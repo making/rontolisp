@@ -79,7 +79,7 @@
 | `uiop:safe-read-file-line`, `uiop:safe-read-file-form`, `uiop:safe-read-from-string` | `(uiop:safe-read-from-string "(+ 1 2)")` | 安全構文の読み取り群: `with-safe-io-syntax` (`*read-eval*` は nil) の下でファイルや文字列を読みます。`safe-read-from-string` はオブジェクトのみを返します |
 | `uiop:with-input-file`, `uiop:call-with-input-file`, `uiop:with-output-file`, `uiop:call-with-output-file` | `(uiop:with-output-file (out "x.txt") (write-line "hi" out))` | ファイルを開きストリームを本体・thunk に渡して実行します。lite 版: `:element-type` の既定は `'character`、`:external-format` は `:utf-8`、`:if-exists` は `:supersede` です |
 | `uiop:with-input`, `uiop:input-string`, `uiop:with-output`, `uiop:output-string` | `(uiop:with-output (o nil) (write-string "x" o))` | ストリーム指示子 (`nil`・`t`・ストリーム・文字列・パス名) をストリームに強制します。`nil` 出力は文字列に集めます。文字列への書き込みはシグナルします |
-| `uiop:copy-file`, `uiop:concatenate-files`, `uiop:copy-stream-to-stream` | `(uiop:copy-file "a" "b")` | ファイル複写・連結・ストリーム複写 — 双方向バイナリで、出力先は切り詰めます。`:linewise` 複写は常に行末に改行を付けます |
+| `uiop:copy-file`, `uiop:concatenate-files`, `uiop:copy-stream-to-stream` | `(uiop:copy-file "a" "b")` | ファイル複写・連結・ストリーム複写 — 双方向バイナリで、出力先は切り詰めます。`:linewise` 複写は入力の終端で終わった行を除いて行末に改行を付けます(上流と同じ) |
 | `uiop:eval-input`, `uiop:eval-thunk`, `uiop:standard-eval-thunk` | `(uiop:eval-input "(+ 1 2) (* 3 4)")` | ストリーム指示子や文字列からフォームを読み評価します。最後のフォームの値が答えです |
 | `uiop:println`, `uiop:writeln`, `uiop:format!`, `uiop:safe-format!`, `uiop:finish-outputs` | `(uiop:println "hi")` | 末尾改行付き出力 (`println` は `princ`・`writeln` は `write` 経由)、前後でフラッシュする `format`、フラッシュ本体。`safe-format!` は決してシグナルしません |
 | `uiop:file-stream-p`, `uiop:file-or-synonym-stream-p` | `(uiop:file-stream-p s)` | ストリーム値に対する厳密な種別判定で、同義ストリームを再帰的にたどります |

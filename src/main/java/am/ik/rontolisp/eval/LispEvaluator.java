@@ -1747,6 +1747,25 @@ public final class LispEvaluator {
 			}
 			return apply(baseReadLine, args, this.globalEnv);
 		}));
+		// %read-line-pair, the read under a read-line producer's multiple-value lowering:
+		// a Gray instance answers through the same dispatch, whose values are the
+		// stream-read-line method's -- (line . missing-newline-p), nil at end of file.
+		LispVal baseReadLinePair = this.globalEnv.lookupFunction(LispNames.READ_LINE_PAIR_INTERNAL);
+		this.globalEnv.defineFunction(LispNames.READ_LINE_PAIR_INTERNAL,
+				new LispFunction(LispNames.READ_LINE_PAIR_INTERNAL, rawArgs -> {
+					List<LispVal> args = resolveDesignatorArg(rawArgs, 0, true);
+					if (!args.isEmpty() && dispatchesToGray(args.get(0))) {
+						LispVal atEnd = new LispCons(LispNil.INSTANCE, LispNil.INSTANCE);
+						this.globalEnv.clearSpill();
+						LispVal line = applyGrayDispatch(GRAY_READ_LINE_DISPATCH,
+								List.of(args.get(0), LispNil.INSTANCE, atEnd));
+						List<LispVal> more = spilledValues(this.globalEnv.spill());
+						this.globalEnv.clearSpill();
+						return line == atEnd ? LispNil.INSTANCE
+								: new LispCons(line, more.isEmpty() ? LispNil.INSTANCE : more.getFirst());
+					}
+					return apply(baseReadLinePair, args, this.globalEnv);
+				}));
 		LispVal baseReadCharNoHang = this.globalEnv.lookupFunction(LispNames.READ_CHAR_NO_HANG);
 		this.globalEnv.defineFunction(LispNames.READ_CHAR_NO_HANG,
 				new LispFunction(LispNames.READ_CHAR_NO_HANG, rawArgs -> {
@@ -3636,6 +3655,26 @@ public final class LispEvaluator {
 			return value;
 		}, true));
 		publishSecondValue(LispNames.ARRAY_DISPLACEMENT, LispNames.ARRAY_DISP_OFFSET);
+		// read-line's missing-newline-p, off the one read %read-line-pair makes -- the
+		// lowering's own read -- with read-line's eof parameters applied on top.
+		LispFunction readLine = registeredBuiltin(LispNames.READ_LINE);
+		LispFunction readLinePair = registeredBuiltin(LispNames.READ_LINE_PAIR_INTERNAL);
+		installValuePublishing(readLine, new LispFunction(LispNames.READ_LINE, args -> {
+			if (args.size() > 4) {
+				return readLine.body().apply(args);
+			}
+			LispVal pair = readLinePair.body().apply(args.isEmpty() ? List.of() : List.of(args.getFirst()));
+			if (pair instanceof LispCons line) {
+				this.globalEnv.publishSpill(new LispCons(line.cdr(), LispNil.INSTANCE));
+				return line.car();
+			}
+			if (args.size() >= 2 && args.get(1) != LispNil.INSTANCE
+					&& !(args.get(1) instanceof LispSymbol sym && "NIL".equals(sym.name()))) {
+				throw Environment.endOfFile(args.getFirst() instanceof LispNil ? LispTrue.INSTANCE : args.getFirst());
+			}
+			this.globalEnv.publishSpill(new LispCons(LispTrue.INSTANCE, LispNil.INSTANCE));
+			return args.size() >= 3 ? args.get(2) : LispNil.INSTANCE;
+		}, true));
 	}
 
 	/**
@@ -7589,6 +7628,9 @@ public final class LispEvaluator {
 			case LispNames.MULTIPLE_VALUE_BIND:
 				return multipleValueConsumerExpansion(cons, LispMacroExpander::expandMultipleValueBind);
 			case LispNames.MULTIPLE_VALUE_LIST:
+			case LispNames.QUIET_MULTIPLE_VALUE_LIST_INTERNAL:
+				// %quiet-multiple-value-list is library source's multiple-value-list,
+				// and the interpreter always has the channel.
 				return multipleValueConsumerExpansion(cons, LispMacroExpander::expandMultipleValueList);
 			case LispNames.MULTIPLE_VALUE_CALL:
 				return multipleValueConsumerExpansion(cons, LispMacroExpander::expandMultipleValueCall);
@@ -7935,6 +7977,7 @@ public final class LispEvaluator {
 			case LispNames.SUBTYPEP:
 			case LispNames.READ_FROM_STRING:
 			case LispNames.ARRAY_DISPLACEMENT:
+			case LispNames.READ_LINE:
 				// One value in call position; the FUNCTION publishes the second
 				// (installValuePublishingFunctions), as the floor family's does above.
 				return evalPrimaryValueCall(cons, env, name);

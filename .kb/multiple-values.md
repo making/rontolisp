@@ -19,8 +19,9 @@ moment two threads ran Lisp code.
   so `macroexpand-1` leaves it alone as in CL.
 - `multiple-value-bind`, `multiple-value-list`, `multiple-value-call`, `nth-value` (CL_MACROS +
   `expandBuiltinMacro`; `multiple-value-call` as a macro deviates from CL's special operator).
-- Secondary values for `floor`/`ceiling`/`round`/`truncate`, `gethash` and `subtypep`, ONLY inside
-  consumers -- in call position. Each of them as a FUNCTION object publishes too (below).
+- Secondary values for `floor`/`ceiling`/`round`/`truncate`, `gethash`, `subtypep` and `read-line`
+  (missing-newline-p, "read-line's missing-newline-p" below), ONLY inside consumers -- in call
+  position. Each of them as a FUNCTION object publishes too (below).
   Two-argument `(floor a b)` elsewhere: `expandFloorFamilyDivisor` -> `(floor (/ a b))`.
 
 ## The lowering (`LispMacroExpander`)
@@ -117,6 +118,52 @@ well-defined on nil.
   existence.
 - WASM: `WasmHandlerCaseCompiler.compileNoErrorClauseBody`, gated on the spill global's
   existence.
+
+## `read-line`'s missing-newline-p
+**Invariant (2026-10-07): `read-line` answers `(values line missing-newline-p)` on all four
+backends, through a consumer, a function tail, `#'read-line`, a string / file / `:io` / socket /
+standard-input stream, a parked `unread-char` and a Gray `stream-read-line`; SBCL 2.2.9's answers.**
+Measured before, the same day: SBCL `("ab" NIL)` `("cd" T)` `(:EOF T)`, all four `("ab")` `("cd")`
+`(:EOF)`.
+- `read-line` (and the component alias `rontolisp::%read-line-raw`) is a syntactic producer. The
+  lowering (`lowerReadLine`) binds the arguments in source order, then ONE read,
+  `(%read-line-pair stream)` -> `(line . missing-newline-p)` or nil at end of file, then the line
+  (or the eof-value / the seeded `end-of-file` signal). A call outside a consumer or a tail keeps
+  the one-value built-in and its `readLine`: only a site that can observe the value pays.
+- The pair reads a character at a time where the call-position read does not
+  (`BufferedReader.readLine` drops the terminator): interpreter `TerminatedLine.read` (plus
+  `SocketSupport.readTerminatedLine`, `HttpRequestBodyStream.readTerminatedLine`,
+  `RontoIoFileStream.lastLineMissingNewline`); JVM `_readLinePair` (+ `_sockReadLinePair`); WASM the
+  shared `_read_line` core storing its flag in `READ_LINE_END_ADDR` -- an alias of
+  `TIME_SCRATCH_ADDR`, sound because the expansion (`WasmReadLineCompiler.pairExpansion`) reads it
+  straight after the call in a single-threaded module; the low 256 bytes hold no free word. A CR
+  the input ends on ends its line as end of file does (the WASM core's answer).
+- Gates: JVM `_readLinePair` and the recording core exist only where `%READ-LINE-PAIR` is spelled
+  OR (the spill global exists AND the program names `read-line` / the alias). The first clause is
+  load-bearing: a settled defun tail has already REPLACED its `read-line` by the pair when the gate
+  is taken, so a program whose only `read-line` is a tail named none (component socket splices:
+  every read sits in `%io-read-line`'s tail). `MutableStringProducers` lists the pair for the same
+  reason.
+- Library wrappers carry the value through quiet operators (next section): `%gray-read-line-dispatch`
+  and `%gray-default-read-line` (gray.lisp), `%unread-read-line`, `stdin.lisp`'s and
+  `sockets.lisp`'s line readers, `http-server.lisp`'s `stream-read-line` method. Interpreter: the
+  publishing `#'read-line` and `%read-line-pair` reach a Gray instance through the dispatch and read
+  its values off the register.
+- A Gray method's `("" t)` (SBCL's end of file) is end of file in the dispatch, which needs the
+  second value -- so `GrayStreamsLibrary` splices the dispatch with a REAL `multiple-value-list`
+  when the program defines its own `stream-read-line` method (a class outside `rontolisp` /
+  `trivial-gray-streams`). Before, such a method looped forever on `""`.
+- Pinned by `ReadLineValuesFixture` in the three backend suites (P1 and component).
+
+## Quiet operators in library source
+`(%quiet-values form...)` / `(%quiet-multiple-value-list form)`: `values` / `multiple-value-list`
+for library source whose extra values only a program's OWN consumer can observe. Neither is in
+the `usesMvOperator` scan; `injectMvSpillGlobal` spells them as the real operators where the
+program has the channel, as `prog1` / `list` where it does not, so splicing a library never makes
+a program a multiple-value one (settled tails, the spill global). Calls, not binding forms, so the
+passes before the spelling (`SpecialDeclarationScoping`, `UserMacroExpander`, ...) read them right
+either way. The interpreter always has the channel: `%quiet-values` is `values`,
+`%quiet-multiple-value-list` the `multiple-value-list` consumer. `--no-gc` never sees them.
 
 ## A syntactic producer's tail escapes through the spill
 **Invariant: the tier boundary is not observable through a function return.** A recognized
@@ -429,6 +476,7 @@ holds the entry's values as a list across the exit catch) and `SchemeValueCount`
 leaf that may answer other than one value leaves through a `return-from`).
 
 ## Tests
+`ReadLineValuesFixture` (read-line's second value, every stream kind, four backends);
 `ThreadTest`/`JvmThreadTest.eachThreadHasItsOwnMultipleValueChannel` and the
 `AwaitValuesMatrix.CONCURRENT_PROGRAM` tests (one register per thread);
 `JvmExportTest#theFirstThreadToCallAnExportOwnsTheChannelForGood` (the claim);

@@ -103,8 +103,10 @@ is then never written.
 
 On the read side the methods answer the keyword `:eof` at end of stream; the
 built-ins translate that through the usual `eof-error-p` / `eof-value`
-contract. `stream-read-line` answers a partial last line as that line — `:eof`
-means "no characters left at all".
+contract. `stream-read-line` answers `(values line missing-newline-p)`, a
+partial last line with a true second value, and `:eof` when no characters are
+left at all; a method of your own may also end the stream the standard Gray way,
+with `("" t)`. `read-line` passes the method's second value on as its own.
 
 ```lisp
 (defclass upcase-stream (rontolisp:fundamental-character-output-stream)
@@ -242,8 +244,6 @@ rontolisp protocol has, so a portable class that defines only
   closed or dropped with one parked does not affect any other; a second
   `unread-char` on a stream whose character is still parked signals.
   `read-byte`, `read-sequence` and `read` do not consult it.
-- The read generics return primary values only: `stream-read-line` has no
-  `(values line missing-newline-p)` pair — `:eof` is the whole EOF signal.
 - `listen` on a Gray instance works on the interpreter and the JVM; the
   Preview 1 WASM backend rejects any `listen` call at compile time (a
   pre-existing platform limit, Gray or not).

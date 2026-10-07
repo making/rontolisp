@@ -360,8 +360,9 @@
   ;; into a string whose bytes ARE the wire bytes -- so a UTF-8 line decodes
   ;; exactly like the interpreter's byte-collecting readLine, chunk boundaries
   ;; included. The pending-cr flag holds a \r back until the next byte shows it
-  ;; is not the one before the terminating \n.
-  (let ((acc "") (got nil) (done nil) (cr nil))
+  ;; is not the one before the terminating \n. The second value is read-line's
+  ;; missing-newline-p: t when the peer's close, not a \n, ended the line.
+  (let ((acc "") (got nil) (done nil) (cr nil) (newline nil))
     (while (not done)
       (let ((b (rontolisp:await (rontolisp::%sock-read-byte-f e))))
         (if (null b)
@@ -369,7 +370,9 @@
             (progn
               (setq got t)
               (if (= b 10)
-                  (setq done t)
+                  (progn
+                    (setq newline t)
+                    (setq done t))
                   (progn
                     (if cr
                         ;; byte-level appends: acc's bytes ARE the wire bytes
@@ -385,7 +388,7 @@
                           (setq acc
                                 (%string-concat acc
                                  (rontolisp::%str-from-byte b)))))))))))
-    (if got acc nil)))
+    (if got (%quiet-values acc (not newline)) (%quiet-values nil t))))
 
 ;;; --- the %io-* dispatch defuns (the compiler rewrite's targets; the %...-raw
 ;;; names compile to the NATIVE built-ins, so there is no rewrite recursion).
@@ -526,8 +529,14 @@
     (s eof-error-p &optional eof-value)
   (let ((e (rontolisp::%sock-entry s)))
     (if e
-        (let ((l (rontolisp:await (rontolisp::%sock-read-line-f e))))
-          (if l l (if eof-error-p (error 'end-of-file) eof-value)))
+        (let* ((vals
+                (%quiet-multiple-value-list
+                 (rontolisp:await (rontolisp::%sock-read-line-f e))))
+               (l (car vals)))
+          (if l
+              (%quiet-values l (car (cdr vals)))
+              (%quiet-values (if eof-error-p (error 'end-of-file) eof-value)
+                             t)))
         (rontolisp::%read-line-raw s eof-error-p eof-value))))
 
 (defun rontolisp::%io-read-line-eof (s eof-error-p &optional eof-value)

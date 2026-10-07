@@ -4246,9 +4246,14 @@ final class WasmRuntimeBuilder {
 	/**
 	 * Builds the _read_line helper function body. Reads one line from the given file
 	 * descriptor (0 = stdin) using fd_read, byte by byte. Returns a string struct with
-	 * '"' prefix/suffix (internal string format), or ref.null eq on EOF.
+	 * '"' prefix/suffix (internal string format), or ref.null eq on EOF. With
+	 * {@code recordsLineEnd} every line it answers also leaves CL's missing-newline-p --
+	 * 1 when end of file, not a newline, ended it -- in
+	 * {@link WasmLispCompiler#READ_LINE_END_ADDR}, where {@code %read-line-pair} reads it
+	 * right after the call; a program that cannot lower a {@code read-line} producer
+	 * keeps the body byte for byte.
 	 */
-	static byte[] buildReadLineBody(WasmLispCompiler.StringTable st) {
+	static byte[] buildReadLineBody(WasmLispCompiler.StringTable st, boolean recordsLineEnd) {
 		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 
@@ -4263,7 +4268,7 @@ final class WasmRuntimeBuilder {
 		// A negative fd is a string input stream (see WasmStringStreamRuntimeBuilder):
 		// return the next line of its [cursor, end) byte range as a fresh quote-framed
 		// heap string, or nil at end of input.
-		emitReadLineFromStringStream(w);
+		emitReadLineFromStringStream(w, recordsLineEnd);
 
 		// heap_ptr = memory[HEAP_PTR_ADDR]
 		w.write(Instruction.I32_CONST);
@@ -4665,6 +4670,14 @@ final class WasmRuntimeBuilder {
 		w.writeUnsignedLeb128(2);
 		w.write(Instruction.END);
 
+		if (recordsLineEnd) {
+			// memory[READ_LINE_END_ADDR] = eof_flag: end of file ended the line
+			w.write(Instruction.I32_CONST);
+			w.writeSignedLeb128(WasmLispCompiler.READ_LINE_END_ADDR);
+			w.write(Instruction.GET_LOCAL);
+			w.writeUnsignedLeb128(4);
+			w.write(Instruction.I32_STORE, 0x02, 0x00);
+		}
 		// if pos == 1 && eof_flag: return ref.null eq (nil)
 		w.write(Instruction.GET_LOCAL);
 		w.writeUnsignedLeb128(2);
@@ -4719,7 +4732,7 @@ final class WasmRuntimeBuilder {
 	 * exhausted. Locals: 0=fd, 1=heap_ptr, 2=scan pos (reused), 3=copy index (reused),
 	 * 5=rec, 6=cursor, 7=endp, 8=llen.
 	 */
-	private static void emitReadLineFromStringStream(WasmWriter w) {
+	private static void emitReadLineFromStringStream(WasmWriter w, boolean recordsLineEnd) {
 		final int FD = 0, HEAP = 1, POS = 2, I = 3, REC = 5, CURSOR = 6, ENDP = 7, LLEN = 8;
 		// if (fd < 0) { ... }
 		w.write(Instruction.GET_LOCAL);
@@ -4896,6 +4909,17 @@ final class WasmRuntimeBuilder {
 		w.write(Instruction.I32_CONST);
 		w.writeSignedLeb128(0x22);
 		w.write(Instruction.I32_STORE8, 0x00, 0x00);
+		if (recordsLineEnd) {
+			// memory[READ_LINE_END_ADDR] = pos >= endp: no newline ended the line
+			w.write(Instruction.I32_CONST);
+			w.writeSignedLeb128(WasmLispCompiler.READ_LINE_END_ADDR);
+			w.write(Instruction.GET_LOCAL);
+			w.writeUnsignedLeb128(POS);
+			w.write(Instruction.GET_LOCAL);
+			w.writeUnsignedLeb128(ENDP);
+			w.write(Instruction.I32_GE_S);
+			w.write(Instruction.I32_STORE, 0x02, 0x00);
+		}
 		// rec.cursor = pos < endp ? pos + 1 (skip the newline) : endp
 		w.write(Instruction.GET_LOCAL);
 		w.writeUnsignedLeb128(REC);

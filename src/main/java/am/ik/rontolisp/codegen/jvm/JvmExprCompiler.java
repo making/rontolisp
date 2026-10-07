@@ -1048,6 +1048,7 @@ final class JvmExprCompiler {
 					JvmArrayCompiler.emitToMutStr(ctx, className);
 				}
 			}
+			case LispNames.READ_LINE_PAIR_INTERNAL -> JvmReadLineCompiler.compilePair(cons, ctx, className);
 			case LispNames.READ_CHAR -> {
 				LispVal typed = LispMacroExpander.expandReadEofSignal(cons, true);
 				if (typed != null) {

@@ -189,6 +189,15 @@ final class JvmIoRuntimeBuilder {
 
 	static final String READ_LINE_STREAM_DESC = "(Ljava/lang/Object;)Ljava/lang/Object;";
 
+	/**
+	 * {@code %read-line-pair}'s helper: the line and missing-newline-p as a cons, emitted
+	 * only for a program that can lower a {@code read-line} producer
+	 * ({@link #buildReadLinePair}).
+	 */
+	static final String READ_LINE_PAIR_METHOD = "_readLinePair";
+
+	static final String READ_LINE_PAIR_DESC = "(Ljava/lang/Object;)Ljava/lang/Object;";
+
 	static final String READ_BYTE_METHOD = "_readByte";
 
 	static final String READ_BYTE_DESC = "(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;";
@@ -448,6 +457,12 @@ final class JvmIoRuntimeBuilder {
 	/** Which file-metadata helpers to emit; see {@link FileMeta}. */
 	private final FileMeta fileMeta;
 
+	/**
+	 * The constant-pool entries of {@code _readLinePair}, minted only for a program that
+	 * can lower a {@code read-line} producer, so every other artifact keeps its bytes.
+	 */
+	@Nullable private final LinePairs linePairs;
+
 	private final @Nullable PackedSequenceIo packedSequenceIo;
 
 	/**
@@ -587,9 +602,10 @@ final class JvmIoRuntimeBuilder {
 			MethodRefEntry printlnStr, MethodRefEntry readLineHelper,
 			JvmSocketRuntimeBuilder.@Nullable SocketRuntime sockets, boolean errorOutput, boolean listDirectory,
 			FileMeta fileMeta, boolean packedSequenceIo, boolean charSequenceIo, boolean arrayRuntime,
-			boolean quantizedBuffer, boolean bidirectionalStreams) {
+			boolean quantizedBuffer, boolean bidirectionalStreams, boolean readLinePairs) {
 		this.sockets = sockets;
 		this.ioStreams = bidirectionalStreams ? IoStreams.mint(cp) : null;
+		this.linePairs = readLinePairs ? LinePairs.mint(cp, bidirectionalStreams) : null;
 		this.charFileStreams = fileMeta.characterPosition() ? CharFileStreams.mint(cp) : null;
 		this.quantizedBuffer = quantizedBuffer;
 		this.errorOutput = errorOutput;
@@ -808,11 +824,30 @@ final class JvmIoRuntimeBuilder {
 			FieldRefEntry systemOut, MethodRefEntry printlnStr, MethodRefEntry readLineHelper,
 			JvmSocketRuntimeBuilder.@Nullable SocketRuntime sockets, boolean errorOutput, boolean listDirectory,
 			FileMeta fileMeta, boolean packedSequenceIo, boolean charSequenceIo, boolean arrayRuntime,
-			boolean quantizedBuffer, boolean bidirectionalStreams) {
+			boolean quantizedBuffer, boolean bidirectionalStreams, boolean readLinePairs) {
 		return new JvmIoRuntimeBuilder(cp, thisClass, objectClass, stringClass, longClass, longValueOf, longValue,
 				stringLength, stringSubstring, stringConcat, systemOut, printlnStr, readLineHelper, sockets,
 				errorOutput, listDirectory, fileMeta, packedSequenceIo, charSequenceIo, arrayRuntime, quantizedBuffer,
-				bidirectionalStreams);
+				bidirectionalStreams, readLinePairs);
+	}
+
+	/**
+	 * The constant-pool entries of {@code _readLinePair}: the character-at-a-time line
+	 * buffer, and the bidirectional stream's own terminator report where that stream kind
+	 * exists.
+	 */
+	private record LinePairs(ClassEntry stringBuilderClass, MethodRefEntry stringBuilderInit, MethodRefEntry appendChar,
+			MethodRefEntry builderToString, @Nullable MethodRefEntry ioMissingNewline) {
+
+		static LinePairs mint(ConstantPool cp, boolean ioStreams) {
+			ClassEntry builder = cp.classEntry("java/lang/StringBuilder");
+			return new LinePairs(builder, cp.methodRef(builder, "<init>", "()V"),
+					cp.methodRef(builder, "append", "(C)Ljava/lang/StringBuilder;"),
+					cp.methodRef(builder, "toString", "()Ljava/lang/String;"),
+					ioStreams ? cp.methodRef(cp.classEntry(IO_FILE_STREAM_CLASS), "lastLineMissingNewline", "()Z")
+							: null);
+		}
+
 	}
 
 	/**
@@ -1069,6 +1104,10 @@ final class JvmIoRuntimeBuilder {
 				buildWriteLine()));
 		ms.add(new IoMethod(this.cp.utf8Entry(READ_LINE_STREAM_METHOD), this.cp.utf8Entry(READ_LINE_STREAM_DESC),
 				buildReadLineStream()));
+		if (this.linePairs != null) {
+			ms.add(new IoMethod(this.cp.utf8Entry(READ_LINE_PAIR_METHOD), this.cp.utf8Entry(READ_LINE_PAIR_DESC),
+					buildReadLinePair(this.linePairs)));
+		}
 		ms.add(new IoMethod(this.cp.utf8Entry(READ_BYTE_METHOD), this.cp.utf8Entry(READ_BYTE_DESC), buildReadByte()));
 		ms.add(new IoMethod(this.cp.utf8Entry(READ_CHAR_METHOD), this.cp.utf8Entry(READ_CHAR_DESC), buildReadChar()));
 		ms.add(new IoMethod(this.cp.utf8Entry(PEEK_CHAR_METHOD), this.cp.utf8Entry(PEEK_CHAR_DESC), buildPeekChar()));
@@ -2791,6 +2830,183 @@ final class JvmIoRuntimeBuilder {
 		code.invokevirtual(this.stringConcat);
 		code.areturn();
 		return code;
+	}
+
+	/**
+	 * {@code _readLinePair(Object handle) -> Object}: the line {@code _readLineStream}
+	 * reads, as the cons {@code (line . missing-newline-p)} -- {@code "T"} when end of
+	 * file ended the line -- or {@code null} (nil) at end of file. What
+	 * {@code %read-line-pair}, the read under a {@code read-line} producer's
+	 * multiple-value lowering, compiles to. A {@code BufferedReader} is read a character
+	 * at a time so the terminator is seen ({@code readLine} drops it); the terminators
+	 * are {@code readLine}'s, a {@code \r} the file ends on ending its line as end of
+	 * file does (the WASM backends' answer). A bidirectional stream reports its own
+	 * terminator, a socket reads through {@code _sockReadLinePair}.
+	 */
+	private MethodCode buildReadLinePair(LinePairs lp) {
+		// Slots: 0=handle, 1=sb (StringBuilder), 2=missing (int), 3=r (BufferedReader),
+		// 4=c (int), 5=next (int), 6=entry, 7=io line (String)
+		MethodCode code = new MethodCode();
+		if (this.sockets != null || this.ioStreams != null) {
+			code.aload(0);
+			code.instanceOf(this.longClass);
+			MethodCode.Label notHandle = code.newLabel();
+			code.ifeq(notHandle);
+			code.getstatic(this.streamsField);
+			code.aload(0);
+			code.checkcast(this.longClass);
+			code.invokevirtual(this.longValue);
+			code.l2i();
+			code.aaload();
+			code.astore(6);
+			JvmSocketRuntimeBuilder.SocketRuntime socketRuntime = this.sockets;
+			if (socketRuntime != null) {
+				// if (entry instanceof Socket) return _sockReadLinePair(entry);
+				code.aload(6);
+				code.instanceOf(socketRuntime.socketClass());
+				MethodCode.Label notSocket = code.newLabel();
+				code.ifeq(notSocket);
+				code.aload(6);
+				code.invokestatic(Objects.requireNonNull(socketRuntime.sockReadLinePair()));
+				code.areturn();
+				code.labelBinding(notSocket);
+			}
+			IoStreams io = this.ioStreams;
+			if (io != null) {
+				// if (entry instanceof RontoIoFileStream) { if (!ready()) return null;
+				// line = readLine(); return {line, lastLineMissingNewline() ? T : nil}; }
+				code.aload(6);
+				code.instanceOf(io.type());
+				MethodCode.Label notIo = code.newLabel();
+				code.ifeq(notIo);
+				code.aload(6);
+				code.checkcast(io.type());
+				code.invokevirtual(io.ready());
+				MethodCode.Label ioReady = code.newLabel();
+				code.ifne(ioReady);
+				code.aconst_null();
+				code.areturn();
+				code.labelBinding(ioReady);
+				code.aload(6);
+				code.checkcast(io.type());
+				code.invokevirtual(io.readLine());
+				code.astore(7);
+				code.aload(6);
+				code.checkcast(io.type());
+				code.invokevirtual(Objects.requireNonNull(lp.ioMissingNewline()));
+				code.istore(2);
+				emitLinePair(code, () -> code.aload(7));
+				code.labelBinding(notIo);
+			}
+			code.labelBinding(notHandle);
+		}
+		emitResolveReader(code);
+		// c = r.read(); if (c < 0) return null;
+		code.aload(3);
+		code.invokevirtual(this.bufferedReaderRead);
+		code.istore(4);
+		code.iload(4);
+		MethodCode.Label haveChar = code.newLabel();
+		code.ifge(haveChar);
+		code.aconst_null();
+		code.areturn();
+		code.labelBinding(haveChar);
+		// sb = new StringBuilder();
+		code.new_(lp.stringBuilderClass());
+		code.dup();
+		code.invokespecial(lp.stringBuilderInit());
+		code.astore(1);
+		// while (c >= 0 && c != '\n' && c != '\r') { sb.append((char) c); c = r.read(); }
+		MethodCode.Label loop = code.newBoundLabel();
+		MethodCode.Label ended = code.newLabel();
+		code.iload(4);
+		code.iflt(ended);
+		code.iload(4);
+		code.loadConstant('\n');
+		code.if_icmpeq(ended);
+		code.iload(4);
+		code.loadConstant('\r');
+		code.if_icmpeq(ended);
+		code.aload(1);
+		code.iload(4);
+		code.i2c();
+		code.invokevirtual(lp.appendChar());
+		code.pop();
+		code.aload(3);
+		code.invokevirtual(this.bufferedReaderRead);
+		code.istore(4);
+		code.goto_(loop);
+		code.labelBinding(ended);
+		// missing = c < 0;
+		code.iload(4);
+		MethodCode.Label terminated = code.newLabel();
+		code.ifge(terminated);
+		code.iconst_1();
+		code.istore(2);
+		MethodCode.Label build = code.newLabel();
+		code.goto_(build);
+		code.labelBinding(terminated);
+		code.iconst_0();
+		code.istore(2);
+		// if (c == '\r') { r.mark(1); next = r.read(); if (next < 0) missing = true;
+		// else if (next != '\n') r.reset(); }
+		code.iload(4);
+		code.loadConstant('\r');
+		code.if_icmpne(build);
+		code.aload(3);
+		code.iconst_1();
+		code.invokevirtual(this.bufferedReaderMark);
+		code.aload(3);
+		code.invokevirtual(this.bufferedReaderRead);
+		code.istore(5);
+		code.iload(5);
+		MethodCode.Label notEnd = code.newLabel();
+		code.ifge(notEnd);
+		code.iconst_1();
+		code.istore(2);
+		code.goto_(build);
+		code.labelBinding(notEnd);
+		code.iload(5);
+		code.loadConstant('\n');
+		code.if_icmpeq(build);
+		code.aload(3);
+		code.invokevirtual(this.bufferedReaderReset);
+		code.labelBinding(build);
+		emitLinePair(code, () -> {
+			code.aload(1);
+			code.invokevirtual(lp.builderToString());
+		});
+		return code;
+	}
+
+	/**
+	 * Emits {@code return new Object[] {"\"" + line + "\"", missing != 0 ? "T" : null};}
+	 * with the raw line pushed by {@code line} and the flag in slot 2.
+	 */
+	private void emitLinePair(MethodCode code, Runnable line) {
+		code.iconst_2();
+		code.anewarray(this.objectClass);
+		code.dup();
+		code.iconst_0();
+		code.ldc(this.quoteStr);
+		line.run();
+		code.invokevirtual(this.stringConcat);
+		code.ldc(this.quoteStr);
+		code.invokevirtual(this.stringConcat);
+		code.aastore();
+		code.dup();
+		code.iconst_1();
+		code.iload(2);
+		MethodCode.Label endedByEof = code.newLabel();
+		code.ifne(endedByEof);
+		code.aconst_null();
+		MethodCode.Label stored = code.newLabel();
+		code.goto_(stored);
+		code.labelBinding(endedByEof);
+		code.ldc(this.tStr);
+		code.labelBinding(stored);
+		code.aastore();
+		code.areturn();
 	}
 
 	/**

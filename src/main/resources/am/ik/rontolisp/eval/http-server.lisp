@@ -324,10 +324,12 @@
   ;; there; this method keeps the compiled (WASM component) construction from
   ;; paying the same shape of tax. Terminators are LF, CR and CRLF -- the
   ;; BufferedReader contract the Java-backed stream follows -- and a partial last
-  ;; line answers as that line (:eof only when nothing was read).
+  ;; line answers as that line with a true missing-newline-p, as does one whose
+  ;; CR is the body's last octet (:eof only when nothing was read).
   (let ((v (rontolisp::%http-body-octets stream))
         (i (rontolisp::%http-body-index stream))
-        (e (rontolisp::%http-body-end stream)))
+        (e (rontolisp::%http-body-end stream))
+        (ended nil))
     (if (>= i e)
         :eof (let ((line
                     (with-output-to-string (out)
@@ -336,11 +338,13 @@
                           (let ((b (aref v i)))
                             (cond ((= b 10)
                                    (setq i (+ i 1))
+                                   (setq ended t)
                                    (setq done t))
                                   ((= b 13)
                                    (setq i (+ i 1))
-                                   (when (and (< i e) (= (aref v i) 10))
-                                     (setq i (+ i 1)))
+                                   (when (< i e)
+                                     (setq ended t)
+                                     (when (= (aref v i) 10) (setq i (+ i 1))))
                                    (setq done t))
                                   ((< b #x80)
                                    (write-char (code-char b) out)
@@ -376,7 +380,7 @@
                                    (write-char (code-char b) out)
                                    (setq i (+ i 1))))))))))
                (setf (rontolisp::%http-body-index stream) i)
-               line))))
+               (%quiet-values line (not ended))))))
 
 (defun rontolisp::%http-body-stream (body)
   ;; nil for an absent or empty body -- upstream guards :raw-body with

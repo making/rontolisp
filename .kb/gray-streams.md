@@ -38,7 +38,9 @@ Lisp in `src/main/resources/am/ik/rontolisp/eval/gray.lisp`, served by
 - `stream-start-line-p` comes from `stream-line-column` (nil = no column, so `fresh-line`
   breaks unconditionally); flush trio, `stream-listen`, `stream-file-position` answer nil.
   Read generics answer `:eof`; dispatch maps it to `eof-error-p`/`eof-value`,
-  `(error 'end-of-file)`. `stream-read-line` returns a partial last line, PRIMARY values only.
+  `(error 'end-of-file)`. `stream-read-line` answers `(values line missing-newline-p)`, `:eof` at
+  end; a program's own method's `("" t)` is end of file too ([[multiple-values]], "read-line's
+  missing-newline-p").
 
 ## Dispatch helpers
 `rontolisp::%gray-*-dispatch` defuns at the bottom of gray.lisp: ONE copy of "instance ->

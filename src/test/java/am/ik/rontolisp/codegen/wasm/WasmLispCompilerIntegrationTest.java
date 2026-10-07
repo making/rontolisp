@@ -14500,6 +14500,74 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void readLineAnswersMissingNewlineP() throws Exception {
+		// The wasm twin of LispEvaluatorTest#readLineAnswersMissingNewlineP, Preview 1
+		// and
+		// the component.
+		for (boolean component : new boolean[] { false, true }) {
+			assertThat(compileAndRunFrontEndWithDir(am.ik.rontolisp.ReadLineValuesFixture.program("rl.txt"), component))
+				.isEqualTo(am.ik.rontolisp.ReadLineValuesFixture.EXPECTED);
+			assertThat(compileAndRunFrontEndWithDir(am.ik.rontolisp.ReadLineValuesFixture.fileKindsProgram("rk.txt"),
+					component))
+				.isEqualTo(am.ik.rontolisp.ReadLineValuesFixture.FILE_KINDS_EXPECTED);
+			// On the component the socket splice routes every read through its dispatch.
+			assertThat(compileAndRunFrontEndWithDir(am.ik.rontolisp.ReadLineValuesFixture.TAIL_AND_SOCKET_PROGRAM,
+					component))
+				.isEqualTo(am.ik.rontolisp.ReadLineValuesFixture.TAIL_AND_SOCKET_EXPECTED);
+		}
+	}
+
+	@Test
+	void readLineAnswersMissingNewlinePAfterAnUnreadCharacter() throws Exception {
+		for (boolean component : new boolean[] { false, true }) {
+			assertThat(compileAndRunFrontEndWithDir(am.ik.rontolisp.ReadLineValuesFixture.UNREAD_PROGRAM, component))
+				.isEqualTo(am.ik.rontolisp.ReadLineValuesFixture.UNREAD_EXPECTED);
+		}
+	}
+
+	@Test
+	void readLineAnswersMissingNewlinePOfAGrayStream() throws Exception {
+		for (boolean component : new boolean[] { false, true }) {
+			assertThat(compileAndRunFrontEndWithDir(am.ik.rontolisp.ReadLineValuesFixture.GRAY_PROGRAM, component))
+				.isEqualTo(am.ik.rontolisp.ReadLineValuesFixture.GRAY_EXPECTED);
+			assertThat(compileAndRunFrontEndWithDir(am.ik.rontolisp.ReadLineValuesFixture.GRAY_EOF_PROGRAM, component))
+				.isEqualTo(am.ik.rontolisp.ReadLineValuesFixture.GRAY_EOF_EXPECTED);
+		}
+	}
+
+	@Test
+	void readLineAnswersMissingNewlinePOfStandardInput() throws Exception {
+		for (boolean component : new boolean[] { false, true }) {
+			assertThat(runFrontendProgramWithStdin(am.ik.rontolisp.ReadLineValuesFixture.STDIN_PROGRAM,
+					am.ik.rontolisp.ReadLineValuesFixture.STDIN, component))
+				.isEqualTo(am.ik.rontolisp.ReadLineValuesFixture.STDIN_EXPECTED);
+			// Async: on the component, stdin.lisp's own line reader answers.
+			assertThat(runFrontendProgramWithStdin(am.ik.rontolisp.ReadLineValuesFixture.ASYNC_STDIN_PROGRAM,
+					am.ik.rontolisp.ReadLineValuesFixture.STDIN, component))
+				.isEqualTo(am.ik.rontolisp.ReadLineValuesFixture.ASYNC_STDIN_EXPECTED);
+		}
+	}
+
+	/**
+	 * As {@link #compileAndRunFrontEndWithDir}, with {@code stdin}'s bytes as the
+	 * program's standard input exactly (no newline added).
+	 */
+	private static String runFrontendProgramWithStdin(String source, String stdin, boolean component) throws Exception {
+		List<LispVal> program = am.ik.rontolisp.cli.CompileFrontendAccess
+			.withSystemPath(source, List.of(), true, component)
+			.forms();
+		byte[] wasmBytes = WasmLispCompiler.builder().component(component).build().compile(program);
+		String file = component ? "test.component.wasm" : "test.wasm";
+		wasmtime.copyFileToContainer(Transferable.of(wasmBytes), path(file));
+		wasmtime.copyFileToContainer(Transferable.of(stdin.getBytes(java.nio.charset.StandardCharsets.UTF_8)),
+				path("stdin.txt"));
+		ExecResult result = wasmtime.execInContainer("bash", "-c",
+				"cd " + workDir() + " && wasmtime run -W gc=y -W exceptions=y --dir . " + file + " < stdin.txt");
+		assertThat(result.getExitCode()).as("exit code for: %s\nstderr: %s", source, result.getStderr()).isZero();
+		return result.getStdout().trim();
+	}
+
+	@Test
 	void objSetCompilesWhereNoInstanceCanExist() throws Exception {
 		// A library writes a reserved cell behind an %obj-is test (unread-char.lisp's
 		// pushback) without knowing whether the module builds instances: with the gate

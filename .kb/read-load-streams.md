@@ -257,6 +257,9 @@ Pinned by `ReadFromStringLambdaListFixture` (`.PROGRAM`, sbcl's answers, ci-spec
 `LispPreludeLibraryTest.theFullReadFromStringIsSplicedOnlyWhereACallCanPassMoreThanTheString`.
 
 ## `read-line`, `read-char`, `peek-char`
+- `read-line`'s second value, missing-newline-p, comes off a separate read that sees the
+  terminator, used only where a consumer or a tail can observe it ([[multiple-values]],
+  "read-line's missing-newline-p").
 - `read-line` strips one trailing CR everywhere (`BufferedReader.readLine`; WASM `_read_line` does an
   explicit `pos--` on `0x0D`), so a lone `\r\n` line reads `""`, not `"\r"`.
 - `read-char`: JVM `_readChar` (lazily initializes the shared `_stdinReader`); WASM `_read_char`

@@ -339,7 +339,8 @@ public final class BuiltinFunctionWrappers {
 	 * only in a program that names it as a designator.
 	 */
 	public static final Set<String> VALUE_PUBLISHING_PRODUCERS = Set.of(LispNames.GETHASH, LispNames.FIND_SYMBOL,
-			LispNames.INTERN, LispNames.SUBTYPEP, LispNames.READ_FROM_STRING, LispNames.ARRAY_DISPLACEMENT);
+			LispNames.INTERN, LispNames.SUBTYPEP, LispNames.READ_FROM_STRING, LispNames.ARRAY_DISPLACEMENT,
+			LispNames.READ_LINE);
 
 	/**
 	 * The {@link #VALUE_PUBLISHING_PRODUCERS} a program names as a function designator

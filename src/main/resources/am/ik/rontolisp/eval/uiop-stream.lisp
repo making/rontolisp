@@ -65,9 +65,6 @@
 ;;;; - `call-with-output` over a string signals: `with-output-to-string` is
 ;;;;   fresh-string only (no fill-pointer append surface), so there is nothing
 ;;;;   honest to append to.
-;;;; - `copy-stream-to-stream` `:linewise` always ends lines with `terpri`:
-;;;;   `read-line` answers one value (no missing-newline-p), so a source missing
-;;;;   its trailing newline gains one.
 
 ;; Upstream's recognized keys, passed down as function arguments -- the shape the
 ;; computed-option lowering behind with-open-file exists for
@@ -174,14 +171,16 @@
                                            8192) ((:linewise %csts-linewise))
                                           ((:prefix %csts-prefix)))
   (if %csts-linewise
-      (do ((%csts-line
+      ;; A line the input's end ended -- read-line's missing-newline-p -- gains no
+      ;; newline, as upstream's copy answers.
+      (loop
+        (multiple-value-bind (%csts-line %csts-missing)
             (read-line %csts-input nil nil)
-            (read-line %csts-input nil nil)))
-          ((null %csts-line) nil)
-        (when %csts-prefix (princ %csts-prefix %csts-output))
-        (write-string %csts-line %csts-output)
-        (terpri %csts-output)
-        (finish-output %csts-output))
+          (when (null %csts-line) (return nil))
+          (when %csts-prefix (princ %csts-prefix %csts-output))
+          (write-string %csts-line %csts-output)
+          (unless %csts-missing (terpri %csts-output))
+          (finish-output %csts-output)))
       (let ((%csts-size (or %csts-buffer-size 8192))
             (%csts-buffer nil)
             (%csts-end 0))

@@ -40385,11 +40385,19 @@ public final class LispMacroExpander {
 			case LispNames.VALUES, LispNames.FLOOR, LispNames.CEILING, LispNames.ROUND, LispNames.TRUNCATE,
 					LispNames.FFLOOR, LispNames.FCEILING, LispNames.FROUND, LispNames.FTRUNCATE, LispNames.GETHASH,
 					LispNames.ARRAY_DISPLACEMENT, LispNames.SUBTYPEP, LispNames.FIND_SYMBOL, LispNames.INTERN,
-					LispNames.READ_FROM_STRING ->
+					LispNames.READ_FROM_STRING, LispNames.READ_LINE, READ_LINE_RAW_QUALIFIED ->
 				true;
 			default -> false;
 		};
 	}
+
+	/**
+	 * The {@code --component} alias of the native {@code read-line}
+	 * ({@link LispNames#READ_LINE_RAW_INTERNAL}) as the resolved program spells it: the
+	 * socket and stdin dispatch defuns fall back through it, so it is the same
+	 * multiple-value producer the public name is.
+	 */
+	private static final String READ_LINE_RAW_QUALIFIED = "RONTOLISP::" + LispNames.READ_LINE_RAW_INTERNAL;
 
 	/** True when the form is recognized as a multi-value producer (see MvProducer). */
 	private static boolean isMvProducerForm(LispVal form) {
@@ -40411,6 +40419,8 @@ public final class LispMacroExpander {
 			case LispNames.SUBTYPEP -> size == 3 || size == 4;
 			case LispNames.FIND_SYMBOL, LispNames.INTERN -> size == 2 || size == 3;
 			case LispNames.READ_FROM_STRING -> size == 2;
+			// (read-line [stream [eof-error-p [eof-value [recursive-p]]]]).
+			case LispNames.READ_LINE, READ_LINE_RAW_QUALIFIED -> size <= 5;
 			default -> false;
 		};
 	}
@@ -40439,7 +40449,7 @@ public final class LispMacroExpander {
 	private static boolean isPublishingWrapperName(String op) {
 		return switch (op) {
 			case LispNames.GETHASH, LispNames.FIND_SYMBOL, LispNames.INTERN, LispNames.SUBTYPEP,
-					LispNames.READ_FROM_STRING, LispNames.ARRAY_DISPLACEMENT ->
+					LispNames.READ_FROM_STRING, LispNames.ARRAY_DISPLACEMENT, LispNames.READ_LINE ->
 				true;
 			default -> isFloorFamilyName(op);
 		};
@@ -40676,6 +40686,10 @@ public final class LispMacroExpander {
 					values.add(mvCall(LispNames.READ_FROM_STRING_END, textRef));
 					return new MvProducer(bindings, values, null);
 				}
+				case LispNames.READ_LINE, READ_LINE_RAW_QUALIFIED: {
+					lowerReadLine(parts, prefix, bindings, values);
+					return new MvProducer(bindings, values, null);
+				}
 				case LispNames.GETHASH: {
 					// (gethash key table [default]) -> value + present-p. An internal
 					// symbol is the not-found default, so a stored nil (or the
@@ -40738,6 +40752,63 @@ public final class LispMacroExpander {
 		LispSymbol rest = new LispSymbol(prefix + "_rest");
 		bindings.add(new MvBinding(rest, makeProg1(new LispSymbol(LispNames.MV_SPILL), setMvSpill(LispNil.INSTANCE))));
 		return new MvProducer(bindings, values, rest);
+	}
+
+	/**
+	 * Lowers {@code (read-line [stream [eof-error-p [eof-value [recursive-p]]]])} into
+	 * the line and CL's missing-newline-p -- true when end of file ended the line, and at
+	 * end of file beside the eof-value. Both come off ONE read,
+	 * {@code (%read-line-pair stream)}, which answers {@code (line . missing-newline-p)}
+	 * or nil at end of file; a call outside a consumer keeps the one-value built-in, so
+	 * only a site that can observe the second value pays for it. The arguments are bound
+	 * in source order first, so each is evaluated once and before the read, as CL
+	 * evaluates them; an omitted eof-error-p is nil, the {@code read-line} default here,
+	 * and a true one signals the seeded {@code end-of-file}, as the call-position
+	 * lowering does ({@link #expandReadEofSignal}).
+	 *
+	 * <pre>
+	 * (read-line s nil v) -&gt;
+	 *   __s = s, __v = v, __p = (%read-line-pair __s),
+	 *   __l = (if __p (car __p) __v)  ; values: __l, (if __p (cdr __p) t)
+	 * </pre>
+	 */
+	private static void lowerReadLine(List<LispVal> parts, String prefix, List<MvBinding> bindings,
+			List<LispVal> values) {
+		List<LispVal> pairArgs = new java.util.ArrayList<>();
+		if (parts.size() >= 2) {
+			LispSymbol stream = new LispSymbol(prefix + "_s");
+			bindings.add(new MvBinding(stream, parts.get(1)));
+			pairArgs.add(stream);
+		}
+		LispVal eofErrorP = parts.size() >= 3 ? parts.get(2) : LispNil.INSTANCE;
+		LispVal errorRef = eofErrorP;
+		if (!isLiteralNil(eofErrorP) && !(IgnoredArgument.isInert(eofErrorP) && !(eofErrorP instanceof LispCons))) {
+			LispSymbol e = new LispSymbol(prefix + "_e");
+			bindings.add(new MvBinding(e, eofErrorP));
+			errorRef = e;
+		}
+		LispVal valueRef = LispNil.INSTANCE;
+		if (parts.size() >= 4) {
+			valueRef = parts.get(3);
+			if (!IgnoredArgument.isInert(valueRef)) {
+				LispSymbol v = new LispSymbol(prefix + "_v");
+				bindings.add(new MvBinding(v, valueRef));
+				valueRef = v;
+			}
+		}
+		// recursive-p is evaluated and ignored (IgnoredArgument).
+		if (parts.size() >= 5 && !IgnoredArgument.isInert(parts.get(4))) {
+			bindings.add(new MvBinding(new LispSymbol(prefix + "_r"), parts.get(4)));
+		}
+		LispSymbol pair = new LispSymbol(prefix + "_p");
+		bindings.add(new MvBinding(pair, mvCall(LispNames.READ_LINE_PAIR_INTERNAL, pairArgs.toArray(LispVal[]::new))));
+		LispVal onEof = isLiteralNil(errorRef) ? valueRef
+				: errorRef instanceof LispSymbol sym && !sym.isKeyword() && !"T".equals(sym.name())
+						? makeIf(errorRef, endOfFileSignal(), valueRef) : endOfFileSignal();
+		LispSymbol line = new LispSymbol(prefix + "_l");
+		bindings.add(new MvBinding(line, makeIf(pair, mvCall(LispNames.CAR, pair), onEof)));
+		values.add(line);
+		values.add(makeIf(pair, mvCall(LispNames.CDR, pair), LispTrue.INSTANCE));
 	}
 
 	/**
@@ -46951,9 +47022,22 @@ public final class LispMacroExpander {
 		// (member "SWANK-INDENTATION" *modules*) editor probe) compiles; nil is also what
 		// the interpreter's *readtable* holds, so the value agrees everywhere.
 		java.util.List<String> loadContextVars = new java.util.ArrayList<>();
+		boolean quiet = false;
 		for (LispVal form : program) {
 			usesMv = usesMv || usesMvOperator(form);
 			usesFloatFormat = usesFloatFormat || usesSymbol(form, LispNames.READ_DEFAULT_FLOAT_FORMAT);
+			quiet = quiet || usesAnySymbol(form, QUIET_MV_OPERATORS);
+		}
+		if (quiet) {
+			// Library source's %quiet-values / %quiet-multiple-value-list: the real
+			// operators where the program has the channel, their primary-value
+			// spellings where it does not -- the choice the scan above just made, which
+			// they do not take part in.
+			List<LispVal> spelled = new java.util.ArrayList<>(program.size());
+			for (LispVal form : program) {
+				spelled.add(spellQuietMultipleValues(form, usesMv));
+			}
+			program = spelled;
 		}
 		if (usesMv) {
 			// Every defun's tail settles the spill: a syntactic producer publishes its
@@ -47257,6 +47341,54 @@ public final class LispMacroExpander {
 			}
 		}
 		return false;
+	}
+
+	/** The two operators {@link #spellQuietMultipleValues} spells. */
+	private static final java.util.Set<String> QUIET_MV_OPERATORS = java.util.Set.of(LispNames.QUIET_VALUES_INTERNAL,
+			LispNames.QUIET_MULTIPLE_VALUE_LIST_INTERNAL);
+
+	/**
+	 * Spells every {@code (%quiet-values form...)} and
+	 * {@code (%quiet-multiple-value-list form)} in the form: {@code values} and
+	 * {@code multiple-value-list} in a program with the multiple-value channel, else
+	 * {@code (prog1 form...)} (nil for none) and {@code (list form)} -- what the real
+	 * operators answer where no consumer can see past the primary value. Library source
+	 * whose extra values only a program's own consumer observes writes these, so the
+	 * library alone never makes a program a multiple-value one (.kb/multiple-values.md,
+	 * "Quiet operators in library source"). Unchanged subtrees keep their identity.
+	 * @param form the form
+	 * @param channel whether the program has the multiple-value channel
+	 * @return the spelled form, or {@code form} itself when nothing changed
+	 */
+	private static LispVal spellQuietMultipleValues(LispVal form, boolean channel) {
+		if (!(form instanceof LispCons cons) || !cons.isProperList()) {
+			return form;
+		}
+		if (cons.car() instanceof LispSymbol op && LispNames.QUOTE.equals(op.name())) {
+			return form;
+		}
+		List<LispVal> parts = cons.toList();
+		List<LispVal> spelled = new java.util.ArrayList<>(parts.size());
+		boolean changed = false;
+		for (LispVal part : parts) {
+			LispVal next = spellQuietMultipleValues(part, channel);
+			changed = changed || next != part;
+			spelled.add(next);
+		}
+		if (cons.car() instanceof LispSymbol op && QUIET_MV_OPERATORS.contains(op.name())) {
+			List<LispVal> args = spelled.subList(1, spelled.size());
+			LispVal out;
+			if (LispNames.QUIET_VALUES_INTERNAL.equals(op.name())) {
+				out = channel ? mvCall(LispNames.VALUES, args.toArray(LispVal[]::new)) : args.isEmpty()
+						? LispNil.INSTANCE
+						: args.size() == 1 ? args.getFirst() : mvCall(LispNames.PROG1, args.toArray(LispVal[]::new));
+			}
+			else {
+				out = mvCall(channel ? LispNames.MULTIPLE_VALUE_LIST : LispNames.LIST, args.toArray(LispVal[]::new));
+			}
+			return SourceProvenance.inherit(cons, out);
+		}
+		return changed ? LispCons.rebuiltList(cons, spelled) : form;
 	}
 
 	private static boolean usesMvOperator(LispVal form) {

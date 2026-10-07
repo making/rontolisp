@@ -6643,6 +6643,64 @@ public final class Environment implements Scope {
 				throw new UncheckedIOException(ex);
 			}
 		}));
+		// (%read-line-pair &optional stream): the line read-line reads, as (line .
+		// missing-newline-p), or nil at end of file -- what the multiple-value lowering
+		// of a read-line producer reads both of its values off
+		// (LispMacroExpander.lowerMvProducer). A line reader that reports its
+		// terminator, so only a site that can observe the second value pays for it;
+		// the call-position read-line keeps BufferedReader.readLine above.
+		env.defineFunction(LispNames.READ_LINE_PAIR_INTERNAL,
+				new LispFunction(LispNames.READ_LINE_PAIR_INTERNAL, args -> {
+					requireArgCountBetween(LispNames.READ_LINE_PAIR_INTERNAL, args, 0, 1);
+					LispVal pushedLine = pushbackTake.apply(args);
+					if (pushedLine instanceof LispChar first && first.codePoint() == '\n') {
+						return new LispCons(new LispString(""), LispNil.INSTANCE);
+					}
+					try {
+						TerminatedLine line;
+						LispVal src = resolveInputSrc.apply(args.isEmpty() ? null : args.get(0));
+						if (src == null || src instanceof LispNil || src instanceof LispTrue) {
+							out.flush();
+							line = TerminatedLine.read(stdinReader);
+						}
+						else if (!(src instanceof LispInteger handle)) {
+							throw new LispEvalException(LispNames.READ_LINE + " expects an input stream");
+						}
+						else {
+							Closeable entry = streams.get(handle.value());
+							if (entry instanceof Socket socket) {
+								line = SocketSupport.readTerminatedLine(socket);
+							}
+							else if (entry instanceof BufferedReader reader) {
+								line = TerminatedLine.read(reader);
+							}
+							else if (entry instanceof HttpRequestBodyStream body) {
+								line = body.readTerminatedLine();
+							}
+							else if (entry instanceof RontoIoFileStream io) {
+								line = io.ready() ? new TerminatedLine(io.readLine(), io.lastLineMissingNewline())
+										: null;
+							}
+							else {
+								throw new LispEvalException(LispNames.READ_LINE + " expects an input stream");
+							}
+						}
+						if (pushedLine instanceof LispChar first) {
+							String head = new String(Character.toChars(first.codePoint()));
+							return line == null ? new LispCons(new LispString(head), LispTrue.INSTANCE)
+									: new LispCons(new LispString(head + line.text()),
+											line.missingNewline() ? LispTrue.INSTANCE : LispNil.INSTANCE);
+						}
+						if (line == null) {
+							return LispNil.INSTANCE;
+						}
+						return new LispCons(new LispString(line.text()),
+								line.missingNewline() ? LispTrue.INSTANCE : LispNil.INSTANCE);
+					}
+					catch (IOException ex) {
+						throw new UncheckedIOException(ex);
+					}
+				}));
 		// (read-char [stream [eof-error-p [eof-value]]]): one character from standard
 		// input or a text stream handle (file streams and string input streams). A
 		// CHARACTER is a Unicode CODE POINT on every backend, so a supplementary code
@@ -8589,6 +8647,9 @@ public final class Environment implements Scope {
 			env.publishSpill(extras);
 			return args.get(0);
 		}, true));
+		// %quiet-values: library source's values (LispNames.QUIET_VALUES_INTERNAL). The
+		// interpreter always has the channel, so it is values itself.
+		env.defineFunction(LispNames.QUIET_VALUES_INTERNAL, env.lookupFunction(LispNames.VALUES));
 		// values-list: (values-list '(1 2)) == (values 1 2) -- the first element is
 		// the primary value, the rest go to the spill channel; an empty list is no
 		// value at all.
@@ -10296,7 +10357,7 @@ public final class Environment implements Scope {
 	 * (what {@code stream-error-stream} reads back).
 	 * @param stream the stream the read ran out on
 	 */
-	private static LispEvalException endOfFile(LispVal stream) {
+	static LispEvalException endOfFile(LispVal stream) {
 		return new LispEvalException(ClosRegistry.END_OF_FILE_MESSAGE, ClosRegistry.newEndOfFileCondition(stream));
 	}
 

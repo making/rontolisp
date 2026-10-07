@@ -99,8 +99,11 @@ Gray ストリームを閉じると `t` を返し、他には何もしません 
 定義して押し戻しを自分で所有します — そのとき保管用のセルは一度も書かれません。
 
 読み取り側のメソッドはストリーム終端でキーワード `:eof` を返します。組み込みはそれを通常の
-`eof-error-p` / `eof-value` 契約に翻訳します。`stream-read-line`
-は末尾の部分行をその行として返します — `:eof` は「文字がまったく残っていない」ことを意味します。
+`eof-error-p` / `eof-value` 契約に翻訳します。`stream-read-line` は
+`(values line missing-newline-p)` を返し、末尾の部分行は 2 番目の値を真にしてその行として、
+文字がまったく残っていなければ `:eof` を返します。自分で定義したメソッドは標準 Gray の
+`("" t)` でストリームの終端を示すこともできます。`read-line` はメソッドの 2 番目の値を
+そのまま自身の 2 番目の値として返します。
 
 ```lisp
 (defclass upcase-stream (rontolisp:fundamental-character-output-stream)
@@ -238,8 +241,6 @@ Gray ストリームを閉じると `t` を返し、他には何もしません 
   文字を保管したまま閉じたり捨てたりしたストリームは他のストリームに影響しません。
   保管した文字が残っているストリームへの 2 回目の `unread-char` は通知します。
   `read-byte` / `read-sequence` / `read` はこれを参照しません。
-- 読み取り総称関数はプライマリ値のみを返します: `stream-read-line` に
-  `(values line missing-newline-p)` のペアはなく、`:eof` が EOF の唯一のシグナルです。
 - Gray インスタンスへの `listen` はインタープリタと JVM で動作します。Preview 1 WASM
   バックエンドはあらゆる `listen` 呼び出しをコンパイル時に拒否します
   (Gray とは無関係の既存プラットフォーム制限)。

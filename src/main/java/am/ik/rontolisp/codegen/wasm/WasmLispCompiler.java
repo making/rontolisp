@@ -814,6 +814,13 @@ public final class WasmLispCompiler implements LispCompiler {
 	private boolean usesIdentityHashTables;
 
 	/**
+	 * Whether {@code _read_line} records missing-newline-p for {@code %read-line-pair}
+	 * ({@link #READ_LINE_END_ADDR}): a program that can lower a {@code read-line}
+	 * producer. Every other program keeps the core's bytes.
+	 */
+	private boolean usesReadLinePairs;
+
+	/**
 	 * Whether the degenerate (non-asyncMode) tier's first-class stream value can exist in
 	 * this module: the program names {@code rontolisp::%stream-new}, its one producer.
 	 * Adds ONE type entry ({@code TYPE_P1_STREAM}) and the two-function
@@ -2767,6 +2774,13 @@ public final class WasmLispCompiler implements LispCompiler {
 	// Scratch (8 bytes) where clock_time_get writes the current time in nanoseconds.
 	static final int TIME_SCRATCH_ADDR = 128;
 
+	// read-line's missing-newline-p, left by a _read_line built to record it
+	// (WasmRuntimeBuilder.buildReadLineBody) and read by %read-line-pair straight after
+	// the call. It shares the time scratch: nothing between that call and that read can
+	// run a time built-in, and the module is single-threaded, so the cell is never live
+	// for both at once -- the 252 bytes below DATA_BASE_OFFSET hold no free word.
+	static final int READ_LINE_END_ADDR = TIME_SCRATCH_ADDR;
+
 	// getenv scratch: environ count / buffer-size words (low free region), and the
 	// pointer
 	// array + "KEY=VALUE\0" buffer placed in page 3 (the canonical realloc heap is page
@@ -3585,6 +3599,14 @@ public final class WasmLispCompiler implements LispCompiler {
 		// Create the %mv-spill global (a top-level setq) when the program uses a
 		// multiple-value operator: the expansions read/write it across functions.
 		program = LispMacroExpander.injectMvSpillGlobal(program, this.runtimeFeatures);
+		// %read-line-pair, the read under a read-line producer's multiple-value lowering,
+		// exists only where one was lowered: a settled defun tail already spells it, and
+		// a consumer lowers its producer during Pass 2 -- in a program with the channel
+		// that names read-line (or its --component alias).
+		boolean namesReadLine = programUsesSymbol(program, LispNames.READ_LINE) || programUsesSymbol(program,
+				PackageRegistry.qualifyInternal(LispNames.RONTOLISP_PKG, LispNames.READ_LINE_RAW_INTERNAL));
+		this.usesReadLinePairs = programUsesSymbol(program, LispNames.READ_LINE_PAIR_INTERNAL)
+				|| (LispMacroExpander.declaresMvSpill(program) && namesReadLine);
 		// Take the arguments of too-wide fixed-arity defuns as one rest list so
 		// real-library signatures compile despite the MAX_CALLABLE_ARITY type limit;
 		// such a defun checks its count itself, through _arity_chk where one is built.
@@ -6091,7 +6113,7 @@ public final class WasmLispCompiler implements LispCompiler {
 		// (a non-list lands in _type_err_list under APPEND in EH mode)
 		byte[] appendBody = WasmRuntimeBuilder.buildAppendBody(this.usesIdentityHashTables, operandOpGlobalIndex,
 				operandOperators.ids().getOrDefault(LispNames.APPEND, 0));
-		byte[] readLineBody = WasmRuntimeBuilder.buildReadLineBody(stringTable);
+		byte[] readLineBody = WasmRuntimeBuilder.buildReadLineBody(stringTable, this.usesReadLinePairs);
 		byte[] princValBody = WasmRuntimeBuilder.buildPrincValBody(stringTable, this.simd,
 				this.asyncMode ? asyncTypeBase() : -1, this.usesP1Streams ? p1StreamTypeBase() : -1,
 				this.usesInstances ? instanceTypeBase() : -1, renderPathGlobalIndex, renderDepthGlobalIndex,
