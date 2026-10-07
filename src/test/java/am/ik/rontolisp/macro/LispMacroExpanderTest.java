@@ -3,6 +3,7 @@ package am.ik.rontolisp.macro;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 import am.ik.rontolisp.ClosRegistry;
 import am.ik.rontolisp.LispCons;
@@ -436,14 +437,43 @@ class LispMacroExpanderTest {
 	void aPlaceNoDefinitionMakesIsTheSetfFunctionCall() {
 		// CL looks the (setf name) function up when the form runs; a standard name no
 		// program may define stays a refusal.
-		LispCons place = (LispCons) LispReader.readAllFromString("(setf (foo x) (bar))").get(0);
+		LispCons place = (LispCons) LispReader.readAllFromString("(setf (foo x) y)").get(0);
 		assertThat(LispMacroExpander.expandSetf(place, new HashMap<>(), new ClosRegistry()).print())
-			.isEqualTo("(FUNCALL #'(SETF FOO) (BAR) X)");
+			.isEqualTo("(FUNCALL #'(SETF FOO) Y X)");
 		LispCons standard = (LispCons) LispReader.readAllFromString("(setf (length x) 1)").get(0);
 		org.assertj.core.api.Assertions
 			.assertThatThrownBy(() -> LispMacroExpander.expandSetf(standard, new HashMap<>(), new ClosRegistry()))
 			.isInstanceOf(UnsupportedOperationException.class)
 			.hasMessage("setf does not support place: LENGTH");
+	}
+
+	@Test
+	void aSetfFunctionPlaceBindsItsArgumentsOnlyWhereTheOrderIsObservable() {
+		// CLHS 5.1.2.9: the arguments, then the value, then the function. A writer a
+		// definition makes is called directly, so only the arguments move ahead of the
+		// value; one looked up when the form runs moves behind the value too.
+		Map<String, Integer> writers = new HashMap<>();
+		writers.put("ACC", LispMacroExpander.SETF_FUNCTION_MARKER);
+		assertThat(expandedSetf("(setf (acc o) v)", writers)).isEqualTo("(FUNCALL #'|%setf-ACC| V O)");
+		assertThat(expandedSetf("(setf (acc o) 1)", writers)).isEqualTo("(FUNCALL #'|%setf-ACC| 1 O)");
+		assertThat(expandedSetf("(setf (acc (f)) 1)", writers)).isEqualTo("(FUNCALL #'|%setf-ACC| 1 (F))");
+		assertThat(expandedSetf("(setf (acc 1 :k) (g))", writers)).isEqualTo("(FUNCALL #'|%setf-ACC| (G) 1 :K)");
+		assertThat(expandedSetf("(setf (acc o) (g))", writers))
+			.isEqualTo("(LET* ((|__setf_arg1| O)) (FUNCALL #'|%setf-ACC| (G) |__setf_arg1|))");
+		assertThat(expandedSetf("(setf (acc o 2 (f)) x)", writers)).isEqualTo(
+				"(LET* ((|__setf_arg1| O) (|__setf_arg2| (F))) (FUNCALL #'|%setf-ACC| X |__setf_arg1| 2 |__setf_arg2|))");
+		assertThat(expandedSetf("(setf (foo x) y)", writers)).isEqualTo("(FUNCALL #'(SETF FOO) Y X)");
+		assertThat(expandedSetf("(setf (foo 1) (bar))", writers))
+			.isEqualTo("(LET* ((|__setf_arg1| (BAR))) (FUNCALL #'(SETF FOO) |__setf_arg1| 1))");
+		assertThat(expandedSetf("(setf (foo x) (bar))", writers)).isEqualTo(
+				"(LET* ((|__setf_arg1| X) (|__setf_arg2| (BAR))) (FUNCALL #'(SETF FOO) |__setf_arg2| |__setf_arg1|))");
+		assertThat(expandedSetf("(setf (foo |__setf_arg1|) (bar))", writers)).isEqualTo(
+				"(LET* ((|__setf_arg2| |__setf_arg1|) (|__setf_arg3| (BAR))) (FUNCALL #'(SETF FOO) |__setf_arg3| |__setf_arg2|))");
+	}
+
+	private static String expandedSetf(String source, Map<String, Integer> structAccessors) {
+		LispCons form = (LispCons) LispReader.readAllFromString(source).get(0);
+		return LispMacroExpander.expandSetf(form, structAccessors, new ClosRegistry()).print();
 	}
 
 	private static List<String> definedFunctionNames(String source) {

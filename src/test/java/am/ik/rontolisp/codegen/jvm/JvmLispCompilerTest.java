@@ -5867,6 +5867,13 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void aSetfFunctionPlaceEvaluatesItsArgumentsBeforeTheValue() throws Exception {
+		// Interpreter parity (the LispEvaluatorTest twin): the value ran first.
+		assertThat(compileAndRun(am.ik.rontolisp.SetfFunctionNameFixture.EVALUATION_ORDER))
+			.isEqualTo(am.ik.rontolisp.SetfFunctionNameFixture.EVALUATION_ORDER_EXPECTED);
+	}
+
+	@Test
 	void anUndefinedSetfFunctionIsReportedAsTheNameTheProgramWrote() throws Exception {
 		// Interpreter parity (the LispEvaluatorTest twin): the call's raw throw spells
 		// (setf name) and the landing pad reads the list back as the name.

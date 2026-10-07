@@ -25,6 +25,38 @@ argument of the place bound to a temp in a `let*` in front of the expansion; tem
 - **`the`/`values`/`apply`/`ldb`/`mask-field` places hoist nothing** -- their non-atomic
   argument is read STRUCTURALLY by the `setf` expanders.
 
+## Sibling: a setf-function place evaluates its arguments before the value
+
+**`(setf (name arg...) value)` evaluates the arguments left to right, then the value, then
+looks the function up (CLHS 5.1.2.9), on every backend**, though the call passes the value
+first. `LispMacroExpander.setfFunctionCall` builds both arms of `expandSetf`'s default
+branch (a `%setf-` writer a definition makes -- `defun (setf ...)`, `defmethod (setf ...)`,
+a CLOS `:accessor`, the prelude's `bit`/`sbit`/`get` -- and the late-bound `#'(setf name)`).
+
+- No temporaries where the order is unobservable: every subform a constant or a read (a
+  variable, `#'name`), a constant value, or (a writer a definition makes) every argument a
+  constant. So `(setf (acc o) v)` / `(setf (acc o) 1)` are the bare call they always were.
+- Otherwise every non-constant argument goes to a `let*` temp ahead of the value; a lone
+  variable on either side is not enough (the other side may assign it, directly or through a
+  closure). The late-bound arm binds the value too, so an undefined function signals after
+  both. `incf`/`push` hand their `PlaceTemps` temps over as variables, so a non-constant new
+  value binds them once more.
+- Lite: a writer a definition makes is still looked up before the value on the interpreter,
+  so a place whose own subforms redefine or `fmakunbound` it differs from SBCL (the compile
+  paths bind it directly anyway); when every subform is a read, an undefined late-bound
+  function is reported ahead of an unbound variable among them.
+
+Measured 2026-10-07: `(setf (eo-u (f "a")) (f "b"))` / a CLOS accessor / `bit` / `get` /
+`defmethod (setf ...)` were SBCL 2.2.9 `ab`, interpreter, JVM, P1 and component `ba`; a value
+form assigning the argument variable redirected the write; `(setf (undefined (f "a"))
+(f "b"))` ran neither before signalling. Pinned by `SetfFunctionNameFixture.EVALUATION_ORDER`
+(`aSetfFunctionPlaceEvaluatesItsArgumentsBeforeTheValue` in the three backend suites) and
+`LispMacroExpanderTest#aSetfFunctionPlaceBindsItsArgumentsOnlyWhereTheOrderIsObservable`.
+
+Not this rule (measured the same day, SBCL left to right): `(setf (gethash k h) v)` on P1
+and the component evaluates `v` before `h`, and the gethash place's default subform is never
+evaluated on any backend.
+
 ## An operation applies after its operands
 
 **Invariant: an operation applies -- and signals -- only once every argument is evaluated,

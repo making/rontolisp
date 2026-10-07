@@ -27198,6 +27198,18 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void aSetfFunctionPlaceEvaluatesItsArgumentsBeforeTheValue() throws Exception {
+		// The wasm twin of the JvmLispCompilerTest test of this name, on Preview 1 and
+		// the component.
+		String program = am.ik.rontolisp.SetfFunctionNameFixture.EVALUATION_ORDER;
+		String expected = am.ik.rontolisp.SetfFunctionNameFixture.EVALUATION_ORDER_EXPECTED;
+		assertThat(compileAndRunProgram(am.ik.rontolisp.cli.CompileFrontendAccess.corpus(program,
+				am.ik.rontolisp.reader.Features.WASM, true, false)))
+			.isEqualTo(expected);
+		assertThat(runComponentFrontendProgramWithDir(program)).isEqualTo(expected);
+	}
+
+	@Test
 	void anUndefinedSetfFunctionIsReportedAsTheNameTheProgramWrote() throws Exception {
 		// The wasm twin of the JvmLispCompilerTest test of this name, on Preview 1 and
 		// the component.

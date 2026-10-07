@@ -21227,6 +21227,14 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void aSetfFunctionPlaceEvaluatesItsArgumentsBeforeTheValue() {
+		// The reference answer (SBCL's) for the compiled backends' twins of this name:
+		// the value ran first.
+		assertThat(printedLines(am.ik.rontolisp.SetfFunctionNameFixture.EVALUATION_ORDER))
+			.isEqualTo(am.ik.rontolisp.SetfFunctionNameFixture.EVALUATION_ORDER_EXPECTED);
+	}
+
+	@Test
 	void aSetfOfAStandardNameNoDefinitionMakesAPlaceIsStillRefused() {
 		// No program may define (setf length), so the place is refused when the form
 		// expands, as a limitation, not deferred to an undefined function.

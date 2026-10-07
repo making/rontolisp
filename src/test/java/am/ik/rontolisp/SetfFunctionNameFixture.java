@@ -17,7 +17,9 @@ package am.ik.rontolisp;
  * at expansion ({@code setf does not support place}) where CL calls the
  * {@code (setf name)} function when the form runs. {@link #STRUCT_WRITER} takes the
  * {@code (setf name)} function of {@code defstruct} slot accessors, which no backend
- * defined. Shared by the backend suites, so every backend is held to one expected text.
+ * defined. {@link #EVALUATION_ORDER} traces the order a setf-function place evaluates its
+ * arguments and its value in, which every backend reversed (the value first). Shared by
+ * the backend suites, so every backend is held to one expected text.
  */
 public final class SetfFunctionNameFixture {
 
@@ -157,5 +159,58 @@ public final class SetfFunctionNameFixture {
 	public static final String STRUCT_WRITER_EXPECTED = String.join("\n", "(NIL NIL NIL NIL NIL)", "(6 6)", "(7 7)",
 			"(8 8)", "((9) 9)", "10", "(SETF SFS-C)", "(SETF SFS-C)", "(10 0)", "(3 4 5 4 5)", "(SETF SFS2-C)",
 			"(42 SFS)");
+
+	/**
+	 * The order {@code (setf (name arg...) value)} evaluates in: the place's arguments
+	 * left to right, then the value, then the function is looked up (CLHS 5.1.2.9) --
+	 * through a {@code defun (setf ...)} writer, a value or a closure assigning an
+	 * argument variable (or an argument assigning the value variable), a CLOS accessor,
+	 * {@code incf} / {@code push} through one, a {@code defmethod (setf ...)}, a writer
+	 * defined after the place, one only {@code (setf fdefinition)} installs, an undefined
+	 * one, and the prelude's {@code bit} and {@code get} writers.
+	 */
+	public static final String EVALUATION_ORDER = """
+			(defvar *sfo-log* nil)
+			(defun sfo-tr (x v) (push x *sfo-log*) v)
+			(defun sfo-take () (prog1 (format nil "~{~A~}" (reverse *sfo-log*)) (setq *sfo-log* nil)))
+			(defun (setf sfo-u) (v x) (list v x))
+			(defun (setf sfo-m) (v x y) (list v x y))
+			(print (list (setf (sfo-u (sfo-tr "a" 1)) (sfo-tr "b" 2)) (sfo-take)))
+			(print (list (setf (sfo-m (sfo-tr "a" 1) (sfo-tr "b" 2)) (sfo-tr "c" 3)) (sfo-take)))
+			(print (list (setf (sfo-m 1 (sfo-tr "a" 2)) (sfo-tr "b" 3)) (sfo-take)))
+			(print (let ((k 1)) (setf (sfo-u k) (progn (setq k 2) 3))))
+			(print (let ((k 1)) (setf (sfo-u (progn (setq k 2) 3)) k)))
+			(print (let* ((k 1) (f (lambda () (setq k 2) 3))) (setf (sfo-u k) (funcall f))))
+			(defclass sfo-c () ((s :accessor sfo-s :initform 0)))
+			(let ((o (make-instance 'sfo-c)) (p (make-instance 'sfo-c)))
+			  (print (list (setf (sfo-s (sfo-tr "c" o)) (sfo-tr "d" 3)) (sfo-take)))
+			  (print (let ((x o)) (list (setf (sfo-s x) (progn (setq x p) 5)) (sfo-s o) (sfo-s p))))
+			  (print (list (incf (sfo-s (sfo-tr "e" o)) (sfo-tr "f" 10)) (sfo-take)))
+			  (setf (sfo-s o) nil)
+			  (print (list (push (sfo-tr "g" 1) (sfo-s (sfo-tr "h" o))) (sfo-take))))
+			(defgeneric (setf sfo-g) (v x))
+			(defmethod (setf sfo-g) (v (x integer)) (list :g v x))
+			(print (list (setf (sfo-g (sfo-tr "i" 1)) (sfo-tr "j" 2)) (sfo-take)))
+			(defun sfo-late (n) (setf (sfo-l (sfo-tr "k" n)) (sfo-tr "l" 5)))
+			(defun (setf sfo-l) (v n) (list :late v n))
+			(print (list (sfo-late 7) (sfo-take)))
+			(setf (fdefinition '(setf sfo-dyn)) (lambda (v x) (list :dyn v x)))
+			(print (list (setf (sfo-dyn (sfo-tr "v" 1)) (sfo-tr "w" 2)) (sfo-take)))
+			(print (list (handler-case (setf (sfo-nope (sfo-tr "m" 1)) (sfo-tr "n" 2))
+			               (undefined-function (c) (cell-error-name c)))
+			             (sfo-take)))
+			(print (list (handler-case (setf (sfo-nope 1) (sfo-tr "o" 2))
+			               (undefined-function (c) (cell-error-name c)))
+			             (sfo-take)))
+			(let ((v (make-array 2 :element-type 'bit)))
+			  (print (list (setf (bit (sfo-tr "p" v) (sfo-tr "q" 0)) (sfo-tr "r" 1)) (sfo-take))))
+			(print (list (setf (get (sfo-tr "s" 'sfo-sym) (sfo-tr "t" 'sfo-ind)) (sfo-tr "u" 2)) (sfo-take)))
+			""";
+
+	/** What {@link #EVALUATION_ORDER} prints, one value per line (SBCL's). */
+	public static final String EVALUATION_ORDER_EXPECTED = String.join("\n", "((2 1) \"ab\")", "((3 1 2) \"abc\")",
+			"((3 1 2) \"ab\")", "(3 1)", "(2 3)", "(3 1)", "(3 \"cd\")", "(5 5 0)", "(15 \"ef\")", "((1) \"gh\")",
+			"((:G 2 1) \"ij\")", "((:LATE 5 7) \"kl\")", "((:DYN 2 1) \"vw\")", "((SETF SFO-NOPE) \"mn\")",
+			"((SETF SFO-NOPE) \"o\")", "(1 \"pqr\")", "(2 \"stu\")");
 
 }
