@@ -9,7 +9,6 @@ import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispHashTable;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispVal;
-import am.ik.rontolisp.compiler.FunctionDesignators;
 import am.ik.rontolisp.compiler.OperandTypes;
 import am.ik.rontolisp.macro.LispMacroExpander;
 
@@ -255,7 +254,7 @@ final class JvmHashTableCompiler {
 		MethodCode c = ctx.body;
 
 		// func = args[1]; pairs = _hashValues(args[2])
-		JvmExprCompiler.compileExpr(FunctionDesignators.normalize(args.get(1)), ctx, className);
+		JvmExprCompiler.compileExpr(JvmFunctionFormCompiler.designator(args.get(1), ctx), ctx, className);
 		int funcSlot = ctx.allocTemp();
 		c.astore(funcSlot);
 

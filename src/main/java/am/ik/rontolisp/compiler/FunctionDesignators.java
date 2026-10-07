@@ -6,6 +6,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.function.Predicate;
 
 import org.jspecify.annotations.Nullable;
 
@@ -185,6 +186,28 @@ public final class FunctionDesignators {
 			return new LispCons(new LispSymbol(LispNames.FUNCTION), new LispCons(sym, LispNil.INSTANCE));
 		}
 		return fnForm;
+	}
+
+	/**
+	 * {@link #normalize(LispVal)} for a backend that knows which names resolve: a quoted
+	 * name {@code defined} rejects stays the quoted SYMBOL, which the dispatcher looks up
+	 * when the call runs -- after the arguments, and never for a call that does not
+	 * happen, as the interpreter does -- with a compile-time warning, so a typo stays
+	 * visible. Rewritten, the backend would compile {@code (function name)} of a name no
+	 * definition has, which signals where the designator is evaluated, before the
+	 * arguments.
+	 * @param fnForm the expression in function-designator position
+	 * @param defined whether the backend resolves {@code (function name)} for a name
+	 * @return the normalized expression
+	 */
+	public static LispVal normalize(LispVal fnForm, Predicate<String> defined) {
+		LispVal normalized = normalize(fnForm);
+		if (normalized != fnForm && normalized instanceof LispCons function && function.cdr() instanceof LispCons rest
+				&& rest.car() instanceof LispSymbol sym && !defined.test(sym.name())) {
+			CompileWarnings.warn(fnForm, "the function " + sym.name() + " is undefined; looked up when the call runs");
+			return fnForm;
+		}
+		return normalized;
 	}
 
 	/**

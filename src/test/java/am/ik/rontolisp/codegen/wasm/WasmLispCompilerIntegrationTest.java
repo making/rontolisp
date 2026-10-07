@@ -26912,6 +26912,23 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void anUndefinedNameTakenAsAFunctionSignalsWhenTheReferenceRuns() throws Exception {
+		// The wasm twin of the JvmLispCompilerTest test of this name, on Preview 1 and
+		// the component: #'name compiles to the direct call's signal at the reference, a
+		// quoted designator stays the symbol the dispatcher reports when the call runs.
+		for (String[] program : new String[][] {
+				{ am.ik.rontolisp.UndefinedFunctionNameFixture.REFERENCE,
+						am.ik.rontolisp.UndefinedFunctionNameFixture.REFERENCE_EXPECTED },
+				{ am.ik.rontolisp.UndefinedFunctionNameFixture.REFERENCE_RESTART,
+						am.ik.rontolisp.UndefinedFunctionNameFixture.REFERENCE_RESTART_EXPECTED } }) {
+			assertThat(compileAndRunProgram(am.ik.rontolisp.cli.CompileFrontendAccess.corpus(program[0],
+					am.ik.rontolisp.reader.Features.WASM, true, false)))
+				.isEqualTo(program[1]);
+			assertThat(runComponentFrontendProgramWithDir(program[0])).isEqualTo(program[1]);
+		}
+	}
+
+	@Test
 	void anUnboundVariableCarriesItsNameInTheCellErrorNameSlot() throws Exception {
 		// The wasm twin of the JvmLispCompilerTest test of this name, on Preview 1 and
 		// the component, both through the whole front end: _symbol_value's miss throws

@@ -11,7 +11,6 @@ import am.ik.rontolisp.compiler.CompileWarnings;
 import am.ik.rontolisp.compiler.DefinedCallArity;
 import am.ik.rontolisp.macro.LispMacroExpander;
 import am.ik.rontolisp.LispVal;
-import am.ik.rontolisp.compiler.FunctionDesignators;
 import am.ik.wasm.Instruction;
 import am.ik.wasm.Type;
 
@@ -92,7 +91,7 @@ final class WasmFunctionCallCompiler {
 		int dispatchFuncIdx = WasmLispCompiler.dispatchFuncIndex(arity, ctx.extraDispatchFuncBase);
 
 		// Push funcval
-		WasmExprCompiler.compileExpr(FunctionDesignators.normalize(parts.get(1)), ctx);
+		WasmExprCompiler.compileExpr(WasmFunctionFormCompiler.designator(parts.get(1), ctx), ctx);
 		// Push args
 		args.forEach(Runnable::run);
 		// Call dispatch
@@ -166,17 +165,29 @@ final class WasmFunctionCallCompiler {
 			// when the call is EXECUTED, so a library whose error path references a
 			// function rontolisp does not provide stays compilable.
 			CompileWarnings.warn(cons, "the function " + name + " is undefined; compiled as a call-time error");
-			if (ctx.undefinedFunctionFuncIndex >= 0) {
-				// The throw every other signal of the class reaches: the typed instance,
-				// naming the function, where the module baked its layout.
-				WasmExprCompiler.compileExpr(new LispCons(new LispSymbol(LispNames.QUOTE),
-						new LispCons(new LispSymbol(name), LispNil.INSTANCE)), ctx);
-				ctx.writer.write(Instruction.CALL);
-				ctx.writer.writeUnsignedLeb128(ctx.undefinedFunctionFuncIndex);
-				return;
-			}
-			WasmExprCompiler.compileExpr(LispMacroExpander.undefinedFunctionCallStub(name), ctx);
+			emitUndefinedFunctionSignal(name, ctx);
 		}
+	}
+
+	/**
+	 * Emits the undefined-function signal for a name no definition has, in a value
+	 * position: the call-time stub of a direct call, and a {@code #'name} reference
+	 * (WasmFunctionFormCompiler). The throw every other signal of the class reaches --
+	 * the typed instance, naming the function -- where the module baked its layout, the
+	 * message-only {@code simple-error} stub elsewhere.
+	 * @param name the undefined function's name
+	 * @param ctx the compilation context
+	 */
+	static void emitUndefinedFunctionSignal(String name, WasmLispCompiler.Ctx ctx) {
+		if (ctx.undefinedFunctionFuncIndex >= 0) {
+			WasmExprCompiler.compileExpr(
+					new LispCons(new LispSymbol(LispNames.QUOTE), new LispCons(new LispSymbol(name), LispNil.INSTANCE)),
+					ctx);
+			ctx.writer.write(Instruction.CALL);
+			ctx.writer.writeUnsignedLeb128(ctx.undefinedFunctionFuncIndex);
+			return;
+		}
+		WasmExprCompiler.compileExpr(LispMacroExpander.undefinedFunctionCallStub(name), ctx);
 	}
 
 }

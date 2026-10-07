@@ -840,6 +840,39 @@ class RontoLispCliStreamsTest {
 	}
 
 	@Test
+	void aReferenceToAnUndefinedFunctionWarnsAtTheReferenceOnEveryBackend() throws Exception {
+		// #'name and a quoted designator of a name no definition has compile -- the
+		// first to a signal where it is evaluated, the second to a symbol the
+		// dispatcher looks up when the call runs -- each with its own warning.
+		Path file = this.tempDir.resolve("warn.lisp");
+		Files.writeString(file, """
+				(defun ref () #'no-such-ref)
+				(defun call (x)
+				  (funcall 'no-such-call x))
+				(print (list (ignore-errors (ref)) (ignore-errors (call 1))))
+				""");
+		for (String output : new String[] { "Warn.class", "warn.wasm" }) {
+			PrintStream savedErr = System.err;
+			ByteArrayOutputStream captured = new ByteArrayOutputStream();
+			try {
+				System.setErr(new PrintStream(captured, true, StandardCharsets.UTF_8));
+				runCli("", file.toString(), "-o", this.tempDir.resolve(output).toString());
+			}
+			finally {
+				System.setErr(savedErr);
+			}
+			// The location prints the path as given; the file name is what is pinned.
+			assertThat(captured.toString(StandardCharsets.UTF_8)
+				.lines()
+				.filter(line -> line.contains("warning: "))
+				.map(line -> line.substring(line.lastIndexOf('/') + 1))).as(output)
+				.containsExactly(
+						"warn.lisp:1:15: warning: the function NO-SUCH-REF is undefined; compiled as a run-time error",
+						"warn.lisp:3:12: warning: the function NO-SUCH-CALL is undefined; looked up when the call runs");
+		}
+	}
+
+	@Test
 	void anUndefinedFunctionWarnsExactlyOncePerCallSite() throws Exception {
 		// The JVM backend re-runs the whole compile when a runtime-helper gate was
 		// under-predicted, and the discarded attempt used to have printed its warnings

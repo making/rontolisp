@@ -63,7 +63,7 @@ final class JvmDesignatorCall {
 			return new JvmDesignatorCall(direct, -1, arity);
 		}
 		ctx.indirectCallArities.add(arity);
-		JvmExprCompiler.compileExpr(FunctionDesignators.normalize(fnForm), ctx, className);
+		JvmExprCompiler.compileExpr(JvmFunctionFormCompiler.designator(fnForm, ctx), ctx, className);
 		int slot = ctx.allocTemp();
 		ctx.body.astore(slot);
 		return new JvmDesignatorCall(null, slot, arity);

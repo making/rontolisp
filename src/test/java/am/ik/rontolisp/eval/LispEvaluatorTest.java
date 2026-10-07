@@ -20887,6 +20887,15 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void anUndefinedNameTakenAsAFunctionSignalsWhenTheReferenceRuns() {
+		// The reference answer (SBCL's) for the compiled backends' twins of this name.
+		assertThat(printedLines(am.ik.rontolisp.UndefinedFunctionNameFixture.REFERENCE))
+			.isEqualTo(am.ik.rontolisp.UndefinedFunctionNameFixture.REFERENCE_EXPECTED);
+		assertThat(printedLines(am.ik.rontolisp.UndefinedFunctionNameFixture.REFERENCE_RESTART))
+			.isEqualTo(am.ik.rontolisp.UndefinedFunctionNameFixture.REFERENCE_RESTART_EXPECTED);
+	}
+
+	@Test
 	void anUnboundVariableCarriesItsNameInTheCellErrorNameSlot() {
 		// The reference answer (SBCL's) the compiled backends' twins of this name
 		// (JvmLispCompilerTest, WasmLispCompilerIntegrationTest) are measured against:

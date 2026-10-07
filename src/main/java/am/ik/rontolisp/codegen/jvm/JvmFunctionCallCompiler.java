@@ -45,7 +45,8 @@ final class JvmFunctionCallCompiler {
 			// such frames, else a bounce the trampoline loop above drives in its own
 			// frame (JvmTailBounce). A literal designator names its target, so that call
 			// stays the direct one below.
-			JvmTailBounce.emitValueTail(parts.get(1), parts, 2, ctx, className);
+			JvmTailBounce.emitValueTail(JvmFunctionFormCompiler.designator(parts.get(1), ctx), parts, 2, ctx,
+					className);
 			return;
 		}
 		// A literal designator is called directly, anything else goes through the arity

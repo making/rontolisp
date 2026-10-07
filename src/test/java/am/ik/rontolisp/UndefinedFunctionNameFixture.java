@@ -68,4 +68,59 @@ public final class UndefinedFunctionNameFixture {
 	public static final String RESTART_EXPECTED = "((UFN-NOPE UNDEFINED-FUNCTION) (UFN-DIRECT UNDEFINED-FUNCTION)"
 			+ " (UFN-DIRECT UFN-NOPE))";
 
+	/**
+	 * A LITERAL reference to a name no definition has: {@code #'name},
+	 * {@code (symbol-function 'name)} and a quoted designator
+	 * ({@code (funcall 'name ...)}, {@code apply}, {@code mapcar}), at top level and in a
+	 * {@code defun} body. The compiled backends refused the whole program
+	 * ({@code Cannot compile: NAME}) where the interpreter and SBCL signal when the
+	 * reference runs. {@code #'name} signals where it is evaluated; a quoted designator
+	 * is looked up when the call runs, after the arguments ({@code (:SPREAD :ARG)}); a
+	 * reference in a branch never taken signals nothing.
+	 */
+	public static final String REFERENCE = """
+			(defun ufr-name (thunk)
+			  (handler-case (funcall thunk)
+			    (undefined-function (c) (list (cell-error-name c) (type-of c)))))
+			(defun ufr-ref () #'ufr-nope)
+			(defun ufr-call (x) (funcall 'ufr-nope x))
+			(defvar *ufr-trace* nil)
+			(print (list (ufr-name (lambda () (funcall 'ufr-nope 1)))
+			             (ufr-name (lambda () #'ufr-nope))
+			             (ufr-name (lambda () (symbol-function 'ufr-nope)))
+			             (ufr-name (lambda () (apply 'ufr-nope '(1 2))))
+			             (ufr-name (lambda () (mapcar 'ufr-nope '(1 2))))
+			             (ufr-name (lambda () (mapcar #'ufr-nope '(1 2))))
+			             (ufr-name #'ufr-ref)
+			             (ufr-name (lambda () (ufr-call 1)))))
+			(print (list (ufr-name (lambda () (funcall 'ufr-nope (push :arg *ufr-trace*))))
+			             (ufr-name (lambda () (apply 'ufr-nope (push :spread *ufr-trace*) nil)))
+			             *ufr-trace*
+			             (if (car (list nil)) #'ufr-nope :dead)))
+			""";
+
+	/** What {@link #REFERENCE} prints, one value per line. */
+	public static final String REFERENCE_EXPECTED = String.join("\n",
+			"((UFR-NOPE UNDEFINED-FUNCTION) (UFR-NOPE UNDEFINED-FUNCTION) (UFR-NOPE UNDEFINED-FUNCTION)"
+					+ " (UFR-NOPE UNDEFINED-FUNCTION) (UFR-NOPE UNDEFINED-FUNCTION) (UFR-NOPE UNDEFINED-FUNCTION)"
+					+ " (UFR-NOPE UNDEFINED-FUNCTION) (UFR-NOPE UNDEFINED-FUNCTION))",
+			"((UFR-NOPE UNDEFINED-FUNCTION) (UFR-NOPE UNDEFINED-FUNCTION) (:SPREAD :ARG) :DEAD)");
+
+	/** {@link #REFERENCE}'s two forms of reference under a {@code handler-bind}. */
+	public static final String REFERENCE_RESTART = """
+			(defvar *ufr-seen* nil)
+			(defun ufr-bound (thunk)
+			  (handler-case
+			      (handler-bind ((undefined-function (lambda (c) (push (cell-error-name c) *ufr-seen*))))
+			        (funcall thunk))
+			    (undefined-function (c) (list (cell-error-name c) (type-of c)))))
+			(print (list (ufr-bound (lambda () #'ufr-ref-nope))
+			             (ufr-bound (lambda () (funcall 'ufr-call-nope 1)))
+			             *ufr-seen*))
+			""";
+
+	/** What {@link #REFERENCE_RESTART} prints. */
+	public static final String REFERENCE_RESTART_EXPECTED = "((UFR-REF-NOPE UNDEFINED-FUNCTION)"
+			+ " (UFR-CALL-NOPE UNDEFINED-FUNCTION) (UFR-CALL-NOPE UFR-REF-NOPE))";
+
 }

@@ -5578,6 +5578,17 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void anUndefinedNameTakenAsAFunctionSignalsWhenTheReferenceRuns() throws Exception {
+		// Interpreter parity (the LispEvaluatorTest twin): #'name compiles to the direct
+		// call's raw throw at the reference, a quoted designator stays the symbol the
+		// dispatcher reports when the call runs (.kb/error-handling.md).
+		assertThat(compileAndRun(am.ik.rontolisp.UndefinedFunctionNameFixture.REFERENCE))
+			.isEqualTo(am.ik.rontolisp.UndefinedFunctionNameFixture.REFERENCE_EXPECTED);
+		assertThat(compileAndRun(am.ik.rontolisp.UndefinedFunctionNameFixture.REFERENCE_RESTART))
+			.isEqualTo(am.ik.rontolisp.UndefinedFunctionNameFixture.REFERENCE_RESTART_EXPECTED);
+	}
+
+	@Test
 	void anUnboundVariableCarriesItsNameInTheCellErrorNameSlot() throws Exception {
 		// Interpreter parity (the LispEvaluatorTest twin): the landing pad reads the name
 		// back out of the text it recovers the class from, in restart mode as well
