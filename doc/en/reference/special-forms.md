@@ -8,7 +8,7 @@ and a runnable example you can evaluate in your browser.
 | `quote` | `(quote expr)` or `'expr` | Returns the expression unevaluated |
 | `if` | `(if cond then else?)` | Conditional. `nil` is false, everything else is true |
 | `let` | `(let ((x 1) (y 2)) body...)` | Local variable bindings (parallel). A name proclaimed special (`defvar`/`declaim`) is bound dynamically instead of lexically |
-| `progv` | `(progv symbols values body...)` | Dynamically bind a runtime-computed list of `symbols` to `values` for the body, restored on exit (interpreter only) |
+| `progv` | `(progv symbols values body...)` | Dynamically bind a runtime-computed list of `symbols` to `values` for the body, restored on exit |
 | `lambda` | `(lambda (params...) body...)` | Anonymous function |
 | `progn` | `(progn expr1 expr2...)` | Evaluate expressions in sequence, return the last |
 | `setq` | `(setq name value ...)` | Assign values to variables; accepts multiple `name value` pairs, assigned left to right, and returns the last value |

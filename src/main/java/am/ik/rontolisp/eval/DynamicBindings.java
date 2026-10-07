@@ -6,7 +6,9 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.Objects;
 
+import am.ik.rontolisp.LispJavaObject;
 import am.ik.rontolisp.LispVal;
+import org.jspecify.annotations.Nullable;
 
 /**
  * Thread-scoped dynamic (special) variable bindings for the interpreter.
@@ -31,9 +33,17 @@ import am.ik.rontolisp.LispVal;
  * {@code let}s push and pop, and {@code setq} of a bound special replaces the top. A name
  * with an empty stack is not dynamically bound -- its value is the global default held in
  * the evaluator's global environment (shallow-binding fallback), which is what the read
- * path consults when {@link #isBound(String)} is false.
+ * path consults when {@link #isBound(String)} is false. A binding may hold NO value --
+ * what {@code progv} makes of a symbol it has no value for ({@link #pushUnbound}): the
+ * name is dynamically bound, so the global stays hidden, but {@link #get} answers null,
+ * which a read reports as the unbound variable and {@code boundp} as nil.
  */
 final class DynamicBindings {
+
+	/**
+	 * What a binding without a value holds on its stack: no Lisp value is this object.
+	 */
+	private static final LispVal UNBOUND = new LispJavaObject(new Object());
 
 	private final ThreadLocal<Map<String, Deque<LispVal>>> stacks = ThreadLocal.withInitial(HashMap::new);
 
@@ -52,11 +62,12 @@ final class DynamicBindings {
 	 * Returns the current (innermost) dynamic value of a bound special. The caller must
 	 * have checked {@link #isBound(String)}.
 	 * @param name the variable name
-	 * @return the current dynamic value
+	 * @return the current dynamic value, or null when the innermost binding holds none
 	 */
-	LispVal get(String name) {
+	@Nullable LispVal get(String name) {
 		Deque<LispVal> stack = Objects.requireNonNull(this.stacks.get().get(name), name);
-		return Objects.requireNonNull(stack.peek(), name);
+		LispVal value = Objects.requireNonNull(stack.peek(), name);
+		return value == UNBOUND ? null : value;
 	}
 
 	/**
@@ -80,6 +91,16 @@ final class DynamicBindings {
 	 */
 	void push(String name, LispVal value) {
 		this.stacks.get().computeIfAbsent(name, k -> new ArrayDeque<>()).push(value);
+	}
+
+	/**
+	 * Establishes a dynamic binding WITHOUT a value: the name is unbound for its extent
+	 * ({@link #get} answers null) until an assignment gives the binding one. Balanced by
+	 * a {@link #pop(String)} like {@link #push}.
+	 * @param name the variable name
+	 */
+	void pushUnbound(String name) {
+		push(name, UNBOUND);
 	}
 
 	/**

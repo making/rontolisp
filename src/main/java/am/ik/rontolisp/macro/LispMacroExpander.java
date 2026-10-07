@@ -4870,7 +4870,10 @@ public final class LispMacroExpander {
 	 * {@code bindArm} (a form over {@code v.name}/{@code v.val} answering the previous
 	 * binding state) and recorded on {@code v.saved} -- {@code (name prev)} without the
 	 * mirror, {@code (name prev entry old)} with it (entry nil = this progv ADDED the
-	 * mirror binding and the restore removes it again).
+	 * mirror binding and the restore removes it again). A name past the end of the values
+	 * is bound to the UNBOUND marker ({@code %progv-unbound}), which a read of the
+	 * variable signals for, and with the mirror is taken OUT of it for the extent,
+	 * recorded as {@code (name prev entry nil t)} (entry nil = it had no mirror binding).
 	 */
 	private static LispVal progvBindLoop(ProgvVars v, boolean mirror, LispVal bindArm) {
 		LispVal genvRead = listToCons(List.of(new LispSymbol(LispNames.PROGV_GENV)));
@@ -4892,7 +4895,9 @@ public final class LispMacroExpander {
 					cons2(v.prev, cons2(v.entry, cons2(callOf(LispNames.CDR, v.entry), LispNil.INSTANCE))));
 			LispVal recordAdded = cons2(v.name,
 					cons2(v.prev, cons2(LispNil.INSTANCE, cons2(LispNil.INSTANCE, LispNil.INSTANCE))));
-			LispVal mirrorStep = listToCons(List.of(new LispSymbol(LispNames.IF), v.entry,
+			LispVal recordHidden = cons2(v.name,
+					cons2(v.prev, cons2(v.entry, cons2(LispNil.INSTANCE, cons2(LispTrue.INSTANCE, LispNil.INSTANCE)))));
+			LispVal bindStep = listToCons(List.of(new LispSymbol(LispNames.IF), v.entry,
 					listToCons(List.of(new LispSymbol(LispNames.PROGN),
 							listToCons(
 									List.of(new LispSymbol(LispNames.SETQ), v.saved, cons2(recordWithEntry, v.saved))),
@@ -4901,6 +4906,11 @@ public final class LispMacroExpander {
 							listToCons(List.of(new LispSymbol(LispNames.SETQ), v.saved, cons2(recordAdded, v.saved))),
 							listToCons(List.of(new LispSymbol(LispNames.PROGV_GENV_SET),
 									cons2(cons2(v.name, v.val), genvRead)))))));
+			LispVal hideStep = listToCons(List.of(new LispSymbol(LispNames.PROGN),
+					listToCons(List.of(new LispSymbol(LispNames.SETQ), v.saved, cons2(recordHidden, v.saved))),
+					listToCons(List.of(new LispSymbol(LispNames.IF), v.entry, mirrorUnlink(v), LispNil.INSTANCE))));
+			LispVal mirrorStep = listToCons(
+					List.of(new LispSymbol(LispNames.IF), callOf(LispNames.CONSP, v.vals), bindStep, hideStep));
 			iterBody
 				.add(listToCons(List.of(
 						new LispSymbol(LispNames.LET), listToCons(List
@@ -4915,7 +4925,8 @@ public final class LispMacroExpander {
 				listToCons(List.of(listToCons(List.of(v.name, callOf(LispNames.CAR, v.syms))),
 						listToCons(List.of(v.val,
 								listToCons(List.of(new LispSymbol(LispNames.IF), callOf(LispNames.CONSP, v.vals),
-										callOf(LispNames.CAR, v.vals), LispNil.INSTANCE)))),
+										callOf(LispNames.CAR, v.vals),
+										listToCons(List.of(new LispSymbol(LispNames.PROGV_UNBOUND))))))),
 						listToCons(List.of(v.prev, bindArm))))),
 				iterBody));
 		return listToCons(List.of(new LispSymbol(LispNames.WHILE), callOf(LispNames.CONSP, v.syms), iterLet,
@@ -4926,46 +4937,64 @@ public final class LispMacroExpander {
 	}
 
 	/**
-	 * The restore loop over {@code v.saved} (innermost first -- the list was built by
-	 * consing): each record's name is restored by {@code unbindArm} (a form over
-	 * {@code v.name}/{@code v.prev}), and with the mirror its mirror binding is put back.
+	 * Removes the first mirror binding of {@code v.name}, if any:
+	 * {@code (let ((env (%progv-genv))) (if HEAD-MATCHES (%progv-genv-set (cdr env))
+	 * UNLINK-LOOP))}.
 	 */
-	private static LispVal progvUnbindLoop(ProgvVars v, boolean mirror, LispVal unbindArm) {
-		List<LispVal> cleanupLetBody = new ArrayList<>();
-		cleanupLetBody.add(unbindArm);
-		if (mirror) {
-			LispSymbol env = v.env;
-			LispSymbol name = v.name;
-			LispVal genvRead = listToCons(List.of(new LispSymbol(LispNames.PROGV_GENV)));
-			LispVal old = callOf(LispNames.CAR,
-					callOf(LispNames.CDR, callOf(LispNames.CDR, callOf(LispNames.CDR, v.e))));
-			LispVal removeHead = listToCons(
-					List.of(new LispSymbol(LispNames.PROGV_GENV_SET), callOf(LispNames.CDR, env)));
-			LispVal headMatches = listToCons(List.of(
-					new LispSymbol(LispNames.IF), callOf(LispNames.CONSP, env), listToCons(List
-						.of(new LispSymbol(LispNames.EQUAL), callOf(LispNames.CAR, callOf(LispNames.CAR, env)), name)),
-					LispNil.INSTANCE));
-			LispVal nextMatches = listToCons(
-					List.of(new LispSymbol(LispNames.IF), callOf(LispNames.CONSP, callOf(LispNames.CDR, env)),
-							listToCons(List.of(new LispSymbol(LispNames.EQUAL),
-									callOf(LispNames.CAR, callOf(LispNames.CAR, callOf(LispNames.CDR, env))), name)),
-							LispNil.INSTANCE));
-			LispVal unlinkLoop = listToCons(List
-				.of(new LispSymbol(LispNames.WHILE), callOf(LispNames.CONSP, env), listToCons(List.of(
-						new LispSymbol(LispNames.IF), nextMatches,
+	private static LispVal mirrorUnlink(ProgvVars v) {
+		LispSymbol env = v.env;
+		LispSymbol name = v.name;
+		LispVal genvRead = listToCons(List.of(new LispSymbol(LispNames.PROGV_GENV)));
+		LispVal removeHead = listToCons(List.of(new LispSymbol(LispNames.PROGV_GENV_SET), callOf(LispNames.CDR, env)));
+		LispVal headMatches = listToCons(List.of(
+				new LispSymbol(LispNames.IF), callOf(LispNames.CONSP, env), listToCons(List
+					.of(new LispSymbol(LispNames.EQUAL), callOf(LispNames.CAR, callOf(LispNames.CAR, env)), name)),
+				LispNil.INSTANCE));
+		LispVal nextMatches = listToCons(
+				List.of(new LispSymbol(LispNames.IF), callOf(LispNames.CONSP, callOf(LispNames.CDR, env)),
+						listToCons(List.of(new LispSymbol(LispNames.EQUAL),
+								callOf(LispNames.CAR, callOf(LispNames.CAR, callOf(LispNames.CDR, env))), name)),
+						LispNil.INSTANCE));
+		LispVal unlinkLoop = listToCons(List.of(new LispSymbol(LispNames.WHILE), callOf(LispNames.CONSP, env),
+				listToCons(List.of(new LispSymbol(LispNames.IF), nextMatches,
 						listToCons(List.of(new LispSymbol(LispNames.PROGN),
 								listToCons(List.of(new LispSymbol(LispNames.RPLACD), env,
 										callOf(LispNames.CDR, callOf(LispNames.CDR, env)))),
 								listToCons(List.of(new LispSymbol(LispNames.SETQ), env, LispNil.INSTANCE)))),
 						listToCons(List.of(new LispSymbol(LispNames.SETQ), env, callOf(LispNames.CDR, env)))))));
+		return listToCons(
+				List.of(new LispSymbol(LispNames.LET), listToCons(List.of(listToCons(List.of(env, genvRead)))),
+						listToCons(List.of(new LispSymbol(LispNames.IF), headMatches, removeHead, unlinkLoop))));
+	}
+
+	/**
+	 * The restore loop over {@code v.saved} (innermost first -- the list was built by
+	 * consing): each record's name is restored by {@code unbindArm} (a form over
+	 * {@code v.name}/{@code v.prev}), and with the mirror its mirror binding is put back:
+	 * the old value into the entry the bind wrote, the entry it added removed, or -- for
+	 * a name the bind took out of the mirror -- any binding a store made since removed
+	 * and the entry it took out linked back in.
+	 */
+	private static LispVal progvUnbindLoop(ProgvVars v, boolean mirror, LispVal unbindArm) {
+		List<LispVal> cleanupLetBody = new ArrayList<>();
+		cleanupLetBody.add(unbindArm);
+		if (mirror) {
+			LispVal genvRead = listToCons(List.of(new LispSymbol(LispNames.PROGV_GENV)));
+			LispVal old = callOf(LispNames.CAR,
+					callOf(LispNames.CDR, callOf(LispNames.CDR, callOf(LispNames.CDR, v.e))));
+			LispVal hidden = callOf(LispNames.CDR,
+					callOf(LispNames.CDR, callOf(LispNames.CDR, callOf(LispNames.CDR, v.e))));
+			LispVal relink = listToCons(List.of(new LispSymbol(LispNames.IF), v.entry,
+					listToCons(List.of(new LispSymbol(LispNames.PROGV_GENV_SET), cons2(v.entry, genvRead))),
+					LispNil.INSTANCE));
 			cleanupLetBody.add(listToCons(List.of(new LispSymbol(LispNames.LET),
 					listToCons(List.of(listToCons(List.of(v.entry,
 							callOf(LispNames.CAR, callOf(LispNames.CDR, callOf(LispNames.CDR, v.e))))))),
-					listToCons(List.of(new LispSymbol(LispNames.IF), v.entry,
-							listToCons(List.of(new LispSymbol(LispNames.RPLACD), v.entry, old)),
-							listToCons(List.of(new LispSymbol(LispNames.LET),
-									listToCons(List.of(listToCons(List.of(env, genvRead)))), listToCons(List
-										.of(new LispSymbol(LispNames.IF), headMatches, removeHead, unlinkLoop)))))))));
+					listToCons(List.of(new LispSymbol(LispNames.IF), hidden,
+							listToCons(List.of(new LispSymbol(LispNames.PROGN), mirrorUnlink(v), relink)),
+							listToCons(List.of(new LispSymbol(LispNames.IF), v.entry,
+									listToCons(List.of(new LispSymbol(LispNames.RPLACD), v.entry, old)),
+									mirrorUnlink(v))))))));
 		}
 		LispVal cleanupLet = listToCons(concat(
 				List.of(new LispSymbol(LispNames.LET_STAR),

@@ -176,6 +176,27 @@ class SpecialVarCollectorTest {
 	}
 
 	/**
+	 * The specials a {@code progv} short of values can leave without a value: in a
+	 * program that calls {@code progv}, every one but a {@code cl} symbol, valued or not;
+	 * none in a program that only quotes the symbol (a code walker's table).
+	 */
+	@Test
+	void aProgvCanLeaveEverySpecialButAClSymbolWithoutAValue() {
+		SequencedSet<String> specials = new LinkedHashSet<>(List.of("*A*", "*B*", "*PRINT-BASE*", "P::*C*"));
+		List<LispVal> program = LispReader.readAllFromString("""
+				(defvar *a* 1)
+				(defvar *b*)
+				(defun f (s v) (progv s v (list *a* *b* *print-base*)))
+				""");
+		assertThat(SpecialVarCollector.collectProgvUnbindable(program, specials)).containsExactly("*A*", "*B*",
+				"P::*C*");
+		assertThat(SpecialVarCollector.collectProgvUnbindable(
+				LispReader.readAllFromString("(defvar *a* 1) (defvar *walk* '((progv . walk-cdr)))"), specials))
+			.isEmpty();
+		assertThat(SpecialVarCollector.collectProgvUnbindable(program, new LinkedHashSet<>())).isEmpty();
+	}
+
+	/**
 	 * What the eval gate reads before the runtime is injected: the probed specials
 	 * without a value that something binds, and whether any {@code boundp} reaches past
 	 * them to the mirror -- every occurrence of the symbol but a literal probe of one of

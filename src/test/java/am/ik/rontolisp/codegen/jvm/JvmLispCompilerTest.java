@@ -5860,6 +5860,24 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void aProgvShortOfValuesLeavesTheExtraSymbolsUnbound() throws Exception {
+		// Interpreter parity (the LispEvaluatorTest twin): every symbol a progv had no
+		// value for used to be bound to nil (.kb/dynamic-special-variables.md, "A progv
+		// short of values"). Shallow bindings here; the thread-scoped store below.
+		assertThat(compileAndRun(am.ik.rontolisp.ProgvShortOfValuesFixture.SOURCE))
+			.isEqualTo(am.ik.rontolisp.ProgvShortOfValuesFixture.EXPECTED);
+	}
+
+	@Test
+	void aProgvShortOfValuesLeavesTheExtraSymbolsUnboundInAThreadScopedBinding() throws Exception {
+		// A thread primitive makes every binding a _d$ cell: the cell holds the UNBOUND
+		// marker for the extent, which the read and _dbound test like the global's.
+		assertThat(compileAndRun(am.ik.rontolisp.ProgvShortOfValuesFixture.SOURCE
+				+ "(rontolisp:join-thread (rontolisp:make-thread (lambda () 1)))\n"))
+			.isEqualTo(am.ik.rontolisp.ProgvShortOfValuesFixture.EXPECTED);
+	}
+
+	@Test
 	void aGlobalReadBeforeItsFirstStoreSignalsUnboundVariable() throws Exception {
 		// Interpreter parity (the LispEvaluatorTest twin): such a global's field used to
 		// start as nil, so every read before the store answered NIL and the arithmetic
@@ -21967,7 +21985,7 @@ class JvmLispCompilerTest {
 		// Interpreter parity for the progv lowering (.kb/dynamic-special-variables.md):
 		// a declared special gets a true dynamic binding visible through a called defun,
 		// nested binds stack, an UNDECLARED name is readable via symbol-value for the
-		// extent (and unbound again after), and extra symbols bind to nil.
+		// extent (and unbound again after), and extra symbols are unbound for the extent.
 		assertThat(compileAndRun("""
 				(defvar *a* 1)
 				(defvar *b* 2)
@@ -21978,13 +21996,13 @@ class JvmLispCompilerTest {
 				         (progv (list '*a* '*c*) (list (* *a* 2) 7)
 				           (list *a* (symbol-value '*c*)))))
 				(print (list *a* (boundp '*c*)))
-				(print (progv '(*a*) '() *a*))
+				(print (handler-case (progv '(*a*) '() *a*) (unbound-variable () :unbound)))
 				""")).isEqualTo("""
 				(10 20)
 				(1 2)
 				(10 7)
 				(1 NIL)
-				NIL""");
+				:UNBOUND""");
 	}
 
 	@Test

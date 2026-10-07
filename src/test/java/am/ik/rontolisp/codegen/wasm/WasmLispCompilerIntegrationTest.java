@@ -25271,7 +25271,8 @@ class WasmLispCompilerIntegrationTest {
 		// Interpreter parity for the progv lowering (.kb/dynamic-special-variables.md):
 		// a declared special gets a true dynamic binding visible through a called defun,
 		// nested binds stack, an UNDECLARED name is readable via symbol-value for the
-		// extent (and unbound again after), and extra symbols bind to nil. The lowering
+		// extent (and unbound again after), and extra symbols are unbound for the extent.
+		// The lowering
 		// rides unwind-protect, so the module compiles in EH mode.
 		assertThat(compileAndRun("""
 				(defvar *a* 1)
@@ -25283,13 +25284,13 @@ class WasmLispCompilerIntegrationTest {
 				         (progv (list '*a* '*c*) (list (* *a* 2) 7)
 				           (list *a* (symbol-value '*c*)))))
 				(print (list *a* (boundp '*c*)))
-				(print (progv '(*a*) '() *a*))
+				(print (handler-case (progv '(*a*) '() *a*) (unbound-variable () :unbound)))
 				""")).isEqualTo("""
 				(10 20)
 				(1 2)
 				(10 7)
 				(1 NIL)
-				NIL""");
+				:UNBOUND""");
 	}
 
 	@Test
@@ -27166,6 +27167,18 @@ class WasmLispCompilerIntegrationTest {
 				.isEqualTo(program[1]);
 			assertThat(runComponentFrontendProgramWithDir(program[0])).isEqualTo(program[1]);
 		}
+	}
+
+	@Test
+	void aProgvShortOfValuesLeavesTheExtraSymbolsUnbound() throws Exception {
+		// The wasm twin of the JvmLispCompilerTest test of this name, on Preview 1 and
+		// the component: every symbol a progv had no value for used to be bound to nil.
+		String source = am.ik.rontolisp.ProgvShortOfValuesFixture.SOURCE;
+		assertThat(compileAndRunProgram(am.ik.rontolisp.cli.CompileFrontendAccess.corpus(source,
+				am.ik.rontolisp.reader.Features.WASM, true, false)))
+			.isEqualTo(am.ik.rontolisp.ProgvShortOfValuesFixture.EXPECTED);
+		assertThat(runComponentFrontendProgramWithDir(source))
+			.isEqualTo(am.ik.rontolisp.ProgvShortOfValuesFixture.EXPECTED);
 	}
 
 	@Test

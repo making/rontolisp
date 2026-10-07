@@ -57,6 +57,15 @@ public final class LispNames {
 	public static final String PROGV_DYN_UNBIND = "%PROGV-DYN-UNBIND";
 
 	/**
+	 * Internal (compile-path only): the value {@code progv} binds a symbol to when it has
+	 * no value for it -- {@code (%progv-unbound)}, the program's UNBOUND marker, which a
+	 * read of the variable signals the {@code unbound-variable} for; nil in a program
+	 * without one. A {@link #PROGV_DYN_BIND} arm whose special has no read check binds
+	 * nil in its place.
+	 */
+	public static final String PROGV_UNBOUND = "%PROGV-UNBOUND";
+
+	/**
 	 * Internal (compile-path only): reads the eval runtime's global environment mirror
 	 * ({@code _genv} / {@code GLOBAL_ENV}) as a Lisp assoc list, so the {@code progv}
 	 * lowering can maintain the mirror -- what {@code symbol-value}/{@code boundp}/

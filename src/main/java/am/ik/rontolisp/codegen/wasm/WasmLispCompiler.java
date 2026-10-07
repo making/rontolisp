@@ -923,11 +923,11 @@ public final class WasmLispCompiler implements LispCompiler {
 	/**
 	 * Whether this module carries {@code _unbound_variable}, the throw a read of a global
 	 * holding the UNBOUND marker reaches ({@code WasmExprCompiler.compileSymbolRef}): EH
-	 * mode, where a throw has a tag and a catcher, and a global that starts as the marker
-	 * ({@code Ctx.unboundGlobals}). Outside EH mode such a read traps in place. Decided
-	 * once that set is known and before any index is handed out, because it shifts
-	 * {@link #userFuncBase()}; a module whose every read sits inside a binding of its
-	 * variable carries an unreferenced function the shaker drops.
+	 * mode, where a throw has a tag and a catcher, and a global whose read can find the
+	 * marker ({@code Ctx.unboundGlobals}). Outside EH mode such a read traps in place.
+	 * Decided once that set is known and before any index is handed out, because it
+	 * shifts {@link #userFuncBase()}; a module whose every read sits inside a binding of
+	 * its variable carries an unreferenced function the shaker drops.
 	 */
 	private boolean emitsUnboundVariable;
 
@@ -3741,10 +3741,11 @@ public final class WasmLispCompiler implements LispCompiler {
 				closRegistry.conditionReports().values(), specialVars, closRegistry);
 		// Whether a read can find a global's UNBOUND marker (Ctx.unboundGlobals) and
 		// signal its unbound-variable: a special only a binding or an assignment gives a
-		// value, a literally probed global without one, or a global a read can reach
-		// before its first store.
+		// value, a literally probed global without one, a global a read can reach
+		// before its first store, or a special a progv short of values binds.
 		boolean readsUnboundGlobal = !readBeforeStore.isEmpty() || !probedBeforeInjection.isEmpty()
-				|| !SpecialVarCollector.collectValueless(program, specialVars).isEmpty();
+				|| !SpecialVarCollector.collectValueless(program, specialVars).isEmpty()
+				|| !SpecialVarCollector.collectProgvUnbindable(program, specialVars).isEmpty();
 		// Every reason for the runtime except the four pure READERS: the program can
 		// write GLOBAL_FENV (eval's defun, load, fmakunbound, a (setf (symbol-function
 		// ...)) whose raw place shape is scanned, since the %set-symbol-function
@@ -4409,7 +4410,13 @@ public final class WasmLispCompiler implements LispCompiler {
 		unboundGlobals.addAll(probedUnboundGlobals);
 		readBeforeStore.retainAll(globals);
 		unboundGlobals.addAll(readBeforeStore);
-		this.emitsUnboundVariable = ehMode && !unboundGlobals.isEmpty();
+		// A progv short of values binds the symbols it has no value for to the marker
+		// (LispNames.PROGV_UNBOUND), and any special can be one of them: in a program
+		// that calls progv every read of a special is checked, the ones that start with a
+		// value included -- which keep their plain start.
+		SequencedSet<String> checkedGlobals = new LinkedHashSet<>(unboundGlobals);
+		checkedGlobals.addAll(SpecialVarCollector.collectProgvUnbindable(program, specialVars));
+		this.emitsUnboundVariable = ehMode && !checkedGlobals.isEmpty();
 		if (!probedUnboundGlobals.isEmpty() && LispMacroExpander.programUsesComputedBoundp(probedForms)
 				&& !LispMacroExpander.definesRuntimeName(userDefinedNames, LispNames.BOUNDP_DYNAMIC)) {
 			for (LispVal segment : LispMacroExpander.boundpDynamicRuntime(probedUnboundGlobals, specialVars)) {
@@ -4876,7 +4883,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			.globals(globals)
 			.nestedDefunNames(nestedDefunNames)
 			.specialVars(specialVars)
-			.unboundGlobals(unboundGlobals)
+			.unboundGlobals(checkedGlobals)
 			.probedUnboundGlobals(probedUnboundGlobals)
 			.globalIndices(globalIndices)
 			.quoteGlobals(quoteGlobals)
@@ -5121,10 +5128,10 @@ public final class WasmLispCompiler implements LispCompiler {
 		// code runs -- binding sites then never need a null check (WasmDynVars).
 		WasmDynVars.emitTaskBegin(ctx);
 
-		// A global whose module global carries its bound-ness starts UNBOUND: the
+		// A global only an assignment or a binding gives a value starts UNBOUND: the
 		// marker (the raw-local sentinel) until something assigns it
 		// (Ctx.unboundGlobals).
-		for (String name : ctx.unboundGlobals) {
+		for (String name : unboundGlobals) {
 			startWriter.write(Instruction.GET_GLOBAL);
 			startWriter.writeUnsignedLeb128(ctx.rawSentinelGlobalIndex);
 			startWriter.write(Instruction.SET_GLOBAL);
@@ -11536,11 +11543,14 @@ public final class WasmLispCompiler implements LispCompiler {
 		 * ({@code SpecialVarCollector.collectValueless}), a global that is no special and
 		 * that a read can reach before its first store ({@code ReadBeforeStore}), and in
 		 * a module without the eval mirror any global a literal {@code boundp} names and
-		 * no definer gives a value ({@code GlobalVarCollector.collectProbedUnbound}).
-		 * {@code _start} seeds each global with the UNBOUND marker -- the raw-local
-		 * sentinel ({@link #rawSentinelGlobalIndex}) -- before any user code; a store
-		 * overwrites it; a binding saves and restores it like any value; a read outside a
-		 * binding of it signals the {@code unbound-variable} naming it
+		 * no definer gives a value ({@code GlobalVarCollector.collectProbedUnbound}) --
+		 * each of which {@code _start} seeds with the UNBOUND marker, the raw-local
+		 * sentinel ({@link #rawSentinelGlobalIndex}), before any user code -- and in a
+		 * program that calls {@code progv} every special but a {@code cl} symbol, which a
+		 * {@code progv} short of values binds to the marker
+		 * ({@code SpecialVarCollector.collectProgvUnbindable}). A store overwrites the
+		 * marker; a binding saves and restores it like any value; a read that finds it
+		 * signals the {@code unbound-variable} naming the global
 		 * ({@code WasmExprCompiler.emitCheckedRead}) and {@code boundp} answers nil
 		 * ({@code WasmSymbolApiCompiler.compileGlobalBoundp}).
 		 */

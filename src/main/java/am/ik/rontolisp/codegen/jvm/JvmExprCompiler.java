@@ -1572,6 +1572,7 @@ final class JvmExprCompiler {
 							ctx, className);
 			case LispNames.PROGV_DYN_BIND -> JvmProgvCompiler.compileDynBind(cons, ctx, className);
 			case LispNames.PROGV_DYN_UNBIND -> JvmProgvCompiler.compileDynUnbind(cons, ctx, className);
+			case LispNames.PROGV_UNBOUND -> JvmProgvCompiler.compileUnbound(ctx);
 			case LispNames.PROGV_GENV -> JvmProgvCompiler.compileGenvRead(ctx, className);
 			case LispNames.PROGV_GENV_SET -> JvmProgvCompiler.compileGenvWrite(cons, ctx, className);
 			case LispNames.SYMBOL_VALUE_RAW -> JvmSymbolApiCompiler.compileSymbolValueRaw(cons, ctx, className);

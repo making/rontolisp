@@ -9,7 +9,7 @@ import am.ik.wasm.Instruction;
 import am.ik.wasm.Type;
 
 /**
- * Compiles the four internal operators of the {@code progv} lowering
+ * Compiles the internal operators of the {@code progv} lowering
  * ({@code LispMacroExpander.expandProgvForCompile}) -- the WASM twin of
  * {@code JvmProgvCompiler}. Each arm of the lowering's name-dispatch chain names its
  * special LITERALLY, so these emit exactly the save/set the {@code let} path emits for
@@ -17,7 +17,8 @@ import am.ik.wasm.Type;
  * over the per-task record's slot under {@code --reentrant} ({@code WasmDynVars}). The
  * previous binding state flows as a VALUE (consed into the lowering's save list) instead
  * of into a save local, because the bind and its restore sit in different loop iterations
- * of the same {@code unwind-protect}.
+ * of the same {@code unwind-protect}. {@code %progv-unbound} is the UNBOUND marker a
+ * symbol past the end of the values is bound to.
  *
  * <p>
  * {@code %progv-genv}/{@code %progv-genv-set} read/write {@code GLOBAL_ENV}, the eval
@@ -40,6 +41,23 @@ final class WasmProgvCompiler {
 		int tmp = ctx.allocTemp();
 		ctx.writer.write(Instruction.SET_LOCAL);
 		ctx.writer.writeUnsignedLeb128(tmp);
+		if (!ctx.unboundGlobals.isEmpty() && !ctx.unboundGlobals.contains(name)) {
+			// No read of this special tests for the marker (a cl symbol): it is bound to
+			// nil where the progv had no value for it.
+			ctx.writer.write(Instruction.GET_LOCAL);
+			ctx.writer.writeUnsignedLeb128(tmp);
+			ctx.writer.write(Instruction.GET_GLOBAL);
+			ctx.writer.writeUnsignedLeb128(ctx.rawSentinelGlobalIndex);
+			ctx.writer.write(Instruction.REF_EQ);
+			ctx.writer.write(Instruction.IF, WasmLispCompiler.BLOCKTYPE_EMPTY);
+			ctx.wasmCtrlDepth++;
+			ctx.writer.write(Instruction.REF_NULL);
+			ctx.writer.writeHeapType(Type.EQ.code());
+			ctx.writer.write(Instruction.SET_LOCAL);
+			ctx.writer.writeUnsignedLeb128(tmp);
+			ctx.wasmCtrlDepth--;
+			ctx.writer.write(Instruction.END);
+		}
 		if (WasmDynVars.handles(ctx, name)) {
 			WasmDynVars.emitProgvBind(ctx, name, tmp);
 			return;
@@ -86,6 +104,21 @@ final class WasmProgvCompiler {
 		}
 		ctx.writer.write(Instruction.REF_NULL);
 		ctx.writer.writeHeapType(Type.EQ.code());
+	}
+
+	/**
+	 * {@code (%progv-unbound)}: the UNBOUND marker (the raw-local sentinel) a symbol past
+	 * the end of the values is bound to, nil in a module no read of which tests for it.
+	 */
+	static void compileUnbound(WasmLispCompiler.Ctx ctx) {
+		if (ctx.unboundGlobals.isEmpty()) {
+			ctx.writer.write(Instruction.REF_NULL);
+			ctx.writer.writeHeapType(Type.EQ.code());
+		}
+		else {
+			ctx.writer.write(Instruction.GET_GLOBAL);
+			ctx.writer.writeUnsignedLeb128(ctx.rawSentinelGlobalIndex);
+		}
 	}
 
 	/** {@code (%progv-genv)}: the eval runtime's global env mirror, as a Lisp alist. */

@@ -2026,6 +2026,12 @@ public final class JvmLispCompiler implements LispCompiler {
 				closRegistry.conditionReports().values(), specialVars, closRegistry);
 		readBeforeStore.retainAll(globals);
 		unboundGlobals.addAll(readBeforeStore);
+		// A progv short of values binds the symbols it has no value for to the marker
+		// (LispNames.PROGV_UNBOUND), and any special can be one of them: in a program
+		// that calls progv every read of a special is checked, the ones that start with a
+		// value included -- which keep their plain start.
+		SequencedSet<String> checkedGlobals = new java.util.LinkedHashSet<>(unboundGlobals);
+		checkedGlobals.addAll(SpecialVarCollector.collectProgvUnbindable(program, specialVars));
 		if (!unboundSpecials.isEmpty() && LispMacroExpander.programUsesComputedBoundp(probedForms)
 				&& !LispMacroExpander.definesRuntimeName(userDefinedNames, LispNames.BOUNDP_DYNAMIC)) {
 			for (LispVal segment : LispMacroExpander.boundpDynamicRuntime(unboundSpecials, specialVars)) {
@@ -2034,7 +2040,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			}
 		}
 		final JvmDynVarRuntimeBuilder.@Nullable UnboundMarker unboundMarker = JvmDynVarRuntimeBuilder.unboundMarker(cp,
-				thisClass, unboundGlobals, probedGlobals, globalFields);
+				thisClass, checkedGlobals, unboundGlobals, probedGlobals, globalFields);
 		final JvmDynVarRuntimeBuilder.@Nullable DynVarRuntime dynVarRuntime = boundSpecialVars.isEmpty()
 				|| !lispOnOtherThreads ? null
 						: JvmDynVarRuntimeBuilder.build(cp, thisClass, objectArrayClass, boundSpecialVars,
@@ -2436,7 +2442,7 @@ public final class JvmLispCompiler implements LispCompiler {
 		// local does not have -- an eval runtime that mirrors the BOX, and anything
 		// concurrent (three fields where there was one).
 		SequencedSet<String> rawGlobalExcluded = new java.util.LinkedHashSet<>(boundSpecialVars);
-		rawGlobalExcluded.addAll(unboundGlobals);
+		rawGlobalExcluded.addAll(checkedGlobals);
 		Set<String> rawGlobalNames = JvmRawGlobals.collect(program, globals, rawGlobalExcluded, intFusion
 				&& !this.dynamic && !usesEval && !usesThreads && !usesHttpHandler && !usesAsyncRuntime && !usesSockets);
 		Map<String, JvmIntFusionCompiler.RawLocal> rawGlobals = new HashMap<>();

@@ -14364,12 +14364,13 @@ cases:
       (print (list (pv-peek) (boundp '*pv-c*)))
       (print (handler-case (progv '(*pv-a*) '(:err) (error "boom"))
                (error () *pv-a*)))
-      (print (progv '(*pv-a*) '() *pv-a*))
+      (print (handler-case (progv '(*pv-a*) '() *pv-a*)
+               (unbound-variable (c) (list :unbound (cell-error-name c)))))
     expected: |
       (10 7)
       (1 NIL)
       1
-      NIL
+      (:UNBOUND *PV-A*)
   - name: special-let-restores-on-every-exit
     source: |
       ;; A special let's binding is restored on EVERY exit channel: an error caught
@@ -22070,6 +22071,57 @@ cases:
       (:UNBOUND *RBS-SCALE*)
       9
       (4 5)
+
+  # A progv short of values leaves each symbol it has no value for unbound for the
+  # extent -- a read signals the unbound-variable naming it, boundp answers nil -- on
+  # all four backends (ProgvShortOfValuesFixture; .kb/dynamic-special-variables.md, "A
+  # progv short of values"). Every backend used to bind such a symbol to nil.
+  - name: a-progv-short-of-values-leaves-the-extra-symbols-unbound
+    source: |
+      (defvar *psv-a* 1)
+      (defvar *psv-b*)
+      (defun psv-try (thunk)
+        (handler-case (funcall thunk)
+          (unbound-variable (c) (list :unbound (cell-error-name c)))))
+      (defun psv-a () *psv-a*)
+      (defun psv-b () *psv-b*)
+      (print (progv '(*psv-a* *psv-b*) '()
+               (list (psv-try #'psv-a) (psv-try #'psv-b) (boundp '*psv-a*) (boundp '*psv-b*)
+                     (psv-try (lambda () (symbol-value '*psv-a*))))))
+      (print (list (psv-a) (psv-try #'psv-b) (boundp '*psv-a*) (boundp '*psv-b*)))
+      (print (progv '(*psv-a* *psv-b*) '(10)
+               (list (psv-a) (psv-try #'psv-b) (mapcar #'boundp '(*psv-a* *psv-b*)))))
+      (print (progv '(*psv-a*) '()
+               (setq *psv-a* 7)
+               (list (psv-a) (boundp '*psv-a*))))
+      (print (list (psv-a) (boundp '*psv-a*)))
+      (print (progv '(*psv-a*) '()
+               (list (progv '(*psv-a*) '(8) (psv-a))
+                     (let ((*psv-a* 9)) (psv-a))
+                     (catch 'psv (progv '(*psv-a*) '(5) (throw 'psv (psv-a))))
+                     (psv-try #'psv-a))))
+      (print (let ((*psv-a* 3))
+               (list (progv '(*psv-a*) '()
+                       (handler-case *psv-a*
+                         (unbound-variable (c) (list :unbound (cell-error-name c)))))
+                     *psv-a*)))
+      (print (progv '(psv-free) '()
+               (list (boundp 'psv-free) (psv-try (lambda () (symbol-value 'psv-free))))))
+      (print (progv '(psv-free) '(4) (list (boundp 'psv-free) (symbol-value 'psv-free))))
+      (print (list (boundp 'psv-free) (psv-try (lambda () (eval '*psv-a*)))))
+      (print (progv (list '*psv-a*) nil (psv-try (lambda () (eval '*psv-a*)))))
+    expected: |
+      ((:UNBOUND *PSV-A*) (:UNBOUND *PSV-B*) NIL NIL (:UNBOUND *PSV-A*))
+      (1 (:UNBOUND *PSV-B*) T NIL)
+      (10 (:UNBOUND *PSV-B*) (T NIL))
+      (7 T)
+      (1 T)
+      (8 9 5 (:UNBOUND *PSV-A*))
+      ((:UNBOUND *PSV-A*) 3)
+      (NIL (:UNBOUND PSV-FREE))
+      (T 4)
+      (NIL 1)
+      (:UNBOUND *PSV-A*)
 
   # The tokenizer package (tokenizers.lisp, .kb/tokenizers.md): the five byte-level
   # pre-tokenizer shapes, the ranked merge loop, the special-token scan, Llama 3's
