@@ -139,7 +139,9 @@ public final class FunctionDesignators {
 			return SourceProvenance.inherit(cons,
 					new LispCons(new LispSymbol(LispNames.FUNCTION), new LispCons(name, LispNil.INSTANCE)));
 		}
-		if ((LispNames.FDEFINITION.equals(op) || LispNames.FBOUNDP.equals(op) || LispNames.FMAKUNBOUND.equals(op))
+		if (op != null
+				&& (LispNames.FDEFINITION.equals(op) || LispNames.FBOUNDP.equals(op)
+						|| LispNames.FMAKUNBOUND.equals(op))
 				&& !shadowed.contains(op) && quotedSetfFunctionPlace(cons.cdr()) instanceof LispSymbol place) {
 			return setfFunctionNameCall(cons, op, place);
 		}
