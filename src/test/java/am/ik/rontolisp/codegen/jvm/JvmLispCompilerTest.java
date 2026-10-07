@@ -5860,6 +5860,17 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void aGlobalReadBeforeItsFirstStoreSignalsUnboundVariable() throws Exception {
+		// Interpreter parity (the LispEvaluatorTest twin): such a global's field used to
+		// start as nil, so every read before the store answered NIL and the arithmetic
+		// over it failed with a type error (.kb/dynamic-special-variables.md, "A read of
+		// a
+		// global before its first store").
+		assertThat(compileAndRun(am.ik.rontolisp.ReadBeforeStoreFixture.SOURCE))
+			.isEqualTo(am.ik.rontolisp.ReadBeforeStoreFixture.EXPECTED);
+	}
+
+	@Test
 	void compileAndRunWrongArityThroughAFunctionValueSignalsProgramError() throws Exception {
 		String defs = "(defun f (x) x) (defun g (x &rest r) (list x r)) ";
 		String caught = "(print (handler-case %s (program-error (c) (princ-to-string c)) (error (c) :plain)))";
@@ -21052,6 +21063,31 @@ class JvmLispCompilerTest {
 		assertThat(declaredFieldNames(valued)).doesNotContain("_unbound");
 		assertThat(declaredMethodNames(valued)).doesNotContain("_dbound", "_bound");
 		assertThat(runClass(valued)).isEqualTo("(T 1)");
+	}
+
+	@Test
+	void aGlobalCarriesTheUnboundMarkerOnlyWhereAReadCanComeBeforeItsFirstStore() throws Exception {
+		// A global the top level assigns before anything can read it keeps the plain
+		// field -- and the unboxed pair beside it an integer accumulator gets
+		// (JvmRawGlobals) -- and the plain read, so such a program compiles as it did.
+		// Read first from a function the top level calls before that store, its field
+		// starts as the UNBOUND marker and the read passes the value through _bound,
+		// which signals the unbound-variable naming it (compiler/ReadBeforeStore).
+		String assigned = "(setq *rb* 0) (defun rb-inc () (setq *rb* (+ *rb* 1))) (rb-inc) (rb-inc) (print *rb*)";
+		byte[] plain = new JvmLispCompiler("Test")
+			.compile(am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString(assigned)));
+		assertThat(declaredFieldNames(plain)).contains("_gr$*RB*").doesNotContain("_unbound");
+		assertThat(declaredMethodNames(plain)).doesNotContain("_bound");
+		assertThat(runClass(plain)).isEqualTo("2");
+		String early = "(defun rb-inc () (setq *rb* (+ *rb* 1)))"
+				+ " (print (handler-case (rb-inc) (unbound-variable () :unbound)))"
+				+ " (setq *rb* 0) (rb-inc) (rb-inc) (print *rb*)";
+		byte[] checked = new JvmLispCompiler("Test")
+			.compile(am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString(early)));
+		assertThat(declaredFieldNames(checked)).contains("_unbound").doesNotContain("_gr$*RB*");
+		assertThat(declaredMethodNames(checked)).contains("_bound");
+		assertThat(ownCallsIn(checked, "RB-INC", "_bound")).isOne();
+		assertThat(runClass(checked)).isEqualTo(":UNBOUND\n2");
 	}
 
 	@Test

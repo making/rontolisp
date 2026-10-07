@@ -455,8 +455,8 @@ unbound state at all, and its read turned the marker into nil.
   `defparameter` or `defconstant` names anywhere (scope-blind) -- a `(defvar x)`, a `declaim` /
   `proclaim` `special`, a local `(declare (special x))` alone -- and not a `cl` symbol; plus,
   without the eval mirror, the literally probed globals ("Bound-ness" above). Each starts as the
-  UNBOUND marker. A special a definer gives a value reads as before, byte for byte; a non-special
-  global no probe names still reads nil before its first store.
+  UNBOUND marker. A special a definer gives a value reads as before, byte for byte; a global that
+  is no special: next section.
 - `boundp` keeps the narrower probed set: every other name's `boundp` reads the mirror, which
   agrees for a special no binding changes, so the eval gate and the computed `boundp` dispatch
   are unchanged.
@@ -497,6 +497,52 @@ unbound state at all, and its read turned the marker into nil.
   rove or ningle (roman, minesweeper-core-test, the three Workers checks, httpbin-ningle), jzon's
   `*writer*` (httpbin-jzon), cffi's (cffi-sqlite) -- +12 to +873 B wasm, +103 to +914 B JVM, and
   every one that runs prints what it did before. ci-spec: all 675 cases on all four backends.
+
+## A read of a global before its first store (all four backends, 2026-10-07)
+
+**Invariant: a read of a global no definer declares -- one a `setq` assigns, at top level or in a
+function body -- that runs before its first store signals the `unbound-variable` naming it, as the
+interpreter and SBCL do; a global nothing can read before that store keeps the plain variable and
+the plain read.** Landed with `.todo/e03`. Before, its variable started as nil on the compile paths
+and such a read answered NIL.
+
+- The set: `compiler/ReadBeforeStore.collect`, joined to d85's (`unboundGlobals`; the JVM's
+  `UnboundMarker.globals`, wasm's `Ctx.unboundGlobals`), so the representation and the read are
+  "A read of a special without a value"'s: the marker seeded first, `_bound` / `emitCheckedRead`.
+  A checked global is never a JVM raw global (`JvmRawGlobals` excludes the set): it loses the
+  unboxed pair an integer accumulator gets.
+- Candidates: the globals the compilers collect less the specials, nested-defun names, the
+  compiler's own (`%mv-spill`, the cluster stacks, the stream variables) and `cl` symbols -- and
+  only those some form, defun or report READS free (`FreeVarAnalyzer`, the closure-capture walk):
+  the collectors are blind to scope, so most of them are `let` variables a `setq` assigns, never
+  read as globals.
+- Exempt: the first top-level form that names it free is an unconditional `setq` / `setf` /
+  `psetq` / `psetf` of it, and nothing that can run before that store reads it -- the forms before
+  it, the values the store evaluates first, and the functions those can call. While that code calls
+  only defuns, local functions and `ReadBeforeStore.INERT` operators, the functions are the defuns
+  its text names (code or quoted data, `%setf-NAME` through a place's accessor, a `satisfies`
+  predicate through the `deftype` a type names), closed over their own text; past any other operator
+  (printing: a `print-object` method; `make-instance`; `error`; a host call; a function the program
+  does not define) every defun and every condition report counts. Directives (`wasm-import`,
+  `wasm-export`, `jvm-export`, the component import) run nothing; an imported name is a host call.
+- Wasm decides it before `usedLayoutTags` (the `readsUnboundGlobal` gate that bakes
+  `unbound-variable`), on the program no pass changes before the globals are collected.
+- Measured 2026-10-07. Premise on SBCL 2.2.9 / interpreter / JVM / P1 / component, `(defun g ()
+  *nb*)` called under a handler before `(setq *nb* 1)`: `*NB*` / `*NB*` / NIL / NIL / NIL; the same
+  for a top-level read before the `setq` and for a global only a function assigns. Census of the
+  candidate rules over size-report (hello_world, pi_approx, zlib, dom_reactor), bench-report (10)
+  and every compile shape of the examples (297 compiles): globals read as globals 40, in 8 programs
+  (the Scheme and Clojure examples -- their `%scheme-false` / `%clojure-false` and `define`d
+  globals -- and cffi-sqlite), 161 read sites, 2 of them JVM raw globals; exempt only when no
+  function reads it: 22 left checked; the rule above: 7 (1 raw global), in 2 programs --
+  streams.scm's `fibs` and `powers-of-two` (a delayed lambda in the store's own value reads them)
+  and `computed` (a function reads it, a print comes first), cffi-sqlite's 4 iterate globals
+  (`defconst` stores them through `(setf (symbol-value ...))`, which no rule sees as a first
+  store). Every other compile's set is empty and compiles as before. Both programs print what they
+  did.
+- Not covered: the check is per global, so a read after the store pays it too once the global is
+  checked; a first store under a `let` or `progn` is not recognised (checked); `--no-gc` keeps
+  nil; a `progv` short of values still binds nil.
 
 ## Local special declarations; a special is never captured (all four backends, 2026-10-05)
 
@@ -742,6 +788,14 @@ A read of a special without a value: `UnboundVariableNameFixture` on
 `WasmLispCompilerIntegrationTest#anUncaughtReadOfASpecialWithoutAValueEndsTheProgram` (the trap
 outside EH mode, the report in it); `UncaughtReportParityTest#aReadOfASpecialWithoutAValueReportsWhereItIsRead`;
 `SpecialVarCollectorTest#everySpecialWithoutADefinersValueStartsUnbound`.
+
+A read of a global before its first store: `ReadBeforeStoreFixture` on
+`aGlobalReadBeforeItsFirstStoreSignalsUnboundVariable` (`LispEvaluatorTest`, `JvmLispCompilerTest`,
+`WasmLispCompilerIntegrationTest` -- Preview 1 and component; no ci-spec row: the corpus class sat
+at its constant-pool tripwire, `.kb/quoted-data.md`);
+`JvmLispCompilerTest#aGlobalCarriesTheUnboundMarkerOnlyWhereAReadCanComeBeforeItsFirstStore`,
+`WasmLispCompilerTest#aGlobalCarriesTheUnboundCheckOnlyWhereAReadCanComeBeforeItsFirstStore`;
+`ReadBeforeStoreTest`.
 
 Parameters: `aParameterNamedLikeASpecialBindsItDynamically` on `LispEvaluatorTest`,
 `JvmLispCompilerTest` and `WasmLispCompilerIntegrationTest` (Preview 1 and component), one

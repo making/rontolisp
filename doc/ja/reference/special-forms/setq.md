@@ -15,3 +15,12 @@
 (remember 42)
 *last-seen* ; => 42
 ```
+
+このようなグローバル変数は最初の代入まで未束縛です。それより前に読み出すと(たとえば先に呼んだ関数の中で読むと)、その名前を持つ `unbound-variable` が通知されます。すべてのバックエンドで SBCL と同じです。
+
+```lisp
+(defun total () (* *rate* 100))
+(handler-case (total) (unbound-variable (e) (cell-error-name e))) ; => *RATE*
+(setq *rate* 3)
+(total) ; => 300
+```

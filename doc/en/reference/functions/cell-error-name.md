@@ -24,7 +24,7 @@ An undefined `(setf name)` function is named by the list `(setf name)`, as writt
   (undefined-function (e) (cell-error-name e))) ; => (SETF CE-NO-SUCH-SETF)
 ```
 
-So does the `unbound-variable` a read of an unbound name signals -- through [`symbol-value`](symbol-value.md), or a reference to a special variable declared without a value -- on every backend:
+So does the `unbound-variable` a read of an unbound name signals -- through [`symbol-value`](symbol-value.md), a reference to a special variable declared without a value, or a reference to a global before its first assignment ([`setq`](../special-forms/setq.md)) -- on every backend:
 
 ```lisp
 (handler-case (symbol-value (intern "CE-NO-SUCH-VARIABLE"))

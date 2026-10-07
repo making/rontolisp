@@ -349,7 +349,7 @@ public final class GlobalVarCollector {
 	 * holds no defun, so the common body allocates nothing; a rewritten path is a copy
 	 * the program never sees.
 	 */
-	private static LispVal nestedDefunsAsLambdas(LispVal form) {
+	static LispVal nestedDefunsAsLambdas(LispVal form) {
 		if (!(form instanceof LispCons cons)) {
 			return form;
 		}

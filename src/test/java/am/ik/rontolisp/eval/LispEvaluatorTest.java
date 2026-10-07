@@ -21220,6 +21220,17 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void aGlobalReadBeforeItsFirstStoreSignalsUnboundVariable() {
+		// The reference answer (SBCL's) the compiled backends' twins of this name
+		// (JvmLispCompilerTest, WasmLispCompilerIntegrationTest) are measured against: a
+		// global no definer declares is unbound until its first store, whatever reads it
+		// -- a function, a top-level form, a deftype's predicate, a lambda a function
+		// maps.
+		assertThat(printedLines(am.ik.rontolisp.ReadBeforeStoreFixture.SOURCE))
+			.isEqualTo(am.ik.rontolisp.ReadBeforeStoreFixture.EXPECTED);
+	}
+
+	@Test
 	void defmethodOnABuiltinNameKeepsTheBuiltinAsTheDefaultMethod() {
 		// The dispatcher SHADOWS the built-in defun; without stashing it as the
 		// generic's default method every non-instance argument dies with "No
