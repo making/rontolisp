@@ -493,6 +493,7 @@ symbol-to-function route (the interpreter resolves designators against the live 
   function namespace is read -- a global VARIABLE holding a lambda is not a
   function binding (the interpreter and SBCL signal for it). The gate is
   `LispMacroExpander.usesRuntimeFunctionBox` (computed symbol-function/fdefinition,
+  `#'symbol-function`/`#'fdefinition` -- whose injected wrapper body is the computed call --,
   literal-`'function` coerce, computed coerce): it keeps the registry live on both
   backends. The JVM probes `_fenv` only when the eval runtime exists
   (`Ctx.evalStoreRef != null`) -- every writer forces it, so without it the probe

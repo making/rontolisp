@@ -26929,6 +26929,19 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void aStandardFunctionTakenAsAValueAnswersAsItsCall() throws Exception {
+		// The wasm twin of the JvmLispCompilerTest test of this name, on Preview 1 and
+		// the component.
+		for (boolean component : new boolean[] { false, true }) {
+			assertThat(runFrontendProgramWithDir(am.ik.rontolisp.StandardFunctionValueFixture.PROGRAM, component))
+				.isEqualTo(am.ik.rontolisp.StandardFunctionValueFixture.EXPECTED);
+			assertThat(
+					runFrontendProgramWithDir(am.ik.rontolisp.StandardFunctionValueFixture.COMPUTED_SYNONYM, component))
+				.isEqualTo(am.ik.rontolisp.StandardFunctionValueFixture.COMPUTED_SYNONYM_EXPECTED);
+		}
+	}
+
+	@Test
 	void anUnboundVariableCarriesItsNameInTheCellErrorNameSlot() throws Exception {
 		// The wasm twin of the JvmLispCompilerTest test of this name, on Preview 1 and
 		// the component, both through the whole front end: _symbol_value's miss throws

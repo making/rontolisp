@@ -10604,8 +10604,9 @@ public final class LispMacroExpander {
 	}
 
 	/**
-	 * Whether the program calls {@code load} with an {@code :if-does-not-exist} option --
-	 * the surface fact {@code LispPreludeLibrary} keys the {@code probe-file} splice on,
+	 * Whether the program calls {@code load} with an {@code :if-does-not-exist} option,
+	 * or names {@code #'load} / {@code 'load}, whose injected wrapper forwards one -- the
+	 * surface fact {@code LispPreludeLibrary} keys the {@code probe-file} splice on,
 	 * because the call that needs it is produced by {@link #lowerLoadOptions(LispCons)}
 	 * inside the expression compilers, long after the prelude selection ran.
 	 * @param program the program forms
@@ -10625,6 +10626,13 @@ public final class LispMacroExpander {
 			return false;
 		}
 		List<LispVal> parts = cons.toList();
+		// #'load, or 'load, which the backends rewrite to #'load in designator position.
+		if (parts.size() == 2 && parts.get(0) instanceof LispSymbol op
+				&& (LispNames.FUNCTION.equals(op.name()) || LispNames.QUOTE.equals(op.name()))
+				&& parts.get(1) instanceof LispSymbol named
+				&& LispNames.LOAD.equals(unqualifiedClMember(named.name()))) {
+			return true;
+		}
 		if (!parts.isEmpty() && parts.get(0) instanceof LispSymbol op
 				&& LispNames.LOAD.equals(unqualifiedClMember(op.name()))) {
 			for (int i = 2; i < parts.size(); i += 2) {
@@ -11310,6 +11318,43 @@ public final class LispMacroExpander {
 		}
 		LispSymbol read = new LispSymbol(quoted.name());
 		return synonymStreamOf(quoteOf(quoted.name()), read);
+	}
+
+	/**
+	 * Whether the program can reach {@link #expandMakeSynonymStream}'s COMPUTED arm -- a
+	 * {@code (make-synonym-stream x)} whose argument is not a quoted symbol, or a
+	 * {@code #'make-synonym-stream}, whose injected wrapper is that call over its
+	 * parameter. The arm synthesizes a {@code symbol-value} inside the expression
+	 * compilers, after every gate scanned the program for that name, so a gate that keys
+	 * {@code symbol-value}'s runtime on the spelling has to ask this too.
+	 * @param program the top-level forms
+	 * @return true when a computed synonym stream can be made
+	 */
+	public static boolean makesComputedSynonymStream(List<LispVal> program) {
+		return program.stream().anyMatch(LispMacroExpander::reachesComputedSynonymStream);
+	}
+
+	private static boolean reachesComputedSynonymStream(LispVal form) {
+		LispVal node = form;
+		while (node instanceof LispCons cons) {
+			if (cons.car() instanceof LispSymbol head && cons.cdr() instanceof LispCons args) {
+				if (LispNames.MAKE_SYNONYM_STREAM.equals(head.name()) && quotedSymbol(args.car()) == null) {
+					return true;
+				}
+				if (LispNames.FUNCTION.equals(head.name()) && args.car() instanceof LispSymbol named
+						&& LispNames.MAKE_SYNONYM_STREAM.equals(named.name())) {
+					return true;
+				}
+			}
+			if (cons.car() instanceof LispSymbol quote && LispNames.QUOTE.equals(quote.name())) {
+				return false;
+			}
+			if (reachesComputedSynonymStream(cons.car())) {
+				return true;
+			}
+			node = cons.cdr();
+		}
+		return false;
 	}
 
 	/** The let temporary holding a COMPUTED make-synonym-stream symbol. */
@@ -44107,15 +44152,16 @@ public final class LispMacroExpander {
 
 	/**
 	 * Whether the program materializes a function VALUE from a name resolved at run time
-	 * -- a computed {@code (symbol-function x)} / {@code (fdefinition x)}, a
-	 * {@code (coerce v 'function)} over a literal function designator, or a
-	 * {@code (coerce v ty)} over a computed result type (which can name FUNCTION at run
-	 * time). The compiled backends must BOX such a resolution as a function value (not
-	 * the symbol), so the name registry has to be live and the print table has to answer
-	 * the name even though no compile-time gate can predict WHICH funcId (.todo/750).
-	 * Like {@code usesRuntimeFunctionDesignator} this scans the pre-lowering spelling:
-	 * the coerce-to-function lowering itself synthesizes a computed symbol-function after
-	 * the gates ran.
+	 * -- a computed {@code (symbol-function x)} / {@code (fdefinition x)}, either
+	 * operator taken as a value ({@code #'symbol-function}, whose injected wrapper body
+	 * is the computed call), a {@code (coerce v 'function)} over a literal function
+	 * designator, or a {@code (coerce v ty)} over a computed result type (which can name
+	 * FUNCTION at run time). The compiled backends must BOX such a resolution as a
+	 * function value (not the symbol), so the name registry has to be live and the print
+	 * table has to answer the name even though no compile-time gate can predict WHICH
+	 * funcId (.todo/750). Like {@code usesRuntimeFunctionDesignator} this scans the
+	 * pre-lowering spelling: the coerce-to-function lowering itself synthesizes a
+	 * computed symbol-function after the gates ran.
 	 * @param program the top-level forms
 	 * @return {@code true} when a runtime-resolved designator can become a value
 	 */
@@ -44136,6 +44182,12 @@ public final class LispMacroExpander {
 					if (parts.size() == 2 && !isQuotedSymbol(parts.get(1))) {
 						return true;
 					}
+				}
+				if (LispNames.FUNCTION.equals(op.name()) && cons.cdr() instanceof LispCons arg
+						&& arg.car() instanceof LispSymbol named
+						&& (LispNames.SYMBOL_FUNCTION.equals(memberOf(named.name()))
+								|| LispNames.FDEFINITION.equals(memberOf(named.name())))) {
+					return true;
 				}
 				if (LispNames.COERCE.equals(member) && cons.isProperList()) {
 					List<LispVal> parts = cons.toList();

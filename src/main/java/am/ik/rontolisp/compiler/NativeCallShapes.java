@@ -93,8 +93,9 @@ final class NativeCallShapes {
 				LispNames.DELETE_PACKAGE, LispNames.EVAL, LispNames.FDEFINITION, LispNames.FMAKUNBOUND,
 				LispNames.GET_OUTPUT_STREAM_STRING, LispNames.HASH_TABLE_REHASH_SIZE,
 				LispNames.HASH_TABLE_REHASH_THRESHOLD, LispNames.HASH_TABLE_SIZE, LispNames.HASH_TABLE_TEST,
-				LispNames.OPEN_STREAM_P, LispNames.PACKAGE_NICKNAMES, LispNames.PACKAGE_SHADOWING_SYMBOLS,
-				LispNames.PROVIDE, LispNames.RATIONALP, LispNames.SYMBOL_FUNCTION, LispNames.SYMBOL_PACKAGE }) {
+				LispNames.MAKE_SYNONYM_STREAM, LispNames.OPEN_STREAM_P, LispNames.PACKAGE_NICKNAMES,
+				LispNames.PACKAGE_SHADOWING_SYMBOLS, LispNames.PROVIDE, LispNames.RATIONALP, LispNames.SYMBOL_FUNCTION,
+				LispNames.SYMBOL_PACKAGE }) {
 			add(rows, name, 1, 1);
 		}
 		for (String name : new String[] { LispNames.GET_INTERNAL_REAL_TIME, LispNames.GET_INTERNAL_RUN_TIME,
@@ -113,6 +114,8 @@ final class NativeCallShapes {
 		add(rows, LispNames.LOAD, 1, UNBOUNDED);
 		add(rows, LispNames.MAKE_PACKAGE, 1, UNBOUNDED);
 		add(rows, LispNames.MAKE_RANDOM_STATE, 0, 1);
+		add(rows, LispNames.MAKE_STRING_INPUT_STREAM, 1, 3);
+		add(rows, LispNames.MAKE_STRING_OUTPUT_STREAM, 0, UNBOUNDED);
 		add(rows, LispNames.RENAME_PACKAGE, 2, 3);
 		add(rows, LispNames.ROW_MAJOR_AREF, 2, 2);
 		// rontolisp's own.

@@ -1138,12 +1138,15 @@ message at the catching end** -- except for the failures the backends report as 
   -- after the arguments (SBCL and the interpreter print `(:SPREAD :ARG)` for the fixture), never
   for a call that does not happen, and through `_fenv` where a runtime `eval` defined it -- with
   `warning: ... looked up when the call runs`. **A standard function is not undefined**:
-  `PackageRegistry.isClFunctionName` names with no value route on a backend (31 measured
-  2026-10-07: `arrayp`, `close`, `eval`, `get-universal-time`, `symbol-function`, ...) still
-  refuse, `Cannot compile: NAME as a function value (this backend has none for the built-in)`, where a
-  late-binding signal would misreport a defined function; the JVM used to let a TAIL
-  `(funcall 'arrayp x)` through as a symbol that then reported `ARRAYP` undefined, and refuses it
-  with wasm now. Pinned by `UndefinedFunctionNameFixture.REFERENCE` / `REFERENCE_RESTART`
+  a `PackageRegistry.isClFunctionName` name, or any name a wrapper backs
+  (`BuiltinFunctionWrappers.isWrappedBuiltin`), never takes the late-binding arm, which would
+  misreport a defined function. 31 such names had no value route on 2026-10-07 and refused; all
+  but `require`/`provide` and the four user-defined generics are values now (`.kb/lisp2-namespaces.md`,
+  "A native built-in's function value"), and those refuse,
+  `Cannot compile: NAME as a function value (this backend has none for the built-in)` -- for
+  `require`/`provide` the computed call's text (`BuiltinFunctionWrappers.noFunctionValueMessage`).
+  The JVM used to let a TAIL `(funcall 'arrayp x)` through as a symbol that then reported
+  `ARRAYP` undefined. Pinned by `UndefinedFunctionNameFixture.REFERENCE` / `REFERENCE_RESTART`
   (`anUndefinedNameTakenAsAFunctionSignalsWhenTheReferenceRuns` in `LispEvaluatorTest` /
   `JvmLispCompilerTest` / `WasmLispCompilerIntegrationTest`) and `RontoLispCliStreamsTest`
   `aReferenceToAnUndefinedFunctionWarnsAtTheReferenceOnEveryBackend`; not in ci-spec, whose

@@ -292,8 +292,9 @@ public final class ShadowedBuiltins {
 	}
 
 	// The case over the tail's length: (if tail<k> deeper arm<k>) per positional count
-	// k, innermost the count past every positional one.
-	private static LispVal tailDispatch(String builtin, List<LispVal> params, LispSymbol rest,
+	// k, innermost the count past every positional one. Also the body of a native
+	// built-in's function value (FunctionValueWrappers.nativeValue).
+	static LispVal tailDispatch(String builtin, List<LispVal> params, LispSymbol rest,
 			Map.@org.jspecify.annotations.Nullable Entry<String, BuiltinAlias> alias) {
 		BuiltinCallArity.Shape shape = BuiltinCallArity.of(builtin);
 		if (shape == null) {

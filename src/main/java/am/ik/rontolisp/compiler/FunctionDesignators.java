@@ -98,8 +98,7 @@ public final class FunctionDesignators {
 	}
 
 	private static boolean isBuiltin(String name) {
-		return BuiltinFunctionWrappers.names().contains(name)
-				|| BuiltinFunctionWrappers.REFERENCE_GATED_FUNCTIONS.contains(name);
+		return BuiltinFunctionWrappers.isWrappedBuiltin(name);
 	}
 
 	private static LispVal rewrite(LispVal form, Set<String> shadowed) {
@@ -122,6 +121,20 @@ public final class FunctionDesignators {
 					? LispCons.rebuilt(c, c.car(), rewriteEach(c.cdr(), shadowed)) : clause);
 			return LispCons.rebuilt(cons, cons.car(), LispCons.rebuilt(keyed, rewrite(keyed.car(), shadowed), clauses));
 		}
+		if ((LispNames.SYMBOL_FUNCTION.equals(op) || LispNames.FDEFINITION.equals(op))
+				&& quotedName(cons.cdr()) instanceof LispSymbol name
+				&& BuiltinFunctionWrappers.REFERENCE_GATED_FUNCTIONS.contains(name.name())
+				&& !shadowed.contains(name.name())) {
+			// (symbol-function 'format) is #'format -- the global definition, which no
+			// local one shadows here -- and only that spelling injects a reference-gated
+			// wrapper.
+			return SourceProvenance.inherit(cons,
+					new LispCons(new LispSymbol(LispNames.FUNCTION), new LispCons(name, LispNil.INSTANCE)));
+		}
+		if ((LispNames.SETF.equals(op) || LispNames.PSETF.equals(op)) && cons.cdr() instanceof LispCons pairs) {
+			// A (symbol-function 'name) PLACE is the definition's setter, not a value.
+			return LispCons.rebuilt(cons, cons.car(), rewritePairs(pairs, shadowed));
+		}
 		Set<String> inner = shadowed;
 		if ((LispNames.FLET.equals(op) || LispNames.LABELS.equals(op) || LispNames.MACROLET.equals(op))
 				&& cons.cdr() instanceof LispCons rest && rest.car() instanceof LispCons definitions) {
@@ -138,6 +151,30 @@ public final class FunctionDesignators {
 			call = withBuiltinDesignator(cons, index, shadowed);
 		}
 		return rewriteEach(call, inner);
+	}
+
+	// The (place value ...) list of a setf: a symbol-function / fdefinition place is
+	// kept, every other element walked as code.
+	private static LispVal rewritePairs(LispVal pairs, Set<String> shadowed) {
+		if (!(pairs instanceof LispCons place)) {
+			return pairs;
+		}
+		LispVal keptPlace = place.car() instanceof LispCons placeForm && placeForm.car() instanceof LispSymbol head
+				&& (LispNames.SYMBOL_FUNCTION.equals(head.name()) || LispNames.FDEFINITION.equals(head.name()))
+						? place.car() : rewrite(place.car(), shadowed);
+		if (!(place.cdr() instanceof LispCons value)) {
+			return LispCons.rebuilt(place, keptPlace, place.cdr());
+		}
+		return LispCons.rebuilt(place, keptPlace,
+				LispCons.rebuilt(value, rewrite(value.car(), shadowed), rewritePairs(value.cdr(), shadowed)));
+	}
+
+	// The symbol of a one-element argument list (quote name), or null.
+	private static @Nullable LispSymbol quotedName(LispVal args) {
+		return args instanceof LispCons arg && arg.cdr() instanceof LispNil && arg.car() instanceof LispCons quoted
+				&& quoted.car() instanceof LispSymbol q && LispNames.QUOTE.equals(q.name())
+				&& quoted.cdr() instanceof LispCons rest && rest.cdr() instanceof LispNil
+				&& rest.car() instanceof LispSymbol name && !name.isKeyword() ? name : null;
 	}
 
 	/**

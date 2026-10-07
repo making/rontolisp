@@ -20896,6 +20896,17 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void aStandardFunctionTakenAsAValueAnswersAsItsCall() {
+		// The reference answer for the compiled backends' twins of this name, which
+		// refused every such program (.kb/lisp2-namespaces.md, "A native built-in's
+		// function value").
+		assertThat(printedLines(am.ik.rontolisp.StandardFunctionValueFixture.PROGRAM))
+			.isEqualTo(am.ik.rontolisp.StandardFunctionValueFixture.EXPECTED);
+		assertThat(printedLines(am.ik.rontolisp.StandardFunctionValueFixture.COMPUTED_SYNONYM))
+			.isEqualTo(am.ik.rontolisp.StandardFunctionValueFixture.COMPUTED_SYNONYM_EXPECTED);
+	}
+
+	@Test
 	void anUnboundVariableCarriesItsNameInTheCellErrorNameSlot() {
 		// The reference answer (SBCL's) the compiled backends' twins of this name
 		// (JvmLispCompilerTest, WasmLispCompilerIntegrationTest) are measured against:
