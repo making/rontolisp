@@ -222,10 +222,9 @@ site, and every complex-free class, keeps its raw emission byte for byte.
   their `_dbl` already meets the computed complex. `isDefinitelyDouble` turns down a tree
   with a complex literal, as its WASM twin does, so `(max (+ #c(1 2) 0.5) 1.0)` reports
   `#C(1.5 2.0)` through `_max`, not the literal through `_dbl`.
-- The generic fold is pairwise, like SBCL's and the generic sites': the interpreter's
-  `+ - /` with a complex and a float argument floats the whole fold, so
-  `(+ z (- z) 1.5)` over an exact `z` is `1.5` compiled and on SBCL and `#C(1.5 0.0)`
-  on the interpreter.
+- The generic fold is pairwise, like SBCL's, the generic sites' and (since 2026-10-07)
+  the interpreter's: `(+ z (- z) 1.5)` over an exact `z` is `1.5` everywhere ("Complex
+  division is SBCL's dispatch").
 
 Pinned by `ComplexBesideAFloatLiteralFixture` (`LispEvaluatorTest#complexBesideAFloatLiteral`,
 `JvmLispCompilerTest#compileAndRunComplexBesideAFloatLiteral`,
@@ -418,49 +417,72 @@ backend. It was chosen because one row of `.todo/762`'s acceptance table did NOT
 when it was written -- `(log -8d0 2d0)` was `#C(2.9999999999999996 4.532360141827194)`
 against SBCL's `#C(3.0 4.532360141827194)` -- and the cause had no logarithm in it: the
 complex DIVISION was the naive denominator form. The identity improved WITH the division
-when `.todo/779` replaced it (below) rather than having to be re-pinned around it.
+when `.todo/779` replaced it (below, since replaced again by SBCL's own dispatch) rather
+than having to be re-pinned around it.
 
-## Complex division is Smith's form (`.todo/779`, 2026-09-11)
+## Complex division is SBCL's dispatch (2026-10-07; Smith's form 2026-09-11)
 
-`(a+bi)/(c+di)` in FLOATS folds on whichever divisor part is larger, never on the
-`c^2+d^2` denominator:
+`+ - /` with a complex operand fold left to right ONE PAIR at a time on every backend, and
+each `/` pair is SBCL 2.2.9's `two-arg-/`:
 
 ```
-|c| >= |d| :  r = d/c,  den = c + d*r,  re = (a + b*r)/den,  im = (b - a*r)/den
-|c| <  |d| :  r = c/d,  den = c*r + d,  re = (a*r + b)/den,  im = (b*r - a)/den
+complex / real     :  (re/y, im/y)                 each part through the real /
+x / (c+di), |c|>|d|:  r = d/c,  dn = c*(1 + r*r)   (|c| <= |d|: r = c/d, dn = d*(1 + r*r))
+  complex x=(a+bi) :  re = (a + b*r)/dn,  im = (b - a*r)/dn     (mirrored: (a*r + b)/dn, (b*r - a)/dn)
+  real x           :  re = x/dn,          im = -(x*r)/dn        (mirrored: (x*r)/dn,     -x/dn)
 ```
 
-Two properties, and a program notices both. A REAL divisor makes `d`, `r` and the
-correction zero, so each part is ONE rounded division instead of three -- which is what
-puts `(log -8d0 2d0)` on SBCL's `#C(3.0 4.532360141827194)`. And the only quantity ever
-squared is the smaller part over the larger, so nothing intermediate leaves the range the
-operands live in: the denominator form overflowed above `|c| ~ 1.3e154` and flushed to
-zero below `~1.5e-162`, answering `#C(NaN NaN)` for `(/ #c(1d200 1d200) #c(1d200 1d200))`
-and for the `1d-200` twin, both of which are `#C(1.0 0.0)`.
+Every operation is a real step with SBCL's contagion: an exact operand converts only where
+it meets a float. So an EXACT divisor's `r` and `dn` stay exact beside a float dividend,
+an exact zero dividend negates to an exact zero (`(/ 0 #c(1.0 -2.0))` is `#C(0.0 -0.0)`),
+and an exact step stays exact whatever float follows (`(/ z z 1.5)` over an exact `z` is
+`0.6666666666666666`, `(/ z 0 1.5)` signals `division-by-zero`). The comparison is
+STRICT: a tie takes the mirrored arm (`(/ #c(1.0 1.0) #c(1.0 -1.0))` is `#C(-0.0 1.0)`).
+Only the smaller part over the larger is ever squared, so nothing intermediate leaves the
+operands' range (`(/ #c(1d200 1d200) #c(1d200 1d200))` is `#C(1.0 0.0)`; the `c^2+d^2`
+denominator answered `#C(NaN NaN)`), and a real divisor is one rounding per part
+(`(log -8d0 2d0)` is SBCL's `#C(3.0 4.532360141827194)`).
 
-Measured against SBCL 2.2.9 on `linux/amd64`, 2026-09-11: this form reproduces SBCL's
-answer on every finite row probed (the two range cases, `#c(3 4)`/`#c(4 3)` either side
-of the fold, a pure-imaginary divisor, a real dividend, `1d300`/`1d-300` divisors) --
-SBCL computes the same form. The one deliberate DIVERGENCE is the zero divisor: SBCL's
-FPU traps, so `(/ #c(1d0 2d0) 0d0)` signals `DIVISION-BY-ZERO` and
-`(/ #c(1d0 2d0) #c(0d0 0d0))` `FLOATING-POINT-INVALID-OPERATION`, where this runtime does
-not trap and answers `#C(NaN NaN)` -- `r` is `0/0` and every part follows. That is the
-value the denominator form answered too, so the existing pin did not move; a `d == 0.0`
-special case would have made it `#C(Infinity Infinity)`, which claims an answer where
-there is none.
+Measured against SBCL 2.2.9 (`*read-default-float-format*` `double-float`, linux/amd64),
+2026-10-07, overturning 2026-09-11's "SBCL computes the same form" (Smith's
+`dn = c + d*r`, `>=`, and every operand floated first when any part was a float), which
+had held on the nine rows probed then: 400 random float-real / float-complex quotients
+matched this real-dividend form 400/400 and the old form 265/400; 500 random
+float-complex / float-complex matched `dn = c*(1+r^2)` 500/500 and the old `c + d*r`
+354/500; float dividends over EXACT divisors matched the exact-`r`/`dn` reading 300/300
+(real) and 300/300 (complex), against 204 and 282 for floating first. Signed zeros moved
+too: the old form answered `#C(-0.0 0.0)` for `(/ #c(-0.0 -0.0) 1.0)` (SBCL
+`#C(-0.0 -0.0)`) and `#C(1.0 0.0)` for `(/ 1 #c(1.0 0.0))` (SBCL `#C(1.0 -0.0)`). A random
+400-form corpus of `+ - /` folds over every operand shape (exact, ratio, float, signed
+zeros, exact and float complexes) then matched SBCL on every row SBCL does not trap on,
+and all four backends agreed on all 400.
 
-Three implementations, one form, and they must agree: `Environment.smithDivide` (the
-interpreter's float arm of `divComplex`), `JvmComplexRuntimeBuilder.buildDiv`'s float
-tail, and `WasmComplexRuntimeBuilder.buildDivBody`'s float arm -- WASM keeps the whole
-exact path on the `_rat_*` helpers below it and branches into raw `f64` instructions when
-any of the four parts is a float, so its digits ARE the JVM's here (unlike the software
-log core's). The EXACT (rational) path of all three is untouched and still divides by
-`c^2+d^2`: rationals neither round nor overflow, and `exactDivComplex`'s zero-divisor
-funnel answers where it always did. Pinning tests:
-`LispEvaluatorTest#evalComplexFloatDivisionIsSmithsForm`,
-`JvmLispCompilerTest#compileAndRunComplexFloatDivisionIsSmithsForm` (a differential
-against the interpreter) and
-`WasmLispCompilerIntegrationTest#compileAndRunComplexFloatDivisionIsSmithsForm`.
+`+` and `-` needed no new form: SBCL counts a real beside a complex as `(r, 0)` with an
+EXACT zero, and contagion makes that the same IEEE sum as a float zero
+(`(+ #c(0.0 -0.0) 1)` is `#C(1.0 0.0)` there too). What moved was the interpreter alone,
+whose `addComplex`/`subComplex`/`divComplex` floated EVERY argument as soon as one was a
+float: `(+ z (- z) 1.5)` was `#C(1.5 0.0)` where SBCL and the compiled backends answer
+`1.5`.
+
+The zero divisor is still the deliberate divergence, in a new shape: SBCL's FPU traps, so
+`(/ #c(1d0 2d0) 0d0)` signals `DIVISION-BY-ZERO` and a zero complex divisor
+`FLOATING-POINT-INVALID-OPERATION`. This runtime does not trap. A zero REAL divisor now
+divides each part, so the parts are what the real `/` answers here (`#C(Infinity
+Infinity)`, `#C(Infinity NaN)` for a zero part) -- the old form answered `#C(NaN NaN)`
+from `r = 0/0`; a zero COMPLEX divisor still makes `r` `0/0` and answers `#C(NaN NaN)`.
+
+Three implementations, one rule, and they must agree: `Environment.divComplexPair` (every
+step a `real*Step`), `JvmComplexRuntimeBuilder.buildDiv` and
+`WasmComplexRuntimeBuilder.buildDivBody`. The compiled two keep a raw-double arm for a
+complex over a FLOAT complex (every operation meets a float there, so floating first IS
+the contagion) and run everything else -- a real dividend, an exact divisor -- through the
+generic helpers (`_add` & co. / `_rat_*`), whose contagion is the interpreter's. Pinning
+tests: `ComplexSumQuotientFixture` (`LispEvaluatorTest#complexSumQuotient`,
+`JvmLispCompilerTest#compileAndRunComplexSumQuotient`,
+`WasmLispCompilerIntegrationTest#complexSumQuotient`: SBCL's rows, signed zeros and last
+digits), `LispEvaluatorTest#evalComplexFloatDivisionIsSbclsForm`,
+`JvmLispCompilerTest#compileAndRunComplexFloatDivisionIsSbclsForm` (a differential against
+the interpreter) and `WasmLispCompilerIntegrationTest#compileAndRunComplexFloatDivisionIsSbclsForm`.
 
 The WASM leg of that test found a defect of its own, in the SHARED front end:
 `compiler/DoubleValuedForms.certainlyDouble` scanned an operator's arguments in one pass

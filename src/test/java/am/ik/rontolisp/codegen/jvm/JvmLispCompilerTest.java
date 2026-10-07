@@ -2030,6 +2030,14 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunComplexSumQuotient() throws Exception {
+		// The interpreter twin is LispEvaluatorTest#complexSumQuotient.
+		assertThat(compileAndRun(am.ik.rontolisp.cli.CompileFrontendAccess.corpus(
+				am.ik.rontolisp.ComplexSumQuotientFixture.SOURCE, am.ik.rontolisp.reader.Features.JVM, false, false)))
+			.isEqualTo(am.ik.rontolisp.ComplexSumQuotientFixture.EXPECTED);
+	}
+
+	@Test
 	void compileAndRunSequenceAndAccessorOperatorsNameTheirWrongTypeArgument() throws Exception {
 		// Through the CLI's front end, which splices the prelude defuns (mismatch,
 		// search, count-if-not) the program reaches. The interpreter twin is
@@ -10288,15 +10296,14 @@ class JvmLispCompilerTest {
 			""";
 
 	@Test
-	void compileAndRunComplexFloatDivisionIsSmithsForm() throws Exception {
-		// _cdiv's float tail is Smith's fold, the interpreter's smithDivide term for
-		// term -- so the pin is the interpreter's own output, which is the only one the
-		// platform's rounding cannot invalidate. The exact arm is in the program too:
-		// it keeps the c^2+d^2 denominator, where rationals neither round nor overflow.
+	void compileAndRunComplexFloatDivisionIsSbclsForm() throws Exception {
+		// _cdiv is the interpreter's divComplexPair term for term -- so the pin is the
+		// interpreter's own output, which is the only one the platform's rounding
+		// cannot invalidate. The exact arm is in the program too.
 		assertThat(compileAndRun(COMPLEX_FLOAT_DIVISION_PROGRAM)).isEqualTo(interpret(COMPLEX_FLOAT_DIVISION_PROGRAM));
-		// The two rows that MOVED, and that no rounding can blur: a real divisor is one
-		// division per part (SBCL's answer), and the fold never squares the larger part
-		// (the denominator form answered #C(NaN NaN) for both range cases).
+		// The rows that no rounding can blur: a real divisor is one division per part
+		// (SBCL's answer), and the fold never squares the larger part (a c^2+d^2
+		// denominator answers #C(NaN NaN) for both range cases).
 		assertThat(compileAndRun("(print (/ #c(2.0794415416798357d0 3.141592653589793d0) 0.6931471805599453d0))"))
 			.isEqualTo("#C(3.0 4.532360141827194)");
 		assertThat(compileAndRun("(print (/ #c(1d200 1d200) #c(1d200 1d200)))")).isEqualTo("#C(1.0 0.0)");

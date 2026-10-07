@@ -651,73 +651,58 @@ final class JvmComplexRuntimeBuilder {
 		return new ComplexMethod(name, desc, c);
 	}
 
-	// _cdiv over real-or-complex operands. The exact path divides by the
-	// c^2+d^2 denominator through _div, whose _rat landing throws the same
-	// ArithmeticException("Division by zero") a real division throws; the FLOAT tail
-	// is Smith's form, the interpreter's smithDivide (see there for why).
-	// Slots: params 0-1, parts 2-5, temps 6-8, doubles 10-21
-	// (10=a, 12=b, 14=c, 16=d, 18=r, 20=den).
+	// _cdiv over real-or-complex operands: SBCL's two-argument / (the interpreter's
+	// divComplexPair, see there for the measurements). Neither operand a holder is a
+	// plain _div; a holder over a real divides each part by it; a holder over a FLOAT
+	// holder is the fold in raw doubles (every operation meets a float, so converting
+	// first is what SBCL's contagion does); everything else -- a real dividend, or an
+	// EXACT divisor -- runs SBCL's form through the generic helpers, so an exact
+	// divisor's r and denominator stay exact beside a float dividend and an exact zero
+	// dividend negates to an exact zero.
+	// Slots: params 0-1, dividend parts 2-3, divisor parts 4-5, 6-7 (the boxed parts
+	// in the raw arm, r and dn in the generic one), doubles 10-21 (10=a, 12=b, 14=c,
+	// 16=d, 18=r, 20=den).
 	private static ComplexMethod buildDiv(Refs refs, ConstantPool cp, Utf8Entry name, Utf8Entry desc) {
 		MethodCode c = new MethodCode();
 		// Neither operand a holder: a plain real division, which the ungated _div
-		// answers -- exactly, without the c^2+d^2 denominator's two extra roundings
-		// and without manufacturing a zero-imagined float holder the float path
-		// cannot canonicalize away. The arm is reachable because a complex-capable
-		// site only knows at RUN time whether it holds a complex: (log n base)
-		// divides two logarithms, either of which may have stayed real, and this is
-		// what keeps that quotient EQUAL to (/ (log n) (log base)). The WASM twin
-		// (_c_div's own head) is the same arm.
-		c.aload(0);
-		c.instanceOf(refs.rcClass());
-		MethodCode.Label firstIsHolder = c.newLabel();
-		c.ifne(firstIsHolder);
+		// answers -- exactly, and without manufacturing a zero-imagined float holder.
+		// The arm is reachable because a complex-capable site only knows at RUN time
+		// whether it holds a complex: (log n base) divides two logarithms, either of
+		// which may have stayed real, and this is what keeps that quotient EQUAL to
+		// (/ (log n) (log base)). The WASM twin (_c_div's own head) is the same arm.
+		MethodCode.Label divisorIsHolder = c.newLabel();
 		c.aload(1);
 		c.instanceOf(refs.rcClass());
-		MethodCode.Label secondIsHolder = c.newLabel();
-		c.ifne(secondIsHolder);
+		c.ifne(divisorIsHolder);
+		c.aload(0);
+		c.instanceOf(refs.rcClass());
+		MethodCode.Label dividendIsHolder = c.newLabel();
+		c.ifne(dividendIsHolder);
 		c.aload(0);
 		c.aload(1);
 		c.invokestatic(refs.rDiv());
 		c.areturn();
-		c.labelBinding(firstIsHolder);
-		c.labelBinding(secondIsHolder);
+		// A holder over a real: each part divided by the real.
+		c.labelBinding(dividendIsHolder);
 		emitExtractParts(c, refs, 0, 2, 3);
-		emitExtractParts(c, refs, 1, 4, 5);
-		MethodCode.Label toFloat = c.newLabel();
-		emitFloatTest(c, refs, new int[] { 2, 3, 4, 5 }, toFloat);
-		c.aload(4);
-		c.aload(4);
-		c.invokestatic(refs.rMul());
-		c.aload(5);
-		c.aload(5);
-		c.invokestatic(refs.rMul());
-		c.invokestatic(refs.rAdd());
-		c.astore(6);
 		c.aload(2);
-		c.aload(4);
-		c.invokestatic(refs.rMul());
-		c.aload(3);
-		c.aload(5);
-		c.invokestatic(refs.rMul());
-		c.invokestatic(refs.rAdd());
-		c.aload(6);
+		c.aload(1);
 		c.invokestatic(refs.rDiv());
-		c.astore(7);
 		c.aload(3);
-		c.aload(4);
-		c.invokestatic(refs.rMul());
-		c.aload(2);
-		c.aload(5);
-		c.invokestatic(refs.rMul());
-		c.invokestatic(refs.rSub());
-		c.aload(6);
+		c.aload(1);
 		c.invokestatic(refs.rDiv());
-		c.astore(8);
-		c.aload(7);
-		c.aload(8);
 		c.invokestatic(refs.rCComplex());
 		c.areturn();
-		c.labelBinding(toFloat);
+		c.labelBinding(divisorIsHolder);
+		emitExtractParts(c, refs, 1, 4, 5);
+		MethodCode.Label generic = c.newLabel();
+		c.aload(0);
+		c.instanceOf(refs.rcClass());
+		c.ifeq(generic);
+		c.aload(4);
+		c.instanceOf(refs.doubleClass());
+		c.ifeq(generic);
+		emitExtractParts(c, refs, 0, 2, 3);
 		emitToDouble(c, refs, 2);
 		c.dstore(10);
 		emitToDouble(c, refs, 3);
@@ -726,25 +711,23 @@ final class JvmComplexRuntimeBuilder {
 		c.dstore(14);
 		emitToDouble(c, refs, 5);
 		c.dstore(16);
-		// Smith's fold: |c| >= |d| ? -- DCMPL answers -1 for a NaN, so a NaN operand
-		// takes the mirrored arm, exactly what Java's >= does in smithDivide.
+		// The fold: |c| > |d| ? -- strict, like SBCL, so a tie takes the mirrored arm;
+		// DCMPL answers -1 for a NaN, which takes it too.
 		c.dload(14);
 		callMath(c, refs, cp, "abs", "(D)D");
 		c.dload(16);
 		callMath(c, refs, cp, "abs", "(D)D");
 		c.dcmpl();
 		MethodCode.Label realFold = c.newLabel();
-		c.ifge(realFold);
-		// |c| < |d|: r = c/d, den = c*r + d, re = (a*r + b)/den, im = (b*r - a)/den.
+		c.ifgt(realFold);
+		// |c| <= |d|: r = c/d, den = d*(1 + r*r), re = (a*r + b)/den, im = (b*r - a)/den.
 		c.dload(14);
 		c.dload(16);
 		c.ddiv();
 		c.dstore(18);
-		c.dload(14);
-		c.dload(18);
-		c.dmul();
 		c.dload(16);
-		c.dadd();
+		emitOnePlusSquare(c, 18);
+		c.dmul();
 		c.dstore(20);
 		c.dload(10);
 		c.dload(18);
@@ -767,17 +750,14 @@ final class JvmComplexRuntimeBuilder {
 		MethodCode.Label built = c.newLabel();
 		c.goto_(built);
 		c.labelBinding(realFold);
-		// |c| >= |d|: r = d/c, den = c + d*r, re = (a + b*r)/den, im = (b - a*r)/den.
-		// A REAL divisor lands here with d zero, so both parts are ONE division.
+		// |c| > |d|: r = d/c, den = c*(1 + r*r), re = (a + b*r)/den, im = (b - a*r)/den.
 		c.dload(16);
 		c.dload(14);
 		c.ddiv();
 		c.dstore(18);
 		c.dload(14);
-		c.dload(16);
-		c.dload(18);
+		emitOnePlusSquare(c, 18);
 		c.dmul();
-		c.dadd();
 		c.dstore(20);
 		c.dload(10);
 		c.dload(12);
@@ -800,7 +780,119 @@ final class JvmComplexRuntimeBuilder {
 		c.labelBinding(built);
 		emitNewHolderFromSlots(c, refs, 6, 7);
 		c.areturn();
+
+		// SBCL's form through the generic helpers. |c| > |d| over the divisor's own
+		// parts: raw doubles for a float holder, the exact squares otherwise.
+		c.labelBinding(generic);
+		MethodCode.Label bigReal = c.newLabel();
+		MethodCode.Label smallReal = c.newLabel();
+		MethodCode.Label exactCompare = c.newLabel();
+		c.aload(4);
+		c.instanceOf(refs.doubleClass());
+		c.ifeq(exactCompare);
+		emitToDouble(c, refs, 4);
+		callMath(c, refs, cp, "abs", "(D)D");
+		emitToDouble(c, refs, 5);
+		callMath(c, refs, cp, "abs", "(D)D");
+		c.dcmpl();
+		c.ifgt(bigReal);
+		c.goto_(smallReal);
+		c.labelBinding(exactCompare);
+		emitGeneric(c, refs.rMul(), slot(4), slot(4));
+		emitGeneric(c, refs.rMul(), slot(5), slot(5));
+		c.invokestatic(refs.rCmp());
+		c.ifgt(bigReal);
+		c.labelBinding(smallReal);
+		emitDivFold(c, refs, 4, 5, false);
+		c.labelBinding(bigReal);
+		emitDivFold(c, refs, 5, 4, true);
 		return new ComplexMethod(name, desc, c);
+	}
+
+	// One arm of _cdiv's generic SBCL form, ending in areturn: r = num/big and
+	// dn = big*(1 + r*r), where big is the divisor part in slot bigSlot and num the one
+	// in numSlot; realFold says which part is big, the real (c) or the imaginary (d).
+	// A holder dividend's parts go into slots 2-3.
+	private static void emitDivFold(MethodCode c, Refs refs, int numSlot, int bigSlot, boolean realFold) {
+		emitGeneric(c, refs.rDiv(), slot(numSlot), slot(bigSlot));
+		c.astore(6);
+		emitGeneric(c, refs.rMul(), slot(bigSlot), op(refs.rAdd(), longOne(refs), op(refs.rMul(), slot(6), slot(6))));
+		c.astore(7);
+		MethodCode.Label realDividend = c.newLabel();
+		c.aload(0);
+		c.instanceOf(refs.rcClass());
+		c.ifeq(realDividend);
+		emitExtractParts(c, refs, 0, 2, 3);
+		if (realFold) {
+			// re = (a + b*r)/dn, im = (b - a*r)/dn
+			emitGeneric(c, refs.rDiv(), op(refs.rAdd(), slot(2), op(refs.rMul(), slot(3), slot(6))), slot(7));
+			emitGeneric(c, refs.rDiv(), op(refs.rSub(), slot(3), op(refs.rMul(), slot(2), slot(6))), slot(7));
+		}
+		else {
+			// re = (a*r + b)/dn, im = (b*r - a)/dn
+			emitGeneric(c, refs.rDiv(), op(refs.rAdd(), op(refs.rMul(), slot(2), slot(6)), slot(3)), slot(7));
+			emitGeneric(c, refs.rDiv(), op(refs.rSub(), op(refs.rMul(), slot(3), slot(6)), slot(2)), slot(7));
+		}
+		c.invokestatic(refs.rCComplex());
+		c.areturn();
+		c.labelBinding(realDividend);
+		if (realFold) {
+			// re = x/dn, im = -(x*r)/dn
+			emitGeneric(c, refs.rDiv(), slot(0), slot(7));
+			emitGeneric(c, refs.rDiv(), neg(refs, op(refs.rMul(), slot(0), slot(6))), slot(7));
+		}
+		else {
+			// re = (x*r)/dn, im = -x/dn
+			emitGeneric(c, refs.rDiv(), op(refs.rMul(), slot(0), slot(6)), slot(7));
+			emitGeneric(c, refs.rDiv(), neg(refs, slot(0)), slot(7));
+		}
+		c.invokestatic(refs.rCComplex());
+		c.areturn();
+	}
+
+	// Leaves 1 + r*r on the stack for the raw double in slot rSlot.
+	private static void emitOnePlusSquare(MethodCode c, int rSlot) {
+		c.dconst_1();
+		c.dload(rSlot);
+		c.dload(rSlot);
+		c.dmul();
+		c.dadd();
+	}
+
+	/** A value _cdiv's generic arm pushes. */
+	private interface Operand {
+
+		void emit(MethodCode c);
+
+	}
+
+	private static Operand slot(int slot) {
+		return c -> c.aload(slot);
+	}
+
+	private static Operand op(MethodRefEntry helper, Operand left, Operand right) {
+		return c -> emitGeneric(c, helper, left, right);
+	}
+
+	private static Operand neg(Refs refs, Operand value) {
+		return c -> {
+			value.emit(c);
+			c.invokestatic(refs.rNeg());
+		};
+	}
+
+	private static Operand longOne(Refs refs) {
+		return c -> {
+			c.lconst_1();
+			c.invokestatic(refs.longValueOf());
+		};
+	}
+
+	// Pushes helper(left, right) for one of the generic binary helpers.
+	private static void emitGeneric(MethodCode c, MethodRefEntry helper, Operand left, Operand right) {
+		left.emit(c);
+		right.emit(c);
+		c.invokestatic(helper);
 	}
 
 	// _cneg(Object x): (-re, -im), each part through _neg (which keeps doubles

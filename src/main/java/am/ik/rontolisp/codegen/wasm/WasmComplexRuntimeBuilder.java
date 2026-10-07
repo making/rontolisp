@@ -196,9 +196,9 @@ final class WasmComplexRuntimeBuilder {
 		emitIsComplex(w, 0);
 		w.write(Instruction.IF);
 		w.writeRefType(true, Type.EQ.code());
-		emitScaleParts(w, 0, 1);
+		emitScaleParts(w, 0, 1, WasmLispCompiler.FUNC_RAT_MUL);
 		w.write(Instruction.ELSE);
-		emitScaleParts(w, 1, 0);
+		emitScaleParts(w, 1, 0, WasmLispCompiler.FUNC_RAT_MUL);
 		w.write(Instruction.END);
 		w.write(Instruction.RETURN);
 		w.write(Instruction.END);
@@ -244,49 +244,48 @@ final class WasmComplexRuntimeBuilder {
 	}
 
 	// Pushes the canonical complex whose parts are the parts of the complex in
-	// local[complexSlot] each multiplied by the real in local[realSlot].
-	private static void emitScaleParts(WasmWriter w, int complexSlot, int realSlot) {
+	// local[complexSlot] each combined with the real in local[realSlot] by ratFunc
+	// (_rat_mul or _rat_div, the part first).
+	private static void emitScaleParts(WasmWriter w, int complexSlot, int realSlot, int ratFunc) {
 		emitComplexReal(w, complexSlot);
 		getLocal(w, realSlot);
-		call(w, WasmLispCompiler.FUNC_RAT_MUL);
+		call(w, ratFunc);
 		emitComplexImag(w, complexSlot);
 		getLocal(w, realSlot);
-		call(w, WasmLispCompiler.FUNC_RAT_MUL);
+		call(w, ratFunc);
 		call(w, WasmLispCompiler.FUNC_C_COMPLEX);
 	}
 
-	// _cdiv((ref null eq) a, (ref null eq) b) -> (ref null eq): (a+bi)/(c+di). The
-	// EXACT arm divides by the real denominator c^2+d^2 -- the interpreter's
-	// exactDivComplex, where rationals neither round nor overflow -- and a zero
-	// divisor fails inside _rat_div exactly the way a real (/ x 0) does. A FLOAT part
-	// anywhere takes Smith's fold instead, the interpreter's smithDivide (see there
-	// for why: the denominator form overflows where the operands do not, and a real
-	// divisor must cost ONE rounding per part, not three). The JVM twin is
-	// JvmComplexRuntimeBuilder.buildDiv's float tail; all three must agree.
+	// _cdiv((ref null eq) a, (ref null eq) b) -> (ref null eq): SBCL's two-argument /,
+	// the interpreter's divComplexPair (see there for the measurements). Neither
+	// operand a complex is a plain _rat_div; a complex over a real divides each part
+	// by it; a complex over a FLOAT complex is the fold in raw f64 (every operation
+	// meets a float, so converting first is what SBCL's contagion does);
+	// everything else -- a real dividend, or an EXACT divisor -- runs SBCL's form
+	// through the _rat_* helpers, so an exact divisor's r and denominator stay exact
+	// beside a float dividend and an exact zero dividend negates to an exact zero.
+	// The JVM twin is JvmComplexRuntimeBuilder.buildDiv; all three must agree.
 	static byte[] buildDivBody() {
 		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 
-		// Locals: 0=a, 1=b (params), 2=ra, 3=ia, 4=rb, 5=ib, 6=denom, 7=re, 8=im,
-		// then the float arm's raw parts 9=a, 10=b, 11=c, 12=d, 13=r, 14=den.
+		// Locals: 0=a, 1=b (params), 2=ra, 3=ia, 4=c, 5=d, 6=r, 7=dn, 8=re, 9=im,
+		// 10=scratch, then the float arm's raw parts 11=a, 12=b, 13=c, 14=d, 15=r,
+		// 16=den.
 		w.write(2);
-		w.write(7);
+		w.write(9);
 		w.writeRefType(true, Type.EQ.code());
 		w.write(6);
 		w.write(Type.F64);
 
 		// Neither operand a complex: a plain real division, which _rat_div answers
-		// exactly -- without the c^2+d^2 denominator's two extra roundings. The arm
-		// is reachable because a complex-capable site only knows at RUN time whether
-		// it holds a complex: (log n base) divides two logarithms, either of which
-		// may have stayed real, and this is what keeps that quotient EQUAL to
-		// (/ (log n) (log base)). The JVM twin (_cdiv's own head) is the same arm.
-		getLocal(w, 0);
-		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
-		w.writeHeapType(WasmLispCompiler.TYPE_COMPLEX);
-		getLocal(w, 1);
-		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
-		w.writeHeapType(WasmLispCompiler.TYPE_COMPLEX);
+		// exactly. The arm is reachable because a complex-capable site only knows at
+		// RUN time whether it holds a complex: (log n base) divides two logarithms,
+		// either of which may have stayed real, and this is what keeps that quotient
+		// EQUAL to (/ (log n) (log base)). The JVM twin (_cdiv's own head) is the
+		// same arm.
+		emitIsComplex(w, 0);
+		emitIsComplex(w, 1);
 		w.write(Instruction.I32_OR);
 		w.write(Instruction.I32_EQZ);
 		w.write(Instruction.IF, 0x40);
@@ -295,160 +294,252 @@ final class WasmComplexRuntimeBuilder {
 		call(w, WasmLispCompiler.FUNC_RAT_DIV);
 		w.write(Instruction.RETURN);
 		w.write(Instruction.END);
-
-		emitComplexReal(w, 0);
-		w.write(Instruction.SET_LOCAL);
-		w.writeUnsignedLeb128(2);
-		emitComplexImag(w, 0);
-		w.write(Instruction.SET_LOCAL);
-		w.writeUnsignedLeb128(3);
-		emitComplexReal(w, 1);
-		w.write(Instruction.SET_LOCAL);
-		w.writeUnsignedLeb128(4);
-		emitComplexImag(w, 1);
-		w.write(Instruction.SET_LOCAL);
-		w.writeUnsignedLeb128(5);
-
-		// A float part anywhere coerces all four through the ONE shared _as_f64 and
-		// takes Smith's fold. The whole arm returns, so the exact code below never
-		// sees a float and stays the plain _rat_* denominator form.
-		emitIsFloat(w, 2);
-		emitIsFloat(w, 3);
-		w.write(Instruction.I32_OR);
-		emitIsFloat(w, 4);
-		w.write(Instruction.I32_OR);
-		emitIsFloat(w, 5);
-		w.write(Instruction.I32_OR);
+		// A complex over a real: each part divided by the real.
+		emitIsComplex(w, 1);
+		w.write(Instruction.I32_EQZ);
 		w.write(Instruction.IF, 0x40);
+		emitScaleParts(w, 0, 1, WasmLispCompiler.FUNC_RAT_DIV);
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END);
+
+		emitComplexReal(w, 1);
+		setLocal(w, 4);
+		emitComplexImag(w, 1);
+		setLocal(w, 5);
+
+		// A complex over a float complex: the fold in raw f64. Canonical parts
+		// are uniformly float or uniformly exact, so the divisor's real part decides.
+		emitIsComplex(w, 0);
+		emitIsFloat(w, 4);
+		w.write(Instruction.I32_AND);
+		w.write(Instruction.IF, 0x40);
+		emitComplexReal(w, 0);
+		setLocal(w, 2);
+		emitComplexImag(w, 0);
+		setLocal(w, 3);
 		for (int part = 0; part < 4; part++) {
 			getLocal(w, 2 + part);
 			call(w, WasmLispCompiler.FUNC_AS_F64);
-			w.write(Instruction.SET_LOCAL);
-			w.writeUnsignedLeb128(9 + part);
+			setLocal(w, 11 + part);
 		}
-		// |c| >= |d| ? -- f64.ge answers 0 for a NaN operand, which takes the
-		// mirrored arm, exactly what Java's >= does in smithDivide.
-		getLocal(w, 11);
+		// |c| > |d| ? -- strict, like SBCL, so a tie takes the mirrored arm; f64.gt
+		// answers 0 for a NaN operand, which takes it too.
+		getLocal(w, 13);
 		w.write(Instruction.F64_ABS);
-		getLocal(w, 12);
+		getLocal(w, 14);
 		w.write(Instruction.F64_ABS);
-		w.write(Instruction.F64_GE);
+		w.write(Instruction.F64_GT);
 		w.write(Instruction.IF, 0x40);
-		// r = d/c, den = c + d*r, re = (a + b*r)/den, im = (b - a*r)/den. A REAL
-		// divisor lands here with d zero, so both parts are ONE division.
-		getLocal(w, 12);
-		getLocal(w, 11);
-		w.write(Instruction.F64_DIV);
-		w.write(Instruction.SET_LOCAL);
-		w.writeUnsignedLeb128(13);
-		getLocal(w, 11);
-		getLocal(w, 12);
-		getLocal(w, 13);
-		w.write(Instruction.F64_MUL);
-		w.write(Instruction.F64_ADD);
-		w.write(Instruction.SET_LOCAL);
-		w.writeUnsignedLeb128(14);
-		getLocal(w, 9);
-		getLocal(w, 10);
-		getLocal(w, 13);
-		w.write(Instruction.F64_MUL);
-		w.write(Instruction.F64_ADD);
+		// r = d/c, den = c*(1 + r*r), re = (a + b*r)/den, im = (b - a*r)/den.
 		getLocal(w, 14);
+		getLocal(w, 13);
+		w.write(Instruction.F64_DIV);
+		setLocal(w, 15);
+		getLocal(w, 13);
+		emitOnePlusSquare(w, 15);
+		w.write(Instruction.F64_MUL);
+		setLocal(w, 16);
+		getLocal(w, 11);
+		getLocal(w, 12);
+		getLocal(w, 15);
+		w.write(Instruction.F64_MUL);
+		w.write(Instruction.F64_ADD);
+		getLocal(w, 16);
 		w.write(Instruction.F64_DIV);
 		boxF64(w);
-		w.write(Instruction.SET_LOCAL);
-		w.writeUnsignedLeb128(7);
-		getLocal(w, 10);
-		getLocal(w, 9);
-		getLocal(w, 13);
+		setLocal(w, 8);
+		getLocal(w, 12);
+		getLocal(w, 11);
+		getLocal(w, 15);
 		w.write(Instruction.F64_MUL);
 		w.write(Instruction.F64_SUB);
-		getLocal(w, 14);
+		getLocal(w, 16);
 		w.write(Instruction.F64_DIV);
 		boxF64(w);
-		w.write(Instruction.SET_LOCAL);
-		w.writeUnsignedLeb128(8);
+		setLocal(w, 9);
 		w.write(Instruction.ELSE);
-		// r = c/d, den = c*r + d, re = (a*r + b)/den, im = (b*r - a)/den.
-		getLocal(w, 11);
-		getLocal(w, 12);
-		w.write(Instruction.F64_DIV);
-		w.write(Instruction.SET_LOCAL);
-		w.writeUnsignedLeb128(13);
-		getLocal(w, 11);
+		// r = c/d, den = d*(1 + r*r), re = (a*r + b)/den, im = (b*r - a)/den.
 		getLocal(w, 13);
-		w.write(Instruction.F64_MUL);
-		getLocal(w, 12);
-		w.write(Instruction.F64_ADD);
-		w.write(Instruction.SET_LOCAL);
-		w.writeUnsignedLeb128(14);
-		getLocal(w, 9);
-		getLocal(w, 13);
-		w.write(Instruction.F64_MUL);
-		getLocal(w, 10);
-		w.write(Instruction.F64_ADD);
 		getLocal(w, 14);
 		w.write(Instruction.F64_DIV);
-		boxF64(w);
-		w.write(Instruction.SET_LOCAL);
-		w.writeUnsignedLeb128(7);
-		getLocal(w, 10);
-		getLocal(w, 13);
+		setLocal(w, 15);
+		getLocal(w, 14);
+		emitOnePlusSquare(w, 15);
 		w.write(Instruction.F64_MUL);
-		getLocal(w, 9);
+		setLocal(w, 16);
+		getLocal(w, 11);
+		getLocal(w, 15);
+		w.write(Instruction.F64_MUL);
+		getLocal(w, 12);
+		w.write(Instruction.F64_ADD);
+		getLocal(w, 16);
+		w.write(Instruction.F64_DIV);
+		boxF64(w);
+		setLocal(w, 8);
+		getLocal(w, 12);
+		getLocal(w, 15);
+		w.write(Instruction.F64_MUL);
+		getLocal(w, 11);
 		w.write(Instruction.F64_SUB);
-		getLocal(w, 14);
+		getLocal(w, 16);
 		w.write(Instruction.F64_DIV);
 		boxF64(w);
-		w.write(Instruction.SET_LOCAL);
-		w.writeUnsignedLeb128(8);
+		setLocal(w, 9);
 		w.write(Instruction.END);
-		getLocal(w, 7);
 		getLocal(w, 8);
+		getLocal(w, 9);
 		call(w, WasmLispCompiler.FUNC_C_COMPLEX);
 		w.write(Instruction.RETURN);
 		w.write(Instruction.END);
 
-		// denom = rb*rb + ib*ib
+		// SBCL's form through the _rat_* helpers. |c| > |d| over the divisor's own
+		// parts: raw f64 for a float complex, the exact squares otherwise.
+		emitIsFloat(w, 4);
+		w.write(Instruction.IF);
+		w.write(Type.I32);
+		getLocal(w, 4);
+		call(w, WasmLispCompiler.FUNC_AS_F64);
+		w.write(Instruction.F64_ABS);
+		getLocal(w, 5);
+		call(w, WasmLispCompiler.FUNC_AS_F64);
+		w.write(Instruction.F64_ABS);
+		w.write(Instruction.F64_GT);
+		w.write(Instruction.ELSE);
 		getLocal(w, 4);
 		getLocal(w, 4);
 		call(w, WasmLispCompiler.FUNC_RAT_MUL);
 		getLocal(w, 5);
 		getLocal(w, 5);
 		call(w, WasmLispCompiler.FUNC_RAT_MUL);
-		call(w, WasmLispCompiler.FUNC_RAT_ADD);
-		w.write(Instruction.SET_LOCAL);
-		w.writeUnsignedLeb128(6);
-		// re = (ra*rb + ia*ib) / denom
-		getLocal(w, 2);
-		getLocal(w, 4);
-		call(w, WasmLispCompiler.FUNC_RAT_MUL);
-		getLocal(w, 3);
-		getLocal(w, 5);
-		call(w, WasmLispCompiler.FUNC_RAT_MUL);
-		call(w, WasmLispCompiler.FUNC_RAT_ADD);
-		getLocal(w, 6);
-		call(w, WasmLispCompiler.FUNC_RAT_DIV);
-		w.write(Instruction.SET_LOCAL);
-		w.writeUnsignedLeb128(7);
-		// im = (ia*rb - ra*ib) / denom
-		getLocal(w, 3);
-		getLocal(w, 4);
-		call(w, WasmLispCompiler.FUNC_RAT_MUL);
-		getLocal(w, 2);
-		getLocal(w, 5);
-		call(w, WasmLispCompiler.FUNC_RAT_MUL);
-		call(w, WasmLispCompiler.FUNC_RAT_SUB);
-		getLocal(w, 6);
-		call(w, WasmLispCompiler.FUNC_RAT_DIV);
-		w.write(Instruction.SET_LOCAL);
-		w.writeUnsignedLeb128(8);
-		getLocal(w, 7);
-		getLocal(w, 8);
-		call(w, WasmLispCompiler.FUNC_C_COMPLEX);
+		call(w, WasmLispCompiler.FUNC_RAT_CMP);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(0);
+		w.write(Instruction.I32_GT_S);
+		w.write(Instruction.END);
+		w.write(Instruction.IF);
+		w.writeRefType(true, Type.EQ.code());
+		emitDivFold(w, 5, 4, true);
+		w.write(Instruction.ELSE);
+		emitDivFold(w, 4, 5, false);
+		w.write(Instruction.END);
 
 		w.write(Instruction.END);
 		return body.toByteArray();
+	}
+
+	// Pushes one arm of _cdiv's SBCL form: r = num/big and dn = big*(1 + r*r), where big
+	// is the divisor part in local[bigSlot] and num the one in local[numSlot]; realFold
+	// says which part is big, the real (c) or the imaginary (d). A complex dividend's
+	// parts go into locals 2-3.
+	private static void emitDivFold(WasmWriter w, int numSlot, int bigSlot, boolean realFold) {
+		getLocal(w, numSlot);
+		getLocal(w, bigSlot);
+		call(w, WasmLispCompiler.FUNC_RAT_DIV);
+		setLocal(w, 6);
+		getLocal(w, bigSlot);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(1);
+		w.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
+		getLocal(w, 6);
+		getLocal(w, 6);
+		call(w, WasmLispCompiler.FUNC_RAT_MUL);
+		call(w, WasmLispCompiler.FUNC_RAT_ADD);
+		call(w, WasmLispCompiler.FUNC_RAT_MUL);
+		setLocal(w, 7);
+		emitIsComplex(w, 0);
+		w.write(Instruction.IF);
+		w.writeRefType(true, Type.EQ.code());
+		emitComplexReal(w, 0);
+		setLocal(w, 2);
+		emitComplexImag(w, 0);
+		setLocal(w, 3);
+		if (realFold) {
+			// re = (a + b*r)/dn, im = (b - a*r)/dn
+			getLocal(w, 2);
+			getLocal(w, 3);
+			getLocal(w, 6);
+			call(w, WasmLispCompiler.FUNC_RAT_MUL);
+			call(w, WasmLispCompiler.FUNC_RAT_ADD);
+			getLocal(w, 7);
+			call(w, WasmLispCompiler.FUNC_RAT_DIV);
+			getLocal(w, 3);
+			getLocal(w, 2);
+			getLocal(w, 6);
+			call(w, WasmLispCompiler.FUNC_RAT_MUL);
+			call(w, WasmLispCompiler.FUNC_RAT_SUB);
+		}
+		else {
+			// re = (a*r + b)/dn, im = (b*r - a)/dn
+			getLocal(w, 2);
+			getLocal(w, 6);
+			call(w, WasmLispCompiler.FUNC_RAT_MUL);
+			getLocal(w, 3);
+			call(w, WasmLispCompiler.FUNC_RAT_ADD);
+			getLocal(w, 7);
+			call(w, WasmLispCompiler.FUNC_RAT_DIV);
+			getLocal(w, 3);
+			getLocal(w, 6);
+			call(w, WasmLispCompiler.FUNC_RAT_MUL);
+			getLocal(w, 2);
+			call(w, WasmLispCompiler.FUNC_RAT_SUB);
+		}
+		getLocal(w, 7);
+		call(w, WasmLispCompiler.FUNC_RAT_DIV);
+		call(w, WasmLispCompiler.FUNC_C_COMPLEX);
+		w.write(Instruction.ELSE);
+		if (realFold) {
+			// re = x/dn, im = -(x*r)/dn
+			getLocal(w, 0);
+			getLocal(w, 7);
+			call(w, WasmLispCompiler.FUNC_RAT_DIV);
+			getLocal(w, 0);
+			getLocal(w, 6);
+			call(w, WasmLispCompiler.FUNC_RAT_MUL);
+			setLocal(w, 10);
+		}
+		else {
+			// re = (x*r)/dn, im = -x/dn
+			getLocal(w, 0);
+			getLocal(w, 6);
+			call(w, WasmLispCompiler.FUNC_RAT_MUL);
+			getLocal(w, 7);
+			call(w, WasmLispCompiler.FUNC_RAT_DIV);
+			getLocal(w, 0);
+			setLocal(w, 10);
+		}
+		emitNegReal(w, 10);
+		getLocal(w, 7);
+		call(w, WasmLispCompiler.FUNC_RAT_DIV);
+		call(w, WasmLispCompiler.FUNC_C_COMPLEX);
+		w.write(Instruction.END);
+	}
+
+	// Pushes 1 + r*r for the f64 in local[rSlot].
+	private static void emitOnePlusSquare(WasmWriter w, int rSlot) {
+		w.write(Instruction.F64_CONST);
+		w.writeF64(1.0);
+		getLocal(w, rSlot);
+		getLocal(w, rSlot);
+		w.write(Instruction.F64_MUL);
+		w.write(Instruction.F64_ADD);
+	}
+
+	// Pushes the negation of the real in local[slot]: a float through f64.neg (so a
+	// zero's sign flips), an exact one as _rat_sub(0, x) (so an exact zero stays the
+	// exact zero; a non-number lands in its funnel).
+	private static void emitNegReal(WasmWriter w, int slot) {
+		emitIsFloat(w, slot);
+		w.write(Instruction.IF);
+		w.writeRefType(true, Type.EQ.code());
+		getLocal(w, slot);
+		call(w, WasmLispCompiler.FUNC_AS_F64);
+		w.write(Instruction.F64_NEG);
+		boxF64(w);
+		w.write(Instruction.ELSE);
+		emitI31Zero(w);
+		getLocal(w, slot);
+		call(w, WasmLispCompiler.FUNC_RAT_SUB);
+		w.write(Instruction.END);
 	}
 
 	// _cneg((ref null eq) a) -> (ref null eq): unary negation part-wise (a float
@@ -702,6 +793,11 @@ final class WasmComplexRuntimeBuilder {
 
 	private static void getLocal(WasmWriter w, int slot) {
 		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(slot);
+	}
+
+	private static void setLocal(WasmWriter w, int slot) {
+		w.write(Instruction.SET_LOCAL);
 		w.writeUnsignedLeb128(slot);
 	}
 

@@ -294,27 +294,23 @@ NaN -- the one documented place where that answer survives.
   the contract (the exact axes, the identity against `phase`, the magnitude and
   the TYPE) and `transcendentals-bit-identical-cross-backend` the digits.
 
-## `_c_div`'s float arm is Smith's form (`.todo/779`, 2026-09-11)
+## `_c_div` is SBCL's dispatch (2026-10-07; Smith's form 2026-09-11)
 
-The form, why it is not the `c^2+d^2` denominator, and the SBCL measurement are
-`.kb/jvm-complex.md`'s "Complex division is Smith's form" -- one form, three
+The rule, the SBCL measurement that replaced Smith's form and the pins are
+`.kb/jvm-complex.md`'s "Complex division is SBCL's dispatch" -- one rule, three
 implementations, changed together. What is this backend's alone:
 
-- The whole body used to be ONE path over the `_rat_*` helpers, which absorb float
-  contagion for free. Smith's fold cannot ride them (`r = d/c` would make an exact
-  ratio and the comparison `|c| >= |d|` has no `_rat_` spelling that is cheaper
-  than the fold), so the body now BRANCHES: any of the four parts a `TYPE_FLOAT`
-  coerces all four through the one shared `_as_f64` and computes the fold in raw
-  `f64` instructions (`f64.abs`, `f64.ge`, `f64.div`), boxing the two parts back
-  through `_c_complex`. Locals 9-14 are that arm's raw parts, `r` and `den`.
-- The EXACT path below it is byte-for-byte what it was, denominator included: it
-  now only ever sees exact parts, where nothing rounds or overflows, and a zero
-  divisor still fails inside `_rat_div` the way a real `(/ x 0)` does.
+- The body branches four ways: neither operand a complex is `_rat_div`; a complex over a
+  real is `emitScaleParts` with `_rat_div` (the part first); a complex over a FLOAT
+  complex coerces all four parts through the one shared `_as_f64` and folds in raw `f64`
+  (`f64.abs`, `f64.gt`, `f64.div`; locals 11-16); everything else -- a real dividend, or
+  an exact divisor -- is `emitDivFold` over the `_rat_*` helpers, whose float paths are
+  the contagion SBCL applies per operation. The exact `|c| > |d|` there is
+  `_rat_cmp(c*c, d*d)`; a negation is `emitNegReal` (`f64.neg` for a float, so a zero's
+  sign flips; `_rat_sub(0, x)` for an exact one, so an exact zero stays exact).
 - Raw `f64` instructions round exactly as the JVM's `DDIV`/`DMUL` do, so the two
-  backends agree BIT for bit on a float complex quotient (as they do on the
-  transcendentals since 2026-09-17).
-  `WasmLispCompilerIntegrationTest#compileAndRunComplexFloatDivisionIsSmithsForm`
-  therefore pins digits, not tolerances.
+  backends agree BIT for bit on a complex quotient (as they do on the transcendentals
+  since 2026-09-17); the fixture pins digits, not tolerances.
 
 ## Known corners (documented, matching the JVM where stated)
 
