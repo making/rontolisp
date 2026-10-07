@@ -2168,9 +2168,7 @@ public final class LispEvaluator {
 					}
 					LispVal value = this.globalEnv.lookupOrNull(sym.name());
 					if (value == null) {
-						throw LispEvalException.ofClass(ClosRegistry.UNBOUND_VARIABLE_CLASS_NAME,
-								ClosRegistry.UNBOUND_VARIABLE_MESSAGE_PREFIX + sym.name()
-										+ ClosRegistry.UNBOUND_VARIABLE_MESSAGE_SUFFIX);
+						throw CellErrorException.unboundVariable(sym.name());
 					}
 					yield value;
 				}
@@ -5825,8 +5823,7 @@ public final class LispEvaluator {
 			value = this.globalEnv.lookupOrNull(name);
 		}
 		if (value == null) {
-			throw LispEvalException.ofClass(ClosRegistry.UNBOUND_VARIABLE_CLASS_NAME,
-					ClosRegistry.UNBOUND_VARIABLE_MESSAGE_PREFIX + name + ClosRegistry.UNBOUND_VARIABLE_MESSAGE_SUFFIX);
+			throw CellErrorException.unboundVariable(name);
 		}
 		return value;
 	}
@@ -10033,8 +10030,7 @@ public final class LispEvaluator {
 		}
 		LispVal value = this.globalEnv.lookupOrNull(name);
 		if (value == null) {
-			throw LispEvalException.ofClass(ClosRegistry.UNBOUND_VARIABLE_CLASS_NAME,
-					ClosRegistry.UNBOUND_VARIABLE_MESSAGE_PREFIX + name + ClosRegistry.UNBOUND_VARIABLE_MESSAGE_SUFFIX);
+			throw CellErrorException.unboundVariable(name);
 		}
 		return value;
 	}
@@ -11978,7 +11974,8 @@ public final class LispEvaluator {
 					.of("DATUM", operand.datum(), "EXPECTED-TYPE", operand.expectedType())) instanceof LispVal c) {
 			return c;
 		}
-		// An unbound cell (an undefined function): the condition names it.
+		// An unbound cell (an undefined function, an unbound variable): the condition
+		// names it.
 		if (e instanceof CellErrorException cell && className != null
 				&& this.closRegistry.newReportingCondition(className, messageVal,
 						java.util.Map.of("NAME", symbolOfSpelling(cell.spelling()))) instanceof LispVal c) {

@@ -1126,19 +1126,28 @@ message at the catching end** -- except for the failures the backends report as 
   `ehAnUndefinedFunctionCallIsCaughtAsTheClassTheProgramNames`). Through the CLI the bake is
   common: anything that splices the report runtime (`princ-to-string` of a condition) names the
   class.
-- **Every undefined-function names its function** (`cell-error-name`, SBCL's answer; NIL on every
-  backend before 2026-10-07). Interpreter: the four throw sites raise `CellErrorException`
-  carrying the spelling, `synthesizeCondition` fills `NAME` (`symbolOfSpelling`: NIL and T are the
-  singletons). JVM: the pad's undefined-function arm reads the name back out of the message it
-  recovers the class from -- the text between `UNDEFINED_FUNCTION_MESSAGE_PREFIX` and the suffix IS
-  the symbol there, `"NIL"` mapped to null (`emitUndefinedFunctionConstruction`). wasm:
-  `NotFunctionReport`'s typed throw stores local 0 (the symbol) in the name slot, the slot array
-  built on the stack (`emitConditionThrowOnStack`, `array.new_fixed`) because local 0 is still live.
-  Pinned by `UndefinedFunctionNameFixture` (`LispEvaluatorTest` / `JvmLispCompilerTest` /
-  `WasmLispCompilerIntegrationTest` `anUndefinedFunctionCarriesItsNameInTheCellErrorNameSlot`) and
-  ci-spec `undefined-function-carries-its-name`. **`unbound-variable` still answers NIL** (and
-  traps on wasm-GC): `.todo/d82`; `#'name` / `(funcall 'name)` of an undefined name does not
-  compile at all: `.todo/d83`.
+- **Every undefined-function names its function, every unbound-variable its variable**
+  (`cell-error-name`, SBCL's answer; NIL on every backend before 2026-10-07). Interpreter: the
+  throw sites raise `CellErrorException` (`undefinedFunction`, `unboundVariable`) carrying the
+  spelling, `synthesizeCondition` fills `NAME` (`symbolOfSpelling`: NIL and T are the
+  singletons). JVM: the pad's undefined-function and unbound-variable arms read the name back
+  out of the message they recover the class from -- the text between the class's
+  `*_MESSAGE_PREFIX` and suffix IS the symbol there, `"NIL"` mapped to null
+  (`emitCellErrorConstruction`). wasm: `NotFunctionReport`'s typed throw stores local 0 (the
+  symbol) in the name slot, the slot array built on the stack (`emitConditionThrowOnStack`,
+  `array.new_fixed`) because local 0 is still live. `_symbol_value`'s miss trapped
+  (`unreachable`) until 2026-10-07; in EH mode it now throws `UnboundVariableReport`'s
+  `unbound-variable` naming the symbol, typed wherever the module baked the class --
+  `usedLayoutTags` bakes it where a landing pad and `symbol-value` meet -- and the
+  message-only payload elsewhere. Outside EH mode it still traps (the module is
+  byte-identical there). Pinned by `UndefinedFunctionNameFixture` / `UnboundVariableNameFixture`
+  (`LispEvaluatorTest` / `JvmLispCompilerTest` / `WasmLispCompilerIntegrationTest`
+  `an{UndefinedFunction,UnboundVariable}CarriesItsNameInTheCellErrorNameSlot`) and ci-spec
+  `undefined-function-carries-its-name` / `unbound-variable-carries-its-name`. Left open: a
+  compiled read of a `(defvar x)` without a value answers NIL rather than signalling
+  (`.todo/d85`); the wasm message spells the name with `princ`, dropping a package prefix
+  (`.todo/d86`); `#'name` / `(funcall 'name)` of an undefined name does not compile at all
+  (`.todo/d83`).
 - **The message a raw host failure reports is rontolisp's, not the host's**:
   `ClosRegistry.TYPE_ERROR_MESSAGE` replaces a `ClassCastException`'s Java class names and
   `INDEX_OUT_OF_BOUNDS_MESSAGE` the JVM's `Index 10 out of bounds for length 3` (whose length counts

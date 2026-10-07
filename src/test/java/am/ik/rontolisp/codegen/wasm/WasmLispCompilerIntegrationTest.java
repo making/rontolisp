@@ -26881,6 +26881,26 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void anUnboundVariableCarriesItsNameInTheCellErrorNameSlot() throws Exception {
+		// The wasm twin of the JvmLispCompilerTest test of this name, on Preview 1 and
+		// the component, both through the whole front end: _symbol_value's miss throws
+		// the typed instance with the symbol in its name slot, where it used to trap
+		// (.kb/error-handling.md).
+		for (String[] program : new String[][] {
+				{ am.ik.rontolisp.UnboundVariableNameFixture.PLAIN,
+						am.ik.rontolisp.UnboundVariableNameFixture.PLAIN_EXPECTED },
+				{ am.ik.rontolisp.UnboundVariableNameFixture.RESTART,
+						am.ik.rontolisp.UnboundVariableNameFixture.RESTART_EXPECTED },
+				{ am.ik.rontolisp.UnboundVariableNameFixture.MESSAGE,
+						am.ik.rontolisp.UnboundVariableNameFixture.MESSAGE_EXPECTED } }) {
+			assertThat(compileAndRunProgram(am.ik.rontolisp.cli.CompileFrontendAccess.corpus(program[0],
+					am.ik.rontolisp.reader.Features.WASM, true, false)))
+				.isEqualTo(program[1]);
+			assertThat(runComponentFrontendProgramWithDir(program[0])).isEqualTo(program[1]);
+		}
+	}
+
+	@Test
 	void ehAStructAccessorOnANonInstanceSignalsATypeError() throws Exception {
 		// The checked %obj-ref / %obj-set cast is a br_on_cast_fail whose miss runs the
 		// accessor's %struct-type-error (.kb/defstruct.md, "Accessors check their

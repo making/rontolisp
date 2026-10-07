@@ -14201,6 +14201,71 @@ cases:
       (1 #(NIL))
       (NIL)
       (1 #())
+  - name: special-let-restores-across-nested-exits
+    source: |
+      ;; The same restore on the exits the case above leaves out: a return crossing a
+      ;; handler-case (with and without an unwind-protect), a go across a handler-case, a
+      ;; handler-bind handler that go's out, a 50-deep recursion leaving by error, throw and
+      ;; return-from, a return-from out of a flet / labels function, nested bindings of one
+      ;; special, and progv.
+      (defvar *sy* :top)
+      (defun sy-see () *sy*)
+      (defun sy-r1 ()
+        (block b (handler-case (let ((*sy* :in)) (return-from b (sy-see))) (error () nil))))
+      (print (list (sy-r1) *sy*))
+      (defun sy-r2 ()
+        (block b (let ((*sy* :in)) (handler-case (return-from b (sy-see)) (error () nil)))))
+      (print (list (sy-r2) *sy*))
+      (defun sy-r3 ()
+        (block b
+          (handler-case (let ((*sy* :in)) (unwind-protect (return-from b (sy-see)) (sy-see)))
+            (error () nil))))
+      (print (list (sy-r3) *sy*))
+      (defun sy-r4 ()
+        (let ((seen nil))
+          (block b (let ((*sy* :in)) (unwind-protect (return-from b nil) (setq seen *sy*))))
+          (list seen *sy*)))
+      (print (sy-r4))
+      (defun sy-go ()
+        (let ((r nil))
+          (tagbody
+             (handler-case (let ((*sy* :go)) (setq r *sy*) (go out)) (error () nil))
+           out)
+          (list r *sy*)))
+      (print (sy-go))
+      (defun sy-hb ()
+        (tagbody
+           (handler-bind ((error (lambda (c) (declare (ignore c)) (go done))))
+             (let ((*sy* :hb)) (error "z")))
+         done)
+        *sy*)
+      (print (sy-hb))
+      (defun sy-deep-err (n) (let ((*sy* n)) (if (= n 0) (error "x") (sy-deep-err (- n 1)))))
+      (defun sy-deep-throw (n) (let ((*sy* n)) (if (= n 0) (throw 'sy-tag *sy*) (sy-deep-throw (- n 1)))))
+      (defun sy-deep-ret (n) (let ((*sy* n)) (if (= n 0) (return-from sy-deep-ret *sy*) (sy-deep-ret (- n 1)))))
+      (print (list (handler-case (sy-deep-err 50) (error () :caught)) *sy*))
+      (print (list (catch 'sy-tag (sy-deep-throw 50)) *sy*))
+      (print (list (sy-deep-ret 50) *sy*))
+      (defun sy-fl ()
+        (block b (flet ((f () (let ((*sy* :fl)) (return-from b (sy-see))))) (f))))
+      (defun sy-lb ()
+        (block b (labels ((f () (let ((*sy* :lb)) (return-from b (sy-see))))) (f))))
+      (print (list (sy-fl) (sy-lb) *sy*))
+      (print (list (handler-case (let ((*sy* 1)) (let ((*sy* 2)) (error "q"))) (error () *sy*)) *sy*))
+      (print (list (handler-case (progv '(*sy*) '(:pv) (error "q")) (error () *sy*)) *sy*))
+    expected: |
+      (:IN :TOP)
+      (:IN :TOP)
+      (:IN :TOP)
+      (:IN :TOP)
+      (:GO :TOP)
+      :TOP
+      (:CAUGHT :TOP)
+      (0 :TOP)
+      (0 :TOP)
+      (:FL :LB :TOP)
+      (:TOP :TOP)
+      (:TOP :TOP)
   - name: special-parameters-bind-dynamically
     source: |
       ;; A parameter named like a special binds it dynamically on every backend
@@ -21484,6 +21549,46 @@ cases:
       ((UFN-GONE UNDEFINED-FUNCTION) (UFN-GONE UNDEFINED-FUNCTION) (NIL UNDEFINED-FUNCTION) (T UNDEFINED-FUNCTION) (:UFN-KEY UNDEFINED-FUNCTION))
       T
       ((UFN-NOPE UNDEFINED-FUNCTION) (UFN-OTHER UNDEFINED-FUNCTION) (UFN-OTHER UFN-NOPE))
+
+  # An unbound-variable names its variable in the cell-error name slot on every
+  # backend -- symbol-value of a literal and a computed name, #'symbol-value called
+  # and mapped, inside a binding of another special, caught as cell-error and error --
+  # also under a handler-bind; the wasm-GC backends trapped before. The programs of
+  # UnboundVariableNameFixture; SBCL's expected text but for the report, rontolisp's.
+  - name: unbound-variable-carries-its-name
+    source: |
+      (defun uvn-name (thunk)
+        (handler-case (funcall thunk)
+          (unbound-variable (c) (list (cell-error-name c) (type-of c)))))
+      (defvar *uvn-special* 1)
+      (print (list (uvn-name (lambda () (symbol-value 'uvn-nope)))
+                   (uvn-name (lambda () (symbol-value (intern "UVN-COMPUTED"))))
+                   (uvn-name (lambda () (funcall #'symbol-value 'uvn-nope)))
+                   (uvn-name (lambda () (mapcar #'symbol-value '(uvn-mapped))))
+                   (uvn-name (lambda () (let ((*uvn-special* 2)) (symbol-value 'uvn-inside))))))
+      (print (eq (cell-error-name (handler-case (symbol-value 'uvn-nope) (unbound-variable (c) c)))
+                 'uvn-nope))
+      (print (handler-case (symbol-value 'uvn-nope)
+               (cell-error (c) (list :cell (cell-error-name c) (typep c 'unbound-variable)))))
+      (print (handler-case (symbol-value 'uvn-nope)
+               (error (c) (list :error (type-of c)))))
+      (defvar *uvn-seen* nil)
+      (defun uvn-bound (thunk)
+        (handler-case
+            (handler-bind ((unbound-variable (lambda (c) (push (cell-error-name c) *uvn-seen*))))
+              (funcall thunk))
+          (unbound-variable (c) (list (cell-error-name c) (type-of c)))))
+      (print (list (uvn-bound (lambda () (symbol-value 'uvn-nope)))
+                   (uvn-bound (lambda () (symbol-value (intern "UVN-OTHER"))))
+                   *uvn-seen*))
+      (print (handler-case (symbol-value 'uvn-nope) (error (c) (princ-to-string c))))
+    expected: |
+      ((UVN-NOPE UNBOUND-VARIABLE) (UVN-COMPUTED UNBOUND-VARIABLE) (UVN-NOPE UNBOUND-VARIABLE) (UVN-MAPPED UNBOUND-VARIABLE) (UVN-INSIDE UNBOUND-VARIABLE))
+      T
+      (:CELL UVN-NOPE T)
+      (:ERROR UNBOUND-VARIABLE)
+      ((UVN-NOPE UNBOUND-VARIABLE) (UVN-OTHER UNBOUND-VARIABLE) (UVN-OTHER UVN-NOPE))
+      "The variable UVN-NOPE is unbound"
 
   # The tokenizer package (tokenizers.lisp, .kb/tokenizers.md): the five byte-level
   # pre-tokenizer shapes, the ranked merge loop, the special-token scan, Llama 3's

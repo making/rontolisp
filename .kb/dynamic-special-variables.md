@@ -280,7 +280,15 @@ native `evalProgv`).
    Pinned by `specialLetRestoresOnEveryExit` on `LispEvaluatorTest` / `JvmLispCompilerTest` /
    `WasmLispCompilerIntegrationTest` (P1 + component), ci-spec
    `special-let-restores-on-every-exit`, and `ClPpcreE2eTest`'s failing-one-register scan
-   between two zero-register scans. What is NOT an exit: a wasm-GC RAW trap (`(car 5)`, a failed
+   between two zero-register scans. Ci-spec `special-let-restores-across-nested-exits` adds the
+   shapes that case leaves out (a `return` across a `handler-case` with and without an
+   `unwind-protect`, a `go` across a `handler-case`, a `handler-bind` handler leaving by `go`, a
+   50-deep recursion leaving by error / `throw` / `return-from`, a `return-from` out of an
+   `flet` / `labels` function, nested bindings, `progv`); measured 2026-10-07 on SBCL 2.2.9, the
+   interpreter, the JVM, Preview 1 and the component, all answering the same text.
+   `doc/*/guides/missing-features.md` said until then that the compiled backends did not restore
+   on an error, a `go` or a `return` across `unwind-protect` / `handler-case`; it now says every
+   exit restores. What is NOT an exit: a wasm-GC RAW trap (`(car 5)`, a failed
    cast) ends the module, restore moot. The mechanism is thrower-side (each binding frame
    restores its own on the way out), which is why no catch-site save stack was needed: the
    `.todo/192` sketch's objection -- the slots live in the thrower's dead frames -- holds only
@@ -422,7 +430,7 @@ for good: NIL inside `(let ((*x* 1)) ...)`, and T forever once a callee `setq`'d
   `boundp-and-fboundp-as-function-values`.
 - Still nil, not an error, for a read of a tracked special while unbound (a direct read,
   `symbol-value`, `eval`), as for every unassigned global; a `progv` short of values binds nil
-  (both documented).
+  (both documented). Signalling instead, for every valueless `defvar`: `.todo/d85`.
 - Measured 2026-10-04 (before -> after). size-report, bench-report: byte-identical on P1,
   `--optimize=size`, component and JVM. Workers: byte-identical except hello-ningle and
   httpbin-ningle +1,255 B: lack's and alexandria's computed `boundp` track cl-ppcre's 14
