@@ -24,4 +24,4 @@
   l) ; => (1 9)
 ```
 
-`fdefinition` は [`symbol-function`](symbol-function.md) と同じ `setf` の place です: `(setf (fdefinition 'name) fn)` は `fn` をそのシンボルのグローバルな関数定義としてインストールし、`(setf (fdefinition '(setf name)) fn)` は `(setf name)` 関数をインストールします。
+`fdefinition` は [`symbol-function`](symbol-function.md) と同じ `setf` の place です: `(setf (fdefinition 'name) fn)` は `fn` をそのシンボルのグローバルな関数定義としてインストールし、`(setf (fdefinition '(setf name)) fn)` は `(setf name)` 関数をインストールします。名前は実行時に組み立てたもの (`(list 'setf p)`、`(intern s)`) でもかまいません: そうした書き込み (または `eval` の `defun`) だけが束縛する名前の直接呼び出し、`setf` の place、`#'name`、`fboundp` は、全バックエンドで実行時にその名前を引きます。

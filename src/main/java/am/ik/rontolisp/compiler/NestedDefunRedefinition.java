@@ -22,9 +22,9 @@ import org.jspecify.annotations.Nullable;
  * Both compile backends resolve a call by NAME against the map Pass 1 builds, and a
  * non-top-level {@code defun} is not in that map: it lowers to
  * {@code (setq name (lambda ...))} and its call sites dispatch through the global
- * VARIABLE instead ({@code LispMacroExpander.expandCallThroughVariable}). When the same
- * name also has a top-level {@code defun}, every call site found the compiled function
- * first and the nested definition was written to a store nothing read -- so
+ * VARIABLE instead ({@code LispMacroExpander.expandCallThroughFunctionValue}). When the
+ * same name also has a top-level {@code defun}, every call site found the compiled
+ * function first and the nested definition was written to a store nothing read -- so
  * {@code (defun over () 'top)} plus a nested {@code (defun over () 'nested)} answered
  * {@code TOP} after the redefinition where the interpreter and SBCL answer
  * {@code NESTED}.

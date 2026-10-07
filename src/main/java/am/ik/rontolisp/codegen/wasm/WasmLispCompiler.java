@@ -3754,6 +3754,12 @@ public final class WasmLispCompiler implements LispCompiler {
 		boolean writesFunctionNamespace = programUsesEval(program) || usesLoad || this.dynamic
 				|| programUsesSymbol(program, LispNames.FMAKUNBOUND)
 				|| LispMacroExpander.usesSymbolFunctionWrite(program);
+		// Of those writers, the ones that can bind a name no definition in the program
+		// has: a call of such a name reads GLOBAL_FENV instead of compiling to the
+		// undefined-function signal alone (fmakunbound only retires, and a quoted
+		// (setf (symbol-function 'n) ...) name has its forwarder defun).
+		boolean bindsRuntimeFunctionNames = programUsesEval(program) || usesLoad
+				|| LispMacroExpander.writesComputedFunctionName(program);
 		// A computed make-synonym-stream reads its variable through a symbol-value the
 		// lowering synthesizes after this scan.
 		boolean usesEval = writesFunctionNamespace || boundpReadsMirror
@@ -4881,6 +4887,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			.warnedClRedefinitions(warnedClRedefinitions)
 			.usesFmakunbound(programUsesSymbol(program, LispNames.FMAKUNBOUND))
 			.fenvForwarders(Set.copyOf(fenvForwarders))
+			.bindsRuntimeFunctionNames(bindsRuntimeFunctionNames)
 			.usesRuntimePackages(packageResolver.runtimePackagesMutable())
 			// Every context carries the flag (not just _start): the progv lowering
 			// maintains the eval env mirror from any position, while the top-level-only
@@ -11472,6 +11479,15 @@ public final class WasmLispCompiler implements LispCompiler {
 		Set<String> fenvForwarders = Set.of();
 
 		/**
+		 * Whether the program can bind a function name the compile cannot see -- a
+		 * runtime {@code eval}'s {@code defun}, {@code load}, or a write through a
+		 * computed name ({@link LispMacroExpander#writesComputedFunctionName}). When it
+		 * can, a call of a name no definition has, {@code #'name} and a literal
+		 * {@code fboundp} of it read {@code GLOBAL_FENV} when they run.
+		 */
+		boolean bindsRuntimeFunctionNames = false;
+
+		/**
 		 * Whether the program can create, delete or rename packages at run time. When it
 		 * does, the package lowerings consult the {@code %runtime-packages%} table before
 		 * their baked answers (see {@code .kb/packages.md}); read off the resolver after
@@ -11936,6 +11952,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			this.builtinShapedDefuns = builder.builtinShapedDefuns;
 			this.usesFmakunbound = builder.usesFmakunbound;
 			this.fenvForwarders = builder.fenvForwarders;
+			this.bindsRuntimeFunctionNames = builder.bindsRuntimeFunctionNames;
 			this.usesRuntimePackages = builder.usesRuntimePackages;
 			this.usesEval = builder.usesEval;
 			this.packageTable = builder.packageTable;
@@ -12136,6 +12153,8 @@ public final class WasmLispCompiler implements LispCompiler {
 
 			private Set<String> fenvForwarders = Set.of();
 
+			private boolean bindsRuntimeFunctionNames = false;
+
 			private boolean usesRuntimePackages = false;
 
 			private boolean usesEval = false;
@@ -12279,6 +12298,7 @@ public final class WasmLispCompiler implements LispCompiler {
 				this.builtinShapedDefuns = proto.builtinShapedDefuns;
 				this.usesFmakunbound = proto.usesFmakunbound;
 				this.fenvForwarders = proto.fenvForwarders;
+				this.bindsRuntimeFunctionNames = proto.bindsRuntimeFunctionNames;
 				this.usesRuntimePackages = proto.usesRuntimePackages;
 				this.usesEval = proto.usesEval;
 				this.packageTable = proto.packageTable;
@@ -12658,6 +12678,11 @@ public final class WasmLispCompiler implements LispCompiler {
 
 			Builder fenvForwarders(Set<String> fenvForwarders) {
 				this.fenvForwarders = fenvForwarders;
+				return this;
+			}
+
+			Builder bindsRuntimeFunctionNames(boolean bindsRuntimeFunctionNames) {
+				this.bindsRuntimeFunctionNames = bindsRuntimeFunctionNames;
 				return this;
 			}
 

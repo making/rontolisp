@@ -110,13 +110,15 @@ final class JvmFunctionCallCompiler {
 			// handed on to callers that drive it (JvmTailBounce).
 			JvmTailBounce.emitDirectCall(fi, cons, ctx, className);
 		}
-		else if (ctx.nestedDefunNames.contains(name) && ctx.globals.contains(name)) {
+		else if (JvmFunctionFormCompiler.nestedDefun(name, ctx)) {
 			// A defun nested inside a top-level let or a function body compiles to
 			// (setq name (lambda ...)) and the assigned name is a global variable
-			// holding the closure: dispatch the call through it. BEFORE the dynamic
-			// fallback below, which resolves the runtime FUNCTION namespace -- a
-			// namespace this definition never enters, so --dynamic answered nil.
-			JvmExprCompiler.compileExpr(LispMacroExpander.expandCallThroughVariable(cons), ctx, className);
+			// holding the closure: dispatch the call through #'name, which reads it
+			// (the undefined-function naming it before the definition ran, ahead of
+			// the arguments). BEFORE the dynamic fallback below, which resolves the
+			// runtime FUNCTION namespace -- a namespace this definition never enters,
+			// so --dynamic answered nil.
+			JvmExprCompiler.compileExpr(LispMacroExpander.expandCallThroughFunctionValue(cons), ctx, className);
 		}
 		else if (ctx.dynamic) {
 			JvmDynamicCallCompiler.compileCall(name, cons, ctx, className);
@@ -130,6 +132,15 @@ final class JvmFunctionCallCompiler {
 			if (ctx.globals.contains(name)) {
 				// A top-level (setq name (lambda ...)) the same way.
 				JvmExprCompiler.compileExpr(LispMacroExpander.expandCallThroughVariable(cons), ctx, className);
+				return;
+			}
+			if (ctx.bindsRuntimeFunctionNames) {
+				// A program that can bind the name at run time (eval's defun, load, a
+				// write through a computed name): the call applies what _fenv holds
+				// when it runs, and a miss is the undefined-function below.
+				CompileWarnings.warn(cons, "the function " + ClosRegistry.functionNameForReport(name)
+						+ " is undefined; looked up when the call runs");
+				JvmExprCompiler.compileExpr(LispMacroExpander.runtimeFunctionNamespaceCall(name, cons), ctx, className);
 				return;
 			}
 			// An undefined function: keep the interpreter's late binding -- signal

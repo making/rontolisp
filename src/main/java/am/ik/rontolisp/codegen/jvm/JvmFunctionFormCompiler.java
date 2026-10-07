@@ -147,12 +147,12 @@ final class JvmFunctionFormCompiler {
 			JvmEmitHelper.emitIntConst(ctx, fi.funcId());
 			ctx.body.invokestatic(ctx.integerValueOf).aastore();
 		}
-		else if (ctx.nestedDefunNames.contains(name) && ctx.globals.contains(name)) {
+		else if (nestedDefun(name, ctx)) {
 			// A defun nested inside a top-level let or a function body compiles to
-			// (setq name (lambda ...)): the global variable already HOLDS the function
-			// value. Before the dynamic fallback for the same reason the call site
-			// checks it first (JvmFunctionCallCompiler).
-			JvmExprCompiler.compileExpr(new am.ik.rontolisp.LispSymbol(name), ctx, className);
+			// (setq name (lambda ...)): the global variable HOLDS the function value
+			// once the definition ran. Before the dynamic fallback for the same reason
+			// the call site checks it first (JvmFunctionCallCompiler).
+			emitNestedDefunValue(name, ctx);
 		}
 		else if (ctx.dynamic) {
 			JvmDynamicCallCompiler.compileFunctionRef(name, ctx, className);
@@ -160,6 +160,13 @@ final class JvmFunctionFormCompiler {
 		else if (ctx.globals.contains(name)) {
 			// A top-level (setq name (lambda ...)) the same way.
 			JvmExprCompiler.compileExpr(new am.ik.rontolisp.LispSymbol(name), ctx, className);
+		}
+		else if (undefined(name, ctx) && ctx.bindsRuntimeFunctionNames) {
+			// ... and in a program that can bind the name at run time, what _fenv holds
+			// when the reference runs, the same signal on a miss.
+			CompileWarnings.warn(null, "the function " + ClosRegistry.functionNameForReport(name)
+					+ " is undefined; looked up when the reference runs");
+			JvmSymbolApiCompiler.compileFenvFunction(name, ctx, className);
 		}
 		else if (undefined(name, ctx)) {
 			// A name no definition has: the interpreter's late binding, as for a direct
@@ -175,6 +182,34 @@ final class JvmFunctionFormCompiler {
 			// definition, so the late-binding signal above would misreport it.
 			throw new UnsupportedOperationException(BuiltinFunctionWrappers.noFunctionValueMessage(name));
 		}
+	}
+
+	/**
+	 * {@return whether {@code name} is a function only a {@code defun} below the top
+	 * level defines: a global variable that holds the function once that definition ran}
+	 * @param name the function name
+	 * @param ctx the method context
+	 */
+	static boolean nestedDefun(String name, JvmLispCompiler.Ctx ctx) {
+		return ctx.nestedDefunNames.contains(name) && ctx.globals.contains(name);
+	}
+
+	/**
+	 * Pushes the function a {@link #nestedDefun} name holds, read from its global and
+	 * never from a lexical variable of the same spelling; before the definition ran the
+	 * global is still nil, and the reference signals the {@code undefined-function}
+	 * naming the function, as a direct call of an undefined name does.
+	 * @param name the function name
+	 * @param ctx the method context
+	 */
+	static void emitNestedDefunValue(String name, JvmLispCompiler.Ctx ctx) {
+		JvmExprCompiler.compileSpecialRead(name, ctx);
+		ctx.body.dup();
+		MethodCode.Label defined = ctx.body.newLabel();
+		ctx.body.ifnonnull(defined);
+		ctx.body.pop();
+		emitUndefinedFunctionThrow(name, ctx);
+		ctx.body.labelBinding(defined);
 	}
 
 	/**

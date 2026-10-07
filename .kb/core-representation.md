@@ -92,6 +92,25 @@ unboxed free variable is an `IllegalStateException` naming the name. Pins:
 `defun` is in `CompileTimeBoundp`'s `DEFERRING` set, so the name is POISONED (no
 `(boundp 'name)` fold).
 
+**The global is the function's bound-ness** (all four backends). The variable is nil until the
+definition runs (`ReadBeforeStore` leaves nested names out, so no UNBOUND marker). Each backend's
+`FunctionFormCompiler.nestedDefun(name, ctx)` names such a function and `emitNestedDefunValue`
+reads its GLOBAL (never a lexical of the same spelling) and signals the `undefined-function`
+naming it while nil. A direct call is `LispMacroExpander.expandCallThroughFunctionValue`,
+`(funcall #'name args...)`, so `#'name`, a quoted designator, `symbol-function`, `fdefinition`
+and a setf place (`#'%setf-NAME`, reported `(SETF NAME)`) all reach that read, ahead of the
+arguments. A literal `fboundp` reads the global (non-nil -> t), behind the tombstone guard when
+the program calls `fmakunbound`. Measured 2026-10-07 (SBCL 2.2.9 / interpreter answered; JVM,
+P1, component before): `fboundp` NIL even after the definition ran, a call or place before it
+`undefined-function` naming NIL, `#'` / `symbol-function` / `fdefinition` answered NIL, and a
+lexical of the same spelling shadowed the function at a call and at `#'` (`Not a function: 5`).
+The nested call no longer marks wasm's `runtimeDesignatorDispatch` (its designator is
+`#'name`, static). Still open: a COMPUTED name (`(funcall (intern "F"))`, `(fboundp (intern
+"F"))`, `symbol-function`) misses -- the registry and `_fenv` do not know the global -- and
+`fmakunbound` of the name leaves the global, so a call still runs (`.todo/e23`). Pinned by
+`NestedDefunNameFixture` (`aNestedDefunIsFboundOnceItRunsAndNamedWhenTakenBefore` in the three
+backend suites).
+
 **A name the program assigns with no lexical binding in scope is a global** (all four
 backends, 2026-10-04, `.todo/d02`, `.todo/d05`). CL leaves assigning an undeclared variable
 undefined; SBCL warns and assigns the global, the interpreter always did, so the compile paths

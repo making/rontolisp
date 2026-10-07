@@ -12,6 +12,8 @@ As a function value (`#'fboundp`, as in `(mapcar #'fboundp names)`) it is a comp
 
 A name retired by [`fmakunbound`](fmakunbound.md) answers `nil` again, at a literal call site too.
 
+A function a [`defun`](../special-forms/defun.md#below-the-top-level) below the top level defines is bound once that definition has run: a literal argument answers `nil` before and `t` after on every backend. A computed argument naming it answers `nil` on the compiled backends.
+
 ```lisp
 (fboundp 'car) ; => T
 ```

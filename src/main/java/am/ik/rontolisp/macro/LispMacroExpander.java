@@ -17780,11 +17780,9 @@ public final class LispMacroExpander {
 	/**
 	 * Lowers a call to a name that is not a compiled FUNCTION but IS a known global
 	 * VARIABLE into {@code (funcall name args...)} -- the function value is read from the
-	 * variable at run time. This is how a defun nested inside a top-level {@code let}
-	 * (the CL closure-over-let idiom, e.g. cl-ppcre's {@code quote-meta-chars}) is
-	 * called: the nested defun compiles to {@code (setq name (lambda ...))} (a lambda
-	 * capturing the let variables) and the setq-assigned name is promoted to a global, so
-	 * call sites dispatch through it.
+	 * variable at run time: a top-level {@code (setq name (lambda ...))}. A defun nested
+	 * inside a top-level {@code let} or a function body is called through
+	 * {@link #expandCallThroughFunctionValue} instead.
 	 * @param cons the call expression
 	 * @return the funcall lowering
 	 */
@@ -17793,6 +17791,24 @@ public final class LispMacroExpander {
 		List<LispVal> out = new java.util.ArrayList<>(parts.size() + 1);
 		out.add(new LispSymbol(LispNames.FUNCALL));
 		out.addAll(parts);
+		return listToCons(out);
+	}
+
+	/**
+	 * Lowers a call of a function a {@code defun} below the top level defines into
+	 * {@code (funcall #'name args...)}: the backends compile that {@code #'name} to a
+	 * read of the global variable the nested definition assigns -- the global, whatever
+	 * lexical variable shares the spelling -- which signals the
+	 * {@code undefined-function} naming the function while the definition has not run.
+	 * @param cons the call expression
+	 * @return the funcall lowering
+	 */
+	public static LispVal expandCallThroughFunctionValue(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		List<LispVal> out = new java.util.ArrayList<>(parts.size() + 1);
+		out.add(new LispSymbol(LispNames.FUNCALL));
+		out.add(listToCons(List.of(new LispSymbol(LispNames.FUNCTION), parts.get(0))));
+		out.addAll(parts.subList(1, parts.size()));
 		return listToCons(out);
 	}
 
@@ -27040,6 +27056,9 @@ public final class LispMacroExpander {
 		// to give a slot.
 		program = PureBuiltinFolder.foldProgram(program, dynamic, usesPrintControls(program));
 		program = hoistLoadTimeValues(program);
+		// A (defun (setf name) ...) below the top level (over a let, in a function body)
+		// takes its writer's name here, so every later pass sees a symbol-named defun.
+		program = renameNestedSetfFunctionDefuns(program, structAccessors);
 		// A defclass carrying (:metaclass M) switches the metaclass protocol on: the
 		// protocol's default methods and driver (MopProtocol) are PREPENDED so the walk
 		// below registers them like user definitions -- ahead of the reference scans,
@@ -28244,6 +28263,46 @@ public final class LispMacroExpander {
 				(cell, car, cdr) -> new LispCons(car, cdr));
 	}
 
+	/**
+	 * Renames every {@code (defun (setf name) ...)} BELOW the top level -- over a
+	 * {@code let}, in a function body -- onto its {@code %setf-} writer and registers the
+	 * place, as {@link #rewriteSetfFunctionDefun} does for a top-level one (quoted data
+	 * skipped). The nested definition then lowers like any nested {@code defun}, to a
+	 * global holding the closure, which {@code #'(setf name)} and the place reach under
+	 * the writer's name; with the list as its name it reached that lowering and failed a
+	 * cast to a symbol.
+	 * @param program the top-level forms
+	 * @param structAccessors mutated: each place maps to the setf-function marker
+	 * @return the program, the same list when no form changed
+	 */
+	private static List<LispVal> renameNestedSetfFunctionDefuns(List<LispVal> program,
+			java.util.Map<String, Integer> structAccessors) {
+		List<LispVal> out = null;
+		for (int i = 0; i < program.size(); i++) {
+			LispVal form = program.get(i);
+			LispVal renamed = isNamedForm(form, LispNames.QUOTE) ? form
+					: renameSetfFunctionDefunsBelow(form, structAccessors);
+			if (renamed != form && out == null) {
+				out = new java.util.ArrayList<>(program);
+			}
+			if (out != null) {
+				out.set(i, renamed);
+			}
+		}
+		return out == null ? program : out;
+	}
+
+	private static LispVal renameSetfFunctionDefunsBelow(LispVal form, java.util.Map<String, Integer> structAccessors) {
+		return LispTrees.rebuildSpine(form, node -> node instanceof LispCons ? null : node, element -> {
+			if (!(element instanceof LispCons) || isNamedForm(element, LispNames.QUOTE)) {
+				return element;
+			}
+			LispVal inner = renameSetfFunctionDefunsBelow(element, structAccessors);
+			return isSetfFunctionDefun(inner) && inner instanceof LispCons defun && defun.isProperList()
+					? rewriteSetfFunctionDefun(defun, structAccessors) : inner;
+		});
+	}
+
 	private static LispVal rewriteSetfFunctionDefun(LispCons cons, java.util.Map<String, Integer> structAccessors) {
 		List<LispVal> parts = cons.toList();
 		LispSymbol place = java.util.Objects.requireNonNull(LambdaLists.setfFunctionPlaceName(parts.get(1)));
@@ -28323,6 +28382,74 @@ public final class LispMacroExpander {
 			form = cons.cdr();
 		}
 		return false;
+	}
+
+	/**
+	 * Whether the program can bind a function name the compile cannot read: a
+	 * {@code (setf (symbol-function x) ...)} / {@code (setf (fdefinition x) ...)} place
+	 * whose name is neither a quoted symbol nor a quoted {@code (setf name)} list (both
+	 * of those get the setf-only forwarder of {@link #expandTopLevelDefinitions}). With
+	 * {@code eval} and {@code load}, it is what makes a call of a name no definition has
+	 * read the run-time function namespace instead of compiling to the undefined-function
+	 * signal alone.
+	 * @param program the top-level forms
+	 * @return true when such a place is written
+	 */
+	public static boolean writesComputedFunctionName(List<LispVal> program) {
+		return program.stream().anyMatch(LispMacroExpander::containsComputedFunctionNameWrite);
+	}
+
+	private static boolean containsComputedFunctionNameWrite(LispVal form) {
+		while (form instanceof LispCons cons) {
+			if (cons.car() instanceof LispSymbol op) {
+				String member = memberOf(op.name());
+				if (LispNames.QUOTE.equals(member)) {
+					return false;
+				}
+				if (LispNames.SETF.equals(member) && cons.isProperList()) {
+					List<LispVal> parts = cons.toList();
+					for (int i = 1; i + 1 < parts.size(); i += 2) {
+						if (isSymbolFunctionPlace(parts.get(i)) && parts.get(i) instanceof LispCons place
+								&& !(place.cdr() instanceof LispCons nameCell
+										&& isQuotedFunctionName(nameCell.car()))) {
+							return true;
+						}
+					}
+				}
+			}
+			if (containsComputedFunctionNameWrite(cons.car())) {
+				return true;
+			}
+			form = cons.cdr();
+		}
+		return false;
+	}
+
+	// A quoted symbol or a quoted (setf name) list.
+	private static boolean isQuotedFunctionName(LispVal arg) {
+		if (!isNamedForm(arg, LispNames.QUOTE) || !(arg instanceof LispCons quote)
+				|| !(quote.cdr() instanceof LispCons datumCell)) {
+			return false;
+		}
+		LispVal datum = datumCell.car();
+		return datum instanceof LispSymbol || LambdaLists.setfFunctionPlaceName(datum) != null;
+	}
+
+	/**
+	 * The call of a name no definition has, in a program that can bind such a name at run
+	 * time ({@link #writesComputedFunctionName}, {@code eval}, {@code load}): the
+	 * function the namespace holds when the call runs, applied to the arguments --
+	 * {@code (funcall (%fenv-function 'name) arg...)}. A miss (no binding, or
+	 * {@code fmakunbound}'s tombstone) signals the undefined-function the call compiled
+	 * to before, ahead of the arguments.
+	 * @param name the called name
+	 * @param call the call form
+	 * @return the form to compile in the call's place
+	 */
+	public static LispVal runtimeFunctionNamespaceCall(String name, LispCons call) {
+		LispVal read = listToCons(List.of(new LispSymbol(LispNames.FENV_FUNCTION_INTERNAL), quoteOf(name)));
+		return SourceProvenance.inherit(call,
+				new LispCons(new LispSymbol(LispNames.FUNCALL), new LispCons(read, call.cdr())));
 	}
 
 	private static boolean isSymbolFunctionPlace(LispVal place) {

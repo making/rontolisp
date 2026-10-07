@@ -94,6 +94,18 @@ A parameter whose name is proclaimed special (by [`defvar`](defvar.md)/[`defpara
 (list (scaled-by 10 5) (scaled 5)) ; => (50 5)
 ```
 
+## Below the top level
+
+A `defun` inside a function body or over a `let` defines the function when that form runs. Until then the name is undefined on every backend: [`fboundp`](../functions/fboundp.md) answers `nil`, and a call, `#'name` or `symbol-function` signals `undefined-function` naming the function.
+
+```lisp
+(defun install () (defun late (x) (* x 2)))
+(fboundp 'late) ; => NIL
+(handler-case (late 1) (undefined-function (c) (cell-error-name c))) ; => LATE
+(install)
+(list (fboundp 'late) (late 4)) ; => (T 8)
+```
+
 ## setf-function names
 
 The `name` may be a `(setf name)` list instead of a plain symbol. This defines a *setf-function*: the writer invoked when `name` is used as a `setf` place. The new value is passed as the first argument (it is the last required parameter of the setf lambda list, per the Common Lisp convention), so `(setf (name arg...) value)` calls the writer with `value` followed by `arg...`. The function is also first-class through `#'(setf name)`.
@@ -105,4 +117,4 @@ The `name` may be a `(setf name)` list instead of a plain symbol. This defines a
 *mode* ; => :HTML5
 ```
 
-Only the `(setf name)` form is supported (a two-element list); `symbol-function`/`fboundp` of a `(setf ...)` name is not.
+Like any `defun`, a setf-function may be defined below the top level -- over a `let`, or inside a function body, defined when that runs. Only the `(setf name)` form is supported (a two-element list); [`fdefinition`](../functions/fdefinition.md), `fboundp` and `fmakunbound` take it, `symbol-function` does not (a symbol only, as in Common Lisp).

@@ -274,11 +274,28 @@ final class WasmSymbolApiCompiler {
 				compileUnaryCall(cons, LispNames.FBOUNDP, WasmLispCompiler.FUNC_FBOUNDP, ctx);
 				return;
 			}
+			if (WasmFunctionFormCompiler.nestedDefun(name, ctx)) {
+				// Bound once the definition below the top level ran: its global holds
+				// the function from then on, nil before.
+				Runnable read = () -> emitNestedDefunBound(name, ctx);
+				if (ctx.usesFmakunbound) {
+					emitTombstoneGuardedFold(name, read, ctx);
+				}
+				else {
+					read.run();
+				}
+				return;
+			}
 			boolean bound = PackageRegistry.specialOperatorNames().contains(name)
 					|| PackageRegistry.clFunctionNames().contains(name) || LispNames.isCarCdrComposition(name)
 					|| ctx.userDefunNames.contains(name) || ctx.functions.containsKey(name);
+			if (!bound && ctx.bindsRuntimeFunctionNames) {
+				// No definition, but the run time can bind the name: the probe answers.
+				compileUnaryCall(cons, LispNames.FBOUNDP, WasmLispCompiler.FUNC_FBOUNDP, ctx);
+				return;
+			}
 			if (ctx.usesFmakunbound) {
-				emitTombstoneGuardedFold(name, bound, ctx);
+				emitTombstoneGuardedFold(name, bound ? () -> WasmEmitHelper.emitTrue(ctx) : () -> emitNil(ctx), ctx);
 				return;
 			}
 			if (bound) {
@@ -631,7 +648,7 @@ final class WasmSymbolApiCompiler {
 	 * otherwise the compile-time fold stands. The literal's string-table offset is known
 	 * here, so the probe is {@code _env_lookup} inline rather than a helper call.
 	 */
-	private static void emitTombstoneGuardedFold(String name, boolean folded, WasmLispCompiler.Ctx ctx) {
+	private static void emitTombstoneGuardedFold(String name, Runnable fold, WasmLispCompiler.Ctx ctx) {
 		int offset = ctx.stringTable.addString(name).offset();
 		int bind = ctx.allocTemp();
 		ctx.writer.write(Instruction.I32_CONST);
@@ -647,12 +664,7 @@ final class WasmSymbolApiCompiler {
 		ctx.writer.write(Instruction.REF_IS_NULL);
 		ctx.writer.write(Instruction.IF);
 		ctx.writer.writeRefType(true, Type.EQ.code());
-		if (folded) {
-			WasmEmitHelper.emitTrue(ctx);
-		}
-		else {
-			emitNil(ctx);
-		}
+		fold.run();
 		ctx.writer.write(Instruction.ELSE);
 		// A binding exists: its value cell answers, normalized to t/nil.
 		ctx.writer.write(Instruction.GET_LOCAL);
@@ -696,6 +708,21 @@ final class WasmSymbolApiCompiler {
 			throw new UnsupportedOperationException(name + " expects 1 argument, got " + (parts.size() - 1));
 		}
 		return parts;
+	}
+
+	/**
+	 * Pushes t when the global a function defined below the top level is assigned to
+	 * holds it (the definition ran), nil while it is still nil.
+	 */
+	private static void emitNestedDefunBound(String name, WasmLispCompiler.Ctx ctx) {
+		WasmExprCompiler.emitRawSpecialRead(ctx, name, java.util.Objects.requireNonNull(ctx.globalIndices.get(name)));
+		ctx.writer.write(Instruction.REF_IS_NULL);
+		ctx.writer.write(Instruction.IF);
+		ctx.writer.writeRefType(true, Type.EQ.code());
+		emitNil(ctx);
+		ctx.writer.write(Instruction.ELSE);
+		WasmEmitHelper.emitTrue(ctx);
+		ctx.writer.write(Instruction.END);
 	}
 
 	private static void emitNil(WasmLispCompiler.Ctx ctx) {
