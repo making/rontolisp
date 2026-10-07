@@ -3647,13 +3647,17 @@ public final class WasmLispCompiler implements LispCompiler {
 		boolean boundpReadsMirror = programUsesSymbol(program, LispNames.BOUNDP) && LispMacroExpander
 			.boundpReachesMirror(program, GlobalVarCollector.collectProbedUnboundBeforeInjection(program,
 					closRegistry.conditionReports().values(), specialVars, false));
-		boolean usesEval = programUsesEval(program) || usesLoad || this.dynamic || boundpReadsMirror
-				|| programUsesSymbol(program, LispNames.SYMBOL_VALUE) || programUsesSymbol(program, LispNames.SET)
-				|| programUsesSymbol(program, LispNames.FBOUNDP) || programUsesSymbol(program, LispNames.FMAKUNBOUND)
-				// (setf (symbol-function ...)) writes GLOBAL_FENV (the raw place shape
-				// is scanned: the %set-symbol-function lowering happens per expression,
-				// after this gate).
+		// Every reason for the runtime except the four pure READERS: the program can
+		// write GLOBAL_FENV (eval's defun, load, fmakunbound, a (setf (symbol-function
+		// ...)) whose raw place shape is scanned, since the %set-symbol-function
+		// lowering happens per expression, after this gate), so the dispatchers probe
+		// it before the registry. A reader-only program's GLOBAL_FENV stays empty.
+		boolean writesFunctionNamespace = programUsesEval(program) || usesLoad || this.dynamic
+				|| programUsesSymbol(program, LispNames.FMAKUNBOUND)
 				|| LispMacroExpander.usesSymbolFunctionWrite(program);
+		boolean usesEval = writesFunctionNamespace || boundpReadsMirror
+				|| programUsesSymbol(program, LispNames.SYMBOL_VALUE) || programUsesSymbol(program, LispNames.SET)
+				|| programUsesSymbol(program, LispNames.FBOUNDP);
 		// A runtime apply -- a computed designator, a multiple-value-call, or a
 		// flet-bound/unknown literal target -- needs _apply and the SPREAD dispatcher,
 		// but NOT the _eval interpreter: an apply whose literal #'f/'f target names a
@@ -5913,10 +5917,11 @@ public final class WasmLispCompiler implements LispCompiler {
 		final int ladderArityChkIndex = arityChkIndex;
 		final int ladderNumDefuns = numDefuns;
 		final boolean ladderUsesEval = usesEval;
+		final boolean ladderProbesNamespace = writesFunctionNamespace;
 		final int ladderRawSentinel = rawSentinelGlobalIndex;
 		LadderBuilder ladderBuilder = (ladder, dispatchable) -> WasmRuntimeBuilder.buildDispatch(ladder.arity(), defuns,
-				lambdaDecls, ladderNumDefuns, stringTable, ladderUsesEval, ladderUserFuncBase, ladder.spread(),
-				dispatchable, ladder.pageBase(), ladderArityReport, ladderArityChkIndex,
+				lambdaDecls, ladderNumDefuns, stringTable, ladderUsesEval, ladderProbesNamespace, ladderUserFuncBase,
+				ladder.spread(), dispatchable, ladder.pageBase(), ladderArityReport, ladderArityChkIndex,
 				this.optimize.prefersSizeOverSpeed(), ladderNotFunction, this.usesIdentityHashTables,
 				ladderRawSentinel);
 		List<Ladder> ladders = new ArrayList<>();

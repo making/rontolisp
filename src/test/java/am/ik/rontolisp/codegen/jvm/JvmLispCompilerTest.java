@@ -20580,6 +20580,15 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void aCallThroughAComputedNameSeesTheRuntimeFunctionNamespace() throws Exception {
+		// The JVM twin of
+		// LispEvaluatorTest#aCallThroughAComputedNameSeesTheRuntimeFunctionNamespace: the
+		// dispatchers probe _fenv before the registry.
+		assertThat(compileAndRun(am.ik.rontolisp.RuntimeFunctionNamespaceCallFixture.SOURCE))
+			.isEqualTo(am.ik.rontolisp.RuntimeFunctionNamespaceCallFixture.EXPECTED);
+	}
+
+	@Test
 	void theFunctionNamespaceOfARetiredNameIsUnbound() throws Exception {
 		// The JVM twin of
 		// LispEvaluatorTest#theFunctionNamespaceOfARetiredNameIsUnbound.

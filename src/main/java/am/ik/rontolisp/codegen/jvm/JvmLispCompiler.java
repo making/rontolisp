@@ -1635,14 +1635,17 @@ public final class JvmLispCompiler implements LispCompiler {
 		boolean boundpReadsMirror = programUsesSymbol(program, LispNames.BOUNDP) && LispMacroExpander
 			.boundpReachesMirror(program, GlobalVarCollector.collectProbedUnboundBeforeInjection(program,
 					closRegistry.conditionReports().values(), specialVars, usesThreads));
-		boolean usesEval = programUsesEval(program) || usesLoad || this.dynamic || usesJavaBridge || usesObjc || usesFfi
-				|| boundpReadsMirror || programUsesSymbol(program, LispNames.SYMBOL_VALUE)
-				|| programUsesSymbol(program, LispNames.SET) || programUsesSymbol(program, LispNames.FBOUNDP)
-				|| programUsesSymbol(program, LispNames.FMAKUNBOUND)
-				// (setf (symbol-function ...)) writes _fenv (the raw place shape is
-				// scanned: the lowering to %set-symbol-function happens per expression,
-				// after this gate).
+		// Every reason for the runtime except the four pure READERS: the program can
+		// write _fenv (eval's defun, load, fmakunbound, a (setf (symbol-function ...))
+		// whose raw place shape is scanned, since the lowering to %set-symbol-function
+		// happens per expression, after this gate), so the dispatchers probe it before
+		// the registry. A reader-only program's _fenv stays empty.
+		boolean writesFunctionNamespace = programUsesEval(program) || usesLoad || this.dynamic || usesJavaBridge
+				|| usesObjc || usesFfi || programUsesSymbol(program, LispNames.FMAKUNBOUND)
 				|| LispMacroExpander.usesSymbolFunctionWrite(program) || forcedGroups.contains(GROUP_EVAL);
+		boolean usesEval = writesFunctionNamespace || boundpReadsMirror
+				|| programUsesSymbol(program, LispNames.SYMBOL_VALUE) || programUsesSymbol(program, LispNames.SET)
+				|| programUsesSymbol(program, LispNames.FBOUNDP);
 		// The APPLY TIER: _apply and the spread dispatcher it hands the argument list
 		// to, without the interpreter (_eval/_store/_envLookup, the _genv mirror, a
 		// dispatcher for every arity). A runtime apply needs no more than that -- an
@@ -3204,6 +3207,12 @@ public final class JvmLispCompiler implements LispCompiler {
 		MethodRefEntry applyRefForDispatch = usesEval
 				? cp.methodRef(thisClass, "_apply", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;") : null;
 		MethodRefEntry lookupRefForDispatch = needsLookup ? cp.methodRef(thisClass, lookupName, lookupDesc) : null;
+		// ... after the function namespace, where the program can write one: the order
+		// symbol-function and _apply resolve a name in.
+		JvmRuntimeBuilder.FunctionNamespace namespaceForDispatch = writesFunctionNamespace && needsLookup
+				? new JvmRuntimeBuilder.FunctionNamespace(fenvField,
+						cp.methodRef(thisClass, envLookupName, envLookupDesc))
+				: null;
 		// The arity reporters a wrong argument COUNT is signalled through, each emitted
 		// only for a program that has the site it serves: _arityErr for a per-arity
 		// dispatcher's no-match arm, _arityChk for a SPREAD case or a literal apply's
@@ -3245,8 +3254,8 @@ public final class JvmLispCompiler implements LispCompiler {
 			for (int arity : indirectCallArities) {
 				List<DispatchMethod> shared = JvmRuntimeBuilder.buildDispatchMethods(arity, functions, lambdaDecls,
 						lambdaFuncInfos, cp, thisClass, objectArrayClass, integerClass, integerValue, objectClass,
-						stringClass, applyRefForDispatch, lookupRefForDispatch, funcIds, arityReporting,
-						mainCtx.unsupplied);
+						stringClass, applyRefForDispatch, lookupRefForDispatch, namespaceForDispatch, funcIds,
+						arityReporting, mainCtx.unsupplied);
 				built.addAll(shared);
 				// A value tail's real call goes through a copy of its arity's
 				// dispatcher, whose profile holds only what value tails reach. An arity
@@ -3255,7 +3264,7 @@ public final class JvmLispCompiler implements LispCompiler {
 				if (valueTailDispatchers && shared.size() == 1 && mainCtx.valueTailArities.contains(arity)) {
 					built.addAll(JvmRuntimeBuilder.buildDispatchMethods(arity, functions, lambdaDecls, lambdaFuncInfos,
 							cp, thisClass, objectArrayClass, integerClass, integerValue, objectClass, stringClass,
-							applyRefForDispatch, lookupRefForDispatch, false,
+							applyRefForDispatch, lookupRefForDispatch, namespaceForDispatch, false,
 							JvmTailBounce.valueTailDispatcherName(arity), true, funcIds, arityReporting,
 							mainCtx.unsupplied));
 					valueTailCopies.add(arity);
@@ -3267,8 +3276,8 @@ public final class JvmLispCompiler implements LispCompiler {
 			if (usesApplyRuntime) {
 				built.addAll(JvmRuntimeBuilder.buildDispatchMethods(0, functions, lambdaDecls, lambdaFuncInfos, cp,
 						thisClass, objectArrayClass, integerClass, integerValue, objectClass, stringClass,
-						applyRefForDispatch, lookupRefForDispatch, true, JvmRuntimeBuilder.dispatcherName(0, true),
-						false, funcIds, arityReporting, mainCtx.unsupplied));
+						applyRefForDispatch, lookupRefForDispatch, namespaceForDispatch, true,
+						JvmRuntimeBuilder.dispatcherName(0, true), false, funcIds, arityReporting, mainCtx.unsupplied));
 			}
 			return built;
 		};

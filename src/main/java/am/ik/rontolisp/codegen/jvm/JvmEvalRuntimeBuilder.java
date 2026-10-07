@@ -1151,6 +1151,15 @@ final class JvmEvalRuntimeBuilder {
 			a.checkcast(this.k.objectArrayClass());
 			a.loadConstant(1);
 			a.aaload();
+			a.astore(TMP);
+			// fmakunbound's tombstone (a nil cell) shadows the registry: the name is
+			// undefined, and the report spells it rather than the nil it holds.
+			MethodCode.Label bound = a.newLabel();
+			a.aload(TMP);
+			a.ifnonnull(bound);
+			emitNotFunctionThrow(a, FN);
+			a.labelBinding(bound);
+			a.aload(TMP);
 			a.astore(FN);
 			a.goto_(resolved);
 		}
