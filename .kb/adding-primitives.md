@@ -28,7 +28,11 @@ fail silently at the call site.
    cons (12% of a WASM compile's CPU). Add a case to any slice with room; `HugeMethodTest`
    fails when one crosses the limit, and the answer is another slice, never an allow-list
    entry.
-5. `BuiltinFunctionWrappers.WRAPPER_DEFS` entry so it works as a first-class value.
+5. `BuiltinFunctionWrappers.WRAPPER_DEFS` entry so it works as a first-class value -- or, for a
+   built-in the interpreter binds as a Java `LispFunction` and the compilers lower in call
+   position, a `NativeCallShapes` row plus a `NATIVE_VALUE_FUNCTIONS` entry, which derives the
+   value from the row (`.kb/lisp2-namespaces.md`, "A native built-in's function value").
+   `StandardFunctionValueCompileTest` fails for a `cl` function with neither.
 6. A case in `src/test/resources/ci-spec.yaml` if it deserves end-to-end coverage.
 7. Docs: a per-operator page under `reference/{functions,macros,special-forms}/` (H1 = name,
    signature, one runnable ```lisp example with a `; => value`), a `_catalog.yaml` entry, and

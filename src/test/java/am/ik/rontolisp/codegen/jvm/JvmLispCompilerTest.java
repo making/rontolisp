@@ -5627,6 +5627,21 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void aStandardFunctionTakenAsAValueAnswersAsItsCall() throws Exception {
+		// Interpreter parity (the LispEvaluatorTest twin), through the CLI's front end:
+		// a standard function lowered only in call position is a value through its
+		// call-shape wrapper, and #'symbol-function boxes the name it resolves.
+		assertThat(compileAndRun(
+				am.ik.rontolisp.cli.CompileFrontendAccess.corpus(am.ik.rontolisp.StandardFunctionValueFixture.PROGRAM,
+						am.ik.rontolisp.reader.Features.JVM, false, false)))
+			.isEqualTo(am.ik.rontolisp.StandardFunctionValueFixture.EXPECTED);
+		assertThat(compileAndRun(am.ik.rontolisp.cli.CompileFrontendAccess.corpus(
+				am.ik.rontolisp.StandardFunctionValueFixture.COMPUTED_SYNONYM, am.ik.rontolisp.reader.Features.JVM,
+				false, false)))
+			.isEqualTo(am.ik.rontolisp.StandardFunctionValueFixture.COMPUTED_SYNONYM_EXPECTED);
+	}
+
+	@Test
 	void anUnboundVariableCarriesItsNameInTheCellErrorNameSlot() throws Exception {
 		// Interpreter parity (the LispEvaluatorTest twin): the landing pad reads the name
 		// back out of the text it recovers the class from, in restart mode as well

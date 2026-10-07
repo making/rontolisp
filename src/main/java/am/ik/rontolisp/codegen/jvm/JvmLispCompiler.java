@@ -1774,7 +1774,8 @@ public final class JvmLispCompiler implements LispCompiler {
 		// names them as a designator.
 		Set<String> designatedProducers = BuiltinFunctionWrappers.designatedValueProducers(program,
 				closRegistry.conditionReports().values());
-		List<LispVal> wrappers = BuiltinFunctionWrappers.generate(userDefinedNames, wrapperExcludes);
+		List<LispVal> wrappers = am.ik.rontolisp.compiler.FunctionValueWrappers.generate(userDefinedNames,
+				wrapperExcludes);
 		if (LispMacroExpander.declaresMvSpill(program)) {
 			// A wrapper is a function body like any other: its tail settles the
 			// multiple-value channel (the defuns' tails were settled by

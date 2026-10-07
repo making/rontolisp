@@ -111,6 +111,28 @@ public final class BuiltinFunctionWrappers {
 			LispNames.WARN);
 
 	/**
+	 * The native built-ins ({@link NativeCallShapes}) every compiled backend lowers in
+	 * call position and has no defun for, in injection order. The interpreter binds each
+	 * as a Java {@code LispFunction}; the compile paths' function value is a wrapper
+	 * derived from the operator's call shape ({@code FunctionValueWrappers}), so
+	 * {@code #'arrayp} and {@code (funcall 'close s)} answer as the call does and a count
+	 * the shape rules out reports the interpreter's text. Reference-gated like
+	 * {@link #REFERENCE_GATED_FUNCTIONS}: several bodies reach a runtime (the eval
+	 * mirror, the stream and hash-table helpers, the run-time function box) that a gate
+	 * scanning the source program turns on for the operator's name. {@code require} and
+	 * {@code provide} are not here: the compile path has them only as literal top-level
+	 * forms ({@link #noFunctionValueMessage}).
+	 */
+	public static final List<String> NATIVE_VALUE_FUNCTIONS = List.of(LispNames.ARRAY_DIMENSIONS, LispNames.ARRAYP,
+			LispNames.CLOSE, LispNames.EVAL, LispNames.EXPORT, LispNames.FDEFINITION, LispNames.FMAKUNBOUND,
+			LispNames.GET_INTERNAL_REAL_TIME, LispNames.GET_INTERNAL_RUN_TIME, LispNames.GET_OUTPUT_STREAM_STRING,
+			LispNames.GET_UNIVERSAL_TIME, LispNames.HASH_TABLE_REHASH_SIZE, LispNames.HASH_TABLE_REHASH_THRESHOLD,
+			LispNames.HASH_TABLE_SIZE, LispNames.HASH_TABLE_TEST, LispNames.IMPORT, LispNames.LOAD,
+			LispNames.MAKE_RANDOM_STATE, LispNames.MAKE_STRING_INPUT_STREAM, LispNames.MAKE_STRING_OUTPUT_STREAM,
+			LispNames.MAKE_SYNONYM_STREAM, LispNames.OPEN_STREAM_P, LispNames.RATIONALP, LispNames.ROW_MAJOR_AREF,
+			LispNames.SYMBOL_FUNCTION, LispNames.UNEXPORT, LispNames.UNUSE_PACKAGE, LispNames.USE_PACKAGE);
+
+	/**
 	 * Wrappers injected only when the program takes the operator as a first-class value
 	 * (see {@link #referencesFunctionValue}), so ordinary programs stay byte-identical:
 	 * the signal operators plus {@code format}. The {@code #'format} wrapper renders
@@ -246,7 +268,35 @@ public final class BuiltinFunctionWrappers {
 		// its own bound check is a separate, already-gated backend intrinsic.
 		gated.add(LispNames.AREF);
 		gated.add(LispNames.ARRAY_ROW_MAJOR_INDEX);
+		gated.addAll(NATIVE_VALUE_FUNCTIONS);
 		REFERENCE_GATED_FUNCTIONS = Set.copyOf(gated);
+	}
+
+	/**
+	 * Whether the name is a built-in some compiled function value stands for: a catalog
+	 * wrapper or a reference-gated one. Such a name is never undefined on the compile
+	 * paths -- a {@code #'name} of it injects its wrapper.
+	 * @param name the operator name
+	 * @return whether a wrapper backs the name
+	 */
+	public static boolean isWrappedBuiltin(String name) {
+		return WRAPPER_NAMES.contains(name) || REFERENCE_GATED_FUNCTIONS.contains(name);
+	}
+
+	/**
+	 * What a compile path reports for a {@code #'name} of a standard function it has no
+	 * function value for: {@code require} and {@code provide} exist on the compile path
+	 * only as literal top-level forms, spliced before anything runs, so neither has a
+	 * value -- the refusal a nested or computed call of either gets. Any other name is a
+	 * standard function the backend has no wrapper for.
+	 * @param name the function name
+	 * @return the refusal message
+	 */
+	public static String noFunctionValueMessage(String name) {
+		if (LispNames.REQUIRE.equals(name) || LispNames.PROVIDE.equals(name)) {
+			return name + " is only supported as a literal top-level form on the compile path";
+		}
+		return "Cannot compile: " + name + " as a function value (this backend has none for the built-in)";
 	}
 
 	/**
@@ -575,6 +625,15 @@ public final class BuiltinFunctionWrappers {
 			}
 		}
 		return wrappers;
+	}
+
+	/**
+	 * {@code (setq name (lambda params body...))}, in the catalog's parameter spelling
+	 * ({@code "e=t"}, {@code "b?bp"}): a wrapper form built outside the catalog
+	 * ({@link FunctionValueWrappers}).
+	 */
+	static LispVal setqLambda(String name, List<String> params, List<LispVal> body) {
+		return new WrapperDef(name, params, body).toSetqLambda();
 	}
 
 	/**
@@ -1020,7 +1079,7 @@ public final class BuiltinFunctionWrappers {
 	}
 
 	// Helper to build a call expression: (op args...)
-	private static LispVal call(String op, String... args) {
+	static LispVal call(String op, String... args) {
 		List<LispVal> parts = new ArrayList<>();
 		parts.add(new LispSymbol(op));
 		for (String arg : args) {
@@ -1030,7 +1089,7 @@ public final class BuiltinFunctionWrappers {
 	}
 
 	// Helper to build a call with LispVal args
-	private static LispVal callV(String op, LispVal... args) {
+	static LispVal callV(String op, LispVal... args) {
 		List<LispVal> parts = new ArrayList<>();
 		parts.add(new LispSymbol(op));
 		for (LispVal arg : args) {
@@ -1904,7 +1963,7 @@ public final class BuiltinFunctionWrappers {
 	// (getf kw :indicator default) -- the default stands for an ABSENT indicator only: an
 	// indicator present with a nil value stays nil, which a bound that is no bound
 	// (:start nil) must reach the operator as. getfKwOr cannot tell the two apart.
-	private static LispVal getfKwDefault(String indicator, LispVal dflt) {
+	static LispVal getfKwDefault(String indicator, LispVal dflt) {
 		String upper = indicator.toUpperCase(java.util.Locale.ROOT);
 		LispVal fallback = upper.equals(indicator) ? dflt
 				: callV(LispNames.GETF, new LispSymbol("kw"), new LispSymbol(upper), dflt);

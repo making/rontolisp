@@ -3658,9 +3658,12 @@ public final class WasmLispCompiler implements LispCompiler {
 		boolean writesFunctionNamespace = programUsesEval(program) || usesLoad || this.dynamic
 				|| programUsesSymbol(program, LispNames.FMAKUNBOUND)
 				|| LispMacroExpander.usesSymbolFunctionWrite(program);
+		// A computed make-synonym-stream reads its variable through a symbol-value the
+		// lowering synthesizes after this scan.
 		boolean usesEval = writesFunctionNamespace || boundpReadsMirror
 				|| programUsesSymbol(program, LispNames.SYMBOL_VALUE) || programUsesSymbol(program, LispNames.SET)
-				|| programUsesSymbol(program, LispNames.FBOUNDP);
+				|| programUsesSymbol(program, LispNames.FBOUNDP)
+				|| LispMacroExpander.makesComputedSynonymStream(program);
 		// A runtime apply -- a computed designator, a multiple-value-call, or a
 		// flet-bound/unknown literal target -- needs _apply and the SPREAD dispatcher,
 		// but NOT the _eval interpreter: an apply whose literal #'f/'f target names a
@@ -4117,7 +4120,8 @@ public final class WasmLispCompiler implements LispCompiler {
 		// names them as a designator.
 		Set<String> designatedProducers = BuiltinFunctionWrappers.designatedValueProducers(program,
 				closRegistry.conditionReports().values());
-		List<LispVal> wrappers = BuiltinFunctionWrappers.generate(userDefinedNames, wrapperExcludes);
+		List<LispVal> wrappers = am.ik.rontolisp.compiler.FunctionValueWrappers.generate(userDefinedNames,
+				wrapperExcludes);
 		if (LispMacroExpander.declaresMvSpill(program)) {
 			// A wrapper is a function body like any other: its tail settles the
 			// multiple-value channel (the defuns' tails were settled by

@@ -10,6 +10,7 @@ import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.PackageRegistry;
+import am.ik.rontolisp.compiler.BuiltinFunctionWrappers;
 import am.ik.rontolisp.compiler.CompileWarnings;
 import am.ik.rontolisp.compiler.FunctionDesignators;
 import am.ik.wasm.Instruction;
@@ -252,23 +253,24 @@ final class WasmFunctionFormCompiler {
 			WasmFunctionCallCompiler.emitUndefinedFunctionSignal(name, ctx);
 		}
 		else {
-			// A standard function this backend calls only in head position: it HAS a
+			// A standard function with no function value here (require/provide, which
+			// the compile path has only as literal top-level forms): it HAS a
 			// definition, so the late-binding signal above would misreport it.
-			throw new UnsupportedOperationException(
-					"Cannot compile: " + name + " as a function value (this backend has none for the built-in)");
+			throw new UnsupportedOperationException(BuiltinFunctionWrappers.noFunctionValueMessage(name));
 		}
 	}
 
 	/**
 	 * {@return whether {@code name} has no definition at all -- no function this backend
 	 * registered, no car/cdr composition, no variable holding the function, no standard
-	 * function, and no {@code --dynamic} runtime to ask}
+	 * function or wrapped built-in, and no {@code --dynamic} runtime to ask}
 	 * @param name the function name
 	 * @param ctx the compilation context
 	 */
 	static boolean undefined(String name, WasmLispCompiler.Ctx ctx) {
 		return !ctx.functions.containsKey(name) && !LispNames.isCarCdrComposition(name) && !ctx.dynamic
-				&& !ctx.globalIndices.containsKey(name) && !PackageRegistry.isClFunctionName(name);
+				&& !ctx.globalIndices.containsKey(name) && !PackageRegistry.isClFunctionName(name)
+				&& !BuiltinFunctionWrappers.isWrappedBuiltin(name);
 	}
 
 	/**
