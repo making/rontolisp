@@ -3,6 +3,7 @@ package am.ik.rontolisp.codegen.wasm;
 import java.util.ArrayList;
 import java.util.List;
 
+import am.ik.rontolisp.ClosRegistry;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispNil;
@@ -164,7 +165,8 @@ final class WasmFunctionCallCompiler {
 			// An undefined function: keep the interpreter's late binding -- signal
 			// when the call is EXECUTED, so a library whose error path references a
 			// function rontolisp does not provide stays compilable.
-			CompileWarnings.warn(cons, "the function " + name + " is undefined; compiled as a call-time error");
+			CompileWarnings.warn(cons, "the function " + ClosRegistry.functionNameForReport(name)
+					+ " is undefined; compiled as a call-time error");
 			emitUndefinedFunctionSignal(name, ctx);
 		}
 	}
@@ -180,9 +182,13 @@ final class WasmFunctionCallCompiler {
 	 */
 	static void emitUndefinedFunctionSignal(String name, WasmLispCompiler.Ctx ctx) {
 		if (ctx.undefinedFunctionFuncIndex >= 0) {
+			// A (setf place) function's name is the list the program wrote, which
+			// _undefined_function reports as such.
+			String place = ClosRegistry.setfPlaceOfFunctionName(name);
+			LispVal designator = place == null ? new LispSymbol(name) : new LispCons(new LispSymbol(LispNames.SETF),
+					new LispCons(new LispSymbol(place), LispNil.INSTANCE));
 			WasmExprCompiler.compileExpr(
-					new LispCons(new LispSymbol(LispNames.QUOTE), new LispCons(new LispSymbol(name), LispNil.INSTANCE)),
-					ctx);
+					new LispCons(new LispSymbol(LispNames.QUOTE), new LispCons(designator, LispNil.INSTANCE)), ctx);
 			ctx.writer.write(Instruction.CALL);
 			ctx.writer.writeUnsignedLeb128(ctx.undefinedFunctionFuncIndex);
 			return;

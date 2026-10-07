@@ -873,6 +873,32 @@ class RontoLispCliStreamsTest {
 	}
 
 	@Test
+	void aReferenceToAnUndefinedSetfFunctionWarnsWithTheNameTheProgramWrote() throws Exception {
+		Path file = this.tempDir.resolve("warn.lisp");
+		Files.writeString(file, """
+				(defun ref () #'(setf no-such-setf))
+				(print (ignore-errors (ref)))
+				""");
+		for (String output : new String[] { "Warn.class", "warn.wasm" }) {
+			PrintStream savedErr = System.err;
+			ByteArrayOutputStream captured = new ByteArrayOutputStream();
+			try {
+				System.setErr(new PrintStream(captured, true, StandardCharsets.UTF_8));
+				runCli("", file.toString(), "-o", this.tempDir.resolve(output).toString());
+			}
+			finally {
+				System.setErr(savedErr);
+			}
+			assertThat(captured.toString(StandardCharsets.UTF_8)
+				.lines()
+				.filter(line -> line.contains("warning: "))
+				.map(line -> line.substring(line.lastIndexOf('/') + 1))).as(output)
+				.containsExactly(
+						"warn.lisp:1:15: warning: the function (SETF NO-SUCH-SETF) is undefined; compiled as a run-time error");
+		}
+	}
+
+	@Test
 	void anUndefinedFunctionWarnsExactlyOncePerCallSite() throws Exception {
 		// The JVM backend re-runs the whole compile when a runtime-helper gate was
 		// under-predicted, and the discarded attempt used to have printed its warnings

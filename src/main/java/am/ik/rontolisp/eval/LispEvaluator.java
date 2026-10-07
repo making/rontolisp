@@ -12031,7 +12031,7 @@ public final class LispEvaluator {
 		// names it.
 		if (e instanceof CellErrorException cell && className != null
 				&& this.closRegistry.newReportingCondition(className, messageVal,
-						java.util.Map.of("NAME", symbolOfSpelling(cell.spelling()))) instanceof LispVal c) {
+						java.util.Map.of("NAME", cellName(cell))) instanceof LispVal c) {
 			return c;
 		}
 		// A java: member that threw (JavaInterop.fail): the condition carries the
@@ -12212,6 +12212,16 @@ public final class LispEvaluator {
 			return new PackageResolver.Accessible(name, LispNames.STATUS_EXTERNAL);
 		}
 		return this.packageResolver.accessible(this.packageResolver.currentPackageName(), name, this::definedInImage);
+	}
+
+	/**
+	 * The value a cell-error's {@code name} slot holds: the symbol of its spelling, or
+	 * the list {@code (setf place)} for an undefined {@code (setf place)} function.
+	 */
+	private static LispVal cellName(CellErrorException cell) {
+		String place = cell.setfPlace();
+		return place == null ? symbolOfSpelling(cell.spelling())
+				: new LispCons(new LispSymbol(LispNames.SETF), new LispCons(symbolOfSpelling(place), LispNil.INSTANCE));
 	}
 
 	/**

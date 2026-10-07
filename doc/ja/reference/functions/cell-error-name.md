@@ -17,6 +17,13 @@
   (undefined-function (e) (cell-error-name e))) ; => CE-NO-SUCH-FUNCTION
 ```
 
+未定義の `(setf name)` 関数は、書かれたとおりのリスト `(setf name)` を名前として持ち、メッセージも同じ表記になります:
+
+```lisp
+(handler-case (funcall #'(setf ce-no-such-setf) 1 2)
+  (undefined-function (e) (cell-error-name e))) ; => (SETF CE-NO-SUCH-SETF)
+```
+
 未束縛の名前を [`symbol-value`](symbol-value.md) で読み出したとき、または値なしで宣言したスペシャル変数を参照したときに通知される `unbound-variable` も、すべてのバックエンドでその名前を持ちます:
 
 ```lisp
