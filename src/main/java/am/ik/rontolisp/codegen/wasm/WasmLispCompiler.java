@@ -1303,18 +1303,15 @@ public final class WasmLispCompiler implements LispCompiler {
 	static final int FUNC_FMAKUNBOUND = FUNC_FBOUNDP + 1;
 
 	// _set_symbol_function(sym, value): the write-side twin of _fmakunbound behind
-	// (setf (symbol-function ...)); _fenv_function(sym): the GLOBAL_FENV-only read the
-	// setf-only-alias forwarder defuns call. Appended beside the other symbol-API
-	// helpers, before FUNC_USER_BASE.
+	// (setf (symbol-function ...)). Appended beside the other symbol-API helpers, before
+	// FUNC_USER_BASE.
 	static final int FUNC_SET_SYMBOL_FUNCTION = FUNC_FMAKUNBOUND + 1;
-
-	static final int FUNC_FENV_FUNCTION = FUNC_SET_SYMBOL_FUNCTION + 1;
 
 	// read-char runtime helper (WasmIoRuntimeBuilder.buildReadCharBody): one byte from
 	// stdin, a WASI fd or a string input stream, boxed as a character struct. Appended
 	// before FUNC_USER_BASE like the mod/rem helpers, so no import/FUNC_START index
 	// shifts and the component blobs are unaffected.
-	static final int FUNC_READ_CHAR = FUNC_FENV_FUNCTION + 1;
+	static final int FUNC_READ_CHAR = FUNC_SET_SYMBOL_FUNCTION + 1;
 
 	// _str_build (off, len) -> (ref null eq): allocates a $str_bytes GC array of
 	// length len, copies linear[off..off+len) into it, and returns a TYPE_STRING
@@ -3442,6 +3439,9 @@ public final class WasmLispCompiler implements LispCompiler {
 						: reportsUncaught ? SignalMessages.RENDERED : SignalMessages.LAZY,
 				this.optimize.eliminatesDeadCode() && !this.dynamic
 						? new am.ik.rontolisp.compiler.GenericDispatchNarrowing() : null);
+		// The (setf (symbol-function 'n) ...) forwarders: no definition of their name, so
+		// out of the registry, and #'n / fboundp read the runtime function namespace.
+		Set<String> fenvForwarders = LispMacroExpander.symbolFunctionForwarderNames(program);
 		// The read/compile-time package table for the runtime package API (see
 		// .kb/packages.md): injected after package resolution, from the resolver's
 		// final registry, only when the program can need it at run time.
@@ -4196,8 +4196,11 @@ public final class WasmLispCompiler implements LispCompiler {
 		// The shared name dispatches injected below are called only from the sites the
 		// compiler lowers onto them, never through a designator: no dispatcher case
 		// (registryFuncIds), so a program whose names resolve at run time does not
-		// keep one alive that no reachable site calls.
-		Set<String> callOnlyRuntimes = new HashSet<>();
+		// keep one alive that no reachable site calls. A symbol-function forwarder is
+		// called only from direct call sites the same way: a designator of its name
+		// resolves through GLOBAL_FENV, and a registry row would answer the forwarder
+		// before the setf ran.
+		Set<String> callOnlyRuntimes = new HashSet<>(fenvForwarders);
 		boolean usesSet = LispMacroExpander.programUsesSet(program) || LispMacroExpander.programUsesSet(injectedForms);
 		// A computed symbol-value reads through the shared accessor injected with the
 		// global set below (LispMacroExpander.dynamicFirstSymbolValue).
@@ -4743,6 +4746,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			.builtinShapedDefuns(builtinShapedDefuns)
 			.warnedClRedefinitions(warnedClRedefinitions)
 			.usesFmakunbound(programUsesSymbol(program, LispNames.FMAKUNBOUND))
+			.fenvForwarders(Set.copyOf(fenvForwarders))
 			.usesRuntimePackages(packageResolver.runtimePackagesMutable())
 			// Every context carries the flag (not just _start): the progv lowering
 			// maintains the eval env mirror from any position, while the top-level-only
@@ -6411,7 +6415,6 @@ public final class WasmLispCompiler implements LispCompiler {
 		final byte[] fmakunboundBody = WasmSymbolApiRuntimeBuilder.buildFmakunbound(this.usesIdentityHashTables);
 		final byte[] setSymbolFunctionBody = WasmSymbolApiRuntimeBuilder
 			.buildSetSymbolFunction(this.usesIdentityHashTables);
-		final byte[] fenvFunctionBody = WasmSymbolApiRuntimeBuilder.buildFenvFunction();
 
 		// Case-fold tables. Two compressed (from, to, delta) triple tables, generated
 		// from Character.toUpperCase(int) / toLowerCase(int) so char-upcase /
@@ -7429,7 +7432,6 @@ public final class WasmLispCompiler implements LispCompiler {
 				fnDef.addFunction(TYPE_CALLABLE_BASE + 0); // _fmakunbound (sym)
 				fnDef.addFunction(TYPE_CALLABLE_BASE + 1); // _set_symbol_function (sym,
 															// value)
-				fnDef.addFunction(TYPE_CALLABLE_BASE + 0); // _fenv_function (sym)
 				// read-char runtime helper
 				fnDef.addFunction(TYPE_CALLABLE_BASE + 2); // _read_char (stream,
 															// eof-error-p, eof-value) ->
@@ -8368,7 +8370,6 @@ public final class WasmLispCompiler implements LispCompiler {
 				code.addFunction(fboundpBody);
 				code.addFunction(fmakunboundBody);
 				code.addFunction(setSymbolFunctionBody);
-				code.addFunction(fenvFunctionBody);
 				// read-char runtime helper body (FUNC_READ_CHAR)
 				code.addFunction(WasmIoRuntimeBuilder.buildReadCharBody());
 				// _str_build helper body (FUNC_STR_BUILD): linear[off..off+len) -> a
@@ -11262,6 +11263,14 @@ public final class WasmLispCompiler implements LispCompiler {
 		boolean usesFmakunbound = false;
 
 		/**
+		 * The names with a {@code (setf (symbol-function 'n) ...)} forwarder defun
+		 * ({@link LispMacroExpander#symbolFunctionForwarderNames}): {@code #'n} and a
+		 * literal {@code fboundp} read {@code GLOBAL_FENV} for them instead of the
+		 * forwarder.
+		 */
+		Set<String> fenvForwarders = Set.of();
+
+		/**
 		 * Whether the program can create, delete or rename packages at run time. When it
 		 * does, the package lowerings consult the {@code %runtime-packages%} table before
 		 * their baked answers (see {@code .kb/packages.md}); read off the resolver after
@@ -11703,6 +11712,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			this.userDefunNames = builder.userDefunNames;
 			this.builtinShapedDefuns = builder.builtinShapedDefuns;
 			this.usesFmakunbound = builder.usesFmakunbound;
+			this.fenvForwarders = builder.fenvForwarders;
 			this.usesRuntimePackages = builder.usesRuntimePackages;
 			this.usesEval = builder.usesEval;
 			this.packageTable = builder.packageTable;
@@ -11898,6 +11908,8 @@ public final class WasmLispCompiler implements LispCompiler {
 
 			private boolean usesFmakunbound = false;
 
+			private Set<String> fenvForwarders = Set.of();
+
 			private boolean usesRuntimePackages = false;
 
 			private boolean usesEval = false;
@@ -12037,6 +12049,7 @@ public final class WasmLispCompiler implements LispCompiler {
 				this.userDefunNames = proto.userDefunNames;
 				this.builtinShapedDefuns = proto.builtinShapedDefuns;
 				this.usesFmakunbound = proto.usesFmakunbound;
+				this.fenvForwarders = proto.fenvForwarders;
 				this.usesRuntimePackages = proto.usesRuntimePackages;
 				this.usesEval = proto.usesEval;
 				this.packageTable = proto.packageTable;
@@ -12405,6 +12418,11 @@ public final class WasmLispCompiler implements LispCompiler {
 
 			Builder usesFmakunbound(boolean usesFmakunbound) {
 				this.usesFmakunbound = usesFmakunbound;
+				return this;
+			}
+
+			Builder fenvForwarders(Set<String> fenvForwarders) {
+				this.fenvForwarders = fenvForwarders;
 				return this;
 			}
 

@@ -13,7 +13,7 @@ Returns the function value bound to `symbol` in the function namespace -- the sa
   (funcall fn '(1 2 3))) ; => 1
 ```
 
-`symbol-function` is also a `setf` place: `(setf (symbol-function 'name) fn)` installs `fn` as the symbol's global function definition -- defining an alias for an existing function, or replacing one. In the compilers a call site the compiler already bound directly keeps the original function ([`fmakunbound`](fmakunbound.md)'s divergence); a name bound ONLY this way is fully late-bound, and calling it before the assignment signals `The function NAME is undefined`.
+`symbol-function` is also a `setf` place: `(setf (symbol-function 'name) fn)` installs `fn` as the symbol's global function definition -- defining an alias for an existing function, or replacing one. In the compilers a call site the compiler already bound directly keeps the original function ([`fmakunbound`](fmakunbound.md)'s divergence); a name bound ONLY this way is fully late-bound: before the assignment runs, a call, `#'name`, `symbol-function` and `fdefinition` signal `undefined-function` naming it and `fboundp` answers false, on every backend; afterwards `#'name` is the installed function itself.
 
 ```lisp
 (defun double (x) (* x 2))

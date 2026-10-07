@@ -266,13 +266,30 @@ nil)` reported `The function NIL is undefined`. Pinned on all four backends by
   (`setfOnlyFunctionAliasNames` + `symbolFunctionForwarderDefuns`):
   `(defun NAME (&rest args) (apply (%fenv-function 'NAME) args))`. **`%fenv-function` probes the
   function NAMESPACE ONLY** — probing the compiled registry would find the forwarder itself and
-  loop — and a miss signals `The function NAME is undefined`.
+  loop — and a miss (no binding, or the tombstone) signals the undefined-function a direct call
+  of an undefined name signals: JVM `emitUndefinedFunctionThrow`, wasm inline
+  (`WasmFunctionFormCompiler.emitFenvRead` -> `emitUndefinedFunctionSignal`; it was a fixed
+  `_fenv_function` runtime that trapped until 2026-10-07).
+- **The forwarder is no definition of the name**: it serves direct call sites only.
+  `LispMacroExpander.symbolFunctionForwarderNames` recognizes it in the expanded program, and
+  each backend (`Ctx.fenvForwarders`) compiles `#'NAME` and the literal `symbol-function` /
+  `fdefinition` (both via `compileNamed`) as the `%fenv-function` read, takes a literal
+  `(fboundp 'NAME)` down the computed probe, and keeps the forwarder out of the name registry
+  (its name joins `callOnlyRuntimes`), so a computed designator, `symbol-function` or `fboundp`
+  reaches `_fenv` / `GLOBAL_FENV` and then misses. Before (measured 2026-10-07, all of these
+  before the setf ran): JVM `#'NAME`, the literal and computed `symbol-function` answered the
+  forwarder (`#<function NAME>`, never `eq` to the installed function afterwards) and both
+  `fboundp` spellings T; P1 and the component trapped on every call. The interpreter and SBCL
+  signal / answer NIL. Cost: run-time `eval` of `(NAME ...)` before the setf now answers the
+  eval runtime's silent nil for an unknown operator (`.todo/384`) instead of reaching the
+  forwarder's signal.
 - **Divergences**: an eagerly-bound call site of a name that HAD a defun keeps the old function
   after a re-setf; `--no-gc` has no eval runtime.
 - Tests: `LispEvaluatorTest#setfSymbolFunction*`/`#setfFdefinition*`,
   `JvmLispCompilerTest#compileAndRunSetfSymbolFunction*`,
   `WasmLispCompilerIntegrationTest#setfSymbolFunctionAliasAndRedefinition`, ci-spec
-  `setf-symbol-function-and-fdefinition`.
+  `setf-symbol-function-and-fdefinition`; `SetfSymbolFunctionReferenceFixture`
+  (`aNameOnlySetfSymbolFunctionBindsIsUndefinedUntilTheSetfRuns` in the three backend suites).
 
 ### `set` / `(setf (symbol-value name) value)` for a computed name (`.todo/852`)
 `expandSetf` lowers the place to `(set name value)` -- one store, evaluated once each

@@ -17997,6 +17997,14 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void aNameOnlySetfSymbolFunctionBindsIsUndefinedUntilTheSetfRuns() {
+		// Calls, #'name, symbol-function, fdefinition and fboundp before the setf, after
+		// it and after fmakunbound -- sbcl's answers, pinned on all four backends.
+		assertThat(printedLines(am.ik.rontolisp.SetfSymbolFunctionReferenceFixture.SOURCE))
+			.isEqualTo(am.ik.rontolisp.SetfSymbolFunctionReferenceFixture.EXPECTED);
+	}
+
+	@Test
 	void theFunctionNamespaceOfARetiredNameIsUnbound() {
 		// symbol-function / fdefinition of a computed name fmakunbound retired signal
 		// undefined-function, and a name given a function again answers it -- sbcl's
