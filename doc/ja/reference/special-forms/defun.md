@@ -105,4 +105,4 @@ Function expects 2 arguments, got 1
 *mode* ; => :HTML5
 ```
 
-サポートされるのは `(setf name)` 形式(2 要素のリスト)のみです。`(setf ...)` 名に対する `symbol-function`/`fboundp` はサポートされません。
+ほかの `defun` と同じく、setf 関数はトップレベル以外でも定義できます — `let` の内側や、関数本体の中 (その関数の実行時に定義されます)。サポートされるのは `(setf name)` 形式(2 要素のリスト)のみです。[`fdefinition`](../functions/fdefinition.md)、`fboundp`、`fmakunbound` はこのリストを受け付けますが、`symbol-function` は受け付けません (Common Lisp と同じくシンボルのみ)。

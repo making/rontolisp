@@ -24,4 +24,4 @@ A quoted symbol literal (`(fdefinition 'car)`) resolves at compile time in the c
   l) ; => (1 9)
 ```
 
-`fdefinition` is the same `setf` place as [`symbol-function`](symbol-function.md): `(setf (fdefinition 'name) fn)` installs `fn` as the symbol's global function definition, and `(setf (fdefinition '(setf name)) fn)` installs the `(setf name)` function.
+`fdefinition` is the same `setf` place as [`symbol-function`](symbol-function.md): `(setf (fdefinition 'name) fn)` installs `fn` as the symbol's global function definition, and `(setf (fdefinition '(setf name)) fn)` installs the `(setf name)` function. The name may also be built at run time (`(list 'setf p)`, `(intern s)`): a direct call, a `setf` place, `#'name` and `fboundp` of a name only such a write (or `eval`'s `defun`) binds look it up when they run, on every backend.

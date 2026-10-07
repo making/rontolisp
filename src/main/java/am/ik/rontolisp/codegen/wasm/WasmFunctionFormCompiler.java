@@ -307,6 +307,13 @@ final class WasmFunctionFormCompiler {
 			// A top-level (setq name (lambda ...)) the same way.
 			WasmExprCompiler.compileExpr(new am.ik.rontolisp.LispSymbol(name), ctx);
 		}
+		else if (undefined(name, ctx) && ctx.bindsRuntimeFunctionNames) {
+			// ... and in a program that can bind the name at run time, what GLOBAL_FENV
+			// holds when the reference runs, the same signal on a miss.
+			CompileWarnings.warn(null, "the function " + ClosRegistry.functionNameForReport(name)
+					+ " is undefined; looked up when the reference runs");
+			emitFenvRead(name, ctx);
+		}
 		else if (undefined(name, ctx)) {
 			// A name no definition has: the interpreter's late binding, as for a direct
 			// call (WasmFunctionCallCompiler) -- the undefined-function is signalled

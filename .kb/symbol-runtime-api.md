@@ -337,10 +337,24 @@ under `%setf-NAME` (`LispMacroExpander.setfFunctionName`), so the list maps onto
   both backends), and every writable defstruct slot gets its writer defun
   (`referencedStructWriterDefuns`). A place assembled out of computed pieces is the
   `RuntimeNameProducers` carve-out.
-- **Divergence kept**: a direct call or place of a name only a computed `(setf fdefinition)`
-  installs (`(setf (fdefinition (list 'setf 'n)) fn)` then `(setf (n x) v)`) is the compiled
-  call-time undefined-function, as for a symbol installed through a computed name; the quoted
-  spelling gets the setf-only forwarder.
+- **A name only the run time binds is looked up when it is used.** The quoted spelling gets the
+  setf-only forwarder; a computed one cannot be known at compile time, so where the program can
+  bind such a name -- `Ctx.bindsRuntimeFunctionNames` = `eval` || `load` ||
+  `LispMacroExpander.writesComputedFunctionName` (a `symbol-function` / `fdefinition` place whose
+  name is not a quoted symbol or `(setf n)` list; `fmakunbound` and quoted writes excluded) --
+  the three late-binding arms of a name no definition has read the namespace instead: the direct
+  call compiles to `runtimeFunctionNamespaceCall`, `(funcall (%fenv-function 'NAME) arg...)` (the
+  read, so a miss signals, ahead of the arguments, as the interpreter's direct call does), `#'NAME`
+  / literal `symbol-function` / `fdefinition` to the `%fenv-function` read, a literal
+  `(fboundp 'NAME)` to the computed probe, warning `looked up when the call runs` / `... the
+  reference runs` instead of `compiled as a ... error`. Every other program compiles as before.
+  Measured 2026-10-07 (SBCL 2.2.9 / interpreter answered; JVM, P1, component before): a direct
+  call, a place, `#'` and `fboundp` of a name installed through `(list 'setf p)`, `(intern s)` or
+  `eval`'s `defun` were the call-time undefined-function (a trap on wasm outside EH mode) / NIL.
+  Pinned by `SetfFunctionNameFixture.COMPUTED_INSTALL` (`aFunctionANameBuiltAtRunTimeInstallsIsCalledByName`
+  in the three backend suites), the gate by
+  `LispMacroExpanderTest#onlyAFunctionNamespaceWriteThroughAComputedNameCanBindANameTheCompileCannotSee`,
+  the warnings by `RontoLispCliStreamsTest#anUndefinedNameAProgramCanBindAtRunTimeWarnsThatItIsLookedUp`.
 - Measured 2026-10-07 (SBCL 2.2.9 / interpreter / JVM / P1 / component): before, `(fdefinition
   '(setf n))` was `FDEFINITION expects a symbol` / `ClassCastException` / trap / trap; a list
   built at run time, after that change, `(1 2)` / `(1 2)` / `ClassCastException` / `Not a

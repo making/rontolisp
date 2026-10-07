@@ -27210,6 +27210,30 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void aFunctionANameBuiltAtRunTimeInstallsIsCalledByName() throws Exception {
+		// The wasm twin of the JvmLispCompilerTest test of this name, on Preview 1 and
+		// the component.
+		String program = am.ik.rontolisp.SetfFunctionNameFixture.COMPUTED_INSTALL;
+		String expected = am.ik.rontolisp.SetfFunctionNameFixture.COMPUTED_INSTALL_EXPECTED;
+		assertThat(compileAndRunProgram(am.ik.rontolisp.cli.CompileFrontendAccess.corpus(program,
+				am.ik.rontolisp.reader.Features.WASM, true, false)))
+			.isEqualTo(expected);
+		assertThat(runComponentFrontendProgramWithDir(program)).isEqualTo(expected);
+	}
+
+	@Test
+	void aSetfFunctionDefinedBelowTheTopLevelIsAPlaceAndAFunction() throws Exception {
+		// The wasm twin of the JvmLispCompilerTest test of this name, on Preview 1 and
+		// the component.
+		String program = am.ik.rontolisp.SetfFunctionNameFixture.NESTED_DEFINITION;
+		String expected = am.ik.rontolisp.SetfFunctionNameFixture.NESTED_DEFINITION_EXPECTED;
+		assertThat(compileAndRunProgram(am.ik.rontolisp.cli.CompileFrontendAccess.corpus(program,
+				am.ik.rontolisp.reader.Features.WASM, true, false)))
+			.isEqualTo(expected);
+		assertThat(runComponentFrontendProgramWithDir(program)).isEqualTo(expected);
+	}
+
+	@Test
 	void anUndefinedSetfFunctionIsReportedAsTheNameTheProgramWrote() throws Exception {
 		// The wasm twin of the JvmLispCompilerTest test of this name, on Preview 1 and
 		// the component.

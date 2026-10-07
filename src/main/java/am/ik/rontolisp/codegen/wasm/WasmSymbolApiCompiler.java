@@ -277,6 +277,11 @@ final class WasmSymbolApiCompiler {
 			boolean bound = PackageRegistry.specialOperatorNames().contains(name)
 					|| PackageRegistry.clFunctionNames().contains(name) || LispNames.isCarCdrComposition(name)
 					|| ctx.userDefunNames.contains(name) || ctx.functions.containsKey(name);
+			if (!bound && ctx.bindsRuntimeFunctionNames) {
+				// No definition, but the run time can bind the name: the probe answers.
+				compileUnaryCall(cons, LispNames.FBOUNDP, WasmLispCompiler.FUNC_FBOUNDP, ctx);
+				return;
+			}
 			if (ctx.usesFmakunbound) {
 				emitTombstoneGuardedFold(name, bound, ctx);
 				return;

@@ -408,6 +408,11 @@ final class JvmSymbolApiCompiler {
 			boolean bound = PackageRegistry.specialOperatorNames().contains(name)
 					|| PackageRegistry.clFunctionNames().contains(name) || LispNames.isCarCdrComposition(name)
 					|| ctx.userDefunNames.contains(name) || ctx.functions.containsKey(name);
+			if (!bound && ctx.bindsRuntimeFunctionNames) {
+				// No definition, but the run time can bind the name: the probe answers.
+				compileComputedFboundp(parts.get(1), ctx, className);
+				return;
+			}
 			MethodCode.Label foldEnd = ctx.usesFmakunbound ? emitTombstoneGuard(name, ctx, className) : null;
 			if (bound) {
 				JvmEmitHelper.compileTrue(ctx);

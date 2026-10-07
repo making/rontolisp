@@ -105,4 +105,4 @@ The `name` may be a `(setf name)` list instead of a plain symbol. This defines a
 *mode* ; => :HTML5
 ```
 
-Only the `(setf name)` form is supported (a two-element list); `symbol-function`/`fboundp` of a `(setf ...)` name is not.
+Like any `defun`, a setf-function may be defined below the top level -- over a `let`, or inside a function body, defined when that runs. Only the `(setf name)` form is supported (a two-element list); [`fdefinition`](../functions/fdefinition.md), `fboundp` and `fmakunbound` take it, `symbol-function` does not (a symbol only, as in Common Lisp).

@@ -161,6 +161,13 @@ final class JvmFunctionFormCompiler {
 			// A top-level (setq name (lambda ...)) the same way.
 			JvmExprCompiler.compileExpr(new am.ik.rontolisp.LispSymbol(name), ctx, className);
 		}
+		else if (undefined(name, ctx) && ctx.bindsRuntimeFunctionNames) {
+			// ... and in a program that can bind the name at run time, what _fenv holds
+			// when the reference runs, the same signal on a miss.
+			CompileWarnings.warn(null, "the function " + ClosRegistry.functionNameForReport(name)
+					+ " is undefined; looked up when the reference runs");
+			JvmSymbolApiCompiler.compileFenvFunction(name, ctx, className);
+		}
 		else if (undefined(name, ctx)) {
 			// A name no definition has: the interpreter's late binding, as for a direct
 			// call (JvmFunctionCallCompiler) -- the undefined-function is signalled where

@@ -143,7 +143,13 @@ as `setfFunctionName(name)` = `%setf-<name>`, NOT in the ordinary function names
 evaluated before it where that is observable ([argument-evaluation-order.md](argument-evaluation-order.md)).
 `#'(setf name)` resolves in `evalFunction` and both `Jvm/WasmFunctionFormCompiler`s (`setfFunctionPlaceName`); registration
 is `evalDefun` / `expandTopLevelDefinitions`, the latter also rewriting the defun name so Pass 1
-collects it ordinarily. `fdefinition`/`fboundp`/`fmakunbound` of a `(setf ...)` name:
+collects it ordinarily. A `(defun (setf name) ...)` BELOW the top level (over a `let`, in a
+function body) is renamed and registered the same way first thing in `expandTopLevelDefinitions`
+(`renameNestedSetfFunctionDefuns`), so it lowers like any nested `defun` (a global holding the
+closure, `.kb/core-representation.md`); with the list as its name it reached that lowering and
+failed a cast (`LispCons cannot be cast to LispSymbol`) on the JVM, P1 and the component, measured
+2026-10-07. Pinned by `SetfFunctionNameFixture.NESTED_DEFINITION`
+(`aSetfFunctionDefinedBelowTheTopLevelIsAPlaceAndAFunction` in the three backend suites). `fdefinition`/`fboundp`/`fmakunbound` of a `(setf ...)` name:
 [symbol-runtime-api.md](symbol-runtime-api.md).
 
 **A place nothing registers is the `(setf name)` call, late-bound** (CL): the default branch's

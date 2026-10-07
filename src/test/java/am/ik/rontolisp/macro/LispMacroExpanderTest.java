@@ -100,6 +100,23 @@ class LispMacroExpanderTest {
 	}
 
 	@Test
+	void onlyAFunctionNamespaceWriteThroughAComputedNameCanBindANameTheCompileCannotSee() {
+		// The gate that makes a call of an undefined name read the function namespace:
+		// a quoted symbol or (setf name) list has its forwarder defun instead.
+		for (String source : List.of("(setf (symbol-function (intern \"F\")) #'car)",
+				"(defun f (n g) (setf (fdefinition n) g))", "(setf (fdefinition (list 'setf 'p)) #'car)",
+				"(let ((x 1)) (setf x 2 (symbol-function x) #'car))")) {
+			assertThat(LispMacroExpander.writesComputedFunctionName(LispReader.readAllFromString(source))).as(source)
+				.isTrue();
+		}
+		for (String source : List.of("(setf (symbol-function 'f) #'car)", "(setf (fdefinition '(setf p)) #'car)",
+				"(print '(setf (fdefinition x) y))", "(fmakunbound (intern \"F\"))", "(setf (car x) 1)")) {
+			assertThat(LispMacroExpander.writesComputedFunctionName(LispReader.readAllFromString(source))).as(source)
+				.isFalse();
+		}
+	}
+
+	@Test
 	void anOperatorPositionRestartFormStillFlipsRestartMode() {
 		assertThat(LispMacroExpander.usesRestartSystem(LispReader.readAllFromString("(continue)"))).isTrue();
 		assertThat(LispMacroExpander.usesRestartSystem(LispReader.readAllFromString("(when t (abort c))"))).isTrue();

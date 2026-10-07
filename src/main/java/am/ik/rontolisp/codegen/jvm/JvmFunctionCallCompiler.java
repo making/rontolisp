@@ -132,6 +132,15 @@ final class JvmFunctionCallCompiler {
 				JvmExprCompiler.compileExpr(LispMacroExpander.expandCallThroughVariable(cons), ctx, className);
 				return;
 			}
+			if (ctx.bindsRuntimeFunctionNames) {
+				// A program that can bind the name at run time (eval's defun, load, a
+				// write through a computed name): the call applies what _fenv holds
+				// when it runs, and a miss is the undefined-function below.
+				CompileWarnings.warn(cons, "the function " + ClosRegistry.functionNameForReport(name)
+						+ " is undefined; looked up when the call runs");
+				JvmExprCompiler.compileExpr(LispMacroExpander.runtimeFunctionNamespaceCall(name, cons), ctx, className);
+				return;
+			}
 			// An undefined function: keep the interpreter's late binding -- signal
 			// when the call is EXECUTED, so a library whose error path references a
 			// function rontolisp does not provide stays compilable.

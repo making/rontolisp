@@ -899,6 +899,37 @@ class RontoLispCliStreamsTest {
 	}
 
 	@Test
+	void anUndefinedNameAProgramCanBindAtRunTimeWarnsThatItIsLookedUp() throws Exception {
+		// A program writing the function namespace through a computed name: a call or
+		// #' of a name no definition has reads the namespace when it runs, and says so.
+		Path file = this.tempDir.resolve("warn.lisp");
+		Files.writeString(file, """
+				(defun install (name fn) (setf (fdefinition name) fn))
+				(defun ref () #'no-such-ref)
+				(defun call (x) (no-such-call x))
+				(print (list (ignore-errors (ref)) (ignore-errors (call 1))))
+				""");
+		for (String output : new String[] { "Warn.class", "warn.wasm" }) {
+			PrintStream savedErr = System.err;
+			ByteArrayOutputStream captured = new ByteArrayOutputStream();
+			try {
+				System.setErr(new PrintStream(captured, true, StandardCharsets.UTF_8));
+				runCli("", file.toString(), "-o", this.tempDir.resolve(output).toString());
+			}
+			finally {
+				System.setErr(savedErr);
+			}
+			assertThat(captured.toString(StandardCharsets.UTF_8)
+				.lines()
+				.filter(line -> line.contains("warning: "))
+				.map(line -> line.substring(line.lastIndexOf('/') + 1))).as(output)
+				.containsExactly(
+						"warn.lisp:2:15: warning: the function NO-SUCH-REF is undefined; looked up when the reference runs",
+						"warn.lisp:3:17: warning: the function NO-SUCH-CALL is undefined; looked up when the call runs");
+		}
+	}
+
+	@Test
 	void anUndefinedFunctionWarnsExactlyOncePerCallSite() throws Exception {
 		// The JVM backend re-runs the whole compile when a runtime-helper gate was
 		// under-predicted, and the discarded attempt used to have printed its warnings

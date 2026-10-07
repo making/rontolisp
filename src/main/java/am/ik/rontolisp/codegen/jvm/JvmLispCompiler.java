@@ -1650,6 +1650,12 @@ public final class JvmLispCompiler implements LispCompiler {
 		boolean usesEval = writesFunctionNamespace || boundpReadsMirror
 				|| programUsesSymbol(program, LispNames.SYMBOL_VALUE) || programUsesSymbol(program, LispNames.SET)
 				|| programUsesSymbol(program, LispNames.FBOUNDP);
+		// Of those writers, the ones that can bind a name no definition in the program
+		// has: a call of such a name reads _fenv instead of compiling to the
+		// undefined-function signal alone (fmakunbound only retires, and a quoted
+		// (setf (symbol-function 'n) ...) name has its forwarder defun).
+		boolean bindsRuntimeFunctionNames = programUsesEval(program) || usesLoad
+				|| LispMacroExpander.writesComputedFunctionName(program);
 		// The APPLY TIER: _apply and the spread dispatcher it hands the argument list
 		// to, without the interpreter (_eval/_store/_envLookup, the _genv mirror, a
 		// dispatcher for every arity). A runtime apply needs no more than that -- an
@@ -2587,6 +2593,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			.warnedClRedefinitions(new HashSet<>())
 			.usesFmakunbound(programUsesSymbol(program, LispNames.FMAKUNBOUND))
 			.fenvForwarders(Set.copyOf(fenvForwarders))
+			.bindsRuntimeFunctionNames(bindsRuntimeFunctionNames)
 			.usesRuntimePackages(packageResolver.runtimePackagesMutable())
 			.packageTable(packageResolver.runtimePackageTable())
 			.packageUseTable(packageResolver.runtimePackageUseTable())
@@ -7486,6 +7493,15 @@ public final class JvmLispCompiler implements LispCompiler {
 		Set<String> fenvForwarders = Set.of();
 
 		/**
+		 * Whether the program can bind a function name the compile cannot see -- a
+		 * runtime {@code eval}'s {@code defun}, {@code load}, or a write through a
+		 * computed name ({@link LispMacroExpander#writesComputedFunctionName}). When it
+		 * can, a call of a name no definition has, {@code #'name} and a literal
+		 * {@code fboundp} of it read {@code _fenv} when they run.
+		 */
+		boolean bindsRuntimeFunctionNames = false;
+
+		/**
 		 * Whether the program can create, delete or rename packages at run time (a
 		 * {@code make-package} / {@code delete-package} / {@code rename-package}
 		 * reference outside quoted data). When it does, the package lowerings consult the
@@ -7826,6 +7842,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			this.warnedClRedefinitions = builder.warnedClRedefinitions;
 			this.usesFmakunbound = builder.usesFmakunbound;
 			this.fenvForwarders = builder.fenvForwarders;
+			this.bindsRuntimeFunctionNames = builder.bindsRuntimeFunctionNames;
 			this.usesRuntimePackages = builder.usesRuntimePackages;
 			this.packageTable = builder.packageTable;
 			this.packageUseTable = builder.packageUseTable;
@@ -8383,6 +8400,8 @@ public final class JvmLispCompiler implements LispCompiler {
 			private boolean usesFmakunbound = false;
 
 			private Set<String> fenvForwarders = Set.of();
+
+			private boolean bindsRuntimeFunctionNames = false;
 
 			private boolean usesRuntimePackages = false;
 
@@ -8965,6 +8984,11 @@ public final class JvmLispCompiler implements LispCompiler {
 
 			Builder fenvForwarders(Set<String> fenvForwarders) {
 				this.fenvForwarders = fenvForwarders;
+				return this;
+			}
+
+			Builder bindsRuntimeFunctionNames(boolean bindsRuntimeFunctionNames) {
+				this.bindsRuntimeFunctionNames = bindsRuntimeFunctionNames;
 				return this;
 			}
 

@@ -18,7 +18,11 @@ package am.ik.rontolisp;
  * {@code (setf name)} function when the form runs. {@link #STRUCT_WRITER} takes the
  * {@code (setf name)} function of {@code defstruct} slot accessors, which no backend
  * defined. {@link #EVALUATION_ORDER} traces the order a setf-function place evaluates its
- * arguments and its value in, which every backend reversed (the value first). Shared by
+ * arguments and its value in, which every backend reversed (the value first).
+ * {@link #COMPUTED_INSTALL} calls, as a place and with {@code #'}, functions only a name
+ * built at run time installs, which the compiled backends compiled as undefined.
+ * {@link #NESTED_DEFINITION} defines {@code (setf name)} functions below the top level,
+ * which the compiled backends failed to compile ({@code ClassCastException}). Shared by
  * the backend suites, so every backend is held to one expected text.
  */
 public final class SetfFunctionNameFixture {
@@ -212,5 +216,77 @@ public final class SetfFunctionNameFixture {
 			"((3 1 2) \"ab\")", "(3 1)", "(2 3)", "(3 1)", "(3 \"cd\")", "(5 5 0)", "(15 \"ef\")", "((1) \"gh\")",
 			"((:G 2 1) \"ij\")", "((:LATE 5 7) \"kl\")", "((:DYN 2 1) \"vw\")", "((SETF SFO-NOPE) \"mn\")",
 			"((SETF SFO-NOPE) \"o\")", "(1 \"pqr\")", "(2 \"stu\")");
+
+	/**
+	 * Functions installed through a name built at run time -- a {@code (setf name)} list,
+	 * an interned symbol, {@code eval}'s {@code defun} -- called directly, as a place,
+	 * with {@code #'}, from a function compiled before the install, and probed with a
+	 * literal {@code fboundp}; a name nothing installs, or one {@code fmakunbound}
+	 * retired, still signals {@code undefined-function}.
+	 */
+	public static final String COMPUTED_INSTALL = """
+			(defun sfi-name (p) (list 'setf p))
+			(defun sfi-sym (s) (intern s))
+			(defun sfi-late (x) (sfi-h x))
+			(setf (fdefinition (sfi-name 'sfi-n)) (lambda (v x) (list :n v x)))
+			(print (setf (sfi-n 9) 8))
+			(print (funcall #'(setf sfi-n) 1 2))
+			(print (funcall (lambda (k) (setf (sfi-n k) (* k 10))) 3))
+			(print (not (fboundp '(setf sfi-n))))
+			(setf (fdefinition (sfi-sym "SFI-F")) (lambda (x) (* x 2)))
+			(print (list (sfi-f 4) (funcall #'sfi-f 5) (mapcar #'sfi-f '(1 2)) (not (fboundp 'sfi-f))))
+			(print (funcall (lambda (y) (sfi-f y)) 6))
+			(setf (symbol-function (sfi-sym "SFI-G")) (lambda (&rest xs) (cons :g xs)))
+			(print (list (sfi-g 1 2 3) (not (symbol-function 'sfi-g))))
+			(setf (fdefinition (sfi-sym "SFI-H")) (lambda (x) (list :h x)))
+			(print (sfi-late 1))
+			(eval '(defun sfi-e (x) (+ x 1)))
+			(print (list (sfi-e 1) (funcall #'sfi-e 2)))
+			(print (list (fboundp 'sfi-nope)
+			             (handler-case (sfi-nope 1) (undefined-function (c) (cell-error-name c)))
+			             (handler-case (setf (sfi-nope 1) 2) (undefined-function (c) (cell-error-name c)))
+			             (handler-case #'sfi-nope (undefined-function (c) (cell-error-name c)))))
+			(fmakunbound (sfi-sym "SFI-F"))
+			(print (list (fboundp 'sfi-f) (handler-case (sfi-f 1) (undefined-function (c) (cell-error-name c)))))
+			(setf (fdefinition (sfi-sym "SFI-F")) (lambda (x) (* x 3)))
+			(print (sfi-f 4))
+			""";
+
+	/** What {@link #COMPUTED_INSTALL} prints, one value per line (SBCL's). */
+	public static final String COMPUTED_INSTALL_EXPECTED = String.join("\n", "(:N 8 9)", "(:N 1 2)", "(:N 30 3)", "NIL",
+			"(8 10 (2 4) NIL)", "12", "((:G 1 2 3) NIL)", "(:H 1)", "(2 3)", "(NIL SFI-NOPE (SETF SFI-NOPE) SFI-NOPE)",
+			"(NIL SFI-F)", "12");
+
+	/**
+	 * {@code (setf name)} functions defined below the top level: a {@code defun} over a
+	 * {@code let}'s variable, one a function body defines (and redefines), a
+	 * {@code defmethod} over a {@code let}, and a reader and its writer sharing one
+	 * binding -- used as places, through {@code #'}, {@code fdefinition} and
+	 * {@code incf}.
+	 */
+	public static final String NESTED_DEFINITION = """
+			(let ((k 1))
+			  (defun (setf sfd-n) (v x) (list v x k)))
+			(print (list (setf (sfd-n 1) 2) (funcall #'(setf sfd-n) 3 4) (funcall (fdefinition '(setf sfd-n)) 5 6)))
+			(defun sfd-def (k) (defun (setf sfd-m) (v x) (list v x k)))
+			(sfd-def :a)
+			(print (list (funcall #'(setf sfd-m) 1 2) (setf (sfd-m 3) 4)))
+			(sfd-def :b)
+			(print (setf (sfd-m 5) 6))
+			(defun sfd-put (x v) (setf (sfd-m x) v))
+			(print (sfd-put 7 8))
+			(let ((n 0))
+			  (defmethod (setf sfd-g) (v (x integer)) (incf n) (list :g v x n)))
+			(print (list (setf (sfd-g 1) 2) (funcall #'(setf sfd-g) 3 4)))
+			(let ((k 5))
+			  (defun sfd-p (x) (+ x k))
+			  (defun (setf sfd-p) (v x) (setq k v) (list :p v x)))
+			(print (list (sfd-p 1) (setf (sfd-p 2) 3) (sfd-p 1)))
+			(print (incf (sfd-p 1) 10))
+			""";
+
+	/** What {@link #NESTED_DEFINITION} prints, one value per line (SBCL's). */
+	public static final String NESTED_DEFINITION_EXPECTED = String.join("\n", "((2 1 1) (3 4 1) (5 6 1))",
+			"((1 2 :A) (4 3 :A))", "(6 5 :B)", "(8 7 :B)", "((:G 2 1 1) (:G 3 4 2))", "(6 (:P 3 2) 4)", "(:P 14 1)");
 
 }

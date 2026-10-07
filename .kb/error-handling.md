@@ -1116,7 +1116,9 @@ message at the catching end** -- except for the failures the backends report as 
 - **WASM**: the pad is unchanged, and correctly so -- only `$lisp-cond` throws land in it.
 - **Undefined functions keep the call-time stub contract**: a call to a name with no definition
   compiles to `The function X is undefined` at call time plus a compile-time warning, matching the
-  interpreter's late binding. **The stub constructs no instance itself**: it is produced during
+  interpreter's late binding. In a program that can bind a name at run time (`eval`, `load`, a
+  write through a computed name) the call reads the function namespace first
+  (`.kb/symbol-runtime-api.md`, "A name only the run time binds is looked up when it is used"). **The stub constructs no instance itself**: it is produced during
   BODY compilation, after `mayCreateInstances` fixed whether the artifact has an instance
   representation and after `usedLayoutTags` chose which layouts to bake (`%OBJ-NEW reached the
   compiler with no instance representation`). It reaches the throw every other undefined-function

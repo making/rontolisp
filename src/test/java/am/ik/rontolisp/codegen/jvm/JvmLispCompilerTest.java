@@ -5874,6 +5874,22 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void aFunctionANameBuiltAtRunTimeInstallsIsCalledByName() throws Exception {
+		// Interpreter parity (the LispEvaluatorTest twin): a direct call, a place and #'
+		// of such a name compiled as undefined.
+		assertThat(compileAndRun(am.ik.rontolisp.SetfFunctionNameFixture.COMPUTED_INSTALL))
+			.isEqualTo(am.ik.rontolisp.SetfFunctionNameFixture.COMPUTED_INSTALL_EXPECTED);
+	}
+
+	@Test
+	void aSetfFunctionDefinedBelowTheTopLevelIsAPlaceAndAFunction() throws Exception {
+		// Interpreter parity (the LispEvaluatorTest twin): the nested definition reached
+		// the defun lowering with its (setf name) list and failed a cast.
+		assertThat(compileAndRun(am.ik.rontolisp.SetfFunctionNameFixture.NESTED_DEFINITION))
+			.isEqualTo(am.ik.rontolisp.SetfFunctionNameFixture.NESTED_DEFINITION_EXPECTED);
+	}
+
+	@Test
 	void anUndefinedSetfFunctionIsReportedAsTheNameTheProgramWrote() throws Exception {
 		// Interpreter parity (the LispEvaluatorTest twin): the call's raw throw spells
 		// (setf name) and the landing pad reads the list back as the name.
