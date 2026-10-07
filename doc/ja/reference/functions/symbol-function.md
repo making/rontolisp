@@ -13,7 +13,7 @@
   (funcall fn '(1 2 3))) ; => 1
 ```
 
-`symbol-function` は `setf` の place でもあります: `(setf (symbol-function 'name) fn)` は `fn` をそのシンボルのグローバルな関数定義としてインストールします — 既存関数の別名の定義や、置き換えに使えます。コンパイラではコンパイラが直接束縛済みの呼び出し箇所は元の関数のまま呼ばれます（[`fmakunbound`](fmakunbound.md) と同じ乖離）。この方法で**のみ**束縛された名前は完全に遅延束縛され、代入前に呼び出すと `The function NAME is undefined` をシグナルします。
+`symbol-function` は `setf` の place でもあります: `(setf (symbol-function 'name) fn)` は `fn` をそのシンボルのグローバルな関数定義としてインストールします — 既存関数の別名の定義や、置き換えに使えます。コンパイラではコンパイラが直接束縛済みの呼び出し箇所は元の関数のまま呼ばれます（[`fmakunbound`](fmakunbound.md) と同じ乖離）。この方法で**のみ**束縛された名前は完全に遅延束縛されます。代入が実行される前は、呼び出し、`#'name`、`symbol-function`、`fdefinition` はその名前を持つ `undefined-function` を通知し、`fboundp` は偽を返します（全バックエンド共通）。代入後の `#'name` はインストールされた関数そのものです。
 
 ```lisp
 (defun double (x) (* x 2))

@@ -266,6 +266,12 @@ final class WasmSymbolApiCompiler {
 		if (parts.get(1) instanceof LispCons quoteForm && quoteForm.car() instanceof LispSymbol op
 				&& LispNames.QUOTE.equals(op.name()) && ((LispCons) quoteForm.cdr()).car() instanceof LispSymbol sym) {
 			String name = sym.name();
+			if (ctx.fenvForwarders.contains(name)) {
+				// Bound once the setf ran: the forwarder defun is no definition, so the
+				// run-time probe answers (it misses the registry).
+				compileUnaryCall(cons, LispNames.FBOUNDP, WasmLispCompiler.FUNC_FBOUNDP, ctx);
+				return;
+			}
 			boolean bound = PackageRegistry.specialOperatorNames().contains(name)
 					|| PackageRegistry.clFunctionNames().contains(name) || LispNames.isCarCdrComposition(name)
 					|| ctx.userDefunNames.contains(name) || ctx.functions.containsKey(name);
@@ -312,12 +318,17 @@ final class WasmSymbolApiCompiler {
 	}
 
 	/**
-	 * {@code (%fenv-function name)}: the GLOBAL_FENV-only function read of the
-	 * setf-only-alias forwarder defuns
-	 * ({@link WasmSymbolApiRuntimeBuilder#buildFenvFunction}); a miss traps.
+	 * {@code (%fenv-function 'name)}: the GLOBAL_FENV-only function read of the
+	 * setf-only-alias forwarder defuns ({@link WasmFunctionFormCompiler#emitFenvRead}); a
+	 * miss signals the undefined-function a direct call of the name would.
 	 */
 	static void compileFenvFunction(LispCons cons, WasmLispCompiler.Ctx ctx) {
-		compileUnaryCall(cons, LispNames.FENV_FUNCTION_INTERNAL, WasmLispCompiler.FUNC_FENV_FUNCTION, ctx);
+		List<LispVal> parts = requireArgs(cons, LispNames.FENV_FUNCTION_INTERNAL);
+		if (!(parts.get(1) instanceof LispCons quoteForm && quoteForm.car() instanceof LispSymbol op
+				&& LispNames.QUOTE.equals(op.name()) && ((LispCons) quoteForm.cdr()).car() instanceof LispSymbol sym)) {
+			throw new UnsupportedOperationException(LispNames.FENV_FUNCTION_INTERNAL + " expects a quoted name");
+		}
+		WasmFunctionFormCompiler.emitFenvRead(sym.name(), ctx);
 	}
 
 	/**

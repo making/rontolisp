@@ -982,6 +982,9 @@ public final class JvmLispCompiler implements LispCompiler {
 				packageResolver::spellsAsExternal, this.dynamic, SignalMessages.RENDERED,
 				this.optimize.eliminatesDeadCode() && !this.dynamic
 						? new am.ik.rontolisp.compiler.GenericDispatchNarrowing() : null);
+		// The (setf (symbol-function 'n) ...) forwarders: no definition of their name, so
+		// out of the registry, and #'n / fboundp read the runtime function namespace.
+		Set<String> fenvForwarders = LispMacroExpander.symbolFunctionForwarderNames(program);
 		// The read/compile-time package table for the runtime package API (see
 		// .kb/packages.md): injected after package resolution, from the resolver's
 		// final registry, only when the program can need it at run time.
@@ -1889,8 +1892,11 @@ public final class JvmLispCompiler implements LispCompiler {
 		// The shared name dispatches injected below are called only from the sites the
 		// compiler lowers onto them, never through a designator: no dispatcher case
 		// (registryFuncIds), so a program whose names resolve at run time does not
-		// keep one alive that no reachable site calls.
-		Set<String> callOnlyRuntimes = new HashSet<>();
+		// keep one alive that no reachable site calls. A symbol-function forwarder is
+		// called only from direct call sites the same way: a designator of its name
+		// resolves through _fenv, and a registry row would answer the forwarder before
+		// the setf ran.
+		Set<String> callOnlyRuntimes = new HashSet<>(fenvForwarders);
 		boolean usesSet = LispMacroExpander.programUsesSet(program) || LispMacroExpander.programUsesSet(injectedForms);
 		// A computed symbol-value reads through the shared accessor injected with the
 		// global set below (LispMacroExpander.dynamicFirstSymbolValue).
@@ -2559,6 +2565,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			.builtinShapedDefuns(builtinShapedDefuns)
 			.warnedClRedefinitions(new HashSet<>())
 			.usesFmakunbound(programUsesSymbol(program, LispNames.FMAKUNBOUND))
+			.fenvForwarders(Set.copyOf(fenvForwarders))
 			.usesRuntimePackages(packageResolver.runtimePackagesMutable())
 			.packageTable(packageResolver.runtimePackageTable())
 			.packageUseTable(packageResolver.runtimePackageUseTable())
@@ -7435,6 +7442,13 @@ public final class JvmLispCompiler implements LispCompiler {
 		boolean usesFmakunbound = false;
 
 		/**
+		 * The names with a {@code (setf (symbol-function 'n) ...)} forwarder defun
+		 * ({@link LispMacroExpander#symbolFunctionForwarderNames}): {@code #'n} and a
+		 * literal {@code fboundp} read {@code _fenv} for them instead of the forwarder.
+		 */
+		Set<String> fenvForwarders = Set.of();
+
+		/**
 		 * Whether the program can create, delete or rename packages at run time (a
 		 * {@code make-package} / {@code delete-package} / {@code rename-package}
 		 * reference outside quoted data). When it does, the package lowerings consult the
@@ -7774,6 +7788,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			this.builtinShapedDefuns = builder.builtinShapedDefuns;
 			this.warnedClRedefinitions = builder.warnedClRedefinitions;
 			this.usesFmakunbound = builder.usesFmakunbound;
+			this.fenvForwarders = builder.fenvForwarders;
 			this.usesRuntimePackages = builder.usesRuntimePackages;
 			this.packageTable = builder.packageTable;
 			this.packageUseTable = builder.packageUseTable;
@@ -8329,6 +8344,8 @@ public final class JvmLispCompiler implements LispCompiler {
 			private Set<String> warnedClRedefinitions = new HashSet<>();
 
 			private boolean usesFmakunbound = false;
+
+			private Set<String> fenvForwarders = Set.of();
 
 			private boolean usesRuntimePackages = false;
 
@@ -8906,6 +8923,11 @@ public final class JvmLispCompiler implements LispCompiler {
 
 			Builder usesFmakunbound(boolean usesFmakunbound) {
 				this.usesFmakunbound = usesFmakunbound;
+				return this;
+			}
+
+			Builder fenvForwarders(Set<String> fenvForwarders) {
+				this.fenvForwarders = fenvForwarders;
 				return this;
 			}
 

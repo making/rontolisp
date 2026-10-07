@@ -398,6 +398,12 @@ final class JvmSymbolApiCompiler {
 		if (parts.get(1) instanceof LispCons quoteForm && quoteForm.car() instanceof LispSymbol op
 				&& LispNames.QUOTE.equals(op.name()) && ((LispCons) quoteForm.cdr()).car() instanceof LispSymbol sym) {
 			String name = sym.name();
+			if (ctx.fenvForwarders.contains(name)) {
+				// Bound once the setf ran: the forwarder defun is no definition, so the
+				// run-time probe below answers (it misses the registry).
+				compileComputedFboundp(parts.get(1), ctx, className);
+				return;
+			}
 			boolean bound = PackageRegistry.specialOperatorNames().contains(name)
 					|| PackageRegistry.clFunctionNames().contains(name) || LispNames.isCarCdrComposition(name)
 					|| ctx.userDefunNames.contains(name) || ctx.functions.containsKey(name);
@@ -413,7 +419,11 @@ final class JvmSymbolApiCompiler {
 			}
 			return;
 		}
-		int tempSlot = compileArgToTemp(parts.get(1), ctx, className);
+		compileComputedFboundp(parts.get(1), ctx, className);
+	}
+
+	private static void compileComputedFboundp(LispVal arg, JvmLispCompiler.Ctx ctx, String className) {
+		int tempSlot = compileArgToTemp(arg, ctx, className);
 		// nil -> nil
 		ctx.body.aload(tempSlot);
 		MethodCode.Label ifNotNil = ctx.body.newLabel();
@@ -723,7 +733,21 @@ final class JvmSymbolApiCompiler {
 	 */
 	static void compileFenvFunction(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
 		List<LispVal> parts = requireArgs(cons, 1, LispNames.FENV_FUNCTION_INTERNAL);
-		int nameSlot = compileArgToTemp(parts.get(1), ctx, className);
+		if (!(parts.get(1) instanceof LispCons quoteForm && quoteForm.car() instanceof LispSymbol op
+				&& LispNames.QUOTE.equals(op.name()) && ((LispCons) quoteForm.cdr()).car() instanceof LispSymbol sym)) {
+			throw new UnsupportedOperationException(LispNames.FENV_FUNCTION_INTERNAL + " expects a quoted name");
+		}
+		compileFenvFunction(sym.name(), ctx, className);
+	}
+
+	/**
+	 * The {@code _fenv} binding value of {@code name}, or the undefined-function the
+	 * funcall dispatchers' miss arm throws: {@code (%fenv-function 'name)}, and
+	 * {@code #'name} of a symbol-function forwarder's name.
+	 */
+	static void compileFenvFunction(String name, JvmLispCompiler.Ctx ctx, String className) {
+		int nameSlot = compileArgToTemp(new LispCons(new LispSymbol(LispNames.QUOTE),
+				new LispCons(new LispSymbol(name), am.ik.rontolisp.LispNil.INSTANCE)), ctx, className);
 		ctx.body.aload(nameSlot).getstatic(evalField(ctx, className, "_fenv"));
 		ctx.body.invokestatic(envLookupRef(ctx, className)).dup();
 		MethodCode.Label noBinding = ctx.body.newLabel();

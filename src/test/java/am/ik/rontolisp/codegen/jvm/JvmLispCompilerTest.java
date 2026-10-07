@@ -20740,6 +20740,16 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void aNameOnlySetfSymbolFunctionBindsIsUndefinedUntilTheSetfRuns() throws Exception {
+		// The JVM twin of
+		// LispEvaluatorTest#aNameOnlySetfSymbolFunctionBindsIsUndefinedUntilTheSetfRuns:
+		// #'name
+		// reads _fenv instead of answering the forwarder defun.
+		assertThat(compileAndRun(am.ik.rontolisp.SetfSymbolFunctionReferenceFixture.SOURCE))
+			.isEqualTo(am.ik.rontolisp.SetfSymbolFunctionReferenceFixture.EXPECTED);
+	}
+
+	@Test
 	void theFunctionNamespaceOfARetiredNameIsUnbound() throws Exception {
 		// The JVM twin of
 		// LispEvaluatorTest#theFunctionNamespaceOfARetiredNameIsUnbound.

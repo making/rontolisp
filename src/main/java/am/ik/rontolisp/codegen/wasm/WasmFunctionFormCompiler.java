@@ -212,7 +212,69 @@ final class WasmFunctionFormCompiler {
 		ctx.writer.write(Instruction.UNREACHABLE);
 	}
 
+	/**
+	 * The {@code GLOBAL_FENV} binding value of {@code name}, or -- with no binding, or
+	 * {@code fmakunbound}'s tombstone -- the undefined-function a direct call of an
+	 * undefined name signals
+	 * ({@link WasmFunctionCallCompiler#emitUndefinedFunctionSignal}):
+	 * {@code (%fenv-function 'name)}, the body of a symbol-function forwarder, and
+	 * {@code #'name} of a forwarder's name. The compiled-function registry is not probed:
+	 * it would answer the forwarder itself.
+	 */
+	static void emitFenvRead(String name, WasmLispCompiler.Ctx ctx) {
+		WasmExprCompiler.compileExpr(
+				new LispCons(new LispSymbol(LispNames.QUOTE), new LispCons(new LispSymbol(name), LispNil.INSTANCE)),
+				ctx);
+		int symTemp = ctx.allocTemp();
+		int valueTemp = ctx.allocTemp();
+		ctx.writer.write(Instruction.SET_LOCAL);
+		ctx.writer.writeUnsignedLeb128(symTemp);
+		emitStringOffset(ctx, symTemp);
+		ctx.writer.write(Instruction.GET_GLOBAL);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.GLOBAL_FENV);
+		ctx.writer.write(Instruction.CALL);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_ENV_LOOKUP);
+		ctx.writer.write(Instruction.SET_LOCAL);
+		ctx.writer.writeUnsignedLeb128(valueTemp);
+		// value = binding ? binding.cdr : null -- a tombstone's cdr is null as well
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writer.writeUnsignedLeb128(valueTemp);
+		ctx.writer.write(Instruction.REF_IS_NULL);
+		ctx.writer.write(Instruction.IF);
+		ctx.writer.writeRefType(true, Type.EQ.code());
+		ctx.writer.write(Instruction.REF_NULL);
+		ctx.writer.writeHeapType(Type.EQ.code());
+		ctx.writer.write(Instruction.ELSE);
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writer.writeUnsignedLeb128(valueTemp);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_CONS);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
+		ctx.writer.writeUnsignedLeb128(1);
+		ctx.writer.write(Instruction.END);
+		ctx.writer.write(Instruction.SET_LOCAL);
+		ctx.writer.writeUnsignedLeb128(valueTemp);
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writer.writeUnsignedLeb128(valueTemp);
+		ctx.writer.write(Instruction.REF_IS_NULL);
+		ctx.writer.write(Instruction.IF);
+		ctx.writer.writeRefType(true, Type.EQ.code());
+		WasmFunctionCallCompiler.emitUndefinedFunctionSignal(name, ctx);
+		ctx.writer.write(Instruction.ELSE);
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writer.writeUnsignedLeb128(valueTemp);
+		ctx.writer.write(Instruction.END);
+	}
+
 	static void compileNamed(String name, WasmLispCompiler.Ctx ctx) {
+		if (ctx.fenvForwarders.contains(name)) {
+			// A name only (setf (symbol-function 'name) ...) binds: its value is what the
+			// setf installed, read when the reference runs -- an undefined-function
+			// before that -- never the forwarder defun.
+			emitFenvRead(name, ctx);
+			return;
+		}
 		if (!ctx.functions.containsKey(name) && LispNames.isCarCdrComposition(name)) {
 			// Synthesize (lambda (x) (cadr x)) so car/cdr compositions are first-class
 			WasmLambdaCompiler.compileValue(carCdrLambda(name), ctx);

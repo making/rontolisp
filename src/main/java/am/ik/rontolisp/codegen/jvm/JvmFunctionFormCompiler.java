@@ -123,6 +123,13 @@ final class JvmFunctionFormCompiler {
 	}
 
 	static void compileNamed(String name, JvmLispCompiler.Ctx ctx, String className) {
+		if (ctx.fenvForwarders.contains(name)) {
+			// A name only (setf (symbol-function 'name) ...) binds: its value is what the
+			// setf installed, read from _fenv when the reference runs -- an
+			// undefined-function before that -- never the forwarder defun.
+			JvmSymbolApiCompiler.compileFenvFunction(name, ctx, className);
+			return;
+		}
 		if (!ctx.functions.containsKey(name) && LispNames.isCarCdrComposition(name)) {
 			// Synthesize (lambda (x) (cadr x)) so car/cdr compositions are first-class
 			JvmLambdaCompiler.compileValue(carCdrLambda(name), ctx, className);

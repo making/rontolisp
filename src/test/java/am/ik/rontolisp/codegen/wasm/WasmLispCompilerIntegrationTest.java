@@ -24617,6 +24617,20 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void aNameOnlySetfSymbolFunctionBindsIsUndefinedUntilTheSetfRuns() throws Exception {
+		// The wasm twin of
+		// LispEvaluatorTest#aNameOnlySetfSymbolFunctionBindsIsUndefinedUntilTheSetfRuns,
+		// on
+		// Preview 1 and the component: the forwarder's GLOBAL_FENV miss signals instead
+		// of
+		// trapping.
+		assertThat(compileAndRunFrontEndWithDir(am.ik.rontolisp.SetfSymbolFunctionReferenceFixture.SOURCE, false))
+			.isEqualTo(am.ik.rontolisp.SetfSymbolFunctionReferenceFixture.EXPECTED);
+		assertThat(compileAndRunFrontEndWithDir(am.ik.rontolisp.SetfSymbolFunctionReferenceFixture.SOURCE, true))
+			.isEqualTo(am.ik.rontolisp.SetfSymbolFunctionReferenceFixture.EXPECTED);
+	}
+
+	@Test
 	void theFunctionNamespaceOfARetiredNameIsUnbound() throws Exception {
 		// The wasm twin of
 		// LispEvaluatorTest#theFunctionNamespaceOfARetiredNameIsUnbound, on

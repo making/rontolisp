@@ -27812,10 +27812,52 @@ public final class LispMacroExpander {
 		}
 	}
 
+	/**
+	 * The names {@link #expandTopLevelDefinitions} gave a {@code (setf (symbol-function
+	 * 'n) ...)} forwarder defun. The forwarder exists for DIRECT call sites only: it is
+	 * not a definition of the name, so a backend answers {@code #'n},
+	 * {@code (symbol-function 'n)} and {@code (fboundp 'n)} from the runtime function
+	 * namespace and keeps the forwarder out of its name registry -- otherwise a reference
+	 * before the setf runs would answer the forwarder instead of signalling
+	 * {@code undefined-function}.
+	 * @param program the program after {@link #expandTopLevelDefinitions}
+	 * @return the forwarded names
+	 */
+	public static Set<String> symbolFunctionForwarderNames(List<LispVal> program) {
+		Set<String> names = new java.util.HashSet<>();
+		for (LispVal form : program) {
+			if (symbolFunctionForwarderName(form) instanceof String name) {
+				names.add(name);
+			}
+		}
+		return names;
+	}
+
+	/**
+	 * The name of a forwarder defun {@link #symbolFunctionForwarderDefuns} built, or
+	 * null.
+	 */
+	private static @Nullable String symbolFunctionForwarderName(LispVal form) {
+		if (!(form instanceof LispCons cons) || !cons.isProperList()) {
+			return null;
+		}
+		List<LispVal> parts = cons.toList();
+		if (parts.size() != 4 || !isNamedForm(form, LispNames.DEFUN) || !(parts.get(1) instanceof LispSymbol name)
+				|| !(parts.get(3) instanceof LispCons body) || !body.isProperList()) {
+			return null;
+		}
+		List<LispVal> call = body.toList();
+		return call.size() == 3 && isNamedForm(body, LispNames.APPLY) && call.get(1) instanceof LispCons read
+				&& isNamedForm(read, LispNames.FENV_FUNCTION_INTERNAL) && call.get(2) instanceof LispSymbol args
+				&& SYMBOL_FUNCTION_FORWARDER_ARGS.equals(args.name()) ? name.name() : null;
+	}
+
+	private static final String SYMBOL_FUNCTION_FORWARDER_ARGS = "%SFW-ARGS";
+
 	/** The forwarder defuns of {@link #setfOnlyFunctionAliasNames}. */
 	private static List<LispVal> symbolFunctionForwarderDefuns(List<String> names) {
 		List<LispVal> defuns = new java.util.ArrayList<>();
-		LispSymbol argsVar = new LispSymbol("%SFW-ARGS");
+		LispSymbol argsVar = new LispSymbol(SYMBOL_FUNCTION_FORWARDER_ARGS);
 		for (String name : names) {
 			defuns.add(listToCons(List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(name),
 					listToCons(List.of(new LispSymbol("&REST"), argsVar)),
