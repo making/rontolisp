@@ -57,10 +57,8 @@ rontolisp は意図的に小さくした Common Lisp のサブセットで、3 �
 [`return-from`](../reference/macros/return-from.md) と
 [`tagbody`](../reference/special-forms/tagbody.md) /
 [`go`](../reference/special-forms/go.md) は利用できますが、**コンパイル済み**
-バックエンドには 2 つの制限があります（インタプリタには影響しません）:
+バックエンドには 1 つの制限があります（インタプリタには影響しません）:
 
-- `flet`/`labels` のローカル関数をまたぐ必要がある `return-from` はまだ
-  未対応です（`lambda` をまたぐものは非局所脱出として対応済みです）。
 - `go` はレキシカルに囲む `tagbody` のタグのみを対象にできます。インタプリタは
   さらに関数呼び出しの境界を越える動的 `go`、つまり*呼び出し元*が確立したタグへの
   ジャンプもサポートします。ネストした `lambda` の内側から囲む関数のタグへ
@@ -70,7 +68,8 @@ rontolisp は意図的に小さくした Common Lisp のサブセットで、3 �
   同じく下位変換されます: そのタグで `tagbody` に再入して実行を続ける
   非局所脱出になります。
 
-`lambda` をまたぐ `return-from` と `go`、`catch`/`throw`、`unwind-protect`、
+`lambda` や `flet`/`labels` の関数をまたぐ `return-from` は Common Lisp と同じ
+ように振る舞います。`lambda` をまたぐ `return-from` と `go`、`catch`/`throw`、`unwind-protect`、
 条件の捕捉はいずれも例外処理モードでコンパイルされます。`--no-gc` では
 `catch`/`throw`、`unwind-protect` と条件系のフォームはコンパイルエラーに
 なります。
@@ -207,14 +206,13 @@ CLOS は**静的なサブセット**です
 
 ## 動的（special）変数
 
-`let`/`let*` および [`progv`](../reference/special-forms/progv.md) による
-動的束縛はサポートされていますが、**コンパイル済み**バックエンドには 1 つの
-制限があります（インタプリタには影響しません）。通常の脱出と special な `let`
-の境界を**越えて**脱出する `return`/`return-from` は束縛を復元しますが、`let`
-の外側のハンドラで捕捉されるエラー（および境界を越える `go`、WASM バックエンドで
-`unwind-protect` / `handler-case` も同時に越える `return`）では復元されません。
-`progv` は `unwind-protect` がカバーするすべての脱出（上記のケースを含む）で
-復元します。
+`let`/`let*`、[`progv`](../reference/special-forms/progv.md)、および special と
+同名のパラメータによる動的束縛はすべてのバックエンドでサポートされ、どの脱出でも
+直前の束縛に復元されます: 通常の復帰、束縛の外側のハンドラで捕捉されるエラー、
+`catch`/`throw`、`return`/`return-from`（`lambda`、`flet`、`labels` の関数からの
+ものを含む）、`go`、そして `go` や `return-from` で抜ける
+[`handler-bind`](../reference/macros/handler-bind.md) のハンドラです。`--no-gc`
+バックエンドはトップレベルの `defvar` を拒否します。
 
 ## 数値タワー
 
