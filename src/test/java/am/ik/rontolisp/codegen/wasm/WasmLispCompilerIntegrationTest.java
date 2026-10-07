@@ -14,6 +14,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.stream.Stream;
 
+import am.ik.rontolisp.FastPathEvaluationOrderFixture;
 import am.ik.rontolisp.CharacterFilePositionFixture;
 import am.ik.rontolisp.HelperWrapperFixture;
 import am.ik.rontolisp.MethodedBuiltinFixture;
@@ -27693,6 +27694,34 @@ class WasmLispCompilerIntegrationTest {
 			.isEqualTo(am.ik.rontolisp.ComplexThroughAVariableFixture.SIGNALS_EXPECTED);
 		assertThat(compileComponentAndRunProgram(signals))
 			.isEqualTo(am.ik.rontolisp.ComplexThroughAVariableFixture.SIGNALS_EXPECTED);
+	}
+
+	@Test
+	void fastPathsKeepTheInterpretersEvaluationOrder() throws Exception {
+		// The twin of LispEvaluatorTest#fastPathsKeepTheInterpretersEvaluationOrder. The
+		// f64 path converted an operand before the operation's later operands ran, a
+		// fused tree evaluated every leaf before applying anything -- after a later
+		// leaf's output, exit or store -- and the two-argument log took the number's
+		// logarithm before its base was evaluated. Every level (size declines fusion), P1
+		// and component; the values program runs outside EH mode, the others inside it.
+		String[][] fixtures = {
+				{ FastPathEvaluationOrderFixture.SIGNALS_SOURCE, FastPathEvaluationOrderFixture.SIGNALS_EXPECTED,
+						"eos" },
+				{ FastPathEvaluationOrderFixture.VALUES_SOURCE, FastPathEvaluationOrderFixture.VALUES_EXPECTED, "eov" },
+				{ FastPathEvaluationOrderFixture.COMPLEX_SOURCE, FastPathEvaluationOrderFixture.COMPLEX_EXPECTED,
+						"eoc" } };
+		for (String[] fixture : fixtures) {
+			List<LispVal> program = am.ik.rontolisp.cli.CompileFrontendAccess.corpus(fixture[0],
+					am.ik.rontolisp.reader.Features.WASM, true, false);
+			for (OptimizeLevel level : OptimizeLevel.values()) {
+				assertThat(runModule(WasmLispCompiler.builder().optimize(level).build().compile(program),
+						fixture[2] + "-" + level + ".wasm"))
+					.as("%s at level %s", fixture[2], level)
+					.isEqualTo(fixture[1]);
+			}
+			assertThat(compileComponentAndRunProgram(program)).as("%s as a component", fixture[2])
+				.isEqualTo(fixture[1]);
+		}
 	}
 
 	@Test

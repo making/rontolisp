@@ -30,6 +30,27 @@ through `_int_new`.
   `x & (2^k - 1)`; `(ash x -k)` with a literal non-positive count is an arithmetic right shift
   clamped at 63.
 
+## The interpreter's order
+
+The JVM twin's rule and plan (`.kb/jvm-int-fusion.md`, "The interpreter's order"):
+classification records leaf evaluations and applications in the interpreter's order, and
+before a leaf whose evaluation is observable while applications are pending `evalLeaves`
+runs a check -- `PendingGuard` (every leaf the pending operations read an i31 or a
+`TYPE_BIGNUM`, divisors non-zero, shift counts no larger than an `i32`) or `LeafGuard`
+(the leaf is integer arithmetic over quiet variables, which hold such integers); anything
+no check stands in for -- an aref read before a leaf that may store, a computed divisor
+or count -- is made opaque and evaluated in place. An aref leaf's evaluation is its array
+and its index together, so its check stands in front of both. What is this backend's own:
+
+- **The probe is inline**: `block $checked { block $fails { checks; br $checked } probe }`,
+  the probe being each pending root's generic fallback with its value dropped. A site whose
+  probes would apply more than `MAX_OPS` operations between them, or whose checks would run
+  more than `MAX_ORDER_CHECKS` leaf tests, declines fusion (`classifyOrdered` answers
+  null), which bounds the body (`.kb/wasm-function-body-size.md`); the generic
+  per-operation path keeps the order by construction.
+- Every leaf already lands in a scratch local, so the checks read those; a site with no
+  boundary emits what it did before.
+
 ## What else rides the fast path
 
 - **Leaf kinds**: `RawLeaf` (unboxed dual-representation LOCALS, `.kb/wasm-unboxed-locals.md`),
@@ -138,4 +159,6 @@ an impossible 30-60%. Wall-clock A/B against a standalone reproduction is the re
 `.fusedComparisonsAndRawLeafStoresMatchTheGenericPath`,
 `.theSizeLevelDeclinesTheSpeedTradesWithoutChangingAnyResult`; ci-spec
 `fused-integer-expression-trees`, `flet-fusion-and-unboxed-locals`,
-`fused-comparisons-and-raw-leaf-stores`.
+`fused-comparisons-and-raw-leaf-stores`. The order: `FastPathEvaluationOrderFixture`
+(`.fastPathsKeepTheInterpretersEvaluationOrder`, every level, P1 and component) and
+ci-spec `fast-paths-keep-the-evaluation-order`.

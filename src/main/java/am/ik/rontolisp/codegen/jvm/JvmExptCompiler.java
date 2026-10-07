@@ -43,8 +43,8 @@ final class JvmExptCompiler {
 						ctx.numOp(JvmNumericRuntimeBuilder.POW), ctx, className);
 				return;
 			}
-			JvmArithCompiler.compileUnboxedOperand(args.get(1), ctx, className);
-			JvmArithCompiler.compileUnboxedOperand(args.get(2), ctx, className);
+			JvmArithCompiler.compileUnboxedOperands(args.subList(1, 3), ctx, className, i -> {
+			});
 			ctx.body.invokestatic(ctx.mathOp(JvmMathFnCompiler.POW));
 			JvmEmitHelper.boxDouble(ctx);
 		}

@@ -1,10 +1,12 @@
 package am.ik.rontolisp.codegen.wasm;
 
 import java.util.List;
+import java.util.function.IntConsumer;
 
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.compiler.ArithmeticIdentities;
 import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.compiler.ArgumentOrder;
 import am.ik.wasm.Instruction;
 import am.ik.wasm.Type;
 
@@ -75,13 +77,11 @@ final class WasmArithCompiler {
 				ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_FLOAT);
 				return;
 			}
-			WasmExprCompiler.compileExpr(args.get(1), ctx);
-			WasmEmitHelper.castFloatGetF64(ctx);
-			for (int i = 2; i < args.size(); i++) {
-				WasmExprCompiler.compileExpr(args.get(i), ctx);
-				WasmEmitHelper.castFloatGetF64(ctx);
-				ctx.writer.write(f64Opcode);
-			}
+			compileF64Operands(operands, ctx, i -> {
+				if (i > 0) {
+					ctx.writer.write(f64Opcode);
+				}
+			});
 			ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
 			ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_FLOAT);
 			return;
@@ -109,6 +109,89 @@ final class WasmArithCompiler {
 			WasmExprCompiler.compileExpr(args.get(i), ctx);
 			WasmOperandTypes.emitCall(ctx, ratioFunc);
 		}
+	}
+
+	/**
+	 * Pushes the operands of a float-literal operation as {@code f64}s, one after the
+	 * other, running {@code step} with each operand's index once it is on the stack.
+	 * Every operand is evaluated where the interpreter evaluates it -- an inner operation
+	 * is a call like any other, applied where it stands -- and none is CONVERTED, which
+	 * signals for a non-number, before a later operand whose evaluation could be observed
+	 * has run: an operation applies to its arguments only once they are all evaluated
+	 * (`.kb/argument-evaluation-order.md`, "An operation applies after its operands").
+	 * Only an operand whose conversion can fail and that has such an operand after it
+	 * waits, in a temporary, with the operands up to that later one; every other operand
+	 * converts where it stands, as it always did, so an operation without such a pair
+	 * emits what it did before.
+	 * @param operands the operand forms, in source order
+	 * @param ctx the compile context
+	 * @param step what follows each operand on the stack: the fold step, or nothing
+	 */
+	static void compileF64Operands(List<LispVal> operands, WasmLispCompiler.Ctx ctx, IntConsumer step) {
+		int count = operands.size();
+		int lastObservable = -1;
+		for (int i = 0; i < count; i++) {
+			if (!ArgumentOrder.isQuiet(operands.get(i), name -> isQuietVariable(name, ctx))) {
+				lastObservable = i;
+			}
+		}
+		int firstWaiting = -1;
+		for (int i = 0; i < lastObservable; i++) {
+			if (!ArgumentOrder.isRealValued(operands.get(i))) {
+				firstWaiting = i;
+				break;
+			}
+		}
+		int[] slots = new int[count];
+		for (int i = 0; i < count; i++) {
+			if (i < firstWaiting || i > lastObservable || firstWaiting < 0) {
+				WasmExprCompiler.compileExpr(operands.get(i), ctx);
+				WasmEmitHelper.castFloatGetF64(ctx);
+				step.accept(i);
+				continue;
+			}
+			// From the first operand that has to wait up to the last observable one: each
+			// is evaluated in order into a temporary (a constant is left where it
+			// stands), and converted only once the last of them has run.
+			slots[i] = -1;
+			if (!ArgumentOrder.isOrderIndependent(operands.get(i))) {
+				WasmExprCompiler.compileExpr(operands.get(i), ctx);
+				slots[i] = ctx.allocTemp();
+				ctx.writer.write(Instruction.SET_LOCAL);
+				ctx.writer.writeUnsignedLeb128(slots[i]);
+			}
+			if (i < lastObservable) {
+				continue;
+			}
+			for (int j = firstWaiting; j <= lastObservable; j++) {
+				if (slots[j] < 0) {
+					WasmExprCompiler.compileExpr(operands.get(j), ctx);
+				}
+				else {
+					ctx.writer.write(Instruction.GET_LOCAL);
+					ctx.writer.writeUnsignedLeb128(slots[j]);
+				}
+				WasmEmitHelper.castFloatGetF64(ctx);
+				step.accept(j);
+			}
+		}
+	}
+
+	/**
+	 * Whether a read of the variable can neither fail nor change anything where the site
+	 * is compiled: a lexical variable, a special this function binds, or a global whose
+	 * read tests for no UNBOUND marker ({@code WasmExprCompiler.emitUnboundAsNil}) and is
+	 * not read through a task's dynamic bindings.
+	 */
+	static boolean isQuietVariable(String name, WasmLispCompiler.Ctx ctx) {
+		if (ctx.boundSpecials.contains(name)) {
+			return true;
+		}
+		if (ctx.locals.containsKey(name) || ctx.captures.containsKey(name) || ctx.rawLocals.containsKey(name)) {
+			return true;
+		}
+		return ctx.globalIndices.containsKey(name) && !ctx.dynamic && !ctx.unboundGlobals.contains(name)
+				&& !WasmDynVars.handles(ctx, name);
 	}
 
 	/**

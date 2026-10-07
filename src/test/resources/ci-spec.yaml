@@ -22501,6 +22501,56 @@ cases:
       "<: The value #C(2.0 4.0) is not of type REAL"
       "*: The value A is not of type NUMBER"
       z "+: The value A is not of type NUMBER"
+  - name: fast-paths-keep-the-evaluation-order
+    # An operation applies to its arguments once they are all evaluated: a wrong-typed
+    # operand signals after its later operands ran, an inner operation before the outer
+    # one's later operands, and nothing evaluated later undoes an earlier application.
+    # The unboxed float paths, integer fusion and the two-argument log each kept an
+    # order of their own. The rows are FastPathEvaluationOrderFixture's.
+    source: |
+      (defvar *ci-eo-a* 'a)
+      (defvar *ci-eo-b* 'b)
+      (defvar *ci-eo-v* (make-array 3 :element-type '(unsigned-byte 8) :initial-contents '(1 2 3)))
+      (defvar *ci-eo-zero* 0)
+      (defun ci-eo-mark (s v) (princ s) v)
+      (defun ci-eo-exit (a) (block nil (+ (* 2 a) (return 5))))
+      (defun ci-eo-f64-exit (a) (block nil (+ a (return 7) 1.5)))
+      (defun ci-eo-after (v) (+ (aref v 0) (progn (setf (aref v 0) 99) 1)))
+      (defun ci-eo-mix (x) (+ (* 2 x) (ci-eo-mark "" 1)))
+      (defun ci-eo-pair (v i j) (logior (ash (aref v i) 8) (aref v (+ j 1))))
+      (print (handler-case (+ *ci-eo-a* (ci-eo-mark "z " 1.5)) (error (e) (princ-to-string e))))
+      (print (handler-case (+ (* 2.0 *ci-eo-a*) (ci-eo-mark "y " 1.5)) (error (e) (princ-to-string e))))
+      (print (handler-case (+ *ci-eo-a* (* 2.0 *ci-eo-b*)) (error (e) (princ-to-string e))))
+      (print (handler-case (atan *ci-eo-a* (ci-eo-mark "z " 1.0)) (error (e) (princ-to-string e))))
+      (print (handler-case (log *ci-eo-a* (ci-eo-mark "z " 2.0)) (error (e) (princ-to-string e))))
+      (print (handler-case (+ (* 2 *ci-eo-a*) (ci-eo-mark "x " 1)) (error (e) (princ-to-string e))))
+      (print (handler-case (* 2 (+ 1 *ci-eo-a*) (ci-eo-mark "u " 3)) (error (e) (princ-to-string e))))
+      (print (handler-case (+ (mod 5 *ci-eo-zero*) (ci-eo-mark "m " 1)) (error (e) (princ-to-string e))))
+      (print (handler-case (+ (aref *ci-eo-v* 10) (ci-eo-mark "r " 1)) (error (e) (princ-to-string e))))
+      (print (handler-case (< (* 2 *ci-eo-a*) (ci-eo-mark "c " 1)) (error (e) (princ-to-string e))))
+      (print (handler-case (+ (* 2 *ci-eo-a*) (car *ci-eo-zero*)) (error (e) (princ-to-string e))))
+      (print (handler-case (ci-eo-pair *ci-eo-v* 10 *ci-eo-b*) (error (e) (princ-to-string e))))
+      (print (handler-case (ci-eo-exit *ci-eo-a*) (error (e) (princ-to-string e))))
+      (print (ci-eo-f64-exit *ci-eo-a*))
+      (print (ci-eo-after *ci-eo-v*))
+      (print (list (ci-eo-mix 3) (ci-eo-mix 1.5) (ci-eo-mix (expt 2 70)) (ci-eo-pair *ci-eo-v* 1 0)))
+    expected: |
+      z "+: The value A is not of type NUMBER"
+      "*: The value A is not of type NUMBER"
+      "*: The value B is not of type NUMBER"
+      z "ATAN: The value A is not of type NUMBER"
+      z "LOG: The value A is not of type NUMBER"
+      "*: The value A is not of type NUMBER"
+      "+: The value A is not of type NUMBER"
+      "Division by zero"
+      "AREF: The value 10 is not of type (INTEGER 0 (3))"
+      "*: The value A is not of type NUMBER"
+      "*: The value A is not of type NUMBER"
+      "AREF: The value 10 is not of type (INTEGER 0 (3))"
+      "*: The value A is not of type NUMBER"
+      7
+      2
+      (7 4.0 2361183241434822606849 514)
   - name: complex-type-system
     source: |
       (print (typep #c(1 2) 'complex))

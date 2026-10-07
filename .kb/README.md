@@ -30,7 +30,7 @@ deliberate boundaries the audit must not undo: user-facing operator catalogues l
 - [lisp2-namespaces.md](lisp2-namespaces.md) -- Lisp-2 function/variable namespace split
 - [parallel-let.md](parallel-let.md) -- `let` stays parallel on the compile path (`ParallelLetStaging` at the let compilers' entry); `(+)`/`(*)` identities
 - [lambda-lists.md](lambda-lists.md) -- `&optional`/`&rest`/`&key`/`&aux` desugared to required + `&rest`; on the compilers an optional travels as a parameter of its own (the UNSUPPLIED marker when absent), so passing one conses nothing
-- [argument-evaluation-order.md](argument-evaluation-order.md) -- call arguments and `list` elements evaluate left to right on every backend
+- [argument-evaluation-order.md](argument-evaluation-order.md) -- call arguments and `list` elements evaluate left to right on every backend; an operation applies, and signals, only after its arguments -- on the compiled fast paths too (SBCL's pairwise n-ary arithmetic is the one difference)
 - [do-return-block.md](do-return-block.md) -- `do`/`return`, `block`/`return-from` (lexical), `catch`/`throw`, `tagbody`/`go`, `prog`
 - [loop-iteration-heads.md](loop-iteration-heads.md) -- `loop` per-clause iteration heads: what is assigned before vs after the termination test
 - [flet-labels.md](flet-labels.md) -- `flet`/`labels` as let-bound lambdas + Lisp-2 call-site rewrite
@@ -148,7 +148,7 @@ deliberate boundaries the audit must not undo: user-facing operator catalogues l
 ## JVM backend
 
 - [jvm-export.md](jvm-export.md) -- `rontolisp:jvm-export`, `--no-main`, `-o out.jar`, the `-o` path-to-class-name rule, the Maven plugin
-- [jvm-int-fusion.md](jvm-int-fusion.md) -- integer expression-tree fusion into unboxed arithmetic
+- [jvm-int-fusion.md](jvm-int-fusion.md) -- integer expression-tree fusion into unboxed arithmetic; the checks between leaves that keep the interpreter's order, and the probe a failed one calls
 - [jvm-double-arithmetic.md](jvm-double-arithmetic.md) -- `hasDoubleLiteral` routing and unboxed IEEE operations
 - [jvm-complex.md](jvm-complex.md) -- the `RontoComplex` holder, the gated `_c*` group, the `hasComplexOperand` steering, and a complex through a variable or beside a float literal found at run time
 - [jvm-typed-loops.md](jvm-typed-loops.md) -- typed numeric loops over packed float arrays
@@ -176,7 +176,7 @@ deliberate boundaries the audit must not undo: user-facing operator catalogues l
 - [wasm-landing-pad-refresh.md](wasm-landing-pad-refresh.md) -- a `try_table` landing pad refreshes every local live after it: Cranelift passes a local into the pad as a pre-call exceptional-edge argument, stale after a copying collection; the push is narrowed to the live locals once the body is complete
 - [wasm-bignum.md](wasm-bignum.md) -- exact integers in three tiers (i31, `TYPE_BIGNUM`, `TYPE_BIGINT`), ratios with components in those tiers, and the correctly rounded conversions to double
 - [wasm-complex.md](wasm-complex.md) -- the tagged `TYPE_COMPLEX` struct (the `TYPE_FARRAY` twin that forced the tag), the `_c*` runtime group, the `containsComplex` steering, and a complex through a variable or beside a float literal found at run time
-- [wasm-int-fusion.md](wasm-int-fusion.md) -- integer expression-tree fusion keeping raw i64
+- [wasm-int-fusion.md](wasm-int-fusion.md) -- integer expression-tree fusion keeping raw i64; the same order checks with an inline probe
 - [wasm-ref-type-fold.md](wasm-ref-type-fold.md) -- a closed module's `ref.test`/`ref.cast` are decided by its own constructors: the byte-level type-flow fold before the shaker, the call-forwarding redirect, the exact integer export lane, the raw condition compare
 - [wasm-counted-loops.md](wasm-counted-loops.md) -- a loop induction variable as a bare `i64` counter
 - [wasm-unboxed-locals.md](wasm-unboxed-locals.md) -- dual-representation `let` locals

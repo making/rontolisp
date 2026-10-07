@@ -2,6 +2,7 @@ package am.ik.rontolisp.codegen.jvm;
 
 import java.lang.classfile.Opcode;
 import java.util.List;
+import java.util.function.IntConsumer;
 
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.compiler.ArithmeticIdentities;
@@ -10,6 +11,8 @@ import am.ik.rontolisp.LispInteger;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.compiler.ArgumentOrder;
+import org.jspecify.annotations.Nullable;
 
 /**
  * Compiles arithmetic operations ({@code +}, {@code -}, {@code *}, {@code /},
@@ -134,9 +137,10 @@ final class JvmArithCompiler {
 			ctx.body.dneg();
 			return;
 		}
-		compileUnboxedOperand(args.get(1), ctx, className);
-		for (int i = 2; i < args.size(); i++) {
-			compileUnboxedOperand(args.get(i), ctx, className);
+		compileUnboxedOperands(args.subList(1, args.size()), ctx, className, i -> {
+			if (i == 0) {
+				return;
+			}
 			if (isMod || isRem) {
 				// Common Lisp float modulo (sign of the divisor) and remainder, neither
 				// of which is a bare DREM: _fmod corrects the sign of a nonzero result
@@ -147,7 +151,147 @@ final class JvmArithCompiler {
 			else {
 				emitDoubleOp(ctx, doubleOpcode);
 			}
+		});
+	}
+
+	/**
+	 * Pushes the operands of a float site as raw doubles, one after the other, running
+	 * {@code step} with each operand's index once it is on the stack. Every operand is
+	 * evaluated where the interpreter evaluates it -- an inner float-literal operation
+	 * applied where it stands -- and none is CONVERTED, which signals for a non-number,
+	 * before a later operand whose evaluation could be observed has run: an operation
+	 * applies to its arguments only once they are all evaluated
+	 * (`.kb/argument-evaluation-order.md`, "An operation applies after its operands").
+	 * Only an operand whose conversion can fail and that has such an operand after it
+	 * waits, in a temporary, with the operands up to that later one; every other operand
+	 * converts where it stands, as it always did, so a site without such a pair emits the
+	 * instructions it did before; a temporary costs no machine work once compiled.
+	 * @param operands the operand forms, in source order
+	 * @param ctx the compile context
+	 * @param className the class being emitted
+	 * @param step what follows each operand on the stack: the fold step, or nothing
+	 */
+	static void compileUnboxedOperands(List<LispVal> operands, JvmLispCompiler.Ctx ctx, String className,
+			IntConsumer step) {
+		int count = operands.size();
+		int lastObservable = -1;
+		for (int i = 0; i < count; i++) {
+			if (observable(operands.get(i), ctx)) {
+				lastObservable = i;
+			}
 		}
+		int firstWaiting = -1;
+		for (int i = 0; i < lastObservable; i++) {
+			if (conversionMayFail(operands.get(i), ctx)) {
+				firstWaiting = i;
+				break;
+			}
+		}
+		if (firstWaiting < 0) {
+			for (int i = 0; i < count; i++) {
+				compileUnboxedOperand(operands.get(i), ctx, className);
+				step.accept(i);
+			}
+			return;
+		}
+		for (int i = 0; i < firstWaiting; i++) {
+			compileUnboxedOperand(operands.get(i), ctx, className);
+			step.accept(i);
+		}
+		// From the first operand that has to wait up to the last observable one: each is
+		// evaluated in order into a temporary (a constant is left where it stands), and
+		// converted only once the last of them has run.
+		int[] slots = new int[lastObservable + 1];
+		boolean[] raw = new boolean[lastObservable + 1];
+		for (int i = firstWaiting; i <= lastObservable; i++) {
+			LispVal operand = operands.get(i);
+			if (ArgumentOrder.isOrderIndependent(operand)) {
+				slots[i] = -1;
+			}
+			else if (!conversionMayFail(operand, ctx)) {
+				// Converted where it stands -- a declared float, an inner float-literal
+				// operation, an arithmetic call -- and held raw.
+				compileUnboxedOperand(operand, ctx, className);
+				slots[i] = ctx.allocTemp();
+				ctx.allocTemp();
+				raw[i] = true;
+				ctx.body.dstore(slots[i]);
+			}
+			else {
+				JvmExprCompiler.compileExpr(operand, ctx, className);
+				slots[i] = ctx.allocTemp();
+				ctx.body.astore(slots[i]);
+			}
+		}
+		for (int i = firstWaiting; i <= lastObservable; i++) {
+			if (slots[i] < 0) {
+				compileUnboxedOperand(operands.get(i), ctx, className);
+			}
+			else if (raw[i]) {
+				ctx.body.dload(slots[i]);
+			}
+			else {
+				ctx.body.aload(slots[i]);
+				JvmEmitHelper.unboxDouble(ctx);
+			}
+			step.accept(i);
+		}
+		for (int i = lastObservable + 1; i < count; i++) {
+			compileUnboxedOperand(operands.get(i), ctx, className);
+			step.accept(i);
+		}
+	}
+
+	/**
+	 * Whether evaluating an operand of a float site can be observed by a later operand's
+	 * evaluation: anything but a constant or a quiet variable's read -- and an inner
+	 * float-literal operation exactly when applying it can signal, through an operand of
+	 * its own.
+	 */
+	private static boolean observable(LispVal operand, JvmLispCompiler.Ctx ctx) {
+		if (ArgumentOrder.isQuiet(operand, name -> isQuietVariable(name, ctx))) {
+			return false;
+		}
+		if (inlinedOpKey(operand, ctx) != null) {
+			LispVal operands = ((LispCons) operand).cdr();
+			while (operands instanceof LispCons cell) {
+				if (observable(cell.car(), ctx) || conversionMayFail(cell.car(), ctx)) {
+					return true;
+				}
+				operands = cell.cdr();
+			}
+			return false;
+		}
+		return true;
+	}
+
+	/**
+	 * Whether pushing an operand as a raw double can signal: anything whose value is not
+	 * certainly a number -- a declared float and an inner float-literal operation are raw
+	 * already, and an arithmetic call answers a real when it returns.
+	 */
+	private static boolean conversionMayFail(LispVal operand, JvmLispCompiler.Ctx ctx) {
+		if (operand instanceof LispSymbol sym
+				&& (ctx.rawDoubleLocals.containsKey(sym.name()) || ctx.declaredDoubles.contains(sym.name()))) {
+			return false;
+		}
+		return inlinedOpKey(operand, ctx) == null && !ArgumentOrder.isRealValued(operand);
+	}
+
+	/**
+	 * Whether a read of the variable can neither fail nor change anything where the site
+	 * is compiled: a lexical variable, or a global whose read tests for no UNBOUND marker
+	 * ({@code JvmExprCompiler.compileSpecialRead}) and is not dynamically bound.
+	 */
+	static boolean isQuietVariable(String name, JvmLispCompiler.Ctx ctx) {
+		if (ctx.locals.containsKey(name) || ctx.captures.containsKey(name) || ctx.rawLocals.containsKey(name)
+				|| ctx.rawDoubleLocals.containsKey(name)) {
+			return true;
+		}
+		JvmDynVarRuntimeBuilder.UnboundMarker marker = ctx.unboundMarker;
+		JvmDynVarRuntimeBuilder.DynVarRuntime dyn = ctx.dynVars;
+		return ctx.globals.contains(name) && !ctx.dynamic && (marker == null || !marker.globals().contains(name))
+				&& (dyn == null || !dyn.fields().containsKey(name));
 	}
 
 	/**
@@ -204,14 +348,27 @@ final class JvmArithCompiler {
 		String opKey = inlinedOpKey(arg, ctx);
 		if (opKey != null) {
 			LispCons nested = (LispCons) arg;
-			Opcode doubleOpcode = switch (((LispSymbol) nested.car()).name()) {
+			String operator = ((LispSymbol) nested.car()).name();
+			Opcode doubleOpcode = switch (operator) {
 				case LispNames.ADD -> Opcode.DADD;
 				case LispNames.SUB -> Opcode.DSUB;
 				case LispNames.MUL -> Opcode.DMUL;
 				case LispNames.DIV -> Opcode.DDIV;
 				default -> Opcode.DREM;
 			};
-			compileUnboxed(nested.toList(), ctx, opKey, doubleOpcode, className);
+			// The inner operation is applied here, under its own operator and source
+			// site, as the interpreter applies it: a wrong-type operand of an inner *
+			// reports *, not the operator it is an operand of.
+			@Nullable String outerOperator = ctx.operator;
+			ctx.operator = operator;
+			int site = ctx.enterSite(nested);
+			try {
+				compileUnboxed(nested.toList(), ctx, opKey, doubleOpcode, className);
+			}
+			finally {
+				ctx.operator = outerOperator;
+				ctx.leaveSite(site);
+			}
 			return;
 		}
 		JvmExprCompiler.compileExpr(arg, ctx, className);
@@ -225,7 +382,7 @@ final class JvmArithCompiler {
 	 * opcode) pair JvmExprCompiler routes them with, so an inlined operand compiles to
 	 * exactly what the boxed emission of the same node would have computed.
 	 */
-	static @org.jspecify.annotations.Nullable String inlinedOpKey(LispVal arg, JvmLispCompiler.Ctx ctx) {
+	static @Nullable String inlinedOpKey(LispVal arg, JvmLispCompiler.Ctx ctx) {
 		if (!(arg instanceof LispCons nested && nested.isProperList() && nested.car() instanceof LispSymbol head)) {
 			return null;
 		}

@@ -66,8 +66,8 @@ final class JvmComparisonCompiler {
 			// computed exact operand, e.g. (= 1.0 (+ 1 tiny-ratio)) -- goes through
 			// _cmpb, whose mixed arm compares exact values (the min/max gate's
 			// hasDoubleLiteral-vs-isDefinitelyDouble distinction, JvmMinCompiler).
-			JvmArithCompiler.compileUnboxedOperand(args.get(1), ctx, className);
-			JvmArithCompiler.compileUnboxedOperand(args.get(2), ctx, className);
+			JvmArithCompiler.compileUnboxedOperands(args.subList(1, 3), ctx, className, i -> {
+			});
 			emitDoubleCompare(ctx, branchOpcode);
 			branch = branchOpcode;
 		}

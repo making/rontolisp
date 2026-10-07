@@ -641,10 +641,20 @@ final class WasmComplexCompiler {
 	 * @param ctx the compile context
 	 */
 	static void compileLogOf(LispVal arg, WasmLispCompiler.Ctx ctx) {
+		emitLogOfSlot(ctx, evaluateIntoTemp(arg, ctx));
+	}
+
+	private static int evaluateIntoTemp(LispVal arg, WasmLispCompiler.Ctx ctx) {
 		WasmExprCompiler.compileExpr(arg, ctx);
 		int slot = ctx.allocTemp();
 		ctx.writer.write(Instruction.SET_LOCAL);
 		ctx.writer.writeUnsignedLeb128(slot);
+		return slot;
+	}
+
+	// The logarithm of the value in slot, a complex one or a real one (escaping into the
+	// plane below zero).
+	private static void emitLogOfSlot(WasmLispCompiler.Ctx ctx, int slot) {
 		emitTestComplex(ctx, slot);
 		ctx.writer.write(Instruction.IF);
 		ctx.writer.writeRefType(true, Type.EQ.code());
@@ -680,8 +690,19 @@ final class WasmComplexCompiler {
 	static void compileLogBase(LispCons cons, WasmLispCompiler.Ctx ctx, boolean complexCapable) {
 		List<LispVal> args = cons.toList();
 		if (complexCapable) {
-			compileLogOf(args.get(1), ctx);
-			compileLogOf(args.get(2), ctx);
+			if (am.ik.rontolisp.compiler.ArgumentOrder.isQuiet(args.get(2),
+					name -> WasmArithCompiler.isQuietVariable(name, ctx))) {
+				compileLogOf(args.get(1), ctx);
+				compileLogOf(args.get(2), ctx);
+			}
+			else {
+				// A base whose evaluation can be observed runs before the number's
+				// logarithm can signal: (log n b) applies once both are evaluated.
+				int number = evaluateIntoTemp(args.get(1), ctx);
+				int base = evaluateIntoTemp(args.get(2), ctx);
+				emitLogOfSlot(ctx, number);
+				emitLogOfSlot(ctx, base);
+			}
 			call(ctx, WasmLispCompiler.FUNC_C_DIV);
 			return;
 		}

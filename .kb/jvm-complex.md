@@ -211,8 +211,8 @@ site, and every complex-free class, keeps its raw emission byte for byte.
   operator and source site, so a wrong-typed operand of an inner `*` reports `*`.
 - Order: every operand of an operation runs before the operation signals, and an inner
   operation signals before the outer one's later operands run -- the interpreter's
-  order. The complex-free raw path converts each operand before the next one runs, and
-  int fusion evaluates every leaf of its tree before any operation, so neither keeps it.
+  order, which the complex-free raw path and int fusion keep too since 2026-10-07
+  (`.kb/argument-evaluation-order.md`, "An operation applies after its operands").
 - The consumers do the same over their operands (`JvmFloatOperands.compileCall` for the
   one-helper shapes): the comparison on proven doubles (`_cmpb` for `=`, `_ccmpb` for an
   ordering, which reports the complex the inner operation computed), `min`/`max`
@@ -397,7 +397,8 @@ which is byte-for-byte what it was.
 - **`log/2` is TWO logarithms and one division.** `escapesToComplex` therefore reads
   BOTH literals: `(log 8 2)` keeps the gate shut and compiles to two `StrictMath.log` calls
   and a `DDIV`; anything a literal cannot prove non-negative runs both arguments through
-  `_cu1`'s `U1_LOG` and divides with `_cdiv`
+  `_cu1`'s `U1_LOG` and divides with `_cdiv` -- a base whose evaluation can be observed is
+  evaluated before the number's logarithm is taken, which signals for a non-number
   (`JvmLispCompilerTest#aLiteralProvenRealBaseKeepsTheComplexGateShut`).
 - **`_cdiv` gained the arm that makes that quotient total**: neither operand a holder ->
   delegate to the ungated `_div`. A complex-capable site only knows at RUN time whether
