@@ -3194,12 +3194,14 @@ public final class LispMacroExpander {
 	public static final String UNREAD_CHAR_TWICE_MESSAGE = "UNREAD-CHAR without an intervening READ-CHAR";
 
 	/**
-	 * The message a {@code #'unread-char} FUNCTION VALUE answers on the compile backends.
-	 * The handle-side pushback is a call-site rewrite ({@code eval/UnreadCharLibrary}),
-	 * and a function-value wrapper is synthesized inside the compiler, long after every
-	 * pre-pass -- so there is no call site to rewrite and the operator says so rather
-	 * than dropping the character. The interpreter, whose built-ins ARE function values,
-	 * has no such limit.
+	 * The message the catalog {@code #'unread-char} wrapper answers on the compile
+	 * backends. The handle-side pushback is a library splice
+	 * ({@code eval/UnreadCharLibrary}) made for a program that names {@code unread-char},
+	 * whose function value then calls it ({@code BuiltinFunctionWrappers}' pushback
+	 * twin). What is left is a program that never spells the name -- reaching the
+	 * operator through a symbol built at run time -- where there is no pushback to park
+	 * in, so the operator says so rather than dropping the character. The interpreter,
+	 * whose built-ins ARE function values, has no such limit.
 	 */
 	public static final String UNREAD_CHAR_NOT_A_VALUE_MESSAGE = "UNREAD-CHAR is not supported as a function value";
 
@@ -3233,11 +3235,11 @@ public final class LispMacroExpander {
 	 * {@link #UNREAD_CHAR_NOT_A_VALUE_MESSAGE} signal. A CALL SITE never reaches this:
 	 * {@code eval/UnreadCharLibrary} has already rewritten it onto the handle-side
 	 * pushback defun (and {@code GrayStreamsLibrary.process} routes an instance to
-	 * {@code rontolisp:stream-unread-char} before that). What lands here is the
-	 * {@code #'unread-char} function-value wrapper the compilers synthesize, which no
-	 * pre-pass walks -- there is no call site to rewrite, the same first-class limit
-	 * {@code #'read-byte} has on a Gray instance. The arguments are kept in front of the
-	 * {@code error} so their effects still happen in CL's order.
+	 * {@code rontolisp:stream-unread-char} before that), and a program naming the
+	 * operator gets a function value calling the pushback defun. What lands here is the
+	 * catalog wrapper of a program that never spells {@code unread-char}, which has no
+	 * pushback spliced. The arguments are kept in front of the {@code error} so their
+	 * effects still happen in CL's order.
 	 * @param cons the unread-char expression
 	 * @return the expanded expression
 	 */
@@ -28466,8 +28468,9 @@ public final class LispMacroExpander {
 				case 'r' -> {
 					flushFmtLiteral(lit, ops);
 					if (!fmtHasParam(params, 0)) {
+						// Spelled out (English, Roman) by the runtime renderer only.
 						throw new UnsupportedOperationException(
-								"format: ~r requires a radix parameter (English cardinal/ordinal output is not supported)");
+								"format: ~r without a radix parameter is rendered at run time");
 					}
 					LispVal arg = args.next(directive);
 					LispVal digits = radixIntegerExpr(arg, fmtParam(params, 0), colon, fmtCommaChar(params, 3),

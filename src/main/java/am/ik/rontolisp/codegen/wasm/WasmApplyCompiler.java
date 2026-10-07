@@ -5,7 +5,6 @@ import java.util.List;
 
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispVal;
-import am.ik.rontolisp.compiler.FunctionDesignators;
 import am.ik.wasm.Instruction;
 import am.ik.wasm.Type;
 
@@ -123,7 +122,7 @@ final class WasmApplyCompiler {
 		}
 
 		// Compile the function designator.
-		WasmExprCompiler.compileExpr(FunctionDesignators.normalize(args.get(1)), ctx);
+		WasmExprCompiler.compileExpr(WasmFunctionFormCompiler.designator(args.get(1), ctx), ctx);
 		int funcSlot = ctx.allocTemp();
 		ctx.writer.write(Instruction.SET_LOCAL);
 		ctx.writer.writeUnsignedLeb128(funcSlot);

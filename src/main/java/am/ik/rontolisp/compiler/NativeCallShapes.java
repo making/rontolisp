@@ -115,7 +115,6 @@ final class NativeCallShapes {
 		add(rows, LispNames.MAKE_RANDOM_STATE, 0, 1);
 		add(rows, LispNames.RENAME_PACKAGE, 2, 3);
 		add(rows, LispNames.ROW_MAJOR_AREF, 2, 2);
-		add(rows, LispNames.WRITE_BYTE, 2, 2);
 		// rontolisp's own.
 		for (String member : new String[] { LispNames.AWAIT, LispNames.DESTROY_THREAD, LispNames.FUTUREP,
 				LispNames.JOIN_THREAD, LispNames.JSON_PARSE, LispNames.JSON_STRINGIFY, LispNames.MUTEX_ACQUIRE,

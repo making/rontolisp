@@ -51,7 +51,6 @@ categories:
       - { slug: the, name: the }
       - { slug: eval-when, name: eval-when }
       - { slug: locally, name: locally }
-      - { slug: write-char, name: write-char }
       - { slug: flet, name: flet }
       - { slug: labels, name: labels }
       - { slug: macrolet, name: macrolet }

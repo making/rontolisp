@@ -17,6 +17,7 @@ import am.ik.rontolisp.ReadFeatureGuardFixture;
 import am.ik.rontolisp.ReadFromStringLambdaListFixture;
 import am.ik.rontolisp.ReadFromStringMalformedFixture;
 import am.ik.rontolisp.ScaleFloatOperandsFixture;
+import am.ik.rontolisp.FormatSpelledNumbersFixture;
 import am.ik.rontolisp.StringNilStartFixture;
 import am.ik.rontolisp.SubseqBoundsFixture;
 import am.ik.rontolisp.BoundedStringBoundsFixture;
@@ -5379,6 +5380,27 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunWriteCharWriteByteAndUnreadCharAreFunctionValues() throws Exception {
+		// The JVM twin of
+		// LispEvaluatorTest#writeCharWriteByteAndUnreadCharAreFunctionValues:
+		// #'write-char / #'write-byte did not compile and #'unread-char signalled.
+		String program = StringStreamPrograms.writeAndUnreadValueProgram(this.tempDir.resolve("value.bin").toString());
+		assertThat(compileAndRun(am.ik.rontolisp.cli.CompileFrontendAccess.corpus(program,
+				am.ik.rontolisp.reader.Features.JVM, false, false)))
+			.isEqualTo(StringStreamPrograms.WRITE_AND_UNREAD_VALUE_EXPECTED);
+	}
+
+	@Test
+	void compileAndRunWriteCharWriteByteAndUnreadCharValuesReachAGrayStream() throws Exception {
+		// The JVM twin of
+		// LispEvaluatorTest#writeCharWriteByteAndUnreadCharValuesReachAGrayStream.
+		assertThat(compileAndRun(am.ik.rontolisp.cli.CompileFrontendAccess.corpus(
+				am.ik.rontolisp.GrayStreamCallFixture.WRITE_AND_UNREAD_VALUE_PROGRAM,
+				am.ik.rontolisp.reader.Features.JVM, false, false)))
+			.isEqualTo(am.ik.rontolisp.GrayStreamCallFixture.WRITE_AND_UNREAD_VALUE_EXPECTED);
+	}
+
+	@Test
 	void compileAndRunDirectionPredicatesAnswerTheStreamsRealDirection() throws Exception {
 		// The interpreter twin is
 		// LispEvaluatorTest#directionPredicatesAnswerTheStreamsRealDirection.
@@ -5591,6 +5613,17 @@ class JvmLispCompilerTest {
 			.isEqualTo(am.ik.rontolisp.UndefinedFunctionNameFixture.PLAIN_EXPECTED);
 		assertThat(compileAndRun(am.ik.rontolisp.UndefinedFunctionNameFixture.RESTART))
 			.isEqualTo(am.ik.rontolisp.UndefinedFunctionNameFixture.RESTART_EXPECTED);
+	}
+
+	@Test
+	void anUndefinedNameTakenAsAFunctionSignalsWhenTheReferenceRuns() throws Exception {
+		// Interpreter parity (the LispEvaluatorTest twin): #'name compiles to the direct
+		// call's raw throw at the reference, a quoted designator stays the symbol the
+		// dispatcher reports when the call runs (.kb/error-handling.md).
+		assertThat(compileAndRun(am.ik.rontolisp.UndefinedFunctionNameFixture.REFERENCE))
+			.isEqualTo(am.ik.rontolisp.UndefinedFunctionNameFixture.REFERENCE_EXPECTED);
+		assertThat(compileAndRun(am.ik.rontolisp.UndefinedFunctionNameFixture.REFERENCE_RESTART))
+			.isEqualTo(am.ik.rontolisp.UndefinedFunctionNameFixture.REFERENCE_RESTART_EXPECTED);
 	}
 
 	@Test
@@ -13686,6 +13719,16 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunAFormatTInAPackageReachesAGrayStandardStream() throws Exception {
+		// The JVM twin of
+		// LispEvaluatorTest#aFormatTInAPackageReachesAGrayStandardStream.
+		assertThat(compileAndRun(am.ik.rontolisp.cli.CompileFrontendAccess.corpus(
+				am.ik.rontolisp.GrayStreamCallFixture.STANDARD_STREAM_IN_A_PACKAGE_PROGRAM,
+				am.ik.rontolisp.reader.Features.JVM, false, false)))
+			.isEqualTo(am.ik.rontolisp.GrayStreamCallFixture.STANDARD_STREAM_IN_A_PACKAGE_EXPECTED);
+	}
+
+	@Test
 	void compileAndRunUnreadCharInAGrayProgramParksOnTheOpenStream() throws Exception {
 		// The JVM twin of LispEvaluatorTest#unreadCharInAGrayProgramParksOnTheOpenStream.
 		assertThat(compileAndRun(am.ik.rontolisp.cli.CompileFrontendAccess.corpus(
@@ -13732,6 +13775,13 @@ class JvmLispCompilerTest {
 		// LispEvaluatorTest#aCountedDeleteOrNsubstituteReportsUnderItsOwnName.
 		assertThat(compileAndRunExpanded(SequenceBoundsFixture.OPERATOR_REPORT_PROGRAM))
 			.isEqualTo(SequenceBoundsFixture.OPERATOR_REPORT_EXPECTED);
+	}
+
+	@Test
+	void compileAndRunFormatRWithoutARadixSpellsTheNumber() throws Exception {
+		// The JVM twin of LispEvaluatorTest#formatRWithoutARadixSpellsTheNumber.
+		assertThat(compileAndRunExpanded(FormatSpelledNumbersFixture.PROGRAM))
+			.isEqualTo(FormatSpelledNumbersFixture.EXPECTED);
 	}
 
 	@Test

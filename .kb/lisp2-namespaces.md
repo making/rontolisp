@@ -10,7 +10,9 @@
   compilers: `compiler.FunctionDesignators.normalize` statically rewrites a literal
   `(quote name)` in function position to `(function name)`, and `.literalName` reads it back so
   `funcall` / the map family / `reduce` / `sort` emit the DIRECT call instead of dispatching
-  through a function value (`.kb/optimize-dead-code-elimination.md`).
+  through a function value (`.kb/optimize-dead-code-elimination.md`). A quoted name with no
+  definition is NOT rewritten (`.kb/error-handling.md`, "Undefined functions keep the call-time
+  stub contract").
 - `defun` defines into the function namespace and returns the name symbol.
 
 Interpreter: `Environment` keeps two maps (`lookup`/`define`, `lookupFunction`/`defineFunction`;

@@ -267,4 +267,68 @@ public final class StringStreamPrograms {
 			(0 0 #\\a)
 			(#\\1 #\\3)""";
 
+	/**
+	 * {@code write-char}, {@code write-byte} and {@code unread-char} are FUNCTIONS: taken
+	 * as values ({@code #'op}, a quoted designator, {@code apply}) they write and push
+	 * back as their calls do, and in a program that uses {@code unread-char} the read
+	 * family taken as values consults the pushback too. Every {@code %p} is the path of a
+	 * scratch file the program creates. SBCL's answers.
+	 */
+	public static final String WRITE_AND_UNREAD_VALUE_PROGRAM = """
+			(let ((svh-s (make-string-output-stream)))
+			  (print (list (funcall #'write-char #\\a svh-s) (apply #'write-char #\\b (list svh-s))
+			               (funcall 'write-char #\\c svh-s) (get-output-stream-string svh-s))))
+			(funcall #'write-char #\\x)
+			(funcall #'write-char #\\y nil)
+			(apply #'write-char #\\z t nil)
+			(terpri)
+			(print (with-open-file (svh-o "%p" :direction :output :if-exists :supersede :element-type '(unsigned-byte 8))
+			         (list (funcall #'write-byte 7 svh-o) (apply #'write-byte 200 svh-o nil))))
+			(print (with-open-file (svh-i "%p" :element-type '(unsigned-byte 8))
+			         (list (read-byte svh-i) (read-byte svh-i) (read-byte svh-i nil :eof))))
+			(with-input-from-string (svh-s (format nil "abc~%de"))
+			  (let* ((svh-c1 (funcall #'read-char svh-s))
+			         (svh-u1 (funcall #'unread-char svh-c1 svh-s))
+			         (svh-p (funcall #'peek-char nil svh-s))
+			         (svh-c2 (funcall #'read-char svh-s))
+			         (svh-c3 (read-char svh-s))
+			         (svh-u2 (apply #'unread-char svh-c3 (list svh-s)))
+			         (svh-l1 (funcall #'read-line svh-s))
+			         (svh-c4 (funcall #'read-char-no-hang svh-s))
+			         (svh-u3 (funcall 'unread-char svh-c4 svh-s))
+			         (svh-ls (funcall #'listen svh-s))
+			         (svh-l2 (funcall #'read-line svh-s nil :eof))
+			         (svh-l3 (funcall #'read-line svh-s nil :eof)))
+			    (print (list svh-c1 svh-u1 svh-p svh-c2 svh-c3 svh-u2 svh-l1 svh-c4 svh-u3 svh-ls svh-l2 svh-l3))))
+			(with-input-from-string (svh-s "hello")
+			  (read-char svh-s)
+			  (funcall #'unread-char (read-char svh-s) svh-s)
+			  (print (list (funcall #'file-position svh-s) (read-char svh-s) (funcall #'file-position svh-s))))
+			(let ((*standard-input* (make-string-input-stream "xy")))
+			  (let ((svh-c (read-char)))
+			    (print (list (funcall #'unread-char svh-c) (funcall #'read-char) (funcall #'read-char)))))
+			(print (list (macro-function 'write-char) (not (null (fboundp 'write-char))) (functionp #'write-char)
+			             (functionp #'write-byte) (functionp #'unread-char)))
+			""";
+
+	/** What {@link #WRITE_AND_UNREAD_VALUE_PROGRAM} prints. */
+	public static final String WRITE_AND_UNREAD_VALUE_EXPECTED = """
+			(#\\a #\\b #\\c "abc")
+			xyz
+			(7 200)
+			(7 200 :EOF)
+			(#\\a NIL #\\a #\\a #\\b NIL "bc" #\\d NIL T "de" :EOF)
+			(1 #\\e 2)
+			(NIL #\\x #\\y)
+			(NIL T T T T)""";
+
+	/**
+	 * The write / unread value program over a concrete scratch path.
+	 * @param path the scratch file
+	 * @return the program text
+	 */
+	public static String writeAndUnreadValueProgram(String path) {
+		return WRITE_AND_UNREAD_VALUE_PROGRAM.replace("%p", path.replace("\\", "\\\\"));
+	}
+
 }

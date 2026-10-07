@@ -3546,6 +3546,46 @@ public final class LispNames {
 	public static final String UNREAD_CHAR_PUSH_INTERNAL = "%UNREAD-CHAR-PUSH";
 
 	/**
+	 * The internal {@code rontolisp::%unread-read-char} defun of
+	 * {@code unread-char.lisp}: {@code read-char} / {@code read-char-no-hang} draining
+	 * the handle-side pushback. A rewritten call site names it, and so does the function
+	 * value of either operator where it is spliced ({@code BuiltinFunctionWrappers}).
+	 */
+	public static final String UNREAD_READ_CHAR_INTERNAL = "%UNREAD-READ-CHAR";
+
+	/**
+	 * The internal {@code rontolisp::%unread-peek-char} defun of
+	 * {@code unread-char.lisp}: {@code peek-char} over the handle-side pushback.
+	 */
+	public static final String UNREAD_PEEK_CHAR_INTERNAL = "%UNREAD-PEEK-CHAR";
+
+	/**
+	 * The internal {@code rontolisp::%unread-read-line} defun of
+	 * {@code unread-char.lisp}: {@code read-line} draining the handle-side pushback.
+	 */
+	public static final String UNREAD_READ_LINE_INTERNAL = "%UNREAD-READ-LINE";
+
+	/**
+	 * The internal {@code rontolisp::%unread-listen} defun of {@code unread-char.lisp}:
+	 * {@code listen} counting a parked character as one that remains.
+	 */
+	public static final String UNREAD_LISTEN_INTERNAL = "%UNREAD-LISTEN";
+
+	/**
+	 * The internal {@code rontolisp::%unread-file-position} defun of
+	 * {@code unread-char.lisp}: the {@code file-position} query counting a parked
+	 * character as not consumed.
+	 */
+	public static final String UNREAD_FILE_POSITION_INTERNAL = "%UNREAD-FILE-POSITION";
+
+	/**
+	 * The internal {@code rontolisp::%unread-file-position-set} defun of
+	 * {@code unread-char.lisp}: the {@code file-position} set dropping a parked
+	 * character.
+	 */
+	public static final String UNREAD_FILE_POSITION_SET_INTERNAL = "%UNREAD-FILE-POSITION-SET";
+
+	/**
 	 * The {@code peek-char} built-in function
 	 * ({@code (peek-char [peek-type [stream [eof-error-p [eof-value]]]])}): the next
 	 * character of a stream WITHOUT consuming it. A literal {@code peek-type} of
@@ -9342,6 +9382,12 @@ public final class LispNames {
 	 * unwrapped.
 	 */
 	public static final String PRIN1_PIECE_INTERNAL = "%PRIN1-PIECE";
+
+	/**
+	 * The runtime {@code format} renderer's entry point,
+	 * {@code (%fmt-render control-string argument-list)} ({@code format-render.lisp}).
+	 */
+	public static final String FMT_RENDER = "%FMT-RENDER";
 
 	/**
 	 * The internal {@code (%print-cased x escape)} renderer: the text the printer writes

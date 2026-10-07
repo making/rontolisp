@@ -72,6 +72,13 @@ the print family wrote PAST the instance to standard output on the compile paths
   turn (so `~&` asks the Gray stream; building the string first would lose `~&` on the real
   stdout too). A Gray program that binds a standard stream -- the ci-spec corpus does --
   sends EVERY stream-less print through the helpers.
+- That lowering runs BEFORE `PackageResolver`, inside the caller's package: every name the
+  expansion emits must be `cl`-owned (`%princ-piece`, `%prin1-piece`, `%fmt-render` are in
+  `PackageRegistry.CL_INTERNALS`), or it resolves into the user package. Until 2026-10-07 they
+  were not: `(format t "~:(~a~)" ...)` inside clack's `clackup` became
+  `CLACK::%PRINC-PIECE`, undefined on JVM / P1 / component (6 of the 27 cloudflare-workers
+  example legs). Pinned by `GrayStreamCallFixture.STANDARD_STREAM_IN_A_PACKAGE_PROGRAM` (all four)
+  and `LispMacroExpanderTest.aFormatExpansionNamesOnlyOperatorsClOwns` (the vocabulary).
 - `--component`: a gray.lisp `%gray-*` helper is a strict call head for the await hoist
   (`WasmAwaitNormalizer.isStrictCallHead`, `LispNames.GRAY_HELPER_PREFIX`). Before, `(princ
   (rontolisp:await f) gray-var)` was refused as a non-spine await, and the stream-less rewrite
@@ -195,11 +202,24 @@ interpreter's Java wrappers already dispatched.
 - Covered: write-string/write-line (the BOUNDS helpers), read/write-sequence, princ/prin1/
   print, terpri, fresh-line, force/finish/clear-output, listen, read-char(-no-hang),
   read-line, peek-char, read-byte, input/output-stream-p, stream-element-type, file-length,
-  file-position, format.
+  file-position, format, write-char, write-byte, unread-char.
 - Pinned by `GrayStreamCallFixture.FUNCTION_VALUE_PROGRAM` (SBCL's answers) on all four,
   ci-spec `gray-stream-operators-as-function-values`, `GrayStreamsLibraryTest
   #aStreamOperatorTakenAsAValueSplicesItsDispatchHelpers`,
   `BuiltinFunctionWrapperCatalogTest#aStreamOperatorsWrapperCallsTheGrayDispatchOnlyBesideIt`.
+- `write-char`, `write-byte`, `unread-char` had NO function value until 2026-10-07 (measured
+  that day on all four: `#'write-char` "WRITE-CHAR is a macro or special operator, not a
+  function" on the interpreter, "Cannot compile: WRITE-CHAR" on JVM/P1/component;
+  `#'write-byte` "Cannot compile" on the three compile paths; `#'unread-char` signalled
+  `UNREAD_CHAR_NOT_A_VALUE_MESSAGE` there; SBCL 2.2.9 answers all three). `write-char` sat in
+  `PackageRegistry.CL_MACROS`, so `(macro-function 'write-char)` answered a function on all
+  four (SBCL: NIL); it is a CL function now, interpreter-lowered (`ShadowedBuiltins
+  .EXPANSION_LOWERED`). Catalog wrappers `(c &optional s)` / `(b s)` (write-byte
+  reference-gated: the JVM drains raw stdout octets only for a source naming it), Gray
+  twins over the existing `%gray-write-char/-write-byte/-unread-char-dispatch`. Pinned by
+  `GrayStreamCallFixture.WRITE_AND_UNREAD_VALUE_PROGRAM` /
+  `StringStreamPrograms.WRITE_AND_UNREAD_VALUE_PROGRAM` in the three suites, ci-spec
+  `write-char-write-byte-and-unread-char-as-function-values`.
 
 ## Compile path: `GrayStreamsLibrary.process`
 Runs after `UserMacroExpander`; triggered by any protocol name (`splitQualified` member match,
@@ -265,8 +285,6 @@ over the WHOLE program once ANY part uses the protocol. Walker rules (no positio
 ## Limits
 - `listen` on an instance works interpreter/JVM; Preview 1 WASM rejects ANY `listen` at
   compile time.
-- `#'write-char`, `#'write-byte`, `#'unread-char` have no function value on the compile
-  paths at all (a compile error / a signal), Gray or not.
 - `input-stream-p`/`output-stream-p` = `typep` against the two DIRECTION base classes,
   ownable like `open-stream-p`, deliberately not full Gray's per-base-class generics.
 
@@ -354,9 +372,18 @@ Contract, identical on all four:
   `StringStreamPrograms.PER_STREAM_PUSHBACK_PROGRAM` in the three backend suites.
 - A parked character survives `close` on its value: a read of the closed stream answers it
   where SBCL signals (unmeasured edge, all four alike).
-- **A `#'unread-char` FUNCTION VALUE still signals on the compile backends**
-  (`LispMacroExpander.UNREAD_CHAR_NOT_A_VALUE_MESSAGE`); the interpreter has no such limit.
-  Callers: cl-json's decoder, local-time's parser, chunga's `unread-char*`.
+- **Function values: `BuiltinFunctionWrappers.PUSHBACK_WRAPPERS`**, the `GRAY_WRAPPERS`
+  idea on this splice: where the program carries the defuns (it names `unread-char`; the
+  file-position pair also needs `file-position` named), `#'unread-char`, `#'read-char`,
+  `#'read-char-no-hang`, `#'peek-char`, `#'read-line` (the catalog's lite eof shape),
+  `#'listen` and `#'file-position` call them, so a value parks and drains like a call.
+  Until 2026-10-07 `#'unread-char` signalled and the read family taken as values read PAST a
+  parked character (then the next `unread-char` signalled "without an intervening
+  READ-CHAR"), JVM/P1/component. A Gray twin wins over a pushback twin: its handle fallback
+  is a call site this pass already rewrote. The catalog `#'unread-char` still signals
+  (`LispMacroExpander.UNREAD_CHAR_NOT_A_VALUE_MESSAGE`), reachable only through a symbol
+  built at run time. Callers: cl-json's decoder, local-time's parser, chunga's
+  `unread-char*`.
 
 ## `make-broadcast-stream` is a Gray stream
 Prelude Lisp (`LispPreludeLibrary.MAKE_BROADCAST_STREAM`) defines a

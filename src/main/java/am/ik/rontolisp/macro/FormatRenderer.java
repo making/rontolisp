@@ -8,6 +8,7 @@ import java.util.List;
 import java.util.Set;
 
 import am.ik.rontolisp.LispCons;
+import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispString;
 import am.ik.rontolisp.LispSymbol;
@@ -62,7 +63,7 @@ public final class FormatRenderer {
 	 * The renderer entry point: {@code (%fmt-render control-string argument-list)}
 	 * answers the rendered string.
 	 */
-	public static final String RENDER = "%FMT-RENDER";
+	public static final String RENDER = LispNames.FMT_RENDER;
 
 	/**
 	 * The prefix every renderer definition carries. A cheap pre-test for the

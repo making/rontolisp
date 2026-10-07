@@ -52,12 +52,12 @@ public final class PackageRegistry {
 			LispNames.DOCUMENTATION, LispNames.COMPLEMENT, LispNames.WARN, LispNames.SIGNAL, LispNames.RETURN_FROM,
 			LispNames.MAKE_INSTANCE, LispNames.SLOT_VALUE, LispNames.WITH_SLOTS, LispNames.WITH_ACCESSORS,
 			LispNames.CHANGE_CLASS, LispNames.HANDLER_CASE, LispNames.IGNORE_ERRORS, LispNames.HANDLER_BIND,
-			LispNames.WRITE_CHAR, LispNames.MAKE_SEQUENCE, LispNames.PROG, LispNames.PROG_STAR, LispNames.SHIFTF,
-			LispNames.LOAD_TIME_VALUE, LispNames.TYPEP, LispNames.SLOT_BOUNDP, LispNames.SLOT_MAKUNBOUND,
-			LispNames.SLOT_EXISTS_P, LispNames.PRINT_UNREADABLE_OBJECT, LispNames.WITH_PACKAGE_ITERATOR,
-			LispNames.WITH_HASH_TABLE_ITERATOR, LispNames.DO_EXTERNAL_SYMBOLS, LispNames.DO_SYMBOLS,
-			LispNames.DO_ALL_SYMBOLS, LispNames.WITH_COMPILATION_UNIT, LispNames.RESTART_BIND,
-			LispNames.WITH_SIMPLE_RESTART, LispNames.PPRINT_LOGICAL_BLOCK);
+			LispNames.MAKE_SEQUENCE, LispNames.PROG, LispNames.PROG_STAR, LispNames.SHIFTF, LispNames.LOAD_TIME_VALUE,
+			LispNames.TYPEP, LispNames.SLOT_BOUNDP, LispNames.SLOT_MAKUNBOUND, LispNames.SLOT_EXISTS_P,
+			LispNames.PRINT_UNREADABLE_OBJECT, LispNames.WITH_PACKAGE_ITERATOR, LispNames.WITH_HASH_TABLE_ITERATOR,
+			LispNames.DO_EXTERNAL_SYMBOLS, LispNames.DO_SYMBOLS, LispNames.DO_ALL_SYMBOLS,
+			LispNames.WITH_COMPILATION_UNIT, LispNames.RESTART_BIND, LispNames.WITH_SIMPLE_RESTART,
+			LispNames.PPRINT_LOGICAL_BLOCK);
 
 	/**
 	 * The {@code cl} functions: every standard name usable as a function value via
@@ -109,9 +109,9 @@ public final class PackageRegistry {
 			LispNames.STRING_NOT_LESSP, LispNames.STRING_NOT_EQUAL, LispNames.STRING_TRIM, LispNames.STRING_LEFT_TRIM,
 			LispNames.STRING_RIGHT_TRIM, LispNames.OPEN, LispNames.CLOSE, LispNames.PROBE_FILE, LispNames.DIRECTORY,
 			LispNames.PATHNAME_DIRECTORY, LispNames.CONSTANTLY, LispNames.WRITE_LINE, LispNames.READ_BYTE,
-			LispNames.WRITE_BYTE, LispNames.READ_SEQUENCE, LispNames.WRITE_SEQUENCE, LispNames.IDENTITY,
-			LispNames.COPY_LIST, LispNames.COPY_STRUCTURE, LispNames.COPY_TREE, LispNames.TREE_EQUAL,
-			LispNames.NREVERSE, LispNames.MAKE_LIST, LispNames.UNION, LispNames.SET_EXCLUSIVE_OR,
+			LispNames.WRITE_BYTE, LispNames.WRITE_CHAR, LispNames.READ_SEQUENCE, LispNames.WRITE_SEQUENCE,
+			LispNames.IDENTITY, LispNames.COPY_LIST, LispNames.COPY_STRUCTURE, LispNames.COPY_TREE,
+			LispNames.TREE_EQUAL, LispNames.NREVERSE, LispNames.MAKE_LIST, LispNames.UNION, LispNames.SET_EXCLUSIVE_OR,
 			LispNames.COUNT_IF_NOT, LispNames.MERGE, LispNames.NUNION, LispNames.NINTERSECTION,
 			LispNames.NSET_DIFFERENCE, LispNames.NSET_EXCLUSIVE_OR, LispNames.NSUBST, LispNames.NSUBST_IF,
 			LispNames.NSUBST_IF_NOT, LispNames.SUBST_IF, LispNames.SUBST_IF_NOT, LispNames.NSUBLIS,
@@ -289,7 +289,9 @@ public final class PackageRegistry {
 
 	/**
 	 * Internal {@code %}-prefixed helpers owned by {@code cl} but excluded from the
-	 * introspection listings.
+	 * introspection listings. Every name a built-in lowering emits belongs here: a
+	 * compile-path pass may run the lowering before the package resolver, inside the
+	 * user's package, where a name {@code cl} does not own resolves into that package.
 	 */
 	private static final Set<String> CL_INTERNALS = Set.of(LispNames.REMF_TAIL, LispNames.STRING_CONCAT,
 			LispNames.FIXED_DECIMAL, LispNames.SEQ_STRING, LispNames.SEQ_INT_VECTOR, LispNames.SEQ_FLOAT_VECTOR,
@@ -359,7 +361,8 @@ public final class PackageRegistry {
 			LispNames.PACKAGE_ITERATOR_ENTRIES_INTERNAL, LispNames.RUNTIME_MEMBER_FIND_INTERNAL,
 			LispNames.RUNTIME_MEMBER_STATUS_INTERNAL, LispNames.RUNTIME_MEMBER_INTERN_INTERNAL,
 			LispNames.RUNTIME_EXTERNAL_FIND_INTERNAL, LispNames.RUNTIME_PACKAGE_OP_INTERNAL,
-			LispNames.CHECK_BOUNDS_INTERNAL);
+			LispNames.CHECK_BOUNDS_INTERNAL, LispNames.PRINC_PIECE_INTERNAL, LispNames.PRIN1_PIECE_INTERNAL,
+			LispNames.FMT_RENDER);
 
 	/**
 	 * The names of the symbols owned by the {@code cl} package, derived as the union of

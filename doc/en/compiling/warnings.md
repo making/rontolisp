@@ -6,7 +6,8 @@ line on standard error, at the position of the form:
 
 - a call whose argument count or keyword arguments the callee rules out, which signals
   `program-error` when it runs (see [`defun`](../reference/special-forms/defun.md))
-- a call to a function the program never defines
+- a call to a function the program never defines, or a reference to one (`#'name`, or a
+  quoted name passed as a function, as in `(funcall 'name ...)`)
 - a `defun` of a `COMMON-LISP` function whose call sites compile to the standard
   operator anyway
 - a primitive a `--no-wasi` module reaches while it loads, an `http-handler` port a war

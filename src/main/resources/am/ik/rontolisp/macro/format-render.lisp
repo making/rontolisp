@@ -658,13 +658,136 @@
               (%fmt-pad-char params 1 " ") t)))
 
 ;;; ~radix,mincol,padchar,commachar,comma-interval R. Without a radix parameter
-;;; Common Lisp spells the number in English; rontolisp prints the decimal digits
-;;; instead (see the doc's format limitations).
+;;; (none given, or `v` reading NIL) the directive spells the number: English
+;;; cardinal, ~:R ordinal, ~@R Roman, ~:@R old Roman; every other parameter is
+;;; ignored, as SBCL does.
 (defun %fmt-field-radix (v params colon at)
-  (let ((base (%fmt-int params 0 10)))
-    (%fmt-pad (%fmt-radix v base colon (%fmt-pad-char params 3 ",")
-                          (%fmt-int params 4 3) at) (%fmt-int params 1 0) 1 0
-              (%fmt-pad-char params 2 " ") t)))
+  (if (null (%fmt-nth params 0))
+      (%fmt-spelled v colon at)
+      (let ((base (%fmt-int params 0 10)))
+        (%fmt-pad (%fmt-radix v base colon (%fmt-pad-char params 3 ",")
+                              (%fmt-int params 4 3) at) (%fmt-int params 1 0) 1
+                  0 (%fmt-pad-char params 2 " ") t))))
+
+;;; A non-integer argument prints as if by ~A, like every other numeric directive
+;;; here (the renderer never rejects an argument's type); only the range limits
+;;; of the spellings signal, with SBCL's text.
+(defun %fmt-spelled (n colon at)
+  (cond ((not (integerp n)) (%princ-piece n))
+        (at (%fmt-roman n colon))
+        (t (%fmt-english n colon))))
+
+;;; Roman numerals: 1..3999 (subtractive), 1..4999 with ~:@R (additive).
+(defun %fmt-roman (n old)
+  (if old
+      (if (or (< n 1) (> n 4999))
+          (error "Number too large to print in old Roman numerals: ~:D" n)
+          (%fmt-roman-digits n
+           '(1000 "M" 500 "D" 100 "C" 50 "L" 10 "X" 5 "V" 1 "I")))
+      (if (or (< n 1) (> n 3999))
+          (error "Number too large to print in Roman numerals: ~:D" n)
+          (%fmt-roman-digits n
+                             '(1000 "M" 900 "CM" 500 "D" 400 "CD" 100 "C" 90
+                               "XC" 50 "L" 40 "XL" 10 "X" 9 "IX" 5 "V" 4 "IV" 1
+                               "I")))))
+
+;;; Greedy over TBL, value/numeral pairs largest first.
+(defun %fmt-roman-digits (n tbl)
+  (let ((out "") (rest n) (p tbl))
+    (while p
+      (while (>= rest (car p))
+        (setq out (%fmt-cat out (car (cdr p))))
+        (setq rest (- rest (car p))))
+      (setq p (cdr (cdr p))))
+    out))
+
+;;; English cardinal / ordinal for |n| < 10^66 (a vigintillion is the largest
+;;; scale word). The magnitude is cut into groups of three digits, least
+;;; significant first, so a bignum costs one division per group. The ordinal's
+;;; error names the magnitude with its last two digits dropped: SBCL spells all
+;;; but the last word as a cardinal, and reports that number.
+(defun %fmt-english (n ordinal)
+  (let* ((neg (< n 0)) (m (if neg (- 0 n) n)) (groups nil) (count 0))
+    (while (and (> m 0) (< count 22))
+      (setq groups (cons (mod m 1000) groups))
+      (setq m (truncate (/ m 1000)))
+      (setq count (+ count 1)))
+    (if (> m 0)
+        (error "Number too large to print in English: ~:D"
+               (if ordinal (- (abs n) (mod (abs n) 100)) n))
+        (let* ((words (if (null groups) "zero" (%fmt-groups groups count)))
+               (text (if ordinal (%fmt-ordinal-text words) words)))
+          (if neg (%fmt-cat "negative " text) text)))))
+
+;;; GROUPS most significant first, COUNT of them: "<group> <scale>" for each
+;;; non-zero group, joined by spaces.
+(defun %fmt-groups (groups count)
+  (let ((out "") (k count) (p groups))
+    (while p
+      (setq k (- k 1))
+      (if (> (car p) 0)
+          (setq out
+                (%fmt-cat (if (string= out "") out (%fmt-cat out " "))
+                          (%fmt-group-words (car p) k))))
+      (setq p (cdr p)))
+    out))
+
+(defun %fmt-group-words (g k)
+  (if (= k 0)
+      (%fmt-below-1000 g)
+      (%fmt-cat (%fmt-cat (%fmt-below-1000 g) " ")
+                (nth k
+                     '("" "thousand" "million" "billion" "trillion"
+                       "quadrillion" "quintillion" "sextillion" "septillion"
+                       "octillion" "nonillion" "decillion" "undecillion"
+                       "duodecillion" "tredecillion" "quattuordecillion"
+                       "quindecillion" "sexdecillion" "septendecillion"
+                       "octodecillion" "novemdecillion" "vigintillion")))))
+
+;;; 1..999.
+(defun %fmt-below-1000 (g)
+  (let ((h (truncate (/ g 100))) (r (mod g 100)))
+    (cond ((= h 0) (%fmt-below-100 r))
+     ((= r 0) (%fmt-cat (%fmt-ones h) " hundred"))
+     (t (%fmt-cat (%fmt-cat (%fmt-ones h) " hundred ") (%fmt-below-100 r))))))
+
+;;; 1..99.
+(defun %fmt-below-100 (r)
+  (if (< r 20)
+      (%fmt-ones r)
+      (let ((tens
+             (nth (truncate (/ r 10))
+                  '(nil nil "twenty" "thirty" "forty" "fifty" "sixty" "seventy"
+                        "eighty" "ninety")))
+            (u (mod r 10)))
+        (if (= u 0) tens (%fmt-cat (%fmt-cat tens "-") (%fmt-ones u))))))
+
+(defun %fmt-ones (k)
+  (nth k
+       '("zero" "one" "two" "three" "four" "five" "six" "seven" "eight" "nine"
+         "ten" "eleven" "twelve" "thirteen" "fourteen" "fifteen" "sixteen"
+         "seventeen" "eighteen" "nineteen")))
+
+;;; The cardinal text with its LAST word (after the last space or hyphen) made
+;;; ordinal.
+(defun %fmt-ordinal-text (words)
+  (let ((i (length words)))
+    (while (and (> i 0) (not (char= (char words (- i 1)) #\Space))
+                (not (char= (char words (- i 1)) #\-)))
+      (setq i (- i 1)))
+    (%fmt-cat (subseq words 0 i) (%fmt-ordinal-word (subseq words i)))))
+
+(defun %fmt-ordinal-word (w)
+  (cond ((string= w "one") "first")
+        ((string= w "two") "second")
+        ((string= w "three") "third")
+        ((string= w "five") "fifth")
+        ((string= w "eight") "eighth")
+        ((string= w "nine") "ninth")
+        ((string= w "twelve") "twelfth")
+        ((char= (char w (- (length w) 1)) #\y)
+         (%fmt-cat (subseq w 0 (- (length w) 1)) "ieth"))
+        (t (%fmt-cat w "th"))))
 
 ;;; ~w,d,k,overflowchar,padchar F
 (defun %fmt-field-fixed (v params at)

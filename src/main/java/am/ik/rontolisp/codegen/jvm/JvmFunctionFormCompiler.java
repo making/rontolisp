@@ -14,6 +14,9 @@ import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.PackageRegistry;
+import am.ik.rontolisp.compiler.CompileWarnings;
+import am.ik.rontolisp.compiler.FunctionDesignators;
 
 /**
  * Compiles the {@code (function name)} special form ({@code #'name} reader syntax) and
@@ -22,7 +25,8 @@ import am.ik.rontolisp.LispVal;
  * compile-time function registry (user defuns and built-in wrappers) and compiles to a
  * closure {@code Object[]{Integer funcId}}; {@code (function (lambda ...))} compiles the
  * lambda value directly. In dynamic mode an unresolved name defers to the runtime via
- * {@code _eval('(function name), null)}.
+ * {@code _eval('(function name), null)}; otherwise a name no definition has compiles to
+ * the undefined-function signal a direct call of it reaches, where the reference runs.
  */
 final class JvmFunctionFormCompiler {
 
@@ -149,9 +153,44 @@ final class JvmFunctionFormCompiler {
 			// A top-level (setq name (lambda ...)) the same way.
 			JvmExprCompiler.compileExpr(new am.ik.rontolisp.LispSymbol(name), ctx, className);
 		}
-		else {
-			throw new UnsupportedOperationException("Cannot compile: " + name);
+		else if (undefined(name, ctx)) {
+			// A name no definition has: the interpreter's late binding, as for a direct
+			// call (JvmFunctionCallCompiler) -- the undefined-function is signalled where
+			// the reference is EVALUATED, so a branch never taken still compiles.
+			CompileWarnings.warn(null, "the function " + name + " is undefined; compiled as a run-time error");
+			emitUndefinedFunctionThrow(name, ctx);
 		}
+		else {
+			// A standard function this backend calls only in head position: it HAS a
+			// definition, so the late-binding signal above would misreport it.
+			throw new UnsupportedOperationException(
+					"Cannot compile: " + name + " as a function value (this backend has none for the built-in)");
+		}
+	}
+
+	/**
+	 * {@return whether {@code name} has no definition at all -- no function this backend
+	 * registered, no car/cdr composition, no variable holding the function, no standard
+	 * function, and no {@code --dynamic} runtime to ask}
+	 * @param name the function name
+	 * @param ctx the method context
+	 */
+	static boolean undefined(String name, JvmLispCompiler.Ctx ctx) {
+		return !ctx.functions.containsKey(name) && !LispNames.isCarCdrComposition(name) && !ctx.dynamic
+				&& !ctx.globals.contains(name) && !PackageRegistry.isClFunctionName(name);
+	}
+
+	/**
+	 * The expression a function-designator ARGUMENT compiles to
+	 * ({@link FunctionDesignators#normalize(LispVal, java.util.function.Predicate)}): a
+	 * quoted name this backend resolves becomes {@code (function name)}, one no
+	 * definition has stays the symbol the dispatcher looks up when the call runs.
+	 * @param fnForm the expression in function-designator position
+	 * @param ctx the method context
+	 * @return the expression to compile
+	 */
+	static LispVal designator(LispVal fnForm, JvmLispCompiler.Ctx ctx) {
+		return FunctionDesignators.normalize(fnForm, name -> !undefined(name, ctx));
 	}
 
 	private static LispCons carCdrLambda(String name) {

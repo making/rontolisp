@@ -78,7 +78,7 @@ final class WasmDesignatorCall {
 		if (!ctx.injectedRuntimeBody && !LispMacroExpander.isStaticFunctionDesignator(fnForm)) {
 			ctx.runtimeDesignatorDispatch[0] = true;
 		}
-		WasmExprCompiler.compileExpr(FunctionDesignators.normalize(fnForm), ctx);
+		WasmExprCompiler.compileExpr(WasmFunctionFormCompiler.designator(fnForm, ctx), ctx);
 		int slot = ctx.allocTemp();
 		ctx.writer.write(Instruction.SET_LOCAL);
 		ctx.writer.writeUnsignedLeb128(slot);

@@ -1126,6 +1126,28 @@ message at the catching end** -- except for the failures the backends report as 
   `ehAnUndefinedFunctionCallIsCaughtAsTheClassTheProgramNames`). Through the CLI the bake is
   common: anything that splices the report runtime (`princ-to-string` of a condition) names the
   class.
+- **A literal REFERENCE to such a name keeps the same contract** (refused with `Cannot compile:
+  NAME` on every compiled backend until 2026-10-07). `#'name` / `(symbol-function 'name)`
+  compile to the direct call's signal at the reference -- the interpreter signals where
+  `(function name)` is evaluated, before any argument -- with `warning: ... compiled as a
+  run-time error` (`Jvm`/`WasmFunctionFormCompiler.compileNamed`'s `undefined` arm; wasm shares
+  `WasmFunctionCallCompiler.emitUndefinedFunctionSignal` with the call stub). A QUOTED
+  designator (`(funcall 'name ...)`, `apply`, `mapcar`, `maphash`, the JVM's value tail) is not
+  rewritten to `#'name` for such a name (`FunctionDesignators.normalize(fnForm, defined)`, the
+  backends' `designator`): it stays the symbol, which the dispatchers look up when the call runs
+  -- after the arguments (SBCL and the interpreter print `(:SPREAD :ARG)` for the fixture), never
+  for a call that does not happen, and through `_fenv` where a runtime `eval` defined it -- with
+  `warning: ... looked up when the call runs`. **A standard function is not undefined**:
+  `PackageRegistry.isClFunctionName` names with no value route on a backend (31 measured
+  2026-10-07: `arrayp`, `close`, `eval`, `get-universal-time`, `symbol-function`, ...) still
+  refuse, `Cannot compile: NAME as a function value (this backend has none for the built-in)`, where a
+  late-binding signal would misreport a defined function; the JVM used to let a TAIL
+  `(funcall 'arrayp x)` through as a symbol that then reported `ARRAYP` undefined, and refuses it
+  with wasm now. Pinned by `UndefinedFunctionNameFixture.REFERENCE` / `REFERENCE_RESTART`
+  (`anUndefinedNameTakenAsAFunctionSignalsWhenTheReferenceRuns` in `LispEvaluatorTest` /
+  `JvmLispCompilerTest` / `WasmLispCompilerIntegrationTest`) and `RontoLispCliStreamsTest`
+  `aReferenceToAnUndefinedFunctionWarnsAtTheReferenceOnEveryBackend`; not in ci-spec, whose
+  compiles forbid the warning.
 - **Every undefined-function names its function, every unbound-variable its variable**
   (`cell-error-name`, SBCL's answer; NIL on every backend before 2026-10-07). Interpreter: the
   throw sites raise `CellErrorException` (`undefinedFunction`, `unboundVariable`) carrying the
@@ -1146,8 +1168,7 @@ message at the catching end** -- except for the failures the backends report as 
   `undefined-function-carries-its-name` / `unbound-variable-carries-its-name`. Left open: a
   compiled read of a `(defvar x)` without a value answers NIL rather than signalling
   (`.todo/d85`); the wasm message spells the name with `princ`, dropping a package prefix
-  (`.todo/d86`); `#'name` / `(funcall 'name)` of an undefined name does not compile at all
-  (`.todo/d83`).
+  (`.todo/d86`).
 - **The message a raw host failure reports is rontolisp's, not the host's**:
   `ClosRegistry.TYPE_ERROR_MESSAGE` replaces a `ClassCastException`'s Java class names and
   `INDEX_OUT_OF_BOUNDS_MESSAGE` the JVM's `Index 10 out of bounds for length 3` (whose length counts

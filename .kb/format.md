@@ -134,7 +134,8 @@ cursor cannot serve it -- `~*`, `~:*`, `~n@*` and `~?`/`~{` recursion make the a
 - **The renderer never signals**: a malformed control, an unknown directive, an unterminated
   `~{`, a missing argument all render as text (`NIL` for the missing argument); the literal path
   signals the same at EXPANSION time. A condition report must not fail while reporting -- do not
-  "fix" this. One exception: the absent `~/name/` arm, a missing capability rather than bad input.
+  "fix" this. Exceptions: the absent `~/name/` arm, a missing capability rather than bad input, and
+  the range errors of the no-radix `~r` below.
 - **`~t`, `~p`, `~<...~>` and `~/name/` are renderer-only.** If the static path grows them, drop
   them from this list, not from the renderer.
 - **`~<...~>` is JUSTIFICATION, `~<...~:>` a LOGICAL BLOCK, and the closing directive decides.**
@@ -156,8 +157,16 @@ cursor cannot serve it -- `~*`, `~:*`, `~n@*` and `~?`/`~{` recursion make the a
   `.todo/041` owns the remaining reads. **Trigger: when the printer entry points honor the control
   variables past `write`'s own keywords, `~W` must consult `*print-escape*`/`*print-readably*` as
   `write` does.** ci-spec `format-directive-write`.
-- `~r` without a radix prints decimal digits (English cardinals/ordinals unimplemented);
-  `~x`/`~o`/`~b`/`~r` answer UPPERCASE digits on both paths (`ClWhoE2eTest`); `~&` measures the
+- `~r` without a radix (none, or `v` reading NIL) is renderer-only (the static parser declines it) and
+  spells the integer: cardinal, `~:r` ordinal, `~@r` Roman 1..3999, `~:@r` old Roman 1..4999, every other
+  parameter ignored; `|n| >= 10^66` (cardinal, ordinal) and the Roman ranges SIGNAL `simple-error` with
+  SBCL's text -- an exception to "never signals" like the absent `~/name/` arm. The
+  ordinal's error names `|n|` with its last two digits dropped, as SBCL does. A non-integer argument prints
+  as `~a` (CLHS 22.3.2; SBCL signals a `format-error` instead). Pinned by `FormatSpelledNumbersFixture` on
+  all four backends and ci-spec `format-r-without-a-radix-spells-the-number`; SBCL 2.2.9 answered all 1,312
+  rows of a 0..10^100 sweep identically on the interpreter, JVM, P1 and component, literal and runtime
+  control (2026-10-07).
+- `~x`/`~o`/`~b`/`~r` answer UPPERCASE digits on both paths (`ClWhoE2eTest`); `~&` measures the
   column from the text rendered so far, the literal path's `t` destination using the real one.
 - **A signal's runtime control renders EAGERLY, into the message** -- the condition carries the
   rendered text in `format-control` and nil `format-arguments`, on BOTH paths

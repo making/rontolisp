@@ -7,7 +7,6 @@ import am.ik.rontolisp.LispHashTable;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
-import am.ik.rontolisp.compiler.FunctionDesignators;
 import am.ik.rontolisp.compiler.OperandTypes;
 import am.ik.rontolisp.macro.LispMacroExpander;
 import am.ik.wasm.Instruction;
@@ -493,7 +492,7 @@ final class WasmHashTableCompiler {
 		}
 		int dispatchFuncIdx = WasmLispCompiler.FUNC_DISPATCH_BASE + 2;
 
-		WasmExprCompiler.compileExpr(FunctionDesignators.normalize(args.get(1)), ctx);
+		WasmExprCompiler.compileExpr(WasmFunctionFormCompiler.designator(args.get(1), ctx), ctx);
 		int funcSlot = setTemp(ctx);
 		int headerSlot = headerSlot(args.get(2), ctx);
 		// A folding table's entries are (fold . (key . value)): its tag, read once.

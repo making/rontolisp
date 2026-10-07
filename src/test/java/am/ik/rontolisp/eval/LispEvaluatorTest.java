@@ -28,6 +28,7 @@ import am.ik.rontolisp.ReadFeatureGuardFixture;
 import am.ik.rontolisp.ReadFromStringLambdaListFixture;
 import am.ik.rontolisp.ReadFromStringMalformedFixture;
 import am.ik.rontolisp.ScaleFloatOperandsFixture;
+import am.ik.rontolisp.FormatSpelledNumbersFixture;
 import am.ik.rontolisp.StringNilStartFixture;
 import am.ik.rontolisp.SubseqBoundsFixture;
 import am.ik.rontolisp.BoundedStringBoundsFixture;
@@ -818,6 +819,21 @@ class LispEvaluatorTest {
 		// answers its target's (.kb/read-load-streams.md, "String streams").
 		assertThat(printedOutput(StringStreamPrograms.directionProgram(tempDir.resolve("dir.txt").toString())))
 			.isEqualTo(StringStreamPrograms.DIRECTION_EXPECTED);
+	}
+
+	@Test
+	void writeCharWriteByteAndUnreadCharAreFunctionValues(@TempDir Path tempDir) {
+		// #'write-char resolved to "a macro or special operator" here; the program pins
+		// SBCL's answers on all four backends.
+		assertThat(
+				printedOutput(StringStreamPrograms.writeAndUnreadValueProgram(tempDir.resolve("value.bin").toString())))
+			.isEqualTo(StringStreamPrograms.WRITE_AND_UNREAD_VALUE_EXPECTED);
+	}
+
+	@Test
+	void writeCharWriteByteAndUnreadCharValuesReachAGrayStream() {
+		assertThat(printedOutput(am.ik.rontolisp.GrayStreamCallFixture.WRITE_AND_UNREAD_VALUE_PROGRAM))
+			.isEqualTo(am.ik.rontolisp.GrayStreamCallFixture.WRITE_AND_UNREAD_VALUE_EXPECTED);
 	}
 
 	@Test
@@ -10513,6 +10529,20 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void aFormatTInAPackageReachesAGrayStandardStream() {
+		// The compile paths lower this (format t ...) before the package resolver runs;
+		// the interpreter is the reference its twins are held to.
+		ByteArrayOutputStream baos = new ByteArrayOutputStream();
+		LispEvaluator evaluator = new LispEvaluator(new PrintStream(baos));
+		for (LispVal expr : LispReader
+			.readAllFromString(am.ik.rontolisp.GrayStreamCallFixture.STANDARD_STREAM_IN_A_PACKAGE_PROGRAM)) {
+			evaluator.eval(expr);
+		}
+		assertThat(baos.toString().trim())
+			.isEqualTo(am.ik.rontolisp.GrayStreamCallFixture.STANDARD_STREAM_IN_A_PACKAGE_EXPECTED);
+	}
+
+	@Test
 	void unreadCharInAGrayProgramParksOnTheOpenStream() {
 		// Reads through the Gray dispatch helpers still park on the open stream value.
 		ByteArrayOutputStream baos = new ByteArrayOutputStream();
@@ -10588,6 +10618,20 @@ class LispEvaluatorTest {
 			evaluator.eval(expr);
 		}
 		assertThat(baos.toString().trim()).isEqualTo(SequenceBoundsFixture.OPERATOR_REPORT_EXPECTED);
+	}
+
+	@Test
+	void formatRWithoutARadixSpellsTheNumber() {
+		// ~r / ~:r / ~@r / ~:@r with no radix: English cardinal, ordinal, Roman and old
+		// Roman numerals with sbcl's range errors, through a literal and a runtime
+		// control,
+		// pinned on all four backends.
+		ByteArrayOutputStream baos = new ByteArrayOutputStream();
+		LispEvaluator evaluator = new LispEvaluator(new PrintStream(baos));
+		for (LispVal expr : LispReader.readAllFromString(FormatSpelledNumbersFixture.PROGRAM)) {
+			evaluator.eval(expr);
+		}
+		assertThat(baos.toString().trim()).isEqualTo(FormatSpelledNumbersFixture.EXPECTED);
 	}
 
 	@Test
@@ -20855,6 +20899,15 @@ class LispEvaluatorTest {
 			.isEqualTo(am.ik.rontolisp.UndefinedFunctionNameFixture.PLAIN_EXPECTED);
 		assertThat(printedLines(am.ik.rontolisp.UndefinedFunctionNameFixture.RESTART))
 			.isEqualTo(am.ik.rontolisp.UndefinedFunctionNameFixture.RESTART_EXPECTED);
+	}
+
+	@Test
+	void anUndefinedNameTakenAsAFunctionSignalsWhenTheReferenceRuns() {
+		// The reference answer (SBCL's) for the compiled backends' twins of this name.
+		assertThat(printedLines(am.ik.rontolisp.UndefinedFunctionNameFixture.REFERENCE))
+			.isEqualTo(am.ik.rontolisp.UndefinedFunctionNameFixture.REFERENCE_EXPECTED);
+		assertThat(printedLines(am.ik.rontolisp.UndefinedFunctionNameFixture.REFERENCE_RESTART))
+			.isEqualTo(am.ik.rontolisp.UndefinedFunctionNameFixture.REFERENCE_RESTART_EXPECTED);
 	}
 
 	@Test

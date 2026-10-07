@@ -5,7 +5,6 @@ import java.util.ArrayList;
 import java.util.List;
 
 import am.ik.rontolisp.LispCons;
-import am.ik.rontolisp.compiler.FunctionDesignators;
 import am.ik.rontolisp.LispVal;
 import org.jspecify.annotations.Nullable;
 
@@ -80,7 +79,7 @@ final class JvmApplyCompiler {
 		}
 
 		// Compile the function designator.
-		JvmExprCompiler.compileExpr(FunctionDesignators.normalize(args.get(1)), ctx, className);
+		JvmExprCompiler.compileExpr(JvmFunctionFormCompiler.designator(args.get(1), ctx), ctx, className);
 		int funcSlot = ctx.allocTemp();
 		ctx.body.astore(funcSlot);
 

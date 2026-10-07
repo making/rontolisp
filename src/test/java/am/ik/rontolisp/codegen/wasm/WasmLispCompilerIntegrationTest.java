@@ -32,6 +32,7 @@ import am.ik.rontolisp.ReadFeatureGuardFixture;
 import am.ik.rontolisp.ReadFromStringLambdaListFixture;
 import am.ik.rontolisp.ReadFromStringMalformedFixture;
 import am.ik.rontolisp.ScaleFloatOperandsFixture;
+import am.ik.rontolisp.FormatSpelledNumbersFixture;
 import am.ik.rontolisp.StringNilStartFixture;
 import am.ik.rontolisp.SubseqBoundsFixture;
 import am.ik.rontolisp.BoundedStringBoundsFixture;
@@ -14427,6 +14428,27 @@ class WasmLispCompilerIntegrationTest {
 	private static final String FILE_POSITION_EXPECTED = "10\n0\n0\n1\nT\n5\n5\n6\n0";
 
 	@Test
+	void writeCharWriteByteAndUnreadCharAreFunctionValues() throws Exception {
+		// The wasm twin of
+		// LispEvaluatorTest#writeCharWriteByteAndUnreadCharAreFunctionValues, Preview 1
+		// and the component.
+		for (boolean component : new boolean[] { false, true }) {
+			assertThat(
+					runFrontendProgramWithDir(StringStreamPrograms.writeAndUnreadValueProgram("value.bin"), component))
+				.isEqualTo(StringStreamPrograms.WRITE_AND_UNREAD_VALUE_EXPECTED);
+		}
+	}
+
+	@Test
+	void writeCharWriteByteAndUnreadCharValuesReachAGrayStream() throws Exception {
+		for (boolean component : new boolean[] { false, true }) {
+			assertThat(compileAndRunFrontEndWithDir(
+					am.ik.rontolisp.GrayStreamCallFixture.WRITE_AND_UNREAD_VALUE_PROGRAM, component))
+				.isEqualTo(am.ik.rontolisp.GrayStreamCallFixture.WRITE_AND_UNREAD_VALUE_EXPECTED);
+		}
+	}
+
+	@Test
 	void directionPredicatesAnswerTheStreamsRealDirectionOnPreview1() throws Exception {
 		// The interpreter twin is
 		// LispEvaluatorTest#directionPredicatesAnswerTheStreamsRealDirection.
@@ -14664,6 +14686,18 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void aFormatTInAPackageReachesAGrayStandardStream() throws Exception {
+		// The wasm twin of
+		// LispEvaluatorTest#aFormatTInAPackageReachesAGrayStandardStream, Preview 1 and
+		// the component.
+		for (boolean component : new boolean[] { false, true }) {
+			assertThat(compileAndRunFrontEndWithDir(
+					am.ik.rontolisp.GrayStreamCallFixture.STANDARD_STREAM_IN_A_PACKAGE_PROGRAM, component))
+				.isEqualTo(am.ik.rontolisp.GrayStreamCallFixture.STANDARD_STREAM_IN_A_PACKAGE_EXPECTED);
+		}
+	}
+
+	@Test
 	void anAwaitInAGrayDispatchArgumentIsHoistedOnTheComponent() throws Exception {
 		// The Gray rewrite turns a stream call into a gray.lisp helper call -- with an
 		// explicit stream, and the stream-less print family once the program binds
@@ -14746,6 +14780,17 @@ class WasmLispCompilerIntegrationTest {
 			.isEqualTo(SequenceBoundsFixture.OPERATOR_REPORT_EXPECTED);
 		assertThat(compileAndRunFrontEndWithDir(SequenceBoundsFixture.OPERATOR_REPORT_PROGRAM, true))
 			.isEqualTo(SequenceBoundsFixture.OPERATOR_REPORT_EXPECTED);
+	}
+
+	@Test
+	void formatRWithoutARadixSpellsTheNumber() throws Exception {
+		// The wasm twin of LispEvaluatorTest#formatRWithoutARadixSpellsTheNumber, Preview
+		// 1
+		// and the component.
+		assertThat(compileAndRunFrontEndWithDir(FormatSpelledNumbersFixture.PROGRAM, false))
+			.isEqualTo(FormatSpelledNumbersFixture.EXPECTED);
+		assertThat(compileAndRunFrontEndWithDir(FormatSpelledNumbersFixture.PROGRAM, true))
+			.isEqualTo(FormatSpelledNumbersFixture.EXPECTED);
 	}
 
 	@Test
@@ -26860,6 +26905,23 @@ class WasmLispCompilerIntegrationTest {
 						am.ik.rontolisp.UndefinedFunctionNameFixture.PLAIN_EXPECTED },
 				{ am.ik.rontolisp.UndefinedFunctionNameFixture.RESTART,
 						am.ik.rontolisp.UndefinedFunctionNameFixture.RESTART_EXPECTED } }) {
+			assertThat(compileAndRunProgram(am.ik.rontolisp.cli.CompileFrontendAccess.corpus(program[0],
+					am.ik.rontolisp.reader.Features.WASM, true, false)))
+				.isEqualTo(program[1]);
+			assertThat(runComponentFrontendProgramWithDir(program[0])).isEqualTo(program[1]);
+		}
+	}
+
+	@Test
+	void anUndefinedNameTakenAsAFunctionSignalsWhenTheReferenceRuns() throws Exception {
+		// The wasm twin of the JvmLispCompilerTest test of this name, on Preview 1 and
+		// the component: #'name compiles to the direct call's signal at the reference, a
+		// quoted designator stays the symbol the dispatcher reports when the call runs.
+		for (String[] program : new String[][] {
+				{ am.ik.rontolisp.UndefinedFunctionNameFixture.REFERENCE,
+						am.ik.rontolisp.UndefinedFunctionNameFixture.REFERENCE_EXPECTED },
+				{ am.ik.rontolisp.UndefinedFunctionNameFixture.REFERENCE_RESTART,
+						am.ik.rontolisp.UndefinedFunctionNameFixture.REFERENCE_RESTART_EXPECTED } }) {
 			assertThat(compileAndRunProgram(am.ik.rontolisp.cli.CompileFrontendAccess.corpus(program[0],
 					am.ik.rontolisp.reader.Features.WASM, true, false)))
 				.isEqualTo(program[1]);
