@@ -7506,6 +7506,67 @@ public final class LispMacroExpander {
 		return listToCons(List.of(new LispSymbol(LispNames.LET_STAR), bindings, makeIf(streamVar, streamVar, signal)));
 	}
 
+	/** The text every backend reports a {@code load} of a missing file with. */
+	public static final String LOAD_FAILURE_PREFIX = LispNames.LOAD + ": cannot open file ";
+
+	/** Fixed temporaries of the {@code load} file-error lowering. */
+	private static final String LOAD_FILE_VAR = "__load_file";
+
+	private static final String LOAD_NAMESTRING_VAR = "__load_ns";
+
+	private static final String LOAD_DONE_VAR = "__load_done";
+
+	/**
+	 * Rewrites a one-argument {@code load} on a compiled backend so a file it cannot open
+	 * signals a {@code file-error} carrying the designator as given (CLHS {@code load}),
+	 * the {@link #expandOpenFileErrorSignal} shape: the backend's {@code _load} answers
+	 * nil when the open fails and {@code t} otherwise, and the expansion tests that nil.
+	 * Returns null for the call the expansion itself makes, over its own namestring
+	 * temporary, which the backend compiles as the raw {@code _load} call.
+	 *
+	 * <pre>
+	 * (load p) ->
+	 *   (let* ((__load_file p)
+	 *          (__load_ns &lt;namestring of __load_file&gt;)
+	 *          (__load_done (load __load_ns)))
+	 *     (if __load_done
+	 *         __load_done
+	 *         (%file-error __load_file (%string-concat "LOAD: cannot open file " __load_ns))))
+	 * </pre>
+	 * @param cons the {@code load} call
+	 * @param instances whether a pathname instance can exist in the program
+	 * @return the lowered form, or null for the raw call
+	 */
+	public static @Nullable LispVal expandLoadFileErrorSignal(LispCons cons, boolean instances) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() != 2 || isRawLoadCall(cons)) {
+			return null;
+		}
+		LispSymbol fileVar = new LispSymbol(LOAD_FILE_VAR);
+		LispSymbol nsVar = new LispSymbol(LOAD_NAMESTRING_VAR);
+		LispSymbol doneVar = new LispSymbol(LOAD_DONE_VAR);
+		LispVal namestring = instances
+				? makeIf(objIs(fileVar, List.of(LispLayout.PATHNAME_TAG)), objRef(fileVar, 0), fileVar) : fileVar;
+		LispVal bindings = listToCons(
+				List.of(listToCons(List.of(fileVar, parts.get(1))), listToCons(List.of(nsVar, namestring)),
+						listToCons(List.of(doneVar, listToCons(List.of(parts.get(0), nsVar))))));
+		LispVal signal = listToCons(List.of(new LispSymbol(LispNames.FILE_ERROR_INTERNAL), fileVar, listToCons(
+				List.of(new LispSymbol(LispNames.STRING_CONCAT), new LispString(LOAD_FAILURE_PREFIX), nsVar))));
+		return listToCons(List.of(new LispSymbol(LispNames.LET_STAR), bindings, makeIf(doneVar, doneVar, signal)));
+	}
+
+	/**
+	 * Whether {@code cons} is the raw {@code load} call
+	 * {@link #expandLoadFileErrorSignal} makes: one argument, its own namestring
+	 * temporary.
+	 * @param cons the {@code load} call
+	 * @return whether the backend compiles it as the bare {@code _load} call
+	 */
+	public static boolean isRawLoadCall(LispCons cons) {
+		return cons.cdr() instanceof LispCons args && args.car() instanceof LispSymbol arg
+				&& LOAD_NAMESTRING_VAR.equals(arg.name()) && args.cdr() instanceof LispNil;
+	}
+
 	/**
 	 * Whether the program establishes a handler LANDING PAD -- a {@code handler-case},
 	 * {@code handler-bind}, {@code ignore-errors} or the {@code %hb-guard} the second
@@ -9599,7 +9660,7 @@ public final class LispMacroExpander {
 			// A spec whose values are all literal and whose options the mode DOES express
 			// keeps the fold below, byte for byte.
 			return buildWithOpenFileFrom(var, lowerRuntimeOpenOptions(LispNames.WITH_OPEN_FILE, filename, options),
-					parts.subList(2, parts.size()), unwindProtect);
+					parts.subList(2, parts.size()), unwindProtect, true);
 		}
 		String direction = LispNames.INPUT_KEYWORD;
 		StreamElementType elementType = StreamElementType.CHARACTER;
@@ -10654,30 +10715,34 @@ public final class LispMacroExpander {
 		if (!elementType.isCharacter()) {
 			openParts.add(elementTypeLiteral(elementType));
 		}
-		return buildWithOpenFileFrom(var, listToCons(openParts), body, unwindProtect);
+		return buildWithOpenFileFrom(var, listToCons(openParts), body, unwindProtect, false);
 	}
 
 	/**
 	 * The {@code with-open-file} shape around an already-built {@code open} EXPRESSION --
 	 * the literal call above, or the runtime dispatch
 	 * {@link #lowerRuntimeOpenOptions(String, LispVal, List)} builds for a computed
-	 * option.
+	 * option. An open that may answer nil ({@code mayBeNil}: an
+	 * {@code :if-does-not-exist nil} / {@code :if-exists nil} guard or a computed option)
+	 * closes only a stream, as CL's own expansion does -- {@code close} of nil is a
+	 * type-error.
 	 */
 	private static LispVal buildWithOpenFileFrom(LispVal var, LispVal openCall, List<LispVal> body,
-			boolean unwindProtect) {
+			boolean unwindProtect, boolean mayBeNil) {
 		LispVal bodyExpr = prognOrNil(body);
 		LispVal outerBindings = new LispCons(listToCons(List.of(var, openCall)), LispNil.INSTANCE);
+		LispVal close = mayBeNil ? makeIf(var, callOf(LispNames.CLOSE, var), LispNil.INSTANCE)
+				: callOf(LispNames.CLOSE, var);
 		if (unwindProtect) {
 			// (let ((var (open filename direction)))
 			// (unwind-protect body-expr (close var)))
-			return listToCons(List.of(new LispSymbol(LispNames.LET), outerBindings,
-					unwindProtectAround(bodyExpr, callOf(LispNames.CLOSE, var))));
+			return listToCons(
+					List.of(new LispSymbol(LispNames.LET), outerBindings, unwindProtectAround(bodyExpr, close)));
 		}
 		LispSymbol result = new LispSymbol(WOF_RESULT_VAR);
 		// (let ((__wof_result body-expr)) (close var) __wof_result)
 		LispVal innerBindings = new LispCons(listToCons(List.of(result, bodyExpr)), LispNil.INSTANCE);
-		LispVal innerLet = listToCons(
-				List.of(new LispSymbol(LispNames.LET), innerBindings, callOf(LispNames.CLOSE, var), result));
+		LispVal innerLet = listToCons(List.of(new LispSymbol(LispNames.LET), innerBindings, close, result));
 		// (let ((var (open filename direction))) inner-let)
 		return listToCons(List.of(new LispSymbol(LispNames.LET), outerBindings, innerLet));
 	}
@@ -11145,9 +11210,19 @@ public final class LispMacroExpander {
 	/**
 	 * Expands {@code (make-string-input-stream string &optional start end)} -- CL's
 	 * public spelling of the internal {@code (%make-string-input-stream string)} that
-	 * {@code with-input-from-string} is built on. A bounded call becomes the internal
-	 * call over {@code (subseq string start end)}, so the code-point bounds rule is
-	 * subseq's on every backend rather than a second implementation of it.
+	 * {@code with-input-from-string} is built on. Every argument is bound in order, then
+	 * a string that is no string is the operator's {@code STRING} type-error; a bounded
+	 * call becomes the internal call over {@code (subseq string start end)}, so the
+	 * code-point bounds rule and its type-error are subseq's on every backend rather than
+	 * a second implementation of it. A literal string needs no check.
+	 *
+	 * <pre>
+	 * (make-string-input-stream s b) ->
+	 * (let* ((__msis_string s) (__msis_start b))
+	 *   (if (stringp __msis_string) nil
+	 *       (%operand-type-error __msis_string 'make-string-input-stream 'string))
+	 *   (%make-string-input-stream (subseq __msis_string __msis_start)))
+	 * </pre>
 	 * @param cons the make-string-input-stream expression
 	 * @return the expanded expression
 	 */
@@ -11157,16 +11232,40 @@ public final class LispMacroExpander {
 			return programErrorForm(cons,
 					LispNames.MAKE_STRING_INPUT_STREAM + " expects 1 to 3 arguments, got " + (parts.size() - 1));
 		}
-		LispVal string = parts.get(1);
-		if (parts.size() > 2) {
-			List<LispVal> subseq = new ArrayList<>(List.of(new LispSymbol(LispNames.SUBSEQ), string, parts.get(2)));
-			if (parts.size() == 4) {
-				subseq.add(parts.get(3));
-			}
-			string = listToCons(subseq);
+		if (parts.get(1) instanceof LispString) {
+			return callOf(LispNames.MAKE_STRING_INPUT_STREAM_INTERNAL,
+					parts.size() > 2 ? subseqCall(parts) : parts.get(1));
 		}
-		return callOf(LispNames.MAKE_STRING_INPUT_STREAM_INTERNAL, string);
+		LispSymbol string = new LispSymbol(MSIS_STRING_VAR);
+		List<LispVal> bindings = new ArrayList<>();
+		bindings.add(listToCons(List.of(string, parts.get(1))));
+		List<LispVal> bounded = new ArrayList<>(List.of(new LispSymbol(LispNames.SUBSEQ), string));
+		for (int i = 2; i < parts.size(); i++) {
+			LispSymbol bound = new LispSymbol(i == 2 ? MSIS_START_VAR : MSIS_END_VAR);
+			bindings.add(listToCons(List.of(bound, parts.get(i))));
+			bounded.add(bound);
+		}
+		LispVal check = makeIf(callOf(LispNames.STRINGP, string), LispNil.INSTANCE,
+				listToCons(List.of(new LispSymbol(LispNames.OPERAND_TYPE_ERROR_INTERNAL), string,
+						quoteOf(LispNames.MAKE_STRING_INPUT_STREAM), quoteOf("STRING"))));
+		LispVal stream = callOf(LispNames.MAKE_STRING_INPUT_STREAM_INTERNAL,
+				parts.size() > 2 ? listToCons(bounded) : string);
+		return listToCons(List.of(new LispSymbol(LispNames.LET_STAR), listToCons(bindings), check, stream));
 	}
+
+	/** The {@code (subseq string start [end])} of a bounded call over its own forms. */
+	private static LispVal subseqCall(List<LispVal> parts) {
+		List<LispVal> subseq = new ArrayList<>(List.of(new LispSymbol(LispNames.SUBSEQ)));
+		subseq.addAll(parts.subList(1, parts.size()));
+		return listToCons(subseq);
+	}
+
+	/** Fixed temporaries of the {@code make-string-input-stream} expansion. */
+	private static final String MSIS_STRING_VAR = "__msis_string";
+
+	private static final String MSIS_START_VAR = "__msis_start";
+
+	private static final String MSIS_END_VAR = "__msis_end";
 
 	/**
 	 * Expands {@code (get-output-stream-string stream)} into the internal
@@ -11182,7 +11281,29 @@ public final class LispMacroExpander {
 			return programErrorForm(cons,
 					LispNames.GET_OUTPUT_STREAM_STRING + " expects 1 argument, got " + (parts.size() - 1));
 		}
-		return callOf(LispNames.STRING_STREAM_CONTENTS_INTERNAL, parts.get(1));
+		LispSymbol stream = new LispSymbol(GOSS_STREAM_VAR);
+		return makeLet(GOSS_STREAM_VAR, parts.get(1),
+				mvCall(LispNames.PROGN, streamTypeCheck(stream, LispNames.GET_OUTPUT_STREAM_STRING),
+						callOf(LispNames.STRING_STREAM_CONTENTS_INTERNAL, stream)));
+	}
+
+	/**
+	 * The temporary the {@code get-output-stream-string} expansion binds its stream to.
+	 */
+	private static final String GOSS_STREAM_VAR = "__goss_stream";
+
+	/**
+	 * {@code (if (streamp v) nil (%operand-type-error v 'operator 'stream))}: the check a
+	 * stream operator that takes no designator makes of its argument -- a non-stream is
+	 * the operator's {@code STREAM} type-error, as in SBCL. {@code streamp} answers t for
+	 * the {@code t} designator, an open, synonym or Gray stream.
+	 * @param v the bound argument
+	 * @param operator the operator the report names
+	 * @return the checking form, answering nil for a stream
+	 */
+	private static LispVal streamTypeCheck(LispSymbol v, String operator) {
+		return makeIf(callOf(LispNames.STREAMP, v), LispNil.INSTANCE, listToCons(List
+			.of(new LispSymbol(LispNames.OPERAND_TYPE_ERROR_INTERNAL), v, quoteOf(operator), quoteOf("STREAM"))));
 	}
 
 	/** Fixed temporaries of the {@code peek-char} skip-loop expansion. */
@@ -11368,6 +11489,45 @@ public final class LispMacroExpander {
 		LispVal reader = listToCons(List.of(new LispSymbol(LispNames.LAMBDA), LispNil.INSTANCE, read));
 		return listToCons(
 				List.of(new LispSymbol(LispNames.OBJ_NEW), quoteOf(LispLayout.SYNONYM_STREAM_TAG), symbol, reader));
+	}
+
+	/** The temporary {@link #checkedClose} binds the stream to. */
+	private static final String CLOSE_CHECKED_VAR = "__close_chk";
+
+	/**
+	 * Wraps a {@code close} call (or its {@code %close-raw} alias) in the check of its
+	 * argument the compile paths make before closing anything: {@code t} -- the
+	 * standard-stream designator {@code *standard-output*} holds -- answers {@code t}
+	 * like any standard stream, which survives a close, and a value that is no stream is
+	 * {@code close}'s {@code STREAM} type-error, as in SBCL. Returns null for the call
+	 * the wrapper itself makes, over its own temporary, which closes as before. An
+	 * {@code :abort} pair is dropped unevaluated, as every close compiler drops it.
+	 *
+	 * <pre>
+	 * (close s) ->
+	 * (let ((__close_chk s))
+	 *   (if (eq __close_chk t) t
+	 *       (if (streamp __close_chk) (close __close_chk)
+	 *           (%operand-type-error __close_chk 'close 'stream))))
+	 * </pre>
+	 * @param cons the close call
+	 * @return the checked call, or null when {@code cons} is already the inner call
+	 */
+	public static @Nullable LispVal checkedClose(LispCons cons) {
+		if (stripCloseAbort(cons) instanceof LispCons stripped) {
+			cons = stripped;
+		}
+		List<LispVal> parts = cons.toList();
+		if (parts.size() != 2 || (parts.get(1) instanceof LispSymbol arg && CLOSE_CHECKED_VAR.equals(arg.name()))) {
+			return null;
+		}
+		LispSymbol stream = new LispSymbol(CLOSE_CHECKED_VAR);
+		LispVal close = listToCons(List.of(parts.get(0), stream));
+		LispVal checked = makeIf(callOf(LispNames.STREAMP, stream), close,
+				listToCons(List.of(new LispSymbol(LispNames.OPERAND_TYPE_ERROR_INTERNAL), stream,
+						quoteOf(LispNames.CLOSE), quoteOf("STREAM"))));
+		return makeLet(CLOSE_CHECKED_VAR, parts.get(1),
+				makeIf(callOf(LispNames.EQ_GENERAL, stream, LispTrue.INSTANCE), LispTrue.INSTANCE, checked));
 	}
 
 	/**
@@ -33906,7 +34066,7 @@ public final class LispMacroExpander {
 	 * as the tag's.
 	 */
 	public static final java.util.Set<String> FILE_ERROR_SITES = java.util.Set.of(LispNames.OPEN,
-			LispNames.WITH_OPEN_FILE, LispNames.FILE_ERROR_INTERNAL);
+			LispNames.WITH_OPEN_FILE, LispNames.LOAD, LispNames.FILE_ERROR_INTERNAL);
 
 	/**
 	 * The operators whose compiled form can construct a {@code package-error} instance in

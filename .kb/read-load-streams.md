@@ -304,6 +304,24 @@ Pinned by `ReadFromStringLambdaListFixture` (`.PROGRAM`, sbcl's answers, ci-spec
   (2026-09-19, `--optimize=size`): `with-open-file` + `read-line` without a handler +39 B P1
   / +37 B component / +213 B JVM class; inside `handler-case` +172..+243 B WASM, +370..+501 B
   JVM.
+- **A `load` that cannot open its file signals a `file-error` on every backend** (2026-10-07),
+  carrying the designator as given and reporting `LOAD: cannot open file <namestring>`. Compiled:
+  `LispMacroExpander.expandLoadFileErrorSignal`, the `open` shape -- `_load` answers nil on a
+  failed open (wasm always did; the JVM `_load` now catches the `IOException` of its read) and
+  the expansion tests it; the raw call is the one over its `__load_ns` temporary
+  (`isRawLoadCall`). `LOAD` joined `FILE_ERROR_SITES`. Interpreter: `loadFile`'s designator
+  overload (`require` and ASDF components keep `cannot read file <resolved>`). Before (SBCL
+  2.2.9 `SIMPLE-FILE-ERROR`): a `file-error` naming the RESOLVED path on the interpreter, a
+  `simple-error` (`NoSuchFileException`'s text) on the JVM, and NIL -- no signal -- on both wasm
+  backends. A top-level literal `(load "missing.lisp")` still fails the compile in `LoadInliner`.
+- **`with-open-file` closes only a stream** when its open may answer nil (an
+  `:if-does-not-exist nil` / `:if-exists nil` guard or a computed option:
+  `buildWithOpenFileFrom`'s `mayBeNil`, CL's `(when var (close var))`); the literal fold
+  never answers nil and keeps its bytes. `close` of nil is a `type-error` now ("The stream
+  operators that take a stream" in `.kb/error-handling.md`); before 2026-10-07 the cleanup's
+  `(close nil)` was a `simple-error` (interpreter, JVM) or a trap (wasm), so
+  `(with-open-file (s "missing" :if-does-not-exist nil) s)` failed on every backend where SBCL
+  answers NIL.
 - `--component`: `adapter.wat`'s `$ensure_preopen` read the first `get-directories` element
   unconditionally, handing `open-at` handle 0 with no `--dir` (`unknown handle index 0` trap); it now
   caches `-1` and `$path_open` turns that into an errno. Hit `probe-file` too.

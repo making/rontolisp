@@ -93,7 +93,14 @@ public final class OperandTypes {
 		 * built-in signal, the argument refused before the exponent
 		 * ({@link OperandTypes#floatOperators}).
 		 */
-		FLOAT;
+		FLOAT,
+
+		/**
+		 * A non-stream reaching a stream operator that takes no designator
+		 * ({@code close}, {@code get-output-stream-string};
+		 * {@link OperandTypes#streamOperators}).
+		 */
+		STREAM;
 
 		/**
 		 * The type's symbol name, as a report and an {@code expected-type} spell it:
@@ -256,6 +263,19 @@ public final class OperandTypes {
 	private static final List<String> FLOAT_OPERATORS = List.of("SCALE-FLOAT");
 
 	/**
+	 * The stream operators that take a stream rather than a designator, funnel-typed:
+	 * {@code close} and {@code get-output-stream-string} land {@code STREAM}. After
+	 * {@link #FLOAT_OPERATORS}.
+	 */
+	private static final List<String> STREAM_OPERATORS = List.of("CLOSE", "GET-OUTPUT-STREAM-STRING");
+
+	/**
+	 * {@code make-string-input-stream}, funnel-typed: its string lands {@code STRING};
+	 * its bounds are {@code subseq}'s. Last in the table.
+	 */
+	public static final String MAKE_STRING_INPUT_STREAM = "MAKE-STRING-INPUT-STREAM";
+
+	/**
 	 * The character comparisons, fixed-typed {@code CHARACTER}: every argument is
 	 * checked, the single one of a one-argument call included. Last in the table, after
 	 * the hash-table accessors.
@@ -380,6 +400,12 @@ public final class OperandTypes {
 			OPERATOR_TYPES.put(op, FUNNEL_TYPE);
 			order.add(op);
 		}
+		for (String op : STREAM_OPERATORS) {
+			OPERATOR_TYPES.put(op, FUNNEL_TYPE);
+			order.add(op);
+		}
+		OPERATOR_TYPES.put(MAKE_STRING_INPUT_STREAM, FUNNEL_TYPE);
+		order.add(MAKE_STRING_INPUT_STREAM);
 		OPERATORS = List.copyOf(order);
 	}
 
@@ -477,6 +503,15 @@ public final class OperandTypes {
 	 */
 	public static List<String> floatOperators() {
 		return FLOAT_OPERATORS;
+	}
+
+	/**
+	 * The operators whose checks land {@link Kind#STREAM}, as
+	 * {@link #sequenceOperators()} is for {@code SEQUENCE}.
+	 * @return the operator names
+	 */
+	public static List<String> streamOperators() {
+		return STREAM_OPERATORS;
 	}
 
 	/**

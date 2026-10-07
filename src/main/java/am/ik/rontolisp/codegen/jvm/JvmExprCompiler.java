@@ -1117,6 +1117,14 @@ final class JvmExprCompiler {
 			case LispNames.PACKAGE_ERROR_INTERNAL -> JvmExprCompiler.compileExpr(LispMacroExpander
 				.lowerPackageError(cons, ctx.closRegistry, ctx.hasLandingPad && ctx.mayUseInstances), ctx, className);
 			case LispNames.CLOSE -> {
+				// t answers t and a non-stream is close's type-error before anything
+				// is closed (LispMacroExpander.checkedClose); the inner call, over the
+				// checked temporary, comes back here.
+				LispVal checkedClose = LispMacroExpander.checkedClose(cons);
+				if (checkedClose != null) {
+					JvmExprCompiler.compileExpr(checkedClose, ctx, className);
+					break;
+				}
 				// Closing a SYNONYM stream closes the synonym, not what it forwards
 				// to -- which is nothing to do; an OPEN stream resolves to its
 				// handle. The guard is emitted only when the program can build one
@@ -1866,7 +1874,7 @@ final class JvmExprCompiler {
 					ctx, className);
 			case LispNames.APPEND -> JvmAppendCompiler.compile(cons, ctx, className);
 			case LispNames.EVAL -> JvmEvalCompiler.compile(cons, ctx, className);
-			case LispNames.LOAD -> JvmLoadCompiler.compile(coercePathArgWhenGated(cons, 0, ctx), ctx, className);
+			case LispNames.LOAD -> JvmLoadCompiler.compile(cons, ctx, className);
 			// A literal top-level require/provide (and the asdf directives) was
 			// consumed by the compile-time LoadInliner pass; anything left is nested
 			// or non-literal, which the compiled runtime reader cannot execute

@@ -10,7 +10,9 @@ import am.ik.wasm.Instruction;
 /**
  * Compiles the {@code load} built-in. The path argument is compiled to a runtime string
  * value, then the {@code _load} runtime helper reads the file, parses every top-level
- * datum, and evaluates each in the global environment via the {@code _eval} runtime.
+ * datum, and evaluates each in the global environment via the {@code _eval} runtime; it
+ * answers nil when the file cannot be opened, which the shared lowering around it turns
+ * into a {@code file-error} ({@code LispMacroExpander.expandLoadFileErrorSignal}).
  */
 final class WasmLoadCompiler {
 
@@ -28,6 +30,13 @@ final class WasmLoadCompiler {
 		List<LispVal> parts = cons.toList();
 		if (parts.size() != 2) {
 			throw new UnsupportedOperationException("load expects 1 argument, got " + (parts.size() - 1));
+		}
+		// A file the load cannot open signals a file-error naming the designator; the
+		// expansion unwraps a pathname itself and comes back here for the raw call.
+		LispVal checked = LispMacroExpander.expandLoadFileErrorSignal(cons, ctx.instanceTypeIndex >= 0);
+		if (checked != null) {
+			WasmExprCompiler.compileExpr(checked, ctx);
+			return;
 		}
 		WasmExprCompiler.compileExpr(parts.get(1), ctx);
 		ctx.writer.write(Instruction.CALL);

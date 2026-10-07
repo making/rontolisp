@@ -1820,7 +1820,7 @@ final class WasmExprCompiler {
 				WasmStringTrimCompiler.compileRight(LispMacroExpander.normalizeStringTrimArgs(cons), ctx);
 				WasmEmitHelper.emitToMutStrCall(ctx);
 			}
-			case LispNames.LOAD -> WasmLoadCompiler.compile(coercePathArgWhenGated(cons, 0, ctx), ctx);
+			case LispNames.LOAD -> WasmLoadCompiler.compile(cons, ctx);
 			// A literal top-level require/provide (and the asdf directives) was
 			// consumed by the compile-time LoadInliner pass; anything left is nested
 			// or non-literal, which the compiled runtime reader cannot execute
@@ -2773,6 +2773,14 @@ final class WasmExprCompiler {
 	 * descriptor may already belong to a newer stream.
 	 */
 	private static void compileClose(LispCons cons, WasmLispCompiler.Ctx ctx) {
+		// t answers t and a non-stream is close's type-error before anything is closed
+		// (LispMacroExpander.checkedClose); the inner call, over the checked temporary,
+		// comes back here.
+		LispVal checked = LispMacroExpander.checkedClose(cons);
+		if (checked != null) {
+			WasmExprCompiler.compileExpr(checked, ctx);
+			return;
+		}
 		if (!(ctx.usesSynonymStreams || ctx.usesStreamValues)) {
 			WasmCloseCompiler.compile(cons, ctx);
 			return;

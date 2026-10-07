@@ -3602,12 +3602,16 @@ final class JvmReadRuntimeBuilder {
 		a.isub();
 		a.invokevirtual(this.stringSubstring);
 		a.astore(2); // path
-		// content = Files.readString(Paths.get(path, new String[0]))
+		// content = Files.readString(Paths.get(path, new String[0])); a file that cannot
+		// be read answers null, which the shared lowering around the call turns into a
+		// file-error (LispMacroExpander.expandLoadFileErrorSignal)
+		MethodCode.Label tryStart = a.newBoundLabel();
 		a.aload(2);
 		a.loadConstant(0);
 		a.anewarray(this.stringClass);
 		a.invokestatic(paths);
 		a.invokestatic(files);
+		MethodCode.Label tryEnd = a.newBoundLabel();
 		a.putstatic(this.readSrc);
 		a.loadConstant(0);
 		a.putstatic(this.readPos);
@@ -3665,6 +3669,12 @@ final class JvmReadRuntimeBuilder {
 		// symbol), NOT the integer 1 -- the interpreter's load answers t.
 		ldc(a, "T");
 		a.areturn();
+		// catch (IOException e) { return null; }
+		MethodCode.Label unreadable = a.newBoundLabel();
+		a.pop();
+		a.aconst_null();
+		a.areturn();
+		a.exceptionCatch(tryStart, tryEnd, unreadable, this.cp.classEntry("java/io/IOException"));
 		return a;
 	}
 

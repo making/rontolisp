@@ -2,7 +2,7 @@
 
 `(get-output-stream-string stream)`
 
-Returns everything written to a `make-string-output-stream` stream so far, and **clears** it: the next call answers only what was written after this one. That is Common Lisp's contract, and it is what lets one accumulator stream be reused for a sequence of tokens.
+Returns everything written to a `make-string-output-stream` stream so far, and **clears** it: the next call answers only what was written after this one. That is Common Lisp's contract, and it is what lets one accumulator stream be reused for a sequence of tokens. A `stream` that is not a stream signals a `type-error` whose expected type is `stream`.
 
 ```lisp
 (let ((s (make-string-output-stream)))

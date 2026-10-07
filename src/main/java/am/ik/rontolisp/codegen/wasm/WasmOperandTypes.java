@@ -83,12 +83,12 @@ final class WasmOperandTypes {
 
 	/**
 	 * The operators whose sites hand a landing a kind no {@code _type_err_*} stub has --
-	 * {@code STRING}, which {@code _str_char_ref} and {@code %check-string} land with
-	 * directly ({@link #emitLanding}) -- so the shared body selects its type only in a
-	 * module that can reach one.
+	 * {@code STRING}, which {@code _str_char_ref}, {@code %check-string} and
+	 * {@code make-string-input-stream}'s check land with directly ({@link #emitLanding})
+	 * -- so the shared body selects its type only in a module that can reach one.
 	 */
 	private static final java.util.List<String> STRING_CHECKED = java.util.List.of("CHAR", "SCHAR",
-			OperandTypes.SETF_CHAR, OperandTypes.SETF_SCHAR);
+			OperandTypes.SETF_CHAR, OperandTypes.SETF_SCHAR, OperandTypes.MAKE_STRING_INPUT_STREAM);
 
 	/**
 	 * The function whose presence says a module has string stores, whose
@@ -150,10 +150,11 @@ final class WasmOperandTypes {
 	 * ({@link OperandTypes#sequenceOperators}), {@code ARRAY}'s and {@code HASH-TABLE}'s
 	 * when an array or a hash-table accessor's do and {@code CHARACTER}'s when a
 	 * character operator's do ({@link OperandTypes#characterOperators}) or the module
-	 * stores into strings ({@link #CHARACTER_CHECKED}) and {@code FLOAT}'s when
-	 * {@code scale-float}'s do ({@link OperandTypes#floatOperators}): a landing selects
-	 * among only the types they can name, so a suffix no row can reach is never cited and
-	 * drops with the string blob's dead ranges
+	 * stores into strings ({@link #CHARACTER_CHECKED}), {@code FLOAT}'s when
+	 * {@code scale-float}'s do ({@link OperandTypes#floatOperators}) and {@code STREAM}'s
+	 * when a stream operator's do ({@link OperandTypes#streamOperators}): a landing
+	 * selects among only the types they can name, so a suffix no row can reach is never
+	 * cited and drops with the string blob's dead ranges
 	 */
 	record Operators(java.util.Map<String, Integer> ids, int base, java.util.Set<Integer> rowCodes,
 			WasmLispCompiler.StringTable.@Nullable StringEntry indexPrefix,
@@ -238,6 +239,9 @@ final class WasmOperandTypes {
 				}
 				if (OperandTypes.floatOperators().contains(op)) {
 					rowCodes.add(code(OperandTypes.Kind.FLOAT));
+				}
+				if (OperandTypes.streamOperators().contains(op)) {
+					rowCodes.add(code(OperandTypes.Kind.STREAM));
 				}
 			}
 			if (spelled.test(CHARACTER_CHECKED)) {
