@@ -13628,6 +13628,16 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunAFormatTInAPackageReachesAGrayStandardStream() throws Exception {
+		// The JVM twin of
+		// LispEvaluatorTest#aFormatTInAPackageReachesAGrayStandardStream.
+		assertThat(compileAndRun(am.ik.rontolisp.cli.CompileFrontendAccess.corpus(
+				am.ik.rontolisp.GrayStreamCallFixture.STANDARD_STREAM_IN_A_PACKAGE_PROGRAM,
+				am.ik.rontolisp.reader.Features.JVM, false, false)))
+			.isEqualTo(am.ik.rontolisp.GrayStreamCallFixture.STANDARD_STREAM_IN_A_PACKAGE_EXPECTED);
+	}
+
+	@Test
 	void compileAndRunUnreadCharInAGrayProgramParksOnTheOpenStream() throws Exception {
 		// The JVM twin of LispEvaluatorTest#unreadCharInAGrayProgramParksOnTheOpenStream.
 		assertThat(compileAndRun(am.ik.rontolisp.cli.CompileFrontendAccess.corpus(

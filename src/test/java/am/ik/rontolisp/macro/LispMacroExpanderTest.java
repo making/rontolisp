@@ -312,6 +312,38 @@ class LispMacroExpanderTest {
 	}
 
 	@Test
+	void aFormatExpansionNamesOnlyOperatorsClOwns() {
+		// GrayStreamsLibrary lowers (format t ...) BEFORE the package resolver, inside
+		// whatever package the call sits in. A name the expansion emits that cl does not
+		// own resolves into that package there (GSP-APP::%PRINC-PIECE) and is undefined.
+		// Allowed besides cl names: the arguments, keywords, and the __-prefixed
+		// temporaries, which resolve into the package consistently.
+		List<String> controls = List.of("\"~a ~s ~d ~x ~b ~o\"", "\"~5,2f ~e ~g ~$\"", "\"~r ~:r ~@r\"", "\"~c ~:c\"",
+				"\"~&~%~|~~~10t\"", "\"~:(~a~) ~@(~a~) ~(~a~) ~:@(~a~)\"", "\"~{~a~^, ~}\"", "\"~:{~a~}\"",
+				"\"~@{~a~}\"", "\"~[a~;b~] ~:[a~;b~] ~@[~a~]\"", "\"~? ~@?\"", "\"~2@*~a ~*~a\"", "\"~/fa/ ~<~a~>\"",
+				"\"~10a ~10@a ~,,'0d ~:d ~@d\"", "\"~p ~:p ~@p ~i ~_ ~w\"", "fctl");
+		List<String> foreign = new ArrayList<>();
+		for (String control : controls) {
+			LispCons form = (LispCons) LispReader
+				.readAllFromString("(format t " + control + " fa fb fc fd fe ff fg fh)")
+				.get(0);
+			collectForeignNames(LispMacroExpander.expandFormat(form), control, foreign);
+		}
+		assertThat(foreign).isEmpty();
+	}
+
+	private static void collectForeignNames(LispVal form, String control, List<String> out) {
+		if (form instanceof LispCons cons) {
+			collectForeignNames(cons.car(), control, out);
+			collectForeignNames(cons.cdr(), control, out);
+		}
+		else if (form instanceof LispSymbol sym && !sym.isKeyword() && !sym.name().startsWith("__")
+				&& !sym.name().matches("FCTL|F[A-H]") && !am.ik.rontolisp.PackageRegistry.isClSymbol(sym.name())) {
+			out.add(control + " -> " + sym.name());
+		}
+	}
+
+	@Test
 	void aFixedDecimalDirectiveIsOneCallAndNotAnInlinedScaleRoundSliceExpansion() {
 		// ~F and ~$ used to expand INLINE into eight ordinary forms -- scale by 10^d,
 		// `round` to a bignum-capable integer, `princ-to-string` it, then punch in a

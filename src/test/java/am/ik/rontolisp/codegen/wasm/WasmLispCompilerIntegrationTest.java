@@ -14663,6 +14663,18 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void aFormatTInAPackageReachesAGrayStandardStream() throws Exception {
+		// The wasm twin of
+		// LispEvaluatorTest#aFormatTInAPackageReachesAGrayStandardStream, Preview 1 and
+		// the component.
+		for (boolean component : new boolean[] { false, true }) {
+			assertThat(compileAndRunFrontEndWithDir(
+					am.ik.rontolisp.GrayStreamCallFixture.STANDARD_STREAM_IN_A_PACKAGE_PROGRAM, component))
+				.isEqualTo(am.ik.rontolisp.GrayStreamCallFixture.STANDARD_STREAM_IN_A_PACKAGE_EXPECTED);
+		}
+	}
+
+	@Test
 	void anAwaitInAGrayDispatchArgumentIsHoistedOnTheComponent() throws Exception {
 		// The Gray rewrite turns a stream call into a gray.lisp helper call -- with an
 		// explicit stream, and the stream-less print family once the program binds

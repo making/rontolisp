@@ -72,6 +72,13 @@ the print family wrote PAST the instance to standard output on the compile paths
   turn (so `~&` asks the Gray stream; building the string first would lose `~&` on the real
   stdout too). A Gray program that binds a standard stream -- the ci-spec corpus does --
   sends EVERY stream-less print through the helpers.
+- That lowering runs BEFORE `PackageResolver`, inside the caller's package: every name the
+  expansion emits must be `cl`-owned (`%princ-piece`, `%prin1-piece`, `%fmt-render` are in
+  `PackageRegistry.CL_INTERNALS`), or it resolves into the user package. Until 2026-10-07 they
+  were not: `(format t "~:(~a~)" ...)` inside clack's `clackup` became
+  `CLACK::%PRINC-PIECE`, undefined on JVM / P1 / component (6 of the 27 cloudflare-workers
+  example legs). Pinned by `GrayStreamCallFixture.STANDARD_STREAM_IN_A_PACKAGE_PROGRAM` (all four)
+  and `LispMacroExpanderTest.aFormatExpansionNamesOnlyOperatorsClOwns` (the vocabulary).
 - `--component`: a gray.lisp `%gray-*` helper is a strict call head for the await hoist
   (`WasmAwaitNormalizer.isStrictCallHead`, `LispNames.GRAY_HELPER_PREFIX`). Before, `(princ
   (rontolisp:await f) gray-var)` was refused as a non-spine await, and the stream-less rewrite

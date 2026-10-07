@@ -10510,6 +10510,20 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void aFormatTInAPackageReachesAGrayStandardStream() {
+		// The compile paths lower this (format t ...) before the package resolver runs;
+		// the interpreter is the reference its twins are held to.
+		ByteArrayOutputStream baos = new ByteArrayOutputStream();
+		LispEvaluator evaluator = new LispEvaluator(new PrintStream(baos));
+		for (LispVal expr : LispReader
+			.readAllFromString(am.ik.rontolisp.GrayStreamCallFixture.STANDARD_STREAM_IN_A_PACKAGE_PROGRAM)) {
+			evaluator.eval(expr);
+		}
+		assertThat(baos.toString().trim())
+			.isEqualTo(am.ik.rontolisp.GrayStreamCallFixture.STANDARD_STREAM_IN_A_PACKAGE_EXPECTED);
+	}
+
+	@Test
 	void unreadCharInAGrayProgramParksOnTheOpenStream() {
 		// Reads through the Gray dispatch helpers still park on the open stream value.
 		ByteArrayOutputStream baos = new ByteArrayOutputStream();
