@@ -9,9 +9,11 @@ package am.ik.rontolisp;
  * the wasm-GC backends trapped instead of signalling. {@link #RESTART} adds a
  * {@code handler-bind}, which puts the compiled backends in restart mode. The expected
  * text is SBCL's. {@link #MESSAGE} pins the condition's report, rontolisp's text (SBCL
- * ends it with a period). Shared by the backend suites, so every backend is held to one
- * expected text; {@code ci-spec.yaml}'s {@code unbound-variable-carries-its-name} runs
- * the programs on the native binary.
+ * ends it with a period). {@link #SPELLING} pins the name's spelling in that report: a
+ * package-qualified, an uninterned and a lower-case symbol appear as their symbol spells,
+ * no bars. Shared by the backend suites, so every backend is held to one expected text;
+ * {@code ci-spec.yaml}'s {@code unbound-variable-carries-its-name} runs the programs on
+ * the native binary.
  */
 public final class UnboundVariableNameFixture {
 
@@ -67,5 +69,22 @@ public final class UnboundVariableNameFixture {
 
 	/** What {@link #MESSAGE} prints: the interpreter's text, on every backend. */
 	public static final String MESSAGE_EXPECTED = "\"The variable UVN-NOPE is unbound\"";
+
+	/**
+	 * The program printing the report for a package-qualified, uninterned and lower-case
+	 * name.
+	 */
+	public static final String SPELLING = """
+			(defpackage :uvn-pkg (:use :cl))
+			(defun uvn-text (name)
+			  (handler-case (symbol-value name) (unbound-variable (c) (princ-to-string c))))
+			(print (list (uvn-text (car (list 'uvn-pkg::nope)))
+			             (uvn-text (car (list (make-symbol "UVN-UNINTERNED"))))
+			             (uvn-text (car (list (intern "uvn-lower"))))))
+			""";
+
+	/** What {@link #SPELLING} prints. */
+	public static final String SPELLING_EXPECTED = "(\"The variable UVN-PKG::NOPE is unbound\""
+			+ " \"The variable #:UVN-UNINTERNED is unbound\" \"The variable uvn-lower is unbound\")";
 
 }

@@ -20907,6 +20907,8 @@ class LispEvaluatorTest {
 			.isEqualTo(am.ik.rontolisp.UndefinedFunctionNameFixture.PLAIN_EXPECTED);
 		assertThat(printedLines(am.ik.rontolisp.UndefinedFunctionNameFixture.RESTART))
 			.isEqualTo(am.ik.rontolisp.UndefinedFunctionNameFixture.RESTART_EXPECTED);
+		assertThat(printedLines(am.ik.rontolisp.UndefinedFunctionNameFixture.SPELLING))
+			.isEqualTo(am.ik.rontolisp.UndefinedFunctionNameFixture.SPELLING_EXPECTED);
 	}
 
 	@Test
@@ -20941,6 +20943,8 @@ class LispEvaluatorTest {
 			.isEqualTo(am.ik.rontolisp.UnboundVariableNameFixture.RESTART_EXPECTED);
 		assertThat(printedLines(am.ik.rontolisp.UnboundVariableNameFixture.MESSAGE))
 			.isEqualTo(am.ik.rontolisp.UnboundVariableNameFixture.MESSAGE_EXPECTED);
+		assertThat(printedLines(am.ik.rontolisp.UnboundVariableNameFixture.SPELLING))
+			.isEqualTo(am.ik.rontolisp.UnboundVariableNameFixture.SPELLING_EXPECTED);
 	}
 
 	@Test

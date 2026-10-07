@@ -2547,8 +2547,7 @@ final class WasmRuntimeBuilder {
 		 * or nil. A quote-framed string shares the struct with a symbol and missed the
 		 * registry the same way, so it branches on to the {@code $notFunction} arm that
 		 * directly follows this one. A symbol reports its name as the interpreter's
-		 * {@code symbol.name()} spells it: the {@code princ} text, except that a keyword
-		 * keeps its colon, which only {@code prin1} writes.
+		 * {@code symbol.name()} spells it ({@link #emitSymbolSpelling}).
 		 * @param w the writer
 		 * @param msgLocal a spare {@code (ref null eq)} local
 		 * @param byteLocal a spare {@code i32} local
@@ -2579,23 +2578,7 @@ final class WasmRuntimeBuilder {
 			w.write(Instruction.BR_IF);
 			w.writeUnsignedLeb128(0); // $notFunction
 			emitStrConst(w, Objects.requireNonNull(this.undefinedPrefix));
-			w.write(Instruction.GET_LOCAL);
-			w.writeUnsignedLeb128(byteLocal);
-			w.write(Instruction.I32_CONST);
-			w.writeSignedLeb128(':');
-			w.write(Instruction.I32_EQ);
-			w.write(Instruction.IF);
-			w.writeRefType(true, Type.EQ.code());
-			w.write(Instruction.GET_LOCAL);
-			w.writeUnsignedLeb128(0);
-			w.write(Instruction.CALL);
-			w.writeUnsignedLeb128(WasmLispCompiler.FUNC_PRIN1_TO_STR);
-			w.write(Instruction.ELSE);
-			w.write(Instruction.GET_LOCAL);
-			w.writeUnsignedLeb128(0);
-			w.write(Instruction.CALL);
-			w.writeUnsignedLeb128(WasmLispCompiler.FUNC_PRINC_TO_STR);
-			w.write(Instruction.END);
+			emitSymbolSpelling(w, 0, msgLocal);
 			emitConcat(w);
 			emitStrConst(w, Objects.requireNonNull(this.undefinedSuffix));
 			emitConcat(w);
@@ -2662,11 +2645,11 @@ final class WasmRuntimeBuilder {
 	/**
 	 * What {@code _symbol_value} throws for a name no binding answers, in EH mode: the
 	 * interpreter's text, {@code The variable NAME is unbound}, the name spelled as
-	 * {@link NotFunctionReport#emitUndefinedThrow} spells a function's (no keyword
-	 * reaches it: a keyword is self-bound). A module that baked {@code unbound-variable}
-	 * -- {@code usedLayoutTags} does wherever a landing pad and {@code symbol-value} meet
-	 * -- throws the typed instance naming the variable in its {@code name} slot; any
-	 * other gets the message-only payload. The pieces are interned on first use.
+	 * {@link #emitSymbolSpelling} spells it (no keyword reaches it: a keyword is
+	 * self-bound). A module that baked {@code unbound-variable} -- {@code usedLayoutTags}
+	 * does wherever a landing pad and {@code symbol-value} meet -- throws the typed
+	 * instance naming the variable in its {@code name} slot; any other gets the
+	 * message-only payload. The pieces are interned on first use.
 	 */
 	static final class UnboundVariableReport {
 
@@ -2705,10 +2688,7 @@ final class WasmRuntimeBuilder {
 					.addBodyString("\"" + ClosRegistry.UNBOUND_VARIABLE_MESSAGE_SUFFIX + "\"");
 			}
 			emitStrConst(w, Objects.requireNonNull(this.prefix));
-			w.write(Instruction.GET_LOCAL);
-			w.writeUnsignedLeb128(symLocal);
-			w.write(Instruction.CALL);
-			w.writeUnsignedLeb128(WasmLispCompiler.FUNC_PRINC_TO_STR);
+			emitSymbolSpelling(w, symLocal, msgLocal);
 			emitConcat(w);
 			emitStrConst(w, Objects.requireNonNull(this.suffix));
 			emitConcat(w);
@@ -3298,6 +3278,125 @@ final class WasmRuntimeBuilder {
 		w.writeSignedLeb128(entry.length());
 		w.write(Instruction.CALL);
 		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_STR_BUILD);
+	}
+
+	/**
+	 * Pushes a quote-framed string spelling the symbol in {@code symLocal} the way the
+	 * interpreter's {@code symbol.name()} does: the stored name verbatim, package
+	 * qualifier ({@code P::V}) and uninterned marker ({@code #:U}) included, no
+	 * {@code |...|} escapes. {@code princ} drops the qualifier and the marker,
+	 * {@code prin1} adds the bars. A symbol is a {@code TYPE_STRING} whose bytes are not
+	 * quote-framed, so the framed copy is built here, a transient that
+	 * {@code _string_concat} consumes at once. A value that is no bare name -- nil, a
+	 * quote-framed string, an empty name -- keeps {@code princ}'s text.
+	 * @param w the writer
+	 * @param symLocal the local holding the value
+	 * @param scratchLocal a spare {@code (ref null eq)} local, overwritten
+	 */
+	private static void emitSymbolSpelling(WasmWriter w, int symLocal, int scratchLocal) {
+		// a bare name: a TYPE_STRING that is not empty and does not open with a quote
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(symLocal);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		w.writeHeapType(WasmLispCompiler.TYPE_STRING);
+		w.write(Instruction.IF, Type.I32.code());
+		emitSymbolBytes(w, symLocal);
+		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_LEN);
+		w.write(Instruction.I32_EQZ);
+		w.write(Instruction.IF, Type.I32.code());
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(0);
+		w.write(Instruction.ELSE);
+		emitSymbolBytes(w, symLocal);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(0);
+		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_GET_U);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_STR_BYTES);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128('"');
+		w.write(Instruction.I32_NE);
+		w.write(Instruction.END);
+		w.write(Instruction.ELSE);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(0);
+		w.write(Instruction.END);
+		w.write(Instruction.IF);
+		w.writeRefType(true, Type.EQ.code());
+		// scratch = a byte array of the name's length plus the two frame quotes
+		emitSymbolBytes(w, symLocal);
+		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_LEN);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(2);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_NEW_DEFAULT);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_STR_BYTES);
+		w.write(Instruction.SET_LOCAL);
+		w.writeUnsignedLeb128(scratchLocal);
+		// the opening quote, the closing quote after the name, the name between
+		emitScratchBytes(w, scratchLocal);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(0);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128('"');
+		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_SET);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_STR_BYTES);
+		emitScratchBytes(w, scratchLocal);
+		emitSymbolBytes(w, symLocal);
+		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_LEN);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(1);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128('"');
+		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_SET);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_STR_BYTES);
+		emitScratchBytes(w, scratchLocal);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(1);
+		emitSymbolBytes(w, symLocal);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(0);
+		emitSymbolBytes(w, symLocal);
+		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_LEN);
+		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_COPY);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_STR_BYTES);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_STR_BYTES);
+		// the transient string: id 0, the framed length, the bytes, the seed cursor
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(0);
+		emitSymbolBytes(w, symLocal);
+		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_LEN);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(2);
+		w.write(Instruction.I32_ADD);
+		emitScratchBytes(w, scratchLocal);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(0);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(1);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_STRING);
+		w.write(Instruction.ELSE);
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(symLocal);
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_PRINC_TO_STR);
+		w.write(Instruction.END);
+	}
+
+	/** Pushes the byte array of the {@code TYPE_STRING} in {@code symLocal}. */
+	private static void emitSymbolBytes(WasmWriter w, int symLocal) {
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(symLocal);
+		WasmEmitHelper.emitStrBytesArray(w);
+	}
+
+	/** Pushes the byte array {@link #emitSymbolSpelling} keeps in its scratch local. */
+	private static void emitScratchBytes(WasmWriter w, int scratchLocal) {
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(scratchLocal);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(WasmLispCompiler.TYPE_STR_BYTES);
 	}
 
 	private static void emitConcat(WasmWriter w) {

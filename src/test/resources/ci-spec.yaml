@@ -21653,11 +21653,18 @@ cases:
       (print (list (ufn-bound (lambda () (funcall (intern "UFN-NOPE"))))
                    (ufn-bound (lambda () (apply (intern "UFN-OTHER") '(1))))
                    *ufn-seen*))
+      (defpackage :ufn-pkg (:use :cl))
+      (defun ufn-text (name)
+        (handler-case (funcall name) (undefined-function (c) (princ-to-string c))))
+      (print (list (ufn-text (car (list 'ufn-pkg::nope)))
+                   (ufn-text (car (list (make-symbol "UFN-UNINTERNED"))))
+                   (ufn-text (car (list (intern "ufn-lower"))))))
     expected: |
       ((UFN-NOPE UNDEFINED-FUNCTION) (UFN-NOPE UNDEFINED-FUNCTION) (UFN-NOPE UNDEFINED-FUNCTION) (UFN-NOPE UNDEFINED-FUNCTION) (UFN-NOPE UNDEFINED-FUNCTION) (UFN-NOPE UNDEFINED-FUNCTION))
       ((UFN-GONE UNDEFINED-FUNCTION) (UFN-GONE UNDEFINED-FUNCTION) (NIL UNDEFINED-FUNCTION) (T UNDEFINED-FUNCTION) (:UFN-KEY UNDEFINED-FUNCTION))
       T
       ((UFN-NOPE UNDEFINED-FUNCTION) (UFN-OTHER UNDEFINED-FUNCTION) (UFN-OTHER UFN-NOPE))
+      ("The function UFN-PKG::NOPE is undefined" "The function #:UFN-UNINTERNED is undefined" "The function ufn-lower is undefined")
 
   # An unbound-variable names its variable in the cell-error name slot on every
   # backend -- symbol-value of a literal and a computed name, #'symbol-value called
@@ -21691,6 +21698,12 @@ cases:
                    (uvn-bound (lambda () (symbol-value (intern "UVN-OTHER"))))
                    *uvn-seen*))
       (print (handler-case (symbol-value 'uvn-nope) (error (c) (princ-to-string c))))
+      (defpackage :uvn-pkg (:use :cl))
+      (defun uvn-text (name)
+        (handler-case (symbol-value name) (unbound-variable (c) (princ-to-string c))))
+      (print (list (uvn-text (car (list 'uvn-pkg::nope)))
+                   (uvn-text (car (list (make-symbol "UVN-UNINTERNED"))))
+                   (uvn-text (car (list (intern "uvn-lower"))))))
     expected: |
       ((UVN-NOPE UNBOUND-VARIABLE) (UVN-COMPUTED UNBOUND-VARIABLE) (UVN-NOPE UNBOUND-VARIABLE) (UVN-MAPPED UNBOUND-VARIABLE) (UVN-INSIDE UNBOUND-VARIABLE))
       T
@@ -21698,6 +21711,7 @@ cases:
       (:ERROR UNBOUND-VARIABLE)
       ((UVN-NOPE UNBOUND-VARIABLE) (UVN-OTHER UNBOUND-VARIABLE) (UVN-OTHER UVN-NOPE))
       "The variable UVN-NOPE is unbound"
+      ("The variable UVN-PKG::NOPE is unbound" "The variable #:UVN-UNINTERNED is unbound" "The variable uvn-lower is unbound")
 
   # The tokenizer package (tokenizers.lisp, .kb/tokenizers.md): the five byte-level
   # pre-tokenizer shapes, the ranked merge loop, the special-token scan, Llama 3's
