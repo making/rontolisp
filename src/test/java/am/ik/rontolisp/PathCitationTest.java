@@ -2,8 +2,12 @@ package am.ik.rontolisp;
 
 import java.io.IOException;
 import java.io.UncheckedIOException;
+import java.nio.charset.CharacterCodingException;
+import java.nio.file.FileVisitResult;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.SimpleFileVisitor;
+import java.nio.file.attribute.BasicFileAttributes;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashSet;
@@ -40,11 +44,18 @@ import static org.assertj.core.api.Assertions.assertThat;
  * <li>It carries no glob or placeholder ({@code *}, {@code ?}, {@code <>}, {@code NNN},
  * {@code YYYY}) -- {@code .kb/*.md} names a set, not a file.</li>
  * <li>It is not a {@code .todo/NNN} or {@code .todo/NNN-title.md} ITEM reference. An
- * item's file is DELETED when it closes and its number goes on being cited afterwards, by
- * design ({@code .todo/.history.md}, "Reading a deleted item"). Everything else under
- * {@code .todo/} -- the artefact directories under {@code .todo/artefacts/} above all --
- * is checked.</li>
+ * item's file is DELETED when it closes, and the notes ({@code .kb/}, {@code .todo/}) go
+ * on citing its number afterwards ({@code .todo/.history.md}, "Reading a deleted item").
+ * Everything else under {@code .todo/} -- the artefact directories under
+ * {@code .todo/artefacts/} above all -- is checked.</li>
  * </ul>
+ *
+ * <p>
+ * <b>An item number belongs to the notes only.</b> Outside {@code .kb/} and
+ * {@code .todo/} -- source, tests, test data, examples, user docs -- a comment states the
+ * fact or measurement itself, or points at the {@code .kb/} file holding it; an item
+ * number means nothing to a reader once the item closes.
+ * {@link #noTodoItemIsCitedOutsideTheNotes()} fails on one.
  *
  * <p>
  * <b>What is not scanned, and why.</b> {@code .todo/artefacts/} and
@@ -75,7 +86,7 @@ class PathCitationTest {
 	private static final List<String> ABSENT_ON_PURPOSE = List.of(
 			// The four ignore-bearing directory renames .kb/directory-rename.md is about.
 			"examples/llama2", "examples/wasm-size", "examples/wit-world", "examples/hiragana",
-			// On the gui-poc branch only, never on develop (.todo/030).
+			// On the gui-poc branch only, never on develop.
 			"examples/maze-rl-gui.lisp",
 			// Promoted out of the examples into the shipped metal.lisp
 			// (eval/MetalLibrary).
@@ -96,10 +107,41 @@ class PathCitationTest {
 	private static final Pattern MARKDOWN_LINK = Pattern.compile("]\\(([^)\\s]+)\\)");
 
 	/**
-	 * {@code .todo/671}, {@code .todo/682-what-a-rename-breaks.md}, {@code .todo/a00} --
-	 * an item, not a path.
+	 * {@code .todo/NNN} or {@code .todo/NNN-title.md}, NNN being three digits or, past
+	 * 999, a letter and two digits -- an item, not a path.
 	 */
 	private static final Pattern TODO_ITEM_REFERENCE = Pattern.compile("\\.todo/[0-9a-z]\\d{2}(-[^/]*\\.md)?");
+
+	/**
+	 * An item number cited anywhere: {@code .todo/NNN} (also behind a closing
+	 * {@code @code} brace), and the word todo directly before the number --
+	 * {@code todo NNN}, {@code Todo-NNN}, or the number wrapped onto the next comment
+	 * line. Three digits or a letter and two digits; two digits alone is how an item
+	 * below 100 was written in prose.
+	 */
+	private static final Pattern TODO_ITEM_CITATION = Pattern.compile(
+			"\\.todo[}/-]{1,2}[0-9a-z]\\d{2}(?![0-9A-Za-z])|(?i)\\btodos?(?:[ -]|\\s*\\R\\s*(?://+|\\*|;+|#+)?\\s*)"
+					+ "#?(?:[a-z]\\d{2}|\\d{2,3})(?![0-9A-Za-z])");
+
+	/**
+	 * Top-level entries the item-number scan leaves out: the notes, where item numbers
+	 * belong, and what is not this repository's text.
+	 */
+	private static final Set<String> NOT_SCANNED_FOR_ITEMS = Set.of(".git", ".kb", ".todo", ".claude", ".idea",
+			"target");
+
+	/**
+	 * Directories that are build output wherever they sit
+	 * ({@code examples/.../node_modules}); none is tracked.
+	 */
+	private static final Set<String> PRUNED_DIRECTORIES = Set.of("target", "node_modules", "dist", ".wrangler",
+			".gradle", ".venv");
+
+	/** The ANSI suite checkout: foreign code, git-ignored. */
+	private static final Path ANSI_SUITE = Path.of(".", "ansi-test", "suite");
+
+	/** Larger than any tracked text file by a wide margin; past it is model weights. */
+	private static final long LARGEST_SCANNED_FILE = 8L * 1024 * 1024;
 
 	/** A citation may carry a line or a range: {@code Foo.java:120-134}. */
 	private static final Pattern TRAILING_LINES = Pattern.compile(":\\d+(-\\d+)?$");
@@ -162,15 +204,14 @@ class PathCitationTest {
 	}
 
 	/**
-	 * Step 1 of {@code .todo/710}, pinned: {@code .todo/} carries two things with
-	 * different lifetimes -- an item, deleted when it closes, and its measurement
-	 * artefacts, kept forever because the numbers outlive the item. They shared one
-	 * namespace until 2026-09-06, when {@code ls .todo/} showed sixteen numbered
-	 * directories of which two belonged to an open item, and three readers had taken one
-	 * of the other fourteen for an open item hours after it closed. The artefacts now
-	 * live under {@code .todo/artefacts/}, which makes the listing readable without
-	 * opening anything and costs nothing at close time -- the directory is already where
-	 * it belongs, so closing an item moves nothing.
+	 * {@code .todo/} carries two things with different lifetimes -- an item, deleted when
+	 * it closes, and its measurement artefacts, kept forever because the numbers outlive
+	 * the item. They shared one namespace until 2026-09-06, when {@code ls .todo/} showed
+	 * sixteen numbered directories of which two belonged to an open item, and three
+	 * readers had taken one of the other fourteen for an open item hours after it closed.
+	 * The artefacts now live under {@code .todo/artefacts/}, which makes the listing
+	 * readable without opening anything and costs nothing at close time -- the directory
+	 * is already where it belongs, so closing an item moves nothing.
 	 *
 	 * <p>
 	 * A third top-level directory, {@code .todo/pending/}, holds {@code NNN-title.md}
@@ -201,10 +242,49 @@ class PathCitationTest {
 	 */
 	@Test
 	void anItemNumberPast999IsAnItemReference() {
-		assertThat(isCitation(".todo/999")).isFalse();
-		assertThat(isCitation(".todo/a00")).isFalse();
-		assertThat(isCitation(".todo/z99-the-last-number.md")).isFalse();
+		assertThat(isCitation(item("999"))).isFalse();
+		assertThat(isCitation(item("a00"))).isFalse();
+		assertThat(isCitation(item("z99") + "-the-last-number.md")).isFalse();
 		assertThat(isCitation(".todo/artefacts/a00-title")).isTrue();
+	}
+
+	@Test
+	void noTodoItemIsCitedOutsideTheNotes() throws IOException {
+		List<String> citing = new ArrayList<>();
+		for (Path file : filesScannedForItems()) {
+			String text;
+			try {
+				text = Files.readString(file);
+			}
+			catch (CharacterCodingException binary) {
+				continue;
+			}
+			Matcher matcher = TODO_ITEM_CITATION.matcher(text);
+			while (matcher.find()) {
+				long line = 1 + text.substring(0, matcher.start()).chars().filter(c -> c == '\n').count();
+				citing.add(file + ":" + line + ": " + matcher.group().replaceAll("\\s+", " "));
+			}
+		}
+		assertThat(citing)
+			.as("A todo item number is cited outside .kb/ and .todo/. State the fact or measurement itself, or point "
+					+ "at the .kb/ file that holds it: the number means nothing once the item closes.")
+			.isEmpty();
+	}
+
+	/**
+	 * The forms the scan has to catch, and the paths and numbers it must leave alone.
+	 */
+	@Test
+	void anItemCitationIsRecognizedInEveryForm() {
+		for (String citing : List.of(item("671"), item("682") + "-what-a-rename-breaks.md", item("a00"),
+				"{@code .todo}-" + "332's inventory", "(todo " + "626)", "Todo " + "445: a method", "todo-" + "473's",
+				"(todo " + "a42)", "todo " + "92 Tier 2", "(todo\n\t\t// " + "194 stage 2)", "(todo\n * " + "a58)")) {
+			assertThat(TODO_ITEM_CITATION.matcher(citing).find()).as(citing).isTrue();
+		}
+		for (String clean : List.of(".todo/artefacts/672-q8/bench.sh", ".todo/claim-number.sh", ".todo/NNN-title.md",
+				"todo list", "(format t \"~a12\")", "a todo: 3 cases", "todo\n(print 100)")) {
+			assertThat(TODO_ITEM_CITATION.matcher(clean).find()).as(clean).isFalse();
+		}
 	}
 
 	/**
@@ -269,6 +349,43 @@ class PathCitationTest {
 				}
 			}
 		}
+	}
+
+	/** An item path built at run time, so this file cites no item itself. */
+	private static String item(String number) {
+		return ".todo/" + number;
+	}
+
+	private static List<Path> filesScannedForItems() throws IOException {
+		List<Path> files = new ArrayList<>();
+		try (Stream<Path> entries = Files.list(Path.of("."))) {
+			for (Path entry : entries.sorted().toList()) {
+				if (NOT_SCANNED_FOR_ITEMS.contains(entry.getFileName().toString())) {
+					continue;
+				}
+				if (Files.isRegularFile(entry)) {
+					files.add(entry);
+					continue;
+				}
+				Files.walkFileTree(entry, new SimpleFileVisitor<>() {
+					@Override
+					public FileVisitResult preVisitDirectory(Path dir, BasicFileAttributes attrs) {
+						boolean pruned = PRUNED_DIRECTORIES.contains(dir.getFileName().toString())
+								|| dir.equals(ANSI_SUITE);
+						return pruned ? FileVisitResult.SKIP_SUBTREE : FileVisitResult.CONTINUE;
+					}
+
+					@Override
+					public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) {
+						if (attrs.isRegularFile() && attrs.size() <= LARGEST_SCANNED_FILE) {
+							files.add(file);
+						}
+						return FileVisitResult.CONTINUE;
+					}
+				});
+			}
+		}
+		return files.stream().sorted().toList();
 	}
 
 	private static boolean isCitation(String token) {

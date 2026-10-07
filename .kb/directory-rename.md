@@ -124,7 +124,11 @@ the root notes) or a javadoc `{@code ...}` no longer resolves, which is the cita
 human's grep missed. Its own judgement call is stated at the top of the file: what counts
 as a citation, why `src/` alone is not a checked prefix (a note about a consumed ASDF
 system cites `src/strings.lisp`, which is someone else's tree), and why a `.todo/NNN` item
-reference is exempt where a `.todo/artefacts/NNN-*/` path is not. A path the tree
+reference is exempt where a `.todo/artefacts/NNN-*/` path is not. That exemption holds in
+the notes only: outside `.kb/` and `.todo/` an item number (`.todo/NNN`, `todo NNN`,
+`todo-NNN`) fails `noTodoItemIsCitedOutsideTheNotes` -- a comment there states the fact or
+points at the `.kb/` file holding it, since the number means nothing once the item closes
+(swept from source, tests and examples on 2026-10-07). A path the tree
 deliberately no longer has goes in its `ABSENT_ON_PURPOSE` list with its reason, and a
 second test fails if one of those names comes back.
 
