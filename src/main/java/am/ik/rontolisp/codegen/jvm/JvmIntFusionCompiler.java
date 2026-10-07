@@ -152,11 +152,12 @@ final class JvmIntFusionCompiler {
 	 * pure), reproducing today's behavior including the error shapes.
 	 *
 	 * <p>
-	 * The INDEX is itself a fusion node ({@link #arefIndexNode}): a literal folds into
-	 * the method, an unboxed local and a {@code random} draw read the raw slot the
-	 * prologue filled, and anything else is an ordinary guarded {@code Object} argument
-	 * -- so {@code (aref a (random n))} and {@code (aref a i)} over an unboxed {@code i}
-	 * pay no box on the way in either.
+	 * The INDEX is an ordinary operand of the tree ({@link #arefLeaf}): a literal folds
+	 * into the method, an unboxed local and a {@code random} draw read the raw slot the
+	 * prologue filled, an arithmetic index is computed raw in the prologue, and anything
+	 * else is an ordinary guarded {@code Object} argument -- so {@code (aref a (+ i 1))},
+	 * {@code (aref a (random n))} and {@code (aref a i)} over an unboxed {@code i} pay no
+	 * box on the way in either.
 	 */
 	private static final class ArefLeaf implements Node {
 
@@ -1476,37 +1477,22 @@ final class JvmIntFusionCompiler {
 	/**
 	 * Builds and registers a rank-1 aref leaf. The leaf registers BEFORE its index, so
 	 * the call site pushes the array first and the index's own leaves after it -- the
-	 * generic {@code (aref a i)} argument order.
+	 * generic {@code (aref a i)} argument order. The index classifies like any other
+	 * operand: an arithmetic index is part of the tree, its operations applied before the
+	 * read in the interpreter's order, computed raw in the prologue and generically by
+	 * the fallback.
 	 */
-	private static Node arefLeaf(LispVal arrayExpr, LispVal indexExpr, int sourceSite, JvmLispCompiler.Ctx ctx,
+	@Nullable private static Node arefLeaf(LispVal arrayExpr, LispVal indexExpr, int sourceSite, JvmLispCompiler.Ctx ctx,
 			Site site, int depth) {
 		ArefLeaf leaf = new ArefLeaf(arrayExpr, sourceSite);
 		registerLeaf(leaf, site);
-		leaf.indexNode = arefIndexNode(indexExpr, ctx, site, depth);
+		Node index = classify(indexExpr, ctx, Map.of(), site, depth);
+		if (index == null) {
+			return null;
+		}
+		leaf.indexNode = index;
 		// The read applies once the array and the index are evaluated.
 		return applied(leaf, site);
-	}
-
-	/**
-	 * The index of an aref leaf as a node the prologue can resolve into a raw
-	 * {@code long} slot (or a constant). A literal, a symbol (an unboxed local's slot
-	 * triple, else an ordinary guarded argument) and a {@code random} draw classify;
-	 * anything else -- an arithmetic index, a call -- becomes one opaque guarded
-	 * argument, exactly the boxed index the leaf always took.
-	 */
-	private static Node arefIndexNode(LispVal indexExpr, JvmLispCompiler.Ctx ctx, Site site, int depth) {
-		boolean resolvable = indexExpr instanceof LispInteger || indexExpr instanceof LispSymbol
-				|| (indexExpr instanceof LispCons cons && cons.isProperList() && cons.car() instanceof LispSymbol head
-						&& LispNames.RANDOM.equals(head.name()) && cons.toList().size() == 2);
-		if (!resolvable) {
-			return registerLeaf(new ExprLeaf(indexExpr), site);
-		}
-		Node node = classify(indexExpr, ctx, Map.of(), site, depth);
-		if (!(node instanceof ConstLeaf || node instanceof ExprLeaf || node instanceof RawLeaf
-				|| node instanceof RandomLeaf)) {
-			throw new IllegalStateException("aref index did not resolve to a slot: " + indexExpr);
-		}
-		return node;
 	}
 
 	/**
@@ -1567,11 +1553,14 @@ final class JvmIntFusionCompiler {
 		return null;
 	}
 
-	/** Counts fused operations (an n-ary node left-folds into arity - 1 binary ops). */
+	/**
+	 * Counts fused operations (an n-ary node left-folds into arity - 1 binary ops), an
+	 * aref index's among them.
+	 */
 	private static int countOps(Node node) {
 		return switch (node) {
 			case ExprLeaf ignored -> 0;
-			case ArefLeaf ignored -> 0;
+			case ArefLeaf leaf -> countOps(java.util.Objects.requireNonNull(leaf.indexNode));
 			case RandomLeaf ignored -> 0;
 			case RawLeaf ignored -> 0;
 			case ConstLeaf ignored -> 0;
@@ -2325,20 +2314,28 @@ final class JvmIntFusionCompiler {
 				default -> throw new IllegalStateException("not a registered leaf: " + leaf);
 			}
 		}
-		ArefScratch arefScratch = null;
-		for (Node leaf : pending.leaves()) {
-			if (leaf instanceof ArefLeaf l) {
-				if (arefScratch == null) {
-					arefScratch = new ArefScratch(ctx.allocTemp(), ctx.allocTemp(), ctx.allocTemp());
-				}
-				emitArefRead(l, ctx, bails, longArrayClass, arefScratch);
-			}
-		}
 		// The fast path, protected: an ArithmeticException (Math.*Exact overflow,
 		// _fxAsh, a zero divisor) discards the partial operand stack and lands in the
 		// bail, whose fallback recomputes generically -- including the generic error
-		// shape for the zero divisor.
-		MethodCode.Label tryStart = ctx.body.newBoundLabel();
+		// shape for the zero divisor. A computed aref index is part of it: the region
+		// then opens before the reads.
+		MethodCode.Label tryStart = null;
+		ArefScratch arefScratch = null;
+		java.util.Set<Node> read = java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>());
+		for (Node leaf : pending.leaves()) {
+			if (leaf instanceof ArefLeaf l) {
+				if (arefScratch == null) {
+					if (pending.leaves().stream().anyMatch(JvmIntFusionCompiler::computesIndex)) {
+						tryStart = ctx.body.newBoundLabel();
+					}
+					arefScratch = new ArefScratch(ctx.allocTemp(), ctx.allocTemp(), ctx.allocTemp());
+				}
+				emitArefReads(l, read, ctx, state, bails, longArrayClass, arefScratch);
+			}
+		}
+		if (tryStart == null) {
+			tryStart = ctx.body.newBoundLabel();
+		}
 		if (pending.isCompare()) {
 			OpNode root = (OpNode) pending.root();
 			emitFast(root.args().get(0), ctx, state);
@@ -2477,6 +2474,35 @@ final class JvmIntFusionCompiler {
 		ctx.body.dmul().d2l();
 	}
 
+	/** Whether the leaf is an aref read whose index the prologue computes. */
+	private static boolean computesIndex(Node leaf) {
+		return leaf instanceof ArefLeaf l && l.indexNode instanceof OpNode;
+	}
+
+	/**
+	 * Reads the aref leaves under {@code node} in the order their values are needed: an
+	 * aref in another's index is read before the read that indexes with it.
+	 */
+	private static void emitArefReads(Node node, java.util.Set<Node> read, JvmLispCompiler.Ctx ctx, State state,
+			MethodCode.Label bails, ClassEntry longArrayClass, ArefScratch scratch) {
+		switch (node) {
+			case OpNode op -> {
+				for (Node arg : op.args()) {
+					emitArefReads(arg, read, ctx, state, bails, longArrayClass, scratch);
+				}
+			}
+			case ArefLeaf leaf -> {
+				if (read.add(leaf)) {
+					emitArefReads(java.util.Objects.requireNonNull(leaf.indexNode), read, ctx, state, bails,
+							longArrayClass, scratch);
+					emitArefRead(leaf, ctx, state, bails, longArrayClass, scratch);
+				}
+			}
+			default -> {
+			}
+		}
+	}
+
 	/**
 	 * The prologue's raw rank-1 aref read, over whichever packed representation the
 	 * program can hold: the bare {@code long[]} packed integer vector (elements from slot
@@ -2486,7 +2512,7 @@ final class JvmIntFusionCompiler {
 	 * out-of-range index, a nil element -- bails into the same {@code _aref1} the unfused
 	 * emission would have called.
 	 */
-	private static void emitArefRead(ArefLeaf leaf, JvmLispCompiler.Ctx ctx, MethodCode.Label bails,
+	private static void emitArefRead(ArefLeaf leaf, JvmLispCompiler.Ctx ctx, State state, MethodCode.Label bails,
 			ClassEntry longArrayClass, ArefScratch scratch) {
 		// idx = (int) <index>, an index past the int range bailing: _aref1 checks the
 		// whole value against the bound, so no truncation may read an element.
@@ -2498,6 +2524,13 @@ final class JvmIntFusionCompiler {
 			}
 			JvmEmitHelper.emitIntConst(ctx, (int) c.value());
 			ctx.body.istore(idxSlot);
+		}
+		else if (index instanceof OpNode) {
+			// Computed raw, inside the checked region: an overflow bails like the
+			// tree's own.
+			emitFast(index, ctx, state);
+			ctx.body.dup2().l2i().istore(idxSlot);
+			ctx.body.iload(idxSlot).i2l().lcmp().ifne(bails);
 		}
 		else {
 			emitLongLoad(rawSlotOf(index), ctx);
@@ -2586,6 +2619,7 @@ final class JvmIntFusionCompiler {
 	private static int rawSlotOf(Node index) {
 		return switch (index) {
 			case ExprLeaf l -> l.longSlot;
+			case ArefLeaf l -> l.longSlot;
 			case RawLeaf l -> l.longSlot;
 			case RandomLeaf l -> l.longSlot;
 			default -> throw new IllegalStateException("not a slot-resolved index: " + index);

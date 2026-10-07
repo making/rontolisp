@@ -39,8 +39,8 @@ runs a check -- `PendingGuard` (every leaf the pending operations read an i31 or
 `TYPE_BIGNUM`, divisors non-zero, shift counts no larger than an `i32`) or `LeafGuard`
 (the leaf is integer arithmetic over quiet variables, which hold such integers); anything
 no check stands in for -- an aref read before a leaf that may store, a computed divisor
-or count -- is made opaque and evaluated in place. An aref leaf's evaluation is its array
-and its index together, so its check stands in front of both. What is this backend's own:
+or count -- is made opaque and evaluated in place. An aref leaf's evaluation is its array;
+its index is part of the tree (below). What is this backend's own:
 
 - **The probe is inline**: `block $checked { block $fails { checks; br $checked } probe }`,
   the probe being each pending root's generic fallback with its value dropped. A site whose
@@ -54,7 +54,16 @@ and its index together, so its check stands in front of both. What is this backe
 ## What else rides the fast path
 
 - **Leaf kinds**: `RawLeaf` (unboxed dual-representation LOCALS, `.kb/wasm-unboxed-locals.md`),
-  `ArefLeaf` (packed integer vectors, `.kb/packed-integer-vectors.md`), `ConstLeaf`. A `dotimes`
+  `ArefLeaf` (packed integer vectors, `.kb/packed-integer-vectors.md`), `ConstLeaf`. An aref's
+  INDEX is an operand of the tree (`arefLeaf`), as on the JVM: a literal folds, an unboxed
+  local reads its snapshot, an operation computes raw; the reads run after every other leaf's
+  unbox, an aref in another's index first (`emitArefReads`), and bail unless the index is an
+  i31, as when the index arrived boxed. The fallback computes it generically into a temp (an
+  expression leaf's own slot otherwise). Measured 2026-10-07 (wasmtime 49, the JVM file's
+  kernels, best of 15 rounds, 7 processes): decode 696-792 -> 562-699 ms, fill 369-419 ->
+  279-373 ms; `flexi-streams:octets-to-string` 93-99 -> 82-89 ms and `md5sum-sequence` 35-37 ->
+  33-35 ms; the kernel module 24,106 -> 21,618 B, one loading flexi-streams and md5 181,345 ->
+  177,260 B. A `dotimes`
   induction variable over a LITERAL bound is a COUNTED `RawLocal` needing no snapshot, guard or
   `_int_new` -- registered at every optimize level, unlike everything else here
   (`.kb/wasm-counted-loops.md`). Each leaf is unboxed ONCE into an i64 scratch local; those

@@ -65,10 +65,11 @@ before `*` could signal, and `(+ (* 2 a) (car x))` reported `car`.
   - `PendingGuard`, when every pending application is an operation whose divisor or shift
     count is a literal or a leaf: the leaves they read are `Long`s, the divisors non-zero,
     the counts no larger than an `int` -- then they cannot signal. The pending set clears.
-  - `LeafGuard`, when the leaf is integer arithmetic over quiet variables (in practice an
-    aref index, `(aref v (+ i 1))`): those variables are `Long`s -- then the leaf cannot
+  - `LeafGuard`, when the leaf is integer arithmetic over quiet variables the tree did not
+    take (`(- x)`, a one-operand `+`): those variables are `Long`s -- then the leaf cannot
     signal or change anything and the applications stay pending; an aref read keeps its
-    raw read in the method.
+    raw read in the method. An arithmetic aref index, its main case until 2026-10-07, is
+    part of the tree now (below).
   - Anything else -- an aref read before a leaf that may store, a `random` draw, a
     `mod`/`rem`/`ash` over a computed divisor or count -- is made opaque: an ordinary leaf
     evaluated in place by the ordinary emission (`classifyOrdered` repeats the
@@ -97,7 +98,8 @@ program, every global counted as observable): 159,287 fused sites, 4,737 with an
 application pending before an observable leaf -- 5,765 integer operations, 1,002 `ash` by
 a literal, 1,158 by a leaf count and 341 by a computed one (all `ldb`/`dpb` over a
 run-time byte spec), 31 `mod` by a literal, 502 aref reads (mostly in front of an
-arithmetic aref index: UTF-8 decoding, MD5), no draw and no computed divisor.
+arithmetic aref index: UTF-8 decoding, MD5 -- which no longer is a leaf), no draw and no
+computed divisor.
 
 ## Entry points beyond plain trees
 - **Fused comparisons** (`= < > <= >=`, binary): `_fx$N` returning a raw `int`; generic
@@ -117,7 +119,19 @@ arithmetic aref index: UTF-8 decoding, MD5), no draw and no computed divisor.
   boxed general array**. The nil sentinel (`Long.MIN_VALUE`), an out-of-range index (a long one past the int range
   too, which no truncation may turn into a read) and every
   non-packed shape bail into the same `_ivAref1`/`_fvAref1`/`_arrayAref1` the ordinary emission
-  would use. The INDEX is itself a fusion node.
+  would use. **The INDEX is an operand of the tree** (`arefLeaf`): its leaves register after
+  the array's and its operations apply before the read, in the interpreter's order, so
+  `(aref v (+ i 1))` puts no leaf (and no check) between the reads in front of it. The
+  prologue computes an operation index raw (`emitArefRead`) inside the checked region, which
+  then opens before the reads, so an overflow bails; an aref in another's index is read first
+  (`emitArefReads`); the fallback computes it generically. Measured 2026-10-07 (scratch
+  kernels copying `flexi-streams:octets-to-string`'s decode and md5's `fill-block-ub8` loop over
+  1 MB, best of 15 rounds per process, load 20-50): steady state unchanged (decode 84-95 ms,
+  fill 42-46 ms either way -- C2 already scalar-replaced the index's box once it inlined the
+  index's own `_fx$N`); the first round, through tier-up, decode median 266 -> 221 ms and
+  fill 279 -> 218 ms (8 processes each); the library calls themselves within noise; a class
+  loading flexi-streams and md5 196,069 -> 194,710 B. The WASM half gains in steady state
+  (`.kb/wasm-int-fusion.md`).
 - **Random leaves**: `(random <integer>)` draws with the same formula `_random` uses for a `Long`
   limit, `(long) (ThreadLocalRandom.current().nextDouble() * limit)` (`.kb/random.md`). **The only
   IMPURE leaf, and its protocol follows**: the fallback re-emits its tree and a shared parameter
@@ -183,6 +197,7 @@ limit (`.kb/jvm-method-size-limits.md`) -- past 255 slots `astore 256/257/258` t
 ## Pinning tests
 `JvmLispCompilerTest.fusedIntegerExpressionTreesMatchTheGenericPath`,
 `.fusedArefLeavesReadTheGeneralArraysPackedShapeAndBailForEveryOther`,
+`.anArithmeticArefIndexIsComputedInsideTheFusedTree` (one `_fx$` call and no probe per site),
 `.unboxedTopLevelGlobalsAnswerWhatTheBoxedStaticFieldAnswers`,
 `.aDynamicallyBoundSpecialAndAnEvaldGlobalDeclineTheUnboxedRepresentation` (pinned by the ABSENCE
 of the `_gr$` field too), `.theSizeLevelChangesNothingWithoutASpeedForSizeTrade`;

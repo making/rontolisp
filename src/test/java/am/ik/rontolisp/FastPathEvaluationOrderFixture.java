@@ -96,7 +96,10 @@ public final class FastPathEvaluationOrderFixture {
 			(eo-report (+ (aref *eo-v* *eo-ten*) (car *eo-ten*)))
 			(eo-report (eo-pair *eo-u8* 10 *eo-b*))
 			(eo-report (eo-pair *eo-u8* 10 0))
-			(eo-report (logior (ash (aref *eo-u8* 1) 8) (aref *eo-u8* (+ *eo-ten* 1))))""";
+			(eo-report (logior (ash (aref *eo-u8* 1) 8) (aref *eo-u8* (+ *eo-ten* 1))))
+			(eo-report (+ (aref *eo-u8* 0) (aref *eo-u8* (+ (eo-mark "k " 1) *eo-a*))))
+			(eo-report (+ 1 (aref *eo-u8* (aref *eo-v* (- *eo-ten* 8)))))
+			(eo-report (* 2 (aref *eo-u8* (ash *eo-ten* 62))))""";
 
 	/** What every backend prints for {@link #SIGNALS_SOURCE}. */
 	public static final String SIGNALS_EXPECTED = """
@@ -155,7 +158,10 @@ public final class FastPathEvaluationOrderFixture {
 			AREF: The value 10 is not of type (INTEGER 0 (3))
 			AREF: The value 10 is not of type (INTEGER 0 (3))
 			AREF: The value 10 is not of type (INTEGER 0 (3))
-			AREF: The value 11 is not of type (INTEGER 0 (3))""";
+			AREF: The value 11 is not of type (INTEGER 0 (3))
+			k +: The value A is not of type NUMBER
+			AREF: The value 3 is not of type (INTEGER 0 (3))
+			AREF: The value 46116860184273879040 is not of type (INTEGER 0 (3))""";
 
 	/**
 	 * The answers, with no handler anywhere (WASM compiles it outside EH mode): an aref
@@ -177,6 +183,7 @@ public final class FastPathEvaluationOrderFixture {
 			(defun ev-f64-mix (x) (+ x (ev-id 2) 0.5))
 			(defun ev-octets (v i) (logior (ash (logand (aref v (+ i 1)) 63) 6) (logand (aref v (+ i 2)) 63)))
 			(defun ev-loop (n) (let ((s 0)) (dotimes (k n) (setq s (+ s (* 2 k) (ev-id 1)))) s))
+			(defun ev-index-store (v) (+ (aref v 0) (aref v (+ (progn (setf (aref v 0) 2) 0) 0))))
 			(print (ev-f64-exit *ev-a*))
 			(print (ev-aref-after *ev-v*))
 			(print (ev-aref-after *ev-u8*))
@@ -190,7 +197,9 @@ public final class FastPathEvaluationOrderFixture {
 			(print (ev-octets (make-array 4 :element-type '(unsigned-byte 8) :initial-contents '(224 162 130 0)) 0))
 			(print (ev-octets (vector 224 162 130 0) 0))
 			(print (ev-loop 4))
-			(print (list (+ (random 1) (ev-id 1)) (+ (mod 7 *ev-three*) (ev-id 1)) (+ (ash 1 *ev-three*) (ev-id 1))))""";
+			(print (list (+ (random 1) (ev-id 1)) (+ (mod 7 *ev-three*) (ev-id 1)) (+ (ash 1 *ev-three*) (ev-id 1))))
+			(print (ev-index-store (make-array 2 :element-type '(unsigned-byte 8) :initial-contents '(5 6))))
+			(print (ev-index-store (vector 5 6)))""";
 
 	/** What every backend prints for {@link #VALUES_SOURCE}. */
 	public static final String VALUES_EXPECTED = """
@@ -207,7 +216,9 @@ public final class FastPathEvaluationOrderFixture {
 			2178
 			2178
 			16
-			(1 2 9)""";
+			(1 2 9)
+			7
+			7""";
 
 	/**
 	 * A program that may observe a complex: the two-argument {@code log} evaluates its
