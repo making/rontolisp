@@ -288,4 +288,31 @@ public final class GrayStreamCallFixture {
 			"(\"ab\" \"q\" #\\c #\\d \"ef\" \"xyz\" \"g\")", "(NIL :FRESH NIL \"3\" NIL NIL NIL \"h\" \"i\")",
 			"\"ab\\\"q\\\"cdefyzg", "", "", "2!hi\"");
 
+	/**
+	 * A {@code (format t ...)} in a package other than {@code cl-user}, run with a Gray
+	 * {@code *standard-output*}: the compile paths lower that call before the package
+	 * resolver runs, so the names its expansion emits ({@code %princ-piece},
+	 * {@code %prin1-piece}, {@code %fmt-render}) must not resolve into the user package.
+	 */
+	public static final String STANDARD_STREAM_IN_A_PACKAGE_PROGRAM = """
+			(defclass gsp-sink (rontolisp:fundamental-character-output-stream)
+			  ((gsp-acc :initform nil)))
+			(defmethod rontolisp:stream-write-char ((gsp-s gsp-sink) gsp-c)
+			  (push gsp-c (slot-value gsp-s 'gsp-acc))
+			  gsp-c)
+			(defpackage :gsp-app (:use :cl))
+			(in-package :gsp-app)
+			(defun banner (server port control address)
+			  (format t "~&~:(~a~) server ~x ~:c.~%" server port #\\Space)
+			  (format t control address port))
+			(let ((sink (make-instance 'cl-user::gsp-sink)))
+			  (let ((*standard-output* sink))
+			    (banner :reactor 255 "Listening on ~a:~d~%" "127.0.0.1"))
+			  (print (coerce (reverse (slot-value sink 'cl-user::gsp-acc)) 'string)))
+			""";
+
+	/** What {@link #STANDARD_STREAM_IN_A_PACKAGE_PROGRAM} prints (SBCL's answer). */
+	public static final String STANDARD_STREAM_IN_A_PACKAGE_EXPECTED = String.join("\n", "\"",
+			"Reactor server FF Space.", "Listening on 127.0.0.1:255", "\"");
+
 }

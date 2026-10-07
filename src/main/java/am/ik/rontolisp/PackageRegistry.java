@@ -289,7 +289,9 @@ public final class PackageRegistry {
 
 	/**
 	 * Internal {@code %}-prefixed helpers owned by {@code cl} but excluded from the
-	 * introspection listings.
+	 * introspection listings. Every name a built-in lowering emits belongs here: a
+	 * compile-path pass may run the lowering before the package resolver, inside the
+	 * user's package, where a name {@code cl} does not own resolves into that package.
 	 */
 	private static final Set<String> CL_INTERNALS = Set.of(LispNames.REMF_TAIL, LispNames.STRING_CONCAT,
 			LispNames.FIXED_DECIMAL, LispNames.SEQ_STRING, LispNames.SEQ_INT_VECTOR, LispNames.SEQ_FLOAT_VECTOR,
@@ -359,7 +361,8 @@ public final class PackageRegistry {
 			LispNames.PACKAGE_ITERATOR_ENTRIES_INTERNAL, LispNames.RUNTIME_MEMBER_FIND_INTERNAL,
 			LispNames.RUNTIME_MEMBER_STATUS_INTERNAL, LispNames.RUNTIME_MEMBER_INTERN_INTERNAL,
 			LispNames.RUNTIME_EXTERNAL_FIND_INTERNAL, LispNames.RUNTIME_PACKAGE_OP_INTERNAL,
-			LispNames.CHECK_BOUNDS_INTERNAL);
+			LispNames.CHECK_BOUNDS_INTERNAL, LispNames.PRINC_PIECE_INTERNAL, LispNames.PRIN1_PIECE_INTERNAL,
+			LispNames.FMT_RENDER);
 
 	/**
 	 * The names of the symbols owned by the {@code cl} package, derived as the union of
