@@ -54,6 +54,7 @@ import am.ik.rontolisp.compiler.FreeVarAnalyzer;
 import am.ik.rontolisp.compiler.GlobalVarCollector;
 import am.ik.rontolisp.compiler.LispCompiler;
 import am.ik.rontolisp.compiler.NestedDefunRedefinition;
+import am.ik.rontolisp.compiler.ReadBeforeStore;
 import am.ik.rontolisp.compiler.OptimizeLevel;
 import am.ik.rontolisp.compiler.ShadowedBuiltins;
 import am.ik.rontolisp.compiler.SequenceIoNarrowing;
@@ -2018,6 +2019,13 @@ public final class JvmLispCompiler implements LispCompiler {
 		}
 		SequencedSet<String> unboundGlobals = SpecialVarCollector.collectValueless(probedForms, specialVars);
 		unboundGlobals.addAll(probedGlobals);
+		// A global that is no special starts as the marker too where a read can reach it
+		// before its first store (compiler/ReadBeforeStore); every other one keeps the
+		// plain field, which starts as nil.
+		SequencedSet<String> readBeforeStore = ReadBeforeStore.collect(program,
+				closRegistry.conditionReports().values(), specialVars, closRegistry);
+		readBeforeStore.retainAll(globals);
+		unboundGlobals.addAll(readBeforeStore);
 		if (!unboundSpecials.isEmpty() && LispMacroExpander.programUsesComputedBoundp(probedForms)
 				&& !LispMacroExpander.definesRuntimeName(userDefinedNames, LispNames.BOUNDP_DYNAMIC)) {
 			for (LispVal segment : LispMacroExpander.boundpDynamicRuntime(unboundSpecials, specialVars)) {

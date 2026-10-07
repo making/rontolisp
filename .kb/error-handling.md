@@ -1169,10 +1169,10 @@ message at the catching end** -- except for the failures the backends report as 
   (`LispEvaluatorTest` / `JvmLispCompilerTest` / `WasmLispCompilerIntegrationTest`
   `an{UndefinedFunction,UnboundVariable}CarriesItsNameInTheCellErrorNameSlot`) and ci-spec
   `undefined-function-carries-its-name` / `unbound-variable-carries-its-name`. A compiled read of
-  a special without a value (a `(defvar x)`) signals it too since 2026-10-07: the JVM's `_bound`
-  throws the same text, wasm's `_unbound_variable` the same report
-  ([dynamic-special-variables.md](dynamic-special-variables.md), "A read of a special without a
-  value").
+  a special without a value (a `(defvar x)`) signals it too since 2026-10-07, and so does one of a
+  global before its first store: the JVM's `_bound` throws the same text, wasm's
+  `_unbound_variable` the same report ([dynamic-special-variables.md](dynamic-special-variables.md),
+  "A read of a special without a value", "A read of a global before its first store").
 - **The report spells the name as the symbol is stored** (`symbol.name()`): `P::V`, `#:U`, a
   keyword's colon, `lower` without bars. wasm used `princ` (drops the qualifier and the `#:`)
   until 2026-10-07, and `prin1` would add the bars. `WasmRuntimeBuilder.emitSymbolSpelling` frames a

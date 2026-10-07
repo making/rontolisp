@@ -27079,6 +27079,20 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void aGlobalReadBeforeItsFirstStoreSignalsUnboundVariable() throws Exception {
+		// The wasm twin of the JvmLispCompilerTest test of this name, on Preview 1 and
+		// the
+		// component: such a global's module global used to start as nil, so every read
+		// before the store answered NIL.
+		String source = am.ik.rontolisp.ReadBeforeStoreFixture.SOURCE;
+		assertThat(compileAndRunProgram(am.ik.rontolisp.cli.CompileFrontendAccess.corpus(source,
+				am.ik.rontolisp.reader.Features.WASM, true, false)))
+			.isEqualTo(am.ik.rontolisp.ReadBeforeStoreFixture.EXPECTED);
+		assertThat(runComponentFrontendProgramWithDir(source))
+			.isEqualTo(am.ik.rontolisp.ReadBeforeStoreFixture.EXPECTED);
+	}
+
+	@Test
 	void anUncaughtReadOfASpecialWithoutAValueEndsTheProgram() throws Exception {
 		// Such a read used to answer nil and the program ran on. In EH mode the uncaught
 		// unbound-variable reaches the entry report with the interpreter's text; outside

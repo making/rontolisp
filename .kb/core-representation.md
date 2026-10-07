@@ -115,7 +115,9 @@ size-report, bench-report and the ci-spec program (1,927 outputs: P1, `--optimiz
 component, JVM) compile byte-identically, build-info strings aside; ci-spec compile time
 unchanged (~18 s). A literal `boundp` of such a name reads its variable in a program without the
 eval mirror (`.kb/compile-time-boundp.md`, "A probe the fold leaves open"). Pins:
-`GlobalVarCollectorTest`, `FunctionAssignedGlobalFixture` on
+Such a global, like a top-level `setq` one, is unbound until its first store: a read that can
+run before it signals (`.kb/dynamic-special-variables.md`, "A read of a global before its first
+store"). `GlobalVarCollectorTest`, `FunctionAssignedGlobalFixture` on
 `aGlobalAssignedOnlyInsideAFunctionIsAGlobal` and `ProbedUnboundGlobalFixture`'s top-level part
 (`LispEvaluatorTest`, `JvmLispCompilerTest`, `WasmLispCompilerIntegrationTest` P1 + component),
 ci-spec `a-global-assigned-only-inside-a-function`.

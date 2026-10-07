@@ -55,6 +55,7 @@ import am.ik.rontolisp.compiler.FetchResponseShape;
 import am.ik.rontolisp.compiler.FreeVarAnalyzer;
 import am.ik.rontolisp.compiler.GlobalVarCollector;
 import am.ik.rontolisp.compiler.NestedDefunRedefinition;
+import am.ik.rontolisp.compiler.ReadBeforeStore;
 import am.ik.rontolisp.compiler.HostGlueEmitter;
 import am.ik.rontolisp.compiler.LispCompiler;
 import am.ik.rontolisp.compiler.NoWasiFilesystemStubs;
@@ -3733,10 +3734,16 @@ public final class WasmLispCompiler implements LispCompiler {
 				: new LinkedHashSet<>();
 		boolean boundpReadsMirror = programUsesSymbol(program, LispNames.BOUNDP)
 				&& LispMacroExpander.boundpReachesMirror(program, probedBeforeInjection);
+		// The globals that are no special and that a read can reach before their first
+		// store (compiler/ReadBeforeStore) start as the UNBOUND marker too. Read off
+		// the program here: no pass changes it before the globals are collected below.
+		SequencedSet<String> readBeforeStore = ReadBeforeStore.collect(program,
+				closRegistry.conditionReports().values(), specialVars, closRegistry);
 		// Whether a read can find a global's UNBOUND marker (Ctx.unboundGlobals) and
 		// signal its unbound-variable: a special only a binding or an assignment gives a
-		// value, or a literally probed global without one.
-		boolean readsUnboundGlobal = !probedBeforeInjection.isEmpty()
+		// value, a literally probed global without one, or a global a read can reach
+		// before its first store.
+		boolean readsUnboundGlobal = !readBeforeStore.isEmpty() || !probedBeforeInjection.isEmpty()
 				|| !SpecialVarCollector.collectValueless(program, specialVars).isEmpty();
 		// Every reason for the runtime except the four pure READERS: the program can
 		// write GLOBAL_FENV (eval's defun, load, fmakunbound, a (setf (symbol-function
@@ -4400,6 +4407,8 @@ public final class WasmLispCompiler implements LispCompiler {
 		}
 		SequencedSet<String> unboundGlobals = SpecialVarCollector.collectValueless(probedForms, specialVars);
 		unboundGlobals.addAll(probedUnboundGlobals);
+		readBeforeStore.retainAll(globals);
+		unboundGlobals.addAll(readBeforeStore);
 		this.emitsUnboundVariable = ehMode && !unboundGlobals.isEmpty();
 		if (!probedUnboundGlobals.isEmpty() && LispMacroExpander.programUsesComputedBoundp(probedForms)
 				&& !LispMacroExpander.definesRuntimeName(userDefinedNames, LispNames.BOUNDP_DYNAMIC)) {
@@ -11524,13 +11533,14 @@ public final class WasmLispCompiler implements LispCompiler {
 		/**
 		 * The globals whose module global carries their bound-ness: a special only a
 		 * binding or an assignment gives a value
-		 * ({@code SpecialVarCollector.collectValueless}), and in a module without the
-		 * eval mirror any global a literal {@code boundp} names and no definer gives a
-		 * value ({@code GlobalVarCollector.collectProbedUnbound}). {@code _start} seeds
-		 * each global with the UNBOUND marker -- the raw-local sentinel
-		 * ({@link #rawSentinelGlobalIndex}) -- before any user code; a store overwrites
-		 * it; a binding saves and restores it like any value; a read outside a binding of
-		 * it signals the {@code unbound-variable} naming it
+		 * ({@code SpecialVarCollector.collectValueless}), a global that is no special and
+		 * that a read can reach before its first store ({@code ReadBeforeStore}), and in
+		 * a module without the eval mirror any global a literal {@code boundp} names and
+		 * no definer gives a value ({@code GlobalVarCollector.collectProbedUnbound}).
+		 * {@code _start} seeds each global with the UNBOUND marker -- the raw-local
+		 * sentinel ({@link #rawSentinelGlobalIndex}) -- before any user code; a store
+		 * overwrites it; a binding saves and restores it like any value; a read outside a
+		 * binding of it signals the {@code unbound-variable} naming it
 		 * ({@code WasmExprCompiler.emitCheckedRead}) and {@code boundp} answers nil
 		 * ({@code WasmSymbolApiCompiler.compileGlobalBoundp}).
 		 */

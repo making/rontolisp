@@ -1869,6 +1869,23 @@ class WasmLispCompilerTest {
 		assertThat(compile(mixed).length).isGreaterThan(probed + 1024);
 	}
 
+	@Test
+	void aGlobalCarriesTheUnboundCheckOnlyWhereAReadCanComeBeforeItsFirstStore() {
+		// The wasm twin of the JvmLispCompilerTest test of this name: the same forms in
+		// two orders. Assigned before the call that reads it, the global keeps the plain
+		// module global and the plain read, so nothing in the module can signal the
+		// unbound-variable and its report text is not there; called first, the read is
+		// tested against the UNBOUND marker and the module carries _unbound_variable
+		// (EH mode: the handler-case) and the report (compiler/ReadBeforeStore).
+		String inc = "(defun rb-inc () (setq *rb* (+ *rb* 1)))";
+		String call = " (print (handler-case (rb-inc) (unbound-variable () :unbound)))";
+		byte[] plain = compile("(setq *rb* 0) " + inc + call);
+		byte[] checked = compile(inc + call + " (setq *rb* 0)");
+		assertThat(occurrences(plain, " is unbound")).isZero();
+		assertThat(occurrences(checked, " is unbound")).isOne();
+		assertThat(functionCount(checked)).isGreaterThan(functionCount(plain));
+	}
+
 	// How many call instructions of _store an unoptimized module spells (no shake, so
 	// the fixed index stays the index).
 	private static int storeCalls(String source) {

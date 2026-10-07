@@ -15,3 +15,12 @@ A `name` that no lexical binding holds and no `defvar` declares is the global va
 (remember 42)
 *last-seen* ; => 42
 ```
+
+Such a global is unbound until its first assignment: a read of it before then -- by a function the program calls first, say -- signals an `unbound-variable` naming it, on every backend, as in SBCL.
+
+```lisp
+(defun total () (* *rate* 100))
+(handler-case (total) (unbound-variable (e) (cell-error-name e))) ; => *RATE*
+(setq *rate* 3)
+(total) ; => 300
+```
