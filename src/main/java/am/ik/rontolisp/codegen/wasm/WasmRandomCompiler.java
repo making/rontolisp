@@ -38,13 +38,14 @@ import am.ik.wasm.Type;
  * {@code _int_new}.
  *
  * <p>
- * A float-literal argument compiles straight to the float path
- * ({@code (rand / 2^31) * limit}). Otherwise the limit's type is tested at runtime
- * ({@code ref.test TYPE_FLOAT}): a float limit takes the float path, an integer limit the
- * {@code rand mod limit} i31 path. The runtime test is what lets a float limit reaching
- * {@code random} through a variable work (the compile-time literal shape alone cannot
- * detect it). ONE draw is taken before the test and shared by both branches, so a call
- * advances the generator exactly once either way.
+ * A limit proven a float ({@link WasmLispCompiler#isDefinitelyDouble}) compiles straight
+ * to the float path ({@code (rand / 2^31) * limit}). Otherwise the limit's type is tested
+ * at runtime ({@code ref.test TYPE_FLOAT}): a float limit takes the float path, an
+ * integer limit the {@code rand mod limit} i31 path. The runtime test is what lets a
+ * float limit reaching {@code random} through a variable work, and an integer limit whose
+ * form only mentions a float ({@code (random (if c 1.0 10))}) draw an integer. ONE draw
+ * is taken before the test and shared by both branches, so a call advances the generator
+ * exactly once either way.
  */
 final class WasmRandomCompiler {
 
@@ -61,8 +62,8 @@ final class WasmRandomCompiler {
 		if (args.size() != 2) {
 			throw new UnsupportedOperationException("random expects 1 argument, got " + (args.size() - 1));
 		}
-		if (WasmLispCompiler.hasDoubleLiteral(args)) {
-			// Float-literal limit: the float path directly, no runtime test needed --
+		if (WasmLispCompiler.isDefinitelyDouble(args.get(1))) {
+			// A limit proven a float: the float path directly, no runtime test needed --
 			// but reject a non-positive one first (.todo/981), which this path would
 			// otherwise never check.
 			int limitSlot = ctx.allocTemp();

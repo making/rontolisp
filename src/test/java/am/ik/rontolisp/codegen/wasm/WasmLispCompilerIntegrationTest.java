@@ -27854,6 +27854,30 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void oneOperandFloatSite() throws Exception {
+		// The interpreter twin is LispEvaluatorTest#oneOperandFloatSite. (- x), (/ x),
+		// abs and random converted their operand whenever a float literal appeared
+		// anywhere in it, so an exact operand answered a float.
+		String[][] fixtures = {
+				{ am.ik.rontolisp.OneOperandFloatSiteFixture.SOURCE,
+						am.ik.rontolisp.OneOperandFloatSiteFixture.EXPECTED, "ofl" },
+				{ am.ik.rontolisp.OneOperandFloatSiteFixture.COMPLEX_SOURCE,
+						am.ik.rontolisp.OneOperandFloatSiteFixture.COMPLEX_EXPECTED, "ofc" } };
+		for (String[] fixture : fixtures) {
+			List<LispVal> program = am.ik.rontolisp.cli.CompileFrontendAccess.corpus(fixture[0],
+					am.ik.rontolisp.reader.Features.WASM, true, false);
+			for (OptimizeLevel level : OptimizeLevel.values()) {
+				assertThat(runModule(WasmLispCompiler.builder().optimize(level).build().compile(program),
+						fixture[2] + "-" + level + ".wasm"))
+					.as("%s at level %s", fixture[2], level)
+					.isEqualTo(fixture[1]);
+			}
+			assertThat(compileComponentAndRunProgram(program)).as("%s as a component", fixture[2])
+				.isEqualTo(fixture[1]);
+		}
+	}
+
+	@Test
 	void ehAnUncaughtDivisionByZeroReportsBeforeTrapping() throws Exception {
 		// EH mode without a handler around the division: the entry landing pad reports
 		// it as the interpreter does. Outside EH mode it is still the bare trap.

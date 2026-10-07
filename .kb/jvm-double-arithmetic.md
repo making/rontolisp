@@ -10,8 +10,8 @@ path allocated and immediately unwrapped, never a different computation. Sibling
 - `JvmLispCompiler.hasDoubleLiteral` (recursive via `containsDouble`) decides per NODE. It is a
   syntactic guess, not type inference: the unboxed path coerces through `_dbl` (accepts `Long`,
   `BigInteger`, `Double`, ratio). For `+ - * / mod rem` the raw fold runs only where
-  `isDefinitelyDouble` proves an operand ("The exact prefix" below); a one-operand site
-  (`(- x)`, `(/ x)`, `abs`, `signum`, `expt`, `random`) still answers a float for a wrong guess.
+  `isDefinitelyDouble` proves an operand ("The exact prefix" below), and a one-operand site
+  only where it proves that operand ("One-operand sites" below).
   `INTEGER_VALUED_FORMS` (`round`, `truncate`, `floor`, `ceiling`) stop the recursion.
 - **`_dbl`'s ratio arm is the generated `_ratToDouble`: the correctly-rounded nearest
   double** (round-half-even over a 56-bit `BigInteger` head plus the remainder as the
@@ -98,6 +98,30 @@ through calls pairwise (fusion took them).
   exactConstant`), since a `Long` leaf bails there anyway.
 - Pins: `ExactPrefixFloatFoldFixture` (`LispEvaluatorTest`, `JvmLispCompilerTest` both levels,
   `WasmLispCompilerIntegrationTest` every level and the component).
+
+## One-operand sites
+`(- x)`, `(/ x)`, `abs`, `signum`, `random` and `expt` (base or power) convert their operand
+only where `isDefinitelyDouble` proves it (`FloatFold.exactPrefix` answers the operand count
+for a lone unproven operand); a float literal anywhere else in it (`(abs (if c 1.5 -2))`) no
+longer makes an exact value a float. Measured 2026-10-07, SBCL 2.2.9 = interpreter: `2`, `-2`,
+`1/4`, `-1`, `8`, `(integerp (random ...))` T; before that day the JVM answered `2.0 -2.0 0.25
+-1.0 8.0 NIL`, P1 and the component `2.0 -2.0 0.25 -1 8 NIL` (WASM's `signum`/`expt` never
+routed on the literal), and `(/ (if c 2.0 0))` was Infinity, not division-by-zero.
+
+- Unproven: the site is what it is without a float literal -- `_neg`, `_div(1, x)`, `_abs`,
+  `_signum`, `_pow`, `_random` (WASM: `compileUnaryNegate`, `_rat_div`, the `abs` type ladder,
+  `random`'s `ref.test TYPE_FLOAT` path). Each already dispatches on the value, so a float
+  there costs the helper's type dispatch, and a proven site emits exactly what it did: no
+  run-time test is added to a site whose operand is proven a float.
+- Inside a raw site (`compileUnboxedOperand` inlining, `JvmFloatOperands.compileInner`) an
+  unproven `(/ x)` ends on `_divd(1, x)`: `1.0 / dbl(x)` rounds twice and differs from the
+  double of the exact reciprocal for a bignum past 2^53 (`(* 1.0 (/ 9007199254740993))` is
+  `...564e-16`, not `...565e-16`). An unproven `(- x)` keeps DNEG: negation is exact and the
+  conversion is sign-symmetric, so `-dbl(x)` IS `dbl(-x)`. WASM compiles an inner operation
+  as a call, so it gets the exact reciprocal from the top-level arm.
+- Pins: `OneOperandFloatSiteFixture` (`LispEvaluatorTest#oneOperandFloatSite`,
+  `JvmLispCompilerTest#compileAndRunOneOperandFloatSite` both levels,
+  `WasmLispCompilerIntegrationTest#oneOperandFloatSite` every level and the component).
 
 ## The all-Double fast path inside `_fx$N`
 `.kb/jvm-int-fusion.md`'s fused methods guard leaves `instanceof Long`; they now carry a second

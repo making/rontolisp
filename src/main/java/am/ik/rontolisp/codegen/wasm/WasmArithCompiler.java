@@ -55,39 +55,18 @@ final class WasmArithCompiler {
 		if (WasmLispCompiler.hasDoubleLiteral(args)) {
 			List<LispVal> operands = args.subList(1, args.size());
 			int prefix = exactPrefix(operands);
-			if (prefix == operands.size()) {
+			if (prefix < operands.size()) {
+				compileFloat(operands, prefix, ctx, f64Opcode, ratioFunc);
+				return;
+			}
+			if (operands.size() > 1) {
 				// No operand is proven a float: every step may be exact, so the generic
 				// helpers fold the operation, a complex included.
 				compileFold(operands, prefix, ctx, f64Opcode, ratioFunc);
 				return;
 			}
-			if (WasmFloatOperands.guards(operands, ctx)) {
-				compileGuarded(operands, prefix, ctx, f64Opcode, ratioFunc);
-				return;
-			}
-			// Unary (/ x) is the reciprocal: 1.0 / x.
-			if (args.size() == 2 && ratioFunc == WasmLispCompiler.FUNC_RAT_DIV) {
-				ctx.writer.write(Instruction.F64_CONST);
-				ctx.writer.writeF64(1.0);
-				WasmExprCompiler.compileExpr(args.get(1), ctx);
-				WasmEmitHelper.castFloatGetF64(ctx);
-				ctx.writer.write(f64Opcode);
-				ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-				ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_FLOAT);
-				return;
-			}
-			// Unary (- x) is IEEE negation: f64.neg. (Falling through to the loop
-			// below would return x unchanged, and 0 - x would turn -0.0 into +0.0.)
-			if (args.size() == 2 && ratioFunc == WasmLispCompiler.FUNC_RAT_SUB) {
-				WasmExprCompiler.compileExpr(args.get(1), ctx);
-				WasmEmitHelper.castFloatGetF64(ctx);
-				ctx.writer.write(Instruction.F64_NEG);
-				ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-				ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_FLOAT);
-				return;
-			}
-			compileFold(operands, prefix, ctx, f64Opcode, ratioFunc);
-			return;
+			// A lone operand not proven a float may be exact: the negation and the
+			// reciprocal below answer it as the generic helpers do.
 		}
 		// Common Lisp unary forms: (- x) negates, (/ x) is the reciprocal.
 		if (args.size() == 2
@@ -109,6 +88,46 @@ final class WasmArithCompiler {
 		}
 		List<LispVal> operands = args.subList(1, args.size());
 		compileFold(operands, operands.size(), ctx, f64Opcode, ratioFunc);
+	}
+
+	/**
+	 * A float site with an operand proven a float ({@link #exactPrefix} below the operand
+	 * count): the reciprocal and the negation as their {@code f64} operations, every
+	 * other arity the fold, guarded where an operand may hold a complex.
+	 * @param operands the operand forms, in source order
+	 * @param prefix the exact prefix's length
+	 * @param ctx the compile context
+	 * @param f64Opcode the operator's {@code f64} instruction
+	 * @param ratioFunc the operator's generic helper
+	 */
+	private static void compileFloat(List<LispVal> operands, int prefix, WasmLispCompiler.Ctx ctx, int f64Opcode,
+			int ratioFunc) {
+		if (WasmFloatOperands.guards(operands, ctx)) {
+			compileGuarded(operands, prefix, ctx, f64Opcode, ratioFunc);
+			return;
+		}
+		// Unary (/ x) is the reciprocal: 1.0 / x.
+		if (operands.size() == 1 && ratioFunc == WasmLispCompiler.FUNC_RAT_DIV) {
+			ctx.writer.write(Instruction.F64_CONST);
+			ctx.writer.writeF64(1.0);
+			WasmExprCompiler.compileExpr(operands.get(0), ctx);
+			WasmEmitHelper.castFloatGetF64(ctx);
+			ctx.writer.write(f64Opcode);
+			ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
+			ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_FLOAT);
+			return;
+		}
+		// Unary (- x) is IEEE negation: f64.neg. (Falling through to the loop
+		// below would return x unchanged, and 0 - x would turn -0.0 into +0.0.)
+		if (operands.size() == 1 && ratioFunc == WasmLispCompiler.FUNC_RAT_SUB) {
+			WasmExprCompiler.compileExpr(operands.get(0), ctx);
+			WasmEmitHelper.castFloatGetF64(ctx);
+			ctx.writer.write(Instruction.F64_NEG);
+			ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
+			ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_FLOAT);
+			return;
+		}
+		compileFold(operands, prefix, ctx, f64Opcode, ratioFunc);
 	}
 
 	/**

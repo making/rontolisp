@@ -2104,6 +2104,21 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunOneOperandFloatSite() throws Exception {
+		// The interpreter twin is LispEvaluatorTest#oneOperandFloatSite. (- x), (/ x),
+		// abs, signum, expt and random converted their operand whenever a float literal
+		// appeared anywhere in it, so an exact operand answered a float.
+		for (OptimizeLevel level : List.of(OptimizeLevel.DEFAULT, OptimizeLevel.SIZE)) {
+			assertThat(compileAndRun(fixtureProgram(am.ik.rontolisp.OneOperandFloatSiteFixture.SOURCE), level))
+				.as("level %s", level)
+				.isEqualTo(am.ik.rontolisp.OneOperandFloatSiteFixture.EXPECTED);
+			assertThat(compileAndRun(fixtureProgram(am.ik.rontolisp.OneOperandFloatSiteFixture.COMPLEX_SOURCE), level))
+				.as("complex, level %s", level)
+				.isEqualTo(am.ik.rontolisp.OneOperandFloatSiteFixture.COMPLEX_EXPECTED);
+		}
+	}
+
+	@Test
 	void compileAndRunSequenceAndAccessorOperatorsNameTheirWrongTypeArgument() throws Exception {
 		// Through the CLI's front end, which splices the prelude defuns (mismatch,
 		// search, count-if-not) the program reaches. The interpreter twin is

@@ -46,21 +46,25 @@ final class JvmArithCompiler {
 		boolean unaryDiv = JvmNumericRuntimeBuilder.DIV.equals(opKey) && args.size() == 2;
 		if (JvmLispCompiler.hasDoubleLiteral(args, ctx)) {
 			List<LispVal> operands = args.subList(1, args.size());
-			if (exactPrefix(operands, ctx) == operands.size()) {
+			if (exactPrefix(operands, ctx) < operands.size()) {
+				if (JvmFloatOperands.guards(operands, ctx)) {
+					// An operand may hold a complex the form does not spell: the raw fold
+					// runs only when none does (`.kb/jvm-complex.md`).
+					JvmFloatOperands.compileArithmetic(operands, opKey, ctx, className);
+					return;
+				}
+				compileUnboxed(args, ctx, opKey, doubleOpcode, className);
+				JvmEmitHelper.boxDouble(ctx);
+				return;
+			}
+			if (operands.size() > 1) {
 				// No operand is proven a float: every step may be exact, so the
 				// generic helpers fold the operation, a complex included.
 				compileFold(operands, operands.size(), opKey, doubleOpcode, false, ctx, className);
 				return;
 			}
-			if (JvmFloatOperands.guards(operands, ctx)) {
-				// An operand may hold a complex the form does not spell: the raw fold
-				// runs only when none does (`.kb/jvm-complex.md`).
-				JvmFloatOperands.compileArithmetic(operands, opKey, ctx, className);
-				return;
-			}
-			compileUnboxed(args, ctx, opKey, doubleOpcode, className);
-			JvmEmitHelper.boxDouble(ctx);
-			return;
+			// A lone operand not proven a float may be exact: the negation and the
+			// reciprocal below answer it as the generic helpers do.
 		}
 		// Unary (/ x) is the reciprocal: _div(1, x).
 		if (unaryDiv) {
@@ -131,15 +135,25 @@ final class JvmArithCompiler {
 	 */
 	private static void compileUnboxed(List<LispVal> args, JvmLispCompiler.Ctx ctx, String opKey, Opcode doubleOpcode,
 			String className) {
-		// Unary (/ x) is the reciprocal: 1.0 / x.
+		// Unary (/ x) is the reciprocal: 1.0 / x for an operand proven a float; any
+		// other operand may be exact, and the double of its exact reciprocal (_divd)
+		// is not always 1.0 over its double.
 		if (JvmNumericRuntimeBuilder.DIV.equals(opKey) && args.size() == 2) {
+			if (!JvmLispCompiler.isDefinitelyDouble(args.get(1), ctx)) {
+				JvmEmitHelper.compileLong(1, ctx);
+				JvmExprCompiler.compileExpr(args.get(1), ctx, className);
+				ctx.body.invokestatic(ctx.numOp(JvmNumericRuntimeBuilder.DIV_TO_DOUBLE));
+				return;
+			}
 			ctx.body.dconst_1();
 			compileUnboxedOperand(args.get(1), ctx, className);
 			emitDoubleOp(ctx, doubleOpcode);
 			return;
 		}
 		// Unary (- x) is IEEE negation: DNEG. (Falling through to the loop below
-		// would return x unchanged, and 0 - x would turn -0.0 into +0.0.)
+		// would return x unchanged, and 0 - x would turn -0.0 into +0.0.) Negation is
+		// exact, so the negated double of an exact operand is the double of its exact
+		// negation.
 		if (JvmNumericRuntimeBuilder.SUB.equals(opKey) && args.size() == 2) {
 			compileUnboxedOperand(args.get(1), ctx, className);
 			ctx.body.dneg();

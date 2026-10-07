@@ -8,7 +8,10 @@ import am.ik.wasm.Instruction;
 import am.ik.wasm.Type;
 
 /**
- * Compiles the {@code abs} built-in function.
+ * Compiles the {@code abs} built-in function: {@code f64.abs} when the argument is proven
+ * a float ({@link WasmLispCompiler#isDefinitelyDouble}), a test of the value's type
+ * otherwise -- a float literal elsewhere in the argument ({@code (abs (if c 1.5 -2))})
+ * does not make an exact value a float.
  */
 final class WasmAbsCompiler {
 
@@ -18,8 +21,8 @@ final class WasmAbsCompiler {
 	static void compile(LispCons cons, WasmLispCompiler.Ctx ctx) {
 		List<LispVal> args = cons.toList();
 		WasmComplexBlock complexBlock = ctx.complexBlock;
-		if (complexBlock != null && WasmLispCompiler.hasDoubleLiteral(args)
-				&& WasmFloatOperands.guards(args.subList(1, 2), ctx)) {
+		boolean provenFloat = WasmLispCompiler.isDefinitelyDouble(args.get(1));
+		if (complexBlock != null && provenFloat && WasmFloatOperands.guards(args.subList(1, 2), ctx)) {
 			// The argument may hold a complex the form does not spell ((abs (* 2.0 z))):
 			// its modulus comes from the complex block, a real takes f64.abs.
 			WasmFloatOperands.Operands operands = WasmFloatOperands.evaluate(args.subList(1, 2), ctx);
@@ -36,7 +39,7 @@ final class WasmAbsCompiler {
 			return;
 		}
 		WasmExprCompiler.compileExpr(args.get(1), ctx);
-		if (WasmLispCompiler.hasDoubleLiteral(args)) {
+		if (provenFloat) {
 			// Double path: f64.abs is a native WASM instruction
 			WasmEmitHelper.castFloatGetF64(ctx);
 			ctx.writer.write(Instruction.F64_ABS);
@@ -47,7 +50,7 @@ final class WasmAbsCompiler {
 			int tmpSlot = ctx.allocTemp();
 			ctx.writer.write(Instruction.SET_LOCAL);
 			ctx.writer.writeUnsignedLeb128(tmpSlot);
-			// Float path FIRST, even without a literal in the argument form: |x| on a
+			// Float path FIRST, even for an argument not proven a float: |x| on a
 			// float is the sign bit cleared, which is what f64.abs and Math.abs both
 			// do. The compare-and-subtract ladder below returns -0.0 unchanged (the
 			// comparison is false), so a signed zero reaching abs through a VARIABLE

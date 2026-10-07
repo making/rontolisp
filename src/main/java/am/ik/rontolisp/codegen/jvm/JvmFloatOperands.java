@@ -218,12 +218,19 @@ final class JvmFloatOperands {
 	}
 
 	// JvmArithCompiler's raw fold, over the evaluated operands: the reciprocal and the
-	// negation as their IEEE operations, every other arity a left fold -- its exact
-	// prefix through the generic helpers, joined to the raw operands by the _addd
-	// family's step (JvmArithCompiler.compileFold).
+	// negation as their IEEE operations (the reciprocal of an operand not proven a float
+	// through _divd, as JvmArithCompiler.compileUnboxed takes it), every other arity a
+	// left fold -- its exact prefix through the generic helpers, joined to the raw
+	// operands by the _addd family's step (JvmArithCompiler.compileFold).
 	private static void foldRaw(Operands operands, int prefix, String opKey, JvmLispCompiler.Ctx ctx,
 			String className) {
 		int count = operands.size();
+		if (JvmNumericRuntimeBuilder.DIV.equals(opKey) && count == 1 && prefix > 0) {
+			JvmEmitHelper.compileLong(1, ctx);
+			operands.pushBoxed(0, ctx, className);
+			ctx.body.invokestatic(ctx.numOp(JvmNumericRuntimeBuilder.DIV_TO_DOUBLE));
+			return;
+		}
 		if (JvmNumericRuntimeBuilder.DIV.equals(opKey) && count == 1) {
 			ctx.body.dconst_1();
 			operands.pushRaw(0, ctx, className);
