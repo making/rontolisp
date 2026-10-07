@@ -5,6 +5,7 @@ import java.lang.classfile.constantpool.ClassEntry;
 import java.lang.classfile.constantpool.FieldRefEntry;
 import java.lang.classfile.constantpool.MethodRefEntry;
 import java.lang.classfile.constantpool.Utf8Entry;
+import java.math.BigInteger;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -2699,8 +2700,23 @@ final class JvmIntFusionCompiler {
 			case ArefLeaf ignored -> throw new IllegalStateException("aref leaf on the double path");
 			case RandomLeaf ignored -> throw new IllegalStateException("random leaf on the double path");
 			case OpNode op -> {
-				emitFastDouble(op.args().get(0), ctx);
-				for (int i = 1; i < op.args().size(); i++) {
+				// The integer constants a node starts with fold exactly, as the generic
+				// helpers fold them before they meet the first Double, and only their
+				// value widens (`.kb/jvm-double-arithmetic.md`, "The exact prefix").
+				int from = 0;
+				while (from < op.args().size() && exactConstant(op.args().get(from)) != null) {
+					from++;
+				}
+				if (from >= 2) {
+					JvmEmitHelper.emitRawDouble(java.util.Objects
+						.requireNonNull(exactConstant(new OpNode(op.op(), op.args().subList(0, from), op.site())))
+						.doubleValue(), ctx);
+				}
+				else {
+					from = 1;
+					emitFastDouble(op.args().get(0), ctx);
+				}
+				for (int i = from; i < op.args().size(); i++) {
 					emitFastDouble(op.args().get(i), ctx);
 					switch (op.op()) {
 						case LispNames.ADD -> ctx.body.dadd();
@@ -2711,6 +2727,31 @@ final class JvmIntFusionCompiler {
 				}
 			}
 		}
+	}
+
+	/**
+	 * The exact value of a double-path node built from integer constants alone -- a
+	 * constant, or a {@code + - *} node over such nodes that did not fold to a
+	 * {@code long} -- or null for a node that reads a leaf.
+	 */
+	private static @Nullable BigInteger exactConstant(Node node) {
+		if (node instanceof ConstLeaf c) {
+			return BigInteger.valueOf(c.value());
+		}
+		if (!(node instanceof OpNode op) || op.args().size() < 2) {
+			return null;
+		}
+		BigInteger acc = exactConstant(op.args().get(0));
+		for (int i = 1; acc != null && i < op.args().size(); i++) {
+			BigInteger next = exactConstant(op.args().get(i));
+			acc = next == null ? null : switch (op.op()) {
+				case LispNames.ADD -> acc.add(next);
+				case LispNames.SUB -> acc.subtract(next);
+				case LispNames.MUL -> acc.multiply(next);
+				default -> null;
+			};
+		}
+		return acc;
 	}
 
 	private static void emitDoubleLoad(int slot, JvmLispCompiler.Ctx ctx) {

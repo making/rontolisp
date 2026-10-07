@@ -2747,34 +2747,8 @@ public final class Environment implements Scope {
 			if (hasComplex(args)) {
 				return addComplex(args);
 			}
-			if (hasDouble(args)) {
-				// Seed from the first operand, not from an exact 0: 0.0 + -0.0 is 0.0
-				// under
-				// IEEE 754, so an exact-zero seed erases the sign of an all-negative-zero
-				// sum. Starting at args[0] makes (+ -0.0 -0.0) answer -0.0, matching both
-				// compiler backends and upstream Common Lisp.
-				double result = asDouble(args.get(0));
-				for (int i = 1; i < args.size(); i++) {
-					result += asDouble(args.get(i));
-				}
-				return new LispDouble(result);
-			}
-			if (hasRatio(args)) {
-				return addRational(args);
-			}
-			if (hasBigInteger(args)) {
-				return addBig(args);
-			}
-			try {
-				long result = 0;
-				for (LispVal arg : args) {
-					result = Math.addExact(result, asLong(arg));
-				}
-				return new LispInteger(result);
-			}
-			catch (ArithmeticException overflow) {
-				return addBig(args);
-			}
+			int firstFloat = firstDouble(args);
+			return firstFloat < 0 ? addExact(args) : floatFold(args, firstFloat, Environment::addExact, Double::sum);
 		}));
 		env.defineFunction(LispNames.SUB, new LispFunction(LispNames.SUB, args -> {
 			// Unlike + and *, - has no identity (CLHS 12.2): the compile path
@@ -2788,63 +2762,22 @@ public final class Environment implements Scope {
 			if (hasComplex(args)) {
 				return subComplex(args);
 			}
-			if (hasDouble(args)) {
-				if (args.size() == 1) {
-					return new LispDouble(-asDouble(args.get(0)));
-				}
-				double result = asDouble(args.get(0));
-				for (int i = 1; i < args.size(); i++) {
-					result -= asDouble(args.get(i));
-				}
-				return new LispDouble(result);
+			int firstFloat = firstDouble(args);
+			if (firstFloat < 0) {
+				return subExact(args);
 			}
-			if (hasRatio(args)) {
-				return subRational(args);
+			if (args.size() == 1) {
+				return new LispDouble(-asDouble(args.get(0)));
 			}
-			if (hasBigInteger(args)) {
-				return subBig(args);
-			}
-			try {
-				if (args.size() == 1) {
-					return new LispInteger(Math.negateExact(asLong(args.get(0))));
-				}
-				long result = asLong(args.get(0));
-				for (int i = 1; i < args.size(); i++) {
-					result = Math.subtractExact(result, asLong(args.get(i)));
-				}
-				return new LispInteger(result);
-			}
-			catch (ArithmeticException overflow) {
-				return subBig(args);
-			}
+			return floatFold(args, firstFloat, Environment::subExact, (a, b) -> a - b);
 		}));
 		env.defineFunction(LispNames.MUL, new LispFunction(LispNames.MUL, args -> {
 			if (hasComplex(args)) {
 				return mulComplex(args);
 			}
-			if (hasDouble(args)) {
-				double result = 1;
-				for (LispVal arg : args) {
-					result *= asDouble(arg);
-				}
-				return new LispDouble(result);
-			}
-			if (hasRatio(args)) {
-				return mulRational(args);
-			}
-			if (hasBigInteger(args)) {
-				return mulBig(args);
-			}
-			try {
-				long result = 1;
-				for (LispVal arg : args) {
-					result = Math.multiplyExact(result, asLong(arg));
-				}
-				return new LispInteger(result);
-			}
-			catch (ArithmeticException overflow) {
-				return mulBig(args);
-			}
+			int firstFloat = firstDouble(args);
+			return firstFloat < 0 ? mulExact(args)
+					: floatFold(args, firstFloat, Environment::mulExact, (a, b) -> a * b);
 		}));
 		env.defineFunction(LispNames.DIV, new LispFunction(LispNames.DIV, args -> {
 			// Unlike + and *, / has no identity (CLHS 12.2): the compile path
@@ -2858,40 +2791,14 @@ public final class Environment implements Scope {
 			if (hasComplex(args)) {
 				return divComplex(args);
 			}
-			if (hasDouble(args)) {
-				if (args.size() == 1) {
-					return new LispDouble(1.0 / asDouble(args.get(0)));
-				}
-				double result = asDouble(args.get(0));
-				for (int i = 1; i < args.size(); i++) {
-					result /= asDouble(args.get(i));
-				}
-				return new LispDouble(result);
+			int firstFloat = firstDouble(args);
+			if (firstFloat < 0) {
+				return divExact(args);
 			}
-			// Exact rational division (Common Lisp semantics): (/ 1 2) -> 1/2,
-			// (/ 4 2) -> 2, and unary (/ x) is the reciprocal.
-			BigInteger num;
-			BigInteger den;
-			int first;
 			if (args.size() == 1) {
-				num = BigInteger.ONE;
-				den = BigInteger.ONE;
-				first = 0;
+				return new LispDouble(1.0 / asDouble(args.get(0)));
 			}
-			else {
-				num = numeratorOf(args.get(0));
-				den = denominatorOf(args.get(0));
-				first = 1;
-			}
-			for (int i = first; i < args.size(); i++) {
-				BigInteger divisorNum = numeratorOf(args.get(i));
-				if (divisorNum.signum() == 0) {
-					throw LispEvalException.divisionByZero();
-				}
-				num = num.multiply(denominatorOf(args.get(i)));
-				den = den.multiply(divisorNum);
-			}
-			return LispRatio.valueOf(num, den);
+			return floatFold(args, firstFloat, Environment::divExact, (a, b) -> a / b);
 		}));
 		// mod: modulo whose result takes the sign of the divisor (Common Lisp mod).
 		env.defineFunction(LispNames.MOD, new LispFunction(LispNames.MOD, args -> {
@@ -9196,6 +9103,134 @@ public final class Environment implements Scope {
 			throw new LispEvalException("rational of a non-finite float is undefined");
 		}
 		return LispRatio.ofDouble(value);
+	}
+
+	/**
+	 * The index of the first float argument, or -1 when there is none.
+	 */
+	private static int firstDouble(List<LispVal> args) {
+		for (int i = 0; i < args.size(); i++) {
+			if (args.get(i) instanceof LispDouble) {
+				return i;
+			}
+		}
+		return -1;
+	}
+
+	/**
+	 * A real {@code + - * /} over at least one float, folded one pair at a time from the
+	 * first argument as SBCL folds it: the arguments ahead of the first float fold
+	 * exactly, and only their result converts, so {@code (+ 1/10 1/5 0.0)} is
+	 * {@code 0.3}, not the {@code 0.30000000000000004} of converting each argument first.
+	 * From the first float on every step is a float step, which converting each remaining
+	 * argument and folding in doubles is. A lone argument ahead of the float converts as
+	 * it is: one argument has nothing to fold.
+	 * @param args the arguments, at least two
+	 * @param firstFloat the index of the first float argument
+	 * @param exact the operator's exact fold, for the arguments ahead of it
+	 * @param step the operator's double step
+	 * @return the float result
+	 */
+	private static LispVal floatFold(List<LispVal> args, int firstFloat,
+			java.util.function.Function<List<LispVal>, LispVal> exact, java.util.function.DoubleBinaryOperator step) {
+		// Seeded from the first operand (or the exact prefix), never from an identity:
+		// 0.0 + -0.0 is 0.0 under IEEE 754, so an exact-zero seed would erase the sign
+		// of an all-negative-zero sum.
+		int from = Math.max(firstFloat, 1);
+		double result = asDouble(firstFloat <= 1 ? args.get(0) : exact.apply(args.subList(0, firstFloat)));
+		for (int i = from; i < args.size(); i++) {
+			result = step.applyAsDouble(result, asDouble(args.get(i)));
+		}
+		return new LispDouble(result);
+	}
+
+	private static LispVal addExact(List<LispVal> args) {
+		if (hasRatio(args)) {
+			return addRational(args);
+		}
+		if (hasBigInteger(args)) {
+			return addBig(args);
+		}
+		try {
+			long result = 0;
+			for (LispVal arg : args) {
+				result = Math.addExact(result, asLong(arg));
+			}
+			return new LispInteger(result);
+		}
+		catch (ArithmeticException overflow) {
+			return addBig(args);
+		}
+	}
+
+	private static LispVal subExact(List<LispVal> args) {
+		if (hasRatio(args)) {
+			return subRational(args);
+		}
+		if (hasBigInteger(args)) {
+			return subBig(args);
+		}
+		try {
+			if (args.size() == 1) {
+				return new LispInteger(Math.negateExact(asLong(args.get(0))));
+			}
+			long result = asLong(args.get(0));
+			for (int i = 1; i < args.size(); i++) {
+				result = Math.subtractExact(result, asLong(args.get(i)));
+			}
+			return new LispInteger(result);
+		}
+		catch (ArithmeticException overflow) {
+			return subBig(args);
+		}
+	}
+
+	private static LispVal mulExact(List<LispVal> args) {
+		if (hasRatio(args)) {
+			return mulRational(args);
+		}
+		if (hasBigInteger(args)) {
+			return mulBig(args);
+		}
+		try {
+			long result = 1;
+			for (LispVal arg : args) {
+				result = Math.multiplyExact(result, asLong(arg));
+			}
+			return new LispInteger(result);
+		}
+		catch (ArithmeticException overflow) {
+			return mulBig(args);
+		}
+	}
+
+	/**
+	 * Exact rational division (Common Lisp semantics): {@code (/ 1 2)} is {@code 1/2},
+	 * {@code (/ 4 2)} is {@code 2}, and unary {@code (/ x)} is the reciprocal.
+	 */
+	private static LispVal divExact(List<LispVal> args) {
+		BigInteger num;
+		BigInteger den;
+		int first;
+		if (args.size() == 1) {
+			num = BigInteger.ONE;
+			den = BigInteger.ONE;
+			first = 0;
+		}
+		else {
+			num = numeratorOf(args.get(0));
+			den = denominatorOf(args.get(0));
+			first = 1;
+		}
+		for (int i = first; i < args.size(); i++) {
+			BigInteger divisorNum = numeratorOf(args.get(i));
+			if (divisorNum.signum() == 0) {
+				throw LispEvalException.divisionByZero();
+			}
+			num = num.multiply(denominatorOf(args.get(i)));
+			den = den.multiply(divisorNum);
+		}
+		return LispRatio.valueOf(num, den);
 	}
 
 	private static LispVal addBig(List<LispVal> args) {

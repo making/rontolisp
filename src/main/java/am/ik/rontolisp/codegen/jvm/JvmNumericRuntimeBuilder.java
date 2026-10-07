@@ -55,6 +55,23 @@ final class JvmNumericRuntimeBuilder {
 
 	static final String REM = "_rem";
 
+	/**
+	 * The raw double of {@link #ADD}'s step over two boxed operands -- the step that
+	 * joins a float site's exact prefix to its raw fold (`.kb/jvm-double-arithmetic.md`,
+	 * "The exact prefix"): a float operand makes it the raw step itself, two exact ones
+	 * the conversion of their exact sum.
+	 */
+	static final String ADD_TO_DOUBLE = "_addd";
+
+	/** {@link #ADD_TO_DOUBLE} for {@link #SUB}. */
+	static final String SUB_TO_DOUBLE = "_subd";
+
+	/** {@link #ADD_TO_DOUBLE} for {@link #MUL}. */
+	static final String MUL_TO_DOUBLE = "_muld";
+
+	/** {@link #ADD_TO_DOUBLE} for {@link #DIV}. */
+	static final String DIV_TO_DOUBLE = "_divd";
+
 	/** Floating-point modulo whose result takes the sign of the divisor. */
 	static final String FMOD = "_fmod";
 
@@ -205,6 +222,8 @@ final class JvmNumericRuntimeBuilder {
 
 	private static final String BINARY_DESC = "(" + OBJ + OBJ + ")" + OBJ;
 
+	private static final String TO_DOUBLE_DESC = "(" + OBJ + OBJ + ")D";
+
 	/**
 	 * The helpers a wrong-type operand can escape from, with their descriptors: a call to
 	 * one compiled inside a named operator's form goes through that operator's wrapper
@@ -213,16 +232,18 @@ final class JvmNumericRuntimeBuilder {
 	 */
 	private static final Map<String, String> WRAPPED_DESCS = Map.ofEntries(Map.entry(ADD, BINARY_DESC),
 			Map.entry(SUB, BINARY_DESC), Map.entry(MUL, BINARY_DESC), Map.entry(DIV, BINARY_DESC),
-			Map.entry(MOD, BINARY_DESC), Map.entry(REM, BINARY_DESC), Map.entry(MIN, BINARY_DESC),
-			Map.entry(MAX, BINARY_DESC), Map.entry(POW, BINARY_DESC), Map.entry(LOGAND, BINARY_DESC),
-			Map.entry(LOGIOR, BINARY_DESC), Map.entry(LOGXOR, BINARY_DESC), Map.entry(ASH, BINARY_DESC),
-			Map.entry(NEG, UNARY_DESC), Map.entry(ABS, UNARY_DESC), Map.entry(SIGNUM, UNARY_DESC),
-			Map.entry(DBL, UNARY_DESC), Map.entry(RATIONAL, UNARY_DESC), Map.entry(LOGNOT, UNARY_DESC),
-			Map.entry(INTEGER_LENGTH, UNARY_DESC), Map.entry(CMP, "(" + OBJ + OBJ + ")I"),
-			Map.entry(CMPB, "(" + OBJ + OBJ + ")I"), Map.entry(LOGBITP, "(" + OBJ + OBJ + ")I"),
-			Map.entry(BIG_OP, "(" + OBJ + ")" + BIG), Map.entry(RAT_NUM, "(" + OBJ + ")" + BIG),
-			Map.entry(RAT_DEN, "(" + OBJ + ")" + BIG), Map.entry(FDIV, "(" + OBJ + OBJ + "I)" + OBJ),
-			Map.entry(RANDOM, UNARY_DESC), Map.entry(JvmOperandTypeRuntime.CK_IDX, JvmOperandTypeRuntime.CK_IDX_DESC),
+			Map.entry(MOD, BINARY_DESC), Map.entry(REM, BINARY_DESC), Map.entry(ADD_TO_DOUBLE, TO_DOUBLE_DESC),
+			Map.entry(SUB_TO_DOUBLE, TO_DOUBLE_DESC), Map.entry(MUL_TO_DOUBLE, TO_DOUBLE_DESC),
+			Map.entry(DIV_TO_DOUBLE, TO_DOUBLE_DESC), Map.entry(MIN, BINARY_DESC), Map.entry(MAX, BINARY_DESC),
+			Map.entry(POW, BINARY_DESC), Map.entry(LOGAND, BINARY_DESC), Map.entry(LOGIOR, BINARY_DESC),
+			Map.entry(LOGXOR, BINARY_DESC), Map.entry(ASH, BINARY_DESC), Map.entry(NEG, UNARY_DESC),
+			Map.entry(ABS, UNARY_DESC), Map.entry(SIGNUM, UNARY_DESC), Map.entry(DBL, UNARY_DESC),
+			Map.entry(RATIONAL, UNARY_DESC), Map.entry(LOGNOT, UNARY_DESC), Map.entry(INTEGER_LENGTH, UNARY_DESC),
+			Map.entry(CMP, "(" + OBJ + OBJ + ")I"), Map.entry(CMPB, "(" + OBJ + OBJ + ")I"),
+			Map.entry(LOGBITP, "(" + OBJ + OBJ + ")I"), Map.entry(BIG_OP, "(" + OBJ + ")" + BIG),
+			Map.entry(RAT_NUM, "(" + OBJ + ")" + BIG), Map.entry(RAT_DEN, "(" + OBJ + ")" + BIG),
+			Map.entry(FDIV, "(" + OBJ + OBJ + "I)" + OBJ), Map.entry(RANDOM, UNARY_DESC),
+			Map.entry(JvmOperandTypeRuntime.CK_IDX, JvmOperandTypeRuntime.CK_IDX_DESC),
 			Map.entry(JvmOperandTypeRuntime.CK_RAT, JvmOperandTypeRuntime.CK_RAT_DESC),
 			Map.entry(JvmOperandTypeRuntime.CK_TAB, JvmOperandTypeRuntime.CK_IDX_DESC),
 			Map.entry(JvmOperandTypeRuntime.CK_CHR, JvmOperandTypeRuntime.CK_IDX_DESC),
@@ -765,6 +786,17 @@ final class JvmNumericRuntimeBuilder {
 		methods.add(buildFloatSelect(nFmax, dFmod, MethodCode::dcmpl, MethodCode::ifge));
 		methods.add(buildDbl(nDbl, dUnary, ratArrClass, doubleClass, numberClass, doubleValueOf, numDoubleValue,
 				rRatNum, rRatDen, rRatToDouble, typeErrRefs, rcClass, hasComplex));
+		Utf8Entry dToDouble = cp.utf8Entry(TO_DOUBLE_DESC);
+		Map<String, MethodRefEntry> toDoubleRefs = new LinkedHashMap<>();
+		for (ToDoubleStep step : List.of(new ToDoubleStep(ADD_TO_DOUBLE, rAdd, MethodCode::dadd),
+				new ToDoubleStep(SUB_TO_DOUBLE, rSub, MethodCode::dsub),
+				new ToDoubleStep(MUL_TO_DOUBLE, rMul, MethodCode::dmul),
+				new ToDoubleStep(DIV_TO_DOUBLE, rDiv, MethodCode::ddiv))) {
+			Utf8Entry name = cp.utf8Entry(step.key());
+			methods.add(buildToDouble(name, dToDouble, step.exact(), doubleClass, rDbl, numberClass, numDoubleValue,
+					step.doubleOp()));
+			toDoubleRefs.put(step.key(), cp.methodRef(thisClass, name, dToDouble));
+		}
 		methods.add(buildRatToDouble(nRatToDouble, dRatToDouble, biSignum, biNeg, biBitLength, biShiftLeft, biCompareTo,
 				biDiv, biRem, biLongValue, dblLongBits, dblNegInf, dblPosInf, cRat3, cRat4, cRat2p53, cRatFracMask));
 		methods.add(buildPow(nPow, dBinary, rRatNum, rRatDen, rRat, biPow, doubleClass, longClass, longValue,
@@ -810,6 +842,7 @@ final class JvmNumericRuntimeBuilder {
 		ops.put(DIV, rDiv);
 		ops.put(MOD, rMod);
 		ops.put(REM, rRem);
+		ops.putAll(toDoubleRefs);
 		ops.put(FMOD, rFmod);
 		ops.put(FREM, rFrem);
 		ops.put(CMP, rCmp);
@@ -1059,6 +1092,52 @@ final class JvmNumericRuntimeBuilder {
 			HolderArms.emitDelegation(c, toComplex, Objects.requireNonNull(complexTwin), true);
 		}
 		c.exceptionCatch(tryStart, handler, handler, arithEx);
+		return new NumericMethod(name, desc, c);
+	}
+
+	/** One {@code _addd}-family helper: its key, its exact step and its double step. */
+	private record ToDoubleStep(String key, MethodRefEntry exact, Consumer<MethodCode> doubleOp) {
+	}
+
+	// _addd/_subd/_muld/_divd(Object a, Object b) -> double: the raw double of the binary
+	// step over two boxed operands. A Double operand makes it the float step the raw
+	// fold takes -- the Double read straight out of its box, the other through _dbl, so
+	// a float pays the tests _dbl's own Double arm makes and nothing more -- and two
+	// exact operands the conversion of the exact step (the generic helper, whose funnels
+	// also report a non-number and an exact zero divisor).
+	private static NumericMethod buildToDouble(Utf8Entry name, Utf8Entry desc, MethodRefEntry exactStep,
+			ClassEntry doubleClass, MethodRefEntry rDbl, ClassEntry numberClass, MethodRefEntry numDoubleValue,
+			Consumer<MethodCode> doubleOp) {
+		MethodCode c = new MethodCode();
+		MethodCode.Label aNotDouble = c.newLabel();
+		c.aload(0);
+		c.instanceOf(doubleClass);
+		c.ifeq(aNotDouble);
+		c.aload(0);
+		c.checkcast(numberClass);
+		c.invokevirtual(numDoubleValue);
+		emitToDouble(c, 1, rDbl, numberClass, numDoubleValue);
+		doubleOp.accept(c);
+		c.dreturn();
+		c.labelBinding(aNotDouble);
+		MethodCode.Label exact = c.newLabel();
+		c.aload(1);
+		c.instanceOf(doubleClass);
+		c.ifeq(exact);
+		emitToDouble(c, 0, rDbl, numberClass, numDoubleValue);
+		c.aload(1);
+		c.checkcast(numberClass);
+		c.invokevirtual(numDoubleValue);
+		doubleOp.accept(c);
+		c.dreturn();
+		c.labelBinding(exact);
+		c.aload(0);
+		c.aload(1);
+		c.invokestatic(exactStep);
+		c.invokestatic(rDbl);
+		c.checkcast(numberClass);
+		c.invokevirtual(numDoubleValue);
+		c.dreturn();
 		return new NumericMethod(name, desc, c);
 	}
 

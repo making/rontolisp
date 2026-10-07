@@ -2154,6 +2154,21 @@ public final class WasmLispCompiler implements LispCompiler {
 	// nothing spells a bound.
 	static final int FUNC_CK_BOUNDS = FUNC_SUBSEQ_BAD + 1;
 
+	// _rat_add_f64 .. _rat_div_f64 ((ref null eq) a, (ref null eq) b) -> f64: the f64 of
+	// the _rat_add .. _rat_div step over two boxed operands -- the step that joins a
+	// float site's exact prefix to its f64 fold (.kb/jvm-double-arithmetic.md, "The
+	// exact prefix"; WasmRatioRuntimeBuilder.buildRatStepF64Body): a float operand makes
+	// it the f64 step itself, two exact ones the conversion of the exact step. One
+	// signature (TYPE_RAT_STEP_F64); appended after the last fixed helper so no index
+	// above shifts, and shaken when no site has an exact prefix.
+	static final int FUNC_RAT_ADD_F64 = FUNC_CK_BOUNDS + 1;
+
+	static final int FUNC_RAT_SUB_F64 = FUNC_RAT_ADD_F64 + 1;
+
+	static final int FUNC_RAT_MUL_F64 = FUNC_RAT_SUB_F64 + 1;
+
+	static final int FUNC_RAT_DIV_F64 = FUNC_RAT_MUL_F64 + 1;
+
 	/**
 	 * The fixed function index of an fdlibm function.
 	 * @param fn the function
@@ -2184,7 +2199,7 @@ public final class WasmLispCompiler implements LispCompiler {
 	// above keeps its value; the user defuns below shift by
 	// WasmVecSimdRuntimeBuilder.FUNC_COUNT when the block is present. Read the base
 	// through userFuncBase(), never FUNC_USER_BASE.
-	static final int FUNC_VEC_BASE = FUNC_CK_BOUNDS + 1;
+	static final int FUNC_VEC_BASE = FUNC_RAT_DIV_F64 + 1;
 
 	// User defuns start after the dispatch functions, the plist helper, the two
 	// hash-table runtime helpers, the two mod/rem helpers, the gensym helper, the
@@ -2203,9 +2218,10 @@ public final class WasmLispCompiler implements LispCompiler {
 	// (_idx_in, _idx_bound, _idx_ref), the character check (_chr_code), the compound
 	// landing (_type_err_of), the fill-pointer check (_fp_hdr), the ratio-to-double
 	// conversion (_rat_to_f64), the division-by-zero landing (_div_zero), the subseq
-	// bounds landing (_subseq_bad) and the bounds check (_ck_bounds) -- plus, under
-	// --simd, the vec: SIMD block. Use userFuncBase(), which adds that offset.
-	static final int FUNC_USER_BASE = FUNC_CK_BOUNDS + 1;
+	// bounds landing (_subseq_bad), the bounds check (_ck_bounds) and the four exact
+	// prefix steps (_rat_add_f64 .. _rat_div_f64) -- plus, under --simd, the vec: SIMD
+	// block. Use userFuncBase(), which adds that offset.
+	static final int FUNC_USER_BASE = FUNC_RAT_DIV_F64 + 1;
 
 	// Type indices
 	static final int TYPE_FD_WRITE = 0;
@@ -2546,7 +2562,12 @@ public final class WasmLispCompiler implements LispCompiler {
 
 	static final int TYPE_FD_KREM = TYPE_FD_REM + 1; // (i32, i32) -> i32
 
-	static final int SCHUB_TYPE_LAST = TYPE_FD_KREM;
+	// The exact prefix steps' signature (FUNC_RAT_ADD_F64 ..), appended after the
+	// fdlibm block so no fixed type index above moves.
+	static final int TYPE_RAT_STEP_F64 = TYPE_FD_KREM + 1; // ((ref null eq), (ref null
+															// eq)) -> f64
+
+	static final int SCHUB_TYPE_LAST = TYPE_RAT_STEP_F64;
 
 	// --- the --simd block (see WasmVecSimdRuntimeBuilder) -------------------------
 	//
@@ -2559,7 +2580,7 @@ public final class WasmLispCompiler implements LispCompiler {
 	// array (mut v128) -- the lane-group storage of a packed float array under --simd.
 	// A bare array comptype (implicitly sub final), so a subtype of eq. array.new_default
 	// zeroes every lane, which is what lets the kernels drop their scalar tails.
-	static final int TYPE_V128ARR = SCHUB_TYPE_LAST + 1; // 70
+	static final int TYPE_V128ARR = SCHUB_TYPE_LAST + 1; // 71
 
 	// struct {i32 count, i32 kind, (ref null eq) groups} -- the --simd replacement for
 	// the
@@ -2571,13 +2592,13 @@ public final class WasmLispCompiler implements LispCompiler {
 	// TYPE_V128ARR, and `groups` holds ceil(count / lanes) + 1 groups -- the trailing one
 	// a
 	// zero sentinel so matvec's shuffle window can always read one group past its last.
-	static final int TYPE_VBLOCK = SCHUB_TYPE_LAST + 2; // 71
+	static final int TYPE_VBLOCK = SCHUB_TYPE_LAST + 2; // 72
 
 	// _v_get ((ref null eq) vblock, i32 index) -> f64
-	static final int TYPE_V_GET = SCHUB_TYPE_LAST + 3; // 72
+	static final int TYPE_V_GET = SCHUB_TYPE_LAST + 3; // 73
 
 	// _v_set ((ref null eq) vblock, i32 index, f64 value) -> f64 (the value AS STORED)
-	static final int TYPE_V_SET = SCHUB_TYPE_LAST + 4; // 73
+	static final int TYPE_V_SET = SCHUB_TYPE_LAST + 4; // 74
 
 	// How many type entries the --simd block appends.
 	static final int SIMD_TYPE_COUNT = 4;
@@ -6973,6 +6994,15 @@ public final class WasmLispCompiler implements LispCompiler {
 				types.addFunc(new Type[] { Type.F64 }, new Type[] { Type.I32 });
 				// TYPE_FD_KREM: (i32 e0, i32 nx) -> i32
 				types.addFunc(new Type[] { Type.I32, Type.I32 }, new Type[] { Type.I32 });
+				// TYPE_RAT_STEP_F64: ((ref null eq) a, (ref null eq) b) -> f64
+				types.add(w -> {
+					w.write(Type.FUNC);
+					w.write(2);
+					w.writeRefType(true, Type.EQ.code());
+					w.writeRefType(true, Type.EQ.code());
+					w.write(1);
+					w.write(Type.F64);
+				});
 				if (this.simd) {
 					// type 48 (TYPE_V128ARR): array (mut v128) -- the lane-group storage
 					// of a packed float array. Declaring it at all requires the SIMD
@@ -7653,6 +7683,10 @@ public final class WasmLispCompiler implements LispCompiler {
 				fnDef.addFunction(TYPE_CALLABLE_BASE + 2); // _ck_bounds (seq, start,
 															// end) -> nil
 															// (FUNC_CK_BOUNDS)
+				// _rat_add_f64 .. _rat_div_f64 (a, b) -> f64 (FUNC_RAT_ADD_F64 ..)
+				for (int i = 0; i < 4; i++) {
+					fnDef.addFunction(TYPE_RAT_STEP_F64);
+				}
 				// vec: SIMD block (--simd only): the three element helpers + twelve
 				// kernels
 				if (this.simd) {
@@ -8677,6 +8711,13 @@ public final class WasmLispCompiler implements LispCompiler {
 				// the bounds check body (FUNC_CK_BOUNDS): shaken when nothing spells a
 				// bound.
 				code.addFunction(WasmStringRuntimeBuilder.buildCheckBoundsBody(ehMode, subseqBoundsForLength));
+				// the exact prefix steps (FUNC_RAT_ADD_F64 ..): shaken when no site has
+				// an
+				// exact prefix.
+				code.addFunction(WasmRatioRuntimeBuilder.buildRatStepF64Body(FUNC_RAT_ADD, Instruction.F64_ADD));
+				code.addFunction(WasmRatioRuntimeBuilder.buildRatStepF64Body(FUNC_RAT_SUB, Instruction.F64_SUB));
+				code.addFunction(WasmRatioRuntimeBuilder.buildRatStepF64Body(FUNC_RAT_MUL, Instruction.F64_MUL));
+				code.addFunction(WasmRatioRuntimeBuilder.buildRatStepF64Body(FUNC_RAT_DIV, Instruction.F64_DIV));
 				// vec: SIMD block bodies (--simd only), in FUNC_VEC_BASE index order.
 				if (this.simd) {
 					// Each helper is handed the function index of the scalar vec.lisp

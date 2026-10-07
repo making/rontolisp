@@ -5846,7 +5846,7 @@ public final class JvmLispCompiler implements LispCompiler {
 	 * contain a double literal somewhere.
 	 */
 	private static final java.util.Set<String> CONTAGIOUS_ARITHMETIC_FORMS = java.util.Set.of(LispNames.ADD,
-			LispNames.SUB, LispNames.MUL, LispNames.MOD, LispNames.REM);
+			LispNames.SUB, LispNames.MUL, LispNames.DIV, LispNames.MOD, LispNames.REM);
 
 	/**
 	 * True when {@code val}'s VALUE is PROVEN to be a double, unlike

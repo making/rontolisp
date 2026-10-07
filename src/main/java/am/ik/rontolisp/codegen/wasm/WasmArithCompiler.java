@@ -2,11 +2,13 @@ package am.ik.rontolisp.codegen.wasm;
 
 import java.util.List;
 import java.util.function.IntConsumer;
+import java.util.function.IntPredicate;
 
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.compiler.ArithmeticIdentities;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.compiler.ArgumentOrder;
+import am.ik.rontolisp.compiler.FloatFold;
 import am.ik.wasm.Instruction;
 import am.ik.wasm.Type;
 
@@ -52,8 +54,15 @@ final class WasmArithCompiler {
 		}
 		if (WasmLispCompiler.hasDoubleLiteral(args)) {
 			List<LispVal> operands = args.subList(1, args.size());
+			int prefix = exactPrefix(operands);
+			if (prefix == operands.size()) {
+				// No operand is proven a float: every step may be exact, so the generic
+				// helpers fold the operation, a complex included.
+				compileFold(operands, prefix, ctx, f64Opcode, ratioFunc);
+				return;
+			}
 			if (WasmFloatOperands.guards(operands, ctx)) {
-				compileGuarded(operands, ctx, f64Opcode, ratioFunc);
+				compileGuarded(operands, prefix, ctx, f64Opcode, ratioFunc);
 				return;
 			}
 			// Unary (/ x) is the reciprocal: 1.0 / x.
@@ -77,13 +86,7 @@ final class WasmArithCompiler {
 				ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_FLOAT);
 				return;
 			}
-			compileF64Operands(operands, ctx, i -> {
-				if (i > 0) {
-					ctx.writer.write(f64Opcode);
-				}
-			});
-			ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-			ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_FLOAT);
+			compileFold(operands, prefix, ctx, f64Opcode, ratioFunc);
 			return;
 		}
 		// Common Lisp unary forms: (- x) negates, (/ x) is the reciprocal.
@@ -104,55 +107,121 @@ final class WasmArithCompiler {
 			WasmOperandTypes.emitCall(ctx, ratioFunc);
 			return;
 		}
-		WasmExprCompiler.compileExpr(args.get(1), ctx);
-		for (int i = 2; i < args.size(); i++) {
-			WasmExprCompiler.compileExpr(args.get(i), ctx);
-			WasmOperandTypes.emitCall(ctx, ratioFunc);
-		}
+		List<LispVal> operands = args.subList(1, args.size());
+		compileFold(operands, operands.size(), ctx, f64Opcode, ratioFunc);
 	}
 
 	/**
-	 * Pushes the operands of a float-literal operation as {@code f64}s, one after the
-	 * other, running {@code step} with each operand's index once it is on the stack.
-	 * Every operand is evaluated where the interpreter evaluates it -- an inner operation
-	 * is a call like any other, applied where it stands -- and none is CONVERTED, which
-	 * signals for a non-number, before a later operand whose evaluation could be observed
-	 * has run: an operation applies to its arguments only once they are all evaluated
-	 * (`.kb/argument-evaluation-order.md`, "An operation applies after its operands").
-	 * Only an operand whose conversion can fail and that has such an operand after it
-	 * waits, in a temporary, with the operands up to that later one; every other operand
-	 * converts where it stands, as it always did, so an operation without such a pair
-	 * emits what it did before.
+	 * A generic n-ary fold whose every operand is a boxed value -- the complex helpers'
+	 * included -- its steps held back as {@link #compileOperands} holds them.
 	 * @param operands the operand forms, in source order
+	 * @param dividing whether the operator divides
+	 * @param ctx the compile context
+	 * @param stepFunc the helper each step calls
+	 */
+	static void compileGenericFold(List<LispVal> operands, boolean dividing, WasmLispCompiler.Ctx ctx, int stepFunc) {
+		compileOperands(operands, operands.size(), i -> FloatFold.stepMayFail(operands, i, dividing), ctx, i -> {
+			if (i > 0) {
+				WasmOperandTypes.emitCall(ctx, stepFunc);
+			}
+		});
+	}
+
+	/**
+	 * The length of a float site's exact prefix ({@link FloatFold#exactPrefix}): the
+	 * operands ahead of the first one proven a float, folded through the generic
+	 * {@code _rat_*} helpers before the {@code f64} fold, or {@code 0} when the
+	 * {@code f64} fold runs from the first operand.
+	 * @param operands the operand forms
+	 * @return the prefix length
+	 */
+	static int exactPrefix(List<LispVal> operands) {
+		return FloatFold.exactPrefix(operands, WasmLispCompiler::isDefinitelyDouble);
+	}
+
+	/**
+	 * A float site's fold, one pair at a time from the first operand: the first
+	 * {@code prefix} operands boxed through the generic {@code _rat_*} helpers, the rest
+	 * as {@code f64}s. The step that joins the prefix to the {@code f64} operands is the
+	 * {@code _rat_*_f64} one, which converts the exact step's value or is the {@code f64}
+	 * step itself when an operand is a float; a prefix that is the whole site leaves the
+	 * generic helpers' value as it is. Otherwise the value is boxed.
+	 * @param operands the operand forms, at least two
+	 * @param prefix the exact prefix's length ({@link #exactPrefix})
+	 * @param ctx the compile context
+	 * @param f64Opcode the operator's {@code f64} instruction
+	 * @param ratioFunc the operator's generic helper
+	 */
+	private static void compileFold(List<LispVal> operands, int prefix, WasmLispCompiler.Ctx ctx, int f64Opcode,
+			int ratioFunc) {
+		boolean f64Fold = prefix < operands.size();
+		boolean dividing = ratioFunc == WasmLispCompiler.FUNC_RAT_DIV;
+		compileOperands(operands, prefix, i -> FloatFold.stepMayFail(operands, i, dividing), ctx, i -> {
+			if (i == 0) {
+				return;
+			}
+			if (i >= prefix) {
+				ctx.writer.write(f64Opcode);
+			}
+			else {
+				WasmOperandTypes.emitCall(ctx, i == prefix - 1 && f64Fold ? stepF64(ratioFunc) : ratioFunc);
+			}
+		});
+		if (f64Fold) {
+			WasmEmitHelper.boxF64(ctx);
+		}
+	}
+
+	/** The {@code _rat_*_f64} step of a generic helper. */
+	private static int stepF64(int ratioFunc) {
+		if (ratioFunc == WasmLispCompiler.FUNC_RAT_ADD) {
+			return WasmLispCompiler.FUNC_RAT_ADD_F64;
+		}
+		if (ratioFunc == WasmLispCompiler.FUNC_RAT_SUB) {
+			return WasmLispCompiler.FUNC_RAT_SUB_F64;
+		}
+		return ratioFunc == WasmLispCompiler.FUNC_RAT_MUL ? WasmLispCompiler.FUNC_RAT_MUL_F64
+				: WasmLispCompiler.FUNC_RAT_DIV_F64;
+	}
+
+	/**
+	 * Pushes the operands of a float-literal operation one after the other -- the first
+	 * {@code boxed} as values for the generic helpers, the rest as {@code f64}s --
+	 * running {@code step} with each operand's index once it is on the stack. Every
+	 * operand is evaluated where the interpreter evaluates it -- an inner operation is a
+	 * call like any other, applied where it stands -- and no action that can signal (a
+	 * conversion, a generic step) runs before a later operand whose evaluation could be
+	 * observed has run: an operation applies to its arguments only once they are all
+	 * evaluated (`.kb/argument-evaluation-order.md`, "An operation applies after its
+	 * operands"). Only an operand whose action can fail and that has such an operand
+	 * after it waits, in a temporary, with the operands up to that later one
+	 * ({@link FloatFold#waiting}); every other operand is acted on where it stands, so an
+	 * operation without such a pair emits what it did before.
+	 * @param operands the operand forms, in source order
+	 * @param boxed how many leading operands are pushed boxed
+	 * @param stepMayFail whether the step after boxed operand {@code i} may signal
 	 * @param ctx the compile context
 	 * @param step what follows each operand on the stack: the fold step, or nothing
 	 */
-	static void compileF64Operands(List<LispVal> operands, WasmLispCompiler.Ctx ctx, IntConsumer step) {
+	private static void compileOperands(List<LispVal> operands, int boxed, IntPredicate stepMayFail,
+			WasmLispCompiler.Ctx ctx, IntConsumer step) {
 		int count = operands.size();
-		int lastObservable = -1;
-		for (int i = 0; i < count; i++) {
-			if (!ArgumentOrder.isQuiet(operands.get(i), name -> isQuietVariable(name, ctx))) {
-				lastObservable = i;
-			}
-		}
-		int firstWaiting = -1;
-		for (int i = 0; i < lastObservable; i++) {
-			if (!ArgumentOrder.isRealValued(operands.get(i))) {
-				firstWaiting = i;
-				break;
-			}
-		}
+		FloatFold.Waiting waiting = FloatFold.waiting(count,
+				i -> !ArgumentOrder.isQuiet(operands.get(i), name -> isQuietVariable(name, ctx)),
+				i -> i < boxed ? i > 0 && stepMayFail.test(i) : !ArgumentOrder.isRealValued(operands.get(i)));
 		int[] slots = new int[count];
 		for (int i = 0; i < count; i++) {
-			if (i < firstWaiting || i > lastObservable || firstWaiting < 0) {
+			if (!waiting.waits(i)) {
 				WasmExprCompiler.compileExpr(operands.get(i), ctx);
-				WasmEmitHelper.castFloatGetF64(ctx);
+				if (i >= boxed) {
+					WasmEmitHelper.castFloatGetF64(ctx);
+				}
 				step.accept(i);
 				continue;
 			}
 			// From the first operand that has to wait up to the last observable one: each
 			// is evaluated in order into a temporary (a constant is left where it
-			// stands), and converted only once the last of them has run.
+			// stands), and acted on only once the last of them has run.
 			slots[i] = -1;
 			if (!ArgumentOrder.isOrderIndependent(operands.get(i))) {
 				WasmExprCompiler.compileExpr(operands.get(i), ctx);
@@ -160,10 +229,10 @@ final class WasmArithCompiler {
 				ctx.writer.write(Instruction.SET_LOCAL);
 				ctx.writer.writeUnsignedLeb128(slots[i]);
 			}
-			if (i < lastObservable) {
+			if (i < waiting.last()) {
 				continue;
 			}
-			for (int j = firstWaiting; j <= lastObservable; j++) {
+			for (int j = waiting.first(); j <= waiting.last(); j++) {
 				if (slots[j] < 0) {
 					WasmExprCompiler.compileExpr(operands.get(j), ctx);
 				}
@@ -171,7 +240,9 @@ final class WasmArithCompiler {
 					ctx.writer.write(Instruction.GET_LOCAL);
 					ctx.writer.writeUnsignedLeb128(slots[j]);
 				}
-				WasmEmitHelper.castFloatGetF64(ctx);
+				if (j >= boxed) {
+					WasmEmitHelper.castFloatGetF64(ctx);
+				}
 				step.accept(j);
 			}
 		}
@@ -200,7 +271,7 @@ final class WasmArithCompiler {
 	 * evaluated first, then the {@code f64} fold runs when none is a complex and the
 	 * generic {@code _rat_*} fold, whose arms answer it, when one is.
 	 */
-	private static void compileGuarded(List<LispVal> operandForms, WasmLispCompiler.Ctx ctx, int f64Opcode,
+	private static void compileGuarded(List<LispVal> operandForms, int prefix, WasmLispCompiler.Ctx ctx, int f64Opcode,
 			int ratioFunc) {
 		WasmFloatOperands.Operands operands = WasmFloatOperands.evaluate(operandForms, ctx);
 		int count = operands.size();
@@ -239,8 +310,19 @@ final class WasmArithCompiler {
 			ctx.writer.write(Instruction.F64_NEG);
 		}
 		else {
-			operands.pushRaw(0, ctx);
-			for (int i = 1; i < count; i++) {
+			// The exact prefix through the generic helpers, joined to the f64 operands by
+			// the _rat_*_f64 step (compileFold).
+			if (prefix > 0) {
+				operands.pushBoxed(0, ctx);
+				for (int i = 1; i < prefix; i++) {
+					operands.pushBoxed(i, ctx);
+					WasmOperandTypes.emitCall(ctx, i == prefix - 1 ? stepF64(ratioFunc) : ratioFunc);
+				}
+			}
+			else {
+				operands.pushRaw(0, ctx);
+			}
+			for (int i = Math.max(prefix, 1); i < count; i++) {
 				operands.pushRaw(i, ctx);
 				ctx.writer.write(f64Opcode);
 			}
