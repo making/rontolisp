@@ -14,6 +14,8 @@ package am.ik.rontolisp;
  * is held to one expected text; {@code ci-spec.yaml}'s
  * {@code undefined-function-carries-its-name} runs both programs on the native binary,
  * without the direct calls, whose compile-time warning the corpus compiles forbid.
+ * {@link #SPELLING} pins the name's spelling in the report: a package-qualified, an
+ * uninterned and a lower-case symbol appear as their symbol spells, no bars.
  */
 public final class UndefinedFunctionNameFixture {
 
@@ -122,5 +124,22 @@ public final class UndefinedFunctionNameFixture {
 	/** What {@link #REFERENCE_RESTART} prints. */
 	public static final String REFERENCE_RESTART_EXPECTED = "((UFR-REF-NOPE UNDEFINED-FUNCTION)"
 			+ " (UFR-CALL-NOPE UNDEFINED-FUNCTION) (UFR-CALL-NOPE UFR-REF-NOPE))";
+
+	/**
+	 * The program printing the report for a package-qualified, uninterned and lower-case
+	 * name.
+	 */
+	public static final String SPELLING = """
+			(defpackage :ufn-pkg (:use :cl))
+			(defun ufn-text (name)
+			  (handler-case (funcall name) (undefined-function (c) (princ-to-string c))))
+			(print (list (ufn-text (car (list 'ufn-pkg::nope)))
+			             (ufn-text (car (list (make-symbol "UFN-UNINTERNED"))))
+			             (ufn-text (car (list (intern "ufn-lower"))))))
+			""";
+
+	/** What {@link #SPELLING} prints. */
+	public static final String SPELLING_EXPECTED = "(\"The function UFN-PKG::NOPE is undefined\""
+			+ " \"The function #:UFN-UNINTERNED is undefined\" \"The function ufn-lower is undefined\")";
 
 }

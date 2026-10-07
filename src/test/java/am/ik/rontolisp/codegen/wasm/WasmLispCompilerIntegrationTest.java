@@ -26918,7 +26918,9 @@ class WasmLispCompilerIntegrationTest {
 				{ am.ik.rontolisp.UndefinedFunctionNameFixture.PLAIN,
 						am.ik.rontolisp.UndefinedFunctionNameFixture.PLAIN_EXPECTED },
 				{ am.ik.rontolisp.UndefinedFunctionNameFixture.RESTART,
-						am.ik.rontolisp.UndefinedFunctionNameFixture.RESTART_EXPECTED } }) {
+						am.ik.rontolisp.UndefinedFunctionNameFixture.RESTART_EXPECTED },
+				{ am.ik.rontolisp.UndefinedFunctionNameFixture.SPELLING,
+						am.ik.rontolisp.UndefinedFunctionNameFixture.SPELLING_EXPECTED } }) {
 			assertThat(compileAndRunProgram(am.ik.rontolisp.cli.CompileFrontendAccess.corpus(program[0],
 					am.ik.rontolisp.reader.Features.WASM, true, false)))
 				.isEqualTo(program[1]);
@@ -26968,7 +26970,9 @@ class WasmLispCompilerIntegrationTest {
 				{ am.ik.rontolisp.UnboundVariableNameFixture.RESTART,
 						am.ik.rontolisp.UnboundVariableNameFixture.RESTART_EXPECTED },
 				{ am.ik.rontolisp.UnboundVariableNameFixture.MESSAGE,
-						am.ik.rontolisp.UnboundVariableNameFixture.MESSAGE_EXPECTED } }) {
+						am.ik.rontolisp.UnboundVariableNameFixture.MESSAGE_EXPECTED },
+				{ am.ik.rontolisp.UnboundVariableNameFixture.SPELLING,
+						am.ik.rontolisp.UnboundVariableNameFixture.SPELLING_EXPECTED } }) {
 			assertThat(compileAndRunProgram(am.ik.rontolisp.cli.CompileFrontendAccess.corpus(program[0],
 					am.ik.rontolisp.reader.Features.WASM, true, false)))
 				.isEqualTo(program[1]);
