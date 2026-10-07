@@ -1447,6 +1447,21 @@ type T` with the type the operator requires, as a catchable `type-error` answeri
   interpreter's built-in goes through `Environment.requireListArgument`, and
   `%copy-list-runtime`'s non-list branch is `(%check-list x 'copy-list)` -- the same
   shared, instance-free funnel, so the fix costs nothing beyond one more table row.
+- **`scale-float`** (measured 2026-10-06, SBCL 2.2.9): refuses a non-`FLOAT` first argument (a complex,
+  an integer, a ratio, a symbol, `nil`) and then a non-`INTEGER` second one, each a `type-error` over the
+  argument as given. Before, nothing checked either: the interpreter's `asDouble` answered `6.0` for `3`
+  and `NUMBER` unnamed for a complex or a symbol; the compiled backends lowered it to a product of
+  `(expt 2.0 k)` factors, so the float met only `*`'s check -- `#C(4.0 8.0)` for a complex (a float-literal
+  operation beside a complex, `.kb/jvm-complex.md`), `6.0` for `3`, a ratio taken as its double -- and a
+  non-integer, `nil` or complex exponent was clamped by `min`/`max` (`4.242640687119285` for `1.5`,
+  `REAL` for `nil`). `LispMacroExpander.expandScaleFloat` now binds both, checks `floatp` then `integerp`
+  with `%operand-type-error` under `SCALE-FLOAT` (new kind `FLOAT`, funnel-typed row after `ELT`; the
+  wasm landing selects its text only in a module that names `scale-float`), and Environment's built-in
+  does the same. The interpreter also narrowed the exponent with `(int)` (`(scale-float 1.5 (expt 2 40))`
+  answered `1.5`, a bignum exponent a `type-error`): it clamps now, as the lowering always did.
+  Pinned by `ScaleFloatOperandsFixture` (ci-spec `scale-float-refuses-a-non-float-or-non-integer-argument`).
+  Not covered: SBCL signals `floating-point-overflow` where the result overflows (`(scale-float 1.5 3000)`);
+  every backend here answers an infinity, as for `*`.
 - **FUNNEL-TYPED operators** (`OperandTypes.FUNNEL_TYPE`: `CAR`, `CDR`, `NTHCDR`, `ENDP`, `AREF`,
   `(SETF AREF)`, `CHAR`, `SCHAR`, `(SETF CHAR)`, `(SETF SCHAR)`, `ROW-MAJOR-AREF`,
   `(SETF ROW-MAJOR-AREF)`, `COPY-LIST`): each of their funnels checks ONE argument's type, so the funnel's kind IS the type

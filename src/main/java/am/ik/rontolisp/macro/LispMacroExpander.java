@@ -41895,11 +41895,14 @@ public final class LispMacroExpander {
 
 	/**
 	 * Expands {@code (scale-float f n)} ({@code f * 2^n} with IEEE semantics) into a
-	 * chunked power-of-two product: the exponent is clamped to ±2200 (beyond which every
-	 * finite double has saturated to 0/infinity anyway) and split into three chunks of at
-	 * most ±1000 so each {@code (expt 2.0 chunk)} factor stays finite and nonzero --
-	 * multiplying by such a factor is exact until the final step over/underflows, which
-	 * reproduces {@code Math.scalb} including the subnormal range.
+	 * chunked power-of-two product: both arguments are evaluated, then checked as SBCL
+	 * checks them -- {@code f} a float, refused first, then {@code n} an integer, each a
+	 * {@code type-error} under {@code scale-float} -- so the product's own checks never
+	 * see a complex or a non-number. The exponent is clamped to ±2200 (beyond which every
+	 * finite double has saturated to 0/infinity anyway, a bignum included) and split into
+	 * three chunks of at most ±1000 so each {@code (expt 2.0 chunk)} factor stays finite
+	 * and nonzero -- multiplying by such a factor is exact until the final step
+	 * over/underflows, which reproduces {@code Math.scalb} including the subnormal range.
 	 * @param cons the scale-float expression
 	 * @return the expanded expression
 	 */
@@ -41910,18 +41913,30 @@ public final class LispMacroExpander {
 		}
 		String prefix = "__sf" + MV_COUNTER.getAndIncrement();
 		LispSymbol f = new LispSymbol(prefix + "_f");
+		LispSymbol raw = new LispSymbol(prefix + "_r");
 		LispSymbol nc = new LispSymbol(prefix + "_n");
 		LispSymbol a = new LispSymbol(prefix + "_a");
 		LispSymbol b = new LispSymbol(prefix + "_b");
 		LispSymbol c = new LispSymbol(prefix + "_c");
-		LispVal ncInit = clampInt(parts.get(2), 2200);
+		LispVal ncInit = clampInt(raw, 2200);
 		LispVal aInit = clampInt(nc, 1000);
 		LispVal bInit = clampInt(mvCall(LispNames.SUB, nc, a), 1000);
 		LispVal cInit = mvCall(LispNames.SUB, nc, a, b);
 		LispVal product = mvCall(LispNames.MUL, mvCall(LispNames.MUL, mvCall(LispNames.MUL, f, pow2(a)), pow2(b)),
 				pow2(c));
-		return nestMvBindings(List.of(new MvBinding(f, parts.get(1)), new MvBinding(nc, ncInit),
-				new MvBinding(a, aInit), new MvBinding(b, bInit), new MvBinding(c, cInit)), product);
+		LispVal scaled = nestMvBindings(List.of(new MvBinding(nc, ncInit), new MvBinding(a, aInit),
+				new MvBinding(b, bInit), new MvBinding(c, cInit)), product);
+		LispVal checked = mvCall(LispNames.PROGN, scaleFloatCheck(LispNames.FLOATP, f, "FLOAT"),
+				scaleFloatCheck(LispNames.INTEGERP, raw, "INTEGER"), scaled);
+		return nestMvBindings(List.of(new MvBinding(f, parts.get(1)), new MvBinding(raw, parts.get(2))), checked);
+	}
+
+	/** Builds {@code (if (test v) nil (%operand-type-error v 'scale-float 'kind))}. */
+	private static LispVal scaleFloatCheck(String test, LispSymbol v, String kind) {
+		LispVal signal = mvCall(LispNames.OPERAND_TYPE_ERROR_INTERNAL, v,
+				mvCall(LispNames.QUOTE, new LispSymbol(LispNames.SCALE_FLOAT)),
+				mvCall(LispNames.QUOTE, new LispSymbol(kind)));
+		return makeIf(mvCall(test, v), LispNil.INSTANCE, signal);
 	}
 
 	/**
