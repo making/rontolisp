@@ -3,7 +3,6 @@ package am.ik.rontolisp.compiler;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Collection;
-import java.util.Comparator;
 import java.util.Deque;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -203,13 +202,14 @@ public final class ReadBeforeStore {
 		}
 		// The exempt ones, decided in the order of their first form: what can run before
 		// form i only grows with i.
-		List<String> byFirst = new ArrayList<>();
+		List<Map.Entry<String, Integer>> byFirst = new ArrayList<>();
 		for (String name : candidates) {
-			if (first.containsKey(name)) {
-				byFirst.add(name);
+			Integer index = first.get(name);
+			if (index != null) {
+				byFirst.add(Map.entry(name, index));
 			}
 		}
-		byFirst.sort(Comparator.comparingInt(first::get));
+		byFirst.sort(Map.Entry.comparingByValue());
 		Set<String> hostFunctions = new HashSet<>();
 		for (LispVal form : topLevel) {
 			hostFunctions(form, hostFunctions);
@@ -217,8 +217,9 @@ public final class ReadBeforeStore {
 		Region before = new Region(defuns, defunReads, closRegistry, hostFunctions);
 		int walked = 0;
 		Set<String> exempt = new HashSet<>();
-		for (String name : byFirst) {
-			int index = first.get(name);
+		for (Map.Entry<String, Integer> entry : byFirst) {
+			String name = entry.getKey();
+			int index = entry.getValue();
 			for (; walked < index; walked++) {
 				before.add(topLevel.get(walked));
 			}
