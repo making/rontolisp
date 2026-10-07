@@ -17,9 +17,15 @@
   (undefined-function (e) (cell-error-name e))) ; => CE-NO-SUCH-FUNCTION
 ```
 
-[`symbol-value`](symbol-value.md) で未束縛の名前を読み出したときに通知される `unbound-variable` も、すべてのバックエンドでその名前を持ちます:
+未束縛の名前を [`symbol-value`](symbol-value.md) で読み出したとき、または値なしで宣言したスペシャル変数を参照したときに通知される `unbound-variable` も、すべてのバックエンドでその名前を持ちます:
 
 ```lisp
 (handler-case (symbol-value (intern "CE-NO-SUCH-VARIABLE"))
   (unbound-variable (e) (cell-error-name e))) ; => CE-NO-SUCH-VARIABLE
+```
+
+```lisp
+(defvar *ce-unset*)
+(handler-case *ce-unset*
+  (unbound-variable (e) (cell-error-name e))) ; => *CE-UNSET*
 ```

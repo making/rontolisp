@@ -282,8 +282,7 @@ final class WasmExprCompiler {
 		// the per-call task record (WasmDynVars), the global being only its default.
 		Integer globalIndex = ctx.globalIndices.get(name);
 		if (globalIndex != null) {
-			emitRawSpecialRead(ctx, name, globalIndex);
-			emitUnboundAsNil(ctx, name);
+			emitCheckedRead(ctx, name, globalIndex);
 			return;
 		}
 		if (ctx.dynamic) {
@@ -316,7 +315,7 @@ final class WasmExprCompiler {
 	/**
 	 * A global's current value as stored: the per-task binding of a dynamically-bound
 	 * special under {@code --reentrant}, else the module global (under shallow binding a
-	 * special's active binding) -- the UNBOUND marker of {@link #emitUnboundAsNil}
+	 * special's active binding) -- the UNBOUND marker of {@link #emitCheckedRead}
 	 * included. Leaves one {@code (ref null eq)} on the stack.
 	 * @param ctx the compilation context
 	 * @param name the global's name
@@ -332,34 +331,64 @@ final class WasmExprCompiler {
 	}
 
 	/**
-	 * Turns the value on the stack into nil when it is the UNBOUND marker -- the
-	 * raw-local sentinel, which the module global of a global in
-	 * {@code Ctx.unboundGlobals} holds until something assigns it -- so a read of such a
-	 * global answers nil there, as every other unassigned global does. Emits nothing for
-	 * any other name.
+	 * Reads a global outside a binding of it this function holds: its current value
+	 * ({@link #emitRawSpecialRead}), and for a global in {@code Ctx.unboundGlobals} --
+	 * whose module global holds the UNBOUND marker, the raw-local sentinel, until a store
+	 * gives it a value -- the {@code unbound-variable} naming it when the value is the
+	 * marker, which is what the interpreter's read of a variable nothing has given a
+	 * value signals. In EH mode the throw is {@code _unbound_variable}'s, handed the
+	 * name's string-table entry; outside it nothing could catch the signal, so the read
+	 * traps in place, as {@code error} does there. A plain module global is tested BEFORE
+	 * it is read, and the throw arm ends in {@code unreachable}: nothing is live across
+	 * the test, and the engine keeps nothing for a path that cannot come back, so a hot
+	 * read costs what the bare read does (.kb/dynamic-special-variables.md, "A read of a
+	 * special without a value"). The per-task read of {@code --reentrant} is tested
+	 * through a temp.
 	 * @param ctx the compilation context
 	 * @param name the variable read
+	 * @param globalIndex its module global
 	 */
-	private static void emitUnboundAsNil(WasmLispCompiler.Ctx ctx, String name) {
+	private static void emitCheckedRead(WasmLispCompiler.Ctx ctx, String name, int globalIndex) {
 		if (!ctx.unboundGlobals.contains(name)) {
+			emitRawSpecialRead(ctx, name, globalIndex);
 			return;
 		}
-		int value = ctx.allocTemp();
-		ctx.writer.write(Instruction.TEE_LOCAL);
-		ctx.writer.writeUnsignedLeb128(value);
+		int value = -1;
+		if (WasmDynVars.handles(ctx, name)) {
+			emitRawSpecialRead(ctx, name, globalIndex);
+			value = ctx.allocTemp();
+			ctx.writer.write(Instruction.TEE_LOCAL);
+			ctx.writer.writeUnsignedLeb128(value);
+		}
+		else {
+			ctx.writer.write(Instruction.GET_GLOBAL);
+			ctx.writer.writeUnsignedLeb128(globalIndex);
+		}
 		ctx.writer.write(Instruction.GET_GLOBAL);
 		ctx.writer.writeUnsignedLeb128(ctx.rawSentinelGlobalIndex);
 		ctx.writer.write(Instruction.REF_EQ);
-		ctx.writer.write(Instruction.IF);
-		ctx.writer.writeRefType(true, Type.EQ.code());
+		ctx.writer.write(Instruction.IF, WasmLispCompiler.BLOCKTYPE_EMPTY);
 		ctx.wasmCtrlDepth++;
-		ctx.writer.write(Instruction.REF_NULL);
-		ctx.writer.writeHeapType(Type.EQ.code());
-		ctx.writer.write(Instruction.ELSE);
-		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeUnsignedLeb128(value);
+		if (ctx.unboundVariableFuncIndex >= 0) {
+			WasmLispCompiler.StringTable.StringEntry entry = ctx.stringTable.addString(name);
+			ctx.writer.write(Instruction.I32_CONST);
+			ctx.writer.writeSignedLeb128(entry.offset());
+			ctx.writer.write(Instruction.I32_CONST);
+			ctx.writer.writeSignedLeb128(entry.length());
+			ctx.writer.write(Instruction.CALL);
+			ctx.writer.writeUnsignedLeb128(ctx.unboundVariableFuncIndex);
+		}
+		ctx.writer.write(Instruction.UNREACHABLE);
 		ctx.wasmCtrlDepth--;
 		ctx.writer.write(Instruction.END);
+		if (value >= 0) {
+			ctx.writer.write(Instruction.GET_LOCAL);
+			ctx.writer.writeUnsignedLeb128(value);
+		}
+		else {
+			ctx.writer.write(Instruction.GET_GLOBAL);
+			ctx.writer.writeUnsignedLeb128(globalIndex);
+		}
 	}
 
 	/**

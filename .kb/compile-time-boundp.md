@@ -73,8 +73,8 @@ literal `(boundp 'G)` names G, G is a global (special or not), no `defvar` with 
 `defparameter` / `defconstant` names it, not a `cl` symbol, and the program calls no
 `progv` (whose lowering binds a non-special name in the mirror). They join the tracked set
 of `.kb/dynamic-special-variables.md` ("Bound-ness of a special without a value"): the
-variable starts as the UNBOUND marker, a store overwrites it, a read answers nil for it,
-the probe is `(%global-boundp 'G)`.
+variable starts as the UNBOUND marker, a store overwrites it, a read of it signals the
+`unbound-variable` naming it (since 2026-10-07; nil before), the probe is `(%global-boundp 'G)`.
 
 - Only where the mirror is absent: a program carrying the eval runtime anyway (`eval`, a
   computed probe, `symbol-value`, ...) keeps the mirror probe, which answers the same, so it

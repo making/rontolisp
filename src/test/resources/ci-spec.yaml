@@ -21869,7 +21869,10 @@ cases:
   # An unbound-variable names its variable in the cell-error name slot on every
   # backend -- symbol-value of a literal and a computed name, #'symbol-value called
   # and mapped, inside a binding of another special, caught as cell-error and error --
-  # also under a handler-bind; the wasm-GC backends trapped before. The programs of
+  # also under a handler-bind; the wasm-GC backends trapped before. A special declared
+  # without a value (defvar, declaim, a local declaration) read directly, from a
+  # function, through symbol-value and as an operand, outside or after a binding of it:
+  # the compiled backends read NIL there before. The programs of
   # UnboundVariableNameFixture; SBCL's expected text but for the report, rontolisp's.
   - name: unbound-variable-carries-its-name
     source: |
@@ -21888,7 +21891,23 @@ cases:
                (cell-error (c) (list :cell (cell-error-name c) (typep c 'unbound-variable)))))
       (print (handler-case (symbol-value 'uvn-nope)
                (error (c) (list :error (type-of c)))))
+      (defvar *uvn-valueless*)
+      (declaim (special *uvn-declaimed*))
+      (defun uvn-read () *uvn-valueless*)
+      (defun uvn-local-read () (declare (special uvn-local)) uvn-local)
+      (print (list (uvn-name (lambda () *uvn-valueless*))
+                   (uvn-name #'uvn-read)
+                   (uvn-name (lambda () (symbol-value '*uvn-valueless*)))
+                   (uvn-name (lambda () (let ((*uvn-valueless* 1)) (uvn-read))))
+                   (uvn-name (lambda () (let ((*uvn-valueless* 2)) (setq *uvn-valueless* 3)) (uvn-read)))
+                   (uvn-name (lambda () (1+ *uvn-valueless*)))
+                   (uvn-name (lambda () *uvn-declaimed*))
+                   (uvn-name #'uvn-local-read)
+                   (uvn-name (lambda () (let ((uvn-local 4)) (declare (special uvn-local)) (uvn-local-read))))))
+      (setq *uvn-valueless* 5)
+      (print (list (uvn-read) (symbol-value '*uvn-valueless*)))
       (defvar *uvn-seen* nil)
+      (defvar *uvn-restart*)
       (defun uvn-bound (thunk)
         (handler-case
             (handler-bind ((unbound-variable (lambda (c) (push (cell-error-name c) *uvn-seen*))))
@@ -21896,22 +21915,35 @@ cases:
           (unbound-variable (c) (list (cell-error-name c) (type-of c)))))
       (print (list (uvn-bound (lambda () (symbol-value 'uvn-nope)))
                    (uvn-bound (lambda () (symbol-value (intern "UVN-OTHER"))))
+                   (uvn-bound (lambda () *uvn-restart*))
                    *uvn-seen*))
       (print (handler-case (symbol-value 'uvn-nope) (error (c) (princ-to-string c))))
+      (defvar *uvn-message*)
+      (print (handler-case *uvn-message* (error (c) (princ-to-string c))))
       (defpackage :uvn-pkg (:use :cl))
       (defun uvn-text (name)
         (handler-case (symbol-value name) (unbound-variable (c) (princ-to-string c))))
       (print (list (uvn-text (car (list 'uvn-pkg::nope)))
                    (uvn-text (car (list (make-symbol "UVN-UNINTERNED"))))
                    (uvn-text (car (list (intern "uvn-lower"))))))
+      (defvar uvn-pkg::*valueless*)
+      (defvar |uvn-lower-var|)
+      (defun uvn-read-text (thunk)
+        (handler-case (funcall thunk) (unbound-variable (c) (list (princ-to-string c) (cell-error-name c)))))
+      (print (list (uvn-read-text (lambda () uvn-pkg::*valueless*))
+                   (uvn-read-text (lambda () |uvn-lower-var|))))
     expected: |
       ((UVN-NOPE UNBOUND-VARIABLE) (UVN-COMPUTED UNBOUND-VARIABLE) (UVN-NOPE UNBOUND-VARIABLE) (UVN-MAPPED UNBOUND-VARIABLE) (UVN-INSIDE UNBOUND-VARIABLE))
       T
       (:CELL UVN-NOPE T)
       (:ERROR UNBOUND-VARIABLE)
-      ((UVN-NOPE UNBOUND-VARIABLE) (UVN-OTHER UNBOUND-VARIABLE) (UVN-OTHER UVN-NOPE))
+      ((*UVN-VALUELESS* UNBOUND-VARIABLE) (*UVN-VALUELESS* UNBOUND-VARIABLE) (*UVN-VALUELESS* UNBOUND-VARIABLE) 1 (*UVN-VALUELESS* UNBOUND-VARIABLE) (*UVN-VALUELESS* UNBOUND-VARIABLE) (*UVN-DECLAIMED* UNBOUND-VARIABLE) (UVN-LOCAL UNBOUND-VARIABLE) 4)
+      (5 5)
+      ((UVN-NOPE UNBOUND-VARIABLE) (UVN-OTHER UNBOUND-VARIABLE) (*UVN-RESTART* UNBOUND-VARIABLE) (*UVN-RESTART* UVN-OTHER UVN-NOPE))
       "The variable UVN-NOPE is unbound"
+      "The variable *UVN-MESSAGE* is unbound"
       ("The variable UVN-PKG::NOPE is unbound" "The variable #:UVN-UNINTERNED is unbound" "The variable uvn-lower is unbound")
+      (("The variable UVN-PKG::*VALUELESS* is unbound" UVN-PKG::*VALUELESS*) ("The variable uvn-lower-var is unbound" |uvn-lower-var|))
 
   # The tokenizer package (tokenizers.lisp, .kb/tokenizers.md): the five byte-level
   # pre-tokenizer shapes, the ranked merge loop, the special-token scan, Llama 3's

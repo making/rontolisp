@@ -24575,7 +24575,7 @@ class WasmLispCompilerIntegrationTest {
 		// the component: such a special's module global starts as the UNBOUND marker,
 		// which a shallow binding saves and restores like any value, so boundp answers t
 		// for the extent of a binding and nil again after it; a read of it while it has
-		// no value answers nil, never the marker.
+		// no value signals the unbound-variable naming it, never answering the marker.
 		for (String[] program : new String[][] {
 				{ am.ik.rontolisp.BoundpInBindingFixture.SOURCE, am.ik.rontolisp.BoundpInBindingFixture.EXPECTED },
 				{ am.ik.rontolisp.BoundpInBindingFixture.STORE_SOURCE,
@@ -27007,6 +27007,26 @@ class WasmLispCompilerIntegrationTest {
 					am.ik.rontolisp.reader.Features.WASM, true, false)))
 				.isEqualTo(program[1]);
 			assertThat(runComponentFrontendProgramWithDir(program[0])).isEqualTo(program[1]);
+		}
+	}
+
+	@Test
+	void anUncaughtReadOfASpecialWithoutAValueEndsTheProgram() throws Exception {
+		// Such a read used to answer nil and the program ran on. In EH mode the uncaught
+		// unbound-variable reaches the entry report with the interpreter's text; outside
+		// it nothing could catch the signal, so the read traps in place, as error does
+		// there.
+		for (boolean eh : new boolean[] { false, true }) {
+			String source = (eh ? "(print (ignore-errors (car 1)))" : "(print nil)")
+					+ " (defvar *uv*) (defun uv-read () *uv*) (print (uv-read)) (print :after)";
+			byte[] wasmBytes = new WasmLispCompiler().compile(LispReader.readAllFromString(source));
+			wasmtime.copyFileToContainer(Transferable.of(wasmBytes), path("test.wasm"));
+			ExecResult result = wasmtime.execInContainer("wasmtime", "run", "-W", "gc", "-W", "exceptions=y",
+					path("test.wasm"));
+			assertThat(result.getExitCode()).as(source).isNotZero();
+			assertThat(result.getStdout().trim()).as(source).isEqualTo("NIL");
+			assertThat(result.getStderr()).as(source)
+				.contains(eh ? "Unhandled condition: The variable *UV* is unbound" : "unreachable");
 		}
 	}
 

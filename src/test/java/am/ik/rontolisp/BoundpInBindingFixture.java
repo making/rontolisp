@@ -92,23 +92,28 @@ public final class BoundpInBindingFixture {
 			"((T T) NIL)", "(T T 8 T)");
 
 	/**
-	 * Compile paths only: a read of such a special while it has no value answers nil
-	 * there (documented; the interpreter signals, as SBCL does), never the marker its
-	 * variable holds -- a direct read, {@code symbol-value} of a literal and of a
-	 * computed name, {@code eval}, a binding's init form, and a {@code progv} short of
-	 * values, which binds the symbol to nil.
+	 * A read of such a special while it has no value signals the {@code unbound-variable}
+	 * naming it, never answering the marker its variable holds -- a direct read,
+	 * {@code symbol-value} of a literal and of a computed name, {@code eval}, a binding's
+	 * init form -- while a {@code progv} short of values binds the symbol to nil
+	 * (documented; SBCL leaves it unbound). The compile paths used to read nil for every
+	 * one of them.
 	 */
 	public static final String UNBOUND_READ_SOURCE = """
 			(defvar *bil*)
 			(defun bil-probe () (boundp '*bil*))
+			(defun bil-read (thunk)
+			  (handler-case (funcall thunk) (unbound-variable (c) (list :unbound (cell-error-name c)))))
 			(print (list (let ((*bil* 1)) (bil-probe)) (bil-probe)))
-			(print (list *bil* (symbol-value '*bil*) (symbol-value (intern "*BIL*")) (eval '*bil*)))
-			(print (let ((*bil* *bil*)) (list *bil* (bil-probe))))
-			(print (list (progv '(*bil*) '() (list *bil* (bil-probe))) (bil-probe)))
+			(print (list (bil-read (lambda () *bil*)) (bil-read (lambda () (symbol-value '*bil*)))
+			             (bil-read (lambda () (symbol-value (intern "*BIL*")))) (bil-read (lambda () (eval '*bil*)))))
+			(print (bil-read (lambda () (let ((*bil* *bil*)) (list *bil* (bil-probe))))))
+			(print (list (progv '(*bil*) '() (list (bil-read (lambda () *bil*)) (bil-probe))) (bil-probe)))
 			""";
 
-	/** What {@link #UNBOUND_READ_SOURCE} prints on the compile paths. */
-	public static final String UNBOUND_READ_EXPECTED = String.join("\n", "(T NIL)", "(NIL NIL NIL NIL)", "(NIL T)",
+	/** What {@link #UNBOUND_READ_SOURCE} prints, one value per line. */
+	public static final String UNBOUND_READ_EXPECTED = String.join("\n", "(T NIL)",
+			"((:UNBOUND *BIL*) (:UNBOUND *BIL*) (:UNBOUND *BIL*) (:UNBOUND *BIL*))", "(:UNBOUND *BIL*)",
 			"((NIL T) NIL)");
 
 }

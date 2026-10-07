@@ -273,9 +273,8 @@ public final class SpecialVarCollector {
 	 */
 	public static LinkedHashSet<String> collectProbedValueless(Collection<LispVal> forms,
 			SequencedSet<String> specials) {
-		LinkedHashSet<String> out = new LinkedHashSet<>();
 		if (specials.isEmpty()) {
-			return out;
+			return new LinkedHashSet<>();
 		}
 		Set<String> probed = new HashSet<>();
 		boolean computed = false;
@@ -283,6 +282,32 @@ public final class SpecialVarCollector {
 			computed |= LispMacroExpander.boundpProbes(form, probed);
 		}
 		if (!computed && probed.isEmpty()) {
+			return new LinkedHashSet<>();
+		}
+		LinkedHashSet<String> out = collectValueless(forms, specials);
+		if (!computed) {
+			out.retainAll(probed);
+		}
+		return out;
+	}
+
+	/**
+	 * The specials of a program that nothing but an assignment or a binding gives a
+	 * value: no {@code defvar} with a value, {@code defparameter} or {@code defconstant}
+	 * names one anywhere (scope-blind) -- a {@code (defvar *x*)}, a
+	 * {@code (declaim (special *x*))}, a local {@code (declare (special x))} -- and it is
+	 * not a {@code cl} symbol (the backends seed the standard variables they declare).
+	 * Such a special is unbound until a store or a binding gives it a value: the compile
+	 * paths start its variable as the UNBOUND marker, which a store overwrites and a
+	 * binding saves and restores, and a read of the marker signals the
+	 * {@code unbound-variable} naming it, as the interpreter's read does.
+	 * @param forms the program's forms, the injected runtime's included
+	 * @param specials the program's special-variable names
+	 * @return those specials, in {@code specials} order
+	 */
+	public static LinkedHashSet<String> collectValueless(Collection<LispVal> forms, SequencedSet<String> specials) {
+		LinkedHashSet<String> out = new LinkedHashSet<>();
+		if (specials.isEmpty()) {
 			return out;
 		}
 		Set<String> valued = new HashSet<>();
@@ -290,7 +315,7 @@ public final class SpecialVarCollector {
 			collectValued(form, valued);
 		}
 		for (String name : specials) {
-			if ((computed || probed.contains(name)) && !valued.contains(name) && !PackageRegistry.isClSymbol(name)
+			if (!valued.contains(name) && !PackageRegistry.isClSymbol(name)
 					&& !PackageRegistry.isClSymbol(member(name))) {
 				out.add(name);
 			}

@@ -235,8 +235,8 @@ final class JvmSymbolApiCompiler {
 	}
 
 	/**
-	 * boundp. A global whose variable carries its bound-ness
-	 * ({@link JvmDynVarRuntimeBuilder#unboundMarker}) is answered by it
+	 * boundp. A probed global whose variable carries its bound-ness
+	 * ({@link JvmDynVarRuntimeBuilder.UnboundMarker#probed}) is answered by it
 	 * ({@link LispMacroExpander#dynamicFirstBoundp}): a literal one by
 	 * {@code %global-boundp}, a computed name through the shared dispatch over them.
 	 * Every other name, and every name in a program without such a global, takes the raw
@@ -245,7 +245,7 @@ final class JvmSymbolApiCompiler {
 	static void compileBoundp(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
 		JvmDynVarRuntimeBuilder.UnboundMarker marker = ctx.unboundMarker;
 		if (marker != null) {
-			LispVal tracked = LispMacroExpander.dynamicFirstBoundp(cons, marker.globals(), ctx.specialVars,
+			LispVal tracked = LispMacroExpander.dynamicFirstBoundp(cons, marker.probed(), ctx.specialVars,
 					ctx.functions.containsKey(LispNames.BOUNDP_DYNAMIC));
 			if (tracked != null) {
 				JvmExprCompiler.compileExpr(tracked, ctx, className);

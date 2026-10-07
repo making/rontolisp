@@ -129,15 +129,15 @@ final class WasmSymbolApiCompiler {
 	}
 
 	/**
-	 * boundp. A global whose module global carries its bound-ness (it starts as the
-	 * UNBOUND marker, {@link WasmLispCompiler.Ctx#unboundGlobals}) is answered by it
-	 * ({@link LispMacroExpander#dynamicFirstBoundp}): a literal one by
+	 * boundp. A probed global whose module global carries its bound-ness (it starts as
+	 * the UNBOUND marker, {@link WasmLispCompiler.Ctx#probedUnboundGlobals}) is answered
+	 * by it ({@link LispMacroExpander#dynamicFirstBoundp}): a literal one by
 	 * {@code %global-boundp}, a computed name through the shared dispatch over them.
 	 * Every other name, and every name in a program without such a global, probes the
 	 * {@code GLOBAL_ENV} mirror.
 	 */
 	static void compileBoundp(LispCons cons, WasmLispCompiler.Ctx ctx) {
-		LispVal tracked = LispMacroExpander.dynamicFirstBoundp(cons, ctx.unboundGlobals, ctx.specialVars,
+		LispVal tracked = LispMacroExpander.dynamicFirstBoundp(cons, ctx.probedUnboundGlobals, ctx.specialVars,
 				ctx.functions.containsKey(LispNames.BOUNDP_DYNAMIC));
 		if (tracked != null) {
 			WasmExprCompiler.compileExpr(tracked, ctx);
