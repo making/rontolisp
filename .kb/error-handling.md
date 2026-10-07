@@ -1170,8 +1170,16 @@ message at the catching end** -- except for the failures the backends report as 
   `an{UndefinedFunction,UnboundVariable}CarriesItsNameInTheCellErrorNameSlot`) and ci-spec
   `undefined-function-carries-its-name` / `unbound-variable-carries-its-name`. Left open: a
   compiled read of a `(defvar x)` without a value answers NIL rather than signalling
-  (`.todo/d85`); the wasm message spells the name with `princ`, dropping a package prefix
-  (`.todo/d86`).
+  (`.todo/d85`).
+- **The report spells the name as the symbol is stored** (`symbol.name()`): `P::V`, `#:U`, a
+  keyword's colon, `lower` without bars. wasm used `princ` (drops the qualifier and the `#:`)
+  until 2026-10-07, and `prin1` would add the bars. `WasmRuntimeBuilder.emitSymbolSpelling` frames a
+  copy of the symbol's bytes (a symbol is an unframed `TYPE_STRING`, so `_string_concat` cannot
+  take it as is); both throwers use it. nil, a quote-framed string and an empty name keep
+  `princ`'s text. The compiled backends print an `(intern "F" :p)` symbol `P:F` where the
+  interpreter prints `P::F` (`.todo/156`), so `UndefinedFunctionNameFixture.SPELLING` names
+  its symbols by literal. An EMPTY symbol name still traps on wasm (`symbol-value`'s keyword
+  probe and the undefined arm read byte 0) and gives `index out of bounds` on the JVM.
 - **The message a raw host failure reports is rontolisp's, not the host's**:
   `ClosRegistry.TYPE_ERROR_MESSAGE` replaces a `ClassCastException`'s Java class names and
   `INDEX_OUT_OF_BOUNDS_MESSAGE` the JVM's `Index 10 out of bounds for length 3` (whose length counts
