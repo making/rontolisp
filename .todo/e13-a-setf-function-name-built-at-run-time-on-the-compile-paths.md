@@ -24,3 +24,6 @@ time (`.kb/symbol-runtime-api.md`, "A `(setf name)` function name").
   through `_intern` (the `usesIntern` rail). Keep a program without a computed designator
   byte-identical; measure what a site that has one costs before choosing per-site code versus
   one shared runtime helper.
+- A `defstruct` slot's `(setf accessor)` function is emitted on the compile paths only for a program
+  whose text names `(setf accessor)` (`LispMacroExpander.referencedStructWriterDefuns`): a computed
+  designator has to make those writers reachable too.
