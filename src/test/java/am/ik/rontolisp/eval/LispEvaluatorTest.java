@@ -10779,6 +10779,14 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void computedTypepOfAStreamTypeNameAnswersAsTheLiteralDoes() {
+		// A stream type name held in a value decides what its literal spelling decides.
+		// Pinned on all four backends.
+		assertThat(evalPrinted(am.ik.rontolisp.ComputedStreamTypepFixture.PROGRAM))
+			.isEqualTo(am.ik.rontolisp.ComputedStreamTypepFixture.EXPECTED);
+	}
+
+	@Test
 	void scaleFloatRefusesANonFloatOrNonIntegerArgument() {
 		// A first argument that is no float and a second that is no integer are the
 		// type-error of FLOAT / INTEGER, the float refused first -- sbcl's answers,

@@ -27114,10 +27114,14 @@ public final class LispMacroExpander {
 			// The alias table is narrowed to the names the program SPELLS, and the probe
 			// runs before the defuns below join `out` (their own bodies would otherwise
 			// spell the very names they are gated on).
-			java.util.Map<String, LispVal> aliases = narrowedDeftypeAliases(closRegistry, out);
-			out.add(runtimeTypepDefun(closRegistry, !aliases.isEmpty()));
+			// The stream subtype names are narrowed the same way: a program that never
+			// spells one keeps the bytes it had.
+			java.util.Set<String> spelled = spelledSymbolNames(out);
+			java.util.Map<String, LispVal> aliases = narrowedDeftypeAliases(closRegistry, spelled);
+			List<String> streamNames = RUNTIME_TYPEP_STREAM_NAMES.stream().filter(spelled::contains).toList();
+			out.add(runtimeTypepDefun(closRegistry, !aliases.isEmpty(), streamNames));
 			out.add(runtimeTypepCompoundDefun());
-			out.addAll(0, typepTagTableForms(closRegistry));
+			out.addAll(0, typepTagTableForms(closRegistry, streamNames));
 			if (!aliases.isEmpty()) {
 				// The user-deftype alias resolver the dispatch above normalizes its
 				// designator through, gated on the program registering one: without an
@@ -42965,6 +42969,22 @@ public final class LispMacroExpander {
 			"STREAM", "T");
 
 	/**
+	 * The stream SUBTYPE names a runtime {@code typep} specifier can hold, each tested by
+	 * the literal spelling's {@link #makeTypeTest} arm. Apart from
+	 * {@link #RUNTIME_TYPEP_BUILTINS} because every stream is an INSTANCE: on the compile
+	 * paths these names answer only through {@code %typep-runtime}'s instance branch
+	 * ({@link #typepTagTableForms} for the tag-decided ones, {@link #streamKindFallback}
+	 * for the two the {@code KIND} slot decides), so a non-instance arm per name would be
+	 * dead code, and the {@code subtypep} universe that row list also feeds has no stream
+	 * lattice to place them in.
+	 */
+	private static final List<String> RUNTIME_TYPEP_STREAM_NAMES = List.of("FILE-STREAM", "STRING-STREAM",
+			"SYNONYM-STREAM", "TWO-WAY-STREAM", "BROADCAST-STREAM", "ECHO-STREAM", "CONCATENATED-STREAM");
+
+	/** The stream names whose test reads the open stream's {@code KIND} slot. */
+	private static final List<String> RUNTIME_TYPEP_STREAM_KIND_NAMES = List.of("FILE-STREAM", "STRING-STREAM");
+
+	/**
 	 * The COMPOUND half of the runtime {@code typep} dispatch: an interpreter of a
 	 * specifier VALUE that arrived as a cons, written ONCE in Lisp so the inline
 	 * interpreter path and the compile paths' {@code %typep-compound-runtime} defun
@@ -43232,6 +43252,11 @@ public final class LispMacroExpander {
 			}
 			clauses.add(
 					listToCons(List.of(nameMatchTest(tn, builtin), makeIf(test, LispTrue.INSTANCE, LispNil.INSTANCE))));
+		}
+		// Last, so a name an arm above decides pays nothing for them.
+		for (String streamName : RUNTIME_TYPEP_STREAM_NAMES) {
+			clauses.add(listToCons(List.of(nameMatchTest(tn, streamName), makeIf(
+					makeTypeTest(v, new LispSymbol(streamName), closRegistry), LispTrue.INSTANCE, LispNil.INSTANCE))));
 		}
 		clauses.add(listToCons(List.of(LispTrue.INSTANCE, LispNil.INSTANCE)));
 		List<LispVal> condParts = new java.util.ArrayList<>();
@@ -43991,12 +44016,13 @@ public final class LispMacroExpander {
 	 * paths exactly as it did before this item; the interpreter, which re-expands against
 	 * the live registry and has no program to probe, resolves it.
 	 * @param closRegistry the registry holding the {@code deftype} expansions
-	 * @param program the expanded top-level forms, BEFORE the table's own forms join them
+	 * @param programSpellings {@link #spelledSymbolNames} of the expanded top-level
+	 * forms, taken BEFORE the table's own forms join them
 	 * @return the aliases to emit, in registration order
 	 */
 	private static java.util.Map<String, LispVal> narrowedDeftypeAliases(ClosRegistry closRegistry,
-			List<LispVal> program) {
-		java.util.Set<String> spelled = new java.util.HashSet<>(spelledSymbolNames(program));
+			java.util.Set<String> programSpellings) {
+		java.util.Set<String> spelled = new java.util.HashSet<>(programSpellings);
 		java.util.Map<String, LispVal> aliases = deftypeAliasExpansions(closRegistry, spelled);
 		// One entry's EXPANSION can name another alias -- alexandria's proper-sequence
 		// is (or proper-list ...) -- and %typep-compound-runtime recurses back into the
@@ -44966,8 +44992,11 @@ public final class LispMacroExpander {
 	 * class/struct type name (plus the {@code standard-object} / {@code structure-object}
 	 * unions) to the instance tags that name accepts. Pure quoted data, emitted through
 	 * {@link #chunkedTableForms}.
+	 * @param closRegistry the complete registry
+	 * @param streamNames the {@link #RUNTIME_TYPEP_STREAM_NAMES} the program spells
+	 * @return the table forms
 	 */
-	private static List<LispVal> typepTagTableForms(ClosRegistry closRegistry) {
+	private static List<LispVal> typepTagTableForms(ClosRegistry closRegistry, List<String> streamNames) {
 		java.util.Map<List<String>, java.util.LinkedHashSet<String>> namesByTags = new java.util.LinkedHashMap<>();
 		java.util.Set<String> seen = new java.util.HashSet<>();
 		for (ClosRegistry.ClassInfo info : closRegistry.classes().values()) {
@@ -45036,6 +45065,23 @@ public final class LispMacroExpander {
 		streamTags.add(LispLayout.SYNONYM_STREAM_TAG);
 		streamTags.addAll(closRegistry.descendantTags(GRAY_FUNDAMENTAL_STREAM_CLASS));
 		namesByTags.computeIfAbsent(streamTags, k -> new java.util.LinkedHashSet<>()).add("STREAM");
+		// The stream subtypes a tag decides, each the literal arm's one tag: the synonym
+		// layout's, and a composite stream's prelude class -- only when the program
+		// registers that class, since no value carries the tag of one it does not.
+		for (String streamName : streamNames) {
+			String tag;
+			if ("SYNONYM-STREAM".equals(streamName)) {
+				tag = LispLayout.SYNONYM_STREAM_TAG;
+			}
+			else if (RUNTIME_TYPEP_STREAM_KIND_NAMES.contains(streamName)
+					|| closRegistry.findClass("%" + streamName) == null) {
+				continue;
+			}
+			else {
+				tag = LispLayout.CLASS_TAG_PREFIX + "%" + streamName;
+			}
+			namesByTags.computeIfAbsent(List.of(tag), k -> new java.util.LinkedHashSet<>()).add(streamName);
+		}
 		List<LispVal> entries = new java.util.ArrayList<>();
 		for (java.util.Map.Entry<List<String>, java.util.LinkedHashSet<String>> entry : namesByTags.entrySet()) {
 			List<LispVal> entryParts = new java.util.ArrayList<>();
@@ -45086,16 +45132,22 @@ public final class LispMacroExpander {
 	 * count -- the per-class data lives in the table, so it does not grow with the number
 	 * of registered classes (the inline dispatch overflowed the JVM's 16-bit branch
 	 * offsets at 165 registered classes).
+	 * @param closRegistry the complete registry
+	 * @param resolvesAliases whether the designator goes through the alias resolver
+	 * @param streamNames the {@link #RUNTIME_TYPEP_STREAM_NAMES} the program spells
+	 * @return the defun form
 	 */
-	private static LispVal runtimeTypepDefun(ClosRegistry closRegistry, boolean resolvesAliases) {
+	private static LispVal runtimeTypepDefun(ClosRegistry closRegistry, boolean resolvesAliases,
+			List<String> streamNames) {
 		LispSymbol v = new LispSymbol("%tp_rv");
 		LispSymbol tn = new LispSymbol("%tp_rt");
 		LispSymbol tag = new LispSymbol("%tp_rtag");
 		LispSymbol entry = new LispSymbol("%tp_re");
-		// (dolist (e table nil) (if (member tn (car e)) (return (if (member tag (cdr
-		// e)) t nil)) nil))
+		// (dolist (e table <no-entry>) (if (member tn (car e)) (return (if (member tag
+		// (cdr e)) t nil)) nil))
 		LispVal tableScan = listToCons(List.of(new LispSymbol(LispNames.DOLIST),
-				listToCons(List.of(entry, new LispSymbol(LispNames.TYPEP_TAG_TABLE), LispNil.INSTANCE)),
+				listToCons(List.of(entry, new LispSymbol(LispNames.TYPEP_TAG_TABLE),
+						streamKindFallback(v, tn, streamNames))),
 				makeIf(mvCall(LispNames.MEMBER, tn, mvCall(LispNames.CAR, entry)),
 						listToCons(List.of(new LispSymbol(LispNames.RETURN),
 								makeIf(mvCall(LispNames.MEMBER, tag, mvCall(LispNames.CDR, entry)), LispTrue.INSTANCE,
@@ -45152,6 +45204,27 @@ public final class LispMacroExpander {
 		}
 		bodyParts.add(listToCons(condParts));
 		return listToCons(bodyParts);
+	}
+
+	/**
+	 * The answer of {@code %typep-runtime}'s instance branch for a name the tag table
+	 * does not hold: the {@code KIND}-slot test of {@code file-stream} or
+	 * {@code string-stream} (no tag tells those from any other open stream), else nil. It
+	 * is the scan's result form, so a name the table holds never reaches it.
+	 * @param value the value variable
+	 * @param name the designator variable
+	 * @param streamNames the {@link #RUNTIME_TYPEP_STREAM_NAMES} the program spells
+	 * @return the fallback form, nil when the program spells neither name
+	 */
+	private static LispVal streamKindFallback(LispSymbol value, LispSymbol name, List<String> streamNames) {
+		LispVal fallback = LispNil.INSTANCE;
+		for (String streamName : RUNTIME_TYPEP_STREAM_KIND_NAMES.reversed()) {
+			if (streamNames.contains(streamName)) {
+				fallback = makeIf(nameMatchTest(name, streamName),
+						makeTypeTest(value, new LispSymbol(streamName), EMPTY_CLOS_REGISTRY), fallback);
+			}
+		}
+		return fallback;
 	}
 
 	/**

@@ -14962,6 +14962,17 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void computedTypepOfAStreamTypeName() throws Exception {
+		// The wasm twin of
+		// LispEvaluatorTest#computedTypepOfAStreamTypeNameAnswersAsTheLiteralDoes,
+		// Preview 1 and the component.
+		for (boolean component : new boolean[] { false, true }) {
+			assertThat(compileAndRunFrontEndWithDir(am.ik.rontolisp.ComputedStreamTypepFixture.PROGRAM, component))
+				.isEqualTo(am.ik.rontolisp.ComputedStreamTypepFixture.EXPECTED);
+		}
+	}
+
+	@Test
 	void scaleFloatRefusesANonFloatOrNonIntegerArgument() throws Exception {
 		// The wasm twin of
 		// LispEvaluatorTest#scaleFloatRefusesANonFloatOrNonIntegerArgument,

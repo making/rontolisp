@@ -302,6 +302,17 @@ not a dispatch helper**: `(typep x 'stream)` lowers to `(streamp x)` in
 - **A COMPUTED type specifier needs BOTH halves of the runtime typep machinery**
   (`.kb/clos.md`): `STREAM` in `RUNTIME_TYPEP_BUILTINS` AND a row in `%typep-tag-table%` —
   `%typep-runtime` tests `%obj-p` FIRST, so an instance never reaches the built-in name arms.
+- **The stream SUBTYPE names (`file-stream` ... `concatenated-stream`) answer computed as they do
+  literally** (`RUNTIME_TYPEP_STREAM_NAMES`, kept out of `RUNTIME_TYPEP_BUILTINS`: a non-instance
+  arm would be dead code, and that list also seeds the `subtypep` universe). Interpreter: one arm
+  each, after the built-ins. Compile paths: synonym and the composites are tag-table rows (a
+  composite only when its prelude class is registered); `file-stream`/`string-stream` share the
+  `%STREAM` tag, so their `KIND` test is the table scan's RESULT form (`streamKindFallback`),
+  reached only by a name the table lacks. Both gated on the program SPELLING the name (the probe
+  `narrowedDeftypeAliases` uses); spelling none -> byte-identical. `get-output-stream-string`'s
+  expansion spells `STRING-STREAM`, so its programs carry that arm. Pin:
+  `ComputedStreamTypepFixture`. Still open there: `subtypep` has no stream lattice, and
+  `type-of`/`class-of` of a stream answer internal names.
 - **`ArgumentShapes.Shape.INSTANCE` had to gain `STREAM`**: the compile-path dead-branch pruner
   deletes a `typecase` clause no value of the key's shape can satisfy, so `STREAM` absent from
   that row DELETED cl+ssl's `(etypecase socket (integer ...) (stream ...))` arm.

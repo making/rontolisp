@@ -14064,6 +14064,14 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunComputedTypepOfAStreamTypeName() throws Exception {
+		// The JVM twin of
+		// LispEvaluatorTest#computedTypepOfAStreamTypeNameAnswersAsTheLiteralDoes.
+		assertThat(compileAndRun(fixtureProgram(am.ik.rontolisp.ComputedStreamTypepFixture.PROGRAM)))
+			.isEqualTo(am.ik.rontolisp.ComputedStreamTypepFixture.EXPECTED);
+	}
+
+	@Test
 	void compileAndRunScaleFloatRefusesANonFloatOrNonIntegerArgument() throws Exception {
 		// The JVM twin of
 		// LispEvaluatorTest#scaleFloatRefusesANonFloatOrNonIntegerArgument.
