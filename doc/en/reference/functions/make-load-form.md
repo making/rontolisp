@@ -6,7 +6,14 @@ The generic function the COMPILER consults when an object appears as a literal i
 
 An object gets into code that way when a macro splices a live object into its own expansion — the standard reason a library needs this. CFFI does it in every `defcfun` whose argument or return type is a `defcenum`, and declares a method so the object survives compilation.
 
-Like [`print-object`](print-object.md) there is no system method: the compile path routes only a type some method specializes on. A type no method covers is dumped as it always was, by writing out its slots, so a program that defines no `make-load-form` method compiles exactly as before. The two-value form is honored: a method may return a creation form and an init form, and the init form runs against the freshly created object.
+The compile path routes only a type some method specializes on. A type no method covers is dumped as it always was, by writing out its slots, so a program that defines no `make-load-form` method compiles exactly as before. The two-value form is honored: a method may return a creation form and an init form, and the init form runs against the freshly created object.
+
+A direct call, or `#'make-load-form` taken as a value, works with or without a method: the standard methods answer every other object, as in CL. An instance with no method of its own signals `don't know how to dump ...`, and an object that is not an instance signals no-applicable-method.
+
+```lisp
+(handler-case (make-load-form 1) (error () :no-method))
+; => :NO-METHOD
+```
 
 The creation form is evaluated **once per program run**, not once per use, so a method whose form is expensive (parsing a foreign type, compiling a scanner) costs that work one time.
 

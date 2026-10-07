@@ -5712,6 +5712,22 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void aStandardGenericWithOnlyItsStandardMethodsIsAValueThatSignalsNoApplicableMethod() throws Exception {
+		// Interpreter parity (the LispEvaluatorTest twin), through the CLI's front end.
+		for (String[] program : new String[][] {
+				{ am.ik.rontolisp.StandardGenericFunctionValueFixture.VALUES,
+						am.ik.rontolisp.StandardGenericFunctionValueFixture.VALUES_EXPECTED },
+				{ am.ik.rontolisp.StandardGenericFunctionValueFixture.NO_METHOD,
+						am.ik.rontolisp.StandardGenericFunctionValueFixture.NO_METHOD_EXPECTED },
+				{ am.ik.rontolisp.StandardGenericFunctionValueFixture.WITH_CLASS,
+						am.ik.rontolisp.StandardGenericFunctionValueFixture.WITH_CLASS_EXPECTED } }) {
+			assertThat(compileAndRun(am.ik.rontolisp.cli.CompileFrontendAccess.corpus(program[0],
+					am.ik.rontolisp.reader.Features.JVM, false, false)))
+				.isEqualTo(program[1]);
+		}
+	}
+
+	@Test
 	void aStandardFunctionTakenAsAValueAnswersAsItsCall() throws Exception {
 		// Interpreter parity (the LispEvaluatorTest twin), through the CLI's front end:
 		// a standard function lowered only in call position is a value through its

@@ -27,8 +27,8 @@ field on JVM, `GLOBAL_FENV` wasm global). `FreeVarAnalyzer` skips the operator p
 
 ## A native built-in's function value
 
-**Invariant: every `cl` function but `require`/`provide` and the four user-defined generics
-(`.todo/d94`) is a function value on every compiled target** (`StandardFunctionValueCompileTest`
+**Invariant: every `cl` function but `require`/`provide` is a function value on every compiled
+target** (`StandardFunctionValueCompileTest`
 compiles `#'name` of all of them in one program). The catalog (`BuiltinFunctionWrappers.WRAPPER_DEFS`)
 covers what the interpreter lowers in `evalCons`; the NATIVE built-ins it binds as Java
 `LispFunction`s and the compilers lower in call position only (`NativeCallShapes`) had none, and

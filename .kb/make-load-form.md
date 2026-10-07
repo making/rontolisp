@@ -17,9 +17,12 @@ at the end of it -- a form reaches `result` by several routes (kept `eval-when` 
 
 ## Default = the structural dump
 
-- `make-load-form` is a cl-owned generic with **no system method** (`LispNames.MAKE_LOAD_FORM`,
-  `PackageRegistry.CL_SYMBOLS`) -- the `print-object` pattern, so a `defmethod` in any package that
-  uses cl joins the one generic.
+- `make-load-form` is a cl-owned generic (`LispNames.MAKE_LOAD_FORM`, `PackageRegistry.CL_SYMBOLS`)
+  -- the `print-object` pattern, so a `defmethod` in any package that uses cl joins the one generic.
+  Its standard methods are ONE synthesized default primary (`synthesizeMakeLoadFormDefault`, made
+  with the first method or the first call / `#'make-load-form`): an instance signals SBCL's
+  `don't know how to dump ~S (default MAKE-LOAD-FORM method called).`, anything else
+  no-applicable-method. The substituter never reaches it (below).
 - `LoadFormSubstituter` acts only on an instance whose type has a method
   (`LispEvaluator.hasMakeLoadFormMethodFor`: CLASS/TYPE specializer matching the type's own name, its
   class precedence list, or its `:include` chain; **an unspecialized default method does NOT count**

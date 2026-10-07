@@ -158,9 +158,9 @@ first-class values -- internal encoding, not a real user definition (Lisp-2).
   and cannot recurse.
 - Every CL FUNCTION with an operator-position case needs a wrapper; without one the name is
   "undefined" on every backend. `BuiltinFunctionWrapperCatalogTest` walks
-  `PackageRegistry.clFunctionNames()` and fails on any name with no function value. One
-  exclusion: the four standard GENERICS with no built-in definition (`print-object`,
-  `initialize-instance`, `reinitialize-instance`, `shared-initialize`). Cross-backend pins:
+  `PackageRegistry.clFunctionNames()` and fails on any name with no function value, the
+  standard generics with no built-in definition included (their value is the synthesized
+  generic, `.kb/clos.md` "The instance-initialization protocol"). Cross-backend pins:
   `LoweredBuiltinValues` (one program, identical expectation in the three compiler tests),
   ci-spec `lowered-builtin-function-values`.
 - A wrapper reaching a GATED runtime must be reference-gated too (gates scan the SOURCE program

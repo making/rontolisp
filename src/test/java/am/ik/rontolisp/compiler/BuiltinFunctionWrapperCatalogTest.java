@@ -32,25 +32,18 @@ import static org.assertj.core.api.Assertions.assertThat;
 class BuiltinFunctionWrapperCatalogTest {
 
 	/**
-	 * The CL function names with no function value, deliberately. Each is a standard
-	 * GENERIC function with no built-in definition of its own ({@code make-load-form} is
-	 * the compile path's literal-object protocol, {@code .kb/make-load-form.md}): the
-	 * value appears when the program's own {@code defmethod} generates the dispatcher
-	 * defun, exactly as in CL, and there is nothing for a wrapper to call before that. A
-	 * wrapper here would be a lambda whose body resolves back to itself.
+	 * The standard generic functions the static subset models with no built-in
+	 * definition: each is a value through its synthesized standard methods before the
+	 * program defines a method, and stays one after.
 	 */
-	private static final Set<String> USER_DEFINED_GENERICS = Set.of(LispNames.PRINT_OBJECT,
-			LispNames.INITIALIZE_INSTANCE, LispNames.REINITIALIZE_INSTANCE, LispNames.SHARED_INITIALIZE,
-			LispNames.MAKE_LOAD_FORM);
+	private static final List<String> STANDARD_GENERICS = List.of(LispNames.PRINT_OBJECT, LispNames.INITIALIZE_INSTANCE,
+			LispNames.REINITIALIZE_INSTANCE, LispNames.SHARED_INITIALIZE, LispNames.MAKE_LOAD_FORM);
 
 	@Test
 	void everyClFunctionNameHasAFunctionValue() {
 		LispEvaluator evaluator = new LispEvaluator(new PrintStream(new ByteArrayOutputStream()));
 		List<String> undefined = new ArrayList<>();
 		for (String name : PackageRegistry.clFunctionNames()) {
-			if (USER_DEFINED_GENERICS.contains(name)) {
-				continue;
-			}
 			try {
 				evaluator.eval(LispReader.readFromString("(symbol-function '" + name + ")"));
 			}
@@ -62,10 +55,9 @@ class BuiltinFunctionWrapperCatalogTest {
 	}
 
 	@Test
-	void aUserDefinedGenericGetsItsValueFromItsOwnDefmethod() {
-		// The other half of the exclusion above: the four names are not permanently
-		// value-less, they are value-less until the program defines a method. If this
-		// ever fails the exclusion has become a real gap.
+	void aStandardGenericStaysAValueAfterTheProgramDefinesAMethod() {
+		// A program method joins the generic the standard methods made; it does not
+		// replace the value.
 		LispEvaluator evaluator = new LispEvaluator(new PrintStream(new ByteArrayOutputStream()));
 		for (var form : LispReader.readAllFromString("""
 				(defclass point () ((x :initarg :x :initform 0)))
@@ -77,7 +69,7 @@ class BuiltinFunctionWrapperCatalogTest {
 				""")) {
 			evaluator.eval(form);
 		}
-		for (String name : USER_DEFINED_GENERICS) {
+		for (String name : STANDARD_GENERICS) {
 			assertThat(evaluator.eval(LispReader.readFromString("(functionp (symbol-function '" + name + "))")).print())
 				.as(name)
 				.isEqualTo("T");

@@ -36,13 +36,9 @@ class StandardFunctionValueCompileTest {
 	/**
 	 * The names without a compiled value by design: the compile path has
 	 * {@code require}/{@code provide} only as literal top-level forms
-	 * ({@link #requireAndProvideAsValuesRefuseWithTheReasonTheirComputedCallsGet}), and
-	 * the standard generic functions with no built-in method get their value from the
-	 * program's own {@code defmethod}.
+	 * ({@link #requireAndProvideAsValuesRefuseWithTheReasonTheirComputedCallsGet}).
 	 */
-	private static final Set<String> NO_VALUE = Set.of(LispNames.REQUIRE, LispNames.PROVIDE,
-			LispNames.INITIALIZE_INSTANCE, LispNames.REINITIALIZE_INSTANCE, LispNames.SHARED_INITIALIZE,
-			LispNames.MAKE_LOAD_FORM);
+	private static final Set<String> NO_VALUE = Set.of(LispNames.REQUIRE, LispNames.PROVIDE);
 
 	@ParameterizedTest
 	@ValueSource(strings = { "jvm", "wasm", "component" })
