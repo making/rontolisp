@@ -20,6 +20,7 @@ import am.ik.rontolisp.HelperWrapperFixture;
 import am.ik.rontolisp.MethodedBuiltinFixture;
 import am.ik.rontolisp.BuiltinFunctionValueCountFixture;
 import am.ik.rontolisp.MethodedBuiltinTailFixture;
+import am.ik.rontolisp.OutputStreamStringKindFixture;
 import am.ik.rontolisp.PeekPushbackFixture;
 import am.ik.rontolisp.IgnoredArgumentFixture;
 import am.ik.rontolisp.SequenceBoundsFixture;
@@ -14944,6 +14945,19 @@ class WasmLispCompilerIntegrationTest {
 				.isEqualTo(StreamOperandErrorsFixture.EXPECTED);
 			assertThat(compileAndRunFrontEndWithDir(StreamOperandErrorsFixture.REPORT_PROGRAM, component))
 				.isEqualTo(StreamOperandErrorsFixture.REPORT_EXPECTED);
+		}
+	}
+
+	@Test
+	void getOutputStreamStringRefusesAnotherKindOfStream() throws Exception {
+		// The wasm twin of
+		// LispEvaluatorTest#getOutputStreamStringRefusesAnotherKindOfStream, Preview 1
+		// and the component.
+		for (boolean component : new boolean[] { false, true }) {
+			assertThat(compileAndRunFrontEndWithDir(OutputStreamStringKindFixture.PROGRAM, component))
+				.isEqualTo(OutputStreamStringKindFixture.EXPECTED);
+			assertThat(compileAndRunFrontEndWithDir(OutputStreamStringKindFixture.REPORT_PROGRAM, component))
+				.isEqualTo(OutputStreamStringKindFixture.REPORT_EXPECTED);
 		}
 	}
 

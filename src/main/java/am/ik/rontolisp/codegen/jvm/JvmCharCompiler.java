@@ -102,9 +102,20 @@ final class JvmCharCompiler {
 			ctx.body.astore(tokenSlot);
 		}
 		JvmExprCompiler.compileExpr(cons.toList().get(1), ctx, className);
-		JvmEmitHelper.compileUnspelledLiteral(OperandTypes.Kind.named(form.kind()).typeName(), ctx);
-		ctx.body.invokestatic(JvmEmitHelper.selfMethod(ctx, className, JvmOperandTypeRuntime.TE_RAW,
-				JvmOperandTypeRuntime.TE_RAW_DESC));
+		LispCons compoundType = form.compoundType();
+		if (compoundType != null) {
+			// A compound type is the report's own, printed and carried as it is: _teOf,
+			// whose report the rename below keeps verbatim.
+			emitTypeValue(compoundType, ctx);
+			ctx.body.invokestatic(JvmEmitHelper.selfMethod(ctx, className, JvmOperandTypeRuntime.TE_OF,
+					JvmOperandTypeRuntime.TE_OF_DESC));
+		}
+		else {
+			JvmEmitHelper.compileUnspelledLiteral(
+					OperandTypes.Kind.named(java.util.Objects.requireNonNull(form.kind())).typeName(), ctx);
+			ctx.body.invokestatic(JvmEmitHelper.selfMethod(ctx, className, JvmOperandTypeRuntime.TE_RAW,
+					JvmOperandTypeRuntime.TE_RAW_DESC));
+		}
 		if (tokenSlot >= 0) {
 			// nil: the raw report, thrown as it is; a name: renamed, then thrown.
 			ctx.body.aload(tokenSlot);
@@ -128,6 +139,32 @@ final class JvmCharCompiler {
 			emitOpTypeErr(ctx, className, numberTyped ? OperandTypes.Kind.NUMBER.name() : OperandTypes.FUNNEL_TYPE);
 		}
 		ctx.body.athrow();
+	}
+
+	// Pushes a compound type as the Lisp value it spells: a symbol its name (unspelled,
+	// as the kinds are), an integer a Long, a list a chain of Object[2] conses.
+	private static void emitTypeValue(LispVal type, JvmLispCompiler.Ctx ctx) {
+		if (type instanceof LispCons list) {
+			List<LispVal> elements = list.toList();
+			for (LispVal element : elements) {
+				ctx.body.iconst_2().anewarray(ctx.objectClass).dup().iconst_0();
+				emitTypeValue(element, ctx);
+				ctx.body.aastore().dup().iconst_1();
+			}
+			ctx.body.aconst_null();
+			for (int i = 0; i < elements.size(); i++) {
+				ctx.body.aastore();
+			}
+		}
+		else if (type instanceof LispSymbol symbol) {
+			JvmEmitHelper.compileUnspelledLiteral(symbol.name(), ctx);
+		}
+		else if (type instanceof LispInteger n) {
+			JvmEmitHelper.compileLong(n.value(), ctx);
+		}
+		else {
+			throw new IllegalArgumentException("not a type: " + type.print());
+		}
 	}
 
 	// With the raw report and the operator's name on the stack: the rename under the

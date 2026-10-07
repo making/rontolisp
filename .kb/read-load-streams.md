@@ -553,7 +553,8 @@ streams. Interpreter `StringWriter` / `BufferedReader(StringReader)`; JVM the sa
   spellings (`expandMakeStringOutputStream`/`expandGetOutputStreamString`; the interpreter registers
   both as real `LispFunction`s so `#'` and native-image mode work), and
   **`%string-stream-contents` CLEARS the stream as it answers** (CL's contract; the WASM BUFFER
-  stays).
+  stays). A stream of another kind is its type-error: `.kb/error-handling.md`, "A wrong-type
+  argument names its operator".
 - `make-string-input-stream` (`expandMakeStringInputStream`) exists because a library needed the
   stream to OUTLIVE the form that made it: yason's `parse` makes one, so `lack/request` answered
   `400 Bad Request` to every JSON body (every `ningle` application). `&optional start end` routes

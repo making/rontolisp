@@ -1523,6 +1523,7 @@ type T` with the type the operator requires, as a catchable `type-error` answeri
 | `(point-x 42)`, `(setf (point-x 42) 0)`, `(copy-point 42)` (a `defstruct`'s) | `POINT-X:` / `(SETF POINT-X):` / `COPY-POINT: ... POINT` -- generated code, not this table: [defstruct.md](defstruct.md) |
 | `(copy-list 5)` | `COPY-LIST: ... LIST` |
 | `(close 1)`, `(get-output-stream-string nil)` / `(make-string-input-stream 1)` | `CLOSE:` / `GET-OUTPUT-STREAM-STRING: ... STREAM` / `MAKE-STRING-INPUT-STREAM: ... STRING` |
+| `(get-output-stream-string (make-string-input-stream "a"))`, of `*error-output*` | `GET-OUTPUT-STREAM-STRING: ... (AND STRING-STREAM (SATISFIES OUTPUT-STREAM-P))` |
 
 - **`copy-list` of a non-list** (2026-09-26): used to signal a bare `type-error` whose
   `datum`/`expected-type` answered nothing on the interpreter (a raw
@@ -1548,10 +1549,30 @@ type T` with the type the operator requires, as a catchable `type-error` answeri
   `expandGetOutputStreamString` and `expandMakeStringInputStream` (every argument bound first, a
   literal string unchecked) -- each `(streamp v)` / `(stringp v)` then `%operand-type-error`.
   SBCL's `get-output-stream-string` expects its internal `STRING-OUTPUT-STREAM` type; nothing
-  standard names it, so `STREAM` it is. `(close t)` -- `*standard-output*` holds `t` -- answers `T`
+  standard names it, so a non-stream is `STREAM` (a stream of another kind: next bullet). `(close t)` -- `*standard-output*` holds `t` -- answers `T`
   on all four (it was a `simple-error` or a trap); SBCL closes its stdout. Pinned by
   `StreamOperandErrorsFixture` (ci-spec `load-and-stream-operators-signal-their-condition`).
-  Not covered: `get-output-stream-string` of a stream of another kind (`.todo/d98`).
+- **`get-output-stream-string` of a stream of another kind** (measured 2026-10-07, SBCL 2.2.9): a
+  string input stream, a standard stream, `t`, a synonym stream (over a string output stream too:
+  SBCL refuses it), a file, composite or Gray stream is `GET-OUTPUT-STREAM-STRING: The value X is
+  not of type (AND STRING-STREAM (SATISFIES OUTPUT-STREAM-P))`, the datum the stream as given --
+  SBCL's `type-error` with its internal `SB-IMPL::STRING-OUTPUT-STREAM` as the expected type; no
+  standard type names a string output stream. A non-stream keeps `STREAM`, checked second (the
+  fill-pointer split). Before: a `simple-error` `%STRING-STREAM-CONTENTS expects a string output
+  stream` on the interpreter (a composite or Gray stream there failed `STREAM`: the built-in's
+  stream test knew no Gray instance), an unnamed `type-error` or an NPE's `simple-error` on the JVM,
+  a cast-failure or out-of-bounds trap on wasm; a synonym over a string output stream answered its
+  target's text on all four. The test is the value's KIND (`:STRING-OUTPUT`, `makeStreamKindTest`),
+  so a closed string output stream passes it and keeps its old per-backend answer (not covered:
+  SBCL answers the text, `.todo/e06`); a computed `typep` against the type answers nil even for a
+  string output stream (`.todo/e05`). `%operand-type-error` takes a quoted COMPOUND type as well as a kind:
+  interpreter `OperandTypeException.notOfType(datum, type, op)`, JVM `_teOf` over the type built
+  at the site then `_opTypeErr`'s compound arm, wasm `_type_err_of` under the operator's row (the
+  type's symbols spelled at the site, as `digit-char-p`'s `(INTEGER 2 36)`). The expansion
+  (`expandGetOutputStreamString`) tests the kind first, then `streamp` to pick the type; the
+  interpreter's built-in makes the same two tests, `streamp` looked up at call time (the Gray
+  wrap). Pinned by `OutputStreamStringKindFixture` (ci-spec
+  `get-output-stream-string-refuses-another-kind-of-stream`).
 - **`scale-float`** (measured 2026-10-06, SBCL 2.2.9): refuses a non-`FLOAT` first argument (a complex,
   an integer, a ratio, a symbol, `nil`) and then a non-`INTEGER` second one, each a `type-error` over the
   argument as given. Before, nothing checked either: the interpreter's `asDouble` answered `6.0` for `3`

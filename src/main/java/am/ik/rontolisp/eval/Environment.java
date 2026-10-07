@@ -5876,17 +5876,27 @@ public final class Environment implements Scope {
 		};
 		env.defineFunction(LispNames.STRING_STREAM_CONTENTS_INTERNAL,
 				new LispFunction(LispNames.STRING_STREAM_CONTENTS_INTERNAL, streamContents));
-		// The public name refuses a non-stream as SBCL does; a stream of
-		// another kind keeps the internal's error.
+		// The public name takes a string output stream and nothing else, as SBCL: a
+		// stream of another kind -- a synonym stream included -- is its type-error
+		// expecting (AND STRING-STREAM (SATISFIES OUTPUT-STREAM-P)), a non-stream
+		// STREAM's (LispMacroExpander.expandGetOutputStreamString, the compile paths').
+		// streamp is looked up at call time: LispEvaluator wraps it to answer t for a
+		// Gray stream.
 		env.defineFunction(LispNames.GET_OUTPUT_STREAM_STRING,
 				new LispFunction(LispNames.GET_OUTPUT_STREAM_STRING, args -> {
 					requireArgCount(LispNames.GET_OUTPUT_STREAM_STRING, args, 1);
 					LispVal stream = args.get(0);
-					if (!(isStreamValue(stream) || stream instanceof LispTrue || isSynonymStream(stream))) {
-						throw OperandTypeException.of(stream, OperandTypes.Kind.STREAM,
+					if (stream instanceof LispInstance inst && inst.hasTag(LispLayout.STREAM_TAG)
+							&& inst.slot(1) instanceof LispSymbol kind
+							&& LispLayout.Kinds.STRING_OUTPUT.equals(kind.name())) {
+						return streamContents.apply(args);
+					}
+					if (env.lookupFunction(LispNames.STREAMP) instanceof LispFunction streamp
+							&& !(streamp.body().apply(List.of(stream)) instanceof LispNil)) {
+						throw OperandTypeException.notOfType(stream, LispMacroExpander.stringOutputStreamType(),
 								LispNames.GET_OUTPUT_STREAM_STRING);
 					}
-					return streamContents.apply(args);
+					throw OperandTypeException.of(stream, OperandTypes.Kind.STREAM, LispNames.GET_OUTPUT_STREAM_STRING);
 				}));
 		env.defineFunction(LispNames.FRESH_LINE, new LispFunction(LispNames.FRESH_LINE, args -> {
 			requireArgCountBetween(LispNames.FRESH_LINE, args, 0, 1);
@@ -8781,10 +8791,14 @@ public final class Environment implements Scope {
 		}));
 		// (%operand-type-error x 'op 'kind): OP's type-error over x naming KIND -- the
 		// signal a lowering places where its own type dispatch has no arm left; a nil
-		// op reports unnamed.
+		// op reports unnamed. A compound type, '(and ...), is reported as it is.
 		env.defineFunction(LispNames.OPERAND_TYPE_ERROR_INTERNAL,
 				new LispFunction(LispNames.OPERAND_TYPE_ERROR_INTERNAL, args -> {
 					requireArgCount(LispNames.OPERAND_TYPE_ERROR_INTERNAL, args, 3);
+					if (args.get(2) instanceof LispCons compound) {
+						throw OperandTypeException.notOfType(args.get(0), compound,
+								args.get(1) instanceof LispSymbol op ? op.name() : null);
+					}
 					OperandTypes.Kind kind = OperandTypes.Kind.named(((LispSymbol) args.get(2)).name());
 					String reported = args.get(1) instanceof LispSymbol op ? OperandTypes.reportedOperator(op.name())
 							: null;

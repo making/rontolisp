@@ -1754,6 +1754,45 @@ cases:
       (:TYPE-ERROR :TYPE-ERROR :TYPE-ERROR ("bc"))
       ((T) (T) (:TYPE-ERROR 5 STREAM) (T))
       ((NIL) (NIL) (:TYPE-ERROR NIL STREAM) (NIL))
+  # get-output-stream-string of a stream that is no string output stream -- a string input stream, the
+  # standard error, a synonym stream, a file, two-way, broadcast or Gray stream -- is a type-error over
+  # the stream as given expecting (AND STRING-STREAM (SATISFIES OUTPUT-STREAM-P)), in call position and
+  # first class; the streams stay usable. SBCL's answers but for the expected type (SBCL's internal
+  # STRING-OUTPUT-STREAM) (OutputStreamStringKindFixture).
+  - name: get-output-stream-string-refuses-another-kind-of-stream
+    source: |
+      (defclass goss-gray-out (rontolisp:fundamental-character-output-stream) ())
+      (defvar *goss-out* (make-string-output-stream))
+      (defvar *goss-in* (make-string-input-stream "abc"))
+      (defvar *goss-type* (list 'and 'string-stream (list 'satisfies 'output-stream-p)))
+      (defun goss-check (stream thunk)
+        (handler-case (multiple-value-list (funcall thunk))
+          (type-error (c)
+            (list :type-error (eq (type-error-datum c) stream)
+                  (equal (type-error-expected-type c) *goss-type*)))
+          (error () :other-error)))
+      (defmacro goss-row (&rest streams)
+        `(print (list ,@(mapcar (lambda (s)
+                                  `(let ((goss-s ,s))
+                                     (goss-check goss-s (lambda () (get-output-stream-string goss-s)))))
+                                streams))))
+      (goss-row *goss-in* *error-output* (make-synonym-stream '*error-output*) (make-synonym-stream '*goss-out*))
+      (with-open-file (f "goss-kind.txt" :direction :output :if-exists :supersede)
+        (goss-row f (make-two-way-stream *goss-in* *goss-out*) (make-broadcast-stream) (make-instance 'goss-gray-out)))
+      (ignore-errors (delete-file "goss-kind.txt"))
+      (print (list (goss-check *goss-in* (lambda () (funcall #'get-output-stream-string *goss-in*)))
+                   (goss-check *error-output* (lambda () (apply 'get-output-stream-string (list *error-output*))))))
+      (write-string "kept" *goss-out*)
+      (print (list (handler-case (get-output-stream-string t) (type-error (c) (type-error-datum c)))
+                   (get-output-stream-string *goss-out*)
+                   (read-char *goss-in*)))
+      (print (handler-case (get-output-stream-string t) (type-error (c) (princ-to-string c))))
+    expected: |
+      ((:TYPE-ERROR T T) (:TYPE-ERROR T T) (:TYPE-ERROR T T) (:TYPE-ERROR T T))
+      ((:TYPE-ERROR T T) (:TYPE-ERROR T T) (:TYPE-ERROR T T) (:TYPE-ERROR T T))
+      ((:TYPE-ERROR T T) (:TYPE-ERROR T T))
+      (T "kept" #\a)
+      "GET-OUTPUT-STREAM-STRING: The value T is not of type (AND STRING-STREAM (SATISFIES OUTPUT-STREAM-P))"
   - name: parse-integer-signals-a-parse-error
     source: |
       (defvar *pis-1* (read-from-string "1"))

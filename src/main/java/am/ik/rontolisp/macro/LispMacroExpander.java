@@ -11296,7 +11296,20 @@ public final class LispMacroExpander {
 	 * Expands {@code (get-output-stream-string stream)} into the internal
 	 * {@code (%string-stream-contents stream)}, which answers what the string output
 	 * stream has accumulated AND clears it -- CL's contract, so a second call sees only
-	 * what was written after the first.
+	 * what was written after the first. Anything but a string output stream is the
+	 * operator's type-error, as in SBCL: a stream of another kind -- a synonym stream
+	 * included, as SBCL refuses one -- expecting {@link #stringOutputStreamType}, a
+	 * non-stream {@code STREAM}.
+	 *
+	 * <pre>
+	 * (let ((__goss_stream x))
+	 *   (if &lt;x is a :string-output stream value&gt; nil
+	 *       (if (streamp __goss_stream)
+	 *           (%operand-type-error __goss_stream 'get-output-stream-string
+	 *                                '(and string-stream (satisfies output-stream-p)))
+	 *           (%operand-type-error __goss_stream 'get-output-stream-string 'stream)))
+	 *   (%string-stream-contents __goss_stream))
+	 * </pre>
 	 * @param cons the get-output-stream-string expression
 	 * @return the expanded expression
 	 */
@@ -11307,9 +11320,16 @@ public final class LispMacroExpander {
 					LispNames.GET_OUTPUT_STREAM_STRING + " expects 1 argument, got " + (parts.size() - 1));
 		}
 		LispSymbol stream = new LispSymbol(GOSS_STREAM_VAR);
+		LispVal operator = quoteOf(LispNames.GET_OUTPUT_STREAM_STRING);
+		LispVal refusal = makeIf(callOf(LispNames.STREAMP, stream),
+				listToCons(List.of(new LispSymbol(LispNames.OPERAND_TYPE_ERROR_INTERNAL), stream, operator,
+						listToCons(List.of(new LispSymbol(LispNames.QUOTE), stringOutputStreamType())))),
+				listToCons(List.of(new LispSymbol(LispNames.OPERAND_TYPE_ERROR_INTERNAL), stream, operator,
+						quoteOf("STREAM"))));
+		LispVal check = makeIf(makeStreamKindTest(stream, List.of(LispLayout.Kinds.STRING_OUTPUT)), LispNil.INSTANCE,
+				refusal);
 		return makeLet(GOSS_STREAM_VAR, parts.get(1),
-				mvCall(LispNames.PROGN, streamTypeCheck(stream, LispNames.GET_OUTPUT_STREAM_STRING),
-						callOf(LispNames.STRING_STREAM_CONTENTS_INTERNAL, stream)));
+				mvCall(LispNames.PROGN, check, callOf(LispNames.STRING_STREAM_CONTENTS_INTERNAL, stream)));
 	}
 
 	/**
@@ -11318,18 +11338,21 @@ public final class LispMacroExpander {
 	private static final String GOSS_STREAM_VAR = "__goss_stream";
 
 	/**
-	 * {@code (if (streamp v) nil (%operand-type-error v 'operator 'stream))}: the check a
-	 * stream operator that takes no designator makes of its argument -- a non-stream is
-	 * the operator's {@code STREAM} type-error, as in SBCL. {@code streamp} answers t for
-	 * the {@code t} designator, an open, synonym or Gray stream.
-	 * @param v the bound argument
-	 * @param operator the operator the report names
-	 * @return the checking form, answering nil for a stream
+	 * The type {@code get-output-stream-string} requires of a stream:
+	 * {@code (AND STRING-STREAM (SATISFIES OUTPUT-STREAM-P))}, the string output streams.
+	 * No standard type names them (SBCL's check names its internal
+	 * {@code STRING-OUTPUT-STREAM} class), so the {@code type-error}'s expected type is
+	 * this compound one, the value every backend's report prints and carries.
+	 * @return the type, a fresh list
 	 */
-	private static LispVal streamTypeCheck(LispSymbol v, String operator) {
-		return makeIf(callOf(LispNames.STREAMP, v), LispNil.INSTANCE, listToCons(List
-			.of(new LispSymbol(LispNames.OPERAND_TYPE_ERROR_INTERNAL), v, quoteOf(operator), quoteOf("STREAM"))));
+	public static LispVal stringOutputStreamType() {
+		return listToCons(List.of(new LispSymbol(LispNames.AND), new LispSymbol(STRING_STREAM_TYPE),
+				listToCons(List.of(new LispSymbol(SATISFIES_TYPE), new LispSymbol(LispNames.OUTPUT_STREAM_P)))));
 	}
+
+	private static final String STRING_STREAM_TYPE = "STRING-STREAM";
+
+	private static final String SATISFIES_TYPE = "SATISFIES";
 
 	/** Fixed temporaries of the {@code peek-char} skip-loop expansion. */
 	private static final String PEEK_TYPE_VAR = "__pc_type";
@@ -18083,14 +18106,18 @@ public final class LispMacroExpander {
 	 * What a {@code (%operand-type-error x op 'kind)} form names
 	 * ({@link #sequenceTypeErrorOf}): a literal operator -- quoted, or nil for an unnamed
 	 * report -- or, in {@link #checkSequenceRuntimeWrapper()}'s body, an operator token
-	 * computed at run time.
+	 * computed at run time. The type is a quoted kind's type name or a quoted COMPOUND
+	 * type ({@link #stringOutputStreamType}), which the report prints and the
+	 * {@code type-error} carries as it is.
 	 *
 	 * @param operator the literal operator's symbol name, or null (unnamed, or a computed
 	 * one)
 	 * @param operatorForm the form computing the operator token, or null for a literal
-	 * @param kind the kind's type name
+	 * @param kind the kind's type name, or null for a compound type
+	 * @param compoundType the compound type, or null for a kind
 	 */
-	public record OperandTypeErrorForm(@Nullable String operator, @Nullable LispVal operatorForm, String kind) {
+	public record OperandTypeErrorForm(@Nullable String operator, @Nullable LispVal operatorForm, @Nullable String kind,
+			@Nullable LispCons compoundType) {
 
 		/**
 		 * Reads the form.
@@ -18099,21 +18126,24 @@ public final class LispMacroExpander {
 		 */
 		public static OperandTypeErrorForm of(LispCons cons) {
 			List<LispVal> parts = cons.toList();
-			if (parts.size() == 4 && parts.get(3) instanceof LispCons kindQuote
-					&& kindQuote.cdr() instanceof LispCons kindBody && kindBody.car() instanceof LispSymbol kind) {
+			if (parts.size() == 4 && parts.get(3) instanceof LispCons typeQuote
+					&& typeQuote.cdr() instanceof LispCons typeBody
+					&& (typeBody.car() instanceof LispSymbol || typeBody.car() instanceof LispCons)) {
+				String kind = typeBody.car() instanceof LispSymbol symbol ? symbol.name() : null;
+				LispCons compound = typeBody.car() instanceof LispCons type ? type : null;
 				LispVal opPart = parts.get(2);
 				if (opPart instanceof LispNil) {
-					return new OperandTypeErrorForm(null, null, kind.name());
+					return new OperandTypeErrorForm(null, null, kind, compound);
 				}
 				if (opPart instanceof LispCons opQuote && opQuote.car() instanceof LispSymbol q
 						&& LispNames.QUOTE.equals(q.name()) && opQuote.cdr() instanceof LispCons opBody
 						&& opBody.car() instanceof LispSymbol sym) {
-					return new OperandTypeErrorForm(sym.name(), null, kind.name());
+					return new OperandTypeErrorForm(sym.name(), null, kind, compound);
 				}
-				return new OperandTypeErrorForm(null, opPart, kind.name());
+				return new OperandTypeErrorForm(null, opPart, kind, compound);
 			}
 			throw new IllegalArgumentException(LispNames.OPERAND_TYPE_ERROR_INTERNAL
-					+ " expects a value, an operator and a quoted kind: " + cons.print());
+					+ " expects a value, an operator and a quoted type: " + cons.print());
 		}
 
 	}

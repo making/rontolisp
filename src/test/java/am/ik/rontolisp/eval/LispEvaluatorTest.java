@@ -16,6 +16,7 @@ import am.ik.rontolisp.HelperWrapperFixture;
 import am.ik.rontolisp.MethodedBuiltinFixture;
 import am.ik.rontolisp.BuiltinFunctionValueCountFixture;
 import am.ik.rontolisp.MethodedBuiltinTailFixture;
+import am.ik.rontolisp.OutputStreamStringKindFixture;
 import am.ik.rontolisp.PeekPushbackFixture;
 import am.ik.rontolisp.IgnoredArgumentFixture;
 import am.ik.rontolisp.SequenceBoundsFixture;
@@ -10764,6 +10765,17 @@ class LispEvaluatorTest {
 		assertThat(evalPrinted(StreamOperandErrorsFixture.PROGRAM)).isEqualTo(StreamOperandErrorsFixture.EXPECTED);
 		assertThat(evalPrinted(StreamOperandErrorsFixture.REPORT_PROGRAM))
 			.isEqualTo(StreamOperandErrorsFixture.REPORT_EXPECTED);
+	}
+
+	@Test
+	void getOutputStreamStringRefusesAnotherKindOfStream() {
+		// A stream that is no string output stream is the operator's type-error over
+		// the stream as given, expecting (AND STRING-STREAM (SATISFIES
+		// OUTPUT-STREAM-P)). Pinned on all four backends.
+		assertThat(evalPrinted(OutputStreamStringKindFixture.PROGRAM))
+			.isEqualTo(OutputStreamStringKindFixture.EXPECTED);
+		assertThat(evalPrinted(OutputStreamStringKindFixture.REPORT_PROGRAM))
+			.isEqualTo(OutputStreamStringKindFixture.REPORT_EXPECTED);
 	}
 
 	@Test

@@ -5,6 +5,7 @@ import am.ik.rontolisp.HelperWrapperFixture;
 import am.ik.rontolisp.MethodedBuiltinFixture;
 import am.ik.rontolisp.BuiltinFunctionValueCountFixture;
 import am.ik.rontolisp.MethodedBuiltinTailFixture;
+import am.ik.rontolisp.OutputStreamStringKindFixture;
 import am.ik.rontolisp.PeekPushbackFixture;
 import am.ik.rontolisp.IgnoredArgumentFixture;
 import am.ik.rontolisp.SequenceBoundsFixture;
@@ -14049,6 +14050,17 @@ class JvmLispCompilerTest {
 			.isEqualTo(StreamOperandErrorsFixture.EXPECTED);
 		assertThat(compileAndRunExpanded(StreamOperandErrorsFixture.REPORT_PROGRAM))
 			.isEqualTo(StreamOperandErrorsFixture.REPORT_EXPECTED);
+	}
+
+	@Test
+	void compileAndRunGetOutputStreamStringRefusesAnotherKindOfStream() throws Exception {
+		// The JVM twin of
+		// LispEvaluatorTest#getOutputStreamStringRefusesAnotherKindOfStream, through
+		// the whole front end (the Gray class).
+		assertThat(compileAndRun(fixtureProgram(OutputStreamStringKindFixture.PROGRAM)))
+			.isEqualTo(OutputStreamStringKindFixture.EXPECTED);
+		assertThat(compileAndRun(fixtureProgram(OutputStreamStringKindFixture.REPORT_PROGRAM)))
+			.isEqualTo(OutputStreamStringKindFixture.REPORT_EXPECTED);
 	}
 
 	@Test
