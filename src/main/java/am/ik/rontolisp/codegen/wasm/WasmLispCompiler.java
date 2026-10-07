@@ -9412,15 +9412,17 @@ public final class WasmLispCompiler implements LispCompiler {
 	/**
 	 * True when {@code val}'s VALUE is proven to be a double, unlike
 	 * {@link #containsDouble}, which only asks whether a double literal occurs anywhere
-	 * in the subtree. That guess is sound for the force-coercing arithmetic itself (every
-	 * sibling compiler widens through {@code _as_f64}), but it is not sound as a basis
-	 * for choosing a comparison's path: a float beside an exact number compares exact
-	 * values (the float's exact binary value, as {@code rational} answers it), so
-	 * coercing the exact side through f64 rounds a near tie to equality --
-	 * {@code (= 0.6666666666666666 2/3)} must be NIL, not T. The comparison and min/max
-	 * call sites therefore take the unboxed f64 path only when BOTH operands prove double
-	 * here (the JVM backend's {@code isDefinitelyDouble} distinction,
-	 * {@code .kb/jvm-double-arithmetic.md}); anything else goes through
+	 * in the subtree. That guess only picks the sites worth a look: converting an operand
+	 * the guess did not prove turns an exact value into a float, so {@code + - * /} fold
+	 * exactly ahead of the first operand proven here, and {@code (- x)}, {@code (/ x)},
+	 * {@code abs} and {@code random} take their {@code f64} path only for an operand
+	 * proven here. Nor is it a basis for choosing a comparison's path: a float beside an
+	 * exact number compares exact values (the float's exact binary value, as
+	 * {@code rational} answers it), so coercing the exact side through f64 rounds a near
+	 * tie to equality -- {@code (= 0.6666666666666666 2/3)} must be NIL, not T. The
+	 * comparison and min/max call sites therefore take the unboxed f64 path only when
+	 * BOTH operands prove double here (the JVM backend's {@code isDefinitelyDouble}
+	 * distinction, {@code .kb/jvm-double-arithmetic.md}); anything else goes through
 	 * {@code _rat_cmp_bits}, whose float-vs-exact arm is exact. Recursion is bounded to
 	 * {@link #CONTAGIOUS_ARITHMETIC_FORMS} -- true contagion, not a guess -- and never
 	 * crosses into an arbitrary call (whose return type this pass cannot see) or into

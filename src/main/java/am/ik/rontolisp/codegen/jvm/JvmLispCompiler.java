@@ -5851,18 +5851,20 @@ public final class JvmLispCompiler implements LispCompiler {
 	/**
 	 * True when {@code val}'s VALUE is PROVEN to be a double, unlike
 	 * {@link #containsDouble}, which only asks whether a double literal occurs ANYWHERE
-	 * in the subtree. That guess is sound for the force-coercing operators themselves
-	 * ({@code compileUnboxedOperand} widens any Number it is handed, so a wrong guess
-	 * about an unrelated nested form still lands on the right answer), but it is NOT
-	 * sound as a basis for choosing min/max's result type: their result is exactly one of
-	 * the two operands, so treating the wrong one as a double changes its TYPE, not just
-	 * its box -- {@code (min 1 2.0)} would answer the double {@code 1.0} instead of the
-	 * rational {@code 1}. Recursion here is bounded to
-	 * {@link #CONTAGIOUS_ARITHMETIC_FORMS} -- true contagion, not a guess -- and never
-	 * crosses into an arbitrary function call (whose return type this pass cannot see) or
-	 * into {@code min}/{@code max} themselves (whose own result is exactly this same
-	 * ambiguity). A syntactically visible complex anywhere in the tree disqualifies it
-	 * outright, as in the WASM twin: the tree answers a complex, not a double.
+	 * in the subtree. That guess only picks the sites worth a look: converting an operand
+	 * the guess did not prove turns an exact value into a float, so
+	 * {@code + - * / mod rem} fold exactly ahead of the first operand proven here, and a
+	 * one-operand site ({@code (- x)}, {@code (/ x)}, {@code abs}, {@code signum},
+	 * {@code expt}, {@code random}) unboxes only an operand proven here. Nor is it a
+	 * basis for choosing min/max's result type: their result is exactly one of the two
+	 * operands, so treating the wrong one as a double changes its TYPE, not just its box
+	 * -- {@code (min 1 2.0)} would answer the double {@code 1.0} instead of the rational
+	 * {@code 1}. Recursion here is bounded to {@link #CONTAGIOUS_ARITHMETIC_FORMS} --
+	 * true contagion, not a guess -- and never crosses into an arbitrary function call
+	 * (whose return type this pass cannot see) or into {@code min}/{@code max} themselves
+	 * (whose own result is exactly this same ambiguity). A syntactically visible complex
+	 * anywhere in the tree disqualifies it outright, as in the WASM twin: the tree
+	 * answers a complex, not a double.
 	 * @param val the expression tree
 	 * @param ctx the compiler context (declared/raw double locals)
 	 * @return true only when val is guaranteed to evaluate to a double

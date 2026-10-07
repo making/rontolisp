@@ -20544,6 +20544,18 @@ class LispEvaluatorTest {
 			.isEqualTo(am.ik.rontolisp.ExactPrefixFloatFoldFixture.COMPLEX_EXPECTED);
 	}
 
+	// A one-operand float site whose float literal sits in a branch the operand need not
+	// take answers exactly for an exact operand (the interpreter already did). The twins
+	// are JvmLispCompilerTest#compileAndRunOneOperandFloatSite and
+	// WasmLispCompilerIntegrationTest#oneOperandFloatSite.
+	@Test
+	void oneOperandFloatSite() {
+		assertThat(printedLines(am.ik.rontolisp.OneOperandFloatSiteFixture.SOURCE))
+			.isEqualTo(am.ik.rontolisp.OneOperandFloatSiteFixture.EXPECTED);
+		assertThat(printedLines(am.ik.rontolisp.OneOperandFloatSiteFixture.COMPLEX_SOURCE))
+			.isEqualTo(am.ik.rontolisp.OneOperandFloatSiteFixture.COMPLEX_EXPECTED);
+	}
+
 	// A sequence operator, an array accessor and a hash-table accessor handed a value
 	// that is none of those: a type-error naming the operator, the value and SEQUENCE /
 	// ARRAY / HASH-TABLE (several answered silently or signalled a simple-error). The

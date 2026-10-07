@@ -149,7 +149,7 @@ deliberate boundaries the audit must not undo: user-facing operator catalogues l
 
 - [jvm-export.md](jvm-export.md) -- `rontolisp:jvm-export`, `--no-main`, `-o out.jar`, the `-o` path-to-class-name rule, the Maven plugin
 - [jvm-int-fusion.md](jvm-int-fusion.md) -- integer expression-tree fusion into unboxed arithmetic; the checks between leaves that keep the interpreter's order, and the probe a failed one calls
-- [jvm-double-arithmetic.md](jvm-double-arithmetic.md) -- `hasDoubleLiteral` routing and unboxed IEEE operations; the exact prefix a float site folds before its raw fold (`FloatFold`, the `_addd` / `_rat_add_f64` steps), on every backend
+- [jvm-double-arithmetic.md](jvm-double-arithmetic.md) -- `hasDoubleLiteral` routing and unboxed IEEE operations; the exact prefix a float site folds before its raw fold (`FloatFold`, the `_addd` / `_rat_add_f64` steps), on every backend; one-operand sites (`(- x)`, `(/ x)`, `abs`, `signum`, `expt`, `random`) unboxed only on a proven float
 - [jvm-complex.md](jvm-complex.md) -- the `RontoComplex` holder, the gated `_c*` group, the `hasComplexOperand` steering, and a complex through a variable or beside a float literal found at run time
 - [jvm-typed-loops.md](jvm-typed-loops.md) -- typed numeric loops over packed float arrays
 - [jvm-bignum-literal-pool.md](jvm-bignum-literal-pool.md) -- one `BigInteger` instance per distinct literal in a `_bi$N` pool

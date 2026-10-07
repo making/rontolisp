@@ -31,10 +31,13 @@ public final class FloatFold {
 	 * The number of leading operands a float site folds through the generic helpers
 	 * before its raw fold: {@code 0} when one of the first two operands is proven a float
 	 * (the raw fold then runs from the first operand), else the index of the first
-	 * operand proven a float, or every operand when none is.
+	 * operand proven a float, or every operand when none is -- the lone operand of
+	 * {@code (- x)} or {@code (/ x)} included, whose negation or reciprocal is then the
+	 * generic helpers' too.
 	 * @param operands the operand forms, in source order
 	 * @param provenFloat whether the backend proves an operand's value a float
-	 * @return the length of the exact prefix, {@code 0} or at least {@code 2}
+	 * @return the length of the exact prefix: {@code 0}, at least {@code 2}, or the
+	 * operand count when no operand is proven a float
 	 */
 	public static int exactPrefix(List<LispVal> operands, Predicate<LispVal> provenFloat) {
 		int count = operands.size();
@@ -43,7 +46,7 @@ public final class FloatFold {
 				return i <= 1 ? 0 : i;
 			}
 		}
-		return count < 2 ? 0 : count;
+		return count;
 	}
 
 	/**

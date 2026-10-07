@@ -2512,8 +2512,9 @@ final class JvmNumericRuntimeBuilder {
 	// _pow(Object base, Object e): exact rational power for an integer exponent --
 	// (a/b)^e = a^e/b^e for e >= 0 and b^-e/a^-e for e < 0 (so an integer base with a
 	// negative exponent yields a ratio) -- and Math.pow over the float contagion for
-	// anything else. The compile-time double check (hasDoubleLiteral) only sees literals,
-	// so a double or ratio arriving through a variable or a call is handled here rather
+	// anything else. The compile-time double check (isDefinitelyDouble) only sees a
+	// proven float, so a double or ratio arriving through a variable or a call is handled
+	// here rather
 	// than cast: a Double base with an integer exponent short-circuits to Math.pow, and a
 	// non-Long exponent (a Double, a ratio, a huge BigInteger) takes Math.pow(_dbl(base),
 	// _dbl(e)) -- the interpreter's answer for (expt 4 1/2) = 2.0 and (expt 2 0.5). A
