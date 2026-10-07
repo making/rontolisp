@@ -932,7 +932,7 @@ final class WasmArrayCompiler {
 		List<LispVal> args = cons.toList();
 		// The array expression is evaluated exactly once (side effects run once, not
 		// once per branch below): pushed here, then run through emitArefCheckRank, which
-		// traps unless the array's actual rank matches subscriptCount -- the ORIGINAL
+		// fails unless the array's actual rank matches subscriptCount -- the ORIGINAL
 		// number of subscripts at this call site (0 for a bare (aref a), which reads a
 		// rank-0 array's single element), computed before any arity-specific dispatch
 		// below (todo 479; the JVM backend had the same hole --
@@ -998,12 +998,11 @@ final class WasmArrayCompiler {
 	}
 
 	// Calls the shared _arr_check_rank(arr, given) -> arr (FUNC_ARR_CHECK_RANK,
-	// WasmArrayRuntimeBuilder#buildArrCheckRankBody): traps (UNREACHABLE) when the array
-	// in arrSlot's actual rank doesn't match `given`, the subscript count the aref/%aset
-	// call site baked in at compile time -- the same invariant
-	// LispArray/LispFloatArray#flatIndex enforce (with a message) in the interpreter.
-	// The WASM backend's internal array-compiler checks are bare traps with no message
-	// (see the displaced-to bounds check in compileMakeDisplaced), so this one is too.
+	// WasmArrayRuntimeBuilder#buildArrCheckRankBody): fails when the array in arrSlot's
+	// actual rank doesn't match `given`, the subscript count the aref/%aset call site
+	// baked in at compile time -- the same invariant LispArray/LispFloatArray#flatIndex
+	// enforce in the interpreter. In an EH-mode module whose operator table names aref
+	// it signals their "aref: expected N subscripts, got M"; elsewhere it traps.
 	// The returned reference is dropped -- arrSlot already holds it, every arm below
 	// reads it from there -- so this is a call, not a per-site copy of the four-way
 	// representation dispatch (~90 bytes; see

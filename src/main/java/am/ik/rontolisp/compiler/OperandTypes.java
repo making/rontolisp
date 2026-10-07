@@ -181,6 +181,17 @@ public final class OperandTypes {
 	public static final String VECTOR_POP_EMPTY = "VECTOR-POP: there is nothing left to pop";
 
 	/**
+	 * The text in front of the rank in what an {@code aref} or {@code (setf aref)} whose
+	 * subscript count is not its array's rank signals -- {@code aref: expected 2
+	 * subscripts, got 1}, a {@code simple-error} on every compiled backend, under either
+	 * operator.
+	 */
+	public static final String RANK_MISMATCH_PREFIX = "aref: expected ";
+
+	/** {@link #RANK_MISMATCH_PREFIX}'s text between the rank and the subscript count. */
+	public static final String RANK_MISMATCH_INFIX = " subscripts, got ";
+
+	/**
 	 * The symbol name that opens a fill pointer's range type, {@link #fillPointerType}.
 	 */
 	public static final String INTEGER_TYPE = "INTEGER";

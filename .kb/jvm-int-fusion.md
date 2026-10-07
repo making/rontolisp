@@ -116,10 +116,18 @@ computed divisor.
   `Ctx.usesIntArray`) or the general array's length-6 header over a flat `long[]` (elements from
   slot 0, `.kb/adjustable-arrays.md`). Discriminator: `instanceof ArrayList`, `size() != 0`,
   `get(0) instanceof Object[]`, `length == 6` -- **4 is a character vector, 5 a displacement, 3 the
-  boxed general array**. The nil sentinel (`Long.MIN_VALUE`), an out-of-range index (a long one past the int range
-  too, which no truncation may turn into a read) and every
-  non-packed shape bail into the same `_ivAref1`/`_fvAref1`/`_arrayAref1` the ordinary emission
-  would use. **The INDEX is an operand of the tree** (`arefLeaf`): its leaves register after
+  boxed general array** -- and dims (header slot 0) of length 1: the packed shape holds every
+  rank. The nil sentinel (`Long.MIN_VALUE`), an out-of-range index (a long one past the int range
+  too, which no truncation may turn into a read), another rank and every
+  non-packed shape bail into the fallback, which is the ordinary emission's rank-1 aref over the
+  same arguments in the interpreter's order: the index computes, `_ckIdx` (`INTEGER`), the
+  host-array guard and `_*CheckRank` (`JvmArrayCompiler.emitArefArrayCheck`), then
+  `_ivAref1`/`_fvAref1`/`_arrayAref1`. Until 2026-10-07 it called the read helper alone, which
+  read a rank-2 array's flat storage as rank 1 and reported a non-integer subscript as out of
+  range (`(INTEGER 0 (n))`); the fast path read a rank-2 packed array raw. Why this shape: the
+  checks run only after a bail, and the rank guard is one `arraylength` on the header the leaf
+  already loaded. Rejected: a rank-1-only header tag, which would move every consumer of the tag
+  ([adjustable-arrays.md](adjustable-arrays.md)) for one test. **The INDEX is an operand of the tree** (`arefLeaf`): its leaves register after
   the array's and its operations apply before the read, in the interpreter's order, so
   `(aref v (+ i 1))` puts no leaf (and no check) between the reads in front of it. The
   prologue computes an operation index raw (`emitArefRead`) inside the checked region, which
@@ -198,6 +206,8 @@ limit (`.kb/jvm-method-size-limits.md`) -- past 255 slots `astore 256/257/258` t
 `JvmLispCompilerTest.fusedIntegerExpressionTreesMatchTheGenericPath`,
 `.fusedArefLeavesReadTheGeneralArraysPackedShapeAndBailForEveryOther`,
 `.anArithmeticArefIndexIsComputedInsideTheFusedTree` (one `_fx$` call and no probe per site),
+`.compileAndRunArefChecksItsArraysRankAndItsSubscriptsType` (`ArefRankAndSubscriptChecksFixture`,
+both levels),
 `.unboxedTopLevelGlobalsAnswerWhatTheBoxedStaticFieldAnswers`,
 `.aDynamicallyBoundSpecialAndAnEvaldGlobalDeclineTheUnboxedRepresentation` (pinned by the ABSENCE
 of the `_gr$` field too), `.theSizeLevelChangesNothingWithoutASpeedForSizeTrade`;
