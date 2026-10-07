@@ -6226,6 +6226,11 @@ public final class WasmLispCompiler implements LispCompiler {
 				.add(stringTable, LispNames.POP)
 				.add(stringTable, LispNames.FUNCTION)
 				.add(stringTable, LispNames.SYMBOL_FUNCTION);
+			List<String> evalForwarders = new ArrayList<>(fenvForwarders);
+			java.util.Collections.sort(evalForwarders);
+			for (String forwarded : evalForwarders) {
+				offsetsBuilder.add(stringTable, forwarded);
+			}
 			WasmEvalRuntimeBuilder.SpecialFormOffsets offsets = offsetsBuilder.build();
 			// The shape the arm that checks its own count reports through: eval, which no
 			// wrapper backs, named by the id the report reserved.
@@ -6248,7 +6253,7 @@ public final class WasmLispCompiler implements LispCompiler {
 					countShapes);
 			envLookupBody = WasmEvalRuntimeBuilder.buildEnvLookupBody();
 			evalBody = WasmEvalRuntimeBuilder.buildEvalBody(offsets, counts,
-					evalRunsForms ? globalAccessIndex(functions) : -1, this.usesIdentityHashTables);
+					evalRunsForms ? globalAccessIndex(functions) : -1, evalForwarders, this.usesIdentityHashTables);
 			storeBody = WasmEvalRuntimeBuilder.buildStoreBody(offsets, this.usesIdentityHashTables);
 		}
 		else {

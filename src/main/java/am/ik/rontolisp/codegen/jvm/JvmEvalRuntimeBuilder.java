@@ -112,6 +112,8 @@ final class JvmEvalRuntimeBuilder {
 
 		private final JvmArityOperators arityOperators;
 
+		private final Set<String> fenvForwarders;
+
 		private final ClassEntry thisClass;
 
 		private EvalConstants(Builder b) {
@@ -146,6 +148,7 @@ final class JvmEvalRuntimeBuilder {
 			this.arityChkRef = b.arityChkRef;
 			this.globalAccessRef = b.globalAccessRef;
 			this.arityOperators = Objects.requireNonNull(b.arityOperators);
+			this.fenvForwarders = b.fenvForwarders;
 			this.thisClass = Objects.requireNonNull(b.thisClass);
 		}
 
@@ -288,6 +291,15 @@ final class JvmEvalRuntimeBuilder {
 			return this.arityOperators;
 		}
 
+		/**
+		 * The names only a {@code (setf (symbol-function 'n) ...)} binds: their forwarder
+		 * defun is in no registry, so {@code _eval} reports a call of one with no
+		 * {@code _fenv} binding as undefined instead of answering nil.
+		 */
+		Set<String> fenvForwarders() {
+			return this.fenvForwarders;
+		}
+
 		static Builder builder() {
 			return new Builder();
 		}
@@ -362,6 +374,8 @@ final class JvmEvalRuntimeBuilder {
 			private @Nullable MethodRefEntry globalAccessRef;
 
 			private @Nullable JvmArityOperators arityOperators;
+
+			private Set<String> fenvForwarders = Set.of();
 
 			Builder cp(ConstantPool cp) {
 				this.cp = cp;
@@ -515,6 +529,11 @@ final class JvmEvalRuntimeBuilder {
 
 			Builder arityOperators(JvmArityOperators arityOperators) {
 				this.arityOperators = arityOperators;
+				return this;
+			}
+
+			Builder fenvForwarders(Set<String> fenvForwarders) {
+				this.fenvForwarders = fenvForwarders;
 				return this;
 			}
 
@@ -2541,12 +2560,25 @@ final class JvmEvalRuntimeBuilder {
 		a.loadConstant(1);
 		a.aaload();
 		a.astore(FN);
+		// fmakunbound's tombstone (a nil cell): the name is undefined, reported by
+		// _apply's probe of the SYMBOL -- the nil would be reported instead of it.
+		MethodCode.Label undefinedOperator = a.newLabel();
+		a.aload(FN);
+		a.ifnull(undefinedOperator);
 		buildArgList(a, REST, ENV, ARGHEAD, ARGTAIL, NEWCELL, TMP);
 		a.aload(FN);
 		a.aload(ARGHEAD);
 		a.invokestatic(this.k.applyRef());
 		a.areturn();
 		a.labelBinding(notFenv);
+		// A name only (setf (symbol-function 'n) ...) binds, before the setf ran: its
+		// forwarder defun is in no registry, so the probes below would miss into the
+		// unknown operator's nil.
+		for (String forwarded : new java.util.TreeSet<>(this.k.fenvForwarders())) {
+			MethodCode.Label other = special(a, OP, forwarded);
+			a.goto_(undefinedOperator);
+			a.labelBinding(other);
+		}
 		MethodCode.Label notReg = a.newLabel();
 		// (b) registered function: evaluate every argument form, then apply. The count is
 		// the spread dispatcher's to judge -- its case measures the list against the
@@ -2609,6 +2641,13 @@ final class JvmEvalRuntimeBuilder {
 		a.labelBinding(noRetry);
 		// (d) unknown operator
 		a.aconst_null();
+		a.areturn();
+		// An operator the function namespace knows to be undefined: _apply's symbol
+		// probe reports it by name, before any argument is evaluated.
+		a.labelBinding(undefinedOperator);
+		a.aload(OP);
+		a.aconst_null();
+		a.invokestatic(this.k.applyRef());
 		a.areturn();
 		return a;
 	}

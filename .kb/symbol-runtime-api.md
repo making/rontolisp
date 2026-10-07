@@ -280,9 +280,14 @@ nil)` reported `The function NIL is undefined`. Pinned on all four backends by
   before the setf ran): JVM `#'NAME`, the literal and computed `symbol-function` answered the
   forwarder (`#<function NAME>`, never `eq` to the installed function afterwards) and both
   `fboundp` spellings T; P1 and the component trapped on every call. The interpreter and SBCL
-  signal / answer NIL. Cost: run-time `eval` of `(NAME ...)` before the setf now answers the
-  eval runtime's silent nil for an unknown operator (`.todo/384`) instead of reaching the
-  forwarder's signal.
+  signal / answer NIL. The eval runtime's named application (`_eval`, both backends) learns the
+  forwarder names too (`EvalConstants.fenvForwarders` / `buildEvalBody`'s list): with no
+  `_fenv` binding such an operator is reported undefined -- registry-less, it would otherwise
+  fall to the unknown operator's silent nil (`.todo/384`, which stays open for other names;
+  JVM `(eval '(NAME 1))` answered NIL there for a day, P1 and the component had trapped). A
+  tombstoned binding (any name `fmakunbound` retired) is reported the same way, naming it: it
+  used to apply the nil cell, `undefined-function` with `cell-error-name` NIL. The report is
+  `_apply` of the operator SYMBOL and no arguments, before any argument form is evaluated.
 - **Divergences**: an eagerly-bound call site of a name that HAD a defun keeps the old function
   after a re-setf; `--no-gc` has no eval runtime.
 - Tests: `LispEvaluatorTest#setfSymbolFunction*`/`#setfFdefinition*`,

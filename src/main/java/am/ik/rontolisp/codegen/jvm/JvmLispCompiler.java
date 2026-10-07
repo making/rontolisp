@@ -3189,6 +3189,7 @@ public final class JvmLispCompiler implements LispCompiler {
 						? cp.methodRef(thisClass, JvmRuntimeBuilder.ARITY_CHK_NAME, JvmRuntimeBuilder.ARITY_CHK_DESC)
 						: null)
 				.arityOperators(arityOperators)
+				.fenvForwarders(fenvForwarders)
 				.thisClass(thisClass)
 				.globalAccessRef(evalRunsForms ? globalAccessRef(functions) : null)
 				.build();
