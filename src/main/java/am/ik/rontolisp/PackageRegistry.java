@@ -52,12 +52,12 @@ public final class PackageRegistry {
 			LispNames.DOCUMENTATION, LispNames.COMPLEMENT, LispNames.WARN, LispNames.SIGNAL, LispNames.RETURN_FROM,
 			LispNames.MAKE_INSTANCE, LispNames.SLOT_VALUE, LispNames.WITH_SLOTS, LispNames.WITH_ACCESSORS,
 			LispNames.CHANGE_CLASS, LispNames.HANDLER_CASE, LispNames.IGNORE_ERRORS, LispNames.HANDLER_BIND,
-			LispNames.WRITE_CHAR, LispNames.MAKE_SEQUENCE, LispNames.PROG, LispNames.PROG_STAR, LispNames.SHIFTF,
-			LispNames.LOAD_TIME_VALUE, LispNames.TYPEP, LispNames.SLOT_BOUNDP, LispNames.SLOT_MAKUNBOUND,
-			LispNames.SLOT_EXISTS_P, LispNames.PRINT_UNREADABLE_OBJECT, LispNames.WITH_PACKAGE_ITERATOR,
-			LispNames.WITH_HASH_TABLE_ITERATOR, LispNames.DO_EXTERNAL_SYMBOLS, LispNames.DO_SYMBOLS,
-			LispNames.DO_ALL_SYMBOLS, LispNames.WITH_COMPILATION_UNIT, LispNames.RESTART_BIND,
-			LispNames.WITH_SIMPLE_RESTART, LispNames.PPRINT_LOGICAL_BLOCK);
+			LispNames.MAKE_SEQUENCE, LispNames.PROG, LispNames.PROG_STAR, LispNames.SHIFTF, LispNames.LOAD_TIME_VALUE,
+			LispNames.TYPEP, LispNames.SLOT_BOUNDP, LispNames.SLOT_MAKUNBOUND, LispNames.SLOT_EXISTS_P,
+			LispNames.PRINT_UNREADABLE_OBJECT, LispNames.WITH_PACKAGE_ITERATOR, LispNames.WITH_HASH_TABLE_ITERATOR,
+			LispNames.DO_EXTERNAL_SYMBOLS, LispNames.DO_SYMBOLS, LispNames.DO_ALL_SYMBOLS,
+			LispNames.WITH_COMPILATION_UNIT, LispNames.RESTART_BIND, LispNames.WITH_SIMPLE_RESTART,
+			LispNames.PPRINT_LOGICAL_BLOCK);
 
 	/**
 	 * The {@code cl} functions: every standard name usable as a function value via
@@ -109,9 +109,9 @@ public final class PackageRegistry {
 			LispNames.STRING_NOT_LESSP, LispNames.STRING_NOT_EQUAL, LispNames.STRING_TRIM, LispNames.STRING_LEFT_TRIM,
 			LispNames.STRING_RIGHT_TRIM, LispNames.OPEN, LispNames.CLOSE, LispNames.PROBE_FILE, LispNames.DIRECTORY,
 			LispNames.PATHNAME_DIRECTORY, LispNames.CONSTANTLY, LispNames.WRITE_LINE, LispNames.READ_BYTE,
-			LispNames.WRITE_BYTE, LispNames.READ_SEQUENCE, LispNames.WRITE_SEQUENCE, LispNames.IDENTITY,
-			LispNames.COPY_LIST, LispNames.COPY_STRUCTURE, LispNames.COPY_TREE, LispNames.TREE_EQUAL,
-			LispNames.NREVERSE, LispNames.MAKE_LIST, LispNames.UNION, LispNames.SET_EXCLUSIVE_OR,
+			LispNames.WRITE_BYTE, LispNames.WRITE_CHAR, LispNames.READ_SEQUENCE, LispNames.WRITE_SEQUENCE,
+			LispNames.IDENTITY, LispNames.COPY_LIST, LispNames.COPY_STRUCTURE, LispNames.COPY_TREE,
+			LispNames.TREE_EQUAL, LispNames.NREVERSE, LispNames.MAKE_LIST, LispNames.UNION, LispNames.SET_EXCLUSIVE_OR,
 			LispNames.COUNT_IF_NOT, LispNames.MERGE, LispNames.NUNION, LispNames.NINTERSECTION,
 			LispNames.NSET_DIFFERENCE, LispNames.NSET_EXCLUSIVE_OR, LispNames.NSUBST, LispNames.NSUBST_IF,
 			LispNames.NSUBST_IF_NOT, LispNames.SUBST_IF, LispNames.SUBST_IF_NOT, LispNames.NSUBLIS,

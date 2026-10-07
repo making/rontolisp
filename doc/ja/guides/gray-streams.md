@@ -248,5 +248,4 @@ Gray ストリームを閉じると `t` を返し、他には何もしません 
   `type-error` になり、何も書き込まれません。メソッドには整数の `start` と `end` が渡されます
   (`:end` が `nil` または省略なら文字列の長さ)。
 - 上の演算子は関数値として呼んでもディスパッチします (`(funcall #'read-byte instance)`、
-  `(apply #'write-line args)`)。`write-char`、`write-byte`、`unread-char` は
-  コンパイルバックエンドでは関数値を持ちません。
+  `(apply #'write-line args)`、`(funcall #'write-char #\x instance)`)。

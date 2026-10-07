@@ -253,5 +253,4 @@ rontolisp protocol has, so a portable class that defines only
   written. The method then receives integer `start` and `end` (a `nil` or omitted
   `:end` is the length).
 - The operators above dispatch as function values too (`(funcall #'read-byte
-  instance)`, `(apply #'write-line args)`). `write-char`, `write-byte` and
-  `unread-char` have no function value on the compiled backends.
+  instance)`, `(apply #'write-line args)`, `(funcall #'write-char #\x instance)`).

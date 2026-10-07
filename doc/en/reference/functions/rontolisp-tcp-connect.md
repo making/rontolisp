@@ -6,7 +6,7 @@ Opens a blocking TCP connection to `host`/`port` and returns a
 **bidirectional stream handle**. The handle lives in the same handle space as
 file streams, so the standard stream functions work on it directly:
 [`read-line`](read-line.md), [`write-line`](write-line.md),
-[`write-string`](write-string.md), [`write-char`](../macros/write-char.md),
+[`write-string`](write-string.md), [`write-char`](write-char.md),
 [`read-char`](read-char.md), [`read-byte`](read-byte.md),
 [`write-byte`](write-byte.md) and
 [`close`](close.md). Unlike buffered file output, socket writes are sent

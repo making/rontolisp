@@ -483,6 +483,7 @@ categories:
       - { slug: listen, name: "listen" }
       - { slug: write-line, name: "write-line" }
       - { slug: write-string, name: "write-string" }
+      - { slug: write-char, name: "write-char" }
       - { slug: read-byte, name: "read-byte" }
       - { slug: write-byte, name: "write-byte" }
       - { slug: read-sequence, name: "read-sequence" }

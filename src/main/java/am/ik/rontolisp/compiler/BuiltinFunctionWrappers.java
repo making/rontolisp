@@ -134,6 +134,10 @@ public final class BuiltinFunctionWrappers {
 		gated.add(LispNames.READ_CHAR_NO_HANG);
 		gated.add(LispNames.PEEK_CHAR);
 		gated.add(LispNames.READ_BYTE);
+		// #'write-byte: a write to standard output reaches the JVM's _writeByte, whose
+		// raw octets main drains only for a program whose source names write-byte -- one
+		// scan for both sides.
+		gated.add(LispNames.WRITE_BYTE);
 		// #'read-sequence / #'write-sequence for the same reason: their
 		// boundedSequenceIo bodies re-enter the operator's own expansion, whose bounds
 		// check constructs a type-error instance -- machinery a program that never
@@ -559,7 +563,11 @@ public final class BuiltinFunctionWrappers {
 				HelperWrapper helper = HELPER_WRAPPERS.get(def.name);
 				WrapperDef chosen = helper != null && !userDefinedNames.contains(helper.helper()) ? helper.narrow()
 						: def;
-				GrayWrapper gray = GRAY_WRAPPERS.get(def.name);
+				DispatchWrapper pushback = PUSHBACK_WRAPPERS.get(def.name);
+				if (pushback != null && userDefinedNames.containsAll(pushback.helpers())) {
+					chosen = pushback.dispatching();
+				}
+				DispatchWrapper gray = GRAY_WRAPPERS.get(def.name);
 				if (gray != null && userDefinedNames.containsAll(gray.helpers())) {
 					chosen = gray.dispatching();
 				}
@@ -614,22 +622,39 @@ public final class BuiltinFunctionWrappers {
 				new HelperWrapper(LispNames.READ_FROM_STRING_FULL_INTERNAL, unary(LispNames.READ_FROM_STRING)));
 
 	/**
-	 * A stream operator's wrapper in a program carrying the Gray protocol: the catalog
-	 * wrapper's lambda list, its body calling the {@code gray.lisp} dispatch helpers a
-	 * call-position site is rewritten to, so a function value handed a Gray stream
-	 * instance reaches the class's methods as the call does ({@code .kb/gray-streams.md},
-	 * "Function values"). Chosen exactly where every helper it names is in the program;
-	 * {@code GrayStreamsLibrary.process} splices them for an operator the program
-	 * designates ({@link #grayDispatchHelpers}), so any other program keeps the catalog
-	 * wrapper.
+	 * A stream operator's wrapper in a program whose pre-pass rewrites that operator's
+	 * call sites onto spliced defuns: the catalog wrapper's lambda list, its body calling
+	 * the defuns a call-position site is rewritten to, so the function value answers as
+	 * the call does. A function value has no call site for the rewrite to see, and the
+	 * wrapper is synthesized by the backend after every pre-pass. Chosen exactly where
+	 * every helper it names is in the program -- one fact, read after the splice.
 	 *
-	 * @param helpers the qualified names of the dispatch helpers the body calls
+	 * @param helpers the qualified names of the defuns the body calls
 	 * @param dispatching the wrapper calling them
 	 */
-	private record GrayWrapper(List<String> helpers, WrapperDef dispatching) {
+	private record DispatchWrapper(List<String> helpers, WrapperDef dispatching) {
 	}
 
-	private static final Map<String, GrayWrapper> GRAY_WRAPPERS = grayWrappers();
+	/**
+	 * The Gray twins: the bodies call the {@code gray.lisp} dispatch helpers, so a
+	 * function value handed a Gray stream instance reaches the class's methods
+	 * ({@code .kb/gray-streams.md}, "Function values").
+	 * {@code GrayStreamsLibrary.process} splices the helpers for an operator the program
+	 * designates ({@link #grayDispatchHelpers}). A Gray twin wins over a pushback twin:
+	 * its handle fallback is a call site {@code UnreadCharLibrary} has already rewritten.
+	 */
+	private static final Map<String, DispatchWrapper> GRAY_WRAPPERS = grayWrappers();
+
+	/**
+	 * The pushback twins: the bodies call the {@code unread-char.lisp} defuns
+	 * {@code UnreadCharLibrary} splices into a program naming {@code unread-char}, so
+	 * {@code #'unread-char} parks the character and the read family taken as values
+	 * drains it ({@code .kb/gray-streams.md}, "Handle-side pushback of
+	 * {@code unread-char}"). Elsewhere {@code #'unread-char} is the catalog wrapper,
+	 * which signals: no call site names the operator there, so it is reachable only
+	 * through a symbol built at run time.
+	 */
+	private static final Map<String, DispatchWrapper> PUSHBACK_WRAPPERS = pushbackWrappers();
 
 	/**
 	 * The dispatch helpers a function value of the operator calls in a program carrying
@@ -639,21 +664,21 @@ public final class BuiltinFunctionWrappers {
 	 * @return the qualified helper names
 	 */
 	public static List<String> grayDispatchHelpers(String name) {
-		GrayWrapper gray = GRAY_WRAPPERS.get(name);
+		DispatchWrapper gray = GRAY_WRAPPERS.get(name);
 		return gray == null ? List.of() : gray.helpers();
 	}
 
-	private static Map<String, GrayWrapper> grayWrappers() {
-		Map<String, GrayWrapper> table = new java.util.LinkedHashMap<>();
+	private static Map<String, DispatchWrapper> grayWrappers() {
+		Map<String, DispatchWrapper> table = new java.util.LinkedHashMap<>();
 		LispVal start = getfKwDefault(LispNames.START_KEYWORD, new LispInteger(0));
 		LispVal end = getfKw(LispNames.END_KEYWORD);
 		// (s &optional st &key start end): the bounds helper, which checks a spelled
 		// bound and hands the method integers.
 		for (String[] op : new String[][] { { LispNames.WRITE_STRING, "%GRAY-WRITE-STRING-BOUNDS-DISPATCH" },
 				{ LispNames.WRITE_LINE, "%GRAY-WRITE-LINE-BOUNDS-DISPATCH" } }) {
-			String helper = grayHelper(op[1]);
+			String helper = rontolispInternal(op[1]);
 			table.put(op[0],
-					new GrayWrapper(List.of(helper),
+					new DispatchWrapper(List.of(helper),
 							new WrapperDef(op[0],
 									List.of("s", LispNames.LAMBDA_OPTIONAL, "st", LispNames.LAMBDA_REST, "kw"),
 									List.of(callV(helper, new LispSymbol("s"), new LispSymbol("st"), start, end)))));
@@ -661,17 +686,17 @@ public final class BuiltinFunctionWrappers {
 		// (seq stream &key start end).
 		for (String[] op : new String[][] { { LispNames.READ_SEQUENCE, "%GRAY-READ-SEQUENCE-DISPATCH" },
 				{ LispNames.WRITE_SEQUENCE, "%GRAY-WRITE-SEQUENCE-DISPATCH" } }) {
-			String helper = grayHelper(op[1]);
+			String helper = rontolispInternal(op[1]);
 			table.put(op[0],
-					new GrayWrapper(List.of(helper),
+					new DispatchWrapper(List.of(helper),
 							new WrapperDef(op[0], List.of("seq", "st", LispNames.LAMBDA_REST, "kw"),
 									List.of(callV(helper, new LispSymbol("seq"), new LispSymbol("st"), start, end)))));
 		}
 		// (value &optional stream).
 		for (String[] op : new String[][] { { LispNames.PRINC, "%GRAY-PRINC-DISPATCH" },
 				{ LispNames.PRIN1, "%GRAY-PRIN1-DISPATCH" }, { LispNames.PRINT, "%GRAY-PRINT-DISPATCH" } }) {
-			String helper = grayHelper(op[1]);
-			table.put(op[0], new GrayWrapper(List.of(helper), new WrapperDef(op[0],
+			String helper = rontolispInternal(op[1]);
+			table.put(op[0], new DispatchWrapper(List.of(helper), new WrapperDef(op[0],
 					List.of("a", LispNames.LAMBDA_OPTIONAL, "s"), List.of(call(helper, "a", "s")))));
 		}
 		// (&optional stream).
@@ -681,29 +706,40 @@ public final class BuiltinFunctionWrappers {
 				{ LispNames.FINISH_OUTPUT, "%GRAY-FINISH-OUTPUT-DISPATCH" },
 				{ LispNames.CLEAR_OUTPUT, "%GRAY-CLEAR-OUTPUT-DISPATCH" },
 				{ LispNames.LISTEN, "%GRAY-LISTEN-DISPATCH" } }) {
-			String helper = grayHelper(op[1]);
-			table.put(op[0], new GrayWrapper(List.of(helper),
+			String helper = rontolispInternal(op[1]);
+			table.put(op[0], new DispatchWrapper(List.of(helper),
 					new WrapperDef(op[0], List.of(LispNames.LAMBDA_OPTIONAL, "s"), List.of(call(helper, "s")))));
 		}
 		// (&optional stream (eof-error-p t) eof-value recursive-p).
 		for (String[] op : new String[][] { { LispNames.READ_CHAR, "%GRAY-READ-CHAR-DISPATCH" },
 				{ LispNames.READ_CHAR_NO_HANG, "%GRAY-READ-CHAR-NO-HANG-DISPATCH" },
 				{ LispNames.READ_LINE, "%GRAY-READ-LINE-DISPATCH" } }) {
-			String helper = grayHelper(op[1]);
+			String helper = rontolispInternal(op[1]);
 			table.put(op[0],
-					new GrayWrapper(List.of(helper),
+					new DispatchWrapper(List.of(helper),
 							new WrapperDef(op[0], List.of(LispNames.LAMBDA_OPTIONAL, "s", "e" + DEFAULT_TRUE, "v", "r"),
 									List.of(call(helper, "s", "e", "v")))));
 		}
-		String peekChar = grayHelper("%GRAY-PEEK-CHAR-DISPATCH");
+		String peekChar = rontolispInternal("%GRAY-PEEK-CHAR-DISPATCH");
 		table.put(LispNames.PEEK_CHAR,
-				new GrayWrapper(List.of(peekChar),
+				new DispatchWrapper(List.of(peekChar),
 						new WrapperDef(LispNames.PEEK_CHAR,
 								List.of(LispNames.LAMBDA_OPTIONAL, "a", "b", "e" + DEFAULT_TRUE, "v", "r"),
 								List.of(call(peekChar, "a", "b", "e", "v")))));
-		String readByte = grayHelper("%GRAY-READ-BYTE-DISPATCH");
+		// (character &optional stream): a nil stream is the current *standard-output* /
+		// *standard-input*, which the helper resolves.
+		for (String[] op : new String[][] { { LispNames.WRITE_CHAR, "%GRAY-WRITE-CHAR-DISPATCH" },
+				{ LispNames.UNREAD_CHAR, "%GRAY-UNREAD-CHAR-DISPATCH" } }) {
+			String helper = rontolispInternal(op[1]);
+			table.put(op[0], new DispatchWrapper(List.of(helper), new WrapperDef(op[0],
+					List.of("c", LispNames.LAMBDA_OPTIONAL, "s"), List.of(call(helper, "c", "s")))));
+		}
+		String writeByte = rontolispInternal("%GRAY-WRITE-BYTE-DISPATCH");
+		table.put(LispNames.WRITE_BYTE, new DispatchWrapper(List.of(writeByte),
+				new WrapperDef(LispNames.WRITE_BYTE, List.of("b", "s"), List.of(call(writeByte, "b", "s")))));
+		String readByte = rontolispInternal("%GRAY-READ-BYTE-DISPATCH");
 		table.put(LispNames.READ_BYTE,
-				new GrayWrapper(List.of(readByte),
+				new DispatchWrapper(List.of(readByte),
 						new WrapperDef(LispNames.READ_BYTE,
 								List.of("s", LispNames.LAMBDA_OPTIONAL, "e" + DEFAULT_TRUE, "v"),
 								List.of(call(readByte, "s", "e", "v")))));
@@ -713,23 +749,66 @@ public final class BuiltinFunctionWrappers {
 				{ LispNames.OUTPUT_STREAM_P, "%GRAY-OUTPUT-STREAM-P-DISPATCH" },
 				{ LispNames.STREAM_ELEMENT_TYPE, "%GRAY-STREAM-ELEMENT-TYPE-DISPATCH" },
 				{ LispNames.FILE_LENGTH, "%GRAY-BROADCAST-FILE-LENGTH" } }) {
-			String helper = grayHelper(op[1]);
-			table.put(op[0],
-					new GrayWrapper(List.of(helper), new WrapperDef(op[0], List.of("a"), List.of(call(helper, "a")))));
+			String helper = rontolispInternal(op[1]);
+			table.put(op[0], new DispatchWrapper(List.of(helper),
+					new WrapperDef(op[0], List.of("a"), List.of(call(helper, "a")))));
 		}
-		String position = grayHelper("%GRAY-FILE-POSITION-DISPATCH");
-		String positionSet = grayHelper("%GRAY-FILE-POSITION-SET-DISPATCH");
+		String position = rontolispInternal("%GRAY-FILE-POSITION-DISPATCH");
+		String positionSet = rontolispInternal("%GRAY-FILE-POSITION-SET-DISPATCH");
 		table.put(LispNames.FILE_POSITION,
-				new GrayWrapper(List.of(position, positionSet),
+				new DispatchWrapper(List.of(position, positionSet),
 						new WrapperDef(LispNames.FILE_POSITION, List.of("a", LispNames.LAMBDA_OPTIONAL, "b"),
 								List.of(listToCons(List.of(new LispSymbol(LispNames.IF), new LispSymbol("b"),
 										call(positionSet, "a", "b"), call(position, "a")))))));
-		String writeString = grayHelper("%GRAY-WRITE-STRING-DISPATCH");
-		table.put(LispNames.FORMAT, new GrayWrapper(List.of(writeString), formatWrapper(writeString)));
+		String writeString = rontolispInternal("%GRAY-WRITE-STRING-DISPATCH");
+		table.put(LispNames.FORMAT, new DispatchWrapper(List.of(writeString), formatWrapper(writeString)));
 		return java.util.Collections.unmodifiableMap(table);
 	}
 
-	private static String grayHelper(String member) {
+	private static Map<String, DispatchWrapper> pushbackWrappers() {
+		Map<String, DispatchWrapper> table = new java.util.LinkedHashMap<>();
+		String push = rontolispInternal(LispNames.UNREAD_CHAR_PUSH_INTERNAL);
+		table.put(LispNames.UNREAD_CHAR, new DispatchWrapper(List.of(push), new WrapperDef(LispNames.UNREAD_CHAR,
+				List.of("c", LispNames.LAMBDA_OPTIONAL, "s"), List.of(call(push, "c", "s")))));
+		// read-char-no-hang IS read-char here, at a call site and as a value.
+		String readChar = rontolispInternal(LispNames.UNREAD_READ_CHAR_INTERNAL);
+		for (String op : List.of(LispNames.READ_CHAR, LispNames.READ_CHAR_NO_HANG)) {
+			table.put(op,
+					new DispatchWrapper(List.of(readChar),
+							new WrapperDef(op, List.of(LispNames.LAMBDA_OPTIONAL, "s", "e" + DEFAULT_TRUE, "v", "r"),
+									List.of(call(readChar, "s", "e", "v")))));
+		}
+		String peekChar = rontolispInternal(LispNames.UNREAD_PEEK_CHAR_INTERNAL);
+		table.put(LispNames.PEEK_CHAR,
+				new DispatchWrapper(List.of(peekChar),
+						new WrapperDef(LispNames.PEEK_CHAR,
+								List.of(LispNames.LAMBDA_OPTIONAL, "a", "b", "e" + DEFAULT_TRUE, "v", "r"),
+								List.of(call(peekChar, "a", "b", "e", "v")))));
+		// read-line keeps the catalog wrapper's lite eof convention (readLineWrapper):
+		// a true eof-error-p is the one-argument call, which the call-site rewrite
+		// sends to the pushback defun with eof-error-p nil.
+		String readLine = rontolispInternal(LispNames.UNREAD_READ_LINE_INTERNAL);
+		LispVal readLineBody = listToCons(List.of(new LispSymbol(LispNames.IF), new LispSymbol("e"),
+				callV(readLine, new LispSymbol("s"), LispNil.INSTANCE, LispNil.INSTANCE),
+				callV(readLine, new LispSymbol("s"), LispNil.INSTANCE, new LispSymbol("v"))));
+		table.put(LispNames.READ_LINE, new DispatchWrapper(List.of(readLine), new WrapperDef(LispNames.READ_LINE,
+				List.of(LispNames.LAMBDA_OPTIONAL, "s", "e" + DEFAULT_TRUE, "v", "r"), List.of(readLineBody))));
+		String listen = rontolispInternal(LispNames.UNREAD_LISTEN_INTERNAL);
+		table.put(LispNames.LISTEN, new DispatchWrapper(List.of(listen),
+				new WrapperDef(LispNames.LISTEN, List.of(LispNames.LAMBDA_OPTIONAL, "s"), List.of(call(listen, "s")))));
+		// Both file-position defuns are spliced only where the program names
+		// file-position, which #'file-position does.
+		String position = rontolispInternal(LispNames.UNREAD_FILE_POSITION_INTERNAL);
+		String positionSet = rontolispInternal(LispNames.UNREAD_FILE_POSITION_SET_INTERNAL);
+		table.put(LispNames.FILE_POSITION,
+				new DispatchWrapper(List.of(position, positionSet),
+						new WrapperDef(LispNames.FILE_POSITION, List.of("a", LispNames.LAMBDA_OPTIONAL, "b"),
+								List.of(listToCons(List.of(new LispSymbol(LispNames.IF), new LispSymbol("b"),
+										call(positionSet, "a", "b"), call(position, "a")))))));
+		return java.util.Collections.unmodifiableMap(table);
+	}
+
+	private static String rontolispInternal(String member) {
 		return LispNames.RONTOLISP_PKG + "::" + member;
 	}
 
@@ -2800,10 +2879,10 @@ public final class BuiltinFunctionWrappers {
 			new WrapperDef(LispNames.PEEK_CHAR,
 					List.of(LispNames.LAMBDA_OPTIONAL, "a", "b", "e" + DEFAULT_TRUE, "v", "r"),
 					List.of(call(LispNames.PEEK_CHAR, "a", "b", "e", "v"))),
-			// read-char-no-hang takes read-char's tail (its call position IS read-char);
-			// #'unread-char signals on the compile paths whatever its count -- its body
-			// signals on a handle, and a Gray instance reaches it only through a
-			// rewritten CALL site, so #'unread-char is the handle answer by construction.
+			// read-char-no-hang takes read-char's tail (its call position IS read-char).
+			// #'unread-char's catalog body signals on the compile paths: the pushback is
+			// a splice, and a program naming the operator gets the PUSHBACK_WRAPPERS
+			// twin calling it -- what is left is a symbol built at run time.
 			optionalStreamEof(LispNames.READ_CHAR_NO_HANG),
 			new WrapperDef(LispNames.UNREAD_CHAR, List.of("c", LispNames.LAMBDA_OPTIONAL, "s"),
 					List.of(call(LispNames.UNREAD_CHAR, "c", "s"))),
@@ -2826,6 +2905,9 @@ public final class BuiltinFunctionWrappers {
 			// write-to-string: a prin1-to-string alias without keywords, the printer
 			// variables bound around it with them (HELPER_WRAPPERS).
 			optionalStreamBounded(LispNames.WRITE_STRING), writeToStringWrapper(),
+			// write-char: (character &optional stream), the same designator rule as
+			// princ. write-byte: (byte stream), both required.
+			unaryOptionalStream(LispNames.WRITE_CHAR), binary(LispNames.WRITE_BYTE),
 			// symbol runtime API: the pure string<->symbol converters get plain
 			// wrappers. find-symbol folds at compile time (literal-only, like
 			// symbol-function); boundp/fboundp need the eval runtime, which is only

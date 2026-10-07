@@ -82,6 +82,7 @@ page.
 | `clear-input` | `(clear-input stream)` | Discard an input stream's undelivered buffer. Nothing is buffered that way here, so it validates the designator and returns nil |
 | `listen` | `(listen stream)` | `t` when input is immediately available without blocking; Preview 1 WASM has no such probe |
 | `write-line` | `(write-line "hi" stream)`, `(write-line "hi")` | Write the string plus a newline to an output stream (or to standard output). Returns the string |
+| `write-char` | `(write-char #\a stream)`, `(write-char #\a)` | Write one character to an output stream (or to standard output) and return it; on a Gray stream instance it calls `rontolisp:stream-write-char` |
 | `read-byte` | `(read-byte stream)`, `(read-byte *standard-input* nil nil)` | Read one byte (0-255) from a binary input stream, or from standard input for the `t`/`nil` designator. At EOF, signal an `end-of-file` condition, or return `eof-value` when `eof-error-p` is `nil` |
 | `write-byte` | `(write-byte 255 stream)`, `(write-byte 255 *standard-output*)` | Write one raw byte (0-255) to a binary output stream, or to standard output for the `t`/`nil` designator. Returns the byte |
 | `read-sequence` | `(read-sequence buf stream)`, `(read-sequence buf stream :start 2 :end 4)` | Fill a vector from an input stream -- characters when the buffer is a character vector, raw little-endian elements in bulk when it is a packed float array (any rank) or packed integer vector, else bytes. Returns the fill position. `:start`/`:end` must be literal keywords |

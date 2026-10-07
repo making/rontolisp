@@ -69,11 +69,11 @@ public final class ShadowedBuiltins {
 	 * spelled as a fallback and keeps the old shadowing behavior.
 	 */
 	private static final Set<String> LOWERED_WITHOUT_WRAPPER = Set.of(LispNames.CLOSE, LispNames.LISTEN,
-			LispNames.OPEN_STREAM_P, LispNames.WRITE_BYTE, LispNames.WRITE_LINE, LispNames.GET_OUTPUT_STREAM_STRING,
-			LispNames.FORCE_OUTPUT, LispNames.FINISH_OUTPUT, LispNames.CLEAR_OUTPUT, LispNames.ARRAYP,
-			LispNames.ARRAY_DIMENSIONS, LispNames.RATIONALP, LispNames.NUMERATOR, LispNames.DENOMINATOR,
-			LispNames.RPLACA, LispNames.RPLACD, LispNames.HASH_TABLE_TEST, LispNames.HASH_TABLE_SIZE,
-			LispNames.HASH_TABLE_REHASH_SIZE, LispNames.HASH_TABLE_REHASH_THRESHOLD);
+			LispNames.OPEN_STREAM_P, LispNames.WRITE_LINE, LispNames.GET_OUTPUT_STREAM_STRING, LispNames.FORCE_OUTPUT,
+			LispNames.FINISH_OUTPUT, LispNames.CLEAR_OUTPUT, LispNames.ARRAYP, LispNames.ARRAY_DIMENSIONS,
+			LispNames.RATIONALP, LispNames.NUMERATOR, LispNames.DENOMINATOR, LispNames.RPLACA, LispNames.RPLACD,
+			LispNames.HASH_TABLE_TEST, LispNames.HASH_TABLE_SIZE, LispNames.HASH_TABLE_REHASH_SIZE,
+			LispNames.HASH_TABLE_REHASH_THRESHOLD);
 
 	/**
 	 * Wrapped names a generic must NOT shadow. The signal operators double as
@@ -115,10 +115,10 @@ public final class ShadowedBuiltins {
 			LispNames.LIST_STAR, LispNames.REVAPPEND, LispNames.NRECONC, LispNames.VECTOR, LispNames.SVREF,
 			LispNames.ARRAY_RANK, LispNames.ARRAY_DIMENSION, LispNames.ARRAY_TOTAL_SIZE,
 			LispNames.ARRAY_ROW_MAJOR_INDEX, LispNames.MAP, LispNames.MAP_INTO, LispNames.NOTANY, LispNames.NOTEVERY,
-			LispNames.READ_SEQUENCE, LispNames.WRITE_SEQUENCE, LispNames.COPY_READTABLE, LispNames.READTABLE_CASE,
-			LispNames.SET_DISPATCH_MACRO_CHARACTER, LispNames.UNION, LispNames.INTERSECTION, LispNames.SET_DIFFERENCE,
-			LispNames.ADJOIN, LispNames.SUBSETP, LispNames.SET, LispNames.MAKE_BROADCAST_STREAM, LispNames.BOUNDP,
-			LispNames.FBOUNDP);
+			LispNames.READ_SEQUENCE, LispNames.WRITE_SEQUENCE, LispNames.WRITE_CHAR, LispNames.COPY_READTABLE,
+			LispNames.READTABLE_CASE, LispNames.SET_DISPATCH_MACRO_CHARACTER, LispNames.UNION, LispNames.INTERSECTION,
+			LispNames.SET_DIFFERENCE, LispNames.ADJOIN, LispNames.SUBSETP, LispNames.SET,
+			LispNames.MAKE_BROADCAST_STREAM, LispNames.BOUNDP, LispNames.FBOUNDP);
 
 	private static volatile @org.jspecify.annotations.Nullable Set<String> lowered;
 

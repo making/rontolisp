@@ -57,22 +57,22 @@ public final class UnreadCharLibrary {
 	static final String PUSH = LispNames.UNREAD_CHAR_PUSH_INTERNAL;
 
 	/** The pushback defun a rewritten {@code read-char} call site names. */
-	static final String READ_CHAR = "%UNREAD-READ-CHAR";
+	static final String READ_CHAR = LispNames.UNREAD_READ_CHAR_INTERNAL;
 
 	/** The pushback defun a rewritten {@code peek-char} call site names. */
-	static final String PEEK_CHAR = "%UNREAD-PEEK-CHAR";
+	static final String PEEK_CHAR = LispNames.UNREAD_PEEK_CHAR_INTERNAL;
 
 	/** The pushback defun a rewritten {@code read-line} call site names. */
-	static final String READ_LINE = "%UNREAD-READ-LINE";
+	static final String READ_LINE = LispNames.UNREAD_READ_LINE_INTERNAL;
 
 	/** The pushback defun a rewritten one-argument {@code file-position} names. */
-	static final String FILE_POSITION = "%UNREAD-FILE-POSITION";
+	static final String FILE_POSITION = LispNames.UNREAD_FILE_POSITION_INTERNAL;
 
 	/** The pushback defun a rewritten two-argument {@code file-position} names. */
-	static final String FILE_POSITION_SET = "%UNREAD-FILE-POSITION-SET";
+	static final String FILE_POSITION_SET = LispNames.UNREAD_FILE_POSITION_SET_INTERNAL;
 
 	/** The pushback defun a rewritten {@code listen} call site names. */
-	static final String LISTEN = "%UNREAD-LISTEN";
+	static final String LISTEN = LispNames.UNREAD_LISTEN_INTERNAL;
 
 	/**
 	 * The library's own defuns, whose bodies call the very built-ins the rewrite targets:

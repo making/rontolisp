@@ -192,6 +192,59 @@ public final class GrayStreamCallFixture {
 			"(0 #\\a)", "#\\a");
 
 	/**
+	 * {@code #'write-char}, {@code #'write-byte} and {@code #'unread-char} handed a Gray
+	 * instance reach {@code stream-write-char} / {@code stream-write-byte} /
+	 * {@code stream-unread-char} as their calls do -- a stream-less {@code #'write-char}
+	 * the instance bound to {@code *standard-output*} -- and a string stream still
+	 * reaches the built-in and its pushback.
+	 */
+	public static final String WRITE_AND_UNREAD_VALUE_PROGRAM = """
+			(defclass gwv-out (rontolisp:fundamental-character-output-stream)
+			  ((gwv-log :initform nil)))
+			(defmethod rontolisp:stream-write-char ((gwv-s gwv-out) gwv-c)
+			  (push gwv-c (slot-value gwv-s 'gwv-log))
+			  gwv-c)
+			(defclass gwv-bin (rontolisp:fundamental-binary-output-stream)
+			  ((gwv-log :initform nil)))
+			(defmethod rontolisp:stream-write-byte ((gwv-s gwv-bin) gwv-b)
+			  (push gwv-b (slot-value gwv-s 'gwv-log))
+			  gwv-b)
+			(defclass gwv-in (rontolisp:fundamental-character-input-stream)
+			  ((gwv-text :initarg :text) (gwv-at :initform 0) (gwv-back :initform nil)))
+			(defmethod rontolisp:stream-read-char ((gwv-s gwv-in))
+			  (let ((gwv-i (slot-value gwv-s 'gwv-at)) (gwv-t (slot-value gwv-s 'gwv-text)))
+			    (if (< gwv-i (length gwv-t))
+			        (progn (setf (slot-value gwv-s 'gwv-at) (+ gwv-i 1)) (char gwv-t gwv-i))
+			        :eof)))
+			(defmethod rontolisp:stream-unread-char ((gwv-s gwv-in) gwv-c)
+			  (push gwv-c (slot-value gwv-s 'gwv-back))
+			  (decf (slot-value gwv-s 'gwv-at))
+			  nil)
+			(let ((gwv-o (make-instance 'gwv-out)))
+			  (print (list (funcall #'write-char #\\x gwv-o) (apply #'write-char #\\y gwv-o nil) (funcall 'write-char #\\z gwv-o)
+			               (reverse (slot-value gwv-o 'gwv-log)))))
+			(let ((gwv-o (make-instance 'gwv-out)))
+			  (let ((*standard-output* gwv-o))
+			    (funcall #'write-char #\\s)
+			    (funcall #'write-char #\\t nil))
+			  (print (reverse (slot-value gwv-o 'gwv-log))))
+			(let ((gwv-b (make-instance 'gwv-bin)))
+			  (print (list (funcall #'write-byte 3 gwv-b) (apply #'write-byte (list 4 gwv-b)) (reverse (slot-value gwv-b 'gwv-log)))))
+			(let* ((gwv-i (make-instance 'gwv-in :text "pq"))
+			       (gwv-c (read-char gwv-i)))
+			  (print (list gwv-c (funcall #'unread-char gwv-c gwv-i) (slot-value gwv-i 'gwv-back) (read-char gwv-i)
+			               (apply #'unread-char #\\p (list gwv-i)) (funcall #'read-char gwv-i) (read-char gwv-i nil :eof))))
+			(print (list (with-output-to-string (gwv-s) (funcall #'write-char #\\h gwv-s) (funcall #'write-char #\\i gwv-s))
+			             (with-input-from-string (gwv-s "ab")
+			               (let ((gwv-c (funcall #'read-char gwv-s)))
+			                 (list (funcall #'unread-char gwv-c gwv-s) (funcall #'read-char gwv-s) (read-char gwv-s))))))
+			""";
+
+	/** What {@link #WRITE_AND_UNREAD_VALUE_PROGRAM} prints (SBCL's answers). */
+	public static final String WRITE_AND_UNREAD_VALUE_EXPECTED = String.join("\n", "(#\\x #\\y #\\z (#\\x #\\y #\\z))",
+			"(#\\s #\\t)", "(3 4 (3 4))", "(#\\p NIL (#\\p) #\\p NIL #\\p #\\q)", "(\"hi\" (NIL #\\a #\\b))");
+
+	/**
 	 * A Gray instance bound to {@code *standard-input*} / {@code *standard-output*}
 	 * receives the stream-LESS read and print families, an explicit {@code nil} stream, a
 	 * stream argument that is nil at run time, {@code format t} and the operators taken

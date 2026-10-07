@@ -82,6 +82,7 @@
 | `clear-input` | `(clear-input stream)` | 入力ストリームの未処理バッファを捨てます。ここではそのようなバッファを持たないため、指定子を検証して nil を返すだけです |
 | `listen` | `(listen stream)` | ブロックせずに入力を読めるなら `t`。Preview 1 の WASM にはこの問い合わせ手段がない |
 | `write-line` | `(write-line "hi" stream)`, `(write-line "hi")` | 文字列と改行を出力ストリーム(または標準出力)に書き込みます。文字列を返します |
+| `write-char` | `(write-char #\a stream)`, `(write-char #\a)` | 出力ストリーム(省略時は標準出力)に 1 文字を書き込み、その文字を返します。Gray ストリームのインスタンスには `rontolisp:stream-write-char` を呼びます |
 | `read-byte` | `(read-byte stream)`, `(read-byte *standard-input* nil nil)` | バイナリ入力ストリーム、または `t`/`nil` 指定子なら標準入力から 1 バイト(0-255)を読み込みます。EOF では `end-of-file` コンディションを通知し、`eof-error-p` が `nil` の場合は `eof-value` を返します |
 | `write-byte` | `(write-byte 255 stream)`, `(write-byte 255 *standard-output*)` | バイナリ出力ストリーム、または `t`/`nil` 指定子なら標準出力に生の 1 バイト(0-255)を書き込みます。バイトを返します |
 | `read-sequence` | `(read-sequence buf stream)`, `(read-sequence buf stream :start 2 :end 4)` | 入力ストリームからベクタを埋めます。バッファが文字ベクタなら文字、パックド浮動小数点配列（任意ランク）やパックド整数ベクタなら生のリトルエンディアン要素を一括で、それ以外はバイトです。充填位置を返します。`:start`/`:end` はリテラルのキーワードでなければなりません |

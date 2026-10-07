@@ -5333,6 +5333,27 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunWriteCharWriteByteAndUnreadCharAreFunctionValues() throws Exception {
+		// The JVM twin of
+		// LispEvaluatorTest#writeCharWriteByteAndUnreadCharAreFunctionValues:
+		// #'write-char / #'write-byte did not compile and #'unread-char signalled.
+		String program = StringStreamPrograms.writeAndUnreadValueProgram(this.tempDir.resolve("value.bin").toString());
+		assertThat(compileAndRun(am.ik.rontolisp.cli.CompileFrontendAccess.corpus(program,
+				am.ik.rontolisp.reader.Features.JVM, false, false)))
+			.isEqualTo(StringStreamPrograms.WRITE_AND_UNREAD_VALUE_EXPECTED);
+	}
+
+	@Test
+	void compileAndRunWriteCharWriteByteAndUnreadCharValuesReachAGrayStream() throws Exception {
+		// The JVM twin of
+		// LispEvaluatorTest#writeCharWriteByteAndUnreadCharValuesReachAGrayStream.
+		assertThat(compileAndRun(am.ik.rontolisp.cli.CompileFrontendAccess.corpus(
+				am.ik.rontolisp.GrayStreamCallFixture.WRITE_AND_UNREAD_VALUE_PROGRAM,
+				am.ik.rontolisp.reader.Features.JVM, false, false)))
+			.isEqualTo(am.ik.rontolisp.GrayStreamCallFixture.WRITE_AND_UNREAD_VALUE_EXPECTED);
+	}
+
+	@Test
 	void compileAndRunDirectionPredicatesAnswerTheStreamsRealDirection() throws Exception {
 		// The interpreter twin is
 		// LispEvaluatorTest#directionPredicatesAnswerTheStreamsRealDirection.

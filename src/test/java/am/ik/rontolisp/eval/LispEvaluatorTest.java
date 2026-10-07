@@ -821,6 +821,21 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void writeCharWriteByteAndUnreadCharAreFunctionValues(@TempDir Path tempDir) {
+		// #'write-char resolved to "a macro or special operator" here; the program pins
+		// SBCL's answers on all four backends.
+		assertThat(
+				printedOutput(StringStreamPrograms.writeAndUnreadValueProgram(tempDir.resolve("value.bin").toString())))
+			.isEqualTo(StringStreamPrograms.WRITE_AND_UNREAD_VALUE_EXPECTED);
+	}
+
+	@Test
+	void writeCharWriteByteAndUnreadCharValuesReachAGrayStream() {
+		assertThat(printedOutput(am.ik.rontolisp.GrayStreamCallFixture.WRITE_AND_UNREAD_VALUE_PROGRAM))
+			.isEqualTo(am.ik.rontolisp.GrayStreamCallFixture.WRITE_AND_UNREAD_VALUE_EXPECTED);
+	}
+
+	@Test
 	void compositeStreamConstructorsRefuseAComponentOfTheWrongDirection() {
 		// With every stream answering both directions, a string OUTPUT stream passed as
 		// the input half went through; the ANSI MAKE-TWO-WAY-STREAM.ERROR.5 and

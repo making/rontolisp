@@ -14426,6 +14426,27 @@ class WasmLispCompilerIntegrationTest {
 	private static final String FILE_POSITION_EXPECTED = "10\n0\n0\n1\nT\n5\n5\n6\n0";
 
 	@Test
+	void writeCharWriteByteAndUnreadCharAreFunctionValues() throws Exception {
+		// The wasm twin of
+		// LispEvaluatorTest#writeCharWriteByteAndUnreadCharAreFunctionValues, Preview 1
+		// and the component.
+		for (boolean component : new boolean[] { false, true }) {
+			assertThat(
+					runFrontendProgramWithDir(StringStreamPrograms.writeAndUnreadValueProgram("value.bin"), component))
+				.isEqualTo(StringStreamPrograms.WRITE_AND_UNREAD_VALUE_EXPECTED);
+		}
+	}
+
+	@Test
+	void writeCharWriteByteAndUnreadCharValuesReachAGrayStream() throws Exception {
+		for (boolean component : new boolean[] { false, true }) {
+			assertThat(compileAndRunFrontEndWithDir(
+					am.ik.rontolisp.GrayStreamCallFixture.WRITE_AND_UNREAD_VALUE_PROGRAM, component))
+				.isEqualTo(am.ik.rontolisp.GrayStreamCallFixture.WRITE_AND_UNREAD_VALUE_EXPECTED);
+		}
+	}
+
+	@Test
 	void directionPredicatesAnswerTheStreamsRealDirectionOnPreview1() throws Exception {
 		// The interpreter twin is
 		// LispEvaluatorTest#directionPredicatesAnswerTheStreamsRealDirection.
