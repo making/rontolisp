@@ -267,6 +267,10 @@ table is GENERATED from it. **Change them together.**
   one into a `typep`). Pins `LispEvaluatorTest#evalSubtypepOverCircularDeftypes`,
   `JvmLispCompilerTest#compileRuntimeSubtypepBesideCircularDeftypes`,
   `WasmLispCompilerIntegrationTest#runtimeSubtypepBesideCircularDeftypes`.
+- **The stream subtypes are edges to `STREAM`** (`file-stream` ... `concatenated-stream`), and a
+  Gray class (ancestor `rontolisp:fundamental-stream`) is below `STREAM` in `namedSubtypep`. The
+  edges join the runtime universe only for the names `runtimeStreamTypeNames` keeps, so a
+  computed-`subtypep` program meeting none keeps its table (`.kb/gray-streams.md`).
 - **Trap:** a lattice LEAF with no `SUBTYPEP_PARENTS` entry (`hash-table`, `function`, `package`,
   `stream`, `atom`) had no ancestor-table row, so a runtime `(subtypep 'hash-table 'hash-table)`
   answered nil on the compile paths and `T` on the interpreter. `subtypepUniverse` now adds every

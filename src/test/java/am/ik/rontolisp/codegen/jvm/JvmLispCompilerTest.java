@@ -14072,6 +14072,16 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunTypeOfClassOfAndSubtypepPlaceAStreamInTheStreamLattice() throws Exception {
+		// The JVM twin of
+		// LispEvaluatorTest#typeOfClassOfAndSubtypepPlaceAStreamInTheStreamLattice.
+		assertThat(compileAndRun(fixtureProgram(am.ik.rontolisp.StreamTypeLatticeFixture.PROGRAM)))
+			.isEqualTo(am.ik.rontolisp.StreamTypeLatticeFixture.EXPECTED);
+		assertThat(compileAndRun(fixtureProgram(am.ik.rontolisp.StreamTypeLatticeFixture.UNSPELLED_PROGRAM)))
+			.isEqualTo(am.ik.rontolisp.StreamTypeLatticeFixture.UNSPELLED_EXPECTED);
+	}
+
+	@Test
 	void compileAndRunStreampOfACompositeStreamBuiltInTheSameForm() throws Exception {
 		// The JVM twin of LispEvaluatorTest#streampOfACompositeStreamBuiltInTheSameForm.
 		assertThat(compileAndRun(fixtureProgram(am.ik.rontolisp.CompositeStreampFixture.STREAMP_PROGRAM)))

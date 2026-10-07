@@ -613,7 +613,8 @@ The STATIC metaobject subset is IN: `find-class` AND `class-of` answer a real me
   consumers (prelude `type-of`, `print-unreadable-object :type`, the no-applicable-method
   message, `%json-out-instance`) — they drag no metaobject runtime in.
 - **The built-in class set is TWO lists and ONE narrowing.** `BUILTIN_CLASS_NAMES` is what
-  `class-of` can answer; `FIND_CLASS_ONLY_CLASS_NAMES` is the rest of the CL built-in lattice,
+  `class-of` can answer (the eight standard stream classes included, which the designator
+  answers for a built-in stream instance, `.kb/gray-streams.md`); `FIND_CLASS_ONLY_CLASS_NAMES` is the rest of the CL built-in lattice,
   reachable by NAME only because every value it covers has a narrower answer
   (`number`/`real`/`rational` under `integer`/`ratio`/`float`/`complex`, `sequence`/`list`
   under `cons`/`null`, `bit-vector` under the general `vector` — a bit vector IS the general

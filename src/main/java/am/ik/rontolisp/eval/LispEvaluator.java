@@ -1376,6 +1376,12 @@ public final class LispEvaluator {
 			// holds. The old tag/type-name view lives on as %class-designator.
 			LispVal v = args.get(0);
 			if (v instanceof LispInstance inst) {
+				// A built-in stream answers its standard class, before its layout's
+				// (the composites are prelude classes, the rest layout-only).
+				String streamClass = ClosRegistry.streamClassName(inst);
+				if (streamClass != null) {
+					return java.util.Objects.requireNonNull(this.closRegistry.builtinClassMetaobject(streamClass));
+				}
 				LispVal metaobject = this.closRegistry.classMetaobject(inst.layout().tag());
 				if (metaobject != null) {
 					return metaobject;
@@ -1399,7 +1405,10 @@ public final class LispEvaluator {
 					// too).
 					LispVal v = args.get(0);
 					if (v instanceof LispInstance inst) {
-						return new LispSymbol(inst.layout().tag());
+						// A built-in stream designates its standard class, not its
+						// internal layout.
+						String streamClass = ClosRegistry.streamClassName(inst);
+						return new LispSymbol(streamClass != null ? streamClass : inst.layout().tag());
 					}
 					return new LispSymbol(builtinTypeName(v).toUpperCase(java.util.Locale.ROOT));
 				}));

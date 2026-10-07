@@ -14973,6 +14973,20 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void typeOfClassOfAndSubtypepPlaceAStreamInTheStreamLattice() throws Exception {
+		// The wasm twin of
+		// LispEvaluatorTest#typeOfClassOfAndSubtypepPlaceAStreamInTheStreamLattice,
+		// Preview 1 and the component.
+		for (boolean component : new boolean[] { false, true }) {
+			assertThat(compileAndRunFrontEndWithDir(am.ik.rontolisp.StreamTypeLatticeFixture.PROGRAM, component))
+				.isEqualTo(am.ik.rontolisp.StreamTypeLatticeFixture.EXPECTED);
+			assertThat(
+					compileAndRunFrontEndWithDir(am.ik.rontolisp.StreamTypeLatticeFixture.UNSPELLED_PROGRAM, component))
+				.isEqualTo(am.ik.rontolisp.StreamTypeLatticeFixture.UNSPELLED_EXPECTED);
+		}
+	}
+
+	@Test
 	void streampOfACompositeStreamBuiltInTheSameForm() throws Exception {
 		// The wasm twin of LispEvaluatorTest#streampOfACompositeStreamBuiltInTheSameForm,
 		// Preview 1 and the component.

@@ -20,6 +20,14 @@ An ARRAY answers a COMPOUND specifier instead, so the rank and the element type 
 ; => ((SIMPLE-VECTOR 4) (SIMPLE-ARRAY T NIL) (SIMPLE-ARRAY DOUBLE-FLOAT (2 2)) (SIMPLE-ARRAY (UNSIGNED-BYTE 8) (4)) (VECTOR T 4) (VECTOR T 2))
 ```
 
+A built-in stream answers its standard class: `string-stream`, `file-stream`, `synonym-stream`, `two-way-stream`, `broadcast-stream`, `echo-stream` or `concatenated-stream`, and `stream` for any other kind (a socket, `*error-output*`). Where an implementation answers an implementation subclass (SBCL's `SB-IMPL::STRING-OUTPUT-STREAM`), rontolisp answers the standard class itself, so `(typep s (type-of s))` holds and the name is portable.
+
+```lisp
+(list (type-of (make-string-output-stream))
+      (type-of (make-two-way-stream (make-string-input-stream "a") (make-string-output-stream))))
+; => (STRING-STREAM TWO-WAY-STREAM)
+```
+
 ```lisp
 (defpackage :gfx (:use :cl) (:export :sprite))
 (in-package :gfx)

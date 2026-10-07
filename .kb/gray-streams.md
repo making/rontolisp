@@ -320,8 +320,25 @@ not a dispatch helper**: `(typep x 'stream)` lowers to `(streamp x)` in
   reached only by a name the table lacks. Both gated on the program SPELLING the name (the probe
   `narrowedDeftypeAliases` uses); spelling none -> byte-identical. `get-output-stream-string`'s
   expansion spells `STRING-STREAM`, so its programs carry that arm. Pin:
-  `ComputedStreamTypepFixture`. Still open there: `subtypep` has no stream lattice, and
-  `type-of`/`class-of` of a stream answer internal names.
+  `ComputedStreamTypepFixture`.
+- **`type-of`/`class-of` name a built-in stream by its STANDARD class, and `subtypep` places
+  the subtypes below `stream`** (2026-10-07; before, `%STREAM` / `%TWO-WAY-STREAM`, `(typep s
+  (type-of s))` NIL, `class-of` an error compiled). The ONE dispatch is `%class-designator`:
+  interpreter `ClosRegistry.streamClassName`, compile paths `streamClassDesignator` inside the
+  `%obj-p` arm, each arm gated on the program building that stream (`usesStreamValues`,
+  `usesSynonymStreams`, composite class registered), so `type-of`, `class-of`, the
+  `print-unreadable-object :type` text and the no-applicable-method message follow. The eight
+  names are in `BUILTIN_CLASS_NAMES` (slot-less metaobjects; `class-of` of a stream is `eq` to
+  `find-class` of the name -- SBCL answers an implementation subclass instead). `subtypep`:
+  seven `SUBTYPEP_PARENTS` edges to `STREAM` (ANSI CPLs: echo is NOT below two-way, unlike
+  SBCL) and a class with `rontolisp:fundamental-stream` among its ancestors is below `STREAM`.
+  Runtime tables: `runtimeStreamTypeNames` = the names spelled, or all seven when the program
+  references `type-of`/`class-of` (a name reached with nothing spelled); the `subtypep`
+  universe skips an edge outside that set, so a program meeting none keeps its table. Pin:
+  `StreamTypeLatticeFixture` (incl. an unspelled program). Not covered: a Gray base class
+  NAMED before gray.lisp loads on the interpreter (`(subtypep 'rontolisp:fundamental-stream
+  'stream)` as the first Gray reference) is an unknown class there; the compile paths splice
+  gray.lisp for any program naming one.
 - **`ArgumentShapes.Shape.INSTANCE` had to gain `STREAM`**: the compile-path dead-branch pruner
   deletes a `typecase` clause no value of the key's shape can satisfy, so `STREAM` absent from
   that row DELETED cl+ssl's `(etypecase socket (integer ...) (stream ...))` arm.

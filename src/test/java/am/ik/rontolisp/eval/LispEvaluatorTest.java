@@ -10787,6 +10787,17 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void typeOfClassOfAndSubtypepPlaceAStreamInTheStreamLattice() {
+		// type-of and class-of name the standard stream class, typep and subtypep
+		// accept that name, a Gray stream class is below stream. Pinned on all four
+		// backends.
+		assertThat(evalPrinted(am.ik.rontolisp.StreamTypeLatticeFixture.PROGRAM))
+			.isEqualTo(am.ik.rontolisp.StreamTypeLatticeFixture.EXPECTED);
+		assertThat(evalPrinted(am.ik.rontolisp.StreamTypeLatticeFixture.UNSPELLED_PROGRAM))
+			.isEqualTo(am.ik.rontolisp.StreamTypeLatticeFixture.UNSPELLED_EXPECTED);
+	}
+
+	@Test
 	void streampOfACompositeStreamBuiltInTheSameForm() {
 		// The composite class loads while the predicate's argument runs, after the call
 		// form was reached; the answer still counts it. Pinned on all four backends.

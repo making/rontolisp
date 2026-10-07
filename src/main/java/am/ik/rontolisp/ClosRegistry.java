@@ -844,7 +844,70 @@ public final class ClosRegistry {
 	 */
 	public static final List<String> BUILTIN_CLASS_NAMES = List.of("T", "NULL", "BOOLEAN", "INTEGER", "RATIO", "FLOAT",
 			"COMPLEX", "STRING", "CHARACTER", "KEYWORD", "SYMBOL", "HASH-TABLE", "FUNCTION", "CONS", "ARRAY", "VECTOR",
-			"BIT-VECTOR", "QUANTIZED-MATRIX");
+			"BIT-VECTOR", "QUANTIZED-MATRIX", "STREAM", "FILE-STREAM", "STRING-STREAM", "SYNONYM-STREAM",
+			"TWO-WAY-STREAM", "BROADCAST-STREAM", "ECHO-STREAM", "CONCATENATED-STREAM");
+
+	/**
+	 * The standard stream classes, {@code stream} first and then the subtypes ANSI places
+	 * directly below it -- the names {@link #streamClassName} answers, and part of
+	 * {@link #BUILTIN_CLASS_NAMES}.
+	 */
+	public static final List<String> STREAM_CLASS_NAMES = BUILTIN_CLASS_NAMES
+		.subList(BUILTIN_CLASS_NAMES.indexOf("STREAM"), BUILTIN_CLASS_NAMES.size());
+
+	/**
+	 * The composite stream classes, each built by a prelude Gray class named
+	 * {@code %<NAME>} (tag {@code %class-%<NAME>}).
+	 */
+	public static final List<String> COMPOSITE_STREAM_CLASS_NAMES = List.of("TWO-WAY-STREAM", "BROADCAST-STREAM",
+			"ECHO-STREAM", "CONCATENATED-STREAM");
+
+	/**
+	 * The standard class of a built-in stream VALUE -- what {@code type-of} and
+	 * {@code class-of} name: an open stream by its {@code KIND} ({@code file-stream},
+	 * {@code string-stream}, else {@code stream}), a synonym stream, or a composite
+	 * stream by its prelude class. The compile paths emit the same dispatch
+	 * ({@code LispMacroExpander.expandClassDesignator}).
+	 * @param instance the instance
+	 * @return the class name, or null for an instance that is no built-in stream
+	 */
+	public static @Nullable String streamClassName(LispInstance instance) {
+		String tag = instance.layout().tag();
+		if (LispLayout.STREAM_TAG.equals(tag)) {
+			return streamKindClassName(instance.slot(1) instanceof LispSymbol kind ? kind.name() : "");
+		}
+		if (LispLayout.SYNONYM_STREAM_TAG.equals(tag)) {
+			return "SYNONYM-STREAM";
+		}
+		for (String name : COMPOSITE_STREAM_CLASS_NAMES) {
+			if (compositeStreamTag(name).equals(tag)) {
+				return name;
+			}
+		}
+		return null;
+	}
+
+	/**
+	 * The standard class of an open stream of one {@link LispLayout.Kinds} kind.
+	 * @param kind the kind keyword's name
+	 * @return {@code FILE-STREAM}, {@code STRING-STREAM} or {@code STREAM}
+	 */
+	public static String streamKindClassName(String kind) {
+		return switch (kind) {
+			case LispLayout.Kinds.FILE -> "FILE-STREAM";
+			case LispLayout.Kinds.STRING_INPUT, LispLayout.Kinds.STRING_OUTPUT -> "STRING-STREAM";
+			default -> "STREAM";
+		};
+	}
+
+	/**
+	 * The instance tag of a composite stream class's prelude Gray class.
+	 * @param name one of {@link #COMPOSITE_STREAM_CLASS_NAMES}
+	 * @return the tag
+	 */
+	public static String compositeStreamTag(String name) {
+		return LispLayout.CLASS_TAG_PREFIX + "%" + name;
+	}
 
 	/**
 	 * Names {@code find-class} resolves to a memoized slot-less metaobject but that are

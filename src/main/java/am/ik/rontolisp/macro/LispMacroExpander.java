@@ -21331,17 +21331,22 @@ public final class LispMacroExpander {
 	 * gives. The interpreter's {@code classOfTypeName} is the same dispatch, and
 	 * {@code ClosRegistry.BUILTIN_CLASS_NAMES} is the result set of both.
 	 * @param cons the class-of expression
-	 * @param hashTablesExist see {@link #expandClassDesignator(LispCons, boolean)}
+	 * @param hashTablesExist see
+	 * {@link #expandClassDesignator(LispCons, boolean, boolean, boolean, ClosRegistry)}
+	 * @param synonymStreams whether the program can build a synonym stream
+	 * @param streamValues whether the program can build an open stream value
+	 * @param closRegistry the complete registry
 	 * @return the expanded expression
 	 */
-	public static LispVal expandClassOf(LispCons cons, boolean hashTablesExist) {
+	public static LispVal expandClassOf(LispCons cons, boolean hashTablesExist, boolean synonymStreams,
+			boolean streamValues, ClosRegistry closRegistry) {
 		List<LispVal> parts = cons.toList();
 		if (parts.size() != 2) {
 			throw new IllegalArgumentException(LispNames.CLASS_OF + " expects exactly one argument: " + cons.print());
 		}
 		LispSymbol v = new LispSymbol("__cof" + MV_COUNTER.getAndIncrement() + "_v");
 		LispVal designator = expandClassDesignator((LispCons) fmtCall(LispNames.CLASS_DESIGNATOR_INTERNAL, v),
-				hashTablesExist);
+				hashTablesExist, synonymStreams, streamValues, closRegistry);
 		LispVal rankOne = listToCons(
 				List.of(new LispSymbol(LispNames.EQ), callOf(LispNames.ARRAY_RANK, v), new LispInteger(1)));
 		// A bit vector IS the general boxed array stamped bit: rank-1 bit-stamped
@@ -21363,16 +21368,15 @@ public final class LispMacroExpander {
 	 * the value, so no tag enumeration has to be kept in step with the registry), else a
 	 * built-in type NAME symbol ({@code integer}, {@code string}, ...), with {@code t}
 	 * for anything else (arrays included).
-	 * @param cons the %class-designator (or class-of) expression
-	 * @return the expanded expression
-	 */
-	public static LispVal expandClassDesignator(LispCons cons) {
-		return expandClassDesignator(cons, true);
-	}
-
-	/**
-	 * Like {@link #expandClassDesignator(LispCons)}, but lets a backend drop the
-	 * {@code hash-table-p} clause when no hash table can exist in the program at all.
+	 * <p>
+	 * A built-in stream is an instance too, but designates its STANDARD class
+	 * ({@code ClosRegistry.streamClassName}, the interpreter's half): an open stream by
+	 * its {@code KIND}, a synonym stream, a composite stream by its prelude class. Each
+	 * arm is emitted only for a stream the program can build, so a program building none
+	 * keeps its bytes.
+	 * <p>
+	 * A backend may drop the {@code hash-table-p} clause when no hash table can exist in
+	 * the program at all.
 	 * <p>
 	 * The JVM emits its hash-table runtime only for a program that uses a hash-table
 	 * operator, so in every other program the clause is a call to a {@code _hashP} that
@@ -21384,9 +21388,14 @@ public final class LispMacroExpander {
 	 * -- their hash primitives are unconditional.
 	 * @param cons the %class-designator (or class-of) expression
 	 * @param hashTablesExist whether a hash table can exist in this program
+	 * @param synonymStreams whether the program can build a synonym stream
+	 * @param streamValues whether the program can build an open stream value
+	 * @param closRegistry the complete registry, which says which composite stream
+	 * classes are loaded
 	 * @return the expanded expression
 	 */
-	public static LispVal expandClassDesignator(LispCons cons, boolean hashTablesExist) {
+	public static LispVal expandClassDesignator(LispCons cons, boolean hashTablesExist, boolean synonymStreams,
+			boolean streamValues, ClosRegistry closRegistry) {
 		List<LispVal> parts = cons.toList();
 		if (parts.size() != 2) {
 			throw new IllegalArgumentException(
@@ -21395,7 +21404,8 @@ public final class LispMacroExpander {
 		String prefix = "__co" + MV_COUNTER.getAndIncrement();
 		LispSymbol v = new LispSymbol(prefix + "_v");
 		List<LispVal> clauses = new java.util.ArrayList<>();
-		clauses.add(listToCons(List.of(listToCons(List.of(new LispSymbol(LispNames.OBJ_P), v)), objTag(v))));
+		clauses.add(listToCons(List.of(listToCons(List.of(new LispSymbol(LispNames.OBJ_P), v)),
+				streamClassDesignator(v, synonymStreams, streamValues, closRegistry))));
 		clauses.add(listToCons(List.of(mvCall(LispNames.NULL, v), unspelledQuoteOf("NULL"))));
 		clauses
 			.add(listToCons(List.of(fmtCall(LispNames.EQ_GENERAL, v, LispTrue.INSTANCE), unspelledQuoteOf("BOOLEAN"))));
@@ -21424,6 +21434,51 @@ public final class LispMacroExpander {
 		condParts.add(new LispSymbol(LispNames.COND));
 		condParts.addAll(clauses);
 		return nestMvBindings(List.of(new MvBinding(v, parts.get(1))), listToCons(condParts));
+	}
+
+	/**
+	 * The designator of an INSTANCE {@code v}: the standard class of each built-in stream
+	 * the program can build, else the instance tag.
+	 * @param v the bound instance variable
+	 * @param synonymStreams whether a synonym stream can exist
+	 * @param streamValues whether an open stream value can exist
+	 * @param closRegistry the complete registry
+	 * @return the designator form
+	 */
+	private static LispVal streamClassDesignator(LispSymbol v, boolean synonymStreams, boolean streamValues,
+			ClosRegistry closRegistry) {
+		List<LispVal> clauses = new java.util.ArrayList<>();
+		if (streamValues) {
+			// file-stream / string-stream by the KIND slot, every other kind stream.
+			LispSymbol kind = new LispSymbol(v.name() + "_k");
+			LispVal stringKind = makeIf(fmtCall(LispNames.EQUAL, kind, new LispSymbol(LispLayout.Kinds.STRING_INPUT)),
+					LispTrue.INSTANCE, fmtCall(LispNames.EQUAL, kind, new LispSymbol(LispLayout.Kinds.STRING_OUTPUT)));
+			LispVal byKind = makeIf(fmtCall(LispNames.EQUAL, kind, new LispSymbol(LispLayout.Kinds.FILE)),
+					unspelledQuoteOf(ClosRegistry.streamKindClassName(LispLayout.Kinds.FILE)),
+					makeIf(stringKind,
+							unspelledQuoteOf(ClosRegistry.streamKindClassName(LispLayout.Kinds.STRING_INPUT)),
+							unspelledQuoteOf(ClosRegistry.streamKindClassName(""))));
+			clauses.add(listToCons(
+					List.of(objIs(v, List.of(LispLayout.STREAM_TAG)), makeLet(kind.name(), objRef(v, 1), byKind))));
+		}
+		if (synonymStreams) {
+			clauses.add(listToCons(
+					List.of(objIs(v, List.of(LispLayout.SYNONYM_STREAM_TAG)), unspelledQuoteOf("SYNONYM-STREAM"))));
+		}
+		for (String name : ClosRegistry.COMPOSITE_STREAM_CLASS_NAMES) {
+			if (closRegistry.findClass("%" + name) != null) {
+				clauses.add(listToCons(
+						List.of(objIs(v, List.of(ClosRegistry.compositeStreamTag(name))), unspelledQuoteOf(name))));
+			}
+		}
+		if (clauses.isEmpty()) {
+			return objTag(v);
+		}
+		clauses.add(listToCons(List.of(LispTrue.INSTANCE, objTag(v))));
+		List<LispVal> condParts = new java.util.ArrayList<>();
+		condParts.add(new LispSymbol(LispNames.COND));
+		condParts.addAll(clauses);
+		return listToCons(condParts);
 	}
 
 	/**
@@ -27097,11 +27152,13 @@ public final class LispMacroExpander {
 			// top-level defvar and must run before any top-level subtypep call, so it
 			// goes FIRST (after the dispatcher slots above were filled by index).
 			boolean intervals = mentionsIntegerIntervalType(program);
+			// Probed before the forms below join `out`, like the typep probe.
+			List<String> streamNames = runtimeStreamTypeNames(spelledSymbolNames(out));
 			out.add(runtimeSubtypepDefun(closRegistry, intervals));
 			if (intervals) {
 				out.addAll(LispReader.readAllFromString(RUNTIME_SUBTYPEP_INTERVAL_SOURCE, Features.INTERPRETER));
 			}
-			out.addAll(0, subtypepAncestorTableForms(closRegistry));
+			out.addAll(0, subtypepAncestorTableForms(closRegistry, streamNames));
 		}
 		if (runtimeSubtypepValid) {
 			// Position-independent like the dispatch they call.
@@ -27114,11 +27171,11 @@ public final class LispMacroExpander {
 			// The alias table is narrowed to the names the program SPELLS, and the probe
 			// runs before the defuns below join `out` (their own bodies would otherwise
 			// spell the very names they are gated on).
-			// The stream subtype names are narrowed the same way: a program that never
-			// spells one keeps the bytes it had.
+			// The stream subtype names are narrowed the same way: a program that neither
+			// spells one nor can turn a stream into one keeps the bytes it had.
 			java.util.Set<String> spelled = spelledSymbolNames(out);
 			java.util.Map<String, LispVal> aliases = narrowedDeftypeAliases(closRegistry, spelled);
-			List<String> streamNames = RUNTIME_TYPEP_STREAM_NAMES.stream().filter(spelled::contains).toList();
+			List<String> streamNames = runtimeStreamTypeNames(spelled);
 			out.add(runtimeTypepDefun(closRegistry, !aliases.isEmpty(), streamNames));
 			out.add(runtimeTypepCompoundDefun());
 			out.addAll(0, typepTagTableForms(closRegistry, streamNames));
@@ -42975,11 +43032,25 @@ public final class LispMacroExpander {
 	 * paths these names answer only through {@code %typep-runtime}'s instance branch
 	 * ({@link #typepTagTableForms} for the tag-decided ones, {@link #streamKindFallback}
 	 * for the two the {@code KIND} slot decides), so a non-instance arm per name would be
-	 * dead code, and the {@code subtypep} universe that row list also feeds has no stream
-	 * lattice to place them in.
+	 * dead code. They are {@link #SUBTYPEP_PARENTS} edges below {@code STREAM}, joining
+	 * the runtime {@code subtypep} universe only where {@link #runtimeStreamTypeNames}
+	 * says so.
 	 */
-	private static final List<String> RUNTIME_TYPEP_STREAM_NAMES = List.of("FILE-STREAM", "STRING-STREAM",
-			"SYNONYM-STREAM", "TWO-WAY-STREAM", "BROADCAST-STREAM", "ECHO-STREAM", "CONCATENATED-STREAM");
+	private static final List<String> RUNTIME_TYPEP_STREAM_NAMES = ClosRegistry.STREAM_CLASS_NAMES.subList(1,
+			ClosRegistry.STREAM_CLASS_NAMES.size());
+
+	/**
+	 * The {@link #RUNTIME_TYPEP_STREAM_NAMES} a program's runtime {@code typep} and
+	 * {@code subtypep} tables answer: the ones it spells, and all of them when it
+	 * references {@code type-of} or {@code class-of}, which turn a stream VALUE into its
+	 * name with nothing spelled.
+	 * @param spelled {@link #spelledSymbolNames} of the program
+	 * @return the names, in list order
+	 */
+	private static List<String> runtimeStreamTypeNames(java.util.Set<String> spelled) {
+		boolean designates = spelled.contains(LispNames.TYPE_OF) || spelled.contains(LispNames.CLASS_OF);
+		return RUNTIME_TYPEP_STREAM_NAMES.stream().filter(name -> designates || spelled.contains(name)).toList();
+	}
 
 	/** The stream names whose test reads the open stream's {@code KIND} slot. */
 	private static final List<String> RUNTIME_TYPEP_STREAM_KIND_NAMES = List.of("FILE-STREAM", "STRING-STREAM");
@@ -43353,7 +43424,14 @@ public final class LispMacroExpander {
 			java.util.Map.entry("SIMPLE-BIT-VECTOR", List.of("BIT-VECTOR", "SIMPLE-ARRAY")),
 			java.util.Map.entry("SIMPLE-STRING", List.of("SIMPLE-ARRAY", "STRING")),
 			java.util.Map.entry("SIMPLE-VECTOR", List.of("SIMPLE-ARRAY", "VECTOR")),
-			java.util.Map.entry("SIMPLE-ARRAY", List.of("ARRAY")));
+			java.util.Map.entry("SIMPLE-ARRAY", List.of("ARRAY")),
+			java.util.Map.entry("FILE-STREAM", List.of("STREAM")),
+			java.util.Map.entry("STRING-STREAM", List.of("STREAM")),
+			java.util.Map.entry("SYNONYM-STREAM", List.of("STREAM")),
+			java.util.Map.entry("TWO-WAY-STREAM", List.of("STREAM")),
+			java.util.Map.entry("BROADCAST-STREAM", List.of("STREAM")),
+			java.util.Map.entry("ECHO-STREAM", List.of("STREAM")),
+			java.util.Map.entry("CONCATENATED-STREAM", List.of("STREAM")));
 
 	/**
 	 * An immutable map that iterates in DECLARATION order. {@code Map.of}/
@@ -43594,7 +43672,9 @@ public final class LispMacroExpander {
 			if (sup.classInfo() != null) {
 				return subClass.ancestors().contains(sup.classKey());
 			}
-			return "STANDARD-OBJECT".equals(sup.canonical);
+			// A Gray stream class is a stream: typep says so of its instances.
+			return "STANDARD-OBJECT".equals(sup.canonical) || ("STREAM".equals(sup.canonical)
+					&& subClass.ancestors().contains(ClosRegistry.normalize(GRAY_FUNDAMENTAL_STREAM_CLASS)));
 		}
 		// A defstruct type: :include ancestry via the spelling-tolerant tag APIs;
 		// structure-object is every struct's supertype. A struct sub whose super is
@@ -46405,9 +46485,12 @@ public final class LispMacroExpander {
 	 * {@link #expandRuntimeSubtypep}: the universe's names grouped by ancestor set so
 	 * aliases share one entry. Pure quoted data, emitted through
 	 * {@link #chunkedTableForms}.
+	 * @param closRegistry the complete registry
+	 * @param streamNames the {@link #runtimeStreamTypeNames} of the program
+	 * @return the table forms
 	 */
-	private static List<LispVal> subtypepAncestorTableForms(ClosRegistry closRegistry) {
-		List<String> universe = subtypepUniverse(closRegistry);
+	private static List<LispVal> subtypepAncestorTableForms(ClosRegistry closRegistry, List<String> streamNames) {
+		List<String> universe = subtypepUniverse(closRegistry, streamNames);
 		List<SubtypepName> names = new java.util.ArrayList<>(universe.size());
 		for (String name : universe) {
 			names.add(new SubtypepName(new LispSymbol(name), closRegistry));
@@ -46441,10 +46524,20 @@ public final class LispMacroExpander {
 		return chunkedTableForms(LispNames.SUBTYPEP_ANCESTOR_TABLE, entries);
 	}
 
-	/** The runtime-subtypep type universe; see {@link #expandRuntimeSubtypep}. */
-	private static List<String> subtypepUniverse(ClosRegistry closRegistry) {
+	/**
+	 * The runtime-subtypep type universe; see {@link #expandRuntimeSubtypep}.
+	 * @param closRegistry the complete registry
+	 * @param streamNames the stream subtype names to include
+	 * @return the names
+	 */
+	private static List<String> subtypepUniverse(ClosRegistry closRegistry, List<String> streamNames) {
 		java.util.LinkedHashSet<String> names = new java.util.LinkedHashSet<>();
 		for (java.util.Map.Entry<String, List<String>> entry : SUBTYPEP_PARENTS.entrySet()) {
+			// A stream subtype edge joins only where the program can meet the name, so
+			// a program meeting none keeps the table it had.
+			if (RUNTIME_TYPEP_STREAM_NAMES.contains(entry.getKey()) && !streamNames.contains(entry.getKey())) {
+				continue;
+			}
 			names.add(entry.getKey());
 			names.addAll(entry.getValue());
 		}

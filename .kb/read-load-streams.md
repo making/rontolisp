@@ -1518,6 +1518,8 @@ answer.
   `readtable` lowers to `null`. All four are in `PackageRegistry.CL_TYPES` and
   `LispMacroExpander.makeTypeTest`; **a name in the first without a case in the second is a hard
   expansion error in `typecase`, not a silent nil.**
+  `type-of`/`class-of` answer these standard names and `subtypep` places them below `stream`
+  (`.kb/gray-streams.md`).
 
 - **Open or closed is a fact about the VALUE on wasm** (2026-09-27). A WASI descriptor has no
   stream table behind it and the host hands the lowest free one to the next `open`, so a
