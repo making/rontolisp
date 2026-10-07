@@ -14973,6 +14973,18 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void streampOfACompositeStreamBuiltInTheSameForm() throws Exception {
+		// The wasm twin of LispEvaluatorTest#streampOfACompositeStreamBuiltInTheSameForm,
+		// Preview 1 and the component.
+		for (boolean component : new boolean[] { false, true }) {
+			assertThat(compileAndRunFrontEndWithDir(am.ik.rontolisp.CompositeStreampFixture.STREAMP_PROGRAM, component))
+				.isEqualTo(am.ik.rontolisp.CompositeStreampFixture.EXPECTED);
+			assertThat(compileAndRunFrontEndWithDir(am.ik.rontolisp.CompositeStreampFixture.TYPEP_PROGRAM, component))
+				.isEqualTo(am.ik.rontolisp.CompositeStreampFixture.EXPECTED);
+		}
+	}
+
+	@Test
 	void scaleFloatRefusesANonFloatOrNonIntegerArgument() throws Exception {
 		// The wasm twin of
 		// LispEvaluatorTest#scaleFloatRefusesANonFloatOrNonIntegerArgument,

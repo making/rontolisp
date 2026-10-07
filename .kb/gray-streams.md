@@ -299,6 +299,15 @@ not a dispatch helper**: `(typep x 'stream)` lowers to `(streamp x)` in
 - `<tags>` = the OPEN-stream layout tag `%STREAM` and the synonym-stream tag (each only when
   the program can build one), then `closRegistry.descendantTags(rontolisp:fundamental-stream)`.
   No `integerp` arm: every stream is a VALUE (`.kb/read-load-streams.md`).
+- **The interpreter does NOT lower the call form**: `(streamp x)` is the function value
+  (`LispEvaluator`'s wrap over `Environment`'s built-in), which reads the descendant tags AFTER
+  `x` ran. A lowering bakes them at expansion, before the argument runs, and the argument may be
+  what loads the class: the composite prelude classes load on the constructor's first CALL, so
+  `(streamp (make-two-way-stream ...))` as the program's first composite answered NIL there
+  until 2026-10-07 (SBCL, JVM, both WASM: T). `(typep x 'stream)` was spared: its lowering binds
+  `x` first and the `(streamp tmp)` it produces is expanded afterwards. Pin:
+  `CompositeStreampFixture` (the composite built inside the predicate, directly and through a
+  defun).
 - **A COMPUTED type specifier needs BOTH halves of the runtime typep machinery**
   (`.kb/clos.md`): `STREAM` in `RUNTIME_TYPEP_BUILTINS` AND a row in `%typep-tag-table%` —
   `%typep-runtime` tests `%obj-p` FIRST, so an instance never reaches the built-in name arms.

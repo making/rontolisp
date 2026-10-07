@@ -14072,6 +14072,15 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunStreampOfACompositeStreamBuiltInTheSameForm() throws Exception {
+		// The JVM twin of LispEvaluatorTest#streampOfACompositeStreamBuiltInTheSameForm.
+		assertThat(compileAndRun(fixtureProgram(am.ik.rontolisp.CompositeStreampFixture.STREAMP_PROGRAM)))
+			.isEqualTo(am.ik.rontolisp.CompositeStreampFixture.EXPECTED);
+		assertThat(compileAndRun(fixtureProgram(am.ik.rontolisp.CompositeStreampFixture.TYPEP_PROGRAM)))
+			.isEqualTo(am.ik.rontolisp.CompositeStreampFixture.EXPECTED);
+	}
+
+	@Test
 	void compileAndRunScaleFloatRefusesANonFloatOrNonIntegerArgument() throws Exception {
 		// The JVM twin of
 		// LispEvaluatorTest#scaleFloatRefusesANonFloatOrNonIntegerArgument.

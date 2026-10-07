@@ -10787,6 +10787,16 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void streampOfACompositeStreamBuiltInTheSameForm() {
+		// The composite class loads while the predicate's argument runs, after the call
+		// form was reached; the answer still counts it. Pinned on all four backends.
+		assertThat(evalPrinted(am.ik.rontolisp.CompositeStreampFixture.STREAMP_PROGRAM))
+			.isEqualTo(am.ik.rontolisp.CompositeStreampFixture.EXPECTED);
+		assertThat(evalPrinted(am.ik.rontolisp.CompositeStreampFixture.TYPEP_PROGRAM))
+			.isEqualTo(am.ik.rontolisp.CompositeStreampFixture.EXPECTED);
+	}
+
+	@Test
 	void scaleFloatRefusesANonFloatOrNonIntegerArgument() {
 		// A first argument that is no float and a second that is no integer are the
 		// type-error of FLOAT / INTEGER, the float refused first -- sbcl's answers,
