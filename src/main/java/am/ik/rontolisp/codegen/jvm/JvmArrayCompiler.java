@@ -491,11 +491,7 @@ final class JvmArrayCompiler {
 		// before any arity-specific rewriting below.
 		int subscriptCount = args.size() - 2;
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
-		emitHostArrayGuard(ctx, LispNames.AREF);
-		JvmExprCompiler.compileExpr(new LispInteger(subscriptCount), ctx, className);
-		invokeNamedHelper(ctx, className, ivOr(ctx, JvmIntArrayRuntimeBuilder.CHECK_RANK,
-				JvmFloatArrayRuntimeBuilder.CHECK_RANK, JvmArrayRuntimeBuilder.CHECK_RANK),
-				JvmArrayRuntimeBuilder.CHECK_RANK_DESC);
+		emitArefArrayCheck(ctx, className, subscriptCount);
 		if (subscriptCount == 0) {
 			// (aref a): a rank-0 array holds its one element at row-major index 0, so
 			// the empty Horner fold is the constant 0 (the arm WasmArrayCompiler has).
@@ -523,6 +519,24 @@ final class JvmArrayCompiler {
 					fvOr(ctx, JvmFloatArrayRuntimeBuilder.AREFN, JvmArrayRuntimeBuilder.AREFN),
 					JvmArrayRuntimeBuilder.AREFN_DESC);
 		}
+	}
+
+	/**
+	 * {@code aref}'s check of the array on the stack, which it leaves there: a Java host
+	 * array is refused, then the rank must be {@code subscriptCount} ({@code _*CheckRank}
+	 * under the operator's wrapper, which throws {@code aref: expected N subscripts, got
+	 * M}). Shared with the fused integer tree's fallback, which reads a rank-1 aref
+	 * outside the form ({@code JvmIntFusionCompiler}).
+	 * @param ctx the compile context, its operator the access's
+	 * @param className the class the helpers live in
+	 * @param subscriptCount the subscripts the site spells
+	 */
+	static void emitArefArrayCheck(JvmLispCompiler.Ctx ctx, String className, int subscriptCount) {
+		emitHostArrayGuard(ctx, LispNames.AREF);
+		JvmEmitHelper.compileLong(subscriptCount, ctx);
+		invokeNamedHelper(ctx, className, ivOr(ctx, JvmIntArrayRuntimeBuilder.CHECK_RANK,
+				JvmFloatArrayRuntimeBuilder.CHECK_RANK, JvmArrayRuntimeBuilder.CHECK_RANK),
+				JvmArrayRuntimeBuilder.CHECK_RANK_DESC);
 	}
 
 	static void compileRowMajorAref(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
@@ -805,6 +819,15 @@ final class JvmArrayCompiler {
 	 */
 	private static void compileSubscript(LispVal subscript, JvmLispCompiler.Ctx ctx, String className) {
 		JvmExprCompiler.compileExpr(subscript, ctx, className);
+		emitSubscriptCheck(ctx);
+	}
+
+	/**
+	 * Checks the subscript on the stack is an integer, leaving it there ({@code _ckIdx}
+	 * under the operator's wrapper).
+	 * @param ctx the compile context, its operator the access's
+	 */
+	static void emitSubscriptCheck(JvmLispCompiler.Ctx ctx) {
 		ctx.body.invokestatic(ctx.numOp(JvmOperandTypeRuntime.CK_IDX));
 	}
 

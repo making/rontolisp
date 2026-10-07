@@ -2589,6 +2589,11 @@ final class JvmIntFusionCompiler {
 			ctx.body.aload(headerSlot).checkcast(objectArrayClass).arraylength();
 			JvmEmitHelper.emitIntConst(ctx, 6);
 			ctx.body.if_icmpne(bails);
+			// The packed shape holds every rank: only a rank-1 array's flat storage is
+			// its elements, so any other dims (slot 0) bails to the fallback's rank
+			// check.
+			ctx.body.aload(headerSlot).checkcast(objectArrayClass).iconst_0().aaload();
+			ctx.body.checkcast(objectArrayClass).arraylength().iconst_1().if_icmpne(bails);
 			ctx.body.aload(headerSlot).checkcast(objectArrayClass).iconst_5().aaload();
 			ctx.body.checkcast(longArrayClass).astore(dataSlot).iload(idxSlot).iflt(bails);
 			ctx.body.iload(idxSlot).aload(dataSlot).arraylength().if_icmpge(bails);
@@ -3003,13 +3008,24 @@ final class JvmIntFusionCompiler {
 			case ExprLeaf leaf -> {
 				ctx.body.aload(leaf.paramSlot);
 			}
-			// The ordinary rank-1 aref dispatch from the SAME arguments: strings,
-			// packed and general arrays all behave exactly as an unfused (aref a i)
-			// would, including its error shapes.
+			// The ordinary rank-1 aref from the SAME arguments, checks included, in the
+			// interpreter's order: the index computes, the subscript must be an
+			// integer, the array of rank 1, then the bound and the read. Strings, packed
+			// and general arrays all behave exactly as an unfused (aref a i) would.
 			case ArefLeaf leaf -> {
-				ctx.body.aload(leaf.arrParam);
 				emitFallback(java.util.Objects.requireNonNull(leaf.indexNode), ctx, className);
 				ctx.restoreSite(leaf.site);
+				@Nullable String outer = ctx.operator;
+				ctx.operator = LispNames.AREF;
+				try {
+					JvmArrayCompiler.emitSubscriptCheck(ctx);
+					ctx.body.aload(leaf.arrParam);
+					JvmArrayCompiler.emitArefArrayCheck(ctx, className, 1);
+				}
+				finally {
+					ctx.operator = outer;
+				}
+				ctx.body.swap();
 				ctx.body.invokestatic(namedAref1Helper(ctx, className));
 			}
 			// The ONE draw the prologue took, re-boxed: raw from the slot, or the

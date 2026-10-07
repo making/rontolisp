@@ -2259,8 +2259,16 @@ final class WasmIntFusionCompiler {
 				WasmUncaughtLocations.Operation located = WasmUncaughtLocations.enterOperation(leaf.source, leaf.owner,
 						ctx);
 				// Under AREF's name: the fallback runs away from the aref form, and an
-				// out-of-range index reports the access.
+				// out-of-range index reports the access. The interpreter's order: the
+				// subscript must be an integer (a literal is), the array of rank 1, then
+				// the bound and the read.
 				WasmOperandTypes.withOperator(ctx, LispNames.AREF, () -> {
+					if (!(index instanceof ConstLeaf) && WasmEmitHelper.checksConsFields(ctx)) {
+						ctx.writer.write(Instruction.GET_LOCAL);
+						ctx.writer.writeUnsignedLeb128(idxSlot);
+						WasmEmitHelper.emitIndexCheck(ctx);
+						ctx.writer.write(Instruction.DROP);
+					}
 					WasmArrayCompiler.emitRank1Check(ctx, leaf.arrSlot);
 					WasmArrayCompiler.emitAref1FromSlots(ctx, leaf.arrSlot, idxSlot, false);
 				});

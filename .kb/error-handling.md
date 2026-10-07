@@ -2236,6 +2236,27 @@ on wasm-GC even in EH mode.
   Pinned by `LispEvaluatorTest#functionValueArefAndArrayRowMajorIndexCheckRankAndBounds`,
   `JvmLispCompilerTest#compileAndRunFunctionValueArefChecksRankAndBounds` and
   `WasmLispCompilerIntegrationTest#compileFunctionValueArefChecksRankAndBounds`.
+- **A rank-1 `aref` over another rank, and a fused aref's subscript** (2026-10-07): an integer
+  tree's aref leaf (`.kb/jvm-int-fusion.md`) read a rank-2 array's flat storage as rank 1 on the
+  JVM at the speed levels (`(* 2 (aref m 1))` answered `2` on a 2x2 array of ones) and reported a
+  `nil`/`2.0` subscript as `(INTEGER 0 (n))`, and wasm-GC's `_arr_check_rank` trapped on any rank
+  mismatch even in EH mode. The JVM leaf now guards the rank and its fallback runs the ordinary
+  checks; EH-mode `_arr_check_rank` signals the JVM's `aref: expected N subscripts, got M`
+  (`OperandTypes.RANK_MISMATCH_PREFIX`/`_INFIX`, interned where the operator table names `AREF`
+  or `(SETF AREF)`), the instance-less payload a handler takes as a `simple-error`. Pinned by
+  `ArefRankAndSubscriptChecksFixture` (`LispEvaluatorTest`, `JvmLispCompilerTest` both levels,
+  `WasmLispCompilerIntegrationTest` every level and component). Still different (`.todo/e21`):
+  the interpreter signals a `program-error`, the compiled backends a `simple-error`; a packed
+  integer vector or a string given two subscripts reports otherwise interpreted; and the ordinary
+  compiled emission checks the array and its rank before it evaluates and type-checks the
+  subscripts, where the interpreter (and now a fused aref) does the reverse -- `(aref m nil)` on
+  a 2x2 array is `INTEGER` interpreted, the rank compiled.
+  - **SBCL 2.2.9 is no oracle here** (measured 2026-10-07): a compiled `(aref v x)` over an
+    array of unknown type, at any safety, and `(funcall #'aref m 1)` read a rank-2 array
+    row-major without a rank check; two or more subscripts against another rank signal a
+    `type-error` expecting `(ARRAY * (* *))`; a `nil` or `2.0` subscript signals
+    `invalid-array-index-error` expecting `(INTEGER 0 (n))`. The project keeps its own
+    contract: the rank checked, a non-integer subscript `INTEGER`.
 - **`elt` of a LIST outside it** (closed 2026-09-28, `.todo/a59`): `(elt '(1 2) 5)` answered
   `NIL` and `(elt '(1 2) -1)` `1` on all four backends -- the list arm was `(nth idx seq)` -- and
   `(setf (elt l -1) v)` stored into the first cell. The list arm is now `(car (%elt-cell seq idx))`,

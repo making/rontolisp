@@ -4623,6 +4623,18 @@ public final class WasmLispCompiler implements LispCompiler {
 		WasmOperandTypes.Operators operandOperators = ehMode
 				? WasmOperandTypes.Operators.place(stringTable, name -> programUsesSymbol(spelledProgram, name))
 				: WasmOperandTypes.Operators.NONE;
+		// The two pieces of the rank mismatch _arr_check_rank signals, interned HERE
+		// for the same reason as operandTexts above: where the table names an access
+		// that checks a rank (aref, (setf aref) -- svref and elt through it); elsewhere
+		// the check keeps its trap and every EH-mode module its addresses.
+		boolean reportsRank = operandOperators.ids().containsKey(LispNames.AREF)
+				|| operandOperators.ids().containsKey(am.ik.rontolisp.compiler.OperandTypes.SETF_AREF);
+		StringTable.StringEntry rankMismatchPrefix = reportsRank
+				? stringTable.addBodyString("\"" + am.ik.rontolisp.compiler.OperandTypes.RANK_MISMATCH_PREFIX + "\"")
+				: null;
+		StringTable.StringEntry rankMismatchInfix = reportsRank
+				? stringTable.addBodyString("\"" + am.ik.rontolisp.compiler.OperandTypes.RANK_MISMATCH_INFIX + "\"")
+				: null;
 		// The Schubfach float-printer tables (todo-431): ONE reader-owned blob whose one
 		// reader is the _schub_g body built later, so a program that never prints a
 		// float carries no table bytes. Appended here, BEFORE any user body
@@ -8727,7 +8739,8 @@ public final class WasmLispCompiler implements LispCompiler {
 				// shared :fill-pointer resolution body (FUNC_ARR_FP)
 				code.addFunction(WasmArrayRuntimeBuilder.buildArrFpBody());
 				// shared aref/%aset rank-check body (FUNC_ARR_CHECK_RANK)
-				code.addFunction(WasmArrayRuntimeBuilder.buildArrCheckRankBody(operandOpGlobalIndex));
+				code.addFunction(WasmArrayRuntimeBuilder.buildArrCheckRankBody(operandOpGlobalIndex, rankMismatchPrefix,
+						rankMismatchInfix, this.usesIdentityHashTables));
 				// shared displaced-view materialization body (FUNC_ARR_UNDISPLACE)
 				code.addFunction(WasmArrayRuntimeBuilder.buildArrUndisplaceBody(this.simd));
 				// exact float floor-family division body (FUNC_F64_FDIV)

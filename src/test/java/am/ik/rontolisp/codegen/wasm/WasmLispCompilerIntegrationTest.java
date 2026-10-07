@@ -22151,11 +22151,10 @@ class WasmLispCompilerIntegrationTest {
 		// A packed float array (todo 479): the WASM backend's aref/aset applied a
 		// mismatched subscript count positionally instead of checking it against the
 		// array's own rank, the same hole the JVM backend had
-		// (JvmLispCompilerTest#compileAndRunArefRejectsAWrongSubscriptCount). WASM traps
-		// (no message) on a mismatch instead of the interpreter/JVM's "aref: expected N
-		// subscripts, got M" text -- the array compiler's other internal invariant
-		// checks are bare traps too (see compileMakeDisplaced's displaced-to bounds
-		// check).
+		// (JvmLispCompilerTest#compileAndRunArefRejectsAWrongSubscriptCount). Without a
+		// catching form a mismatch traps; with one it signals the interpreter/JVM's
+		// "aref: expected N subscripts, got M"
+		// (arefChecksItsArraysRankAndItsSubscriptsType).
 		compileAndExpectTrap(
 				"(print (aref (make-array (list 2 2 2) :initial-element 0.0d0 :element-type 'double-float) 0 1))");
 		// The same hole existed for a general (non-packed) array and for %aset -- both
@@ -28160,6 +28159,24 @@ class WasmLispCompilerIntegrationTest {
 			.isEqualTo(am.ik.rontolisp.ComplexThroughAVariableFixture.SIGNALS_EXPECTED);
 		assertThat(compileComponentAndRunProgram(signals))
 			.isEqualTo(am.ik.rontolisp.ComplexThroughAVariableFixture.SIGNALS_EXPECTED);
+	}
+
+	@Test
+	void arefChecksItsArraysRankAndItsSubscriptsType() throws Exception {
+		// The twin of LispEvaluatorTest#arefChecksItsArraysRankAndItsSubscriptsType. A
+		// rank mismatch trapped in _arr_check_rank where the handler should have taken
+		// it. Every level (size declines fusion), P1 and component.
+		List<LispVal> program = am.ik.rontolisp.cli.CompileFrontendAccess.corpus(
+				am.ik.rontolisp.ArefRankAndSubscriptChecksFixture.SOURCE, am.ik.rontolisp.reader.Features.WASM, true,
+				false);
+		for (OptimizeLevel level : OptimizeLevel.values()) {
+			assertThat(runModule(WasmLispCompiler.builder().optimize(level).build().compile(program),
+					"arc-" + level + ".wasm"))
+				.as("level %s", level)
+				.isEqualTo(am.ik.rontolisp.ArefRankAndSubscriptChecksFixture.EXPECTED);
+		}
+		assertThat(compileComponentAndRunProgram(program)).as("component")
+			.isEqualTo(am.ik.rontolisp.ArefRankAndSubscriptChecksFixture.EXPECTED);
 	}
 
 	@Test

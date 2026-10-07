@@ -20707,6 +20707,17 @@ class LispEvaluatorTest {
 			.isEqualTo(am.ik.rontolisp.ComplexThroughAVariableFixture.SIGNALS_EXPECTED);
 	}
 
+	// The reference for a rank-1 aref over an array of another rank or a subscript that
+	// is no integer, which the compiled backends' integer fusion read past and the wasm
+	// rank check trapped on. The twins are
+	// JvmLispCompilerTest#compileAndRunArefChecksItsArraysRankAndItsSubscriptsType and
+	// WasmLispCompilerIntegrationTest#arefChecksItsArraysRankAndItsSubscriptsType.
+	@Test
+	void arefChecksItsArraysRankAndItsSubscriptsType() {
+		assertThat(printedLines(am.ik.rontolisp.ArefRankAndSubscriptChecksFixture.SOURCE))
+			.isEqualTo(am.ik.rontolisp.ArefRankAndSubscriptChecksFixture.EXPECTED);
+	}
+
 	// The reference for the order an operation's arguments are evaluated and its
 	// application signals in, which the compiled backends' fast paths (the unboxed float
 	// paths, integer fusion, the two-argument log) kept only in part. The twins are

@@ -2107,6 +2107,19 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunArefChecksItsArraysRankAndItsSubscriptsType() throws Exception {
+		// The twin of LispEvaluatorTest#arefChecksItsArraysRankAndItsSubscriptsType. A
+		// fused tree's aref read a rank-2 array's flat storage as rank 1, and its
+		// fallback checked a non-integer subscript only against the bound. Both levels:
+		// size declines fusion.
+		List<LispVal> program = fixtureProgram(am.ik.rontolisp.ArefRankAndSubscriptChecksFixture.SOURCE);
+		for (OptimizeLevel level : List.of(OptimizeLevel.DEFAULT, OptimizeLevel.SIZE)) {
+			assertThat(compileAndRun(program, level)).as("level %s", level)
+				.isEqualTo(am.ik.rontolisp.ArefRankAndSubscriptChecksFixture.EXPECTED);
+		}
+	}
+
+	@Test
 	void compileAndRunFastPathsKeepTheInterpretersEvaluationOrder() throws Exception {
 		// The twin of LispEvaluatorTest#fastPathsKeepTheInterpretersEvaluationOrder. The
 		// unboxed double path converted an operand before the operation's later operands
