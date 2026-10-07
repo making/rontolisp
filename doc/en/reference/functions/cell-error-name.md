@@ -16,3 +16,10 @@ The `undefined-function` a call of an undefined name signals carries that name -
 (handler-case (funcall (intern "CE-NO-SUCH-FUNCTION"))
   (undefined-function (e) (cell-error-name e))) ; => CE-NO-SUCH-FUNCTION
 ```
+
+So does the `unbound-variable` a read of an unbound name through [`symbol-value`](symbol-value.md) signals, on every backend:
+
+```lisp
+(handler-case (symbol-value (intern "CE-NO-SUCH-VARIABLE"))
+  (unbound-variable (e) (cell-error-name e))) ; => CE-NO-SUCH-VARIABLE
+```

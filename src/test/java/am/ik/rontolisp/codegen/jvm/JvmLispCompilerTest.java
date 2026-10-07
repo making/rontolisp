@@ -5556,6 +5556,19 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void anUnboundVariableCarriesItsNameInTheCellErrorNameSlot() throws Exception {
+		// Interpreter parity (the LispEvaluatorTest twin): the landing pad reads the name
+		// back out of the text it recovers the class from, in restart mode as well
+		// (.kb/error-handling.md).
+		assertThat(compileAndRun(am.ik.rontolisp.UnboundVariableNameFixture.PLAIN))
+			.isEqualTo(am.ik.rontolisp.UnboundVariableNameFixture.PLAIN_EXPECTED);
+		assertThat(compileAndRun(am.ik.rontolisp.UnboundVariableNameFixture.RESTART))
+			.isEqualTo(am.ik.rontolisp.UnboundVariableNameFixture.RESTART_EXPECTED);
+		assertThat(compileAndRun(am.ik.rontolisp.UnboundVariableNameFixture.MESSAGE))
+			.isEqualTo(am.ik.rontolisp.UnboundVariableNameFixture.MESSAGE_EXPECTED);
+	}
+
+	@Test
 	void compileAndRunWrongArityThroughAFunctionValueSignalsProgramError() throws Exception {
 		String defs = "(defun f (x) x) (defun g (x &rest r) (list x r)) ";
 		String caught = "(print (handler-case %s (program-error (c) (princ-to-string c)) (error (c) :plain)))";

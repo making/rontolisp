@@ -552,8 +552,7 @@ public final class Environment implements Scope {
 		if (LispNames.MV_SPILL.equals(name)) {
 			return this.mvSpill.get();
 		}
-		throw LispEvalException.ofClass(ClosRegistry.UNBOUND_VARIABLE_CLASS_NAME,
-				ClosRegistry.UNBOUND_VARIABLE_MESSAGE_PREFIX + name + ClosRegistry.UNBOUND_VARIABLE_MESSAGE_SUFFIX);
+		throw CellErrorException.unboundVariable(name);
 	}
 
 	/**

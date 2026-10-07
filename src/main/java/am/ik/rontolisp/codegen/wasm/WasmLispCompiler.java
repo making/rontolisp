@@ -6395,7 +6395,14 @@ public final class WasmLispCompiler implements LispCompiler {
 		final byte[] makeSymbolBody = WasmSymbolApiRuntimeBuilder.buildMakeSymbol();
 		final byte[] internSymBody = WasmSymbolApiRuntimeBuilder.buildInternSym(internNilOffset);
 		final byte[] boundpBody = WasmSymbolApiRuntimeBuilder.buildBoundp(symbolTOffset);
-		final byte[] symbolValueBody = WasmSymbolApiRuntimeBuilder.buildSymbolValue(symbolTOffset);
+		// What _symbol_value throws for an unbound name: EH mode only, like the
+		// dispatchers' report, the typed unbound-variable where usedLayoutTags baked it.
+		final byte[] symbolValueBody = WasmSymbolApiRuntimeBuilder.buildSymbolValue(symbolTOffset,
+				ehMode ? new WasmRuntimeBuilder.UnboundVariableReport(stringTable,
+						this.usesInstances ? conditionInstance(ClosRegistry.UNBOUND_VARIABLE_CLASS_NAME, closRegistry,
+								layoutAddresses) : null,
+						slotIndex(closRegistry, ClosRegistry.UNBOUND_VARIABLE_CLASS_NAME, "NAME"),
+						this.usesIdentityHashTables) : null);
 		final byte[] fboundpBody = WasmSymbolApiRuntimeBuilder.buildFboundp(symbolTOffset);
 		final byte[] fmakunboundBody = WasmSymbolApiRuntimeBuilder.buildFmakunbound(this.usesIdentityHashTables);
 		final byte[] setSymbolFunctionBody = WasmSymbolApiRuntimeBuilder
@@ -12763,6 +12770,11 @@ public final class WasmLispCompiler implements LispCompiler {
 					used.add(LispLayout.CLASS_TAG_PREFIX + am.ik.rontolisp.ClosRegistry.PACKAGE_ERROR_CLASS_NAME);
 					break;
 				}
+			}
+			// The same for an unbound name's unbound-variable, which _symbol_value's
+			// miss builds (WasmRuntimeBuilder.UnboundVariableReport).
+			if (symbols.contains(LispNames.SYMBOL_VALUE)) {
+				used.add(LispLayout.CLASS_TAG_PREFIX + am.ik.rontolisp.ClosRegistry.UNBOUND_VARIABLE_CLASS_NAME);
 			}
 			// The same for a parse-integer's parse-error (lowerParseError).
 			for (String site : LispMacroExpander.PARSE_ERROR_SITES) {

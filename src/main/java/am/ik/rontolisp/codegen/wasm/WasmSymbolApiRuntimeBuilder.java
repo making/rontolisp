@@ -6,6 +6,8 @@ import am.ik.wasm.Instruction;
 import am.ik.wasm.Type;
 import am.ik.wasm.WasmWriter;
 
+import org.jspecify.annotations.Nullable;
+
 /**
  * Builds the five symbol-runtime-API helper functions, all typed
  * {@code ((ref null eq)) -> (ref null eq)} (TYPE_CALLABLE_BASE):
@@ -227,16 +229,28 @@ final class WasmSymbolApiRuntimeBuilder {
 	}
 
 	/**
-	 * {@code _symbol_value(sym) -> (ref null eq)}: an unbound variable traps.
+	 * {@code _symbol_value(sym) -> (ref null eq)}: an unbound variable signals the
+	 * report's {@code unbound-variable}, and traps outside EH mode, where nothing could
+	 * catch it.
 	 * @param tOffset the string-table offset of the symbol {@code t}
+	 * @param unbound what an unbound variable throws, or null outside EH mode
 	 */
-	static byte[] buildSymbolValue(int tOffset) {
+	static byte[] buildSymbolValue(int tOffset, WasmRuntimeBuilder.@Nullable UnboundVariableReport unbound) {
 		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
-		final int SYM = 0, OFF = 1;
-		w.write(1);
-		w.writeUnsignedLeb128(1);
-		w.write(Type.I32);
+		final int SYM = 0, OFF = 1, PAIR = 2, MSG = 3;
+		if (unbound != null) {
+			w.write(2);
+			w.writeUnsignedLeb128(1);
+			w.write(Type.I32);
+			w.writeUnsignedLeb128(2);
+			w.writeRefType(true, Type.EQ.code());
+		}
+		else {
+			w.write(1);
+			w.writeUnsignedLeb128(1);
+			w.write(Type.I32);
+		}
 		emitSelfBoundChecks(w, SYM, OFF, tOffset, () -> {
 			emitNull(w);
 			w.write(Instruction.RETURN);
@@ -244,19 +258,25 @@ final class WasmSymbolApiRuntimeBuilder {
 			get(w, SYM);
 			w.write(Instruction.RETURN);
 		}, () -> w.write(Instruction.UNREACHABLE));
-		// pair = _env_lookup(off, GLOBAL_ENV); null -> trap; else (cdr pair)
+		// pair = _env_lookup(off, GLOBAL_ENV); null -> unbound; else (cdr pair)
+		int pair = unbound != null ? PAIR : SYM;
 		get(w, OFF);
 		w.write(Instruction.GET_GLOBAL);
 		w.writeUnsignedLeb128(WasmLispCompiler.GLOBAL_ENV);
 		w.write(Instruction.CALL);
 		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_ENV_LOOKUP);
-		set(w, SYM); // reuse the SYM slot for the binding pair
-		get(w, SYM);
+		set(w, pair);
+		get(w, pair);
 		w.write(Instruction.REF_IS_NULL);
 		w.write(Instruction.IF, 0x40);
-		w.write(Instruction.UNREACHABLE);
+		if (unbound != null) {
+			unbound.emitThrow(w, SYM, MSG);
+		}
+		else {
+			w.write(Instruction.UNREACHABLE);
+		}
 		w.write(Instruction.END);
-		get(w, SYM);
+		get(w, pair);
 		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
 		w.writeHeapType(WasmLispCompiler.TYPE_CONS);
 		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);

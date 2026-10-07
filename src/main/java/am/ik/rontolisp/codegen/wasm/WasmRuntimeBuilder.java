@@ -2660,6 +2660,80 @@ final class WasmRuntimeBuilder {
 	}
 
 	/**
+	 * What {@code _symbol_value} throws for a name no binding answers, in EH mode: the
+	 * interpreter's text, {@code The variable NAME is unbound}, the name spelled as
+	 * {@link NotFunctionReport#emitUndefinedThrow} spells a function's (no keyword
+	 * reaches it: a keyword is self-bound). A module that baked {@code unbound-variable}
+	 * -- {@code usedLayoutTags} does wherever a landing pad and {@code symbol-value} meet
+	 * -- throws the typed instance naming the variable in its {@code name} slot; any
+	 * other gets the message-only payload. The pieces are interned on first use.
+	 */
+	static final class UnboundVariableReport {
+
+		private final WasmLispCompiler.StringTable stringTable;
+
+		private final @Nullable ConditionInstance unboundVariable;
+
+		/** The {@code name} slot of {@link #unboundVariable}, or -1 without one. */
+		private final int nameSlot;
+
+		private final boolean identityHash;
+
+		private WasmLispCompiler.StringTable.@Nullable StringEntry prefix;
+
+		private WasmLispCompiler.StringTable.@Nullable StringEntry suffix;
+
+		UnboundVariableReport(WasmLispCompiler.StringTable stringTable, @Nullable ConditionInstance unboundVariable,
+				int nameSlot, boolean identityHash) {
+			this.stringTable = stringTable;
+			this.unboundVariable = unboundVariable;
+			this.nameSlot = unboundVariable != null ? nameSlot : -1;
+			this.identityHash = identityHash;
+		}
+
+		/**
+		 * Throws the report for the symbol in {@code symLocal}.
+		 * @param w the writer
+		 * @param symLocal the local holding the symbol
+		 * @param msgLocal a spare {@code (ref null eq)} local
+		 */
+		void emitThrow(WasmWriter w, int symLocal, int msgLocal) {
+			if (this.prefix == null) {
+				this.prefix = this.stringTable
+					.addBodyString("\"" + ClosRegistry.UNBOUND_VARIABLE_MESSAGE_PREFIX + "\"");
+				this.suffix = this.stringTable
+					.addBodyString("\"" + ClosRegistry.UNBOUND_VARIABLE_MESSAGE_SUFFIX + "\"");
+			}
+			emitStrConst(w, Objects.requireNonNull(this.prefix));
+			w.write(Instruction.GET_LOCAL);
+			w.writeUnsignedLeb128(symLocal);
+			w.write(Instruction.CALL);
+			w.writeUnsignedLeb128(WasmLispCompiler.FUNC_PRINC_TO_STR);
+			emitConcat(w);
+			emitStrConst(w, Objects.requireNonNull(this.suffix));
+			emitConcat(w);
+			w.write(Instruction.SET_LOCAL);
+			w.writeUnsignedLeb128(msgLocal);
+			ConditionInstance instance = this.unboundVariable;
+			if (instance != null && this.nameSlot >= 0) {
+				emitConditionThrowOnStack(w, instance, msgLocal, Map.of(this.nameSlot, () -> {
+					w.write(Instruction.GET_LOCAL);
+					w.writeUnsignedLeb128(symLocal);
+				}));
+				return;
+			}
+			w.write(Instruction.REF_NULL);
+			w.writeHeapType(Type.EQ.code());
+			w.write(Instruction.GET_LOCAL);
+			w.writeUnsignedLeb128(msgLocal);
+			WasmEmitHelper.emitNewCons(w, this.identityHash);
+			w.write(Instruction.THROW);
+			w.writeUnsignedLeb128(WasmLispCompiler.TAG_LISP_COND);
+		}
+
+	}
+
+	/**
 	 * The dispatchable callables this arity CANNOT serve, as {@code funcId -> shape}
 	 * (required count doubled, plus one for a {@code &rest} tail). Their funcId reaching
 	 * the dispatcher is a call with the wrong number of arguments.

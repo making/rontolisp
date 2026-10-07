@@ -21550,6 +21550,46 @@ cases:
       T
       ((UFN-NOPE UNDEFINED-FUNCTION) (UFN-OTHER UNDEFINED-FUNCTION) (UFN-OTHER UFN-NOPE))
 
+  # An unbound-variable names its variable in the cell-error name slot on every
+  # backend -- symbol-value of a literal and a computed name, #'symbol-value called
+  # and mapped, inside a binding of another special, caught as cell-error and error --
+  # also under a handler-bind; the wasm-GC backends trapped before. The programs of
+  # UnboundVariableNameFixture; SBCL's expected text but for the report, rontolisp's.
+  - name: unbound-variable-carries-its-name
+    source: |
+      (defun uvn-name (thunk)
+        (handler-case (funcall thunk)
+          (unbound-variable (c) (list (cell-error-name c) (type-of c)))))
+      (defvar *uvn-special* 1)
+      (print (list (uvn-name (lambda () (symbol-value 'uvn-nope)))
+                   (uvn-name (lambda () (symbol-value (intern "UVN-COMPUTED"))))
+                   (uvn-name (lambda () (funcall #'symbol-value 'uvn-nope)))
+                   (uvn-name (lambda () (mapcar #'symbol-value '(uvn-mapped))))
+                   (uvn-name (lambda () (let ((*uvn-special* 2)) (symbol-value 'uvn-inside))))))
+      (print (eq (cell-error-name (handler-case (symbol-value 'uvn-nope) (unbound-variable (c) c)))
+                 'uvn-nope))
+      (print (handler-case (symbol-value 'uvn-nope)
+               (cell-error (c) (list :cell (cell-error-name c) (typep c 'unbound-variable)))))
+      (print (handler-case (symbol-value 'uvn-nope)
+               (error (c) (list :error (type-of c)))))
+      (defvar *uvn-seen* nil)
+      (defun uvn-bound (thunk)
+        (handler-case
+            (handler-bind ((unbound-variable (lambda (c) (push (cell-error-name c) *uvn-seen*))))
+              (funcall thunk))
+          (unbound-variable (c) (list (cell-error-name c) (type-of c)))))
+      (print (list (uvn-bound (lambda () (symbol-value 'uvn-nope)))
+                   (uvn-bound (lambda () (symbol-value (intern "UVN-OTHER"))))
+                   *uvn-seen*))
+      (print (handler-case (symbol-value 'uvn-nope) (error (c) (princ-to-string c))))
+    expected: |
+      ((UVN-NOPE UNBOUND-VARIABLE) (UVN-COMPUTED UNBOUND-VARIABLE) (UVN-NOPE UNBOUND-VARIABLE) (UVN-MAPPED UNBOUND-VARIABLE) (UVN-INSIDE UNBOUND-VARIABLE))
+      T
+      (:CELL UVN-NOPE T)
+      (:ERROR UNBOUND-VARIABLE)
+      ((UVN-NOPE UNBOUND-VARIABLE) (UVN-OTHER UNBOUND-VARIABLE) (UVN-OTHER UVN-NOPE))
+      "The variable UVN-NOPE is unbound"
+
   # The tokenizer package (tokenizers.lisp, .kb/tokenizers.md): the five byte-level
   # pre-tokenizer shapes, the ranked merge loop, the special-token scan, Llama 3's
   # ignore-merges and the SentencePiece half, on all four backends. The vocabulary is

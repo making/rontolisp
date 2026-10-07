@@ -20843,6 +20843,20 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void anUnboundVariableCarriesItsNameInTheCellErrorNameSlot() {
+		// The reference answer (SBCL's) the compiled backends' twins of this name
+		// (JvmLispCompilerTest, WasmLispCompilerIntegrationTest) are measured against:
+		// every unbound-variable names its variable, NIL used to be read back
+		// (.kb/error-handling.md, "Every cell-error names its cell").
+		assertThat(printedLines(am.ik.rontolisp.UnboundVariableNameFixture.PLAIN))
+			.isEqualTo(am.ik.rontolisp.UnboundVariableNameFixture.PLAIN_EXPECTED);
+		assertThat(printedLines(am.ik.rontolisp.UnboundVariableNameFixture.RESTART))
+			.isEqualTo(am.ik.rontolisp.UnboundVariableNameFixture.RESTART_EXPECTED);
+		assertThat(printedLines(am.ik.rontolisp.UnboundVariableNameFixture.MESSAGE))
+			.isEqualTo(am.ik.rontolisp.UnboundVariableNameFixture.MESSAGE_EXPECTED);
+	}
+
+	@Test
 	void defmethodOnABuiltinNameKeepsTheBuiltinAsTheDefaultMethod() {
 		// The dispatcher SHADOWS the built-in defun; without stashing it as the
 		// generic's default method every non-instance argument dies with "No
