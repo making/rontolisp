@@ -10,6 +10,7 @@ import java.util.function.Predicate;
 
 import org.jspecify.annotations.Nullable;
 
+import am.ik.rontolisp.LambdaLists;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispNil;
@@ -17,6 +18,7 @@ import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispTrees;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.SourceProvenance;
+import am.ik.rontolisp.macro.LispMacroExpander;
 
 /**
  * Static rewriting of function designators for the compilers. Common Lisp allows a symbol
@@ -79,6 +81,12 @@ public final class FunctionDesignators {
 	 * {@code flet}/{@code labels}/{@code macrolet} binds anyway is left alone below it.
 	 * Quoted data is not walked, and a {@code case}-family clause's keys are not code.
 	 * Identity-preserving: a form with nothing to rewrite comes back as itself.
+	 *
+	 * <p>
+	 * A quoted {@code (setf name)} function name given to {@code fdefinition},
+	 * {@code fboundp}, {@code fmakunbound} or a {@code (setf (fdefinition ...))} place is
+	 * mapped here too, onto the internal name the writer is stored under
+	 * ({@link #setfFunctionNameCall}): the backends and the gates read symbols there.
 	 * @param program the package-resolved top-level forms
 	 * @return the program with those designators rewritten, or {@code program} itself
 	 */
@@ -131,6 +139,12 @@ public final class FunctionDesignators {
 			return SourceProvenance.inherit(cons,
 					new LispCons(new LispSymbol(LispNames.FUNCTION), new LispCons(name, LispNil.INSTANCE)));
 		}
+		if (op != null
+				&& (LispNames.FDEFINITION.equals(op) || LispNames.FBOUNDP.equals(op)
+						|| LispNames.FMAKUNBOUND.equals(op))
+				&& !shadowed.contains(op) && quotedSetfFunctionPlace(cons.cdr()) instanceof LispSymbol place) {
+			return setfFunctionNameCall(cons, op, place);
+		}
 		if ((LispNames.SETF.equals(op) || LispNames.PSETF.equals(op)) && cons.cdr() instanceof LispCons pairs) {
 			// A (symbol-function 'name) PLACE is the definition's setter, not a value.
 			return LispCons.rebuilt(cons, cons.car(), rewritePairs(pairs, shadowed));
@@ -161,12 +175,60 @@ public final class FunctionDesignators {
 		}
 		LispVal keptPlace = place.car() instanceof LispCons placeForm && placeForm.car() instanceof LispSymbol head
 				&& (LispNames.SYMBOL_FUNCTION.equals(head.name()) || LispNames.FDEFINITION.equals(head.name()))
-						? place.car() : rewrite(place.car(), shadowed);
+						? setfFunctionNamePlace(placeForm, head) : rewrite(place.car(), shadowed);
 		if (!(place.cdr() instanceof LispCons value)) {
 			return LispCons.rebuilt(place, keptPlace, place.cdr());
 		}
 		return LispCons.rebuilt(place, keptPlace,
 				LispCons.rebuilt(value, rewrite(value.car(), shadowed), rewritePairs(value.cdr(), shadowed)));
+	}
+
+	/**
+	 * A {@code (fdefinition '(setf name))}, {@code (fboundp '(setf name))} or
+	 * {@code (fmakunbound '(setf name))} call over the internal name the writer function
+	 * is stored under ({@link LispMacroExpander#setfFunctionName}), as the interpreter
+	 * maps the list when the call runs. {@code fdefinition} becomes
+	 * {@code #'(setf name)}, which every backend already resolves and reports undefined
+	 * as {@code (setf name)}; {@code fmakunbound} still answers the list.
+	 */
+	private static LispVal setfFunctionNameCall(LispCons call, String op, LispSymbol place) {
+		LispVal quotedName = ((LispCons) call.cdr()).car();
+		if (LispNames.FDEFINITION.equals(op)) {
+			return SourceProvenance.inherit(call, new LispCons(new LispSymbol(LispNames.FUNCTION),
+					new LispCons(((LispCons) quotedName).toList().get(1), LispNil.INSTANCE)));
+		}
+		LispCons internal = SourceProvenance.inherit(call, new LispCons(call.car(), new LispCons(
+				quoted(new LispSymbol(LispMacroExpander.setfFunctionName(place.name()))), LispNil.INSTANCE)));
+		if (LispNames.FBOUNDP.equals(op)) {
+			return internal;
+		}
+		return SourceProvenance.inherit(call, new LispCons(new LispSymbol(LispNames.PROGN),
+				new LispCons(internal, new LispCons(quotedName, LispNil.INSTANCE))));
+	}
+
+	/**
+	 * A {@code (fdefinition '(setf name))} setf place over the writer's internal name;
+	 * any other {@code symbol-function} / {@code fdefinition} place as it stands.
+	 */
+	private static LispVal setfFunctionNamePlace(LispCons placeForm, LispSymbol head) {
+		if (LispNames.FDEFINITION.equals(head.name())
+				&& quotedSetfFunctionPlace(placeForm.cdr()) instanceof LispSymbol place) {
+			return SourceProvenance.inherit(placeForm, new LispCons(head, new LispCons(
+					quoted(new LispSymbol(LispMacroExpander.setfFunctionName(place.name()))), LispNil.INSTANCE)));
+		}
+		return placeForm;
+	}
+
+	// The place of a one-element argument list (quote (setf place)), or null.
+	private static @Nullable LispSymbol quotedSetfFunctionPlace(LispVal args) {
+		return args instanceof LispCons arg && arg.cdr() instanceof LispNil && arg.car() instanceof LispCons quoted
+				&& quoted.car() instanceof LispSymbol q && LispNames.QUOTE.equals(q.name())
+				&& quoted.cdr() instanceof LispCons rest && rest.cdr() instanceof LispNil
+						? LambdaLists.setfFunctionPlaceName(rest.car()) : null;
+	}
+
+	private static LispCons quoted(LispVal datum) {
+		return new LispCons(new LispSymbol(LispNames.QUOTE), new LispCons(datum, LispNil.INSTANCE));
 	}
 
 	// The symbol of a one-element argument list (quote name), or null.

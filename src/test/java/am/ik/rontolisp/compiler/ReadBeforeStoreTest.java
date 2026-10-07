@@ -100,6 +100,10 @@ class ReadBeforeStoreTest {
 		// An assignment of a place calls its setf function.
 		assertThat(checked("(defun |%setf-BOX| (v b) (list v b *a*)) (setf (box 1) 2) (setq *a* 0) (print *a*)"))
 			.isEqualTo("*A*");
+		// So does a call through #'(setf name).
+		assertThat(checked(
+				"(defun |%setf-BOX| (v b) (list v b *a*)) (setq *b* (funcall #'(setf box) 1 2)) (setq *a* 0) (print *b*)"))
+			.isEqualTo("*A*");
 		// A function named in quoted data can be called through it.
 		assertThat(checked("(defun f () *a*) (setq *b* (funcall 'f)) (setq *a* 0)")).isEqualTo("*A*");
 	}

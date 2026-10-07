@@ -23,7 +23,13 @@ Compilers: pass 1 collects only real `(defun ...)` -- a top-level `(setq f (lamb
 VARIABLE, called via `funcall`. `Jvm/WasmFunctionFormCompiler` compiles
 `(function name)`/`symbol-function`. Eval runtimes keep a second function namespace (`_fenv`
 field on JVM, `GLOBAL_FENV` wasm global). `FreeVarAnalyzer` skips the operator position and
-`(function name)` designators.
+`(function name)` / `(function (setf name))` designators: only a `#'(lambda ...)` operand is code.
+Every walker that descends into `function`'s operand must make the same test
+(`LambdaLists.setfFunctionPlaceName`); reading `(setf name)` as a form made a closure over
+`#'(setf name)` capture a variable NAME (`Cannot capture variable` on the JVM, `Cannot find
+variable for closure` on wasm) and hid the writer from `ReadBeforeStore`'s call graph.
+Pinned by `SetfFunctionNameFixture.CLOSURE` (`aSetfFunctionNameIsAFunctionNameInsideAClosure`
+in the three backend suites) and `ReadBeforeStoreTest#aFunctionTheTextNamesOnlyIndirectlyIsFollowed`.
 
 ## A native built-in's function value
 

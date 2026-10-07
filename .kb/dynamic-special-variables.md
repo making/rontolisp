@@ -523,7 +523,7 @@ and such a read answered NIL.
   `psetq` / `psetf` of it, and nothing that can run before that store reads it -- the forms before
   it, the values the store evaluates first, and the functions those can call. While that code calls
   only defuns, local functions and `ReadBeforeStore.INERT` operators, the functions are the defuns
-  its text names (code or quoted data, `%setf-NAME` through a place's accessor, a `satisfies`
+  its text names (code or quoted data, `%setf-NAME` through a place's accessor or `#'(setf NAME)`, a `satisfies`
   predicate through the `deftype` a type names), closed over their own text; past any other operator
   (printing: a `print-object` method; `make-instance`; `error`; a host call; a function the program
   does not define) every defun and every condition report counts. Directives (`wasm-import`,

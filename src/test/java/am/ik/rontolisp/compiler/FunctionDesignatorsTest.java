@@ -36,6 +36,17 @@ class FunctionDesignatorsTest {
 			.isEqualTo("(FLET ((FORMAT (X) X)) (SYMBOL-FUNCTION 'FORMAT))");
 	}
 
+	@Test
+	void aQuotedSetfFunctionNameIsTheWritersInternalName() {
+		assertThat(normalized("(list (fdefinition '(setf box)) (fboundp '(setf box)) (fmakunbound '(setf box)))"))
+			.isEqualTo("(LIST #'(SETF BOX) (FBOUNDP '|%setf-BOX|) (PROGN (FMAKUNBOUND '|%setf-BOX|) '(SETF BOX)))");
+		assertThat(normalized("(setf (fdefinition '(setf box)) #'list)"))
+			.isEqualTo("(SETF (FDEFINITION '|%setf-BOX|) #'LIST)");
+		// A computed name, and a list that names no function, stay as written.
+		assertThat(normalized("(list (fboundp (list 'setf 'box)) (fboundp '(box)))"))
+			.isEqualTo("(LIST (FBOUNDP (LIST 'SETF 'BOX)) (FBOUNDP '(BOX)))");
+	}
+
 	private static String normalized(String source) {
 		List<LispVal> program = FunctionDesignators.normalizeBuiltinDesignators(LispReader.readAllFromString(source));
 		return program.getFirst().print();

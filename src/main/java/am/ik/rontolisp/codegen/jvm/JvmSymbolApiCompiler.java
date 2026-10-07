@@ -760,7 +760,8 @@ final class JvmSymbolApiCompiler {
 		ctx.body.labelBinding(noBinding);
 		ctx.body.labelBinding(cleared);
 		ctx.body.pop();
-		JvmFunctionFormCompiler.emitUndefinedFunctionThrow(nameSlot, ctx);
+		// The name is known here, so a (setf place) writer's is reported as the list.
+		JvmFunctionFormCompiler.emitUndefinedFunctionThrow(name, ctx);
 		ctx.body.labelBinding(end);
 	}
 

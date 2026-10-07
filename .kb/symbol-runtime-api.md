@@ -296,6 +296,30 @@ nil)` reported `The function NIL is undefined`. Pinned on all four backends by
   `setf-symbol-function-and-fdefinition`; `SetfSymbolFunctionReferenceFixture`
   (`aNameOnlySetfSymbolFunctionBindsIsUndefinedUntilTheSetfRuns` in the three backend suites).
 
+### A `(setf name)` function name
+`fdefinition`, `fboundp`, `fmakunbound` and `(setf (fdefinition ...))` take a `(setf name)` list
+as well as a symbol (`symbol-function` does not: SBCL signals a type-error). The writer is stored
+under `%setf-NAME` (`LispMacroExpander.setfFunctionName`), so the list maps onto that name.
+
+- **Interpreter**: at run time, any list (`LispEvaluator.functionName`); `fmakunbound` answers the
+  list.
+- **Compile paths**: a QUOTED list only, rewritten in `FunctionDesignators.normalizeBuiltinDesignators`
+  (both backends, before every gate): `(fdefinition '(setf n))` -> `#'(setf n)`, `(fboundp '(setf
+  n))` -> `(fboundp '%setf-N)`, `(fmakunbound '(setf n))` -> `(progn (fmakunbound '%setf-N) '(setf
+  n))`, the place `(fdefinition '(setf n))` -> `(fdefinition '%setf-N)` -- so the setf-only alias
+  forwarder serves it (`setfOnlyFunctionAliasNames` also counts `(defun (setf n) ...)` as a
+  definition of `%setf-N`). A miss reports `(SETF N)` through `ClosRegistry.functionNameForReport`;
+  the JVM's `%fenv-function` miss now throws the static text for that (it concatenated the
+  symbol at run time, so a retired forwarder name reported `|%setf-N|`).
+- **Not done: a list built at run time** on the compile paths (`(fdefinition (list 'setf x))`):
+  the JVM throws a raw `ClassCastException`, P1 and the component trap -- mapping it needs the
+  `%setf-` name built and interned at run time on every such site (`.todo/e13`).
+- Measured 2026-10-07 (SBCL 2.2.9 / interpreter / JVM / P1 / component): before, `(fdefinition
+  '(setf n))` was `FDEFINITION expects a symbol` / `ClassCastException` / trap / trap.
+- Pinned by `SetfFunctionNameFixture.DESIGNATOR` (`theFunctionNameOperatorsTakeASetfFunctionName`
+  in the three backend suites); the run-time list by
+  `LispEvaluatorTest#theFunctionNameOperatorsTakeAComputedSetfFunctionName`.
+
 ### `set` / `(setf (symbol-value name) value)` for a computed name (`.todo/852`)
 `expandSetf` lowers the place to `(set name value)` -- one store, evaluated once each
 side, answering the value -- so only `set` needs the per-backend work.
