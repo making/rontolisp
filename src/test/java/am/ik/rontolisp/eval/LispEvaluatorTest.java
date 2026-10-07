@@ -21349,7 +21349,7 @@ class LispEvaluatorTest {
 		// The reference answer (SBCL's) the compiled backends' twins of this name
 		// (JvmLispCompilerTest, WasmLispCompilerIntegrationTest) are measured against:
 		// every unbound-variable names its variable, NIL used to be read back
-		// (.kb/error-handling.md, "Every cell-error names its cell").
+		// (.kb/error-handling.md, "A built-in error carries its CONDITION CLASS").
 		assertThat(printedLines(am.ik.rontolisp.UnboundVariableNameFixture.PLAIN))
 			.isEqualTo(am.ik.rontolisp.UnboundVariableNameFixture.PLAIN_EXPECTED);
 		assertThat(printedLines(am.ik.rontolisp.UnboundVariableNameFixture.RESTART))

@@ -1,5 +1,5 @@
 ;;;; The kernels behind the --gpu residency measurement (.kb/jvm-export.md,
-;;;; "--gpu residency, and why the handle does not materialize"). Compile them as
+;;;; "The packed float array handle"). Compile them as
 ;;;; a library class -- see run.sh, which also builds and runs GpuResidencyBench:
 ;;;;
 ;;;;   rontolisp gpu-kernels.lisp -o com/example/GpuKernels.class --no-main --gpu

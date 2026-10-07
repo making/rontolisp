@@ -597,11 +597,11 @@ public final class LispString implements LispVal {
 	 * <p>
 	 * Both compile backends encode a string value as its content framed in {@code "}
 	 * bytes, and use the leading {@code "} as the discriminator that tells a string from
-	 * a symbol name (see {@code .kb/core-representation.md}, "symbolp/stringp"). That
-	 * framing is part of the VALUE, so it must stay verbatim: the escaping belongs to the
-	 * printer ({@link #print()}) and is applied by the emitted runtime at print time, on
-	 * the content only. A storage site that used {@link #print()} would bake the escapes
-	 * into the value itself and make {@code length}/{@code char} see them.
+	 * a symbol name (see {@code .kb/core-representation.md}, "Encoding"). That framing is
+	 * part of the VALUE, so it must stay verbatim: the escaping belongs to the printer
+	 * ({@link #print()}) and is applied by the emitted runtime at print time, on the
+	 * content only. A storage site that used {@link #print()} would bake the escapes into
+	 * the value itself and make {@code length}/{@code char} see them.
 	 * @return the raw quote-framed content
 	 */
 	public String literal() {

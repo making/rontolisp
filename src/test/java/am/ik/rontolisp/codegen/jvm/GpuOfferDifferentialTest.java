@@ -282,10 +282,10 @@ class GpuOfferDifferentialTest {
 	 *
 	 * <p>
 	 * Making it CI-visible was priced and declined -- a stand-in {@code GpuDevice}, or a
-	 * parallel shape-predicate surface on the bridge; {@code .kb/gpu.md}, "Closing the
-	 * gap was priced and DECLINED" has the numbers and the reasons, of which the sharpest
-	 * is that a device answering {@code true} without touching memory would make the
-	 * seven RESIDENT-operand cases below agree vacuously and would compare an unwritten
+	 * parallel shape-predicate surface on the bridge ({@code .kb/gpu.md}, "The offer is
+	 * decided twice, and what pins the two"). The sharpest reason is that a device
+	 * answering {@code true} without touching memory would make the seven
+	 * RESIDENT-operand cases below agree vacuously and would compare an unwritten
 	 * destination against another unwritten destination for the bits. What DOES run in CI
 	 * is {@link #theTwoPathsAccelerateTheSameMemberSet()}, one method up.
 	 */
@@ -761,7 +761,7 @@ class GpuOfferDifferentialTest {
 	/**
 	 * The COMPILED side of a quantized operand: the blocks behind the int header
 	 * {@code [format = 1][rank][dims...]} at {@code 8 + 4 * rank}
-	 * ({@code .kb/quantized-matrix.md}, "JVM representation").
+	 * ({@code .kb/quantized-matrix.md}, "The type").
 	 */
 	private static byte[] packedQ8(Operand o) {
 		int[] dims = o.dims();

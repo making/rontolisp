@@ -19,7 +19,7 @@ import java.util.Arrays;
  * body, binary stream and digest buffer is made of: a {@code long[]} spent eight bytes an
  * octet, and a 256 MiB body read with {@code read-all} peaked at 6.2 GB of live heap, two
  * thirds of it the body's octets held twice in {@code long[]}s
- * ({@code .kb/fetch-http.md}, "Throughput").
+ * ({@code .kb/fetch-http.md}, "--native").
  *
  * <p>
  * Element semantics, identical on every backend by construction: a store masks the value

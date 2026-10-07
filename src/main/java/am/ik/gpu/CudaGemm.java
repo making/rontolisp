@@ -1677,8 +1677,8 @@ final class CudaGemm implements GpuDevice {
 		// AND
 		// a later upload, and the pool's recycling, which the cap exists for, is worth
 		// less
-		// than either; the budget is what the device has less a headroom (.kb/gpu.md, "A
-		// result comes home on first host touch").
+		// than either; the budget is what the device has less a headroom (.kb/gpu.md,
+		// "Lazy results").
 		long held = free < 0 ? 0 : free + this.residency.bytes();
 		this.residency.setBudget(override >= 0 ? override
 				: this.lazy ? Math.max(0, held - Math.max(held / LAZY_HEADROOM_SHARE, LAZY_HEADROOM_FLOOR))

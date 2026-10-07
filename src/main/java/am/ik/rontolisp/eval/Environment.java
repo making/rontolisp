@@ -10757,7 +10757,7 @@ public final class Environment implements Scope {
 	 * decoder into a {@code CharBuffer} (and, for malformed input, a
 	 * {@code StringBuilder}), then re-scan the {@code String} into code points -- five
 	 * body-sized intermediates, half of a 256 MiB {@code read-all}'s peak
-	 * ({@code .kb/fetch-http.md}, "Throughput").
+	 * ({@code .kb/fetch-http.md}, "--native").
 	 * @param v the octets
 	 * @return the decoded code points
 	 */

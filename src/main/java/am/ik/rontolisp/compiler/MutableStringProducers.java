@@ -14,8 +14,8 @@ import am.ik.rontolisp.LispVal;
  * {@code format nil} / string-stream-capture / {@code read-line} result the writable
  * identity a Common Lisp string has (two aliases of one string see each other's writes),
  * matching the interpreter and SBCL. {@code subseq} / {@code copy-seq} flipped first
- * ({@code .kb/string-write-runtime.md}, "A copy-seq/subseq result is mutable with
- * identity"); this class carries the second round.
+ * ({@code .kb/string-write-runtime.md}, "Allocated strings are mutable with identity");
+ * this class carries the second round.
  *
  * <p>
  * Both compile backends wrap the flipped producers' results through one runtime helper

@@ -25,7 +25,7 @@ import org.jspecify.annotations.Nullable;
  * interface vocabulary ({@code objc:invoke}, {@code objc:invoke-into},
  * {@code objc:retain}, {@code cocoa:set-ns-rect*}, ...), written once in rontolisp
  * ({@code objc.lisp} on the classpath) over the per-backend primitive layer
- * ({@code objc::%send} and friends; .kb/objc.md, "The primitive layer").
+ * ({@code objc::%send} and friends; .kb/objc.md, "Layers").
  *
  * <p>
  * Consumers, the {@link AppKitLibrary} pair:

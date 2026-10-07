@@ -847,8 +847,8 @@ extern "C" __global__ void scatter_f64(double* Z, const double* G, const int* me
 // whole array, in double at both widths. This is the ONE kernel in this file that does
 // not compute the caller's own fold ORDER, and it is a deliberate break rather than an
 // oversight -- the defun's contract is a single left fold, which no parallel reduction
-// keeps, and every alternative was worse than the break (.kb/gpu.md, "The index tier and
-// the clip norm"). Each block folds a grid-stride slice and writes one double partial;
+// keeps, and every alternative was worse than the break (.kb/gpu.md, "Precision"). Each block folds
+// a grid-stride slice and writes one double partial;
 // the host adds the partials up in block order, so the value is still a pure function of
 // the length. Both steps are _rn intrinsics, so each term is rounded exactly where the
 // defun rounds it and only the ASSOCIATION differs.

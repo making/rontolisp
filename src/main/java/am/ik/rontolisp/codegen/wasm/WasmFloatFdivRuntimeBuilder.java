@@ -19,8 +19,8 @@ import am.ik.wasm.WasmWriter;
  * instead rounds twice and then clamps: {@code (truncate
  * 1d300 7.0)} answered {@code Long.MAX_VALUE} and {@code (truncate 1d18 7.0)} answered a
  * quotient seven too high, whose remainder no longer satisfied
- * {@code quotient*divisor + remainder = number}. See {@code .kb/linalg-simd.md},
- * "mod/rem", and {@code .kb/wasm-bignum.md}.
+ * {@code quotient*divisor + remainder = number}. See {@code .kb/linalg-simd.md}, "mod /
+ * rem and the floor family", and {@code .kb/wasm-bignum.md}.
  *
  * <p>
  * Both operands become the exact rational they are -- a float as
@@ -70,7 +70,7 @@ final class WasmFloatFdivRuntimeBuilder {
 		// emitRationalOf says so). With a finite nonzero dividend, a/b is an
 		// infinitesimal whose magnitude is always under 1/2, so truncate/round are
 		// always 0 and floor/ceiling read off whether the dividend and the divisor agree
-		// in sign. See .kb/linalg-simd.md, "mod/rem".
+		// in sign. See .kb/linalg-simd.md, "mod / rem and the floor family".
 		get(w, 1);
 		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
 		w.writeHeapType(WasmLispCompiler.TYPE_FLOAT);

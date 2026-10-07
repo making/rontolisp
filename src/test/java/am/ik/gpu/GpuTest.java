@@ -1712,7 +1712,7 @@ class GpuTest {
 		double[] a = new double[batch * n * n], b = new double[batch * n * n], out = new double[batch * n * n];
 		// The accepted baseline at the same shape, over its own operands: this
 		// enumeration is the one that went vacuous on the other backend, whose floor the
-		// same batch does not clear (.kb/gpu.md, "What GpuTest claims").
+		// same batch does not clear (.kb/gpu.md, "The vacuity sweeps").
 		double[] baseA = new double[batch * n * n], baseB = new double[batch * n * n],
 				baseOut = new double[batch * n * n];
 		assertThat(Gpu.multiply(baseA, 0, n * n, baseB, 0, n * n, baseOut, 0, batch, n, n, n))

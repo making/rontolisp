@@ -484,8 +484,9 @@ public final class RontoFloatArray {
 			throw new IllegalArgumentException("not a packed float array: it carries no dimension header");
 		}
 		int rank = headerAt(packed, RANK_SLOT);
-		// A --gpu lazy result is the header ALONE (.kb/gpu.md, "A lazy result allocates
-		// no host array"), so the elements are NOT required to be present here.
+		// A --gpu lazy result is the header ALONE (.kb/gpu.md, "Lazy results"), so the
+		// elements are
+		// NOT required to be present here.
 		if (rank < 1 || length < dataOffsetOf(packed, rank)) {
 			throw new IllegalArgumentException("not a packed float array: its dimension header states rank " + rank);
 		}

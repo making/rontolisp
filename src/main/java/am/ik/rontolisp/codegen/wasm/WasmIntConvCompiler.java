@@ -93,7 +93,8 @@ final class WasmIntConvCompiler {
 			// A FLOAT operand divides exactly too: _f64_fdiv reads both operands as the
 			// exact rationals they are, so the quotient is the mathematical integer at
 			// any magnitude rather than the rounded double (/ a b) narrowed into an i64,
-			// and the remainder beside it stays rem/mod (.kb/linalg-simd.md, "mod/rem").
+			// and the remainder beside it stays rem/mod (.kb/linalg-simd.md, "mod / rem
+			// and the floor family").
 			// It answers a null for the pairs it does not improve on -- a ratio operand,
 			// a non-finite float, a zero divisor outside EH mode -- which fall through to
 			// the ordinary division below.

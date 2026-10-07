@@ -406,9 +406,9 @@ final class WasmHandlerCaseCompiler {
 	/**
 	 * Compiles a {@code :no-error} clause body -- {@code (:no-error ([var...]) body...)}
 	 * -- binding each variable to the protected form's VALUES, the same shape
-	 * {@code multiple-value-bind} uses (.kb/multiple-values.md, "missing -> nil, surplus
-	 * evaluated and dropped"). The variable list here is the required-only shape:
-	 * {@code &optional}/{@code &rest}/{@code &key} are not accepted.
+	 * {@code multiple-value-bind} uses (.kb/multiple-values.md, "handler-case's :no-error
+	 * clause is a multiple-value consumer"). The variable list here is the required-only
+	 * shape: {@code &optional}/{@code &rest}/{@code &key} are not accepted.
 	 *
 	 * <p>
 	 * The primary value is already in {@code valueSlot} (the protected form's result),

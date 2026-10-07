@@ -57,18 +57,18 @@ import static org.assertj.core.api.Assertions.within;
  * That file is gated on a DOUBLE-capable device, so its tests skip in full on every Mac,
  * and for a long time nobody had put the two lists side by side: a pin inside a device
  * gate is covered on ONE backend, and the other backend's suite is the only thing that
- * says whether the claim holds there. The comparison is written out per test in
- * {@code .kb/gpu.md}, "What GpuTest claims, and where Metal answers it"; the section at
- * the end of this file is the half of it that came back "the mechanism is here and
- * nothing on this backend pinned it" -- the decline enumerations that a device-free
- * suite's fixed shapes cannot reach here, the strided tier's offsets and its rank-3
- * gather, the middle-axis fold over a resident operand, the exact-reciprocal rewrite
- * (whose own argument is about a backend that computes in {@code float}, which is this
- * one), the element-wise and strided pool runs, and the four result-stub claims, which
- * are what every compiled {@code --gpu} program's results are here now that lazy results
- * pay. It also pins the three tiers this backend does NOT have -- the index tier, the
- * clip norm and layer-norm's affine pair -- as declines over a RESIDENT operand, which is
- * the only state that tells "not a member here" from "not resident yet".
+ * says whether the claim holds there ({@code .kb/gpu.md}, "The Metal backend"). The
+ * section at the end of this file is the half of the comparison that came back "the
+ * mechanism is here and nothing on this backend pinned it" -- the decline enumerations
+ * that a device-free suite's fixed shapes cannot reach here, the strided tier's offsets
+ * and its rank-3 gather, the middle-axis fold over a resident operand, the
+ * exact-reciprocal rewrite (whose own argument is about a backend that computes in
+ * {@code float}, which is this one), the element-wise and strided pool runs, and the four
+ * result-stub claims, which are what every compiled {@code --gpu} program's results are
+ * here now that lazy results pay. It also pins the three tiers this backend does NOT have
+ * -- the index tier, the clip norm and layer-norm's affine pair -- as declines over a
+ * RESIDENT operand, which is the only state that tells "not a member here" from "not
+ * resident yet".
  */
 @EnabledIf("am.ik.gpu.MetalGpuTest#aMetalGpuIsAvailable")
 class MetalGpuTest {
@@ -897,8 +897,8 @@ class MetalGpuTest {
 	// --- lazy results and the resident tier, on Metal (2026-08-23) ---------------------
 	// The Apple half of CUDA's lazy results, built, measured, NOT switched on for the
 	// interceptors until the command buffers became asynchronous under it (.kb/gpu.md,
-	// "Lazy results and the resident tier on Metal", then "Asynchronous command buffers
-	// on Metal"): asked for, a member's result stays in its slab as the host array's
+	// "Residency and the GEMV on this backend", then "Asynchronous command buffers"):
+	// asked for, a member's result stays in its slab as the host array's
 	// DIRTY copy until the host first reads it, every operand a call uploads is kept as a
 	// clean one, and the members a round trip had refused run over a resident operand as
 	// launches with no copy. The slabs are the pool's, so the claims below are also
@@ -913,7 +913,7 @@ class MetalGpuTest {
 	void theInterceptorsRequestSwitchesLazyResultsOnHereAndTheDefaultStaysEager() {
 		// The first decision (eager), reversed and pinned: lazy results pay on
 		// this backend now that a call under the mode does not wait for its command
-		// buffer (.kb/gpu.md, "Asynchronous command buffers on Metal"), so the request
+		// buffer (.kb/gpu.md, "Asynchronous command buffers"), so the request
 		// the interceptors make switches the mode on -- while the library's default,
 		// and the contract every method's javadoc states, is still eager.
 		MetalGemm gemm = device();
@@ -1908,8 +1908,7 @@ class MetalGpuTest {
 	// GpuTest is gated on a DOUBLE-capable device, so its 57 tests skip in full on every
 	// Mac, and for a long time nobody had put the two lists side by side. What follows is
 	// the half of that comparison that came back "the mechanism is here and nothing on
-	// this backend pins it". The verdict per test, and the reason for each claim that is
-	// NOT here, is in `.kb/gpu.md`, "What GpuTest claims, and where Metal answers it".
+	// this backend pins it" (`.kb/gpu.md`, "The Metal backend").
 
 	@Test
 	void everyBatchedDeclineConditionStillDeclinesWithADevicePresent() {

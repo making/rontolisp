@@ -281,8 +281,11 @@ sealed interface GpuDevice permits CudaGemm, MetalGemm {
 	 * the last-axis log-softmax and its adjoint, layer-norm's normalization and its
 	 * adjoint, and the inverted-dropout mask, each as one pass where the
 	 * {@code torch.lisp} composition launched a chain of members -- every rounding of the
-	 * chain reproduced ({@link Gpu} has the per-member contract). On CUDA; the Metal half
-	 * declines them all, and the compositions run there member by member as before.
+	 * chain reproduced ({@link Gpu} has the per-member contract). CUDA takes every member
+	 * at both widths. The Metal half takes eight of the nine at single float -- its
+	 * {@code double} overloads decline -- and declines layer-norm's affine pair and the
+	 * dropout mask, whose compositions run there member by member as before
+	 * ({@code .kb/gpu.md}, "The fused tier on Metal").
 	 * @return {@code true} when the result was filled
 	 */
 	boolean gelu(double[] a, int oa, double[] c, int oc, int n);
@@ -425,8 +428,8 @@ sealed interface GpuDevice permits CudaGemm, MetalGemm {
 	 * {@code true} on CUDA (a fifth off the training step, then half), and {@code true}
 	 * on Metal since its command buffers became asynchronous under the mode (the step at
 	 * the book's shapes 4.80 -> 1.81 s); it was {@code false} there while every call
-	 * waited ({@code .kb/gpu.md}, "Asynchronous command buffers on Metal"). Independent
-	 * of {@link #lazyResults}: an embedder that asks gets the mode on either backend.
+	 * waited ({@code .kb/gpu.md}, "Asynchronous command buffers"). Independent of
+	 * {@link #lazyResults}: an embedder that asks gets the mode on either backend.
 	 * @return {@code true} when the interceptors should run with lazy results
 	 */
 	boolean lazyResultsPay();

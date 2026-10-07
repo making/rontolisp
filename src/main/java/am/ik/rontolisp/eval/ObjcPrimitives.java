@@ -32,7 +32,7 @@ import org.jspecify.annotations.Nullable;
 
 /**
  * The interpreter's primitive layer of the new {@code objc} base: the {@code objc::%}
- * functions {@code objc.lisp} is written over (.kb/objc.md, "The primitive layer"), plus
+ * functions {@code objc.lisp} is written over (.kb/objc.md, "Layers"), plus
  * {@code objc:on-main}. Nothing here decides a rule -- which argument converts to what,
  * who owns a reference, when a pool drains -- that is all in {@code objc.lisp}, run
  * unchanged on every target; this class only moves raw values between the interpreter's

@@ -132,6 +132,14 @@ points at the `.kb/` file holding it, since the number means nothing once the it
 deliberately no longer has goes in its `ABSENT_ON_PURPOSE` list with its reason, and a
 second test fails if one of those names comes back.
 
+The same test pins the other half of a citation, the SECTION: outside the notes, a
+comment that names a note and quotes a title after it (a path, then a comma and a
+quoted title) must quote the opening words of a heading of that note
+(`everyQuotedSectionTitleInSourceIsAHeadingOfThatNote`; markup and case ignored, a
+title may be shortened but not reworded). Renaming or splitting a heading in a note
+therefore fails the build until the quotes follow it. A bold paragraph label or a table
+row is not a heading: cite the heading it sits under.
+
 ### 2b. A move that changes DEPTH rewrites the paths INSIDE what moved
 
 The four renames above kept their depth, so nothing inside the moved files had to change.

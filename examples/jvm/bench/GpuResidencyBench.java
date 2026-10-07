@@ -8,8 +8,7 @@ import com.example.GpuKernels;
 
 /**
  * Does the Java boundary handle defeat the {@code --gpu} device-resident tier? -- the
- * measurement behind {@code .kb/jvm-export.md}, "--gpu residency, and why the handle does
- * not materialize".
+ * measurement behind {@code .kb/jvm-export.md}, "The packed float array handle".
  *
  * <p>
  * A {@code :float-vector} result is wrapped WITHOUT materializing, so a Java-side chain

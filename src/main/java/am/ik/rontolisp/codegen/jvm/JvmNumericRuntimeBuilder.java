@@ -3353,7 +3353,7 @@ final class JvmNumericRuntimeBuilder {
 	// they do not: floor rounds the infinitesimal down, ceiling up). An exact-zero or
 	// non-finite dividend, or a ratio operand, still declines to the old f64 route, which
 	// already answers correctly there (0/infinity is exactly zero, not an infinitesimal).
-	// See .kb/linalg-simd.md, "mod/rem".
+	// See .kb/linalg-simd.md, "mod / rem and the floor family".
 	private static NumericMethod buildFdiv(Utf8Entry name, Utf8Entry desc, ClassEntry doubleClass,
 			ClassEntry numberClass, MethodRefEntry numDoubleValue, ClassEntry ratArrClass, MethodRefEntry rFrat,
 			MethodRefEntry rDiv, MethodRefEntry rRatTrunc, MethodRefEntry rRatFloor, MethodRefEntry rRatCeil,

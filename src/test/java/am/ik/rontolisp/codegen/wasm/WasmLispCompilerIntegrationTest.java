@@ -9166,7 +9166,8 @@ class WasmLispCompilerIntegrationTest {
 		// the nested definition was written to a store nothing read and the call after
 		// (redefiner) still answered TOP. The top-level definition is renamed and its
 		// function value assigned to the global in its place, so the one variable
-		// carries both answers in order (.kb/core-representation.md, "The NAME half").
+		// carries both answers in order (.kb/core-representation.md, "Three-pass
+		// compilation").
 		assertThat(compileAndRun("""
 				(defun over () 'top)
 				(defun redefiner ()
@@ -24112,7 +24113,8 @@ class WasmLispCompilerIntegrationTest {
 	// WITHOUT --simd, and that is exactly where a --simd-only bug hid: the
 	// matrix that matters here is backend x --simd, not backend alone. Under --simd a
 	// packed float array's data field is a TYPE_VBLOCK of v128 lane groups instead of a
-	// $f32arr / $f64arr (.kb/vec.md, "Acceleration layer 3"), so the widen's destination
+	// $f32arr / $f64arr (.kb/vec.md, "The four acceleration layers"), so the widen's
+	// destination
 	// cast and the narrow's source cast both trapped on every --simd build. The element
 	// counts are chosen to leave a partly-used last lane group at both widths (7 with
 	// f32x4, 5 with f64x2), and the first case's :start 2 into a pre-filled destination
@@ -25601,12 +25603,12 @@ class WasmLispCompilerIntegrationTest {
 	 * 31 columns is a PARTIAL group, and the four close one differently: the interpreter,
 	 * the JVM and {@code --no-gc} run the lane loop to {@code loopBound} and add the
 	 * leftover as a scalar tail, while wasm-GC folds the {@code ceil(n/4)}th group with
-	 * its padding lanes zeroed ({@code .kb/vec.md}, "No kernel has a scalar tail"). They
-	 * agree here -- {@code 2^24 + 24} on all four -- but the agreement is arithmetic
-	 * luck, not the contract: the two folds reach different intermediate sums and both
-	 * tie to even onto the same neighbour for THIS probe's data. Move the {@code 2^24}
-	 * into the tail region and they part company, 16777244 against 16777248 -- the
-	 * deliberate divergence pinned by
+	 * its padding lanes zeroed ({@code .kb/vec.md}, "The f32-reduction precision
+	 * contract"). They agree here -- {@code 2^24 + 24} on all four -- but the agreement
+	 * is arithmetic luck, not the contract: the two folds reach different intermediate
+	 * sums and both tie to even onto the same neighbour for THIS probe's data. Move the
+	 * {@code 2^24} into the tail region and they part company, 16777244 against 16777248
+	 * -- the deliberate divergence pinned by
 	 * {@code wasmGcSimdPartialFinalGroupFoldsTheZeroPaddedGroupByDesign} and its
 	 * scalar-tail mirror (a contract exception, {@code .kb/vec.md}). So this assertion
 	 * pins what the backends do at a partial row, and is not evidence that a partial row

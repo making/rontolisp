@@ -33,8 +33,9 @@ import static org.assertj.core.api.Assertions.assertThatCode;
  * Every evaluation builds its own evaluator, so the methods, the two runs of one program
  * and the calls of one table all run at once: the class is the scalar defun over
  * six-digit element counts, minutes when serial. The one shared thing is the DEVICE --
- * {@code am.ik.gpu.DeviceResidency} is not thread-safe (.kb/gpu.md, "Threads") -- so
- * where a device answered the probe, the flag-on runs still take it one at a time.
+ * {@code am.ik.gpu.DeviceResidency} is not thread-safe (.kb/gpu.md, "The probe, and
+ * lifetimes") -- so where a device answered the probe, the flag-on runs still take it one
+ * at a time.
  */
 @Execution(ExecutionMode.CONCURRENT)
 class LinalgGpuDeclineTest {

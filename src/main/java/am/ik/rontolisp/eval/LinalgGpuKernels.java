@@ -81,8 +81,7 @@ final class LinalgGpuKernels {
 	 * that the record holds as its storage and the library keys its residency on, with
 	 * the elements allocated by the library the first time the host reads them
 	 * ({@code Gpu.materialize}, answered through the records' {@code data()}). A result
-	 * nobody reads then costs the host no array ({@code .kb/gpu.md}, "A lazy result
-	 * allocates no host array").
+	 * nobody reads then costs the host no array ({@code .kb/gpu.md}, "Lazy results").
 	 */
 	static float[] resultF(int n) {
 		return new float[Gpu.lazyResultsOn() ? 0 : n];

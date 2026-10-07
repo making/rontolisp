@@ -9450,11 +9450,11 @@ public final class LispNames {
 	 * is consumed by an internal append or written straight to a stream and the program
 	 * never receives it. The public {@code princ-to-string} wraps its result into a
 	 * mutable character vector so it carries identity
-	 * ({@code .kb/string-write-runtime.md}, "The fourth round"); a piece built with it
-	 * would pay that conversion once per PIECE, and {@code map 'string} once per
-	 * CHARACTER. Distinct from {@link #PRINC_TO_STRING_RAW}, which does not route through
-	 * {@code print-object} and therefore cannot serve a piece that renders a user
-	 * instance.
+	 * ({@code .kb/string-write-runtime.md}, "Allocated strings are mutable with
+	 * identity"); a piece built with it would pay that conversion once per PIECE, and
+	 * {@code map 'string} once per CHARACTER. Distinct from {@link #PRINC_TO_STRING_RAW},
+	 * which does not route through {@code print-object} and therefore cannot serve a
+	 * piece that renders a user instance.
 	 */
 	public static final String PRINC_PIECE_INTERNAL = "%PRINC-PIECE";
 

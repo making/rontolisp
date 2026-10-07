@@ -2627,7 +2627,7 @@ public final class LispPreludeLibrary {
 		// keeps a document-shaped consumer reading text off a byte stream. A stream
 		// mixing the two kinds is an error rather than a guess. The chunk list is dropped
 		// once joined, so a body's octets are held once, not twice, while the decode
-		// builds the string (.kb/fetch-http.md, "Throughput").
+		// builds the string (.kb/fetch-http.md, "--native").
 		SOURCES.put(LispNames.READ_ALL, """
 				(rontolisp:async-defun rontolisp:read-all (s)
 				  (if (stringp s)

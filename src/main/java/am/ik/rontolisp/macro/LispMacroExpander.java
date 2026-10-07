@@ -40452,7 +40452,7 @@ public final class LispMacroExpander {
 			blockParts.addAll(e.body());
 			lambdaParts.add(listToCons(blockParts));
 			// The local function stands for its definition, so a compiled program's
-			// report places it there (.kb/source-positions.md, Half 2).
+			// report places it there (.kb/source-positions.md, "Phase 2").
 			LispVal lambda = listToCons(lambdaParts);
 			SourceProvenance.inheritWhenCompiling((LispCons) defs.get(i - 1), lambda);
 			if (recursive) {
@@ -40524,7 +40524,7 @@ public final class LispMacroExpander {
 		}
 		letParts.addAll(rewrittenBody);
 		// The expansion stands where the flet/labels form stood (.kb/source-positions.md,
-		// "Half 2").
+		// "Phase 2").
 		return inheriting(cons, listToCons(letParts));
 	}
 
@@ -40580,7 +40580,7 @@ public final class LispMacroExpander {
 	 *
 	 * <p>
 	 * A form nothing inside changed comes back as itself, and a rebuilt one keeps the
-	 * position of the one it replaces on both paths (.kb/source-positions.md, Half 2):
+	 * position of the one it replaces on both paths (.kb/source-positions.md, "Phase 2"):
 	 * otherwise every form around a local call would lose the line an uncaught report
 	 * gives for a condition inside it.
 	 */
@@ -41102,7 +41102,8 @@ public final class LispMacroExpander {
 					// truncate and mod as the remainder of floor, and both are exact on
 					// every backend, so the family reads its own remainder off them:
 					// ceiling's is mod - divisor, and round's is whichever of the two its
-					// quotient landed on. See .kb/linalg-simd.md, "mod/rem".
+					// quotient landed on. See .kb/linalg-simd.md, "mod / rem and the
+					// floor family".
 					//
 					// The f-prefixed twins (ffloor/fceiling/fround/ftruncate) share this
 					// lowering entirely: their quotient is the SAME exact integer, only
@@ -41937,7 +41938,7 @@ public final class LispMacroExpander {
 
 	/**
 	 * A form the walk built in place of {@code original}, carrying its source position
-	 * (.kb/source-positions.md, "Half 2"): a compile error inside the rewritten tail
+	 * (.kb/source-positions.md, "Phase 2"): a compile error inside the rewritten tail
 	 * still names the line it came from.
 	 */
 	private static LispVal inheriting(LispVal original, LispVal rewritten) {

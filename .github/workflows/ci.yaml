@@ -99,7 +99,7 @@ jobs:
   # Each platform's runner stubs (rlrun, and rlrun-net for a program that fetches), for
   # every native binary to carry beside its own pair: a --native-target output starts
   # with the TARGET's stub, and only a runner of that platform can build it
-  # (.kb/native-output.md, "Packaging").
+  # (.kb/native-output.md, "The Java side").
   native-stubs:
     needs: test
     if: github.event_name != 'pull_request'
@@ -253,7 +253,7 @@ jobs:
         pattern: rontolisp-*
         path: artifacts
     # Every platform's --native pair goes into the executable jar, which runs on any
-    # of them (~11 MB compressed for the three; .kb/native-output.md, "Packaging").
+    # of them (~11 MB compressed for the three; .kb/native-output.md, "The Java side").
     # The Maven Central jar (the deploy job) carries none.
     - name: Download every platform's --native pair
       uses: actions/download-artifact@v8

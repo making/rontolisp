@@ -29,7 +29,8 @@
 # added through rustup when missing), so an output runs on any distribution: no glibc
 # floor. Not static glibc, which made every output 0.83 MB bigger; the stub brings its
 # own memcpy/memmove (and memset on x86_64), since musl's made the copying GC ~17% slower
-# on x86_64 and ~3% on aarch64 (.kb/native-output.md, "musl"). Without the target (no rustup) the stub falls back to
+# on x86_64 and ~3% on aarch64 (.kb/native-output.md, "Traps"). Without the target (no rustup) the
+# stub falls back to
 # linking glibc dynamically with a warning, except under REQUIRED.
 set -euo pipefail
 cd "$(dirname "$0")"
