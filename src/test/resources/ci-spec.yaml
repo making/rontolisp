@@ -14201,6 +14201,71 @@ cases:
       (1 #(NIL))
       (NIL)
       (1 #())
+  - name: special-let-restores-across-nested-exits
+    source: |
+      ;; The same restore on the exits the case above leaves out: a return crossing a
+      ;; handler-case (with and without an unwind-protect), a go across a handler-case, a
+      ;; handler-bind handler that go's out, a 50-deep recursion leaving by error, throw and
+      ;; return-from, a return-from out of a flet / labels function, nested bindings of one
+      ;; special, and progv.
+      (defvar *sy* :top)
+      (defun sy-see () *sy*)
+      (defun sy-r1 ()
+        (block b (handler-case (let ((*sy* :in)) (return-from b (sy-see))) (error () nil))))
+      (print (list (sy-r1) *sy*))
+      (defun sy-r2 ()
+        (block b (let ((*sy* :in)) (handler-case (return-from b (sy-see)) (error () nil)))))
+      (print (list (sy-r2) *sy*))
+      (defun sy-r3 ()
+        (block b
+          (handler-case (let ((*sy* :in)) (unwind-protect (return-from b (sy-see)) (sy-see)))
+            (error () nil))))
+      (print (list (sy-r3) *sy*))
+      (defun sy-r4 ()
+        (let ((seen nil))
+          (block b (let ((*sy* :in)) (unwind-protect (return-from b nil) (setq seen *sy*))))
+          (list seen *sy*)))
+      (print (sy-r4))
+      (defun sy-go ()
+        (let ((r nil))
+          (tagbody
+             (handler-case (let ((*sy* :go)) (setq r *sy*) (go out)) (error () nil))
+           out)
+          (list r *sy*)))
+      (print (sy-go))
+      (defun sy-hb ()
+        (tagbody
+           (handler-bind ((error (lambda (c) (declare (ignore c)) (go done))))
+             (let ((*sy* :hb)) (error "z")))
+         done)
+        *sy*)
+      (print (sy-hb))
+      (defun sy-deep-err (n) (let ((*sy* n)) (if (= n 0) (error "x") (sy-deep-err (- n 1)))))
+      (defun sy-deep-throw (n) (let ((*sy* n)) (if (= n 0) (throw 'sy-tag *sy*) (sy-deep-throw (- n 1)))))
+      (defun sy-deep-ret (n) (let ((*sy* n)) (if (= n 0) (return-from sy-deep-ret *sy*) (sy-deep-ret (- n 1)))))
+      (print (list (handler-case (sy-deep-err 50) (error () :caught)) *sy*))
+      (print (list (catch 'sy-tag (sy-deep-throw 50)) *sy*))
+      (print (list (sy-deep-ret 50) *sy*))
+      (defun sy-fl ()
+        (block b (flet ((f () (let ((*sy* :fl)) (return-from b (sy-see))))) (f))))
+      (defun sy-lb ()
+        (block b (labels ((f () (let ((*sy* :lb)) (return-from b (sy-see))))) (f))))
+      (print (list (sy-fl) (sy-lb) *sy*))
+      (print (list (handler-case (let ((*sy* 1)) (let ((*sy* 2)) (error "q"))) (error () *sy*)) *sy*))
+      (print (list (handler-case (progv '(*sy*) '(:pv) (error "q")) (error () *sy*)) *sy*))
+    expected: |
+      (:IN :TOP)
+      (:IN :TOP)
+      (:IN :TOP)
+      (:IN :TOP)
+      (:GO :TOP)
+      :TOP
+      (:CAUGHT :TOP)
+      (0 :TOP)
+      (0 :TOP)
+      (:FL :LB :TOP)
+      (:TOP :TOP)
+      (:TOP :TOP)
   - name: special-parameters-bind-dynamically
     source: |
       ;; A parameter named like a special binds it dynamically on every backend

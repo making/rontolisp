@@ -57,11 +57,9 @@ Lisp:
 [`block`](../reference/macros/block.md) /
 [`return-from`](../reference/macros/return-from.md) and
 [`tagbody`](../reference/special-forms/tagbody.md) /
-[`go`](../reference/special-forms/go.md) are available, with two gaps on the
+[`go`](../reference/special-forms/go.md) are available, with one gap on the
 **compiled** backends (the interpreter is unaffected):
 
-- a `return-from` that would cross an `flet`/`labels` local function is not yet
-  supported (one crossing a `lambda` is, as a non-local exit);
 - `go` must target a tag of a `tagbody` that lexically encloses it; the
   interpreter additionally supports dynamic `go` across function-call
   boundaries, i.e. a tag established by the *caller*. A tag reached from inside
@@ -71,7 +69,8 @@ Lisp:
   percent-decoding does -- is lowered like a cross-`lambda` `return-from`: a
   non-local exit that re-enters the `tagbody` at the tag and carries on.
 
-A cross-`lambda` `return-from` or `go`, `catch`/`throw`, `unwind-protect`, and
+A `return-from` crossing a `lambda` or an `flet`/`labels` function behaves as
+in Common Lisp. A cross-`lambda` `return-from` or `go`, `catch`/`throw`, `unwind-protect`, and
 condition catching all compile in exception-handling mode; under `--no-gc`
 `catch`/`throw`, `unwind-protect` and the condition forms are a compile error.
 
@@ -205,14 +204,13 @@ order wins instead of signaling a conflict.
 
 ## Dynamic (special) variables
 
-Dynamic binding through `let`/`let*` and
-[`progv`](../reference/special-forms/progv.md) is supported, with one
-limitation on the **compiled** backends (the interpreter is unaffected): while
-normal exit and a `return`/`return-from` that unwinds *across* a special `let`
-boundary both restore the binding, an error caught by a handler outside the
-`let` (a `go` across it, and on the WASM backends a `return` that also crosses
-an `unwind-protect`/`handler-case`) does not. `progv` restores on every exit an
-`unwind-protect` covers, including those cases.
+Dynamic binding through `let`/`let*`, [`progv`](../reference/special-forms/progv.md)
+and parameters named like a special is supported on every backend, and every
+exit restores the previous binding: normal return, an error caught by a handler
+outside the binding, `catch`/`throw`, `return`/`return-from` (including out of a
+`lambda`, `flet` or `labels` function), `go`, and a
+[`handler-bind`](../reference/macros/handler-bind.md) handler that leaves by a
+`go` or `return-from`. The `--no-gc` backend rejects a top-level `defvar`.
 
 ## Numeric tower
 
