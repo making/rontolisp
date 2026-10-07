@@ -5895,6 +5895,17 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void aNestedDefunIsFboundOnceItRunsAndNamedWhenTakenBefore() throws Exception {
+		// Interpreter parity (the LispEvaluatorTest twin): a literal fboundp folded NIL
+		// for the name, and a call or reference before the definition ran read the
+		// empty global, naming NIL.
+		assertThat(compileAndRun(am.ik.rontolisp.NestedDefunNameFixture.PLAIN))
+			.isEqualTo(am.ik.rontolisp.NestedDefunNameFixture.PLAIN_EXPECTED);
+		assertThat(compileAndRun(am.ik.rontolisp.NestedDefunNameFixture.RESTART))
+			.isEqualTo(am.ik.rontolisp.NestedDefunNameFixture.RESTART_EXPECTED);
+	}
+
+	@Test
 	void aSetfFunctionDefinedBelowTheTopLevelIsAPlaceAndAFunction() throws Exception {
 		// Interpreter parity (the LispEvaluatorTest twin): the nested definition reached
 		// the defun lowering with its (setf name) list and failed a cast.

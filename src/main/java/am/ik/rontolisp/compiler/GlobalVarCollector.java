@@ -92,7 +92,7 @@ public final class GlobalVarCollector {
 					// A defun nested inside a top-level non-defun form (the CL
 					// closure-over-let idiom) compiles to (setq name (lambda ...)), so
 					// the name needs the same global backing store; call sites then
-					// dispatch through the variable (expandCallThroughVariable).
+					// dispatch through the variable (expandCallThroughFunctionValue).
 					collectNestedDefunNames(cons, globals);
 					// An assignment NESTED in a top-level form -- (print (progn (setq a
 					// 10)
@@ -180,9 +180,9 @@ public final class GlobalVarCollector {
 	 * A nested {@code defun} lowers to {@code (setq name (lambda ...))} on both compile
 	 * backends whatever encloses it, so the name needs the same global backing store in a
 	 * function body as under a top-level {@code let} -- call sites dispatch through the
-	 * variable ({@code LispMacroExpander.expandCallThroughVariable}). Without it the call
-	 * compiled to the generic undefined-function error while the interpreter (and SBCL)
-	 * answered. The definition still does not exist until the enclosing function is
+	 * variable ({@code LispMacroExpander.expandCallThroughFunctionValue}). Without it the
+	 * call compiled to the generic undefined-function error while the interpreter (and
+	 * SBCL) answered. The definition still does not exist until the enclosing function is
 	 * CALLED, and calling it twice rebinds the name; that is the shape's semantics, not a
 	 * limitation of the store.
 	 * @param program the whole program, top-level {@code defun}s included

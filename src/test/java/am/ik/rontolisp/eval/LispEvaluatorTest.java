@@ -21253,6 +21253,15 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void aNestedDefunIsFboundOnceItRunsAndNamedWhenTakenBefore() {
+		// The reference answer (SBCL's) for the compiled backends' twins of this name.
+		assertThat(printedLines(am.ik.rontolisp.NestedDefunNameFixture.PLAIN))
+			.isEqualTo(am.ik.rontolisp.NestedDefunNameFixture.PLAIN_EXPECTED);
+		assertThat(printedLines(am.ik.rontolisp.NestedDefunNameFixture.RESTART))
+			.isEqualTo(am.ik.rontolisp.NestedDefunNameFixture.RESTART_EXPECTED);
+	}
+
+	@Test
 	void aSetfFunctionDefinedBelowTheTopLevelIsAPlaceAndAFunction() {
 		// The reference answer (SBCL's) for the compiled backends' twins of this name.
 		assertThat(printedLines(am.ik.rontolisp.SetfFunctionNameFixture.NESTED_DEFINITION))

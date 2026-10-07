@@ -293,12 +293,12 @@ final class WasmFunctionFormCompiler {
 			ctx.writer.writeHeapType(Type.EQ.code());
 			WasmEmitHelper.emitNewClosure(ctx);
 		}
-		else if (ctx.nestedDefunNames.contains(name) && ctx.globalIndices.containsKey(name)) {
+		else if (nestedDefun(name, ctx)) {
 			// A defun nested inside a top-level let or a function body compiles to
-			// (setq name (lambda ...)): the global variable already HOLDS the function
-			// value. Before the dynamic fallback for the same reason the call site
-			// checks it first (WasmFunctionCallCompiler).
-			WasmExprCompiler.compileExpr(new am.ik.rontolisp.LispSymbol(name), ctx);
+			// (setq name (lambda ...)): the global variable HOLDS the function value
+			// once the definition ran. Before the dynamic fallback for the same reason
+			// the call site checks it first (WasmFunctionCallCompiler).
+			emitNestedDefunValue(name, ctx);
 		}
 		else if (ctx.dynamic) {
 			WasmDynamicCallCompiler.compileFunctionRef(name, ctx);
@@ -329,6 +329,44 @@ final class WasmFunctionFormCompiler {
 			// definition, so the late-binding signal above would misreport it.
 			throw new UnsupportedOperationException(BuiltinFunctionWrappers.noFunctionValueMessage(name));
 		}
+	}
+
+	/**
+	 * {@return whether {@code name} is a function only a {@code defun} below the top
+	 * level defines: a global variable that holds the function once that definition ran}
+	 * @param name the function name
+	 * @param ctx the compilation context
+	 */
+	static boolean nestedDefun(String name, WasmLispCompiler.Ctx ctx) {
+		return ctx.nestedDefunNames.contains(name) && ctx.globalIndices.containsKey(name);
+	}
+
+	/**
+	 * Pushes the function a {@link #nestedDefun} name holds, read from its global and
+	 * never from a lexical variable of the same spelling; before the definition ran the
+	 * global is still nil, and the reference signals the {@code undefined-function}
+	 * naming the function ({@link WasmFunctionCallCompiler#emitUndefinedFunctionSignal}),
+	 * as a direct call of an undefined name does.
+	 * @param name the function name
+	 * @param ctx the compilation context
+	 */
+	static void emitNestedDefunValue(String name, WasmLispCompiler.Ctx ctx) {
+		int valueTemp = ctx.allocTemp();
+		WasmExprCompiler.emitRawSpecialRead(ctx, name, java.util.Objects.requireNonNull(ctx.globalIndices.get(name)));
+		ctx.writer.write(Instruction.SET_LOCAL);
+		ctx.writer.writeUnsignedLeb128(valueTemp);
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writer.writeUnsignedLeb128(valueTemp);
+		ctx.writer.write(Instruction.REF_IS_NULL);
+		ctx.writer.write(Instruction.IF);
+		ctx.writer.writeRefType(true, Type.EQ.code());
+		ctx.wasmCtrlDepth++;
+		WasmFunctionCallCompiler.emitUndefinedFunctionSignal(name, ctx);
+		ctx.writer.write(Instruction.ELSE);
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writer.writeUnsignedLeb128(valueTemp);
+		ctx.wasmCtrlDepth--;
+		ctx.writer.write(Instruction.END);
 	}
 
 	/**

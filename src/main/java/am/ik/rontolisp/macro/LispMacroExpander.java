@@ -17780,11 +17780,9 @@ public final class LispMacroExpander {
 	/**
 	 * Lowers a call to a name that is not a compiled FUNCTION but IS a known global
 	 * VARIABLE into {@code (funcall name args...)} -- the function value is read from the
-	 * variable at run time. This is how a defun nested inside a top-level {@code let}
-	 * (the CL closure-over-let idiom, e.g. cl-ppcre's {@code quote-meta-chars}) is
-	 * called: the nested defun compiles to {@code (setq name (lambda ...))} (a lambda
-	 * capturing the let variables) and the setq-assigned name is promoted to a global, so
-	 * call sites dispatch through it.
+	 * variable at run time: a top-level {@code (setq name (lambda ...))}. A defun nested
+	 * inside a top-level {@code let} or a function body is called through
+	 * {@link #expandCallThroughFunctionValue} instead.
 	 * @param cons the call expression
 	 * @return the funcall lowering
 	 */
@@ -17793,6 +17791,24 @@ public final class LispMacroExpander {
 		List<LispVal> out = new java.util.ArrayList<>(parts.size() + 1);
 		out.add(new LispSymbol(LispNames.FUNCALL));
 		out.addAll(parts);
+		return listToCons(out);
+	}
+
+	/**
+	 * Lowers a call of a function a {@code defun} below the top level defines into
+	 * {@code (funcall #'name args...)}: the backends compile that {@code #'name} to a
+	 * read of the global variable the nested definition assigns -- the global, whatever
+	 * lexical variable shares the spelling -- which signals the
+	 * {@code undefined-function} naming the function while the definition has not run.
+	 * @param cons the call expression
+	 * @return the funcall lowering
+	 */
+	public static LispVal expandCallThroughFunctionValue(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		List<LispVal> out = new java.util.ArrayList<>(parts.size() + 1);
+		out.add(new LispSymbol(LispNames.FUNCALL));
+		out.add(listToCons(List.of(new LispSymbol(LispNames.FUNCTION), parts.get(0))));
+		out.addAll(parts.subList(1, parts.size()));
 		return listToCons(out);
 	}
 

@@ -138,14 +138,15 @@ final class WasmFunctionCallCompiler {
 			ctx.writer.write(WasmUncaughtLocations.tailCallOp(ctx, tail, name));
 			ctx.writer.writeUnsignedLeb128(fi.funcIndex());
 		}
-		else if (ctx.nestedDefunNames.contains(name) && ctx.globalIndices.containsKey(name)) {
+		else if (WasmFunctionFormCompiler.nestedDefun(name, ctx)) {
 			// A defun nested inside a top-level let or a function body compiles to
 			// (setq name (lambda ...)) and the assigned name is a global variable
-			// holding the closure: dispatch the call through it. BEFORE the dynamic
-			// fallback below, which resolves the runtime FUNCTION namespace -- a
-			// namespace this definition never enters.
+			// holding the closure: dispatch the call through #'name, which reads it
+			// (the undefined-function naming it before the definition ran, ahead of
+			// the arguments). BEFORE the dynamic fallback below, which resolves the
+			// runtime FUNCTION namespace -- a namespace this definition never enters.
 			ctx.tailPosition = tail;
-			WasmExprCompiler.compileExpr(LispMacroExpander.expandCallThroughVariable(cons), ctx);
+			WasmExprCompiler.compileExpr(LispMacroExpander.expandCallThroughFunctionValue(cons), ctx);
 		}
 		else if (ctx.dynamic) {
 			WasmDynamicCallCompiler.compileCall(name, cons, ctx);

@@ -662,7 +662,7 @@ public final class FreeVarAnalyzer {
 					// A defun that is NOT at top level is not a definition: both
 					// backends lower it to (setq name (lambda ...)) and call it
 					// through the variable
-					// (LispMacroExpander.expandCallThroughVariable), so it closes
+					// (LispMacroExpander.expandCallThroughFunctionValue), so it closes
 					// over the enclosing bindings exactly as a lambda does and
 					// they need the same cell. Skipping it left the binding
 					// unboxed and handed every nested definition a private

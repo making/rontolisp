@@ -384,7 +384,8 @@ final class JvmSymbolApiCompiler {
 
 	/**
 	 * fboundp: a literal quoted symbol folds at compile time (functions, macros, special
-	 * forms, car/cdr compositions, user defuns); a computed argument probes the runtime
+	 * forms, car/cdr compositions, user defuns) -- a function a defun below the top level
+	 * defines reads its global instead; a computed argument probes the runtime
 	 * {@code _fenv} then the compiled-function registry {@code _lookup} (so it sees
 	 * functions only -- built-in macros and special forms exist solely at compile time).
 	 *
@@ -403,6 +404,24 @@ final class JvmSymbolApiCompiler {
 				// Bound once the setf ran: the forwarder defun is no definition, so the
 				// run-time probe below answers (it misses the registry).
 				compileComputedFboundp(parts.get(1), ctx, className);
+				return;
+			}
+			if (JvmFunctionFormCompiler.nestedDefun(name, ctx)) {
+				// Bound once the definition below the top level ran: its global holds
+				// the function from then on, nil before.
+				MethodCode.Label foldEnd = ctx.usesFmakunbound ? emitTombstoneGuard(name, ctx, className) : null;
+				JvmExprCompiler.compileSpecialRead(name, ctx);
+				MethodCode.Label unbound = ctx.body.newLabel();
+				MethodCode.Label end = ctx.body.newLabel();
+				ctx.body.ifnull(unbound);
+				JvmEmitHelper.compileTrue(ctx);
+				ctx.body.goto_(end);
+				ctx.body.labelBinding(unbound);
+				ctx.body.aconst_null();
+				ctx.body.labelBinding(end);
+				if (foldEnd != null) {
+					ctx.body.labelBinding(foldEnd);
+				}
 				return;
 			}
 			boolean bound = PackageRegistry.specialOperatorNames().contains(name)

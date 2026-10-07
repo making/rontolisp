@@ -12,6 +12,8 @@
 
 [`fmakunbound`](fmakunbound.md) で失効した名前は、リテラルの呼び出し箇所でも再び `nil` を返します。
 
+トップレベル以外の [`defun`](../special-forms/defun.md#below-the-top-level) が定義する関数は、その定義が実行された時点で束縛されます。リテラルの引数は全バックエンドで、実行前は `nil`、実行後は `t` を返します。その名前を計算された引数で渡すと、コンパイルバックエンドでは `nil` を返します。
+
 ```lisp
 (fboundp 'car) ; => T
 ```

@@ -94,6 +94,18 @@ Function expects 2 arguments, got 1
 (list (scaled-by 10 5) (scaled 5)) ; => (50 5)
 ```
 
+## トップレベル以外での定義
+
+関数本体の中や `let` の内側の `defun` は、そのフォームが実行されたときに関数を定義します。それまでは全バックエンドでその名前は未定義です。[`fboundp`](../functions/fboundp.md) は `nil` を返し、呼び出し、`#'name`、`symbol-function` はその関数名を持つ `undefined-function` を通知します。
+
+```lisp
+(defun install () (defun late (x) (* x 2)))
+(fboundp 'late) ; => NIL
+(handler-case (late 1) (undefined-function (c) (cell-error-name c))) ; => LATE
+(install)
+(list (fboundp 'late) (late 4)) ; => (T 8)
+```
+
 ## setf 関数名
 
 `name` にはプレーンなシンボルの代わりに `(setf name)` のリストを指定できます。これは *setf 関数* を定義します。すなわち、`name` を `setf` のプレースとして使ったときに呼び出される書き込み用の関数です。新しい値は最初の引数として渡されます(Common Lisp の慣習どおり、setf ラムダリストの最後の必須パラメータになります)。したがって `(setf (name arg...) value)` は書き込み関数を `value` に続いて `arg...` の順で呼び出します。`#'(setf name)` を通じてファーストクラス値としても扱えます。
