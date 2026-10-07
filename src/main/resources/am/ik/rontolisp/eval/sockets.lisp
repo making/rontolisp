@@ -516,7 +516,8 @@
     (if e
         (let ((c (rontolisp:await (rontolisp::%sock-read-char-f e))))
           (if c c (if eof-error-p (error 'end-of-file) eof-value)))
-        (rontolisp::%read-char-raw s eof-error-p eof-value))))
+        (rontolisp:await
+         (rontolisp::%stdin-read-char-eof-or-raw-f s eof-error-p eof-value)))))
 
 (defun rontolisp::%io-read-char-eof (s eof-error-p &optional eof-value)
   (let ((in (rontolisp::%sock-handle (or s *standard-input*))))
@@ -537,7 +538,8 @@
               (%quiet-values l (car (cdr vals)))
               (%quiet-values (if eof-error-p (error 'end-of-file) eof-value)
                              t)))
-        (rontolisp::%read-line-raw s eof-error-p eof-value))))
+        (rontolisp:await
+         (rontolisp::%stdin-read-line-eof-or-raw-f s eof-error-p eof-value)))))
 
 (defun rontolisp::%io-read-line-eof (s eof-error-p &optional eof-value)
   (let ((in (rontolisp::%sock-handle (or s *standard-input*))))

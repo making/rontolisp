@@ -14549,6 +14549,25 @@ class WasmLispCompilerIntegrationTest {
 		}
 	}
 
+	@Test
+	void anEofArgumentReadSharesTheStandardInputOfAPlainRead() throws Exception {
+		for (boolean component : new boolean[] { false, true }) {
+			assertThat(runFrontendProgramWithStdin(am.ik.rontolisp.ReadLineValuesFixture.ASYNC_STDIN_EOF_LINES_PROGRAM,
+					am.ik.rontolisp.ReadLineValuesFixture.STDIN, component))
+				.as("lines, component=%s", component)
+				.isEqualTo(am.ik.rontolisp.ReadLineValuesFixture.ASYNC_STDIN_EOF_LINES_EXPECTED);
+			assertThat(runFrontendProgramWithStdin(am.ik.rontolisp.ReadLineValuesFixture.ASYNC_STDIN_EOF_CHARS_PROGRAM,
+					am.ik.rontolisp.ReadLineValuesFixture.STDIN, component))
+				.as("chars, component=%s", component)
+				.isEqualTo(am.ik.rontolisp.ReadLineValuesFixture.ASYNC_STDIN_EOF_CHARS_EXPECTED);
+			assertThat(
+					runFrontendProgramWithStdin(am.ik.rontolisp.ReadLineValuesFixture.ASYNC_STDIN_EOF_TOP_LEVEL_PROGRAM,
+							am.ik.rontolisp.ReadLineValuesFixture.STDIN, component))
+				.as("top level, component=%s", component)
+				.isEqualTo(am.ik.rontolisp.ReadLineValuesFixture.ASYNC_STDIN_EOF_TOP_LEVEL_EXPECTED);
+		}
+	}
+
 	/**
 	 * As {@link #compileAndRunFrontEndWithDir}, with {@code stdin}'s bytes as the
 	 * program's standard input exactly (no newline added).

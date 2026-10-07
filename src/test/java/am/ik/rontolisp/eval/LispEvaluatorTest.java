@@ -913,6 +913,17 @@ class LispEvaluatorTest {
 			.isEqualTo(ReadLineValuesFixture.ASYNC_STDIN_EXPECTED);
 	}
 
+	@Test
+	void anEofArgumentReadSharesTheStandardInputOfAPlainRead() {
+		assertThat(printedOverStdin(ReadLineValuesFixture.ASYNC_STDIN_EOF_LINES_PROGRAM, ReadLineValuesFixture.STDIN))
+			.isEqualTo(ReadLineValuesFixture.ASYNC_STDIN_EOF_LINES_EXPECTED);
+		assertThat(printedOverStdin(ReadLineValuesFixture.ASYNC_STDIN_EOF_CHARS_PROGRAM, ReadLineValuesFixture.STDIN))
+			.isEqualTo(ReadLineValuesFixture.ASYNC_STDIN_EOF_CHARS_EXPECTED);
+		assertThat(
+				printedOverStdin(ReadLineValuesFixture.ASYNC_STDIN_EOF_TOP_LEVEL_PROGRAM, ReadLineValuesFixture.STDIN))
+			.isEqualTo(ReadLineValuesFixture.ASYNC_STDIN_EOF_TOP_LEVEL_EXPECTED);
+	}
+
 	private static String printedOverStdin(String program, String stdin) {
 		ByteArrayOutputStream baos = new ByteArrayOutputStream();
 		LispEvaluator evaluator = new LispEvaluator(new PrintStream(baos),

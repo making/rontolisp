@@ -17,3 +17,11 @@
 
 (rontolisp:async-defun rontolisp::%stdin-read-byte-or-raw-f (s)
   (rontolisp::%read-byte-raw s))
+
+(rontolisp:async-defun rontolisp::%stdin-read-line-eof-or-raw-f
+    (s eof-error-p eof-value)
+  (rontolisp::%read-line-raw s eof-error-p eof-value))
+
+(rontolisp:async-defun rontolisp::%stdin-read-char-eof-or-raw-f
+    (s eof-error-p eof-value)
+  (rontolisp::%read-char-raw s eof-error-p eof-value))

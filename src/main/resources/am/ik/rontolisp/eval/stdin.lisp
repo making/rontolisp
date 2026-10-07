@@ -156,6 +156,34 @@
         (let ((c (rontolisp:await (rontolisp::%stdin-read-char-f))))
           (if c c (error 'end-of-file))))))
 
+;;; The eof-argument twins. The stdin arm answers off the SAME chunk buffer the plain
+;;; reads above drain -- the native %read-*-raw would read host fd 0 and never see
+;;; what the buffer already holds -- and applies the eof arguments on top of the
+;;; nil-at-EOF those reads give. read-line keeps its missing-newline-p second value,
+;;; and answers t beside the eof-value, as the native read does. A handle designator
+;;; keeps the native built-in with the eof arguments passed through.
+(rontolisp:async-defun rontolisp::%stdin-read-line-eof-or-raw-f
+    (s eof-error-p eof-value)
+  (let ((in (%stream-target (or s *standard-input*))))
+    (if (integerp in)
+        (rontolisp::%read-line-raw in eof-error-p eof-value)
+        (let* ((vals
+                (%quiet-multiple-value-list
+                 (rontolisp:await (rontolisp::%stdin-read-line-f))))
+               (l (car vals)))
+          (if l
+              (%quiet-values l (car (cdr vals)))
+              (%quiet-values (if eof-error-p (error 'end-of-file) eof-value)
+                             t))))))
+
+(rontolisp:async-defun rontolisp::%stdin-read-char-eof-or-raw-f
+    (s eof-error-p eof-value)
+  (let ((in (%stream-target (or s *standard-input*))))
+    (if (integerp in)
+        (rontolisp::%read-char-raw in eof-error-p eof-value)
+        (let ((c (rontolisp:await (rontolisp::%stdin-read-char-f))))
+          (if c c (if eof-error-p (error 'end-of-file) eof-value))))))
+
 (rontolisp:async-defun rontolisp::%stdin-read-byte-or-raw-f (s)
   ;; A raw PASSTHROUGH, unlike its two siblings above: the native read-byte now
   ;; takes the standard-stream designator itself, so a nil / t stream reaches the

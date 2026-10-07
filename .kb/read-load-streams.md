@@ -1104,6 +1104,17 @@ makes a pending stdin read SUSPEND the task. EOF parity: `read-line` -> nil; the
 signals `(error 'end-of-file)` — the CLASS the native lowering signals
 (`LispMacroExpander.endOfFileSignal`), not a look-alike message.
 
+**The eof-argument reads drain the same buffer.** `read-line` / `read-char` with eof arguments
+(`%io-read-*-eof`, `%read-*-eof-future`, in `sockets.lisp` and `stdin-dispatch.lisp` alike) end in
+`%stdin-read-line-eof-or-raw-f` / `%stdin-read-char-eof-or-raw-f`: a non-handle designator reads
+`%stdin-read-*-f` and applies the eof arguments on top (`read-line` keeps missing-newline-p, `t`
+beside the eof-value); a handle goes to the native built-in with the eof arguments, and
+`stdin-stub.lisp` is that passthrough for every designator. They used to call `%read-*-raw` -- fd 0
+-- so a `(read-line *standard-input* nil :eof)` after a plain `(read-line)` answered `:eof` over
+`s1\ns2`, and an eof-argument read at top level lost its second value. Pinned on the interpreter,
+JVM, Preview 1 and the component by `ReadLineValuesFixture.ASYNC_STDIN_EOF_*` (SBCL 2.2.9's answers).
+`read-byte` stays raw (octets are not in the chunk buffer, see the mixing limit above).
+
 **A NON-async stdin program is deliberately NOT migrated**: it keeps the adapter's `fd_read` branch,
 so its component is byte-identical (`componentNonAsyncStdinKeepsTheAdapterPathAndItsFlags`). When
 sockets.lisp is spliced, `StdinLibrary` supplies only the or-raw helpers' backing (real `stdin.lisp`,
