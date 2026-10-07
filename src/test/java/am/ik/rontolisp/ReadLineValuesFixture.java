@@ -233,4 +233,59 @@ public final class ReadLineValuesFixture {
 	/** What {@link #ASYNC_STDIN_PROGRAM} prints over {@link #STDIN} (SBCL's reads). */
 	public static final String ASYNC_STDIN_EXPECTED = String.join("\n", "(\"s1\" NIL)", "(\"s2\" T)");
 
+	/**
+	 * {@code read-line} with eof arguments after a plain one, inside an async body: both
+	 * read the one standard input, so the second does not lose what the first buffered.
+	 */
+	public static final String ASYNC_STDIN_EOF_LINES_PROGRAM = """
+			(rontolisp:async-defun rlv-async-eof-lines ()
+			  (print (multiple-value-list (read-line)))
+			  (print (multiple-value-list (read-line *standard-input* nil :eof)))
+			  (print (multiple-value-list (read-line *standard-input* nil :eof)))
+			  (print (handler-case (read-line *standard-input* t)
+			           (end-of-file () :signalled))))
+			(rontolisp:await (rlv-async-eof-lines))
+			""";
+
+	/**
+	 * What {@link #ASYNC_STDIN_EOF_LINES_PROGRAM} prints over {@link #STDIN} (SBCL's
+	 * reads).
+	 */
+	public static final String ASYNC_STDIN_EOF_LINES_EXPECTED = String.join("\n", "(\"s1\" NIL)", "(\"s2\" T)",
+			"(:EOF T)", ":SIGNALLED");
+
+	/** The same, one character at a time and across a character / line boundary. */
+	public static final String ASYNC_STDIN_EOF_CHARS_PROGRAM = """
+			(rontolisp:async-defun rlv-async-eof-chars ()
+			  (print (read-char))
+			  (print (read-char *standard-input* nil :eof))
+			  (print (multiple-value-list (read-line)))
+			  (print (multiple-value-list (read-line *standard-input* nil :eof)))
+			  (print (read-char *standard-input* nil :eof))
+			  (print (handler-case (read-char *standard-input* t)
+			           (end-of-file () :signalled))))
+			(rontolisp:await (rlv-async-eof-chars))
+			""";
+
+	/**
+	 * What {@link #ASYNC_STDIN_EOF_CHARS_PROGRAM} prints over {@link #STDIN} (SBCL's
+	 * reads).
+	 */
+	public static final String ASYNC_STDIN_EOF_CHARS_EXPECTED = String.join("\n", "#\\s", "#\\1", "(\"\" NIL)",
+			"(\"s2\" T)", ":EOF", ":SIGNALLED");
+
+	/** An eof-argument read outside any async body, ahead of an async plain read. */
+	public static final String ASYNC_STDIN_EOF_TOP_LEVEL_PROGRAM = """
+			(rontolisp:async-defun rlv-async-rest ()
+			  (print (multiple-value-list (read-line))))
+			(print (multiple-value-list (read-line *standard-input* nil :eof)))
+			(rontolisp:await (rlv-async-rest))
+			""";
+
+	/**
+	 * What {@link #ASYNC_STDIN_EOF_TOP_LEVEL_PROGRAM} prints over {@link #STDIN} (SBCL's
+	 * reads).
+	 */
+	public static final String ASYNC_STDIN_EOF_TOP_LEVEL_EXPECTED = String.join("\n", "(\"s1\" NIL)", "(\"s2\" T)");
+
 }

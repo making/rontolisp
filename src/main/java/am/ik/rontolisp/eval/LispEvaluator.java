@@ -10446,7 +10446,9 @@ public final class LispEvaluator {
 	 * Resolves a function designator name against the global function namespace.
 	 * @param name the function name
 	 * @return the function value
-	 * @throws LispEvalException if the name is a special operator or macro, or undefined
+	 * @throws LispEvalException the {@code undefined-function} if the name is a special
+	 * operator or macro, or undefined: a macro or special operator has no function value,
+	 * which the compiled backends report the same way
 	 */
 	private LispVal resolveFunction(String name) {
 		// A registered function value wins over the macro/special-operator guard:
@@ -10458,7 +10460,7 @@ public final class LispEvaluator {
 			return fn;
 		}
 		if (this.userMacros.containsKey(name)) {
-			throw new LispEvalException(name + " is a macro or special operator, not a function");
+			throw CellErrorException.undefinedFunction(name);
 		}
 		// A BuiltinFunctionWrappers entry IS the function value of a built-in that
 		// evalCons lowers in operator position but Environment never binds as a
@@ -10483,7 +10485,7 @@ public final class LispEvaluator {
 					: value;
 		}
 		if (SPECIAL_OPERATORS.contains(name)) {
-			throw new LispEvalException(name + " is a macro or special operator, not a function");
+			throw CellErrorException.undefinedFunction(name);
 		}
 		// Everything below LOADS something into the shared global environment, so it runs
 		// under the library lock: a concurrently served request must either see the load

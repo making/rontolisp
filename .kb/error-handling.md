@@ -1155,6 +1155,18 @@ message at the catching end** -- except for the failures the backends report as 
   `JvmLispCompilerTest` / `WasmLispCompilerIntegrationTest`) and `RontoLispCliStreamsTest`
   `aReferenceToAnUndefinedFunctionWarnsAtTheReferenceOnEveryBackend`; not in ci-spec, whose
   compiles forbid the warning.
+- **A macro or special operator taken as a function is an `undefined-function` on every
+  backend** (the interpreter signalled a `simple-error` `NAME is a macro or special operator, not a
+  function` until 2026-10-07; the compiled backends already took the name as undefined). The
+  interpreter's `resolveFunction` throws `CellErrorException.undefinedFunction` for a user macro
+  and for a `SPECIAL_OPERATORS` name with no function value, so the report text is the compiled
+  backends' `The function NAME is undefined`. SBCL words it per kind (`COMMON-LISP:WHEN is a macro,
+  not a function.`, `Cannot FUNCALL the SYMBOL-FUNCTION of special operator IF.`; the latter's class is
+  the `SB-INT:SPECIAL-FORM-FUNCTION` subclass of `undefined-function`), which is not pinned. A literal
+  `#'when` / `#'if` is a compile-time error in SBCL, so only the computed designators and `#'while`
+  (undefined there) have its answer; `symbol-function` of a macro answers the expander there and
+  signals here. Pinned by `UndefinedFunctionNameFixture.MACRO_OPERATOR` / `MACRO_OPERATOR_RESTART`
+  (`aMacroOrSpecialOperatorTakenAsAFunctionIsUndefined` in the three suites).
 - **Every undefined-function names its function, every unbound-variable its variable**
   (`cell-error-name`, SBCL's answer; NIL on every backend before 2026-10-07). Interpreter: the
   throw sites raise `CellErrorException` (`undefinedFunction`, `unboundVariable`) carrying the

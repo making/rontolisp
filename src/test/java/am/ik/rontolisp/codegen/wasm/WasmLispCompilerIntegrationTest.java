@@ -14549,6 +14549,25 @@ class WasmLispCompilerIntegrationTest {
 		}
 	}
 
+	@Test
+	void anEofArgumentReadSharesTheStandardInputOfAPlainRead() throws Exception {
+		for (boolean component : new boolean[] { false, true }) {
+			assertThat(runFrontendProgramWithStdin(am.ik.rontolisp.ReadLineValuesFixture.ASYNC_STDIN_EOF_LINES_PROGRAM,
+					am.ik.rontolisp.ReadLineValuesFixture.STDIN, component))
+				.as("lines, component=%s", component)
+				.isEqualTo(am.ik.rontolisp.ReadLineValuesFixture.ASYNC_STDIN_EOF_LINES_EXPECTED);
+			assertThat(runFrontendProgramWithStdin(am.ik.rontolisp.ReadLineValuesFixture.ASYNC_STDIN_EOF_CHARS_PROGRAM,
+					am.ik.rontolisp.ReadLineValuesFixture.STDIN, component))
+				.as("chars, component=%s", component)
+				.isEqualTo(am.ik.rontolisp.ReadLineValuesFixture.ASYNC_STDIN_EOF_CHARS_EXPECTED);
+			assertThat(
+					runFrontendProgramWithStdin(am.ik.rontolisp.ReadLineValuesFixture.ASYNC_STDIN_EOF_TOP_LEVEL_PROGRAM,
+							am.ik.rontolisp.ReadLineValuesFixture.STDIN, component))
+				.as("top level, component=%s", component)
+				.isEqualTo(am.ik.rontolisp.ReadLineValuesFixture.ASYNC_STDIN_EOF_TOP_LEVEL_EXPECTED);
+		}
+	}
+
 	/**
 	 * As {@link #compileAndRunFrontEndWithDir}, with {@code stdin}'s bytes as the
 	 * program's standard input exactly (no newline added).
@@ -27095,6 +27114,22 @@ class WasmLispCompilerIntegrationTest {
 						am.ik.rontolisp.UndefinedFunctionNameFixture.REFERENCE_EXPECTED },
 				{ am.ik.rontolisp.UndefinedFunctionNameFixture.REFERENCE_RESTART,
 						am.ik.rontolisp.UndefinedFunctionNameFixture.REFERENCE_RESTART_EXPECTED } }) {
+			assertThat(compileAndRunProgram(am.ik.rontolisp.cli.CompileFrontendAccess.corpus(program[0],
+					am.ik.rontolisp.reader.Features.WASM, true, false)))
+				.isEqualTo(program[1]);
+			assertThat(runComponentFrontendProgramWithDir(program[0])).isEqualTo(program[1]);
+		}
+	}
+
+	@Test
+	void aMacroOrSpecialOperatorTakenAsAFunctionIsUndefined() throws Exception {
+		// The wasm twin of the JvmLispCompilerTest test of this name, on Preview 1 and
+		// the component.
+		for (String[] program : new String[][] {
+				{ am.ik.rontolisp.UndefinedFunctionNameFixture.MACRO_OPERATOR,
+						am.ik.rontolisp.UndefinedFunctionNameFixture.MACRO_OPERATOR_EXPECTED },
+				{ am.ik.rontolisp.UndefinedFunctionNameFixture.MACRO_OPERATOR_RESTART,
+						am.ik.rontolisp.UndefinedFunctionNameFixture.MACRO_OPERATOR_RESTART_EXPECTED } }) {
 			assertThat(compileAndRunProgram(am.ik.rontolisp.cli.CompileFrontendAccess.corpus(program[0],
 					am.ik.rontolisp.reader.Features.WASM, true, false)))
 				.isEqualTo(program[1]);

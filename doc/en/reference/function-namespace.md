@@ -17,7 +17,8 @@ separate namespaces.
 - `defun` defines into the function namespace and returns the function name.
   `(setq f (lambda ...))` binds a **variable** to a function value; call it with
   `(funcall f ...)`, not `(f ...)`.
-- `#'` of a macro or special operator (e.g. `#'if`, `#'defun`) is an error.
+- `#'` of a macro or special operator (e.g. `#'if`, `#'defun`), or a `funcall` of its name, signals
+  `undefined-function` naming the operator, as an undefined function does, on every backend.
 
 Function values can be passed as arguments, returned from functions, and stored in data
 structures in all three execution modes.

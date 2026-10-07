@@ -82,16 +82,28 @@
   (rontolisp::%read-byte-raw s eof-error-p eof-value))
 
 (defun rontolisp::%io-read-char-eof (s eof-error-p &optional eof-value)
-  (rontolisp::%read-char-raw s eof-error-p eof-value))
+  (let ((in (%stream-target (or s *standard-input*))))
+    (if (integerp in)
+        (rontolisp::%read-char-raw in eof-error-p eof-value)
+        (rontolisp::%future-force
+         (rontolisp::%read-char-eof-future in eof-error-p eof-value)))))
 
-(defun rontolisp::%read-char-eof-future (s eof-error-p &optional eof-value)
-  (rontolisp::%read-char-raw s eof-error-p eof-value))
+(rontolisp:async-defun rontolisp::%read-char-eof-future
+    (s eof-error-p &optional eof-value)
+  (rontolisp:await
+   (rontolisp::%stdin-read-char-eof-or-raw-f s eof-error-p eof-value)))
 
 (defun rontolisp::%io-read-line-eof (s eof-error-p &optional eof-value)
-  (rontolisp::%read-line-raw s eof-error-p eof-value))
+  (let ((in (%stream-target (or s *standard-input*))))
+    (if (integerp in)
+        (rontolisp::%read-line-raw in eof-error-p eof-value)
+        (rontolisp::%future-force
+         (rontolisp::%read-line-eof-future in eof-error-p eof-value)))))
 
-(defun rontolisp::%read-line-eof-future (s eof-error-p &optional eof-value)
-  (rontolisp::%read-line-raw s eof-error-p eof-value))
+(rontolisp:async-defun rontolisp::%read-line-eof-future
+    (s eof-error-p &optional eof-value)
+  (rontolisp:await
+   (rontolisp::%stdin-read-line-eof-or-raw-f s eof-error-p eof-value)))
 
 ;; :end stays nil for the native built-in: it takes nil as "the whole buffer",
 ;; and a rank-2 packed float array has no length (.kb/binary-sequence-io.md).

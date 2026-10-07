@@ -5614,6 +5614,21 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunAnEofArgumentReadSharesTheStandardInputOfAPlainRead() throws Exception {
+		for (String[] c : new String[][] {
+				{ ReadLineValuesFixture.ASYNC_STDIN_EOF_LINES_PROGRAM,
+						ReadLineValuesFixture.ASYNC_STDIN_EOF_LINES_EXPECTED },
+				{ ReadLineValuesFixture.ASYNC_STDIN_EOF_CHARS_PROGRAM,
+						ReadLineValuesFixture.ASYNC_STDIN_EOF_CHARS_EXPECTED },
+				{ ReadLineValuesFixture.ASYNC_STDIN_EOF_TOP_LEVEL_PROGRAM,
+						ReadLineValuesFixture.ASYNC_STDIN_EOF_TOP_LEVEL_EXPECTED } }) {
+			assertThat(compileAndRun(am.ik.rontolisp.cli.CompileFrontendAccess.corpus(c[0],
+					am.ik.rontolisp.reader.Features.JVM, false, false), ReadLineValuesFixture.STDIN))
+				.isEqualTo(c[1]);
+		}
+	}
+
+	@Test
 	void compileAndRunObjSetCompilesWhereNoInstanceCanExist() throws Exception {
 		// A library writes a reserved cell behind an %obj-is test (unread-char.lisp's
 		// pushback) without knowing whether the class builds instances: with the gate
@@ -5801,6 +5816,16 @@ class JvmLispCompilerTest {
 			.isEqualTo(am.ik.rontolisp.UndefinedFunctionNameFixture.REFERENCE_EXPECTED);
 		assertThat(compileAndRun(am.ik.rontolisp.UndefinedFunctionNameFixture.REFERENCE_RESTART))
 			.isEqualTo(am.ik.rontolisp.UndefinedFunctionNameFixture.REFERENCE_RESTART_EXPECTED);
+	}
+
+	@Test
+	void aMacroOrSpecialOperatorTakenAsAFunctionIsUndefined() throws Exception {
+		// Interpreter parity (the LispEvaluatorTest twin); the user macro goes through
+		// the macro-expansion pass the CLI runs first.
+		assertThat(compileAndRunExpanded(am.ik.rontolisp.UndefinedFunctionNameFixture.MACRO_OPERATOR))
+			.isEqualTo(am.ik.rontolisp.UndefinedFunctionNameFixture.MACRO_OPERATOR_EXPECTED);
+		assertThat(compileAndRunExpanded(am.ik.rontolisp.UndefinedFunctionNameFixture.MACRO_OPERATOR_RESTART))
+			.isEqualTo(am.ik.rontolisp.UndefinedFunctionNameFixture.MACRO_OPERATOR_RESTART_EXPECTED);
 	}
 
 	@Test
