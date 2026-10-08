@@ -221,6 +221,351 @@
 (defmethod simple-dispatch java.lang.Character [x] (pprint-default x))
 (defmethod simple-dispatch :default [x] (pprint-default x))
 
+;; code-dispatch: the layouts of Clojure code. A run of writes the code layouts
+;; spell in sequence stops at the first object *print-length* cuts short, as
+;; Clojure's own layouts (format directives) do.
+
+(def ^:private ^:dynamic *code-symbols*
+  "While the body of an anonymous function literal prints, the spelling (%, %1,
+  %2, ...) of each of its parameters."
+  {})
+
+(defn- write-run
+  "Writes the members of s, each but the last followed by a space and a
+  newline of kind, stopping at the first one *print-length* cuts short."
+  [s kind]
+  (loop [s (seq s)]
+    (when (and s (not (write-out (first s))) (next s))
+      (print " ")
+      (pprint-newline kind)
+      (recur (next s)))))
+
+(defn- code-plain
+  "The list s as code with no layout of its own: its members on one line, or
+  each on a line of its own indented one column past the parenthesis."
+  [s]
+  (pprint-logical-block :prefix "(" :suffix ")"
+    (pprint-indent :block 1)
+    (print-length-loop [s (seq s)]
+      (when s
+        (write-out (first s))
+        (when (next s)
+          (print " ")
+          (pprint-newline :linear)
+          (recur (next s)))))))
+
+(defn- code-pairs
+  "The members of s two by two, each pair a block whose second member may go
+  below its first in miser style, the pairs separated by linear newlines."
+  [s]
+  (print-length-loop [s (seq s)]
+    (when s
+      (pprint-logical-block
+        (write-out (first s))
+        (when (next s)
+          (print " ")
+          (pprint-newline :miser)
+          (write-out (second s))))
+      (when (next (rest s))
+        (print " ")
+        (pprint-newline :linear)
+        (recur (next (rest s)))))))
+
+(defn- code-head
+  "Writes the head of a defining form and, past a space and a block indent of
+  one, the name after it (which goes below in miser style)."
+  [head named]
+  (when-not (write-out head)
+    (print " ")
+    (pprint-indent :block 1)
+    (pprint-newline :miser)
+    (write-out named)))
+
+(defn- code-hold-first
+  "def, ->, . and the like: the first operand stays beside the head unless in
+  miser style, the rest go below it."
+  [s]
+  (pprint-logical-block :prefix "(" :suffix ")"
+    (when-not (write-out (first s))
+      (when-let [more (next s)]
+        (print " ")
+        (pprint-newline :miser)
+        (when-not (write-out (first more))
+          (when-let [more (next more)]
+            (print " ")
+            (pprint-newline :linear)
+            (write-run more :linear)))))))
+
+(defn- code-defn
+  "defn, defmacro, fn: the name beside the head, then the docstring, the
+  attribute map and the parameter vector and body, or the arities."
+  [s]
+  (if (next s)
+    (let [[head named & more] s
+          [doc more] (if (string? (first more)) [(first more) (next more)] [nil more])
+          [attrs more] (if (map? (first more)) [(first more) (next more)] [nil more])]
+      (pprint-logical-block :prefix "(" :suffix ")"
+        (code-head head named)
+        (when doc
+          (print " ")
+          (pprint-newline :linear)
+          (write-out doc))
+        (when attrs
+          (print " ")
+          (pprint-newline :linear)
+          (write-out attrs))
+        (when (seq more)
+          (print " ")
+          (pprint-newline (if (and (vector? (first more)) (not (or doc attrs))) :miser :linear))
+          (write-run more :linear))))
+    (code-plain s)))
+
+(defn- code-bindings
+  "A binding vector: its name and value pairs."
+  [v]
+  (pprint-logical-block :prefix "[" :suffix "]"
+    (code-pairs v)))
+
+(defn- code-let
+  "let, loop, binding, doseq and the like: the binding vector beside the head,
+  the body below."
+  [s]
+  (pprint-logical-block :prefix "(" :suffix ")"
+    (if (and (next s) (vector? (second s)))
+      (do
+        (when-not (write-out (first s))
+          (print " ")
+          (pprint-indent :block 1)
+          (pprint-newline :miser))
+        (code-bindings (second s))
+        (print " ")
+        (pprint-newline :linear)
+        (write-run (next (next s)) :linear))
+      (code-plain s))))
+
+(defn- code-if
+  "if, when and their negations: the test beside the head unless in miser
+  style, the branches or body below."
+  [s]
+  (pprint-logical-block :prefix "(" :suffix ")"
+    (pprint-indent :block 1)
+    (when-not (write-out (first s))
+      (when-let [more (next s)]
+        (print " ")
+        (pprint-newline :miser)
+        (when-not (write-out (first more))
+          (loop [more (next more)]
+            (when more
+              (print " ")
+              (pprint-newline :linear)
+              (when-not (write-out (first more))
+                (recur (next more))))))))))
+
+(defn- code-cond
+  "cond: the test and expression pairs below the head."
+  [s]
+  (pprint-logical-block :prefix "(" :suffix ")"
+    (pprint-indent :block 1)
+    (write-out (first s))
+    (when (next s)
+      (print " ")
+      (pprint-newline :linear)
+      (code-pairs (next s)))))
+
+(defn- code-condp
+  "condp: the predicate and the expression beside the head, the clause pairs
+  below."
+  [s]
+  (if (> (count s) 3)
+    (pprint-logical-block :prefix "(" :suffix ")"
+      (pprint-indent :block 1)
+      (when-not (write-out (first s))
+        (print " ")
+        (pprint-newline :miser)
+        (when-not (write-out (second s))
+          (print " ")
+          (pprint-newline :miser)
+          (when-not (write-out (nth s 2))
+            (print " ")
+            (pprint-newline :linear))))
+      (code-pairs (drop 3 s)))
+    (code-plain s)))
+
+(defn- code-anonymous
+  "fn* over a parameter vector as the literal #(...) the reader reads into it,
+  each parameter spelled % (the only one) or %1, %2, ... by position."
+  [s]
+  (let [params (second s)
+        body (first (rest (rest s)))]
+    (if (vector? params)
+      (binding [*code-symbols* (if (= 1 (count params))
+                                 {(first params) "%"}
+                                 (into {} (map (fn [p i] [p (str "%" i)])
+                                               params (range 1 (inc (count params))))))]
+        (pprint-logical-block :prefix "#(" :suffix ")"
+          (write-run body :linear)))
+      (code-plain s))))
+
+(defn- code-reference-part
+  "A list or vector inside an ns reference. A libspec of a name, a keyword and
+  a value ([lib :as alias], [lib :refer [a b]]) stays on one line, a list or
+  vector value filled; any other has its members after the first aligned past
+  it and filled."
+  [part]
+  (let [open (if (vector? part) "[" "(")
+        close (if (vector? part) "]" ")")]
+    (if (and (= 3 (count part)) (keyword? (second part)))
+      (let [[lib option value] part]
+        (pprint-logical-block :prefix open :suffix close
+          (when-not (write-out lib)
+            (print " ")
+            (when-not (write-out option)
+              (print " ")))
+          (if (sequential? value)
+            (pprint-logical-block :prefix (if (vector? value) "[" "(") :suffix (if (vector? value) "]" ")")
+              (write-run value :fill))
+            (write-out value))))
+      (do
+        (when (empty? part)
+          (throw (Exception. "Not enough arguments for format definition")))
+        (pprint-logical-block :prefix open :suffix close
+          (when-not (write-out (first part))
+            (print " ")
+            (pprint-indent :current 0)
+            (write-run (rest part) :fill)))))))
+
+(defn- code-reference
+  "One reference of an ns form, (:require ...) and the like: its arguments
+  aligned one column past the keyword, a line ending after a list or vector
+  argument when they do not fit, filled after any other."
+  [reference]
+  (if (sequential? reference)
+    (pprint-logical-block :prefix (if (vector? reference) "[" "(")
+                          :suffix (if (vector? reference) "]" ")")
+      (when-not (write-out (first reference))
+        (pprint-indent :current 0))
+      (loop [args (next reference)]
+        (when args
+          (print " ")
+          (let [arg (first args)]
+            (if (sequential? arg)
+              (code-reference-part arg)
+              (write-out arg))
+            (when (next args)
+              (pprint-newline (if (sequential? arg) :linear :fill))))
+          (recur (next args)))))
+    (write-out reference)))
+
+(defn- code-ns
+  "ns: the name beside the head, then the docstring, the attribute map and
+  each reference on lines of their own."
+  [s]
+  (if (next s)
+    (let [[head named & more] s
+          [doc more] (if (string? (first more)) [(first more) (next more)] [nil more])
+          [attrs references] (if (map? (first more)) [(first more) (next more)] [nil more])]
+      (pprint-logical-block :prefix "(" :suffix ")"
+        (code-head head named)
+        (when (or doc attrs (seq references))
+          (pprint-newline :mandatory))
+        (when doc
+          (print (str "\"" doc "\""))
+          (when (or attrs (seq references))
+            (pprint-newline :mandatory)))
+        (when attrs
+          (when (and (not (write-out attrs)) (seq references))
+            (pprint-newline :mandatory)))
+        (loop [references (seq references)]
+          (when references
+            (code-reference (first references))
+            (when (next references)
+              (pprint-newline :linear)
+              (recur (next references)))))))
+    (code-plain s)))
+
+(def ^:private code-layouts
+  "The layout of each head symbol code-dispatch lays out its own way, the
+  clojure.core macros and functions under their qualified names too."
+  (let [special {'def code-hold-first
+                 'if code-if
+                 'fn* code-anonymous
+                 '. code-hold-first}
+        core {'defonce code-hold-first
+              'defn code-defn
+              'defn- code-defn
+              'defmacro code-defn
+              'fn code-defn
+              'let code-let
+              'loop code-let
+              'binding code-let
+              'with-local-vars code-let
+              'with-open code-let
+              'when-let code-let
+              'if-let code-let
+              'doseq code-let
+              'dotimes code-let
+              'when-first code-let
+              'if-not code-if
+              'when code-if
+              'when-not code-if
+              'cond code-cond
+              'condp code-condp
+              '.. code-hold-first
+              '-> code-hold-first
+              'locking code-hold-first
+              'struct code-hold-first
+              'struct-map code-hold-first
+              'ns code-ns}]
+    (merge special core
+           (into {} (map (fn [[sym layout]] [(symbol "clojure.core" (name sym)) layout]) core)))))
+
+(defn- code-list
+  "The list s as code: a reader macro form abbreviated, a form whose head has
+  a layout of its own laid out so, any other as a plain list."
+  [s]
+  (when-not (pprint-reader-macro s)
+    (if-let [layout (get code-layouts (first s))]
+      (layout s)
+      (code-plain s))))
+
+(defn- code-symbol
+  "A symbol in code: an anonymous function's parameter as its % spelling."
+  [sym]
+  (if-let [spelling (get *code-symbols* sym)]
+    (print spelling)
+    (if *print-suppress-namespaces*
+      (print (name sym))
+      (pr sym))))
+
+(defn- code-default
+  "x laid out as code: a seq as a list, a symbol as code-symbol does, anything
+  else as simple-dispatch lays it out."
+  [x]
+  (cond
+    (seq? x) (code-list x)
+    (symbol? x) (code-symbol x)
+    :else (pprint-default x)))
+
+(defmulti code-dispatch
+  "The pprint dispatch for Clojure code: def, defn, let, if, cond, condp, ns,
+  anonymous function literals and the like each in the layout Clojure's
+  pretty printer gives them, other lists as plain calls, and data as
+  simple-dispatch lays it out. A program adds a method for its own class."
+  class)
+
+(defmethod code-dispatch clojure.lang.IPersistentList [x] (code-default x))
+(defmethod code-dispatch clojure.lang.Symbol [x] (code-symbol x))
+(defmethod code-dispatch clojure.lang.IPersistentVector [x] (pprint-default x))
+(defmethod code-dispatch clojure.lang.IPersistentMap [x] (pprint-default x))
+(defmethod code-dispatch clojure.lang.IPersistentSet [x] (pprint-default x))
+(defmethod code-dispatch java.lang.Number [x] (pprint-default x))
+(defmethod code-dispatch java.lang.String [x] (pprint-default x))
+(defmethod code-dispatch clojure.lang.Keyword [x] (pprint-default x))
+(defmethod code-dispatch java.lang.Boolean [x] (pprint-default x))
+(defmethod code-dispatch java.lang.Character [x] (pprint-default x))
+(defmethod code-dispatch nil [_] (pr nil))
+(defmethod code-dispatch :default [x] (code-default x))
+
 (defn pprint
   "Pretty prints object to writer (*out* when absent) within
   *print-right-margin*, then a newline."

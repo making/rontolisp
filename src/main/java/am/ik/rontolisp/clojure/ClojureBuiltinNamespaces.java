@@ -45,8 +45,7 @@ final class ClojureBuiltinNamespaces {
 			"clojure.pprint",
 			Map.of("cl-format", "Common Lisp format directives over Clojure values are not built in", "formatter",
 					"Common Lisp format directives over Clojure values are not built in", "formatter-out",
-					"Common Lisp format directives over Clojure values are not built in", "code-dispatch",
-					"the code layout is not built in; simple-dispatch prints code as data"));
+					"Common Lisp format directives over Clojure values are not built in"));
 
 	/**
 	 * The shipped namespaces {@code clj -M} has loaded before the program runs: a

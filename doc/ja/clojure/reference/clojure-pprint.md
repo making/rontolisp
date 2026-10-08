@@ -13,6 +13,7 @@
 | `write` | `(write x & options)`: オプションに従って `x` を書く。`:stream`（ライター。既定の `true` は `*out*`、`nil` なら文字列を返す）、`:pretty`、`:right-margin`、`:miser-width`、`:dispatch`、`:length`、`:level`、`:readably`、`:suppress-namespaces`、`:base`、`:radix` |
 | `print-table` | `(print-table rows)`、`(print-table ks rows)`: `rows` のマップを表として出力する。列は `ks` のキーごとに 1 つで右寄せ（`ks` を省くと最初の行のキー） |
 | `simple-dispatch` | 既定のディスパッチ。`class` で振り分けるマルチメソッドで、プログラムは自分のレコードや型のメソッドを追加できる |
+| `code-dispatch` | Clojure のコード用のディスパッチ。これも `class` で振り分けるマルチメソッドで、定義や制御のフォームをそれぞれ固有のレイアウトで出力する |
 | `*print-pprint-dispatch*`、`with-pprint-dispatch`、`set-pprint-dispatch` | `pprint` が各値を渡す関数。本体の間だけ束縛するか、置き換える |
 | `pprint-logical-block` | `(pprint-logical-block options* body)`: `body` を論理ブロック（レイアウトが改行するかどうかを判断する単位）として実行する。オプションは `:prefix`、`:per-line-prefix`、`:suffix`。`*print-level*` より深いと `#` を書く |
 | `print-length-loop` | 本体を最大 `*print-length*` 回実行し、打ち切ったところで `...` を書く `loop` |
@@ -104,10 +105,33 @@
  18 19>
 ```
 
+`code-dispatch` は Clojure のプリティプリンタと同じようにコードをレイアウトします。`defn`、`let`、
+`if`、`cond`、`condp`、`->`、`ns` などはそれぞれ固有のレイアウトで、無名関数のフォームは `#(...)`
+リテラルとして出力します。
+
+```clojure
+(require '[clojure.pprint :as pp])
+(pp/with-pprint-dispatch pp/code-dispatch
+  (pp/pprint '(defn greet "Greets a person." [person]
+                (let [n (:name person)]
+                  (when (seq n) (println "Hello," n "- glad to see you again"))))))
+(pp/with-pprint-dispatch pp/code-dispatch
+  (pp/pprint '(fn* [p1 p2] (+ p1 (* p2 p2)))))
+```
+
+```
+(defn greet
+  "Greets a person."
+  [person]
+  (let [n (:name person)]
+    (when (seq n) (println "Hello," n "- glad to see you again"))))
+#(+ %1 (* %2 %2))
+```
+
 ## 違い
 
-- `cl-format`、`formatter`、`formatter-out`、`code-dispatch` は組み込まれておらず、名前を使うと
-  そのことを告げるエラーになります。
+- `cl-format`、`formatter`、`formatter-out` は組み込まれておらず、名前を使うとそのことを告げる
+  エラーになります。
 - `get-pretty-writer` は受け取ったライターをそのまま返します。`pprint` や `write` は呼び出しごとに
   出力を 0 桁目からレイアウトし、マージンには実行時に束縛されている値を使います。Clojure の
   プリティライターは、作られたときのマージンを保ち、それまでにそのライターへ書かれた内容の続きの桁から

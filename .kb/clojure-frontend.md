@@ -1306,11 +1306,32 @@ end** (`src/main/resources/am/ik/rontolisp/clojure/lib/clojure/**`, the
     four-key maps, 129/109/125 KB of output): JVM class 0.48/0.24/0.54 s, the oracle
     1.34/0.30/1.44 s (cold), wasm P1 and component 1.5/0.5/2.6 s, the interpreter
     13/3.9/22 s.
+  - `code-dispatch` (a multimethod on `class`, like the oracle's) emits, per head symbol,
+    the event sequence of the oracle's code layout, inferred from its output only
+    (2026-10-08): the oracle spells most layouts as format directives, so a run of
+    writes stops at the first object `*print-length*` cuts (`write-run`, `code-head`;
+    `(condp = ...1 2)` and `(defn f ... ...)` follow), while the plain list, `cond`'s and
+    the bindings' pairs use `print-length-loop`. The quirks kept: a blank before a broken
+    head's miser newline (`(defn \n  f`), `(let [a 1] )`, `((let x))` for a non-vector
+    second, a nested `#(...)` rebinding the parameter spellings, the ns docstring
+    unescaped, a 3-member libspec with a keyword second (`[lib :as x]`,
+    `[lib :refer [a b]]`) never broken and its list value filled, any other part's
+    members filled past its first, a reference's arguments one column past its keyword
+    with a linear newline after a list or vector argument and a fill one after any other
+    (a `:current` indent set only when the keyword was not cut). `special-symbol?` heads
+    (`def` `if` `fn*` `.`) match unqualified only, the rest as `clojure.core/` too.
+    Verified the same day: 2,200 generated forms (the table's heads, plain calls,
+    bindings, ns forms, at random margins, miser widths, lengths and levels) identical
+    to clj 1.12.6 on the interpreter, 1,500 of them on all four backends. Deviations:
+    `(ns)` alone prints as a list where the oracle overflows its stack; an empty list in
+    a reference (`(:require ())`, `[x :refer ()]`) is nil here ("Deviations"), so it
+    prints `nil` where the oracle signals or prints `()` (an empty vector part signals
+    the oracle's `Exception` alike).
   - Left out, refused by name (`refuseLeftOut`): `cl-format`, `formatter`,
-    `formatter-out` (Common Lisp format directives over Clojure values) and
-    `code-dispatch`. Deviation: `get-pretty-writer` answers its writer, so each `pprint`
-    lays out from column 0 within the margin bound when it runs; the oracle's pretty
-    writer keeps its creation margin and its column across calls.
+    `formatter-out` (Common Lisp format directives over Clojure values). Deviation:
+    `get-pretty-writer` answers its writer, so each `pprint` lays out from column 0
+    within the margin bound when it runs; the oracle's pretty writer keeps its creation
+    margin and its column across calls.
 - Pins: clojure-spec `clojure-walk-*` (all four backends, oracle-identical, the first
   case loading `clojure.walk` through a qualified name only),
   `clojure-template-substitutes-per-group-of-values`, `clojure-pprint-*`,

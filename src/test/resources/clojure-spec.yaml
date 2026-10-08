@@ -8095,3 +8095,60 @@ cases:
       | two |
       |     |
       [true 72 40 nil nil 10]
+  - name: clojure-pprint-code-dispatch-lays-code-out-like-the-oracle
+    # code-dispatch (.kb/clojure-frontend.md "clojure.jar namespaces"): defn, let, if, cond,
+    # condp, ->, ns and the #(...) literal each in the oracle's layout, its quirks included
+    # (the blank after a broken head, (let [a 1] ), ((let x y)), a nested literal's
+    # parameters, a libspec kept on one line), *print-length* cutting a run short, and write
+    # with :dispatch. Every line is the oracle's (clj 1.12.6), on all four backends.
+    source: |
+      (ns pp-code (:require [clojure.pprint :as pp]))
+      (defn code [margin miser form]
+        (binding [pp/*print-right-margin* margin pp/*print-miser-width* miser]
+          (prn (with-out-str (pp/with-pprint-dispatch pp/code-dispatch (pp/pprint form))))))
+      (code 72 40 '(defn greet "Greets a person." {:added "1.0"} [person] (let [n (:name person) title (:title person "friend")] (when (seq n) (println "Hello," title n)))))
+      (code 30 40 '(defn greet [person] (let [n (:name person)] (println "Hello," n))))
+      (code 40 nil '(defn area ([r] (area r r)) ([w h] (cond (neg? w) :negative (zero? w) :zero :else (* w h)))))
+      (code 24 nil '(condp = mode :fast (go-fast) :slow (go-slow) (stay)))
+      (code 20 nil '(if (pos? x) (println "positive number") (println "negative number")))
+      (code 30 nil '(-> request (assoc :user user) (update :count inc) (dissoc :password)))
+      (code 72 40 '(fn* [p1 p2] (map (fn* [q] (+ p1 q)) (range p2))))
+      (code 72 40 '(fn* [a & more] (apply + a more)))
+      (code 40 nil '(ns my.app.core "The application." (:require [clojure.string :as str] [clojure.set :refer [union intersection difference]] my.app.util) (:import (java.util Date UUID) (java.io File)) (:gen-class)))
+      (code 72 40 '(let [{:keys [a b]} m] a))
+      (code 72 40 '(let [a 1]))
+      (code 72 40 '(let x y))
+      (code 72 40 '(clojure.core/when-let [x (f)] (g x)))
+      (code 15 40 '(loop [i 0 acc []] (recur (inc i) (conj acc i))))
+      (code 72 40 '(quote x))
+      (code 72 40 '[(quote a) (var b) (clojure.core/deref c) {:k (inc x)} #{1}])
+      (binding [*print-length* 2]
+        (code 72 40 '(defn f [x] a b c))
+        (code 72 40 '(condp = x 1 2 3 4))
+        (code 72 40 '(ns a (:require b c d))))
+      (binding [*print-level* 2]
+        (code 72 40 '(defn f [x] (let [a (b (c))] a))))
+      (prn (with-out-str (pp/write '(when-not done (recur)) :dispatch pp/code-dispatch :right-margin 12)))
+      (in-ns 'user)
+    expected: |
+      "(defn greet\n  \"Greets a person.\"\n  {:added \"1.0\"}\n  [person]\n  (let [n (:name person) title (:title person \"friend\")]\n    (when (seq n) (println \"Hello,\" title n))))\n"
+      "(defn \n  greet\n  [person]\n  (let \n    [n (:name person)]\n    (println \"Hello,\" n)))\n"
+      "(defn area\n  ([r] (area r r))\n  ([w h]\n    (cond\n      (neg? w) :negative\n      (zero? w) :zero\n      :else (* w h))))\n"
+      "(condp = mode\n  :fast (go-fast)\n  :slow (go-slow)\n  (stay))\n"
+      "(if (pos? x)\n  (println\n    \"positive number\")\n  (println\n    \"negative number\"))\n"
+      "(-> request\n (assoc :user user)\n (update :count inc)\n (dissoc :password))\n"
+      "#(map #(+ p1 %) (range %2))\n"
+      "#(apply + %1 %3)\n"
+      "(ns my.app.core\n  \"The application.\"\n  (:require [clojure.string :as str]\n            [clojure.set :refer [union\n                                 intersection\n                                 difference]]\n            my.app.util)\n  (:import (java.util Date UUID)\n           (java.io File))\n  (:gen-class))\n"
+      "(let [{:keys [a b]} m] a)\n"
+      "(let [a 1] )\n"
+      "((let x y))\n"
+      "(clojure.core/when-let [x (f)] (g x))\n"
+      "(loop \n  [i 0 acc []]\n  (recur\n    (inc i)\n    (conj\n      acc\n      i)))\n"
+      "'x\n"
+      "['a #'b @c {:k (inc x)} #{1}]\n"
+      "(defn f ...)\n"
+      "(condp = ...1 2 3 4)\n"
+      "(ns a\n  (:require b ... ...))\n"
+      "(defn f [x] (let # a))\n"
+      "(when-not\n  done\n  (recur))"

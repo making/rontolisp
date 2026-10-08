@@ -25,7 +25,7 @@ has them.
 | [(clojure.string)](reference/string.md) | The string library, plus the core `subs` |
 | [(clojure.set)](reference/clojure-set.md) | The relational set library: `union`/`intersection`/`difference`, `select`/`project`/`rename`, `index`/`join`, `subset?`/`superset?` |
 | [clojure.edn](reference/clojure-edn.md) | Reading EDN data: `read-string`/`read` with `:eof`, `:readers` and `:default` |
-| [clojure.pprint](reference/clojure-pprint.md) | Pretty printing: `pprint`/`write` within a right margin, `print-table`, and the dispatch a program extends or replaces |
+| [clojure.pprint](reference/clojure-pprint.md) | Pretty printing: `pprint`/`write` within a right margin, `print-table`, `code-dispatch` for code, and the dispatch a program extends or replaces |
 | [clojure.template](reference/clojure-template.md) | Expression templates: `apply-template`, `do-template` |
 | [clojure.walk](reference/clojure-walk.md) | Generic traversal of nested data: `walk`/`postwalk`/`prewalk`, the `-replace` pair, `keywordize-keys`/`stringify-keys` |
 | [Regular expressions](reference/regex.md) | `re-find`/`re-seq`/`re-matches`, `re-matcher`/`re-groups`, `re-pattern` and pattern `split`/`replace` |
