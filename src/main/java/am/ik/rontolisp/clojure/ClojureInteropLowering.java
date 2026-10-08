@@ -16,6 +16,7 @@ import am.ik.rontolisp.LispHashTable;
 import am.ik.rontolisp.LispArray;
 import am.ik.rontolisp.LispDouble;
 import am.ik.rontolisp.LispInteger;
+import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispTrue;
 import am.ik.rontolisp.LispString;
@@ -48,6 +49,32 @@ final class ClojureInteropLowering {
 	static final LispSymbol JAVA_PROXY = new LispSymbol("JAVA:PROXY");
 
 	static final LispSymbol JAVA_SUBCLASS = new LispSymbol("JAVA:SUBCLASS");
+
+	/**
+	 * A {@code java:new} / {@code java:call} / {@code java:static} call over its parts
+	 * (the names, then the arguments), ended in {@code :functional} when an argument may
+	 * be a function: a Clojure fn passed where an interface is expected implements every
+	 * abstract method by the method's arguments, as the oracle's fn implements a
+	 * functional interface, never as a {@code java:proxy} called with the method's name
+	 * first ({@code compiler.JavaSiteResolver#FUNCTIONAL}). A site whose arguments are
+	 * all literals lowers as before.
+	 * @param operator the {@code java:} operator
+	 * @param parts the names and the arguments
+	 * @param names how many leading parts are names, not arguments
+	 * @return the call
+	 */
+	static LispVal hostCall(LispSymbol operator, List<LispVal> parts, int names) {
+		for (LispVal argument : parts.subList(names, parts.size())) {
+			if (!(argument instanceof LispString || argument instanceof LispInteger || argument instanceof LispDouble
+					|| argument instanceof LispChar || argument instanceof LispNil || argument instanceof LispTrue
+					|| argument instanceof LispSymbol symbol && symbol.isKeyword())) {
+				List<LispVal> ended = new ArrayList<>(parts);
+				ended.add(new LispSymbol(LispNames.JAVA_FUNCTIONAL_MARKER));
+				return ClojureLowerUtil.cons(operator, ended);
+			}
+		}
+		return ClojureLowerUtil.cons(operator, parts);
+	}
 
 	/**
 	 * The one host class the lowering builds itself: a zero-argument
@@ -298,7 +325,7 @@ final class ClojureInteropLowering {
 		List<LispVal> args = new ArrayList<>();
 		args.add(LispString.literal(designator(cls, types)));
 		args.addAll(lowered);
-		return ClojureLowerUtil.cons(JAVA_NEW, args);
+		return hostCall(JAVA_NEW, args, 1);
 	}
 
 	/**
@@ -619,7 +646,7 @@ final class ClojureInteropLowering {
 		call.add(LispString.literal(cls));
 		call.add(LispString.literal(designator));
 		call.addAll(args);
-		LispVal run = ClojureLowerUtil.cons(JAVA_STATIC, call);
+		LispVal run = hostCall(JAVA_STATIC, call, 2);
 		if (staticMember(cls, member).booleanArities().contains(args.size())) {
 			return ctx.booleanAnswer(run);
 		}
@@ -791,7 +818,7 @@ final class ClojureInteropLowering {
 		List<LispVal> call = new ArrayList<>();
 		call.add(LispString.literal(designator(cls, types)));
 		call.addAll(args);
-		return ClojureLowerUtil.cons(JAVA_NEW, call);
+		return hostCall(JAVA_NEW, call, 1);
 	}
 
 	/**
@@ -1342,7 +1369,7 @@ final class ClojureInteropLowering {
 		for (LispVal arg : items.subList(2, items.size())) {
 			args.add(ctx.lower(arg));
 		}
-		return ClojureLowerUtil.cons(JAVA_CALL, args);
+		return hostCall(JAVA_CALL, args, 2);
 	}
 
 	/**
@@ -1396,7 +1423,7 @@ final class ClojureInteropLowering {
 		direct.add(recv);
 		direct.add(LispString.literal(designator));
 		direct.addAll(args);
-		LispVal hostCall = ClojureLowerUtil.cons(JAVA_CALL, direct);
+		LispVal hostCall = hostCall(JAVA_CALL, direct, 2);
 		LispVal call = hostCall;
 		String cls = knownClass;
 		if (cls == null) {

@@ -34,3 +34,5 @@ before it runs, among the methods of that class: to one method when the argument
 known too, otherwise to the overloads it chooses among by the kinds its arguments have when
 it runs (the guide's [Resolving calls before they
 run](../../guides/java-interop.md#resolving-calls-before-they-run)).
+
+A function argument passed where an interface is expected becomes a `java:proxy` of it, called with the method name first. Ending the call in `:functional`, after the arguments, makes it implement each abstract method by the method's arguments instead, as `java:new` and `java:static` do with the same ending (the guide's [Callbacks via java:proxy](../../guides/java-interop.md#callbacks-via-javaproxy)).

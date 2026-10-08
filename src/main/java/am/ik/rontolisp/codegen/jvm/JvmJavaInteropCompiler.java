@@ -235,19 +235,21 @@ final class JvmJavaInteropCompiler {
 		// the method sees it, as the bridge renders every argument).
 		List<LispVal> values;
 		int firstArgument;
+		// A :functional marker ends the form after the arguments: it is no value.
+		int end = site.functional() ? args.size() - 1 : args.size();
 		switch (site.operator()) {
 			case CALL -> {
 				values = new java.util.ArrayList<>();
 				values.add(args.get(1));
-				values.addAll(args.subList(3, args.size()));
+				values.addAll(args.subList(3, end));
 				firstArgument = 1;
 			}
 			case STATIC -> {
-				values = args.subList(3, args.size());
+				values = args.subList(3, end);
 				firstArgument = 0;
 			}
 			case NEW -> {
-				values = args.subList(2, args.size());
+				values = args.subList(2, end);
 				firstArgument = 0;
 			}
 			default -> {

@@ -304,6 +304,41 @@ public final class JavaSiteResolver {
 	}
 
 	/**
+	 * The marker a {@code java:new}, {@code java:call} or {@code java:static} form may
+	 * end in, after its arguments: a function argument converted to an interface
+	 * implements every abstract method by the method's arguments alone
+	 * ({@link JavaImplementations#functional}) instead of as a {@code java:proxy}. The
+	 * Clojure lowering ends every host call with a non-literal argument in it (a Clojure
+	 * fn takes no method name); a keyword is never an argument a member accepts, so it
+	 * cannot be mistaken for one, and the run-time paths read it off the evaluated
+	 * arguments the same way.
+	 */
+	public static final String FUNCTIONAL = LispNames.JAVA_FUNCTIONAL_MARKER;
+
+	/**
+	 * Whether a site's parts end in {@link #FUNCTIONAL} after its names.
+	 * @param operator the site's operator
+	 * @param parts the form's elements, the operator first
+	 * @return whether the last part is the marker
+	 */
+	public static boolean isFunctional(JavaSite.Operator operator, List<LispVal> parts) {
+		int first = switch (operator) {
+			case NEW -> 2;
+			case CALL, STATIC -> 3;
+			case FIELD -> Integer.MAX_VALUE;
+		};
+		return parts.size() > first && isFunctionalMarker(parts.get(parts.size() - 1));
+	}
+
+	/**
+	 * @param value a form or an evaluated argument
+	 * @return whether it is the keyword {@link #FUNCTIONAL}
+	 */
+	public static boolean isFunctionalMarker(LispVal value) {
+		return value instanceof LispSymbol symbol && FUNCTIONAL.equals(symbol.name());
+	}
+
+	/**
 	 * Resolves a site.
 	 * @param site a {@code java:new}, {@code java:call}, {@code java:static} or
 	 * {@code java:field} form
@@ -319,13 +354,18 @@ public final class JavaSiteResolver {
 			return JavaSite.unresolved(operator, JavaStaticType.UNKNOWN, "the form is malformed");
 		}
 		List<LispVal> parts = site.toList();
+		boolean functional = isFunctional(operator, parts);
+		if (functional) {
+			parts = parts.subList(0, parts.size() - 1);
+		}
 		try {
-			return switch (operator) {
+			JavaSite resolved = switch (operator) {
 				case NEW -> resolveNew(parts);
 				case STATIC -> resolveStatic(parts);
 				case CALL -> resolveCall(parts);
 				case FIELD -> resolveField(parts);
 			};
+			return functional ? resolved.asFunctional() : resolved;
 		}
 		catch (IllegalArgumentException ex) {
 			// A malformed parameter tag: the run-time path raises it.

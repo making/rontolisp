@@ -7838,6 +7838,14 @@ public final class LispNames {
 	 */
 	public static final String JAVA_WARN_ON_REFLECTION = "*WARN-ON-REFLECTION*";
 
+	/**
+	 * The keyword a {@code java:new} / {@code java:call} / {@code java:static} call may
+	 * end in, after its arguments: a function argument converted to an interface
+	 * implements it by the method's arguments, not as a {@code java:proxy}
+	 * ({@code compiler.JavaSiteResolver#FUNCTIONAL}).
+	 */
+	public static final String JAVA_FUNCTIONAL_MARKER = ":FUNCTIONAL";
+
 	/** {@code java:new}, qualified. */
 	public static final String JAVA_NEW_QUALIFIED = JAVA_PKG + ":" + JAVA_NEW;
 

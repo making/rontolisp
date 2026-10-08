@@ -356,6 +356,13 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   string, number or character and every overload at that arity of its class answers
   one (`(.matches "abc" "x")`); any other host boolean
   keeps the shared `java:` unmarshal and prints `nil` for `false`.
+- A fn passed where a Java interface is expected implements every abstract method of
+  any interface, each called with the method's arguments; the oracle converts a fn only
+  to an interface annotated `@FunctionalInterface` (a `PropertyChangeListener` is a
+  `ClassCastException` there). The fn's value crosses back as an argument would: a
+  `Comparator` fn answers a number (the oracle also takes `true`/`false`), and `false`
+  crosses as no Java value at all, so a fn answering a Java `boolean` answers `true` or
+  `nil`, and a member taking a `false` argument finds no match.
 - An integer receiver is called as an `Integer` when it fits one, else as a `Long`
   (the oracle's is always a `Long`): `(.getClass 1)` answers `java.lang.Integer`.
 - A `_` param tag leaves that parameter to the cost rule of the `java:` surface, so

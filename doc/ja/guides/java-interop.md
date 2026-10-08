@@ -52,7 +52,7 @@ Lisp の値も `java:call` の receiver になり、`Object` 引数に渡した�
 | character | `char`/`Character` | `Character` → character |
 | `t` / `nil` | `boolean` (`nil` は任意の `null` 参照にもなる) | `boolean` → `t`/`nil` |
 | `java` オブジェクト | ラップされたホストオブジェクト | その他のオブジェクト → `java` オブジェクト |
-| 関数/ラムダ | 一致するインターフェースに対する `java:proxy` (引数に限る) | — |
+| 関数/ラムダ | 一致するインターフェースに対する `java:proxy`、`:functional` の後ではその抽象メソッドの実装 (引数に限る) | — |
 | 真リスト / ベクタ (特殊化されたものも含む) | `T[]` (要素ごとに変換、プリミティブ配列も可)、または `List`/`Collection`/`Iterable` | 任意の Java 配列 → リスト |
 
 Java の `null` (および `void` メソッド) は `nil` として返ります。Java の配列が期待される箇所に真リスト (または `make-array` で作ったランク 1 の配列。`double-float`、`single-float`、`bfloat16`、`(unsigned-byte 8|16|32)` に特殊化された配列も含む) を渡すと、要素ごとに要素型へ変換されます (`int[]` などのプリミティブ配列も含む)。`List`/`Collection`/`Iterable` が期待される箇所では `java.util.List` になり、ネストしたリストは再帰的に変換されます。逆方向では、Java の **配列** の結果は Lisp のリストになりますが、返された `java.util.List` は不透明な `java` オブジェクトのままで、そのメソッドを呼び出して操作します。
@@ -282,6 +282,16 @@ error: --java-static: 1 java: call cannot be compiled without reflection:
 ```console
 (java:call button "addActionListener"
   (lambda (method event) (handle-click)))
+```
+
+引数の後ろを `:functional` で終えた `java:new`・`java:call`・`java:static` は、関数を Java がラムダを変換するのと同じ形で変換します。インターフェースの各抽象メソッドはメソッドの引数だけで関数を呼び、default メソッドは本体を保ちます。Clojure フロントエンドは呼び出しをこれで終えるので、Clojure の `fn` はメソッド名を受け取りません。
+
+```lisp
+(let ((lst (java:new "java.util.ArrayList")))
+  (dolist (x (list 3 1 2)) (java:call lst "add" x))
+  (java:static "java.util.Collections" "sort" lst (lambda (a b) (- b a)) :functional)
+  (java:call lst "toString"))
+; => "[3, 2, 1]"
 ```
 
 ## java:subclass によるクラスの proxy

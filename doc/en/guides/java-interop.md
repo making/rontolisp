@@ -79,7 +79,7 @@ Arguments and results are converted between rontolisp and Java automatically:
 | character | `char`/`Character` | `Character` → character |
 | `t` / `nil` | `boolean` (`nil` also → any `null` reference) | `boolean` → `t`/`nil` |
 | a `java` object | the wrapped host object | any other object → a `java` object |
-| a function/lambda | a `java:proxy` over the matching interface (an argument only) | — |
+| a function/lambda | a `java:proxy` over the matching interface, or after `:functional` an implementation of its abstract methods (an argument only) | — |
 | a proper list / a vector (specialized too) | `T[]` (element-wise, incl. primitives), or `List`/`Collection`/`Iterable` | any Java array → a list |
 
 A Java `null` (and a `void` method) comes back as `nil`. A proper list — or a
@@ -417,6 +417,19 @@ automatically, which is what lets a Swing `ActionListener` be a plain lambda:
 ```console
 (java:call button "addActionListener"
   (lambda (method event) (handle-click)))
+```
+
+A `java:new`, `java:call` or `java:static` ending in `:functional`, after its arguments,
+converts a function the way Java converts a lambda instead: each abstract method of the
+interface calls it with the method's arguments alone, and default methods keep their
+bodies. The Clojure front end ends its calls in it, so a Clojure `fn` takes no method name:
+
+```lisp
+(let ((lst (java:new "java.util.ArrayList")))
+  (dolist (x (list 3 1 2)) (java:call lst "add" x))
+  (java:static "java.util.Collections" "sort" lst (lambda (a b) (- b a)) :functional)
+  (java:call lst "toString"))
+; => "[3, 2, 1]"
 ```
 
 ## Class proxies via java:subclass

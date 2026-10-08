@@ -345,6 +345,13 @@
   場合（`(.matches "abc" "x")`）だけ `false` を答えます。
   それ以外のホスト boolean は共有の `java:` unmarshal のままとなり、`false` は
   `nil` と表示されます。
+- Java のインタフェースが期待される位置に渡した fn は、どのインタフェースでもその抽象
+  メソッドすべてを実装し、それぞれメソッドの引数で呼ばれます。オラクルが fn を変換する
+  のは `@FunctionalInterface` 注釈付きのインタフェースだけです（`PropertyChangeListener`
+  はオラクルでは `ClassCastException` になります）。fn の値は引数と同じ規則で Java へ
+  戻ります。`Comparator` の fn は数値を答えます（オラクルは `true`/`false` も受け付けます）。
+  `false` は Java の値に変換されないため、Java の `boolean` を答える fn は `true` か
+  `nil` を答え、`false` を引数に取るメンバは一致しません。
 - 整数の receiver は `Integer` に収まれば `Integer`、収まらなければ `Long` として
   呼ばれます（オラクルでは常に `Long` です）。`(.getClass 1)` は
   `java.lang.Integer` を答えます。

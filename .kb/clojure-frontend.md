@@ -2139,6 +2139,20 @@ The `java:` surface (`.kb/java-interop.md`); interpreter and JVM only -- wasm co
   member value, or an instance call on a construction literal, a `let`/`if-let`/`when-let`
   local bound to one (single-shot, so the inference is sound), or a `..` step's declared
   return. Anything else prints `nil` for false.
+- A fn passed where an interface is expected implements every abstract method by the
+  method's arguments, defaults keeping their bodies (`.kb/java-interop.md`, `:functional`;
+  `ClojureInteropLowering.hostCall` ends a `java:new`/`java:call`/`java:static` with any
+  non-literal argument in the marker). Before (measured 2026-10-08, interpreter and JVM)
+  the shared auto-proxy passed the method name first: `(.start (Thread. (fn [] ...)))`
+  was `Function expects 0 arguments, got 1`. Oracle (clj 1.12.6, same day): a fn converts
+  only to a `@FunctionalInterface` (a `PropertyChangeListener`/`DocumentListener` is a
+  `ClassCastException`; here every abstract method of any interface calls it -- user doc
+  deviation), `Comparator` takes a boolean answer (`AFunction.compare`; here a number),
+  and `false` returned or passed is Java false (here no Java value: `|false|` is a symbol
+  `java:` does not bridge, for `proxy` bodies too -- todo e69). `(proxy [Super] [fn] ...)`
+  constructor arguments still convert as `java:proxy`. Pin:
+  `ClojureInteropTest#aFnPassedWhereAnInterfaceIsExpectedImplementsItsMethodByItsArguments`
+  (`locking`'s threaded pin passes its fn to `Thread.` directly).
 - `proxy` of interfaces is `java:proxy` with a name-dispatching lambda over the Java
   arguments (no `this`); a missing method raises `no proxy method: <name>`;
   `toString`/`equals`/`hashCode` are refused there (`java:proxy` keeps `Object`'s, so the

@@ -37,10 +37,14 @@ import org.jspecify.annotations.Nullable;
  * resolved one
  * @param overloads for a dispatched site, the overloads of the static class the call
  * chooses among when it runs, in {@link JavaOverloads#ranked} order; empty otherwise
+ * @param functional whether the site ends in {@code :functional}
+ * ({@link JavaSiteResolver#FUNCTIONAL}): a function argument converted to an interface
+ * implements it by its arguments ({@link JavaImplementations#functional}), not as a
+ * {@code java:proxy} called with the method's name first
  */
 public record JavaSite(Operator operator, @Nullable String staticClass, @Nullable String designator,
 		@Nullable JavaExecutable executable, @Nullable JavaField field, boolean packed, JavaStaticType result,
-		List<Argument> arguments, @Nullable String reason, List<JavaOverloads.Overload> overloads) {
+		List<Argument> arguments, @Nullable String reason, List<JavaOverloads.Overload> overloads, boolean functional) {
 
 	/**
 	 * Copies the arguments and the overloads.
@@ -48,6 +52,33 @@ public record JavaSite(Operator operator, @Nullable String staticClass, @Nullabl
 	public JavaSite {
 		arguments = List.copyOf(arguments);
 		overloads = List.copyOf(overloads);
+	}
+
+	/**
+	 * A site without {@code :functional}.
+	 * @param operator which {@code java:} operator
+	 * @param staticClass the class whose members were the candidates, or {@code null}
+	 * @param designator the member, or {@code null}
+	 * @param executable the resolved method or constructor, or {@code null}
+	 * @param field the resolved field, or {@code null}
+	 * @param packed whether the call packs its trailing arguments
+	 * @param result the static type of the site's value
+	 * @param arguments what was known about each argument
+	 * @param reason why the site is resolved at run time, or {@code null}
+	 * @param overloads a dispatched site's overloads
+	 */
+	public JavaSite(Operator operator, @Nullable String staticClass, @Nullable String designator,
+			@Nullable JavaExecutable executable, @Nullable JavaField field, boolean packed, JavaStaticType result,
+			List<Argument> arguments, @Nullable String reason, List<JavaOverloads.Overload> overloads) {
+		this(operator, staticClass, designator, executable, field, packed, result, arguments, reason, overloads, false);
+	}
+
+	/**
+	 * @return this site, ending in {@code :functional}
+	 */
+	public JavaSite asFunctional() {
+		return new JavaSite(this.operator, this.staticClass, this.designator, this.executable, this.field, this.packed,
+				this.result, this.arguments, this.reason, this.overloads, true);
 	}
 
 	/** The {@code java:} operators a site can be. */

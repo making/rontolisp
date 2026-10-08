@@ -799,6 +799,18 @@ class JavaInteropTest {
 	}
 
 	// Mirrors
+	// JvmJavaInteropCompilerTest#aFunctionAtAFunctionalSiteImplementsItsInterfaceByItsArguments.
+	@Test
+	void aFunctionAtAFunctionalSiteImplementsItsInterfaceByItsArguments() {
+		assertThat(output(JavaImplementationPrograms.FUNCTIONAL))
+			.isEqualTo(JavaImplementationPrograms.FUNCTIONAL_OUTPUT);
+		// through apply, the marker is the last evaluated argument
+		assertThat(output("(let ((l (java:new \"java.util.ArrayList\"))) (java:call l \"add\" 4)"
+				+ " (apply #'java:call l \"forEach\" (list #'print :functional)))"))
+			.isEqualTo("4");
+	}
+
+	// Mirrors
 	// JvmJavaInteropCompilerTest#aProxyOfSeveralInterfacesResolvesTheCallsItIsPassedTo.
 	@Test
 	void aProxyOfSeveralInterfacesResolvesTheCallsItIsPassedTo() {
