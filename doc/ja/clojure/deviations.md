@@ -226,7 +226,7 @@
 - `class` は種類名のキーワードで答えます（`:string`・`:number`・`:keyword` 等）。オラクルは
   ホストクラスを返しますが、wasm バックエンドにはありません。record/deftype は
   タグのキーワードで、ホストオブジェクト（インタプリタと JVM）はホストクラスで答えます。
-- コレクション・キーワード・シンボル・比・atom へのインスタンス呼び出しは core 関数を通して
+- コレクション・キーワード・シンボル・比・atom・fn へのインスタンス呼び出しは core 関数を通して
   答えるため、その逸脱も引き継ぎます（`.getClass` は `class` と同じ値を返します）。対応づけて
   いないメソッドは `Method m taking N args is not supported for class C` として拒否し、
   オラクルが答える場合（`.hashCode`）もあります。map のクラス名は件数だけで決め、8 件までは
@@ -266,9 +266,11 @@
 - `unchecked-` の算術は整数を64ビット（`-int` 系は32ビット）に折り返し、型変換 `short`・`byte`・
   `char`・`float` と合わせてオラクルと同じです。ただし64ビットを超える整数もここでは通常の整数なので、
   オラクルでは折り返されない bigint のオペランド（`(unchecked-add 9223372036854775807N 1)`）も
-  折り返します。`int` と `long` はオラクルの範囲検査をせずに切り捨てます（`(long 1e19)` は
-  `10000000000000000000` で、オラクルは `IllegalArgumentException` を投げます。`(long ##NaN)` は
-  シグナルし、オラクルは `0` を返します）。比の `double` は最も近い double で（`(double 2/3)` は
+  折り返します。`int` と `long` は範囲検査とメッセージを含めてオラクルの型変換と同じです。
+  リテラルの引数はその型の型変換を、それ以外はオブジェクトの型変換を通ります。オラクルの
+  コンパイラがプリミティブの double と型付けする値（double リテラルを束縛した `let` の
+  ローカル、`(* 2.0 x)`）は、オラクルでは `Value out of range for int: 2.0E10`、ここでは
+  `integer overflow` で拒否されます。比の `double` は最も近い double で（`(double 2/3)` は
   `0.6666666666666666`）、オラクルは先に有効数字 16 桁に丸めます（`0.6666666666666667`）。`inc`・
   `dec` と検査付きの演算は桁あふれしません（整数は bignum です）。
 - `bigint` と `biginteger` は通常の整数、`bigdec` は通常の有理数を返します（`(bigdec "1.5")` は
@@ -298,9 +300,7 @@
   （オラクルはコアの関数との同一性で判別します）。`compare` は文字列をコードポイントで比べます
   （オラクルは UTF-16 の単位で比べるので、U+FFFF を超える文字で答えが変わります）。
 - `float` は倍精度の値を返すので、`(float 1/3)` は `0.3333333333333333` です（オラクルの Float は
-  `0.33333334` と表示します）。float の範囲を超える値は同様にシグナルします。`int` と `long` は
-  切り捨てるだけで、範囲外の値を拒否しません（オラクルは `integer overflow`、
-  `Value out of range for long: ...`）。
+  `0.33333334` と表示します）。float の範囲を超える値は同様にシグナルします。
 - 被除数が NaN や無限大の `mod` と `rem` は `ArithmeticException` を投げます（オラクルは
   `NumberFormatException`）。
 - `vector-of` は通常のベクターを返します。あとの `conj` や `assoc` は値をそのまま格納し
@@ -356,6 +356,11 @@
   （オラクルは先にクラスが読み込まれている必要があります）。deftype のリテラルは
   拒否されます。`read` はストリームを取り、素の `clojure.java.io/reader` も受け付けます
   （オラクルは `PushbackReader` を要求します）。ホストのリーダは拒否します。
+- `#inst` と `#uuid` は、すべてのバックエンドでオラクルの `java.util.Date` と
+  `java.util.UUID` として読まれます。わずかな違い（インスタントの `str` は UTC で答える、
+  interop で得たホストの値は読んだ値と `=` にならない）は[インスタントと UUID](reference/instants.md)
+  にあります。`*data-readers*` と `data_readers.clj` は読まないため、ドットを含まないそれ以外の
+  タグには、ソースでも `read-string` でもリーダ関数がありません。
 - `*out*`/`*in*`/`*err*` は `*standard-output*`/`*standard-input*`/`*error-output*`
   です（再束縛は標準ストリームの再束縛になります）。ルートで読んだ `*out*` と `*in*` は
   プロセスの標準ストリームを指すストリーム値です。
@@ -365,16 +370,22 @@
   `..` ステップの宣言戻り値型）、その引数個数の
   オーバーロードがすべてプリミティブ boolean を答える場合と、receiver が文字列・数値・
   文字で、そのクラスのその引数個数のオーバーロードがすべてプリミティブ boolean を答える
-  場合（`(.matches "abc" "x")`）だけ `false` を答えます。
+  場合（`(.matches "abc" "x")`）と、receiver がインタフェース 1 つかクラス 1 つだけの
+  `proxy` の場合だけ `false` を答えます。
   それ以外のホスト boolean は共有の `java:` unmarshal のままとなり、`false` は
-  `nil` と表示されます。
+  `nil` と表示されます。ホストコレクションから読み戻した `Boolean.FALSE` も同じです
+  （`false` を入れたリストの `(vec l)` は `[nil]` を答えます）。
 - Java のインタフェースが期待される位置に渡した fn は、どのインタフェースでもその抽象
   メソッドすべてを実装し、それぞれメソッドの引数で呼ばれます。オラクルが fn を変換する
   のは `@FunctionalInterface` 注釈付きのインタフェースだけです（`PropertyChangeListener`
   はオラクルでは `ClassCastException` になります）。fn の値は引数と同じ規則で Java へ
-  戻ります。`Comparator` の fn は数値を答えます（オラクルは `true`/`false` も受け付けます）。
-  `false` は Java の値に変換されないため、Java の `boolean` を答える fn は `true` か
-  `nil` を答え、`false` を引数に取るメンバは一致しません。
+  戻ります。Java に渡した `Comparator` の fn は数値を答えます（オラクルは `true`/`false`
+  も受け付けます。fn 自身への `(.compare f a b)` はここでも受け付けます）。
+- Java に渡したマップは、そのエントリを持つ新しい `java.util.LinkedHashMap` になり、
+  各キーと値は引数と同じく変換されます（ベクタは `List`、マップは `Map`）。オラクルは
+  マップそのものを渡すため、コピーの `str` は入れ子のコレクションを Java の形で綴ります
+  （`{a=[1, 2]}`。オラクルは `{a=[1 2]}`）。セット・キーワード・record には Java の値が
+  ないため、それを取るメンバ（キーワードをキーにしたマップも）は一致しません。
 - 整数の receiver は `Integer` に収まれば `Integer`、収まらなければ `Long` として
   呼ばれます（オラクルでは常に `Long` です）。`(.getClass 1)` は
   `java.lang.Integer` を答えます。
@@ -389,8 +400,10 @@
   座標を取得しません。それにしかありえない名前空間はそれを挙げて拒否し、プログラムの残りは
   動きます。組み込みのライブラリは、その依存も含めて何も取得しません。組み込みの Ring 名前空間は
   `ring/ring-core` の座標がなくてもロードでき（oracle では座標が必要です）、同梱より古い ring-core
-  の代わりにもなります。`pom.xml` のプロジェクトは読まず、ライブラリの `data_readers.clj` も
-  読みません。そのタグはほかの未知のタグと同じく拒否します。`settings.xml` の認証情報で応じるのは
+  の代わりにもなります。コマンドライン以外では `pom.xml` のプロジェクトも読みません。そのモデルの検証は
+  oracle の strict ではなく Maven の minimal の水準なので、strict の検査だけが拒否する POM
+  （ディレクトリのないリソースなど）も読みます。ライブラリの `data_readers.clj` は読みません。
+  そのタグはほかの未知のタグと同じく拒否します。`settings.xml` の認証情報で応じるのは
   Basic 認証だけで（oracle は Digest と NTLM にも応じます）、ダウンロードは `maven-metadata.xml` も含めて
   常に `.sha1` と照合します（oracle の既定は警告だけです）。どのリポジトリにもなかったファイルは
   そのリポジトリの更新ポリシーが許すまで問い合わせ直しません。既定は `:daily` で、`:update` で

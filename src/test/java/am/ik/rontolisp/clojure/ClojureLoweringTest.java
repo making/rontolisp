@@ -2166,7 +2166,18 @@ class ClojureLoweringTest {
 			.contains("FUNCTIONP");
 		assertThat(lowered("(instance? Integer 1)")).contains("(PROGN 1 RONTOLISP::%CLOJURE-FALSE)");
 		assertThat(lowered("(class 1)")).contains(":C%KEYWORD");
-		assertThat(lowered("(int 1.5)")).contains("TRUNCATE");
+		// int/long are the oracle's object casts; a literal folds through its own type's
+		assertThat(lowered("(def x 1.5) (int x)")).contains("(RONTOLISP::%CLOJURE-INT-CAST |c%x|)");
+		assertThat(lowered("(def x 1.5) (long x)")).contains("(RONTOLISP::%CLOJURE-LONG-CAST |c%x|)");
+		assertThat(lowered("(def x [1]) (int (count x))")).doesNotContain("-CAST");
+		assertThat(lowered("(defn f [count x] (int (count x)))")).contains("%CLOJURE-INT-CAST");
+		assertThat(lowered("(int 1.5)")).endsWith("\n1");
+		assertThat(lowered("(int 1e10)"))
+			.contains("(RONTOLISP::%CLOJURE-ILLEGAL-ARGUMENT-EXCEPTION \"Value out of range for int: 1.0E10\")");
+		assertThat(lowered("(int 3000000000)"))
+			.contains("(RONTOLISP::%CLOJURE-ARITHMETIC-EXCEPTION \"integer overflow\")");
+		assertThatThrownBy(() -> Clojure.read("(long 1 2)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Wrong number of args (2) passed to: clojure.core/long");
 		assertThatThrownBy(() -> Clojure.read("(instance? Point 1)", null)).isInstanceOf(LispReadException.class)
 			.hasMessageContaining("unknown name: Point");
 	}
@@ -2523,7 +2534,9 @@ class ClojureLoweringTest {
 			.contains("RONTOLISP::%CLOJURE-FALSE");
 		assertThat(lowered("(fn [x] (number? x))")).contains("(NUMBERP ");
 		assertThat(lowered("(fn [x] (qualified-keyword? x))")).contains("(RONTOLISP::%CLOJURE-IS-QUALIFIED ");
-		assertThat(lowered("(fn [x] (uuid? x))")).contains("(RONTOLISP::%CLOJURE-HOST-INSTANCE-P ")
+		// a UUID or a host one: the UUID family's alias of the host test, which a
+		// program making no UUID calls in its place
+		assertThat(lowered("(fn [x] (uuid? x))")).contains("(RONTOLISP::%CLOJURE-IS-UUID ")
 			.contains("\"java.util.UUID\"");
 		assertThat(lowered("(map map? [1])")).contains("LAMBDA").contains("(RONTOLISP::%CLOJURE-IS-MAP ");
 		// a kind no value here has: false, the argument still evaluated
@@ -2610,9 +2623,9 @@ class ClojureLoweringTest {
 		}
 		assertThatThrownBy(() -> Clojure.read("(extends? Nope String)", null)).isInstanceOf(LispReadException.class)
 			.hasMessageContaining("No such protocol: Nope");
-		assertThatThrownBy(() -> Clojure.read("(defprotocol P (m [x])) (extends? P java.util.Date)", null))
+		assertThatThrownBy(() -> Clojure.read("(defprotocol P (m [x])) (extends? P java.time.Instant)", null))
 			.isInstanceOf(LispReadException.class)
-			.hasMessageContaining("extends? needs a core type, not java.util.Date");
+			.hasMessageContaining("extends? needs a core type, not java.time.Instant");
 		for (String name : new String[] { "future?", "future-done?", "future-cancelled?", "future-cancel" }) {
 			assertThatThrownBy(() -> Clojure.read("(" + name + ")", null)).isInstanceOf(LispReadException.class)
 				.hasMessageContaining("Wrong number of args (0) passed to: clojure.core/" + name);

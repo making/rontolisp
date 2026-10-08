@@ -17,6 +17,7 @@ import am.ik.rontolisp.LispHashTable;
 import am.ik.rontolisp.LispArray;
 import am.ik.rontolisp.LispDouble;
 import am.ik.rontolisp.LispInteger;
+import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispTrue;
 import am.ik.rontolisp.LispString;
@@ -154,8 +155,12 @@ public final class ClojureLowering {
 	 */
 	static final String FALSE_VARIABLE = "RONTOLISP::%CLOJURE-FALSE";
 
-	/** The false value's own spelling: a symbol, so it prints as {@code false}. */
-	static final String FALSE_VALUE_NAME = "false";
+	/**
+	 * The false value's own spelling: a symbol, so it prints as {@code false} -- the one
+	 * {@code java:} passes as Java's false ({@link LispNames#JAVA_FALSE}), so Clojure's
+	 * false crosses to Java as the oracle's does.
+	 */
+	static final String FALSE_VALUE_NAME = LispNames.JAVA_FALSE;
 
 	static final LispVal NIL_CONST = LispNil.INSTANCE;
 
@@ -948,7 +953,8 @@ public final class ClojureLowering {
 	 * Records a class spelled in a dispatch or hierarchy position, and every class a
 	 * value may have without the program naming it whose supers hold it (the runtime
 	 * errors', the streams'), so {@code isa?} walks from the class {@code class} answers
-	 * to it; {@code Object} records them all.
+	 * to it; {@code Object} records them all. A class of the instants records the ones
+	 * below it ({@code Date} a {@code Timestamp}), which no other spelling records.
 	 * @param name the class's binary name
 	 */
 	void recordSpelledClass(String name) {
@@ -962,6 +968,9 @@ public final class ClojureLowering {
 			if (implicit.equals(name) || ClojureClassBases.supersOf(implicit).contains(name)) {
 				recordClass(implicit);
 			}
+		}
+		for (String subclass : ClojureClassBases.timeValueSubclassesOf(name)) {
+			recordClass(subclass);
 		}
 	}
 
@@ -3250,6 +3259,9 @@ public final class ClojureLowering {
 		if (ClojureLowerUtil.isSymbolNamed(head, "%record")) {
 			return ClojureProtocolLowering.recordLiteral(this, items);
 		}
+		if (ClojureDefaultReaders.isMarker(head)) {
+			return ClojureDefaultReaders.construction(items);
+		}
 		if (ClojureLowerUtil.isSymbolNamed(head, "if")) {
 			ClojureLowerUtil.isTrue(items.size() == 3 || items.size() == 4,
 					"if takes a condition, a then and an optional else");
@@ -3915,9 +3927,6 @@ public final class ClojureLowering {
 			case "class":
 				ClojureLowerUtil.isTrue(n == 1, "class takes one value");
 				return ClojureDispatchLowering.classForm(this, lower(items.get(1)));
-			case "int", "long":
-				ClojureLowerUtil.isTrue(n == 1, name + " takes one value");
-				return ClojureDispatchLowering.intForm(this, lower(items.get(1)));
 			case "spit":
 				return ClojureStringLowering.spitOf(this, items);
 			case "slurp":
@@ -4170,7 +4179,6 @@ public final class ClojureLowering {
 			case "string?" -> ClojureFnLowering.stringPredValue(this);
 			case "symbol?" -> ClojureFnLowering.symbolPredValue(this);
 			case "class" -> ClojureDispatchLowering.classValue(this);
-			case "int", "long" -> ClojureDispatchLowering.intValue(this);
 			case "spit" -> ClojureStringLowering.spitValue(this);
 			case "slurp" -> ClojureStringLowering.slurpValue(this);
 			case "line-seq" -> ClojureStringLowering.lineSeqValue(this);
@@ -4532,6 +4540,10 @@ public final class ClojureLowering {
 			}
 			if (!items.isEmpty() && ClojureLowerUtil.isSymbolNamed(items.get(0), "%record")) {
 				return ClojureProtocolLowering.recordLiteral(this, items);
+			}
+			if (!items.isEmpty() && ClojureDefaultReaders.isMarker(items.get(0))) {
+				// an #inst or #uuid literal is already a value: built in place
+				return ClojureDefaultReaders.construction(items);
 			}
 			// one constant when every element is one; a nested vector, map, set or
 			// regex literal is built at run time, so the list is too (its element

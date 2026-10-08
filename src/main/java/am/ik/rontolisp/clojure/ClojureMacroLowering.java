@@ -460,6 +460,10 @@ final class ClojureMacroLowering {
 				if (tag.name().equals(":C%PATTERN")) {
 					return decodePattern(cons);
 				}
+				if (tag.name().equals(":C%INST") || tag.name().equals(":C%TIMESTAMP")
+						|| tag.name().equals(":C%CALENDAR") || tag.name().equals(":C%UUID")) {
+					return decodeTagged(cons);
+				}
 				if (tag.name().equals(":C%ATOM")) {
 					throw new LispReadException("an atom cannot travel through a macro expansion");
 				}
@@ -569,6 +573,26 @@ final class ClojureMacroLowering {
 		throw new LispReadException("an unreadable value: " + wrapper.print());
 	}
 
+	/**
+	 * An instant or UUID answer back to its literal's marker: a UUID's two halves, any
+	 * instant's milliseconds, so a Timestamp or a Calendar comes back a Date, like the
+	 * oracle's compiler, which embeds such a constant by printing its {@code #inst} and
+	 * reading it back.
+	 */
+	static LispVal decodeTagged(LispCons wrapper) {
+		List<LispVal> parts = ClojureLowerUtil.items(wrapper);
+		boolean uuid = ClojureLowerUtil.isSymbolNamed(wrapper.car(), ":C%UUID");
+		if (parts != null && parts.size() >= 2 && parts.get(1) instanceof LispInteger first) {
+			if (!uuid) {
+				return ClojureLowerUtil.list(ClojureDefaultReaders.INST, first);
+			}
+			if (parts.size() == 3 && parts.get(2) instanceof LispInteger second) {
+				return ClojureLowerUtil.list(ClojureDefaultReaders.UUID, first, second);
+			}
+		}
+		throw new LispReadException("an unreadable value: " + wrapper.print());
+	}
+
 	static LispVal decodeSet(ClojureLowering ctx, LispCons wrapper) {
 		if (wrapper.cdr() instanceof LispCons rest && rest.car() instanceof LispHashTable table
 				&& rest.cdr() instanceof LispNil) {
@@ -663,6 +687,10 @@ final class ClojureMacroLowering {
 		if (!marked.isEmpty() && ClojureLowerUtil.isSymbolNamed(marked.get(0), "%record")) {
 			// a record literal is already a value: syntax-quote leaves it alone
 			return ClojureProtocolLowering.recordLiteral(ctx, marked);
+		}
+		if (!marked.isEmpty() && ClojureDefaultReaders.isMarker(marked.get(0))) {
+			// so is an #inst or #uuid literal
+			return ClojureDefaultReaders.construction(marked);
 		}
 		if (datum instanceof LispCons) {
 			List<LispVal> parts = ClojureLowerUtil.items(datum);

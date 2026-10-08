@@ -207,12 +207,15 @@ final class JvmJavaInteropCompiler {
 	private static void compileSubclass(JavaImplementation implementation, List<LispVal> args, JvmLispCompiler.Ctx ctx,
 			String className) {
 		JvmJavaSites sites = Objects.requireNonNull(ctx.javaSites);
-		MethodRefEntry construct = sites.implementations().subclassFactory(implementation, args.size() - 5);
-		JvmExprCompiler.compileExpr(args.get(args.size() - 1), ctx, className);
+		// A :functional marker ends the form after the callable: it is no value.
+		boolean functional = JavaImplementations.subclassFunctional(args);
+		int callable = args.size() - (functional ? 2 : 1);
+		MethodRefEntry construct = sites.implementations().subclassFactory(implementation, callable - 4, functional);
+		JvmExprCompiler.compileExpr(args.get(callable), ctx, className);
 		emitMaterialize(ctx);
-		JvmEmitHelper.emitIntConst(ctx, args.size() - 5);
+		JvmEmitHelper.emitIntConst(ctx, callable - 4);
 		ctx.body.anewarray(ctx.objectClass);
-		for (int i = 4; i < args.size() - 1; i++) {
+		for (int i = 4; i < callable; i++) {
 			ctx.body.dup();
 			JvmEmitHelper.emitIntConst(ctx, i - 4);
 			JvmExprCompiler.compileExpr(args.get(i), ctx, className);

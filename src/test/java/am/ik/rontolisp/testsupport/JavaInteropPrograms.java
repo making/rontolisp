@@ -80,7 +80,8 @@ public final class JavaInteropPrograms {
 	 * {@code Collection} / {@code Map}, a falsely declared argument -- and
 	 * {@code BigInteger} results: every Lisp value is refused and shown as {@code prin1}
 	 * shows it -- a float, bignum or fixnum receiver is called as its {@code Double},
-	 * {@code BigInteger} or {@code Integer}, which has no {@code size} --, a host list
+	 * {@code BigInteger} or {@code Integer}, which has no {@code size}, and a vector or
+	 * hash table argument converts to a fresh {@code List} or {@code Map} --, a host list
 	 * and map are called, and a {@code BigInteger} is a Lisp integer. Prints
 	 * {@link #HOST_OBJECT_OUTPUT}.
 	 */
@@ -286,7 +287,7 @@ public final class JavaInteropPrograms {
 			java:call expects a java object as the first argument, got #d(1.0 1.0)
 			"[1.0, 1.0]"
 			java:call expects a java object as the first argument, got #<HASH-TABLE :TEST EQUAL :COUNT 0>
-			No matching method java.util.Objects.toString with 1 argument(s)
+			"{}"
 			java:call expects a java object as the first argument, got #(1 2)
 			java:call expects a java object as the first argument, got #<HASH-TABLE :TEST EQUAL :COUNT 0>
 			(1 1 1 1 "[1]" "{k=1}")
@@ -346,6 +347,78 @@ public final class JavaInteropPrograms {
 			java:call expects a java object as the first argument, got FOO
 			java:call expects a java object as the first argument, got (1)
 			java:call expects a java object as the first argument, got #<function CAR>""";
+
+	/**
+	 * The symbol {@code |false|} and hash tables as arguments, at a resolved site (a
+	 * quoted {@code |false|}), a dispatched one ({@code ts}, {@code bool}, {@code copy})
+	 * and one left to run time (the class name in a variable: the compiled program's
+	 * bridge): {@code |false|} is Java's false for a {@code boolean} and
+	 * {@code Boolean.FALSE} for a reference, where {@code nil} is {@code null}, a
+	 * receiver called as {@code Boolean.FALSE}, and what a callback answers for a
+	 * {@code boolean} or a {@code Boolean}; a hash table is a fresh {@code LinkedHashMap}
+	 * of its live entries in insertion order (an {@code equalp} table's keys as first
+	 * stored), element-wise, for a parameter one is assignable to, and nothing else.
+	 * Prints {@link #FALSE_AND_TABLE_OUTPUT}.
+	 */
+	public static final String FALSE_AND_TABLE_PROGRAM = """
+			(defvar *objects* "java.util.Objects")
+			(defvar *hash-map* "java.util.HashMap")
+			(defun row (thunk)
+			  (handler-case (prin1 (funcall thunk)) (error (e) (princ e)))
+			  (terpri))
+			(defun ts (x) (java:static "java.util.Objects" "toString" x))
+			(defun ts* (x) (java:static *objects* "toString" x))
+			(defun bool (x) (java:static "java.lang.Boolean" "toString" x))
+			(defun copy (x) (java:call (java:new "java.util.TreeMap" x) "toString"))
+			(defun copy* (x) (java:call (java:new *hash-map* x) "toString"))
+			(defun table (&rest kvs)
+			  (let ((h (make-hash-table :test 'equal)))
+			    (loop for (k v) on kvs by #'cddr do (setf (gethash k h) v))
+			    h))
+			(row (lambda () (list (java:static "java.lang.Boolean" "toString" '|false|) (bool '|false|) (bool t)
+			                      (bool nil))))
+			(row (lambda () (list (ts '|false|) (ts* '|false|) (ts nil) (ts* t))))
+			(row (lambda () (let ((l (java:new "java.util.ArrayList")))
+			                  (java:call l "add" '|false|)
+			                  (java:call l "add" nil)
+			                  (java:call l "add" (list t '|false|))
+			                  (java:call l "toString"))))
+			(row (lambda () (list (java:call '|false| "booleanValue") (java:call '|false| "equals" '|false|)
+			                      (java:call (java:call '|false| "getClass") "getSimpleName"))))
+			(row (lambda () (list (java:call (java:reify "java.util.function.Predicate" "test" (lambda (x) '|false|))
+			                                 "test" 1)
+			                      (java:call (java:reify "java.util.function.Function" "apply" (lambda (x) '|false|))
+			                                 "apply" 1)
+			                      (java:call (java:proxy "java.util.function.BooleanSupplier" (lambda (m) '|false|))
+			                                 "getAsBoolean"))))
+			(let ((h (table "b" 2 "a" '(1 "x") "gone" 0 "c" '|false|)))
+			  (remhash "gone" h)
+			  (row (lambda () (list (copy h) (copy* h) (ts h) (ts* h)))))
+			(let ((p (make-hash-table :test 'equalp)))
+			  (setf (gethash "Key" p) 1)
+			  (setf (gethash "KEY" p) 2)
+			  (row (lambda () (list (ts p) (ts* p)))))
+			(row (lambda () (ts (make-hash-table))))
+			(row (lambda () (copy (table 'sym 1))))
+			(row (lambda () (copy* (table "k" 'sym))))
+			(row (lambda () (java:static "java.lang.Math" "abs" (table "k" 1))))
+			(row (lambda () (ts 'other)))
+			""";
+
+	/** What {@link #FALSE_AND_TABLE_PROGRAM} prints. */
+	public static final String FALSE_AND_TABLE_OUTPUT = """
+			("false" "false" "true" "false")
+			("false" "false" "null" "true")
+			"[false, null, [true, false]]"
+			(NIL T "Boolean")
+			(NIL NIL NIL)
+			("{a=[1, x], b=2, c=false}" "{a=[1, x], b=2, c=false}" "{b=2, a=[1, x], c=false}" "{b=2, a=[1, x], c=false}")
+			("{Key=2}" "{Key=2}")
+			"{}"
+			No matching constructor for java.util.TreeMap with 1 argument(s)
+			No matching constructor for java.util.HashMap with 1 argument(s)
+			No matching method java.lang.Math.abs with 1 argument(s)
+			No matching method java.util.Objects.toString with 1 argument(s)""";
 
 	/**
 	 * Specialized vectors and bignums as arguments, at a dispatched site ({@code ts},

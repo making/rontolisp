@@ -1269,6 +1269,13 @@ class JvmJavaInteropCompilerTest {
 			.isEqualTo(JavaInteropPrograms.LISP_RECEIVER_OUTPUT);
 	}
 
+	// Mirrors JavaInteropTest#falseAndAHashTableCrossAsJavasFalseAndAMap.
+	@Test
+	void falseAndAHashTableCrossAsJavasFalseAndAMap() throws Exception {
+		assertThat(compileAndRun(JavaInteropPrograms.FALSE_AND_TABLE_PROGRAM))
+			.isEqualTo(JavaInteropPrograms.FALSE_AND_TABLE_OUTPUT);
+	}
+
 	@Test
 	void proxyOnNonInterfaceSignals() {
 		assertThatThrownBy(() -> compileAndRun("(java:proxy \"java.lang.String\" (lambda (m) nil))"))

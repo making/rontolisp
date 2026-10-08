@@ -16,6 +16,7 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.TreeMap;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Supplier;
@@ -142,6 +143,12 @@ final class JavaBridgeTemplate {
 
 	private static final String KIND_T = "t";
 
+	private static final String KIND_FALSE = "false";
+
+	// The symbol java: passes as Java's false (am.ik.rontolisp.LispNames.JAVA_FALSE; this
+	// class may import nothing of rontolisp): a bare String, as every compiled symbol.
+	private static final String JAVA_FALSE = "false";
+
 	private static final String KIND_INTEGER = "integer";
 
 	private static final String KIND_BIGNUM = "bignum";
@@ -193,6 +200,14 @@ final class JavaBridgeTemplate {
 	 * {@code aref} answers without a fourth hand copy of the arithmetic.
 	 */
 	private static @Nullable Method bf16ValueMethod;
+
+	/**
+	 * The generated program's {@code _hashValues(Object)} -- a hash table's live entry
+	 * pairs in insertion order, what {@code maphash} walks -- or null when the program
+	 * carries no hash-table runtime (then no table can exist). Bound beside
+	 * {@code _strv}, so a table this bridge marshals is read as the program reads it.
+	 */
+	private static @Nullable Method hashValuesMethod;
 
 	/**
 	 * The generated program's {@code _jsig(Throwable)}: what this bridge's {@code Proxy}
@@ -263,6 +278,15 @@ final class JavaBridgeTemplate {
 		catch (NoSuchMethodException ex) {
 			// No packed float runtime in this program: no bfloat16 array can exist.
 			bf16ValueMethod = null;
+		}
+		try {
+			Method hashValues = mainClass.getDeclaredMethod("_hashValues", Object.class);
+			hashValues.setAccessible(true);
+			hashValuesMethod = hashValues;
+		}
+		catch (NoSuchMethodException ex) {
+			// No hash-table runtime in this program: no table can exist.
+			hashValuesMethod = null;
 		}
 	}
 
@@ -1064,8 +1088,9 @@ final class JavaBridgeTemplate {
 	}
 
 	// The token of which every conversion cost is a pure function (kindCost), or null
-	// when there is none: a cons or a Lisp array (the cost sums its elements), and the
-	// values marshal() never bridges. The tests mirror marshal()'s, in its order.
+	// when there is none: a cons, a Lisp array or a hash table (the cost sums its
+	// elements), and the values marshal() never bridges. The tests mirror marshal()'s, in
+	// its order.
 	private static @Nullable Object kindOf(@Nullable Object value) {
 		if (value == null) {
 			return KIND_NIL;
@@ -1086,7 +1111,7 @@ final class JavaBridgeTemplate {
 			if (isLispString(s)) {
 				return stringValue(s).length() == 1 ? KIND_STRING_1 : KIND_STRING;
 			}
-			return "T".equals(s) ? KIND_T : null;
+			return "T".equals(s) ? KIND_T : (JAVA_FALSE.equals(s) ? KIND_FALSE : null);
 		}
 		if (value.getClass() == Object[].class) {
 			Object[] arr = (Object[]) value;
@@ -1393,8 +1418,64 @@ final class JavaBridgeTemplate {
 		if (packed != null) {
 			return marshalSequence(packed, target, out, index, functions);
 		}
+		List<@Nullable Object> entries = tableEntries(value);
+		if (entries != null) {
+			return marshalTable(entries, target, out, index, functions);
+		}
 		return NO_MATCH; // other symbols, ratios, rank-2+ arrays are not bridged (as
 							// interpreted)
+	}
+
+	// A Lisp hash table's entries in insertion order, keys and values alternating (an
+	// equalp table's key as first stored, not its fold), or null for anything else.
+	// Mirrors JvmJavaDirectSites' _jtab.
+	private static @Nullable List<@Nullable Object> tableEntries(@Nullable Object value) {
+		Method hashValues = hashValuesMethod;
+		if (hashValues == null || !(value instanceof LinkedHashMap<?, ?> map)
+				|| !(map.get(HASH_TABLE_ORDER_KEY) instanceof ArrayList)) {
+			return null;
+		}
+		Object[] pairs;
+		try {
+			pairs = (Object[]) Objects.requireNonNull(hashValues.invoke(null, value));
+		}
+		catch (ReflectiveOperationException ex) {
+			throw new IllegalStateException("java interop: cannot read a hash table", ex);
+		}
+		List<@Nullable Object> entries = new ArrayList<>(2 * pairs.length);
+		for (Object entry : pairs) {
+			Object[] pair = (Object[]) entry;
+			entries.add(pair.length > 2 ? pair[2] : pair[0]);
+			entries.add(pair[1]);
+		}
+		return entries;
+	}
+
+	// A hash table converts, for any target a java.util.LinkedHashMap is assignable to,
+	// to a fresh one of its entries, each key and value marshalled as an Object (mirrors
+	// eval/JavaInterop.marshalTable).
+	private static int marshalTable(List<@Nullable Object> entries, Class<?> target, @Nullable Object[] out, int index,
+			int functions) {
+		if (!target.isAssignableFrom(LinkedHashMap.class)) {
+			return NO_MATCH;
+		}
+		@Nullable Object[] slot = new @Nullable Object[2];
+		Map<@Nullable Object, @Nullable Object> map = new LinkedHashMap<>();
+		int total = COST_BOXED;
+		for (int i = 0; i < entries.size(); i += 2) {
+			int keyCost = marshal(entries.get(i), Object.class, slot, 0, functions);
+			if (keyCost == NO_MATCH) {
+				return NO_MATCH;
+			}
+			int valueCost = marshal(entries.get(i + 1), Object.class, slot, 1, functions);
+			if (valueCost == NO_MATCH) {
+				return NO_MATCH;
+			}
+			total += keyCost + valueCost;
+			map.put(slot[0], slot[1]);
+		}
+		out[index] = map;
+		return total;
 	}
 
 	// The elements of a rank-1 SPECIALIZED vector -- a bare primitive array carrying its
@@ -1475,7 +1556,8 @@ final class JavaBridgeTemplate {
 				// nil carries no type, so any reference target ties
 				yield target.isPrimitive() ? NO_MATCH : COST_BOXED;
 			}
-			case KIND_T -> {
+			// Java's false is t's twin.
+			case KIND_T, KIND_FALSE -> {
 				if (target == boolean.class) {
 					yield COST_EXACT;
 				}
@@ -1582,7 +1664,8 @@ final class JavaBridgeTemplate {
 		}
 		if (value instanceof String s) {
 			if (!isLispString(s)) {
-				return Boolean.TRUE; // the symbol t
+				return JAVA_FALSE.equals(s) ? Boolean.FALSE : Boolean.TRUE; // |false| or
+																			// t
 			}
 			String str = stringValue(s);
 			return target.isAssignableFrom(String.class) ? str : (Object) str.charAt(0);

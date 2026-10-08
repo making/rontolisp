@@ -5,9 +5,9 @@ import java.nio.charset.StandardCharsets;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Deque;
-import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Set;
+import java.util.Map;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -174,6 +174,8 @@ final class XmlParser {
 
 		final StringBuilder text = new StringBuilder();
 
+		final Map<String, String> attributes = new LinkedHashMap<>();
+
 		final List<XmlElement> children = new ArrayList<>();
 
 		boolean empty;
@@ -184,7 +186,8 @@ final class XmlParser {
 		}
 
 		XmlElement close() {
-			return new XmlElement(this.name, this.text.toString(), this.children, this.line);
+			return new XmlElement(this.name, this.text.toString(), this.attributes, this.children, this.empty,
+					this.line);
 		}
 
 	}
@@ -262,7 +265,6 @@ final class XmlParser {
 		this.pos++;
 		String name = name("start tag name");
 		Open element = new Open(name, line);
-		Set<String> attributes = new HashSet<>();
 		while (true) {
 			boolean spaced = skipWhitespace();
 			if (this.pos >= this.text.length()) {
@@ -281,7 +283,7 @@ final class XmlParser {
 				throw malformed("attribute in <" + name + "> must be preceded by whitespace");
 			}
 			String attribute = name("attribute name");
-			if (!attributes.add(attribute)) {
+			if (element.attributes.containsKey(attribute)) {
 				throw malformed("duplicated attribute " + attribute + " in <" + name + ">");
 			}
 			skipWhitespace();
@@ -292,7 +294,7 @@ final class XmlParser {
 				throw malformed("attribute value of " + attribute + " must be quoted");
 			}
 			char quote = this.text.charAt(this.pos++);
-			StringBuilder ignored = new StringBuilder();
+			StringBuilder value = new StringBuilder();
 			while (true) {
 				if (this.pos >= this.text.length()) {
 					throw malformed("attribute value of " + attribute + " not terminated");
@@ -300,15 +302,17 @@ final class XmlParser {
 				char c = this.text.charAt(this.pos);
 				if (c == quote) {
 					this.pos++;
+					element.attributes.put(attribute, value.toString());
 					break;
 				}
 				if (c == '<') {
 					throw malformed("attribute value of " + attribute + " must not contain '<'");
 				}
 				if (c == '&') {
-					reference(ignored);
+					reference(value);
 				}
 				else {
+					value.append(c);
 					this.pos++;
 				}
 			}

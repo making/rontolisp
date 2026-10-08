@@ -18,8 +18,9 @@ is READ. Here none is read: such a tag is the reader's `No reader function for t
   which now runs the program's definitions, `e46`) is where it would run; its answer must be
   a datum the lowering accepts (a value with no source spelling -- a `java.time` object -- has
   no representation on the wasm backends).
-- `*data-readers*` at run time, `read-string`'s use of it, and `#inst`/`#uuid` (refused today)
-  move with it.
+- `*data-readers*` at run time and `read-string`'s use of it move with it. `#inst`/`#uuid` are
+  built into both readers (`.kb/clojure-frontend.md`, "Instants and UUIDs"): a table consulted
+  first leaves them the defaults, and `default-data-readers` is still to define.
 
 ## Plan
 

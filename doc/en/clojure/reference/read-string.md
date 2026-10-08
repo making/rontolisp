@@ -11,15 +11,16 @@ string `{:tag x}`, a vector `{:param-tags v}`; a symbol carries none) and `#_` d
 repeated map key or set member is the oracle's `Duplicate key`, and a keyword or symbol the
 oracle does not read (`a:`, `x/`, `//`) its `Invalid token`. A
 record literal (`#ns.Name{...}` / `#ns.Name[...]`) builds the record of a class the
-program defines, over its unevaluated body. Text after the first datum is ignored. Empty
+program defines, over its unevaluated body, and `#inst`/`#uuid` read their
+[values](instants.md) like in source. Text after the first datum is ignored. Empty
 input signals `EOF while reading`, unless the options map has an `:eof` entry, which is
 then the answer. Reader conditionals are refused (`Conditional read not allowed`) unless
 the options map holds `:read-cond :allow`; then they read like in a `.cljc` file, a
 `:features` set adding features to `:rontolisp`, `:clj` and `:default`. Under
 `:read-cond :preserve` a `#?(...)`/`#?@(...)` reads as a
 [reader-conditional](reader-conditional.md) over the whole list, and a tagged literal inside
-one as a [tagged-literal](tagged-literal.md). `#=` read-time evaluation and
-tagged literals elsewhere are refused like in source, and `@x` reads `(deref x)` like `'@x` does (the oracle:
+one as a [tagged-literal](tagged-literal.md). `#=` read-time evaluation and any
+other tagged literal elsewhere are refused like in source, and `@x` reads `(deref x)` like `'@x` does (the oracle:
 `(clojure.core/deref x)`). Runs on every backend; as a value, one or two arguments.
 
 ```clojure

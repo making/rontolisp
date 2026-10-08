@@ -15,11 +15,11 @@ import org.jspecify.annotations.Nullable;
 /**
  * Instance calls on a Clojure value that has no host object: a collection (vector, list,
  * lazy seq, map, record, set, sorted collection), a keyword, a symbol, a ratio, an atom
- * cell or nil (the empty list here). The oracle calls the {@code clojure.lang} /
+ * cell, a fn or nil (the empty list here). The oracle calls the {@code clojure.lang} /
  * {@code java.util} interface method of the value's class ({@code Counted}, {@code List},
- * {@code Map}, {@code Set}, {@code Named}, {@code Ratio}, ...); here the common ones
- * answer through the core verb that does the same, so they run on every backend, and
- * every other method on such a value is refused by name instead of reaching
+ * {@code Map}, {@code Set}, {@code Named}, {@code Ratio}, {@code IFn}, ...); here the
+ * common ones answer through the core verb that does the same, so they run on every
+ * backend, and every other method on such a value is refused by name instead of reaching
  * {@code java:call}, which takes no Lisp value but a string, number, character or
  * {@code t}.
  *
@@ -72,8 +72,31 @@ final class ClojureValueMethodLowering {
 	 */
 	private static final String ATOM = "atom";
 
+	/** A fn's kind, which no one-argument predicate here names. */
+	private static final String FUNCTION = "fn";
+
+	/** The most arguments {@code IFn.invoke} takes before its variadic overload. */
+	private static final int MAX_INVOKE_ARITY = 20;
+
 	/** The predicates whose kinds include the list, which nil stands for when empty. */
 	private static final List<String> LIST_KINDS = List.of("coll?", "seq?", "list?", "sequential?");
+
+	/** Any instant's kind: a Date, a Timestamp or a Calendar. */
+	private static final String INSTANT = "instant";
+
+	/** The kind of an instant that is a {@code java.util.Date}: a Date or a Timestamp. */
+	private static final String DATE = "date";
+
+	/** The UUID's kind. */
+	private static final String UUID = "uuid";
+
+	/**
+	 * The kinds no one-argument predicate names exactly, each to its family's test, which
+	 * a program making no such value folds ({@link ClojureArms.Family#INSTANT},
+	 * {@link ClojureArms.Family#UUID}).
+	 */
+	private static final Map<String, String> FAMILY_KINDS = Map.of(INSTANT, ClojurePredicateLowering.INSTANT_P, DATE,
+			ClojurePredicateLowering.INST_P, UUID, ClojurePredicateLowering.UUID_P);
 
 	/** The rows, by {@code method/arity}. */
 	private static final Map<String, List<Arm>> ROWS = new HashMap<>();
@@ -81,8 +104,10 @@ final class ClojureValueMethodLowering {
 	static {
 		collectionRows();
 		lookupRows();
+		functionRows();
 		updateRows();
 		nameAndNumberRows();
+		timeValueRows();
 	}
 
 	private static void collectionRows() {
@@ -118,9 +143,29 @@ final class ClojureValueMethodLowering {
 		row("indexOf", 1, new Arm(List.of("sequential?"), ctx -> indexOf(ctx, false)));
 		row("lastIndexOf", 1, new Arm(List.of("sequential?"), ctx -> indexOf(ctx, true)));
 		row("entryAt", 1, arm(List.of("map?", "indexed?"), core("find", R, A)));
-		row("invoke", 1, arm(List.of("ifn?"), ClojureLowerUtil.list(R, A)));
-		row("invoke", 2, arm(List.of("ifn?"), ClojureLowerUtil.list(R, A, B)));
+	}
+
+	/**
+	 * A fn is the oracle's {@code AFunction}: an {@code IFn} ({@code invoke} of up to
+	 * twenty arguments, {@code applyTo}), a {@code Callable} ({@code call}), a
+	 * {@code Runnable} ({@code run}) and a {@code Comparator} ({@code compare}, whose
+	 * boolean answer is {@code AFunction.compare}'s); the {@code IFn} ones answer for any
+	 * {@code ifn?} value, an {@code AFn} too.
+	 */
+	private static void functionRows() {
+		for (int n = 0; n <= MAX_INVOKE_ARITY; n++) {
+			List<LispVal> call = new ArrayList<>();
+			call.add(R);
+			for (int i = 0; i < n; i++) {
+				call.add(new LispSymbol(argName(i)));
+			}
+			row("invoke", n, arm(List.of("ifn?"), ClojureLowerUtil.list(call)));
+		}
 		row("applyTo", 1, arm(List.of("ifn?"), core("apply", R, A)));
+		row("call", 0, arm(List.of("ifn?"), ClojureLowerUtil.list(R)));
+		row("run", 0, arm(List.of("ifn?"),
+				ClojureLowerUtil.list(new LispSymbol("do"), ClojureLowerUtil.list(R), new LispSymbol("nil"))));
+		row("compare", 2, new Arm(List.of(FUNCTION), ClojureValueMethodLowering::fnCompare));
 	}
 
 	private static void updateRows() {
@@ -131,7 +176,27 @@ final class ClojureValueMethodLowering {
 		for (String equal : List.of("equiv", "equals")) {
 			row(equal, 1, arm(List.of(), core("=", R, A)));
 		}
-		row("compareTo", 1, arm(List.of("indexed?", "ident?", "ratio?"), core("compare", R, A)));
+		row("compareTo", 1, arm(List.of("indexed?", "ident?", "ratio?", INSTANT, UUID), core("compare", R, A)));
+	}
+
+	/**
+	 * The methods of the instants and the UUID a program reads: a Date's (or a
+	 * Timestamp's) {@code getTime}, {@code before} and {@code after} (by milliseconds,
+	 * {@code Date}'s), a UUID's halves, version and variant.
+	 */
+	private static void timeValueRows() {
+		row("getTime", 0, arm(List.of(DATE), core("inst-ms", R)));
+		row("before", 1, arm(List.of(DATE), core("<", core("inst-ms", R), core("inst-ms", A))));
+		row("after", 1, arm(List.of(DATE), core(">", core("inst-ms", R), core("inst-ms", A))));
+		row("getMostSignificantBits", 0, new Arm(List.of(UUID), ctx -> part(ctx, "CADR")));
+		row("getLeastSignificantBits", 0, new Arm(List.of(UUID), ctx -> part(ctx, "CADDR")));
+		row("version", 0, new Arm(List.of(UUID), ctx -> part(ctx, "RONTOLISP::%CLOJURE-UUID-VERSION")));
+		row("variant", 0, new Arm(List.of(UUID), ctx -> part(ctx, "RONTOLISP::%CLOJURE-UUID-VARIANT")));
+	}
+
+	/** The function applied to the bound receiver. */
+	private static LispVal part(ClojureLowering ctx, String function) {
+		return ClojureLowerUtil.list(new LispSymbol(function), ctx.localSym(RECV));
 	}
 
 	private static void nameAndNumberRows() {
@@ -179,6 +244,15 @@ final class ClojureValueMethodLowering {
 	private static LispVal listGet(ClojureLowering ctx) {
 		return ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-LIST-GET"), ctx.localSym(RECV),
 				ctx.localSym(argName(0)));
+	}
+
+	/**
+	 * {@code Comparator.compare} of a fn: {@code AFunction.compare} over the receiver and
+	 * the two arguments.
+	 */
+	private static LispVal fnCompare(ClojureLowering ctx) {
+		return ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-FN-COMPARE"), ctx.localSym(RECV),
+				ctx.localSym(argName(0)), ctx.localSym(argName(1)));
 	}
 
 	/**
@@ -385,17 +459,19 @@ final class ClojureValueMethodLowering {
 		}
 		List<LispVal> tests = new ArrayList<>();
 		for (String kind : arm.kinds()) {
-			if (kind.equals(ATOM)) {
-				tests.add(ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-ATOM-P"), self));
+			String family = FAMILY_KINDS.get(kind);
+			if (family != null) {
+				tests.add(ClojureLowerUtil.list(new LispSymbol(family), self));
+				continue;
 			}
-			else if (kind.equals("indexed?")) {
-				// a vector's methods: a type implementing Indexed answers its own
-				// through the typed clauses ahead of the rows
-				tests.add(ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-IS-VECTOR"), self));
-			}
-			else {
-				tests.add(ClojurePredicateLowering.rawTest(kind, self));
-			}
+			tests.add(switch (kind) {
+				case ATOM -> ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-ATOM-P"), self);
+				case FUNCTION -> ClojureLowerUtil.list(ClojureLowerUtil.sym("functionp"), self);
+				// a vector's methods: a type implementing Indexed answers its own through
+				// the typed clauses ahead of the rows
+				case "indexed?" -> ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-IS-VECTOR"), self);
+				default -> ClojurePredicateLowering.rawTest(kind, self);
+			});
 		}
 		if (arm.kinds().stream().anyMatch(LIST_KINDS::contains)) {
 			tests.add(ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), self));

@@ -31,6 +31,8 @@ final class ClojureValueClasses {
 
 	private static final String COMPARABLE = "java.lang.Comparable";
 
+	private static final String CLONEABLE = "java.lang.Cloneable";
+
 	private static final String CONSTABLE = "java.lang.constant.Constable";
 
 	private static final String CONSTANT_DESC = "java.lang.constant.ConstantDesc";
@@ -175,6 +177,23 @@ final class ClojureValueClasses {
 
 		/** {@code clojure.lang.TaggedLiteral}. */
 		TAGGED_LITERAL(List.of("clojure.lang.TaggedLiteral", "clojure.lang.ILookup")),
+
+		/** {@code java.util.Date}, the instant {@code #inst} reads. */
+		DATE(List.of("java.util.Date", SERIALIZABLE, CLONEABLE, COMPARABLE)),
+
+		/**
+		 * {@code java.sql.Timestamp}, {@code clojure.instant/read-instant-timestamp}'s.
+		 */
+		TIMESTAMP(List.of("java.sql.Timestamp", "java.util.Date", SERIALIZABLE, CLONEABLE, COMPARABLE)),
+
+		/**
+		 * {@code java.util.GregorianCalendar},
+		 * {@code clojure.instant/read-instant-calendar}'s.
+		 */
+		CALENDAR(List.of("java.util.GregorianCalendar", "java.util.Calendar", SERIALIZABLE, CLONEABLE, COMPARABLE)),
+
+		/** {@code java.util.UUID}, the value {@code #uuid} reads. */
+		UUID(List.of("java.util.UUID", SERIALIZABLE, COMPARABLE)),
 
 		/** A record: what every record class implements. */
 		RECORD(List.of("clojure.lang.Associative", "clojure.lang.Counted", "clojure.lang.IHashEq",

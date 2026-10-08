@@ -50,6 +50,19 @@ public final class JavaImplementations {
 			+ " '(\"interface\"...) '(\"method\"...) constructor-args... callable)";
 
 	/**
+	 * Whether a {@code java:subclass} form ends in {@code :functional} after its callable
+	 * ({@link LispNames#JAVA_FUNCTIONAL_MARKER}): a function constructor argument
+	 * converted to an interface implements it by the method's arguments, as at a
+	 * {@code java:new} ending in the marker.
+	 * @param parts the form's elements, the operator first
+	 * @return whether the last one is the marker
+	 */
+	public static boolean subclassFunctional(List<LispVal> parts) {
+		return parts.size() > 5 && parts.get(parts.size() - 1) instanceof LispSymbol marker
+				&& LispNames.JAVA_FUNCTIONAL_MARKER.equals(marker.name());
+	}
+
+	/**
 	 * How many throwables a thread holds between the function called back from Java that
 	 * raised each one and the {@code java:} site whose Java call passes it on (the
 	 * interpreter's {@code JavaInterop}, a compiled program's {@code _jsig}): the newest
@@ -491,7 +504,7 @@ public final class JavaImplementations {
 				interfaces.add(type);
 			}
 			JavaImplementation implementation = subclass(superclass, interfaces, methodNames);
-			int argc = parts.size() - 5;
+			int argc = parts.size() - 5 - (subclassFunctional(parts) ? 1 : 0);
 			boolean viable = false;
 			for (JavaOverloads.Overload overload : JavaOverloads.ranked(superclass.subclassConstructors(), argc)) {
 				boolean linkable = true;

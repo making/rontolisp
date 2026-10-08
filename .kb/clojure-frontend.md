@@ -46,7 +46,7 @@ The oracle is `clj` 1.12.6.1673: a behavior is decided by running it there, and 
 |---|---|---|
 | identifier `foo` | symbol `c%foo`; a global var of namespace `n` is `c%n/foo` (`user`'s keep `c%foo`) | the prefix keeps every name off `LispNames` case labels, lambda-list keywords and `T`/`NIL`; spelling verbatim (`Foo` and `foo` apart); `:` -> `%c`, `%` -> `%%` keeps the map injective; a local never carries a namespace. Generated names add a lone `%` suffix no identifier spells (`%2`/`%*` arity helpers, `%defN`, `%macro`, `%bound-depth`, `%loaded`, `%init-N`, `%meta`, `%root`, `%local`) |
 | `nil` / `true` | `NIL` / `T` | `nil` IS the empty list |
-| `false` | the value of `rontolisp::%clojure-false`, a distinct non-`NIL` symbol spelled `false` | the `#f` treatment of `scheme.lisp`; every lowered test is an explicit null-or-false check on a temporary |
+| `false` | the value of `rontolisp::%clojure-false`, a distinct non-`NIL` symbol spelled `false` | the `#f` treatment of `scheme.lisp`; every lowered test is an explicit null-or-false check on a temporary; the symbol `java:` passes as Java's false ("Java interop") |
 | `:foo`, `:a/b` | `(:C%KEYWORD "foo")`, spelling verbatim | compared by `equal`; `::kw` / `::alias/kw` resolve at lower time against the current namespace (an unknown alias is the oracle's `Invalid token`) |
 | `{k v}` | an `equal` hash table (`rontolisp:plist-hash-table`), never mutated: every verb builds a fresh one | the shared runtime (`.kb/hash-tables.md`), so persistence holds on all four backends with no per-backend code; a persistent-map library would add a representation every backend prints, hashes and compares. Collection keys go through "Structural keys" |
 | `#{..}` | `(:C%SET table)`, each member under itself | a repeated literal element is refused when the read forms are `=` (`ClojureReader.equivKey`: `1`/`1N`, `[1]`/`(1)`, maps and sets in any order; `Duplicate key`) |
@@ -58,6 +58,7 @@ The oracle is `clj` 1.12.6.1673: a behavior is decided by running it there, and 
 | `#"re"` | `(:C%PATTERN stamp source ops ngroups)` | the stamp is a gensym, so `=` is identity like the oracle |
 | `reduced`, var, nil dispatch value | `(:C%REDUCED x)`, `(:C%VAR "ns/name" getter)`, `(:C%NIL)` | |
 | `ex-info` | a condition with message and data slots | |
+| `#inst`, `#uuid` | `(:C%INST ms)` (`clojure.instant` also `:C%TIMESTAMP`, `:C%CALENDAR`), `(:C%UUID msb lsb)` | "Instants and UUIDs" |
 | `1M`, `0.1M` / `2N` | exact ratio (`1/10`) / integer | decimals stay exact; neither prints its mark |
 | `\a`, `"..."` | `LispChar`, `LispString` | exactly the oracle's spellings and escapes (`\uXXXX`, octal up to `\377`); anything else the oracle's refusal wording (`Unsupported character`, `Unsupported escape character`, `Invalid unicode escape`, `Invalid digit`, `Invalid character length`); a buffer ending mid-`\u` stays `truncated \u escape` so a session waits for more input |
 | radix ints (`0x`, `Nr`, leading-`0` octal) | `LispInteger` (bignum past `long`) | a shaped token parsing to nothing is `Invalid number` |
@@ -172,8 +173,9 @@ answered `2 5 3` before).
 | `comp` `partial` `complement` `constantly` `identity` `memoize` `trampoline` | closures | `(comp)` is `identity`; `memoize` keys the argument list by `=` (`%clojure-memo-key`) |
 | `=` / `not=` | the spliced `%clojure-equal` per neighbouring pair | maps structurally (nested), records by tag plus entries, deftype/reify by identity, sequentials (lists, vectors, lazy seqs, nil) element by element across kinds, two floats by CL `=` (-0.0 = 0.0, NaN not = NaN), else `equal` (a host object on the left asks its `equals`, handed a number, string, character, `true`, nil or host object -- never `false`, a keyword, a symbol or a collection: [eq-numbers.md](eq-numbers.md) "Host objects", `ClojureInteropTest#equalsOfAHostObjectAndAValueAsksTheLeftOperand`); a host `List`/`Map`/`Set` and a Clojure collection of its kind through the host-object family's arm `%clojure-host-equal-p`, either side first ([eq-numbers.md](eq-numbers.md) "Clojure `=` of a host collection"). One shared callee, not a `labels` per site: ten sites measured 87,050 -> 34,004 B of wasm |
 | `<` `>` `<=` `>=` `==` `nil?` `false?` `true?` `boolean?` `boolean` `string?` `symbol?` `vector?` `fn?` | the CL test answering `T`-or-false | `==` is CL `=` (numeric across categories: `(== 1 1.0)`, `(== 0.0 -0.0)`; a non-number signals, `(==)` is refused at lower time); `<` `>` `<=` `>=` `==` as values are `&rest` lambdas over the CL function answering `T`-or-false (`(map < [1 2] [2 1])` is `(true false)`, not `(true nil)`). `fn?` is false for keywords, sets and maps |
-| the type predicates (`coll?` `seq?` `sequential?` `map?` `set?` `list?` `record?` `seqable?` `associative?` `counted?` `indexed?` `reversible?` `ifn?`, `number?` `integer?` `int?` `double?` `float?` `ratio?` `rational?` `nat-int?` `pos-int?` `neg-int?` `infinite?` `NaN?`, `keyword?` `ident?` and the `simple-`/`qualified-` six, `char?` `var?` `volatile?` `realized?` `special-symbol?`, `inst?` `uuid?` `uri?` `class?`) | `ClojurePredicateLowering`: `(if TEST T false)` over one CL type predicate or one spliced `%clojure-is-NAME` helper (CL boolean); as a value a one-argument lambda over the same test | a wrapper is a cons whose car is a CL keyword, so every list test excludes keywords/atoms/vars/records/patterns (`coll?` answered true for them before). The host four go through `%clojure-host-instance-p` (a host arm, `isInstance` of the named class; NIL stand-in without `java:`). `sorted?` is `%clojure-is-sorted`; `set?` and `reversible?` name the sorted-aware `%clojure-is-set`/`%clojure-is-reversible`, which a program building no sorted collection calls as `%clojure-set-p`/`%clojure-is-vector` ("Sorted collections"). `chunked-seq?` `decimal?` `bytes?` `delay?` are `(progn x false)`, and so are `reader-conditional?` `tagged-literal?` where nothing makes one ("Reader conditionals"): no value of that kind exists, which is the oracle's answer for every value a program here builds (not a refusal: `(if (future? x) @x x)` runs); `any?` is `(progn x T)`. `not-any?`/`not-every?` negate the inline `some`/`every?` loops; `identical?` is `eql` plus keyword spelling (keywords are fresh lists), so a host object is identical only to itself (`ClojureInteropTest.identicalOnHostObjectsIsIdentity`, [eq-numbers.md](eq-numbers.md) "Host objects"); `distinct?` goes through `%clojure-distinct-new-p`; `bound?` is false at the first var whose root is the unbound root ("Vars and metadata"; a var whose metadata says `:macro` is bound without taking its root, the oracle's own mark); `extends?` reads the protocol's tables at the type's `extendKeyForm` tag (literal names, no value form). `future?`, `future-done?`, `future-cancelled?` and `future-cancel` read a host `Future` ("A host `Future` under `deref`"). Arity refusals in the oracle's words. Pinned oracle-identical (clj 1.12.6, 2026-10-03) by clojure-spec `collection-predicates-*`, `number-predicates-*`, `name-predicates-*`, `any-not-any-*`, `var-volatile-*`, `predicates-of-kinds-*`, `special-symbol-*`, `extends-*`, `coll-is-false-for-the-tagged-wrappers`; the representation deviations by `the-seq-predicates-follow-the-list-representation`, `decimal-and-bigint-literals-are-plain-rationals`, `identical-compares-numbers-and-symbols-by-value`; the host four by `ClojureInteropTest.hostKindPredicatesTestTheHostClass` |
-| `int` `long` `char` `quot` | `truncate` (`char-code` for a char) / `code-char` / `truncate` | a non-number signals |
+| the type predicates (`coll?` `seq?` `sequential?` `map?` `set?` `list?` `record?` `seqable?` `associative?` `counted?` `indexed?` `reversible?` `ifn?`, `number?` `integer?` `int?` `double?` `float?` `ratio?` `rational?` `nat-int?` `pos-int?` `neg-int?` `infinite?` `NaN?`, `keyword?` `ident?` and the `simple-`/`qualified-` six, `char?` `var?` `volatile?` `realized?` `special-symbol?`, `inst?` `uuid?` `uri?` `class?`) | `ClojurePredicateLowering`: `(if TEST T false)` over one CL type predicate or one spliced `%clojure-is-NAME` helper (CL boolean); as a value a one-argument lambda over the same test | a wrapper is a cons whose car is a CL keyword, so every list test excludes keywords/atoms/vars/records/patterns (`coll?` answered true for them before). The host four go through `%clojure-host-instance-p` (a host arm, `isInstance` of the named class; NIL stand-in without `java:`); `inst?` and `uuid?` also take the program's own instants and UUIDs ("Instants and UUIDs"). `sorted?` is `%clojure-is-sorted`; `set?` and `reversible?` name the sorted-aware `%clojure-is-set`/`%clojure-is-reversible`, which a program building no sorted collection calls as `%clojure-set-p`/`%clojure-is-vector` ("Sorted collections"). `chunked-seq?` `decimal?` `bytes?` `delay?` are `(progn x false)`, and so are `reader-conditional?` `tagged-literal?` where nothing makes one ("Reader conditionals"): no value of that kind exists, which is the oracle's answer for every value a program here builds (not a refusal: `(if (future? x) @x x)` runs); `any?` is `(progn x T)`. `not-any?`/`not-every?` negate the inline `some`/`every?` loops; `identical?` is `eql` plus keyword spelling (keywords are fresh lists), so a host object is identical only to itself (`ClojureInteropTest.identicalOnHostObjectsIsIdentity`, [eq-numbers.md](eq-numbers.md) "Host objects"); `distinct?` goes through `%clojure-distinct-new-p`; `bound?` is false at the first var whose root is the unbound root ("Vars and metadata"; a var whose metadata says `:macro` is bound without taking its root, the oracle's own mark); `extends?` reads the protocol's tables at the type's `extendKeyForm` tag (literal names, no value form). `future?`, `future-done?`, `future-cancelled?` and `future-cancel` read a host `Future` ("A host `Future` under `deref`"). Arity refusals in the oracle's words. Pinned oracle-identical (clj 1.12.6, 2026-10-03) by clojure-spec `collection-predicates-*`, `number-predicates-*`, `name-predicates-*`, `any-not-any-*`, `var-volatile-*`, `predicates-of-kinds-*`, `special-symbol-*`, `extends-*`, `coll-is-false-for-the-tagged-wrappers`; the representation deviations by `the-seq-predicates-follow-the-list-representation`, `decimal-and-bigint-literals-are-plain-rationals`, `identical-compares-numbers-and-symbols-by-value`; the host four by `ClojureInteropTest.hostKindPredicatesTestTheHostClass` |
+| `int` `long` | `rontolisp::%clojure-int-cast` / `%clojure-long-cast` (`ClojureCoreLowering.castOf`; `-int-v` / `-long-v` as a value, arity checked at run time), a literal argument folded at lower time through the cast of its own type (`foldedCast`: a double literal's `intCast(double)`, a long's, a bigint's or ratio's object cast), an out-of-range literal folding to its refusal carrier with the oracle's message | the oracle's `RT.intCast` / `RT.longCast` of an object: range checks and messages included; a non-literal double takes the object cast (`(int x)` of a var holding `1e10` "integer overflow", where the oracle's primitive-typed double -- a `let` local, `(* 2.0 x)` -- says "Value out of range for int: 2.0E10"); pinned oracle-identical (clj 1.12.6, 2026-10-08) by clojure-spec `int-and-long-are-the-oracles-range-checked-casts` |
+| `char` `quot` | `code-char` / `truncate` | a non-number signals |
 | `double` `float` `byte` `short` `num` | one call to `rontolisp::%clojure-NAME` (`-v` as a value, arity checked at run time); `byte`/`short` through `%clojure-cast-bounded` (a character's code, a ratio or double truncated, a double compared BEFORE truncating so `(byte 127.9)` refuses, NaN refuses; the refusal spells the value with `princ-to-string`), `double`/`float` widen to a double, `float` refusing past `3.4028234663852886e38`, `num` is the number itself or nil | a non-number signals; `float` holds a double (`(float 1/3)` prints `0.3333333333333333`, the oracle `0.33333334`); `vector-of :double`/`:float` call the same workers, `:byte`/`:short` keep the longCast path (the oracle's `(vector-of :byte 127.9)` is `[127]`); pinned by clojure-spec `primitive-casts-double-float-byte-short-and-num` |
 | `bigint` `biginteger` `bigdec` `rationalize` `numerator` `denominator` `unchecked-int` `-long` `-short` `-byte` `-char` `-double` `-float` | one call to `rontolisp::%clojure-NAME` (`-v` as a value, arity checked at run time) | integers and ratios are plain Lisp rationals (the `N`/`M` literal rule), so `bigint`/`biginteger` truncate to an integer (a decimal string through `parse-integer` after a first/last character check, since `parse-integer` skips surrounding whitespace and `BigInteger` refuses it; `bigdec` of a string was already strict, both pinned by clojure-spec `bigint-and-bigdec-strings-refuse-surrounding-whitespace`) and `bigdec` answers a rational: an integer, a ratio only when its denominator is `2^a 5^b` (the oracle's `Non-terminating decimal expansion`), a string through `%clojure-parse-decimal`. `rationalize` and `bigdec` of a double read the SHORTEST decimal it prints as (`princ-to-string` parsed back: `(rationalize 0.1)` is `1/10`, the oracle's `BigDecimal.valueOf`; the Lisp `rationalize` answers the simplest rational within half an ulp, `0.3333333333333333` is `1/3` there, not `3333333333333333/10000000000000000`). `numerator`/`denominator` signal on an integer (the oracle's `ClassCastException` on a `Long`). The `unchecked-` casts follow the oracle's Java casts: an integer or ratio wraps two's-complement to the width (`%clojure-wrap-bits`), a double saturates first (int range for `int`/`short`/`byte`, long range for `long`/`char`; NaN 0) so `(unchecked-byte 1e20)` is `-1`, a character is accepted by `unchecked-int`/`-char` only; `unchecked-float` answers a double, the infinity past the float range; `-double` is `double`. Pinned oracle-identical (clj 1.12.6, 2026-10-03) by clojure-spec `number-conversions-bigint-bigdec-rationalize-and-the-unchecked-casts` (a bigint printed through `str`, a bigdec through `double`: the representation deviates) |
 | `unchecked-add` `-subtract` `-multiply` `-inc` `-dec` `-negate` and the `-int` verbs (`unchecked-add-int` `-subtract-int` `-multiply-int` `-inc-int` `-dec-int` `-negate-int` `-divide-int` `-remainder-int`) | one call to `rontolisp::%clojure-NAME` (`-v` as a value, arity checked at run time) | the long verbs wrap an INTEGER result at 64 bits (`%mask-signed-field` over two integer operands, `%clojure-wrap-long` over the plain result otherwise; a double or ratio result passes, like the oracle's `Ops`), so `(unchecked-inc 9223372036854775807)` is `-9223372036854775808`. An integer past 64 bits is a plain integer here, so the oracle's bigint operand (`9223372036854775807N`), which its unchecked verbs add unwrapped, wraps too (`deviations.md`). The `-int` verbs cast each argument like `RT.intCast` (`%clojure-int-arg`: a ratio or double truncates, an integer outside the int range signals `integer overflow`, a double outside it signals, a non-number and a character signal) and wrap at 32 (`%mask-signed-field`); `-divide-int` truncates (only `-2147483648 / -1` wraps), both division verbs signal on a zero divisor. Pinned oracle-identical (clj 1.12.6, 2026-10-03) by clojure-spec `unchecked-arithmetic-verbs-wrap-at-long-and-int-width` |
@@ -496,7 +498,7 @@ for the same call**, decided where it is detected (oracle-checked clj 1.12.6, 20
   `ClojureLoweringTest#aStringMethodOfAReceiverNotKnownToBeAStringIsTheReflectiveAlias`,
   `ClojureArmsTest#theRefusalFamilyFoldsEachRefusalToThePlainErrorOfItsMessage`.
 - Names no class: a refusal of a construct the oracle accepts (regex lookaround, named groups,
-  `\G`, POSIX classes, `(partition 0 ...)`, `#inst`, a deftype literal), a value macro's
+  `\G`, POSIX classes, `(partition 0 ...)`, a deftype literal), a value macro's
   `Can't take value of a macro` (a compile error in the oracle), internal invariants. A
   misuse a lower verb refuses first carries that verb's
   class: `(shuffle 5)` is `seq`'s IAE, the oracle's CCE casting to `Collection`.
@@ -660,19 +662,27 @@ before the library splice.
   keyword `:<` ...; a test passed as a value is classified by its answers on `(1 0)`,
   `(0 0)`, `(-1 0)` (`%clojure-sorted-test`; the core functions as values are fresh lambdas,
   so identity cannot work).
-- `int`/`long` stay inline `truncate` and refuse nothing out of range. Measured 2026-10-03,
-  raw wasm / `--optimize=size` / JVM class of `(println (int 2.7))`: 12,296 / 10,938 / 65,015.
-  Sharing `%clojure-vector-of-1` would make it ~46,000 wasm (`(println (vector-of :int 1))`
-  46,306 / 38,157 / 79,458): its refusals spell the value through `%clojure-str-of`, the
-  `str` runtime. The light `%clojure-cast-bounded` path costs `(println (byte 5))` 14,130 /
-  12,182 / 68,651 (about +1.8 KB wasm, +3.6 KB class, mostly the float printer the refusal
-  needs) on a hot path of every program calling `int`, for a refusal no program that runs
-  on the oracle relies on; not made. `double` 14,365 and `num` 9,619 raw wasm.
+- `int`/`long` call `%clojure-int-cast`/`%clojure-long-cast` since 2026-10-08 (inline
+  `truncate` before, refusing nothing). The refusal spells the value through `princ` (a
+  double upcased, `1.0E19`), not `%clojure-str-of` (the `str` runtime, ~+34 KB wasm). Raw wasm
+  / `--optimize=size` / JVM class, before -> after: `(println (int 2.7))` 18,042 / 16,688 /
+  63,088 -> 15,071 / 14,048 / 61,621 (a literal folds); `(defn f [x] (int x))` printing
+  `(f (/ (rand-int 10) 2))` 21,629 / 20,108 / 64,272 -> 31,049 / 28,246 / 68,957 (4.8 KB of it
+  the float printer of the double spelling); the clojure-spec program -1.1 KB on all three;
+  `demo.clj` unchanged (no cast). Time, 20M iterations: `(+ s (int i) (long i))` wasm
+  1.30-1.53 s -> 1.48-1.62 s, JVM 0.11-0.12 s both; `(+ s (long (quot i 3)) (int (* i 0.5)))`
+  wasm 2.96-3.44 s -> 4.17-4.33 s (a double cast pays one generic float compare,
+  `_rat_cmp_bits`, ~20 ns there; the first worker's four compares cost twice that), JVM
+  2.5-2.8 s both. Interpreter, 1M iterations: 3.0 s -> 5.0 s and 3.8 s -> 8.0 s (the worker is
+  interpreted Lisp). An inline arm answering an in-range integer before the call took the
+  interpreter's integer loop to 3.9-4.0 s, left the compiled ones level, and cost ~250 B wasm
+  / ~650 B class per call site; not made. A `count` argument is not cast (an int already).
+  `double` 14,365 and `num` 9,619 raw wasm (2026-10-03).
   The conversions of 2026-10-03, raw wasm / JVM class of `(println (f x))`: `unchecked-int`
   18,215 / 70,003 (the same for `-long`, `-byte`, `-char`: bignum `mod`/`expt` in the wrap),
   `unchecked-float` 25,192 / 64,642, `numerator` 9,658 / 64,805, `bigint` 29,555 / 72,352,
   `bigdec`/`rationalize` of a double 39,301-39,331 / 74,314-75,980 (the float printer), `(bigint 3)`
-  12,825 (a literal integer folds). Each links only when called; `int`/`long` stay inline.
+  12,825 (a literal integer folds). Each links only when called.
   Wrapping through `(mod n (expt 2 bits))` linked a bignum division: `(println (unchecked-int x))`
   with `x` from `rand-int` was 32,753 raw wasm; the mask form (`logand` over `(ash 1 bits)`,
   `%clojure-wrap-bits`) is 17,710 (JVM class 70,902 -> 70,404). The unchecked arithmetic verbs
@@ -980,7 +990,7 @@ repositories, `GITLIBS` set; tools.deps read from the CLI jar).
   (`ClojureDepsGraph.chooseCoord`), canonicalized against the project when first used.
 - **Procurer** (`ClojureDepsProcurer`, the oracle's extensions): `:local/root` canonical
   (`SourceLoader.canonicalPath`, `toRealPath`) and checked (`Local lib X not found: R`); a
-  manifest `:deps`, `:jar`, `:pom` (not read: a note), none (`Manifest file not found ...`) or
+  manifest `:deps`, `:jar`, `:pom` (below), none (`Manifest file not found ...`) or
   another (`Manifest type :lein not loaded ...`; tools.deps has no lein reader);
   `:deps/prep-lib` checked after every contribution, local or git (`The following libs must be
   prepared before use: [..]`), never run. It fetches through `ClojureFiles.repositories()`
@@ -1012,6 +1022,22 @@ repositories, `GITLIBS` set; tools.deps read from the CLI jar).
   and runtime kept, OPTIONAL KEPT, coord `:mvn/version :scope [:optional]`. Measured: a
   test-jar typed dependency is the plain jar, a pom typed one the oracle tries as a jar and
   fails on.
+- **A `pom.xml` project** (`coord-deps`/`coord-paths :pom`, `ClojureRepositories.pomProject`
+  -> `MavenResolver.project(file, {project.basedir=.})`, read once per resolution): children
+  as a jar's pom (`modelChildren`); roots, `pomRoots`: the effective `sourceDirectory`,
+  `src/main/clojure`, each resource directory, then the build-helper directories, each
+  `canonical(resolve(root, p))` (absent ones included), each once. Build-helper
+  (`get-build-helper-paths`): when ANY plugin is `org.codehaus.mojo:build-helper-maven-plugin`,
+  the FIRST plugin's executions with goal `add-source` give `<sources>`' children's values,
+  then `add-resource`'s `<resources>` -- a value-less child (`<source/>`, a nested
+  `<resource><directory>`) dropped, an empty one the root. Measured 2026-10-08 on `clj`
+  1.12.6 (`MavenProjectTest`'s cases): no build -> `src/main/java`, `src/main/clojure`,
+  `src/main/resources`; `${project.basedir}/x` -> `x`, `${basedir}/x` -> the literal
+  `${basedir}/x` under the root, `${project.build.directory}/gen` -> `target/gen`; a parent's
+  inherited and managed build-helper executions, a profile's plugin and resources, duplicate
+  plugins all reach the first plugin as Maven merges them; a child plugin listed before the
+  build-helper it shares with its parent makes that child plugin first (no helper dirs). The
+  oracle's model is STRICT-validated, ours minimal (`.kb/maven-resolver.md`, `project`).
 - **git** (`canonicalize`/`manifest-type`/`compare-versions :git`): both spellings refused,
   URL given or inferred (the oracle's regex table, here only -- `GitFetcher` has none), then
   against the repository: a tag must exist (`Library L has invalid tag: t`), sha and tag must
@@ -1037,8 +1063,8 @@ repositories, `GITLIBS` set; tools.deps read from the CLI jar).
   (`SourceStandards.DEFAULT`) fetch nothing, the env-read rule of the user-level map. A fetch
   failure is a refusal (`FetchFailure` -> `LispReadException`) in the resolver's words.
 - **Unfetched where nothing fetches, refused when missed**: a non-built-in Maven coordinate, a
-  git coordinate and a jar's `pom.xml` dependencies -- and a `:pom` project everywhere -- add
-  no root and a note (`Contribution.unread`); a lookup that finds nothing appends them
+  git coordinate, a jar's `pom.xml` dependencies and a `:pom` project add no root and a note
+  (`Contribution.unread`); a lookup that finds nothing appends them
   (`notSearched`) to `Could not locate` and to `unknown namespace`. A lookup steps past an
   unfetched library's place in the order (an earlier unfetched jar holding the same namespace
   is not detected). The browser's refusal by name is this.
@@ -1062,7 +1088,8 @@ repositories, `GITLIBS` set; tools.deps read from the CLI jar).
   READ time, and a whole file is read before its first `require` lowers (`Clojure.read`), so
   the reader function's namespace could never be loaded in time; a tag it defines is the
   reader's `No reader function for tag t`, the oracle's words when none is installed, and
-  `*data-readers*` stays `{}`.
+  `*data-readers*` stays `{}`. The two default tags, `#inst` and `#uuid`, are built into both
+  readers ("Instants and UUIDs").
 - **No resolved-graph cache** (gap 5, measured 2026-10-08): the `.cpcache` idea was the plan;
   the caches under the resolution already make a second run network-free -- a local
   repository file is used as is, an installed checkout needs no git, a tag is checked against
@@ -1122,11 +1149,12 @@ repositories, `GITLIBS` set; tools.deps read from the CLI jar).
   map, a session), `PlaygroundReplTest#aClojureRequireReadsTheUploadedDepsEdnLikeEveryOtherRoute`,
   `ClojureDepsFetchTest` (Maven and git through in-memory repositories: the measured
   classpaths -- scopes, optional, exclusions, `*/*`, pom and classified types, `[1.0]`, a jar's
-  pom, `:deps/root`, tags, abbreviated shas, the descendant -- and every refusal; the class path
+  pom, a `pom.xml` project's roots, `:deps/root`, tags, abbreviated shas, the descendant -- and every refusal; the class path
   reported before the lowering), `ClojureDepsFetchCliTest` (the CLI over a `file:` Maven
   repository and on-disk git repositories: four backends, newest-wins across Maven and git,
   what is fetched and what not, a Java jar on the interpreter's class path and beside a jar
-  and in its pom, a second run with the remote gone and no git, refusals; the output the
+  and in its pom, a `pom.xml` monorepo module (local parent, managed build-helper) on four
+  backends, a second run with the remote gone and no git, refusals; the output the
   oracle's over the same repositories), `GitFetcherTest`, `MavenRepositoryTest#aPomGivenAsBytes...`.
 
 ## Ring adapter
@@ -1495,7 +1523,8 @@ function and a directive must be a top-level form.
 end** (`src/main/resources/am/ik/rontolisp/clojure/lib/clojure/**`, the
 `ClojureBuiltinNamespaces` mechanism of "Ring util namespaces"): `clojure.walk`,
 `clojure.template`, `clojure.pprint`, `clojure.data`, `clojure.zip`, `clojure.core.protocols`,
-`clojure.datafy`, `clojure.stacktrace`, `clojure.math`, `clojure.core.reducers`.
+`clojure.datafy`, `clojure.stacktrace`, `clojure.math`, `clojure.core.reducers`,
+`clojure.instant`, `clojure.uuid` ("Instants and UUIDs").
 - **Licensing**: clojure.jar is EPL-1.0, this project Apache-2.0, so nothing of it is
   copied -- no code, no docstring. Each file is written from the documented behaviour and
   diffed against the oracle; a one-line var dictated by its contract
@@ -1511,7 +1540,7 @@ end** (`src/main/resources/am/ik/rontolisp/clojure/lib/clojure/**`, the
   `clojure.data`, `main`, `java.shell`. Among the probes: malli's `core` and
   camel-snake-kebab require `walk`, data.json and reitit `pprint`, honeysql `template`.
 - **Startup namespaces** (`ClojureBuiltinNamespaces.STARTUP`, shipped: `clojure.walk`,
-  `clojure.core.protocols`): `clj -M` has loaded `clojure.walk` (with `core.protocols`, `core.server`, `edn`, `instant`, `java.io`,
+  `clojure.core.protocols`, `clojure.instant`, `clojure.uuid`): `clj -M` has loaded `clojure.walk` (with `core.protocols`, `core.server`, `edn`, `instant`, `java.io`,
   `main`, `spec.alpha`, `spec.gen.alpha`, `string`, `uuid`) before the program, so a
   qualified name reaches it with no `require` and a `require` reads no project file
   (`ClojureSourcePath.find` skips the roots). Here `ClojureLowering.projectNamespaceOf`
@@ -1667,7 +1696,7 @@ end** (`src/main/resources/am/ik/rontolisp/clojure/lib/clojure/**`, the
   NaN 0, 2^63 itself the largest long as Java's `(long)` saturates, past it
   `IllegalArgumentException`, a character its code); `scalb`'s exponent goes through
   `%clojure-int-cast` (`RT.intCast`: past the int range "integer overflow"). The two casts are
-  shared with `vector-of`'s integer kinds, whose copy refused 2^63 until 2026-10-08 (the
+  shared with `int`/`long` and `vector-of`'s integer kinds, whose copy refused 2^63 until 2026-10-08 (the
   oracle stores Long/MAX_VALUE). `E`, `PI`, `to-radians`, `to-degrees` (one multiply, Java's
   constants) and `random` (`rand`) are plain Clojure. Not a startup namespace: a qualified
   name without a `require` is the oracle's class lookup failure. Deviations, each in the user
@@ -1709,8 +1738,7 @@ end** (`src/main/resources/am/ik/rontolisp/clojure/lib/clojure/**`, the
   class: `(prn (r/fold + (r/map inc [1 2 3])))` 143,501 / 131,041 B.
 - Not shipped, with what each waits on (decided 2026-10-08): `clojure.java.io` beyond
   `reader` (a portable File and byte streams, e55), pprint's
-  `cl-format`/`formatter`/`formatter-out` (e58), `clojure.instant`/`clojure.uuid` and the
-  `#inst`/`#uuid` values (e59), `Throwable->map` and `extend-protocol` to
+  `cl-format`/`formatter`/`formatter-out` (e58), `Throwable->map` and `extend-protocol` to
   `Throwable`/`IRef` (e60), `clojure.repl`/`main`/`java.shell`/`xml` (e61).
 - Pins: clojure-spec `clojure-walk-*` (all four backends, oracle-identical, the first
   case loading `clojure.walk` through a qualified name only),
@@ -1961,8 +1989,8 @@ constructor and consumer, and a regex `replace` with a function replacement.
   (measured on the oracle); the key is the namespace-qualified method symbol.
   `satisfies?` reads both tables, never metadata.
 - `extend-protocol`/`extend-type`/`extend` add rows under the target's tag: the
-  class-keyword kinds, `nil`, `Object`, known records and deftypes; anything else
-  (`Instant`, `Date`) is refused.
+  class-keyword kinds, `nil`, `Object`, known records and deftypes, the classes of the
+  instants and the UUID ("Instants and UUIDs"); anything else (`Instant`) is refused.
 - `defrecord`/`deftype`: positional (and, for records, map) constructors as `defun`s plus
   one row per inline method. `class` in the record is the printed host class name
   (`#my_app.core.R{...}`: `-` munged to `_`); every rewrap carries it. `(T. ...)`/`(new T
@@ -1973,7 +2001,7 @@ constructor and consumer, and a regex `replace` with a function replacement.
 - Record literals `#ns.Name{...}`/`#ns.Name[...]` build the record over the QUOTED body
   (the oracle never evaluates it); the class must match a defined record; a deftype
   literal is refused; an undotted `#P{}` is `No reader function for tag P` (`#inst`/`#uuid`
-  stay `unsupported reader form`).
+  read their values, "Instants and UUIDs").
 - `reify`: a fresh tag per evaluation with a row per method; `=` is identity (unless the body
   overrides `equals`, "Host interfaces").
 - `instance?` (oracle-checked clj 1.12.6, 2026-10-04; it has no value): a record/deftype name
@@ -2341,9 +2369,35 @@ The `java:` surface (`.kb/java-interop.md`); interpreter and JVM only -- wasm co
   it would make host false truthy in `java:` programs and move all three paths plus the
   bridge parity). The lowering wraps to `T`-or-false instead where every overload at that
   arity returns a primitive boolean and the receiver class is known: a static call or
-  member value, or an instance call on a construction literal, a `let`/`if-let`/`when-let`
+  member value, or an instance call on a construction literal -- `java:new`, a `proxy` of
+  one interface (`java:proxy "I" fn`) or of a class alone (`java:subclass "S" '() ...`;
+  `ClojureInteropLowering.constructedClass`) --, a `let`/`if-let`/`when-let`
   local bound to one (single-shot, so the inference is sound), or a `..` step's declared
-  return. Anything else prints `nil` for false.
+  return; a `true`/`false` receiver of unknown class is called as its `Boolean`
+  (`valuePredicate`: `(.booleanValue false)`). Anything else prints `nil` for false, a
+  `Boolean.FALSE` read back from a host collection too (`(vec l)` of a list holding false
+  is `[nil]`; the oracle's `[false]`): a per-site "answer false as `|false|`" unmarshal is
+  the remaining half (todo e73).
+- `false` crosses to Java as Java's false (e69, 2026-10-08): the false object IS the symbol
+  `java:` passes as `false` / `Boolean.FALSE` (`FALSE_VALUE_NAME = LispNames.JAVA_FALSE`,
+  `.kb/java-interop.md` "Java's false and hash tables"), an argument and a fn's or proxy
+  body's answer alike; a map crosses as a fresh `LinkedHashMap` (the same section), its
+  vector/map values converted too, so the copy's `toString` spells them the Java way (user doc
+  deviation). A set, keyword or record has no Java value (`(:C%SET table)` is no table to
+  `java:`, and `java:` learns no Clojure shape): the same todo. Before, measured 2026-10-08
+  (interpreter and JVM): `(.add l false)`, `(Boolean/toString false)` and `(java.util.HashMap.
+  {"a" 1})` were `No matching method/constructor`, `(.removeIf l odd?)` and a proxy `test`
+  answering false `cannot return |false| as boolean`.
+- A fn receiver is the oracle's `AFunction` (`ClojureValueMethodLowering.functionRows`; the
+  value gate `%clojure-value-receiver-p` takes `functionp`): `invoke` of 0..20 arguments and
+  `applyTo` for any `ifn?` value, `call`, `run` (nil), and `compare` on a fn through
+  `%clojure-fn-compare` (`AFunction.compare`: true -1, false 1 when the reversed call is true
+  else 0, a number its `intValue` by `%clojure-unchecked-int`, nil the NPE, else a
+  ClassCastException). Runs on all four backends (the arm answers before the `java:call`);
+  before, `java:call expects a java object as the first argument, got #<lambda>`. A `Comparator`
+  fn passed TO Java still answers a number (deviation): `java:` cannot know a boolean answer
+  means `AFunction.compare`. Pin: clojure-spec
+  `instance-calls-on-a-fn-are-its-ifn-callable-runnable-and-comparator-methods`.
 - A fn passed where an interface is expected implements every abstract method by the
   method's arguments, defaults keeping their bodies (`.kb/java-interop.md`, `:functional`;
   `ClojureInteropLowering.hostCall` ends a `java:new`/`java:call`/`java:static` with any
@@ -2352,12 +2406,13 @@ The `java:` surface (`.kb/java-interop.md`); interpreter and JVM only -- wasm co
   was `Function expects 0 arguments, got 1`. Oracle (clj 1.12.6, same day): a fn converts
   only to a `@FunctionalInterface` (a `PropertyChangeListener`/`DocumentListener` is a
   `ClassCastException`; here every abstract method of any interface calls it -- user doc
-  deviation), `Comparator` takes a boolean answer (`AFunction.compare`; here a number),
-  and `false` returned or passed is Java false (here no Java value: `|false|` is a symbol
-  `java:` does not bridge, for `proxy` bodies too -- todo e69). `(proxy [Super] [fn] ...)`
-  constructor arguments still convert as `java:proxy`. Pin:
+  deviation), `Comparator` takes a boolean answer (`AFunction.compare`; here a number).
+  `(proxy [Super] [fn] ...)` constructor arguments convert the same way: `proxyClassOf` ends
+  the `java:subclass` in the marker after its callable (until e69 they converted as
+  `java:proxy`, the method name first). Pins:
   `ClojureInteropTest#aFnPassedWhereAnInterfaceIsExpectedImplementsItsMethodByItsArguments`
-  (`locking`'s threaded pin passes its fn to `Thread.` directly).
+  (`locking`'s threaded pin passes its fn to `Thread.` directly),
+  `ClojureInteropTest#falseAMapAndAFnCrossTheJavaBoundaryAsTheOraclesDo`.
 - `proxy` of interfaces is `java:proxy` with a name-dispatching lambda over the Java
   arguments (no `this`); a missing method raises `no proxy method: <name>`;
   `toString`/`equals`/`hashCode` are refused there (`java:proxy` keeps `Object`'s, so the
@@ -2676,7 +2731,7 @@ through it. Pinned on all four backends by clojure-spec `a-double-prints-its-exp
 source reader's language, answering what a quote of the same text answers**, so `(=
 (read-string s) 's)` holds: `@x` reads `(deref x)` and `` `x `` `(syntax-quote x)` like a
 quote does (the oracle: `clojure.core/deref`, the expansion), `#(...)` the source reader's
-`(fn* [p1__N# ...] (body))` (N per datum read, through the specials `%clojure-rd-args`/`%clojure-rd-arg-id`), `#=`/`#inst` are its refusals, and `#?` reads under `{:read-cond :allow}` ("Reader conditionals"). A read map
+`(fn* [p1__N# ...] (body))` (N per datum read, through the specials `%clojure-rd-args`/`%clojure-rd-arg-id`), `#=` is its refusal, `#inst`/`#uuid` read their values ("Instants and UUIDs"), and `#?` reads under `{:read-cond :allow}` ("Reader conditionals"). A read map
 or set stores its keys through "Structural keys" (`%clojure-rd-map-of`, `%clojure-set-put`),
 so it finds `=` keys and refuses an `=` duplicate like the oracle (`Duplicate key: k`, k's
 toString: a map names the earlier key, a set the later member). `::kw` resolves against the
@@ -2739,8 +2794,8 @@ number needs a digit or a sign and a digit first (`.5` is a symbol here only in 
 source reader and `read-string` read it as 0.5, the leniency the source reader keeps);
 `#` dispatches to `{` `_` `#` `:` `^` and a letter (a tagged literal; `<` is `Unreadable
 form`), anything else `No dispatch macro for: c`; `#:` reads its namespace as a whole form.
-A tag calls the `:readers` value, then the built-in `#inst`/`#uuid` (refused while no such
-value exists), then `:default` with tag and value, through `%clojure-call` -- a var or
+A tag calls the `:readers` value, then the built-in `#inst`/`#uuid` ("Instants and UUIDs"),
+then `:default` with tag and value, through `%clojure-call` -- a var or
 keyword reader works -- outside the read in progress (`%clojure-rd-edn-call` rebinds the
 read specials, so a read inside the reader function starts afresh). `(read-string s)` is
 `{:eof nil}` (a nil `s` answers nil); `read`'s stream is any character stream.
@@ -2882,6 +2937,93 @@ one algorithm (`ClojureReader.readConditional`, `%clojure-rd-conditional`):
   dependency `infinite range is not supported`, camel-snake-kebab `extend needs a core
   type, not Pattern`, cuerdas `unknown namespace: clojure.core` -- lowering gaps for `e43`,
   none in the reader.
+
+## Instants and UUIDs
+
+**`#inst` and `#uuid` read through the oracle's default data readers in source, under
+`read-string`/`read` and in `clojure.edn`, into values of this front end's own on all four
+backends** (oracle-checked clj 1.12.6 on JDK 25, default time zone UTC, 2026-10-08):
+`(:C%INST ms)` the oracle's `java.util.Date`, `(:C%TIMESTAMP ms nanos)` a `java.sql.Timestamp`
+(`ms` its `getTime`), `(:C%CALENDAR ms offset zone)` a `GregorianCalendar` (offset in
+minutes, `zone` the oracle's id `GMT-00:00`, which `=` compares: `-00:00` is not `Z`),
+`(:C%UUID msb lsb)` a `java.util.UUID` (signed halves). Tagged wrappers, so the seq verbs
+refuse them and `equal` decides `=` and keys them, but for `(= date timestamp)` (true by
+milliseconds; the reverse false, the oracle's one-sided `equals`).
+- Timestamps (`clojure.lisp` "Instants and UUIDs", Java twin `ClojureDefaultReaders`): the
+  oracle's pattern matched by hand, deepest component level first and backing off while what
+  follows is no `Z`/`+hh:mm` offset reaching the end (`2020-05:30` is 2020 at -05:30; `\d` is
+  ASCII); `validated`'s nine checks in its order and words; the instant computed as the
+  oracle's lenient `GregorianCalendar` computes it: time of day first (`23:59:60` carries),
+  the day Julian before 1582 and Gregorian after, in 1582 Gregorian from the cutover day
+  -141427 on and Julian before it (`1582-10-10` is the Julian date of `10-20`), the zone
+  `GMT+` unless the sign is negative. Fields back out the same way (year of the era: year 0
+  prints `0001`). Printing is `print-date`'s UTC `yyyy-MM-dd'T'HH:mm:ss.SSS-00:00`, nine
+  nanosecond digits for a Timestamp, a Calendar at its own offset; `str` is `Date.toString`
+  in UTC (the oracle's JVM zone; deviation), `Timestamp.toString`, and a Calendar's printed
+  form (deviation: the oracle dumps its fields).
+- A source literal is read at read time, positioned after its string like the oracle's
+  error, into the marker `(%inst ms)`/`(%uuid msb lsb)`; the lowering
+  (`ClojureDefaultReaders.construction`, also under quote, syntax-quote and a macro's
+  decoded answer) builds `(%clojure-make-inst ms')` where `ms'` is read(print(ms)): the
+  oracle's compiler embeds a `Date` constant by `RT.printString` and `readString` at class
+  init, so a BC date comes back AD (`#inst "0000-01-01"` is year 1) and one past 9999 fails
+  when the code runs (lowered to the run-time read of the printed text). A macro answering a
+  Timestamp or Calendar decodes to a Date the same way.
+- UUIDs: `UUID.fromString`'s lenient read (at most 36 chars, exactly four dashes, groups
+  parsed like `Long.parseLong(s, b, e, 16)` -- optional `+`, overflow past 2^63-1 -- and
+  masked), its `IllegalArgumentException`/`NumberFormatException` texts for `#uuid` and nil
+  for `parse-uuid`. Deviation: ASCII hex only (`Character.digit` takes any `Nd` and fullwidth
+  letters). `random-uuid` is 16 `rontolisp:random-bytes` with the version/variant bits.
+- Families `INSTANT` and `UUID` (`ClojureArms`): arms in the printer, `str`, `=` (the
+  Date/Timestamp clause), `compare` and `%clojure-comparable-p`, `%clojure-hash`,
+  `%clojure-class-name-of`, `inst?` (`%clojure-is-inst`'s disjunct), the `class` and
+  protocol-tag branches (`ClojureDispatchLowering.timeValueClassBranches`), `instance?`'s
+  kinds (`ClojureValueClasses` DATE/TIMESTAMP/CALENDAR/UUID) and the instance-call rows
+  (`getTime`, `before`/`after` by milliseconds, `compareTo`, the UUID halves, `version`,
+  `variant`). `uuid?` lowers to `(%clojure-is-uuid x "java.util.UUID")`, an alias of the
+  host test. Producers: the two constructors, every read entry (`Reads.ENTRIES`), the
+  `clojure.instant` kernels, `random-uuid`/`parse-uuid`. Inside the runtime a type test is
+  inline (`(eq (car b) :C%UUID)`), never a family test in a position the strip cannot fold.
+  Measured 2026-10-08 against the parent build, wasm P1 / `--optimize=size` / component / JVM
+  class: 15 programs naming none (printing, `compare`, `sort`, `class`, `instance? Comparable`
+  of a literal, `defmulti` on `String` and `Object`, `extend-protocol`, `ancestors`, `inst?`,
+  `uuid?`, `format`, structural keys, `clojure.walk`) plus `demo.clj` and `ring-hello.clj`
+  byte-identical; `(.getTime x)` -3 B wasm (the row makes the method known, so the refusal is
+  the oracle's `No matching field found`).
+- Cost: a program that reads at run time carries both default readers. `(prn (read-string
+  "[1 {:a 2}]"))` plus a `defn`: 203,543 / 158,350 / 205,980 / 209,346 -> 240,221 / 178,890 /
+  242,622 / 250,512 B (`clojure.edn` likewise, 227,283 -> 263,608 wasm). Stubbing one piece at
+  a time (wasm P1): both readers 21 KB (the timestamp match 5.8, `validated` 2.9, the
+  calendar arithmetic 3.8, the UUID read 4.8), the printer's field split 5.8, `str` 3.1, the
+  UUID spelling 1.5; Timestamp and Calendar together ~2 KB (no family of their own). `(prn
+  #inst "2020-01-01")` 49,040 B, `(prn #uuid "...")` 45,146 B, `(prn (random-uuid))` 46,969 B.
+- Classes: `class` answers `:java.util.Date` / `:java.sql.Timestamp` /
+  `:java.util.GregorianCalendar` / `:java.util.UUID`. `ClojureClassBases` tables the four
+  classes and `Calendar` (`TIME_VALUE_SUPERS`, roots, interfaces), so a `defmethod` on
+  `java.util.Date` dispatches a Timestamp through `isa?` (spelling Date records the Timestamp
+  row: `timeValueSubclassesOf`; `Object` and the interfaces record none, so `ancestors` of a
+  class the program never spells answers nil, a deviation). `extend-protocol` takes the four
+  classes (`TIME_VALUE_DISPATCH`, `Calendar` to `GregorianCalendar`), by exact tag: a protocol
+  extended to `java.util.Date` does not reach a Timestamp (deviation).
+- `inst-ms`/`inst-ms*` read a Date or Timestamp, a host `Date`/`Instant` through the host
+  arms, else the oracle's `No implementation of method: :inst-ms* of protocol:
+  #'clojure.core/Inst found for class: C`. A host Date or UUID stays a host object: never `=`
+  to a read one (deviation), and `(java.util.Date.)`, `UUID/randomUUID` and their kin stay
+  `java:` calls, refused on wasm (`e76`).
+- `clojure.instant` (parse-timestamp, validated, read-instant-date/-timestamp/-calendar)
+  and `clojure.uuid` (no vars) ship as startup namespaces ("clojure.jar namespaces") over the
+  kernels `rontolisp.internal.instant` (`parse`, `validate`, `read-date`, `read-timestamp`,
+  `read-calendar`); the runtime reader calls `%clojure-instant-read-date` directly.
+  `*data-readers*` is still not read (`e54`), so binding it does not change `read-string`.
+- Pins: clojure-spec `inst-literals-*`, `uuid-literals-*`, `inst-and-uuid-*`,
+  `read-string-and-clojure-edn-read-inst-and-uuid-like-the-oracle`,
+  `clojure-instant-parses-validates-and-reads-three-instants` (all four backends,
+  oracle-identical); `ClojureDefaultReadersTest` (the pattern, the calendar, the printed and
+  `toString` forms and `UUID.fromString` against the JDK over seeded random inputs, the Java
+  half 20,000 each and the Lisp half 1,500 each on the interpreter);
+  `ClojureReaderTest#instAndUuid*`, `ClojureArmsTest#theInstantAndUuidFamilies*`,
+  `ClojureLibraryTest#aProgramMakingNoInstantOrUuid*`,
+  `ClojureInteropTest#instMsReadsAHostDateOrInstant*`.
 
 ## Vars and metadata
 
@@ -3284,7 +3426,8 @@ in-scope program needs `valid?`/`conform` (then `explain-data` stays refused).
 - Reading: the `read-string-*`/`read-takes-*`/`str-spells-*` spec cases,
   `ClojureLoweringTest#readingVerbs*`/`#aReaderWrapper*`, `ClojureReaderTest#aDiscard*`/
   `#aCharacterLiteral*`, `ClojureSessionTest#aBufferRegisters*`,
-  `ClojureInteropTest#readTakesBackWhatSpitWrote`, `ClojureWasmFileIoTest`.
+  `ClojureInteropTest#readTakesBackWhatSpitWrote`, `ClojureWasmFileIoTest`;
+  `ClojureDefaultReadersTest` (`#inst`/`#uuid` against the JDK, both halves).
 - Interop and host IO: `ClojureInteropTest` (interpreter and JVM),
   `ClojureWasmInteropRefusalTest`, `ClojureWasmFileIoTest`, `ClojureWasmFileRefusalTest`.
 - `ClojureArmsTest` (the sorted-collection, unbound-root, matcher, reducible, interface and

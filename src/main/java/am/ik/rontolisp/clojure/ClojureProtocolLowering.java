@@ -183,6 +183,9 @@ final class ClojureProtocolLowering {
 		branches.add(ClojureLowerUtil.list(isRecordForm(one), typedTagOf(one)));
 		branches.add(ClojureLowerUtil.list(isDeftypeForm(one), typedTagOf(one)));
 		branches.add(ClojureLowerUtil.list(isReifyForm(one), typedTagOf(one)));
+		// an instant or a UUID dispatches on its class's keyword, like class (arms a
+		// program making neither sheds)
+		branches.addAll(ClojureDispatchLowering.timeValueClassBranches(one));
 		branches.add(ClojureLowerUtil.list(ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), one),
 				ClojureCollectionLowering.keywordForm("nil")));
 		branches.add(ClojureLowerUtil.list(ClojureLowerUtil.list(ClojureLowerUtil.sym("eq"), one, ctx.falseVariable),
@@ -1475,8 +1478,9 @@ final class ClojureProtocolLowering {
 	 * {@code Object} (the default row). Record and deftype names answer their tags; host
 	 * kinds answer the {@code class} keyword spelling (a {@code java.lang.}/
 	 * {@code clojure.lang.} qualified or imported spelling too, like a {@code defmethod}
-	 * dispatch value), so dispatch agrees with {@code class}; anything else (a
-	 * {@code java.time.Instant}, a {@code Date}, ...) is a named refusal.
+	 * dispatch value), so dispatch agrees with {@code class}, and so do the classes of
+	 * the instants and the UUID ({@link ClojureClassBases#TIME_VALUE_DISPATCH}); anything
+	 * else (a {@code java.time.Instant}, ...) is a named refusal.
 	 */
 	static @Nullable LispVal extendKeyForm(ClojureLowering ctx, String typeName, String what) {
 		if (ClojureDispatchLowering.isObjectClassName(ctx, typeName)) {
@@ -1493,6 +1497,9 @@ final class ClojureProtocolLowering {
 		// value
 		String fqn = ClojureNamespaceLowering.resolveClass(ctx, typeName);
 		String kind = ClojureDispatchLowering.DISPATCH_CLASS_KEYWORDS.get(fqn.substring(fqn.lastIndexOf('.') + 1));
+		if (kind == null) {
+			kind = ClojureClassBases.TIME_VALUE_DISPATCH.get(fqn);
+		}
 		if (kind == null) {
 			throw new LispReadException(what + " needs a core type, not " + typeName);
 		}

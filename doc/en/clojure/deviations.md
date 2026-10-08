@@ -236,7 +236,7 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
 - `class` answers a keyword naming the kind (`:string`, `:number`, `:keyword`, ...);
   the oracle answers host classes, which no wasm backend has. A record or deftype
   answers its tag keyword instead; a host object (interpreter and JVM) its host class.
-- An instance call on a collection, keyword, symbol, ratio or atom answers through the core
+- An instance call on a collection, keyword, symbol, ratio, atom or fn answers through the core
   functions and shares their deviations (`.getClass` answers what `class` does). A method
   left unmapped is refused as `Method m taking N args is not supported for class C`, where the
   oracle may answer (`.hashCode`); the class named for a map is an array map up to eight
@@ -277,10 +277,11 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
 - The `unchecked-` arithmetic verbs wrap integers at 64 bits (`-int` verbs at 32) and the casts
   `short`, `byte`, `char` and `float` match the oracle, with one deviation: an integer past 64
   bits is a plain integer here, so the oracle's unwrapped bigint operand
-  (`(unchecked-add 9223372036854775807N 1)`) wraps too. `int` and `long` truncate without the
-  oracle's range checks (`(long 1e19)` is `10000000000000000000`, where the oracle throws an
-  `IllegalArgumentException`, and `(long ##NaN)` signals, where the oracle answers `0`), and
-  `double` of a ratio is its nearest double (`(double 2/3)` is `0.6666666666666666`), where the
+  (`(unchecked-add 9223372036854775807N 1)`) wraps too. `int` and `long` are the oracle's casts,
+  range checks and messages included. A literal argument takes the cast of its own type, any
+  other the object cast: a double the oracle's compiler types as a primitive (a `let` local
+  bound to a double literal, `(* 2.0 x)`) refuses with `Value out of range for int: 2.0E10`
+  there and `integer overflow` here. `double` of a ratio is its nearest double (`(double 2/3)` is `0.6666666666666666`), where the
   oracle rounds it to 16 significant digits first (`0.6666666666666667`). `inc`, `dec` and the
   checked verbs never overflow (integers are bignums).
 - `bigint` and `biginteger` answer a plain integer, and `bigdec` a plain rational (`(bigdec "1.5")`
@@ -313,8 +314,7 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   `(0 0)` and `(-1 0)`, where the oracle compares it with the core functions. `compare`
   orders strings by code point (the oracle by UTF-16 unit, which differs past U+FFFF).
 - `float` answers a double, so `(float 1/3)` is `0.3333333333333333` (the oracle's Float prints
-  `0.33333334`); a value past the float range still signals. `int` and `long` truncate and do not
-  refuse a value out of range (the oracle: `integer overflow`, `Value out of range for long: ...`).
+  `0.33333334`); a value past the float range still signals.
 - `mod` and `rem` of a NaN or infinite dividend throw an `ArithmeticException` (the oracle: a
   `NumberFormatException`).
 - `vector-of` answers an ordinary vector: a later `conj` or `assoc` stores its value as
@@ -370,6 +370,11 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   the class loaded first); a deftype literal is refused. `read` takes a stream -- a
   plain `clojure.java.io/reader` too, where the oracle requires a `PushbackReader` -- and
   refuses a host reader.
+- `#inst` and `#uuid` read as the oracle's `java.util.Date` and `java.util.UUID` on every
+  backend; [Instants and UUIDs](reference/instants.md) lists the few differences (`str` of an
+  instant answers in UTC, a host value from interop is never `=` to a read one).
+  `*data-readers*` and `data_readers.clj` are not read, so no other undotted tag has a
+  reader function, in source or under `read-string`.
 - `*out*`/`*in*`/`*err*` are `*standard-output*`/`*standard-input*`/`*error-output*`
   (rebinding rebinds the standard streams); read at the root, `*out*` and `*in*` are
   stream values over the process standard streams;
@@ -379,15 +384,21 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   to one, or a `..` step's declared return) and every
   overload at that arity answers a primitive boolean, or when the receiver is a
   string, number or character and every overload at that arity of its class answers
-  one (`(.matches "abc" "x")`); any other host boolean
-  keeps the shared `java:` unmarshal and prints `nil` for `false`.
+  one (`(.matches "abc" "x")`), or a `proxy` of one interface or of a class alone; any
+  other host boolean keeps the shared `java:` unmarshal and prints `nil` for `false`, and
+  so does a `Boolean.FALSE` read back from a host collection (`(vec l)` answers `[nil]`
+  for a list holding `false`).
 - A fn passed where a Java interface is expected implements every abstract method of
   any interface, each called with the method's arguments; the oracle converts a fn only
   to an interface annotated `@FunctionalInterface` (a `PropertyChangeListener` is a
   `ClassCastException` there). The fn's value crosses back as an argument would: a
-  `Comparator` fn answers a number (the oracle also takes `true`/`false`), and `false`
-  crosses as no Java value at all, so a fn answering a Java `boolean` answers `true` or
-  `nil`, and a member taking a `false` argument finds no match.
+  `Comparator` fn passed to Java answers a number (the oracle also takes `true`/`false`,
+  as `(.compare f a b)` on the fn itself does here).
+- A map passed to Java is a fresh `java.util.LinkedHashMap` of its entries, each key and
+  value converted as an argument is (a vector a `List`, a map a `Map`), where the oracle
+  passes the map itself: `str` of the copy spells a nested collection the Java way
+  (`{a=[1, 2]}`, the oracle `{a=[1 2]}`). A set, a keyword and a record have no Java
+  value, so a member taking one (a map keyed by keywords too) finds no match.
 - An integer receiver is called as an `Integer` when it fits one, else as a `Long`
   (the oracle's is always a `Long`): `(.getClass 1)` answers `java.lang.Integer`.
 - A `_` param tag leaves that parameter to the cost rule of the `java:` surface, so
@@ -401,8 +412,11 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   is not fetched: a namespace only it could hold is refused, naming it, and the rest of the
   program runs. A built-in library fetches nothing, its own dependencies included; the
   built-in Ring namespaces load without a `ring/ring-core` coordinate (the oracle needs one)
-  and stand in for an older ring-core than the one shipped. A `pom.xml` project is not read,
-  nor is a library's `data_readers.clj`: its tags are refused like any unknown tag.
+  and stand in for an older ring-core than the one shipped. Without the command line a
+  `pom.xml` project is not read either. Its model is validated at Maven's minimal level,
+  where the oracle's is strict, so a POM only the strict checks refuse (a resource without a
+  directory, say) is read. A library's `data_readers.clj` is not read: its tags are refused
+  like any unknown tag.
   `settings.xml` credentials answer Basic authentication only (the oracle also answers Digest
   and NTLM), and a download, `maven-metadata.xml` included, is always checked against its `.sha1` (the
   oracle's default only warns). A file no repository had is not asked for again until the

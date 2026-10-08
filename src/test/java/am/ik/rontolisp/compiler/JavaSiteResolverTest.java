@@ -81,6 +81,21 @@ class JavaSiteResolverTest {
 		assertThat(resolve("(java:field \"java.lang.Integer\" \"MAX_VALUE\" :functional)").functional()).isFalse();
 	}
 
+	// The quoted symbol |false| is Java's false: the boolean overload for a primitive, a
+	// Boolean where a reference is expected -- a site resolves on it as on t.
+	@Test
+	void aQuotedFalseSymbolResolvesAsJavasFalse() {
+		assertThat(member("(java:static \"java.lang.Boolean\" \"toString\" '|false|)"))
+			.isEqualTo("java.lang.Boolean toString(boolean)");
+		assertThat(member("(java:static \"java.lang.String\" \"valueOf\" '|false|)"))
+			.isEqualTo(member("(java:static \"java.lang.String\" \"valueOf\" t)"));
+		// a java:subclass ending in :functional counts its constructor arguments without
+		// it
+		assertThat(JavaImplementations.resolve((LispCons) LispReader.readAllFromString(
+				"(java:subclass \"java.lang.Thread\" '() '() (lambda () nil) (lambda (this m &rest a) nil) :functional)")
+			.get(0), ReflectiveJavaClasses.instance()).resolved()).isTrue();
+	}
+
 	@Test
 	void aVarargsTailIsPackedExactlyAsAtRunTime() {
 		assertThat(member("(java:static \"java.lang.String\" \"format\" \"%s-%s\" 1 \"x\")"))

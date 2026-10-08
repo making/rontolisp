@@ -33,6 +33,9 @@ import org.jspecify.annotations.Nullable;
  * token buffer and its layout, and the radix spelling of a number.</li>
  * <li>{@code rontolisp.internal.datafy} for {@code clojure.datafy}: the oracle's class
  * name of a value, which {@code class} (a kind keyword here) does not answer.</li>
+ * <li>{@code rontolisp.internal.instant} for {@code clojure.instant}: the timestamp
+ * match, {@code validated}'s checks and the three readers, which the run-time reader's
+ * default {@code #inst} reader shares.</li>
  * <li>{@code rontolisp.internal.reducers} for {@code clojure.core.reducers}: the
  * accumulator {@code cat} answers (the oracle's {@code java.util.ArrayList}, a growable
  * vector here, which no Clojure verb makes), the push of {@code append!} onto it and the
@@ -182,6 +185,10 @@ final class ClojureKernelLowering {
 							Map.entry("number-string", 3), Map.entry("members", 1))),
 			"rontolisp.internal.datafy",
 			new Kernels("clojure.datafy", "RONTOLISP::%CLOJURE-", Map.of("class-name-of", 1)),
+			"rontolisp.internal.instant",
+			new Kernels("clojure.instant", "RONTOLISP::%CLOJURE-INSTANT-",
+					Map.ofEntries(Map.entry("parse", 1), Map.entry("validate", 10), Map.entry("read-date", 1),
+							Map.entry("read-timestamp", 1), Map.entry("read-calendar", 1))),
 			"rontolisp.internal.reducers",
 			new Kernels("clojure.core.reducers", "RONTOLISP::%CLOJURE-REDUCERS-",
 					Map.ofEntries(Map.entry("accumulator", 0), Map.entry("accumulator?", 1), Map.entry("append", 2),

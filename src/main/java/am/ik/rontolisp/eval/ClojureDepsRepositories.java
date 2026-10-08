@@ -15,9 +15,11 @@ import am.ik.artifact.ArtifactCache;
 import am.ik.artifact.Downloader;
 import am.ik.artifact.GitFetcher;
 import am.ik.maven.Artifact;
+import am.ik.maven.ConfigurationNode;
 import am.ik.maven.Dependency;
 import am.ik.maven.Exclusion;
 import am.ik.maven.MavenResolutionException;
+import am.ik.maven.MavenProject;
 import am.ik.maven.MavenResolver;
 import am.ik.maven.MavenSettings;
 import am.ik.maven.RemoteRepository;
@@ -134,6 +136,42 @@ public final class ClojureDepsRepositories implements ClojureRepositories {
 		catch (MavenResolutionException ex) {
 			throw new FetchFailure(String.valueOf(ex.getMessage()));
 		}
+	}
+
+	/**
+	 * The project the oracle's {@code read-model-file} reads: the model built from the
+	 * file, the system property {@code project.basedir} set to {@code .} as tools.deps
+	 * sets it.
+	 */
+	@Override
+	public PomProject pomProject(MavenSource source, String pom) {
+		MavenProject project;
+		try {
+			project = resolver(source).project(Path.of(pom), Map.of("project.basedir", "."));
+		}
+		catch (MavenResolutionException ex) {
+			throw new FetchFailure(String.valueOf(ex.getMessage()));
+		}
+		List<PomPlugin> plugins = new ArrayList<>();
+		for (MavenProject.Plugin plugin : project.plugins()) {
+			List<PomExecution> executions = new ArrayList<>();
+			for (MavenProject.Execution execution : plugin.executions()) {
+				ConfigurationNode configuration = execution.configuration();
+				executions.add(new PomExecution(execution.goals(),
+						configuration == null ? null : configurationOf(configuration)));
+			}
+			plugins.add(new PomPlugin(plugin.groupId(), plugin.artifactId(), executions));
+		}
+		return new PomProject(dependenciesOf(project.dependencies()), project.sourceDirectory(),
+				project.resourceDirectories(), plugins);
+	}
+
+	private static PomConfiguration configurationOf(ConfigurationNode node) {
+		List<PomConfiguration> children = new ArrayList<>();
+		for (ConfigurationNode child : node.children()) {
+			children.add(configurationOf(child));
+		}
+		return new PomConfiguration(node.name(), node.value(), children);
 	}
 
 	@Override

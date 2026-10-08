@@ -17,3 +17,7 @@ to `Throwable` or `IRef` fails to lower.
    throwable classes (the class rows a catch already walks, `ClojureClassBases`), and to
    `IRef`/`IDeref` (atoms, volatiles, refs, agents, delays).
 3. `clojure.datafy`'s `Throwable` and `IRef` rows as the oracle's; clojure-spec lines.
+
+A protocol dispatcher that walks the class rows would also take a `java.sql.Timestamp` to a
+protocol extended to `java.util.Date`, which today reaches only the exact class
+(`.kb/clojure-frontend.md`, "Instants and UUIDs").

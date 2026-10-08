@@ -456,6 +456,17 @@ class ClojureInteropTest {
 	}
 
 	@Test
+	void instMsReadsAHostDateOrInstantBesideTheProgramsOwnInstants() throws Exception {
+		// oracle-identical (clj 1.12.6): the Inst protocol's host rows beside a Date the
+		// program read, whose class instance? names as the host's
+		assertBothEqual("(def hd (java.util.Date. 5))"
+				+ " (prn (inst? hd) (inst-ms hd) (inst-ms (java.time.Instant/ofEpochMilli 7)) (inst-ms* hd)"
+				+ " (map inst-ms [hd #inst \"1970-01-01T00:00:00.009Z\"]) (instance? java.util.Date hd)"
+				+ " (instance? java.util.Date #inst \"2020\") (uuid? (java.util.UUID/randomUUID)) (uuid? #uuid \"1-1-1-1-1\"))",
+				"true 5 7 5 (5 9) true true true true\n");
+	}
+
+	@Test
 	void classOfAnExceptionIsItsClassKeywordWithOrWithoutInterop() throws Exception {
 		// an ex-info condition is no host object: the same keyword whether the program
 		// uses interop (the host arm behind the exception arm) or not (no java: at all)
@@ -731,8 +742,7 @@ class ClojureInteropTest {
 	// is expected implements its method by the method's arguments -- a literal fn (a
 	// resolved site), a local of a known receiver (a dispatched site), a var on a
 	// receiver of unknown class (run time) and a static call alike -- and the interface's
-	// default methods keep their bodies (Predicate/not calls negate on it; the fn answers
-	// nil, not false, which crosses to Java as no value yet). Before,
+	// default methods keep their bodies (Predicate/not calls negate on it). Before,
 	// measured 2026-10-08 on the interpreter and the JVM, every call passed the method's
 	// name first: "Function expects 0 arguments, got 1".
 	@Test
@@ -745,6 +755,7 @@ class ClojureInteropTest {
 		assertBothEqual("(defn each2 [f] (.forEach (java.util.ArrayList. [5]) f)) (each2 println)", "5\n");
 		assertBothEqual("(println (.test (java.util.function.Predicate/not (fn [x] (when (odd? x) true))) 2))",
 				"true\n");
+		assertBothEqual("(println (.test (java.util.function.Predicate/not odd?) 2))", "true\n");
 		assertBothEqual(
 				"(let [l (java.util.ArrayList. [3 1 2])]"
 						+ " (java.util.Collections/sort l (fn [a b] (compare a b))) (println (vec l))"
@@ -768,6 +779,36 @@ class ClojureInteropTest {
 				  (.addDocumentListener d (fn [e] (println "doc" (str (.getType e)))))
 				  (.insertString d 0 "x" nil))
 				""", "pc 2\ndoc INSERT\n");
+	}
+
+	// Oracle (clj 1.12.6, measured 2026-10-08): false crosses to Java as Java's false --
+	// an argument (a Boolean where an Object is expected) and a fn's or a proxy body's
+	// answer for a boolean -- a map as a java.util.Map, and a fn is a Callable, a
+	// Runnable
+	// and a Comparator itself (clojure-spec pins the receiver half on every backend); a
+	// proxy's constructor arguments convert a fn as every call does. Before, measured
+	// 2026-10-08 on the interpreter and the JVM: "No matching method
+	// java.util.ArrayList.add with 1 argument(s)", "java:reify: cannot return |false| as
+	// boolean ...", "No matching constructor for java.util.HashMap", "java:call expects a
+	// java object as the first argument, got #<lambda>". Deviations: a map argument is a
+	// fresh LinkedHashMap whose vector and map values are converted too (the oracle's
+	// toString spells them as Clojure's), and a host false read back is still nil.
+	@Test
+	void falseAMapAndAFnCrossTheJavaBoundaryAsTheOraclesDo() throws Exception {
+		assertBothEqual("(let [l (java.util.ArrayList.)] (.add l false) (.add l true) (.add l nil) (println (str l)))",
+				"[false, true, null]\n");
+		assertBothEqual("(println (Boolean/toString false) (java.util.Objects/toString false))", "false false\n");
+		assertBothEqual("(let [l (java.util.ArrayList. [1 2 3])] (.removeIf l odd?) (println (vec l)))", "[2]\n");
+		assertBothEqual("(println (.test (proxy [java.util.function.Predicate] [] (test [x] false)) 1))", "false\n");
+		assertBothEqual("(let [p (proxy [java.util.function.Predicate] [] (test [x] (odd? x)))]"
+				+ " (println (.test p 1) (.test p 2)))", "true false\n");
+		assertBothEqual("(println (.booleanValue false) (.booleanValue true) (.equals false false))",
+				"false true true\n");
+		assertBothEqual("(println (str (java.util.HashMap. {\"a\" 1})) (str (java.util.TreeMap. {\"b\" 2 \"a\" 1})))",
+				"{a=1} {a=1, b=2}\n");
+		assertBothEqual("(let [l (java.util.ArrayList.)] (.add l {\"k\" false}) (println (str l)))", "[{k=false}]\n");
+		assertBothEqual("(println (.call (fn [] 5)) (.run (fn [] 5)) (.compare (fn [a b] (< a b)) 2 1))", "5 nil 1\n");
+		assertBothEqual("(let [t (proxy [Thread] [(fn [] (println \"ran\"))])] (.start t) (.join t))", "ran\n");
 	}
 
 	@Test
