@@ -198,11 +198,12 @@ cases:
     # with nil is nil (a plain &rest self call would wrap the rest in a
     # one-list and loop forever on the second probe). The stored lambda splits
     # into a worker (the rest as an ordinary parameter, so recur assigns
-    # exactly) plus the &rest head for normal calls; inline and extended
-    # protocol methods share the stored path (the oracle refuses variadic
-    # protocol methods at definition -- No single method ... of interface --
-    # so those rows pin our lenient reading, green on all four backends by the
-    # same construction). The dispatch function takes the call's full argument
+    # exactly) plus the &rest head for normal calls; an extended protocol
+    # method shares the stored path, and an inline one recurs without its
+    # target to a loop taking the rest the same way (the oracle refuses
+    # variadic protocol methods at definition -- No single method ... of
+    # interface -- so those rows pin our lenient reading, green on all four
+    # backends by the same construction). The dispatch function takes the call's full argument
     # list (the dispatcher applies it to every argument), so it spells its own
     # &r; a keyword dispatch takes the lookup plus an optional default,
     # like (:k m dflt).
@@ -216,7 +217,7 @@ cases:
       (println (walk {:shape :pt :pt [1 2]} [3 4]))
       (println (walk {:shape :pt :pt [1 2]} nil))
       (defprotocol StepP (step [t a & r]))
-      (defrecord StepR [f] StepP (step [t a & r] (if (empty? r) [f a] (recur t (first r) (rest r)))))
+      (defrecord StepR [f] StepP (step [t a & r] (if (empty? r) [f a] (recur (first r) (rest r)))))
       (println (step (StepR. "f") :start [1]))
       (println (step (StepR. "f") :start nil))
       (extend-protocol StepP String (step [t a & r] (if (empty? r) a (recur t (first r) (rest r)))))
@@ -232,6 +233,34 @@ cases:
       [f nil]
       [1]
       nil
+  - name: recur-in-an-inline-method-passes-every-parameter-but-the-target
+    # Oracle clj 1.12.6.1673, every line: a recur in a deftype, defrecord or
+    # reify method (protocol or interface) passes every parameter but the
+    # target, which the method supplies itself and a let cannot substitute
+    # ((recur this acc) there is "Mismatched argument count to recur"); each
+    # arity of a multi-arity method is its own target. An extension body is a
+    # fn, whose recur passes the target too.
+    source: |
+      (defprotocol RcP (rc-m [x acc] [x acc k]))
+      (deftype RcC [n] RcP
+        (rc-m [this acc] (if (> acc 3) [n acc] (recur (inc acc))))
+        (rc-m [this acc k] (if (> acc k) [n acc k] (recur (inc acc) k))))
+      (println (rc-m (RcC. 7) 0) (rc-m (RcC. 7) 0 5))
+      (println (rc-m (RcC. 7) 0 100000))
+      (defrecord RcR [n] RcP (rc-m [this acc] (if (> acc 3) [n acc] (recur (inc acc)))))
+      (println (rc-m (RcR. 8) 0))
+      (println (rc-m (reify RcP (rc-m [this acc] (if (> acc 3) [:r acc] (let [this 5] (recur (inc acc)))))) 0))
+      (println (reduce + 0 (reify clojure.lang.IReduceInit
+                             (reduce [this f init] (if (> init 10) init (recur f (f init 3)))))))
+      (extend-protocol RcP String (rc-m [s acc] (if (> acc 3) [s acc] (recur s (inc acc)))))
+      (println (rc-m "s" 0))
+    expected: |
+      [7 4] [7 6 5]
+      [7 100001 100000]
+      [8 4]
+      [:r 4]
+      12
+      [s 4]
   - name: multi-arg-calls-to-collection-dispatched-multimethods
     # Oracle clj 1.12.6.1673: the dispatcher applies the dispatch function to
     # every call argument, and a keyword over two arguments is the lookup with
@@ -7588,6 +7617,28 @@ cases:
       Value out of range for byte | Value out of range for short | Value out of range for float | Value out of range for float | Value out of range for float | Value out of range for float
       :refused :refused :refused :refused :refused :refused :refused :refused
       [1] [127] "Value out of range for float"
+  - name: int-and-long-are-the-oracles-range-checked-casts
+    # Oracle-identical (clj 1.12.6), messages included: a literal argument takes the cast
+    # of its own type (a double literal's "Value out of range for int: 1.0E10"), any other
+    # the object cast (longCast first, so the same double through a var is "integer
+    # overflow"). Only the class of a non-number's refusal is pinned (the texts differ).
+    source: |
+      (defn ilc [f] (try (pr-str (f)) (catch Exception e (str (cond (instance? ArithmeticException e) "AE" (instance? IllegalArgumentException e) "IAE" :else "other") " " (ex-message e)))))
+      (defn ilc-refused [f] (try (f) :no (catch Exception e :refused)))
+      (def ilc-d10 1e10) (def ilc-d19 1e19) (def ilc-l 3000000000) (def ilc-r 30000000001/2) (def ilc-inf ##-Inf) (def ilc-nan ##NaN) (def ilc-big 92233720368547758080)
+      (println (ilc #(long 1e19)) "|" (ilc #(long 9.223372036854776E18)) "|" (ilc #(long -9.223372036854776E18)) "|" (ilc #(long 92233720368547758080N)) "|" (ilc #(long ##NaN)) "|" (ilc #(long ##Inf)))
+      (println (ilc #(int 3000000000)) "|" (ilc #(int 1e10)) "|" (ilc #(int ##Inf)) "|" (ilc #(int ##NaN)) "|" (ilc #(int -2147483648.5)) "|" (ilc #(int 99999999999999999999)))
+      (println (int 2.7) (long -2.7) (int 7/2) (long -7/2) (int \a) (long \a) (int 2147483647) (int -2147483648) (long 9223372036854775807) (long -9223372036854775808) (long 1.5e18))
+      (println (ilc #(int ilc-d10)) "|" (ilc #(long ilc-d19)) "|" (ilc #(int ilc-l)) "|" (ilc #(int ilc-r)) "|" (ilc #(long ilc-inf)) "|" (ilc #(long ilc-nan)) "|" (ilc #(int ilc-big)))
+      (println (ilc #(doall (map int [1e10]))) "|" (ilc #(doall (map long [1e19]))) "|" (ilc #(apply int [3000000000])) "|" (map int [2.5 -2.5 1/2]) (map long [\b 7]) (apply long [9.5]))
+      (println (map ilc-refused [#(int nil) #(long nil) #(int "a") #(long :k) #(apply int [1 2])]))
+    expected: |
+      IAE Value out of range for long: 1.0E19 | 9223372036854775807 | -9223372036854775808 | IAE Value out of range for long: 92233720368547758080 | 0 | IAE Value out of range for long: Infinity
+      AE integer overflow | IAE Value out of range for int: 1.0E10 | IAE Value out of range for int: Infinity | 0 | IAE Value out of range for int: -2.1474836485E9 | IAE Value out of range for long: 99999999999999999999
+      2 -2 3 -3 97 97 2147483647 -2147483648 9223372036854775807 -9223372036854775808 1500000000000000000
+      AE integer overflow | IAE Value out of range for long: 1.0E19 | AE integer overflow | AE integer overflow | IAE Value out of range for long: -Infinity | 0 | IAE Value out of range for long: 92233720368547758080
+      AE integer overflow | IAE Value out of range for long: 1.0E19 | AE integer overflow | (2 -2 0) (98 7) 9
+      (:refused :refused :refused :refused :refused)
   - name: number-conversions-bigint-bigdec-rationalize-and-the-unchecked-casts
     # Oracle-identical (clj 1.12.6) in the values; the representation deviates (see
     # decimal-and-bigint-literals-are-plain-rationals), so a bigint prints through str and a
@@ -8155,6 +8206,220 @@ cases:
     expected: |
       ("Duplicate key: 1" "Duplicate key: (1)" "Duplicate key: [1]" "Duplicate key: {:a 1, :b 2}" "Duplicate key: #{1 2}" "Duplicate key: a" "Duplicate key: null" "Duplicate key: a" "Duplicate key: a" "Duplicate key: (1)" "Duplicate key: [1]")
       [:a :b 2] 4 "Map literal must contain an even number of forms"
+  - name: inst-literals-print-compare-and-key-like-the-oracles-dates
+    # An #inst literal is the oracle's java.util.Date: printed as #inst in UTC under
+    # print and pr alike, str its toString in UTC, = and compare by its milliseconds, a map
+    # or set key found by =. Every line is the oracle's (clj 1.12.6), on all four backends.
+    source: |
+      (def tv-d #inst "2020-06-15T10:20:30.456+02:00")
+      (prn tv-d)
+      (println tv-d (str tv-d) (inst? tv-d) (inst-ms tv-d))
+      (println (= tv-d #inst "2020-06-15T08:20:30.456Z") (compare tv-d #inst "2021") (compare #inst "2021" tv-d) (compare tv-d nil))
+      (prn (sort [#inst "2021" #inst "1000-01-01" tv-d]) (sorted-set #inst "2021" #inst "2019" #inst "2020"))
+      (prn [#inst "2020" #inst "2020-02" #inst "2020-02-29T23:59:60-01:30" #inst "2020-01-01T10:20:30.123456789Z"])
+      (prn (str [tv-d]) (pr-str tv-d) (print-str tv-d) (format "%s" #inst "2020"))
+      (println (get {#inst "2020" :a} #inst "2020-01-01T00:00:00Z") (contains? #{tv-d} #inst "2020-06-15T08:20:30.456Z"))
+      (prn (distinct [#inst "2020" #inst "2020-01-01T00:00Z" #inst "2021"]))
+    expected: |
+      #inst "2020-06-15T08:20:30.456-00:00"
+      #inst "2020-06-15T08:20:30.456-00:00" Mon Jun 15 08:20:30 UTC 2020 true 1592209230456
+      true -1 1 1
+      (#inst "1000-01-01T00:00:00.000-00:00" #inst "2020-06-15T08:20:30.456-00:00" #inst "2021-01-01T00:00:00.000-00:00") #{#inst "2019-01-01T00:00:00.000-00:00" #inst "2020-01-01T00:00:00.000-00:00" #inst "2021-01-01T00:00:00.000-00:00"}
+      [#inst "2020-01-01T00:00:00.000-00:00" #inst "2020-02-01T00:00:00.000-00:00" #inst "2020-03-01T01:30:00.000-00:00" #inst "2020-01-01T10:20:30.123-00:00"]
+      "[#inst \"2020-06-15T08:20:30.456-00:00\"]" "#inst \"2020-06-15T08:20:30.456-00:00\"" "#inst \"2020-06-15T08:20:30.456-00:00\"" "Wed Jan 01 00:00:00 UTC 2020"
+      :a true
+      (#inst "2020-01-01T00:00:00.000-00:00" #inst "2021-01-01T00:00:00.000-00:00")
+  - name: inst-literals-take-the-julian-calendar-before-1582-like-the-oracle
+    # A date before 1582-10-15 is the Julian calendar's, like the oracle's
+    # GregorianCalendar (1582-10-10 is the Julian date of 1582-10-20). The oracle's compiler
+    # embeds a Date constant by printing it and reading it back, so a literal of the year 0
+    # (1 BC) comes back as the year 1. Every line is the oracle's (clj 1.12.6), on all four
+    # backends.
+    source: |
+      (prn [#inst "1582-10-04" #inst "1582-10-10" #inst "1582-10-15" #inst "1000-01-01"])
+      (println (map inst-ms [#inst "1582-10-04" #inst "1582-10-15" #inst "1000-01-01" #inst "0001-01-01"]))
+      (println (str #inst "0999-03-04T05:06:07") "/" (str #inst "1582-10-04"))
+      (prn #inst "0000-01-01" (inst-ms #inst "0000-01-01") (str #inst "0000-01-01T00:00:00+01:00"))
+      (prn (read-string "#inst \"0000-01-01T00:00:00+01:00\"") (str (read-string "#inst \"0000-01-01T00:00:00+01:00\"")))
+    expected: |
+      [#inst "1582-10-04T00:00:00.000-00:00" #inst "1582-10-20T00:00:00.000-00:00" #inst "1582-10-15T00:00:00.000-00:00" #inst "1000-01-01T00:00:00.000-00:00"]
+      (-12219379200000 -12219292800000 -30609792000000 -62135769600000)
+      Sat Mar 04 05:06:07 UTC 999 / Thu Oct 04 00:00:00 UTC 1582
+      #inst "0001-01-01T00:00:00.000-00:00" -62135769600000 "Sun Dec 31 23:00:00 UTC 2"
+      #inst "0002-12-31T23:00:00.000-00:00" "Wed Dec 31 23:00:00 UTC 2"
+  - name: uuid-literals-print-compare-and-parse-like-the-oracles-uuids
+    # A #uuid literal is the oracle's java.util.UUID: printed as #uuid, str its
+    # canonical lowercase spelling, compare by its halves as signed longs (so f... sorts
+    # before 0...), parse-uuid UUID.fromString's lenient read or nil. Every line is the
+    # oracle's (clj 1.12.6), on all four backends.
+    source: |
+      (def tv-u #uuid "550e8400-e29b-41d4-a716-446655440000")
+      (prn tv-u #uuid "1-1-1-1-1")
+      (println tv-u (str tv-u) (uuid? tv-u) (uuid? (str tv-u)) (= tv-u (parse-uuid "550E8400-E29B-41D4-A716-446655440000")))
+      (println (compare tv-u #uuid "f50e8400-e29b-41d4-a716-446655440001") (compare tv-u tv-u) (compare nil tv-u))
+      (prn (sort [#uuid "80000000-0000-0000-0000-000000000000" #uuid "00000000-0000-0000-0000-000000000002" #uuid "7fffffff-0000-0000-0000-000000000000"]))
+      (prn (map parse-uuid ["1-1-1-1-1" "+1-1-1-1-1" "123456789-1-1-1-1" "1-1-1-1-fffffffffffff" "-1-1-1-1-1" "1--1-1-1-1" "1-1-1-1-1-1" "550e8400-e29b-41d4-a716-4466554400000" "" "0x1-1-1-1-1" "550e8400-e29b-41d4-a716-44665544000g"]))
+      (let [r (random-uuid)] (println (uuid? r) (.version r) (.variant r) (= r (parse-uuid (str r))) (count (str r)) (= r (random-uuid))))
+      (prn (into (sorted-map) {#uuid "2-2-2-2-2" :b #uuid "1-1-1-1-1" :a}) (get {tv-u 1} (parse-uuid (str tv-u))))
+    expected: |
+      #uuid "550e8400-e29b-41d4-a716-446655440000" #uuid "00000001-0001-0001-0001-000000000001"
+      #uuid "550e8400-e29b-41d4-a716-446655440000" 550e8400-e29b-41d4-a716-446655440000 true false true
+      1 0 -1
+      (#uuid "80000000-0000-0000-0000-000000000000" #uuid "00000000-0000-0000-0000-000000000002" #uuid "7fffffff-0000-0000-0000-000000000000")
+      (#uuid "00000001-0001-0001-0001-000000000001" #uuid "00000001-0001-0001-0001-000000000001" #uuid "23456789-0001-0001-0001-000000000001" #uuid "00000001-0001-0001-0001-ffffffffffff" nil nil nil nil nil nil nil)
+      true 4 2 true 36 false
+      {#uuid "00000001-0001-0001-0001-000000000001" :a, #uuid "00000002-0002-0002-0002-000000000002" :b} 1
+  - name: inst-and-uuid-predicates-and-refusals-are-the-oracles
+    # inst? takes a Date (and a Timestamp), uuid? a UUID; inst-ms of anything else
+    # is the Inst protocol's refusal, and compare across kinds the oracle's
+    # ClassCastException. Every line is the oracle's (clj 1.12.6), on all four backends.
+    source: |
+      (println (map inst? [#inst "2020" #uuid "1-1-1-1-1" nil "2020" 1]) (map uuid? [#inst "2020" #uuid "1-1-1-1-1" nil "x"]))
+      (println (try (inst-ms "2020") (catch IllegalArgumentException e (ex-message e))))
+      (println (try (inst-ms* nil) (catch IllegalArgumentException e (ex-message e))))
+      (println (try (compare #inst "2020" #uuid "1-1-1-1-1") (catch ClassCastException e "ClassCastException")))
+      (println (try (parse-uuid nil) (catch NullPointerException e "NullPointerException")) (try (parse-uuid 1) (catch ClassCastException e "ClassCastException")))
+      (println (.getTime #inst "1970-01-01T00:00:01Z") (.before #inst "2020" #inst "2021") (.after #inst "2020" #inst "2021") (.compareTo #inst "2020" #inst "2021"))
+      (println (.getMostSignificantBits #uuid "1-1-1-1-1") (.getLeastSignificantBits #uuid "ffffffff-ffff-ffff-ffff-ffffffffffff") (.variant #uuid "1-1-1-c000-1") (.toString #uuid "1-1-1-1-1"))
+    expected: |
+      (true false false false false) (false true false false)
+      No implementation of method: :inst-ms* of protocol: #'clojure.core/Inst found for class: java.lang.String
+      No implementation of method: :inst-ms* of protocol: #'clojure.core/Inst found for class: nil
+      ClassCastException
+      NullPointerException ClassCastException
+      1000 true false -1
+      4295032833 -1 6 00000001-0001-0001-0001-000000000001
+  - name: read-string-and-clojure-edn-read-inst-and-uuid-like-the-oracle
+    # read-string and clojure.edn read #inst and #uuid through the oracle's default
+    # data readers (EDN's :readers first, then those, then :default), refusing a timestamp
+    # or UUID they do not take in the oracle's words; inside a preserved reader conditional
+    # a tag stays a tagged literal. Every line is the oracle's (clj 1.12.6), on all four
+    # backends.
+    source: |
+      (prn (read-string "[#inst \"1582-10-10\" #uuid \"1-1-1-1-1\" #inst \"2020-01-01T23:59:60+01:00\"]"))
+      (prn (clojure.edn/read-string "#inst \"2020-01-01T10:20:30.123456789+05:30\"") (clojure.edn/read-string "#uuid \"FFFFFFFF-ffff-FFFF-ffff-FFFFFFFFFFFF\""))
+      (prn (clojure.edn/read-string {:readers {'inst identity}} "#inst \"2020\"") (clojure.edn/read-string {:readers {'uuid str}} "#uuid \"x\"") (clojure.edn/read-string {:default vector} "#inst \"2020\""))
+      (prn (read-string {:read-cond :preserve} "#?(:clj #inst \"2020\")") (read-string {:read-cond :allow} "#?(:clj #inst \"2020\")"))
+      (doseq [s ["#inst \"2021-02-29\"" "#inst \"2020-13\"" "#inst \"2020-01-01T24:00\"" "#inst \"2020-01-01T23:58:60\"" "#inst \"2020-01-01T10:20:30+24:00\"" "#inst \"2020-01-01T10:20:30+0530\"" "#inst \"2020-1-1\"" "#uuid \"bad\"" "#uuid \"1-1-1-1-g\"" "#uuid \"1-1-1-1-8000000000000000\"" "#uuid \"1-1-1-1-\"" "#uuid \"0000000000000000000000000000000000001\"" "#uuid 1" "{#inst \"2020\" 1 #inst \"2020-01-01T00:00:00Z\" 2}" "#{#uuid \"1-1-1-1-1\" #uuid \"00000001-0001-0001-0001-000000000001\"}"]]
+        (println (try (read-string s) (catch Exception e (str (.getName (class e)) ": " (ex-message e))))))
+    expected: |
+      [#inst "1582-10-20T00:00:00.000-00:00" #uuid "00000001-0001-0001-0001-000000000001" #inst "2020-01-01T23:00:00.000-00:00"]
+      #inst "2020-01-01T04:50:30.123-00:00" #uuid "ffffffff-ffff-ffff-ffff-ffffffffffff"
+      "2020" "x" #inst "2020-01-01T00:00:00.000-00:00"
+      #?(:clj #inst "2020") #inst "2020-01-01T00:00:00.000-00:00"
+      java.lang.RuntimeException: failed: (<= 1 days (days-in-month months (leap-year? years)))
+      java.lang.RuntimeException: failed: (<= 1 months 12)
+      java.lang.RuntimeException: failed: (<= 0 hours 23)
+      java.lang.RuntimeException: failed: (<= 0 seconds (if (= minutes 59) 60 59))
+      java.lang.RuntimeException: failed: (<= 0 offset-hours 23)
+      java.lang.RuntimeException: Unrecognized date/time syntax: 2020-01-01T10:20:30+0530
+      java.lang.RuntimeException: Unrecognized date/time syntax: 2020-1-1
+      java.lang.IllegalArgumentException: Invalid UUID string: bad
+      java.lang.NumberFormatException: Error at index 0 in: "g"
+      java.lang.NumberFormatException: Error at index 15 in: "8000000000000000"
+      java.lang.NumberFormatException: For input string: "" under radix 16
+      java.lang.IllegalArgumentException: UUID string too large
+      java.lang.IllegalArgumentException: #uuid data reader expected string
+      java.lang.IllegalArgumentException: Duplicate key: Wed Jan 01 00:00:00 UTC 2020
+      java.lang.IllegalArgumentException: Duplicate key: 00000001-0001-0001-0001-000000000001
+  - name: clojure-instant-parses-validates-and-reads-three-instants
+    # The built-in clojure.instant: parse-timestamp matches like the oracle's pattern
+    # (2020-05:30 is the year 2020 at -05:30), validated checks in the oracle's order and
+    # words, and the three readers make a Date, a Timestamp (nanoseconds kept, = and compare
+    # against a Date one-sided like the oracle's) and a Calendar (its offset kept, = by
+    # instant and zone). Every line is the oracle's (clj 1.12.6), on all four backends.
+    source: |
+      (require '[clojure.instant :as tv-inst])
+      (prn (tv-inst/parse-timestamp vector "2020-01-01T10:20:30.123456789+05:30") (tv-inst/parse-timestamp vector "2020-05:30") (tv-inst/parse-timestamp vector "2020Z"))
+      (prn ((tv-inst/validated vector) 2020 2 29 0 59 60 0 -1 23 59))
+      (println (try ((tv-inst/validated vector) 2021 2 29 0 0 0 0 0 0 0) (catch RuntimeException e (ex-message e))))
+      (println (try (tv-inst/parse-timestamp vector "2020-01-01T10:20:30.Z") (catch RuntimeException e (ex-message e))))
+      (prn (tv-inst/read-instant-date "2020-01-01T10:20:30.5-01:00") (tv-inst/read-instant-timestamp "1969-12-31T23:59:59.5Z") (inst-ms (tv-inst/read-instant-timestamp "1969-12-31T23:59:59.5Z")))
+      (println (str (tv-inst/read-instant-timestamp "2020-01-01T00:00:00.120")) (str (tv-inst/read-instant-timestamp "2020-01-01")))
+      (prn (tv-inst/read-instant-calendar "2020-01-01T10:20:30.123456789+05:30") (tv-inst/read-instant-calendar "2020-01-01T00:00:00-00:00"))
+      (println (= (tv-inst/read-instant-calendar "2020-01-01T00:00:00-00:00") (tv-inst/read-instant-calendar "2020-01-01T00:00:00Z")) (= (tv-inst/read-instant-calendar "2020") (tv-inst/read-instant-calendar "2020-01-01T00:00:00Z")))
+      (println (inst? (tv-inst/read-instant-calendar "2020")) (inst? (tv-inst/read-instant-timestamp "2020")))
+      (let [d #inst "2020" ts (tv-inst/read-instant-timestamp "2020-01-01T00:00:00.0005Z")] (println (= d ts) (= ts d) (compare d ts) (compare ts d)))
+      (prn (clojure.edn/read-string {:readers {'inst tv-inst/read-instant-timestamp}} "#inst \"2020-01-01T00:00:00.123456789+01:00\""))
+    expected: |
+      [2020 1 1 10 20 30 123456789 1 5 30] [2020 1 1 0 0 0 0 -1 5 30] [2020 1 1 0 0 0 0 0 0 0]
+      [2020 2 29 0 59 60 0 -1 23 59]
+      failed: (<= 1 days (days-in-month months (leap-year? years)))
+      Unrecognized date/time syntax: 2020-01-01T10:20:30.Z
+      #inst "2020-01-01T11:20:30.500-00:00" #inst "1969-12-31T23:59:59.500000000-00:00" -500
+      2020-01-01 00:00:00.12 2020-01-01 00:00:00.0
+      #inst "2020-01-01T10:20:30.123+05:30" #inst "2020-01-01T00:00:00.000+00:00"
+      false true
+      false true
+      true false 0 1
+      #inst "2019-12-31T23:00:00.123456789-00:00"
+  - name: data-readers-read-a-tag-at-run-time-like-the-oracle
+    # *data-readers* maps a tag symbol to the function read-string and read call for its
+    # tagged literals (#my.ns/tag too: only a dotted name is a record class), ahead of the
+    # default #inst and #uuid readers; *default-data-reader-fn* takes the tag and the value
+    # of a tag none of them reads; a nil answer is the oracle's No dispatch macro, a
+    # thrown exception the function's own. Without a data_readers file *data-readers* starts
+    # empty, and default-data-readers names the two defaults' vars. Every line is the
+    # oracle's (clj 1.12.6.1673, 2026-10-08), on all four backends.
+    source: |
+      (defn dr-tag [x] [:tagged x])
+      (prn (binding [*data-readers* {'my/tag dr-tag 'my.ns/tag #'dr-tag}] [(read-string "#my/tag 1") (read-string "#my.ns/tag 2")]))
+      (prn (binding [*data-readers* {'my/tag (fn [x] nil)}] (try (read-string "#my/tag 1") (catch Exception e (ex-message e)))))
+      (prn (binding [*data-readers* {'inst (fn [x] [:inst x])}] (read-string "#inst \"2020\"")))
+      (prn (binding [*default-data-reader-fn* (fn [t v] [t v])] [(read-string "#foo/bar 3") (read-string "#inst \"1970\"")]))
+      (prn (binding [*default-data-reader-fn* (fn [t v] nil)] (try (read-string "#foo/bar 1") (catch Exception e (ex-message e)))))
+      (prn (binding [*data-readers* {'k/w :k}] (read-string "#k/w {:k 4}")))
+      (prn (try (read-string "#my.ns/tag 1") (catch Exception e (ex-message e))))
+      (prn *data-readers* *default-data-reader-fn*)
+      (prn (get default-data-readers 'inst) (get default-data-readers 'uuid) (count default-data-readers))
+      (prn ((get default-data-readers 'uuid) "1-1-1-1-1") (try ((get default-data-readers 'uuid) 1) (catch Exception e (ex-message e))))
+      (prn (with-in-str "#my/tag [1 2]" (binding [*data-readers* {'my/tag dr-tag}] (read))))
+      (prn (binding [*data-readers* {'my/tag dr-tag}] (read-string "[#my/tag #my/tag 1 #_#my/tag 2]")))
+      (prn (binding [*data-readers* {'my/tag (fn [x] (throw (ex-info "no" {:x x})))}] (try (read-string "#my/tag 1") (catch clojure.lang.ExceptionInfo e [(ex-message e) (ex-data e)]))))
+    expected: |
+      [[:tagged 1] [:tagged 2]]
+      "No dispatch macro for: m"
+      [:inst "2020"]
+      [[foo/bar 3] #inst "1970-01-01T00:00:00.000-00:00"]
+      "No dispatch macro for: f"
+      4
+      "No reader function for tag my.ns/tag"
+      {} nil
+      #'clojure.instant/read-instant-date #'clojure.uuid/default-uuid-reader 2
+      #uuid "00000001-0001-0001-0001-000000000001" "#uuid data reader expected string"
+      [:tagged [1 2]]
+      [[:tagged [:tagged 1]]]
+      ["no" {:x 1}]
+  - name: inst-and-uuid-values-dispatch-and-cross-macros-like-the-oracles
+    # A multimethod on class and a protocol dispatch on java.util.Date and
+    # java.util.UUID (a Timestamp takes the Date method through the class hierarchy), instance?
+    # reads their classes, and a macro both takes and answers one. Every line is the
+    # oracle's (clj 1.12.6), on all four backends.
+    source: |
+      (defmulti tv-kind class)
+      (defmethod tv-kind java.util.Date [_] :date)
+      (defmethod tv-kind java.util.UUID [_] :uuid)
+      (defmethod tv-kind :default [_] :other)
+      (println (map tv-kind [#inst "2020" #uuid "1-1-1-1-1" (clojure.instant/read-instant-timestamp "2020") (clojure.instant/read-instant-calendar "2020") 1]))
+      (defprotocol TvStamp (tv-stamp [x]))
+      (extend-protocol TvStamp java.util.Date (tv-stamp [x] (inst-ms x)) java.util.UUID (tv-stamp [x] (str x)))
+      (println (map tv-stamp [#inst "1970-01-01T00:00:01Z" #uuid "1-1-1-1-1"]) (satisfies? TvStamp #inst "2020"))
+      (println (instance? java.util.Date #inst "2020") (instance? Comparable #uuid "1-1-1-1-1") (instance? java.util.UUID #inst "2020") (instance? java.util.Date (clojure.instant/read-instant-timestamp "2020")) (instance? java.util.Calendar (clojure.instant/read-instant-calendar "2020")))
+      (defmacro tv-macro-inst [] #inst "2021-03-04")
+      (defmacro tv-macro-ms [x] (inst-ms x))
+      (println (tv-macro-inst) (tv-macro-ms #inst "1970-01-01T00:00:02Z"))
+      (prn '[#inst "2020" #uuid "1-1-1-1-1"] `(tv-a #inst "2020"))
+      (require '[clojure.pprint :as tv-pp])
+      (tv-pp/pprint [#inst "2020-06-15T10:20:30.456Z" #uuid "550e8400-e29b-41d4-a716-446655440000" {:at #inst "2020"}])
+    expected: |
+      (:date :uuid :date :other :other)
+      (1000 00000001-0001-0001-0001-000000000001) true
+      true true false true true
+      #inst "2021-03-04T00:00:00.000-00:00" 2000
+      [#inst "2020-01-01T00:00:00.000-00:00" #uuid "00000001-0001-0001-0001-000000000001"] (user/tv-a #inst "2020-01-01T00:00:00.000-00:00")
+      [#inst "2020-06-15T10:20:30.456-00:00"
+       #uuid "550e8400-e29b-41d4-a716-446655440000"
+       {:at #inst "2020-01-01T00:00:00.000-00:00"}]
   - name: clojure-template-substitutes-per-group-of-values
     # The built-in clojure.template (.kb/clojure-frontend.md "clojure.jar namespaces"):
     # apply-template substitutes at any depth, do-template expands to one copy per
@@ -8553,6 +8818,89 @@ cases:
       [:x 1] :init
       6 0
       #datafy_nav.Node{:id 0} 5
+  - name: clojure-datafy-of-an-exception-and-a-ref-like-the-oracle
+    # clojure.datafy's Throwable and IRef rows (.kb/clojure-frontend.md "clojure.jar
+    # namespaces"): an exception datafies to Throwable->map's map with its class in the
+    # metadata, an atom, a ref and an agent to [value], a volatile to itself. Each part is
+    # printed alone, since a map of several keys prints in another order on wasm. Every line
+    # is the oracle's (clj 1.12.6), on all four backends.
+    source: |
+      (ns datafy-throwable (:require [clojure.datafy :as d]))
+      (def dt (d/datafy (ex-info "boom" {:a 1} (Exception. "root"))))
+      (prn (map :type (:via dt)) (map :message (:via dt)) (:data (first (:via dt))))
+      (prn (:cause dt) (:data dt) (::d/class (meta dt)) (ex-message (::d/obj (meta dt))))
+      (prn (d/datafy (atom 1)) (d/datafy (ref 2)) (d/datafy (agent 3)) (volatile? (d/datafy (volatile! 4))))
+      (in-ns 'user)
+    expected: |
+      (clojure.lang.ExceptionInfo java.lang.Exception) ("boom" "root") {:a 1}
+      "root" nil clojure.lang.ExceptionInfo "boom"
+      [1] [2] [3] true
+  - name: throwable-to-map-answers-the-oracles-map-without-frames
+    # Throwable->map (.kb/clojure-frontend.md "Exceptions"): :via down the cause chain with
+    # each throwable's class symbol, message and data, the root's :cause and :data, :phase
+    # from the outer data. A deviation: a throwable has no frames here, so :trace is [] and
+    # no :via map has :at (the oracle's frames and :at), what the oracle answers for an
+    # empty stack trace -- the first three lines. Each part is printed alone (a map of
+    # several keys prints in another order on wasm); the rest is the oracle's (clj 1.12.6).
+    source: |
+      (def tm1 (Throwable->map (ex-info "outer" {:b 2} (ex-info "inner" {:c 3}))))
+      (prn (map :type (:via tm1)) (map :message (:via tm1)) (map :data (:via tm1)) (:trace tm1) (:cause tm1) (:data tm1))
+      (def tm2 (Throwable->map (Exception. "e" (IllegalStateException. "ise"))))
+      (prn (map :type (:via tm2)) (:cause tm2) (contains? tm2 :data) (contains? (first (:via tm2)) :at))
+      (prn (:via (Throwable->map (Exception.))) (sort (map name (keys (Throwable->map (Exception.))))))
+      (prn (:phase (Throwable->map (ex-info "a" {:clojure.error/phase :compile}))))
+      (prn (map (comp :type first :via Throwable->map) [(ex-info "a" {}) (RuntimeException. "r")]))
+      (prn (:type (first (:via (Throwable->map (try (/ 1 0) (catch Exception e e)))))))
+      (prn (try (Throwable->map 1) (catch ClassCastException e :cce)) (try (Throwable->map nil) (catch NullPointerException e :npe)))
+    expected: |
+      (clojure.lang.ExceptionInfo clojure.lang.ExceptionInfo) ("outer" "inner") ({:b 2} {:c 3}) [] "inner" {:c 3}
+      (java.lang.Exception java.lang.IllegalStateException) "ise" false false
+      [{:type java.lang.Exception}] ("trace" "via")
+      :compile
+      (clojure.lang.ExceptionInfo java.lang.RuntimeException)
+      java.lang.ArithmeticException
+      :cce :npe
+  - name: a-protocol-extended-to-throwables-and-refs-walks-the-oracles-classes
+    # A protocol extended to a class no value's own class is (.kb/clojure-frontend.md
+    # "Dispatch"): a throwable, an interface over core kinds, java.util.Date for a Timestamp.
+    # Past an exact miss the dispatcher tries the superclasses, then the interfaces, each
+    # ahead of its supertypes, then Object, like the oracle's protocol lookup; satisfies?
+    # walks alike, extends? names the exact class only. Every line is the oracle's (clj
+    # 1.12.6), on all four backends.
+    source: |
+      (require 'clojure.instant)
+      (defprotocol WalkP (walk-m [x]))
+      (extend-protocol WalkP
+        Throwable (walk-m [_] :throwable)
+        Exception (walk-m [_] :exception)
+        clojure.lang.IExceptionInfo (walk-m [_] :iexinfo)
+        clojure.lang.IDeref (walk-m [_] :ideref)
+        clojure.lang.IRef (walk-m [_] :iref)
+        Object (walk-m [_] :object))
+      (prn (walk-m (ex-info "a" {})) (walk-m (RuntimeException. "r")) (walk-m (Error. "e")) (walk-m (AssertionError. "x")))
+      (prn (walk-m (atom 1)) (walk-m (volatile! 1)) (walk-m (ref 1)) (walk-m (agent 1)) (walk-m #'walk-m) (walk-m 5))
+      (defprotocol WalkQ (walk-q [x]))
+      (extend-protocol WalkQ clojure.lang.IExceptionInfo (walk-q [_] :iexinfo) Object (walk-q [_] :object))
+      (prn (walk-q (ex-info "a" {})) (walk-q (Exception. "x")))
+      (defprotocol WalkR (walk-r [x]))
+      (extend-type Exception WalkR (walk-r [_] :ex))
+      (prn (walk-r (IllegalStateException. "x")) (satisfies? WalkR (Exception.)) (satisfies? WalkR (Error.)))
+      (prn (extends? WalkR Exception) (extends? WalkR RuntimeException))
+      (prn (try (walk-r (Error.)) (catch IllegalArgumentException e :no-implementation)))
+      (defprotocol WalkS (walk-s [x]))
+      (extend clojure.lang.IRef WalkS {:walk-s (fn [_] :iref)})
+      (extend-protocol WalkS java.util.Date (walk-s [_] :date))
+      (prn (walk-s (atom 1)) (satisfies? WalkS (atom 1)) (satisfies? WalkS (volatile! 1)))
+      (prn (walk-s #inst "2020-01-01") (walk-s (clojure.instant/read-instant-timestamp "2020-01-01")))
+    expected: |
+      :exception :exception :throwable :throwable
+      :iref :ideref :iref :iref :iref :object
+      :iexinfo :object
+      :ex true false
+      true false
+      :no-implementation
+      :iref true false
+      :date :date
   - name: clojure-stacktrace-prints-throwables-like-the-oracle
     # The built-in clojure.stacktrace (.kb/clojure-frontend.md "clojure.jar namespaces"):
     # root-cause through a chain of causes, print-throwable of an ex-info (its data on a line
@@ -8868,6 +9216,172 @@ cases:
     expected: |
       [1 2 3] [:i 1 2 3 4 5]
       [2 3 4] 6 4 (2 3 4)
+  - name: a-type-implementing-ireduceinit-ireduce-or-ikvreduce-reduces-through-it
+    # clojure.lang.IReduceInit, IReduce and IKVReduce in a reify or deftype body
+    # (.kb/clojure-frontend.md "Host interfaces"): reduce with an init, into, transduce,
+    # mapv, filterv, vec, set, frequencies, group-by and run! hand the value to its reduce,
+    # the init-less reduce to IReduce's (an IReduceInit alone is the oracle's
+    # ClassCastException), reduce-kv and update-vals to its kvreduce; seq and count stay
+    # refused. Every line is the oracle's (clj 1.12.6), on all four backends.
+    source: |
+      (ns iface-reduce)
+      (def four (reify clojure.lang.IReduceInit
+                  (reduce [_ f init]
+                    (loop [acc init i 0]
+                      (if (< i 4)
+                        (let [r (f acc i)] (if (reduced? r) @r (recur r (inc i))))
+                        acc)))))
+      (prn (reduce + 100 four) (reduce (fn [a x] (if (= x 2) (reduced a) (+ a x))) 0 four) (into [] four) (into [] (map inc) four) (transduce (map inc) + four))
+      (prn (mapv inc four) (filterv even? four) (vec four) (sort (set four)) (sort (frequencies four)) (get (group-by odd? four) true))
+      (run! print four)
+      (println)
+      (prn (try (reduce + four) (catch ClassCastException e :no-ireduce)) (try (seq four) (catch IllegalArgumentException e :no-seq)) (try (count four) (catch UnsupportedOperationException e :no-count)))
+      (prn (instance? clojure.lang.IReduceInit four) (instance? clojure.lang.IReduce four) (.reduce four + 1))
+      (deftype Tens [n]
+        clojure.lang.IReduce
+        (reduce [_ f] (reduce f (range 10 (* 10 (inc n)) 10)))
+        (reduce [_ f init] (reduce f init (range 10 (* 10 (inc n)) 10))))
+      (prn (reduce + (Tens. 3)) (reduce + 1 (Tens. 3)) (into [] (Tens. 2)) (instance? clojure.lang.IReduceInit (Tens. 1)))
+      (deftype Pairs [] clojure.lang.IKVReduce (kvreduce [_ f init] (f (f init :a 1) :b 2)))
+      (prn (reduce-kv (fn [acc k v] (conj acc [k v])) [] (Pairs.)) (sort (update-vals (Pairs.) inc)))
+      (in-ns 'user)
+    expected: |
+      106 1 [0 1 2 3] [1 2 3 4] 10
+      [1 2 3 4] [0 2] [0 1 2 3] (0 1 2 3) ([0 1] [1 1] [2 1] [3 1]) [1 3]
+      0123
+      :no-ireduce :no-seq :no-count
+      true false 7
+      60 61 [10 20] true
+      [[:a 1] [:b 2]] ([:a 2] [:b 3])
+  - name: a-seqable-type-seqs-through-its-seq
+    # clojure.lang.Seqable (.kb/clojure-frontend.md "Host interfaces"): the seq view --
+    # seq, first, rest, map, filter, into, reduce, apply, for, last -- reads the value's
+    # seq, lazily where the oracle's verbs are lazy, so an endless one answers take;
+    # count and nth stay refused, and a seq answering no seq is the oracle's
+    # ClassCastException. Every line is the oracle's (clj 1.12.6), on all four backends.
+    source: |
+      (ns iface-seqable)
+      (def abc (reify clojure.lang.Seqable (seq [_] (list :a :b :c))))
+      (prn (seq abc) (first abc) (rest abc) (next abc) (second abc) (map name abc) (filter #{:a :c} abc) (into [] abc))
+      (prn (reduce conj [] abc) (apply str (map name abc)) (empty? abc) (empty? (reify clojure.lang.Seqable (seq [_] nil))) (seqable? abc) (coll? abc) (sequential? abc))
+      (prn (take 3 (map inc (reify clojure.lang.Seqable (seq [_] (iterate inc 0))))) (for [x abc] (name x)) (last abc) (reverse abc))
+      (prn (try (count abc) (catch UnsupportedOperationException e :no-count)) (try (nth abc 0) (catch UnsupportedOperationException e :no-nth)) (try (seq (reify clojure.lang.Seqable (seq [_] [1]))) (catch ClassCastException e :not-a-seq)))
+      (in-ns 'user)
+    expected: |
+      (:a :b :c) :a (:b :c) (:b :c) :b ("a" "b" "c") (:a :c) [:a :b :c]
+      [:a :b :c] "abc" false true true false false
+      (1 2 3) ("a" "b" "c") :c (:c :b :a)
+      :no-count :no-nth :not-a-seq
+  - name: a-counted-or-indexed-type-counts-and-indexes-through-its-methods
+    # clojure.lang.Counted and Indexed (.kb/clojure-frontend.md "Host interfaces"): count,
+    # counted?, empty? (counted? first, like the oracle's) and .count read count; nth of
+    # two and three arguments and vector destructuring the nth of that count; a method
+    # the body leaves out is the oracle's AbstractMethodError. Every line is the
+    # oracle's (clj 1.12.6), on all four backends.
+    source: |
+      (ns iface-counted)
+      (def three (reify clojure.lang.Counted (count [_] 3)))
+      (deftype Squares [n]
+        clojure.lang.Indexed
+        (nth [_ i] (if (< -1 i n) (* i i) (throw (IndexOutOfBoundsException.))))
+        (nth [_ i nf] (if (< -1 i n) (* i i) nf))
+        (count [_] n))
+      (prn (count three) (counted? three) (empty? three) (empty? (reify clojure.lang.Counted (count [_] 0))) (.count three))
+      (prn (count (Squares. 4)) (nth (Squares. 4) 3) (nth (Squares. 4) 9 :none) (let [[a b c] (Squares. 4)] [a b c]) (indexed? (Squares. 4)) (counted? (Squares. 4)) (instance? clojure.lang.Counted (Squares. 4)))
+      (prn (try (nth (Squares. 2) 5) (catch IndexOutOfBoundsException e :out)) (try (count (reify clojure.lang.Counted)) (catch AbstractMethodError e :abstract)))
+      (in-ns 'user)
+    expected: |
+      3 true false true 3
+      4 9 :none [0 1 4] true true true
+      :out :abstract
+  - name: an-ilookup-type-reads-through-the-valat-of-the-calls-count
+    # clojure.lang.ILookup (.kb/clojure-frontend.md "Host interfaces"): get, a keyword's
+    # or symbol's call, get-in and map destructuring call valAt over the key alone, or
+    # over the default when the call gives one; a count the body leaves out is the
+    # oracle's AbstractMethodError. Every line is the oracle's (clj 1.12.6), on all four
+    # backends.
+    source: |
+      (ns iface-lookup)
+      (def arity (reify clojure.lang.ILookup
+                   (valAt [_ k] [:two k])
+                   (valAt [_ k nf] [:three k nf])))
+      (prn (get arity :a) (get arity :a :d) (:b arity) (:b arity :d) ('c arity) (get-in {:u arity} [:u :e]))
+      (prn (let [{:keys [x]} arity] x) (let [{y :y :or {y :dy}} arity] y) (map? arity) (instance? clojure.lang.ILookup arity))
+      (prn (try (get (reify clojure.lang.ILookup (valAt [_ k] k)) :k :d) (catch AbstractMethodError e :abstract)))
+      (in-ns 'user)
+    expected: |
+      [:two :a] [:three :a :d] [:two :b] [:three :b :d] [:two c] [:two :e]
+      [:two :x] [:three :y :dy] false true
+      :abstract
+  - name: an-ifn-type-is-called-through-its-invoke-and-applied-through-its-apply-to
+    # clojure.lang.IFn (.kb/clojure-frontend.md "Host interfaces"): a call, map, filter and
+    # a record's call reach the invoke of the call's count, apply the applyTo (here
+    # through clojure.lang.AFn/applyToHelper, the usual body); a count or an applyTo the
+    # body leaves out is the oracle's AbstractMethodError. Every line is the oracle's
+    # (clj 1.12.6), on all four backends.
+    source: |
+      (ns iface-fn)
+      (def f (reify clojure.lang.IFn
+               (invoke [_] :none)
+               (invoke [_ a] [:one a])
+               (invoke [_ a b] [:two a b])
+               (applyTo [this args] (clojure.lang.AFn/applyToHelper this args))))
+      (prn (f) (f 1) (f 1 2) (apply f [1 2]) (map f [1 2]) (ifn? f) (fn? f))
+      (prn (try (f 1 2 3) (catch AbstractMethodError e :abstract)) (try (apply (reify clojure.lang.IFn (invoke [_ a] a)) [1]) (catch AbstractMethodError e :abstract)))
+      (defrecord Adder [n] clojure.lang.IFn (invoke [_ x] (+ n x)))
+      (prn ((->Adder 10) 5) (map (->Adder 1) [1 2]) (filter (reify clojure.lang.IFn (invoke [_ x] (odd? x))) [1 2 3]))
+      (prn (apply (reify clojure.lang.IFn (invoke [_ a] a) (applyTo [_ args] [:applied args])) [7]))
+      (in-ns 'user)
+    expected: |
+      :none [:one 1] [:two 1 2] [:two 1 2] ([:one 1] [:one 2]) true false
+      :abstract :abstract
+      15 (2 3) (1 3)
+      [:applied (7)]
+  - name: an-ideref-type-derefs-through-its-deref
+    # clojure.lang.IDeref (.kb/clojure-frontend.md "Host interfaces"): deref, @ and deref
+    # as a value. Every line is the oracle's (clj 1.12.6), on all four backends.
+    source: |
+      (ns iface-deref)
+      (deftype Box [v] clojure.lang.IDeref (deref [_] v))
+      (prn @(Box. 5) (deref (Box. :x)) (instance? clojure.lang.IDeref (Box. 1)) (map deref [(Box. 1) (atom 2)]))
+      (in-ns 'user)
+    expected: |
+      5 :x true (1 2)
+  - name: a-type-overriding-object-answers-str-and-equals-through-it
+    # Object's toString, equals and hashCode in a deftype, reify or defrecord body
+    # (.kb/clojure-frontend.md "Host interfaces"), under any group like the oracle's
+    # class: str and = read them, a record still prints its literal. A deviation: the
+    # oracle prints such a value as #object[iface_object$reify__410 0x7b60c3e "a reify"],
+    # its class's counter and identity hash, where the line below has neither.
+    source: |
+      (ns iface-object)
+      (deftype Money [cents]
+        Object
+        (toString [_] (str "$" (quot cents 100) "." (mod cents 100)))
+        (equals [_ o] (and (instance? Money o) (= cents (.-cents ^Money o))))
+        (hashCode [_] cents))
+      (prn (str (Money. 150)) (str "total: " (Money. 205)) (= (Money. 1) (Money. 1)) (= (Money. 1) (Money. 2)) (= (Money. 1) 1) (.hashCode (Money. 7)))
+      (defprotocol Named (label [x]))
+      (def r (reify Named (label [_] :lbl) (toString [_] "a reify")))
+      (prn (label r) (str r) (str [1 r]))
+      (defrecord Point [x y] Object (toString [_] (str "<" x "," y ">")))
+      (prn (str (->Point 1 2)) (->Point 1 2))
+      (in-ns 'user)
+    expected: |
+      "$1.50" "total: $2.5" true false false 7
+      :lbl "a reify" "[1 #object[iface_object$reify \"a reify\"]]"
+      "<1,2>" #iface_object.Point{:x 1, :y 2}
+  - name: a-deftype-implementing-iobj-carries-its-own-metadata
+    # clojure.lang.IMeta and IObj in a deftype body (.kb/clojure-frontend.md "Host
+    # interfaces"): meta, with-meta and vary-meta read and make it through meta and
+    # withMeta. Every line is the oracle's (clj 1.12.6), on all four backends.
+    source: |
+      (ns iface-meta)
+      (deftype Tagged [v m] clojure.lang.IObj (meta [_] m) (withMeta [_ m2] (Tagged. v m2)))
+      (prn (meta (Tagged. 1 {:a 1})) (meta (with-meta (Tagged. 1 nil) {:b 2})) (sort (meta (vary-meta (Tagged. 1 {:a 1}) assoc :c 3))) (instance? clojure.lang.IMeta (Tagged. 1 nil)))
+      (in-ns 'user)
+    expected: |
+      {:a 1} {:b 2} ([:a 1] [:c 3]) true
   - name: clojure-java-io-file-names-a-path
     # clojure.java.io/file and (java.io.File. ...) make a java.io.File value of this
     # front end's own on every backend: the path as java.io.File normalizes it on Unix

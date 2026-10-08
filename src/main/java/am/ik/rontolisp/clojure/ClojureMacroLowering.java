@@ -420,8 +420,9 @@ final class ClojureMacroLowering {
 	 * A macro answer back to a datum: the inverse of {@link #quote}, so the expansion
 	 * lowers the way the quoted call-site data would. Mangled symbols shed the prefix,
 	 * keyword and set wrappers answer their datum, a pattern its regex literal, vectors
-	 * and tables their literals, and a gensym ({@code #:}-spelled, uninterned) travels as
-	 * itself so the {@code #:} bypass lowers it back to the same symbol.
+	 * and tables their literals, a host UUID or instant its literal's marker
+	 * ({@link #decodeHostValue}), and a gensym ({@code #:}-spelled, uninterned) travels
+	 * as itself so the {@code #:} bypass lowers it back to the same symbol.
 	 */
 	static LispVal decodeDatum(ClojureLowering ctx, LispVal value) {
 		if (value instanceof LispNil) {
@@ -459,6 +460,10 @@ final class ClojureMacroLowering {
 				}
 				if (tag.name().equals(":C%PATTERN")) {
 					return decodePattern(cons);
+				}
+				if (tag.name().equals(":C%INST") || tag.name().equals(":C%TIMESTAMP")
+						|| tag.name().equals(":C%CALENDAR") || tag.name().equals(":C%UUID")) {
+					return decodeTagged(cons);
 				}
 				if (tag.name().equals(":C%ATOM")) {
 					throw new LispReadException("an atom cannot travel through a macro expansion");
@@ -501,7 +506,34 @@ final class ClojureMacroLowering {
 				|| value instanceof am.ik.rontolisp.LispDouble) {
 			return value;
 		}
+		if (value instanceof am.ik.rontolisp.LispJavaObject host) {
+			LispVal own = decodeHostValue(host.ref());
+			if (own != null) {
+				return own;
+			}
+		}
 		throw new LispReadException("an unreadable value: " + value.print());
+	}
+
+	/**
+	 * A host {@code java.util.UUID} or instant back to the marker of its literal: the
+	 * oracle's compiler embeds one by printing its {@code #uuid} or {@code #inst} and
+	 * reading it back, which here reads this front end's own value (a {@code Timestamp}
+	 * and a {@code Calendar}, like the oracle's, come back a Date). Null for any other
+	 * host object, which has no spelling to compile.
+	 */
+	private static @Nullable LispVal decodeHostValue(Object ref) {
+		if (ref instanceof java.util.UUID uuid) {
+			return ClojureLowerUtil.list(ClojureDefaultReaders.UUID, new LispInteger(uuid.getMostSignificantBits()),
+					new LispInteger(uuid.getLeastSignificantBits()));
+		}
+		if (ref instanceof java.util.Date date) {
+			return ClojureLowerUtil.list(ClojureDefaultReaders.INST, new LispInteger(date.getTime()));
+		}
+		if (ref instanceof java.util.Calendar calendar) {
+			return ClojureLowerUtil.list(ClojureDefaultReaders.INST, new LispInteger(calendar.getTimeInMillis()));
+		}
+		return null;
 	}
 
 	static LispVal decodeKeyword(ClojureLowering ctx, LispCons wrapper) {
@@ -565,6 +597,26 @@ final class ClojureMacroLowering {
 		List<LispVal> parts = ClojureLowerUtil.items(wrapper);
 		if (parts != null && parts.size() == 5 && parts.get(2) instanceof LispString source) {
 			return ClojureLowerUtil.list(ClojureReader.REGEX, source);
+		}
+		throw new LispReadException("an unreadable value: " + wrapper.print());
+	}
+
+	/**
+	 * An instant or UUID answer back to its literal's marker: a UUID's two halves, any
+	 * instant's milliseconds, so a Timestamp or a Calendar comes back a Date, like the
+	 * oracle's compiler, which embeds such a constant by printing its {@code #inst} and
+	 * reading it back.
+	 */
+	static LispVal decodeTagged(LispCons wrapper) {
+		List<LispVal> parts = ClojureLowerUtil.items(wrapper);
+		boolean uuid = ClojureLowerUtil.isSymbolNamed(wrapper.car(), ":C%UUID");
+		if (parts != null && parts.size() >= 2 && parts.get(1) instanceof LispInteger first) {
+			if (!uuid) {
+				return ClojureLowerUtil.list(ClojureDefaultReaders.INST, first);
+			}
+			if (parts.size() == 3 && parts.get(2) instanceof LispInteger second) {
+				return ClojureLowerUtil.list(ClojureDefaultReaders.UUID, first, second);
+			}
 		}
 		throw new LispReadException("an unreadable value: " + wrapper.print());
 	}
@@ -663,6 +715,10 @@ final class ClojureMacroLowering {
 		if (!marked.isEmpty() && ClojureLowerUtil.isSymbolNamed(marked.get(0), "%record")) {
 			// a record literal is already a value: syntax-quote leaves it alone
 			return ClojureProtocolLowering.recordLiteral(ctx, marked);
+		}
+		if (!marked.isEmpty() && ClojureDefaultReaders.isMarker(marked.get(0))) {
+			// so is an #inst or #uuid literal
+			return ClojureDefaultReaders.construction(marked);
 		}
 		if (datum instanceof LispCons) {
 			List<LispVal> parts = ClojureLowerUtil.items(datum);

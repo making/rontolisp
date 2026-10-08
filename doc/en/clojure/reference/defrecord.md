@@ -25,7 +25,7 @@ count is refused). The class must be a record the program defines; an undotted
 (`No reader function for tag Name`).
 
 Deviation: `str` of a record spells its literal, where the oracle answers
-`user.R@<hash>`.
+`user.R@<hash>` (a body overriding `toString` answers its own, below).
 
 ```clojure
 (defrecord R [a])
@@ -36,4 +36,17 @@ Deviation: `str` of a record spells its literal, where the oracle answers
 (println (= r (->R 7)))           ; true
 (println (= r {:a 7}))            ; false
 (println (get (assoc r :b 1) :b)) ; 1
+```
+
+The body may implement the interfaces of [reify](reify.md#host-interfaces) a record does not
+implement itself -- `IFn`, `IDeref`, `IReduceInit` ... -- and override `toString`, which `str`
+reads while the record still prints its literal. Its map interfaces are its own: naming
+`ILookup` or `IObj`, or defining `count`, `seq`, `valAt`, `meta`, `equals` or `hashCode`, is the
+oracle's `Duplicate` refusal.
+
+```clojure
+(defrecord Adder [n] clojure.lang.IFn (invoke [_ x] (+ n x)))
+((->Adder 10) 5) ; => 15
+(defrecord Point [x y] Object (toString [_] (str "<" x "," y ">")))
+(str (->Point 1 2)) ; => "<1,2>"
 ```

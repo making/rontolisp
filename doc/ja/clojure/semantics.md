@@ -82,6 +82,8 @@ oracle と同じく無視します。oracle の spec が拒否する値、どの
   循環は選択済みのライブラリで止まります。
 - ソースパスは、エントリファイル自身のルート、プロジェクトの `:paths`、選ばれた各ライブラリの
   ルート（oracle のクラスパスと同じく、ツリーの上から）、最後に組み込みの名前空間の順です。
+  ルートにある `data_readers.clj` と `data_readers.cljc` がプログラムのデータリーダを与えます
+  （[タグ付きリテラル](syntax.md#tagged-literals)）。
 - `org.clojure/clojure`、`org.clojure/spec.alpha`、`org.clojure/core.specs.alpha` は、バージョンに
   かかわらずこのフロントエンド自身です。`ring/ring-core` と `ring/ring-codec` は、同梱のバージョン
   （ring-core 1.15.5、ring-codec 1.3.0）以下の Maven バージョンなら組み込みの Ring 名前空間です。
@@ -104,8 +106,12 @@ oracle と同じく無視します。oracle の spec が拒否する値、どの
   短縮した sha にはタグが必要です。1 つのライブラリの 2 つのコミットでは、子孫のほうが新しい
   バージョンです。その `deps.edn` は `:local/root` のディレクトリと同じく読みます。
 - `:local/root` の jar 自身の `pom.xml` が、その jar の依存を与えます。`pom.xml` のプロジェクト
-  （`deps.edn` がなく `pom.xml` を持つディレクトリやコミット）は読みません。それにしかありえない
-  名前空間は、それを挙げて拒否します。
+  （`deps.edn` がなく `pom.xml` を持つディレクトリやコミット）は、Maven がモデルを組み立てる
+  とおりに読みます。親はリポジトリより先に `<relativePath>`（既定は `../pom.xml`）で探します。
+  compile と runtime の依存（optional を含む）を与え、ソースルートとして build のソース
+  ディレクトリ（既定は `src/main/java`）、`src/main/clojure`、リソースディレクトリ（既定は
+  `src/main/resources`）、`build-helper-maven-plugin` の `add-source` / `add-resource` の
+  ディレクトリを加えます。最後のものは oracle と同じく先頭のプラグインから読みます。
 - クラスを含む依存の jar は、プログラムの Java クラスパスにも加わります。インタプリタと JVM は
   そのクラスを呼べ、`-o app.jar` はその jar を出力の横にコピーします。WebAssembly は呼び出し時に
   Java を拒否するままです。
@@ -319,7 +325,8 @@ docstring の `:doc`、名前のメタデータと attr マップ（定義の位
 `binding` は `^:dynamic` な var と `clojure.core` の特殊変数を動的エクステントで
 再束縛します。それ以外は拒否されます。`*out*`/`*in*`/`*err*` は `*standard-output*`/
 `*standard-input*`/`*error-output*` です。フラグは `clojure -M` でのオラクルの値を持ち
-（`*print-length*` は `nil`、`*assert*` は `true`、`*data-readers*` は `{}`、
+（`*print-length*` は `nil`、`*assert*` は `true`、`*data-readers*` はプログラムの
+データリーダ（なければ `{}`）、
 `*command-line-args*` はプログラムの引数、`*clojure-version*` は 1.12.6 など）、
 プリンタは `*print-length*`、`*print-level*`、`*print-readably*`、`*print-meta*`、
 `*print-namespace-maps*` に従い（キーが一つの名前空間を共有するマップは `#:a{:b 1}` と
@@ -346,12 +353,16 @@ lazy 入力はどの seq 動詞にも届きます。コレクション全体を�
 ## プロトコル、レコード、型
 
 `defprotocol` はメソッドを宣言します。各メソッドはターゲットのタグ上のディスパッチャ
-（階層探索なしの multimethod 形:タグの完全一致、それから `Object` 行）に lower され
-ます。`extend-protocol`/`extend-type`/`extend` はターゲットのタグの下に行を足し、
+（階層探索なしの multimethod 形:タグの完全一致、次にプロトコルを extend したクラスの
+うちターゲットが継承または実装するもの、それから `Object` 行）に lower されます。
+`extend-protocol`/`extend-type`/`extend` はターゲットのタグの下に行を足し、
 `satisfies?` は所属を調べます。extend 対象は `class` が答える種類（`String`、
 `Number`、`Boolean`、`Keyword`、`Symbol`、`Character`、`Map`、`Vector`、`Set`、
-`List`/`Seq`、それに外れ既定としての `nil` と `Object`）と既知の record/deftype 名
-で、それ以外は名前付きで拒否されます。`Object` 行なしの外れはオラクル同様シグナル
+`List`/`Seq`、それに外れ既定としての `nil` と `Object`）、既知の record/deftype 名、
+それに値がインスタンスでありうる他のクラス（throwable、`clojure.lang.IRef` のような
+インタフェース、`java.util.Date`、インタプリタと JVM ではホストのクラス）です。後者は
+オラクル同様、スーパークラス、インタフェースの順に試します。どのクラスでもない名前は
+拒否されます。`Object` 行なしの外れはオラクル同様シグナル
 を上げます。メソッドはアリティごとに1つのパラメータベクターを宣言します。インライン本体は
 メソッド名を書き直して別のアリティを実装し、拡張は `fn` の節で書き、行には呼び出しの引数の数に
 一致するアリティを適用する1つのラムダを格納します。`clojure.core.protocols/CollReduce` や
@@ -397,8 +408,9 @@ ClojureScript の `^:mutable` は指定になりません。ローカル・パ�
 すべてのバックエンドで読みます。答えは同じテキストをクオートしたときの値と同じです。
 数・文字列・文字・キーワード（`::kw` は呼び出し元の名前空間で解決）・コレクションを
 同じように読み、メタデータは捨て、`#_` は読み飛ばします。レコードリテラルは
-プログラムが定義するクラスのレコードを組みます。`#=` の読み取り時評価とタグ付きリテラルは
-ソースと同様に拒否され、リーダ条件は `{:read-cond :allow}` のとき `.cljc` ファイルと同様に読まれます。リーダとして渡せるのは
+プログラムが定義するクラスのレコードを組みます。`#=` の読み取り時評価はソースと同様に
+拒否され、タグ付きリテラルはオラクルと同じく `*data-readers*`、`#inst` と `#uuid` の既定の
+リーダ、`*default-data-reader-fn*` の順に読まれ、リーダ条件は `{:read-cond :allow}` のとき `.cljc` ファイルと同様に読まれます。リーダとして渡せるのは
 `clojure.java.io/reader`、`*in*`、それらや `java.io.StringReader` の上の
 `java.io.PushbackReader`/`BufferedReader`/`InputStreamReader` で、いずれもどのバックエンドでも
 ストリームです。`read` はリーダをデータの直後に残します。`str` はオラクル同様、
@@ -438,6 +450,7 @@ var はエクスポートより下で定義してかまいません。
 | end なし `range` | `infinite range is not supported: range needs an end` | 無限 seq は strict には綴れない -- `iterate` を使う |
 | `transient`、`persistent!`、`assoc!`、`dissoc!`、`conj!`、`disj!` | `transients are not supported yet: ...` | テーブルの裏にトランジェント実装がない |
 | `definterface`、`gen-class`、`gen-interface` | `protocols are not supported yet: ...` | どのバックエンドにもインターフェース生成がない |
+| コア関数が参照するもの以外のインタフェースを挙げた `reify`/`deftype`/`defrecord` の本体（[reify](reference/reify.md#host-interfaces)） | `... is not supported yet as an interface of ...` | コレクションのインタフェース（`ISeq`、`IPersistentMap` など）とホストのインタフェースを参照する関数がまだない |
 | 特殊変数でない core の var（`inc`）やホストフィールドへの `set!` | `set! of a var is not supported yet: ...`、`set! of a host field is not supported yet: ...` | 代入先の var がない。`java:` にフィールド書き込みがない |
 | `future`、`delay`/`force`、`promise`/`deliver` | 名前で | どのバックエンドにもスレッドプール・遅延メモセル・ブロッキング待ち合わせがない |
 | proxy メソッドの外側の `proxy-super` | `proxy-super outside a proxy method` | `proxy-super` はメソッドの `this` に対するスーパークラスの実装呼び出し |

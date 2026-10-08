@@ -49,6 +49,34 @@ final class ClojurePredicateLowering {
 
 	}
 
+	/**
+	 * {@code uuid?}'s test {@code (p value "java.util.UUID")}: a UUID or a host one, an
+	 * alias of {@code %clojure-host-instance-p} in a program that makes no UUID
+	 * ({@link ClojureArms.Family#UUID}), which lowers {@code uuid?} as before UUIDs
+	 * existed.
+	 */
+	static final String IS_UUID = "RONTOLISP::%CLOJURE-IS-UUID";
+
+	/** The instant family's test of a Date, a Timestamp or a Calendar. */
+	static final String INSTANT_P = "RONTOLISP::%CLOJURE-INSTANT-P";
+
+	/**
+	 * The instant family's test of an instant {@code inst?} takes: a Date or a Timestamp.
+	 */
+	static final String INST_P = "RONTOLISP::%CLOJURE-INST-P";
+
+	/** The instant family's test of a Date. */
+	static final String DATE_P = "RONTOLISP::%CLOJURE-DATE-P";
+
+	/** The instant family's test of a Timestamp. */
+	static final String TIMESTAMP_P = "RONTOLISP::%CLOJURE-TIMESTAMP-P";
+
+	/** The instant family's test of a Calendar. */
+	static final String CALENDAR_P = "RONTOLISP::%CLOJURE-CALENDAR-P";
+
+	/** The UUID family's test of a UUID. */
+	static final String UUID_P = "RONTOLISP::%CLOJURE-UUID-P";
+
 	private static final LispVal T = ClojureLowering.TRUE_CONST;
 
 	private static final LispVal NIL = ClojureLowering.NIL_CONST;
@@ -58,7 +86,7 @@ final class ClojurePredicateLowering {
 			Map.entry("set?", helper("IS-SET")), Map.entry("list?", helper("IS-LIST")),
 			Map.entry("record?", helper("RECORD-P")), Map.entry("coll?", helper("IS-COLL")),
 			Map.entry("seqable?", helper("IS-SEQABLE")), Map.entry("associative?", helper("IS-ASSOCIATIVE")),
-			Map.entry("counted?", helper("IS-COUNTED")), Map.entry("indexed?", helper("IS-VECTOR")),
+			Map.entry("counted?", helper("IS-COUNTED")), Map.entry("indexed?", helper("IS-INDEXED")),
 			Map.entry("reversible?", helper("IS-REVERSIBLE")), Map.entry("ifn?", helper("IS-IFN")),
 			Map.entry("sorted?", helper("IS-SORTED")), Map.entry("number?", cl("NUMBERP")),
 			Map.entry("integer?", cl("INTEGERP")), Map.entry("int?", helper("IS-INT")),
@@ -73,7 +101,8 @@ final class ClojurePredicateLowering {
 			Map.entry("qualified-symbol?", qualified(NIL, T, T)), Map.entry("char?", cl("CHARACTERP")),
 			Map.entry("var?", helper("VAR-P")), Map.entry("volatile?", helper("IS-VOLATILE")),
 			Map.entry("realized?", helper("IS-REALIZED")), Map.entry("special-symbol?", helper("IS-SPECIAL-SYMBOL")),
-			Map.entry("inst?", helper("IS-INST")), Map.entry("uuid?", host("java.util.UUID")),
+			Map.entry("inst?", helper("IS-INST")),
+			Map.entry("uuid?", new Test(IS_UUID, List.of(LispString.literal("java.util.UUID")))),
 			Map.entry("uri?", helper("IS-URI")), Map.entry("class?", host("java.lang.Class")));
 
 	/**

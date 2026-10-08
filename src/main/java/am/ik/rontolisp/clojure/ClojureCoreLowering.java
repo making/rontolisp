@@ -1,8 +1,13 @@
 package am.ik.rontolisp.clojure;
 
+import java.math.BigInteger;
 import java.util.ArrayList;
 import java.util.List;
+import am.ik.rontolisp.LispBigInteger;
+import am.ik.rontolisp.LispChar;
+import am.ik.rontolisp.LispDouble;
 import am.ik.rontolisp.LispInteger;
+import am.ik.rontolisp.LispRatio;
 import am.ik.rontolisp.LispString;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
@@ -58,6 +63,9 @@ final class ClojureCoreLowering {
 					"unchecked-char", "unchecked-double", "unchecked-float":
 				arity(name, n, 1, 1);
 				return worker(name, ctx.lower(items.get(1)));
+			case "int", "long":
+				arity(name, n, 1, 1);
+				return castOf(ctx, name, items.get(1));
 			case "unchecked-inc", "unchecked-dec", "unchecked-negate", "unchecked-inc-int", "unchecked-dec-int",
 					"unchecked-negate-int":
 				arity(name, n, 1, 1);
@@ -159,6 +167,17 @@ final class ClojureCoreLowering {
 			case "reader-conditional", "tagged-literal":
 				arity(name, n, 2, 2);
 				return worker(name, ctx.lower(items.get(1)), ctx.lower(items.get(2)));
+			case "inst-ms", "inst-ms*":
+				// the Inst protocol's one method: a Date's or a Timestamp's
+				// milliseconds, a host Date's or Instant's
+				arity(name, n, 1, 1);
+				return worker("inst-ms", ctx.lower(items.get(1)));
+			case "parse-uuid":
+				arity(name, n, 1, 1);
+				return worker(name, ctx.lower(items.get(1)));
+			case "random-uuid":
+				arity(name, n, 0, 0);
+				return worker(name);
 			case "read-line":
 				// the next line of *in*, nil past the end, a closed one's IOException,
 				// like the oracle's
@@ -183,15 +202,16 @@ final class ClojureCoreLowering {
 					"dedupe", "replace", "find", "subvec", "key", "val", "rseq", "find-keyword", "partition-all",
 					"partition-by", "min-key", "max-key", "juxt", "fnil", "every-pred", "some-fn", "update-keys",
 					"update-vals", "reduce-kv", "with-meta", "meta", "vary-meta", "empty", "comparator", "hash-set",
-					"double", "float", "byte", "short", "num", "bigint", "biginteger", "bigdec", "rationalize",
-					"numerator", "denominator", "unchecked-int", "unchecked-long", "unchecked-short", "unchecked-byte",
-					"unchecked-char", "unchecked-double", "unchecked-float", "unchecked-inc", "unchecked-dec",
-					"unchecked-negate", "unchecked-inc-int", "unchecked-dec-int", "unchecked-negate-int",
-					"unchecked-add", "unchecked-subtract", "unchecked-multiply", "unchecked-add-int",
-					"unchecked-subtract-int", "unchecked-multiply-int", "unchecked-divide-int",
+					"int", "long", "double", "float", "byte", "short", "num", "bigint", "biginteger", "bigdec",
+					"rationalize", "numerator", "denominator", "unchecked-int", "unchecked-long", "unchecked-short",
+					"unchecked-byte", "unchecked-char", "unchecked-double", "unchecked-float", "unchecked-inc",
+					"unchecked-dec", "unchecked-negate", "unchecked-inc-int", "unchecked-dec-int",
+					"unchecked-negate-int", "unchecked-add", "unchecked-subtract", "unchecked-multiply",
+					"unchecked-add-int", "unchecked-subtract-int", "unchecked-multiply-int", "unchecked-divide-int",
 					"unchecked-remainder-int", "run!", "println", "print", "prn", "pr", "read-line",
-					"reader-conditional", "tagged-literal" ->
+					"reader-conditional", "tagged-literal", "inst-ms", "parse-uuid", "random-uuid" ->
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), runtime(name + "-v"));
+			case "inst-ms*" -> ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), runtime("inst-ms-v"));
 			case "map-entry?" -> ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), runtime("map-entry-p-v"));
 			case "pmap" -> ClojureSeqLowering.mapValue(ctx);
 			case "test" -> ClojureVarLowering.testValue();
@@ -261,6 +281,84 @@ final class ClojureCoreLowering {
 			return parts.subList(1, parts.size());
 		}
 		throw new LispReadException("Metadata must be Symbol,Keyword,String or Map");
+	}
+
+	/**
+	 * {@code (int x)} / {@code (long x)}: the oracle's {@code RT.intCast} /
+	 * {@code RT.longCast} of an object ({@code %clojure-int-cast} /
+	 * {@code %clojure-long-cast}). A literal argument folds here, through the overload
+	 * the oracle's compiler picks for its type: a double literal takes the {@code double}
+	 * cast, so {@code (int 1e10)} refuses with {@code Value out of range for int:
+	 * 1.0E10} where the object cast of the same value refuses with {@code integer
+	 * overflow}. A {@code count} is an int already and is not cast.
+	 * @param ctx the hub
+	 * @param name {@code int} or {@code long}
+	 * @param arg the argument datum
+	 * @return the folded value or refusal, or the cast call
+	 */
+	static LispVal castOf(ClojureLowering ctx, String name, LispVal arg) {
+		boolean toInt = name.equals("int");
+		LispVal folded = foldedCast(toInt, arg);
+		if (folded != null) {
+			return folded;
+		}
+		LispVal lowered = ctx.lower(arg);
+		return isCoreCall(ctx, arg, "count") ? lowered : worker(toInt ? "int-cast" : "long-cast", lowered);
+	}
+
+	/** Whether {@code form} is a one-argument call of the core function {@code name}. */
+	private static boolean isCoreCall(ClojureLowering ctx, LispVal form, String name) {
+		List<LispVal> parts = ClojureLowerUtil.items(form);
+		if (parts == null || parts.size() != 2 || !(parts.get(0) instanceof LispSymbol head)) {
+			return false;
+		}
+		return name.equals(ClojureCoreNames.coreSpelling(head.name()))
+				|| (head.name().equals(name) && !ctx.known(name));
+	}
+
+	/**
+	 * The cast of a literal number or character, or null when {@code arg} is none:
+	 * {@code RT.longCast} / {@code RT.intCast} of the literal's type ({@code long},
+	 * {@code double}, or the object casts of a bigint and a ratio).
+	 */
+	private static @Nullable LispVal foldedCast(boolean toInt, LispVal arg) {
+		if (arg instanceof LispDouble(double x)) {
+			if (toInt) {
+				return (x < Integer.MIN_VALUE || x > Integer.MAX_VALUE) ? outOfRange("int", Double.toString(x))
+						: new LispInteger((int) x);
+			}
+			return (x < Long.MIN_VALUE || x > Long.MAX_VALUE) ? outOfRange("long", Double.toString(x))
+					: new LispInteger((long) x);
+		}
+		BigInteger n;
+		if (arg instanceof LispInteger(long value)) {
+			n = BigInteger.valueOf(value);
+		}
+		else if (arg instanceof LispBigInteger(BigInteger value)) {
+			n = value;
+		}
+		else if (arg instanceof LispRatio(BigInteger numerator, BigInteger denominator)) {
+			n = numerator.divide(denominator);
+		}
+		else if (arg instanceof LispChar(int codePoint)) {
+			n = BigInteger.valueOf(codePoint);
+		}
+		else {
+			return null;
+		}
+		if (n.bitLength() >= 64) {
+			return outOfRange("long", n.toString());
+		}
+		long value = n.longValue();
+		if (toInt && (int) value != value) {
+			return ClojureRefusals.refusal(ClojureRefusals.ARITHMETIC, LispString.literal("integer overflow"));
+		}
+		return new LispInteger(value);
+	}
+
+	private static LispVal outOfRange(String kind, String spelled) {
+		return ClojureRefusals.refusal(ClojureRefusals.ILLEGAL_ARGUMENT,
+				LispString.literal("Value out of range for " + kind + ": " + spelled));
 	}
 
 	private static LispVal worker(String name, LispVal... args) {

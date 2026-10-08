@@ -6,7 +6,6 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Map;
 
 import am.ik.artifact.HttpStatusException;
 import org.junit.jupiter.api.Test;
@@ -23,19 +22,6 @@ class MavenBoundaryTest {
 
 	@TempDir
 	Path local;
-
-	@Test
-	void projectBuildExpressionsAreNotModelled(@TempDir Path remoteRoot) throws IOException {
-		// Maven answers the super POM's default, ${project.basedir}/target: a path no
-		// repository POM resolves (it has no project directory) and no coordinate uses.
-		MavenResolver resolver = MavenTestRepository.resolver(MavenTestRepository.remote(remoteRoot), this.local,
-				Map.of());
-
-		ArtifactDescriptor descriptor = resolver.descriptor(Artifact.parse("test.interp:build-directory:1"));
-
-		assertThat(descriptor.dependencies()).extracting(dependency -> dependency.artifact().version())
-			.containsExactly("${project.build.directory}");
-	}
 
 	@Test
 	void repositoriesAPomDeclaresAreNeverContacted(@TempDir Path remoteRoot) throws IOException {

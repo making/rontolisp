@@ -31,9 +31,11 @@ EDN はデータだけを表します。クォートはシンボルの一部で�
 ## タグ付きリテラル
 
 `#tag value` は `value` を読み、`:readers` マップがタグのシンボルに対して持つ関数を呼びます。
-なければ組み込みの `#inst` と `#uuid` を使い、それもなければ `:default` 関数をタグと値で呼びます。
-どれも受け付けないタグは `No reader function for tag` エラーです。リーダーには関数値なら何でも
-使えます。関数、var、キーワード、マップのいずれでも構いません。
+なければ組み込みの `#inst` と `#uuid`（ソースと同じく読まれる[値](instants.md)）を使い、
+それもなければ `:default` 関数をタグと値で呼びます。どれも受け付けないタグは
+`No reader function for tag` エラーです。リーダーには関数値なら何でも使えます。関数、var、
+キーワード、マップのいずれでも構いません。オラクルと同じく、EDN の読み取りは `*data-readers*` も
+`*default-data-reader-fn*` も参照しません。
 
 ```clojure
 (require '[clojure.edn :as edn])
@@ -41,12 +43,12 @@ EDN はデータだけを表します。クォートはシンボルの一部で�
 ; => [1.5 0.2]
 (edn/read-string {:default (fn [tag value] {:tag tag :value value})} "#my/point [1 2]")
 ; => {:tag my/point, :value [1 2]}
+(edn/read-string "[#inst \"2020-06-15T10:20:30Z\" #uuid \"1-1-1-1-1\"]")
+; => [#inst "2020-06-15T10:20:30.000-00:00" #uuid "00000001-0001-0001-0001-000000000001"]
 ```
 
 ## 違い
 
-- `#inst` と `#uuid` にはまだ対応する値がありません。`:readers` マップがそのタグを指定しない限り、
-  どちらの読み取りも拒否されます。
 - `read` は文字ストリームなら何でも受け付けます。素の `clojure.java.io/reader` も読めますが、
   オラクルは `java.io.PushbackReader` を要求します。
 - `N` と `M` の数値は、ただの整数と正確な比として読まれます（[構文](../syntax.md#numbers)）。

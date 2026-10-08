@@ -312,6 +312,39 @@ class ClojureArmsTest {
 	}
 
 	@Test
+	void theInstantAndUuidFamiliesFoldTheirArmsInAProgramMakingNeither() {
+		// only an #inst or #uuid literal, a read, the clojure.instant kernels,
+		// random-uuid and parse-uuid make one: uuid? is the host test again, and the
+		// class branch, the instance? arms and an instance call's clause go
+		List<LispVal> forms = read("(rontolisp::%clojure-is-uuid x \"java.util.UUID\")"
+				+ " (cond ((rontolisp::%clojure-instant-p c) (rontolisp::%clojure-instant-class c))"
+				+ " ((rontolisp::%clojure-uuid-p c) (list :c%keyword \"java.util.UUID\")) (t c))"
+				+ " (or (rontolisp::%clojure-date-p v) (rontolisp::%clojure-timestamp-p v) (stringp v))"
+				+ " (cond ((rontolisp::%clojure-inst-p r) (rontolisp::%clojure-inst-ms r)) (t (refuse r)))");
+		for (ClojureArms.Family family : List.of(ClojureArms.Family.INSTANT, ClojureArms.Family.UUID)) {
+			ClojureArms.Scan scan = ClojureArms.scan(forms, family);
+			assertThat(scan.builds()).isFalse();
+			assertThat(scan.strips()).isTrue();
+		}
+		List<LispVal> stripped = ClojureArms.strip(ClojureArms.strip(forms, ClojureArms.Family.INSTANT),
+				ClojureArms.Family.UUID);
+		assertThat(stripped.stream().map(LispVal::print)).containsExactly(
+				"(RONTOLISP::%CLOJURE-HOST-INSTANCE-P X \"java.util.UUID\")", "(COND (T C))", "(STRINGP V)",
+				"(COND (T (REFUSE R)))");
+		for (String producer : List.of("(rontolisp::%clojure-make-inst 0)", "(rontolisp::%clojure-read-string s ctx)",
+				"(function rontolisp::%clojure-edn-read-string-v)", "(rontolisp::%clojure-instant-read-calendar s)")) {
+			assertThat(ClojureArms.scan(read(producer), ClojureArms.Family.INSTANT).builds()).as(producer).isTrue();
+		}
+		for (String producer : List.of("(rontolisp::%clojure-make-uuid 0 0)", "(rontolisp::%clojure-random-uuid)",
+				"(function rontolisp::%clojure-parse-uuid-v)", "(rontolisp::%clojure-read s nil nil ctx)")) {
+			assertThat(ClojureArms.scan(read(producer), ClojureArms.Family.UUID).builds()).as(producer).isTrue();
+		}
+		// inst-ms reads one, it makes none
+		assertThat(ClojureArms.scan(read("(rontolisp::%clojure-inst-ms x)"), ClojureArms.Family.INSTANT).builds())
+			.isFalse();
+	}
+
+	@Test
 	void theRefusalFamilyFoldsVecsArgumentCheckToTheArgument() {
 		// vec's RuntimeException for a non-collection is read only where a class is
 		List<LispVal> forms = read(
@@ -399,6 +432,69 @@ class ClojureArmsTest {
 				"(rontolisp::%clojure-kv-reducer-row table (list :c%keyword \"R\") f)")) {
 			assertThat(ClojureArms.scan(read(arms + producer), family).builds()).as(producer).isTrue();
 		}
+	}
+
+	/**
+	 * One interface family: arms of each shape it has, what they fold to, and the store
+	 * of a row of its interfaces that makes a value of it.
+	 */
+	private record InterfaceCase(ClojureArms.Family family, String arms, List<String> folded, String store) {
+	}
+
+	@Test
+	void anInterfaceFamilyIsMadeByTheStoreOfARowOfItsInterfaces() {
+		List<InterfaceCase> cases = List.of(
+				new InterfaceCase(ClojureArms.Family.REDUCE_INTERFACE,
+						"(if (rontolisp::%clojure-reduce-init-p coll) (i coll) (walk coll))"
+								+ " (or (row x) (rontolisp::%clojure-kvreduce-p x))"
+								+ " (vec-arg (rontolisp::%clojure-reduce-init-items (f x)))",
+						List.of("(WALK COLL)", "(ROW X)", "(VEC-ARG (F X))"),
+						"(rontolisp::%clojure-reduce-interface-row (cadr self)"
+								+ " '(\"clojure.lang.IReduceInit\") (list \"reduce\" f))"),
+				new InterfaceCase(ClojureArms.Family.SEQABLE,
+						"(cond ((rontolisp::%clojure-seqable-p coll) (s coll)) (t (e coll)))"
+								+ " (if (rontolisp::%clojure-lazy-input-p coll) (l coll) (w coll))",
+						List.of("(COND (T (E COLL)))", "(IF (RONTOLISP::%CLOJURE-LAZY-P COLL) (L COLL) (W COLL))"),
+						"(rontolisp::%clojure-seqable-row (cadr self) '(\"clojure.lang.Seqable\") (list \"seq\" f))"),
+				new InterfaceCase(ClojureArms.Family.COUNTED, "(or (v x) (rontolisp::%clojure-counted-p x))",
+						List.of("(V X)"),
+						"(rontolisp::%clojure-counted-row (list :c%keyword \"T\") '(\"clojure.lang.Counted\")"
+								+ " (list \"count\" f))"),
+				new InterfaceCase(ClojureArms.Family.INDEXED,
+						"(cond ((rontolisp::%clojure-indexed-p coll) (n coll)) (t (e coll)))"
+								+ " (rontolisp::%clojure-nth-2 v 1 nil) (rontolisp::%clojure-is-indexed v)",
+						List.of("(COND (T (E COLL)))", "(RONTOLISP::%CLOJURE-NTH V 1 NIL)",
+								"(RONTOLISP::%CLOJURE-IS-VECTOR V)"),
+						"(rontolisp::%clojure-indexed-row (cadr self) '(\"clojure.lang.Indexed\") (list \"nth\" f))"),
+				new InterfaceCase(ClojureArms.Family.LOOKUP,
+						"(cond ((rontolisp::%clojure-lookup-p (car args)) (g args)) (t d))", List.of("(COND (T D))"),
+						"(rontolisp::%clojure-lookup-row (cadr self) '(\"clojure.lang.ILookup\") (list \"valAt\" f))"),
+				new InterfaceCase(ClojureArms.Family.INVOKABLE,
+						"(if (rontolisp::%clojure-invokable-p f) (i f) (c f))"
+								+ " (apply (rontolisp::%clojure-applied-fn g) args)",
+						List.of("(C F)", "(APPLY G ARGS)"),
+						"(rontolisp::%clojure-invokable-row (cadr self) '(\"clojure.lang.IFn\") (list \"invoke\" f))"),
+				new InterfaceCase(ClojureArms.Family.DEREFABLE,
+						"(cond ((rontolisp::%clojure-derefable-p x) (d x)) (t (e x)))", List.of("(COND (T (E X)))"),
+						"(rontolisp::%clojure-derefable-row (cadr self) '(\"clojure.lang.IDeref\") (list \"deref\" f))"),
+				new InterfaceCase(ClojureArms.Family.META_INTERFACE,
+						"(if (rontolisp::%clojure-imeta-p x) (m x) (side x))", List.of("(SIDE X)"),
+						"(rontolisp::%clojure-meta-row (cadr self) '(\"clojure.lang.IMeta\") (list \"meta\" f))"),
+				new InterfaceCase(ClojureArms.Family.OBJECT_METHODS,
+						"(cond ((rontolisp::%clojure-to-string-p x) (s x)) (t (p x)))", List.of("(COND (T (P X)))"),
+						"(rontolisp::%clojure-object-row (cadr self) nil (list \"toString\" f))"));
+		for (InterfaceCase one : cases) {
+			assertThat(ClojureArms.scan(read(one.arms()), one.family()).strips()).as(one.family().name()).isTrue();
+			assertThat(ClojureArms.strip(read(one.arms()), one.family()).stream().map(LispVal::print))
+				.as(one.family().name())
+				.containsExactlyElementsOf(one.folded());
+			assertThat(ClojureArms.scan(read(one.arms() + one.store()), one.family()).builds()).as(one.family().name())
+				.isTrue();
+		}
+		// a reduce-interface row makes a reducible value too, whose verbs hold its arms
+		assertThat(ClojureArms
+			.scan(read("(rontolisp::%clojure-reduce-interface-row tag nil nil)"), ClojureArms.Family.REDUCIBLE)
+			.builds()).isTrue();
 	}
 
 }

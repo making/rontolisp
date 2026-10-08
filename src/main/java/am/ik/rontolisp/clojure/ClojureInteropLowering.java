@@ -659,6 +659,13 @@ final class ClojureInteropLowering {
 			return ClojureLowerUtil.list(ClojureLowerUtil.sym("%host-exit"),
 					ClojureLowerUtil.list(ClojureLowerUtil.sym("logand"), args.get(0), new LispInteger(255)));
 		}
+		if (cls.equals("clojure.lang.AFn") && member.equals("applyToHelper") && args.size() == 2) {
+			// the applyTo an IFn body delegates to: the function called on the members of
+			// the argument seq by their count, like the oracle's, on every backend
+			// (clojure.lang is no host class here)
+			return ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-CALL"), args.get(0),
+					ClojureSeqLowering.seqAllForm(ctx, args.get(1)));
+		}
 		List<LispVal> call = new ArrayList<>();
 		call.add(LispString.literal(cls));
 		call.add(LispString.literal(designator));
@@ -1511,8 +1518,7 @@ final class ClojureInteropLowering {
 		}
 		if (cls == null || ClojureIoLowering.CLASSES.containsKey(cls)) {
 			// a File, a URL, a URI, a byte stream or a stream clojure.java.io made
-			// answers
-			// its own methods: an arm a program making none sheds
+			// answers its own methods: an arm a program making none sheds
 			call = ClojureIoLowering.methodArm(method, designator, recv, args, call);
 		}
 		LispVal mapped = stringMethod(ctx, method, recv, args, cls != null || receiver instanceof LispString);

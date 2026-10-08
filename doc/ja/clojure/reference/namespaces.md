@@ -17,7 +17,7 @@
 
 Clojure で書かれた組み込みの名前空間は、プロジェクトのファイルと同じ手順で、すべてのソースルートの
 あとに読み込まれます。そのため、ソースパス上に同じ名前のファイルがあればそちらが優先されます。
-例外は `clojure.walk` と `clojure.core.protocols` で、Clojure と同じくプログラムより先に読み込まれており、
+例外は `clojure.walk`、`clojure.core.protocols`、`clojure.instant`、`clojure.uuid` で、Clojure と同じくプログラムより先に読み込まれており、
 `clojure.walk/postwalk` のような修飾名は、`clojure.edn` や `clojure.string` の修飾名と同じく `require`
 なしで届きます。Clojure 本体に含まれない `clojure.*` 名前空間
 （`clojure.data.json` などの contrib ライブラリ）は、ほかのライブラリと同じくソースパスから
@@ -29,6 +29,8 @@ Clojure で書かれた組み込みの名前空間は、プロジェクトのフ
 | `clojure.set` | [(clojure.set)](clojure-set.md) |
 | `clojure.walk` | [clojure.walk](clojure-walk.md) |
 | `clojure.edn` | [clojure.edn](clojure-edn.md) |
+| `clojure.instant` | [clojure.instant](clojure-instant.md) |
+| `clojure.uuid`（var なし。`#uuid` はリーダが読む） | [インスタントと UUID](instants.md) |
 | `clojure.data` | [clojure.data](clojure-data.md) |
 | `clojure.zip` | [clojure.zip](clojure-zip.md) |
 | `clojure.datafy`, `clojure.core.protocols` | [clojure.datafy](clojure-datafy.md) |

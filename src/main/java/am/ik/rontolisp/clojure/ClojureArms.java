@@ -1,6 +1,7 @@
 package am.ik.rontolisp.clojure;
 
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -124,11 +125,38 @@ public final class ClojureArms {
 	 * {@code java.io} constructions opening a file or wrapping a byte stream.
 	 */
 	private static Set<String> streamProducers() {
-		Set<String> out = new java.util.HashSet<>(Set.of("RONTOLISP::%CLOJURE-OUT", "RONTOLISP::%CLOJURE-IN",
+		Set<String> out = new HashSet<>(Set.of("RONTOLISP::%CLOJURE-OUT", "RONTOLISP::%CLOJURE-IN",
 				"RONTOLISP::%CLOJURE-ERR", "RONTOLISP::%CLOJURE-STRING-WRITER", "RONTOLISP::%CLOJURE-STRING-READER",
 				"RONTOLISP::%CLOJURE-READER"));
 		out.addAll(ClojureIoLowering.STREAM_PRODUCERS);
 		return Set.copyOf(out);
+	}
+
+	/**
+	 * The run-time reads a program names -- {@code read-string}, {@code read} and
+	 * {@code clojure.edn}'s, each of which may make an instant or a UUID through its
+	 * default {@code #inst} and {@code #uuid} readers -- held apart from {@link Family}
+	 * so its constants can name them.
+	 */
+	private static final class Reads {
+
+		private static final Set<String> ENTRIES = Set.of("RONTOLISP::%CLOJURE-READ", "RONTOLISP::%CLOJURE-READ-V",
+				"RONTOLISP::%CLOJURE-READ-OPTS", "RONTOLISP::%CLOJURE-READ-FROM", "RONTOLISP::%CLOJURE-READ-STRING",
+				"RONTOLISP::%CLOJURE-READ-STRING-V", "RONTOLISP::%CLOJURE-READ-STRING-OPTS",
+				"RONTOLISP::%CLOJURE-EDN-FROM", "RONTOLISP::%CLOJURE-EDN-READ-STRING-1",
+				"RONTOLISP::%CLOJURE-EDN-READ-STRING", "RONTOLISP::%CLOJURE-EDN-READ",
+				"RONTOLISP::%CLOJURE-EDN-READ-STRING-V", "RONTOLISP::%CLOJURE-EDN-READ-V");
+
+		private Reads() {
+		}
+
+		/** The reads and the other producers. */
+		static Set<String> with(String... producers) {
+			Set<String> all = new HashSet<>(ENTRIES);
+			all.addAll(List.of(producers));
+			return Set.copyOf(all);
+		}
+
 	}
 
 	/**
@@ -240,7 +268,8 @@ public final class ClojureArms {
 				"RONTOLISP::%CLOJURE-RD-SET", "RONTOLISP::%CLOJURE-RD-SUPPRESSED", "RONTOLISP::%CLOJURE-RD-SYMBOL",
 				"RONTOLISP::%CLOJURE-RD-SYMBOLIC", "RONTOLISP::%CLOJURE-RD-WRAP", "RONTOLISP::%CLOJURE-RD-ATOM-OF",
 				"RONTOLISP::%CLOJURE-RD-NS-MAP", "RONTOLISP::%CLOJURE-RD-NS-MAP-OF", "RONTOLISP::%CLOJURE-RD-NS-KEY",
-				"RONTOLISP::%CLOJURE-RD-IDENT", "RONTOLISP::%CLOJURE-RD-EDN-FORM-AT", "RONTOLISP::%CLOJURE-RD-EDN-ATOM",
+				"RONTOLISP::%CLOJURE-RD-IDENT", "RONTOLISP::%CLOJURE-RD-DATA-READ",
+				"RONTOLISP::%CLOJURE-RD-EDN-FORM-AT", "RONTOLISP::%CLOJURE-RD-EDN-ATOM",
 				"RONTOLISP::%CLOJURE-RD-EDN-DISPATCH", "RONTOLISP::%CLOJURE-RD-EDN-TAGGED",
 				"RONTOLISP::%CLOJURE-EDN-FROM", "RONTOLISP::%CLOJURE-EDN-READ-STRING-1",
 				"RONTOLISP::%CLOJURE-EDN-READ-STRING", "RONTOLISP::%CLOJURE-EDN-READ",
@@ -289,7 +318,102 @@ public final class ClojureArms {
 		 */
 		REDUCIBLE("reducible", Set.of("RONTOLISP::%CLOJURE-COLL-REDUCIBLE-P", "RONTOLISP::%CLOJURE-KV-REDUCIBLE-P"),
 				Set.of(ClojureSeqLowering.REDUCIBLE_ITEMS), Map.of(),
-				Set.of("RONTOLISP::%CLOJURE-COLL-REDUCER-ROW", "RONTOLISP::%CLOJURE-KV-REDUCER-ROW"), Set.of()),
+				Set.of("RONTOLISP::%CLOJURE-COLL-REDUCER-ROW", "RONTOLISP::%CLOJURE-KV-REDUCER-ROW",
+						ClojureInterfaces.REDUCE_ROW),
+				Set.of()),
+
+		/**
+		 * A record, deftype or reify whose body implements
+		 * {@code clojure.lang.IReduceInit}, {@code IReduce} or {@code IKVReduce}, which
+		 * {@code reduce} and {@code reduce-kv} call ahead of the reducing protocols, like
+		 * the oracle, and {@code vec} and {@code set} reduce: only the store of such a
+		 * row makes one ({@link ClojureInterfaces}), which makes a value of
+		 * {@link #REDUCIBLE} too, whose functions hold these arms. The view is the
+		 * members such a reduction steps, which {@code vec} and {@code set} walk.
+		 */
+		REDUCE_INTERFACE("reduce-interface",
+				Set.of("RONTOLISP::%CLOJURE-REDUCE-INIT-P", "RONTOLISP::%CLOJURE-IREDUCE-P",
+						"RONTOLISP::%CLOJURE-KVREDUCE-P", "RONTOLISP::%CLOJURE-KV-INTERFACE-P"),
+				Set.of(ClojureInterfaces.REDUCE_INIT_ITEMS), Map.of(), Set.of(ClojureInterfaces.REDUCE_ROW), Set.of()),
+
+		/**
+		 * A record, deftype or reify whose body implements {@code clojure.lang.Seqable},
+		 * which the seq view ({@code seq}, {@code first}, {@code map}, {@code into} ...)
+		 * and {@code seqable?} read through its {@code seq}: only the store of such a row
+		 * makes one. The alias is the lazy-or-strict verbs' test of a lazy input, which
+		 * takes such a value as one.
+		 */
+		SEQABLE("seqable", Set.of("RONTOLISP::%CLOJURE-SEQABLE-P"), Set.of(),
+				Map.of("RONTOLISP::%CLOJURE-LAZY-INPUT-P", "RONTOLISP::%CLOJURE-LAZY-P"),
+				Set.of(ClojureInterfaces.SEQABLE_ROW), Set.of()),
+
+		/**
+		 * A record, deftype or reify whose body implements {@code clojure.lang.Counted}
+		 * (an {@code Indexed} one too), which {@code count}, {@code empty?} and
+		 * {@code counted?} read through its {@code count}: only the store of such a row
+		 * makes one.
+		 */
+		COUNTED("counted", Set.of("RONTOLISP::%CLOJURE-COUNTED-P"), Set.of(), Map.of(),
+				Set.of(ClojureInterfaces.COUNTED_ROW), Set.of()),
+
+		/**
+		 * A record, deftype or reify whose body implements {@code clojure.lang.Indexed},
+		 * which {@code nth}, vector destructuring and {@code indexed?} read through its
+		 * {@code nth}: only the store of such a row makes one. The aliases are
+		 * {@code indexed?}'s test, a vector's alone without the kind, and {@code nth} of
+		 * two arguments, {@code %clojure-nth} with a nil default without it.
+		 */
+		INDEXED("indexed", Set.of("RONTOLISP::%CLOJURE-INDEXED-P"), Set.of(),
+				Map.of("RONTOLISP::%CLOJURE-IS-INDEXED", "RONTOLISP::%CLOJURE-IS-VECTOR", "RONTOLISP::%CLOJURE-NTH-2",
+						"RONTOLISP::%CLOJURE-NTH"),
+				Set.of(ClojureInterfaces.INDEXED_ROW), Set.of()),
+
+		/**
+		 * A deftype or reify whose body implements {@code clojure.lang.ILookup}, which
+		 * {@code get}, a keyword's or symbol's call, map destructuring and {@code get-in}
+		 * read through its {@code valAt}: only the store of such a row makes one.
+		 */
+		LOOKUP("lookup", Set.of("RONTOLISP::%CLOJURE-LOOKUP-P"), Set.of(), Map.of(),
+				Set.of(ClojureInterfaces.LOOKUP_ROW), Set.of()),
+
+		/**
+		 * A record, deftype or reify whose body implements {@code clojure.lang.IFn} (or
+		 * its supers {@code Callable} and {@code Runnable}), which a call, a function
+		 * argument of any verb and {@code ifn?} reach through its {@code invoke}, and
+		 * {@code apply} through its {@code applyTo}: only the store of such a row makes
+		 * one. The view is {@code apply}'s function.
+		 */
+		INVOKABLE("invokable",
+				Set.of("RONTOLISP::%CLOJURE-INVOKABLE-P", "RONTOLISP::%CLOJURE-CALLABLE-P",
+						"RONTOLISP::%CLOJURE-RUNNABLE-P"),
+				Set.of(ClojureInterfaces.APPLIED_FN), Map.of(), Set.of(ClojureInterfaces.INVOKABLE_ROW), Set.of()),
+
+		/**
+		 * A record, deftype or reify whose body implements {@code clojure.lang.IDeref},
+		 * which {@code deref} and {@code @} read through its {@code deref}: only the
+		 * store of such a row makes one.
+		 */
+		DEREFABLE("derefable", Set.of("RONTOLISP::%CLOJURE-DEREFABLE-P"), Set.of(), Map.of(),
+				Set.of(ClojureInterfaces.DEREFABLE_ROW), Set.of()),
+
+		/**
+		 * A deftype whose body implements {@code clojure.lang.IMeta} or {@code IObj},
+		 * which {@code meta}, {@code with-meta} and {@code vary-meta} reach through its
+		 * {@code meta} and {@code withMeta}: only the store of such a row makes one.
+		 */
+		META_INTERFACE("meta-interface", Set.of("RONTOLISP::%CLOJURE-IMETA-P", "RONTOLISP::%CLOJURE-IOBJ-P"), Set.of(),
+				Map.of(), Set.of(ClojureInterfaces.META_ROW), Set.of()),
+
+		/**
+		 * A record, deftype or reify whose body overrides {@code Object}'s
+		 * {@code toString}, {@code equals} or {@code hashCode}, which {@code str}, the
+		 * printer, {@code =} and the instance calls read: only the store of such a row
+		 * makes one.
+		 */
+		OBJECT_METHODS("object-methods",
+				Set.of("RONTOLISP::%CLOJURE-TO-STRING-P", "RONTOLISP::%CLOJURE-EQUALS-P",
+						"RONTOLISP::%CLOJURE-HASH-CODE-P"),
+				Set.of(), Map.of(), Set.of(ClojureInterfaces.OBJECT_ROW), Set.of()),
 
 		/**
 		 * A read in clojure.edn's grammar, which the run-time reader's EDN clauses take:
@@ -300,6 +424,17 @@ public final class ClojureArms {
 						"RONTOLISP::%CLOJURE-EDN-READ", "RONTOLISP::%CLOJURE-EDN-READ-STRING-V",
 						"RONTOLISP::%CLOJURE-EDN-READ-V"),
 				Set.of()),
+
+		/**
+		 * A data reader, which the run-time reader asks for a tagged literal ahead of the
+		 * default {@code #inst} and {@code #uuid}, and {@code *default-data-reader-fn*}
+		 * after them: only a program naming {@code *data-readers*} or
+		 * {@code *default-data-reader-fn*} can install one -- the lowering names the
+		 * first for a program whose {@code data_readers.clj} files map a tag and that
+		 * reads at run time ({@link ClojureDataReaders#noteRuntimeReads}).
+		 */
+		DATA_READERS("data-readers", Set.of("RONTOLISP::%CLOJURE-RD-DATA-READERS-P"), Set.of(), Map.of(),
+				Set.of("RONTOLISP::%CLOJURE-DATA-READERS", "RONTOLISP::%CLOJURE-DEFAULT-DATA-READER-FN"), Set.of()),
 
 		/**
 		 * A reader conditional or a tagged literal, which the printer, {@code str},
@@ -321,6 +456,42 @@ public final class ClojureArms {
 						"RONTOLISP::%CLOJURE-READ-STRING-V", "RONTOLISP::%CLOJURE-READ-V",
 						"RONTOLISP::%CLOJURE-READER-CONDITIONAL", "RONTOLISP::%CLOJURE-READER-CONDITIONAL-V",
 						"RONTOLISP::%CLOJURE-TAGGED-LITERAL", "RONTOLISP::%CLOJURE-TAGGED-LITERAL-V"),
+				Set.of()),
+
+		/**
+		 * An instant -- a Date, a Timestamp or a Calendar -- which the printer,
+		 * {@code str}, {@code =}, {@code compare} (and the sorted collections' default
+		 * comparator), the structural keys' hash, {@code class} and its class name,
+		 * {@code instance?}, {@code inst?} and the instance calls read: only an
+		 * {@code #inst} literal, a read ({@code read-string}, {@code read},
+		 * {@code clojure.edn}), whose default {@code #inst} reader makes one, and the
+		 * {@code clojure.instant} kernels make one.
+		 */
+		INSTANT("instant",
+				Set.of(ClojurePredicateLowering.INSTANT_P, ClojurePredicateLowering.INST_P,
+						ClojurePredicateLowering.DATE_P, ClojurePredicateLowering.TIMESTAMP_P,
+						ClojurePredicateLowering.CALENDAR_P),
+				Set.of(), Map.of(),
+				Reads.with(ClojureDefaultReaders.MAKE_INST, "RONTOLISP::%CLOJURE-INSTANT-READ-DATE",
+						"RONTOLISP::%CLOJURE-INSTANT-READ-TIMESTAMP", "RONTOLISP::%CLOJURE-INSTANT-READ-CALENDAR",
+						"RONTOLISP::%CLOJURE-INSTANT-READ", "RONTOLISP::%CLOJURE-INSTANT-OF"),
+				Set.of()),
+
+		/**
+		 * A UUID, which the printer, {@code str}, {@code compare} (and the sorted
+		 * collections' default comparator), the structural keys' hash, {@code class} and
+		 * its class name, {@code instance?}, {@code uuid?} and the instance calls read:
+		 * only a {@code #uuid} literal, a read, whose default {@code #uuid} reader makes
+		 * one, {@code random-uuid} and {@code parse-uuid} make one. The alias is
+		 * {@code uuid?}'s call {@code (is-uuid value "java.util.UUID")}, which stands for
+		 * the host test it made before.
+		 */
+		UUID("uuid", Set.of(ClojurePredicateLowering.UUID_P), Set.of(),
+				Map.of(ClojurePredicateLowering.IS_UUID, "RONTOLISP::%CLOJURE-HOST-INSTANCE-P"),
+				Reads.with(ClojureDefaultReaders.MAKE_UUID, "RONTOLISP::%CLOJURE-RANDOM-UUID",
+						"RONTOLISP::%CLOJURE-RANDOM-UUID-V", "RONTOLISP::%CLOJURE-PARSE-UUID",
+						"RONTOLISP::%CLOJURE-PARSE-UUID-V", "RONTOLISP::%CLOJURE-READ-UUID",
+						"RONTOLISP::%CLOJURE-UUID-OF"),
 				Set.of()),
 
 		/**

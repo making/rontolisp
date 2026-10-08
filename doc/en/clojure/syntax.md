@@ -15,8 +15,10 @@ a pattern value (see [Regular expressions](reference/regex.md)); `#'x` reads as
 `#^`) reads too: on a name or a local it parses and drops, on a vector, map or set
 literal it attaches like `with-meta` (see
 [Semantics](semantics.md#state-and-dynamic-scope)). A record literal
-(`#ns.Name{...}` / `#ns.Name[...]`) reads to the record over its unevaluated body (see
-[defrecord](reference/defrecord.md)). A namespace map gives its keys a namespace:
+(`#ns.Name{...}` / `#ns.Name[...]`, a tag whose name is dotted) reads to the record over
+its unevaluated body (see [defrecord](reference/defrecord.md)); any other tag (`#inst`,
+`#uuid`, `#my.lib/tag`) is a [tagged literal](#tagged-literals). A
+namespace map gives its keys a namespace:
 `#:user{:id 1 :_/raw 2 name 3}` reads as `{:user/id 1 :raw 2 user/name 3}` (each keyword or
 symbol key without a namespace takes it, one qualified by `_` loses it), and `#::{...}` /
 `#::alias{...}` take the current namespace or the alias's for their keyword keys.
@@ -75,3 +77,55 @@ the literals whose lowering [Semantics](semantics.md) describes. A map or set li
 key that is `=` to an earlier one (`Duplicate key`): `{1 :a 1N :b}` and `#{[1] (1)}` are
 refused, `{1 :a 1.0 :b}` is not. Keys that are only equal once evaluated, as in
 `{(+ 1 2) :a 3 :b}`, are not checked.
+
+## Tagged literals
+
+`#inst` and `#uuid` read through the oracle's default data readers while the form is read:
+`#inst "2020-06-15T10:20:30.456+02:00"` is an instant (the oracle's `java.util.Date`),
+`#uuid "550e8400-e29b-41d4-a716-446655440000"` a UUID (its `java.util.UUID`). A timestamp is
+`yyyy`, then optionally `-MM`, `-dd`, `Thh`, `:mm`, `:ss` and a fraction, each part needing
+the ones before it, then optionally `Z` or an offset `+hh:mm`/`-hh:mm`; a date before
+1582-10-15 is the Julian calendar's, like the oracle's. A field out of range
+(`#inst "2021-02-29"`), a timestamp of another shape and a malformed UUID are the oracle's
+read errors, positioned after the string. [Instants and UUIDs](reference/instants.md) has
+what the two values print, compare and answer.
+
+```clojure
+(prn #inst "2020-06-15T10:20:30.456+02:00" #uuid "1-1-1-1-1")
+(println (str #inst "2020") (inst-ms #inst "1970-01-01T00:00:01Z"))
+```
+
+```
+#inst "2020-06-15T08:20:30.456-00:00" #uuid "00000001-0001-0001-0001-000000000001"
+Wed Jan 01 00:00:00 UTC 2020 1000
+```
+
+Any other tag is a library's: a `data_readers.clj` or `data_readers.cljc` at a source root
+(a directory or jar on the [source path](semantics.md#projects-depsedn)) maps tag symbols to
+the vars whose functions read them, and every one is merged as the oracle merges them at
+startup (each `.clj` file before each `.cljc` one; only its first form counts, and a tag two
+files give different vars is refused). A tagged literal calls its function on the form read
+after it, while the source is read, and the answer stands in the literal's place: data (a
+vector, map, set, record, string, number, keyword, `#inst`, `#uuid`, pattern) is that value,
+a list or symbol is code. The function runs as the program compiles, on the JVM, so it may
+call Java even for a wasm target. Like the oracle's startup, which names the var without
+loading it, its namespace must be loaded by a form above the literal (an `ns` `:require`),
+else the literal is `Attempting to call unbound fn`. An answer `nil` is the oracle's
+`No dispatch macro`, one with no source spelling (an atom, a function, a host object other
+than a UUID or Date) its `Can't embed object in code`. A data reader of `inst` or `uuid`
+reads it ahead of the default; a tag no data reader reads has no reader function. At run
+time `read-string` and `read` ask `*data-readers*` (the same map) first (see
+[read-string](reference/read-string.md)).
+
+```console
+$ cat src/data_readers.clj
+{geo/point my.geo/point}
+$ cat src/my/geo.clj
+(ns my.geo)
+(defn point [[x y]] {:x x :y y})
+$ cat src/app/main.clj
+(ns app.main (:require [my.geo]))
+(println #geo/point [1 2])
+$ rontolisp src/app/main.clj
+{:x 1, :y 2}
+```

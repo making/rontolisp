@@ -86,7 +86,8 @@ no known type and a dependency the oracle cannot resolve are errors in its words
   ends at the library already selected.
 - The source path is the entry file's own root, the project's `:paths`, each selected
   library's roots in the oracle's classpath order (the top of the tree first), then the
-  built-in namespaces.
+  built-in namespaces. A root's `data_readers.clj` and `data_readers.cljc` give the
+  program's data readers ([Tagged literals](syntax.md#tagged-literals)).
 - `org.clojure/clojure`, `org.clojure/spec.alpha` and `org.clojure/core.specs.alpha` are
   this front end at any version. `ring/ring-core` and `ring/ring-codec` at a Maven version
   up to the one shipped (ring-core 1.15.5, ring-codec 1.3.0) are the built-in Ring
@@ -110,8 +111,13 @@ no known type and a dependency the oracle cannot resolve are errors in its words
   an abbreviated sha needs a tag, and of two commits of one library the descendant is the
   newer. Its `deps.edn` is read like a `:local/root` directory's.
 - A `:local/root` jar's own `pom.xml` gives its dependencies. A `pom.xml` project (a
-  directory or commit with a `pom.xml` and no `deps.edn`) is not read: a namespace only it
-  could hold is refused naming it.
+  directory or commit with a `pom.xml` and no `deps.edn`) is read as Maven builds its model,
+  its parent looked for at `<relativePath>` (by default `../pom.xml`) before the
+  repositories: its compile and runtime dependencies, optional ones included, and as
+  source roots its build's source directory (by default `src/main/java`),
+  `src/main/clojure`, its resource directories (by default `src/main/resources`) and the
+  `add-source` / `add-resource` directories of `build-helper-maven-plugin`, read off the
+  first plugin as the oracle reads them.
 - A dependency's jar holding classes joins the program's Java class path: the interpreter
   and the JVM call its classes, and `-o app.jar` copies it beside the jar. WebAssembly keeps
   refusing Java when called.
@@ -335,7 +341,8 @@ handle).
 `binding` rebinds `^:dynamic` vars and the `clojure.core` specials with dynamic
 extent; anything else is refused. `*out*`/`*in*`/`*err*` are `*standard-output*`/
 `*standard-input*`/`*error-output*`; the flags hold the oracle's values under
-`clojure -M` (`*print-length*` `nil`, `*assert*` `true`, `*data-readers*` `{}`,
+`clojure -M` (`*print-length*` `nil`, `*assert*` `true`, `*data-readers*` the program's
+data readers, `{}` without one,
 `*command-line-args*` the program's arguments, `*clojure-version*` 1.12.6, ...), and
 the printer honours `*print-length*`, `*print-level*`, `*print-readably*`,
 `*print-meta*` and `*print-namespace-maps*` (a map whose keys share a namespace prints
@@ -358,11 +365,15 @@ character's code (`-1` past the end).
 
 A `defprotocol` declares methods; each method lowers to a dispatcher over the
 target's tag (the multimethod shape without the hierarchy search: an exact tag
-match, then the `Object` row). `extend-protocol`/`extend-type`/`extend` add rows
+match, then a class the target extends or implements that the protocol was extended to,
+then the `Object` row). `extend-protocol`/`extend-type`/`extend` add rows
 under a target's tag; `satisfies?` tests membership. Extend targets are the kinds
 `class` answers (`String`, `Number`, `Boolean`, `Keyword`, `Symbol`, `Character`,
 `Map`, `Vector`, `Set`, `List`/`Seq`, plus `nil` and `Object` as the miss
-default) and known record/deftype names; anything else is a named refusal. A miss
+default), known record/deftype names, and any other class a value may be an instance of
+(a throwable, an interface such as `clojure.lang.IRef`, `java.util.Date`, a host class on
+the interpreter and the JVM), which are tried like the oracle's: the superclasses, then the
+interfaces. A name no class has is refused. A miss
 with no `Object` row signals, like the oracle. A method declares one parameter vector
 per arity: an inline body names the method again for another arity, an extension spells
 `fn` clauses, and the row stores one lambda applying the arity of the call's count. A
@@ -406,7 +417,9 @@ global it signals `Can't change/establish root binding of: ... with set` at run 
 run time on every backend, answering what a quote of the same text answers: the same
 numbers, strings, characters, keywords (`::kw` in the calling namespace) and collections,
 metadata dropped, `#_` discarding. A record literal builds the record of a class the
-program defines; `#=` read-time evaluation and tagged literals are refused like in source,
+program defines; `#=` read-time evaluation is refused like in source, a tagged literal
+reads through `*data-readers*`, the default `#inst` and `#uuid` readers and
+`*default-data-reader-fn*` in that order, like the oracle's,
 and reader conditionals read under `{:read-cond :allow}` like in a `.cljc` file. A reader is a `clojure.java.io/reader`, `*in*`, or a
 `java.io.PushbackReader`/`BufferedReader`/`InputStreamReader` over one or over a `java.io.StringReader`,
 which is a stream on every backend; `read` leaves it right after the datum. `str` of a
@@ -445,6 +458,7 @@ Each refusal names the missing design, never `unknown name`:
 | end-less `range` | `infinite range is not supported: range needs an end` | an infinite seq cannot be spelled strictly -- spell it with `iterate` |
 | `transient`, `persistent!`, `assoc!`, `dissoc!`, `conj!`, `disj!` | `transients are not supported yet: ...` | no transient runtime behind the tables |
 | `definterface`, `gen-class`, `gen-interface` | `protocols are not supported yet: ...` | no interface generation on any backend |
+| a `reify`/`deftype`/`defrecord` body naming an interface other than the core functions' ([reify](reference/reify.md#host-interfaces)) | `... is not supported yet as an interface of ...` | the collection interfaces (`ISeq`, `IPersistentMap` ...) and the host ones have no consulting functions yet |
 | `set!` of a core var that is no special (`inc`), of a host field | `set! of a var is not supported yet: ...`, `set! of a host field is not supported yet: ...` | no var to assign; the `java:` surface has no field write |
 | `future`, `delay`/`force`, `promise`/`deliver` | by name | no thread pool, lazy memo cells or blocking rendezvous on any backend |
 | `proxy-super` outside a proxy method | `proxy-super outside a proxy method` | a `proxy-super` calls the superclass implementation on the method's `this` |

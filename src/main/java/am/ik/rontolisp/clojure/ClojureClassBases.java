@@ -13,9 +13,10 @@ import org.jspecify.annotations.Nullable;
  * superclass first, then the direct interfaces -- so {@code isa?}, {@code parents} and
  * {@code ancestors} follow Java inheritance the way the oracle does. The throwable half
  * extends {@link ClojureThrowables#PARENTS} with the interfaces, the stream half is
- * {@link #STREAM_SUPERS}; both are tables read off clj 1.12.6 on JDK 25 (2026-10-04), not
- * reflection, so a host that reflects only what its image holds resolves them alike. Any
- * other throwable reflects, like its chain.
+ * {@link #STREAM_SUPERS}, the half of the instants and the UUID
+ * {@link #TIME_VALUE_SUPERS}; all are tables read off clj 1.12.6 on JDK 25 (2026-10-04,
+ * the time half 2026-10-08), not reflection, so a host that reflects only what its image
+ * holds resolves them alike. Any other throwable reflects, like its chain.
  */
 final class ClojureClassBases {
 
@@ -50,6 +51,26 @@ final class ClojureClassBases {
 			OBJECT);
 
 	/**
+	 * The superclass of each class an instant {@code class} answers that has one below
+	 * {@code Object}: the time half of the class chains.
+	 */
+	static final Map<String, String> TIME_VALUE_SUPERS = Map.of("java.sql.Timestamp", "java.util.Date",
+			"java.util.GregorianCalendar", "java.util.Calendar");
+
+	/** The classes of the instants and the UUID whose superclass is {@code Object}. */
+	private static final Set<String> TIME_VALUE_ROOTS = Set.of("java.util.Date", "java.util.Calendar",
+			"java.util.UUID");
+
+	/**
+	 * The class keyword an {@code extend} of a class of the instants and the UUID
+	 * dispatches on: the class's own, but for {@code Calendar}, whose one class here is
+	 * {@code GregorianCalendar} (a protocol's rows are looked up by the exact class).
+	 */
+	static final Map<String, String> TIME_VALUE_DISPATCH = Map.of("java.util.Date", "java.util.Date",
+			"java.sql.Timestamp", "java.sql.Timestamp", "java.util.Calendar", "java.util.GregorianCalendar",
+			"java.util.GregorianCalendar", "java.util.GregorianCalendar", "java.util.UUID", "java.util.UUID");
+
+	/**
 	 * The direct interfaces of the tabled classes that have any, and the bases of the
 	 * interfaces among their supers (an interface's bases are its superinterfaces).
 	 */
@@ -65,12 +86,16 @@ final class ClojureClassBases {
 			Map.entry("java.net.URL", List.of("java.io.Serializable")),
 			Map.entry("java.net.URI", List.of("java.lang.Comparable", "java.io.Serializable")),
 			Map.entry("java.io.InputStream", List.of("java.io.Closeable")),
-			Map.entry("java.io.OutputStream", List.of("java.io.Closeable", "java.io.Flushable")));
+			Map.entry("java.io.OutputStream", List.of("java.io.Closeable", "java.io.Flushable")),
+			Map.entry("java.util.Date", List.of("java.io.Serializable", "java.lang.Cloneable", "java.lang.Comparable")),
+			Map.entry("java.util.Calendar",
+					List.of("java.io.Serializable", "java.lang.Cloneable", "java.lang.Comparable")),
+			Map.entry("java.util.UUID", List.of("java.io.Serializable", "java.lang.Comparable")));
 
 	/** The interfaces among the tabled classes' supers. */
 	static final Set<String> TABLED_INTERFACES = Set.of("java.io.Serializable", "clojure.lang.IExceptionInfo",
 			"java.lang.Appendable", "java.io.Closeable", "java.io.Flushable", "java.lang.Readable",
-			"java.lang.AutoCloseable");
+			"java.lang.AutoCloseable", "java.lang.Cloneable", "java.lang.Comparable");
 
 	/**
 	 * The classes a runtime error's or an {@code ex-info}'s class may be
@@ -119,7 +144,11 @@ final class ClojureClassBases {
 		if (superclass == null) {
 			superclass = IO_SUPERS.get(name);
 		}
-		if (superclass == null && (name.equals(ClojureThrowables.THROWABLE) || STREAM_ROOTS.contains(name))) {
+		if (superclass == null) {
+			superclass = TIME_VALUE_SUPERS.get(name);
+		}
+		if (superclass == null && (name.equals(ClojureThrowables.THROWABLE) || STREAM_ROOTS.contains(name)
+				|| TIME_VALUE_ROOTS.contains(name))) {
 			superclass = OBJECT;
 		}
 		if (superclass != null) {
@@ -161,10 +190,30 @@ final class ClojureClassBases {
 
 	/**
 	 * Whether a spelling of this class lowers to its class keyword: a throwable, a stream
-	 * class, an interface among their supers, or {@code Object}.
+	 * class, a class of the instants or the UUID, an interface among their supers, or
+	 * {@code Object}.
 	 */
 	static boolean isChained(String name) {
 		return basesOf(name) != null;
+	}
+
+	/**
+	 * The classes of the instants below the class: what a spelling of
+	 * {@code java.util.Date} records beside its own row, so the class keyword of a
+	 * Timestamp walks to it, while a spelling of {@code Object} or an interface, which
+	 * every class reaches, records none of them.
+	 * @param name the spelled class
+	 * @return the subclasses, sorted
+	 */
+	static List<String> timeValueSubclassesOf(String name) {
+		List<String> subclasses = new ArrayList<>();
+		for (Map.Entry<String, String> entry : TIME_VALUE_SUPERS.entrySet()) {
+			if (entry.getValue().equals(name)) {
+				subclasses.add(entry.getKey());
+			}
+		}
+		subclasses.sort(null);
+		return subclasses;
 	}
 
 	/**

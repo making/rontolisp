@@ -45,6 +45,24 @@ or `version` (`RELEASE`/`LATEST`) -- and builds its resolver as `clj` does:
   none here, `tests` in a descriptor), the type's extension. An invalid POM is a
   `MavenResolutionException` here (no descriptor to fall back to). What tools.deps'
   `coord-deps :jar` reads (`model-dep->data`).
+- `project(Path pom, Map extraSystemProperties)` -> `MavenProject`: a `pom.xml` built as
+  Maven builds a `FileModelSource` without a project directory (tools.deps' `read-model-file`:
+  no `request.setPomFile`, so `${project.basedir}` / `${basedir}` reflect nothing and the
+  path translator does nothing; tools.deps sets the system property `project.basedir=.`, the
+  caller passes it). Its dependencies as `projectDependencies`, its effective
+  `sourceDirectory`, resource directories (a directory-less resource left out) and plugins
+  (key, executions: id, goals, `ConfigurationNode` = `Xpp3Dom`), the plugin management merged
+  in. A parent is read beside the file first (`localParent`, Maven's `readParentLocally` +
+  `FileModelSource.getRelatedSource`): `relativePath` (absent -> `../pom.xml`, empty ->
+  none; a directory gets `pom.xml`), taken when its group (or its parent's) and artifact are
+  the parent's and its version equal or inside the parent's range (then a child without its
+  own version is `Version must be a constant`; the range is tested with `GenericVersion`,
+  Maven's `readParentLocally` uses maven-artifact's `DefaultArtifactVersion`); else the
+  repositories. Up a chain of files.
+  A repository parent's own relatedSource (Maven's: beside `~/.m2/.../a-v.pom`) is never
+  looked at. Validated at the MINIMAL level like a repository POM; tools.deps' request is
+  Maven's default STRICT (measured: `'build.resources.resource.directory' is missing.`
+  refused there), so a POM only the strict checks refuse is accepted here.
 
 ## Effective model (`ModelBuilder`, `ProfileActivator`, `Interpolator`)
 Maven's `DefaultModelBuilder` at validation level minimal, no project directory:
@@ -59,16 +77,38 @@ Maven's `DefaultModelBuilder` at validation level minimal, no project directory:
   of the same POM is active otherwise.
 - User properties are `{packaging: <the requested POM's packaging>}`, for its parents and
   imports too (3.9): profiles and `${packaging}` see it, and it shadows a POM property.
+- The chain ends with Maven 3.9.16's super POM (`ModelBuilder.SUPER_POM_XML`, a text block:
+  no resource for the native image), profile activation included (`release-profile` on
+  `performRelease=true`).
 - Inheritance by management key, the child's entry whole: the child's dependencies first,
   then each ancestor's. Not inherited: artifactId, packaging, name, profiles, modules,
-  relocation (a relocation in a parent or an active profile does not apply, measured).
+  relocation (a relocation in a parent or an active profile does not apply, measured), and
+  modelVersion (`MavenModelMerger.mergeModel_ModelVersion`; until 2026-10-08 it was
+  inherited, so a child without one was valid here, invalid in Maven: `oracle/superpom.txt`).
+- A parent's packaging must be `pom` (`readParent`, ERROR at every level: `Invalid packaging
+  for parent POM g:a:v, must be "pom" but is "jar"`; added 2026-10-08, measured).
+- `build` (`BuildMerger`, a port of the 3.9.16 mergers read from source): directories,
+  `finalName`, `defaultGoal`, resources (directory only), filters, plugins and plugin
+  management (key `groupId:artifactId`, groupId defaulting to `org.apache.maven.plugins`;
+  executions by id, `default` when absent; `inherited`; configurations as `ConfigurationNode`,
+  `Xpp3Dom.mergeXpp3Dom` with `combine.self` override/remove and `combine.children` append,
+  read after the recessive's attributes join). Inheritance (`InheritanceModelMerger`): the
+  parent's plugins that are `inherited` or have executions first, a child plugin preceding a
+  shared one kept before it, the rest after; an execution's own `inherited` else the
+  plugin's; resources the parent's only when the child has none. Profile injection
+  (`ProfileModelMerger`): the profile dominant, its resources after the POM's. Duplicate
+  plugins of one POM merge at the first's place, the later dominant (`DefaultModelNormalizer`).
+  Plugin management after interpolation (`DefaultPluginManagementInjector`): managed
+  executions first. Not modelled: extensions, plugin dependencies, reporting.
 - Interpolation (`StringSearchInterpolator`'s semantics): `project.*`/`pom.*` reflection,
   user, model, system properties, `env.X` as system property `env.X`, unprefixed reflection;
   unresolved stays literal; a cycle (`project.`/`pom.` trimmed) invalidates, an unused
   property cycle included. Reflection covers groupId, artifactId, version, packaging, name,
-  description, modelVersion, parent.{groupId,artifactId,version}; `${project.build.*}` is
-  not modelled (Maven: the super POM's `${project.basedir}/target`, a path no coordinate
-  uses; `MavenBoundaryTest`).
+  description, modelVersion, parent.{groupId,artifactId,version} and the build's scalar
+  fields (`build.directory`, `build.outputDirectory`, `build.finalName`, ...): with the
+  super POM `${project.build.directory}` is `${project.basedir}/target`, `basedir` unresolved
+  without a project directory (until 2026-10-08 the expression stayed whole; `oracle/superpom.txt`).
+  The build and every configuration value and attribute are interpolated too.
 - `import`-scoped `pom` entries after interpolation: removed, own entries first, then each
   import in order, first entry of a key wins. Cached by id AND packaging: Maven's session
   cache keys by id, so a BOM whose profiles test `packaging` answers its first importer's
@@ -97,8 +137,10 @@ factory lookup or xerces in a native image, nothing for the web profile to subst
 Measured 2026-10-08: no POM of a developer `~/.m2` (1552) uses an undeclared entity outside
 CDATA, so the table is parity, not a hot path. `PomReader` refuses what the lenient reader
 refuses in the sections it reads (a known field twice, text in a structure, an element in a
-value); the others (`build`, `reporting`, ...) are skipped unvalidated, and the reader's
-unbalanced skip of an unknown element inside a list is not reproduced.
+value); the others (`reporting`, a plugin's dependencies, ...) are skipped unvalidated, and
+the reader's unbalanced skip of an unknown element inside a list is not reproduced.
+`XmlElement` keeps attributes and whether it was `<a/>` (an `Xpp3Dom` value is `null` then,
+`""` for `<a></a>`, the trimmed text otherwise, none with children).
 
 ## Collected graph (`DependencyCollector`)
 Maven Resolver's depth-first collector under Maven's session, conflict resolver off:
@@ -326,7 +368,8 @@ release POMs of a developer `~/.m2/repository` gave identical descriptors (119,1
 were refused then).
 
 ## Tests
-`MavenOracleParityTest`, `MavenRepositoryTest` (metadata caching, update policy, not-found
+`MavenOracleParityTest`, `MavenProjectTest` (`project`: the build, its merges and local
+parents, each case measured through `clj -Srepro -Spath` 1.12.6), `MavenRepositoryTest` (metadata caching, update policy, not-found
 records, snapshots, `LATEST`/`RELEASE`, ranges across repositories, mirror routing, blocked
 mirrors, the access a route carries, per-repository release/snapshot policies;
 `oracle/policy-*.txt` are the same measured against Maven), `ClojureDepsFetchCliTest`

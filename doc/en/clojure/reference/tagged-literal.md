@@ -4,7 +4,10 @@
 
 `clojure.core/tagged-literal`: the tagged literal of the symbol `tag` over `form`, what a
 tag reads as inside a reader conditional under `{:read-cond :preserve}` (a record
-literal's, `#inst`'s and `#uuid`'s too; outside one a tag stays `No reader function`). It
+literal's, `#inst`'s and `#uuid`'s too; outside one a tag reads through the
+[data readers](../syntax.md#tagged-literals) or into an `#inst` or `#uuid`
+[value](instants.md), and with `*default-data-reader-fn*` bound to `tagged-literal`
+`read-string` reads any other tag as one). It
 looks up `:tag` and `:form` like a map (any other key answers the default), is `=` to
 another of the same tag and an `=` form, and prints as `#tag form`; it is no collection and
 no function. `tag` must be a symbol or `nil` (anything else is a `ClassCastException`).

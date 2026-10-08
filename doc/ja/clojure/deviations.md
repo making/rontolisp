@@ -126,7 +126,8 @@
   プログラムが作った例外の `class` はクラス名をキーワードで返し（`:java.lang.Exception`。オラクルはホストの
   クラスを返します）、クラスを示さないエラーには `:java.lang.RuntimeException` を返します。`.printStackTrace` は `toString` の行を `*err*` に書き（オラクルはそれとフレーム
   ごとの行を、`*err*` の束縛に関わらずプロセスの標準エラーに書きます）、`.getStackTrace` は
-  空のベクターを返します。`.getClass` は `class` と同じ値を返します。インタプリタと JVM では、
+  空のベクターを返します（そのため `Throwable->map` の `:trace` は `[]` で、`:via` の
+  マップに `:at` はありません）。`.getClass` は `class` と同じ値を返します。インタプリタと JVM では、
   それ以外のメソッドは、例外のクラスのホストの例外に対して呼び出され、Java のメンバに渡した
   例外もそのホストの例外として渡ります。ホストの例外はメッセージと cause から一度だけ作り、
   `ex-info` のものは `RuntimeException` です。そのため `(.getCause (UncheckedIOException. "u" e))`
@@ -159,9 +160,11 @@
  `(isa? (class (java.util.ArrayList.)) java.util.List)` は `true` です。同じく `:list` と
  綴る `clojure.lang.IPersistentList` にも `isa?` で、オラクルは `false` を返します。それ以外の
 クラス（`java.io.File`）はディスパッチ値でもクラスオブジェクトで、オラクル通りです。プロトコルの
- ディスパッチは階層を読まず（タグの
- 完全一致と `Object` 既定）、`Long`・`Double` を `:number` にまとめます（オラクルは
- 区別します）。
+ ディスパッチは階層（`derive`）を読まず、タグの完全一致の次はプロトコルを extend した
+ クラスだけを試し、それから `Object` 既定です。`Long`・`Double` を `:number` にまとめ
+ （オラクルは区別します）、1つの値が実装する2つの `clojure.lang` インタフェースは
+ それぞれが受ける値の種類で順序づけます（`IRef` が `IDeref` より先）。`clojure.lang` は
+ このクラスパスにないためです。
 - `(methods mt)` と `get-method`・`remove-method`・`prefer-method` は式ではなく multimethod の
   名前（`defmulti` の var。alias や refer 経由も可）を取ります。multimethod を束縛した
   ローカルは降低時に拒否されます。`methods` が返すマップはホストクラスの行を `class` が
@@ -169,7 +172,9 @@
 - record はオラクル同様リテラルで印字されます（`#user.R{:a 7}`）。ただし `str` も
  そのリテラルを綴ります（オラクルは `user.R@<hash>`）。deftype はラッパーリスト
  （`(:C%TYPE ...)`）、reify は `(:C%REIFY ...)` で印字されます。決定的に印字されるのは
- エントリのマップだけです。
+ エントリのマップだけです。本体が `toString` を上書きしたものは、オラクルの
+ `#object[user.T "text"]` から同一性ハッシュを除いた形で印字され、reify のクラスは
+ オラクルの番号を除いた `user$reify` と綴ります。
 - deftype の `^:volatile-mutable` フィールドは `^:unsynchronized-mutable` と同じ素の
  スロットです（スレッド間の順序保証はありません）。
 - `split`/`replace` は seq を返しベクターにはなりません。素の文字列は文字通りのままです（パターン値だけがパターンマッチします）。`index-of` は
@@ -250,15 +255,25 @@
   オラクルの `reduce` は、自分では畳み込まないコレクション（文字列、マップ）についてもその拡張を
   使います。インライン本体が実装していない引数の数でプロトコルメソッドを呼ぶと
   `ArityException` をシグナルします（オラクルは `AbstractMethodError`）。
+- `reify`・`deftype`・`defrecord` の本体が実装できるのは、コア関数が参照する `clojure.lang`
+  のインタフェース（`IReduceInit`、`IReduce`、`IKVReduce`、`Seqable`、`Counted`、`Indexed`、
+  `ILookup`、`IFn`（`Callable` と `Runnable` を含む）、`IDeref`、`IMeta`、`IObj`）と `Object` の
+  メソッドの上書きです（[reify](reference/reify.md#host-interfaces)）。それ以外のインタフェース
+  （`ISeq`、`IPersistentMap`、`Sequential`、`java.util.List` など）は名前を挙げて拒否されます。
+  型の `equals` と `hashCode` は `=` と `.hashCode` に答えますが、マップのキーやセットの要素の
+  比較には使われず、そうした値は同一性で保持されます。`Seqable` だけを実装した型について、
+  `sort` と `distinct` はその seq を通して答えます。オラクルはどちらも拒否します。
 - `clojure.core.reducers` は呼び出したスレッドの上で部分を順に1つずつ fold します。空でない
   2つのコレクションの `cat` は両方を持つ1つのアキュムレーター（ベクター）を返します。オラクルは
   `Cat` の木を返し、その fold は半分ずつの fold を結合します。
 - `unchecked-` の算術は整数を64ビット（`-int` 系は32ビット）に折り返し、型変換 `short`・`byte`・
   `char`・`float` と合わせてオラクルと同じです。ただし64ビットを超える整数もここでは通常の整数なので、
   オラクルでは折り返されない bigint のオペランド（`(unchecked-add 9223372036854775807N 1)`）も
-  折り返します。`int` と `long` はオラクルの範囲検査をせずに切り捨てます（`(long 1e19)` は
-  `10000000000000000000` で、オラクルは `IllegalArgumentException` を投げます。`(long ##NaN)` は
-  シグナルし、オラクルは `0` を返します）。比の `double` は最も近い double で（`(double 2/3)` は
+  折り返します。`int` と `long` は範囲検査とメッセージを含めてオラクルの型変換と同じです。
+  リテラルの引数はその型の型変換を、それ以外はオブジェクトの型変換を通ります。オラクルの
+  コンパイラがプリミティブの double と型付けする値（double リテラルを束縛した `let` の
+  ローカル、`(* 2.0 x)`）は、オラクルでは `Value out of range for int: 2.0E10`、ここでは
+  `integer overflow` で拒否されます。比の `double` は最も近い double で（`(double 2/3)` は
   `0.6666666666666666`）、オラクルは先に有効数字 16 桁に丸めます（`0.6666666666666667`）。`inc`・
   `dec` と検査付きの演算は桁あふれしません（整数は bignum です）。
 - `bigint` と `biginteger` は通常の整数、`bigdec` は通常の有理数を返します（`(bigdec "1.5")` は
@@ -288,9 +303,7 @@
   （オラクルはコアの関数との同一性で判別します）。`compare` は文字列をコードポイントで比べます
   （オラクルは UTF-16 の単位で比べるので、U+FFFF を超える文字で答えが変わります）。
 - `float` は倍精度の値を返すので、`(float 1/3)` は `0.3333333333333333` です（オラクルの Float は
-  `0.33333334` と表示します）。float の範囲を超える値は同様にシグナルします。`int` と `long` は
-  切り捨てるだけで、範囲外の値を拒否しません（オラクルは `integer overflow`、
-  `Value out of range for long: ...`）。
+  `0.33333334` と表示します）。float の範囲を超える値は同様にシグナルします。
 - 被除数が NaN や無限大の `mod` と `rem` は `ArithmeticException` を投げます（オラクルは
   `NumberFormatException`）。
 - `vector-of` は通常のベクターを返します。あとの `conj` や `assoc` は値をそのまま格納し
@@ -346,6 +359,18 @@
   （オラクルは先にクラスが読み込まれている必要があります）。deftype のリテラルは
   拒否されます。`read` はストリームを取り、素の `clojure.java.io/reader` も受け付けます
   （オラクルは `PushbackReader` を要求します）。ホストのリーダは拒否します。
+- `#inst` と `#uuid` は、すべてのバックエンドでオラクルの `java.util.Date` と
+  `java.util.UUID` として読まれます。わずかな違い（インスタントの `str` は UTC で答える、
+  interop で得たホストの値は読んだ値と `=` にならない）は[インスタントと UUID](reference/instants.md)
+  にあります。
+- データリーダはプログラムのコンパイル時に動くので、ソースでの答えはメタデータを失い、ここで
+  綴れる値でなければなりません。関数、deftype のインスタンス、UUID・Date 以外のホストの
+  オブジェクトは `Can't embed object in code` です（オラクルは `print-dup` で印字できるものを
+  コンパイルします）。ここでは `()` が `nil` なので、空リストの答えは `No dispatch macro` です。
+  `*data-readers*` や `*default-data-reader-fn*` の `set!` は `read-string` と `read` の読み方を
+  変えますが、プログラムのソースの読み方は変えません（オラクルのロードはファイルの後続の
+  フォームを、REPL は後続の入力をそれで読みます）。エントリファイル自身のルートの
+  `data_readers` のファイルも数えます（オラクルはクラスパスのものだけを読みます）。
 - `*out*`/`*in*`/`*err*` は `*standard-output*`/`*standard-input*`/`*error-output*`
   です（再束縛は標準ストリームの再束縛になります）。ルートで読んだ `*out*` と `*in*` は
   プロセスの標準ストリームを指すストリーム値です。
@@ -385,8 +410,11 @@
   座標を取得しません。それにしかありえない名前空間はそれを挙げて拒否し、プログラムの残りは
   動きます。組み込みのライブラリは、その依存も含めて何も取得しません。組み込みの Ring 名前空間は
   `ring/ring-core` の座標がなくてもロードでき（oracle では座標が必要です）、同梱より古い ring-core
-  の代わりにもなります。`pom.xml` のプロジェクトは読まず、ライブラリの `data_readers.clj` も
-  読みません。そのタグはほかの未知のタグと同じく拒否します。`settings.xml` の認証情報で応じるのは
+  の代わりにもなります。コマンドライン以外では `pom.xml` のプロジェクトも読みません。そのモデルの検証は
+  oracle の strict ではなく Maven の minimal の水準なので、strict の検査だけが拒否する POM
+  （ディレクトリのないリソースなど）も読みます。取得しないライブラリはデータリーダも与えません。
+  その `data_readers.clj` だけが対応づけるタグにはリーダ関数がなく、そのライブラリを挙げて拒否します。
+  `settings.xml` の認証情報で応じるのは
   Basic 認証だけで（oracle は Digest と NTLM にも応じます）、ダウンロードは `maven-metadata.xml` も含めて
   常に `.sha1` と照合します（oracle の既定は警告だけです）。どのリポジトリにもなかったファイルは
   そのリポジトリの更新ポリシーが許すまで問い合わせ直しません。既定は `:daily` で、`:update` で

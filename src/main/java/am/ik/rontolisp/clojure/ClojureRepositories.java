@@ -124,6 +124,110 @@ public interface ClojureRepositories {
 	}
 
 	/**
+	 * What a {@code pom.xml} project's effective model says: its dependencies and the
+	 * parts of its {@code build} the oracle's {@code coord-paths :pom} reads.
+	 *
+	 * @param dependencies the dependencies as the model holds them (each classifier the
+	 * one written), in model order
+	 * @param sourceDirectory the build's source directory, as interpolated
+	 * @param resourceDirectories its resources' directories, as interpolated
+	 * @param plugins its plugins, in the model's order
+	 */
+	record PomProject(List<MavenDependency> dependencies, @Nullable String sourceDirectory,
+			List<String> resourceDirectories, List<PomPlugin> plugins) {
+
+		/**
+		 * Copies the lists.
+		 * @param dependencies the dependencies
+		 * @param sourceDirectory the source directory
+		 * @param resourceDirectories the resources' directories
+		 * @param plugins the plugins
+		 */
+		public PomProject {
+			dependencies = List.copyOf(dependencies);
+			resourceDirectories = List.copyOf(resourceDirectories);
+			plugins = List.copyOf(plugins);
+		}
+
+	}
+
+	/**
+	 * A build plugin of a {@code pom.xml} project.
+	 *
+	 * @param groupId its group id
+	 * @param artifactId its artifact id
+	 * @param executions its executions
+	 */
+	record PomPlugin(@Nullable String groupId, @Nullable String artifactId, List<PomExecution> executions) {
+
+		/**
+		 * Copies the list.
+		 * @param groupId its group id
+		 * @param artifactId its artifact id
+		 * @param executions its executions
+		 */
+		public PomPlugin {
+			executions = List.copyOf(executions);
+		}
+
+	}
+
+	/**
+	 * A plugin execution.
+	 *
+	 * @param goals its goals
+	 * @param configuration its configuration, or {@code null} without one
+	 */
+	record PomExecution(List<String> goals, @Nullable PomConfiguration configuration) {
+
+		/**
+		 * Copies the list.
+		 * @param goals its goals
+		 * @param configuration its configuration
+		 */
+		public PomExecution {
+			goals = List.copyOf(goals);
+		}
+
+	}
+
+	/**
+	 * An element of a plugin configuration, as Maven's {@code Xpp3Dom} holds it.
+	 *
+	 * @param name the element name
+	 * @param value its trimmed text when it has no children, {@code null} when it has
+	 * children or was written {@code <a/>}
+	 * @param children its child elements
+	 */
+	record PomConfiguration(String name, @Nullable String value, List<PomConfiguration> children) {
+
+		/**
+		 * Copies the list.
+		 * @param name the element name
+		 * @param value its value
+		 * @param children its child elements
+		 */
+		public PomConfiguration {
+			children = List.copyOf(children);
+		}
+
+		/**
+		 * The first child of a name, {@code Xpp3Dom.getChild}.
+		 * @param childName the name
+		 * @return the child, or {@code null}
+		 */
+		public @Nullable PomConfiguration child(String childName) {
+			for (PomConfiguration child : this.children) {
+				if (child.name.equals(childName)) {
+					return child;
+				}
+			}
+			return null;
+		}
+
+	}
+
+	/**
 	 * A fetch that cannot answer: no repository has the artifact or the commit, a
 	 * repository failed, a request this host refuses by name.
 	 */
@@ -171,6 +275,17 @@ public interface ClojureRepositories {
 	 * @return the dependencies, in the model's order
 	 */
 	List<MavenDependency> pomDependencies(MavenSource source, String pom);
+
+	/**
+	 * A {@code pom.xml} project's effective model, built as the oracle's
+	 * {@code read-model-file} builds it: from the file, a parent at its
+	 * {@code relativePath} beside it before the repositories, imports from the
+	 * repositories, {@code ${project.basedir}} reading {@code .} (no project directory).
+	 * @param source the repositories
+	 * @param pom the {@code pom.xml} file
+	 * @return the project
+	 */
+	PomProject pomProject(MavenSource source, String pom);
 
 	/**
 	 * A Maven artifact's file, fetched into the local repository first when it is not

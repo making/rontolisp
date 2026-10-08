@@ -477,6 +477,17 @@ class ClojureInteropTest {
 	}
 
 	@Test
+	void instMsReadsAHostDateOrInstantBesideTheProgramsOwnInstants() throws Exception {
+		// oracle-identical (clj 1.12.6): the Inst protocol's host rows beside a Date the
+		// program read, whose class instance? names as the host's
+		assertBothEqual("(def hd (java.util.Date. 5))"
+				+ " (prn (inst? hd) (inst-ms hd) (inst-ms (java.time.Instant/ofEpochMilli 7)) (inst-ms* hd)"
+				+ " (map inst-ms [hd #inst \"1970-01-01T00:00:00.009Z\"]) (instance? java.util.Date hd)"
+				+ " (instance? java.util.Date #inst \"2020\") (uuid? (java.util.UUID/randomUUID)) (uuid? #uuid \"1-1-1-1-1\"))",
+				"true 5 7 5 (5 9) true true true true\n");
+	}
+
+	@Test
 	void classOfAnExceptionIsItsClassKeywordWithOrWithoutInterop() throws Exception {
 		// an ex-info condition is no host object: the same keyword whether the program
 		// uses interop (the host arm behind the exception arm) or not (no java: at all)

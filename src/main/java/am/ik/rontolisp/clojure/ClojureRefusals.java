@@ -88,6 +88,12 @@ final class ClojureRefusals {
 	static final String MALFORMED_URL = "RONTOLISP::%CLOJURE-MALFORMED-URL-EXCEPTION";
 
 	/**
+	 * {@code java.lang.AbstractMethodError}: a call of an interface method the type's
+	 * body leaves out ({@link ClojureInterfaces}).
+	 */
+	static final String ABSTRACT_METHOD = "RONTOLISP::%CLOJURE-ABSTRACT-METHOD-ERROR";
+
+	/**
 	 * {@code java.lang.ClassCastException} casting a value, its
 	 * {@code NullPointerException} when the value is nil.
 	 */
@@ -159,7 +165,8 @@ final class ClojureRefusals {
 			Map.entry(ASSERTION_ERROR, "java.lang.AssertionError"), Map.entry(IO, "java.io.IOException"),
 			Map.entry(FILE_NOT_FOUND, "java.io.FileNotFoundException"),
 			Map.entry(UNSUPPORTED_ENCODING, "java.io.UnsupportedEncodingException"),
-			Map.entry(MALFORMED_URL, "java.net.MalformedURLException"));
+			Map.entry(MALFORMED_URL, "java.net.MalformedURLException"),
+			Map.entry(ABSTRACT_METHOD, "java.lang.AbstractMethodError"));
 
 	/** Every carrier: a call to one is a refusal the strip folds. */
 	static final Set<String> CARRIERS = carriers();

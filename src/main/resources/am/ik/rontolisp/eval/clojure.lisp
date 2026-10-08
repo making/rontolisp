@@ -693,6 +693,12 @@
         ((rontolisp::%clojure-reader-value-p x)
          (rontolisp::%clojure-write-reader-value x nil-replacement readable
                                                  stream labels))
+        ;; an instant or a UUID prints its tagged literal under print and pr
+        ;; alike, like the oracle's print-method
+        ((rontolisp::%clojure-instant-p x)
+         (rontolisp::%clojure-write-inst-literal x stream))
+        ((rontolisp::%clojure-uuid-p x)
+         (rontolisp::%clojure-write-uuid-literal x stream))
         ((rontolisp::%clojure-print-meta-p x readable stream labels))
         ((rontolisp::%clojure-print-deep-p x) (write-char #\# stream))
         ((rontolisp::%clojure-lazy-p x)
@@ -781,6 +787,10 @@
         ((rontolisp::%clojure-sorted-p x)
          (rontolisp::%clojure-write-sorted x nil-replacement readable stream
                                            labels))
+        ;; a deftype or reify overriding toString is the oracle's #object: an
+        ;; arm of the object-methods family ("Host interfaces")
+        ((rontolisp::%clojure-to-string-p x)
+         (rontolisp::%clojure-write-object x readable stream))
         ((consp x)
          (write-char #\( stream)
          (rontolisp::%clojure-write-nested (car x) nil-replacement readable
@@ -879,6 +889,14 @@
                ((rontolisp::%clojure-ns-object-p x) (car (cdr x)))
                ((rontolisp::%clojure-reader-value-p x)
                 (rontolisp::%clojure-reader-value-string x))
+               ((rontolisp::%clojure-instant-p x)
+                (rontolisp::%clojure-instant-string x))
+               ((rontolisp::%clojure-uuid-p x)
+                (rontolisp::%clojure-uuid-to-string x))
+               ;; a type overriding toString: an arm of the object-methods
+               ;; family ("Host interfaces")
+               ((rontolisp::%clojure-to-string-p x)
+                (rontolisp::%clojure-object-string x))
                (t (or (rontolisp::%clojure-host-string x)
                       (rontolisp::%clojure-str-of x "nil" t)))))
         ((rontolisp::%clojure-re-pattern-p x)
@@ -1209,6 +1227,14 @@
    '("java.lang.AssertionError" "java.lang.Error" "java.lang.Throwable")
    message))
 
+(defun rontolisp::%clojure-abstract-method-error (message)
+  "A refusal the oracle throws as an AbstractMethodError: a call of an
+   interface method the type's body leaves out."
+  (rontolisp::%clojure-refuse '("java.lang.AbstractMethodError"
+                                "java.lang.IncompatibleClassChangeError"
+                                "java.lang.LinkageError" "java.lang.Error"
+                                "java.lang.Throwable") message))
+
 (defun rontolisp::%clojure-class-cast-exception-of (message value)
   "A refusal the oracle throws as a ClassCastException casting VALUE: its
    NullPointerException when VALUE is nil."
@@ -1492,6 +1518,55 @@
       (let ((e (rontolisp::%clojure-exception-of x)))
         (if e (car (cdr (cdr (cdr (c%e-parts e)))))))))
 
+;; One throwable's map in Throwable->map's :via: its class as a symbol, its
+;; message and its data when it has them. It has no frames here, so no :at.
+(defun rontolisp::%clojure-throwable-via (x)
+  (let ((e (rontolisp::%clojure-exception-of x))
+        (m (make-hash-table :test 'equal)))
+    (let ((message (rontolisp::%clojure-ex-message e))
+          (data (rontolisp::%clojure-ex-data e)))
+      (setf (gethash '(:c%keyword "type") m)
+            (rontolisp::%clojure-symbol-1
+             (car (rontolisp::%clojure-condition-chain e))))
+      (if message (setf (gethash '(:c%keyword "message") m) message))
+      (if data (setf (gethash '(:c%keyword "data") m) data))
+      m)))
+
+(defun rontolisp::%clojure-throwable-to-map (o)
+  "Throwable->map: the map of the throwable O -- :via one map per throwable
+   down its cause chain, :trace the root's frames, :cause and :data the root's
+   message and data, :phase the :clojure.error/phase of O's data. No throwable
+   has frames here (.getStackTrace answers []), so :trace is [] and no :via map
+   has :at, the oracle's own answer for an empty stack trace. Nil is the
+   oracle's NullPointerException, any other value its ClassCastException."
+  (if (null o)
+      (rontolisp::%clojure-null-pointer-exception
+       "Cannot invoke \"java.lang.Throwable.getStackTrace()\""))
+  (if (null (rontolisp::%clojure-exception-of o))
+      (rontolisp::%clojure-class-cast-exception
+       (concatenate 'string "class " (rontolisp::%clojure-class-name-of o)
+                    " cannot be cast to class java.lang.Throwable")))
+  (let ((via nil) (root o) (m (make-hash-table :test 'equal)))
+    (do ((tt o (rontolisp::%clojure-ex-cause tt)))
+        ((null tt))
+      (setq root tt)
+      (setq via (cons (rontolisp::%clojure-throwable-via tt) via)))
+    (let* ((top (rontolisp::%clojure-exception-of o))
+           (e (rontolisp::%clojure-exception-of root))
+           (message (rontolisp::%clojure-ex-message e))
+           (data (rontolisp::%clojure-ex-data e))
+           (own (rontolisp::%clojure-ex-data top))
+           (fields (if (rontolisp::%clojure-record-p own) (nth 3 own) own))
+           (phase
+            (if (hash-table-p fields)
+                (gethash '(:c%keyword "clojure.error/phase") fields))))
+      (setf (gethash '(:c%keyword "via") m) (coerce (reverse via) 'vector))
+      (setf (gethash '(:c%keyword "trace") m) (vector))
+      (if message (setf (gethash '(:c%keyword "cause") m) message))
+      (if data (setf (gethash '(:c%keyword "data") m) data))
+      (if phase (setf (gethash '(:c%keyword "phase") m) phase))
+      m)))
+
 ;; A host Throwable is a cause as itself, so ex-cause answers that very object
 ;; (the arm goes from a program that can make no host exception).
 (defun rontolisp::%clojure-cause-of (x)
@@ -1611,6 +1686,9 @@
         ((rontolisp::%clojure-atom-p x) "clojure.lang.Atom")
         ((and (consp x) (eq (car x) :C%PATTERN)) "java.util.regex.Pattern")
         ((and (consp x) (eq (car x) :C%VAR)) "clojure.lang.Var")
+        ((rontolisp::%clojure-instant-p x)
+         (rontolisp::%clojure-instant-class-name x))
+        ((rontolisp::%clojure-uuid-p x) "java.util.UUID")
         ((and (consp x) (keywordp (car x))) "java.lang.Object")
         ((consp x) "clojure.lang.PersistentList")
         ((hash-table-p x)
@@ -1620,6 +1698,15 @@
         ((vectorp x) "clojure.lang.PersistentVector")
         ((rationalp x) "clojure.lang.Ratio")
         (t "clojure.lang.Symbol")))
+
+;; clojure.datafy's :clojure.datafy/class of X: the oracle's class name, an
+;; exception's (or a host throwable's) too, which a datafy of one reaches only
+;; through the namespace's Throwable row and so its exception runtime.
+(defun rontolisp::%clojure-datafy-class-name (x)
+  (let ((e (rontolisp::%clojure-exception-of x)))
+    (if e
+        (car (rontolisp::%clojure-condition-chain e))
+        (rontolisp::%clojure-class-name-of x))))
 
 ;; Refuse an instance call of METHOD on X, a value %clojure-value-receiver-p
 ;; takes: the lowering's WORDS (the oracle's, or the unsupported refusal) and
@@ -2065,40 +2152,46 @@
    two sequentials element by element, two floats numerically, anything else
    with equal (numbers keep their category, strings and characters compare by
    value)."
-  (cond ((and (vectorp a) (vectorp b) (not (stringp a)) (not (stringp b)))
-         ;; two vectors read in place, without the seq view's copies
-         (and (eql (length a) (length b))
-              (let ((same t))
-                (dotimes (i (length a))
-                  (if (and same
-                       (not (rontolisp::%clojure-equal (aref a i) (aref b i))))
-                      (setq same nil)))
-                same)))
-        ((and (rontolisp::%clojure-set-p a) (rontolisp::%clojure-set-p b))
-         (rontolisp::%clojure-table-equal (car (cdr a)) (car (cdr b))))
-        ((and (rontolisp::%clojure-record-p a) (rontolisp::%clojure-record-p b))
-         (and (equal (car (cdr a)) (car (cdr b)))
-              (rontolisp::%clojure-table-equal (car (cdr (cdr (cdr a))))
-                                               (car (cdr (cdr (cdr b)))))))
-        ((or (rontolisp::%clojure-typed-opaque-p a)
-             (rontolisp::%clojure-typed-opaque-p b)
-             (rontolisp::%clojure-record-p a) (rontolisp::%clojure-record-p b))
-         (eq a b))
-        ((and (hash-table-p a) (hash-table-p b))
-         (rontolisp::%clojure-table-equal a b))
-        ((and (rontolisp::%clojure-sequential-p a)
-              (rontolisp::%clojure-sequential-p b))
-         (rontolisp::%clojure-seq-equal a b))
-        ((and (floatp a) (floatp b))
-         ;; numeric, like Numbers.equiv: the zeros are equal, NaN is not
-         (= a b))
-        ((or (rontolisp::%clojure-sorted-p a) (rontolisp::%clojure-sorted-p b))
-         (rontolisp::%clojure-sorted-equal a b))
-        ((rontolisp::%clojure-reader-value-p a)
-         (rontolisp::%clojure-reader-value-equal a b))
-        ;; equal hands a host object no collection, so a host collection and a
-        ;; Clojure one reach the host-object family's arm
-        (t (or (equal a b) (rontolisp::%clojure-host-equal-p a b)))))
+  (cond
+   ((and (vectorp a) (vectorp b) (not (stringp a)) (not (stringp b)))
+    ;; two vectors read in place, without the seq view's copies
+    (and (eql (length a) (length b))
+         (let ((same t))
+           (dotimes (i (length a))
+             (if (and same
+                      (not (rontolisp::%clojure-equal (aref a i) (aref b i))))
+                 (setq same nil)))
+           same)))
+   ((and (rontolisp::%clojure-set-p a) (rontolisp::%clojure-set-p b))
+    (rontolisp::%clojure-table-equal (car (cdr a)) (car (cdr b))))
+   ((and (rontolisp::%clojure-record-p a) (rontolisp::%clojure-record-p b))
+    (and (equal (car (cdr a)) (car (cdr b)))
+         (rontolisp::%clojure-table-equal (car (cdr (cdr (cdr a))))
+                                          (car (cdr (cdr (cdr b)))))))
+   ;; a deftype or reify overriding equals: an arm of the object-methods
+   ;; family ("Host interfaces")
+   ((rontolisp::%clojure-equals-p a) (rontolisp::%clojure-object-equal a b))
+   ((or (rontolisp::%clojure-typed-opaque-p a)
+        (rontolisp::%clojure-typed-opaque-p b) (rontolisp::%clojure-record-p a)
+        (rontolisp::%clojure-record-p b))
+    (eq a b))
+   ((and (hash-table-p a) (hash-table-p b))
+    (rontolisp::%clojure-table-equal a b))
+   ((and (rontolisp::%clojure-sequential-p a)
+         (rontolisp::%clojure-sequential-p b))
+    (rontolisp::%clojure-seq-equal a b))
+   ((and (floatp a) (floatp b))
+    ;; numeric, like Numbers.equiv: the zeros are equal, NaN is not
+    (= a b))
+   ((or (rontolisp::%clojure-sorted-p a) (rontolisp::%clojure-sorted-p b))
+    (rontolisp::%clojure-sorted-equal a b))
+   ((rontolisp::%clojure-reader-value-p a)
+    (rontolisp::%clojure-reader-value-equal a b))
+   ;; a Date is = to a Timestamp of its milliseconds, not the other way
+   ((rontolisp::%clojure-instant-p a) (rontolisp::%clojure-inst-equal a b))
+   ;; equal hands a host object no collection, so a host collection and a
+   ;; Clojure one reach the host-object family's arm
+   (t (or (equal a b) (rontolisp::%clojure-host-equal-p a b)))))
 
 ;; = of a host collection and a Clojure one, the oracle's pcequiv: Util.equiv
 ;; hands a pair holding a Clojure collection to that collection's equiv, which
@@ -2473,6 +2566,11 @@
           ((rontolisp::%clojure-sorted-p x) (rontolisp::%clojure-sorted-hash x))
           ((rontolisp::%clojure-reader-value-p x)
            (rontolisp::%clojure-reader-value-hash x))
+          ;; an instant by its milliseconds, so a Date and a Timestamp = to it
+          ;; hash alike
+          ((rontolisp::%clojure-instant-p x) (logand (car (cdr x)) 1048575))
+          ((rontolisp::%clojure-uuid-p x)
+           (logand (logxor (car (cdr x)) (car (cdr (cdr x)))) 1048575))
           ((rontolisp::%clojure-io-p x) (rontolisp::%clojure-io-hash x))
           (t 0)))
         ((characterp x) (char-code x))
@@ -2664,41 +2762,54 @@
    arity error. Strings are no functions, like the oracle, and anything else
    signals."
   (cond ((functionp f) (apply f args))
-        ((rontolisp::%clojure-set-p f)
-         (gethash (rontolisp::%clojure-table-key (car args) (car (cdr f)))
-                  (car (cdr f)) (if (cdr args) (car (cdr args)) nil)))
-        ((hash-table-p f)
-         (gethash (rontolisp::%clojure-table-key (car args) f) f
-                  (if (cdr args) (car (cdr args)) nil)))
-        ((and (vectorp f) (not (stringp f)))
-         (let ((i (car args)))
-           (if (and (integerp i) (<= 0 i) (< i (length f)))
-               (elt f i)
-               (if (cdr args) (car (cdr args)) nil))))
-        ((rontolisp::%clojure-keyword-p f)
-         (if (or (null args) (cdr (cdr args)))
-             (rontolisp::%clojure-arity-exception
-              (format nil "Wrong number of args (~D) passed to: :~A"
-                      (length args) (car (cdr f))))
-             (rontolisp::%clojure-call-keyword f (car args)
-              (if (cdr args) (car (cdr args)) nil))))
-        ((rontolisp::%clojure-real-symbol-p f)
-         (if (or (null args) (cdr (cdr args)))
-             (rontolisp::%clojure-arity-exception
-              (format nil
-                      "Wrong number of args (~D) passed to: clojure.lang.Symbol"
-                      (length args)))
-             (rontolisp::%clojure-call-keyword f (car args)
-              (if (cdr args) (car (cdr args)) nil))))
-        ((rontolisp::%clojure-var-p f)
-         (rontolisp::%clojure-call (rontolisp::%clojure-var-get f) args))
-        ((rontolisp::%clojure-sorted-p f)
-         (rontolisp::%clojure-sorted-get f (car args)
-                                         (if (cdr args) (car (cdr args)) nil)))
-        ((rontolisp::%clojure-unbound-p f)
-         (rontolisp::%clojure-illegal-state-exception
-          (format nil "Attempting to call unbound fn: #'~A" (car (cdr f)))))
-        (t (rontolisp::%clojure-class-cast-exception-of "not a function" f))))
+   ((rontolisp::%clojure-set-p f)
+    (gethash (rontolisp::%clojure-table-key (car args) (car (cdr f)))
+             (car (cdr f)) (if (cdr args) (car (cdr args)) nil)))
+   ((hash-table-p f)
+    (gethash (rontolisp::%clojure-table-key (car args) f) f
+             (if (cdr args) (car (cdr args)) nil)))
+   ((and (vectorp f) (not (stringp f)))
+    (let ((i (car args)))
+      (if (and (integerp i) (<= 0 i) (< i (length f)))
+          (elt f i)
+          (if (cdr args) (car (cdr args)) nil))))
+   ;; a keyword or symbol over a type implementing ILookup reads through its
+   ;; valAt of the call's count: an arm of the lookup family ("Host
+   ;; interfaces")
+   ((rontolisp::%clojure-keyword-p f)
+    (if (or (null args) (cdr (cdr args)))
+        (rontolisp::%clojure-arity-exception
+         (format nil "Wrong number of args (~D) passed to: :~A" (length args)
+                 (car (cdr f))))
+        (if (rontolisp::%clojure-lookup-p (car args))
+            (rontolisp::%clojure-lookup-get (car args) f
+                                            (if (cdr args) (car (cdr args)) nil)
+                                            (cdr args))
+            (rontolisp::%clojure-call-keyword f (car args)
+             (if (cdr args) (car (cdr args)) nil)))))
+   ((rontolisp::%clojure-real-symbol-p f)
+    (if (or (null args) (cdr (cdr args)))
+        (rontolisp::%clojure-arity-exception
+         (format nil "Wrong number of args (~D) passed to: clojure.lang.Symbol"
+                 (length args)))
+        (if (rontolisp::%clojure-lookup-p (car args))
+            (rontolisp::%clojure-lookup-get (car args) f
+                                            (if (cdr args) (car (cdr args)) nil)
+                                            (cdr args))
+            (rontolisp::%clojure-call-keyword f (car args)
+             (if (cdr args) (car (cdr args)) nil)))))
+   ((rontolisp::%clojure-var-p f)
+    (rontolisp::%clojure-call (rontolisp::%clojure-var-get f) args))
+   ((rontolisp::%clojure-sorted-p f)
+    (rontolisp::%clojure-sorted-get f (car args)
+                                    (if (cdr args) (car (cdr args)) nil)))
+   ((rontolisp::%clojure-unbound-p f)
+    (rontolisp::%clojure-illegal-state-exception
+     (format nil "Attempting to call unbound fn: #'~A" (car (cdr f)))))
+   ;; a type implementing IFn: an arm of the invokable family ("Host
+   ;; interfaces")
+   ((rontolisp::%clojure-invokable-p f) (rontolisp::%clojure-invoke f args))
+   (t (rontolisp::%clojure-class-cast-exception-of "not a function" f))))
 
 (defun rontolisp::%clojure-as-fn (f)
   "F as a real function for a runtime worker to funcall: F itself when it is
@@ -2719,6 +2830,11 @@
          (rontolisp::%clojure-sorted-get coll k dflt))
         ((rontolisp::%clojure-reader-value-p coll)
          (rontolisp::%clojure-reader-value-get coll k dflt))
+        ;; a type implementing ILookup, its default given when not nil (the
+        ;; dispatcher asks ahead with the count it has): an arm of the lookup
+        ;; family ("Host interfaces")
+        ((rontolisp::%clojure-lookup-p coll)
+         (rontolisp::%clojure-lookup-get coll k dflt dflt))
         (t dflt)))
 
 ;;;; Lazy seqs: memoized-thunk wrappers over the strict seq view.
@@ -2778,6 +2894,9 @@
                (car (cdr (cdr (cdr coll)))))
       acc))
    ((rontolisp::%clojure-sorted-p coll) (rontolisp::%clojure-sorted-seq coll))
+   ;; a type implementing Seqable seqs through its seq: an arm of the seqable
+   ;; family ("Host interfaces")
+   ((rontolisp::%clojure-seqable-p coll) (rontolisp::%clojure-seqable-seq coll))
    ((rontolisp::%clojure-host-seqable-p coll)
     (rontolisp::%clojure-host-seq coll))
    (t
@@ -2891,6 +3010,11 @@
             (setq left (- left 1))))))
    ((rontolisp::%clojure-matcher-value-p coll)
     (rontolisp::%clojure-matcher-nth coll i dflt))
+   ;; a type implementing Indexed answers its nth over the default (nth of two
+   ;; arguments is %clojure-nth-2's): an arm of the indexed family ("Host
+   ;; interfaces")
+   ((rontolisp::%clojure-indexed-p coll)
+    (funcall (rontolisp::%clojure-interface-entry coll "nth") coll i dflt))
    (t (rontolisp::%clojure-unsupported-operation-exception
        "nth not supported on this type"))))
 
@@ -2925,11 +3049,22 @@
       (setq s (rontolisp::%clojure-seq (cdr s)))
       (setq left (- left 1)))))
 
+;; The lazy-or-strict verbs ask %clojure-lazy-input-p of their input: a lazy
+;; wrapper, or a type implementing Seqable, whose seq may be lazy and endless
+;; (the oracle's verbs are lazy over it). Their lazy arms step the input through
+;; %clojure-seq alone, which reads such a type, and never hold the input itself
+;; as a seq's tail. A program storing no Seqable row calls %clojure-lazy-p in its
+;; place (the seqable family's alias, "Host interfaces").
+(defun rontolisp::%clojure-lazy-input-p (x)
+  "Whether the lazy-or-strict verbs take X as a lazy input: a lazy wrapper or a
+   Seqable."
+  (or (rontolisp::%clojure-lazy-p x) (rontolisp::%clojure-seqable-p x)))
+
 (defun rontolisp::%clojure-any-lazy-p (colls)
-  "Whether any member of the COLLS list is a lazy wrapper."
+  "Whether any member of the COLLS list is a lazy input."
   (if (null colls)
       nil
-      (if (rontolisp::%clojure-lazy-p (car colls))
+      (if (rontolisp::%clojure-lazy-input-p (car colls))
           t
           (rontolisp::%clojure-any-lazy-p (cdr colls)))))
 
@@ -2990,7 +3125,7 @@
 (defun rontolisp::%clojure-filter (pred coll)
   "Filter COLL through PRED: a wrapper when COLL is lazy, remove-if-not over
    the whole-collection view else."
-  (if (rontolisp::%clojure-lazy-p coll)
+  (if (rontolisp::%clojure-lazy-input-p coll)
       (rontolisp::%clojure-filter-lazy pred coll)
       (remove-if-not (lambda (x) (rontolisp::%clojure-filter-test pred x))
                      (rontolisp::%clojure-seq-all coll))))
@@ -3068,7 +3203,7 @@
 
 (defun rontolisp::%clojure-remove (pred coll)
   "(remove pred coll): the members PRED answers nil or false for."
-  (if (rontolisp::%clojure-lazy-p coll)
+  (if (rontolisp::%clojure-lazy-input-p coll)
       (rontolisp::%clojure-keep-lazy (lambda (i x)
                                        (declare (ignore i))
                                        (if (rontolisp::%clojure-truthy
@@ -3080,7 +3215,7 @@
 (defun rontolisp::%clojure-keep (f coll)
   "(keep f coll): F's non-nil answers (false is kept, a signalling F
    signals)."
-  (if (rontolisp::%clojure-lazy-p coll)
+  (if (rontolisp::%clojure-lazy-input-p coll)
       (rontolisp::%clojure-keep-lazy (lambda (i x)
                                        (declare (ignore i))
                                        (let ((v (funcall f x)))
@@ -3092,7 +3227,7 @@
 (defun rontolisp::%clojure-indexed (f coll keep)
   "(keep-indexed f coll) when KEEP, (map-indexed f coll) otherwise: F over the
    index from 0 and each member, a nil answer dropped when KEEP."
-  (if (rontolisp::%clojure-lazy-p coll)
+  (if (rontolisp::%clojure-lazy-input-p coll)
       (rontolisp::%clojure-keep-lazy (if keep
                                          (lambda (i x)
                                            (let ((v (funcall f i x)))
@@ -3109,7 +3244,7 @@
    structural-key runtime, like a set's. A lazy cell realizes at most once, so
    the seen table grows in member order."
   (let ((seen (make-hash-table :test 'equal)))
-    (if (rontolisp::%clojure-lazy-p coll)
+    (if (rontolisp::%clojure-lazy-input-p coll)
         (rontolisp::%clojure-keep-lazy (lambda (i x)
                                          (declare (ignore i))
                                          (if (rontolisp::%clojure-distinct-new-p
@@ -3133,7 +3268,7 @@
 (defun rontolisp::%clojure-interpose (sep coll)
   "(interpose sep coll): SEP between every two members, so one member never
    shows it."
-  (if (rontolisp::%clojure-lazy-p coll)
+  (if (rontolisp::%clojure-lazy-input-p coll)
       (rontolisp::%clojure-interpose-lazy sep coll nil)
       (let ((acc nil))
         (dolist (x (rontolisp::%clojure-seq-all coll) (reverse acc))
@@ -3155,7 +3290,7 @@
   "(partition n step coll): runs of N every STEP members, an incomplete tail
    dropped, like the oracle. A non-positive size signals."
   (cond ((<= n 0) (error "partition takes a positive size"))
-        ((rontolisp::%clojure-lazy-p coll)
+        ((rontolisp::%clojure-lazy-input-p coll)
          (rontolisp::%clojure-partition-lazy n step coll))
         (t (let ((s (rontolisp::%clojure-seq-all coll)) (acc nil) (part nil))
              (do ()
@@ -3325,7 +3460,7 @@
    DEPTH (the number of binding levels): a lazy seq when COLL is lazy, else the
    realized strict list, or that list's prefix concatenated before the lazy
    rest when a later level meets a lazy collection."
-  (if (rontolisp::%clojure-lazy-p coll)
+  (if (rontolisp::%clojure-lazy-input-p coll)
       (rontolisp::%clojure-for-lazy coll step depth)
       (let ((box (list nil)))
         (let ((rest (rontolisp::%clojure-for-walk coll step depth box)))
@@ -3346,7 +3481,7 @@
         (cond ((eq r :C%FOR-SKIP) nil)
               ((eq r :C%FOR-STOP) (setq done t))
               ((= depth 1) (rplaca box (cons r (car box))))
-              ((rontolisp::%clojure-lazy-p (car r))
+              ((rontolisp::%clojure-lazy-input-p (car r))
                (setq rest
                      (list
                       (rontolisp::%clojure-for-lazy (car r) (cdr r) (- depth 1))
@@ -4633,7 +4768,7 @@
 
 (defun rontolisp::%clojure-lazy-or-strict (coll lazy)
   "LAZY (a wrapper) when COLL is lazy, LAZY realized to a strict list otherwise."
-  (if (rontolisp::%clojure-lazy-p coll)
+  (if (rontolisp::%clojure-lazy-input-p coll)
       lazy
       (rontolisp::%clojure-realize-all lazy)))
 
@@ -5348,9 +5483,17 @@
   (or (rontolisp::%clojure-is-sequential x) (rontolisp::%clojure-is-map x)
       (rontolisp::%clojure-set-p x) (rontolisp::%clojure-sorted-set-p x)))
 
+;; A type implementing the interface a predicate names answers true: arms of
+;; the seqable, counted, indexed and invokable families ("Host interfaces").
 (defun rontolisp::%clojure-is-seqable (x)
   "seqable?: what seq takes -- nil, a string or a collection."
-  (or (null x) (stringp x) (rontolisp::%clojure-is-coll x)))
+  (or (null x) (stringp x) (rontolisp::%clojure-is-coll x)
+      (rontolisp::%clojure-seqable-p x)))
+
+(defun rontolisp::%clojure-is-indexed (x)
+  "indexed?: a vector, or a type implementing Indexed. A program storing no
+   Indexed row calls %clojure-is-vector in its place (the family's alias)."
+  (or (rontolisp::%clojure-is-vector x) (rontolisp::%clojure-indexed-p x)))
 
 (defun rontolisp::%clojure-is-associative (x)
   "associative?: a map, a record or a vector."
@@ -5360,15 +5503,16 @@
   "counted?: a list, vector, map, set or record; a lazy seq is not."
   (or (rontolisp::%clojure-is-list x) (rontolisp::%clojure-is-vector x)
       (rontolisp::%clojure-is-map x) (rontolisp::%clojure-set-p x)
-      (rontolisp::%clojure-sorted-set-p x)))
+      (rontolisp::%clojure-sorted-set-p x) (rontolisp::%clojure-counted-p x)))
 
 (defun rontolisp::%clojure-is-ifn (x)
   "ifn?: a function, keyword, symbol, map, set, vector or var. A record is no
-   IFn, like the oracle's."
+   IFn, like the oracle's, unless its body implements it."
   (or (functionp x) (rontolisp::%clojure-keyword-p x)
       (rontolisp::%clojure-real-symbol-p x) (hash-table-p x)
       (rontolisp::%clojure-set-p x) (rontolisp::%clojure-is-vector x)
-      (rontolisp::%clojure-var-p x) (rontolisp::%clojure-sorted-p x)))
+      (rontolisp::%clojure-var-p x) (rontolisp::%clojure-sorted-p x)
+      (rontolisp::%clojure-invokable-p x)))
 
 (defun rontolisp::%clojure-is-int (x)
   "int?: an integer a long holds (the oracle's Long, Integer, Short, Byte)."
@@ -5510,9 +5654,12 @@
   "bound? as a value."
   (if (rontolisp::%clojure-is-bound args) t rontolisp::%clojure-false))
 
+;; A Date or a Timestamp (the instant family's arm, so a program making no
+;; instant keeps the two host tests alone), else a host Date or Instant.
 (defun rontolisp::%clojure-is-inst (x)
   "inst?: a host java.util.Date or java.time.Instant."
-  (or (rontolisp::%clojure-host-instance-p x "java.util.Date")
+  (or (rontolisp::%clojure-inst-p x)
+      (rontolisp::%clojure-host-instance-p x "java.util.Date")
       (rontolisp::%clojure-host-instance-p x "java.time.Instant")))
 
 ;;;; clojure.set: the relational set library over the set wrapper.
@@ -6079,6 +6226,10 @@
      (rontolisp::%clojure-symbol-full-name b)))
    ((and (vectorp a) (not (stringp a)) (vectorp b) (not (stringp b)))
     (rontolisp::%clojure-compare-vectors a b))
+   ;; an instant or a UUID orders against its own kind, like the oracle's
+   ;; compareTo
+   ((rontolisp::%clojure-instant-p a) (rontolisp::%clojure-instant-compare a b))
+   ((rontolisp::%clojure-uuid-p a) (rontolisp::%clojure-uuid-compare a b))
    (t (rontolisp::%clojure-class-cast-exception
        "compare needs two values of one comparable kind"))))
 
@@ -6092,7 +6243,8 @@
    boolean, a keyword, a symbol or a vector -- the oracle's nil, Number or
    Comparable."
   (or (symbolp x) (numberp x) (stringp x) (characterp x)
-      (rontolisp::%clojure-keyword-p x) (and (vectorp x) (not (stringp x)))))
+      (rontolisp::%clojure-keyword-p x) (and (vectorp x) (not (stringp x)))
+      (rontolisp::%clojure-instant-p x) (rontolisp::%clojure-uuid-p x)))
 
 (defun rontolisp::%clojure-cmp-call (cmp a b)
   "The order the comparator function CMP puts A and B in, the oracle's
@@ -7282,9 +7434,9 @@
 
 ;;;; The oracle's long and int casts, and clojure.math's round and long arithmetic.
 ;;
-;; The two casts are the oracle's RT.longCast and RT.intCast of an object: what a
-;; ^long parameter and (int x) apply, and what vector-of stores an integer kind
-;; through. The double functions of clojure.math are one (%strict-math :name ...)
+;; The two casts are the oracle's RT.longCast and RT.intCast of an object: what
+;; (long x), (int x), a ^long parameter apply, and what vector-of stores an integer
+;; kind through. The double functions of clojure.math are one (%strict-math :name ...)
 ;; each, over arguments cast by %clojure-double, lowered in place by the
 ;; rontolisp.internal.math kernels (ClojureKernelLowering); the functions below are
 ;; the kernels that are workers.
@@ -7293,33 +7445,53 @@
   "X as the oracle's longCast takes an object: an integer in the long range, a
    ratio truncated toward zero, a double truncated (NaN is 0, 2^63 itself the
    largest long, as Java's (long) saturates, one past it refused), a
-   character's code; anything else signals, so does a value out of range."
+   character's code; anything else signals, so does a value out of range. The
+   refusal spells the value as the oracle's toString through princ, not the str
+   runtime."
   (let ((n
-         (cond ((characterp x) (char-code x))
-               ((integerp x) x)
+         (cond ((integerp x) x)
+               ((characterp x) (char-code x))
                ((floatp x)
-                (cond ((/= x x) 0)
-                      ((or (> x 9.223372036854775807e18)
-                           (< x -9.223372036854775808e18))
-                       nil)
-                      ((>= x 9.223372036854775807e18) 9223372036854775807)
-                      (t (truncate x))))
+                ;; one float comparison on the common path: a generic one costs
+                ;; more than the truncation on wasm
+                (cond ((< (abs x) 9.223372036854775807e18) (truncate x))
+                      ((/= x x) 0)
+                      ((= x 9.223372036854775807e18) 9223372036854775807)
+                      ((= x -9.223372036854775808e18) -9223372036854775808)
+                      (t nil)))
                ((numberp x) (truncate x))
                (t (rontolisp::%clojure-class-cast-exception-of
                    "long needs a number or a character" x)))))
     (if (or (null n) (> n 9223372036854775807) (< n -9223372036854775808))
         (rontolisp::%clojure-illegal-argument-exception
          (concatenate 'string "Value out of range for long: "
-          (rontolisp::%clojure-str-of (if (null n) x n) "null" nil)))
+                      (cond (n (princ-to-string n))
+                            ;; Double.toString: Infinity, 1.0E19
+                            ((rontolisp::%clojure-symbolic-float-p x)
+                             (princ-to-string x))
+                            (t (string-upcase (princ-to-string x))))))
         n)))
 
 (defun rontolisp::%clojure-int-cast (x)
   "X as the oracle's intCast takes an object: its longCast, refused past the
-   int range as the oracle's integer overflow."
-  (let ((n (rontolisp::%clojure-long-cast x)))
-    (if (or (< n -2147483648) (> n 2147483647))
-        (rontolisp::%clojure-arithmetic-exception "integer overflow")
-        n)))
+   int range as the oracle's integer overflow. An integer in the int range
+   answers itself without the longCast call."
+  (if (and (integerp x) (>= x -2147483648) (<= x 2147483647))
+      x
+      (let ((n (rontolisp::%clojure-long-cast x)))
+        (if (or (< n -2147483648) (> n 2147483647))
+            (rontolisp::%clojure-arithmetic-exception "integer overflow")
+            n))))
+
+(defun rontolisp::%clojure-long-v (&rest args)
+  "long as a value."
+  (rontolisp::%clojure-check-arity args 1 1 "long")
+  (rontolisp::%clojure-long-cast (car args)))
+
+(defun rontolisp::%clojure-int-v (&rest args)
+  "int as a value."
+  (rontolisp::%clojure-check-arity args 1 1 "int")
+  (rontolisp::%clojure-int-cast (car args)))
 
 (defun rontolisp::%clojure-math-round (a)
   "(clojure.math/round a): the long nearest the double of A, a tie rounding up
@@ -7428,11 +7600,15 @@
     (setf (gethash x rontolisp::%clojure-meta-table) m))
   x)
 
+;; A deftype implementing IObj answers its own withMeta, and one implementing
+;; IMeta its own meta: arms of the meta-interface family ("Host interfaces").
 (defun rontolisp::%clojure-with-meta (x m)
   "A copy of X carrying the metadata map M, like the oracle's withMeta; a symbol
    answers itself (see above), anything else that is no IObj in the oracle
    signals, like its cast."
-  (cond ((hash-table-p x)
+  (cond ((rontolisp::%clojure-iobj-p x)
+         (funcall (rontolisp::%clojure-interface-entry x "withMeta") x m))
+        ((hash-table-p x)
          (let ((copy (make-hash-table :test 'equal)))
            (maphash (lambda (k v) (setf (gethash k copy) v)) x)
            (rontolisp::%clojure-put-meta copy m)))
@@ -7462,9 +7638,11 @@
 
 (defun rontolisp::%clojure-meta (x)
   "X's metadata map, nil when it carries none."
-  (if rontolisp::%clojure-meta-table
-      (values (gethash x rontolisp::%clojure-meta-table))
-      nil))
+  (if (rontolisp::%clojure-imeta-p x)
+      (funcall (rontolisp::%clojure-interface-entry x "meta") x)
+      (if rontolisp::%clojure-meta-table
+          (values (gethash x rontolisp::%clojure-meta-table))
+          nil)))
 
 (defun rontolisp::%clojure-meta-v (&rest args)
   "meta as a value."
@@ -7764,6 +7942,9 @@
    ((rontolisp::%clojure-future-p x) (rontolisp::%clojure-future-get x))
    ((rontolisp::%clojure-host-object-p x "java.util.concurrent.Future")
     (rontolisp::%clojure-host-future-get x))
+   ;; a type implementing IDeref: an arm of the derefable family ("Host
+   ;; interfaces")
+   ((rontolisp::%clojure-derefable-p x) (rontolisp::%clojure-interface-deref x))
    (t (rontolisp::%clojure-class-cast-exception-of "deref needs an atom" x))))
 
 ;; deref's host arm: a host Future is read through its own get, a failure
@@ -7960,42 +8141,57 @@
         (if row (gethash method row) nil))
       nil))
 
+;; A type whose body implements clojure.lang.IReduceInit reduces through it too,
+;; and one implementing clojure.lang.IKVReduce kv-reduces through it: arms of
+;; the reduce-interface family ("Host interfaces" below), whose store also makes
+;; a value of this one. The oracle's reduce asks IReduceInit (IReduce without an
+;; init) ahead of CollReduce, and its kv-reduce takes a type's own IKVReduce row
+;; ahead of the protocol's row for the interface.
 (defun rontolisp::%clojure-coll-reducible-p (x)
-  "Whether X reduces through its own CollReduce row: the reducible family's
-   test."
-  (if (rontolisp::%clojure-typed-reducer x rontolisp::%clojure-coll-reducers
-                                         '(:c%keyword "coll-reduce"))
+  "Whether X reduces through its own CollReduce row or its IReduceInit: the
+   reducible family's test."
+  (if (or (rontolisp::%clojure-typed-reducer x rontolisp::%clojure-coll-reducers
+                                             '(:c%keyword "coll-reduce"))
+          (rontolisp::%clojure-reduce-init-p x))
       t
       nil))
 
 (defun rontolisp::%clojure-kv-reducible-p (x)
-  "Whether X reduces through its own IKVReduce row: the reducible family's
-   test."
-  (if (rontolisp::%clojure-typed-reducer x rontolisp::%clojure-kv-reducers
-                                         '(:c%keyword "kv-reduce"))
+  "Whether X reduces through its own IKVReduce row or interface: the reducible
+   family's test."
+  (if (or (rontolisp::%clojure-typed-reducer x rontolisp::%clojure-kv-reducers
+                                             '(:c%keyword "kv-reduce"))
+          (rontolisp::%clojure-kvreduce-p x))
       t
       nil))
 
 (defun rontolisp::%clojure-coll-reduce-2 (coll f)
-  "(coll-reduce coll f) through COLL's own CollReduce row."
-  (funcall (rontolisp::%clojure-typed-reducer coll
-                                              rontolisp::%clojure-coll-reducers
-                                              '(:c%keyword "coll-reduce")) coll
-           f))
+  "(coll-reduce coll f) through COLL's own CollReduce row, or (reduce f coll)
+   of an IReduceInit."
+  (if (rontolisp::%clojure-reduce-init-p coll)
+      (rontolisp::%clojure-interface-reduce-2 coll f)
+      (funcall (rontolisp::%clojure-typed-reducer coll
+                rontolisp::%clojure-coll-reducers '(:c%keyword "coll-reduce"))
+               coll f)))
 
 (defun rontolisp::%clojure-coll-reduce-3 (coll f init)
-  "(coll-reduce coll f init) through COLL's own CollReduce row."
-  (funcall (rontolisp::%clojure-typed-reducer coll
-                                              rontolisp::%clojure-coll-reducers
-                                              '(:c%keyword "coll-reduce")) coll
-           f init))
+  "(coll-reduce coll f init) through COLL's own CollReduce row, or its
+   IReduceInit's reduce."
+  (if (rontolisp::%clojure-reduce-init-p coll)
+      (funcall (rontolisp::%clojure-interface-entry coll "reduce") coll f init)
+      (funcall (rontolisp::%clojure-typed-reducer coll
+                rontolisp::%clojure-coll-reducers '(:c%keyword "coll-reduce"))
+               coll f init)))
 
 (defun rontolisp::%clojure-kv-reduce-3 (coll f init)
-  "(kv-reduce coll f init) through COLL's own IKVReduce row."
-  (funcall (rontolisp::%clojure-typed-reducer coll
-                                              rontolisp::%clojure-kv-reducers
-                                              '(:c%keyword "kv-reduce")) coll f
-           init))
+  "(kv-reduce coll f init) through COLL's own IKVReduce row, or its IKVReduce
+   interface's kvreduce."
+  (if (rontolisp::%clojure-kv-interface-p coll)
+      (funcall (rontolisp::%clojure-interface-entry coll "kvreduce") coll f
+               init)
+      (funcall (rontolisp::%clojure-typed-reducer coll
+                rontolisp::%clojure-kv-reducers '(:c%keyword "kv-reduce")) coll
+               f init)))
 
 (defun rontolisp::%clojure-reducible-items (coll)
   "COLL, unless it reduces through its own CollReduce row: then the list of
@@ -8006,6 +8202,257 @@
        (rontolisp::%clojure-coll-reduce-3 coll (lambda (acc x) (cons x acc))
                                           nil))
       coll))
+
+;;;; Host interfaces: a reify, deftype or defrecord body implementing a
+;;;; clojure.lang interface the core verbs consult (clojure/ClojureInterfaces).
+;;
+;; The type's row, under its tag in %clojure-interface-rows, maps each interface
+;; it implements (its binary name, supers included) to T and each method name to
+;; the lambda the body defines, dispatching on the call's count where the
+;; interfaces declare several (valAt, nth, invoke, reduce); a method or a count
+;; it leaves out is the oracle's AbstractMethodError. Each interface family
+;; stores through a function of its own, the family's producer
+;; (clojure/ClojureArms), and the verbs ask the family's tests in their arms, so a
+;; program storing no row of a family has its arms folded and compiles as before.
+;; Like the protocol rows, a reify's row stays for the program's lifetime.
+
+(defvar rontolisp::%clojure-interface-rows nil)
+
+(defun rontolisp::%clojure-interface-store (tag names methods)
+  "Stores the interface NAMES (binary names) and the METHODS plist (a method
+   name, its lambda ...) in the row of the type TAG, the table and the row made
+   on first use."
+  (if (null rontolisp::%clojure-interface-rows)
+      (setq rontolisp::%clojure-interface-rows (make-hash-table :test 'equal)))
+  (let ((row (gethash tag rontolisp::%clojure-interface-rows)))
+    (if (null row)
+        (progn
+          (setq row (make-hash-table :test 'equal))
+          (setf (gethash tag rontolisp::%clojure-interface-rows) row)))
+    (dolist (name names) (setf (gethash name row) t))
+    (do ((p methods (cdr (cdr p))))
+        ((null p) nil)
+      (setf (gethash (car p) row) (car (cdr p))))))
+
+(defun rontolisp::%clojure-interface-entry (x key)
+  "The entry KEY of the row of the record, deftype or reify X's type: T for an
+   interface it implements, the lambda of a method; nil for any other value or
+   key."
+  (if (and rontolisp::%clojure-interface-rows (consp x)
+       (or (eq (car x) :c%record) (eq (car x) :c%type) (eq (car x) :c%reify)))
+      (let ((row (gethash (car (cdr x)) rontolisp::%clojure-interface-rows)))
+        (if row (gethash key row) nil))
+      nil))
+
+;; The stores, one per family: the families' producers.
+
+(defun rontolisp::%clojure-reduce-interface-row (tag names methods)
+  "Stores an IReduceInit, IReduce or IKVReduce row."
+  (rontolisp::%clojure-interface-store tag names methods))
+
+(defun rontolisp::%clojure-seqable-row (tag names methods)
+  "Stores a Seqable row."
+  (rontolisp::%clojure-interface-store tag names methods))
+
+(defun rontolisp::%clojure-counted-row (tag names methods)
+  "Stores a Counted row."
+  (rontolisp::%clojure-interface-store tag names methods))
+
+(defun rontolisp::%clojure-indexed-row (tag names methods)
+  "Stores an Indexed row."
+  (rontolisp::%clojure-interface-store tag names methods))
+
+(defun rontolisp::%clojure-lookup-row (tag names methods)
+  "Stores an ILookup row."
+  (rontolisp::%clojure-interface-store tag names methods))
+
+(defun rontolisp::%clojure-invokable-row (tag names methods)
+  "Stores an IFn, Callable or Runnable row."
+  (rontolisp::%clojure-interface-store tag names methods))
+
+(defun rontolisp::%clojure-derefable-row (tag names methods)
+  "Stores an IDeref row."
+  (rontolisp::%clojure-interface-store tag names methods))
+
+(defun rontolisp::%clojure-meta-row (tag names methods)
+  "Stores an IMeta or IObj row."
+  (rontolisp::%clojure-interface-store tag names methods))
+
+(defun rontolisp::%clojure-object-row (tag names methods)
+  "Stores the Object overrides (toString, equals, hashCode) of a type."
+  (rontolisp::%clojure-interface-store tag names methods))
+
+;; The tests, the families' arm tests: whether X's type implements the
+;; interface (or, for Object, overrides the method).
+
+(defun rontolisp::%clojure-reduce-init-p (x)
+  (rontolisp::%clojure-interface-entry x "clojure.lang.IReduceInit"))
+
+(defun rontolisp::%clojure-ireduce-p (x)
+  (rontolisp::%clojure-interface-entry x "clojure.lang.IReduce"))
+
+(defun rontolisp::%clojure-kvreduce-p (x)
+  (rontolisp::%clojure-interface-entry x "clojure.lang.IKVReduce"))
+
+(defun rontolisp::%clojure-kv-interface-p (x)
+  "Whether reduce-kv takes X through its IKVReduce interface: X implements it
+   and its type has no IKVReduce protocol row, which the oracle's dispatch
+   takes first."
+  (and (rontolisp::%clojure-interface-entry x "clojure.lang.IKVReduce")
+       (null
+        (rontolisp::%clojure-typed-reducer x rontolisp::%clojure-kv-reducers
+                                           '(:c%keyword "kv-reduce")))))
+
+(defun rontolisp::%clojure-seqable-p (x)
+  (rontolisp::%clojure-interface-entry x "clojure.lang.Seqable"))
+
+(defun rontolisp::%clojure-counted-p (x)
+  (rontolisp::%clojure-interface-entry x "clojure.lang.Counted"))
+
+(defun rontolisp::%clojure-indexed-p (x)
+  (rontolisp::%clojure-interface-entry x "clojure.lang.Indexed"))
+
+(defun rontolisp::%clojure-lookup-p (x)
+  (rontolisp::%clojure-interface-entry x "clojure.lang.ILookup"))
+
+(defun rontolisp::%clojure-invokable-p (x)
+  (rontolisp::%clojure-interface-entry x "clojure.lang.IFn"))
+
+(defun rontolisp::%clojure-callable-p (x)
+  (rontolisp::%clojure-interface-entry x "java.util.concurrent.Callable"))
+
+(defun rontolisp::%clojure-runnable-p (x)
+  (rontolisp::%clojure-interface-entry x "java.lang.Runnable"))
+
+(defun rontolisp::%clojure-derefable-p (x)
+  (rontolisp::%clojure-interface-entry x "clojure.lang.IDeref"))
+
+(defun rontolisp::%clojure-imeta-p (x)
+  (rontolisp::%clojure-interface-entry x "clojure.lang.IMeta"))
+
+(defun rontolisp::%clojure-iobj-p (x)
+  (rontolisp::%clojure-interface-entry x "clojure.lang.IObj"))
+
+(defun rontolisp::%clojure-to-string-p (x)
+  (if (rontolisp::%clojure-interface-entry x "toString") t nil))
+
+(defun rontolisp::%clojure-equals-p (x)
+  (if (rontolisp::%clojure-interface-entry x "equals") t nil))
+
+(defun rontolisp::%clojure-hash-code-p (x)
+  (if (rontolisp::%clojure-interface-entry x "hashCode") t nil))
+
+;; What the verbs call in their arms.
+
+(defun rontolisp::%clojure-interface-reduce-2 (coll f)
+  "(reduce f coll) of an IReduceInit: its IReduce's reduce, else its own
+   CollReduce row, else the oracle's cast to IReduce failing."
+  (cond ((rontolisp::%clojure-ireduce-p coll)
+         (funcall (rontolisp::%clojure-interface-entry coll "reduce") coll f))
+        ((rontolisp::%clojure-typed-reducer coll
+                                            rontolisp::%clojure-coll-reducers
+                                            '(:c%keyword "coll-reduce"))
+         (funcall (rontolisp::%clojure-typed-reducer coll
+                   rontolisp::%clojure-coll-reducers
+                   '(:c%keyword "coll-reduce")) coll f))
+        (t (rontolisp::%clojure-class-cast-exception
+            "an IReduceInit cannot be cast to class clojure.lang.IReduce"))))
+
+(defun rontolisp::%clojure-reduce-init-items (coll)
+  "COLL, unless it implements IReduceInit: then the list of what its reduction
+   steps, in order. The reduce-interface family's view, which vec and set
+   walk."
+  (if (rontolisp::%clojure-reduce-init-p coll)
+      (reverse
+       (funcall (rontolisp::%clojure-interface-entry coll "reduce") coll
+                (lambda (acc x) (cons x acc)) nil))
+      coll))
+
+(defun rontolisp::%clojure-seqable-seq (x)
+  "The seq of the Seqable X: what its seq answers, which must be a seq (nil, a
+   list or a lazy seq, realized one level), like the oracle's cast to ISeq."
+  (let ((s (funcall (rontolisp::%clojure-interface-entry x "seq") x)))
+    (cond ((null s) nil)
+          ((rontolisp::%clojure-lazy-p s) (rontolisp::%clojure-realize s))
+          ((and (consp s) (not (keywordp (car s)))) s)
+          (t (rontolisp::%clojure-class-cast-exception
+              "the answer of seq cannot be cast to class clojure.lang.ISeq")))))
+
+(defun rontolisp::%clojure-counted-count (x)
+  "The count of the Counted X: what its count answers, a number cast to an int
+   like the oracle's."
+  (let ((n (funcall (rontolisp::%clojure-interface-entry x "count") x)))
+    (cond ((integerp n) n)
+          ((numberp n) (truncate n))
+          (t
+           (rontolisp::%clojure-class-cast-exception
+            "the answer of count cannot be cast to class java.lang.Number")))))
+
+(defun rontolisp::%clojure-nth-2 (coll i dflt)
+  "(nth coll i): an Indexed's nth over the index alone, like the oracle's nth of
+   two arguments; anything else %clojure-nth's answer. A program storing no
+   Indexed row calls %clojure-nth in its place (the indexed family's alias)."
+  (if (rontolisp::%clojure-indexed-p coll)
+      (funcall (rontolisp::%clojure-interface-entry coll "nth") coll i)
+      (rontolisp::%clojure-nth coll i dflt)))
+
+(defun rontolisp::%clojure-lookup-get (x k dflt supplied)
+  "(get x k) of the ILookup X, or (get x k dflt) when SUPPLIED: its valAt over
+   the key alone or over the default too, like the oracle's get of two or three
+   arguments."
+  (if supplied
+      (funcall (rontolisp::%clojure-interface-entry x "valAt") x k dflt)
+      (funcall (rontolisp::%clojure-interface-entry x "valAt") x k)))
+
+(defun rontolisp::%clojure-invoke (f args)
+  "The IFn F called on the argument list ARGS: its invoke of that count."
+  (apply (rontolisp::%clojure-interface-entry f "invoke") f args))
+
+(defun rontolisp::%clojure-applied-fn (f)
+  "apply's function: F, unless it implements IFn -- then a function handing its
+   argument list to F's applyTo, like the oracle's apply. The invokable
+   family's view."
+  (if (rontolisp::%clojure-invokable-p f)
+      (lambda (&rest args)
+        (funcall (rontolisp::%clojure-interface-entry f "applyTo") f args))
+      f))
+
+(defun rontolisp::%clojure-interface-deref (x)
+  "@x of the IDeref X: what its deref answers."
+  (funcall (rontolisp::%clojure-interface-entry x "deref") x))
+
+(defun rontolisp::%clojure-object-string (x)
+  "str of X, whose type overrides toString: what it answers, which must be a
+   string, like the oracle's cast."
+  (let ((s (funcall (rontolisp::%clojure-interface-entry x "toString") x)))
+    (if (stringp s)
+        s
+        (rontolisp::%clojure-class-cast-exception
+         "the answer of toString cannot be cast to class java.lang.String"))))
+
+(defun rontolisp::%clojure-write-object (x readable stream)
+  "Write X, whose type overrides toString, as the oracle's #object[class
+   \"toString\"], without the identity hash it carries: a deftype's class is
+   its own, a reify's the one its row names."
+  (write-string "#object[" stream)
+  (write-string (if (eq (car x) :c%reify)
+                    (rontolisp::%clojure-interface-entry x "class")
+                    (car (cdr (cdr (cdr (cdr x)))))) stream)
+  (write-char #\Space stream)
+  (if readable
+      (rontolisp::%clojure-write-readable-string
+       (rontolisp::%clojure-object-string x) stream)
+      (write-string (rontolisp::%clojure-object-string x) stream))
+  (write-char #\] stream))
+
+(defun rontolisp::%clojure-object-equal (a b)
+  "(= a b) of A, whose type overrides equals: true of A itself, false of a
+   collection (which the oracle's = asks instead), else what A's equals
+   answers, by truth."
+  (cond ((eq a b) t)
+        ((rontolisp::%clojure-is-coll b) nil)
+        (t (rontolisp::%clojure-truthy
+            (funcall (rontolisp::%clojure-interface-entry a "equals") a b)))))
 
 (defun rontolisp::%clojure-xf-rf (rf step complete)
   "A reducing function over RF: STEP (a two-argument closure) for the step
@@ -9446,7 +9893,8 @@
           ((or (string= alias (car ctx)) (string= alias "clojure.string")
                (string= alias "clojure.set") (string= alias "clojure.edn")
                (string= alias "clojure.java.io") (string= alias "clojure.test")
-               (string= alias "clojure.walk"))
+               (string= alias "clojure.walk") (string= alias "clojure.instant")
+               (string= alias "clojure.uuid"))
            alias)
           (t nil))))
 
@@ -9944,31 +10392,106 @@
                  (rontolisp::%clojure-rd-symbol tag)))
           (t (rontolisp::%clojure-rd-record-of rd tag)))))
 
+;; A tag is undotted when its NAME is, the part after the slash of a qualified
+;; one (#my.ns/tag is a tagged literal, like the oracle's). Where the program
+;; may have data readers -- the DATA_READERS arm, whose producers are
+;; *data-readers* and *default-data-reader-fn* -- a tagged literal reads
+;; through %clojure-rd-data-read, the oracle's whole order; elsewhere only the
+;; two default readers are left.
 (defun rontolisp::%clojure-rd-record-of (rd tag)
-  "The record literal of the class TAG, its tag consumed (%clojure-rd-record)."
-  (progn
-    (if (not (search "." tag))
-        (progn
-          ;; like the oracle, the value reads before its reader is looked for
-          (rontolisp::%clojure-rd-required rd)
-          (if (or (string= tag "inst") (string= tag "uuid"))
-              (error "~A" (concatenate 'string "unsupported reader form #" tag))
-              (rontolisp::%clojure-runtime-exception
-               (concatenate 'string "No reader function for tag " tag)))))
-    (rontolisp::%clojure-rd-skip rd)
-    (let ((c (rontolisp::%clojure-rd-peek rd)))
-      (cond ((eql c #\[)
-             (rontolisp::%clojure-rd-next rd)
-             (rontolisp::%clojure-rd-build-record tag
-              (rontolisp::%clojure-rd-seq rd #\]) nil))
-            ((eql c #\{)
-             (rontolisp::%clojure-rd-next rd)
-             (rontolisp::%clojure-rd-build-record tag
-              (rontolisp::%clojure-rd-seq rd #\}) t))
-            (t (rontolisp::%clojure-runtime-exception
-                (concatenate 'string
-                             "Unreadable constructor form starting with \"#" tag
-                             "\"")))))))
+  "The record literal of the class TAG, its tag consumed (%clojure-rd-record).
+   An undotted tag is a tagged literal: #inst and #uuid answer what their
+   default readers make of the value, any other tag is the oracle's refusal."
+  (if (not (rontolisp::%clojure-rd-record-tag-p tag))
+      ;; like the oracle, the value reads before its reader is looked for
+      (let ((value (rontolisp::%clojure-rd-required rd)))
+        (cond
+         ((rontolisp::%clojure-rd-data-readers-p)
+          (rontolisp::%clojure-rd-data-read tag value))
+         ((string= tag "inst") (rontolisp::%clojure-instant-read-date value))
+         ((string= tag "uuid") (rontolisp::%clojure-read-uuid value))
+         (t (rontolisp::%clojure-runtime-exception
+             (concatenate 'string "No reader function for tag " tag)))))
+      (progn
+        (rontolisp::%clojure-rd-skip rd)
+        (let ((c (rontolisp::%clojure-rd-peek rd)))
+          (cond ((eql c #\[)
+                 (rontolisp::%clojure-rd-next rd)
+                 (rontolisp::%clojure-rd-build-record tag
+                  (rontolisp::%clojure-rd-seq rd #\]) nil))
+                ((eql c #\{)
+                 (rontolisp::%clojure-rd-next rd)
+                 (rontolisp::%clojure-rd-build-record tag
+                  (rontolisp::%clojure-rd-seq rd #\}) t))
+                (t (rontolisp::%clojure-runtime-exception
+                    (concatenate 'string
+                                 "Unreadable constructor form starting with \"#"
+                                 tag "\""))))))))
+
+(defun rontolisp::%clojure-rd-record-tag-p (tag)
+  "Whether the tag TAG names a record class: its name -- what follows the first
+   slash of a qualified tag -- is dotted, the oracle's
+   sym.getName().contains(\".\")."
+  (let ((slash (search "/" tag)))
+    (search "." (if slash (subseq tag (+ slash 1)) tag))))
+
+;;;; Data readers: *data-readers* and *default-data-reader-fn*.
+;;
+;; The oracle's LispReader reads a tagged literal through the function
+;; *data-readers* maps its tag symbol to, then default-data-readers (#inst,
+;; #uuid), then *default-data-reader-fn* of the tag and the value, and refuses
+;; a tag none of them reads; a nil answer is its dispatch reader's No dispatch
+;; macro. Both specials are read here only, through one arm whose producers
+;; are the two specials themselves (ClojureArms DATA_READERS): a program naming
+;; neither -- and having no data_readers.clj, whose map the lowering makes the
+;; root of *data-readers* -- reads as it did before. They are defined here,
+;; ahead of a compiled program's definitions of them, so the interpreter,
+;; which keeps every arm, finds them bound; a program's data readers replace
+;; the empty root (ClojureDataReaders, defparameter).
+
+(defvar rontolisp::%clojure-data-readers
+  (make-hash-table :test 'equal)
+  "*data-readers*: the map from a tag symbol to the function reading its
+   tagged literals.")
+
+(defvar rontolisp::%clojure-default-data-reader-fn
+  nil
+  "*default-data-reader-fn*: the function of a tag and a value reading a
+   tagged literal no data reader reads, or NIL.")
+
+(defun rontolisp::%clojure-rd-data-readers-p ()
+  "Whether a tagged literal reads through *data-readers*: the DATA_READERS
+   arm test, which a program naming neither special folds."
+  t)
+
+(defun rontolisp::%clojure-rd-data-read (tag value)
+  "The tagged literal of TAG over its read VALUE: the function *data-readers*
+   maps the tag's symbol to, else the default #inst and #uuid readers, else
+   *default-data-reader-fn* of the symbol and the value, else the oracle's No
+   reader function. Each is called like any IFn (a var's root, a keyword's
+   lookup), outside the read in progress."
+  (let* ((sym (rontolisp::%clojure-rd-symbol tag))
+         (f
+          (rontolisp::%clojure-call-keyword sym rontolisp::%clojure-data-readers
+                                            nil)))
+    (cond (f (rontolisp::%clojure-rd-data-answer
+              (rontolisp::%clojure-rd-edn-call f (list value)) tag))
+          ((string= tag "inst") (rontolisp::%clojure-instant-read-date value))
+          ((string= tag "uuid") (rontolisp::%clojure-read-uuid value))
+          (rontolisp::%clojure-default-data-reader-fn
+           (rontolisp::%clojure-rd-data-answer
+            (rontolisp::%clojure-rd-edn-call
+             rontolisp::%clojure-default-data-reader-fn (list sym value)) tag))
+          (t (rontolisp::%clojure-runtime-exception
+              (concatenate 'string "No reader function for tag " tag))))))
+
+(defun rontolisp::%clojure-rd-data-answer (x tag)
+  "X, what a reader function answered for the tag TAG, unless it is nil: the
+   oracle's dispatch reader takes a nil answer for no reader at all."
+  (if (null x)
+      (rontolisp::%clojure-runtime-exception
+       (concatenate 'string "No dispatch macro for: " (string (char tag 0))))
+      x))
 
 (defun rontolisp::%clojure-rd-build-record (tag items map-body)
   "The record of class TAG over the body ITEMS: keyword/value pairs when
@@ -10125,6 +10648,625 @@
      (t (rontolisp::%clojure-read (car args) (car (cdr args))
                                   (car (cdr (cdr args))) ctx)))))
 
+;;;; Instants and UUIDs: the values #inst and #uuid read as.
+;;
+;; An instant is the oracle's java.util.Date, (:C%INST ms): MS the milliseconds
+;; since 1970-01-01T00:00:00Z. clojure.instant's two other readers make the
+;; oracle's other instants: a java.sql.Timestamp, (:C%TIMESTAMP ms nanos), MS
+;; its getTime and NANOS the nanoseconds of its second; a GregorianCalendar,
+;; (:C%CALENDAR ms offset zone), OFFSET its zone's offset in minutes and ZONE the
+;; zone's id (GMT-05:30), which its = compares, so -00:00 and Z read unequal
+;; like the oracle's. A UUID is the oracle's java.util.UUID, (:C%UUID msb lsb),
+;; its two halves as signed 64-bit integers. Each is a tagged wrapper, so no seq
+;; verb takes one, and = of two is equal of the wrappers but for a Date against
+;; a Timestamp (the oracle's Date.equals reads the Timestamp's getTime, while
+;; Timestamp.equals takes no Date).
+;;
+;; A date's fields are the oracle's GregorianCalendar's: the Julian calendar
+;; before 1582-10-15, the Gregorian one from then on, and a year before 1 as its
+;; year of the era, so #inst "0000" prints as 0001 like the oracle's. Every
+;; instant prints in UTC, a Calendar at its own offset. Every test of one is an
+;; arm of the instant or the UUID family (clojure/ClojureArms): only the #inst
+;; and #uuid literals, the readers, the clojure.instant kernels, random-uuid and
+;; parse-uuid make one, so a program naming none of them sheds them.
+
+(defun rontolisp::%clojure-instant-p (x)
+  "Whether X is an instant: a Date, a Timestamp or a Calendar."
+  (and (consp x)
+       (or (eq (car x) :C%INST) (eq (car x) :C%TIMESTAMP)
+           (eq (car x) :C%CALENDAR))))
+
+(defun rontolisp::%clojure-inst-p (x)
+  "Whether X is an instant inst? takes and inst-ms reads: a Date or a
+   Timestamp (a Calendar is no Inst, like the oracle's)."
+  (and (consp x) (or (eq (car x) :C%INST) (eq (car x) :C%TIMESTAMP))))
+
+(defun rontolisp::%clojure-date-p (x)
+  "Whether X is a Date, the instant #inst reads."
+  (and (consp x) (eq (car x) :C%INST)))
+
+(defun rontolisp::%clojure-timestamp-p (x)
+  "Whether X is a Timestamp."
+  (and (consp x) (eq (car x) :C%TIMESTAMP)))
+
+(defun rontolisp::%clojure-calendar-p (x)
+  "Whether X is a Calendar."
+  (and (consp x) (eq (car x) :C%CALENDAR)))
+
+(defun rontolisp::%clojure-make-inst (ms)
+  "The Date of the milliseconds MS: what an #inst literal lowers to."
+  (list :C%INST ms))
+
+(defun rontolisp::%clojure-days-from-civil (y m d julian)
+  "The days from 1970-01-01 to the date Y-M-D of the Julian calendar when
+   JULIAN, else of the proleptic Gregorian one, year 0 being 1 BC: counted from
+   March 1 of the date's cycle, 4 years in the one and 400 in the other."
+  (let* ((y (if (<= m 2) (- y 1) y))
+         (era (floor y (if julian 4 400)))
+         (yoe (- y (* era (if julian 4 400))))
+         (doy (+ (floor (+ (* 153 (if (> m 2) (- m 3) (+ m 9))) 2) 5) (- d 1))))
+    (+ (* era (if julian 1461 146097)) (* yoe 365) (floor yoe 4)
+       (- (floor yoe 100)) doy (if julian -719470 -719468))))
+
+(defun rontolisp::%clojure-civil-from-days (z julian)
+  "The (year month day) of the day Z after 1970-01-01 in the Julian calendar
+   when JULIAN, else in the proleptic Gregorian one."
+  (let* ((cycle (if julian 1461 146097))
+         (z (+ z (if julian 719470 719468)))
+         (era (floor z cycle))
+         (doe (- z (* era cycle)))
+         (yoe
+          (floor
+           (+ (- doe (floor doe 1460)) (floor doe 36524) (- (floor doe 146096)))
+           365))
+         (doy (- doe (+ (* 365 yoe) (floor yoe 4) (- (floor yoe 100)))))
+         (mp (floor (+ (* 5 doy) 2) 153))
+         (m (if (< mp 10) (+ mp 3) (- mp 9))))
+    (list (+ yoe (* era (if julian 4 400)) (if (<= m 2) 1 0)) m
+          (+ (- doy (floor (+ (* 153 mp) 2) 5)) 1))))
+
+(defun rontolisp::%clojure-instant-fields (ms offset)
+  "The oracle's GregorianCalendar fields of the instant MS seen OFFSET minutes
+   east of UTC: (year month day hour minute second millisecond weekday), the
+   date the Julian calendar's before 1582-10-15, a year before 1 its year of
+   the era, WEEKDAY 0 for a Sunday."
+  (let* ((local (+ ms (* offset 60000)))
+         (day (floor local 86400000))
+         (time (- local (* day 86400000)))
+         (date (rontolisp::%clojure-civil-from-days day (< day -141427)))
+         (year (car date)))
+    (list (if (< year 1) (- 1 year) year) (car (cdr date))
+          (car (cdr (cdr date))) (floor time 3600000)
+          (mod (floor time 60000) 60) (mod (floor time 1000) 60) (mod time 1000)
+          (mod (+ day 4) 7))))
+
+(defun rontolisp::%clojure-instant-millis
+    (years months days hours minutes seconds millis sign oh om)
+  "The milliseconds of the date and time the fields spell at the offset SIGN
+   OH:OM, as the oracle's lenient GregorianCalendar computes them: the time of
+   day first (a 60th second carries into the next day), then the day, Julian
+   before 1582 and Gregorian after; in 1582 the Gregorian day when it falls on
+   or after the cutover, else the Julian one, so 1582-10-10 is the Julian date
+   of 1582-10-20."
+  (let* ((time (+ (* (+ (* (+ (* hours 60) minutes) 60) seconds) 1000) millis))
+         (carry (floor time 86400000))
+         (gregorian
+          (+ (rontolisp::%clojure-days-from-civil years months days nil) carry))
+         (day
+          (if (or (> years 1582) (and (= years 1582) (>= gregorian -141427)))
+              gregorian
+              (+ (rontolisp::%clojure-days-from-civil years months days t)
+                 carry))))
+    ;; the zone is GMT+ unless SIGN is negative, as the oracle spells it
+    (- (+ (* day 86400000) (- time (* carry 86400000)))
+       (* (if (< sign 0) -1 1) (+ (* oh 60) om) 60000))))
+
+(defun rontolisp::%clojure-instant-digits (s i n)
+  "The value of the N decimal digits of S from I, or NIL when S has not N
+   ASCII digits there (the oracle's \\d)."
+  (let ((v 0))
+    (dotimes (k n v)
+      (let ((c (if (< (+ i k) (length s)) (char s (+ i k)) nil)))
+        (if (and v c (char<= #\0 c) (char<= c #\9))
+            (setq v (+ (* v 10) (- (char-code c) 48)))
+            (setq v nil))))))
+
+(defun rontolisp::%clojure-instant-offset (s i n)
+  "The (sign hours minutes) of the time offset spanning S from I to its end N:
+   nothing or Z is (0 0 0), +hh:mm or -hh:mm its sign and numbers; NIL when
+   the rest of S is no offset."
+  (cond ((= i n) (list 0 0 0))
+        ((and (char= (char s i) #\Z) (= (+ i 1) n)) (list 0 0 0))
+        ((and (= (+ i 6) n) (or (char= (char s i) #\+) (char= (char s i) #\-))
+              (char= (char s (+ i 3)) #\:)
+              (rontolisp::%clojure-instant-digits s (+ i 1) 2)
+              (rontolisp::%clojure-instant-digits s (+ i 4) 2))
+         (list (if (char= (char s i) #\-) -1 1)
+               (rontolisp::%clojure-instant-digits s (+ i 1) 2)
+               (rontolisp::%clojure-instant-digits s (+ i 4) 2)))
+        (t nil)))
+
+(defun rontolisp::%clojure-instant-parse (cs)
+  "clojure.instant's parse-timestamp over the string CS: the ten integers its
+   new-instant takes -- years, months, days, hours, minutes, seconds,
+   nanoseconds, offset sign, offset hours and offset minutes, an omitted one
+   its default -- matched the way the oracle's pattern matches: the most
+   components first, then fewer while what follows them is no offset reaching
+   the end, so 2020-05:30 is the year 2020 at -05:30. A fraction keeps its
+   first nine digits. Anything else is the oracle's Unrecognized date/time
+   syntax."
+  (if (not (stringp cs))
+      (rontolisp::%clojure-class-cast-exception-of "a timestamp needs a string"
+                                                   cs))
+  (let* ((n (length cs))
+         (year (rontolisp::%clojure-instant-digits cs 0 4))
+         (levels (if year (list (cons 4 year)) nil))
+         (i 4)
+         (result nil))
+    (dotimes (k 5)
+      (if (and (= (length levels) (+ k 1)) (< i n)
+               (char= (char cs i) (char "--T::" k))
+               (rontolisp::%clojure-instant-digits cs (+ i 1) 2))
+          (progn
+            (setq levels
+                  (cons (cons (+ i 3)
+                              (rontolisp::%clojure-instant-digits cs (+ i 1) 2))
+                        levels))
+            (setq i (+ i 3)))))
+    (if (and (= (length levels) 6) (< (+ i 1) n) (char= (char cs i) #\.)
+             (rontolisp::%clojure-instant-digits cs (+ i 1) 1))
+        (let ((j (+ i 1)) (nanos 0) (count 0))
+          (do ()
+              ((not (and (< j n) (rontolisp::%clojure-instant-digits cs j 1))))
+            (if (< count 9)
+                (setq nanos
+                 (+ (* nanos 10) (rontolisp::%clojure-instant-digits cs j 1))))
+            (setq count (+ count 1))
+            (setq j (+ j 1)))
+          (dotimes (k (- 9 (min count 9))) (setq nanos (* nanos 10)))
+          (setq levels (cons (cons j nanos) levels))))
+    (do ((rest levels (cdr rest)))
+        ((or result (null rest)))
+      (let ((offset (rontolisp::%clojure-instant-offset cs (car (car rest)) n)))
+        (if offset
+            (let ((fields nil))
+              (dolist (level rest) (setq fields (cons (cdr level) fields)))
+              (setq result
+                    (append fields
+                            (nthcdr (- (length fields) 1) (list 1 1 0 0 0 0))
+                            offset))))))
+    (or result
+        (rontolisp::%clojure-runtime-exception
+         (concatenate 'string "Unrecognized date/time syntax: " cs)))))
+
+(defun rontolisp::%clojure-days-in-month (month year)
+  "The days of MONTH (1 to 12) in YEAR, February's 29 in a Gregorian leap
+   year."
+  (cond ((/= month 2) (if (member month '(4 6 9 11)) 30 31))
+        ((and (zerop (rem year 4))
+              (or (not (zerop (rem year 100))) (zerop (rem year 400))))
+         29)
+        (t 28)))
+
+(defun rontolisp::%clojure-instant-check (f)
+  "clojure.instant's validated checks over the ten fields F (years, months,
+   days, hours, minutes, seconds, nanoseconds, offset sign, hours and minutes),
+   in the oracle's order: the first that fails is the oracle's
+   RuntimeException quoting it. The years go unchecked, like the oracle's, and
+   the month's days are the Gregorian calendar's."
+  (let* ((months (nth 1 f))
+         (minutes (nth 4 f))
+         (failed
+          (cond ((not (<= 1 months 12)) "(<= 1 months 12)")
+           ((not
+             (<= 1 (nth 2 f)
+                 (rontolisp::%clojure-days-in-month months (car f))))
+            "(<= 1 days (days-in-month months (leap-year? years)))")
+           ((not (<= 0 (nth 3 f) 23)) "(<= 0 hours 23)")
+           ((not (<= 0 minutes 59)) "(<= 0 minutes 59)")
+           ((not (<= 0 (nth 5 f) (if (= minutes 59) 60 59)))
+            "(<= 0 seconds (if (= minutes 59) 60 59))")
+           ((not (<= 0 (nth 6 f) 999999999)) "(<= 0 nanoseconds 999999999)")
+           ((not (<= -1 (nth 7 f) 1)) "(<= -1 offset-sign 1)")
+           ((not (<= 0 (nth 8 f) 23)) "(<= 0 offset-hours 23)")
+           ((not (<= 0 (nth 9 f) 59)) "(<= 0 offset-minutes 59)")
+           (t nil))))
+    (if failed
+        (rontolisp::%clojure-runtime-exception
+         (concatenate 'string "failed: " failed)))))
+
+(defun rontolisp::%clojure-instant-validate
+    (years months days hours minutes seconds nanos sign oh om)
+  "The checks of clojure.instant's validated over its ten arguments."
+  (rontolisp::%clojure-instant-check
+   (list years months days hours minutes seconds nanos sign oh om)))
+
+(defun rontolisp::%clojure-instant-of (f kind)
+  "The instant of the ten fields F, by KIND the oracle's construct-date
+   (:date, its milliseconds truncated from the nanoseconds), construct-timestamp
+   (:timestamp, the second's milliseconds plus the whole milliseconds of the
+   nanoseconds, which it keeps) or construct-calendar (:calendar, in the zone
+   GMT plus or minus the offset)."
+  (let* ((nanos (nth 6 f))
+         (sign (nth 7 f))
+         (oh (nth 8 f))
+         (om (nth 9 f))
+         (ms
+          (rontolisp::%clojure-instant-millis (car f) (nth 1 f) (nth 2 f)
+           (nth 3 f) (nth 4 f) (nth 5 f)
+           (if (eq kind :timestamp) 0 (floor nanos 1000000)) sign oh om)))
+    (cond ((eq kind :date) (list :C%INST ms))
+          ((eq kind :timestamp)
+           (list :C%TIMESTAMP (+ ms (floor nanos 1000000)) nanos))
+          (t (let ((zone (make-string-output-stream)))
+               (write-string (if (< sign 0) "GMT-" "GMT+") zone)
+               (rontolisp::%clojure-write-padded oh 2 zone)
+               (write-char #\: zone)
+               (rontolisp::%clojure-write-padded om 2 zone)
+               (list :C%CALENDAR ms (* (if (< sign 0) -1 1) (+ (* oh 60) om))
+                     (get-output-stream-string zone)))))))
+
+(defun rontolisp::%clojure-instant-read (cs kind)
+  "The instant of KIND (%clojure-instant-of) the timestamp CS spells, through
+   parse-timestamp and validated."
+  (let ((f (rontolisp::%clojure-instant-parse cs)))
+    (rontolisp::%clojure-instant-check f)
+    (rontolisp::%clojure-instant-of f kind)))
+
+(defun rontolisp::%clojure-instant-read-date (cs)
+  "clojure.instant's read-instant-date, the #inst reader: the Date the
+   timestamp CS spells."
+  (rontolisp::%clojure-instant-read cs :date))
+
+(defun rontolisp::%clojure-instant-read-timestamp (cs)
+  "clojure.instant's read-instant-timestamp: the Timestamp the timestamp CS
+   spells."
+  (rontolisp::%clojure-instant-read cs :timestamp))
+
+(defun rontolisp::%clojure-instant-read-calendar (cs)
+  "clojure.instant's read-instant-calendar: the Calendar the timestamp CS
+   spells."
+  (rontolisp::%clojure-instant-read cs :calendar))
+
+(defun rontolisp::%clojure-write-padded (n width stream)
+  "Write the non-negative integer N to STREAM in decimal, zero-padded to WIDTH
+   digits."
+  (let ((digits (princ-to-string n)))
+    (dotimes (i (- width (length digits))) (write-char #\0 stream))
+    (write-string digits stream)))
+
+(defun rontolisp::%clojure-write-instant-time (f stream)
+  "Write the hour, minute and second of the fields F as HH:mm:ss."
+  (rontolisp::%clojure-write-padded (nth 3 f) 2 stream)
+  (write-char #\: stream)
+  (rontolisp::%clojure-write-padded (nth 4 f) 2 stream)
+  (write-char #\: stream)
+  (rontolisp::%clojure-write-padded (nth 5 f) 2 stream))
+
+(defun rontolisp::%clojure-write-inst-literal (x stream)
+  "Write the instant X as the oracle's print-method does: #inst \"...\" in
+   UTC to the millisecond for a Date and to the nanosecond for a Timestamp, a
+   Calendar at its own offset."
+  (let* ((offset (if (eq (car x) :C%CALENDAR) (car (cdr (cdr x))) 0))
+         (f (rontolisp::%clojure-instant-fields (car (cdr x)) offset)))
+    (write-string "#inst \"" stream)
+    (rontolisp::%clojure-write-padded (car f) 4 stream)
+    (write-char #\- stream)
+    (rontolisp::%clojure-write-padded (nth 1 f) 2 stream)
+    (write-char #\- stream)
+    (rontolisp::%clojure-write-padded (nth 2 f) 2 stream)
+    (write-char #\T stream)
+    (rontolisp::%clojure-write-instant-time f stream)
+    (write-char #\. stream)
+    (if (eq (car x) :C%TIMESTAMP)
+        (rontolisp::%clojure-write-padded (car (cdr (cdr x))) 9 stream)
+        (rontolisp::%clojure-write-padded (nth 6 f) 3 stream))
+    (if (eq (car x) :C%CALENDAR)
+        (progn
+          (write-char (if (< offset 0) #\- #\+) stream)
+          (rontolisp::%clojure-write-padded (floor (abs offset) 60) 2 stream)
+          (write-char #\: stream)
+          (rontolisp::%clojure-write-padded (mod (abs offset) 60) 2 stream))
+        (write-string "-00:00" stream))
+    (write-char #\" stream)))
+
+(defun rontolisp::%clojure-instant-string (x)
+  "str of the instant X: the oracle's toString in UTC, a Date's Wed Jan 01
+   00:00:00 UTC 2020 and a Timestamp's 2020-01-01 00:00:00.5 (the
+   nanoseconds without their trailing zeros); a Calendar answers its printed
+   form, where the oracle's dumps its fields."
+  (let ((out (make-string-output-stream))
+        (f (rontolisp::%clojure-instant-fields (car (cdr x)) 0)))
+    (cond
+     ((eq (car x) :C%CALENDAR) (rontolisp::%clojure-write-inst-literal x out))
+     ((eq (car x) :C%INST)
+      (write-string
+       (subseq "SunMonTueWedThuFriSat" (* 3 (nth 7 f)) (+ 3 (* 3 (nth 7 f))))
+       out)
+      (write-char #\Space out)
+      (write-string (subseq "JanFebMarAprMayJunJulAugSepOctNovDec"
+                            (* 3 (- (nth 1 f) 1)) (* 3 (nth 1 f))) out)
+      (write-char #\Space out)
+      (rontolisp::%clojure-write-padded (nth 2 f) 2 out)
+      (write-char #\Space out)
+      (rontolisp::%clojure-write-instant-time f out)
+      (write-string " UTC " out)
+      (write-string (princ-to-string (car f)) out))
+     (t
+      (let ((nanos (make-string-output-stream)))
+        (rontolisp::%clojure-write-padded (car (cdr (cdr x))) 9 nanos)
+        (rontolisp::%clojure-write-padded (car f) 4 out)
+        (write-char #\- out)
+        (rontolisp::%clojure-write-padded (nth 1 f) 2 out)
+        (write-char #\- out)
+        (rontolisp::%clojure-write-padded (nth 2 f) 2 out)
+        (write-char #\Space out)
+        (rontolisp::%clojure-write-instant-time f out)
+        (write-char #\. out)
+        (let* ((digits (get-output-stream-string nanos)) (end (length digits)))
+          (do ()
+              ((or (= end 1) (char/= (char digits (- end 1)) #\0)))
+            (setq end (- end 1)))
+          (write-string (subseq digits 0 end) out)))))
+    (get-output-stream-string out)))
+
+(defun rontolisp::%clojure-instant-class-name (x)
+  "The oracle's class of the instant X."
+  (cond ((eq (car x) :C%INST) "java.util.Date")
+        ((eq (car x) :C%TIMESTAMP) "java.sql.Timestamp")
+        (t "java.util.GregorianCalendar")))
+
+(defun rontolisp::%clojure-instant-class (x)
+  "class of the instant X, as a keyword."
+  (list :C%KEYWORD (rontolisp::%clojure-instant-class-name x)))
+
+(defun rontolisp::%clojure-inst-equal (a b)
+  "= of the instant A and B: equal wrappers, or a Date and a Timestamp of the
+   same milliseconds (the oracle's Date.equals; Timestamp.equals takes no
+   Date)."
+  (or (equal a b)
+      (and (eq (car a) :C%INST) (consp b) (eq (car b) :C%TIMESTAMP)
+           (= (car (cdr a)) (car (cdr b))))))
+
+(defun rontolisp::%clojure-instant-compare (a b)
+  "compare of the instant A with B, the oracle's compareTo: a Date by
+   milliseconds against a Date or a Timestamp, a Timestamp by milliseconds
+   and then nanoseconds (a Date's being its milliseconds' fraction), a
+   Calendar by milliseconds against a Calendar; anything else signals like
+   the oracle's cast."
+  (if (and (consp b)
+           (if (eq (car a) :C%CALENDAR)
+               (eq (car b) :C%CALENDAR)
+               (or (eq (car b) :C%INST) (eq (car b) :C%TIMESTAMP))))
+      (let ((x (car (cdr a))) (y (car (cdr b))))
+        (if (and (= x y) (eq (car a) :C%TIMESTAMP))
+            (progn
+              (setq x (car (cdr (cdr a))))
+              (setq y
+                    (if (eq (car b) :C%TIMESTAMP)
+                        (car (cdr (cdr b)))
+                        (* (mod y 1000) 1000000)))))
+        (cond ((< x y) -1) ((> x y) 1) (t 0)))
+      (rontolisp::%clojure-class-cast-exception
+       "compare needs two values of one comparable kind")))
+
+(defun rontolisp::%clojure-inst-ms (x)
+  "inst-ms: the milliseconds of a Date or a Timestamp (its getTime), or of a
+   host java.util.Date or java.time.Instant; anything else is the oracle's
+   refusal of a value the Inst protocol has no implementation for."
+  (cond ((rontolisp::%clojure-inst-p x) (car (cdr x)))
+        ((rontolisp::%clojure-host-instance-p x "java.util.Date")
+         (rontolisp::%clojure-host-method x "getTime"))
+        ((rontolisp::%clojure-host-instance-p x "java.time.Instant")
+         (rontolisp::%clojure-host-method x "toEpochMilli"))
+        (t (rontolisp::%clojure-illegal-argument-exception
+            (concatenate 'string
+             "No implementation of method: :inst-ms* of protocol: #'clojure.core/Inst found for class: "
+             (if (null x) "nil" (rontolisp::%clojure-class-name-of x)))))))
+
+(defun rontolisp::%clojure-inst-ms-v (&rest args)
+  "inst-ms as a value."
+  (rontolisp::%clojure-check-arity args 1 1 "inst-ms")
+  (rontolisp::%clojure-inst-ms (car args)))
+
+(defun rontolisp::%clojure-uuid-p (x)
+  "Whether X is a UUID."
+  (and (consp x) (eq (car x) :C%UUID)))
+
+(defun rontolisp::%clojure-make-uuid (msb lsb)
+  "The UUID of the signed 64-bit halves MSB and LSB: what a #uuid literal
+   lowers to."
+  (list :C%UUID msb lsb))
+
+(defun rontolisp::%clojure-is-uuid (x class-name)
+  "uuid?: a UUID, or a host object of the class CLASS-NAME, java.util.UUID. A
+   program that makes no UUID calls %clojure-host-instance-p in its place (the
+   strip's alias)."
+  (or (rontolisp::%clojure-uuid-p x)
+      (rontolisp::%clojure-host-instance-p x class-name)))
+
+(defun rontolisp::%clojure-signed-64 (n)
+  "The unsigned 64-bit integer N as the signed long of the same bits."
+  (if (>= n 9223372036854775808) (- n 18446744073709551616) n))
+
+(defun rontolisp::%clojure-write-hex (n width stream)
+  "Write the low WIDTH hex digits of the integer N to STREAM, lowercase (a
+   negative N as its two's complement)."
+  (do ((shift (* 4 (- width 1)) (- shift 4)))
+      ((< shift 0))
+    (write-char (char "0123456789abcdef" (logand (ash n (- shift)) 15))
+                stream)))
+
+(defun rontolisp::%clojure-uuid-to-string (x)
+  "str of the UUID X: the oracle's toString, its 32 hex digits lowercase in
+   groups of 8, 4, 4, 4 and 12."
+  (let ((out (make-string-output-stream))
+        (msb (car (cdr x)))
+        (lsb (car (cdr (cdr x)))))
+    (rontolisp::%clojure-write-hex (ash msb -32) 8 out)
+    (write-char #\- out)
+    (rontolisp::%clojure-write-hex (ash msb -16) 4 out)
+    (write-char #\- out)
+    (rontolisp::%clojure-write-hex msb 4 out)
+    (write-char #\- out)
+    (rontolisp::%clojure-write-hex (ash lsb -48) 4 out)
+    (write-char #\- out)
+    (rontolisp::%clojure-write-hex lsb 12 out)
+    (get-output-stream-string out)))
+
+(defun rontolisp::%clojure-write-uuid-literal (x stream)
+  "Write the UUID X as the oracle's print-method does: #uuid \"...\"."
+  (write-string "#uuid \"" stream)
+  (write-string (rontolisp::%clojure-uuid-to-string x) stream)
+  (write-char #\" stream))
+
+(defun rontolisp::%clojure-uuid-hex (c)
+  "The value of the hex digit C, or NIL: ASCII digits and letters only."
+  (let ((code (char-code c)))
+    (cond ((and (>= code 48) (<= code 57)) (- code 48))
+          ((and (>= code 97) (<= code 102)) (- code 87))
+          ((and (>= code 65) (<= code 70)) (- code 55))
+          (t nil))))
+
+(defun rontolisp::%clojure-uuid-group (s start end mask strict)
+  "The group of the string S from START to END as java.lang.Long's parseLong
+   reads it in radix 16 -- an optional + first, then hex digits worth at most
+   2^63 - 1 -- masked to MASK. A group that is no such number answers NIL when
+   not STRICT, else signals the oracle's NumberFormatException, which names
+   where the read stopped."
+  (let ((i start) (v 0) (stop nil))
+    (if (< i end)
+        (progn
+          (if (char= (char s i) #\+) (setq i (+ i 1)))
+          (if (= i end) (setq stop i))
+          (do ()
+              ((or stop (>= i end)))
+            (let ((d (rontolisp::%clojure-uuid-hex (char s i))))
+              (if (or (null d) (> v 576460752303423487))
+                  (setq stop i)
+                  (progn
+                    (setq v (+ (* v 16) d))
+                    (setq i (+ i 1)))))))
+        (setq stop :empty))
+    (cond ((null stop) (logand v mask))
+          ((not strict) nil)
+          ((eq stop :empty)
+           (rontolisp::%clojure-number-format-exception
+            "For input string: \"\" under radix 16"))
+          (t (rontolisp::%clojure-number-format-exception
+              (concatenate 'string "Error at index "
+                           (princ-to-string (- stop start)) " in: \""
+                           (subseq s start end) "\""))))))
+
+(defun rontolisp::%clojure-uuid-of (s strict)
+  "The UUID the string S spells, the oracle's java.util.UUID/fromString: at
+   most 36 characters, five groups between exactly four dashes, each read in
+   radix 16 and masked to its width (so 1-1-1-1-1 reads). A string that is no
+   UUID answers NIL when not STRICT, else signals the oracle's exception."
+  (let ((n (length s)) (dashes nil))
+    (dotimes (i n) (if (char= (char s i) #\-) (setq dashes (cons i dashes))))
+    (setq dashes (reverse dashes))
+    (cond ((> n 36)
+           (if strict
+               (rontolisp::%clojure-illegal-argument-exception
+                "UUID string too large")))
+          ((/= (length dashes) 4)
+           (if strict
+               (rontolisp::%clojure-illegal-argument-exception
+                (concatenate 'string "Invalid UUID string: " s))))
+          (t
+           (let* ((d1 (car dashes))
+                  (d2 (car (cdr dashes)))
+                  (d3 (car (cdr (cdr dashes))))
+                  (d4 (car (cdr (cdr (cdr dashes)))))
+                  (g1 (rontolisp::%clojure-uuid-group s 0 d1 4294967295 strict))
+                  (g2
+                   (and g1
+                        (rontolisp::%clojure-uuid-group s (+ d1 1) d2 65535
+                                                        strict)))
+                  (g3
+                   (and g2
+                        (rontolisp::%clojure-uuid-group s (+ d2 1) d3 65535
+                                                        strict)))
+                  (g4
+                   (and g3
+                        (rontolisp::%clojure-uuid-group s (+ d3 1) d4 65535
+                                                        strict)))
+                  (g5
+                   (and g4
+                        (rontolisp::%clojure-uuid-group s (+ d4 1) n
+                                                        281474976710655
+                                                        strict))))
+             (if g5
+                 (list :C%UUID (rontolisp::%clojure-signed-64
+                                (logior (ash g1 32) (ash g2 16) g3))
+                       (rontolisp::%clojure-signed-64 (logior (ash g4 48) g5)))
+                 nil))))))
+
+(defun rontolisp::%clojure-parse-uuid (s)
+  "parse-uuid: the UUID the string S spells, nil when it is no UUID; a value
+   that is no string is the oracle's ClassCastException, nil its
+   NullPointerException."
+  (if (stringp s)
+      (rontolisp::%clojure-uuid-of s nil)
+      (rontolisp::%clojure-class-cast-exception-of "parse-uuid needs a string"
+                                                   s)))
+
+(defun rontolisp::%clojure-parse-uuid-v (&rest args)
+  "parse-uuid as a value."
+  (rontolisp::%clojure-check-arity args 1 1 "parse-uuid")
+  (rontolisp::%clojure-parse-uuid (car args)))
+
+(defun rontolisp::%clojure-read-uuid (form)
+  "The #uuid reader: the UUID the string FORM spells, the oracle's exception
+   for one that is no UUID, its refusal of a FORM that is no string."
+  (if (stringp form)
+      (rontolisp::%clojure-uuid-of form t)
+      (rontolisp::%clojure-illegal-argument-exception
+       "#uuid data reader expected string")))
+
+(defun rontolisp::%clojure-random-uuid ()
+  "random-uuid: a version 4 UUID of 122 random bits from
+   rontolisp:random-bytes (the oracle's is SecureRandom's), its version and
+   variant bits set like java.util.UUID's randomUUID."
+  (let ((bytes (rontolisp:random-bytes 16)) (msb 0) (lsb 0))
+    (setf (aref bytes 6) (logior (logand (aref bytes 6) 15) 64))
+    (setf (aref bytes 8) (logior (logand (aref bytes 8) 63) 128))
+    (dotimes (i 8)
+      (setq msb (logior (ash msb 8) (aref bytes i)))
+      (setq lsb (logior (ash lsb 8) (aref bytes (+ i 8)))))
+    (list :C%UUID (rontolisp::%clojure-signed-64 msb)
+          (rontolisp::%clojure-signed-64 lsb))))
+
+(defun rontolisp::%clojure-random-uuid-v (&rest args)
+  "random-uuid as a value."
+  (rontolisp::%clojure-check-arity args 0 0 "random-uuid")
+  (rontolisp::%clojure-random-uuid))
+
+(defun rontolisp::%clojure-uuid-compare (a b)
+  "compare of the UUID A with B, the oracle's UUID.compareTo: the halves as
+   signed longs, the most significant first; anything else signals like the
+   oracle's cast."
+  (if (and (consp b) (eq (car b) :C%UUID))
+      (let ((x (car (cdr a))) (y (car (cdr b))))
+        (if (= x y)
+            (progn
+              (setq x (car (cdr (cdr a))))
+              (setq y (car (cdr (cdr b))))))
+        (cond ((< x y) -1) ((> x y) 1) (t 0)))
+      (rontolisp::%clojure-class-cast-exception
+       "compare needs two values of one comparable kind")))
+
+(defun rontolisp::%clojure-uuid-version (x)
+  ".version of the UUID X: the four bits after its third group's start."
+  (logand (ash (car (cdr x)) -12) 15))
+
+(defun rontolisp::%clojure-uuid-variant (x)
+  ".variant of the UUID X, java.util.UUID's: 0 when the low half's top bit
+   is clear, 2 for 10, else its top three bits."
+  (let ((top (logand (ash (car (cdr (cdr x))) -61) 7)))
+    (cond ((< top 4) 0) ((< top 6) 2) (t top))))
+
 ;;;; clojure.edn: read-string and read over the reader above in EDN mode.
 ;;
 ;; The oracle's EdnReader reads data only: the quote is a symbol constituent, a
@@ -10255,11 +11397,10 @@
          (f
           (if readers (rontolisp::%clojure-call-keyword tag readers nil) nil)))
     (cond (f (rontolisp::%clojure-rd-edn-call f (list value)))
-          ((or (eq tag (rontolisp::%clojure-rd-symbol "inst"))
-               (eq tag (rontolisp::%clojure-rd-symbol "uuid")))
-           (error "~A"
-                  (concatenate 'string "unsupported reader form #"
-                               (rontolisp::%clojure-symbol-full-name tag))))
+          ((eq tag (rontolisp::%clojure-rd-symbol "inst"))
+           (rontolisp::%clojure-instant-read-date value))
+          ((eq tag (rontolisp::%clojure-rd-symbol "uuid"))
+           (rontolisp::%clojure-read-uuid value))
           (dflt (rontolisp::%clojure-rd-edn-call dflt (list tag value)))
           (t (rontolisp::%clojure-runtime-exception
               (concatenate 'string "No reader function for tag "

@@ -25,7 +25,8 @@ lower されます。位置指定の `->Name`（数が違うとシグナル）�
 `#Name{...}` はタグ付きリテラルで、オラクル同様拒否されます
 （`No reader function for tag Name`）。
 
-仕様との差異:レコードの `str` もリテラルを綴ります。オラクルは `user.R@<hash>` を返します。
+仕様との差異:レコードの `str` もリテラルを綴ります。オラクルは `user.R@<hash>` を返します
+（`toString` を上書きした本体は、その答えを返します。後述）。
 
 ```clojure
 (defrecord R [a])
@@ -36,4 +37,17 @@ lower されます。位置指定の `->Name`（数が違うとシグナル）�
 (println (= r (->R 7)))           ; true
 (println (= r {:a 7}))            ; false
 (println (get (assoc r :b 1) :b)) ; 1
+```
+
+本体は、[reify](reify.md#host-interfaces) のインタフェースのうちレコード自身が実装しない
+もの（`IFn`、`IDeref`、`IReduceInit` など）を実装でき、`toString` を上書きできます。
+`toString` は `str` が読み、印字は引き続きレコードのリテラルです。マップのインタフェースは
+レコード自身のものなので、`ILookup` や `IObj` を挙げることと、`count`・`seq`・`valAt`・
+`meta`・`equals`・`hashCode` を定義することは、オラクルの `Duplicate` による拒否になります。
+
+```clojure
+(defrecord Adder [n] clojure.lang.IFn (invoke [_ x] (+ n x)))
+((->Adder 10) 5) ; => 15
+(defrecord Point [x y] Object (toString [_] (str "<" x "," y ">")))
+(str (->Point 1 2)) ; => "<1,2>"
 ```

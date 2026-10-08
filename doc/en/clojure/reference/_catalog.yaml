@@ -322,6 +322,12 @@ categories:
       - { slug: special-symbol-p, name: "special-symbol?" }
       - { slug: reader-conditional-p, name: "reader-conditional?" }
       - { slug: tagged-literal-p, name: "tagged-literal?" }
+  - title: "Instants and UUIDs"
+    index_page: clojure/reference/instants.md
+    functions:
+      - { slug: inst-ms, name: "inst-ms" }
+      - { slug: random-uuid, name: "random-uuid" }
+      - { slug: parse-uuid, name: "parse-uuid" }
   - title: "State"
     index_page: clojure/reference/state.md
     functions:
@@ -382,6 +388,7 @@ categories:
       - { slug: ex-data, name: "ex-data" }
       - { slug: ex-message, name: "ex-message" }
       - { slug: ex-cause, name: "ex-cause" }
+      - { slug: throwable-to-map, name: "Throwable->map" }
       - { slug: assert, name: "assert" }
   - title: "Namespaces"
     index_page: clojure/reference/namespaces.md
@@ -490,6 +497,7 @@ categories:
       - { slug: read, name: "read" }
       - { slug: reader-conditional, name: "reader-conditional" }
       - { slug: tagged-literal, name: "tagged-literal" }
+      - { slug: default-data-readers, name: "default-data-readers" }
       - { slug: format, name: "format" }
       - { slug: with-open, name: "with-open" }
       - { slug: with-out-str, name: "with-out-str" }

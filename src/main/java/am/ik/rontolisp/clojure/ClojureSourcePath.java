@@ -29,7 +29,8 @@ import org.jspecify.annotations.Nullable;
  * dependencies resolve before it lowers, as the oracle's classpath is built before its
  * program starts -- and then each selected jar that holds classes joins the program's
  * Java class path ({@link ClojureFiles#addJavaClassPath}), so the lowering and the
- * program see them.
+ * program see them. The {@code data_readers} files the roots hold are read when the
+ * project resolves too ({@link #dataReaders}).
  */
 final class ClojureSourcePath {
 
@@ -63,6 +64,9 @@ final class ClojureSourcePath {
 
 	/** The namespaces found so far: one read per file per lowering. */
 	private final Map<String, Found> found = new HashMap<>();
+
+	/** The data readers the roots hold, read with them. */
+	private @Nullable ClojureDataReaders dataReaders;
 
 	ClojureSourcePath(ClojureFiles files, @Nullable String entryFile) {
 		this.files = files;
@@ -352,6 +356,45 @@ final class ClojureSourcePath {
 			this.roots = known;
 		}
 		return known;
+	}
+
+	/**
+	 * The program's data readers ({@link ClojureDataReaders}): every
+	 * {@code data_readers.clj} at a root, in the roots' order, then every
+	 * {@code data_readers.cljc}, like the oracle's {@code getResources} over its
+	 * classpath. Read once, when the program's project resolves.
+	 * @return the data readers
+	 */
+	ClojureDataReaders dataReaders() {
+		ClojureDataReaders known = this.dataReaders;
+		if (known == null) {
+			List<ClojureDataReaders.Source> sources = new ArrayList<>();
+			for (String name : ClojureDataReaders.FILES) {
+				for (Root root : roots()) {
+					ClojureDataReaders.Source source = rootFile(root, name);
+					if (source != null) {
+						sources.add(source);
+					}
+				}
+			}
+			known = ClojureDataReaders.of(sources);
+			this.dataReaders = known;
+		}
+		return known;
+	}
+
+	/** A file directly below a root, or null when the root holds none of the name. */
+	private ClojureDataReaders.@Nullable Source rootFile(Root root, String name) {
+		if (root.archive()) {
+			if (!entriesOf(root).contains(name)) {
+				return null;
+			}
+			String text = this.files.readArchiveEntry(root.path(), name);
+			return text == null ? null : new ClojureDataReaders.Source(root.path() + "!/" + name, text);
+		}
+		String path = this.files.resolve(root.path(), name);
+		String text = this.files.read(path);
+		return text == null ? null : new ClojureDataReaders.Source(path, text);
 	}
 
 	private List<Root> computeRoots() {

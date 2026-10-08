@@ -21,6 +21,7 @@ class ClojureClassBasesTest {
 		names.addAll(ClojureClassBases.STREAM_SUPERS.values());
 		names.addAll(ClojureClassBases.IO_SUPERS.keySet());
 		names.addAll(ClojureClassBases.TABLED_INTERFACES);
+		names.addAll(ClojureClassBases.TIME_VALUE_DISPATCH.keySet());
 		names.addAll(List.of(ClojureThrowables.THROWABLE, ClojureClassBases.OBJECT));
 		for (String name : names) {
 			if (name.startsWith("java.")) {
@@ -40,9 +41,14 @@ class ClojureClassBasesTest {
 		assertThat(ClojureClassBases.supersOf("java.io.StringWriter"))
 			.isEqualTo(Set.of("java.io.Writer", "java.lang.Object", "java.lang.Appendable", "java.io.Closeable",
 					"java.lang.AutoCloseable", "java.io.Flushable"));
+		// the instants' and the UUID's classes are tabled: a Timestamp walks to Date
+		assertThat(ClojureClassBases.supersOf("java.sql.Timestamp")).isEqualTo(Set.of("java.util.Date",
+				"java.lang.Object", "java.io.Serializable", "java.lang.Cloneable", "java.lang.Comparable"));
+		assertThat(ClojureClassBases.timeValueSubclassesOf("java.util.Date")).containsExactly("java.sql.Timestamp");
+		assertThat(ClojureClassBases.timeValueSubclassesOf("java.lang.Object")).isEmpty();
 		// beyond the tables, a throwable reflects; any other class is no class keyword
 		assertThat(ClojureClassBases.basesOf("java.io.FileNotFoundException")).containsExactly("java.io.IOException");
-		assertThat(ClojureClassBases.basesOf("java.util.Date")).isNull();
+		assertThat(ClojureClassBases.basesOf("java.util.ArrayList")).isNull();
 	}
 
 	private static List<String> reflected(String name) throws ClassNotFoundException {

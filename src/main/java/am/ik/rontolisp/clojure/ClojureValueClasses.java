@@ -31,6 +31,8 @@ final class ClojureValueClasses {
 
 	private static final String COMPARABLE = "java.lang.Comparable";
 
+	private static final String CLONEABLE = "java.lang.Cloneable";
+
 	private static final String CONSTABLE = "java.lang.constant.Constable";
 
 	private static final String CONSTANT_DESC = "java.lang.constant.ConstantDesc";
@@ -175,6 +177,23 @@ final class ClojureValueClasses {
 
 		/** {@code clojure.lang.TaggedLiteral}. */
 		TAGGED_LITERAL(List.of("clojure.lang.TaggedLiteral", "clojure.lang.ILookup")),
+
+		/** {@code java.util.Date}, the instant {@code #inst} reads. */
+		DATE(List.of("java.util.Date", SERIALIZABLE, CLONEABLE, COMPARABLE)),
+
+		/**
+		 * {@code java.sql.Timestamp}, {@code clojure.instant/read-instant-timestamp}'s.
+		 */
+		TIMESTAMP(List.of("java.sql.Timestamp", "java.util.Date", SERIALIZABLE, CLONEABLE, COMPARABLE)),
+
+		/**
+		 * {@code java.util.GregorianCalendar},
+		 * {@code clojure.instant/read-instant-calendar}'s.
+		 */
+		CALENDAR(List.of("java.util.GregorianCalendar", "java.util.Calendar", SERIALIZABLE, CLONEABLE, COMPARABLE)),
+
+		/** {@code java.util.UUID}, the value {@code #uuid} reads. */
+		UUID(List.of("java.util.UUID", SERIALIZABLE, COMPARABLE)),
 
 		/** A record: what every record class implements. */
 		RECORD(List.of("clojure.lang.Associative", "clojure.lang.Counted", "clojure.lang.IHashEq",
@@ -333,6 +352,70 @@ final class ClojureValueClasses {
 	 */
 	static boolean hostMayHold(String className, boolean loads) {
 		return loads && !CONVERTED.contains(className) && !className.equals(ClojureClassBases.OBJECT);
+	}
+
+	/**
+	 * The {@code clojure.lang} interfaces among the kinds' classes whose simple name does
+	 * not start with {@code I}: {@code clojure.lang} is not on this class path, so its
+	 * interfaces are told by name ({@link #isInterface}).
+	 */
+	private static final Set<String> CLOJURE_LANG_INTERFACES = Set.of("Associative", "Counted", "Fn", "Indexed",
+			"MapEquivalence", "Named", "Reversible", "Seqable", "Sequential", "Settable", "Sorted");
+
+	/**
+	 * Whether the class is an interface: the tabled ones, any class the host loads by
+	 * reflection, a {@code clojure.lang} one by its name ({@code IRef}, {@code Counted};
+	 * {@code ARef}, {@code Atom} are classes).
+	 * @param className the class's binary name
+	 * @return {@code true} for an interface
+	 */
+	static boolean isInterface(String className) {
+		if (ClojureClassBases.TABLED_INTERFACES.contains(className)) {
+			return true;
+		}
+		if (ClojureClassBases.basesOf(className) != null) {
+			return false;
+		}
+		try {
+			return ClojureHostClasses.load(className).isInterface();
+		}
+		catch (ClassNotFoundException | LinkageError _) {
+			String simple = className.substring(className.lastIndexOf('.') + 1);
+			return simple.length() > 1 && simple.charAt(0) == 'I' && Character.isUpperCase(simple.charAt(1))
+					|| CLOJURE_LANG_INTERFACES.contains(simple);
+		}
+	}
+
+	/**
+	 * Whether one class is a proper subtype of another, as far as this class path tells:
+	 * the class rows ({@link ClojureClassBases#supersOf}) or host reflection, and for two
+	 * {@code clojure.lang} classes the kinds -- the subtype's values a proper subset of
+	 * the supertype's ({@code IRef} below {@code IDeref}).
+	 * @param sub the candidate subtype
+	 * @param sup the candidate supertype
+	 * @return {@code true} when {@code sub} is below {@code sup}
+	 */
+	static boolean isSubtype(String sub, String sup) {
+		if (sub.equals(sup)) {
+			return false;
+		}
+		if (ClojureClassBases.basesOf(sub) != null) {
+			return ClojureClassBases.supersOf(sub).contains(sup);
+		}
+		try {
+			Class<?> subClass = ClojureHostClasses.load(sub);
+			try {
+				return ClojureHostClasses.load(sup).isAssignableFrom(subClass);
+			}
+			catch (ClassNotFoundException | LinkageError _) {
+				return false;
+			}
+		}
+		catch (ClassNotFoundException | LinkageError _) {
+			List<Kind> subKinds = kindsOf(sub);
+			List<Kind> supKinds = kindsOf(sup);
+			return !subKinds.isEmpty() && supKinds.containsAll(subKinds) && !subKinds.containsAll(supKinds);
+		}
 	}
 
 }
