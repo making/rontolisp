@@ -96,6 +96,21 @@ final class ClojureSourcePath {
 	 */
 	@Nullable Found find(String ns) {
 		String relative = resourceOf(ns);
+		Found project = findFile(relative);
+		if (project != null) {
+			return project;
+		}
+		String builtin = ClojureBuiltinNamespaces.source(ns);
+		return builtin == null ? null : new Found(relative, builtin, true);
+	}
+
+	/**
+	 * A file below the first root holding it, for {@code load}: a root-relative path, not
+	 * a namespace.
+	 * @param relative the path, extension included
+	 * @return the file, or {@code null} when no root holds it
+	 */
+	@Nullable Found findFile(String relative) {
 		for (String root : roots()) {
 			String path = this.files.resolve(root, relative);
 			String text = this.files.read(path);
@@ -103,8 +118,7 @@ final class ClojureSourcePath {
 				return new Found(path, text, false);
 			}
 		}
-		String builtin = ClojureBuiltinNamespaces.source(ns);
-		return builtin == null ? null : new Found(relative, builtin, true);
+		return null;
 	}
 
 	/**

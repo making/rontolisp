@@ -183,6 +183,21 @@ class ClojureProjectNamespacesTest {
 					(defn here [] [(str *ns*) *file* *source-path*])
 					(in-ns 'app.elsewhere)
 					(clojure.core/prn :switched (clojure.core/str clojure.core/*ns*))
+					"""), Map.entry("src/app/ld/part1.clj", """
+					(in-ns 'app.ld-test)
+					(println "loading part1" (str *ns*) (s/upper-case "x"))
+					(defn part1-fn [] :p1)
+					(def counter-ld (atom 0))
+					(swap! counter-ld inc)
+					(println "counter" @counter-ld)
+					"""), Map.entry("src/app/ld/part2.clj", """
+					(println "loading part2" (str *ns*))
+					(defn part2-fn [] [:p2 (part1-fn)])
+					"""), Map.entry("src/app/loud.clj", """
+					(ns app.loud)
+					(println "loading app.loud")
+					(defn shout [x] (str x "!"))
+					(defn other [x] [:other x])
 					"""), Map.entry("test/app/a.clj", """
 					(ns app.a (:require [app.shared :as sh]))
 					(println (sh/s) :from-a)
@@ -554,6 +569,107 @@ class ClojureProjectNamespacesTest {
 		Path entry = entry("late_test.clj", LATE_MAIN);
 		assertThat(runOnWasm(entry, false)).isEqualTo(LATE_OUT);
 		assertThat(runOnWasm(entry, true)).isEqualTo(LATE_OUT);
+	}
+
+	/**
+	 * {@code load} and the {@code (:load ...)} ns clause read a file relative to the
+	 * directory of the current namespace's file (a leading slash: a source root),
+	 * evaluate it in the current namespace again at every call -- its own {@code in-ns}
+	 * does not outlive it -- and answer nil, like the oracle.
+	 */
+	private static final String LOAD_MAIN = """
+			(ns app.ld-test
+			  (:require [clojure.string :as s])
+			  (:load "ld/part1" "ld/part2"))
+			(println "after ns" (part1-fn) (part2-fn))
+			(load "ld/part1")
+			(println "reloaded" @counter-ld)
+			(load "/app/ld/part2")
+			(println (str *ns*))
+			(println (load "ld/part1"))
+			(defn later [] (load "ld/part2") :done)
+			(println (later))
+			""";
+
+	private static final String LOAD_OUT = """
+			loading part1 app.ld-test X
+			counter 1
+			loading part2 app.ld-test
+			after ns :p1 [:p2 :p1]
+			loading part1 app.ld-test X
+			counter 1
+			reloaded 1
+			loading part2 app.ld-test
+			app.ld-test
+			loading part1 app.ld-test X
+			counter 1
+			nil
+			loading part2 app.ld-test
+			:done
+			""";
+
+	@Test
+	void loadRunsAFileInTheCurrentNamespaceEveryTime() throws Exception {
+		Path entry = entry("ld_test.clj", LOAD_MAIN);
+		assertThat(interpret(entry)).isEqualTo(LOAD_OUT);
+		assertThat(runOnJvm(entry, "LoadFiles")).isEqualTo(LOAD_OUT);
+	}
+
+	@Test
+	void loadRunsAFileInTheCurrentNamespaceEveryTimeOnBothWasmBackends() throws Exception {
+		assumeTrue(HostWasmtime.isAvailable(), "no usable wasmtime on PATH");
+		Path entry = entry("ld_test.clj", LOAD_MAIN);
+		assertThat(runOnWasm(entry, false)).isEqualTo(LOAD_OUT);
+		assertThat(runOnWasm(entry, true)).isEqualTo(LOAD_OUT);
+	}
+
+	@Test
+	void loadRefusesWhatItCannotReadWhileLowering() throws Exception {
+		assertThatThrownBy(() -> read(entry("ld1.clj", "(ns app.ld1) (load \"nope\")")))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Could not locate app/nope.clj on the source path: ");
+		assertThatThrownBy(() -> read(entry("ld2.clj", "(ns app.ld2) (let [p \"ld/part2\"] (load p))")))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("load takes string literal paths");
+	}
+
+	/**
+	 * {@code :as-alias} names a namespace without loading it, and {@code :rename} refers
+	 * a var under another name (the old one is not referred), like the oracle.
+	 */
+	private static final String ALIAS_MAIN = """
+			(ns app.alias-test
+			  (:require [app.loud :as-alias l]
+			            [app.loud :refer :all :rename {other o2, shout yell}]))
+			(println "after ns")
+			(println ::l/k `l/x)
+			(println (yell "b") (o2 1) (app.loud/shout "q") (map yell ["c" "d"]))
+			""";
+
+	private static final String ALIAS_OUT = """
+			loading app.loud
+			after ns
+			:app.loud/k app.loud/x
+			b! [:other 1] q! (c! d!)
+			""";
+
+	@Test
+	void asAliasAndRenameWorkOnProjectNamespaces() throws Exception {
+		Path entry = entry("alias_test.clj", ALIAS_MAIN);
+		assertThat(interpret(entry)).isEqualTo(ALIAS_OUT);
+		assertThat(runOnJvm(entry, "AliasRename")).isEqualTo(ALIAS_OUT);
+		assertThatThrownBy(() -> read(entry("al2.clj",
+				"(ns app.al2 (:require [app.loud :as-alias l] [app.loud :refer :all :rename {shout yell}])) (shout \"x\")")))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("unknown name: shout");
+	}
+
+	@Test
+	void asAliasAndRenameWorkOnProjectNamespacesOnBothWasmBackends() throws Exception {
+		assumeTrue(HostWasmtime.isAvailable(), "no usable wasmtime on PATH");
+		Path entry = entry("alias_test.clj", ALIAS_MAIN);
+		assertThat(runOnWasm(entry, false)).isEqualTo(ALIAS_OUT);
+		assertThat(runOnWasm(entry, true)).isEqualTo(ALIAS_OUT);
 	}
 
 	/**

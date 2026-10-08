@@ -44,7 +44,10 @@ the form that required it, while its other top-level forms run when the `require
 including a `require` inside a function body, which loads when the body runs. A second
 `require` loads nothing; `:reload` runs the file again (`def` resets, `defonce` keeps its
 root) and `:reload-all` re-runs its dependencies first, like the oracle. A file without an `ns` form
-defines into the requiring namespace. `use` and `:refer :all` bring in every public var; a
+defines into the requiring namespace. `(load "path")` and the `(:load "path" ...)` ns clause read a file relative to the
+directory of the current namespace's file (a leading slash: a source root) and run it in the current namespace, again at
+every call, answering `nil`; its own `in-ns` does not outlive it. The path is a string literal: the file is read while the
+program lowers. `use` and `:refer :all` bring in every public var; a
 file no root holds, a cycle of requires and a refer of a missing or private var are errors
 in the oracle's words.
 

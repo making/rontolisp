@@ -44,7 +44,7 @@ Common Lisp ファイルはこの名前で呼び出します。
 `require` も、本体の実行時にロードします。2 度目の `require` は何もロードしません。
 `:reload` はファイルを再実行し（`def` はリセット、`defonce` はルートを保持）、
 `:reload-all` は依存先を先に再実行します。いずれも oracle と同じです。`ns` フォームのないファイルは、require した側の
-名前空間に定義を追加します。`use` と `:refer :all` は public な var をすべて refer します。
+名前空間に定義を追加します。`(load "path")` と ns の `(:load "path" ...)` 節は、現在の名前空間のファイルがあるディレクトリからの相対パス（先頭が `/` ならソースルートから）でファイルを読み、現在の名前空間で実行します。呼ぶたびに再実行し、`nil` を返し、ファイル内の `in-ns` は終了後に残りません。パスは文字列リテラルで、ファイルは lower の間に読まれます。`use` と `:refer :all` は public な var をすべて refer します。
 どのルートにもないファイル、require の循環、存在しない var や private な var の refer は、
 oracle と同じ文言のエラーになります。
 
