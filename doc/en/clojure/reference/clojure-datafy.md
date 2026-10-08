@@ -8,7 +8,7 @@ documented behavior of Clojure's namespaces, and run the same on every backend.
 
 | Var | Behavior |
 |---|---|
-| `clojure.datafy/datafy` | `(datafy x)`: `x` as data through `Datafiable`; when that answers a new collection, its metadata holds `x` as `:clojure.datafy/obj` and the symbol of its class as `:clojure.datafy/class`. An atom answers `[value]` |
+| `clojure.datafy/datafy` | `(datafy x)`: `x` as data through `Datafiable`; when that answers a new collection, its metadata holds `x` as `:clojure.datafy/obj` and the symbol of its class as `:clojure.datafy/class`. An exception answers [Throwable->map](throwable-to-map.md)'s map; an atom, ref or agent `[value]` with its metadata |
 | `clojure.datafy/nav` | `(nav coll k v)`: what `v`, found under `k` in `coll`, stands for, through `Navigable`; `v` itself unless extended |
 | `clojure.core.protocols/Datafiable`, `datafy` | The protocol behind `datafy`: `nil` and every other value answer themselves; extendable through metadata |
 | `clojure.core.protocols/Navigable`, `nav` | The protocol behind `nav`, extendable through metadata |
@@ -25,6 +25,7 @@ the method's qualified symbol, ahead of the extensions:
 (d/datafy conn) ; => {:connection 7}
 (::d/obj (meta (d/datafy conn))) ; => {:id 7}
 (d/datafy (atom 5)) ; => [5]
+(:cause (d/datafy (ex-info "boom" {:code 7}))) ; => "boom"
 (defrecord Node [id])
 (extend-protocol p/Navigable Node
   (nav [n k v] (if (= k :parent) (->Node v) v)))
@@ -55,5 +56,5 @@ A type reduces through its own `CollReduce` or `IKVReduce` row:
   `String`, a map) is reached by calling `coll-reduce` or `kv-reduce` itself, while
   Clojure's `reduce` takes it for a collection that does not reduce itself (a string, a
   map). `reduce` does not consult `InternalReduce`.
-- An exception datafies to itself (Clojure answers `Throwable->map`'s map), and a
-  namespace or class to itself too.
+- A namespace or class datafies to itself (Clojure answers a map of its members). An
+  exception's map has no frames ([Throwable->map](throwable-to-map.md)).

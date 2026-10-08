@@ -15,7 +15,7 @@
     (if (identical? v x)
       v
       (if (coll? v)
-        (vary-meta v assoc ::obj x ::class (symbol (kernel/class-name-of x)))
+        (vary-meta v assoc ::obj x ::class (symbol (kernel/class-name x)))
         v))))
 
 (defn nav
@@ -25,8 +25,8 @@
   (p/nav coll k v))
 
 (extend-protocol p/Datafiable
-  Object
-  (datafy [x]
-    (if (instance? clojure.lang.IRef x)
-      (with-meta [(deref x)] (meta x))
-      x)))
+  Throwable
+  (datafy [x] (Throwable->map x))
+
+  clojure.lang.IRef
+  (datafy [r] (with-meta [(deref r)] (meta r))))

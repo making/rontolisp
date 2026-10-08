@@ -295,6 +295,17 @@ class ClojureSessionTest {
 	}
 
 	@Test
+	void aLaterBufferExtendingAProtocolToAWalkedClassReachesItsValues() {
+		// a session's dispatchers all walk; a buffer extending a protocol of an earlier
+		// one to a throwable or an interface defines the walk again with that class
+		assertThat(runSession("(defprotocol SP (sp [x])) (extend-protocol SP Object (sp [_] :object))",
+				"(println (sp (ex-info \"a\" {})) (sp (atom 1)))", "(extend-protocol SP Exception (sp [_] :exception))",
+				"(extend clojure.lang.IRef SP {:sp (fn [_] :iref)})",
+				"(println (sp (ex-info \"a\" {})) (sp (atom 1)) (sp 1) (satisfies? SP (Error.)))"))
+			.isEqualTo(":object :object\n:exception :iref :object true\n");
+	}
+
+	@Test
 	void theTestRuntimeStartsOnceAheadOfTheFirstTestBuffer() {
 		// clojure.test in a session: the runtime start travels ahead of the
 		// buffer that first uses it, the test registers under the session's

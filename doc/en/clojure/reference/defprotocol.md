@@ -4,8 +4,10 @@
 
 Declares a protocol: a method-table global plus one dispatcher per method over the
 target's tag (the multimethod shape without the hierarchy search). The name answers
-its method table. A call dispatches on the target's exact tag, then the `Object`
-row; a miss with no `Object` row signals, like the oracle. A method declares one
+its method table. A call dispatches on the target's exact tag, then on a class the
+target extends or implements that the protocol was extended to (a throwable, `IRef`, ...:
+[extend-protocol](extend-protocol.md)), then the `Object` row; a miss with no `Object` row
+signals, like the oracle. A method declares one
 parameter vector per arity, each taking the target first, and a call reaches the
 implementation's arity of its argument count. A `defrecord`, `deftype` or `reify` body
 implements another arity by naming the method again over another parameter vector, each

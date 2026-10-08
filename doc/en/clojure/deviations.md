@@ -128,7 +128,8 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   exception the program built answers its class name as a keyword (`:java.lang.Exception`, where the oracle
   answers the host class), `:java.lang.RuntimeException` for an error naming no class; `.printStackTrace` writes the `toString` line to `*err*` (the oracle writes it
   and a line per frame to the process's stderr, whatever `*err*` is bound to) and
-  `.getStackTrace` answers an empty vector; `.getClass` answers what `class` does. On the
+  `.getStackTrace` answers an empty vector (so `Throwable->map` answers `:trace []` and no
+  `:at` in its `:via` maps); `.getClass` answers what `class` does. On the
   interpreter and the JVM, any other method is called on, and a Java member is passed, a
   host exception of the exception's class built once from its message and cause (an
   `ex-info`'s is a `RuntimeException`): `(.getCause (UncheckedIOException. "u" e))` answers
@@ -167,9 +168,11 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   of `clojure.lang.IPersistentList`, which also spells `:list`, where the oracle answers
   `false`. Any other class (`java.io.File`) is its class object, in a dispatch value too,
   like the oracle.
-  Protocol dispatch reads no hierarchy (exact tag match
-  plus the `Object` default) and merges `Long`/`Double` into `:number`, where the
-  oracle tells them apart.
+  Protocol dispatch reads no hierarchy (`derive`): past the exact tag it tries only the
+  classes the protocol was extended to, then the `Object` default. It merges
+  `Long`/`Double` into `:number`, where the oracle tells them apart, and two
+  `clojure.lang` interfaces one value implements are ordered by the kinds of value each
+  holds (`IRef` ahead of `IDeref`), since `clojure.lang` is not on this class path.
 - `(methods mt)` and `get-method`, `remove-method`, `prefer-method` take the multimethod's
   name (a `defmulti` var, through an alias or a referred one), not an expression: a local
   bound to a multimethod is refused at lowering. The map `methods` answers keys a host

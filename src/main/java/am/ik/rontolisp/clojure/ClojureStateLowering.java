@@ -392,6 +392,8 @@ final class ClojureStateLowering {
 
 	static final String EX_CAUSE = "RONTOLISP::%CLOJURE-EX-CAUSE";
 
+	static final String THROWABLE_TO_MAP = "RONTOLISP::%CLOJURE-THROWABLE-TO-MAP";
+
 	static final String THROW = "RONTOLISP::%CLOJURE-THROW";
 
 	static final String EXCEPTION_NEW = "RONTOLISP::%CLOJURE-EXCEPTION-NEW";
@@ -414,8 +416,8 @@ final class ClojureStateLowering {
 	}
 
 	/**
-	 * {@code (ex-message e)}, {@code (ex-data e)}, {@code (ex-cause e)} and
-	 * {@code (throw e)}: one call to the library function.
+	 * {@code (ex-message e)}, {@code (ex-data e)}, {@code (ex-cause e)},
+	 * {@code (Throwable->map e)} and {@code (throw e)}: one call to the library function.
 	 */
 	static LispVal exReaderOf(ClojureLowering ctx, List<LispVal> items, String helper) {
 		ClojureLowerUtil.isTrue(items.size() == 2, ((LispSymbol) items.get(0)).name() + " takes one exception");

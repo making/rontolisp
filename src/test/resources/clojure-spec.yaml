@@ -8755,6 +8755,89 @@ cases:
       [:x 1] :init
       6 0
       #datafy_nav.Node{:id 0} 5
+  - name: clojure-datafy-of-an-exception-and-a-ref-like-the-oracle
+    # clojure.datafy's Throwable and IRef rows (.kb/clojure-frontend.md "clojure.jar
+    # namespaces"): an exception datafies to Throwable->map's map with its class in the
+    # metadata, an atom, a ref and an agent to [value], a volatile to itself. Each part is
+    # printed alone, since a map of several keys prints in another order on wasm. Every line
+    # is the oracle's (clj 1.12.6), on all four backends.
+    source: |
+      (ns datafy-throwable (:require [clojure.datafy :as d]))
+      (def dt (d/datafy (ex-info "boom" {:a 1} (Exception. "root"))))
+      (prn (map :type (:via dt)) (map :message (:via dt)) (:data (first (:via dt))))
+      (prn (:cause dt) (:data dt) (::d/class (meta dt)) (ex-message (::d/obj (meta dt))))
+      (prn (d/datafy (atom 1)) (d/datafy (ref 2)) (d/datafy (agent 3)) (volatile? (d/datafy (volatile! 4))))
+      (in-ns 'user)
+    expected: |
+      (clojure.lang.ExceptionInfo java.lang.Exception) ("boom" "root") {:a 1}
+      "root" nil clojure.lang.ExceptionInfo "boom"
+      [1] [2] [3] true
+  - name: throwable-to-map-answers-the-oracles-map-without-frames
+    # Throwable->map (.kb/clojure-frontend.md "Exceptions"): :via down the cause chain with
+    # each throwable's class symbol, message and data, the root's :cause and :data, :phase
+    # from the outer data. A deviation: a throwable has no frames here, so :trace is [] and
+    # no :via map has :at (the oracle's frames and :at), what the oracle answers for an
+    # empty stack trace -- the first three lines. Each part is printed alone (a map of
+    # several keys prints in another order on wasm); the rest is the oracle's (clj 1.12.6).
+    source: |
+      (def tm1 (Throwable->map (ex-info "outer" {:b 2} (ex-info "inner" {:c 3}))))
+      (prn (map :type (:via tm1)) (map :message (:via tm1)) (map :data (:via tm1)) (:trace tm1) (:cause tm1) (:data tm1))
+      (def tm2 (Throwable->map (Exception. "e" (IllegalStateException. "ise"))))
+      (prn (map :type (:via tm2)) (:cause tm2) (contains? tm2 :data) (contains? (first (:via tm2)) :at))
+      (prn (:via (Throwable->map (Exception.))) (sort (map name (keys (Throwable->map (Exception.))))))
+      (prn (:phase (Throwable->map (ex-info "a" {:clojure.error/phase :compile}))))
+      (prn (map (comp :type first :via Throwable->map) [(ex-info "a" {}) (RuntimeException. "r")]))
+      (prn (:type (first (:via (Throwable->map (try (/ 1 0) (catch Exception e e)))))))
+      (prn (try (Throwable->map 1) (catch ClassCastException e :cce)) (try (Throwable->map nil) (catch NullPointerException e :npe)))
+    expected: |
+      (clojure.lang.ExceptionInfo clojure.lang.ExceptionInfo) ("outer" "inner") ({:b 2} {:c 3}) [] "inner" {:c 3}
+      (java.lang.Exception java.lang.IllegalStateException) "ise" false false
+      [{:type java.lang.Exception}] ("trace" "via")
+      :compile
+      (clojure.lang.ExceptionInfo java.lang.RuntimeException)
+      java.lang.ArithmeticException
+      :cce :npe
+  - name: a-protocol-extended-to-throwables-and-refs-walks-the-oracles-classes
+    # A protocol extended to a class no value's own class is (.kb/clojure-frontend.md
+    # "Dispatch"): a throwable, an interface over core kinds, java.util.Date for a Timestamp.
+    # Past an exact miss the dispatcher tries the superclasses, then the interfaces, each
+    # ahead of its supertypes, then Object, like the oracle's protocol lookup; satisfies?
+    # walks alike, extends? names the exact class only. Every line is the oracle's (clj
+    # 1.12.6), on all four backends.
+    source: |
+      (require 'clojure.instant)
+      (defprotocol WalkP (walk-m [x]))
+      (extend-protocol WalkP
+        Throwable (walk-m [_] :throwable)
+        Exception (walk-m [_] :exception)
+        clojure.lang.IExceptionInfo (walk-m [_] :iexinfo)
+        clojure.lang.IDeref (walk-m [_] :ideref)
+        clojure.lang.IRef (walk-m [_] :iref)
+        Object (walk-m [_] :object))
+      (prn (walk-m (ex-info "a" {})) (walk-m (RuntimeException. "r")) (walk-m (Error. "e")) (walk-m (AssertionError. "x")))
+      (prn (walk-m (atom 1)) (walk-m (volatile! 1)) (walk-m (ref 1)) (walk-m (agent 1)) (walk-m #'walk-m) (walk-m 5))
+      (defprotocol WalkQ (walk-q [x]))
+      (extend-protocol WalkQ clojure.lang.IExceptionInfo (walk-q [_] :iexinfo) Object (walk-q [_] :object))
+      (prn (walk-q (ex-info "a" {})) (walk-q (Exception. "x")))
+      (defprotocol WalkR (walk-r [x]))
+      (extend-type Exception WalkR (walk-r [_] :ex))
+      (prn (walk-r (IllegalStateException. "x")) (satisfies? WalkR (Exception.)) (satisfies? WalkR (Error.)))
+      (prn (extends? WalkR Exception) (extends? WalkR RuntimeException))
+      (prn (try (walk-r (Error.)) (catch IllegalArgumentException e :no-implementation)))
+      (defprotocol WalkS (walk-s [x]))
+      (extend clojure.lang.IRef WalkS {:walk-s (fn [_] :iref)})
+      (extend-protocol WalkS java.util.Date (walk-s [_] :date))
+      (prn (walk-s (atom 1)) (satisfies? WalkS (atom 1)) (satisfies? WalkS (volatile! 1)))
+      (prn (walk-s #inst "2020-01-01") (walk-s (clojure.instant/read-instant-timestamp "2020-01-01")))
+    expected: |
+      :exception :exception :throwable :throwable
+      :iref :ideref :iref :iref :iref :object
+      :iexinfo :object
+      :ex true false
+      true false
+      :no-implementation
+      :iref true false
+      :date :date
   - name: clojure-stacktrace-prints-throwables-like-the-oracle
     # The built-in clojure.stacktrace (.kb/clojure-frontend.md "clojure.jar namespaces"):
     # root-cause through a chain of causes, print-throwable of an ex-info (its data on a line

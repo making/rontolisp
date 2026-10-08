@@ -1472,6 +1472,54 @@
       (let ((e (rontolisp::%clojure-exception-of x)))
         (if e (car (cdr (cdr (cdr (c%e-parts e)))))))))
 
+;; One throwable's map in Throwable->map's :via: its class as a symbol, its
+;; message and its data when it has them. It has no frames here, so no :at.
+(defun rontolisp::%clojure-throwable-via (x)
+  (let ((e (rontolisp::%clojure-exception-of x))
+        (m (make-hash-table :test 'equal)))
+    (let ((message (rontolisp::%clojure-ex-message e))
+          (data (rontolisp::%clojure-ex-data e)))
+      (setf (gethash '(:c%keyword "type") m)
+            (rontolisp::%clojure-symbol-1
+             (car (rontolisp::%clojure-condition-chain e))))
+      (if message (setf (gethash '(:c%keyword "message") m) message))
+      (if data (setf (gethash '(:c%keyword "data") m) data))
+      m)))
+
+(defun rontolisp::%clojure-throwable-to-map (o)
+  "Throwable->map: the map of the throwable O -- :via one map per throwable
+   down its cause chain, :trace the root's frames, :cause and :data the root's
+   message and data, :phase the :clojure.error/phase of O's data. No throwable
+   has frames here (.getStackTrace answers []), so :trace is [] and no :via map
+   has :at, the oracle's own answer for an empty stack trace. Nil is the
+   oracle's NullPointerException, any other value its ClassCastException."
+  (if (null o)
+      (rontolisp::%clojure-null-pointer-exception
+       "Cannot invoke \"java.lang.Throwable.getStackTrace()\""))
+  (if (null (rontolisp::%clojure-exception-of o))
+      (rontolisp::%clojure-class-cast-exception
+       (concatenate 'string "class " (rontolisp::%clojure-class-name-of o)
+                    " cannot be cast to class java.lang.Throwable")))
+  (let ((via nil) (root o) (m (make-hash-table :test 'equal)))
+    (do ((tt o (rontolisp::%clojure-ex-cause tt)))
+        ((null tt))
+      (setq root tt)
+      (setq via (cons (rontolisp::%clojure-throwable-via tt) via)))
+    (let* ((top (rontolisp::%clojure-exception-of o))
+           (e (rontolisp::%clojure-exception-of root))
+           (message (rontolisp::%clojure-ex-message e))
+           (data (rontolisp::%clojure-ex-data e))
+           (own (rontolisp::%clojure-ex-data top))
+           (fields (if (rontolisp::%clojure-record-p own) (nth 3 own) own))
+           (phase (if (hash-table-p fields)
+                      (gethash '(:c%keyword "clojure.error/phase") fields))))
+      (setf (gethash '(:c%keyword "via") m) (coerce (reverse via) 'vector))
+      (setf (gethash '(:c%keyword "trace") m) (vector))
+      (if message (setf (gethash '(:c%keyword "cause") m) message))
+      (if data (setf (gethash '(:c%keyword "data") m) data))
+      (if phase (setf (gethash '(:c%keyword "phase") m) phase))
+      m)))
+
 ;; A host Throwable is a cause as itself, so ex-cause answers that very object
 ;; (the arm goes from a program that can make no host exception).
 (defun rontolisp::%clojure-cause-of (x)
@@ -1602,6 +1650,15 @@
         ((vectorp x) "clojure.lang.PersistentVector")
         ((rationalp x) "clojure.lang.Ratio")
         (t "clojure.lang.Symbol")))
+
+;; clojure.datafy's :clojure.datafy/class of X: the oracle's class name, an
+;; exception's (or a host throwable's) too, which a datafy of one reaches only
+;; through the namespace's Throwable row and so its exception runtime.
+(defun rontolisp::%clojure-datafy-class-name (x)
+  (let ((e (rontolisp::%clojure-exception-of x)))
+    (if e
+        (car (rontolisp::%clojure-condition-chain e))
+        (rontolisp::%clojure-class-name-of x))))
 
 ;; Refuse an instance call of METHOD on X, a value %clojure-value-receiver-p
 ;; takes: the lowering's WORDS (the oracle's, or the unsupported refusal) and

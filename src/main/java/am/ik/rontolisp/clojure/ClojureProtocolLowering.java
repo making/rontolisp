@@ -2,6 +2,7 @@ package am.ik.rontolisp.clojure;
 
 import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Deque;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -173,9 +174,10 @@ final class ClojureProtocolLowering {
 	 * extending to a host kind ({@code String}, {@code Number}, ...) dispatches on the
 	 * same spelling {@code class} answers. What no branch names (a host object from
 	 * interop on the backends that have one) answers a fresh one-list no row can hold, so
-	 * the {@code Object} default still catches it instead of signalling.
+	 * the {@code Object} default still catches it instead of signalling. With
+	 * {@code walk}, the walk past an exact miss follows ({@link #walkRuntime}).
 	 */
-	static List<LispVal> protocolRuntime(ClojureLowering ctx) {
+	static List<LispVal> protocolRuntime(ClojureLowering ctx, boolean walk) {
 		LispSymbol one = new LispSymbol("x");
 		List<LispVal> branches = new ArrayList<>();
 		branches.add(ClojureLowerUtil.list(isRecordForm(one), typedTagOf(one)));
@@ -221,8 +223,21 @@ final class ClojureProtocolLowering {
 				ClojureCollectionLowering.keywordForm("atom")));
 		branches.add(ClojureLowerUtil.list(ClojureLowering.TRUE_CONST,
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("list"), ClojureLowering.NIL_CONST)));
-		return List.of(ClojureLowerUtil.list(ClojureLowerUtil.sym("defun"), new LispSymbol(PROTOCOL_TAG),
+		List<LispVal> forms = new ArrayList<>();
+		forms.add(ClojureLowerUtil.list(ClojureLowerUtil.sym("defun"), new LispSymbol(PROTOCOL_TAG),
 				ClojureLowerUtil.list(List.of(one)), ClojureLowerUtil.cons(ClojureLowerUtil.sym("cond"), branches)));
+		if (walk) {
+			forms.addAll(walkRuntime(ctx));
+		}
+		return forms;
+	}
+
+	/**
+	 * The protocol runtime of a lowering: with the walk where a dispatcher walks (a
+	 * protocol extended to a walked class, or a session).
+	 */
+	static List<LispVal> protocolRuntime(ClojureLowering ctx) {
+		return protocolRuntime(ctx, ctx.session || !ctx.walkingProtocols.isEmpty());
 	}
 
 	/**
@@ -512,6 +527,18 @@ final class ClojureProtocolLowering {
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), def.defaultVar()), miss,
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("gethash"), ClojureCollectionLowering.keywordForm(method),
 						def.defaultVar(), miss));
+		if (walks(ctx, def)) {
+			// a walked class's row ahead of the Object row, like the oracle's
+			// superclass chain and interfaces
+			LispSymbol up = ctx.freshTemp();
+			objectRow = ClojureLowerUtil.list(ClojureLowerUtil.sym("let*"),
+					ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(up,
+							ClojureLowerUtil.list(new LispSymbol(PROTOCOL_SUPER),
+									ClojureLowerUtil.list(ClojureLowerUtil.sym("car"), args), def.methodsVar(),
+									ClojureCollectionLowering.keywordForm(method), miss)))),
+					ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
+							ClojureLowerUtil.list(ClojureLowerUtil.sym("eq"), up, miss), objectRow, up));
+		}
 		LispVal extended = ClojureLowerUtil.list(ClojureLowerUtil.sym("let*"),
 				ClojureLowerUtil.list(List.of(
 						ClojureLowerUtil.list(inner,
@@ -1272,8 +1299,11 @@ final class ClojureProtocolLowering {
 	 * kinds answer the {@code class} keyword spelling (a {@code java.lang.}/
 	 * {@code clojure.lang.} qualified or imported spelling too, like a {@code defmethod}
 	 * dispatch value), so dispatch agrees with {@code class}, and so do the classes of
-	 * the instants and the UUID ({@link ClojureClassBases#TIME_VALUE_DISPATCH}); anything
-	 * else (a {@code java.time.Instant}, ...) is a named refusal.
+	 * the instants and the UUID ({@link ClojureClassBases#TIME_VALUE_DISPATCH}). Any
+	 * other class a value may be an instance of -- a throwable, an interface such as
+	 * {@code clojure.lang.IRef}, a host class -- is a walked class
+	 * ({@link #walkTargetOf}), keyed by its binary name; a name no class has is the
+	 * oracle's unresolved symbol, like {@code instance?}'s.
 	 */
 	static @Nullable LispVal extendKeyForm(ClojureLowering ctx, String typeName, String what) {
 		if (ClojureDispatchLowering.isObjectClassName(ctx, typeName)) {
@@ -1293,10 +1323,164 @@ final class ClojureProtocolLowering {
 		if (kind == null) {
 			kind = ClojureClassBases.TIME_VALUE_DISPATCH.get(fqn);
 		}
-		if (kind == null) {
-			throw new LispReadException(what + " needs a core type, not " + typeName);
+		if (kind != null) {
+			return ClojureCollectionLowering.keywordForm(kind);
 		}
-		return ClojureCollectionLowering.keywordForm(kind);
+		if (typeName.startsWith(":") || !ClojureNamespaceLowering.isClasslike(ctx, typeName)) {
+			throw new LispReadException(what + " takes a type name, not " + typeName);
+		}
+		// the test refuses a name no class has
+		ClojureDispatchLowering.instanceTest(ctx, typeName, WALK_VALUE);
+		return ClojureCollectionLowering.keywordForm(walkedName(ctx, typeName));
+	}
+
+	/**
+	 * The variable a walked class's {@code instance?} test reads: the parameter of the
+	 * protocol runtime's walk ({@link #walkRuntime}).
+	 */
+	static final LispSymbol WALK_VALUE = new LispSymbol("x");
+
+	/** The protocol runtime's walk past an exact miss ({@link #walkRuntime}). */
+	static final String PROTOCOL_SUPER = "C%PROTOCOL-SUPER";
+
+	/** The protocol runtime's read of one row of a protocol's table. */
+	static final String PROTOCOL_ROW = "C%PROTOCOL-ROW";
+
+	/**
+	 * The binary name of a class spelling as {@code instance?} resolves it: an import, a
+	 * {@code java.lang} default, else a bare {@code clojure.lang} simple name.
+	 */
+	private static String walkedName(ClojureLowering ctx, String typeName) {
+		String resolved = ClojureNamespaceLowering.resolveClass(ctx, typeName);
+		String lang = resolved.indexOf('.') < 0 ? ClojureValueClasses.clojureLang(resolved) : null;
+		return lang != null ? lang : resolved;
+	}
+
+	/**
+	 * The class an {@code extend} target names when a value reaches its row only by
+	 * walking its classes past its own -- the oracle's superclass chain, then its
+	 * interfaces: a throwable (a condition's tag names no class), an interface or
+	 * abstract class over core kinds ({@code clojure.lang.IRef}, {@code IDeref}), a host
+	 * class, and {@code java.util.Date}, which a {@code java.sql.Timestamp} extends. Null
+	 * for a target whose row its values' tag names exactly ({@link #extendKeyForm}).
+	 * @param ctx the lowering
+	 * @param typeName the target's spelling
+	 * @return the walked class's binary name, or null
+	 */
+	static @Nullable String walkTargetOf(ClojureLowering ctx, String typeName) {
+		if (ClojureDispatchLowering.isObjectClassName(ctx, typeName) || typeName.equals("nil")
+				|| ctx.typeDefOf(typeName) != null) {
+			return null;
+		}
+		String fqn = ClojureNamespaceLowering.resolveClass(ctx, typeName);
+		if (ClojureDispatchLowering.DISPATCH_CLASS_KEYWORDS.containsKey(fqn.substring(fqn.lastIndexOf('.') + 1))) {
+			return null;
+		}
+		if (ClojureClassBases.TIME_VALUE_DISPATCH.containsKey(fqn)) {
+			return ClojureClassBases.timeValueSubclassesOf(fqn).isEmpty() ? null : fqn;
+		}
+		return walkedName(ctx, typeName);
+	}
+
+	/**
+	 * Records an extension of the protocol to a walked class: the class's test joins the
+	 * protocol runtime's walk, and a protocol whose dispatchers lowered without the walk
+	 * is a miss the lowering starts over for ({@link ClojureLowering#walkMisses}). A
+	 * class no value here can be an instance of needs no walk.
+	 */
+	static void noteWalk(ClojureLowering ctx, ClojureLowering.ProtocolDef def, String typeName) {
+		String walked = walkTargetOf(ctx, typeName);
+		if (walked == null) {
+			return;
+		}
+		LispVal test = ClojureDispatchLowering.instanceTest(ctx, typeName, WALK_VALUE);
+		if (test instanceof LispNil) {
+			return;
+		}
+		ctx.walkTests.putIfAbsent(walked, test);
+		if (!walks(ctx, def)) {
+			ctx.walkMisses.add(def.methodsVar().name());
+		}
+	}
+
+	/** Whether the protocol's dispatchers walk the classes of their target. */
+	static boolean walks(ClojureLowering ctx, ClojureLowering.ProtocolDef def) {
+		return ctx.session || ctx.walkingProtocols.contains(def.methodsVar().name());
+	}
+
+	/**
+	 * The protocol runtime's walk: {@code (C%PROTOCOL-SUPER x table method miss)} answers
+	 * the row of the protocol table {@code table} under the first walked class {@code x}
+	 * is an instance of that has one -- its {@code method}'s lambda, or the row itself
+	 * for a nil {@code method} ({@code satisfies?}) -- else {@code miss}. The classes go
+	 * in the order of the oracle's protocol lookup past the value's own class
+	 * ({@link #walkOrder}).
+	 */
+	static List<LispVal> walkRuntime(ClojureLowering ctx) {
+		LispSymbol table = new LispSymbol("table");
+		LispSymbol method = new LispSymbol("method");
+		LispSymbol miss = new LispSymbol("miss");
+		LispSymbol key = new LispSymbol("key");
+		LispSymbol inner = new LispSymbol("inner");
+		LispSymbol found = new LispSymbol("found");
+		LispVal rowBody = ClojureLowerUtil.list(ClojureLowerUtil.sym("let*"),
+				ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(inner,
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("gethash"), key, table, miss)))),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("eq"), inner, miss), miss,
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), method,
+								ClojureLowerUtil.list(ClojureLowerUtil.sym("gethash"), method, inner, miss), inner)));
+		LispVal row = ClojureLowerUtil.list(ClojureLowerUtil.sym("defun"), new LispSymbol(PROTOCOL_ROW),
+				ClojureLowerUtil.list(List.of(table, key, method, miss)), rowBody);
+		List<LispVal> body = new ArrayList<>();
+		boolean first = true;
+		for (String walked : walkOrder(ctx.walkTests.keySet())) {
+			LispVal store = ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
+					ctx.walkTests.getOrDefault(walked, ClojureLowering.NIL_CONST),
+					ClojureLowerUtil.list(ClojureLowerUtil.sym("setq"), found,
+							ClojureLowerUtil.list(new LispSymbol(PROTOCOL_ROW), table,
+									ClojureCollectionLowering.keywordForm(walked), method, miss)));
+			body.add(first ? store : ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
+					ClojureLowerUtil.list(ClojureLowerUtil.sym("eq"), found, miss), store));
+			first = false;
+		}
+		body.add(found);
+		LispVal walk = ClojureLowerUtil.list(ClojureLowerUtil.sym("defun"), new LispSymbol(PROTOCOL_SUPER),
+				ClojureLowerUtil.list(List.of(WALK_VALUE, table, method, miss)),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("let*"),
+						ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(found, miss))),
+						ClojureLowerUtil.cons(ClojureLowerUtil.sym("progn"), body)));
+		return List.of(row, walk);
+	}
+
+	/**
+	 * The walked classes in the order the oracle's protocol lookup tries a value's
+	 * supertypes past its own class: the superclasses first, then the interfaces, each
+	 * ahead of its own supertypes ({@link ClojureValueClasses#isSubtype}); unrelated ones
+	 * in the order spelled.
+	 */
+	static List<String> walkOrder(Collection<String> classes) {
+		List<String> ordered = new ArrayList<>();
+		for (boolean interfaces : new boolean[] { false, true }) {
+			List<String> rank = new ArrayList<>();
+			for (String each : classes) {
+				if (ClojureValueClasses.isInterface(each) == interfaces) {
+					rank.add(each);
+				}
+			}
+			while (!rank.isEmpty()) {
+				String next = rank.get(0);
+				for (String candidate : rank) {
+					if (rank.stream().noneMatch(other -> ClojureValueClasses.isSubtype(other, candidate))) {
+						next = candidate;
+						break;
+					}
+				}
+				ordered.add(next);
+				rank.remove(next);
+			}
+		}
+		return ordered;
 	}
 
 	/**
@@ -1356,7 +1540,8 @@ final class ClojureProtocolLowering {
 		ClojureLowerUtil.isTrue(items.size() >= 3, "extend-protocol takes a protocol, a type and methods");
 		ClojureLowerUtil.isTrue(items.get(1) instanceof LispSymbol, "extend-protocol takes a protocol name");
 		String protocol = ((LispSymbol) items.get(1)).name();
-		if (protocolOf(ctx, protocol) == null) {
+		ClojureLowering.ProtocolDef def = protocolOf(ctx, protocol);
+		if (def == null) {
 			throw new LispReadException("No such protocol: " + protocol);
 		}
 		List<LispVal> rows = new ArrayList<>();
@@ -1367,6 +1552,9 @@ final class ClojureProtocolLowering {
 			LispVal key = extendKeyForm(ctx, target, "extend-protocol");
 			boolean typed = isTypedTarget(ctx, target);
 			at++;
+			if (at < items.size() && !(items.get(at) instanceof LispSymbol)) {
+				noteWalk(ctx, def, target);
+			}
 			while (at < items.size() && !(items.get(at) instanceof LispSymbol)) {
 				List<LispVal> impl = ClojureLowerUtil.items(items.get(at));
 				if (impl == null || impl.size() < 2 || !(impl.get(0) instanceof LispSymbol)) {
@@ -1402,6 +1590,10 @@ final class ClojureProtocolLowering {
 			for (ClojureLowering.TypeMethod impl : group.methods()) {
 				rows.add(extendRow(ctx, group.protocol(), key, impl, typed));
 			}
+			ClojureLowering.ProtocolDef def = protocolOf(ctx, group.protocol());
+			if (def != null && !group.methods().isEmpty()) {
+				noteWalk(ctx, def, target);
+			}
 		}
 		ctx.usedProtocols = true;
 		if (rows.isEmpty()) {
@@ -1432,6 +1624,9 @@ final class ClojureProtocolLowering {
 		}
 		LispVal key = extendKeyForm(ctx, target, "extend");
 		boolean typed = isTypedTarget(ctx, target);
+		if (entries.size() > 1) {
+			noteWalk(ctx, def, target);
+		}
 		List<LispVal> rows = new ArrayList<>();
 		for (int i = 1; i < entries.size(); i += 2) {
 			ClojureLowerUtil.isTrue(entries.get(i) instanceof LispSymbol k && k.name().startsWith(":"),
@@ -1484,13 +1679,32 @@ final class ClojureProtocolLowering {
 					ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
 							ClojureLowerUtil.list(ClojureLowerUtil.sym("eq"), direct, miss), row, direct));
 		}
+		LispVal lowered = ctx.lower(items.get(2));
+		if (!walks(ctx, def)) {
+			return ClojureLowerUtil.list(ClojureLowerUtil.sym("let*"),
+					ClojureLowerUtil.list(List.of(
+							ClojureLowerUtil.list(tag, ClojureLowerUtil.list(new LispSymbol(PROTOCOL_TAG), lowered)),
+							ClojureLowerUtil.list(miss,
+									ClojureLowerUtil.list(ClojureLowerUtil.sym("list"), ClojureLowering.NIL_CONST)),
+							ClojureLowerUtil.list(inner, row))),
+					answer);
+		}
+		// a walked class's row satisfies too, like the oracle's
+		LispSymbol value = ctx.freshTemp();
+		LispSymbol exact = ctx.freshTemp();
+		LispVal walked = ClojureLowerUtil.list(ClojureLowerUtil.sym("let*"),
+				ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(exact, row))),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("eq"), exact, miss),
+						ClojureLowerUtil.list(new LispSymbol(PROTOCOL_SUPER), value, def.methodsVar(),
+								ClojureLowering.NIL_CONST, miss),
+						exact));
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let*"),
-				ClojureLowerUtil.list(List.of(
-						ClojureLowerUtil.list(tag,
-								ClojureLowerUtil.list(new LispSymbol(PROTOCOL_TAG), ctx.lower(items.get(2)))),
+				ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(value, lowered),
+						ClojureLowerUtil.list(tag, ClojureLowerUtil.list(new LispSymbol(PROTOCOL_TAG), value)),
 						ClojureLowerUtil.list(miss,
 								ClojureLowerUtil.list(ClojureLowerUtil.sym("list"), ClojureLowering.NIL_CONST)),
-						ClojureLowerUtil.list(inner, row))),
+						ClojureLowerUtil.list(inner, walked))),
 				answer);
 	}
 
