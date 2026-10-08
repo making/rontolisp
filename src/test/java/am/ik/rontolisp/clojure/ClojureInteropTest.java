@@ -728,6 +728,23 @@ class ClojureInteropTest {
 	// Before, measured 2026-10-04: the JVM answered equals for identical? (the proxy was
 	// identical? to true and printed "true"), the interpreter for two Files.
 	@Test
+	void lockingExcludesTheOtherThreadsOnTheInterpreterAndTheJvm() throws Exception {
+		// four threads each run 2000 read-yield-write steps on one atom: without the
+		// lock the steps interleave and updates are lost (2389 of 8000, measured
+		// 2026-10-08); under it every step lands, like the oracle's monitor
+		assertBothEqual("""
+				(def lock (atom 0))
+				(def plain (atom 0))
+				(defn work []
+				  (dotimes [_ 2000]
+				    (locking lock (let [v @plain] (Thread/yield) (reset! plain (inc v))))))
+				(def ts (doall (repeatedly 4 #(doto (Thread. (proxy [Runnable] [] (run [] (work)))) (.start)))))
+				(doseq [t ts] (.join t))
+				(println @plain)
+				""", "8000\n");
+	}
+
+	@Test
 	void identicalOnHostObjectsIsIdentity() throws Exception {
 		assertBothEqual("""
 				(def f1 (java.io.File. "x"))

@@ -979,8 +979,10 @@ final class ClojureStateLowering {
 		if (dynamic) {
 			ctx.dynamicVars.add(key);
 		}
-		ClojureDispatchLowering.recordClassDispatchFn(ctx, key, dynamic, items.size() == 3 ? items.get(2) : null);
-		if (ClojureLowerUtil.yieldsFun(value)) {
+		boolean redef = ctx.redefinable(key, nameDatum);
+		ClojureDispatchLowering.recordClassDispatchFn(ctx, key, dynamic || redef,
+				items.size() == 3 ? items.get(2) : null);
+		if (ClojureLowerUtil.yieldsFun(value) && !redef) {
 			ctx.globalDirectFuns.add(key);
 		}
 		else {

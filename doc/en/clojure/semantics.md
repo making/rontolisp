@@ -447,6 +447,7 @@ Each refusal names the missing design, never `unknown name`:
 | `::alias/kw` with an unknown alias | `Invalid token: ...` | only required aliases, the file's own ns and known namespaces resolve |
 | `--no-gc` builds | by name | that backend has no pairs, symbols or closures |
 | `file-seq`, `clojure.java.io` (except `reader`) | `file-seq` / `unknown name: clojure.java.io/...` | no directory walks; only `reader` resolves, opening a file-stream reader |
+| `with-redefs` of a `clojure.core` var, a macro, a multimethod or protocol method; in the REPL, of a `defn` an earlier input defined without `^:redef` | `with-redefs of ... is not supported...`, `... define it ^:redef to redefine it` | core verbs lower inline; only a `def`/`defn`/`declare` var has a root to replace, and a REPL input already ran with direct calls |
 | an asynchronous Ring handler (`run-server` with `:async? true`) | `asynchronous handlers (:async? true) are not supported` | no respond/raise protocol under the transports |
 | `:async` on a `rontolisp.wasm` declaration, an `async func` WIT member or export | `:async is not supported yet ...`, `... is an async func ...` | the future a suspending crossing answers is no Clojure future |
 | a WIT member taking or answering a stream or a future | `... which the Clojure tier does not carry yet (file.wit:N)` | the async canonical ABI's handles answer no Clojure future yet |
