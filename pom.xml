@@ -18,6 +18,15 @@
 		<project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
 		<spring-boot.version>4.1.1</spring-boot.version>
 		<version-generate-skip>false</version-generate-skip>
+		<!--
+			The plugins JarMavenConsumerE2eTest's offline builds run, pinned rather than left to
+			the running Maven's default bindings, which move with the Maven version. The
+			consumer project declares these same versions, so it resolves exactly what this
+			module's own build executed in full.
+		-->
+		<maven-resources-plugin.version>3.4.0</maven-resources-plugin.version>
+		<maven-compiler-plugin.version>3.16.0</maven-compiler-plugin.version>
+		<maven-install-plugin.version>3.1.4</maven-install-plugin.version>
 		<!-- The native executable output's precompile shim and runner stub
 		     (.kb/native-output.md): build them with rontolisp-native/build.sh during
 		     generate-resources when cargo is found (-Pnative turns this on), and fail
@@ -262,8 +271,18 @@ gitBranch=${git.branch}
 			</plugin>
 			<plugin>
 				<groupId>org.apache.maven.plugins</groupId>
+				<artifactId>maven-resources-plugin</artifactId>
+				<version>${maven-resources-plugin.version}</version>
+			</plugin>
+			<plugin>
+				<groupId>org.apache.maven.plugins</groupId>
+				<artifactId>maven-install-plugin</artifactId>
+				<version>${maven-install-plugin.version}</version>
+			</plugin>
+			<plugin>
+				<groupId>org.apache.maven.plugins</groupId>
 				<artifactId>maven-compiler-plugin</artifactId>
-				<version>3.16.0</version>
+				<version>${maven-compiler-plugin.version}</version>
 				<configuration>
 					<!-- JvmSimdVectorTemplate uses the incubator Vector API (embedded as a
 					     resource for the simd JVM acceleration bridge; never loaded as a
@@ -313,6 +332,18 @@ gitBranch=${git.branch}
 					     static wasmtime container for the Docker-based tests. -->
 					<forkCount>${rontolisp.test.forkCount}</forkCount>
 					<reuseForks>true</reuseForks>
+					<!--
+						What JarMavenConsumerE2eTest's shelled-out builds run on: the Maven running
+						this build and the local repository it seeded. Never an `mvn` on PATH, whose
+						default bindings move with the machine's Maven.
+					-->
+					<systemPropertyVariables>
+						<rontolisp.jar.e2e.maven.home>${maven.home}</rontolisp.jar.e2e.maven.home>
+						<rontolisp.jar.e2e.local.repository>${settings.localRepository}</rontolisp.jar.e2e.local.repository>
+						<rontolisp.jar.e2e.maven-resources-plugin>${maven-resources-plugin.version}</rontolisp.jar.e2e.maven-resources-plugin>
+						<rontolisp.jar.e2e.maven-compiler-plugin>${maven-compiler-plugin.version}</rontolisp.jar.e2e.maven-compiler-plugin>
+						<rontolisp.jar.e2e.maven-install-plugin>${maven-install-plugin.version}</rontolisp.jar.e2e.maven-install-plugin>
+					</systemPropertyVariables>
 				</configuration>
 			</plugin>
 			<plugin>

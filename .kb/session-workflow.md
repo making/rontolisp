@@ -27,6 +27,15 @@ executes in full, so the offline build resolves under any runner Maven. Rejected
 in the workflow (CI only, the local run stays broken) and dropping `-o` (network-bound, still
 the PATH Maven).
 
+The root `e2e/JarMavenConsumerE2eTest` (`-Drontolisp.jar.e2e=true`) works the same way: the root
+pom's surefire configuration passes `${maven.home}`, `${settings.localRepository}` and the
+`maven-{resources,compiler,install}-plugin.version` properties, every child build runs with
+`-Dmaven.repo.local`, and the consumer pom declares the resources and compiler versions. It runs
+Maven offline and `install-file` needs the install plugin, which only `install` executes, so run
+`./mvnw install -DskipTests` first. Reproduced 2026-10-08 with Maven 3.10.0 first on PATH and an
+empty scratch repository seeded by `./mvnw install -DskipTests`: the old test failed on
+`maven-resources-plugin:3.5.0` (3.10.0's default) not being in the repository.
+
 ## The deploy job
 
 `ci.yaml` `deploy:` publishes on `./mvnw`, as every other job builds: the runner's `/usr/bin/mvn`
