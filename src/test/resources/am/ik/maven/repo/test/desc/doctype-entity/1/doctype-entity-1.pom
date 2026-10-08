@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE project [ <!ENTITY ver "9.9"> ]>
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>test.desc</groupId>
+  <artifactId>doctype-entity</artifactId>
+  <version>1</version>
+  <dependencies>
+      <dependency><groupId>test.lib</groupId><artifactId>a</artifactId><version>&ver;</version></dependency>
+  </dependencies>
+</project>

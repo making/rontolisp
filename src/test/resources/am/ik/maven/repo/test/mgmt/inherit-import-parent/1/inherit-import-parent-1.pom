@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>test.mgmt</groupId>
+  <artifactId>inherit-import-parent</artifactId>
+  <version>1</version>
+  <packaging>pom</packaging>
+  <properties>
+    <bom.version>1</bom.version>
+  </properties>
+  <dependencyManagement>
+    <dependencies>
+      <dependency><groupId>test.mgmt</groupId><artifactId>bom-versioned</artifactId><version>${bom.version}</version><type>pom</type><scope>import</scope></dependency>
+    </dependencies>
+  </dependencyManagement>
+</project>

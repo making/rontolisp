@@ -1,0 +1,15 @@
+# descriptor test.pkg:jar-user:1 test.pkg:bundle-user:1 test.pkg:shadow:1 test.pkg:child:1 test.pkg:bom:1
+artifact test.pkg:jar-user:jar:1
+dep test.lib:pkg-jar:jar::1 scope=compile optional=null
+dep test.lib:packaging-ref:jar::jar scope=compile optional=null
+managed test.lib:pkg-jar:jar::1 scope= optional=null
+artifact test.pkg:bundle-user:jar:1
+dep test.lib:packaging-ref:jar::bundle scope=compile optional=null
+dep test.lib:project-packaging:jar::bundle scope=compile optional=null
+artifact test.pkg:shadow:jar:1
+dep test.lib:x:jar::jar scope=compile optional=null
+artifact test.pkg:child:jar:1
+dep test.lib:own:jar::1 scope=compile optional=null
+dep test.lib:from-parent-pkg:jar::1 scope=compile optional=null
+artifact test.pkg:bom:jar:1
+managed test.lib:pkg-pom:jar::1 scope= optional=null

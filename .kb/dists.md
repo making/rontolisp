@@ -54,10 +54,12 @@ Format, not vendor: distinfo (`name:`, `system-index-url:`, `release-index-url:`
 
 ## The shared artifact layer (`am.ik.artifact`)
 Language-independent (no rontolisp import, `PackageCycleTest`); DistClient is its first
-consumer, the Maven resolver and the git fetcher build on it. `ArtifactCache` (root =
-`RONTOLISP_DIST_HOME` / `~/.rontolisp`, read only in `createDefault`; `area(name)` per
-consumer; `download(url, size, Checksum...)`), `HttpDownloader`, `Checksum`, `Archives`
-(tar.gz incl. GNU `L` and PAX `path`; zip; `safeResolve`), `AtomicInstall`
+consumer, the Maven resolver (`.kb/maven-resolver.md`) and the git fetcher build on it.
+`ArtifactCache` (root = `RONTOLISP_DIST_HOME` / `~/.rontolisp`, read only in
+`createDefault`; `area(name)` per consumer; `download(url, size, Checksum...)`),
+`HttpDownloader` (a non-200 status is an `HttpStatusException`, `isNotFound()` for 404, so a
+consumer searching several repositories tells "not here" from a failure), `Checksum`,
+`Archives` (tar.gz incl. GNU `L` and PAX `path`; zip; `safeResolve`), `AtomicInstall`
 (`installDirectory` via `.staging-*` + rename, `writeFile`). Layer messages name no
 caller; DistClient prefixes `ql:quickload:` (`quickloadStep`).
 - **Verification: size + `file-md5`, never the `sha1` column.** Measured 2026-10-08: on

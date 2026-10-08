@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>test.profiles</groupId>
+  <artifactId>interp-activation</artifactId>
+  <version>1</version>
+  <properties>
+    <min.jdk>[11,)</min.jdk>
+    <flag.name>declared.flag</flag.name>
+  </properties>
+  <profiles>
+    <profile><id>p</id><activation><jdk>${min.jdk}</jdk></activation>
+  <dependencies>
+      <dependency><groupId>test.lib</groupId><artifactId>interpolated-jdk</artifactId><version>1</version></dependency>
+  </dependencies>
+    </profile>
+    <profile><id>q</id><activation><property><name>${flag.name}</name></property></activation>
+  <dependencies>
+      <dependency><groupId>test.lib</groupId><artifactId>interpolated-prop</artifactId><version>1</version></dependency>
+  </dependencies>
+    </profile>
+  </profiles>
+</project>

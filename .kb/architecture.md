@@ -30,12 +30,15 @@ for `.clj` and `.cljc`, lowered to the same core forms so no backend learns a Cl
 
 ## Language-independent libraries
 
-`am.ik.jvm`, `am.ik.wasm`, `am.ik.wit`, `am.ik.gpu`, `am.ik.objc` and `am.ik.artifact` may
-import no rontolisp package and no external dependency.
+`am.ik.jvm`, `am.ik.wasm`, `am.ik.wit`, `am.ik.gpu`, `am.ik.objc`, `am.ik.artifact` and
+`am.ik.maven` may import no rontolisp package and no external dependency.
 
 - `am.ik.artifact` -- the one fetch-and-cache layer under every downloader (HTTP with
   timeouts, checksums, tar.gz/zip extraction, atomic install, the cache root); reached from
   `eval/DistClient` (`.kb/dists.md`).
+- `am.ik.maven` -- Maven coordinates to descriptors, dependency graphs and jars through the
+  `~/.m2` local repository, built on `am.ik.artifact` and on nothing else of ours; no
+  consumer yet (`.kb/maven-resolver.md`).
 - `am.ik.gpu` -- the device half of `--gpu`, CUDA and Metal behind one sealed `GpuDevice`
   seam; imports nothing at all (`.kb/gpu.md`). The interpreter reaches it through
   `eval/LinalgGpu` -> `eval/LinalgGpuKernels`; the JVM backend EMBEDS its class files in the
@@ -71,6 +74,7 @@ runtime -> (nothing)
 am.ik.gpu -> (nothing)
 am.ik.objc -> (nothing)
 am.ik.artifact -> (nothing)
+am.ik.maven -> am.ik.artifact
 ```
 
 ## Package rules

@@ -51,6 +51,10 @@ class HttpDownloaderTest {
 			exchange.sendResponseHeaders(404, -1);
 			exchange.close();
 		});
+		this.server.createContext("/broken", exchange -> {
+			exchange.sendResponseHeaders(500, -1);
+			exchange.close();
+		});
 		this.server.createContext("/moved", exchange -> {
 			exchange.getResponseHeaders().add("Location", "/ok");
 			exchange.sendResponseHeaders(302, -1);
@@ -107,6 +111,19 @@ class HttpDownloaderTest {
 	void anyOtherStatusFails() {
 		assertThatThrownBy(() -> downloader().get(this.base + "/missing")).isInstanceOf(IOException.class)
 			.hasMessage("HTTP 404 for " + this.base + "/missing");
+	}
+
+	@Test
+	void theStatusTellsNotFoundFromAFailure() {
+		// A consumer searching several repositories moves on after a 404 and nothing
+		// else.
+		assertThatThrownBy(() -> downloader().get(this.base + "/missing")).isInstanceOfSatisfying(
+				HttpStatusException.class, ex -> assertThat(ex.isNotFound()).as("404 is not found").isTrue());
+		assertThatThrownBy(() -> downloader().get(this.base + "/broken"))
+			.isInstanceOfSatisfying(HttpStatusException.class, ex -> {
+				assertThat(ex.statusCode()).isEqualTo(500);
+				assertThat(ex.isNotFound()).isFalse();
+			});
 	}
 
 	@Test

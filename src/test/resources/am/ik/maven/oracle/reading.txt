@@ -1,0 +1,20 @@
+# descriptor test.desc:bad-xml:1 test.desc:entities:1 test.desc:unknown-entity:1 test.desc:doctype:1 test.desc:doctype-entity:1 test.desc:latin1:1 test.desc:dup-tag:1 test.desc:root:1
+artifact test.desc:bad-xml:jar:1
+warning invalid test.desc:bad-xml:jar:1: 1 problem was encountered while building the effective model [FATAL] Non-readable POM <local>/test/desc/bad-xml/1/bad-xml-1.pom: no more data available - expected end tag </project> to close start tag <project> from line 1, parser stopped on END_TAG seen ...</dependencies>\n... @2:1 @
+artifact test.desc:entities:jar:1
+dep test.lib:a:jar::1.0 scope=compile optional=null
+dep test.lib:b:jar::2.0 scope=compile optional=null
+dep test.lib:c:jar::3.0 scope=compile optional=null
+dep test.lib:d:jar::4.0 scope=compile optional=null
+dep test.lib:e:jar::5.0& scope=compile optional=null
+artifact test.desc:unknown-entity:jar:1
+warning invalid test.desc:unknown-entity:jar:1: 1 problem was encountered while building the effective model [FATAL] Non-parseable POM <local>/test/desc/unknown-entity/1/unknown-entity-1.pom: could not resolve entity named 'bogus' (position: START_TAG seen ...<description>&bogus;... @7:23)  @ line 7, column 23
+artifact test.desc:doctype:jar:1
+dep test.lib:a:jar::1 scope=compile optional=null
+artifact test.desc:doctype-entity:jar:1
+warning invalid test.desc:doctype-entity:jar:1: 1 problem was encountered while building the effective model [FATAL] Non-parseable POM <local>/test/desc/doctype-entity/1/doctype-entity-1.pom: could not resolve entity named 'ver' (position: START_TAG seen ...</artifactId><version>&ver;... @9:86)  @ line 9, column 86
+artifact test.desc:latin1:jar:1
+warning invalid test.desc:latin1:jar:1: 1 problem was encountered while building the effective model for test.desc:latin1:1 [ERROR] 'dependencies.dependency.artifactId' for test.lib:café:jar with value 'café' does not match a valid id pattern. @
+artifact test.desc:dup-tag:jar:1
+warning invalid test.desc:dup-tag:jar:1: 1 problem was encountered while building the effective model [FATAL] Non-parseable POM <local>/test/desc/dup-tag/1/dup-tag-1.pom: Duplicated tag: 'version' (position: START_TAG seen ...<version>1</version><version>... @8:101)  @ line 8, column 101
+artifact test.desc:root:jar:1

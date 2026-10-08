@@ -1,0 +1,23 @@
+# collect test.graph:app:1
+test.graph:app:jar::1 scope=compile optional=null
+  test.graph:b:jar::1 scope=compile optional=null
+    test.graph:c:jar::2 scope=compile optional=null
+      test.graph:c-child:jar::2 scope=compile optional=null
+    test.graph:cycle-back:jar::1 scope=compile optional=null
+      test.graph:b:jar::9 scope=compile optional=null cycle
+    test.reloc.new:old:jar::1 scope=compile optional=null relocations=[test.reloc:old:jar:1]
+      test.lib:after-reloc:jar::1 scope=compile optional=null
+    test.graph:x:jar::1 scope=compile optional=null
+      test.graph:x-child:jar::1 scope=compile optional=null
+  test.graph:f:jar::1 scope=runtime optional=null
+    test.graph:r1:jar::1 scope=runtime optional=null
+    test.graph:sys1:jar::1 scope=system optional=null
+    test.graph:gone:jar::1 scope=compile optional=null
+    test.graph:x:jar::2 scope=compile optional=null
+      test.graph:x-child:jar::2 scope=compile optional=null
+    test.graph:weird:jar::1 scope=weird optional=null
+  test.graph:excl-holder:jar::1 scope=compile optional=null exclusions=test.graph:gone
+    test.graph:keep:jar::1 scope=compile optional=null
+      test.graph:kept-child:jar::1 scope=compile optional=null
+    test.graph:wild:jar::1 scope=compile optional=null exclusions=*:*
+  test.graph:war-thing:war::1 scope=compile optional=null

@@ -1,0 +1,50 @@
+# descriptor test.desc:types:1 test.desc:dups:1 test.desc:optional:1 test.desc:scopes:1 test.desc:bom-import-in-deps:1 test.desc:dm-no-version:1 test.desc:ranges:1 test.desc:whitespace:1 test.desc:unknown-elements:1
+artifact test.desc:types:jar:1
+dep test.lib:tj:jar:tests:1 scope=compile optional=null
+dep test.lib:ec:jar:client:1 scope=compile optional=null
+dep test.lib:wr:war::1 scope=compile optional=null
+dep test.lib:foo:foo::1 scope=compile optional=null
+dep test.lib:tjc:jar:other:1 scope=compile optional=null
+dep test.lib:pm:pom::1 scope=compile optional=null
+dep test.lib:src:jar:sources:1 scope=compile optional=null
+dep test.lib:jd:jar:javadoc:1 scope=compile optional=null
+dep test.lib:ejb:jar::1 scope=compile optional=null
+dep test.lib:mp:jar::1 scope=compile optional=null
+dep test.lib:bd:bundle::1 scope=compile optional=null
+dep test.lib:ec2:jar::1 scope=compile optional=null
+dep test.lib:ear:ear::1 scope=compile optional=null
+dep test.lib:rar:rar::1 scope=compile optional=null
+dep test.lib:par:par::1 scope=compile optional=null
+artifact test.desc:dups:jar:1
+dep test.lib:a:jar::2.0 scope=test optional=null
+dep test.lib:b:jar::1.0 scope=compile optional=null
+artifact test.desc:optional:jar:1
+dep test.lib:o1:jar::1 scope=compile optional=true
+dep test.lib:o2:jar::1 scope=compile optional=true
+dep test.lib:o3:jar::1 scope=compile optional=false
+dep test.lib:o4:jar::1 scope=compile optional=false
+dep test.lib:o5:jar::1 scope=compile optional=null
+dep test.lib:o6:jar::1 scope=compile optional=true
+artifact test.desc:scopes:jar:1
+dep test.lib:s1:jar::1 scope=compile optional=null
+dep test.lib:s2:jar::1 scope=runtime optional=null
+dep test.lib:s3:jar::1 scope=test optional=null
+dep test.lib:s4:jar::1 scope=provided optional=null
+dep test.lib:s5:jar::1 scope=system optional=null
+dep test.lib:s6:jar::1 scope=import optional=null
+dep test.lib:s7:jar::1 scope=weird optional=null
+dep test.lib:s8:jar::1 scope=runtime optional=null
+artifact test.desc:bom-import-in-deps:jar:1
+dep test.mgmt:bom-a:pom::1 scope=import optional=null
+dep test.lib:a:jar::1 scope=compile optional=null
+artifact test.desc:dm-no-version:jar:1
+dep test.lib:a:jar::1 scope=compile optional=null
+managed test.lib:dmnv:jar:: scope= optional=null
+artifact test.desc:ranges:jar:1
+dep test.lib:r:jar::[1.0,2.0) scope=compile optional=null
+dep test.lib:s:jar::1.0-SNAPSHOT scope=compile optional=null
+dep test.lib:l:jar::LATEST scope=compile optional=null
+artifact test.desc:whitespace:jar:1
+dep test.lib:ws:jar::1.0 scope=test optional=null
+artifact test.desc:unknown-elements:jar:1
+dep test.lib:a:jar::1 scope=compile optional=null

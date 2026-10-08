@@ -22,7 +22,7 @@ import org.jspecify.annotations.Nullable;
 /**
  * The network {@link Downloader}: an HTTP(S) GET through the JDK {@link HttpClient},
  * following redirects, answering the body of a {@code 200} and failing on any other
- * status.
+ * status with an {@link HttpStatusException}.
  *
  * <p>
  * Two timeouts bound a stalled server, so a download can never hang the compile: the
@@ -85,7 +85,7 @@ public final class HttpDownloader implements Downloader {
 		});
 		HttpResponse<byte[]> response = await(pending, received, url);
 		if (response.statusCode() != 200) {
-			throw new IOException("HTTP " + response.statusCode() + " for " + url);
+			throw new HttpStatusException(response.statusCode(), url);
 		}
 		return response.body();
 	}

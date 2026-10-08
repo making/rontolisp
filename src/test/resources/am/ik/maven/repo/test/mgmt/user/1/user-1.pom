@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>test.mgmt</groupId>
+  <artifactId>user</artifactId>
+  <version>1</version>
+  <dependencyManagement>
+    <dependencies>
+      <dependency><groupId>test.lib</groupId><artifactId>z</artifactId><version>9.0</version></dependency>
+      <dependency><groupId>test.mgmt</groupId><artifactId>bom-a</artifactId><version>1</version><type>pom</type><scope>import</scope></dependency>
+      <dependency><groupId>test.mgmt</groupId><artifactId>bom-b</artifactId><version>1</version><type>pom</type><scope>import</scope></dependency>
+      <dependency><groupId>test.mgmt</groupId><artifactId>bom-c</artifactId><version>1</version><type>pom</type><scope>import</scope></dependency>
+    </dependencies>
+  </dependencyManagement>
+  <dependencies>
+      <dependency><groupId>test.lib</groupId><artifactId>x</artifactId></dependency>
+      <dependency><groupId>test.lib</groupId><artifactId>y</artifactId></dependency>
+      <dependency><groupId>test.lib</groupId><artifactId>z</artifactId></dependency>
+      <dependency><groupId>test.lib</groupId><artifactId>w</artifactId></dependency>
+      <dependency><groupId>test.lib</groupId><artifactId>u</artifactId></dependency>
+      <dependency><groupId>test.lib</groupId><artifactId>v</artifactId></dependency>
+  </dependencies>
+</project>

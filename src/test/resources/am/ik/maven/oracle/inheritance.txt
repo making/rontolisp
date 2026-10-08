@@ -1,0 +1,23 @@
+# descriptor test.inherit:child:2 test.inherit:own-version:3
+artifact test.inherit:child:jar:2
+dep test.lib:c-dep:jar::2 scope=compile optional=null
+dep test.lib:dup:jar::2.0 scope=compile optional=null
+dep test.lib:managed-a:jar::2.1 scope=compile optional=null
+dep test.lib:managed-b:jar::3.0 scope=compile optional=null exclusions=ex.gp:gone
+dep test.lib:by-artifact-id:jar::child scope=compile optional=null
+dep test.lib:unprefixed:jar::2 scope=compile optional=null
+dep test.lib:pom-prefix:jar::2 scope=compile optional=null
+dep test.lib:shared:jar::grand scope=compile optional=null
+dep test.lib:p-dep:jar::2 scope=compile optional=null
+dep test.lib:p-only:jar::p scope=compile optional=null
+dep test.lib:gp-dep:jar::1.2 scope=compile optional=null
+managed test.lib:managed-a:jar::2.1 scope= optional=null
+managed test.lib:managed-b:jar::3.0 scope= optional=null exclusions=ex.gp:gone
+artifact test.inherit:own-version:jar:3
+dep test.lib:own-dep:jar::3 scope=compile optional=null
+dep test.lib:p-dep:jar::3 scope=compile optional=null
+dep test.lib:dup:jar::1.0 scope=test optional=null
+dep test.lib:p-only:jar::p scope=compile optional=null
+dep test.lib:gp-dep:jar::1.1 scope=compile optional=null
+managed test.lib:managed-a:jar::2.1 scope= optional=null
+managed test.lib:managed-b:jar::3.0 scope= optional=null exclusions=ex.gp:gone

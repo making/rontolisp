@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>test.pkg</groupId>
+  <artifactId>shadow</artifactId>
+  <version>1</version>
+  <properties>
+    <packaging>prop-value</packaging>
+  </properties>
+  <dependencies>
+      <dependency><groupId>test.lib</groupId><artifactId>x</artifactId><version>${packaging}</version></dependency>
+  </dependencies>
+</project>
