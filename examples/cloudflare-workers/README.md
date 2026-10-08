@@ -171,14 +171,14 @@ an import only a Worker provides. Every other Lisp source here is pinned by
 
 ## Deploying
 
-**Eleven of the twelve are deployed to the real edge**, not only run under
+**The examples are deployed to the real edge**, not only run under
 `wrangler dev`, and every endpoint in the tables above was checked there with
 `curl` — including the 405, the 404, the unparseable body, both `/status`
 answers, and `dog-fetcher/`'s outgoing request, whose JSPI bridge needs nothing
-on the edge that it did not need locally. `btc-ticker/` is the exception so far:
-it has been driven end to end against the real bitFlyer API through its own
-generated `worker()` on node 24 JSPI, which is the same code path workerd runs,
-but not yet deployed, and `ring-hello-one-source/` has so far run under
+on the edge that it did not need locally. The exceptions so far:
+`btc-ticker/` has been driven end to end against the real bitFlyer API through
+its own generated `worker()` on node 24 JSPI, which is the same code path
+workerd runs, but not yet deployed; `ring-hello-one-source/` has run under
 `wrangler dev` only.
 
 Cloudflare budget-checks **Worker Startup Time** at deploy, and `wrangler
