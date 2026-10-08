@@ -27,12 +27,14 @@ interop エントリのすべてを、分野ごとにまとめています。**�
 | [clojure.datafy](reference/clojure-datafy.md) | 値のデータ化とデータからの移動: `clojure.core.protocols` のプロトコルの上の `datafy`/`nav` |
 | [clojure.edn](reference/clojure-edn.md) | EDN データの読み取り: `:eof`・`:readers`・`:default` を取る `read-string`/`read` |
 | [clojure.pprint](reference/clojure-pprint.md) | プリティプリント: 右マージンの内側にレイアウトする `pprint`/`write`、`print-table`、コード用の `code-dispatch`、プログラムが拡張・置換できるディスパッチ |
+| [clojure.stacktrace](reference/clojure-stacktrace.md) | スロー可能オブジェクトとその原因の出力: `root-cause`、`print-throwable`、`print-stack-trace`、`print-cause-trace` |
 | [clojure.template](reference/clojure-template.md) | 式のテンプレート: `apply-template`、`do-template` |
 | [clojure.walk](reference/clojure-walk.md) | 入れ子のデータの汎用走査: `walk`/`postwalk`/`prewalk`、`-replace` の組、`keywordize-keys`/`stringify-keys` |
 | [clojure.zip](reference/clojure-zip.md) | ジッパーによる関数的な木の編集: `vector-zip`/`seq-zip`/`xml-zip`、移動、編集、深さ優先の巡回 |
 | [正規表現](reference/regex.md) | `re-find`/`re-seq`/`re-matches`、`re-matcher`/`re-groups`、`re-pattern` とパターンの `split`/`replace` |
 | [Ring アダプター](reference/ring.md) | `ring.adapter.rontolisp/run-server`: Ring ハンドラをすべてのトランスポートで提供 |
 | [Ring ユーティリティ](reference/ring-util.md) | 組み込みの `ring.util.*` と `ring.middleware.*`: レスポンスの組み立て、URL とフォームの符号化、パラメーターのミドルウェア |
+| [HTTP クライアント (rontolisp.http-client)](reference/http-client.md) | babashka.http-client と同じ API の `request` と `get`/`post`/`put`/`delete`/`head`/`patch`。どのトランスポートでも `rontolisp:fetch` を通る |
 | [WASM ホスト関数 (rontolisp.wasm)](reference/wasm.md) | `defimport`/`export`: モジュールが呼ぶホスト関数、ホストが呼ぶ関数 |
 | [WIT 契約 (rontolisp.wit)](reference/wit.md) | `import`/`export`/`provide`: 呼び出す WIT インターフェース、実装する WIT world |
 | [Java interop](reference/interop.md) | `.`、`..`、構築、`memfn`、`proxy` |

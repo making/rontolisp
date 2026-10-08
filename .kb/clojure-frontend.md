@@ -110,7 +110,7 @@ answered `2 5 3` before).
 | `try`/`catch`/`finally`/`throw` | `handler-case` inside `unwind-protect`; `throw` is `%clojure-throw` | one `handler-case` clause per catch, in order, of the type its class takes ("Catching"); `throw` signals an exception as itself (a caught one rethrows unchanged, a host `Throwable` as the `java:java-exception` carrying it, "Host exceptions"), anything else a `ClassCastException` (nil a `NullPointerException`) whose message is its rendering, so strings keep their message |
 | `ex-info` `ex-data` `ex-message` `ex-cause`, `.getMessage` `.getLocalizedMessage` `.getCause` | one call to the `clojure.lisp` "Exceptions" function | see "Exceptions" |
 | `assert` | `if` around the `AssertionError` carrier ("Refusals") | the `Assert failed:` message evaluates only on failure; it names the failed form, built only in the failure branch: rendered at lower time (`ClojureStringLowering.prSource`: symbols, keywords, integers, strings, chars, lists, vectors, maps) so no printer is linked, else `quote` through the readable `%clojure-str-of` (double, ratio, set, regex...) which links the collection printer (measured 2026-10-03: `(assert (nil? x))` wasm 3171 -> 3282 bytes; with a double in the form 3171 -> 54237 versus 21992 before) |
-| `atom` `deref`/`@` `swap!` `reset!` `compare-and-set!` `volatile!` `vswap!` `vreset!` | reads/writes of the cell | answer the new value; `compare-and-set!` compares with `eql`; `seq`/`first`/`count`/`empty?`/`cons`/`conj` onto a cell signal like the oracle; `deref` also reads a host `Future`, with or without a timeout ("A host `Future` under `deref`") |
+| `atom` `deref`/`@` `swap!` `reset!` `compare-and-set!` `volatile!` `vswap!` `vreset!` | reads/writes of the cell | answer the new value; `compare-and-set!` compares with `eql`; `seq`/`first`/`count`/`empty?`/`cons`/`conj` onto a cell signal like the oracle; `deref` also reads a host `Future`, with or without a timeout ("A host `Future` under `deref`"), and the rontolisp future the HTTP client answers ("HTTP client") |
 | `ref` `dosync` `alter` `commute` `ref-set` `ensure` | the cell under the spliced STM runtime | "State" |
 | `agent` `send` `send-off` `await` `shutdown-agents` | the cell as a synchronous agent | "State" |
 | `binding` / `set!` | `let*` of specials plus a depth counter | "State" |
@@ -131,10 +131,11 @@ answered `2 5 3` before).
 | `rontolisp.wasm` (`defimport` `export`, a `defn`'s `:wasm/export`) | `rontolisp:wasm-import` hoisted ahead of the datum / `rontolisp:wasm-export` after the whole program, each passing the name as written as `:as`; a converting crossing behind a wrapper `defun` (`ClojureWasmLowering`) | "Host boundary" |
 | `rontolisp.wit` (`import` `export` `provide`) | `rontolisp:wit-import` (hoisted) / `rontolisp:wit-export` (after the whole program), each with a `:names` table of the vars' symbols; `rontolisp:wit-provide` (`ClojureWitLowering`) | "Host boundary" |
 | `ring.util.response` `ring.util.request` `ring.util.codec` `ring.util.mime-type` `ring.middleware.params` `ring.middleware.keyword-params` `ring.middleware.content-type` | Clojure source in the jar, loaded like a project file; `rontolisp.internal.ring/NAME` (their kernels) is one call to `rontolisp::%clojure-ring-NAME` (`ClojureKernelLowering`, which holds every `rontolisp.internal.*` kernel namespace with its arities) | "Ring util namespaces" |
+| `rontolisp.http-client` (`request` `get` `post` `put` `delete` `head` `patch`) | Clojure source in the jar, loaded like a project file; `rontolisp.internal.http/request` is `rontolisp::%clojure-http-request`, `rontolisp.internal.http/fetch` is `rontolisp:fetch` itself (`ClojureKernelLowering`'s worker override) | "HTTP client" |
 | `clojure.edn` (`read-string` `read`) | `ClojureEdnLowering`: one call to `rontolisp::%clojure-edn-read-string-1` / `-read-string` / `-read` after a lower-time arity check in the oracle's wording; as a value `#'...-v` | "Reading", clojure.edn |
 | `clojure.walk` | Clojure source in the jar written for this front end, loaded like a project file (a startup namespace: on its first qualified name too) | "clojure.jar namespaces" |
 | `clojure.template` | the same, loaded at its `require` | "clojure.jar namespaces" |
-| `clojure.data` `clojure.zip` `clojure.datafy` | the same, loaded at its `require` | "clojure.jar namespaces" |
+| `clojure.data` `clojure.zip` `clojure.datafy` `clojure.stacktrace` | the same, loaded at its `require` | "clojure.jar namespaces" |
 | `clojure.core.protocols` | the same, a startup namespace like `clojure.walk` | "clojure.jar namespaces" |
 | `clojure.pprint` | the same; its layout engine is `rontolisp.internal.pprint/NAME`, one call to `rontolisp::%clojure-pp-NAME` (`ClojureKernelLowering`) | "clojure.jar namespaces" |
 | `subs`, `.substring` | `%clojure-subs`, the refusal family's alias of `subseq` ("Refusals") | a bound outside a string is the oracle's `StringIndexOutOfBoundsException` where a class is read; a double or ratio bound is truncated (`%clojure-string-bound`), a non-number one is refused as the oracle does ("Refusals") |
@@ -163,7 +164,7 @@ answered `2 5 3` before).
 | `comp` `partial` `complement` `constantly` `identity` `memoize` `trampoline` | closures | `(comp)` is `identity`; `memoize` keys the argument list by `=` (`%clojure-memo-key`) |
 | `=` / `not=` | the spliced `%clojure-equal` per neighbouring pair | maps structurally (nested), records by tag plus entries, deftype/reify by identity, sequentials (lists, vectors, lazy seqs, nil) element by element across kinds, two floats by CL `=` (-0.0 = 0.0, NaN not = NaN), else `equal` (a host object on the left asks its `equals`, handed a number, string, character, `true`, nil or host object -- never `false`, a keyword, a symbol or a collection: [eq-numbers.md](eq-numbers.md) "Host objects", `ClojureInteropTest#equalsOfAHostObjectAndAValueAsksTheLeftOperand`); a host `List`/`Map`/`Set` and a Clojure collection of its kind through the host-object family's arm `%clojure-host-equal-p`, either side first ([eq-numbers.md](eq-numbers.md) "Clojure `=` of a host collection"). One shared callee, not a `labels` per site: ten sites measured 87,050 -> 34,004 B of wasm |
 | `<` `>` `<=` `>=` `==` `nil?` `false?` `true?` `boolean?` `boolean` `string?` `symbol?` `vector?` `fn?` | the CL test answering `T`-or-false | `==` is CL `=` (numeric across categories: `(== 1 1.0)`, `(== 0.0 -0.0)`; a non-number signals, `(==)` is refused at lower time); `<` `>` `<=` `>=` `==` as values are `&rest` lambdas over the CL function answering `T`-or-false (`(map < [1 2] [2 1])` is `(true false)`, not `(true nil)`). `fn?` is false for keywords, sets and maps |
-| the type predicates (`coll?` `seq?` `sequential?` `map?` `set?` `list?` `record?` `seqable?` `associative?` `counted?` `indexed?` `reversible?` `ifn?`, `number?` `integer?` `int?` `double?` `float?` `ratio?` `rational?` `nat-int?` `pos-int?` `neg-int?` `infinite?` `NaN?`, `keyword?` `ident?` and the `simple-`/`qualified-` six, `char?` `var?` `volatile?` `realized?` `special-symbol?`, `inst?` `uuid?` `uri?` `class?`) | `ClojurePredicateLowering`: `(if TEST T false)` over one CL type predicate or one spliced `%clojure-is-NAME` helper (CL boolean); as a value a one-argument lambda over the same test | a wrapper is a cons whose car is a CL keyword, so every list test excludes keywords/atoms/vars/records/patterns (`coll?` answered true for them before). The host four go through `%clojure-host-instance-p` (a host arm, `isInstance` of the named class; NIL stand-in without `java:`). `sorted?` is `%clojure-is-sorted`; `set?` and `reversible?` name the sorted-aware `%clojure-is-set`/`%clojure-is-reversible`, which a program building no sorted collection calls as `%clojure-set-p`/`%clojure-is-vector` ("Sorted collections"). `chunked-seq?` `decimal?` `bytes?` `delay?` `reader-conditional?` `tagged-literal?` are `(progn x false)`: no value of that kind exists, which is the oracle's answer for every value a program here builds (not a refusal: `(if (future? x) @x x)` runs); `any?` is `(progn x T)`. `not-any?`/`not-every?` negate the inline `some`/`every?` loops; `identical?` is `eql` plus keyword spelling (keywords are fresh lists), so a host object is identical only to itself (`ClojureInteropTest.identicalOnHostObjectsIsIdentity`, [eq-numbers.md](eq-numbers.md) "Host objects"); `distinct?` goes through `%clojure-distinct-new-p`; `bound?` is false at the first var whose root is the unbound root ("Vars and metadata"; a var whose metadata says `:macro` is bound without taking its root, the oracle's own mark); `extends?` reads the protocol's tables at the type's `extendKeyForm` tag (literal names, no value form). `future?`, `future-done?`, `future-cancelled?` and `future-cancel` read a host `Future` ("A host `Future` under `deref`"). Arity refusals in the oracle's words. Pinned oracle-identical (clj 1.12.6, 2026-10-03) by clojure-spec `collection-predicates-*`, `number-predicates-*`, `name-predicates-*`, `any-not-any-*`, `var-volatile-*`, `predicates-of-kinds-*`, `special-symbol-*`, `extends-*`, `coll-is-false-for-the-tagged-wrappers`; the representation deviations by `the-seq-predicates-follow-the-list-representation`, `decimal-and-bigint-literals-are-plain-rationals`, `identical-compares-numbers-and-symbols-by-value`; the host four by `ClojureInteropTest.hostKindPredicatesTestTheHostClass` |
+| the type predicates (`coll?` `seq?` `sequential?` `map?` `set?` `list?` `record?` `seqable?` `associative?` `counted?` `indexed?` `reversible?` `ifn?`, `number?` `integer?` `int?` `double?` `float?` `ratio?` `rational?` `nat-int?` `pos-int?` `neg-int?` `infinite?` `NaN?`, `keyword?` `ident?` and the `simple-`/`qualified-` six, `char?` `var?` `volatile?` `realized?` `special-symbol?`, `inst?` `uuid?` `uri?` `class?`) | `ClojurePredicateLowering`: `(if TEST T false)` over one CL type predicate or one spliced `%clojure-is-NAME` helper (CL boolean); as a value a one-argument lambda over the same test | a wrapper is a cons whose car is a CL keyword, so every list test excludes keywords/atoms/vars/records/patterns (`coll?` answered true for them before). The host four go through `%clojure-host-instance-p` (a host arm, `isInstance` of the named class; NIL stand-in without `java:`). `sorted?` is `%clojure-is-sorted`; `set?` and `reversible?` name the sorted-aware `%clojure-is-set`/`%clojure-is-reversible`, which a program building no sorted collection calls as `%clojure-set-p`/`%clojure-is-vector` ("Sorted collections"). `chunked-seq?` `decimal?` `bytes?` `delay?` are `(progn x false)`, and so are `reader-conditional?` `tagged-literal?` where nothing makes one ("Reader conditionals"): no value of that kind exists, which is the oracle's answer for every value a program here builds (not a refusal: `(if (future? x) @x x)` runs); `any?` is `(progn x T)`. `not-any?`/`not-every?` negate the inline `some`/`every?` loops; `identical?` is `eql` plus keyword spelling (keywords are fresh lists), so a host object is identical only to itself (`ClojureInteropTest.identicalOnHostObjectsIsIdentity`, [eq-numbers.md](eq-numbers.md) "Host objects"); `distinct?` goes through `%clojure-distinct-new-p`; `bound?` is false at the first var whose root is the unbound root ("Vars and metadata"; a var whose metadata says `:macro` is bound without taking its root, the oracle's own mark); `extends?` reads the protocol's tables at the type's `extendKeyForm` tag (literal names, no value form). `future?`, `future-done?`, `future-cancelled?` and `future-cancel` read a host `Future` ("A host `Future` under `deref`"). Arity refusals in the oracle's words. Pinned oracle-identical (clj 1.12.6, 2026-10-03) by clojure-spec `collection-predicates-*`, `number-predicates-*`, `name-predicates-*`, `any-not-any-*`, `var-volatile-*`, `predicates-of-kinds-*`, `special-symbol-*`, `extends-*`, `coll-is-false-for-the-tagged-wrappers`; the representation deviations by `the-seq-predicates-follow-the-list-representation`, `decimal-and-bigint-literals-are-plain-rationals`, `identical-compares-numbers-and-symbols-by-value`; the host four by `ClojureInteropTest.hostKindPredicatesTestTheHostClass` |
 | `int` `long` `char` `quot` | `truncate` (`char-code` for a char) / `code-char` / `truncate` | a non-number signals |
 | `double` `float` `byte` `short` `num` | one call to `rontolisp::%clojure-NAME` (`-v` as a value, arity checked at run time); `byte`/`short` through `%clojure-cast-bounded` (a character's code, a ratio or double truncated, a double compared BEFORE truncating so `(byte 127.9)` refuses, NaN refuses; the refusal spells the value with `princ-to-string`), `double`/`float` widen to a double, `float` refusing past `3.4028234663852886e38`, `num` is the number itself or nil | a non-number signals; `float` holds a double (`(float 1/3)` prints `0.3333333333333333`, the oracle `0.33333334`); `vector-of :double`/`:float` call the same workers, `:byte`/`:short` keep the longCast path (the oracle's `(vector-of :byte 127.9)` is `[127]`); pinned by clojure-spec `primitive-casts-double-float-byte-short-and-num` |
 | `bigint` `biginteger` `bigdec` `rationalize` `numerator` `denominator` `unchecked-int` `-long` `-short` `-byte` `-char` `-double` `-float` | one call to `rontolisp::%clojure-NAME` (`-v` as a value, arity checked at run time) | integers and ratios are plain Lisp rationals (the `N`/`M` literal rule), so `bigint`/`biginteger` truncate to an integer (a decimal string through `parse-integer` after a first/last character check, since `parse-integer` skips surrounding whitespace and `BigInteger` refuses it; `bigdec` of a string was already strict, both pinned by clojure-spec `bigint-and-bigdec-strings-refuse-surrounding-whitespace`) and `bigdec` answers a rational: an integer, a ratio only when its denominator is `2^a 5^b` (the oracle's `Non-terminating decimal expansion`), a string through `%clojure-parse-decimal`. `rationalize` and `bigdec` of a double read the SHORTEST decimal it prints as (`princ-to-string` parsed back: `(rationalize 0.1)` is `1/10`, the oracle's `BigDecimal.valueOf`; the Lisp `rationalize` answers the simplest rational within half an ulp, `0.3333333333333333` is `1/3` there, not `3333333333333333/10000000000000000`). `numerator`/`denominator` signal on an integer (the oracle's `ClassCastException` on a `Long`). The `unchecked-` casts follow the oracle's Java casts: an integer or ratio wraps two's-complement to the width (`%clojure-wrap-bits`), a double saturates first (int range for `int`/`short`/`byte`, long range for `long`/`char`; NaN 0) so `(unchecked-byte 1e20)` is `-1`, a character is accepted by `unchecked-int`/`-char` only; `unchecked-float` answers a double, the infinity past the float range; `-double` is `double`. Pinned oracle-identical (clj 1.12.6, 2026-10-03) by clojure-spec `number-conversions-bigint-bigdec-rationalize-and-the-unchecked-casts` (a bigint printed through `str`, a bigdec through `double`: the representation deviates) |
@@ -702,7 +703,7 @@ before the library splice.
   first argument for anything unsorted, its other arguments variables; an ALIAS
   (`%clojure-is-set` -> `%clojure-set-p`, `%clojure-is-reversible` -> `%clojure-is-vector`).
   `clojure/ClojureArms` (family `SORTED`; `MATCHER` is the regex matcher's, `UNBOUND` is the unbound root's,
-  `STREAM_DEPTH` the core specials' counters, "Vars and metadata", `PRINT_FLAGS`,
+  `STREAM_DEPTH` the core specials' counters, "Vars and metadata", `READER_VALUE` "Reader conditionals", `PRINT_FLAGS`,
   `PRINT_META` and `NAMESPACE_MAP` the printer's, "State", and `STREAM` the stream printer's, "Streams as values") scans for a PRODUCER (`%clojure-sorted-make` and the four
   constructor `-v` values: no literal makes one) and, without one, strips: a test folds to
   false (its clause, its `if` branch or its disjunct goes; one disjunct left stands alone),
@@ -869,8 +870,9 @@ a program without `ns` lowers unqualified. A quoted `'n/x` is the symbol of var 
   ("clojure.jar namespaces") or `unknown namespace: x`. A `clojure.*` namespace OUTSIDE
   that list (a contrib library, `clojure.data.json`) is an ordinary library on the source
   path, a `:local/root` dependency's or a project's (until 2026-10-08 every `clojure.*` was
-  refused; "deps.edn"). The built-in Ring namespaces load as project files from the jar
-  when no root holds them ("Ring util namespaces").
+  refused; "deps.edn"). The built-in Ring namespaces and `rontolisp.http-client` load as
+  project files from the jar when no root holds them ("Ring util namespaces", "HTTP
+  client").
 - **ns clauses and libspec options** (measured on `clj` 1.12.6, 2026-10-08):
   `(:gen-class ...)` is a no-op outside an AOT compile, options included, so the clause
   declares nothing (a top-level `gen-class` stays refused). `:as-alias` is a real alias
@@ -1238,6 +1240,106 @@ oracle's classpath; a `deps.edn` ring-core newer than the shipped one refuses th
   `examples/clojure/ring-hello.clj` (verified by hand 2026-10-08 under curl on the
   interpreter, the JVM class and `wasmtime serve`).
 
+## HTTP client
+
+**`rontolisp.http-client` is babashka.http-client's API (0.4.23) as a built-in Clojure
+namespace whose every request is the program's own `rontolisp:fetch` call: no transport is
+new, and the five fetch has (the JDK's on the interpreter and the JVM, `wasi:http`, the
+`--host-fetch` reactor's `env.fetch`, the `--native` runner) all carry it.**
+- Shape: `clojure/lib/rontolisp/http_client.clj` (`request` and six verbs, each `(request
+  (assoc opts :uri uri :method m))`) over the kernel namespace `rontolisp.internal.http`
+  (`ClojureKernelLowering`): `request` is `rontolisp::%clojure-http-request opts transport`,
+  `fetch` is `RONTOLISP:FETCH` itself (`Kernels.workers`). The namespace's transport `(fn [url
+  options] (kernel/fetch url options))` makes the PROGRAM name fetch, which is what the
+  transport splices read (`HostFetchLibrary`, `processForRunner`, `HttpLibrary` all run
+  before `ClojureLibrary`, the library's own references are invisible to them) and what makes
+  plain P1 and `--no-wasi` without `--host-fetch` refuse at compile time
+  (`WasmFetchCompiler.reject`, whose words name the client too). A kernel call sets
+  `usedExInfo` (`Kernels.exceptions`).
+- Decided 2026-10-08: babashka.http-client over hato and clj-http, being the smallest API
+  over the same `java.net.http` client fetch's JDK leg is. A built-in file rather than a
+  lowering slice like `ring.adapter.rontolisp`: the verbs are real vars (values, `#'`,
+  `:refer`), the `assoc` onto the options is the core's own; the cost is the front end's
+  defn arity words (`wrong number of arguments passed to: get`, an `ArityException`; the
+  oracle's `Wrong number of args (0) passed to: babashka.http-client/get`). The name
+  `babashka.http-client` (and its sub-namespaces) is refused when no root holds it, pointing
+  here (`ClojureBuiltinNamespaces.notShipped`: a claimed name promises its options, and
+  `:client`, `:interceptors`, `:version` and its `java.net.URI` `:uri` have no value kind
+  on wasm); its vars that build a Java client (`client`, `default-client-opts`, the `->X`
+  builders) are refused by name (`leftOut`).
+- The request (`clojure.lisp` "rontolisp.http-client"), at the call: the oracle's request
+  interceptors in their order -- headers merged under `{:accept "*/*"}` with
+  `prefer-string-keys` (a keyword name dropped beside a string one, written or
+  capitalized), `:request-method`, `:url`, `:accept :json`, `:basic-auth` (base64 of the
+  UTF-8 octets), `:oauth-token`, `:query-params` (`URLEncoder` through the Ring kernel
+  `%clojure-ring-form-encode`, a collection value repeating its key at any depth),
+  `:form-params` (content type unless the KEYWORD key names one, like the oracle's
+  `get-in`) -- then `java.net.URI/create`'s and the JDK client's refusals of the URL
+  (illegal character per component, malformed escape, `URI with undefined scheme`,
+  `invalid URI scheme`, `unsupported URI`), the client's restricted header names and
+  non-string values, and by name what no transport here honours (`:client`,
+  `:interceptors`, `:timeout` until todo 148, `:version`, `:multipart`, `:raw`,
+  `:expect-continue`, `:as :bytes`). A method fetch does not send is refused by name.
+- The exchange: plain defuns each answering an `async-lambda`'s future, never
+  `async-defun`s -- `LibraryDefunPruner` drops an unreached DEFUN and keeps every other
+  top-level form, so an async-defun in `clojure.lisp` rode every Clojure program (caught by
+  `ClojureLoweringTest#aProgramPassingRealFunctionsSplicesNoDispatcher`). `send` is fetch
+  with a transport failure as the `%clojure-io-exception` carrier over the transport's own
+  text; `follow` is the JDK's `RedirectFilter` under the oracle's default NORMAL policy
+  (301/302/303/307/308, `++hops < 5`, never https to http, 303 and a POST's 301/302 to GET,
+  the body kept only for an unchanged method off a 303, `ALLOWED_REDIRECT_HEADERS` across
+  origins, `URI.resolve` ported with its RFC 2396 empty-path rule; a hop's body
+  stream-closed); `respond` refuses a `gzip`/`deflate` body (nothing decompresses, so no
+  `accept-encoding` is sent) and an `:as` with no clause, drains through `read-all` unless
+  `:as :stream`, builds `{:status :headers :body :uri :request}` (headers a string-keyed
+  map, a repeated field a vector in wire order) and throws `ex-info` `Exceptional status
+  code: N` over it outside the oracle's unexceptional set unless `:throw false`; `exchange`
+  applies `:async-then`/`:async-catch` (the latter handed `{:ex CompletionException :ex-cause
+  :ex-data :ex-message :request}`) in async mode only. A plain call `%future-force`s it;
+  `:async true` answers it.
+- The rontolisp future and stream under the core verbs are arms of
+  `ClojureArms.Family.FETCH` (tests `%clojure-future-p`, `%clojure-async-stream-p`; the
+  alias `%clojure-future-or-host-p` -> `%clojure-host-future-p`, which the HOST family folds
+  in turn, so FETCH precedes HOST in the enum; producer the kernel's `%clojure-http-request`
+  alone). `deref`: a clause of `%clojure-deref-other` ahead of the host one (on the JVM the
+  future IS a `CompletableFuture`, whose settled EMARKER/VMARKER payload only `_await`
+  reads), a failure re-signalled as `java.util.concurrent.ExecutionException` over it (a
+  C%E with the cause), like `get`. Timed `deref`: `%clojure-future-get-within` polls the
+  new internal `rontolisp::%future-settled-p` between `(sleep 0.001)`s; on a component that
+  sleep is wait.lisp's `%future-force` of a timer, which drives the scheduler, so
+  `WaitForLibrary` splices it where `ClojureArms.sleepsOnAFuture` (a producer and the
+  timed arm). `future?` T; `future-done?` is `%future-settled-p`; `future-cancelled?` and
+  `future-cancel` false (cancel's "not possible"); `realized?` stays the
+  `ClassCastException` the oracle throws for a `CompletableFuture`. `:as :stream` is
+  fetch's body stream itself: `slurp` and `clojure.java.io/reader` drain it through
+  `read-all` (the reader into a string stream), `.close` is `stream-close`, and a Ring
+  response body passes it to the transport as it is, so a relay is byte-exact.
+- Per transport: on P1 (`--native`, `--host-fetch`) an async body runs to its end at the
+  call, so an `:async` request has completed when `get` returns and a timed deref never
+  times out; the `--host-fetch` host's JS `fetch` follows redirects itself (20 hops, `:uri`
+  the requested URL); a transport failure's text is the transport's (`java.net.ConnectException`,
+  `the WIT call answered its error arm: :CONNECTION-REFUSED`, `fetch: cannot connect to ...`).
+- Cloudflare Workers, verified 2026-10-08 under `wrangler dev` 4.148.0: a Ring handler
+  proxying a local upstream through the client (`--no-wasi --host-fetch
+  --host-boundary=streaming --emit-js-glue`, the three-line `index.js` of the other Workers)
+  relays a 70,000 B binary reply byte for byte under `:as :stream`, answers `:async true` +
+  `deref`, and catches the 404 `ex-info`.
+- Oracle (clj 1.12.6 + babashka.http-client 0.4.23 against the corpus origin, 2026-10-08):
+  identical but the response's missing `:version` and the `java.net.URI` `:uri` (a string
+  here), `accept-encoding`, the User-Agent (fetch's), a transport failure's class (an
+  `IOException`; the oracle's `ConnectException` is one), map key order, `:as :bytes`.
+  What waits on a value kind or a transport feature (`:as :bytes`, compression,
+  `:multipart`, a lazy reader over the stream body, `:timeout`, the arity words): todo `e63`.
+- Pins: `FetchSpecE2eTest#clojureHttpClient` (`clojure-http-spec.yaml`: interpreter, JVM,
+  `--native`, component), `ClojureHttpClientTest` (the lowering, the refusals, the FETCH
+  strip, the P1 and `--no-wasi` refusals, a Ring proxy relaying a binary reply on the
+  interpreter and the JVM, a redirect to a second origin dropping the credential headers --
+  the corpus has one origin), `ClojureHttpClientHostFetchE2eTest` (node `--experimental-wasm-jspi`
+  over the generated glue's `defaultHost()`: the client, and a Ring proxy through
+  `worker(module)`), `ServeRingComponentE2eTest#wasmtimeServeRelaysAFetchedReplyByteForByte`
+  (opt-in), the `http-client.md` doc examples (`DocExamplesTest` points their URLs at its
+  local origin).
+
 ## Host boundary
 
 **`rontolisp.wasm` and `rontolisp.wit` LOWER to the Common Lisp directives
@@ -1281,7 +1383,8 @@ function and a directive must be a top-level form.
 - **Byte identity, measured 2026-10-08**: a `:wasm/export` program equals the Common Lisp
   program loading the same `.clj` under the hand-written directive (419 bytes by default,
   263,545 at `--optimize=off`, and under `--component`); `wit/import` on P1 equals
-  `defimport` of its members; a `wit/export` world equals the hand-written `wit-export` block
+  `defimport` of the members it calls (it binds no other since 2026-10-08, "`wit/import`");
+  a `wit/export` world equals the hand-written `wit-export` block
   (P1 and `--component`). The world case needed `ClojureArms.scan` to skip the three
   function-naming directives: their quoted `|c%ns/f|` is a compile-time name, yet as a
   qualified symbol literal it made the scan keep the `#:ns{...}` printer arm
@@ -1289,24 +1392,76 @@ function and a directive must be a top-level form.
 - **`wit/import`**: the interface's members become vars of a namespace named after its id
   (`namespaceOf`: `/` becomes `.`, an id without a package gains `wit:`), reached through
   `:as`/`:refer`; a second import of the id wires names only. The directive is hoisted with a
-  `:names` table listing only the members the Clojure tier binds: numbers, `char`, `string`,
-  `list<u8>`, handles, an `option` of those, a `result` answering one, `bool` and
-  `option<bool>` through a wrapper. Each wrapper is emitted only when the program names its
-  member (`referencedWrappers`), so `--component` still imports only the called members. A
-  member outside the tier (records, variants, enums, flags, tuples, lists, a `result`
-  argument, `async func`, the async built-ins) is not bound, and a reference to it is refused
-  at lower time naming the WIT line (`refusalOf`, from `ClojureNamespaceLowering.refuseLeftOut`).
-  The rest is `.todo/e50-*`.
+  `:names` table listing every member with a Clojure value: all but a stream, a future
+  (anywhere inside the type, `unsupported`), an `async func` and the async built-ins, which
+  are not bound and whose reference is refused at lower time naming the WIT line
+  (`refusalOf`, from `ClojureNamespaceLowering.refuseLeftOut`). Each wrapper is emitted only
+  when the program names its member (`referencedWrappers`), so `--component` imports only
+  the called members, and so does a core module: `WitImportInliner` filters a `:names`
+  directive by reference on P1 too (`.kb/wit.md`, "The naming hook"), so a member the core
+  import cannot carry (a record, an option, a result, `char`, `s64`) fails the build with the
+  Common Lisp P1 refusal only where the program calls it. Until 2026-10-08 P1 bound the whole
+  table, and an interface with one `option` member failed every Clojure P1 build.
+- **Rich values** (the Clojure spelling of the settled CL tier, `.kb/wit.md`): a record is a
+  map of its fields' keywords, an enum or a payload-less case its keyword, a case with a
+  payload `[:case payload]`, flags a set of keywords, a tuple or a `list<T>` a vector, a
+  `result` value (an argument, or nested) `[:ok v]` / `[:error e]` (`:ok` / `:error` without
+  payload); a label keeps its WIT spelling (`:DNS-error`; the boundary's is upcased,
+  `:DNS-ERROR`). No oracle: the reference page is the contract; `[:tag value]` is
+  `clojure.spec`'s conform shape of an `s/or`. The lowering turns each member's types into
+  descriptors (`ClojureWitLowering.descriptor`: `NIL` alike, `:BOOL`, `(:OPTION . d)`,
+  `(:LIST . d)`, `(:TUPLE "wit" d ...)`, `(:RECORD "wit" (kw :KW d) ...)`,
+  `(:VARIANT "wit" (kw :KW [d]) ...)` for a variant or an enum, `(:RESULT ...)` a variant
+  whose payload-less arm the boundary still conses, `(:FLAGS "wit" (kw :KW) ...)`) which one
+  `clojure.lisp` walker reads both ways (`%clojure-wit-out` / `-in`), so a deep type costs a
+  constant, not code. A wrapper reads each descriptor from a global holding it
+  (`typeArg`: `c%wit%type%N`, one per distinct type -- wasi's error variants recur across
+  members -- a top-level `setq` emitted ahead of the first wrapper reading it). `bool` and
+  `option<bool>` keep the inline crossing, so a member with none of the rich types lowers
+  byte-identically to before. To the host a list/tuple/flags takes any collection
+  (`%clojure-seq-all`) and a record any map (`%clojure-call-keyword`, records and sorted maps
+  too); a value of no shape of its type is an `IllegalArgumentException` naming the type.
+- **The error arm** is an `ExceptionInfo` ("member of iface answered its error arm") whose
+  data holds the converted value under `:rontolisp.wit/error` (`ERROR_KEY`, `::wit/error`
+  with the alias); its cause, on the interpreter and the JVM, the condition the provider
+  signalled. Rejected: leaving the CL `wit-error` condition (no Clojure reader reaches its
+  payload, and a label like `DNS-error` cannot be recovered from `:DNS-ERROR` without the
+  shape); `{:payload ...}` (an unqualified key a provider's own exceptions may hold). How the
+  wrapper gets the arm differs by target, because the CL tier signals it on the host and
+  answers an envelope on wasm: a WASM wrapper calls the RAW binding (`<bound>%raw`, the
+  `(:OK . v)` / `(:ERROR . e)` envelope) and throws itself, so nothing catches -- a catch
+  would put every result-calling module in EH mode (`.kb/error-handling.md`) -- and
+  `WitImportDirective` binds a member named only through its raw binding without the
+  `%wit-result` wrapper, which would have spliced the whole of wit.lisp; a host wrapper
+  catches `rontolisp:wit-error` around the provider call and re-raises it as the arm, unless
+  `rontolisp::*wit-providers*` holds no provider for the interface (then the
+  "No provider is bound" refusal goes on unchanged). The key is spelled in the program
+  (the descriptor global `(key . d)`), so `ClojureArms`' scan makes `NAMESPACE_MAP` and
+  `(ex-data e)` prints `#:rontolisp.wit{:error ...}` like any map of one namespace.
+- **Trap: `clojure.lisp` must name nothing of wit.lisp** (`rontolisp:wit-error`,
+  `wit-error-payload`, `%wit-call`, `%wit-result`, `wit-provide`): `WitLibrary.process` runs
+  after the Clojure splice, sees the whole library before the pruner, and splices wit.lisp
+  (not prunable, its `define-condition` kept) into every Clojure program. What signals or
+  catches the condition is lowered into the program instead (the host wrapper, the provide
+  adapter).
 - **`wit/export`**: each world label names a var of the declaring namespace; `flushWorlds`
   resolves it as `wasm/export` does (wrapper, `bool` crossing) and emits the `:names` table. The
   CL directive keeps the contract check, the type check (primitives only,
   `WitExportDirective.designator`) and `--emit-wit`. Refused: an `async func` export; a
   `wasm/export` beside a world (a file's rule only: a session's world is checked buffer by
   buffer against what is defined so far).
-- **`wit/provide`**: `(rontolisp:wit-provide iface fn)` on the interpreter and the JVM (a
-  literal interface written as an import spelled it is canonicalized); on wasm it answers the
-  interface and binds nothing, the host providing every import. The provider sees the
-  boundary's values (a `bool` as `true`/`nil`).
+- **`wit/provide`**: `(rontolisp:wit-provide iface fn)` on the interpreter and the JVM; on
+  wasm it answers the interface and binds nothing, the host providing every import. The
+  interface is a string an import above names (its id or the spelling it wrote,
+  canonicalized), refused otherwise, and `provide` has no value: the import's WIT is what the
+  provider's values convert by. When a member converts, the provider is wrapped in an adapter
+  (`ClojureWitLowering.adapter`: a lambda over `%clojure-wit-serve` and the interface's table,
+  `("member" (d ...) result [error])` rows behind the error key), so it sees and answers
+  Clojure values; an `ExceptionInfo` holding the error key it throws is signalled as
+  `rontolisp:wit-error` with the converted payload and its message (`%clojure-wit-arm-p`, a
+  `satisfies` clause), so a Common Lisp caller of a Clojure provider reads the CL tier and a
+  Clojure caller turns it back. The language boundary IS the CL tier: each side converts to
+  and from it, and what the WIT does not carry (other `ex-data` keys) does not cross.
 - **WIT paths** resolve against the naming file through `ClojureFiles`; the directive keeps
   the path as written in the entry file (so the CL inliner, resolving against the entry's
   directory, reads the same file) and the resolved path in a required namespace's file.
@@ -1314,9 +1469,14 @@ function and a directive must be a top-level form.
   Clojure form; a `.clj` scaffold would be its own item.
 - Pins: `ClojureWasmBoundaryTest`, `ClojureWitBoundaryTest` (the interpreter, the JVM, P1 under
   node through `--emit-js-glue`, `--component` under wasmtime including its real
-  `wasi:keyvalue`), `WitNamingHookTest`, `ClojureHostBoundaryTest`; `ExamplesE2eTest` over
-  `examples/clojure/host-boundary/`, `examples/clojure/greeter/`,
-  `examples/wit/keyvalue/page-hits.clj`.
+  `wasi:keyvalue`, `wasi:sockets/types` and `wasi:http/types`;
+  `everyRichValueCrossesInClojuresSpellingOnTheInterpreterAndTheJvm`,
+  `eachLanguageSeesItsOwnSpellingOfOneInterface`,
+  `aPreview1ModuleRefusesARichMemberOnlyWhereTheProgramCallsIt`), `WitNamingHookTest`,
+  `ClojureHostBoundaryTest`, `WitImportInlinerTest.aNamesTableBindsOnPreview1TheMembersTheProgramNames`;
+  `ExamplesE2eTest` over `examples/clojure/host-boundary/`, `examples/clojure/greeter/`,
+  `examples/wit/keyvalue/page-hits.clj` (a record answer and an error arm, wasmtime's store
+  and the program's alike).
 
 ## clojure.jar namespaces
 
@@ -1324,7 +1484,7 @@ function and a directive must be a top-level form.
 end** (`src/main/resources/am/ik/rontolisp/clojure/lib/clojure/**`, the
 `ClojureBuiltinNamespaces` mechanism of "Ring util namespaces"): `clojure.walk`,
 `clojure.template`, `clojure.pprint`, `clojure.data`, `clojure.zip`, `clojure.core.protocols`,
-`clojure.datafy`.
+`clojure.datafy`, `clojure.stacktrace`.
 - **Licensing**: clojure.jar is EPL-1.0, this project Apache-2.0, so nothing of it is
   copied -- no code, no docstring. Each file is written from the documented behaviour and
   diffed against the oracle; a one-line var dictated by its contract
@@ -1445,11 +1605,26 @@ end** (`src/main/resources/am/ik/rontolisp/clojure/lib/clojure/**`, the
   `rontolisp.internal.datafy/class-name-of`, i.e. `%clojure-class-name-of`, the oracle's
   class names `%clojure-no-method` already spelled (now shared), since `class` answers a
   kind keyword.
+- `clojure.stacktrace`: `print-throwable` spells the class as `(name (class tr))` (`class`
+  of a throwable is its class-name keyword here) and a nil message `null` like the
+  oracle's `printf`. A throwable has no frames (`.getStackTrace` answers `[]`), so
+  `print-stack-trace` prints ` at [empty stack trace]`: pinned as a deviation by
+  clojure-spec `clojure-stacktrace-prints-no-frames`; `print-trace-element` is the oracle's
+  over a host `StackTraceElement` (interpreter and JVM,
+  `ClojureInteropTest#printTraceElementSpellsAHostStackTraceElementLikeTheOracle`).
+- Not shipped, with what each waits on (decided 2026-10-08): `clojure.java.io` beyond
+  `reader` (a portable File and byte streams, e55), `clojure.core.reducers` and
+  `CollReduce` (multi-arity protocol methods and a `reduce` that consults a protocol,
+  e56), `clojure.math` (fdlibm functions the runtime lacks on every backend, e57), pprint's
+  `cl-format`/`formatter`/`formatter-out` (e58), `clojure.instant`/`clojure.uuid` and the
+  `#inst`/`#uuid` values (e59), `Throwable->map` and `extend-protocol` to
+  `Throwable`/`IRef` (e60), `clojure.repl`/`main`/`java.shell`/`xml` (e61).
 - Pins: clojure-spec `clojure-walk-*` (all four backends, oracle-identical, the first
   case loading `clojure.walk` through a qualified name only),
   `clojure-template-substitutes-per-group-of-values`, `clojure-pprint-*`,
   `clojure-data-diff-compares-like-the-oracle`, `clojure-zip-moves-and-edits-like-the-oracle`,
   `clojure-datafy-and-core-protocols-like-the-oracle`,
+  `clojure-stacktrace-prints-throwables-like-the-oracle`,
   `ClojureLanguageNamespacesTest` (the startup load, a project file never shadowing a
   startup namespace, a contrib `clojure.*` namespace on the source path, the refusal of
   one not built in).
@@ -2428,10 +2603,35 @@ one algorithm (`ClojureReader.readConditional`, `%clojure-rd-conditional`):
 - ns forms: every `:require-macros`/`:include-macros` in the seven libraries (18 lines)
   sits inside a `:cljs` branch, so none reaches `ClojureNamespaceLowering` (whose
   `:include-macros` refusal stays; the oracle ignores the option).
-- Not built: `{:read-cond :preserve}` answers a `ReaderConditional` (and a `TaggedLiteral`
-  for a tag inside one), two value kinds no backend has; it is refused at the first `#?`
-  (`read-cond :preserve is not supported: ...`), so a text without one reads as the oracle
-  reads it, and `reader-conditional?` stays false. Deviations kept (error cases only):
+- **`{:read-cond :preserve}`** (oracle-checked clj 1.12.6, 2026-10-08, about 170 probes): after
+  the `#?`/`#?@` and `(` checks, `%clojure-rd-preserved` reads the whole list (features never
+  asked, `:else` too) into `(:C%READER-COND form splicing)`, `splicing` the Clojure boolean,
+  with `%clojure-rd-cond` rebound to `:C%PRESERVING`, so a nested `#?@` is one more member
+  (no pending forms) and a top-level splice reads. Only there (the oracle's `READ_COND_ENV`)
+  `%clojure-rd-record` makes `(:C%TAGGED form tag)` of ANY tag -- `#js`, `#inst`, `#uuid`,
+  a record literal's `#my.R`; outside one a tag keeps `No reader function`. `reader-conditional`
+  and `tagged-literal` build the same (the oracle's Boolean / Symbol casts: nil is an NPE,
+  else a CCE). Both are an ILookup (`:form`, then `:splicing?` / `:tag`; another key the
+  default; no IFn, no meta, `^m` on one `Metadata can only be applied to IMetas`), `=` by
+  kind and parts through `%clojure-equal` (a list form `=` a vector one, like Java
+  `equals`), a structural key, printed `#?(...)`/`#?@(...)`/`#tag form` (print-method's
+  shape; strings bare under `print`), and `instance?` of their class or `ILookup`
+  (`ClojureValueClasses.Kind`). Deviations: `class` is the keyword, `str` is
+  `Class@<hex of %clojure-hash>` (the oracle's `hashCode`, so its set order and `Duplicate
+  key` text differ too), `#?()`'s form is nil here so a nil form prints `()`. Arms: family
+  `ClojureArms.Family.READER_VALUE`, tests `%clojure-reader-value-p`/`-reader-cond-p`/
+  `-tagged-literal-p` (printer, `str`, `=`, hash, structural key, `%clojure-call-keyword`,
+  `getBranches`, `classForm`, `instance?`) and the reader's `%clojure-rd-preserve-p`/
+  `-preserving-p`; the predicates lower to `(%clojure-is-reader-conditional x false)`, an
+  alias of `progn`; producers the opts entries (`read-string`/`read` with a map, or as a
+  value) and the constructors. So `(read-string s)` drops the preserve clauses (the old
+  refusal with them) and a program reading nothing never had them; the
+  docstrings of the touched pre-existing defuns are unchanged. Pins: clojure-spec
+  `read-cond-preserve-reads-reader-conditionals-and-tagged-literals`,
+  `reader-conditional-and-tagged-literal-values-look-up-compare-and-print`,
+  `ClojureArmsTest#theReaderValueFamilyFoldsThePredicatesAndTheReaderArmsOfAProgramReadingWithoutOptions`,
+  `ClojureLibraryTest#aProgramReadingWithoutOptionsSplicesTheReaderWithoutItsPreserveClauses`.
+  Deviations kept (error cases only):
   `::alias/kw` of an unknown alias in a branch not taken reads (the lowering never sees it;
   the oracle refuses at read), the runtime reader splices `#?@(:clj nil)` as nothing (`()`
   and `nil` read alike there) and takes `:features` as a hash set only.
@@ -2815,6 +3015,8 @@ in-scope program needs `valid?`/`conform` (then `explain-data` stays refused).
   `ClojureWasmInteropRefusalTest`, `ClojureWasmFileIoTest`, `ClojureWasmFileRefusalTest`.
 - `ClojureArmsTest` (the sorted-collection, unbound-root, matcher and refusal strips).
 - `ClojureRingAdapterTest`, `ClojureRingUtilTest` (the Ring namespaces),
+  `ClojureHttpClientTest`, `ClojureHttpClientHostFetchE2eTest` and
+  `FetchSpecE2eTest#clojureHttpClient` (the HTTP client),
   `ClojureWasmBoundaryTest`, `ClojureWitBoundaryTest` (the host boundary),
   `ClojureLanguageNamespacesTest` (where the clojure.jar namespaces come from).
 - `ClojureLibraryTest` (the splice), `SourceLanguageTest`, `RontoLispCliTest` and

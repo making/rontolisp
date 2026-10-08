@@ -32,9 +32,11 @@ Clojure で書かれた組み込みの名前空間は、プロジェクトのフ
 | `clojure.data` | [clojure.data](clojure-data.md) |
 | `clojure.zip` | [clojure.zip](clojure-zip.md) |
 | `clojure.datafy`, `clojure.core.protocols` | [clojure.datafy](clojure-datafy.md) |
+| `clojure.stacktrace` | [clojure.stacktrace](clojure-stacktrace.md) |
 | `clojure.pprint` | [clojure.pprint](clojure-pprint.md) |
 | `clojure.template` | [clojure.template](clojure-template.md) |
 | `clojure.java.io`（`reader` のみ） | [入出力](io.md) |
 | `clojure.test` | [テスト (clojure.test)](test.md) |
 | `ring.adapter.rontolisp` | [Ring アダプター](ring.md) |
 | `ring.util.*`、`ring.middleware.*` | [Ring ユーティリティ](ring-util.md) |
+| `rontolisp.http-client` | [HTTP クライアント](http-client.md) |

@@ -151,12 +151,13 @@ class DocExamplesTest {
 	}
 
 	/**
-	 * If an example uses {@code rontolisp:fetch}, rewrites the origin of its http(s) URL
-	 * string literals to the local test server (keeping the path) so evaluation stays
-	 * offline; otherwise returns the source unchanged.
+	 * If an example uses {@code rontolisp:fetch} -- or Clojure's
+	 * {@code rontolisp.http-client}, which sends through it -- rewrites the origin of its
+	 * http(s) URL string literals to the local test server (keeping the path) so
+	 * evaluation stays offline; otherwise returns the source unchanged.
 	 */
 	private static String rewriteFetchUrls(String source) {
-		if (!source.contains("rontolisp:fetch")) {
+		if (!source.contains("rontolisp:fetch") && !source.contains("rontolisp.http-client")) {
 			return source;
 		}
 		return source.replaceAll("(?<=\")https?://[^\"/]*", Matcher.quoteReplacement(localFetchOrigin()));
@@ -531,7 +532,9 @@ class DocExamplesTest {
 						pendingStdout = run.stdout();
 					}
 					else {
-						pendingStdout = runProgram(language, source, stdin, page.toString(), files);
+						// a client example's URL reaches the local server, as a lisp
+						// block's fetch does; the page keeps the documented one
+						pendingStdout = runProgram(language, rewriteFetchUrls(source), stdin, page.toString(), files);
 					}
 				}
 				else if (isOutputInfo(info) && pendingStdout != null) {

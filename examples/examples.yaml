@@ -874,11 +874,12 @@ examples:
     backends: [interpreter, jvm, wasm-component]
     note: >-
       page-hits.lisp in Clojure, through rontolisp.wit/import and /provide: the
-      interpreter and jvm legs run against the store the program provides itself;
-      wasm-component compiles the canonical-ABI import, which `wasmtime run -S
-      keyvalue=y` runs against wasmtime's own store with the same output
-      (ClojureWitBoundaryTest runs all three). No list-keys: it answers a record,
-      which the Clojure tier does not carry yet
+      interpreter and jvm legs run against the store the program provides itself,
+      which sees and answers Clojure values; wasm-component compiles the
+      canonical-ABI import, which `wasmtime run -S keyvalue=y` runs against
+      wasmtime's own store with the same output (ClojureWitBoundaryTest runs all
+      three). list-keys answers the key-response record as a map, and open's error
+      arm is caught as an ExceptionInfo holding the error variant's case keyword
     expect:
       file: .expected/wit-keyvalue-page-hits-clj.txt
 

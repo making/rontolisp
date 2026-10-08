@@ -6026,16 +6026,77 @@ cases:
       ("Reader conditional splicing not allowed at the top level." "Feature name :else is reserved." "Feature should be a keyword: clj" "read-cond requires an even number of forms." "Spliced form list in read-cond-splicing must implement java.util.List" "read-cond body must be a list" "Feature should be a keyword: null")
       "Conditional read not allowed" "Conditional read not allowed" "Conditional read not allowed"
       [1 [2 3]]
-  - name: read-cond-preserve-is-refused-at-the-conditional
-    # :preserve builds a ReaderConditional (and a TaggedLiteral inside one), kinds
-    # no value here is: refused by name at the #?, so a text without one reads as
-    # the oracle reads it. The oracle prints #?(:clj 1) for the second line.
+  - name: read-cond-preserve-reads-reader-conditionals-and-tagged-literals
+    # {:read-cond :preserve} reads #?(...) and #?@(...) as a ReaderConditional over
+    # the whole list (features never asked, a splice kept as one member, a splice
+    # at the top level read too) and a tagged literal inside one as a
+    # TaggedLiteral, a record literal's and #inst's too; outside one a tag is
+    # still No reader function. Every line is the oracle's (clj 1.12.6.1673,
+    # 2026-10-08).
     source: |
-      (prn (read-string {:read-cond :preserve} "[1 2]"))
-      (prn (try (read-string {:read-cond :preserve} "#?(:clj 1)") (catch Exception e (ex-message e))))
+      (defn rcp [s] (try (read-string {:read-cond :preserve} s) (catch Exception e (str "ERR " (ex-message e)))))
+      (prn (rcp "#?(:clj 1 :cljs 2)") (rcp "#?@(:clj [1 2])") (rcp "[#?@(:clj [1 2]) 3]") (count (rcp "[#?@(:clj [1 2]) 3]")) (rcp "(a #?(:clj 1) b)"))
+      (prn (rcp "#?(:clj #js {} :cljs #foo 1)") (rcp "#?(:clj #inst \"2020-01-01\")") (rcp "#?(:clj #my.R{:a 1})") (rcp "#?(:clj #my.R[1 2])"))
+      (prn (rcp "#foo/bar 1") (rcp "#?(:clj #foo/bar 1)") (= (:tag (second (:form (rcp "#?(:clj #foo/bar 1)")))) 'foo/bar))
+      (prn (rcp "#?(:clj [#?(:cljs 1)])") (rcp "#?(:cljs 1)") (rcp "#?()") (rcp "#?(:clj)") (rcp "#?(:else 1)") (rcp "#?(clj 1)"))
+      (prn (rcp "#?[:clj 1]") (rcp "#?@(:clj 1)") (rcp "[#?@(:clj 1)]") (= (rcp "#?(:clj ::foo)") (reader-conditional '(:clj ::foo) false)) (rcp "#?(:clj #?(:cljs 1))") (rcp "{#?(:clj 1) 2}"))
+      (prn (rcp "#js {}") (rcp "#?(:clj #js)") (rcp "#?(:clj #js #?(:cljs 1))") (rcp "'#?(:clj 1)") (rcp "^:m #?(:clj [1])"))
+      (prn (rcp "#_ #?(:clj 1) 2") (rcp "#?(:clj #_1 2)") (rcp "#?@(:clj [1 2]) 3") (rcp "#?(:clj 1 :cljs 2 :x)") (rcp "#?(:clj #foo [1 #bar 2])"))
+      (prn (meta (second (:form (rcp "#?(:clj ^:m [1])")))) (map :splicing? (rcp "[#?@(:clj [1 2]) #?(:clj 3)]")) (rcp "#?") (rcp "#?(:clj 1"))
+      (prn (read-string {:read-cond :preserve :features #{:cljs}} "#?(:cljs 1)") (read-string {:read-cond :preserve} "[1 2]") (read-string {:read-cond :preserve :eof :x} ""))
+      (prn (with-open [r (java.io.PushbackReader. (java.io.StringReader. "#?(:cljs 0 :clj 1) [#?@(:clj [2 3])]"))]
+             [(read {:read-cond :preserve} r) (read {:read-cond :preserve} r)]))
     expected: |
-      [1 2]
-      "read-cond :preserve is not supported: no reader-conditional or tagged-literal value exists here"
+      #?(:clj 1 :cljs 2) #?@(:clj [1 2]) [#?@(:clj [1 2]) 3] 2 (a #?(:clj 1) b)
+      #?(:clj #js {} :cljs #foo 1) #?(:clj #inst "2020-01-01") #?(:clj #my.R {:a 1}) #?(:clj #my.R [1 2])
+      "ERR No reader function for tag foo/bar" #?(:clj #foo/bar 1) true
+      #?(:clj [#?(:cljs 1)]) #?(:cljs 1) #?() #?(:clj) #?(:else 1) #?(clj 1)
+      "ERR read-cond body must be a list" #?@(:clj 1) [#?@(:clj 1)] true #?(:clj #?(:cljs 1)) {#?(:clj 1) 2}
+      "ERR No reader function for tag js" "ERR Unmatched delimiter: )" #?(:clj #js #?(:cljs 1)) (quote #?(:clj 1)) "ERR Metadata can only be applied to IMetas"
+      2 #?(:clj 2) #?@(:clj [1 2]) #?(:clj 1 :cljs 2 :x) #?(:clj #foo [1 #bar 2])
+      {:m true} (true false) "ERR EOF while reading character" "ERR EOF while reading"
+      #?(:cljs 1) [1 2] :x
+      [#?(:cljs 0 :clj 1) [#?@(:clj [2 3])]]
+  - name: reader-conditional-and-tagged-literal-values-look-up-compare-and-print
+    # A ReaderConditional and a TaggedLiteral: an ILookup of :form and :splicing?
+    # or :tag, = by its parts (a list form = a vector one), a structural key,
+    # printed back as read (print leaves the strings bare), no collection, and the
+    # constructors' casts. Every line is the oracle's (clj 1.12.6.1673,
+    # 2026-10-08) but the last two: the oracle's class prints without the colon,
+    # and its str spells the hash its hashCode answers.
+    source: |
+      (def rcv (read-string {:read-cond :preserve} "#?(:clj 1 :cljs 2)"))
+      (def tlv (second (:form (read-string {:read-cond :preserve} "#?(:clj #js {})"))))
+      (prn (:form rcv) (:splicing? rcv) (get rcv :form) (get rcv :foo 9) (:foo rcv 9) (get rcv :tag :nf) (:tag tlv) (:form tlv) (get tlv :splicing? :nf))
+      (prn (reader-conditional? rcv) (tagged-literal? rcv) (reader-conditional? tlv) (tagged-literal? tlv) (map reader-conditional? [rcv 1 nil]) (filter tagged-literal? [rcv tlv]))
+      (prn (= rcv (read-string {:read-cond :preserve} "#?(:clj 1 :cljs 2)")) (= rcv (reader-conditional '(:clj 1 :cljs 3) false)) (= rcv (reader-conditional '(:clj 1 :cljs 2) true)) (= tlv (tagged-literal 'js {})) (= rcv tlv))
+      (prn (= (reader-conditional '(1) false) (reader-conditional [1] false)) (= (tagged-literal 'a [1]) (tagged-literal 'a '(1))) (= (tagged-literal 'a 1) (tagged-literal 'a 2)))
+      (prn (vec (keys (hash-map (reader-conditional '([1]) false) 1 (reader-conditional '((1)) false) 2))) (into #{} [(tagged-literal 'x [1]) (tagged-literal 'x '(1))]))
+      (prn [rcv] (list tlv) {:k rcv} #{tlv} (reader-conditional '(:clj 1) true) (tagged-literal 'a/b "x") (tagged-literal nil 1) (tagged-literal 'a nil))
+      (println rcv (tagged-literal 'x "s") (reader-conditional '(:clj "s" \c) true))
+      (prn (str [rcv]) (pr-str (tagged-literal 'x "s")) (print-str (tagged-literal 'x [\c "s"])) (pr-str (reader-conditional '(:clj \c) true)))
+      (prn (let [{:keys [form splicing?]} (reader-conditional '(:clj [1 2]) true)] [form splicing?]) (map :form [tlv rcv]) (apply reader-conditional ['(1) true]) (apply tagged-literal ['x 2]))
+      (prn (map? tlv) (coll? tlv) (seq? rcv) (seqable? rcv) (associative? rcv) (ifn? rcv) (sequential? rcv) (meta rcv))
+      (prn (instance? clojure.lang.ILookup tlv) (instance? clojure.lang.TaggedLiteral tlv) (instance? clojure.lang.ReaderConditional tlv) (instance? clojure.lang.ReaderConditional rcv))
+      (defn rcv-class [f] (try (f) (catch Exception e (.getName (class e)))))
+      (prn (rcv-class #(reader-conditional '(1) nil)) (rcv-class #(reader-conditional '(1) 1)) (rcv-class #(tagged-literal "a" 1)) (rcv-class #(count rcv)) (rcv-class #(rcv :form)))
+      (prn (class rcv) (class tlv))
+      (prn (some? (re-find #"^clojure.lang.ReaderConditional@[0-9a-f]+$" (str rcv))) (some? (re-find #"^clojure.lang.TaggedLiteral@[0-9a-f]+$" (str tlv))))
+    expected: |
+      (:clj 1 :cljs 2) false (:clj 1 :cljs 2) 9 9 :nf js {} :nf
+      true false false true (true false false) (#js {})
+      true false false true false
+      true true false
+      [#?([1])] #{#x [1]}
+      [#?(:clj 1 :cljs 2)] (#js {}) {:k #?(:clj 1 :cljs 2)} #{#js {}} #?@(:clj 1) #a/b "x" #nil 1 #a nil
+      #?(:clj 1 :cljs 2) #x s #?@(:clj s c)
+      "[#?(:clj 1 :cljs 2)]" "#x \"s\"" "#x [c s]" "#?@(:clj \\c)"
+      [(:clj [1 2]) true] ({} (:clj 1 :cljs 2)) #?@(1) #x 2
+      false false false false false false false nil
+      true true false true
+      "java.lang.NullPointerException" "java.lang.ClassCastException" "java.lang.ClassCastException" "java.lang.UnsupportedOperationException" "java.lang.ClassCastException"
+      :clojure.lang.ReaderConditional :clojure.lang.TaggedLiteral
+      true true
   - name: read-string-refuses-in-the-oracles-words
     # The end of input (empty or inside a datum), a repeated set member, an
     # unknown character name, a bad number and an unmatched closing bracket
@@ -8282,3 +8343,44 @@ cases:
       [:x 1] :init
       6 0
       #datafy_nav.Node{:id 0} 5
+  - name: clojure-stacktrace-prints-throwables-like-the-oracle
+    # The built-in clojure.stacktrace (.kb/clojure-frontend.md "clojure.jar namespaces"):
+    # root-cause through a chain of causes, print-throwable of an ex-info (its data on a line
+    # of its own), of a plain throwable, of one without a message, and of a caught one. Every
+    # line is the oracle's (clj 1.12.6), on all four backends.
+    source: |
+      (ns stack-traces (:require [clojure.stacktrace :as st]))
+      (def inner (ex-info "boom" {:x 1}))
+      (def outer (Exception. "outer" (RuntimeException. "middle" inner)))
+      (prn (ex-message (st/root-cause outer)) (ex-message (st/root-cause inner)) (= inner (st/root-cause outer)))
+      (st/print-throwable inner)
+      (newline)
+      (st/print-throwable (RuntimeException. "plain"))
+      (newline)
+      (st/print-throwable (Exception.))
+      (newline)
+      (prn (with-out-str (st/print-throwable outer)))
+      (prn (try (throw (IllegalStateException. "state")) (catch IllegalStateException e (with-out-str (st/print-throwable e)))))
+      (in-ns 'user)
+    expected: |
+      "boom" "boom" true
+      clojure.lang.ExceptionInfo: boom
+      {:x 1}
+      java.lang.RuntimeException: plain
+      java.lang.Exception: null
+      "java.lang.Exception: outer"
+      "java.lang.IllegalStateException: state"
+  - name: clojure-stacktrace-prints-no-frames
+    # A deviation: a throwable here carries no stack frames (.getStackTrace answers an empty
+    # vector), so print-stack-trace and print-cause-trace print the oracle's [empty stack trace]
+    # line where the oracle prints the frames of the code that built it.
+    source: |
+      (ns stack-frames (:require [clojure.stacktrace :as st]))
+      (def failure (Exception. "outer" (ex-info "boom" {:x 1})))
+      (st/print-stack-trace failure)
+      (prn (with-out-str (st/print-cause-trace failure 2)))
+      (in-ns 'user)
+    expected: |
+      java.lang.Exception: outer
+       at [empty stack trace]
+      "java.lang.Exception: outer\n at [empty stack trace]\nCaused by: clojure.lang.ExceptionInfo: boom\n{:x 1}\n at [empty stack trace]\n"

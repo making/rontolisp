@@ -30,6 +30,11 @@ import org.jspecify.annotations.Nullable;
  * token buffer and its layout, and the radix spelling of a number.</li>
  * <li>{@code rontolisp.internal.datafy} for {@code clojure.datafy}: the oracle's class
  * name of a value, which {@code class} (a kind keyword here) does not answer.</li>
+ * <li>{@code rontolisp.internal.http} for {@code rontolisp.http-client}: the request
+ * ({@code clojure.lisp}, "rontolisp.http-client") and {@code fetch}, which is
+ * {@code rontolisp:fetch} itself, so the program names the transport every fetch splice
+ * reads; the request builds the oracle's exceptions, so a call of it emits the exception
+ * runtime.</li>
  * </ul>
  *
  * <p>
@@ -44,9 +49,24 @@ final class ClojureKernelLowering {
 	 * @param owners the built-in namespaces it serves, for the refusal
 	 * @param prefix the worker names' prefix
 	 * @param arity each var's argument count
+	 * @param workers the vars whose worker is no prefixed name, to the one it is
+	 * @param exceptions whether a call builds the program's exceptions, so the lowering
+	 * emits their runtime
 	 */
-	record Kernels(String owners, String prefix, Map<String, Integer> arity) {
+	record Kernels(String owners, String prefix, Map<String, Integer> arity, Map<String, String> workers,
+			boolean exceptions) {
+
+		Kernels(String owners, String prefix, Map<String, Integer> arity) {
+			this(owners, prefix, arity, Map.of(), false);
+		}
+
 	}
+
+	/**
+	 * The worker of {@code rontolisp.internal.http/request}: what makes a fetch family
+	 * value.
+	 */
+	static final String HTTP_REQUEST = "RONTOLISP::%CLOJURE-HTTP-REQUEST";
 
 	/** The internal namespaces. */
 	private static final Map<String, Kernels> NAMESPACES = Map.of("rontolisp.internal.ring",
@@ -62,7 +82,11 @@ final class ClojureKernelLowering {
 							Map.entry("length-reached", 1), Map.entry("count-object", 0), Map.entry("reset-length", 0),
 							Map.entry("number-string", 3), Map.entry("members", 1))),
 			"rontolisp.internal.datafy",
-			new Kernels("clojure.datafy", "RONTOLISP::%CLOJURE-", Map.of("class-name-of", 1)));
+			new Kernels("clojure.datafy", "RONTOLISP::%CLOJURE-", Map.of("class-name-of", 1)),
+			"rontolisp.internal.http",
+			new Kernels("rontolisp.http-client", "RONTOLISP::%CLOJURE-HTTP-",
+					Map.ofEntries(Map.entry("request", 2), Map.entry("fetch", 2)), Map.of("fetch", "RONTOLISP:FETCH"),
+					true));
 
 	private ClojureKernelLowering() {
 	}
@@ -125,24 +149,31 @@ final class ClojureKernelLowering {
 			throw new LispReadException(
 					"Wrong number of args (" + (items.size() - 1) + ") passed to: " + ns + "/" + var);
 		}
+		ctx.usedExInfo |= kernels.exceptions();
 		return ClojureLowerUtil.cons(worker(kernels, var), ctx.lowers(items, 1));
 	}
 
 	/**
 	 * A kernel as a function value: the worker itself.
+	 * @param ctx the hub
 	 * @param ns the internal namespace
 	 * @param var the var name
 	 * @return the value form
 	 */
-	static LispVal kernelValue(String ns, String var) {
+	static LispVal kernelValue(ClojureLowering ctx, String ns, String var) {
 		Kernels kernels = NAMESPACES.get(ns);
 		if (kernels == null || !kernels.arity().containsKey(var)) {
 			throw new LispReadException("unknown name: " + ns + "/" + var);
 		}
+		ctx.usedExInfo |= kernels.exceptions();
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), worker(kernels, var));
 	}
 
 	private static LispSymbol worker(Kernels kernels, String var) {
+		String own = kernels.workers().get(var);
+		if (own != null) {
+			return new LispSymbol(own);
+		}
 		String name = var.endsWith("?") ? var.substring(0, var.length() - 1) + "-p" : var;
 		return new LispSymbol(kernels.prefix() + name.toUpperCase(Locale.ROOT));
 	}

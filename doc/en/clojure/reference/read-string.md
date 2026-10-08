@@ -15,9 +15,11 @@ program defines, over its unevaluated body. Text after the first datum is ignore
 input signals `EOF while reading`, unless the options map has an `:eof` entry, which is
 then the answer. Reader conditionals are refused (`Conditional read not allowed`) unless
 the options map holds `:read-cond :allow`; then they read like in a `.cljc` file, a
-`:features` set adding features to `:rontolisp`, `:clj` and `:default`
-(`:read-cond :preserve` is refused at the first `#?`). `#=` read-time evaluation and
-tagged literals are refused like in source, and `@x` reads `(deref x)` like `'@x` does (the oracle:
+`:features` set adding features to `:rontolisp`, `:clj` and `:default`. Under
+`:read-cond :preserve` a `#?(...)`/`#?@(...)` reads as a
+[reader-conditional](reader-conditional.md) over the whole list, and a tagged literal inside
+one as a [tagged-literal](tagged-literal.md). `#=` read-time evaluation and
+tagged literals elsewhere are refused like in source, and `@x` reads `(deref x)` like `'@x` does (the oracle:
 `(clojure.core/deref x)`). Runs on every backend; as a value, one or two arguments.
 
 ```clojure
@@ -27,6 +29,7 @@ tagged literals are refused like in source, and `@x` reads `(deref x)` like `'@x
 (println (read-string {:eof :none} ""))
 (println (read-string {:read-cond :allow} "[#?(:cljs 1 :clj 2) #?@(:clj [3 4])]"))
 (println (read-string {:read-cond :allow :features #{:cljs}} "#?(:cljs 1 :clj 2)"))
+(println (read-string {:read-cond :preserve} "#?(:cljs #js {} :clj 2)"))
 ```
 
 ```
@@ -35,4 +38,5 @@ true
 :none
 [2 3 4]
 1
+#?(:cljs #js {} :clj 2)
 ```

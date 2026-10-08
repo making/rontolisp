@@ -1429,6 +1429,13 @@ final class ClojureInteropLowering {
 			call = ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
 					ClojureLowerUtil.list(ClojureLowerUtil.sym("streamp"), recv), stream, call);
 		}
+		if (method.equals("close") && args.isEmpty()) {
+			// a fetched reply's body stream (rontolisp.http-client's :as :stream) closes
+			// as a rontolisp stream: an arm a program that fetches nothing folds
+			call = ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
+					ClojureLowerUtil.list(new LispSymbol(ClojureStateLowering.ASYNC_STREAM_P), recv),
+					ClojureLowerUtil.list(new LispSymbol("RONTOLISP:STREAM-CLOSE"), recv), call);
+		}
 		if (cls == null) {
 			call = valuePredicate(ctx, recv, method, args.size(), hostCall, call);
 			if (!(method.equals("toString") && args.isEmpty())) {

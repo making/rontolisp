@@ -241,6 +241,35 @@ class WitImportInlinerTest {
 	}
 
 	/**
+	 * A front end's {@code :names} table lists every member its own tier binds, so under
+	 * one a Preview 1 module binds the members the program names, like a component: a
+	 * member the core import cannot carry fails the build only where it is called.
+	 * {@code --no-prune} binds the whole table, and a Common Lisp directive keeps binding
+	 * every function (the hand-written block's bytes, the tests above).
+	 */
+	@Test
+	void aNamesTableBindsOnPreview1TheMembersTheProgramNames() {
+		String directive = "(rontolisp:wit-import \"gl.wit\" :interface \"local:webgl/gl\" :names "
+				+ "((\"create-shader\" \"c%gl/create-shader\") (\"clear-color\" \"c%gl/clear-color\")))\n";
+		List<LispVal> program = LispReader.readAllFromString(directive + "(print (|c%gl/create-shader| 1))");
+		String pruned = String.join("\n",
+				WitImportInliner
+					.inline(program, null, WitExportDirective.Backend.WASM_GC, uploads(Map.of("gl.wit", GL_WIT)))
+					.stream()
+					.map(LispVal::print)
+					.toList());
+		assertThat(pruned).contains("(RONTOLISP:WASM-IMPORT '|c%gl/create-shader| :FROM \"gl\"")
+			.doesNotContain("clear-color");
+		String whole = String.join("\n",
+				WitImportInliner
+					.inline(program, null, WitExportDirective.Backend.WASM_GC, uploads(Map.of("gl.wit", GL_WIT)), false)
+					.stream()
+					.map(LispVal::print)
+					.toList());
+		assertThat(whole).contains("'|c%gl/create-shader|").contains("'|c%gl/clear-color|");
+	}
+
+	/**
 	 * The host is the provider on the WASM backends, so a top-level
 	 * {@code rontolisp:wit-provide} is inert there -- dropped, not a compile error -- and
 	 * one source runs on every backend. Everywhere a provider IS dispatched (the

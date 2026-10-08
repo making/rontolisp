@@ -29,7 +29,10 @@ against `FetchResponseShape.responseFields()` at compile time (a mismatch fails 
 **Error timing** is JS-like: options validated at `fetch` time; request/transport failures surface at
 `await` on EVERY backend (on WASM the send result's error arm becomes a `rontolisp:wit-error`
 condition, catchable with `handler-case`; interpreter/JVM signal a plain error -- a known type
-divergence), and again at every later await of the same future. A request that cannot be built (a
+divergence), and again at every later await of the same future. The plain error's report is the
+host failure's message, or its `toString` when it has none (the JDK client's
+`ConnectException`): the JVM rethrows the throwable itself, and the interpreter said `await
+failed` until 2026-10-08. A request that cannot be built (a
 URL with a space in its path) is such a failure: `fetch` answers a future, whose await signals. A
 transfer that fails mid-body signals at the DRAIN, never reading as a shorter body. The component
 answered `nil` for a fetch it could not start until 2026-09-26.
@@ -193,6 +196,11 @@ and sliced back per case, like `ci-spec.yaml`. It is in `./mvnw test` (the nativ
 without the host's pair, the component leg without wasmtime) and in CI's native-image job, where
 the native leg compiles through the binary on each release platform. The `--host-fetch` reactor
 has no leg (its transport is the JavaScript host, `WasmHostFetchBodyE2eTest`).
+
+The same test runs a second corpus over the same origin and legs, `clojure-http-spec.yaml`:
+Clojure's `rontolisp.http-client`, every request of which is the program's own fetch call
+(`.kb/clojure-frontend.md`, "HTTP client"). Its one skip is the `--native` leg of a timed
+`deref` of a pending reply: a Preview 1 async body runs to its end at the call.
 
 A case a leg skips names the divergence; no case skips a leg since 2026-09-26. What the corpus
 does not pin (it looks fields up by name), measured 2026-09-25:

@@ -561,11 +561,16 @@
   "A reader over (java.io.StringReader. TEXT): a string input stream."
   (make-string-input-stream text))
 
+;; A fetched reply's body stream (rontolisp.http-client's :as :stream) is read
+;; whole, its octets decoded as UTF-8, into a string input stream; the arm goes
+;; from a program that fetches nothing.
 (defun rontolisp::%clojure-reader (source)
   "clojure.java.io/reader: a character input stream over the file SOURCE, or
    SOURCE itself when it is already an input stream (a reader over a reader,
    a Ring request :body)."
-  (if (streamp source) source (open source)))
+  (if (rontolisp::%clojure-async-stream-p source)
+      (make-string-input-stream (rontolisp::%clojure-async-stream-text source))
+      (if (streamp source) source (open source))))
 
 (defun rontolisp::%clojure-read-to-end (stream)
   "Every character left on STREAM, as one string."
@@ -581,20 +586,25 @@
       stream
       (rontolisp::%clojure-io-exception "Stream closed")))
 
+;; A fetched reply's body stream (rontolisp.http-client's :as :stream) is read
+;; to its end, its octets decoded as UTF-8; the arm goes from a program that
+;; fetches nothing.
 (defun rontolisp::%clojure-slurp (source)
   "slurp: the whole of SOURCE as a string -- a path, opened and closed around
    the read, or an already-open input stream (a clojure.java.io/reader, a Ring
    request :body), read to its end and closed, like the oracle's with-open. A
    second close, the with-open that opened it or the transport that made it,
    does nothing."
-  (if (streamp source)
-      (let ((text
-             (rontolisp::%clojure-read-to-end
-              (rontolisp::%clojure-open-reader source))))
-        (close source)
-        text)
-      (with-open-file (stream source)
-        (rontolisp::%clojure-read-to-end stream))))
+  (if (rontolisp::%clojure-async-stream-p source)
+      (rontolisp::%clojure-async-stream-text source)
+      (if (streamp source)
+          (let ((text
+                 (rontolisp::%clojure-read-to-end
+                  (rontolisp::%clojure-open-reader source))))
+            (close source)
+            text)
+          (with-open-file (stream source)
+            (rontolisp::%clojure-read-to-end stream)))))
 
 (defun rontolisp::%clojure-stream-p (x)
   "Whether X is a stream value."
@@ -673,6 +683,10 @@
         ((rontolisp::%clojure-keyword-p x)
          (write-char #\: stream)
          (write-string (car (cdr x)) stream))
+        ;; no collection and no metadata: ahead of the flags' arms
+        ((rontolisp::%clojure-reader-value-p x)
+         (rontolisp::%clojure-write-reader-value x nil-replacement readable
+                                                 stream labels))
         ((rontolisp::%clojure-print-meta-p x readable stream labels))
         ((rontolisp::%clojure-print-deep-p x) (write-char #\# stream))
         ((rontolisp::%clojure-lazy-p x)
@@ -854,6 +868,8 @@
                ((rontolisp::%clojure-unbound-p x)
                 (concatenate 'string "Unbound: #'" (car (cdr x))))
                ((rontolisp::%clojure-ns-object-p x) (car (cdr x)))
+               ((rontolisp::%clojure-reader-value-p x)
+                (rontolisp::%clojure-reader-value-string x))
                (t (or (rontolisp::%clojure-host-string x)
                       (rontolisp::%clojure-str-of x "nil" t)))))
         ((rontolisp::%clojure-re-pattern-p x)
@@ -2018,6 +2034,8 @@
          (= a b))
         ((or (rontolisp::%clojure-sorted-p a) (rontolisp::%clojure-sorted-p b))
          (rontolisp::%clojure-sorted-equal a b))
+        ((rontolisp::%clojure-reader-value-p a)
+         (rontolisp::%clojure-reader-value-equal a b))
         ;; equal hands a host object no collection, so a host collection and a
         ;; Clojure one reach the host-object family's arm
         (t (or (equal a b) (rontolisp::%clojure-host-equal-p a b)))))
@@ -2327,7 +2345,8 @@
            (cond ((eq h :C%KEYWORD) nil)
                  ((keywordp h)
                   (or (eq h :C%SET) (eq h :C%LAZY) (eq h :C%RECORD)
-                      (rontolisp::%clojure-sorted-p k)))
+                      (rontolisp::%clojure-sorted-p k)
+                      (rontolisp::%clojure-reader-value-p k)))
                  (t t))))
         ((vectorp k) (not (stringp k)))
         (t (hash-table-p k))))
@@ -2392,6 +2411,8 @@
                              1048575))
                (setq s (rontolisp::%clojure-seq (cdr s))))))
           ((rontolisp::%clojure-sorted-p x) (rontolisp::%clojure-sorted-hash x))
+          ((rontolisp::%clojure-reader-value-p x)
+           (rontolisp::%clojure-reader-value-hash x))
           (t 0)))
         ((characterp x) (char-code x))
         ((symbolp x) (rontolisp::%clojure-hash-string (symbol-name x)))
@@ -2635,6 +2656,8 @@
         ((hash-table-p coll) (gethash k coll dflt))
         ((rontolisp::%clojure-sorted-p coll)
          (rontolisp::%clojure-sorted-get coll k dflt))
+        ((rontolisp::%clojure-reader-value-p coll)
+         (rontolisp::%clojure-reader-value-get coll k dflt))
         (t dflt)))
 
 ;;;; Lazy seqs: memoized-thunk wrappers over the strict seq view.
@@ -7504,12 +7527,17 @@
   "X when it is reduced, else X wrapped."
   (if (rontolisp::%clojure-reduced-p x) x (rontolisp::%clojure-reduced x)))
 
+;; A future rontolisp.http-client answers under :async true is read through
+;; %clojure-future-get, ahead of a host Future: on the JVM it is a
+;; CompletableFuture, whose settled payload only the await runtime reads (the arm
+;; goes from a program that fetches nothing).
 (defun rontolisp::%clojure-deref-other (x)
   "deref of anything but an atom cell: a reduced value's content (the oracle's
    Reduced is an IDeref), a var's root, a host Future's get, else the oracle's
    cast failure."
   (cond ((rontolisp::%clojure-reduced-p x) (car (cdr x)))
    ((rontolisp::%clojure-var-p x) (rontolisp::%clojure-var-get x))
+   ((rontolisp::%clojure-future-p x) (rontolisp::%clojure-future-get x))
    ((rontolisp::%clojure-host-object-p x "java.util.concurrent.Future")
     (rontolisp::%clojure-host-future-get x))
    (t (rontolisp::%clojure-class-cast-exception-of "deref needs an atom" x))))
@@ -7549,6 +7577,64 @@
                "java.util.concurrent.TimeoutException")
               default
               (error c))))
+      (rontolisp::%clojure-class-cast-exception-of
+       "deref needs a number as its timeout" ms)))
+
+;; The future rontolisp.http-client answers under :async true and the body
+;; stream it answers under :as :stream are rontolisp's own (the interpreter's
+;; LispFuture and LispStream, the JVM's CompletableFuture and stream array,
+;; wasm's future and stream structs), read through the await runtime. Their
+;; tests are arms of the fetch family (clojure/ClojureArms): a program that
+;; fetches nothing makes neither, and folds them.
+
+(defun rontolisp::%clojure-future-p (x)
+  "Whether X is a rontolisp future: the fetch family's arm test."
+  (rontolisp:futurep x))
+
+(defun rontolisp::%clojure-future-get (f)
+  "deref of the rontolisp future F: its settled value, a failure the oracle's
+   ExecutionException over its cause, like a CompletableFuture's get."
+  (handler-case (rontolisp::%future-force f)
+    (error (c)
+      (error
+       (c%e-new '("java.util.concurrent.ExecutionException"
+                  "java.lang.Exception" "java.lang.Throwable")
+                (rontolisp::%clojure-http-text c) nil c)))))
+
+(defun rontolisp::%clojure-future-or-host-p (x no)
+  "future?: T for a rontolisp future or a host Future, NO for anything else.
+   The fetch family's alias of %clojure-host-future-p."
+  (if (rontolisp::%clojure-future-p x)
+      t
+      (rontolisp::%clojure-host-future-p x no)))
+
+(defun rontolisp::%clojure-async-stream-p (x)
+  "Whether X is a rontolisp stream, a fetched reply's body under :as :stream:
+   the fetch family's arm test."
+  (rontolisp:streamp x))
+
+(defun rontolisp::%clojure-async-stream-text (s)
+  "Everything left on the rontolisp stream S, its octets decoded as UTF-8:
+   what slurp and clojure.java.io/reader read of a fetched reply's body."
+  (rontolisp::%future-force (rontolisp:read-all s)))
+
+(defun rontolisp::%clojure-future-get-within (f ms default)
+  "deref of the rontolisp future F within MS milliseconds, truncated like the
+   oracle's long coercion: its value once it settles, DEFAULT when MS pass
+   first, a failure %clojure-future-get's ExecutionException; a timeout that
+   is no number the oracle's cast failure. The wait polls the future between
+   sleeps of a millisecond, which on a --component drive its scheduler, so the
+   request goes on meanwhile."
+  (if (realp ms)
+      (let ((deadline
+             (+ (get-internal-real-time)
+                (truncate (* (truncate ms) internal-time-units-per-second)
+                          1000))))
+        (loop
+          (if (rontolisp::%future-settled-p f)
+              (return (rontolisp::%clojure-future-get f)))
+          (if (>= (get-internal-real-time) deadline) (return default))
+          (sleep 0.001)))
       (rontolisp::%clojure-class-cast-exception-of
        "deref needs a number as its timeout" ms)))
 
@@ -8318,6 +8404,10 @@
   0
   "The last number a generated #(...) parameter took in the datum being read.")
 
+;; :C%PRESERVE reads a reader conditional as a value (%clojure-rd-preserved),
+;; and :C%PRESERVING is the mode inside one. The docstring below predates them
+;; and stays byte for byte: the JVM backend emits a docstring into the class of
+;; every program splicing the definition.
 (defvar rontolisp::%clojure-rd-cond
   nil
   "How the read takes a reader conditional, from its options map: NIL refuses
@@ -9132,6 +9222,8 @@
      (t (rontolisp::%clojure-runtime-exception
          (concatenate 'string "unsupported reader form #" (string c)))))))
 
+;; Under :preserve the whole list reads into a reader conditional
+;; (%clojure-rd-preserved).
 (defun rontolisp::%clojure-rd-conditional (rd)
   "#?(...) or #?@(...), the #? consumed: the oracle's readCondDelimited. The
    features and the taken branch read as ever; after a feature not taken, and
@@ -9144,9 +9236,6 @@
         (splicing nil))
     (if (null mode)
         (rontolisp::%clojure-runtime-exception "Conditional read not allowed"))
-    (if (eq mode :C%PRESERVE)
-        (error "~A"
-               "read-cond :preserve is not supported: no reader-conditional or tagged-literal value exists here"))
     (if (eql c #\@)
         (progn
           (setq splicing t)
@@ -9158,38 +9247,180 @@
         (rontolisp::%clojure-runtime-exception "EOF while reading character"))
     (if (not (char= c #\())
         (rontolisp::%clojure-runtime-exception "read-cond body must be a list"))
-    (let ((top (null rontolisp::%clojure-rd-pending)))
-      (let ((rontolisp::%clojure-rd-pending
-             (or rontolisp::%clojure-rd-pending (list :C%PENDING)))
-            (result :C%READ-SKIP)
-            (done nil))
-        (do ()
-            (done)
-          (if (eq result :C%READ-SKIP)
-              (let ((feature (rontolisp::%clojure-rd-item rd #\))))
-                (cond ((eq feature :C%READ-END) (setq done t))
-                      ((rontolisp::%clojure-rd-feature-p feature (cdr mode))
-                       (setq result (rontolisp::%clojure-rd-item rd #\)))
-                       (if (eq result :C%READ-END)
-                           (rontolisp::%clojure-runtime-exception
-                            "read-cond requires an even number of forms.")))
-                      (t (setq done (rontolisp::%clojure-rd-suppressed rd)))))
-              (setq done (rontolisp::%clojure-rd-suppressed rd))))
-        (cond ((or (eq result :C%READ-SKIP) (not splicing)) result)
-              ((not
-                (or (and (listp result) (not (keywordp (car result))))
-                    (and (vectorp result) (not (stringp result)))))
-               ;; a wrapper (:C%SET ...), (:C%KEYWORD ...) is no list read
-               (rontolisp::%clojure-runtime-exception
-                "Spliced form list in read-cond-splicing must implement java.util.List"))
-              (top
-               (rontolisp::%clojure-runtime-exception
-                "Reader conditional splicing not allowed at the top level."))
-              (t
-               (rplacd rontolisp::%clojure-rd-pending
-                       (append (coerce result 'list)
-                               (cdr rontolisp::%clojure-rd-pending)))
-               :C%READ-SKIP))))))
+    (if (rontolisp::%clojure-rd-preserve-p mode)
+        (rontolisp::%clojure-rd-preserved rd splicing)
+        (let ((top (null rontolisp::%clojure-rd-pending)))
+          (let ((rontolisp::%clojure-rd-pending
+                 (or rontolisp::%clojure-rd-pending (list :C%PENDING)))
+                (result :C%READ-SKIP)
+                (done nil))
+            (do ()
+                (done)
+              (if (eq result :C%READ-SKIP)
+                  (let ((feature (rontolisp::%clojure-rd-item rd #\))))
+                    (cond ((eq feature :C%READ-END) (setq done t))
+                     ((rontolisp::%clojure-rd-feature-p feature (cdr mode))
+                      (setq result (rontolisp::%clojure-rd-item rd #\)))
+                      (if (eq result :C%READ-END)
+                          (rontolisp::%clojure-runtime-exception
+                           "read-cond requires an even number of forms.")))
+                     (t (setq done (rontolisp::%clojure-rd-suppressed rd)))))
+                  (setq done (rontolisp::%clojure-rd-suppressed rd))))
+            (cond ((or (eq result :C%READ-SKIP) (not splicing)) result)
+             ((not
+               (or (and (listp result) (not (keywordp (car result))))
+                   (and (vectorp result) (not (stringp result)))))
+              ;; a wrapper (:C%SET ...), (:C%KEYWORD ...) is no list read
+              (rontolisp::%clojure-runtime-exception
+               "Spliced form list in read-cond-splicing must implement java.util.List"))
+             (top (rontolisp::%clojure-runtime-exception
+                   "Reader conditional splicing not allowed at the top level."))
+             (t
+              (rplacd rontolisp::%clojure-rd-pending
+                      (append (coerce result 'list)
+                              (cdr rontolisp::%clojure-rd-pending)))
+              :C%READ-SKIP)))))))
+
+(defun rontolisp::%clojure-rd-preserve-p (mode)
+  "Whether the read MODE (%clojure-rd-cond) preserves a reader conditional: a
+   read under {:read-cond :preserve}, inside one or not."
+  (or (eq mode :C%PRESERVE) (eq mode :C%PRESERVING)))
+
+(defun rontolisp::%clojure-rd-preserving-p ()
+  "Whether the datum being read is inside a preserved reader conditional,
+   where a tagged literal reads as one (the oracle's READ_COND_ENV)."
+  (eq rontolisp::%clojure-rd-cond :C%PRESERVING))
+
+(defun rontolisp::%clojure-rd-preserved (rd splicing)
+  "#?(...) or #?@(...) under {:read-cond :preserve}, read through its (: the
+   reader conditional over the whole list, its features never asked and a
+   splice inside it kept as one more reader conditional, like the oracle's
+   ReaderConditional; a splice at the top level reads too."
+  (let ((rontolisp::%clojure-rd-cond :C%PRESERVING))
+    (list :C%READER-COND (rontolisp::%clojure-rd-seq rd #\))
+          (if splicing t rontolisp::%clojure-false))))
+
+;;;; Reader conditionals and tagged literals as values.
+;;
+;; {:read-cond :preserve} reads #?(...) as (:C%READER-COND form splicing), the
+;; oracle's clojure.lang.ReaderConditional with SPLICING a Clojure boolean, and a
+;; tagged literal inside one as (:C%TAGGED form tag), its TaggedLiteral;
+;; reader-conditional and tagged-literal build them too. Each is an ILookup
+;; (:form, then :splicing? or :tag), = by its parts, printed back as it was
+;; read. Every test of one is an arm of the reader-value family
+;; (clojure/ClojureArms): a program that names neither constructor nor a read
+;; that may take :preserve sheds them.
+
+(defun rontolisp::%clojure-reader-value-p (x)
+  "Whether X is a reader conditional or a tagged literal."
+  (and (consp x) (or (eq (car x) :C%READER-COND) (eq (car x) :C%TAGGED))))
+
+(defun rontolisp::%clojure-reader-cond-p (x)
+  "Whether X is a reader conditional."
+  (and (consp x) (eq (car x) :C%READER-COND)))
+
+(defun rontolisp::%clojure-tagged-literal-p (x)
+  "Whether X is a tagged literal."
+  (and (consp x) (eq (car x) :C%TAGGED)))
+
+(defun rontolisp::%clojure-is-reader-conditional (x no)
+  "reader-conditional?: T for a reader conditional, else NO (false)."
+  (if (rontolisp::%clojure-reader-cond-p x) t no))
+
+(defun rontolisp::%clojure-is-tagged-literal (x no)
+  "tagged-literal?: T for a tagged literal, else NO (false)."
+  (if (rontolisp::%clojure-tagged-literal-p x) t no))
+
+(defun rontolisp::%clojure-reader-conditional (form splicing)
+  "(reader-conditional form splicing?): SPLICING must be a boolean, like the
+   oracle's Boolean cast (nil its NullPointerException)."
+  (if (or (eq splicing t) (eq splicing rontolisp::%clojure-false))
+      (list :C%READER-COND form splicing)
+      (rontolisp::%clojure-class-cast-exception-of
+       "reader-conditional needs a boolean splicing?" splicing)))
+
+(defun rontolisp::%clojure-reader-conditional-v (&rest args)
+  "reader-conditional as a value."
+  (rontolisp::%clojure-check-arity args 2 2 "reader-conditional")
+  (rontolisp::%clojure-reader-conditional (car args) (car (cdr args))))
+
+(defun rontolisp::%clojure-tagged-literal (tag form)
+  "(tagged-literal tag form): TAG must be a symbol or nil, like the oracle's
+   Symbol cast."
+  (if (or (null tag) (rontolisp::%clojure-real-symbol-p tag))
+      (list :C%TAGGED form tag)
+      (rontolisp::%clojure-class-cast-exception
+       "tagged-literal needs a symbol tag")))
+
+(defun rontolisp::%clojure-tagged-literal-v (&rest args)
+  "tagged-literal as a value."
+  (rontolisp::%clojure-check-arity args 2 2 "tagged-literal")
+  (rontolisp::%clojure-tagged-literal (car args) (car (cdr args))))
+
+(defun rontolisp::%clojure-reader-value-get (x key dflt)
+  "The ILookup read of the reader conditional or tagged literal X: :form, then
+   :splicing? of the one and :tag of the other; DFLT for any other key."
+  (let ((name (if (rontolisp::%clojure-keyword-p key) (car (cdr key)) nil)))
+    (cond ((equal name "form") (car (cdr x)))
+          ((equal name (if (eq (car x) :C%READER-COND) "splicing?" "tag"))
+           (car (cdr (cdr x))))
+          (t dflt))))
+
+(defun rontolisp::%clojure-reader-value-equal (a b)
+  "= of the reader conditional or tagged literal A and B: one of the same
+   kind whose parts are =."
+  (and (consp b) (eq (car a) (car b))
+       (rontolisp::%clojure-equal (car (cdr a)) (car (cdr b)))
+       (rontolisp::%clojure-equal (car (cdr (cdr a))) (car (cdr (cdr b))))))
+
+(defun rontolisp::%clojure-reader-value-hash (x)
+  "The hash of the reader conditional or tagged literal X, over its parts."
+  (logand (+ (* (rontolisp::%clojure-hash (car (cdr x))) 31)
+             (rontolisp::%clojure-hash (car (cdr (cdr x))))
+             (if (eq (car x) :C%READER-COND) 7 13)) 1048575))
+
+(defun rontolisp::%clojure-reader-value-class-name (x)
+  "The class of the reader conditional or tagged literal X."
+  (if (eq (car x) :C%READER-COND)
+      "clojure.lang.ReaderConditional"
+      "clojure.lang.TaggedLiteral"))
+
+(defun rontolisp::%clojure-reader-value-class (x)
+  "class of the reader conditional or tagged literal X, as a keyword."
+  (list :C%KEYWORD (rontolisp::%clojure-reader-value-class-name x)))
+
+(defun rontolisp::%clojure-reader-value-string (x)
+  "str of the reader conditional or tagged literal X: the oracle's Object
+   toString, Class@hash, over this hash."
+  (let ((h (rontolisp::%clojure-reader-value-hash x)) (digits nil))
+    (do ()
+        ((and digits (= h 0)))
+      (setq digits (cons (char "0123456789abcdef" (logand h 15)) digits))
+      (setq h (ash h -4)))
+    (concatenate 'string (rontolisp::%clojure-reader-value-class-name x) "@"
+                 (coerce digits 'string))))
+
+(defun rontolisp::%clojure-write-reader-value
+    (x nil-replacement readable stream labels)
+  "Write the reader conditional or tagged literal X as the oracle's
+   print-method does: #?(...) or #?@(...), and #tag form. A reader
+   conditional over an empty list writes it as ()."
+  (let ((form (car (cdr x))))
+    (if (eq (car x) :C%READER-COND)
+        (progn
+          (write-string "#?" stream)
+          (if (eq (car (cdr (cdr x))) t) (write-char #\@ stream))
+          (if (null form)
+              (write-string "()" stream)
+              (rontolisp::%clojure-write form nil-replacement readable stream
+                                         labels)))
+        (progn
+          (write-char #\# stream)
+          (rontolisp::%clojure-write (car (cdr (cdr x))) nil-replacement
+                                     readable stream labels)
+          (write-char #\Space stream)
+          (rontolisp::%clojure-write form nil-replacement readable stream
+                                     labels)))))
 
 (defun rontolisp::%clojure-rd-suppressed (rd)
   "Read and drop the next form of a reader conditional, suppressed: whether
@@ -9360,6 +9591,8 @@
               (setq chars (cons (rontolisp::%clojure-rd-next rd) chars))
               (setq done t)))))))
 
+;; Inside a preserved reader conditional any tag, a record's too, reads as a
+;; tagged literal.
 (defun rontolisp::%clojure-rd-record (rd)
   "A record literal #ns.Name{:k v ...} or #ns.Name[v ...], the hash consumed:
    the record over the body read as data (never evaluated); an undotted tag
@@ -9368,9 +9601,12 @@
    literals apart like the oracle's."
   (let ((tag
          (rontolisp::%clojure-rd-token rd (rontolisp::%clojure-rd-next rd))))
-    (if rontolisp::%clojure-rd-suppress
-        (list tag (rontolisp::%clojure-rd-required rd))
-        (rontolisp::%clojure-rd-record-of rd tag))))
+    (cond (rontolisp::%clojure-rd-suppress
+           (list tag (rontolisp::%clojure-rd-required rd)))
+          ((rontolisp::%clojure-rd-preserving-p)
+           (list :C%TAGGED (rontolisp::%clojure-rd-required rd)
+                 (rontolisp::%clojure-rd-symbol tag)))
+          (t (rontolisp::%clojure-rd-record-of rd tag)))))
 
 (defun rontolisp::%clojure-rd-record-of (rd tag)
   "The record literal of the class TAG, its tag consumed (%clojure-rd-record)."
@@ -9890,6 +10126,10 @@
              (rontolisp::%clojure-str-of headers "nil" t))))
     (nreverse out)))
 
+;; A fetched reply's body stream (rontolisp.http-client's :as :stream) is a
+;; Clack body as it is: the transport drains it, its octets unchanged, so a
+;; handler relaying an upstream reply relays it byte for byte (the arm goes from
+;; a program that fetches nothing).
 (defun rontolisp::%clojure-ring-body (body)
   "A Ring response :body as a Clack body: nil; a String; a seq whose members
    are written through str; an input stream (a clojure.java.io/reader, a
@@ -9897,6 +10137,7 @@
    java.io.File among them -- is refused by its printed value."
   (cond ((null body) nil)
         ((stringp body) (list body))
+        ((rontolisp::%clojure-async-stream-p body) body)
         ((streamp body)
          (let ((text (rontolisp::%clojure-read-to-end body)))
            (close body)
@@ -9919,6 +10160,759 @@
          (rontolisp::%clojure-ring-option response "headers" nil))
         (rontolisp::%clojure-ring-body
          (rontolisp::%clojure-ring-option response "body" nil))))
+
+;;;; rontolisp.http-client: babashka.http-client's API over rontolisp:fetch.
+;;;; The namespace is Clojure source (clojure/lib/rontolisp/http_client.clj):
+;;;; request and the six verbs, each an assoc of :uri and :method onto its
+;;;; options. request calls the kernel rontolisp.internal.http/request,
+;;;; %clojure-http-request below, over the options and a transport the namespace
+;;;; spells (fn [url options] (rontolisp.internal.http/fetch url options)) -- a
+;;;; call of rontolisp:fetch itself, so a program requiring the namespace names
+;;;; fetch, which is what every transport splice (http.lisp, the --host-fetch
+;;;; reactor, the --native runner) and the Preview 1 refusal read.
+;;;;
+;;;; The request is the oracle's request interceptors run over the options map:
+;;;; the default accept header under the caller's headers, a keyword name
+;;;; dropped beside a string one spelling the same field, :accept, :basic-auth,
+;;;; :oauth-token, :query-params onto the URL and :form-params into the body,
+;;;; the URL checked as java.net.URI/create and the JDK client check it. The
+;;;; exchange is async bodies: the request, the redirects the oracle's default
+;;;; client follows (the JDK's NORMAL policy, its method rewrite, its header
+;;;; filter across origins, at most four), the response map {:status :headers
+;;;; :body :uri :request}, the body per :as and the throw of an exceptional
+;;;; status. A plain call forces the exchange's future; :async true answers it,
+;;;; which deref and future? read (clojure/ClojureArms, the fetch family).
+;;;; Options needing what no transport here offers are refused by name.
+
+(defun rontolisp::%clojure-http-option (map name)
+  "The keyword NAME's value in the options map MAP, nil when MAP is nil or
+   holds none."
+  (rontolisp::%clojure-call-keyword (list :c%keyword name) map nil))
+
+(defun rontolisp::%clojure-http-table (opts what)
+  "The map OPTS as an equal hash table to read (a record its entries), NIL for
+   nil; anything else is the oracle's cast failure, WHAT naming the value."
+  (cond ((null opts) nil)
+        ((hash-table-p opts) opts)
+        ((rontolisp::%clojure-record-p opts) (car (cdr (cdr (cdr opts)))))
+        (t (rontolisp::%clojure-class-cast-exception
+            (concatenate 'string "rontolisp.http-client: " what
+                         " must be a map, not "
+                         (rontolisp::%clojure-str-of opts "nil" t))))))
+
+(defun rontolisp::%clojure-http-assoc (table pairs)
+  "A fresh map: TABLE's entries (an equal hash table, or nil) with PAIRS'
+   keyword names and values put over them, a later pair winning."
+  (let ((out
+         (if table
+             (rontolisp:plist-hash-table (rontolisp:hash-table-plist table)
+                                         :test 'equal)
+             (make-hash-table :test 'equal))))
+    (do ((p pairs (cdr (cdr p))))
+        ((null p) out)
+      (setf (gethash (list :c%keyword (car p)) out) (car (cdr p))))))
+
+(defun rontolisp::%clojure-http-key-name (k)
+  "A header or parameter key as the oracle's coerce-key spells it: a keyword
+   its name with its namespace, anything else through str."
+  (if (rontolisp::%clojure-keyword-p k)
+      (car (cdr k))
+      (rontolisp::%clojure-str-of k "" nil)))
+
+(defun rontolisp::%clojure-http-capitalize (name)
+  "The oracle's capitalize-header: each - separated part of NAME capitalized,
+   the empty parts at the end dropped with their dashes."
+  (let ((out (make-string-output-stream)) (start t) (end (length name)))
+    (loop
+      (if (or (= end 0) (not (char= (char name (- end 1)) #\-))) (return nil))
+      (setq end (- end 1)))
+    (dotimes (i end)
+      (let ((c (char name i)))
+        (write-char (if start (char-upcase c) (char-downcase c)) out)
+        (setq start (char= c #\-))))
+    (get-output-stream-string out)))
+
+(defun rontolisp::%clojure-http-headers (headers)
+  "The request's header map: the default accept under HEADERS (a map or nil),
+   then a keyword name dropped where a string key spells the same field, as
+   written or capitalized, like the oracle's prefer-string-keys."
+  (let ((out (make-hash-table :test 'equal)) (drop nil))
+    (setf (gethash (list :c%keyword "accept") out) "*/*")
+    (let ((given (rontolisp::%clojure-http-table headers ":headers")))
+      (if given (maphash (lambda (k v) (setf (gethash k out) v)) given)))
+    (maphash (lambda (k v)
+               (declare (ignore v))
+               (if (rontolisp::%clojure-keyword-p k)
+                   (let ((s (car (cdr k))))
+                     (if (or (rontolisp::%clojure-truthy
+                              (gethash (rontolisp::%clojure-http-capitalize s)
+                                       out))
+                             (rontolisp::%clojure-truthy (gethash s out)))
+                         (setq drop (cons k drop)))))) out)
+    (dolist (k drop) (remhash k out))
+    out))
+
+(defun rontolisp::%clojure-http-field (name value)
+  "One request header field (NAME . VALUE) as the JDK client takes it: a
+   string value, a name it does not reserve."
+  (cond ((null value)
+         (rontolisp::%clojure-null-pointer-exception
+          (concatenate 'string "rontolisp.http-client: header " name
+                       " has a nil value")))
+        ((not (stringp value))
+         (rontolisp::%clojure-illegal-argument-exception
+          "array element type mismatch"))
+        ((member (string-downcase name)
+                 '("connection" "content-length" "expect" "host" "upgrade")
+                 :test #'string=)
+         (rontolisp::%clojure-illegal-argument-exception
+          (concatenate 'string "restricted header name: \"" name "\"")))
+        (t (cons name value))))
+
+(defun rontolisp::%clojure-http-fields (headers)
+  "The fetch :headers alist of the header map HEADERS: one (name . value) per
+   value, a sequential value one field per member, like the oracle's
+   coerce-headers."
+  (let ((out nil))
+    (maphash (lambda (k v)
+               (let ((name (rontolisp::%clojure-http-key-name k)))
+                 (if (rontolisp::%clojure-ring-sequential-p v)
+                     (dolist (one (rontolisp::%clojure-seq-all v))
+                       (setq out
+                        (cons (rontolisp::%clojure-http-field name one) out)))
+                     (setq out
+                      (cons (rontolisp::%clojure-http-field name v) out)))))
+             headers)
+    (nreverse out)))
+
+(defun rontolisp::%clojure-http-method (m)
+  "The method fetch sends for the :method option M: a keyword's name or a
+   string, upcased, GET for nil. fetch sends seven methods; any other is
+   refused by name."
+  (let ((name
+         (cond ((null m) "GET")
+               ((rontolisp::%clojure-keyword-p m)
+                (let* ((s (car (cdr m))) (slash (position #\/ s)))
+                  (string-upcase
+                   (if (and slash (> slash 0)) (subseq s (+ slash 1)) s))))
+               ((stringp m) (string-upcase m))
+               (t (rontolisp::%clojure-class-cast-exception-of
+                   (concatenate 'string
+                    "rontolisp.http-client: :method must be a keyword, not "
+                    (rontolisp::%clojure-str-of m "nil" t)) m)))))
+    (if (member name '("GET" "HEAD" "POST" "PUT" "DELETE" "OPTIONS" "PATCH")
+                :test #'string=)
+        name
+        (rontolisp::%clojure-unsupported-operation-exception
+         (concatenate 'string "rontolisp.http-client: method " name
+                      " is not supported (rontolisp:fetch sends GET, HEAD, POST, PUT, DELETE, OPTIONS and PATCH)")))))
+
+(defun rontolisp::%clojure-http-uri-char-p (c set)
+  "Whether java.net.URI takes C unescaped in a component whose punctuation is
+   the string SET: a letter, a digit, an unreserved mark, a character of SET,
+   or a character past ASCII that is no control and no space."
+  (let ((code (char-code c)))
+    (cond ((>= code 128)
+           (not
+            (or (<= code 160) (= code 5760) (and (>= code 8192) (<= code 8202))
+                (= code 8232) (= code 8233) (= code 8239) (= code 8287)
+                (= code 12288))))
+          ((or (and (>= code 48) (<= code 57)) (and (>= code 65) (<= code 90))
+               (and (>= code 97) (<= code 122)))
+           t)
+          (t (if (or (find c "_-!.~'()*") (find c set)) t nil)))))
+
+(defun rontolisp::%clojure-http-bad-url (what url i)
+  "java.net.URI's refusal WHAT at index I of URL, the IllegalArgumentException
+   URI/create throws."
+  (rontolisp::%clojure-illegal-argument-exception
+   (concatenate 'string what " at index " (rontolisp::%clojure-str-of i "" nil)
+                ": " url)))
+
+(defun rontolisp::%clojure-http-scan-url (url start end set what)
+  "Checks the characters START..END of URL against java.net.URI's rule for the
+   component WHAT, whose punctuation is SET: a % must start an escape pair."
+  (let ((i start))
+    (loop
+      (if (>= i end) (return end))
+      (let ((c (char url i)))
+        (cond ((char= c #\%)
+               (if (and (< (+ i 2) end)
+                        (rontolisp::%clojure-ring-hex (char url (+ i 1)))
+                        (rontolisp::%clojure-ring-hex (char url (+ i 2))))
+                   (setq i (+ i 3))
+                   (rontolisp::%clojure-http-bad-url "Malformed escape pair" url
+                                                     i)))
+              ((rontolisp::%clojure-http-uri-char-p c set) (setq i (+ i 1)))
+              (t
+               (rontolisp::%clojure-http-bad-url
+                (concatenate 'string "Illegal character in " what) url i)))))))
+
+(defun rontolisp::%clojure-http-first-of (url chars start)
+  "The index of the first character of URL from START that is one of CHARS,
+   the length of URL when there is none."
+  (or (position-if (lambda (c) (find c chars)) url :start start) (length url)))
+
+(defun rontolisp::%clojure-http-url (uri)
+  "The request URL of the :uri option URI, a string as java.net.URI/create
+   parses it and the JDK client takes it: an absolute http or https URL with
+   an authority. Anything else is the IllegalArgumentException either throws;
+   a :uri map is refused by name."
+  (cond ((stringp uri) nil)
+        ((or (hash-table-p uri) (rontolisp::%clojure-record-p uri))
+         (rontolisp::%clojure-unsupported-operation-exception
+          "rontolisp.http-client: a :uri map is not supported; give the URL as a string"))
+        ((null uri)
+         (rontolisp::%clojure-null-pointer-exception
+          "rontolisp.http-client: the request has no :uri"))
+        (t (rontolisp::%clojure-class-cast-exception
+            (concatenate 'string
+             "rontolisp.http-client: the :uri must be a string, not "
+             (rontolisp::%clojure-str-of uri "nil" t)))))
+  (let* ((n (length uri))
+         (stop (rontolisp::%clojure-http-first-of uri "/?#" 0))
+         (colon (position #\: uri :end stop))
+         (scheme nil)
+         (p 0))
+    (if colon
+        (progn
+          (if (= colon 0)
+              (rontolisp::%clojure-http-bad-url "Expected scheme name" uri 0))
+          (dotimes (i colon)
+            (let ((c (char uri i)))
+              (if (not
+                   (or (alpha-char-p c)
+                       (and (> i 0) (or (digit-char-p c) (find c "+-.")))))
+                  (rontolisp::%clojure-http-bad-url
+                   "Illegal character in scheme name" uri i))))
+          (setq scheme (string-downcase (subseq uri 0 colon)))
+          (setq p (+ colon 1))))
+    (let ((authority nil))
+      (if (and (< (+ p 1) n) (char= (char uri p) #\/)
+               (char= (char uri (+ p 1)) #\/))
+          (let ((q (rontolisp::%clojure-http-first-of uri "/?#" (+ p 2))))
+            (if (and (= q (+ p 2)) (= q n))
+                (rontolisp::%clojure-http-bad-url "Expected authority" uri q))
+            (rontolisp::%clojure-http-scan-url uri (+ p 2) q ";:@&=+$,[]"
+                                               "authority")
+            (if (> q (+ p 2)) (setq authority t))
+            (setq p q)))
+      (let ((q (rontolisp::%clojure-http-first-of uri "?#" p)))
+        (rontolisp::%clojure-http-scan-url uri p q ";/:@&=+$," "path")
+        (setq p q))
+      (if (and (< p n) (char= (char uri p) #\?))
+          (let ((q (rontolisp::%clojure-http-first-of uri "#" (+ p 1))))
+            (rontolisp::%clojure-http-scan-url uri (+ p 1) q ";/?:@&=+$,[]"
+                                               "query")
+            (setq p q)))
+      (if (< p n)
+          (rontolisp::%clojure-http-scan-url uri (+ p 1) n ";/?:@&=+$,[]"
+                                             "fragment"))
+      (cond ((null scheme)
+             (rontolisp::%clojure-illegal-argument-exception
+              "URI with undefined scheme"))
+            ((not (or (string= scheme "http") (string= scheme "https")))
+             (rontolisp::%clojure-illegal-argument-exception
+              (concatenate 'string "invalid URI scheme " scheme)))
+            ((not authority)
+             (rontolisp::%clojure-illegal-argument-exception
+              (concatenate 'string "unsupported URI " uri)))
+            (t uri)))))
+
+(defun rontolisp::%clojure-http-join (parts)
+  "The strings PARTS joined by &."
+  (let ((out (make-string-output-stream)) (first t))
+    (dolist (part parts)
+      (if first (setq first nil) (write-char #\& out))
+      (write-string part out))
+    (get-output-stream-string out)))
+
+(defun rontolisp::%clojure-http-pair (k v)
+  "One key=value of a query or a form: both through java.net.URLEncoder in
+   UTF-8, the key as coerce-key spells it, the value through str."
+  (concatenate 'string
+               (rontolisp::%clojure-ring-form-encode
+                (rontolisp::%clojure-http-key-name k) nil) "="
+               (rontolisp::%clojure-ring-form-encode
+                (rontolisp::%clojure-str-of v "" nil) nil)))
+
+(defun rontolisp::%clojure-http-query (params)
+  "The query of the :query-params map PARAMS, the oracle's map->query-params:
+   a collection value one pair per member, at any depth."
+  (let ((pending
+         (mapcar (lambda (e) (cons (aref e 0) (aref e 1)))
+                 (rontolisp::%clojure-seq-all params)))
+        (parts nil))
+    (loop
+      (if (null pending)
+          (return (rontolisp::%clojure-http-join (nreverse parts))))
+      (let ((k (car (car pending))) (v (cdr (car pending))))
+        (setq pending (cdr pending))
+        (if (rontolisp::%clojure-is-coll v)
+            (setq pending
+                  (append (mapcar (lambda (one) (cons k one))
+                                  (rontolisp::%clojure-seq-all v)) pending))
+            (setq parts (cons (rontolisp::%clojure-http-pair k v) parts)))))))
+
+(defun rontolisp::%clojure-http-form (params)
+  "The body of the :form-params map PARAMS, the oracle's map->form-params:
+   each value through str."
+  (rontolisp::%clojure-http-join
+   (mapcar (lambda (e) (rontolisp::%clojure-http-pair (aref e 0) (aref e 1)))
+           (rontolisp::%clojure-seq-all params))))
+
+(defun rontolisp::%clojure-http-with-query (url query)
+  "URL with QUERY joined to its query (after an & when it has one), ahead of
+   its fragment."
+  (let* ((hash (position #\# url)) (base (if hash (subseq url 0 hash) url)))
+    (concatenate 'string base (if (position #\? base) "&" "?") query
+                 (if hash (subseq url hash) ""))))
+
+(defun rontolisp::%clojure-http-base64 (s)
+  "The padded base64 of the UTF-8 octets of the string S."
+  (let* ((octets (rontolisp:string-to-octets s))
+         (n (length octets))
+         (alphabet
+          "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/")
+         (out (make-string-output-stream))
+         (i 0))
+    (loop
+      (if (>= i n) (return (get-output-stream-string out)))
+      (let ((w
+             (+ (ash (aref octets i) 16)
+                (if (< (+ i 1) n) (ash (aref octets (+ i 1)) 8) 0)
+                (if (< (+ i 2) n) (aref octets (+ i 2)) 0))))
+        (write-char (char alphabet (logand (ash w -18) 63)) out)
+        (write-char (char alphabet (logand (ash w -12) 63)) out)
+        (write-char
+         (if (< (+ i 1) n) (char alphabet (logand (ash w -6) 63)) #\=) out)
+        (write-char (if (< (+ i 2) n) (char alphabet (logand w 63)) #\=) out)
+        (setq i (+ i 3))))))
+
+(defun rontolisp::%clojure-http-basic-auth (auth)
+  "The Authorization value of :basic-auth AUTH, [user pass] or {:user :pass}."
+  (let ((user
+         (if (rontolisp::%clojure-ring-sequential-p auth)
+             (rontolisp::%clojure-nth auth 0 nil)
+             (rontolisp::%clojure-http-option auth "user")))
+        (pass
+         (if (rontolisp::%clojure-ring-sequential-p auth)
+             (rontolisp::%clojure-nth auth 1 nil)
+             (rontolisp::%clojure-http-option auth "pass"))))
+    (concatenate 'string "Basic "
+                 (rontolisp::%clojure-http-base64
+                  (concatenate 'string (rontolisp::%clojure-str-of user "" nil)
+                               ":" (rontolisp::%clojure-str-of pass "" nil))))))
+
+(defun rontolisp::%clojure-http-body (body)
+  "The request body fetch sends for the :body option BODY: a string as it is,
+   nil none, an input stream (a clojure.java.io/reader, a request :body) or a
+   fetched reply's body stream read to its end; anything else the oracle's
+   ex-info."
+  (cond ((null body) nil)
+        ((stringp body) body)
+        ((rontolisp:streamp body)
+         (rontolisp::%future-force (rontolisp:read-all body)))
+        ((streamp body)
+         (let ((text (rontolisp::%clojure-read-to-end body)))
+           (close body)
+           text))
+        (t (error
+            (rontolisp::%clojure-ex-info
+             (concatenate 'string "Don't know how to convert "
+                          (rontolisp::%clojure-str-of body "nil" t) " to body")
+             (rontolisp::%clojure-http-assoc nil (list "body" body)) nil)))))
+
+(defun rontolisp::%clojure-http-refuse-options (req)
+  "Refuses by name an option of REQ no transport here honours."
+  (dolist (refused
+           '(("client" .
+              "a client is the transport rontolisp:fetch picks for the target")
+             ("interceptors" . "the request and response steps are built in")
+             ("timeout" . "rontolisp:fetch has no timeout yet")
+             ("version" . "the transport chooses the HTTP version")
+             ("multipart" . "a multipart body is not built in")
+             ("raw" . "the response is always the response map")
+             ("expect-continue" .
+              "the transport decides whether to expect 100-continue")))
+    (if (rontolisp::%clojure-truthy
+         (rontolisp::%clojure-http-option req (car refused)))
+        (rontolisp::%clojure-unsupported-operation-exception
+         (concatenate 'string "rontolisp.http-client: :" (car refused)
+                      " is not supported: " (cdr refused)))))
+  (if (equal (rontolisp::%clojure-http-option req "as")
+             (list :c%keyword "bytes"))
+      (rontolisp::%clojure-unsupported-operation-exception
+       "rontolisp.http-client: :as :bytes is not supported: no value here is a byte array; take :as :stream")))
+
+(defun rontolisp::%clojure-http-prepare (opts)
+  "The request of the options map OPTS as (request url method fields body):
+   the oracle's request steps over it -- the headers merged, :accept,
+   :basic-auth, :oauth-token, :query-params onto the URL, :form-params into
+   the body -- and REQUEST the map they leave, which the response carries."
+  (let* ((given (rontolisp::%clojure-http-table opts "the request"))
+         (headers
+          (rontolisp::%clojure-http-headers
+           (rontolisp::%clojure-http-option given "headers")))
+         (method
+          (or (rontolisp::%clojure-http-option given "method")
+              (rontolisp::%clojure-http-option given "request-method")))
+         (url
+          (rontolisp::%clojure-http-url
+           (or (rontolisp::%clojure-http-option given "uri")
+               (rontolisp::%clojure-http-option given "url"))))
+         (accept (rontolisp::%clojure-http-option given "accept"))
+         (auth (rontolisp::%clojure-http-option given "basic-auth"))
+         (token (rontolisp::%clojure-http-option given "oauth-token"))
+         (query (rontolisp::%clojure-http-option given "query-params"))
+         (form (rontolisp::%clojure-http-option given "form-params"))
+         (body (rontolisp::%clojure-http-option given "body")))
+    (rontolisp::%clojure-http-refuse-options given)
+    (if (rontolisp::%clojure-truthy accept)
+        (if (equal accept (list :c%keyword "json"))
+            (setf (gethash (list :c%keyword "accept") headers)
+                  "application/json")
+            (rontolisp::%clojure-illegal-argument-exception
+             (concatenate 'string "No matching clause: "
+                          (rontolisp::%clojure-str-of accept "nil" t)))))
+    (if (rontolisp::%clojure-truthy auth)
+        (setf (gethash (list :c%keyword "authorization") headers)
+              (rontolisp::%clojure-http-basic-auth auth)))
+    (if (rontolisp::%clojure-truthy token)
+        (setf (gethash (list :c%keyword "authorization") headers)
+              (concatenate 'string "Bearer "
+                           (rontolisp::%clojure-str-of token "" nil))))
+    (if (rontolisp::%clojure-truthy query)
+        (setq url
+              (rontolisp::%clojure-http-with-query url
+               (rontolisp::%clojure-http-query query))))
+    (if (rontolisp::%clojure-truthy form)
+        (progn
+          (setq body (rontolisp::%clojure-http-form form))
+          (if (not
+               (rontolisp::%clojure-truthy
+                (gethash (list :c%keyword "content-type") headers)))
+              (setf (gethash (list :c%keyword "content-type") headers)
+                    "application/x-www-form-urlencoded"))))
+    (let* ((sent
+            (append (list "headers" headers "uri" url)
+                    (if method (list "method" method))
+                    (if (rontolisp::%clojure-truthy form) (list "body" body))))
+           (req (rontolisp::%clojure-http-assoc given sent)))
+      (list req url (rontolisp::%clojure-http-method method)
+            (rontolisp::%clojure-http-fields headers)
+            (rontolisp::%clojure-http-body body)))))
+
+(defun rontolisp::%clojure-http-split (url)
+  "The parts (scheme authority path query fragment) of the URI reference URL,
+   each nil when absent but the path, a string."
+  (let* ((hash (position #\# url))
+         (fragment (if hash (subseq url (+ hash 1))))
+         (rest (if hash (subseq url 0 hash) url))
+         (mark (position #\? rest))
+         (query (if mark (subseq rest (+ mark 1))))
+         (rest (if mark (subseq rest 0 mark) rest))
+         (colon (position #\: rest :end (position #\/ rest)))
+         (scheme (if (and colon (> colon 0)) (subseq rest 0 colon)))
+         (rest (if scheme (subseq rest (+ colon 1)) rest))
+         (authority nil))
+    (if (and (>= (length rest) 2) (string= (subseq rest 0 2) "//"))
+        (let ((slash (or (position #\/ rest :start 2) (length rest))))
+          (setq authority (subseq rest 2 slash))
+          (setq rest (subseq rest slash))))
+    (list scheme authority rest query fragment)))
+
+(defun rontolisp::%clojure-http-normalize (path)
+  "java.net.URI's normalize of PATH: every . segment and every .. segment with
+   the segment ahead of it dropped, a leading .. kept, redundant slashes
+   gone."
+  (let ((absolute (and (> (length path) 0) (char= (char path 0) #\/)))
+        (segments nil)
+        (directory nil)
+        (start 0))
+    (loop
+      (let* ((slash (position #\/ path :start start))
+             (segment (subseq path start (or slash (length path)))))
+        (cond ((string= segment ".") (setq directory t))
+              ((string= segment "..")
+               (if (and segments (not (string= (car segments) "..")))
+                   (setq segments (cdr segments))
+                   (setq segments (cons segment segments)))
+               (setq directory t))
+              ((string= segment "")
+               (if (null slash) (setq directory (or directory segments))))
+              (t
+               (setq segments (cons segment segments))
+               (setq directory nil)))
+        (if (null slash) (return nil))
+        (setq start (+ slash 1))))
+    (let ((out (make-string-output-stream)) (first t))
+      (if absolute (write-char #\/ out))
+      (dolist (s (reverse segments))
+        (if first (setq first nil) (write-char #\/ out))
+        (write-string s out))
+      (if (and directory segments) (write-char #\/ out))
+      (get-output-stream-string out))))
+
+(defun rontolisp::%clojure-http-resolve (base location)
+  "The redirect target LOCATION resolved against the request URL BASE, as
+   java.net.URI's resolve answers it."
+  (let ((b (rontolisp::%clojure-http-split base))
+        (c (rontolisp::%clojure-http-split location)))
+    (if (car c)
+        location
+        (let ((scheme (car b))
+              (authority (nth 1 b))
+              (path (nth 2 b))
+              (query (nth 3 c))
+              (fragment (nth 4 c))
+              (cpath (nth 2 c)))
+          (cond ((and (null (nth 1 c)) (string= cpath "") fragment (null query))
+                 (setq query (nth 3 b))
+                 (setq path (nth 2 b)))
+                ((nth 1 c)
+                 (setq authority (nth 1 c))
+                 (setq path cpath))
+                ((and (> (length cpath) 0) (char= (char cpath 0) #\/))
+                 (setq path cpath))
+                (t (let ((slash (position #\/ path :from-end t)))
+                     (setq path
+                           (rontolisp::%clojure-http-normalize
+                            (if slash
+                                (concatenate 'string (subseq path 0 (+ slash 1))
+                                             cpath)
+                                (concatenate 'string "/" cpath)))))))
+          (concatenate 'string scheme ":"
+                       (if authority (concatenate 'string "//" authority) "")
+                       path (if query (concatenate 'string "?" query) "")
+                       (if fragment (concatenate 'string "#" fragment) ""))))))
+
+(defun rontolisp::%clojure-http-redirect (res url method fields body hops)
+  "The request the redirect reply RES to URL leads to under the JDK's NORMAL
+   policy -- (url method fields body) -- or NIL: a 301, 302, 303, 307 or 308
+   with a Location the client may follow (no https to http) on hop HOPS of at
+   most four. 303 turns any method and 301/302 a POST into a GET, dropping the
+   body; a target of another origin goes without the caller's Authorization,
+   Cookie, Origin, Referer and Host."
+  (let ((status (getf res :status)))
+    (if (and (member status '(301 302 303 307 308)) (< (+ hops 1) 5))
+        (let ((location
+               (cdr (assoc "location" (getf res :headers) :test #'string=))))
+          (if (null location)
+              (rontolisp::%clojure-io-exception
+               "java.io.UncheckedIOException: java.io.IOException: Invalid redirection"))
+          (let* ((target (rontolisp::%clojure-http-resolve url location))
+                 (from (rontolisp::%clojure-http-split url))
+                 (to (rontolisp::%clojure-http-split target))
+                 (next-method
+                  (cond ((= status 303) "GET")
+                        ((and (member status '(301 302))
+                              (string= method "POST"))
+                         "GET")
+                        (t method))))
+            (if (or (string-equal (car to) (car from))
+                    (string-equal (car to) "https"))
+                (let ((same-origin
+                       (and (string-equal (car to) (car from))
+                            (equal (nth 1 to) (nth 1 from))))
+                      (dropped
+                       '("authorization" "cookie" "origin" "referer" "host")))
+                  (list target next-method
+                        (if same-origin
+                            fields
+                            (remove-if (lambda (f)
+                                         (member (string-downcase (car f))
+                                                 dropped
+                                                 :test #'string=)) fields))
+                        (if (and (/= status 303) (string= next-method method))
+                            body
+                            nil)))))))))
+
+(defun rontolisp::%clojure-http-text (c)
+  "The oracle's toString of the condition C: an exception's report already
+   is; any other condition's class and report."
+  (if (c%e-parts c)
+      (princ-to-string c)
+      (concatenate 'string (car (rontolisp::%clojure-condition-chain c)) ": "
+                   (princ-to-string c))))
+
+;; The exchange's steps are plain defuns answering the future of an async-lambda,
+;; not async-defuns: the library pruner drops an unreached defun, and keeps every
+;; other top-level form.
+
+(defun rontolisp::%clojure-http-send (url method fields body transport)
+  "The future of one request through TRANSPORT, the call site's rontolisp:fetch:
+   its reply, a transport failure signalled as the oracle's IOException."
+  (funcall
+   (rontolisp:async-lambda ()
+     (handler-case (let ((res
+                          (rontolisp:await
+                           (funcall transport url
+                            (list :method method :headers fields :body body)))))
+                     res)
+       (error (c) (rontolisp::%clojure-io-exception (princ-to-string c)))))))
+
+(defun rontolisp::%clojure-http-follow (request transport)
+  "The future of the request (url method fields body) and the redirects it
+   leads to: the last reply and its URL, (res . url)."
+  (funcall
+   (rontolisp:async-lambda ()
+     (let ((url (nth 0 request))
+           (method (nth 1 request))
+           (fields (nth 2 request))
+           (body (nth 3 request))
+           (hops 0))
+       (loop
+         (let ((res
+                (rontolisp:await
+                 (rontolisp::%clojure-http-send url method fields body
+                                                transport))))
+           (let ((next
+                  (rontolisp::%clojure-http-redirect res url method fields body
+                                                     hops)))
+             (if (null next) (return (cons res url)))
+             (rontolisp:stream-close (getf res :body))
+             (setq url (nth 0 next))
+             (setq method (nth 1 next))
+             (setq fields (nth 2 next))
+             (setq body (nth 3 next))
+             (setq hops (+ hops 1)))))))))
+
+(defun rontolisp::%clojure-http-header-map (fields)
+  "The response :headers map of fetch's alist FIELDS (one pair per value, a
+   field's values in wire order): each name to its value, or to a vector of
+   them when the reply repeats the field."
+  (let ((out (make-hash-table :test 'equal)))
+    (dolist (f fields)
+      (let ((had (gethash (car f) out)))
+        (setf (gethash (car f) out)
+              (cond ((null had) (cdr f))
+                    ((stringp had) (vector had (cdr f)))
+                    (t (let ((grown (make-array (+ (length had) 1))))
+                         (dotimes (i (length had))
+                           (setf (aref grown i) (aref had i)))
+                         (setf (aref grown (length had)) (cdr f))
+                         grown))))))
+    out))
+
+(defun rontolisp::%clojure-http-check-body (res req as)
+  "Refuses what the response RES to the request REQ cannot answer per :as AS:
+   a compressed body (nothing here decompresses), an :as the oracle has no
+   clause for."
+  (let ((encoding
+         (cdr (assoc "content-encoding" (getf res :headers) :test #'string=))))
+    (if (and encoding
+         (member (string-downcase encoding) '("gzip" "deflate") :test #'string=)
+         (not
+          (eq (rontolisp::%clojure-http-option req "decompress-body")
+              rontolisp::%clojure-false))
+         (not
+          (equal (rontolisp::%clojure-http-option req "method")
+                 (list :c%keyword "head"))))
+        (rontolisp::%clojure-unsupported-operation-exception
+         (concatenate 'string "rontolisp.http-client: a " encoding
+                      " response body is not decompressed")))
+    (if (not
+         (or (null as) (equal as (list :c%keyword "string"))
+             (equal as (list :c%keyword "stream"))))
+        (rontolisp::%clojure-illegal-argument-exception
+         (concatenate 'string "No matching clause: "
+                      (rontolisp::%clojure-str-of as "nil" t))))))
+
+(defun rontolisp::%clojure-http-respond (prepared transport)
+  "The future of the response map of the prepared request PREPARED: the
+   exchange, the body per :as, the throw of an exceptional status."
+  (funcall
+   (rontolisp:async-lambda ()
+     (let* ((req (car prepared))
+            (reply
+             (rontolisp:await
+              (rontolisp::%clojure-http-follow (cdr prepared) transport)))
+            (res (car reply))
+            (status (getf res :status))
+            (as (rontolisp::%clojure-http-option req "as"))
+            (checked (rontolisp::%clojure-http-check-body res req as))
+            (text
+             (rontolisp:await
+              (if (equal as (list :c%keyword "stream"))
+                  nil
+                  (rontolisp:read-all (getf res :body)))))
+            (resp
+             (rontolisp::%clojure-http-assoc nil
+              (list "status" status "headers"
+               (rontolisp::%clojure-http-header-map (getf res :headers)) "body"
+               (if (equal as (list :c%keyword "stream")) (getf res :body) text)
+               "uri" (cdr reply) "request" req))))
+       (declare (ignore checked))
+       (if (and (not
+                 (eq (rontolisp::%clojure-http-option req "throw")
+                     rontolisp::%clojure-false))
+                (not
+                 (member status
+                  '(200 201 202 203 204 205 206 207 300 301 302 303 304 307))))
+           (let ((message
+                  (concatenate 'string "Exceptional status code: "
+                               (princ-to-string status))))
+             (error (rontolisp::%clojure-ex-info message resp nil))))
+       resp))))
+
+(defun rontolisp::%clojure-http-call (f x)
+  "The :async-then or :async-catch function F applied to X, a collection or
+   keyword through the IFn dispatcher."
+  (if (functionp f) (funcall f x) (rontolisp::%clojure-call f (list x))))
+
+(defun rontolisp::%clojure-http-failure (c req)
+  "What :async-catch is handed for the failure C of the request REQ, the
+   oracle's map: the CompletionException over C, C itself, its data, its
+   message and the request."
+  (let ((ex
+         (c%e-new '("java.util.concurrent.CompletionException"
+                    "java.lang.RuntimeException" "java.lang.Exception"
+                    "java.lang.Throwable") (rontolisp::%clojure-http-text c) nil
+                  c))
+        (data (rontolisp::%clojure-ex-data c))
+        (message (rontolisp::%clojure-ex-message c)))
+    (rontolisp::%clojure-http-assoc nil
+                                    (list "ex" ex "ex-cause" c "ex-data" data
+                                          "ex-message" message "request" req))))
+
+(defun rontolisp::%clojure-http-exchange (prepared transport async)
+  "The future of the response map of the prepared request PREPARED, through
+   :async-then and :async-catch when ASYNC."
+  (funcall
+   (rontolisp:async-lambda ()
+     (let* ((req (car prepared))
+            (then (if async (rontolisp::%clojure-http-option req "async-then")))
+            (catch
+             (if async (rontolisp::%clojure-http-option req "async-catch"))))
+       (if (rontolisp::%clojure-truthy catch)
+           (handler-case (let ((resp
+                                (rontolisp:await
+                                 (rontolisp::%clojure-http-respond prepared
+                                                                   transport))))
+                           (if (rontolisp::%clojure-truthy then)
+                               (rontolisp::%clojure-http-call then resp)
+                               resp))
+             (error (c)
+               (rontolisp::%clojure-http-call catch
+                (rontolisp::%clojure-http-failure c req))))
+           (let ((resp
+                  (rontolisp:await
+                   (rontolisp::%clojure-http-respond prepared transport))))
+             (if (rontolisp::%clojure-truthy then)
+                 (rontolisp::%clojure-http-call then resp)
+                 resp)))))))
+
+(defun rontolisp::%clojure-http-request (opts transport)
+  "rontolisp.http-client/request: the response map of the options map OPTS,
+   sent through TRANSPORT (the call site's rontolisp:fetch); the future of it
+   under :async true. The options are read and refused here, at the call."
+  (let* ((prepared (rontolisp::%clojure-http-prepare opts))
+         (async
+          (rontolisp::%clojure-truthy
+           (rontolisp::%clojure-http-option (car prepared) "async")))
+         (future (rontolisp::%clojure-http-exchange prepared transport async)))
+    (if async future (rontolisp::%future-force future))))
 
 ;;;; The ring.util kernels: rontolisp.internal.ring, the namespace only the
 ;;;; built-in Ring namespaces (src/main/resources/am/ik/rontolisp/clojure/lib)
@@ -11038,3 +12032,227 @@
             (rontolisp::%clojure-pp-base-string (numerator x) base nil) "/"
             (rontolisp::%clojure-pp-base-string (denominator x) base nil)))
           (t nil))))
+
+;;;; rontolisp.wit: a WIT value's Clojure spelling. An import's wrapper and a
+;;;; provider's adapter (clojure/ClojureWitLowering) convert each value the two
+;;;; languages spell differently by a descriptor of its WIT type:
+;;;;
+;;;;   NIL                           spelled alike: a number, a character, a
+;;;;                                 string, a byte string, a handle
+;;;;   :BOOL                         true / false     <-> T / NIL
+;;;;   (:OPTION . d)                 nil or the value <-> NIL or the value
+;;;;   (:LIST . d)                   a collection     <-> a list (a vector back)
+;;;;   (:TUPLE "wit" d ...)          a collection     <-> a list (a vector back)
+;;;;   (:RECORD "wit" (kw :KW d) ...)    a map        <-> a keyword plist
+;;;;   (:VARIANT "wit" (kw :KW [d]) ...) :case, [:case v] <-> :CASE, (:CASE . v)
+;;;;   (:RESULT "wit" ok error)      a variant whose payload-less arm the
+;;;;                                 boundary spells (:OK) all the same
+;;;;   (:FLAGS "wit" (kw :KW) ...)   a set of keywords <-> a keyword list
+;;;;
+;;;; where kw is a label's Clojure keyword, spelled as the WIT writes it, :KW
+;;;; the boundary's keyword (upcased, as the component lift spells it), and a
+;;;; variant's case carries a descriptor only when it carries a payload. The
+;;;; boundary's values are the settled Common Lisp tier (.kb/wit.md); a value
+;;;; naming no case or no field shape of its type is refused naming the type.
+;;;; Nothing here names the WIT runtime (wit.lisp): a reference would splice it
+;;;; into every Clojure program, so the lowering keeps what signals and catches
+;;;; rontolisp:wit-error in the program.
+
+(defun rontolisp::%clojure-wit-refuse (x text)
+  "Refuse the WIT value X: its rendering, then TEXT."
+  (rontolisp::%clojure-illegal-argument-exception
+   (concatenate 'string (rontolisp::%clojure-str-of x "nil" t) text)))
+
+(defun rontolisp::%clojure-wit-out (type x)
+  "The Clojure value X as the WIT boundary's value of the type TYPE describes."
+  (cond ((null type) x)
+   ((eq type :bool) (if (or (null x) (eq x rontolisp::%clojure-false)) nil t))
+   ((eq (car type) :option)
+    (if (null x) nil (rontolisp::%clojure-wit-out (cdr type) x)))
+   ((eq (car type) :list)
+    (let ((out nil))
+      (dolist (item (rontolisp::%clojure-seq-all x) (nreverse out))
+        (setq out (cons (rontolisp::%clojure-wit-out (cdr type) item) out)))))
+   ((eq (car type) :tuple) (rontolisp::%clojure-wit-out-tuple type x))
+   ((eq (car type) :record) (rontolisp::%clojure-wit-out-record type x))
+   ((eq (car type) :flags) (rontolisp::%clojure-wit-out-flags type x))
+   (t (rontolisp::%clojure-wit-out-case type x))))
+
+(defun rontolisp::%clojure-wit-out-tuple (type x)
+  "The collection X of a tuple's members as the tuple's list."
+  (let ((items (rontolisp::%clojure-seq-all x))
+        (types (cdr (cdr type)))
+        (out nil))
+    (if (/= (length items) (length types))
+        (rontolisp::%clojure-wit-refuse x
+                                        (concatenate 'string " is no "
+                                         (car (cdr type))
+                                         " (a collection of its members)")))
+    (do ((i items (cdr i)) (ty types (cdr ty)))
+        ((null ty) (nreverse out))
+      (setq out (cons (rontolisp::%clojure-wit-out (car ty) (car i)) out)))))
+
+(defun rontolisp::%clojure-wit-out-record (type x)
+  "The map X as a record's keyword plist, each field read by its keyword (a
+   missing one nil, an option's none)."
+  (if (not (rontolisp::%clojure-is-map x))
+      (rontolisp::%clojure-wit-refuse x
+                                      (concatenate 'string " is no "
+                                                   (car (cdr type))
+                                                   " (a map of its fields)")))
+  (let ((out nil))
+    (dolist (field (cdr (cdr type)) (nreverse out))
+      (setq out
+            (cons (rontolisp::%clojure-wit-out (car (cdr (cdr field)))
+                   (rontolisp::%clojure-call-keyword (car field) x nil))
+                  (cons (car (cdr field)) out))))))
+
+(defun rontolisp::%clojure-wit-out-case (type x)
+  "A case keyword X, or the vector [case payload], as a variant's, an enum's
+   or a result's boundary value: the case's keyword, (:CASE . payload) for a
+   case carrying one -- a result's arm a cons either way."
+  (let* ((vec (and (vectorp x) (not (stringp x)) (> (length x) 0)))
+         (entry
+          (rontolisp::%clojure-wit-case (cdr (cdr type))
+                                        (if vec (aref x 0) x))))
+    (if (null entry)
+        (rontolisp::%clojure-wit-refuse x
+         (concatenate 'string " is no case of " (car (cdr type)))))
+    (if (cdr (cdr entry))
+        (cons (car (cdr entry))
+              (rontolisp::%clojure-wit-out (car (cdr (cdr entry)))
+               (if (and vec (> (length x) 1)) (aref x 1))))
+        (if (eq (car type) :result)
+            (list (car (cdr entry)))
+            (car (cdr entry))))))
+
+(defun rontolisp::%clojure-wit-out-flags (type x)
+  "The collection X of flag keywords (a set) as the flags' keyword list, in
+   the order the WIT declares them."
+  (let ((members (rontolisp::%clojure-seq-all x)) (out nil))
+    (dolist (m members)
+      (if (null (rontolisp::%clojure-wit-case (cdr (cdr type)) m))
+          (rontolisp::%clojure-wit-refuse m
+           (concatenate 'string " is no flag of " (car (cdr type))))))
+    (dolist (flag (cdr (cdr type)) (nreverse out))
+      (if (do ((m members (cdr m)))
+              ((or (null m) (equal (car m) (car flag))) m))
+          (setq out (cons (car (cdr flag)) out))))))
+
+(defun rontolisp::%clojure-wit-case (entries k)
+  "The entry of ENTRIES whose Clojure keyword is K, or NIL."
+  (do ((e entries (cdr e))) ((or (null e) (equal (car (car e)) k)) (car e))))
+
+(defun rontolisp::%clojure-wit-in (type x)
+  "The WIT boundary's value X of the type TYPE describes as the Clojure value."
+  (cond ((null type) x)
+        ((eq type :bool) (if x t rontolisp::%clojure-false))
+        ((eq (car type) :option)
+         (if (null x) nil (rontolisp::%clojure-wit-in (cdr type) x)))
+        ((eq (car type) :list)
+         (let ((out nil))
+           (dolist (item x (coerce (nreverse out) 'vector))
+             (setq out
+                   (cons (rontolisp::%clojure-wit-in (cdr type) item) out)))))
+        ((eq (car type) :tuple)
+         (let ((out nil))
+           (do ((i x (cdr i)) (ty (cdr (cdr type)) (cdr ty)))
+               ((null ty) (coerce (nreverse out) 'vector))
+             (setq out
+                   (cons (rontolisp::%clojure-wit-in (car ty) (car i)) out)))))
+        ((eq (car type) :record)
+         (let ((m (make-hash-table :test 'equal)))
+           (dolist (field (cdr (cdr type)) m)
+             (setf (gethash (car field) m)
+                   (rontolisp::%clojure-wit-in (car (cdr (cdr field)))
+                                               (getf x (car (cdr field))))))))
+        ((eq (car type) :flags)
+         (let ((members nil))
+           (dolist (k x (rontolisp::%clojure-set-of (nreverse members)))
+             (setq members
+              (cons (car (rontolisp::%clojure-wit-label type k x)) members)))))
+        (t (let ((entry
+                  (rontolisp::%clojure-wit-label type (if (consp x) (car x) x)
+                                                 x)))
+             (if (cdr (cdr entry))
+                 (vector (car entry)
+                         (rontolisp::%clojure-wit-in (car (cdr (cdr entry)))
+                                                     (if (consp x) (cdr x))))
+                 (car entry))))))
+
+(defun rontolisp::%clojure-wit-label (type k x)
+  "The entry of TYPE's labels whose boundary keyword is K; a value X naming
+   none is refused."
+  (let ((entry
+         (do ((e (cdr (cdr type)) (cdr e)))
+             ((or (null e) (eq (car (cdr (car e))) k)) (car e)))))
+    (if (null entry)
+        (rontolisp::%clojure-wit-refuse x
+         (concatenate 'string " answered across the WIT boundary is no "
+                      (car (cdr type)))))
+    entry))
+
+(defun rontolisp::%clojure-wit-answer (envelope ok spec iface member)
+  "A WIT result's envelope -- (:OK . v) or (:ERROR . e), what a WASM build's
+   raw binding answers -- as the Clojure call's value: the ok arm converted by
+   OK, the error arm thrown (%clojure-wit-raise)."
+  (if (eq (car envelope) :ok)
+      (rontolisp::%clojure-wit-in ok (cdr envelope))
+      (rontolisp::%clojure-wit-raise iface member spec (cdr envelope) nil)))
+
+(defun rontolisp::%clojure-wit-raise (iface member spec payload cause)
+  "Throw a WIT result's error arm, the boundary's value PAYLOAD, as an
+   ExceptionInfo whose data holds its Clojure value under the key SPEC
+   carries (rontolisp.wit/error), converted by the descriptor SPEC carries;
+   CAUSE is the condition the arm was signalled as, or NIL."
+  (let ((data (make-hash-table :test 'equal)))
+    (setf (gethash (car spec) data)
+          (rontolisp::%clojure-wit-in (cdr spec) payload))
+    (rontolisp::%clojure-throw
+     (rontolisp::%clojure-ex-info
+      (concatenate 'string member " of " iface " answered its error arm") data
+      cause))))
+
+(defun rontolisp::%clojure-wit-serve (table provider member args)
+  "A Clojure PROVIDER's answer to a call of MEMBER of a WIT interface it
+   provides: the boundary's ARGS converted to Clojure values and the answer
+   back, by MEMBER's row of TABLE -- (key (\"member\" (d ...) result [error])
+   ...), clojure/ClojureWitLowering -- and a member with no row as it is."
+  (let ((row (rontolisp::%clojure-wit-row table member)))
+    (if (null row)
+        (apply provider member args)
+        (let ((in nil))
+          (do ((a args (cdr a)) (ty (car (cdr row)) (cdr ty)))
+              ((null a))
+            (setq in (cons (rontolisp::%clojure-wit-in (car ty) (car a)) in)))
+          (rontolisp::%clojure-wit-out (car (cdr (cdr row)))
+           (apply provider member (nreverse in)))))))
+
+(defun rontolisp::%clojure-wit-row (table member)
+  "MEMBER's row of a provider's TABLE, or NIL."
+  (do ((r (cdr table) (cdr r)))
+      ((or (null r) (equal (car (car r)) member)) (car r))))
+
+(defun rontolisp::%clojure-wit-arm-p (c)
+  "Whether the condition C is a WIT result's error arm a Clojure provider
+   threw: an exception whose data holds rontolisp.wit/error (the key
+   clojure/ClojureWitLowering.ERROR_KEY names)."
+  (let ((data (rontolisp::%clojure-ex-data c)) (miss (list nil)))
+    (and (hash-table-p data)
+     (not (eq (gethash '(:c%keyword "rontolisp.wit/error") data miss) miss)))))
+
+(defun rontolisp::%clojure-wit-arm-payload (table member c)
+  "The error arm C a Clojure provider threw (%clojure-wit-arm-p) as MEMBER's
+   boundary value, converted by its row of TABLE; a member answering no result
+   throws C on."
+  (let ((row (rontolisp::%clojure-wit-row table member)))
+    (if (and row (cdr (cdr (cdr row))))
+        (rontolisp::%clojure-wit-out (car (cdr (cdr (cdr row))))
+         (gethash (car table) (rontolisp::%clojure-ex-data c)))
+        (rontolisp::%clojure-throw c))))
+
+(defun rontolisp::%clojure-wit-arm-message (c)
+  "The message of the error arm C a Clojure provider threw, as the WIT
+   error's."
+  (let ((m (rontolisp::%clojure-ex-message c)))
+    (if (stringp m) m "WIT call failed")))

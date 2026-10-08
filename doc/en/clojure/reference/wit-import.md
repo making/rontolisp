@@ -41,6 +41,9 @@ $ rontolisp app.clj -o app.wasm --no-wasi --emit-js-glue
 
 The calls lower to the WIT's own bindings on each target: the provider on the interpreter
 and the JVM ([provide](wit-provide.md)), one `math.addInts` / `math.isEven` host import of a
-WASM core module, a canonical-ABI import under `--component`. A member outside the types the
-Clojure side carries is not bound, and a reference to it is refused naming its WIT line
-([What crosses](wit.md#what-crosses)).
+WASM core module, a canonical-ABI import under `--component`; a core module imports the
+members the program calls. Each value crosses in its Clojure spelling -- a record as a map, a
+variant's case as a keyword or `[:case payload]` -- and a `result`'s error arm throws an
+`ExceptionInfo` holding the error value ([What crosses](wit.md#what-crosses)). A member
+whose types reach a stream or a future, or an `async func`, is not bound, and a reference to
+it is refused naming its WIT line.

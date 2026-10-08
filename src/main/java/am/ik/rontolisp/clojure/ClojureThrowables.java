@@ -29,8 +29,11 @@ final class ClojureThrowables {
 	/**
 	 * The superclass of each throwable a program names without an import -- the oracle's
 	 * {@code java.lang} default imports ({@link ClojureNamespaceLowering#JAVA_LANG}) and
-	 * the classes between them and {@code Throwable} -- and of the public
-	 * {@code clojure.lang} throwables, read off clj 1.12.6 on JDK 25 (2026-10-03). A
+	 * the classes between them and {@code Throwable} -- of the public
+	 * {@code clojure.lang} throwables, read off clj 1.12.6 on JDK 25 (2026-10-03), and of
+	 * the three the HTTP client throws ({@code rontolisp.http-client}: a transport's
+	 * {@code IOException}, a failed future's {@code ExecutionException} under
+	 * {@code deref}, the {@code CompletionException} {@code :async-catch} is handed). A
 	 * table, not reflection, so a host that reflects only what its image holds (a native
 	 * image, the browser) resolves these alike; {@code ClojureThrowablesTest} pins the
 	 * {@code java} rows to reflection. The {@code clojure.lang} rows are what no host
@@ -86,6 +89,9 @@ final class ClojureThrowables {
 			Map.entry("java.lang.UnsupportedOperationException", "java.lang.RuntimeException"),
 			Map.entry("java.lang.VerifyError", "java.lang.LinkageError"),
 			Map.entry("java.lang.VirtualMachineError", "java.lang.Error"),
+			Map.entry("java.io.IOException", "java.lang.Exception"),
+			Map.entry("java.util.concurrent.ExecutionException", "java.lang.Exception"),
+			Map.entry("java.util.concurrent.CompletionException", "java.lang.RuntimeException"),
 			Map.entry("clojure.lang.ExceptionInfo", "java.lang.RuntimeException"),
 			Map.entry("clojure.lang.ArityException", "java.lang.IllegalArgumentException"),
 			Map.entry("clojure.lang.Compiler$CompilerException", "java.lang.RuntimeException"),

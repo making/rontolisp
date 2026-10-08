@@ -98,14 +98,20 @@ public final class ClojureHostBoundary implements ClojureBoundary {
 	}
 
 	/**
-	 * A compiler shape as the Clojure lowering's type: the representation by name (the
-	 * two enums spell the same members, {@code ClojureHostBoundaryTest}).
+	 * A compiler shape as the Clojure lowering's type, every nested shape with it: the
+	 * representation by name (the two enums spell the same members,
+	 * {@code ClojureHostBoundaryTest}).
 	 */
 	static @Nullable Type type(WitTypeMapper.@Nullable Shape shape) {
 		if (shape == null) {
 			return null;
 		}
-		return new Type(Rep.valueOf(shape.rep().name()), type(shape.element()), shape.wit());
+		List<Part> parts = new ArrayList<>();
+		for (WitTypeMapper.Part part : shape.parts()) {
+			parts.add(new Part(part.label(), type(part.shape())));
+		}
+		return new Type(Rep.valueOf(shape.rep().name()), type(shape.element()), shape.wit(), type(shape.error()),
+				List.copyOf(parts));
 	}
 
 }

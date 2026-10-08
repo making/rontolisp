@@ -560,6 +560,11 @@ final class ClojureCollectionLowering {
 		// sheds, ClojureArms)
 		branches.add(ClojureLowerUtil.list(ClojureSortedLowering.sortedTest(coll),
 				ClojureSortedLowering.runtime("sorted-get", coll, key, dflt)));
+		// a reader conditional or tagged literal is an ILookup of its parts (an arm a
+		// program making neither sheds, ClojureArms)
+		branches.add(ClojureLowerUtil.list(
+				ClojureLowerUtil.list(new LispSymbol(ClojurePredicateLowering.READER_VALUE_P), coll),
+				ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-READER-VALUE-GET"), coll, key, dflt)));
 		branches.add(hostArm(coll, hostCall("GET", coll, key, dflt)));
 		branches.add(ClojureLowerUtil.list(ClojureLowering.TRUE_CONST, dflt));
 		return branches;

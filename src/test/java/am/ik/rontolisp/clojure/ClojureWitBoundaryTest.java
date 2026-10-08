@@ -95,13 +95,19 @@ class ClojureWitBoundaryTest {
 		String ns = "c%wasi%ckeyvalue.store@0.2.0-draft/";
 		// the path is the program's own spelling, which every later pass resolves against
 		// the entry's directory; every member that crosses into Clojure is named, the
-		// drop too (bound only where the program names it, like a Common Lisp drop)
-		assertThat(wasmForms(program))
+		// drop too (bound only where the program names it, like a Common Lisp drop). A
+		// member answering a result binds behind its var's wrapper, which on WASM reads
+		// the envelope through the raw binding and throws the error arm itself
+		List<String> forms = wasmForms(program);
+		assertThat(forms)
 			.contains("(RONTOLISP:WIT-IMPORT \"kv.wit\" :INTERFACE "
-					+ "\"wasi:keyvalue/store@0.2.0-draft\" :NAMES ((\"open\" \"" + ns + "open\") (\"bucket-get\" \""
-					+ ns + "bucket-get\") (\"bucket-set\" \"" + ns + "bucket-set\") (\"bucket-drop\" \"" + ns
+					+ "\"wasi:keyvalue/store@0.2.0-draft\" :NAMES ((\"open\" \"" + ns + "open%wit\") (\"bucket-get\" \""
+					+ ns + "bucket-get%wit\") (\"bucket-set\" \"" + ns + "bucket-set%wit\") (\"bucket-drop\" \"" + ns
 					+ "bucket-drop\")))")
-			.anyMatch(form -> form.contains("(|" + ns + "bucket-set| |c%bucket| \"hits\" \"42\")"));
+			.anyMatch(form -> form.contains("(|" + ns + "bucket-set| |c%bucket| \"hits\" \"42\")"))
+			.anyMatch(form -> form.startsWith("(DEFUN |" + ns + "open| (")
+					&& form.contains("(RONTOLISP::%CLOJURE-WIT-ANSWER (|" + ns + "open%wit%raw| ")
+					&& form.endsWith(" \"wasi:keyvalue/store@0.2.0-draft\" \"open\"))"));
 	}
 
 	/**
@@ -453,6 +459,7 @@ class ClojureWitBoundaryTest {
 			  plot: func(p: point);
 			  later: async func(n: u32) -> u32;
 			  distance: func(a: s32, b: s32) -> s32;
+			  feed: func(body: option<stream<u8>>);
 			}
 			""";
 
@@ -461,15 +468,18 @@ class ClojureWitBoundaryTest {
 		write("geo.wit", GEO_WIT);
 		String head = "(ns app (:require [rontolisp.wit :as wit]))\n";
 		String imported = head + "(wit/import \"geo.wit\" {:interface \"example:geo/api\" :as geo})\n";
-		// the interface imports: what crosses is bound
+		// the interface imports: what has a Clojure value is bound, a record behind its
+		// var's converting wrapper
 		assertThat(wasmForms(write("ok.clj", imported + "(println (geo/distance 1 2))\n")))
-			.anyMatch(form -> form.contains("(\"distance\" \"c%example%cgeo.api@0.1.0/distance\")"));
-		assertRefused(imported + "(geo/plot 1)", "plot of example:geo/api@0.1.0 takes point (parameter 'p'), "
-				+ "a record, which the Clojure tier does not carry yet (geo.wit:5)");
+			.anyMatch(form -> form.contains("(\"distance\" \"c%example%cgeo.api@0.1.0/distance\")"))
+			.anyMatch(form -> form.contains("(\"plot\" \"c%example%cgeo.api@0.1.0/plot%wit\")"));
+		assertRefused(imported + "(geo/feed nil)",
+				"feed of example:geo/api@0.1.0 takes option<stream<u8>> (parameter 'body'), an option carrying a "
+						+ "stream, which the Clojure tier does not carry yet (geo.wit:8)");
 		assertRefused(imported + "(map geo/later [1])", "later of example:geo/api@0.1.0 is an async func: the future "
 				+ "it answers does not map onto a Clojure future yet (geo.wit:6)");
-		assertRefused(head + "(wit/import \"geo.wit\" {:interface \"example:geo/api\" :refer [plot]})",
-				"plot of example:geo/api@0.1.0 takes point");
+		assertRefused(head + "(wit/import \"geo.wit\" {:interface \"example:geo/api\" :refer [feed]})",
+				"feed of example:geo/api@0.1.0 takes option<stream<u8>>");
 		assertRefused(imported + "(geo/nope 1)", "No such var: geo/nope");
 		assertRefused(head + "(wit/import \"geo.wit\" {:interface \"example:geo/api\"})",
 				"rontolisp.wit/import takes :as or :refer");
@@ -477,6 +487,365 @@ class ClojureWitBoundaryTest {
 				"rontolisp.wit/import: cannot read WIT file nope.wit");
 		assertRefused(head + "(wit/import \"geo.wit\" {:interface \"example:geo/nope\" :as g})",
 				"geo.wit: no interface 'example:geo/nope'");
+	}
+
+	/** Every rich WIT type: records, enums, variants, flags, tuples, lists, results. */
+	private static final String SHAPES_WIT = """
+			package example:shapes@0.1.0;
+
+			interface api {
+			  enum color { red, green, DNS-blue }
+			  flags perms { read, write, exec }
+			  record point { x: s32, y: s32 }
+			  record shape { name: string, at: point, tags: list<string>, color: color, visible: bool, label: option<string> }
+			  variant figure { none, dot(point), poly(list<point>), named(tuple<string, u32>) }
+			  variant problem { too-big(u32), unknown }
+
+			  move: func(p: point, by: tuple<s32, s32>) -> point;
+			  describe: func(s: shape) -> shape;
+			  echo-figure: func(f: figure) -> figure;
+			  grant: func(p: perms) -> perms;
+			  colors: func() -> list<color>;
+			  checked: func(n: u32) -> result<u32, problem>;
+			  fallible: func(ok: bool) -> result<_, string>;
+			  take-result: func(r: result<point, problem>) -> string;
+			}
+			""";
+
+	private static final String SHAPES_IMPORT = """
+			(ns shapes
+			  (:require [rontolisp.wit :as wit]))
+
+			(wit/import "shapes.wit" {:interface "example:shapes/api" :as api})
+			""";
+
+	/**
+	 * Every row of the Clojure spelling on the interpreter and the JVM, where the program
+	 * provides the interface: a record is a map, an enum a keyword (the label as written,
+	 * upper case and all), a variant its case keyword or {@code [:case payload]}, flags a
+	 * set, a tuple and a list a vector, a {@code result} argument {@code [:ok v]} /
+	 * {@code [:error e]}. The provider sees those values too (its {@code take-result}
+	 * renders the argument it got, its {@code describe} negates a {@code bool} field),
+	 * and a {@code result}'s error arm it throws under {@code ::wit/error} reaches the
+	 * caller as an {@code ExceptionInfo} holding it, the provider's own exception its
+	 * cause. A value of no shape of its type is refused naming the type.
+	 */
+	@Test
+	void everyRichValueCrossesInClojuresSpellingOnTheInterpreterAndTheJvm() throws Exception {
+		write("shapes.wit", SHAPES_WIT);
+		Path program = write("shapes.clj", SHAPES_IMPORT
+				+ """
+
+						(def handlers
+						  {"move" (fn [p [dx dy]] {:x (+ (:x p) dx) :y (+ (:y p) dy)})
+						   "describe" (fn [s] (assoc s :name (str (:name s) "!") :visible (not (:visible s))))
+						   "echo-figure" (fn [f] f)
+						   "grant" (fn [p] (conj p :exec))
+						   "colors" (fn [] [:red :DNS-blue])
+						   "checked" (fn [n] (if (> n 10) (throw (ex-info "too big" {::wit/error [:too-big n]})) (* n 2)))
+						   "fallible" (fn [ok] (if ok nil (throw (ex-info "nope" {::wit/error "failed"}))))
+						   "take-result" (fn [r] (pr-str r))})
+
+						(wit/provide "example:shapes/api" (fn [member & args] (apply (get handlers member) args)))
+
+						(println (api/move {:x 1 :y 2} [10 20]))
+						(let [s (api/describe {:name "sq" :at {:x 0 :y 0} :tags ["a" "b"] :color :green :visible true})]
+						  (println (:name s) (:at s) (:tags s) (:color s) (:visible s) (:label s)))
+						(println (api/echo-figure :none) (api/echo-figure [:dot {:x 3 :y 4}]))
+						(println (api/echo-figure [:poly (list {:x 1 :y 1} {:x 2 :y 2})]) (api/echo-figure [:named ["n" 7]]))
+						(println (sort (map name (api/grant #{:read}))) (api/colors))
+						(println (api/checked 3))
+						(println (try (api/checked 30)
+						              (catch clojure.lang.ExceptionInfo e [(ex-message e) (ex-data e) (ex-message (ex-cause e))])))
+						(println (api/fallible true) (try (api/fallible false) (catch Exception e (::wit/error (ex-data e)))))
+						(println (api/take-result [:ok {:x 1 :y 2}]) (api/take-result [:error [:too-big 5]])
+						         (api/take-result [:error :unknown]))
+						(println (try (api/echo-figure :purple) (catch IllegalArgumentException e (ex-message e))))
+						(println (try (api/move [1 2] [1 1]) (catch IllegalArgumentException e (ex-message e))))
+						(println (try (api/move {:x 1 :y 2} [1]) (catch IllegalArgumentException e (ex-message e))))
+						(println (try (api/grant #{:read :fly}) (catch IllegalArgumentException e (ex-message e))))
+						""");
+		String expected = """
+				{:x 11, :y 22}
+				sq! {:x 0, :y 0} [a b] :green false nil
+				:none [:dot {:x 3, :y 4}]
+				[:poly [{:x 1, :y 1} {:x 2, :y 2}]] [:named [n 7]]
+				(exec read) [:red :DNS-blue]
+				6
+				[checked of example:shapes/api@0.1.0 answered its error arm #:rontolisp.wit{:error [:too-big 30]} too big]
+				nil failed
+				[:ok {:x 1, :y 2}] [:error [:too-big 5]] [:error :unknown]
+				:purple is no case of figure
+				[1 2] is no point (a map of its fields)
+				[1] is no tuple<s32, s32> (a collection of its members)
+				:fly is no flag of perms
+				""";
+		assertThat(HostBoundaryRuns.cli(program.toString())).isEqualTo(expected);
+		assertThat(HostBoundaryRuns.jvm(program, Files.createDirectories(this.dir.resolve("classes")), "Shapes"))
+			.isEqualTo(expected);
+	}
+
+	/**
+	 * The boundary between the two languages is the Common Lisp tier, so each sees its
+	 * own spelling of one interface: a Common Lisp provider answers a Clojure caller with
+	 * keyword plists and signals {@code rontolisp:wit-error}, which the caller reads as a
+	 * map and an {@code ExceptionInfo}; a Clojure provider answers a Common Lisp caller
+	 * with a plist and a {@code rontolisp:wit-error} carrying the Common Lisp payload.
+	 */
+	@Test
+	void eachLanguageSeesItsOwnSpellingOfOneInterface() throws Exception {
+		write("shapes.wit", SHAPES_WIT);
+		write("caller.clj", SHAPES_IMPORT
+				+ """
+
+						(println (api/move {:x 1 :y 2} [10 20]) (api/echo-figure [:dot {:x 3 :y 4}]))
+						(println (try (api/checked 30)
+						              (catch clojure.lang.ExceptionInfo e [(::wit/error (ex-data e)) (ex-message (ex-cause e))])))
+						""");
+		Path lispProvider = write("lisp-provider.lisp", """
+				(rontolisp:wit-provide "example:shapes/api@0.1.0"
+				  (lambda (member &rest args)
+				    (cond ((equal member "move")
+				           (list :x (+ (getf (first args) :x) (first (second args)))
+				                 :y (+ (getf (first args) :y) (second (second args)))))
+				          ((equal member "echo-figure") (first args))
+				          ((equal member "checked")
+				           (error 'rontolisp:wit-error :payload (cons :too-big (first args)) :message "too big")))))
+				(load "caller.clj")
+				""");
+		String clojureCalls = "{:x 11, :y 22} [:dot {:x 3, :y 4}]\n[[:too-big 30] too big]\n";
+		assertThat(HostBoundaryRuns.cli(lispProvider.toString())).isEqualTo(clojureCalls);
+		assertThat(HostBoundaryRuns.jvm(lispProvider, Files.createDirectories(this.dir.resolve("a")), "LispProvider"))
+			.isEqualTo(clojureCalls);
+		write("provider.clj", SHAPES_IMPORT + """
+
+				(wit/provide "example:shapes/api"
+				  (fn [member & args]
+				    (cond (= member "move") (let [[p [dx dy]] args] {:x (+ (:x p) dx) :y (+ (:y p) dy)})
+				          (= member "echo-figure") (first args)
+				          (= member "checked") (throw (ex-info "too big" {::wit/error [:too-big (first args)]})))))
+				""");
+		Path lispCaller = write("lisp-caller.lisp", """
+				(load "provider.clj")
+				(rontolisp:wit-import "shapes.wit" :interface "example:shapes/api" :package api)
+				(print (api:move '(:x 1 :y 2) '(10 20)))
+				(print (api:echo-figure '(:dot :x 3 :y 4)))
+				(print (handler-case (api:checked 30)
+				         (rontolisp:wit-error (e) (list (rontolisp:wit-error-payload e) (princ-to-string e)))))
+				""");
+		String lispCalls = "(:X 11 :Y 22)\n(:DOT :X 3 :Y 4)\n((:TOO-BIG . 30) \"too big\")\n";
+		assertThat(HostBoundaryRuns.cli(lispCaller.toString())).isEqualTo(lispCalls);
+		assertThat(HostBoundaryRuns.jvm(lispCaller, Files.createDirectories(this.dir.resolve("b")), "LispCaller"))
+			.isEqualTo(lispCalls);
+	}
+
+	/**
+	 * The rich types against wasmtime's real hosts under {@code --component}: an enum
+	 * argument, a variant carrying a record carrying a tuple both ways, and a
+	 * {@code result}'s error arm thrown with its value ({@code wasi:sockets}); a variant
+	 * whose cases mostly carry nothing and a {@code result} with no payload at all
+	 * ({@code wasi:http}). The interfaces are the hosts' own, trimmed (the subtype check
+	 * is structural).
+	 */
+	@Test
+	void aComponentCrossesWasmtimesSocketsAndHttpTypesInClojuresSpelling() throws Exception {
+		assumeTrue(HostWasmtime.isAvailable(), "no wasmtime " + HostWasmtime.MINIMUM_MAJOR + "+ on PATH");
+		write("sockets.wit", """
+				package wasi:sockets@0.3.0;
+
+				interface types {
+				  variant error-code {
+				    access-denied,
+				    not-supported,
+				    invalid-argument,
+				    out-of-memory,
+				    timeout,
+				    invalid-state,
+				    address-not-bindable,
+				    address-in-use,
+				    remote-unreachable,
+				    connection-refused,
+				    connection-broken,
+				    connection-reset,
+				    connection-aborted,
+				    datagram-too-large,
+				    other(option<string>)
+				  }
+
+				  enum ip-address-family {
+				    ipv4,
+				    ipv6
+				  }
+
+				  type ipv4-address = tuple<u8, u8, u8, u8>;
+				  type ipv6-address = tuple<u16, u16, u16, u16, u16, u16, u16, u16>;
+
+				  record ipv4-socket-address {
+				    port: u16,
+				    address: ipv4-address
+				  }
+
+				  record ipv6-socket-address {
+				    port: u16,
+				    flow-info: u32,
+				    address: ipv6-address,
+				    scope-id: u32
+				  }
+
+				  variant ip-socket-address {
+				    ipv4(ipv4-socket-address),
+				    ipv6(ipv6-socket-address)
+				  }
+
+				  resource tcp-socket {
+				    create: static func(address-family: ip-address-family) -> result<tcp-socket, error-code>;
+
+				    bind: func(local-address: ip-socket-address) -> result<_, error-code>;
+
+				    get-local-address: func() -> result<ip-socket-address, error-code>;
+				  }
+				}
+				""");
+		Path sockets = write("sockets.clj", """
+				(ns sockets
+				  (:require [rontolisp.wit :as wit]))
+
+				(wit/import "sockets.wit" {:interface "wasi:sockets/types@0.3.0" :as sock})
+
+				(let [s (sock/tcp-socket-create :ipv4)]
+				  (sock/tcp-socket-bind s [:ipv4 {:port 0 :address [127 0 0 1]}])
+				  (let [[family address] (sock/tcp-socket-get-local-address s)]
+				    (println family (:address address) (pos? (:port address))))
+				  (println (try (sock/tcp-socket-bind s [:ipv4 {:port 0 :address [127 0 0 1]}])
+				                (catch clojure.lang.ExceptionInfo e [(ex-message e) (::wit/error (ex-data e))]))))
+				""");
+		Path module = this.dir.resolve("sockets.wasm");
+		HostBoundaryRuns.cli(sockets.toString(), "-o", module.toString(), "--component");
+		HostWasmtime.ExecResult run = HostWasmtime.INSTANCE.execInContainer("wasmtime", "run", "-S",
+				"inherit-network=y", module.toString());
+		assertThat(run.exitCode()).as("wasmtime: %s", run.stderr()).isZero();
+		assertThat(run.stdout()).isEqualTo(":ipv4 [127 0 0 1] true\n"
+				+ "[tcp-socket-bind of wasi:sockets/types@0.3.0 answered its error arm :invalid-state]\n");
+		write("http.wit", """
+				package wasi:http@0.2.0;
+
+				interface types {
+				  variant method {
+				    get,
+				    head,
+				    post,
+				    put,
+				    delete,
+				    connect,
+				    options,
+				    trace,
+				    patch,
+				    other(string)
+				  }
+
+				  resource fields {
+				    constructor();
+				  }
+
+				  type headers = fields;
+
+				  resource outgoing-request {
+				    constructor(headers: headers);
+
+				    method: func() -> method;
+
+				    set-method: func(method: method) -> result;
+				  }
+				}
+				""");
+		Path http = write("http.clj", """
+				(ns http
+				  (:require [rontolisp.wit :as wit]))
+
+				(wit/import "http.wit" {:interface "wasi:http/types@0.2.0" :as http})
+
+				(let [request (http/outgoing-request-new (http/fields-new))]
+				  (println (http/outgoing-request-method request))
+				  (http/outgoing-request-set-method request :post)
+				  (println (http/outgoing-request-method request))
+				  (http/outgoing-request-set-method request [:other "PATCH"])
+				  (println (http/outgoing-request-method request))
+				  (println (try (http/outgoing-request-set-method request [:other "bad method"])
+				                (catch clojure.lang.ExceptionInfo e (ex-data e)))))
+				""");
+		Path httpModule = this.dir.resolve("http.wasm");
+		HostBoundaryRuns.cli(http.toString(), "-o", httpModule.toString(), "--component");
+		HostWasmtime.ExecResult httpRun = HostWasmtime.INSTANCE.execInContainer("wasmtime", "run", "-S", "http=y",
+				httpModule.toString());
+		assertThat(httpRun.exitCode()).as("wasmtime: %s", httpRun.stderr()).isZero();
+		assertThat(httpRun.stdout()).isEqualTo(":get\n:post\n[:other PATCH]\n#:rontolisp.wit{:error nil}\n");
+	}
+
+	/**
+	 * A WASM core module carries the flat values only, so it refuses a rich member as it
+	 * does for Common Lisp, naming the WIT line -- but only a member the program calls:
+	 * under a Clojure import a Preview 1 module binds the members the program names, like
+	 * a component, and one the program leaves alone costs nothing.
+	 */
+	@Test
+	void aPreview1ModuleRefusesARichMemberOnlyWhereTheProgramCallsIt() throws Exception {
+		write("flat.wit", """
+				package example:flat@0.1.0;
+
+				interface flat {
+				  record point { x: s32, y: s32 }
+				  move: func(p: point) -> point;
+				  twice: func(n: s32) -> s32;
+				}
+				""");
+		Path flat = write("flat.clj", """
+				(ns flat
+				  (:require [rontolisp.wit :as wit]))
+
+				(wit/import "flat.wit" {:interface "example:flat/flat" :as flat})
+
+				(defn report {:wasm/export {:params [:int] :returns :int}} [n] (flat/twice n))
+				""");
+		Path module = this.dir.resolve("flat.wasm");
+		HostBoundaryRuns.cli(flat.toString(), "-o", module.toString(), "--no-wasi");
+		assertThat(new String(Files.readAllBytes(module), StandardCharsets.ISO_8859_1)).contains("twice")
+			.doesNotContain("move");
+		Path moving = write("moving.clj", Files.readString(flat).replace("(flat/twice n)", "(:x (flat/move {:x n}))"));
+		assertThatThrownBy(() -> HostBoundaryRuns.cli(moving.toString(), "-o", module.toString(), "--no-wasi"))
+			.hasMessageContaining("flat.wit:5: 'move': the WIT type of parameter 'p' does not cross the Preview 1 "
+					+ "WASM import boundary");
+	}
+
+	@Test
+	void aSessionCrossesRichValuesInTheBufferThatCallsThem() throws Exception {
+		Path wit = write("shapes.wit", SHAPES_WIT);
+		ByteArrayOutputStream out = new ByteArrayOutputStream();
+		LispEvaluator evaluator = new LispEvaluator(new PrintStream(out, true, StandardCharsets.UTF_8));
+		SourceSession session = new SourceSession(SourceLanguage.CLOJURE, SourceStandards.DEFAULT,
+				SourceLoader.fileSystem());
+		for (String buffer : List.of("(require '[rontolisp.wit :as wit])",
+				"(wit/import \"" + wit.toString().replace("\\", "\\\\")
+						+ "\" {:interface \"example:shapes/api\" :as api})",
+				"(wit/provide \"example:shapes/api\" (fn [m p [dx dy]] {:x (+ (:x p) dx) :y (+ (:y p) dy)}))",
+				"(println (api/move {:x 1 :y 2} [10 20]))", "(println (:y (api/move {:x 0 :y 0} [1 1])))")) {
+			for (SourceSession.Step step : session.read(buffer, Features.INTERPRETER)) {
+				for (LispVal form : step.forms()) {
+					evaluator.eval(form);
+				}
+			}
+		}
+		assertThat(out.toString(StandardCharsets.UTF_8)).isEqualTo("{:x 11, :y 22}\n1\n");
+	}
+
+	@Test
+	void provideNamesAnInterfaceAnImportAboveBinds() throws Exception {
+		write("shapes.wit", SHAPES_WIT);
+		assertRefused(SHAPES_IMPORT + "(def iface \"example:shapes/api\")\n(wit/provide iface (fn [m] m))",
+				"rontolisp.wit/provide takes the interface as a string, the way an import above wrote it, not iface");
+		assertRefused(SHAPES_IMPORT + "(wit/provide \"example:other/api\" (fn [m] m))",
+				"rontolisp.wit/provide: example:other/api is no interface an import above binds -- import it first");
+		assertRefused(SHAPES_IMPORT + "(map wit/provide [\"example:shapes/api\"] [identity])",
+				"Can't take value of a macro: #'rontolisp.wit/provide");
 	}
 
 	@Test

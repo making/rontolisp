@@ -373,8 +373,11 @@
   `rontolisp test` は `clj` のコマンドではなく、cognitect test-runner の既定（`test` 以下の、
   名前が `-test` で終わる名前空間）に従います。
 - リーダ条件は `:rontolisp` も選びます。フォームが `:clj` より先に挙げていればそちらが先です。
-  `{:read-cond :preserve}` は最初の `#?` で拒否されます（リーダ条件やタグ付きリテラルの値が
-  ないため）。そのため `reader-conditional?` は `false` のままです。選ばれない分岐の中では、
+  `{:read-cond :preserve}` で読んだリーダ条件やタグ付きリテラルの `class` は、ここでのほかの
+  クラスと同じくキーワード（`:clojure.lang.ReaderConditional`・`:clojure.lang.TaggedLiteral`）
+  を返します。`str` が綴るハッシュは `=` に従うこの実装のもので、オラクルの `hashCode` では
+  ありません。`(reader-conditional nil false)` は `#?()` から読んだものと同じく `#?()` と
+  印字されます。選ばれない分岐の中では、
   未知のエイリアスの `::alias/kw` も読めます（オラクルは拒否します）。実行時のリーダは
   `#?@(:clj nil)` を何も展開しないものとして読み（オラクルは拒否します）、`:features` は
   ハッシュセットだけを受け取ります。

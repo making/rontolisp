@@ -97,6 +97,13 @@ final class JvmAsyncRuntimeBuilder {
 
 	static final String FUTUREP_METHOD = "_futurep";
 
+	/**
+	 * {@code _future_settled(Object) -> Object}: {@code rontolisp::%future-settled-p}, a
+	 * {@code CompletableFuture}'s {@code isDone} ({@code t} for any other value). Emitted
+	 * only when the program names the primitive, so no other program grows.
+	 */
+	static final String FUTURE_SETTLED_METHOD = "_future_settled";
+
 	static final String STREAMP_METHOD = "_streamp";
 
 	static final String MAKE_STREAM_METHOD = "_make_stream";
@@ -195,13 +202,16 @@ final class JvmAsyncRuntimeBuilder {
 	 * @param asyncAwaited {@code _asyncAwaited}, which {@code _await} hands a body's
 	 * exception to before rethrowing it -- the uncaught report's record of the await
 	 * ({@link JvmUncaughtHandler}) -- or null when no async body records its boundary
+	 * @param futureSettled whether the program names
+	 * {@code rontolisp::%future-settled-p}, whose {@code _future_settled} is emitted only
+	 * then
 	 * @return the runtime bodies
 	 */
 	static AsyncRuntime build(ConstantPool cp, ClassEntry thisClass, ClassEntry objectClass,
 			ClassEntry objectArrayClass, ClassEntry stringClass, JvmLispCompiler.ConditionChannel channel,
 			MethodRefEntry instanceInitRef, MethodRefEntry longValueOf, MethodRefEntry stringLength,
 			MethodRefEntry stringSubstring, MethodRefEntry stringConcat, @Nullable MethodRefEntry launcherRun,
-			@Nullable JvmMvChannel mvChannel, @Nullable MethodRefEntry asyncAwaited) {
+			@Nullable JvmMvChannel mvChannel, @Nullable MethodRefEntry asyncAwaited, boolean futureSettled) {
 		// --- shared class/method references ---
 		ClassEntry futureClass = cp.classEntry("java/util/concurrent/CompletableFuture");
 		MethodRefEntry futureCtor = cp.methodRef(futureClass, "<init>", "()V");
@@ -604,6 +614,27 @@ final class JvmAsyncRuntimeBuilder {
 			a.aconst_null();
 			a.areturn();
 			methods.add(new AsyncMethod(cp.utf8Entry(FUTUREP_METHOD), cp.utf8Entry(UNARY_DESC), a));
+		}
+
+		// --- _future_settled(v): a CompletableFuture's isDone, t for any other value
+		if (futureSettled) {
+			MethodCode a = new MethodCode();
+			MethodCode.Label yes = a.newLabel();
+			MethodCode.Label no = a.newLabel();
+			a.aload(0);
+			a.instanceOf(futureClass);
+			a.ifeq(yes);
+			a.aload(0);
+			a.checkcast(futureClass);
+			a.invokevirtual(futureIsDone);
+			a.ifeq(no);
+			a.labelBinding(yes);
+			a.ldc(tStr);
+			a.areturn();
+			a.labelBinding(no);
+			a.aconst_null();
+			a.areturn();
+			methods.add(new AsyncMethod(cp.utf8Entry(FUTURE_SETTLED_METHOD), cp.utf8Entry(UNARY_DESC), a));
 		}
 
 		// --- _streamp(v)

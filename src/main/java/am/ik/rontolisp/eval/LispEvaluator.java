@@ -2894,6 +2894,17 @@ public final class LispEvaluator {
 			}
 			return awaitValues(args.get(0));
 		}, true));
+		// %future-settled-p: whether a future has settled, without waiting (t for a
+		// non-future, which an await answers at once).
+		String futureSettledName = LispNames.FUTURE_SETTLED_QUALIFIED;
+		this.globalEnv.defineFunction(futureSettledName, new LispFunction(futureSettledName, args -> {
+			if (args.size() != 1) {
+				throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
+						LispNames.FUTURE_SETTLED_INTERNAL + " expects 1 argument, got " + args.size());
+			}
+			return !(args.get(0) instanceof LispFuture future) || future.future().isDone() ? LispTrue.INSTANCE
+					: LispNil.INSTANCE;
+		}, true));
 		// %stream-new: the from-thunk stream constructor every backend shares -- a read
 		// thunk, a close thunk and a drained flag is all a stream IS. Here rather than in
 		// Environment for the %async-run reason: pulling a chunk means APPLYING a Lisp
@@ -13419,7 +13430,9 @@ public final class LispEvaluator {
 				lispError.trace().reawaited(cf);
 				throw lispError;
 			}
-			throw new LispEvalException(java.util.Objects.requireNonNullElse(cause.getMessage(), "await failed"));
+			// a host failure with no message (the JDK client's ConnectException)
+			// reports its class, as the JVM backend's rethrown throwable does
+			throw new LispEvalException(java.util.Objects.requireNonNullElse(cause.getMessage(), cause.toString()));
 		}
 	}
 

@@ -31,7 +31,8 @@ final class ClojureBuiltinNamespaces {
 
 	/**
 	 * The shipped namespaces, each with the public vars of the oracle's namespace
-	 * (ring-core 1.15.5, ring-codec 1.3.0, clj 1.12.6) it leaves out and why.
+	 * (ring-core 1.15.5, ring-codec 1.3.0, clj 1.12.6; babashka.http-client 0.4.23 for
+	 * {@code rontolisp.http-client}, which has its API) it leaves out and why.
 	 */
 	private static final Map<String, Map<String, String>> SHIPPED = Map.ofEntries(
 			Map.entry("ring.util.response",
@@ -51,11 +52,23 @@ final class ClojureBuiltinNamespaces {
 					Map.of("CollReduce", "a protocol method of two arities is not built in", "coll-reduce",
 							"a protocol method of two arities is not built in", "iterator-reduce!",
 							"it reduces a java.util.Iterator")),
-			Map.entry("clojure.datafy", Map.of()),
+			Map.entry("clojure.datafy", Map.of()), Map.entry("clojure.stacktrace", Map.of()),
 			Map.entry("clojure.pprint",
 					Map.of("cl-format", "Common Lisp format directives over Clojure values are not built in",
 							"formatter", "Common Lisp format directives over Clojure values are not built in",
-							"formatter-out", "Common Lisp format directives over Clojure values are not built in")));
+							"formatter-out", "Common Lisp format directives over Clojure values are not built in")),
+			Map.entry("rontolisp.http-client", httpClientLeftOut()));
+
+	/**
+	 * The public vars of babashka.http-client 0.4.23 that {@code rontolisp.http-client}
+	 * leaves out: each builds or configures a {@code java.net.http.HttpClient}, and the
+	 * transport here is {@code rontolisp:fetch}, which the target picks.
+	 */
+	private static Map<String, String> httpClientLeftOut() {
+		String why = "it builds a java.net.http client; the transport is rontolisp:fetch, which the target picks";
+		return Map.of("client", why, "default-client-opts", why, "->ProxySelector", why, "->SSLContext", why,
+				"->Authenticator", why, "->CookieHandler", why, "->SSLParameters", why, "->Executor", why);
+	}
 
 	/**
 	 * The shipped namespaces {@code clj -M} has loaded before the program runs: a
@@ -154,13 +167,18 @@ final class ClojureBuiltinNamespaces {
 
 	/**
 	 * Why a namespace no root holds is refused, when it is one of the oracle's Ring
-	 * namespaces this front end does not ship.
+	 * namespaces this front end does not ship, or babashka.http-client's, whose API
+	 * {@code rontolisp.http-client} has under its own name.
 	 * @param ns the namespace
 	 * @return the refusal, or {@code null} for any other namespace
 	 */
 	static @Nullable String notShipped(String ns) {
 		if (ns.equals("ring.adapter.jetty")) {
 			return "ring.adapter.jetty is not built in: serve a Ring handler with ring.adapter.rontolisp/run-server";
+		}
+		if (ns.equals("babashka.http-client") || ns.startsWith("babashka.http-client.")) {
+			// a claimed name promises its options; the client here has a name of its own
+			return ns + " is not built in: rontolisp.http-client has its API over rontolisp:fetch";
 		}
 		return NOT_SHIPPED.contains(ns) ? ns + " is not built in: " + shippedRingList() : null;
 	}

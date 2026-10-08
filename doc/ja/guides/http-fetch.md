@@ -16,6 +16,10 @@
 | [`rontolisp:json-parse`](../reference/functions/rontolisp-json-parse.md) | JSON文字列をLispの値にパースする |
 | [`rontolisp:json-stringify`](../reference/functions/rontolisp-json-stringify.md) | Lispの値をJSON文字列にシリアライズする |
 
+Clojure のプログラムは [`rontolisp.http-client`](../clojure/reference/http-client.md)
+でリクエストを送ります。API は babashka.http-client と同じで、リクエストはこの `fetch` を
+通ります。
+
 > **バックエンドのサポート。** インタプリタとJVMコンパイル済みクラスはJDKの
 > `java.net.http.HttpClient` を使い、`fetch` が返った瞬間からリクエストは
 > バックグラウンドスレッドで走ります。WASMでは `fetch` は代わりに通信を

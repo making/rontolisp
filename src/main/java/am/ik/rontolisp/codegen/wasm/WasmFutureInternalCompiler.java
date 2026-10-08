@@ -47,6 +47,10 @@ final class WasmFutureInternalCompiler {
 			ctx.writer.writeUnsignedLeb128(streamType);
 			return;
 		}
+		if (LispNames.FUTURE_SETTLED_INTERNAL.equals(member)) {
+			compileSettled(member, cons, ctx);
+			return;
+		}
 		if (ctx.asyncFuncBase < 0) {
 			// %future-force is the one member with a meaning OUTSIDE asyncMode: every
 			// non-asyncMode future is the degenerate settled TYPE_P1_FUTURE, so the
@@ -126,6 +130,51 @@ final class WasmFutureInternalCompiler {
 					+ " scheduler");
 			default -> throw new IllegalArgumentException("unknown future internal: " + member);
 		}
+	}
+
+	/**
+	 * {@code %future-settled-p}: whether the value has settled without waiting -- the
+	 * asyncMode {@code TYPE_FUTURE}'s state (pending is 0), a degenerate
+	 * {@code TYPE_P1_FUTURE}'s kind (only a deferred one is unsettled), any other value
+	 * settled -- as {@code t} or {@code nil}.
+	 */
+	private static void compileSettled(String member, LispCons cons, WasmLispCompiler.Ctx ctx) {
+		List<LispVal> args = cons.toList();
+		expectArgs(member, args, 1);
+		WasmExprCompiler.compileExpr(args.get(1), ctx);
+		int value = ctx.allocTemp();
+		ctx.writer.write(Instruction.SET_LOCAL);
+		ctx.writer.writeUnsignedLeb128(value);
+		boolean asyncMode = ctx.futureTypeIndex >= 0;
+		int type = asyncMode ? ctx.futureTypeIndex : WasmLispCompiler.TYPE_P1_FUTURE;
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writer.writeUnsignedLeb128(value);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		ctx.writer.writeHeapType(type);
+		ctx.writer.write(Instruction.IF, Type.I32.code());
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writer.writeUnsignedLeb128(value);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		ctx.writer.writeHeapType(type);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		ctx.writer.writeUnsignedLeb128(type);
+		ctx.writer.writeUnsignedLeb128(0);
+		if (asyncMode) {
+			// TYPE_FUTURE's state: 0 pending, 1 fulfilled, 2 rejected
+			ctx.writer.write(Instruction.I32_CONST);
+			ctx.writer.writeSignedLeb128(0);
+		}
+		else {
+			// TYPE_P1_FUTURE's kind: every one but the deferred is settled at creation
+			ctx.writer.write(Instruction.I32_CONST);
+			ctx.writer.writeSignedLeb128(WasmP1FutureRuntimeBuilder.KIND_DEFERRED);
+		}
+		ctx.writer.write(Instruction.I32_NE);
+		ctx.writer.write(Instruction.ELSE);
+		ctx.writer.write(Instruction.I32_CONST);
+		ctx.writer.writeSignedLeb128(1);
+		ctx.writer.write(Instruction.END);
+		WasmEmitHelper.emitBoolFromI32(ctx);
 	}
 
 	private static void expectArgs(String member, List<LispVal> args, int expected) {

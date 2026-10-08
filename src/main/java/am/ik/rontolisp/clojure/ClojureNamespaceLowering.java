@@ -98,13 +98,13 @@ final class ClojureNamespaceLowering {
 			return ClojureRingLowering.ringValue(ref.var());
 		}
 		if (ClojureKernelLowering.isKernelNamespace(ref.ns())) {
-			return ClojureKernelLowering.kernelValue(ref.ns(), ref.var());
+			return ClojureKernelLowering.kernelValue(ctx, ref.ns(), ref.var());
 		}
 		if (ref.ns().equals(ClojureWasmLowering.NAMESPACE)) {
 			return ClojureWasmLowering.value(ref.var());
 		}
 		if (ref.ns().equals(ClojureWitLowering.NAMESPACE)) {
-			return ClojureWitLowering.value(ctx, ref.var());
+			return ClojureWitLowering.value(ref.var());
 		}
 		return ClojureStringLowering.stringValue(ctx, ref.var());
 	}

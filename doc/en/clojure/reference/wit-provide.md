@@ -8,8 +8,10 @@ name (a string such as `"open"` or `"bucket-get"`) followed by that member's arg
 resource method's handle first; what it answers is the call's value, and what it throws, the
 call throws. A later `provide` of the interface replaces it. The answer is `interface`.
 
-`interface` is the interface's full id; the spelling a [rontolisp.wit/import](wit-import.md)
-above wrote (`"wasi:keyvalue/store"`) stands for the same id.
+`interface` is a string: the full id of an interface a [rontolisp.wit/import](wit-import.md)
+above binds, or the spelling that import wrote (`"wasi:keyvalue/store"`). Any other interface,
+or one computed when the program runs, is refused when the program compiles: the import's WIT
+is what the provider's values are converted by. For the same reason `provide` has no value.
 
 ```console
 $ cat hits.clj
@@ -35,5 +37,13 @@ $ rontolisp hits.clj
 
 A WASM build's host provides every import, so there `provide` binds nothing: the same source
 compiled with `--component` runs against wasmtime's own `wasi:keyvalue`
-(`wasmtime run -S keyvalue=y`). A provider sees the boundary's values: a `bool` argument
-arrives as `true` or `nil`. With no provider bound, a call throws naming the interface.
+(`wasmtime run -S keyvalue=y`). With no provider bound, a call throws naming the interface.
+
+A provider sees and answers Clojure values, the ones a caller passes and gets
+([What crosses](wit.md#what-crosses)): a `bool` arrives as `true` or `false`, a record as a
+map, a variant's case as a keyword or `[:case payload]`. A member answering a `result` answers
+its ok value; its error arm is an `ExceptionInfo` holding the error value under
+`:rontolisp.wit/error`, the exception a caller catches:
+`(throw (ex-info "no such store" {::wit/error :no-such-store}))`. A Common Lisp program calling
+the interface receives that arm as `rontolisp:wit-error`, its payload in the Common Lisp
+spelling (`:NO-SUCH-STORE`).

@@ -67,6 +67,44 @@ public final class ClojureArms {
 	static final String LISP_INSTANCE_P = "RONTOLISP::%CLOJURE-LISP-INSTANCE-P";
 
 	/**
+	 * The fetch family's timed {@code deref} of a rontolisp future
+	 * ({@code clojure.lisp}), which polls the future between sleeps.
+	 */
+	static final String FUTURE_GET_WITHIN = "RONTOLISP::%CLOJURE-FUTURE-GET-WITHIN";
+
+	/**
+	 * Whether the lowered program waits on a rontolisp future with a timeout: it can make
+	 * one ({@link Family#FETCH}'s producer) and a timed {@code deref} keeps its fetch
+	 * arm, whose library function sleeps between polls. The library splices after the
+	 * {@code --component}'s {@code sleep} (wait.lisp) would have, so that splice asks.
+	 * @param program the top-level forms
+	 * @return {@code true} when the program will call {@code sleep} through the arm
+	 */
+	public static boolean sleepsOnAFuture(List<LispVal> program) {
+		Scan fetch = scan(program, Family.FETCH);
+		if (!fetch.builds()) {
+			return false;
+		}
+		for (LispVal form : program) {
+			if (mentions(form, FUTURE_GET_WITHIN)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	private static boolean mentions(LispVal form, String name) {
+		LispVal rest = form;
+		while (rest instanceof LispCons cons) {
+			if (mentions(cons.car(), name)) {
+				return true;
+			}
+			rest = cons.cdr();
+		}
+		return rest instanceof LispSymbol symbol && symbol.name().equals(name);
+	}
+
+	/**
 	 * Whether a family's arms fold where the host is not (wasm), whatever the program
 	 * names: only the host makes a value of it.
 	 * @param family the family
@@ -184,14 +222,14 @@ public final class ClojureArms {
 				"RONTOLISP::%CLOJURE-READ-STRING-OPTS", "RONTOLISP::%CLOJURE-RD-ANON-FN", "RONTOLISP::%CLOJURE-RD-ARG",
 				"RONTOLISP::%CLOJURE-RD-ARG-PARAM", "RONTOLISP::%CLOJURE-RD-ATOM",
 				"RONTOLISP::%CLOJURE-RD-BUILD-RECORD", "RONTOLISP::%CLOJURE-RD-CONDITIONAL",
-				"RONTOLISP::%CLOJURE-RD-DISPATCH", "RONTOLISP::%CLOJURE-RD-FORM", "RONTOLISP::%CLOJURE-RD-FORM-AT",
-				"RONTOLISP::%CLOJURE-RD-ITEM", "RONTOLISP::%CLOJURE-RD-KEYWORD", "RONTOLISP::%CLOJURE-RD-MAP",
-				"RONTOLISP::%CLOJURE-RD-META", "RONTOLISP::%CLOJURE-RD-RECORD", "RONTOLISP::%CLOJURE-RD-RECORD-OF",
-				"RONTOLISP::%CLOJURE-RD-REQUIRED", "RONTOLISP::%CLOJURE-RD-SEQ", "RONTOLISP::%CLOJURE-RD-SET",
-				"RONTOLISP::%CLOJURE-RD-SUPPRESSED", "RONTOLISP::%CLOJURE-RD-SYMBOL", "RONTOLISP::%CLOJURE-RD-SYMBOLIC",
-				"RONTOLISP::%CLOJURE-RD-WRAP", "RONTOLISP::%CLOJURE-RD-ATOM-OF", "RONTOLISP::%CLOJURE-RD-NS-MAP",
-				"RONTOLISP::%CLOJURE-RD-NS-MAP-OF", "RONTOLISP::%CLOJURE-RD-NS-KEY", "RONTOLISP::%CLOJURE-RD-IDENT",
-				"RONTOLISP::%CLOJURE-RD-EDN-FORM-AT", "RONTOLISP::%CLOJURE-RD-EDN-ATOM",
+				"RONTOLISP::%CLOJURE-RD-PRESERVED", "RONTOLISP::%CLOJURE-RD-DISPATCH", "RONTOLISP::%CLOJURE-RD-FORM",
+				"RONTOLISP::%CLOJURE-RD-FORM-AT", "RONTOLISP::%CLOJURE-RD-ITEM", "RONTOLISP::%CLOJURE-RD-KEYWORD",
+				"RONTOLISP::%CLOJURE-RD-MAP", "RONTOLISP::%CLOJURE-RD-META", "RONTOLISP::%CLOJURE-RD-RECORD",
+				"RONTOLISP::%CLOJURE-RD-RECORD-OF", "RONTOLISP::%CLOJURE-RD-REQUIRED", "RONTOLISP::%CLOJURE-RD-SEQ",
+				"RONTOLISP::%CLOJURE-RD-SET", "RONTOLISP::%CLOJURE-RD-SUPPRESSED", "RONTOLISP::%CLOJURE-RD-SYMBOL",
+				"RONTOLISP::%CLOJURE-RD-SYMBOLIC", "RONTOLISP::%CLOJURE-RD-WRAP", "RONTOLISP::%CLOJURE-RD-ATOM-OF",
+				"RONTOLISP::%CLOJURE-RD-NS-MAP", "RONTOLISP::%CLOJURE-RD-NS-MAP-OF", "RONTOLISP::%CLOJURE-RD-NS-KEY",
+				"RONTOLISP::%CLOJURE-RD-IDENT", "RONTOLISP::%CLOJURE-RD-EDN-FORM-AT", "RONTOLISP::%CLOJURE-RD-EDN-ATOM",
 				"RONTOLISP::%CLOJURE-RD-EDN-DISPATCH", "RONTOLISP::%CLOJURE-RD-EDN-TAGGED",
 				"RONTOLISP::%CLOJURE-EDN-FROM", "RONTOLISP::%CLOJURE-EDN-READ-STRING-1",
 				"RONTOLISP::%CLOJURE-EDN-READ-STRING", "RONTOLISP::%CLOJURE-EDN-READ",
@@ -241,6 +279,28 @@ public final class ClojureArms {
 				Set.of()),
 
 		/**
+		 * A reader conditional or a tagged literal, which the printer, {@code str},
+		 * {@code =}, the structural keys and their hash, {@code get}, {@code class} and
+		 * {@code instance?} read, and the run-time reader's {@code :preserve} clauses
+		 * build: only a read that may take an options map ({@code read-string} or
+		 * {@code read} with one, or as a value) and the two constructors make one. The
+		 * aliases are the two predicates' calls {@code (p value false)}, which stand for
+		 * {@code (progn value false)}.
+		 */
+		READER_VALUE("reader-value",
+				Set.of(ClojurePredicateLowering.READER_VALUE_P, ClojurePredicateLowering.READER_COND_P,
+						ClojurePredicateLowering.TAGGED_LITERAL_P, "RONTOLISP::%CLOJURE-RD-PRESERVE-P",
+						"RONTOLISP::%CLOJURE-RD-PRESERVING-P"),
+				Set.of(),
+				Map.of("RONTOLISP::%CLOJURE-IS-READER-CONDITIONAL", "PROGN", "RONTOLISP::%CLOJURE-IS-TAGGED-LITERAL",
+						"PROGN"),
+				Set.of("RONTOLISP::%CLOJURE-READ-STRING-OPTS", "RONTOLISP::%CLOJURE-READ-OPTS",
+						"RONTOLISP::%CLOJURE-READ-STRING-V", "RONTOLISP::%CLOJURE-READ-V",
+						"RONTOLISP::%CLOJURE-READER-CONDITIONAL", "RONTOLISP::%CLOJURE-READER-CONDITIONAL-V",
+						"RONTOLISP::%CLOJURE-TAGGED-LITERAL", "RONTOLISP::%CLOJURE-TAGGED-LITERAL-V"),
+				Set.of()),
+
+		/**
 		 * A namespace, which the printer, {@code str} and {@code class} spell: only a
 		 * read of {@code *ns*} (whose root and switches build one), {@code the-ns} and
 		 * {@code find-ns} hand one to the program.
@@ -248,6 +308,20 @@ public final class ClojureArms {
 		NAMESPACE("namespace", Set.of("RONTOLISP::%CLOJURE-NS-OBJECT-P"), Set.of(), Map.of(),
 				Set.of(ClojureCoreSpecials.NS_OBJECT, "RONTOLISP::%CLOJURE-THE-NS", "RONTOLISP::%CLOJURE-FIND-NS"),
 				Set.of()),
+
+		/**
+		 * A rontolisp future or stream -- what {@code rontolisp.http-client} answers
+		 * under {@code :async true}, and the reply body it answers under
+		 * {@code :as :stream} -- which {@code deref} and {@code future?} read through the
+		 * await runtime and {@code slurp}, {@code clojure.java.io/reader}, {@code .close}
+		 * and a Ring response body take: only the client's kernel makes one, so a program
+		 * that fetches nothing folds every arm. Ahead of {@link #HOST}: {@code future?}'s
+		 * call {@code (future-or-host-p value false)} stands for
+		 * {@code (host-future-p value false)}, which that family folds in turn.
+		 */
+		FETCH("fetch", Set.of(ClojureStateLowering.FUTURE_P, ClojureStateLowering.ASYNC_STREAM_P), Set.of(),
+				Map.of(ClojurePredicateLowering.FUTURE_OR_HOST_P, ClojurePredicateLowering.HOST_FUTURE_P),
+				Set.of(ClojureKernelLowering.HTTP_REQUEST), Set.of()),
 
 		/**
 		 * A host object, which {@code instance?} asks the host the class of, {@code =}

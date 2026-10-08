@@ -32,9 +32,11 @@ source path like any other; any other namespace of Clojure's own is an error.
 | `clojure.data` | [clojure.data](clojure-data.md) |
 | `clojure.zip` | [clojure.zip](clojure-zip.md) |
 | `clojure.datafy`, `clojure.core.protocols` | [clojure.datafy](clojure-datafy.md) |
+| `clojure.stacktrace` | [clojure.stacktrace](clojure-stacktrace.md) |
 | `clojure.pprint` | [clojure.pprint](clojure-pprint.md) |
 | `clojure.template` | [clojure.template](clojure-template.md) |
 | `clojure.java.io` (`reader` only) | [IO](io.md) |
 | `clojure.test` | [Tests (clojure.test)](test.md) |
 | `ring.adapter.rontolisp` | [Ring adapter](ring.md) |
 | `ring.util.*`, `ring.middleware.*` | [Ring utilities](ring-util.md) |
+| `rontolisp.http-client` | [HTTP client](http-client.md) |

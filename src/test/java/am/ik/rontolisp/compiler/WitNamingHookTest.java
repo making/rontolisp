@@ -149,6 +149,24 @@ class WitNamingHookTest {
 			.doesNotContain(":DROP");
 	}
 
+	/**
+	 * A front end that reads a result's envelope itself names the raw binding alone: the
+	 * component binds the member, and the public wrapper unwrapping it through
+	 * {@code %wit-result} -- with the wit.lisp runtime that call splices -- is left out
+	 * until the program names the bound name too.
+	 */
+	@Test
+	void aFrontEndReadingAResultsEnvelopeNamesTheRawBindingAlone() {
+		WitImportDirective.Directive directive = named("example:app/api", table("fetch", "c%a/fetch"));
+		String raw = printed(WitImportDirective.lower(directive, API, WIT, Backend.WASM_COMPONENT,
+				Set.of("c%a/fetch%raw"), Set.of()));
+		assertThat(raw).contains("(\"fetch\" \"c%a/fetch%raw\")").doesNotContain("%WIT-RESULT");
+		String both = printed(WitImportDirective.lower(directive, API, WIT, Backend.WASM_COMPONENT,
+				Set.of("c%a/fetch%raw", "c%a/fetch"), Set.of()));
+		assertThat(both).contains("(\"fetch\" \"c%a/fetch%raw\")")
+			.contains("(DEFUN |c%a/fetch| (|url|) (RONTOLISP::%WIT-RESULT (|c%a/fetch%raw| |url|)))");
+	}
+
 	@Test
 	void theTableIsParsedFromTheDirectiveAndTakesNoPackage() {
 		WitImportDirective.Directive parsed = WitImportDirective.parse((LispCons) LispReader.readFromString(
@@ -206,6 +224,54 @@ class WitNamingHookTest {
 		assertThat(described.members().get(2).params().get(0).shape().rep()).isEqualTo(WitTypeMapper.Rep.PLIST);
 		assertThat(shape(described.members().get(3).result()).rep()).isEqualTo(WitTypeMapper.Rep.BOOLEAN);
 		assertThat(described.members().get(3).line()).isEqualTo(9);
+	}
+
+	/**
+	 * A described type holds every type nested in it, each resolved in the interface that
+	 * writes it (a variant used from another interface carries that interface's record),
+	 * aliases followed. A nested type naming no definition has no representation, and
+	 * only the member reaching it is affected -- the interpreter's lowering never looks
+	 * inside a record, so neither does the description's check.
+	 */
+	@Test
+	void describeSpellsEveryNestedTypeInTheScopeItIsWrittenIn() {
+		String wit = """
+				package example:app@0.1.0;
+
+				interface types {
+				  record point { x: s32, y: s32 }
+				  variant shape { empty, dot(point) }
+				}
+
+				interface api {
+				  use types.{shape};
+				  type octet = u8;
+				  record half { x: missing }
+				  draw: func(s: shape, raw: list<octet>) -> result<list<shape>, tuple<s32, string>>;
+				  broken: func(h: half);
+				}
+				""";
+		List<WitImportDirective.Member> members = WitImportDirective
+			.describe(new WitImportDirective.Directive(WIT, "example:app/api", null, null, FieldStyle.CAMEL), wit, WIT)
+			.members();
+		WitTypeMapper.Shape shape = members.get(0).params().get(0).shape();
+		assertThat(shape.rep()).isEqualTo(WitTypeMapper.Rep.TAGGED_LIST);
+		assertThat(shape.parts().stream().map(WitTypeMapper.Part::label)).containsExactly("empty", "dot");
+		assertThat(shape.parts().get(0).shape()).isNull();
+		WitTypeMapper.Shape point = shape(shape.parts().get(1).shape());
+		assertThat(point.rep()).isEqualTo(WitTypeMapper.Rep.PLIST);
+		assertThat(point.parts().stream().map(part -> part.label() + ":" + shape(part.shape()).rep()))
+			.containsExactly("x:INT", "y:INT");
+		assertThat(members.get(0).params().get(1).shape().rep()).as("a list of an alias of u8 is a byte string")
+			.isEqualTo(WitTypeMapper.Rep.BYTE_STRING);
+		WitTypeMapper.Shape result = shape(members.get(0).result());
+		assertThat(shape(result.element()).rep()).isEqualTo(WitTypeMapper.Rep.LIST);
+		assertThat(shape(shape(result.element()).element()).rep()).isEqualTo(WitTypeMapper.Rep.TAGGED_LIST);
+		assertThat(shape(result.error()).parts().stream().map(part -> shape(part.shape()).rep()))
+			.containsExactly(WitTypeMapper.Rep.INT, WitTypeMapper.Rep.STRING);
+		WitTypeMapper.Shape half = members.get(1).params().get(0).shape();
+		assertThat(half.rep()).isEqualTo(WitTypeMapper.Rep.PLIST);
+		assertThat(shape(half.parts().get(0).shape()).rep()).isEqualTo(WitTypeMapper.Rep.UNSUPPORTED);
 	}
 
 	// A world's exports, lowered and described.

@@ -279,6 +279,8 @@ sections:
             title: "(clojure.edn)"
           - file: clojure/reference/clojure-pprint.md
             title: "(clojure.pprint)"
+          - file: clojure/reference/clojure-stacktrace.md
+            title: "(clojure.stacktrace)"
           - file: clojure/reference/clojure-template.md
             title: "(clojure.template)"
           - file: clojure/reference/regex.md
@@ -293,6 +295,8 @@ sections:
             title: "Ring adapter"
           - file: clojure/reference/ring-util.md
             title: "Ring utilities"
+          - file: clojure/reference/http-client.md
+            title: "HTTP client (rontolisp.http-client)"
           - file: clojure/reference/wasm.md
             title: "WASM host functions (rontolisp.wasm)"
           - file: clojure/reference/wit.md

@@ -1222,6 +1222,8 @@ public final class JvmLispCompiler implements LispCompiler {
 				// %future-force (the function spelling of await, e.g. the http-reactor
 				// transport's boundary resolve) compiles to the same _await helper.
 				|| programUsesSymbol(program, LispNames.FUTURE_FORCE_QUALIFIED)
+				// %future-settled-p (the Clojure client's future-done? and timed deref)
+				|| programUsesSymbol(program, LispNames.FUTURE_SETTLED_QUALIFIED)
 				|| programUsesSymbol(program, PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.FUTUREP))
 				|| programUsesSymbol(program, PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.WAIT_FOR));
 		MethodRefEntry fetchHelperMethod = usesFetch
@@ -1235,6 +1237,9 @@ public final class JvmLispCompiler implements LispCompiler {
 		MethodRefEntry futurepHelperMethod = usesAsyncRuntime
 				? cp.methodRef(thisClass, JvmAsyncRuntimeBuilder.FUTUREP_METHOD, JvmAsyncRuntimeBuilder.UNARY_DESC)
 				: null;
+		boolean usesFutureSettled = programUsesSymbol(program, LispNames.FUTURE_SETTLED_QUALIFIED);
+		MethodRefEntry futureSettledHelperMethod = usesFutureSettled ? cp.methodRef(thisClass,
+				JvmAsyncRuntimeBuilder.FUTURE_SETTLED_METHOD, JvmAsyncRuntimeBuilder.UNARY_DESC) : null;
 		MethodRefEntry streampHelperMethod = usesAsyncRuntime
 				? cp.methodRef(thisClass, JvmAsyncRuntimeBuilder.STREAMP_METHOD, JvmAsyncRuntimeBuilder.UNARY_DESC)
 				: null;
@@ -2539,6 +2544,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			.awaitHelper(awaitHelperMethod)
 			.asyncRunHelper(asyncRunHelperMethod)
 			.futurepHelper(futurepHelperMethod)
+			.futureSettledHelper(futureSettledHelperMethod)
 			.streampHelper(streampHelperMethod)
 			.makeStreamHelper(makeStreamHelperMethod)
 			.streamNewHelper(streamNewHelperMethod)
@@ -3807,7 +3813,8 @@ public final class JvmLispCompiler implements LispCompiler {
 					mainCtx.conditionChannel, progInitForAsync, longValueOf, stringLength, stringSubstring,
 					stringConcat, sizedMain != null ? sizedMain.runRef() : null, mainCtx.mvChannel,
 					recordsAsyncBoundaries ? cp.methodRef(thisClass, JvmUncaughtHandler.ASYNC_AWAITED_METHOD,
-							JvmUncaughtHandler.ASYNC_AWAITED_DESC) : null);
+							JvmUncaughtHandler.ASYNC_AWAITED_DESC) : null,
+					programUsesSymbol(program, LispNames.FUTURE_SETTLED_QUALIFIED));
 			runnableClass = cp.classEntry("java/lang/Runnable");
 		}
 		else {
@@ -6786,6 +6793,8 @@ public final class JvmLispCompiler implements LispCompiler {
 
 		final @Nullable MethodRefEntry futurepHelper;
 
+		final @Nullable MethodRefEntry futureSettledHelper;
+
 		final @Nullable MethodRefEntry streampHelper;
 
 		final @Nullable MethodRefEntry makeStreamHelper;
@@ -7908,6 +7917,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			this.awaitHelper = builder.awaitHelper;
 			this.asyncRunHelper = builder.asyncRunHelper;
 			this.futurepHelper = builder.futurepHelper;
+			this.futureSettledHelper = builder.futureSettledHelper;
 			this.streampHelper = builder.streampHelper;
 			this.makeStreamHelper = builder.makeStreamHelper;
 			this.streamNewHelper = builder.streamNewHelper;
@@ -8239,6 +8249,8 @@ public final class JvmLispCompiler implements LispCompiler {
 			private @Nullable MethodRefEntry asyncRunHelper;
 
 			private @Nullable MethodRefEntry futurepHelper;
+
+			private @Nullable MethodRefEntry futureSettledHelper;
 
 			private @Nullable MethodRefEntry streampHelper;
 
@@ -8626,6 +8638,11 @@ public final class JvmLispCompiler implements LispCompiler {
 
 			Builder futurepHelper(@Nullable MethodRefEntry futurepHelper) {
 				this.futurepHelper = futurepHelper;
+				return this;
+			}
+
+			Builder futureSettledHelper(@Nullable MethodRefEntry futureSettledHelper) {
+				this.futureSettledHelper = futureSettledHelper;
 				return this;
 			}
 

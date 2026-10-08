@@ -207,30 +207,47 @@ final class ClojureStateLowering {
 	}
 
 	/**
-	 * The three-argument {@code deref}: only a host {@code Future} is an
-	 * {@code IBlockingDeref} here, so every other value, once the timeout and the timeout
-	 * value have run like the oracle's arguments, is its {@code ClassCastException} (nil
-	 * a {@code NullPointerException}). A program that can make no host object folds the
-	 * host arm away ({@link ClojureArms.Family#HOST}), leaving the refusal.
+	 * The three-argument {@code deref}: only a rontolisp future (the
+	 * {@code rontolisp.http-client} answer under {@code :async true}) and a host
+	 * {@code Future} are an {@code IBlockingDeref} here, so every other value, once the
+	 * timeout and the timeout value have run like the oracle's arguments, is its
+	 * {@code ClassCastException} (nil a {@code NullPointerException}). A program that can
+	 * make neither folds both arms away ({@link ClojureArms.Family#FETCH},
+	 * {@link ClojureArms.Family#HOST}), leaving the refusal.
 	 */
 	private static LispVal timedDerefForm(ClojureLowering ctx, LispVal future, LispVal timeout, LispVal timeoutValue) {
 		LispSymbol cell = ctx.freshTemp();
 		LispSymbol ms = ctx.freshTemp();
 		LispSymbol dflt = ctx.freshTemp();
+		LispVal host = ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
+				ClojureLowerUtil.list(new LispSymbol(ClojureDispatchLowering.HOST_OBJECT_P), cell,
+						LispString.literal(HOST_FUTURE)),
+				ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-HOST-FUTURE-GET-WITHIN"), cell, ms, dflt),
+				ClojureRefusals.refusal(ClojureRefusals.CLASS_CAST_OF,
+						LispString.literal("deref with a timeout needs a future"), cell));
+		// a rontolisp future (rontolisp.http-client's :async answer) waits through the
+		// await runtime: an arm a program that fetches nothing folds
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
 				ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(cell, future), ClojureLowerUtil.list(ms, timeout),
 						ClojureLowerUtil.list(dflt, timeoutValue))),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
-						ClojureLowerUtil.list(new LispSymbol(ClojureDispatchLowering.HOST_OBJECT_P), cell,
-								LispString.literal(HOST_FUTURE)),
-						ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-HOST-FUTURE-GET-WITHIN"), cell, ms,
-								dflt),
-						ClojureRefusals.refusal(ClojureRefusals.CLASS_CAST_OF,
-								LispString.literal("deref with a timeout needs a future"), cell)));
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), ClojureLowerUtil.list(new LispSymbol(FUTURE_P), cell),
+						ClojureLowerUtil.list(new LispSymbol(ClojureArms.FUTURE_GET_WITHIN), cell, ms, dflt), host));
 	}
 
 	/** The host class {@code deref} reads through its {@code get}. */
 	static final String HOST_FUTURE = "java.util.concurrent.Future";
+
+	/**
+	 * The fetch family's test of a rontolisp future ({@code clojure.lisp}): what
+	 * {@code rontolisp.http-client} answers under {@code :async true}.
+	 */
+	static final String FUTURE_P = "RONTOLISP::%CLOJURE-FUTURE-P";
+
+	/**
+	 * The fetch family's test of a rontolisp stream ({@code clojure.lisp}): the reply
+	 * body {@code rontolisp.http-client} answers under {@code :as :stream}.
+	 */
+	static final String ASYNC_STREAM_P = "RONTOLISP::%CLOJURE-ASYNC-STREAM-P";
 
 	/**
 	 * The value inside the lowered atom; anything else goes to the spliced

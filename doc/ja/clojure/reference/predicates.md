@@ -66,5 +66,5 @@
 | `class?` | `(class? 1)` | `false` |
 | `extends?` | `(extends? P R)` | `R` が `P` を実装していれば `true` |
 | `special-symbol?` | `(special-symbol? 'if)` | `true` |
-| `reader-conditional?` | `(reader-conditional? '(1))` | `false` |
-| `tagged-literal?` | `(tagged-literal? 1)` | `false` |
+| `reader-conditional?` | `(reader-conditional? (reader-conditional '(1) false))` | `true` |
+| `tagged-literal?` | `(tagged-literal? (tagged-literal 'a 1))` | `true` |

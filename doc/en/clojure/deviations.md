@@ -386,8 +386,10 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   the oracle's classpath does not hold. `rontolisp test` is no `clj` command: it follows
   the cognitect test-runner's defaults (namespaces ending in `-test` under `test`).
 - A reader conditional takes `:rontolisp` too, ahead of `:clj` where a form names it
-  first. `{:read-cond :preserve}` is refused at the first `#?` (no reader-conditional or
-  tagged-literal value exists), so `reader-conditional?` stays `false`. In a branch not
+  first. Under `{:read-cond :preserve}`, `class` of a reader conditional or tagged literal
+  answers `:clojure.lang.ReaderConditional`/`:clojure.lang.TaggedLiteral` like every class
+  keyword here, `str` spells the hash `=` keeps (not the oracle's `hashCode`), and
+  `(reader-conditional nil false)` prints `#?()`, as one read from `#?()` does. In a branch not
   taken, `::alias/kw` of an unknown alias reads (the oracle refuses it); the runtime
   reader splices `#?@(:clj nil)` as nothing (the oracle refuses it) and takes `:features`
   as a hash set only.

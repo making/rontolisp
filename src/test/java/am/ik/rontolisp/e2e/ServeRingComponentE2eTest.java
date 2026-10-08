@@ -1,15 +1,19 @@
 package am.ik.rontolisp.e2e;
 
+import java.io.OutputStream;
+import java.net.InetSocketAddress;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
 
+import com.sun.net.httpserver.HttpServer;
 import org.junit.jupiter.api.Test;
 
 import static am.ik.rontolisp.e2e.ServeComponentE2eSupport.compileComponent;
@@ -111,6 +115,83 @@ class ServeRingComponentE2eTest {
 				server.destroyForcibly();
 				server.waitFor(10, TimeUnit.SECONDS);
 			}
+			deleteRecursively(work);
+		}
+	}
+
+	/**
+	 * A Ring handler relaying an upstream reply through {@code rontolisp.http-client}:
+	 * serve and fetch in one component, the reply body under {@code :as :stream} the
+	 * response body as it is, so a binary body arrives byte for byte.
+	 */
+	private static final String PROXY = """
+			(ns proxy
+			  (:require [ring.adapter.rontolisp :refer [run-server]]
+			            [rontolisp.http-client :as http]))
+
+			(def upstream "%UPSTREAM%")
+
+			(defn handler [req]
+			  (let [r (http/get (str upstream (:uri req)) {:as :stream :throw false})]
+			    {:status (:status r)
+			     :headers {"content-type" "application/octet-stream"}
+			     :body (:body r)}))
+
+			(run-server handler {:port 3000})
+			""";
+
+	@Test
+	void wasmtimeServeRelaysAFetchedReplyByteForByte() throws Exception {
+		List<String> driver = resolveDriver();
+		assumeTrue(driver != null, "serve component E2E is opt-in: pass -Drontolisp.binary=<native binary> or "
+				+ "-Drontolisp.examples=true (after ./mvnw clean package -DskipTests)");
+		assumeTrue(onPath("wasmtime"), "wasmtime is not on PATH");
+
+		HttpServer upstream = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+		upstream.createContext("/octets", exchange -> {
+			byte[] body = { (byte) 0xff, (byte) 0xfe, 0x41 };
+			exchange.sendResponseHeaders(200, body.length);
+			try (OutputStream out = exchange.getResponseBody()) {
+				out.write(body);
+			}
+		});
+		upstream.createContext("/status/404", exchange -> {
+			byte[] body = "missing".getBytes(StandardCharsets.UTF_8);
+			exchange.sendResponseHeaders(404, body.length);
+			try (OutputStream out = exchange.getResponseBody()) {
+				out.write(body);
+			}
+		});
+		upstream.start();
+		Path work = Files.createTempDirectory("rontolisp-serve-ring-proxy-");
+		Process server = null;
+		try {
+			Path source = work.resolve("proxy.clj");
+			Files.writeString(source,
+					PROXY.replace("%UPSTREAM%", "http://127.0.0.1:" + upstream.getAddress().getPort()));
+			Path component = work.resolve("proxy.wasm");
+			compileComponent(driver, source, component, work);
+
+			int port = freePort();
+			server = startServe(component, port, work, List.of());
+			waitForPort(port, server, work.resolve("serve.log"));
+
+			HttpClient client = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build();
+			HttpResponse<byte[]> octets = client.send(HttpRequest.newBuilder(uri(port, "/octets")).build(),
+					HttpResponse.BodyHandlers.ofByteArray());
+			assertThat(octets.statusCode()).isEqualTo(200);
+			assertThat(octets.body()).containsExactly((byte) 0xff, (byte) 0xfe, 0x41);
+			HttpResponse<String> missing = client.send(HttpRequest.newBuilder(uri(port, "/status/404")).build(),
+					HttpResponse.BodyHandlers.ofString());
+			assertThat(missing.statusCode()).isEqualTo(404);
+			assertThat(missing.body()).isEqualTo("missing");
+		}
+		finally {
+			if (server != null) {
+				server.destroyForcibly();
+				server.waitFor(10, TimeUnit.SECONDS);
+			}
+			upstream.stop(0);
 			deleteRecursively(work);
 		}
 	}
