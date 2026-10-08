@@ -20,7 +20,9 @@ The oracle is `clj` 1.12.6.1673: a behavior is decided by running it there, and 
 - `ClojureReader` (text -> datums) and `ClojureLowering` (the hub: datums -> core forms;
   the named cycle root in `PackageCycleTest`), plus one `Clojure*Lowering` slice per
   feature, each taking the hub first and re-entering it for subforms. The package sees
-  only the AST types and `reader`.
+  only the AST types and `reader`; what it needs of `compiler` (the WIT reader, the boundary
+  vocabulary) comes through `ClojureBoundary`, which `eval/ClojureHostBoundary` implements
+  and the seam injects like `ClojureFiles` ("Host boundary").
 - The run-time helpers are Lisp in `src/main/resources/am/ik/rontolisp/eval/clojure.lisp`,
   spliced by `eval/ClojureLibrary` (the `SchemeLibrary` shape). Each runtime (printer,
   STM, hierarchy, regex, ex-info, `clojure.test`, transducers) is referenced only when
@@ -126,6 +128,8 @@ answered `2 5 3` before).
 | `clojure.string` (`join` `split` `split-lines` `upper-case` `lower-case` `capitalize` `trim` `triml` `trimr` `trim-newline` `blank?` `starts-with?` `ends-with?` `includes?` `index-of` `last-index-of` `replace` `replace-first` `escape` `re-quote-replacement` `reverse`) | core string operations | reached as `alias/var`, `clojure.string/var` or a referred var. `split`/`replace` take a pattern (through the regex runtime) or a literal string/char (a plain string never compiles to a pattern). Empty literal-`split` input is `nil` (a pattern answers one empty part); a positive `split` limit caps, a negative keeps every part, else trailing empties drop. `index-of`'s start (and `.indexOf`'s) is clamped into `[0, length]` before CL's `search`, which refuses a start outside the string, so it reads like Java's: past the end nothing is found (an empty match is the length), a negative one is 0 (`ClojureStringLowering.searchFrom`) |
 | `clojure.set` (`union` `intersection` `difference` `select` `project` `rename-keys` `rename` `index` `map-invert` `join` `subset?` `superset?`: every public var) | `ClojureSetLowering`: one call to the spliced `rontolisp::%clojure-set-NAME` worker (`?` spelled `-p`, the variadic three over one list of their sets, `join` with a key map `-join-km`) after a lower-time arity check in the oracle's wording (`... passed to: clojure.set/NAME`); as a value `#'...-v` | the oracle's own algorithms, so an answer's kind follows the same input: `union` grows its largest input (bubble order and all; a vector or list there answers one, a map signals), `intersection` shrinks its smallest, `difference`/`select` the first; nil stays nil, an unchanged input is answered itself, a set changes in a fresh copy. Membership goes through the structural-key runtime; `contains?` on a vector is by index, like the oracle's. Relation members may be records: `join`'s merge keeps the first's record, `rename-keys` keeps it unless a declared field is renamed away. Answers carry no metadata. Corpus witness: shcloj4 `examples.test.sequences` `test-sets`/`test-joins` (`ClojureProjectNamespacesTest`); the whole namespace stays red on `examples.utils` (the `?.` macro), `clojure.xml` and `file-seq` (measured 2026-10-03: the load stops at `utils.clj:37:1`) |
 | `ring.adapter.rontolisp` (`run-server`) | `(rontolisp::%http-serve (%clojure-ring-app f opts) (%clojure-ring-port opts) (%clojure-ring-host opts) (%clojure-ring-join opts))` (`ClojureRingLowering`) | "Ring adapter" |
+| `rontolisp.wasm` (`defimport` `export`, a `defn`'s `:wasm/export`) | `rontolisp:wasm-import` hoisted ahead of the datum / `rontolisp:wasm-export` after the whole program, each passing the name as written as `:as`; a converting crossing behind a wrapper `defun` (`ClojureWasmLowering`) | "Host boundary" |
+| `rontolisp.wit` (`import` `export` `provide`) | `rontolisp:wit-import` (hoisted) / `rontolisp:wit-export` (after the whole program), each with a `:names` table of the vars' symbols; `rontolisp:wit-provide` (`ClojureWitLowering`) | "Host boundary" |
 | `ring.util.response` `ring.util.request` `ring.util.codec` `ring.util.mime-type` `ring.middleware.params` `ring.middleware.keyword-params` `ring.middleware.content-type` | Clojure source in the jar, loaded like a project file; `rontolisp.internal.ring/NAME` (their kernels) is one call to `rontolisp::%clojure-ring-NAME` (`ClojureRingUtilLowering`) | "Ring util namespaces" |
 | `clojure.edn` (`read-string` `read`) | `ClojureEdnLowering`: one call to `rontolisp::%clojure-edn-read-string-1` / `-read-string` / `-read` after a lower-time arity check in the oracle's wording; as a value `#'...-v` | "Reading", clojure.edn |
 | `clojure.walk` | Clojure source in the jar written for this front end, loaded like a project file (a startup namespace: on its first qualified name too) | "clojure.jar namespaces" |
@@ -1142,6 +1146,86 @@ oracle's classpath; a `deps.edn` ring-core newer than the shipped one refuses th
   clojure-spec `ring-util-*` and `ring-middleware-*` (all four backends, oracle-identical),
   `examples/clojure/ring-hello.clj` (verified by hand 2026-10-08 under curl on the
   interpreter, the JVM class and `wasmtime serve`).
+
+## Host boundary
+
+**`rontolisp.wasm` and `rontolisp.wit` LOWER to the Common Lisp directives
+(`rontolisp:wasm-import`/`wasm-export`, `rontolisp:wit-import`/`wit-export`/`wit-provide`);
+no backend gained a path.** Built in (`ClojureWasmLowering`, `ClojureWitLowering`, dispatched
+like `ring.adapter.rontolisp`) rather than a library, because Clojure cannot name a CL
+function and a directive must be a top-level form.
+
+- **The hook**: the WIT parser and `BoundaryType` live in `compiler`, which this package may
+  not import. `ClojureBoundary` (the designators; a WIT interface's members and a world's
+  exports, each type as representation + option/result element + WIT spelling, with its line)
+  is implemented by `eval/ClojureHostBoundary` over `WitImportDirective.describe` /
+  `WitExportDirective.describe` (`.kb/wit.md`, "The naming hook") and injected through
+  `Clojure.read(..., boundary)` and `ClojureSession.setBoundary`. Without it
+  (`ClojureBoundary.NONE`) both namespaces refuse by name.
+- **Names**: the host sees the name as written (`:as`, the WIT label), never `c%ns/name`:
+  every lowered `wasm-import`/`wasm-export` passes `:as`; the WIT directives take a `:names`
+  table of `("label" "c%ns/name")` pairs.
+- **Crossings** (`ClojureWasmLowering.Crossing`): `:bool` maps `false` to `nil` going out and
+  a host's `nil` to `false` coming in (`false` is a non-NIL symbol here); `:s-expr` crosses as
+  the Clojure printer's text read back by the Clojure reader (the directive declares
+  `:string`), so vectors, maps, keywords and `false` round-trip. A declaration with no such
+  crossing lowers to exactly the hand-written directive. A converting import binds the
+  directive to `<var>%import` behind a `defun` of the var (`importWrapper`); an export that
+  converts, or names no single-arity top-level `defn` taking exactly its parameters (several
+  arities, a rest parameter, a `def`'d fn, a multimethod), goes through `<var>%export[N]`
+  (`exportWrapper`) calling the var. Refused by name: `:bytes` (an `(unsigned-byte 8)`
+  vector, which no Clojure value is), `:async` (its future is no Clojure future).
+- **Order**: `defimport` registers its name in pass one by spelling (like `deftest`), so a
+  call above it is a direct call; on the interpreter and the JVM it binds a stub of the
+  declared arity throwing `UnsupportedOperationException` in Clojure's words (the
+  directive's own stub would name the mangled symbol). A `wit/import` reads the WIT in pass
+  two, so its vars exist below it, like a `require`'s alias. Every export (`wasm/export`,
+  `:wasm/export`, `wit/export`) is recorded and resolved by `ClojureWasmLowering.flush` once
+  the whole file has lowered (a session: at the end of the buffer), so its var may be defined
+  below it and a redefined `defn` exports its newest definition; the interpreter's
+  `wit-export` special form then sees every function, wherever the declaration sits.
+- **`:wasm/export` metadata is QUOTED** into the var's metadata (`defnExport`): a literal
+  map is built at run time, so an exporting program would differ from the non-exporting one
+  by that store.
+- **Byte identity, measured 2026-10-08**: a `:wasm/export` program equals the Common Lisp
+  program loading the same `.clj` under the hand-written directive (419 bytes by default,
+  263,545 at `--optimize=off`, and under `--component`); `wit/import` on P1 equals
+  `defimport` of its members; a `wit/export` world equals the hand-written `wit-export` block
+  (P1 and `--component`). The world case needed `ClojureArms.scan` to skip the three
+  function-naming directives: their quoted `|c%ns/f|` is a compile-time name, yet as a
+  qualified symbol literal it made the scan keep the `#:ns{...}` printer arm
+  (`Family.NAMESPACE_MAP`).
+- **`wit/import`**: the interface's members become vars of a namespace named after its id
+  (`namespaceOf`: `/` becomes `.`, an id without a package gains `wit:`), reached through
+  `:as`/`:refer`; a second import of the id wires names only. The directive is hoisted with a
+  `:names` table listing only the members the Clojure tier binds: numbers, `char`, `string`,
+  `list<u8>`, handles, an `option` of those, a `result` answering one, `bool` and
+  `option<bool>` through a wrapper. Each wrapper is emitted only when the program names its
+  member (`referencedWrappers`), so `--component` still imports only the called members. A
+  member outside the tier (records, variants, enums, flags, tuples, lists, a `result`
+  argument, `async func`, the async built-ins) is not bound, and a reference to it is refused
+  at lower time naming the WIT line (`refusalOf`, from `ClojureNamespaceLowering.refuseLeftOut`).
+  The rest is `.todo/e50-*`.
+- **`wit/export`**: each world label names a var of the declaring namespace; `flushWorlds`
+  resolves it as `wasm/export` does (wrapper, `bool` crossing) and emits the `:names` table. The
+  CL directive keeps the contract check, the type check (primitives only,
+  `WitExportDirective.designator`) and `--emit-wit`. Refused: an `async func` export; a
+  `wasm/export` beside a world (a file's rule only: a session's world is checked buffer by
+  buffer against what is defined so far).
+- **`wit/provide`**: `(rontolisp:wit-provide iface fn)` on the interpreter and the JVM (a
+  literal interface written as an import spelled it is canonicalized); on wasm it answers the
+  interface and binds nothing, the host providing every import. The provider sees the
+  boundary's values (a `bool` as `true`/`nil`).
+- **WIT paths** resolve against the naming file through `ClojureFiles`; the directive keeps
+  the path as written in the entry file (so the CL inliner, resolving against the entry's
+  directory, reads the same file) and the resolved path in a required namespace's file.
+- `--scaffold-wit` generates Common Lisp from a WIT file and reads no source, so it has no
+  Clojure form; a `.clj` scaffold would be its own item.
+- Pins: `ClojureWasmBoundaryTest`, `ClojureWitBoundaryTest` (the interpreter, the JVM, P1 under
+  node through `--emit-js-glue`, `--component` under wasmtime including its real
+  `wasi:keyvalue`), `WitNamingHookTest`, `ClojureHostBoundaryTest`; `ExamplesE2eTest` over
+  `examples/clojure/host-boundary/`, `examples/clojure/greeter/`,
+  `examples/wit/keyvalue/page-hits.clj`.
 
 ## clojure.jar namespaces
 
@@ -2514,6 +2598,7 @@ in-scope program needs `valid?`/`conform` (then `explain-data` stays refused).
   `ClojureWasmInteropRefusalTest`, `ClojureWasmFileIoTest`, `ClojureWasmFileRefusalTest`.
 - `ClojureArmsTest` (the sorted-collection, unbound-root, matcher and refusal strips).
 - `ClojureRingAdapterTest`, `ClojureRingUtilTest` (the Ring namespaces),
+  `ClojureWasmBoundaryTest`, `ClojureWitBoundaryTest` (the host boundary),
   `ClojureLanguageNamespacesTest` (where the clojure.jar namespaces come from).
 - `ClojureLibraryTest` (the splice), `SourceLanguageTest`, `RontoLispCliTest` and
   `PlaygroundReplTest` (the `clojure>` transcript, `--no-gc`), `examples/clojure/demo.clj`

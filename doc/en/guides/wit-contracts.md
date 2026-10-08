@@ -8,6 +8,9 @@ front-end for the manual [`wasm-export` / `wasm-import`](wasm-host-boundary.md)
 machinery, plus per-backend implementations that let the same source run
 everywhere (typed component-model exports under `--component`, provider
 callbacks on the interpreter and the JVM, byte-identical Preview 1 imports).
+A Clojure program uses both through
+[`rontolisp.wit`](../clojure/reference/wit.md), which lowers to these
+directives.
 
 ## Implementing a WIT World (`wit-export`)
 

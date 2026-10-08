@@ -379,6 +379,23 @@ public final class ClojureLowering {
 	ClojureSourcePath sourcePath = new ClojureSourcePath(ClojureFiles.NONE, null);
 
 	/**
+	 * The files the program names besides its namespaces: the WIT files
+	 * {@code rontolisp.wit} reads.
+	 */
+	ClojureFiles files = ClojureFiles.NONE;
+
+	/**
+	 * The host boundary {@code rontolisp.wasm} and {@code rontolisp.wit} lower against.
+	 */
+	ClojureBoundary boundary = ClojureBoundary.NONE;
+
+	/** What {@code rontolisp.wasm} declared ({@link ClojureWasmLowering}). */
+	final ClojureWasmLowering.State wasm = new ClojureWasmLowering.State();
+
+	/** What {@code rontolisp.wit} declared ({@link ClojureWitLowering}). */
+	final ClojureWitLowering.State wit = new ClojureWitLowering.State();
+
+	/**
 	 * The forms of the namespaces loaded while the current top-level datum lowers: the
 	 * definitions stay top-level (a {@code defn} keeps its direct call and its
 	 * tree-shaker visibility there), while a namespace's statements run from its init
@@ -1239,10 +1256,18 @@ public final class ClojureLowering {
 
 	static List<LispVal> lower(List<LispVal> datums, @Nullable ClojureReader reader,
 			@Nullable ClojureMacroEvaluator macroEvaluator, ClojureFiles files, boolean hostTarget) {
+		return lower(datums, reader, macroEvaluator, files, hostTarget, ClojureBoundary.NONE);
+	}
+
+	static List<LispVal> lower(List<LispVal> datums, @Nullable ClojureReader reader,
+			@Nullable ClojureMacroEvaluator macroEvaluator, ClojureFiles files, boolean hostTarget,
+			ClojureBoundary boundary) {
 		ClojureLowering lowering = new ClojureLowering();
 		lowering.hostTarget = hostTarget;
 		lowering.reader = reader;
 		lowering.macroEvaluator = macroEvaluator;
+		lowering.files = files;
+		lowering.boundary = boundary;
 		lowering.sourcePath = new ClojureSourcePath(files, reader == null ? null : reader.file());
 		lowering.sourcePath.entryNamespace(firstNsName(datums));
 		lowering.rootFile = lowering.sourcePath.entryPath();
@@ -1255,6 +1280,11 @@ public final class ClojureLowering {
 		for (LispVal datum : datums) {
 			lowering.forms.addAll(lowering.topLevels(datum));
 		}
+		// the host boundary: the exports, resolved once every definition has lowered,
+		// run last (the interpreter's world check sees every function); the conversion
+		// wrappers of the WIT members the program names run first
+		lowering.forms.addAll(ClojureWasmLowering.flush(lowering));
+		lowering.forms.addAll(1, ClojureWitLowering.referencedWrappers(lowering, lowering.forms));
 		if (lowering.usedMacros) {
 			// the macro runtime travels with the program, like the false value
 			lowering.forms.addAll(1, ClojureMacroLowering.macroRuntime(lowering));
@@ -1340,6 +1370,12 @@ public final class ClojureLowering {
 				out.add(new ClojureTopLevel(evaluated(forms, !ns), !ns));
 			}
 		}
+		// the buffer's exports run after it, resolved against everything it defined; the
+		// conversion wrappers of the WIT members it names, ahead of it
+		List<LispVal> exported = ClojureWasmLowering.flush(this);
+		if (!exported.isEmpty()) {
+			out.add(new ClojureTopLevel(exported, false));
+		}
 		if (!this.falseBound && !out.isEmpty()) {
 			// The session's first datum carries the false binding ahead of itself,
 			// like a file's first form; a buffer that failed to lower binds nothing.
@@ -1349,6 +1385,11 @@ public final class ClojureLowering {
 			forms.addAll(first.forms());
 			out.set(0, new ClojureTopLevel(List.copyOf(forms), first.echoes()));
 			this.falseBound = true;
+		}
+		List<LispVal> wrappers = ClojureWitLowering.referencedWrappers(this,
+				out.stream().flatMap(top -> top.forms().stream()).toList());
+		if (!wrappers.isEmpty()) {
+			out.add(0, new ClojureTopLevel(wrappers, false));
 		}
 		// a hierarchy meets a host class object once any buffer named the host
 		noteHost(out.stream().flatMap(top -> top.forms().stream()).toList());
@@ -1597,6 +1638,11 @@ public final class ClojureLowering {
 			// a clojure.test definition is a zero-argument function: (name) runs
 			// the test, like the oracle
 			preDeclare(items.get(1), "deftest", Kind.FUNCTION, false);
+		}
+		else if (ClojureWasmLowering.isDefimportSpelling(items.get(0))) {
+			// a host function is a function var like a defn's, so a call above its
+			// declaration lowers to the direct call
+			preDeclare(items.get(1), "defimport", Kind.FUNCTION, false);
 		}
 		else if (ClojureLowerUtil.isSymbolNamed(items.get(0), "declare")) {
 			// a forward declaration: later buffers (and later forms) may call
@@ -2546,7 +2592,12 @@ public final class ClojureLowering {
 			List<LispVal> items = ClojureLowerUtil.items(form);
 			if (items != null && !items.isEmpty() && (ClojureLowerUtil.isSymbolNamed(items.get(0), "defn")
 					|| ClojureLowerUtil.isSymbolNamed(items.get(0), "defn-"))) {
-				return ClojureBindingLowering.defuns(this, form, items);
+				List<LispVal> defuns = ClojureBindingLowering.defuns(this, form, items);
+				// a top-level defun is what an export may name itself
+				this.wasm.topLevelDefuns
+					.add(currentDefnSym(varKey(this.currentNs, ClojureLowerUtil.plainName(items.get(1), "defn")))
+						.name());
+				return defuns;
 			}
 			if (items != null && !items.isEmpty() && ClojureLowerUtil.isSymbolNamed(items.get(0), "def")) {
 				// a ^:dynamic def contributes its defparameter plus its

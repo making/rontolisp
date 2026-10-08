@@ -71,8 +71,10 @@ the naming file's directory like `load`), for `include` and `define-library` fil
 way. A Clojure read gets the same loader through `SourceLanguage.clojureFiles`, for the
 project namespaces a `require` loads, the `deps.edn` files, a dependency's directory and a
 jar read in place (`SourceLoader.listArchive`, whose default, like every probe's, answers
-"none" for a loader that is not a filesystem) (`.kb/clojure-frontend.md`, "deps.edn"). A
-read with no loader names no file. A Common Lisp read ignores it.
+"none" for a loader that is not a filesystem) (`.kb/clojure-frontend.md`, "deps.edn"), and
+the WIT files `rontolisp.wit` reads, described through `eval/ClojureHostBoundary`, the
+`ClojureBoundary` the seam passes beside the loader (`.kb/clojure-frontend.md`, "Host
+boundary"). A read with no loader names no file. A Common Lisp read ignores it.
 
 The entry-language override is validated where it is parsed (an unknown name fails
 fast); loaded files always pick by extension, so the override never leaks into them.

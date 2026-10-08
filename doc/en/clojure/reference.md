@@ -30,6 +30,8 @@ has them.
 | [Regular expressions](reference/regex.md) | `re-find`/`re-seq`/`re-matches`, `re-matcher`/`re-groups`, `re-pattern` and pattern `split`/`replace` |
 | [Ring adapter](reference/ring.md) | `ring.adapter.rontolisp/run-server`: a Ring handler served on every transport |
 | [Ring utilities](reference/ring-util.md) | The built-in `ring.util.*` and `ring.middleware.*` namespaces: response builders, URL and form coding, parameter middleware |
+| [WASM host functions (rontolisp.wasm)](reference/wasm.md) | `defimport`/`export`: a host function a module calls, a function the host calls |
+| [WIT contracts (rontolisp.wit)](reference/wit.md) | `import`/`export`/`provide`: a WIT interface called, a WIT world implemented |
 | [Java interop](reference/interop.md) | `.`, `..`, construction, `memfn`, `proxy` |
 | [Transducers](reference/transducers.md) | `transduce`/`eduction`/`sequence`/`completing`, `reduced` and its companions, `cat`, and the one-argument arities of the seq verbs |
 | [IO](reference/io.md) | `spit`/`slurp`/`line-seq`, `clojure.java.io/reader` and `format` |

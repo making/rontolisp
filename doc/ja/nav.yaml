@@ -285,6 +285,10 @@ sections:
             title: "Ring アダプター"
           - file: clojure/reference/ring-util.md
             title: "Ring ユーティリティ"
+          - file: clojure/reference/wasm.md
+            title: "WASM ホスト関数 (rontolisp.wasm)"
+          - file: clojure/reference/wit.md
+            title: "WIT 契約 (rontolisp.wit)"
           - file: clojure/reference/interop.md
             title: "Java interop"
           - file: clojure/reference/test.md

@@ -76,6 +76,19 @@ final class ClojureReadLowering {
 	}
 
 	/**
+	 * {@code (read-string text)} over an already lowered text, in the current namespace's
+	 * context: how a boundary crossing reads an {@code :s-expr} the host handed over
+	 * ({@link ClojureWasmLowering}).
+	 * @param ctx the hub
+	 * @param text the lowered string
+	 * @return the read call
+	 */
+	static LispVal readStringOf(ClojureLowering ctx, LispVal text) {
+		ctx.usedReader = true;
+		return worker("READ-STRING", text, context(ctx));
+	}
+
+	/**
 	 * A reading verb as a function value, or null when the name is none of them: a rest
 	 * lambda over the {@code -v} worker, which checks the count at run time.
 	 * @param ctx the hub

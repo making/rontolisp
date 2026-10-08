@@ -28,6 +28,7 @@ public final class ClojureSession {
 	 */
 	public ClojureSession(ClojureFiles files) {
 		this.lowering.sourcePath = new ClojureSourcePath(files, null);
+		this.lowering.files = files;
 	}
 
 	/**
@@ -48,6 +49,15 @@ public final class ClojureSession {
 	 */
 	public void setMacroEvaluator(@Nullable ClojureMacroEvaluator macroEvaluator) {
 		this.lowering.setMacroEvaluator(macroEvaluator);
+	}
+
+	/**
+	 * The host boundary {@code rontolisp.wasm} and {@code rontolisp.wit} lower against,
+	 * kept across the session's buffers.
+	 * @param boundary the boundary
+	 */
+	public void setBoundary(ClojureBoundary boundary) {
+		this.lowering.boundary = boundary;
 	}
 
 	/**
