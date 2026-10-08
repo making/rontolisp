@@ -159,7 +159,7 @@
  キーワードと、単純名を通じてコアの種類のキーワードと同じクラスなので、
  `(isa? (class (java.util.ArrayList.)) java.util.List)` は `true` です。同じく `:list` と
  綴る `clojure.lang.IPersistentList` にも `isa?` で、オラクルは `false` を返します。それ以外の
-クラス（`java.io.File`）はディスパッチ値でもクラスオブジェクトで、オラクル通りです。プロトコルの
+クラス（`java.util.AbstractList`）はディスパッチ値でもクラスオブジェクトで、オラクル通りです。プロトコルの
  ディスパッチは階層（`derive`）を読まず、タグの完全一致の次はプロトコルを extend した
  クラスだけを試し、それから `Object` 既定です。`Long`・`Double` を `:number` にまとめ
  （オラクルは区別します）、1つの値が実装する2つの `clojure.lang` インタフェースは
@@ -282,9 +282,10 @@
 - `format` は `%s`・`%d`・`%x`・`%X`・`%o`・`%c`・`%b`・`%f`・`%%`・`%n` を描画します
   （幅・浮動小数点精度付き）。`%e`・`%g`・フラグ・非リテラルは名前付きで拒否されます。
   `%s` の `nil` はオラクル同様 `"null"` です。
-- `line-seq` はパスか開かれたリーダー（`clojure.java.io/reader` など。閉じるのは
-  `with-open`）を取って、どちらも strict に答えます（オラクルはリーダーを取って遅延です）。
-  `spit`・`slurp`・`line-seq`・`reader` はインタプリタと JVM、wasm ではパスを含む `--dir` プリオープン付きで動きます。
+- `line-seq` は開かれたリーダー（`clojure.java.io/reader` など。閉じるのは `with-open`）か、
+  開いて読むパス、File、URL、バイトストリームを取って、どれも strict に答えます（オラクルは
+  リーダーだけを取って遅延です）。`spit`・`slurp`・`line-seq`・`reader` はすべてのバックエンドで、
+  wasm ではファイルを含む `--dir` プリオープン付きで動きます。
   リーダーの上の `java.io.InputStreamReader` はどのバックエンドでもそのリーダー自身です。Ring のリクエスト
   `:body` が、オラクルでは `InputStream` であるのに対し、ここではリーダーだからです。
 - Ring アダプター（`ring.adapter.rontolisp/run-server`）のリクエストマップには
@@ -349,7 +350,8 @@
   メタデータの `:tag` は書いたままのシンボル（`String`）で、オラクルはクラス
   （`java.lang.String`）に解決します。
 - `with-open` は `close` メソッド越しに閉じるため、バックエンドの届く closeable
-  だけが動きます（Java の closeable は JVM が要ります）。`time` は値を答えますが、
+  だけが動きます（`clojure.java.io` のバイトストリームはどのバックエンドでも、Java の
+  closeable はインタプリタと JVM で）。`time` は値を答えますが、
   ミリ秒数は固定されません。数えるのは整数ミリ秒（`42.0`）で、オラクルの値には
   ナノ秒の桁が付きます。
 - `read-string`/`read` はクオートと同じ答えを返します。`@x` は `(deref x)` と読まれ、
@@ -363,6 +365,10 @@
   `java.util.UUID` として読まれます。わずかな違い（インスタントの `str` は UTC で答える、
   interop で得たホストの値は読んだ値と `=` にならない）は[インスタントと UUID](reference/instants.md)
   にあります。
+- `clojure.java.io` の `java.io.File`、`java.net.URL`、`java.net.URI`、バイトストリームは、
+  すべてのバックエンドでこのフロントエンド自身の値です。違い（バイト配列がない、文字セットは
+  3 つ、`http:` URL の背後に接続がない、リソースはクラスパスではなくソースパスで見つける、WASM の
+  ディレクトリ）は [clojure.java.io](reference/clojure-java-io.md) にあります。
 - データリーダはプログラムのコンパイル時に動くので、ソースでの答えはメタデータを失い、ここで
   綴れる値でなければなりません。関数、deftype のインスタンス、UUID・Date 以外のホストの
   オブジェクトは `Can't embed object in code` です（オラクルは `print-dup` で印字できるものを

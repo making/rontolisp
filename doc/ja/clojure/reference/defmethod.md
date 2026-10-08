@@ -9,12 +9,13 @@
 クラス（`String`、`Number`、`java.util.Map`、`clojure.lang.IPersistentVector`、…）を
 書けて、`class` が答えるキーワードの下に格納されるので、`class` の multimethod がそこへ
 ディスパッチします。throwable のクラス（`IllegalArgumentException`、
-`clojure.lang.ExceptionInfo`）やストリームのクラス（`java.io.StringWriter`、
-`java.io.Writer`、`java.io.Reader`）は、`class` が例外やストリームに答えるクラス名の
-キーワードの下に格納され、検索はオラクルの Java の継承と同じくスーパークラスの連鎖を
+`clojure.lang.ExceptionInfo`）、ストリームのクラス（`java.io.StringWriter`、
+`java.io.Writer`、`java.io.Reader`）、[clojure.java.io](clojure-java-io.md) の値のクラス
+（`java.io.File`、`java.io.InputStream`）は、`class` が例外、ストリーム、それらの値に答える
+クラス名のキーワードの下に格納され、検索はオラクルの Java の継承と同じくスーパークラスの連鎖を
 たどります。`NumberFormatException` は `Exception` のメソッドより先に
 `IllegalArgumentException` のメソッドへ届きます。それ以外のホストクラス
-（`java.io.File`、`java.util.AbstractList`）は、`class` がホストオブジェクトに答える
+（`java.util.AbstractList`）は、`class` がホストオブジェクトに答える
 クラスオブジェクトの下に格納され（インタプリタと JVM）、検索は同じく Java の
 スーパータイプをたどります。`ArrayList` は `java.util.List` のメソッドより先に
 `java.util.AbstractList` のメソッドへ届きます。このディスパッチ値はホスト相互運用なので、

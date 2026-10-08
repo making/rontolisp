@@ -166,7 +166,7 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   its name's keyword and, by its simple name, a core kind's, so
   `(isa? (class (java.util.ArrayList.)) java.util.List)` is `true` -- and so is its `isa?`
   of `clojure.lang.IPersistentList`, which also spells `:list`, where the oracle answers
-  `false`. Any other class (`java.io.File`) is its class object, in a dispatch value too,
+  `false`. Any other class (`java.util.AbstractList`) is its class object, in a dispatch value too,
   like the oracle.
   Protocol dispatch reads no hierarchy (`derive`): past the exact tag it tries only the
   classes the protocol was extended to, then the `Object` default. It merges
@@ -293,10 +293,11 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
 - `format` renders `%s`/`%d`/`%x`/`%X`/`%o`/`%c`/`%b`/`%f`/`%%`/`%n` (with widths, float
   precision); `%e`/`%g`, flags and non-literal patterns are named refusals. `%s` spells
   `nil` `"null"`, like the oracle.
-- `line-seq` takes a path or an open reader (such as a `clojure.java.io/reader`,
-  which `with-open` closes) and answers strictly either way (the oracle takes a
-  reader and answers lazily); `spit`/`slurp`/`line-seq`/`reader` run on the
-  interpreter and the JVM, and on wasm with a `--dir` preopen covering the path.
+- `line-seq` takes an open reader (such as a `clojure.java.io/reader`, which
+  `with-open` closes), or a path, a File, a URL or a byte stream it opens, and answers
+  strictly either way (the oracle takes a reader only and answers lazily);
+  `spit`/`slurp`/`line-seq`/`reader` run on every backend, on wasm with a `--dir` preopen
+  covering the file.
   A `java.io.InputStreamReader` over a reader is that reader, on every backend: here a
   Ring request `:body` is a reader, where the oracle's is an `InputStream`.
 - The Ring adapter (`ring.adapter.rontolisp/run-server`) puts `:content-type` and
@@ -363,7 +364,8 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   literal stays the symbol as written (`String`), where the oracle resolves the class
   (`java.lang.String`).
 - `with-open` closes through the `close` method, so only closeables the backend
-  reaches work (Java closeables need the JVM); `time` answers its value but its
+  reaches work (a `clojure.java.io` byte stream on every backend, a Java closeable on the
+  interpreter and the JVM); `time` answers its value but its
   millisecond count never pins, and it counts whole milliseconds (`42.0`) where the
   oracle's carries nanosecond digits.
 - `read-string`/`read` answer what a quote answers: `@x` reads `(deref x)` and a
@@ -376,6 +378,10 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
 - `#inst` and `#uuid` read as the oracle's `java.util.Date` and `java.util.UUID` on every
   backend; [Instants and UUIDs](reference/instants.md) lists the few differences (`str` of an
   instant answers in UTC, a host value from interop is never `=` to a read one).
+- `clojure.java.io`'s `java.io.File`, `java.net.URL`, `java.net.URI` and byte streams are
+  values of this front end's own on every backend; [clojure.java.io](reference/clojure-java-io.md)
+  lists the differences (no byte arrays, three charsets, no connection behind an `http:`
+  URL, a resource found on the source path rather than the class path, WASM's directories).
 - A data reader runs as the program compiles, so its answer in source loses its metadata
   and needs a spelling here: a function, a deftype instance and a host object other than a
   UUID or Date are `Can't embed object in code`, where the oracle compiles one its

@@ -13,11 +13,13 @@ directly. A dispatch value
 may name a host class (`String`, `Number`, `java.util.Map`,
 `clojure.lang.IPersistentVector`, ...) and stores under the keyword `class` answers for it,
 so `class` multis dispatch to it. A throwable class (`IllegalArgumentException`,
-`clojure.lang.ExceptionInfo`) or a stream class (`java.io.StringWriter`, `java.io.Writer`,
-`java.io.Reader`) stores under its name as a keyword, the one `class` answers for an exception
-or a stream, and the search follows the superclass chain like the oracle's Java inheritance:
+`clojure.lang.ExceptionInfo`), a stream class (`java.io.StringWriter`, `java.io.Writer`,
+`java.io.Reader`) or the class of a [clojure.java.io](clojure-java-io.md) value
+(`java.io.File`, `java.io.InputStream`) stores under its name as a keyword, the one `class`
+answers for an exception, a stream or such a value, and the search follows the superclass
+chain like the oracle's Java inheritance:
 a `NumberFormatException` reaches an `IllegalArgumentException` method ahead of an
-`Exception` one. Any other host class (`java.io.File`, `java.util.AbstractList`) stores under
+`Exception` one. Any other host class (`java.util.AbstractList`) stores under
 its class object, the one `class` answers for a host object (interpreter and JVM), and the
 search follows its Java supers the same way: an `ArrayList` reaches a `java.util.AbstractList`
 method ahead of a `java.util.List` one. Such a dispatch value is host interop, so the

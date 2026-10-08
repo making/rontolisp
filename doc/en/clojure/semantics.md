@@ -468,7 +468,8 @@ Each refusal names the missing design, never `unknown name`:
 | `&form`/`&env` in `defmacro` parameters | by name | macros receive no compilation environment |
 | `::alias/kw` with an unknown alias | `Invalid token: ...` | only required aliases, the file's own ns and known namespaces resolve |
 | `--no-gc` builds | by name | that backend has no pairs, symbols or closures |
-| `file-seq`, `clojure.java.io` (except `reader`) | `file-seq` / `unknown name: clojure.java.io/...` | no directory walks; only `reader` resolves, opening a file-stream reader |
+| `read` into a byte array, `readAllBytes`, `write` of a byte array | `... of a byte array is not supported: byte arrays are not built in` | no byte array kind on any backend (`bytes?` is `false`) |
+| reading an `http:` (or any other non-`file:`) URL | `reading the http: URL ... is not built in` | no connection runtime behind `clojure.java.io`; [rontolisp.http-client](reference/http-client.md) fetches |
 | `with-redefs` of a `clojure.core` var, a macro, a multimethod or protocol method; in the REPL, of a `defn` an earlier input defined without `^:redef` | `with-redefs of ... is not supported...`, `... define it ^:redef to redefine it` | core verbs lower inline; only a `def`/`defn`/`declare` var has a root to replace, and a REPL input already ran with direct calls |
 | an asynchronous Ring handler (`run-server` with `:async? true`) | `asynchronous handlers (:async? true) are not supported` | no respond/raise protocol under the transports |
 | `:async` on a `rontolisp.wasm` declaration, an `async func` WIT member or export | `:async is not supported yet ...`, `... is an async func ...` | the future a suspending crossing answers is no Clojure future |
