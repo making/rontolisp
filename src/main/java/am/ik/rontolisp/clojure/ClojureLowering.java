@@ -301,9 +301,26 @@ public final class ClojureLowering {
 	 */
 	final Set<String> requiredLibraries = new HashSet<>();
 
-	/** The library namespaces {@code clj -M} has loaded before the program runs. */
-	static final List<String> STARTUP_NAMESPACES = List.of("clojure.core", "clojure.edn", "clojure.java.io",
-			"clojure.string");
+	/**
+	 * The library namespaces {@code clj -M} has loaded before the program runs (the
+	 * shipped ones among them, {@link ClojureBuiltinNamespaces#startup}, load on their
+	 * first qualified reference here).
+	 */
+	static final List<String> STARTUP_NAMESPACES = startupNamespaces();
+
+	private static List<String> startupNamespaces() {
+		Set<String> names = new java.util.TreeSet<>(
+				List.of("clojure.core", "clojure.edn", "clojure.java.io", "clojure.string"));
+		names.addAll(ClojureBuiltinNamespaces.startup());
+		return List.copyOf(names);
+	}
+
+	/**
+	 * How deep the lowering is inside top-level datums ({@link #topLevelsOf}): a shipped
+	 * startup namespace loads on its first qualified reference only there, where its
+	 * definitions have a place ahead of the datum ({@link #hoisted}).
+	 */
+	private int topLevelDepth;
 
 	/**
 	 * Every namespace an {@code ns} or {@code in-ns} named so far, {@code user} first:
@@ -1755,6 +1772,13 @@ public final class ClojureLowering {
 				&& !ClojureNamespaceLowering.isKnownNamespace(head)) {
 			return head;
 		}
+		if (ClojureBuiltinNamespaces.isStartup(head) && this.topLevelDepth > 0
+				&& !this.loadingNamespaces.contains(head)) {
+			// the oracle loaded it before the program: its first qualified name loads
+			// it here, ahead of the datum naming it
+			ClojureNamespaceLowering.preload(this, head);
+			return this.createdNamespaces.contains(head) ? head : null;
+		}
 		return null;
 	}
 
@@ -2510,6 +2534,7 @@ public final class ClojureLowering {
 	}
 
 	private List<LispVal> topLevelsOf(LispVal form) {
+		this.topLevelDepth++;
 		try {
 			if (ClojureLowerUtil.isNsForm(form)) {
 				// wires the aliases and defines nothing itself; its clauses'
@@ -2573,6 +2598,9 @@ public final class ClojureLowering {
 		}
 		catch (LispReadException ex) {
 			throw positioned(ex, form);
+		}
+		finally {
+			this.topLevelDepth--;
 		}
 	}
 

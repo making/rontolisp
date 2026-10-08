@@ -479,8 +479,9 @@ final class ClojureNamespaceLowering {
 			ctx.requiredLibraries.add(ns);
 		}
 		else {
-			if (ns.startsWith("clojure.")) {
-				// the language's own libraries are lowerings, never project files
+			if (ClojureBuiltinNamespaces.isLanguage(ns) && !ClojureBuiltinNamespaces.isShipped(ns)) {
+				// the language's own libraries are lowerings or built-in files, never
+				// project files; a contrib clojure.* library is found like any other
 				throw new LispReadException("unknown namespace: " + ns);
 			}
 			// a dependency edge for :reload-all: the file being lowered owns it
@@ -615,6 +616,22 @@ final class ClojureNamespaceLowering {
 		}
 		ctx.loadFile(ns, found);
 		ctx.emitNamespaceInit(ns);
+	}
+
+	/**
+	 * Loads a shipped namespace the oracle loads before the program
+	 * ({@link ClojureBuiltinNamespaces#isStartup}) where a qualified name first reaches
+	 * it: its definitions ahead of the top-level datum at hand, its init (if any) run
+	 * there behind its loaded flag.
+	 * @param ctx the hub
+	 * @param ns the namespace
+	 */
+	static void preload(ClojureLowering ctx, String ns) {
+		loadNamespace(ctx, ns);
+		LispVal init = ctx.requireCall(ns, ClojureLowering.LoadMode.GUARDED);
+		if (init != null) {
+			ctx.hoisted.add(init);
+		}
 	}
 
 	/**

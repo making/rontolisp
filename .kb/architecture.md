@@ -18,9 +18,9 @@ picks the language per file from its extension, with a `--source-language` CLI o
 the entry source, so one program may mix languages file by file. No class outside the seam
 reads user source through `LispReader` (`SourceLanguageSeamTest`); library source shipped in
 the jar stays Common Lisp and keeps its direct reads, as do the runtime data reads and the
-`.asd` scans. The one exception is Clojure: the built-in Ring namespaces are Clojure source in
+`.asd` scans. The one exception is Clojure: the built-in Ring and clojure.jar namespaces are Clojure source in
 the jar, which the Clojure lowering loads behind the seam like a project file
-(`.kb/clojure-frontend.md`, "Ring util namespaces"). The seam lives in `eval`, reachable from `cli`, `web` and the interpreter's
+(`.kb/clojure-frontend.md`, "Ring util namespaces", "clojure.jar namespaces"). The seam lives in `eval`, reachable from `cli`, `web` and the interpreter's
 `load` under the existing graph. The second language is `scheme` -- an EXPERIMENTAL R7RS-small
 subset for `.scm`, lowered to the same core forms so no backend learns a Scheme name; its
 run-time helpers are Common Lisp source spliced like any other library

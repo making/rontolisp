@@ -46,7 +46,8 @@ Common Lisp ファイルはこの名前で呼び出します。
 `:reload-all` は依存先を先に再実行します。いずれも oracle と同じです。`ns` フォームのないファイルは、require した側の
 名前空間に定義を追加します。`(load "path")` と ns の `(:load "path" ...)` 節は、現在の名前空間のファイルがあるディレクトリからの相対パス（先頭が `/` ならソースルートから）でファイル（`path.clj`、なければ `path.cljc`）を読み、現在の名前空間で実行します。呼ぶたびに再実行し、`nil` を返し、ファイル内の `in-ns` は終了後に残りません。パスは文字列リテラルで、ファイルは lower の間に読まれます。`use` と `:refer :all` は public な var をすべて refer します。
 どのルートにもないファイル、require の循環、存在しない var や private な var の refer は、
-oracle と同じ文言のエラーになります。
+oracle と同じ文言のエラーになります。[組み込みの名前空間](reference/namespaces.md#built-in-namespaces)
+はファイルを必要としません。
 
 `*ns*` は現在の名前空間を値として持ちます。`ns` と `in-ns` が実行された時点で切り替わり、
 読むコードの実行時に読まれるため、関数は呼び出し側の名前空間を答えます。require された

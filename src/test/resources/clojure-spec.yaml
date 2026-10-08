@@ -7704,3 +7704,67 @@ cases:
       clojure.core/map rn-ns/map
       [:mine 1 2]
       (2)
+  - name: clojure-walk-is-loaded-before-the-program
+    # The oracle loads clojure.walk at startup, so a qualified name reaches it
+    # without a require; here its first qualified name loads it.
+    source: |
+      (defn walk-ids [] (clojure.walk/postwalk-replace {:id 1} [:id #{:id}]))
+      (prn (walk-ids) (some? (find-ns 'clojure.walk)) (clojure.walk/keywordize-keys {"q" 1}))
+      (prn #'clojure.walk/prewalk (map clojure.walk/stringify-keys [{:a 1} {:b 2}]))
+    expected: |
+      [1 #{1}] true {:q 1}
+      #'clojure.walk/prewalk ({"a" 1} {"b" 2})
+  - name: clojure-walk-rebuilds-every-kind-of-collection
+    # The built-in clojure.walk (Clojure source written for this front end,
+    # .kb/clojure-frontend.md "clojure.jar namespaces"); every line is the oracle's
+    # (clj 1.12.6), on all four backends. A sorted collection keeps its comparator, a
+    # record its type and extra keys, every kind its metadata.
+    source: |
+      (ns walk-kinds (:require [clojure.walk :as w]))
+      (defrecord WR [a b])
+      (prn (w/postwalk #(if (number? %) (inc %) %) [1 '(2 [3]) #{4} {:k 5} (sorted-map 2 :b 1 :a)]))
+      (prn (w/prewalk #(if (vector? %) (vec (reverse %)) %) [[1 2] '(3 [4 5])]))
+      (prn (w/walk inc #(apply + %) [1 2 3]) (w/walk inc identity '(1 2)) (w/walk inc identity nil) (w/walk inc identity "s"))
+      (prn (w/postwalk #(if (number? %) (* 10 %) %) (->WR 1 (assoc (->WR 2 3) :z 4))))
+      (prn (w/postwalk #(if (number? %) (inc %) %) (sorted-set-by > 1 3 2)))
+      (prn (w/postwalk #(if (number? %) (inc %) %) (lazy-seq [1 (lazy-seq [2 3])])))
+      (prn (map meta [(w/postwalk identity (with-meta [1] {:v 1})) (w/postwalk identity (with-meta '(1) {:l 1}))
+                      (w/prewalk identity (with-meta {:a 1} {:m 1})) (w/prewalk identity (with-meta #{1} {:s 1}))
+                      (w/postwalk identity (with-meta (->WR 1 2) {:r 1}))]))
+      (prn (w/prewalk #(if (and (vector? %) (keyword? (first %))) [(first %) :x] %) {:a 1}))
+      (in-ns 'user)
+    expected: |
+      [2 (3 [4]) #{5} {:k 6} {2 :a, 3 :b}]
+      [(3 [5 4]) [2 1]]
+      9 (2 3) nil "s"
+      #walk_kinds.WR{:a 10, :b #walk_kinds.WR{:a 20, :b 30, :z 40}}
+      #{4 3 2}
+      (2 (3 4))
+      ({:v 1} {:l 1} {:m 1} {:s 1} {:r 1})
+      {:a :x}
+  - name: clojure-walk-converts-keys-and-replaces-values
+    source: |
+      (ns walk-keys (:require [clojure.walk :refer [keywordize-keys stringify-keys prewalk-replace postwalk-replace postwalk-demo prewalk-demo]]))
+      (prn (keywordize-keys {"a" {"b" [{"c" 1}]}}) (keywordize-keys {"x y" 1}) (keywordize-keys [{1 2} nil]))
+      (prn (stringify-keys {:a {:ns/b [{:c 1}]}}) (stringify-keys {1 :k}))
+      (prn (prewalk-replace {:a :b} [:a {:a :a} '(:a)]) (postwalk-replace {[1] :one} [[1] [[1]]]))
+      (prn (prewalk-replace {[1] :one} [[1] [[1]]]) (postwalk-replace '{x 1} '(+ x (* x 2))))
+      (prn (postwalk-demo [1 '(2)]))
+      (prn (prewalk-demo {:a [1]}))
+      (in-ns 'user)
+    expected: |
+      {:a {:b [{:c 1}]}} {:x y 1} [{1 2} nil]
+      {"a" {"b" [{"c" 1}]}} {1 :k}
+      [:b {:b :b} (:b)] [:one [:one]]
+      [:one [:one]] (+ 1 (* 1 2))
+      Walked: 1
+      Walked: 2
+      Walked: (2)
+      Walked: [1 (2)]
+      [1 (2)]
+      Walked: {:a [1]}
+      Walked: [:a [1]]
+      Walked: :a
+      Walked: [1]
+      Walked: 1
+      {:a [1]}

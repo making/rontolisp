@@ -50,7 +50,8 @@ defines into the requiring namespace. `(load "path")` and the `(:load "path" ...
 every call, answering `nil`; its own `in-ns` does not outlive it. The path is a string literal: the file is read while the
 program lowers. `use` and `:refer :all` bring in every public var; a
 file no root holds, a cycle of requires and a refer of a missing or private var are errors
-in the oracle's words.
+in the oracle's words. A [built-in namespace](reference/namespaces.md#built-in-namespaces)
+needs no file.
 
 `*ns*` is the current namespace as a value, switched by `ns` and `in-ns` where they run and
 read when the reading code runs, so a function answers its caller's namespace. While a

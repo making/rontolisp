@@ -267,6 +267,8 @@ sections:
             title: "(clojure.string)"
           - file: clojure/reference/clojure-set.md
             title: "(clojure.set)"
+          - file: clojure/reference/clojure-walk.md
+            title: "(clojure.walk)"
           - file: clojure/reference/regex.md
             title: "正規表現"
           - file: clojure/reference/higher-order.md
