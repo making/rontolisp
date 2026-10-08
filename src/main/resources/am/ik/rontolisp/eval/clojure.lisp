@@ -938,12 +938,22 @@
   (rontolisp::%clojure-check-arity args 0 0 "read-line")
   (read-line (rontolisp::%clojure-open-reader *standard-input*) nil nil))
 
+;; A COLL reducing through its own CollReduce row runs F through that reduction,
+;; the oracle's (reduce #(proc %2) nil coll): an arm of the reducible family
+;; (clojure/ClojureArms), "CollReduce and IKVReduce" below.
 (defun rontolisp::%clojure-run! (f coll)
   "(run! f coll): F called on every member of COLL for effect, a lazy one
    realizing member by member; answers nil."
-  (do ((s (rontolisp::%clojure-seq coll) (rontolisp::%clojure-seq-rest s)))
-      ((null s) nil)
-    (funcall f (car s))))
+  (if (rontolisp::%clojure-coll-reducible-p coll)
+      (progn
+        (rontolisp::%clojure-coll-reduce-3 coll
+                                           (lambda (acc x)
+                                             (declare (ignore acc))
+                                             (funcall f x)) nil)
+        nil)
+      (do ((s (rontolisp::%clojure-seq coll) (rontolisp::%clojure-seq-rest s)))
+          ((null s) nil)
+        (funcall f (car s)))))
 
 (defun rontolisp::%clojure-run!-v (&rest args)
   "run! as a value."
@@ -1532,10 +1542,29 @@
 
 ;; Whether X is nil or a Clojure value with no host object of its own: a list or
 ;; a tagged wrapper (keyword, set, lazy seq, record, atom, ...), a vector, a map,
-;; a ratio or a symbol.
+;; a ratio, a symbol or a fn.
 (defun rontolisp::%clojure-value-receiver-p (x)
   (or (null x) (consp x) (hash-table-p x) (and (vectorp x) (not (stringp x)))
-      (rontolisp::%clojure-is-ratio x) (rontolisp::%clojure-real-symbol-p x)))
+      (functionp x) (rontolisp::%clojure-is-ratio x)
+      (rontolisp::%clojure-real-symbol-p x)))
+
+;; (.compare f a b) on a fn, the oracle's AFunction.compare: a true answer is -1, a
+;; false one 1 when F of B and A is true and else 0, a number its intValue;
+;; anything else the oracle's ClassCastException to Number (nil its
+;; NullPointerException).
+(defun rontolisp::%clojure-fn-compare (f a b)
+  (let ((r (funcall f a b)))
+    (cond ((eq r t) -1)
+          ((eq r rontolisp::%clojure-false)
+           (if (rontolisp::%clojure-truthy (funcall f b a)) 1 0))
+          ((realp r) (rontolisp::%clojure-unchecked-int r))
+          ((null r)
+           (rontolisp::%clojure-null-pointer-exception
+            "NullPointerException: compare of a fn answering nil"))
+          (t
+           (rontolisp::%clojure-class-cast-exception
+            (concatenate 'string "class " (rontolisp::%clojure-class-name-of r)
+                         " cannot be cast to class java.lang.Number"))))))
 
 ;; The oracle's class name of the value X, nil aside: a map of more than eight
 ;; entries a hash map (its literals and assoc growth), a smaller one an array
@@ -3362,16 +3391,44 @@
                                                                     depth))))
                          (setq done t))))))))))
 
+;; One collection reducing through its own CollReduce row maps through that
+;; reduction, as the oracle's mapv of one collection reduces it (several
+;; collections go through map, a seq, like the oracle's): an arm of the
+;; reducible family, "CollReduce and IKVReduce" below.
 (defun rontolisp::%clojure-mapv (f colls)
   "Map the real function F over the COLLS list, answering a vector (of empty,
    the empty vector)."
-  (coerce (apply #'mapcar f (mapcar #'rontolisp::%clojure-realize-all colls))
-          'vector))
+  (if (rontolisp::%clojure-coll-reducible-p (car colls))
+      (rontolisp::%clojure-mapv-reduced f colls)
+      (coerce
+       (apply #'mapcar f (mapcar #'rontolisp::%clojure-realize-all colls))
+       'vector)))
 
+(defun rontolisp::%clojure-mapv-reduced (f colls)
+  "mapv over the COLLS list whose first member reduces through its own
+   CollReduce row: alone, the vector of F over what that reduction steps."
+  (if (cdr colls)
+      (coerce
+       (apply #'mapcar f (mapcar #'rontolisp::%clojure-realize-all colls))
+       'vector)
+      (coerce (reverse
+               (rontolisp::%clojure-coll-reduce-3 (car colls)
+                (lambda (acc x) (cons (funcall f x) acc)) nil)) 'vector)))
+
+;; A COLL reducing through its own CollReduce row filters through that reduction,
+;; the oracle's filterv: an arm of the reducible family.
 (defun rontolisp::%clojure-filterv (pred coll)
   "Filter COLL through PRED under Clojure truthiness, answering a vector."
-  (coerce (remove-if-not (lambda (x) (rontolisp::%clojure-filter-test pred x))
-                         (rontolisp::%clojure-realize-all coll)) 'vector))
+  (if (rontolisp::%clojure-coll-reducible-p coll)
+      (coerce (reverse
+               (rontolisp::%clojure-coll-reduce-3 coll
+                (lambda (acc x)
+                  (if (rontolisp::%clojure-filter-test pred x)
+                      (cons x acc)
+                      acc)) nil)) 'vector)
+      (coerce (remove-if-not
+               (lambda (x) (rontolisp::%clojure-filter-test pred x))
+               (rontolisp::%clojure-realize-all coll)) 'vector)))
 
 (defun rontolisp::%clojure-mapcat (f colls)
   "Map the real function F over the COLLS list and concat the mapped seq
@@ -5171,18 +5228,22 @@
         (t (rontolisp::%clojure-map-entry-refusal
             (format nil "~A needs a map or a vector" name) coll))))
 
+;; A COLL reducing through its own IKVReduce row is handed to it, the oracle's
+;; kv-reduce: an arm of the reducible family, "CollReduce and IKVReduce" below.
 (defun rontolisp::%clojure-reduce-kv (f init coll)
   "(f acc k v) folded over COLL's pairs from INIT, stopping at a reduced
    answer (unwrapped)."
-  (let ((acc init) (pairs (rontolisp::%clojure-kv-pairs coll "reduce-kv")))
-    (do ()
-        ((null pairs) acc)
-      (setq acc (funcall f acc (car (car pairs)) (cdr (car pairs))))
-      (if (rontolisp::%clojure-reduced-p acc)
-          (progn
-            (setq acc (car (cdr acc)))
-            (setq pairs nil))
-          (setq pairs (cdr pairs))))))
+  (if (rontolisp::%clojure-kv-reducible-p coll)
+      (rontolisp::%clojure-kv-reduce-3 coll f init)
+      (let ((acc init) (pairs (rontolisp::%clojure-kv-pairs coll "reduce-kv")))
+        (do ()
+            ((null pairs) acc)
+          (setq acc (funcall f acc (car (car pairs)) (cdr (car pairs))))
+          (if (rontolisp::%clojure-reduced-p acc)
+              (progn
+                (setq acc (car (cdr acc)))
+                (setq pairs nil))
+              (setq pairs (cdr pairs)))))))
 
 (defun rontolisp::%clojure-reduce-kv-v (&rest args)
   "reduce-kv as a value."
@@ -5190,13 +5251,23 @@
   (rontolisp::%clojure-reduce-kv (rontolisp::%clojure-as-fn (car args))
                                  (car (cdr args)) (car (cdr (cdr args)))))
 
+;; update-keys and update-vals of an M reducing through its own IKVReduce row
+;; build the fresh map through that reduction, the oracle's reduce-kv into an
+;; empty map: arms of the reducible family, "CollReduce and IKVReduce" below.
 (defun rontolisp::%clojure-update-keys (m f)
   "A fresh map of M's entries under (f key) (a colliding key keeps one entry)."
-  (let ((out (make-hash-table :test 'equal)))
-    (dolist (kv (rontolisp::%clojure-kv-pairs m "update-keys") out)
-      (setf
-       (gethash (rontolisp::%clojure-store-key (funcall f (car kv)) out) out)
-       (cdr kv)))))
+  (if (rontolisp::%clojure-kv-reducible-p m)
+      (rontolisp::%clojure-kv-reduce-3 m
+                                       (lambda (out k v)
+                                         (setf (gethash
+                                                (rontolisp::%clojure-store-key
+                                                 (funcall f k) out) out) v)
+                                         out) (make-hash-table :test 'equal))
+      (let ((out (make-hash-table :test 'equal)))
+        (dolist (kv (rontolisp::%clojure-kv-pairs m "update-keys") out)
+          (setf (gethash
+                 (rontolisp::%clojure-store-key (funcall f (car kv)) out) out)
+                (cdr kv))))))
 
 (defun rontolisp::%clojure-update-keys-v (&rest args)
   "update-keys as a value."
@@ -5207,11 +5278,18 @@
 (defun rontolisp::%clojure-update-vals (m f)
   "M with (f value) for every value: a vector stays a vector, a map or record
    answers a fresh map, nil the empty map."
-  (if (and (vectorp m) (not (stringp m)))
-      (coerce (mapcar f (coerce m 'list)) 'vector)
-      (let ((out (make-hash-table :test 'equal)))
-        (dolist (kv (rontolisp::%clojure-kv-pairs m "update-vals") out)
-          (setf (gethash (car kv) out) (funcall f (cdr kv)))))))
+  (if (rontolisp::%clojure-kv-reducible-p m)
+      (rontolisp::%clojure-kv-reduce-3 m
+                                       (lambda (out k v)
+                                         (setf (gethash
+                                                (rontolisp::%clojure-store-key k
+                                                 out) out) (funcall f v))
+                                         out) (make-hash-table :test 'equal))
+      (if (and (vectorp m) (not (stringp m)))
+          (coerce (mapcar f (coerce m 'list)) 'vector)
+          (let ((out (make-hash-table :test 'equal)))
+            (dolist (kv (rontolisp::%clojure-kv-pairs m "update-vals") out)
+              (setf (gethash (car kv) out) (funcall f (cdr kv))))))))
 
 (defun rontolisp::%clojure-update-vals-v (&rest args)
   "update-vals as a value."
@@ -7131,28 +7209,6 @@
   (rontolisp::%clojure-check-arity args 1 1 "num")
   (rontolisp::%clojure-num (car args)))
 
-(defun rontolisp::%clojure-vector-of-long (x)
-  "The oracle's longCast of X: a character's code, an integer in the long range,
-   a ratio truncated, a double truncated toward zero (NaN 0) when it is in
-   range; anything else signals, so does a value out of range."
-  (let ((n
-         (cond ((characterp x) (char-code x))
-               ((integerp x) x)
-               ((floatp x)
-                (cond ((/= x x) 0)
-                      ((or (> x 9.223372036854775807e18)
-                           (< x -9.223372036854775808e18))
-                       nil)
-                      (t (truncate x))))
-               ((numberp x) (truncate x))
-               (t (rontolisp::%clojure-class-cast-exception-of
-                   "vector-of needs a number or a character" x)))))
-    (if (or (null n) (> n 9223372036854775807) (< n -9223372036854775808))
-        (rontolisp::%clojure-illegal-argument-exception
-         (concatenate 'string "Value out of range for long: "
-                      (rontolisp::%clojure-str-of x "null" nil)))
-        n)))
-
 (defun rontolisp::%clojure-vector-of-range (x n lo hi kind)
   "N (X's integer value) when it lies in LO..HI, else the oracle's refusal for
    the primitive KIND, spelling X."
@@ -7168,18 +7224,16 @@
    its code) and refuse one out of range (through longCast, unlike byte and
    short, which compare a double first), :double and :float widen to a double
    (:float refusing one past the float range), :char takes a character or a code, :boolean is the truthiness."
-  (cond ((equal kind "long") (rontolisp::%clojure-vector-of-long x))
-        ((equal kind "int")
-         (let ((n (rontolisp::%clojure-vector-of-long x)))
-           (if (or (< n -2147483648) (> n 2147483647))
-               (rontolisp::%clojure-arithmetic-exception "integer overflow")
-               n)))
+  (cond ((equal kind "long") (rontolisp::%clojure-long-cast x))
+        ((equal kind "int") (rontolisp::%clojure-int-cast x))
         ((equal kind "short")
          (rontolisp::%clojure-vector-of-range x
-          (rontolisp::%clojure-vector-of-long x) -32768 32767 "short"))
+                                              (rontolisp::%clojure-long-cast x)
+                                              -32768 32767 "short"))
         ((equal kind "byte")
          (rontolisp::%clojure-vector-of-range x
-          (rontolisp::%clojure-vector-of-long x) -128 127 "byte"))
+                                              (rontolisp::%clojure-long-cast x)
+                                              -128 127 "byte"))
         ((equal kind "double") (rontolisp::%clojure-double x))
         ((equal kind "float") (rontolisp::%clojure-float x))
         ((equal kind "char")
@@ -7221,6 +7275,116 @@
   "vector-of as a value."
   (rontolisp::%clojure-check-arity args 1 nil "vector-of")
   (rontolisp::%clojure-vector-of (car args) (cdr args)))
+
+;;;; The oracle's long and int casts, and clojure.math's round and long arithmetic.
+;;
+;; The two casts are the oracle's RT.longCast and RT.intCast of an object: what a
+;; ^long parameter and (int x) apply, and what vector-of stores an integer kind
+;; through. The double functions of clojure.math are one (%strict-math :name ...)
+;; each, over arguments cast by %clojure-double, lowered in place by the
+;; rontolisp.internal.math kernels (ClojureKernelLowering); the functions below are
+;; the kernels that are workers.
+
+(defun rontolisp::%clojure-long-cast (x)
+  "X as the oracle's longCast takes an object: an integer in the long range, a
+   ratio truncated toward zero, a double truncated (NaN is 0, 2^63 itself the
+   largest long, as Java's (long) saturates, one past it refused), a
+   character's code; anything else signals, so does a value out of range."
+  (let ((n
+         (cond ((characterp x) (char-code x))
+               ((integerp x) x)
+               ((floatp x)
+                (cond ((/= x x) 0)
+                      ((or (> x 9.223372036854775807e18)
+                           (< x -9.223372036854775808e18))
+                       nil)
+                      ((>= x 9.223372036854775807e18) 9223372036854775807)
+                      (t (truncate x))))
+               ((numberp x) (truncate x))
+               (t (rontolisp::%clojure-class-cast-exception-of
+                   "long needs a number or a character" x)))))
+    (if (or (null n) (> n 9223372036854775807) (< n -9223372036854775808))
+        (rontolisp::%clojure-illegal-argument-exception
+         (concatenate 'string "Value out of range for long: "
+          (rontolisp::%clojure-str-of (if (null n) x n) "null" nil)))
+        n)))
+
+(defun rontolisp::%clojure-int-cast (x)
+  "X as the oracle's intCast takes an object: its longCast, refused past the
+   int range as the oracle's integer overflow."
+  (let ((n (rontolisp::%clojure-long-cast x)))
+    (if (or (< n -2147483648) (> n 2147483647))
+        (rontolisp::%clojure-arithmetic-exception "integer overflow")
+        n)))
+
+(defun rontolisp::%clojure-math-round (a)
+  "(clojure.math/round a): the long nearest the double of A, a tie rounding up
+   -- the floor of a + 1/2, exactly; NaN is 0, and a double past either end of
+   the long range is that end, like Java's Math.round."
+  (let ((x (rontolisp::%clojure-double a)))
+    (cond ((/= x x) 0)
+          ((>= x 9.223372036854775807e18) 9223372036854775807)
+          ((<= x -9.223372036854775808e18) -9223372036854775808)
+          ((>= (abs x) 4.503599627370496e15) (truncate x))
+          (t (floor (+ (rational x) 1/2))))))
+
+(defun rontolisp::%clojure-math-floor-div (x y)
+  "(clojure.math/floor-div x y): the largest long not above x / y, both longs;
+   the one quotient past the long range (Long/MIN_VALUE by -1) wraps, and a
+   zero divisor is the oracle's ArithmeticException."
+  (let ((a (rontolisp::%clojure-long-cast x))
+        (b (rontolisp::%clojure-long-cast y)))
+    (if (= b 0)
+        (rontolisp::%clojure-arithmetic-exception "/ by zero")
+        (rontolisp::%clojure-wrap-long (floor a b)))))
+
+(defun rontolisp::%clojure-math-floor-mod (x y)
+  "(clojure.math/floor-mod x y): x minus (floor-div x y) times y, both longs,
+   which takes y's sign; a zero divisor is the oracle's ArithmeticException."
+  (let ((a (rontolisp::%clojure-long-cast x))
+        (b (rontolisp::%clojure-long-cast y)))
+    (if (= b 0)
+        (rontolisp::%clojure-arithmetic-exception "/ by zero")
+        (mod a b))))
+
+(defun rontolisp::%clojure-math-exact (n)
+  "N when it is a long, else the oracle's ArithmeticException, long overflow."
+  (if (or (< n -9223372036854775808) (> n 9223372036854775807))
+      (rontolisp::%clojure-arithmetic-exception "long overflow")
+      n))
+
+(defun rontolisp::%clojure-math-add-exact (x y)
+  "(clojure.math/add-exact x y): the sum of two longs, refused past the long
+   range."
+  (rontolisp::%clojure-math-exact
+   (+ (rontolisp::%clojure-long-cast x) (rontolisp::%clojure-long-cast y))))
+
+(defun rontolisp::%clojure-math-subtract-exact (x y)
+  "(clojure.math/subtract-exact x y): the difference of two longs, refused past
+   the long range."
+  (rontolisp::%clojure-math-exact
+   (- (rontolisp::%clojure-long-cast x) (rontolisp::%clojure-long-cast y))))
+
+(defun rontolisp::%clojure-math-multiply-exact (x y)
+  "(clojure.math/multiply-exact x y): the product of two longs, refused past
+   the long range."
+  (rontolisp::%clojure-math-exact
+   (* (rontolisp::%clojure-long-cast x) (rontolisp::%clojure-long-cast y))))
+
+(defun rontolisp::%clojure-math-increment-exact (a)
+  "(clojure.math/increment-exact a): the long A plus one, refused past the long
+   range."
+  (rontolisp::%clojure-math-exact (+ (rontolisp::%clojure-long-cast a) 1)))
+
+(defun rontolisp::%clojure-math-decrement-exact (a)
+  "(clojure.math/decrement-exact a): the long A minus one, refused past the long
+   range."
+  (rontolisp::%clojure-math-exact (- (rontolisp::%clojure-long-cast a) 1)))
+
+(defun rontolisp::%clojure-math-negate-exact (a)
+  "(clojure.math/negate-exact a): minus the long A, refused past the long range
+   (Long/MIN_VALUE has no long negation)."
+  (rontolisp::%clojure-math-exact (- (rontolisp::%clojure-long-cast a))))
 
 ;;;; Metadata: with-meta and meta over an identity side table.
 ;;
@@ -7329,6 +7493,34 @@
                                 (car (cdr (cdr (cdr m)))))))))
           (if (rontolisp::%clojure-truthy f) f nil))
         nil)))
+
+;;;; Monitors: the lock locking holds on the interpreter and the JVM.
+;;
+;; The oracle's locking enters the object's own monitor. Here a value has none, so
+;; rontolisp::%clojure-monitors maps it, by identity (eql: a number by value), to a
+;; reentrant rontolisp:make-mutex, made on first use under one guard mutex (a Ring
+;; handler runs one thread per request, so two may ask at once). A keyword is a
+;; fresh list per site, so it is keyed by its spelling instead, one monitor per
+;; keyword like the oracle's interned one. Like the metadata table it keeps every
+;; object it was handed. The wasm lowering never calls it: a module is
+;; single-threaded, so the body runs as is.
+
+(defvar rontolisp::%clojure-monitor-guard (rontolisp:make-mutex))
+
+(defvar rontolisp::%clojure-monitors (make-hash-table :test 'eql))
+
+(defvar rontolisp::%clojure-keyword-monitors (make-hash-table :test 'equal))
+
+(defun rontolisp::%clojure-monitor (x)
+  "The reentrant mutex standing for X's monitor."
+  (rontolisp:with-mutex (rontolisp::%clojure-monitor-guard)
+    (let ((table
+           (if (rontolisp::%clojure-keyword-p x)
+               rontolisp::%clojure-keyword-monitors
+               rontolisp::%clojure-monitors))
+          (key (if (rontolisp::%clojure-keyword-p x) (car (cdr x)) x)))
+      (or (gethash key table)
+          (setf (gethash key table) (rontolisp:make-mutex))))))
 
 ;;;; Vars: #'x as a value.
 ;;
@@ -7688,18 +7880,128 @@
             (setq done t))
           (setq s (rontolisp::%clojure-seq-rest s))))))
 
+;; reduce and reduce-init hand a COLL reducing through its own CollReduce row to
+;; it: arms of the reducible family, "CollReduce and IKVReduce" below. into,
+;; transduce and the cat transducer reduce through reduce-init.
 (defun rontolisp::%clojure-reduce (f coll)
   "(reduce f coll): (f) of empty, the lone member of one, else F folded from
    the head over the rest."
-  (let ((s (rontolisp::%clojure-seq coll)))
-    (if (null s)
-        (funcall f)
-        (rontolisp::%clojure-reduce-seq f (car s)
-                                        (rontolisp::%clojure-seq-rest s)))))
+  (if (rontolisp::%clojure-coll-reducible-p coll)
+      (rontolisp::%clojure-coll-reduce-2 coll f)
+      (let ((s (rontolisp::%clojure-seq coll)))
+        (if (null s)
+            (funcall f)
+            (rontolisp::%clojure-reduce-seq f (car s)
+             (rontolisp::%clojure-seq-rest s))))))
 
 (defun rontolisp::%clojure-reduce-init (f init coll)
   "(reduce f init coll)."
-  (rontolisp::%clojure-reduce-seq f init (rontolisp::%clojure-seq coll)))
+  (if (rontolisp::%clojure-coll-reducible-p coll)
+      (rontolisp::%clojure-coll-reduce-3 coll f init)
+      (rontolisp::%clojure-reduce-seq f init (rontolisp::%clojure-seq coll))))
+
+;; CollReduce and IKVReduce (clojure.core.protocols). The oracle's reduce asks
+;; CollReduce for a collection that does not reduce itself, and reduce-kv asks
+;; IKVReduce, so a record, deftype or reify whose type has its own row of either
+;; -- in its body or extended to it -- reduces through that row; so do the verbs
+;; the oracle builds on reduce (into, transduce, the cat transducer, run!, mapv
+;; and filterv of one collection, group-by and frequencies through
+;; %clojure-reducible-items) and on reduce-kv (update-keys, update-vals). Every
+;; other value takes the verb's own walk, which answers what the oracle's rows
+;; for the core collections do (an extension of either protocol to nil, Object
+;; or a core kind is reached through coll-reduce or kv-reduce themselves).
+;;
+;; A typed row of the two protocols is stored through %clojure-coll-reducer-row
+;; or %clojure-kv-reducer-row, which keep the protocol's table for these arms:
+;; the two are the producers of the reducible family (clojure/ClojureArms
+;; REDUCIBLE), so a program storing no such row has every arm folded and
+;; compiles as before.
+
+(defvar rontolisp::%clojure-coll-reducers nil)
+
+(defvar rontolisp::%clojure-kv-reducers nil)
+
+(defun rontolisp::%clojure-reducer-row (table tag method fn)
+  "Stores FN as METHOD of the row TAG has in the protocol TABLE, the row made
+   on first use, and answers TABLE."
+  (let ((row (gethash tag table)))
+    (if (null row)
+        (progn
+          (setq row (make-hash-table :test 'equal))
+          (setf (gethash tag table) row)))
+    (setf (gethash method row) fn)
+    table))
+
+(defun rontolisp::%clojure-coll-reducer-row (table tag fn)
+  "Stores FN as the coll-reduce method of the record, deftype or reify type TAG
+   in CollReduce's method TABLE, which reduce and the verbs built on it read
+   from then on."
+  (setq rontolisp::%clojure-coll-reducers
+   (rontolisp::%clojure-reducer-row table tag '(:c%keyword "coll-reduce") fn)))
+
+(defun rontolisp::%clojure-kv-reducer-row (table tag fn)
+  "Stores FN as the kv-reduce method of the record, deftype or reify type TAG in
+   IKVReduce's method TABLE, which reduce-kv and the verbs built on it read
+   from then on."
+  (setq rontolisp::%clojure-kv-reducers
+   (rontolisp::%clojure-reducer-row table tag '(:c%keyword "kv-reduce") fn)))
+
+(defun rontolisp::%clojure-typed-reducer (x table method)
+  "The METHOD function of the row the type of the record, deftype or reify X
+   holds in the protocol TABLE, or nil: no table yet, any other value, no row,
+   no such method."
+  (if (and table (consp x)
+       (or (eq (car x) :c%record) (eq (car x) :c%type) (eq (car x) :c%reify)))
+      (let ((row (gethash (car (cdr x)) table)))
+        (if row (gethash method row) nil))
+      nil))
+
+(defun rontolisp::%clojure-coll-reducible-p (x)
+  "Whether X reduces through its own CollReduce row: the reducible family's
+   test."
+  (if (rontolisp::%clojure-typed-reducer x rontolisp::%clojure-coll-reducers
+                                         '(:c%keyword "coll-reduce"))
+      t
+      nil))
+
+(defun rontolisp::%clojure-kv-reducible-p (x)
+  "Whether X reduces through its own IKVReduce row: the reducible family's
+   test."
+  (if (rontolisp::%clojure-typed-reducer x rontolisp::%clojure-kv-reducers
+                                         '(:c%keyword "kv-reduce"))
+      t
+      nil))
+
+(defun rontolisp::%clojure-coll-reduce-2 (coll f)
+  "(coll-reduce coll f) through COLL's own CollReduce row."
+  (funcall (rontolisp::%clojure-typed-reducer coll
+                                              rontolisp::%clojure-coll-reducers
+                                              '(:c%keyword "coll-reduce")) coll
+           f))
+
+(defun rontolisp::%clojure-coll-reduce-3 (coll f init)
+  "(coll-reduce coll f init) through COLL's own CollReduce row."
+  (funcall (rontolisp::%clojure-typed-reducer coll
+                                              rontolisp::%clojure-coll-reducers
+                                              '(:c%keyword "coll-reduce")) coll
+           f init))
+
+(defun rontolisp::%clojure-kv-reduce-3 (coll f init)
+  "(kv-reduce coll f init) through COLL's own IKVReduce row."
+  (funcall (rontolisp::%clojure-typed-reducer coll
+                                              rontolisp::%clojure-kv-reducers
+                                              '(:c%keyword "kv-reduce")) coll f
+           init))
+
+(defun rontolisp::%clojure-reducible-items (coll)
+  "COLL, unless it reduces through its own CollReduce row: then the list of
+   what that reduction steps, in order. The reducible family's view, which
+   group-by and frequencies walk."
+  (if (rontolisp::%clojure-coll-reducible-p coll)
+      (reverse
+       (rontolisp::%clojure-coll-reduce-3 coll (lambda (acc x) (cons x acc))
+                                          nil))
+      coll))
 
 (defun rontolisp::%clojure-xf-rf (rf step complete)
   "A reducing function over RF: STEP (a two-argument closure) for the step
@@ -8040,14 +8342,16 @@
         (rontolisp::%clojure-transduce-3 xf f (car more))
         (rontolisp::%clojure-transduce xf f (car more) (car (cdr more))))))
 
+;; A collection reducing through its own CollReduce row steps what that reduction
+;; steps (the reducible family's view, "CollReduce and IKVReduce").
 (defun rontolisp::%clojure-eduction-v (&rest args)
   "eduction as a value: transducers then one collection."
   (rontolisp::%clojure-check-arity args 1 nil "eduction")
   (let ((rev (reverse args)))
-    (rontolisp::%clojure-sequence-xf (rontolisp::%clojure-xf-comp
-                                      (mapcar #'rontolisp::%clojure-as-fn
-                                              (reverse (cdr rev))))
-                                     (list (car rev)))))
+    (rontolisp::%clojure-sequence-xf
+     (rontolisp::%clojure-xf-comp
+      (mapcar #'rontolisp::%clojure-as-fn (reverse (cdr rev))))
+     (list (rontolisp::%clojure-reducible-items (car rev))))))
 
 (defun rontolisp::%clojure-sequence-v (&rest args)
   "sequence as a value: [coll] or [xf coll...]."
@@ -12160,6 +12464,45 @@
                (and slash (rontolisp::%clojure-ring-keyword-part-p s 0 slash t)
                     (rontolisp::%clojure-ring-keyword-part-p s (+ slash 1) n
                                                              nil)))))))
+
+;;;; The clojure.core.reducers kernels: rontolisp.internal.reducers, the
+;;;; namespace only the built-in clojure.core.reducers requires, lowers each var
+;;;; to one of these. cat's accumulator, the oracle's java.util.ArrayList, is a
+;;;; growable vector here (adjustable, with a fill pointer): it counts, seqs,
+;;;; prints and reduces as a vector on every backend, append! pushes onto it,
+;;;; and cat of two non-empty collections answers a fresh one holding both in
+;;;; order -- where the oracle answers a Cat, a tree of the two, which folds
+;;;; part by part; a fold reduces an accumulator whole, like the oracle's
+;;;; ArrayList.
+
+(defun rontolisp::%clojure-reducers-accumulator ()
+  "A fresh empty accumulator: (cat)."
+  (make-array 0 :adjustable t :fill-pointer 0))
+
+(defun rontolisp::%clojure-reducers-accumulator-p (x)
+  "Whether X is an accumulator cat made, T or NIL."
+  (and (vectorp x) (not (stringp x)) (array-has-fill-pointer-p x)))
+
+(defun rontolisp::%clojure-reducers-append (acc x)
+  "append!: X pushed onto the accumulator ACC, answering ACC. Any other ACC
+   takes no add: nil is the oracle's NullPointerException, anything else its
+   UnsupportedOperationException."
+  (cond ((rontolisp::%clojure-reducers-accumulator-p acc)
+         (vector-push-extend x acc)
+         acc)
+        ((null acc)
+         (rontolisp::%clojure-null-pointer-exception
+          "append! needs an accumulator cat made, not nil"))
+        (t (rontolisp::%clojure-unsupported-operation-exception
+            "append! needs an accumulator cat made"))))
+
+(defun rontolisp::%clojure-reducers-joined (left right)
+  "cat of two non-empty collections: a fresh accumulator holding the members
+   of LEFT, then those of RIGHT."
+  (let ((out (make-array 0 :adjustable t :fill-pointer 0)))
+    (dolist (x (rontolisp::%clojure-seq-all left)) (vector-push-extend x out))
+    (dolist (x (rontolisp::%clojure-seq-all right)) (vector-push-extend x out))
+    out))
 
 ;;;; The clojure.pprint kernels: rontolisp.internal.pprint, the namespace only
 ;;;; the built-in clojure.pprint requires, lowers each var to one of these.

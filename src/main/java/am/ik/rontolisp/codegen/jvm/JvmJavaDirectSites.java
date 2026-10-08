@@ -15,6 +15,7 @@ import java.util.Objects;
 
 import am.ik.jvm.ConstantPool;
 import am.ik.jvm.MethodCode;
+import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.compiler.JavaClassLookup;
 import am.ik.rontolisp.compiler.JavaExecutable;
 import am.ik.rontolisp.compiler.JavaField;
@@ -124,6 +125,12 @@ final class JvmJavaDirectSites {
 	/** {@code _jseq(Object)Object[]}: the elements of a proper list or rank-1 vector. */
 	static final String SEQUENCE = "_jseq";
 
+	/**
+	 * {@code _jtab(Object)Object[]}: a Lisp hash table's entries, keys and values
+	 * alternating.
+	 */
+	static final String TABLE = "_jtab";
+
 	/** The prefix of {@code _jcost$N(Object)I}: a value's cost for one parameter type. */
 	static final String COST_PREFIX = "_jcost$";
 
@@ -155,7 +162,7 @@ final class JvmJavaDirectSites {
 	private static final String SIGNAL_DESC = "(Ljava/lang/Throwable;)Ljava/lang/Throwable;";
 
 	// _jkind's codes: a Lisp kind's is its index in LISP_KINDS (its ordinal), then the
-	// four below.
+	// five below.
 	private static final JavaKind.Lisp[] LISP_KINDS = JavaKind.Lisp.values();
 
 	private static final int KIND_CONS = LISP_KINDS.length;
@@ -165,6 +172,9 @@ final class JvmJavaDirectSites {
 	private static final int KIND_HOST = KIND_CONS + 2;
 
 	private static final int KIND_NONE = KIND_CONS + 3;
+
+	// A Lisp hash table, in a program that can hold one (hashTables).
+	private static final int KIND_TABLE = KIND_CONS + 4;
 
 	private static final String OBJECT_DESC = "(Ljava/lang/Object;)Ljava/lang/Object;";
 
@@ -234,6 +244,11 @@ final class JvmJavaDirectSites {
 
 	private @Nullable MethodRefEntry bf16Value;
 
+	// The program's _hashValues when it can hold a hash table, and _jtab over it.
+	private @Nullable MethodRefEntry hashValues;
+
+	private @Nullable MethodRefEntry tableEntries;
+
 	private final Map<String, MethodRefEntry> costs = new LinkedHashMap<>();
 
 	private @Nullable JvmJavaImplementations implementations;
@@ -301,6 +316,18 @@ final class JvmJavaDirectSites {
 		this.floatVectors = floats;
 		this.intVectors = ints;
 		this.bf16Value = bf16Value;
+	}
+
+	/**
+	 * Names the program's {@code _hashValues} when it can hold a hash table, which a
+	 * table argument's entries are read through as the bridge's {@code marshal} reads
+	 * them: a table converts to a {@code java.util.LinkedHashMap} where one is expected.
+	 * A program without the hash-table runtime never tests for a table.
+	 * @param hashValues the program's {@code _hashValues(Object)Object[]}, or
+	 * {@code null}
+	 */
+	void hashTables(@Nullable MethodRefEntry hashValues) {
+		this.hashValues = hashValues;
 	}
 
 	/**
@@ -655,6 +682,10 @@ final class JvmJavaDirectSites {
 		StringBuilder key = new StringBuilder();
 		key.append(site.operator()).append('|').append(site.staticClass()).append('|').append(site.designator());
 		key.append('|').append(site.packed()).append('|').append(staticField).append('|').append(packedValues);
+		if (site.functional()) {
+			// a function argument converts by its arguments (Body.functional)
+			key.append("|functional");
+		}
 		for (JavaSite.Argument argument : site.arguments()) {
 			key.append('|');
 			for (JavaKind kind : argument.kinds()) {
@@ -911,6 +942,7 @@ final class JvmJavaDirectSites {
 					JvmJavaDirectSites.this.lookup.find(Objects.requireNonNull(site.staticClass())), "resolved class");
 			this.owner = cls(this.type);
 			this.operator = "java:" + site.operator().name().toLowerCase(java.util.Locale.ROOT);
+			this.functional = site.functional();
 			this.valueSlots = new int[valueCount];
 			for (int i = 0; i < valueCount; i++) {
 				if (packedValues) {
@@ -1361,7 +1393,7 @@ final class JvmJavaDirectSites {
 				JavaType param = params.get(j);
 				a.aload(this.valueSlots[firstValue + j]);
 				boolean open = arguments.get(j).mayBeFunction();
-				a.invokestatic(convert(param, open, open));
+				a.invokestatic(convert(param, open, open, open && this.functional));
 				converted[j] = this.nextSlot;
 				this.nextSlot += width(param);
 				store(param, converted[j]);
@@ -1377,7 +1409,7 @@ final class JvmJavaDirectSites {
 					a.loadConstant(j - fixed);
 					a.aload(this.valueSlots[firstValue + j]);
 					boolean open = arguments.get(j).mayBeFunction();
-					a.invokestatic(convert(component, open, open));
+					a.invokestatic(convert(component, open, open, open && this.functional));
 					a.arrayStore(typeKind(component));
 				}
 				converted[fixed] = array;
@@ -1408,6 +1440,10 @@ final class JvmJavaDirectSites {
 		final int objectTemp;
 
 		final int longTemp;
+
+		// Whether a function converts to an interface by its arguments (a site ending
+		// in :functional, JavaImplementations.functional) rather than as its proxy.
+		boolean functional;
 
 		/**
 		 * @param firstFree the first local the parameters leave free
@@ -1502,8 +1538,8 @@ final class JvmJavaDirectSites {
 					a.aload(slot);
 					a.ifnonnull(fail);
 				}
-				case T -> {
-					a.ldc(str("T"));
+				case T, FALSE -> {
+					a.ldc(str(kind == JavaKind.Lisp.T ? "T" : LispNames.JAVA_FALSE));
 					a.aload(slot);
 					a.invokevirtual(method("java/lang/String", "equals", "(Ljava/lang/Object;)Z"));
 					a.ifeq(fail);
@@ -1624,6 +1660,14 @@ final class JvmJavaDirectSites {
 						a.getstatic(field("java/lang/Boolean", "TRUE", "Ljava/lang/Boolean;"));
 					}
 				}
+				case FALSE -> {
+					if ("boolean".equals(name)) {
+						a.loadConstant(0);
+					}
+					else {
+						a.getstatic(field("java/lang/Boolean", "FALSE", "Ljava/lang/Boolean;"));
+					}
+				}
 				case INTEGER -> convertInteger(slot, name);
 				// The BigInteger itself, for that class or a supertype.
 				case BIGNUM -> a.aload(slot);
@@ -1687,14 +1731,17 @@ final class JvmJavaDirectSites {
 				}
 				case FUNCTION -> {
 					// The interface's generated proxy class over the function, as the
-					// bridge makes it a Proxy: of(new Object[] { function }).
+					// bridge makes it a Proxy -- at a :functional site the class
+					// implementing its abstract methods by their arguments: of(new
+					// Object[] { function }).
 					a.loadConstant(1);
 					a.anewarray(cls("java/lang/Object"));
 					a.dup();
 					a.loadConstant(0);
 					a.aload(slot);
 					a.aastore();
-					a.invokestatic(implementations().proxyFactory(target));
+					a.invokestatic(this.functional ? implementations().functionalFactory(target)
+							: implementations().proxyFactory(target));
 				}
 			}
 		}
@@ -1992,6 +2039,18 @@ final class JvmJavaDirectSites {
 		return ref;
 	}
 
+	private MethodRefEntry tableEntries() {
+		MethodRefEntry ref = this.tableEntries;
+		if (ref == null) {
+			Utf8Entry name = this.cp.utf8Entry(TABLE);
+			Utf8Entry desc = this.cp.utf8Entry("(Ljava/lang/Object;)[Ljava/lang/Object;");
+			ref = this.cp.methodRef(this.thisClass, name, desc);
+			this.tableEntries = ref;
+			this.methods.add(buildTableEntries(name, desc));
+		}
+		return ref;
+	}
+
 	private MethodRefEntry sequence() {
 		MethodRefEntry ref = this.sequence;
 		if (ref == null) {
@@ -2023,6 +2082,17 @@ final class JvmJavaDirectSites {
 	 */
 	MethodRefEntry argumentConvert(JavaType target) {
 		return convert(target, true, true);
+	}
+
+	/**
+	 * {@link #argumentConvert(JavaType)}, a function converted by the method's arguments
+	 * when {@code functional} (a form ending in {@code :functional}).
+	 * @param target the parameter type
+	 * @param functional whether a function implements its interface by its arguments
+	 * @return {@code _jconv$N(Object)T}
+	 */
+	MethodRefEntry argumentConvert(JavaType target, boolean functional) {
+		return convert(target, true, true, functional);
 	}
 
 	/**
@@ -2060,14 +2130,23 @@ final class JvmJavaDirectSites {
 	 * sequences without functions.
 	 */
 	private MethodRefEntry convert(JavaType target, boolean functions, boolean sequences) {
-		String key = target.name() + (functions ? " functions" : "") + (sequences ? " sequences" : "");
+		return convert(target, functions, sequences, false);
+	}
+
+	/**
+	 * {@code _jconv$N} as above, a function converted by its arguments when
+	 * {@code functional} (a site ending in {@code :functional}).
+	 */
+	private MethodRefEntry convert(JavaType target, boolean functions, boolean sequences, boolean functional) {
+		String key = target.name() + (functions ? " functions" : "") + (sequences ? " sequences" : "")
+				+ (functional ? " functional" : "");
 		MethodRefEntry ref = this.converts.get(key);
 		if (ref == null) {
 			Utf8Entry name = this.cp.utf8Entry(CONVERT_PREFIX + this.converts.size());
 			Utf8Entry desc = this.cp.utf8Entry("(Ljava/lang/Object;)" + descriptor(target));
 			ref = this.cp.methodRef(this.thisClass, name, desc);
 			this.converts.put(key, ref);
-			this.methods.add(buildConvert(name, desc, target, functions, sequences));
+			this.methods.add(buildConvert(name, desc, target, functions, sequences, functional));
 		}
 		return ref;
 	}
@@ -2090,6 +2169,17 @@ final class JvmJavaDirectSites {
 		return null;
 	}
 
+	// The type a hash table's keys and values convert to for this parameter: Object for
+	// a type a java.util.LinkedHashMap is, in a program that can hold a table, else none.
+	private @Nullable JavaType tableEntry(JavaType target) {
+		JavaType linkedHashMap = this.lookup.find("java.util.LinkedHashMap");
+		if (this.hashValues != null && !target.isPrimitive() && linkedHashMap != null
+				&& target.isAssignableFrom(linkedHashMap)) {
+			return Objects.requireNonNull(this.lookup.find("java.lang.Object"), "java.lang.Object");
+		}
+		return null;
+	}
+
 	// v = _strv(v): a mutable character vector as the string it spells.
 	private void render(MethodCode a, int slot) {
 		MethodRefEntry render = this.strv;
@@ -2100,9 +2190,82 @@ final class JvmJavaDirectSites {
 		}
 	}
 
+	// _jtab(Object)Object[]: a Lisp hash table's live entries in insertion order, keys
+	// and values alternating, read through the program's _hashValues (the pairs maphash
+	// walks); an equalp table's key is the one first stored (slot 2), not its fold. The
+	// bridge's tableEntries.
+	private Method buildTableEntries(Utf8Entry name, Utf8Entry desc) {
+		MethodCode a = new MethodCode();
+		ClassEntry objects = cls("[Ljava/lang/Object;");
+		int pairs = 1;
+		int out = 2;
+		int index = 3;
+		int pair = 4;
+		int key = 5;
+		MethodCode.Label loop = a.newLabel();
+		MethodCode.Label done = a.newLabel();
+		MethodCode.Label keep = a.newLabel();
+		a.aload(0);
+		a.invokestatic(Objects.requireNonNull(this.hashValues, "_hashValues"));
+		a.astore(pairs);
+		a.aload(pairs);
+		a.arraylength();
+		a.loadConstant(2);
+		a.imul();
+		a.anewarray(cls("java/lang/Object"));
+		a.astore(out);
+		a.loadConstant(0);
+		a.istore(index);
+		a.labelBinding(loop);
+		a.iload(index);
+		a.aload(pairs);
+		a.arraylength();
+		a.if_icmpge(done);
+		a.aload(pairs);
+		a.iload(index);
+		a.aaload();
+		a.checkcast(objects);
+		a.astore(pair);
+		a.aload(pair);
+		a.loadConstant(0);
+		a.aaload();
+		a.astore(key);
+		a.aload(pair);
+		a.arraylength();
+		a.loadConstant(2);
+		a.if_icmple(keep);
+		a.aload(pair);
+		a.loadConstant(2);
+		a.aaload();
+		a.astore(key);
+		a.labelBinding(keep);
+		a.aload(out);
+		a.iload(index);
+		a.loadConstant(2);
+		a.imul();
+		a.aload(key);
+		a.aastore();
+		a.aload(out);
+		a.iload(index);
+		a.loadConstant(2);
+		a.imul();
+		a.loadConstant(1);
+		a.iadd();
+		a.aload(pair);
+		a.loadConstant(1);
+		a.aaload();
+		a.aastore();
+		a.iinc(index, 1);
+		a.goto_(loop);
+		a.labelBinding(done);
+		a.aload(out);
+		a.areturn();
+		return new Method(name, desc, a);
+	}
+
 	// _jkind(Object)I: the bridge's kindOf as a code -- the Lisp kinds (LISP_KINDS'
-	// index), a cons, a Lisp array (a specialized one too), a host object, or none (a
-	// symbol, a ratio, a hash table) -- tested in its order.
+	// index; |false| among them), a cons, a Lisp array (a specialized one too), a host
+	// object, a hash table, or none (any other symbol, a ratio) -- tested in its order.
 	private Method buildKind(Utf8Entry name, Utf8Entry desc, MethodRefEntry hostTest) {
 		MethodCode a = new MethodCode();
 		ClassEntry string = cls("java/lang/String");
@@ -2154,7 +2317,8 @@ final class JvmJavaDirectSites {
 		returnCode(a, code(JavaKind.Lisp.SUPPLEMENTARY_CHAR));
 		a.labelBinding(notChar);
 		// A quote-framed string is a Lisp string (length 3: one character), "T" the
-		// symbol t, any other string another symbol.
+		// symbol t, "false" Java's false (LispNames.JAVA_FALSE), any other string another
+		// symbol.
 		MethodCode.Label notString = a.newLabel();
 		MethodCode.Label symbol = a.newLabel();
 		MethodCode.Label longer = a.newLabel();
@@ -2187,6 +2351,13 @@ final class JvmJavaDirectSites {
 		a.ifeq(other);
 		returnCode(a, code(JavaKind.Lisp.T));
 		a.labelBinding(other);
+		MethodCode.Label otherSymbol = a.newLabel();
+		a.ldc(str(LispNames.JAVA_FALSE));
+		a.aload(0);
+		a.invokevirtual(method("java/lang/String", "equals", "(Ljava/lang/Object;)Z"));
+		a.ifeq(otherSymbol);
+		returnCode(a, code(JavaKind.Lisp.FALSE));
+		a.labelBinding(otherSymbol);
 		returnCode(a, KIND_NONE);
 		a.labelBinding(notString);
 		// An exact Object[] is a function value (an Integer first) or a cons.
@@ -2236,13 +2407,22 @@ final class JvmJavaDirectSites {
 			returnCode(a, KIND_ARRAY);
 			a.labelBinding(next);
 		}
-		// A host object (_jhost), or a value of no kind (a ratio, a hash table).
-		MethodCode.Label none = a.newLabel();
+		// A host object (_jhost); then, so a host pays nothing for it, a Lisp hash table
+		// when the program can hold one; else a value of no kind (a ratio).
+		MethodCode.Label notHost = a.newLabel();
 		a.aload(0);
 		a.invokestatic(hostTest);
-		a.ifeq(none);
+		a.ifeq(notHost);
 		returnCode(a, KIND_HOST);
-		a.labelBinding(none);
+		a.labelBinding(notHost);
+		if (this.hashValues != null) {
+			MethodCode.Label notTable = a.newLabel();
+			a.aload(0);
+			a.invokestatic(lispTable());
+			a.ifeq(notTable);
+			returnCode(a, KIND_TABLE);
+			a.labelBinding(notTable);
+		}
 		returnCode(a, KIND_NONE);
 		return new Method(name, desc, a);
 	}
@@ -2636,14 +2816,6 @@ final class JvmJavaDirectSites {
 		if (element != null) {
 			MethodCode.Label sequenceValue = a.newLabel();
 			MethodCode.Label notSequence = a.newLabel();
-			MethodCode.Label proper = a.newLabel();
-			MethodCode.Label loop = a.newLabel();
-			MethodCode.Label done = a.newLabel();
-			MethodCode.Label add = a.newLabel();
-			int elements = 2;
-			int total = 3;
-			int index = 4;
-			int each = 5;
 			a.iload(code);
 			a.loadConstant(KIND_CONS);
 			a.if_icmpeq(sequenceValue);
@@ -2651,43 +2823,18 @@ final class JvmJavaDirectSites {
 			a.loadConstant(KIND_ARRAY);
 			a.if_icmpne(notSequence);
 			a.labelBinding(sequenceValue);
-			a.aload(0);
-			a.invokestatic(sequence());
-			a.astore(elements);
-			a.aload(elements);
-			a.ifnonnull(proper);
-			a.loadConstant(JavaOverloads.NO_MATCH);
-			a.ireturn();
-			a.labelBinding(proper);
-			a.loadConstant(target.isArray() ? JavaOverloads.COST_CONVERT : JavaOverloads.COST_BOXED);
-			a.istore(total);
-			a.loadConstant(0);
-			a.istore(index);
-			a.labelBinding(loop);
-			a.iload(index);
-			a.aload(elements);
-			a.arraylength();
-			a.if_icmpge(done);
-			a.aload(elements);
-			a.iload(index);
-			a.aaload();
-			a.invokestatic(cost(element, functions));
-			a.istore(each);
-			a.iload(each);
-			a.ifge(add);
-			a.loadConstant(JavaOverloads.NO_MATCH);
-			a.ireturn();
-			a.labelBinding(add);
-			a.iload(total);
-			a.iload(each);
-			a.iadd();
-			a.istore(total);
-			a.iinc(index, 1);
-			a.goto_(loop);
-			a.labelBinding(done);
-			a.iload(total);
-			a.ireturn();
+			emitSummedCost(a, sequence(), target.isArray() ? JavaOverloads.COST_CONVERT : JavaOverloads.COST_BOXED,
+					cost(element, functions));
 			a.labelBinding(notSequence);
+		}
+		JavaType entry = tableEntry(target);
+		if (entry != null) {
+			MethodCode.Label notTable = a.newLabel();
+			a.iload(code);
+			a.loadConstant(KIND_TABLE);
+			a.if_icmpne(notTable);
+			emitSummedCost(a, tableEntries(), JavaOverloads.COST_BOXED, cost(entry, functions));
+			a.labelBinding(notTable);
 		}
 		if (!target.isPrimitive()) {
 			// A host object: its exact class, or a subclass, of the type.
@@ -2714,6 +2861,55 @@ final class JvmJavaDirectSites {
 		a.loadConstant(JavaOverloads.NO_MATCH);
 		a.ireturn();
 		return new Method(name, desc, a);
+	}
+
+	// Returns the cost of the value in slot 0 whose elements ELEMENTS answers: BASE plus
+	// each element's, or NO_MATCH when it answers null or an element does not convert.
+	private static void emitSummedCost(MethodCode a, MethodRefEntry elementsOf, int base, MethodRefEntry each) {
+		MethodCode.Label proper = a.newLabel();
+		MethodCode.Label loop = a.newLabel();
+		MethodCode.Label done = a.newLabel();
+		MethodCode.Label add = a.newLabel();
+		int elements = 2;
+		int total = 3;
+		int index = 4;
+		int cost = 5;
+		a.aload(0);
+		a.invokestatic(elementsOf);
+		a.astore(elements);
+		a.aload(elements);
+		a.ifnonnull(proper);
+		a.loadConstant(JavaOverloads.NO_MATCH);
+		a.ireturn();
+		a.labelBinding(proper);
+		a.loadConstant(base);
+		a.istore(total);
+		a.loadConstant(0);
+		a.istore(index);
+		a.labelBinding(loop);
+		a.iload(index);
+		a.aload(elements);
+		a.arraylength();
+		a.if_icmpge(done);
+		a.aload(elements);
+		a.iload(index);
+		a.aaload();
+		a.invokestatic(each);
+		a.istore(cost);
+		a.iload(cost);
+		a.ifge(add);
+		a.loadConstant(JavaOverloads.NO_MATCH);
+		a.ireturn();
+		a.labelBinding(add);
+		a.iload(total);
+		a.iload(cost);
+		a.iadd();
+		a.istore(total);
+		a.iinc(index, 1);
+		a.goto_(loop);
+		a.labelBinding(done);
+		a.iload(total);
+		a.ireturn();
 	}
 
 	// _jrecv(Object)Object: the value rendered, then the bridge's convert arm of its kind
@@ -2750,8 +2946,10 @@ final class JvmJavaDirectSites {
 	// host object itself, and in the open variant a function's proxy and a sequence's
 	// array or list. A value no arm takes was costed NO_MATCH, so the site never passes
 	// one.
-	private Method buildConvert(Utf8Entry name, Utf8Entry desc, JavaType target, boolean functions, boolean sequences) {
+	private Method buildConvert(Utf8Entry name, Utf8Entry desc, JavaType target, boolean functions, boolean sequences,
+			boolean functional) {
 		Body body = new Body(2);
+		body.functional = functional;
 		MethodCode a = body.a;
 		int code = 1;
 		MethodCode.Label reject = a.newLabel();
@@ -2800,7 +2998,7 @@ final class JvmJavaDirectSites {
 			a.astore(elements);
 			a.aload(elements);
 			a.ifnull(reject);
-			MethodRefEntry each = convert(element, functions, sequences);
+			MethodRefEntry each = convert(element, functions, sequences, functional);
 			if (target.isArray()) {
 				a.aload(elements);
 				a.arraylength();
@@ -2851,6 +3049,59 @@ final class JvmJavaDirectSites {
 			}
 			a.areturn();
 			a.labelBinding(notSequence);
+		}
+		JavaType entry = sequences ? tableEntry(target) : null;
+		if (entry != null) {
+			// A fresh LinkedHashMap of the entries, each key and value converted.
+			MethodCode.Label notTable = a.newLabel();
+			MethodCode.Label loop = a.newLabel();
+			MethodCode.Label done = a.newLabel();
+			int entries = body.nextSlot++;
+			int result = body.nextSlot++;
+			int index = body.nextSlot++;
+			ClassEntry linkedHashMap = cls("java/util/LinkedHashMap");
+			MethodRefEntry each = convert(entry, functions, sequences, functional);
+			a.iload(code);
+			a.loadConstant(KIND_TABLE);
+			a.if_icmpne(notTable);
+			a.aload(0);
+			a.invokestatic(tableEntries());
+			a.astore(entries);
+			a.new_(linkedHashMap);
+			a.dup();
+			a.invokespecial(method("java/util/LinkedHashMap", "<init>", "()V"));
+			a.astore(result);
+			a.loadConstant(0);
+			a.istore(index);
+			a.labelBinding(loop);
+			a.iload(index);
+			a.aload(entries);
+			a.arraylength();
+			a.if_icmpge(done);
+			a.aload(result);
+			a.checkcast(linkedHashMap);
+			a.aload(entries);
+			a.iload(index);
+			a.aaload();
+			a.invokestatic(each);
+			a.aload(entries);
+			a.iload(index);
+			a.loadConstant(1);
+			a.iadd();
+			a.aaload();
+			a.invokestatic(each);
+			a.invokevirtual(method("java/util/LinkedHashMap", "put",
+					"(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;"));
+			a.pop();
+			a.iinc(index, 2);
+			a.goto_(loop);
+			a.labelBinding(done);
+			a.aload(result);
+			if (needsCast) {
+				a.checkcast(type);
+			}
+			a.areturn();
+			a.labelBinding(notTable);
 		}
 		if (reference) {
 			a.iload(code);

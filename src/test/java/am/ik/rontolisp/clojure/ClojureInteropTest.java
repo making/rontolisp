@@ -738,6 +738,96 @@ class ClojureInteropTest {
 	// equals answers true is not identical? to true or 1 and str shows its toString.
 	// Before, measured 2026-10-04: the JVM answered equals for identical? (the proxy was
 	// identical? to true and printed "true"), the interpreter for two Files.
+	// Oracle (clj 1.12.6, measured 2026-10-08): a fn passed where a functional interface
+	// is expected implements its method by the method's arguments -- a literal fn (a
+	// resolved site), a local of a known receiver (a dispatched site), a var on a
+	// receiver of unknown class (run time) and a static call alike -- and the interface's
+	// default methods keep their bodies (Predicate/not calls negate on it). Before,
+	// measured 2026-10-08 on the interpreter and the JVM, every call passed the method's
+	// name first: "Function expects 0 arguments, got 1".
+	@Test
+	void aFnPassedWhereAnInterfaceIsExpectedImplementsItsMethodByItsArguments() throws Exception {
+		assertBothEqual("(let [t (Thread. (fn [] (println \"ran\")))] (.start t) (.join t))", "ran\n");
+		assertBothEqual("(.forEach (java.util.ArrayList. [1 2]) (fn [x] (println x)))", "1\n2\n");
+		assertBothEqual("(println (.compute (doto (java.util.HashMap.) (.put \"a\" 1)) \"a\" (fn [k v] (inc v))))",
+				"2\n");
+		assertBothEqual("(defn each [coll f] (.forEach coll f)) (each (java.util.ArrayList. [3]) println)", "3\n");
+		assertBothEqual("(defn each2 [f] (.forEach (java.util.ArrayList. [5]) f)) (each2 println)", "5\n");
+		assertBothEqual("(println (.test (java.util.function.Predicate/not (fn [x] (when (odd? x) true))) 2))",
+				"true\n");
+		assertBothEqual("(println (.test (java.util.function.Predicate/not odd?) 2))", "true\n");
+		assertBothEqual(
+				"(let [l (java.util.ArrayList. [3 1 2])]"
+						+ " (java.util.Collections/sort l (fn [a b] (compare a b))) (println (vec l))"
+						+ " (.sort l (java.util.Comparator/comparing (fn [x] (- x)))) (println (vec l)))",
+				"[1 2 3]\n[3 2 1]\n");
+		assertBothEqual("(println (.get (.map (java.util.Optional/of 4) (fn [x] (* 2 x)))))", "8\n");
+		// a fn of the wrong arity is called with the method's arguments, and refuses them
+		assertThatThrownBy(() -> interpret("(.forEach (java.util.ArrayList. [2]) (fn [] 1))"))
+			.hasStackTraceContaining("expects 0 arguments, got 1");
+		assertThatThrownBy(() -> runOnJvm("(.forEach (java.util.ArrayList. [2]) (fn [] 1))"))
+			.hasStackTraceContaining("expects 0 arguments, got 1");
+		// Deviation: the oracle converts a fn only to an interface annotated
+		// @FunctionalInterface (a PropertyChangeListener or a DocumentListener is a
+		// ClassCastException there); here every abstract method of any interface calls
+		// it.
+		assertBothEqual("""
+				(let [s (java.beans.PropertyChangeSupport. "b")]
+				  (.addPropertyChangeListener s (fn [e] (println "pc" (.getNewValue e))))
+				  (.firePropertyChange s "size" 1 2))
+				(let [d (javax.swing.text.PlainDocument.)]
+				  (.addDocumentListener d (fn [e] (println "doc" (str (.getType e)))))
+				  (.insertString d 0 "x" nil))
+				""", "pc 2\ndoc INSERT\n");
+	}
+
+	// Oracle (clj 1.12.6, measured 2026-10-08): false crosses to Java as Java's false --
+	// an argument (a Boolean where an Object is expected) and a fn's or a proxy body's
+	// answer for a boolean -- a map as a java.util.Map, and a fn is a Callable, a
+	// Runnable
+	// and a Comparator itself (clojure-spec pins the receiver half on every backend); a
+	// proxy's constructor arguments convert a fn as every call does. Before, measured
+	// 2026-10-08 on the interpreter and the JVM: "No matching method
+	// java.util.ArrayList.add with 1 argument(s)", "java:reify: cannot return |false| as
+	// boolean ...", "No matching constructor for java.util.HashMap", "java:call expects a
+	// java object as the first argument, got #<lambda>". Deviations: a map argument is a
+	// fresh LinkedHashMap whose vector and map values are converted too (the oracle's
+	// toString spells them as Clojure's), and a host false read back is still nil.
+	@Test
+	void falseAMapAndAFnCrossTheJavaBoundaryAsTheOraclesDo() throws Exception {
+		assertBothEqual("(let [l (java.util.ArrayList.)] (.add l false) (.add l true) (.add l nil) (println (str l)))",
+				"[false, true, null]\n");
+		assertBothEqual("(println (Boolean/toString false) (java.util.Objects/toString false))", "false false\n");
+		assertBothEqual("(let [l (java.util.ArrayList. [1 2 3])] (.removeIf l odd?) (println (vec l)))", "[2]\n");
+		assertBothEqual("(println (.test (proxy [java.util.function.Predicate] [] (test [x] false)) 1))", "false\n");
+		assertBothEqual("(let [p (proxy [java.util.function.Predicate] [] (test [x] (odd? x)))]"
+				+ " (println (.test p 1) (.test p 2)))", "true false\n");
+		assertBothEqual("(println (.booleanValue false) (.booleanValue true) (.equals false false))",
+				"false true true\n");
+		assertBothEqual("(println (str (java.util.HashMap. {\"a\" 1})) (str (java.util.TreeMap. {\"b\" 2 \"a\" 1})))",
+				"{a=1} {a=1, b=2}\n");
+		assertBothEqual("(let [l (java.util.ArrayList.)] (.add l {\"k\" false}) (println (str l)))", "[{k=false}]\n");
+		assertBothEqual("(println (.call (fn [] 5)) (.run (fn [] 5)) (.compare (fn [a b] (< a b)) 2 1))", "5 nil 1\n");
+		assertBothEqual("(let [t (proxy [Thread] [(fn [] (println \"ran\"))])] (.start t) (.join t))", "ran\n");
+	}
+
+	@Test
+	void lockingExcludesTheOtherThreadsOnTheInterpreterAndTheJvm() throws Exception {
+		// four threads each run 2000 read-yield-write steps on one atom: without the
+		// lock the steps interleave and updates are lost (2389 of 8000, measured
+		// 2026-10-08); under it every step lands, like the oracle's monitor
+		assertBothEqual("""
+				(def lock (atom 0))
+				(def plain (atom 0))
+				(defn work []
+				  (dotimes [_ 2000]
+				    (locking lock (let [v @plain] (Thread/yield) (reset! plain (inc v))))))
+				(def ts (doall (repeatedly 4 #(doto (Thread. work) (.start)))))
+				(doseq [t ts] (.join t))
+				(println @plain)
+				""", "8000\n");
+	}
+
 	@Test
 	void identicalOnHostObjectsIsIdentity() throws Exception {
 		assertBothEqual("""

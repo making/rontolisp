@@ -1,0 +1,3 @@
+# collect --no-releases test.snap:user:1
+test.snap:user:jar::1 scope=compile optional=null
+warning missing test.snap:user:jar:1

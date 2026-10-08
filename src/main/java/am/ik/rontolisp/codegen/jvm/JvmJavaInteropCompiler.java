@@ -207,12 +207,15 @@ final class JvmJavaInteropCompiler {
 	private static void compileSubclass(JavaImplementation implementation, List<LispVal> args, JvmLispCompiler.Ctx ctx,
 			String className) {
 		JvmJavaSites sites = Objects.requireNonNull(ctx.javaSites);
-		MethodRefEntry construct = sites.implementations().subclassFactory(implementation, args.size() - 5);
-		JvmExprCompiler.compileExpr(args.get(args.size() - 1), ctx, className);
+		// A :functional marker ends the form after the callable: it is no value.
+		boolean functional = JavaImplementations.subclassFunctional(args);
+		int callable = args.size() - (functional ? 2 : 1);
+		MethodRefEntry construct = sites.implementations().subclassFactory(implementation, callable - 4, functional);
+		JvmExprCompiler.compileExpr(args.get(callable), ctx, className);
 		emitMaterialize(ctx);
-		JvmEmitHelper.emitIntConst(ctx, args.size() - 5);
+		JvmEmitHelper.emitIntConst(ctx, callable - 4);
 		ctx.body.anewarray(ctx.objectClass);
-		for (int i = 4; i < args.size() - 1; i++) {
+		for (int i = 4; i < callable; i++) {
 			ctx.body.dup();
 			JvmEmitHelper.emitIntConst(ctx, i - 4);
 			JvmExprCompiler.compileExpr(args.get(i), ctx, className);
@@ -235,19 +238,21 @@ final class JvmJavaInteropCompiler {
 		// the method sees it, as the bridge renders every argument).
 		List<LispVal> values;
 		int firstArgument;
+		// A :functional marker ends the form after the arguments: it is no value.
+		int end = site.functional() ? args.size() - 1 : args.size();
 		switch (site.operator()) {
 			case CALL -> {
 				values = new java.util.ArrayList<>();
 				values.add(args.get(1));
-				values.addAll(args.subList(3, args.size()));
+				values.addAll(args.subList(3, end));
 				firstArgument = 1;
 			}
 			case STATIC -> {
-				values = args.subList(3, args.size());
+				values = args.subList(3, end);
 				firstArgument = 0;
 			}
 			case NEW -> {
-				values = args.subList(2, args.size());
+				values = args.subList(2, end);
 				firstArgument = 0;
 			}
 			default -> {

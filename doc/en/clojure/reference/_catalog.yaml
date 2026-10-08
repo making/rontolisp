@@ -34,6 +34,13 @@ categories:
       - { slug: when-not, name: "when-not" }
       - { slug: if-not, name: "if-not" }
       - { slug: when-first, name: "when-first" }
+      - { slug: if-some, name: "if-some" }
+      - { slug: when-some, name: "when-some" }
+      - { slug: case, name: "case" }
+      - { slug: condp, name: "condp" }
+      - { slug: while, name: "while" }
+      - { slug: locking, name: "locking" }
+      - { slug: with-redefs, name: "with-redefs" }
       - { slug: binding, name: "binding" }
       - { slug: time, name: "time" }
   - title: "Threading"

@@ -366,7 +366,7 @@ public final class PackageRegistry {
 			LispNames.RUNTIME_MEMBER_STATUS_INTERNAL, LispNames.RUNTIME_MEMBER_INTERN_INTERNAL,
 			LispNames.RUNTIME_EXTERNAL_FIND_INTERNAL, LispNames.RUNTIME_PACKAGE_OP_INTERNAL,
 			LispNames.CHECK_BOUNDS_INTERNAL, LispNames.PRINC_PIECE_INTERNAL, LispNames.PRIN1_PIECE_INTERNAL,
-			LispNames.FMT_RENDER);
+			LispNames.FMT_RENDER, LispNames.STRICT_MATH_INTERNAL);
 
 	/**
 	 * The names of the symbols owned by the {@code cl} package, derived as the union of

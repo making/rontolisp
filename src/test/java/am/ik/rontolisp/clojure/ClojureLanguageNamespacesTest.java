@@ -1,9 +1,12 @@
 package am.ik.rontolisp.clojure;
 
+import java.util.HashMap;
+import java.util.Locale;
 import java.util.Map;
 import java.util.stream.Collectors;
 
 import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.compiler.StrictMathFunction;
 import am.ik.rontolisp.eval.ClojureMacroTime;
 import am.ik.rontolisp.reader.LispReadException;
 import org.junit.jupiter.api.Test;
@@ -81,13 +84,67 @@ class ClojureLanguageNamespacesTest {
 	}
 
 	@Test
-	void coreProtocolsLoadsAtStartupAndRefusesItsTwoArityProtocol() {
+	void coreProtocolsLoadsAtStartupAndRefusesItsIteratorReduction() {
 		assertThat(lowered("(clojure.core.protocols/datafy 1)", Map.of()))
 			.contains("(DEFUN |c%clojure.core.protocols/datafy|");
-		assertThatThrownBy(() -> Clojure.read("(require '[clojure.core.protocols :as p]) (p/coll-reduce [1] +)", null))
+		assertThat(lowered("(require '[clojure.core.protocols :as p]) (p/coll-reduce [1] + 0)", Map.of()))
+			.contains("(DEFUN |c%clojure.core.protocols/coll-reduce|");
+		assertThatThrownBy(
+				() -> Clojure.read("(require '[clojure.core.protocols :as p]) (p/iterator-reduce! nil +)", null))
 			.isInstanceOf(LispReadException.class)
 			.hasMessageContaining(
-					"clojure.core.protocols/coll-reduce is not built in: a protocol method of two arities is not built in");
+					"clojure.core.protocols/iterator-reduce! is not built in: it reduces a java.util.Iterator");
+	}
+
+	@Test
+	void clojureCoreReducersLoadsAtItsRequireAndRefusesTheForkJoinPool() {
+		String out = lowered("(ns a (:require [clojure.core.reducers :as r])) (r/fold + (r/map inc [1 2]))", Map.of());
+		assertThat(out).contains("(DEFUN |c%clojure.core.reducers/fold|")
+			.contains("(DEFUN |c%clojure.core.reducers/coll-fold|")
+			.contains("(RONTOLISP::%CLOJURE-COLL-REDUCER-ROW ");
+		// clj -M has not loaded clojure.core.reducers: a qualified name alone does not
+		// reach it.
+		assertThat(lowered("(defn f [x] (clojure.edn/read-string x))", Map.of())).doesNotContain("reducers");
+		for (String var : new String[] { "pool", "fjtask", "->Cat" }) {
+			assertThatThrownBy(
+					() -> Clojure.read("(ns a (:require [clojure.core.reducers :as r])) (r/" + var + ")", null))
+				.as(var)
+				.isInstanceOf(LispReadException.class)
+				.hasMessageContaining("clojure.core.reducers/" + var + " is not built in: ");
+		}
+		assertThatThrownBy(() -> Clojure.read("(ns a (:require [rontolisp.internal.reducers :as k]))", null))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("rontolisp.internal.reducers is internal to clojure.core.reducers");
+	}
+
+	@Test
+	void clojureMathLowersEachDoubleFunctionToOneStrictMathCallAtItsRequire() {
+		String out = lowered("(ns a (:require [clojure.math :as m])) (m/sin 1.0) (m/scalb 1.0 2) (m/floor-div 7 2)",
+				Map.of());
+		assertThat(out).contains("(DEFUN |c%clojure.math/sin|")
+			.contains("(%STRICT-MATH :SIN (RONTOLISP::%CLOJURE-DOUBLE ")
+			.contains("(%STRICT-MATH :SCALB (RONTOLISP::%CLOJURE-DOUBLE |c%d|) (RONTOLISP::%CLOJURE-INT-CAST ")
+			.contains("(RONTOLISP::%CLOJURE-MATH-FLOOR-DIV ");
+		// clj -M has not loaded clojure.math: a qualified name alone does not reach it.
+		assertThat(lowered("(defn f [x] (clojure.edn/read-string x))", Map.of())).doesNotContain("clojure.math");
+		assertThatThrownBy(() -> Clojure.read("(ns a (:require [rontolisp.internal.math :as k]))", null))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("rontolisp.internal.math is internal to clojure.math");
+	}
+
+	@Test
+	void everyStrictMathFunctionIsAClojureMathKernelOfItsArity() {
+		// The lowering spells %strict-math's keywords itself (it may not import the
+		// compiler package): each kernel names a StrictMath function, and every
+		// function has its clojure.math var.
+		Map<String, Integer> expected = new HashMap<>();
+		for (StrictMathFunction fn : StrictMathFunction.values()) {
+			expected.put(fn.keyword(), fn.shape().arity());
+		}
+		Map<String, Integer> kernels = new HashMap<>();
+		ClojureKernelLowering.STRICT_MATH
+			.forEach((name, arity) -> kernels.put(":" + name.toUpperCase(Locale.ROOT), arity));
+		assertThat(kernels).isEqualTo(expected);
 	}
 
 	@Test

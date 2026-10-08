@@ -3,6 +3,7 @@ package am.ik.maven;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -26,11 +27,14 @@ import org.jspecify.annotations.Nullable;
  * {@code SNAPSHOT} to the build deployed last (or installed locally), {@code LATEST} and
  * {@code RELEASE} to the version the metadata names, a version range in a dependency or a
  * parent to the versions the metadata lists. The metadata is cached in the local
- * repository and asked for again under the update policy (Maven's default, daily), which
- * also governs when a repository that had no copy of a file is asked again. A
- * {@code settings.xml} mirror or proxy covering a repository about to be contacted is
- * refused by name. Repositories a POM declares are never consulted; the caller's list is
- * the only one.
+ * repository and asked for again under the repository's update policy (Maven's default,
+ * daily), which also governs when a repository that had no copy of a file is asked again;
+ * a repository serves releases and snapshots only as far as its {@link RepositoryPolicy
+ * policies} enable them. A repository is contacted as Maven contacts it under the
+ * {@link MavenSettings}: through the mirror covering it, the proxy serving the URL
+ * contacted, and the credentials, headers and timeouts of the {@code <server>} of the id
+ * contacted. Repositories a POM declares are never consulted; the caller's list is the
+ * only one.
  *
  * <p>
  * Every public method holds the instance lock: one resolver serves several threads, one
@@ -75,7 +79,9 @@ public final class MavenResolver {
 	}
 
 	/**
-	 * Returns the remote repositories, in search order.
+	 * Returns the remote repositories, in search order, as configured -- the active
+	 * settings profiles' ahead of the builder's: a {@code settings.xml} mirror may stand
+	 * for some of them when they are contacted.
 	 * @return the repositories
 	 */
 	public List<RemoteRepository> repositories() {
@@ -182,8 +188,8 @@ public final class MavenResolver {
 		Path path = this.access.fetch(artifact);
 		if (path == null) {
 			StringJoiner searched = new StringJoiner(", ");
-			for (RemoteRepository repository : this.access.repositories()) {
-				searched.add(repository.toString());
+			for (RepositoryRoute route : this.access.routes()) {
+				searched.add(route.toString());
 			}
 			throw new MavenResolutionException(
 					artifact + " is in neither the local repository nor any of: " + searched);
@@ -342,15 +348,18 @@ public final class MavenResolver {
 
 		private @Nullable Map<String, String> systemProperties;
 
-		private UpdatePolicy updatePolicy = UpdatePolicy.DAILY;
+		private @Nullable UpdatePolicy updatePolicy;
 
 		private Builder() {
 		}
 
 		/**
-		 * Sets when a remote repository is asked again for a {@code maven-metadata.xml}
-		 * the local repository caches, and for a file it did not have, in Maven's
-		 * spellings (default: {@code daily}, Maven's).
+		 * Sets one update policy for every repository -- when it is asked again for a
+		 * {@code maven-metadata.xml} the local repository caches, and for a file it did
+		 * not have -- in Maven's spellings, replacing the repositories' own
+		 * ({@link RepositoryPolicy}; Maven's session update policy, {@code mvn -U} being
+		 * {@code always}). Without it each repository's policy for the kind asked
+		 * applies, {@code daily} unless the repository says otherwise.
 		 * @param policy {@code always}, {@code daily}, {@code never} or
 		 * {@code interval:MINUTES}
 		 * @return this builder
@@ -415,10 +424,33 @@ public final class MavenResolver {
 		}
 
 		/**
+		 * The repositories searched: the active settings profiles' first, in Maven's
+		 * order, then the ones set here without those whose id a profile redefines (a
+		 * profile repository takes over its id, {@code central} included), as Maven puts
+		 * the profiles' repositories ahead of a project's and its super POM's
+		 * ({@link MavenSettings#repositories()}).
+		 */
+		private List<RemoteRepository> searched() {
+			List<RemoteRepository> searched = new ArrayList<>(this.settings.repositories());
+			Set<String> ids = new HashSet<>();
+			for (RemoteRepository repository : searched) {
+				ids.add(repository.id());
+			}
+			for (RemoteRepository repository : this.repositories) {
+				if (!ids.contains(repository.id())) {
+					searched.add(repository);
+				}
+			}
+			return searched;
+		}
+
+		/**
 		 * Builds the resolver.
 		 * @return the resolver
 		 * @throws IllegalStateException if no local repository is set or named by the
 		 * settings
+		 * @throws IllegalArgumentException if an active settings profile's repository has
+		 * a URL this resolver cannot read
 		 */
 		public MavenResolver build() {
 			Path local = this.localRepository != null ? this.localRepository : this.settings.localRepository();
@@ -435,8 +467,7 @@ public final class MavenResolver {
 				properties = snapshot;
 			}
 			Downloader chosen = this.downloader != null ? this.downloader : new HttpDownloader();
-			return new MavenResolver(
-					new RepositoryAccess(local, this.repositories, chosen, this.settings, this.updatePolicy),
+			return new MavenResolver(new RepositoryAccess(local, searched(), chosen, this.settings, this.updatePolicy),
 					properties);
 		}
 

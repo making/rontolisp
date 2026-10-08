@@ -19,7 +19,13 @@ over the 321-case `ci-spec.yaml` corpus in both WASI modes at `NONE` and `DEFAUL
    (`WasmWriter.writeHeapType`); the component model's `valtype`, whose SIGN discriminates
    primitive from type index (`ComponentWriter` — do not "fix"). Everything else goes through
    `writeUnsignedLeb128`. The unboxed-locals pass's fixed-width placeholders are now SPLICED OUT
-   (`WasmLispCompiler.buildLocalsAndPatch`, `.kb/wasm-unboxed-locals.md`).
+   (`WasmLispCompiler.buildLocalsAndPatch`, `.kb/wasm-unboxed-locals.md`). A memory's limits
+   are `u32`s too: `MemoryDef.addMemory` wrote each as ONE RAW BYTE until 2026-10-08, so a
+   module of 128 pages (8 MiB) or more had a continuation byte its section size did not count
+   and failed to parse (`unexpected end-of-file`) -- every compiler's memory section, sized
+   from its static data (`memoryMinPages`, `--no-gc`'s `heapBase`); found when
+   `WasmFdlibmRuntimeBuilderTest`'s output buffer passed 128 pages. Pinned by
+   `WasmWriterEncodingTest.aMemoryLimitIsAU32`.
 3. **`sub final` with no supertype is the BARE comptype** — `RecTypeDef` writes it, 2 bytes/type
    cheaper, types stay FINAL (`.kb/wasm-gc-final-types.md`). Adjacent local declarations of the
    same type fold into one run (`WasmRuntimeBuilder` hand-written bodies,

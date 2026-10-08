@@ -33,9 +33,9 @@ Package `java` (`LispNames.JAVA_PKG`, `PackageRegistry`; does NOT use `cl`): `ja
 - `select()` = lowest total cost `COST_EXACT` < `COST_WIDEN` < `COST_CONVERT` < `COST_NARROW` <
   `COST_BOXED` < `COST_PROXY` (`COST_VARARGS` via `varargsCost`), ties by stable signature string,
   then (one parameter list, covariant variants) the most specific return type -- never the
-  bridge that erases it. `marshal`/`marshalSequence`/`accessibleMethod`. Symbols, ratios, hash
-  tables, dotted lists and rank-2+ arrays are NOT marshalled ("Bignums and specialized vectors"
-  below for what is).
+  bridge that erases it. `marshal`/`marshalSequence`/`marshalTable`/`accessibleMethod`. Symbols
+  (but `|false|`), ratios, dotted lists and rank-2+ arrays are NOT marshalled ("Bignums and
+  specialized vectors", "Java's false and hash tables" below for what is).
 - THE rule lives ONCE for the interpreter and the compiler: `compiler/JavaOverloads` (`select`,
   `kindCost`, the tags). The interpreter (`eval/JavaInterop`) selects through it at run time over
   `compiler/ReflectiveJavaClasses`; `JavaBridgeTemplate` keeps a hand copy (it must stand alone),
@@ -126,7 +126,7 @@ Package `java` (`LispNames.JAVA_PKG`, `PackageRegistry`; does NOT use `cl`): `ja
   makes of it for an `Object` parameter: string `String` (a mutable one rendered first), fixnum
   the narrowest box (`Integer`, else `Long` -- the argument rule, so `(java:call 5 "equals" 5)`
   is `Integer.equals(Integer)`, T), float `Double`, bignum `BigInteger`, BMP char `Character`,
-  supplementary char `Integer`, `t` `Boolean.TRUE`. Anything else keeps `java:call expects a
+  supplementary char `Integer`, `t` `Boolean.TRUE`, `|false|` `Boolean.FALSE`. Anything else keeps `java:call expects a
   java object ..., got X`. `java:field` is unchanged (a string there is a class name).
 - Copies: interpreter `LispJavaObject.receiverObject` (run-time `callInstance`,
   `invokeResolved` and `equal`), bridge `receiverObject`, direct sites and `_equal` `_jrecv` (`JvmJavaDirectSites.
@@ -171,14 +171,48 @@ Package `java` (`LispNames.JAVA_PKG`, `PackageRegistry`; does NOT use `cl`): `ja
   `JavaBridgeTemplateParityTest#theBridgeAndADirectSiteReadASpecializedVectorAlike` and its
   bignum corpus rows, `JavaSiteResolverTest#bignumsAndBigIntegerParametersResolve`.
 
+## Java's false and hash tables (e69, 2026-10-08)
+- The symbol `|false|` (`LispNames.JAVA_FALSE`, Java's own spelling) is the kind
+  `JavaKind.Lisp.FALSE`: t's twin in `kindCost` (`boolean` EXACT, `Boolean` WIDEN, a supertype
+  BOXED), converting to `false` / `Boolean.FALSE` where nil is `null`; a receiver kind
+  (`Boolean.FALSE`); a quoted `'|false|` types a site (`JavaSiteResolver.typeOf`). A callback
+  answering it for a `boolean`/`Boolean` returns false through the same marshal. Clojure's
+  false object IS that symbol (`ClojureLowering.FALSE_VALUE_NAME`), so its false crosses with no
+  Clojure name in `java:`. Unmarshal is unchanged: host false is nil (the Clojure lowering's
+  `booleanAnswer` sites aside). Copies: interpreter `kindOf`/`convert`/`LispJavaObject.
+  receiverObject`, the bridge's `KIND_FALSE`/`JAVA_FALSE` (pinned to `LispNames` by
+  `theBridgeSpellsTheRepresentationAsTheRuntimeDoes`), `_jkind` (a `"false".equals` after the
+  `"T"` test, so only a symbol that is neither pays it) and `emitKindTest`/`emitConvert`.
+- A hash table converts, for a parameter a `java.util.LinkedHashMap` is assignable to (`Map`,
+  `HashMap`, `Object`, ...), to a fresh one of its live entries in insertion order, keys and
+  values marshalled as `Object` (functions per the site's mode), `COST_BOXED` + their costs, as
+  a sequence converts to a `List`; an `equalp` table's key is the one first stored. Copies:
+  `JavaInterop.marshalTable`; the bridge's `tableEntries`/`marshalTable`, reading through the
+  program's `_hashValues` bound in `bind` (a shaker root and `REFLECTIVELY_FOUND_METHODS` like
+  `_bf16Value`); the direct sites' `_jtab` (flat `{k, v, ...}` over `_hashValues`), the
+  `KIND_TABLE` code and the `_jcost$N` / open `_jconv$N` table arms, all only when
+  `JvmJavaDirectSites.hashTables` named `_hashValues` (a program without the hash runtime holds
+  no table). `JavaBridgeTemplateParityTest#theBridgeAndADirectSiteReadAHashTableAlike`.
+- Before, measured 2026-10-08 (both backends): `(java:call l "add" '|false|)` and a table where a
+  `Map` is expected were `No matching method`, a callback answering `|false|` for a `boolean`
+  `java:reify: cannot return |false| as boolean`. Pins: `JavaInteropPrograms.
+  FALSE_AND_TABLE_PROGRAM` (`JavaInteropTest` / `JvmJavaInteropCompilerTest`: resolved,
+  dispatched and bridged sites, receivers, callbacks, tombstoned and `equalp` tables, refusals),
+  `HOST_OBJECT_OUTPUT` (a table's `Objects.toString` is `"{}"`),
+  `JavaSiteResolverTest#aQuotedFalseSymbolResolvesAsJavasFalse`, the parity corpus.
+- Known gap, not this rule's: a direct site's `_jlarr` (and the bridge's `isJavaObject`) asks a
+  host `ArrayList` subclass its own `isEmpty`/`get`, so a `java:subclass` of `ArrayList` whose
+  `isEmpty` answers false while empty throws `index out of bounds` on the JVM (todo e74).
+
 ## Resolution: kinds, pure select, caches (both bridges, identical)
 Per call the uncached bridge paid `getMethods()` (~2.5 us), `select()` (250 ns - 1.4 us),
 `Class.forName` (~500 ns); a resolved `Method.invoke` is ~46 ns.
-- A KIND is the smallest token every conversion cost is a pure function of: nil, t, integer,
-  bignum, float, string of UTF-16 length 1 (may narrow to `char`), other string, BMP char,
-  supplementary char, function value, host object = its exact `Class`. Canonical (constants /
-  `Class`), compared by identity. Conses and Lisp arrays have NO kind (the cost sums the
-  elements); values `marshal` never bridges (symbols, ratios, ...) have none either.
+- A KIND is the smallest token every conversion cost is a pure function of: nil, t, `|false|`,
+  integer, bignum, float, string of UTF-16 length 1 (may narrow to `char`), other string, BMP
+  char, supplementary char, function value, host object = its exact `Class`. Canonical
+  (constants / `Class`), compared by identity. Conses, Lisp arrays and hash tables have NO kind
+  (the cost sums the elements, a table's keys and values); values `marshal` never bridges
+  (other symbols, ratios, ...) have none either.
 - `kindCost(kind, target)` is THE cost table; `marshal` = `kindCost` + `convert` for a value
   with a kind, element-wise `marshal` for a sequence. So cost and conversion cannot drift.
 - `select(candidates, argc, cost)` returns an overload (executable, parameter types,
@@ -365,7 +399,8 @@ Per call the uncached bridge paid `getMethods()` (~2.5 us), `select()` (250 ns -
   store), `emitInvoke`, `emitUnmarshal`, `areturn`. Shared helpers, made once per attempt:
   - `_jkind(Object)I`: the bridge's `kindOf` order as codes: a Lisp kind's ordinal
     (`LISP_KINDS` = `JavaKind.Lisp.values()`), then cons, Lisp array (a specialized one too),
-    host (`_jhost`), none (symbol, ratio, hash table, ...).
+    host (`_jhost`), hash table (after the host test, only where `hashTables` named the
+    program's `_hashValues`), none (any other symbol, ratio, ...).
   - `_jseq(Object)Object[]`: a cons's cars (null if dotted / function-terminated), a rank-1 Lisp
     array's elements (fill pointer; the PACKED long[] shape with MIN_VALUE -> nil), a rank-1
     specialized vector's ("Bignums and specialized vectors"), else null.
@@ -507,6 +542,34 @@ Per call the uncached bridge paid `getMethods()` (~2.5 us), `select()` (250 ns -
   reify/proxy do not coerce return values either; an interface return is a
   `java:reify`/`java:proxy` object.
   Function -> interface stays for ARGUMENTS (Clojure 1.12's direction).
+- `:functional` (e66, 2026-10-08): a `java:new` / `java:call` / `java:static` whose LAST
+  element is the keyword (`LispNames.JAVA_FUNCTIONAL_MARKER`, after the arguments; a
+  keyword is never an argument a member takes) converts a function argument by
+  `JavaImplementations.functional` instead of `proxy`: a reify whose one function
+  implements every group with an abstract variant (Object's three aside, each variant of
+  the group), defaults keep their bodies, `#<java-reify I>`. COSTS are unchanged (a
+  function still costs `COST_PROXY` against any interface), so overload choice and the
+  memos are the same in both modes; only the conversion differs. Resolved sites:
+  `JavaSiteResolver.resolve` strips the marker and answers `JavaSite.functional()`;
+  the interpreter's `evalJavaSite` drops the evaluated marker and passes
+  `JavaInterop.functional(caller)` (`Caller.functional()`, read by `convert`'s function
+  arm); the direct sites' `Body.functional` picks `functionalFactory` in the FUNCTION
+  arm and a `_jconv$N` keyed `" functional"`, and `shapeKey` carries it (two sites
+  differing only in the marker are two `_jsite$N`: the program's last two calls pin it).
+  Run-time paths read it off the evaluated
+  arguments (`JavaInterop.endsFunctional`, the bridge's `functionsOf`: a keyword compiles
+  to its name, `":FUNCTIONAL"`), so `apply #'java:call` takes it too; the bridge threads
+  `FUNCTIONS_NONE/PROXY/BY_ARGUMENTS` where it threaded `proxies`. `java:field` takes none;
+  `java:subclass` reads it after its callable, for its constructor arguments
+  (`JavaImplementations.subclassFunctional`; the interpreter's `subclass` drops it and
+  passes `functional(caller)`, the JVM's `subclassFactory(..., functional)` keys a second
+  `$Subclass<N>` whose `_jsubclass$N` converts through `argumentConvert(param, functional)`).
+  The Clojure lowering ends every
+  host call with a non-literal argument in it (`ClojureInteropLowering.hostCall`). Pinned:
+  `JavaImplementationPrograms.FUNCTIONAL` (both backends; resolved, dispatched, bridge,
+  constructor, static, a default method), `JavaImplementationsTest#aFunctionalImplementation...`,
+  `JavaBridgeTemplateParityTest#theTemplateImplementsAFunctionalArgument...`,
+  `JavaSiteResolverTest#aTrailingFunctionalMarkerIsSetAside`.
 - The object's KIND is `compiler/JavaImplementationType` (canonical per interface in each lookup,
   `JavaClassLookup.implementationOf`): assignable to Object, `java.io.Serializable`, the interface
   and its superinterfaces -- a `java.lang.reflect.Proxy` class's supertypes less `Proxy` -- so its
@@ -631,8 +694,13 @@ Per call the uncached bridge paid `getMethods()` (~2.5 us), `select()` (250 ns -
   hands it in `CompileFrontend.Request.javaClassLoader`.
 - CLI (`cli/JavaClassPath`): `--java-classpath` entries (must exist, else refused by name)
   then the `--java-dep` jars in Maven's runtime class path order (`MavenResolver.resolve`,
-  `.kb/maven-resolver.md`), from Central through `~/.m2/settings.xml`'s local repository /
-  `offline` (`RontoLispCli.javaDependencyResolver` injects a fixture repository in tests),
+  `.kb/maven-resolver.md`), from Central, then the repeatable `--java-repository [ID=]URL`
+  repositories in the order given (`JavaResolutionOptions.repositories`; no id ->
+  `java-repository-N`, an id given twice refused, `central` replaces Central's URL in place,
+  the flag without `--java-dep` refused; Central stays first because a mirror in
+  `settings.xml` is the way to stop asking it; the active `settings.xml` profiles' repositories
+  go AHEAD of both, in Maven's order, `.kb/maven-resolver.md` "Repositories"), through `settings.xml`'s (user's over `$MAVEN_HOME`'s)
+  local repository / `offline` / mirror / proxy / server (`RontoLispCli.javaDependencyResolver` injects a fixture repository, or a factory over the repository list, in tests),
   then the jars a Clojure program's `deps.edn` dependencies bring, holding classes
   (`JavaClassPath.add`, reached through `SourceLoader.addJavaClassPath` /
   `SourceLoader.fileSystem(loader, sink)` and `CompileFrontend.Request.javaClassPath`, as the

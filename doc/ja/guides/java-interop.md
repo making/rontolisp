@@ -32,7 +32,7 @@
 (java:field "java.lang.Integer" "MAX_VALUE")   ; => 2147483647
 ```
 
-Lisp の値も `java:call` の receiver になり、`Object` 引数に渡したときのオブジェクトとして呼ばれます。文字列は `String`、整数は `Integer`（収まらなければ `Long`）、浮動小数点数は `Double`、bignum は `BigInteger`、文字は `Character`（補助文字はそのコードポイントの `Integer`）、`t` は `Boolean.TRUE` です。`nil`、関数、シンボル、リスト、配列、ハッシュテーブルは receiver になりません。
+Lisp の値も `java:call` の receiver になり、`Object` 引数に渡したときのオブジェクトとして呼ばれます。文字列は `String`、整数は `Integer`（収まらなければ `Long`）、浮動小数点数は `Double`、bignum は `BigInteger`、文字は `Character`（補助文字はそのコードポイントの `Integer`）、`t` は `Boolean.TRUE`、シンボル `|false|` は `Boolean.FALSE` です。`nil`、関数、その他のシンボル、リスト、配列、ハッシュテーブルは receiver になりません。
 
 ```lisp
 (java:call "abc" "codePointAt" 0)   ; => 97
@@ -51,9 +51,11 @@ Lisp の値も `java:call` の receiver になり、`Object` 引数に渡した�
 | string | `String`、長さ 1 なら `char` | `String` → string |
 | character | `char`/`Character` | `Character` → character |
 | `t` / `nil` | `boolean` (`nil` は任意の `null` 参照にもなる) | `boolean` → `t`/`nil` |
+| 名前が `false` のシンボル | `boolean` の false、任意の参照には `Boolean.FALSE` | — |
 | `java` オブジェクト | ラップされたホストオブジェクト | その他のオブジェクト → `java` オブジェクト |
-| 関数/ラムダ | 一致するインターフェースに対する `java:proxy` (引数に限る) | — |
+| 関数/ラムダ | 一致するインターフェースに対する `java:proxy`、`:functional` の後ではその抽象メソッドの実装 (引数に限る) | — |
 | 真リスト / ベクタ (特殊化されたものも含む) | `T[]` (要素ごとに変換、プリミティブ配列も可)、または `List`/`Collection`/`Iterable` | 任意の Java 配列 → リスト |
+| ハッシュテーブル | 新しい `java.util.LinkedHashMap` (`Map`、`HashMap`、`Object` など) | — |
 
 Java の `null` (および `void` メソッド) は `nil` として返ります。Java の配列が期待される箇所に真リスト (または `make-array` で作ったランク 1 の配列。`double-float`、`single-float`、`bfloat16`、`(unsigned-byte 8|16|32)` に特殊化された配列も含む) を渡すと、要素ごとに要素型へ変換されます (`int[]` などのプリミティブ配列も含む)。`List`/`Collection`/`Iterable` が期待される箇所では `java.util.List` になり、ネストしたリストは再帰的に変換されます。逆方向では、Java の **配列** の結果は Lisp のリストになりますが、返された `java.util.List` は不透明な `java` オブジェクトのままで、そのメソッドを呼び出して操作します。
 
@@ -80,7 +82,22 @@ bignum は、`java.math.BigInteger` (または `Number`、`Object` などその�
              (make-array 2 :element-type 'double-float :initial-element 0.5d0))   ; => "[0.5, 0.5]"
 ```
 
-シンボル、分数、ハッシュテーブル、ドット対 (非真リスト)、多次元 (ランク 2 以上) の配列はマーシャリング **されません**。
+`nil` は参照が期待される位置では常に Java の `null` です。そのため `Object` 引数に `Boolean.FALSE` を渡すには、Java が false を綴るとおりのシンボル `'|false|` を使います。コールバックが `boolean`・`Boolean` の結果として返すのもこのシンボルです。ハッシュテーブルは挿入順のエントリを持つ新しい `java.util.LinkedHashMap` になり、各キーと値は `Object` 引数と同じく変換されます (`equalp` テーブルのキーは最初に格納した形です)。
+
+```lisp
+(let ((l (java:new "java.util.ArrayList")))
+  (java:call l "add" '|false|)
+  (java:call l "add" nil)
+  (java:call l "toString"))   ; => "[false, null]"
+```
+
+```lisp
+(let ((h (make-hash-table :test 'equal)))
+  (setf (gethash "b" h) 2 (gethash "a" h) (list 1 2))
+  (java:call (java:new "java.util.TreeMap" h) "toString"))   ; => "{a=[1, 2], b=2}"
+```
+
+その他のシンボル、分数、ドット対 (非真リスト)、多次元 (ランク 2 以上) の配列はマーシャリング **されません**。
 
 `java` オブジェクトが `eq`・`eql` になるのは自分自身とだけです。2 回の呼び出しが返した同じオブジェクトは `eq` ですが、`equals` が真になる別々のオブジェクトは `eq` ではありません。`equal` と `equalp` はオブジェクトの `equals` で比較します。そのため `eq`・`eql` のハッシュテーブルは `java` オブジェクトを同一性でキーにし (格納後に変更したキーも見つかります)、`equal`・`equalp` のテーブルは `equals` と `hashCode` でキーにします。
 
@@ -284,6 +301,16 @@ error: --java-static: 1 java: call cannot be compiled without reflection:
   (lambda (method event) (handle-click)))
 ```
 
+引数の後ろを `:functional` で終えた `java:new`・`java:call`・`java:static` (`java:subclass` ではコンストラクタ引数について、callable の後ろ) は、関数を Java がラムダを変換するのと同じ形で変換します。インターフェースの各抽象メソッドはメソッドの引数だけで関数を呼び、default メソッドは本体を保ちます。Clojure フロントエンドは呼び出しをこれで終えるので、Clojure の `fn` はメソッド名を受け取りません。
+
+```lisp
+(let ((lst (java:new "java.util.ArrayList")))
+  (dolist (x (list 3 1 2)) (java:call lst "add" x))
+  (java:static "java.util.Collections" "sort" lst (lambda (a b) (- b a)) :functional)
+  (java:call lst "toString"))
+; => "[3, 2, 1]"
+```
+
 ## java:subclass によるクラスの proxy
 
 `java:subclass` は rontolisp の callable を背後に持つホストクラスのインスタンスを作ります。`java.lang.reflect.Proxy` はインターフェースしか実装できないため、`java:proxy` にはできないことです。このフォームはスーパークラス、追加のインターフェース、オーバーライドするメソッド、コンストラクタ引数を指定します。
@@ -391,7 +418,20 @@ $ rontolisp app.lisp -o app.jar --java-dep com.google.guava:guava:33.4.0-jre
 $ java -jar app.jar
 ```
 
-`--java-dep` は Maven がプロジェクトの依存を解決するのと同じ方法で解決します。同じライブラリの 2 つのバージョンが出会うと、要求した座標に近い方が勝ち、jar は `--java-classpath` のエントリーの後に Maven のクラスパス順で並びます。取得元は Maven Central で、`mvn` と同じローカルリポジトリ (`~/.m2/repository`、または `~/.m2/settings.xml` の `localRepository`。同ファイルの `offline` に従います) を経由します。SNAPSHOT、`LATEST`、`RELEASE`、バージョン範囲は、指定したものも依存の POM にあるものも、Maven と同じく Central の `maven-metadata.xml` で解決します。そのメタデータはローカルリポジトリに保存し、Central に問い合わせ直すのは 1 日に 1 回です。Central になかったファイルも同じです。Central を覆う `settings.xml` のミラーやプロキシは、名前を挙げて拒否します。Clojure プログラムの `deps.edn` の依存のうちクラスを含むものは、これらの後にクラスパスへ加わります ([プロジェクト: deps.edn](../clojure/semantics.md#projects-depsedn))。
+`--java-dep` は Maven がプロジェクトの依存を解決するのと同じ方法で解決します。同じライブラリの 2 つのバージョンが出会うと、要求した座標に近い方が勝ち、jar は `--java-classpath` のエントリーの後に Maven のクラスパス順で並びます。取得元は Maven Central で、`mvn` と同じローカルリポジトリ (`~/.m2/repository`、または `settings.xml` の `localRepository`) を経由します。SNAPSHOT、`LATEST`、`RELEASE`、バージョン範囲は、指定したものも依存の POM にあるものも、Maven と同じく Central の `maven-metadata.xml` で解決します。そのメタデータはローカルリポジトリに保存し、Central に問い合わせ直すのは 1 日に 1 回です。Central になかったファイルも同じです。Maven と同じく Central は SNAPSHOT を配布しない扱いで、SNAPSHOT は `--java-repository` で指定したリポジトリだけから探します。
+
+Clojars、社内リポジトリ、`file:` ディレクトリなど、Central にないライブラリは `--java-repository [ID=]URL` (繰り返し指定可。`https:`、`http:`、`file:`) で指定します。これらのリポジトリは Central の後に、指定した順で検索します。`ID` (省略時は `java-repository-N`) は `settings.xml` が照合する名前で、`<server>` がその認証情報を与え、`mirrorOf` がこの ID を指す `<mirror>` は URL を置き換えます。ID を `central` にすると、リポジトリを追加せず Central の URL を置き換えます。
+
+```console
+$ rontolisp app.lisp --java-dep clj-http:clj-http:3.12.3 \
+    --java-repository clojars=https://repo.clojars.org/
+```
+
+`settings.xml` は `mvn` と同じく効きます。読むのは `~/.m2/settings.xml` で、`MAVEN_HOME` が設定されていれば `$MAVEN_HOME/conf/settings.xml` の上に重ねます。`offline` に従い、Central を覆うミラーがあれば Central の代わりにそのミラーへ問い合わせ (`blocked` のミラーなら失敗します)、プロキシがあればそれを経由します。問い合わせ先のリポジトリの `<server>` からは、Basic 認証の認証情報、`httpHeaders`、タイムアウトを使います。`mvn --encrypt-password` で暗号化したパスワードは、`~/.m2/settings-security.xml` のマスターパスワードで復号します。
+
+有効な `settings.xml` のプロファイル（`<activeProfiles>` に挙げたもの、または `<activation>` が成り立つもの。グローバルとユーザーの両ファイルを合わせます）の `<repositories>` は、`mvn` と同じ順で検索します。Central と `--java-repository` で指定したものより前に置き、後に定義したプロファイルを先に、1 つのプロファイル内では記述順です。それらと同じ id のプロファイルのリポジトリは、そのリポジトリを置き換えます。
+
+Clojure プログラムの `deps.edn` の依存のうちクラスを含むものは、これらの後にクラスパスへ加わります ([プロジェクト: deps.edn](../clojure/semantics.md#projects-depsedn))。
 
 出力ごとに持ち運ぶもの:
 
@@ -418,7 +458,7 @@ native-image -jar prog.jar -H:ConfigurationFileDirectories=config
 
 - **JVM 専用**。インタプリタ (`java -jar rontolisp.jar`) と JVM コンパイル済みクラス (`java Prog`) で動作します。WASM バックエンドでは動作せず、連携クラスのリフレクションメタデータを持たない GraalVM ネイティブバイナリでのインタプリタ実行もできません (ネイティブバイナリで `java:` プログラムを `.class` に*コンパイルする*ことは可能です)。
 - コンパイル済みクラスでは 6 つの関数は呼び出し位置でのみ使えます。第一級の関数値を持たないため、`#'java:call` や `(funcall 'java:new ...)` はコンパイルエラーになります (代わりに自前の `defun` でラップしてください)。埋め込み `eval` ランタイムもこれらを認識しません。また `java:` を使うコンパイル済みプログラムの実行には、呼び出しを解決したリリースの JRE が必要で、実行時解決に回る呼び出しを含むものには、rontolisp をビルドした JRE と同等以上に新しい JRE が必要です。
-- シンボル、ハッシュテーブル、ドット対 (非真リスト)、多次元 (ランク 2 以上) の配列はマーシャリングされません。代わりに `java:new`/`java:call` で構築した Java コレクションとして渡してください。
+- `|false|` 以外のシンボル、ドット対 (非真リスト)、多次元 (ランク 2 以上) の配列はマーシャリングされません。代わりに `java:new`/`java:call` で構築した Java コレクションとして渡してください。
 - 返された `java.util.List` は (Java 配列と異なり) 不透明な `java` オブジェクトのままです。同一性と可変性が保たれるため、リスト関数ではなく `java:call` (`"get"`、`"size"` など) で読み取ってください。
 - オーバーロード解決は引数コストによるもので、Java の完全な型推論規則ではありません。曖昧な呼び出しは曖昧性エラーを出さず、最小コスト (次に最小シグネチャ) の候補に解決されます。パラメータタグでオーバーロードを明示できます。
 - これは完全なホストリフレクションブリッジであり任意の Java コードを実行できます。`java:` を使うプログラムは他の JVM プログラムと同じ信頼度で扱ってください。

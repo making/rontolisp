@@ -67,25 +67,7 @@ final class ClojureSeqLowering {
 		ClojureLowerUtil.isTrue(items.size() >= 3, "when-let needs a binding vector and a body");
 		List<LispVal> bindings = ClojureLowerUtil.bindingItems(items.get(1), "when-let");
 		ClojureLowerUtil.isTrue(bindings.size() == 2, "when-let takes a single binding pair");
-		LispSymbol init = ctx.freshTemp();
-		Map<String, ClojureLowering.Kind> scope = new HashMap<>();
-		ctx.scopes.add(scope);
-		ctx.directScopes.add(new HashSet<>());
-		try {
-			List<LispVal> pairs = new ArrayList<>();
-			LispVal loweredInit = ctx.lower(bindings.get(1));
-			pairs.add(ClojureLowerUtil.list(init, loweredInit));
-			Set<String> bound = new HashSet<>(scope.keySet());
-			ClojureBindingLowering.destructureInto(ctx, bindings.get(0), init, pairs, scope, "when-let");
-			ClojureBindingLowering.noteOrForgetHost(ctx, bindings.get(0), loweredInit, scope.keySet(), bound);
-			return ClojureLowerUtil.list(ClojureLowerUtil.sym("let*"), ClojureLowerUtil.list(pairs),
-					ctx.ifFalsey(init, ctx.body(items, 2), ClojureLowering.NIL_CONST));
-		}
-		finally {
-			ctx.scopes.remove(ctx.scopes.size() - 1);
-			ctx.directScopes.remove(ctx.directScopes.size() - 1);
-			ClojureBindingLowering.forgetDeepHosts(ctx);
-		}
+		return testedBinding(ctx, items, "when-let", false, true);
 	}
 
 	/**
@@ -97,27 +79,81 @@ final class ClojureSeqLowering {
 				"if-let takes a binding vector, a then and an optional else");
 		List<LispVal> bindings = ClojureLowerUtil.bindingItems(items.get(1), "if-let");
 		ClojureLowerUtil.isTrue(bindings.size() == 2, "if-let takes a single binding pair");
+		return testedBinding(ctx, items, "if-let", false, false);
+	}
+
+	/**
+	 * {@code when-some}: {@link #whenLetOf} tested against nil only, so {@code false}
+	 * binds and runs the body. Refusals in the oracle's words.
+	 */
+	static LispVal whenSomeOf(ClojureLowering ctx, List<LispVal> items) {
+		ClojureLowerUtil.isTrue(items.size() >= 2,
+				"Wrong number of args (" + (items.size() - 1) + ") passed to: clojure.core/when-some");
+		someBindings(items.get(1), "when-some");
+		return testedBinding(ctx, items, "when-some", true, true);
+	}
+
+	/**
+	 * {@code if-some}: {@link #ifLetOf} tested against nil only, so {@code false} binds
+	 * and takes the then branch. Refusals in the oracle's words.
+	 */
+	static LispVal ifSomeOf(ClojureLowering ctx, List<LispVal> items) {
+		ClojureLowerUtil.isTrue(items.size() >= 3,
+				"Wrong number of args (" + (items.size() - 1) + ") passed to: clojure.core/if-some");
+		someBindings(items.get(1), "if-some");
+		ClojureLowerUtil.isTrue(items.size() <= 4, "if-some requires 1 or 2 forms after binding vector");
+		return testedBinding(ctx, items, "if-some", true, false);
+	}
+
+	private static void someBindings(LispVal vector, String what) {
+		List<LispVal> parts = ClojureLowerUtil.items(vector, List.of());
+		ClojureLowerUtil.isTrue(!parts.isEmpty() && parts.get(0) == ClojureReader.VECTOR,
+				what + " requires a vector for its binding");
+		ClojureLowerUtil.isTrue(parts.size() == 3, what + " requires exactly 2 forms in binding vector");
+	}
+
+	/**
+	 * One tested binding: the init bound once to a temporary, then the pattern
+	 * destructured from it inside the taken branch only, so a failing init destructures
+	 * nothing and the else branch sees the names as they were outside, like the oracle's
+	 * expansion.
+	 * @param ctx the hub
+	 * @param items the form's items
+	 * @param what the form's name, for refusals
+	 * @param nilOnly whether only nil fails the test ({@code if-some}, {@code when-some})
+	 * rather than nil and false
+	 * @param body whether the rest is a body ({@code when-}) rather than a then and an
+	 * optional else ({@code if-})
+	 * @return the lowered form
+	 */
+	private static LispVal testedBinding(ClojureLowering ctx, List<LispVal> items, String what, boolean nilOnly,
+			boolean body) {
+		List<LispVal> bindings = ClojureLowerUtil.bindingItems(items.get(1), what);
 		LispSymbol init = ctx.freshTemp();
+		LispVal loweredInit = ctx.lower(bindings.get(1));
 		Map<String, ClojureLowering.Kind> scope = new HashMap<>();
 		ctx.scopes.add(scope);
 		ctx.directScopes.add(new HashSet<>());
+		LispVal then;
 		try {
 			List<LispVal> pairs = new ArrayList<>();
-			LispVal loweredInit = ctx.lower(bindings.get(1));
-			pairs.add(ClojureLowerUtil.list(init, loweredInit));
 			Set<String> bound = new HashSet<>(scope.keySet());
-			ClojureBindingLowering.destructureInto(ctx, bindings.get(0), init, pairs, scope, "if-let");
+			ClojureBindingLowering.destructureInto(ctx, bindings.get(0), init, pairs, scope, what);
 			ClojureBindingLowering.noteOrForgetHost(ctx, bindings.get(0), loweredInit, scope.keySet(), bound);
-			LispVal then = ctx.lowerTailSlot(items.get(2));
-			LispVal els = items.size() == 4 ? ctx.lowerTailSlot(items.get(3)) : ClojureLowering.NIL_CONST;
-			return ClojureLowerUtil.list(ClojureLowerUtil.sym("let*"), ClojureLowerUtil.list(pairs),
-					ctx.ifFalsey(init, then, els));
+			LispVal taken = body ? ctx.body(items, 2) : ctx.lowerTailSlot(items.get(2));
+			then = pairs.isEmpty() ? taken
+					: ClojureLowerUtil.list(ClojureLowerUtil.sym("let*"), ClojureLowerUtil.list(pairs), taken);
 		}
 		finally {
 			ctx.scopes.remove(ctx.scopes.size() - 1);
 			ctx.directScopes.remove(ctx.directScopes.size() - 1);
 			ClojureBindingLowering.forgetDeepHosts(ctx);
 		}
+		LispVal els = !body && items.size() == 4 ? ctx.lowerTailSlot(items.get(3)) : ClojureLowering.NIL_CONST;
+		LispVal failed = nilOnly ? ClojureLowerUtil.list(ClojureLowerUtil.sym("NULL"), init) : ctx.isFalsey(init);
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let*"),
+				ClojureLowerUtil.list(ClojureLowerUtil.list(init, loweredInit)),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("IF"), failed, els, then));
 	}
 
 	/** {@code when-not}: the body unless the test is truthy. */
@@ -331,6 +367,36 @@ final class ClojureSeqLowering {
 	 */
 	static LispVal seqAllForm(ClojureLowering ctx, LispVal lowered) {
 		return ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-SEQ-ALL"), lowered);
+	}
+
+	/**
+	 * The view of a collection a verb the oracle builds on {@code reduce} walks as a list
+	 * ({@code clojure.lisp}, "CollReduce and IKVReduce"): a record, deftype or reify with
+	 * its own {@code CollReduce} row answers what that reduction steps, anything else
+	 * itself -- an arm a program storing no such row sheds
+	 * ({@link ClojureArms.Family#REDUCIBLE}).
+	 */
+	static final String REDUCIBLE_ITEMS = "RONTOLISP::%CLOJURE-REDUCIBLE-ITEMS";
+
+	/**
+	 * The whole-collection view of an already-lowered collection a verb the oracle builds
+	 * on {@code reduce} walks ({@code group-by}, {@code frequencies}): the
+	 * {@link #REDUCIBLE_ITEMS} view under {@link #seqAllForm}.
+	 * @param lowered the lowered collection
+	 * @return the form answering the realized list view
+	 */
+	static LispVal reducedAllForm(ClojureLowering ctx, LispVal lowered) {
+		return seqAllForm(ctx, reducibleItemsForm(lowered));
+	}
+
+	/**
+	 * An already-lowered collection behind the {@link #REDUCIBLE_ITEMS} view: what an
+	 * {@code eduction} steps, which the oracle reduces.
+	 * @param lowered the lowered collection
+	 * @return the view
+	 */
+	static LispVal reducibleItemsForm(LispVal lowered) {
+		return ClojureLowerUtil.list(new LispSymbol(REDUCIBLE_ITEMS), lowered);
 	}
 
 	/**

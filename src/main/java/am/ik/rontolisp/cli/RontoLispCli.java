@@ -17,8 +17,10 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
+import java.util.function.Function;
 
 import am.ik.maven.MavenResolver;
+import am.ik.maven.RemoteRepository;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.Version;
@@ -63,7 +65,7 @@ public final class RontoLispCli {
 
 	private @Nullable Boolean assumedTerminal;
 
-	private @Nullable MavenResolver javaDependencyResolver;
+	private @Nullable Function<List<RemoteRepository>, MavenResolver> javaDependencyResolver;
 
 	private @Nullable ClojureDepsRepositories clojureRepositories;
 
@@ -83,6 +85,16 @@ public final class RontoLispCli {
 	 * @param resolver the resolver
 	 */
 	void javaDependencyResolver(MavenResolver resolver) {
+		this.javaDependencyResolver = repositories -> resolver;
+	}
+
+	/**
+	 * Builds the resolver of {@code --java-dep} coordinates from the repositories to
+	 * search (Maven Central, then the {@code --java-repository} ones) -- a test's fixture
+	 * repositories.
+	 * @param resolver the resolver factory
+	 */
+	void javaDependencyResolver(Function<List<RemoteRepository>, MavenResolver> resolver) {
 		this.javaDependencyResolver = resolver;
 	}
 
@@ -1520,6 +1532,11 @@ public final class RontoLispCli {
 		this.out.println("                     Central through ~/.m2/repository (or settings.xml's");
 		this.out.println("                     localRepository); its jars join the class path after");
 		this.out.println("                     --java-classpath, and a generated pom lists the coordinates");
+		this.out.println("  --java-repository [ID=]URL");
+		this.out.println("                     Repeatable. A Maven repository (https:, http: or file:) for");
+		this.out.println("                     --java-dep to search after Maven Central, in the order given;");
+		this.out.println("                     the ID (default java-repository-N) is what settings.xml's");
+		this.out.println("                     <server> and <mirror> name. The id central replaces Central's URL");
 		this.out.println("  --warn-java-reflection");
 		this.out.println("                     Report every java: call that cannot be resolved before it runs");
 		this.out.println("                     (a compile warning; the interpreter sets java:*warn-on-reflection*)");

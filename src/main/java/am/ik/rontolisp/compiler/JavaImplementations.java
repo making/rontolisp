@@ -50,6 +50,19 @@ public final class JavaImplementations {
 			+ " '(\"interface\"...) '(\"method\"...) constructor-args... callable)";
 
 	/**
+	 * Whether a {@code java:subclass} form ends in {@code :functional} after its callable
+	 * ({@link LispNames#JAVA_FUNCTIONAL_MARKER}): a function constructor argument
+	 * converted to an interface implements it by the method's arguments, as at a
+	 * {@code java:new} ending in the marker.
+	 * @param parts the form's elements, the operator first
+	 * @return whether the last one is the marker
+	 */
+	public static boolean subclassFunctional(List<LispVal> parts) {
+		return parts.size() > 5 && parts.get(parts.size() - 1) instanceof LispSymbol marker
+				&& LispNames.JAVA_FUNCTIONAL_MARKER.equals(marker.name());
+	}
+
+	/**
 	 * How many throwables a thread holds between the function called back from Java that
 	 * raised each one and the {@code java:} site whose Java call passes it on (the
 	 * interpreter's {@code JavaInterop}, a compiled program's {@code _jsig}): the newest
@@ -327,6 +340,36 @@ public final class JavaImplementations {
 	}
 
 	/**
+	 * How a function passed where the interface is expected implements it at a
+	 * {@code :functional} site (a Clojure fn, as Java implements a lambda): every method
+	 * a class must implement -- an abstract one, {@code Object}'s three aside -- calls
+	 * the function with the method's arguments alone; a default method keeps its body and
+	 * {@code Object}'s three their identity behavior. A {@code java:reify} whose one
+	 * function implements every abstract method.
+	 * @param iface the interface
+	 * @param lookup unused; for symmetry with {@link #reify}
+	 * @return the implementation
+	 */
+	public static JavaImplementation functional(JavaType iface, JavaClassLookup lookup) {
+		List<JavaImplementation.Slot> slots = new ArrayList<>();
+		for (Group group : groups(iface).values()) {
+			if (OBJECT_METHODS.contains(group.key())) {
+				continue;
+			}
+			boolean abstractMethod = false;
+			for (Variant variant : group.variants()) {
+				abstractMethod |= variant.mustImplement();
+			}
+			if (abstractMethod) {
+				for (Variant variant : group.variants()) {
+					slots.add(slot(group, variant, 0));
+				}
+			}
+		}
+		return new JavaImplementation(false, List.of(iface), slots, null);
+	}
+
+	/**
 	 * How {@code (java:proxy "I" callable)} implements the interface: every method but
 	 * {@code Object}'s three calls the callable.
 	 * @param iface the interface
@@ -461,7 +504,7 @@ public final class JavaImplementations {
 				interfaces.add(type);
 			}
 			JavaImplementation implementation = subclass(superclass, interfaces, methodNames);
-			int argc = parts.size() - 5;
+			int argc = parts.size() - 5 - (subclassFunctional(parts) ? 1 : 0);
 			boolean viable = false;
 			for (JavaOverloads.Overload overload : JavaOverloads.ranked(superclass.subclassConstructors(), argc)) {
 				boolean linkable = true;

@@ -16,6 +16,7 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.TreeMap;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Supplier;
@@ -73,6 +74,21 @@ final class JavaBridgeTemplate {
 
 	private static final int NO_MATCH = -1;
 
+	// How marshal() converts a function value (mirrors eval/JavaInterop): to nothing --
+	// a value a java:reify / java:proxy function answers --, to the interface's
+	// java:proxy -- an argument --, or, at a call ending in :functional, to the
+	// implementation calling the function with each abstract method's arguments.
+	private static final int FUNCTIONS_NONE = 0;
+
+	private static final int FUNCTIONS_PROXY = 1;
+
+	private static final int FUNCTIONS_BY_ARGUMENTS = 2;
+
+	// The keyword a java:new / java:call / java:static call may end in after its
+	// arguments (mirrors compiler/JavaSiteResolver.FUNCTIONAL); a keyword compiles to its
+	// name.
+	private static final String FUNCTIONAL_MARKER = ":FUNCTIONAL";
+
 	// Resolution caches, mirroring eval/JavaInterop: the class by name, the candidate
 	// constructors / methods / field of a class, and the overload chosen for (class,
 	// member, argument kinds). A kind is the smallest token of which every marshal()
@@ -127,6 +143,12 @@ final class JavaBridgeTemplate {
 
 	private static final String KIND_T = "t";
 
+	private static final String KIND_FALSE = "false";
+
+	// The symbol java: passes as Java's false (am.ik.rontolisp.LispNames.JAVA_FALSE; this
+	// class may import nothing of rontolisp): a bare String, as every compiled symbol.
+	private static final String JAVA_FALSE = "false";
+
 	private static final String KIND_INTEGER = "integer";
 
 	private static final String KIND_BIGNUM = "bignum";
@@ -178,6 +200,14 @@ final class JavaBridgeTemplate {
 	 * {@code aref} answers without a fourth hand copy of the arithmetic.
 	 */
 	private static @Nullable Method bf16ValueMethod;
+
+	/**
+	 * The generated program's {@code _hashValues(Object)} -- a hash table's live entry
+	 * pairs in insertion order, what {@code maphash} walks -- or null when the program
+	 * carries no hash-table runtime (then no table can exist). Bound beside
+	 * {@code _strv}, so a table this bridge marshals is read as the program reads it.
+	 */
+	private static @Nullable Method hashValuesMethod;
 
 	/**
 	 * The generated program's {@code _jsig(Throwable)}: what this bridge's {@code Proxy}
@@ -249,6 +279,15 @@ final class JavaBridgeTemplate {
 			// No packed float runtime in this program: no bfloat16 array can exist.
 			bf16ValueMethod = null;
 		}
+		try {
+			Method hashValues = mainClass.getDeclaredMethod("_hashValues", Object.class);
+			hashValues.setAccessible(true);
+			hashValuesMethod = hashValues;
+		}
+		catch (NoSuchMethodException ex) {
+			// No hash-table runtime in this program: no table can exist.
+			hashValuesMethod = null;
+		}
 	}
 
 	// A method every program the bridge travels with declares.
@@ -268,6 +307,10 @@ final class JavaBridgeTemplate {
 	 * ({@code "java.lang.StringBuilder(int)"}).
 	 */
 	static @Nullable Object javaNew(@Nullable Object className, @Nullable Object[] args) {
+		int functions = functionsOf(args);
+		if (functions == FUNCTIONS_BY_ARGUMENTS) {
+			args = Arrays.copyOf(args, args.length - 1);
+		}
 		String designator = lispString(className);
 		if (designator == null) {
 			throw new RuntimeException("java:new expects a class-name string, got " + describe(className));
@@ -285,7 +328,7 @@ final class JavaBridgeTemplate {
 					"No matching constructor for " + designator + " with " + args.length + " argument(s)");
 		}
 		try {
-			return unmarshal(((Constructor<?>) overload[0]).newInstance(marshalArguments(overload, values)));
+			return unmarshal(((Constructor<?>) overload[0]).newInstance(marshalArguments(overload, values, functions)));
 		}
 		catch (ReflectiveOperationException ex) {
 			throw fail("constructing " + name, ex);
@@ -304,6 +347,13 @@ final class JavaBridgeTemplate {
 					"java:call expects a java object as the first argument, got " + describe(target));
 		}
 		return invoke(receiver.getClass(), receiver, method, args);
+	}
+
+	// FUNCTIONS_BY_ARGUMENTS when the evaluated arguments end in the :functional marker
+	// (which the caller then drops), else FUNCTIONS_PROXY.
+	private static int functionsOf(@Nullable Object[] args) {
+		return args.length > 0 && FUNCTIONAL_MARKER.equals(args[args.length - 1]) ? FUNCTIONS_BY_ARGUMENTS
+				: FUNCTIONS_PROXY;
 	}
 
 	// The object a java:call is made on: a host object itself, or the one a Lisp value of
@@ -441,6 +491,45 @@ final class JavaBridgeTemplate {
 		return proxy(new Class<?>[] { iface }, callable);
 	}
 
+	// The designators stand-in of a :functional implementation's key.
+	private static final String FUNCTIONAL_KEY = "functional";
+
+	// A function value where an interface is expected at a call ending in :functional:
+	// every abstract method calls the function with its arguments (mirrors
+	// compiler/JavaImplementations.functional).
+	private static Object functional(Class<?> iface, @Nullable Object function) {
+		List<Object> key = List.of(iface, FUNCTIONAL_KEY);
+		Map<String, Integer> slots = IMPLEMENTATIONS.get(key);
+		if (slots == null) {
+			slots = functionalSlots(iface);
+			remember(IMPLEMENTATIONS, key, slots);
+		}
+		return implementation(new Class<?>[] { iface }, false, slots, new @Nullable Object[] { function });
+	}
+
+	// Every method a class implementing the interface must implement, by
+	// name(parameters)return -- an abstract one, Object's three aside -- each variant of
+	// it calling the function (mirrors compiler/JavaImplementations.functional).
+	private static Map<String, Integer> functionalSlots(Class<?> iface) {
+		Map<String, Integer> slots = new HashMap<>();
+		for (Map.Entry<String, List<Method>> group : groups(new Class<?>[] { iface }).entrySet()) {
+			if (OBJECT_METHODS.contains(group.getKey())) {
+				continue;
+			}
+			Map<String, List<Method>> variants = variants(group.getValue());
+			boolean abstractMethod = false;
+			for (List<Method> variant : variants.values()) {
+				abstractMethod |= mustImplement(variant);
+			}
+			if (abstractMethod) {
+				for (List<Method> variant : variants.values()) {
+					slots.put(group.getKey() + variant.get(0).getReturnType().getName(), 0);
+				}
+			}
+		}
+		return slots;
+	}
+
 	// java:proxy: every method of every interface but Object's three calls the callable
 	// with the method's name first.
 	private static Object proxy(Class<?>[] interfaces, @Nullable Object callable) {
@@ -536,7 +625,7 @@ final class JavaBridgeTemplate {
 			return null;
 		}
 		@Nullable Object[] slot = new @Nullable Object[1];
-		if (marshal(result, ret, slot, 0, false) == NO_MATCH) {
+		if (marshal(result, ret, slot, 0, FUNCTIONS_NONE) == NO_MATCH) {
 			throw new RuntimeException((proxy ? "java:proxy" : "java:reify") + ": cannot return " + describe(result)
 					+ " as " + ret + " from " + name + (proxy ? "" : "." + method.getName()));
 		}
@@ -746,6 +835,10 @@ final class JavaBridgeTemplate {
 
 	private static @Nullable Object invoke(Class<?> cls, @Nullable Object receiver, String methodName,
 			@Nullable Object[] args) {
+		int functions = functionsOf(args);
+		if (functions == FUNCTIONS_BY_ARGUMENTS) {
+			args = Arrays.copyOf(args, args.length - 1);
+		}
 		@Nullable Object[] values = renderedAll(args);
 		// A static call (no receiver) chooses among the static methods only. The
 		// designator is parsed only when the candidates are needed: a remembered choice
@@ -764,7 +857,7 @@ final class JavaBridgeTemplate {
 					"No matching method " + cls.getName() + "." + methodName + " with " + args.length + " argument(s)");
 		}
 		try {
-			return unmarshal(((Method) overload[0]).invoke(receiver, marshalArguments(overload, values)));
+			return unmarshal(((Method) overload[0]).invoke(receiver, marshalArguments(overload, values, functions)));
 		}
 		catch (ReflectiveOperationException ex) {
 			throw fail("calling " + cls.getName() + "." + ((Method) overload[0]).getName(), ex);
@@ -995,8 +1088,9 @@ final class JavaBridgeTemplate {
 	}
 
 	// The token of which every conversion cost is a pure function (kindCost), or null
-	// when there is none: a cons or a Lisp array (the cost sums its elements), and the
-	// values marshal() never bridges. The tests mirror marshal()'s, in its order.
+	// when there is none: a cons, a Lisp array or a hash table (the cost sums its
+	// elements), and the values marshal() never bridges. The tests mirror marshal()'s, in
+	// its order.
 	private static @Nullable Object kindOf(@Nullable Object value) {
 		if (value == null) {
 			return KIND_NIL;
@@ -1017,7 +1111,7 @@ final class JavaBridgeTemplate {
 			if (isLispString(s)) {
 				return stringValue(s).length() == 1 ? KIND_STRING_1 : KIND_STRING;
 			}
-			return "T".equals(s) ? KIND_T : null;
+			return "T".equals(s) ? KIND_T : (JAVA_FALSE.equals(s) ? KIND_FALSE : null);
 		}
 		if (value.getClass() == Object[].class) {
 			Object[] arr = (Object[]) value;
@@ -1237,20 +1331,20 @@ final class JavaBridgeTemplate {
 	}
 
 	// The Java arguments for the chosen overload, packing a varargs tail.
-	private static @Nullable Object[] marshalArguments(Object[] overload, @Nullable Object[] values) {
+	private static @Nullable Object[] marshalArguments(Object[] overload, @Nullable Object[] values, int functions) {
 		Class<?>[] params = (Class<?>[]) overload[1];
 		boolean packs = (Boolean) overload[2];
 		@Nullable Object[] out = new @Nullable Object[params.length];
 		int fixed = packs ? params.length - 1 : params.length;
 		for (int i = 0; i < fixed; i++) {
-			marshalSelected(values[i], params[i], out, i);
+			marshalSelected(values[i], params[i], out, i, functions);
 		}
 		if (packs) {
 			Class<?> component = params[fixed].getComponentType();
 			Object packed = Array.newInstance(component, values.length - fixed);
 			@Nullable Object[] slot = new @Nullable Object[1];
 			for (int i = fixed; i < values.length; i++) {
-				marshalSelected(values[i], component, slot, 0);
+				marshalSelected(values[i], component, slot, 0, functions);
 				Array.set(packed, i - fixed, slot[0]);
 			}
 			out[fixed] = packed;
@@ -1259,8 +1353,9 @@ final class JavaBridgeTemplate {
 	}
 
 	// select() costed this argument against this type, so it converts.
-	private static void marshalSelected(@Nullable Object value, Class<?> target, @Nullable Object[] out, int index) {
-		if (marshal(value, target, out, index) == NO_MATCH) {
+	private static void marshalSelected(@Nullable Object value, Class<?> target, @Nullable Object[] out, int index,
+			int functions) {
+		if (marshal(value, target, out, index, functions) == NO_MATCH) {
 			throw new IllegalStateException("java interop: the selected overload rejects " + describe(value));
 		}
 	}
@@ -1271,25 +1366,25 @@ final class JavaBridgeTemplate {
 	// one cost table -- and converted by convert(); a cons or Lisp array element-wise. A
 	// function becomes a proxy of an interface: an argument's conversion.
 	private static int marshal(@Nullable Object value, Class<?> target, @Nullable Object[] out, int index) {
-		return marshal(value, target, out, index, true);
+		return marshal(value, target, out, index, FUNCTIONS_PROXY);
 	}
 
-	// With proxies false a function converts to nothing: the conversion of a value a
+	// With FUNCTIONS_NONE a function converts to nothing: the conversion of a value a
 	// java:reify / java:proxy function answers (mirrors eval/JavaInterop).
 	private static int marshal(@Nullable Object value, Class<?> target, @Nullable Object[] out, int index,
-			boolean proxies) {
+			int functions) {
 		// A mutable character vector marshals as the string it spells: rendered once
 		// here, the single source of truth for every argument position (fixed arity,
 		// varargs, constructors and sequence elements alike).
 		value = rendered(value);
 		Object kind = kindOf(value);
 		if (kind != null) {
-			if (!proxies && KIND_FUNCTION.equals(kind)) {
+			if (functions == FUNCTIONS_NONE && KIND_FUNCTION.equals(kind)) {
 				return NO_MATCH;
 			}
 			int cost = kindCost(kind, target);
 			if (cost != NO_MATCH) {
-				out[index] = convert(value, target);
+				out[index] = convert(value, target, functions);
 			}
 			return cost;
 		}
@@ -1298,7 +1393,7 @@ final class JavaBridgeTemplate {
 			if (elements == null) {
 				return NO_MATCH; // a dotted (improper) list is not a sequence
 			}
-			return marshalSequence(elements, target, out, index, proxies);
+			return marshalSequence(elements, target, out, index, functions);
 		}
 		if (value instanceof ArrayList<?> list && !list.isEmpty() && list.get(0) instanceof Object[] header) {
 			// The compiled Lisp array representation: slot 0 = the {dims, fillPointer,
@@ -1314,17 +1409,73 @@ final class JavaBridgeTemplate {
 				for (long v : packed) {
 					elements.add(v == Long.MIN_VALUE ? null : v);
 				}
-				return marshalSequence(elements, target, out, index, proxies);
+				return marshalSequence(elements, target, out, index, functions);
 			}
 			int count = header[1] instanceof Long fp ? fp.intValue() : list.size() - 1;
-			return marshalSequence(new ArrayList<>(list.subList(1, 1 + count)), target, out, index, proxies);
+			return marshalSequence(new ArrayList<>(list.subList(1, 1 + count)), target, out, index, functions);
 		}
 		List<@Nullable Object> packed = packedElements(value);
 		if (packed != null) {
-			return marshalSequence(packed, target, out, index, proxies);
+			return marshalSequence(packed, target, out, index, functions);
+		}
+		List<@Nullable Object> entries = tableEntries(value);
+		if (entries != null) {
+			return marshalTable(entries, target, out, index, functions);
 		}
 		return NO_MATCH; // other symbols, ratios, rank-2+ arrays are not bridged (as
 							// interpreted)
+	}
+
+	// A Lisp hash table's entries in insertion order, keys and values alternating (an
+	// equalp table's key as first stored, not its fold), or null for anything else.
+	// Mirrors JvmJavaDirectSites' _jtab.
+	private static @Nullable List<@Nullable Object> tableEntries(@Nullable Object value) {
+		Method hashValues = hashValuesMethod;
+		if (hashValues == null || !(value instanceof LinkedHashMap<?, ?> map)
+				|| !(map.get(HASH_TABLE_ORDER_KEY) instanceof ArrayList)) {
+			return null;
+		}
+		Object[] pairs;
+		try {
+			pairs = (Object[]) Objects.requireNonNull(hashValues.invoke(null, value));
+		}
+		catch (ReflectiveOperationException ex) {
+			throw new IllegalStateException("java interop: cannot read a hash table", ex);
+		}
+		List<@Nullable Object> entries = new ArrayList<>(2 * pairs.length);
+		for (Object entry : pairs) {
+			Object[] pair = (Object[]) entry;
+			entries.add(pair.length > 2 ? pair[2] : pair[0]);
+			entries.add(pair[1]);
+		}
+		return entries;
+	}
+
+	// A hash table converts, for any target a java.util.LinkedHashMap is assignable to,
+	// to a fresh one of its entries, each key and value marshalled as an Object (mirrors
+	// eval/JavaInterop.marshalTable).
+	private static int marshalTable(List<@Nullable Object> entries, Class<?> target, @Nullable Object[] out, int index,
+			int functions) {
+		if (!target.isAssignableFrom(LinkedHashMap.class)) {
+			return NO_MATCH;
+		}
+		@Nullable Object[] slot = new @Nullable Object[2];
+		Map<@Nullable Object, @Nullable Object> map = new LinkedHashMap<>();
+		int total = COST_BOXED;
+		for (int i = 0; i < entries.size(); i += 2) {
+			int keyCost = marshal(entries.get(i), Object.class, slot, 0, functions);
+			if (keyCost == NO_MATCH) {
+				return NO_MATCH;
+			}
+			int valueCost = marshal(entries.get(i + 1), Object.class, slot, 1, functions);
+			if (valueCost == NO_MATCH) {
+				return NO_MATCH;
+			}
+			total += keyCost + valueCost;
+			map.put(slot[0], slot[1]);
+		}
+		out[index] = map;
+		return total;
 	}
 
 	// The elements of a rank-1 SPECIALIZED vector -- a bare primitive array carrying its
@@ -1405,7 +1556,8 @@ final class JavaBridgeTemplate {
 				// nil carries no type, so any reference target ties
 				yield target.isPrimitive() ? NO_MATCH : COST_BOXED;
 			}
-			case KIND_T -> {
+			// Java's false is t's twin.
+			case KIND_T, KIND_FALSE -> {
 				if (target == boolean.class) {
 					yield COST_EXACT;
 				}
@@ -1488,6 +1640,10 @@ final class JavaBridgeTemplate {
 
 	// The Java value of a (rendered) value with a kind, for a target kindCost accepted.
 	private static @Nullable Object convert(@Nullable Object value, Class<?> target) {
+		return convert(value, target, FUNCTIONS_PROXY);
+	}
+
+	private static @Nullable Object convert(@Nullable Object value, Class<?> target, int functions) {
 		if (value == null) { // nil
 			return target == boolean.class || target == Boolean.class ? Boolean.FALSE : null;
 		}
@@ -1508,13 +1664,14 @@ final class JavaBridgeTemplate {
 		}
 		if (value instanceof String s) {
 			if (!isLispString(s)) {
-				return Boolean.TRUE; // the symbol t
+				return JAVA_FALSE.equals(s) ? Boolean.FALSE : Boolean.TRUE; // |false| or
+																			// t
 			}
 			String str = stringValue(s);
 			return target.isAssignableFrom(String.class) ? str : (Object) str.charAt(0);
 		}
 		if (value.getClass() == Object[].class) { // a function value
-			return proxy(target, value);
+			return functions == FUNCTIONS_BY_ARGUMENTS ? functional(target, value) : proxy(target, value);
 		}
 		return value; // a wrapped host object
 	}
@@ -1549,14 +1706,14 @@ final class JavaBridgeTemplate {
 	// component type, recursively) or, for any List-compatible reference target, to a
 	// java.util.List of boxed elements.
 	private static int marshalSequence(List<@Nullable Object> elements, Class<?> target, @Nullable Object[] out,
-			int index, boolean proxies) {
+			int index, int functions) {
 		@Nullable Object[] slot = new @Nullable Object[1];
 		if (target.isArray()) {
 			Class<?> component = target.getComponentType();
 			Object array = Array.newInstance(component, elements.size());
 			int total = COST_CONVERT;
 			for (int i = 0; i < elements.size(); i++) {
-				int cost = marshal(elements.get(i), component, slot, 0, proxies);
+				int cost = marshal(elements.get(i), component, slot, 0, functions);
 				if (cost == NO_MATCH) {
 					return NO_MATCH;
 				}
@@ -1570,7 +1727,7 @@ final class JavaBridgeTemplate {
 			List<@Nullable Object> list = new ArrayList<>(elements.size());
 			int total = COST_BOXED;
 			for (Object element : elements) {
-				int cost = marshal(element, Object.class, slot, 0, proxies);
+				int cost = marshal(element, Object.class, slot, 0, functions);
 				if (cost == NO_MATCH) {
 					return NO_MATCH;
 				}

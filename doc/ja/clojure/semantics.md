@@ -94,7 +94,10 @@ oracle と同じく無視します。oracle の spec が拒否する値、どの
   `"[1.0]"` は 1.0 です。バージョン範囲は、リポジトリの `maven-metadata.xml` がその範囲に挙げる
   最も新しいバージョンです。`RELEASE`、`LATEST`、`SNAPSHOT` もそのメタデータで解決します。
   メタデータはローカルリポジトリに保存し、問い合わせ直すのは 1 日に 1 回です。`http:` の
-  リポジトリと、`~/.m2/settings.xml` の mirror や proxy がかかるリポジトリは拒否します。
+  リポジトリは拒否します。`settings.xml`（`$MAVEN_HOME/conf/settings.xml` に
+  `~/.m2/settings.xml` を重ねたもの）は oracle と同じく効きます。mirror、proxy、server の
+  認証情報と `httpHeaders`（`mvn --encrypt-password` で暗号化したパスワードも含む）に従い、
+  `localRepository`、`offline`、プロファイルの `<repositories>` は読みません。
 - git 座標（`:git/url`、または `io.github.user/repo` という名前が示す URL と、`:git/sha`、
   `:git/tag`、`:deps/root`）は `git` コマンドでそのコミットを `~/.rontolisp/gitlibs`
   （`$RONTOLISP_DIST_HOME/gitlibs`）にチェックアウトします。タグはそのコミットを指す必要があり、
@@ -349,7 +352,11 @@ lazy 入力はどの seq 動詞にも届きます。コレクション全体を�
 `Number`、`Boolean`、`Keyword`、`Symbol`、`Character`、`Map`、`Vector`、`Set`、
 `List`/`Seq`、それに外れ既定としての `nil` と `Object`）と既知の record/deftype 名
 で、それ以外は名前付きで拒否されます。`Object` 行なしの外れはオラクル同様シグナル
-を上げます。各メソッドは1つのパラメータベクターを取ります（複数アリティは拒否のまま）。
+を上げます。メソッドはアリティごとに1つのパラメータベクターを宣言します。インライン本体は
+メソッド名を書き直して別のアリティを実装し、拡張は `fn` の節で書き、行には呼び出しの引数の数に
+一致するアリティを適用する1つのラムダを格納します。`clojure.core.protocols/CollReduce` や
+`IKVReduce` の自前の行を持つ record・deftype・`reify` は、`reduce`・`reduce-kv` とその上に
+作られた動詞でもその行を通して畳み込まれます（[reduce](reference/reduce.md)）。
 `:extend-via-metadata true` と宣言したプロトコルは、ターゲットのメタデータからも
 名前空間で修飾したメソッドのシンボルでメソッドを探します。オラクル同様、
 `defrecord`/`deftype`/`reify` 本体の実装の後、extend の行の前です
@@ -431,7 +438,6 @@ var はエクスポートより下で定義してかまいません。
 | end なし `range` | `infinite range is not supported: range needs an end` | 無限 seq は strict には綴れない -- `iterate` を使う |
 | `transient`、`persistent!`、`assoc!`、`dissoc!`、`conj!`、`disj!` | `transients are not supported yet: ...` | テーブルの裏にトランジェント実装がない |
 | `definterface`、`gen-class`、`gen-interface` | `protocols are not supported yet: ...` | どのバックエンドにもインターフェース生成がない |
-| 複数アリティのプロトコルメソッド | `multi-arity protocol methods are not supported yet: ...` | メソッドごとにパラメータベクターは1つ |
 | 特殊変数でない core の var（`inc`）やホストフィールドへの `set!` | `set! of a var is not supported yet: ...`、`set! of a host field is not supported yet: ...` | 代入先の var がない。`java:` にフィールド書き込みがない |
 | `future`、`delay`/`force`、`promise`/`deliver` | 名前で | どのバックエンドにもスレッドプール・遅延メモセル・ブロッキング待ち合わせがない |
 | proxy メソッドの外側の `proxy-super` | `proxy-super outside a proxy method` | `proxy-super` はメソッドの `this` に対するスーパークラスの実装呼び出し |
@@ -442,6 +448,7 @@ var はエクスポートより下で定義してかまいません。
 | 未知のエイリアスの `::alias/kw` | `Invalid token: ...` | 解決するのは require のエイリアス、ファイル自身の ns、既知の名前空間のみ |
 | `--no-gc` ビルド | 名前で | そのバックエッドにはペアもシンボルもクロージャもない |
 | `file-seq`、`clojure.java.io`（`reader` 以外） | `file-seq` / `unknown name: clojure.java.io/...` | ディレクトリ走査なし。解決するのは `reader` のみで、ファイルストリームのリーダーを開く |
+| `clojure.core` の var、マクロ、マルチメソッド、プロトコルメソッドの `with-redefs`。REPL では、以前の入力が `^:redef` なしで定義した `defn` の `with-redefs` | `with-redefs of ... is not supported...`、`... define it ^:redef to redefine it` | コアの関数は呼び出しごとにインライン展開される。置き換えるルートを持つのは `def`/`defn`/`declare` の var だけで、REPL の入力は直接呼び出しのまま実行済み |
 | 非同期の Ring ハンドラ（`:async? true` 付きの `run-server`） | `asynchronous handlers (:async? true) are not supported` | トランスポートに respond/raise の仕組みがない |
 | `rontolisp.wasm` の宣言の `:async`、`async func` の WIT メンバーやエクスポート | `:async is not supported yet ...`、`... is an async func ...` | 中断する呼び出しが答える future は Clojure の future ではない |
 | stream か future を受け取るか答える WIT メンバー | `... which the Clojure tier does not carry yet (file.wit:N)` | 非同期 canonical ABI のハンドルが答える Clojure の future がまだない |

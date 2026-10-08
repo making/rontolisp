@@ -21,6 +21,7 @@ import am.ik.maven.MavenResolutionException;
 import am.ik.maven.MavenResolver;
 import am.ik.maven.MavenSettings;
 import am.ik.maven.RemoteRepository;
+import am.ik.maven.RepositoryPolicy;
 import am.ik.rontolisp.clojure.ClojureRepositories;
 
 /**
@@ -64,15 +65,15 @@ public final class ClojureDepsRepositories implements ClojureRepositories {
 	}
 
 	/**
-	 * The command line's repositories: {@code ~/.m2/repository}, the user's
-	 * {@code settings.xml} (its mirrors and proxies, refused by name), the network, and
-	 * the artifact cache's {@code gitlibs} area -- read from the environment here and
-	 * nowhere else. Nothing is read until a coordinate is fetched.
+	 * The command line's repositories: {@code ~/.m2/repository}, Maven's
+	 * {@code settings.xml} (its mirrors, proxies and servers), the network, and the
+	 * artifact cache's {@code gitlibs} area -- read from the environment here and nowhere
+	 * else. Nothing is read until a coordinate is fetched.
 	 * @return the repositories
 	 */
 	public static ClojureDepsRepositories createDefault() {
 		return builder().defaultLocalRepository(MavenResolver.defaultLocalRepository())
-			.settings(MavenSettings::readUserSettings)
+			.settings(MavenSettings::readGlobalAndUser)
 			.git(GitFetcher.create(ArtifactCache.createDefault()))
 			.allowHttp(System.getenv("CLOJURE_CLI_ALLOW_HTTP_REPO") != null)
 			.build();
@@ -224,7 +225,8 @@ public final class ClojureDepsRepositories implements ClojureRepositories {
 				throw new FetchFailure("Invalid repo url (http not supported): " + repository.url());
 			}
 			try {
-				repositories.add(new RemoteRepository(repository.id(), repository.url()));
+				repositories.add(new RemoteRepository(repository.id(), repository.url(), policy(repository.releases()),
+						policy(repository.snapshots())));
 			}
 			catch (IllegalArgumentException ex) {
 				throw new FetchFailure(String.valueOf(ex.getMessage()));
@@ -243,6 +245,10 @@ public final class ClojureDepsRepositories implements ClojureRepositories {
 		return made;
 	}
 
+	private static RepositoryPolicy policy(MavenPolicy policy) {
+		return new RepositoryPolicy(policy.enabled(), policy.update());
+	}
+
 	private MavenSettings settings() {
 		MavenSettings known = this.settings;
 		if (known == null) {
@@ -253,8 +259,9 @@ public final class ClojureDepsRepositories implements ClojureRepositories {
 			catch (MavenResolutionException ex) {
 				throw new FetchFailure(String.valueOf(ex.getMessage()));
 			}
-			// clj routes through settings.xml's mirrors and proxies, but reads neither
-			// its local repository nor its offline flag
+			// clj routes through settings.xml's mirrors, proxies and servers, but reads
+			// neither its local repository, its offline flag nor its profiles'
+			// repositories (measured on clj 1.12.6, 2026-10-08)
 			known = new MavenSettings(null, false, read.mirrors(), read.proxies(), read.servers());
 			this.settings = known;
 		}

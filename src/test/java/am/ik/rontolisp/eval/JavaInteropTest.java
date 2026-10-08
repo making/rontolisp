@@ -684,6 +684,15 @@ class JavaInteropTest {
 			.isEqualTo(JavaInteropPrograms.LISP_RECEIVER_OUTPUT);
 	}
 
+	// Mirrors JvmJavaInteropCompilerTest#falseAndAHashTableCrossAsJavasFalseAndAMap.
+	// Before, measured 2026-10-08: every |false| and hash-table row was "No matching
+	// method ..." and every callback row "java:reify: cannot return |false| as ...".
+	@Test
+	void falseAndAHashTableCrossAsJavasFalseAndAMap() {
+		assertThat(output(JavaInteropPrograms.FALSE_AND_TABLE_PROGRAM))
+			.isEqualTo(JavaInteropPrograms.FALSE_AND_TABLE_OUTPUT);
+	}
+
 	@Test
 	void proxyOnNonInterfaceSignals() {
 		assertThatThrownBy(() -> eval("(java:proxy \"java.lang.String\" (lambda (m) nil))"))
@@ -796,6 +805,18 @@ class JavaInteropTest {
 		assertThatThrownBy(() -> eval(JavaImplementationPrograms.FALSE_IMPLEMENTATION))
 			.isInstanceOf(LispEvalException.class)
 			.hasMessage(JavaImplementationPrograms.FALSE_IMPLEMENTATION_ERROR);
+	}
+
+	// Mirrors
+	// JvmJavaInteropCompilerTest#aFunctionAtAFunctionalSiteImplementsItsInterfaceByItsArguments.
+	@Test
+	void aFunctionAtAFunctionalSiteImplementsItsInterfaceByItsArguments() {
+		assertThat(output(JavaImplementationPrograms.FUNCTIONAL))
+			.isEqualTo(JavaImplementationPrograms.FUNCTIONAL_OUTPUT);
+		// through apply, the marker is the last evaluated argument
+		assertThat(output("(let ((l (java:new \"java.util.ArrayList\"))) (java:call l \"add\" 4)"
+				+ " (apply #'java:call l \"forEach\" (list #'print :functional)))"))
+			.isEqualTo("4");
 	}
 
 	// Mirrors

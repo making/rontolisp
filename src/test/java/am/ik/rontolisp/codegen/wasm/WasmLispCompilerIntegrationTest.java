@@ -12068,6 +12068,15 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void scaleFloatRoundsOnceIntoTheSubnormalRange() throws Exception {
+		// Math.scalb's answers, which the interpreter gives: the product rounds once,
+		// so a chunk that lands in the subnormal range must be the last one.
+		assertThat(compileAndRun("(print (scale-float (+ (expt 2d0 -25) (expt 2d0 -77)) -1050))"
+				+ " (print (scale-float -2.3779429016845906d285 -2004))"))
+			.isEqualTo("4.9e-324\n-1.294467e-318");
+	}
+
+	@Test
 	void charNamePrelude() throws Exception {
 		// The prelude splice mirrors the CLI pipeline (char-name is a prelude defun).
 		assertThat(compileAndRunProgram(am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString("""

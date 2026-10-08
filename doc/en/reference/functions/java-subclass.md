@@ -39,6 +39,10 @@ when it is called and nothing implements it:
 ; => ("over!" "x" "x")
 ```
 
+Ending the form in `:functional`, after the callable, makes a function constructor
+argument passed where an interface is expected implement it by the method's arguments
+instead of as a `java:proxy` (`java:new`'s `:functional`).
+
 ## In a compiled program
 
 A `java:subclass` whose superclass, interfaces and methods are literal strings

@@ -50,8 +50,8 @@ final class ProfileActivator {
 		return active.isEmpty() ? byDefault : active;
 	}
 
-	private static boolean isActive(@Nullable String profileId, PomModel.Activation activation,
-			Map<String, String> user, Map<String, String> system, List<String> problems) {
+	static boolean isActive(@Nullable String profileId, PomModel.Activation activation, Map<String, String> user,
+			Map<String, String> system, List<String> problems) {
 		String jdk = activation.jdk();
 		PomModel.Os os = activation.os();
 		PomModel.Property property = activation.property();

@@ -46,7 +46,7 @@ The oracle is `clj` 1.12.6.1673: a behavior is decided by running it there, and 
 |---|---|---|
 | identifier `foo` | symbol `c%foo`; a global var of namespace `n` is `c%n/foo` (`user`'s keep `c%foo`) | the prefix keeps every name off `LispNames` case labels, lambda-list keywords and `T`/`NIL`; spelling verbatim (`Foo` and `foo` apart); `:` -> `%c`, `%` -> `%%` keeps the map injective; a local never carries a namespace. Generated names add a lone `%` suffix no identifier spells (`%2`/`%*` arity helpers, `%defN`, `%macro`, `%bound-depth`, `%loaded`, `%init-N`, `%meta`, `%root`, `%local`) |
 | `nil` / `true` | `NIL` / `T` | `nil` IS the empty list |
-| `false` | the value of `rontolisp::%clojure-false`, a distinct non-`NIL` symbol spelled `false` | the `#f` treatment of `scheme.lisp`; every lowered test is an explicit null-or-false check on a temporary |
+| `false` | the value of `rontolisp::%clojure-false`, a distinct non-`NIL` symbol spelled `false` | the `#f` treatment of `scheme.lisp`; every lowered test is an explicit null-or-false check on a temporary; the symbol `java:` passes as Java's false ("Java interop") |
 | `:foo`, `:a/b` | `(:C%KEYWORD "foo")`, spelling verbatim | compared by `equal`; `::kw` / `::alias/kw` resolve at lower time against the current namespace (an unknown alias is the oracle's `Invalid token`) |
 | `{k v}` | an `equal` hash table (`rontolisp:plist-hash-table`), never mutated: every verb builds a fresh one | the shared runtime (`.kb/hash-tables.md`), so persistence holds on all four backends with no per-backend code; a persistent-map library would add a representation every backend prints, hashes and compares. Collection keys go through "Structural keys" |
 | `#{..}` | `(:C%SET table)`, each member under itself | a repeated literal element is refused when the read forms are `=` (`ClojureReader.equivKey`: `1`/`1N`, `[1]`/`(1)`, maps and sets in any order; `Duplicate key`) |
@@ -108,6 +108,12 @@ answered `2 5 3` before).
 | `dorun` / `doall` | `%clojure-dorun` / `-doall` (`-n` with a count) | walk to the end, answering `nil` / the collection; with a count `n + 1` members realize, like the oracle; `doall` never coerces |
 | `if` `when` `cond` `do` `and` `or` `not` | the core forms over null-or-false tests | `cond`'s odd trailing arm is the default (the oracle refuses); `:else` is true; `and`/`or`/`assert` have no function value |
 | `when-let` `if-let` `when-not` `if-not` `when-first` | `let*` over one temporary plus the test | `when-let`/`if-let` destructure, testing the whole init; `when-first` binds the head of the seq view |
+| `if-some` `when-some` | `if-let`/`when-let` with `(null tmp)` as the test (`ClojureSeqLowering.testedBinding`, shared by all four) | `false` binds. The pattern destructures inside the taken branch only, so the else sees the outer names and a failing init destructures nothing; until 2026-10-08 `if-let`/`when-let` destructured before the test (`(let [x 1] (if-let [x nil] :t x))` answered nil, `(when-let [[a] false] a)` signalled `nth`), clojure-spec `if-let-and-when-let-destructure-only-in-the-taken-branch`. Refusals in the oracle's words (`if-some requires a vector for its binding`, `... exactly 2 forms in binding vector`, `... 1 or 2 forms after binding vector`) |
+| `case` | `(let ((tmp e)) (if TEST1 R1 (if TEST2 R2 ... DEFAULT)))` (`ClojureControlLowering.caseOf`) | one test per constant, picked at lower time by its kind -- the oracle's hash-then-`=` (measured 2026-10-08, clj 1.12.6): `eql` for a number or char (`1.0` never matches `1`, `-0.0` never `0.0`, `##NaN` lowers to no test), `equal` for a string or keyword constant, `eq` for a symbol, `null`/`eq` for nil/true/false, `%clojure-equal` for a vector, map, set or `((1 2))` list constant (a vector constant matches a list or lazy seq). A list test is the alternatives. Duplicates are refused at lower time (`Duplicate case test constant: X`, `caseKey`: `1`=`1N`, `-0.0`=`0.0`, a map or set in any order, `[1]`=`((1))`; NaN never), an empty list test is refused (the oracle's `max` arity error). No default: `%clojure-illegal-argument-exception` over `No matching clause: ` + `str` of the value. Linear, never a jump table: `1M` is the integer `1` here (deviation) |
+| `condp` | `(let* ((pred P) (expr E)) clauses)` (`ClojureControlLowering.condpOf`) | the oracle's `emit` recursion: a `:>>` second form takes three forms, else two; `(pred test expr)` through `callFun` (funcall for a real function value); `:>>` binds the answer and calls `f` on it; a lone trailing form the default; else the `case` refusal over `expr` |
+| `while` | `(do () (falsey-test nil) body)` | answers nil; the body is non-tail (`recur` refused like the oracle's) |
+| `locking` | host targets: `(let ((tmp x)) nil-check (rontolisp:with-mutex ((%clojure-monitor tmp)) body))`; wasm: the same without the mutex (`ClojureLowering.hostTarget`) | `%clojure-monitor` (clojure.lisp "Monitors") keeps one reentrant `make-mutex` per value in an `eql` table (a keyword by its spelling in an `equal` one), made under one guard mutex: a Ring handler runs one thread per request on the interpreter and the JVM. Both defvars are library definitions the pruner drops with the helper, so a program without `locking` and every wasm program carries none. nil is `NullPointerException` before the body (message `... "locklocal" is null`; the oracle's names a gensym). Body behind the `try` barrier |
+| `with-redefs` | values bound in order, old roots saved, `(unwind-protect (progn (setq cell v)... body) (setq cell old)...)` (`ClojureVarLowering.withRedefsOf`) | "Vars and metadata", with-redefs |
 | `try`/`catch`/`finally`/`throw` | `handler-case` inside `unwind-protect`; `throw` is `%clojure-throw` | one `handler-case` clause per catch, in order, of the type its class takes ("Catching"); `throw` signals an exception as itself (a caught one rethrows unchanged, a host `Throwable` as the `java:java-exception` carrying it, "Host exceptions"), anything else a `ClassCastException` (nil a `NullPointerException`) whose message is its rendering, so strings keep their message |
 | `ex-info` `ex-data` `ex-message` `ex-cause`, `.getMessage` `.getLocalizedMessage` `.getCause` | one call to the `clojure.lisp` "Exceptions" function | see "Exceptions" |
 | `assert` | `if` around the `AssertionError` carrier ("Refusals") | the `Assert failed:` message evaluates only on failure; it names the failed form, built only in the failure branch: rendered at lower time (`ClojureStringLowering.prSource`: symbols, keywords, integers, strings, chars, lists, vectors, maps) so no printer is linked, else `quote` through the readable `%clojure-str-of` (double, ratio, set, regex...) which links the collection printer (measured 2026-10-03: `(assert (nil? x))` wasm 3171 -> 3282 bytes; with a double in the form 3171 -> 54237 versus 21992 before) |
@@ -138,14 +144,16 @@ answered `2 5 3` before).
 | `clojure.template` | the same, loaded at its `require` | "clojure.jar namespaces" |
 | `clojure.data` `clojure.zip` `clojure.datafy` `clojure.stacktrace` | the same, loaded at its `require` | "clojure.jar namespaces" |
 | `clojure.core.protocols` | the same, a startup namespace like `clojure.walk` | "clojure.jar namespaces" |
+| `clojure.core.reducers` | the same, loaded at its `require`; cat's accumulator is `rontolisp.internal.reducers/NAME`, one call to `rontolisp::%clojure-reducers-NAME` (`ClojureKernelLowering`) | "clojure.jar namespaces" |
 | `clojure.pprint` | the same; its layout engine is `rontolisp.internal.pprint/NAME`, one call to `rontolisp::%clojure-pp-NAME` (`ClojureKernelLowering`) | "clojure.jar namespaces" |
+| `clojure.math` | the same, loaded at its `require`; a double function's body is `rontolisp.internal.math/NAME`, lowered in place to `(%strict-math :name (rontolisp::%clojure-double a) ...)`, `round` and the long arithmetic one call to `rontolisp::%clojure-math-NAME` (`ClojureKernelLowering`) | "clojure.jar namespaces" |
 | `subs`, `.substring` | `%clojure-subs`, the refusal family's alias of `subseq` ("Refusals") | a bound outside a string is the oracle's `StringIndexOutOfBoundsException` where a class is read; a double or ratio bound is truncated (`%clojure-string-bound`), a non-number one is refused as the oracle does ("Refusals") |
 | `format` | the Java directives translated to `format` over Clojure-rendered arguments | literal format string only; `%s` like `str` (nil spells `null`), `%b`; `%e`/`%g`, flags and the rest refused |
 | `spit` `slurp` `line-seq` `clojure.java.io/reader` | `with-open-file` of the `str` spelling / `rontolisp::%clojure-slurp` / a `read-line` loop / `%clojure-reader` (`open`) | every backend; wasm needs a `--dir` preopen (without it the open signals). `spit` supersedes unless `:append` is truthy, `nil` writes nothing. `slurp`, `line-seq` and `reader` take a path or an open stream (`streamp`, so a Gray instance -- the Ring `:body` -- too): `slurp` reads a stream to its end and closes it (the oracle's `with-open`; until 2026-10-08 it left it open), `reader` answers it, `line-seq` reads it strictly and never closes it. A read of a CLOSED stream -- `slurp`, `line-seq`, `.read`, `.readLine`, `read-line` -- goes through `%clojure-open-reader` (`open-stream-p`, else the `%clojure-io-exception` carrier: the oracle's `IOException: Stream closed`); before it the interpreter said `READ-CHAR expects an input stream`, the JVM an NPE, and both wasm backends READ a closed string input stream (its record is never marked closed, `.kb/read-load-streams.md`). `read` is not guarded: the oracle wraps the failure in a `LispReader$ReaderException` over a `LineNumberingPushbackReader` and not over a `PushbackReader`, which share one stream kind here. A second close is harmless on every backend (`.kb/read-load-streams.md`, "close on an already-closed stream"). Pins: clojure-spec `slurp-closes-the-stream-it-reads`, `ClojureInteropTest#filesRoundTripThroughReaderAndLineSeq`, `ClojureWasmFileIoTest`. `slurp` was an inline `read-char` loop per site until 2026-10-08. `file-seq` and every other `clojure.java.io` fn are refused |
 | `read-string` `read` | `rontolisp::%clojure-read-string`/`-read` (`-opts` for an options map, `-v` as values) over the call site's namespace context | "Reading"; every backend |
 | regex `#"..."`, `re-pattern` `re-matcher` `re-find` `re-seq` `re-matches` `re-groups` | `RONTOLISP::%CLOJURE-RE-COMPILE` and the spliced matcher | "Regex" |
 | `map` `filter` `concat` | `rontolisp::%clojure-map`/`-filter`/`-concat` | any number of collections (`map` stops at the shortest); lazy when an input is lazy, strict otherwise ("Laziness"); a false object drops like nil |
-| `reduce` / `apply` | `%clojure-reduce`/`-reduce-init` / CL `apply` over the whole-collection view of the last argument | `reduce` walks the seq view and stops at `reduced`; its function is a real one ("The IFn dispatcher stays at the call site") |
+| `reduce` / `apply` | `%clojure-reduce`/`-reduce-init` / CL `apply` over the whole-collection view of the last argument | `reduce` walks the seq view and stops at `reduced`, a record/deftype/reify with its own `CollReduce` row reducing through it ("clojure.jar namespaces", the reducible arms); its function is a real one ("The IFn dispatcher stays at the call site") |
 | `first` `rest` `next` `seq` `cons` | `car`/`cdr` over `%clojure-seq`, `%clojure-cons` | the seq view: lists pass through, vectors/strings coerce, a map gives one two-vector per entry and a set its members (table walk order), nil is empty, anything else signals ("Seq verbs over a wrapper"); `cons` onto a lazy collection answers a wrapper |
 | `nth` / `second` | `%clojure-nth` / `%clojure-seq-nth` | a vector or string indexed directly, a list, lazy seq or host object stepped, a matcher answering its group (`%clojure-matcher-nth`, "Regex"; `nth` refuses anything else, a map or set too, as the oracle's `UnsupportedOperationException`; `second` steps any seq view, refusing as `seq`); past either end the default (`nil` without one) |
 | `take` `drop` | `%clojure-take`/`-drop`, stepping | `(take n infinite)` terminates, realizing exactly what it answers |
@@ -703,7 +711,7 @@ before the library splice.
   a VIEW (`%clojure-sorted-key`, `-items`, `-hashed`, `-shrunk`, `-rewrap`) answering its
   first argument for anything unsorted, its other arguments variables; an ALIAS
   (`%clojure-is-set` -> `%clojure-set-p`, `%clojure-is-reversible` -> `%clojure-is-vector`).
-  `clojure/ClojureArms` (family `SORTED`; `MATCHER` is the regex matcher's, `UNBOUND` is the unbound root's,
+  `clojure/ClojureArms` (family `SORTED`; `MATCHER` is the regex matcher's, `REDUCIBLE` a typed value's own `CollReduce`/`IKVReduce` row's, "clojure.jar namespaces", `UNBOUND` is the unbound root's,
   `STREAM_DEPTH` the core specials' counters, "Vars and metadata", `READER_VALUE` "Reader conditionals", `PRINT_FLAGS`,
   `PRINT_META` and `NAMESPACE_MAP` the printer's, "State", and `STREAM` the stream printer's, "Streams as values") scans for a PRODUCER (`%clojure-sorted-make` and the four
   constructor `-v` values: no literal makes one) and, without one, strips: a test folds to
@@ -988,12 +996,14 @@ repositories, `GITLIBS` set; tools.deps read from the CLI jar).
   -> `MavenResolver.version`; a SNAPSHOT resolves at the fetch (`ClojureDepsFetchCliTest`,
   measured against clj 1.12.6 2026-10-08). A `:classifier` key is the oracle's `Invalid
   library spec` refusal. Repositories (`ClojureBasis.mavenSource`, `remote-repos`): central,
-  clojars, then the merged maps' others in order, `nil` removes one, `:releases {:enabled
-  false}` drops one, `http:` refused (`Invalid repo url (http not supported)`) unless
+  clojars, then the merged maps' others in order, `nil` removes one, each carrying its
+  `:releases` / `:snapshots` policy (`:enabled`, `:update`; tools.deps drops nothing: a
+  repository with releases disabled still serves snapshots, `.kb/maven-resolver.md`
+  "Per-repository policies"; until 2026-10-08 it was dropped whole), `http:` refused (`Invalid repo url (http not supported)`) unless
   `CLOJURE_CLI_ALLOW_HTTP_REPO`. Local repository: `:mvn/local-repo` against the project
   directory, else `~/.m2/repository`; measured, `clj` reads neither `settings.xml`'s
-  `localRepository` nor its `offline` (`eval/ClojureDepsRepositories` passes mirrors/proxies on,
-  refused by name like `--java-dep`). Only the top-level maps name repositories: a
+  `localRepository`, its `offline` nor its profiles' repositories (measured 2026-10-08; `eval/ClojureDepsRepositories` passes mirrors, proxies
+  and servers on, global `$MAVEN_HOME` file merged, as `--java-dep`; `.kb/maven-resolver.md`). Only the top-level maps name repositories: a
   dependency's own `:mvn/repos` is never read. A built-in coordinate fetches nothing, children
   included (the oracle's classpath has clojure's spec jars; here they contribute no root).
 - **A jar's own `pom.xml`** (`coord-deps :jar`): the first `META-INF/**/pom.xml` entry read as a
@@ -1486,8 +1496,8 @@ function and a directive must be a top-level form.
 end** (`src/main/resources/am/ik/rontolisp/clojure/lib/clojure/**`, the
 `ClojureBuiltinNamespaces` mechanism of "Ring util namespaces"): `clojure.walk`,
 `clojure.template`, `clojure.pprint`, `clojure.data`, `clojure.zip`, `clojure.core.protocols`,
-`clojure.datafy`, `clojure.stacktrace`, `clojure.instant`, `clojure.uuid` ("Instants and
-UUIDs").
+`clojure.datafy`, `clojure.stacktrace`, `clojure.math`, `clojure.core.reducers`,
+`clojure.instant`, `clojure.uuid` ("Instants and UUIDs").
 - **Licensing**: clojure.jar is EPL-1.0, this project Apache-2.0, so nothing of it is
   copied -- no code, no docstring. Each file is written from the documented behaviour and
   diffed against the oracle; a one-line var dictated by its contract
@@ -1597,11 +1607,41 @@ UUIDs").
   error words (`called children on a leaf node`, `Insert at top`, `Remove at top`, as
   `Exception`) are the oracle's.
 - `clojure.core.protocols` / `clojure.datafy`: `Datafiable` and `Navigable` with
-  `:extend-via-metadata`, `IKVReduce` and `InternalReduce` with nil and `Object` rows;
-  `CollReduce`/`coll-reduce` (two arities: `defprotocol` takes one per method here) and
-  `iterator-reduce!` are refused by name. `reduce`/`reduce-kv` stay lowerings that consult
-  no protocol, so an extension is reached only through `kv-reduce`/`internal-reduce`
-  themselves. `extend-protocol` takes no `Throwable` or `IRef` target here ("needs a core
+  `:extend-via-metadata`, `CollReduce`, `IKVReduce` and `InternalReduce` with nil and
+  `Object` rows (the `Object` rows call `reduce`/`reduce-kv`); `iterator-reduce!` is refused
+  by name. Loading the namespace costs the `CollReduce` protocol since 2026-10-08:
+  `(prn (clojure.core.protocols/datafy 1))` wasm P1 110,671 -> 114,564 B, JVM class 105,351
+  -> 108,674 B.
+- **`reduce` consults `CollReduce` and `reduce-kv` `IKVReduce` for a record, deftype or
+  reify whose type has its own row** (body or extension), like the oracle's protocol
+  dispatch; every other value takes the verb's own walk, which answers what the oracle's
+  rows for the core collections answer. An extension to nil, `Object` or a core kind is
+  reached only through `coll-reduce`/`kv-reduce` (deviation: the oracle's `reduce` also
+  takes one for a collection that is no `IReduceInit` -- a string, a map, a lazy seq -- and
+  ignores it for one that is, a vector or list; measured 2026-10-08, clj 1.12.6). The
+  verbs the oracle builds on them follow (`clojure.core` read 2026-10-08): `into`,
+  `transduce`, the `cat` transducer (all through `%clojure-reduce-init`), `run!`, `mapv`
+  of one collection, `filterv`, `group-by`, `frequencies`; `update-vals`/`update-keys`
+  through `reduce-kv`. `vec`, `set`, `seq`, `count`, `apply`, `sequence` stay refused,
+  like the oracle's.
+  - The arms: the reducible family (`ClojureArms.Family.REDUCIBLE`, `clojure.lisp`
+    "CollReduce and IKVReduce"). Tests `%clojure-coll-reducible-p`/`-kv-reducible-p` in
+    the library verbs, the view `%clojure-reducible-items` (the list a reduction steps)
+    around `group-by`'s and `frequencies`' collection (`ClojureSeqLowering.reducedAllForm`)
+    and an `eduction`'s. Producers `%clojure-coll-reducer-row`/`-kv-reducer-row`: the
+    lowering stores a typed row of the two protocols through them
+    (`ProtocolDef.reducerRow`, `ClojureProtocolLowering.rowStoreForm`: inline bodies,
+    reify, an extension whose target is a record or deftype), and they keep the
+    protocol's table in a library global the tests read -- no mangled program name in the
+    library. The namespace's own nil/`Object` rows and a core-kind extension are no
+    producer, so a datafy program folds the arms. Verified 2026-10-08: a program reducing,
+    `reduce-kv`ing, `into`/`transduce`/`mapv`/`filterv`/`group-by`/`frequencies`/
+    `update-vals`/`eduction`/`run!` with a protocol record, and `examples/clojure/demo.clj`,
+    byte-identical as wasm P1 and JVM class.
+  - An `eduction` over such a value reduces it at the `eduction` (the view): `into`,
+    `transduce` and a seeded `reduce` answer the oracle's, the init-less `reduce` and the
+    `seq` the oracle refuses answer (deviation, user doc).
+- `clojure.datafy`: `extend-protocol` takes no `Throwable` or `IRef` target here ("needs a core
   type", measured 2026-10-08), so `clojure.datafy` re-extends the `Object` row with the
   oracle's `IRef` answer (`[value]` with the ref's metadata) and an exception datafies to
   itself (no `Throwable->map` here). `:clojure.datafy/class` comes from
@@ -1615,10 +1655,61 @@ UUIDs").
   clojure-spec `clojure-stacktrace-prints-no-frames`; `print-trace-element` is the oracle's
   over a host `StackTraceElement` (interpreter and JVM,
   `ClojureInteropTest#printTraceElementSpellsAHostStackTraceElementLikeTheOracle`).
+- `clojure.math` (2026-10-08): all 45 vars, each `defn` a one-line body over a kernel of
+  `rontolisp.internal.math`. A double function's kernel is lowered IN PLACE
+  (`ClojureKernelLowering.Kernels.inline`, `STRICT_MATH`): `(%strict-math :name ...)` over
+  `%clojure-double` of each argument -- the oracle's own wrapper is one `Math` call over
+  `(double x)` -- so a call costs the `defn` and the primitive (`.kb/transcendentals.md`,
+  "%strict-math": `StrictMath`'s bits on all four backends, NaN where the CL function would
+  answer a complex). `round` (the floor of a + 1/2 over the exact rational, saturating at the
+  long range, NaN 0) and the long arithmetic (`floor-div`/`floor-mod`, the `-exact` six:
+  `ArithmeticException` "long overflow" / "/ by zero") are workers `%clojure-math-NAME` over
+  `%clojure-long-cast`, the oracle's `RT.longCast` of an object (a double or ratio truncated,
+  NaN 0, 2^63 itself the largest long as Java's `(long)` saturates, past it
+  `IllegalArgumentException`, a character its code); `scalb`'s exponent goes through
+  `%clojure-int-cast` (`RT.intCast`: past the int range "integer overflow"). The two casts are
+  shared with `vector-of`'s integer kinds, whose copy refused 2^63 until 2026-10-08 (the
+  oracle stores Long/MAX_VALUE). `E`, `PI`, `to-radians`, `to-degrees` (one multiply, Java's
+  constants) and `random` (`rand`) are plain Clojure. Not a startup namespace: a qualified
+  name without a `require` is the oracle's class lookup failure. Deviations, each in the user
+  doc: the `StrictMath` bits (`Math` differs in the last place on 1-8% of arguments for nine
+  functions, measured in `.kb/transcendentals.md`); `copy-sign` reads a NaN sign as positive;
+  a ratio converts to its nearest double (the oracle's `Ratio.doubleValue` rounds to 16 digits
+  first: `(double 2/3)` 0.6666666666666666 here, ...667 there -- `double` alike); `scalb` of a
+  LITERAL double exponent past the int range is the oracle's other cast
+  (`IllegalArgumentException` "Value out of range for int", a non-literal one "integer
+  overflow" as here); a character is accepted as a long through a function value too (the
+  oracle's value path casts to `Number` first). Size, wasm P1 (2026-10-08): `(m/sqrt 2.0)`
+  printed 25,926 B against 25,061 B for printing a double product, `(m/sin 2.0)` 30,554 B (the
+  fdlibm sin and its tables), `(m/floor-div 7 2)` 19,502 B -- the shaker drops every other var.
+  Pins: clojure-spec `clojure-math-*` (four oracle-identical cases and the `StrictMath`
+  deviation, all four backends), `ClojureLanguageNamespacesTest`
+  (`clojureMathLowersEachDoubleFunctionToOneStrictMathCallAtItsRequire`,
+  `everyStrictMathFunctionIsAClojureMathKernelOfItsArity`: the kernel table against
+  `StrictMathFunction`, which this package may not import).
+- `clojure.core.reducers` (2026-10-08): every public var but `pool`, `fjtask` and `->Cat`
+  (refused by name). The reducers are `reify` objects of `CollReduce` (`folder`s also of
+  the namespace's `CollFold`), so they need the multi-arity protocol methods ("Dispatch")
+  and the reducible arms above; written over explicit three-arity reducing fns (the
+  oracle's `rfn`/`defcurried` are private macros). `fold` keeps the oracle's split -- a
+  vector halves while it holds more than `n` (`fold-range` over index bounds, so only a
+  leaf is copied by `subvec`), each part reduced from `(combinef)`, the halves combined in
+  order -- but runs on the calling thread, the left part first; a map, record or sorted map
+  folds as one `kv-reduce` (the `Object` row through the namespace's own `reduce`, which
+  takes `java.util.Map` like the oracle's -- the oracle's hash map past eight entries also
+  combines its trie's parts), any other collection as one reduction. Measured on clj
+  1.12.6 the same day, `(r/fold 2 (fn ([] []) ([a b] (conj a b))) conj [1 2 3 4 5])` is
+  `[1 2 [3 [4 5]]]` here as there. cat's accumulator (the oracle's `java.util.ArrayList`)
+  is an adjustable vector with a fill pointer (`rontolisp.internal.reducers`): it counts,
+  seqs, prints `[...]` and reduces as a vector everywhere, and the `IPersistentVector` row
+  of `CollFold` reduces one whole like the oracle's `ArrayList` row. `(cat l r)` of two
+  non-empty collections joins them into a fresh accumulator: the oracle's `Cat` is a tree
+  that `count`s and `seq`s through interfaces a deftype here cannot implement, so a
+  `foldcat` result could not be counted; the cost is one copy per combine level and a
+  fold of a joined result reducing it whole (deviation, user doc). Size, wasm P1 / JVM
+  class: `(prn (r/fold + (r/map inc [1 2 3])))` 143,501 / 131,041 B.
 - Not shipped, with what each waits on (decided 2026-10-08): `clojure.java.io` beyond
-  `reader` (a portable File and byte streams, e55), `clojure.core.reducers` and
-  `CollReduce` (multi-arity protocol methods and a `reduce` that consults a protocol,
-  e56), `clojure.math` (fdlibm functions the runtime lacks on every backend, e57), pprint's
+  `reader` (a portable File and byte streams, e55), pprint's
   `cl-format`/`formatter`/`formatter-out` (e58), `Throwable->map` and `extend-protocol` to
   `Throwable`/`IRef` (e60), `clojure.repl`/`main`/`java.shell`/`xml` (e61).
 - Pins: clojure-spec `clojure-walk-*` (all four backends, oracle-identical, the first
@@ -1627,9 +1718,14 @@ UUIDs").
   `clojure-data-diff-compares-like-the-oracle`, `clojure-zip-moves-and-edits-like-the-oracle`,
   `clojure-datafy-and-core-protocols-like-the-oracle`,
   `clojure-stacktrace-prints-throwables-like-the-oracle`,
-  `ClojureLanguageNamespacesTest` (the startup load, a project file never shadowing a
-  startup namespace, a contrib `clojure.*` namespace on the source path, the refusal of
-  one not built in).
+  `reduce-and-the-verbs-built-on-it-reach-a-coll-reduce-row`,
+  `reduce-kv-and-update-vals-reach-an-ikv-reduce-row`, `clojure-core-reducers-*` (the
+  last one the deviations), `ClojureLanguageNamespacesTest` (the startup load, a project
+  file never shadowing a startup namespace, a contrib `clojure.*` namespace on the source
+  path, the refusal of one not built in, the reducers' refusals),
+  `ClojureLibraryTest#aProgramStoringNoReducerRowSplicesTheReduceVerbsWithoutTheirProtocolArms`,
+  `ClojureArmsTest#theReducibleFamilyIsMadeByATypedRowOfCollReduceOrIKVReduce`,
+  `ClojureLoweringTest#aTypedRowOfCollReduceOrIKVReduceIsStoredThroughTheLibrary`.
 
 ## Macros
 
@@ -1836,9 +1932,30 @@ constructor and consumer, and a regex `replace` with a function replacement.
 - A hierarchy is a map of `:parents`/`:ancestors`/`:descendants` tables to wrapped sets;
   the global one is `C%H-GLOBAL`, rebound by two-argument `derive`/`underive`.
 - `defprotocol`: an `equal`-table global plus one dispatcher `defun` per method over
-  `C%PROTOCOL-TAG`; exact tag, then the method's `Object` row, else a signal; one signature
-  per method. The multimethod shape over runtimes all four backends already run, not a
-  per-backend value model (`.todo/artefacts/b13-protocols/spike.md`).
+  `C%PROTOCOL-TAG`; exact tag, then the method's `Object` row, else a signal. The
+  multimethod shape over runtimes all four backends already run, not a per-backend value
+  model (`.todo/artefacts/b13-protocols/spike.md`).
+- **A method declares one parameter vector per arity** (`(m [x] [x y] "doc")`;
+  `ProtocolDef.arities` holds each method's counts, the target included, which an
+  instance call `(.m r ...)` matches). The dispatcher stays `&rest` + `apply`, so the row
+  holds ONE lambda: a single arity stores its own lambda exactly as before (a protocol
+  program of single arities lowers byte-identically), several store `arityDispatch`'s
+  `(let ((a1 L1) (a2 L2)) (lambda (&rest args) (cond ((= n 1) (apply a1 args)) ...)))`,
+  each `Li` the lambda that arity alone would store (its own recur target, an inline body's
+  field bindings from its own target), fixed counts first, a variadic one last, any other
+  count the `ArityException` carrier. An inline body (`defrecord`/`deftype`/`reify`) names
+  the method again per arity, each a count the protocol declares ("Can't define method
+  not in interfaces", the oracle's compile error, where an undeclared count was accepted
+  before 2026-10-08) and each once; an extension (`extend-protocol`/`extend-type`) spells
+  `fn` clauses (`extensionMethod`: the `fn` refusals "Can't have 2 overloads with same
+  arity", "Can't have more than 1 variadic overload") and a repeated method there keeps
+  the later one, like the oracle's map of fns; `extend` takes a multi-arity `fn` as it
+  is. The defprotocol refusals take the oracle's words ("Function m in protocol P was
+  redefined...", "Definition of function m in protocol P must take at least one arg.").
+  Deviation: a count an inline body leaves out signals `ArityException` where the oracle
+  throws `AbstractMethodError`. Pin: clojure-spec
+  `protocol-methods-of-several-arities-dispatch-by-count` (all four, oracle-identical),
+  `ClojureLoweringTest#aProtocolMethodOfSeveralAritiesStoresOneLambdaApplyingTheArityOfTheCall`.
   `:extend-via-metadata true` adds an `%inline` table; the order is body implementation,
   then `(%clojure-meta-method target 'ns/method)`, then extension rows, then `Object`
   (measured on the oracle); the key is the namespace-qualified method symbol.
@@ -2132,9 +2249,50 @@ The `java:` surface (`.kb/java-interop.md`); interpreter and JVM only -- wasm co
   it would make host false truthy in `java:` programs and move all three paths plus the
   bridge parity). The lowering wraps to `T`-or-false instead where every overload at that
   arity returns a primitive boolean and the receiver class is known: a static call or
-  member value, or an instance call on a construction literal, a `let`/`if-let`/`when-let`
+  member value, or an instance call on a construction literal -- `java:new`, a `proxy` of
+  one interface (`java:proxy "I" fn`) or of a class alone (`java:subclass "S" '() ...`;
+  `ClojureInteropLowering.constructedClass`) --, a `let`/`if-let`/`when-let`
   local bound to one (single-shot, so the inference is sound), or a `..` step's declared
-  return. Anything else prints `nil` for false.
+  return; a `true`/`false` receiver of unknown class is called as its `Boolean`
+  (`valuePredicate`: `(.booleanValue false)`). Anything else prints `nil` for false, a
+  `Boolean.FALSE` read back from a host collection too (`(vec l)` of a list holding false
+  is `[nil]`; the oracle's `[false]`): a per-site "answer false as `|false|`" unmarshal is
+  the remaining half (todo e73).
+- `false` crosses to Java as Java's false (e69, 2026-10-08): the false object IS the symbol
+  `java:` passes as `false` / `Boolean.FALSE` (`FALSE_VALUE_NAME = LispNames.JAVA_FALSE`,
+  `.kb/java-interop.md` "Java's false and hash tables"), an argument and a fn's or proxy
+  body's answer alike; a map crosses as a fresh `LinkedHashMap` (the same section), its
+  vector/map values converted too, so the copy's `toString` spells them the Java way (user doc
+  deviation). A set, keyword or record has no Java value (`(:C%SET table)` is no table to
+  `java:`, and `java:` learns no Clojure shape): the same todo. Before, measured 2026-10-08
+  (interpreter and JVM): `(.add l false)`, `(Boolean/toString false)` and `(java.util.HashMap.
+  {"a" 1})` were `No matching method/constructor`, `(.removeIf l odd?)` and a proxy `test`
+  answering false `cannot return |false| as boolean`.
+- A fn receiver is the oracle's `AFunction` (`ClojureValueMethodLowering.functionRows`; the
+  value gate `%clojure-value-receiver-p` takes `functionp`): `invoke` of 0..20 arguments and
+  `applyTo` for any `ifn?` value, `call`, `run` (nil), and `compare` on a fn through
+  `%clojure-fn-compare` (`AFunction.compare`: true -1, false 1 when the reversed call is true
+  else 0, a number its `intValue` by `%clojure-unchecked-int`, nil the NPE, else a
+  ClassCastException). Runs on all four backends (the arm answers before the `java:call`);
+  before, `java:call expects a java object as the first argument, got #<lambda>`. A `Comparator`
+  fn passed TO Java still answers a number (deviation): `java:` cannot know a boolean answer
+  means `AFunction.compare`. Pin: clojure-spec
+  `instance-calls-on-a-fn-are-its-ifn-callable-runnable-and-comparator-methods`.
+- A fn passed where an interface is expected implements every abstract method by the
+  method's arguments, defaults keeping their bodies (`.kb/java-interop.md`, `:functional`;
+  `ClojureInteropLowering.hostCall` ends a `java:new`/`java:call`/`java:static` with any
+  non-literal argument in the marker). Before (measured 2026-10-08, interpreter and JVM)
+  the shared auto-proxy passed the method name first: `(.start (Thread. (fn [] ...)))`
+  was `Function expects 0 arguments, got 1`. Oracle (clj 1.12.6, same day): a fn converts
+  only to a `@FunctionalInterface` (a `PropertyChangeListener`/`DocumentListener` is a
+  `ClassCastException`; here every abstract method of any interface calls it -- user doc
+  deviation), `Comparator` takes a boolean answer (`AFunction.compare`; here a number).
+  `(proxy [Super] [fn] ...)` constructor arguments convert the same way: `proxyClassOf` ends
+  the `java:subclass` in the marker after its callable (until e69 they converted as
+  `java:proxy`, the method name first). Pins:
+  `ClojureInteropTest#aFnPassedWhereAnInterfaceIsExpectedImplementsItsMethodByItsArguments`
+  (`locking`'s threaded pin passes its fn to `Thread.` directly),
+  `ClojureInteropTest#falseAMapAndAFnCrossTheJavaBoundaryAsTheOraclesDo`.
 - `proxy` of interfaces is `java:proxy` with a name-dispatching lambda over the Java
   arguments (no `this`); a missing method raises `no proxy method: <name>`;
   `toString`/`equals`/`hashCode` are refused there (`java:proxy` keeps `Object`'s, so the
@@ -2383,7 +2541,9 @@ tail after an early `take` stop).
   `transduce` `eduction` `sequence` `completing` `reduced` `reduced?` `unreduced`
   `ensure-reduced` `cat`.
 - `reduce`, `reduce-kv`, `transduce`, `into` and the stepping consumers stop at
-  `reduced`; `deref` reads it.
+  `reduced`; `deref` reads it. `transduce`, `into` and `cat` reduce through
+  `%clojure-reduce-init`, so a record/deftype/reify with its own `CollReduce` row reduces
+  through it under them too ("clojure.jar namespaces").
 - `sequence`/`eduction` step inputs one element at a time behind a lazy wrapper
   (`%clojure-xf-puller`), lazy-or-strict; several collections step in lockstep.
 - Every transducer, reducing function and `completing` argument is a real function
@@ -2872,6 +3032,37 @@ resolve var`.
   and `ClojureWasmFileIoTest` (the file reader), `ClojureLibraryTest#classOfAStreamIsAnArmAProgramMakingNoStreamSheds`.
   `defmethod` on a stream CLASS SPELLING (`java.io.StringWriter`) is still the "needs a core
   class" refusal (a keyword dispatch value works).
+- **with-redefs.** A `defn` is a direct `defun` call, so a replaced root would never
+  reach a call site; the design is the oracle's own direct-linking opt-out. A var is
+  REDEFINABLE (`ClojureLowering.redefinable(key, nameDatum)`) when its key is in
+  `redefinable` (seeded by an earlier pass), its simple name is in `redefNames` (the
+  pre-scan of every lowered file, `scanRedefinitions`: every `with-redefs` binding name
+  at any depth, namespace dropped, so a test file's `(with-redefs [alias/f ...])` reaches
+  the namespace it requires next), or its name carries `^:redef`. A redefinable `defn`
+  pre-declares and lowers as `Kind.VARIABLE`, keeps its `defun` (recur and arity helpers
+  stay direct) and adds `(setq var #'fn)` (`ClojureBindingLowering.redefCellStore`, also
+  allowed in `defnInBody`); it is never in `globalDirectFuns`, so calls go through
+  `%clojure-call` (a stub may be a map or keyword). A redefinable `def`/`defonce` drops
+  out of `globalDirectFuns` the same way. A program naming no such var lowers
+  byte-identically. `withRedefsOf` evaluates the values in order, saves each distinct
+  var's value cell, sets, runs the body behind the `try` barrier and restores in an
+  `unwind-protect`; a later pair of one var wins, a trailing name is resolved only. A
+  target the lowering already lowered as a direct call (a `defn` of a namespace loaded
+  before the file naming it was scanned) goes into `redefMisses`; `ClojureLowering.lower`
+  then lowers the whole program again with those keys seeded (reusing the resolved
+  `ClojureSourcePath`), and stops when a pass adds no new key -- at most one extra pass
+  in practice, none without such a target. The macro evaluator sees the first pass's
+  definitions again (a macro that prints while expanding prints twice). A session cannot
+  re-lower an evaluated input: there such a target is refused, naming `^:redef`. Refused
+  too: a local and an unknown name (`Unable to resolve var`, the oracle's), a macro, a
+  `clojure.core` var (its verbs lower inline; the oracle's inlined `inc` ignores the
+  redef too, its `println` does not), and a key still `FUNCTION` after the reseed (a
+  multimethod, protocol method, record constructor, test). Deviation: inside a `binding`
+  of a `^:dynamic` var the `setq` changes the binding (the oracle changes the root; CL has
+  no portable global-value write under a dynamic binding). Measured 2026-10-08 (clj
+  1.12.6) and pinned by clojure-spec `with-redefs-replaces-var-roots-for-the-body`,
+  `ClojureProjectNamespacesTest#aWithRedefsReachesTheCallsOfANamespaceLoadedBeforeIt*`
+  (the reseed, all four backends), `ClojureControlLoweringTest`.
 - `with-meta`/`vary-meta` answer a shallow copy recorded in the eq table
   `%clojure-meta-table`; `meta` reads it. IObj kinds only (a string, number, keyword,
   boolean, atom, deftype or pattern signals; a symbol answers itself).
@@ -3102,6 +3293,9 @@ in-scope program needs `valid?`/`conform` (then `explain-data` stays refused).
 
 - `clojure-spec.yaml` via `ClojureSpecE2eTest`: one case per table row or builtin group,
   concatenated into one program and sliced back per case, on all four backends.
+- `ClojureControlLoweringTest` (`case`/`condp`/`if-some`/`when-some`/`while`/`locking`/
+  `with-redefs`: refusals, the per-kind `case` tests, the host-only monitor, the
+  redefinable `defn`, the session refusal).
 - `ClojureLoweringTest` (lowered shapes and refusals; `aLiteralScalarKeySkipsTheStructuralKeyRuntime`,
   `clojureSetWiresLikeClojureString`), `ClojureThrowablesTest` (class chains), `ClojureRefusalsTest`
   (the refusal carriers' chains), `ClojureClassBasesTest` (class rows), `ClojureReaderTest`,
@@ -3115,7 +3309,7 @@ in-scope program needs `valid?`/`conform` (then `explain-data` stays refused).
   `ClojureDefaultReadersTest` (`#inst`/`#uuid` against the JDK, both halves).
 - Interop and host IO: `ClojureInteropTest` (interpreter and JVM),
   `ClojureWasmInteropRefusalTest`, `ClojureWasmFileIoTest`, `ClojureWasmFileRefusalTest`.
-- `ClojureArmsTest` (the sorted-collection, unbound-root, matcher and refusal strips).
+- `ClojureArmsTest` (the sorted-collection, unbound-root, matcher, reducible and refusal strips).
 - `ClojureRingAdapterTest`, `ClojureRingUtilTest` (the Ring namespaces),
   `ClojureHttpClientTest`, `ClojureHttpClientHostFetchE2eTest` and
   `FetchSpecE2eTest#clojureHttpClient` (the HTTP client),

@@ -8,7 +8,8 @@ oracle). Targets are the kinds `class` answers (`String`, `Number`, `Boolean`,
 `Keyword`, `Symbol`, `Character`, `Map`, `Vector`, `Set`, `List`/`Seq`, plus `nil`
 and `Object` as the miss default; package-qualified spellings such as `java.lang.String` or
 `clojure.lang.IPersistentMap` too) and known record/deftype names; anything else
-(an `Instant`, a `Date`, ...) is a named refusal.
+(an `Instant`, a `Date`, ...) is a named refusal. A method of several arities spells
+them as the clauses of a `fn`: `(method ([target] ...) ([target x] ...))`.
 
 ```clojure
 (defprotocol P (m [x]))
@@ -19,4 +20,8 @@ and `Object` as the miss default; package-qualified spellings such as `java.lang
 (println (m nil))  ; :nil
 (println (m "s"))  ; :str
 (println (m 1.5))  ; :other
+
+(defprotocol Q (q [x] [x y]))
+(extend-protocol Q Long (q ([n] n) ([n k] (* n k))))
+(println (q 7) (q 7 6)) ; 7 42
 ```

@@ -84,8 +84,10 @@ final class ClojureBindingLowering {
 		if (dynamic) {
 			ctx.dynamicVars.add(key);
 		}
-		ClojureDispatchLowering.recordClassDispatchFn(ctx, key, dynamic, items.size() == at + 1 ? items.get(at) : null);
-		if (ClojureLowerUtil.yieldsFun(value)) {
+		boolean redef = ctx.redefinable(key, nameDatum);
+		ClojureDispatchLowering.recordClassDispatchFn(ctx, key, dynamic || redef,
+				items.size() == at + 1 ? items.get(at) : null);
+		if (ClojureLowerUtil.yieldsFun(value) && !redef) {
 			ctx.globalDirectFuns.add(key);
 		}
 		else {
@@ -289,13 +291,22 @@ final class ClojureBindingLowering {
 		boolean dynamic = ClojureLowerUtil.nameIsDynamic(items.get(1));
 		String key = ctx.intern(name,
 				ClojureLowerUtil.isSymbolNamed(items.get(0), "defn-") || ClojureLowerUtil.nameIsPrivate(items.get(1)));
-		ctx.globals.put(key, dynamic ? ClojureLowering.Kind.VARIABLE : ClojureLowering.Kind.FUNCTION);
+		// a redefinable var (with-redefs, ^:redef) keeps its function in the value
+		// cell like a dynamic one, but calls it through the dispatcher: a with-redefs
+		// may store any IFn there, a map or a keyword too
+		boolean redef = ctx.redefinable(key, items.get(1));
+		ctx.globals.put(key, dynamic || redef ? ClojureLowering.Kind.VARIABLE : ClojureLowering.Kind.FUNCTION);
 		ctx.macros.remove(key); // a definition wins over the macro it shadows
 		if (dynamic) {
 			// a dynamic var is rebindable: the value cell holds the function
 			// (proclaimed special, so binding rebinds it with dynamic extent)
 			// while the function cell keeps the definition
 			ctx.dynamicVars.add(key);
+		}
+		if (redef) {
+			ctx.globalDirectFuns.remove(key);
+		}
+		else if (dynamic) {
 			ctx.globalDirectFuns.add(key);
 		}
 		// a redefined defn gets a fresh internal name per definition: the call
@@ -309,7 +320,7 @@ final class ClojureBindingLowering {
 		fnParts.add(new LispSymbol("fn*")); // a special form: no program macro captures
 											// it
 		fnParts.addAll(items.subList(at, items.size()));
-		ClojureDispatchLowering.recordClassDispatchFn(ctx, key, dynamic, ClojureLowerUtil.list(fnParts));
+		ClojureDispatchLowering.recordClassDispatchFn(ctx, key, dynamic || redef, ClojureLowerUtil.list(fnParts));
 		// the arities an export of the var may take ({:wasm/export ...},
 		// rontolisp.wasm/export, a world's label), and the export the definition's
 		// metadata declares, its spec held quoted so the metadata stays a constant
@@ -364,8 +375,28 @@ final class ClojureBindingLowering {
 			forms.add(ClojureLowerUtil.list(ClojureLowerUtil.sym("defparameter"), ClojureLowering.boundDepthSym(key),
 					new LispInteger(0)));
 		}
+		else if (redef) {
+			// the value cell every call reads, set where the definition stands
+			forms.add(redefCellStore(key, fn));
+		}
 		forms.addAll(0, metaStore); // ahead, so the definition still answers the form
 		return forms;
+	}
+
+	/** A redefinable {@code defn}'s value-cell store: {@code (setq var #'fn)}. */
+	static LispVal redefCellStore(String key, LispSymbol fn) {
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("setq"), ClojureLowering.varSym(key),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), fn));
+	}
+
+	/** Whether a lowered form is a redefinable {@code defn}'s value-cell store. */
+	static boolean isRedefCellStore(LispVal form) {
+		List<LispVal> parts = ClojureLowerUtil.items(form);
+		if (parts == null || parts.size() != 3 || !ClojureLowerUtil.isSymbolNamed(parts.get(0), "SETQ")) {
+			return false;
+		}
+		List<LispVal> value = ClojureLowerUtil.items(parts.get(2));
+		return value != null && value.size() == 2 && ClojureLowerUtil.isSymbolNamed(value.get(0), "FUNCTION");
 	}
 
 	/** The parameter vectors of a {@code defn}'s single arity or of each clause. */

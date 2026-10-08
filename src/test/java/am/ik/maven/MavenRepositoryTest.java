@@ -5,6 +5,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.attribute.FileTime;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -12,6 +13,7 @@ import java.util.Map;
 import java.util.stream.Stream;
 
 import am.ik.artifact.Downloader;
+import am.ik.artifact.HttpAccess;
 import am.ik.artifact.HttpStatusException;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -32,6 +34,8 @@ class MavenRepositoryTest {
 
 	private static final String MIRROR = "https://mirror.example/repo/";
 
+	private static final String CORP = "https://corp.example/repo/";
+
 	private static final Artifact LIB = Artifact.parse("org.example:lib:1.0");
 
 	private static final byte[] JAR = "jar bytes".getBytes(StandardCharsets.UTF_8);
@@ -48,6 +52,8 @@ class MavenRepositoryTest {
 
 		final List<String> requested = new ArrayList<>();
 
+		final Map<String, HttpAccess> accesses = new HashMap<>();
+
 		Served file(String url, byte[] bytes) {
 			this.answers.put(url, bytes);
 			this.answers.put(url + ".sha1", MavenTestRepository.sha1(bytes).getBytes(StandardCharsets.US_ASCII));
@@ -57,6 +63,12 @@ class MavenRepositoryTest {
 		Served answer(String url, Object answer) {
 			this.answers.put(url, answer);
 			return this;
+		}
+
+		@Override
+		public byte[] get(String url, HttpAccess access) throws IOException {
+			this.accesses.put(url, access);
+			return get(url);
 		}
 
 		@Override
@@ -225,40 +237,142 @@ class MavenRepositoryTest {
 	}
 
 	@Test
-	void aMirrorCoveringTheRepositoryIsRefusedByNameAndNeverBypassed() {
+	void aMirrorStandsForTheRepositoriesItCoversUnderItsOwnId() throws IOException {
 		MavenSettings mirrored = new MavenSettings(null, false,
 				List.of(new MavenSettings.Mirror("corporate", MIRROR, "*")), List.of(), List.of());
+		Served served = new Served().file(MIRROR + LIB.path(), JAR).file(MIRROR + LIB_METADATA, versions("1.0", "2.0"));
+		MavenResolver resolver = resolver(served, mirrored, CENTRAL, "https://other.example/repo/");
+
+		assertThat(resolver.artifact(LIB)).hasBinaryContent(JAR);
+		assertThat(resolver.versions(Artifact.parse("org.example:lib:[1.0,3.0)"))).containsExactly("1.0", "2.0");
+		// both repositories are the one mirror: asked once, its copy cached under its id
+		assertThat(served.requested).containsExactly(MIRROR + LIB.path(), MIRROR + LIB.path() + ".sha1",
+				MIRROR + LIB_METADATA, MIRROR + LIB_METADATA + ".sha1");
+		assertThat(this.local.resolve("org/example/lib/maven-metadata-corporate.xml")).exists();
+		assertThatThrownBy(() -> resolver.artifact(Artifact.parse("org.example:gone:1.0"))).hasMessage(
+				"org.example:gone:jar:1.0 is in neither the local repository nor any of: corporate (" + MIRROR + ")");
+	}
+
+	private static MavenSettings profiled(String repositories) throws MavenResolutionException {
+		return MavenSettings.parse(
+				("<settings><profiles><profile><id>corp</id><repositories>" + repositories
+						+ "</repositories></profile></profiles><activeProfiles><activeProfile>corp</activeProfile>"
+						+ "</activeProfiles></settings>")
+					.getBytes(StandardCharsets.UTF_8),
+				"settings.xml", Map.of(), Map.of());
+	}
+
+	@Test
+	void anActiveSettingsProfilesRepositoryIsSearchedAheadOfTheBuildersAsMavenSearchesIt()
+			throws IOException, MavenResolutionException {
+		// Maven printed [profile repositories, project repositories, central]
+		MavenSettings settings = profiled("<repository><id>corp</id><url>" + CORP + "</url></repository>");
+		Served both = new Served().file(CORP + LIB.path(), JAR).file(CENTRAL + LIB.path(), JAR);
+		Artifact other = Artifact.parse("org.example:other:1.0");
+		Served onlyCentral = new Served().file(CENTRAL + other.path(), JAR);
+
+		MavenResolver resolver = resolver(both, settings, CENTRAL);
+		assertThat(resolver.repositories()).extracting(RemoteRepository::id).containsExactly("corp", "central");
+		assertThat(resolver.artifact(LIB)).hasBinaryContent(JAR);
+		assertThat(both.requested).containsExactly(CORP + LIB.path(), CORP + LIB.path() + ".sha1");
+		// what corp lacks is asked of the builder's Central next
+		assertThat(resolver(onlyCentral, settings, CENTRAL).artifact(other)).hasBinaryContent(JAR);
+		assertThat(onlyCentral.requested).containsExactly(CORP + other.path(), CENTRAL + other.path(),
+				CENTRAL + other.path() + ".sha1");
+	}
+
+	@Test
+	void aSettingsProfileRepositoryRedefiningAnIdTakesOverTheBuildersRepositoryOfThatId()
+			throws IOException, MavenResolutionException {
+		MavenSettings settings = profiled("<repository><id>central</id><url>" + CORP + "</url></repository>");
+		Served served = new Served().file(CORP + LIB.path(), JAR).file(CENTRAL + LIB.path(), JAR);
+
+		MavenResolver resolver = resolver(served, settings, CENTRAL);
+
+		assertThat(resolver.repositories()).extracting(RemoteRepository::url).containsExactly(CORP);
+		assertThat(resolver.artifact(LIB)).hasBinaryContent(JAR);
+		assertThat(served.requested).containsExactly(CORP + LIB.path(), CORP + LIB.path() + ".sha1");
+	}
+
+	@Test
+	void aSettingsMirrorStandsForAProfileRepositoryAndOneOfAnotherLayoutIsNeverContacted()
+			throws IOException, MavenResolutionException {
+		MavenSettings settings = MavenSettings.parse(("<settings><profiles><profile><id>corp</id><repositories>"
+				+ "<repository><id>corp</id><url>" + CORP + "</url></repository>"
+				+ "</repositories></profile></profiles><activeProfiles><activeProfile>corp</activeProfile>"
+				+ "</activeProfiles><mirrors><mirror><id>m</id><url>" + MIRROR + "</url><mirrorOf>corp</mirrorOf>"
+				+ "</mirror></mirrors></settings>")
+			.getBytes(StandardCharsets.UTF_8), "settings.xml", Map.of(), Map.of());
+		Served served = new Served().file(MIRROR + LIB.path(), JAR);
+
+		assertThat(resolver(served, settings, CENTRAL).artifact(LIB)).hasBinaryContent(JAR);
+		assertThat(served.requested).containsExactly(MIRROR + LIB.path(), MIRROR + LIB.path() + ".sha1");
+
+		MavenSettings legacy = profiled(
+				"<repository><id>old</id><url>https://old.example/repo/</url><layout>legacy</layout></repository>");
+		Served missing = new Served();
+		Artifact absent = Artifact.parse("org.example:absent:1.0");
+		assertThatThrownBy(() -> resolver(missing, legacy).artifact(absent))
+			.isInstanceOf(MavenResolutionException.class)
+			.hasMessageContaining("Unsupported repository layout legacy");
+		assertThat(missing.requested).isEmpty();
+	}
+
+	@Test
+	void aBlockedMirrorFailsTheRepositoriesItCoversWithoutContactingThem() throws MavenResolutionException {
+		MavenSettings blocked = new MavenSettings(null, false, List.of(new MavenSettings.Mirror("blocker",
+				"http://0.0.0.0/", "external:http:*", "default", "default,legacy", true)), List.of(), List.of());
+		String insecure = "http://insecure.example/repo/";
 		Served served = new Served().file(CENTRAL + LIB.path(), JAR);
 
-		assertThatThrownBy(() -> resolver(served, mirrored, CENTRAL).artifact(LIB))
+		assertThatThrownBy(() -> resolver(served, blocked, insecure).artifact(LIB))
 			.isInstanceOf(MavenResolutionException.class)
-			.hasMessage("settings.xml mirrors repository central (" + CENTRAL + ") to 'corporate' (" + MIRROR
-					+ ", mirrorOf *); mirrors are not supported, so it is not contacted");
-		assertThat(served.requested).isEmpty();
+			.hasMessage("cannot fetch org.example:lib:jar:1.0 (blocker: Blocked mirror for repositories: [central ("
+					+ insecure + ")])");
+		// https is not external:http:*
+		assertThat(resolver(served, blocked, CENTRAL).artifact(LIB)).hasBinaryContent(JAR);
+		assertThat(served.requested).containsExactly(CENTRAL + LIB.path(), CENTRAL + LIB.path() + ".sha1");
 	}
 
 	@Test
-	void aProxyRoutingTheRepositoryIsRefusedByName() {
+	void theRepositoryContactedTakesItsProxyAndItsServer() throws IOException {
+		MavenSettings.Login proxyLogin = new MavenSettings.Login("office-user", "office-pass", null);
+		MavenSettings settings = new MavenSettings(null, false,
+				List.of(new MavenSettings.Mirror("corporate", MIRROR, "central")),
+				List.of(new MavenSettings.Proxy("office", true, "https", "proxy.example", 3128, "", proxyLogin)),
+				List.of(new MavenSettings.Server("central", new MavenSettings.Login("not-used", "x", null)),
+						new MavenSettings.Server("corporate", new MavenSettings.Login("deployer", "secret", null),
+								Map.of("X-Token", "t"), Duration.ofSeconds(3), null)));
+		Served served = new Served().file(MIRROR + LIB.path(), JAR);
+
+		resolver(served, settings, CENTRAL).artifact(LIB);
+
+		assertThat(served.accesses.get(MIRROR + LIB.path())).isEqualTo(new HttpAccess(
+				new HttpAccess.Proxy("proxy.example", 3128, new HttpAccess.Credentials("office-user", "office-pass")),
+				new HttpAccess.Credentials("deployer", "secret"), Map.of("X-Token", "t"), Duration.ofSeconds(3), null));
+	}
+
+	@Test
+	void anAuthenticationFailureNamesTheSettingsEntryAnsweringForIt() {
+		String url = CENTRAL + LIB.path();
+		Served unauthorized = new Served().answer(url, new HttpStatusException(401, url));
+		MavenSettings undecryptable = new MavenSettings(null, false, List.of(), List.of(),
+				List.of(new MavenSettings.Server("central",
+						new MavenSettings.Login("me", "{abc}", "master password is not set"))));
 		MavenSettings proxied = new MavenSettings(null, false, List.of(),
 				List.of(new MavenSettings.Proxy("office", true, "http", "proxy.example", 3128, "")), List.of());
+		Served proxyRefuses = new Served().answer(url, new HttpStatusException(407, url));
 
-		assertThatThrownBy(() -> resolver(new Served(), proxied, CENTRAL).artifact(LIB))
-			.isInstanceOf(MavenResolutionException.class)
-			.hasMessage("settings.xml routes central (" + CENTRAL
-					+ ") through proxy 'office' (http://proxy.example:3128); proxies are not supported, so it is not "
-					+ "contacted");
-	}
-
-	@Test
-	void credentialsAreNeverSentAndARepositoryAskingForThemSaysSo() {
-		MavenSettings withServer = new MavenSettings(null, false, List.of(), List.of(), List.of("central"));
-		Served served = new Served().answer(CENTRAL + LIB.path(), new HttpStatusException(401, CENTRAL + LIB.path()));
-
-		assertThatThrownBy(() -> resolver(served, withServer, CENTRAL).artifact(LIB))
-			.isInstanceOf(MavenResolutionException.class)
-			.hasMessage("cannot fetch org.example:lib:jar:1.0 (central: HTTP 401 for " + CENTRAL + LIB.path()
-					+ ": the repository asks for credentials, which are not sent (settings.xml <server> 'central' is "
-					+ "not supported))");
+		assertThatThrownBy(() -> resolver(unauthorized, CENTRAL).artifact(LIB))
+			.hasMessage("cannot fetch org.example:lib:jar:1.0 (central: HTTP 401 for " + url
+					+ " (settings.xml <server> 'central' has no username, so no credentials are sent))");
+		assertThatThrownBy(() -> resolver(unauthorized, undecryptable, CENTRAL).artifact(LIB))
+			.hasMessage("cannot fetch org.example:lib:jar:1.0 (central: HTTP 401 for " + url
+					+ " (settings.xml <server> 'central', user 'me'; its password could not be decrypted, so it is "
+					+ "sent as written: master password is not set))");
+		assertThatThrownBy(() -> resolver(proxyRefuses, proxied, CENTRAL).artifact(LIB))
+			.hasMessage("cannot fetch org.example:lib:jar:1.0 (central: HTTP 407 for " + url
+					+ " (settings.xml proxy 'office' has no username, so no credentials are sent))");
 	}
 
 	@Test
@@ -464,6 +578,199 @@ class MavenRepositoryTest {
 		assertThatThrownBy(() -> MavenResolver.builder().updatePolicy("hourly"))
 			.isInstanceOf(IllegalArgumentException.class)
 			.hasMessage("not a Maven update policy (always, daily, never or interval:MINUTES): 'hourly'");
+	}
+
+	private MavenResolver over(Downloader downloader, Path localRepository, RemoteRepository... repositories) {
+		return over(downloader, localRepository, MavenSettings.none(), repositories);
+	}
+
+	/** A resolver whose repositories keep their own policies (no session override). */
+	private MavenResolver over(Downloader downloader, Path localRepository, MavenSettings settings,
+			RemoteRepository... repositories) {
+		return MavenResolver.builder()
+			.localRepository(localRepository)
+			.repositories(List.of(repositories))
+			.downloader(downloader)
+			.settings(settings)
+			.systemProperties(MavenTestRepository.SYSTEM)
+			.build();
+	}
+
+	private static RemoteRepository central(RepositoryPolicy releases, RepositoryPolicy snapshots) {
+		return new RemoteRepository("central", CENTRAL, releases, snapshots);
+	}
+
+	@Test
+	void aRepositoryIsNotAskedForAFileOfAKindItDoesNotServe() throws IOException {
+		Artifact build = Artifact.parse("org.example:lib:1.0-20240101.000000-1");
+		Served served = new Served().file(CENTRAL + LIB.path(), JAR).file(CENTRAL + build.path(), JAR);
+		RepositoryPolicy disabled = RepositoryPolicy.DISABLED;
+		RepositoryPolicy enabled = RepositoryPolicy.DEFAULT;
+
+		// Maven's DefaultArtifactResolver skips a repository whose policy for the
+		// artifact's kind is disabled (measured with the oracle: no request at all)
+		assertThatThrownBy(() -> over(served, this.local.resolve("a"), central(enabled, disabled)).artifact(build))
+			.isInstanceOf(MavenResolutionException.class)
+			.hasMessageStartingWith(build + " is in neither the local repository");
+		assertThatThrownBy(() -> over(served, this.local.resolve("b"), central(disabled, enabled)).artifact(LIB))
+			.isInstanceOf(MavenResolutionException.class);
+		assertThat(served.requested).isEmpty();
+
+		assertThat(over(served, this.local.resolve("c"), central(enabled, disabled)).artifact(LIB))
+			.hasBinaryContent(JAR);
+		assertThat(over(served, this.local.resolve("d"), central(disabled, enabled)).artifact(build))
+			.hasBinaryContent(JAR);
+	}
+
+	@Test
+	void metadataIsAskedOnlyOfTheRepositoriesServingItsKind() throws IOException {
+		Artifact snapshot = Artifact.parse("org.example:lib:1.0-SNAPSHOT");
+		Artifact release = Artifact.parse("org.example:lib:RELEASE");
+		Artifact latest = Artifact.parse("org.example:lib:LATEST");
+		String snapshotMetadata = "org/example/lib/1.0-SNAPSHOT/maven-metadata.xml";
+		Served served = new Served().file(CENTRAL + LIB_METADATA,
+				("<metadata><versioning><latest>1.0-SNAPSHOT</latest><release>1.0</release></versioning></metadata>")
+					.getBytes(StandardCharsets.UTF_8))
+			.file(CENTRAL + snapshotMetadata, snapshots("1.0-20240101.000000-1", "20240101000000"));
+		RepositoryPolicy disabled = RepositoryPolicy.DISABLED;
+		RepositoryPolicy enabled = RepositoryPolicy.DEFAULT;
+
+		// SNAPSHOT: the snapshot policy decides; the version stays as written
+		MavenResolver noSnapshots = over(served, this.local.resolve("a"), central(enabled, disabled));
+		assertThat(noSnapshots.version(snapshot)).isEqualTo("1.0-SNAPSHOT");
+		assertThat(served.requested).isEmpty();
+		assertThat(over(served, this.local.resolve("b"), central(enabled, enabled)).version(snapshot))
+			.isEqualTo("1.0-20240101.000000-1");
+		served.requested.clear();
+
+		// RELEASE: the release policy decides
+		assertThatThrownBy(() -> over(served, this.local.resolve("c"), central(disabled, enabled)).version(release))
+			.isInstanceOf(MavenResolutionException.class)
+			.hasMessageStartingWith("Failed to resolve version for org.example:lib:jar:RELEASE");
+		assertThat(served.requested).isEmpty();
+		assertThat(over(served, this.local.resolve("d"), central(enabled, disabled)).version(release)).isEqualTo("1.0");
+		served.requested.clear();
+
+		// LATEST: either policy suffices, and a snapshot it names is not resolved further
+		// where snapshots are disabled
+		assertThat(over(served, this.local.resolve("e"), central(enabled, disabled)).version(latest))
+			.isEqualTo("1.0-SNAPSHOT");
+		assertThat(served.requested).containsExactly(CENTRAL + LIB_METADATA, CENTRAL + LIB_METADATA + ".sha1");
+		served.requested.clear();
+		assertThat(over(served, this.local.resolve("f"), central(disabled, enabled)).version(latest))
+			.isEqualTo("1.0-20240101.000000-1");
+		assertThat(served.requested).contains(CENTRAL + LIB_METADATA, CENTRAL + snapshotMetadata);
+		assertThatThrownBy(() -> over(served, this.local.resolve("g"), central(disabled, disabled)).version(latest))
+			.isInstanceOf(MavenResolutionException.class);
+	}
+
+	@Test
+	void aCopyCachedByARepositoryServingNoSuchKindIsNotRead() throws IOException {
+		Served served = new Served().file(CENTRAL + LIB_METADATA,
+				"<metadata><versioning><release>1.0</release></versioning></metadata>"
+					.getBytes(StandardCharsets.UTF_8));
+		Artifact release = Artifact.parse("org.example:lib:RELEASE");
+		assertThat(
+				over(served, this.local, central(RepositoryPolicy.DEFAULT, RepositoryPolicy.DEFAULT)).version(release))
+			.isEqualTo("1.0");
+		assertThat(this.local.resolve("org/example/lib/maven-metadata-central.xml")).exists();
+
+		// the copy stays on disk, but a repository whose releases are disabled is not
+		// consulted for RELEASE
+		served.requested.clear();
+		assertThatThrownBy(() -> over(served, this.local, central(RepositoryPolicy.DISABLED, RepositoryPolicy.DEFAULT))
+			.version(release)).isInstanceOf(MavenResolutionException.class);
+		assertThat(served.requested).isEmpty();
+	}
+
+	@Test
+	void aRangeListsOfARepositoryOnlyTheKindsItServes() throws IOException {
+		Served served = new Served().file(CENTRAL + LIB_METADATA,
+				versions("1.0", "2.0-SNAPSHOT", "2.1-20240101.000000-1", "3.0-snapshot", "4.0"));
+		write(this.local.resolve("local/org/example/lib/maven-metadata-local.xml"), versions("1.5-SNAPSHOT"));
+		Artifact range = Artifact.parse("org.example:lib:[1,10)");
+		RepositoryPolicy disabled = RepositoryPolicy.DISABLED;
+		RepositoryPolicy enabled = RepositoryPolicy.DEFAULT;
+
+		// Maven filters a repository's list with ArtifactUtils.isSnapshot (case-blind
+		// SNAPSHOT suffix, a timestamped build); the local repository's list is not
+		// filtered
+		Path withLocal = this.local.resolve("local");
+		assertThat(over(served, withLocal, central(enabled, disabled)).versions(range)).containsExactly("1.0",
+				"1.5-SNAPSHOT", "4.0");
+		assertThat(over(served, this.local.resolve("b"), central(enabled, enabled)).versions(range))
+			.containsExactly("1.0", "2.0-SNAPSHOT", "2.1-20240101.000000-1", "3.0-snapshot", "4.0");
+		assertThat(over(served, this.local.resolve("c"), central(disabled, enabled)).versions(range))
+			.containsExactly("2.0-SNAPSHOT", "2.1-20240101.000000-1", "3.0-snapshot");
+		served.requested.clear();
+		assertThat(over(served, this.local.resolve("d"), central(disabled, disabled)).versions(range)).isEmpty();
+		assertThat(served.requested).isEmpty();
+	}
+
+	@Test
+	void eachKindOfRequestFollowsTheUpdatePolicyOfTheKindsItAsksFor() throws IOException {
+		Served served = new Served().file(CENTRAL + LIB_METADATA,
+				"<metadata><versioning><release>1.0</release><versions><version>1.0</version></versions></versioning></metadata>"
+					.getBytes(StandardCharsets.UTF_8));
+		Artifact release = Artifact.parse("org.example:lib:RELEASE");
+		Artifact range = Artifact.parse("org.example:lib:[1,2)");
+		RemoteRepository releasesNeverSnapshotsAlways = central(new RepositoryPolicy(true, "never"),
+				new RepositoryPolicy(true, "always"));
+		assertThat(over(served, this.local, releasesNeverSnapshotsAlways).version(release)).isEqualTo("1.0");
+		assertThat(served.requested).hasSize(2);
+
+		// RELEASE asks the release policy: never
+		served.requested.clear();
+		assertThat(over(served, this.local, releasesNeverSnapshotsAlways).version(release)).isEqualTo("1.0");
+		assertThat(served.requested).isEmpty();
+		// a range asks for both kinds and updates as often as the more frequent: always
+		assertThat(over(served, this.local, releasesNeverSnapshotsAlways).versions(range)).containsExactly("1.0");
+		assertThat(served.requested).containsExactly(CENTRAL + LIB_METADATA, CENTRAL + LIB_METADATA + ".sha1");
+
+		// the session's own policy replaces every repository's
+		served.requested.clear();
+		MavenResolver forced = MavenResolver.builder()
+			.localRepository(this.local)
+			.repositories(List.of(central(new RepositoryPolicy(true, "never"), new RepositoryPolicy(true, "never"))))
+			.downloader(served)
+			.updatePolicy("always")
+			.systemProperties(MavenTestRepository.SYSTEM)
+			.build();
+		assertThat(forced.version(release)).isEqualTo("1.0");
+		assertThat(served.requested).hasSize(2);
+	}
+
+	@Test
+	void aMirrorServesWhatTheRepositoriesItCoversServe() throws IOException {
+		Artifact build = Artifact.parse("org.example:lib:1.0-20240101.000000-1");
+		MavenSettings mirror = new MavenSettings(null, false,
+				List.of(new MavenSettings.Mirror("corporate", MIRROR, "*")), List.of(), List.of());
+		Served served = new Served().file(MIRROR + build.path(), JAR);
+		RemoteRepository noSnapshots = central(RepositoryPolicy.DEFAULT, RepositoryPolicy.DISABLED);
+		RemoteRepository other = new RemoteRepository("other", "https://other.example/repo/");
+
+		assertThatThrownBy(() -> over(served, this.local.resolve("a"), mirror, noSnapshots).artifact(build))
+			.isInstanceOf(MavenResolutionException.class);
+		assertThat(served.requested).isEmpty();
+		// a disabled policy gives way to the enabled one of another covered repository
+		assertThat(over(served, this.local.resolve("b"), mirror, noSnapshots, other).artifact(build))
+			.hasBinaryContent(JAR);
+	}
+
+	@Test
+	void aRepositoryPolicyIsSpelledAsMavenSpellsIt() {
+		assertThat(new RepositoryPolicy(true, "interval:5").update()).isEqualTo("interval:5");
+		assertThatThrownBy(() -> new RepositoryPolicy(true, "hourly")).isInstanceOf(IllegalArgumentException.class)
+			.hasMessage("not a Maven update policy (always, daily, never or interval:MINUTES): 'hourly'");
+		// merged as Maven Resolver merges the policies of repositories behind one mirror
+		RepositoryPolicy never = new RepositoryPolicy(true, "never");
+		RepositoryPolicy always = new RepositoryPolicy(true, "always");
+		assertThat(RepositoryPolicy.merge(never, always)).isEqualTo(always);
+		assertThat(RepositoryPolicy.merge(RepositoryPolicy.DEFAULT, new RepositoryPolicy(true, "interval:5")))
+			.isEqualTo(new RepositoryPolicy(true, "interval:5"));
+		assertThat(RepositoryPolicy.merge(RepositoryPolicy.DISABLED, never)).isEqualTo(never);
+		assertThat(RepositoryPolicy.merge(always, RepositoryPolicy.DISABLED)).isEqualTo(always);
+		assertThat(RepositoryPolicy.merge(RepositoryPolicy.DISABLED, RepositoryPolicy.DISABLED).enabled()).isFalse();
 	}
 
 	private static byte[] versions(String... versions) {

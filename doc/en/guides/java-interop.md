@@ -58,8 +58,9 @@ can be passed back into `java:call`/`java:field`:
 A Lisp value is a `java:call` receiver too, called as the object it becomes for an `Object`
 parameter: a string as a `String`, an integer as an `Integer` (a `Long` when it does not fit
 one), a float as a `Double`, a bignum as a `BigInteger`, a character as a `Character` (a
-supplementary one as the `Integer` of its code point), `t` as `Boolean.TRUE`. `nil`, a
-function, a symbol, a list, an array and a hash table are no receiver.
+supplementary one as the `Integer` of its code point), `t` as `Boolean.TRUE`, the symbol
+`|false|` as `Boolean.FALSE`. `nil`, a function, any other symbol, a list, an array and a hash
+table are no receiver.
 
 ```lisp
 (java:call "abc" "codePointAt" 0)   ; => 97
@@ -78,9 +79,11 @@ Arguments and results are converted between rontolisp and Java automatically:
 | string | `String`, or `char` if length 1 | `String` → string |
 | character | `char`/`Character` | `Character` → character |
 | `t` / `nil` | `boolean` (`nil` also → any `null` reference) | `boolean` → `t`/`nil` |
+| the symbol named `false` | `boolean` false, `Boolean.FALSE` for any reference | — |
 | a `java` object | the wrapped host object | any other object → a `java` object |
-| a function/lambda | a `java:proxy` over the matching interface (an argument only) | — |
+| a function/lambda | a `java:proxy` over the matching interface, or after `:functional` an implementation of its abstract methods (an argument only) | — |
 | a proper list / a vector (specialized too) | `T[]` (element-wise, incl. primitives), or `List`/`Collection`/`Iterable` | any Java array → a list |
+| a hash table | a fresh `java.util.LinkedHashMap` (`Map`, `HashMap`, `Object`, ...) | — |
 
 A Java `null` (and a `void` method) comes back as `nil`. A proper list — or a
 rank-1 array made with `make-array`, a specialized one included (`double-float`,
@@ -119,8 +122,28 @@ it in Lisp rather than through `java:call`.
              (make-array 2 :element-type 'double-float :initial-element 0.5d0))   ; => "[0.5, 0.5]"
 ```
 
-Symbols, ratios, hash tables, dotted (improper) lists and multidimensional
-(rank-2+) arrays are **not** bridged.
+`nil` is Java's `null` wherever a reference is expected, so `'|false|` -- the symbol
+spelled as Java spells false -- is the way to pass `Boolean.FALSE` to an `Object`
+parameter, and what a callback answers for a `boolean` or `Boolean` result. A hash
+table becomes a fresh `java.util.LinkedHashMap` of its entries in insertion order,
+each key and value converted as an `Object` argument is (an `equalp` table's keys as
+first stored):
+
+```lisp
+(let ((l (java:new "java.util.ArrayList")))
+  (java:call l "add" '|false|)
+  (java:call l "add" nil)
+  (java:call l "toString"))   ; => "[false, null]"
+```
+
+```lisp
+(let ((h (make-hash-table :test 'equal)))
+  (setf (gethash "b" h) 2 (gethash "a" h) (list 1 2))
+  (java:call (java:new "java.util.TreeMap" h) "toString"))   ; => "{a=[1, 2], b=2}"
+```
+
+Any other symbol, ratios, dotted (improper) lists and multidimensional (rank-2+) arrays
+are **not** bridged.
 
 A `java` object is `eq` and `eql` only to itself: the same object answered by two
 calls is `eq`, while two objects that are `equals` are not. `equal` and `equalp`
@@ -419,6 +442,20 @@ automatically, which is what lets a Swing `ActionListener` be a plain lambda:
   (lambda (method event) (handle-click)))
 ```
 
+A `java:new`, `java:call` or `java:static` ending in `:functional`, after its arguments
+(a `java:subclass` after its callable, for its constructor arguments), converts a function
+the way Java converts a lambda instead: each abstract method of the
+interface calls it with the method's arguments alone, and default methods keep their
+bodies. The Clojure front end ends its calls in it, so a Clojure `fn` takes no method name:
+
+```lisp
+(let ((lst (java:new "java.util.ArrayList")))
+  (dolist (x (list 3 1 2)) (java:call lst "add" x))
+  (java:static "java.util.Collections" "sort" lst (lambda (a b) (- b a)) :functional)
+  (java:call lst "toString"))
+; => "[3, 2, 1]"
+```
+
 ## Class proxies via java:subclass
 
 `java:subclass` makes a host class instance backed by a rontolisp callable --
@@ -563,11 +600,39 @@ $ java -jar app.jar
 a library meet, the one nearest the requested coordinates wins, and the jars join the
 class path after the `--java-classpath` entries, in Maven's class path order. They come
 from Maven Central through the local repository `mvn` uses -- `~/.m2/repository`, or
-the `localRepository` of `~/.m2/settings.xml`, whose `offline` is honored. A SNAPSHOT,
-`LATEST`, `RELEASE` or version range, given or in a dependency's POM, resolves through
-Central's `maven-metadata.xml` as Maven resolves it. The local repository keeps that
-metadata and asks Central again once a day, as it does for a file Central did not have.
-A `settings.xml` mirror or proxy covering Central is refused by name. A Clojure program's `deps.edn` dependencies that hold classes join the class path
+the `localRepository` of `settings.xml`. A SNAPSHOT, `LATEST`, `RELEASE` or version range,
+given or in a dependency's POM, resolves through Central's `maven-metadata.xml` as Maven
+resolves it. The local repository keeps that metadata and asks Central again once a day,
+as it does for a file Central did not have. Central serves no SNAPSHOT, as in Maven: a
+SNAPSHOT is looked up only in the repositories named with `--java-repository`.
+
+A library Central does not hold -- Clojars, a company repository, a `file:` directory --
+is named with `--java-repository [ID=]URL` (repeatable; `https:`, `http:` or `file:`).
+Those repositories are searched after Central, in the order given. The `ID` (default
+`java-repository-N`) is what `settings.xml` matches: its `<server>` supplies the
+credentials and a `<mirror>` whose `mirrorOf` names the id replaces the URL. An id of
+`central` replaces Central's URL instead of adding a repository.
+
+```console
+$ rontolisp app.lisp --java-dep clj-http:clj-http:3.12.3 \
+    --java-repository clojars=https://repo.clojars.org/
+```
+
+`settings.xml` applies as it does for `mvn`: `~/.m2/settings.xml`, merged over
+`$MAVEN_HOME/conf/settings.xml` when `MAVEN_HOME` is set. Its `offline` is honored, a
+mirror covering Central is contacted in Central's place (a `blocked` one fails), a proxy
+carries the requests, and the `<server>` of the repository contacted supplies Basic
+credentials, `httpHeaders` and timeouts. A password encrypted with
+`mvn --encrypt-password` is decrypted with the master password in
+`~/.m2/settings-security.xml`.
+
+The `<repositories>` of the active `settings.xml` profiles (named in `<activeProfiles>`,
+or holding to their `<activation>`; the global and the user's file together) are searched
+as `mvn` searches them: ahead of Central and the `--java-repository` ones, the profile
+defined last first, a profile's own repositories in order. A profile repository with the
+id of one of those replaces it.
+
+A Clojure program's `deps.edn` dependencies that hold classes join the class path
 after these ([Projects: deps.edn](../clojure/semantics.md#projects-depsedn)).
 
 What each output carries:
@@ -624,9 +689,9 @@ shape the program uses, or declare the types so the calls resolve.
   `java:` needs a JRE of the release its calls were resolved against, and one
   that leaves a call to run time a JRE at least as new as the one rontolisp was
   built with.
-- Symbols, hash tables, dotted (improper) lists and multidimensional (rank-2+)
-  arrays are not marshalled — pass them as Java collections you build with
-  `java:new`/`java:call` instead.
+- Symbols other than `|false|`, dotted (improper) lists and multidimensional
+  (rank-2+) arrays are not marshalled — pass them as Java collections you build
+  with `java:new`/`java:call` instead.
 - A returned `java.util.List` (unlike a Java array) stays an opaque `java`
   object: it keeps its identity and mutability, so read it with
   `java:call` (`"get"`, `"size"`, ...) rather than list functions.

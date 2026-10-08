@@ -72,7 +72,8 @@ class MavenOracleParityTest {
 	void answersWhatMavenAnswers(String name, @TempDir Path local) throws IOException {
 		List<String> lines = Files.readAllLines(CASES.resolve(name), StandardCharsets.UTF_8);
 		Request request = Request.parse(lines.get(0).substring(2));
-		MavenResolver resolver = MavenTestRepository.resolver(remote, local, request.system());
+		MavenResolver resolver = MavenTestRepository.resolver(remote, local, request.system(), request.releases(),
+				request.snapshots());
 		List<String> maven = lines.subList(1, lines.size());
 		List<String> ours = new ArrayList<>();
 		if (!request.mode().equals("descriptor")) {
@@ -164,7 +165,7 @@ class MavenOracleParityTest {
 
 	/** A request in {@code MavenOracle}'s argument syntax. */
 	private record Request(String mode, Map<String, String> system, List<Dependency> dependencies,
-			List<Dependency> managed) {
+			List<Dependency> managed, RepositoryPolicy releases, RepositoryPolicy snapshots) {
 
 		static Request parse(String header) {
 			String[] words = header.split(" ");
@@ -172,8 +173,18 @@ class MavenOracleParityTest {
 			List<Dependency> dependencies = new ArrayList<>();
 			List<Dependency> managed = new ArrayList<>();
 			boolean inManaged = false;
+			RepositoryPolicy releases = RepositoryPolicy.DEFAULT;
+			RepositoryPolicy snapshots = RepositoryPolicy.DEFAULT;
 			for (int i = 1; i < words.length; i++) {
 				String word = words[i];
+				if (word.equals("--no-releases")) {
+					releases = RepositoryPolicy.DISABLED;
+					continue;
+				}
+				if (word.equals("--no-snapshots")) {
+					snapshots = RepositoryPolicy.DISABLED;
+					continue;
+				}
 				if (word.startsWith("-D")) {
 					String[] pair = word.substring(2).split("=", 2);
 					system.put(pair[0], pair.length > 1 ? pair[1] : "");
@@ -201,7 +212,7 @@ class MavenOracleParityTest {
 				(inManaged ? managed : dependencies)
 					.add(new Dependency(artifact, artifact.extension(), scope, optional, exclusions));
 			}
-			return new Request(words[0], system, dependencies, managed);
+			return new Request(words[0], system, dependencies, managed, releases, snapshots);
 		}
 
 	}

@@ -99,8 +99,11 @@ no known type and a dependency the oracle cannot resolve are errors in its words
   join the tree; its jar is read in place. `"[1.0]"` is 1.0. A version range is the highest
   version the repositories' `maven-metadata.xml` lists in it; `RELEASE`, `LATEST` and a
   `SNAPSHOT` resolve through that metadata too, which the local repository keeps and asks
-  for again once a day. An `http:` repository and a repository a `~/.m2/settings.xml` mirror
-  or proxy covers are refused.
+  for again once a day. An `http:` repository is refused. `settings.xml` (`~/.m2/settings.xml`
+  merged over `$MAVEN_HOME/conf/settings.xml`) applies as it does for the oracle: its mirrors,
+  proxies, and servers' credentials and `httpHeaders` (a password encrypted with
+  `mvn --encrypt-password` included), not its `localRepository`, `offline` or profiles'
+  repositories.
 - A git coordinate (`:git/url`, or the URL an `io.github.user/repo` name implies, with
   `:git/sha`, `:git/tag`, `:deps/root`) is checked out at its commit with the `git` command,
   into `~/.rontolisp/gitlibs` (`$RONTOLISP_DIST_HOME/gitlibs`). A tag must name the commit,
@@ -360,8 +363,12 @@ under a target's tag; `satisfies?` tests membership. Extend targets are the kind
 `class` answers (`String`, `Number`, `Boolean`, `Keyword`, `Symbol`, `Character`,
 `Map`, `Vector`, `Set`, `List`/`Seq`, plus `nil` and `Object` as the miss
 default) and known record/deftype names; anything else is a named refusal. A miss
-with no `Object` row signals, like the oracle. Each method takes one parameter
-vector (several arities stay refused). A protocol declared `:extend-via-metadata true`
+with no `Object` row signals, like the oracle. A method declares one parameter vector
+per arity: an inline body names the method again for another arity, an extension spells
+`fn` clauses, and the row stores one lambda applying the arity of the call's count. A
+record, deftype or `reify` with its own row of `clojure.core.protocols/CollReduce` or
+`IKVReduce` reduces through it under `reduce`, `reduce-kv` and the verbs built on them
+([reduce](reference/reduce.md)). A protocol declared `:extend-via-metadata true`
 also finds a method in the target's metadata under the namespace-qualified method
 symbol -- after an implementation in a `defrecord`/`deftype`/`reify` body and before
 the extension rows, like the oracle (see [defprotocol](reference/defprotocol.md)).
@@ -438,7 +445,6 @@ Each refusal names the missing design, never `unknown name`:
 | end-less `range` | `infinite range is not supported: range needs an end` | an infinite seq cannot be spelled strictly -- spell it with `iterate` |
 | `transient`, `persistent!`, `assoc!`, `dissoc!`, `conj!`, `disj!` | `transients are not supported yet: ...` | no transient runtime behind the tables |
 | `definterface`, `gen-class`, `gen-interface` | `protocols are not supported yet: ...` | no interface generation on any backend |
-| multi-arity protocol methods | `multi-arity protocol methods are not supported yet: ...` | one parameter vector per method |
 | `set!` of a core var that is no special (`inc`), of a host field | `set! of a var is not supported yet: ...`, `set! of a host field is not supported yet: ...` | no var to assign; the `java:` surface has no field write |
 | `future`, `delay`/`force`, `promise`/`deliver` | by name | no thread pool, lazy memo cells or blocking rendezvous on any backend |
 | `proxy-super` outside a proxy method | `proxy-super outside a proxy method` | a `proxy-super` calls the superclass implementation on the method's `this` |
@@ -449,6 +455,7 @@ Each refusal names the missing design, never `unknown name`:
 | `::alias/kw` with an unknown alias | `Invalid token: ...` | only required aliases, the file's own ns and known namespaces resolve |
 | `--no-gc` builds | by name | that backend has no pairs, symbols or closures |
 | `file-seq`, `clojure.java.io` (except `reader`) | `file-seq` / `unknown name: clojure.java.io/...` | no directory walks; only `reader` resolves, opening a file-stream reader |
+| `with-redefs` of a `clojure.core` var, a macro, a multimethod or protocol method; in the REPL, of a `defn` an earlier input defined without `^:redef` | `with-redefs of ... is not supported...`, `... define it ^:redef to redefine it` | core verbs lower inline; only a `def`/`defn`/`declare` var has a root to replace, and a REPL input already ran with direct calls |
 | an asynchronous Ring handler (`run-server` with `:async? true`) | `asynchronous handlers (:async? true) are not supported` | no respond/raise protocol under the transports |
 | `:async` on a `rontolisp.wasm` declaration, an `async func` WIT member or export | `:async is not supported yet ...`, `... is an async func ...` | the future a suspending crossing answers is no Clojure future |
 | a WIT member taking or answering a stream or a future | `... which the Clojure tier does not carry yet (file.wit:N)` | the async canonical ABI's handles answer no Clojure future yet |

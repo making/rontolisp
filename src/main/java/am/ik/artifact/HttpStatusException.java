@@ -24,6 +24,17 @@ public final class HttpStatusException extends IOException {
 	}
 
 	/**
+	 * Creates the exception with what the status meant.
+	 * @param statusCode the HTTP status
+	 * @param url the URL that answered it
+	 * @param detail why the answer is final
+	 */
+	public HttpStatusException(int statusCode, String url, String detail) {
+		super("HTTP " + statusCode + " for " + url + ": " + detail);
+		this.statusCode = statusCode;
+	}
+
+	/**
 	 * Returns the HTTP status.
 	 * @return the status code
 	 */

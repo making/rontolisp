@@ -11,7 +11,9 @@ import java.math.BigInteger;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Supplier;
 
@@ -25,13 +27,16 @@ import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispDouble;
 import am.ik.rontolisp.LispFloatArray;
 import am.ik.rontolisp.LispFunction;
+import am.ik.rontolisp.LispHashTable;
 import am.ik.rontolisp.LispInstance;
 import am.ik.rontolisp.LispIntVector;
 import am.ik.rontolisp.LispInteger;
 import am.ik.rontolisp.LispJavaObject;
 import am.ik.rontolisp.LispLambda;
+import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispString;
+import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispTrue;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.compiler.JavaExecutable;
@@ -42,6 +47,7 @@ import am.ik.rontolisp.compiler.JavaImplementations;
 import am.ik.rontolisp.compiler.JavaKind;
 import am.ik.rontolisp.compiler.JavaOverloads;
 import am.ik.rontolisp.compiler.JavaSite;
+import am.ik.rontolisp.compiler.JavaSiteResolver;
 import am.ik.rontolisp.compiler.JavaType;
 import am.ik.rontolisp.compiler.ReflectiveJavaClasses;
 
@@ -87,6 +93,47 @@ final class JavaInterop {
 		 */
 		ReflectiveJavaClasses classes();
 
+		/**
+		 * Whether the call ends in {@code :functional}: a function argument converted to
+		 * an interface implements it by its arguments
+		 * ({@link JavaImplementations#functional}), not as a {@code java:proxy}.
+		 * @return whether functions convert so
+		 */
+		default boolean functional() {
+			return false;
+		}
+
+	}
+
+	// The caller of a call ending in :functional.
+	static Caller functional(Caller caller) {
+		if (caller.functional()) {
+			return caller;
+		}
+		return new Caller() {
+
+			@Override
+			public LispVal call(LispVal function, List<LispVal> args) {
+				return caller.call(function, args);
+			}
+
+			@Override
+			public ReflectiveJavaClasses classes() {
+				return caller.classes();
+			}
+
+			@Override
+			public boolean functional() {
+				return true;
+			}
+
+		};
+	}
+
+	// Whether evaluated arguments end in the :functional marker
+	// (compiler/JavaSiteResolver.FUNCTIONAL).
+	private static boolean endsFunctional(List<LispVal> args) {
+		return !args.isEmpty() && JavaSiteResolver.isFunctionalMarker(args.get(args.size() - 1));
 	}
 
 	private static final ReflectiveJavaClasses CLASSES = ReflectiveJavaClasses.instance();
@@ -160,6 +207,9 @@ final class JavaInterop {
 	}
 
 	static LispVal newInstance(String classDesignator, List<LispVal> rawArgs, Caller caller) {
+		if (endsFunctional(rawArgs)) {
+			return newInstance(classDesignator, rawArgs.subList(0, rawArgs.size() - 1), functional(caller));
+		}
 		List<LispVal> args = hostArguments(rawArgs, caller);
 		boolean tagged = isTagged(classDesignator);
 		String name = tagged ? member(classDesignator).name() : classDesignator;
@@ -200,6 +250,9 @@ final class JavaInterop {
 	// so its choices are remembered apart from an instance call's of the same name.
 	private static LispVal invoke(ReflectiveJavaClasses.Type type, @Nullable Object receiver, String methodName,
 			List<LispVal> rawArgs, Caller caller) {
+		if (endsFunctional(rawArgs)) {
+			return invoke(type, receiver, methodName, rawArgs.subList(0, rawArgs.size() - 1), functional(caller));
+		}
 		List<LispVal> args = hostArguments(rawArgs, caller);
 		boolean statics = receiver == null;
 		// The designator is parsed only when the candidates are needed: a remembered
@@ -324,12 +377,14 @@ final class JavaInterop {
 	}
 
 	// The token of which marshal(value, target) is a pure function for every target, or
-	// null when there is none: a list or vector (the cost sums its elements), and the
-	// values marshal() never bridges (they never match, so nothing is remembered).
+	// null when there is none: a list, vector or hash table (the cost sums its elements),
+	// and the values marshal() never bridges (they never match, so nothing is
+	// remembered).
 	private static @Nullable JavaKind kindOf(LispVal value) {
 		return switch (value) {
 			case LispNil ignored -> JavaKind.Lisp.NIL;
 			case LispTrue ignored -> JavaKind.Lisp.T;
+			case LispSymbol symbol when LispNames.JAVA_FALSE.equals(symbol.name()) -> JavaKind.Lisp.FALSE;
 			case LispInteger ignored -> JavaKind.Lisp.INTEGER;
 			case LispBigInteger ignored -> JavaKind.Lisp.BIGNUM;
 			case LispDouble ignored -> JavaKind.Lisp.FLOAT;
@@ -596,6 +651,10 @@ final class JavaInterop {
 	// (compiler/JavaImplementations.subclass, which a compiled program's generated
 	// class declares).
 	static LispVal subclass(List<LispVal> args, Caller caller) {
+		if (args.size() > 4 && endsFunctional(args)) {
+			// A function constructor argument implements its interface by its arguments.
+			return subclass(args.subList(0, args.size() - 1), functional(caller));
+		}
 		if (args.size() < 4 || !(args.get(0) instanceof LispString superName)) {
 			throw new LispEvalException(JavaImplementations.SUBCLASS_USAGE);
 		}
@@ -830,8 +889,27 @@ final class JavaInterop {
 		return implement(dispatch, functions, caller);
 	}
 
+	// A function passed where an interface is expected: the interface's java:proxy, or,
+	// at a call ending in :functional, the implementation calling the function with each
+	// abstract method's arguments (compiler/JavaImplementations.functional).
+	private static LispVal implementation(Class<?> iface, LispVal function, Caller caller) {
+		if (!caller.functional()) {
+			return proxy(iface.getName(), function, caller);
+		}
+		List<Object> key = List.of(iface, FUNCTIONAL_KEY);
+		Dispatch dispatch = IMPLEMENTATIONS.get(key);
+		if (dispatch == null) {
+			dispatch = new Dispatch(JavaImplementations.functional(ReflectiveJavaClasses.of(iface), CLASSES));
+			remember(IMPLEMENTATIONS, key, dispatch);
+		}
+		return implement(dispatch, List.of(function), caller);
+	}
+
 	// The designators-list stand-in of a java:proxy's key.
 	private static final String PROXY_KEY = "proxy";
+
+	// The designators-list stand-in of a function's :functional implementation's key.
+	private static final String FUNCTIONAL_KEY = "functional";
 
 	// How a java:proxy of an interface class, or a java:reify of (interface class,
 	// designators), implements it: resolved once.
@@ -1046,8 +1124,8 @@ final class JavaInterop {
 	// Writes the Java value for `value` (assignable to `target`) into out[index] and
 	// returns its conversion cost, or NO_MATCH (writing nothing) if it cannot convert. A
 	// value with a kind is costed by kindCost -- the one cost table -- and converted by
-	// convert(); a list or vector element-wise. A function becomes a proxy of an
-	// interface: an argument's conversion.
+	// convert(); a list or vector element-wise, a hash table entry-wise. A function
+	// becomes a proxy of an interface: an argument's conversion.
 	private static int marshal(LispVal value, JavaType target, Caller caller, @Nullable Object[] out, int index) {
 		return marshal(value, target, caller, out, index, true);
 	}
@@ -1112,8 +1190,16 @@ final class JavaInterop {
 				}
 				return marshalSequence(elements, target, caller, out, index, proxies);
 			}
+			case LispHashTable table -> {
+				List<LispVal> entries = new ArrayList<>(2 * table.count());
+				for (LispHashTable.Entry entry : table.entries()) {
+					entries.add(entry.key());
+					entries.add(entry.value());
+				}
+				return marshalTable(entries, target, caller, out, index, proxies);
+			}
 			default -> {
-				return NO_MATCH; // symbol, ratio, hash-table, ... are not bridged
+				return NO_MATCH; // symbol, ratio, ... are not bridged
 			}
 		}
 	}
@@ -1123,6 +1209,8 @@ final class JavaInterop {
 		return switch (value) {
 			case LispNil ignored -> target == boolean.class || target == Boolean.class ? Boolean.FALSE : null;
 			case LispTrue ignored -> Boolean.TRUE;
+			// |false|, the one symbol with a kind
+			case LispSymbol ignored -> Boolean.FALSE;
 			case LispInteger i -> convertLong(i.value(), target);
 			case LispBigInteger b -> b.value(); // a BigInteger or a supertype of it
 			case LispDouble d -> convertDouble(d.value(), target);
@@ -1133,8 +1221,8 @@ final class JavaInterop {
 						|| target.isAssignableFrom(Character.class)) ? (Object) (char) cp : (Object) cp;
 			}
 			case LispJavaObject obj -> obj.ref();
-			case LispLambda lambda -> ((LispJavaObject) proxy(target.getName(), lambda, caller)).ref();
-			case LispFunction function -> ((LispJavaObject) proxy(target.getName(), function, caller)).ref();
+			case LispLambda lambda -> ((LispJavaObject) implementation(target, lambda, caller)).ref();
+			case LispFunction function -> ((LispJavaObject) implementation(target, function, caller)).ref();
 			default -> throw new IllegalArgumentException("no kind: " + value.print());
 		};
 	}
@@ -1207,6 +1295,35 @@ final class JavaInterop {
 			return total;
 		}
 		return NO_MATCH;
+	}
+
+	// A hash table converts, for any target a java.util.LinkedHashMap is assignable to,
+	// to a fresh one of its entries in insertion order, each key and value marshalled as
+	// an Object -- as a sequence converts to a java.util.List. ENTRIES alternates keys
+	// and values (compiled: JvmJavaDirectSites' _jtab, the bridge's tableEntries).
+	private static int marshalTable(List<LispVal> entries, JavaType target, Caller caller, @Nullable Object[] out,
+			int index, boolean proxies) {
+		if (target.isPrimitive() || !classOf(target).isAssignableFrom(LinkedHashMap.class)) {
+			return NO_MATCH;
+		}
+		@Nullable Object[] slot = new @Nullable Object[2];
+		JavaType object = ReflectiveJavaClasses.of(Object.class);
+		Map<@Nullable Object, @Nullable Object> map = new LinkedHashMap<>();
+		int total = JavaOverloads.COST_BOXED;
+		for (int i = 0; i < entries.size(); i += 2) {
+			int keyCost = marshal(entries.get(i), object, caller, slot, 0, proxies);
+			if (keyCost == NO_MATCH) {
+				return NO_MATCH;
+			}
+			int valueCost = marshal(entries.get(i + 1), object, caller, slot, 1, proxies);
+			if (valueCost == NO_MATCH) {
+				return NO_MATCH;
+			}
+			total += keyCost + valueCost;
+			map.put(slot[0], slot[1]);
+		}
+		out[index] = map;
+		return total;
 	}
 
 	private static @Nullable List<LispVal> properListElements(LispCons cons) {

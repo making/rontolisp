@@ -395,4 +395,22 @@ class ClojureArmsTest {
 		}
 	}
 
+	@Test
+	void theReducibleFamilyIsMadeByATypedRowOfCollReduceOrIKVReduce() {
+		ClojureArms.Family family = ClojureArms.Family.REDUCIBLE;
+		// reduce's and reduce-kv's arms fold to their own walk, the view of group-by and
+		// frequencies to the collection
+		String arms = "(if (rontolisp::%clojure-coll-reducible-p coll) (r coll) (walk coll))"
+				+ " (if (rontolisp::%clojure-kv-reducible-p (car colls)) (kv m) (pairs m))"
+				+ " (rontolisp::%clojure-seq-all (rontolisp::%clojure-reducible-items (f x)))";
+		assertThat(ClojureArms.scan(read(arms), family).strips()).isTrue();
+		assertThat(ClojureArms.strip(read(arms), family).stream().map(LispVal::print)).containsExactly("(WALK COLL)",
+				"(PAIRS M)", "(RONTOLISP::%CLOJURE-SEQ-ALL (F X))");
+		// only the store of a record's, deftype's or reify's row makes one
+		for (String producer : List.of("(rontolisp::%clojure-coll-reducer-row table (cadr self) f)",
+				"(rontolisp::%clojure-kv-reducer-row table (list :c%keyword \"R\") f)")) {
+			assertThat(ClojureArms.scan(read(arms + producer), family).builds()).as(producer).isTrue();
+		}
+	}
+
 }

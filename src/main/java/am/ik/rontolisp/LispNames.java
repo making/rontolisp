@@ -7838,6 +7838,24 @@ public final class LispNames {
 	 */
 	public static final String JAVA_WARN_ON_REFLECTION = "*WARN-ON-REFLECTION*";
 
+	/**
+	 * The keyword a {@code java:new} / {@code java:call} / {@code java:static} call may
+	 * end in, after its arguments: a function argument converted to an interface
+	 * implements it by the method's arguments, not as a {@code java:proxy}
+	 * ({@code compiler.JavaSiteResolver#FUNCTIONAL}).
+	 */
+	public static final String JAVA_FUNCTIONAL_MARKER = ":FUNCTIONAL";
+
+	/**
+	 * The name of the symbol {@code java:} passes as Java's {@code false} -- the
+	 * {@code boolean} false, and {@code Boolean.FALSE} where a reference is expected,
+	 * where {@code nil} is {@code null} -- and which a function called back from Java may
+	 * answer for a {@code boolean}: {@code |false|}, Java's own spelling. A language with
+	 * a false distinct from {@code nil} spells its false with it, so its false crosses as
+	 * Java's.
+	 */
+	public static final String JAVA_FALSE = "false";
+
 	/** {@code java:new}, qualified. */
 	public static final String JAVA_NEW_QUALIFIED = JAVA_PKG + ":" + JAVA_NEW;
 
@@ -9888,6 +9906,16 @@ public final class LispNames {
 
 	/** {@code %ieee754-double-from-bits} -- the double of unsigned 64-bit IEEE bits. */
 	public static final String IEEE754_DOUBLE_FROM_BITS = "%IEEE754-DOUBLE-FROM-BITS";
+
+	/**
+	 * {@code %strict-math} -- {@code (%strict-math :name x [y])} is
+	 * {@code java.lang.StrictMath.name(x[, y])} over doubles, the same bits on every
+	 * backend: {@code compiler.StrictMathFunction} lists the names and their shapes. It
+	 * never leaves the reals ({@code :log} of a negative is NaN, where {@code log}
+	 * answers a complex). The keyword must be a literal on the compile path. The Clojure
+	 * front end's {@code clojure.math} is built on it.
+	 */
+	public static final String STRICT_MATH_INTERNAL = "%STRICT-MATH";
 
 	/**
 	 * The {@code %decimal-double} internal prelude helper: the double nearest

@@ -81,7 +81,8 @@ caller; DistClient prefixes `ql:quickload:` (`quickloadStep`).
   before the `quickload` forms below them) and consumes the form. Computed argument =
   hard error; NESTED occurrences rejected by both compilers in the same `case` as
   `REQUIRE`/`PROVIDE`/`ASDF_DEFSYSTEM`.
-- Web profile: `Target_HttpDownloader` substitutes `get` (the only path to `HttpClient`)
+- Web profile: `Target_HttpDownloader` substitutes `get(String, HttpAccess)` (the only path to
+  `HttpClient` and `ProxyTunnel`)
   and refuses every download; the consumer's prefix makes it land on its own call site
   (`ql:quickload: downloading ... is not available in the browser playground`).
   `Target_Checksum` keeps the JCA `MessageDigest` lookup out of the image (why

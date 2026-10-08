@@ -8,12 +8,16 @@ import java.util.Objects;
 /**
  * A Maven repository by id and base URL: {@code https:} and {@code http:} through the
  * downloader, {@code file:} read from disk. The id is what a {@code settings.xml} mirror
- * or server names.
+ * or server names. Its {@link RepositoryPolicy policies} say which kinds it is asked for
+ * and how often cached answers are refreshed: both enabled and {@code daily} unless
+ * given.
  *
  * @param id the repository id
  * @param url the base URL
+ * @param releases what it serves of releases
+ * @param snapshots what it serves of snapshots
  */
-public record RemoteRepository(String id, String url) {
+public record RemoteRepository(String id, String url, RepositoryPolicy releases, RepositoryPolicy snapshots) {
 
 	/** Maven Central, under the id and URL {@code clj} uses. */
 	public static final RemoteRepository CENTRAL = new RemoteRepository("central", "https://repo1.maven.org/maven2/");
@@ -22,13 +26,26 @@ public record RemoteRepository(String id, String url) {
 	public static final RemoteRepository CLOJARS = new RemoteRepository("clojars", "https://repo.clojars.org/");
 
 	/**
+	 * A repository with Maven's default policies.
+	 * @param id the repository id
+	 * @param url the base URL
+	 */
+	public RemoteRepository(String id, String url) {
+		this(id, url, RepositoryPolicy.DEFAULT, RepositoryPolicy.DEFAULT);
+	}
+
+	/**
 	 * Validates the URL: absolute, with a scheme this resolver reads.
 	 * @param id the repository id
 	 * @param url the base URL
+	 * @param releases what it serves of releases
+	 * @param snapshots what it serves of snapshots
 	 */
 	public RemoteRepository {
 		Objects.requireNonNull(id, "id");
 		Objects.requireNonNull(url, "url");
+		Objects.requireNonNull(releases, "releases");
+		Objects.requireNonNull(snapshots, "snapshots");
 		URI uri;
 		try {
 			uri = URI.create(url);
@@ -41,6 +58,33 @@ public record RemoteRepository(String id, String url) {
 			throw new IllegalArgumentException(
 					"repository '" + id + "' has a URL this resolver cannot read (https, http or file): " + url);
 		}
+	}
+
+	/**
+	 * Returns this repository with another release policy.
+	 * @param policy what it serves of releases
+	 * @return the repository
+	 */
+	public RemoteRepository withReleases(RepositoryPolicy policy) {
+		return new RemoteRepository(this.id, this.url, policy, this.snapshots);
+	}
+
+	/**
+	 * Returns this repository with another snapshot policy.
+	 * @param policy what it serves of snapshots
+	 * @return the repository
+	 */
+	public RemoteRepository withSnapshots(RepositoryPolicy policy) {
+		return new RemoteRepository(this.id, this.url, this.releases, policy);
+	}
+
+	/**
+	 * Returns the policy for releases or for snapshots.
+	 * @param snapshot whether the snapshot policy is wanted
+	 * @return the policy
+	 */
+	RepositoryPolicy policy(boolean snapshot) {
+		return snapshot ? this.snapshots : this.releases;
 	}
 
 	/**

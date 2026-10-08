@@ -125,6 +125,49 @@ public final class JavaImplementationPrograms {
 			0""";
 
 	/**
+	 * Calls ending in {@code :functional}: a function passed where an interface is
+	 * expected implements every abstract method by the method's arguments -- a literal
+	 * lambda (a resolved site), a function in a variable (a dispatched site), a receiver
+	 * of no known class (resolved when it runs), a constructor and a static call -- and a
+	 * default method keeps its body ({@code Predicate.not} calls {@code negate} on it).
+	 * The last two calls differ only in the marker: a compiled program gives them
+	 * different site methods.
+	 */
+	public static final String FUNCTIONAL = """
+			(let ((lst (java:new "java.util.ArrayList")))
+			  (dolist (x (list 3 1 2)) (java:call lst "add" x))
+			  (java:static "java.util.Collections" "sort" lst (lambda (a b) (- a b)) :functional)
+			  (print (java:call lst "toString"))
+			  (print (java:call (java:static "java.util.function.Predicate" "not" (lambda (x) (oddp x)) :functional)
+			                    "test" 2))
+			  (let ((f (lambda (x) (print (* x 10)))))
+			    (java:call lst "forEach" f :functional))
+			  (let ((each (lambda (coll f) (java:call coll "forEach" f :functional))))
+			    (funcall each lst #'print))
+			  (let ((th (java:new "java.lang.Thread" (lambda () (print :ran)) :functional)))
+			    (java:call th "start")
+			    (java:call th "join")))
+			(let ((one (java:new "java.util.ArrayList")))
+			  (java:call one "add" 7)
+			  (java:call one "forEach" (lambda (m x) (print (list m x))))
+			  (java:call one "forEach" (lambda (x) (print x)) :functional))
+			""";
+
+	/** What {@link #FUNCTIONAL} prints. */
+	public static final String FUNCTIONAL_OUTPUT = """
+			"[1, 2, 3]"
+			T
+			10
+			20
+			30
+			1
+			2
+			3
+			:RAN
+			("accept" 7)
+			7""";
+
+	/**
 	 * A declaration that a value is what a {@code java:proxy} of one interface makes,
 	 * holding a {@code java:proxy} of that interface and another: the kind is the
 	 * interface list, so the declaration lies.

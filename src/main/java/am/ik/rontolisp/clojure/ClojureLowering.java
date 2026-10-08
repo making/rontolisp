@@ -17,6 +17,7 @@ import am.ik.rontolisp.LispHashTable;
 import am.ik.rontolisp.LispArray;
 import am.ik.rontolisp.LispDouble;
 import am.ik.rontolisp.LispInteger;
+import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispTrue;
 import am.ik.rontolisp.LispString;
@@ -154,8 +155,12 @@ public final class ClojureLowering {
 	 */
 	static final String FALSE_VARIABLE = "RONTOLISP::%CLOJURE-FALSE";
 
-	/** The false value's own spelling: a symbol, so it prints as {@code false}. */
-	static final String FALSE_VALUE_NAME = "false";
+	/**
+	 * The false value's own spelling: a symbol, so it prints as {@code false} -- the one
+	 * {@code java:} passes as Java's false ({@link LispNames#JAVA_FALSE}), so Clojure's
+	 * false crosses to Java as the oracle's does.
+	 */
+	static final String FALSE_VALUE_NAME = LispNames.JAVA_FALSE;
 
 	static final LispVal NIL_CONST = LispNil.INSTANCE;
 
@@ -1051,10 +1056,14 @@ public final class ClojureLowering {
 	 * {@code defrecord}/{@code deftype}/{@code reify} body holds, which win over the
 	 * target's metadata, which wins over the extension rows, like the oracle; null for
 	 * every other protocol, whose inline rows share the method table. {@code arities}
-	 * maps each method to its signature's parameter count, the target included.
+	 * maps each method to the parameter counts of its signatures, the target included.
+	 * {@code reducerRow} is the library function storing a record's, deftype's or reify's
+	 * row of {@code clojure.core.protocols}' {@code CollReduce} or {@code IKVReduce},
+	 * which {@code reduce} and {@code reduce-kv} hand such a value to; null for every
+	 * other protocol.
 	 */
-	record ProtocolDef(Set<String> methods, Map<String, Integer> arities, LispSymbol methodsVar, LispSymbol defaultVar,
-			@Nullable LispSymbol inlineVar) {
+	record ProtocolDef(Set<String> methods, Map<String, Set<Integer>> arities, LispSymbol methodsVar,
+			LispSymbol defaultVar, @Nullable LispSymbol inlineVar, @Nullable String reducerRow) {
 
 		/** The table an inline (body) implementation is stored in. */
 		LispSymbol inlineTable() {
@@ -1124,6 +1133,43 @@ public final class ClojureLowering {
 	 * the agent runtime binds while a {@code send} runs) may be rebound.
 	 */
 	final Set<String> dynamicVars = new HashSet<>();
+
+	/**
+	 * The vars a {@code with-redefs} replaces, by var key, as the pass before this one
+	 * learned them ({@link #redefMisses}): a {@code defn} of one keeps its function in
+	 * the value cell and every call goes through it, so a replaced root reaches the call
+	 * sites, like the oracle's var.
+	 */
+	final Set<String> redefinable = new HashSet<>();
+
+	/**
+	 * The simple names every {@code with-redefs} of a lowered file names, at any depth
+	 * (the pre-scan): a {@code defn} of such a name in any namespace is redefinable, so a
+	 * test file's {@code (with-redefs [alias/f ...])} reaches the namespace it requires
+	 * without a second pass. A same-named function elsewhere only calls through its value
+	 * cell.
+	 */
+	final Set<String> redefNames = new HashSet<>();
+
+	/**
+	 * The vars a {@code with-redefs} named that their definition had already lowered as a
+	 * direct call (a {@code defn} of a namespace loaded before the file naming it was
+	 * scanned): the lowering starts over with them redefinable ({@link #lower}).
+	 */
+	final Set<String> redefMisses = new LinkedHashSet<>();
+
+	/**
+	 * Whether a var's calls go through its value cell so {@code with-redefs} can replace
+	 * it: a name a {@code with-redefs} names, or one the program marks {@code ^:redef}
+	 * (the oracle's own opt-out of direct linking).
+	 * @param key the var key
+	 * @param nameDatum the definition's name datum, metadata included
+	 * @return whether the var is redefinable
+	 */
+	boolean redefinable(String key, LispVal nameDatum) {
+		return this.redefinable.contains(key) || this.redefNames.contains(key.substring(key.indexOf('/') + 1))
+				|| ClojureLowerUtil.nameHasFlag(nameDatum, ":redef");
+	}
 
 	/**
 	 * The identifiers whose own symbol ({@link ClojureLowerUtil#idSym}) is a special
@@ -1276,17 +1322,46 @@ public final class ClojureLowering {
 		return lower(datums, reader, macroEvaluator, files, hostTarget, ClojureBoundary.NONE);
 	}
 
+	/**
+	 * Lowers a whole program. A {@code with-redefs} naming a {@code defn} that an earlier
+	 * file lowered as a direct call leaves that var in {@link #redefMisses}: the program
+	 * lowers again with those vars redefinable from the start, so every call site reads
+	 * the var's value cell (at most once more per such var; a program without one lowers
+	 * once). The second pass reuses the first's resolved source path.
+	 */
 	static List<LispVal> lower(List<LispVal> datums, @Nullable ClojureReader reader,
 			@Nullable ClojureMacroEvaluator macroEvaluator, ClojureFiles files, boolean hostTarget,
 			ClojureBoundary boundary) {
-		ClojureLowering lowering = new ClojureLowering();
+		Set<String> redefinable = new HashSet<>();
+		ClojureSourcePath sourcePath = null;
+		while (true) {
+			ClojureLowering lowering = new ClojureLowering();
+			lowering.redefinable.addAll(redefinable);
+			List<LispVal> forms = lowering.lowerProgram(datums, reader, macroEvaluator, files, hostTarget, boundary,
+					sourcePath);
+			if (!redefinable.addAll(lowering.redefMisses)) {
+				return forms;
+			}
+			sourcePath = lowering.sourcePath;
+		}
+	}
+
+	private List<LispVal> lowerProgram(List<LispVal> datums, @Nullable ClojureReader reader,
+			@Nullable ClojureMacroEvaluator macroEvaluator, ClojureFiles files, boolean hostTarget,
+			ClojureBoundary boundary, @Nullable ClojureSourcePath resolved) {
+		ClojureLowering lowering = this;
 		lowering.hostTarget = hostTarget;
 		lowering.reader = reader;
 		lowering.macroEvaluator = macroEvaluator;
 		lowering.files = files;
 		lowering.boundary = boundary;
-		lowering.sourcePath = new ClojureSourcePath(files, reader == null ? null : reader.file());
-		lowering.sourcePath.entryNamespace(firstNsName(datums));
+		if (resolved != null) {
+			lowering.sourcePath = resolved;
+		}
+		else {
+			lowering.sourcePath = new ClojureSourcePath(files, reader == null ? null : reader.file());
+			lowering.sourcePath.entryNamespace(firstNsName(datums));
+		}
 		lowering.rootFile = lowering.sourcePath.entryPath();
 		lowering.rootSourcePath = lowering.sourcePath.entryName();
 		lowering.loadingFile = lowering.rootFile;
@@ -1573,6 +1648,9 @@ public final class ClojureLowering {
 		// ns form moves the namespace a record's class name takes, and pass two
 		// starts over from the namespace this pass started in
 		String ns = this.currentNs;
+		for (LispVal datum : datums) {
+			scanRedefinitions(datum);
+		}
 		try {
 			for (LispVal datum : datums) {
 				try {
@@ -1586,6 +1664,31 @@ public final class ClojureLowering {
 		}
 		finally {
 			this.currentNs = ns;
+		}
+	}
+
+	/**
+	 * Records into {@link #redefNames} the simple name of every var a {@code with-redefs}
+	 * the datum holds names, at any depth.
+	 */
+	private void scanRedefinitions(LispVal datum) {
+		List<LispVal> items = ClojureLowerUtil.items(datum);
+		if (items == null) {
+			return;
+		}
+		if (items.size() >= 2 && ClojureLowerUtil.isSymbolNamed(items.get(0), "with-redefs")) {
+			List<LispVal> bindings = ClojureLowerUtil.items(items.get(1));
+			if (bindings != null && !bindings.isEmpty() && bindings.get(0) == ClojureReader.VECTOR) {
+				for (int i = 1; i < bindings.size(); i += 2) {
+					if (ClojureLowerUtil.stripMeta(bindings.get(i)) instanceof LispSymbol name) {
+						int slash = qualifierSlash(name.name());
+						this.redefNames.add(slash < 0 ? name.name() : name.name().substring(slash + 1));
+					}
+				}
+			}
+		}
+		for (LispVal item : items) {
+			scanRedefinitions(item);
 		}
 	}
 
@@ -1640,11 +1743,14 @@ public final class ClojureLowering {
 		}
 		else if (ClojureLowerUtil.isSymbolNamed(items.get(0), "defn")
 				|| ClojureLowerUtil.isSymbolNamed(items.get(0), "defn-")) {
-			// a ^:dynamic defn holds its function in the value cell (like a def),
-			// so even a forward call routes through it and sees a binding
-			preDeclare(items.get(1), "defn",
-					ClojureLowerUtil.nameIsDynamic(items.get(1)) ? Kind.VARIABLE : Kind.FUNCTION,
+			// a ^:dynamic or redefinable defn holds its function in the value cell
+			// (like a def), so even a forward call routes through it and sees a
+			// binding or a with-redefs
+			String key = preDeclare(items.get(1), "defn", Kind.FUNCTION,
 					ClojureLowerUtil.isSymbolNamed(items.get(0), "defn-"));
+			if (ClojureLowerUtil.nameIsDynamic(items.get(1)) || redefinable(key, items.get(1))) {
+				this.globals.put(key, Kind.VARIABLE);
+			}
 		}
 		else if (ClojureLowerUtil.isSymbolNamed(items.get(0), "defonce")) {
 			preDeclare(items.get(1), "defonce", Kind.VARIABLE, false);
@@ -2798,8 +2904,8 @@ public final class ClojureLowering {
 
 	/**
 	 * A {@code defn} in a body: a single defun (a dynamic single-arity one its defun plus
-	 * its defparameters) splices behind a progn, like ever; several arities cannot splice
-	 * into expression position.
+	 * its defparameters, a redefinable one its defun plus its value-cell store) splices
+	 * behind a progn, like ever; several arities cannot splice into expression position.
 	 */
 	LispVal defnInBody(LispVal form, List<LispVal> items) {
 		List<LispVal> forms = ClojureBindingLowering.defuns(this, form, items);
@@ -2808,7 +2914,7 @@ public final class ClojureLowering {
 		}
 		boolean single = forms.stream().filter(ClojureLowering::isLoweredDefun).count() == 1 && forms.stream()
 			.allMatch(f -> ClojureLowering.isLoweredDefun(f) || isLoweredDefparameter(f)
-					|| ClojureVarLowering.isMetaStore(f));
+					|| ClojureVarLowering.isMetaStore(f) || ClojureBindingLowering.isRedefCellStore(f));
 		ClojureLowerUtil.isTrue(single, "a multi-arity defn is only allowed at the top level");
 		return ClojureLowerUtil.cons(ClojureLowerUtil.sym("progn"), forms);
 	}
@@ -3186,6 +3292,27 @@ public final class ClojureLowering {
 		}
 		if (ClojureLowerUtil.isSymbolNamed(head, "cond")) {
 			return ClojureSeqLowering.condOf(this, items);
+		}
+		if (ClojureLowerUtil.isSymbolNamed(head, "if-some")) {
+			return ClojureSeqLowering.ifSomeOf(this, items);
+		}
+		if (ClojureLowerUtil.isSymbolNamed(head, "when-some")) {
+			return ClojureSeqLowering.whenSomeOf(this, items);
+		}
+		if (ClojureLowerUtil.isSymbolNamed(head, "case")) {
+			return ClojureControlLowering.caseOf(this, items);
+		}
+		if (ClojureLowerUtil.isSymbolNamed(head, "condp")) {
+			return ClojureControlLowering.condpOf(this, items);
+		}
+		if (ClojureLowerUtil.isSymbolNamed(head, "while")) {
+			return ClojureControlLowering.whileOf(this, items);
+		}
+		if (ClojureLowerUtil.isSymbolNamed(head, "locking")) {
+			return ClojureControlLowering.lockingOf(this, items);
+		}
+		if (ClojureLowerUtil.isSymbolNamed(head, "with-redefs")) {
+			return ClojureVarLowering.withRedefsOf(this, items);
 		}
 		if (ClojureLowerUtil.isSymbolNamed(head, "do")) {
 			return body(items, 1);
@@ -3720,7 +3847,7 @@ public final class ClojureLowering {
 			case "group-by":
 				ClojureLowerUtil.isTrue(n == 2, "group-by takes a function and a collection");
 				return ClojureFilterLowering.groupByForm(this, ClojureBindingLowering.fnArg(this, items.get(1)),
-						ClojureSeqLowering.seqAllForm(this, lower(items.get(2))));
+						ClojureSeqLowering.reducedAllForm(this, lower(items.get(2))));
 			case "sort":
 				return ClojureFilterLowering.sortOf(this, items);
 			case "sort-by":
@@ -3766,7 +3893,7 @@ public final class ClojureLowering {
 			case "frequencies":
 				ClojureLowerUtil.isTrue(n == 1, "frequencies takes one collection");
 				return ClojureUpdateLowering.frequenciesForm(this,
-						ClojureSeqLowering.seqAllForm(this, lower(items.get(1))));
+						ClojureSeqLowering.reducedAllForm(this, lower(items.get(1))));
 			case "comp":
 				return ClojureFnLowering.compOf(this, items);
 			case "partial":
@@ -4482,9 +4609,21 @@ public final class ClojureLowering {
 	// errors: try over handler-case and unwind-protect, throw over error
 
 	/**
-	 * One parsed method implementation: the method name, its parameter vector and body.
+	 * One parsed method implementation: the method name and its arities, one or more. An
+	 * inline body ({@code defrecord}, {@code deftype}, {@code reify}) spells each arity
+	 * as the method name again over another parameter vector; an extension spells them as
+	 * the clauses of a {@code fn}, {@code (m ([x] ...) ([x y] ...))}.
 	 */
-	record TypeMethod(String method, LispVal params, List<LispVal> body) {
+	record TypeMethod(String method, List<MethodArity> arities) {
+
+		TypeMethod(String method, LispVal params, List<LispVal> body) {
+			this(method, List.of(new MethodArity(params, body)));
+		}
+
+	}
+
+	/** One arity of a method implementation: its parameter vector and body. */
+	record MethodArity(LispVal params, List<LispVal> body) {
 	}
 
 	/** One parsed implementation group: the protocol plus its method implementations. */

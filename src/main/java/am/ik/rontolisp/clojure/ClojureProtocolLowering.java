@@ -382,8 +382,9 @@ final class ClojureProtocolLowering {
 	/**
 	 * Parses a {@code defprotocol} datum without emitting: the name's method names in
 	 * definition order, with the table and default globals. Docstrings and attr maps are
-	 * skipped, like {@code defn} and {@code defmulti}; a signature is one parameter
-	 * vector per method (several arities stay refused).
+	 * skipped, like {@code defn} and {@code defmulti}; a signature is the method name
+	 * over one parameter vector per arity, {@code (m [x] [x y] "doc")}, each taking the
+	 * target first, like the oracle's.
 	 */
 	static ClojureLowering.ProtocolDef parseProtocol(ClojureLowering ctx, String key, String name,
 			List<LispVal> items) {
@@ -411,7 +412,7 @@ final class ClojureProtocolLowering {
 			}
 		}
 		Set<String> methods = new LinkedHashSet<>();
-		Map<String, Integer> arities = new HashMap<>();
+		Map<String, Set<Integer>> arities = new HashMap<>();
 		for (; at < items.size(); at++) {
 			List<LispVal> sig = ClojureLowerUtil.items(items.get(at));
 			if (sig == null || sig.isEmpty() || !(sig.get(0) instanceof LispSymbol)) {
@@ -420,25 +421,46 @@ final class ClojureProtocolLowering {
 			String method = ((LispSymbol) sig.get(0)).name();
 			ClojureLowerUtil.isTrue(!method.startsWith(":"),
 					"defprotocol takes method signatures, not " + items.get(at).print());
-			ClojureLowerUtil.isTrue(methods.add(method), "duplicate method in defprotocol " + name + ": " + method);
+			ClojureLowerUtil.isTrue(methods.add(method), "Function " + method + " in protocol " + name
+					+ " was redefined. Specify all arities in single definition.");
 			int marg = 1;
 			if (marg < sig.size() && sig.get(marg) instanceof LispString) {
-				marg++; // the method docstring
+				marg++; // a docstring ahead of the parameter vectors
 			}
-			ClojureLowerUtil.isTrue(
-					marg < sig.size()
-							&& ClojureBindingLowering.isVectorDatum(ClojureLowerUtil.stripMeta(sig.get(marg))),
-					"multi-arity protocol methods are not supported yet: " + method);
-			List<LispVal> params = ClojureLowerUtil.bindingItems(ClojureLowerUtil.stripMeta(sig.get(marg)),
-					"the method " + method + " of");
-			ClojureLowerUtil.isTrue(!params.isEmpty(), "a protocol method takes a target and arguments: " + method);
-			arities.put(method, params.size());
+			Set<Integer> counts = new LinkedHashSet<>();
+			for (; marg < sig.size()
+					&& ClojureBindingLowering.isVectorDatum(ClojureLowerUtil.stripMeta(sig.get(marg))); marg++) {
+				List<LispVal> params = ClojureLowerUtil.bindingItems(ClojureLowerUtil.stripMeta(sig.get(marg)),
+						"the method " + method + " of");
+				ClojureLowerUtil.isTrue(!params.isEmpty(),
+						"Definition of function " + method + " in protocol " + name + " must take at least one arg.");
+				ClojureLowerUtil.isTrue(counts.add(params.size()),
+						"defprotocol " + name + " declares " + method + " twice with " + params.size() + " parameters");
+			}
+			ClojureLowerUtil.isTrue(!counts.isEmpty(),
+					"a defprotocol method signature is its name over one parameter vector per arity, not "
+							+ items.get(at).print());
+			arities.put(method, Set.copyOf(counts));
 		}
 		ClojureLowerUtil.isTrue(!methods.isEmpty(), "defprotocol takes at least one method: " + name);
 		String var = ClojureLowering.varSym(key).name();
 		return new ClojureLowering.ProtocolDef(methods, arities, new LispSymbol(var + "%methods"),
-				new LispSymbol(var + "%default"), viaMetadata ? new LispSymbol(var + "%inline") : null);
+				new LispSymbol(var + "%default"), viaMetadata ? new LispSymbol(var + "%inline") : null,
+				REDUCER_ROWS.get(key));
 	}
+
+	/**
+	 * The library functions storing a record's, deftype's or reify's row of the two
+	 * reducing protocols of {@code clojure.core.protocols}, by the protocol's var key:
+	 * {@code reduce} and the verbs built on it hand such a value to its
+	 * {@code CollReduce} row, {@code reduce-kv} to its {@code IKVReduce} row
+	 * ({@code clojure.lisp}, "CollReduce and IKVReduce"). The store is what makes a value
+	 * of the reducible family ({@link ClojureArms.Family#REDUCIBLE}): a program storing
+	 * none has the arms of those verbs folded.
+	 */
+	private static final Map<String, String> REDUCER_ROWS = Map.of("clojure.core.protocols/CollReduce",
+			"RONTOLISP::%CLOJURE-COLL-REDUCER-ROW", "clojure.core.protocols/IKVReduce",
+			"RONTOLISP::%CLOJURE-KV-REDUCER-ROW");
 
 	/**
 	 * {@code (defprotocol name doc? (method [target & args] doc?)...)}: a method-table
@@ -746,11 +768,16 @@ final class ClojureProtocolLowering {
 	}
 
 	/**
-	 * The implementation groups behind {@code defrecord}/{@code deftype} (each headed by
-	 * a known protocol name) or {@code extend-type}: every method must belong to its
-	 * protocol, like the oracle's "Can't define method not in interfaces".
+	 * The implementation groups behind {@code defrecord}/{@code deftype}/{@code reify}
+	 * (each headed by a known protocol name) or {@code extend-type}: every method must
+	 * belong to its protocol, like the oracle's "Can't define method not in interfaces".
+	 * An inline body (anything but {@code extend-type}) implements another arity by
+	 * naming the method again over another parameter vector, each one an arity the
+	 * protocol declares; an extension spells several arities as {@code fn} clauses and a
+	 * repeated method replaces the earlier one ({@link #extensionMethod}).
 	 */
 	static List<ClojureLowering.ImplGroup> implGroups(ClojureLowering ctx, List<LispVal> rest, String what) {
+		boolean inline = !what.equals("extend-type");
 		List<ClojureLowering.ImplGroup> groups = new ArrayList<>();
 		String protocol = null;
 		ClojureLowering.ProtocolDef def = null;
@@ -781,15 +808,12 @@ final class ClojureProtocolLowering {
 			}
 			String method = ((LispSymbol) impl.get(0)).name();
 			ClojureLowerUtil.isTrue(def.methods().contains(method), "Can't define method not in interfaces: " + method);
-			String seen = method;
-			ClojureLowerUtil.isTrue(methods.stream().noneMatch(m -> m.method().equals(seen)),
-					"duplicate method implementation: " + method);
-			ClojureLowerUtil.isTrue(ClojureBindingLowering.isVectorDatum(ClojureLowerUtil.stripMeta(impl.get(1))),
-					"multi-arity protocol methods are not supported yet: " + method);
-			List<LispVal> params = ClojureLowerUtil.bindingItems(ClojureLowerUtil.stripMeta(impl.get(1)),
-					"the method " + method + " of");
-			ClojureLowerUtil.isTrue(!params.isEmpty(), "a protocol method takes a target and arguments: " + method);
-			methods.add(new ClojureLowering.TypeMethod(method, impl.get(1), impl.subList(2, impl.size())));
+			if (inline) {
+				addInlineArity(def, methods, method, impl);
+			}
+			else {
+				methods.add(extensionMethod(method, impl));
+			}
 		}
 		if (methods != null) {
 			if (protocol == null) {
@@ -798,6 +822,147 @@ final class ClojureProtocolLowering {
 			groups.add(new ClojureLowering.ImplGroup(protocol, methods));
 		}
 		return groups;
+	}
+
+	/**
+	 * One inline arity {@code (method [params] body...)} added to the group's methods: a
+	 * new method, or another arity of one named before. Its parameter count, the target
+	 * included, must be one the protocol declares for the method, and each once, like the
+	 * oracle's class implementing the interface.
+	 */
+	private static void addInlineArity(ClojureLowering.ProtocolDef def, List<ClojureLowering.TypeMethod> methods,
+			String method, List<LispVal> impl) {
+		ClojureLowerUtil.isTrue(ClojureBindingLowering.isVectorDatum(ClojureLowerUtil.stripMeta(impl.get(1))),
+				"an inline method takes one parameter vector, naming the method again for another arity: " + method);
+		List<LispVal> params = ClojureLowerUtil.bindingItems(ClojureLowerUtil.stripMeta(impl.get(1)),
+				"the method " + method + " of");
+		ClojureLowerUtil.isTrue(!params.isEmpty(), "a protocol method takes a target and arguments: " + method);
+		Set<Integer> declared = def.arities().get(method);
+		ClojureLowerUtil.isTrue(declared != null && declared.contains(params.size()),
+				"Can't define method not in interfaces: " + method);
+		ClojureLowering.MethodArity arity = new ClojureLowering.MethodArity(impl.get(1), impl.subList(2, impl.size()));
+		for (int i = 0; i < methods.size(); i++) {
+			ClojureLowering.TypeMethod prior = methods.get(i);
+			if (!prior.method().equals(method)) {
+				continue;
+			}
+			for (ClojureLowering.MethodArity other : prior.arities()) {
+				ClojureLowerUtil.isTrue(ClojureLowerUtil
+					.bindingItems(ClojureLowerUtil.stripMeta(other.params()), "the method " + method + " of")
+					.size() != params.size(), "duplicate method implementation: " + method);
+			}
+			List<ClojureLowering.MethodArity> arities = new ArrayList<>(prior.arities());
+			arities.add(arity);
+			methods.set(i, new ClojureLowering.TypeMethod(method, List.copyOf(arities)));
+			return;
+		}
+		methods.add(new ClojureLowering.TypeMethod(method, List.of(arity)));
+	}
+
+	/**
+	 * One extension method, {@code (method [params] body...)} or {@code (method ([params]
+	 * body...)+)}: the arities of a {@code fn}, each fixed count once and at most one
+	 * variadic, like the oracle's {@code fn} the extension stores.
+	 */
+	static ClojureLowering.TypeMethod extensionMethod(String method, List<LispVal> impl) {
+		if (ClojureBindingLowering.isVectorDatum(ClojureLowerUtil.stripMeta(impl.get(1)))) {
+			List<LispVal> params = ClojureLowerUtil.bindingItems(ClojureLowerUtil.stripMeta(impl.get(1)),
+					"the method " + method + " of");
+			ClojureLowerUtil.isTrue(!params.isEmpty(), "a protocol method takes a target and arguments: " + method);
+			return new ClojureLowering.TypeMethod(method, impl.get(1), impl.subList(2, impl.size()));
+		}
+		List<ClojureLowering.MethodArity> arities = new ArrayList<>();
+		Set<Integer> fixed = new HashSet<>();
+		boolean variadic = false;
+		for (LispVal clause : impl.subList(1, impl.size())) {
+			List<LispVal> parts = ClojureLowerUtil.items(clause);
+			if (parts == null || parts.isEmpty()
+					|| !ClojureBindingLowering.isVectorDatum(ClojureLowerUtil.stripMeta(parts.get(0)))) {
+				throw new LispReadException("a method implementation takes a parameter vector and a body, or arity"
+						+ " clauses ([params] body...), not " + clause.print());
+			}
+			ClojureLowering.ParamShape shape = ClojureBindingLowering.paramShape(parts.get(0));
+			ClojureLowerUtil.isTrue(shape.fixed() != 0, "a protocol method takes a target and arguments: " + method);
+			if (shape.variadic()) {
+				ClojureLowerUtil.isTrue(!variadic, "Can't have more than 1 variadic overload");
+				variadic = true;
+			}
+			else {
+				ClojureLowerUtil.isTrue(fixed.add(shape.fixed()), "Can't have 2 overloads with same arity");
+			}
+			arities.add(new ClojureLowering.MethodArity(parts.get(0), parts.subList(1, parts.size())));
+		}
+		return new ClojureLowering.TypeMethod(method, List.copyOf(arities));
+	}
+
+	/**
+	 * The lambda a method implementation stores: its one arity's, or one dispatching each
+	 * call by its count to the lambda of the matching arity ({@link #arityDispatch}).
+	 */
+	static LispVal methodLambda(ClojureLowering ctx, ClojureLowering.TypeMethod impl) {
+		if (impl.arities().size() == 1) {
+			ClojureLowering.MethodArity only = impl.arities().get(0);
+			return ClojureDispatchLowering.methodLambda(ctx, only.params(), only.body());
+		}
+		List<LispVal> lambdas = new ArrayList<>();
+		for (ClojureLowering.MethodArity arity : impl.arities()) {
+			lambdas.add(ClojureDispatchLowering.methodLambda(ctx, arity.params(), arity.body()));
+		}
+		return arityDispatch(ctx, impl, lambdas);
+	}
+
+	/**
+	 * A method of several arities: each arity's lambda bound once, behind one lambda
+	 * applying the one whose parameter count matches the call's (a fixed count exactly, a
+	 * variadic arity from its fixed part on, tried last); any other count is the oracle's
+	 * arity error.
+	 */
+	private static LispVal arityDispatch(ClojureLowering ctx, ClojureLowering.TypeMethod impl, List<LispVal> lambdas) {
+		List<LispVal> cells = new ArrayList<>();
+		List<LispVal> fixedArms = new ArrayList<>();
+		List<LispVal> variadicArms = new ArrayList<>();
+		LispSymbol args = ctx.freshTemp();
+		LispSymbol count = ctx.freshTemp();
+		for (int i = 0; i < lambdas.size(); i++) {
+			LispSymbol cell = ctx.freshTemp();
+			cells.add(ClojureLowerUtil.list(cell, lambdas.get(i)));
+			ClojureLowering.ParamShape shape = ClojureBindingLowering.paramShape(impl.arities().get(i).params());
+			LispVal call = ClojureLowerUtil.list(ClojureLowerUtil.sym("apply"), cell, args);
+			if (shape.variadic()) {
+				variadicArms.add(ClojureLowerUtil.list(
+						ClojureLowerUtil.list(ClojureLowerUtil.sym(">="), count, new LispInteger(shape.fixed())),
+						call));
+			}
+			else {
+				fixedArms.add(ClojureLowerUtil.list(
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("="), count, new LispInteger(shape.fixed())), call));
+			}
+		}
+		List<LispVal> arms = new ArrayList<>(fixedArms);
+		arms.addAll(variadicArms);
+		arms.add(ClojureLowerUtil.list(ClojureLowering.TRUE_CONST, ClojureRefusals.refusal(ClojureRefusals.ARITY,
+				LispString.literal("wrong number of arguments passed to: " + impl.method()))));
+		LispVal dispatch = ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"),
+				ClojureLowerUtil.list(List.of(ClojureLowering.AMPERSAND_REST, args)),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
+						ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(count,
+								ClojureLowerUtil.list(ClojureLowerUtil.sym("length"), args)))),
+						ClojureLowerUtil.cons(ClojureLowerUtil.sym("cond"), arms)));
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let"), ClojureLowerUtil.list(cells), dispatch);
+	}
+
+	/**
+	 * The store of a method row: through the protocol's
+	 * {@link ClojureLowering.ProtocolDef#reducerRow} when it is one of the reducing
+	 * protocols and the key is a record's, deftype's or reify's tag ({@code typed}) --
+	 * what {@code reduce} and {@code reduce-kv} reach -- else {@link #methodStoreForm}.
+	 */
+	static LispVal rowStoreForm(ClojureLowering ctx, ClojureLowering.ProtocolDef def, LispSymbol table, LispVal key,
+			String method, LispVal lambda, boolean typed) {
+		if (typed && def.reducerRow() != null) {
+			return ClojureLowerUtil.list(new LispSymbol(def.reducerRow()), table, key, lambda);
+		}
+		return methodStoreForm(ctx, table, key, method, lambda);
 	}
 
 	/**
@@ -818,7 +983,7 @@ final class ClojureProtocolLowering {
 		}
 		LispVal lambda;
 		if (fields == null) {
-			lambda = ClojureDispatchLowering.methodLambda(ctx, impl.params(), impl.body());
+			lambda = methodLambda(ctx, impl);
 		}
 		else {
 			Map<String, ClojureLowering.Kind> scope = new HashMap<>();
@@ -844,14 +1009,31 @@ final class ClojureProtocolLowering {
 				ctx.mutableFieldPlaces.putAll(outerPlaces);
 			}
 		}
-		return methodStoreForm(ctx, def.inlineTable(), key, impl.method(), lambda);
+		return rowStoreForm(ctx, def, def.inlineTable(), key, impl.method(), lambda, true);
 	}
 
 	/**
-	 * One inline method's lambda with the fields in scope: the immutable ones bound from
-	 * the instance table, the mutable ones (in {@code places}) through the slot vector.
+	 * One inline method's lambda with the fields in scope: its one arity's, or the
+	 * dispatch over each arity's ({@link #arityDispatch}), every arity binding the fields
+	 * from its own target.
 	 */
 	static LispVal fieldMethodLambda(ClojureLowering ctx, ClojureLowering.TypeMethod impl, List<String> fields,
+			LispSymbol slots, Map<String, LispVal> places) {
+		if (impl.arities().size() == 1) {
+			return fieldArityLambda(ctx, impl.arities().get(0), fields, slots, places);
+		}
+		List<LispVal> lambdas = new ArrayList<>();
+		for (ClojureLowering.MethodArity arity : impl.arities()) {
+			lambdas.add(fieldArityLambda(ctx, arity, fields, slots, places));
+		}
+		return arityDispatch(ctx, impl, lambdas);
+	}
+
+	/**
+	 * One inline arity's lambda with the fields in scope: the immutable ones bound from
+	 * the instance table, the mutable ones (in {@code places}) through the slot vector.
+	 */
+	private static LispVal fieldArityLambda(ClojureLowering ctx, ClojureLowering.MethodArity impl, List<String> fields,
 			LispSymbol slots, Map<String, LispVal> places) {
 		String fresh = ctx.freshRecurName();
 		String worker = ClojureBindingLowering.workerName(fresh);
@@ -1118,23 +1300,33 @@ final class ClojureProtocolLowering {
 	}
 
 	/**
+	 * Whether an {@code extend} target names a record or deftype the program defines, so
+	 * its key is that type's tag ({@link #extendKeyForm}).
+	 */
+	static boolean isTypedTarget(ClojureLowering ctx, String typeName) {
+		return !ClojureDispatchLowering.isObjectClassName(ctx, typeName) && !typeName.equals("nil")
+				&& ctx.typeDefOf(typeName) != null;
+	}
+
+	/**
 	 * Stores one extension row: under the target's tag, or (for {@code Object}) the
 	 * protocol's default global consulted on a miss. The method must belong to the
-	 * protocol, like the inline implementations.
+	 * protocol, like the inline implementations; {@code typed} says the key is a record's
+	 * or deftype's tag ({@link #rowStoreForm}).
 	 */
 	static LispVal extendRow(ClojureLowering ctx, String protocol, @Nullable LispVal key,
-			ClojureLowering.TypeMethod impl, String what) {
+			ClojureLowering.TypeMethod impl, boolean typed) {
 		ClojureLowering.ProtocolDef def = protocolOf(ctx, protocol);
 		if (def == null) {
 			throw new LispReadException("No such protocol: " + protocol);
 		}
 		ClojureLowerUtil.isTrue(def.methods().contains(impl.method()),
 				"Can't define method not in interfaces: " + impl.method());
-		LispVal lambda = ClojureDispatchLowering.methodLambda(ctx, impl.params(), impl.body());
+		LispVal lambda = methodLambda(ctx, impl);
 		if (key == null) {
 			return objectStoreForm(def, impl.method(), lambda);
 		}
-		return methodStoreForm(ctx, def.methodsVar(), key, impl.method(), lambda);
+		return rowStoreForm(ctx, def, def.methodsVar(), key, impl.method(), lambda, typed);
 	}
 
 	/**
@@ -1157,7 +1349,8 @@ final class ClojureProtocolLowering {
 	/**
 	 * {@code (extend-protocol P Type (method [target & args] body...)+ ...)}: one row per
 	 * method per type, like {@code defmethod} rows. The type may repeat (later rows win,
-	 * like the oracle).
+	 * like the oracle); a method of several arities spells them as {@code fn} clauses
+	 * ({@link #extensionMethod}).
 	 */
 	static LispVal extendProtocolForm(ClojureLowering ctx, List<LispVal> items) {
 		ClojureLowerUtil.isTrue(items.size() >= 3, "extend-protocol takes a protocol, a type and methods");
@@ -1172,6 +1365,7 @@ final class ClojureProtocolLowering {
 			ClojureLowerUtil.isTrue(items.get(at) instanceof LispSymbol, "extend-protocol takes a type name");
 			String target = ((LispSymbol) items.get(at)).name();
 			LispVal key = extendKeyForm(ctx, target, "extend-protocol");
+			boolean typed = isTypedTarget(ctx, target);
 			at++;
 			while (at < items.size() && !(items.get(at) instanceof LispSymbol)) {
 				List<LispVal> impl = ClojureLowerUtil.items(items.get(at));
@@ -1180,14 +1374,7 @@ final class ClojureProtocolLowering {
 							+ items.get(at).print());
 				}
 				String method = ((LispSymbol) impl.get(0)).name();
-				ClojureLowerUtil.isTrue(ClojureBindingLowering.isVectorDatum(ClojureLowerUtil.stripMeta(impl.get(1))),
-						"multi-arity protocol methods are not supported yet: " + method);
-				List<LispVal> params = ClojureLowerUtil.bindingItems(ClojureLowerUtil.stripMeta(impl.get(1)),
-						"the method " + method + " of");
-				ClojureLowerUtil.isTrue(!params.isEmpty(), "a protocol method takes a target and arguments: " + method);
-				rows.add(extendRow(ctx, protocol, key,
-						new ClojureLowering.TypeMethod(method, impl.get(1), impl.subList(2, impl.size())),
-						"extend-protocol"));
+				rows.add(extendRow(ctx, protocol, key, extensionMethod(method, impl), typed));
 				at++;
 			}
 		}
@@ -1208,11 +1395,12 @@ final class ClojureProtocolLowering {
 		ClojureLowerUtil.isTrue(items.get(1) instanceof LispSymbol, "extend-type takes a type name");
 		String target = ((LispSymbol) items.get(1)).name();
 		LispVal key = extendKeyForm(ctx, target, "extend-type");
+		boolean typed = isTypedTarget(ctx, target);
 		List<ClojureLowering.ImplGroup> groups = implGroups(ctx, items.subList(2, items.size()), "extend-type");
 		List<LispVal> rows = new ArrayList<>();
 		for (ClojureLowering.ImplGroup group : groups) {
 			for (ClojureLowering.TypeMethod impl : group.methods()) {
-				rows.add(extendRow(ctx, group.protocol(), key, impl, "extend-type"));
+				rows.add(extendRow(ctx, group.protocol(), key, impl, typed));
 			}
 		}
 		ctx.usedProtocols = true;
@@ -1243,6 +1431,7 @@ final class ClojureProtocolLowering {
 			throw new LispReadException("extend takes a map literal of methods, not " + items.get(3).print());
 		}
 		LispVal key = extendKeyForm(ctx, target, "extend");
+		boolean typed = isTypedTarget(ctx, target);
 		List<LispVal> rows = new ArrayList<>();
 		for (int i = 1; i < entries.size(); i += 2) {
 			ClojureLowerUtil.isTrue(entries.get(i) instanceof LispSymbol k && k.name().startsWith(":"),
@@ -1251,7 +1440,7 @@ final class ClojureProtocolLowering {
 			ClojureLowerUtil.isTrue(def.methods().contains(method), "Can't define method not in interfaces: " + method);
 			LispVal fun = ClojureBindingLowering.fnValue(ctx, entries.get(i + 1));
 			LispVal row = key == null ? objectStoreForm(def, method, fun)
-					: methodStoreForm(ctx, def.methodsVar(), key, method, fun);
+					: rowStoreForm(ctx, def, def.methodsVar(), key, method, fun, typed);
 			rows.add(row);
 		}
 		ctx.usedProtocols = true;
@@ -1309,7 +1498,8 @@ final class ClojureProtocolLowering {
 	 * {@code (reify Protocol (method [target & args] body...)+ ...)}: one fresh tag per
 	 * evaluation with a row per method in each protocol's table, answering the opaque
 	 * value -- a single-shot map plus methods (never {@code proxy}, which stays the
-	 * {@code java:} surface).
+	 * {@code java:} surface). A method named again over another parameter vector is
+	 * another arity of it.
 	 */
 	static LispVal reifyForm(ClojureLowering ctx, List<LispVal> items) {
 		ClojureLowerUtil.isTrue(items.size() >= 2, "reify takes a protocol and methods");
@@ -1328,9 +1518,9 @@ final class ClojureProtocolLowering {
 				body.add(emptyRowForm(def.inlineTable(), ClojureLowerUtil.list(ClojureLowerUtil.sym("cadr"), self)));
 			}
 			for (ClojureLowering.TypeMethod impl : group.methods()) {
-				LispVal lambda = ClojureDispatchLowering.methodLambda(ctx, impl.params(), impl.body());
-				body.add(methodStoreForm(ctx, def.inlineTable(),
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("cadr"), self), impl.method(), lambda));
+				LispVal lambda = methodLambda(ctx, impl);
+				body.add(rowStoreForm(ctx, def, def.inlineTable(),
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("cadr"), self), impl.method(), lambda, true));
 			}
 		}
 		body.add(self);

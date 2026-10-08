@@ -16,6 +16,7 @@ import am.ik.rontolisp.LispHashTable;
 import am.ik.rontolisp.LispArray;
 import am.ik.rontolisp.LispDouble;
 import am.ik.rontolisp.LispInteger;
+import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispTrue;
 import am.ik.rontolisp.LispString;
@@ -48,6 +49,41 @@ final class ClojureInteropLowering {
 	static final LispSymbol JAVA_PROXY = new LispSymbol("JAVA:PROXY");
 
 	static final LispSymbol JAVA_SUBCLASS = new LispSymbol("JAVA:SUBCLASS");
+
+	/**
+	 * A {@code java:new} / {@code java:call} / {@code java:static} call over its parts
+	 * (the names, then the arguments), ended in {@code :functional} when an argument may
+	 * be a function: a Clojure fn passed where an interface is expected implements every
+	 * abstract method by the method's arguments, as the oracle's fn implements a
+	 * functional interface, never as a {@code java:proxy} called with the method's name
+	 * first ({@code compiler.JavaSiteResolver#FUNCTIONAL}). A site whose arguments are
+	 * all literals lowers as before.
+	 * @param operator the {@code java:} operator
+	 * @param parts the names and the arguments
+	 * @param names how many leading parts are names, not arguments
+	 * @return the call
+	 */
+	static LispVal hostCall(LispSymbol operator, List<LispVal> parts, int names) {
+		if (!allLiteral(parts.subList(names, parts.size()))) {
+			List<LispVal> ended = new ArrayList<>(parts);
+			ended.add(new LispSymbol(LispNames.JAVA_FUNCTIONAL_MARKER));
+			return ClojureLowerUtil.cons(operator, ended);
+		}
+		return ClojureLowerUtil.cons(operator, parts);
+	}
+
+	// Whether every lowered argument is a literal no fn can be: a string, number,
+	// character, nil, true or keyword.
+	private static boolean allLiteral(List<LispVal> arguments) {
+		for (LispVal argument : arguments) {
+			if (!(argument instanceof LispString || argument instanceof LispInteger || argument instanceof LispDouble
+					|| argument instanceof LispChar || argument instanceof LispNil || argument instanceof LispTrue
+					|| argument instanceof LispSymbol symbol && symbol.isKeyword())) {
+				return false;
+			}
+		}
+		return true;
+	}
 
 	/**
 	 * The one host class the lowering builds itself: a zero-argument
@@ -298,7 +334,7 @@ final class ClojureInteropLowering {
 		List<LispVal> args = new ArrayList<>();
 		args.add(LispString.literal(designator(cls, types)));
 		args.addAll(lowered);
-		return ClojureLowerUtil.cons(JAVA_NEW, args);
+		return hostCall(JAVA_NEW, args, 1);
 	}
 
 	/**
@@ -619,7 +655,7 @@ final class ClojureInteropLowering {
 		call.add(LispString.literal(cls));
 		call.add(LispString.literal(designator));
 		call.addAll(args);
-		LispVal run = ClojureLowerUtil.cons(JAVA_STATIC, call);
+		LispVal run = hostCall(JAVA_STATIC, call, 2);
 		if (staticMember(cls, member).booleanArities().contains(args.size())) {
 			return ctx.booleanAnswer(run);
 		}
@@ -791,7 +827,7 @@ final class ClojureInteropLowering {
 		List<LispVal> call = new ArrayList<>();
 		call.add(LispString.literal(designator(cls, types)));
 		call.addAll(args);
-		return ClojureLowerUtil.cons(JAVA_NEW, call);
+		return hostCall(JAVA_NEW, call, 1);
 	}
 
 	/**
@@ -1312,6 +1348,10 @@ final class ClojureInteropLowering {
 		LispVal callable = ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"),
 				ClojureLowerUtil.list(List.of(thisSym, got, ClojureLowering.AMPERSAND_REST, rest)), dispatch);
 		javaSubclass.add(callable);
+		if (!allLiteral(ctorArgs)) {
+			// a fn constructor argument implements its interface by its arguments
+			javaSubclass.add(new LispSymbol(LispNames.JAVA_FUNCTIONAL_MARKER));
+		}
 		return ClojureLowerUtil.cons(JAVA_SUBCLASS, javaSubclass);
 	}
 
@@ -1342,7 +1382,7 @@ final class ClojureInteropLowering {
 		for (LispVal arg : items.subList(2, items.size())) {
 			args.add(ctx.lower(arg));
 		}
-		return ClojureLowerUtil.cons(JAVA_CALL, args);
+		return hostCall(JAVA_CALL, args, 2);
 	}
 
 	/**
@@ -1396,7 +1436,7 @@ final class ClojureInteropLowering {
 		direct.add(recv);
 		direct.add(LispString.literal(designator));
 		direct.addAll(args);
-		LispVal hostCall = ClojureLowerUtil.cons(JAVA_CALL, direct);
+		LispVal hostCall = hostCall(JAVA_CALL, direct, 2);
 		LispVal call = hostCall;
 		String cls = knownClass;
 		if (cls == null) {
@@ -1460,12 +1500,13 @@ final class ClojureInteropLowering {
 	}
 
 	/**
-	 * A receiver of no known class that is a number or a character is called as its box
-	 * or {@code Character} (an integer as an {@code Integer} or a {@code Long}, by size):
-	 * where every overload of the method at this arity on each of those classes answers a
-	 * primitive boolean, such a receiver answers {@code T}-or-false, like a known
-	 * receiver ({@code (.isNaN 1.5)}, {@code (.equals 1 2)}); anything else keeps the
-	 * call. A string takes its own arm ({@link #stringMethod}).
+	 * A receiver of no known class that is a number, a character or a boolean is called
+	 * as its box, {@code Character} or {@code Boolean} (an integer as an {@code Integer}
+	 * or a {@code Long}, by size): where every overload of the method at this arity on
+	 * each of those classes answers a primitive boolean, such a receiver answers
+	 * {@code T}-or-false, like a known receiver ({@code (.isNaN 1.5)},
+	 * {@code (.equals 1 2)}); anything else keeps the call. A string takes its own arm
+	 * ({@link #stringMethod}).
 	 */
 	static LispVal valuePredicate(ClojureLowering ctx, LispSymbol recv, String method, int arity, LispVal hostCall,
 			LispVal call) {
@@ -1479,6 +1520,12 @@ final class ClojureInteropLowering {
 		}
 		if (instanceBooleanAtArity("java.lang.Character", method, arity)) {
 			tests.add(ClojureLowerUtil.list(ClojureLowerUtil.sym("characterp"), recv));
+		}
+		if (instanceBooleanAtArity("java.lang.Boolean", method, arity)) {
+			// true and false are called as their Boolean: (.booleanValue false)
+			tests.add(ClojureLowerUtil.list(ClojureLowerUtil.sym("or"),
+					ClojureLowerUtil.list(ClojureLowerUtil.sym("eq"), recv, ClojureLowering.TRUE_CONST),
+					ClojureLowerUtil.list(ClojureLowerUtil.sym("eq"), recv, ctx.falseVariable)));
 		}
 		if (tests.isEmpty()) {
 			return call;
@@ -1532,16 +1579,30 @@ final class ClojureInteropLowering {
 
 	/**
 	 * The class a lowered receiver constructs, when it is a construction literal: a
-	 * {@code java:new} over a literal class name. No user form lowers to that head
-	 * (anything else spelling it is an unknown name), so the class is read off the call
-	 * site with no scope analysis.
+	 * {@code java:new} over a literal class name, or a {@code proxy} of one type -- a
+	 * {@code java:proxy} of a single interface, a {@code java:subclass} of a superclass
+	 * and no interface -- whose object has exactly that type's methods. No user form
+	 * lowers to those heads (anything else spelling them is an unknown name), so the
+	 * class is read off the call site with no scope analysis.
 	 */
 	static @Nullable String constructedClass(LispVal receiver) {
-		if (receiver instanceof LispCons cell && ClojureLowerUtil.isSymbolNamed(cell.car(), "JAVA:NEW")
-				&& cell.cdr() instanceof LispCons rest && rest.car() instanceof LispString cls) {
+		if (!(receiver instanceof LispCons cell) || !(cell.cdr() instanceof LispCons rest)
+				|| !(rest.car() instanceof LispString cls)) {
+			return null;
+		}
+		if (ClojureLowerUtil.isSymbolNamed(cell.car(), "JAVA:NEW")) {
 			// a param-tagged construction names the class before its parameter types
 			int tagged = cls.value().indexOf('(');
 			return tagged < 0 ? cls.value() : cls.value().substring(0, tagged);
+		}
+		if (ClojureLowerUtil.isSymbolNamed(cell.car(), "JAVA:PROXY") && rest.cdr() instanceof LispCons callable
+				&& !(callable.car() instanceof LispString) && callable.cdr() instanceof LispNil) {
+			return cls.value();
+		}
+		if (ClojureLowerUtil.isSymbolNamed(cell.car(), "JAVA:SUBCLASS") && rest.cdr() instanceof LispCons interfaces
+				&& interfaces.car() instanceof LispCons quoted && ClojureLowerUtil.isSymbolNamed(quoted.car(), "QUOTE")
+				&& quoted.cdr() instanceof LispCons quotedList && quotedList.car() instanceof LispNil) {
+			return cls.value();
 		}
 		return null;
 	}

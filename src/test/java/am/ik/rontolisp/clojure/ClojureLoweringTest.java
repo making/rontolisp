@@ -983,9 +983,9 @@ class ClojureLoweringTest {
 		assertThat(lowered("(defprotocol P (foo [x])) (satisfies? P 1)")).contains("C%PROTOCOL-TAG");
 		assertThat(lowered("(defrecord R [a]) (instance? R 1)")).contains("C%PROTOCOL-TAG");
 		assertThat(lowered("(defrecord R [a]) (.-a (->R 1))")).contains("GETHASH");
-		// the stays-refused set: interfaces and code generation, multi-arity methods,
-		// a computed metadata-extension flag, non-core extend targets, unknown
-		// protocols and methods outside their protocols
+		// the stays-refused set: interfaces and code generation, a signature that is
+		// no parameter vector, a computed metadata-extension flag, non-core extend
+		// targets, unknown protocols and methods outside their protocols
 		assertThatThrownBy(() -> Clojure.read("(gen-class)", null)).isInstanceOf(LispReadException.class)
 			.hasMessageContaining("protocols are not supported yet: gen-class");
 		assertThatThrownBy(() -> Clojure.read("(gen-interface)", null)).isInstanceOf(LispReadException.class)
@@ -994,7 +994,7 @@ class ClojureLoweringTest {
 			.hasMessageContaining("protocols are not supported yet: definterface");
 		assertThatThrownBy(() -> Clojure.read("(defprotocol Q (m ([x] 1) ([x y] 2)))", null))
 			.isInstanceOf(LispReadException.class)
-			.hasMessageContaining("multi-arity protocol methods are not supported yet: m");
+			.hasMessageContaining("a defprotocol method signature is its name over one parameter vector per arity");
 		assertThatThrownBy(() -> Clojure.read("(defprotocol Q :extend-via-metadata yes (m [x]))", null))
 			.isInstanceOf(LispReadException.class)
 			.hasMessageContaining("extend-via-metadata takes true or false, not yes");
@@ -1019,6 +1019,69 @@ class ClojureLoweringTest {
 		assertThatThrownBy(() -> Clojure.read("(defrecord R [a] :load-ns true)", null))
 			.isInstanceOf(LispReadException.class)
 			.hasMessageContaining("defrecord option");
+	}
+
+	@Test
+	void aProtocolMethodOfSeveralAritiesStoresOneLambdaApplyingTheArityOfTheCall() {
+		// each arity lowers as a single-arity method would, behind one lambda applying
+		// the
+		// one whose count the call has; an inline body names the method once per arity,
+		// an extension spells fn clauses
+		String inline = lowered("(defprotocol Q (m [x] [x y] \"doc\")) (reify Q (m [_] 1) (m [_ y] y))");
+		assertThat(inline).contains("(LAMBDA (|c%_|) 1)")
+			.contains("(LAMBDA (|c%_| |c%y|) |c%y|)")
+			.containsPattern(
+					"\\(COND \\(\\(= \\|__clojure_\\d+\\| 1\\) \\(APPLY \\|__clojure_\\d+\\| \\|__clojure_\\d+\\|\\)\\)"
+							+ " \\(\\(= \\|__clojure_\\d+\\| 2\\) \\(APPLY \\|__clojure_\\d+\\| \\|__clojure_\\d+\\|\\)\\)"
+							+ " \\(T \\(RONTOLISP::%CLOJURE-ARITY-EXCEPTION \"wrong number of arguments passed to: m\"\\)\\)\\)");
+		String extension = lowered("(defprotocol Q (m [x] [x y])) (extend-protocol Q String (m ([s] 1) ([s y] y)))");
+		assertThat(extension).contains("(LAMBDA (|c%s|) 1)").contains("(LAMBDA (|c%s| |c%y|) |c%y|)");
+		// a single arity stores its own lambda, as before
+		assertThat(lowered("(defprotocol Q (m [x] [x y])) (reify Q (m [_] 1))")).doesNotContain("(LENGTH ");
+		// the oracle's refusals: an arity the protocol does not declare, one twice, a
+		// method declared twice or without a target, extension clauses of one arity
+		assertThatThrownBy(() -> Clojure.read("(defprotocol Q (m [x])) (reify Q (m [_ y] y))", null))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Can't define method not in interfaces: m");
+		assertThatThrownBy(
+				() -> Clojure.read("(defprotocol Q (m [x] [x y])) (deftype T [] Q (m [_] 1) (m [_] 2))", null))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("duplicate method implementation: m");
+		assertThatThrownBy(() -> Clojure.read("(defprotocol Q (m [x] [x y])) (reify Q (m ([_] 1) ([_ y] y)))", null))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("an inline method takes one parameter vector, naming the method again");
+		assertThatThrownBy(() -> Clojure.read("(defprotocol Q (m [x]) (m [x y]))", null))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Function m in protocol Q was redefined. Specify all arities in single definition.");
+		assertThatThrownBy(() -> Clojure.read("(defprotocol Q (m [x] []))", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Definition of function m in protocol Q must take at least one arg.");
+		assertThatThrownBy(() -> Clojure.read("(defprotocol Q (m [x] [y]))", null))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("defprotocol Q declares m twice with 1 parameters");
+		assertThatThrownBy(() -> Clojure
+			.read("(defprotocol Q (m [x] [x y])) (extend-protocol Q String (m ([s] 1) ([t] 2)))", null))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Can't have 2 overloads with same arity");
+	}
+
+	@Test
+	void aTypedRowOfCollReduceOrIKVReduceIsStoredThroughTheLibrary() {
+		// what reduce and reduce-kv hand a record, deftype or reify to: the store is the
+		// reducible family's producer, so a program storing none folds every arm
+		String reify = lowered("(require '[clojure.core.protocols :as p])"
+				+ " (def r (reify p/CollReduce (coll-reduce [_ f init] init)))");
+		assertThat(reify).contains(
+				"(RONTOLISP::%CLOJURE-COLL-REDUCER-ROW |c%clojure.core.protocols/CollReduce%methods|" + " (CADR ");
+		String record = lowered("(require '[clojure.core.protocols :as p]) (defrecord R [a])"
+				+ " (extend-protocol p/IKVReduce R (kv-reduce [r f init] init))");
+		assertThat(record).contains(
+				"(RONTOLISP::%CLOJURE-KV-REDUCER-ROW |c%clojure.core.protocols/IKVReduce%methods| (LIST :C%KEYWORD \"R\")");
+		// the namespace's own nil and Object rows, a core kind and any other protocol
+		// store as before
+		String core = lowered("(require '[clojure.core.protocols :as p])"
+				+ " (extend-protocol p/CollReduce String (coll-reduce ([s f] 1) ([s f i] 2)))"
+				+ " (defprotocol Q (m [x])) (reify Q (m [_] 1))");
+		assertThat(core).doesNotContain("%CLOJURE-COLL-REDUCER-ROW").doesNotContain("%CLOJURE-KV-REDUCER-ROW");
 	}
 
 	@Test

@@ -1,10 +1,13 @@
 package am.ik.rontolisp.clojure;
 
+import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 
+import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.reader.LispReadException;
@@ -33,11 +36,21 @@ import org.jspecify.annotations.Nullable;
  * <li>{@code rontolisp.internal.instant} for {@code clojure.instant}: the timestamp
  * match, {@code validated}'s checks and the three readers, which the run-time reader's
  * default {@code #inst} reader shares.</li>
+ * <li>{@code rontolisp.internal.reducers} for {@code clojure.core.reducers}: the
+ * accumulator {@code cat} answers (the oracle's {@code java.util.ArrayList}, a growable
+ * vector here, which no Clojure verb makes), the push of {@code append!} onto it and the
+ * join of two collections into a fresh one.</li>
  * <li>{@code rontolisp.internal.http} for {@code rontolisp.http-client}: the request
  * ({@code clojure.lisp}, "rontolisp.http-client") and {@code fetch}, which is
  * {@code rontolisp:fetch} itself, so the program names the transport every fetch splice
  * reads; the request builds the oracle's exceptions, so a call of it emits the exception
  * runtime.</li>
+ * <li>{@code rontolisp.internal.math} for {@code clojure.math}: each double function is
+ * one {@code (%strict-math :name ...)} over its arguments cast as the oracle's
+ * {@code double} casts them, lowered in place rather than as a worker call -- the
+ * oracle's own wrapper is one {@code Math} call; {@code round} and the long arithmetic
+ * ({@code floor-div}, the {@code -exact} six) are workers over the oracle's
+ * {@code longCast}.</li>
  * </ul>
  *
  * <p>
@@ -55,14 +68,100 @@ final class ClojureKernelLowering {
 	 * @param workers the vars whose worker is no prefixed name, to the one it is
 	 * @param exceptions whether a call builds the program's exceptions, so the lowering
 	 * emits their runtime
+	 * @param inline the vars lowered in place instead of to a worker call
 	 */
 	record Kernels(String owners, String prefix, Map<String, Integer> arity, Map<String, String> workers,
-			boolean exceptions) {
+			boolean exceptions, Map<String, Inline> inline) {
 
 		Kernels(String owners, String prefix, Map<String, Integer> arity) {
-			this(owners, prefix, arity, Map.of(), false);
+			this(owners, prefix, arity, Map.of(), false, Map.of());
 		}
 
+		Kernels(String owners, String prefix, Map<String, Integer> arity, Map<String, String> workers,
+				boolean exceptions) {
+			this(owners, prefix, arity, workers, exceptions, Map.of());
+		}
+
+	}
+
+	/** A kernel lowered in place: its form over the lowered arguments. */
+	@FunctionalInterface
+	interface Inline {
+
+		/**
+		 * The kernel's form.
+		 * @param args the lowered arguments, as many as its arity
+		 * @return the form
+		 */
+		LispVal lower(List<LispVal> args);
+
+	}
+
+	/**
+	 * The double cast of a {@code clojure.math} argument: the oracle's {@code double}.
+	 */
+	private static final LispSymbol DOUBLE_CAST = new LispSymbol("RONTOLISP::%CLOJURE-DOUBLE");
+
+	/**
+	 * The int cast of {@code scalb}'s exponent: the oracle's {@code int} of an object.
+	 */
+	private static final LispSymbol INT_CAST = new LispSymbol("RONTOLISP::%CLOJURE-INT-CAST");
+
+	/**
+	 * The {@code clojure.math} functions that are one {@code java.lang.StrictMath}
+	 * method, by name and argument count: {@code (%strict-math :name ...)} names the
+	 * method by the same name ({@code compiler.StrictMathFunction}, which the lowering
+	 * may not import; {@code ClojureLanguageNamespacesTest} pins the two lists together).
+	 */
+	static final Map<String, Integer> STRICT_MATH = strictMath();
+
+	private static Map<String, Integer> strictMath() {
+		Map<String, Integer> out = new HashMap<>();
+		for (String name : List.of("sin", "cos", "tan", "asin", "acos", "atan", "exp", "log", "log10", "sqrt", "cbrt",
+				"ceil", "floor", "rint", "sinh", "cosh", "tanh", "expm1", "log1p", "ulp", "signum", "next-up",
+				"next-down", "get-exponent")) {
+			out.put(name, 1);
+		}
+		for (String name : List.of("atan2", "pow", "hypot", "IEEE-remainder", "copy-sign", "next-after", "scalb")) {
+			out.put(name, 2);
+		}
+		return Map.copyOf(out);
+	}
+
+	/**
+	 * {@code rontolisp.internal.math}: the {@link #STRICT_MATH} functions in place, and
+	 * the workers ({@code rontolisp::%clojure-math-NAME}) of {@code round} and the long
+	 * arithmetic.
+	 */
+	private static Kernels mathKernels() {
+		Map<String, Integer> arity = new HashMap<>(STRICT_MATH);
+		Map<String, Inline> inline = new HashMap<>();
+		for (String name : STRICT_MATH.keySet()) {
+			inline.put(name, args -> strictMathCall(name, args));
+		}
+		for (String name : List.of("round", "increment-exact", "decrement-exact", "negate-exact")) {
+			arity.put(name, 1);
+		}
+		for (String name : List.of("floor-div", "floor-mod", "add-exact", "subtract-exact", "multiply-exact")) {
+			arity.put(name, 2);
+		}
+		return new Kernels("clojure.math", "RONTOLISP::%CLOJURE-MATH-", Map.copyOf(arity), Map.of(), false,
+				Map.copyOf(inline));
+	}
+
+	/**
+	 * {@code (%strict-math :name (double a) ...)}: the arguments cast to doubles, and
+	 * {@code scalb}'s exponent to an int, as the oracle's wrapper casts them.
+	 */
+	private static LispVal strictMathCall(String name, List<LispVal> args) {
+		List<LispVal> call = new ArrayList<>();
+		call.add(new LispSymbol(LispNames.STRICT_MATH_INTERNAL));
+		call.add(new LispSymbol(":" + name.toUpperCase(Locale.ROOT)));
+		for (int i = 0; i < args.size(); i++) {
+			boolean exponent = name.equals("scalb") && i == 1;
+			call.add(ClojureLowerUtil.list(exponent ? INT_CAST : DOUBLE_CAST, args.get(i)));
+		}
+		return ClojureLowerUtil.list(call);
 	}
 
 	/**
@@ -90,10 +189,15 @@ final class ClojureKernelLowering {
 			new Kernels("clojure.instant", "RONTOLISP::%CLOJURE-INSTANT-",
 					Map.ofEntries(Map.entry("parse", 1), Map.entry("validate", 10), Map.entry("read-date", 1),
 							Map.entry("read-timestamp", 1), Map.entry("read-calendar", 1))),
+			"rontolisp.internal.reducers",
+			new Kernels("clojure.core.reducers", "RONTOLISP::%CLOJURE-REDUCERS-",
+					Map.ofEntries(Map.entry("accumulator", 0), Map.entry("accumulator?", 1), Map.entry("append", 2),
+							Map.entry("joined", 2))),
 			"rontolisp.internal.http",
 			new Kernels("rontolisp.http-client", "RONTOLISP::%CLOJURE-HTTP-",
 					Map.ofEntries(Map.entry("request", 2), Map.entry("fetch", 2)), Map.of("fetch", "RONTOLISP:FETCH"),
-					true));
+					true),
+			"rontolisp.internal.math", mathKernels());
 
 	private ClojureKernelLowering() {
 	}
@@ -157,6 +261,10 @@ final class ClojureKernelLowering {
 					"Wrong number of args (" + (items.size() - 1) + ") passed to: " + ns + "/" + var);
 		}
 		ctx.usedExInfo |= kernels.exceptions();
+		Inline inline = kernels.inline().get(var);
+		if (inline != null) {
+			return inline.lower(ctx.lowers(items, 1));
+		}
 		return ClojureLowerUtil.cons(worker(kernels, var), ctx.lowers(items, 1));
 	}
 
@@ -173,6 +281,16 @@ final class ClojureKernelLowering {
 			throw new LispReadException("unknown name: " + ns + "/" + var);
 		}
 		ctx.usedExInfo |= kernels.exceptions();
+		Inline inline = kernels.inline().get(var);
+		if (inline != null) {
+			// A lambda of the kernel's arity around its in-place form.
+			List<LispVal> params = new ArrayList<>();
+			for (int i = 0; i < kernels.arity().get(var); i++) {
+				params.add(new LispSymbol("ARG" + i + "%"));
+			}
+			return ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), ClojureLowerUtil
+				.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(params), inline.lower(params)));
+		}
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), worker(kernels, var));
 	}
 
