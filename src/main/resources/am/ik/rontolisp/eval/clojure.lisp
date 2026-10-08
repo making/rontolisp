@@ -7302,6 +7302,34 @@
           (if (rontolisp::%clojure-truthy f) f nil))
         nil)))
 
+;;;; Monitors: the lock locking holds on the interpreter and the JVM.
+;;
+;; The oracle's locking enters the object's own monitor. Here a value has none, so
+;; rontolisp::%clojure-monitors maps it, by identity (eql: a number by value), to a
+;; reentrant rontolisp:make-mutex, made on first use under one guard mutex (a Ring
+;; handler runs one thread per request, so two may ask at once). A keyword is a
+;; fresh list per site, so it is keyed by its spelling instead, one monitor per
+;; keyword like the oracle's interned one. Like the metadata table it keeps every
+;; object it was handed. The wasm lowering never calls it: a module is
+;; single-threaded, so the body runs as is.
+
+(defvar rontolisp::%clojure-monitor-guard (rontolisp:make-mutex))
+
+(defvar rontolisp::%clojure-monitors (make-hash-table :test 'eql))
+
+(defvar rontolisp::%clojure-keyword-monitors (make-hash-table :test 'equal))
+
+(defun rontolisp::%clojure-monitor (x)
+  "The reentrant mutex standing for X's monitor."
+  (rontolisp:with-mutex (rontolisp::%clojure-monitor-guard)
+    (let ((table
+           (if (rontolisp::%clojure-keyword-p x)
+               rontolisp::%clojure-keyword-monitors
+               rontolisp::%clojure-monitors))
+          (key (if (rontolisp::%clojure-keyword-p x) (car (cdr x)) x)))
+      (or (gethash key table)
+          (setf (gethash key table) (rontolisp:make-mutex))))))
+
 ;;;; Vars: #'x as a value.
 ;;
 ;; A var is (:C%VAR "ns/name" getter), interned per name in

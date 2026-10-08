@@ -219,6 +219,116 @@ final class ClojureVarLowering {
 	}
 
 	/**
+	 * {@code (with-redefs [var value ...] body...)}: every value evaluated in order, then
+	 * each var's root replaced for the body and restored in an {@code unwind-protect},
+	 * like the oracle's {@code with-redefs-fn} (a later binding of one var wins; a
+	 * trailing name without a value is resolved and left alone). A var is a value cell
+	 * here: a {@code def}'s, a {@code declare}'s, and a {@code defn}'s when the var is
+	 * redefinable ({@link ClojureLowering#redefinable(String, LispVal)}), which every
+	 * {@code defn} a {@code with-redefs} names is: the pre-scan finds the name, or the
+	 * program lowers again ({@link ClojureLowering#redefMisses}). A session cannot lower
+	 * an earlier input again, so there a {@code defn} it lowered as a direct call is
+	 * refused by name. A local, an unknown name, a macro, a {@code clojure.core} var (its
+	 * verbs lower inline) and a function no {@code defn} defined (a multimethod, a
+	 * protocol method, a test) are refused too. The body sits behind the {@code try}
+	 * barrier.
+	 */
+	static LispVal withRedefsOf(ClojureLowering ctx, List<LispVal> items) {
+		ClojureLowerUtil.isTrue(items.size() >= 2,
+				"Wrong number of args (" + (items.size() - 1) + ") passed to: clojure.core/with-redefs");
+		List<LispVal> bindings = ClojureLowerUtil.bindingItems(items.get(1), "with-redefs");
+		List<LispVal> pairs = new ArrayList<>();
+		List<LispSymbol> cells = new ArrayList<>();
+		List<LispVal> sets = new ArrayList<>();
+		boolean missed = false;
+		for (int i = 0; i < bindings.size(); i += 2) {
+			if (!(ClojureLowerUtil.stripMeta(bindings.get(i)) instanceof LispSymbol target)) {
+				throw new LispReadException("with-redefs names a var, not " + bindings.get(i).print());
+			}
+			String key = redefTarget(ctx, target.name());
+			missed |= key == null;
+			if (i + 1 >= bindings.size()) {
+				break;
+			}
+			LispSymbol value = ctx.freshTemp();
+			pairs.add(ClojureLowerUtil.list(value, ctx.lower(bindings.get(i + 1))));
+			if (key != null) {
+				LispSymbol cell = ClojureLowering.varSym(key);
+				if (!cells.contains(cell)) {
+					cells.add(cell);
+				}
+				sets.add(ClojureLowerUtil.list(ClojureLowerUtil.sym("setq"), cell, value));
+			}
+		}
+		LispVal body = ClojureStateLowering.barrierBody(ctx, items, 2);
+		if (missed) {
+			// this pass is thrown away: the program lowers again with the var
+			// redefinable
+			return ClojureLowering.NIL_CONST;
+		}
+		if (cells.isEmpty()) {
+			return pairs.isEmpty() ? body
+					: ClojureLowerUtil.list(ClojureLowerUtil.sym("let*"), ClojureLowerUtil.list(pairs), body);
+		}
+		List<LispVal> saved = new ArrayList<>();
+		List<LispVal> restores = new ArrayList<>();
+		for (LispSymbol cell : cells) {
+			LispSymbol old = ctx.freshTemp();
+			saved.add(ClojureLowerUtil.list(old, cell));
+			restores.add(ClojureLowerUtil.list(ClojureLowerUtil.sym("setq"), cell, old));
+		}
+		List<LispVal> run = new ArrayList<>();
+		run.add(ClojureLowerUtil.sym("progn"));
+		run.addAll(sets);
+		run.add(body);
+		List<LispVal> guarded = new ArrayList<>();
+		guarded.add(ClojureLowerUtil.sym("unwind-protect"));
+		guarded.add(ClojureLowerUtil.list(run));
+		guarded.addAll(restores);
+		pairs.addAll(saved);
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let*"), ClojureLowerUtil.list(pairs),
+				ClojureLowerUtil.list(guarded));
+	}
+
+	/**
+	 * The var key a {@code with-redefs} replaces, or null when its definition lowered as
+	 * a direct call and the program lowers again ({@link ClojureLowering#redefMisses}).
+	 */
+	private static @Nullable String redefTarget(ClojureLowering ctx, String name) {
+		if (ctx.isLocal(name)) {
+			throw new LispReadException("Unable to resolve var: " + name + " in this context");
+		}
+		String core = ClojureCoreNames.coreSpelling(name);
+		String key = core != null ? null : ctx.lookupVar(name);
+		if (key == null) {
+			if (core != null || ClojureCoreNames.contains(name)) {
+				throw new LispReadException("with-redefs of a clojure.core var is not supported: "
+						+ (core != null ? core : name) + " lowers inline at every call");
+			}
+			throw new LispReadException("Unable to resolve var: " + name + " in this context");
+		}
+		ClojureLowering.Kind kind = ctx.globals.get(key);
+		if (kind == ClojureLowering.Kind.MACRO) {
+			throw new LispReadException("with-redefs of a macro is not supported: " + key);
+		}
+		if (kind != ClojureLowering.Kind.FUNCTION && !ctx.globalDirectFuns.contains(key)) {
+			return key;
+		}
+		if (ctx.redefinable.contains(key)) {
+			// the program already lowers again with the var redefinable, and its
+			// definition still calls directly: no defn or def defined it
+			throw new LispReadException("with-redefs of " + key
+					+ " is not supported: only a def or defn var can be redefined, not a multimethod, protocol method, record constructor or test");
+		}
+		if (ctx.session) {
+			throw new LispReadException("with-redefs of " + key
+					+ ": an earlier input defined it as a function called directly; define it ^:redef to redefine it");
+		}
+		ctx.redefMisses.add(key);
+		return null;
+	}
+
+	/**
 	 * The var of a {@code clojure.core} name: interned as {@code clojure.core/name}, its
 	 * root the name's core value (what {@code clojure.core/name} reads), a macro's root a
 	 * signal like a program macro's, and its metadata {@code :name}/{@code :ns} plus a

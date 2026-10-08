@@ -46,7 +46,16 @@ class ClojureProjectNamespacesTest {
 	static Path project;
 
 	private static final Map<String, String> FILES = Map.ofEntries(Map.entry("deps.edn", "{:paths [\"src\"]}\n"),
-			Map.entry("src/app/greet.clj", """
+			Map.entry("src/app/svc.clj", """
+					(ns app.svc)
+					(defn fetch [id] (str "real-" id))
+					(defn report [id] (str "report of " (fetch id)))
+					"""), Map.entry("src/app/svc_probe.clj", """
+					(ns app.svc-probe (:require [app.svc :as s]))
+					(defn stubbed []
+					  (with-redefs [s/fetch (fn [id] (str "stub-" id))]
+					    (s/report 7)))
+					"""), Map.entry("src/app/greet.clj", """
 					(ns app.greet)
 					(println "loading app.greet")
 					(def greeting "hello")
@@ -622,6 +631,41 @@ class ClojureProjectNamespacesTest {
 		Path entry = entry("late_test.clj", LATE_MAIN);
 		assertThat(runOnWasm(entry, false)).isEqualTo(LATE_OUT);
 		assertThat(runOnWasm(entry, true)).isEqualTo(LATE_OUT);
+	}
+
+	/**
+	 * A {@code with-redefs} of a var whose namespace loaded before the file naming it was
+	 * read: the {@code defn} lowered as a direct call, so the program lowers again with
+	 * the var redefinable, and the replaced root reaches {@code report}'s call.
+	 */
+	private static final String REDEFS_MAIN = """
+			(ns app.redefs-test
+			  (:require [app.svc :as svc]
+			            [app.svc-probe :as probe]))
+			(println (svc/report 1))
+			(println (probe/stubbed))
+			(println (svc/report 2))
+			""";
+
+	private static final String REDEFS_OUT = """
+			report of real-1
+			report of stub-7
+			report of real-2
+			""";
+
+	@Test
+	void aWithRedefsReachesTheCallsOfANamespaceLoadedBeforeIt() throws Exception {
+		Path entry = entry("redefs_test.clj", REDEFS_MAIN);
+		assertThat(interpret(entry)).isEqualTo(REDEFS_OUT);
+		assertThat(runOnJvm(entry, "Redefs")).isEqualTo(REDEFS_OUT);
+	}
+
+	@Test
+	void aWithRedefsReachesTheCallsOfANamespaceLoadedBeforeItOnBothWasmBackends() throws Exception {
+		assumeTrue(HostWasmtime.isAvailable(), "no usable wasmtime on PATH");
+		Path entry = entry("redefs_test.clj", REDEFS_MAIN);
+		assertThat(runOnWasm(entry, false)).isEqualTo(REDEFS_OUT);
+		assertThat(runOnWasm(entry, true)).isEqualTo(REDEFS_OUT);
 	}
 
 	/**

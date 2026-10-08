@@ -49,7 +49,7 @@ The oracle is `clj` 1.12.6.1673: a behavior is decided by running it there, and 
 | `false` | the value of `rontolisp::%clojure-false`, a distinct non-`NIL` symbol spelled `false` | the `#f` treatment of `scheme.lisp`; every lowered test is an explicit null-or-false check on a temporary |
 | `:foo`, `:a/b` | `(:C%KEYWORD "foo")`, spelling verbatim | compared by `equal`; `::kw` / `::alias/kw` resolve at lower time against the current namespace (an unknown alias is the oracle's `Invalid token`) |
 | `{k v}` | an `equal` hash table (`rontolisp:plist-hash-table`), never mutated: every verb builds a fresh one | the shared runtime (`.kb/hash-tables.md`), so persistence holds on all four backends with no per-backend code; a persistent-map library would add a representation every backend prints, hashes and compares. Collection keys go through "Structural keys" |
-| `#{..}` | `(:C%SET table)`, each member under itself | a repeated literal element is refused by spelling (`Duplicate key`) |
+| `#{..}` | `(:C%SET table)`, each member under itself | a repeated literal element is refused when the read forms are `=` (`ClojureReader.equivKey`: `1`/`1N`, `[1]`/`(1)`, maps and sets in any order; `Duplicate key`) |
 | `sorted-map` / `sorted-set` (and `-by`) | `(:C%SORTED setp cmp items)`: a vector of `[k v]` entries or members in comparator order | "Sorted collections" |
 | `[..]` | a CL vector (a `vector` call) | a string is a CL vector too, so `vector?`/`coll?` exclude strings |
 | list, seq | a CL list | lazy seq: `(:C%LAZY cell)`, memoized through `rplaca`/`rplacd` ("Laziness") |
@@ -107,6 +107,12 @@ answered `2 5 3` before).
 | `dorun` / `doall` | `%clojure-dorun` / `-doall` (`-n` with a count) | walk to the end, answering `nil` / the collection; with a count `n + 1` members realize, like the oracle; `doall` never coerces |
 | `if` `when` `cond` `do` `and` `or` `not` | the core forms over null-or-false tests | `cond`'s odd trailing arm is the default (the oracle refuses); `:else` is true; `and`/`or`/`assert` have no function value |
 | `when-let` `if-let` `when-not` `if-not` `when-first` | `let*` over one temporary plus the test | `when-let`/`if-let` destructure, testing the whole init; `when-first` binds the head of the seq view |
+| `if-some` `when-some` | `if-let`/`when-let` with `(null tmp)` as the test (`ClojureSeqLowering.testedBinding`, shared by all four) | `false` binds. The pattern destructures inside the taken branch only, so the else sees the outer names and a failing init destructures nothing; until 2026-10-08 `if-let`/`when-let` destructured before the test (`(let [x 1] (if-let [x nil] :t x))` answered nil, `(when-let [[a] false] a)` signalled `nth`), clojure-spec `if-let-and-when-let-destructure-only-in-the-taken-branch`. Refusals in the oracle's words (`if-some requires a vector for its binding`, `... exactly 2 forms in binding vector`, `... 1 or 2 forms after binding vector`) |
+| `case` | `(let ((tmp e)) (if TEST1 R1 (if TEST2 R2 ... DEFAULT)))` (`ClojureControlLowering.caseOf`) | one test per constant, picked at lower time by its kind -- the oracle's hash-then-`=` (measured 2026-10-08, clj 1.12.6): `eql` for a number or char (`1.0` never matches `1`, `-0.0` never `0.0`, `##NaN` lowers to no test), `equal` for a string or keyword constant, `eq` for a symbol, `null`/`eq` for nil/true/false, `%clojure-equal` for a vector, map, set or `((1 2))` list constant (a vector constant matches a list or lazy seq). A list test is the alternatives. Duplicates are refused at lower time (`Duplicate case test constant: X`, `caseKey`: `1`=`1N`, `-0.0`=`0.0`, a map or set in any order, `[1]`=`((1))`; NaN never), an empty list test is refused (the oracle's `max` arity error). No default: `%clojure-illegal-argument-exception` over `No matching clause: ` + `str` of the value. Linear, never a jump table: `1M` is the integer `1` here (deviation) |
+| `condp` | `(let* ((pred P) (expr E)) clauses)` (`ClojureControlLowering.condpOf`) | the oracle's `emit` recursion: a `:>>` second form takes three forms, else two; `(pred test expr)` through `callFun` (funcall for a real function value); `:>>` binds the answer and calls `f` on it; a lone trailing form the default; else the `case` refusal over `expr` |
+| `while` | `(do () (falsey-test nil) body)` | answers nil; the body is non-tail (`recur` refused like the oracle's) |
+| `locking` | host targets: `(let ((tmp x)) nil-check (rontolisp:with-mutex ((%clojure-monitor tmp)) body))`; wasm: the same without the mutex (`ClojureLowering.hostTarget`) | `%clojure-monitor` (clojure.lisp "Monitors") keeps one reentrant `make-mutex` per value in an `eql` table (a keyword by its spelling in an `equal` one), made under one guard mutex: a Ring handler runs one thread per request on the interpreter and the JVM. Both defvars are library definitions the pruner drops with the helper, so a program without `locking` and every wasm program carries none. nil is `NullPointerException` before the body (message `... "locklocal" is null`; the oracle's names a gensym). Body behind the `try` barrier |
+| `with-redefs` | values bound in order, old roots saved, `(unwind-protect (progn (setq cell v)... body) (setq cell old)...)` (`ClojureVarLowering.withRedefsOf`) | "Vars and metadata", with-redefs |
 | `try`/`catch`/`finally`/`throw` | `handler-case` inside `unwind-protect`; `throw` is `%clojure-throw` | one `handler-case` clause per catch, in order, of the type its class takes ("Catching"); `throw` signals an exception as itself (a caught one rethrows unchanged, a host `Throwable` as the `java:java-exception` carrying it, "Host exceptions"), anything else a `ClassCastException` (nil a `NullPointerException`) whose message is its rendering, so strings keep their message |
 | `ex-info` `ex-data` `ex-message` `ex-cause`, `.getMessage` `.getLocalizedMessage` `.getCause` | one call to the `clojure.lisp` "Exceptions" function | see "Exceptions" |
 | `assert` | `if` around the `AssertionError` carrier ("Refusals") | the `Assert failed:` message evaluates only on failure; it names the failed form, built only in the failure branch: rendered at lower time (`ClojureStringLowering.prSource`: symbols, keywords, integers, strings, chars, lists, vectors, maps) so no printer is linked, else `quote` through the readable `%clojure-str-of` (double, ratio, set, regex...) which links the collection printer (measured 2026-10-03: `(assert (nil? x))` wasm 3171 -> 3282 bytes; with a double in the form 3171 -> 54237 versus 21992 before) |
@@ -2455,6 +2461,19 @@ so it finds `=` keys and refuses an `=` duplicate like the oracle (`Duplicate ke
 toString: a map names the earlier key, a set the later member). `::kw` resolves against the
 context each call site passes, `("ns" ("alias" "full.ns") ...)`, plus the libraries
 `isKnownNamespace` names and the startup ones (mirrored in `%clojure-rd-alias`).
+The source reader refuses the same duplicates at read time, positioned after the closing
+brace (`readBraced`/`readSet`, measured on `clj` 1.12.6, 2026-10-08): the oracle's
+`PersistentArrayMap.createWithCheck` compares the READ forms, so `{1 :a 1N :b}`,
+`{[1] :a (1) :b}`, `{{:a 1 :b 2} 1 {:b 2 :a 1} 2}` and `{-0.0 1 0.0 2}` are refused and
+`{1 :a 1.0 :b}`, `{1 :a 1M :b}`, `{#"a" 1 #"a" 2}` and `{:a 1 ::a 2}` are not; keys equal
+only once evaluated (`{(+ 1 2) 1 3 2}`, `{[1] :a (list 1) :b}`) are the oracle's RUNTIME
+`Duplicate key`, and `{[1] :a '(1) :b}` its compile-time `Duplicate constant keys in map`;
+none of those three is checked (map literals with non-constant keys build last-wins).
+`1M` reads as the rational `1` (`doc/en/clojure/deviations.md`), so `{1 :a 1M :b}` is
+refused where the oracle reads it. A `deps.edn` read (`forEdn`) leaves maps to
+`ClojureDepsEdn.duplicateKey`, whose wording (`Error reading edn. Duplicate key: k (path)`)
+the reader's positioned message cannot give. The runtime reader still tells `()` and `[]`
+apart as keys (`(= () [])` holds, `(get {[] 1} ())` answers `nil`).
 `eval`/`load-string` stay unknown names: no compiler runs at run time.
 
 **Oracle-checked 2026-10-08 (clj 1.12.6), shared by `read-string`/`read` and clojure.edn:**
@@ -2771,6 +2790,37 @@ resolve var`.
   and `ClojureWasmFileIoTest` (the file reader), `ClojureLibraryTest#classOfAStreamIsAnArmAProgramMakingNoStreamSheds`.
   `defmethod` on a stream CLASS SPELLING (`java.io.StringWriter`) is still the "needs a core
   class" refusal (a keyword dispatch value works).
+- **with-redefs.** A `defn` is a direct `defun` call, so a replaced root would never
+  reach a call site; the design is the oracle's own direct-linking opt-out. A var is
+  REDEFINABLE (`ClojureLowering.redefinable(key, nameDatum)`) when its key is in
+  `redefinable` (seeded by an earlier pass), its simple name is in `redefNames` (the
+  pre-scan of every lowered file, `scanRedefinitions`: every `with-redefs` binding name
+  at any depth, namespace dropped, so a test file's `(with-redefs [alias/f ...])` reaches
+  the namespace it requires next), or its name carries `^:redef`. A redefinable `defn`
+  pre-declares and lowers as `Kind.VARIABLE`, keeps its `defun` (recur and arity helpers
+  stay direct) and adds `(setq var #'fn)` (`ClojureBindingLowering.redefCellStore`, also
+  allowed in `defnInBody`); it is never in `globalDirectFuns`, so calls go through
+  `%clojure-call` (a stub may be a map or keyword). A redefinable `def`/`defonce` drops
+  out of `globalDirectFuns` the same way. A program naming no such var lowers
+  byte-identically. `withRedefsOf` evaluates the values in order, saves each distinct
+  var's value cell, sets, runs the body behind the `try` barrier and restores in an
+  `unwind-protect`; a later pair of one var wins, a trailing name is resolved only. A
+  target the lowering already lowered as a direct call (a `defn` of a namespace loaded
+  before the file naming it was scanned) goes into `redefMisses`; `ClojureLowering.lower`
+  then lowers the whole program again with those keys seeded (reusing the resolved
+  `ClojureSourcePath`), and stops when a pass adds no new key -- at most one extra pass
+  in practice, none without such a target. The macro evaluator sees the first pass's
+  definitions again (a macro that prints while expanding prints twice). A session cannot
+  re-lower an evaluated input: there such a target is refused, naming `^:redef`. Refused
+  too: a local and an unknown name (`Unable to resolve var`, the oracle's), a macro, a
+  `clojure.core` var (its verbs lower inline; the oracle's inlined `inc` ignores the
+  redef too, its `println` does not), and a key still `FUNCTION` after the reseed (a
+  multimethod, protocol method, record constructor, test). Deviation: inside a `binding`
+  of a `^:dynamic` var the `setq` changes the binding (the oracle changes the root; CL has
+  no portable global-value write under a dynamic binding). Measured 2026-10-08 (clj
+  1.12.6) and pinned by clojure-spec `with-redefs-replaces-var-roots-for-the-body`,
+  `ClojureProjectNamespacesTest#aWithRedefsReachesTheCallsOfANamespaceLoadedBeforeIt*`
+  (the reseed, all four backends), `ClojureControlLoweringTest`.
 - `with-meta`/`vary-meta` answer a shallow copy recorded in the eq table
   `%clojure-meta-table`; `meta` reads it. IObj kinds only (a string, number, keyword,
   boolean, atom, deftype or pattern signals; a symbol answers itself).
@@ -3001,6 +3051,9 @@ in-scope program needs `valid?`/`conform` (then `explain-data` stays refused).
 
 - `clojure-spec.yaml` via `ClojureSpecE2eTest`: one case per table row or builtin group,
   concatenated into one program and sliced back per case, on all four backends.
+- `ClojureControlLoweringTest` (`case`/`condp`/`if-some`/`when-some`/`while`/`locking`/
+  `with-redefs`: refusals, the per-kind `case` tests, the host-only monitor, the
+  redefinable `defn`, the session refusal).
 - `ClojureLoweringTest` (lowered shapes and refusals; `aLiteralScalarKeySkipsTheStructuralKeyRuntime`,
   `clojureSetWiresLikeClojureString`), `ClojureThrowablesTest` (class chains), `ClojureRefusalsTest`
   (the refusal carriers' chains), `ClojureClassBasesTest` (class rows), `ClojureReaderTest`,

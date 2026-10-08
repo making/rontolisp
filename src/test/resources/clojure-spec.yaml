@@ -3501,6 +3501,182 @@ cases:
       1
       nil
       (1 2)
+  - name: if-let-and-when-let-destructure-only-in-the-taken-branch
+    # The else branch sees the names as they were outside, and a falsey init
+    # destructures nothing (until 2026-10-08 both answered nil and the when-let
+    # signalled "nth not supported on this type"); oracle-identical.
+    source: |
+      (let [x 1] (println (if-let [x nil] :then x)))
+      (let [x 1] (println (if-let [[x] nil] :then x)))
+      (println (when-let [[a] false] a))
+      (println (if-let [{:keys [a]} false] a :no))
+    expected: |
+      1
+      1
+      nil
+      :no
+  - name: if-some-and-when-some-test-against-nil-only
+    source: |
+      (println (if-some [x false] [:then x] :else))
+      (println (if-some [x nil] [:then x] :else))
+      (println (if-some [x nil] [:then x]))
+      (let [x 1] (println (if-some [x nil] :then x)))
+      (println (if-some [[a b] [1 2]] [a b] :no))
+      (println (if-some [{:keys [a]} {:a 1}] a :no))
+      (println (when-some [x false] [:body x]))
+      (println (when-some [x nil] [:body x]))
+      (println (when-some [x 0] (print "side ") [:body x]))
+      (println (when-some [x 1]))
+    expected: |
+      [:then false]
+      :else
+      nil
+      1
+      [1 2]
+      1
+      [:body false]
+      nil
+      side [:body 0]
+      nil
+  - name: case-dispatches-on-unevaluated-constants
+    source: |
+      (println (case 1 1 :a 2 :b))
+      (println (case 3 1 :a 2 :b :dflt))
+      (println (case 'x x :sym :no))
+      (println (case 2 (1 2 3) :few :many))
+      (println (case 'quote (quote x) :quote-is-a-constant :no))
+      (println (case :k (:j :k) :kw :no))
+      (println (case "s" "s" :str :no))
+      (println (case \a \a :ch :no))
+      (println (case nil nil :nil :no))
+      (println (case false false :f nil :n :no))
+      (println (case 3 1 :one 2 :two (+ 1 2)))
+      (println (case (+ 1 1) 2 :two))
+      (println (case 1 :only-default))
+      (println (case 12345678901234567890 12345678901234567890 :big :no))
+    expected: |
+      :a
+      :dflt
+      :sym
+      :few
+      :quote-is-a-constant
+      :kw
+      :str
+      :ch
+      :nil
+      :f
+      3
+      :two
+      :only-default
+      :big
+  - name: case-compares-each-constant-like-the-oracles-hash-and-equals
+    # A number matches only its own category (1N is 1, 1.0 is not; -0.0 is not
+    # 0.0 and ##NaN matches nothing), a character never its code, and a
+    # collection constant compares by = (a vector matches a list or lazy seq).
+    source: |
+      (println (case 1N 1 :x :no) (case 1.0 1 :x :no) (case 1 1.0 :x :no) (case 1.0 1.0 :x :no))
+      (println (case 1/2 1/2 :x :no) (case -0.0 0.0 :z :no) (case 0.0 -0.0 :z :no) (case ##NaN ##NaN :nan :no))
+      (println (case \a 97 :a :no) (case (symbol "true") true :t :no) (case 1 1 :int 1.0 :double))
+      (println (case [1 2] [1 2] :vec :no) (case '(1 2) [1 2] :vec :no) (case [1 2] (1 2) :one :no))
+      (println (case [1 2] ([1 2]) :listvec :no) (case (lazy-seq [1 2]) [1 2] :vec :no) (case [1 2] [1 2.0] :vd :no))
+      (println (case {:a 1} {:a 1} :map :no) (case #{1} #{1} :set :no) (case (sorted-map 1 2) {1 2} :m :no))
+    expected: |
+      :x :no :no :x
+      :x :no :no :no
+      :no :no :int
+      :vec :vec :no
+      :listvec :vec :no
+      :map :set :m
+  - name: case-without-a-matching-clause-refuses-the-value
+    source: |
+      (defn case-nm [x] (try (case x 1 :a) (catch IllegalArgumentException e (ex-message e))))
+      (prn (case-nm 3))
+      (prn (case-nm nil))
+      (prn (case-nm [1 "a"]))
+      (prn (case-nm :k))
+    expected: |
+      "No matching clause: 3"
+      "No matching clause: "
+      "No matching clause: [1 \"a\"]"
+      "No matching clause: :k"
+  - name: condp-applies-the-predicate-to-each-test-and-the-value
+    source: |
+      (println (condp = 2 1 :one 2 :two :other))
+      (println (condp = 3 1 :one 2 :two :other))
+      (println (condp < 5 10 :a 3 :b))
+      (println (condp some [1 2 3] #{0 6} :>> inc #{4 5} :>> dec #{1 2} :>> (fn [x] (+ x 3))))
+      (println (condp = 1 1 :>>) (condp = 1 1 :>> identity) (condp = 1 2 :>> identity :dflt))
+      (println (condp (fn [k m] (get m k)) {:a false} :a :>> (fn [v] [:got v]) :none))
+      (println (condp (fn [a b] (print "pred" a b "") (= a b)) (do (print "expr ") 2)
+                 (do (print "t1 ") 1) :one (do (print "t2 ") 2) :two (do (print "t3 ") 3) :three))
+      (println (try (condp = 3 1 :one 2 :two) (catch IllegalArgumentException e (ex-message e))))
+      (println (try (condp get {:a 2} :b :>> inc) (catch IllegalArgumentException e (ex-message e))))
+    expected: |
+      :two
+      :other
+      :b
+      4
+      :>> true :dflt
+      :none
+      expr t1 pred 1 2 t2 pred 2 2 :two
+      No matching clause: 3
+      No matching clause: {:a 2}
+  - name: while-runs-the-body-while-the-test-is-truthy
+    source: |
+      (let [a (atom 0)] (while (< @a 3) (swap! a inc)) (println @a))
+      (let [a (atom 0)] (println [(while (< @a 3) (swap! a inc) :ignored) @a]))
+      (println (while false))
+      (let [a (atom [1 2 false 3])] (while (first @a) (println (first @a)) (swap! a rest)))
+    expected: |
+      3
+      [nil 3]
+      nil
+      1
+      2
+  - name: locking-runs-the-body-holding-the-monitor
+    # A nil lock is the oracle's NullPointerException before the body; its message
+    # names a gensym'd local (locklocal__N__auto__M), here a fixed "locklocal".
+    source: |
+      (println (locking 1 2))
+      (println (locking :k (+ 1 2) :done))
+      (println (locking 1))
+      (let [o (atom 0)] (println (locking o (locking o (swap! o inc)))))
+      (println (try (locking nil (println "never") 1) (catch NullPointerException e :npe)))
+    expected: |
+      2
+      :done
+      nil
+      1
+      :npe
+  - name: with-redefs-replaces-var-roots-for-the-body
+    # A defn the program redefines calls through its var, so the replaced root
+    # reaches g's call to f; a captured function value keeps the old one.
+    source: |
+      (defn wr-f [] :orig)
+      (defn wr-g [] (wr-f))
+      (def wr-v 1)
+      (defn wr-readv [] wr-v)
+      (println (with-redefs [wr-f (fn [] :stub)] [(wr-f) (wr-g)]) [(wr-f) (wr-g)])
+      (println (with-redefs [wr-v 2] [wr-v (wr-readv)]) wr-v)
+      (println (try (with-redefs [wr-f (fn [] :stub)] (throw (ex-info "x" {})))
+                    (catch Exception e [(wr-f) (wr-g)])))
+      (println (with-redefs [wr-f (fn [] :a) wr-f (fn [] :b)] (wr-g)) (with-redefs [] 1))
+      (println (with-redefs [wr-f {:x 1}] (wr-f :x)) (with-redefs [wr-f (fn [] :x)] (let [r #'wr-f] (r))))
+      (def wr-captured wr-f)
+      (println (with-redefs [wr-f (fn [] :stub)] (wr-captured)))
+      (defn wr-k ([] 0) ([a] a))
+      (println (with-redefs [wr-k (fn [& a] :all)] [(wr-k) (wr-k 1)]) [(wr-k) (wr-k 5)])
+      (declare wr-und)
+      (println (with-redefs [wr-und 1] wr-und) (bound? #'wr-und))
+    expected: |
+      [:stub :stub] [:orig :orig]
+      [2 2] 1
+      [:orig :orig]
+      :b 1
+      1 :x
+      :orig
+      [:all :all] [0 5]
+      1 false
   - name: clojure-format-args
     # format over Java directives: %s converts like str (nil spells "null", like
     # String/valueOf), %b the boolean spelling, numbers the matching directive.
@@ -7945,6 +8121,20 @@ cases:
       ("Octal escape sequence must be in range [0, 377]." "Invalid octal escape sequence length: 4" "Invalid unicode character: \\u00" "Invalid character constant: \\ud800" "Invalid digit: z" "Invalid token: :" "Namespaced map must specify a map" "Namespaced map must specify a valid namespace: null" "Unknown auto-resolved namespace alias: nope")
       a/9 a//b :1 a/:b
       #:item{:id 1} 2 #:it{name 1} #:user{:local 3}
+  - name: read-string-map-and-set-keys-repeat-by-equality-not-spelling
+    # A map or set literal refuses a key that is = to an earlier one, whatever its
+    # spelling (1 and 1N, a vector and a list, maps and sets in any order), naming the
+    # earlier key in a map and the later member in a set; keys of different types or
+    # categories stay apart. The source reader refuses the same way at read time
+    # (ClojureReaderTest). Every line is the oracle's (clj 1.12.6), on all four
+    # backends.
+    source: |
+      (defn rs-err [s] (try (read-string s) (catch Exception e (ex-message e))))
+      (prn (map rs-err ["{1 :a 1N :b}" "{(1) 1 [1] 2}" "{[1] 1 (1) 2}" "{{:a 1 :b 2} 1 {:b 2 :a 1} 2}" "{#{1 2} 1 #{2 1} 2}" "{\"a\" 1 \"a\" 2}" "{nil 1 nil 2}" "{\\a 1 \\a 2}" "{^:m a 1 a 2}" "#{[1] (1)}" "#{(1) [1]}"]))
+      (prn (let [m (read-string "{1 :a 1.0 :b}")] [(m 1) (m 1.0) (count m)]) (count (read-string "{\\a 1 \"a\" 2 :a 3 a 4}")) (rs-err "{:a 1 :b 2 :a}"))
+    expected: |
+      ("Duplicate key: 1" "Duplicate key: (1)" "Duplicate key: [1]" "Duplicate key: {:a 1, :b 2}" "Duplicate key: #{1 2}" "Duplicate key: a" "Duplicate key: null" "Duplicate key: a" "Duplicate key: a" "Duplicate key: (1)" "Duplicate key: [1]")
+      [:a :b 2] 4 "Map literal must contain an even number of forms"
   - name: clojure-template-substitutes-per-group-of-values
     # The built-in clojure.template (.kb/clojure-frontend.md "clojure.jar namespaces"):
     # apply-template substitutes at any depth, do-template expands to one copy per

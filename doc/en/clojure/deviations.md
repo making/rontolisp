@@ -66,7 +66,8 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   (the oracle's lazy or chunked seq: `false`); no seq is chunked (`chunked-seq?` is always
   `false`), and an `iterate`/`cycle` seq is `realized?` only once forced. A decimal or `N`
   literal is a plain rational, so `decimal?` is always `false` and `ratio?`, `integer?` and
-  `int?` answer for the rational (`(ratio? 1.5M)`, `(int? 2N)` are `true`). `identical?`
+  `int?` answer for the rational (`(ratio? 1.5M)`, `(int? 2N)` are `true`); for the same
+  reason a map or set literal holding `1` and `1M` is refused as a duplicate. `identical?`
   compares numbers, characters and symbols by value (`(identical? 1000 1000)` is `true`) and
   two keywords of one spelling as one object.
 - A program's own top-level definition of a core name (`(defn peek ...)`) shadows the
@@ -321,6 +322,13 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   that var for its extent once it is defined, so a function called there reads the
   local's value; the oracle binds a local lexically, and the function reads the var.
   In a file such a local is lexical.
+- The root `with-redefs` replaces is the var's value cell, so inside a `binding` of a
+  `^:dynamic` var it changes that binding (the oracle changes the root and the binding
+  stays). A `clojure.core` var is refused by name; in the REPL, so is a `defn` an
+  earlier input defined without `^:redef`.
+- `locking` holds a mutex kept per value, and the lock table keeps every value it was
+  handed for the program's lifetime. The `NullPointerException` of a `nil` lock names
+  the local `locklocal` (the oracle names a generated one).
 - `with-meta` answers a copy carrying the metadata; a value derived from it (`assoc`,
   `conj`, ...) starts without metadata, where the oracle keeps it, and a symbol carries
   none (`with-meta` answers the symbol). A `:tag` from reader metadata on a collection

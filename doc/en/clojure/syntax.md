@@ -71,5 +71,7 @@ an `Invalid token` refusal. In call position a keyword is the map lookup -- [Sem
 ## Collection literals
 
 A vector `[1 2 3]`, a map `{:a 1}`, a set `#{1 2}` and a quoted list `'(1 2 3)` read as
-the literals whose lowering [Semantics](semantics.md) describes. A set literal refuses a
-repeated element by spelling (`Duplicate key`).
+the literals whose lowering [Semantics](semantics.md) describes. A map or set literal refuses a
+key that is `=` to an earlier one (`Duplicate key`): `{1 :a 1N :b}` and `#{[1] (1)}` are
+refused, `{1 :a 1.0 :b}` is not. Keys that are only equal once evaluated, as in
+`{(+ 1 2) :a 3 :b}`, are not checked.

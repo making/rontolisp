@@ -32,5 +32,12 @@
 | `when-not` | `(when-not false :ran)` | `:ran` |
 | `if-not` | `(if-not nil :t :e)` | `:t` |
 | `when-first` | `(when-first [x [1 2]] x)` | `1` |
+| `if-some` | `(if-some [x false] [x] :none)` | `[false]` |
+| `when-some` | `(when-some [x nil] :body)` | `nil` |
+| `case` | `(case 2 1 :one (2 3) :few :many)` | `:few` |
+| `condp` | `(condp < 5 10 :big 3 :mid)` | `:mid` |
+| `while` | `(let [a (atom 0)] (while (< @a 3) (swap! a inc)) @a)` | `3` |
+| `locking` | `(locking :k (+ 1 2))` | `3` |
+| `with-redefs` | `(do (defn f [] 1) (with-redefs [f (fn [] 2)] (f)))` | `2` |
 | `binding` | `(do (def ^:dynamic *d* 1) (binding [*d* 2] *d*))` | `2` |
 | `time` | `(time (+ 1 2))` | `3` |
