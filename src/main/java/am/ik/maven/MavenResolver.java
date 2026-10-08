@@ -3,6 +3,7 @@ package am.ik.maven;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -78,8 +79,9 @@ public final class MavenResolver {
 	}
 
 	/**
-	 * Returns the remote repositories, in search order, as configured: a
-	 * {@code settings.xml} mirror may stand for some of them when they are contacted.
+	 * Returns the remote repositories, in search order, as configured -- the active
+	 * settings profiles' ahead of the builder's: a {@code settings.xml} mirror may stand
+	 * for some of them when they are contacted.
 	 * @return the repositories
 	 */
 	public List<RemoteRepository> repositories() {
@@ -422,10 +424,33 @@ public final class MavenResolver {
 		}
 
 		/**
+		 * The repositories searched: the active settings profiles' first, in Maven's
+		 * order, then the ones set here without those whose id a profile redefines (a
+		 * profile repository takes over its id, {@code central} included), as Maven puts
+		 * the profiles' repositories ahead of a project's and its super POM's
+		 * ({@link MavenSettings#repositories()}).
+		 */
+		private List<RemoteRepository> searched() {
+			List<RemoteRepository> searched = new ArrayList<>(this.settings.repositories());
+			Set<String> ids = new HashSet<>();
+			for (RemoteRepository repository : searched) {
+				ids.add(repository.id());
+			}
+			for (RemoteRepository repository : this.repositories) {
+				if (!ids.contains(repository.id())) {
+					searched.add(repository);
+				}
+			}
+			return searched;
+		}
+
+		/**
 		 * Builds the resolver.
 		 * @return the resolver
 		 * @throws IllegalStateException if no local repository is set or named by the
 		 * settings
+		 * @throws IllegalArgumentException if an active settings profile's repository has
+		 * a URL this resolver cannot read
 		 */
 		public MavenResolver build() {
 			Path local = this.localRepository != null ? this.localRepository : this.settings.localRepository();
@@ -442,8 +467,7 @@ public final class MavenResolver {
 				properties = snapshot;
 			}
 			Downloader chosen = this.downloader != null ? this.downloader : new HttpDownloader();
-			return new MavenResolver(
-					new RepositoryAccess(local, this.repositories, chosen, this.settings, this.updatePolicy),
+			return new MavenResolver(new RepositoryAccess(local, searched(), chosen, this.settings, this.updatePolicy),
 					properties);
 		}
 

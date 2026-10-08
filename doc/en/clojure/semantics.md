@@ -102,7 +102,8 @@ no known type and a dependency the oracle cannot resolve are errors in its words
   for again once a day. An `http:` repository is refused. `settings.xml` (`~/.m2/settings.xml`
   merged over `$MAVEN_HOME/conf/settings.xml`) applies as it does for the oracle: its mirrors,
   proxies, and servers' credentials and `httpHeaders` (a password encrypted with
-  `mvn --encrypt-password` included), not its `localRepository` or `offline`.
+  `mvn --encrypt-password` included), not its `localRepository`, `offline` or profiles'
+  repositories.
 - A git coordinate (`:git/url`, or the URL an `io.github.user/repo` name implies, with
   `:git/sha`, `:git/tag`, `:deps/root`) is checked out at its commit with the `git` command,
   into `~/.rontolisp/gitlibs` (`$RONTOLISP_DIST_HOME/gitlibs`). A tag must name the commit,

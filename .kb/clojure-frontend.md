@@ -1000,7 +1000,7 @@ repositories, `GITLIBS` set; tools.deps read from the CLI jar).
   "Per-repository policies"; until 2026-10-08 it was dropped whole), `http:` refused (`Invalid repo url (http not supported)`) unless
   `CLOJURE_CLI_ALLOW_HTTP_REPO`. Local repository: `:mvn/local-repo` against the project
   directory, else `~/.m2/repository`; measured, `clj` reads neither `settings.xml`'s
-  `localRepository` nor its `offline` (`eval/ClojureDepsRepositories` passes mirrors, proxies
+  `localRepository`, its `offline` nor its profiles' repositories (measured 2026-10-08; `eval/ClojureDepsRepositories` passes mirrors, proxies
   and servers on, global `$MAVEN_HOME` file merged, as `--java-dep`; `.kb/maven-resolver.md`). Only the top-level maps name repositories: a
   dependency's own `:mvn/repos` is never read. A built-in coordinate fetches nothing, children
   included (the oracle's classpath has clojure's spec jars; here they contribute no root).

@@ -90,6 +90,12 @@ record RepositoryRoute(RemoteRepository repository, List<RemoteRepository> mirro
 				unavailable = "Cannot access " + repository + " with type " + mirror.layout()
 						+ " (settings.xml mirror layout); only the default layout is read";
 			}
+			else if (mirror == null && !settings.layoutOf(repository.id()).equals("default")) {
+				// a profile repository of a layout other than default (Maven's legacy)
+				String layout = settings.layoutOf(repository.id());
+				unavailable = "Cannot access " + repository + " with type " + layout
+						+ " using the available layout factories: Unsupported repository layout " + layout;
+			}
 			routes.add(new RepositoryRoute(repository, List.copyOf(mirrored), unavailable,
 					settings.proxyFor(repository), settings.server(repository.id())));
 		}

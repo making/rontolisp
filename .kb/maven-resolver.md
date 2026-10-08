@@ -269,7 +269,34 @@ reports the collection's warnings with that failure; the parity test re-collects
   with `settings.security`. Fixtures in `MavenSettingsTest` are `mvn --encrypt-master-password`
   / `--encrypt-password` output of 3.9.16. Undecryptable: kept as written (Maven's
   `DefaultSettingsDecrypter` does the same) and the reason joins the 401 message.
-- Not read: `settings.xml` `<profiles>` / `<activeProfiles>` (their `<repositories>`; e67).
+- Profile repositories (`MavenSettings.repositories()`; `MavenResolver.Builder.build` puts them
+  AHEAD of the builder's list, an id the builder also names dropped there). Measured 2026-10-08,
+  Maven 3.9.16 (`mvn -X dependency:resolve`, `file:` repositories, "Repositories (dependencies)"):
+  Maven printed `[profile repositories, project repositories, central]` -- so a profile
+  repository is searched BEFORE Central, not after. Each active profile is injected ahead of
+  what is there: profiles defined pa, pb, pc give `[pc.., pb.., pa..]` whatever order
+  `<activeProfiles>` lists them, a profile's repositories in order; an id repeated keeps its
+  FIRST position with its LAST definition within a profile, and across profiles the later
+  profile's definition (a profile repository also beats a POM's of the same id); `central`
+  redefined by a profile sits at the profile's position with the profile's URL. Active =
+  named in `<activeProfiles>` (an unknown id ignored) OR activation holds (`jdk`, `os`,
+  `property` -- `env.NAME` included --, `file`, ANDed, as for a POM: `ProfileActivator`) OR
+  `activeByDefault`; a settings profile's `activeByDefault` is NOT retired by an activated one
+  (that rule is for POM-source profiles only; `<activation/>` empty -> inactive). Global and
+  user files: profiles user's first then each global id the user's lack (a same-id profile is
+  the user's whole), `<activeProfiles>` the union (`mvn -gs -s`). Policies: `<releases>` /
+  `<snapshots>` `enabled` (default true) and `updatePolicy` (unknown -> `never`, an
+  unparseable `interval:` -> 1440, as Resolver reads them). A repository without `url` or `id`
+  is refused whether or not its profile is active (`'profiles.profile[p].repositories
+  .repository.url' for X is missing`, Maven's wording); a `layout` other than `default` is
+  kept and fails without a request when contacted (`RepositoryRoute.unavailable`, Maven's
+  `Unsupported repository layout legacy`), and takes its mirror by `mirrorOfLayouts`. A URL
+  this resolver cannot read is `IllegalArgumentException` from `build()`, only for an active
+  profile. `deps.edn` does NOT honor them: `clj` 1.12.6 with a profile-only repository
+  (global `settings.xml` via `MAVEN_HOME`, the artifact only in that repository) fails
+  `Could not find artifact ... in central`, the same settings with a `central` mirror
+  resolves it; `ClojureDepsRepositories` builds its `MavenSettings` without profiles. The
+  item that asked for them after Central was written before this was measured.
 - POM-declared `<repositories>` are never consulted (`MavenBoundaryTest`).
 - Browser: no substitution of its own; a download reaches `Target_HttpDownloader`'s
   refusal (`get(String, HttpAccess)`, where every download converges). Native image: plain Java, no reflection or resources -- a `native-image` build of
@@ -303,7 +330,7 @@ were refused then).
 records, snapshots, `LATEST`/`RELEASE`, ranges across repositories, mirror routing, blocked
 mirrors, the access a route carries, per-repository release/snapshot policies;
 `oracle/policy-*.txt` are the same measured against Maven), `ClojureDepsFetchCliTest`
-(`:releases` / `:snapshots` of a `deps.edn` repository, measured against `clj`), `MavenSettingsTest` (parsing, decryption, global merge),
+(`:releases` / `:snapshots` of a `deps.edn` repository, measured against `clj`), `MavenSettingsTest` (parsing, decryption, global merge, profile repositories: order, activation, merge),
 `MavenSettingsTransportTest` (mirror behind an authenticating proxy over `HttpDownloader` and
 a local `HttpServer`), `HttpDownloaderAccessTest` (challenge, redirect scoping, headers, http
 proxy, the TLS tunnel through a `CONNECT` proxy with a keytool certificate), `MavenBoundaryTest`,

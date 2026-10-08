@@ -412,6 +412,8 @@ $ rontolisp app.lisp --java-dep clj-http:clj-http:3.12.3 \
 
 `settings.xml` は `mvn` と同じく効きます。読むのは `~/.m2/settings.xml` で、`MAVEN_HOME` が設定されていれば `$MAVEN_HOME/conf/settings.xml` の上に重ねます。`offline` に従い、Central を覆うミラーがあれば Central の代わりにそのミラーへ問い合わせ (`blocked` のミラーなら失敗します)、プロキシがあればそれを経由します。問い合わせ先のリポジトリの `<server>` からは、Basic 認証の認証情報、`httpHeaders`、タイムアウトを使います。`mvn --encrypt-password` で暗号化したパスワードは、`~/.m2/settings-security.xml` のマスターパスワードで復号します。
 
+有効な `settings.xml` のプロファイル（`<activeProfiles>` に挙げたもの、または `<activation>` が成り立つもの。グローバルとユーザーの両ファイルを合わせます）の `<repositories>` は、`mvn` と同じ順で検索します。Central と `--java-repository` で指定したものより前に置き、後に定義したプロファイルを先に、1 つのプロファイル内では記述順です。それらと同じ id のプロファイルのリポジトリは、そのリポジトリを置き換えます。
+
 Clojure プログラムの `deps.edn` の依存のうちクラスを含むものは、これらの後にクラスパスへ加わります ([プロジェクト: deps.edn](../clojure/semantics.md#projects-depsedn))。
 
 出力ごとに持ち運ぶもの:

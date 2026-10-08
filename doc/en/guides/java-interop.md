@@ -602,6 +602,12 @@ credentials, `httpHeaders` and timeouts. A password encrypted with
 `mvn --encrypt-password` is decrypted with the master password in
 `~/.m2/settings-security.xml`.
 
+The `<repositories>` of the active `settings.xml` profiles (named in `<activeProfiles>`,
+or holding to their `<activation>`; the global and the user's file together) are searched
+as `mvn` searches them: ahead of Central and the `--java-repository` ones, the profile
+defined last first, a profile's own repositories in order. A profile repository with the
+id of one of those replaces it.
+
 A Clojure program's `deps.edn` dependencies that hold classes join the class path
 after these ([Projects: deps.edn](../clojure/semantics.md#projects-depsedn)).
 

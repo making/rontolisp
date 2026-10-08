@@ -34,6 +34,8 @@ class MavenRepositoryTest {
 
 	private static final String MIRROR = "https://mirror.example/repo/";
 
+	private static final String CORP = "https://corp.example/repo/";
+
 	private static final Artifact LIB = Artifact.parse("org.example:lib:1.0");
 
 	private static final byte[] JAR = "jar bytes".getBytes(StandardCharsets.UTF_8);
@@ -249,6 +251,71 @@ class MavenRepositoryTest {
 		assertThat(this.local.resolve("org/example/lib/maven-metadata-corporate.xml")).exists();
 		assertThatThrownBy(() -> resolver.artifact(Artifact.parse("org.example:gone:1.0"))).hasMessage(
 				"org.example:gone:jar:1.0 is in neither the local repository nor any of: corporate (" + MIRROR + ")");
+	}
+
+	private static MavenSettings profiled(String repositories) throws MavenResolutionException {
+		return MavenSettings.parse(
+				("<settings><profiles><profile><id>corp</id><repositories>" + repositories
+						+ "</repositories></profile></profiles><activeProfiles><activeProfile>corp</activeProfile>"
+						+ "</activeProfiles></settings>")
+					.getBytes(StandardCharsets.UTF_8),
+				"settings.xml", Map.of(), Map.of());
+	}
+
+	@Test
+	void anActiveSettingsProfilesRepositoryIsSearchedAheadOfTheBuildersAsMavenSearchesIt()
+			throws IOException, MavenResolutionException {
+		// Maven printed [profile repositories, project repositories, central]
+		MavenSettings settings = profiled("<repository><id>corp</id><url>" + CORP + "</url></repository>");
+		Served both = new Served().file(CORP + LIB.path(), JAR).file(CENTRAL + LIB.path(), JAR);
+		Artifact other = Artifact.parse("org.example:other:1.0");
+		Served onlyCentral = new Served().file(CENTRAL + other.path(), JAR);
+
+		MavenResolver resolver = resolver(both, settings, CENTRAL);
+		assertThat(resolver.repositories()).extracting(RemoteRepository::id).containsExactly("corp", "central");
+		assertThat(resolver.artifact(LIB)).hasBinaryContent(JAR);
+		assertThat(both.requested).containsExactly(CORP + LIB.path(), CORP + LIB.path() + ".sha1");
+		// what corp lacks is asked of the builder's Central next
+		assertThat(resolver(onlyCentral, settings, CENTRAL).artifact(other)).hasBinaryContent(JAR);
+		assertThat(onlyCentral.requested).containsExactly(CORP + other.path(), CENTRAL + other.path(),
+				CENTRAL + other.path() + ".sha1");
+	}
+
+	@Test
+	void aSettingsProfileRepositoryRedefiningAnIdTakesOverTheBuildersRepositoryOfThatId()
+			throws IOException, MavenResolutionException {
+		MavenSettings settings = profiled("<repository><id>central</id><url>" + CORP + "</url></repository>");
+		Served served = new Served().file(CORP + LIB.path(), JAR).file(CENTRAL + LIB.path(), JAR);
+
+		MavenResolver resolver = resolver(served, settings, CENTRAL);
+
+		assertThat(resolver.repositories()).extracting(RemoteRepository::url).containsExactly(CORP);
+		assertThat(resolver.artifact(LIB)).hasBinaryContent(JAR);
+		assertThat(served.requested).containsExactly(CORP + LIB.path(), CORP + LIB.path() + ".sha1");
+	}
+
+	@Test
+	void aSettingsMirrorStandsForAProfileRepositoryAndOneOfAnotherLayoutIsNeverContacted()
+			throws IOException, MavenResolutionException {
+		MavenSettings settings = MavenSettings.parse(("<settings><profiles><profile><id>corp</id><repositories>"
+				+ "<repository><id>corp</id><url>" + CORP + "</url></repository>"
+				+ "</repositories></profile></profiles><activeProfiles><activeProfile>corp</activeProfile>"
+				+ "</activeProfiles><mirrors><mirror><id>m</id><url>" + MIRROR + "</url><mirrorOf>corp</mirrorOf>"
+				+ "</mirror></mirrors></settings>")
+			.getBytes(StandardCharsets.UTF_8), "settings.xml", Map.of(), Map.of());
+		Served served = new Served().file(MIRROR + LIB.path(), JAR);
+
+		assertThat(resolver(served, settings, CENTRAL).artifact(LIB)).hasBinaryContent(JAR);
+		assertThat(served.requested).containsExactly(MIRROR + LIB.path(), MIRROR + LIB.path() + ".sha1");
+
+		MavenSettings legacy = profiled(
+				"<repository><id>old</id><url>https://old.example/repo/</url><layout>legacy</layout></repository>");
+		Served missing = new Served();
+		Artifact absent = Artifact.parse("org.example:absent:1.0");
+		assertThatThrownBy(() -> resolver(missing, legacy).artifact(absent))
+			.isInstanceOf(MavenResolutionException.class)
+			.hasMessageContaining("Unsupported repository layout legacy");
+		assertThat(missing.requested).isEmpty();
 	}
 
 	@Test

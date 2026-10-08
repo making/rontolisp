@@ -97,7 +97,7 @@ oracle と同じく無視します。oracle の spec が拒否する値、どの
   リポジトリは拒否します。`settings.xml`（`$MAVEN_HOME/conf/settings.xml` に
   `~/.m2/settings.xml` を重ねたもの）は oracle と同じく効きます。mirror、proxy、server の
   認証情報と `httpHeaders`（`mvn --encrypt-password` で暗号化したパスワードも含む）に従い、
-  `localRepository` と `offline` は読みません。
+  `localRepository`、`offline`、プロファイルの `<repositories>` は読みません。
 - git 座標（`:git/url`、または `io.github.user/repo` という名前が示す URL と、`:git/sha`、
   `:git/tag`、`:deps/root`）は `git` コマンドでそのコミットを `~/.rontolisp/gitlibs`
   （`$RONTOLISP_DIST_HOME/gitlibs`）にチェックアウトします。タグはそのコミットを指す必要があり、

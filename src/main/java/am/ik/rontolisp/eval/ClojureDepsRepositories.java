@@ -260,7 +260,8 @@ public final class ClojureDepsRepositories implements ClojureRepositories {
 				throw new FetchFailure(String.valueOf(ex.getMessage()));
 			}
 			// clj routes through settings.xml's mirrors, proxies and servers, but reads
-			// neither its local repository nor its offline flag
+			// neither its local repository, its offline flag nor its profiles'
+			// repositories (measured on clj 1.12.6, 2026-10-08)
 			known = new MavenSettings(null, false, read.mirrors(), read.proxies(), read.servers());
 			this.settings = known;
 		}
