@@ -556,9 +556,10 @@ public final class WitImportDirective {
 		// only knowable once every import is in hand, so the component path defers the
 		// judgement to WasmComponentBuilder.appendUserImports. On every other backend an
 		// interface is a set of callable functions and nothing else, so an unused one is
-		// a mistake worth naming -- unless a filter left every member out: then the
-		// program names none, which binds nothing.
-		if (boundMembers.isEmpty() && !component && memberFilter == null) {
+		// a mistake worth naming -- unless a front end's :names table filtered every
+		// member out: the table lists its whole tier, so a program that names none of
+		// it binds nothing.
+		if (boundMembers.isEmpty() && !component && (memberFilter == null || directive.names() == null)) {
 			throw new UnsupportedOperationException(witPath + ":" + locations.lineOf(iface) + ": interface '"
 					+ iface.name() + "': the program calls none of its functions");
 		}
