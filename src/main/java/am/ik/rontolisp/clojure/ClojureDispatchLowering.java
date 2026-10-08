@@ -107,6 +107,12 @@ final class ClojureDispatchLowering {
 				arms.add(kindArm(ctx, kind));
 			}
 		}
+		if (ClojureIoLowering.mayBeInstance(fqn)) {
+			// a clojure.java.io value of the class or a subclass: an arm a program making
+			// none sheds (ClojureArms.Family.IO)
+			arms.add(new Arm(Use.VARIABLE, v -> ClojureLowerUtil.list(new LispSymbol(ClojureIoLowering.IO_INSTANCE_P),
+					v, LispString.literal(fqn))));
+		}
 		List<String> streams = ClojureValueClasses.streamClassesOf(fqn);
 		if (!streams.isEmpty()) {
 			arms.add(streamArm(streams));
@@ -289,6 +295,11 @@ final class ClojureDispatchLowering {
 				ClojureProtocolLowering.typedTagOf(one)));
 		branches.add(ClojureLowerUtil.list(ClojureProtocolLowering.isReifyForm(one),
 				ClojureCollectionLowering.keywordForm("reify")));
+		// a clojure.java.io value -- a File, a URL, a byte stream, a stream the
+		// namespace made over one -- answers its class's keyword: an arm a program making
+		// none sheds (ClojureArms.Family.IO)
+		branches.add(ClojureLowerUtil.list(ClojureLowerUtil.list(new LispSymbol(ClojureIoLowering.IO_P), one),
+				ClojureLowerUtil.list(new LispSymbol(ClojureIoLowering.CLASS_KEY), one)));
 		// a stream answers the host class its printer names, as a keyword like every
 		// kind: an arm a program making no stream sheds (ClojureArms.Family.STREAM)
 		branches.add(ClojureLowerUtil.list(ClojureLowerUtil.list(new LispSymbol(ClojureInteropLowering.STREAM_P), one),

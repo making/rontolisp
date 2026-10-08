@@ -3554,6 +3554,11 @@ public final class ClojureLowering {
 				return inlined;
 			}
 		}
+		// clojure.java.io/resource of a literal name is found while the program lowers
+		LispVal resource = ClojureIoLowering.literalResource(this, name, items);
+		if (resource != null) {
+			return resource;
+		}
 		List<LispVal> args = new ArrayList<>();
 		for (int i = 1; i < items.size(); i++) {
 			args.add(lower(items.get(i)));
@@ -3924,9 +3929,15 @@ public final class ClojureLowering {
 				ClojureLowerUtil.isTrue(n == 1, name + " takes one value");
 				return ClojureDispatchLowering.intForm(this, lower(items.get(1)));
 			case "spit":
+				if (n > 2 && ClojureIoLowering.namesEncoding(items, 3)) {
+					return ClojureIoLowering.spitWithOptions(this, items);
+				}
 				return ClojureStringLowering.spitOf(this, items);
 			case "slurp":
-				ClojureLowerUtil.isTrue(n == 1, "slurp takes one path");
+				ClojureLowerUtil.isTrue(n >= 1, "slurp takes a path and options");
+				if (n > 1) {
+					return ClojureIoLowering.slurpWithOptions(this, items);
+				}
 				return ClojureStringLowering.slurpForm(this, lower(items.get(1)));
 			case "line-seq":
 				ClojureLowerUtil.isTrue(n == 1, "line-seq takes one path or reader");
@@ -3934,7 +3945,7 @@ public final class ClojureLowering {
 			case "format":
 				return ClojureStringLowering.formatOf(this, items);
 			case "file-seq":
-				throw new LispReadException("file-seq is not supported yet: directory walks need a design");
+				return ClojureIoLowering.fileSeqOf(this, items);
 			case "keys":
 				return ClojureCollectionLowering.keysOf(this, items);
 			case "vals":
@@ -4179,6 +4190,7 @@ public final class ClojureLowering {
 			case "spit" -> ClojureStringLowering.spitValue(this);
 			case "slurp" -> ClojureStringLowering.slurpValue(this);
 			case "line-seq" -> ClojureStringLowering.lineSeqValue(this);
+			case "file-seq" -> ClojureIoLowering.fileSeqValue();
 			case "atom" -> ClojureStateLowering.atomValue(this);
 			case "volatile!" -> ClojureStateLowering.volatileValue();
 			case "deref" -> ClojureStateLowering.derefValue(this);

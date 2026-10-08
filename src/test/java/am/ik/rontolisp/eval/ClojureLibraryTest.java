@@ -184,6 +184,29 @@ class ClojureLibraryTest {
 	}
 
 	@Test
+	void aProgramMakingNoIoValueSplicesTheLibraryWithoutItsIoArms() {
+		// the printer's, str's, ='s, the hash's and slurp's arms for a File, a URL and a
+		// byte stream go like the stream ones: only a program that can hold one (the
+		// clojure.java.io kernels, a java.io.File construction) keeps them
+		assertThat(defun(ClojureLibrary.forms(), "RONTOLISP::%CLOJURE-WRITE")).contains("(RONTOLISP::%CLOJURE-IO-P X)");
+		List<LispVal> plain = Clojure.read("(spit \"f\" (str 1)) (prn (slurp \"f\") (line-seq \"f\"))", null);
+		List<LispVal> processed = ClojureLibrary.process(plain);
+		// the library keeps its own definitions (the tree-shaker prunes them later); the
+		// arms are in the program's forms and the shared verbs
+		assertThat(processed.stream()
+			.map(LispVal::print)
+			.filter(text -> !text.startsWith("(DEFUN ") && !text.startsWith("(DEFVAR ")))
+			.noneMatch(text -> text.contains("%CLOJURE-IO-") || text.contains("%CLOJURE-HOST-FILE-PATH"));
+		for (String name : List.of("RONTOLISP::%CLOJURE-WRITE", "RONTOLISP::%CLOJURE-STR-OF",
+				"RONTOLISP::%CLOJURE-SLURP")) {
+			assertThat(defun(processed, name)).as(name).doesNotContain("%CLOJURE-IO-P");
+		}
+		List<LispVal> file = Clojure.read("(prn (java.io.File. \"a\"))", null);
+		assertThat(defun(ClojureLibrary.process(file), "RONTOLISP::%CLOJURE-WRITE"))
+			.contains("(RONTOLISP::%CLOJURE-IO-P X)");
+	}
+
+	@Test
 	void classOfAStreamIsAnArmAProgramMakingNoStreamSheds() {
 		// the library keeps its own defuns (the tree-shaker prunes them later); the arm
 		// is
@@ -296,11 +319,14 @@ class ClojureLibraryTest {
 		// class rows' bases neither, nor a host class's keys); ns-name a namespace's name
 		// as a symbol, which has none either; the Ring adapter its options' and request
 		// map's fixed key names and a method or scheme, HTTP tokens that admit no slash;
-		// the HTTP client its options' and response map's fixed key names
+		// the HTTP client its options' and response map's fixed key names;
+		// clojure.java.io
+		// a value's class name
 		Set<String> slashless = Set.of("RONTOLISP::%CLOJURE-EXCEPTION-CLASS", "RONTOLISP::%CLOJURE-CLASS-KEYWORDS",
 				"RONTOLISP::%CLOJURE-READER-VALUE-CLASS", "RONTOLISP::%CLOJURE-HOST-CLASS-KEYS",
 				"RONTOLISP::%CLOJURE-NS-NAME", "RONTOLISP::%CLOJURE-RING-KEYWORD", "RONTOLISP::%CLOJURE-RING-MAP",
-				"RONTOLISP::%CLOJURE-RING-OPTION", "RONTOLISP::%CLOJURE-HTTP-ASSOC", "RONTOLISP::%CLOJURE-HTTP-OPTION");
+				"RONTOLISP::%CLOJURE-RING-OPTION", "RONTOLISP::%CLOJURE-HTTP-ASSOC", "RONTOLISP::%CLOJURE-HTTP-OPTION",
+				"RONTOLISP::%CLOJURE-IO-CLASS-KEY");
 		builders.removeAll(slashless);
 		boolean grew = true;
 		while (grew) {

@@ -118,6 +118,20 @@ public final class ClojureArms {
 	}
 
 	/**
+	 * What hands a stream value to a program: a read of {@code *out*}, {@code *in*} or
+	 * {@code *err*}, a {@code java.io.StringWriter}, a reader over a
+	 * {@code java.io.StringReader}, and the {@code clojure.java.io} kernels and
+	 * {@code java.io} constructions opening a file or wrapping a byte stream.
+	 */
+	private static Set<String> streamProducers() {
+		Set<String> out = new java.util.HashSet<>(Set.of("RONTOLISP::%CLOJURE-OUT", "RONTOLISP::%CLOJURE-IN",
+				"RONTOLISP::%CLOJURE-ERR", "RONTOLISP::%CLOJURE-STRING-WRITER", "RONTOLISP::%CLOJURE-STRING-READER",
+				"RONTOLISP::%CLOJURE-READER"));
+		out.addAll(ClojureIoLowering.STREAM_PRODUCERS);
+		return Set.copyOf(out);
+	}
+
+	/**
 	 * A kind of value with arms: its tests, views and aliases, and what makes one.
 	 */
 	public enum Family {
@@ -164,16 +178,13 @@ public final class ClojureArms {
 		 * A stream value, which the printer and {@code str} spell as the oracle's
 		 * {@code #object} of the host class its kind is: only a read of {@code *out*},
 		 * {@code *in*} or {@code *err*} as a value, a {@code java.io.StringWriter}, a
-		 * reader over a {@code java.io.StringReader} and a {@code clojure.java.io/reader}
-		 * hand one to the program. The Common Lisp constructors the library and the
-		 * binding forms call are no producer: naming one would splice the library into a
-		 * Common Lisp program.
+		 * reader over a {@code java.io.StringReader} and the {@code clojure.java.io}
+		 * kernels and {@code java.io} constructions opening a file
+		 * ({@link ClojureIoLowering#STREAM_PRODUCERS}) hand one to the program. The
+		 * Common Lisp constructors the library and the binding forms call are no
+		 * producer: naming one would splice the library into a Common Lisp program.
 		 */
-		STREAM("stream", Set.of("RONTOLISP::%CLOJURE-STREAM-P"), Set.of(), Map.of(),
-				Set.of("RONTOLISP::%CLOJURE-OUT", "RONTOLISP::%CLOJURE-IN", "RONTOLISP::%CLOJURE-ERR",
-						"RONTOLISP::%CLOJURE-STRING-WRITER", "RONTOLISP::%CLOJURE-STRING-READER",
-						"RONTOLISP::%CLOJURE-READER"),
-				Set.of()),
+		STREAM("stream", Set.of("RONTOLISP::%CLOJURE-STREAM-P"), Set.of(), Map.of(), streamProducers(), Set.of()),
 
 		/**
 		 * The binding depth of the {@code clojure.core} specials {@code clojure.main}
@@ -322,6 +333,17 @@ public final class ClojureArms {
 				Set.of()),
 
 		/**
+		 * A {@code clojure.java.io} value -- a {@code java.io.File}, a URL, a URI, a byte
+		 * stream, a character stream the namespace made over one -- which the printer,
+		 * {@code str}, {@code =}, the hash, {@code class}, {@code instance?}, a
+		 * protocol's dispatch, {@code slurp}, {@code spit}, {@code line-seq} and an
+		 * instance call read: only the namespace's kernels and the lowering's
+		 * {@code java.io} constructions make one ({@link ClojureIoLowering#PRODUCERS}).
+		 */
+		IO("io-value", Set.of(ClojureIoLowering.IO_P, ClojureIoLowering.IO_INSTANCE_P),
+				Set.of(ClojureIoLowering.HOST_VIEW), Map.of(), ClojureIoLowering.PRODUCERS, Set.of()),
+
+		/**
 		 * A rontolisp future or stream -- what {@code rontolisp.http-client} answers
 		 * under {@code :async true}, and the reply body it answers under
 		 * {@code :as :stream} -- which {@code deref} and {@code future?} read through the
@@ -350,7 +372,8 @@ public final class ClojureArms {
 		HOST("host-object",
 				Set.of(ClojureDispatchLowering.HOST_OBJECT_P, "RONTOLISP::%CLOJURE-HOST-EQUAL-P",
 						ClojureCollectionLowering.HOST_SEQABLE_P),
-				Set.of(ClojureUpdateLowering.HOST_SELECT_KEYS, ClojureUpdateLowering.HOST_TABLE),
+				Set.of(ClojureUpdateLowering.HOST_SELECT_KEYS, ClojureUpdateLowering.HOST_TABLE,
+						ClojureIoLowering.HOST_FILE_PATH),
 				Map.of("RONTOLISP::%CLOJURE-HOST-NUMBER-P", "NUMBERP", "RONTOLISP::%CLOJURE-HOST-CHAR-SEQUENCE-P",
 						"STRINGP", ClojurePredicateLowering.HOST_FUTURE_P, "PROGN"),
 				Set.copyOf(LispNames.JAVA_OPERATORS_QUALIFIED), Set.of()),

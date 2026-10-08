@@ -210,12 +210,19 @@ final class ClojureProtocolLowering {
 				ClojureCollectionLowering.keywordForm("map")));
 		branches.add(ClojureLowerUtil.list(ClojureSortedLowering.sortedSetTest(one),
 				ClojureCollectionLowering.keywordForm("set")));
+		// a clojure.java.io value (its wrapper is a cons) dispatches as its class: an arm
+		// a program making none sheds
+		branches.add(ClojureLowerUtil.list(ClojureLowerUtil.list(new LispSymbol(ClojureIoLowering.IO_P), one),
+				ClojureLowerUtil.list(new LispSymbol(ClojureIoLowering.CLASS_KEY), one)));
 		branches.add(ClojureLowerUtil.list(ClojureLowerUtil.list(ClojureLowerUtil.sym("consp"), one),
 				ClojureCollectionLowering.keywordForm("list")));
 		branches.add(ClojureLowerUtil.list(ClojureLowerUtil.list(ClojureLowerUtil.sym("functionp"), one),
 				ClojureCollectionLowering.keywordForm("function")));
 		branches.add(ClojureLowerUtil.list(ClojureStateLowering.isAtomForm(one),
 				ClojureCollectionLowering.keywordForm("atom")));
+		// a host java.io.File, URL or URI (interpreter, JVM) dispatches as one
+		// clojure.java.io makes: host arms a program naming no java: operator sheds
+		branches.addAll(ClojureIoLowering.hostTagArms(one));
 		branches.add(ClojureLowerUtil.list(ClojureLowering.TRUE_CONST,
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("list"), ClojureLowering.NIL_CONST)));
 		return List.of(ClojureLowerUtil.list(ClojureLowerUtil.sym("defun"), new LispSymbol(PROTOCOL_TAG),
@@ -1285,6 +1292,10 @@ final class ClojureProtocolLowering {
 		// a package-qualified or imported spelling resolves like a defmethod dispatch
 		// value
 		String fqn = ClojureNamespaceLowering.resolveClass(ctx, typeName);
+		if (ClojureIoLowering.EXTENDABLE.contains(fqn)) {
+			// a clojure.java.io value dispatches as its class's keyword
+			return ClojureCollectionLowering.keywordForm(fqn);
+		}
 		String kind = ClojureDispatchLowering.DISPATCH_CLASS_KEYWORDS.get(fqn.substring(fqn.lastIndexOf('.') + 1));
 		if (kind == null) {
 			throw new LispReadException(what + " needs a core type, not " + typeName);

@@ -30,24 +30,42 @@ final class ClojureClassBases {
 	 */
 	static final Map<String, String> STREAM_SUPERS = Map.of("java.io.StringWriter", "java.io.Writer",
 			"java.io.PrintWriter", "java.io.Writer", "java.io.OutputStreamWriter", "java.io.Writer",
-			"java.io.BufferedReader", "java.io.Reader", "clojure.lang.LineNumberingPushbackReader",
-			"java.io.PushbackReader", "java.io.PushbackReader", "java.io.FilterReader", "java.io.FilterReader",
-			"java.io.Reader");
+			"java.io.BufferedWriter", "java.io.Writer", "java.io.BufferedReader", "java.io.Reader",
+			"clojure.lang.LineNumberingPushbackReader", "java.io.PushbackReader", "java.io.PushbackReader",
+			"java.io.FilterReader", "java.io.FilterReader", "java.io.Reader");
 
 	/** The stream classes below {@code Object} that no other stream class extends. */
 	private static final Set<String> STREAM_ROOTS = Set.of("java.io.Writer", "java.io.Reader");
 
 	/**
+	 * The superclass of each class a {@code clojure.java.io} value's {@code class}
+	 * answers that is no character stream ({@code ClojureIoLowering.CLASSES}), and of
+	 * theirs below {@code Object}: a dispatch value or a hierarchy argument spelling one
+	 * lowers to the keyword {@code class} answers.
+	 */
+	static final Map<String, String> IO_SUPERS = Map.of("java.io.File", OBJECT, "java.net.URL", OBJECT, "java.net.URI",
+			OBJECT, "java.io.BufferedInputStream", "java.io.FilterInputStream", "java.io.FilterInputStream",
+			"java.io.InputStream", "java.io.InputStream", OBJECT, "java.io.BufferedOutputStream",
+			"java.io.FilterOutputStream", "java.io.FilterOutputStream", "java.io.OutputStream", "java.io.OutputStream",
+			OBJECT);
+
+	/**
 	 * The direct interfaces of the tabled classes that have any, and the bases of the
 	 * interfaces among their supers (an interface's bases are its superinterfaces).
 	 */
-	static final Map<String, List<String>> INTERFACES = Map.of("java.lang.Throwable", List.of("java.io.Serializable"),
-			"clojure.lang.ExceptionInfo", List.of("clojure.lang.IExceptionInfo"),
-			"clojure.lang.Compiler$CompilerException", List.of("clojure.lang.IExceptionInfo"),
-			"clojure.lang.LispReader$ReaderException", List.of("clojure.lang.IExceptionInfo"), "java.io.Writer",
-			List.of("java.lang.Appendable", "java.io.Closeable", "java.io.Flushable"), "java.io.Reader",
-			List.of("java.lang.Readable", "java.io.Closeable"), "java.io.Closeable",
-			List.of("java.lang.AutoCloseable"));
+	static final Map<String, List<String>> INTERFACES = Map.ofEntries(
+			Map.entry("java.lang.Throwable", List.of("java.io.Serializable")),
+			Map.entry("clojure.lang.ExceptionInfo", List.of("clojure.lang.IExceptionInfo")),
+			Map.entry("clojure.lang.Compiler$CompilerException", List.of("clojure.lang.IExceptionInfo")),
+			Map.entry("clojure.lang.LispReader$ReaderException", List.of("clojure.lang.IExceptionInfo")),
+			Map.entry("java.io.Writer", List.of("java.lang.Appendable", "java.io.Closeable", "java.io.Flushable")),
+			Map.entry("java.io.Reader", List.of("java.lang.Readable", "java.io.Closeable")),
+			Map.entry("java.io.Closeable", List.of("java.lang.AutoCloseable")),
+			Map.entry("java.io.File", List.of("java.io.Serializable", "java.lang.Comparable")),
+			Map.entry("java.net.URL", List.of("java.io.Serializable")),
+			Map.entry("java.net.URI", List.of("java.lang.Comparable", "java.io.Serializable")),
+			Map.entry("java.io.InputStream", List.of("java.io.Closeable")),
+			Map.entry("java.io.OutputStream", List.of("java.io.Closeable", "java.io.Flushable")));
 
 	/** The interfaces among the tabled classes' supers. */
 	static final Set<String> TABLED_INTERFACES = Set.of("java.io.Serializable", "clojure.lang.IExceptionInfo",
@@ -97,6 +115,9 @@ final class ClojureClassBases {
 		String superclass = ClojureThrowables.PARENTS.get(name);
 		if (superclass == null) {
 			superclass = STREAM_SUPERS.get(name);
+		}
+		if (superclass == null) {
+			superclass = IO_SUPERS.get(name);
 		}
 		if (superclass == null && (name.equals(ClojureThrowables.THROWABLE) || STREAM_ROOTS.contains(name))) {
 			superclass = OBJECT;
@@ -175,11 +196,13 @@ final class ClojureClassBases {
 
 	/**
 	 * The classes a value's {@code class} may answer without the program naming them: the
-	 * runtime errors' and the streams'.
+	 * runtime errors', the streams' and the other {@code clojure.java.io} values'.
 	 */
 	static List<String> implicitClasses() {
 		List<String> classes = new ArrayList<>(RUNTIME_THROWABLES);
 		classes.addAll(STREAM_SUPERS.keySet().stream().sorted().toList());
+		classes.addAll(List.of("java.io.BufferedInputStream", "java.io.BufferedOutputStream", "java.io.File",
+				"java.net.URI", "java.net.URL"));
 		return classes;
 	}
 

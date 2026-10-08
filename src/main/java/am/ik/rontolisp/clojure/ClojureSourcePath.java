@@ -214,6 +214,85 @@ final class ClojureSourcePath {
 		return null;
 	}
 
+	/**
+	 * A resource {@code clojure.java.io/resource} found below a root.
+	 *
+	 * @param spec its URL, as the oracle's class loader spells it: {@code file:} and the
+	 * absolute path below a directory root, {@code jar:file:} and the jar's absolute path
+	 * then {@code !/} and the entry below a jar root
+	 * @param text its contents
+	 */
+	record Resource(String spec, String text) {
+	}
+
+	/**
+	 * The resource a name finds below the first root holding it, like the oracle's class
+	 * loader over its class path: a directory root's file, a jar root's entry. The
+	 * built-in namespaces' files are no resource (the oracle's are clojure.jar's own). A
+	 * name starting with {@code /} finds nothing, as a class loader's does.
+	 * @param name the resource's path below a root
+	 * @return the resource, or {@code null} when no root holds it
+	 */
+	@Nullable Resource findResource(String name) {
+		if (name.isEmpty() || name.startsWith("/")) {
+			return null;
+		}
+		for (Root root : roots()) {
+			if (root.archive()) {
+				if (entriesOf(root).contains(name)) {
+					String text = this.files.readArchiveEntry(root.path(), name);
+					if (text != null) {
+						return new Resource(
+								"jar:file:" + uriPath(this.files.absolute(root.path())) + "!/" + uriPath(name), text);
+					}
+				}
+				continue;
+			}
+			String path = this.files.resolve(root.path(), name);
+			String text = this.files.read(path);
+			if (text != null) {
+				return new Resource("file:" + uriPath(this.files.absolute(path)), text);
+			}
+		}
+		return null;
+	}
+
+	/**
+	 * The directory roots, absolute, in search order: where a resource whose name is
+	 * known only when the program runs is looked for.
+	 * @return the roots
+	 */
+	List<String> directoryRoots() {
+		List<String> out = new ArrayList<>();
+		for (Root root : roots()) {
+			if (!root.archive()) {
+				String absolute = this.files.absolute(root.path());
+				if (!out.contains(absolute)) {
+					out.add(absolute);
+				}
+			}
+		}
+		return out;
+	}
+
+	/**
+	 * A path quoted as {@code java.net.URI} quotes the path it builds: an ASCII character
+	 * outside the path set as its {@code %XX}, every other kept.
+	 */
+	static String uriPath(String path) {
+		StringBuilder out = new StringBuilder();
+		for (int i = 0; i < path.length(); i++) {
+			char c = path.charAt(i);
+			if (c >= 128 || Character.isLetterOrDigit(c) && c < 128 || "/-_.!~*'();:@&=+$,".indexOf(c) >= 0) {
+				out.append(c);
+			}
+			else {
+				out.append('%').append("0123456789ABCDEF".charAt(c >> 4)).append("0123456789ABCDEF".charAt(c & 15));
+			}
+		}
+		return out.toString();
+	}
+
 	private Set<String> entriesOf(Root root) {
 		Set<String> known = this.archives.get(root.path());
 		if (known == null) {

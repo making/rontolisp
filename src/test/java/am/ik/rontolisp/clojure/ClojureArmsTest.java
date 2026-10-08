@@ -266,6 +266,27 @@ class ClojureArmsTest {
 	}
 
 	@Test
+	void theIoFamilyIsMadeByClojureJavaIoAndFoldsTheArmsOfAProgramMakingNone() {
+		// only the namespace's kernels and the java.io constructions make a File, a URL
+		// or
+		// a byte stream: an instance call's arm, a java: argument's view, class's and
+		// instance?'s arms go from a program making none
+		List<LispVal> forms = read("(let ((r x)) (if (rontolisp::%clojure-io-p r) (rontolisp::%clojure-io-m-close r)"
+				+ " (close r)))" + " (java:call o \"m\" (rontolisp::%clojure-io-host v))"
+				+ " (or (rontolisp::%clojure-io-instance-p v \"java.io.File\") (stringp v))"
+				+ " (cond ((rontolisp::%clojure-io-p c) (rontolisp::%clojure-io-class-key c)) (t :other))");
+		ClojureArms.Scan scan = ClojureArms.scan(forms, ClojureArms.Family.IO);
+		assertThat(scan.builds()).isFalse();
+		assertThat(scan.strips()).isTrue();
+		assertThat(ClojureArms.strip(forms, ClojureArms.Family.IO).stream().map(LispVal::print))
+			.containsExactly("(LET ((R X)) (CLOSE R))", "(JAVA:CALL O \"m\" V)", "(STRINGP V)", "(COND (T :OTHER))");
+		for (String producer : List.of("(rontolisp::%clojure-io-file \"a\")", "(rontolisp::%clojure-io-file-2 p c)",
+				"(rontolisp::%clojure-io-open-input x)", "(rontolisp::%clojure-io-url-found \"file:/a\" \"t\")")) {
+			assertThat(ClojureArms.scan(read(producer), ClojureArms.Family.IO).builds()).as(producer).isTrue();
+		}
+	}
+
+	@Test
 	void theReaderValueFamilyFoldsThePredicatesAndTheReaderArmsOfAProgramReadingWithoutOptions() {
 		// only a read that may take {:read-cond :preserve} and the two constructors make
 		// a reader conditional or a tagged literal: the predicates are (progn x false)
