@@ -47,7 +47,8 @@ class ServeRingComponentE2eTest {
 			                  " " (:scheme req) " " (:protocol req) " " (integer? (:server-port req)))}
 			      (= uri "/echo")
 			      {:status 201
-			       :body ["echo:" (slurp body) "|" (:content-length req) "|" (:content-type req)]}
+			       :body ["echo:" (slurp body) "|" (pr-str (slurp body)) "|" (.read body)
+			              "|" (:content-length req) "|" (:content-type req)]}
 			      (= uri "/lines")
 			      {:body (str (vec (line-seq (io/reader (java.io.InputStreamReader. body "UTF-8")))))}
 			      (= uri "/empty") {:status 204}
@@ -89,7 +90,7 @@ class ServeRingComponentE2eTest {
 				.POST(HttpRequest.BodyPublishers.ofString("hé"))
 				.build(), HttpResponse.BodyHandlers.ofString());
 			assertThat(echo.statusCode()).isEqualTo(201);
-			assertThat(echo.body()).isEqualTo("echo:hé|3|text/plain");
+			assertThat(echo.body()).isEqualTo("echo:hé|\"\"|-1|3|text/plain");
 
 			HttpResponse<String> lines = client.send(HttpRequest.newBuilder(uri(port, "/lines"))
 				.POST(HttpRequest.BodyPublishers.ofString("l1\nl2\n"))

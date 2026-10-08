@@ -42,9 +42,10 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
  * {@code WarE2eTest}. What every leg pins: the request map (a lower-cased method keyword
  * usable as a map key, the raw {@code :uri}, the query string, the headers map, scheme,
  * protocol, content type and length), the request {@code :body} read through
- * {@code slurp}, {@code clojure.java.io/reader} + {@code line-seq} and
- * {@code java.io.InputStreamReader}, and the response map (a missing status, a header
- * vector as repeated lines, a keyword header name, a seq body).
+ * {@code slurp} (which closes it; a second {@code slurp} and a {@code .read} then answer
+ * the end, as under the oracle's Jetty adapter), {@code clojure.java.io/reader} +
+ * {@code line-seq} and {@code java.io.InputStreamReader}, and the response map (a missing
+ * status, a header vector as repeated lines, a keyword header name, a seq body).
  */
 class ClojureRingAdapterTest {
 
@@ -68,7 +69,8 @@ class ClojureRingAdapterTest {
 			                  " " (:scheme req) " " (:protocol req) " " (integer? (:server-port req)))}
 			      (= uri "/echo")
 			      {:status 201
-			       :body ["echo:" (slurp body) "|" (:content-length req) "|" (:content-type req)]}
+			       :body ["echo:" (slurp body) "|" (pr-str (slurp body)) "|" (.read body)
+			              "|" (:content-length req) "|" (:content-type req)]}
 			      (= uri "/lines")
 			      {:body (str (vec (line-seq (io/reader (java.io.InputStreamReader. body "UTF-8")))))}
 			      (= uri "/empty") {:status 204}
@@ -121,7 +123,7 @@ class ClojureRingAdapterTest {
 			.POST(HttpRequest.BodyPublishers.ofString("hé"))
 			.build(), HttpResponse.BodyHandlers.ofString());
 		assertThat(echo.statusCode()).isEqualTo(201);
-		assertThat(echo.body()).isEqualTo("echo:hé|3|text/plain");
+		assertThat(echo.body()).isEqualTo("echo:hé|\"\"|-1|3|text/plain");
 
 		HttpResponse<String> lines = client.send(HttpRequest.newBuilder(uri(port, "/lines"))
 			.POST(HttpRequest.BodyPublishers.ofString("l1\nl2\n"))
@@ -186,8 +188,8 @@ class ClojureRingAdapterTest {
 		assertThat(node.waitFor()).as(replies).isZero();
 		assertThat(replies.lines().toList()).containsExactly(
 				"[200,\"get G /info a=1&b=%20x ring-test :http HTTP/1.1 true\",[\"x-kw=k\",\"x-multi=a\",\"x-multi=b\"]]",
-				"[201,\"echo:hé|3|text/plain\",[]]", "[200,\"[\\\"l1\\\" \\\"l2\\\"]\",[]]", "[204,\"\",[]]",
-				"[404,\"not found\",[]]");
+				"[201,\"echo:hé|\\\"\\\"|-1|3|text/plain\",[]]", "[200,\"[\\\"l1\\\" \\\"l2\\\"]\",[]]",
+				"[204,\"\",[]]", "[404,\"not found\",[]]");
 	}
 
 	@Test

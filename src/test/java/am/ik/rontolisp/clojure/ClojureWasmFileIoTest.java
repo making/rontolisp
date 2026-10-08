@@ -17,8 +17,9 @@ import static org.junit.jupiter.api.Assumptions.abort;
  * The preopened case for Clojure file IO on both WASM backends: with a {@code --dir}
  * preopen covering the paths, {@code spit} writes and {@code slurp}, {@code line-seq}
  * (over a path and over an open reader), {@code clojure.java.io/reader} and {@code read}
- * through a {@code PushbackReader} over one read, like every other backend. (Without a
- * preopen the open signals the file-error instead -- pinned in
+ * through a {@code PushbackReader} over one read, and {@code slurp} closes the reader it
+ * read (a later read is the oracle's {@code IOException}), like every other backend.
+ * (Without a preopen the open signals the file-error instead -- pinned in
  * {@link ClojureWasmFileRefusalTest}. The shared spec yaml cannot pin file IO, so the
  * interpreter and JVM legs live in {@link ClojureInteropTest}.)
  */
@@ -31,14 +32,14 @@ class ClojureWasmFileIoTest {
 	void spitSlurpLineSeqAndReaderRunWithAPreopenOnPreview1() throws Exception {
 		assertThat(runWithPreopen(false))
 			.isEqualTo("a\nb\n(a b)\n(1 2)\n[1 2]\n{:a 1}\n42\n\"\"\ns#fileio.Rec{:a 1, :b 2}\n7\n"
-					+ "(#fileio.Rec{:a 1, :b \"x\"}) :eof\n:java.io.BufferedReader\n");
+					+ "(#fileio.Rec{:a 1, :b \"x\"}) :eof\n35\nStream closed\n:java.io.BufferedReader\n");
 	}
 
 	@Test
 	void spitSlurpLineSeqAndReaderRunWithAPreopenOnTheComponent() throws Exception {
 		assertThat(runWithPreopen(true))
 			.isEqualTo("a\nb\n(a b)\n(1 2)\n[1 2]\n{:a 1}\n42\n\"\"\ns#fileio.Rec{:a 1, :b 2}\n7\n"
-					+ "(#fileio.Rec{:a 1, :b \"x\"}) :eof\n:java.io.BufferedReader\n");
+					+ "(#fileio.Rec{:a 1, :b \"x\"}) :eof\n35\nStream closed\n:java.io.BufferedReader\n");
 	}
 
 	private static String runWithPreopen(boolean component) throws Exception {
@@ -61,7 +62,9 @@ class ClojureWasmFileIoTest {
 				+ "))" + "(with-open [r (jio/reader " + words + ")] (println (count (line-seq r))))" + "(spit " + out
 				+ " (list (->Rec 1 \"x\")))" + "(with-open [r (java.io.PushbackReader. (jio/reader " + out + "))]"
 				+ " (prn (read r) (read r false :eof)))" + "(with-open [r (jio/reader " + words
-				+ ")] (println (class r)))";
+				+ ")] (println (count (slurp r)))"
+				+ " (println (try (.read r) (catch java.io.IOException e (ex-message e)))))"
+				+ "(with-open [r (jio/reader " + words + ")] (println (class r)))";
 		CompileFrontendAccess.Program frontend = CompileFrontendAccess.clojure(program, true, component);
 		byte[] module = WasmLispCompiler.builder()
 			.component(component)

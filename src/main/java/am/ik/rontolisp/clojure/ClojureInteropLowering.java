@@ -1692,8 +1692,9 @@ final class ClojureInteropLowering {
 	 * A stream method over an already-bound receiver: {@code write} prints through
 	 * {@code princ} (strings bare, characters as glyphs), {@code flush} finishes the
 	 * output, {@code readLine} reads through {@code read-line} (nil past the end, like
-	 * the oracle), {@code read} answers one character's code ({@code -1} past the end)
-	 * and {@code close} closes the stream, so {@code with-open} over a
+	 * the oracle), {@code read} answers one character's code ({@code -1} past the end),
+	 * both refusing a closed stream as the oracle's {@code IOException}, and
+	 * {@code close} closes the stream, so {@code with-open} over a
 	 * {@code clojure.java.io/reader} (an {@code open} file stream) runs on every backend
 	 * without reaching {@code java:call}. {@code toString} is {@link #valueToString}'s.
 	 * Null when the method maps to nothing, so the call goes to {@code java:call}.
@@ -1715,8 +1716,8 @@ final class ClojureInteropLowering {
 		}
 		if (method.equals("readLine") && args.isEmpty()) {
 			// nil past the end, like the oracle (a Java reader takes the java:call path)
-			return ClojureLowerUtil.list(ClojureLowerUtil.sym("read-line"), recv, ClojureLowering.NIL_CONST,
-					ClojureLowering.NIL_CONST);
+			return ClojureLowerUtil.list(ClojureLowerUtil.sym("read-line"), ClojureStringLowering.openReader(recv),
+					ClojureLowering.NIL_CONST, ClojureLowering.NIL_CONST);
 		}
 		if (method.equals("close") && args.isEmpty()) {
 			return ClojureLowerUtil.list(ClojureLowerUtil.sym("close"), recv);
@@ -1724,10 +1725,9 @@ final class ClojureInteropLowering {
 		if (method.equals("read") && args.isEmpty()) {
 			// one character's code, -1 past the end, like Reader.read
 			LispSymbol c = ctx.freshTemp();
-			return ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
-					ClojureLowerUtil.list(ClojureLowerUtil.list(c,
-							ClojureLowerUtil.list(ClojureLowerUtil.sym("read-char"), recv, ClojureLowering.NIL_CONST,
-									ClojureLowering.NIL_CONST))),
+			return ClojureLowerUtil.list(ClojureLowerUtil.sym("let"), ClojureLowerUtil.list(ClojureLowerUtil.list(c,
+					ClojureLowerUtil.list(ClojureLowerUtil.sym("read-char"), ClojureStringLowering.openReader(recv),
+							ClojureLowering.NIL_CONST, ClojureLowering.NIL_CONST))),
 					ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), c,
 							ClojureLowerUtil.list(ClojureLowerUtil.sym("char-code"), c), new LispInteger(-1)));
 		}

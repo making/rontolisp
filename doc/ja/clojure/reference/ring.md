@@ -55,6 +55,8 @@ get /hello
 `:body` は `slurp`、`line-seq`、`clojure.java.io/reader` で読みます。その上の
 `java.io.InputStreamReader`（または `BufferedReader`）はどのバックエンドでもストリーム
 そのものです。ストリームはバッファ済みなので、読み取りがネットワークを待つことはありません。
+`slurp` はストリームを閉じます。その後の読み取りは、Ring の Jetty アダプターと同じく
+ボディの終端を返します。
 
 ## レスポンスマップ
 

@@ -157,10 +157,12 @@ final class ClojureCoreLowering {
 			case "read-string", "read":
 				return ClojureReadLowering.callOf(ctx, name, items);
 			case "read-line":
-				// the next line of *in*, nil past the end, like the oracle's
+				// the next line of *in*, nil past the end, a closed one's IOException,
+				// like the oracle's
 				arity(name, n, 0, 0);
-				return ClojureLowerUtil.list(ClojureLowerUtil.sym("read-line"), new LispSymbol("*STANDARD-INPUT*"),
-						ClojureLowering.NIL_CONST, ClojureLowering.NIL_CONST);
+				return ClojureLowerUtil.list(ClojureLowerUtil.sym("read-line"),
+						ClojureStringLowering.openReader(new LispSymbol("*STANDARD-INPUT*")), ClojureLowering.NIL_CONST,
+						ClojureLowering.NIL_CONST);
 			default:
 				return null;
 		}

@@ -27,7 +27,8 @@ import org.jspecify.annotations.Nullable;
  * {@code listen} takes it with no new arm; {@code read-line} / {@code read-char} /
  * {@code peek-char} / {@code file-position} dispatch on the concrete type. The entry is
  * removed from the stream table when the request ends (the transport closes it), never by
- * the handler.
+ * the handler: a program's {@code close} of it answers {@code t} and keeps it, as the
+ * Gray class's default close does.
  */
 public final class HttpRequestBodyStream extends InputStream {
 

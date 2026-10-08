@@ -54,6 +54,8 @@ get /hello
 Read `:body` with `slurp`, `line-seq` or `clojure.java.io/reader`; a
 `java.io.InputStreamReader` (or `BufferedReader`) over it is the stream itself, on
 every backend. The stream is buffered, so the read never waits on the network.
+`slurp` closes it; a later read answers the end of the body, as under Ring's Jetty
+adapter.
 
 ## The response map
 

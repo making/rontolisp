@@ -252,8 +252,7 @@
 - `line-seq` はパスか開かれたリーダー（`clojure.java.io/reader` など。閉じるのは
   `with-open`）を取って、どちらも strict に答えます（オラクルはリーダーを取って遅延です）。
   `spit`・`slurp`・`line-seq`・`reader` はインタプリタと JVM、wasm ではパスを含む `--dir` プリオープン付きで動きます。
-  開かれたリーダーの `slurp` はリーダーを閉じません（オラクルは閉じます）。リーダーの上の
-  `java.io.InputStreamReader` はどのバックエンドでもそのリーダー自身です。Ring のリクエスト
+  リーダーの上の `java.io.InputStreamReader` はどのバックエンドでもそのリーダー自身です。Ring のリクエスト
   `:body` が、オラクルでは `InputStream` であるのに対し、ここではリーダーだからです。
 - Ring アダプター（`ring.adapter.rontolisp/run-server`）のリクエストマップには
   `:content-type` と `:content-length` が入りますが、`:character-encoding` と

@@ -574,13 +574,25 @@
         ((null c) (get-output-stream-string out))
       (write-char c out))))
 
+(defun rontolisp::%clojure-open-reader (stream)
+  "STREAM while it is open; a closed one is the oracle's IOException, which a
+   closed Java reader answers to every read."
+  (if (open-stream-p stream)
+      stream
+      (rontolisp::%clojure-io-exception "Stream closed")))
+
 (defun rontolisp::%clojure-slurp (source)
   "slurp: the whole of SOURCE as a string -- a path, opened and closed around
    the read, or an already-open input stream (a clojure.java.io/reader, a Ring
-   request :body), read to its end and left open: its owner closes it, the
-   with-open that opened it or the transport that made it."
+   request :body), read to its end and closed, like the oracle's with-open. A
+   second close, the with-open that opened it or the transport that made it,
+   does nothing."
   (if (streamp source)
-      (rontolisp::%clojure-read-to-end source)
+      (let ((text
+             (rontolisp::%clojure-read-to-end
+              (rontolisp::%clojure-open-reader source))))
+        (close source)
+        text)
       (with-open-file (stream source)
         (rontolisp::%clojure-read-to-end stream))))
 
@@ -898,7 +910,7 @@
 (defun rontolisp::%clojure-read-line-v (&rest args)
   "read-line as a value: the next line of *in*, nil past the end."
   (rontolisp::%clojure-check-arity args 0 0 "read-line")
-  (read-line *standard-input* nil nil))
+  (read-line (rontolisp::%clojure-open-reader *standard-input*) nil nil))
 
 (defun rontolisp::%clojure-run! (f coll)
   "(run! f coll): F called on every member of COLL for effect, a lazy one
@@ -1096,6 +1108,12 @@
   "A refusal the oracle throws as a RuntimeException."
   (rontolisp::%clojure-refuse
    '("java.lang.RuntimeException" "java.lang.Exception" "java.lang.Throwable")
+   message))
+
+(defun rontolisp::%clojure-io-exception (message)
+  "A refusal the oracle throws as a java.io.IOException."
+  (rontolisp::%clojure-refuse
+   '("java.io.IOException" "java.lang.Exception" "java.lang.Throwable")
    message))
 
 (defun rontolisp::%clojure-exception (message)

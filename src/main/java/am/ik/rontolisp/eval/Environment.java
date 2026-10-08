@@ -6411,6 +6411,13 @@ public final class Environment implements Scope {
 				// here, so a later warn still reaches stderr.
 				return LispTrue.INSTANCE;
 			}
+			if (streams.get(handle.value()) instanceof HttpRequestBodyStream) {
+				// A served request's buffered body belongs to the transport, which
+				// removes it when the request ends; a program's close (a Clojure slurp
+				// of the Ring :body) leaves it readable at its cursor, like the compiled
+				// backends' Gray body, whose close is the default no-op.
+				return LispTrue.INSTANCE;
+			}
 			Closeable stream = streams.remove(handle.value());
 			streamPaths.remove(handle.value());
 			streamPositions.remove(handle.value());

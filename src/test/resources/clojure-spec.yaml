@@ -4192,8 +4192,8 @@ cases:
     # slurp, clojure.java.io/reader and line-seq take an already-open character
     # stream as well as a path, on every backend -- the shape a Ring request :body
     # is (ClojureRingAdapterTest serves it). A reader over a reader is the stream
-    # itself. Matches the oracle (clj 1.12.6, 2026-10-08), which also closes what
-    # slurp read; here the stream is left to its owner, the with-open below.
+    # itself. Matches the oracle (clj 1.12.6, 2026-10-08); slurp closes the stream
+    # it read, and the with-open below closing it again is harmless.
     source: |
       (println (slurp (java.io.BufferedReader. (java.io.StringReader. "ab\ncd"))))
       (println (line-seq (clojure.java.io/reader (java.io.BufferedReader. (java.io.StringReader. "x\ny")))))
@@ -4207,6 +4207,41 @@ cases:
       (x y)
       (v w)
       "z\n"
+  - name: slurp-closes-the-stream-it-reads
+    # slurp of an open reader closes it, like the oracle's with-open (clj 1.12.6,
+    # 2026-10-08): every later read -- .read, .readLine, slurp, line-seq,
+    # read-line of with-in-str's *in* -- is the oracle's IOException "Stream
+    # closed" on every backend, and a second close (an explicit one, a with-open's)
+    # does nothing.
+    source: |
+      (let [r (java.io.BufferedReader. (java.io.StringReader. "ab\ncd"))]
+        (println (slurp r))
+        (println (try (.read r) (catch java.io.IOException e (ex-message e))))
+        (println (try (.readLine r) (catch java.io.IOException e (ex-message e))))
+        (println (try (slurp r) (catch java.io.IOException e (ex-message e))))
+        (println (try (line-seq r) (catch java.io.IOException e (ex-message e))))
+        (println (try (.read r) (catch Exception e (instance? java.io.IOException e))))
+        (.close r)
+        (println :closed-again))
+      (with-open [r (clojure.java.io/reader (java.io.BufferedReader. (java.io.StringReader. "z\n")))]
+        (println (pr-str (slurp r))))
+      (println :with-open-closed-it-again)
+      (with-in-str "in\nput"
+        (println (pr-str (slurp *in*)))
+        (println (try (read-line) (catch java.io.IOException e (ex-message e)))))
+    expected: |
+      ab
+      cd
+      Stream closed
+      Stream closed
+      Stream closed
+      Stream closed
+      true
+      :closed-again
+      "z\n"
+      :with-open-closed-it-again
+      "in\nput"
+      Stream closed
   - name: mapv-answers-vectors
     # mapv maps over one or more collections and answers a vector (never a lazy
     # wrapper, even over lazy inputs); class pins the vector answer. The hangman

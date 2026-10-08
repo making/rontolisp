@@ -1129,10 +1129,21 @@ final class ClojureStringLowering {
 	static final String SLURP = "RONTOLISP::%CLOJURE-SLURP";
 
 	/**
+	 * The open-stream check of a read: the stream while it is open, else the oracle's
+	 * {@code IOException: Stream closed}.
+	 */
+	static final String OPEN_READER = "RONTOLISP::%CLOJURE-OPEN-READER";
+
+	/** {@code (OPEN_READER stream)}. */
+	static LispVal openReader(LispVal stream) {
+		return ClojureLowerUtil.list(new LispSymbol(OPEN_READER), stream);
+	}
+
+	/**
 	 * {@code slurp}: the whole of a path or an open input stream as a string, one call to
 	 * the spliced {@link #SLURP} (a path is opened and closed around the read; a stream
 	 * -- a {@code clojure.java.io/reader}, a Ring request {@code :body} -- is read to its
-	 * end and left to its owner).
+	 * end and closed, like the oracle).
 	 */
 	static LispVal slurpForm(ClojureLowering ctx, LispVal source) {
 		return ClojureLowerUtil.list(new LispSymbol(SLURP), source);
@@ -1147,15 +1158,17 @@ final class ClojureStringLowering {
 	 * {@code line-seq}: the lines as a strict list -- of a path, opened and closed around
 	 * the read (the documented path deviation: the oracle takes a reader and answers
 	 * lazily), or of an already-open reader, which is read but never closed
-	 * ({@code with-open} owns closing, like the oracle). A stream value takes the reader
-	 * loop, anything else the path form.
+	 * ({@code with-open} owns closing, like the oracle; a closed one is the oracle's
+	 * {@code IOException}). A stream value takes the reader loop, anything else the path
+	 * form.
 	 */
 	static LispVal lineSeqForm(ClojureLowering ctx, LispVal target) {
 		LispSymbol src = ctx.freshTemp();
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
 				ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(src, target))),
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("streamp"), src), lineSeqReaderLoop(ctx, src),
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("streamp"), src), ClojureLowerUtil
+							.list(ClojureLowerUtil.sym("progn"), openReader(src), lineSeqReaderLoop(ctx, src)),
 						lineSeqPathForm(ctx, src)));
 	}
 

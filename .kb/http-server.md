@@ -98,7 +98,8 @@ decides at RUN time, via `%http-reactor-register app [:buffered]` (`.kb/clack.md
   REAL `file-position`; lets `lack:builder` -> `circular-streams` -> `http-body:parse` run
   natively. A bodiless request gets `:raw-body nil`.
 - Interpreter: `eval/HttpRequestBodyStream`, `byte[]` + cursor in the stream table
-  (`Environment`'s `httpBodyStreamOpener/Closer`; the TRANSPORT closes it at request end) —
+  (`Environment`'s `httpBodyStreamOpener/Closer`; the TRANSPORT closes it at request end; a
+  program's `close` answers t and keeps the entry, like the Gray class's default close) —
   a Gray class here measured -36% POST throughput. JVM + WASM: compiled Gray class
   `http-request-body-stream` over `rontolisp:fundamental-binary-input-stream`, built by
   `%http-body-stream`.

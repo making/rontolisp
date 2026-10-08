@@ -75,6 +75,9 @@ final class ClojureRefusals {
 	/** {@code java.lang.AssertionError}. */
 	static final String ASSERTION_ERROR = "RONTOLISP::%CLOJURE-ASSERTION-ERROR";
 
+	/** {@code java.io.IOException}: a read of a closed stream. */
+	static final String IO = "RONTOLISP::%CLOJURE-IO-EXCEPTION";
+
 	/**
 	 * {@code java.lang.ClassCastException} casting a value, its
 	 * {@code NullPointerException} when the value is nil.
@@ -144,7 +147,7 @@ final class ClojureRefusals {
 			Map.entry(CLASS_NOT_FOUND, "java.lang.ClassNotFoundException"),
 			Map.entry(PATTERN_SYNTAX, "java.util.regex.PatternSyntaxException"),
 			Map.entry(ILLEGAL_FORMAT_CONVERSION, "java.util.IllegalFormatConversionException"),
-			Map.entry(ASSERTION_ERROR, "java.lang.AssertionError"));
+			Map.entry(ASSERTION_ERROR, "java.lang.AssertionError"), Map.entry(IO, "java.io.IOException"));
 
 	/** Every carrier: a call to one is a refusal the strip folds. */
 	static final Set<String> CARRIERS = carriers();
