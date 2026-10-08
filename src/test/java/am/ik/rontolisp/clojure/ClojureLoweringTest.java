@@ -2024,7 +2024,7 @@ class ClojureLoweringTest {
 		assertThat(lowered("(spit \"f\" \"x\")")).contains("WITH-OPEN-FILE")
 			.contains("WRITE-STRING")
 			.contains("%CLOJURE-STR-OF");
-		assertThat(lowered("(slurp \"f\")")).contains("READ-CHAR");
+		assertThat(lowered("(slurp \"f\")")).contains("(RONTOLISP::%CLOJURE-SLURP \"f\")");
 		assertThat(lowered("(line-seq \"f\")")).contains("READ-LINE").contains("STREAMP");
 		assertThat(lowered("(ns t (:require [clojure.java.io :as jio])) (jio/reader \"f\")"))
 			.contains("(RONTOLISP::%CLOJURE-READER \"f\")");

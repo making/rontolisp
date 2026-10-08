@@ -287,7 +287,7 @@ ClojureScript の `^:mutable` は指定になりません。ローカル・パ�
 プログラムが定義するクラスのレコードを組みます。`#=` の読み取り時評価、リーダ条件、
 タグ付きリテラルはソースと同様に拒否されます。リーダとして渡せるのは
 `clojure.java.io/reader`、`*in*`、それらや `java.io.StringReader` の上の
-`java.io.PushbackReader`/`BufferedReader` で、いずれもどのバックエンドでも
+`java.io.PushbackReader`/`BufferedReader`/`InputStreamReader` で、いずれもどのバックエンドでも
 ストリームです。`read` はリーダをデータの直後に残します。`str` はオラクル同様、
 コレクション内の文字列をクォートするので、`spit` が書いたものは読み戻せます。
 `eval` と `load-string` は提供しません。実行時にコンパイラが動かないためです。
@@ -312,6 +312,7 @@ ClojureScript の `^:mutable` は指定になりません。ローカル・パ�
 | 未知のエイリアスの `::alias/kw` | `Invalid token: ...` | 解決するのは require のエイリアス、ファイル自身の ns、既知の名前空間のみ |
 | `--no-gc` ビルド | 名前で | そのバックエッドにはペアもシンボルもクロージャもない |
 | `file-seq`、`clojure.java.io`（`reader` 以外） | `file-seq` / `unknown name: clojure.java.io/...` | ディレクトリ走査なし。解決するのは `reader` のみで、ファイルストリームのリーダーを開く |
+| 非同期の Ring ハンドラ（`:async? true` 付きの `run-server`） | `asynchronous handlers (:async? true) are not supported` | トランスポートに respond/raise の仕組みがない |
 
 ## エラーと位置
 

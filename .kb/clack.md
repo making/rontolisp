@@ -91,14 +91,31 @@ five legs per file.
   got a bounded wait and the handler slot was made VOLATILE. The war legs leave `:use-thread`
   at its default deliberately.
 
+**The legs live in ONE place, `http-serve.lisp`** (`rontolisp::%http-serve app port address
+join` / `%http-serve-stop`; `eval/HttpServeLibrary`), called by the shim's `run`/`stop` AND by
+the Clojure front end's `ring.adapter.rontolisp/run-server` (`.kb/clojure-frontend.md`,
+"Ring adapter"), so the two adapters cannot drift (2026-10-08; the legs were the shim's own
+`#+` defuns before). Read with the TARGET's features like a shim, cached per feature set.
+- Compile path: `HttpServeLibrary.process(loaded, features)` is the FIRST pass of
+  `CompileFrontend.expand` (after the async-sugar rewrite), because every leg is what a later
+  pass reads: the directive (`HttpHandlerInliner`, `HttpLibrary`, the `:raw-body` scan), the
+  reactor marker (`HttpReactorInliner`). Spliced when the program names either entry point.
+- Interpreter: an EXACT-name hook (`HttpServeLibrary.isServeFunction`) ahead of the
+  `RONTOLISP::%HTTP-` prefix hook, which would load `http-server.lisp` for the same prefix.
+- The WASI leg's literal handler is `rontolisp::%http-serve-app` over the stored
+  `rontolisp::%http-serve-current` (was `clack.handler.rontolisp::%app` / `*app*`). `join`
+  nil on the socket leg answers the handle without the join/unwind (Ring's `:join? false`).
+- `resource-config.json` carries the file (`NativeImageResourceConfigTest`).
+
 Why a reader feature and not a front-end rewrite: the shim already branches per target,
 builtin-shim sources are read with the target's features (`ShimLibraries.forms`), and the
 directive then does not EXIST in a reactor compile. **The feature reflects the TARGET, not
 the vendor.**
 
 ## WASM component / Preview 1
-The shim's WASI-wasm `run` stores the app and calls the `rontolisp:http-handler` DIRECTIVE
-with literal quoted `'%app` plus `:raw-body :buffered`, inside a defun body.
+The WASI-wasm leg of `%http-serve` stores the app and calls the `rontolisp:http-handler`
+DIRECTIVE with literal quoted `'rontolisp::%http-serve-app` plus `:raw-body :buffered`, inside a
+defun body.
 `HttpLibrary.process` / `HttpHandlerInliner.usesHttpHandler` therefore detect the directive
 NESTED in a form (quoted data excluded), extract the static handler name for `%serve-handle`
 export wiring, and lower the call site to nil. The `%serve-dispatch` bridge + `wasm-export`

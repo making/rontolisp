@@ -561,9 +561,28 @@
   "A reader over (java.io.StringReader. TEXT): a string input stream."
   (make-string-input-stream text))
 
-(defun rontolisp::%clojure-reader (path)
-  "clojure.java.io/reader: a character input stream over the file PATH."
-  (open path))
+(defun rontolisp::%clojure-reader (source)
+  "clojure.java.io/reader: a character input stream over the file SOURCE, or
+   SOURCE itself when it is already an input stream (a reader over a reader,
+   a Ring request :body)."
+  (if (streamp source) source (open source)))
+
+(defun rontolisp::%clojure-read-to-end (stream)
+  "Every character left on STREAM, as one string."
+  (let ((out (make-string-output-stream)))
+    (do ((c (read-char stream nil nil) (read-char stream nil nil)))
+        ((null c) (get-output-stream-string out))
+      (write-char c out))))
+
+(defun rontolisp::%clojure-slurp (source)
+  "slurp: the whole of SOURCE as a string -- a path, opened and closed around
+   the read, or an already-open input stream (a clojure.java.io/reader, a Ring
+   request :body), read to its end and left open: its owner closes it, the
+   with-open that opened it or the transport that made it."
+  (if (streamp source)
+      (rontolisp::%clojure-read-to-end source)
+      (with-open-file (stream source)
+        (rontolisp::%clojure-read-to-end stream))))
 
 (defun rontolisp::%clojure-stream-p (x)
   "Whether X is a stream value."
@@ -9099,3 +9118,155 @@
      ((= n 2) (rontolisp::%clojure-read-opts (car args) (car (cdr args)) ctx))
      (t (rontolisp::%clojure-read (car args) (car (cdr args))
                                   (car (cdr (cdr args))) ctx)))))
+
+;;;; ring.adapter.rontolisp: a Ring handler served as the Clack application
+;;;; every transport serves (http-serve.lisp). run-server lowers to
+;;;; (%http-serve (%clojure-ring-app handler opts) port host join); the Clack
+;;;; environment becomes the Ring request map here, and the Ring response map
+;;;; the Clack (status headers body) list the transport normalizes.
+
+(defun rontolisp::%clojure-ring-option (opts name dflt)
+  "The keyword option NAME of the map OPTS, DFLT when absent (or OPTS nil)."
+  (rontolisp::%clojure-call-keyword (list :c%keyword name) opts dflt))
+
+(defun rontolisp::%clojure-ring-port (opts)
+  "run-server's :port, 80 by default like ring.adapter.jetty."
+  (let ((port (rontolisp::%clojure-ring-option opts "port" 80)))
+    (if (integerp port)
+        port
+        (error
+         "ring.adapter.rontolisp/run-server: :port must be an integer, got ~A"
+         (rontolisp::%clojure-str-of port "nil" t)))))
+
+(defun rontolisp::%clojure-ring-host (opts)
+  "run-server's :host (or :address), a string; nil binds every interface."
+  (let ((host
+         (rontolisp::%clojure-ring-option opts "host"
+          (rontolisp::%clojure-ring-option opts "address" nil))))
+    (if (or (null host) (stringp host))
+        host
+        (error
+         "ring.adapter.rontolisp/run-server: :host must be a string, got ~A"
+         (rontolisp::%clojure-str-of host "nil" t)))))
+
+(defun rontolisp::%clojure-ring-join (opts)
+  "run-server's :join?, true by default: block until the server stops."
+  (rontolisp::%clojure-truthy (rontolisp::%clojure-ring-option opts "join?" t)))
+
+(defun rontolisp::%clojure-ring-app (handler opts)
+  "The Clack application serving the Ring HANDLER, a one-argument function of
+   the request map. An asynchronous (three-argument) handler is refused by its
+   option: there is no respond/raise protocol under the transports."
+  (if (rontolisp::%clojure-truthy
+       (rontolisp::%clojure-ring-option opts "async?" nil))
+      (error
+       "ring.adapter.rontolisp/run-server: asynchronous handlers (:async? true) are not supported"))
+  (lambda (env)
+    (rontolisp::%clojure-ring-response
+     (funcall handler (rontolisp::%clojure-ring-request env)))))
+
+(defun rontolisp::%clojure-ring-name (x)
+  "A keyword-ish environment value (:GET, :HTTP/1.1, \"http\") as its name,
+   nil for nil."
+  (if (null x) nil (string x)))
+
+(defun rontolisp::%clojure-ring-keyword (name)
+  "The lower-cased keyword of NAME, nil for nil."
+  (if name (list :c%keyword (string-downcase name)) nil))
+
+(defun rontolisp::%clojure-ring-map (pairs)
+  "A fresh Clojure map of PAIRS, an alist of key name and value, each name a
+   keyword."
+  (let ((plist nil))
+    (dolist (pair pairs)
+      (setq plist (cons (list :c%keyword (car pair)) (cons (cdr pair) plist))))
+    (rontolisp:plist-hash-table plist :test 'equal)))
+
+(defun rontolisp::%clojure-ring-request (env)
+  "The Ring request map of the Clack environment ENV. :uri is the RAW path,
+   the request target up to its ?, like a servlet's getRequestURI; :headers is
+   the environment's own table (lower-cased string names, repeats joined), an
+   equal hash table and so already a Clojure map; :body is the buffered
+   request stream, nil without a body."
+  (let* ((target (getf env :request-uri))
+         (q (position #\? target))
+         (method (rontolisp::%clojure-ring-name (getf env :request-method)))
+         (scheme (rontolisp::%clojure-ring-name (getf env :url-scheme))))
+    (rontolisp::%clojure-ring-map
+     (list (cons "server-port" (getf env :server-port))
+           (cons "server-name" (getf env :server-name))
+           (cons "remote-addr" (getf env :remote-addr))
+           (cons "uri" (if q (subseq target 0 q) target))
+           (cons "query-string" (getf env :query-string))
+           (cons "scheme" (rontolisp::%clojure-ring-keyword scheme))
+           (cons "request-method" (rontolisp::%clojure-ring-keyword method))
+           (cons "protocol"
+                 (rontolisp::%clojure-ring-name (getf env :server-protocol)))
+           (cons "headers" (getf env :headers))
+           (cons "content-type" (getf env :content-type))
+           (cons "content-length" (getf env :content-length))
+           (cons "body" (getf env :raw-body))))))
+
+(defun rontolisp::%clojure-ring-sequential-p (x)
+  "Whether X is a seq a response body or header value may be: a list, a lazy
+   seq or a vector, never a string or another tagged wrapper."
+  (or (and (vectorp x) (not (stringp x)))
+      (and (consp x)
+           (or (not (keywordp (car x))) (rontolisp::%clojure-lazy-p x)))))
+
+(defun rontolisp::%clojure-ring-headers (headers)
+  "Ring response headers -- a map of header name to a string, or to a seq of
+   strings, one header line each -- as the dotted (name . value) alist the
+   transport takes. A keyword name is its name; values go through str."
+  (let ((out nil))
+    (if (hash-table-p headers)
+        (maphash (lambda (k v)
+                   (let ((name
+                          (if (rontolisp::%clojure-keyword-p k)
+                              (car (cdr k))
+                              (rontolisp::%clojure-str-of k "" nil))))
+                     (if (rontolisp::%clojure-ring-sequential-p v)
+                         (dolist (one (rontolisp::%clojure-seq-all v))
+                           (setq out
+                                 (cons (cons name
+                                        (rontolisp::%clojure-str-of one "" nil))
+                                       out)))
+                         (setq out
+                               (cons (cons name
+                                      (rontolisp::%clojure-str-of v "" nil))
+                                     out))))) headers)
+        (if headers
+            (error
+             "ring.adapter.rontolisp: response :headers must be a map, got ~A"
+             (rontolisp::%clojure-str-of headers "nil" t))))
+    (nreverse out)))
+
+(defun rontolisp::%clojure-ring-body (body)
+  "A Ring response :body as a Clack body: nil; a String; a seq whose members
+   are written through str; an input stream (a clojure.java.io/reader, a
+   request :body), read to its end and closed. Anything else -- a
+   java.io.File among them -- is refused by its printed value."
+  (cond ((null body) nil)
+        ((stringp body) (list body))
+        ((streamp body)
+         (let ((text (rontolisp::%clojure-read-to-end body)))
+           (close body)
+           (list text)))
+        ((rontolisp::%clojure-ring-sequential-p body)
+         (mapcar (lambda (x) (rontolisp::%clojure-str-of x "" nil))
+                 (rontolisp::%clojure-seq-all body)))
+        (t (error "ring.adapter.rontolisp: a response :body must be a String, a seq of strings or an input stream, got ~A"
+                  (rontolisp::%clojure-str-of body "nil" t)))))
+
+(defun rontolisp::%clojure-ring-response (response)
+  "The Clack response of the Ring RESPONSE map: :status (200 when absent, as a
+   servlet answers), :headers, :body."
+  (if (not (or (hash-table-p response) (rontolisp::%clojure-record-p response)))
+      (error
+       "ring.adapter.rontolisp: a handler must return a response map, got ~A"
+       (rontolisp::%clojure-str-of response "nil" t)))
+  (list (or (rontolisp::%clojure-ring-option response "status" nil) 200)
+        (rontolisp::%clojure-ring-headers
+         (rontolisp::%clojure-ring-option response "headers" nil))
+        (rontolisp::%clojure-ring-body
+         (rontolisp::%clojure-ring-option response "body" nil))))

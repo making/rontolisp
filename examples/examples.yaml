@@ -238,6 +238,18 @@ examples:
     backends: [interpreter, jvm, wasm, wasm-component-run]
     expect:
       file: .expected/clojure-demo.txt
+  - path: clojure/ring-hello.clj
+    backends: [jvm-compile, war-compile, wasm-component, wasm-reactor]
+    note: >-
+      a Ring handler served by ring.adapter.rontolisp/run-server, the ONE source
+      for every transport :server :rontolisp picks between in
+      net/hello-clack.lisp (both adapters call the same rontolisp::%http-serve):
+      a socket on the interpreter and the JVM, a Servlet container under
+      -o app.war, `wasmtime serve` under --component, a host calling the
+      handle-request export under --no-wasi. Compile legs, like hello-clack:
+      a server blocks and a war or reactor is never run as a program. The
+      request round trips on all four backends are ClojureRingAdapterTest (and
+      ServeRingComponentE2eTest for `wasmtime serve`).
 
   # --- ml: numerical computing & machine learning ----------------------------
   - path: ml/deep-digits.lisp

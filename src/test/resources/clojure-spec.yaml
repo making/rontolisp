@@ -4188,6 +4188,25 @@ cases:
       #<procedure>
       nil
       nil
+  - name: slurp-and-the-reader-take-an-open-stream
+    # slurp, clojure.java.io/reader and line-seq take an already-open character
+    # stream as well as a path, on every backend -- the shape a Ring request :body
+    # is (ClojureRingAdapterTest serves it). A reader over a reader is the stream
+    # itself. Matches the oracle (clj 1.12.6, 2026-10-08), which also closes what
+    # slurp read; here the stream is left to its owner, the with-open below.
+    source: |
+      (println (slurp (java.io.BufferedReader. (java.io.StringReader. "ab\ncd"))))
+      (println (line-seq (clojure.java.io/reader (java.io.BufferedReader. (java.io.StringReader. "x\ny")))))
+      (println (map slurp [(java.io.BufferedReader. (java.io.StringReader. "v"))
+                           (clojure.java.io/reader (java.io.PushbackReader. (java.io.StringReader. "w")))]))
+      (with-open [r (clojure.java.io/reader (java.io.BufferedReader. (java.io.StringReader. "z\n")))]
+        (println (pr-str (slurp r))))
+    expected: |
+      ab
+      cd
+      (x y)
+      (v w)
+      "z\n"
   - name: mapv-answers-vectors
     # mapv maps over one or more collections and answers a vector (never a lazy
     # wrapper, even over lazy inputs); class pins the vector answer. The hangman

@@ -275,6 +275,8 @@ sections:
             title: "トランスデューサー"
           - file: clojure/reference/io.md
             title: "入出力"
+          - file: clojure/reference/ring.md
+            title: "Ring アダプター"
           - file: clojure/reference/interop.md
             title: "Java interop"
           - file: clojure/reference/test.md

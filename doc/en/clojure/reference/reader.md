@@ -1,9 +1,10 @@
 # clojure.java.io/reader
 
-`(clojure.java.io/reader path)` / `(jio/reader path)` with `[clojure.java.io :as jio]`
+`(clojure.java.io/reader path-or-reader)` / `(jio/reader path)` with `[clojure.java.io :as jio]`
 
 Opens a buffered reader over the file, through the same file-stream runtime
-`slurp` reads through. `line-seq` reads its lines without closing it;
+`slurp` reads through; of an open reader (a Ring request [`:body`](ring.md)) it
+answers that reader. `line-seq` reads its lines without closing it;
 `with-open` closes it. Wires like `clojure.string` (`:as`, `:refer`, or the
 fully-qualified spelling); it is the only `clojure.java.io` var, and any other
 is an error. Runs on the interpreter and the JVM; on wasm it needs a `--dir`

@@ -489,6 +489,10 @@ categories:
       - { slug: print-str, name: "print-str" }
       - { slug: prn-str, name: "prn-str" }
       - { slug: println-str, name: "println-str" }
+  - title: "Ring adapter"
+    index_page: clojure/reference/ring.md
+    functions:
+      - { slug: run-server, name: "ring.adapter.rontolisp/run-server" }
   - title: "Java interop"
     index_page: clojure/reference/interop.md
     functions:

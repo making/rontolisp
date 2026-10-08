@@ -280,6 +280,10 @@ transports that own a socket look at.
 [`examples/cloudflare-workers/hello-clack-one-source/`](https://github.com/making/rontolisp/tree/develop/examples/cloudflare-workers/hello-clack-one-source)
 deploys that same file as a Worker, and lists the per-host commands.
 
+A Clojure program reaches the same transports through the Ring adapter
+[`ring.adapter.rontolisp/run-server`](../clojure/reference/ring.md), which
+calls the same transport code `:server :rontolisp` does.
+
 ## A host that calls you: the reactor build
 
 Some hosts never hand you a socket. A Cloudflare Worker, a browser page, node

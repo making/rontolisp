@@ -86,6 +86,7 @@ class SourceLanguageSeamTest {
 			Map.entry("am.ik.rontolisp.eval.HttpLibrary", SHIPPED_SOURCE),
 			Map.entry("am.ik.rontolisp.eval.HttpReactorInliner", SHIPPED_SOURCE),
 			Map.entry("am.ik.rontolisp.eval.HttpReactorLibrary", SHIPPED_SOURCE),
+			Map.entry("am.ik.rontolisp.eval.HttpServeLibrary", SHIPPED_SOURCE),
 			Map.entry("am.ik.rontolisp.eval.HttpServerLibrary", SHIPPED_SOURCE),
 			Map.entry("am.ik.rontolisp.eval.JsonLibrary", SHIPPED_SOURCE),
 			Map.entry("am.ik.rontolisp.eval.LinalgLibrary", SHIPPED_SOURCE),

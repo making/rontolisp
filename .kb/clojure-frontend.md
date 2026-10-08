@@ -125,9 +125,10 @@ answered `2 5 3` before).
 | `ns` `require` `use` `import` `in-ns` | alias and refer wiring; a project namespace's file loaded at the `require` | "Namespaces and project files" |
 | `clojure.string` (`join` `split` `split-lines` `upper-case` `lower-case` `capitalize` `trim` `triml` `trimr` `trim-newline` `blank?` `starts-with?` `ends-with?` `includes?` `index-of` `last-index-of` `replace` `replace-first` `escape` `re-quote-replacement` `reverse`) | core string operations | reached as `alias/var`, `clojure.string/var` or a referred var. `split`/`replace` take a pattern (through the regex runtime) or a literal string/char (a plain string never compiles to a pattern). Empty literal-`split` input is `nil` (a pattern answers one empty part); a positive `split` limit caps, a negative keeps every part, else trailing empties drop. `index-of`'s start (and `.indexOf`'s) is clamped into `[0, length]` before CL's `search`, which refuses a start outside the string, so it reads like Java's: past the end nothing is found (an empty match is the length), a negative one is 0 (`ClojureStringLowering.searchFrom`) |
 | `clojure.set` (`union` `intersection` `difference` `select` `project` `rename-keys` `rename` `index` `map-invert` `join` `subset?` `superset?`: every public var) | `ClojureSetLowering`: one call to the spliced `rontolisp::%clojure-set-NAME` worker (`?` spelled `-p`, the variadic three over one list of their sets, `join` with a key map `-join-km`) after a lower-time arity check in the oracle's wording (`... passed to: clojure.set/NAME`); as a value `#'...-v` | the oracle's own algorithms, so an answer's kind follows the same input: `union` grows its largest input (bubble order and all; a vector or list there answers one, a map signals), `intersection` shrinks its smallest, `difference`/`select` the first; nil stays nil, an unchanged input is answered itself, a set changes in a fresh copy. Membership goes through the structural-key runtime; `contains?` on a vector is by index, like the oracle's. Relation members may be records: `join`'s merge keeps the first's record, `rename-keys` keeps it unless a declared field is renamed away. Answers carry no metadata. Corpus witness: shcloj4 `examples.test.sequences` `test-sets`/`test-joins` (`ClojureProjectNamespacesTest`); the whole namespace stays red on `examples.utils` (the `?.` macro), `clojure.xml` and `file-seq` (measured 2026-10-03: the load stops at `utils.clj:37:1`) |
+| `ring.adapter.rontolisp` (`run-server`) | `(rontolisp::%http-serve (%clojure-ring-app f opts) (%clojure-ring-port opts) (%clojure-ring-host opts) (%clojure-ring-join opts))` (`ClojureRingLowering`) | "Ring adapter" |
 | `subs`, `.substring` | `%clojure-subs`, the refusal family's alias of `subseq` ("Refusals") | a bound outside a string is the oracle's `StringIndexOutOfBoundsException` where a class is read; a double or ratio bound is truncated (`%clojure-string-bound`), a non-number one is refused as the oracle does ("Refusals") |
 | `format` | the Java directives translated to `format` over Clojure-rendered arguments | literal format string only; `%s` like `str` (nil spells `null`), `%b`; `%e`/`%g`, flags and the rest refused |
-| `spit` `slurp` `line-seq` `clojure.java.io/reader` | `with-open-file` of the `str` spelling / a `read-char` loop / a `read-line` loop / `open` | every backend; wasm needs a `--dir` preopen (without it the open signals). `spit` supersedes unless `:append` is truthy, `nil` writes nothing. `line-seq` takes a path or an open reader, strictly, and never closes the reader. `file-seq` and every other `clojure.java.io` fn are refused |
+| `spit` `slurp` `line-seq` `clojure.java.io/reader` | `with-open-file` of the `str` spelling / `rontolisp::%clojure-slurp` / a `read-line` loop / `%clojure-reader` (`open`) | every backend; wasm needs a `--dir` preopen (without it the open signals). `spit` supersedes unless `:append` is truthy, `nil` writes nothing. `slurp`, `line-seq` and `reader` take a path or an open stream (`streamp`, so a Gray instance -- the Ring `:body` -- too): `slurp` reads a stream to its end and leaves it open (the oracle closes it), `reader` answers it, `line-seq` reads it strictly and never closes it. `slurp` was an inline `read-char` loop per site until 2026-10-08. `file-seq` and every other `clojure.java.io` fn are refused |
 | `read-string` `read` | `rontolisp::%clojure-read-string`/`-read` (`-opts` for an options map, `-v` as values) over the call site's namespace context | "Reading"; every backend |
 | regex `#"..."`, `re-pattern` `re-matcher` `re-find` `re-seq` `re-matches` `re-groups` | `RONTOLISP::%CLOJURE-RE-COMPILE` and the spliced matcher | "Regex" |
 | `map` `filter` `concat` | `rontolisp::%clojure-map`/`-filter`/`-concat` | any number of collections (`map` stops at the shortest); lazy when an input is lazy, strict otherwise ("Laziness"); a false object drops like nil |
@@ -851,7 +852,8 @@ a program without `ns` lowers unqualified. A quoted `'n/x` is the symbol of var 
   `require` with a bare `:only` refers nothing, like the oracle's `load-lib`. `:reload`,
   `:reload-all`, `:verbose` flags; quoted libspecs and prefix lists `(prefix [sub ...])`
   go through one spec parser. `clojure.string`, `clojure.set`, `clojure.java.io` (`reader`
-  only) and `clojure.test` resolve; any other `clojure.*` is `unknown namespace: x`.
+  only), `clojure.test` and `ring.adapter.rontolisp` resolve; any other `clojure.*` is
+  `unknown namespace: x`.
 - **Loading** (`ClojureNamespaceLowering.loadNamespace`, `ClojureLowering.loadFile`): an
   `ns` form marks its namespace loaded AFTER its clauses (marking first hid the cycle),
   so a single-file program's later `(:require [a])` reads nothing. Any other project
@@ -881,6 +883,46 @@ a program without `ns` lowers unqualified. A quoted `'n/x` is the symbol of var 
   refused by name).
 - **Records** keep the simple-name tag; `typeKeyOf` resolves own, then an imported or
   dotted name matching the class, else the only one of that simple name.
+
+## Ring adapter
+
+`ring.adapter.rontolisp/run-server` `(handler opts)` serves a Ring handler on every transport
+the Clack `:server :rontolisp` shim serves, by lowering to the SAME transport function the
+shim's `run` calls, `rontolisp::%http-serve` (`.kb/clack.md`, "Transport selection"). Built
+in, not a library: Clojure has no documented way to call a Common Lisp function. The call
+site names `%http-serve` itself, so `HttpServeLibrary` (first pass of `expand`) splices it
+before the passes reading its legs; `ClojureLibrary` (much later) splices the
+`%clojure-ring-*` conversions. Verified 2026-10-08 on the interpreter and the JVM (socket), a
+`--no-wasi` module driven by node (P1's serving transport), `--component` under `wasmtime
+serve`, and a war on embedded Tomcat; plain P1 compiles and signals the directive's
+"requires --component" at call time, like Clack.
+- Request map (`%clojure-ring-request` over the Clack env): `:request-method` lower-cased
+  keyword, `:uri` = `:request-uri` up to `?` (RAW, not the decoded `:path-info`),
+  `:query-string`, `:headers` = the env's equal table as is (already a Clojure map),
+  `:server-name`/`-port`, `:remote-addr`, `:scheme` keyword, `:protocol` string,
+  `:content-type`/`:content-length`, `:body` = the `:buffered` stream (nil without a body).
+  A computed method keyword is a fresh `string-downcase` charvec; `(get {:get ..} m)` and
+  `=` were measured to match on all four. The keyword builders are listed slashless in
+  `ClojureLibraryTest`'s namespace-map census (HTTP tokens admit no `/`).
+- Response map (`%clojure-ring-response`): `:status` (nil -> 200, the servlet default),
+  `:headers` to a dotted alist (a keyword name is its name; a seq value is one line per
+  member; values through `str`), `:body` string (wrapped in a list), seq (members `str`'d),
+  a CL stream (read to the end, closed: Ring closes an `InputStream` body), nil; anything
+  else (a `java.io.File` host object) and a non-map response signal -> 500.
+- Options: `:port` (default 80, `ring.adapter.jetty`'s), `:host`/`:address` (nil = every
+  interface), `:join?` (default true; false answers the socket leg's handle), `:async?`
+  truthy refused by name. Arity 2 exactly, the oracle's wording; as a value a 2-arg lambda.
+- `(java.io.InputStreamReader. body [charset])` is the stream itself (`READER_WRAPPERS`,
+  beside `PushbackReader`/`BufferedReader`) -- the measured `no matching constructor` on the
+  JVM is gone on every backend. Over a `StringReader` it also answers the string stream,
+  where the oracle has no such constructor (a leniency, not pinned).
+- Not done: `ring.adapter.jetty` as an alias (would claim Jetty options), a `stop-server`
+  (Jetty's is `(.stop server)`, interop on the handle), util namespaces (`.todo/e29`).
+- Pins: `ClojureRingAdapterTest` (interpreter, JVM through a var, the `--no-wasi` export via
+  node, the war's registration, the refusals, `run-server` as a value),
+  `ServeRingComponentE2eTest` (opt-in), `WarE2eTest#aRingHandlerServesFromTheWarOnTomcat`
+  (opt-in), clojure-spec `slurp-and-the-reader-take-an-open-stream`,
+  `examples/clojure/ring-hello.clj` (the four compile legs).
 
 ## Macros
 

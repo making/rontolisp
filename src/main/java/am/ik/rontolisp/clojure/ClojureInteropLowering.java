@@ -875,9 +875,12 @@ final class ClojureInteropLowering {
 	 * The host reader classes a construction of which over a Common Lisp character input
 	 * stream answers the stream itself: such a stream already peeks one character, which
 	 * is all {@code read} needs, so {@code (java.io.PushbackReader. (reader path))} reads
-	 * on every backend.
+	 * on every backend. {@code java.io.InputStreamReader} is one too: a Ring request
+	 * {@code :body} is a Lisp input stream here, so {@code (InputStreamReader. body)} --
+	 * the charset argument included, every stream reading UTF-8 -- is the body itself.
 	 */
-	static final Set<String> READER_WRAPPERS = Set.of("java.io.PushbackReader", "java.io.BufferedReader");
+	static final Set<String> READER_WRAPPERS = Set.of("java.io.PushbackReader", "java.io.BufferedReader",
+			"java.io.InputStreamReader");
 
 	/**
 	 * A {@code java.io.PushbackReader}/{@code java.io.BufferedReader} construction (an

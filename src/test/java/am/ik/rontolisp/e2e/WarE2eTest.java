@@ -98,7 +98,11 @@ class WarE2eTest {
 			""";
 
 	private Path compileWar(String source) throws Exception {
-		Path program = this.tempDir.resolve("app.lisp");
+		return compileWar(source, "app.lisp");
+	}
+
+	private Path compileWar(String source, String fileName) throws Exception {
+		Path program = this.tempDir.resolve(fileName);
 		Files.writeString(program, source);
 		Path war = this.tempDir.resolve("app.war");
 		new RontoLispCli(new ByteArrayInputStream(new byte[0]),
@@ -223,6 +227,44 @@ class WarE2eTest {
 		HttpResponse<String> failed = client.send(HttpRequest.newBuilder(uri(port, "/error")).build(),
 				HttpResponse.BodyHandlers.ofString());
 		assertThat(failed.statusCode()).isEqualTo(500);
+	}
+
+	/**
+	 * The war leg of {@code ring.adapter.rontolisp/run-server} (the other legs:
+	 * {@code ClojureRingAdapterTest}, {@code ServeRingComponentE2eTest}): the Ring
+	 * handler registered by the shared {@code rontolisp::%http-serve} servlet leg,
+	 * reading its {@code :body} and answering a header vector as repeated lines.
+	 */
+	private static final String RING_HANDLER = """
+			(ns ring-war (:require [ring.adapter.rontolisp :refer [run-server]]))
+			(defn handler [{:keys [request-method uri query-string body]}]
+			  {:status 200
+			   :headers {"Content-Type" "text/plain" "X-Demo" ["one" "two"]}
+			   :body [(name request-method) " " uri " " query-string " " (if body (slurp body) "-")]})
+			(run-server handler {:port 3000})
+			""";
+
+	@Test
+	void aRingHandlerServesFromTheWarOnTomcat() throws Exception {
+		optIn();
+		Path war = compileWar(RING_HANDLER, "app.clj");
+		Tomcat tomcat = tomcat(war, 0);
+		try {
+			int port = tomcat.getConnector().getLocalPort();
+			HttpResponse<String> echo = client().send(HttpRequest.newBuilder(uri(port, "/echo?a=1"))
+				.POST(HttpRequest.BodyPublishers.ofString("hello"))
+				.build(), HttpResponse.BodyHandlers.ofString());
+			assertThat(echo.statusCode()).isEqualTo(200);
+			assertThat(echo.body()).isEqualTo("post /echo a=1 hello");
+			assertThat(echo.headers().allValues("x-demo")).containsExactly("one", "two");
+			HttpResponse<String> get = client().send(HttpRequest.newBuilder(uri(port, "/")).build(),
+					HttpResponse.BodyHandlers.ofString());
+			assertThat(get.body()).isEqualTo("get /  -");
+		}
+		finally {
+			tomcat.stop();
+			tomcat.destroy();
+		}
 	}
 
 	@Test

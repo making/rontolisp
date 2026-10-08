@@ -6062,6 +6062,8 @@ public final class LispEvaluator {
 
 	private boolean httpReactorLoaded;
 
+	private boolean httpServeLoaded;
+
 	private static final String GRAY_READ_BYTE_DISPATCH = GrayStreamsLibrary.READ_BYTE_DISPATCH;
 
 	private static final String GRAY_READ_CHAR_DISPATCH = GrayStreamsLibrary.READ_CHAR_DISPATCH;
@@ -10858,6 +10860,24 @@ public final class LispEvaluator {
 			// would answer the same prefix by loading http-server.lisp (and the Gray
 			// protocol with it) for nothing -- a reactor loads that model on the
 			// first %http-make-env call, not on the run that stores the app.
+			// The native-transport serve (http-serve.lisp) behind the
+			// clack-handler-rontolisp shim and ring.adapter.rontolisp: by exact name,
+			// ahead of the %HTTP- prefix hook below, which would answer the same prefix
+			// with http-server.lisp.
+			if (!this.httpServeLoaded && HttpServeLibrary.isServeFunction(name)) {
+				synchronized (this.libraryLoadLock) {
+					if (!this.httpServeLoaded) {
+						this.httpServeLoaded = true;
+						for (LispVal form : HttpServeLibrary.forms(Features.INTERPRETER)) {
+							eval(form, this.globalEnv);
+						}
+					}
+				}
+				LispVal loaded = this.globalEnv.lookupFunctionOrNull(name);
+				if (loaded != null) {
+					return loaded;
+				}
+			}
 			if (!this.httpReactorLoaded && name.startsWith("RONTOLISP::%HTTP-REACTOR-")) {
 				ensureHttpReactorLoaded();
 				LispVal loaded = this.globalEnv.lookupFunctionOrNull(name);

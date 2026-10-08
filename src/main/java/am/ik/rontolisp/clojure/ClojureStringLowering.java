@@ -1125,44 +1125,22 @@ final class ClojureStringLowering {
 				spitForm(ctx, path, content, exists));
 	}
 
+	/** The {@code slurp} runtime: a path, or an already-open input stream. */
+	static final String SLURP = "RONTOLISP::%CLOJURE-SLURP";
+
 	/**
-	 * {@code slurp}: the whole file as a string, read character by character into a
-	 * string stream.
+	 * {@code slurp}: the whole of a path or an open input stream as a string, one call to
+	 * the spliced {@link #SLURP} (a path is opened and closed around the read; a stream
+	 * -- a {@code clojure.java.io/reader}, a Ring request {@code :body} -- is read to its
+	 * end and left to its owner).
 	 */
-	static LispVal slurpForm(ClojureLowering ctx, LispVal path) {
-		String name = ClojureLowering.mangle("slurp-") + (ctx.counter++);
-		LispSymbol self = new LispSymbol(name);
-		LispSymbol file = ctx.freshTemp();
-		LispSymbol stream = ctx.freshTemp();
-		LispSymbol out = ctx.freshTemp();
-		LispSymbol got = ctx.freshTemp();
-		LispVal step = ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
-				ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(got,
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("read-char"), stream, ClojureLowering.NIL_CONST,
-								ClojureLowering.NIL_CONST)))),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), got),
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("get-output-stream-string"), out),
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("progn"),
-								ClojureLowerUtil.list(ClojureLowerUtil.sym("write-char"), got, out),
-								ClojureLowerUtil.list(self))));
-		LispVal binding = new LispCons(self,
-				new LispCons(ClojureLowerUtil.list(List.of()), ClojureLowerUtil.cons(step, List.of())));
-		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let*"),
-				ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(file, path))),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("with-open-file"),
-						ClojureLowerUtil.list(List.of(stream, file)),
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("let*"),
-								ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(out,
-										ClojureLowerUtil.list(ClojureLowerUtil.sym("make-string-output-stream"))))),
-								ClojureLowerUtil.list(ClojureLowerUtil.sym("labels"),
-										ClojureLowerUtil.list(List.of(binding)), ClojureLowerUtil.list(self)))));
+	static LispVal slurpForm(ClojureLowering ctx, LispVal source) {
+		return ClojureLowerUtil.list(new LispSymbol(SLURP), source);
 	}
 
-	/** {@code slurp} as a value: a one-argument lambda over the same read. */
+	/** {@code slurp} as a value: the runtime function itself. */
 	static LispVal slurpValue(ClojureLowering ctx) {
-		LispSymbol path = new LispSymbol(ClojureLowering.mangle("slurp-path"));
-		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(path), slurpForm(ctx, path));
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), new LispSymbol(SLURP));
 	}
 
 	/**

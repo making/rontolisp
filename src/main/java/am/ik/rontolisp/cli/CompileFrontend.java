@@ -21,6 +21,7 @@ import am.ik.rontolisp.eval.HostFetchLibrary;
 import am.ik.rontolisp.eval.HttpLibrary;
 import am.ik.rontolisp.eval.HttpReactorInliner;
 import am.ik.rontolisp.eval.HttpReactorLibrary;
+import am.ik.rontolisp.eval.HttpServeLibrary;
 import am.ik.rontolisp.eval.HttpServerLibrary;
 import am.ik.rontolisp.eval.JsonLibrary;
 import am.ik.rontolisp.eval.SafetensorsLibrary;
@@ -514,6 +515,12 @@ final class CompileFrontend {
 		// definitions: HttpLibrary's handler reachability, WitExportInliner's defun
 		// checks and the library pruner all recognize async-defun, never the sugar.
 		loaded = LispMacroExpander.rewriteAsyncSugar(loaded);
+		// "Serve on this target's native transport" (http-serve.lisp), read with the
+		// target's features: the clack-handler-rontolisp shim's run and the Clojure
+		// ring.adapter.rontolisp/run-server both call it. FIRST, because each leg is
+		// what a later pass reads -- the http-handler directive (HttpHandlerInliner,
+		// HttpLibrary, the :raw-body scan), the reactor marker (HttpReactorInliner).
+		loaded = HttpServeLibrary.process(loaded, features);
 		// objc:, appkit:, metal: and scene: have no lowering for a .wasm and never will
 		// (no WASM runtime offers a foreign function API, AppKit or Metal); the JVM
 		// backend carries the binding as an embedded blob (JvmObjcRuntimeBuilder), and a

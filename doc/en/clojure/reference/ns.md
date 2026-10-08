@@ -6,7 +6,8 @@ Switches to the namespace, creating it, and wires its clauses: `:as` registers a
 `:refer`/`:use` unqualified names, `:import` class names for interop, and
 `(:refer-clojure :only ...)`/`(:refer-clojure :exclude ...)` narrow the visible core. There
 is no `:rename`. The definitions below the form belong to the namespace. A required
-namespace other than `clojure.string`, `clojure.set`, `clojure.java.io` (`reader` only) and `clojure.test`
+namespace other than `clojure.string`, `clojure.set`, `clojure.java.io` (`reader` only), `clojure.test` and
+`ring.adapter.rontolisp` ([Ring adapter](ring.md))
 is a project namespace: one an earlier `ns` form of the program declared, or one whose
 file on the source path loads when the clause runs -- once per program, again under
 `:reload` ([Semantics](../semantics.md#namespaces-and-files)); a file

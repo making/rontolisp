@@ -327,6 +327,12 @@
       },
       {
         "condition": {
+          "typeReachable": "am.ik.rontolisp.eval.HttpServeLibrary"
+        },
+        "pattern": "am/ik/rontolisp/eval/http-serve\\.lisp"
+      },
+      {
+        "condition": {
           "typeReachable": "am.ik.rontolisp.eval.HttpLibrary"
         },
         "pattern": "am/ik/rontolisp/eval/http\\.wit"

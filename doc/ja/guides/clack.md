@@ -283,6 +283,10 @@ Hello, Clack!
 [`examples/cloudflare-workers/hello-clack-one-source/`](https://github.com/making/rontolisp/tree/develop/examples/cloudflare-workers/hello-clack-one-source)
 は、その同じファイルを Worker としてデプロイし、ホストごとのコマンドを並べています。
 
+Clojure のプログラムは、Ring アダプター
+[`ring.adapter.rontolisp/run-server`](../clojure/reference/ring.md) で同じトランスポートを
+使えます。このアダプターは `:server :rontolisp` と同じトランスポートのコードを呼び出します。
+
 ## ホストから呼ばれる場合: リアクタビルド
 
 ソケットを渡してこないホストもあります。Cloudflare Workers、ブラウザのページ、

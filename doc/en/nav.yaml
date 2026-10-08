@@ -275,6 +275,8 @@ sections:
             title: "Transducers"
           - file: clojure/reference/io.md
             title: "IO"
+          - file: clojure/reference/ring.md
+            title: "Ring adapter"
           - file: clojure/reference/interop.md
             title: "Java interop"
           - file: clojure/reference/test.md

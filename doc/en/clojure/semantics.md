@@ -289,7 +289,7 @@ numbers, strings, characters, keywords (`::kw` in the calling namespace) and col
 metadata dropped, `#_` discarding. A record literal builds the record of a class the
 program defines; `#=` read-time evaluation, reader conditionals and tagged literals are
 refused like in source. A reader is a `clojure.java.io/reader`, `*in*`, or a
-`java.io.PushbackReader`/`BufferedReader` over one or over a `java.io.StringReader`,
+`java.io.PushbackReader`/`BufferedReader`/`InputStreamReader` over one or over a `java.io.StringReader`,
 which is a stream on every backend; `read` leaves it right after the datum. `str` of a
 collection quotes the strings inside it, like the oracle's, so what `spit` writes reads
 back. `eval` and `load-string` stay absent: no compiler runs at run time.
@@ -314,6 +314,7 @@ Each refusal names the missing design, never `unknown name`:
 | `::alias/kw` with an unknown alias | `Invalid token: ...` | only required aliases, the file's own ns and known namespaces resolve |
 | `--no-gc` builds | by name | that backend has no pairs, symbols or closures |
 | `file-seq`, `clojure.java.io` (except `reader`) | `file-seq` / `unknown name: clojure.java.io/...` | no directory walks; only `reader` resolves, opening a file-stream reader |
+| an asynchronous Ring handler (`run-server` with `:async? true`) | `asynchronous handlers (:async? true) are not supported` | no respond/raise protocol under the transports |
 
 ## Errors and positions
 

@@ -252,6 +252,14 @@
 - `line-seq` はパスか開かれたリーダー（`clojure.java.io/reader` など。閉じるのは
   `with-open`）を取って、どちらも strict に答えます（オラクルはリーダーを取って遅延です）。
   `spit`・`slurp`・`line-seq`・`reader` はインタプリタと JVM、wasm ではパスを含む `--dir` プリオープン付きで動きます。
+  開かれたリーダーの `slurp` はリーダーを閉じません（オラクルは閉じます）。リーダーの上の
+  `java.io.InputStreamReader` はどのバックエンドでもそのリーダー自身です。Ring のリクエスト
+  `:body` が、オラクルでは `InputStream` であるのに対し、ここではリーダーだからです。
+- Ring アダプター（`ring.adapter.rontolisp/run-server`）のリクエストマップには
+  `:content-type` と `:content-length` が入りますが、`:character-encoding` と
+  `:ssl-client-cert` は入りません。ボディのないリクエストの `:body` は `nil` です（Jetty の
+  アダプターは空のストリームを渡します）。非同期ハンドラと `java.io.File` のボディは拒否し、
+  2 つ目の同時サーバーは最初のものを置き換えます（[アダプター](reference/ring.md)を参照）。
 - ソート済みのマップとセットは、順序付け・表示・キーの検索がオラクルと同じですが、どの操作も
   コピーを作ります（関連付けにはハッシュマップと同じくコレクションの大きさ分のコストが
   かかります）。`class` は `:map`/`:set` を返します。先頭から走査して何も残らない `subseq`/`rsubseq` は `nil` を返します（オラクルは

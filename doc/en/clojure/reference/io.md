@@ -9,9 +9,9 @@ Clojure-notation arguments.
 | Name | Example | Result |
 |---|---|---|
 | `spit` | `(spit path "a\n")` | `nil` |
-| `slurp` | `(slurp path)` | `"a\n"` |
+| `slurp` | `(slurp path-or-reader)` | `"a\n"` |
 | `line-seq` | `(line-seq path-or-reader)` | `("a")` |
-| `clojure.java.io/reader` | `(jio/reader path)` | a reader |
+| `clojure.java.io/reader` | `(jio/reader path-or-reader)` | a reader |
 | `read-string` | `(read-string "[1 :k]")` | `[1 :k]` |
 | `read` | `(read (java.io.PushbackReader. (jio/reader path)))` | the first datum |
 | `format` | `(format "%s=%d" :a 5)` | `":a=5"` |

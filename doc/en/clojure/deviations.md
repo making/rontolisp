@@ -262,6 +262,14 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   which `with-open` closes) and answers strictly either way (the oracle takes a
   reader and answers lazily); `spit`/`slurp`/`line-seq`/`reader` run on the
   interpreter and the JVM, and on wasm with a `--dir` preopen covering the path.
+  `slurp` of an open reader leaves it open (the oracle closes it), and a
+  `java.io.InputStreamReader` over a reader is that reader, on every backend: here a
+  Ring request `:body` is a reader, where the oracle's is an `InputStream`.
+- The Ring adapter (`ring.adapter.rontolisp/run-server`) puts `:content-type` and
+  `:content-length` in the request map but not `:character-encoding` or
+  `:ssl-client-cert`; a request without a body has `:body` `nil` (Jetty's adapter
+  supplies an empty stream). An asynchronous handler, a `java.io.File` body and a
+  second concurrent server are refused or replaced (see [the adapter](reference/ring.md)).
 - A sorted map or set orders, prints and finds keys like the oracle's, but every verb
   copies it (an association costs the collection's size, like a hash map's); `class`
   answers `:map`/`:set`; a `subseq` or

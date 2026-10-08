@@ -58,6 +58,9 @@ final class ClojureNamespaceLowering {
 		if (ref.ns().equals("clojure.java.io")) {
 			return jioCall(ctx, ref.var(), items);
 		}
+		if (ref.ns().equals(ClojureRingLowering.NAMESPACE)) {
+			return ClojureRingLowering.ringCall(ctx, ref.var(), items);
+		}
 		return ClojureStringLowering.stringCall(ctx, ref.var(), items);
 	}
 
@@ -75,6 +78,9 @@ final class ClojureNamespaceLowering {
 		}
 		if (ref.ns().equals("clojure.java.io")) {
 			return jioValue(ref.var());
+		}
+		if (ref.ns().equals(ClojureRingLowering.NAMESPACE)) {
+			return ClojureRingLowering.ringValue(ref.var());
 		}
 		return ClojureStringLowering.stringValue(ctx, ref.var());
 	}
@@ -109,11 +115,12 @@ final class ClojureNamespaceLowering {
 
 	/**
 	 * The namespaces whose vars lower to core forms: {@code clojure.string},
-	 * {@code clojure.set}, {@code clojure.java.io} and {@code clojure.test}.
+	 * {@code clojure.set}, {@code clojure.java.io}, {@code clojure.test} and the Ring
+	 * adapter {@code ring.adapter.rontolisp}.
 	 */
 	static boolean isKnownNamespace(String ns) {
 		return ns.equals("clojure.string") || ns.equals(ClojureSetLowering.NAMESPACE) || ns.equals("clojure.java.io")
-				|| ns.equals(ClojureTestLowering.NAMESPACE);
+				|| ns.equals(ClojureTestLowering.NAMESPACE) || ns.equals(ClojureRingLowering.NAMESPACE);
 	}
 
 	/** Whether the namespace exports the var as a lowering. */
@@ -121,7 +128,8 @@ final class ClojureNamespaceLowering {
 		return ns.equals("clojure.string") && STRING_VARS.contains(var)
 				|| ns.equals(ClojureSetLowering.NAMESPACE) && ClojureSetLowering.VARS.contains(var)
 				|| ns.equals("clojure.java.io") && JIO_VARS.contains(var)
-				|| ns.equals(ClojureTestLowering.NAMESPACE) && ClojureTestLowering.VARS.contains(var);
+				|| ns.equals(ClojureTestLowering.NAMESPACE) && ClojureTestLowering.VARS.contains(var)
+				|| ns.equals(ClojureRingLowering.NAMESPACE) && ClojureRingLowering.VARS.contains(var);
 	}
 
 	/**
@@ -137,6 +145,9 @@ final class ClojureNamespaceLowering {
 		}
 		if (ns.equals(ClojureSetLowering.NAMESPACE)) {
 			return ClojureSetLowering.VARS;
+		}
+		if (ns.equals(ClojureRingLowering.NAMESPACE)) {
+			return ClojureRingLowering.VARS;
 		}
 		return STRING_VARS;
 	}
