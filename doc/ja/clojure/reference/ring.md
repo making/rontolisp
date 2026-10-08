@@ -69,3 +69,24 @@ get /hello
 ハンドラがマップ以外を返した場合と、それ以外の種類のボディ（`java.io.File` を含む）を
 返した場合はエラーを通知し、トランスポートは 500 を返します。レスポンスを組み立てる関数と
 パラメーターのミドルウェアは、組み込みの [Ring ユーティリティ](ring-util.md)にあります。
+
+## Cloudflare Workers
+
+Worker は `handle-request` エクスポートを呼ぶので、リアクタービルドはソースを変えずに
+Worker としてデプロイできます。`--emit-js-glue` が JavaScript 側をモジュールの隣に書き出します。
+
+```console
+$ rontolisp app.clj -o src/worker.wasm --no-wasi --optimize=size --emit-js-glue
+$ cat src/index.js
+import module from "./worker.wasm";
+import { worker } from "./worker.js";
+
+export default worker(module);
+$ npx wrangler dev      # http://localhost:8787
+$ npx wrangler deploy
+```
+
+ここでは `:port` と `:host` は読まれません。`wrangler.jsonc` と、他のターゲットと同じ Ring の例を
+ビルドする `build.sh` を含む完全なプロジェクトは
+[`examples/cloudflare-workers/ring-hello-one-source/`](https://github.com/making/rontolisp/tree/develop/examples/cloudflare-workers/ring-hello-one-source)
+にあります。

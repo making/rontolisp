@@ -22,6 +22,7 @@ Module sizes are measured rather than quoted here:
 | [`hello/`](hello) | **Start here.** Three `wasm-export`ed functions JavaScript calls directly. `--no-gc`, a plain MVP module with zero imports | 32 lines, no dependencies |
 | [`hello-clack/`](hello-clack) | **Start here if you want Clack.** One application function and `clack:clackup` — the whole of [Clack](https://github.com/fukamachi/clack)'s API | GENERATED, and all of it: `src/index.js` is three lines |
 | [`hello-clack-one-source/`](hello-clack-one-source) | **No `worker.lisp` at all**, and the smallest program that says so: `build.sh` compiles [`net/hello-clack.lisp`](../net/hello-clack.lisp) unchanged — the file that also binds a socket locally, deploys as a Servlet war and serves under `wasmtime serve`. One source, five hosts | GENERATED — the same file `hello-clack` gets |
+| [`ring-hello-one-source/`](ring-hello-one-source) | **Clojure.** `build.sh` compiles [`clojure/ring-hello.clj`](../clojure/ring-hello.clj) unchanged: a Ring handler with `ring.util.response` and `wrap-params`, served by `ring.adapter.rontolisp/run-server` — the file that also binds a socket locally, deploys as a Servlet war and serves under `wasmtime serve` | GENERATED — `hello-clack`'s file less the entropy seed, which a program that draws no random number does not keep |
 | [`hello-tiny-routes/`](hello-tiny-routes) | [tiny-routes](https://github.com/jeko2000/tiny-routes): a route table composed with `define-routes`, threaded through middleware with `pipe`. Loaded as `tiny-routes/lite`, so no regex engine ships | GENERATED — the same file `hello-clack` gets, because the declarations are the same |
 | [`hello-ningle/`](hello-ningle) | [ningle](https://github.com/fukamachi/ningle): routes assigned to a CLOS *object*, a bare string as a controller, an overridden `not-found` **method** | GENERATED — the same file `hello-clack` gets, because the declarations are the same |
 | [`httpbin/`](httpbin) | **No library.** Five echo endpoints, 405, 404, `handler-case` — plus the reactor adapter written out by hand, so clack never ships | 54 lines, boundary included — the one hand-written host left here |
@@ -51,6 +52,9 @@ Module sizes are measured rather than quoted here:
 - **`httpbin-clack-one-source/`** when the program already serves somewhere
   else. `:server :rontolisp` picks the transport from the compile target, so
   there is no edit between a local server and this Worker.
+- **`ring-hello-one-source/`** when the program is a Ring handler. The Clojure
+  counterpart of `hello-clack-one-source/`: `run-server` picks the transport
+  from the compile target, so the Worker is a compile flag.
 - **`httpbin-tiny-routes/`** when the routes deserve a library — templates,
   declining, middleware combinators — *provided* it is loaded as
   `tiny-routes/lite`. Full `"tiny-routes"` spells the same routes and ships
@@ -154,7 +158,8 @@ further and asserts each answer with
 [rove](../../doc/en/guides/testing.md), so it exits non-zero when the handler
 drifts — which is why that one needs rove's directories on `--system-path`.
 `httpbin-clack-one-source/` needs none — its program IS
-`../net/httpbin-clack.lisp`, so its loop is serving that file and `curl`; and
+`../net/httpbin-clack.lisp`, so its loop is serving that file and `curl`, as is
+`ring-hello-one-source/`'s with `../clojure/ring-hello.clj`; and
 `dog-fetcher/` and `btc-ticker/` cannot have one, because their HTTP client is
 an import only a Worker provides. Every other Lisp source here is pinned by
 `examples/examples.yaml`:
@@ -173,7 +178,8 @@ answers, and `dog-fetcher/`'s outgoing request, whose JSPI bridge needs nothing
 on the edge that it did not need locally. `btc-ticker/` is the exception so far:
 it has been driven end to end against the real bitFlyer API through its own
 generated `worker()` on node 24 JSPI, which is the same code path workerd runs,
-but not yet deployed.
+but not yet deployed, and `ring-hello-one-source/` has so far run under
+`wrangler dev` only.
 
 Cloudflare budget-checks **Worker Startup Time** at deploy, and `wrangler
 deploy` prints it when it has one to report. Going through `clack:clackup`

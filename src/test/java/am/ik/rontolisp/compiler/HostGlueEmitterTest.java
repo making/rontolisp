@@ -29,7 +29,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 /**
  * Pins the {@code --emit-js-glue} output against the declarations it is derived from --
  * the {@link GlImportObjectTest} rule applied to the host boundary of a {@code --no-wasi}
- * reactor. FIVE shapes, and this asserts every checked-in Worker glue is exactly what its
+ * reactor. SIX shapes, and this asserts every checked-in Worker glue is exactly what its
  * build writes, so no shipped Worker can drift from the compiler: a reactor that FETCHES
  * on each boundary ({@link am.ik.rontolisp.compiler.HostBoundary}) --
  * {@code dog-fetcher/src/worker.js} streaming and {@code btc-ticker/src/worker.js}
@@ -37,7 +37,8 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  * streaming fetcher compiled {@code --reentrant} ({@code dog-relay/src/worker.js}: no
  * queue, per-call body state keyed by the call id), and a reactor that does not fetch, on
  * each boundary: the four {@code hello-*} directories, which import nothing at all, and
- * the four {@code httpbin-*} ones that go through {@code clackup}.
+ * the four {@code httpbin-*} ones that go through {@code clackup}, plus the one Worker
+ * whose program draws no random number ({@code ring-hello-one-source}).
  *
  * <p>
  * The glue is derived from the DECLARATIONS alone, which is why the programs compiled
@@ -47,8 +48,11 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  * asserted rather than assumed -- every directory in a family is pinned against the one
  * derived string. (Verified: each example's own build writes its file unchanged.) The one
  * fact beyond the declarations is which host hooks survive {@code --optimize}; every
- * example here both draws and reads the clock, so it keeps both, as these unoptimized
- * builds do.
+ * example here but one both draws and reads the clock, so it keeps both, as these
+ * unoptimized builds do. The exception is the Ring Worker: the transport reads the clock
+ * and nothing in the program draws, so its {@code --optimize=size} build keeps only
+ * {@code __ronto_set_time} -- which is what the answering reactor's own shaken build
+ * keeps, and so what it is pinned against.
  *
  * <p>
  * {@code examples/cloudflare-workers/httpbin} is deliberately absent: it writes its
@@ -76,6 +80,9 @@ class HostGlueEmitterTest {
 
 	private static final List<Path> HTTPBIN_GLUE = glueIn("httpbin-clack", "httpbin-clack-one-source", "httpbin-ningle",
 			"httpbin-tiny-routes");
+
+	// The Ring Worker: the hello-* declarations, shaken as its build.sh shakes them.
+	private static final List<Path> RING_GLUE = glueIn("ring-hello-one-source");
 
 	private static final String FIX = "./mvnw -Drontolisp.glue.fix=true -Dtest=HostGlueEmitterTest#fixWorkerGlue test";
 
@@ -152,6 +159,24 @@ class HostGlueEmitterTest {
 		assertPinned(HTTPBIN_GLUE, answeringStreamingGlue());
 	}
 
+	@Test
+	@DisabledIfSystemProperty(named = "rontolisp.glue.fix", matches = "true")
+	void theCheckedInRingGlueIsWhatAShakenAnsweringEnvelopeReactorBuildWrites() throws IOException {
+		assertPinned(RING_GLUE, shakenAnsweringEnvelopeGlue());
+	}
+
+	@Test
+	void aShakenReactorThatDrawsNothingIsNotSeeded() {
+		// The transport reads the clock and nothing draws, so --optimize=size keeps only
+		// the clock hook, and the glue calls only what survived; the unshaken build
+		// seeds.
+		String shaken = shakenAnsweringEnvelopeGlue();
+		assertThat(shaken).doesNotContain(HostGlueEmitter.SEED_RANDOM_EXPORT)
+			.contains("exports." + HostGlueEmitter.SET_TIME_EXPORT + "(");
+		String unshaken = answeringEnvelopeGlue();
+		assertThat(unshaken).contains("exports." + HostGlueEmitter.SEED_RANDOM_EXPORT + "(");
+	}
+
 	private static void assertPinned(List<Path> paths, String expected) throws IOException {
 		for (Path path : paths) {
 			assertThat(Files.readString(path, StandardCharsets.UTF_8))
@@ -173,6 +198,7 @@ class HostGlueEmitterTest {
 		write(RELAY_GLUE, reentrantReactorGlue());
 		write(HELLO_GLUE, answeringEnvelopeGlue());
 		write(HTTPBIN_GLUE, answeringStreamingGlue());
+		write(RING_GLUE, shakenAnsweringEnvelopeGlue());
 	}
 
 	private static void write(List<Path> paths, String glue) throws IOException {
@@ -413,6 +439,10 @@ class HostGlueEmitterTest {
 		return reactorGlue(ANSWERING_REACTOR, HostBoundary.STREAMING, false);
 	}
 
+	private static String shakenAnsweringEnvelopeGlue() {
+		return reactorGlue(ANSWERING_REACTOR, HostBoundary.ENVELOPE, false, false, OptimizeLevel.SIZE);
+	}
+
 	// The CLI's --no-wasi reactor pipeline, in its order, with --host-fetch's splice
 	// under the same condition the CLI puts it under. The PROGRAM and the BOUNDARY are
 	// the only differences between the four shipped shapes' glue, which is the point of
@@ -422,6 +452,11 @@ class HostGlueEmitterTest {
 	}
 
 	private static String reactorGlue(String source, HostBoundary boundary, boolean hostFetch, boolean reentrant) {
+		return reactorGlue(source, boundary, hostFetch, reentrant, OptimizeLevel.NONE);
+	}
+
+	private static String reactorGlue(String source, HostBoundary boundary, boolean hostFetch, boolean reentrant,
+			OptimizeLevel optimize) {
 		List<LispVal> loaded = HttpReactorInliner
 			.lowerHttpHandler(LispReader.readAllFromString(source, Features.WASM_REACTOR));
 		if (hostFetch) {
@@ -434,7 +469,7 @@ class HostGlueEmitterTest {
 			.process(LispPreludeLibrary.process(JsonLibrary.process(UserMacroExpander.expand(loaded))));
 		WasmLispCompiler compiler = WasmLispCompiler.builder()
 			.noWasi(true)
-			.optimize(OptimizeLevel.NONE)
+			.optimize(optimize)
 			.hostFetch(hostFetch)
 			.reentrant(reentrant)
 			.build();

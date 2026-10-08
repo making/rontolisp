@@ -923,6 +923,15 @@ serve`, and a war on embedded Tomcat; plain P1 compiles and signals the directiv
   beside `PushbackReader`/`BufferedReader`) -- the measured `no matching constructor` on the
   JVM is gone on every backend. Over a `StringReader` it also answers the string stream,
   where the oracle has no such constructor (a leniency, not pinned).
+- Cloudflare Workers: `examples/cloudflare-workers/ring-hello-one-source/` compiles
+  `examples/clojure/ring-hello.clj` unedited (`--no-wasi --optimize=size --emit-js-glue`,
+  419,012 B, 0 imports). Its glue is the hello-* glue less the entropy seed: the reactor
+  transport reads the clock and the program draws nothing, so the shake drops
+  `__ronto_seed_random` (`.kb/wasm-export-no-wasi.md`); `HostGlueEmitterTest` pins it
+  against the answering envelope reactor built at `--optimize=size`. Verified 2026-10-08
+  under `wrangler dev` 4.148.0: `/`, `/greet?name=`, urlencoded POST `/greet`, `text/plain`
+  POST `/echo` (UTF-8 round trip), `/home` 302, 404. A urlencoded POST `/echo` answers ""
+  because `wrap-params` consumed the body, as under the oracle's Jetty adapter.
 - Not done: `ring.adapter.jetty` as an alias (would claim Jetty options; refused by name,
   pointing here), a `stop-server` (Jetty's is `(.stop server)`, interop on the handle). The
   util namespaces are "Ring util namespaces".
@@ -930,7 +939,8 @@ serve`, and a war on embedded Tomcat; plain P1 compiles and signals the directiv
   node, the war's registration, the refusals, `run-server` as a value),
   `ServeRingComponentE2eTest` (opt-in), `WarE2eTest#aRingHandlerServesFromTheWarOnTomcat`
   (opt-in), clojure-spec `slurp-and-the-reader-take-an-open-stream`,
-  `examples/clojure/ring-hello.clj` (the four compile legs).
+  `examples/clojure/ring-hello.clj` (the four compile legs), `HostGlueEmitterTest` (the
+  Worker's checked-in glue).
 
 ## Ring util namespaces
 

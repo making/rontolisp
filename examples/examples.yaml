@@ -247,7 +247,8 @@ examples:
       net/hello-clack.lisp (both adapters call the same rontolisp::%http-serve):
       a socket on the interpreter and the JVM, a Servlet container under
       -o app.war, `wasmtime serve` under --component, a host calling the
-      handle-request export under --no-wasi. Compile legs, like hello-clack:
+      handle-request export under --no-wasi (what
+      cloudflare-workers/ring-hello-one-source deploys, unedited). Compile legs, like hello-clack:
       a server blocks and a war or reactor is never run as a program. The
       request round trips on all four backends are ClojureRingAdapterTest (and
       ServeRingComponentE2eTest for `wasmtime serve`).

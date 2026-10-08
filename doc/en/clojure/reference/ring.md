@@ -68,3 +68,23 @@ adapter.
 A handler that answers anything but a map, or a body of any other kind (a `java.io.File`
 included), signals; the transport answers 500. The response builders and the parameter
 middleware are the built-in [Ring utilities](ring-util.md).
+
+## Cloudflare Workers
+
+A Worker calls the `handle-request` export, so the reactor build deploys as one with no
+change to the source. `--emit-js-glue` writes the JavaScript half beside the module:
+
+```console
+$ rontolisp app.clj -o src/worker.wasm --no-wasi --optimize=size --emit-js-glue
+$ cat src/index.js
+import module from "./worker.wasm";
+import { worker } from "./worker.js";
+
+export default worker(module);
+$ npx wrangler dev      # http://localhost:8787
+$ npx wrangler deploy
+```
+
+`:port` and `:host` are not read there. A complete project, with `wrangler.jsonc` and a
+`build.sh` over the same Ring example the other targets build, is
+[`examples/cloudflare-workers/ring-hello-one-source/`](https://github.com/making/rontolisp/tree/develop/examples/cloudflare-workers/ring-hello-one-source).
