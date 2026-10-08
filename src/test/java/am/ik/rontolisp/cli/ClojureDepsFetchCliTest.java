@@ -34,10 +34,11 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
  * a {@code file:} Maven repository and git repositories the test makes on disk, nothing
  * reaching the network -- through the command line: the same program on the interpreter,
  * a jar, a Preview 1 module and a component; a Java library a Maven dependency brings on
- * the interpreter's class path and beside a jar; a second run from the caches alone. The
- * expected output is the oracle's ({@code clj -Srepro -M src/app/main.clj} over the same
- * repositories, {@code clj} 1.12.6, 2026-10-08): the newest {@code fixture/words} across
- * the tree wins, the optional and test dependencies of a POM are never fetched.
+ * the interpreter's class path and beside a jar, and at macro time on every backend; a
+ * second run from the caches alone. The expected output is the oracle's
+ * ({@code clj -Srepro -M src/app/main.clj} over the same repositories, {@code clj}
+ * 1.12.6, 2026-10-08): the newest {@code fixture/words} across the tree wins, the
+ * optional and test dependencies of a POM are never fetched.
  */
 class ClojureDepsFetchCliTest {
 
@@ -96,6 +97,11 @@ class ClojureDepsFetchCliTest {
 		project("java", "fixture/shouting {:mvn/version \"1.0\"}", " :mvn/local-repo \"m2-java\"");
 		write(dir.resolve("java/src/java_app/main.clj"),
 				"(ns java-app.main (:require [fixture.shouting :as s]))\n(println (s/shout \"deps\"))\n");
+		write(dir.resolve("java/src/java_app/macro.clj"), """
+				(ns java-app.macro (:require [fixture.shouting :as s]))
+				(defmacro loud [x] (s/shout x))
+				(println (loud "macro"))
+				""");
 	}
 
 	@Test
@@ -139,6 +145,24 @@ class ClojureDepsFetchCliTest {
 		assertThat(Files.readString(dir.resolve("out/java.pom"))).contains("<artifactId>javalib</artifactId>")
 			.doesNotContain("<artifactId>shouting</artifactId>");
 		assertThat(java("-jar", jar.toString())).isEqualTo("DEPS!\n");
+	}
+
+	@Test
+	void aMacroBodyReachesTheClassesADependencyBringsOnEveryBackend() throws Exception {
+		// the expansion runs while the program lowers, on the JVM whatever the target,
+		// so the wasm legs print what the Java class answered then
+		Path main = dir.resolve("java/src/java_app/macro.clj");
+		assertThat(runCli(main.toString())).isEqualTo("MACRO!\n");
+		Path jar = dir.resolve("out/macro.jar");
+		runCli(main.toString(), "-o", jar.toString());
+		assertThat(java("-jar", jar.toString())).isEqualTo("MACRO!\n");
+		assumeTrue(HostWasmtime.isAvailable(), "no usable wasmtime on PATH");
+		Path preview1 = dir.resolve("out/macro.wasm");
+		runCli(main.toString(), "-o", preview1.toString());
+		assertThat(wasmtime(preview1)).isEqualTo("MACRO!\n");
+		Path component = dir.resolve("out/macro-c.wasm");
+		runCli(main.toString(), "-o", component.toString(), "--component");
+		assertThat(wasmtime(component)).isEqualTo("MACRO!\n");
 	}
 
 	@Test

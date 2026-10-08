@@ -1039,7 +1039,9 @@ repositories, `GITLIBS` set; tools.deps read from the CLI jar).
   generated pom lists the Maven coordinate. Directories never join (a `src` tree would be
   copied beside every jar, and two `src` names collide); a prepped library's
   `target/classes` is `--java-classpath`'s. A source-only jar (most Clojars libraries) does not
-  join. Wasm: the jars contribute sources only; Java stays refused at call time.
+  join. Wasm: the compile's lowering and macro time see the classes too (a macro body's helper
+  calling a dependency's class expands there, `ClojureDepsFetchCliTest`), a run-time call
+  stays refused.
 - **`data_readers.clj`** (gap 4): not read. Honoring one means calling a library function at
   READ time, and a whole file is read before its first `require` lowers (`Clojure.read`), so
   the reader function's namespace could never be loaded in time; a tag it defines is the

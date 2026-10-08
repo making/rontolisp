@@ -44,29 +44,20 @@ import org.jspecify.annotations.Nullable;
  */
 final class JavaClassPath implements AutoCloseable {
 
-	/**
-	 * No class path, and none to grow: the classes rontolisp runs with -- what a target
-	 * without Java classes (wasm) compiles against.
-	 */
-	static final JavaClassPath NONE = new JavaClassPath(List.of(), List.of(), false);
-
-	private final boolean growable;
-
 	private final List<Path> entries;
 
 	private final List<Artifact> dependencies;
 
 	private @Nullable ClassLoader loader;
 
-	private JavaClassPath(List<Path> entries, List<Artifact> dependencies, boolean growable) {
+	private JavaClassPath(List<Path> entries, List<Artifact> dependencies) {
 		this.entries = new ArrayList<>(entries);
 		this.dependencies = new ArrayList<>(dependencies);
-		this.growable = growable;
 	}
 
 	/**
 	 * A class path of the entries given, growing as a program's dependencies resolve: an
-	 * embedder's, whose entries are its own.
+	 * embedder's, whose entries are its own, or a wasm compile's, which names none.
 	 * @param entries the directories and jars, in search order
 	 * @return the class path
 	 */
@@ -75,7 +66,7 @@ final class JavaClassPath implements AutoCloseable {
 		for (Path entry : entries) {
 			absolute.add(entry.toAbsolutePath().normalize());
 		}
-		return new JavaClassPath(absolute, List.of(), true);
+		return new JavaClassPath(absolute, List.of());
 	}
 
 	/**
@@ -90,7 +81,7 @@ final class JavaClassPath implements AutoCloseable {
 	 */
 	static JavaClassPath of(JavaResolutionOptions options, @Nullable MavenResolver resolver, PrintStream err) {
 		if (!options.namesClassPath()) {
-			return new JavaClassPath(List.of(), List.of(), true);
+			return new JavaClassPath(List.of(), List.of());
 		}
 		List<Path> entries = new ArrayList<>();
 		for (Path entry : options.classpath()) {
@@ -125,7 +116,7 @@ final class JavaClassPath implements AutoCloseable {
 				throw new IllegalArgumentException("--java-dep: " + ex.getMessage(), ex);
 			}
 		}
-		return new JavaClassPath(entries, coordinates, true);
+		return new JavaClassPath(entries, coordinates);
 	}
 
 	/**
@@ -133,15 +124,12 @@ final class JavaClassPath implements AutoCloseable {
 	 * -- after the entries already there, each once: what {@link #classLoader()} loads
 	 * from from now on, what a compile resolves against and a compiled jar carries. Its
 	 * Maven coordinates, when a coordinate brought it, join the {@link #dependencies()} a
-	 * generated pom names. {@link #NONE} adds nothing.
+	 * generated pom names.
 	 * @param jar the jar's path
 	 * @param mavenCoordinate its coordinates
 	 * ({@code groupId:artifactId[:extension[:classifier]]:version}), or {@code null}
 	 */
 	synchronized void add(String jar, @Nullable String mavenCoordinate) {
-		if (!this.growable) {
-			return;
-		}
 		Path path = Path.of(jar).toAbsolutePath().normalize();
 		if (!this.entries.contains(path)) {
 			this.entries.add(path);
@@ -316,14 +304,13 @@ final class JavaClassPath implements AutoCloseable {
 	 * runs with, made once, which loads from every entry {@link #add} adds later too. A
 	 * native image defines no class at run time, so there the entries reach a JVM
 	 * compile's class-file lookup and a jar's manifest, not a loader.
-	 * @return the loader (rontolisp's own for {@link #NONE}, or in a native image)
+	 * @return the loader (rontolisp's own in a native image)
 	 */
 	synchronized ClassLoader classLoader() {
 		ClassLoader made = this.loader;
 		if (made == null) {
 			ClassLoader parent = JavaClassPath.class.getClassLoader();
-			if ((!this.growable && this.entries.isEmpty())
-					|| System.getProperty("org.graalvm.nativeimage.imagecode") != null) {
+			if (System.getProperty("org.graalvm.nativeimage.imagecode") != null) {
 				made = parent;
 			}
 			else {

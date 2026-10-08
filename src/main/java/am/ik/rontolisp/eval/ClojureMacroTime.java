@@ -31,11 +31,24 @@ public final class ClojureMacroTime {
 	}
 
 	/**
-	 * A macro evaluator over a fresh macro-time evaluator, built on first use.
+	 * A macro evaluator over a fresh macro-time evaluator, built on first use, its Java
+	 * classes rontolisp's own.
 	 * @return the evaluator
 	 */
 	public static ClojureMacroEvaluator create() {
-		return new LazyEvaluator();
+		return new LazyEvaluator(SourceLoader.class.getClassLoader());
+	}
+
+	/**
+	 * A macro evaluator over a fresh macro-time evaluator, built on first use, whose
+	 * {@code java:} calls resolve through the program's Java class loader -- the one its
+	 * lowering asks, which the jars of its dependencies join -- so a helper a macro body
+	 * calls reaches the classes the program does.
+	 * @param javaClasses the program's Java class loader
+	 * @return the evaluator
+	 */
+	public static ClojureMacroEvaluator create(ClassLoader javaClasses) {
+		return new LazyEvaluator(javaClasses);
 	}
 
 	/** One handed-over definition waiting for the next evaluation. */
@@ -51,15 +64,22 @@ public final class ClojureMacroTime {
 
 	private static final class LazyEvaluator implements ClojureMacroEvaluator {
 
+		private final ClassLoader javaClasses;
+
 		private @Nullable LispEvaluator evaluator;
 
 		private final List<Pending> pending = new ArrayList<>();
+
+		LazyEvaluator(ClassLoader javaClasses) {
+			this.javaClasses = javaClasses;
+		}
 
 		@Override
 		public synchronized LispVal evaluate(LispVal form) {
 			LispEvaluator macroEval = this.evaluator;
 			if (macroEval == null) {
 				macroEval = new LispEvaluator(new PrintStream(OutputStream.nullOutputStream()));
+				macroEval.setSourceLoader(SourceLoader.fileSystem(this.javaClasses));
 				for (LispVal library : ClojureLibrary.forms()) {
 					macroEval.eval(library);
 				}

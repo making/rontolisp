@@ -641,7 +641,12 @@ Per call the uncached bridge paid `getMethods()` (~2.5 us), `select()` (250 ns -
   `URLClassLoader` subclass over rontolisp's loader, made once and ALWAYS (a run with no entry
   gets an empty one, so a lowering can grow it: `addURL`) -- not in a native image (no
   run-time class definition: there the class path reaches the class-file lookup and the
-  outputs only); `NONE` (a wasm output's) grows nothing. Growth lands before the lowering's
+  outputs only). A wasm compile's class path names nothing (`--java-classpath`/`--java-dep`
+  are refused there) and grows the same way: its lowering and its macro time run on the JVM.
+  The Clojure macro-time evaluator resolves `java:` through the program's loader
+  (`ClojureMacroTime.create(loader)`, from `SourceLanguage`/`SourceSession`), so a helper a
+  macro body calls reaches what the program does -- until 2026-10-08 it had rontolisp's own
+  (`No such class` in the macro for a dependency's class). Growth lands before the lowering's
   first class question and before the program runs: `ReflectiveJavaClasses` remembers an
   absent name, so a class asked for before its jar joined stays absent (a CL program that
   `load`s a `.clj` after asking). `JvmSourceCompiler` (an embedder) lowers against a

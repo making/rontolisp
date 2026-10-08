@@ -1017,8 +1017,11 @@ public final class RontoLispCli {
 		// and the library tree-shaker -- in the one place all four backends and the
 		// embedded JVM seam (JvmSourceCompiler) share (CompileFrontend).
 		// The program's Java class path: what its java: sites resolve against and what a
-		// jar or war carries.
-		JavaClassPath javaClassPath = jvmOutput(outputFile) ? javaClassPath(javaResolution) : JavaClassPath.NONE;
+		// jar or war carries. A wasm output carries none and names none (refused above),
+		// but a Clojure program's dependencies still bring their jars to the lowering and
+		// its macro time, which run here, on the JVM.
+		JavaClassPath javaClassPath = jvmOutput(outputFile) ? javaClassPath(javaResolution)
+				: JavaClassPath.of(List.of());
 		CompileFrontend.Result frontend = CompileFrontend.run(CompileFrontend.Request.builder()
 			.source(source)
 			.entryFile(entryFile)

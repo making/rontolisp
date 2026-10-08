@@ -173,10 +173,10 @@ public enum SourceLanguage {
 			}
 			// The host is wherever the target is no wasm one: a java: member can throw
 			// and take an exception there.
-			return new LispReader.ReadPrefix(
-					Clojure.read(source, file, ClojureMacroTime.create(), clojureFiles(loader, standards),
-							!features.contains("rontolisp-wasm"), ClojureHostBoundary.INSTANCE),
-					null);
+			return new LispReader.ReadPrefix(Clojure.read(source, file,
+					loader == null ? ClojureMacroTime.create() : ClojureMacroTime.create(loader.javaClassLoader()),
+					clojureFiles(loader, standards), !features.contains("rontolisp-wasm"),
+					ClojureHostBoundary.INSTANCE), null);
 		}
 		catch (LispReadException ex) {
 			return new LispReader.ReadPrefix(List.of(), ex);
