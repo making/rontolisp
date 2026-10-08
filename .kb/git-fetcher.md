@@ -1,7 +1,8 @@
 # Git fetcher (`am.ik.artifact.GitFetcher`)
 
-A repository at a pinned commit, checked out into the cache: what a `deps.edn` `:git/url`
-coordinate needs. No consumer yet (the `deps.edn` coordinates are the first); no CL surface.
+A repository at a pinned commit, checked out into the cache, and what a dependency resolver
+asks of a repository. Consumer: `eval/ClojureDepsRepositories` (`deps.edn` `:git/url`,
+`.kb/clojure-frontend.md` "deps.edn"); no CL surface.
 
 ## Input
 `GitCoordinate(url, sha, tag, root)` (builder). Malformed input is an
@@ -14,9 +15,24 @@ coordinate needs. No consumer yet (the `deps.edn` coordinates are the first); no
   refused. A root that is no directory of the checkout (or whose real path leaves it) is an
   `IOException` at fetch.
 
-`GitFetcher.inferUrl("io.github.user/repo")` -> `https://github.com/user/repo.git`: the
-tools.deps table (`github.`/`com.github.`/`io.github.`, the same for gitlab, bitbucket
-(`org.`/`io.`), beanstalkapp, `ht.sr.` -> `https://git.sr.ht/~user/repo`), else `null`.
+Inferring a URL from an `io.github.user/repo` lib name is the resolver's, not the fetcher's:
+the oracle's regex table lives in `clojure/ClojureDepsProcurer`. A `GitFetcher.inferUrl` with
+an older table (bare `github.`, no codeberg) was removed 2026-10-08: no consumer, and a second
+table that disagreed with the oracle's.
+
+## The resolver's questions (`e39`)
+Each holds the repository lock and clones first when the cache has none; a revision or tag
+starting with `-` or spelling revision syntax (`..`, `~^:\`) is refused before git runs.
+- `resolve(url, rev)`: the full sha a tag, branch or (abbreviated) sha names --
+  `rev-parse --verify --quiet <rev>^{commit}`, then once after `fetchRefs`; `null` for none
+  (an abbreviation two commits share names none).
+- `hasTag(url, tag)`: `refs/tags/<tag>` in the clone, else once after `fetchRefs`. The oracle
+  fetches tags on every resolution; here only on a miss, so a second run needs no network.
+- `descendant(url, x, y)`: both commits present (one fetch otherwise, `null` if still
+  absent), then `merge-base --is-ancestor` both ways (exit 0 yes, 1 no, else `IOException`);
+  `null` for unrelated commits.
+- `checkout(url, sha)`: `fetch` without tag or root, `null` (nothing installed) when the
+  repository has no such commit -- the resolver's `Commit not found` is its own refusal.
 
 ## Transport: the `git` CLI, not forge archive endpoints
 Decided 2026-10-08. The git CLI (tools.deps' own choice) works for any host and transport,
@@ -71,4 +87,6 @@ smudge filter config.
 `GitFetcherTest`: repositories made on disk by the test, `file://` URLs, no network --
 checkout without metadata, root, offline reuse with no git, later commit, missing commit
 installs nothing, tag accepted / created later / moved / mismatched / unknown, no git, four
-concurrent fetches, input refusals, keys, inferred URLs.
+concurrent fetches, input refusals, keys; `resolve` (tags, abbreviations, after the clone),
+`hasTag`, `descendant` (both orders, unrelated, unknown), refused revisions.
+`ClojureDepsFetchCliTest` runs it under a `deps.edn` project.

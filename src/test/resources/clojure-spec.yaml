@@ -8282,3 +8282,44 @@ cases:
       [:x 1] :init
       6 0
       #datafy_nav.Node{:id 0} 5
+  - name: clojure-stacktrace-prints-throwables-like-the-oracle
+    # The built-in clojure.stacktrace (.kb/clojure-frontend.md "clojure.jar namespaces"):
+    # root-cause through a chain of causes, print-throwable of an ex-info (its data on a line
+    # of its own), of a plain throwable, of one without a message, and of a caught one. Every
+    # line is the oracle's (clj 1.12.6), on all four backends.
+    source: |
+      (ns stack-traces (:require [clojure.stacktrace :as st]))
+      (def inner (ex-info "boom" {:x 1}))
+      (def outer (Exception. "outer" (RuntimeException. "middle" inner)))
+      (prn (ex-message (st/root-cause outer)) (ex-message (st/root-cause inner)) (= inner (st/root-cause outer)))
+      (st/print-throwable inner)
+      (newline)
+      (st/print-throwable (RuntimeException. "plain"))
+      (newline)
+      (st/print-throwable (Exception.))
+      (newline)
+      (prn (with-out-str (st/print-throwable outer)))
+      (prn (try (throw (IllegalStateException. "state")) (catch IllegalStateException e (with-out-str (st/print-throwable e)))))
+      (in-ns 'user)
+    expected: |
+      "boom" "boom" true
+      clojure.lang.ExceptionInfo: boom
+      {:x 1}
+      java.lang.RuntimeException: plain
+      java.lang.Exception: null
+      "java.lang.Exception: outer"
+      "java.lang.IllegalStateException: state"
+  - name: clojure-stacktrace-prints-no-frames
+    # A deviation: a throwable here carries no stack frames (.getStackTrace answers an empty
+    # vector), so print-stack-trace and print-cause-trace print the oracle's [empty stack trace]
+    # line where the oracle prints the frames of the code that built it.
+    source: |
+      (ns stack-frames (:require [clojure.stacktrace :as st]))
+      (def failure (Exception. "outer" (ex-info "boom" {:x 1})))
+      (st/print-stack-trace failure)
+      (prn (with-out-str (st/print-cause-trace failure 2)))
+      (in-ns 'user)
+    expected: |
+      java.lang.Exception: outer
+       at [empty stack trace]
+      "java.lang.Exception: outer\n at [empty stack trace]\nCaused by: clojure.lang.ExceptionInfo: boom\n{:x 1}\n at [empty stack trace]\n"

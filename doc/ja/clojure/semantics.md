@@ -86,19 +86,37 @@ oracle と同じく無視します。oracle の spec が拒否する値、どの
   かかわらずこのフロントエンド自身です。`ring/ring-core` と `ring/ring-codec` は、同梱のバージョン
   （ring-core 1.15.5、ring-codec 1.3.0）以下の Maven バージョンなら組み込みの Ring 名前空間です。
   それより新しいバージョンは、Ring 名前空間をロードする時点で拒否します。
-- Clojure 本体に属さない `clojure.*` 名前空間（`:local/root` に置いた `org.clojure` の contrib
-  ライブラリなど）は、ほかの名前空間と同じくソースパスからロードします。
-- それ以外のライブラリの Maven 座標（`:mvn/version`）と git 座標（`:git/url`、`:git/sha`）は
-  取得しません。ルートを加えず、どのルートにもない名前空間は、それらの座標を挙げて拒否します。
-  jar 自身の `pom.xml` と、`deps.edn` がなく `pom.xml` だけを持つ `:local/root` のプロジェクトも
-  読みません。`:aliases` は実行で選んだときに適用します（次節）。
+- Clojure 本体に属さない `clojure.*` 名前空間（`org.clojure` の contrib ライブラリなど）は、
+  ほかの名前空間と同じくソースパスからロードします。
+- Maven 座標（`:mvn/version`）は `:mvn/repos`（Maven Central、次に Clojars、次にマップが加える
+  リポジトリ。`nil` で除けます）から `:mvn/local-repo`、なければ `~/.m2/repository` に取得します。
+  POM の compile と runtime の依存（optional は除く）がツリーに加わり、jar は展開せずに読みます。
+  `"[1.0]"` は 1.0 です。バージョン範囲、`RELEASE`、`LATEST`、`SNAPSHOT`、`http:` のリポジトリ、
+  `~/.m2/settings.xml` の mirror や proxy がかかるリポジトリは拒否します。
+- git 座標（`:git/url`、または `io.github.user/repo` という名前が示す URL と、`:git/sha`、
+  `:git/tag`、`:deps/root`）は `git` コマンドでそのコミットを `~/.rontolisp/gitlibs`
+  （`$RONTOLISP_DIST_HOME/gitlibs`）にチェックアウトします。タグはそのコミットを指す必要があり、
+  短縮した sha にはタグが必要です。1 つのライブラリの 2 つのコミットでは、子孫のほうが新しい
+  バージョンです。その `deps.edn` は `:local/root` のディレクトリと同じく読みます。
+- `:local/root` の jar 自身の `pom.xml` が、その jar の依存を与えます。`pom.xml` のプロジェクト
+  （`deps.edn` がなく `pom.xml` を持つディレクトリやコミット）は読みません。それにしかありえない
+  名前空間は、それを挙げて拒否します。
+- クラスを含む依存の jar は、プログラムの Java クラスパスにも加わります。インタプリタと JVM は
+  そのクラスを呼べ、`-o app.jar` はその jar を出力の横にコピーします。WebAssembly は呼び出し時に
+  Java を拒否するままです。
+- プロジェクトはプログラムの実行前に解決するため、取得できない依存があるとプログラムは止まります。
+  2 回目の実行はローカルリポジトリと git のキャッシュだけを読み、ネットワークを使いません。
+  取得するのはコマンドラインです。組み込み側（`JvmSourceCompiler`）とブラウザのプレイグラウンドは
+  何も取得せず、Maven 座標や git 座標にしかありえない名前空間は、その座標を挙げて拒否します。
+  `:aliases` は実行で選んだときに適用します（次節）。
 
 ```console
 $ cat deps.edn
 {:paths ["src"]
  :deps {my/util {:local/root "../util"}
-        my/parser {:local/root "../parser.jar"}}}
-$ rontolisp src/app/main.clj      # roots: src, ../parser.jar, ../util/src
+        org.clojure/data.json {:mvn/version "2.5.1"}
+        io.github.me/lib {:git/tag "v1.0" :git/sha "1a2b3c4"}}}
+$ rontolisp src/app/main.clj   # roots: src, the lib checkout's src, ../util/src, the data.json jar
 ```
 
 ## プロジェクトの実行: -A、-M、-X、test

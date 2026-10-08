@@ -98,6 +98,40 @@ public interface SourceLoader {
 	}
 
 	/**
+	 * Adds a jar the program's dependencies bring to its Java class path -- a Clojure
+	 * {@code deps.edn} library's -- so that {@link #javaClassLoader()} loads from it from
+	 * now on and a compiled program carries it. Like {@link #exists} it must never throw;
+	 * the default adds nothing, for a loader whose program has no Java class path of its
+	 * own (the browser playground's).
+	 * @param jar the jar's path
+	 * @param mavenCoordinate its Maven coordinates
+	 * ({@code groupId:artifactId[:extension[:classifier]]:version}) when a Maven
+	 * coordinate brought it, else {@code null}
+	 */
+	default void addJavaClassPath(String jar, @Nullable String mavenCoordinate) {
+	}
+
+	/**
+	 * Where a program's Java class path grows: the host's record of it, which the class
+	 * loader it hands out reads.
+	 */
+	@FunctionalInterface
+	interface JavaClassPathSink {
+
+		/** Records nothing: a class path that never grows. */
+		JavaClassPathSink NONE = (jar, mavenCoordinate) -> {
+		};
+
+		/**
+		 * Adds a jar to the class path.
+		 * @param jar the jar's path
+		 * @param mavenCoordinate its Maven coordinates, or {@code null}
+		 */
+		void add(String jar, @Nullable String mavenCoordinate);
+
+	}
+
+	/**
 	 * The path one file or directory is known by however it was spelled: absolute, every
 	 * symbolic link resolved -- how a Clojure dependency's root is told apart from
 	 * another (the oracle's {@code getCanonicalPath}). Like {@link #exists} it must never
@@ -151,6 +185,19 @@ public interface SourceLoader {
 	 * @return a filesystem-backed loader
 	 */
 	static SourceLoader fileSystem(ClassLoader javaClasses) {
+		return fileSystem(javaClasses, JavaClassPathSink.NONE);
+	}
+
+	/**
+	 * Returns a loader that reads files from the local filesystem, for a program whose
+	 * Java classes come from {@code javaClasses} and whose Java class path grows through
+	 * {@code javaClassPath} -- the host's record that loader reads.
+	 * @param javaClasses the program's Java class loader ({@link #javaClassLoader()})
+	 * @param javaClassPath where a jar the program's dependencies bring is added
+	 * ({@link #addJavaClassPath})
+	 * @return a filesystem-backed loader
+	 */
+	static SourceLoader fileSystem(ClassLoader javaClasses, JavaClassPathSink javaClassPath) {
 		return new SourceLoader() {
 			@Override
 			public String load(String path) throws IOException {
@@ -160,6 +207,11 @@ public interface SourceLoader {
 			@Override
 			public ClassLoader javaClassLoader() {
 				return javaClasses;
+			}
+
+			@Override
+			public void addJavaClassPath(String jar, @Nullable String mavenCoordinate) {
+				javaClassPath.add(jar, mavenCoordinate);
 			}
 
 			@Override

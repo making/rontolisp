@@ -279,6 +279,8 @@ sections:
             title: "(clojure.edn)"
           - file: clojure/reference/clojure-pprint.md
             title: "(clojure.pprint)"
+          - file: clojure/reference/clojure-stacktrace.md
+            title: "(clojure.stacktrace)"
           - file: clojure/reference/clojure-template.md
             title: "(clojure.template)"
           - file: clojure/reference/regex.md

@@ -5,9 +5,12 @@ the descriptor (effective model), the collected graph, the resolved (nearest-win
 its runtime class path -- measured against Maven itself; what needs `maven-metadata.xml` or an
 unsupported `settings.xml` feature is refused by name, never approximated.**
 Language-independent: imports `am.ik.artifact` and nothing else of ours (`PackageCycleTest`).
-Consumer: `cli/JavaClassPath` (`--java-dep`, `.kb/java-interop.md` "The program's Java class
-path"). `deps.edn` `:mvn/version` (tools.deps newest-wins, `e39`) selects over the collected
-graph itself.
+Consumers: `cli/JavaClassPath` (`--java-dep`, `.kb/java-interop.md` "The program's Java class
+path"); `eval/ClojureDepsRepositories` (`deps.edn` `:mvn/version`, `.kb/clojure-frontend.md`
+"deps.edn"), which reads descriptors and jars one at a time and selects with tools.deps'
+newest-wins itself -- never `collect`/`resolve` -- and builds its resolver as `clj` does:
+`:mvn/local-repo` else `~/.m2/repository`, `settings.xml` without its `localRepository` and
+`offline` (measured: `clj` reads neither).
 
 ## API
 - `MavenResolver.builder()`: the local repository is never guessed -- `localRepository(..)`,
@@ -21,6 +24,13 @@ graph itself.
   caller's), `resolve(deps, managed)` (Maven's selection, below), `artifact(Artifact)` (local
   path); `DependencyGraph.runtimeClassPath()` of a resolved graph. Public methods hold the
   instance lock.
+- `projectDependencies(byte[] pom)`: a POM given as bytes (a jar's `META-INF/maven/**/pom.xml`)
+  built like a repository POM (`ModelBuilder.effective(byte[])`, parents and imports from the
+  repositories -- Maven's `UrlModelSource` has no relativePath parent either), its
+  dependencies as the MODEL holds them: the classifier written (a `test-jar` type implies
+  none here, `tests` in a descriptor), the type's extension. An invalid POM is a
+  `MavenResolutionException` here (no descriptor to fall back to). What tools.deps'
+  `coord-deps :jar` reads (`model-dep->data`).
 
 ## Effective model (`ModelBuilder`, `ProfileActivator`, `Interpolator`)
 Maven's `DefaultModelBuilder` at validation level minimal, no project directory:

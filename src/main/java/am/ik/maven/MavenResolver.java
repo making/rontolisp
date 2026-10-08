@@ -95,6 +95,38 @@ public final class MavenResolver {
 	}
 
 	/**
+	 * Reads the dependencies a POM given as bytes declares -- one shipped inside a jar
+	 * ({@code META-INF/maven/<group>/<artifact>/pom.xml}) -- after Maven's model
+	 * building, its parents and imports read from the repositories, as the MODEL holds
+	 * them rather than as {@link #descriptor} converts them: each dependency's artifact
+	 * carries the classifier written in the POM (none where only its type implies one, as
+	 * {@code test-jar} implies {@code tests}) and its type's extension; the scope is
+	 * never empty.
+	 * @param pom the POM's bytes
+	 * @return the dependencies, in model order
+	 * @throws MavenResolutionException if Maven's model builder would reject the POM, or
+	 * a parent or import cannot be resolved
+	 */
+	public synchronized List<Dependency> projectDependencies(byte[] pom) throws MavenResolutionException {
+		PomModel model;
+		try {
+			model = this.models.effective(pom);
+		}
+		catch (InvalidPomException ex) {
+			throw new MavenResolutionException("the POM is invalid: " + ex.getMessage(), ex);
+		}
+		List<Dependency> dependencies = new ArrayList<>();
+		for (PomModel.Dep dep : model.dependencies()) {
+			String type = dep.effectiveType();
+			Artifact artifact = new Artifact(Objects.requireNonNullElse(dep.groupId(), ""),
+					Objects.requireNonNullElse(dep.artifactId(), ""), Objects.requireNonNullElse(dep.version(), ""),
+					Objects.requireNonNullElse(dep.classifier(), ""), ArtifactTypes.extension(type));
+			dependencies.add(dependency(dep).withArtifact(artifact));
+		}
+		return dependencies;
+	}
+
+	/**
 	 * Collects the dependency graph below {@code dependencies}, with
 	 * {@code managedDependencies} applied below them as a project's dependency management
 	 * is.

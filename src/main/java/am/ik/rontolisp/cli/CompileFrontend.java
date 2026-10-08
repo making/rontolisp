@@ -100,10 +100,13 @@ final class CompileFrontend {
 	 * @param options the target and pass options
 	 * @param javaClassLoader the program's Java class loader, whose classes a Clojure
 	 * host form lowers against ({@link SourceLoader#javaClassLoader()})
+	 * @param javaClassPath where the jars a Clojure program's dependencies bring join the
+	 * program's Java class path -- the one that loader reads
+	 * ({@link SourceLoader#addJavaClassPath})
 	 */
 	record Request(String source, @Nullable String entryFile, @Nullable String sourceLanguage,
 			SourceStandards standards, List<String> systemPath, DistClient dists, List<String> declaredFeatures,
-			Options options, ClassLoader javaClassLoader) {
+			Options options, ClassLoader javaClassLoader, SourceLoader.JavaClassPathSink javaClassPath) {
 
 		static Builder builder() {
 			return new Builder();
@@ -129,11 +132,18 @@ final class CompileFrontend {
 
 			private ClassLoader javaClassLoader = SourceLoader.fileSystem().javaClassLoader();
 
+			private SourceLoader.JavaClassPathSink javaClassPath = SourceLoader.JavaClassPathSink.NONE;
+
 			private Builder() {
 			}
 
 			Builder javaClassLoader(ClassLoader javaClassLoader) {
 				this.javaClassLoader = javaClassLoader;
+				return this;
+			}
+
+			Builder javaClassPath(SourceLoader.JavaClassPathSink javaClassPath) {
+				this.javaClassPath = javaClassPath;
 				return this;
 			}
 
@@ -187,7 +197,8 @@ final class CompileFrontend {
 				return new Request(Objects.requireNonNull(this.source, "source is required"), this.entryFile,
 						this.sourceLanguage, this.standards, this.systemPath,
 						this.dists != null ? this.dists : DistClient.createDefault(List.of()), this.declaredFeatures,
-						Objects.requireNonNull(this.options, "options is required"), this.javaClassLoader);
+						Objects.requireNonNull(this.options, "options is required"), this.javaClassLoader,
+						this.javaClassPath);
 			}
 
 		}
@@ -472,7 +483,7 @@ final class CompileFrontend {
 			throw new IllegalArgumentException("Cannot compile: a Clojure program needs the GC backend -- --no-gc has"
 					+ " no cons cell, no symbol and no closure (drop --no-gc)");
 		}
-		SourceLoader files = SourceLoader.fileSystem(request.javaClassLoader());
+		SourceLoader files = SourceLoader.fileSystem(request.javaClassLoader(), request.javaClassPath());
 		List<LispVal> read = language.read(request.source(), features, entryFile, request.standards(), files);
 		List<LispVal> loaded = LoadInliner.inline(read, files, options.baseDir(), request.systemPath(), features,
 				request.dists(), request.standards());

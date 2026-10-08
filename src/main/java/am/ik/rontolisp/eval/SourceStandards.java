@@ -4,6 +4,7 @@ import java.util.List;
 
 import org.jspecify.annotations.Nullable;
 
+import am.ik.rontolisp.clojure.ClojureRepositories;
 import am.ik.rontolisp.scheme.SchemeStandard;
 
 /**
@@ -23,17 +24,23 @@ import am.ik.rontolisp.scheme.SchemeStandard;
  * @param clojureAliases the {@code deps.edn} aliases every Clojure read applies, the
  * oracle's {@code -A}/{@code -M}/{@code -X} selection ({@code :test}), in order; none
  * when the command line selects none
+ * @param clojureRepositories where a {@code deps.edn}'s Maven and git coordinates are
+ * fetched from, or {@code null} to fetch none: the command line fetches through the
+ * network and the caches the environment names, while an embedder, a test and the browser
+ * fetch nothing, for the same reason they read no user-level map
  */
-public record SourceStandards(SchemeStandard scheme, @Nullable String clojureConfigDir, List<String> clojureAliases) {
+public record SourceStandards(SchemeStandard scheme, @Nullable String clojureConfigDir, List<String> clojureAliases,
+		@Nullable ClojureRepositories clojureRepositories) {
 
 	/** Every language's default: {@code --scheme-standard rontolisp}, no user config. */
-	public static final SourceStandards DEFAULT = new SourceStandards(SchemeStandard.RONTOLISP, null, List.of());
+	public static final SourceStandards DEFAULT = new SourceStandards(SchemeStandard.RONTOLISP, null, List.of(), null);
 
 	/**
 	 * The standards.
 	 * @param scheme what a Scheme file is read against
 	 * @param clojureConfigDir the user-level {@code deps.edn} directory, or {@code null}
 	 * @param clojureAliases the selected {@code deps.edn} aliases
+	 * @param clojureRepositories where coordinates are fetched from, or {@code null}
 	 */
 	public SourceStandards {
 		clojureAliases = List.copyOf(clojureAliases);
@@ -46,7 +53,7 @@ public record SourceStandards(SchemeStandard scheme, @Nullable String clojureCon
 	 * @throws IllegalArgumentException when a value names no standard, naming the value
 	 */
 	public static SourceStandards parse(@Nullable String scheme) {
-		return scheme == null ? DEFAULT : new SourceStandards(SchemeStandard.parse(scheme), null, List.of());
+		return scheme == null ? DEFAULT : new SourceStandards(SchemeStandard.parse(scheme), null, List.of(), null);
 	}
 
 	/**
@@ -55,7 +62,7 @@ public record SourceStandards(SchemeStandard scheme, @Nullable String clojureCon
 	 * @return the standards
 	 */
 	public SourceStandards withClojureConfigDir(@Nullable String dir) {
-		return new SourceStandards(this.scheme, dir, this.clojureAliases);
+		return new SourceStandards(this.scheme, dir, this.clojureAliases, this.clojureRepositories);
 	}
 
 	/**
@@ -64,7 +71,17 @@ public record SourceStandards(SchemeStandard scheme, @Nullable String clojureCon
 	 * @return the standards
 	 */
 	public SourceStandards withClojureAliases(List<String> aliases) {
-		return new SourceStandards(this.scheme, this.clojureConfigDir, aliases);
+		return new SourceStandards(this.scheme, this.clojureConfigDir, aliases, this.clojureRepositories);
+	}
+
+	/**
+	 * These standards with where a {@code deps.edn}'s Maven and git coordinates are
+	 * fetched from.
+	 * @param repositories the repositories, or {@code null} to fetch none
+	 * @return the standards
+	 */
+	public SourceStandards withClojureRepositories(@Nullable ClojureRepositories repositories) {
+		return new SourceStandards(this.scheme, this.clojureConfigDir, this.clojureAliases, repositories);
 	}
 
 	/**

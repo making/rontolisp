@@ -34,21 +34,53 @@ public record GitCoordinate(String url, String sha, @Nullable String tag, @Nulla
 	public GitCoordinate {
 		Objects.requireNonNull(url, "url is required");
 		Objects.requireNonNull(sha, "sha is required");
-		if (url.isBlank() || url.startsWith("-") || url.chars().anyMatch(Character::isWhitespace)) {
-			throw new IllegalArgumentException("not a git repository URL: '" + url + "'");
-		}
-		sha = sha.toLowerCase(Locale.ROOT);
-		if (!FULL_SHA.matcher(sha).matches()) {
-			throw new IllegalArgumentException(
-					"not a full commit sha (40 hex digits; a short sha is refused): '" + sha + "' for " + url);
-		}
-		if (tag != null && (tag.isBlank() || tag.startsWith("-") || tag.contains("..")
-				|| tag.chars().anyMatch(c -> c <= ' ' || c == '~' || c == '^' || c == ':' || c == '\\'))) {
-			throw new IllegalArgumentException("not a git tag name: '" + tag + "' for " + url);
+		checkUrl(url);
+		sha = fullSha(sha, url);
+		if (tag != null) {
+			checkRevision(tag, "tag", url);
 		}
 		if (root != null) {
 			root = normalizeRoot(root, url);
 		}
+	}
+
+	/**
+	 * Refuses a URL git would read as an option, or that is no URL at all.
+	 * @param url the repository URL
+	 */
+	static void checkUrl(String url) {
+		if (url.isBlank() || url.startsWith("-") || url.chars().anyMatch(Character::isWhitespace)) {
+			throw new IllegalArgumentException("not a git repository URL: '" + url + "'");
+		}
+	}
+
+	/**
+	 * Refuses a revision -- a tag, a branch, an abbreviated sha -- git would read as an
+	 * option or as revision syntax ({@code ..}, {@code ~}, {@code ^}, {@code :}).
+	 * @param revision the revision
+	 * @param what what the revision is, for the refusal ({@code tag})
+	 * @param url the repository it is asked of
+	 */
+	static void checkRevision(String revision, String what, String url) {
+		if (revision.isBlank() || revision.startsWith("-") || revision.contains("..")
+				|| revision.chars().anyMatch(c -> c <= ' ' || c == '~' || c == '^' || c == ':' || c == '\\')) {
+			throw new IllegalArgumentException("not a git " + what + " name: '" + revision + "' for " + url);
+		}
+	}
+
+	/**
+	 * A full commit sha, lower case; a short one is refused.
+	 * @param sha the sha
+	 * @param url the repository it names a commit of
+	 * @return the sha, lower case
+	 */
+	static String fullSha(String sha, String url) {
+		String lower = sha.toLowerCase(Locale.ROOT);
+		if (!FULL_SHA.matcher(lower).matches()) {
+			throw new IllegalArgumentException(
+					"not a full commit sha (40 hex digits; a short sha is refused): '" + lower + "' for " + url);
+		}
+		return lower;
 	}
 
 	/**

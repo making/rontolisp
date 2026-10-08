@@ -130,8 +130,22 @@ final class ClojureDepsGraph {
 	 * @param unread what of it this build does not read, for a refusal to name: a Maven
 	 * or git coordinate is not fetched, a jar's {@code pom.xml} is not read -- or null
 	 * when everything it holds is on the path
+	 * @param mavenCoordinate the Maven coordinates
+	 * ({@code groupId:artifactId[:extension:classifier]:version}) of the jar a Maven
+	 * coordinate fetched, its one root -- or null for any other root
 	 */
-	record Contribution(List<Root> roots, boolean builtin, @Nullable String unread) {
+	record Contribution(List<Root> roots, boolean builtin, @Nullable String unread, @Nullable String mavenCoordinate) {
+
+		/**
+		 * A contribution no Maven coordinate fetched.
+		 * @param roots its source roots, in order
+		 * @param builtin whether its namespaces are this front end's own
+		 * @param unread what of it this build does not read, or null
+		 */
+		Contribution(List<Root> roots, boolean builtin, @Nullable String unread) {
+			this(roots, builtin, unread, null);
+		}
+
 	}
 
 	/**

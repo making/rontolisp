@@ -7,7 +7,8 @@ import java.io.IOException;
  * repository has, or a request this resolver refuses by name (a SNAPSHOT or a version
  * range, a {@code settings.xml} mirror or proxy, offline mode). A POM that is missing or
  * invalid is not one of these: its descriptor answers no dependencies and a warning, as
- * Maven's does.
+ * Maven's does -- except a POM read from bytes
+ * ({@link MavenResolver#projectDependencies}), whose invalidity is one.
  */
 public class MavenResolutionException extends IOException {
 

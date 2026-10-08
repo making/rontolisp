@@ -306,15 +306,77 @@ class GitFetcherTest {
 	}
 
 	@Test
-	void aForgeLibNameInfersItsRepositoryUrl() {
-		assertThat(GitFetcher.inferUrl("io.github.user/repo")).isEqualTo("https://github.com/user/repo.git");
-		assertThat(GitFetcher.inferUrl("com.github.user/repo")).isEqualTo("https://github.com/user/repo.git");
-		assertThat(GitFetcher.inferUrl("io.gitlab.group/proj")).isEqualTo("https://gitlab.com/group/proj.git");
-		assertThat(GitFetcher.inferUrl("org.bitbucket.team/lib")).isEqualTo("https://bitbucket.org/team/lib.git");
-		assertThat(GitFetcher.inferUrl("ht.sr.someone/lib")).isEqualTo("https://git.sr.ht/~someone/lib");
-		assertThat(GitFetcher.inferUrl("org.clojure/data.json")).isNull();
-		assertThat(GitFetcher.inferUrl("io.github./repo")).isNull();
-		assertThat(GitFetcher.inferUrl("repo")).isNull();
+	void aRevisionResolvesToItsFullShaFetchingOnlyWhatTheCloneLacks(@TempDir Path tmp) throws IOException {
+		Source source = Source.create(tmp.resolve("src"));
+		String first = source.commit(Map.of("a.txt", "one"));
+		source.tag("v1", first);
+		GitFetcher fetcher = fetcher(tmp.resolve("area"));
+
+		assertThat(fetcher.resolve(source.url(), "v1")).isEqualTo(first);
+		assertThat(fetcher.resolve(source.url(), first.substring(0, 7))).isEqualTo(first);
+		assertThat(fetcher.resolve(source.url(), first)).isEqualTo(first);
+		// a commit and a tag made after the clone
+		String second = source.commit(Map.of("a.txt", "two"));
+		source.tag("v2", second);
+		assertThat(fetcher.resolve(source.url(), "v2")).isEqualTo(second);
+		assertThat(fetcher.resolve(source.url(), second.substring(0, 8))).isEqualTo(second);
+		assertThat(fetcher.resolve(source.url(), "v9")).isNull();
+		assertThat(fetcher.resolve(source.url(), "0123456789012345678901234567890123456789")).isNull();
+	}
+
+	@Test
+	void aTagIsLookedUpInTheCloneThenFetched(@TempDir Path tmp) throws IOException {
+		Source source = Source.create(tmp.resolve("src"));
+		String sha = source.commit(Map.of("a.txt", "a"));
+		source.tag("v1", sha);
+		GitFetcher fetcher = fetcher(tmp.resolve("area"));
+
+		assertThat(fetcher.hasTag(source.url(), "v1")).isTrue();
+		assertThat(fetcher.hasTag(source.url(), "v2")).isFalse();
+		source.tag("v2", sha);
+		assertThat(fetcher.hasTag(source.url(), "v2")).isTrue();
+	}
+
+	@Test
+	void ofTwoCommitsTheDescendantIsTheNewerAndUnrelatedOnesHaveNone(@TempDir Path tmp) throws IOException {
+		Source source = Source.create(tmp.resolve("src"));
+		String first = source.commit(Map.of("a.txt", "one"));
+		String second = source.commit(Map.of("a.txt", "two"));
+		git(source.dir(), "checkout", "--quiet", "--orphan", "other");
+		String unrelated = source.commit(Map.of("b.txt", "b"));
+		GitFetcher fetcher = fetcher(tmp.resolve("area"));
+
+		assertThat(fetcher.descendant(source.url(), first, second)).isEqualTo(second);
+		assertThat(fetcher.descendant(source.url(), second, first)).isEqualTo(second);
+		assertThat(fetcher.descendant(source.url(), first, first)).isEqualTo(first);
+		assertThat(fetcher.descendant(source.url(), second, unrelated)).isNull();
+		assertThat(fetcher.descendant(source.url(), first, "0123456789012345678901234567890123456789")).isNull();
+	}
+
+	@Test
+	void aCheckoutOfACommitTheRepositoryLacksIsNoneAndInstallsNothing(@TempDir Path tmp) throws IOException {
+		Source source = Source.create(tmp.resolve("src"));
+		String sha = source.commit(Map.of("a.txt", "a"));
+		GitFetcher fetcher = fetcher(tmp.resolve("area"));
+		String absent = "0123456789abcdef0123456789abcdef01234567";
+
+		assertThat(fetcher.checkout(source.url(), sha)).isEqualTo(fetcher.fetch(at(source, sha)));
+		assertThat(fetcher.checkout(source.url(), absent)).isNull();
+		assertThat(tmp.resolve("area/libs/" + GitFetcher.cacheKey(source.url()) + "/" + absent)).doesNotExist();
+	}
+
+	@Test
+	void aRevisionGitWouldReadAsAnOptionIsRefused(@TempDir Path tmp) {
+		GitFetcher fetcher = fetcher(tmp.resolve("area"));
+
+		assertThatThrownBy(() -> fetcher.resolve("https://h/r.git", "--all"))
+			.isInstanceOf(IllegalArgumentException.class)
+			.hasMessage("not a git revision name: '--all' for https://h/r.git");
+		assertThatThrownBy(() -> fetcher.hasTag("--upload-pack=x", "v1")).isInstanceOf(IllegalArgumentException.class)
+			.hasMessage("not a git repository URL: '--upload-pack=x'");
+		assertThatThrownBy(() -> fetcher.descendant("https://h/r.git", "abc", "abc"))
+			.isInstanceOf(IllegalArgumentException.class)
+			.hasMessage("not a full commit sha (40 hex digits; a short sha is refused): 'abc' for https://h/r.git");
 	}
 
 }
