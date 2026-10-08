@@ -3,8 +3,8 @@
 `(require 'clause ...)`
 
 Loads namespaces and wires each clause's `:as` alias and `:refer`ed names, answering `nil` --
-the same wiring `ns` does, spelled at top level with quoted libspecs. `clojure.string`,
-`clojure.set`, `clojure.java.io` (`reader` only), `clojure.test` and `ring.adapter.rontolisp` are built in; any other namespace loads
+the same wiring `ns` does, spelled at top level with quoted libspecs. A
+[built-in namespace](namespaces.md#built-in-namespaces) needs no file; any other namespace loads
 once per program from its file on the source path ([Semantics](../semantics.md#namespaces-and-files)),
 and one no root holds is an error. Only `:refer` refers names: a bare `:only` refers nothing,
 like the oracle. `:rename {old new}` refers a referred var under `new` instead of `old`;

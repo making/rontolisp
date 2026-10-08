@@ -1,6 +1,6 @@
 # Namespaces
 
-Every namespace has its own vars: a definition belongs to the current namespace, a name resolves to that namespace's own var and then to a referred one, and `alias/name` or `full.name/name` reaches another namespace's public var. A namespace form switches to its namespace and wires its clauses: `:as` registers an alias, `:refer`/`:use` unqualified names, `:import` class names for interop, `(:refer-clojure :only/:exclude ...)` narrows the visible core; metadata on the name (`^{...}`, `#^{...}`), a docstring and an attr map are skipped. `clojure.string`, `clojure.set`, `clojure.java.io` (`reader` only), `clojure.test` and the Ring adapter `ring.adapter.rontolisp` are built in; any other namespace is one the program declares with `ns`, or one loaded once from its file on the source path -- or, when no root holds that file, from the built-in [Ring utilities](ring-util.md) ([Semantics](../semantics.md#namespaces-and-files)). A namespace no root holds is an error.
+Every namespace has its own vars: a definition belongs to the current namespace, a name resolves to that namespace's own var and then to a referred one, and `alias/name` or `full.name/name` reaches another namespace's public var. A namespace form switches to its namespace and wires its clauses: `:as` registers an alias, `:refer`/`:use` unqualified names, `:import` class names for interop, `(:refer-clojure :only/:exclude ...)` narrows the visible core; metadata on the name (`^{...}`, `#^{...}`), a docstring and an attr map are skipped. The [built-in namespaces](#built-in-namespaces) need no file; any other namespace is one the program declares with `ns`, or one loaded once from its file on the source path ([Semantics](../semantics.md#namespaces-and-files)). A namespace no root holds is an error.
 
 | Name | Example | Result |
 |---|---|---|
@@ -12,3 +12,22 @@ Every namespace has its own vars: a definition belongs to the current namespace,
 | `the-ns` | `(str (the-ns 'user))` | `"user"` |
 | `find-ns` | `(find-ns 'no-such)` | `nil` |
 | `ns-name` | `(ns-name *ns*)` | `user` |
+
+## Built-in namespaces
+
+A built-in namespace written in Clojure loads like a project file, after every source root,
+so a file of its name on the source path takes precedence -- except `clojure.walk`, which
+is loaded before the program, as in Clojure: a qualified name such as
+`clojure.walk/postwalk` reaches it without a `require`. A `clojure.*` namespace that is not
+part of Clojure itself (a contrib library such as `clojure.data.json`) loads from the
+source path like any other; any other namespace of Clojure's own is an error.
+
+| Namespace | Page |
+|---|---|
+| `clojure.string` | [(clojure.string)](string.md) |
+| `clojure.set` | [(clojure.set)](clojure-set.md) |
+| `clojure.walk` | [clojure.walk](clojure-walk.md) |
+| `clojure.java.io` (`reader` only) | [IO](io.md) |
+| `clojure.test` | [Tests (clojure.test)](test.md) |
+| `ring.adapter.rontolisp` | [Ring adapter](ring.md) |
+| `ring.util.*`, `ring.middleware.*` | [Ring utilities](ring-util.md) |

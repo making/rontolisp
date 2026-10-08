@@ -127,6 +127,7 @@ answered `2 5 3` before).
 | `clojure.set` (`union` `intersection` `difference` `select` `project` `rename-keys` `rename` `index` `map-invert` `join` `subset?` `superset?`: every public var) | `ClojureSetLowering`: one call to the spliced `rontolisp::%clojure-set-NAME` worker (`?` spelled `-p`, the variadic three over one list of their sets, `join` with a key map `-join-km`) after a lower-time arity check in the oracle's wording (`... passed to: clojure.set/NAME`); as a value `#'...-v` | the oracle's own algorithms, so an answer's kind follows the same input: `union` grows its largest input (bubble order and all; a vector or list there answers one, a map signals), `intersection` shrinks its smallest, `difference`/`select` the first; nil stays nil, an unchanged input is answered itself, a set changes in a fresh copy. Membership goes through the structural-key runtime; `contains?` on a vector is by index, like the oracle's. Relation members may be records: `join`'s merge keeps the first's record, `rename-keys` keeps it unless a declared field is renamed away. Answers carry no metadata. Corpus witness: shcloj4 `examples.test.sequences` `test-sets`/`test-joins` (`ClojureProjectNamespacesTest`); the whole namespace stays red on `examples.utils` (the `?.` macro), `clojure.xml` and `file-seq` (measured 2026-10-03: the load stops at `utils.clj:37:1`) |
 | `ring.adapter.rontolisp` (`run-server`) | `(rontolisp::%http-serve (%clojure-ring-app f opts) (%clojure-ring-port opts) (%clojure-ring-host opts) (%clojure-ring-join opts))` (`ClojureRingLowering`) | "Ring adapter" |
 | `ring.util.response` `ring.util.request` `ring.util.codec` `ring.util.mime-type` `ring.middleware.params` `ring.middleware.keyword-params` `ring.middleware.content-type` | Clojure source in the jar, loaded like a project file; `rontolisp.internal.ring/NAME` (their kernels) is one call to `rontolisp::%clojure-ring-NAME` (`ClojureRingUtilLowering`) | "Ring util namespaces" |
+| `clojure.walk` | Clojure source in the jar written for this front end, loaded like a project file (a startup namespace: on its first qualified name too) | "clojure.jar namespaces" |
 | `subs`, `.substring` | `%clojure-subs`, the refusal family's alias of `subseq` ("Refusals") | a bound outside a string is the oracle's `StringIndexOutOfBoundsException` where a class is read; a double or ratio bound is truncated (`%clojure-string-bound`), a non-number one is refused as the oracle does ("Refusals") |
 | `format` | the Java directives translated to `format` over Clojure-rendered arguments | literal format string only; `%s` like `str` (nil spells `null`), `%b`; `%e`/`%g`, flags and the rest refused |
 | `spit` `slurp` `line-seq` `clojure.java.io/reader` | `with-open-file` of the `str` spelling / `rontolisp::%clojure-slurp` / a `read-line` loop / `%clojure-reader` (`open`) | every backend; wasm needs a `--dir` preopen (without it the open signals). `spit` supersedes unless `:append` is truthy, `nil` writes nothing. `slurp`, `line-seq` and `reader` take a path or an open stream (`streamp`, so a Gray instance -- the Ring `:body` -- too): `slurp` reads a stream to its end and closes it (the oracle's `with-open`; until 2026-10-08 it left it open), `reader` answers it, `line-seq` reads it strictly and never closes it. A read of a CLOSED stream -- `slurp`, `line-seq`, `.read`, `.readLine`, `read-line` -- goes through `%clojure-open-reader` (`open-stream-p`, else the `%clojure-io-exception` carrier: the oracle's `IOException: Stream closed`); before it the interpreter said `READ-CHAR expects an input stream`, the JVM an NPE, and both wasm backends READ a closed string input stream (its record is never marked closed, `.kb/read-load-streams.md`). `read` is not guarded: the oracle wraps the failure in a `LispReader$ReaderException` over a `LineNumberingPushbackReader` and not over a `PushbackReader`, which share one stream kind here. A second close is harmless on every backend (`.kb/read-load-streams.md`, "close on an already-closed stream"). Pins: clojure-spec `slurp-closes-the-stream-it-reads`, `ClojureInteropTest#filesRoundTripThroughReaderAndLineSeq`, `ClojureWasmFileIoTest`. `slurp` was an inline `read-char` loop per site until 2026-10-08. `file-seq` and every other `clojure.java.io` fn are refused |
@@ -853,9 +854,12 @@ a program without `ns` lowers unqualified. A quoted `'n/x` is the symbol of var 
   `require` with a bare `:only` refers nothing, like the oracle's `load-lib`. `:reload`,
   `:reload-all`, `:verbose` flags; quoted libspecs and prefix lists `(prefix [sub ...])`
   go through one spec parser. `clojure.string`, `clojure.set`, `clojure.java.io` (`reader`
-  only), `clojure.test` and `ring.adapter.rontolisp` resolve; any other `clojure.*` is
-  `unknown namespace: x`. The built-in Ring namespaces load as project files from the jar
-  when no root holds them ("Ring util namespaces").
+  only), `clojure.test` and `ring.adapter.rontolisp` resolve as lowerings; any other
+  namespace clojure.jar defines (`ClojureBuiltinNamespaces.LANGUAGE`) is a built-in file
+  ("clojure.jar namespaces") or `unknown namespace: x`. A `clojure.*` namespace OUTSIDE
+  that list (a contrib library, `clojure.data.json`) is an ordinary library on the source
+  path (until 2026-10-08 every `clojure.*` was refused). The built-in Ring namespaces load
+  as project files from the jar when no root holds them ("Ring util namespaces").
 - **ns clauses and libspec options** (measured on `clj` 1.12.6, 2026-10-08):
   `(:gen-class ...)` is a no-op outside an AOT compile, options included, so the clause
   declares nothing (a top-level `gen-class` stays refused). `:as-alias` is a real alias
@@ -1030,6 +1034,49 @@ oracle's classpath. Loaded through `loadNamespace` like any project namespace: v
   clojure-spec `ring-util-*` and `ring-middleware-*` (all four backends, oracle-identical),
   `examples/clojure/ring-hello.clj` (verified by hand 2026-10-08 under curl on the
   interpreter, the JVM class and `wasmtime serve`).
+
+## clojure.jar namespaces
+
+**The map-shaped namespaces of clojure.jar ship as Clojure source written for this front
+end** (`src/main/resources/am/ik/rontolisp/clojure/lib/clojure/**`, the
+`ClojureBuiltinNamespaces` mechanism of "Ring util namespaces"): `clojure.walk`.
+- **Licensing**: clojure.jar is EPL-1.0, this project Apache-2.0, so nothing of it is
+  copied -- no code, no docstring. Each file is written from the documented behaviour and
+  diffed against the oracle; a one-line var dictated by its contract
+  (`(prewalk-replace smap form)`) reads like the oracle's because the contract allows no
+  other shape.
+- **Which first** (measured 2026-10-08 over 72 jars: the eight `e43` probe libraries plus
+  64 widely used Clojars/contrib ones, a library counted once per namespace it names in a
+  `.clj`/`.cljc`): `clojure.string` 43, `clojure.java.io` 20, `clojure.set` 19,
+  `clojure.walk` 18, `clojure.pprint` 13, `clojure.edn` 13, `clojure.spec.alpha` 10
+  (refused, "clojure.spec"), `clojure.core.protocols` 6, `clojure.test` 4,
+  `clojure.datafy` 3, `clojure.stacktrace` 2, then one each for `clojure.zip`, `xml`,
+  `uuid`, `template`, `repl`, `math`, `instant`, `core.reducers`, and none for
+  `clojure.data`, `main`, `java.shell`. Among the probes: malli's `core` and
+  camel-snake-kebab require `walk`, data.json and reitit `pprint`, honeysql `template`.
+- **Startup namespaces** (`ClojureBuiltinNamespaces.STARTUP`): `clj -M` has loaded
+  `clojure.walk` (with `core.protocols`, `core.server`, `edn`, `instant`, `java.io`,
+  `main`, `spec.alpha`, `spec.gen.alpha`, `string`, `uuid`) before the program, so a
+  qualified name reaches it with no `require` and a `require` reads no project file
+  (`ClojureSourcePath.find` skips the roots). Here `ClojureLowering.projectNamespaceOf`
+  loads one on its first qualified name (`ClojureNamespaceLowering.preload`), but only
+  inside a top-level datum (`topLevelDepth`): the definitions need `hoisted` to land
+  ahead of the datum, and the pre-scan resolves names outside it. `STARTUP_NAMESPACES`
+  (what `find-ns` finds) includes them.
+- Any other shipped namespace follows the source path like a dependency: a project file of
+  the name wins.
+- `clojure.walk`: `walk` re-attaches the form's metadata itself (`with-meta-of`), since
+  `into` here starts a derived value without metadata ("Deviations") where the oracle's
+  keeps `empty`'s; only when there is metadata, so a walk never copies a node to record
+  nil. A strict seq is a list, so `walk` keeps it a list (the oracle realizes a
+  `LongRange` as a seq: printed alike). Deviation: `macroexpand-all` expands only the
+  program's macros -- the core forms are lowering rows, not macros, so `(when x y)` stays
+  where the oracle answers `(if x (do y))`.
+- Pins: clojure-spec `clojure-walk-*` (all four backends, oracle-identical, the first
+  case loading `clojure.walk` through a qualified name only),
+  `ClojureLanguageNamespacesTest` (the startup load, a project file never shadowing a
+  startup namespace, a contrib `clojure.*` namespace on the source path, the refusal of
+  one not built in).
 
 ## Macros
 
@@ -2297,7 +2344,8 @@ in-scope program needs `valid?`/`conform` (then `explain-data` stays refused).
 - Interop and host IO: `ClojureInteropTest` (interpreter and JVM),
   `ClojureWasmInteropRefusalTest`, `ClojureWasmFileIoTest`, `ClojureWasmFileRefusalTest`.
 - `ClojureArmsTest` (the sorted-collection, unbound-root, matcher and refusal strips).
-- `ClojureRingAdapterTest`, `ClojureRingUtilTest` (the Ring namespaces).
+- `ClojureRingAdapterTest`, `ClojureRingUtilTest` (the Ring namespaces),
+  `ClojureLanguageNamespacesTest` (where the clojure.jar namespaces come from).
 - `ClojureLibraryTest` (the splice), `SourceLanguageTest`, `RontoLispCliTest` and
   `PlaygroundReplTest` (the `clojure>` transcript, `--no-gc`), `examples/clojure/demo.clj`
   through `ExamplesE2eTest`.
