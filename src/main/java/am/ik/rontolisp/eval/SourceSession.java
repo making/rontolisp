@@ -92,6 +92,7 @@ public final class SourceSession {
 		this.clojureMacros = this.clojure == null ? null : ClojureMacroTime.create();
 		if (this.clojure != null) {
 			this.clojure.setMacroEvaluator(this.clojureMacros);
+			this.clojure.setBoundary(ClojureHostBoundary.INSTANCE);
 		}
 	}
 

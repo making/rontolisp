@@ -27,6 +27,7 @@ wrote from the `.wit`. What they *reach* is decided elsewhere, by whoever binds 
 | [`memory-store.lisp`](memory-store.lisp) | An implementation: a portable Lisp hash-table store, ~50 lines, ending in one `rontolisp:wit-provide` |
 | [`java-store.lisp`](java-store.lisp) | The **same** interface over a real `java.util.LinkedHashMap`. Bound after the first, so it replaces it |
 | [`page-hits-server.lisp`](page-hits-server.lisp) | The same counter as an HTTP server ([§6](#6-serve-it)) |
+| [`page-hits.clj`](page-hits.clj) | The counter in Clojure, through [`rontolisp.wit`](../../../doc/en/clojure/reference/wit.md): `kv/bucket-get` and friends are vars, and the store is a Clojure function bound with `wit/provide` |
 
 Run it on the interpreter and the Lisp store answers; compile to the JVM and the
 Java store answers; compile to a **WASI component** and wasmtime's own
@@ -232,6 +233,31 @@ A host that links an **out-of-process** provider keeps them. wasmCloud does, and
 compiles this directory, deploys the component and links it, and the counts
 accumulate on `:8000`. That the component cannot tell the two hosts apart is the
 point of the boundary.
+
+## In Clojure
+
+[`page-hits.clj`](page-hits.clj) is the same counter written in the experimental
+Clojure front end. `rontolisp.wit/import` binds the interface's functions as the
+vars of a namespace an alias reaches, and `rontolisp.wit/provide` binds the store
+where the program provides it itself:
+
+```clojure
+(wit/import "wit/keyvalue.wit" {:interface "wasi:keyvalue/store@0.2.0-draft" :as kv})
+
+(defn record-hit [bucket page]
+  (let [seen (kv/bucket-get bucket page)]
+    (kv/bucket-set bucket page (str (inc (if seen (read-string seen) 0))))))
+```
+
+```console
+$ rontolisp page-hits.clj
+$ rontolisp page-hits.clj -o PageHits.class && java -cp . PageHits
+$ rontolisp page-hits.clj -o page-hits-clj.wasm --component && wasmtime run -S keyvalue=y page-hits-clj.wasm
+```
+
+All three print the same lines. On the component the `wit/provide` binds nothing:
+wasmtime is the store. `bucket.list-keys` is not called, because it answers a
+record, which the Clojure side does not carry yet.
 
 ## Limitations
 

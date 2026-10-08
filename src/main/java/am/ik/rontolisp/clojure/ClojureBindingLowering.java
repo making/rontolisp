@@ -310,10 +310,20 @@ final class ClojureBindingLowering {
 											// it
 		fnParts.addAll(items.subList(at, items.size()));
 		ClojureDispatchLowering.recordClassDispatchFn(ctx, key, dynamic, ClojureLowerUtil.list(fnParts));
+		// the arities an export of the var may take ({:wasm/export ...},
+		// rontolisp.wasm/export, a world's label), and the export the definition's
+		// metadata declares, its spec held quoted so the metadata stays a constant
+		List<ClojureLowering.ParamShape> shapes = new ArrayList<>();
+		for (LispVal arglist : arglistsOf(items.subList(at, items.size()))) {
+			shapes.add(paramShape(arglist));
+		}
+		ctx.wasm.defnShapes.put(key, List.copyOf(shapes));
+		ClojureWasmLowering.DefnExport exported = ClojureWasmLowering.defnExport(ctx, name, items.get(1), attrMap,
+				form);
 		// recorded ahead of the body, so a #' of the name inside it sees this
 		// definition's metadata
-		List<LispVal> metaStore = ClojureVarLowering.record(ctx, key, form, items.get(1),
-				arglistsOf(items.subList(at, items.size())), doc, attrMap,
+		List<LispVal> metaStore = ClojureVarLowering.record(ctx, key, form, exported.nameDatum(),
+				arglistsOf(items.subList(at, items.size())), doc, exported.attrMap(),
 				ClojureLowerUtil.isSymbolNamed(items.get(0), "defn-"), false);
 		List<LispVal> forms;
 		if (items.get(at) instanceof LispCons && !isVectorDatum(items.get(at))) {

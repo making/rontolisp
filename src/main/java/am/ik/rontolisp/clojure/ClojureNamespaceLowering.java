@@ -64,6 +64,12 @@ final class ClojureNamespaceLowering {
 		if (ref.ns().equals(ClojureRingUtilLowering.NAMESPACE)) {
 			return ClojureRingUtilLowering.kernelCall(ctx, ref.var(), items);
 		}
+		if (ref.ns().equals(ClojureWasmLowering.NAMESPACE)) {
+			return ClojureWasmLowering.call(ctx, ref.var(), items, form);
+		}
+		if (ref.ns().equals(ClojureWitLowering.NAMESPACE)) {
+			return ClojureWitLowering.call(ctx, ref.var(), items, form);
+		}
 		return ClojureStringLowering.stringCall(ctx, ref.var(), items);
 	}
 
@@ -87,6 +93,12 @@ final class ClojureNamespaceLowering {
 		}
 		if (ref.ns().equals(ClojureRingUtilLowering.NAMESPACE)) {
 			return ClojureRingUtilLowering.kernelValue(ref.var());
+		}
+		if (ref.ns().equals(ClojureWasmLowering.NAMESPACE)) {
+			return ClojureWasmLowering.value(ref.var());
+		}
+		if (ref.ns().equals(ClojureWitLowering.NAMESPACE)) {
+			return ClojureWitLowering.value(ctx, ref.var());
 		}
 		return ClojureStringLowering.stringValue(ctx, ref.var());
 	}
@@ -122,13 +134,15 @@ final class ClojureNamespaceLowering {
 	/**
 	 * The namespaces whose vars lower to core forms: {@code clojure.string},
 	 * {@code clojure.set}, {@code clojure.java.io}, {@code clojure.test}, the Ring
-	 * adapter {@code ring.adapter.rontolisp} and the kernels of the built-in Ring
-	 * namespaces, {@code rontolisp.internal.ring}.
+	 * adapter {@code ring.adapter.rontolisp}, the kernels of the built-in Ring
+	 * namespaces, {@code rontolisp.internal.ring}, and the host boundary's
+	 * {@code rontolisp.wasm} and {@code rontolisp.wit}.
 	 */
 	static boolean isKnownNamespace(String ns) {
 		return ns.equals("clojure.string") || ns.equals(ClojureSetLowering.NAMESPACE) || ns.equals("clojure.java.io")
 				|| ns.equals(ClojureTestLowering.NAMESPACE) || ns.equals(ClojureRingLowering.NAMESPACE)
-				|| ns.equals(ClojureRingUtilLowering.NAMESPACE);
+				|| ns.equals(ClojureRingUtilLowering.NAMESPACE) || ns.equals(ClojureWasmLowering.NAMESPACE)
+				|| ns.equals(ClojureWitLowering.NAMESPACE);
 	}
 
 	/** Whether the namespace exports the var as a lowering. */
@@ -138,7 +152,9 @@ final class ClojureNamespaceLowering {
 				|| ns.equals("clojure.java.io") && JIO_VARS.contains(var)
 				|| ns.equals(ClojureTestLowering.NAMESPACE) && ClojureTestLowering.VARS.contains(var)
 				|| ns.equals(ClojureRingLowering.NAMESPACE) && ClojureRingLowering.VARS.contains(var)
-				|| ns.equals(ClojureRingUtilLowering.NAMESPACE) && ClojureRingUtilLowering.VARS.contains(var);
+				|| ns.equals(ClojureRingUtilLowering.NAMESPACE) && ClojureRingUtilLowering.VARS.contains(var)
+				|| ns.equals(ClojureWasmLowering.NAMESPACE) && ClojureWasmLowering.VARS.contains(var)
+				|| ns.equals(ClojureWitLowering.NAMESPACE) && ClojureWitLowering.VARS.contains(var);
 	}
 
 	/**
@@ -160,6 +176,12 @@ final class ClojureNamespaceLowering {
 		}
 		if (ns.equals(ClojureRingUtilLowering.NAMESPACE)) {
 			return ClojureRingUtilLowering.VARS;
+		}
+		if (ns.equals(ClojureWasmLowering.NAMESPACE)) {
+			return ClojureWasmLowering.VARS;
+		}
+		if (ns.equals(ClojureWitLowering.NAMESPACE)) {
+			return ClojureWitLowering.VARS;
 		}
 		return STRING_VARS;
 	}
@@ -664,7 +686,8 @@ final class ClojureNamespaceLowering {
 	 * built-in file.
 	 */
 	static void refuseLeftOut(ClojureLowering ctx, String ns, String var) {
-		String why = ctx.builtinNamespaces.contains(ns) ? ClojureBuiltinNamespaces.leftOut(ns, var) : null;
+		String why = ctx.builtinNamespaces.contains(ns) ? ClojureBuiltinNamespaces.leftOut(ns, var)
+				: ClojureWitLowering.refusalOf(ctx, ns, var);
 		if (why != null) {
 			throw new LispReadException(why);
 		}

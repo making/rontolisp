@@ -1,0 +1,7 @@
+hits per page:
+  /index = 3
+  /pricing = 2
+  /docs = 1
+/docs exists?     true
+/docs exists now? false
+values:           [3 2 nil]

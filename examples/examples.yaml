@@ -252,6 +252,26 @@ examples:
       a server blocks and a war or reactor is never run as a program. The
       request round trips on all four backends are ClojureRingAdapterTest (and
       ServeRingComponentE2eTest for `wasmtime serve`).
+  - path: clojure/host-boundary/main.clj
+    backends: [jvm-compile, wasm-reactor]
+    note: >-
+      the WASM host boundary guide's add/add10 in Clojure: rontolisp.wasm/defimport
+      and a defn's {:wasm/export ...} lower to the rontolisp:wasm-import and
+      rontolisp:wasm-export a Common Lisp source writes. Host-invoked (wasmtime run
+      --preload host=host.wasm --invoke add10 main.wasm 32 -> 42, or node run.mjs over
+      the --emit-js-glue file), so the harness only compiles; ClojureWasmBoundaryTest
+      runs the preload
+  - path: clojure/host-boundary/host.clj
+    backends: [jvm-compile, wasm-reactor]
+    note: the module main.wasm's "host" import is preloaded from -- a defn exported under :as "add"
+  - path: clojure/greeter/greeter.clj
+    backends: [jvm-compile, wasm-component]
+    note: >-
+      implements wit/greeter.wit with rontolisp.wit/export: each world export is the
+      var its label names, a bool crossing in Clojure's spelling. jvm-compile pins that
+      the same world check runs where nothing is exported. Host-invoked (wasmtime run
+      --invoke 'shout("Ada", true)' -> "HELLO, ADA!!!"), so the harness only compiles;
+      ClojureWitBoundaryTest runs the invokes
 
   # --- ml: numerical computing & machine learning ----------------------------
   - path: ml/deep-digits.lisp
@@ -849,6 +869,18 @@ examples:
         - 'keys:              ("/index" "/pricing")'
         - "bad store:         NO-SUCH-STORE"
         - 'seeded:            ("/a" "/b")'
+
+  - path: wit/keyvalue/page-hits.clj
+    backends: [interpreter, jvm, wasm-component]
+    note: >-
+      page-hits.lisp in Clojure, through rontolisp.wit/import and /provide: the
+      interpreter and jvm legs run against the store the program provides itself;
+      wasm-component compiles the canonical-ABI import, which `wasmtime run -S
+      keyvalue=y` runs against wasmtime's own store with the same output
+      (ClojureWitBoundaryTest runs all three). No list-keys: it answers a record,
+      which the Clojure tier does not carry yet
+    expect:
+      file: .expected/wit-keyvalue-page-hits-clj.txt
 
   - path: wit/keyvalue/page-hits-server.lisp
     backends: [jvm-compile, wasm-component]

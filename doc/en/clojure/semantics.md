@@ -299,6 +299,18 @@ which is a stream on every backend; `read` leaves it right after the datum. `str
 collection quotes the strings inside it, like the oracle's, so what `spit` writes reads
 back. `eval` and `load-string` stay absent: no compiler runs at run time.
 
+## Host boundary
+
+`rontolisp.wasm/defimport` and `rontolisp.wasm/export` lower to `rontolisp:wasm-import` and
+`rontolisp:wasm-export`, `rontolisp.wit/import`, `export` and `provide` to the three WIT
+directives, so every backend binds a Clojure program's boundary the way it binds a Common Lisp
+one's ([WASM host functions](reference/wasm.md), [WIT contracts](reference/wit.md)). The host
+sees each name as written, never the mangled symbol. `false` crosses as the host's false and
+comes back as `false`; an `:s-expr` crosses as the Clojure printer's text. A WIT import's vars
+exist below its form, like a `require`'s alias, while a `defimport` may be called above it, like
+a `defn`. An export resolves its var once the whole file has lowered, so the var may be
+defined below it.
+
 ## Not yet
 
 Each refusal names the missing design, never `unknown name`:
@@ -320,6 +332,9 @@ Each refusal names the missing design, never `unknown name`:
 | `--no-gc` builds | by name | that backend has no pairs, symbols or closures |
 | `file-seq`, `clojure.java.io` (except `reader`) | `file-seq` / `unknown name: clojure.java.io/...` | no directory walks; only `reader` resolves, opening a file-stream reader |
 | an asynchronous Ring handler (`run-server` with `:async? true`) | `asynchronous handlers (:async? true) are not supported` | no respond/raise protocol under the transports |
+| `:async` on a `rontolisp.wasm` declaration, an `async func` WIT member or export | `:async is not supported yet ...`, `... is an async func ...` | the future a suspending crossing answers is no Clojure future |
+| a WIT member taking or answering a record, variant, enum, flags, tuple, list (but `list<u8>`), stream or future | `... which the Clojure tier does not carry yet (file.wit:N)` | no conversion between those Clojure values and the boundary's yet |
+| `:bytes` in a `rontolisp.wasm` declaration | `:bytes does not cross from Clojure ...` | it transfers an `(unsigned-byte 8)` vector, which no Clojure value is |
 
 ## Errors and positions
 

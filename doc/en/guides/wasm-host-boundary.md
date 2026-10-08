@@ -6,7 +6,9 @@ same source runs on every backend — the directives are no-ops or defun stubs
 on the interpreter and the JVM).
 
 For the typed WIT-driven boundary, see the
-[WIT contracts guide](wit-contracts.md).
+[WIT contracts guide](wit-contracts.md). A Clojure program declares the same
+boundary with [`rontolisp.wasm`](../clojure/reference/wasm.md), which lowers to
+these directives.
 
 ## Exporting Lisp Functions
 

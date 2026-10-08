@@ -1,6 +1,6 @@
 # WIT 契約(`wit-export` / `wit-import`)
 
-プログラムの境界を、誰かが書いた(あるいはバインディングジェネレータが生成した)`.wit` ファイルから直接持ってこられる 2 つのディレクティブです: **`rontolisp:wit-export`** は world を実装し、**`rontolisp:wit-import`** はインターフェースを呼び出します。どちらも新しいローワリングパスを追加するものではありません — 手動の [`wasm-export` / `wasm-import`](wasm-host-boundary.md) 機構への型付きフロントエンドと、同じソースがどこでも動くようにするバックエンドごとの実装(`--component` では型付きコンポーネントモデルエクスポート、インタプリタと JVM ではプロバイダコールバック、Preview 1 ではバイト単位で同一のインポート)です。
+プログラムの境界を、誰かが書いた(あるいはバインディングジェネレータが生成した)`.wit` ファイルから直接持ってこられる 2 つのディレクティブです: **`rontolisp:wit-export`** は world を実装し、**`rontolisp:wit-import`** はインターフェースを呼び出します。どちらも新しいローワリングパスを追加するものではありません — 手動の [`wasm-export` / `wasm-import`](wasm-host-boundary.md) 機構への型付きフロントエンドと、同じソースがどこでも動くようにするバックエンドごとの実装(`--component` では型付きコンポーネントモデルエクスポート、インタプリタと JVM ではプロバイダコールバック、Preview 1 ではバイト単位で同一のインポート)です。Clojure のプログラムは [`rontolisp.wit`](../clojure/reference/wit.md) を通じて両方を使います。これはここのディレクティブにローワリングされます。
 
 ## WIT world の実装(`wit-export`)
 

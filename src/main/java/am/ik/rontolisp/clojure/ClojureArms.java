@@ -398,12 +398,28 @@ public final class ClojureArms {
 	public static Scan scan(List<LispVal> forms, Family family) {
 		boolean[] found = new boolean[2];
 		for (LispVal form : forms) {
+			if (isBoundaryDirective(form)) {
+				continue;
+			}
 			scanInto(form, family, found, false);
 			if (found[0] && found[1]) {
 				break;
 			}
 		}
 		return new Scan(found[0], found[1]);
+	}
+
+	/**
+	 * The top-level directives naming a function for a host boundary: their quoted name
+	 * ({@code '|c%ns/f|}, a namespaced var's symbol) is a compile-time name, never a
+	 * value the program builds, so it makes no qualified symbol a printer could meet.
+	 */
+	private static final Set<String> BOUNDARY_DIRECTIVES = Set.of("RONTOLISP:WASM-EXPORT", "RONTOLISP:WASM-IMPORT",
+			"RONTOLISP:JVM-EXPORT");
+
+	private static boolean isBoundaryDirective(LispVal form) {
+		return form instanceof LispCons cons && cons.car() instanceof LispSymbol head
+				&& BOUNDARY_DIRECTIVES.contains(head.name());
 	}
 
 	private static void scanInto(LispVal form, Family family, boolean[] found, boolean quoted) {
