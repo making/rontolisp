@@ -216,6 +216,6 @@ deliberate boundaries the audit must not undo: user-facing operator catalogues l
 - [dists.md](dists.md) -- the download half of `ql:quickload`
 - [time-environment-builtins.md](time-environment-builtins.md) -- time/environment built-ins and the environment-enquiry family
 - [architecture.md](architecture.md) -- the pipeline, the language-independent libraries, the package dependency graph and the per-package import rules, the `CompileFrontend.expand` no-restatement rule and its drift history, requirements
-- [session-workflow.md](session-workflow.md) -- builds outside the root reactor, waiting for a long run and the three false greens, working beside other sessions on `develop` (`.todo` number claims), the after-task checks
+- [session-workflow.md](session-workflow.md) -- builds outside the root reactor, the CI deploy job (Maven 3.10 credential scoping, the `sonatype-central` server id), waiting for a long run and the three false greens, working beside other sessions on `develop` (`.todo` number claims), the after-task checks
 - [documentation-site.md](documentation-site.md) -- doc site layout, fence conventions, search index, build/preview
 - [directory-rename.md](directory-rename.md) -- moving a directory: the things that break outside the rename's own diff (a location-scoped ignore rule, a citation vs. a member, the relative paths INSIDE what moved when the depth changes, a re-flowed javadoc line, a fixture lookup that turns into a skip), the walk-defined corpus behind them, and `PathCitationTest` as the machine half

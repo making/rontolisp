@@ -1,4 +1,4 @@
-# Session workflow: builds outside the reactor, long runs, shared `develop`, after-task checks
+# Session workflow: builds outside the reactor, the deploy job, long runs, shared `develop`, after-task checks
 
 ## Builds outside the root reactor
 
@@ -26,6 +26,25 @@ jar without its dependencies, left by an online fixture build that only computed
 executes in full, so the offline build resolves under any runner Maven. Rejected: pre-resolving
 in the workflow (CI only, the local run stays broken) and dropping `-o` (network-bound, still
 the PATH Maven).
+
+## The deploy job
+
+`ci.yaml` `deploy:` publishes on `./mvnw`, as every other job builds: the runner's `/usr/bin/mvn`
+moves with the image. Measured 2026-10-08: on 3.10.0 every snapshot publish got HTTP 401 with
+unchanged credentials. 3.10 binds a server's credentials to the origins declared for its id
+(`maven.repository.credentialScope`, default `origin`), and the id `central` always has the
+built-in Maven Central repository's origin `https://repo.maven.apache.org`, so credentials under
+`central` never reach `central.sonatype.com`. Reproduced locally against a dummy settings file and
+a local HTTP server (`-DcentralSnapshotsUrl=http://127.0.0.1:PORT/...`): 3.9.16 sends
+`Authorization`, 3.10.0 does not and logs `Not using credentials of server 'central'`.
+
+The Portal credentials therefore live under `sonatype-central`, the `publishingServerId` of both
+poms and the id in the workflow's settings; the three must agree. Under 3.10 an id with no
+declared origin still gets its credentials, with a warning. When the wrapper reaches 3.10, add
+`<repositoryOrigins><repositoryOrigin>https://central.sonatype.com</repositoryOrigin>` to that
+server (3.10 `strict` scope refuses it otherwise); 3.9.16 rejects the tag with a settings warning,
+so it is not there yet. Rejected: `-Dmaven.repository.credentialScope=id` (turns the scoping off)
+and `<repositoryOrigins>` on `central` (also hands the Portal token to `repo.maven.apache.org`).
 
 ## Waiting for a long run
 

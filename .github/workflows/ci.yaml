@@ -453,19 +453,27 @@ jobs:
         cache: maven
         gpg-private-key: ${{ steps.secrets.outputs.GPG_SECRING }}
         gpg-passphrase: ${{ steps.secrets.outputs.GPG_PASSPHRASE }}
+    # The Portal credentials get an id of their own: `central` is also the id of the
+    # repository Maven reads from (repo.maven.apache.org), and Maven 3.10 binds a
+    # server's credentials to the origins declared for its id, so under the id
+    # `central` they never reach central.sonatype.com (HTTP 401). It must match
+    # `publishingServerId` in pom.xml and rontolisp-maven-plugin/pom.xml
+    # (.kb/session-workflow.md, "The deploy job").
     - name: Generates Maven Settings
       uses: s4u/maven-settings-action@v4.0.0
       with:
         servers: |
           [{
-              "id": "central",
+              "id": "sonatype-central",
               "username": "${{ steps.secrets.outputs.MAVEN_CENTRAL_USERNAME }}",
               "password": "${{ steps.secrets.outputs.MAVEN_CENTRAL_PASSWORD }}"
           }]
+    # On the wrapper's Maven like every other job, not the runner's /usr/bin/mvn: a
+    # runner image update must not change the Maven that publishes.
     - name: Deploy to Maven Central
       run: |
         set -e
-        mvn -V \
+        ./mvnw -V \
             generate-sources \
             javadoc:jar \
             source:jar \
@@ -480,7 +488,7 @@ jobs:
     - name: Deploy rontolisp-maven-plugin to Maven Central
       run: |
         set -e
-        mvn -V -f rontolisp-maven-plugin/pom.xml \
+        ./mvnw -V -f rontolisp-maven-plugin/pom.xml \
             javadoc:jar \
             source:jar \
             package \
