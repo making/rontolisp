@@ -1,0 +1,16 @@
+# descriptor --no-snapshots test.snap:lib:1.0-SNAPSHOT test.snap:lib:1.0-20240101.000000-1 test.snap:plain:1.0-SNAPSHOT test.snap:installed:1.0-SNAPSHOT test.snap:child:1 test.snap:missing:1.0-SNAPSHOT test.snap:user:1
+artifact test.snap:lib:jar:1.0-SNAPSHOT
+warning missing test.snap:lib:jar:1.0-SNAPSHOT
+artifact test.snap:lib:jar:1.0-20240101.000000-1
+warning missing test.snap:lib:jar:1.0-20240101.000000-1
+artifact test.snap:plain:jar:1.0-SNAPSHOT
+warning missing test.snap:plain:jar:1.0-SNAPSHOT
+artifact test.snap:installed:jar:1.0-SNAPSHOT
+dep test.snap:dep:jar::1 scope=compile optional=null
+error Failed to read artifact descriptor for test.snap:child:jar:1 <- The following artifacts could not be resolved: test.snap:parent:pom:1.0-SNAPSHOT (absent): Could not find artifact test.snap:parent:pom:1.0-SNAPSHOT <- The following artifacts could not be resolved: test.snap:parent:pom:1.0-SNAPSHOT (absent): Could not find artifact test.snap:parent:pom:1.0-SNAPSHOT <- Could not find artifact test.snap:parent:pom:1.0-SNAPSHOT
+artifact test.snap:missing:jar:1.0-SNAPSHOT
+warning missing test.snap:missing:jar:1.0-SNAPSHOT
+artifact test.snap:user:jar:1
+dep test.snap:lib:jar::1.0-SNAPSHOT scope=compile optional=null
+dep test.snap:plain:jar::1.0-SNAPSHOT scope=compile optional=null
+dep test.snap:missing:jar::1.0-SNAPSHOT scope=compile optional=null

@@ -1,0 +1,15 @@
+# descriptor --no-releases test.snap:child:1 test.snap:lib:1.0-SNAPSHOT test.snap:installed:1.0-SNAPSHOT test.meta:lib:1.0 test.meta:lib:RELEASE test.meta:lib:LATEST test.meta:snaplatest:LATEST test.meta:snaplatest:RELEASE
+artifact test.snap:child:jar:1
+warning missing test.snap:child:jar:1
+artifact test.snap:lib:jar:1.0-SNAPSHOT
+dep test.snap:dep:jar::1 scope=compile optional=null
+artifact test.snap:installed:jar:1.0-SNAPSHOT
+dep test.snap:dep:jar::1 scope=compile optional=null
+artifact test.meta:lib:jar:1.0
+warning missing test.meta:lib:jar:1.0
+error Failed to read artifact descriptor for test.meta:lib:jar:RELEASE <- Failed to resolve version for test.meta:lib:jar:RELEASE: Could not find metadata test.meta:lib/maven-metadata.xml in local (<local>) <- Could not find metadata test.meta:lib/maven-metadata.xml in local (<local>)
+artifact test.meta:lib:jar:LATEST
+warning missing test.meta:lib:jar:2.0
+artifact test.meta:snaplatest:jar:LATEST
+dep test.meta:two:jar::1 scope=compile optional=null
+error Failed to read artifact descriptor for test.meta:snaplatest:jar:RELEASE <- Failed to resolve version for test.meta:snaplatest:jar:RELEASE: Could not find metadata test.meta:snaplatest/maven-metadata.xml in local (<local>) <- Could not find metadata test.meta:snaplatest/maven-metadata.xml in local (<local>)

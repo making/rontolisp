@@ -391,7 +391,7 @@ $ rontolisp app.lisp -o app.jar --java-dep com.google.guava:guava:33.4.0-jre
 $ java -jar app.jar
 ```
 
-`--java-dep` は Maven がプロジェクトの依存を解決するのと同じ方法で解決します。同じライブラリの 2 つのバージョンが出会うと、要求した座標に近い方が勝ち、jar は `--java-classpath` のエントリーの後に Maven のクラスパス順で並びます。取得元は Maven Central で、`mvn` と同じローカルリポジトリ (`~/.m2/repository`、または `settings.xml` の `localRepository`) を経由します。SNAPSHOT、`LATEST`、`RELEASE`、バージョン範囲は、指定したものも依存の POM にあるものも、Maven と同じく Central の `maven-metadata.xml` で解決します。そのメタデータはローカルリポジトリに保存し、Central に問い合わせ直すのは 1 日に 1 回です。Central になかったファイルも同じです。
+`--java-dep` は Maven がプロジェクトの依存を解決するのと同じ方法で解決します。同じライブラリの 2 つのバージョンが出会うと、要求した座標に近い方が勝ち、jar は `--java-classpath` のエントリーの後に Maven のクラスパス順で並びます。取得元は Maven Central で、`mvn` と同じローカルリポジトリ (`~/.m2/repository`、または `settings.xml` の `localRepository`) を経由します。SNAPSHOT、`LATEST`、`RELEASE`、バージョン範囲は、指定したものも依存の POM にあるものも、Maven と同じく Central の `maven-metadata.xml` で解決します。そのメタデータはローカルリポジトリに保存し、Central に問い合わせ直すのは 1 日に 1 回です。Central になかったファイルも同じです。Maven と同じく Central は SNAPSHOT を配布しない扱いで、SNAPSHOT は `--java-repository` で指定したリポジトリだけから探します。
 
 Clojars、社内リポジトリ、`file:` ディレクトリなど、Central にないライブラリは `--java-repository [ID=]URL` (繰り返し指定可。`https:`、`http:`、`file:`) で指定します。これらのリポジトリは Central の後に、指定した順で検索します。`ID` (省略時は `java-repository-N`) は `settings.xml` が照合する名前で、`<server>` がその認証情報を与え、`mirrorOf` がこの ID を指す `<mirror>` は URL を置き換えます。ID を `central` にすると、リポジトリを追加せず Central の URL を置き換えます。
 

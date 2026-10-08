@@ -378,8 +378,8 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   `settings.xml` credentials answer Basic authentication only (the oracle also answers Digest
   and NTLM), and a download, `maven-metadata.xml` included, is always checked against its `.sha1` (the
   oracle's default only warns). A file no repository had is not asked for again until the
-  next day (the oracle asks on every run); one update policy, daily, serves every repository
-  (a repository's `:update` is not read). A git tag is checked against the
+  repository's update policy says so, `:daily` unless its `:update` names another (the
+  oracle asks on every run). A git tag is checked against the
   local clone, which is fetched only when the tag is missing or names another commit (the
   oracle fetches on every resolution); checkouts live in `~/.rontolisp/gitlibs`, not
   `~/.gitlibs`. Two commits of one library neither of which descends from the other are

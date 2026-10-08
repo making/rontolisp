@@ -513,6 +513,199 @@ class MavenRepositoryTest {
 			.hasMessage("not a Maven update policy (always, daily, never or interval:MINUTES): 'hourly'");
 	}
 
+	private MavenResolver over(Downloader downloader, Path localRepository, RemoteRepository... repositories) {
+		return over(downloader, localRepository, MavenSettings.none(), repositories);
+	}
+
+	/** A resolver whose repositories keep their own policies (no session override). */
+	private MavenResolver over(Downloader downloader, Path localRepository, MavenSettings settings,
+			RemoteRepository... repositories) {
+		return MavenResolver.builder()
+			.localRepository(localRepository)
+			.repositories(List.of(repositories))
+			.downloader(downloader)
+			.settings(settings)
+			.systemProperties(MavenTestRepository.SYSTEM)
+			.build();
+	}
+
+	private static RemoteRepository central(RepositoryPolicy releases, RepositoryPolicy snapshots) {
+		return new RemoteRepository("central", CENTRAL, releases, snapshots);
+	}
+
+	@Test
+	void aRepositoryIsNotAskedForAFileOfAKindItDoesNotServe() throws IOException {
+		Artifact build = Artifact.parse("org.example:lib:1.0-20240101.000000-1");
+		Served served = new Served().file(CENTRAL + LIB.path(), JAR).file(CENTRAL + build.path(), JAR);
+		RepositoryPolicy disabled = RepositoryPolicy.DISABLED;
+		RepositoryPolicy enabled = RepositoryPolicy.DEFAULT;
+
+		// Maven's DefaultArtifactResolver skips a repository whose policy for the
+		// artifact's kind is disabled (measured with the oracle: no request at all)
+		assertThatThrownBy(() -> over(served, this.local.resolve("a"), central(enabled, disabled)).artifact(build))
+			.isInstanceOf(MavenResolutionException.class)
+			.hasMessageStartingWith(build + " is in neither the local repository");
+		assertThatThrownBy(() -> over(served, this.local.resolve("b"), central(disabled, enabled)).artifact(LIB))
+			.isInstanceOf(MavenResolutionException.class);
+		assertThat(served.requested).isEmpty();
+
+		assertThat(over(served, this.local.resolve("c"), central(enabled, disabled)).artifact(LIB))
+			.hasBinaryContent(JAR);
+		assertThat(over(served, this.local.resolve("d"), central(disabled, enabled)).artifact(build))
+			.hasBinaryContent(JAR);
+	}
+
+	@Test
+	void metadataIsAskedOnlyOfTheRepositoriesServingItsKind() throws IOException {
+		Artifact snapshot = Artifact.parse("org.example:lib:1.0-SNAPSHOT");
+		Artifact release = Artifact.parse("org.example:lib:RELEASE");
+		Artifact latest = Artifact.parse("org.example:lib:LATEST");
+		String snapshotMetadata = "org/example/lib/1.0-SNAPSHOT/maven-metadata.xml";
+		Served served = new Served().file(CENTRAL + LIB_METADATA,
+				("<metadata><versioning><latest>1.0-SNAPSHOT</latest><release>1.0</release></versioning></metadata>")
+					.getBytes(StandardCharsets.UTF_8))
+			.file(CENTRAL + snapshotMetadata, snapshots("1.0-20240101.000000-1", "20240101000000"));
+		RepositoryPolicy disabled = RepositoryPolicy.DISABLED;
+		RepositoryPolicy enabled = RepositoryPolicy.DEFAULT;
+
+		// SNAPSHOT: the snapshot policy decides; the version stays as written
+		MavenResolver noSnapshots = over(served, this.local.resolve("a"), central(enabled, disabled));
+		assertThat(noSnapshots.version(snapshot)).isEqualTo("1.0-SNAPSHOT");
+		assertThat(served.requested).isEmpty();
+		assertThat(over(served, this.local.resolve("b"), central(enabled, enabled)).version(snapshot))
+			.isEqualTo("1.0-20240101.000000-1");
+		served.requested.clear();
+
+		// RELEASE: the release policy decides
+		assertThatThrownBy(() -> over(served, this.local.resolve("c"), central(disabled, enabled)).version(release))
+			.isInstanceOf(MavenResolutionException.class)
+			.hasMessageStartingWith("Failed to resolve version for org.example:lib:jar:RELEASE");
+		assertThat(served.requested).isEmpty();
+		assertThat(over(served, this.local.resolve("d"), central(enabled, disabled)).version(release)).isEqualTo("1.0");
+		served.requested.clear();
+
+		// LATEST: either policy suffices, and a snapshot it names is not resolved further
+		// where snapshots are disabled
+		assertThat(over(served, this.local.resolve("e"), central(enabled, disabled)).version(latest))
+			.isEqualTo("1.0-SNAPSHOT");
+		assertThat(served.requested).containsExactly(CENTRAL + LIB_METADATA, CENTRAL + LIB_METADATA + ".sha1");
+		served.requested.clear();
+		assertThat(over(served, this.local.resolve("f"), central(disabled, enabled)).version(latest))
+			.isEqualTo("1.0-20240101.000000-1");
+		assertThat(served.requested).contains(CENTRAL + LIB_METADATA, CENTRAL + snapshotMetadata);
+		assertThatThrownBy(() -> over(served, this.local.resolve("g"), central(disabled, disabled)).version(latest))
+			.isInstanceOf(MavenResolutionException.class);
+	}
+
+	@Test
+	void aCopyCachedByARepositoryServingNoSuchKindIsNotRead() throws IOException {
+		Served served = new Served().file(CENTRAL + LIB_METADATA,
+				"<metadata><versioning><release>1.0</release></versioning></metadata>"
+					.getBytes(StandardCharsets.UTF_8));
+		Artifact release = Artifact.parse("org.example:lib:RELEASE");
+		assertThat(
+				over(served, this.local, central(RepositoryPolicy.DEFAULT, RepositoryPolicy.DEFAULT)).version(release))
+			.isEqualTo("1.0");
+		assertThat(this.local.resolve("org/example/lib/maven-metadata-central.xml")).exists();
+
+		// the copy stays on disk, but a repository whose releases are disabled is not
+		// consulted for RELEASE
+		served.requested.clear();
+		assertThatThrownBy(() -> over(served, this.local, central(RepositoryPolicy.DISABLED, RepositoryPolicy.DEFAULT))
+			.version(release)).isInstanceOf(MavenResolutionException.class);
+		assertThat(served.requested).isEmpty();
+	}
+
+	@Test
+	void aRangeListsOfARepositoryOnlyTheKindsItServes() throws IOException {
+		Served served = new Served().file(CENTRAL + LIB_METADATA,
+				versions("1.0", "2.0-SNAPSHOT", "2.1-20240101.000000-1", "3.0-snapshot", "4.0"));
+		write(this.local.resolve("local/org/example/lib/maven-metadata-local.xml"), versions("1.5-SNAPSHOT"));
+		Artifact range = Artifact.parse("org.example:lib:[1,10)");
+		RepositoryPolicy disabled = RepositoryPolicy.DISABLED;
+		RepositoryPolicy enabled = RepositoryPolicy.DEFAULT;
+
+		// Maven filters a repository's list with ArtifactUtils.isSnapshot (case-blind
+		// SNAPSHOT suffix, a timestamped build); the local repository's list is not
+		// filtered
+		Path withLocal = this.local.resolve("local");
+		assertThat(over(served, withLocal, central(enabled, disabled)).versions(range)).containsExactly("1.0",
+				"1.5-SNAPSHOT", "4.0");
+		assertThat(over(served, this.local.resolve("b"), central(enabled, enabled)).versions(range))
+			.containsExactly("1.0", "2.0-SNAPSHOT", "2.1-20240101.000000-1", "3.0-snapshot", "4.0");
+		assertThat(over(served, this.local.resolve("c"), central(disabled, enabled)).versions(range))
+			.containsExactly("2.0-SNAPSHOT", "2.1-20240101.000000-1", "3.0-snapshot");
+		served.requested.clear();
+		assertThat(over(served, this.local.resolve("d"), central(disabled, disabled)).versions(range)).isEmpty();
+		assertThat(served.requested).isEmpty();
+	}
+
+	@Test
+	void eachKindOfRequestFollowsTheUpdatePolicyOfTheKindsItAsksFor() throws IOException {
+		Served served = new Served().file(CENTRAL + LIB_METADATA,
+				"<metadata><versioning><release>1.0</release><versions><version>1.0</version></versions></versioning></metadata>"
+					.getBytes(StandardCharsets.UTF_8));
+		Artifact release = Artifact.parse("org.example:lib:RELEASE");
+		Artifact range = Artifact.parse("org.example:lib:[1,2)");
+		RemoteRepository releasesNeverSnapshotsAlways = central(new RepositoryPolicy(true, "never"),
+				new RepositoryPolicy(true, "always"));
+		assertThat(over(served, this.local, releasesNeverSnapshotsAlways).version(release)).isEqualTo("1.0");
+		assertThat(served.requested).hasSize(2);
+
+		// RELEASE asks the release policy: never
+		served.requested.clear();
+		assertThat(over(served, this.local, releasesNeverSnapshotsAlways).version(release)).isEqualTo("1.0");
+		assertThat(served.requested).isEmpty();
+		// a range asks for both kinds and updates as often as the more frequent: always
+		assertThat(over(served, this.local, releasesNeverSnapshotsAlways).versions(range)).containsExactly("1.0");
+		assertThat(served.requested).containsExactly(CENTRAL + LIB_METADATA, CENTRAL + LIB_METADATA + ".sha1");
+
+		// the session's own policy replaces every repository's
+		served.requested.clear();
+		MavenResolver forced = MavenResolver.builder()
+			.localRepository(this.local)
+			.repositories(List.of(central(new RepositoryPolicy(true, "never"), new RepositoryPolicy(true, "never"))))
+			.downloader(served)
+			.updatePolicy("always")
+			.systemProperties(MavenTestRepository.SYSTEM)
+			.build();
+		assertThat(forced.version(release)).isEqualTo("1.0");
+		assertThat(served.requested).hasSize(2);
+	}
+
+	@Test
+	void aMirrorServesWhatTheRepositoriesItCoversServe() throws IOException {
+		Artifact build = Artifact.parse("org.example:lib:1.0-20240101.000000-1");
+		MavenSettings mirror = new MavenSettings(null, false,
+				List.of(new MavenSettings.Mirror("corporate", MIRROR, "*")), List.of(), List.of());
+		Served served = new Served().file(MIRROR + build.path(), JAR);
+		RemoteRepository noSnapshots = central(RepositoryPolicy.DEFAULT, RepositoryPolicy.DISABLED);
+		RemoteRepository other = new RemoteRepository("other", "https://other.example/repo/");
+
+		assertThatThrownBy(() -> over(served, this.local.resolve("a"), mirror, noSnapshots).artifact(build))
+			.isInstanceOf(MavenResolutionException.class);
+		assertThat(served.requested).isEmpty();
+		// a disabled policy gives way to the enabled one of another covered repository
+		assertThat(over(served, this.local.resolve("b"), mirror, noSnapshots, other).artifact(build))
+			.hasBinaryContent(JAR);
+	}
+
+	@Test
+	void aRepositoryPolicyIsSpelledAsMavenSpellsIt() {
+		assertThat(new RepositoryPolicy(true, "interval:5").update()).isEqualTo("interval:5");
+		assertThatThrownBy(() -> new RepositoryPolicy(true, "hourly")).isInstanceOf(IllegalArgumentException.class)
+			.hasMessage("not a Maven update policy (always, daily, never or interval:MINUTES): 'hourly'");
+		// merged as Maven Resolver merges the policies of repositories behind one mirror
+		RepositoryPolicy never = new RepositoryPolicy(true, "never");
+		RepositoryPolicy always = new RepositoryPolicy(true, "always");
+		assertThat(RepositoryPolicy.merge(never, always)).isEqualTo(always);
+		assertThat(RepositoryPolicy.merge(RepositoryPolicy.DEFAULT, new RepositoryPolicy(true, "interval:5")))
+			.isEqualTo(new RepositoryPolicy(true, "interval:5"));
+		assertThat(RepositoryPolicy.merge(RepositoryPolicy.DISABLED, never)).isEqualTo(never);
+		assertThat(RepositoryPolicy.merge(always, RepositoryPolicy.DISABLED)).isEqualTo(always);
+		assertThat(RepositoryPolicy.merge(RepositoryPolicy.DISABLED, RepositoryPolicy.DISABLED).enabled()).isFalse();
+	}
+
 	private static byte[] versions(String... versions) {
 		StringBuilder text = new StringBuilder(
 				"<metadata><groupId>org.example</groupId><artifactId>lib</artifactId><versioning><versions>");

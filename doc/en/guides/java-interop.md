@@ -566,7 +566,8 @@ from Maven Central through the local repository `mvn` uses -- `~/.m2/repository`
 the `localRepository` of `settings.xml`. A SNAPSHOT, `LATEST`, `RELEASE` or version range,
 given or in a dependency's POM, resolves through Central's `maven-metadata.xml` as Maven
 resolves it. The local repository keeps that metadata and asks Central again once a day,
-as it does for a file Central did not have.
+as it does for a file Central did not have. Central serves no SNAPSHOT, as in Maven: a
+SNAPSHOT is looked up only in the repositories named with `--java-repository`.
 
 A library Central does not hold -- Clojars, a company repository, a `file:` directory --
 is named with `--java-repository [ID=]URL` (repeatable; `https:`, `http:` or `file:`).

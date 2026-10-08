@@ -80,6 +80,22 @@ final class MavenTestRepository {
 	 * @throws IOException if the installed files cannot be copied
 	 */
 	static MavenResolver resolver(Path remote, Path local, Map<String, String> extra) throws IOException {
+		return resolver(remote, local, extra, RepositoryPolicy.DEFAULT, RepositoryPolicy.DEFAULT);
+	}
+
+	/**
+	 * Like {@link #resolver(Path, Path, Map)}, the fixture repository with the given
+	 * release and snapshot policies.
+	 * @param remote the copy, from {@link #remote}
+	 * @param local an empty local repository
+	 * @param extra system properties added or replaced
+	 * @param releases what the repository serves of releases
+	 * @param snapshots what the repository serves of snapshots
+	 * @return the resolver
+	 * @throws IOException if the installed files cannot be copied
+	 */
+	static MavenResolver resolver(Path remote, Path local, Map<String, String> extra, RepositoryPolicy releases,
+			RepositoryPolicy snapshots) throws IOException {
 		try (Stream<Path> files = Files.walk(INSTALLED)) {
 			for (Path file : files.filter(Files::isRegularFile).toList()) {
 				Path target = local.resolve(INSTALLED.relativize(file).toString());
@@ -91,7 +107,7 @@ final class MavenTestRepository {
 		system.putAll(extra);
 		return MavenResolver.builder()
 			.localRepository(local)
-			.repositories(List.of(new RemoteRepository("fixture", remote.toUri().toString())))
+			.repositories(List.of(new RemoteRepository("fixture", remote.toUri().toString(), releases, snapshots)))
 			.systemProperties(system)
 			.build();
 	}

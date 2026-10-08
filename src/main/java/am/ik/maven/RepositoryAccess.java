@@ -64,6 +64,29 @@ final class RepositoryAccess implements ModelBuilder.PomSource {
 	private static final String SNAPSHOT = "SNAPSHOT";
 
 	/**
+	 * Which versions a {@code maven-metadata.xml} is asked for (Resolver's
+	 * {@code Metadata.Nature}).
+	 */
+	private enum Nature {
+
+		RELEASE, SNAPSHOT, RELEASE_OR_SNAPSHOT
+
+	}
+
+	/** Maven's {@code Artifact.VERSION_FILE_PATTERN}: a timestamped snapshot. */
+	private static final Pattern TIMESTAMPED = Pattern.compile("^(.*)-(\\d{8}\\.\\d{6})-(\\d+)$");
+
+	/**
+	 * Whether a version listed in a repository's metadata is a snapshot, as
+	 * {@code ArtifactUtils.isSnapshot} reads it: a trailing {@code SNAPSHOT} in any case,
+	 * or a timestamped build.
+	 */
+	private static boolean isSnapshot(String version) {
+		return version.regionMatches(true, version.length() - SNAPSHOT.length(), SNAPSHOT, 0, SNAPSHOT.length())
+				|| TIMESTAMPED.matcher(version).matches();
+	}
+
+	/**
 	 * Where a version came from: a remote repository's metadata, or the local
 	 * repository's ({@code route} null).
 	 *
@@ -105,7 +128,10 @@ final class RepositoryAccess implements ModelBuilder.PomSource {
 
 	private final MavenSettings settings;
 
-	private final UpdatePolicy policy;
+	/**
+	 * The update policy of the whole session, replacing each repository's own, or null.
+	 */
+	private final @Nullable UpdatePolicy override;
 
 	/** The repositories as contacted, made on first use. */
 	private @Nullable List<RepositoryRoute> routes;
@@ -121,12 +147,12 @@ final class RepositoryAccess implements ModelBuilder.PomSource {
 	private final Map<Artifact, VersionRangeResult> ranges = new HashMap<>();
 
 	RepositoryAccess(Path localRepository, List<RemoteRepository> repositories, Downloader downloader,
-			MavenSettings settings, UpdatePolicy policy) {
+			MavenSettings settings, @Nullable UpdatePolicy override) {
 		this.root = localRepository.toAbsolutePath().normalize();
 		this.repositories = List.copyOf(repositories);
 		this.downloader = downloader;
 		this.settings = settings;
-		this.policy = policy;
+		this.override = override;
 	}
 
 	Path root() {
@@ -177,6 +203,16 @@ final class RepositoryAccess implements ModelBuilder.PomSource {
 			// a version the local repository's metadata named is a local file or nothing
 			candidates = remote == null ? List.of() : List.of(remote);
 		}
+		// a repository serves a snapshot or a release only when its policy for that kind
+		// is enabled (DefaultArtifactResolver: "Skipping disabled repository")
+		boolean snapshot = artifact.isSnapshot();
+		List<RepositoryRoute> enabled = new ArrayList<>();
+		for (RepositoryRoute route : candidates) {
+			if (route.effective(!snapshot, snapshot, this.override).enabled()) {
+				enabled.add(route);
+			}
+		}
+		candidates = enabled;
 		if (candidates.isEmpty()) {
 			return null;
 		}
@@ -189,7 +225,8 @@ final class RepositoryAccess implements ModelBuilder.PomSource {
 		for (RepositoryRoute route : candidates) {
 			RemoteRepository repository = route.repository();
 			String dataKey = normalizedUrl(repository);
-			if (!this.asked.add(target + "|" + repository.id()) || notFoundBefore(tracking, dataKey)) {
+			if (!this.asked.add(target + "|" + repository.id()) || notFoundBefore(tracking, dataKey,
+					route.effective(!snapshot, snapshot, this.override).update())) {
 				continue;
 			}
 			String failure = route.unavailable() != null ? route.unavailable() : fetchFrom(route, artifact, target);
@@ -223,11 +260,11 @@ final class RepositoryAccess implements ModelBuilder.PomSource {
 	 * Whether a repository answered "not found" for a file before, recently enough by the
 	 * update policy that it is not asked again (Maven's cached not-found failure).
 	 */
-	private boolean notFoundBefore(Path tracking, String dataKey) {
+	private static boolean notFoundBefore(Path tracking, String dataKey, UpdatePolicy policy) {
 		Properties properties = TrackingFile.read(tracking);
 		String error = properties.getProperty(dataKey + ".error");
 		return error != null && error.isEmpty()
-				&& !this.policy.updateRequired(TrackingFile.lastUpdated(properties, dataKey));
+				&& !policy.updateRequired(TrackingFile.lastUpdated(properties, dataKey));
 	}
 
 	private static boolean hasErrors(Path tracking) {
@@ -332,8 +369,10 @@ final class RepositoryAccess implements ModelBuilder.PomSource {
 		// Maven's exceptions, in its order: each repository's, then its file's
 		List<String> exceptions = new ArrayList<>();
 		Map<String, VersionInfo> infos = new HashMap<>();
+		// the nature of the metadata asked for decides which repositories are asked
+		Nature nature = release ? Nature.RELEASE : latest ? Nature.RELEASE_OR_SNAPSHOT : Nature.SNAPSHOT;
 		for (MetadataFile file : metadata(artifact.groupId(), artifact.artifactId(), release || latest ? "" : version,
-				true, repositories)) {
+				nature, true, repositories)) {
 			if (file.exception() != null) {
 				exceptions.add(file.exception());
 			}
@@ -460,12 +499,18 @@ final class RepositoryAccess implements ModelBuilder.PomSource {
 		else {
 			List<String> problems = new ArrayList<>();
 			Map<String, Origin> index = new HashMap<>();
-			for (MetadataFile file : metadata(artifact.groupId(), artifact.artifactId(), "", false, routes())) {
+			for (MetadataFile file : metadata(artifact.groupId(), artifact.artifactId(), "", Nature.RELEASE_OR_SNAPSHOT,
+					false, routes())) {
 				if (file.failed()) {
 					problems.add(String.valueOf(file.exception()));
 				}
+				RepositoryRoute remote = file.origin().route();
 				for (String version : versioning(file, problems).versions()) {
-					index.putIfAbsent(version, file.origin());
+					// filterVersionsByRepositoryType: a repository's list holds only the
+					// kinds it serves
+					if (remote == null || remote.repository().policy(isSnapshot(version)).enabled()) {
+						index.putIfAbsent(version, file.origin());
+					}
 				}
 			}
 			List<GenericVersion> versions = new ArrayList<>();
@@ -521,13 +566,15 @@ final class RepositoryAccess implements ModelBuilder.PomSource {
 	 * @param artifactId the artifact id
 	 * @param version the snapshot version whose metadata it is, or the empty string for
 	 * the artifact's
+	 * @param nature the kind of versions the metadata is for: a repository serving none
+	 * of them is skipped, and the update policy is the one of the kinds
 	 * @param favorLocal whether a local file updated within the policy spares the remote
 	 * repositories a request (version resolution, not range resolution)
 	 * @param repositories the remote repositories
-	 * @return one entry per repository, the local one first
+	 * @return one entry per repository serving the nature, the local one first
 	 */
-	private List<MetadataFile> metadata(String groupId, String artifactId, String version, boolean favorLocal,
-			List<RepositoryRoute> repositories) throws MavenResolutionException {
+	private List<MetadataFile> metadata(String groupId, String artifactId, String version, Nature nature,
+			boolean favorLocal, List<RepositoryRoute> repositories) throws MavenResolutionException {
 		String directory = groupId.replace('.', '/') + '/' + artifactId + (version.isEmpty() ? "" : '/' + version);
 		Path dir = localPath(directory);
 		if (dir == null) {
@@ -552,6 +599,14 @@ final class RepositoryAccess implements ModelBuilder.PomSource {
 		Path tracking = dir.resolve("resolver-status.properties");
 		for (RepositoryRoute route : repositories) {
 			RemoteRepository repository = route.repository();
+			RepositoryRoute.Effective effective = route.effective(nature != Nature.SNAPSHOT, nature != Nature.RELEASE,
+					this.override);
+			if (!effective.enabled()) {
+				// getEnabledSourceRepositories: not asked, and a copy it cached is not
+				// read
+				continue;
+			}
+			UpdatePolicy policy = effective.update();
 			Path cached = dir.resolve("maven-metadata-" + repository.id() + ".xml");
 			String exception = null;
 			boolean failed = false;
@@ -562,8 +617,8 @@ final class RepositoryAccess implements ModelBuilder.PomSource {
 					failed = true;
 				}
 			}
-			else if ((localUpdated == 0 || this.policy.updateRequired(localUpdated))
-					&& checkRequired(cached, tracking, repository)) {
+			else if ((localUpdated == 0 || policy.updateRequired(localUpdated))
+					&& checkRequired(cached, tracking, repository, policy)) {
 				String failure = route.unavailable() != null ? route.unavailable()
 						: fetchMetadata(route, directory, cached, tracking);
 				if (failure != null && failure.isEmpty()) {
@@ -578,7 +633,7 @@ final class RepositoryAccess implements ModelBuilder.PomSource {
 					&& "".equals(TrackingFile.read(tracking).getProperty(cached.getFileName() + ".error"))) {
 				exception = metadata + " was not found in " + repository.url() + " during a previous attempt. This "
 						+ "failure was cached in the local repository and resolution is not reattempted until the "
-						+ "update interval of " + repository.id() + " has elapsed (update policy " + this.policy + ")";
+						+ "update interval of " + repository.id() + " has elapsed (update policy " + policy + ")";
 			}
 			files.add(new MetadataFile(new Origin(route), Files.isRegularFile(cached) ? cached : null, exception,
 					failed));
@@ -587,7 +642,7 @@ final class RepositoryAccess implements ModelBuilder.PomSource {
 	}
 
 	/** {@code DefaultUpdateCheckManager.checkMetadata} under Maven's error policy. */
-	private boolean checkRequired(Path cached, Path tracking, RemoteRepository repository) {
+	private boolean checkRequired(Path cached, Path tracking, RemoteRepository repository, UpdatePolicy policy) {
 		if (this.asked.contains(cached + "|" + repository.id())) {
 			return false;
 		}
@@ -606,7 +661,7 @@ final class RepositoryAccess implements ModelBuilder.PomSource {
 			lastUpdated = TrackingFile.lastUpdated(properties,
 					name + "/@default-" + repository.id() + "-" + normalizedUrl(repository));
 		}
-		if (lastUpdated == 0 || this.policy.updateRequired(lastUpdated)) {
+		if (lastUpdated == 0 || policy.updateRequired(lastUpdated)) {
 			return true;
 		}
 		// a "not found" is remembered; a transfer failure is retried

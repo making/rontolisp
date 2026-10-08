@@ -26,12 +26,14 @@ import org.jspecify.annotations.Nullable;
  * {@code SNAPSHOT} to the build deployed last (or installed locally), {@code LATEST} and
  * {@code RELEASE} to the version the metadata names, a version range in a dependency or a
  * parent to the versions the metadata lists. The metadata is cached in the local
- * repository and asked for again under the update policy (Maven's default, daily), which
- * also governs when a repository that had no copy of a file is asked again. A repository
- * is contacted as Maven contacts it under the {@link MavenSettings}: through the mirror
- * covering it, the proxy serving the URL contacted, and the credentials, headers and
- * timeouts of the {@code <server>} of the id contacted. Repositories a POM declares are
- * never consulted; the caller's list is the only one.
+ * repository and asked for again under the repository's update policy (Maven's default,
+ * daily), which also governs when a repository that had no copy of a file is asked again;
+ * a repository serves releases and snapshots only as far as its {@link RepositoryPolicy
+ * policies} enable them. A repository is contacted as Maven contacts it under the
+ * {@link MavenSettings}: through the mirror covering it, the proxy serving the URL
+ * contacted, and the credentials, headers and timeouts of the {@code <server>} of the id
+ * contacted. Repositories a POM declares are never consulted; the caller's list is the
+ * only one.
  *
  * <p>
  * Every public method holds the instance lock: one resolver serves several threads, one
@@ -344,15 +346,18 @@ public final class MavenResolver {
 
 		private @Nullable Map<String, String> systemProperties;
 
-		private UpdatePolicy updatePolicy = UpdatePolicy.DAILY;
+		private @Nullable UpdatePolicy updatePolicy;
 
 		private Builder() {
 		}
 
 		/**
-		 * Sets when a remote repository is asked again for a {@code maven-metadata.xml}
-		 * the local repository caches, and for a file it did not have, in Maven's
-		 * spellings (default: {@code daily}, Maven's).
+		 * Sets one update policy for every repository -- when it is asked again for a
+		 * {@code maven-metadata.xml} the local repository caches, and for a file it did
+		 * not have -- in Maven's spellings, replacing the repositories' own
+		 * ({@link RepositoryPolicy}; Maven's session update policy, {@code mvn -U} being
+		 * {@code always}). Without it each repository's policy for the kind asked
+		 * applies, {@code daily} unless the repository says otherwise.
 		 * @param policy {@code always}, {@code daily}, {@code never} or
 		 * {@code interval:MINUTES}
 		 * @return this builder

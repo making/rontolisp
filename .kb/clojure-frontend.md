@@ -994,8 +994,10 @@ repositories, `GITLIBS` set; tools.deps read from the CLI jar).
   -> `MavenResolver.version`; a SNAPSHOT resolves at the fetch (`ClojureDepsFetchCliTest`,
   measured against clj 1.12.6 2026-10-08). A `:classifier` key is the oracle's `Invalid
   library spec` refusal. Repositories (`ClojureBasis.mavenSource`, `remote-repos`): central,
-  clojars, then the merged maps' others in order, `nil` removes one, `:releases {:enabled
-  false}` drops one, `http:` refused (`Invalid repo url (http not supported)`) unless
+  clojars, then the merged maps' others in order, `nil` removes one, each carrying its
+  `:releases` / `:snapshots` policy (`:enabled`, `:update`; tools.deps drops nothing: a
+  repository with releases disabled still serves snapshots, `.kb/maven-resolver.md`
+  "Per-repository policies"; until 2026-10-08 it was dropped whole), `http:` refused (`Invalid repo url (http not supported)`) unless
   `CLOJURE_CLI_ALLOW_HTTP_REPO`. Local repository: `:mvn/local-repo` against the project
   directory, else `~/.m2/repository`; measured, `clj` reads neither `settings.xml`'s
   `localRepository` nor its `offline` (`eval/ClojureDepsRepositories` passes mirrors, proxies

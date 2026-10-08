@@ -56,7 +56,8 @@ import org.eclipse.aether.util.graph.manager.DependencyManagerUtils;
  * DependencyGraph.runtimeClassPath answers). Arguments:
  * {@code -Dname=value} sets a system property; {@code COORDS[@scope][?][#g:a]...} is a
  * dependency ({@code ?} optional, each {@code #g:a} an exclusion), dependency management
- * after {@code --managed}. The session is Maven's defaults -- lenient descriptor policy,
+ * after {@code --managed}; {@code --no-snapshots} / {@code --no-releases} disable that
+ * policy of the fixture repository. The session is Maven's defaults -- lenient descriptor policy,
  * so a missing or invalid POM is a warning -- with checksums ignored (the fixture carries
  * none) and POM-declared repositories ignored (as MavenResolver ignores them), over fixed
  * system properties: java.version 25.0.4, os Linux amd64 6.8.0, java.home
@@ -78,6 +79,8 @@ public class MavenOracle {
 		List<Dependency> deps = new ArrayList<>();
 		List<Dependency> managed = new ArrayList<>();
 		boolean inManaged = false;
+		boolean releasesEnabled = true;
+		boolean snapshotsEnabled = true;
 		for (int i = 2; i < args.length; i++) {
 			String a = args[i];
 			if (a.startsWith("-D")) {
@@ -87,6 +90,14 @@ public class MavenOracle {
 			}
 			if (a.equals("--managed")) {
 				inManaged = true;
+				continue;
+			}
+			if (a.equals("--no-snapshots")) {
+				snapshotsEnabled = false;
+				continue;
+			}
+			if (a.equals("--no-releases")) {
+				releasesEnabled = false;
 				continue;
 			}
 			String[] hashes = a.split("#");
@@ -148,7 +159,12 @@ public class MavenOracle {
 			}
 
 		});
-		RemoteRepository remote = new RemoteRepository.Builder("fixture", "default", repo.toUri().toString()).build();
+		RemoteRepository remote = new RemoteRepository.Builder("fixture", "default", repo.toUri().toString())
+			.setReleasePolicy(new RepositoryPolicy(releasesEnabled, RepositoryPolicy.UPDATE_POLICY_DAILY,
+					RepositoryPolicy.CHECKSUM_POLICY_IGNORE))
+			.setSnapshotPolicy(new RepositoryPolicy(snapshotsEnabled, RepositoryPolicy.UPDATE_POLICY_DAILY,
+					RepositoryPolicy.CHECKSUM_POLICY_IGNORE))
+			.build();
 		List<RemoteRepository> repos = List.of(remote);
 		switch (mode) {
 			case "descriptor" -> {

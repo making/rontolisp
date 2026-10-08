@@ -21,6 +21,7 @@ import am.ik.maven.MavenResolutionException;
 import am.ik.maven.MavenResolver;
 import am.ik.maven.MavenSettings;
 import am.ik.maven.RemoteRepository;
+import am.ik.maven.RepositoryPolicy;
 import am.ik.rontolisp.clojure.ClojureRepositories;
 
 /**
@@ -224,7 +225,8 @@ public final class ClojureDepsRepositories implements ClojureRepositories {
 				throw new FetchFailure("Invalid repo url (http not supported): " + repository.url());
 			}
 			try {
-				repositories.add(new RemoteRepository(repository.id(), repository.url()));
+				repositories.add(new RemoteRepository(repository.id(), repository.url(), policy(repository.releases()),
+						policy(repository.snapshots())));
 			}
 			catch (IllegalArgumentException ex) {
 				throw new FetchFailure(String.valueOf(ex.getMessage()));
@@ -241,6 +243,10 @@ public final class ClojureDepsRepositories implements ClojureRepositories {
 		MavenResolver made = builder.build();
 		this.resolvers.put(source, made);
 		return made;
+	}
+
+	private static RepositoryPolicy policy(MavenPolicy policy) {
+		return new RepositoryPolicy(policy.enabled(), policy.update());
 	}
 
 	private MavenSettings settings() {
