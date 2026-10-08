@@ -11869,3 +11869,227 @@
             (rontolisp::%clojure-pp-base-string (numerator x) base nil) "/"
             (rontolisp::%clojure-pp-base-string (denominator x) base nil)))
           (t nil))))
+
+;;;; rontolisp.wit: a WIT value's Clojure spelling. An import's wrapper and a
+;;;; provider's adapter (clojure/ClojureWitLowering) convert each value the two
+;;;; languages spell differently by a descriptor of its WIT type:
+;;;;
+;;;;   NIL                           spelled alike: a number, a character, a
+;;;;                                 string, a byte string, a handle
+;;;;   :BOOL                         true / false     <-> T / NIL
+;;;;   (:OPTION . d)                 nil or the value <-> NIL or the value
+;;;;   (:LIST . d)                   a collection     <-> a list (a vector back)
+;;;;   (:TUPLE "wit" d ...)          a collection     <-> a list (a vector back)
+;;;;   (:RECORD "wit" (kw :KW d) ...)    a map        <-> a keyword plist
+;;;;   (:VARIANT "wit" (kw :KW [d]) ...) :case, [:case v] <-> :CASE, (:CASE . v)
+;;;;   (:RESULT "wit" ok error)      a variant whose payload-less arm the
+;;;;                                 boundary spells (:OK) all the same
+;;;;   (:FLAGS "wit" (kw :KW) ...)   a set of keywords <-> a keyword list
+;;;;
+;;;; where kw is a label's Clojure keyword, spelled as the WIT writes it, :KW
+;;;; the boundary's keyword (upcased, as the component lift spells it), and a
+;;;; variant's case carries a descriptor only when it carries a payload. The
+;;;; boundary's values are the settled Common Lisp tier (.kb/wit.md); a value
+;;;; naming no case or no field shape of its type is refused naming the type.
+;;;; Nothing here names the WIT runtime (wit.lisp): a reference would splice it
+;;;; into every Clojure program, so the lowering keeps what signals and catches
+;;;; rontolisp:wit-error in the program.
+
+(defun rontolisp::%clojure-wit-refuse (x text)
+  "Refuse the WIT value X: its rendering, then TEXT."
+  (rontolisp::%clojure-illegal-argument-exception
+   (concatenate 'string (rontolisp::%clojure-str-of x "nil" t) text)))
+
+(defun rontolisp::%clojure-wit-out (type x)
+  "The Clojure value X as the WIT boundary's value of the type TYPE describes."
+  (cond ((null type) x)
+   ((eq type :bool) (if (or (null x) (eq x rontolisp::%clojure-false)) nil t))
+   ((eq (car type) :option)
+    (if (null x) nil (rontolisp::%clojure-wit-out (cdr type) x)))
+   ((eq (car type) :list)
+    (let ((out nil))
+      (dolist (item (rontolisp::%clojure-seq-all x) (nreverse out))
+        (setq out (cons (rontolisp::%clojure-wit-out (cdr type) item) out)))))
+   ((eq (car type) :tuple) (rontolisp::%clojure-wit-out-tuple type x))
+   ((eq (car type) :record) (rontolisp::%clojure-wit-out-record type x))
+   ((eq (car type) :flags) (rontolisp::%clojure-wit-out-flags type x))
+   (t (rontolisp::%clojure-wit-out-case type x))))
+
+(defun rontolisp::%clojure-wit-out-tuple (type x)
+  "The collection X of a tuple's members as the tuple's list."
+  (let ((items (rontolisp::%clojure-seq-all x))
+        (types (cdr (cdr type)))
+        (out nil))
+    (if (/= (length items) (length types))
+        (rontolisp::%clojure-wit-refuse x
+                                        (concatenate 'string " is no "
+                                         (car (cdr type))
+                                         " (a collection of its members)")))
+    (do ((i items (cdr i)) (ty types (cdr ty)))
+        ((null ty) (nreverse out))
+      (setq out (cons (rontolisp::%clojure-wit-out (car ty) (car i)) out)))))
+
+(defun rontolisp::%clojure-wit-out-record (type x)
+  "The map X as a record's keyword plist, each field read by its keyword (a
+   missing one nil, an option's none)."
+  (if (not (rontolisp::%clojure-is-map x))
+      (rontolisp::%clojure-wit-refuse x
+                                      (concatenate 'string " is no "
+                                                   (car (cdr type))
+                                                   " (a map of its fields)")))
+  (let ((out nil))
+    (dolist (field (cdr (cdr type)) (nreverse out))
+      (setq out
+            (cons (rontolisp::%clojure-wit-out (car (cdr (cdr field)))
+                   (rontolisp::%clojure-call-keyword (car field) x nil))
+                  (cons (car (cdr field)) out))))))
+
+(defun rontolisp::%clojure-wit-out-case (type x)
+  "A case keyword X, or the vector [case payload], as a variant's, an enum's
+   or a result's boundary value: the case's keyword, (:CASE . payload) for a
+   case carrying one -- a result's arm a cons either way."
+  (let* ((vec (and (vectorp x) (not (stringp x)) (> (length x) 0)))
+         (entry
+          (rontolisp::%clojure-wit-case (cdr (cdr type))
+                                        (if vec (aref x 0) x))))
+    (if (null entry)
+        (rontolisp::%clojure-wit-refuse x
+         (concatenate 'string " is no case of " (car (cdr type)))))
+    (if (cdr (cdr entry))
+        (cons (car (cdr entry))
+              (rontolisp::%clojure-wit-out (car (cdr (cdr entry)))
+               (if (and vec (> (length x) 1)) (aref x 1))))
+        (if (eq (car type) :result)
+            (list (car (cdr entry)))
+            (car (cdr entry))))))
+
+(defun rontolisp::%clojure-wit-out-flags (type x)
+  "The collection X of flag keywords (a set) as the flags' keyword list, in
+   the order the WIT declares them."
+  (let ((members (rontolisp::%clojure-seq-all x)) (out nil))
+    (dolist (m members)
+      (if (null (rontolisp::%clojure-wit-case (cdr (cdr type)) m))
+          (rontolisp::%clojure-wit-refuse m
+           (concatenate 'string " is no flag of " (car (cdr type))))))
+    (dolist (flag (cdr (cdr type)) (nreverse out))
+      (if (do ((m members (cdr m)))
+              ((or (null m) (equal (car m) (car flag))) m))
+          (setq out (cons (car (cdr flag)) out))))))
+
+(defun rontolisp::%clojure-wit-case (entries k)
+  "The entry of ENTRIES whose Clojure keyword is K, or NIL."
+  (do ((e entries (cdr e))) ((or (null e) (equal (car (car e)) k)) (car e))))
+
+(defun rontolisp::%clojure-wit-in (type x)
+  "The WIT boundary's value X of the type TYPE describes as the Clojure value."
+  (cond ((null type) x)
+        ((eq type :bool) (if x t rontolisp::%clojure-false))
+        ((eq (car type) :option)
+         (if (null x) nil (rontolisp::%clojure-wit-in (cdr type) x)))
+        ((eq (car type) :list)
+         (let ((out nil))
+           (dolist (item x (coerce (nreverse out) 'vector))
+             (setq out
+                   (cons (rontolisp::%clojure-wit-in (cdr type) item) out)))))
+        ((eq (car type) :tuple)
+         (let ((out nil))
+           (do ((i x (cdr i)) (ty (cdr (cdr type)) (cdr ty)))
+               ((null ty) (coerce (nreverse out) 'vector))
+             (setq out
+                   (cons (rontolisp::%clojure-wit-in (car ty) (car i)) out)))))
+        ((eq (car type) :record)
+         (let ((m (make-hash-table :test 'equal)))
+           (dolist (field (cdr (cdr type)) m)
+             (setf (gethash (car field) m)
+                   (rontolisp::%clojure-wit-in (car (cdr (cdr field)))
+                                               (getf x (car (cdr field))))))))
+        ((eq (car type) :flags)
+         (let ((members nil))
+           (dolist (k x (rontolisp::%clojure-set-of (nreverse members)))
+             (setq members
+              (cons (car (rontolisp::%clojure-wit-label type k x)) members)))))
+        (t (let ((entry
+                  (rontolisp::%clojure-wit-label type (if (consp x) (car x) x)
+                                                 x)))
+             (if (cdr (cdr entry))
+                 (vector (car entry)
+                         (rontolisp::%clojure-wit-in (car (cdr (cdr entry)))
+                                                     (if (consp x) (cdr x))))
+                 (car entry))))))
+
+(defun rontolisp::%clojure-wit-label (type k x)
+  "The entry of TYPE's labels whose boundary keyword is K; a value X naming
+   none is refused."
+  (let ((entry
+         (do ((e (cdr (cdr type)) (cdr e)))
+             ((or (null e) (eq (car (cdr (car e))) k)) (car e)))))
+    (if (null entry)
+        (rontolisp::%clojure-wit-refuse x
+         (concatenate 'string " answered across the WIT boundary is no "
+                      (car (cdr type)))))
+    entry))
+
+(defun rontolisp::%clojure-wit-answer (envelope ok spec iface member)
+  "A WIT result's envelope -- (:OK . v) or (:ERROR . e), what a WASM build's
+   raw binding answers -- as the Clojure call's value: the ok arm converted by
+   OK, the error arm thrown (%clojure-wit-raise)."
+  (if (eq (car envelope) :ok)
+      (rontolisp::%clojure-wit-in ok (cdr envelope))
+      (rontolisp::%clojure-wit-raise iface member spec (cdr envelope) nil)))
+
+(defun rontolisp::%clojure-wit-raise (iface member spec payload cause)
+  "Throw a WIT result's error arm, the boundary's value PAYLOAD, as an
+   ExceptionInfo whose data holds its Clojure value under the key SPEC
+   carries (rontolisp.wit/error), converted by the descriptor SPEC carries;
+   CAUSE is the condition the arm was signalled as, or NIL."
+  (let ((data (make-hash-table :test 'equal)))
+    (setf (gethash (car spec) data)
+          (rontolisp::%clojure-wit-in (cdr spec) payload))
+    (rontolisp::%clojure-throw
+     (rontolisp::%clojure-ex-info
+      (concatenate 'string member " of " iface " answered its error arm") data
+      cause))))
+
+(defun rontolisp::%clojure-wit-serve (table provider member args)
+  "A Clojure PROVIDER's answer to a call of MEMBER of a WIT interface it
+   provides: the boundary's ARGS converted to Clojure values and the answer
+   back, by MEMBER's row of TABLE -- (key (\"member\" (d ...) result [error])
+   ...), clojure/ClojureWitLowering -- and a member with no row as it is."
+  (let ((row (rontolisp::%clojure-wit-row table member)))
+    (if (null row)
+        (apply provider member args)
+        (let ((in nil))
+          (do ((a args (cdr a)) (ty (car (cdr row)) (cdr ty)))
+              ((null a))
+            (setq in (cons (rontolisp::%clojure-wit-in (car ty) (car a)) in)))
+          (rontolisp::%clojure-wit-out (car (cdr (cdr row)))
+           (apply provider member (nreverse in)))))))
+
+(defun rontolisp::%clojure-wit-row (table member)
+  "MEMBER's row of a provider's TABLE, or NIL."
+  (do ((r (cdr table) (cdr r)))
+      ((or (null r) (equal (car (car r)) member)) (car r))))
+
+(defun rontolisp::%clojure-wit-arm-p (c)
+  "Whether the condition C is a WIT result's error arm a Clojure provider
+   threw: an exception whose data holds rontolisp.wit/error (the key
+   clojure/ClojureWitLowering.ERROR_KEY names)."
+  (let ((data (rontolisp::%clojure-ex-data c)) (miss (list nil)))
+    (and (hash-table-p data)
+     (not (eq (gethash '(:c%keyword "rontolisp.wit/error") data miss) miss)))))
+
+(defun rontolisp::%clojure-wit-arm-payload (table member c)
+  "The error arm C a Clojure provider threw (%clojure-wit-arm-p) as MEMBER's
+   boundary value, converted by its row of TABLE; a member answering no result
+   throws C on."
+  (let ((row (rontolisp::%clojure-wit-row table member)))
+    (if (and row (cdr (cdr (cdr row))))
+        (rontolisp::%clojure-wit-out (car (cdr (cdr (cdr row))))
+         (gethash (car table) (rontolisp::%clojure-ex-data c)))
+        (rontolisp::%clojure-throw c))))
+
+(defun rontolisp::%clojure-wit-arm-message (c)
+  "The message of the error arm C a Clojure provider threw, as the WIT
+   error's."
+  (let ((m (rontolisp::%clojure-ex-message c)))
+    (if (stringp m) m "WIT call failed")))

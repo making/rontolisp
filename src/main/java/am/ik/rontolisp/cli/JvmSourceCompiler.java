@@ -308,27 +308,33 @@ public final class JvmSourceCompiler {
 	private Optional<Result> compileRecording(String source, @Nullable String entryFile, boolean onlyIfExported) {
 		DistClient dists = DistClient.createDefault(this.dists);
 		return CompileDiagnostics.recording(dists, () -> {
-			CompileFrontend.Result frontend = CompileFrontend.run(CompileFrontend.Request.builder()
-				.source(source)
-				.entryFile(entryFile)
-				.sourceLanguage(this.sourceLanguage)
-				.standards(this.standards)
-				.systemPath(this.systemPath)
-				.dists(dists)
-				.declaredFeatures(this.features)
-				.options(CompileFrontend.Options.builder()
-					.baseDir(this.baseDir)
-					.servlet(this.servlet)
-					.dynamic(this.dynamic)
-					.noPrune(this.noPrune)
-					.build())
-				.build());
-			if (onlyIfExported && frontend.program().stream().noneMatch(JvmExportDirective::isExportForm)) {
-				return Optional.empty();
+			// The lowering sees the class path the backend resolves against, and the jars
+			// a Clojure program's dependencies bring join both.
+			try (JavaClassPath classPath = JavaClassPath.of(this.javaClasspath)) {
+				CompileFrontend.Result frontend = CompileFrontend.run(CompileFrontend.Request.builder()
+					.source(source)
+					.entryFile(entryFile)
+					.sourceLanguage(this.sourceLanguage)
+					.standards(this.standards)
+					.systemPath(this.systemPath)
+					.dists(dists)
+					.declaredFeatures(this.features)
+					.javaClassLoader(classPath.classLoader())
+					.javaClassPath(classPath::add)
+					.options(CompileFrontend.Options.builder()
+						.baseDir(this.baseDir)
+						.servlet(this.servlet)
+						.dynamic(this.dynamic)
+						.noPrune(this.noPrune)
+						.build())
+					.build());
+				if (onlyIfExported && frontend.program().stream().noneMatch(JvmExportDirective::isExportForm)) {
+					return Optional.empty();
+				}
+				Result compiled = compileProgram(frontend.program(), frontend.features(), classPath.entries());
+				CompileDiagnostics.failOnWarnings(this.warningsAsErrors);
+				return Optional.of(compiled);
 			}
-			Result compiled = compileProgram(frontend.program(), frontend.features());
-			CompileDiagnostics.failOnWarnings(this.warningsAsErrors);
-			return Optional.of(compiled);
 		});
 	}
 
@@ -340,6 +346,10 @@ public final class JvmSourceCompiler {
 	 * @return the emitted class and the runtime classes that travel with it
 	 */
 	Result compileProgram(List<LispVal> program, Features features) {
+		return compileProgram(program, features, this.javaClasspath);
+	}
+
+	private Result compileProgram(List<LispVal> program, Features features, List<java.nio.file.Path> javaClasspath) {
 		// The JVM backend cannot parse PEM in hand-assembled bytecode, so rewrite
 		// rontolisp:tls-listen-pem to embed the compile-time-parsed PKCS12 keystore
 		// (WASM keeps tls-listen-pem, which its compiler rejects outright).
@@ -355,7 +365,7 @@ public final class JvmSourceCompiler {
 			.servlet(this.servlet)
 			.runtimeFeatures(features.names())
 			.javaRelease(this.javaRelease)
-			.javaClasspath(this.javaClasspath)
+			.javaClasspath(javaClasspath)
 			.warnJavaReflection(this.warnJavaReflection)
 			.javaStatic(this.javaStatic)
 			.build();

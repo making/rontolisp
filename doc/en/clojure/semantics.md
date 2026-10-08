@@ -92,18 +92,37 @@ no known type and a dependency the oracle cannot resolve are errors in its words
   up to the one shipped (ring-core 1.15.5, ring-codec 1.3.0) are the built-in Ring
   namespaces; a newer one is refused when a Ring namespace loads.
 - A `clojure.*` namespace that is not part of Clojure itself (an `org.clojure` contrib
-  library under a `:local/root`) loads from the source path like any other.
-- A Maven (`:mvn/version`) or git (`:git/url`, `:git/sha`) coordinate of any other library
-  is not fetched: it adds no root, and a namespace no root holds is refused naming it. A
-  jar's own `pom.xml`, and a `:local/root` project with a `pom.xml` but no `deps.edn`, are
-  not read either. `:aliases` apply when a run selects them (below).
+  library) loads from the source path like any other.
+- A Maven coordinate (`:mvn/version`) is fetched from the `:mvn/repos` (Maven Central, then
+  Clojars, then any a map adds; `nil` removes one) into the `:mvn/local-repo`, else
+  `~/.m2/repository`. Its POM's compile and runtime dependencies, not the optional ones,
+  join the tree; its jar is read in place. `"[1.0]"` is 1.0. A version range, `RELEASE`,
+  `LATEST`, a `SNAPSHOT`, an `http:` repository and a repository a `~/.m2/settings.xml`
+  mirror or proxy covers are refused.
+- A git coordinate (`:git/url`, or the URL an `io.github.user/repo` name implies, with
+  `:git/sha`, `:git/tag`, `:deps/root`) is checked out at its commit with the `git` command,
+  into `~/.rontolisp/gitlibs` (`$RONTOLISP_DIST_HOME/gitlibs`). A tag must name the commit,
+  an abbreviated sha needs a tag, and of two commits of one library the descendant is the
+  newer. Its `deps.edn` is read like a `:local/root` directory's.
+- A `:local/root` jar's own `pom.xml` gives its dependencies. A `pom.xml` project (a
+  directory or commit with a `pom.xml` and no `deps.edn`) is not read: a namespace only it
+  could hold is refused naming it.
+- A dependency's jar holding classes joins the program's Java class path: the interpreter
+  and the JVM call its classes, and `-o app.jar` copies it beside the jar. WebAssembly keeps
+  refusing Java when called.
+- The project resolves before the program runs, so a dependency that cannot be fetched
+  stops it. A second run reads the local repository and the git cache, with no network.
+  The command line fetches; an embedder (`JvmSourceCompiler`) and the browser playground
+  fetch nothing, and refuse a namespace only a Maven or git coordinate could hold, naming
+  the coordinate. `:aliases` apply when a run selects them (below).
 
 ```console
 $ cat deps.edn
 {:paths ["src"]
  :deps {my/util {:local/root "../util"}
-        my/parser {:local/root "../parser.jar"}}}
-$ rontolisp src/app/main.clj      # roots: src, ../parser.jar, ../util/src
+        org.clojure/data.json {:mvn/version "2.5.1"}
+        io.github.me/lib {:git/tag "v1.0" :git/sha "1a2b3c4"}}}
+$ rontolisp src/app/main.clj   # roots: src, the lib checkout's src, ../util/src, the data.json jar
 ```
 
 ## Running a project: -A, -M, -X, test
@@ -392,7 +411,10 @@ back. `eval` and `load-string` stay absent: no compiler runs at run time.
 directives, so every backend binds a Clojure program's boundary the way it binds a Common Lisp
 one's ([WASM host functions](reference/wasm.md), [WIT contracts](reference/wit.md)). The host
 sees each name as written, never the mangled symbol. `false` crosses as the host's false and
-comes back as `false`; an `:s-expr` crosses as the Clojure printer's text. A WIT import's vars
+comes back as `false`; an `:s-expr` crosses as the Clojure printer's text. A richer WIT value
+crosses in its Clojure spelling both ways -- a record as a map, an enum or a variant's case as
+a keyword or `[:case payload]`, flags as a set, a tuple or a list as a vector -- and a
+`result`'s error arm as an `ExceptionInfo` holding the error value. A WIT import's vars
 exist below its form, like a `require`'s alias, while a `defimport` may be called above it, like
 a `defn`. An export resolves its var once the whole file has lowered, so the var may be
 defined below it.
@@ -427,7 +449,7 @@ Each refusal names the missing design, never `unknown name`:
 | `file-seq`, `clojure.java.io` (except `reader`) | `file-seq` / `unknown name: clojure.java.io/...` | no directory walks; only `reader` resolves, opening a file-stream reader |
 | an asynchronous Ring handler (`run-server` with `:async? true`) | `asynchronous handlers (:async? true) are not supported` | no respond/raise protocol under the transports |
 | `:async` on a `rontolisp.wasm` declaration, an `async func` WIT member or export | `:async is not supported yet ...`, `... is an async func ...` | the future a suspending crossing answers is no Clojure future |
-| a WIT member taking or answering a record, variant, enum, flags, tuple, list (but `list<u8>`), stream or future | `... which the Clojure tier does not carry yet (file.wit:N)` | no conversion between those Clojure values and the boundary's yet |
+| a WIT member taking or answering a stream or a future | `... which the Clojure tier does not carry yet (file.wit:N)` | the async canonical ABI's handles answer no Clojure future yet |
 | `:bytes` in a `rontolisp.wasm` declaration | `:bytes does not cross from Clojure ...` | it transfers an `(unsigned-byte 8)` vector, which no Clojure value is |
 
 ## Errors and positions

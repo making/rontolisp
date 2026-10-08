@@ -104,7 +104,7 @@ final class ClojureNamespaceLowering {
 			return ClojureWasmLowering.value(ref.var());
 		}
 		if (ref.ns().equals(ClojureWitLowering.NAMESPACE)) {
-			return ClojureWitLowering.value(ctx, ref.var());
+			return ClojureWitLowering.value(ref.var());
 		}
 		return ClojureStringLowering.stringValue(ctx, ref.var());
 	}

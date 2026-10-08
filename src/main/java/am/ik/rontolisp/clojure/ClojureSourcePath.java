@@ -25,8 +25,11 @@ import org.jspecify.annotations.Nullable;
  * {@code deps.edn} and the nearest {@code deps.edn} at or above the entry file's
  * directory, merged in that order with the aliases the files name applied
  * ({@link ClojureBasis}); with no {@code deps.edn} anywhere, the working directory is the
- * project's ({@code src} below it). Computed on the first lookup, so a program that loads
- * nothing never looks.
+ * project's ({@code src} below it). Computed once, when a lowering starts -- a program's
+ * dependencies resolve before it lowers, as the oracle's classpath is built before its
+ * program starts -- and then each selected jar that holds classes joins the program's
+ * Java class path ({@link ClojureFiles#addJavaClassPath}), so the lowering and the
+ * program see them.
  */
 final class ClojureSourcePath {
 
@@ -290,6 +293,13 @@ final class ClojureSourcePath {
 		this.libs = basis.libraries();
 		for (Selected selected : this.libs) {
 			out.addAll(selected.contribution().roots());
+		}
+		for (Selected selected : this.libs) {
+			for (Root root : selected.contribution().roots()) {
+				if (root.archive() && entriesOf(root).stream().anyMatch(entry -> entry.endsWith(".class"))) {
+					this.files.addJavaClassPath(root.path(), selected.contribution().mavenCoordinate());
+				}
+			}
 		}
 		return List.copyOf(out);
 	}

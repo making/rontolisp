@@ -103,7 +103,7 @@ public final class WitImportInliner {
 			return program;
 		}
 		Set<String> referenced = referencedNames(program);
-		Set<String> memberFilter = backend == WitExportDirective.Backend.WASM_COMPONENT && pruneMembers ? referenced
+		Set<String> componentFilter = backend == WitExportDirective.Backend.WASM_COMPONENT && pruneMembers ? referenced
 				: null;
 		// A resource `drop` is bound only when the program NAMES it, on every backend --
 		// a
@@ -117,6 +117,13 @@ public final class WitImportInliner {
 			if (WitImportDirective.isDirective(form)) {
 				WitImportDirective.Directive directive = WitImportDirective.parse((LispCons) form);
 				String path = SourceLoader.resolve(baseDir, directive.path());
+				// A front end's :names table lists its whole tier, so a core
+				// module binds the members the program names, like a component:
+				// one its import cannot carry fails the build only where it is
+				// called. A Common Lisp directive still binds every function (the
+				// hand-written block's bytes).
+				Set<String> memberFilter = directive.names() != null && wasm && pruneMembers ? referenced
+						: componentFilter;
 				result.addAll(WitImportDirective.lower(directive, read(loader, path), path, backend, memberFilter,
 						dropFilter));
 			}

@@ -88,13 +88,27 @@ public interface ClojureBoundary {
 	}
 
 	/**
-	 * A WIT type use.
+	 * A WIT type use, with every type nested in it: what the lowering converts a Clojure
+	 * value to and from the boundary's value by.
 	 *
 	 * @param rep its house representation
-	 * @param element an option's element or a result's ok arm, else {@code null}
-	 * @param wit the type as the WIT spells it
+	 * @param element an option's element, a result's ok arm or a list's element, else
+	 * {@code null}
+	 * @param wit the type as the WIT spells it where it is used
+	 * @param error a result's error arm, else {@code null}
+	 * @param parts a record's fields, a variant's cases, an enum's or a flags' labels, a
+	 * tuple's elements, in WIT order; else empty
 	 */
-	record Type(Rep rep, @Nullable Type element, String wit) {
+	record Type(Rep rep, @Nullable Type element, String wit, @Nullable Type error, List<Part> parts) {
+	}
+
+	/**
+	 * A labelled member of a {@link Type}.
+	 *
+	 * @param label the WIT label as written, or a tuple element's position
+	 * @param type its type, or {@code null} for a payload-less case and a label
+	 */
+	record Part(String label, @Nullable Type type) {
 	}
 
 	/**

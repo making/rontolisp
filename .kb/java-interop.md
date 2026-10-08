@@ -632,12 +632,28 @@ Per call the uncached bridge paid `getMethods()` (~2.5 us), `select()` (250 ns -
 - CLI (`cli/JavaClassPath`): `--java-classpath` entries (must exist, else refused by name)
   then the `--java-dep` jars in Maven's runtime class path order (`MavenResolver.resolve`,
   `.kb/maven-resolver.md`), from Central through `~/.m2/settings.xml`'s local repository /
-  `offline` (`RontoLispCli.javaDependencyResolver` injects a fixture repository in tests). A
-  `URLClassLoader` over rontolisp's loader, made once -- not in a native image (no run-time
-  class definition: there the class path reaches the class-file lookup and the outputs
-  only). `--java-release` / `--java-static` stay compile-only; the class path is the
-  interpreter's and the REPL's too (until 2026-10-08 the interpreter refused
-  `--java-classpath`: a jar could not be added under `java -jar` at all).
+  `offline` (`RontoLispCli.javaDependencyResolver` injects a fixture repository in tests),
+  then the jars a Clojure program's `deps.edn` dependencies bring, holding classes
+  (`JavaClassPath.add`, reached through `SourceLoader.addJavaClassPath` /
+  `SourceLoader.fileSystem(loader, sink)` and `CompileFrontend.Request.javaClassPath`, as the
+  lowering resolves its project: `.kb/clojure-frontend.md` "deps.edn"), each once, its Maven
+  coordinate joining `dependencies()` for a generated pom. The loader is a
+  `URLClassLoader` subclass over rontolisp's loader, made once and ALWAYS (a run with no entry
+  gets an empty one, so a lowering can grow it: `addURL`) -- not in a native image (no
+  run-time class definition: there the class path reaches the class-file lookup and the
+  outputs only). A wasm compile's class path names nothing (`--java-classpath`/`--java-dep`
+  are refused there) and grows the same way: its lowering and its macro time run on the JVM.
+  The Clojure macro-time evaluator resolves `java:` through the program's loader
+  (`ClojureMacroTime.create(loader)`, from `SourceLanguage`/`SourceSession`), so a helper a
+  macro body calls reaches what the program does -- until 2026-10-08 it had rontolisp's own
+  (`No such class` in the macro for a dependency's class). Growth lands before the lowering's
+  first class question and before the program runs: `ReflectiveJavaClasses` remembers an
+  absent name, so a class asked for before its jar joined stays absent (a CL program that
+  `load`s a `.clj` after asking). `JvmSourceCompiler` (an embedder) lowers against a
+  `JavaClassPath.of(javaClasspath)` it closes after the compile, the grown entries
+  resolving the backend's sites. `--java-release` / `--java-static` stay compile-only; the
+  class path is the interpreter's and the REPL's too (until 2026-10-08 the interpreter
+  refused `--java-classpath`: a jar could not be added under `java -jar` at all).
 - Outputs: a program jar copies each entry into `<stem>-lib/` beside it (a jar under its file
   name, a directory as a directory; two entries of one name refused) and lists them in the
   manifest `Class-Path` (relative URLs) -- exact class-path semantics for `java -jar` and

@@ -391,7 +391,7 @@ $ rontolisp app.lisp -o app.jar --java-dep com.google.guava:guava:33.4.0-jre
 $ java -jar app.jar
 ```
 
-`--java-dep` は Maven がプロジェクトの依存を解決するのと同じ方法で解決します。同じライブラリの 2 つのバージョンが出会うと、要求した座標に近い方が勝ち、jar は `--java-classpath` のエントリーの後に Maven のクラスパス順で並びます。取得元は Maven Central で、`mvn` と同じローカルリポジトリ (`~/.m2/repository`、または `~/.m2/settings.xml` の `localRepository`。同ファイルの `offline` に従います) を経由します。SNAPSHOT、バージョン範囲、Central を覆う `settings.xml` のミラーやプロキシは、名前を挙げて拒否します。
+`--java-dep` は Maven がプロジェクトの依存を解決するのと同じ方法で解決します。同じライブラリの 2 つのバージョンが出会うと、要求した座標に近い方が勝ち、jar は `--java-classpath` のエントリーの後に Maven のクラスパス順で並びます。取得元は Maven Central で、`mvn` と同じローカルリポジトリ (`~/.m2/repository`、または `~/.m2/settings.xml` の `localRepository`。同ファイルの `offline` に従います) を経由します。SNAPSHOT、バージョン範囲、Central を覆う `settings.xml` のミラーやプロキシは、名前を挙げて拒否します。Clojure プログラムの `deps.edn` の依存のうちクラスを含むものは、これらの後にクラスパスへ加わります ([プロジェクト: deps.edn](../clojure/semantics.md#projects-depsedn))。
 
 出力ごとに持ち運ぶもの:
 

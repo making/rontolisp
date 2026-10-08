@@ -42,6 +42,9 @@ $ rontolisp app.clj -o app.wasm --no-wasi --emit-js-glue
 
 呼び出しは、ターゲットごとに WIT 自身の束縛へローワリングされます。インタプリタと JVM では
 プロバイダ（[provide](wit-provide.md)）、WASM コアモジュールではホストのインポート
-`math.addInts` / `math.isEven`、`--component` では canonical ABI のインポートです。Clojure 側で
-扱えない型を持つメンバーは束縛せず、それを参照すると WIT の行を名指して拒否します
-（[渡るもの](wit.md#what-crosses)）。
+`math.addInts` / `math.isEven`、`--component` では canonical ABI のインポートです。コア
+モジュールがインポートするのはプログラムが呼ぶメンバーです。値はそれぞれ Clojure の綴りで
+渡り（レコードはマップ、バリアントのケースはキーワードか `[:case payload]`）、`result`
+のエラー側はエラーの値を持つ `ExceptionInfo` を投げます（[渡るもの](wit.md#what-crosses)）。
+型がストリームかフューチャーに届くメンバーや `async func` は束縛せず、それを参照すると
+WIT の行を名指して拒否します。

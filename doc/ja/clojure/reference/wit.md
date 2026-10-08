@@ -40,8 +40,9 @@ $ wasmtime run -S keyvalue=y hits.wasm
 
 ## 渡るもの
 
-WIT の値は、下の表の Clojure の値として渡ります。`bool` は [rontolisp.wasm](wasm.md#types)
-の `:bool` と同じく渡るときに変換し、ほかの行はどちらの言語でも同じ値です。
+WIT の値は、下の表の Clojure の値として渡ります。変換は渡るときに両方向で行い、呼び出す側でも
+[プロバイダ](wit-provide.md)の側でも同じです。ラベルは WIT の綴りのままなので、ケース
+`DNS-error` はキーワード `:DNS-error` になります。
 
 | WIT | Clojure |
 |---|---|
@@ -52,17 +53,50 @@ WIT の値は、下の表の Clojure の値として渡ります。`bool` は [r
 | `list<u8>` | 1 バイトを 1 文字とする文字列 |
 | リソースのハンドル（`own`、`borrow`） | 不透明な整数 |
 | `option<T>` | 値か `nil` |
-| 結果としての `result<T, E>` | ok の値。エラー側は例外を投げ、`(catch Exception e ...)` で捕まえられる |
+| `record` | 各フィールドをそのキーワードの下に持つマップ: `{:port 0 :address [127 0 0 1]}` |
+| `enum` | ケースのキーワード: `:ipv4` |
+| `variant` | ペイロードのないケースはそのキーワード `:get`、ペイロードのあるケースは `[:case payload]`（`[:other "PATCH"]`） |
+| `flags` | キーワードの集合: `#{:read :write}` |
+| `tuple<...>`、`list<T>` | ベクタ |
+| 引数として、またはほかの値の中の `result<T, E>` | `[:ok v]` か `[:error e]`。ペイロードのない側は `:ok` か `:error` |
+| 関数の結果としての `result<T, E>` | ok の値。エラー側は、`ex-data` の `:rontolisp.wit/error` にエラーの値を持つ `ExceptionInfo` を投げる |
 
-型がこの表を越えるメンバー（レコード、バリアント、enum、フラグ、タプル、`u8` 以外の
-リスト、ストリームやフューチャー、引数としての `result`）は束縛しません。`async func` も
-同様です。それを参照すると、コンパイル時に WIT の行を名指して拒否します。
+ホストへ渡すとき、リスト、タプル、フラグはどのコレクション（ベクタ、リスト、seq、集合）でも
+受け取り、レコードはどのマップでも受け取ります。マップにないフィールドは `nil`、つまり
+option の none です。型のどの形にも当てはまらない値は、型を名指す
+`IllegalArgumentException` を投げます。エラー側の例外はメンバーを名指し、`rontolisp.wit`
+のエイリアスがあればその値は `(::wit/error (ex-data e))` です。
+
+```console
+$ cat bind.clj
+(ns bind (:require [rontolisp.wit :as wit]))
+
+(wit/import "sockets.wit" {:interface "wasi:sockets/types@0.3.0" :as sock})
+
+(let [s (sock/tcp-socket-create :ipv4)]
+  (sock/tcp-socket-bind s [:ipv4 {:port 0 :address [127 0 0 1]}])
+  (println (first (sock/tcp-socket-get-local-address s)))
+  (try (sock/tcp-socket-bind s [:ipv4 {:port 0 :address [127 0 0 1]}])
+       (catch clojure.lang.ExceptionInfo e
+         (println (ex-message e))
+         (println (::wit/error (ex-data e))))))
+$ rontolisp bind.clj -o bind.wasm --component
+$ wasmtime run -S inherit-network=y bind.wasm
+:ipv4
+tcp-socket-bind of wasi:sockets/types@0.3.0 answered its error arm
+:invalid-state
+```
+
+型がストリームかフューチャーに届くメンバーは束縛しません。`async func` も同様です。
+それを参照すると、コンパイル時に WIT の行を名指して拒否します。
 
 ```console
 $ rontolisp app.clj
-error: app.clj:4:1: plot of example:geo/api@0.1.0 takes point (parameter 'p'), a record, which the Clojure tier does not carry yet (geo.wit:5)
+error: app.clj:4:1: feed of example:geo/api@0.1.0 takes option<stream<u8>> (parameter 'body'), an option carrying a stream, which the Clojure tier does not carry yet (geo.wit:8)
 ```
 
 ターゲットによっては、Common Lisp と同じく範囲がさらに狭まります。WASM コアモジュールの
 インポートを渡れる型は 32 ビットまでの整数、浮動小数点数、`bool`、`string`、`list<u8>`、
-ハンドルで、world のエクスポートを渡れる型は整数、`f64`、`bool`、`string` です。
+ハンドルで、それを越えるメンバーはプログラムが呼ぶところで拒否します。コンポーネントの
+インポートはフラグと、`u8` 以外のリストの引数を除くすべての行を渡せます。world の
+エクスポートを渡れる型は整数、`f64`、`bool`、`string` です。

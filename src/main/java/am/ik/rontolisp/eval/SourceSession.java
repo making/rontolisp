@@ -89,7 +89,8 @@ public final class SourceSession {
 				? am.ik.rontolisp.clojure.Clojure.session(SourceLanguage.clojureFiles(loader, standards)) : null;
 		// One macro-time evaluator per session, built lazily on the first expansion,
 		// so a macro defined in one buffer expands in a later one.
-		this.clojureMacros = this.clojure == null ? null : ClojureMacroTime.create();
+		this.clojureMacros = this.clojure == null ? null
+				: loader == null ? ClojureMacroTime.create() : ClojureMacroTime.create(loader.javaClassLoader());
 		if (this.clojure != null) {
 			this.clojure.setMacroEvaluator(this.clojureMacros);
 			this.clojure.setBoundary(ClojureHostBoundary.INSTANCE);

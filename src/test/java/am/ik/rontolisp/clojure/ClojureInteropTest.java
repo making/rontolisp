@@ -435,6 +435,17 @@ class ClojureInteropTest {
 	}
 
 	@Test
+	void printTraceElementSpellsAHostStackTraceElementLikeTheOracle() throws Exception {
+		// oracle-identical (clj 1.12.6, 2026-10-08); a throwable built here has no frames
+		// (clojure-spec clojure-stacktrace-prints-no-frames), so only a host element
+		// reaches clojure.stacktrace/print-trace-element
+		assertBothEqual("(require '[clojure.stacktrace :as st])"
+				+ " (st/print-trace-element (StackTraceElement. \"my.ns$f__123\" \"invoke\" \"f.clj\" 10)) (newline)"
+				+ " (st/print-trace-element (StackTraceElement. \"a.b$c\" \"doInvoke\" nil -1)) (newline)",
+				"my.ns/f (f.clj:10)\na.b$c.doInvoke (:-1)\n");
+	}
+
+	@Test
 	void hostKindPredicatesTestTheHostClass() throws Exception {
 		// oracle-identical (clj 1.12.6); a Lisp value is no host object, so a string
 		// is no uri? or inst? (the all-four-backend false answers are clojure-spec's)

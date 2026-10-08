@@ -135,7 +135,7 @@ answered `2 5 3` before).
 | `clojure.edn` (`read-string` `read`) | `ClojureEdnLowering`: one call to `rontolisp::%clojure-edn-read-string-1` / `-read-string` / `-read` after a lower-time arity check in the oracle's wording; as a value `#'...-v` | "Reading", clojure.edn |
 | `clojure.walk` | Clojure source in the jar written for this front end, loaded like a project file (a startup namespace: on its first qualified name too) | "clojure.jar namespaces" |
 | `clojure.template` | the same, loaded at its `require` | "clojure.jar namespaces" |
-| `clojure.data` `clojure.zip` `clojure.datafy` | the same, loaded at its `require` | "clojure.jar namespaces" |
+| `clojure.data` `clojure.zip` `clojure.datafy` `clojure.stacktrace` | the same, loaded at its `require` | "clojure.jar namespaces" |
 | `clojure.core.protocols` | the same, a startup namespace like `clojure.walk` | "clojure.jar namespaces" |
 | `clojure.pprint` | the same; its layout engine is `rontolisp.internal.pprint/NAME`, one call to `rontolisp::%clojure-pp-NAME` (`ClojureKernelLowering`) | "clojure.jar namespaces" |
 | `subs`, `.substring` | `%clojure-subs`, the refusal family's alias of `subseq` ("Refusals") | a bound outside a string is the oracle's `StringIndexOutOfBoundsException` where a class is read; a double or ratio bound is truncated (`%clojure-string-bound`), a non-number one is refused as the oracle does ("Refusals") |
@@ -913,7 +913,7 @@ a program without `ns` lowers unqualified. A quoted `'n/x` is the symbol of var 
 - **Refusals in the oracle's words**: `Could not locate a/b.clj or a/b.cljc on the source
   path: <roots>`, `Cyclic load dependency: [ /a ]->/b->[ /a ]`, `namespace 'x' not found after
   loading '/x'`, `x does not exist`, `x is not public`.
-- **Source path** (`ClojureSourcePath`, on the first lookup): the root the entry file's
+- **Source path** (`ClojureSourcePath`, computed when a lowering starts): the root the entry file's
   namespace names (`src` for `src/demo/main.clj` declaring `demo.main`; else the file's
   directory; a session's working directory), then the project's `:paths` and its
   dependencies' roots ("deps.edn"). `deps.edn` over a new flag: it is the oracle's own
@@ -933,10 +933,13 @@ a program without `ns` lowers unqualified. A quoted `'n/x` is the symbol of var 
 ## deps.edn
 
 **Invariant: the source path is the oracle's classpath, minus what this build does not
-read, named when a lookup misses.** `ClojureSourcePath.computeRoots`: the entry's own root,
+read, named when a lookup misses; its jars holding classes are the program's Java class
+path too.** `ClojureSourcePath.computeRoots`: the entry's own root,
 the merged map's `:paths`, every library `ClojureDepsGraph.resolve` selects in the oracle's
 order, then `Found.builtin`. Every rule below was measured 2026-10-08 on `clj` 1.12.6.1673
-(`clj -Srepro -Spath` over fixture trees; tools.deps read from the CLI jar).
+(`clj -Srepro -Spath` over fixture trees -- a `file:` Maven repository with
+`:mvn/local-repo` seeded from `~/.m2` minus its `_remote.repositories`, `file://` git
+repositories, `GITLIBS` set; tools.deps read from the CLI jar).
 - **Maps** (`ClojureDepsEdn`): the oracle's root `deps.edn` (`ROOT_TEXT`, verbatim), the
   user-level one, the project's (nearest at or above the entry file; the oracle reads the
   working directory's), merged like `merge-edns` (a map value merges, anything else
@@ -963,28 +966,100 @@ order, then `Found.builtin`. Every rule below was measured 2026-10-08 on `clj` 1
   versions`; git commits by descent (`Procurer.compareGit`, the first stays while unfetched).
   The Maven graphs the oracle resolved from a `file:` repository fixture (newest wins,
   orphans, exclusion narrowing, order, cycles) are pinned through
-  `ClojureDepsGraphTest.FakeRepository`: the selection is complete, only the procurer fetches
-  nothing. `:override-deps`/`:default-deps` (alias arguments) are `choose-coord`
+  `ClojureDepsGraphTest.FakeRepository`; over fetched descriptors by `ClojureDepsFetchTest`.
+  `:override-deps`/`:default-deps` (alias arguments) are `choose-coord`
   (`ClojureDepsGraph.chooseCoord`), canonicalized against the project when first used.
-- **Procurer** (`ClojureDepsProcurer`): `:local/root` canonical (`SourceLoader.canonicalPath`,
-  `toRealPath`) and checked (`Local lib X not found: R`); its manifest `:deps`, `:jar`, `:pom`
-  (not read), none (`Manifest file not found ...`) or another (`Manifest type :lein not loaded
-  ...`); the git checks that need no repository (missing sha, prefix sha without a tag, both
-  spellings of the sha or the tag, the inferred forge URL); `:deps/prep-lib` checked after
-  every contribution (`The following libs must be prepared before use: [..]`), never run.
+- **Procurer** (`ClojureDepsProcurer`, the oracle's extensions): `:local/root` canonical
+  (`SourceLoader.canonicalPath`, `toRealPath`) and checked (`Local lib X not found: R`); a
+  manifest `:deps`, `:jar`, `:pom` (not read: a note), none (`Manifest file not found ...`) or
+  another (`Manifest type :lein not loaded ...`; tools.deps has no lein reader);
+  `:deps/prep-lib` checked after every contribution, local or git (`The following libs must be
+  prepared before use: [..]`), never run. It fetches through `ClojureFiles.repositories()`
+  (`ClojureRepositories`), the host's; null = fetch nothing (below).
+- **Maven** (`coord-deps :mvn`, `coord-paths :mvn`): the descriptor's dependencies
+  (`ClojureRepositories.mavenDependencies`, `MavenResolver.descriptor`: classifier and
+  extension from the type) kept when compile/runtime and not optional, each lib
+  `group/artifact$classifier`, its coord `:mvn/version`, `:extension` when not jar, `:exclusions`
+  as a set of `group/artifact` (a POM's `*:*` is no lib's name: measured, excludes nothing).
+  The jar (`mavenArtifact`) only for extension jar (`:extension "pom"`: children, no root).
+  `canonicalize`: `[1.0]` is 1.0; a range/`RELEASE`/`LATEST` goes to `mavenVersion`, refused by
+  name until `e47`; SNAPSHOT refused at the fetch. A `:classifier` key is the oracle's `Invalid
+  library spec` refusal. Repositories (`ClojureBasis.mavenSource`, `remote-repos`): central,
+  clojars, then the merged maps' others in order, `nil` removes one, `:releases {:enabled
+  false}` drops one, `http:` refused (`Invalid repo url (http not supported)`) unless
+  `CLOJURE_CLI_ALLOW_HTTP_REPO`. Local repository: `:mvn/local-repo` against the project
+  directory, else `~/.m2/repository`; measured, `clj` reads neither `settings.xml`'s
+  `localRepository` nor its `offline` (`eval/ClojureDepsRepositories` passes mirrors/proxies on,
+  refused by name like `--java-dep`). Only the top-level maps name repositories: a
+  dependency's own `:mvn/repos` is never read. A built-in coordinate fetches nothing, children
+  included (the oracle's classpath has clojure's spec jars; here they contribute no root).
+- **A jar's own `pom.xml`** (`coord-deps :jar`): the first `META-INF/**/pom.xml` entry read as a
+  project model (`ClojureRepositories.pomDependencies`, `MavenResolver.projectDependencies`:
+  parents and imports from the repositories, classifier AS WRITTEN, type ignored), compile
+  and runtime kept, OPTIONAL KEPT, coord `:mvn/version :scope [:optional]`. Measured: a
+  test-jar typed dependency is the plain jar, a pom typed one the oracle tries as a jar and
+  fails on.
+- **git** (`canonicalize`/`manifest-type`/`compare-versions :git`): both spellings refused,
+  URL given or inferred (the oracle's regex table, here only -- `GitFetcher` has none), then
+  against the repository: a tag must exist (`Library L has invalid tag: t`), sha and tag must
+  name one commit (`... point to different commits`), an abbreviated sha needs a tag and is
+  replaced by the full one, no sha `has coord with missing sha`. The manifest checks the
+  commit out (`gitCheckout`; absent: `Commit not found for L in repo U at S`), roots
+  `:deps/root` below it (an absolute one as written, like the oracle) and detects
+  `deps.edn`/`pom.xml`. Of two commits the descendant is newer (`gitDescendant`, asked of
+  both repositories when the URLs differ); none: `No known ancestor relationship between git
+  versions for L\n  U at X\n  U at Y` -- measured, the oracle throws an EMPTY message for
+  two unrelated commits of one repository (`commit-comparator`'s `(ex-info "" {})`); here its
+  own wording for the unknown case. Tags and commits are asked once per resolution.
 - **A jar is read in place** (`SourceLoader.listArchive`/`loadArchiveEntry`: the central
   directory, an entry opened only when listed). Extracting it (`Archives.extractZip`, the
   plan) would need a cache keyed by content and invalidated when the jar changes, for
   nothing a read in place lacks; fetched Maven jars take the same path. `Found.path` is
   `jar!/entry`, `Found.resource` the entry (`*file*`, measured `lib/core.clj`). A namespace a
   jar holds only as `__init.class` is refused by name.
-- **Unfetched, refused when missed**: a non-built-in Maven coordinate, a git coordinate, a
-  jar's `pom.xml` dependencies and a `:pom` project add no root and a note
-  (`Contribution.unread`); a lookup that finds nothing appends them (`notSearched`) to
-  `Could not locate` and to `unknown namespace`. Refusing at the first lookup was rejected: a
-  project with any Maven dependency (nearly all) would stop where the program needs only its
-  local namespaces. A lookup steps past an unfetched library's place in the order (an earlier
-  unfetched jar holding the same namespace is not detected).
+- **Who fetches**: the command line alone -- `RontoLispCli` puts
+  `eval/ClojureDepsRepositories.createDefault()` (am.ik.maven + `GitFetcher` over
+  `ArtifactCache`'s `gitlibs`) on `SourceStandards.clojureRepositories`, the seam hands it to
+  `ClojureFiles.repositories()`. An embedder (`JvmSourceCompiler`), the tests and the browser
+  (`SourceStandards.DEFAULT`) fetch nothing, the env-read rule of the user-level map. A fetch
+  failure is a refusal (`FetchFailure` -> `LispReadException`) in the resolver's words.
+- **Unfetched where nothing fetches, refused when missed**: a non-built-in Maven coordinate, a
+  git coordinate and a jar's `pom.xml` dependencies -- and a `:pom` project everywhere -- add
+  no root and a note (`Contribution.unread`); a lookup that finds nothing appends them
+  (`notSearched`) to `Could not locate` and to `unknown namespace`. A lookup steps past an
+  unfetched library's place in the order (an earlier unfetched jar holding the same namespace
+  is not detected). The browser's refusal by name is this.
+- **Resolved when a lowering starts** (`ClojureLowering.resolveProject`, a file's and each
+  session buffer's): the roots compute before `declare`, a refusal positioned at the first
+  datum -- so a class a dependency's jar holds is the lowering's (an `(:import ...)` before any
+  `require` asks for it) and an unresolvable dependency stops the program before it runs, as
+  the oracle's classpath does. Until 2026-10-08 the first lookup computed them (a program
+  requiring nothing never read its `deps.edn`).
+- **The Java class path** (gap 3 of `e39`): after the roots, each selected archive root holding
+  a `.class` entry goes to `ClojureFiles.addJavaClassPath(jar, coordinate)` ->
+  `SourceLoader.addJavaClassPath` -> the CLI's `JavaClassPath.add` (`.kb/java-interop.md`): the
+  interpreter's loader grows, a JVM compile resolves against it, a program jar copies it, a
+  generated pom lists the Maven coordinate. Directories never join (a `src` tree would be
+  copied beside every jar, and two `src` names collide); a prepped library's
+  `target/classes` is `--java-classpath`'s. A source-only jar (most Clojars libraries) does not
+  join. Wasm: the compile's lowering and macro time see the classes too (a macro body's helper
+  calling a dependency's class expands there, `ClojureDepsFetchCliTest`), a run-time call
+  stays refused.
+- **`data_readers.clj`** (gap 4): not read. Honoring one means calling a library function at
+  READ time, and a whole file is read before its first `require` lowers (`Clojure.read`), so
+  the reader function's namespace could never be loaded in time; a tag it defines is the
+  reader's `No reader function for tag t`, the oracle's words when none is installed, and
+  `*data-readers*` stays `{}`.
+- **No resolved-graph cache** (gap 5, measured 2026-10-08): the `.cpcache` idea was the plan;
+  the caches under the resolution already make a second run network-free -- a local
+  repository file is used as is, an installed checkout needs no git, a tag is checked against
+  the clone. cheshire 5.13.0 + clj-http 3.13.0 + core.async 1.6.681 + malli 0.16.4 (33 jars,
+  54 POMs): first run 8.67 s; warm 1.79-1.89 s against 1.66-1.78 s for an empty `deps.edn`
+  (`java -jar`, this machine), so re-resolving costs ~0.1 s, and the warm run passes with both
+  repositories pointed at an unreachable host. A cache keyed by `deps.edn` content would save
+  that 0.1 s for an invalidation scheme (local roots' manifests, jar times) whose failure is a
+  stale classpath. Not built. Left open: a POM no repository has is asked again every run
+  (am.ik.maven writes no `.lastUpdated`), so that one case needs the network.
 - **Built-in coordinates** (`ClojureBuiltinLibs`): `org.clojure/clojure`, `spec.alpha` and
   `core.specs.alpha` at any Maven version are the front end; `ring/ring-core` up to 1.15.5 and
   `ring/ring-codec` up to 1.3.0 are the shipped Ring files, standing in for an older version
@@ -1001,8 +1076,7 @@ order, then `Found.builtin`. Every rule below was measured 2026-10-08 on `clj` 1
   (interpreter, compile path, REPL); `SourceStandards.DEFAULT` (tests, `JvmSourceCompiler`, the
   playground) reads none. Merged, measured: its `:paths` apply where the project has none, its
   `:deps` join, a relative path resolves against the project's directory.
-- Read, applied by nothing yet: `:mvn/repos`, `:mvn/local-repo`. More than eight
-  top deps iterate in the oracle's hash order, here in file order.
+- More than eight top deps iterate in the oracle's hash order, here in file order.
 - **Aliases** (`ClojureBasis`, the oracle's `create-basis`; measured 2026-10-08): alias data
   is `merge-with merge` over root/user/project (a project `:test` keeps the root's
   `:extra-paths ["test"]`); the selection merges by `merge-alias-maps`' per-key rules
@@ -1031,7 +1105,15 @@ order, then `Found.builtin`. Every rule below was measured 2026-10-08 on `clj` 1
   `System/exit`), `CliOptionsTest#theAliasFlags...`, `ClojureDepsEdnTest`, `ClojureDepsGraphTest`, `ClojureMavenVersionsTest`,
   `ClojureDepsProjectTest` (the four backends over a `:local/root` directory with its own
   dependency, a jar, a `clojure.*` contrib namespace; the refusals, Ring versions, the user
-  map, a session), `PlaygroundReplTest#aClojureRequireReadsTheUploadedDepsEdnLikeEveryOtherRoute`.
+  map, a session), `PlaygroundReplTest#aClojureRequireReadsTheUploadedDepsEdnLikeEveryOtherRoute`,
+  `ClojureDepsFetchTest` (Maven and git through in-memory repositories: the measured
+  classpaths -- scopes, optional, exclusions, `*/*`, pom and classified types, `[1.0]`, a jar's
+  pom, `:deps/root`, tags, abbreviated shas, the descendant -- and every refusal; the class path
+  reported before the lowering), `ClojureDepsFetchCliTest` (the CLI over a `file:` Maven
+  repository and on-disk git repositories: four backends, newest-wins across Maven and git,
+  what is fetched and what not, a Java jar on the interpreter's class path and beside a jar
+  and in its pom, a second run with the remote gone and no git, refusals; the output the
+  oracle's over the same repositories), `GitFetcherTest`, `MavenRepositoryTest#aPomGivenAsBytes...`.
 
 ## Ring adapter
 
@@ -1298,7 +1380,8 @@ function and a directive must be a top-level form.
 - **Byte identity, measured 2026-10-08**: a `:wasm/export` program equals the Common Lisp
   program loading the same `.clj` under the hand-written directive (419 bytes by default,
   263,545 at `--optimize=off`, and under `--component`); `wit/import` on P1 equals
-  `defimport` of its members; a `wit/export` world equals the hand-written `wit-export` block
+  `defimport` of the members it calls (it binds no other since 2026-10-08, "`wit/import`");
+  a `wit/export` world equals the hand-written `wit-export` block
   (P1 and `--component`). The world case needed `ClojureArms.scan` to skip the three
   function-naming directives: their quoted `|c%ns/f|` is a compile-time name, yet as a
   qualified symbol literal it made the scan keep the `#:ns{...}` printer arm
@@ -1306,24 +1389,76 @@ function and a directive must be a top-level form.
 - **`wit/import`**: the interface's members become vars of a namespace named after its id
   (`namespaceOf`: `/` becomes `.`, an id without a package gains `wit:`), reached through
   `:as`/`:refer`; a second import of the id wires names only. The directive is hoisted with a
-  `:names` table listing only the members the Clojure tier binds: numbers, `char`, `string`,
-  `list<u8>`, handles, an `option` of those, a `result` answering one, `bool` and
-  `option<bool>` through a wrapper. Each wrapper is emitted only when the program names its
-  member (`referencedWrappers`), so `--component` still imports only the called members. A
-  member outside the tier (records, variants, enums, flags, tuples, lists, a `result`
-  argument, `async func`, the async built-ins) is not bound, and a reference to it is refused
-  at lower time naming the WIT line (`refusalOf`, from `ClojureNamespaceLowering.refuseLeftOut`).
-  The rest is `.todo/e50-*`.
+  `:names` table listing every member with a Clojure value: all but a stream, a future
+  (anywhere inside the type, `unsupported`), an `async func` and the async built-ins, which
+  are not bound and whose reference is refused at lower time naming the WIT line
+  (`refusalOf`, from `ClojureNamespaceLowering.refuseLeftOut`). Each wrapper is emitted only
+  when the program names its member (`referencedWrappers`), so `--component` imports only
+  the called members, and so does a core module: `WitImportInliner` filters a `:names`
+  directive by reference on P1 too (`.kb/wit.md`, "The naming hook"), so a member the core
+  import cannot carry (a record, an option, a result, `char`, `s64`) fails the build with the
+  Common Lisp P1 refusal only where the program calls it. Until 2026-10-08 P1 bound the whole
+  table, and an interface with one `option` member failed every Clojure P1 build.
+- **Rich values** (the Clojure spelling of the settled CL tier, `.kb/wit.md`): a record is a
+  map of its fields' keywords, an enum or a payload-less case its keyword, a case with a
+  payload `[:case payload]`, flags a set of keywords, a tuple or a `list<T>` a vector, a
+  `result` value (an argument, or nested) `[:ok v]` / `[:error e]` (`:ok` / `:error` without
+  payload); a label keeps its WIT spelling (`:DNS-error`; the boundary's is upcased,
+  `:DNS-ERROR`). No oracle: the reference page is the contract; `[:tag value]` is
+  `clojure.spec`'s conform shape of an `s/or`. The lowering turns each member's types into
+  descriptors (`ClojureWitLowering.descriptor`: `NIL` alike, `:BOOL`, `(:OPTION . d)`,
+  `(:LIST . d)`, `(:TUPLE "wit" d ...)`, `(:RECORD "wit" (kw :KW d) ...)`,
+  `(:VARIANT "wit" (kw :KW [d]) ...)` for a variant or an enum, `(:RESULT ...)` a variant
+  whose payload-less arm the boundary still conses, `(:FLAGS "wit" (kw :KW) ...)`) which one
+  `clojure.lisp` walker reads both ways (`%clojure-wit-out` / `-in`), so a deep type costs a
+  constant, not code. A wrapper reads each descriptor from a global holding it
+  (`typeArg`: `c%wit%type%N`, one per distinct type -- wasi's error variants recur across
+  members -- a top-level `setq` emitted ahead of the first wrapper reading it). `bool` and
+  `option<bool>` keep the inline crossing, so a member with none of the rich types lowers
+  byte-identically to before. To the host a list/tuple/flags takes any collection
+  (`%clojure-seq-all`) and a record any map (`%clojure-call-keyword`, records and sorted maps
+  too); a value of no shape of its type is an `IllegalArgumentException` naming the type.
+- **The error arm** is an `ExceptionInfo` ("member of iface answered its error arm") whose
+  data holds the converted value under `:rontolisp.wit/error` (`ERROR_KEY`, `::wit/error`
+  with the alias); its cause, on the interpreter and the JVM, the condition the provider
+  signalled. Rejected: leaving the CL `wit-error` condition (no Clojure reader reaches its
+  payload, and a label like `DNS-error` cannot be recovered from `:DNS-ERROR` without the
+  shape); `{:payload ...}` (an unqualified key a provider's own exceptions may hold). How the
+  wrapper gets the arm differs by target, because the CL tier signals it on the host and
+  answers an envelope on wasm: a WASM wrapper calls the RAW binding (`<bound>%raw`, the
+  `(:OK . v)` / `(:ERROR . e)` envelope) and throws itself, so nothing catches -- a catch
+  would put every result-calling module in EH mode (`.kb/error-handling.md`) -- and
+  `WitImportDirective` binds a member named only through its raw binding without the
+  `%wit-result` wrapper, which would have spliced the whole of wit.lisp; a host wrapper
+  catches `rontolisp:wit-error` around the provider call and re-raises it as the arm, unless
+  `rontolisp::*wit-providers*` holds no provider for the interface (then the
+  "No provider is bound" refusal goes on unchanged). The key is spelled in the program
+  (the descriptor global `(key . d)`), so `ClojureArms`' scan makes `NAMESPACE_MAP` and
+  `(ex-data e)` prints `#:rontolisp.wit{:error ...}` like any map of one namespace.
+- **Trap: `clojure.lisp` must name nothing of wit.lisp** (`rontolisp:wit-error`,
+  `wit-error-payload`, `%wit-call`, `%wit-result`, `wit-provide`): `WitLibrary.process` runs
+  after the Clojure splice, sees the whole library before the pruner, and splices wit.lisp
+  (not prunable, its `define-condition` kept) into every Clojure program. What signals or
+  catches the condition is lowered into the program instead (the host wrapper, the provide
+  adapter).
 - **`wit/export`**: each world label names a var of the declaring namespace; `flushWorlds`
   resolves it as `wasm/export` does (wrapper, `bool` crossing) and emits the `:names` table. The
   CL directive keeps the contract check, the type check (primitives only,
   `WitExportDirective.designator`) and `--emit-wit`. Refused: an `async func` export; a
   `wasm/export` beside a world (a file's rule only: a session's world is checked buffer by
   buffer against what is defined so far).
-- **`wit/provide`**: `(rontolisp:wit-provide iface fn)` on the interpreter and the JVM (a
-  literal interface written as an import spelled it is canonicalized); on wasm it answers the
-  interface and binds nothing, the host providing every import. The provider sees the
-  boundary's values (a `bool` as `true`/`nil`).
+- **`wit/provide`**: `(rontolisp:wit-provide iface fn)` on the interpreter and the JVM; on
+  wasm it answers the interface and binds nothing, the host providing every import. The
+  interface is a string an import above names (its id or the spelling it wrote,
+  canonicalized), refused otherwise, and `provide` has no value: the import's WIT is what the
+  provider's values convert by. When a member converts, the provider is wrapped in an adapter
+  (`ClojureWitLowering.adapter`: a lambda over `%clojure-wit-serve` and the interface's table,
+  `("member" (d ...) result [error])` rows behind the error key), so it sees and answers
+  Clojure values; an `ExceptionInfo` holding the error key it throws is signalled as
+  `rontolisp:wit-error` with the converted payload and its message (`%clojure-wit-arm-p`, a
+  `satisfies` clause), so a Common Lisp caller of a Clojure provider reads the CL tier and a
+  Clojure caller turns it back. The language boundary IS the CL tier: each side converts to
+  and from it, and what the WIT does not carry (other `ex-data` keys) does not cross.
 - **WIT paths** resolve against the naming file through `ClojureFiles`; the directive keeps
   the path as written in the entry file (so the CL inliner, resolving against the entry's
   directory, reads the same file) and the resolved path in a required namespace's file.
@@ -1331,9 +1466,14 @@ function and a directive must be a top-level form.
   Clojure form; a `.clj` scaffold would be its own item.
 - Pins: `ClojureWasmBoundaryTest`, `ClojureWitBoundaryTest` (the interpreter, the JVM, P1 under
   node through `--emit-js-glue`, `--component` under wasmtime including its real
-  `wasi:keyvalue`), `WitNamingHookTest`, `ClojureHostBoundaryTest`; `ExamplesE2eTest` over
-  `examples/clojure/host-boundary/`, `examples/clojure/greeter/`,
-  `examples/wit/keyvalue/page-hits.clj`.
+  `wasi:keyvalue`, `wasi:sockets/types` and `wasi:http/types`;
+  `everyRichValueCrossesInClojuresSpellingOnTheInterpreterAndTheJvm`,
+  `eachLanguageSeesItsOwnSpellingOfOneInterface`,
+  `aPreview1ModuleRefusesARichMemberOnlyWhereTheProgramCallsIt`), `WitNamingHookTest`,
+  `ClojureHostBoundaryTest`, `WitImportInlinerTest.aNamesTableBindsOnPreview1TheMembersTheProgramNames`;
+  `ExamplesE2eTest` over `examples/clojure/host-boundary/`, `examples/clojure/greeter/`,
+  `examples/wit/keyvalue/page-hits.clj` (a record answer and an error arm, wasmtime's store
+  and the program's alike).
 
 ## clojure.jar namespaces
 
@@ -1341,7 +1481,7 @@ function and a directive must be a top-level form.
 end** (`src/main/resources/am/ik/rontolisp/clojure/lib/clojure/**`, the
 `ClojureBuiltinNamespaces` mechanism of "Ring util namespaces"): `clojure.walk`,
 `clojure.template`, `clojure.pprint`, `clojure.data`, `clojure.zip`, `clojure.core.protocols`,
-`clojure.datafy`.
+`clojure.datafy`, `clojure.stacktrace`.
 - **Licensing**: clojure.jar is EPL-1.0, this project Apache-2.0, so nothing of it is
   copied -- no code, no docstring. Each file is written from the documented behaviour and
   diffed against the oracle; a one-line var dictated by its contract
@@ -1462,11 +1602,26 @@ end** (`src/main/resources/am/ik/rontolisp/clojure/lib/clojure/**`, the
   `rontolisp.internal.datafy/class-name-of`, i.e. `%clojure-class-name-of`, the oracle's
   class names `%clojure-no-method` already spelled (now shared), since `class` answers a
   kind keyword.
+- `clojure.stacktrace`: `print-throwable` spells the class as `(name (class tr))` (`class`
+  of a throwable is its class-name keyword here) and a nil message `null` like the
+  oracle's `printf`. A throwable has no frames (`.getStackTrace` answers `[]`), so
+  `print-stack-trace` prints ` at [empty stack trace]`: pinned as a deviation by
+  clojure-spec `clojure-stacktrace-prints-no-frames`; `print-trace-element` is the oracle's
+  over a host `StackTraceElement` (interpreter and JVM,
+  `ClojureInteropTest#printTraceElementSpellsAHostStackTraceElementLikeTheOracle`).
+- Not shipped, with what each waits on (decided 2026-10-08): `clojure.java.io` beyond
+  `reader` (a portable File and byte streams, e55), `clojure.core.reducers` and
+  `CollReduce` (multi-arity protocol methods and a `reduce` that consults a protocol,
+  e56), `clojure.math` (fdlibm functions the runtime lacks on every backend, e57), pprint's
+  `cl-format`/`formatter`/`formatter-out` (e58), `clojure.instant`/`clojure.uuid` and the
+  `#inst`/`#uuid` values (e59), `Throwable->map` and `extend-protocol` to
+  `Throwable`/`IRef` (e60), `clojure.repl`/`main`/`java.shell`/`xml` (e61).
 - Pins: clojure-spec `clojure-walk-*` (all four backends, oracle-identical, the first
   case loading `clojure.walk` through a qualified name only),
   `clojure-template-substitutes-per-group-of-values`, `clojure-pprint-*`,
   `clojure-data-diff-compares-like-the-oracle`, `clojure-zip-moves-and-edits-like-the-oracle`,
   `clojure-datafy-and-core-protocols-like-the-oracle`,
+  `clojure-stacktrace-prints-throwables-like-the-oracle`,
   `ClojureLanguageNamespacesTest` (the startup load, a project file never shadowing a
   startup namespace, a contrib `clojure.*` namespace on the source path, the refusal of
   one not built in).

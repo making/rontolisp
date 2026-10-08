@@ -18,14 +18,16 @@ import org.jspecify.annotations.Nullable;
 
 /**
  * Fetches a git repository at a pinned commit into the cache, through the {@code git}
- * command line (any host, any transport, the user's own credentials and git config).
+ * command line (any host, any transport, the user's own credentials and git config), and
+ * answers what a dependency resolver asks of a repository: the commit a tag or an
+ * abbreviated sha names, whether a tag exists, which of two commits descends from the
+ * other.
  *
  * <p>
  * Layout under the area ({@code <root>/gitlibs/}):
  * <ul>
  * <li>{@code repos/<key>/} -- a bare clone of the repository, fetched into when a commit
- * or tag is missing, and {@code repos/<key>.lock}, the lock every update of it
- * holds;</li>
+ * or tag is missing, and {@code repos/<key>.lock}, the lock every use of it holds;</li>
  * <li>{@code libs/<key>/<sha>/} -- the checkout of one commit: the committed tree, no
  * {@code .git}. Its existence is the installed mark ({@link AtomicInstall}), and nothing
  * writes into it afterwards.</li>
@@ -38,6 +40,7 @@ import org.jspecify.annotations.Nullable;
  * <p>
  * An installed checkout needs no git: without a tag, a second fetch is a directory
  * lookup. A tag is checked against the clone every time (no network while it agrees).
+ * Every question fetches the repository only when the clone cannot answer it.
  */
 public final class GitFetcher {
 
@@ -46,24 +49,6 @@ public final class GitFetcher {
 
 	/** The git command the default fetcher runs. */
 	public static final String DEFAULT_EXECUTABLE = "git";
-
-	/**
-	 * The {@code deps.edn} lib-name prefixes tools.deps infers a repository URL from, and
-	 * the URL format each one fills with the rest of the group and the artifact name.
-	 */
-	private static final List<Map.Entry<String, String>> INFERRED_URLS = List.of(
-			Map.entry("github.", "https://github.com/%s/%s.git"),
-			Map.entry("com.github.", "https://github.com/%s/%s.git"),
-			Map.entry("io.github.", "https://github.com/%s/%s.git"),
-			Map.entry("gitlab.", "https://gitlab.com/%s/%s.git"),
-			Map.entry("com.gitlab.", "https://gitlab.com/%s/%s.git"),
-			Map.entry("io.gitlab.", "https://gitlab.com/%s/%s.git"),
-			Map.entry("bitbucket.", "https://bitbucket.org/%s/%s.git"),
-			Map.entry("org.bitbucket.", "https://bitbucket.org/%s/%s.git"),
-			Map.entry("io.bitbucket.", "https://bitbucket.org/%s/%s.git"),
-			Map.entry("beanstalkapp.", "https://%s.git.beanstalkapp.com/%s.git"),
-			Map.entry("com.beanstalkapp.", "https://%s.git.beanstalkapp.com/%s.git"),
-			Map.entry("ht.sr.", "https://git.sr.ht/~%s/%s"));
 
 	/**
 	 * One monitor per lock file: a JVM may not hold two {@link FileLock}s on one file.
@@ -98,28 +83,6 @@ public final class GitFetcher {
 	}
 
 	/**
-	 * Answers the repository URL tools.deps infers from a lib name
-	 * ({@code io.github.user/repo} -> {@code https://github.com/user/repo.git}), or
-	 * {@code null} when the name names no known forge.
-	 * @param lib the qualified lib name, {@code group/artifact}
-	 * @return the URL, or {@code null}
-	 */
-	public static @Nullable String inferUrl(String lib) {
-		int slash = lib.indexOf('/');
-		if (slash <= 0 || slash == lib.length() - 1 || lib.indexOf('/', slash + 1) >= 0) {
-			return null;
-		}
-		String group = lib.substring(0, slash);
-		String artifact = lib.substring(slash + 1);
-		for (Map.Entry<String, String> entry : INFERRED_URLS) {
-			if (group.startsWith(entry.getKey()) && group.length() > entry.getKey().length()) {
-				return entry.getValue().formatted(group.substring(entry.getKey().length()), artifact);
-			}
-		}
-		return null;
-	}
-
-	/**
 	 * Answers the checkout of {@code coordinate}'s commit -- or its {@code root}
 	 * sub-directory -- installing it first if the cache has none. Clones or fetches the
 	 * repository only when the commit (or the tag) is not already in the local clone.
@@ -129,26 +92,129 @@ public final class GitFetcher {
 	 * tag names another commit, or the root is not a directory of the checkout
 	 */
 	public Path fetch(GitCoordinate coordinate) throws IOException {
-		String key = cacheKey(coordinate.url());
-		Path lib = this.area.resolve("libs").resolve(key).resolve(coordinate.sha());
+		Path lib = libOf(coordinate.url(), coordinate.sha());
 		if (coordinate.tag() != null || !Files.isDirectory(lib)) {
-			Path repos = this.area.resolve("repos");
-			Files.createDirectories(repos);
-			Path lockFile = repos.resolve(key + ".lock").toAbsolutePath().normalize();
-			synchronized (JVM_LOCKS.computeIfAbsent(lockFile, path -> new Object())) {
-				try (FileChannel channel = FileChannel.open(lockFile, StandardOpenOption.CREATE,
-						StandardOpenOption.WRITE); FileLock fileLock = channel.lock()) {
-					Path mirror = ensureMirror(coordinate, repos.resolve(key));
-					ensureCommit(coordinate, mirror);
-					String tag = coordinate.tag();
-					if (tag != null) {
-						checkTag(coordinate, tag, mirror);
-					}
-					AtomicInstall.installDirectory(lib, staging -> checkout(mirror, coordinate.sha(), staging));
+			withClone(coordinate.url(), mirror -> {
+				if (!ensureCommit(coordinate.url(), coordinate.sha(), mirror)) {
+					throw new IOException("commit " + coordinate.sha() + " not found in " + coordinate.url());
 				}
-			}
+				String tag = coordinate.tag();
+				if (tag != null) {
+					checkTag(coordinate, tag, mirror);
+				}
+				return AtomicInstall.installDirectory(lib, staging -> writeTree(mirror, coordinate.sha(), staging));
+			});
 		}
 		return resolveRoot(lib, coordinate);
+	}
+
+	/**
+	 * Answers the checkout of a commit, installing it first if the cache has none, like
+	 * {@link #fetch} without a tag or a root -- or {@code null} when the repository has
+	 * no such commit.
+	 * @param url the repository URL
+	 * @param sha the full sha
+	 * @return the directory, or {@code null}
+	 * @throws IOException if git cannot be run or the repository cannot be cloned
+	 * @throws IllegalArgumentException if the URL would reach git as an option, or the
+	 * sha is not a full one
+	 */
+	public @Nullable Path checkout(String url, String sha) throws IOException {
+		GitCoordinate.checkUrl(url);
+		String full = GitCoordinate.fullSha(sha, url);
+		Path lib = libOf(url, full);
+		if (Files.isDirectory(lib)) {
+			return lib;
+		}
+		return withClone(url, mirror -> ensureCommit(url, full, mirror)
+				? AtomicInstall.installDirectory(lib, staging -> writeTree(mirror, full, staging)) : null);
+	}
+
+	private Path libOf(String url, String sha) {
+		return this.area.resolve("libs").resolve(cacheKey(url)).resolve(sha);
+	}
+
+	/**
+	 * Answers the full sha of the commit a revision names in a repository -- a tag, a
+	 * branch, a full or abbreviated sha -- cloning the repository when the cache has no
+	 * clone of it, and fetching its branches and tags once when the clone cannot resolve
+	 * the revision.
+	 * @param url the repository URL
+	 * @param revision the revision
+	 * @return the full sha, lower case, or {@code null} when the repository has no commit
+	 * of that name (an abbreviation two commits share names none)
+	 * @throws IOException if git cannot be run or the repository cannot be cloned
+	 * @throws IllegalArgumentException if the URL or revision would reach git as an
+	 * option or is no name
+	 */
+	public @Nullable String resolve(String url, String revision) throws IOException {
+		GitCoordinate.checkUrl(url);
+		GitCoordinate.checkRevision(revision, "revision", url);
+		return withClone(url, mirror -> {
+			String sha = commitOf(mirror, revision);
+			if (sha == null) {
+				fetchRefs(url, mirror);
+				sha = commitOf(mirror, revision);
+			}
+			return sha;
+		});
+	}
+
+	/**
+	 * Answers whether a repository has a tag of a name, fetching its branches and tags
+	 * once when the clone has none of that name.
+	 * @param url the repository URL
+	 * @param tag the tag name
+	 * @return whether the tag exists
+	 * @throws IOException if git cannot be run or the repository cannot be cloned
+	 * @throws IllegalArgumentException if the URL or tag would reach git as an option or
+	 * is no name
+	 */
+	public boolean hasTag(String url, String tag) throws IOException {
+		GitCoordinate.checkUrl(url);
+		GitCoordinate.checkRevision(tag, "tag", url);
+		Boolean found = withClone(url, mirror -> {
+			if (tagExists(mirror, tag)) {
+				return true;
+			}
+			fetchRefs(url, mirror);
+			return tagExists(mirror, tag);
+		});
+		return Boolean.TRUE.equals(found);
+	}
+
+	/**
+	 * Answers which of two commits of a repository descends from the other -- the newer
+	 * of two versions of one history -- fetching once when the clone lacks either.
+	 * @param url the repository URL
+	 * @param x one full sha
+	 * @param y the other full sha
+	 * @return {@code x} or {@code y}, whichever descends from the other (either when they
+	 * are one commit), or {@code null} when neither does or the repository lacks one
+	 * @throws IOException if git cannot be run, the repository cannot be cloned, or git
+	 * cannot compare the commits
+	 * @throws IllegalArgumentException if the URL would reach git as an option, or a sha
+	 * is not a full one
+	 */
+	public @Nullable String descendant(String url, String x, String y) throws IOException {
+		GitCoordinate.checkUrl(url);
+		String shaX = GitCoordinate.fullSha(x, url);
+		String shaY = GitCoordinate.fullSha(y, url);
+		if (shaX.equals(shaY)) {
+			return x;
+		}
+		return withClone(url, mirror -> {
+			if (!hasCommit(mirror, shaX) || !hasCommit(mirror, shaY)) {
+				fetchRefs(url, mirror);
+				if (!hasCommit(mirror, shaX) || !hasCommit(mirror, shaY)) {
+					return null;
+				}
+			}
+			if (isAncestor(mirror, shaX, shaY)) {
+				return y;
+			}
+			return isAncestor(mirror, shaY, shaX) ? x : null;
+		});
 	}
 
 	/**
@@ -225,11 +291,37 @@ public final class GitFetcher {
 		return host + "/" + path;
 	}
 
+	/** What runs against a repository's clone, holding its lock. */
+	@FunctionalInterface
+	private interface CloneWork<T> {
+
+		@Nullable T run(Path mirror) throws IOException;
+
+	}
+
+	/**
+	 * Runs work against the repository's clone -- cloned first when the cache has none --
+	 * holding the repository's lock: a {@link FileLock} across processes and one monitor
+	 * per lock file within this JVM.
+	 */
+	private <T> @Nullable T withClone(String url, CloneWork<T> work) throws IOException {
+		String key = cacheKey(url);
+		Path repos = this.area.resolve("repos");
+		Files.createDirectories(repos);
+		Path lockFile = repos.resolve(key + ".lock").toAbsolutePath().normalize();
+		synchronized (JVM_LOCKS.computeIfAbsent(lockFile, path -> new Object())) {
+			try (FileChannel channel = FileChannel.open(lockFile, StandardOpenOption.CREATE, StandardOpenOption.WRITE);
+					FileLock fileLock = channel.lock()) {
+				return work.run(ensureMirror(url, repos.resolve(key)));
+			}
+		}
+	}
+
 	/** Clones the repository bare unless the clone exists; answers the clone. */
-	private Path ensureMirror(GitCoordinate coordinate, Path mirror) throws IOException {
+	private Path ensureMirror(String url, Path mirror) throws IOException {
 		return AtomicInstall.installDirectory(mirror, staging -> {
 			Path clone = staging.resolve("repo.git");
-			this.git.run(Map.of(), List.of("clone", "--bare", "--quiet", "--", coordinate.url(), clone.toString()));
+			this.git.run(Map.of(), List.of("clone", "--bare", "--quiet", "--", url, clone.toString()));
 			return clone;
 		});
 	}
@@ -237,30 +329,54 @@ public final class GitFetcher {
 	/**
 	 * Makes the commit present in the clone: fetches every branch and tag when it is
 	 * missing, then the commit itself (a commit no ref names, where the server allows
-	 * it).
+	 * it). Answers whether the commit is there now.
 	 */
-	private void ensureCommit(GitCoordinate coordinate, Path mirror) throws IOException {
-		if (hasCommit(mirror, coordinate.sha())) {
-			return;
+	private boolean ensureCommit(String url, String sha, Path mirror) throws IOException {
+		if (hasCommit(mirror, sha)) {
+			return true;
 		}
-		fetchRefs(coordinate, mirror);
-		if (hasCommit(mirror, coordinate.sha())) {
-			return;
+		fetchRefs(url, mirror);
+		if (hasCommit(mirror, sha)) {
+			return true;
 		}
-		GitCommand.Result bySha = this.git.exec(Map.of(), List.of("--git-dir=" + mirror, "fetch", "--quiet", "--",
-				coordinate.url(), coordinate.sha() + ":refs/rontolisp/" + coordinate.sha()));
-		if (!bySha.ok() || !hasCommit(mirror, coordinate.sha())) {
-			throw new IOException("commit " + coordinate.sha() + " not found in " + coordinate.url());
-		}
+		GitCommand.Result bySha = this.git.exec(Map.of(),
+				List.of("--git-dir=" + mirror, "fetch", "--quiet", "--", url, sha + ":refs/rontolisp/" + sha));
+		return bySha.ok() && hasCommit(mirror, sha);
 	}
 
-	private void fetchRefs(GitCoordinate coordinate, Path mirror) throws IOException {
-		this.git.run(Map.of(), List.of("--git-dir=" + mirror, "fetch", "--quiet", "--", coordinate.url(),
+	private void fetchRefs(String url, Path mirror) throws IOException {
+		this.git.run(Map.of(), List.of("--git-dir=" + mirror, "fetch", "--quiet", "--", url,
 				"+refs/heads/*:refs/heads/*", "+refs/tags/*:refs/tags/*"));
 	}
 
 	private boolean hasCommit(Path mirror, String sha) throws IOException {
 		return this.git.exec(Map.of(), List.of("--git-dir=" + mirror, "cat-file", "-e", sha + "^{commit}")).ok();
+	}
+
+	/** The full sha a revision names in the clone, or {@code null} for none. */
+	private @Nullable String commitOf(Path mirror, String revision) throws IOException {
+		GitCommand.Result result = this.git.exec(Map.of(),
+				List.of("--git-dir=" + mirror, "rev-parse", "--verify", "--quiet", revision + "^{commit}"));
+		return result.ok() ? result.stdout().strip() : null;
+	}
+
+	private boolean tagExists(Path mirror, String tag) throws IOException {
+		return this.git
+			.exec(Map.of(), List.of("--git-dir=" + mirror, "rev-parse", "--verify", "--quiet", "refs/tags/" + tag))
+			.ok();
+	}
+
+	/**
+	 * {@code merge-base --is-ancestor}: exit 0 is yes, 1 is no, anything else a failure.
+	 */
+	private boolean isAncestor(Path mirror, String ancestor, String descendant) throws IOException {
+		GitCommand.Result result = this.git.exec(Map.of(),
+				List.of("--git-dir=" + mirror, "merge-base", "--is-ancestor", ancestor, descendant));
+		if (result.exitCode() > 1) {
+			throw new IOException(
+					"git cannot compare commits " + ancestor + " and " + descendant + ": " + result.stderr().strip());
+		}
+		return result.ok();
 	}
 
 	/**
@@ -270,7 +386,7 @@ public final class GitFetcher {
 	private void checkTag(GitCoordinate coordinate, String tag, Path mirror) throws IOException {
 		String tagged = tagCommit(mirror, tag);
 		if (!coordinate.sha().equals(tagged)) {
-			fetchRefs(coordinate, mirror);
+			fetchRefs(coordinate.url(), mirror);
 			tagged = tagCommit(mirror, tag);
 		}
 		if (tagged == null) {
@@ -283,9 +399,7 @@ public final class GitFetcher {
 	}
 
 	private @Nullable String tagCommit(Path mirror, String tag) throws IOException {
-		GitCommand.Result result = this.git.exec(Map.of(),
-				List.of("--git-dir=" + mirror, "rev-parse", "--verify", "--quiet", "refs/tags/" + tag + "^{commit}"));
-		return result.ok() ? result.stdout().strip() : null;
+		return commitOf(mirror, "refs/tags/" + tag);
 	}
 
 	/**
@@ -293,7 +407,7 @@ public final class GitFetcher {
 	 * clone's own state is never touched, and answers the tree. Line endings are the
 	 * committed ones whatever the user's {@code core.autocrlf}.
 	 */
-	private Path checkout(Path mirror, String sha, Path staging) throws IOException {
+	private Path writeTree(Path mirror, String sha, Path staging) throws IOException {
 		Path tree = Files.createDirectory(staging.resolve("tree"));
 		Map<String, String> env = Map.of("GIT_INDEX_FILE", staging.resolve("index").toString());
 		this.git.run(env, List.of("--git-dir=" + mirror, "read-tree", sha));

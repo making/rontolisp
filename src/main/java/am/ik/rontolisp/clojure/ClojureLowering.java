@@ -1287,6 +1287,7 @@ public final class ClojureLowering {
 		lowering.rootSourcePath = lowering.sourcePath.entryName();
 		lowering.loadingFile = lowering.rootFile;
 		lowering.loadingSourcePath = lowering.rootSourcePath;
+		lowering.resolveProject(datums);
 		lowering.declare(datums);
 		lowering.forms.add(lowering.falseBinding());
 		// pass two: lower
@@ -1360,10 +1361,29 @@ public final class ClojureLowering {
 	 * @param buffer the reader over the typed text
 	 * @return the lowered datums, in order
 	 */
+	/**
+	 * Resolves the program's project -- its {@code deps.edn}, its dependencies fetched,
+	 * their jars on the program's Java class path -- before anything lowers, so a class
+	 * those jars hold is the lowering's too, and a dependency the oracle could not
+	 * resolve stops the program before it runs, as the oracle's classpath does. A refusal
+	 * names the first datum's position. Once per source path: a session's later buffers
+	 * find it resolved (or try again after a failure).
+	 * @param datums the datums about to lower
+	 */
+	void resolveProject(List<LispVal> datums) {
+		try {
+			this.sourcePath.roots();
+		}
+		catch (LispReadException ex) {
+			throw datums.isEmpty() ? ex : positioned(ex, datums.get(0));
+		}
+	}
+
 	List<ClojureTopLevel> interact(ClojureReader buffer) {
 		this.session = true;
 		this.reader = buffer;
 		List<LispVal> datums = buffer.readAll();
+		resolveProject(datums);
 		// A buffer's pre-scan must not clobber what earlier buffers already
 		// defined: its inits evaluate against the OLD binding (e.g. (def p
 		// (memoize p)) after a (defn p ...) captures the function cell), while
