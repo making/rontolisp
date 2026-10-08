@@ -829,8 +829,8 @@ first `=` key of its kind (vector / lazy seq / list / sorted / other) the progra
 ## recur
 
 `recur` targets the innermost `loop`, `fn` (named or anonymous), `defn` clause, `letfn`
-entry, `lazy-seq` body (arity 0) or stored method lambda (`defmethod`, protocol methods,
-`reify`): a target stack, through which a plain lambda passes. Each multi-arity clause is
+entry, `lazy-seq` body (arity 0), stored method lambda (`defmethod`, extension methods) or
+inline method arity (below): a target stack, through which a plain lambda passes. Each multi-arity clause is
 its own target, so the count must match the clause; a wrong count and a `recur` outside
 any target are named refusals; `#()` recurs unchecked (its arity is known only after the
 body lowers). `loop` inits are sequential and destructure.
@@ -845,6 +845,16 @@ body lowers). `loop` inits are sequential and destructure.
 - A `recur` reaching a variadic target splits it into a worker taking the rest as an
   ordinary parameter plus an `&rest` head, so the `recur` assigns exactly while normal
   calls wrap through the head; an unused variadic keeps its single shape.
+- An inline method's arity (`deftype`/`defrecord`/`reify`, protocol or interface) counts
+  every parameter but the first, the target the method supplies itself (oracle clj 1.12.6;
+  `(recur this acc)` there is its `Mismatched argument count to recur`):
+  `ClojureProtocolLowering.inlineArityLambda` pushes `RecurTarget.inlineMethod`, and a used
+  target wraps the body, inside the field bindings, in one `labels` entry over the other
+  parameters (the rest an ordinary one) called once (`ClojureBindingLowering.inlineRecurBody`):
+  no worker split, and a `let` rebinding the target cannot substitute it. A `[& r]` vector
+  counts every parameter. An extension body is a `fn` (`extensionLambda`), whose `recur`
+  passes the target. Pinned by `recur-in-an-inline-method-passes-every-parameter-but-the-target`
+  and `ClojureLoweringTest.anInlineMethodRecurPassesEveryParameterButTheTarget`.
 - Constant stack comes from the backends' tail calls: wasm `return_call`, the
   interpreter's `eval` loop, the JVM's self tail call as a jump back to the method's start
   and, for `letfn` entries or `defn`s calling each other, its tail groups
@@ -2209,7 +2219,7 @@ measured on clj 1.12.6, 2026-10-08).
   counts (`valAt`, `nth`, `invoke`, `reduce`) is one lambda dispatching on the call's count, the
   fallback the oracle's `AbstractMethodError` (a refusal carrier added for it); a declared method
   the body leaves out stores a lambda refusing the same way. A deftype's or record's methods see
-  its fields like inline protocol methods (`inFieldScope`) and share their `recur` rule (e70). A
+  its fields like inline protocol methods (`inFieldScope`) and share their `recur` rule. A
   reify's `Object` row names its printed class, `<ns>$reify`.
 - Families (`ClojureArms.Family`):
   - REDUCE_INTERFACE (`IReduceInit`, `IReduce`, `IKVReduce`): its store makes REDUCIBLE too,

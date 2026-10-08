@@ -9,6 +9,7 @@ import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.function.BiFunction;
 import java.util.function.Function;
@@ -1043,10 +1044,12 @@ final class ClojureProtocolLowering {
 	}
 
 	/**
-	 * The lambda a method implementation stores: its one arity's, or one dispatching each
-	 * call by its count to the lambda of the matching arity ({@link #arityDispatch}).
+	 * The lambda an extension's method stores: its one arity's, or one dispatching each
+	 * call by its count to the lambda of the matching arity ({@link #arityDispatch}). An
+	 * extension body is a {@code fn}, whose {@code recur} passes the target too; an
+	 * inline body's is {@link #inlineMethodLambda}.
 	 */
-	static LispVal methodLambda(ClojureLowering ctx, ClojureLowering.TypeMethod impl) {
+	static LispVal extensionLambda(ClojureLowering ctx, ClojureLowering.TypeMethod impl) {
 		if (impl.arities().size() == 1) {
 			ClojureLowering.MethodArity only = impl.arities().get(0);
 			return ClojureDispatchLowering.methodLambda(ctx, only.params(), only.body());
@@ -1140,11 +1143,11 @@ final class ClojureProtocolLowering {
 		}
 		LispVal lambda;
 		if (fields == null) {
-			lambda = methodLambda(ctx, impl);
+			lambda = inlineMethodLambda(ctx, impl, List.of(), null, Map.of());
 		}
 		else {
 			lambda = inFieldScope(ctx, fields, mutable,
-					(slots, places) -> fieldMethodLambda(ctx, impl, fields, slots, places));
+					(slots, places) -> inlineMethodLambda(ctx, impl, fields, slots, places));
 		}
 		return rowStoreForm(ctx, def, def.inlineTable(), key, impl.method(), lambda, true);
 	}
@@ -1194,10 +1197,10 @@ final class ClojureProtocolLowering {
 		return ClojureInterfaces.rowForms(ctx, what, body, tag, reifyClass, (impl, dispatch, fallback) -> {
 			if (fields == null) {
 				return interfaceLambda(ctx, impl, dispatch, fallback,
-						arity -> ClojureDispatchLowering.methodLambda(ctx, arity.params(), arity.body()));
+						arity -> inlineArityLambda(ctx, arity, List.of(), null, Map.of()));
 			}
 			return inFieldScope(ctx, fields, mutable, (slots, places) -> interfaceLambda(ctx, impl, dispatch, fallback,
-					arity -> fieldArityLambda(ctx, arity, fields, slots, places)));
+					arity -> inlineArityLambda(ctx, arity, fields, slots, places)));
 		});
 	}
 
@@ -1218,40 +1221,37 @@ final class ClojureProtocolLowering {
 	}
 
 	/**
-	 * One inline method's lambda with the fields in scope: its one arity's, or the
-	 * dispatch over each arity's ({@link #arityDispatch}), every arity binding the fields
-	 * from its own target.
+	 * One inline method's lambda, the fields in scope ({@link #inlineArityLambda}): its
+	 * one arity's, or the dispatch over each arity's ({@link #arityDispatch}), every
+	 * arity binding the fields from its own target.
 	 */
-	static LispVal fieldMethodLambda(ClojureLowering ctx, ClojureLowering.TypeMethod impl, List<String> fields,
-			LispSymbol slots, Map<String, LispVal> places) {
+	static LispVal inlineMethodLambda(ClojureLowering ctx, ClojureLowering.TypeMethod impl, List<String> fields,
+			@Nullable LispSymbol slots, Map<String, LispVal> places) {
 		if (impl.arities().size() == 1) {
-			return fieldArityLambda(ctx, impl.arities().get(0), fields, slots, places);
+			return inlineArityLambda(ctx, impl.arities().get(0), fields, slots, places);
 		}
 		List<LispVal> lambdas = new ArrayList<>();
 		for (ClojureLowering.MethodArity arity : impl.arities()) {
-			lambdas.add(fieldArityLambda(ctx, arity, fields, slots, places));
+			lambdas.add(inlineArityLambda(ctx, arity, fields, slots, places));
 		}
 		return arityDispatch(ctx, impl, lambdas);
 	}
 
 	/**
-	 * One inline arity's lambda with the fields in scope: the immutable ones bound from
-	 * the instance table, the mutable ones (in {@code places}) through the slot vector.
+	 * One inline arity's lambda, a record's or deftype's fields in scope (none for a
+	 * {@code reify}): the immutable ones bound from the instance table, the mutable ones
+	 * (in {@code places}) through the slot vector. A {@code recur} passes every parameter
+	 * but the target, like the oracle ({@link ClojureBindingLowering#inlineRecurBody}).
 	 */
-	private static LispVal fieldArityLambda(ClojureLowering ctx, ClojureLowering.MethodArity impl, List<String> fields,
-			LispSymbol slots, Map<String, LispVal> places) {
+	private static LispVal inlineArityLambda(ClojureLowering ctx, ClojureLowering.MethodArity impl, List<String> fields,
+			@Nullable LispSymbol slots, Map<String, LispVal> places) {
 		String fresh = ctx.freshRecurName();
-		String worker = ClojureBindingLowering.workerName(fresh);
-		ClojureLowering.RecurTarget target = new ClojureLowering.RecurTarget(
-				ClojureBindingLowering.isVariadicParams(impl.params()) ? worker : fresh, true);
+		ClojureLowering.RecurTarget target = ClojureLowering.RecurTarget.inlineMethod(fresh,
+				ClojureBindingLowering.paramShape(impl.params()).fixed() >= 1 ? 1 : 0);
 		ClojureLowering.Clause clause = ClojureBindingLowering.clause(ctx, impl.params(), impl.body(), target);
-		LispVal inner = ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(clause.params()),
-				clause.wrapped());
+		LispVal body = ClojureBindingLowering.inlineRecurBody(fresh, clause, target);
 		if (fields.isEmpty()) {
-			if (target.used() && clause.variadic()) {
-				return ClojureBindingLowering.splitMethodLambda(ctx, fresh, worker, clause, clause.wrapped());
-			}
-			return target.used() ? ClojureLowering.labelsSelfCall(fresh, inner) : inner;
+			return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(clause.params()), body);
 		}
 		LispVal self = clause.params().isEmpty() ? ClojureLowering.NIL_CONST : clause.params().get(0);
 		// a field a parameter names stays the parameter: the lambda list binds it
@@ -1272,9 +1272,8 @@ final class ClojureProtocolLowering {
 								ClojureLowering.NIL_CONST)));
 			}
 		}
-		LispVal body = clause.wrapped();
 		if (!places.isEmpty()) {
-			binds.add(ClojureLowerUtil.list(slots,
+			binds.add(ClojureLowerUtil.list(Objects.requireNonNull(slots),
 					ClojureLowerUtil.list(ClojureLowerUtil.sym("nth"), new LispInteger(DEFTYPE_SLOTS), self)));
 			List<LispVal> macros = new ArrayList<>();
 			for (Map.Entry<String, LispVal> place : places.entrySet()) {
@@ -1285,13 +1284,8 @@ final class ClojureProtocolLowering {
 			}
 			body = ClojureLowerUtil.list(ClojureLowerUtil.sym("symbol-macrolet"), ClojureLowerUtil.list(macros), body);
 		}
-		LispVal fieldBody = ClojureLowerUtil.list(ClojureLowerUtil.sym("let*"), ClojureLowerUtil.list(binds), body);
-		LispVal withFields = ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"),
-				ClojureLowerUtil.list(clause.params()), fieldBody);
-		if (target.used() && clause.variadic()) {
-			return ClojureBindingLowering.splitMethodLambda(ctx, fresh, worker, clause, fieldBody);
-		}
-		return target.used() ? ClojureLowering.labelsSelfCall(fresh, withFields) : withFields;
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(clause.params()),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("let*"), ClojureLowerUtil.list(binds), body));
 	}
 
 	/**
@@ -1529,7 +1523,7 @@ final class ClojureProtocolLowering {
 		}
 		ClojureLowerUtil.isTrue(def.methods().contains(impl.method()),
 				"Can't define method not in interfaces: " + impl.method());
-		LispVal lambda = methodLambda(ctx, impl);
+		LispVal lambda = extensionLambda(ctx, impl);
 		if (key == null) {
 			return objectStoreForm(def, impl.method(), lambda);
 		}
@@ -1725,7 +1719,7 @@ final class ClojureProtocolLowering {
 				body.add(emptyRowForm(def.inlineTable(), ClojureLowerUtil.list(ClojureLowerUtil.sym("cadr"), self)));
 			}
 			for (ClojureLowering.TypeMethod impl : group.methods()) {
-				LispVal lambda = methodLambda(ctx, impl);
+				LispVal lambda = inlineMethodLambda(ctx, impl, List.of(), null, Map.of());
 				body.add(rowStoreForm(ctx, def, def.inlineTable(),
 						ClojureLowerUtil.list(ClojureLowerUtil.sym("cadr"), self), impl.method(), lambda, true));
 			}

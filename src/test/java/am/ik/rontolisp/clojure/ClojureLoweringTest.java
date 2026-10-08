@@ -231,17 +231,8 @@ class ClojureLoweringTest {
 		assertThat(lowered("(defmulti m :shape) (defmethod m :a [a & r] a)"))
 			.contains("(LAMBDA (|c%a| &REST |c%r|) |c%a|)")
 			.doesNotContain("%*");
-		// inline and extended protocol methods share the stored path
-		assertThat(lowered("(defprotocol P (foo [t a & r])) (defrecord R [f] P (foo [t a & r] (recur t a r)))"))
-			.contains("LABELS")
-			.contains("%*");
+		// an extended protocol method is a fn: its recur passes the target too
 		assertThat(lowered("(defprotocol P (foo [t a & r])) (extend-protocol P String (foo [t a & r] (recur t a r)))"))
-			.contains("LABELS")
-			.contains("%*");
-		assertThat(lowered("(defprotocol P (foo [t a & r])) (defrecord E [] P (foo [t a & r] (recur t a r)))"))
-			.contains("LABELS")
-			.contains("%*");
-		assertThat(lowered("(defprotocol P (foo [t a & r])) (reify P (foo [t a & r] (recur t a r)))"))
 			.contains("LABELS")
 			.contains("%*");
 		// the stored path keeps the arity, tail-position and try checks
@@ -255,6 +246,30 @@ class ClojureLoweringTest {
 			.read("(defmulti m :shape) (defmethod m :a [a & r] (try (recur a r) (catch Exception e :c)))", null))
 			.isInstanceOf(LispReadException.class)
 			.hasMessageContaining("Cannot recur across try");
+	}
+
+	@Test
+	void anInlineMethodRecurPassesEveryParameterButTheTarget() {
+		// an inline method's recur passes every parameter but the target (oracle clj
+		// 1.12.6.1673), so the method loops over the rest, the rest an ordinary
+		// parameter there: no worker split
+		assertThat(lowered("(defprotocol P (foo [t a & r])) (defrecord R [f] P (foo [t a & r] (recur a r)))"))
+			.contains("(|c%a| |c%r|)")
+			.doesNotContain("%*");
+		assertThat(lowered("(defprotocol P (foo [t a & r])) (defrecord E [] P (foo [t a & r] (recur a r)))"))
+			.contains("(|c%a| |c%r|)")
+			.doesNotContain("%*");
+		assertThat(lowered("(defprotocol P (foo [t a & r])) (reify P (foo [t a & r] (recur a r)))"))
+			.contains("(|c%a| |c%r|)")
+			.doesNotContain("%*");
+		assertThatThrownBy(
+				() -> Clojure.read("(defprotocol P (foo [t a])) (deftype D [] P (foo [t a] (recur t a)))", null))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("wrong number of arguments passed to recur: expected 1, got 2");
+		assertThatThrownBy(() -> Clojure
+			.read("(defprotocol P (foo [t a] [t a b])) (reify P (foo [t a] a) (foo [t a b] (recur a)))", null))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("wrong number of arguments passed to recur: expected 2, got 1");
 	}
 
 	@Test

@@ -13,7 +13,10 @@ into a worker taking the rest as an ordinary parameter plus the `&rest` head for
 normal calls, so the last `recur` argument binds the rest itself, like the oracle
 (an unused variadic keeps its single shape). A `lazy-seq` body is its own zero-arity
 target: a `recur` in its tail position re-runs the thunk itself, so a recur with
-arguments is an arity error there. Constant-stack by the interpreter's
+arguments is an arity error there. A `deftype`, `defrecord` or `reify` method
+recurs to its own arity with every parameter but the target, which the method
+supplies itself, like the oracle; an `extend-protocol` or `extend-type` body is a `fn`,
+whose `recur` passes the target too. Constant-stack by the interpreter's
 tail calls.
 
 ```clojure
@@ -31,6 +34,10 @@ tail calls.
 (defmethod walk-shape :go [m & r]
   (if (empty? r) (:v m) (recur {:v (first r)} (rest r))))
 (println (walk-shape {:shape :go :v :start} [1])) ; [1]
+(defprotocol Counter (count-up [c acc]))
+(deftype Limit [n] Counter
+  (count-up [this acc] (if (>= acc n) acc (recur (inc acc)))))
+(println (count-up (Limit. 3) 0)) ; 3
 (def calls (atom 0))
 (def draining (lazy-seq (swap! calls inc) (when (< @calls 3) (recur))))
 (println (first draining)) ; nil

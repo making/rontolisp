@@ -198,11 +198,12 @@ cases:
     # with nil is nil (a plain &rest self call would wrap the rest in a
     # one-list and loop forever on the second probe). The stored lambda splits
     # into a worker (the rest as an ordinary parameter, so recur assigns
-    # exactly) plus the &rest head for normal calls; inline and extended
-    # protocol methods share the stored path (the oracle refuses variadic
-    # protocol methods at definition -- No single method ... of interface --
-    # so those rows pin our lenient reading, green on all four backends by the
-    # same construction). The dispatch function takes the call's full argument
+    # exactly) plus the &rest head for normal calls; an extended protocol
+    # method shares the stored path, and an inline one recurs without its
+    # target to a loop taking the rest the same way (the oracle refuses
+    # variadic protocol methods at definition -- No single method ... of
+    # interface -- so those rows pin our lenient reading, green on all four
+    # backends by the same construction). The dispatch function takes the call's full argument
     # list (the dispatcher applies it to every argument), so it spells its own
     # &r; a keyword dispatch takes the lookup plus an optional default,
     # like (:k m dflt).
@@ -216,7 +217,7 @@ cases:
       (println (walk {:shape :pt :pt [1 2]} [3 4]))
       (println (walk {:shape :pt :pt [1 2]} nil))
       (defprotocol StepP (step [t a & r]))
-      (defrecord StepR [f] StepP (step [t a & r] (if (empty? r) [f a] (recur t (first r) (rest r)))))
+      (defrecord StepR [f] StepP (step [t a & r] (if (empty? r) [f a] (recur (first r) (rest r)))))
       (println (step (StepR. "f") :start [1]))
       (println (step (StepR. "f") :start nil))
       (extend-protocol StepP String (step [t a & r] (if (empty? r) a (recur t (first r) (rest r)))))
@@ -232,6 +233,34 @@ cases:
       [f nil]
       [1]
       nil
+  - name: recur-in-an-inline-method-passes-every-parameter-but-the-target
+    # Oracle clj 1.12.6.1673, every line: a recur in a deftype, defrecord or
+    # reify method (protocol or interface) passes every parameter but the
+    # target, which the method supplies itself and a let cannot substitute
+    # ((recur this acc) there is "Mismatched argument count to recur"); each
+    # arity of a multi-arity method is its own target. An extension body is a
+    # fn, whose recur passes the target too.
+    source: |
+      (defprotocol RcP (rc-m [x acc] [x acc k]))
+      (deftype RcC [n] RcP
+        (rc-m [this acc] (if (> acc 3) [n acc] (recur (inc acc))))
+        (rc-m [this acc k] (if (> acc k) [n acc k] (recur (inc acc) k))))
+      (println (rc-m (RcC. 7) 0) (rc-m (RcC. 7) 0 5))
+      (println (rc-m (RcC. 7) 0 100000))
+      (defrecord RcR [n] RcP (rc-m [this acc] (if (> acc 3) [n acc] (recur (inc acc)))))
+      (println (rc-m (RcR. 8) 0))
+      (println (rc-m (reify RcP (rc-m [this acc] (if (> acc 3) [:r acc] (let [this 5] (recur (inc acc)))))) 0))
+      (println (reduce + 0 (reify clojure.lang.IReduceInit
+                             (reduce [this f init] (if (> init 10) init (recur f (f init 3)))))))
+      (extend-protocol RcP String (rc-m [s acc] (if (> acc 3) [s acc] (recur s (inc acc)))))
+      (println (rc-m "s" 0))
+    expected: |
+      [7 4] [7 6 5]
+      [7 100001 100000]
+      [8 4]
+      [:r 4]
+      12
+      [s 4]
   - name: multi-arg-calls-to-collection-dispatched-multimethods
     # Oracle clj 1.12.6.1673: the dispatcher applies the dispatch function to
     # every call argument, and a keyword over two arguments is the lookup with

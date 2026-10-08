@@ -551,13 +551,17 @@ public final class ClojureLowering {
 	 * an anonymous {@code fn} (or {@code #(...)}, or a stored method lambda) a fresh
 	 * {@code labels} name the form wraps itself in when the target is used. A plain
 	 * lambda that is none of these pushes nothing, so a {@code recur} passes through it
-	 * to the enclosing target.
+	 * to the enclosing target. An inline method's target ({@link #inlineMethod}) leaves
+	 * its first parameter, the target object, out of the count.
 	 */
 	static final class RecurTarget {
 
 		private final String callName;
 
 		private final boolean checked;
+
+		/** How many leading parameters the method supplies itself, not the recur. */
+		private final int leading;
 
 		private int arity = -1;
 
@@ -571,8 +575,27 @@ public final class ClojureLowering {
 		private int depth;
 
 		RecurTarget(String callName, boolean checked) {
+			this(callName, checked, 0);
+		}
+
+		private RecurTarget(String callName, boolean checked, int leading) {
 			this.callName = callName;
 			this.checked = checked;
+			this.leading = leading;
+		}
+
+		/**
+		 * The target of an inline {@code deftype}/{@code defrecord}/{@code reify}
+		 * method's arity: a {@code recur} passes every parameter but the first
+		 * {@code leading} -- the target object, which the method supplies itself, like
+		 * the oracle; none when a rest holds every parameter.
+		 */
+		static RecurTarget inlineMethod(String callName, int leading) {
+			return new RecurTarget(callName, true, leading);
+		}
+
+		int leading() {
+			return this.leading;
 		}
 
 		String callName() {

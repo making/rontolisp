@@ -272,6 +272,28 @@ final class ClojureBindingLowering {
 		return labelsWithHead(fresh, List.of(entry), head);
 	}
 
+	/**
+	 * An inline method arity's body behind its recur loop when a {@code recur} reached
+	 * it: one {@code labels} entry over the parameters the {@code recur} passes -- every
+	 * one but the target, the rest an ordinary parameter so the {@code recur} assigns it
+	 * exactly -- called once with them, so the target (and the fields bound from it) stay
+	 * the method's own. The clause's wrapped body otherwise.
+	 */
+	static LispVal inlineRecurBody(String fresh, ClojureLowering.Clause clause, ClojureLowering.RecurTarget target) {
+		if (!target.used()) {
+			return clause.wrapped();
+		}
+		List<LispVal> params = new ArrayList<>(clause.params().subList(target.leading(), clause.params().size()));
+		params.remove(ClojureLowering.AMPERSAND_REST);
+		LispVal entry = new LispCons(new LispSymbol(fresh),
+				new LispCons(ClojureLowerUtil.list(params), ClojureLowerUtil.cons(clause.wrapped(), List.of())));
+		List<LispVal> call = new ArrayList<>();
+		call.add(new LispSymbol(fresh));
+		call.addAll(params);
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("labels"), ClojureLowerUtil.list(List.of(entry)),
+				ClojureLowerUtil.list(call));
+	}
+
 	static List<LispVal> defuns(ClojureLowering ctx, LispVal form, List<LispVal> items) {
 		int at = 2;
 		LispString doc = null;
@@ -590,7 +612,7 @@ final class ClojureBindingLowering {
 			body = ctx.inScope(scope, () -> ctx.bodyOf(bodyForms));
 		}
 		else {
-			target.setArity(variadic ? fixed + 1 : fixed, variadic);
+			target.setArity((variadic ? fixed + 1 : fixed) - target.leading(), variadic);
 			ctx.pushRecurTarget(target);
 			try {
 				body = ctx.inScope(scope, () -> ctx.bodyOfTail(bodyForms));
