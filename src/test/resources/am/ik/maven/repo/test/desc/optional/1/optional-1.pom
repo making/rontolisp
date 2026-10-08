@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>test.desc</groupId>
+  <artifactId>optional</artifactId>
+  <version>1</version>
+  <dependencies>
+      <dependency><groupId>test.lib</groupId><artifactId>o1</artifactId><version>1</version><optional>true</optional></dependency>
+      <dependency><groupId>test.lib</groupId><artifactId>o2</artifactId><version>1</version><optional>TRUE</optional></dependency>
+      <dependency><groupId>test.lib</groupId><artifactId>o3</artifactId><version>1</version><optional>false</optional></dependency>
+      <dependency><groupId>test.lib</groupId><artifactId>o4</artifactId><version>1</version><optional>yes</optional></dependency>
+      <dependency><groupId>test.lib</groupId><artifactId>o5</artifactId><version>1</version></dependency>
+      <dependency><groupId>test.lib</groupId><artifactId>o6</artifactId><version>1</version><optional> true </optional></dependency>
+  </dependencies>
+</project>

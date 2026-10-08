@@ -1,0 +1,41 @@
+# descriptor test.xml:leading-space:1 test.xml:no-decl:1 test.xml:bom:1 test.xml:utf16:1 test.xml:text-in-container:1 test.xml:child-in-leaf:1 test.xml:child-in-property:1 test.xml:attributes:1 test.xml:empty-version:1 test.xml:bare-amp:1 test.xml:pi-inside:1 test.xml:dup-property:1 test.xml:dup-dependencies:1 test.xml:comment-in-container:1 test.xml:cdata-container:1 test.xml:entity-ws-container:1 test.xml:prop-entities:1 test.xml:upper-entity:1 test.xml:mismatched:1 test.xml:nested-unknown:1 test.xml:prefixed:1
+artifact test.xml:leading-space:jar:1
+artifact test.xml:no-decl:jar:1
+dep test.lib:a:jar::1 scope=compile optional=null
+artifact test.xml:bom:jar:1
+dep test.lib:a:jar::1 scope=compile optional=null
+artifact test.xml:utf16:jar:1
+dep test.lib:a:jar::1 scope=compile optional=null
+artifact test.xml:text-in-container:jar:1
+warning invalid test.xml:text-in-container:jar:1: 1 problem was encountered while building the effective model [FATAL] Non-parseable POM <local>/test/xml/text-in-container/1/text-in-container-1.pom: expected START_TAG or END_TAG not TEXT (position: TEXT seen ...<dependencies>junk      <d... @7:29)  @ line 7, column 29
+artifact test.xml:child-in-leaf:jar:1
+warning invalid test.xml:child-in-leaf:jar:1: 1 problem was encountered while building the effective model [FATAL] Non-parseable POM <local>/test/xml/child-in-leaf/1/child-in-leaf-1.pom: parser must be on START_TAG or TEXT to read text (position: START_TAG seen ...</artifactId><version><x/>... @8:85)  @ line 8, column 85
+artifact test.xml:child-in-property:jar:1
+warning invalid test.xml:child-in-property:jar:1: 1 problem was encountered while building the effective model [FATAL] Non-parseable POM <local>/test/xml/child-in-property/1/child-in-property-1.pom: parser must be on START_TAG or TEXT to read text (position: START_TAG seen ...<properties>\n    <p><x/>... @8:12)  @ line 8, column 12
+artifact test.xml:attributes:jar:1
+dep test.lib:a:jar::1 scope=compile optional=null
+artifact test.xml:empty-version:jar:1
+warning invalid test.xml:empty-version:jar:1: 1 problem was encountered while building the effective model for test.xml:empty-version:1 [ERROR] 'dependencies.dependency.version' for test.lib:a:jar is missing. @
+artifact test.xml:bare-amp:jar:1
+warning invalid test.xml:bare-amp:jar:1: 1 problem was encountered while building the effective model [FATAL] Non-parseable POM <local>/test/xml/bare-amp/1/bare-amp-1.pom: entity reference names can not start with character ' ' (position: START_TAG seen ...<description>a & ... @7:20)  @ line 7, column 20
+artifact test.xml:pi-inside:jar:1
+dep test.lib:a:jar::1.0 scope=compile optional=null
+artifact test.xml:dup-property:jar:1
+dep test.lib:a:jar::2 scope=compile optional=null
+artifact test.xml:dup-dependencies:jar:1
+warning invalid test.xml:dup-dependencies:jar:1: 1 problem was encountered while building the effective model [FATAL] Non-parseable POM <local>/test/xml/dup-dependencies/1/dup-dependencies-1.pom: Duplicated tag: 'dependencies' (position: START_TAG seen ...</dependencies>\n  <dependencies>... @10:17)  @ line 10, column 17
+artifact test.xml:comment-in-container:jar:1
+dep test.lib:a:jar::1 scope=compile optional=null
+artifact test.xml:cdata-container:jar:1
+dep test.lib:a:jar::1 scope=compile optional=null
+artifact test.xml:entity-ws-container:jar:1
+dep test.lib:a:jar::1 scope=compile optional=null
+artifact test.xml:prop-entities:jar:1
+dep test.lib:a:jar::<1> scope=compile optional=null
+artifact test.xml:upper-entity:jar:1
+dep test.lib:a:jar::1 scope=compile optional=null
+artifact test.xml:mismatched:jar:1
+warning invalid test.xml:mismatched:jar:1: 1 problem was encountered while building the effective model [FATAL] Non-parseable POM <local>/test/xml/mismatched/1/mismatched-1.pom: end tag name </scopex> must match start tag name <scope> from line 8 (position: TEXT seen ...<scope>test</scopex>... @8:112)  @ line 8, column 112
+artifact test.xml:nested-unknown:jar:1
+dep test.lib:a:jar::1 scope=compile optional=null
+artifact test.xml:prefixed:jar:1

@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <modelVersion>4.0.0</modelVersion>
+  <parent><groupId>test.profiles</groupId><artifactId>inherit-parent</artifactId><version>1</version></parent>
+  <groupId>test.profiles</groupId>
+  <artifactId>inherit-child</artifactId>
+  <version>1</version>
+  <dependencies>
+      <dependency><groupId>test.lib</groupId><artifactId>child-own</artifactId><version>${v}</version></dependency>
+  </dependencies>
+  <profiles>
+    <profile><id>c</id><activation><activeByDefault>true</activeByDefault></activation>
+  <dependencies>
+      <dependency><groupId>test.lib</groupId><artifactId>child-default</artifactId><version>1</version></dependency>
+  </dependencies>
+    </profile>
+  </profiles>
+</project>

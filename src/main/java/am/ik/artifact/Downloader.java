@@ -13,7 +13,9 @@ public interface Downloader {
 	 * Returns the bytes at {@code url}.
 	 * @param url the URL to fetch
 	 * @return the response body bytes
-	 * @throws IOException if the fetch fails
+	 * @throws HttpStatusException if the server answers a status other than {@code 200}
+	 * ({@code 404}: nothing there)
+	 * @throws IOException if the fetch fails otherwise
 	 */
 	byte[] get(String url) throws IOException;
 

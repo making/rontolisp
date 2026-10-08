@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>test.pkg</groupId>
+  <artifactId>bom</artifactId>
+  <version>1</version>
+  <packaging>pom</packaging>
+  <profiles>
+    <profile><id>jar</id><activation><property><name>packaging</name><value>jar</value></property></activation>
+  <dependencyManagement>
+    <dependencies>
+      <dependency><groupId>test.lib</groupId><artifactId>pkg-jar</artifactId><version>1</version></dependency>
+    </dependencies>
+  </dependencyManagement>
+    </profile>
+    <profile><id>pom</id><activation><property><name>packaging</name><value>pom</value></property></activation>
+  <dependencyManagement>
+    <dependencies>
+      <dependency><groupId>test.lib</groupId><artifactId>pkg-pom</artifactId><version>1</version></dependency>
+    </dependencies>
+  </dependencyManagement>
+    </profile>
+  </profiles>
+</project>

@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>test.graph2</groupId>
+  <artifactId>types</artifactId>
+  <version>1</version>
+  <dependencies>
+      <dependency><groupId>test.graph2</groupId><artifactId>tj</artifactId><version>1</version><type>test-jar</type></dependency>
+      <dependency><groupId>test.graph2</groupId><artifactId>ear-thing</artifactId><version>1</version><type>ear</type></dependency>
+      <dependency><groupId>test.graph2</groupId><artifactId>pom-agg</artifactId><version>1</version><type>pom</type></dependency>
+  </dependencies>
+</project>

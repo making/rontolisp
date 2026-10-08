@@ -78,6 +78,8 @@ class PackageCycleTest {
 		assertThat(graph.getOrDefault("am.ik.objc", Set.of())).isEmpty();
 		assertThat(graph.getOrDefault("am.ik.ffi", Set.of())).isEmpty();
 		assertThat(graph.getOrDefault("am.ik.artifact", Set.of())).isEmpty();
+		// The Maven resolver sits on the artifact layer and on nothing else of ours.
+		assertThat(graph.getOrDefault("am.ik.maven", Set.of())).containsOnly("am.ik.artifact");
 		assertThat(graph.getOrDefault("am.ik.rontolisp.reader", Set.of())).doesNotContain("am.ik.rontolisp.eval");
 		// The Scheme front end produces core forms and nothing else: it sees the AST
 		// types and the reader, and is reached only through eval's source-language seam.

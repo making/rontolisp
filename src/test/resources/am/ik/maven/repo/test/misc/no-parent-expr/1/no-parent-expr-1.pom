@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>test.misc</groupId>
+  <artifactId>no-parent-expr</artifactId>
+  <version>1</version>
+  <dependencies>
+      <dependency><groupId>test.lib</groupId><artifactId>a</artifactId><version>${project.parent.version}</version></dependency>
+      <dependency><groupId>test.lib</groupId><artifactId>b</artifactId><version>${parent.version}</version></dependency>
+      <dependency><groupId>test.lib</groupId><artifactId>c</artifactId><version>${project.parent.groupId}</version></dependency>
+  </dependencies>
+</project>
