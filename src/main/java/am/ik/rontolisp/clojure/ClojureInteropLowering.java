@@ -642,6 +642,13 @@ final class ClojureInteropLowering {
 			return ClojureLowerUtil.list(ClojureLowerUtil.sym("%host-exit"),
 					ClojureLowerUtil.list(ClojureLowerUtil.sym("logand"), args.get(0), new LispInteger(255)));
 		}
+		if (cls.equals("clojure.lang.AFn") && member.equals("applyToHelper") && args.size() == 2) {
+			// the applyTo an IFn body delegates to: the function called on the members of
+			// the argument seq by their count, like the oracle's, on every backend
+			// (clojure.lang is no host class here)
+			return ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-CALL"), args.get(0),
+					ClojureSeqLowering.seqAllForm(ctx, args.get(1)));
+		}
 		List<LispVal> call = new ArrayList<>();
 		call.add(LispString.literal(cls));
 		call.add(LispString.literal(designator));

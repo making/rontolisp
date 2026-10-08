@@ -85,8 +85,8 @@ final class ClojureUpdateLowering {
 		LispSymbol one = ctx.freshTemp();
 		LispSymbol at = ctx.freshTemp();
 		LispSymbol fn = ctx.freshTemp();
-		LispVal args = ClojureLowerUtil.list(ClojureLowerUtil.sym("cons"),
-				ClojureCollectionLowering.getForm(ctx, one, at, ClojureLowering.NIL_CONST), tail);
+		LispVal args = ClojureLowerUtil.list(ClojureLowerUtil.sym("cons"), ClojureCollectionLowering.getForm(ctx, one,
+				at, ClojureLowering.NIL_CONST, ClojureCollectionLowering.supplied(false)), tail);
 		LispVal next = real ? ClojureLowerUtil.list(ClojureLowerUtil.sym("apply"), fn, args)
 				: ctx.callableApply(fn, args);
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let*"),
@@ -259,7 +259,8 @@ final class ClojureUpdateLowering {
 		LispVal dflt = n == 3 ? ctx.lower(items.get(3)) : ClojureLowering.NIL_CONST;
 		LispVal acc = ctx.lower(items.get(1));
 		for (LispVal keyDatum : keyData) {
-			acc = ClojureCollectionLowering.getForm(ctx, acc, ctx.lower(keyDatum), dflt);
+			acc = ClojureCollectionLowering.getForm(ctx, acc, ctx.lower(keyDatum), dflt,
+					ClojureCollectionLowering.supplied(n == 3));
 		}
 		return acc;
 	}
@@ -278,7 +279,7 @@ final class ClojureUpdateLowering {
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), left), whole,
 				ClojureLowerUtil.list(self, ClojureLowerUtil.list(ClojureLowerUtil.sym("cdr"), left),
 						ClojureCollectionLowering.getForm(ctx, whole,
-								ClojureLowerUtil.list(ClojureLowerUtil.sym("car"), left), dflt)));
+								ClojureLowerUtil.list(ClojureLowerUtil.sym("car"), left), dflt, rest)));
 		LispVal binding = new LispCons(self,
 				new LispCons(ClojureLowerUtil.list(List.of(left, whole)), ClojureLowerUtil.cons(go, List.of())));
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"),

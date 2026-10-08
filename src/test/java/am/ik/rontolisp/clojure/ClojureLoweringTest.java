@@ -664,8 +664,12 @@ class ClojureLoweringTest {
 	@Test
 	void nthIndexesTheSeqViewWithAnOptionalDefault() {
 		// one spliced stepper: a vector indexes directly, a seq steps one realized level
-		// at a time, so an infinite input answers
-		assertThat(lowered("(nth '(1 2 3) 1)")).isEqualTo(FALSE_BINDING + "(RONTOLISP::%CLOJURE-NTH '(1 2 3) 1 NIL)");
+		// at a time, so an infinite input answers; nth of two arguments is its own entry,
+		// for a type implementing Indexed, which a program storing no such row calls as
+		// the stepper (the indexed family's alias)
+		assertThat(lowered("(nth '(1 2 3) 1)")).isEqualTo(FALSE_BINDING + "(RONTOLISP::%CLOJURE-NTH-2 '(1 2 3) 1 NIL)");
+		List<LispVal> spliced = am.ik.rontolisp.eval.ClojureLibrary.process(Clojure.read("(nth '(1 2 3) 1)", null));
+		assertThat(spliced.get(spliced.size() - 1).print()).isEqualTo("(RONTOLISP::%CLOJURE-NTH '(1 2 3) 1 NIL)");
 		assertThat(lowered("(nth [10 20] 5 :nf)")).contains("(RONTOLISP::%CLOJURE-NTH (VECTOR 10 20) 5")
 			.contains(":C%KEYWORD");
 		assertThat(lowered("nth")).contains("(LAMBDA").contains("(RONTOLISP::%CLOJURE-NTH");
@@ -1082,6 +1086,60 @@ class ClojureLoweringTest {
 				+ " (extend-protocol p/CollReduce String (coll-reduce ([s f] 1) ([s f i] 2)))"
 				+ " (defprotocol Q (m [x])) (reify Q (m [_] 1))");
 		assertThat(core).doesNotContain("%CLOJURE-COLL-REDUCER-ROW").doesNotContain("%CLOJURE-KV-REDUCER-ROW");
+	}
+
+	@Test
+	void aBodyImplementingAnInterfaceStoresItsRowThroughTheFamilyOfEach() {
+		// one store per family under the type's tag: the interfaces it implements
+		// (supers included) and a lambda per method, the body's or the oracle's
+		// AbstractMethodError for one it leaves out
+		String reify = lowered("(def r (reify clojure.lang.Counted (count [_] 3)))");
+		assertThat(reify).contains("(RONTOLISP::%CLOJURE-COUNTED-ROW (CADR ")
+			.contains("'(\"clojure.lang.Counted\") (LIST \"count\" (LAMBDA (");
+		String indexed = lowered("(deftype T [n] clojure.lang.Indexed (nth [_ i] i))");
+		assertThat(indexed).contains(
+				"(RONTOLISP::%CLOJURE-INDEXED-ROW (LIST :C%KEYWORD \"T\") '(\"clojure.lang.Indexed\") (LIST \"nth\"")
+			.contains(
+					"(RONTOLISP::%CLOJURE-COUNTED-ROW (LIST :C%KEYWORD \"T\") '(\"clojure.lang.Counted\") (LIST \"count\"")
+			.contains("(RONTOLISP::%CLOJURE-ABSTRACT-METHOD-ERROR \"does not define or inherit an implementation of"
+					+ " the resolved method count of interface clojure.lang.Counted\")")
+			.contains("(RONTOLISP::%CLOJURE-ABSTRACT-METHOD-ERROR \"does not define or inherit an implementation of"
+					+ " the resolved method nth of interface clojure.lang.Indexed\")");
+		// an Object override needs no group of its own, and a reify's names its class
+		String object = lowered("(defprotocol P (m [x])) (reify P (m [_] 1) (toString [_] \"r\"))");
+		assertThat(object).contains("(RONTOLISP::%CLOJURE-OBJECT-ROW (CADR ")
+			.contains(" NIL (LIST \"toString\" (LAMBDA (")
+			.contains("\"class\" \"user$reify\")");
+		// a protocol-only body stores no interface row
+		assertThat(lowered("(defprotocol P (m [x])) (reify P (m [_] 1)) (deftype U [] P (m [_] 2))"))
+			.doesNotContain("-ROW (");
+		// a group symbol resolves like the oracle's class names
+		assertThat(lowered("(ns u (:import (clojure.lang IFn))) (reify IFn (invoke [_] 1))"))
+			.contains("%CLOJURE-INVOKABLE-ROW");
+		for (String[] refused : new String[][] {
+				{ "(reify IFn (invoke [_] 1))", "Unable to resolve symbol: IFn in this context" },
+				{ "(reify clojure.lang.ISeq (first [_] 1))",
+						"clojure.lang.ISeq is not supported yet as an interface of reify" },
+				{ "(reify clojure.lang.Foo)", "Unable to resolve classname: clojure.lang.Foo" },
+				{ "(reify java.lang.String)", "only interfaces are supported, had: java.lang.String" },
+				{ "(reify java.util.Iterator)", "java.util.Iterator is not supported yet as an interface of reify" },
+				{ "(reify clojure.lang.Counted (cnt [_] 1))", "Can't define method not in interfaces: cnt" },
+				{ "(reify clojure.lang.Counted (count [_ x] 1))", "Can't define method not in interfaces: count" },
+				{ "(reify clojure.lang.Counted (count [_] 1) (count [_] 2))",
+						"duplicate method implementation: count" },
+				{ "(reify clojure.lang.IFn (invoke [_ & xs] xs))",
+						"an interface method takes fixed parameters: invoke" },
+				{ "(reify (toString [_] \"x\"))", "reify methods group under a protocol or interface name" },
+				{ "(reify clojure.lang.IObj)", "Duplicate interface name \"clojure/lang/IObj\" in reify" },
+				{ "(reify clojure.lang.IMeta (meta [_] {}))", "Duplicate method name \"meta\" in reify" },
+				{ "(defrecord R [a] clojure.lang.ILookup)", "Duplicate interface name \"clojure/lang/ILookup\"" },
+				{ "(defrecord R [a] clojure.lang.Counted (count [_] 1))",
+						"Duplicate method name \"count\" in defrecord" },
+				{ "(defrecord R [a] Object (equals [_ o] true))", "Duplicate method name \"equals\" in defrecord" } }) {
+			assertThatThrownBy(() -> Clojure.read(refused[0], null)).as(refused[0])
+				.isInstanceOf(LispReadException.class)
+				.hasMessageContaining(refused[1]);
+		}
 	}
 
 	@Test

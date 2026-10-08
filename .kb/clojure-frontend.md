@@ -54,7 +54,7 @@ The oracle is `clj` 1.12.6.1673: a behavior is decided by running it there, and 
 | `[..]` | a CL vector (a `vector` call) | a string is a CL vector too, so `vector?`/`coll?` exclude strings |
 | list, seq | a CL list | lazy seq: `(:C%LAZY cell)`, memoized through `rplaca`/`rplacd` ("Laziness") |
 | atom, volatile, ref, agent | `(:C%ATOM #(value))`; a volatile's cell `#(value :C%VOLATILE)` | one cell shape, so STM verbs accept atoms; the second slot is only what `volatile?` reads |
-| record / deftype / reify | `(:C%RECORD tag fields table class)` / `(:C%TYPE tag fields table class slots?)` / a fresh `:C%REIFY` tag | "Dispatch" |
+| record / deftype / reify | `(:C%RECORD tag fields table class)` / `(:C%TYPE tag fields table class slots?)` / a fresh `:C%REIFY` tag | "Dispatch"; the interfaces a body implements are rows under the tag ("Host interfaces") |
 | `#"re"` | `(:C%PATTERN stamp source ops ngroups)` | the stamp is a gensym, so `=` is identity like the oracle |
 | `reduced`, var, nil dispatch value | `(:C%REDUCED x)`, `(:C%VAR "ns/name" getter)`, `(:C%NIL)` | |
 | `ex-info` | a condition with message and data slots | |
@@ -129,7 +129,7 @@ answered `2 5 3` before).
 | `with-meta` `meta` `vary-meta`, reader `^` | "Vars and metadata" | |
 | `var` / `#'` | `(rontolisp::%clojure-var "ns/x" (lambda () ROOT) META)` | "Vars and metadata" |
 | `defmacro` `macroexpand(-1)` `gensym`, `` ` `` `~` `~@` | "Macros" | |
-| `defmulti` `defmethod` hierarchies `defprotocol` `defrecord` `deftype` `reify` `extend*` `satisfies?` `instance?` `class` | "Dispatch" | |
+| `defmulti` `defmethod` hierarchies `defprotocol` `defrecord` `deftype` `reify` `extend*` `satisfies?` `instance?` `class` | "Dispatch" | a body's `clojure.lang` interfaces and `Object` overrides: "Host interfaces" |
 | `ns` `require` `use` `import` `in-ns` | alias and refer wiring; a project namespace's file loaded at the `require` | "Namespaces and project files" |
 | `clojure.string` (`join` `split` `split-lines` `upper-case` `lower-case` `capitalize` `trim` `triml` `trimr` `trim-newline` `blank?` `starts-with?` `ends-with?` `includes?` `index-of` `last-index-of` `replace` `replace-first` `escape` `re-quote-replacement` `reverse`) | core string operations | reached as `alias/var`, `clojure.string/var` or a referred var. `split`/`replace` take a pattern (through the regex runtime) or a literal string/char (a plain string never compiles to a pattern). Empty literal-`split` input is `nil` (a pattern answers one empty part); a positive `split` limit caps, a negative keeps every part, else trailing empties drop. `index-of`'s start (and `.indexOf`'s) is clamped into `[0, length]` before CL's `search`, which refuses a start outside the string, so it reads like Java's: past the end nothing is found (an empty match is the length), a negative one is 0 (`ClojureStringLowering.searchFrom`) |
 | `clojure.set` (`union` `intersection` `difference` `select` `project` `rename-keys` `rename` `index` `map-invert` `join` `subset?` `superset?`: every public var) | `ClojureSetLowering`: one call to the spliced `rontolisp::%clojure-set-NAME` worker (`?` spelled `-p`, the variadic three over one list of their sets, `join` with a key map `-join-km`) after a lower-time arity check in the oracle's wording (`... passed to: clojure.set/NAME`); as a value `#'...-v` | the oracle's own algorithms, so an answer's kind follows the same input: `union` grows its largest input (bubble order and all; a vector or list there answers one, a map signals), `intersection` shrinks its smallest, `difference`/`select` the first; nil stays nil, an unchanged input is answered itself, a set changes in a fresh copy. Membership goes through the structural-key runtime; `contains?` on a vector is by index, like the oracle's. Relation members may be records: `join`'s merge keeps the first's record, `rename-keys` keeps it unless a declared field is renamed away. Answers carry no metadata. Corpus witness: shcloj4 `examples.test.sequences` `test-sets`/`test-joins` (`ClojureProjectNamespacesTest`); the whole namespace stays red on `examples.utils` (the `?.` macro), `clojure.xml` and `file-seq` (measured 2026-10-03: the load stops at `utils.clj:37:1`) |
@@ -200,7 +200,8 @@ Each is a real work item unless the reason says otherwise.
   other host object `#<java C>` (the oracle's `#object[C 0x.. "..."]` carries a hash; a
   host `List`/`Map`/`Set` prints readably as its Clojure kind, "Java interop") --
   while a deftype, reify and `reduced` print their
-  wrapper lists; `str` of a lazy seq or record spells the contents where the oracle answers
+  wrapper lists (a type overriding `toString` the oracle's `#object` without the hash, "Host
+  interfaces"); `str` of a lazy seq or record spells the contents where the oracle answers
   `Class@hash`; `*print-meta*` prints no reader `:line`/`:column` (no value carries
   them), `*print-dup*` is a plain value, `print-method` and `pprint` are absent;
   `~S`/`~A` on Clojure values stay CL notation (`format` is a CL surface). Cycles print with
@@ -1611,7 +1612,8 @@ end** (`src/main/resources/am/ik/rontolisp/clojure/lib/clojure/**`, the
   -> 108,674 B.
 - **`reduce` consults `CollReduce` and `reduce-kv` `IKVReduce` for a record, deftype or
   reify whose type has its own row** (body or extension), like the oracle's protocol
-  dispatch; every other value takes the verb's own walk, which answers what the oracle's
+  dispatch, behind a body's `clojure.lang.IReduceInit`/`IReduce`/`IKVReduce`, which the
+  oracle asks first ("Host interfaces"); every other value takes the verb's own walk, which answers what the oracle's
   rows for the core collections answer. An extension to nil, `Object` or a core kind is
   reached only through `coll-reduce`/`kv-reduce` (deviation: the oracle's `reduce` also
   takes one for a collection that is no `IReduceInit` -- a string, a map, a lazy seq -- and
@@ -1972,7 +1974,8 @@ constructor and consumer, and a regex `replace` with a function replacement.
   (the oracle never evaluates it); the class must match a defined record; a deftype
   literal is refused; an undotted `#P{}` is `No reader function for tag P` (`#inst`/`#uuid`
   stay `unsupported reader form`).
-- `reify`: a fresh tag per evaluation with a row per method; `=` is identity.
+- `reify`: a fresh tag per evaluation with a row per method; `=` is identity (unless the body
+  overrides `equals`, "Host interfaces").
 - `instance?` (oracle-checked clj 1.12.6, 2026-10-04; it has no value): a record/deftype name
   tests the tag, `Object` non-nil, a throwable class its chain ("Catching"). Any other class
   is a disjunction over the bound value (`ClojureDispatchLowering.instanceOf`): one test per
@@ -2140,6 +2143,97 @@ constructor and consumer, and a regex `replace` with a function replacement.
   `ClojureInteropTest#aHostClassObjectWalksJavaInheritanceInAHierarchy`,
   `ClojureSessionTest#aSessionWalksAHostClassObjectOnceABufferNamesTheHost`,
   `ClojureLoweringTest#theClassWalkTakesTheDescendantsRefusalAndTheHostOnlyWhereTheProgramNeedsThem`.
+
+## Host interfaces
+
+**A `reify`, `deftype` or `defrecord` body implements the `clojure.lang` interfaces whose
+methods a core verb reads, each group behind an arm family that only the store of its row
+makes, so a program naming none compiles as before** (`ClojureInterfaces`; every verb below
+measured on clj 1.12.6, 2026-10-08).
+- Which (measured 2026-10-08 over 85 libraries -- the eight `e43` probes, instaparse,
+  data.priority-map, next.jdbc and 74 widely used jars -- counting the libraries whose bodies
+  name each): `Object` 21, `IFn` 14, `ILookup` 13, `IObj` 12, `IDeref` 11, `Counted` 11,
+  `Seqable` 10, `Indexed` 10, then the collection interfaces (`IPersistentCollection`,
+  `IHashEq`, `Associative` 9 each ...: e78) and `IReduceInit` 5 (next.jdbc's `plan`,
+  `clojure.core/iteration`: e79). Supported: `IReduceInit`, `IReduce`, `IKVReduce`, `Seqable`,
+  `Counted`, `Indexed`, `ILookup`, `IFn` with its supers `Callable` and `Runnable`, `IDeref`,
+  `IMeta`, `IObj`, and `Object`'s `toString`/`equals`/`hashCode`. Any other interface of the
+  jar (`CLOJURE_LANG`, its public list) or loadable host interface is refused by name
+  (`X is not supported yet as an interface of reify`), a class the oracle's `only interfaces
+  are supported, had: C`, an undotted unknown name its `Unable to resolve symbol` (`clojure.lang`
+  is no default import), a dotted one `Unable to resolve classname`.
+- Parse (`ClojureProtocolLowering.typeBody`): the group heads first, then each method matched
+  by name and count against its group's protocol, the interfaces with their supers
+  (`ClojureInterfaces.closure`: `Indexed` a `Counted`, `IObj` an `IMeta`, `IReduce` an
+  `IReduceInit`) and `Object`'s three, then the body's other protocols -- the oracle's class
+  matches across every interface, so a `toString` under a protocol group overrides `Object`'s
+  (before: `Can't define method not in interfaces`). An interface method takes fixed
+  parameters (the oracle reads `&` as a parameter's name; refused here) and each count once.
+  What the form's class implements itself stores no row and refuses a method of it in the
+  oracle's `Duplicate method name`: a record's `Counted`, `Seqable`, `ILookup`, `IMeta`,
+  `IObj` (naming `ILookup` or `IObj` is its `Duplicate interface name`) and its
+  `equals`/`hashCode`, a reify's `IMeta`/`IObj`. `extend-type` keeps protocols only
+  (`implGroups`).
+- Rows (`ClojureInterfaces.rowForms`): one store per family under the type's tag,
+  `(%clojure-<family>-row tag '("clojure.lang.X" ...) (list "method" lambda ...))`, into the
+  library's `%clojure-interface-rows` (tag -> an `equal` table: interface name -> T, method name
+  -> lambda; `%clojure-interface-entry` reads it). A method an interface declares at several
+  counts (`valAt`, `nth`, `invoke`, `reduce`) is one lambda dispatching on the call's count, the
+  fallback the oracle's `AbstractMethodError` (a refusal carrier added for it); a declared method
+  the body leaves out stores a lambda refusing the same way. A deftype's or record's methods see
+  its fields like inline protocol methods (`inFieldScope`) and share their `recur` rule (e70). A
+  reify's `Object` row names its printed class, `<ns>$reify`.
+- Families (`ClojureArms.Family`):
+  - REDUCE_INTERFACE (`IReduceInit`, `IReduce`, `IKVReduce`): its store makes REDUCIBLE too,
+    whose `%clojure-coll-reducible-p`, `-coll-reduce-2/3`, `-kv-reducible-p` and `-kv-reduce-3`
+    hold its arms. `reduce` with an init takes `IReduceInit` ahead of a `CollReduce` row; without
+    one `IReduce`, else the `CollReduce` row, else the oracle's `ClassCastException`;
+    `kv-reduce` takes a type's `IKVReduce` protocol row ahead of the interface. Its view
+    `%clojure-reduce-init-items` is what `vec` and `set` walk.
+  - SEQABLE: `%clojure-strict-seq`'s clause (an answer that is no seq is the oracle's
+    `ClassCastException`), `seqable?`, and the alias `%clojure-lazy-input-p` -> `%clojure-lazy-p`
+    at the lazy-or-strict verbs' choice, so `map`, `filter`, `for`, `concat` ... over an endless
+    Seqable stay lazy. Their lazy arms step the input through `%clojure-seq` alone and never
+    hold it as a seq's tail, which is why `%clojure-cons` and `%clojure-sequence` keep
+    `%clojure-lazy-p`: a typed value as a cdr would be walked as list structure.
+  - COUNTED: `countForm`'s and `emptyForm`'s clauses (the oracle's `empty?` asks `counted?`
+    first), `counted?`.
+  - INDEXED: `%clojure-nth`'s clause at three arguments (destructuring's too, the oracle's
+    `(nth v i nil)`), the alias `%clojure-nth-2` -> `%clojure-nth` for `nth` of two, the alias
+    `%clojure-is-indexed` -> `%clojure-is-vector` for `indexed?` (an instance call's vector arms
+    keep `%clojure-is-vector`).
+  - LOOKUP: `getBranches`' clause, whose new `supplied` argument (a constant, or a form over a
+    value's arguments) picks `valAt` at two or three like the oracle's `get`; the dispatcher's
+    keyword and symbol clauses (the count they have) and `%clojure-call-keyword` (a non-nil
+    default as given).
+  - INVOKABLE: `%clojure-call`'s clause (so every function argument reaches it through
+    `%clojure-as-fn`), `ifn?`, and the view `%clojure-applied-fn` around `apply`'s function,
+    which calls `applyTo`. `clojure.lang.AFn/applyToHelper` (the usual `applyTo` body) lowers
+    to the dispatcher over the argument seq, and `.applyTo` of any IFn value to `apply`.
+  - DEREFABLE: `%clojure-deref-other`. META_INTERFACE: `%clojure-meta`, `%clojure-with-meta`.
+  - OBJECT_METHODS: `%clojure-str-of`, `%clojure-write` (`#object[class "text"]`, after the
+    record clause, so a record still prints its literal), `%clojure-equal` ahead of the
+    identity clause (the value itself is equal, a collection on the right is not -- the
+    oracle asks the collection --, else `equals` by truth).
+  `instance?` of a supported interface adds its test (never over a literal or quoted value,
+  which no typed value is, so no binding changes), and an instance call of a declared method a
+  clause calling the row's method (`ClojureInterfaces.instanceTest`; an `if` around the refusal
+  where no row maps the method).
+- Deviations (user doc): the `#object` has no identity hash and a reify's class no number;
+  `equals`/`hashCode` key no map or set (the tables hold such a value by identity); `sort` and
+  `distinct` take a type implementing `Seqable` alone, where the oracle's `to-array` and
+  destructuring `nth` refuse it.
+- Pins: clojure-spec `a-type-implementing-ireduceinit-ireduce-or-ikvreduce-reduces-through-it`,
+  `a-seqable-type-seqs-through-its-seq`,
+  `a-counted-or-indexed-type-counts-and-indexes-through-its-methods`,
+  `an-ilookup-type-reads-through-the-valat-of-the-calls-count`,
+  `an-ifn-type-is-called-through-its-invoke-and-applied-through-its-apply-to`,
+  `an-ideref-type-derefs-through-its-deref`,
+  `a-type-overriding-object-answers-str-and-equals-through-it`,
+  `a-deftype-implementing-iobj-carries-its-own-metadata` (all four backends, the oracle's but
+  the `#object` line); `ClojureLoweringTest#aBodyImplementingAnInterfaceStoresItsRowThroughTheFamilyOfEach`
+  (the stores and every refusal), `ClojureArmsTest#anInterfaceFamilyIsMadeByTheStoreOfARowOfItsInterfaces`,
+  `ClojureLibraryTest#aProgramStoringNoInterfaceRowSplicesTheVerbsWithoutTheirInterfaceArms`.
 
 ## Java interop
 
@@ -3193,7 +3287,8 @@ in-scope program needs `valid?`/`conform` (then `explain-data` stays refused).
   `ClojureInteropTest#readTakesBackWhatSpitWrote`, `ClojureWasmFileIoTest`.
 - Interop and host IO: `ClojureInteropTest` (interpreter and JVM),
   `ClojureWasmInteropRefusalTest`, `ClojureWasmFileIoTest`, `ClojureWasmFileRefusalTest`.
-- `ClojureArmsTest` (the sorted-collection, unbound-root, matcher, reducible and refusal strips).
+- `ClojureArmsTest` (the sorted-collection, unbound-root, matcher, reducible, interface and
+  refusal strips).
 - `ClojureRingAdapterTest`, `ClojureRingUtilTest` (the Ring namespaces),
   `ClojureHttpClientTest`, `ClojureHttpClientHostFetchE2eTest` and
   `FetchSpecE2eTest#clojureHttpClient` (the HTTP client),

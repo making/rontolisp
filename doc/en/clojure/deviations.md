@@ -177,7 +177,9 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
 - A record prints as its literal (`#user.R{:a 7}`, like the oracle), but `str` of one
   spells that literal too, where the oracle answers `user.R@<hash>`. A deftype prints
   as its wrapper list (`(:C%TYPE ...)`), a reify as `(:C%REIFY ...)`; only the entry
-  maps print deterministically.
+  maps print deterministically. One whose body overrides `toString` prints as the oracle's
+  `#object[user.T "text"]` without the identity hash, a reify's class spelled
+  `user$reify` without the oracle's number.
 - A deftype's `^:volatile-mutable` field is the same plain slot as an
   `^:unsynchronized-mutable` one (no cross-thread ordering).
 - `split`/`replace` answer seqs, never vectors, and plain strings stay literal (only
@@ -261,6 +263,14 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   a collection that does not reduce itself (a string, a map). A call of a protocol method
   with a count an inline body leaves out signals an `ArityException` (the oracle: an
   `AbstractMethodError`).
+- A `reify`, `deftype` or `defrecord` body implements the `clojure.lang` interfaces the core
+  functions consult -- `IReduceInit`, `IReduce`, `IKVReduce`, `Seqable`, `Counted`,
+  `Indexed`, `ILookup`, `IFn` (with `Callable` and `Runnable`), `IDeref`, `IMeta`, `IObj` --
+  and overrides `Object`'s methods ([reify](reference/reify.md#host-interfaces)); any other
+  interface (`ISeq`, `IPersistentMap`, `Sequential`, `java.util.List` ...) is refused by
+  name. A type's `equals` and `hashCode` answer `=` and `.hashCode` but never key a map or
+  a set, which hold such a value by identity. `sort` and `distinct` take a type
+  implementing `Seqable` alone through its seq, where the oracle refuses both.
 - `clojure.core.reducers` folds on the calling thread, its parts one after the other, and
   `cat` of two non-empty collections answers one accumulator (a vector) holding both, where
   the oracle answers a `Cat` tree whose fold combines its halves' folds.

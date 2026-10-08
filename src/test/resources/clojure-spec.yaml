@@ -8850,3 +8850,169 @@ cases:
     expected: |
       [1 2 3] [:i 1 2 3 4 5]
       [2 3 4] 6 4 (2 3 4)
+  - name: a-type-implementing-ireduceinit-ireduce-or-ikvreduce-reduces-through-it
+    # clojure.lang.IReduceInit, IReduce and IKVReduce in a reify or deftype body
+    # (.kb/clojure-frontend.md "Host interfaces"): reduce with an init, into, transduce,
+    # mapv, filterv, vec, set, frequencies, group-by and run! hand the value to its reduce,
+    # the init-less reduce to IReduce's (an IReduceInit alone is the oracle's
+    # ClassCastException), reduce-kv and update-vals to its kvreduce; seq and count stay
+    # refused. Every line is the oracle's (clj 1.12.6), on all four backends.
+    source: |
+      (ns iface-reduce)
+      (def four (reify clojure.lang.IReduceInit
+                  (reduce [_ f init]
+                    (loop [acc init i 0]
+                      (if (< i 4)
+                        (let [r (f acc i)] (if (reduced? r) @r (recur r (inc i))))
+                        acc)))))
+      (prn (reduce + 100 four) (reduce (fn [a x] (if (= x 2) (reduced a) (+ a x))) 0 four) (into [] four) (into [] (map inc) four) (transduce (map inc) + four))
+      (prn (mapv inc four) (filterv even? four) (vec four) (sort (set four)) (sort (frequencies four)) (get (group-by odd? four) true))
+      (run! print four)
+      (println)
+      (prn (try (reduce + four) (catch ClassCastException e :no-ireduce)) (try (seq four) (catch IllegalArgumentException e :no-seq)) (try (count four) (catch UnsupportedOperationException e :no-count)))
+      (prn (instance? clojure.lang.IReduceInit four) (instance? clojure.lang.IReduce four) (.reduce four + 1))
+      (deftype Tens [n]
+        clojure.lang.IReduce
+        (reduce [_ f] (reduce f (range 10 (* 10 (inc n)) 10)))
+        (reduce [_ f init] (reduce f init (range 10 (* 10 (inc n)) 10))))
+      (prn (reduce + (Tens. 3)) (reduce + 1 (Tens. 3)) (into [] (Tens. 2)) (instance? clojure.lang.IReduceInit (Tens. 1)))
+      (deftype Pairs [] clojure.lang.IKVReduce (kvreduce [_ f init] (f (f init :a 1) :b 2)))
+      (prn (reduce-kv (fn [acc k v] (conj acc [k v])) [] (Pairs.)) (sort (update-vals (Pairs.) inc)))
+      (in-ns 'user)
+    expected: |
+      106 1 [0 1 2 3] [1 2 3 4] 10
+      [1 2 3 4] [0 2] [0 1 2 3] (0 1 2 3) ([0 1] [1 1] [2 1] [3 1]) [1 3]
+      0123
+      :no-ireduce :no-seq :no-count
+      true false 7
+      60 61 [10 20] true
+      [[:a 1] [:b 2]] ([:a 2] [:b 3])
+  - name: a-seqable-type-seqs-through-its-seq
+    # clojure.lang.Seqable (.kb/clojure-frontend.md "Host interfaces"): the seq view --
+    # seq, first, rest, map, filter, into, reduce, apply, for, last -- reads the value's
+    # seq, lazily where the oracle's verbs are lazy, so an endless one answers take;
+    # count and nth stay refused, and a seq answering no seq is the oracle's
+    # ClassCastException. Every line is the oracle's (clj 1.12.6), on all four backends.
+    source: |
+      (ns iface-seqable)
+      (def abc (reify clojure.lang.Seqable (seq [_] (list :a :b :c))))
+      (prn (seq abc) (first abc) (rest abc) (next abc) (second abc) (map name abc) (filter #{:a :c} abc) (into [] abc))
+      (prn (reduce conj [] abc) (apply str (map name abc)) (empty? abc) (empty? (reify clojure.lang.Seqable (seq [_] nil))) (seqable? abc) (coll? abc) (sequential? abc))
+      (prn (take 3 (map inc (reify clojure.lang.Seqable (seq [_] (iterate inc 0))))) (for [x abc] (name x)) (last abc) (reverse abc))
+      (prn (try (count abc) (catch UnsupportedOperationException e :no-count)) (try (nth abc 0) (catch UnsupportedOperationException e :no-nth)) (try (seq (reify clojure.lang.Seqable (seq [_] [1]))) (catch ClassCastException e :not-a-seq)))
+      (in-ns 'user)
+    expected: |
+      (:a :b :c) :a (:b :c) (:b :c) :b ("a" "b" "c") (:a :c) [:a :b :c]
+      [:a :b :c] "abc" false true true false false
+      (1 2 3) ("a" "b" "c") :c (:c :b :a)
+      :no-count :no-nth :not-a-seq
+  - name: a-counted-or-indexed-type-counts-and-indexes-through-its-methods
+    # clojure.lang.Counted and Indexed (.kb/clojure-frontend.md "Host interfaces"): count,
+    # counted?, empty? (counted? first, like the oracle's) and .count read count; nth of
+    # two and three arguments and vector destructuring the nth of that count; a method
+    # the body leaves out is the oracle's AbstractMethodError. Every line is the
+    # oracle's (clj 1.12.6), on all four backends.
+    source: |
+      (ns iface-counted)
+      (def three (reify clojure.lang.Counted (count [_] 3)))
+      (deftype Squares [n]
+        clojure.lang.Indexed
+        (nth [_ i] (if (< -1 i n) (* i i) (throw (IndexOutOfBoundsException.))))
+        (nth [_ i nf] (if (< -1 i n) (* i i) nf))
+        (count [_] n))
+      (prn (count three) (counted? three) (empty? three) (empty? (reify clojure.lang.Counted (count [_] 0))) (.count three))
+      (prn (count (Squares. 4)) (nth (Squares. 4) 3) (nth (Squares. 4) 9 :none) (let [[a b c] (Squares. 4)] [a b c]) (indexed? (Squares. 4)) (counted? (Squares. 4)) (instance? clojure.lang.Counted (Squares. 4)))
+      (prn (try (nth (Squares. 2) 5) (catch IndexOutOfBoundsException e :out)) (try (count (reify clojure.lang.Counted)) (catch AbstractMethodError e :abstract)))
+      (in-ns 'user)
+    expected: |
+      3 true false true 3
+      4 9 :none [0 1 4] true true true
+      :out :abstract
+  - name: an-ilookup-type-reads-through-the-valat-of-the-calls-count
+    # clojure.lang.ILookup (.kb/clojure-frontend.md "Host interfaces"): get, a keyword's
+    # or symbol's call, get-in and map destructuring call valAt over the key alone, or
+    # over the default when the call gives one; a count the body leaves out is the
+    # oracle's AbstractMethodError. Every line is the oracle's (clj 1.12.6), on all four
+    # backends.
+    source: |
+      (ns iface-lookup)
+      (def arity (reify clojure.lang.ILookup
+                   (valAt [_ k] [:two k])
+                   (valAt [_ k nf] [:three k nf])))
+      (prn (get arity :a) (get arity :a :d) (:b arity) (:b arity :d) ('c arity) (get-in {:u arity} [:u :e]))
+      (prn (let [{:keys [x]} arity] x) (let [{y :y :or {y :dy}} arity] y) (map? arity) (instance? clojure.lang.ILookup arity))
+      (prn (try (get (reify clojure.lang.ILookup (valAt [_ k] k)) :k :d) (catch AbstractMethodError e :abstract)))
+      (in-ns 'user)
+    expected: |
+      [:two :a] [:three :a :d] [:two :b] [:three :b :d] [:two c] [:two :e]
+      [:two :x] [:three :y :dy] false true
+      :abstract
+  - name: an-ifn-type-is-called-through-its-invoke-and-applied-through-its-apply-to
+    # clojure.lang.IFn (.kb/clojure-frontend.md "Host interfaces"): a call, map, filter and
+    # a record's call reach the invoke of the call's count, apply the applyTo (here
+    # through clojure.lang.AFn/applyToHelper, the usual body); a count or an applyTo the
+    # body leaves out is the oracle's AbstractMethodError. Every line is the oracle's
+    # (clj 1.12.6), on all four backends.
+    source: |
+      (ns iface-fn)
+      (def f (reify clojure.lang.IFn
+               (invoke [_] :none)
+               (invoke [_ a] [:one a])
+               (invoke [_ a b] [:two a b])
+               (applyTo [this args] (clojure.lang.AFn/applyToHelper this args))))
+      (prn (f) (f 1) (f 1 2) (apply f [1 2]) (map f [1 2]) (ifn? f) (fn? f))
+      (prn (try (f 1 2 3) (catch AbstractMethodError e :abstract)) (try (apply (reify clojure.lang.IFn (invoke [_ a] a)) [1]) (catch AbstractMethodError e :abstract)))
+      (defrecord Adder [n] clojure.lang.IFn (invoke [_ x] (+ n x)))
+      (prn ((->Adder 10) 5) (map (->Adder 1) [1 2]) (filter (reify clojure.lang.IFn (invoke [_ x] (odd? x))) [1 2 3]))
+      (prn (apply (reify clojure.lang.IFn (invoke [_ a] a) (applyTo [_ args] [:applied args])) [7]))
+      (in-ns 'user)
+    expected: |
+      :none [:one 1] [:two 1 2] [:two 1 2] ([:one 1] [:one 2]) true false
+      :abstract :abstract
+      15 (2 3) (1 3)
+      [:applied (7)]
+  - name: an-ideref-type-derefs-through-its-deref
+    # clojure.lang.IDeref (.kb/clojure-frontend.md "Host interfaces"): deref, @ and deref
+    # as a value. Every line is the oracle's (clj 1.12.6), on all four backends.
+    source: |
+      (ns iface-deref)
+      (deftype Box [v] clojure.lang.IDeref (deref [_] v))
+      (prn @(Box. 5) (deref (Box. :x)) (instance? clojure.lang.IDeref (Box. 1)) (map deref [(Box. 1) (atom 2)]))
+      (in-ns 'user)
+    expected: |
+      5 :x true (1 2)
+  - name: a-type-overriding-object-answers-str-and-equals-through-it
+    # Object's toString, equals and hashCode in a deftype, reify or defrecord body
+    # (.kb/clojure-frontend.md "Host interfaces"), under any group like the oracle's
+    # class: str and = read them, a record still prints its literal. A deviation: the
+    # oracle prints such a value as #object[iface_object$reify__410 0x7b60c3e "a reify"],
+    # its class's counter and identity hash, where the line below has neither.
+    source: |
+      (ns iface-object)
+      (deftype Money [cents]
+        Object
+        (toString [_] (str "$" (quot cents 100) "." (mod cents 100)))
+        (equals [_ o] (and (instance? Money o) (= cents (.-cents ^Money o))))
+        (hashCode [_] cents))
+      (prn (str (Money. 150)) (str "total: " (Money. 205)) (= (Money. 1) (Money. 1)) (= (Money. 1) (Money. 2)) (= (Money. 1) 1) (.hashCode (Money. 7)))
+      (defprotocol Named (label [x]))
+      (def r (reify Named (label [_] :lbl) (toString [_] "a reify")))
+      (prn (label r) (str r) (str [1 r]))
+      (defrecord Point [x y] Object (toString [_] (str "<" x "," y ">")))
+      (prn (str (->Point 1 2)) (->Point 1 2))
+      (in-ns 'user)
+    expected: |
+      "$1.50" "total: $2.5" true false false 7
+      :lbl "a reify" "[1 #object[iface_object$reify \"a reify\"]]"
+      "<1,2>" #iface_object.Point{:x 1, :y 2}
+  - name: a-deftype-implementing-iobj-carries-its-own-metadata
+    # clojure.lang.IMeta and IObj in a deftype body (.kb/clojure-frontend.md "Host
+    # interfaces"): meta, with-meta and vary-meta read and make it through meta and
+    # withMeta. Every line is the oracle's (clj 1.12.6), on all four backends.
+    source: |
+      (ns iface-meta)
+      (deftype Tagged [v m] clojure.lang.IObj (meta [_] m) (withMeta [_ m2] (Tagged. v m2)))
+      (prn (meta (Tagged. 1 {:a 1})) (meta (with-meta (Tagged. 1 nil) {:b 2})) (sort (meta (vary-meta (Tagged. 1 {:a 1}) assoc :c 3))) (instance? clojure.lang.IMeta (Tagged. 1 nil)))
+      (in-ns 'user)
+    expected: |
+      {:a 1} {:b 2} ([:a 1] [:c 3]) true

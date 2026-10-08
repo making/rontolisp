@@ -515,22 +515,36 @@ final class ClojureCollectionLowering {
 		int n = items.size() - 1;
 		ClojureLowerUtil.isTrue(n == 2 || n == 3, "get takes a map, a key and an optional default");
 		return getForm(ctx, ctx.lower(items.get(1)), ctx.lower(items.get(2)),
-				n == 3 ? ctx.lower(items.get(3)) : ClojureLowering.NIL_CONST);
+				n == 3 ? ctx.lower(items.get(3)) : ClojureLowering.NIL_CONST, supplied(n == 3));
+	}
+
+	/**
+	 * Whether a read's default was given, as the form {@link #getBranches} takes: true or
+	 * nil.
+	 * @param given whether the call spells a default
+	 * @return the constant
+	 */
+	static LispVal supplied(boolean given) {
+		return given ? ClojureLowering.TRUE_CONST : ClojureLowering.NIL_CONST;
 	}
 
 	/**
 	 * The table-aware read over already-lowered collection, key and default: a set
 	 * answers its member, a map its value, a vector or a string its indexed element,
-	 * anything else the default.
+	 * anything else the default. {@code supplied} answers whether the call gave the
+	 * default ({@link #supplied}, or a form over the call's arguments), which picks the
+	 * {@code valAt} of a type implementing {@code ILookup}, like the oracle's {@code get}
+	 * of two or three arguments.
 	 */
-	static LispVal getForm(ClojureLowering ctx, LispVal coll, LispVal key, LispVal dflt) {
+	static LispVal getForm(ClojureLowering ctx, LispVal coll, LispVal key, LispVal dflt, LispVal supplied) {
 		LispSymbol collSym = ctx.freshTemp();
 		LispSymbol keySym = ctx.freshTemp();
 		LispSymbol dfltSym = ctx.freshTemp();
 		List<LispVal> bindings = List.of(ClojureLowerUtil.list(collSym, coll), ClojureLowerUtil.list(keySym, key),
 				ClojureLowerUtil.list(dfltSym, dflt));
-		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let"), ClojureLowerUtil.list(bindings), ClojureLowerUtil
-			.cons(ClojureLowerUtil.sym("cond"), getBranches(ctx, collSym, keySym, dfltSym, isScalarKeyForm(key))));
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let"), ClojureLowerUtil.list(bindings),
+				ClojureLowerUtil.cons(ClojureLowerUtil.sym("cond"),
+						getBranches(ctx, collSym, keySym, dfltSym, isScalarKeyForm(key), supplied)));
 	}
 
 	/**
@@ -539,9 +553,11 @@ final class ClojureCollectionLowering {
 	 * indexed element, anything else the default. The three arrive as side-effect-free
 	 * forms (bound temporaries, a lambda parameter), so the branches may name them more
 	 * than once. {@code scalarKey} says the key is a literal scalar
-	 * ({@link #isScalarKeyForm}), read without the structural-key runtime.
+	 * ({@link #isScalarKeyForm}), read without the structural-key runtime;
+	 * {@code supplied} whether the call gave the default ({@link #getForm}).
 	 */
-	static List<LispVal> getBranches(ClojureLowering ctx, LispVal coll, LispVal key, LispVal dflt, boolean scalarKey) {
+	static List<LispVal> getBranches(ClojureLowering ctx, LispVal coll, LispVal key, LispVal dflt, boolean scalarKey,
+			LispVal supplied) {
 		List<LispVal> branches = new ArrayList<>();
 		branches.add(ClojureLowerUtil.list(isSetForm(coll), ClojureLowerUtil.list(ClojureLowerUtil.sym("gethash"),
 				lookupKey(key, setInner(coll), scalarKey), setInner(coll), dflt)));
@@ -565,10 +581,17 @@ final class ClojureCollectionLowering {
 		branches.add(ClojureLowerUtil.list(
 				ClojureLowerUtil.list(new LispSymbol(ClojurePredicateLowering.READER_VALUE_P), coll),
 				ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-READER-VALUE-GET"), coll, key, dflt)));
+		// a deftype or reify implementing ILookup reads through its valAt (an arm a
+		// program storing no such row sheds, ClojureArms)
+		branches.add(ClojureLowerUtil.list(ClojureLowerUtil.list(new LispSymbol(LOOKUP_P), coll),
+				ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-LOOKUP-GET"), coll, key, dflt, supplied)));
 		branches.add(hostArm(coll, hostCall("GET", coll, key, dflt)));
 		branches.add(ClojureLowerUtil.list(ClojureLowering.TRUE_CONST, dflt));
 		return branches;
 	}
+
+	/** The lookup family's test of a type implementing {@code ILookup}. */
+	static final String LOOKUP_P = "RONTOLISP::%CLOJURE-LOOKUP-P";
 
 	/**
 	 * {@code get} as a value: over a collection and a key, or those plus a default -- the
@@ -579,8 +602,9 @@ final class ClojureCollectionLowering {
 		LispSymbol coll = new LispSymbol(ClojureLowering.mangle("get-coll"));
 		LispSymbol key = new LispSymbol(ClojureLowering.mangle("get-key"));
 		LispSymbol rest = new LispSymbol(ClojureLowering.mangle("get-rest"));
-		LispVal two = getForm(ctx, coll, key, ClojureLowering.NIL_CONST);
-		LispVal three = getForm(ctx, coll, key, ClojureLowerUtil.list(ClojureLowerUtil.sym("car"), rest));
+		LispVal two = getForm(ctx, coll, key, ClojureLowering.NIL_CONST, supplied(false));
+		LispVal three = getForm(ctx, coll, key, ClojureLowerUtil.list(ClojureLowerUtil.sym("car"), rest),
+				supplied(true));
 		LispVal arity = ClojureRefusals.refusal(ClojureRefusals.ARITY,
 				LispString.literal("get takes a map, a key and an optional default"));
 		LispVal body = ClojureLowerUtil.list(ClojureLowerUtil.sym("cond"),
@@ -1154,9 +1178,12 @@ final class ClojureCollectionLowering {
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("dolist"),
 						ClojureLowerUtil.list(List.of(one, ClojureSeqLowering.seqAllForm(ctx, coll))),
 						setPut(table, one))));
+		// a value implementing IReduceInit is what its reduction steps, like the oracle's
+		// set (a view a program storing no such row sheds, ClojureArms)
+		LispVal members = ClojureLowerUtil.list(new LispSymbol(ClojureInterfaces.REDUCE_INIT_ITEMS), lowered);
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
 				ClojureLowerUtil
-					.list(List.of(ClojureLowerUtil.list(coll, lowered), ClojureLowerUtil.list(table, makeTable()))),
+					.list(List.of(ClojureLowerUtil.list(coll, members), ClojureLowerUtil.list(table, makeTable()))),
 				ClojureLowerUtil.cons(ClojureLowerUtil.sym("cond"), branches), wrapSet(table));
 	}
 
@@ -1204,9 +1231,12 @@ final class ClojureCollectionLowering {
 	 * of the refusal family, so a program reading no class compiles the bare coercion.
 	 */
 	static LispVal vecForm(ClojureLowering ctx, LispVal lowered) {
+		// a value implementing IReduceInit is what its reduction steps, like the oracle's
+		// vec (a view a program storing no such row sheds, ClojureArms)
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("coerce"),
 				ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-REALIZE-ALL"),
-						ClojureLowerUtil.list(new LispSymbol(ClojureRefusals.VEC_ARG), lowered)),
+						ClojureLowerUtil.list(new LispSymbol(ClojureRefusals.VEC_ARG),
+								ClojureLowerUtil.list(new LispSymbol(ClojureInterfaces.REDUCE_INIT_ITEMS), lowered))),
 				ClojureLowerUtil.quoted("vector"));
 	}
 
@@ -1248,6 +1278,10 @@ final class ClojureCollectionLowering {
 				ClojureLowerUtil.list(ClojureLowerUtil.list(ClojureLowerUtil.sym("eq"), tagOf(coll), LAZY_TAG),
 						ClojureLowerUtil.list(ClojureLowerUtil.sym("length"),
 								ClojureSeqLowering.seqAllForm(ctx, coll))),
+				// a type implementing Counted counts through its count (an arm a program
+				// storing no such row sheds, ClojureArms)
+				ClojureLowerUtil.list(ClojureLowerUtil.list(new LispSymbol(COUNTED_P), coll),
+						ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-COUNTED-COUNT"), coll)),
 				ClojureLowerUtil.list(ClojureLowering.TRUE_CONST, ClojureRefusals
 					.refusal(ClojureRefusals.UNSUPPORTED_OPERATION, LispString.literal("count needs a collection"))));
 		List<LispVal> branches = new ArrayList<>();
@@ -1292,6 +1326,11 @@ final class ClojureCollectionLowering {
 				ClojureLowerUtil.list(ClojureSortedLowering.sortedTest(coll),
 						ClojureLowerUtil.list(ClojureLowerUtil.sym("zerop"),
 								ClojureSortedLowering.runtime("sorted-count", coll))),
+				// the oracle's empty? asks counted? first: a type implementing Counted
+				// is empty at a zero count (an arm a program storing no such row sheds)
+				ClojureLowerUtil.list(ClojureLowerUtil.list(new LispSymbol(COUNTED_P), coll),
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("zerop"),
+								ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-COUNTED-COUNT"), coll))),
 				ClojureLowerUtil.list(ClojureLowering.TRUE_CONST,
 						ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), ClojureSeqLowering.seqForm(ctx, coll))));
 		List<LispVal> branches = new ArrayList<>();
@@ -1315,6 +1354,9 @@ final class ClojureCollectionLowering {
 				ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(coll, lowered))),
 				ClojureLowerUtil.cons(ClojureLowerUtil.sym("cond"), branches));
 	}
+
+	/** The counted family's test of a type implementing {@code Counted}. */
+	static final String COUNTED_P = "RONTOLISP::%CLOJURE-COUNTED-P";
 
 	/** The tag a wrapper is headed by: {@code (CAR form)}. */
 	private static LispVal tagOf(LispVal form) {

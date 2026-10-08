@@ -278,7 +278,102 @@ public final class ClojureArms {
 		 */
 		REDUCIBLE("reducible", Set.of("RONTOLISP::%CLOJURE-COLL-REDUCIBLE-P", "RONTOLISP::%CLOJURE-KV-REDUCIBLE-P"),
 				Set.of(ClojureSeqLowering.REDUCIBLE_ITEMS), Map.of(),
-				Set.of("RONTOLISP::%CLOJURE-COLL-REDUCER-ROW", "RONTOLISP::%CLOJURE-KV-REDUCER-ROW"), Set.of()),
+				Set.of("RONTOLISP::%CLOJURE-COLL-REDUCER-ROW", "RONTOLISP::%CLOJURE-KV-REDUCER-ROW",
+						ClojureInterfaces.REDUCE_ROW),
+				Set.of()),
+
+		/**
+		 * A record, deftype or reify whose body implements
+		 * {@code clojure.lang.IReduceInit}, {@code IReduce} or {@code IKVReduce}, which
+		 * {@code reduce} and {@code reduce-kv} call ahead of the reducing protocols, like
+		 * the oracle, and {@code vec} and {@code set} reduce: only the store of such a
+		 * row makes one ({@link ClojureInterfaces}), which makes a value of
+		 * {@link #REDUCIBLE} too, whose functions hold these arms. The view is the
+		 * members such a reduction steps, which {@code vec} and {@code set} walk.
+		 */
+		REDUCE_INTERFACE("reduce-interface",
+				Set.of("RONTOLISP::%CLOJURE-REDUCE-INIT-P", "RONTOLISP::%CLOJURE-IREDUCE-P",
+						"RONTOLISP::%CLOJURE-KVREDUCE-P", "RONTOLISP::%CLOJURE-KV-INTERFACE-P"),
+				Set.of(ClojureInterfaces.REDUCE_INIT_ITEMS), Map.of(), Set.of(ClojureInterfaces.REDUCE_ROW), Set.of()),
+
+		/**
+		 * A record, deftype or reify whose body implements {@code clojure.lang.Seqable},
+		 * which the seq view ({@code seq}, {@code first}, {@code map}, {@code into} ...)
+		 * and {@code seqable?} read through its {@code seq}: only the store of such a row
+		 * makes one. The alias is the lazy-or-strict verbs' test of a lazy input, which
+		 * takes such a value as one.
+		 */
+		SEQABLE("seqable", Set.of("RONTOLISP::%CLOJURE-SEQABLE-P"), Set.of(),
+				Map.of("RONTOLISP::%CLOJURE-LAZY-INPUT-P", "RONTOLISP::%CLOJURE-LAZY-P"),
+				Set.of(ClojureInterfaces.SEQABLE_ROW), Set.of()),
+
+		/**
+		 * A record, deftype or reify whose body implements {@code clojure.lang.Counted}
+		 * (an {@code Indexed} one too), which {@code count}, {@code empty?} and
+		 * {@code counted?} read through its {@code count}: only the store of such a row
+		 * makes one.
+		 */
+		COUNTED("counted", Set.of("RONTOLISP::%CLOJURE-COUNTED-P"), Set.of(), Map.of(),
+				Set.of(ClojureInterfaces.COUNTED_ROW), Set.of()),
+
+		/**
+		 * A record, deftype or reify whose body implements {@code clojure.lang.Indexed},
+		 * which {@code nth}, vector destructuring and {@code indexed?} read through its
+		 * {@code nth}: only the store of such a row makes one. The aliases are
+		 * {@code indexed?}'s test, a vector's alone without the kind, and {@code nth} of
+		 * two arguments, {@code %clojure-nth} with a nil default without it.
+		 */
+		INDEXED("indexed", Set.of("RONTOLISP::%CLOJURE-INDEXED-P"), Set.of(),
+				Map.of("RONTOLISP::%CLOJURE-IS-INDEXED", "RONTOLISP::%CLOJURE-IS-VECTOR", "RONTOLISP::%CLOJURE-NTH-2",
+						"RONTOLISP::%CLOJURE-NTH"),
+				Set.of(ClojureInterfaces.INDEXED_ROW), Set.of()),
+
+		/**
+		 * A deftype or reify whose body implements {@code clojure.lang.ILookup}, which
+		 * {@code get}, a keyword's or symbol's call, map destructuring and {@code get-in}
+		 * read through its {@code valAt}: only the store of such a row makes one.
+		 */
+		LOOKUP("lookup", Set.of("RONTOLISP::%CLOJURE-LOOKUP-P"), Set.of(), Map.of(),
+				Set.of(ClojureInterfaces.LOOKUP_ROW), Set.of()),
+
+		/**
+		 * A record, deftype or reify whose body implements {@code clojure.lang.IFn} (or
+		 * its supers {@code Callable} and {@code Runnable}), which a call, a function
+		 * argument of any verb and {@code ifn?} reach through its {@code invoke}, and
+		 * {@code apply} through its {@code applyTo}: only the store of such a row makes
+		 * one. The view is {@code apply}'s function.
+		 */
+		INVOKABLE("invokable",
+				Set.of("RONTOLISP::%CLOJURE-INVOKABLE-P", "RONTOLISP::%CLOJURE-CALLABLE-P",
+						"RONTOLISP::%CLOJURE-RUNNABLE-P"),
+				Set.of(ClojureInterfaces.APPLIED_FN), Map.of(), Set.of(ClojureInterfaces.INVOKABLE_ROW), Set.of()),
+
+		/**
+		 * A record, deftype or reify whose body implements {@code clojure.lang.IDeref},
+		 * which {@code deref} and {@code @} read through its {@code deref}: only the
+		 * store of such a row makes one.
+		 */
+		DEREFABLE("derefable", Set.of("RONTOLISP::%CLOJURE-DEREFABLE-P"), Set.of(), Map.of(),
+				Set.of(ClojureInterfaces.DEREFABLE_ROW), Set.of()),
+
+		/**
+		 * A deftype whose body implements {@code clojure.lang.IMeta} or {@code IObj},
+		 * which {@code meta}, {@code with-meta} and {@code vary-meta} reach through its
+		 * {@code meta} and {@code withMeta}: only the store of such a row makes one.
+		 */
+		META_INTERFACE("meta-interface", Set.of("RONTOLISP::%CLOJURE-IMETA-P", "RONTOLISP::%CLOJURE-IOBJ-P"), Set.of(),
+				Map.of(), Set.of(ClojureInterfaces.META_ROW), Set.of()),
+
+		/**
+		 * A record, deftype or reify whose body overrides {@code Object}'s
+		 * {@code toString}, {@code equals} or {@code hashCode}, which {@code str}, the
+		 * printer, {@code =} and the instance calls read: only the store of such a row
+		 * makes one.
+		 */
+		OBJECT_METHODS("object-methods",
+				Set.of("RONTOLISP::%CLOJURE-TO-STRING-P", "RONTOLISP::%CLOJURE-EQUALS-P",
+						"RONTOLISP::%CLOJURE-HASH-CODE-P"),
+				Set.of(), Map.of(), Set.of(ClojureInterfaces.OBJECT_ROW), Set.of()),
 
 		/**
 		 * A read in clojure.edn's grammar, which the run-time reader's EDN clauses take:

@@ -120,6 +120,7 @@ final class ClojureValueMethodLowering {
 		row("entryAt", 1, arm(List.of("map?", "indexed?"), core("find", R, A)));
 		row("invoke", 1, arm(List.of("ifn?"), ClojureLowerUtil.list(R, A)));
 		row("invoke", 2, arm(List.of("ifn?"), ClojureLowerUtil.list(R, A, B)));
+		row("applyTo", 1, arm(List.of("ifn?"), core("apply", R, A)));
 	}
 
 	private static void updateRows() {
@@ -209,10 +210,36 @@ final class ClojureValueMethodLowering {
 		// a row at another arity: the method exists, so the refusal is the oracle's own
 		boolean known = arms != null || ROWS.keySet().stream().anyMatch(key -> key.startsWith(method + "/"));
 		TypedMembers typed = typedMembers(ctx, method, args.size());
-		LispVal arm = arms == null && typed == null ? refusal(recv, method, known, args)
-				: boundArm(ctx, method, recv, args, arms == null ? List.of() : arms, known, typed);
+		String implemented = ClojureInterfaces.instanceTest(method, args.size() + 1);
+		LispVal arm;
+		if (arms == null && typed == null) {
+			arm = refusal(recv, method, known, args);
+			if (implemented != null) {
+				// a type implementing the interface answers its own method (an arm a
+				// program storing no such row sheds, leaving the refusal)
+				arm = ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
+						ClojureLowerUtil.list(new LispSymbol(implemented), recv), interfaceCall(method, recv, args),
+						arm);
+			}
+		}
+		else {
+			arm = boundArm(ctx, method, recv, args, arms == null ? List.of() : arms, known, typed, implemented);
+		}
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
 				ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-VALUE-RECEIVER-P"), recv), arm, call);
+	}
+
+	/**
+	 * The call of the method a record's, deftype's or reify's type implements for an
+	 * interface (its row's entry), over the receiver and the arguments.
+	 */
+	private static LispVal interfaceCall(String method, LispVal recv, List<LispVal> args) {
+		List<LispVal> call = new ArrayList<>();
+		call.add(ClojureLowerUtil.sym("funcall"));
+		call.add(ClojureLowerUtil.list(new LispSymbol(ClojureInterfaces.ENTRY), recv, LispString.literal(method)));
+		call.add(recv);
+		call.addAll(args);
+		return ClojureLowerUtil.list(call);
 	}
 
 	/**
@@ -273,7 +300,7 @@ final class ClojureValueMethodLowering {
 	 * site names a typed member, since its class is fully known.
 	 */
 	private static LispVal boundArm(ClojureLowering ctx, String method, LispSymbol recv, List<LispVal> args,
-			List<Arm> arms, boolean known, @Nullable TypedMembers typed) {
+			List<Arm> arms, boolean known, @Nullable TypedMembers typed, @Nullable String implemented) {
 		Map<String, ClojureLowering.Kind> scope = new HashMap<>();
 		scope.put(RECV, ClojureLowering.Kind.VARIABLE);
 		for (int i = 0; i < args.size(); i++) {
@@ -295,6 +322,12 @@ final class ClojureValueMethodLowering {
 				for (InlineCall call : typed.calls()) {
 					clauses.add(inlineClause(call, method, self, locals));
 				}
+			}
+			if (implemented != null) {
+				// a type implementing the interface answers its own method (an arm a
+				// program storing no such row sheds, ClojureArms)
+				clauses.add(ClojureLowerUtil.list(ClojureLowerUtil.list(new LispSymbol(implemented), self),
+						interfaceCall(method, self, locals)));
 			}
 			for (Arm arm : arms) {
 				clauses.add(ClojureLowerUtil.list(armTest(arm, self), arm.body().apply(ctx)));
@@ -352,8 +385,17 @@ final class ClojureValueMethodLowering {
 		}
 		List<LispVal> tests = new ArrayList<>();
 		for (String kind : arm.kinds()) {
-			tests.add(kind.equals(ATOM) ? ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-ATOM-P"), self)
-					: ClojurePredicateLowering.rawTest(kind, self));
+			if (kind.equals(ATOM)) {
+				tests.add(ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-ATOM-P"), self));
+			}
+			else if (kind.equals("indexed?")) {
+				// a vector's methods: a type implementing Indexed answers its own
+				// through the typed clauses ahead of the rows
+				tests.add(ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-IS-VECTOR"), self));
+			}
+			else {
+				tests.add(ClojurePredicateLowering.rawTest(kind, self));
+			}
 		}
 		if (arm.kinds().stream().anyMatch(LIST_KINDS::contains)) {
 			tests.add(ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), self));
