@@ -241,7 +241,7 @@ final class ClojureSeqLowering {
 		}
 		if (ClojureLowerUtil.isSymbolNamed(marker, "%hash-map")) {
 			return ClojureCollectionLowering.getForm(ctx, ClojureCollectionLowering.mapBuild(lowered),
-					ctx.lower(items.get(1)), dflt);
+					ctx.lower(items.get(1)), dflt, ClojureCollectionLowering.supplied(n == 2));
 		}
 		LispSymbol set = ctx.freshTemp();
 		LispSymbol key = ctx.freshTemp();
@@ -289,7 +289,7 @@ final class ClojureSeqLowering {
 			read = nthForm(ctx, ClojureLowerUtil.cons(ClojureLowerUtil.sym("vector"), lowered), arg, dflt);
 		}
 		else if (map) {
-			read = ClojureCollectionLowering.getForm(ctx, ClojureCollectionLowering.mapBuild(lowered), arg, dflt);
+			read = ClojureCollectionLowering.getForm(ctx, ClojureCollectionLowering.mapBuild(lowered), arg, dflt, rest);
 		}
 		else {
 			LispSymbol table = ctx.freshTemp();
@@ -433,8 +433,21 @@ final class ClojureSeqLowering {
 	static LispVal nthOf(ClojureLowering ctx, List<LispVal> items) {
 		int n = items.size() - 1;
 		ClojureLowerUtil.isTrue(n == 2 || n == 3, "nth takes a collection, an index and an optional default");
-		return nthForm(ctx, ctx.lower(items.get(1)), ctx.lower(items.get(2)),
-				n == 3 ? ctx.lower(items.get(3)) : ClojureLowering.NIL_CONST);
+		if (n == 2) {
+			return nthTwoForm(ctx.lower(items.get(1)), ctx.lower(items.get(2)));
+		}
+		return nthForm(ctx, ctx.lower(items.get(1)), ctx.lower(items.get(2)), ctx.lower(items.get(3)));
+	}
+
+	/**
+	 * {@code nth} of two arguments: {@link #nthForm} with a nil default, but a type
+	 * implementing {@code Indexed} answers its {@code nth} over the index alone, like the
+	 * oracle's ({@code %clojure-nth-2}, which a program storing no such row calls as
+	 * {@code %clojure-nth}, ClojureArms).
+	 */
+	private static LispVal nthTwoForm(LispVal coll, LispVal index) {
+		return ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-NTH-2"), coll, index,
+				ClojureLowering.NIL_CONST);
 	}
 
 	/**
@@ -445,7 +458,7 @@ final class ClojureSeqLowering {
 		LispSymbol coll = new LispSymbol(ClojureLowering.mangle("nth-coll"));
 		LispSymbol index = new LispSymbol(ClojureLowering.mangle("nth-index"));
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(List.of(coll, index)),
-				nthForm(ctx, coll, index, ClojureLowering.NIL_CONST));
+				nthTwoForm(coll, index));
 	}
 
 	/**
@@ -587,8 +600,11 @@ final class ClojureSeqLowering {
 		LispSymbol cell = ctx.freshTemp();
 		LispVal tail = pres.isEmpty() ? last : ClojureLowerUtil.list(ClojureLowerUtil.sym("append"),
 				ClojureLowerUtil.cons(ClojureLowerUtil.sym("list"), pres), last);
+		// a type implementing IFn is applied through its applyTo, like the oracle's apply
+		// (a view a program storing no such row sheds, ClojureArms)
+		LispVal applied = ClojureLowerUtil.list(new LispSymbol(ClojureInterfaces.APPLIED_FN), fun);
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let*"),
-				ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(cell, fun))), ctx.callableApply(cell, tail));
+				ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(cell, applied))), ctx.callableApply(cell, tail));
 	}
 
 	/**

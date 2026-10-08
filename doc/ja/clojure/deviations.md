@@ -172,7 +172,9 @@
 - record はオラクル同様リテラルで印字されます（`#user.R{:a 7}`）。ただし `str` も
  そのリテラルを綴ります（オラクルは `user.R@<hash>`）。deftype はラッパーリスト
  （`(:C%TYPE ...)`）、reify は `(:C%REIFY ...)` で印字されます。決定的に印字されるのは
- エントリのマップだけです。
+ エントリのマップだけです。本体が `toString` を上書きしたものは、オラクルの
+ `#object[user.T "text"]` から同一性ハッシュを除いた形で印字され、reify のクラスは
+ オラクルの番号を除いた `user$reify` と綴ります。
 - deftype の `^:volatile-mutable` フィールドは `^:unsynchronized-mutable` と同じ素の
  スロットです（スレッド間の順序保証はありません）。
 - `split`/`replace` は seq を返しベクターにはなりません。素の文字列は文字通りのままです（パターン値だけがパターンマッチします）。`index-of` は
@@ -253,6 +255,14 @@
   オラクルの `reduce` は、自分では畳み込まないコレクション（文字列、マップ）についてもその拡張を
   使います。インライン本体が実装していない引数の数でプロトコルメソッドを呼ぶと
   `ArityException` をシグナルします（オラクルは `AbstractMethodError`）。
+- `reify`・`deftype`・`defrecord` の本体が実装できるのは、コア関数が参照する `clojure.lang`
+  のインタフェース（`IReduceInit`、`IReduce`、`IKVReduce`、`Seqable`、`Counted`、`Indexed`、
+  `ILookup`、`IFn`（`Callable` と `Runnable` を含む）、`IDeref`、`IMeta`、`IObj`）と `Object` の
+  メソッドの上書きです（[reify](reference/reify.md#host-interfaces)）。それ以外のインタフェース
+  （`ISeq`、`IPersistentMap`、`Sequential`、`java.util.List` など）は名前を挙げて拒否されます。
+  型の `equals` と `hashCode` は `=` と `.hashCode` に答えますが、マップのキーやセットの要素の
+  比較には使われず、そうした値は同一性で保持されます。`Seqable` だけを実装した型について、
+  `sort` と `distinct` はその seq を通して答えます。オラクルはどちらも拒否します。
 - `clojure.core.reducers` は呼び出したスレッドの上で部分を順に1つずつ fold します。空でない
   2つのコレクションの `cat` は両方を持つ1つのアキュムレーター（ベクター）を返します。オラクルは
   `Cat` の木を返し、その fold は半分ずつの fold を結合します。

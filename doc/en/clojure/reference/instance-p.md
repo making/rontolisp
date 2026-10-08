@@ -10,7 +10,9 @@ string, number, keyword or vector, `java.io.Writer` for `*out*`. `Object` is eve
 `nil`. A known record/deftype name tests the dispatch tag. A protocol's interface (`user.P`,
 the namespace and name munged like the oracle's: `my_app.core.my_p`) is `true` of a record,
 deftype or `reify` whose body names the protocol, with methods or none; an `extend-type` or
-`extend-protocol` target is not (`satisfies?` is). A throwable class (`Exception`,
+`extend-protocol` target is not (`satisfies?` is). A `clojure.lang` interface a body
+implements ([reify](reify.md#host-interfaces): `Counted`, `IFn` ...) is `true` of the value,
+and so is each of its supers (`Counted` of an `Indexed`). A throwable class (`Exception`,
 `IllegalArgumentException`, `clojure.lang.ExceptionInfo`, a dotted or imported one) tests an
 exception or a runtime error by its class -- the class `class` answers or a subclass of it.
 On the interpreter and the JVM a host object answers by its host class, so

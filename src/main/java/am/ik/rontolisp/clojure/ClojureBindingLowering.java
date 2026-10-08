@@ -1207,14 +1207,14 @@ final class ClojureBindingLowering {
 			if (head instanceof LispSymbol) {
 				String name = ClojureLowerUtil.plainName(head, "a map pattern binding");
 				scope.put(name, ClojureLowering.Kind.VARIABLE);
-				pairs.add(ClojureLowerUtil.list(ctx.localSym(name), ClojureCollectionLowering.getForm(ctx, whole,
-						ctx.lower(arg), defaultFor(ctx, defaults, name))));
+				pairs.add(ClojureLowerUtil.list(ctx.localSym(name),
+						ClojureCollectionLowering.getForm(ctx, whole, ctx.lower(arg), defaultFor(ctx, defaults, name),
+								ClojureCollectionLowering.supplied(defaults.containsKey(name)))));
 				continue;
 			}
 			// a nested pattern binds from the same read, without an :or default
-			destructureInto(ctx, head,
-					ClojureCollectionLowering.getForm(ctx, whole, ctx.lower(arg), ClojureLowering.NIL_CONST), pairs,
-					scope, what);
+			destructureInto(ctx, head, ClojureCollectionLowering.getForm(ctx, whole, ctx.lower(arg),
+					ClojureLowering.NIL_CONST, ClojureCollectionLowering.supplied(false)), pairs, scope, what);
 		}
 	}
 
@@ -1249,7 +1249,8 @@ final class ClojureBindingLowering {
 			};
 			scope.put(local, ClojureLowering.Kind.VARIABLE);
 			pairs.add(ClojureLowerUtil.list(ctx.localSym(local),
-					ClojureCollectionLowering.getForm(ctx, whole, keyForm, defaultFor(ctx, defaults, local))));
+					ClojureCollectionLowering.getForm(ctx, whole, keyForm, defaultFor(ctx, defaults, local),
+							ClojureCollectionLowering.supplied(defaults.containsKey(local)))));
 		}
 	}
 

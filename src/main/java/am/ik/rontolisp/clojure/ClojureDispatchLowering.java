@@ -139,6 +139,13 @@ final class ClojureDispatchLowering {
 				arms.add(new Arm(Use.ONCE, v -> throwableInstance(ctx, throwableChain, v)));
 			}
 		}
+		ClojureInterfaces.HostInterface implemented = ClojureInterfaces.named(fqn);
+		if (implemented != null && (lowered instanceof LispSymbol || !isConstant(lowered))) {
+			// a record, deftype or reify whose body implements the interface (an arm a
+			// program storing no row of its family sheds, ClojureArms); a literal or
+			// quoted value is never one
+			arms.add(new Arm(Use.VARIABLE, v -> ClojureLowerUtil.list(new LispSymbol(implemented.test()), v)));
+		}
 		boolean loads = ClojureValueClasses.loads(fqn);
 		if (ClojureValueClasses.hostMayHold(fqn, loads)) {
 			arms.add(new Arm(Use.VARIABLE,
@@ -189,8 +196,7 @@ final class ClojureDispatchLowering {
 	 */
 	private static LispVal armsAnswer(ClojureLowering ctx, List<Arm> arms, LispVal lowered,
 			Function<LispVal, LispVal> answerOf) {
-		boolean constant = !(lowered instanceof LispCons) || lowered instanceof LispCons quote
-				&& quote.car() instanceof LispSymbol head && head.name().equals("QUOTE");
+		boolean constant = isConstant(lowered);
 		boolean variableArm = arms.stream().anyMatch(arm -> arm.use() == Use.VARIABLE);
 		boolean once = arms.size() == 1 && arms.get(0).use() == Use.ONCE;
 		boolean bind = !(lowered instanceof LispSymbol) && (variableArm || !(once || constant));
@@ -206,6 +212,14 @@ final class ClojureDispatchLowering {
 		}
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let*"),
 				ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(value, lowered))), answer);
+	}
+
+	/**
+	 * Whether a lowered value is a constant: an atom (a variable too) or a quoted datum.
+	 */
+	private static boolean isConstant(LispVal lowered) {
+		return !(lowered instanceof LispCons) || lowered instanceof LispCons quote
+				&& quote.car() instanceof LispSymbol head && head.name().equals("QUOTE");
 	}
 
 	/** The test of one kind of value over the value. */
