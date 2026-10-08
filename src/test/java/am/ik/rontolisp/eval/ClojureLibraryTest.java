@@ -90,6 +90,33 @@ class ClojureLibraryTest {
 	}
 
 	@Test
+	void aProgramStoringNoInterfaceRowSplicesTheVerbsWithoutTheirInterfaceArms() {
+		// only the store of a reify's, deftype's or record's row of a clojure.lang
+		// interface (or an Object override) makes a value the verbs read through it: a
+		// program storing none compiles them as before
+		Map<String, String> arms = Map.of("RONTOLISP::%CLOJURE-STRICT-SEQ", "%CLOJURE-SEQABLE-P",
+				"RONTOLISP::%CLOJURE-CALL", "%CLOJURE-INVOKABLE-P", "RONTOLISP::%CLOJURE-NTH", "%CLOJURE-INDEXED-P",
+				"RONTOLISP::%CLOJURE-STR-OF", "%CLOJURE-TO-STRING-P", "RONTOLISP::%CLOJURE-EQUAL", "%CLOJURE-EQUALS-P",
+				"RONTOLISP::%CLOJURE-DEREF-OTHER", "%CLOJURE-DEREFABLE-P", "RONTOLISP::%CLOJURE-META",
+				"%CLOJURE-IMETA-P", "RONTOLISP::%CLOJURE-COLL-REDUCE-3", "%CLOJURE-REDUCE-INIT-P",
+				"RONTOLISP::%CLOJURE-FILTER", "%CLOJURE-LAZY-INPUT-P");
+		arms.forEach((verb, arm) -> assertThat(defun(ClojureLibrary.forms(), verb)).as(verb).contains(arm));
+		List<LispVal> plain = ClojureLibrary
+			.process(Clojure.read("(defprotocol P (m [x]))" + " (def r (reify P (m [_] 1)))"
+					+ " (println (seq [1]) (map :a [{:a 1}]) (nth [1] 0) (str r) (= r r) @(atom 1) (meta r)"
+					+ " (filter odd? [1]) (nth [1 2] 1) (indexed? []) (m r))", null));
+		arms.forEach((verb, arm) -> assertThat(defun(plain, verb)).as(verb).doesNotContain(arm));
+		String program = plain.get(plain.size() - 1).print();
+		assertThat(program).doesNotContain("%CLOJURE-NTH-2").doesNotContain("%CLOJURE-IS-INDEXED");
+		// a body naming an interface keeps its own family's arms, and no other's
+		List<LispVal> seqable = ClojureLibrary.process(Clojure
+			.read("(println (seq (reify clojure.lang.Seqable (seq [_] (list 1)))) (str 1) (nth [1] 0))", null));
+		assertThat(defun(seqable, "RONTOLISP::%CLOJURE-STRICT-SEQ")).contains("%CLOJURE-SEQABLE-P");
+		assertThat(defun(seqable, "RONTOLISP::%CLOJURE-STR-OF")).doesNotContain("%CLOJURE-TO-STRING-P");
+		assertThat(defun(seqable, "RONTOLISP::%CLOJURE-NTH")).doesNotContain("%CLOJURE-INDEXED-P");
+	}
+
+	@Test
 	void aProgramMakingNoMatcherSplicesNthWithoutItsMatcherArm() {
 		// only re-matcher makes a matcher: a program naming it keeps nth's group arm,
 		// any other compiles nth as before matchers were read
@@ -339,12 +366,14 @@ class ClojureLibraryTest {
 		// class rows' bases neither, nor a host class's keys); ns-name a namespace's name
 		// as a symbol, which has none either; the Ring adapter its options' and request
 		// map's fixed key names and a method or scheme, HTTP tokens that admit no slash;
-		// the HTTP client its options' and response map's fixed key names
+		// the HTTP client its options' and response map's fixed key names; Throwable->map
+		// a class name as a symbol
 		Set<String> slashless = Set.of("RONTOLISP::%CLOJURE-EXCEPTION-CLASS", "RONTOLISP::%CLOJURE-CLASS-KEYWORDS",
 				"RONTOLISP::%CLOJURE-READER-VALUE-CLASS", "RONTOLISP::%CLOJURE-INSTANT-CLASS",
 				"RONTOLISP::%CLOJURE-HOST-CLASS-KEYS", "RONTOLISP::%CLOJURE-NS-NAME",
 				"RONTOLISP::%CLOJURE-RING-KEYWORD", "RONTOLISP::%CLOJURE-RING-MAP", "RONTOLISP::%CLOJURE-RING-OPTION",
-				"RONTOLISP::%CLOJURE-HTTP-ASSOC", "RONTOLISP::%CLOJURE-HTTP-OPTION");
+				"RONTOLISP::%CLOJURE-HTTP-ASSOC", "RONTOLISP::%CLOJURE-HTTP-OPTION",
+				"RONTOLISP::%CLOJURE-THROWABLE-VIA", "RONTOLISP::%CLOJURE-THROWABLE-TO-MAP");
 		builders.removeAll(slashless);
 		boolean grew = true;
 		while (grew) {

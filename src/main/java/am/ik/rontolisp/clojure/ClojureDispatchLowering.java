@@ -56,13 +56,35 @@ final class ClojureDispatchLowering {
 		if (!(items.get(1) instanceof LispSymbol cls)) {
 			throw new LispReadException("instance? takes a class name, not " + items.get(1).print());
 		}
-		String name = cls.name();
-		LispVal lowered = ctx.lower(items.get(2));
+		return instanceAnswer(ctx, cls.name(), ctx.lower(items.get(2)), false);
+	}
+
+	/**
+	 * The test of {@code instance?} of the named class over a variable, as a generalized
+	 * boolean (no {@code T}-or-false answer): what a protocol dispatcher walking the
+	 * classes of its target asks ({@link ClojureProtocolLowering#walkTargetOf}). A class
+	 * no value here has is {@code NIL}; a name no class has is the oracle's unresolved
+	 * symbol, like {@code instance?}'s.
+	 * @param ctx the lowering
+	 * @param name the class's spelling
+	 * @param value the variable holding the value
+	 * @return the test
+	 */
+	static LispVal instanceTest(ClojureLowering ctx, String name, LispSymbol value) {
+		return instanceAnswer(ctx, name, value, true);
+	}
+
+	/**
+	 * {@code instance?} of the named class over the lowered value: the {@code T}-or-false
+	 * answer, or ({@code raw}) the test itself.
+	 */
+	private static LispVal instanceAnswer(ClojureLowering ctx, String name, LispVal lowered, boolean raw) {
+		Function<LispVal, LispVal> answer = raw ? test -> test : ctx::booleanAnswer;
 		ClojureLowering.TypeDef known = ctx.typeDefOf(name);
 		if (known != null) {
 			// a record or deftype name tests the dispatch tag, like a class
 			ctx.usedProtocols = true;
-			return ctx.booleanAnswer(ClojureLowerUtil.list(ClojureLowerUtil.sym("equal"),
+			return answer.apply(ClojureLowerUtil.list(ClojureLowerUtil.sym("equal"),
 					ClojureLowerUtil.list(new LispSymbol(ClojureProtocolLowering.PROTOCOL_TAG), lowered),
 					ClojureProtocolLowering.typeTagForm(known.tagSpelling())));
 		}
@@ -73,27 +95,27 @@ final class ClojureDispatchLowering {
 		Map.Entry<String, ClojureLowering.ProtocolDef> protocol = ClojureProtocolLowering.protocolOfInterface(ctx,
 				resolved);
 		if (protocol != null) {
-			return ctx.booleanAnswer(ClojureProtocolLowering.implementsForm(ctx, protocol, lowered));
+			return answer.apply(ClojureProtocolLowering.implementsForm(ctx, protocol, lowered));
 		}
 		String lang = resolved.indexOf('.') < 0 ? ClojureValueClasses.clojureLang(resolved) : null;
 		String fqn = lang != null ? lang : resolved;
 		if (fqn.equals(ClojureClassBases.OBJECT)) {
-			return ctx.booleanAnswer(ClojureLowerUtil.list(ClojureLowerUtil.sym("not"),
+			return answer.apply(ClojureLowerUtil.list(ClojureLowerUtil.sym("not"),
 					ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), lowered)));
 		}
 		List<String> chain = ClojureThrowables.chainOf(fqn);
 		if (chain != null) {
-			return ctx.booleanAnswer(throwableInstance(ctx, chain, lowered));
+			return answer.apply(throwableInstance(ctx, chain, lowered));
 		}
 		String alias = HOST_ALIASES.get(fqn);
 		if (alias != null) {
 			// a core kind's test a program naming no java: operator calls plain
 			// (ClojureArms.Family.HOST), so it lowers as before host objects counted
-			return ctx.booleanAnswer(ClojureLowerUtil.list(new LispSymbol(alias), lowered));
+			return answer.apply(ClojureLowerUtil.list(new LispSymbol(alias), lowered));
 		}
 		List<ClojureValueClasses.Kind> kinds = ClojureValueClasses.kindsOf(fqn);
 		if (kinds.equals(List.of(ClojureValueClasses.Kind.SYMBOL))) {
-			return ctx.booleanAnswer(ClojureFnLowering.symbolRaw(ctx, lowered));
+			return answer.apply(ClojureFnLowering.symbolRaw(ctx, lowered));
 		}
 		// every number kind is one numberp
 		boolean numbers = kinds.containsAll(List.of(ClojureValueClasses.Kind.LONG, ClojureValueClasses.Kind.DOUBLE,
@@ -117,6 +139,13 @@ final class ClojureDispatchLowering {
 				arms.add(new Arm(Use.ONCE, v -> throwableInstance(ctx, throwableChain, v)));
 			}
 		}
+		ClojureInterfaces.HostInterface implemented = ClojureInterfaces.named(fqn);
+		if (implemented != null && (lowered instanceof LispSymbol || !isConstant(lowered))) {
+			// a record, deftype or reify whose body implements the interface (an arm a
+			// program storing no row of its family sheds, ClojureArms); a literal or
+			// quoted value is never one
+			arms.add(new Arm(Use.VARIABLE, v -> ClojureLowerUtil.list(new LispSymbol(implemented.test()), v)));
+		}
 		boolean loads = ClojureValueClasses.loads(fqn);
 		if (ClojureValueClasses.hostMayHold(fqn, loads)) {
 			arms.add(new Arm(Use.VARIABLE,
@@ -127,9 +156,10 @@ final class ClojureDispatchLowering {
 				throw new LispReadException("unknown name: " + name);
 			}
 			// a class no value here has (Integer: an int is a Long)
-			return ClojureLowerUtil.list(ClojureLowerUtil.sym("progn"), lowered, ctx.falseVariable);
+			return raw ? ClojureLowering.NIL_CONST
+					: ClojureLowerUtil.list(ClojureLowerUtil.sym("progn"), lowered, ctx.falseVariable);
 		}
-		return armsAnswer(ctx, arms, lowered);
+		return armsAnswer(ctx, arms, lowered, answer);
 	}
 
 	/**
@@ -164,9 +194,9 @@ final class ClojureDispatchLowering {
 	 * variable unless every arm may read it as it is: a variable always, a constant where
 	 * no family arm reads it, any form where one arm reads it once.
 	 */
-	private static LispVal armsAnswer(ClojureLowering ctx, List<Arm> arms, LispVal lowered) {
-		boolean constant = !(lowered instanceof LispCons) || lowered instanceof LispCons quote
-				&& quote.car() instanceof LispSymbol head && head.name().equals("QUOTE");
+	private static LispVal armsAnswer(ClojureLowering ctx, List<Arm> arms, LispVal lowered,
+			Function<LispVal, LispVal> answerOf) {
+		boolean constant = isConstant(lowered);
 		boolean variableArm = arms.stream().anyMatch(arm -> arm.use() == Use.VARIABLE);
 		boolean once = arms.size() == 1 && arms.get(0).use() == Use.ONCE;
 		boolean bind = !(lowered instanceof LispSymbol) && (variableArm || !(once || constant));
@@ -175,13 +205,21 @@ final class ClojureDispatchLowering {
 		for (Arm arm : arms) {
 			tests.add(arm.test().apply(value));
 		}
-		LispVal answer = ctx
-			.booleanAnswer(tests.size() == 1 ? tests.get(0) : ClojureLowerUtil.cons(ClojureLowerUtil.sym("or"), tests));
+		LispVal answer = answerOf
+			.apply(tests.size() == 1 ? tests.get(0) : ClojureLowerUtil.cons(ClojureLowerUtil.sym("or"), tests));
 		if (!bind) {
 			return answer;
 		}
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let*"),
 				ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(value, lowered))), answer);
+	}
+
+	/**
+	 * Whether a lowered value is a constant: an atom (a variable too) or a quoted datum.
+	 */
+	private static boolean isConstant(LispVal lowered) {
+		return !(lowered instanceof LispCons) || lowered instanceof LispCons quote
+				&& quote.car() instanceof LispSymbol head && head.name().equals("QUOTE");
 	}
 
 	/** The test of one kind of value over the value. */
@@ -416,27 +454,6 @@ final class ClojureDispatchLowering {
 	static LispVal classValue(ClojureLowering ctx) {
 		LispSymbol one = new LispSymbol(ClojureLowering.mangle("class-one"));
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(one), classForm(ctx, one));
-	}
-
-	/**
-	 * {@code int}/{@code long} over an already-lowered value: a character reads back
-	 * through {@code char-code} (round-tripping {@code char}), anything else truncates,
-	 * like the oracle.
-	 */
-	static LispVal intForm(ClojureLowering ctx, LispVal lowered) {
-		LispSymbol one = ctx.freshTemp();
-		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
-				ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(one, lowered))),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("characterp"), one),
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("char-code"), one),
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("truncate"), one)));
-	}
-
-	/** {@code int}/{@code long} as a value: truncation, like the call. */
-	static LispVal intValue(ClojureLowering ctx) {
-		LispSymbol one = new LispSymbol(ClojureLowering.mangle("int-one"));
-		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(one), intForm(ctx, one));
 	}
 
 	// IO entry points: spit/slurp/line-seq over the eval IO layer (plus the

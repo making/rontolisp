@@ -79,6 +79,12 @@ final class ClojureRefusals {
 	static final String IO = "RONTOLISP::%CLOJURE-IO-EXCEPTION";
 
 	/**
+	 * {@code java.lang.AbstractMethodError}: a call of an interface method the type's
+	 * body leaves out ({@link ClojureInterfaces}).
+	 */
+	static final String ABSTRACT_METHOD = "RONTOLISP::%CLOJURE-ABSTRACT-METHOD-ERROR";
+
+	/**
 	 * {@code java.lang.ClassCastException} casting a value, its
 	 * {@code NullPointerException} when the value is nil.
 	 */
@@ -147,7 +153,8 @@ final class ClojureRefusals {
 			Map.entry(CLASS_NOT_FOUND, "java.lang.ClassNotFoundException"),
 			Map.entry(PATTERN_SYNTAX, "java.util.regex.PatternSyntaxException"),
 			Map.entry(ILLEGAL_FORMAT_CONVERSION, "java.util.IllegalFormatConversionException"),
-			Map.entry(ASSERTION_ERROR, "java.lang.AssertionError"), Map.entry(IO, "java.io.IOException"));
+			Map.entry(ASSERTION_ERROR, "java.lang.AssertionError"), Map.entry(IO, "java.io.IOException"),
+			Map.entry(ABSTRACT_METHOD, "java.lang.AbstractMethodError"));
 
 	/** Every carrier: a call to one is a refusal the strip folds. */
 	static final Set<String> CARRIERS = carriers();

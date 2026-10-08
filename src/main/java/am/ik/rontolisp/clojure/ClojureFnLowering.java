@@ -82,7 +82,8 @@ final class ClojureFnLowering {
 														ClojureLowerUtil.list(ClojureLowerUtil.sym("cdr"), args)),
 												ClojureLowering.NIL_CONST)))),
 								ClojureLowerUtil.cons(ClojureLowerUtil.sym("cond"),
-										ClojureCollectionLowering.getBranches(ctx, coll, key, dflt, true))))));
+										ClojureCollectionLowering.getBranches(ctx, coll, key, dflt, true,
+												ClojureLowerUtil.list(ClojureLowerUtil.sym("cdr"), args)))))));
 	}
 
 	/**

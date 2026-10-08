@@ -128,7 +128,8 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   exception the program built answers its class name as a keyword (`:java.lang.Exception`, where the oracle
   answers the host class), `:java.lang.RuntimeException` for an error naming no class; `.printStackTrace` writes the `toString` line to `*err*` (the oracle writes it
   and a line per frame to the process's stderr, whatever `*err*` is bound to) and
-  `.getStackTrace` answers an empty vector; `.getClass` answers what `class` does. On the
+  `.getStackTrace` answers an empty vector (so `Throwable->map` answers `:trace []` and no
+  `:at` in its `:via` maps); `.getClass` answers what `class` does. On the
   interpreter and the JVM, any other method is called on, and a Java member is passed, a
   host exception of the exception's class built once from its message and cause (an
   `ex-info`'s is a `RuntimeException`): `(.getCause (UncheckedIOException. "u" e))` answers
@@ -167,9 +168,11 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   of `clojure.lang.IPersistentList`, which also spells `:list`, where the oracle answers
   `false`. Any other class (`java.io.File`) is its class object, in a dispatch value too,
   like the oracle.
-  Protocol dispatch reads no hierarchy (exact tag match
-  plus the `Object` default) and merges `Long`/`Double` into `:number`, where the
-  oracle tells them apart.
+  Protocol dispatch reads no hierarchy (`derive`): past the exact tag it tries only the
+  classes the protocol was extended to, then the `Object` default. It merges
+  `Long`/`Double` into `:number`, where the oracle tells them apart, and two
+  `clojure.lang` interfaces one value implements are ordered by the kinds of value each
+  holds (`IRef` ahead of `IDeref`), since `clojure.lang` is not on this class path.
 - `(methods mt)` and `get-method`, `remove-method`, `prefer-method` take the multimethod's
   name (a `defmulti` var, through an alias or a referred one), not an expression: a local
   bound to a multimethod is refused at lowering. The map `methods` answers keys a host
@@ -177,7 +180,9 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
 - A record prints as its literal (`#user.R{:a 7}`, like the oracle), but `str` of one
   spells that literal too, where the oracle answers `user.R@<hash>`. A deftype prints
   as its wrapper list (`(:C%TYPE ...)`), a reify as `(:C%REIFY ...)`; only the entry
-  maps print deterministically.
+  maps print deterministically. One whose body overrides `toString` prints as the oracle's
+  `#object[user.T "text"]` without the identity hash, a reify's class spelled
+  `user$reify` without the oracle's number.
 - A deftype's `^:volatile-mutable` field is the same plain slot as an
   `^:unsynchronized-mutable` one (no cross-thread ordering).
 - `split`/`replace` answer seqs, never vectors, and plain strings stay literal (only
@@ -261,16 +266,25 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   a collection that does not reduce itself (a string, a map). A call of a protocol method
   with a count an inline body leaves out signals an `ArityException` (the oracle: an
   `AbstractMethodError`).
+- A `reify`, `deftype` or `defrecord` body implements the `clojure.lang` interfaces the core
+  functions consult -- `IReduceInit`, `IReduce`, `IKVReduce`, `Seqable`, `Counted`,
+  `Indexed`, `ILookup`, `IFn` (with `Callable` and `Runnable`), `IDeref`, `IMeta`, `IObj` --
+  and overrides `Object`'s methods ([reify](reference/reify.md#host-interfaces)); any other
+  interface (`ISeq`, `IPersistentMap`, `Sequential`, `java.util.List` ...) is refused by
+  name. A type's `equals` and `hashCode` answer `=` and `.hashCode` but never key a map or
+  a set, which hold such a value by identity. `sort` and `distinct` take a type
+  implementing `Seqable` alone through its seq, where the oracle refuses both.
 - `clojure.core.reducers` folds on the calling thread, its parts one after the other, and
   `cat` of two non-empty collections answers one accumulator (a vector) holding both, where
   the oracle answers a `Cat` tree whose fold combines its halves' folds.
 - The `unchecked-` arithmetic verbs wrap integers at 64 bits (`-int` verbs at 32) and the casts
   `short`, `byte`, `char` and `float` match the oracle, with one deviation: an integer past 64
   bits is a plain integer here, so the oracle's unwrapped bigint operand
-  (`(unchecked-add 9223372036854775807N 1)`) wraps too. `int` and `long` truncate without the
-  oracle's range checks (`(long 1e19)` is `10000000000000000000`, where the oracle throws an
-  `IllegalArgumentException`, and `(long ##NaN)` signals, where the oracle answers `0`), and
-  `double` of a ratio is its nearest double (`(double 2/3)` is `0.6666666666666666`), where the
+  (`(unchecked-add 9223372036854775807N 1)`) wraps too. `int` and `long` are the oracle's casts,
+  range checks and messages included. A literal argument takes the cast of its own type, any
+  other the object cast: a double the oracle's compiler types as a primitive (a `let` local
+  bound to a double literal, `(* 2.0 x)`) refuses with `Value out of range for int: 2.0E10`
+  there and `integer overflow` here. `double` of a ratio is its nearest double (`(double 2/3)` is `0.6666666666666666`), where the
   oracle rounds it to 16 significant digits first (`0.6666666666666667`). `inc`, `dec` and the
   checked verbs never overflow (integers are bignums).
 - `bigint` and `biginteger` answer a plain integer, and `bigdec` a plain rational (`(bigdec "1.5")`
@@ -303,8 +317,7 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   `(0 0)` and `(-1 0)`, where the oracle compares it with the core functions. `compare`
   orders strings by code point (the oracle by UTF-16 unit, which differs past U+FFFF).
 - `float` answers a double, so `(float 1/3)` is `0.3333333333333333` (the oracle's Float prints
-  `0.33333334`); a value past the float range still signals. `int` and `long` truncate and do not
-  refuse a value out of range (the oracle: `integer overflow`, `Value out of range for long: ...`).
+  `0.33333334`); a value past the float range still signals.
 - `mod` and `rem` of a NaN or infinite dividend throw an `ArithmeticException` (the oracle: a
   `NumberFormatException`).
 - `vector-of` answers an ordinary vector: a later `conj` or `assoc` stores its value as

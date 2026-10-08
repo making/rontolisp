@@ -365,11 +365,15 @@ character's code (`-1` past the end).
 
 A `defprotocol` declares methods; each method lowers to a dispatcher over the
 target's tag (the multimethod shape without the hierarchy search: an exact tag
-match, then the `Object` row). `extend-protocol`/`extend-type`/`extend` add rows
+match, then a class the target extends or implements that the protocol was extended to,
+then the `Object` row). `extend-protocol`/`extend-type`/`extend` add rows
 under a target's tag; `satisfies?` tests membership. Extend targets are the kinds
 `class` answers (`String`, `Number`, `Boolean`, `Keyword`, `Symbol`, `Character`,
 `Map`, `Vector`, `Set`, `List`/`Seq`, plus `nil` and `Object` as the miss
-default) and known record/deftype names; anything else is a named refusal. A miss
+default), known record/deftype names, and any other class a value may be an instance of
+(a throwable, an interface such as `clojure.lang.IRef`, `java.util.Date`, a host class on
+the interpreter and the JVM), which are tried like the oracle's: the superclasses, then the
+interfaces. A name no class has is refused. A miss
 with no `Object` row signals, like the oracle. A method declares one parameter vector
 per arity: an inline body names the method again for another arity, an extension spells
 `fn` clauses, and the row stores one lambda applying the arity of the call's count. A
@@ -454,6 +458,7 @@ Each refusal names the missing design, never `unknown name`:
 | end-less `range` | `infinite range is not supported: range needs an end` | an infinite seq cannot be spelled strictly -- spell it with `iterate` |
 | `transient`, `persistent!`, `assoc!`, `dissoc!`, `conj!`, `disj!` | `transients are not supported yet: ...` | no transient runtime behind the tables |
 | `definterface`, `gen-class`, `gen-interface` | `protocols are not supported yet: ...` | no interface generation on any backend |
+| a `reify`/`deftype`/`defrecord` body naming an interface other than the core functions' ([reify](reference/reify.md#host-interfaces)) | `... is not supported yet as an interface of ...` | the collection interfaces (`ISeq`, `IPersistentMap` ...) and the host ones have no consulting functions yet |
 | `set!` of a core var that is no special (`inc`), of a host field | `set! of a var is not supported yet: ...`, `set! of a host field is not supported yet: ...` | no var to assign; the `java:` surface has no field write |
 | `future`, `delay`/`force`, `promise`/`deliver` | by name | no thread pool, lazy memo cells or blocking rendezvous on any backend |
 | `proxy-super` outside a proxy method | `proxy-super outside a proxy method` | a `proxy-super` calls the superclass implementation on the method's `this` |

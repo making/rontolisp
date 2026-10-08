@@ -6,8 +6,14 @@
 （`defmethod` 行同様。繰り返した型は後の行が勝ちます。オラクル同様）。対象は
 `class` が答える種類（`String`、`Number`、`Boolean`、`Keyword`、`Symbol`、
 `Character`、`Map`、`Vector`、`Set`、`List`/`Seq`、それに外れ既定としての `nil`
-と `Object`。`java.lang.String`、`clojure.lang.IPersistentMap` のようなパッケージ修飾の綴りも可）と既知の record/deftype 名です。それ以外（`Instant`、`Date` 等）は
-名前付きで拒否されます。複数のアリティを持つメソッドは、アリティを `fn` の節として
+と `Object`。`java.lang.String`、`clojure.lang.IPersistentMap` のようなパッケージ修飾の綴りも可）、既知の record/deftype 名、それに値がインスタンスでありうる他のクラスです。
+他のクラスとは、throwable（`Throwable`、`Exception`、`ExceptionInfo` など）、
+`clojure.lang.IRef` や `clojure.lang.IDeref` のようなインタフェース、`java.util.Date`
+（`java.sql.Timestamp` もここに届きます）、インタプリタと JVM ではホストのクラスです。
+自分のクラスの行がない値は、オラクル同様、プロトコルを extend したそれらのクラスを
+スーパークラス、インタフェースの順に（どちらも自分のスーパータイプより先に）試し、最後に
+`Object` を試します。どのクラスでもない名前は `instance?` 同様に拒否されます。複数の
+アリティを持つメソッドは、アリティを `fn` の節として
 `(method ([target] ...) ([target x] ...))` のように書きます。
 
 ```clojure
@@ -23,4 +29,11 @@
 (defprotocol Q (q [x] [x y]))
 (extend-protocol Q Long (q ([n] n) ([n k] (* n k))))
 (println (q 7) (q 7 6)) ; 7 42
+
+(defprotocol R (r [x]))
+(extend-protocol R
+  Throwable (r [_] :throwable)
+  Exception (r [_] :exception)
+  clojure.lang.IRef (r [_] :ref))
+(println (r (ex-info "m" {})) (r (Error. "e")) (r (atom 1))) ; :exception :throwable :ref
 ```

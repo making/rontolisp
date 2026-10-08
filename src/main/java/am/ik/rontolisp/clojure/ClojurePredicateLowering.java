@@ -86,7 +86,7 @@ final class ClojurePredicateLowering {
 			Map.entry("set?", helper("IS-SET")), Map.entry("list?", helper("IS-LIST")),
 			Map.entry("record?", helper("RECORD-P")), Map.entry("coll?", helper("IS-COLL")),
 			Map.entry("seqable?", helper("IS-SEQABLE")), Map.entry("associative?", helper("IS-ASSOCIATIVE")),
-			Map.entry("counted?", helper("IS-COUNTED")), Map.entry("indexed?", helper("IS-VECTOR")),
+			Map.entry("counted?", helper("IS-COUNTED")), Map.entry("indexed?", helper("IS-INDEXED")),
 			Map.entry("reversible?", helper("IS-REVERSIBLE")), Map.entry("ifn?", helper("IS-IFN")),
 			Map.entry("sorted?", helper("IS-SORTED")), Map.entry("number?", cl("NUMBERP")),
 			Map.entry("integer?", cl("INTEGERP")), Map.entry("int?", helper("IS-INT")),

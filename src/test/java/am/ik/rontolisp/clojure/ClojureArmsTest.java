@@ -413,4 +413,67 @@ class ClojureArmsTest {
 		}
 	}
 
+	/**
+	 * One interface family: arms of each shape it has, what they fold to, and the store
+	 * of a row of its interfaces that makes a value of it.
+	 */
+	private record InterfaceCase(ClojureArms.Family family, String arms, List<String> folded, String store) {
+	}
+
+	@Test
+	void anInterfaceFamilyIsMadeByTheStoreOfARowOfItsInterfaces() {
+		List<InterfaceCase> cases = List.of(
+				new InterfaceCase(ClojureArms.Family.REDUCE_INTERFACE,
+						"(if (rontolisp::%clojure-reduce-init-p coll) (i coll) (walk coll))"
+								+ " (or (row x) (rontolisp::%clojure-kvreduce-p x))"
+								+ " (vec-arg (rontolisp::%clojure-reduce-init-items (f x)))",
+						List.of("(WALK COLL)", "(ROW X)", "(VEC-ARG (F X))"),
+						"(rontolisp::%clojure-reduce-interface-row (cadr self)"
+								+ " '(\"clojure.lang.IReduceInit\") (list \"reduce\" f))"),
+				new InterfaceCase(ClojureArms.Family.SEQABLE,
+						"(cond ((rontolisp::%clojure-seqable-p coll) (s coll)) (t (e coll)))"
+								+ " (if (rontolisp::%clojure-lazy-input-p coll) (l coll) (w coll))",
+						List.of("(COND (T (E COLL)))", "(IF (RONTOLISP::%CLOJURE-LAZY-P COLL) (L COLL) (W COLL))"),
+						"(rontolisp::%clojure-seqable-row (cadr self) '(\"clojure.lang.Seqable\") (list \"seq\" f))"),
+				new InterfaceCase(ClojureArms.Family.COUNTED, "(or (v x) (rontolisp::%clojure-counted-p x))",
+						List.of("(V X)"),
+						"(rontolisp::%clojure-counted-row (list :c%keyword \"T\") '(\"clojure.lang.Counted\")"
+								+ " (list \"count\" f))"),
+				new InterfaceCase(ClojureArms.Family.INDEXED,
+						"(cond ((rontolisp::%clojure-indexed-p coll) (n coll)) (t (e coll)))"
+								+ " (rontolisp::%clojure-nth-2 v 1 nil) (rontolisp::%clojure-is-indexed v)",
+						List.of("(COND (T (E COLL)))", "(RONTOLISP::%CLOJURE-NTH V 1 NIL)",
+								"(RONTOLISP::%CLOJURE-IS-VECTOR V)"),
+						"(rontolisp::%clojure-indexed-row (cadr self) '(\"clojure.lang.Indexed\") (list \"nth\" f))"),
+				new InterfaceCase(ClojureArms.Family.LOOKUP,
+						"(cond ((rontolisp::%clojure-lookup-p (car args)) (g args)) (t d))", List.of("(COND (T D))"),
+						"(rontolisp::%clojure-lookup-row (cadr self) '(\"clojure.lang.ILookup\") (list \"valAt\" f))"),
+				new InterfaceCase(ClojureArms.Family.INVOKABLE,
+						"(if (rontolisp::%clojure-invokable-p f) (i f) (c f))"
+								+ " (apply (rontolisp::%clojure-applied-fn g) args)",
+						List.of("(C F)", "(APPLY G ARGS)"),
+						"(rontolisp::%clojure-invokable-row (cadr self) '(\"clojure.lang.IFn\") (list \"invoke\" f))"),
+				new InterfaceCase(ClojureArms.Family.DEREFABLE,
+						"(cond ((rontolisp::%clojure-derefable-p x) (d x)) (t (e x)))", List.of("(COND (T (E X)))"),
+						"(rontolisp::%clojure-derefable-row (cadr self) '(\"clojure.lang.IDeref\") (list \"deref\" f))"),
+				new InterfaceCase(ClojureArms.Family.META_INTERFACE,
+						"(if (rontolisp::%clojure-imeta-p x) (m x) (side x))", List.of("(SIDE X)"),
+						"(rontolisp::%clojure-meta-row (cadr self) '(\"clojure.lang.IMeta\") (list \"meta\" f))"),
+				new InterfaceCase(ClojureArms.Family.OBJECT_METHODS,
+						"(cond ((rontolisp::%clojure-to-string-p x) (s x)) (t (p x)))", List.of("(COND (T (P X)))"),
+						"(rontolisp::%clojure-object-row (cadr self) nil (list \"toString\" f))"));
+		for (InterfaceCase one : cases) {
+			assertThat(ClojureArms.scan(read(one.arms()), one.family()).strips()).as(one.family().name()).isTrue();
+			assertThat(ClojureArms.strip(read(one.arms()), one.family()).stream().map(LispVal::print))
+				.as(one.family().name())
+				.containsExactlyElementsOf(one.folded());
+			assertThat(ClojureArms.scan(read(one.arms() + one.store()), one.family()).builds()).as(one.family().name())
+				.isTrue();
+		}
+		// a reduce-interface row makes a reducible value too, whose verbs hold its arms
+		assertThat(ClojureArms
+			.scan(read("(rontolisp::%clojure-reduce-interface-row tag nil nil)"), ClojureArms.Family.REDUCIBLE)
+			.builds()).isTrue();
+	}
+
 }

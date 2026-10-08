@@ -558,13 +558,17 @@ public final class ClojureLowering {
 	 * an anonymous {@code fn} (or {@code #(...)}, or a stored method lambda) a fresh
 	 * {@code labels} name the form wraps itself in when the target is used. A plain
 	 * lambda that is none of these pushes nothing, so a {@code recur} passes through it
-	 * to the enclosing target.
+	 * to the enclosing target. An inline method's target ({@link #inlineMethod}) leaves
+	 * its first parameter, the target object, out of the count.
 	 */
 	static final class RecurTarget {
 
 		private final String callName;
 
 		private final boolean checked;
+
+		/** How many leading parameters the method supplies itself, not the recur. */
+		private final int leading;
 
 		private int arity = -1;
 
@@ -578,8 +582,27 @@ public final class ClojureLowering {
 		private int depth;
 
 		RecurTarget(String callName, boolean checked) {
+			this(callName, checked, 0);
+		}
+
+		private RecurTarget(String callName, boolean checked, int leading) {
 			this.callName = callName;
 			this.checked = checked;
+			this.leading = leading;
+		}
+
+		/**
+		 * The target of an inline {@code deftype}/{@code defrecord}/{@code reify}
+		 * method's arity: a {@code recur} passes every parameter but the first
+		 * {@code leading} -- the target object, which the method supplies itself, like
+		 * the oracle; none when a rest holds every parameter.
+		 */
+		static RecurTarget inlineMethod(String callName, int leading) {
+			return new RecurTarget(callName, true, leading);
+		}
+
+		int leading() {
+			return this.leading;
 		}
 
 		String callName() {
@@ -1135,6 +1158,33 @@ public final class ClojureLowering {
 	boolean protocolsEmitted;
 
 	/**
+	 * The protocols whose dispatchers walk the classes of their target past an exact miss
+	 * ({@link ClojureProtocolLowering#dispatcherDefun}), by method-table name, as the
+	 * pass before this one learned them ({@link #walkMisses}): a protocol extended to a
+	 * class no value's tag names exactly -- a throwable, an interface such as
+	 * {@code IRef}, {@code java.util.Date}. A session's dispatchers all walk.
+	 */
+	final Set<String> walkingProtocols = new HashSet<>();
+
+	/**
+	 * The protocols an extension to a walked class reached after their dispatchers had
+	 * lowered without the walk: the lowering starts over with them walking
+	 * ({@link #lower}).
+	 */
+	final Set<String> walkMisses = new LinkedHashSet<>();
+
+	/**
+	 * The walked classes the program extends a protocol to, by binary name, each with its
+	 * {@code instance?} test over {@link ClojureProtocolLowering#WALK_VALUE}, in the
+	 * order spelled: the protocol runtime's walk ({@code C%PROTOCOL-SUPER}) tries them
+	 * the oracle's way.
+	 */
+	final Map<String, LispVal> walkTests = new LinkedHashMap<>();
+
+	/** How many walked classes a session's protocol runtime was last spliced with. */
+	int walkTestsEmitted;
+
+	/**
 	 * The vars declared {@code ^:dynamic}, by var key: only {@code binding} may rebind
 	 * them, and only they (beside {@code *out*}/{@code *in*} and {@code *agent*}, which
 	 * the agent runtime binds while a {@code send} runs) may be rebound.
@@ -1334,19 +1384,26 @@ public final class ClojureLowering {
 	 * file lowered as a direct call leaves that var in {@link #redefMisses}: the program
 	 * lowers again with those vars redefinable from the start, so every call site reads
 	 * the var's value cell (at most once more per such var; a program without one lowers
-	 * once). The second pass reuses the first's resolved source path.
+	 * once). An extension to a walked class of a protocol whose dispatchers lowered
+	 * without the walk leaves it in {@link #walkMisses} the same way, so only the
+	 * protocols extended to one walk. The second pass reuses the first's resolved source
+	 * path.
 	 */
 	static List<LispVal> lower(List<LispVal> datums, @Nullable ClojureReader reader,
 			@Nullable ClojureMacroEvaluator macroEvaluator, ClojureFiles files, boolean hostTarget,
 			ClojureBoundary boundary) {
 		Set<String> redefinable = new HashSet<>();
+		Set<String> walking = new HashSet<>();
 		ClojureSourcePath sourcePath = null;
 		while (true) {
 			ClojureLowering lowering = new ClojureLowering();
 			lowering.redefinable.addAll(redefinable);
+			lowering.walkingProtocols.addAll(walking);
 			List<LispVal> forms = lowering.lowerProgram(datums, reader, macroEvaluator, files, hostTarget, boundary,
 					sourcePath);
-			if (!redefinable.addAll(lowering.redefMisses)) {
+			boolean redefs = redefinable.addAll(lowering.redefMisses);
+			boolean walks = walking.addAll(lowering.walkMisses);
+			if (!redefs && !walks) {
 				return forms;
 			}
 			sourcePath = lowering.sourcePath;
@@ -1651,11 +1708,14 @@ public final class ClojureLowering {
 				out.add(0, new ClojureTopLevel(forms, false));
 			}
 		}
-		if (this.usedProtocols && !this.protocolsEmitted) {
+		if (this.usedProtocols && (!this.protocolsEmitted || this.walkTests.size() != this.walkTestsEmitted)) {
 			// The protocol runtime travels ahead of the buffer that first needs
-			// it, like the false binding; later buffers reuse it.
+			// it, like the false binding; later buffers reuse it, and a buffer
+			// extending a protocol to a class none before it walked defines it
+			// again with that class's test.
 			out.add(0, new ClojureTopLevel(ClojureProtocolLowering.protocolRuntime(this), false));
 			this.protocolsEmitted = true;
+			this.walkTestsEmitted = this.walkTests.size();
 		}
 		if (this.usedMacros && !this.macrosEmitted) {
 			// The macro runtime travels ahead of the buffer that first needs
@@ -3229,6 +3289,9 @@ public final class ClojureLowering {
 		if (ClojureLowerUtil.isSymbolNamed(head, "ex-cause")) {
 			return ClojureStateLowering.exReaderOf(this, items, ClojureStateLowering.EX_CAUSE);
 		}
+		if (ClojureLowerUtil.isSymbolNamed(head, "Throwable->map")) {
+			return ClojureStateLowering.exReaderOf(this, items, ClojureStateLowering.THROWABLE_TO_MAP);
+		}
 		if (ClojureLowerUtil.isSymbolNamed(head, "atom")) {
 			return ClojureStateLowering.atomOf(this, items);
 		}
@@ -4062,9 +4125,6 @@ public final class ClojureLowering {
 			case "class":
 				ClojureLowerUtil.isTrue(n == 1, "class takes one value");
 				return ClojureDispatchLowering.classForm(this, lower(items.get(1)));
-			case "int", "long":
-				ClojureLowerUtil.isTrue(n == 1, name + " takes one value");
-				return ClojureDispatchLowering.intForm(this, lower(items.get(1)));
 			case "spit":
 				return ClojureStringLowering.spitOf(this, items);
 			case "slurp":
@@ -4318,7 +4378,6 @@ public final class ClojureLowering {
 			case "string?" -> ClojureFnLowering.stringPredValue(this);
 			case "symbol?" -> ClojureFnLowering.symbolPredValue(this);
 			case "class" -> ClojureDispatchLowering.classValue(this);
-			case "int", "long" -> ClojureDispatchLowering.intValue(this);
 			case "spit" -> ClojureStringLowering.spitValue(this);
 			case "slurp" -> ClojureStringLowering.slurpValue(this);
 			case "line-seq" -> ClojureStringLowering.lineSeqValue(this);
@@ -4353,6 +4412,7 @@ public final class ClojureLowering {
 			case "ex-data" -> ClojureStateLowering.exHelperValue(this, ClojureStateLowering.EX_DATA);
 			case "ex-message" -> ClojureStateLowering.exHelperValue(this, ClojureStateLowering.EX_MESSAGE);
 			case "ex-cause" -> ClojureStateLowering.exHelperValue(this, ClojureStateLowering.EX_CAUSE);
+			case "Throwable->map" -> ClojureStateLowering.exHelperValue(this, ClojureStateLowering.THROWABLE_TO_MAP);
 			case "ex-info" -> ClojureStateLowering.exInfoValue(this);
 			case "macroexpand-1" -> ClojureMacroLowering.macroexpandValue(this, ClojureMacroLowering.MACROEXPAND_1);
 			case "macroexpand" -> ClojureMacroLowering.macroexpandValue(this, ClojureMacroLowering.MACROEXPAND);
@@ -4802,7 +4862,8 @@ public final class ClojureLowering {
 		ClojureLowering ctx = new ClojureLowering();
 		List<LispVal> forms = new ArrayList<>(ClojureStateLowering.stmRuntime(ctx));
 		forms.addAll(ClojureStateLowering.exInfoRuntime(ctx));
-		forms.addAll(ClojureProtocolLowering.protocolRuntime(ctx));
+		// a definition's dispatcher may walk: the walk finds no class at macro time
+		forms.addAll(ClojureProtocolLowering.protocolRuntime(ctx, true));
 		forms.addAll(ClojureHierarchyLowering.hierarchyRuntime(ctx));
 		forms.addAll(ClojureMacroLowering.macroRuntime(ctx));
 		return forms;

@@ -11,7 +11,9 @@
 プロトコルのインタフェース（`user.P`。名前空間と名前はオラクルと同じく munge され、
 `my_app.core.my_p` のようになります）は、本体でそのプロトコルを挙げた record・deftype・`reify`
 について、メソッドの有無によらず `true` です。`extend-type` や `extend-protocol` の対象は
-インスタンスではありません（`satisfies?` は `true` です）。
+インスタンスではありません（`satisfies?` は `true` です）。本体が実装した `clojure.lang` の
+インタフェース（[reify](reify.md#host-interfaces) を参照。`Counted`、`IFn` など）は、その値に
+ついて `true` で、そのスーパーインタフェース（`Indexed` に対する `Counted`）も同様です。
 throwable クラス（`Exception`、`IllegalArgumentException`、`clojure.lang.ExceptionInfo`、
 ドット付きや import した名前）は、例外と実行時エラーをそのクラス（`class` が返すクラス）か
 そのサブクラスであるかで検査します。インタプリタと JVM ではホストのオブジェクトをホストの

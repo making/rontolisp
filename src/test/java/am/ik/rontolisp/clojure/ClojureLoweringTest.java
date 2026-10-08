@@ -231,17 +231,8 @@ class ClojureLoweringTest {
 		assertThat(lowered("(defmulti m :shape) (defmethod m :a [a & r] a)"))
 			.contains("(LAMBDA (|c%a| &REST |c%r|) |c%a|)")
 			.doesNotContain("%*");
-		// inline and extended protocol methods share the stored path
-		assertThat(lowered("(defprotocol P (foo [t a & r])) (defrecord R [f] P (foo [t a & r] (recur t a r)))"))
-			.contains("LABELS")
-			.contains("%*");
+		// an extended protocol method is a fn: its recur passes the target too
 		assertThat(lowered("(defprotocol P (foo [t a & r])) (extend-protocol P String (foo [t a & r] (recur t a r)))"))
-			.contains("LABELS")
-			.contains("%*");
-		assertThat(lowered("(defprotocol P (foo [t a & r])) (defrecord E [] P (foo [t a & r] (recur t a r)))"))
-			.contains("LABELS")
-			.contains("%*");
-		assertThat(lowered("(defprotocol P (foo [t a & r])) (reify P (foo [t a & r] (recur t a r)))"))
 			.contains("LABELS")
 			.contains("%*");
 		// the stored path keeps the arity, tail-position and try checks
@@ -255,6 +246,30 @@ class ClojureLoweringTest {
 			.read("(defmulti m :shape) (defmethod m :a [a & r] (try (recur a r) (catch Exception e :c)))", null))
 			.isInstanceOf(LispReadException.class)
 			.hasMessageContaining("Cannot recur across try");
+	}
+
+	@Test
+	void anInlineMethodRecurPassesEveryParameterButTheTarget() {
+		// an inline method's recur passes every parameter but the target (oracle clj
+		// 1.12.6.1673), so the method loops over the rest, the rest an ordinary
+		// parameter there: no worker split
+		assertThat(lowered("(defprotocol P (foo [t a & r])) (defrecord R [f] P (foo [t a & r] (recur a r)))"))
+			.contains("(|c%a| |c%r|)")
+			.doesNotContain("%*");
+		assertThat(lowered("(defprotocol P (foo [t a & r])) (defrecord E [] P (foo [t a & r] (recur a r)))"))
+			.contains("(|c%a| |c%r|)")
+			.doesNotContain("%*");
+		assertThat(lowered("(defprotocol P (foo [t a & r])) (reify P (foo [t a & r] (recur a r)))"))
+			.contains("(|c%a| |c%r|)")
+			.doesNotContain("%*");
+		assertThatThrownBy(
+				() -> Clojure.read("(defprotocol P (foo [t a])) (deftype D [] P (foo [t a] (recur t a)))", null))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("wrong number of arguments passed to recur: expected 1, got 2");
+		assertThatThrownBy(() -> Clojure
+			.read("(defprotocol P (foo [t a] [t a b])) (reify P (foo [t a] a) (foo [t a b] (recur a)))", null))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("wrong number of arguments passed to recur: expected 2, got 1");
 	}
 
 	@Test
@@ -664,8 +679,12 @@ class ClojureLoweringTest {
 	@Test
 	void nthIndexesTheSeqViewWithAnOptionalDefault() {
 		// one spliced stepper: a vector indexes directly, a seq steps one realized level
-		// at a time, so an infinite input answers
-		assertThat(lowered("(nth '(1 2 3) 1)")).isEqualTo(FALSE_BINDING + "(RONTOLISP::%CLOJURE-NTH '(1 2 3) 1 NIL)");
+		// at a time, so an infinite input answers; nth of two arguments is its own entry,
+		// for a type implementing Indexed, which a program storing no such row calls as
+		// the stepper (the indexed family's alias)
+		assertThat(lowered("(nth '(1 2 3) 1)")).isEqualTo(FALSE_BINDING + "(RONTOLISP::%CLOJURE-NTH-2 '(1 2 3) 1 NIL)");
+		List<LispVal> spliced = am.ik.rontolisp.eval.ClojureLibrary.process(Clojure.read("(nth '(1 2 3) 1)", null));
+		assertThat(spliced.get(spliced.size() - 1).print()).isEqualTo("(RONTOLISP::%CLOJURE-NTH '(1 2 3) 1 NIL)");
 		assertThat(lowered("(nth [10 20] 5 :nf)")).contains("(RONTOLISP::%CLOJURE-NTH (VECTOR 10 20) 5")
 			.contains(":C%KEYWORD");
 		assertThat(lowered("nth")).contains("(LAMBDA").contains("(RONTOLISP::%CLOJURE-NTH");
@@ -1005,9 +1024,10 @@ class ClojureLoweringTest {
 		assertThat(lowered("(defprotocol Q :extend-via-metadata false (m [x]))")).doesNotContain("|c%Q%inline|")
 			.doesNotContain("%CLOJURE-META-METHOD");
 		assertThat(lowered("(defprotocol Q (m [x]))")).doesNotContain("%CLOJURE-META-METHOD");
+		// a name no class has is the oracle's unresolved symbol, like instance?'s
 		assertThatThrownBy(() -> Clojure.read("(defprotocol Q (m [x])) (extend-protocol Q Instant (m [x] 1))", null))
 			.isInstanceOf(LispReadException.class)
-			.hasMessageContaining("extend-protocol needs a core type, not Instant");
+			.hasMessageContaining("unknown name: Instant");
 		assertThatThrownBy(() -> Clojure.read("(extend-protocol Missing String (m [x] 1))", null))
 			.isInstanceOf(LispReadException.class)
 			.hasMessageContaining("No such protocol: Missing");
@@ -1065,6 +1085,49 @@ class ClojureLoweringTest {
 	}
 
 	@Test
+	void onlyAProtocolExtendedToAWalkedClassWalksPastAnExactMiss() {
+		// no walked class: no walk in the dispatcher, satisfies? or the runtime
+		String exact = lowered(
+				"(defprotocol Q (m [x])) (extend-protocol Q String (m [s] 1) Object (m [_] 2))" + " (satisfies? Q 1)");
+		assertThat(exact).doesNotContain("C%PROTOCOL-SUPER").doesNotContain("C%PROTOCOL-ROW");
+		// a throwable target: the row under its class keyword, the dispatcher (lowered
+		// above the extension, so the lowering starts over) and satisfies? walk, and the
+		// runtime tests the class's chain
+		String walked = lowered("(defprotocol Q (m [x])) (defprotocol O (o [x])) (satisfies? Q 1)"
+				+ " (extend-protocol Q Throwable (m [_] 1))");
+		assertThat(walked).contains("(GETHASH (LIST :C%KEYWORD \"java.lang.Throwable\")")
+			.contains("(DEFUN C%PROTOCOL-SUPER (|x| |table| |method| |miss|)")
+			.contains("(RONTOLISP::%CLOJURE-INSTANCE-OF |x| '(\"java.lang.Throwable\"))")
+			.containsPattern("\\(C%PROTOCOL-SUPER \\(CAR \\|__clojure_\\d+\\|\\) \\|c%Q%methods\\|")
+			.containsPattern("\\(C%PROTOCOL-SUPER \\|__clojure_\\d+\\| \\|c%Q%methods\\| NIL");
+		// a protocol of the same program extended to no walked class keeps its dispatcher
+		assertThat(walked)
+			.doesNotContainPattern("\\(C%PROTOCOL-SUPER \\(CAR \\|__clojure_\\d+\\|\\) \\|c%O%methods\\|");
+		// an interface over core kinds tests the kinds; a host class the host object
+		assertThat(lowered("(defprotocol Q (m [x])) (extend clojure.lang.IRef Q {:m (fn [_] 1)})"))
+			.contains("\"clojure.lang.IRef\"")
+			.contains("(RONTOLISP::%CLOJURE-VAR-P |x|)");
+		assertThat(lowered("(defprotocol Q (m [x])) (extend-type java.time.Instant Q (m [_] 1))"))
+			.contains("(RONTOLISP::%CLOJURE-HOST-OBJECT-P |x| \"java.time.Instant\")");
+		// extends? names the exact class
+		assertThat(lowered("(defprotocol Q (m [x])) (extends? Q Exception)"))
+			.contains("(GETHASH (LIST :C%KEYWORD \"java.lang.Exception\")");
+	}
+
+	@Test
+	void theWalkTriesSuperclassesThenInterfacesEachAheadOfItsSupertypes() {
+		// the classes (ARef unrelated to the throwables), then the interfaces, each
+		// subtype first: IRef below IDeref by the kinds of value either holds
+		assertThat(ClojureProtocolLowering
+			.walkOrder(List.of("java.lang.Throwable", "clojure.lang.IDeref", "clojure.lang.IExceptionInfo",
+					"java.lang.Exception", "clojure.lang.IRef", "clojure.lang.ARef", "java.lang.RuntimeException")))
+			.containsExactly("clojure.lang.ARef", "java.lang.RuntimeException", "java.lang.Exception",
+					"java.lang.Throwable", "clojure.lang.IExceptionInfo", "clojure.lang.IRef", "clojure.lang.IDeref");
+		assertThat(ClojureProtocolLowering.walkOrder(List.of("java.util.Date", "java.io.Writer")))
+			.containsExactly("java.util.Date", "java.io.Writer");
+	}
+
+	@Test
 	void aTypedRowOfCollReduceOrIKVReduceIsStoredThroughTheLibrary() {
 		// what reduce and reduce-kv hand a record, deftype or reify to: the store is the
 		// reducible family's producer, so a program storing none folds every arm
@@ -1082,6 +1145,60 @@ class ClojureLoweringTest {
 				+ " (extend-protocol p/CollReduce String (coll-reduce ([s f] 1) ([s f i] 2)))"
 				+ " (defprotocol Q (m [x])) (reify Q (m [_] 1))");
 		assertThat(core).doesNotContain("%CLOJURE-COLL-REDUCER-ROW").doesNotContain("%CLOJURE-KV-REDUCER-ROW");
+	}
+
+	@Test
+	void aBodyImplementingAnInterfaceStoresItsRowThroughTheFamilyOfEach() {
+		// one store per family under the type's tag: the interfaces it implements
+		// (supers included) and a lambda per method, the body's or the oracle's
+		// AbstractMethodError for one it leaves out
+		String reify = lowered("(def r (reify clojure.lang.Counted (count [_] 3)))");
+		assertThat(reify).contains("(RONTOLISP::%CLOJURE-COUNTED-ROW (CADR ")
+			.contains("'(\"clojure.lang.Counted\") (LIST \"count\" (LAMBDA (");
+		String indexed = lowered("(deftype T [n] clojure.lang.Indexed (nth [_ i] i))");
+		assertThat(indexed).contains(
+				"(RONTOLISP::%CLOJURE-INDEXED-ROW (LIST :C%KEYWORD \"T\") '(\"clojure.lang.Indexed\") (LIST \"nth\"")
+			.contains(
+					"(RONTOLISP::%CLOJURE-COUNTED-ROW (LIST :C%KEYWORD \"T\") '(\"clojure.lang.Counted\") (LIST \"count\"")
+			.contains("(RONTOLISP::%CLOJURE-ABSTRACT-METHOD-ERROR \"does not define or inherit an implementation of"
+					+ " the resolved method count of interface clojure.lang.Counted\")")
+			.contains("(RONTOLISP::%CLOJURE-ABSTRACT-METHOD-ERROR \"does not define or inherit an implementation of"
+					+ " the resolved method nth of interface clojure.lang.Indexed\")");
+		// an Object override needs no group of its own, and a reify's names its class
+		String object = lowered("(defprotocol P (m [x])) (reify P (m [_] 1) (toString [_] \"r\"))");
+		assertThat(object).contains("(RONTOLISP::%CLOJURE-OBJECT-ROW (CADR ")
+			.contains(" NIL (LIST \"toString\" (LAMBDA (")
+			.contains("\"class\" \"user$reify\")");
+		// a protocol-only body stores no interface row
+		assertThat(lowered("(defprotocol P (m [x])) (reify P (m [_] 1)) (deftype U [] P (m [_] 2))"))
+			.doesNotContain("-ROW (");
+		// a group symbol resolves like the oracle's class names
+		assertThat(lowered("(ns u (:import (clojure.lang IFn))) (reify IFn (invoke [_] 1))"))
+			.contains("%CLOJURE-INVOKABLE-ROW");
+		for (String[] refused : new String[][] {
+				{ "(reify IFn (invoke [_] 1))", "Unable to resolve symbol: IFn in this context" },
+				{ "(reify clojure.lang.ISeq (first [_] 1))",
+						"clojure.lang.ISeq is not supported yet as an interface of reify" },
+				{ "(reify clojure.lang.Foo)", "Unable to resolve classname: clojure.lang.Foo" },
+				{ "(reify java.lang.String)", "only interfaces are supported, had: java.lang.String" },
+				{ "(reify java.util.Iterator)", "java.util.Iterator is not supported yet as an interface of reify" },
+				{ "(reify clojure.lang.Counted (cnt [_] 1))", "Can't define method not in interfaces: cnt" },
+				{ "(reify clojure.lang.Counted (count [_ x] 1))", "Can't define method not in interfaces: count" },
+				{ "(reify clojure.lang.Counted (count [_] 1) (count [_] 2))",
+						"duplicate method implementation: count" },
+				{ "(reify clojure.lang.IFn (invoke [_ & xs] xs))",
+						"an interface method takes fixed parameters: invoke" },
+				{ "(reify (toString [_] \"x\"))", "reify methods group under a protocol or interface name" },
+				{ "(reify clojure.lang.IObj)", "Duplicate interface name \"clojure/lang/IObj\" in reify" },
+				{ "(reify clojure.lang.IMeta (meta [_] {}))", "Duplicate method name \"meta\" in reify" },
+				{ "(defrecord R [a] clojure.lang.ILookup)", "Duplicate interface name \"clojure/lang/ILookup\"" },
+				{ "(defrecord R [a] clojure.lang.Counted (count [_] 1))",
+						"Duplicate method name \"count\" in defrecord" },
+				{ "(defrecord R [a] Object (equals [_ o] true))", "Duplicate method name \"equals\" in defrecord" } }) {
+			assertThatThrownBy(() -> Clojure.read(refused[0], null)).as(refused[0])
+				.isInstanceOf(LispReadException.class)
+				.hasMessageContaining(refused[1]);
+		}
 	}
 
 	@Test
@@ -2108,7 +2225,18 @@ class ClojureLoweringTest {
 			.contains("FUNCTIONP");
 		assertThat(lowered("(instance? Integer 1)")).contains("(PROGN 1 RONTOLISP::%CLOJURE-FALSE)");
 		assertThat(lowered("(class 1)")).contains(":C%KEYWORD");
-		assertThat(lowered("(int 1.5)")).contains("TRUNCATE");
+		// int/long are the oracle's object casts; a literal folds through its own type's
+		assertThat(lowered("(def x 1.5) (int x)")).contains("(RONTOLISP::%CLOJURE-INT-CAST |c%x|)");
+		assertThat(lowered("(def x 1.5) (long x)")).contains("(RONTOLISP::%CLOJURE-LONG-CAST |c%x|)");
+		assertThat(lowered("(def x [1]) (int (count x))")).doesNotContain("-CAST");
+		assertThat(lowered("(defn f [count x] (int (count x)))")).contains("%CLOJURE-INT-CAST");
+		assertThat(lowered("(int 1.5)")).endsWith("\n1");
+		assertThat(lowered("(int 1e10)"))
+			.contains("(RONTOLISP::%CLOJURE-ILLEGAL-ARGUMENT-EXCEPTION \"Value out of range for int: 1.0E10\")");
+		assertThat(lowered("(int 3000000000)"))
+			.contains("(RONTOLISP::%CLOJURE-ARITHMETIC-EXCEPTION \"integer overflow\")");
+		assertThatThrownBy(() -> Clojure.read("(long 1 2)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Wrong number of args (2) passed to: clojure.core/long");
 		assertThatThrownBy(() -> Clojure.read("(instance? Point 1)", null)).isInstanceOf(LispReadException.class)
 			.hasMessageContaining("unknown name: Point");
 	}
@@ -2554,9 +2682,9 @@ class ClojureLoweringTest {
 		}
 		assertThatThrownBy(() -> Clojure.read("(extends? Nope String)", null)).isInstanceOf(LispReadException.class)
 			.hasMessageContaining("No such protocol: Nope");
-		assertThatThrownBy(() -> Clojure.read("(defprotocol P (m [x])) (extends? P java.time.Instant)", null))
+		assertThatThrownBy(() -> Clojure.read("(defprotocol P (m [x])) (extends? P java.time.Instantt)", null))
 			.isInstanceOf(LispReadException.class)
-			.hasMessageContaining("extends? needs a core type, not java.time.Instant");
+			.hasMessageContaining("unknown name: java.time.Instantt");
 		for (String name : new String[] { "future?", "future-done?", "future-cancelled?", "future-cancel" }) {
 			assertThatThrownBy(() -> Clojure.read("(" + name + ")", null)).isInstanceOf(LispReadException.class)
 				.hasMessageContaining("Wrong number of args (0) passed to: clojure.core/" + name);
