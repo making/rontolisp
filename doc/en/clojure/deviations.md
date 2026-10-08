@@ -362,9 +362,9 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   program runs. A built-in library fetches nothing, its own dependencies included; the
   built-in Ring namespaces load without a `ring/ring-core` coordinate (the oracle needs one)
   and stand in for an older ring-core than the one shipped. A `pom.xml` project is not read,
-  nor is a library's `data_readers.clj`: its tags are refused like any unknown tag. A
-  repository a `settings.xml` mirror or proxy covers is refused (the oracle resolves it), and
-  a download, `maven-metadata.xml` included, is always checked against its `.sha1` (the
+  nor is a library's `data_readers.clj`: its tags are refused like any unknown tag.
+  `settings.xml` credentials answer Basic authentication only (the oracle also answers Digest
+  and NTLM), and a download, `maven-metadata.xml` included, is always checked against its `.sha1` (the
   oracle's default only warns). A file no repository had is not asked for again until the
   next day (the oracle asks on every run); one update policy, daily, serves every repository
   (a repository's `:update` is not read). A git tag is checked against the

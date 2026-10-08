@@ -391,7 +391,11 @@ $ rontolisp app.lisp -o app.jar --java-dep com.google.guava:guava:33.4.0-jre
 $ java -jar app.jar
 ```
 
-`--java-dep` は Maven がプロジェクトの依存を解決するのと同じ方法で解決します。同じライブラリの 2 つのバージョンが出会うと、要求した座標に近い方が勝ち、jar は `--java-classpath` のエントリーの後に Maven のクラスパス順で並びます。取得元は Maven Central で、`mvn` と同じローカルリポジトリ (`~/.m2/repository`、または `~/.m2/settings.xml` の `localRepository`。同ファイルの `offline` に従います) を経由します。SNAPSHOT、`LATEST`、`RELEASE`、バージョン範囲は、指定したものも依存の POM にあるものも、Maven と同じく Central の `maven-metadata.xml` で解決します。そのメタデータはローカルリポジトリに保存し、Central に問い合わせ直すのは 1 日に 1 回です。Central になかったファイルも同じです。Central を覆う `settings.xml` のミラーやプロキシは、名前を挙げて拒否します。Clojure プログラムの `deps.edn` の依存のうちクラスを含むものは、これらの後にクラスパスへ加わります ([プロジェクト: deps.edn](../clojure/semantics.md#projects-depsedn))。
+`--java-dep` は Maven がプロジェクトの依存を解決するのと同じ方法で解決します。同じライブラリの 2 つのバージョンが出会うと、要求した座標に近い方が勝ち、jar は `--java-classpath` のエントリーの後に Maven のクラスパス順で並びます。取得元は Maven Central で、`mvn` と同じローカルリポジトリ (`~/.m2/repository`、または `settings.xml` の `localRepository`) を経由します。SNAPSHOT、`LATEST`、`RELEASE`、バージョン範囲は、指定したものも依存の POM にあるものも、Maven と同じく Central の `maven-metadata.xml` で解決します。そのメタデータはローカルリポジトリに保存し、Central に問い合わせ直すのは 1 日に 1 回です。Central になかったファイルも同じです。
+
+`settings.xml` は `mvn` と同じく効きます。読むのは `~/.m2/settings.xml` で、`MAVEN_HOME` が設定されていれば `$MAVEN_HOME/conf/settings.xml` の上に重ねます。`offline` に従い、Central を覆うミラーがあれば Central の代わりにそのミラーへ問い合わせ (`blocked` のミラーなら失敗します)、プロキシがあればそれを経由します。問い合わせ先のリポジトリの `<server>` からは、Basic 認証の認証情報、`httpHeaders`、タイムアウトを使います。`mvn --encrypt-password` で暗号化したパスワードは、`~/.m2/settings-security.xml` のマスターパスワードで復号します。
+
+Clojure プログラムの `deps.edn` の依存のうちクラスを含むものは、これらの後にクラスパスへ加わります ([プロジェクト: deps.edn](../clojure/semantics.md#projects-depsedn))。
 
 出力ごとに持ち運ぶもの:
 

@@ -94,7 +94,10 @@ oracle と同じく無視します。oracle の spec が拒否する値、どの
   `"[1.0]"` は 1.0 です。バージョン範囲は、リポジトリの `maven-metadata.xml` がその範囲に挙げる
   最も新しいバージョンです。`RELEASE`、`LATEST`、`SNAPSHOT` もそのメタデータで解決します。
   メタデータはローカルリポジトリに保存し、問い合わせ直すのは 1 日に 1 回です。`http:` の
-  リポジトリと、`~/.m2/settings.xml` の mirror や proxy がかかるリポジトリは拒否します。
+  リポジトリは拒否します。`settings.xml`（`$MAVEN_HOME/conf/settings.xml` に
+  `~/.m2/settings.xml` を重ねたもの）は oracle と同じく効きます。mirror、proxy、server の
+  認証情報と `httpHeaders`（`mvn --encrypt-password` で暗号化したパスワードも含む）に従い、
+  `localRepository` と `offline` は読みません。
 - git 座標（`:git/url`、または `io.github.user/repo` という名前が示す URL と、`:git/sha`、
   `:git/tag`、`:deps/root`）は `git` コマンドでそのコミットを `~/.rontolisp/gitlibs`
   （`$RONTOLISP_DIST_HOME/gitlibs`）にチェックアウトします。タグはそのコミットを指す必要があり、

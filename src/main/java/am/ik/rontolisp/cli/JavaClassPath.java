@@ -38,11 +38,11 @@ import org.jspecify.annotations.Nullable;
  *
  * <p>
  * Coordinates resolve from Maven Central through the local repository {@code mvn} uses --
- * {@code ~/.m2/repository}, or the one {@code ~/.m2/settings.xml} names -- honoring that
- * file's {@code <offline>}; a SNAPSHOT, {@code LATEST}, {@code RELEASE} or version range
- * resolves through the repository's {@code maven-metadata.xml} as Maven's does, and what
- * the resolver cannot do faithfully (a mirror or proxy covering Central) is refused by
- * name.
+ * {@code ~/.m2/repository}, or the one {@code settings.xml} names -- honoring that file's
+ * {@code <offline>} and the mirror, proxy and server credentials it configures for
+ * Central (the user's {@code ~/.m2/settings.xml} merged over {@code $MAVEN_HOME}'s); a
+ * SNAPSHOT, {@code LATEST}, {@code RELEASE} or version range resolves through the
+ * repository's {@code maven-metadata.xml} as Maven's does.
  */
 final class JavaClassPath implements AutoCloseable {
 
@@ -147,12 +147,12 @@ final class JavaClassPath implements AutoCloseable {
 		}
 	}
 
-	// Maven's default remote, through the local repository and offline flag of the
-	// user's settings.
+	// Maven's default remote, through Maven's settings: the local repository, offline
+	// flag, mirrors, proxies and servers of the global and the user's settings.xml.
 	private static MavenResolver centralResolver() {
 		MavenSettings settings;
 		try {
-			settings = MavenSettings.readUserSettings();
+			settings = MavenSettings.readGlobalAndUser();
 		}
 		catch (MavenResolutionException ex) {
 			throw new IllegalArgumentException("--java-dep: " + ex.getMessage(), ex);

@@ -46,6 +46,9 @@ import org.jspecify.annotations.Nullable;
  * that metadata, newest record first, and a timestamped snapshot is copied to its
  * {@code -SNAPSHOT} name once fetched; a version range resolves to every version the
  * repositories' metadata lists that it contains.</li>
+ * <li>"Each remote repository" is each {@link RepositoryRoute}: the repositories one
+ * mirror covers are that mirror, under its id; a blocked mirror fails without a
+ * request.</li>
  * </ul>
  */
 final class RepositoryAccess implements ModelBuilder.PomSource {
@@ -62,11 +65,11 @@ final class RepositoryAccess implements ModelBuilder.PomSource {
 
 	/**
 	 * Where a version came from: a remote repository's metadata, or the local
-	 * repository's ({@code remote} null).
+	 * repository's ({@code route} null).
 	 *
-	 * @param remote the repository, or {@code null} for the local one
+	 * @param route the repository, or {@code null} for the local one
 	 */
-	record Origin(@Nullable RemoteRepository remote) {
+	record Origin(@Nullable RepositoryRoute route) {
 
 		/** The local repository. */
 		static final Origin LOCAL = new Origin(null);
@@ -104,6 +107,9 @@ final class RepositoryAccess implements ModelBuilder.PomSource {
 
 	private final UpdatePolicy policy;
 
+	/** The repositories as contacted, made on first use. */
+	private @Nullable List<RepositoryRoute> routes;
+
 	/**
 	 * What this resolver already asked a repository for -- Maven's session record: asked
 	 * once per resolver, whatever the policy.
@@ -132,6 +138,20 @@ final class RepositoryAccess implements ModelBuilder.PomSource {
 	}
 
 	/**
+	 * The repositories as Maven contacts them, through the settings' mirrors, proxies and
+	 * servers.
+	 * @throws MavenResolutionException if a mirror's URL cannot be read
+	 */
+	List<RepositoryRoute> routes() throws MavenResolutionException {
+		List<RepositoryRoute> known = this.routes;
+		if (known == null) {
+			known = RepositoryRoute.of(this.repositories, this.settings);
+			this.routes = known;
+		}
+		return known;
+	}
+
+	/**
 	 * Returns a file of the local repository, fetching it when it is not there yet -- its
 	 * version resolved first ({@link #resolveVersion}), and a timestamped snapshot copied
 	 * to its {@code -SNAPSHOT} name, which is the path answered.
@@ -151,9 +171,9 @@ final class RepositoryAccess implements ModelBuilder.PomSource {
 		if (Files.isRegularFile(target)) {
 			return normalized(artifact, target);
 		}
-		List<RemoteRepository> candidates = this.repositories;
+		List<RepositoryRoute> candidates = routes();
 		if (resolved.origin() != null) {
-			RemoteRepository remote = resolved.origin().remote();
+			RepositoryRoute remote = resolved.origin().route();
 			// a version the local repository's metadata named is a local file or nothing
 			candidates = remote == null ? List.of() : List.of(remote);
 		}
@@ -166,13 +186,13 @@ final class RepositoryAccess implements ModelBuilder.PomSource {
 		}
 		Path tracking = target.resolveSibling(target.getFileName() + ".lastUpdated");
 		List<String> failures = new ArrayList<>();
-		for (RemoteRepository repository : candidates) {
+		for (RepositoryRoute route : candidates) {
+			RemoteRepository repository = route.repository();
 			String dataKey = normalizedUrl(repository);
 			if (!this.asked.add(target + "|" + repository.id()) || notFoundBefore(tracking, dataKey)) {
 				continue;
 			}
-			this.settings.checkRemoteAccess(repository);
-			String failure = fetchFrom(repository, artifact, target);
+			String failure = route.unavailable() != null ? route.unavailable() : fetchFrom(route, artifact, target);
 			if (failure == null) {
 				Map<String, @Nullable String> updates = new HashMap<>();
 				updates.put(dataKey + ".error", null);
@@ -299,12 +319,12 @@ final class RepositoryAccess implements ModelBuilder.PomSource {
 		if (cached != null) {
 			return cached;
 		}
-		ResolvedVersion resolved = resolveVersion(artifact, this.repositories);
+		ResolvedVersion resolved = resolveVersion(artifact, routes());
 		this.resolvedVersions.put(artifact, resolved);
 		return resolved;
 	}
 
-	private ResolvedVersion resolveVersion(Artifact artifact, List<RemoteRepository> repositories)
+	private ResolvedVersion resolveVersion(Artifact artifact, List<RepositoryRoute> repositories)
 			throws MavenResolutionException {
 		String version = artifact.version();
 		boolean release = version.equals("RELEASE");
@@ -329,7 +349,7 @@ final class RepositoryAccess implements ModelBuilder.PomSource {
 				info = infos.get("RELEASE");
 			}
 			if (info != null && info.version.endsWith(SNAPSHOT)) {
-				RemoteRepository remote = info.origin.remote();
+				RepositoryRoute remote = info.origin.route();
 				return resolveVersion(artifact.withVersion(info.version),
 						remote != null ? List.of(remote) : repositories);
 			}
@@ -440,8 +460,7 @@ final class RepositoryAccess implements ModelBuilder.PomSource {
 		else {
 			List<String> problems = new ArrayList<>();
 			Map<String, Origin> index = new HashMap<>();
-			for (MetadataFile file : metadata(artifact.groupId(), artifact.artifactId(), "", false,
-					this.repositories)) {
+			for (MetadataFile file : metadata(artifact.groupId(), artifact.artifactId(), "", false, routes())) {
 				if (file.failed()) {
 					problems.add(String.valueOf(file.exception()));
 				}
@@ -482,7 +501,7 @@ final class RepositoryAccess implements ModelBuilder.PomSource {
 			return MavenMetadata.EMPTY;
 		}
 		MavenMetadata.Snapshot snapshot = versioning.snapshot();
-		if (metadata.origin().remote() == null && snapshot != null && snapshot.buildNumber() > 0) {
+		if (metadata.origin().route() == null && snapshot != null && snapshot.buildNumber() > 0) {
 			// a remote repository using the id "local" wrote this: Maven reads it as a
 			// local snapshot of the version itself
 			problems.add("invalid " + file + ": snapshot information corrupted with remote repository data, "
@@ -508,7 +527,7 @@ final class RepositoryAccess implements ModelBuilder.PomSource {
 	 * @return one entry per repository, the local one first
 	 */
 	private List<MetadataFile> metadata(String groupId, String artifactId, String version, boolean favorLocal,
-			List<RemoteRepository> repositories) throws MavenResolutionException {
+			List<RepositoryRoute> repositories) throws MavenResolutionException {
 		String directory = groupId.replace('.', '/') + '/' + artifactId + (version.isEmpty() ? "" : '/' + version);
 		Path dir = localPath(directory);
 		if (dir == null) {
@@ -531,7 +550,8 @@ final class RepositoryAccess implements ModelBuilder.PomSource {
 			}
 		}
 		Path tracking = dir.resolve("resolver-status.properties");
-		for (RemoteRepository repository : repositories) {
+		for (RepositoryRoute route : repositories) {
+			RemoteRepository repository = route.repository();
 			Path cached = dir.resolve("maven-metadata-" + repository.id() + ".xml");
 			String exception = null;
 			boolean failed = false;
@@ -544,8 +564,8 @@ final class RepositoryAccess implements ModelBuilder.PomSource {
 			}
 			else if ((localUpdated == 0 || this.policy.updateRequired(localUpdated))
 					&& checkRequired(cached, tracking, repository)) {
-				this.settings.checkRemoteAccess(repository);
-				String failure = fetchMetadata(repository, directory, cached, tracking);
+				String failure = route.unavailable() != null ? route.unavailable()
+						: fetchMetadata(route, directory, cached, tracking);
 				if (failure != null && failure.isEmpty()) {
 					exception = "Could not find metadata " + metadata + " in " + repository;
 				}
@@ -560,7 +580,7 @@ final class RepositoryAccess implements ModelBuilder.PomSource {
 						+ "failure was cached in the local repository and resolution is not reattempted until the "
 						+ "update interval of " + repository.id() + " has elapsed (update policy " + this.policy + ")";
 			}
-			files.add(new MetadataFile(new Origin(repository), Files.isRegularFile(cached) ? cached : null, exception,
+			files.add(new MetadataFile(new Origin(route), Files.isRegularFile(cached) ? cached : null, exception,
 					failed));
 		}
 		return files;
@@ -598,19 +618,20 @@ final class RepositoryAccess implements ModelBuilder.PomSource {
 	 * @return {@code null} once fetched, the empty string when the repository has none
 	 * (the cached copy deleted), else why the repository's copy was not taken
 	 */
-	private @Nullable String fetchMetadata(RemoteRepository repository, String directory, Path cached, Path tracking)
+	private @Nullable String fetchMetadata(RepositoryRoute route, String directory, Path cached, Path tracking)
 			throws MavenResolutionException {
+		RemoteRepository repository = route.repository();
 		this.asked.add(cached + "|" + repository.id());
 		String path = directory + "/" + METADATA;
 		String name = cached.getFileName().toString();
 		byte[] bytes;
 		byte[] checksumFile;
 		try {
-			bytes = get(repository, path);
-			checksumFile = bytes == null ? null : get(repository, path + ".sha1");
+			bytes = get(route, path);
+			checksumFile = bytes == null ? null : get(route, path + ".sha1");
 		}
 		catch (IOException ex) {
-			return failure(repository, ex);
+			return failure(route, ex);
 		}
 		Map<String, @Nullable String> updates = new HashMap<>();
 		updates.put(name + ".lastUpdated", Long.toString(System.currentTimeMillis()));
@@ -635,22 +656,22 @@ final class RepositoryAccess implements ModelBuilder.PomSource {
 	 * @return {@code null} once the verified file is in place, the empty string when the
 	 * repository does not have it, else why the repository's copy was not taken
 	 */
-	private @Nullable String fetchFrom(RemoteRepository repository, Artifact artifact, Path target)
+	private @Nullable String fetchFrom(RepositoryRoute route, Artifact artifact, Path target)
 			throws MavenResolutionException {
 		String path = artifact.path();
 		byte[] bytes;
 		byte[] checksumFile;
 		try {
-			bytes = get(repository, path);
+			bytes = get(route, path);
 			if (bytes == null) {
 				return "";
 			}
-			checksumFile = get(repository, path + ".sha1");
+			checksumFile = get(route, path + ".sha1");
 		}
 		catch (IOException ex) {
-			return failure(repository, ex);
+			return failure(route, ex);
 		}
-		return verify(repository, path, bytes, checksumFile, target);
+		return verify(route.repository(), path, bytes, checksumFile, target);
 	}
 
 	/**
@@ -688,14 +709,36 @@ final class RepositoryAccess implements ModelBuilder.PomSource {
 		return null;
 	}
 
-	private String failure(RemoteRepository repository, IOException ex) {
+	/**
+	 * Why a repository's copy was not taken; an authentication status names the
+	 * {@code settings.xml} entry that answers for it.
+	 */
+	private static String failure(RepositoryRoute route, IOException ex) {
 		String message = ex.getMessage() != null ? ex.getMessage() : ex.toString();
-		if (ex instanceof HttpStatusException status && (status.statusCode() == 401 || status.statusCode() == 403)) {
-			return message + ": the repository asks for credentials, which are not sent"
-					+ (this.settings.hasServer(repository.id())
-							? " (settings.xml <server> '" + repository.id() + "' is not supported)" : "");
+		if (!(ex instanceof HttpStatusException status)) {
+			return message;
+		}
+		if (status.statusCode() == 401 || status.statusCode() == 403) {
+			MavenSettings.Server server = route.server();
+			String entry = "settings.xml <server> '" + route.repository().id() + "'";
+			return message
+					+ " (" + (server == null || server.login() == null
+							? entry + " has no username, so no credentials are sent" : login(entry, server.login()))
+					+ ")";
+		}
+		MavenSettings.Proxy proxy = route.proxy();
+		if (status.statusCode() == 407 && proxy != null) {
+			String entry = "settings.xml proxy '" + proxy.id() + "'";
+			return message + " (" + (proxy.login() == null ? entry + " has no username, so no credentials are sent"
+					: login(entry, proxy.login())) + ")";
 		}
 		return message;
+	}
+
+	private static String login(String entry, MavenSettings.Login login) {
+		String problem = login.passwordProblem();
+		return entry + ", user '" + login.username() + "'" + (problem == null ? ""
+				: "; its password could not be decrypted, so it is sent as written: " + problem);
 	}
 
 	/** A repository's URL ending in {@code /}, Maven's key for it in a tracking file. */
@@ -707,7 +750,8 @@ final class RepositoryAccess implements ModelBuilder.PomSource {
 	 * Reads one file of a repository.
 	 * @return its bytes, or {@code null} when the repository has no such file
 	 */
-	private byte @Nullable [] get(RemoteRepository repository, String path) throws IOException {
+	private byte @Nullable [] get(RepositoryRoute route, String path) throws IOException {
+		RemoteRepository repository = route.repository();
 		URI uri = repository.resolve(path);
 		URI base = repository.resolve("");
 		if (!uri.getPath().startsWith(base.getPath())) {
@@ -732,7 +776,7 @@ final class RepositoryAccess implements ModelBuilder.PomSource {
 			}
 		}
 		try {
-			return this.downloader.get(uri.toString());
+			return this.downloader.get(uri.toString(), route.access());
 		}
 		catch (HttpStatusException ex) {
 			if (ex.isNotFound()) {
