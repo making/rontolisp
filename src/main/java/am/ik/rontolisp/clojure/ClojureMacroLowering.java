@@ -674,6 +674,10 @@ final class ClojureMacroLowering {
 			if (ClojureCoreNames.contains(name) && ClojureNamespaceLowering.coreAllowed(ctx, name)) {
 				return ClojureCoreNames.PREFIX + name;
 			}
+			String renamed = ctx.renamedCore(name);
+			if (renamed != null) {
+				return ClojureCoreNames.PREFIX + renamed;
+			}
 			// a class spelling is already fully qualified (measured on the
 			// oracle: `java.io.StringWriter reads as written, `String as
 			// java.lang.String, an imported name through its import -- and the
