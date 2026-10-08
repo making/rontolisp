@@ -2943,6 +2943,43 @@ cases:
       (+ 1 2)
       true
       true
+  - name: a-macro-body-calls-the-programs-definitions
+    # A macro body runs at lower time over the top-level definitions above it, like the
+    # oracle's form-by-form load: a private and a multi-arity helper, a def'd table, a
+    # dynamic var the body rebinds, a multimethod, a protocol over a record, a catch and
+    # an ex-info. A def's value runs at lower time only if a body reads it, so
+    # mtc-loud prints once, at run time. clj 1.12.6, oracle-identical.
+    source: |
+      (def mtc-ops {:add '+ :mul '*})
+      (def ^:dynamic *mtc-wrap* 'list)
+      (def mtc-loud (do (println "mtc-loud runs once") 7))
+      (defn- mtc-op [k] (get mtc-ops k))
+      (defn mtc-arity ([x] [x]) ([x y] [x y]))
+      (defmulti mtc-shape (fn [x] (if (symbol? x) :sym :other)))
+      (defmethod mtc-shape :sym [x] (list 'quote x))
+      (defmethod mtc-shape :other [x] x)
+      (defprotocol MtcWrap (mtc-unwrap [x]))
+      (defrecord MtcBox [v])
+      (extend-protocol MtcWrap MtcBox (mtc-unwrap [b] (:v b)))
+      (defn mtc-ratio [s] (try (/ 12 (count s)) (catch ArithmeticException _ -1)))
+      (defn mtc-checked [x] (if (number? x) x (throw (ex-info "not a number" {:x x}))))
+      (defmacro mtc-calc [k & args] (cons (mtc-op k) args))
+      (defmacro mtc-wrapped [x] (list *mtc-wrap* x))
+      (defmacro mtc-rebound [x] (binding [*mtc-wrap* 'vector] (list *mtc-wrap* x)))
+      (defmacro mtc-arities [] (list 'quote [(mtc-arity 1) (mtc-arity 1 2)]))
+      (defmacro mtc-shaped [x] (mtc-shape x))
+      (defmacro mtc-boxed [x] (mtc-unwrap (->MtcBox x)))
+      (defmacro mtc-ratioed [s] (mtc-ratio s))
+      (defmacro mtc-guarded [x]
+        (try (mtc-checked x) (catch clojure.lang.ExceptionInfo e (list 'quote (ex-data e)))))
+      (println (mtc-calc :add 1 2) (mtc-calc :mul 3 4) (mtc-wrapped 1) (mtc-rebound 2))
+      (println (mtc-arities) (mtc-shaped foo) (mtc-shaped 3) (mtc-boxed 5))
+      (println (mtc-ratioed "abc") (mtc-ratioed "") (mtc-guarded 4) (mtc-guarded :k) mtc-loud)
+    expected: |
+      mtc-loud runs once
+      3 12 (1) [2]
+      [[1] [1 2]] foo 3 5
+      4 -1 4 {:x :k} 7
   - name: a-macro-argument-holding-a-regex-literal-expands
     # A macro argument travels quoted into the expander and its answer reads back as a
     # datum: a regex literal answers its pattern, which reads back as the literal (the

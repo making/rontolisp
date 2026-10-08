@@ -209,6 +209,17 @@ class ClojureProjectNamespacesTest {
 					"""), Map.entry("src/app/ld/part2.clj", """
 					(println "loading part2" (str *ns*))
 					(defn part2-fn [] [:p2 (part1-fn)])
+					"""), Map.entry("src/app/mlib.clj", """
+					(ns app.mlib)
+					(println "loading app.mlib")
+					(def ^:private suffixes {:bang "!" :q "?"})
+					(def ^:dynamic *sep* "-")
+					(defn- join-name [a b] (str a *sep* b))
+					(defn tagged [k s] (str s (get suffixes k)))
+					(defmacro named [a b] (join-name (name a) (name b)))
+					(defmacro shout [k s] (tagged k s))
+					(defmacro spaced [a b] (binding [*sep* " "] (join-name (name a) (name b))))
+					(def own (named x y))
 					"""), Map.entry("src/app/loud.clj", """
 					(ns app.loud)
 					(println "loading app.loud")
@@ -302,6 +313,32 @@ class ClojureProjectNamespacesTest {
 		Path entry = entry("main_test.clj", MAIN);
 		assertThat(runOnWasm(entry, false)).isEqualTo(MAIN_OUT);
 		assertThat(runOnWasm(entry, true)).isEqualTo(MAIN_OUT);
+	}
+
+	/**
+	 * A required namespace's macros call its own functions -- a private one, one reading
+	 * a private table, one under a {@code binding} of its dynamic var -- at the requiring
+	 * file's expansions and at its own.
+	 */
+	private static final String MACRO_LIB = """
+			(ns app.mlib-test (:require [app.mlib :as m :refer [shout]]))
+			(println (m/named foo bar) (shout :bang "hi") (m/shout :q "ok") (m/spaced a b) m/own)
+			""";
+
+	private static final String MACRO_LIB_OUT = """
+			loading app.mlib
+			foo-bar hi! ok? a b x-y
+			""";
+
+	@Test
+	void aRequiredNamespacesMacrosCallItsFunctions() throws Exception {
+		Path entry = entry("mlib_test.clj", MACRO_LIB);
+		assertThat(interpret(entry)).isEqualTo(MACRO_LIB_OUT);
+		assertThat(runOnJvm(entry, "ProjMacroLib")).isEqualTo(MACRO_LIB_OUT);
+		if (HostWasmtime.isAvailable()) {
+			assertThat(runOnWasm(entry, false)).isEqualTo(MACRO_LIB_OUT);
+			assertThat(runOnWasm(entry, true)).isEqualTo(MACRO_LIB_OUT);
+		}
 	}
 
 	@Test

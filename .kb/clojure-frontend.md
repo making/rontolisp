@@ -1265,10 +1265,9 @@ end** (`src/main/resources/am/ik/rontolisp/clojure/lib/clojure/**`, the
   `LongRange` as a seq: printed alike). Deviation: `macroexpand-all` expands only the
   program's macros -- the core forms are lowering rows, not macros, so `(when x y)` stays
   where the oracle answers `(if x (do y))`.
-- `clojure.template`: `do-template` substitutes in its own body (a `letfn` postwalk
-  replace) instead of calling `apply-template`, because a macro body runs in the
-  macro-time evaluator, which holds the core and `clojure.lisp` but no program function
-  ("Macros"); the oracle's calls `apply-template`. Same answers.
+- `clojure.template`: `do-template` calls `apply-template`, which calls
+  `clojure.walk/postwalk-replace`, at expansion time ("Macros": a body sees the
+  definitions above it, a required namespace's too).
 - Pins: clojure-spec `clojure-walk-*` (all four backends, oracle-identical, the first
   case loading `clojure.walk` through a qualified name only),
   `clojure-template-substitutes-per-group-of-values`,
@@ -1282,10 +1281,43 @@ end** (`src/main/resources/am/ik/rontolisp/clojure/lib/clojure/**`, the
   parameters with their destructuring prologue) plus a `c%name%macro` table global. The
   same lambda expands call sites datum-to-datum at lower time (through
   `eval/ClojureMacroTime`, one per file or session) and serves `macroexpand-1` at run
-  time. Docstring and attr map skipped, `&` rest works, `&form`/`&env` refused. A body
-  sees the core builtins and `clojure.lisp`, not the program's definitions. A call above
-  the definition names the missing expander; a macro has no function value; a later
-  `def`/`defn` wins the call sites back.
+  time. Docstring and attr map skipped, `&` rest works, `&form`/`&env` refused. A call
+  above the definition names the missing expander; a macro has no function value; a
+  later `def`/`defn` wins the call sites back.
+- **A body sees the program's top-level definitions above the call site** (the
+  oracle's form-by-form load). `ClojureMacroLowering.handOver` gives the macro evaluator
+  each top-level datum's lowered forms once the datum lowered (`topLevels`, and
+  `loadFile` per datum of a required namespace, the init `def`s included): `defun` and
+  `declaim` as they are, a `setq`/`defparameter` store as a LAZY root
+  (`LispEvaluator.defineLazyGlobal`: its value runs only when an expansion reads the
+  var, reading the root it supersedes for `(def x (inc x))`), a `defonce`'s store the
+  same unless bound (`ClojureLowering.defonceStores` maps the guarded form to it),
+  `progn` member by member, and every other form only from a datum headed
+  `DEFINITION_HEADS` (`defn`, `defmethod`, `extend-protocol`, `defrecord`, ...). The
+  evaluator queues them and runs them before its next evaluation, so a macro-free
+  program builds nothing; one that fails is dropped (a later expansion reading it names
+  what it misses). The caught classes' predicates go over as the lowering meets them
+  (`handOverCaughtClasses`, also before a `defmacro` or an expansion evaluates). The
+  evaluator holds every per-program runtime from its start
+  (`ClojureLowering.macroTimeRuntimeForms`: STM, ex-info, protocol, hierarchy, macro;
+  built-in class rows only, no host exceptions), since a helper may use one before the
+  lowering met a use. Deviations: no other statement runs at lower time, and what a body
+  changes (a `swap!` of a program atom) the program never sees -- the oracle's `@seen`
+  after two counting expansions is 2, here 0; a `defmethod` a program macro expands to,
+  or a definition inside a top-level `let`, is not replayed.
+  `def` lazily, not eagerly (measured 2026-10-08 over the probe jars in `~/.m2`):
+  macro bodies calling a same-file `defn` -- camel-snake-kebab `defconversion`, hiccup
+  `defelem`/`build-string`/`html5`, malli `assert` and its instrument macros, data.json
+  `codepoint-case`; one reading a `def` through its helpers -- hiccup's `html` compiles
+  through `container-tag?` (the private `void-tags` set) and `util/*html-mode*`. No probe
+  macro builds a value with an effect, but a `(defonce server (run-server ...))` above a
+  macro call would start at every compile if a `def` ran eagerly.
+  Pins: clojure-spec `a-macro-body-calls-the-programs-definitions` (all four backends,
+  oracle-identical), `ClojureLoweringTest#aMacroBodyCallsAHelperDefinedAboveIt`,
+  `#aDefValueRunsAtMacroTimeOnlyWhenAnExpansionReadsIt`,
+  `#aRedefinitionReadsTheRootItSupersedesAtMacroTime`,
+  `ClojureProjectNamespacesTest#aRequiredNamespacesMacrosCallItsFunctions` (all four),
+  `ClojureSessionTest#aMacroOfALaterBufferCallsWhatAnEarlierOneDefined`.
 - **A program macro wins over every lowering row of its name from its definition on;
   above it the core meaning holds**, like the oracle's form-by-form compile. `lowerInner`
   tries the macro before any row, except for `isReservedHead` (the oracle's special forms

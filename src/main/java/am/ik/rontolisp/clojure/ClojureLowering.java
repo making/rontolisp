@@ -5,6 +5,7 @@ import java.util.ArrayList;
 import java.util.Deque;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -460,6 +461,18 @@ public final class ClojureLowering {
 	 * table entry, but a call site cannot expand.
 	 */
 	@Nullable ClojureMacroEvaluator macroEvaluator;
+
+	/**
+	 * The caught classes whose predicates the macro evaluator already holds
+	 * ({@link ClojureMacroLowering#handOver}).
+	 */
+	final Set<String> macroTimeChains = new HashSet<>();
+
+	/**
+	 * A {@code defonce}'s lowered form to the store it guards, so the macro evaluator
+	 * gets the var's root once, lazily ({@link ClojureMacroLowering#handOver}).
+	 */
+	final Map<LispVal, LispVal> defonceStores = new IdentityHashMap<>();
 
 	/**
 	 * How deep macro expansion currently nests; over {@link #MAX_MACRO_DEPTH} it ends.
@@ -2029,6 +2042,7 @@ public final class ClojureLowering {
 		this.nestedDefAnswersVar = echoVars;
 		try {
 			List<LispVal> own = echoVars ? echoingTopLevelsOf(form) : topLevelsOf(form);
+			ClojureMacroLowering.handOver(this, form, own);
 			if (this.hoisted.isEmpty()) {
 				return own;
 			}
@@ -2101,7 +2115,12 @@ public final class ClojureLowering {
 					// (a reload resets a def and keeps a defonce, like the oracle);
 					// a dynamic one's declaim and counter ride top-level, where the
 					// collectors read them
-					statements.addAll(initDefForms(datum, loaded));
+					int mark = loaded.size();
+					List<LispVal> init = initDefForms(datum, loaded);
+					List<LispVal> handed = new ArrayList<>(loaded.subList(mark, loaded.size()));
+					handed.addAll(init);
+					ClojureMacroLowering.handOver(this, datum, handed);
+					statements.addAll(init);
 				}
 				else {
 					// like topLevels, but the drained hoisted forms (the namespaces
@@ -2112,6 +2131,7 @@ public final class ClojureLowering {
 					List<LispVal> own;
 					try {
 						own = topLevelsOf(datum);
+						ClojureMacroLowering.handOver(this, datum, own);
 					}
 					finally {
 						loaded.addAll(this.hoisted);
@@ -4457,6 +4477,26 @@ public final class ClojureLowering {
 	 */
 	public static List<LispVal> coreSpecialForms() {
 		return ClojureCoreSpecials.definitions(new ClojureLowering(), ClojureCoreSpecials.names());
+	}
+
+	/**
+	 * Every per-program runtime a lowered definition may call, for the macro-time
+	 * evaluator, in the order a program carries them: the STM, ex-info, protocol,
+	 * hierarchy and macro runtimes. A program carries only the ones it uses, so its
+	 * output stays small; the macro-time evaluator writes no output and holds them all,
+	 * since a helper a macro body calls may use one before the lowering has seen a use of
+	 * it. The class rows are the built-in ones (a program's records join only its own
+	 * hierarchy runtime), and exceptions are the program's own, not the host's.
+	 * @return the forms
+	 */
+	public static List<LispVal> macroTimeRuntimeForms() {
+		ClojureLowering ctx = new ClojureLowering();
+		List<LispVal> forms = new ArrayList<>(ClojureStateLowering.stmRuntime(ctx));
+		forms.addAll(ClojureStateLowering.exInfoRuntime(ctx));
+		forms.addAll(ClojureProtocolLowering.protocolRuntime(ctx));
+		forms.addAll(ClojureHierarchyLowering.hierarchyRuntime(ctx));
+		forms.addAll(ClojureMacroLowering.macroRuntime(ctx));
+		return forms;
 	}
 
 	// hierarchies: derive/underive/isa?/parents/ancestors/descendants/make-hierarchy,
