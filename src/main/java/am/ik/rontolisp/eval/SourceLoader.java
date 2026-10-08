@@ -1,9 +1,15 @@
 package am.ik.rontolisp.eval;
 
 import java.io.IOException;
+import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.Enumeration;
 import java.util.List;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipFile;
 
 import org.jspecify.annotations.Nullable;
 
@@ -92,6 +98,45 @@ public interface SourceLoader {
 	}
 
 	/**
+	 * The path one file or directory is known by however it was spelled: absolute, every
+	 * symbolic link resolved -- how a Clojure dependency's root is told apart from
+	 * another (the oracle's {@code getCanonicalPath}). Like {@link #exists} it must never
+	 * throw; a loader that is not a filesystem has nothing to resolve and answers the
+	 * path itself, the default.
+	 * @param path the path
+	 * @return the canonical path
+	 */
+	default String canonicalPath(String path) {
+		return path;
+	}
+
+	/**
+	 * The entry names of a zip archive (a jar), in the archive's own order -- what a
+	 * Clojure dependency on a jar contributes is read from the archive in place, never
+	 * extracted ({@link #loadArchiveEntry}). Like {@link #exists} it must never throw;
+	 * {@code null} means the path names no readable zip archive, which is also the
+	 * default: a loader that is not a filesystem (the browser playground's in-memory map)
+	 * holds no archive.
+	 * @param path the archive's path
+	 * @return the entry names, or {@code null} when the path is not a readable archive
+	 */
+	@Nullable default List<String> listArchive(String path) {
+		return null;
+	}
+
+	/**
+	 * Reads one entry of a zip archive as UTF-8 text.
+	 * @param archive the archive's path
+	 * @param entry the entry's name, as {@link #listArchive} gives it
+	 * @return the entry's text
+	 * @throws IOException if the archive or the entry cannot be read -- always, by
+	 * default
+	 */
+	default String loadArchiveEntry(String archive, String entry) throws IOException {
+		throw new IOException(archive + ": no archive can be read here");
+	}
+
+	/**
 	 * Returns a loader that reads files from the local filesystem.
 	 * @return a filesystem-backed loader
 	 */
@@ -152,6 +197,55 @@ public interface SourceLoader {
 					// Not a directory, gone, or unreadable -- all "not there", the
 					// answer probe-file gives for the file case.
 					return null;
+				}
+			}
+
+			@Override
+			public String canonicalPath(String path) {
+				try {
+					Path absolute = Path.of(path).toAbsolutePath().normalize();
+					try {
+						return absolute.toRealPath().toString();
+					}
+					catch (IOException ex) {
+						return absolute.toString(); // gone: whoever asked names the path
+					}
+				}
+				catch (RuntimeException ex) {
+					return path;
+				}
+			}
+
+			@Override
+			@Nullable public List<String> listArchive(String path) {
+				// The central directory alone: a jar's entries are known without
+				// inflating any of them, and a file cut short has none to read.
+				try (ZipFile zip = new ZipFile(Path.of(path).toFile())) {
+					List<String> names = new ArrayList<>();
+					Enumeration<? extends ZipEntry> entries = zip.entries();
+					while (entries.hasMoreElements()) {
+						ZipEntry entry = entries.nextElement();
+						if (!entry.isDirectory()) {
+							names.add(entry.getName());
+						}
+					}
+					return names;
+				}
+				catch (IOException | RuntimeException ex) {
+					return null;
+				}
+			}
+
+			@Override
+			public String loadArchiveEntry(String archive, String entry) throws IOException {
+				try (ZipFile zip = new ZipFile(Path.of(archive).toFile())) {
+					ZipEntry found = zip.getEntry(entry);
+					if (found == null || found.isDirectory()) {
+						throw new IOException(archive + " has no entry " + entry);
+					}
+					try (InputStream in = zip.getInputStream(found)) {
+						return new String(in.readAllBytes(), StandardCharsets.UTF_8);
+					}
 				}
 			}
 		};

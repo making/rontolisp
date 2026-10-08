@@ -53,8 +53,9 @@ runs what the browser runs (`PlaygroundReplTest`, and `DocExamplesTest.runScheme
   making the language a pick rather than a parameter.
 
 **How strictly a language is read is program-wide, not per file**, and travels with the
-seam: `eval/SourceStandards` (today one member, the `--scheme-standard` value,
-`scheme/SchemeStandard`) is handed to every read of user source -- `read(source,
+seam: `eval/SourceStandards` (the `--scheme-standard` value, `scheme/SchemeStandard`, and
+the directory of the user-level Clojure `deps.edn`, which only `RontoLispCli` locates from
+the environment) is handed to every read of user source -- `read(source,
 features, file, standards)`, `SourceSession(language, standards)`, `LoadInliner`,
 `LispEvaluator.setSourceStandards` for run-time `load` -- and to
 `CompileFrontend.Loaded`, whose `SchemeLibrary` splice generates `eval`'s table from it.
@@ -68,9 +69,12 @@ its site already reads through (`SourceLanguage.schemeFiles` adapts it, resolvin
 the naming file's directory like `load`), for `include` and `define-library` files
 (`.kb/scheme-frontend.md`, "Libraries and include"); `SourceSession` takes one the same
 way. A Clojure read gets the same loader through `SourceLanguage.clojureFiles`, for the
-project namespaces a `require` loads and the `deps.edn` naming their roots
-(`.kb/clojure-frontend.md`, "Namespaces and project files"). A read with no loader names
-no file. A Common Lisp read ignores it.
+project namespaces a `require` loads, the `deps.edn` files, a dependency's directory and a
+jar read in place (`SourceLoader.listArchive`, whose default, like every probe's, answers
+"none" for a loader that is not a filesystem) (`.kb/clojure-frontend.md`, "deps.edn"), and
+the WIT files `rontolisp.wit` reads, described through `eval/ClojureHostBoundary`, the
+`ClojureBoundary` the seam passes beside the loader (`.kb/clojure-frontend.md`, "Host
+boundary"). A read with no loader names no file. A Common Lisp read ignores it.
 
 The entry-language override is validated where it is parsed (an unknown name fails
 fast); loaded files always pick by extension, so the override never leaks into them.

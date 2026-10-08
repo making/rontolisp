@@ -3,6 +3,8 @@ package am.ik.rontolisp.compiler;
 import am.ik.wit.WitItem;
 import am.ik.wit.WitType;
 
+import org.jspecify.annotations.Nullable;
+
 /**
  * The settled WIT type &lt;-&gt; rontolisp value mapping — the single vocabulary every
  * backend binder ({@code wit-import} / {@code wit-export}) consults, in the same way
@@ -140,6 +142,30 @@ public final class WitTypeMapper {
 		 */
 		UNSUPPORTED
 
+	}
+
+	/**
+	 * A WIT type use resolved to its house representation, for a front end that binds a
+	 * WIT surface before the lowering runs ({@link WitImportDirective#describe},
+	 * {@link WitExportDirective#describe}): the representation, plus the one nested type
+	 * a value of it can carry unchanged -- an {@code option}'s element, a
+	 * {@code result}'s ok arm ({@code null} for a payload-less arm, and for every other
+	 * representation).
+	 *
+	 * @param rep the house representation
+	 * @param element the option's element or the result's ok arm, or {@code null}
+	 * @param wit the type as the WIT spells it, for a message
+	 */
+	public record Shape(Rep rep, @Nullable Shape element, String wit) {
+	}
+
+	/**
+	 * A named parameter of a described WIT function.
+	 *
+	 * @param name the parameter's WIT name ({@code self} for a resource method's handle)
+	 * @param shape its type
+	 */
+	public record Param(String name, Shape shape) {
 	}
 
 	/**

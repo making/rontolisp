@@ -308,6 +308,30 @@ default** (`.kb/wasm-import.md`).
 - A resource handle is an opaque integer allocated **by the provider**. **It is NOT the shared
   stream/socket handle space, and `cl:close` does not apply to a WIT resource.**
 
+### The naming hook (`:names`) — a front end's own names
+`:names (("label" "lisp-name") ...)`, on both directives (`compiler/WitNamingHook`; strings, so
+no package resolution touches either side). It exists for the Clojure lowering, whose vars are
+`c%ns/name` symbols that neither `:package` nor the reader spelling produces
+(`.kb/clojure-frontend.md`, "Host boundary"). It names the Lisp side only: the WIT labels stay
+the provider's member strings, the Preview 1 fields and the component's import/export names.
+
+- **`wit-import`, table mode**: only the listed members are bound, each under its name
+  verbatim; an unlisted one is neither bound nor checked against the backend's tier (the front
+  end judged it). The internal names follow the bound name behind a lone `%` (`<name>%raw`,
+  `%start`, `%lift`), which no Clojure identifier spells. The component reference filter
+  compares the bound name. `:package` beside it is an error.
+- **`wit-export`**: each world export is implemented by the function the table names and
+  emitted with `:as "label"` (a `c%...` symbol, lowercased, is no label); a label the table
+  leaves out is the usual missing-`defun` error.
+- **`describe`** (`WitImportDirective.describe`, `WitExportDirective.describe`): the members a
+  lowering would bind / the world's exports, each typed as a `WitTypeMapper.Shape`
+  (representation, the element of an `option` or a `result`'s ok arm, the WIT spelling) with its
+  line, after the same passes and checks as `lower` but before any program exists, so a front
+  end binds its names before lowering. The built-ins of a type alias whose target names no
+  definition describe as `UNSUPPORTED`: `lower` checks that target only where it binds them.
+- Pins: `WitNamingHookTest` (every backend's binding names, the internal names, the filter,
+  the parse refusals, both `describe`s).
+
 ### The gl.lisp migration
 `examples/browser/webgl-common/gl.wit` is checked in; gl.lisp binds `local:webgl/gl` and
 `local:webgl/ui` with two directives, neither naming `:package`. The demos' modules were

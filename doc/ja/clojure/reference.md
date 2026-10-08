@@ -29,6 +29,8 @@ interop エントリのすべてを、分野ごとにまとめています。**�
 | [正規表現](reference/regex.md) | `re-find`/`re-seq`/`re-matches`、`re-matcher`/`re-groups`、`re-pattern` とパターンの `split`/`replace` |
 | [Ring アダプター](reference/ring.md) | `ring.adapter.rontolisp/run-server`: Ring ハンドラをすべてのトランスポートで提供 |
 | [Ring ユーティリティ](reference/ring-util.md) | 組み込みの `ring.util.*` と `ring.middleware.*`: レスポンスの組み立て、URL とフォームの符号化、パラメーターのミドルウェア |
+| [WASM ホスト関数 (rontolisp.wasm)](reference/wasm.md) | `defimport`/`export`: モジュールが呼ぶホスト関数、ホストが呼ぶ関数 |
+| [WIT 契約 (rontolisp.wit)](reference/wit.md) | `import`/`export`/`provide`: 呼び出す WIT インターフェース、実装する WIT world |
 | [Java interop](reference/interop.md) | `.`、`..`、構築、`memfn`、`proxy` |
 | [トランスデューサー](reference/transducers.md) | `transduce`・`eduction`・`sequence`・`completing`、`reduced` とその仲間、`cat`、seq 関数の1引数形 |
 | [入出力](reference/io.md) | `spit`・`slurp`・`line-seq`・`clojure.java.io/reader` と `format` |

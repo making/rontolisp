@@ -168,8 +168,11 @@ public final class RontoLispCli {
 		}
 		// --scheme-standard NAME: what EVERY Scheme file of the program is read against
 		// -- the entry file, a loaded one, the REPL -- like gosh -r7. Parsed here for
-		// the same reason.
-		SourceStandards standards = SourceStandards.parse(options.get("--scheme-standard"));
+		// the same reason. The user-level deps.edn every Clojure project merges is
+		// located here, from the environment the oracle's clj reads, and nowhere else.
+		SourceStandards standards = SourceStandards.parse(options.get("--scheme-standard"))
+			.withClojureConfigDir(SourceStandards.clojureConfigDir(System.getenv("CLJ_CONFIG"),
+					System.getenv("XDG_CONFIG_HOME"), System.getProperty("user.home")));
 
 		// --java-classpath / --java-dep / --java-release / --warn-java-reflection: the
 		// program's Java classes and how java: call sites resolve

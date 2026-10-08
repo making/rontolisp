@@ -493,6 +493,17 @@ categories:
     index_page: clojure/reference/ring.md
     functions:
       - { slug: run-server, name: "ring.adapter.rontolisp/run-server" }
+  - title: "WASM ホスト関数 (rontolisp.wasm)"
+    index_page: clojure/reference/wasm.md
+    functions:
+      - { slug: wasm-defimport, name: "rontolisp.wasm/defimport" }
+      - { slug: wasm-export, name: "rontolisp.wasm/export" }
+  - title: "WIT 契約 (rontolisp.wit)"
+    index_page: clojure/reference/wit.md
+    functions:
+      - { slug: wit-import, name: "rontolisp.wit/import" }
+      - { slug: wit-export, name: "rontolisp.wit/export" }
+      - { slug: wit-provide, name: "rontolisp.wit/provide" }
   - title: "Java interop"
     index_page: clojure/reference/interop.md
     functions:

@@ -79,9 +79,30 @@ public final class Clojure {
 	 */
 	public static List<LispVal> read(String source, @Nullable String file,
 			@Nullable ClojureMacroEvaluator macroEvaluator, ClojureFiles files, boolean hostTarget) {
+		return read(source, file, macroEvaluator, files, hostTarget, ClojureBoundary.NONE);
+	}
+
+	/**
+	 * {@link #read(String, String, ClojureMacroEvaluator, ClojureFiles, boolean)} with
+	 * the host boundary {@code rontolisp.wasm} and {@code rontolisp.wit} lower against:
+	 * the designators a declaration may name, the members a WIT interface binds and the
+	 * exports a WIT world declares (the WIT files read through the files).
+	 * @param source the program text
+	 * @param file the origin file for diagnostics and for the source path, or
+	 * {@code null} when unknown (the working directory is the root)
+	 * @param macroEvaluator who evaluates one macro application in the macro-time
+	 * environment, or {@code null} when macro call sites must fail
+	 * @param files where required namespace files and WIT files are read from
+	 * @param hostTarget whether the target is one where the host is
+	 * @param boundary the host boundary
+	 * @return the top-level forms
+	 */
+	public static List<LispVal> read(String source, @Nullable String file,
+			@Nullable ClojureMacroEvaluator macroEvaluator, ClojureFiles files, boolean hostTarget,
+			ClojureBoundary boundary) {
 		ClojureReader reader = new ClojureReader(source, file);
 		return ClojureHostClasses.lowering(files.javaClassLoader(),
-				() -> ClojureLowering.lower(reader.readAll(), reader, macroEvaluator, files, hostTarget));
+				() -> ClojureLowering.lower(reader.readAll(), reader, macroEvaluator, files, hostTarget, boundary));
 	}
 
 	/**

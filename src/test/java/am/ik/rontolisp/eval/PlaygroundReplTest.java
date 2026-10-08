@@ -116,6 +116,21 @@ class PlaygroundReplTest {
 	}
 
 	@Test
+	void aClojureRequireReadsTheUploadedDepsEdnLikeEveryOtherRoute() {
+		// the uploads are the working directory: their deps.edn names the roots, as it
+		// does for the CLI; a :local/root needs a directory, which the browser has none
+		// of
+		SourceLoader loader = files(
+				Map.of("deps.edn", "{:paths [\"lib\"]}", "lib/app/x.clj", "(ns app.x) (defn f [] :from-lib)"));
+		PlaygroundRepl repl = new PlaygroundRepl(loader).pick(SourceLanguage.CLOJURE);
+		assertThat(repl.run("(require 'app.x) (println (app.x/f))")).isEqualTo(":from-lib\n");
+		assertThat(repl.eval("(require '[app.x :as x]) (x/f)")).isEqualTo(":from-lib");
+		SourceLoader local = files(Map.of("deps.edn", "{:deps {my/lib {:local/root \"lib\"}}}"));
+		assertThatThrownBy(() -> new PlaygroundRepl(local).pick(SourceLanguage.CLOJURE).run("(require 'app.x)"))
+			.hasMessageContaining("Local lib my/lib not found: lib");
+	}
+
+	@Test
 	void aFailureCarriesTheConditionsOwnText() {
 		PlaygroundRepl repl = new PlaygroundRepl(NO_FILES).pick(SourceLanguage.SCHEME);
 		assertThatThrownBy(() -> repl.eval("(3 4)")).hasMessageContaining("The object is not applicable: 3");

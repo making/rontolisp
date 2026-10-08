@@ -4,6 +4,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Objects;
 import java.util.SequencedSet;
 import java.util.Set;
@@ -136,9 +137,32 @@ public final class WitImportDirective {
 	 * @param module the WASM Preview 1 import module ({@code :from}), or {@code null} for
 	 * the interface's bare name
 	 * @param fieldStyle how a WIT label is spelled as a Preview 1 import field
+	 * @param names the naming hook of a front end that spells its identifiers its own way
+	 * ({@code :names (("open" "lisp-name") ...)}), or {@code null}: each listed member
+	 * binds under exactly that Lisp name and a member the table leaves out is not bound
+	 * at all. It names the Lisp side only, like {@code :package} -- the member a provider
+	 * is dispatched with, the Preview 1 field and the component import stay the WIT's --
+	 * so it is no per-function alias. The Clojure lowering passes it
+	 * ({@code rontolisp.wit}), whose vars are {@code c%ns/name} symbols no package export
+	 * table can reach
 	 */
 	public record Directive(String path, String iface, @Nullable String pkg, @Nullable String module,
-			FieldStyle fieldStyle) {
+			FieldStyle fieldStyle, @Nullable Map<String, String> names) {
+
+		/**
+		 * A directive with no naming hook: the bindings are named by {@code :package} or
+		 * the reader.
+		 * @param path the WIT file path as written
+		 * @param iface the interface to bind
+		 * @param pkg the Lisp package the bindings land in, or {@code null}
+		 * @param module the WASM Preview 1 import module, or {@code null}
+		 * @param fieldStyle how a WIT label is spelled as a Preview 1 import field
+		 */
+		public Directive(String path, String iface, @Nullable String pkg, @Nullable String module,
+				FieldStyle fieldStyle) {
+			this(path, iface, pkg, module, fieldStyle, null);
+		}
+
 	}
 
 	/**
@@ -171,6 +195,7 @@ public final class WitImportDirective {
 		String pkg = null;
 		String module = null;
 		FieldStyle fieldStyle = FieldStyle.CAMEL;
+		Map<String, String> names = null;
 		int i = 2;
 		while (i < items.size()) {
 			if (!(items.get(i) instanceof LispSymbol keyword) || !keyword.isKeyword()) {
@@ -189,6 +214,7 @@ public final class WitImportDirective {
 				case ":PACKAGE" -> pkg = designator(value, ":package", form);
 				case ":FROM" -> module = designator(value, ":from", form).toLowerCase(Locale.ROOT);
 				case ":FIELD-STYLE" -> fieldStyle = fieldStyle(value, form);
+				case ":NAMES" -> names = WitNamingHook.parse(value, "rontolisp:wit-import", form);
 				default -> throw new UnsupportedOperationException(
 						"Unknown rontolisp:wit-import option " + keyword.name() + " in " + form.print());
 			}
@@ -198,7 +224,12 @@ public final class WitImportDirective {
 			throw new UnsupportedOperationException("rontolisp:wit-import requires :interface (the WIT interface to "
 					+ "bind, e.g. :interface \"wasi:keyvalue/store@0.2.0\") in " + form.print());
 		}
-		return new Directive(path.value(), iface, pkg, module, fieldStyle);
+		if (names != null && pkg != null) {
+			throw new UnsupportedOperationException(
+					"rontolisp:wit-import :names spells every binding itself, so it takes no :package, in "
+							+ form.print());
+		}
+		return new Directive(path.value(), iface, pkg, module, fieldStyle, names);
 	}
 
 	// A string, or a bare symbol written in the WIT's own spelling.
@@ -292,25 +323,11 @@ public final class WitImportDirective {
 	 */
 	public static List<LispVal> lower(Directive directive, String witSource, String witPath,
 			WitExportDirective.Backend backend, @Nullable Set<String> memberFilter, @Nullable Set<String> dropFilter) {
-		WitParseResult parsed;
-		try {
-			parsed = WitParser.parseLocated(witSource);
-		}
-		catch (WitParseException ex) {
-			throw new UnsupportedOperationException(witPath + ": " + ex.getMessage(), ex);
-		}
-		WitLocations locations = parsed.locations();
-		WitResolver resolver = new WitResolver(parsed.document());
-		WitItem.InterfaceDef iface = resolver.findInterface(directive.iface());
-		if (iface == null) {
-			throw new UnsupportedOperationException(witPath + ": no interface '" + directive.iface() + "' (found: "
-					+ String.join(", ", resolver.interfaceIds()) + ")");
-		}
-		List<WitResolver.Func> funcs = WitResolver.functions(iface);
-		if (funcs.isEmpty()) {
-			throw new UnsupportedOperationException(witPath + ":" + locations.lineOf(iface) + ": interface '"
-					+ iface.name() + "' declares no functions");
-		}
+		Target named = target(directive, witSource, witPath);
+		WitLocations locations = named.locations();
+		WitResolver resolver = named.resolver();
+		WitItem.InterfaceDef iface = named.iface();
+		List<WitResolver.Func> funcs = named.funcs();
 		// Preview 1 core-module lowering: one rontolisp:wasm-import per WIT function. The
 		// --no-gc backend takes the SAME lowering -- the directive is the same shape, the
 		// injector the same pass, and every type a WIT function can reach here (the flat
@@ -344,11 +361,11 @@ public final class WitImportDirective {
 				throw new UnsupportedOperationException(witPath + ":" + locations.lineOf(func.def()) + ": interface '"
 						+ iface.name() + "' binds '" + member + "' twice");
 			}
-			if (memberFilter != null && !memberFilter.contains(member)) {
+			if (unnamed(directive, member) || filtered(memberFilter, directive, member)) {
 				continue;
 			}
 			boundMembers.add(member);
-			String name = bindingName(directive.pkg(), member);
+			String name = bindingName(directive, member);
 			if (component) {
 				validateComponentFunc(func, witPath, locations, resolver, iface, member);
 				List<Param> params = parameters(func, witPath, locations, resolver, iface, member, false, true, false);
@@ -362,8 +379,8 @@ public final class WitImportDirective {
 					// public defun is an async-defun that awaits it and unwraps the
 					// (:ok . V) / (:error . E) envelope, so the error arm re-signals at
 					// the caller's await (the settled result mapping).
-					String start = internalName(directive.pkg(), "%" + member + "-start");
-					String lift = internalName(directive.pkg(), "%" + member + "-lift");
+					String start = internalName(directive, member, "-start");
+					String lift = internalName(directive, member, "-lift");
 					componentMembers.add(asyncCallBinding(member, start, lift));
 					bindings
 						.add(subtaskFutureDefun(name, start, lift, params, isResultReturning(func, resolver, iface)));
@@ -372,7 +389,7 @@ public final class WitImportDirective {
 				if (isResultReturning(func, resolver, iface)) {
 					// The raw synthetic defun returns the (:ok . V) / (:error . E)
 					// envelope; the public wrapper unwraps it and signals the error arm.
-					String raw = rawName(directive.pkg(), member);
+					String raw = rawName(directive, member);
 					componentMembers.add(memberBinding(member, raw));
 					bindings.add(resultWrapperDefun(name, raw, params));
 				}
@@ -428,11 +445,11 @@ public final class WitImportDirective {
 				throw new UnsupportedOperationException(witPath + ":" + locations.lineOf(item) + ": interface '"
 						+ iface.name() + "' binds '" + member + "' twice");
 			}
-			if (dropFilter != null && !dropFilter.contains(member)) {
+			if (unnamed(directive, member) || filtered(dropFilter, directive, member)) {
 				continue;
 			}
 			boundMembers.add(member);
-			String name = bindingName(directive.pkg(), member);
+			String name = bindingName(directive, member);
 			if (component) {
 				componentMembers.add(dropBinding(resource.name(), name));
 			}
@@ -481,7 +498,7 @@ public final class WitImportDirective {
 					throw new UnsupportedOperationException(witPath + ":" + locations.lineOf(item) + ": interface '"
 							+ iface.name() + "' binds '" + member + "' twice");
 				}
-				if (dropFilter != null && !dropFilter.contains(member)) {
+				if (unnamed(directive, member) || filtered(dropFilter, directive, member)) {
 					continue;
 				}
 				if (!component) {
@@ -495,7 +512,7 @@ public final class WitImportDirective {
 				validateComponentParam(target.type(), witPath, locations, resolver, target.iface(), alias, member,
 						"the task result", true);
 				boundMembers.add(member);
-				String name = bindingName(directive.pkg(), member);
+				String name = bindingName(directive, member);
 				componentMembers.add(taskReturnBinding(alias.name(), name));
 				continue;
 			}
@@ -505,7 +522,7 @@ public final class WitImportDirective {
 					throw new UnsupportedOperationException(witPath + ":" + locations.lineOf(item) + ": interface '"
 							+ iface.name() + "' binds '" + member + "' twice");
 				}
-				if (dropFilter != null && !dropFilter.contains(member)) {
+				if (unnamed(directive, member) || filtered(dropFilter, directive, member)) {
 					continue;
 				}
 				if (!component) {
@@ -521,7 +538,7 @@ public final class WitImportDirective {
 				}
 				validateAsyncAlias(target, witPath, locations, resolver, alias, member, op);
 				boundMembers.add(member);
-				String name = bindingName(directive.pkg(), member);
+				String name = bindingName(directive, member);
 				componentMembers.add(asyncBinding(alias.name(), op, name));
 			}
 		}
@@ -548,6 +565,223 @@ public final class WitImportDirective {
 		}
 		forms.addAll(bindings);
 		return forms;
+	}
+
+	/**
+	 * The interface a directive names, parsed and resolved: what {@link #lower} and
+	 * {@link #describe} both start from.
+	 */
+	private record Target(WitLocations locations, WitResolver resolver, WitItem.InterfaceDef iface,
+			List<WitResolver.Func> funcs) {
+	}
+
+	private static Target target(Directive directive, String witSource, String witPath) {
+		WitParseResult parsed;
+		try {
+			parsed = WitParser.parseLocated(witSource);
+		}
+		catch (WitParseException ex) {
+			throw new UnsupportedOperationException(witPath + ": " + ex.getMessage(), ex);
+		}
+		WitLocations locations = parsed.locations();
+		WitResolver resolver = new WitResolver(parsed.document());
+		WitItem.InterfaceDef iface = resolver.findInterface(directive.iface());
+		if (iface == null) {
+			throw new UnsupportedOperationException(witPath + ": no interface '" + directive.iface() + "' (found: "
+					+ String.join(", ", resolver.interfaceIds()) + ")");
+		}
+		List<WitResolver.Func> funcs = WitResolver.functions(iface);
+		if (funcs.isEmpty()) {
+			throw new UnsupportedOperationException(witPath + ":" + locations.lineOf(iface) + ": interface '"
+					+ iface.name() + "' declares no functions");
+		}
+		return new Target(locations, resolver, iface, funcs);
+	}
+
+	/**
+	 * How a member of an interface comes to be bound ({@link #lower} has one rule per
+	 * kind).
+	 */
+	public enum Origin {
+
+		/**
+		 * A WIT function: bound on every backend ({@code --component} binds the ones the
+		 * program names).
+		 */
+		FUNCTION,
+
+		/** A resource's {@code <resource>-drop}: bound only when the program names it. */
+		DROP,
+
+		/**
+		 * A stream/future built-in of a {@code type} alias ({@code <alias>-new},
+		 * {@code -read}, ...): {@code --component} only, and only when the program names
+		 * it.
+		 */
+		ASYNC_BUILTIN,
+
+		/**
+		 * An {@code <alias>-task-return} of a {@code type} alias: {@code --component}
+		 * only, and only when the program names it.
+		 */
+		TASK_RETURN
+
+	}
+
+	/**
+	 * A member a {@code rontolisp:wit-import} of the interface binds, under the name the
+	 * lowering gives it.
+	 *
+	 * @param name the member name ({@code open}, {@code bucket-get},
+	 * {@code bucket-drop}): what a {@code :names} table maps and a provider is dispatched
+	 * with
+	 * @param origin how it comes to be bound
+	 * @param params its parameters, a resource method's handle first
+	 * @param result its result type ({@code null} for none; a constructor answers its
+	 * resource's handle)
+	 * @param async whether it is an {@code async func}
+	 * @param line the WIT line declaring it
+	 */
+	public record Member(String name, Origin origin, List<WitTypeMapper.Param> params,
+			WitTypeMapper.@Nullable Shape result, boolean async, int line) {
+	}
+
+	/**
+	 * The interface a directive names, described for a front end that binds names to its
+	 * members before the lowering runs -- the Clojure lowering, whose vars must be known
+	 * when a call site lowers ({@code rontolisp.wit/import}).
+	 *
+	 * @param id the interface's canonical id (the provider registry's key)
+	 * @param members every member a lowering may bind, in the lowering's order
+	 */
+	public record Description(String id, List<Member> members) {
+	}
+
+	/**
+	 * Describes the interface a directive names: every member {@link #lower} may bind,
+	 * named as it names them and checked as it checks them for being bindable at all (the
+	 * interface exists and declares functions, no member name is bound twice, every named
+	 * type is defined). Whether a member's types cross a given backend's boundary stays
+	 * {@link #lower}'s question: this answers what every backend agrees on.
+	 * @param directive the parsed directive
+	 * @param witSource the WIT text
+	 * @param witPath the WIT file path, for error messages
+	 * @return the interface's canonical id and members
+	 * @throws UnsupportedOperationException when the interface cannot be bound, naming
+	 * the WIT file and line
+	 */
+	public static Description describe(Directive directive, String witSource, String witPath) {
+		Target named = target(directive, witSource, witPath);
+		WitLocations locations = named.locations();
+		WitResolver resolver = named.resolver();
+		WitItem.InterfaceDef iface = named.iface();
+		String ifaceId = Objects.requireNonNullElse(resolver.canonicalId(iface), directive.iface());
+		List<Member> members = new ArrayList<>();
+		Set<String> allMembers = new LinkedHashSet<>();
+		// The same three passes, in the same order and with the same duplicate check, as
+		// lower(): its functions, its resources' drops, its type aliases' built-ins.
+		for (WitResolver.Func func : named.funcs()) {
+			String member = memberName(func);
+			if (!allMembers.add(member)) {
+				throw new UnsupportedOperationException(witPath + ":" + locations.lineOf(func.def()) + ": interface '"
+						+ iface.name() + "' binds '" + member + "' twice");
+			}
+			List<WitTypeMapper.Param> params = new ArrayList<>();
+			if (func.resource() != null && func.def().kind() == WitItem.FuncKind.PLAIN) {
+				params.add(new WitTypeMapper.Param("self", handleShape(func.resource())));
+			}
+			for (var param : func.def().func().params()) {
+				params.add(new WitTypeMapper.Param(param.name(), shapeOf(param.type(), resolver, iface, witPath,
+						locations, func.def(), member, "parameter '" + param.name() + "'")));
+			}
+			WitType result = func.def().func().result();
+			WitTypeMapper.Shape resultShape;
+			if (func.def().kind() == WitItem.FuncKind.CONSTRUCTOR) {
+				resultShape = handleShape(Objects.requireNonNull(func.resource()));
+			}
+			else {
+				resultShape = result == null ? null
+						: shapeOf(result, resolver, iface, witPath, locations, func.def(), member, "the result");
+			}
+			members.add(new Member(member, Origin.FUNCTION, List.copyOf(params), resultShape, func.def().func().async(),
+					locations.lineOf(func.def())));
+		}
+		for (WitItem item : iface.items()) {
+			if (!(item instanceof WitItem.ResourceDef resource)) {
+				continue;
+			}
+			String member = resource.name() + "-drop";
+			if (!allMembers.add(member)) {
+				throw new UnsupportedOperationException(witPath + ":" + locations.lineOf(item) + ": interface '"
+						+ iface.name() + "' binds '" + member + "' twice");
+			}
+			members.add(new Member(member, Origin.DROP,
+					List.of(new WitTypeMapper.Param("self", handleShape(resource.name()))), null, false,
+					locations.lineOf(item)));
+		}
+		for (WitItem item : iface.items()) {
+			if (!(item instanceof WitItem.TypeAlias alias)) {
+				continue;
+			}
+			Scoped target = resolveAliases(alias.target(), resolver, iface);
+			boolean async = target.type() instanceof WitType.StreamOf || target.type() instanceof WitType.FutureOf;
+			// lower() checks an alias's target only where it binds the alias's members
+			// (--component, the program naming one), so neither does this: a target
+			// that names no definition is a shape nothing can bind
+			WitTypeMapper.Shape shape;
+			try {
+				shape = shapeOf(alias.target(), resolver, iface, witPath, locations, alias, alias.name(), "the alias");
+			}
+			catch (UnsupportedOperationException ex) {
+				shape = new WitTypeMapper.Shape(WitTypeMapper.Rep.UNSUPPORTED, null,
+						am.ik.wit.WitPrinter.type(alias.target()));
+			}
+			for (String op : async ? ASYNC_OPS : List.of("task-return")) {
+				String member = alias.name() + "-" + op;
+				if (!allMembers.add(member)) {
+					throw new UnsupportedOperationException(witPath + ":" + locations.lineOf(item) + ": interface '"
+							+ iface.name() + "' binds '" + member + "' twice");
+				}
+				members.add(async
+						? new Member(member, Origin.ASYNC_BUILTIN, List.of(), shape, false, locations.lineOf(item))
+						: new Member(member, Origin.TASK_RETURN, List.of(new WitTypeMapper.Param("value", shape)), null,
+								false, locations.lineOf(item)));
+			}
+		}
+		return new Description(ifaceId, List.copyOf(members));
+	}
+
+	// The shape of a resource handle a method takes as `self` and a constructor answers.
+	private static WitTypeMapper.Shape handleShape(String resource) {
+		return new WitTypeMapper.Shape(WitTypeMapper.Rep.HANDLE, null, resource);
+	}
+
+	// A WIT type use resolved to its house representation: aliases followed (across
+	// interfaces), a named type classified by its definition, and an option's element or
+	// a result's ok arm described in the scope THAT type is written in.
+	private static WitTypeMapper.Shape shapeOf(WitType type, WitResolver resolver, WitItem.InterfaceDef iface,
+			String witPath, WitLocations locations, WitItem anchor, String member, String what) {
+		Scoped scoped = resolveAliases(type, resolver, iface);
+		WitType t = scoped.type();
+		WitTypeMapper.Rep rep;
+		if (t instanceof WitType.Named named) {
+			WitResolver.Owned owned = resolver.resolveOwned(scoped.iface(), named.name());
+			if (owned == null) {
+				throw undefinedType(witPath, locations, anchor, member, what, named);
+			}
+			rep = WitTypeMapper.repOfDefinition(owned.item());
+		}
+		else {
+			rep = WitTypeMapper.rep(t);
+		}
+		WitTypeMapper.Shape element = null;
+		if (t instanceof WitType.OptionOf option) {
+			element = shapeOf(option.element(), resolver, scoped.iface(), witPath, locations, anchor, member, what);
+		}
+		else if (t instanceof WitType.ResultOf result && result.ok() != null) {
+			element = shapeOf(result.ok(), resolver, scoped.iface(), witPath, locations, anchor, member, what);
+		}
+		return new WitTypeMapper.Shape(rep, element, am.ik.wit.WitPrinter.type(type));
 	}
 
 	private static final String NO_GC_COMPONENT_RESOURCE_REASON = " (a resource handle has no scalar component"
@@ -590,14 +824,54 @@ public final class WitImportDirective {
 	}
 
 	// The internal raw name of a result-returning binding: pkg::%member (the public
-	// wrapper defun unwraps its envelope).
-	private static String rawName(@Nullable String pkg, String member) {
+	// wrapper defun unwraps its envelope). Under a :names table the bound name behind a
+	// lone-% suffix: the table's front end decides what its names may spell, and the
+	// Clojure one's mangled identifiers never end in one.
+	private static String rawName(Directive directive, String member) {
+		Map<String, String> names = directive.names();
+		if (names != null) {
+			return Objects.requireNonNull(names.get(member)) + "%raw";
+		}
+		String pkg = directive.pkg();
 		return pkg == null ? readerSpelling("%" + member) : PackageRegistry.qualifyInternal(pkg, "%" + member);
 	}
 
-	// An internal (non-exported) name in the directive's package.
-	private static String internalName(@Nullable String pkg, String bare) {
+	// An internal (non-exported) name of a member's binding in the directive's package:
+	// %member-start / %member-lift, or the bound name behind %start / %lift under a
+	// :names table (see rawName).
+	private static String internalName(Directive directive, String member, String role) {
+		Map<String, String> names = directive.names();
+		if (names != null) {
+			return Objects.requireNonNull(names.get(member)) + "%" + role.substring(1);
+		}
+		String bare = "%" + member + role;
+		String pkg = directive.pkg();
 		return pkg == null ? readerSpelling(bare) : PackageRegistry.qualifyInternal(pkg, bare);
+	}
+
+	// Whether a :names table leaves the member out: then it is not bound at all, and not
+	// checked against the backend's boundary either -- the front end judged it before.
+	private static boolean unnamed(Directive directive, String member) {
+		Map<String, String> names = directive.names();
+		return names != null && !names.containsKey(member);
+	}
+
+	// Whether a reference filter (the members the program names) rules the member out.
+	// Under a :names table the program names the BOUND name, which the filter holds as
+	// it is spelled; otherwise the WIT label, whose reader spellings the filter holds.
+	private static boolean filtered(@Nullable Set<String> filter, Directive directive, String member) {
+		if (filter == null) {
+			return false;
+		}
+		Map<String, String> names = directive.names();
+		return !filter.contains(names == null ? member : names.get(member));
+	}
+
+	// The Lisp name one binding is DEFINED under: the :names table's, when the directive
+	// carries one.
+	private static String bindingName(Directive directive, String member) {
+		Map<String, String> names = directive.names();
+		return names != null ? Objects.requireNonNull(names.get(member)) : bindingName(directive.pkg(), member);
 	}
 
 	// The Lisp name one binding is DEFINED under.

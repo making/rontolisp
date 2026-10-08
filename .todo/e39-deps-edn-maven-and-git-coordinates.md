@@ -24,6 +24,20 @@ the Maven resolver is `am.ik.maven` (`.kb/maven-resolver.md`).
 5. Offline and reproducible: a resolved graph is cached per `deps.edn` content (the
    `.cpcache` idea) so a second compile needs no network; the browser refuses by name.
 
+## Where e37 left it (`.kb/clojure-frontend.md`, "deps.edn")
+
+- The selection is complete (`ClojureDepsGraph`, pinned against the oracle on Maven graphs
+  through `ClojureDepsGraphTest.FakeRepository`); what is missing is the procurer:
+  `ClojureDepsProcurer.children`/`contribution` answer nothing for a non-built-in Maven
+  coordinate and for every git one (`Contribution.unread`), `compareGit` keeps the first
+  commit, and `canonicalGit` skips the checks that need the repository (a tag's existence,
+  a short sha with a tag). A `:local/root` jar's own `pom.xml` and a `:pom` manifest are
+  unread the same way: gap 2's decision covers them too.
+- A jar is already read in place (`SourceLoader.listArchive`), its AOT-only namespace
+  refused by name (gap 3's refusal), so a fetched jar needs only its path as a root.
+- `:mvn/repos` and `:mvn/local-repo` are parsed and merged (the root map holds Central and
+  Clojars), not used.
+
 ## Plan
 
 1. Read `.kb/clojure-frontend.md`, `.kb/dists.md`, `.kb/maven-resolver.md`, the `e36` kb
