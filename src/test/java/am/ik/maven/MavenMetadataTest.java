@@ -46,8 +46,8 @@ class MavenMetadataTest {
 
 	@Test
 	void whatMavensReaderRejectsIsRejected() {
-		assertThatThrownBy(() -> read(
-				"<metadata><versioning><release>1</release><release>2</release></versioning></metadata>"))
+		assertThatThrownBy(
+				() -> read("<metadata><versioning><release>1</release><release>2</release></versioning></metadata>"))
 			.isInstanceOf(XmlParser.Malformed.class)
 			.hasMessageStartingWith("Duplicated tag: 'release'");
 		assertThatThrownBy(() -> read(

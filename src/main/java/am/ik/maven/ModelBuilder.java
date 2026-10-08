@@ -57,7 +57,7 @@ final class ModelBuilder {
 		 * @return the versions the range admits
 		 * @throws MavenResolutionException if the range is invalid
 		 */
-		RepositoryAccess.VersionRange versionRange(Artifact pom) throws MavenResolutionException;
+		VersionRangeResult versionRange(Artifact pom) throws MavenResolutionException;
 
 	}
 
@@ -254,7 +254,7 @@ final class ModelBuilder {
 	private String parentVersion(String groupId, String artifactId, String version, String childId)
 			throws MavenResolutionException {
 		String parentId = groupId + ":" + artifactId + ":" + version;
-		RepositoryAccess.VersionRange range;
+		VersionRangeResult range;
 		try {
 			range = this.source.versionRange(new Artifact(groupId, artifactId, version, "", "pom"));
 		}

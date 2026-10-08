@@ -65,7 +65,7 @@ final class DependencyCollector {
 		 * @return the versions
 		 * @throws MavenResolutionException if the constraint is invalid
 		 */
-		RepositoryAccess.VersionRange versions(Artifact artifact) throws MavenResolutionException;
+		VersionRangeResult versions(Artifact artifact) throws MavenResolutionException;
 
 	}
 
@@ -147,7 +147,7 @@ final class DependencyCollector {
 		}
 		// A system dependency is a file at its systemPath: Maven reads no POM for it.
 		boolean noDescriptor = managedDependency.scope().equals("system");
-		RepositoryAccess.VersionRange range;
+		VersionRangeResult range;
 		try {
 			range = this.versions.versions(requested);
 		}

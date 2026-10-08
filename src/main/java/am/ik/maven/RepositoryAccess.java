@@ -83,27 +83,6 @@ final class RepositoryAccess implements ModelBuilder.PomSource {
 	}
 
 	/**
-	 * Maven's version range resolution of one artifact.
-	 *
-	 * @param constraint the constraint the version wrote
-	 * @param versions the versions it admits that the metadata lists, ascending (a plain
-	 * version admits itself without any metadata)
-	 * @param problems what could not be read on the way: a repository's metadata that
-	 * failed to transfer, or was invalid
-	 */
-	record VersionRange(VersionConstraint constraint, List<String> versions, List<String> problems) {
-
-		/**
-		 * The highest version.
-		 * @return it, or {@code null} when there is none
-		 */
-		@Nullable String highest() {
-			return this.versions.isEmpty() ? null : this.versions.get(this.versions.size() - 1);
-		}
-
-	}
-
-	/**
 	 * One repository's copy of one metadata file, cached in the local repository.
 	 *
 	 * @param origin the repository
@@ -133,7 +112,7 @@ final class RepositoryAccess implements ModelBuilder.PomSource {
 
 	private final Map<Artifact, ResolvedVersion> resolvedVersions = new HashMap<>();
 
-	private final Map<Artifact, VersionRange> ranges = new HashMap<>();
+	private final Map<Artifact, VersionRangeResult> ranges = new HashMap<>();
 
 	RepositoryAccess(Path localRepository, List<RemoteRepository> repositories, Downloader downloader,
 			MavenSettings settings, UpdatePolicy policy) {
@@ -444,18 +423,19 @@ final class RepositoryAccess implements ModelBuilder.PomSource {
 	 * @throws MavenResolutionException if the version is not a valid range
 	 */
 	@Override
-	public VersionRange versionRange(Artifact artifact) throws MavenResolutionException {
-		VersionRange cached = this.ranges.get(artifact);
+	public VersionRangeResult versionRange(Artifact artifact) throws MavenResolutionException {
+		VersionRangeResult cached = this.ranges.get(artifact);
 		if (cached != null) {
 			return cached;
 		}
 		VersionConstraint constraint = VersionConstraint.parse(artifact.version());
-		VersionRange range;
+		VersionRangeResult range;
 		if (!constraint.isRange()) {
-			range = new VersionRange(constraint, List.of(artifact.version()), List.of());
+			range = new VersionRangeResult(constraint, List.of(artifact.version()), List.of());
 		}
 		else if (constraint.lowerBound() != null && constraint.lowerBound().equals(constraint.upperBound())) {
-			range = new VersionRange(constraint, List.of(constraint.lowerBound().version().toString()), List.of());
+			range = new VersionRangeResult(constraint, List.of(constraint.lowerBound().version().toString()),
+					List.of());
 		}
 		else {
 			List<String> problems = new ArrayList<>();
@@ -481,7 +461,7 @@ final class RepositoryAccess implements ModelBuilder.PomSource {
 			for (GenericVersion version : versions) {
 				texts.add(version.toString());
 			}
-			range = new VersionRange(constraint, texts, problems);
+			range = new VersionRangeResult(constraint, texts, problems);
 		}
 		this.ranges.put(artifact, range);
 		return range;
