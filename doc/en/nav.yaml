@@ -271,6 +271,8 @@ sections:
             title: "(clojure.walk)"
           - file: clojure/reference/clojure-edn.md
             title: "(clojure.edn)"
+          - file: clojure/reference/clojure-template.md
+            title: "(clojure.template)"
           - file: clojure/reference/regex.md
             title: "Regular expressions"
           - file: clojure/reference/higher-order.md

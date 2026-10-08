@@ -7847,3 +7847,34 @@ cases:
       ("Octal escape sequence must be in range [0, 377]." "Invalid octal escape sequence length: 4" "Invalid unicode character: \\u00" "Invalid character constant: \\ud800" "Invalid digit: z" "Invalid token: :" "Namespaced map must specify a map" "Namespaced map must specify a valid namespace: null" "Unknown auto-resolved namespace alias: nope")
       a/9 a//b :1 a/:b
       #:item{:id 1} 2 #:it{name 1} #:user{:local 3}
+  - name: clojure-template-substitutes-per-group-of-values
+    # The built-in clojure.template (.kb/clojure-frontend.md "clojure.jar namespaces"):
+    # apply-template substitutes at any depth, do-template expands to one copy per
+    # group of values (a short last group dropped), also from a macro's expansion. Every
+    # line is the oracle's (clj 1.12.6), on all four backends.
+    source: |
+      (ns tmpl (:require [clojure.template :as t :refer [do-template]]))
+      (prn (t/apply-template '[x] '(+ x x) '[2]))
+      (prn (t/apply-template '[x y] '[x {:k y} #{x} (f (g y))] '[1 2]))
+      (prn (macroexpand '(do-template [x y] (+ y x) 2 4 3 5)))
+      (prn (do-template [x y] (+ y x) 2 4 3 5))
+      (do-template [a b] (println a "->" b) 1 :one 2 :two 3)
+      (def results (atom []))
+      (do-template [op v] (swap! results conj (op v 10)) + 1 - 2 * 3)
+      (prn @results)
+      (prn (try (t/apply-template '[1] '(+ 1) '[2]) (catch AssertionError e (ex-message e))))
+      (prn (t/apply-template '[x] 'x '[[1 2]]) (t/apply-template '[x] '{x x} '[:k]))
+      (defmacro twice [x] `(do-template [y#] (inc y#) ~x ~x))
+      (prn (twice 5))
+      (in-ns 'user)
+    expected: |
+      (+ 2 2)
+      [1 {:k 2} #{1} (f (g 2))]
+      (do (+ 4 2) (+ 5 3))
+      8
+      1 -> :one
+      2 -> :two
+      [11 -8 30]
+      "Assert failed: (every? symbol? argv)"
+      [1 2] {:k :k}
+      6

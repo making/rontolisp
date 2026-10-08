@@ -129,6 +129,7 @@ answered `2 5 3` before).
 | `ring.util.response` `ring.util.request` `ring.util.codec` `ring.util.mime-type` `ring.middleware.params` `ring.middleware.keyword-params` `ring.middleware.content-type` | Clojure source in the jar, loaded like a project file; `rontolisp.internal.ring/NAME` (their kernels) is one call to `rontolisp::%clojure-ring-NAME` (`ClojureRingUtilLowering`) | "Ring util namespaces" |
 | `clojure.edn` (`read-string` `read`) | `ClojureEdnLowering`: one call to `rontolisp::%clojure-edn-read-string-1` / `-read-string` / `-read` after a lower-time arity check in the oracle's wording; as a value `#'...-v` | "Reading", clojure.edn |
 | `clojure.walk` | Clojure source in the jar written for this front end, loaded like a project file (a startup namespace: on its first qualified name too) | "clojure.jar namespaces" |
+| `clojure.template` | the same, loaded at its `require` | "clojure.jar namespaces" |
 | `subs`, `.substring` | `%clojure-subs`, the refusal family's alias of `subseq` ("Refusals") | a bound outside a string is the oracle's `StringIndexOutOfBoundsException` where a class is read; a double or ratio bound is truncated (`%clojure-string-bound`), a non-number one is refused as the oracle does ("Refusals") |
 | `format` | the Java directives translated to `format` over Clojure-rendered arguments | literal format string only; `%s` like `str` (nil spells `null`), `%b`; `%e`/`%g`, flags and the rest refused |
 | `spit` `slurp` `line-seq` `clojure.java.io/reader` | `with-open-file` of the `str` spelling / `rontolisp::%clojure-slurp` / a `read-line` loop / `%clojure-reader` (`open`) | every backend; wasm needs a `--dir` preopen (without it the open signals). `spit` supersedes unless `:append` is truthy, `nil` writes nothing. `slurp`, `line-seq` and `reader` take a path or an open stream (`streamp`, so a Gray instance -- the Ring `:body` -- too): `slurp` reads a stream to its end and closes it (the oracle's `with-open`; until 2026-10-08 it left it open), `reader` answers it, `line-seq` reads it strictly and never closes it. A read of a CLOSED stream -- `slurp`, `line-seq`, `.read`, `.readLine`, `read-line` -- goes through `%clojure-open-reader` (`open-stream-p`, else the `%clojure-io-exception` carrier: the oracle's `IOException: Stream closed`); before it the interpreter said `READ-CHAR expects an input stream`, the JVM an NPE, and both wasm backends READ a closed string input stream (its record is never marked closed, `.kb/read-load-streams.md`). `read` is not guarded: the oracle wraps the failure in a `LispReader$ReaderException` over a `LineNumberingPushbackReader` and not over a `PushbackReader`, which share one stream kind here. A second close is harmless on every backend (`.kb/read-load-streams.md`, "close on an already-closed stream"). Pins: clojure-spec `slurp-closes-the-stream-it-reads`, `ClojureInteropTest#filesRoundTripThroughReaderAndLineSeq`, `ClojureWasmFileIoTest`. `slurp` was an inline `read-char` loop per site until 2026-10-08. `file-seq` and every other `clojure.java.io` fn are refused |
@@ -1041,7 +1042,8 @@ oracle's classpath. Loaded through `loadNamespace` like any project namespace: v
 
 **The map-shaped namespaces of clojure.jar ship as Clojure source written for this front
 end** (`src/main/resources/am/ik/rontolisp/clojure/lib/clojure/**`, the
-`ClojureBuiltinNamespaces` mechanism of "Ring util namespaces"): `clojure.walk`.
+`ClojureBuiltinNamespaces` mechanism of "Ring util namespaces"): `clojure.walk`,
+`clojure.template`.
 - **Licensing**: clojure.jar is EPL-1.0, this project Apache-2.0, so nothing of it is
   copied -- no code, no docstring. Each file is written from the documented behaviour and
   diffed against the oracle; a one-line var dictated by its contract
@@ -1074,8 +1076,13 @@ end** (`src/main/resources/am/ik/rontolisp/clojure/lib/clojure/**`, the
   `LongRange` as a seq: printed alike). Deviation: `macroexpand-all` expands only the
   program's macros -- the core forms are lowering rows, not macros, so `(when x y)` stays
   where the oracle answers `(if x (do y))`.
+- `clojure.template`: `do-template` substitutes in its own body (a `letfn` postwalk
+  replace) instead of calling `apply-template`, because a macro body runs in the
+  macro-time evaluator, which holds the core and `clojure.lisp` but no program function
+  ("Macros"); the oracle's calls `apply-template`. Same answers.
 - Pins: clojure-spec `clojure-walk-*` (all four backends, oracle-identical, the first
   case loading `clojure.walk` through a qualified name only),
+  `clojure-template-substitutes-per-group-of-values`,
   `ClojureLanguageNamespacesTest` (the startup load, a project file never shadowing a
   startup namespace, a contrib `clojure.*` namespace on the source path, the refusal of
   one not built in).
