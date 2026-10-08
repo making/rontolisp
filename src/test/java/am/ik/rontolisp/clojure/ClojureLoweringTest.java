@@ -1024,9 +1024,10 @@ class ClojureLoweringTest {
 		assertThat(lowered("(defprotocol Q :extend-via-metadata false (m [x]))")).doesNotContain("|c%Q%inline|")
 			.doesNotContain("%CLOJURE-META-METHOD");
 		assertThat(lowered("(defprotocol Q (m [x]))")).doesNotContain("%CLOJURE-META-METHOD");
+		// a name no class has is the oracle's unresolved symbol, like instance?'s
 		assertThatThrownBy(() -> Clojure.read("(defprotocol Q (m [x])) (extend-protocol Q Instant (m [x] 1))", null))
 			.isInstanceOf(LispReadException.class)
-			.hasMessageContaining("extend-protocol needs a core type, not Instant");
+			.hasMessageContaining("unknown name: Instant");
 		assertThatThrownBy(() -> Clojure.read("(extend-protocol Missing String (m [x] 1))", null))
 			.isInstanceOf(LispReadException.class)
 			.hasMessageContaining("No such protocol: Missing");
@@ -1081,6 +1082,49 @@ class ClojureLoweringTest {
 			.read("(defprotocol Q (m [x] [x y])) (extend-protocol Q String (m ([s] 1) ([t] 2)))", null))
 			.isInstanceOf(LispReadException.class)
 			.hasMessageContaining("Can't have 2 overloads with same arity");
+	}
+
+	@Test
+	void onlyAProtocolExtendedToAWalkedClassWalksPastAnExactMiss() {
+		// no walked class: no walk in the dispatcher, satisfies? or the runtime
+		String exact = lowered(
+				"(defprotocol Q (m [x])) (extend-protocol Q String (m [s] 1) Object (m [_] 2))" + " (satisfies? Q 1)");
+		assertThat(exact).doesNotContain("C%PROTOCOL-SUPER").doesNotContain("C%PROTOCOL-ROW");
+		// a throwable target: the row under its class keyword, the dispatcher (lowered
+		// above the extension, so the lowering starts over) and satisfies? walk, and the
+		// runtime tests the class's chain
+		String walked = lowered("(defprotocol Q (m [x])) (defprotocol O (o [x])) (satisfies? Q 1)"
+				+ " (extend-protocol Q Throwable (m [_] 1))");
+		assertThat(walked).contains("(GETHASH (LIST :C%KEYWORD \"java.lang.Throwable\")")
+			.contains("(DEFUN C%PROTOCOL-SUPER (|x| |table| |method| |miss|)")
+			.contains("(RONTOLISP::%CLOJURE-INSTANCE-OF |x| '(\"java.lang.Throwable\"))")
+			.containsPattern("\\(C%PROTOCOL-SUPER \\(CAR \\|__clojure_\\d+\\|\\) \\|c%Q%methods\\|")
+			.containsPattern("\\(C%PROTOCOL-SUPER \\|__clojure_\\d+\\| \\|c%Q%methods\\| NIL");
+		// a protocol of the same program extended to no walked class keeps its dispatcher
+		assertThat(walked)
+			.doesNotContainPattern("\\(C%PROTOCOL-SUPER \\(CAR \\|__clojure_\\d+\\|\\) \\|c%O%methods\\|");
+		// an interface over core kinds tests the kinds; a host class the host object
+		assertThat(lowered("(defprotocol Q (m [x])) (extend clojure.lang.IRef Q {:m (fn [_] 1)})"))
+			.contains("\"clojure.lang.IRef\"")
+			.contains("(RONTOLISP::%CLOJURE-VAR-P |x|)");
+		assertThat(lowered("(defprotocol Q (m [x])) (extend-type java.time.Instant Q (m [_] 1))"))
+			.contains("(RONTOLISP::%CLOJURE-HOST-OBJECT-P |x| \"java.time.Instant\")");
+		// extends? names the exact class
+		assertThat(lowered("(defprotocol Q (m [x])) (extends? Q Exception)"))
+			.contains("(GETHASH (LIST :C%KEYWORD \"java.lang.Exception\")");
+	}
+
+	@Test
+	void theWalkTriesSuperclassesThenInterfacesEachAheadOfItsSupertypes() {
+		// the classes (ARef unrelated to the throwables), then the interfaces, each
+		// subtype first: IRef below IDeref by the kinds of value either holds
+		assertThat(ClojureProtocolLowering
+			.walkOrder(List.of("java.lang.Throwable", "clojure.lang.IDeref", "clojure.lang.IExceptionInfo",
+					"java.lang.Exception", "clojure.lang.IRef", "clojure.lang.ARef", "java.lang.RuntimeException")))
+			.containsExactly("clojure.lang.ARef", "java.lang.RuntimeException", "java.lang.Exception",
+					"java.lang.Throwable", "clojure.lang.IExceptionInfo", "clojure.lang.IRef", "clojure.lang.IDeref");
+		assertThat(ClojureProtocolLowering.walkOrder(List.of("java.util.Date", "java.io.Writer")))
+			.containsExactly("java.util.Date", "java.io.Writer");
 	}
 
 	@Test
@@ -2638,9 +2682,9 @@ class ClojureLoweringTest {
 		}
 		assertThatThrownBy(() -> Clojure.read("(extends? Nope String)", null)).isInstanceOf(LispReadException.class)
 			.hasMessageContaining("No such protocol: Nope");
-		assertThatThrownBy(() -> Clojure.read("(defprotocol P (m [x])) (extends? P java.time.Instant)", null))
+		assertThatThrownBy(() -> Clojure.read("(defprotocol P (m [x])) (extends? P java.time.Instantt)", null))
 			.isInstanceOf(LispReadException.class)
-			.hasMessageContaining("extends? needs a core type, not java.time.Instant");
+			.hasMessageContaining("unknown name: java.time.Instantt");
 		for (String name : new String[] { "future?", "future-done?", "future-cancelled?", "future-cancel" }) {
 			assertThatThrownBy(() -> Clojure.read("(" + name + ")", null)).isInstanceOf(LispReadException.class)
 				.hasMessageContaining("Wrong number of args (0) passed to: clojure.core/" + name);

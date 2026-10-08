@@ -8,7 +8,7 @@ Clojure の同名の名前空間について文書化された振る舞いをも
 
 | var | 振る舞い |
 |---|---|
-| `clojure.datafy/datafy` | `(datafy x)`: `Datafiable` を通した `x` のデータ表現。新しいコレクションが返ったときは、そのメタデータの `:clojure.datafy/obj` に `x` を、`:clojure.datafy/class` にそのクラスのシンボルを入れる。アトムは `[値]` を返す |
+| `clojure.datafy/datafy` | `(datafy x)`: `Datafiable` を通した `x` のデータ表現。新しいコレクションが返ったときは、そのメタデータの `:clojure.datafy/obj` に `x` を、`:clojure.datafy/class` にそのクラスのシンボルを入れる。例外は [Throwable->map](throwable-to-map.md) のマップ、アトム・ref・エージェントはメタデータ付きの `[値]` を返す |
 | `clojure.datafy/nav` | `(nav coll k v)`: `coll` の `k` の位置にある `v` が表すもの。`Navigable` を通し、拡張されていなければ `v` 自身 |
 | `clojure.core.protocols/Datafiable`、`datafy` | `datafy` のもとになるプロトコル。`nil` もほかの値も自分自身を返す。メタデータで拡張できる |
 | `clojure.core.protocols/Navigable`、`nav` | `nav` のもとになるプロトコル。メタデータで拡張できる |
@@ -25,6 +25,7 @@ Clojure の同名の名前空間について文書化された振る舞いをも
 (d/datafy conn) ; => {:connection 7}
 (::d/obj (meta (d/datafy conn))) ; => {:id 7}
 (d/datafy (atom 5)) ; => [5]
+(:cause (d/datafy (ex-info "boom" {:code 7}))) ; => "boom"
 (defrecord Node [id])
 (extend-protocol p/Navigable Node
   (nav [n k v] (if (= k :parent) (->Node v) v)))
@@ -55,5 +56,5 @@ Clojure の同名の名前空間について文書化された振る舞いをも
   ものには、`coll-reduce` や `kv-reduce` を直接呼んで届きます。Clojure の `reduce` は、自分では
   畳み込まないコレクション（文字列、マップ）についてもその拡張を使います。`reduce` は
   `InternalReduce` を参照しません。
-- 例外は自分自身にデータ化されます（Clojure は `Throwable->map` のマップを返します）。名前空間や
-  クラスも自分自身になります。
+- 名前空間やクラスは自分自身にデータ化されます（Clojure はメンバーのマップを返します）。例外の
+  マップにはフレームがありません（[Throwable->map](throwable-to-map.md)）。

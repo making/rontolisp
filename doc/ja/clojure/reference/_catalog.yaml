@@ -388,6 +388,7 @@ categories:
       - { slug: ex-data, name: "ex-data" }
       - { slug: ex-message, name: "ex-message" }
       - { slug: ex-cause, name: "ex-cause" }
+      - { slug: throwable-to-map, name: "Throwable->map" }
       - { slug: assert, name: "assert" }
   - title: "名前空間"
     index_page: clojure/reference/namespaces.md

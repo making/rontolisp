@@ -7,9 +7,14 @@ method per type, like `defmethod` rows (a repeated type's later rows win, like t
 oracle). Targets are the kinds `class` answers (`String`, `Number`, `Boolean`,
 `Keyword`, `Symbol`, `Character`, `Map`, `Vector`, `Set`, `List`/`Seq`, plus `nil`
 and `Object` as the miss default; package-qualified spellings such as `java.lang.String` or
-`clojure.lang.IPersistentMap` too) and known record/deftype names; anything else
-(an `Instant`, a `Date`, ...) is a named refusal. A method of several arities spells
-them as the clauses of a `fn`: `(method ([target] ...) ([target x] ...))`.
+`clojure.lang.IPersistentMap` too), known record/deftype names, and any other class a value
+may be an instance of: a throwable (`Throwable`, `Exception`, `ExceptionInfo`, ...), an
+interface such as `clojure.lang.IRef` or `clojure.lang.IDeref`, `java.util.Date` (which a
+`java.sql.Timestamp` reaches too), and on the interpreter and the JVM a host class. A value
+with no row of its own class tries those the protocol was extended to, like the oracle: the
+superclasses first, then the interfaces, each ahead of its own supertypes, then `Object`. A
+name no class has is refused, like `instance?`. A method of several arities spells them as
+the clauses of a `fn`: `(method ([target] ...) ([target x] ...))`.
 
 ```clojure
 (defprotocol P (m [x]))
@@ -24,4 +29,11 @@ them as the clauses of a `fn`: `(method ([target] ...) ([target x] ...))`.
 (defprotocol Q (q [x] [x y]))
 (extend-protocol Q Long (q ([n] n) ([n k] (* n k))))
 (println (q 7) (q 7 6)) ; 7 42
+
+(defprotocol R (r [x]))
+(extend-protocol R
+  Throwable (r [_] :throwable)
+  Exception (r [_] :exception)
+  clojure.lang.IRef (r [_] :ref))
+(println (r (ex-info "m" {})) (r (Error. "e")) (r (atom 1))) ; :exception :throwable :ref
 ```

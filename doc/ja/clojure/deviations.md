@@ -126,7 +126,8 @@
   プログラムが作った例外の `class` はクラス名をキーワードで返し（`:java.lang.Exception`。オラクルはホストの
   クラスを返します）、クラスを示さないエラーには `:java.lang.RuntimeException` を返します。`.printStackTrace` は `toString` の行を `*err*` に書き（オラクルはそれとフレーム
   ごとの行を、`*err*` の束縛に関わらずプロセスの標準エラーに書きます）、`.getStackTrace` は
-  空のベクターを返します。`.getClass` は `class` と同じ値を返します。インタプリタと JVM では、
+  空のベクターを返します（そのため `Throwable->map` の `:trace` は `[]` で、`:via` の
+  マップに `:at` はありません）。`.getClass` は `class` と同じ値を返します。インタプリタと JVM では、
   それ以外のメソッドは、例外のクラスのホストの例外に対して呼び出され、Java のメンバに渡した
   例外もそのホストの例外として渡ります。ホストの例外はメッセージと cause から一度だけ作り、
   `ex-info` のものは `RuntimeException` です。そのため `(.getCause (UncheckedIOException. "u" e))`
@@ -159,9 +160,11 @@
  `(isa? (class (java.util.ArrayList.)) java.util.List)` は `true` です。同じく `:list` と
  綴る `clojure.lang.IPersistentList` にも `isa?` で、オラクルは `false` を返します。それ以外の
 クラス（`java.io.File`）はディスパッチ値でもクラスオブジェクトで、オラクル通りです。プロトコルの
- ディスパッチは階層を読まず（タグの
- 完全一致と `Object` 既定）、`Long`・`Double` を `:number` にまとめます（オラクルは
- 区別します）。
+ ディスパッチは階層（`derive`）を読まず、タグの完全一致の次はプロトコルを extend した
+ クラスだけを試し、それから `Object` 既定です。`Long`・`Double` を `:number` にまとめ
+ （オラクルは区別します）、1つの値が実装する2つの `clojure.lang` インタフェースは
+ それぞれが受ける値の種類で順序づけます（`IRef` が `IDeref` より先）。`clojure.lang` は
+ このクラスパスにないためです。
 - `(methods mt)` と `get-method`・`remove-method`・`prefer-method` は式ではなく multimethod の
   名前（`defmulti` の var。alias や refer 経由も可）を取ります。multimethod を束縛した
   ローカルは降低時に拒否されます。`methods` が返すマップはホストクラスの行を `class` が

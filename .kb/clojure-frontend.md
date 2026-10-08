@@ -267,6 +267,15 @@ An exception is a condition on every backend (oracle-checked clj 1.12.6, 2026-10
   `catch-takes-a-division-by-zero-as-an-arithmetic-exception` pins the catch, oracle-identical).
 - `ex-info` takes an optional cause; nil data is `{}` (the oracle's); a non-exception cause is
   refused.
+- `Throwable->map` (2026-10-08) is `%clojure-throwable-to-map`, a reader like `ex-data`
+  (`exReaderOf`, so the exception runtime travels): the oracle's map built in its key order --
+  `:via` one `%clojure-throwable-via` map per throwable down `%clojure-ex-cause` (`:type` the
+  class symbol of `%clojure-condition-chain`'s head, `:message`/`:data` when non-nil),
+  `:trace`, the root's `:cause`/`:data`, `:phase` from the outer data (a record's fields
+  too). A throwable has no frames, so `:trace` is `[]` and no `:at` (deviation; the oracle's
+  answer for an empty stack trace). nil is the oracle's NPE, a non-throwable its
+  `ClassCastException` (the message without the oracle's module tail). Pin: clojure-spec
+  `throwable-to-map-answers-the-oracles-map-without-frames`.
 - A construction is an exception (`ClojureInteropLowering.throwableConstruction`, untagged
   `(C. ...)`/`new`/`C/new`, value too) when `plainThrowable`: public concrete `Throwable`, no
   public field, every public method `Throwable`'s/`Object`'s or an override of `Throwable`'s --
@@ -1679,13 +1688,14 @@ end** (`src/main/resources/am/ik/rontolisp/clojure/lib/clojure/**`, the
   - An `eduction` over such a value reduces it at the `eduction` (the view): `into`,
     `transduce` and a seeded `reduce` answer the oracle's, the init-less `reduce` and the
     `seq` the oracle refuses answer (deviation, user doc).
-- `clojure.datafy`: `extend-protocol` takes no `Throwable` or `IRef` target here ("needs a core
-  type", measured 2026-10-08), so `clojure.datafy` re-extends the `Object` row with the
-  oracle's `IRef` answer (`[value]` with the ref's metadata) and an exception datafies to
-  itself (no `Throwable->map` here). `:clojure.datafy/class` comes from
-  `rontolisp.internal.datafy/class-name-of`, i.e. `%clojure-class-name-of`, the oracle's
-  class names `%clojure-no-method` already spelled (now shared), since `class` answers a
-  kind keyword.
+- `clojure.datafy`: the oracle's `Throwable` (`Throwable->map`) and `clojure.lang.IRef`
+  (`[value]` with the ref's metadata) rows, through the walk ("Dispatch", walked classes;
+  until 2026-10-08 an `Object` row with an `instance?` test and an exception datafied to
+  itself). `:clojure.datafy/class` comes from `rontolisp.internal.datafy/class-name`
+  (`%clojure-datafy-class-name`): an exception's class name, else `%clojure-class-name-of`,
+  the oracle's class names `%clojure-no-method` already spelled, since `class` answers a
+  kind keyword. A namespace or class datafies to itself (deviation). Pin: clojure-spec
+  `clojure-datafy-of-an-exception-and-a-ref-like-the-oracle`.
 - `clojure.stacktrace`: `print-throwable` spells the class as `(name (class tr))` (`class`
   of a throwable is its class-name keyword here) and a nil message `null` like the
   oracle's `printf`. A throwable has no frames (`.getStackTrace` answers `[]`), so
@@ -1748,8 +1758,8 @@ end** (`src/main/resources/am/ik/rontolisp/clojure/lib/clojure/**`, the
   class: `(prn (r/fold + (r/map inc [1 2 3])))` 143,501 / 131,041 B.
 - Not shipped, with what each waits on (decided 2026-10-08): `clojure.java.io` beyond
   `reader` (a portable File and byte streams, e55), pprint's
-  `cl-format`/`formatter`/`formatter-out` (e58), `Throwable->map` and `extend-protocol` to
-  `Throwable`/`IRef` (e60), `clojure.repl`/`main`/`java.shell`/`xml` (e61).
+  `cl-format`/`formatter`/`formatter-out` (e58), `clojure.repl`/`main`/`java.shell`/`xml`
+  (e61).
 - Pins: clojure-spec `clojure-walk-*` (all four backends, oracle-identical, the first
   case loading `clojure.walk` through a qualified name only),
   `clojure-template-substitutes-per-group-of-values`, `clojure-pprint-*`,
@@ -1970,7 +1980,8 @@ constructor and consumer, and a regex `replace` with a function replacement.
 - A hierarchy is a map of `:parents`/`:ancestors`/`:descendants` tables to wrapped sets;
   the global one is `C%H-GLOBAL`, rebound by two-argument `derive`/`underive`.
 - `defprotocol`: an `equal`-table global plus one dispatcher `defun` per method over
-  `C%PROTOCOL-TAG`; exact tag, then the method's `Object` row, else a signal. The
+  `C%PROTOCOL-TAG`; exact tag, then (a walking protocol, below) the walked classes, then the
+  method's `Object` row, else a signal. The
   multimethod shape over runtimes all four backends already run, not a per-backend value
   model (`.todo/artefacts/b13-protocols/spike.md`).
 - **A method declares one parameter vector per arity** (`(m [x] [x y] "doc")`;
@@ -2000,7 +2011,36 @@ constructor and consumer, and a regex `replace` with a function replacement.
   `satisfies?` reads both tables, never metadata.
 - `extend-protocol`/`extend-type`/`extend` add rows under the target's tag: the
   class-keyword kinds, `nil`, `Object`, known records and deftypes, the classes of the
-  instants and the UUID ("Instants and UUIDs"); anything else (`Instant`) is refused.
+  instants and the UUID ("Instants and UUIDs"), and any other class `instance?` resolves
+  (a name no class has is its `unknown name: X`).
+- **Walked classes** (oracle-checked clj 1.12.6, 2026-10-08). A target no value's tag names
+  exactly -- a throwable (a condition's tag is the fresh miss list), an interface or
+  abstract class over core kinds (`clojure.lang.IRef`/`IDeref`/`ARef`/`IExceptionInfo`), a
+  stream or host class, and `java.util.Date` (a Timestamp's tag is its own;
+  `ClojureProtocolLowering.walkTargetOf`) -- stores its row under its binary name's keyword
+  (`extendKeyForm`) and joins `ctx.walkTests`: its `instance?` test
+  (`ClojureDispatchLowering.instanceTest`, `instance?`'s arms as a raw test over `x`). A
+  protocol extended to one WALKS: its dispatchers, past the exact row (and an
+  `:extend-via-metadata` protocol's inline and metadata lookups), ask `C%PROTOCOL-SUPER x
+  table method miss` before the `Object` row, and `satisfies?` asks it with a nil method.
+  The protocol runtime's walk (`walkRuntime`, emitted with the tag reader where any protocol
+  walks) tests the walked classes in the oracle's `find-protocol-impl` order (`walkOrder`):
+  the classes first, then the interfaces, each ahead of its supertypes
+  (`ClojureValueClasses.isSubtype`: the class rows or reflection; two `clojure.lang` names,
+  not on this class path, by kinds -- `IRef`'s values a proper subset of `IDeref`'s;
+  `isInterface` tells a `clojure.lang` interface by its name), the first with a row of the
+  method winning. So an `ex-info` takes `Exception` over `IExceptionInfo` (the superclass
+  chain first), a volatile `IDeref`, a Timestamp `Date`'s row. `extends?` reads the exact
+  key only, like the oracle. Which protocols walk is decided per protocol before its
+  dispatchers lower: an extension to a walked class of a protocol whose dispatchers lowered
+  plain records it in `walkMisses`, and `ClojureLowering.lower` starts over with it in
+  `walkingProtocols` (the `with-redefs` restart), so a program extending no protocol to one
+  lowers byte-identically; a session's dispatchers all walk and a buffer adding a walked
+  class re-emits the runtime (`walkTestsEmitted`). Pins: clojure-spec
+  `a-protocol-extended-to-throwables-and-refs-walks-the-oracles-classes` (all four,
+  oracle-identical), `ClojureLoweringTest#onlyAProtocolExtendedToAWalkedClassWalksPastAnExactMiss`,
+  `#theWalkTriesSuperclassesThenInterfacesEachAheadOfItsSupertypes`,
+  `ClojureSessionTest#aLaterBufferExtendingAProtocolToAWalkedClassReachesItsValues`.
 - `defrecord`/`deftype`: positional (and, for records, map) constructors as `defun`s plus
   one row per inline method. `class` in the record is the printed host class name
   (`#my_app.core.R{...}`: `-` munged to `_`); every rewrap carries it. `(T. ...)`/`(new T
@@ -3013,8 +3053,9 @@ milliseconds; the reverse false, the oracle's one-sided `equals`).
   `java.util.Date` dispatches a Timestamp through `isa?` (spelling Date records the Timestamp
   row: `timeValueSubclassesOf`; `Object` and the interfaces record none, so `ancestors` of a
   class the program never spells answers nil, a deviation). `extend-protocol` takes the four
-  classes (`TIME_VALUE_DISPATCH`, `Calendar` to `GregorianCalendar`), by exact tag: a protocol
-  extended to `java.util.Date` does not reach a Timestamp (deviation).
+  classes (`TIME_VALUE_DISPATCH`, `Calendar` to `GregorianCalendar`), by exact tag; a protocol
+  extended to `java.util.Date` reaches a Timestamp through the walk ("Dispatch", walked
+  classes; a deviation until 2026-10-08).
 - `inst-ms`/`inst-ms*` read a Date or Timestamp, a host `Date`/`Instant` through the host
   arms, else the oracle's `No implementation of method: :inst-ms* of protocol:
   #'clojure.core/Inst found for class: C`. A host Date or UUID stays a host object: never `=`

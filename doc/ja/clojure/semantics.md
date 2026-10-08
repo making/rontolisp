@@ -350,12 +350,16 @@ lazy 入力はどの seq 動詞にも届きます。コレクション全体を�
 ## プロトコル、レコード、型
 
 `defprotocol` はメソッドを宣言します。各メソッドはターゲットのタグ上のディスパッチャ
-（階層探索なしの multimethod 形:タグの完全一致、それから `Object` 行）に lower され
-ます。`extend-protocol`/`extend-type`/`extend` はターゲットのタグの下に行を足し、
+（階層探索なしの multimethod 形:タグの完全一致、次にプロトコルを extend したクラスの
+うちターゲットが継承または実装するもの、それから `Object` 行）に lower されます。
+`extend-protocol`/`extend-type`/`extend` はターゲットのタグの下に行を足し、
 `satisfies?` は所属を調べます。extend 対象は `class` が答える種類（`String`、
 `Number`、`Boolean`、`Keyword`、`Symbol`、`Character`、`Map`、`Vector`、`Set`、
-`List`/`Seq`、それに外れ既定としての `nil` と `Object`）と既知の record/deftype 名
-で、それ以外は名前付きで拒否されます。`Object` 行なしの外れはオラクル同様シグナル
+`List`/`Seq`、それに外れ既定としての `nil` と `Object`）、既知の record/deftype 名、
+それに値がインスタンスでありうる他のクラス（throwable、`clojure.lang.IRef` のような
+インタフェース、`java.util.Date`、インタプリタと JVM ではホストのクラス）です。後者は
+オラクル同様、スーパークラス、インタフェースの順に試します。どのクラスでもない名前は
+拒否されます。`Object` 行なしの外れはオラクル同様シグナル
 を上げます。メソッドはアリティごとに1つのパラメータベクターを宣言します。インライン本体は
 メソッド名を書き直して別のアリティを実装し、拡張は `fn` の節で書き、行には呼び出しの引数の数に
 一致するアリティを適用する1つのラムダを格納します。`clojure.core.protocols/CollReduce` や
