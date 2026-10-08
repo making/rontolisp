@@ -17,6 +17,7 @@ import am.ik.rontolisp.LispHashTable;
 import am.ik.rontolisp.LispArray;
 import am.ik.rontolisp.LispDouble;
 import am.ik.rontolisp.LispInteger;
+import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispTrue;
 import am.ik.rontolisp.LispString;
@@ -154,8 +155,12 @@ public final class ClojureLowering {
 	 */
 	static final String FALSE_VARIABLE = "RONTOLISP::%CLOJURE-FALSE";
 
-	/** The false value's own spelling: a symbol, so it prints as {@code false}. */
-	static final String FALSE_VALUE_NAME = "false";
+	/**
+	 * The false value's own spelling: a symbol, so it prints as {@code false} -- the one
+	 * {@code java:} passes as Java's false ({@link LispNames#JAVA_FALSE}), so Clojure's
+	 * false crosses to Java as the oracle's does.
+	 */
+	static final String FALSE_VALUE_NAME = LispNames.JAVA_FALSE;
 
 	static final LispVal NIL_CONST = LispNil.INSTANCE;
 

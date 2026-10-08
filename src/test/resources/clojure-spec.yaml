@@ -6441,6 +6441,27 @@ cases:
       No matching method nth found taking 1 args for class clojure.lang.PersistentList
       :out-of-bounds
       Method foo taking 1 args is not supported for class clojure.lang.Keyword
+  - name: instance-calls-on-a-fn-are-its-ifn-callable-runnable-and-comparator-methods
+    # A fn is the oracle's AFunction: IFn's invoke and applyTo (for any ifn? value),
+    # Callable's call, Runnable's run and Comparator's compare, whose boolean answer
+    # is AFunction.compare's (true -1, else 1 when the reversed call is true, else
+    # 0). Answers measured against clj 1.12.6; the last line is the oracle's
+    # "No matching field found: foo for class user$eval157$fn__158$fn__159".
+    source: |
+      (defn fnrecv-lt [a b] (< a b))
+      (println (.call (fn [] 5)) (.run (fn [] 5)) (.invoke (fn [] 5)) (.invoke + 1 2 3) (.applyTo + '(1 2 3)))
+      (println (.compare fnrecv-lt 1 2) (.compare fnrecv-lt 2 1) (.compare fnrecv-lt 1 1) (.compare compare 3 1) (.compare - 2 5))
+      (prn (.invoke :a {:a 1}) (.call (constantly :k)) (.applyTo str '("a" "b")))
+      (println (try (.compare (fn [a b] nil) 1 2) (catch NullPointerException e :npe)))
+      (println (try (.compare {:a 1} 1 2) (catch Exception e (.getMessage e))))
+      (println (try (.foo (fn [] 1)) (catch Exception e (.getMessage e))))
+    expected: |
+      5 nil 5 6 6
+      -1 1 0 1 -3
+      1 :k "ab"
+      :npe
+      No matching method compare found taking 2 args for class clojure.lang.PersistentArrayMap
+      Method foo taking 0 args is not supported for class clojure.lang.AFunction
   - name: instance-calls-reach-a-record-deftype-or-reify-method-or-field
     # An instance call naming a method a defrecord, deftype or reify body implements
     # calls it, and a zero-argument name that is a declared field reads the field,

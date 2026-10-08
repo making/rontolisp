@@ -14,11 +14,11 @@ import org.jspecify.annotations.Nullable;
 /**
  * Instance calls on a Clojure value that has no host object: a collection (vector, list,
  * lazy seq, map, record, set, sorted collection), a keyword, a symbol, a ratio, an atom
- * cell or nil (the empty list here). The oracle calls the {@code clojure.lang} /
+ * cell, a fn or nil (the empty list here). The oracle calls the {@code clojure.lang} /
  * {@code java.util} interface method of the value's class ({@code Counted}, {@code List},
- * {@code Map}, {@code Set}, {@code Named}, {@code Ratio}, ...); here the common ones
- * answer through the core verb that does the same, so they run on every backend, and
- * every other method on such a value is refused by name instead of reaching
+ * {@code Map}, {@code Set}, {@code Named}, {@code Ratio}, {@code IFn}, ...); here the
+ * common ones answer through the core verb that does the same, so they run on every
+ * backend, and every other method on such a value is refused by name instead of reaching
  * {@code java:call}, which takes no Lisp value but a string, number, character or
  * {@code t}.
  *
@@ -71,6 +71,12 @@ final class ClojureValueMethodLowering {
 	 */
 	private static final String ATOM = "atom";
 
+	/** A fn's kind, which no one-argument predicate here names. */
+	private static final String FUNCTION = "fn";
+
+	/** The most arguments {@code IFn.invoke} takes before its variadic overload. */
+	private static final int MAX_INVOKE_ARITY = 20;
+
 	/** The predicates whose kinds include the list, which nil stands for when empty. */
 	private static final List<String> LIST_KINDS = List.of("coll?", "seq?", "list?", "sequential?");
 
@@ -80,6 +86,7 @@ final class ClojureValueMethodLowering {
 	static {
 		collectionRows();
 		lookupRows();
+		functionRows();
 		updateRows();
 		nameAndNumberRows();
 	}
@@ -117,8 +124,29 @@ final class ClojureValueMethodLowering {
 		row("indexOf", 1, new Arm(List.of("sequential?"), ctx -> indexOf(ctx, false)));
 		row("lastIndexOf", 1, new Arm(List.of("sequential?"), ctx -> indexOf(ctx, true)));
 		row("entryAt", 1, arm(List.of("map?", "indexed?"), core("find", R, A)));
-		row("invoke", 1, arm(List.of("ifn?"), ClojureLowerUtil.list(R, A)));
-		row("invoke", 2, arm(List.of("ifn?"), ClojureLowerUtil.list(R, A, B)));
+	}
+
+	/**
+	 * A fn is the oracle's {@code AFunction}: an {@code IFn} ({@code invoke} of up to
+	 * twenty arguments, {@code applyTo}), a {@code Callable} ({@code call}), a
+	 * {@code Runnable} ({@code run}) and a {@code Comparator} ({@code compare}, whose
+	 * boolean answer is {@code AFunction.compare}'s); the {@code IFn} ones answer for any
+	 * {@code ifn?} value, an {@code AFn} too.
+	 */
+	private static void functionRows() {
+		for (int n = 0; n <= MAX_INVOKE_ARITY; n++) {
+			List<LispVal> call = new ArrayList<>();
+			call.add(R);
+			for (int i = 0; i < n; i++) {
+				call.add(new LispSymbol(argName(i)));
+			}
+			row("invoke", n, arm(List.of("ifn?"), ClojureLowerUtil.list(call)));
+		}
+		row("applyTo", 1, arm(List.of("ifn?"), core("apply", R, A)));
+		row("call", 0, arm(List.of("ifn?"), ClojureLowerUtil.list(R)));
+		row("run", 0, arm(List.of("ifn?"),
+				ClojureLowerUtil.list(new LispSymbol("do"), ClojureLowerUtil.list(R), new LispSymbol("nil"))));
+		row("compare", 2, new Arm(List.of(FUNCTION), ClojureValueMethodLowering::fnCompare));
 	}
 
 	private static void updateRows() {
@@ -177,6 +205,15 @@ final class ClojureValueMethodLowering {
 	private static LispVal listGet(ClojureLowering ctx) {
 		return ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-LIST-GET"), ctx.localSym(RECV),
 				ctx.localSym(argName(0)));
+	}
+
+	/**
+	 * {@code Comparator.compare} of a fn: {@code AFunction.compare} over the receiver and
+	 * the two arguments.
+	 */
+	private static LispVal fnCompare(ClojureLowering ctx) {
+		return ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-FN-COMPARE"), ctx.localSym(RECV),
+				ctx.localSym(argName(0)), ctx.localSym(argName(1)));
 	}
 
 	/**
@@ -351,8 +388,11 @@ final class ClojureValueMethodLowering {
 		}
 		List<LispVal> tests = new ArrayList<>();
 		for (String kind : arm.kinds()) {
-			tests.add(kind.equals(ATOM) ? ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-ATOM-P"), self)
-					: ClojurePredicateLowering.rawTest(kind, self));
+			tests.add(switch (kind) {
+				case ATOM -> ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-ATOM-P"), self);
+				case FUNCTION -> ClojureLowerUtil.list(ClojureLowerUtil.sym("functionp"), self);
+				default -> ClojurePredicateLowering.rawTest(kind, self);
+			});
 		}
 		if (arm.kinds().stream().anyMatch(LIST_KINDS::contains)) {
 			tests.add(ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), self));

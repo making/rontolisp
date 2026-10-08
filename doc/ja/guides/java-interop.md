@@ -32,7 +32,7 @@
 (java:field "java.lang.Integer" "MAX_VALUE")   ; => 2147483647
 ```
 
-Lisp の値も `java:call` の receiver になり、`Object` 引数に渡したときのオブジェクトとして呼ばれます。文字列は `String`、整数は `Integer`（収まらなければ `Long`）、浮動小数点数は `Double`、bignum は `BigInteger`、文字は `Character`（補助文字はそのコードポイントの `Integer`）、`t` は `Boolean.TRUE` です。`nil`、関数、シンボル、リスト、配列、ハッシュテーブルは receiver になりません。
+Lisp の値も `java:call` の receiver になり、`Object` 引数に渡したときのオブジェクトとして呼ばれます。文字列は `String`、整数は `Integer`（収まらなければ `Long`）、浮動小数点数は `Double`、bignum は `BigInteger`、文字は `Character`（補助文字はそのコードポイントの `Integer`）、`t` は `Boolean.TRUE`、シンボル `|false|` は `Boolean.FALSE` です。`nil`、関数、その他のシンボル、リスト、配列、ハッシュテーブルは receiver になりません。
 
 ```lisp
 (java:call "abc" "codePointAt" 0)   ; => 97
@@ -51,9 +51,11 @@ Lisp の値も `java:call` の receiver になり、`Object` 引数に渡した�
 | string | `String`、長さ 1 なら `char` | `String` → string |
 | character | `char`/`Character` | `Character` → character |
 | `t` / `nil` | `boolean` (`nil` は任意の `null` 参照にもなる) | `boolean` → `t`/`nil` |
+| 名前が `false` のシンボル | `boolean` の false、任意の参照には `Boolean.FALSE` | — |
 | `java` オブジェクト | ラップされたホストオブジェクト | その他のオブジェクト → `java` オブジェクト |
 | 関数/ラムダ | 一致するインターフェースに対する `java:proxy`、`:functional` の後ではその抽象メソッドの実装 (引数に限る) | — |
 | 真リスト / ベクタ (特殊化されたものも含む) | `T[]` (要素ごとに変換、プリミティブ配列も可)、または `List`/`Collection`/`Iterable` | 任意の Java 配列 → リスト |
+| ハッシュテーブル | 新しい `java.util.LinkedHashMap` (`Map`、`HashMap`、`Object` など) | — |
 
 Java の `null` (および `void` メソッド) は `nil` として返ります。Java の配列が期待される箇所に真リスト (または `make-array` で作ったランク 1 の配列。`double-float`、`single-float`、`bfloat16`、`(unsigned-byte 8|16|32)` に特殊化された配列も含む) を渡すと、要素ごとに要素型へ変換されます (`int[]` などのプリミティブ配列も含む)。`List`/`Collection`/`Iterable` が期待される箇所では `java.util.List` になり、ネストしたリストは再帰的に変換されます。逆方向では、Java の **配列** の結果は Lisp のリストになりますが、返された `java.util.List` は不透明な `java` オブジェクトのままで、そのメソッドを呼び出して操作します。
 
@@ -80,7 +82,22 @@ bignum は、`java.math.BigInteger` (または `Number`、`Object` などその�
              (make-array 2 :element-type 'double-float :initial-element 0.5d0))   ; => "[0.5, 0.5]"
 ```
 
-シンボル、分数、ハッシュテーブル、ドット対 (非真リスト)、多次元 (ランク 2 以上) の配列はマーシャリング **されません**。
+`nil` は参照が期待される位置では常に Java の `null` です。そのため `Object` 引数に `Boolean.FALSE` を渡すには、Java が false を綴るとおりのシンボル `'|false|` を使います。コールバックが `boolean`・`Boolean` の結果として返すのもこのシンボルです。ハッシュテーブルは挿入順のエントリを持つ新しい `java.util.LinkedHashMap` になり、各キーと値は `Object` 引数と同じく変換されます (`equalp` テーブルのキーは最初に格納した形です)。
+
+```lisp
+(let ((l (java:new "java.util.ArrayList")))
+  (java:call l "add" '|false|)
+  (java:call l "add" nil)
+  (java:call l "toString"))   ; => "[false, null]"
+```
+
+```lisp
+(let ((h (make-hash-table :test 'equal)))
+  (setf (gethash "b" h) 2 (gethash "a" h) (list 1 2))
+  (java:call (java:new "java.util.TreeMap" h) "toString"))   ; => "{a=[1, 2], b=2}"
+```
+
+その他のシンボル、分数、ドット対 (非真リスト)、多次元 (ランク 2 以上) の配列はマーシャリング **されません**。
 
 `java` オブジェクトが `eq`・`eql` になるのは自分自身とだけです。2 回の呼び出しが返した同じオブジェクトは `eq` ですが、`equals` が真になる別々のオブジェクトは `eq` ではありません。`equal` と `equalp` はオブジェクトの `equals` で比較します。そのため `eq`・`eql` のハッシュテーブルは `java` オブジェクトを同一性でキーにし (格納後に変更したキーも見つかります)、`equal`・`equalp` のテーブルは `equals` と `hashCode` でキーにします。
 
@@ -284,7 +301,7 @@ error: --java-static: 1 java: call cannot be compiled without reflection:
   (lambda (method event) (handle-click)))
 ```
 
-引数の後ろを `:functional` で終えた `java:new`・`java:call`・`java:static` は、関数を Java がラムダを変換するのと同じ形で変換します。インターフェースの各抽象メソッドはメソッドの引数だけで関数を呼び、default メソッドは本体を保ちます。Clojure フロントエンドは呼び出しをこれで終えるので、Clojure の `fn` はメソッド名を受け取りません。
+引数の後ろを `:functional` で終えた `java:new`・`java:call`・`java:static` (`java:subclass` ではコンストラクタ引数について、callable の後ろ) は、関数を Java がラムダを変換するのと同じ形で変換します。インターフェースの各抽象メソッドはメソッドの引数だけで関数を呼び、default メソッドは本体を保ちます。Clojure フロントエンドは呼び出しをこれで終えるので、Clojure の `fn` はメソッド名を受け取りません。
 
 ```lisp
 (let ((lst (java:new "java.util.ArrayList")))
@@ -439,7 +456,7 @@ native-image -jar prog.jar -H:ConfigurationFileDirectories=config
 
 - **JVM 専用**。インタプリタ (`java -jar rontolisp.jar`) と JVM コンパイル済みクラス (`java Prog`) で動作します。WASM バックエンドでは動作せず、連携クラスのリフレクションメタデータを持たない GraalVM ネイティブバイナリでのインタプリタ実行もできません (ネイティブバイナリで `java:` プログラムを `.class` に*コンパイルする*ことは可能です)。
 - コンパイル済みクラスでは 6 つの関数は呼び出し位置でのみ使えます。第一級の関数値を持たないため、`#'java:call` や `(funcall 'java:new ...)` はコンパイルエラーになります (代わりに自前の `defun` でラップしてください)。埋め込み `eval` ランタイムもこれらを認識しません。また `java:` を使うコンパイル済みプログラムの実行には、呼び出しを解決したリリースの JRE が必要で、実行時解決に回る呼び出しを含むものには、rontolisp をビルドした JRE と同等以上に新しい JRE が必要です。
-- シンボル、ハッシュテーブル、ドット対 (非真リスト)、多次元 (ランク 2 以上) の配列はマーシャリングされません。代わりに `java:new`/`java:call` で構築した Java コレクションとして渡してください。
+- `|false|` 以外のシンボル、ドット対 (非真リスト)、多次元 (ランク 2 以上) の配列はマーシャリングされません。代わりに `java:new`/`java:call` で構築した Java コレクションとして渡してください。
 - 返された `java.util.List` は (Java 配列と異なり) 不透明な `java` オブジェクトのままです。同一性と可変性が保たれるため、リスト関数ではなく `java:call` (`"get"`、`"size"` など) で読み取ってください。
 - オーバーロード解決は引数コストによるもので、Java の完全な型推論規則ではありません。曖昧な呼び出しは曖昧性エラーを出さず、最小コスト (次に最小シグネチャ) の候補に解決されます。パラメータタグでオーバーロードを明示できます。
 - これは完全なホストリフレクションブリッジであり任意の Java コードを実行できます。`java:` を使うプログラムは他の JVM プログラムと同じ信頼度で扱ってください。

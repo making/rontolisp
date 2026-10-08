@@ -26,6 +26,7 @@ import am.ik.rontolisp.LispDouble;
 import am.ik.rontolisp.LispFunction;
 import am.ik.rontolisp.LispInteger;
 import am.ik.rontolisp.LispJavaObject;
+import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispRatio;
 import am.ik.rontolisp.LispString;
@@ -90,6 +91,8 @@ class JavaBridgeTemplateParityTest {
 
 	private static final Arg T = new Arg(JavaKind.Lisp.T, "T");
 
+	private static final Arg FALSE = new Arg(JavaKind.Lisp.FALSE, LispNames.JAVA_FALSE);
+
 	private static final Arg NIL = new Arg(JavaKind.Lisp.NIL, null);
 
 	@Test
@@ -105,7 +108,11 @@ class JavaBridgeTemplateParityTest {
 				new Object[] { String.class, "valueOf", List.of(real(5.0)) },
 				new Object[] { String.class, "valueOf", List.of(character('a')) },
 				new Object[] { String.class, "valueOf", List.of(T) },
+				new Object[] { String.class, "valueOf", List.of(FALSE) },
 				new Object[] { String.class, "valueOf", List.of(NIL) },
+				new Object[] { Boolean.class, "toString", List.of(FALSE) },
+				new Object[] { java.util.Objects.class, "equals", List.of(FALSE, NIL) },
+				new Object[] { java.util.List.class, "of", List.of(FALSE, T) },
 				new Object[] { String.class, "valueOf", List.of(string("x")) },
 				new Object[] { String.class, "valueOf", List.of(host(builder)) },
 				new Object[] { String.class, "valueOf(Object)", List.of(integer(5)) },
@@ -129,6 +136,7 @@ class JavaBridgeTemplateParityTest {
 				new Object[] { StringBuilder.class, "append", List.of(real(4.2)) },
 				new Object[] { StringBuilder.class, "append", List.of(character('a')) },
 				new Object[] { StringBuilder.class, "append", List.of(T) },
+				new Object[] { StringBuilder.class, "append", List.of(FALSE) },
 				new Object[] { StringBuilder.class, "append", List.of(NIL) },
 				new Object[] { StringBuilder.class, "append", List.of(host(builder)) },
 				new Object[] { StringBuilder.class, "append(CharSequence)", List.of(string("xy")) },
@@ -348,9 +356,9 @@ class JavaBridgeTemplateParityTest {
 			Files.write(target, file.getValue());
 		}
 		Object function = new Object[] { 3, "car" };
-		List<Arg> values = List.of(NIL, T, integer(5), integer(-7), integer(1L << 40), bignum(BigInteger.TEN.pow(30)),
-				real(1.5), string("s"), string("str"), character('a'), character(128512),
-				new Arg(JavaKind.Lisp.FUNCTION, function));
+		List<Arg> values = List.of(NIL, T, FALSE, integer(5), integer(-7), integer(1L << 40),
+				bignum(BigInteger.TEN.pow(30)), real(1.5), string("s"), string("str"), character('a'),
+				character(128512), new Arg(JavaKind.Lisp.FUNCTION, function));
 		try (URLClassLoader loader = new URLClassLoader(new URL[] { dir.toUri().toURL() },
 				ClassLoader.getSystemClassLoader())) {
 			Method jrecv = loader.loadClass("ReceiverTest")
@@ -396,6 +404,7 @@ class JavaBridgeTemplateParityTest {
 		return switch ((JavaKind.Lisp) value.kind()) {
 			case NIL -> LispNil.INSTANCE;
 			case T -> LispTrue.INSTANCE;
+			case FALSE -> new LispSymbol(LispNames.JAVA_FALSE);
 			case INTEGER -> new LispInteger((Long) Objects.requireNonNull(compiled));
 			case BIGNUM -> new LispBigInteger((BigInteger) Objects.requireNonNull(compiled));
 			case FLOAT -> new LispDouble((Double) Objects.requireNonNull(compiled));
@@ -457,7 +466,7 @@ class JavaBridgeTemplateParityTest {
 			finally {
 				// The template class is this JVM's: leave it unbound for the other tests.
 				for (String field : List.of("applyMethod", "strvMethod", "lispToStringMethod", "bf16ValueMethod",
-						"signalMethod", "failMethod")) {
+						"hashValuesMethod", "signalMethod", "failMethod")) {
 					Field f = JavaBridgeTemplate.class.getDeclaredField(field);
 					f.setAccessible(true);
 					f.set(null, null);
@@ -466,12 +475,82 @@ class JavaBridgeTemplateParityTest {
 		}
 	}
 
+	// A hash table reaches a site as the same entries whichever copy reads it: the
+	// bridge's tableEntries and the _jtab a dispatched site calls, both through the
+	// program's _hashValues -- live entries in insertion order, keys and values
+	// alternating, an equalp table's key as first stored -- and anything else as no
+	// table.
+	@Test
+	void theBridgeAndADirectSiteReadAHashTableAlike(@TempDir Path dir) throws Exception {
+		JvmLispCompiler compiler = new JvmLispCompiler("TableTest");
+		byte[] bytes = compiler.compile(LispReader.readAllFromString("""
+				(defvar *c* "java.util.Objects")
+				(defun ts (x) (java:static "java.util.Objects" "toString" x))
+				(defun ts* (x) (java:static *c* "toString" x))
+				(let ((h (make-hash-table :test 'equalp)))
+				  (setf (gethash "a" h) 1)
+				  (remhash "a" h)
+				  (print (ts h))
+				  (print (ts* h)))
+				"""));
+		Files.write(dir.resolve("TableTest.class"), bytes);
+		for (Map.Entry<String, byte[]> file : compiler.runtimeClassFiles().entrySet()) {
+			Path target = dir.resolve(file.getKey());
+			Files.createDirectories(target.getParent());
+			Files.write(target, file.getValue());
+		}
+		try (URLClassLoader loader = new URLClassLoader(new URL[] { dir.toUri().toURL() },
+				ClassLoader.getSystemClassLoader())) {
+			Class<?> program = loader.loadClass("TableTest");
+			Method jtab = declared(program, JvmJavaDirectSites.TABLE, Object.class);
+			Method make = declared(program, JvmHashRuntimeBuilder.MAKE);
+			Method makeEqualp = declared(program, JvmHashRuntimeBuilder.MAKE_EQUALP);
+			Method put = declared(program, JvmHashRuntimeBuilder.PUT, Object.class, Object.class, Object.class);
+			Method remove = declared(program, JvmHashRuntimeBuilder.REM, Object.class, Object.class);
+			Object table = make.invoke(null);
+			put.invoke(null, "\"b\"", table, 2L);
+			put.invoke(null, "\"gone\"", table, 0L);
+			put.invoke(null, "\"a\"", table, null);
+			remove.invoke(null, "\"gone\"", table);
+			Object folded = makeEqualp.invoke(null);
+			put.invoke(null, "\"Key\"", folded, 1L);
+			put.invoke(null, "\"KEY\"", folded, 2L);
+			invoke("bind", new Class<?>[] { Class.class }, program);
+			try {
+				assertThat(Arrays.asList((Object[]) jtab.invoke(null, table))).containsExactly("\"b\"", 2L, "\"a\"",
+						null);
+				assertThat(Arrays.asList((Object[]) jtab.invoke(null, folded))).containsExactly("\"Key\"", 2L);
+				for (Object value : List.of(table, folded)) {
+					assertThat(invoke("tableEntries", new Class<?>[] { Object.class }, value)).as("bridge %s", value)
+						.isEqualTo(Arrays.asList((Object[]) jtab.invoke(null, value)));
+				}
+				assertThat(invoke("tableEntries", new Class<?>[] { Object.class }, new LinkedHashMap<>())).isNull();
+			}
+			finally {
+				// The template class is this JVM's: leave it unbound for the other tests.
+				for (String field : List.of("applyMethod", "strvMethod", "lispToStringMethod", "bf16ValueMethod",
+						"hashValuesMethod", "signalMethod", "failMethod")) {
+					Field f = JavaBridgeTemplate.class.getDeclaredField(field);
+					f.setAccessible(true);
+					f.set(null, null);
+				}
+			}
+		}
+	}
+
+	private static Method declared(Class<?> program, String name, Class<?>... parameterTypes) throws Exception {
+		Method method = program.getDeclaredMethod(name, parameterTypes);
+		method.setAccessible(true);
+		return method;
+	}
+
 	// The bridge may import nothing of rontolisp's, so it spells the hash table's order
-	// key and the runtime package itself.
+	// key, the runtime package and Java's false itself.
 	@Test
 	void theBridgeSpellsTheRepresentationAsTheRuntimeDoes() throws Exception {
 		assertThat(constant("HASH_TABLE_ORDER_KEY")).isEqualTo(RontoHashTable.ORDER_KEY);
 		assertThat(constant("RUNTIME_PACKAGE_PREFIX")).isEqualTo(JvmJavaDirectSites.RUNTIME_PACKAGE_PREFIX);
+		assertThat(constant("JAVA_FALSE")).isEqualTo(LispNames.JAVA_FALSE);
 	}
 
 	private static @Nullable Object constant(String name) throws Exception {

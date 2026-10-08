@@ -234,7 +234,7 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
 - `class` answers a keyword naming the kind (`:string`, `:number`, `:keyword`, ...);
   the oracle answers host classes, which no wasm backend has. A record or deftype
   answers its tag keyword instead; a host object (interpreter and JVM) its host class.
-- An instance call on a collection, keyword, symbol, ratio or atom answers through the core
+- An instance call on a collection, keyword, symbol, ratio, atom or fn answers through the core
   functions and shares their deviations (`.getClass` answers what `class` does). A method
   left unmapped is refused as `Method m taking N args is not supported for class C`, where the
   oracle may answer (`.hashCode`); the class named for a map is an array map up to eight
@@ -358,15 +358,21 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   to one, or a `..` step's declared return) and every
   overload at that arity answers a primitive boolean, or when the receiver is a
   string, number or character and every overload at that arity of its class answers
-  one (`(.matches "abc" "x")`); any other host boolean
-  keeps the shared `java:` unmarshal and prints `nil` for `false`.
+  one (`(.matches "abc" "x")`), or a `proxy` of one interface or of a class alone; any
+  other host boolean keeps the shared `java:` unmarshal and prints `nil` for `false`, and
+  so does a `Boolean.FALSE` read back from a host collection (`(vec l)` answers `[nil]`
+  for a list holding `false`).
 - A fn passed where a Java interface is expected implements every abstract method of
   any interface, each called with the method's arguments; the oracle converts a fn only
   to an interface annotated `@FunctionalInterface` (a `PropertyChangeListener` is a
   `ClassCastException` there). The fn's value crosses back as an argument would: a
-  `Comparator` fn answers a number (the oracle also takes `true`/`false`), and `false`
-  crosses as no Java value at all, so a fn answering a Java `boolean` answers `true` or
-  `nil`, and a member taking a `false` argument finds no match.
+  `Comparator` fn passed to Java answers a number (the oracle also takes `true`/`false`,
+  as `(.compare f a b)` on the fn itself does here).
+- A map passed to Java is a fresh `java.util.LinkedHashMap` of its entries, each key and
+  value converted as an argument is (a vector a `List`, a map a `Map`), where the oracle
+  passes the map itself: `str` of the copy spells a nested collection the Java way
+  (`{a=[1, 2]}`, the oracle `{a=[1 2]}`). A set, a keyword and a record have no Java
+  value, so a member taking one (a map keyed by keywords too) finds no match.
 - An integer receiver is called as an `Integer` when it fits one, else as a `Long`
   (the oracle's is always a `Long`): `(.getClass 1)` answers `java.lang.Integer`.
 - A `_` param tag leaves that parameter to the cost rule of the `java:` surface, so

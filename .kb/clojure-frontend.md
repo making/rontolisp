@@ -46,7 +46,7 @@ The oracle is `clj` 1.12.6.1673: a behavior is decided by running it there, and 
 |---|---|---|
 | identifier `foo` | symbol `c%foo`; a global var of namespace `n` is `c%n/foo` (`user`'s keep `c%foo`) | the prefix keeps every name off `LispNames` case labels, lambda-list keywords and `T`/`NIL`; spelling verbatim (`Foo` and `foo` apart); `:` -> `%c`, `%` -> `%%` keeps the map injective; a local never carries a namespace. Generated names add a lone `%` suffix no identifier spells (`%2`/`%*` arity helpers, `%defN`, `%macro`, `%bound-depth`, `%loaded`, `%init-N`, `%meta`, `%root`, `%local`) |
 | `nil` / `true` | `NIL` / `T` | `nil` IS the empty list |
-| `false` | the value of `rontolisp::%clojure-false`, a distinct non-`NIL` symbol spelled `false` | the `#f` treatment of `scheme.lisp`; every lowered test is an explicit null-or-false check on a temporary |
+| `false` | the value of `rontolisp::%clojure-false`, a distinct non-`NIL` symbol spelled `false` | the `#f` treatment of `scheme.lisp`; every lowered test is an explicit null-or-false check on a temporary; the symbol `java:` passes as Java's false ("Java interop") |
 | `:foo`, `:a/b` | `(:C%KEYWORD "foo")`, spelling verbatim | compared by `equal`; `::kw` / `::alias/kw` resolve at lower time against the current namespace (an unknown alias is the oracle's `Invalid token`) |
 | `{k v}` | an `equal` hash table (`rontolisp:plist-hash-table`), never mutated: every verb builds a fresh one | the shared runtime (`.kb/hash-tables.md`), so persistence holds on all four backends with no per-backend code; a persistent-map library would add a representation every backend prints, hashes and compares. Collection keys go through "Structural keys" |
 | `#{..}` | `(:C%SET table)`, each member under itself | a repeated literal element is refused when the read forms are `=` (`ClojureReader.equivKey`: `1`/`1N`, `[1]`/`(1)`, maps and sets in any order; `Duplicate key`) |
@@ -2169,9 +2169,35 @@ The `java:` surface (`.kb/java-interop.md`); interpreter and JVM only -- wasm co
   it would make host false truthy in `java:` programs and move all three paths plus the
   bridge parity). The lowering wraps to `T`-or-false instead where every overload at that
   arity returns a primitive boolean and the receiver class is known: a static call or
-  member value, or an instance call on a construction literal, a `let`/`if-let`/`when-let`
+  member value, or an instance call on a construction literal -- `java:new`, a `proxy` of
+  one interface (`java:proxy "I" fn`) or of a class alone (`java:subclass "S" '() ...`;
+  `ClojureInteropLowering.constructedClass`) --, a `let`/`if-let`/`when-let`
   local bound to one (single-shot, so the inference is sound), or a `..` step's declared
-  return. Anything else prints `nil` for false.
+  return; a `true`/`false` receiver of unknown class is called as its `Boolean`
+  (`valuePredicate`: `(.booleanValue false)`). Anything else prints `nil` for false, a
+  `Boolean.FALSE` read back from a host collection too (`(vec l)` of a list holding false
+  is `[nil]`; the oracle's `[false]`): a per-site "answer false as `|false|`" unmarshal is
+  the remaining half (todo e73).
+- `false` crosses to Java as Java's false (e69, 2026-10-08): the false object IS the symbol
+  `java:` passes as `false` / `Boolean.FALSE` (`FALSE_VALUE_NAME = LispNames.JAVA_FALSE`,
+  `.kb/java-interop.md` "Java's false and hash tables"), an argument and a fn's or proxy
+  body's answer alike; a map crosses as a fresh `LinkedHashMap` (the same section), its
+  vector/map values converted too, so the copy's `toString` spells them the Java way (user doc
+  deviation). A set, keyword or record has no Java value (`(:C%SET table)` is no table to
+  `java:`, and `java:` learns no Clojure shape): the same todo. Before, measured 2026-10-08
+  (interpreter and JVM): `(.add l false)`, `(Boolean/toString false)` and `(java.util.HashMap.
+  {"a" 1})` were `No matching method/constructor`, `(.removeIf l odd?)` and a proxy `test`
+  answering false `cannot return |false| as boolean`.
+- A fn receiver is the oracle's `AFunction` (`ClojureValueMethodLowering.functionRows`; the
+  value gate `%clojure-value-receiver-p` takes `functionp`): `invoke` of 0..20 arguments and
+  `applyTo` for any `ifn?` value, `call`, `run` (nil), and `compare` on a fn through
+  `%clojure-fn-compare` (`AFunction.compare`: true -1, false 1 when the reversed call is true
+  else 0, a number its `intValue` by `%clojure-unchecked-int`, nil the NPE, else a
+  ClassCastException). Runs on all four backends (the arm answers before the `java:call`);
+  before, `java:call expects a java object as the first argument, got #<lambda>`. A `Comparator`
+  fn passed TO Java still answers a number (deviation): `java:` cannot know a boolean answer
+  means `AFunction.compare`. Pin: clojure-spec
+  `instance-calls-on-a-fn-are-its-ifn-callable-runnable-and-comparator-methods`.
 - A fn passed where an interface is expected implements every abstract method by the
   method's arguments, defaults keeping their bodies (`.kb/java-interop.md`, `:functional`;
   `ClojureInteropLowering.hostCall` ends a `java:new`/`java:call`/`java:static` with any
@@ -2180,12 +2206,13 @@ The `java:` surface (`.kb/java-interop.md`); interpreter and JVM only -- wasm co
   was `Function expects 0 arguments, got 1`. Oracle (clj 1.12.6, same day): a fn converts
   only to a `@FunctionalInterface` (a `PropertyChangeListener`/`DocumentListener` is a
   `ClassCastException`; here every abstract method of any interface calls it -- user doc
-  deviation), `Comparator` takes a boolean answer (`AFunction.compare`; here a number),
-  and `false` returned or passed is Java false (here no Java value: `|false|` is a symbol
-  `java:` does not bridge, for `proxy` bodies too -- todo e69). `(proxy [Super] [fn] ...)`
-  constructor arguments still convert as `java:proxy`. Pin:
+  deviation), `Comparator` takes a boolean answer (`AFunction.compare`; here a number).
+  `(proxy [Super] [fn] ...)` constructor arguments convert the same way: `proxyClassOf` ends
+  the `java:subclass` in the marker after its callable (until e69 they converted as
+  `java:proxy`, the method name first). Pins:
   `ClojureInteropTest#aFnPassedWhereAnInterfaceIsExpectedImplementsItsMethodByItsArguments`
-  (`locking`'s threaded pin passes its fn to `Thread.` directly).
+  (`locking`'s threaded pin passes its fn to `Thread.` directly),
+  `ClojureInteropTest#falseAMapAndAFnCrossTheJavaBoundaryAsTheOraclesDo`.
 - `proxy` of interfaces is `java:proxy` with a name-dispatching lambda over the Java
   arguments (no `this`); a missing method raises `no proxy method: <name>`;
   `toString`/`equals`/`hashCode` are refused there (`java:proxy` keeps `Object`'s, so the

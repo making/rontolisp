@@ -1522,10 +1522,29 @@
 
 ;; Whether X is nil or a Clojure value with no host object of its own: a list or
 ;; a tagged wrapper (keyword, set, lazy seq, record, atom, ...), a vector, a map,
-;; a ratio or a symbol.
+;; a ratio, a symbol or a fn.
 (defun rontolisp::%clojure-value-receiver-p (x)
   (or (null x) (consp x) (hash-table-p x) (and (vectorp x) (not (stringp x)))
-      (rontolisp::%clojure-is-ratio x) (rontolisp::%clojure-real-symbol-p x)))
+      (functionp x) (rontolisp::%clojure-is-ratio x)
+      (rontolisp::%clojure-real-symbol-p x)))
+
+;; (.compare f a b) on a fn, the oracle's AFunction.compare: a true answer is -1, a
+;; false one 1 when F of B and A is true and else 0, a number its intValue;
+;; anything else the oracle's ClassCastException to Number (nil its
+;; NullPointerException).
+(defun rontolisp::%clojure-fn-compare (f a b)
+  (let ((r (funcall f a b)))
+    (cond ((eq r t) -1)
+          ((eq r rontolisp::%clojure-false)
+           (if (rontolisp::%clojure-truthy (funcall f b a)) 1 0))
+          ((realp r) (rontolisp::%clojure-unchecked-int r))
+          ((null r)
+           (rontolisp::%clojure-null-pointer-exception
+            "NullPointerException: compare of a fn answering nil"))
+          (t
+           (rontolisp::%clojure-class-cast-exception
+            (concatenate 'string "class " (rontolisp::%clojure-class-name-of r)
+                         " cannot be cast to class java.lang.Number"))))))
 
 ;; The oracle's class name of the value X, nil aside: a map of more than eight
 ;; entries a hash map (its literals and assoc growth), a smaller one an array

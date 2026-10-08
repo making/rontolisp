@@ -9,8 +9,9 @@ package am.ik.rontolisp.compiler;
  * a call site be resolved once, at run time per kind list or at compile time from the
  * kinds its arguments are statically known to have ({@link JavaSiteResolver}).
  * <p>
- * A cons or a Lisp array has no kind (its cost sums its elements), and neither has a
- * value the bridge never marshals (a symbol, a ratio, a hash table).
+ * A cons, a Lisp array or a hash table has no kind (its cost sums its elements, a table's
+ * keys and values), and neither has a value the bridge never marshals (a symbol other
+ * than {@code |false|}, a ratio).
  */
 public interface JavaKind {
 
@@ -22,6 +23,13 @@ public interface JavaKind {
 
 		/** {@code t}: {@code boolean} true. */
 		T,
+
+		/**
+		 * The symbol {@code |false|}, Java's own spelling of false: {@code boolean}
+		 * false, and {@code Boolean.FALSE} for any reference, where {@code nil} is
+		 * {@code null} ({@link am.ik.rontolisp.LispNames#JAVA_FALSE}).
+		 */
+		FALSE,
 
 		/** An integer that fits a {@code long}. */
 		INTEGER,
