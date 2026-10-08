@@ -66,6 +66,11 @@ class SourceLanguageTest {
 		assertThat(SourceLanguage.forFile("hello.clj", "common-lisp")).isEqualTo(SourceLanguage.COMMON_LISP);
 		assertThat(SourceLanguage.isSourceFile("foo.clj")).isTrue();
 		assertThat(SourceLanguage.CLOJURE.defaultExtension()).isEqualTo(".clj");
+		// a .cljc file is Clojure too, its reader conditionals read
+		assertThat(SourceLanguage.forFile("hello.cljc", null)).isEqualTo(SourceLanguage.CLOJURE);
+		assertThat(SourceLanguage.isSourceFile("foo.cljc")).isTrue();
+		assertThat(SourceLanguage.CLOJURE.read("(def x #?(:cljs 1 :clj 2))", Features.INTERPRETER, "x.cljc"))
+			.isNotEmpty();
 		// The seam's read is the whole front end: read and lower to core forms.
 		assertThat(SourceLanguage.CLOJURE.read("(defn f [x] x)", Features.INTERPRETER, null)
 			.stream()

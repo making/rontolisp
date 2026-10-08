@@ -26,11 +26,13 @@ final class ClojureSourcePath {
 	 * One namespace file found.
 	 *
 	 * @param path the path it was read from, for positions
+	 * @param resource its path below its root ({@code my_app/core.cljc}), the oracle's
+	 * {@code *file*} while it loads
 	 * @param text its contents
 	 * @param builtin whether it is a built-in namespace's file
 	 * ({@link ClojureBuiltinNamespaces}) rather than the project's
 	 */
-	record Found(String path, String text, boolean builtin) {
+	record Found(String path, String resource, String text, boolean builtin) {
 	}
 
 	private final ClojureFiles files;
@@ -77,34 +79,51 @@ final class ClojureSourcePath {
 	}
 
 	/**
-	 * The file a namespace maps to below a root, like the oracle's root resource: the
-	 * dots are directories and a dash is an underscore ({@code my-app.core} is
-	 * {@code my_app/core.clj}).
+	 * The {@code .clj} file a namespace maps to below a root, like the oracle's root
+	 * resource: the dots are directories and a dash is an underscore ({@code my-app.core}
+	 * is {@code my_app/core.clj}).
 	 * @param ns the namespace
 	 * @return the relative path
 	 */
 	static String resourceOf(String ns) {
-		return ns.replace('-', '_').replace('.', '/') + ".clj";
+		return scriptBaseOf(ns) + ".clj";
 	}
 
 	/**
-	 * The file of a namespace, from the first root holding it, else the built-in one
+	 * The path a namespace maps to below a root without an extension, the oracle's
+	 * {@code RT.load} script base ({@code my_app/core}).
+	 * @param ns the namespace
+	 * @return the relative path
+	 */
+	static String scriptBaseOf(String ns) {
+		return ns.replace('-', '_').replace('.', '/');
+	}
+
+	/**
+	 * The file of a namespace like the oracle's {@code RT.load}: its {@code .clj} file
+	 * from the first root holding one, else its {@code .cljc} file from the first root
+	 * holding one -- so a {@code .clj} under any root wins over a {@code .cljc} under an
+	 * earlier one, measured on {@code clj} 1.12.6 (2026-10-08) -- else the built-in one
 	 * ({@link ClojureBuiltinNamespaces}): a project file shadows a built-in namespace, as
 	 * a source directory precedes a dependency jar on the oracle's classpath.
 	 * @param ns the namespace
 	 * @return the file, or {@code null} when neither a root nor the built-ins hold one
 	 */
 	@Nullable Found find(String ns) {
-		String relative = resourceOf(ns);
-		for (String root : roots()) {
-			String path = this.files.resolve(root, relative);
-			String text = this.files.read(path);
-			if (text != null) {
-				return new Found(path, text, false);
+		String base = scriptBaseOf(ns);
+		for (String extension : List.of(".clj", ".cljc")) {
+			String relative = base + extension;
+			for (String root : roots()) {
+				String path = this.files.resolve(root, relative);
+				String text = this.files.read(path);
+				if (text != null) {
+					return new Found(path, relative, text, false);
+				}
 			}
 		}
 		String builtin = ClojureBuiltinNamespaces.source(ns);
-		return builtin == null ? null : new Found(relative, builtin, true);
+		String relative = resourceOf(ns);
+		return builtin == null ? null : new Found(relative, relative, builtin, true);
 	}
 
 	/**
@@ -171,7 +190,9 @@ final class ClojureSourcePath {
 			return dir;
 		}
 		String[] segments = ns.split("\\.", -1);
-		if (segments.length < 2 || !lastSegmentOf(file).equals(munge(segments[segments.length - 1]) + ".clj")) {
+		String fileName = lastSegmentOf(file);
+		String stem = munge(segments[segments.length - 1]);
+		if (segments.length < 2 || !(fileName.equals(stem + ".clj") || fileName.equals(stem + ".cljc"))) {
 			return dir;
 		}
 		String root = dir;

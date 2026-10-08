@@ -335,6 +335,12 @@ public final class ClojureLowering {
 	final Set<String> builtinNamespaces = new HashSet<>();
 
 	/**
+	 * The file each loaded project namespace came from, below its source root
+	 * ({@code my_app/core.cljc}): the {@code *file*} its init runs under.
+	 */
+	final Map<String, String> namespaceResources = new HashMap<>();
+
+	/**
 	 * The namespaces whose files are lowering, innermost first: a {@code require} of one
 	 * of them is the oracle's cyclic-load refusal.
 	 */
@@ -1984,7 +1990,8 @@ public final class ClojureLowering {
 		boolean outerEcho = this.nestedDefAnswersVar;
 		String outerFile = this.loadingFile;
 		String outerSourcePath = this.loadingSourcePath;
-		this.loadingFile = ClojureSourcePath.resourceOf(ns);
+		this.namespaceResources.put(ns, found.resource());
+		this.loadingFile = found.resource();
 		this.loadingSourcePath = ClojureSourcePath.lastSegmentOf(this.loadingFile);
 		this.nestedDefAnswersVar = false;
 		this.scopes.clear();
@@ -2181,7 +2188,7 @@ public final class ClojureLowering {
 	 * @return the call under the bindings
 	 */
 	private LispVal loading(String ns, LispVal run) {
-		String file = ClojureSourcePath.resourceOf(ns);
+		String file = this.namespaceResources.getOrDefault(ns, ClojureSourcePath.resourceOf(ns));
 		this.usedSpecials.addAll(List.of("*ns*", "*file*", "*source-path*"));
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let"), ClojureLowerUtil.list(
 				ClojureLowerUtil.list(ClojureCoreSpecials.NS, ClojureCoreSpecials.NS),

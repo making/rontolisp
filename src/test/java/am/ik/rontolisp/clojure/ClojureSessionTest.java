@@ -374,4 +374,19 @@ class ClojureSessionTest {
 		assertThat(ClojureSession.isComplete("[1 #_ 2]")).isTrue();
 	}
 
+	@Test
+	void aSessionReadsReaderConditionalsLikeTheOraclesRepl() {
+		// clj's REPL reads with {:read-cond :allow}: a branch taken, a splice, and an
+		// input taking none waits for the next datum
+		ClojureSession session = new ClojureSession();
+		assertThat(session.read("#?(:cljs 1 :clj 2)").get(0).forms().stream().map(LispVal::print).toList())
+			.contains(input("2"));
+		assertThat(ClojureSession.isComplete("#?(:clj 1)")).isTrue();
+		assertThat(ClojureSession.isComplete("#?(:cljs 1)")).isFalse();
+		assertThat(ClojureSession.isComplete("#?(:cljs 1) 7")).isTrue();
+		assertThat(ClojureSession.isComplete("#?")).isFalse();
+		assertThat(ClojureSession.isComplete("#?@")).isFalse();
+		assertThat(ClojureSession.isComplete("[#?@(:clj [1")).isFalse();
+	}
+
 }

@@ -105,9 +105,9 @@ package-inferred sub-system file stay Common Lisp.
 
 ## The third language: `CLOJURE` (experimental)
 
-`.clj`, or `--source-language clojure` (`clj`). `read` hands the text to
+`.clj` and `.cljc` (`CLOJURE_COMMON_EXTENSION`, whose reader conditionals read), or `--source-language clojure` (`clj`). `read` hands the text to
 `am.ik.rontolisp.clojure.Clojure.read` -- a case-sensitive reader plus a lowering to
-core forms in one step, with no `#.` and no reader features -- and everything
+core forms in one step, with no `#.` and none of the Common Lisp reader features (a `.cljc` file has its own, `.kb/clojure-frontend.md`) -- and everything
 downstream is unchanged (`.kb/clojure-frontend.md`). `CompileFrontend.run` refuses the
 entry language under `--no-gc`, like Scheme. `defaultExtension()` is per language;
 `fileNameForModule` and the package-inferred sub-system file stay Common Lisp.

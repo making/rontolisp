@@ -5961,6 +5961,44 @@ cases:
       (true true true true true true true true)
       true true
       true
+  - name: read-string-takes-reader-conditionals-under-read-cond-allow
+    # {:read-cond :allow} reads #? and #?@ like a .cljc file: the first branch of
+    # :rontolisp, :clj, :default or a :features member; a branch not taken reads
+    # suppressed (#js, #inst build nothing); a splice under a quote leaves its
+    # rest to the list, one inside a taken branch keeps its first member only; no
+    # :read-cond :allow is the oracle's refusal. Every line is the oracle's (clj
+    # 1.12.6.1673, 2026-10-08).
+    source: |
+      (defn rc-msg [opts s] (try (pr-str (read-string opts s)) (catch Exception e (ex-message e))))
+      (prn (read-string {:read-cond :allow} "[#?(:cljs 1 :clj 2) #?(:default 9 :clj 1) #?@(:cljs [3] :default [4 5]) #?(:cljs 6)]"))
+      (prn (read-string {:read-cond :allow} "(a '#?@(:clj [x y]) b #?(:clj #?@(:clj [3 4]) :cljs 5))"))
+      (prn (read-string {:read-cond :allow} "{#?@(:clj [:a 1]) :b #?(:cljs #js {:c 1} :clj #?(:cljs #inst \"x\" :clj 2))}"))
+      (prn (read-string {:read-cond :allow :features #{:cljs}} "[#?(:cljs 1 :clj 2) #?(:foo 3 :default 4)]"))
+      (prn (read-string {:read-cond :allow :eof :none} "#?(:cljs 1)") (read-string {:read-cond :allow} "#?(:cljs 1) 7"))
+      (prn (map #(rc-msg {:read-cond :allow} %) ["#?@(:clj [1])" "[#?(:else 1)]" "[#?(\"clj\" 1)]" "[#?(:clj)]"
+                                                 "[#?@(:clj 2)]" "[#?[:clj 2]]" "[#?(:cljs 1 nil 2)]"]))
+      (prn (rc-msg {} "#?(:clj 1)") (rc-msg {:read-cond :bogus} "#?(:clj 1)") (rc-msg {:features #{:clj}} "#?(:clj 1)"))
+      (prn (with-open [r (java.io.PushbackReader. (java.io.StringReader. "#?(:cljs 0 :clj 1) [#?@(:clj [2 3])]"))]
+             [(read {:read-cond :allow} r) (read {:read-cond :allow} r)]))
+    expected: |
+      [2 9 4 5]
+      (a (quote x) y b 3)
+      {:a 1, :b 2}
+      [1 4]
+      :none 7
+      ("Reader conditional splicing not allowed at the top level." "Feature name :else is reserved." "Feature should be a keyword: clj" "read-cond requires an even number of forms." "Spliced form list in read-cond-splicing must implement java.util.List" "read-cond body must be a list" "Feature should be a keyword: null")
+      "Conditional read not allowed" "Conditional read not allowed" "Conditional read not allowed"
+      [1 [2 3]]
+  - name: read-cond-preserve-is-refused-at-the-conditional
+    # :preserve builds a ReaderConditional (and a TaggedLiteral inside one), kinds
+    # no value here is: refused by name at the #?, so a text without one reads as
+    # the oracle reads it. The oracle prints #?(:clj 1) for the second line.
+    source: |
+      (prn (read-string {:read-cond :preserve} "[1 2]"))
+      (prn (try (read-string {:read-cond :preserve} "#?(:clj 1)") (catch Exception e (ex-message e))))
+    expected: |
+      [1 2]
+      "read-cond :preserve is not supported: no reader-conditional or tagged-literal value exists here"
   - name: read-string-refuses-in-the-oracles-words
     # The end of input (empty or inside a datum), a repeated set member, an
     # unknown character name, a bad number and an unmatched closing bracket

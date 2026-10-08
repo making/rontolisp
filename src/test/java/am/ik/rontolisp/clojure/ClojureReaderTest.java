@@ -317,6 +317,94 @@ class ClojureReaderTest {
 	}
 
 	@Test
+	void aQuoteInsideASymbolIsAConstituentAndEndsANumber() {
+		// oracle (clj 1.12.6, 2026-10-08): ' is a non-terminating macro character, so
+		// coll' and a'b are symbols (medley, stuartsierra/dependency spell them), while
+		// a number stops at it
+		assertThat(printed("[a' b'' a'b 'c (f'x) :k']"))
+			.isEqualTo("[(|%vector| |a'| |b''| |a'b| (|quote| |c|) (|f'x|) :|k'|)]");
+		assertThat(printed("1'x")).isEqualTo("[1, (|quote| |x|)]");
+	}
+
+	@Test
+	void aReaderConditionalTakesTheFirstBranchOfAFeatureItHas() {
+		// oracle (clj 1.12.6, 2026-10-08, read-string {:read-cond :allow}), :rontolisp
+		// answered first
+		assertThat(conditional("[#?(:cljs 1 :clj 2) #?(:default 9 :clj 1) #?(:rontolisp 3 :clj 4) #?(:cljs 5)]"))
+			.isEqualTo("[(|%vector| 2 9 3)]");
+		assertThat(conditional("#?(:cljs 1) 7")).isEqualTo("[7]");
+		assertThat(conditional("[#?(:clj 1 :cljs)] [#?(:cljs)] [#?()] [#? (:clj 2)] [#?(:clj 1 \"clj\" 1)]"))
+			.isEqualTo("[(|%vector| 1), (|%vector|), (|%vector|), (|%vector| 2), (|%vector| 1)]");
+		// the branches not taken read suppressed: no reader for a tag, no #= evaluation
+		assertThat(conditional("[#?(:cljs #js {:a 1} :clj 2) #?(:cljs #inst \"x\" :clj 3) #?(:cljs #=(+ 1 2) :clj 4)"
+				+ " #?(:cljs #my.Rec{:a 1} :clj 5)]"))
+			.isEqualTo("[(|%vector| 2 3 4 5)]");
+		// a #_ inside, a nested conditional, a map entry
+		assertThat(conditional("[#?(:cljs 3 :clj #_ 4 5) #?(:clj #?(:cljs 3 :clj 4)) #?(:clj 1 :cljs #?(:clj 3))]"))
+			.isEqualTo("[(|%vector| 5 4 1)]");
+		assertThat(conditional("{:a #?(:clj 1)}")).isEqualTo("[(|%hash-map| :|a| 1)]");
+	}
+
+	@Test
+	void aSplicingReaderConditionalSplicesIntoTheEnclosingList() {
+		// oracle: the members go ahead of the rest of the list; under a quote, a deref,
+		// a var or a discard the first is taken and the rest stays in the list; a
+		// splice inside a taken branch keeps its first member only
+		assertThat(conditional("[1 #?@(:clj [2 3] :cljs [4]) 5]")).isEqualTo("[(|%vector| 1 2 3 5)]");
+		assertThat(conditional("{#?@(:clj [:a 1])} (a #?@(:clj []) b) [#?@(:clj (1 2))] [#?@(:clj ^:m [1 2])]"))
+			.isEqualTo("[(|%hash-map| :|a| 1), (|a| |b|), (|%vector| 1 2), (|%vector| 1 2)]");
+		assertThat(conditional("(a '#?@(:clj [x y]) b) (a @#?@(:clj [x y]) b) (a #_#?@(:clj [x y]) b)"))
+			.isEqualTo("[(|a| (|quote| |x|) |y| |b|), (|a| (|deref| |x|) |y| |b|), (|a| |y| |b|)]");
+		assertThat(conditional("'#?@(:clj [x y])")).isEqualTo("[(|quote| |x|)]");
+		assertThat(conditional("[#?(:clj #?@(:clj [3 4]) :cljs 5)] [#?(#?@(:clj [:clj 1]))]"))
+			.isEqualTo("[(|%vector| 3), (|%vector| 1)]");
+		assertThat(conditional("#?@(:cljs [1]) 5")).isEqualTo("[5]");
+		assertThatThrownBy(() -> conditional("#?@(:clj [1 2])")).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Reader conditional splicing not allowed at the top level.");
+		assertThatThrownBy(() -> conditional("#?@(:clj 1) 5")).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Spliced form list in read-cond-splicing must implement java.util.List");
+		assertThatThrownBy(() -> conditional("[#?@(:clj {:a 1})]")).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Spliced form list in read-cond-splicing must implement java.util.List");
+	}
+
+	@Test
+	void aReaderConditionalIsRefusedInTheOraclesWords() {
+		assertThatThrownBy(() -> read("#?(:clj 1)")).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Conditional read not allowed");
+		assertThatThrownBy(() -> new ClojureReader("#?(:clj 1)", "a.clj").readAll())
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("a.clj:1:3: Conditional read not allowed");
+		assertThat(new ClojureReader("[#?(:clj 1)]", "a.cljc").readAll().get(0).print()).isEqualTo("(|%vector| 1)");
+		assertThatThrownBy(() -> conditional("[#?(:clj)]")).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("read-cond requires an even number of forms.");
+		assertThatThrownBy(() -> conditional("[#?(:else 2)]")).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Feature name :else is reserved.");
+		assertThatThrownBy(() -> conditional("[#?(:none 2)]")).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Feature name :none is reserved.");
+		assertThatThrownBy(() -> conditional("[#?[:clj 2]]")).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("read-cond body must be a list");
+		assertThatThrownBy(() -> conditional("[#?(:cljs 3 #_ :clj 4)]")).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Feature should be a keyword: 4");
+		assertThatThrownBy(() -> conditional("[#?(\"clj\" 1)]")).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Feature should be a keyword: clj");
+		assertThatThrownBy(() -> conditional("[#?(:cljs 1 nil 2)]")).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Feature should be a keyword: null");
+		assertThatThrownBy(() -> conditional("[#?([:clj] 1)]")).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Feature should be a keyword: [:clj]");
+		assertThatThrownBy(() -> conditional("[#?(:cljs 1 (x) 2)]")).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Feature should be a keyword: (x)");
+		// a branch not taken still reads: its syntax errors are the oracle's too
+		assertThatThrownBy(() -> conditional("[#?(:cljs #{1 1} :clj 2)]")).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Duplicate key: 1");
+		assertThatThrownBy(() -> conditional("[#?(:clj 3")).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("unclosed form");
+	}
+
+	private static String conditional(String source) {
+		return new ClojureReader(source, null, true).readAll().stream().map(LispVal::print).toList().toString();
+	}
+
+	@Test
 	void anOddMapAndAnUnclosedFormAreErrors() {
 		assertThatThrownBy(() -> read("{:a 1 :b}")).isInstanceOf(LispReadException.class)
 			.hasMessageContaining("even number");

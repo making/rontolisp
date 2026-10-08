@@ -18,6 +18,17 @@ literal it attaches like `with-meta` (see
 (`#ns.Name{...}` / `#ns.Name[...]`) reads to the record over its unevaluated body (see
 [defrecord](reference/defrecord.md)).
 
+## Reader conditionals
+
+A `.cljc` file, and the REPL, read reader conditionals like the oracle: `#?(:clj a :cljs b)`
+reads the form of the first feature the reader has, and `#?@(...)` splices a list or vector
+into the enclosing collection. The features are `:rontolisp`, then the oracle's `:clj`, and
+`:default`; a `:cljs` branch is read but never built (`js/x`, `#js {...}` and
+`:require-macros` in it never reach the program). A conditional taking no branch reads as
+nothing, and a splice at the top level is refused. A `.clj` file refuses `#?` with the
+oracle's `Conditional read not allowed`. `read-string` and `read` take
+`{:read-cond :allow}` (see [read-string](reference/read-string.md)).
+
 ## Characters
 
 Characters read as characters: `\a`, the lowercase `newline`/`space`/`tab`/`return`/

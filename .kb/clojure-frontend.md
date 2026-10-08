@@ -27,7 +27,7 @@ The oracle is `clj` 1.12.6.1673: a behavior is decided by running it there, and 
   used and the pruner drops it otherwise, so a program without it pays nothing. Macro
   bodies run at lower time through `eval/ClojureMacroTime`.
 - Reached ONLY through the seam: `eval/SourceLanguage.CLOJURE`, picked per FILE for `.clj`
-  or by `--source-language clojure` (`clj`) (`.kb/source-language.md`). A Common Lisp
+  and `.cljc` ("Reader conditionals") or by `--source-language clojure` (`clj`) (`.kb/source-language.md`). A Common Lisp
   file may `(load "lib.clj")` and call `(c%name ...)` (`(|c%my.ns/name| ...)` for a
   namespaced one).
 - The browser needs no Java-side change: `RontoPlayground` splices `ClojureLibrary`,
@@ -873,14 +873,18 @@ a program without `ns` lowers unqualified. A quoted `'n/x` is the symbol of var 
   `(setq |c%n%init-N| (lambda () ...))` under a `|c%n%init|` driver so
   `GlobalVarCollector` sees the stores; a `^:dynamic` `def`'s `declaim` and counter stay
   top-level for `SpecialVarCollector`.
-- **Refusals in the oracle's words**: `Could not locate a/b.clj on the source path:
-  <roots>`, `Cyclic load dependency: [ /a ]->/b->[ /a ]`, `namespace 'x' not found after
+- **Refusals in the oracle's words**: `Could not locate a/b.clj or a/b.cljc on the source
+  path: <roots>`, `Cyclic load dependency: [ /a ]->/b->[ /a ]`, `namespace 'x' not found after
   loading '/x'`, `x does not exist`, `x is not public`.
 - **Source path** (`ClojureSourcePath`, on the first project require): the root the entry
   file's namespace names (`src` for `src/demo/main.clj` declaring `demo.main`; else the
   file's directory; a session's working directory), then the `:paths` of the nearest
   `deps.edn` walking up (read as EDN; `["src"]` when absent), else `src` -- the `clj`
-  default. `deps.edn` over a new flag: it is the oracle's own declaration. Files come
+  default. `deps.edn` over a new flag: it is the oracle's own declaration. The file is the
+  oracle's `RT.load` order: `ns.clj` under every root, then `ns.cljc` under every root, so a
+  `.clj` under a later root beats a `.cljc` under an earlier one (measured on `clj` 1.12.6,
+  2026-10-08; instaparse 1.5.0 ships both for 14 namespaces). `Found.resource` is the file
+  below its root, the `*file*` and `:file` of the load (`app/portable.cljc`). Files come
   through `ClojureFiles` (`SourceLanguage.clojureFiles` adapts the site's loader; none is
   refused by name).
 - **Records** keep the simple-name tag; `typeKeyOf` resolves own, then an imported or
@@ -1794,7 +1798,7 @@ through it. Pinned on all four backends by clojure-spec `a-double-prints-its-exp
 source reader's language, answering what a quote of the same text answers**, so `(=
 (read-string s) 's)` holds: `@x` reads `(deref x)` and `` `x `` `(syntax-quote x)` like a
 quote does (the oracle: `clojure.core/deref`, the expansion), `#(...)` the source reader's
-`(fn* [p1__N# ...] (body))` (N per datum read, through the specials `%clojure-rd-args`/`%clojure-rd-arg-id`), metadata drops, `#=`/`#?`/`#inst` are its refusals. A read map
+`(fn* [p1__N# ...] (body))` (N per datum read, through the specials `%clojure-rd-args`/`%clojure-rd-arg-id`), metadata drops, `#=`/`#inst` are its refusals, and `#?` reads under `{:read-cond :allow}` ("Reader conditionals"). A read map
 or set stores its keys through "Structural keys" (`%clojure-plist-table`,
 `%clojure-set-put`), so it finds `=` keys and refuses an `=` duplicate member like a
 literal. `::kw` resolves against the context each call site passes, `("ns" ("alias"
@@ -1848,6 +1852,65 @@ literal. `::kw` resolves against the context each call site passes, `("ns" ("ali
   arithmetic, ~3 KB `intern`. Re-measured the same day after the shared `%decimal-double`
   replaced the Lisp IEEE-bits conversion: wasm 118,226 -> 115,286 B, class 190,861 -> 186,835 B
   (the plain `(prn [1 "a"])` 32,463 -> 32,112 B, class unchanged).
+
+## Reader conditionals
+
+**`#?(...)`/`#?@(...)` read like the oracle's `LispReader.ConditionalReader` where the
+oracle reads them -- a `.cljc` file (`Compiler.load` decides by the file name, so
+`ClojureReader(source, file)` does), a session (clj's REPL reads `{:read-cond :allow}`), and
+`read-string`/`read` under `{:read-cond :allow}` -- and are `Conditional read not allowed`
+everywhere else (a `.clj` file, text without a file, `deps.edn`).** Both readers implement
+one algorithm (`ClojureReader.readConditional`, `%clojure-rd-conditional`):
+- The first feature the reader has takes its form; after a feature not taken, and after the
+  taken form, every form up to `)` reads SUPPRESSED and drops, unpaired (so `#?(:clj 1
+  :cljs)` reads, `#?(:clj)` is `read-cond requires an even number of forms.`). Suppressed,
+  a tagged literal (`#js`, `#inst`, a record literal) and `#=` read their form and build
+  nothing; every other syntax error still signals, as the oracle's (`#{1 1}`, `##Foo`,
+  nested `#()`). A taken-nothing conditional is a discard (`DISCARD`/`:C%READ-SKIP`), so a
+  session buffer ending in one waits for the next datum, like clj's REPL.
+- A splice pushes the members onto the PENDING forms every read takes first (the oracle's
+  `pendingForms`): a list read shares its enclosing one, a quote/deref/var/meta/discard
+  makes one at the top level and drops what is left there. So `(a '#?@(:clj [x y]) b)` is
+  `(a (quote x) y b)`, `'#?@(:clj [x y])` is `(quote x)`, a splice inside a taken branch
+  keeps its first member; a splice of a non-list (map, set, regex, scalar) is `Spliced form
+  list ... java.util.List`, then one at the top level `... not allowed at the top level.`
+  (in that order). Refusals `Feature name :else is reserved.`, `Feature should be a keyword:
+  <str of it>` (`null`, `clj`, `[:clj]`), `read-cond body must be a list`. About 80 probes
+  diffed against `clj` 1.12.6 (2026-10-08) are pinned by `ClojureReaderTest`
+  (`aReaderConditional*`, `aSplicing*`) and clojure-spec
+  `read-string-takes-reader-conditionals-under-read-cond-allow`.
+- **Features: `:rontolisp`, `:clj`, `:default`** (`ClojureReader.FEATURES`), plus a
+  `:features` hash set at run time. Decided 2026-10-08 on seven Clojars libraries' 339
+  conditionals (camel-snake-kebab 0.4.3, cuerdas 2023.11.09, stuartsierra dependency 1.0.0,
+  instaparse 1.5.0, malli 0.16.4, medley 1.8.1, test.check 1.1.1, read with `:preserve`):
+  `:clj` 288 keys, `:cljs` 242, `:bb` 11, `:default` 2. A `:cljs` front end is structurally
+  wrong, not just interop-heavy: the `:clj`-only branches (96) hold the `defmacro`s a cljc
+  library defines for itself, and the `:cljs`-only ones (50) `(:require-macros ...)`,
+  `goog` requires and `js/` calls this front end has no counterpart for. Of the branches,
+  `:clj` ones were Java interop by a symbol heuristic 165 times against 123 portable,
+  `:cljs` ones 74 `js`/`goog`/`.-` against 168 -- but a "portable" cljs branch still names
+  cljs protocols (`ILookup`, `-invoke`). `:clj` also keeps the oracle's answer for every
+  branch. The own key is babashka's shape (`:bb` before `:clj`; malli writes
+  `#?(:bb ... :clj ...)`): free for a library naming no `:rontolisp`, and the one way a
+  library can say "not the JVM branch here". The order of the form decides, not the set:
+  `#?(:clj a :rontolisp b)` is `a`.
+- ns forms: every `:require-macros`/`:include-macros` in the seven libraries (18 lines)
+  sits inside a `:cljs` branch, so none reaches `ClojureNamespaceLowering` (whose
+  `:include-macros` refusal stays; the oracle ignores the option).
+- Not built: `{:read-cond :preserve}` answers a `ReaderConditional` (and a `TaggedLiteral`
+  for a tag inside one), two value kinds no backend has; it is refused at the first `#?`
+  (`read-cond :preserve is not supported: ...`), so a text without one reads as the oracle
+  reads it, and `reader-conditional?` stays false. Deviations kept (error cases only):
+  `::alias/kw` of an unknown alias in a branch not taken reads (the lowering never sees it;
+  the oracle refuses at read), the runtime reader splices `#?@(:clj nil)` as nothing (`()`
+  and `nil` read alike there) and takes `:features` as a hash set only.
+- A symbol's `'` is a constituent (`coll'`, `a'b`) and a number stops at it, as in the
+  oracle's token and number readers (`ClojureReaderTest#aQuoteInsideASymbol*`); medley
+  and dependency spell `coll'`/`g'` and were unreadable before. First failure per library
+  after this (interpreter, 2026-10-08): medley `transients are not supported yet: assoc!`,
+  dependency `infinite range is not supported`, camel-snake-kebab `extend needs a core
+  type, not Pattern`, cuerdas `unknown namespace: clojure.core` -- lowering gaps for `e43`,
+  none in the reader.
 
 ## Vars and metadata
 
@@ -2205,7 +2268,8 @@ in-scope program needs `valid?`/`conform` (then `explain-data` stays refused).
   `clojureSetWiresLikeClojureString`), `ClojureThrowablesTest` (class chains), `ClojureRefusalsTest`
   (the refusal carriers' chains), `ClojureClassBasesTest` (class rows), `ClojureReaderTest`,
   `ClojureSessionTest`, `ClojureProjectNamespacesTest` (a `deps.edn` project, all four
-  backends; `MemoryClojureFiles` for the unit tests).
+  backends, `aCljcFile*` a `.cljc` entry and namespace; `MemoryClojureFiles` for the unit
+  tests, `ClojureLoweringTest#aNamespaceLoadsItsCljFromAnyRootAheadOfItsCljc`).
 - Reading: the `read-string-*`/`read-takes-*`/`str-spells-*` spec cases,
   `ClojureLoweringTest#readingVerbs*`/`#aReaderWrapper*`, `ClojureReaderTest#aDiscard*`/
   `#aCharacterLiteral*`, `ClojureSessionTest#aBufferRegisters*`,

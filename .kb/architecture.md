@@ -25,7 +25,7 @@ the jar, which the Clojure lowering loads behind the seam like a project file
 subset for `.scm`, lowered to the same core forms so no backend learns a Scheme name; its
 run-time helpers are Common Lisp source spliced like any other library
 (`.kb/scheme-frontend.md`). The third language is `clojure` -- an EXPERIMENTAL small subset
-for `.clj`, lowered to the same core forms so no backend learns a Clojure name
+for `.clj` and `.cljc`, lowered to the same core forms so no backend learns a Clojure name
 (`.kb/clojure-frontend.md`).
 
 ## Language-independent libraries

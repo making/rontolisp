@@ -1,5 +1,6 @@
 package am.ik.rontolisp.clojure;
 
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.IdentityHashMap;
@@ -34,8 +35,26 @@ import org.jspecify.annotations.Nullable;
  * mean. A {@code #(...)} anonymous function reads as the oracle's reader reads it,
  * {@code (fn* [p1__N# ...] (body...))}, every argument literal replaced by its generated
  * parameter.
+ *
+ * <p>
+ * A reader conditional ({@code #?(...)}, splicing {@code #?@(...)}) reads like the
+ * oracle's {@code LispReader.ConditionalReader} where it is allowed -- a {@code .cljc}
+ * file, a session -- and is the oracle's {@code Conditional read not allowed} elsewhere.
+ * It takes the first branch whose feature is one of {@link #FEATURES} or
+ * {@code :default}; every other form up to its closing parenthesis reads with tagged
+ * literals suppressed and drops. A splice pushes its members onto the pending forms of
+ * the enclosing list, which every read takes first, so a splice under a quote or a
+ * discard leaves its rest to that list, as the oracle's {@code pendingForms} do.
  */
 final class ClojureReader {
+
+	/**
+	 * The features a reader conditional takes a branch for besides {@code :default}: this
+	 * front end's own, and the oracle's platform, whose branches are the ones written for
+	 * the JVM Clojure this front end follows ({@code .kb/clojure-frontend.md}, "Reader
+	 * conditionals").
+	 */
+	static final Set<String> FEATURES = Set.of(":rontolisp", ":clj");
 
 	static final LispSymbol VECTOR = new LispSymbol("%vector");
 
@@ -61,6 +80,13 @@ final class ClojureReader {
 	 * {@link #readRequired} reads on past it.
 	 */
 	private static final LispSymbol DISCARD = new LispSymbol("%discard");
+
+	/**
+	 * Heads what a tagged literal or {@code #=} reads as in a branch not taken,
+	 * {@code (%tagged tag form)}: the branch drops, so only a set's duplicate check ever
+	 * sees one, telling two literals apart by their forms like the oracle's.
+	 */
+	private static final LispSymbol TAGGED = new LispSymbol("%tagged");
 
 	private final String source;
 
@@ -93,9 +119,43 @@ final class ClojureReader {
 	 */
 	private int anonId;
 
+	/** Whether a reader conditional reads here, rather than being refused. */
+	private final boolean conditionals;
+
+	/**
+	 * The forms a splicing reader conditional left for the list being read, taken ahead
+	 * of the source by every read; null at the top level, where a splice is refused.
+	 */
+	private @Nullable ArrayDeque<LispVal> pending;
+
+	/**
+	 * Whether the datum being read is in a reader conditional's branch not taken: a
+	 * tagged literal then reads without a reader for its tag, like the oracle's
+	 * {@code *suppress-read*}.
+	 */
+	private boolean suppress;
+
+	/**
+	 * A reader of a file's text, taking reader conditionals where the oracle's
+	 * {@code Compiler.load} does: in a {@code .cljc} file.
+	 * @param source the text
+	 * @param file the file it came from, or {@code null}
+	 */
 	ClojureReader(String source, @Nullable String file) {
+		this(source, file, file != null && file.endsWith(".cljc"));
+	}
+
+	/**
+	 * A reader of the text.
+	 * @param source the text
+	 * @param file the file it came from, or {@code null}
+	 * @param conditionals whether a reader conditional reads (a {@code .cljc} file, a
+	 * session) rather than being refused
+	 */
+	ClojureReader(String source, @Nullable String file, boolean conditionals) {
 		this.source = source;
 		this.file = file;
+		this.conditionals = conditionals;
 	}
 
 	/**
@@ -152,13 +212,22 @@ final class ClojureReader {
 	 * {@code unexpected end of input} refusal.
 	 */
 	private LispVal readRequired() {
-		LispVal datum;
-		do {
-			skipSpace();
-			datum = readDatum();
+		ArrayDeque<LispVal> outer = this.pending;
+		if (outer == null) {
+			this.pending = new ArrayDeque<>();
 		}
-		while (datum == DISCARD);
-		return datum;
+		try {
+			LispVal datum;
+			do {
+				skipSpace();
+				datum = readDatum();
+			}
+			while (datum == DISCARD);
+			return datum;
+		}
+		finally {
+			this.pending = outer;
+		}
 	}
 
 	/**
@@ -175,6 +244,9 @@ final class ClojureReader {
 	}
 
 	private LispVal readDatum() {
+		if (this.pending != null && !this.pending.isEmpty()) {
+			return this.pending.poll();
+		}
 		if (this.pos >= this.source.length()) {
 			throw error("unexpected end of input");
 		}
@@ -258,10 +330,158 @@ final class ClojureReader {
 			next();
 			return readSymbolicValue();
 		}
+		if (peek() == '?') {
+			next();
+			return readConditional();
+		}
 		if (Character.isLetter(peek())) {
 			return readRecordLiteral();
 		}
+		if (peek() == '=' && this.suppress) { // a branch not taken evaluates nothing
+			next();
+			return list(List.of(TAGGED, new LispSymbol("="), readRequired()));
+		}
 		throw error("unsupported reader form #" + peek());
+	}
+
+	/**
+	 * One reader conditional, positioned after {@code #?}: the oracle's
+	 * {@code readCondDelimited}. Features and the taken branch read as ever; after a
+	 * feature not taken, and after the taken branch, every form up to the closing
+	 * parenthesis reads suppressed and drops, unpaired. No branch taken reads as a
+	 * discard; a splice's members go onto the pending forms, ahead of the rest of the
+	 * enclosing list.
+	 */
+	private LispVal readConditional() {
+		if (!this.conditionals) {
+			throw error("Conditional read not allowed");
+		}
+		if (this.pos >= this.source.length()) {
+			throw error("unexpected end of input");
+		}
+		boolean splicing = false;
+		if (peek() == '@') {
+			next();
+			splicing = true;
+		}
+		while (this.pos < this.source.length() && " \t\n\r\f,".indexOf(peek()) >= 0) {
+			next();
+		}
+		if (this.pos >= this.source.length()) {
+			throw error("unexpected end of input");
+		}
+		if (peek() != '(') {
+			throw error("read-cond body must be a list");
+		}
+		next();
+		ArrayDeque<LispVal> forms = this.pending;
+		boolean topLevel = forms == null;
+		if (forms == null) {
+			forms = new ArrayDeque<>();
+			this.pending = forms;
+		}
+		try {
+			LispVal result = null;
+			while (true) {
+				if (result == null) {
+					LispVal feature = readItem(')');
+					if (feature == null) {
+						break;
+					}
+					if (ClojureLowerUtil.isSymbolNamed(feature, ":else")
+							|| ClojureLowerUtil.isSymbolNamed(feature, ":none")) {
+						throw error("Feature name " + ((LispSymbol) feature).name() + " is reserved.");
+					}
+					if (!(feature instanceof LispSymbol keyword && keyword.name().startsWith(":"))) {
+						throw error("Feature should be a keyword: " + strOf(feature));
+					}
+					if (keyword.name().equals(":default") || FEATURES.contains(keyword.name())) {
+						result = readItem(')');
+						if (result == null) {
+							throw error("read-cond requires an even number of forms.");
+						}
+						continue;
+					}
+				}
+				boolean outer = this.suppress;
+				this.suppress = true;
+				try {
+					if (readItem(')') == null) {
+						break;
+					}
+				}
+				finally {
+					this.suppress = outer;
+				}
+			}
+			if (result == null) {
+				return DISCARD;
+			}
+			if (!splicing) {
+				return result;
+			}
+			List<LispVal> members = spliceMembers(result);
+			if (members == null) {
+				throw error("Spliced form list in read-cond-splicing must implement java.util.List");
+			}
+			if (topLevel) {
+				throw error("Reader conditional splicing not allowed at the top level.");
+			}
+			for (int i = members.size() - 1; i >= 0; i--) {
+				forms.addFirst(members.get(i));
+			}
+			return DISCARD;
+		}
+		finally {
+			if (topLevel) {
+				this.pending = null;
+			}
+		}
+	}
+
+	/**
+	 * The members a splice takes from its branch when the oracle's form is a
+	 * {@code java.util.List} -- a list or a vector, through any reader metadata -- else
+	 * null (a map, a set, a regex, a scalar).
+	 */
+	private static @Nullable List<LispVal> spliceMembers(LispVal form) {
+		List<LispVal> items = ClojureLowerUtil.items(form);
+		while (items != null && items.size() == 3
+				&& ClojureLowerUtil.isSymbolNamed(items.get(0), ClojureLowerUtil.READER_META)) {
+			items = ClojureLowerUtil.items(items.get(1));
+		}
+		if (items == null || items.isEmpty()) {
+			return items;
+		}
+		LispVal head = items.get(0);
+		if (head == VECTOR) {
+			return items.subList(1, items.size());
+		}
+		if (head == HASH_MAP || head == HASH_SET || head == REGEX || head == RECORD || head == TAGGED) {
+			return null;
+		}
+		return items;
+	}
+
+	/**
+	 * The next datum of the list being read -- a pending form first, discards skipped --
+	 * or null at its closing character, consumed.
+	 */
+	private @Nullable LispVal readItem(char close) {
+		while (true) {
+			if (this.pending != null && !this.pending.isEmpty()) {
+				return this.pending.poll();
+			}
+			skipSpace();
+			if (peekClose(close)) {
+				next();
+				return null;
+			}
+			LispVal datum = readDatum();
+			if (datum != DISCARD) {
+				return datum;
+			}
+		}
 	}
 
 	/**
@@ -290,18 +510,47 @@ final class ClojureReader {
 				throw error("Unknown symbolic value: ##" + symbol.name());
 			}
 		}
-		throw error("Invalid token: ##" + symbolicText(form));
+		throw error("Invalid token: ##" + strOf(form));
 	}
 
-	/** The form as {@code str} spells it, for the symbolic-value refusal. */
-	private static String symbolicText(LispVal form) {
+	/**
+	 * The form as the oracle's refusals spell one ({@code "" + form}): a string or a
+	 * character bare, nil as {@code null}, a collection the way {@code pr} writes it.
+	 */
+	private static String strOf(LispVal form) {
 		if (form instanceof LispString string) {
 			return string.value();
+		}
+		if (form instanceof LispChar c) {
+			return Character.toString(c.codePoint());
 		}
 		if (form instanceof LispSymbol symbol && symbol.name().equals("nil")) {
 			return "null";
 		}
-		return form instanceof LispSymbol symbol ? symbol.name() : form.print();
+		return prOf(form);
+	}
+
+	/** The datum as {@code pr} writes it, for {@link #strOf}. */
+	private static String prOf(LispVal form) {
+		if (form instanceof LispSymbol symbol) {
+			return symbol.name();
+		}
+		List<LispVal> items = ClojureLowerUtil.items(form);
+		if (items == null) {
+			return form.print();
+		}
+		LispVal head = items.isEmpty() ? LispNil.INSTANCE : items.get(0);
+		String open = head == VECTOR ? "[" : head == HASH_SET ? "#{" : head == HASH_MAP ? "{" : "(";
+		String close = head == VECTOR ? "]" : head == HASH_SET || head == HASH_MAP ? "}" : ")";
+		List<LispVal> members = open.equals("(") ? items : items.subList(1, items.size());
+		StringBuilder text = new StringBuilder(open);
+		for (int i = 0; i < members.size(); i++) {
+			if (i > 0) {
+				text.append(head == HASH_MAP && i % 2 == 0 ? ", " : " ");
+			}
+			text.append(prOf(members.get(i)));
+		}
+		return text.append(close).toString();
 	}
 
 	/**
@@ -330,6 +579,9 @@ final class ClojureReader {
 			next();
 		}
 		String tag = this.source.substring(start, this.pos);
+		if (this.suppress) { // a branch not taken needs no reader for its tag
+			return list(List.of(TAGGED, new LispSymbol(tag), readRequired()));
+		}
 		if (tag.indexOf('.') < 0) {
 			if (tag.equals("inst") || tag.equals("uuid")) {
 				throw error("unsupported reader form #" + tag);
@@ -523,17 +775,18 @@ final class ClojureReader {
 
 	private List<LispVal> readSeq(char close) {
 		List<LispVal> items = new ArrayList<>();
-		skipSpace();
-		while (true) {
-			if (peekClose(close)) {
-				next();
-				return items;
-			}
-			LispVal datum = readDatum();
-			if (datum != DISCARD) {
+		ArrayDeque<LispVal> outer = this.pending;
+		if (outer == null) {
+			this.pending = new ArrayDeque<>();
+		}
+		try {
+			for (LispVal datum = readItem(close); datum != null; datum = readItem(close)) {
 				items.add(datum);
 			}
-			skipSpace();
+			return items;
+		}
+		finally {
+			this.pending = outer;
 		}
 	}
 
@@ -807,7 +1060,13 @@ final class ClojureReader {
 
 	private LispVal readAtom() {
 		int start = this.pos;
-		while (this.pos < this.source.length() && DELIMS.indexOf(peek()) < 0) {
+		// a quote is a constituent of a symbol (coll', a'b), the oracle's
+		// non-terminating macro character, while a number stops at it like the
+		// oracle's number reader
+		char first = peek();
+		boolean number = Character.isDigit(first) || ((first == '+' || first == '-')
+				&& this.pos + 1 < this.source.length() && Character.isDigit(this.source.charAt(this.pos + 1)));
+		while (this.pos < this.source.length() && (DELIMS.indexOf(peek()) < 0 || (!number && peek() == '\''))) {
 			next();
 		}
 		// a gensym suffix: `x#` reads as one identifier when the `#` ends the

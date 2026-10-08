@@ -67,9 +67,16 @@ public enum SourceLanguage {
 	/**
 	 * Clojure, EXPERIMENTAL SPIKE: a small subset read case-sensitively and lowered to
 	 * the same core forms by the {@code clojure} package. A feasibility probe; no subset
-	 * or compatibility promise yet.
+	 * or compatibility promise yet. A {@code .cljc} file is Clojure too, read with its
+	 * reader conditionals ({@link #CLOJURE_COMMON_EXTENSION}).
 	 */
 	CLOJURE(".clj");
+
+	/**
+	 * The extension of a Clojure file shared between platforms, whose reader conditionals
+	 * read (a {@code .clj} file refuses one, like the oracle).
+	 */
+	public static final String CLOJURE_COMMON_EXTENSION = ".cljc";
 
 	private final String extension;
 
@@ -331,7 +338,7 @@ public enum SourceLanguage {
 		if (path != null && path.endsWith(SCHEME.defaultExtension())) {
 			return SCHEME;
 		}
-		if (path != null && path.endsWith(CLOJURE.defaultExtension())) {
+		if (path != null && (path.endsWith(CLOJURE.defaultExtension()) || path.endsWith(CLOJURE_COMMON_EXTENSION))) {
 			return CLOJURE;
 		}
 		return COMMON_LISP;
@@ -358,7 +365,7 @@ public enum SourceLanguage {
 	 */
 	public static boolean isSourceFile(String path) {
 		return path.endsWith(COMMON_LISP.defaultExtension()) || path.endsWith(SCHEME.defaultExtension())
-				|| path.endsWith(CLOJURE.defaultExtension());
+				|| path.endsWith(CLOJURE.defaultExtension()) || path.endsWith(CLOJURE_COMMON_EXTENSION);
 	}
 
 	/**

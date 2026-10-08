@@ -18,6 +18,17 @@
 （`#ns.Name{...}`・`#ns.Name[...]`）は、評価しない本体からなるレコードに読まれます
 （[defrecord](reference/defrecord.md) 参照）。
 
+## リーダ条件
+
+`.cljc` ファイルと REPL は、オラクルと同じくリーダ条件を読みます。`#?(:clj a :cljs b)` は
+リーダが持つ最初のフィーチャのフォームとして読まれ、`#?@(...)` はリストかベクターを外側の
+コレクションへ展開します。フィーチャは `:rontolisp`、次にオラクルの `:clj`、そして
+`:default` です。`:cljs` の分岐は読まれますが組み立てられません（その中の `js/x`、
+`#js {...}`、`:require-macros` はプログラムに届きません）。どの分岐も選ばない条件は何も
+読まず、トップレベルの展開は拒否されます。`.clj` ファイルの `#?` はオラクルと同じ
+`Conditional read not allowed` で拒否されます。`read-string` と `read` は
+`{:read-cond :allow}` を受け取ります（[read-string](reference/read-string.md) 参照）。
+
 ## 文字
 
 文字は文字として読まれます:`\a`、小文字の `newline`/`space`/`tab`/`return`/`backspace`/

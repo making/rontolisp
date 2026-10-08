@@ -67,6 +67,22 @@ class ClojureProjectNamespacesTest {
 					(def notes (ref ()))
 					(defn valid? [n] (boolean (and (:from n) (:text n))))
 					(defn post [n] (dosync (alter notes conj n)))
+					"""), Map.entry("src/app/portable.cljc", """
+					(ns app.portable
+					  (:require [clojure.string :as str]
+					            #?(:cljs [goog.string :as gstr]))
+					  #?(:cljs (:require-macros [app.portable :refer [twice]])))
+					#?(:clj (defmacro twice [x] `(* 2 ~x)))
+					(def where #?(:cljs (js/Date.) :default :elsewhere))
+					(defn shout [s] #?(:clj (str/upper-case s) :cljs (.toUpperCase s)))
+					(def spliced [1 #?@(:clj [2 3] :cljs [4]) 5])
+					(def tagged #?(:cljs #js {:a 1} :clj {:a 1}))
+					(def file *file*)
+					(def platform #?(:rontolisp :rontolisp :clj :clj))
+					"""), Map.entry("src/app/split.clj", """
+					(ns app.split) (def from "app/split.clj")
+					"""), Map.entry("src/app/split.cljc", """
+					(ns app.split) (def from "app/split.cljc")
 					"""), Map.entry("src/app/cyc_a.clj", """
 					(ns app.cyc-a (:require [app.cyc-b]))
 					"""), Map.entry("src/app/cyc_b.clj", """
@@ -644,11 +660,58 @@ class ClojureProjectNamespacesTest {
 		assertThat(runLoadsOnJvm(path, "Raise")).isEqualTo(out);
 	}
 
+	/**
+	 * A {@code .cljc} entry and namespace read their reader conditionals: the
+	 * {@code :clj} branch, {@code :default}, a splice, a {@code :cljs} branch the reader
+	 * never builds ({@code js/}, {@code #js}, {@code :require-macros}); a namespace with
+	 * both files loads its {@code .clj}, and {@code *file*} names the {@code .cljc}. The
+	 * last line is the one deviation, by design: {@code :rontolisp} is taken ahead of
+	 * {@code :clj}, where the oracle prints {@code :clj}.
+	 */
+	private static final String CLJC = """
+			(ns app.cljc-test
+			  (:require [app.portable :as p]
+			            [app.split :as s]
+			            #?(:cljs [goog.string :as gstr])))
+			(println p/where (p/shout "hi") p/spliced p/tagged p/file (p/twice 21) s/from)
+			(println #?(:clj "clj" :cljs "cljs") '[a #?@(:clj [x y])] [#?(:cljs 1)] {#?@(:clj [:a 1])})
+			#?(:cljs (println "never"))
+			(println p/platform)
+			""";
+
+	private static final String CLJC_OUT = """
+			:elsewhere HI [1 2 3 5] {:a 1} app/portable.cljc 42 app/split.clj
+			clj [a x y] [] {:a 1}
+			:rontolisp
+			""";
+
+	@Test
+	void aCljcFileReadsItsReaderConditionalsOnTheInterpreterAndTheJvm() throws Exception {
+		Path entry = entry("cljc_test.cljc", CLJC);
+		assertThat(interpret(entry)).isEqualTo(CLJC_OUT);
+		assertThat(runOnJvm(entry, "ProjCljc")).isEqualTo(CLJC_OUT);
+	}
+
+	@Test
+	void aCljcFileReadsItsReaderConditionalsOnBothWasmBackends() throws Exception {
+		assumeTrue(HostWasmtime.isAvailable(), "no usable wasmtime on PATH");
+		Path entry = entry("cljc_test.cljc", CLJC);
+		assertThat(runOnWasm(entry, false)).isEqualTo(CLJC_OUT);
+		assertThat(runOnWasm(entry, true)).isEqualTo(CLJC_OUT);
+	}
+
+	@Test
+	void aCljFileRefusesAReaderConditional() throws Exception {
+		assertThatThrownBy(() -> read(entry("cond_test.clj", "(println #?(:clj 1))")))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("cond_test.clj:1:12: Conditional read not allowed");
+	}
+
 	@Test
 	void aMissingNamespaceFileIsNamedWithTheRootsSearched() throws Exception {
 		Path entry = entry("missing_test.clj", "(ns app.missing-test (:require [app.nowhere]))");
 		assertThatThrownBy(() -> read(entry)).isInstanceOf(LispReadException.class)
-			.hasMessageContaining("Could not locate app/nowhere.clj on the source path: ")
+			.hasMessageContaining("Could not locate app/nowhere.clj or app/nowhere.cljc on the source path: ")
 			.hasMessageContaining(project.resolve("test").toString())
 			.hasMessageContaining(project.resolve("src").toString());
 	}

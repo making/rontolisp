@@ -8280,7 +8280,8 @@
 ;; which a stream cannot. Both discard a #_ before a closing bracket and take a
 ;; character literal's first character whatever it is (\( reads back what pr
 ;; wrote); the end of input and an unmatched closing bracket are worded like
-;; the oracle's here.
+;; the oracle's here. A reader conditional reads under {:read-cond :allow},
+;; like the source reader's in a .cljc file (%clojure-rd-conditional).
 ;;
 ;; The SOURCE is a (string . index) cursor for read-string, or a character
 ;; input stream for read (a clojure.java.io/reader, a PushbackReader over one,
@@ -8306,6 +8307,26 @@
 (defvar rontolisp::%clojure-rd-arg-id
   0
   "The last number a generated #(...) parameter took in the datum being read.")
+
+(defvar rontolisp::%clojure-rd-cond
+  nil
+  "How the read takes a reader conditional, from its options map: NIL refuses
+   one (the oracle's Conditional read not allowed), :C%PRESERVE is the
+   :preserve mode this reader does not build, anything else (:C%ALLOW .
+   features) takes the first branch of :rontolisp, :clj, :default or a member
+   of the FEATURES set.")
+
+(defvar rontolisp::%clojure-rd-pending
+  nil
+  "The forms a splicing reader conditional left for the list being read,
+   (:C%PENDING form ...), taken ahead of the source by every read; NIL at the
+   top level, where a splice signals.")
+
+(defvar rontolisp::%clojure-rd-suppress
+  nil
+  "Whether the datum being read is in a reader conditional's branch not taken:
+   a tagged literal and #= then read without being built, like the oracle's
+   *suppress-read*.")
 
 (defun rontolisp::%clojure-read-register (entries)
   "Make the classes of ENTRIES readable, ahead of the ones registered before
@@ -8407,7 +8428,23 @@
          (coerce (nreverse chars) 'string))
       (setq chars (cons (rontolisp::%clojure-rd-next rd) chars)))))
 
+(defun rontolisp::%clojure-rd-pop-pending ()
+  "The first pending form, removed, or :C%READ-SKIP when none is pending."
+  (let ((pending rontolisp::%clojure-rd-pending))
+    (if (and pending (cdr pending))
+        (let ((form (car (cdr pending))))
+          (rplacd pending (cdr (cdr pending)))
+          form)
+        :C%READ-SKIP)))
+
 (defun rontolisp::%clojure-rd-form (rd)
+  "The pending form a splice left, else the datum starting at RD's next
+   character, or :C%READ-SKIP after a #_ discard or a reader conditional
+   taking no branch; the end of input signals."
+  (let ((form (rontolisp::%clojure-rd-pop-pending)))
+    (if (eq form :C%READ-SKIP) (rontolisp::%clojure-rd-form-at rd) form)))
+
+(defun rontolisp::%clojure-rd-form-at (rd)
   "The datum starting at RD's next character, or :C%READ-SKIP after a #_
    discard; the end of input signals."
   (let ((c (rontolisp::%clojure-rd-next rd)))
@@ -8435,12 +8472,15 @@
 
 (defun rontolisp::%clojure-rd-required (rd)
   "The next datum at RD past whitespace and #_ discards; the end of input
-   signals."
-  (let ((form :C%READ-SKIP))
-    (do ()
-        ((not (eq form :C%READ-SKIP)) form)
-      (rontolisp::%clojure-rd-skip rd)
-      (setq form (rontolisp::%clojure-rd-form rd)))))
+   signals. A splice under it leaves its rest to the enclosing list, or drops
+   it at the top level, like the oracle's pending forms."
+  (let ((rontolisp::%clojure-rd-pending
+         (or rontolisp::%clojure-rd-pending (list :C%PENDING))))
+    (let ((form :C%READ-SKIP))
+      (do ()
+          ((not (eq form :C%READ-SKIP)) form)
+        (rontolisp::%clojure-rd-skip rd)
+        (setq form (rontolisp::%clojure-rd-form rd))))))
 
 (defun rontolisp::%clojure-rd-wrap (rd name)
   "(name datum) over the next datum: the quote, deref and syntax-quote family
@@ -8457,19 +8497,33 @@
 (defun rontolisp::%clojure-rd-seq (rd close)
   "The datums up to the character CLOSE, consumed, as a list; the end of
    input signals."
-  (let ((items nil) (done nil))
+  (let ((rontolisp::%clojure-rd-pending
+         (or rontolisp::%clojure-rd-pending (list :C%PENDING))))
+    (let ((items nil) (form (rontolisp::%clojure-rd-item rd close)))
+      (do ()
+          ((eq form :C%READ-END) (nreverse items))
+        (setq items (cons form items))
+        (setq form (rontolisp::%clojure-rd-item rd close))))))
+
+(defun rontolisp::%clojure-rd-item (rd close)
+  "The next datum of the list being read up to the character CLOSE -- a
+   pending form first, discards skipped -- or :C%READ-END at CLOSE, consumed;
+   the end of input signals."
+  (let ((form :C%READ-SKIP))
     (do ()
-        (done (nreverse items))
-      (rontolisp::%clojure-rd-skip rd)
-      (let ((c (rontolisp::%clojure-rd-peek rd)))
-        (cond
-         ((null c) (rontolisp::%clojure-runtime-exception "EOF while reading"))
-         ((char= c close)
-          (rontolisp::%clojure-rd-next rd)
-          (setq done t))
-         (t (let ((form (rontolisp::%clojure-rd-form rd)))
-              (if (not (eq form :C%READ-SKIP))
-                  (setq items (cons form items))))))))))
+        ((not (eq form :C%READ-SKIP)) form)
+      (setq form (rontolisp::%clojure-rd-pop-pending))
+      (if (eq form :C%READ-SKIP)
+          (progn
+            (rontolisp::%clojure-rd-skip rd)
+            (let ((c (rontolisp::%clojure-rd-peek rd)))
+              (cond ((null c)
+                     (rontolisp::%clojure-runtime-exception
+                      "EOF while reading"))
+                    ((char= c close)
+                     (rontolisp::%clojure-rd-next rd)
+                     (setq form :C%READ-END))
+                    (t (setq form (rontolisp::%clojure-rd-form-at rd))))))))))
 
 (defun rontolisp::%clojure-rd-map (rd)
   "A map literal's entries up to }, as a map whose keys go through the
@@ -8910,9 +8964,109 @@
           ((char= c #\#)
            (rontolisp::%clojure-rd-next rd)
            (rontolisp::%clojure-rd-symbolic rd))
+          ((char= c #\?)
+           (rontolisp::%clojure-rd-next rd)
+           (rontolisp::%clojure-rd-conditional rd))
           ((alpha-char-p c) (rontolisp::%clojure-rd-record rd))
+          ((and (char= c #\=) rontolisp::%clojure-rd-suppress)
+           (rontolisp::%clojure-rd-next rd)
+           (rontolisp::%clojure-rd-required rd)
+           nil)
           (t (rontolisp::%clojure-runtime-exception
               (concatenate 'string "unsupported reader form #" (string c)))))))
+
+(defun rontolisp::%clojure-rd-conditional (rd)
+  "#?(...) or #?@(...), the #? consumed: the oracle's readCondDelimited. The
+   features and the taken branch read as ever; after a feature not taken, and
+   after the taken branch, every form up to the closing parenthesis reads
+   suppressed and drops, unpaired. No branch taken answers :C%READ-SKIP, and
+   so does a splice, whose members go onto the pending forms ahead of the rest
+   of the enclosing list."
+  (let ((mode rontolisp::%clojure-rd-cond)
+        (c (rontolisp::%clojure-rd-next rd))
+        (splicing nil))
+    (if (null mode)
+        (rontolisp::%clojure-runtime-exception "Conditional read not allowed"))
+    (if (eq mode :C%PRESERVE)
+        (error "~A"
+               "read-cond :preserve is not supported: no reader-conditional or tagged-literal value exists here"))
+    (if (eql c #\@)
+        (progn
+          (setq splicing t)
+          (setq c (rontolisp::%clojure-rd-next rd))))
+    (do ()
+        ((not (and c (rontolisp::%clojure-rd-space-p c))))
+      (setq c (rontolisp::%clojure-rd-next rd)))
+    (if (null c)
+        (rontolisp::%clojure-runtime-exception "EOF while reading character"))
+    (if (not (char= c #\())
+        (rontolisp::%clojure-runtime-exception "read-cond body must be a list"))
+    (let ((top (null rontolisp::%clojure-rd-pending)))
+      (let ((rontolisp::%clojure-rd-pending
+             (or rontolisp::%clojure-rd-pending (list :C%PENDING)))
+            (result :C%READ-SKIP)
+            (done nil))
+        (do ()
+            (done)
+          (if (eq result :C%READ-SKIP)
+              (let ((feature (rontolisp::%clojure-rd-item rd #\))))
+                (cond ((eq feature :C%READ-END) (setq done t))
+                      ((rontolisp::%clojure-rd-feature-p feature (cdr mode))
+                       (setq result (rontolisp::%clojure-rd-item rd #\)))
+                       (if (eq result :C%READ-END)
+                           (rontolisp::%clojure-runtime-exception
+                            "read-cond requires an even number of forms.")))
+                      (t (setq done (rontolisp::%clojure-rd-suppressed rd)))))
+              (setq done (rontolisp::%clojure-rd-suppressed rd))))
+        (cond ((or (eq result :C%READ-SKIP) (not splicing)) result)
+              ((not
+                (or (and (listp result) (not (keywordp (car result))))
+                    (and (vectorp result) (not (stringp result)))))
+               ;; a wrapper (:C%SET ...), (:C%KEYWORD ...) is no list read
+               (rontolisp::%clojure-runtime-exception
+                "Spliced form list in read-cond-splicing must implement java.util.List"))
+              (top
+               (rontolisp::%clojure-runtime-exception
+                "Reader conditional splicing not allowed at the top level."))
+              (t
+               (rplacd rontolisp::%clojure-rd-pending
+                       (append (coerce result 'list)
+                               (cdr rontolisp::%clojure-rd-pending)))
+               :C%READ-SKIP))))))
+
+(defun rontolisp::%clojure-rd-suppressed (rd)
+  "Read and drop the next form of a reader conditional, suppressed: whether
+   it was the closing parenthesis instead."
+  (let ((rontolisp::%clojure-rd-suppress t))
+    (eq (rontolisp::%clojure-rd-item rd #\)) :C%READ-END)))
+
+(defun rontolisp::%clojure-rd-feature-p (feature features)
+  "Whether a reader conditional takes the branch of FEATURE, given the
+   FEATURES set of the options map (NIL for none): :rontolisp, :clj and
+   :default always; a reserved name or a non-keyword signals, like the
+   oracle."
+  (if (and (rontolisp::%clojure-keyword-p feature)
+           (or (string= (car (cdr feature)) "else")
+               (string= (car (cdr feature)) "none")))
+      (rontolisp::%clojure-runtime-exception
+       (concatenate 'string "Feature name :" (car (cdr feature))
+                    " is reserved.")))
+  (if (not (rontolisp::%clojure-keyword-p feature))
+      (rontolisp::%clojure-runtime-exception
+       (concatenate 'string "Feature should be a keyword: "
+                    (rontolisp::%clojure-str-of feature "null" nil))))
+  (let ((name (car (cdr feature))) (miss (list nil)))
+    (cond ((or (string= name "default") (string= name "clj")
+               (string= name "rontolisp"))
+           t)
+          ((null features) nil)
+          ((rontolisp::%clojure-set-p features)
+           (let ((table (car (cdr features))))
+             (not
+              (eq (gethash (rontolisp::%clojure-table-key feature table) table
+                           miss) miss))))
+          (t (rontolisp::%clojure-class-cast-exception
+              "the :features of a read must be a set")))))
 
 (defun rontolisp::%clojure-rd-symbolic (rd)
   "A ## symbolic value, both hashes consumed: the double ##NaN, ##Inf or ##-Inf
@@ -8974,9 +9128,18 @@
 (defun rontolisp::%clojure-rd-record (rd)
   "A record literal #ns.Name{:k v ...} or #ns.Name[v ...], the hash consumed:
    the record over the body read as data (never evaluated); an undotted tag
-   is the source reader's refusal."
+   is the source reader's refusal. In a reader conditional's branch not taken
+   the tag needs no reader: the tag and its form, so a set tells two dropped
+   literals apart like the oracle's."
   (let ((tag
          (rontolisp::%clojure-rd-token rd (rontolisp::%clojure-rd-next rd))))
+    (if rontolisp::%clojure-rd-suppress
+        (list tag (rontolisp::%clojure-rd-required rd))
+        (rontolisp::%clojure-rd-record-of rd tag))))
+
+(defun rontolisp::%clojure-rd-record-of (rd tag)
+  "The record literal of the class TAG, its tag consumed (%clojure-rd-record)."
+  (progn
     (if (not (search "." tag))
         (if (or (string= tag "inst") (string= tag "uuid"))
             (error "~A" (concatenate 'string "unsupported reader form #" tag))
@@ -9082,6 +9245,19 @@
                miss)))
       (if (eq v miss) (cons t nil) (cons nil v)))))
 
+(defun rontolisp::%clojure-read-opt-cond (opts)
+  "How a read with the options map OPTS takes a reader conditional
+   (%clojure-rd-cond): :read-cond :allow takes it with the :features set,
+   :preserve is :C%PRESERVE, anything else refuses it."
+  (let ((mode
+         (if (hash-table-p opts)
+             (gethash (list :C%KEYWORD "read-cond") opts nil)
+             nil)))
+    (cond ((equal mode (list :C%KEYWORD "allow"))
+           (cons :C%ALLOW (gethash (list :C%KEYWORD "features") opts nil)))
+          ((equal mode (list :C%KEYWORD "preserve")) :C%PRESERVE)
+          (t nil))))
+
 (defun rontolisp::%clojure-read-string (s ctx)
   "(read-string s): the first datum of the string S, CTX the calling
    namespace context."
@@ -9092,11 +9268,12 @@
 
 (defun rontolisp::%clojure-read-string-opts (opts s ctx)
   "(read-string opts s): the first datum of the string S, the options map
-   OPTS deciding the end of input."
+   OPTS deciding the end of input and the reader conditionals."
   (if (not (stringp s))
       (rontolisp::%clojure-class-cast-exception-of "read-string needs a string"
                                                    s))
-  (let ((eof (rontolisp::%clojure-read-opt-eof opts)))
+  (let ((eof (rontolisp::%clojure-read-opt-eof opts))
+        (rontolisp::%clojure-rd-cond (rontolisp::%clojure-read-opt-cond opts)))
     (rontolisp::%clojure-read-from (cons (cons s 0) ctx) (car eof) (cdr eof))))
 
 (defun rontolisp::%clojure-read-stream (x)
@@ -9115,8 +9292,9 @@
 
 (defun rontolisp::%clojure-read-opts (opts stream ctx)
   "(read opts stream): one datum from STREAM, the options map OPTS deciding
-   the end of input."
-  (let ((eof (rontolisp::%clojure-read-opt-eof opts)))
+   the end of input and the reader conditionals."
+  (let ((eof (rontolisp::%clojure-read-opt-eof opts))
+        (rontolisp::%clojure-rd-cond (rontolisp::%clojure-read-opt-cond opts)))
     (rontolisp::%clojure-read-from
      (cons (rontolisp::%clojure-read-stream stream) ctx) (car eof) (cdr eof))))
 

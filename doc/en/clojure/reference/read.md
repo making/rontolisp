@@ -8,7 +8,8 @@ text. The reader is a `clojure.java.io/reader` (a `java.io.PushbackReader` over 
 that reader), `(java.io.PushbackReader. (java.io.StringReader. s))` (a string reader on
 every backend) or `*in*`, which `(read)` reads; a host reader is refused. At the end of
 input `(read reader)` signals `EOF while reading`, while `(read reader false v)` and
-`(read {:eof v} reader)` answer `v`; an end inside a datum always signals. A fourth
+`(read {:eof v} reader)` answer `v`; the options map's `:read-cond`/`:features` decide reader
+conditionals as for [read-string](read-string.md); an end inside a datum always signals. A fourth
 argument (recursive?) is accepted and ignored. Runs on every backend (a file needs a
 `--dir` preopen on wasm); as a value, zero to four arguments.
 

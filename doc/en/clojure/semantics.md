@@ -35,7 +35,8 @@ oracle's compiler. A var of `user` lowers to `c%name`, any other to `c%ns/name`,
 what a Common Lisp file loading the program calls.
 
 A `require`, `use` or `ns` clause naming a namespace the program has not declared loads its
-file: `my-app.core` is `my_app/core.clj`, read from the first source root holding it --
+file: `my-app.core` is `my_app/core.clj`, read from the first source root holding it, else
+`my_app/core.cljc` from the first holding that (a `.clj` under any root wins, like the oracle) --
 the directory the entry file's own namespace names (`src` for `src/demo/main.clj` declaring
 `demo.main`, the file's directory without an `ns`), then the `:paths` of the nearest
 `deps.edn` at or above the entry file (`["src"]` when it names none), or `src` under the
@@ -287,8 +288,8 @@ global it signals `Can't change/establish root binding of: ... with set` at run 
 run time on every backend, answering what a quote of the same text answers: the same
 numbers, strings, characters, keywords (`::kw` in the calling namespace) and collections,
 metadata dropped, `#_` discarding. A record literal builds the record of a class the
-program defines; `#=` read-time evaluation, reader conditionals and tagged literals are
-refused like in source. A reader is a `clojure.java.io/reader`, `*in*`, or a
+program defines; `#=` read-time evaluation and tagged literals are refused like in source,
+and reader conditionals read under `{:read-cond :allow}` like in a `.cljc` file. A reader is a `clojure.java.io/reader`, `*in*`, or a
 `java.io.PushbackReader`/`BufferedReader`/`InputStreamReader` over one or over a `java.io.StringReader`,
 which is a stream on every backend; `read` leaves it right after the datum. `str` of a
 collection quotes the strings inside it, like the oracle's, so what `spit` writes reads

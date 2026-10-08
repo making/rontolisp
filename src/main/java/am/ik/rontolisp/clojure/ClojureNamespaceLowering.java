@@ -548,8 +548,7 @@ final class ClojureNamespaceLowering {
 
 	/** The oracle's root resource of a namespace: {@code /demo/cyc_a}. */
 	static String rootResource(String ns) {
-		String file = ClojureSourcePath.resourceOf(ns);
-		return "/" + file.substring(0, file.length() - ".clj".length());
+		return "/" + ClojureSourcePath.scriptBaseOf(ns);
 	}
 
 	/**
@@ -586,7 +585,8 @@ final class ClojureNamespaceLowering {
 			if (notShipped != null) {
 				throw new LispReadException(notShipped);
 			}
-			throw new LispReadException("Could not locate " + ClojureSourcePath.resourceOf(ns) + " on the source path"
+			String base = ClojureSourcePath.scriptBaseOf(ns);
+			throw new LispReadException("Could not locate " + base + ".clj or " + base + ".cljc on the source path"
 					+ ctx.sourcePath.describeRoots());
 		}
 		if (found.builtin()) {

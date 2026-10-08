@@ -31,12 +31,13 @@ public final class ClojureSession {
 	}
 
 	/**
-	 * Reads and lowers one buffer.
+	 * Reads and lowers one buffer. A reader conditional reads, as the oracle's REPL reads
+	 * with {@code {:read-cond :allow}}.
 	 * @param source the typed text: any number of datums
 	 * @return one entry per top-level datum, in order
 	 */
 	public List<ClojureTopLevel> read(String source) {
-		return this.lowering.interact(new ClojureReader(source, null));
+		return this.lowering.interact(new ClojureReader(source, null, true));
 	}
 
 	/**
@@ -106,7 +107,7 @@ public final class ClojureSession {
 		// `#(`) still waits for its datum, and so does a trailing discard (the oracle's
 		// REPL reads on past it).
 		try {
-			ClojureReader reader = new ClojureReader(source, null);
+			ClojureReader reader = new ClojureReader(source, null, true);
 			reader.readAll();
 			return !reader.endsInDiscard();
 		}

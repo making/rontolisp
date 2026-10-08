@@ -2584,6 +2584,22 @@ class ClojureLoweringTest {
 	}
 
 	@Test
+	void aNamespaceLoadsItsCljFromAnyRootAheadOfItsCljc() {
+		// the oracle's RT.load (clj 1.12.6, 2026-10-08): the .clj under ANY root, then
+		// the .cljc; a .cljc alone loads with its reader conditionals
+		Map<String, String> files = Map.of("deps.edn", "{:paths [\"a\" \"b\"]}", "a/p/x.cljc",
+				"(ns p.x) (defn from-cljc [] 1)", "b/p/x.clj", "(ns p.x) (defn from-clj [] 2)", "a/p/z.cljc",
+				"(ns p.z) (defn f [] #?(:cljs 1 :clj 2))");
+		assertThat(loweredWithFiles("(require 'p.x) (p.x/from-clj)", files)).contains("(|c%p.x/from-clj|)");
+		assertThatThrownBy(() -> loweredWithFiles("(require 'p.x) (p.x/from-cljc)", files))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("No such var: p.x/from-cljc");
+		assertThat(loweredWithFiles("(require 'p.z) (p.z/f)", files)).contains("(DEFUN |c%p.z/f| NIL 2)");
+		assertThatThrownBy(() -> loweredWithFiles("(require 'p.q)", files)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Could not locate p/q.clj or p/q.cljc on the source path: ., a, b");
+	}
+
+	@Test
 	void aRequiredNamespaceLowersAheadOfTheFormThatLoadsItOnce() {
 		// the file from src (the default root without a deps.edn), its vars
 		// qualified by its namespace, emitted once ahead of the requiring form

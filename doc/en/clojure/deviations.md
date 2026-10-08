@@ -347,7 +347,13 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
 - A `_` param tag leaves that parameter to the cost rule of the `java:` surface, so
   `(^[_] Math/abs -2)` answers `2` where the oracle refuses tags that leave more than one
   overload.
-- Only `.clj` files below the source roots are read (no `.cljc`, no classpath).
+- Only `.clj` and `.cljc` files below the source roots are read (no classpath).
+- A reader conditional takes `:rontolisp` too, ahead of `:clj` where a form names it
+  first. `{:read-cond :preserve}` is refused at the first `#?` (no reader-conditional or
+  tagged-literal value exists), so `reader-conditional?` stays `false`. In a branch not
+  taken, `::alias/kw` of an unknown alias reads (the oracle refuses it); the runtime
+  reader splices `#?@(:clj nil)` as nothing (the oracle refuses it) and takes `:features`
+  as a hash set only.
 - Records and deftypes of one simple name in two namespaces share a dispatch tag, which
   `class`, protocol dispatch and `=` read.
 - A name referred from two namespaces keeps the later refer (the oracle refuses it), and

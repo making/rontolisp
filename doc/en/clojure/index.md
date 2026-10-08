@@ -6,8 +6,8 @@ is a subset or compatibility promise. Use it to try a Clojure program on the JVM
 WebAssembly; write Common Lisp for anything you need to keep working. Interop runs on the
 interpreter and the JVM only: the wasm backends reject the `java:` surface it lowers to.
 
-A `.clj` file is read as Clojure; `--source-language clojure` says so for any other
-file. The language is picked per file, so one program may mix the two.
+A `.clj` or `.cljc` file is read as Clojure (a `.cljc` file with its reader conditionals);
+`--source-language clojure` says so for any other file. The language is picked per file, so one program may mix the two.
 
 ```bash
 rontolisp hello.clj                                # interpreter
