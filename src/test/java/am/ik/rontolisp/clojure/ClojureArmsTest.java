@@ -266,6 +266,31 @@ class ClojureArmsTest {
 	}
 
 	@Test
+	void theReaderValueFamilyFoldsThePredicatesAndTheReaderArmsOfAProgramReadingWithoutOptions() {
+		// only a read that may take {:read-cond :preserve} and the two constructors make
+		// a reader conditional or a tagged literal: the predicates are (progn x false)
+		// again, get's arm goes and the reader's preserve clauses with it
+		List<LispVal> forms = read("(rontolisp::%clojure-is-reader-conditional (f) false)"
+				+ " (lambda (x) (rontolisp::%clojure-is-tagged-literal x false))"
+				+ " (cond ((rontolisp::%clojure-reader-value-p c) (rontolisp::%clojure-reader-value-get c k d)) (t d))"
+				+ " (if (rontolisp::%clojure-rd-preserve-p mode) (preserved) (allowed))"
+				+ " (cond (suppress (s)) ((rontolisp::%clojure-rd-preserving-p) (tagged)) (t (record)))"
+				+ " (rontolisp::%clojure-read-string s ctx)");
+		ClojureArms.Scan scan = ClojureArms.scan(forms, ClojureArms.Family.READER_VALUE);
+		assertThat(scan.builds()).isFalse();
+		assertThat(scan.strips()).isTrue();
+		assertThat(ClojureArms.strip(forms, ClojureArms.Family.READER_VALUE).stream().map(LispVal::print))
+			.containsExactly("(PROGN (F) FALSE)", "(LAMBDA (X) (PROGN X FALSE))", "(COND (T D))", "(ALLOWED)",
+					"(COND (SUPPRESS (S)) (T (RECORD)))", "(RONTOLISP::%CLOJURE-READ-STRING S CTX)");
+		for (String producer : List.of("(rontolisp::%clojure-read-string-opts o s ctx)",
+				"(rontolisp::%clojure-read-opts o r ctx)", "(function rontolisp::%clojure-read-string-v)",
+				"(rontolisp::%clojure-reader-conditional f s)", "(rontolisp::%clojure-tagged-literal-v t f)")) {
+			assertThat(ClojureArms.scan(read(producer), ClojureArms.Family.READER_VALUE).builds()).as(producer)
+				.isTrue();
+		}
+	}
+
+	@Test
 	void theRefusalFamilyFoldsVecsArgumentCheckToTheArgument() {
 		// vec's RuntimeException for a non-collection is read only where a class is
 		List<LispVal> forms = read(

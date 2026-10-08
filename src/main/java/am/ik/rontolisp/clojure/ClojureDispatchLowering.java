@@ -216,6 +216,8 @@ final class ClojureDispatchLowering {
 			case PATTERN -> new Arm(Use.ONCE, ClojureStringLowering::isPatternForm);
 			case MATCHER -> new Arm(Use.ONCE, ClojureStringLowering::isMatcherForm);
 			case NAMESPACE -> runtime(Use.VARIABLE, "RONTOLISP::%CLOJURE-NS-OBJECT-P");
+			case READER_CONDITIONAL -> runtime(Use.VARIABLE, ClojurePredicateLowering.READER_COND_P);
+			case TAGGED_LITERAL -> runtime(Use.VARIABLE, ClojurePredicateLowering.TAGGED_LITERAL_P);
 			case RECORD -> new Arm(Use.MANY, ClojureProtocolLowering::isRecordForm);
 			case DEFTYPE -> new Arm(Use.MANY, ClojureProtocolLowering::isDeftypeForm);
 			case REIFY -> new Arm(Use.MANY, ClojureProtocolLowering::isReifyForm);
@@ -296,6 +298,11 @@ final class ClojureDispatchLowering {
 		branches
 			.add(ClojureLowerUtil.list(ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-NS-OBJECT-P"), one),
 					ClojureCollectionLowering.keywordForm("clojure.lang.Namespace")));
+		// a reader conditional or tagged literal answers its class's keyword: an arm a
+		// program making neither sheds (ClojureArms.Family.READER_VALUE)
+		branches.add(ClojureLowerUtil.list(
+				ClojureLowerUtil.list(new LispSymbol(ClojurePredicateLowering.READER_VALUE_P), one),
+				ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-READER-VALUE-CLASS"), one)));
 		branches.add(ClojureLowerUtil.list(ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), one),
 				ctx.inDispatchFn ? ClojureLowering.NIL_CONST : ClojureCollectionLowering.keywordForm("nil")));
 		branches.add(ClojureLowerUtil.list(ClojureLowerUtil.list(ClojureLowerUtil.sym("eq"), one, ctx.falseVariable),

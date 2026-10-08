@@ -67,5 +67,5 @@ or set is a map or set to every predicate, and `sorted?` and `reversible?` hold 
 | `class?` | `(class? 1)` | `false` |
 | `extends?` | `(extends? P R)` | `true` when `R` implements `P` |
 | `special-symbol?` | `(special-symbol? 'if)` | `true` |
-| `reader-conditional?` | `(reader-conditional? '(1))` | `false` |
-| `tagged-literal?` | `(tagged-literal? 1)` | `false` |
+| `reader-conditional?` | `(reader-conditional? (reader-conditional '(1) false))` | `true` |
+| `tagged-literal?` | `(tagged-literal? (tagged-literal 'a 1))` | `true` |

@@ -13,6 +13,8 @@ open が file-error を通知します。`read-string` と `read` は、`spit` �
 | `clojure.java.io/reader` | `(jio/reader path-or-reader)` | a reader |
 | `read-string` | `(read-string "[1 :k]")` | `[1 :k]` |
 | `read` | `(read (java.io.PushbackReader. (jio/reader path)))` | the first datum |
+| `reader-conditional` | `(reader-conditional '(:clj 1) false)` | `#?(:clj 1)` |
+| `tagged-literal` | `(tagged-literal 'js {})` | `#js {}` |
 | `format` | `(format "%s=%d" :a 5)` | `":a=5"` |
 | `with-open` | `(with-open [] :ok)` | `:ok` |
 | `with-out-str` | `(with-out-str (print 1))` | `"1"` |
