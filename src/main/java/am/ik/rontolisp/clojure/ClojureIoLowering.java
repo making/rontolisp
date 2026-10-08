@@ -42,6 +42,14 @@ final class ClojureIoLowering {
 	/** The io family's {@code instance?} test of a class among a value's supers. */
 	static final String IO_INSTANCE_P = "RONTOLISP::%CLOJURE-IO-INSTANCE-P";
 
+	/**
+	 * The io family's test of what {@code slurp} and {@code spit} open through the
+	 * namespace rather than as a path: a value here, or -- once the namespace has loaded
+	 * -- anything but a path string, which its {@code reader} or {@code writer} opens (a
+	 * type a program extended {@code IOFactory} to included) or refuses.
+	 */
+	static final String OPENABLE_P = "RONTOLISP::%CLOJURE-IO-OPENABLE-P";
+
 	/** The class keyword of a clojure.java.io value. */
 	static final String CLASS_KEY = "RONTOLISP::%CLOJURE-IO-CLASS-KEY";
 
@@ -111,7 +119,7 @@ final class ClojureIoLowering {
 				Map.entry("open-input", 1), Map.entry("open-output", 2), Map.entry("copy", 3),
 				Map.entry("relative-path", 1), Map.entry("delete", 1), Map.entry("refuse-delete", 1),
 				Map.entry("parent-file", 1), Map.entry("mkdirs", 1), Map.entry("resource", 1),
-				Map.entry("from-host", 1));
+				Map.entry("from-host", 1), Map.entry("install", 2));
 		Map<String, String> workers = Map.of("url", URL_OF, "delete", PREFIX + "M-DELETE", "mkdirs",
 				PREFIX + "M-MKDIRS");
 		Map<String, ClojureKernelLowering.Inline> inline = Map.of("resource",
@@ -422,11 +430,13 @@ final class ClojureIoLowering {
 	}
 
 	/**
-	 * {@code spit}'s arm for a clojure.java.io target: {@code (if (io-p file) (spit file
-	 * text append nil) plain)} over the already-bound target and text.
+	 * {@code spit}'s arm for a target the namespace opens ({@link #OPENABLE_P}):
+	 * {@code (if (openable-p file) (spit file text append nil) plain)} over the
+	 * already-bound target and text.
 	 */
 	static LispVal spitArm(LispSymbol file, LispSymbol text, LispVal append, LispVal plain) {
-		return ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), ClojureLowerUtil.list(new LispSymbol(IO_P), file),
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
+				ClojureLowerUtil.list(new LispSymbol(OPENABLE_P), file),
 				ClojureLowerUtil.list(new LispSymbol(SPIT), file, text, append, ClojureLowering.NIL_CONST), plain);
 	}
 
@@ -456,7 +466,7 @@ final class ClojureIoLowering {
 		return ClojureLowerUtil.list(new LispSymbol(HOST_FILE_PATH), x);
 	}
 
-	// resource
+	// Resources
 
 	/**
 	 * {@code (clojure.java.io/resource "name" [loader])} with a literal name: found while

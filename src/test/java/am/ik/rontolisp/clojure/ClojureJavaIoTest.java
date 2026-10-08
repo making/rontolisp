@@ -175,6 +175,26 @@ class ClojureJavaIoTest {
 		assertThat(runOnWasm(Files.readString(main), main, true, proj)).isEqualTo(resourcesOut());
 	}
 
+	/**
+	 * A URL of another protocol than {@code file:} names no file: reading one is refused
+	 * by name (the oracle opens a connection), writing one in the oracle's words.
+	 */
+	private static final String NON_FILE_URL = """
+			(require '[clojure.java.io :as io])
+			(prn (try (slurp (io/as-url "http://example.invalid/x")) (catch UnsupportedOperationException e (ex-message e))))
+			(prn (try (io/writer "https://example.invalid/y") (catch IllegalArgumentException e (ex-message e))))
+			""";
+
+	@Test
+	void aUrlOfAnotherProtocolThanFileIsRefused() throws Exception {
+		String out = """
+				"reading the http: URL http://example.invalid/x is not built in"
+				"Can not write to non-file URL <https://example.invalid/y>"
+				""";
+		assertThat(interpret(NON_FILE_URL, null)).isEqualTo(out);
+		assertThat(runOnJvm(NON_FILE_URL, null, "JioNonFileUrl")).isEqualTo(out);
+	}
+
 	/** The program with {@code root} defined first: a fresh directory of its own. */
 	private String rooted(String program, String leg) throws IOException {
 		Path root = Files.createDirectories(this.dir.resolve(leg)).toRealPath();

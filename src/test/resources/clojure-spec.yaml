@@ -9496,9 +9496,9 @@ cases:
       "é"
       "bogus"
   - name: clojure-java-io-refuses-what-it-cannot-open
-    # IOFactory's refusals in the oracle's words; a missing file is its
-    # FileNotFoundException, a read of a closed byte stream its IOException.
-    # Oracle-identical (clj 1.12.6, 2026-10-08).
+    # IOFactory's refusals in the oracle's words, slurp's and spit's of what no path
+    # names among them; a missing file is its FileNotFoundException, a read of a closed
+    # byte stream its IOException. Oracle-identical (clj 1.12.6, 2026-10-08).
     source: |
       (prn (try (io/reader 1) (catch IllegalArgumentException e (ex-message e)))
            (try (io/reader nil) (catch IllegalArgumentException e (ex-message e)))
@@ -9507,9 +9507,13 @@ cases:
            (try (io/output-stream 1) (catch IllegalArgumentException e (ex-message e))))
       (prn (try (slurp (io/file (str jio-base "-missing"))) (catch java.io.FileNotFoundException e :not-found))
            (try (.read (doto (io/input-stream jio-a) .close)) (catch java.io.IOException e (ex-message e))))
+      (prn (try (slurp 1) (catch IllegalArgumentException e (ex-message e)))
+           (try (spit 2 "x") (catch IllegalArgumentException e (ex-message e)))
+           (try (slurp nil) (catch IllegalArgumentException e (ex-message e))))
     expected: |
       "Cannot open <1> as an InputStream." "Cannot open <nil> as a Reader." "Cannot open <1> as an OutputStream." "Cannot open <:a> as an InputStream." "Cannot open <1> as an OutputStream."
       :not-found "Stream closed"
+      "Cannot open <1> as an InputStream." "Cannot open <2> as an OutputStream." "Cannot open <nil> as a Reader."
   - name: java-io-files-are-made-renamed-and-deleted
     # createNewFile, renameTo, delete-file (silently answering its second argument),
     # make-parents of a path with no parent, and a missing file's lastModified and
@@ -9547,7 +9551,7 @@ cases:
       (prn (try (io/as-url "foo:bar") (catch java.net.MalformedURLException e (ex-message e)))
            (try (io/as-url "/no/protocol") (catch java.net.MalformedURLException e :malformed))
            (try (io/file (io/as-url "http://x/y")) (catch IllegalArgumentException e (ex-message e))))
-      (prn (io/resource "no/such/resource-e55.txt"))
+      (prn (io/resource "no/such/resource-jio.txt"))
     expected: |
       "http://u@h.com:81/p/a.txt?q=1#r" "http" "h.com" 81 "/p/a.txt" "/p/a.txt?q=1" "q=1" "r" "u@h.com:81" "u" 80
       "file" "" -1 "/tmp/x" "/tmp/x" nil
@@ -9575,3 +9579,44 @@ cases:
       "p/q" true false true (:make-input-stream :make-output-stream :make-reader :make-writer)
       ("one" "two")
       "read only"
+  - name: extend-takes-a-map-computed-at-run-time
+    # extend with a map the program computes -- clojure.java.io's default-streams-impl
+    # with one row replaced, a var's map, merge's and hash-map's -- stores each entry as
+    # a row, like a map literal's, and takes several protocol and map pairs; slurp and
+    # spit open a type extended to IOFactory through it. Oracle-identical (clj 1.12.6,
+    # 2026-10-08).
+    source: |
+      (defrecord JioSrc [s])
+      (extend JioSrc io/IOFactory (assoc io/default-streams-impl :make-input-stream (fn [x _] (io/input-stream (:s x)))))
+      (def jio-e (str jio-base "-e.txt"))
+      (spit jio-e "one\ntwo")
+      (with-open [r (io/reader (->JioSrc jio-e))] (prn (line-seq r)))
+      (prn (slurp (->JioSrc jio-e)))
+      (prn (try (io/output-stream (->JioSrc "x")) (catch IllegalArgumentException e (ex-message e)))
+           (try (io/writer (->JioSrc "y")) (catch IllegalArgumentException e (ex-message e))))
+      (def jio-coercions {:as-file (fn [x] (io/file (:s x))) :as-url (fn [_] nil)})
+      (extend JioSrc io/Coercions jio-coercions)
+      (prn (str (io/file (->JioSrc "a/b"))) (io/as-url (->JioSrc "c")) (satisfies? io/Coercions (->JioSrc "d")))
+      (defprotocol JioTwo (jio-one [x]) (jio-two [x y]))
+      (defn jio-one-impl [x] [:one x])
+      (extend String JioTwo (merge {:jio-one jio-one-impl} {:jio-two (fn [x y] [:two x y])}))
+      (extend Object JioTwo (hash-map :jio-one (fn [x] [:object x])))
+      (prn (jio-one "s") (jio-two "s" 2) (jio-one 1))
+      (extend Long JioTwo {:jio-one (fn [x] [:long x])} io/Coercions {:as-file (fn [n] (io/file (str n))) :as-url (fn [_] nil)})
+      (prn (jio-one 5) (str (io/file 7)))
+      (defrecord JioDst [path])
+      (extend JioDst io/IOFactory
+        (assoc io/default-streams-impl
+               :make-output-stream (fn [x opts] (io/output-stream (:path x) :append (:append opts)))))
+      (spit (->JioDst jio-e) "a")
+      (spit (->JioDst jio-e) "b" :append true)
+      (prn (slurp jio-e))
+      (io/delete-file jio-e)
+    expected: |
+      ("one" "two")
+      "one\ntwo"
+      "Cannot open <#user.JioSrc{:s \"x\"}> as an OutputStream." "Cannot open <#user.JioSrc{:s \"y\"}> as an OutputStream."
+      "a/b" nil true
+      [:one "s"] [:two "s" 2] [:object 1]
+      [:long 5] "7"
+      "ab"

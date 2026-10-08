@@ -440,9 +440,8 @@ class ClojureInteropTest {
 		// oracle-identical (clj 1.12.6, 2026-10-08): a File clojure.java.io makes is a
 		// java.io.File to a Java member -- an argument (Objects/toString, compareTo), the
 		// receiver of a member the namespace leaves to the host (toPath) -- and a host
-		// File
-		// a member answers is a File to slurp, spit, the namespace's functions and a
-		// protocol extended to java.io.File
+		// File a member answers is a File to slurp, spit, the namespace's functions and
+		// a protocol extended to java.io.File
 		assertBothEqual("(def f (clojure.java.io/file \"a/b.txt\"))"
 				+ " (prn (str (.toPath f)) (str (.getFileName (.toPath f))) (java.util.Objects/toString f))"
 				+ " (prn (.compareTo (.getParentFile (java.io.File/createTempFile \"jio\" \".tmp\"))"

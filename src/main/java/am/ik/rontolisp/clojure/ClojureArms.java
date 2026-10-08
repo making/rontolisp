@@ -508,10 +508,11 @@ public final class ClojureArms {
 		 * stream, a character stream the namespace made over one -- which the printer,
 		 * {@code str}, {@code =}, the hash, {@code class}, {@code instance?}, a
 		 * protocol's dispatch, {@code slurp}, {@code spit}, {@code line-seq} and an
-		 * instance call read: only the namespace's kernels and the lowering's
+		 * instance call read, and any value {@code slurp} and {@code spit} open through
+		 * the loaded namespace: only the namespace's kernels and the lowering's
 		 * {@code java.io} constructions make one ({@link ClojureIoLowering#PRODUCERS}).
 		 */
-		IO("io-value", Set.of(ClojureIoLowering.IO_P, ClojureIoLowering.IO_INSTANCE_P),
+		IO("io-value", Set.of(ClojureIoLowering.IO_P, ClojureIoLowering.IO_INSTANCE_P, ClojureIoLowering.OPENABLE_P),
 				Set.of(ClojureIoLowering.HOST_VIEW), Map.of(), ClojureIoLowering.PRODUCERS, Set.of()),
 
 		/**

@@ -268,18 +268,20 @@ class ClojureArmsTest {
 	@Test
 	void theIoFamilyIsMadeByClojureJavaIoAndFoldsTheArmsOfAProgramMakingNone() {
 		// only the namespace's kernels and the java.io constructions make a File, a URL
-		// or
-		// a byte stream: an instance call's arm, a java: argument's view, class's and
-		// instance?'s arms go from a program making none
+		// or a byte stream: an instance call's arm, a java: argument's view, class's and
+		// instance?'s arms, and slurp's opening through the namespace go from a program
+		// making none
 		List<LispVal> forms = read("(let ((r x)) (if (rontolisp::%clojure-io-p r) (rontolisp::%clojure-io-m-close r)"
 				+ " (close r)))" + " (java:call o \"m\" (rontolisp::%clojure-io-host v))"
 				+ " (or (rontolisp::%clojure-io-instance-p v \"java.io.File\") (stringp v))"
-				+ " (cond ((rontolisp::%clojure-io-p c) (rontolisp::%clojure-io-class-key c)) (t :other))");
+				+ " (cond ((rontolisp::%clojure-io-p c) (rontolisp::%clojure-io-class-key c)) (t :other))"
+				+ " (if (rontolisp::%clojure-io-openable-p s) (rontolisp::%clojure-io-slurp s nil) (open-path s))");
 		ClojureArms.Scan scan = ClojureArms.scan(forms, ClojureArms.Family.IO);
 		assertThat(scan.builds()).isFalse();
 		assertThat(scan.strips()).isTrue();
-		assertThat(ClojureArms.strip(forms, ClojureArms.Family.IO).stream().map(LispVal::print))
-			.containsExactly("(LET ((R X)) (CLOSE R))", "(JAVA:CALL O \"m\" V)", "(STRINGP V)", "(COND (T :OTHER))");
+		assertThat(ClojureArms.strip(forms, ClojureArms.Family.IO).stream().map(LispVal::print)).containsExactly(
+				"(LET ((R X)) (CLOSE R))", "(JAVA:CALL O \"m\" V)", "(STRINGP V)", "(COND (T :OTHER))",
+				"(OPEN-PATH S)");
 		for (String producer : List.of("(rontolisp::%clojure-io-file \"a\")", "(rontolisp::%clojure-io-file-2 p c)",
 				"(rontolisp::%clojure-io-open-input x)", "(rontolisp::%clojure-io-url-found \"file:/a\" \"t\")")) {
 			assertThat(ClojureArms.scan(read(producer), ClojureArms.Family.IO).builds()).as(producer).isTrue();

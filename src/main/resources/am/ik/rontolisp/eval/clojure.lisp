@@ -595,9 +595,10 @@
    request :body), read to its end and closed, like the oracle's with-open. A
    second close, the with-open that opened it or the transport that made it,
    does nothing."
-  (if (rontolisp::%clojure-io-p source)
-      ;; a File, a URL, a byte stream or a reader clojure.java.io made: an arm a
-      ;; program making none folds
+  (if (rontolisp::%clojure-io-openable-p source)
+      ;; a File, a URL, a byte stream or a reader clojure.java.io made, or once
+      ;; the namespace has loaded anything but a path: an arm a program making
+      ;; none folds
       (rontolisp::%clojure-io-slurp source nil)
       (if (rontolisp::%clojure-async-stream-p source)
           (rontolisp::%clojure-async-stream-text source)
@@ -5397,6 +5398,19 @@
   (rontolisp::%clojure-check-arity args 3 3 "reduce-kv")
   (rontolisp::%clojure-reduce-kv (rontolisp::%clojure-as-fn (car args))
                                  (car (cdr args)) (car (cdr (cdr args)))))
+
+(defun rontolisp::%clojure-extend-rows (store mmap methods)
+  "extend's rows from MMAP, a map of method functions the program computed:
+   STORE called with each entry whose key is the keyword of one of METHODS (the
+   protocol's method names) and its function; any other entry is never looked
+   up, as in the oracle, so none is stored. Answers nil, like the oracle's
+   extend."
+  (dolist (e (rontolisp::%clojure-kv-pairs mmap "extend"))
+    (let ((k (car e)))
+      (if (and (rontolisp::%clojure-keyword-p k)
+               (member (car (cdr k)) methods :test #'equal))
+          (funcall store k (rontolisp::%clojure-as-fn (cdr e))))))
+  nil)
 
 ;; update-keys and update-vals of an M reducing through its own IKVReduce row
 ;; build the fresh map through that reduction, the oracle's reduce-kv into an
@@ -13804,6 +13818,11 @@
 
 (defvar rontolisp::%clojure-io-streams nil)
 
+;; clojure.java.io's reader and writer, (reader . writer), once the namespace
+;; has loaded: what slurp and spit open a value no path names through, as the
+;; oracle's slurp and spit call them.
+(defvar rontolisp::%clojure-io-factory nil)
+
 ;; The text of each resource the lowering found, by its URL's spelling: a jar's
 ;; entry travels with the program here, which no wasm backend could open. NIL
 ;; until the first one is made.
@@ -13833,6 +13852,16 @@
       (if rontolisp::%clojure-io-streams
           (if (%obj-is x '%stream)
               (if (gethash x rontolisp::%clojure-io-streams) t nil)))))
+
+;; Whether slurp or spit opens X through clojure.java.io rather than as a path:
+;; a value of the namespace, or -- once it has loaded (%clojure-io-install) --
+;; anything but a path string, which its reader or writer opens or refuses in
+;; the oracle's words, a type a program extended IOFactory to included. An arm
+;; test of the io family, like %clojure-io-p.
+(defun rontolisp::%clojure-io-openable-p (x)
+  (if (rontolisp::%clojure-io-p x)
+      t
+      (if rontolisp::%clojure-io-factory (not (stringp x)))))
 
 (defun rontolisp::%clojure-io-kind (x)
   "X's clojure.java.io kind: its wrapper tag, :READER or :WRITER for a
@@ -14611,8 +14640,8 @@
                    (concatenate 'string "Can not write to non-file URL <"
                                 (car (cdr x)) ">")))
                  (t (rontolisp::%clojure-unsupported-operation-exception
-                     (concatenate 'string "reading a " (car parts)
-                                  ": URL is not built in"))))))
+                     (concatenate 'string "reading the " (car parts) ": URL "
+                                  (car (cdr x)) " is not built in"))))))
         ((and (consp x) (eq (car x) :C%URI))
          (rontolisp::%clojure-io-target (rontolisp::%clojure-io-uri-url x)
                                         for-write))
@@ -14845,22 +14874,48 @@
 
 ;;;; slurp, spit and line-seq of a clojure.java.io value
 
+(defun rontolisp::%clojure-io-install (reader writer)
+  "Makes clojure.java.io's READER and WRITER what slurp and spit open a value
+   no path names through (%clojure-io-openable-p). Answers nil."
+  (setq rontolisp::%clojure-io-factory (cons reader writer))
+  nil)
+
+(defun rontolisp::%clojure-io-factory-open (x for-write appending encoding)
+  "A reader over X (a writer under FOR-WRITE) from clojure.java.io's reader
+   (writer), handed the options slurp (spit) was: :append under APPENDING,
+   :encoding when ENCODING is given. Nil before the namespace has loaded."
+  (let ((f rontolisp::%clojure-io-factory) (opts nil))
+    (if f
+        (progn
+          (if encoding (setq opts (list (list :C%KEYWORD "encoding") encoding)))
+          (if (rontolisp::%clojure-truthy appending)
+              (setq opts (cons (list :C%KEYWORD "append") (cons t opts))))
+          (apply (if for-write (cdr f) (car f)) x opts)))))
+
 (defun rontolisp::%clojure-io-slurp (x encoding)
-  "slurp of the clojure.java.io value X (or a path, with an :encoding): the
-   whole of what a reader over it reads, the reader closed."
-  (let ((r (rontolisp::%clojure-io-open-reader x encoding)))
+  "slurp of the clojure.java.io value X (or a path, with an :encoding, or
+   anything once the namespace has loaded): the whole of what a reader over it
+   reads, the reader closed."
+  (let ((r
+         (or (rontolisp::%clojure-io-open-reader x encoding)
+             (rontolisp::%clojure-io-factory-open x nil nil encoding))))
     (if (null r)
         (rontolisp::%clojure-illegal-argument-exception
          (concatenate 'string "Cannot open <"
                       (rontolisp::%clojure-str-of x "nil" t) "> as a Reader."))
-        (let ((text (rontolisp::%clojure-read-to-end r)))
+        (let ((text
+               (rontolisp::%clojure-read-to-end
+                (rontolisp::%clojure-open-reader r))))
           (rontolisp::%clojure-io-close-stream r)
           text))))
 
 (defun rontolisp::%clojure-io-spit (x content append encoding)
-  "spit to the clojure.java.io value X (or a path, with an :encoding): the str
-   spelling of CONTENT written through a writer over it, closed after."
-  (let ((w (rontolisp::%clojure-io-open-writer x append encoding)))
+  "spit to the clojure.java.io value X (or a path, with an :encoding, or
+   anything once the namespace has loaded): the str spelling of CONTENT written
+   through a writer over it, closed after."
+  (let ((w
+         (or (rontolisp::%clojure-io-open-writer x append encoding)
+             (rontolisp::%clojure-io-factory-open x t append encoding))))
     (if (null w)
         (rontolisp::%clojure-illegal-argument-exception
          (concatenate 'string "Cannot open <"

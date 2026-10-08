@@ -138,3 +138,7 @@
   class loader given is not consulted."
   ([n] (k/resource n))
   ([n _loader] (k/resource n)))
+
+;; slurp and spit open what no path names through reader and writer, as the
+;; oracle's do: a type a program extends IOFactory to included
+(k/install reader writer)
