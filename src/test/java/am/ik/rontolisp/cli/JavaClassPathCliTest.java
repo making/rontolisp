@@ -9,6 +9,7 @@ import java.nio.file.Path;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.function.Function;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
 
@@ -36,10 +37,14 @@ class JavaClassPathCliTest {
 	Path tempDir;
 
 	private String runCli(String... args) {
-		return runCli(null, args);
+		return runCli((MavenResolver) null, args);
 	}
 
 	private String runCli(@Nullable MavenResolver resolver, String... args) {
+		return runCli(resolver != null ? repositories -> resolver : null, args);
+	}
+
+	private String runCli(@Nullable Function<List<RemoteRepository>, MavenResolver> resolver, String... args) {
 		ByteArrayOutputStream out = new ByteArrayOutputStream();
 		RontoLispCli cli = new RontoLispCli(new ByteArrayInputStream(new byte[0]), new PrintStream(out));
 		if (resolver != null) {
@@ -154,6 +159,73 @@ class JavaClassPathCliTest {
 	}
 
 	@Test
+	void repositoriesGivenSearchAfterCentralInTheOrderGiven() throws Exception {
+		// Central is not reachable from a test: the factory sees the list the CLI built
+		// and searches what follows it.
+		List<List<RemoteRepository>> seen = new java.util.ArrayList<>();
+		Path repo = fixtureRepository();
+		Function<List<RemoteRepository>, MavenResolver> factory = repositories -> {
+			seen.add(repositories);
+			return MavenResolver.builder()
+				.localRepository(this.tempDir.resolve("local"))
+				.repositories(repositories.subList(1, repositories.size()))
+				.systemProperties(Map.of())
+				.build();
+		};
+		Path program = program("prog.lisp",
+				"(print (java:static \"fixture.app.App\" \"hello\"))\n" + JavaLibraryJar.LIBRARY_PROGRAM);
+		String url = repo.toUri().toString();
+		assertThat(printed(runCli(factory, program.toString(), "--java-dep", "test.fixture:fixture-app:1.0",
+				"--java-dep", "test.fixture:fixture-lib:1.0", "--java-repository",
+				"empty=" + this.tempDir.resolve("nothing").toUri(), "--java-repository", url)))
+			.isEqualTo("\"app\"\n" + JavaLibraryJar.LIBRARY_OUTPUT);
+		assertThat(seen).hasSize(1);
+		assertThat(seen.get(0)).extracting(RemoteRepository::id)
+			.containsExactly("central", "empty", "java-repository-2");
+		assertThat(seen.get(0).get(2).url()).isEqualTo(url);
+	}
+
+	@Test
+	void anIdNamedCentralReplacesCentralsUrl() {
+		List<RemoteRepository> all = JavaClassPath
+			.repositories(List.of(new RemoteRepository("central", "https://mirror.example/maven2/"),
+					new RemoteRepository("clojars", RemoteRepository.CLOJARS.url())));
+		assertThat(all).extracting(RemoteRepository::id).containsExactly("central", "clojars");
+		assertThat(all.get(0).url()).isEqualTo("https://mirror.example/maven2/");
+		assertThat(JavaClassPath.repositories(List.of())).containsExactly(RemoteRepository.CENTRAL);
+	}
+
+	@Test
+	void aRepositoryUrlWithAnEqualsSignAndNoIdKeepsItsUrl() throws Exception {
+		Path program = program("prog.lisp", "(print 1)\n");
+		List<List<RemoteRepository>> seen = new java.util.ArrayList<>();
+		String url = "https://repo.example/maven?x=1";
+		assertThatThrownBy(() -> runCli(repositories -> {
+			seen.add(repositories);
+			throw new IllegalStateException("stop");
+		}, program.toString(), "--java-dep", "a:b:1", "--java-repository", url))
+			.isInstanceOf(IllegalStateException.class);
+		assertThat(seen.get(0).get(1)).isEqualTo(new RemoteRepository("java-repository-1", url));
+	}
+
+	@Test
+	void aMalformedRepositoryIsRefusedByName() throws Exception {
+		Path program = program("prog.lisp", "(print 1)\n");
+		assertThatThrownBy(
+				() -> runCli(program.toString(), "--java-dep", "a:b:1", "--java-repository", "ftp://host/repo"))
+			.isInstanceOf(IllegalArgumentException.class)
+			.hasMessageContaining("--java-repository")
+			.hasMessageContaining("ftp://host/repo");
+		assertThatThrownBy(() -> runCli(program.toString(), "--java-dep", "a:b:1", "--java-repository", "x=file:/a",
+				"--java-repository", "x=file:/b"))
+			.isInstanceOf(IllegalArgumentException.class)
+			.hasMessageContaining("'x' is given twice");
+		assertThatThrownBy(() -> runCli(program.toString(), "--java-repository", "file:/a"))
+			.isInstanceOf(IllegalArgumentException.class)
+			.hasMessageContaining("needs a --java-dep");
+	}
+
+	@Test
 	void aLibraryJarNamesItsCoordinatesAndCarriesNoClassPath() throws Exception {
 		MavenResolver resolver = fixtureResolver();
 		Path program = program("lib.lisp", """
@@ -233,6 +305,15 @@ class JavaClassPathCliTest {
 	 * library jar.
 	 */
 	private MavenResolver fixtureResolver() throws Exception {
+		Path repo = fixtureRepository();
+		return MavenResolver.builder()
+			.localRepository(this.tempDir.resolve("local"))
+			.repositories(List.of(new RemoteRepository("fixture", repo.toUri().toString())))
+			.systemProperties(Map.of())
+			.build();
+	}
+
+	private Path fixtureRepository() throws Exception {
 		Path repo = this.tempDir.resolve("repo");
 		Path libJar = JavaLibraryJar.build(Files.createDirectories(this.tempDir.resolve("build-lib")));
 		Path appJar = JavaLibraryJar.build(Files.createDirectories(this.tempDir.resolve("build-app")), "app.jar",
@@ -252,11 +333,7 @@ class JavaClassPathCliTest {
 						</dependencies>
 						""",
 				appJar);
-		return MavenResolver.builder()
-			.localRepository(this.tempDir.resolve("local"))
-			.repositories(List.of(new RemoteRepository("fixture", repo.toUri().toString())))
-			.systemProperties(Map.of())
-			.build();
+		return repo;
 	}
 
 	private static void publish(Path repo, String artifactId, String version, String dependencies, @Nullable Path jar)
