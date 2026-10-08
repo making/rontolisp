@@ -28,6 +28,7 @@ has them.
 | [clojure.datafy](reference/clojure-datafy.md) | Values as data and navigation from data: `datafy`/`nav` over the `clojure.core.protocols` protocols |
 | [clojure.edn](reference/clojure-edn.md) | Reading EDN data: `read-string`/`read` with `:eof`, `:readers` and `:default` |
 | [clojure.pprint](reference/clojure-pprint.md) | Pretty printing: `pprint`/`write` within a right margin, `print-table`, `code-dispatch` for code, and the dispatch a program extends or replaces |
+| [clojure.stacktrace](reference/clojure-stacktrace.md) | Printing throwables and their causes: `root-cause`, `print-throwable`, `print-stack-trace`, `print-cause-trace` |
 | [clojure.template](reference/clojure-template.md) | Expression templates: `apply-template`, `do-template` |
 | [clojure.walk](reference/clojure-walk.md) | Generic traversal of nested data: `walk`/`postwalk`/`prewalk`, the `-replace` pair, `keywordize-keys`/`stringify-keys` |
 | [clojure.zip](reference/clojure-zip.md) | Functional tree editing with zippers: `vector-zip`/`seq-zip`/`xml-zip`, moves, edits and the depth-first walk |

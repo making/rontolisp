@@ -134,7 +134,7 @@ answered `2 5 3` before).
 | `clojure.edn` (`read-string` `read`) | `ClojureEdnLowering`: one call to `rontolisp::%clojure-edn-read-string-1` / `-read-string` / `-read` after a lower-time arity check in the oracle's wording; as a value `#'...-v` | "Reading", clojure.edn |
 | `clojure.walk` | Clojure source in the jar written for this front end, loaded like a project file (a startup namespace: on its first qualified name too) | "clojure.jar namespaces" |
 | `clojure.template` | the same, loaded at its `require` | "clojure.jar namespaces" |
-| `clojure.data` `clojure.zip` `clojure.datafy` | the same, loaded at its `require` | "clojure.jar namespaces" |
+| `clojure.data` `clojure.zip` `clojure.datafy` `clojure.stacktrace` | the same, loaded at its `require` | "clojure.jar namespaces" |
 | `clojure.core.protocols` | the same, a startup namespace like `clojure.walk` | "clojure.jar namespaces" |
 | `clojure.pprint` | the same; its layout engine is `rontolisp.internal.pprint/NAME`, one call to `rontolisp::%clojure-pp-NAME` (`ClojureKernelLowering`) | "clojure.jar namespaces" |
 | `subs`, `.substring` | `%clojure-subs`, the refusal family's alias of `subseq` ("Refusals") | a bound outside a string is the oracle's `StringIndexOutOfBoundsException` where a class is read; a double or ratio bound is truncated (`%clojure-string-bound`), a non-number one is refused as the oracle does ("Refusals") |
@@ -1321,7 +1321,7 @@ function and a directive must be a top-level form.
 end** (`src/main/resources/am/ik/rontolisp/clojure/lib/clojure/**`, the
 `ClojureBuiltinNamespaces` mechanism of "Ring util namespaces"): `clojure.walk`,
 `clojure.template`, `clojure.pprint`, `clojure.data`, `clojure.zip`, `clojure.core.protocols`,
-`clojure.datafy`.
+`clojure.datafy`, `clojure.stacktrace`.
 - **Licensing**: clojure.jar is EPL-1.0, this project Apache-2.0, so nothing of it is
   copied -- no code, no docstring. Each file is written from the documented behaviour and
   diffed against the oracle; a one-line var dictated by its contract
@@ -1442,11 +1442,19 @@ end** (`src/main/resources/am/ik/rontolisp/clojure/lib/clojure/**`, the
   `rontolisp.internal.datafy/class-name-of`, i.e. `%clojure-class-name-of`, the oracle's
   class names `%clojure-no-method` already spelled (now shared), since `class` answers a
   kind keyword.
+- `clojure.stacktrace`: `print-throwable` spells the class as `(name (class tr))` (`class`
+  of a throwable is its class-name keyword here) and a nil message `null` like the
+  oracle's `printf`. A throwable has no frames (`.getStackTrace` answers `[]`), so
+  `print-stack-trace` prints ` at [empty stack trace]`: pinned as a deviation by
+  clojure-spec `clojure-stacktrace-prints-no-frames`; `print-trace-element` is the oracle's
+  over a host `StackTraceElement` (interpreter and JVM,
+  `ClojureInteropTest#printTraceElementSpellsAHostStackTraceElementLikeTheOracle`).
 - Pins: clojure-spec `clojure-walk-*` (all four backends, oracle-identical, the first
   case loading `clojure.walk` through a qualified name only),
   `clojure-template-substitutes-per-group-of-values`, `clojure-pprint-*`,
   `clojure-data-diff-compares-like-the-oracle`, `clojure-zip-moves-and-edits-like-the-oracle`,
   `clojure-datafy-and-core-protocols-like-the-oracle`,
+  `clojure-stacktrace-prints-throwables-like-the-oracle`,
   `ClojureLanguageNamespacesTest` (the startup load, a project file never shadowing a
   startup namespace, a contrib `clojure.*` namespace on the source path, the refusal of
   one not built in).
