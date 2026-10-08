@@ -7,7 +7,8 @@ Defines a function. The multi-arity spelling is one clause per arity plus a disp
 the argument count; a single variadic clause (`&` rest) takes any count past its fixed
 parameters, and any other count signals (`wrong number of arguments passed to: f`). At
 most one variadic clause and one clause per arity. Parameters destructure, vector and map
-patterns alike. The name lowers to a direct call, so recursion is a call, not a value
+patterns alike; a map pattern after `&` takes keyword arguments, as pairs or one map
+([seq-to-map-for-destructuring](seq-to-map-for-destructuring.md)). The name lowers to a direct call, so recursion is a call, not a value
 lookup; a head-position use of a *value* binding (a `def`, a parameter) is the funcall
 instead. A `recur` in the body jumps back to the enclosing clause with new argument
 values.

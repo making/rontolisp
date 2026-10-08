@@ -8422,54 +8422,74 @@
         (t (rontolisp::%clojure-truthy
             (funcall (rontolisp::%clojure-interface-entry a "equals") a b)))))
 
+;;;; Keyword arguments: a map pattern reads a seq as the map its key-value pairs
+;;;; stand for, like the oracle's destructure (Clojure 1.11+).
+
+(defun rontolisp::%clojure-seq-to-map-for-destructuring (s)
+  "seq-to-map-for-destructuring: the map the keyword arguments S stand for,
+   like the oracle's. Two members or more are key-value pairs, the last of a
+   key winning, an odd last one conj'd onto them like onto a map; one member
+   is that member itself; none the empty map."
+  (let ((items (rontolisp::%clojure-realize-all s)))
+    (cond ((null items) (make-hash-table :test 'equal))
+          ((null (cdr items)) (car items))
+          (t (let ((pairs nil) (p items))
+               (do ()
+                   ((or (null p) (null (cdr p))))
+                 (setq pairs (cons (car (cdr p)) (cons (car p) pairs)))
+                 (setq p (cdr (cdr p))))
+               (rontolisp::%clojure-plist-table
+                nil
+                (append (reverse pairs)
+                        (if p
+                            (rontolisp::%clojure-merge-entry-plist (car p))
+                            nil))))))))
+
+(defun rontolisp::%clojure-seq-to-map-for-destructuring-v (&rest args)
+  "seq-to-map-for-destructuring as a value."
+  (rontolisp::%clojure-check-arity args 1 1 "seq-to-map-for-destructuring")
+  (rontolisp::%clojure-seq-to-map-for-destructuring (car args)))
+
+(defun rontolisp::%clojure-destructure-map (x)
+  "The value a map pattern reads from X: a seq (seq?) is the map its keyword
+   arguments stand for (%clojure-seq-to-map-for-destructuring), anything else
+   X itself, like the oracle's destructure."
+  (if (rontolisp::%clojure-is-seq x)
+      (rontolisp::%clojure-seq-to-map-for-destructuring x)
+      x))
+
 ;;;; clojure.core/iteration: a reify implementing Seqable and IReduceInit over a
 ;;;; step function, like the oracle's. Its rows are stored through the families'
 ;;;; stores, so its constructor is a producer of the seqable and reduce-interface
 ;;;; families (clojure/ClojureArms).
 
-(defun rontolisp::%clojure-iteration-option (args key dflt)
-  "The option KEY (a keyword) of iteration's option arguments ARGS, DFLT when
-   none names it, read like the oracle's destructuring of them: one argument
-   is the options map itself, more are key-value pairs (the last of a key
-   wins) and an odd last one is conj'd onto them like onto a map."
-  (if (null (cdr args))
-      (rontolisp::%clojure-call-keyword key (car args) dflt)
-      (let ((found dflt))
-        (do ((p args (cdr (cdr p))))
-            ((null p) found)
-          (if (null (cdr p))
-              (do ((q
-                    (rontolisp::%clojure-merge-entry-plist (car p))
-                    (cdr (cdr q))))
-                  ((null q))
-                (if (equal (car q) key) (setq found (car (cdr q)))))
-              (if (equal (car p) key) (setq found (car (cdr p)))))))))
-
-(defun rontolisp::%clojure-iteration-fn (args key dflt)
-  "The function option KEY (a keyword) of ARGS as a real function, DFLT when
-   none names it. A value given, nil included, is called as an IFn, so a
-   keyword or a set serves and nil fails when called, like the oracle's."
+(defun rontolisp::%clojure-iteration-fn (opts key dflt)
+  "The function option KEY (a keyword) of the options map OPTS as a real
+   function, DFLT when none names it. A value given, nil included, is called
+   as an IFn, so a keyword or a set serves and nil fails when called, like the
+   oracle's."
   (let* ((absent (list nil))
-         (f (rontolisp::%clojure-iteration-option args key absent)))
+         (f (rontolisp::%clojure-call-keyword key opts absent)))
     (if (eq f absent) dflt (rontolisp::%clojure-as-fn f))))
 
 (defun rontolisp::%clojure-iteration (step args)
   "(iteration step & opts): a reify implementing Seqable and IReduceInit over
-   the real function STEP, the options read from ARGS
-   (%clojure-iteration-option) with the oracle's defaults: :somef some?, :vf
+   the real function STEP, the options the keyword arguments ARGS
+   (%clojure-destructure-map) with the oracle's defaults: :somef some?, :vf
    and :kf identity, :initk nil."
-  (let ((somef
-         (rontolisp::%clojure-iteration-fn args '(:c%keyword "somef")
-                                           (lambda (x) (not (null x)))))
-        (vf
-         (rontolisp::%clojure-iteration-fn args '(:c%keyword "vf")
-                                           (lambda (x) x)))
-        (kf
-         (rontolisp::%clojure-iteration-fn args '(:c%keyword "kf")
-                                           (lambda (x) x)))
-        (initk
-         (rontolisp::%clojure-iteration-option args '(:c%keyword "initk") nil))
-        (self (list :c%reify (gensym "reify"))))
+  (let* ((opts (rontolisp::%clojure-destructure-map args))
+         (somef
+          (rontolisp::%clojure-iteration-fn opts '(:c%keyword "somef")
+                                            (lambda (x) (not (null x)))))
+         (vf
+          (rontolisp::%clojure-iteration-fn opts '(:c%keyword "vf")
+                                            (lambda (x) x)))
+         (kf
+          (rontolisp::%clojure-iteration-fn opts '(:c%keyword "kf")
+                                            (lambda (x) x)))
+         (initk
+          (rontolisp::%clojure-call-keyword '(:c%keyword "initk") opts nil))
+         (self (list :c%reify (gensym "reify"))))
     (rontolisp::%clojure-seqable-row (car (cdr self)) '("clojure.lang.Seqable")
                                      (list "seq"
                                            (lambda (x)

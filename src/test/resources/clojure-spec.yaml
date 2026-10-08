@@ -1223,6 +1223,36 @@ cases:
       5
       [1 2 3]
       42
+  - name: a-map-pattern-reads-a-seq-as-keyword-arguments
+    # A map pattern reads a seq (seq?) as the map its keyword arguments stand for
+    # (seq-to-map-for-destructuring): one member is the map itself, more are
+    # pairs with the last key winning and an odd last one conj'd like onto a
+    # map; a vector stays a vector. Until 2026-10-08 every keyword argument
+    # read nil. Oracle-identical (clj 1.12.6).
+    source: |
+      (defn kwa-f [x & {:keys [a b] :or {b 9}}] [x a b])
+      (prn (kwa-f 1 :a 2) (kwa-f 1 {:a 3}) (kwa-f 1 :a 2 :b 3) (kwa-f 1 :a 2 {:b 5}))
+      (prn (kwa-f 1) (kwa-f 1 :a 2 :a 4) (kwa-f 1 :a 2 [:b 6]) (apply kwa-f 1 (map identity [:a 7])))
+      (prn (try (kwa-f 1 :a 2 :b) (catch IllegalArgumentException e :illegal)))
+      (defn kwa-m [& {:as m}] m)
+      (prn (kwa-m) (kwa-m :a 1 :b 2) (kwa-m {:c 3}) (kwa-m :a 1 {:a 2}))
+      (prn (let [{:keys [a]} '(:a 1)] a) (let [{:keys [a]} [:a 1]] a) (let [{:as m} (list :a 1 :a 2)] m))
+      (prn (let [{:keys [a]} (lazy-seq (list :a 5))] a) (let [{:as m} (lazy-seq nil)] m))
+      (prn (seq-to-map-for-destructuring '(:a 1)) (seq-to-map-for-destructuring (list {:a 1})) (seq-to-map-for-destructuring ()))
+      (prn (map seq-to-map-for-destructuring [(list :k 1 :k 2) (list 7)]))
+      (prn (try (seq-to-map-for-destructuring (list :a 1 2)) (catch IllegalArgumentException e :illegal)))
+      (prn ((fn [& {:strs [s]}] s) "s" 1) (let [[x & {y :y}] [1 :y 2]] [x y]))
+    expected: |
+      [1 2 9] [1 3 9] [1 2 3] [1 2 5]
+      [1 nil 9] [1 4 9] [1 2 6] [1 7 9]
+      :illegal
+      nil {:a 1, :b 2} {:c 3} {:a 2}
+      1 nil {:a 2}
+      5 {}
+      {:a 1} {:a 1} {}
+      ({:k 2} 7)
+      :illegal
+      1 [1 2]
   - name: threading-threads-first-and-last
     source: |
       (println (-> 5 inc inc))

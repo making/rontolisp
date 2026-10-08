@@ -191,8 +191,10 @@ anonymous `fn`, a `defn` clause, a `letfn` entry or a `lazy-seq` body of arity 0
 destructure: a vector pattern binds positionally through the seq view (`&` the rest as a
 seq, itself a pattern; `:as` the whole), a map pattern through the table-aware read
 (`:keys`/`:syms`/`:strs`, explicit locals, `:as`, `:or` defaults) -- in `let`, `loop` and
-`fn`/`defn` parameters alike; nested patterns recurse. Malformed shapes are named
-refusals.
+`fn`/`defn` parameters alike; nested patterns recurse. A map pattern reads a seq as the map
+its keyword arguments stand for ([seq-to-map-for-destructuring](reference/seq-to-map-for-destructuring.md)),
+so `(defn f [& {:keys [a]}] a)` takes `(f :a 1)` and `(f {:a 1})`. Malformed shapes are
+named refusals.
 
 ## Macros
 

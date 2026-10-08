@@ -10,6 +10,7 @@ categories:
       - { slug: defn-dash, name: "defn-" }
       - { slug: fn, name: "fn" }
       - { slug: let, name: "let" }
+      - { slug: seq-to-map-for-destructuring, name: "seq-to-map-for-destructuring" }
       - { slug: letfn, name: "letfn" }
       - { slug: loop, name: "loop" }
       - { slug: recur, name: "recur" }
