@@ -1376,16 +1376,6 @@ public final class ClojureLowering {
 		if (!exported.isEmpty()) {
 			out.add(new ClojureTopLevel(exported, false));
 		}
-		if (!this.falseBound && !out.isEmpty()) {
-			// The session's first datum carries the false binding ahead of itself,
-			// like a file's first form; a buffer that failed to lower binds nothing.
-			ClojureTopLevel first = out.get(0);
-			List<LispVal> forms = new ArrayList<>();
-			forms.add(falseBinding());
-			forms.addAll(first.forms());
-			out.set(0, new ClojureTopLevel(List.copyOf(forms), first.echoes()));
-			this.falseBound = true;
-		}
 		List<LispVal> wrappers = ClojureWitLowering.referencedWrappers(this,
 				out.stream().flatMap(top -> top.forms().stream()).toList());
 		if (!wrappers.isEmpty()) {
@@ -1499,6 +1489,18 @@ public final class ClojureLowering {
 			if (registration != null) {
 				out.add(0, new ClojureTopLevel(List.of(registration), false));
 			}
+		}
+		if (!this.falseBound && !out.isEmpty()) {
+			// The session's first forms carry the false binding ahead of themselves,
+			// like a file's first form: ahead of the runtimes travelling with the
+			// buffer too, since a definition there may read it (a flag special's
+			// root is the false object). A buffer that failed to lower binds nothing.
+			ClojureTopLevel first = out.get(0);
+			List<LispVal> forms = new ArrayList<>();
+			forms.add(falseBinding());
+			forms.addAll(first.forms());
+			out.set(0, new ClojureTopLevel(List.copyOf(forms), first.echoes()));
+			this.falseBound = true;
 		}
 		return out;
 	}

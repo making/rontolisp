@@ -2552,6 +2552,12 @@ bracket counting over `()[]{}` (outside strings and comments) plus a reader prob
 trailing dispatch prefix. A buffer's `require` loads from the working directory's source
 path; an `ns` buffer echoes nothing; `*ns*` carries across buffers.
 
+The runtimes a buffer first needs (hierarchy, protocols, macros, specials, ...) travel ahead
+of it, and the false binding ahead of them all: a special's root may be the false object
+(`*print-meta*`), so a first buffer reading a print flag failed on an unbound
+`%clojure-false` until 2026-10-08
+(`ClojureSessionTest#theFalseBindingGoesAheadOfTheRuntimesOfTheFirstBuffer`).
+
 Each input's forms evaluate as one `(handler-bind ((error #'%clojure-repl-error))
 (%clojure-repl-result (progn FORMS...)))` (`ClojureLowering.evaluated`): the value rotates
 into `*1`/`*2`/`*3` (an `ns` input records nil, `(progn ... nil)`), a condition is stored as
