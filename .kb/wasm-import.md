@@ -245,7 +245,8 @@ load-path report says what actually RUNS and never follows one.
 `compiler/HostGlueEmitter` writes one ES module beside the `.wasm`. `WasmLispCompiler` builds a
 `HostGlueEmitter.Surface` from facts it already settled (parsed declarations, the helper exports
 the module carries, the same `SuspendingImports` answers) and `hostGlueJs(fileName)` emits from
-it; nothing is re-walked or read back out of the bytes.
+it; nothing is re-walked, and the one fact read back out of the bytes is which of the two host
+hooks survived the `--optimize` shake (`Surface.afterShake`, below).
 
 Emitted: the import object, the `(ptr, len)` staging of every memory-typed value in both
 directions, the `__ronto_alloc_mark`/`_reset` bracket with the result decoded BEFORE the pop, the
@@ -262,6 +263,12 @@ entry answering a promise is reported by name. Two facts beyond the directives: 
 `SuspendingImports.reaches` widened to the `FETCH` kind.
 
 ### Traps the generated file must avoid (none visible from a passing build)
+- **A host hook the shake dropped is not called** -- `__ronto_seed_random`/`__ronto_set_time` are
+  decided by the shake AFTER the surface is built (`.kb/wasm-export-no-wasi.md`), so
+  `WasmLispCompiler` narrows the surface to the exports of the shaken module. Calling a dropped
+  one threw at instantiate (every Worker request a 500; measured 2026-10-08 on
+  `examples/clojure/ring-hello.clj`, which reads a clock but draws nothing). Pinned by
+  `WasmHostGlueE2eTest.theGlueCallsOnlyTheHostHooksTheShakeKept`.
 - **An EXPORT never becomes a local** -- entry points are PROPERTIES; the two locals are
   `entry$name`/`make$name`, since an export called `call` or `bind` would make the file a
   `SyntaxError`. A name that is not a bare JS identifier is REFUSED with the alias to change.

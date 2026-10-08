@@ -469,6 +469,51 @@ class WasmHostGlueE2eTest {
 				"binary n=3 (255 254 65)", "relayed 200 image/jpeg exact", "superseded BBBBBB 300");
 	}
 
+	// Under --optimize the shake drops a host hook whose cell no surviving body reads
+	// (.kb/wasm-export-no-wasi.md), so the glue may call only the hooks that SURVIVED:
+	// one that calls a dropped hook throws at instantiate, and every request is a 500.
+	private static final String HOOKS_DRIVER = """
+			import { readFileSync } from "node:fs";
+			import { instantiate } from "./glue.js";
+
+			const module = new WebAssembly.Module(readFileSync(new URL("./glue.wasm", import.meta.url)));
+			const hooks = WebAssembly.Module.exports(module)
+			  .map((e) => e.name)
+			  .filter((n) => n.startsWith("__ronto_s"));
+			const lisp = instantiate(module, {});
+			console.log(hooks.join(",") || "none", typeof lisp.f(10));
+			""";
+
+	@Test
+	void theGlueCallsOnlyTheHostHooksTheShakeKept() throws Exception {
+		String fib = """
+				(defun f (n) (if (<= n 1) n (+ (f (- n 1)) (f (- n 2)))))
+				(rontolisp:wasm-export 'f :params '(:s32) :returns :s32)
+				""";
+		String draws = """
+				(defun f (n) (random n))
+				(rontolisp:wasm-export 'f :params '(:s32) :returns :s32)
+				""";
+		String clocks = """
+				(defun f (n) (mod (get-universal-time) n))
+				(rontolisp:wasm-export 'f :params '(:s32) :returns :s32)
+				""";
+		assertThat(runHooks(fib, OptimizeLevel.SIZE)).isEqualTo("none number");
+		assertThat(runHooks(draws, OptimizeLevel.SIZE)).isEqualTo("__ronto_seed_random number");
+		assertThat(runHooks(clocks, OptimizeLevel.SIZE)).isEqualTo("__ronto_set_time number");
+		assertThat(runHooks(fib, OptimizeLevel.NONE)).isEqualTo("__ronto_seed_random,__ronto_set_time number");
+	}
+
+	private String runHooks(String source, OptimizeLevel optimize) throws Exception {
+		WasmLispCompiler compiler = WasmLispCompiler.builder().noWasi(true).optimize(optimize).build();
+		Files.write(this.tempDir.resolve("glue.wasm"), compiler.compile(LispReader.readAllFromString(source)));
+		Files.writeString(this.tempDir.resolve("glue.js"),
+				java.util.Objects.requireNonNull(compiler.hostGlueJs("glue.js")), StandardCharsets.UTF_8);
+		Path driver = this.tempDir.resolve("hooks.mjs");
+		Files.writeString(driver, HOOKS_DRIVER, StandardCharsets.UTF_8);
+		return runNode(driver);
+	}
+
 	// The CLI's --no-wasi --host-fetch reactor pipeline, in its order.
 	private static List<LispVal> program() {
 		return program(MODULE);

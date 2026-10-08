@@ -324,4 +324,6 @@ contract itself is unchanged -- call the hook before `_initialize` -- it just st
 modules that have nothing to seed. Pinned by
 `WasmExportCompilerTest.anOptimizedModuleDropsTheHostHooksItsProgramCannotUse` (a program that draws
 keeps only the seed hook, one that reads a clock only the clock hook, `--optimize=off` keeps both)
-and `WasmTreeShakerTest.dropsAHostCellHookNoOtherSurvivorReads`.
+and `WasmTreeShakerTest.dropsAHostCellHookNoOtherSurvivorReads`. The `--emit-js-glue` surface follows the
+surviving exports (`HostGlueEmitter.Surface.afterShake`): glue built before the shake called a
+dropped hook and threw at instantiate (`WasmHostGlueE2eTest.theGlueCallsOnlyTheHostHooksTheShakeKept`).

@@ -79,6 +79,12 @@ public final class HostGlueEmitter {
 	public record Export(String exportName, List<BoundaryType> paramTypes, BoundaryType returnType, boolean promising) {
 	}
 
+	/** The {@code --no-wasi} entropy hook a host calls before {@code _initialize}. */
+	public static final String SEED_RANDOM_EXPORT = "__ronto_seed_random";
+
+	/** The {@code --no-wasi} clock hook a host calls before {@code _initialize}. */
+	public static final String SET_TIME_EXPORT = "__ronto_set_time";
+
 	/**
 	 * A module's whole host-facing surface: the derived facts this emitter writes from,
 	 * computed once by the backend that also prints the obligation lines.
@@ -140,6 +146,20 @@ public final class HostGlueEmitter {
 				return unique;
 			});
 			return groups;
+		}
+
+		/**
+		 * This surface after the tree shake: a host hook the shake dropped (its cell is
+		 * read by no surviving body, {@code WasmTreeShaker.HostCellHook}) is no longer an
+		 * export, so the glue must not call it -- the call would throw at instantiation.
+		 * @param exportNames the export names of the module as it is finally written
+		 * @return the surface with each hook kept only where its export survived
+		 */
+		public Surface afterShake(Set<String> exportNames) {
+			return new Surface(this.imports, this.entropy, this.exports, this.arena,
+					this.seedRandom && exportNames.contains(SEED_RANDOM_EXPORT),
+					this.setTime && exportNames.contains(SET_TIME_EXPORT), this.initExport, this.derivedFetch,
+					this.envelopeExport, this.reentrant);
 		}
 
 		/** Whether the HOST has to supply anything -- the entropy entry it never does. */

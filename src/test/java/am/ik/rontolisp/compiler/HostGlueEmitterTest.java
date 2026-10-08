@@ -45,7 +45,10 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  * covers nine directories: the same reactor shape declares the same imports and the same
  * {@code handle-request} export, so it emits the same file byte for byte. That is
  * asserted rather than assumed -- every directory in a family is pinned against the one
- * derived string. (Verified: each example's own build writes its file unchanged.)
+ * derived string. (Verified: each example's own build writes its file unchanged.) The one
+ * fact beyond the declarations is which host hooks survive {@code --optimize}; every
+ * example here both draws and reads the clock, so it keeps both, as these unoptimized
+ * builds do.
  *
  * <p>
  * {@code examples/cloudflare-workers/httpbin} is deliberately absent: it writes its

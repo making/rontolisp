@@ -8368,7 +8368,8 @@ public final class WasmLispCompiler implements LispCompiler {
 					// replaces it here. An EXPORT, not an import: an import would cost
 					// the module its instantiate-with-nothing contract.
 					if (seedRandom) {
-						exports.addExport("__ronto_seed_random", ExternalKind.FUNCTION, seedRandomFuncIndex);
+						exports.addExport(HostGlueEmitter.SEED_RANDOM_EXPORT, ExternalKind.FUNCTION,
+								seedRandomFuncIndex);
 					}
 					// The host's clock hook, the same move for the one service a module
 					// with no imports cannot answer on its own: the host writes the time
@@ -8376,7 +8377,7 @@ public final class WasmLispCompiler implements LispCompiler {
 					// built-ins report it. Until it is called they signal, because a
 					// zero cell names 1970 rather than reporting "no time".
 					if (setTime) {
-						exports.addExport("__ronto_set_time", ExternalKind.FUNCTION, setTimeFuncIndex);
+						exports.addExport(HostGlueEmitter.SET_TIME_EXPORT, ExternalKind.FUNCTION, setTimeFuncIndex);
 					}
 					// Host-callable Lisp functions requested via (rontolisp:wasm-export
 					// ...), each under its :as alias (default: the Lisp name).
@@ -9071,8 +9072,8 @@ public final class WasmLispCompiler implements LispCompiler {
 		// a build that exports neither has nothing to decide. See
 		// .kb/wasm-export-no-wasi.md.
 		List<am.ik.wasm.WasmTreeShaker.HostCellHook> hostCellHooks = List.of(
-				new am.ik.wasm.WasmTreeShaker.HostCellHook("__ronto_seed_random", RANDOM_STATE_ADDR),
-				new am.ik.wasm.WasmTreeShaker.HostCellHook("__ronto_set_time", HOST_TIME_ADDR));
+				new am.ik.wasm.WasmTreeShaker.HostCellHook(HostGlueEmitter.SEED_RANDOM_EXPORT, RANDOM_STATE_ADDR),
+				new am.ik.wasm.WasmTreeShaker.HostCellHook(HostGlueEmitter.SET_TIME_EXPORT, HOST_TIME_ADDR));
 		@Nullable Map<Integer, String> funcSizeNames = debugFuncSizes()
 				? funcSizeNames(functions, lambdaDecls, dispatchPageFuncBase, dispatchPageBodies.size()) : null;
 		if (this.component) {
@@ -9158,8 +9159,15 @@ public final class WasmLispCompiler implements LispCompiler {
 			return WasmComponentBuilder.build(coreModule, componentExportDecls, componentImports, narrowing);
 		}
 		if (this.optimize.eliminatesDeadCode()) {
-			return shakeCore(coreModule, caseFoldSegments, stringRanges, hostCellHooks, funcSizeNames,
+			byte[] shaken = shakeCore(coreModule, caseFoldSegments, stringRanges, hostCellHooks, funcSizeNames,
 					hostImports.size());
+			// The glue was built before the shake decided the hooks: it may call only the
+			// ones that survived.
+			HostGlueEmitter.Surface surface = this.hostGlue;
+			if (surface != null) {
+				this.hostGlue = surface.afterShake(am.ik.wasm.WasmExports.names(shaken));
+			}
+			return shaken;
 		}
 		if (funcSizeNames != null) {
 			dumpFuncSizes(coreModule, funcSizeNames, hostImports.size(),
