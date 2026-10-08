@@ -1,11 +1,13 @@
 # Maven repository resolver (`am.ik.maven`)
 
 **Invariant: `am.ik.maven` answers what Maven 3.9's resolver answers for a dependency's POM --
-the descriptor (effective model) and the collected graph -- measured against Maven itself;
-what needs `maven-metadata.xml` or an unsupported `settings.xml` feature is refused by name,
-never approximated.** Language-independent: imports `am.ik.artifact` and nothing else of
-ours (`PackageCycleTest`). No consumer yet: `deps.edn` `:mvn/version` (tools.deps
-newest-wins) and Java libraries for CL programs (Maven nearest-wins) select over its graph.
+the descriptor (effective model), the collected graph, the resolved (nearest-wins) graph and
+its runtime class path -- measured against Maven itself; what needs `maven-metadata.xml` or an
+unsupported `settings.xml` feature is refused by name, never approximated.**
+Language-independent: imports `am.ik.artifact` and nothing else of ours (`PackageCycleTest`).
+Consumer: `cli/JavaClassPath` (`--java-dep`, `.kb/java-interop.md` "The program's Java class
+path"). `deps.edn` `:mvn/version` (tools.deps newest-wins, `e39`) selects over the collected
+graph itself.
 
 ## API
 - `MavenResolver.builder()`: the local repository is never guessed -- `localRepository(..)`,
@@ -16,7 +18,9 @@ newest-wins) and Java libraries for CL programs (Maven nearest-wins) select over
   `MavenSettings.readUserSettings()` is the caller's explicit call (the `ArtifactCache` rule:
   a test never picks up the developer's settings).
 - `descriptor(Artifact)`, `collect(deps, managed)` (every version seen; selection is the
-  caller's), `artifact(Artifact)` (local path). Public methods hold the instance lock.
+  caller's), `resolve(deps, managed)` (Maven's selection, below), `artifact(Artifact)` (local
+  path); `DependencyGraph.runtimeClassPath()` of a resolved graph. Public methods hold the
+  instance lock.
 
 ## Effective model (`ModelBuilder`, `ProfileActivator`, `Interpolator`)
 Maven's `DefaultModelBuilder` at validation level minimal, no project directory:
@@ -65,15 +69,44 @@ unbalanced skip of an unknown element inside a list is not reproduced.
 
 ## Collected graph (`DependencyCollector`)
 Maven Resolver's depth-first collector under Maven's session, conflict resolver off:
-selection runs before management; from depth 2 only `compile`/`runtime` are kept (Maven keeps
-`system` and unknown scopes, which no repository class path uses; tools.deps drops them as
-here) and optional ones dropped; exclusions accumulate down the path. The requested
+selection runs before management; from depth 2 a `test`/`provided` one is dropped and so is an
+optional one -- `system` and unknown scopes are KEPT, as Maven keeps them (until 2026-10-08
+they were dropped and the parity test filtered Maven's answer; a kept one can win a conflict,
+and an unknown scope below a `runtime` parent derives `runtime` and reaches the class path).
+No POM is read for a `system` node (Maven's `isLackingDescriptor`: its file is its
+`systemPath`; condition used here: the managed scope is `system`). Exclusions accumulate
+down the path. The requested
 management applies from depth 2 (exclusions at every depth), first entry wins; a POM's own
 management only shaped its descriptor (Maven 3's classic manager). A relocation is
 selected and managed again under its target (a version-only relocation keeps its version).
 The same `g:a:ext:classifier` (any version) on the path is a cycle node, not expanded --
 Maven shares the ancestor's children instead, which always lose. `war`/`ear`/`rar`/`par`
 are not descended into. Children are pooled per (artifact, exclusions), as Maven's data pool.
+
+## Resolved graph (`ConflictResolver`, `GenericVersion`)
+A PORT of Maven Resolver 1.9's `ConflictMarker` + `ConflictIdSorter` + `ConflictResolver`
+(verbosity none) with Maven's `NearestVersionSelector`, `JavaScopeSelector`,
+`SimpleOptionalitySelector`, `JavaScopeDeriver` -- not a re-derivation: the traversal orders,
+the hash-ordered collections (`Key`'s hash formula, `HashSet` of conflict ids) and the
+order-dependent loser removal are Maven's, so ties break as Maven breaks them. The collected
+records are rebuilt as Maven holds them: a pooled child list is ONE mutable list under every
+node that reached it (identity of the record's list), a cycle node shares its ancestor's list
+(the collector emits it childless), so removing a loser from a shared list removes it under
+every parent. Sibling conflicts (two children of one list) compare by `GenericVersion`
+(Resolver's `GenericVersionScheme`). `DependencyNode.premanagedOptional` is Maven's
+`MANAGED_OPTIONAL` bit (`premanagedScope != null` is `MANAGED_SCOPE`); both stop the scope /
+optional derivation. Ranges never reach it (refused at collect), so no backtracking.
+- `runtimeClassPath()`: maven-core's `RepositoryUtils.toArtifacts` preorder, each artifact
+  once, kept when the scope is `compile`/`runtime` and the type constitutes a build path
+  (`ArtifactTypes.addedToClassPath`: jar, test-jar, maven-plugin, ejb, ejb-client and --
+  Maven's session says so -- `javadoc`; never pom, java-source, war/ear/rar/par or an unknown
+  type such as `bundle`).
+- Oracle modes `resolve` and `classpath` (the latter types requested roots through the
+  session's registry, as maven-core types a project's dependencies; re-measuring every
+  existing case after that change altered none). Measured 2026-10-08 against Maven 3.9.16
+  over a developer `~/.m2` (905 release jars, each resolved on its own): identical trees
+  (7,933 lines, 5,836 below a root), identical class paths (6,741 entries), and an identical
+  collect after the scope change (115,348 lines).
 
 ## Repositories (`RepositoryAccess`, `MavenSettings`)
 - A file in the local repository is used as it is, whoever put it there: no `.sha1` checked,
@@ -115,5 +148,6 @@ refuse its range).
 
 ## Tests
 `MavenOracleParityTest`, `MavenRepositoryTest`, `MavenSettingsTest`, `MavenBoundaryTest`,
-`XmlParserTest`, `ArtifactTest`, `HttpDownloaderTest.theStatusTellsNotFoundFromAFailure`. No
+`XmlParserTest`, `ArtifactTest`, `HttpDownloaderTest.theStatusTellsNotFoundFromAFailure`,
+`JavaClassPathCliTest` (the CLI over a `file:` fixture repository). No
 automated test reaches the network (`.kb/dists.md`).

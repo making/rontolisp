@@ -48,8 +48,12 @@ import org.eclipse.aether.util.graph.manager.DependencyManagerUtils;
  *
  * <p>
  * Modes: {@code descriptor} (each artifact's effective dependencies), {@code collect}
- * (the collected graph, conflict resolution off: what MavenResolver.collect answers) and
- * {@code resolve} (Maven's nearest-wins tree, the selection a caller makes). Arguments:
+ * (the collected graph, conflict resolution off: what MavenResolver.collect answers),
+ * {@code resolve} (Maven's nearest-wins tree: MavenResolver.resolve) and
+ * {@code classpath} (that tree's runtime class path as maven-core builds a project's:
+ * RepositoryUtils.toArtifacts' preorder, each artifact once, kept when its type
+ * constitutes a build path and its scope is compile or runtime -- what
+ * DependencyGraph.runtimeClassPath answers). Arguments:
  * {@code -Dname=value} sets a system property; {@code COORDS[@scope][?][#g:a]...} is a
  * dependency ({@code ?} optional, each {@code #g:a} an exclusion), dependency management
  * after {@code --managed}. The session is Maven's defaults -- lenient descriptor policy,
@@ -115,6 +119,10 @@ public class MavenOracle {
 		session.setChecksumPolicy(RepositoryPolicy.CHECKSUM_POLICY_IGNORE);
 		session.setIgnoreArtifactDescriptorRepositories(true);
 		List<String> warnings = new ArrayList<>();
+		// A requested dependency is typed by its extension, as maven-core types a
+		// project's dependencies through the session's type registry.
+		deps.replaceAll(d -> typed(d, session));
+		managed.replaceAll(d -> typed(d, session));
 		session.setRepositoryListener(new AbstractRepositoryListener() {
 
 			@Override
@@ -154,7 +162,7 @@ public class MavenOracle {
 					warnings.clear();
 				}
 			}
-			case "collect", "resolve" -> {
+			case "collect", "resolve", "classpath" -> {
 				if (mode.equals("collect")) {
 					session.setDependencyGraphTransformer(null);
 				}
@@ -164,7 +172,13 @@ public class MavenOracle {
 				req.setRepositories(repos);
 				try {
 					CollectResult res = system.collectDependencies(session, req);
-					print(res.getRoot(), "", new ArrayList<>());
+					if (mode.equals("classpath")) {
+						java.util.Set<String> seen = new java.util.HashSet<>();
+						classPath(res.getRoot().getChildren(), seen);
+					}
+					else {
+						print(res.getRoot(), "", new ArrayList<>());
+					}
 				}
 				catch (Exception ex) {
 					System.out.println("error " + firstLine(ex));
@@ -173,6 +187,14 @@ public class MavenOracle {
 			}
 			default -> throw new IllegalArgumentException(mode);
 		}
+	}
+
+	static Dependency typed(Dependency d, DefaultRepositorySystemSession session) {
+		Artifact a = d.getArtifact();
+		org.eclipse.aether.artifact.ArtifactType type = session.getArtifactTypeRegistry().get(a.getExtension());
+		return type == null ? d
+				: d.setArtifact(new DefaultArtifact(a.getGroupId(), a.getArtifactId(), a.getClassifier(),
+						a.getExtension(), a.getVersion(), type));
 	}
 
 	/** The temporary local repository and the fixture's absolute path, kept out of the output. */
@@ -205,6 +227,29 @@ public class MavenOracle {
 			sb.append(exclusions);
 		}
 		return sb.toString();
+	}
+
+	/**
+	 * maven-core's RepositoryUtils.toArtifacts (a preorder into a LinkedHashSet of Maven
+	 * artifacts, equal by groupId, artifactId, version, type and classifier), then
+	 * MavenProject.getRuntimeClasspathElements' filter: the handler adds the artifact to a
+	 * class path (RepositoryUtils.newHandler reads the resolver type's
+	 * constitutesBuildPath) and the scope is compile or runtime.
+	 */
+	static void classPath(List<DependencyNode> nodes, java.util.Set<String> seen) {
+		for (DependencyNode n : nodes) {
+			Dependency d = n.getDependency();
+			Artifact a = d.getArtifact();
+			String type = a.getProperty("type", a.getExtension());
+			String key = a.getGroupId() + ":" + a.getArtifactId() + ":" + a.getVersion() + ":" + type + ":"
+					+ a.getClassifier();
+			if (seen.add(key) && Boolean.parseBoolean(a.getProperty("constitutesBuildPath", ""))
+					&& (d.getScope().equals("compile") || d.getScope().equals("runtime"))) {
+				System.out.println("classpath " + a.getGroupId() + ":" + a.getArtifactId() + ":" + a.getExtension()
+						+ ":" + a.getClassifier() + ":" + a.getVersion());
+			}
+			classPath(n.getChildren(), seen);
+		}
 	}
 
 	static void print(DependencyNode n, String indent, List<List<DependencyNode>> path) {

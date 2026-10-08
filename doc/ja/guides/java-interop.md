@@ -204,7 +204,7 @@ len.lisp:1:16: warning: java:call "length" is resolved by reflection at run time
 
 ### Java リリースやクラスパスを指定したコンパイル
 
-インタプリタは実行中のクラスに対して解決します。JVM コンパイラは代わりにクラスファイルを読みます。JDK の `lib/ct.sym` (実行中の JDK のもの、なければ `JAVA_HOME` のもの、なければ `PATH` 上の `java` のもの) から、その JDK が持つ最新のリリース、または `--java-release N` のリリースを読み、続いて `--java-classpath` のディレクトリと jar を探します。コンパイル済みクラスはコンパイル時に選ばれたメソッドを呼ぶので、そのリリース向けに刻印されます (クラスバージョン 44 + N、最低でも Java 17 の 61)。そのリリースより古い JRE はクラスの読み込みを拒否します。コンパイル時に見えないクラスを名指す呼び出しは実行時に解決され、その呼び出しが使うリフレクションブリッジには、rontolisp をビルドした JRE と同等以上に新しい JRE が必要です。
+インタプリタは実行中の JDK とプログラムのクラスパス ([Java ライブラリ](#java-libraries)) に対して解決します。JVM コンパイラは代わりにクラスファイルを読みます。JDK の `lib/ct.sym` (実行中の JDK のもの、なければ `JAVA_HOME` のもの、なければ `PATH` 上の `java` のもの) から、その JDK が持つ最新のリリース、または `--java-release N` のリリースを読み、続いてクラスパスを探します。コンパイル済みクラスはコンパイル時に選ばれたメソッドを呼ぶので、そのリリース向けに刻印されます (クラスバージョン 44 + N、最低でも Java 17 の 61)。そのリリースより古い JRE はクラスの読み込みを拒否します。コンパイル時に見えないクラスを名指す呼び出しは実行時に解決され、その呼び出しが使うリフレクションブリッジには、rontolisp をビルドした JRE と同等以上に新しい JRE が必要です。
 
 ```console
 $ rontolisp app.lisp -o app.jar --java-release 21 --java-classpath lib/guava.jar
@@ -380,6 +380,27 @@ Java からコールバックとして呼ばれた rontolisp の関数が通知�
 ```
 
 `examples/jvm/swing.lisp` はこの 5 つの関数の上に再利用可能なグリッドウィンドウのヘルパーを構築しています。ヘルパーは独自の `swing` [パッケージ](../reference/packages.md)にまとめられており、`(require :swing "swing.lisp")` で取り込みます。`examples/jvm/life-gui.lisp` はこれを使って (`swing:grid-window`、`swing:paint`、...) ライフゲームをアニメーション表示します。
+
+## Java ライブラリ
+
+プログラムの Java クラスパスは、`java:` 呼び出しが JDK の外で使うライブラリを保持します。`--java-classpath` はディレクトリと jar を `java -cp` と同じ区切りで指定し、`--java-dep` はライブラリを Maven 座標 (`groupId:artifactId:version`、繰り返し指定可) で、その依存ごと指定します。インタプリタはクラスパスからクラスを読み込み、JVM コンパイルはクラスパスに対して呼び出しを解決し、Clojure プログラムのホスト形式は JDK のクラスと同じようにクラスパスのクラスを参照します。
+
+```console
+$ rontolisp app.lisp --java-dep com.google.guava:guava:33.4.0-jre
+$ rontolisp app.lisp -o app.jar --java-dep com.google.guava:guava:33.4.0-jre
+$ java -jar app.jar
+```
+
+`--java-dep` は Maven がプロジェクトの依存を解決するのと同じ方法で解決します。同じライブラリの 2 つのバージョンが出会うと、要求した座標に近い方が勝ち、jar は `--java-classpath` のエントリーの後に Maven のクラスパス順で並びます。取得元は Maven Central で、`mvn` と同じローカルリポジトリ (`~/.m2/repository`、または `~/.m2/settings.xml` の `localRepository`。同ファイルの `offline` に従います) を経由します。SNAPSHOT、バージョン範囲、Central を覆う `settings.xml` のミラーやプロキシは、名前を挙げて拒否します。
+
+出力ごとに持ち運ぶもの:
+
+- プログラム jar (`-o app.jar`) はクラスパスを隣の `app-lib/` にコピーし、マニフェストの `Class-Path` でそのコピーを指します。そのため `java -jar app.jar` と `native-image -jar app.jar` がそれを見つけます。配布するときは jar と `app-lib/` を一緒に配ってください。
+- war (`-o app.war`) は jar を `WEB-INF/lib/` に、ディレクトリのファイルを `WEB-INF/classes/` に格納します。
+- クラス (`-o Prog.class`) は何も持ち運びません。`java -cp .:lib/guava.jar Prog` のようにクラスパスを付けて実行してください。
+- ライブラリ jar (`--no-main`) もクラスパスを持ち運びません。その pom (`--maven-coordinates`、`--emit-pom`) が `--java-dep` の座標を依存として列挙し、利用側の Maven がそれを解決します。`--java-classpath` のエントリーは利用側が用意します。
+
+GraalVM ネイティブバイナリは実行時にクラスを読み込めないため、そこではクラスパスはコンパイルが呼び出しを解決する対象と、その出力が持ち運ぶものにだけ届きます。
 
 ## ネイティブイメージ
 

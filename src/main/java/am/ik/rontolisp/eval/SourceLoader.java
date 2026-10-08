@@ -80,14 +80,41 @@ public interface SourceLoader {
 	}
 
 	/**
+	 * The class loader the program's Java classes come from: what a {@code java:} call
+	 * and a Clojure host form resolve a class name through. A program given a Java class
+	 * path ({@code --java-classpath}, {@code --java-dep}) sees it over the classes
+	 * rontolisp runs with; the default is rontolisp's own loader, so a loader that does
+	 * not say otherwise (the browser playground's) sees exactly those.
+	 * @return the loader
+	 */
+	default ClassLoader javaClassLoader() {
+		return SourceLoader.class.getClassLoader();
+	}
+
+	/**
 	 * Returns a loader that reads files from the local filesystem.
 	 * @return a filesystem-backed loader
 	 */
 	static SourceLoader fileSystem() {
+		return fileSystem(SourceLoader.class.getClassLoader());
+	}
+
+	/**
+	 * Returns a loader that reads files from the local filesystem, for a program whose
+	 * Java classes come from {@code javaClasses}.
+	 * @param javaClasses the program's Java class loader ({@link #javaClassLoader()})
+	 * @return a filesystem-backed loader
+	 */
+	static SourceLoader fileSystem(ClassLoader javaClasses) {
 		return new SourceLoader() {
 			@Override
 			public String load(String path) throws IOException {
 				return Files.readString(Path.of(path));
+			}
+
+			@Override
+			public ClassLoader javaClassLoader() {
+				return javaClasses;
 			}
 
 			@Override

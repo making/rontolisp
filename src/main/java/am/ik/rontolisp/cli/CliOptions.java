@@ -30,7 +30,9 @@ public class CliOptions {
 	// so the newline join reads as one more separator.
 	// --feature is repeatable on the same terms: `--feature sbcl --feature x86-64` is one
 	// widening written in two arguments.
-	private static final Set<String> repeatableKeys = Set.of("-e", "--dist", "--feature");
+	// --java-dep is repeatable on the same terms: one coordinate per occurrence, the
+	// list in the order given.
+	private static final Set<String> repeatableKeys = Set.of("-e", "--dist", "--feature", "--java-dep");
 
 	// Long spellings that mean an existing key; the value is stored under the short one,
 	// so every reader looks at one name.

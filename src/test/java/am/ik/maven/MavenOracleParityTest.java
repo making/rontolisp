@@ -32,10 +32,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * <li>an {@code error} line: the request fails at the same place, worded the resolver's
  * way (its own tests pin the wording);</li>
  * <li>an invalid POM's warning: the same artifact, and every problem the resolver names
- * is one Maven names;</li>
- * <li>a collected graph: Maven keeps a transitive {@code system} or unknown-scope
- * dependency, the resolver drops it (only {@code compile} and {@code runtime} reach a
- * class path from a repository).</li>
+ * is one Maven names.</li>
  * </ul>
  */
 class MavenOracleParityTest {
@@ -78,11 +75,20 @@ class MavenOracleParityTest {
 		MavenResolver resolver = MavenTestRepository.resolver(remote, local, request.system());
 		List<String> maven = lines.subList(1, lines.size());
 		List<String> ours = new ArrayList<>();
-		if (request.mode().equals("collect")) {
-			maven = withoutTransitiveExtraScopes(maven);
+		if (!request.mode().equals("descriptor")) {
 			try {
-				DependencyGraph graph = resolver.collect(request.dependencies(), request.managed());
-				ours.addAll(MavenTestRepository.render(graph));
+				DependencyGraph graph = request.mode().equals("collect")
+						? resolver.collect(request.dependencies(), request.managed())
+						: resolver.resolve(request.dependencies(), request.managed());
+				if (request.mode().equals("classpath")) {
+					for (Artifact entry : graph.runtimeClassPath()) {
+						ours.add("classpath " + entry.groupId() + ":" + entry.artifactId() + ":" + entry.extension()
+								+ ":" + entry.classifier() + ":" + entry.version());
+					}
+				}
+				else {
+					ours.addAll(MavenTestRepository.render(graph));
+				}
 				graph.warnings().forEach(warning -> ours.add("warning " + warning));
 			}
 			catch (MavenResolutionException ex) {
@@ -142,39 +148,6 @@ class MavenOracleParityTest {
 				: problem;
 		int suffix = text.lastIndexOf(" (");
 		return suffix > 0 && text.endsWith(")") ? text.substring(0, suffix) : text;
-	}
-
-	private static final Pattern SCOPE = Pattern.compile(" scope=(\\S*)");
-
-	private static final Pattern PREMANAGED_SCOPE = Pattern.compile(" premanaged-scope=(\\S*)");
-
-	/**
-	 * Maven's graph without what the resolver deliberately drops: a node below the roots
-	 * declared in a scope other than {@code compile} or {@code runtime}, with its
-	 * subtree. The declared scope decides, as selection runs before management.
-	 */
-	private static List<String> withoutTransitiveExtraScopes(List<String> lines) {
-		List<String> kept = new ArrayList<>();
-		int droppedIndent = -1;
-		for (String line : lines) {
-			int indent = line.length() - line.stripLeading().length();
-			boolean node = !line.startsWith("warning ") && !line.startsWith("error ");
-			if (droppedIndent >= 0 && node && indent > droppedIndent) {
-				continue;
-			}
-			droppedIndent = -1;
-			if (node && indent >= 2) {
-				Matcher premanaged = PREMANAGED_SCOPE.matcher(line);
-				Matcher scope = SCOPE.matcher(line);
-				String declared = premanaged.find() ? premanaged.group(1) : scope.find() ? scope.group(1) : "";
-				if (!declared.equals("compile") && !declared.equals("runtime")) {
-					droppedIndent = indent;
-					continue;
-				}
-			}
-			kept.add(line);
-		}
-		return kept;
 	}
 
 	/** A request in {@code MavenOracle}'s argument syntax. */

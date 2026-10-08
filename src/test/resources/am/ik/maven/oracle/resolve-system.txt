@@ -1,0 +1,6 @@
+# resolve test.resolve:system-wins:1
+test.resolve:system-wins:jar::1 scope=compile optional=false
+  test.resolve:s-holder:jar::1 scope=compile optional=false
+    test.resolve:sysdep:jar::1 scope=system optional=false
+  test.resolve:q:jar::1 scope=compile optional=false
+    test.resolve:q2:jar::1 scope=compile optional=false

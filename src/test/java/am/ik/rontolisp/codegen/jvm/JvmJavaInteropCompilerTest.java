@@ -16,6 +16,7 @@ import am.ik.rontolisp.reader.Features;
 import am.ik.rontolisp.reader.LispReader;
 import am.ik.rontolisp.testsupport.JavaImplementationPrograms;
 import am.ik.rontolisp.testsupport.JavaInteropPrograms;
+import am.ik.rontolisp.testsupport.JavaLibraryJar;
 import am.ik.rontolisp.testsupport.ThreadStdio;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -1376,6 +1377,38 @@ class JvmJavaInteropCompilerTest {
 				""", true)).contains(
 				"warning: java:proxy is implemented by reflection at run time: the interface name is not a literal string")
 			.doesNotContain("java:reify");
+	}
+
+	// A class of the program's Java class path (--java-classpath) is resolved against at
+	// compile time -- a constructor, a static method, a field and a declared receiver
+	// become direct calls, a reify and a subclass generated classes -- and loaded from
+	// the class path the program runs with. Mirrors
+	// JavaInteropTest#aClassOnTheProgramsJavaClassPathIsReachable.
+	@Test
+	void aClassOnTheJavaClassPathIsCalledDirectly() throws Exception {
+		Path jar = JavaLibraryJar.build(Files.createDirectories(this.tempDir.resolve("lib")));
+		JvmLispCompiler compiler = JvmLispCompiler.builder().className("Test").javaClasspath(List.of(jar)).build();
+		byte[] classBytes = compiler.compile(LispReader.readAllFromString(JavaLibraryJar.LIBRARY_PROGRAM));
+		assertThat(javap(classBytes)).contains("Method fixture/lib/Greeter.twice:(I)I")
+			.contains("Field fixture/lib/Greeter.NAME:Ljava/lang/String;");
+		Files.write(this.tempDir.resolve("Test.class"), classBytes);
+		writeBeside(compiler);
+		try (URLClassLoader loader = new URLClassLoader(new URL[] { this.tempDir.toUri().toURL(), jar.toUri().toURL() },
+				ClassLoader.getSystemClassLoader())) {
+			Method main = loader.loadClass("Test").getMethod("main", String[].class);
+			ByteArrayOutputStream baos = new ByteArrayOutputStream();
+			PrintStream oldOut = System.out;
+			System.setOut(new PrintStream(baos));
+			try {
+				main.invoke(null, (Object) new String[0]);
+			}
+			finally {
+				System.setOut(oldOut);
+			}
+			String printed = baos.toString();
+			assertThat(String.join("\n", printed.strip().lines().map(String::strip).toList()))
+				.isEqualTo(JavaLibraryJar.LIBRARY_OUTPUT);
+		}
 	}
 
 }

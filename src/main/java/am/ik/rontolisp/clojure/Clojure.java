@@ -80,7 +80,8 @@ public final class Clojure {
 	public static List<LispVal> read(String source, @Nullable String file,
 			@Nullable ClojureMacroEvaluator macroEvaluator, ClojureFiles files, boolean hostTarget) {
 		ClojureReader reader = new ClojureReader(source, file);
-		return ClojureLowering.lower(reader.readAll(), reader, macroEvaluator, files, hostTarget);
+		return ClojureHostClasses.lowering(files.javaClassLoader(),
+				() -> ClojureLowering.lower(reader.readAll(), reader, macroEvaluator, files, hostTarget));
 	}
 
 	/**

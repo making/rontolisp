@@ -273,6 +273,11 @@ public enum SourceLanguage {
 			public String resolve(@Nullable String dir, String relative) {
 				return SourceLoader.resolve(dir, relative);
 			}
+
+			@Override
+			public ClassLoader javaClassLoader() {
+				return loader.javaClassLoader();
+			}
 		};
 	}
 

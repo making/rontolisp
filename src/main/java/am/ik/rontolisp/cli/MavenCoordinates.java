@@ -1,7 +1,9 @@
 package am.ik.rontolisp.cli;
 
+import java.util.List;
 import java.util.regex.Pattern;
 
+import am.ik.maven.Artifact;
 import am.ik.rontolisp.Version;
 
 /**
@@ -15,10 +17,11 @@ import am.ik.rontolisp.Version;
  * {@code -DartifactId} / {@code -Dversion} / {@code -DpomFile}: Maven reads them back out
  * of the artifact.
  * <p>
- * A rontolisp-compiled class has no dependencies -- the acceleration bridges and the
- * {@code :float-vector} handle class both travel inside the artifact -- so the generated
- * pom's {@code <dependencies>} is genuinely empty, and it is written empty rather than
- * omitted so that the property is visible in the file.
+ * A rontolisp-compiled class has no dependencies of its own -- the acceleration bridges
+ * and the {@code :float-vector} handle class both travel inside the artifact -- so the
+ * generated pom's {@code <dependencies>} lists exactly the Java libraries the program was
+ * given as {@code --java-dep} coordinates, and is written empty rather than omitted when
+ * there are none, so that the property is visible in the file.
  */
 record MavenCoordinates(String groupId, String artifactId, String version) {
 
@@ -67,13 +70,26 @@ record MavenCoordinates(String groupId, String artifactId, String version) {
 	}
 
 	/**
-	 * The generated pom. {@code <dependencies>} is empty because the artifact really has
-	 * none; the description carries the one thing a consumer's build has to know, which
-	 * is whether the kernels inside need {@code --add-modules jdk.incubator.vector}.
+	 * The generated pom of an artifact with no Java dependencies.
 	 * @param simd whether the class was compiled with {@code --simd}
 	 * @return the pom XML
 	 */
 	String pomXml(boolean simd) {
+		return pomXml(simd, List.of());
+	}
+
+	/**
+	 * The generated pom. {@code <dependencies>} lists the program's {@code --java-dep}
+	 * coordinates, compile scope, in the order given -- a consumer's Maven resolves what
+	 * they depend on -- and is empty when there are none, because the class itself
+	 * depends on nothing; the description carries the one thing a consumer's build has to
+	 * know, which is whether the kernels inside need
+	 * {@code --add-modules jdk.incubator.vector}.
+	 * @param simd whether the class was compiled with {@code --simd}
+	 * @param dependencies the Java libraries the program was compiled against
+	 * @return the pom XML
+	 */
+	String pomXml(boolean simd, List<Artifact> dependencies) {
 		return POM_MARKER + " " + Version.getVersion() + ". -->\n"
 				+ "<project xmlns=\"http://maven.apache.org/POM/4.0.0\"\n"
 				+ "         xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\"\n"
@@ -84,15 +100,43 @@ record MavenCoordinates(String groupId, String artifactId, String version) {
 				+ "  <artifactId>" + this.artifactId + "</artifactId>\n" //
 				+ "  <version>" + this.version + "</version>\n" //
 				+ "  <packaging>jar</packaging>\n" //
-				+ "  <description>" + description(simd) + "</description>\n"
-				+ "  <!-- A rontolisp-compiled class embeds everything it calls, so this artifact"
-				+ " really has no dependencies. -->\n" //
-				+ "  <dependencies/>\n" //
+				+ "  <description>" + description(simd, !dependencies.isEmpty()) + "</description>\n"
+				+ dependencies(dependencies) //
 				+ "</project>\n";
 	}
 
-	private static String description(boolean simd) {
-		String base = "Compiled from Lisp by rontolisp. Self-contained: no dependencies.";
+	private static String dependencies(List<Artifact> dependencies) {
+		if (dependencies.isEmpty()) {
+			return "  <!-- A rontolisp-compiled class embeds everything it calls, so this artifact"
+					+ " really has no dependencies. -->\n" //
+					+ "  <dependencies/>\n";
+		}
+		StringBuilder xml = new StringBuilder("  <!-- The Java libraries the program was compiled against"
+				+ " (--java-dep). -->\n  <dependencies>\n");
+		for (Artifact dependency : dependencies) {
+			xml.append("    <dependency>\n");
+			element(xml, "groupId", dependency.groupId());
+			element(xml, "artifactId", dependency.artifactId());
+			element(xml, "version", dependency.version());
+			if (!dependency.extension().equals("jar")) {
+				element(xml, "type", dependency.extension());
+			}
+			if (!dependency.classifier().isEmpty()) {
+				element(xml, "classifier", dependency.classifier());
+			}
+			xml.append("    </dependency>\n");
+		}
+		return xml.append("  </dependencies>\n").toString();
+	}
+
+	private static void element(StringBuilder xml, String name, String value) {
+		String escaped = value.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;");
+		xml.append("      <").append(name).append('>').append(escaped).append("</").append(name).append(">\n");
+	}
+
+	private static String description(boolean simd, boolean dependencies) {
+		String base = dependencies ? "Compiled from Lisp by rontolisp. Depends on the Java libraries listed below."
+				: "Compiled from Lisp by rontolisp. Self-contained: no dependencies.";
 		// Not a requirement -- a class without the module degrades to the portable
 		// scalar kernels and says so -- but the consumer never saw the build command,
 		// so the pom is the only place that can tell them the flag is worth passing.

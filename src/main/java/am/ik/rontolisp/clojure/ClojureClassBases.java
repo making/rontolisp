@@ -114,7 +114,7 @@ final class ClojureClassBases {
 	private static @Nullable List<String> reflectedBases(String name) {
 		Class<?> type;
 		try {
-			type = Class.forName(name, false, ClojureClassBases.class.getClassLoader());
+			type = ClojureHostClasses.load(name);
 		}
 		catch (ClassNotFoundException | LinkageError _) {
 			return null;

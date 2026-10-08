@@ -366,7 +366,7 @@ final class ClojureInteropLowering {
 	static @Nullable Class<?> plainThrowable(String cls) {
 		Class<?> type;
 		try {
-			type = Class.forName(cls, false, ClojureLowering.class.getClassLoader());
+			type = ClojureHostClasses.load(cls);
 		}
 		catch (ClassNotFoundException | LinkageError _) {
 			return null;
@@ -556,7 +556,7 @@ final class ClojureInteropLowering {
 	 */
 	static ClojureLowering.StaticMember staticMember(String className, String member) {
 		try {
-			Class<?> found = Class.forName(className, false, ClojureLowering.class.getClassLoader());
+			Class<?> found = ClojureHostClasses.load(className);
 			boolean field = false;
 			try {
 				field = java.lang.reflect.Modifier.isStatic(found.getField(member).getModifiers());
@@ -711,7 +711,7 @@ final class ClojureInteropLowering {
 		Set<Integer> arities = new HashSet<>();
 		boolean variadic = false;
 		try {
-			Class<?> found = Class.forName(className, false, ClojureLowering.class.getClassLoader());
+			Class<?> found = ClojureHostClasses.load(className);
 			for (java.lang.reflect.Method candidate : found.getMethods()) {
 				if (!candidate.getName().equals(method) || java.lang.reflect.Modifier.isStatic(candidate.getModifiers())
 						|| candidate.isSynthetic()) {
@@ -740,7 +740,7 @@ final class ClojureInteropLowering {
 		Set<Integer> arities = new HashSet<>();
 		boolean variadic = false;
 		try {
-			Class<?> found = Class.forName(className, false, ClojureLowering.class.getClassLoader());
+			Class<?> found = ClojureHostClasses.load(className);
 			for (java.lang.reflect.Constructor<?> candidate : found.getConstructors()) {
 				if (candidate.isVarArgs()) {
 					variadic = true;
@@ -800,7 +800,7 @@ final class ClojureInteropLowering {
 		}
 		String cls = ClojureNamespaceLowering.resolveClass(ctx, name);
 		try {
-			Class.forName(cls, false, ClojureLowering.class.getClassLoader());
+			ClojureHostClasses.load(cls);
 		}
 		catch (ClassNotFoundException | LinkageError _) {
 			return null;
@@ -1183,7 +1183,7 @@ final class ClojureInteropLowering {
 	// extensible. A name that does not load is left to the run-time error.
 	private static boolean isFinalClass(String className) {
 		try {
-			Class<?> found = Class.forName(className, false, ClojureLowering.class.getClassLoader());
+			Class<?> found = ClojureHostClasses.load(className);
 			return !found.isInterface() && java.lang.reflect.Modifier.isFinal(found.getModifiers());
 		}
 		catch (ClassNotFoundException | LinkageError ex) {
@@ -1195,7 +1195,7 @@ final class ClojureInteropLowering {
 	// superclass. A name that does not load is left to the run-time error.
 	private static boolean isHostClass(String className) {
 		try {
-			Class<?> found = Class.forName(className, false, ClojureLowering.class.getClassLoader());
+			Class<?> found = ClojureHostClasses.load(className);
 			return !found.isInterface();
 		}
 		catch (ClassNotFoundException | LinkageError ex) {
@@ -1562,7 +1562,7 @@ final class ClojureInteropLowering {
 	 */
 	static boolean instanceBooleanAtArity(String className, String member, int arity) {
 		try {
-			Class<?> found = Class.forName(className, false, ClojureLowering.class.getClassLoader());
+			Class<?> found = ClojureHostClasses.load(className);
 			boolean seen = false;
 			for (java.lang.reflect.Method method : found.getMethods()) {
 				if (!method.getName().equals(member) || method.isSynthetic() || method.isVarArgs()
@@ -1606,7 +1606,7 @@ final class ClojureInteropLowering {
 			return null;
 		}
 		try {
-			Class<?> found = Class.forName(className, false, ClojureLowering.class.getClassLoader());
+			Class<?> found = ClojureHostClasses.load(className);
 			Set<String> returns = new HashSet<>();
 			boolean seen = false;
 			for (java.lang.reflect.Method method : found.getMethods()) {
@@ -1636,7 +1636,7 @@ final class ClojureInteropLowering {
 	 */
 	static @Nullable String declaredStaticReturn(String className, String member, int arity) {
 		try {
-			Class<?> found = Class.forName(className, false, ClojureLowering.class.getClassLoader());
+			Class<?> found = ClojureHostClasses.load(className);
 			if (arity == 0) {
 				Set<String> returns = new HashSet<>();
 				boolean seen = false;

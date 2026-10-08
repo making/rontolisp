@@ -1295,7 +1295,7 @@ final class ClojureStateLowering {
 	private static @Nullable LispVal hostConstruction(String className, LispSymbol message, LispSymbol cause) {
 		Class<?> type;
 		try {
-			type = Class.forName(className, false, ClojureStateLowering.class.getClassLoader());
+			type = ClojureHostClasses.load(className);
 		}
 		catch (ClassNotFoundException | LinkageError _) {
 			return null;

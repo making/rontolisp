@@ -913,7 +913,10 @@ a program without `ns` lowers unqualified. A quoted `'n/x` is the symbol of var 
   2026-10-08; instaparse 1.5.0 ships both for 14 namespaces). `Found.resource` is the file
   below its root, the `*file*` and `:file` of the load (`app/portable.cljc`). Files come
   through `ClojureFiles` (`SourceLanguage.clojureFiles` adapts the site's loader; none is
-  refused by name).
+  refused by name), and so does the program's Java class loader: every reflective question
+  the lowering asks of a class name goes through `ClojureHostClasses.load`, bound for the
+  lowering from `ClojureFiles.javaClassLoader()` (`.kb/java-interop.md`, "The program's
+  Java class path").
 - **Records** keep the simple-name tag; `typeKeyOf` resolves own, then an imported or
   dotted name matching the class, else the only one of that simple name.
 

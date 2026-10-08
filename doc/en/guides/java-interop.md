@@ -301,10 +301,11 @@ len.lisp:1:16: warning: java:call "length" is resolved by reflection at run time
 
 ### Compiling against a Java release or a class path
 
-The interpreter resolves against the classes it runs with. The JVM compiler reads class
-files instead: the JDK's `lib/ct.sym` -- the running JDK's, else `JAVA_HOME`'s, else that
-of the `java` on `PATH` -- for the newest release it holds or for `--java-release N`,
-followed by the directories and jars of `--java-classpath`. A compiled class calls the
+The interpreter resolves against the JDK it runs on and the program's class path
+([Java libraries](#java-libraries)). The JVM compiler reads class files instead: the
+JDK's `lib/ct.sym` -- the running JDK's, else `JAVA_HOME`'s, else that of the `java` on
+`PATH` -- for the newest release it holds or for `--java-release N`, followed by the
+class path. A compiled class calls the
 methods chosen at compile time, so it is stamped for that release (class version 44 + N, at
 least Java 17's 61): a JRE older than the release refuses to load it. A call that names a
 class the compile cannot see is resolved when it runs, and the reflection bridge such a call
@@ -542,6 +543,46 @@ another thread, arrives as the failure of the Java call (`FutureTask.get` wraps 
 functions -- wrapped in a `swing` [package](../reference/packages.md) of its own,
 spliced in with `(require :swing "swing.lisp")` -- and `examples/jvm/life-gui.lisp`
 animates Conway's Game of Life with it (`swing:grid-window`, `swing:paint`, ...).
+
+## Java libraries
+
+A program's Java class path holds the libraries its `java:` calls reach beyond the
+JDK. `--java-classpath` names directories and jars, separated as for `java -cp`;
+`--java-dep` names a library by its Maven coordinates (`groupId:artifactId:version`,
+repeatable), together with what it depends on. The interpreter loads classes from the
+class path, a JVM compile resolves calls against it, and a Clojure program's host forms
+see its classes as they see the JDK's.
+
+```console
+$ rontolisp app.lisp --java-dep com.google.guava:guava:33.4.0-jre
+$ rontolisp app.lisp -o app.jar --java-dep com.google.guava:guava:33.4.0-jre
+$ java -jar app.jar
+```
+
+`--java-dep` resolves as Maven resolves a project's dependencies: where two versions of
+a library meet, the one nearest the requested coordinates wins, and the jars join the
+class path after the `--java-classpath` entries, in Maven's class path order. They come
+from Maven Central through the local repository `mvn` uses -- `~/.m2/repository`, or
+the `localRepository` of `~/.m2/settings.xml`, whose `offline` is honored. A SNAPSHOT,
+a version range, or a `settings.xml` mirror or proxy covering Central is refused by
+name.
+
+What each output carries:
+
+- A program jar (`-o app.jar`) copies the class path into `app-lib/` beside it and names
+  the copies in its manifest's `Class-Path`, so `java -jar app.jar` and `native-image
+  -jar app.jar` find them. Ship the jar with its `app-lib/`.
+- A war (`-o app.war`) packs the jars into `WEB-INF/lib/` and a directory's files into
+  `WEB-INF/classes/`.
+- A class (`-o Prog.class`) carries nothing: run it with the class path, as `java -cp
+  .:lib/guava.jar Prog`.
+- A library jar (`--no-main`) carries no class path either: its pom
+  (`--maven-coordinates`, `--emit-pom`) lists the `--java-dep` coordinates as its
+  dependencies, for the consumer's Maven to resolve, and a `--java-classpath` entry is
+  the consumer's to provide.
+
+The GraalVM native binary cannot load a class at run time, so there the class path
+reaches only what a compile resolves calls against and what its output carries.
 
 ## Native image
 

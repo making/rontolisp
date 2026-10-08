@@ -653,8 +653,26 @@ public final class LispEvaluator {
 	 */
 	private final java.util.IdentityHashMap<LispCons, am.ik.rontolisp.compiler.JavaSite> javaSites = new java.util.IdentityHashMap<>();
 
-	/** Applies a Lisp callable for the java: bridge (proxies, auto-proxied arguments). */
-	private final JavaInterop.Caller javaCaller = this::applyGlobally;
+	// The classes java: names resolve to: the source loader's Java class loader
+	// (setSourceLoader), over which the sites below were resolved.
+	private volatile am.ik.rontolisp.compiler.ReflectiveJavaClasses javaClasses = am.ik.rontolisp.compiler.ReflectiveJavaClasses
+		.instance();
+
+	/**
+	 * Applies a Lisp callable for the java: bridge (proxies, auto-proxied arguments), and
+	 * names the classes a class name resolves to.
+	 */
+	private final JavaInterop.Caller javaCaller = new JavaInterop.Caller() {
+		@Override
+		public LispVal call(LispVal function, List<LispVal> args) {
+			return applyGlobally(function, args);
+		}
+
+		@Override
+		public am.ik.rontolisp.compiler.ReflectiveJavaClasses classes() {
+			return LispEvaluator.this.javaClasses;
+		}
+	};
 
 	/**
 	 * The {@code apply} built-in, kept so {@link #evalCons} can recognize an
@@ -853,6 +871,17 @@ public final class LispEvaluator {
 	 */
 	public void setSourceLoader(SourceLoader loader) {
 		this.sourceLoader = java.util.Objects.requireNonNull(loader);
+		ClassLoader classes = loader.javaClassLoader();
+		if (classes != this.javaClasses.loader()) {
+			this.javaClasses = am.ik.rontolisp.compiler.ReflectiveJavaClasses.over(classes);
+			// a site resolved against other classes is resolved again
+			synchronized (this.javaSites) {
+				this.javaSites.clear();
+			}
+			synchronized (this) {
+				this.javaDeclarations = null;
+			}
+		}
 	}
 
 	/**
@@ -5192,7 +5221,7 @@ public final class LispEvaluator {
 			if (args.size() != 2 || !(args.get(1) instanceof LispString field)) {
 				throw new LispEvalException(jfield + " expects (java:field class-or-object \"field\")");
 			}
-			return JavaInterop.field(args.get(0), field.value());
+			return JavaInterop.field(args.get(0), field.value(), caller);
 		}));
 		String jproxy = PackageRegistry.qualify(LispNames.JAVA_PKG, LispNames.JAVA_PROXY);
 		this.globalEnv.defineFunction(jproxy, new LispFunction(jproxy, args -> {
@@ -5284,8 +5313,7 @@ public final class LispEvaluator {
 			}
 		}
 		// Outside the monitor: resolving loads classes.
-		am.ik.rontolisp.compiler.JavaSite site = new am.ik.rontolisp.compiler.JavaSiteResolver(
-				am.ik.rontolisp.compiler.ReflectiveJavaClasses.instance())
+		am.ik.rontolisp.compiler.JavaSite site = new am.ik.rontolisp.compiler.JavaSiteResolver(this.javaClasses)
 			.resolve(cons);
 		if (!site.resolved()
 				&& !(currentSpecialValue(LispNames.JAVA_WARN_ON_REFLECTION_QUALIFIED) instanceof LispNil)) {
@@ -5307,8 +5335,7 @@ public final class LispEvaluator {
 	private synchronized am.ik.rontolisp.compiler.JavaDeclarations javaDeclarations() {
 		am.ik.rontolisp.compiler.JavaDeclarations declarations = this.javaDeclarations;
 		if (declarations == null) {
-			declarations = new am.ik.rontolisp.compiler.JavaDeclarations(
-					am.ik.rontolisp.compiler.ReflectiveJavaClasses.instance());
+			declarations = new am.ik.rontolisp.compiler.JavaDeclarations(this.javaClasses);
 			this.javaDeclarations = declarations;
 		}
 		return declarations;
@@ -5348,7 +5375,7 @@ public final class LispEvaluator {
 			// A java:reify / java:proxy a compiled program implements by reflection too.
 			for (LispCons implementationForm : am.ik.rontolisp.compiler.JavaImplementations.formsIn(lowered)) {
 				am.ik.rontolisp.compiler.JavaImplementation implementation = am.ik.rontolisp.compiler.JavaImplementations
-					.resolve(implementationForm, am.ik.rontolisp.compiler.ReflectiveJavaClasses.instance());
+					.resolve(implementationForm, this.javaClasses);
 				if (!implementation.resolved()) {
 					System.err.println(location + "warning: " + am.ik.rontolisp.compiler.JavaImplementations
 						.reflectionWarning(implementationForm, implementation));

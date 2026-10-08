@@ -5,11 +5,13 @@ import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
 import java.time.LocalDateTime;
+import java.util.List;
 import java.util.Map;
 import java.util.TreeMap;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
 
+import am.ik.maven.Artifact;
 import am.ik.rontolisp.Version;
 
 import org.jspecify.annotations.Nullable;
@@ -54,16 +56,20 @@ final class JvmJarWriter {
 	 * {@code java -jar} a library)
 	 * @param coordinates the Maven coordinates to embed, or {@code null} for none
 	 * @param simd whether the class was compiled with {@code --simd}
+	 * @param classPath the manifest's {@code Class-Path}: URLs relative to the jar, in
+	 * search order (empty for none)
+	 * @param dependencies the {@code --java-dep} coordinates the embedded pom names
 	 * @return the jar bytes
 	 */
 	static byte[] jar(String className, byte[] classBytes, Map<String, byte[]> runtimeClasses, boolean mainClass,
-			@Nullable MavenCoordinates coordinates, boolean simd) {
+			@Nullable MavenCoordinates coordinates, boolean simd, List<String> classPath, List<Artifact> dependencies) {
 		ByteArrayOutputStream out = new ByteArrayOutputStream();
 		try (ZipOutputStream zip = new ZipOutputStream(out, StandardCharsets.UTF_8)) {
-			write(zip, MANIFEST, manifest(className, mainClass).getBytes(StandardCharsets.UTF_8));
+			write(zip, MANIFEST, manifest(className, mainClass, classPath).getBytes(StandardCharsets.UTF_8));
 			if (coordinates != null) {
 				String directory = coordinates.metaInfDirectory();
-				write(zip, directory + "pom.xml", coordinates.pomXml(simd).getBytes(StandardCharsets.UTF_8));
+				write(zip, directory + "pom.xml",
+						coordinates.pomXml(simd, dependencies).getBytes(StandardCharsets.UTF_8));
 				write(zip, directory + "pom.properties", coordinates.pomProperties().getBytes(StandardCharsets.UTF_8));
 			}
 			write(zip, className + ".class", classBytes);
@@ -104,14 +110,21 @@ final class JvmJarWriter {
 	 * Also used by {@link JvmWarWriter} with {@code mainClass=false}: a war has no entry
 	 * point (nobody {@code java -jar}s a war), and {@code Enable-Native-Access} stays --
 	 * inert when unused, and a {@code --blas}/{@code --gpu} war still wants it.
+	 *
+	 * <p>
+	 * {@code Class-Path} names the program's Java class path, each entry a URL relative
+	 * to the jar: what {@code java -jar} and {@code native-image -jar} put after the jar.
 	 */
-	static String manifest(String className, boolean mainClass) {
+	static String manifest(String className, boolean mainClass, List<String> classPath) {
 		StringBuilder manifest = new StringBuilder();
 		append(manifest, "Manifest-Version", "1.0");
 		append(manifest, "Created-By", "rontolisp " + Version.getVersion());
 		append(manifest, "Enable-Native-Access", "ALL-UNNAMED");
 		if (mainClass) {
 			append(manifest, "Main-Class", className.replace('/', '.'));
+		}
+		if (!classPath.isEmpty()) {
+			append(manifest, "Class-Path", String.join(" ", classPath));
 		}
 		manifest.append("\r\n");
 		return manifest.toString();

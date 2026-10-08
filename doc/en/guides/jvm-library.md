@@ -359,7 +359,9 @@ would be a `NoClassDefFoundError` in the consumer.
 
 The generated pom's `<dependencies>` is empty, and that is the point rather
 than an omission: a compiled class embeds everything it calls, so the artifact
-really has none. One acceleration note: a `--simd` build gets its vector
+really has none -- unless the program calls a Java library given as `--java-dep`
+coordinates, which the pom then lists for the consumer's Maven to resolve (the
+interop guide's [Java libraries](java-interop.md#java-libraries)). One acceleration note: a `--simd` build gets its vector
 kernels only on a JVM started with `--add-modules jdk.incubator.vector` —
 without the module the class degrades to the portable scalar kernels and says
 so — and the generated pom repeats it in its `<description>`, because the

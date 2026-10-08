@@ -36,9 +36,10 @@ for `.clj` and `.cljc`, lowered to the same core forms so no backend learns a Cl
 - `am.ik.artifact` -- the one fetch-and-cache layer under every downloader (HTTP with
   timeouts, checksums, tar.gz/zip extraction, atomic install, the cache root); reached from
   `eval/DistClient` (`.kb/dists.md`).
-- `am.ik.maven` -- Maven coordinates to descriptors, dependency graphs and jars through the
-  `~/.m2` local repository, built on `am.ik.artifact` and on nothing else of ours; no
-  consumer yet (`.kb/maven-resolver.md`).
+- `am.ik.maven` -- Maven coordinates to descriptors, dependency graphs (collected, or
+  resolved nearest-wins with Maven's class path) and jars through the `~/.m2` local
+  repository, built on `am.ik.artifact` and on nothing else of ours; reached from
+  `cli/JavaClassPath` (`--java-dep`, `.kb/maven-resolver.md`).
 - `am.ik.gpu` -- the device half of `--gpu`, CUDA and Metal behind one sealed `GpuDevice`
   seam; imports nothing at all (`.kb/gpu.md`). The interpreter reaches it through
   `eval/LinalgGpu` -> `eval/LinalgGpuKernels`; the JVM backend EMBEDS its class files in the
@@ -60,7 +61,7 @@ for `.clj` and `.cljc`, lowered to the same core forms so no backend learns a Cl
 No cycles (`PackageCycleTest`).
 
 ```
-cli -> eval, compiler, codegen.*, macro, reader, format, am.ik.wit
+cli -> eval, compiler, codegen.*, macro, reader, format, am.ik.wit, am.ik.maven
 codegen.jvm -> compiler, macro, runtime, am.ik.jvm, am.ik.gpu, am.ik.objc
 codegen.wasm -> compiler, macro, am.ik.wasm, am.ik.wit
 compiler -> macro, runtime, rontolisp (AST types only), am.ik.wit

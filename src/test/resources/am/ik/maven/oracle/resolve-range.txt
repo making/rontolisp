@@ -1,0 +1,2 @@
+# resolve test.graph2:range-below:1
+error Failed to collect dependencies at test.graph2:range-below:jar:1 -> test.lib:ranged:jar:[1,2) <- No versions available for test.lib:ranged:jar:[1,2) within specified range

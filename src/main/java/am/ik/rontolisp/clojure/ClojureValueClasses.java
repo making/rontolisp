@@ -310,7 +310,7 @@ final class ClojureValueClasses {
 	 */
 	static boolean loads(String className) {
 		try {
-			Class.forName(className, false, ClojureValueClasses.class.getClassLoader());
+			ClojureHostClasses.load(className);
 			return true;
 		}
 		catch (ClassNotFoundException | LinkageError _) {

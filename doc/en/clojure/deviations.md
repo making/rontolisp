@@ -112,7 +112,8 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   `aget` throws `ArrayIndexOutOfBoundsException`); `subs`, `.substring` and `.charAt` past a
   string's bounds throw its `StringIndexOutOfBoundsException` (a double bound past the int range
   too, where the oracle's `subs` throws an `ArithmeticException` or an `IllegalArgumentException`). A catch must name a class that resolves on this host
-  (`java.*`, `clojure.lang`'s throwables); one the oracle finds on its class path only is
+  (`java.*`, `clojure.lang`'s throwables, a class of the program's Java class path:
+  `--java-classpath`, `--java-dep`); one the oracle finds on its class path only is
   refused.
 - An exception is a condition carrying its class, a message, data and a cause. A runtime
   error is the Common Lisp condition the runtime signals, whose message is the Common Lisp

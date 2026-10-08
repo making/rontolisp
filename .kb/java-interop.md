@@ -282,8 +282,9 @@ Per call the uncached bridge paid `getMethods()` (~2.5 us), `select()` (250 ns -
   results, gethash values, a `let` assigned by `setq`); java-interop.lisp 8 of 17 unchanged (its
   receivers are defvar globals), 12 of 17 with a declaim per global (the 5 left: a global as an
   ARGUMENT is only an upper bound, and a `java:proxy` argument).
-- Lookups: interpreter = `ReflectiveJavaClasses` (Class.forName without init; canonical Type per
-  Class via ClassValue). JVM compile = `codegen.jvm.JvmClassFileLookup` over `am.ik.jvm.JvmClassPath`
+- Lookups: interpreter = `ReflectiveJavaClasses` (Class.forName without init, through the
+  program's Java class loader -- "The program's Java class path" below; canonical Type per
+  Class via ClassValue, so two loaders' lookups agree on every class both see). JVM compile = `codegen.jvm.JvmClassFileLookup` over `am.ik.jvm.JvmClassPath`
   (`ClassFileInfo` reader, a `java.lang.classfile` `ClassModel`; a class newer than the running
   JDK is read with its version lowered in a copy): a JDK's `lib/ct.sym` for one release (java.home, else JAVA_HOME, else
   `java` on PATH; works in the native CLI, no reflection) + `--java-classpath` dirs/jars. It
@@ -613,6 +614,45 @@ Per call the uncached bridge paid `getMethods()` (~2.5 us), `select()` (250 ns -
   with the undefined-function call-time error, like every `java:` leg); user doc
   `guides/java-interop.md` ("Class proxies via java:subclass"), `reference/functions/
   java-subclass.md` and the Clojure `proxy` page.
+
+## The program's Java class path (`--java-classpath`, `--java-dep`)
+
+- ONE carrier: `eval/SourceLoader.javaClassLoader()` (default rontolisp's own loader;
+  `SourceLoader.fileSystem(ClassLoader)`). The evaluator derives its lookup from its source
+  loader (`setSourceLoader` -> `ReflectiveJavaClasses.over(loader)`, clearing the site memo),
+  and `JavaInterop.Caller.classes()` is what every name-to-class step uses (`loadClass`,
+  `field`, `keepsPromise`); a class's kinds and implementation types stay canonical per Class.
+  `ClassProxyMaker` keys a generated subclass by the classes themselves (was: their NAMES, a
+  collision across loaders) and defines it under the program loader. The Clojure lowering's
+  reflection (arities, throwable chains, `Class/member` static-or-field) goes through
+  `clojure/ClojureHostClasses.load`, bound per lowering from `ClojureFiles.javaClassLoader()`
+  (`Clojure.read`, `ClojureSession.read`; a ThreadLocal, since helpers deep in the lowering
+  have no context, and the lowering runs to completion where it starts). The compile path
+  hands it in `CompileFrontend.Request.javaClassLoader`.
+- CLI (`cli/JavaClassPath`): `--java-classpath` entries (must exist, else refused by name)
+  then the `--java-dep` jars in Maven's runtime class path order (`MavenResolver.resolve`,
+  `.kb/maven-resolver.md`), from Central through `~/.m2/settings.xml`'s local repository /
+  `offline` (`RontoLispCli.javaDependencyResolver` injects a fixture repository in tests). A
+  `URLClassLoader` over rontolisp's loader, made once -- not in a native image (no run-time
+  class definition: there the class path reaches the class-file lookup and the outputs
+  only). `--java-release` / `--java-static` stay compile-only; the class path is the
+  interpreter's and the REPL's too (until 2026-10-08 the interpreter refused
+  `--java-classpath`: a jar could not be added under `java -jar` at all).
+- Outputs: a program jar copies each entry into `<stem>-lib/` beside it (a jar under its file
+  name, a directory as a directory; two entries of one name refused) and lists them in the
+  manifest `Class-Path` (relative URLs) -- exact class-path semantics for `java -jar` and
+  `native-image -jar`, unlike bundling (services, signatures, multi-release, `getResources`).
+  A `--no-main` library jar carries none: its pom lists the `--java-dep` coordinates
+  (`MavenCoordinates.pomXml(simd, deps)`; a `--java-classpath` entry is the consumer's). A war
+  packs jars into `WEB-INF/lib/`, a directory's files into `WEB-INF/classes/` (a collision
+  with the program's own entries refused). A `.class` carries nothing (`java -cp`).
+- Pins: `JavaInteropTest#aClassOnTheProgramsJavaClassPathIsReachable`,
+  `JvmJavaInteropCompilerTest#aClassOnTheJavaClassPathIsCalledDirectly` (the shared
+  `testsupport/JavaLibraryJar` program: new, static, field, reify with a default method,
+  subclass, a site left to run time), `cli/JavaClassPathCliTest` (interpreter, `.class`,
+  program jar after the source jar is deleted, war, `--java-dep` nearest-wins through a
+  `file:` repository + pom, library jar, a Clojure program's `(Class/zeroArgStatic)`,
+  refusals). WASM: unchanged (`java:` refused at call time).
 
 ## What a callback raises passes through the Java call
 - A function called back from Java (a `java:reify` / `java:proxy` object's method, a function

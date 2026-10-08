@@ -49,9 +49,11 @@ final class ClassProxyMaker {
 	private ClassProxyMaker() {
 	}
 
-	// What the generated class is a function of: its superclass, interfaces, slots
-	// and constructor.
-	private record Key(String superclass, List<String> interfaces, List<String> slots, String constructor) {
+	// What the generated class is a function of: its superclass, interfaces, slots and
+	// constructor -- the classes themselves, so two class paths naming one class apart
+	// never share a subclass -- and the loader it is defined under.
+	private record Key(Class<?> superclass, List<Class<?>> interfaces, List<String> slots, Constructor<?> constructor,
+			ClassLoader loader) {
 	}
 
 	/**
@@ -60,26 +62,24 @@ final class ClassProxyMaker {
 	 * @param interfaces the extra interfaces
 	 * @param implementation the implementation (its slots)
 	 * @param constructor the superclass constructor the new instance is made with
+	 * @param loader the program's Java class loader, which sees the superclass, the
+	 * interfaces and the dispatch interface: the generated class's parent loader
 	 * @return the generated subclass
 	 */
 	static Class<?> proxyClass(Class<?> superclass, List<Class<?>> interfaces, JavaImplementation implementation,
-			Constructor<?> constructor) {
-		List<String> names = new ArrayList<>(interfaces.size());
-		for (Class<?> iface : interfaces) {
-			names.add(iface.getName());
-		}
+			Constructor<?> constructor, ClassLoader loader) {
 		List<String> slots = new ArrayList<>(implementation.slots().size());
 		for (JavaImplementation.Slot slot : implementation.slots()) {
 			slots.add(slot.dispatchKey() + "=" + slot.implementation());
 		}
-		Key key = new Key(superclass.getName(), List.copyOf(names), List.copyOf(slots), constructor.toString());
+		Key key = new Key(superclass, List.copyOf(interfaces), List.copyOf(slots), constructor, loader);
 		Class<?> cached = CLASSES.get(key);
 		if (cached != null) {
 			return cached;
 		}
 		String binaryName = "rontolisp.proxy.Sub$" + COUNTER.getAndIncrement();
 		byte[] bytes = build(ClassDesc.of(binaryName), superclass, interfaces, implementation, constructor);
-		Class<?> defined = new ChildLoader(ClassProxyMaker.class.getClassLoader()).define(binaryName, bytes);
+		Class<?> defined = new ChildLoader(loader).define(binaryName, bytes);
 		Class<?> existing = CLASSES.putIfAbsent(key, defined);
 		return existing != null ? existing : defined;
 	}
