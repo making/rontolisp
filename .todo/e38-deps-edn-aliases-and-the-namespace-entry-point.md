@@ -21,6 +21,18 @@ namespace as the entry point or to call its `-main`, and aliases are not read. D
    (`:extra-paths ["test"]`) and `clojure.test/run-tests` over the test namespaces
    (`.kb/clojure-frontend.md`, "clojure.test").
 
+## Where e37 left it (`.kb/clojure-frontend.md`, "deps.edn")
+
+- `:aliases` are read and validated (`ClojureDepsEdn.DepsMap.aliases`, raw values) from the
+  root map (its `:test` and `:deps` aliases), the user-level map and the project's, merged.
+  Nothing applies them: the oracle's `merge-alias-maps` rules and `tools.deps/tool`
+  (`:replace-*`) are the next step, and `flattenPaths` must put `:extra-paths` ahead of
+  `:paths` like `flatten-paths`.
+- `ClojureDepsGraph.expand` takes no `:override-deps`/`:default-deps` yet: `choose-coord`
+  (override, else the coordinate, else the default) belongs where a node's coordinate is
+  read, and a `nil` coordinate is the oracle's `Bad coordinate` until then. The alias
+  arguments' lib names need the same canonicalization as `:deps` (`ClojureDepsEdn.libMap`).
+
 ## Plan
 
 1. Read `.kb/clojure-frontend.md`, `.kb/source-language.md`, the `RontoLispCli` subcommands.
