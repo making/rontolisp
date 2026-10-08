@@ -232,17 +232,23 @@ final class BuildMerger {
 		}
 		return new Plugin(or(target.groupId(), source.groupId()), or(target.artifactId(), source.artifactId()),
 				or(target.version(), source.version()), inherited, configuration,
-				executions(target, source, false, Executions.MAVEN));
+				executions(target, source, false, Executions.MAVEN), or(target.extensions(), source.extensions()),
+				PomModel.mergeByKey(target.dependencies(), source.dependencies(), false));
 	}
 
-	/** {@code ModelMerger.mergePlugin}, with the executions merged by the given rule. */
+	/**
+	 * {@code ModelMerger.mergePlugin}, with the executions merged by the given rule; the
+	 * dependencies by management key.
+	 */
 	private static Plugin mergePlugin(Plugin target, Plugin source, boolean sourceDominant, Executions rule) {
 		return new Plugin(pick(target.groupId(), source.groupId(), sourceDominant),
 				pick(target.artifactId(), source.artifactId(), sourceDominant),
 				pick(target.version(), source.version(), sourceDominant),
 				pick(target.inherited(), source.inherited(), sourceDominant),
 				mergeConfiguration(target.configuration(), source.configuration(), sourceDominant),
-				executions(target, source, sourceDominant, rule));
+				executions(target, source, sourceDominant, rule),
+				pick(target.extensions(), source.extensions(), sourceDominant),
+				PomModel.mergeByKey(target.dependencies(), source.dependencies(), sourceDominant));
 	}
 
 	private static List<Execution> executions(Plugin target, Plugin source, boolean sourceDominant, Executions rule) {

@@ -1057,8 +1057,9 @@ repositories, `GITLIBS` set; tools.deps read from the CLI jar).
   `${basedir}/x` under the root, `${project.build.directory}/gen` -> `target/gen`; a parent's
   inherited and managed build-helper executions, a profile's plugin and resources, duplicate
   plugins all reach the first plugin as Maven merges them; a child plugin listed before the
-  build-helper it shares with its parent makes that child plugin first (no helper dirs). The
-  oracle's model is STRICT-validated, ours minimal (`.kb/maven-resolver.md`, `project`).
+  build-helper it shares with its parent makes that child plugin first (no helper dirs). Both
+  POMs are validated at the oracle's level, STRICT (`.kb/maven-resolver.md`, "Validation
+  levels").
 - **git** (`canonicalize`/`manifest-type`/`compare-versions :git`): both spellings refused,
   URL given or inferred (the oracle's regex table, here only -- `GitFetcher` has none), then
   against the repository: a tag must exist (`Library L has invalid tag: t`), sha and tag must

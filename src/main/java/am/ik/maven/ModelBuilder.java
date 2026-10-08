@@ -17,13 +17,16 @@ import org.jspecify.annotations.Nullable;
 
 /**
  * The effective model of a POM, built as Maven 3.9's {@code DefaultModelBuilder} builds a
- * dependency's model (validation level minimal, no project directory, no plugin
- * processing):
+ * model without a project directory or plugin processing, at a validation level
+ * ({@link ModelValidator}): minimal for a dependency's POM, strict for what tools.deps
+ * builds:
  * <ol>
- * <li>each POM of the parent chain is read, its duplicate dependencies collapsed (the
- * last declaration wins, at the first one's position) and its duplicate plugins merged,
- * its profiles' activation interpolated against its own properties and its active
- * profiles injected; the chain ends with the super POM (its build defaults);</li>
+ * <li>each POM of the parent chain is read (strictly from level 2.0 on, leniently when
+ * the strict reader refuses it) and its raw model validated, a fatal problem stopping the
+ * build; its duplicate dependencies are collapsed (the last declaration wins, at the
+ * first one's position) and its duplicate plugins merged, its profiles' activation
+ * interpolated against its own properties and its active profiles injected; the chain
+ * ends with the super POM (its build defaults);</li>
  * <li>the chain is merged from the top: group id, version and description are inherited
  * when absent (the model version never is), properties merge with the child winning,
  * dependencies and dependency management merge by management key with the child's entry
@@ -37,7 +40,8 @@ import org.jspecify.annotations.Nullable;
  * then each import's in order, the first entry of a key winning;</li>
  * <li>dependency management fills each dependency's absent version, scope and system
  * path, and its exclusions when it has none; the optional flag is never managed;</li>
- * <li>an absent scope becomes {@code compile}, and the model is validated.</li>
+ * <li>an absent scope becomes {@code compile}, and the model is validated: an error
+ * collected anywhere rejects it.</li>
  * </ol>
  * A parent's version range resolves to the highest version the repositories list, as
  * Maven's model resolver resolves it (an open upper bound refused); an import's is looked
@@ -74,12 +78,26 @@ final class ModelBuilder {
 
 	/**
 	 * Maven 3.9.16's super POM ({@code org/apache/maven/model/pom-4.0.0.xml} in
-	 * maven-model-builder), the last model of every chain. What the reader skips
-	 * (repositories, reporting) is left out.
+	 * maven-model-builder), the last model of every chain. What the reader skips is left
+	 * out.
 	 */
 	private static final String SUPER_POM_XML = """
 			<project>
 			  <modelVersion>4.0.0</modelVersion>
+			  <repositories>
+			    <repository>
+			      <id>central</id>
+			      <url>https://repo.maven.apache.org/maven2</url>
+			      <layout>default</layout>
+			    </repository>
+			  </repositories>
+			  <pluginRepositories>
+			    <pluginRepository>
+			      <id>central</id>
+			      <url>https://repo.maven.apache.org/maven2</url>
+			      <layout>default</layout>
+			    </pluginRepository>
+			  </pluginRepositories>
 			  <build>
 			    <directory>${project.basedir}/target</directory>
 			    <outputDirectory>${project.build.directory}/classes</outputDirectory>
@@ -119,6 +137,7 @@ final class ModelBuilder {
 			      </plugins>
 			    </pluginManagement>
 			  </build>
+			  <reporting/>
 			  <profiles>
 			    <profile>
 			      <id>release-profile</id>
@@ -176,21 +195,33 @@ final class ModelBuilder {
 	private final Map<String, String> system;
 
 	/**
-	 * Raw models by POM: a {@link PomModel}, an {@link InvalidPomException}, or MISSING.
+	 * Repository POMs as each reader read them, by POM: a {@link PomReader.Read}, the
+	 * reader's refusal (a {@code String}), or MISSING. The lenient reader's, then the
+	 * strict reader's (a parent read for a stricter build).
 	 */
-	private final Map<Artifact, Object> raw = new HashMap<>();
+	private final Map<Artifact, Object> lenient = new HashMap<>();
 
-	/** Effective models by POM, the same three kinds of entry. */
+	private final Map<Artifact, Object> strict = new HashMap<>();
+
+	/**
+	 * Effective models by POM (minimal level): a {@link PomModel}, an
+	 * {@link InvalidPomException}, or MISSING.
+	 */
 	private final Map<Artifact, Object> effective = new HashMap<>();
 
 	/**
-	 * The dependency management an import contributes, by imported id and the packaging
-	 * its profiles were activated with. Maven's session cache keys it by id alone, which
-	 * makes a BOM whose profiles test {@code packaging} answer whatever its first
-	 * importer's packaging chose; with the packaging in the key a descriptor is the same
-	 * whatever was resolved before it (what Maven answers without a session cache).
+	 * The dependency management an import contributes, and the problems its build
+	 * reported, by imported id and the packaging its profiles were activated with.
+	 * Maven's session cache keys it by id alone, which makes a BOM whose profiles test
+	 * {@code packaging} answer whatever its first importer's packaging chose; with the
+	 * packaging in the key a descriptor is the same whatever was resolved before it (what
+	 * Maven answers without a session cache, which also reports the import's warnings to
+	 * every importer).
 	 */
-	private final Map<String, List<PomModel.Dep>> imports = new HashMap<>();
+	private final Map<String, Imported> imports = new HashMap<>();
+
+	private record Imported(List<PomModel.Dep> managed, List<ModelProblem> problems) {
+	}
 
 	/**
 	 * Creates a builder.
@@ -204,7 +235,8 @@ final class ModelBuilder {
 	}
 
 	/**
-	 * Returns the effective model of a POM.
+	 * Returns the effective model of a repository POM, built at the minimal validation
+	 * level as Maven's descriptor reader builds it.
 	 * @param pom the POM's coordinates
 	 * @return the model, or {@code null} when no repository has the POM
 	 * @throws InvalidPomException if Maven's model builder would reject the POM
@@ -214,14 +246,16 @@ final class ModelBuilder {
 		Object cached = this.effective.get(pom);
 		if (cached == null) {
 			try {
-				PomModel input = raw(pom);
+				ModelProblems problems = new ModelProblems();
+				PomModel input = readRepository(pom, ModelValidator.MINIMAL, problems);
 				if (input == null) {
 					cached = MISSING;
 				}
 				else {
 					// Maven's 3.9 profile activation context carries the input POM's
 					// packaging as a user property, for its parents and imports too.
-					cached = build(input, null, Map.of("packaging", input.effectivePackaging()), new LinkedHashSet<>());
+					cached = build(input, null, ModelValidator.MINIMAL, Map.of("packaging", input.effectivePackaging()),
+							new LinkedHashSet<>(), problems);
 				}
 			}
 			catch (InvalidPomException ex) {
@@ -240,33 +274,41 @@ final class ModelBuilder {
 
 	/**
 	 * Returns the effective model of a POM given as bytes rather than coordinates -- one
-	 * shipped inside a jar -- built like a repository POM's, its parents and imports read
-	 * from the source.
+	 * shipped inside a jar, Maven's {@code UrlModelSource} -- its parents and imports
+	 * read from the source. What only the lenient reader reads is a warning.
 	 * @param pom the POM's bytes
+	 * @param level the validation level
 	 * @return the model
 	 * @throws InvalidPomException if Maven's model builder would reject the POM
 	 * @throws MavenResolutionException if a parent or import cannot be resolved
 	 */
-	PomModel effective(byte[] pom) throws InvalidPomException, MavenResolutionException {
-		PomModel input = PomReader.read(pom);
-		return build(input, null, Map.of("packaging", input.effectivePackaging()), new LinkedHashSet<>());
+	PomModel effective(byte[] pom, int level) throws InvalidPomException, MavenResolutionException {
+		ModelProblems problems = new ModelProblems();
+		PomModel input = readModel(pom, level, null, false, problems);
+		return build(input, null, level, Map.of("packaging", input.effectivePackaging()), new LinkedHashSet<>(),
+				problems);
 	}
 
 	/**
 	 * Returns the effective model of a POM file, built as Maven builds one from a
 	 * {@code FileModelSource} without a project directory (what tools.deps asks for): a
 	 * parent is looked for at its {@code relativePath} beside the file first -- and so on
-	 * up a chain read from files -- then in the repositories.
+	 * up a chain read from files -- then in the repositories. The request names no POM
+	 * file, so what only the lenient reader reads of this one is a warning; of a parent
+	 * read beside it, an error.
 	 * @param pom the POM file
+	 * @param level the validation level
 	 * @return the model
 	 * @throws InvalidPomException if Maven's model builder would reject the POM
 	 * @throws MavenResolutionException if the file cannot be read, or a parent or import
 	 * cannot be resolved
 	 */
-	PomModel effective(Path pom) throws InvalidPomException, MavenResolutionException {
+	PomModel effective(Path pom, int level) throws InvalidPomException, MavenResolutionException {
 		Path file = pom.toAbsolutePath().normalize();
-		PomModel input = PomReader.read(readFile(file));
-		return build(input, file, Map.of("packaging", input.effectivePackaging()), new LinkedHashSet<>());
+		ModelProblems problems = new ModelProblems();
+		PomModel input = readModel(readFile(file), level, file.toString(), false, problems);
+		return build(input, file, level, Map.of("packaging", input.effectivePackaging()), new LinkedHashSet<>(),
+				problems);
 	}
 
 	private static byte[] readFile(Path file) throws MavenResolutionException {
@@ -287,8 +329,43 @@ final class ModelBuilder {
 		}
 	}
 
-	private @Nullable PomModel raw(Artifact pom) throws InvalidPomException, MavenResolutionException {
-		Object cached = this.raw.get(pom);
+	/**
+	 * Maven's {@code readModel}: the strict reader from level 2.0 on, and the lenient one
+	 * when it refuses; the raw model validated; a fatal problem stops the build.
+	 * @param bytes the POM
+	 * @param level the validation level
+	 * @param location where it was read, for the messages
+	 * @param pomFile whether the request names it as a POM file (a parent read beside its
+	 * child): what only the lenient reader reads is then an error
+	 */
+	private static PomModel readModel(byte[] bytes, int level, @Nullable String location, boolean pomFile,
+			ModelProblems problems) throws InvalidPomException {
+		String at = location == null ? "" : " " + location;
+		PomReader.Read read;
+		try {
+			read = PomReader.read(bytes, level >= ModelValidator.MAVEN_2_0);
+		}
+		catch (XmlParser.Malformed ex) {
+			problems.fatal("Non-parseable POM" + at + ": " + ex.getMessage());
+			throw problems.invalid();
+		}
+		if (read.malformed() != null) {
+			problems.add(pomFile ? ModelProblem.Severity.ERROR : ModelProblem.Severity.WARNING,
+					"Malformed POM" + at + ": " + read.malformed());
+		}
+		validateRaw(read.model(), level, problems);
+		return read.model();
+	}
+
+	/**
+	 * A repository POM through {@link #readModel}, each reader's result cached.
+	 * @return the raw model, or {@code null} when no repository has it
+	 */
+	private @Nullable PomModel readRepository(Artifact pom, int level, ModelProblems problems)
+			throws InvalidPomException, MavenResolutionException {
+		boolean strictReader = level >= ModelValidator.MAVEN_2_0;
+		Map<Artifact, Object> cache = strictReader ? this.strict : this.lenient;
+		Object cached = cache.get(pom);
 		if (cached == null) {
 			byte[] bytes = this.source.read(pom);
 			if (bytes == null) {
@@ -296,49 +373,63 @@ final class ModelBuilder {
 			}
 			else {
 				try {
-					cached = PomReader.read(bytes);
+					cached = PomReader.read(bytes, strictReader);
 				}
-				catch (InvalidPomException ex) {
-					cached = ex;
+				catch (XmlParser.Malformed ex) {
+					cached = ex.getMessage();
 				}
 			}
-			this.raw.put(pom, cached);
+			cache.put(pom, cached);
 		}
 		if (cached == MISSING) {
 			return null;
 		}
-		if (cached instanceof InvalidPomException invalid) {
-			throw new InvalidPomException(invalid.problems());
+		if (cached instanceof String refusal) {
+			problems.fatal("Non-parseable POM: " + refusal);
+			throw problems.invalid();
 		}
-		return (PomModel) cached;
+		if (!(cached instanceof PomReader.Read read)) {
+			throw new IllegalStateException("no read of " + pom);
+		}
+		String malformed = read.malformed();
+		if (malformed != null) {
+			problems.warning("Malformed POM: " + malformed);
+		}
+		validateRaw(read.model(), level, problems);
+		return read.model();
+	}
+
+	/** The raw model's validation; a fatal problem, its own or an earlier one, stops. */
+	private static void validateRaw(PomModel model, int level, ModelProblems problems) throws InvalidPomException {
+		try {
+			ModelValidator.validateRaw(model, level, problems);
+		}
+		catch (NumberFormatException ex) {
+			// Maven's model version comparison throws it out of the builder
+			problems.fatal(ex.toString());
+		}
+		if (problems.hasFatal()) {
+			throw problems.invalid();
+		}
 	}
 
 	/**
 	 * Builds an effective model.
-	 * @param input the raw model
+	 * @param input the raw model, read and validated
 	 * @param location the file it was read from, {@code null} for a repository's or one
 	 * given as bytes (no parent is looked for beside it)
+	 * @param level the validation level
 	 * @param user the user properties
 	 * @param importChain the imports being built, for their cycle check
+	 * @param problems the problems so far
 	 */
-	private PomModel build(PomModel input, @Nullable Path location, Map<String, String> user, Set<String> importChain)
-			throws InvalidPomException, MavenResolutionException {
-		List<String> problems = new ArrayList<>();
+	private PomModel build(PomModel input, @Nullable Path location, int level, Map<String, String> user,
+			Set<String> importChain, ModelProblems problems) throws InvalidPomException, MavenResolutionException {
 		List<PomModel> lineage = new ArrayList<>();
 		Set<String> parentIds = new LinkedHashSet<>();
 		PomModel current = input;
 		Path currentLocation = location;
-		// a fatal problem Maven reports on the next parent it reads
-		boolean fatalPending = false;
 		while (true) {
-			// A raw-model failure is fatal and stops the build; the errors collected so
-			// far (profile activation) only invalidate it at the end, as in Maven.
-			List<String> fatal = new ArrayList<>();
-			validateRaw(current, fatal);
-			if (!fatal.isEmpty()) {
-				problems.addAll(fatal);
-				throw new InvalidPomException(problems);
-			}
 			lineage.add(activateProfiles(mergeDuplicates(current), user, problems));
 			PomModel.Parent parent = current.parent();
 			if (parent == null) {
@@ -348,7 +439,8 @@ final class ModelBuilder {
 			String parentArtifact = nonNull(parent.artifactId());
 			String writtenVersion = nonNull(parent.version());
 			// beside the child's file first, then the repositories
-			LocalParent local = currentLocation == null ? null : localParent(current, currentLocation, problems);
+			LocalParent local = currentLocation == null ? null
+					: localParent(current, currentLocation, current == input, level, problems);
 			String parentVersion;
 			if (local != null) {
 				parentVersion = local.version();
@@ -362,23 +454,27 @@ final class ModelBuilder {
 					+ parentVersion;
 			String childId = (current.groupId() == null ? parentGroup : current.groupId()) + ":" + current.artifactId()
 					+ ":" + (current.version() == null ? parentVersion : current.version());
-			PomModel parentModel = local != null ? local.model()
-					: raw(new Artifact(parentGroup, parentArtifact, parentVersion, "", "pom"));
-			if (parentModel == null) {
-				throw new MavenResolutionException(
-						"Non-resolvable parent POM " + parentId + " for " + childId + ": no repository has it");
+			PomModel parentModel;
+			if (local != null) {
+				parentModel = local.model();
 			}
-			if (fatalPending) {
-				throw new InvalidPomException(problems);
-			}
-			// a version a range admitted: the child cannot inherit what it resolved to
-			if (local != null ? local.versionNotConstant() : !parentVersion.equals(writtenVersion)
-					&& (current.version() == null || PARENT_VERSION_REFERENCES.contains(current.version()))) {
-				problems.add("Version must be a constant");
-				fatalPending = true;
+			else {
+				// a parent from a repository is read at level 2.0 at most
+				parentModel = readRepository(new Artifact(parentGroup, parentArtifact, parentVersion, "", "pom"),
+						Math.min(level, ModelValidator.MAVEN_2_0), problems);
+				if (parentModel == null) {
+					throw new MavenResolutionException(
+							"Non-resolvable parent POM " + parentId + " for " + childId + ": no repository has it");
+				}
+				// a version a range admitted: the child cannot inherit what it resolved
+				// to (fatal at the next POM read, else once the model is built)
+				if (!parentVersion.equals(writtenVersion)
+						&& (current.version() == null || PARENT_VERSION_REFERENCES.contains(current.version()))) {
+					problems.fatal("Version must be a constant");
+				}
 			}
 			if (!"pom".equals(parentModel.effectivePackaging())) {
-				problems.add("Invalid packaging for parent POM " + parentId + ", must be \"pom\" but is \""
+				problems.error("Invalid packaging for parent POM " + parentId + ", must be \"pom\" but is \""
 						+ parentModel.effectivePackaging() + "\"");
 			}
 			if (lineage.size() == 1) {
@@ -387,13 +483,16 @@ final class ModelBuilder {
 				parentIds.add(childId);
 			}
 			else if (!parentIds.add(parentId)) {
-				problems.add("The parents form a cycle: " + String.join(" -> ", parentIds) + " -> " + parentId);
-				throw new InvalidPomException(problems);
+				problems.fatal("The parents form a cycle: " + String.join(" -> ", parentIds) + " -> " + parentId);
+				throw problems.invalid();
 			}
 			current = parentModel;
 			currentLocation = local == null ? null : local.location();
 		}
 		lineage.add(activateProfiles(SUPER_POM, user, problems));
+		if (level >= ModelValidator.MAVEN_2_0) {
+			checkPluginVersions(lineage, problems);
+		}
 		PomModel model = lineage.get(lineage.size() - 1);
 		for (int i = lineage.size() - 2; i >= 0; i--) {
 			model = inherit(lineage.get(i), model);
@@ -403,11 +502,45 @@ final class ModelBuilder {
 		model = importManagement(model, user, importChain, problems);
 		model = injectManagement(model);
 		model = injectDefaultScope(model);
-		validateEffective(model, problems);
-		if (!problems.isEmpty()) {
-			throw new InvalidPomException(problems);
+		ModelValidator.validateEffective(model, level, this.system, problems);
+		if (problems.hasErrors()) {
+			throw problems.invalid();
 		}
 		return model;
+	}
+
+	/**
+	 * {@code DefaultModelBuilder.checkPluginVersions} (level 2.0 on): a plugin no POM of
+	 * the lineage gives a version, nor manages one, is warned about, in the order of
+	 * Maven's {@code HashMap}.
+	 */
+	private static void checkPluginVersions(List<PomModel> lineage, ModelProblems problems) {
+		Map<String, @Nullable String> versions = new HashMap<>();
+		Map<String, @Nullable String> managedVersions = new HashMap<>();
+		for (int i = lineage.size() - 1; i >= 0; i--) {
+			PomModel.Build build = lineage.get(i).build();
+			if (build == null) {
+				continue;
+			}
+			for (PomModel.Plugin plugin : build.plugins()) {
+				if (versions.get(plugin.key()) == null) {
+					versions.put(plugin.key(), plugin.version());
+				}
+			}
+			List<PomModel.Plugin> management = build.pluginManagement();
+			if (management != null) {
+				for (PomModel.Plugin plugin : management) {
+					if (managedVersions.get(plugin.key()) == null) {
+						managedVersions.put(plugin.key(), plugin.version());
+					}
+				}
+			}
+		}
+		for (String key : versions.keySet()) {
+			if (versions.get(key) == null && managedVersions.get(key) == null) {
+				problems.warning("'build.plugins.plugin.version' for " + key + " is missing.");
+			}
+		}
 	}
 
 	/**
@@ -446,21 +579,21 @@ final class ModelBuilder {
 	 * @param location its file
 	 * @param groupId its group id, its own or its parent's
 	 * @param version its version, its own or its parent's
-	 * @param versionNotConstant whether the child inherits a version a range admitted
 	 */
-	private record LocalParent(PomModel model, Path location, String groupId, String version,
-			boolean versionNotConstant) {
+	private record LocalParent(PomModel model, Path location, String groupId, String version) {
 	}
 
 	/**
 	 * Maven's {@code readParentLocally} with a {@code FileModelSource}: the POM at the
 	 * parent's {@code relativePath} beside the child's file ({@code pom.xml} inside a
-	 * directory), taken when it names the parent's group and artifact and its version is
-	 * the parent's or one of the parent's range admits; else {@code null} (the
-	 * repositories are asked).
+	 * directory), read and validated as a POM file of the request whatever it names, then
+	 * taken when it names the parent's group and artifact and its version is the parent's
+	 * or one of the parent's range admits; else {@code null} (the repositories are
+	 * asked).
+	 * @param root whether the child is the model being built (a warning names the others)
 	 */
-	private @Nullable LocalParent localParent(PomModel child, Path childLocation, List<String> problems)
-			throws InvalidPomException {
+	private @Nullable LocalParent localParent(PomModel child, Path childLocation, boolean root, int level,
+			ModelProblems problems) throws InvalidPomException {
 		PomModel.Parent parent = child.parent();
 		String relativePath = parent == null ? "" : parent.effectiveRelativePath();
 		Path directory = childLocation.getParent();
@@ -476,18 +609,15 @@ final class ModelBuilder {
 			return null;
 		}
 		Path location = related.toPath().toAbsolutePath().normalize();
-		PomModel candidate;
+		byte[] bytes;
 		try {
-			candidate = PomReader.read(Files.readAllBytes(location));
+			bytes = Files.readAllBytes(location);
 		}
 		catch (IOException ex) {
-			problems.add("Non-readable POM " + location + ": " + ex.getMessage());
-			throw new InvalidPomException(problems);
+			problems.fatal("Non-readable POM " + location + ": " + ex.getMessage());
+			throw problems.invalid();
 		}
-		catch (InvalidPomException ex) {
-			problems.addAll(ex.problems());
-			throw new InvalidPomException(problems);
-		}
+		PomModel candidate = readModel(bytes, level, location.toString(), true, problems);
 		PomModel.Parent grandparent = candidate.parent();
 		String groupId = candidate.groupId() != null ? candidate.groupId()
 				: grandparent == null ? null : grandparent.groupId();
@@ -495,11 +625,11 @@ final class ModelBuilder {
 				: grandparent == null ? null : grandparent.version();
 		if (groupId == null || !groupId.equals(parent.groupId()) || candidate.artifactId() == null
 				|| !candidate.artifactId().equals(parent.artifactId())) {
-			// Maven warns that the relativePath points elsewhere and asks the
-			// repositories
+			problems.warning("'parent.relativePath'" + (root ? "" : " of POM " + sourceHint(child, childLocation))
+					+ " points at " + groupId + ":" + candidate.artifactId() + " instead of " + parent.groupId() + ":"
+					+ parent.artifactId() + ", please verify your project structure");
 			return null;
 		}
-		boolean notConstant = false;
 		if (version != null && parent.version() != null && !version.equals(parent.version())) {
 			VersionConstraint range;
 			try {
@@ -511,9 +641,21 @@ final class ModelBuilder {
 			if (!range.isRange() || !range.contains(GenericVersion.parse(version))) {
 				return null; // version skew: the repositories are asked
 			}
-			notConstant = child.version() == null || PARENT_VERSION_REFERENCES.contains(child.version());
+			if (child.version() == null || PARENT_VERSION_REFERENCES.contains(child.version())) {
+				problems.fatal("Version must be a constant");
+			}
 		}
-		return new LocalParent(candidate, location, groupId, nonNull(version), notConstant);
+		return new LocalParent(candidate, location, groupId, nonNull(version));
+	}
+
+	/** {@code ModelProblemUtils.toSourceHint} of a model read from a file. */
+	private static String sourceHint(PomModel model, Path location) {
+		PomModel.Parent parent = model.parent();
+		String groupId = model.groupId() != null ? model.groupId() : parent == null ? null : parent.groupId();
+		String version = model.version() != null ? model.version() : parent == null ? null : parent.version();
+		return (groupId == null ? "[unknown-group-id]" : groupId) + ":"
+				+ (model.artifactId() == null ? "[unknown-artifact-id]" : model.artifactId()) + ":"
+				+ (version == null ? "[unknown-version]" : version) + " (" + location + ")";
 	}
 
 	private static String nonNull(@Nullable String value) {
@@ -522,28 +664,6 @@ final class ModelBuilder {
 
 	private static boolean isEmpty(@Nullable String value) {
 		return value == null || value.isEmpty();
-	}
-
-	/** Maven's raw-model checks at validation level minimal; each failure is fatal. */
-	private static void validateRaw(PomModel model, List<String> problems) {
-		PomModel.Parent parent = model.parent();
-		if (parent == null) {
-			return;
-		}
-		if (isEmpty(parent.groupId())) {
-			problems.add("'parent.groupId' is missing.");
-		}
-		if (isEmpty(parent.artifactId())) {
-			problems.add("'parent.artifactId' is missing.");
-		}
-		if (isEmpty(parent.version())) {
-			problems.add("'parent.version' is missing.");
-		}
-		if (nonNull(parent.groupId()).equals(nonNull(model.groupId()))
-				&& nonNull(parent.artifactId()).equals(nonNull(model.artifactId()))) {
-			problems.add("'parent.artifactId' must be changed, the parent element cannot have the same "
-					+ "groupId:artifactId as the project.");
-		}
 	}
 
 	/**
@@ -562,7 +682,7 @@ final class ModelBuilder {
 		return result.withDependencies(new ArrayList<>(byKey.values()), model.managedDependencies());
 	}
 
-	private PomModel activateProfiles(PomModel model, Map<String, String> user, List<String> problems) {
+	private PomModel activateProfiles(PomModel model, Map<String, String> user, ModelProblems problems) {
 		if (model.profiles().isEmpty()) {
 			return model;
 		}
@@ -570,12 +690,17 @@ final class ModelBuilder {
 		// inherited ones, then the user and system properties.
 		Interpolator activation = new Interpolator(
 				List.of(Interpolator.of(model.properties()), Interpolator.of(user), Interpolator.of(this.system)));
+		List<String> errors = new ArrayList<>();
 		List<PomModel.Profile> interpolated = new ArrayList<>();
 		for (PomModel.Profile profile : model.profiles()) {
-			interpolated.add(profile.withActivation(interpolateActivation(profile.activation(), activation, problems)));
+			interpolated.add(profile.withActivation(interpolateActivation(profile.activation(), activation, errors)));
+		}
+		List<PomModel.Profile> active = ProfileActivator.active(interpolated, user, this.system, errors);
+		for (String error : errors) {
+			problems.error(error);
 		}
 		PomModel result = model;
-		for (PomModel.Profile profile : ProfileActivator.active(interpolated, user, this.system, problems)) {
+		for (PomModel.Profile profile : active) {
 			result = inject(result, profile);
 		}
 		return result;
@@ -640,7 +765,8 @@ final class ModelBuilder {
 		PomModel.Build build = profile.build() == null ? model.build()
 				: BuildMerger.injectProfile(model.build(), profile.build());
 		return model.withContent(model.description(), properties,
-				PomModel.mergeByKey(model.dependencies(), profile.dependencies(), true), managed, modules, build);
+				PomModel.mergeByKey(model.dependencies(), profile.dependencies(), true), managed, modules, build,
+				AncillaryMerger.injectProfile(model.ancillary(), profile.ancillary()));
 	}
 
 	/**
@@ -659,13 +785,14 @@ final class ModelBuilder {
 				child.version() == null ? parent.version() : child.version());
 		return merged.withContent(child.description() == null ? parent.description() : child.description(), properties,
 				PomModel.mergeByKey(child.dependencies(), parent.dependencies(), false), managed, child.modules(),
-				BuildMerger.inherit(child.build(), parent.build()));
+				BuildMerger.inherit(child.build(), parent.build()),
+				AncillaryMerger.inherit(child.ancillary(), parent.ancillary()));
 	}
 
 	/**
 	 * Expands {@code ${...}} over the merged model, with Maven's value sources in order.
 	 */
-	private PomModel interpolate(PomModel model, Map<String, String> user, List<String> problems) {
+	private PomModel interpolate(PomModel model, Map<String, String> user, ModelProblems problems) {
 		Interpolator interpolator = new Interpolator(List.of(expression -> {
 			if (expression.startsWith("project.")) {
 				return reflect(model, expression.substring("project.".length()));
@@ -699,7 +826,7 @@ final class ModelBuilder {
 						: new PomModel.Relocation(values.ofNullable(relocation.groupId()),
 								values.ofNullable(relocation.artifactId()), values.ofNullable(relocation.version()),
 								values.ofNullable(relocation.message())),
-				modules, values.of(model.build()));
+				modules, values.of(model.build()), values.of(model.ancillary()));
 	}
 
 	/**
@@ -740,14 +867,14 @@ final class ModelBuilder {
 	}
 
 	/** Interpolates model values, collecting failures as problems. */
-	private record Values(Interpolator interpolator, List<String> problems) {
+	private record Values(Interpolator interpolator, ModelProblems problems) {
 
 		String of(String value) {
 			try {
 				return this.interpolator.interpolate(value);
 			}
 			catch (Interpolator.CycleException ex) {
-				this.problems.add(ex.getMessage());
+				this.problems.error(String.valueOf(ex.getMessage()));
 				return value;
 			}
 		}
@@ -776,7 +903,7 @@ final class ModelBuilder {
 		private List<PomModel.Resource> resources(List<PomModel.Resource> resources) {
 			List<PomModel.Resource> result = new ArrayList<>();
 			for (PomModel.Resource resource : resources) {
-				result.add(new PomModel.Resource(ofNullable(resource.directory())));
+				result.add(new PomModel.Resource(ofNullable(resource.directory()), ofNullable(resource.filtering())));
 			}
 			return result;
 		}
@@ -795,7 +922,7 @@ final class ModelBuilder {
 				}
 				result.add(new PomModel.Plugin(ofNullable(plugin.groupId()), ofNullable(plugin.artifactId()),
 						ofNullable(plugin.version()), ofNullable(plugin.inherited()), of(plugin.configuration()),
-						executions));
+						executions, ofNullable(plugin.extensions()), of(plugin.dependencies())));
 			}
 			return result;
 		}
@@ -819,10 +946,41 @@ final class ModelBuilder {
 			return result;
 		}
 
+		PomModel.Ancillary of(PomModel.Ancillary ancillary) {
+			PomModel.Distribution distribution = ancillary.distribution();
+			List<PomModel.ReportPlugin> reporting = ancillary.reporting();
+			List<PomModel.ReportPlugin> reportPlugins = null;
+			if (reporting != null) {
+				reportPlugins = new ArrayList<>();
+				for (PomModel.ReportPlugin plugin : reporting) {
+					reportPlugins.add(new PomModel.ReportPlugin(ofNullable(plugin.groupId()),
+							ofNullable(plugin.artifactId()), ofNullable(plugin.inherited())));
+				}
+			}
+			return new PomModel.Ancillary(repositories(ancillary.repositories()),
+					repositories(ancillary.pluginRepositories()),
+					distribution == null ? null : new PomModel.Distribution(ofNullable(distribution.status()),
+							repository(distribution.repository()), repository(distribution.snapshotRepository())),
+					reportPlugins);
+		}
+
+		private List<PomModel.Repo> repositories(List<PomModel.Repo> repositories) {
+			List<PomModel.Repo> result = new ArrayList<>();
+			for (PomModel.Repo repository : repositories) {
+				result.add(repository(repository));
+			}
+			return result;
+		}
+
+		private PomModel.@Nullable Repo repository(PomModel.@Nullable Repo repository) {
+			return repository == null ? null : new PomModel.Repo(ofNullable(repository.id()),
+					ofNullable(repository.url()), ofNullable(repository.layout()));
+		}
+
 	}
 
 	private PomModel importManagement(PomModel model, Map<String, String> user, Set<String> importChain,
-			List<String> problems) throws MavenResolutionException {
+			ModelProblems problems) throws MavenResolutionException {
 		List<PomModel.Dep> managed = model.managedDependencies();
 		if (managed == null) {
 			return model;
@@ -857,36 +1015,41 @@ final class ModelBuilder {
 		return model.withDependencies(model.dependencies(), new ArrayList<>(merged.values()));
 	}
 
+	/**
+	 * An import's dependency management, the import built at the minimal level whatever
+	 * the importer's, its problems joining the importer's.
+	 */
 	private @Nullable List<PomModel.Dep> importedManagement(PomModel.Dep dep, String importing,
-			Map<String, String> user, Set<String> importChain, List<String> problems) throws MavenResolutionException {
+			Map<String, String> user, Set<String> importChain, ModelProblems problems) throws MavenResolutionException {
 		String group = dep.groupId();
 		String artifact = dep.artifactId();
 		String version = dep.version();
 		if (group == null || group.isEmpty()) {
-			problems.add("'dependencyManagement.dependencies.dependency.groupId' for " + dep.managementKey()
+			problems.error("'dependencyManagement.dependencies.dependency.groupId' for " + dep.managementKey()
 					+ " is missing.");
 			return null;
 		}
 		if (artifact == null || artifact.isEmpty()) {
-			problems.add("'dependencyManagement.dependencies.dependency.artifactId' for " + dep.managementKey()
+			problems.error("'dependencyManagement.dependencies.dependency.artifactId' for " + dep.managementKey()
 					+ " is missing.");
 			return null;
 		}
 		if (version == null || version.isEmpty()) {
-			problems.add("'dependencyManagement.dependencies.dependency.version' for " + dep.managementKey()
+			problems.error("'dependencyManagement.dependencies.dependency.version' for " + dep.managementKey()
 					+ " is missing.");
 			return null;
 		}
 		String id = group + ":" + artifact + ":" + version;
 		if (importChain.contains(id)) {
-			problems.add("The dependencies of type=pom and with scope=import form a cycle: "
+			problems.error("The dependencies of type=pom and with scope=import form a cycle: "
 					+ String.join(" -> ", importChain) + " -> " + id);
 			return null;
 		}
 		String cacheKey = id + "|" + user.get("packaging");
-		List<PomModel.Dep> cached = this.imports.get(cacheKey);
+		Imported cached = this.imports.get(cacheKey);
 		if (cached != null) {
-			return cached;
+			problems.addAll(cached.problems());
+			return cached.managed();
 		}
 		if (VersionConstraint.isRange(version)) {
 			// Maven 3.9 resolves an import's version as written, never as a range: the
@@ -894,15 +1057,20 @@ final class ModelBuilder {
 			throw new MavenResolutionException("Non-resolvable import POM " + id + " in " + importing
 					+ ": an import's version range is looked up as a version, which no repository has");
 		}
+		ModelProblems importProblems = new ModelProblems();
 		try {
-			PomModel importRaw = raw(new Artifact(group, artifact, version, "", "pom"));
+			PomModel importRaw = readRepository(new Artifact(group, artifact, version, "", "pom"),
+					ModelValidator.MINIMAL, importProblems);
 			if (importRaw == null) {
 				throw new MavenResolutionException(
 						"Non-resolvable import POM " + id + " in " + importing + ": no repository has it");
 			}
-			List<PomModel.Dep> contribution = build(importRaw, null, user, importChain).managedDependencies();
+			List<PomModel.Dep> contribution = build(importRaw, null, ModelValidator.MINIMAL, user, importChain,
+					importProblems)
+				.managedDependencies();
 			List<PomModel.Dep> result = contribution == null ? List.of() : contribution;
-			this.imports.put(cacheKey, result);
+			this.imports.put(cacheKey, new Imported(result, importProblems.list()));
+			problems.addAll(importProblems.list());
 			return result;
 		}
 		catch (InvalidPomException ex) {
@@ -934,87 +1102,31 @@ final class ModelBuilder {
 		return model.withDependencies(dependencies, managed);
 	}
 
+	/**
+	 * {@code DefaultModelNormalizer.injectDefaultValues}: an empty scope is
+	 * {@code compile}, a plugin's dependencies' too.
+	 */
 	private static PomModel injectDefaultScope(PomModel model) {
-		List<PomModel.Dep> dependencies = new ArrayList<>();
-		for (PomModel.Dep dep : model.dependencies()) {
-			dependencies.add(isEmpty(dep.scope())
-					? dep.with(dep.version(), "compile", dep.systemPath(), dep.exclusions()) : dep);
+		PomModel.Build build = model.build();
+		if (build != null && !build.plugins().isEmpty()) {
+			List<PomModel.Plugin> plugins = new ArrayList<>();
+			for (PomModel.Plugin plugin : build.plugins()) {
+				plugins.add(new PomModel.Plugin(plugin.groupId(), plugin.artifactId(), plugin.version(),
+						plugin.inherited(), plugin.configuration(), plugin.executions(), plugin.extensions(),
+						withDefaultScope(plugin.dependencies())));
+			}
+			model = model.withBuild(build.withPlugins(plugins, build.pluginManagement()));
 		}
-		return model.withDependencies(dependencies, model.managedDependencies());
+		return model.withDependencies(withDefaultScope(model.dependencies()), model.managedDependencies());
 	}
 
-	/** Maven's effective-model checks at validation level minimal. */
-	private static void validateEffective(PomModel model, List<String> problems) {
-		if (isEmpty(model.modelVersion())) {
-			problems.add("'modelVersion' is missing.");
+	private static List<PomModel.Dep> withDefaultScope(List<PomModel.Dep> dependencies) {
+		List<PomModel.Dep> result = new ArrayList<>();
+		for (PomModel.Dep dep : dependencies) {
+			result.add(isEmpty(dep.scope()) ? dep.with(dep.version(), "compile", dep.systemPath(), dep.exclusions())
+					: dep);
 		}
-		validateId("groupId", model.groupId(), null, problems);
-		validateId("artifactId", model.artifactId(), null, problems);
-		if (isEmpty(model.packaging()) && model.packaging() != null) {
-			problems.add("'packaging' is missing.");
-		}
-		if (!model.modules().isEmpty() && !"pom".equals(model.effectivePackaging())) {
-			problems.add("'packaging' with value '" + model.effectivePackaging()
-					+ "' is invalid. Aggregator projects require 'pom' as packaging.");
-		}
-		if (isEmpty(model.version())) {
-			problems.add("'version' is missing.");
-		}
-		for (PomModel.Dep dep : model.dependencies()) {
-			validateDependency(dep, false, problems);
-		}
-		List<PomModel.Dep> managed = model.managedDependencies();
-		if (managed != null) {
-			for (PomModel.Dep dep : managed) {
-				validateDependency(dep, true, problems);
-			}
-		}
-	}
-
-	private static void validateDependency(PomModel.Dep dep, boolean management, List<String> problems) {
-		String prefix = management ? "dependencyManagement.dependencies.dependency." : "dependencies.dependency.";
-		String key = dep.managementKey();
-		validateId(prefix + "artifactId", dep.artifactId(), key, problems);
-		validateId(prefix + "groupId", dep.groupId(), key, problems);
-		if (!management) {
-			if (dep.type() != null && dep.type().isEmpty()) {
-				problems.add("'" + prefix + "type' for " + key + " is missing.");
-			}
-			if (isEmpty(dep.version())) {
-				problems.add("'" + prefix + "version' for " + key + " is missing.");
-			}
-		}
-		String systemPath = dep.systemPath();
-		if ("system".equals(dep.scope())) {
-			if (systemPath == null || systemPath.isEmpty()) {
-				problems.add("'" + prefix + "systemPath' for " + key + " is missing.");
-			}
-			else if (!new File(systemPath).isAbsolute()) {
-				problems.add("'" + prefix + "systemPath' for " + key + " must specify an absolute path but is "
-						+ systemPath);
-			}
-		}
-		else if (systemPath != null && !systemPath.isEmpty()) {
-			problems.add("'" + prefix + "systemPath' for " + key
-					+ " must be omitted. This field may only be specified for a dependency with system scope.");
-		}
-	}
-
-	private static void validateId(String field, @Nullable String id, @Nullable String key, List<String> problems) {
-		String subject = "'" + field + "'" + (key == null ? "" : " for " + key);
-		if (id == null || id.isEmpty()) {
-			problems.add(subject + " is missing.");
-			return;
-		}
-		for (int i = 0; i < id.length(); i++) {
-			char c = id.charAt(i);
-			boolean valid = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-'
-					|| c == '_' || c == '.';
-			if (!valid) {
-				problems.add(subject + " with value '" + id + "' does not match a valid id pattern.");
-				return;
-			}
-		}
+		return result;
 	}
 
 }

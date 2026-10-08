@@ -180,6 +180,8 @@ final class XmlParser {
 
 		boolean empty;
 
+		int textAt = -1;
+
 		Open(String name, int line) {
 			this.name = name;
 			this.line = line;
@@ -187,7 +189,20 @@ final class XmlParser {
 
 		XmlElement close() {
 			return new XmlElement(this.name, this.text.toString(), this.attributes, this.children, this.empty,
-					this.line);
+					this.line, this.textAt);
+		}
+
+		/** Records where the data appended since {@code from} holds non-whitespace. */
+		void noteText(int from) {
+			if (this.textAt >= 0) {
+				return;
+			}
+			for (int i = from; i < this.text.length(); i++) {
+				if (!isWhitespace(this.text.charAt(i))) {
+					this.textAt = this.children.size();
+					return;
+				}
+			}
 		}
 
 	}
@@ -211,14 +226,18 @@ final class XmlParser {
 			}
 			char c = this.text.charAt(this.pos);
 			if (c == '&') {
+				int from = top.text.length();
 				reference(top.text);
+				top.noteText(from);
 			}
 			else if (c != '<') {
 				int end = this.pos;
 				while (end < this.text.length() && this.text.charAt(end) != '<' && this.text.charAt(end) != '&') {
 					end++;
 				}
+				int from = top.text.length();
 				top.text.append(this.text, this.pos, end);
+				top.noteText(from);
 				this.pos = end;
 			}
 			else if (this.text.startsWith("</", this.pos)) {
@@ -239,7 +258,9 @@ final class XmlParser {
 				if (end < 0) {
 					throw malformed("CDATA section not terminated");
 				}
+				int from = top.text.length();
 				top.text.append(this.text, this.pos + 9, end);
+				top.noteText(from);
 				this.pos = end + 3;
 			}
 			else if (this.text.startsWith("<?", this.pos)) {
