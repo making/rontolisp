@@ -22,8 +22,9 @@ public record LispJavaObject(Object ref) implements LispVal {
 	/**
 	 * The one object a value is in Java: a host object's own, or what a Lisp value of a
 	 * receiver kind ({@code JavaOverloads.isReceiverKind}) converts to for an
-	 * {@code Object} parameter -- {@code t} {@code Boolean.TRUE}, an integer the
-	 * narrowest box that holds it, a bignum its {@code BigInteger}, a float its
+	 * {@code Object} parameter -- {@code t} {@code Boolean.TRUE}, the symbol
+	 * {@code |false|} ({@link LispNames#JAVA_FALSE}) {@code Boolean.FALSE}, an integer
+	 * the narrowest box that holds it, a bignum its {@code BigInteger}, a float its
 	 * {@code Double}, a string its {@code String}, a BMP character its {@code Character}
 	 * and a supplementary one the {@code Integer} of its code point. The object a
 	 * {@code java:call} on the value is made on, and what a host object's {@code equals}
@@ -37,6 +38,7 @@ public record LispJavaObject(Object ref) implements LispVal {
 		return switch (value) {
 			case LispJavaObject host -> host.ref();
 			case LispTrue ignored -> Boolean.TRUE;
+			case LispSymbol symbol when LispNames.JAVA_FALSE.equals(symbol.name()) -> Boolean.FALSE;
 			case LispInteger i -> i.value() == (int) i.value() ? (Object) (int) i.value() : (Object) i.value();
 			case LispBigInteger b -> b.value();
 			case LispDouble d -> d.value();

@@ -158,8 +158,10 @@ final class ClojureTransducerLowering {
 				List<LispVal> xfs = fnArgs(ctx, items, 1, n - 1);
 				LispVal xf = xfs.size() == 1 ? xfs.get(0)
 						: call("xf-comp", List.of(ClojureLowerUtil.cons(ClojureLowerUtil.sym("list"), xfs)));
-				return call("sequence-xf", List.of(xf),
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("list"), ctx.lower(items.get(n))));
+				// a collection reducing through its own CollReduce row steps what that
+				// reduction steps (a view a program storing no such row sheds)
+				return call("sequence-xf", List.of(xf), ClojureLowerUtil.list(ClojureLowerUtil.sym("list"),
+						ClojureSeqLowering.reducibleItemsForm(ctx.lower(items.get(n)))));
 			}
 			case "sequence":
 				ClojureCoreLowering.arity(name, n, 1, -1);

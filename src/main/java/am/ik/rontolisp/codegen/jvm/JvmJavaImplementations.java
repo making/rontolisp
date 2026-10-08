@@ -192,10 +192,13 @@ final class JvmJavaImplementations {
 	 * ({@link JavaOverloads#selectRanked}).
 	 * @param implementation a resolved subclass implementation
 	 * @param argc the constructor argument count
+	 * @param functional whether a function argument implements its interface by the
+	 * method's arguments (a form ending in {@code :functional}), not as a
+	 * {@code java:proxy}
 	 * @return the dispatcher, a method of the program class
 	 */
-	MethodRefEntry subclassFactory(JavaImplementation implementation, int argc) {
-		Subshell shell = subshell(implementation, argc);
+	MethodRefEntry subclassFactory(JavaImplementation implementation, int argc, boolean functional) {
+		Subshell shell = subshell(implementation, argc, functional);
 		return this.cp.methodRef(this.thisClass, shell.construct(),
 				"(Ljava/lang/Object;[Ljava/lang/Object;)Ljava/lang/Object;");
 	}
@@ -319,7 +322,7 @@ final class JvmJavaImplementations {
 		return "(Ljava/lang/Object;[Ljava/lang/Object;)" + JvmJavaDirectSites.descriptor(slot.returnType());
 	}
 
-	private Subshell subshell(JavaImplementation implementation, int argc) {
+	private Subshell subshell(JavaImplementation implementation, int argc, boolean functional) {
 		if (!implementation.resolved() || !implementation.isSubclass()) {
 			throw new IllegalArgumentException("not a resolved java:subclass");
 		}
@@ -330,7 +333,7 @@ final class JvmJavaImplementations {
 		for (JavaImplementation.Slot slot : implementation.slots()) {
 			key.append('|').append(slot.dispatchKey()).append('=').append(slot.implementation());
 		}
-		key.append('#').append(argc);
+		key.append('#').append(argc).append(functional ? " functional" : "");
 		Subshell cached = this.subshells.get(key.toString());
 		if (cached != null) {
 			return cached;
@@ -343,8 +346,9 @@ final class JvmJavaImplementations {
 				.add(slot.implementation() == JavaImplementation.NONE ? null : subclassCallback(implementation, slot));
 		}
 		String construct = "_jsubclass$" + this.methods.size();
-		this.methods.add(buildSubclassConstruct(implementation, overloads, argc, name, this.cp.utf8Entry(construct),
-				this.cp.utf8Entry("(Ljava/lang/Object;[Ljava/lang/Object;)Ljava/lang/Object;")));
+		this.methods
+			.add(buildSubclassConstruct(implementation, overloads, argc, functional, name, this.cp.utf8Entry(construct),
+					this.cp.utf8Entry("(Ljava/lang/Object;[Ljava/lang/Object;)Ljava/lang/Object;")));
 		Subshell shell = new Subshell(name, implementation, argc, overloads, callbacks, construct);
 		this.subshells.put(key.toString(), shell);
 		return shell;
@@ -609,7 +613,8 @@ final class JvmJavaImplementations {
 	// like a dispatched site -- called with the converted arguments on a new object
 	// of the generated subclass carrying the callable.
 	private JvmJavaDirectSites.Method buildSubclassConstruct(JavaImplementation implementation,
-			List<JavaOverloads.Overload> overloads, int argc, String internalName, Utf8Entry name, Utf8Entry desc) {
+			List<JavaOverloads.Overload> overloads, int argc, boolean functional, String internalName, Utf8Entry name,
+			Utf8Entry desc) {
 		JavaType superclass = java.util.Objects.requireNonNull(implementation.superclass());
 		MethodCode a = new MethodCode();
 		ClassEntry objectClass = cls("java/lang/Object");
@@ -705,7 +710,7 @@ final class JvmJavaImplementations {
 				a.aload(1);
 				a.loadConstant(j);
 				a.aaload();
-				a.invokestatic(this.direct.argumentConvert(param));
+				a.invokestatic(this.direct.argumentConvert(param, functional));
 			}
 			if (overload.packed()) {
 				JavaType component = java.util.Objects.requireNonNull(params.get(fixed).componentType());
@@ -724,7 +729,7 @@ final class JvmJavaImplementations {
 					a.aload(1);
 					a.loadConstant(j);
 					a.aaload();
-					a.invokestatic(this.direct.argumentConvert(component));
+					a.invokestatic(this.direct.argumentConvert(component, functional));
 					a.arrayStore(primitiveKind(component));
 				}
 				a.aload(array);

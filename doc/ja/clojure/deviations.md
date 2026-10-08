@@ -224,7 +224,7 @@
 - `class` は種類名のキーワードで答えます（`:string`・`:number`・`:keyword` 等）。オラクルは
   ホストクラスを返しますが、wasm バックエンドにはありません。record/deftype は
   タグのキーワードで、ホストオブジェクト（インタプリタと JVM）はホストクラスで答えます。
-- コレクション・キーワード・シンボル・比・atom へのインスタンス呼び出しは core 関数を通して
+- コレクション・キーワード・シンボル・比・atom・fn へのインスタンス呼び出しは core 関数を通して
   答えるため、その逸脱も引き継ぎます（`.getClass` は `class` と同じ値を返します）。対応づけて
   いないメソッドは `Method m taking N args is not supported for class C` として拒否し、
   オラクルが答える場合（`.hashCode`）もあります。map のクラス名は件数だけで決め、8 件までは
@@ -244,6 +244,15 @@
   インタフェース（`user.P`）が知るのはその箇所を lower した時点で定義済みの record と deftype
   なので、後の REPL 入力で定義したものはそこではインスタンスになりません。プロトコル自身の名前
   （var である `P`）は未知の名前になります（オラクルは `ClassCastException`）。
+- `reduce` と `reduce-kv`（とその上に作られた動詞）が `clojure.core.protocols/CollReduce` と
+  `IKVReduce` を参照するのは record・deftype・`reify` に対してだけです。どちらかを `nil`、
+  `Object`、コアの種類へ拡張したものには `coll-reduce` や `kv-reduce` を直接呼んで届きます。
+  オラクルの `reduce` は、自分では畳み込まないコレクション（文字列、マップ）についてもその拡張を
+  使います。インライン本体が実装していない引数の数でプロトコルメソッドを呼ぶと
+  `ArityException` をシグナルします（オラクルは `AbstractMethodError`）。
+- `clojure.core.reducers` は呼び出したスレッドの上で部分を順に1つずつ fold します。空でない
+  2つのコレクションの `cat` は両方を持つ1つのアキュムレーター（ベクター）を返します。オラクルは
+  `Cat` の木を返し、その fold は半分ずつの fold を結合します。
 - `unchecked-` の算術は整数を64ビット（`-int` 系は32ビット）に折り返し、型変換 `short`・`byte`・
   `char`・`float` と合わせてオラクルと同じです。ただし64ビットを超える整数もここでは通常の整数なので、
   オラクルでは折り返されない bigint のオペランド（`(unchecked-add 9223372036854775807N 1)`）も
@@ -295,8 +304,9 @@
 - トランスデューサーはオラクルと同じく畳み込み関数に対する関数ですが、`eduction` は入力を
   それへ通した `sequence` で、一度だけ計算します（strict な入力には strict に、lazy な入力
   には lazy に）。オラクルは reduce のたびに変換をやり直します。`println` はその seq を
-  表示し、オラクルはオブジェクトを表示します。`reduced` 値はラッパーのリストとして表示
-  されます。
+  表示し、オラクルはオブジェクトを表示します。自前の `CollReduce` の行を通して畳み込まれる
+  入力は `eduction` の時点で畳み込むため、オラクルでは拒否されるその `seq` も答えを返します。
+  `reduced` 値はラッパーのリストとして表示されます。
 - トランザクションは単一スレッドのエクステントです。`dosync` はリトライせず、`commute`
   は関数を1回だけ走らせ（オラクルは2回走らせうる）、validator は書き込み時に走って
   失敗時は古い値を残します。`dosync` の外側での `alter` 等はシグナルします。
@@ -345,16 +355,22 @@
   `..` ステップの宣言戻り値型）、その引数個数の
   オーバーロードがすべてプリミティブ boolean を答える場合と、receiver が文字列・数値・
   文字で、そのクラスのその引数個数のオーバーロードがすべてプリミティブ boolean を答える
-  場合（`(.matches "abc" "x")`）だけ `false` を答えます。
+  場合（`(.matches "abc" "x")`）と、receiver がインタフェース 1 つかクラス 1 つだけの
+  `proxy` の場合だけ `false` を答えます。
   それ以外のホスト boolean は共有の `java:` unmarshal のままとなり、`false` は
-  `nil` と表示されます。
+  `nil` と表示されます。ホストコレクションから読み戻した `Boolean.FALSE` も同じです
+  （`false` を入れたリストの `(vec l)` は `[nil]` を答えます）。
 - Java のインタフェースが期待される位置に渡した fn は、どのインタフェースでもその抽象
   メソッドすべてを実装し、それぞれメソッドの引数で呼ばれます。オラクルが fn を変換する
   のは `@FunctionalInterface` 注釈付きのインタフェースだけです（`PropertyChangeListener`
   はオラクルでは `ClassCastException` になります）。fn の値は引数と同じ規則で Java へ
-  戻ります。`Comparator` の fn は数値を答えます（オラクルは `true`/`false` も受け付けます）。
-  `false` は Java の値に変換されないため、Java の `boolean` を答える fn は `true` か
-  `nil` を答え、`false` を引数に取るメンバは一致しません。
+  戻ります。Java に渡した `Comparator` の fn は数値を答えます（オラクルは `true`/`false`
+  も受け付けます。fn 自身への `(.compare f a b)` はここでも受け付けます）。
+- Java に渡したマップは、そのエントリを持つ新しい `java.util.LinkedHashMap` になり、
+  各キーと値は引数と同じく変換されます（ベクタは `List`、マップは `Map`）。オラクルは
+  マップそのものを渡すため、コピーの `str` は入れ子のコレクションを Java の形で綴ります
+  （`{a=[1, 2]}`。オラクルは `{a=[1 2]}`）。セット・キーワード・record には Java の値が
+  ないため、それを取るメンバ（キーワードをキーにしたマップも）は一致しません。
 - 整数の receiver は `Integer` に収まれば `Integer`、収まらなければ `Long` として
   呼ばれます（オラクルでは常に `Long` です）。`(.getClass 1)` は
   `java.lang.Integer` を答えます。

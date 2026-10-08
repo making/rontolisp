@@ -33,6 +33,10 @@ import org.jspecify.annotations.Nullable;
  * token buffer and its layout, and the radix spelling of a number.</li>
  * <li>{@code rontolisp.internal.datafy} for {@code clojure.datafy}: the oracle's class
  * name of a value, which {@code class} (a kind keyword here) does not answer.</li>
+ * <li>{@code rontolisp.internal.reducers} for {@code clojure.core.reducers}: the
+ * accumulator {@code cat} answers (the oracle's {@code java.util.ArrayList}, a growable
+ * vector here, which no Clojure verb makes), the push of {@code append!} onto it and the
+ * join of two collections into a fresh one.</li>
  * <li>{@code rontolisp.internal.http} for {@code rontolisp.http-client}: the request
  * ({@code clojure.lisp}, "rontolisp.http-client") and {@code fetch}, which is
  * {@code rontolisp:fetch} itself, so the program names the transport every fetch splice
@@ -178,6 +182,10 @@ final class ClojureKernelLowering {
 							Map.entry("number-string", 3), Map.entry("members", 1))),
 			"rontolisp.internal.datafy",
 			new Kernels("clojure.datafy", "RONTOLISP::%CLOJURE-", Map.of("class-name-of", 1)),
+			"rontolisp.internal.reducers",
+			new Kernels("clojure.core.reducers", "RONTOLISP::%CLOJURE-REDUCERS-",
+					Map.ofEntries(Map.entry("accumulator", 0), Map.entry("accumulator?", 1), Map.entry("append", 2),
+							Map.entry("joined", 2))),
 			"rontolisp.internal.http",
 			new Kernels("rontolisp.http-client", "RONTOLISP::%CLOJURE-HTTP-",
 					Map.ofEntries(Map.entry("request", 2), Map.entry("fetch", 2)), Map.of("fetch", "RONTOLISP:FETCH"),

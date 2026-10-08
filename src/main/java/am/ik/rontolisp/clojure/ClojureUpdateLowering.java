@@ -624,7 +624,7 @@ final class ClojureUpdateLowering {
 	static LispVal frequenciesValue(ClojureLowering ctx) {
 		LispSymbol coll = new LispSymbol(ClojureLowering.mangle("frequencies-coll"));
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(coll),
-				frequenciesForm(ctx, ClojureSeqLowering.seqAllForm(ctx, coll)));
+				frequenciesForm(ctx, ClojureSeqLowering.reducedAllForm(ctx, coll)));
 	}
 
 	// Higher-order functions: closures, no new runtime

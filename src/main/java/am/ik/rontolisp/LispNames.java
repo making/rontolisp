@@ -7846,6 +7846,16 @@ public final class LispNames {
 	 */
 	public static final String JAVA_FUNCTIONAL_MARKER = ":FUNCTIONAL";
 
+	/**
+	 * The name of the symbol {@code java:} passes as Java's {@code false} -- the
+	 * {@code boolean} false, and {@code Boolean.FALSE} where a reference is expected,
+	 * where {@code nil} is {@code null} -- and which a function called back from Java may
+	 * answer for a {@code boolean}: {@code |false|}, Java's own spelling. A language with
+	 * a false distinct from {@code nil} spells its false with it, so its false crosses as
+	 * Java's.
+	 */
+	public static final String JAVA_FALSE = "false";
+
 	/** {@code java:new}, qualified. */
 	public static final String JAVA_NEW_QUALIFIED = JAVA_PKG + ":" + JAVA_NEW;
 

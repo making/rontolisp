@@ -684,6 +684,15 @@ class JavaInteropTest {
 			.isEqualTo(JavaInteropPrograms.LISP_RECEIVER_OUTPUT);
 	}
 
+	// Mirrors JvmJavaInteropCompilerTest#falseAndAHashTableCrossAsJavasFalseAndAMap.
+	// Before, measured 2026-10-08: every |false| and hash-table row was "No matching
+	// method ..." and every callback row "java:reify: cannot return |false| as ...".
+	@Test
+	void falseAndAHashTableCrossAsJavasFalseAndAMap() {
+		assertThat(output(JavaInteropPrograms.FALSE_AND_TABLE_PROGRAM))
+			.isEqualTo(JavaInteropPrograms.FALSE_AND_TABLE_OUTPUT);
+	}
+
 	@Test
 	void proxyOnNonInterfaceSignals() {
 		assertThatThrownBy(() -> eval("(java:proxy \"java.lang.String\" (lambda (m) nil))"))

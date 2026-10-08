@@ -84,13 +84,37 @@ class ClojureLanguageNamespacesTest {
 	}
 
 	@Test
-	void coreProtocolsLoadsAtStartupAndRefusesItsTwoArityProtocol() {
+	void coreProtocolsLoadsAtStartupAndRefusesItsIteratorReduction() {
 		assertThat(lowered("(clojure.core.protocols/datafy 1)", Map.of()))
 			.contains("(DEFUN |c%clojure.core.protocols/datafy|");
-		assertThatThrownBy(() -> Clojure.read("(require '[clojure.core.protocols :as p]) (p/coll-reduce [1] +)", null))
+		assertThat(lowered("(require '[clojure.core.protocols :as p]) (p/coll-reduce [1] + 0)", Map.of()))
+			.contains("(DEFUN |c%clojure.core.protocols/coll-reduce|");
+		assertThatThrownBy(
+				() -> Clojure.read("(require '[clojure.core.protocols :as p]) (p/iterator-reduce! nil +)", null))
 			.isInstanceOf(LispReadException.class)
 			.hasMessageContaining(
-					"clojure.core.protocols/coll-reduce is not built in: a protocol method of two arities is not built in");
+					"clojure.core.protocols/iterator-reduce! is not built in: it reduces a java.util.Iterator");
+	}
+
+	@Test
+	void clojureCoreReducersLoadsAtItsRequireAndRefusesTheForkJoinPool() {
+		String out = lowered("(ns a (:require [clojure.core.reducers :as r])) (r/fold + (r/map inc [1 2]))", Map.of());
+		assertThat(out).contains("(DEFUN |c%clojure.core.reducers/fold|")
+			.contains("(DEFUN |c%clojure.core.reducers/coll-fold|")
+			.contains("(RONTOLISP::%CLOJURE-COLL-REDUCER-ROW ");
+		// clj -M has not loaded clojure.core.reducers: a qualified name alone does not
+		// reach it.
+		assertThat(lowered("(defn f [x] (clojure.edn/read-string x))", Map.of())).doesNotContain("reducers");
+		for (String var : new String[] { "pool", "fjtask", "->Cat" }) {
+			assertThatThrownBy(
+					() -> Clojure.read("(ns a (:require [clojure.core.reducers :as r])) (r/" + var + ")", null))
+				.as(var)
+				.isInstanceOf(LispReadException.class)
+				.hasMessageContaining("clojure.core.reducers/" + var + " is not built in: ");
+		}
+		assertThatThrownBy(() -> Clojure.read("(ns a (:require [rontolisp.internal.reducers :as k]))", null))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("rontolisp.internal.reducers is internal to clojure.core.reducers");
 	}
 
 	@Test

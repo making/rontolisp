@@ -255,14 +255,15 @@ public final class JvmLispCompiler implements LispCompiler {
 	 * which the shipped java:/objc:/ffi: bridges look up with {@code getDeclaredMethod},
 	 * {@code _lispToString}, which the java: bridge shows a value in a message with,
 	 * {@code _bf16Value}, which it reads a bfloat16 vector's elements through,
+	 * {@code _hashValues}, which it reads a hash table's entries through,
 	 * {@code _jsig}/{@code _jfail}, which its {@code Proxy} records what a callback
 	 * raised with and its calls pass it on through, and
 	 * {@code _gpuMaterialize}/{@code _gpuWritten}, which the travelling float-array
 	 * handle resolves through {@code MethodHandles} ({@code .kb/jvm-export.md}).
 	 */
 	private static final Set<String> REFLECTIVELY_FOUND_METHODS = Set.of("_apply", "_strv", "_lispToString",
-			JvmFloatArrayRuntimeBuilder.BF16_VALUE, JvmJavaDirectSites.SIGNAL, JvmJavaDirectSites.FAIL,
-			"_gpuMaterialize", "_gpuWritten");
+			JvmFloatArrayRuntimeBuilder.BF16_VALUE, JvmHashRuntimeBuilder.VALUES, JvmJavaDirectSites.SIGNAL,
+			JvmJavaDirectSites.FAIL, "_gpuMaterialize", "_gpuWritten");
 
 	/** The array runtime helper group ({@link JvmArrayRuntimeBuilder}). */
 	private static final String GROUP_ARRAYS = "arrays";
@@ -2285,6 +2286,12 @@ public final class JvmLispCompiler implements LispCompiler {
 										JvmFloatArrayRuntimeBuilder.BF16_VALUE_DESC)
 
 								: null);
+			// ... and a hash table's entries through the program's own walk, converting
+			// it to a java.util.Map where one is expected.
+			javaSites.direct()
+				.hashTables(usesHashTables
+						? cp.methodRef(thisClass, JvmHashRuntimeBuilder.VALUES, JvmHashRuntimeBuilder.VALUES_DESC)
+						: null);
 		}
 		// Numeric runtime helpers (long arithmetic with automatic BigInteger promotion)
 		// The interned layout array of an instance -- the discriminator the structural
@@ -5010,6 +5017,10 @@ public final class JvmLispCompiler implements LispCompiler {
 				// widening, found by name too.
 				if (usesFloatArray) {
 					roots.add(JvmFloatArrayRuntimeBuilder.BF16_VALUE);
+				}
+				// ... and a hash table's entries through the program's own walk.
+				if (usesHashTables) {
+					roots.add(JvmHashRuntimeBuilder.VALUES);
 				}
 				// ... and records what its Proxy's callback raised, and passes it on from
 				// a call, through the program's _jsig and _jfail.

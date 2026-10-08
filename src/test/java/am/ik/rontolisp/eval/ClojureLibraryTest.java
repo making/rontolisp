@@ -59,6 +59,37 @@ class ClojureLibraryTest {
 	}
 
 	@Test
+	void aProgramStoringNoReducerRowSplicesTheReduceVerbsWithoutTheirProtocolArms() {
+		// only a record's, deftype's or reify's row of CollReduce or IKVReduce makes a
+		// value reduce through its protocol: a program storing none compiles reduce,
+		// reduce-kv and the verbs built on them as before
+		for (String verb : List.of("RONTOLISP::%CLOJURE-REDUCE-INIT", "RONTOLISP::%CLOJURE-REDUCE",
+				"RONTOLISP::%CLOJURE-RUN!")) {
+			assertThat(defun(ClojureLibrary.forms(), verb)).as(verb)
+				.contains("(RONTOLISP::%CLOJURE-COLL-REDUCIBLE-P COLL)");
+		}
+		assertThat(defun(ClojureLibrary.forms(), "RONTOLISP::%CLOJURE-REDUCE-KV"))
+			.contains("(RONTOLISP::%CLOJURE-KV-REDUCIBLE-P COLL)");
+		List<LispVal> plain = ClojureLibrary.process(Clojure.read(
+				"(println (reduce + 0 [1 2]) (reduce-kv (fn [a k v] a) 0 {}) (group-by odd? [1]) (frequencies [1]))",
+				null));
+		for (String verb : List.of("RONTOLISP::%CLOJURE-REDUCE-INIT", "RONTOLISP::%CLOJURE-REDUCE-KV")) {
+			assertThat(defun(plain, verb)).as(verb).doesNotContain("REDUCIBLE").doesNotContain("REDUCER");
+		}
+		assertThat(plain.get(plain.size() - 1).print()).doesNotContain("%CLOJURE-REDUCIBLE-ITEMS");
+		// a protocol program extending CollReduce to a core kind, or nothing typed, folds
+		// them too
+		List<LispVal> core = ClojureLibrary.process(Clojure.read("(require '[clojure.core.protocols :as p])"
+				+ " (extend-protocol p/CollReduce String (coll-reduce ([s f] 1) ([s f i] 2)))"
+				+ " (println (reduce + 0 [1 2]))", null));
+		assertThat(defun(core, "RONTOLISP::%CLOJURE-REDUCE-INIT")).doesNotContain("REDUCIBLE");
+		List<LispVal> reducible = ClojureLibrary.process(Clojure.read("(require '[clojure.core.protocols :as p])"
+				+ " (println (reduce + 0 (reify p/CollReduce (coll-reduce [_ f init] init))))", null));
+		assertThat(defun(reducible, "RONTOLISP::%CLOJURE-REDUCE-INIT"))
+			.contains("(RONTOLISP::%CLOJURE-COLL-REDUCIBLE-P COLL)");
+	}
+
+	@Test
 	void aProgramMakingNoMatcherSplicesNthWithoutItsMatcherArm() {
 		// only re-matcher makes a matcher: a program naming it keeps nth's group arm,
 		// any other compiles nth as before matchers were read

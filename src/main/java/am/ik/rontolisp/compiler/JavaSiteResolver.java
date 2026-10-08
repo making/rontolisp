@@ -884,6 +884,9 @@ public final class JavaSiteResolver {
 							|| quoted instanceof LispChar || quoted instanceof LispNil || quoted instanceof LispTrue) {
 						return typeOf(quoted);
 					}
+					if (quoted instanceof LispSymbol symbol && LispNames.JAVA_FALSE.equals(symbol.name())) {
+						return kinds(JavaKind.Lisp.FALSE);
+					}
 				}
 				return JavaStaticType.UNKNOWN;
 			}

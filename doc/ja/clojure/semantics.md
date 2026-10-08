@@ -356,7 +356,11 @@ lazy 入力はどの seq 動詞にも届きます。コレクション全体を�
 `Number`、`Boolean`、`Keyword`、`Symbol`、`Character`、`Map`、`Vector`、`Set`、
 `List`/`Seq`、それに外れ既定としての `nil` と `Object`）と既知の record/deftype 名
 で、それ以外は名前付きで拒否されます。`Object` 行なしの外れはオラクル同様シグナル
-を上げます。各メソッドは1つのパラメータベクターを取ります（複数アリティは拒否のまま）。
+を上げます。メソッドはアリティごとに1つのパラメータベクターを宣言します。インライン本体は
+メソッド名を書き直して別のアリティを実装し、拡張は `fn` の節で書き、行には呼び出しの引数の数に
+一致するアリティを適用する1つのラムダを格納します。`clojure.core.protocols/CollReduce` や
+`IKVReduce` の自前の行を持つ record・deftype・`reify` は、`reduce`・`reduce-kv` とその上に
+作られた動詞でもその行を通して畳み込まれます（[reduce](reference/reduce.md)）。
 `:extend-via-metadata true` と宣言したプロトコルは、ターゲットのメタデータからも
 名前空間で修飾したメソッドのシンボルでメソッドを探します。オラクル同様、
 `defrecord`/`deftype`/`reify` 本体の実装の後、extend の行の前です
@@ -438,7 +442,6 @@ var はエクスポートより下で定義してかまいません。
 | end なし `range` | `infinite range is not supported: range needs an end` | 無限 seq は strict には綴れない -- `iterate` を使う |
 | `transient`、`persistent!`、`assoc!`、`dissoc!`、`conj!`、`disj!` | `transients are not supported yet: ...` | テーブルの裏にトランジェント実装がない |
 | `definterface`、`gen-class`、`gen-interface` | `protocols are not supported yet: ...` | どのバックエンドにもインターフェース生成がない |
-| 複数アリティのプロトコルメソッド | `multi-arity protocol methods are not supported yet: ...` | メソッドごとにパラメータベクターは1つ |
 | 特殊変数でない core の var（`inc`）やホストフィールドへの `set!` | `set! of a var is not supported yet: ...`、`set! of a host field is not supported yet: ...` | 代入先の var がない。`java:` にフィールド書き込みがない |
 | `future`、`delay`/`force`、`promise`/`deliver` | 名前で | どのバックエンドにもスレッドプール・遅延メモセル・ブロッキング待ち合わせがない |
 | proxy メソッドの外側の `proxy-super` | `proxy-super outside a proxy method` | `proxy-super` はメソッドの `this` に対するスーパークラスの実装呼び出し |

@@ -208,6 +208,7 @@ public record JavaSite(Operator operator, @Nullable String staticClass, @Nullabl
 			return switch ((JavaKind.Lisp) kind) {
 				case NIL -> "nil";
 				case T -> "t";
+				case FALSE -> "false";
 				case INTEGER, BIGNUM -> "an integer";
 				case FLOAT -> "a float";
 				case STRING, STRING_1 -> "a string";

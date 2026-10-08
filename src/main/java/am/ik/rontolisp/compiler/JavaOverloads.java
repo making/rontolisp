@@ -353,16 +353,17 @@ public final class JavaOverloads {
 	 * ({@link #isReceiverKind}), when the kind fixes it: a string a {@code String}, a
 	 * float a {@code Double}, a BMP character a {@code Character}, a supplementary one
 	 * the {@code Integer} of its code point, a bignum a {@code BigInteger}, {@code t}
-	 * {@code Boolean.TRUE} -- what each converts to for an {@code Object} parameter. An
-	 * integer becomes the narrowest box that holds it, {@code Integer} or {@code Long},
-	 * so its class is the value's, not the kind's.
+	 * {@code Boolean.TRUE} and {@code |false|} {@code Boolean.FALSE} -- what each
+	 * converts to for an {@code Object} parameter. An integer becomes the narrowest box
+	 * that holds it, {@code Integer} or {@code Long}, so its class is the value's, not
+	 * the kind's.
 	 * @param kind the receiver's kind
 	 * @return the class name, or {@code null} for an integer and a kind that is no
 	 * receiver
 	 */
 	public static @Nullable String receiverClassName(JavaKind.Lisp kind) {
 		return switch (kind) {
-			case T -> "java.lang.Boolean";
+			case T, FALSE -> "java.lang.Boolean";
 			case BIGNUM -> BIG_INTEGER;
 			case FLOAT -> "java.lang.Double";
 			case STRING, STRING_1 -> "java.lang.String";
@@ -396,7 +397,8 @@ public final class JavaOverloads {
 				// nil carries no type, so any reference target ties
 				yield target.isPrimitive() ? NO_MATCH : COST_BOXED;
 			}
-			case T -> {
+			// Java's false is t's twin: a boolean, a Boolean, or a supertype of Boolean.
+			case T, FALSE -> {
 				if ("boolean".equals(name)) {
 					yield COST_EXACT;
 				}
