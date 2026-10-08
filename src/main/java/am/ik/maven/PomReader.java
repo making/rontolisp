@@ -16,9 +16,12 @@ import org.jspecify.annotations.Nullable;
  * written twice, text between the elements of a structure, an element inside a value.
  *
  * <p>
- * Only the elements a dependency graph needs are read; the others ({@code build},
- * {@code reporting}, {@code scm}, ...) are skipped whole, so malformed content inside
- * them that Maven's full reader would reject is accepted here.
+ * Only the elements a dependency graph or a project's source directories need are read:
+ * of {@code build}, the directories, the resources' directories, the filters and the
+ * plugins (coordinates, {@code inherited}, executions, configurations) with their
+ * management; the rest ({@code reporting}, {@code scm}, a plugin's dependencies, ...) is
+ * skipped whole, so malformed content inside it that Maven's full reader would reject is
+ * accepted here.
  */
 final class PomReader {
 
@@ -55,6 +58,24 @@ final class PomReader {
 
 	private static final Set<String> MANAGEMENT_FIELDS = Set.of("dependencies");
 
+	/** A profile's {@code build}, Maven's {@code BuildBase}. */
+	private static final Set<String> BUILD_BASE_FIELDS = Set.of("defaultGoal", "resources", "testResources",
+			"directory", "finalName", "filters", "pluginManagement", "plugins");
+
+	private static final Set<String> BUILD_FIELDS = Set.of("sourceDirectory", "scriptSourceDirectory",
+			"testSourceDirectory", "outputDirectory", "testOutputDirectory", "extensions", "defaultGoal", "resources",
+			"testResources", "directory", "finalName", "filters", "pluginManagement", "plugins");
+
+	private static final Set<String> RESOURCE_FIELDS = Set.of("targetPath", "filtering", "directory", "includes",
+			"excludes");
+
+	private static final Set<String> PLUGIN_MANAGEMENT_FIELDS = Set.of("plugins");
+
+	private static final Set<String> PLUGIN_FIELDS = Set.of("groupId", "artifactId", "version", "extensions",
+			"executions", "dependencies", "goals", "inherited", "configuration");
+
+	private static final Set<String> EXECUTION_FIELDS = Set.of("id", "phase", "goals", "inherited", "configuration");
+
 	private PomReader() {
 	}
 
@@ -78,17 +99,20 @@ final class PomReader {
 		XmlElement parent = project.child("parent");
 		XmlElement management = project.child("dependencyManagement");
 		XmlElement distribution = project.child("distributionManagement");
+		XmlElement build = project.child("build");
 		return new PomModel(leaf(project, "modelVersion"), parent == null ? null : parent(parent),
 				leaf(project, "groupId"), leaf(project, "artifactId"), leaf(project, "version"),
 				leaf(project, "packaging"), leaf(project, "name"), leaf(project, "description"),
 				properties(project.child("properties")), dependencies(project.child("dependencies")),
 				management == null ? null : management(management), profiles(project.child("profiles")),
-				distribution == null ? null : relocation(distribution), modules(project.child("modules")));
+				distribution == null ? null : relocation(distribution), modules(project.child("modules")),
+				build == null ? null : build(build, BUILD_FIELDS));
 	}
 
 	private static PomModel.Parent parent(XmlElement parent) throws XmlParser.Malformed {
 		structure(parent, PARENT_FIELDS);
-		return new PomModel.Parent(leaf(parent, "groupId"), leaf(parent, "artifactId"), leaf(parent, "version"));
+		return new PomModel.Parent(leaf(parent, "groupId"), leaf(parent, "artifactId"), leaf(parent, "version"),
+				leaf(parent, "relativePath"));
 	}
 
 	private static List<PomModel.Dep> management(XmlElement management) throws XmlParser.Malformed {
@@ -119,11 +143,78 @@ final class PomReader {
 			structure(profile, PROFILE_FIELDS);
 			XmlElement activation = profile.child("activation");
 			XmlElement management = profile.child("dependencyManagement");
+			XmlElement build = profile.child("build");
 			result.add(new PomModel.Profile(leaf(profile, "id"), activation == null ? null : activation(activation),
 					properties(profile.child("properties")), dependencies(profile.child("dependencies")),
-					management == null ? null : management(management), modules(profile.child("modules"))));
+					management == null ? null : management(management), modules(profile.child("modules")),
+					build == null ? null : build(build, BUILD_BASE_FIELDS)));
 		}
 		return result;
+	}
+
+	/**
+	 * A {@code build}, or a profile's: there the fields a {@code BuildBase} lacks are
+	 * unknown elements, skipped.
+	 */
+	private static PomModel.Build build(XmlElement build, Set<String> fields) throws XmlParser.Malformed {
+		structure(build, fields);
+		boolean full = fields == BUILD_FIELDS;
+		List<String> filters = new ArrayList<>();
+		for (XmlElement filter : items(build.child("filters"), "filter")) {
+			filters.add(value(filter));
+		}
+		XmlElement management = build.child("pluginManagement");
+		List<PomModel.Plugin> managed = null;
+		if (management != null) {
+			structure(management, PLUGIN_MANAGEMENT_FIELDS);
+			managed = plugins(management.child("plugins"));
+		}
+		return new PomModel.Build(full ? leaf(build, "sourceDirectory") : null,
+				full ? leaf(build, "scriptSourceDirectory") : null, full ? leaf(build, "testSourceDirectory") : null,
+				full ? leaf(build, "outputDirectory") : null, full ? leaf(build, "testOutputDirectory") : null,
+				leaf(build, "directory"), leaf(build, "finalName"), leaf(build, "defaultGoal"),
+				resources(build.child("resources"), "resource"),
+				resources(build.child("testResources"), "testResource"), filters, plugins(build.child("plugins")),
+				managed);
+	}
+
+	private static List<PomModel.Resource> resources(@Nullable XmlElement resources, String itemName)
+			throws XmlParser.Malformed {
+		List<PomModel.Resource> result = new ArrayList<>();
+		for (XmlElement resource : items(resources, itemName)) {
+			structure(resource, RESOURCE_FIELDS);
+			result.add(new PomModel.Resource(leaf(resource, "directory")));
+		}
+		return result;
+	}
+
+	private static List<PomModel.Plugin> plugins(@Nullable XmlElement plugins) throws XmlParser.Malformed {
+		List<PomModel.Plugin> result = new ArrayList<>();
+		for (XmlElement plugin : items(plugins, "plugin")) {
+			structure(plugin, PLUGIN_FIELDS);
+			List<PomModel.Execution> executions = new ArrayList<>();
+			for (XmlElement execution : items(plugin.child("executions"), "execution")) {
+				structure(execution, EXECUTION_FIELDS);
+				List<String> goals = new ArrayList<>();
+				for (XmlElement goal : items(execution.child("goals"), "goal")) {
+					goals.add(value(goal));
+				}
+				String id = leaf(execution, "id");
+				executions.add(new PomModel.Execution(id == null ? "default" : id, leaf(execution, "phase"), goals,
+						leaf(execution, "inherited"), configuration(execution)));
+			}
+			String groupId = leaf(plugin, "groupId");
+			result.add(new PomModel.Plugin(groupId == null ? "org.apache.maven.plugins" : groupId,
+					leaf(plugin, "artifactId"), leaf(plugin, "version"), leaf(plugin, "inherited"),
+					configuration(plugin), executions));
+		}
+		return result;
+	}
+
+	/** A {@code configuration} element, every element below it kept. */
+	private static @Nullable ConfigurationNode configuration(XmlElement container) {
+		XmlElement configuration = container.child("configuration");
+		return configuration == null ? null : ConfigurationNode.of(configuration);
 	}
 
 	private static PomModel.Activation activation(XmlElement activation) throws XmlParser.Malformed {

@@ -110,8 +110,13 @@ no known type and a dependency the oracle cannot resolve are errors in its words
   an abbreviated sha needs a tag, and of two commits of one library the descendant is the
   newer. Its `deps.edn` is read like a `:local/root` directory's.
 - A `:local/root` jar's own `pom.xml` gives its dependencies. A `pom.xml` project (a
-  directory or commit with a `pom.xml` and no `deps.edn`) is not read: a namespace only it
-  could hold is refused naming it.
+  directory or commit with a `pom.xml` and no `deps.edn`) is read as Maven builds its model,
+  its parent looked for at `<relativePath>` (by default `../pom.xml`) before the
+  repositories: its compile and runtime dependencies, optional ones included, and as
+  source roots its build's source directory (by default `src/main/java`),
+  `src/main/clojure`, its resource directories (by default `src/main/resources`) and the
+  `add-source` / `add-resource` directories of `build-helper-maven-plugin`, read off the
+  first plugin as the oracle reads them.
 - A dependency's jar holding classes joins the program's Java class path: the interpreter
   and the JVM call its classes, and `-o app.jar` copies it beside the jar. WebAssembly keeps
   refusing Java when called.

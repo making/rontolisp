@@ -3,6 +3,7 @@ package am.ik.rontolisp.clojure;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -26,6 +27,10 @@ import am.ik.rontolisp.clojure.ClojureRepositories.FetchFailure;
 import am.ik.rontolisp.clojure.ClojureRepositories.MavenArtifact;
 import am.ik.rontolisp.clojure.ClojureRepositories.MavenDependency;
 import am.ik.rontolisp.clojure.ClojureRepositories.MavenSource;
+import am.ik.rontolisp.clojure.ClojureRepositories.PomConfiguration;
+import am.ik.rontolisp.clojure.ClojureRepositories.PomExecution;
+import am.ik.rontolisp.clojure.ClojureRepositories.PomPlugin;
+import am.ik.rontolisp.clojure.ClojureRepositories.PomProject;
 import am.ik.rontolisp.reader.LispReadException;
 import org.jspecify.annotations.Nullable;
 
@@ -46,12 +51,14 @@ import org.jspecify.annotations.Nullable;
  * resolved against the repository, its {@code deps.edn} read like a local root's; of two
  * commits the descendant is the newer.</li>
  * <li>A {@code pom.xml} project (a directory or a commit with a {@code pom.xml} and no
- * {@code deps.edn}) is not read: it contributes nothing, named when a lookup misses.</li>
+ * {@code deps.edn}): its effective model's compile and runtime dependencies, and its
+ * build's source directory, {@code src/main/clojure}, resource directories and
+ * {@code build-helper-maven-plugin} directories as roots.</li>
  * </ul>
  * Where the host fetches nothing ({@link ClojureFiles#repositories()} is null: an
  * embedder, a test, the browser playground), a Maven or git coordinate contributes no
- * root and no dependency, and a jar's {@code pom.xml} is not read: each is named when a
- * lookup misses.
+ * root and no dependency, and neither a jar's {@code pom.xml} nor a {@code pom.xml}
+ * project is read: each is named when a lookup misses.
  */
 final class ClojureDepsProcurer implements ClojureDepsGraph.Procurer {
 
@@ -83,6 +90,9 @@ final class ClojureDepsProcurer implements ClojureDepsGraph.Procurer {
 
 	/** Each git tag's existence asked once per resolution: {@code url tag}. */
 	private final Map<String, Boolean> tags = new HashMap<>();
+
+	/** Each {@code pom.xml} project's model, by its file. */
+	private final Map<String, PomProject> pomProjects = new HashMap<>();
 
 	/**
 	 * A procurer reading the files, fetching from the root map's Maven repositories.
@@ -328,7 +338,10 @@ final class ClojureDepsProcurer implements ClojureDepsGraph.Procurer {
 				yield out;
 			}
 			case ":jar" -> jarChildren(lib, useCoord);
-			default -> List.of(); // a pom.xml project is not read
+			default -> {
+				PomProject project = pomProject(useCoord);
+				yield project == null ? List.of() : modelChildren(project.dependencies());
+			}
 		};
 	}
 
@@ -374,8 +387,16 @@ final class ClojureDepsProcurer implements ClojureDepsGraph.Procurer {
 		if (text == null) {
 			throw new LispReadException("Local lib " + lib + " is not a readable jar: " + jar);
 		}
-		List<MavenDependency> dependencies = fetch(() -> fetcher.pomDependencies(mavenSource(), text),
-				"the " + pom + " in " + jar + ": ");
+		return modelChildren(
+				fetch(() -> fetcher.pomDependencies(mavenSource(), text), "the " + pom + " in " + jar + ": "));
+	}
+
+	/**
+	 * The oracle's {@code model-deps}, a POM's model read as a project's: the compile and
+	 * runtime dependencies, optional ones too, each coordinate its version, scope,
+	 * {@code :optional} and exclusions, each classifier the one written and no extension.
+	 */
+	private static List<Dep> modelChildren(List<MavenDependency> dependencies) {
 		List<Dep> out = new ArrayList<>();
 		for (MavenDependency dependency : dependencies) {
 			if (!CLASSPATH_SCOPES.contains(dependency.scope())) {
@@ -505,8 +526,8 @@ final class ClojureDepsProcurer implements ClojureDepsGraph.Procurer {
 
 	/**
 	 * What a local root or a checked-out commit contributes by its manifest: a
-	 * {@code deps.edn}'s {@code :paths} below its root, a jar itself, nothing for a
-	 * {@code pom.xml} project.
+	 * {@code deps.edn}'s {@code :paths} below its root, a jar itself, a {@code pom.xml}
+	 * project's source directories (nothing, named, where nothing is fetched).
 	 */
 	private Contribution manifestContribution(Lib lib, Coord useCoord) {
 		String root = String.valueOf(useCoord.string(":deps/root"));
@@ -533,8 +554,86 @@ final class ClojureDepsProcurer implements ClojureDepsGraph.Procurer {
 								? "the dependencies the pom.xml in " + jar + " declares (a jar's pom.xml is not read)"
 								: null);
 			}
-			default -> new Contribution(List.of(), false, lib + " " + root + " (a pom.xml project, not read)");
+			default -> {
+				PomProject project = pomProject(useCoord);
+				yield project == null
+						? new Contribution(List.of(), false, lib + " " + root + " (a pom.xml project, not read)")
+						: new Contribution(pomRoots(root, project), false, null);
+			}
 		};
+	}
+
+	/**
+	 * The oracle's {@code coord-paths :pom}: the source directory,
+	 * {@code src/main/clojure}, the resources' directories, then the
+	 * {@code build-helper-maven-plugin} directories, each made canonical against the root
+	 * (absent ones too), each once.
+	 */
+	private List<Root> pomRoots(String root, PomProject project) {
+		List<@Nullable String> sources = new ArrayList<>();
+		sources.add(project.sourceDirectory());
+		sources.add("src/main/clojure");
+		sources.addAll(project.resourceDirectories());
+		sources.addAll(buildHelperPaths(project.plugins()));
+		Set<String> seen = new LinkedHashSet<>();
+		for (String source : sources) {
+			if (source != null) {
+				seen.add(this.files.canonical(this.files.resolve(root, source)));
+			}
+		}
+		List<Root> roots = new ArrayList<>();
+		for (String path : seen) {
+			roots.add(new Root(path, false));
+		}
+		return roots;
+	}
+
+	/**
+	 * The oracle's {@code get-build-helper-paths}: when any plugin is the
+	 * {@code build-helper-maven-plugin}, the {@code add-source} executions' sources then
+	 * the {@code add-resource} executions' resources -- read off the FIRST plugin,
+	 * whichever it is, as tools.deps' {@code (first plugins)} reads them.
+	 */
+	private static List<@Nullable String> buildHelperPaths(List<PomPlugin> plugins) {
+		boolean helper = false;
+		for (PomPlugin plugin : plugins) {
+			helper |= "org.codehaus.mojo".equals(plugin.groupId())
+					&& "build-helper-maven-plugin".equals(plugin.artifactId());
+		}
+		if (!helper) {
+			return List.of();
+		}
+		List<@Nullable String> paths = new ArrayList<>();
+		addConfigured(paths, plugins.get(0), "add-source", "sources");
+		addConfigured(paths, plugins.get(0), "add-resource", "resources");
+		return paths;
+	}
+
+	/** Each value below the named element of every execution with that goal. */
+	private static void addConfigured(List<@Nullable String> paths, PomPlugin plugin, String goal, String element) {
+		for (PomExecution execution : plugin.executions()) {
+			PomConfiguration configuration = execution.configuration();
+			PomConfiguration list = configuration == null ? null : configuration.child(element);
+			if (execution.goals().contains(goal) && list != null) {
+				for (PomConfiguration child : list.children()) {
+					paths.add(child.value());
+				}
+			}
+		}
+	}
+
+	/**
+	 * A {@code pom.xml} project's model, read once per resolution; {@code null} where
+	 * nothing is fetched.
+	 */
+	private @Nullable PomProject pomProject(Coord useCoord) {
+		ClojureRepositories fetcher = this.repositories;
+		if (fetcher == null) {
+			return null;
+		}
+		String pom = this.files.resolve(String.valueOf(useCoord.string(":deps/root")), "pom.xml");
+		return this.pomProjects.computeIfAbsent(pom,
+				key -> fetch(() -> fetcher.pomProject(mavenSource(), key), key + ": "));
 	}
 
 	/**

@@ -1,6 +1,10 @@
 package am.ik.maven;
 
 import java.io.File;
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
@@ -12,18 +16,22 @@ import java.util.Set;
 import org.jspecify.annotations.Nullable;
 
 /**
- * The effective model of a POM read from a repository, built as Maven 3.9's
- * {@code DefaultModelBuilder} builds a dependency's model (validation level minimal, no
- * project directory, no plugin processing):
+ * The effective model of a POM, built as Maven 3.9's {@code DefaultModelBuilder} builds a
+ * dependency's model (validation level minimal, no project directory, no plugin
+ * processing):
  * <ol>
  * <li>each POM of the parent chain is read, its duplicate dependencies collapsed (the
- * last declaration wins, at the first one's position), its profiles' activation
- * interpolated against its own properties and its active profiles injected;</li>
- * <li>the chain is merged from the top: group id, version, description and model version
- * are inherited when absent, properties merge with the child winning, dependencies and
- * dependency management merge by management key with the child's entry winning whole, and
- * the parent's entries the child lacks follow the child's own;</li>
- * <li>{@code ${...}} is expanded over the merged model ({@link Interpolator});</li>
+ * last declaration wins, at the first one's position) and its duplicate plugins merged,
+ * its profiles' activation interpolated against its own properties and its active
+ * profiles injected; the chain ends with the super POM (its build defaults);</li>
+ * <li>the chain is merged from the top: group id, version and description are inherited
+ * when absent (the model version never is), properties merge with the child winning,
+ * dependencies and dependency management merge by management key with the child's entry
+ * winning whole, and the parent's entries the child lacks follow the child's own; the
+ * build merges as {@link BuildMerger#inherit} merges it;</li>
+ * <li>{@code ${...}} is expanded over the merged model ({@link Interpolator}), its build
+ * and plugin configurations included;</li>
+ * <li>the plugin management is merged into the plugins it manages;</li>
  * <li>{@code import}-scoped {@code pom} entries of the dependency management are replaced
  * by the imported POMs' effective dependency management, the model's own entries first,
  * then each import's in order, the first entry of a key winning;</li>
@@ -63,6 +71,101 @@ final class ModelBuilder {
 
 	/** Marks a POM no repository has. */
 	private static final Object MISSING = new Object();
+
+	/**
+	 * Maven 3.9.16's super POM ({@code org/apache/maven/model/pom-4.0.0.xml} in
+	 * maven-model-builder), the last model of every chain. What the reader skips
+	 * (repositories, reporting) is left out.
+	 */
+	private static final String SUPER_POM_XML = """
+			<project>
+			  <modelVersion>4.0.0</modelVersion>
+			  <build>
+			    <directory>${project.basedir}/target</directory>
+			    <outputDirectory>${project.build.directory}/classes</outputDirectory>
+			    <finalName>${project.artifactId}-${project.version}</finalName>
+			    <testOutputDirectory>${project.build.directory}/test-classes</testOutputDirectory>
+			    <sourceDirectory>${project.basedir}/src/main/java</sourceDirectory>
+			    <scriptSourceDirectory>${project.basedir}/src/main/scripts</scriptSourceDirectory>
+			    <testSourceDirectory>${project.basedir}/src/test/java</testSourceDirectory>
+			    <resources>
+			      <resource>
+			        <directory>${project.basedir}/src/main/resources</directory>
+			      </resource>
+			    </resources>
+			    <testResources>
+			      <testResource>
+			        <directory>${project.basedir}/src/test/resources</directory>
+			      </testResource>
+			    </testResources>
+			    <pluginManagement>
+			      <plugins>
+			        <plugin>
+			          <artifactId>maven-antrun-plugin</artifactId>
+			          <version>3.1.0</version>
+			        </plugin>
+			        <plugin>
+			          <artifactId>maven-assembly-plugin</artifactId>
+			          <version>3.7.1</version>
+			        </plugin>
+			        <plugin>
+			          <artifactId>maven-dependency-plugin</artifactId>
+			          <version>3.7.0</version>
+			        </plugin>
+			        <plugin>
+			          <artifactId>maven-release-plugin</artifactId>
+			          <version>3.0.1</version>
+			        </plugin>
+			      </plugins>
+			    </pluginManagement>
+			  </build>
+			  <profiles>
+			    <profile>
+			      <id>release-profile</id>
+			      <activation>
+			        <property>
+			          <name>performRelease</name>
+			          <value>true</value>
+			        </property>
+			      </activation>
+			      <build>
+			        <plugins>
+			          <plugin>
+			            <inherited>true</inherited>
+			            <artifactId>maven-source-plugin</artifactId>
+			            <executions>
+			              <execution>
+			                <id>attach-sources</id>
+			                <goals>
+			                  <goal>jar-no-fork</goal>
+			                </goals>
+			              </execution>
+			            </executions>
+			          </plugin>
+			          <plugin>
+			            <inherited>true</inherited>
+			            <artifactId>maven-javadoc-plugin</artifactId>
+			            <executions>
+			              <execution>
+			                <id>attach-javadocs</id>
+			                <goals>
+			                  <goal>jar</goal>
+			                </goals>
+			              </execution>
+			            </executions>
+			          </plugin>
+			          <plugin>
+			            <inherited>true</inherited>
+			            <artifactId>maven-deploy-plugin</artifactId>
+			          </plugin>
+			        </plugins>
+			      </build>
+			    </profile>
+			  </profiles>
+			</project>
+			""";
+
+	private static final PomModel SUPER_POM = superPom();
 
 	/** The raw child versions that name the parent's version. */
 	private static final Set<String> PARENT_VERSION_REFERENCES = Set.of("${pom.version}", "${project.version}",
@@ -118,7 +221,7 @@ final class ModelBuilder {
 				else {
 					// Maven's 3.9 profile activation context carries the input POM's
 					// packaging as a user property, for its parents and imports too.
-					cached = build(input, Map.of("packaging", input.effectivePackaging()), new LinkedHashSet<>());
+					cached = build(input, null, Map.of("packaging", input.effectivePackaging()), new LinkedHashSet<>());
 				}
 			}
 			catch (InvalidPomException ex) {
@@ -146,7 +249,42 @@ final class ModelBuilder {
 	 */
 	PomModel effective(byte[] pom) throws InvalidPomException, MavenResolutionException {
 		PomModel input = PomReader.read(pom);
-		return build(input, Map.of("packaging", input.effectivePackaging()), new LinkedHashSet<>());
+		return build(input, null, Map.of("packaging", input.effectivePackaging()), new LinkedHashSet<>());
+	}
+
+	/**
+	 * Returns the effective model of a POM file, built as Maven builds one from a
+	 * {@code FileModelSource} without a project directory (what tools.deps asks for): a
+	 * parent is looked for at its {@code relativePath} beside the file first -- and so on
+	 * up a chain read from files -- then in the repositories.
+	 * @param pom the POM file
+	 * @return the model
+	 * @throws InvalidPomException if Maven's model builder would reject the POM
+	 * @throws MavenResolutionException if the file cannot be read, or a parent or import
+	 * cannot be resolved
+	 */
+	PomModel effective(Path pom) throws InvalidPomException, MavenResolutionException {
+		Path file = pom.toAbsolutePath().normalize();
+		PomModel input = PomReader.read(readFile(file));
+		return build(input, file, Map.of("packaging", input.effectivePackaging()), new LinkedHashSet<>());
+	}
+
+	private static byte[] readFile(Path file) throws MavenResolutionException {
+		try {
+			return Files.readAllBytes(file);
+		}
+		catch (IOException ex) {
+			throw new MavenResolutionException("Non-readable POM " + file + ": " + ex.getMessage(), ex);
+		}
+	}
+
+	private static PomModel superPom() {
+		try {
+			return PomReader.read(SUPER_POM_XML.getBytes(StandardCharsets.UTF_8));
+		}
+		catch (InvalidPomException ex) {
+			throw new IllegalStateException("the super POM does not read", ex);
+		}
 	}
 
 	private @Nullable PomModel raw(Artifact pom) throws InvalidPomException, MavenResolutionException {
@@ -175,12 +313,21 @@ final class ModelBuilder {
 		return (PomModel) cached;
 	}
 
-	private PomModel build(PomModel input, Map<String, String> user, Set<String> importChain)
+	/**
+	 * Builds an effective model.
+	 * @param input the raw model
+	 * @param location the file it was read from, {@code null} for a repository's or one
+	 * given as bytes (no parent is looked for beside it)
+	 * @param user the user properties
+	 * @param importChain the imports being built, for their cycle check
+	 */
+	private PomModel build(PomModel input, @Nullable Path location, Map<String, String> user, Set<String> importChain)
 			throws InvalidPomException, MavenResolutionException {
 		List<String> problems = new ArrayList<>();
 		List<PomModel> lineage = new ArrayList<>();
 		Set<String> parentIds = new LinkedHashSet<>();
 		PomModel current = input;
+		Path currentLocation = location;
 		// a fatal problem Maven reports on the next parent it reads
 		boolean fatalPending = false;
 		while (true) {
@@ -200,13 +347,23 @@ final class ModelBuilder {
 			String parentGroup = nonNull(parent.groupId());
 			String parentArtifact = nonNull(parent.artifactId());
 			String writtenVersion = nonNull(parent.version());
-			String writtenChildId = (current.groupId() == null ? parentGroup : current.groupId()) + ":"
-					+ current.artifactId() + ":" + (current.version() == null ? writtenVersion : current.version());
-			String parentVersion = parentVersion(parentGroup, parentArtifact, writtenVersion, writtenChildId);
-			String parentId = parentGroup + ":" + parentArtifact + ":" + parentVersion;
+			// beside the child's file first, then the repositories
+			LocalParent local = currentLocation == null ? null : localParent(current, currentLocation, problems);
+			String parentVersion;
+			if (local != null) {
+				parentVersion = local.version();
+			}
+			else {
+				String writtenChildId = (current.groupId() == null ? parentGroup : current.groupId()) + ":"
+						+ current.artifactId() + ":" + (current.version() == null ? writtenVersion : current.version());
+				parentVersion = parentVersion(parentGroup, parentArtifact, writtenVersion, writtenChildId);
+			}
+			String parentId = (local != null ? local.groupId() : parentGroup) + ":" + parentArtifact + ":"
+					+ parentVersion;
 			String childId = (current.groupId() == null ? parentGroup : current.groupId()) + ":" + current.artifactId()
 					+ ":" + (current.version() == null ? parentVersion : current.version());
-			PomModel parentModel = raw(new Artifact(parentGroup, parentArtifact, parentVersion, "", "pom"));
+			PomModel parentModel = local != null ? local.model()
+					: raw(new Artifact(parentGroup, parentArtifact, parentVersion, "", "pom"));
 			if (parentModel == null) {
 				throw new MavenResolutionException(
 						"Non-resolvable parent POM " + parentId + " for " + childId + ": no repository has it");
@@ -214,11 +371,15 @@ final class ModelBuilder {
 			if (fatalPending) {
 				throw new InvalidPomException(problems);
 			}
-			if (!parentVersion.equals(writtenVersion)
+			// a version a range admitted: the child cannot inherit what it resolved to
+			if (local != null ? local.versionNotConstant() : !parentVersion.equals(writtenVersion)
 					&& (current.version() == null || PARENT_VERSION_REFERENCES.contains(current.version()))) {
-				// a version range resolved: the child cannot inherit what it resolved to
 				problems.add("Version must be a constant");
 				fatalPending = true;
+			}
+			if (!"pom".equals(parentModel.effectivePackaging())) {
+				problems.add("Invalid packaging for parent POM " + parentId + ", must be \"pom\" but is \""
+						+ parentModel.effectivePackaging() + "\"");
 			}
 			if (lineage.size() == 1) {
 				// Maven records the child, its group and version inherited, then each
@@ -230,12 +391,15 @@ final class ModelBuilder {
 				throw new InvalidPomException(problems);
 			}
 			current = parentModel;
+			currentLocation = local == null ? null : local.location();
 		}
+		lineage.add(activateProfiles(SUPER_POM, user, problems));
 		PomModel model = lineage.get(lineage.size() - 1);
 		for (int i = lineage.size() - 2; i >= 0; i--) {
 			model = inherit(lineage.get(i), model);
 		}
 		model = interpolate(model, user, problems);
+		model = model.withBuild(BuildMerger.injectManagement(model.build()));
 		model = importManagement(model, user, importChain, problems);
 		model = injectManagement(model);
 		model = injectDefaultScope(model);
@@ -275,6 +439,83 @@ final class ModelBuilder {
 		return highest;
 	}
 
+	/**
+	 * A parent read beside its child's file.
+	 *
+	 * @param model its raw model
+	 * @param location its file
+	 * @param groupId its group id, its own or its parent's
+	 * @param version its version, its own or its parent's
+	 * @param versionNotConstant whether the child inherits a version a range admitted
+	 */
+	private record LocalParent(PomModel model, Path location, String groupId, String version,
+			boolean versionNotConstant) {
+	}
+
+	/**
+	 * Maven's {@code readParentLocally} with a {@code FileModelSource}: the POM at the
+	 * parent's {@code relativePath} beside the child's file ({@code pom.xml} inside a
+	 * directory), taken when it names the parent's group and artifact and its version is
+	 * the parent's or one of the parent's range admits; else {@code null} (the
+	 * repositories are asked).
+	 */
+	private @Nullable LocalParent localParent(PomModel child, Path childLocation, List<String> problems)
+			throws InvalidPomException {
+		PomModel.Parent parent = child.parent();
+		String relativePath = parent == null ? "" : parent.effectiveRelativePath();
+		Path directory = childLocation.getParent();
+		if (parent == null || relativePath.isEmpty() || directory == null) {
+			return null;
+		}
+		File related = new File(directory.toFile(),
+				relativePath.replace('\\', File.separatorChar).replace('/', File.separatorChar));
+		if (related.isDirectory()) {
+			related = new File(related, "pom.xml");
+		}
+		if (!related.isFile() || !related.canRead()) {
+			return null;
+		}
+		Path location = related.toPath().toAbsolutePath().normalize();
+		PomModel candidate;
+		try {
+			candidate = PomReader.read(Files.readAllBytes(location));
+		}
+		catch (IOException ex) {
+			problems.add("Non-readable POM " + location + ": " + ex.getMessage());
+			throw new InvalidPomException(problems);
+		}
+		catch (InvalidPomException ex) {
+			problems.addAll(ex.problems());
+			throw new InvalidPomException(problems);
+		}
+		PomModel.Parent grandparent = candidate.parent();
+		String groupId = candidate.groupId() != null ? candidate.groupId()
+				: grandparent == null ? null : grandparent.groupId();
+		String version = candidate.version() != null ? candidate.version()
+				: grandparent == null ? null : grandparent.version();
+		if (groupId == null || !groupId.equals(parent.groupId()) || candidate.artifactId() == null
+				|| !candidate.artifactId().equals(parent.artifactId())) {
+			// Maven warns that the relativePath points elsewhere and asks the
+			// repositories
+			return null;
+		}
+		boolean notConstant = false;
+		if (version != null && parent.version() != null && !version.equals(parent.version())) {
+			VersionConstraint range;
+			try {
+				range = VersionConstraint.parse(parent.version());
+			}
+			catch (MavenResolutionException ex) {
+				return null;
+			}
+			if (!range.isRange() || !range.contains(GenericVersion.parse(version))) {
+				return null; // version skew: the repositories are asked
+			}
+			notConstant = child.version() == null || PARENT_VERSION_REFERENCES.contains(child.version());
+		}
+		return new LocalParent(candidate, location, groupId, nonNull(version), notConstant);
+	}
+
 	private static String nonNull(@Nullable String value) {
 		return value == null ? "" : value;
 	}
@@ -305,16 +546,20 @@ final class ModelBuilder {
 		}
 	}
 
-	/** A dependency declared twice keeps its first position and its last declaration. */
+	/**
+	 * A dependency declared twice keeps its first position and its last declaration; a
+	 * plugin declared twice is merged ({@link BuildMerger#mergeDuplicates}).
+	 */
 	private static PomModel mergeDuplicates(PomModel model) {
+		PomModel result = model.withBuild(BuildMerger.mergeDuplicates(model.build()));
 		Map<String, PomModel.Dep> byKey = new LinkedHashMap<>();
 		for (PomModel.Dep dep : model.dependencies()) {
 			byKey.put(dep.managementKey(), dep);
 		}
 		if (byKey.size() == model.dependencies().size()) {
-			return model;
+			return result;
 		}
-		return model.withDependencies(new ArrayList<>(byKey.values()), model.managedDependencies());
+		return result.withDependencies(new ArrayList<>(byKey.values()), model.managedDependencies());
 	}
 
 	private PomModel activateProfiles(PomModel model, Map<String, String> user, List<String> problems) {
@@ -392,11 +637,16 @@ final class ModelBuilder {
 				modules.add(module);
 			}
 		}
-		return model.withContent(model.modelVersion(), model.description(), properties,
-				PomModel.mergeByKey(model.dependencies(), profile.dependencies(), true), managed, modules);
+		PomModel.Build build = profile.build() == null ? model.build()
+				: BuildMerger.injectProfile(model.build(), profile.build());
+		return model.withContent(model.description(), properties,
+				PomModel.mergeByKey(model.dependencies(), profile.dependencies(), true), managed, modules, build);
 	}
 
-	/** Merges a parent (its own chain already merged into it) into a child. */
+	/**
+	 * Merges a parent (its own chain already merged into it) into a child. The model
+	 * version is neither inherited nor injected ({@code MavenModelMerger}).
+	 */
 	private static PomModel inherit(PomModel child, PomModel parent) {
 		Map<String, String> properties = new LinkedHashMap<>(parent.properties());
 		properties.putAll(child.properties());
@@ -407,9 +657,9 @@ final class ModelBuilder {
 		}
 		PomModel merged = child.withCoordinates(child.groupId() == null ? parent.groupId() : child.groupId(),
 				child.version() == null ? parent.version() : child.version());
-		return merged.withContent(child.modelVersion() == null ? parent.modelVersion() : child.modelVersion(),
-				child.description() == null ? parent.description() : child.description(), properties,
-				PomModel.mergeByKey(child.dependencies(), parent.dependencies(), false), managed, child.modules());
+		return merged.withContent(child.description() == null ? parent.description() : child.description(), properties,
+				PomModel.mergeByKey(child.dependencies(), parent.dependencies(), false), managed, child.modules(),
+				BuildMerger.inherit(child.build(), parent.build()));
 	}
 
 	/**
@@ -438,10 +688,9 @@ final class ModelBuilder {
 			modules.add(values.of(module));
 		}
 		List<PomModel.Dep> managed = model.managedDependencies();
-		return new PomModel(values.ofNullable(model.modelVersion()),
-				parent == null ? null
-						: new PomModel.Parent(values.ofNullable(parent.groupId()),
-								values.ofNullable(parent.artifactId()), values.ofNullable(parent.version())),
+		return new PomModel(values.ofNullable(model.modelVersion()), parent == null ? null
+				: new PomModel.Parent(values.ofNullable(parent.groupId()), values.ofNullable(parent.artifactId()),
+						values.ofNullable(parent.version()), values.ofNullable(parent.relativePath())),
 				values.ofNullable(model.groupId()), values.ofNullable(model.artifactId()),
 				values.ofNullable(model.version()), values.ofNullable(model.packaging()),
 				values.ofNullable(model.name()), values.ofNullable(model.description()), properties,
@@ -450,16 +699,31 @@ final class ModelBuilder {
 						: new PomModel.Relocation(values.ofNullable(relocation.groupId()),
 								values.ofNullable(relocation.artifactId()), values.ofNullable(relocation.version()),
 								values.ofNullable(relocation.message())),
-				modules);
+				modules, values.of(model.build()));
 	}
 
 	/**
 	 * The model fields {@code ${project.*}} reaches, read from the merged model before
 	 * interpolation (the interpolator expands what they hold). Any other path is
-	 * unanswered and stays as written.
+	 * unanswered and stays as written. {@code basedir} is none: without a project
+	 * directory Maven answers it from the properties alone.
 	 */
 	private static @Nullable String reflect(PomModel model, String path) {
 		PomModel.Parent parent = model.parent();
+		PomModel.Build build = model.build();
+		if (path.startsWith("build.")) {
+			return build == null ? null : switch (path) {
+				case "build.sourceDirectory" -> build.sourceDirectory();
+				case "build.scriptSourceDirectory" -> build.scriptSourceDirectory();
+				case "build.testSourceDirectory" -> build.testSourceDirectory();
+				case "build.outputDirectory" -> build.outputDirectory();
+				case "build.testOutputDirectory" -> build.testOutputDirectory();
+				case "build.directory" -> build.directory();
+				case "build.finalName" -> build.finalName();
+				case "build.defaultGoal" -> build.defaultGoal();
+				default -> null;
+			};
+		}
 		return switch (path) {
 			case "groupId" -> model.groupId();
 			case "artifactId" -> model.artifactId();
@@ -490,6 +754,54 @@ final class ModelBuilder {
 
 		@Nullable String ofNullable(@Nullable String value) {
 			return value == null ? null : of(value);
+		}
+
+		PomModel.@Nullable Build of(PomModel.@Nullable Build build) {
+			if (build == null) {
+				return null;
+			}
+			List<String> filters = new ArrayList<>();
+			for (String filter : build.filters()) {
+				filters.add(of(filter));
+			}
+			List<PomModel.Plugin> management = build.pluginManagement();
+			return new PomModel.Build(ofNullable(build.sourceDirectory()), ofNullable(build.scriptSourceDirectory()),
+					ofNullable(build.testSourceDirectory()), ofNullable(build.outputDirectory()),
+					ofNullable(build.testOutputDirectory()), ofNullable(build.directory()),
+					ofNullable(build.finalName()), ofNullable(build.defaultGoal()), resources(build.resources()),
+					resources(build.testResources()), filters, plugins(build.plugins()),
+					management == null ? null : plugins(management));
+		}
+
+		private List<PomModel.Resource> resources(List<PomModel.Resource> resources) {
+			List<PomModel.Resource> result = new ArrayList<>();
+			for (PomModel.Resource resource : resources) {
+				result.add(new PomModel.Resource(ofNullable(resource.directory())));
+			}
+			return result;
+		}
+
+		private List<PomModel.Plugin> plugins(List<PomModel.Plugin> plugins) {
+			List<PomModel.Plugin> result = new ArrayList<>();
+			for (PomModel.Plugin plugin : plugins) {
+				List<PomModel.Execution> executions = new ArrayList<>();
+				for (PomModel.Execution execution : plugin.executions()) {
+					List<String> goals = new ArrayList<>();
+					for (String goal : execution.goals()) {
+						goals.add(of(goal));
+					}
+					executions.add(new PomModel.Execution(ofNullable(execution.id()), ofNullable(execution.phase()),
+							goals, ofNullable(execution.inherited()), of(execution.configuration())));
+				}
+				result.add(new PomModel.Plugin(ofNullable(plugin.groupId()), ofNullable(plugin.artifactId()),
+						ofNullable(plugin.version()), ofNullable(plugin.inherited()), of(plugin.configuration()),
+						executions));
+			}
+			return result;
+		}
+
+		private @Nullable ConfigurationNode of(@Nullable ConfigurationNode configuration) {
+			return configuration == null ? null : configuration.map(this::of);
 		}
 
 		List<PomModel.Dep> of(List<PomModel.Dep> deps) {
@@ -588,7 +900,7 @@ final class ModelBuilder {
 				throw new MavenResolutionException(
 						"Non-resolvable import POM " + id + " in " + importing + ": no repository has it");
 			}
-			List<PomModel.Dep> contribution = build(importRaw, user, importChain).managedDependencies();
+			List<PomModel.Dep> contribution = build(importRaw, null, user, importChain).managedDependencies();
 			List<PomModel.Dep> result = contribution == null ? List.of() : contribution;
 			this.imports.put(cacheKey, result);
 			return result;

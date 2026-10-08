@@ -104,8 +104,12 @@ oracle と同じく無視します。oracle の spec が拒否する値、どの
   短縮した sha にはタグが必要です。1 つのライブラリの 2 つのコミットでは、子孫のほうが新しい
   バージョンです。その `deps.edn` は `:local/root` のディレクトリと同じく読みます。
 - `:local/root` の jar 自身の `pom.xml` が、その jar の依存を与えます。`pom.xml` のプロジェクト
-  （`deps.edn` がなく `pom.xml` を持つディレクトリやコミット）は読みません。それにしかありえない
-  名前空間は、それを挙げて拒否します。
+  （`deps.edn` がなく `pom.xml` を持つディレクトリやコミット）は、Maven がモデルを組み立てる
+  とおりに読みます。親はリポジトリより先に `<relativePath>`（既定は `../pom.xml`）で探します。
+  compile と runtime の依存（optional を含む）を与え、ソースルートとして build のソース
+  ディレクトリ（既定は `src/main/java`）、`src/main/clojure`、リソースディレクトリ（既定は
+  `src/main/resources`）、`build-helper-maven-plugin` の `add-source` / `add-resource` の
+  ディレクトリを加えます。最後のものは oracle と同じく先頭のプラグインから読みます。
 - クラスを含む依存の jar は、プログラムの Java クラスパスにも加わります。インタプリタと JVM は
   そのクラスを呼べ、`-o app.jar` はその jar を出力の横にコピーします。WebAssembly は呼び出し時に
   Java を拒否するままです。

@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>test.superpom</groupId>
+  <artifactId>build-exprs</artifactId>
+  <version>1</version>
+  <dependencies>
+      <dependency><groupId>test.lib</groupId><artifactId>d1</artifactId><version>${project.build.directory}</version></dependency>
+      <dependency><groupId>test.lib</groupId><artifactId>d2</artifactId><version>${project.build.finalName}</version></dependency>
+      <dependency><groupId>test.lib</groupId><artifactId>d3</artifactId><version>${project.build.sourceDirectory}</version></dependency>
+      <dependency><groupId>test.lib</groupId><artifactId>d4</artifactId><version>${build.testOutputDirectory}</version></dependency>
+      <dependency><groupId>test.lib</groupId><artifactId>d5</artifactId><version>${pom.build.scriptSourceDirectory}</version></dependency>
+      <dependency><groupId>test.lib</groupId><artifactId>d6</artifactId><version>${project.build.defaultGoal}</version></dependency>
+  </dependencies>
+</project>
