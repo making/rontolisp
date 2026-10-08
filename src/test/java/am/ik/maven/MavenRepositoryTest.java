@@ -5,6 +5,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.attribute.FileTime;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -12,6 +13,7 @@ import java.util.Map;
 import java.util.stream.Stream;
 
 import am.ik.artifact.Downloader;
+import am.ik.artifact.HttpAccess;
 import am.ik.artifact.HttpStatusException;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -48,6 +50,8 @@ class MavenRepositoryTest {
 
 		final List<String> requested = new ArrayList<>();
 
+		final Map<String, HttpAccess> accesses = new HashMap<>();
+
 		Served file(String url, byte[] bytes) {
 			this.answers.put(url, bytes);
 			this.answers.put(url + ".sha1", MavenTestRepository.sha1(bytes).getBytes(StandardCharsets.US_ASCII));
@@ -57,6 +61,12 @@ class MavenRepositoryTest {
 		Served answer(String url, Object answer) {
 			this.answers.put(url, answer);
 			return this;
+		}
+
+		@Override
+		public byte[] get(String url, HttpAccess access) throws IOException {
+			this.accesses.put(url, access);
+			return get(url);
 		}
 
 		@Override
@@ -225,40 +235,77 @@ class MavenRepositoryTest {
 	}
 
 	@Test
-	void aMirrorCoveringTheRepositoryIsRefusedByNameAndNeverBypassed() {
+	void aMirrorStandsForTheRepositoriesItCoversUnderItsOwnId() throws IOException {
 		MavenSettings mirrored = new MavenSettings(null, false,
 				List.of(new MavenSettings.Mirror("corporate", MIRROR, "*")), List.of(), List.of());
+		Served served = new Served().file(MIRROR + LIB.path(), JAR).file(MIRROR + LIB_METADATA, versions("1.0", "2.0"));
+		MavenResolver resolver = resolver(served, mirrored, CENTRAL, "https://other.example/repo/");
+
+		assertThat(resolver.artifact(LIB)).hasBinaryContent(JAR);
+		assertThat(resolver.versions(Artifact.parse("org.example:lib:[1.0,3.0)"))).containsExactly("1.0", "2.0");
+		// both repositories are the one mirror: asked once, its copy cached under its id
+		assertThat(served.requested).containsExactly(MIRROR + LIB.path(), MIRROR + LIB.path() + ".sha1",
+				MIRROR + LIB_METADATA, MIRROR + LIB_METADATA + ".sha1");
+		assertThat(this.local.resolve("org/example/lib/maven-metadata-corporate.xml")).exists();
+		assertThatThrownBy(() -> resolver.artifact(Artifact.parse("org.example:gone:1.0"))).hasMessage(
+				"org.example:gone:jar:1.0 is in neither the local repository nor any of: corporate (" + MIRROR + ")");
+	}
+
+	@Test
+	void aBlockedMirrorFailsTheRepositoriesItCoversWithoutContactingThem() throws MavenResolutionException {
+		MavenSettings blocked = new MavenSettings(null, false, List.of(new MavenSettings.Mirror("blocker",
+				"http://0.0.0.0/", "external:http:*", "default", "default,legacy", true)), List.of(), List.of());
+		String insecure = "http://insecure.example/repo/";
 		Served served = new Served().file(CENTRAL + LIB.path(), JAR);
 
-		assertThatThrownBy(() -> resolver(served, mirrored, CENTRAL).artifact(LIB))
+		assertThatThrownBy(() -> resolver(served, blocked, insecure).artifact(LIB))
 			.isInstanceOf(MavenResolutionException.class)
-			.hasMessage("settings.xml mirrors repository central (" + CENTRAL + ") to 'corporate' (" + MIRROR
-					+ ", mirrorOf *); mirrors are not supported, so it is not contacted");
-		assertThat(served.requested).isEmpty();
+			.hasMessage("cannot fetch org.example:lib:jar:1.0 (blocker: Blocked mirror for repositories: [central ("
+					+ insecure + ")])");
+		// https is not external:http:*
+		assertThat(resolver(served, blocked, CENTRAL).artifact(LIB)).hasBinaryContent(JAR);
+		assertThat(served.requested).containsExactly(CENTRAL + LIB.path(), CENTRAL + LIB.path() + ".sha1");
 	}
 
 	@Test
-	void aProxyRoutingTheRepositoryIsRefusedByName() {
+	void theRepositoryContactedTakesItsProxyAndItsServer() throws IOException {
+		MavenSettings.Login proxyLogin = new MavenSettings.Login("office-user", "office-pass", null);
+		MavenSettings settings = new MavenSettings(null, false,
+				List.of(new MavenSettings.Mirror("corporate", MIRROR, "central")),
+				List.of(new MavenSettings.Proxy("office", true, "https", "proxy.example", 3128, "", proxyLogin)),
+				List.of(new MavenSettings.Server("central", new MavenSettings.Login("not-used", "x", null)),
+						new MavenSettings.Server("corporate", new MavenSettings.Login("deployer", "secret", null),
+								Map.of("X-Token", "t"), Duration.ofSeconds(3), null)));
+		Served served = new Served().file(MIRROR + LIB.path(), JAR);
+
+		resolver(served, settings, CENTRAL).artifact(LIB);
+
+		assertThat(served.accesses.get(MIRROR + LIB.path())).isEqualTo(new HttpAccess(
+				new HttpAccess.Proxy("proxy.example", 3128, new HttpAccess.Credentials("office-user", "office-pass")),
+				new HttpAccess.Credentials("deployer", "secret"), Map.of("X-Token", "t"), Duration.ofSeconds(3), null));
+	}
+
+	@Test
+	void anAuthenticationFailureNamesTheSettingsEntryAnsweringForIt() {
+		String url = CENTRAL + LIB.path();
+		Served unauthorized = new Served().answer(url, new HttpStatusException(401, url));
+		MavenSettings undecryptable = new MavenSettings(null, false, List.of(), List.of(),
+				List.of(new MavenSettings.Server("central",
+						new MavenSettings.Login("me", "{abc}", "master password is not set"))));
 		MavenSettings proxied = new MavenSettings(null, false, List.of(),
 				List.of(new MavenSettings.Proxy("office", true, "http", "proxy.example", 3128, "")), List.of());
+		Served proxyRefuses = new Served().answer(url, new HttpStatusException(407, url));
 
-		assertThatThrownBy(() -> resolver(new Served(), proxied, CENTRAL).artifact(LIB))
-			.isInstanceOf(MavenResolutionException.class)
-			.hasMessage("settings.xml routes central (" + CENTRAL
-					+ ") through proxy 'office' (http://proxy.example:3128); proxies are not supported, so it is not "
-					+ "contacted");
-	}
-
-	@Test
-	void credentialsAreNeverSentAndARepositoryAskingForThemSaysSo() {
-		MavenSettings withServer = new MavenSettings(null, false, List.of(), List.of(), List.of("central"));
-		Served served = new Served().answer(CENTRAL + LIB.path(), new HttpStatusException(401, CENTRAL + LIB.path()));
-
-		assertThatThrownBy(() -> resolver(served, withServer, CENTRAL).artifact(LIB))
-			.isInstanceOf(MavenResolutionException.class)
-			.hasMessage("cannot fetch org.example:lib:jar:1.0 (central: HTTP 401 for " + CENTRAL + LIB.path()
-					+ ": the repository asks for credentials, which are not sent (settings.xml <server> 'central' is "
-					+ "not supported))");
+		assertThatThrownBy(() -> resolver(unauthorized, CENTRAL).artifact(LIB))
+			.hasMessage("cannot fetch org.example:lib:jar:1.0 (central: HTTP 401 for " + url
+					+ " (settings.xml <server> 'central' has no username, so no credentials are sent))");
+		assertThatThrownBy(() -> resolver(unauthorized, undecryptable, CENTRAL).artifact(LIB))
+			.hasMessage("cannot fetch org.example:lib:jar:1.0 (central: HTTP 401 for " + url
+					+ " (settings.xml <server> 'central', user 'me'; its password could not be decrypted, so it is "
+					+ "sent as written: master password is not set))");
+		assertThatThrownBy(() -> resolver(proxyRefuses, proxied, CENTRAL).artifact(LIB))
+			.hasMessage("cannot fetch org.example:lib:jar:1.0 (central: HTTP 407 for " + url
+					+ " (settings.xml proxy 'office' has no username, so no credentials are sent))");
 	}
 
 	@Test

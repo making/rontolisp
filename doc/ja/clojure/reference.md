@@ -26,6 +26,7 @@ interop エントリのすべてを、分野ごとにまとめています。**�
 | [clojure.data](reference/clojure-data.md) | 再帰的な比較: 片側だけにあるものと両方にあるものを返す `diff` |
 | [clojure.datafy](reference/clojure-datafy.md) | 値のデータ化とデータからの移動: `clojure.core.protocols` のプロトコルの上の `datafy`/`nav` |
 | [clojure.edn](reference/clojure-edn.md) | EDN データの読み取り: `:eof`・`:readers`・`:default` を取る `read-string`/`read` |
+| [clojure.math](reference/clojure-math.md) | どのバックエンドでも同じビットを返す double の関数、丸めと隣の double、オーバーフローを拒否する long の算術 |
 | [clojure.pprint](reference/clojure-pprint.md) | プリティプリント: 右マージンの内側にレイアウトする `pprint`/`write`、`print-table`、コード用の `code-dispatch`、プログラムが拡張・置換できるディスパッチ |
 | [clojure.stacktrace](reference/clojure-stacktrace.md) | スロー可能オブジェクトとその原因の出力: `root-cause`、`print-throwable`、`print-stack-trace`、`print-cause-trace` |
 | [clojure.template](reference/clojure-template.md) | 式のテンプレート: `apply-template`、`do-template` |

@@ -99,8 +99,10 @@ no known type and a dependency the oracle cannot resolve are errors in its words
   join the tree; its jar is read in place. `"[1.0]"` is 1.0. A version range is the highest
   version the repositories' `maven-metadata.xml` lists in it; `RELEASE`, `LATEST` and a
   `SNAPSHOT` resolve through that metadata too, which the local repository keeps and asks
-  for again once a day. An `http:` repository and a repository a `~/.m2/settings.xml` mirror
-  or proxy covers are refused.
+  for again once a day. An `http:` repository is refused. `settings.xml` (`~/.m2/settings.xml`
+  merged over `$MAVEN_HOME/conf/settings.xml`) applies as it does for the oracle: its mirrors,
+  proxies, and servers' credentials and `httpHeaders` (a password encrypted with
+  `mvn --encrypt-password` included), not its `localRepository` or `offline`.
 - A git coordinate (`:git/url`, or the URL an `io.github.user/repo` name implies, with
   `:git/sha`, `:git/tag`, `:deps/root`) is checked out at its commit with the `git` command,
   into `~/.rontolisp/gitlibs` (`$RONTOLISP_DIST_HOME/gitlibs`). A tag must name the commit,

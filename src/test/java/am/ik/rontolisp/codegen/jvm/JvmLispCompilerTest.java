@@ -13935,6 +13935,16 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void scaleFloatRoundsOnceIntoTheSubnormalRange() throws Exception {
+		// Math.scalb's answers: the product rounds once. A first chunk of 2^-1000 that
+		// lands in the subnormal range rounded there, and the 2^-50 after it rounded
+		// again: 2^-1075 + 2^-1127 came out as 2^-1075 exactly, a tie that goes to 0.
+		assertThat(compileAndRun("(print (scale-float (+ (expt 2d0 -25) (expt 2d0 -77)) -1050))"))
+			.isEqualTo("4.9e-324");
+		assertThat(compileAndRun("(print (scale-float -2.3779429016845906d285 -2004))")).isEqualTo("-1.294467e-318");
+	}
+
+	@Test
 	void compileAndRunCharName() throws Exception {
 		assertThat(compileAndRun("(print (char-name #\\Space))")).isEqualTo("\"Space\"");
 		assertThat(compileAndRun("(print (char-name #\\a))")).isEqualTo("NIL");

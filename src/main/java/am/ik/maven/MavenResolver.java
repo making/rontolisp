@@ -27,10 +27,11 @@ import org.jspecify.annotations.Nullable;
  * {@code RELEASE} to the version the metadata names, a version range in a dependency or a
  * parent to the versions the metadata lists. The metadata is cached in the local
  * repository and asked for again under the update policy (Maven's default, daily), which
- * also governs when a repository that had no copy of a file is asked again. A
- * {@code settings.xml} mirror or proxy covering a repository about to be contacted is
- * refused by name. Repositories a POM declares are never consulted; the caller's list is
- * the only one.
+ * also governs when a repository that had no copy of a file is asked again. A repository
+ * is contacted as Maven contacts it under the {@link MavenSettings}: through the mirror
+ * covering it, the proxy serving the URL contacted, and the credentials, headers and
+ * timeouts of the {@code <server>} of the id contacted. Repositories a POM declares are
+ * never consulted; the caller's list is the only one.
  *
  * <p>
  * Every public method holds the instance lock: one resolver serves several threads, one
@@ -75,7 +76,8 @@ public final class MavenResolver {
 	}
 
 	/**
-	 * Returns the remote repositories, in search order.
+	 * Returns the remote repositories, in search order, as configured: a
+	 * {@code settings.xml} mirror may stand for some of them when they are contacted.
 	 * @return the repositories
 	 */
 	public List<RemoteRepository> repositories() {
@@ -182,8 +184,8 @@ public final class MavenResolver {
 		Path path = this.access.fetch(artifact);
 		if (path == null) {
 			StringJoiner searched = new StringJoiner(", ");
-			for (RemoteRepository repository : this.access.repositories()) {
-				searched.add(repository.toString());
+			for (RepositoryRoute route : this.access.routes()) {
+				searched.add(route.toString());
 			}
 			throw new MavenResolutionException(
 					artifact + " is in neither the local repository nor any of: " + searched);

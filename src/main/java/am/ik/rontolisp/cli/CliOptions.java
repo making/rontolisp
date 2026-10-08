@@ -32,8 +32,9 @@ public class CliOptions {
 	// --feature is repeatable on the same terms: `--feature sbcl --feature x86-64` is one
 	// widening written in two arguments.
 	// --java-dep is repeatable on the same terms: one coordinate per occurrence, the
-	// list in the order given.
-	private static final Set<String> repeatableKeys = Set.of("-e", "--dist", "--feature", "--java-dep");
+	// list in the order given. --java-repository likewise: one repository per occurrence.
+	private static final Set<String> repeatableKeys = Set.of("-e", "--dist", "--feature", "--java-dep",
+			"--java-repository");
 
 	// Long spellings that mean an existing key; the value is stored under the short one,
 	// so every reader looks at one name.

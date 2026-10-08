@@ -64,15 +64,15 @@ public final class ClojureDepsRepositories implements ClojureRepositories {
 	}
 
 	/**
-	 * The command line's repositories: {@code ~/.m2/repository}, the user's
-	 * {@code settings.xml} (its mirrors and proxies, refused by name), the network, and
-	 * the artifact cache's {@code gitlibs} area -- read from the environment here and
-	 * nowhere else. Nothing is read until a coordinate is fetched.
+	 * The command line's repositories: {@code ~/.m2/repository}, Maven's
+	 * {@code settings.xml} (its mirrors, proxies and servers), the network, and the
+	 * artifact cache's {@code gitlibs} area -- read from the environment here and nowhere
+	 * else. Nothing is read until a coordinate is fetched.
 	 * @return the repositories
 	 */
 	public static ClojureDepsRepositories createDefault() {
 		return builder().defaultLocalRepository(MavenResolver.defaultLocalRepository())
-			.settings(MavenSettings::readUserSettings)
+			.settings(MavenSettings::readGlobalAndUser)
 			.git(GitFetcher.create(ArtifactCache.createDefault()))
 			.allowHttp(System.getenv("CLOJURE_CLI_ALLOW_HTTP_REPO") != null)
 			.build();
@@ -253,8 +253,8 @@ public final class ClojureDepsRepositories implements ClojureRepositories {
 			catch (MavenResolutionException ex) {
 				throw new FetchFailure(String.valueOf(ex.getMessage()));
 			}
-			// clj routes through settings.xml's mirrors and proxies, but reads neither
-			// its local repository nor its offline flag
+			// clj routes through settings.xml's mirrors, proxies and servers, but reads
+			// neither its local repository nor its offline flag
 			known = new MavenSettings(null, false, read.mirrors(), read.proxies(), read.servers());
 			this.settings = known;
 		}

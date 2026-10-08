@@ -576,11 +576,32 @@ $ java -jar app.jar
 a library meet, the one nearest the requested coordinates wins, and the jars join the
 class path after the `--java-classpath` entries, in Maven's class path order. They come
 from Maven Central through the local repository `mvn` uses -- `~/.m2/repository`, or
-the `localRepository` of `~/.m2/settings.xml`, whose `offline` is honored. A SNAPSHOT,
-`LATEST`, `RELEASE` or version range, given or in a dependency's POM, resolves through
-Central's `maven-metadata.xml` as Maven resolves it. The local repository keeps that
-metadata and asks Central again once a day, as it does for a file Central did not have.
-A `settings.xml` mirror or proxy covering Central is refused by name. A Clojure program's `deps.edn` dependencies that hold classes join the class path
+the `localRepository` of `settings.xml`. A SNAPSHOT, `LATEST`, `RELEASE` or version range,
+given or in a dependency's POM, resolves through Central's `maven-metadata.xml` as Maven
+resolves it. The local repository keeps that metadata and asks Central again once a day,
+as it does for a file Central did not have.
+
+A library Central does not hold -- Clojars, a company repository, a `file:` directory --
+is named with `--java-repository [ID=]URL` (repeatable; `https:`, `http:` or `file:`).
+Those repositories are searched after Central, in the order given. The `ID` (default
+`java-repository-N`) is what `settings.xml` matches: its `<server>` supplies the
+credentials and a `<mirror>` whose `mirrorOf` names the id replaces the URL. An id of
+`central` replaces Central's URL instead of adding a repository.
+
+```console
+$ rontolisp app.lisp --java-dep clj-http:clj-http:3.12.3 \
+    --java-repository clojars=https://repo.clojars.org/
+```
+
+`settings.xml` applies as it does for `mvn`: `~/.m2/settings.xml`, merged over
+`$MAVEN_HOME/conf/settings.xml` when `MAVEN_HOME` is set. Its `offline` is honored, a
+mirror covering Central is contacted in Central's place (a `blocked` one fails), a proxy
+carries the requests, and the `<server>` of the repository contacted supplies Basic
+credentials, `httpHeaders` and timeouts. A password encrypted with
+`mvn --encrypt-password` is decrypted with the master password in
+`~/.m2/settings-security.xml`.
+
+A Clojure program's `deps.edn` dependencies that hold classes join the class path
 after these ([Projects: deps.edn](../clojure/semantics.md#projects-depsedn)).
 
 What each output carries:

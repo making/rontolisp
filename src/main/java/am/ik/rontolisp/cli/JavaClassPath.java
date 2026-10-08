@@ -15,6 +15,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.function.Function;
 import java.util.TreeMap;
 import java.util.stream.Stream;
 
@@ -37,12 +38,13 @@ import org.jspecify.annotations.Nullable;
  * compiled program jar names it in its manifest.
  *
  * <p>
- * Coordinates resolve from Maven Central through the local repository {@code mvn} uses --
- * {@code ~/.m2/repository}, or the one {@code ~/.m2/settings.xml} names -- honoring that
- * file's {@code <offline>}; a SNAPSHOT, {@code LATEST}, {@code RELEASE} or version range
- * resolves through the repository's {@code maven-metadata.xml} as Maven's does, and what
- * the resolver cannot do faithfully (a mirror or proxy covering Central) is refused by
- * name.
+ * Coordinates resolve from Maven Central, then the {@code --java-repository} ones in the
+ * order given, through the local repository {@code mvn} uses -- {@code ~/.m2/repository},
+ * or the one {@code settings.xml} names -- honoring that file's {@code <offline>} and the
+ * mirror, proxy and server credentials it configures for each repository (the user's
+ * {@code ~/.m2/settings.xml} merged over {@code $MAVEN_HOME}'s); a SNAPSHOT,
+ * {@code LATEST}, {@code RELEASE} or version range resolves through the repository's
+ * {@code maven-metadata.xml} as Maven's does.
  */
 final class JavaClassPath implements AutoCloseable {
 
@@ -74,14 +76,16 @@ final class JavaClassPath implements AutoCloseable {
 	/**
 	 * Assembles the class path the options name, resolving the coordinates.
 	 * @param options the command line's Java options
-	 * @param resolver where coordinates resolve, or {@code null} for Maven Central
-	 * through the user's local repository
+	 * @param resolver builds the resolver from the repositories to search (Central, then
+	 * the {@code --java-repository} ones), or {@code null} for Maven's own settings and
+	 * local repository
 	 * @param err where a POM's warning is reported
 	 * @return the class path
 	 * @throws IllegalArgumentException when an entry does not exist or a coordinate
 	 * cannot be resolved
 	 */
-	static JavaClassPath of(JavaResolutionOptions options, @Nullable MavenResolver resolver, PrintStream err) {
+	static JavaClassPath of(JavaResolutionOptions options,
+			@Nullable Function<List<RemoteRepository>, MavenResolver> resolver, PrintStream err) {
 		if (!options.namesClassPath()) {
 			return new JavaClassPath(List.of(), List.of());
 		}
@@ -97,7 +101,8 @@ final class JavaClassPath implements AutoCloseable {
 			coordinates.add(Artifact.parse(dependency));
 		}
 		if (!coordinates.isEmpty()) {
-			MavenResolver maven = resolver != null ? resolver : centralResolver();
+			List<RemoteRepository> repositories = repositories(options.repositories());
+			MavenResolver maven = resolver != null ? resolver.apply(repositories) : mavenResolver(repositories);
 			List<Dependency> requested = new ArrayList<>();
 			for (Artifact artifact : coordinates) {
 				requested.add(Dependency.of(artifact));
@@ -147,12 +152,29 @@ final class JavaClassPath implements AutoCloseable {
 		}
 	}
 
-	// Maven's default remote, through the local repository and offline flag of the
-	// user's settings.
-	private static MavenResolver centralResolver() {
+	// Central first, then the repositories given in order; one named central takes
+	// Central's place (Maven's own redefinition of the id). Their ids are what a
+	// settings.xml server and mirror name.
+	static List<RemoteRepository> repositories(List<RemoteRepository> given) {
+		List<RemoteRepository> all = new ArrayList<>();
+		all.add(RemoteRepository.CENTRAL);
+		for (RemoteRepository repository : given) {
+			if (repository.id().equals(RemoteRepository.CENTRAL.id())) {
+				all.set(0, repository);
+			}
+			else {
+				all.add(repository);
+			}
+		}
+		return all;
+	}
+
+	// The repositories, through Maven's settings: the local repository, offline flag,
+	// mirrors, proxies and servers of the global and the user's settings.xml.
+	private static MavenResolver mavenResolver(List<RemoteRepository> repositories) {
 		MavenSettings settings;
 		try {
-			settings = MavenSettings.readUserSettings();
+			settings = MavenSettings.readGlobalAndUser();
 		}
 		catch (MavenResolutionException ex) {
 			throw new IllegalArgumentException("--java-dep: " + ex.getMessage(), ex);
@@ -161,7 +183,7 @@ final class JavaClassPath implements AutoCloseable {
 		return MavenResolver.builder()
 			.settings(settings)
 			.localRepository(local != null ? local : MavenResolver.defaultLocalRepository())
-			.repositories(List.of(RemoteRepository.CENTRAL))
+			.repositories(repositories)
 			.build();
 	}
 
