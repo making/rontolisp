@@ -17,8 +17,10 @@ macros calling program functions, or WIT rich types. Each needs a runnable examp
 - Java libraries on the run-time class path (e35).
 - `.cljc` and reader conditionals, including `{:read-cond :preserve}` (e40, e45).
 - `ns` clauses and `require` options (e41).
-- Bundled namespaces: `clojure.walk`, `clojure.edn`, `clojure.template` and the rest e42
-  adds.
+- Bundled namespaces (e42): `clojure.walk`, `clojure.edn`, `clojure.template`,
+  `clojure.pprint` (with `code-dispatch`), `clojure.data`, `clojure.zip`,
+  `clojure.core.protocols`, `clojure.datafy`, `clojure.stacktrace`; the rest moved to
+  e55-e61.
 - HTTP client over `rontolisp:fetch` (e44): a leg that needs no external host, or a
   compile-only leg as `ring-hello.clj` does.
 - Macro bodies calling the program's functions (e46).

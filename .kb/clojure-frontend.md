@@ -1507,6 +1507,13 @@ end** (`src/main/resources/am/ik/rontolisp/clojure/lib/clojure/**`, the
   clojure-spec `clojure-stacktrace-prints-no-frames`; `print-trace-element` is the oracle's
   over a host `StackTraceElement` (interpreter and JVM,
   `ClojureInteropTest#printTraceElementSpellsAHostStackTraceElementLikeTheOracle`).
+- Not shipped, with what each waits on (decided 2026-10-08): `clojure.java.io` beyond
+  `reader` (a portable File and byte streams, e55), `clojure.core.reducers` and
+  `CollReduce` (multi-arity protocol methods and a `reduce` that consults a protocol,
+  e56), `clojure.math` (fdlibm functions the runtime lacks on every backend, e57), pprint's
+  `cl-format`/`formatter`/`formatter-out` (e58), `clojure.instant`/`clojure.uuid` and the
+  `#inst`/`#uuid` values (e59), `Throwable->map` and `extend-protocol` to
+  `Throwable`/`IRef` (e60), `clojure.repl`/`main`/`java.shell`/`xml` (e61).
 - Pins: clojure-spec `clojure-walk-*` (all four backends, oracle-identical, the first
   case loading `clojure.walk` through a qualified name only),
   `clojure-template-substitutes-per-group-of-values`, `clojure-pprint-*`,
