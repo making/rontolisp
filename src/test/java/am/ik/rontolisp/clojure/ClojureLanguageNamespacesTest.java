@@ -4,6 +4,7 @@ import java.util.Map;
 import java.util.stream.Collectors;
 
 import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.eval.ClojureMacroTime;
 import am.ik.rontolisp.reader.LispReadException;
 import org.junit.jupiter.api.Test;
 
@@ -60,6 +61,23 @@ class ClojureLanguageNamespacesTest {
 		assertThatThrownBy(() -> Clojure.read("(clojure.edn/read-str \"x\")", null))
 			.isInstanceOf(LispReadException.class)
 			.hasMessageContaining("unknown name: clojure.edn/read-str");
+	}
+
+	@Test
+	void clojurePprintLaysOutThroughItsKernelNamespace() {
+		String pprint = Clojure
+			.read("(ns a (:require [clojure.pprint :as pp])) (pp/pprint [1])", null, ClojureMacroTime.create())
+			.stream()
+			.map(LispVal::print)
+			.collect(Collectors.joining("\n"));
+		assertThat(pprint).contains("(DEFUN |c%clojure.pprint/pprint|").contains("(RONTOLISP::%CLOJURE-PP-CALL ");
+		assertThatThrownBy(() -> Clojure.read("(ns a (:require [rontolisp.internal.pprint :as k]))", null))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("rontolisp.internal.pprint is internal to clojure.pprint");
+		assertThatThrownBy(() -> Clojure.read("(ns a (:require [clojure.pprint :as pp])) (pp/cl-format nil \"~a\" 1)",
+				null, ClojureMacroTime.create()))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("clojure.pprint/cl-format is not built in");
 	}
 
 	@Test

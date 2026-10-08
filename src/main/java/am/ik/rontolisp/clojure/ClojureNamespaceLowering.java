@@ -64,8 +64,8 @@ final class ClojureNamespaceLowering {
 		if (ref.ns().equals(ClojureRingLowering.NAMESPACE)) {
 			return ClojureRingLowering.ringCall(ctx, ref.var(), items);
 		}
-		if (ref.ns().equals(ClojureRingUtilLowering.NAMESPACE)) {
-			return ClojureRingUtilLowering.kernelCall(ctx, ref.var(), items);
+		if (ClojureKernelLowering.isKernelNamespace(ref.ns())) {
+			return ClojureKernelLowering.kernelCall(ctx, ref.ns(), ref.var(), items);
 		}
 		if (ref.ns().equals(ClojureWasmLowering.NAMESPACE)) {
 			return ClojureWasmLowering.call(ctx, ref.var(), items, form);
@@ -97,8 +97,8 @@ final class ClojureNamespaceLowering {
 		if (ref.ns().equals(ClojureRingLowering.NAMESPACE)) {
 			return ClojureRingLowering.ringValue(ref.var());
 		}
-		if (ref.ns().equals(ClojureRingUtilLowering.NAMESPACE)) {
-			return ClojureRingUtilLowering.kernelValue(ref.var());
+		if (ClojureKernelLowering.isKernelNamespace(ref.ns())) {
+			return ClojureKernelLowering.kernelValue(ref.ns(), ref.var());
 		}
 		if (ref.ns().equals(ClojureWasmLowering.NAMESPACE)) {
 			return ClojureWasmLowering.value(ref.var());
@@ -141,14 +141,14 @@ final class ClojureNamespaceLowering {
 	 * The namespaces whose vars lower to core forms: {@code clojure.string},
 	 * {@code clojure.set}, {@code clojure.edn}, {@code clojure.java.io},
 	 * {@code clojure.test}, the Ring adapter {@code ring.adapter.rontolisp}, the kernels
-	 * of the built-in Ring namespaces, {@code rontolisp.internal.ring}, and the host
+	 * of the built-in namespaces ({@link ClojureKernelLowering}), and the host
 	 * boundary's {@code rontolisp.wasm} and {@code rontolisp.wit}.
 	 */
 	static boolean isKnownNamespace(String ns) {
 		return ns.equals("clojure.string") || ns.equals(ClojureSetLowering.NAMESPACE)
 				|| ns.equals(ClojureEdnLowering.NAMESPACE) || ns.equals("clojure.java.io")
 				|| ns.equals(ClojureTestLowering.NAMESPACE) || ns.equals(ClojureRingLowering.NAMESPACE)
-				|| ns.equals(ClojureRingUtilLowering.NAMESPACE) || ns.equals(ClojureWasmLowering.NAMESPACE)
+				|| ClojureKernelLowering.isKernelNamespace(ns) || ns.equals(ClojureWasmLowering.NAMESPACE)
 				|| ns.equals(ClojureWitLowering.NAMESPACE);
 	}
 
@@ -160,7 +160,7 @@ final class ClojureNamespaceLowering {
 				|| ns.equals("clojure.java.io") && JIO_VARS.contains(var)
 				|| ns.equals(ClojureTestLowering.NAMESPACE) && ClojureTestLowering.VARS.contains(var)
 				|| ns.equals(ClojureRingLowering.NAMESPACE) && ClojureRingLowering.VARS.contains(var)
-				|| ns.equals(ClojureRingUtilLowering.NAMESPACE) && ClojureRingUtilLowering.VARS.contains(var)
+				|| ClojureKernelLowering.isKernelVar(ns, var)
 				|| ns.equals(ClojureWasmLowering.NAMESPACE) && ClojureWasmLowering.VARS.contains(var)
 				|| ns.equals(ClojureWitLowering.NAMESPACE) && ClojureWitLowering.VARS.contains(var);
 	}
@@ -185,8 +185,9 @@ final class ClojureNamespaceLowering {
 		if (ns.equals(ClojureRingLowering.NAMESPACE)) {
 			return ClojureRingLowering.VARS;
 		}
-		if (ns.equals(ClojureRingUtilLowering.NAMESPACE)) {
-			return ClojureRingUtilLowering.VARS;
+		Set<String> kernels = ClojureKernelLowering.varsOf(ns);
+		if (kernels != null) {
+			return kernels;
 		}
 		if (ns.equals(ClojureWasmLowering.NAMESPACE)) {
 			return ClojureWasmLowering.VARS;
@@ -498,11 +499,11 @@ final class ClojureNamespaceLowering {
 			return null;
 		}
 		boolean library = isKnownNamespace(ns);
-		if (ns.equals(ClojureRingUtilLowering.NAMESPACE)) {
-			// the kernels are the built-in Ring namespaces' own, no user surface
+		if (ClojureKernelLowering.isKernelNamespace(ns)) {
+			// the kernels are the built-in namespaces' own, no user surface
 			String owner = ctx.loadingNamespaces.peek();
 			if (owner == null || !ctx.builtinNamespaces.contains(owner)) {
-				throw new LispReadException(ns + " is internal to the built-in Ring namespaces");
+				throw new LispReadException(ClojureKernelLowering.refusal(ns));
 			}
 			ctx.ns().aliases.putIfAbsent(ns, ns);
 		}

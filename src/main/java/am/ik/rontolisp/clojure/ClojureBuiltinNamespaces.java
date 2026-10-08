@@ -20,7 +20,7 @@ import org.jspecify.annotations.Nullable;
  * source directory precedes a dependency jar on the oracle's classpath -- except a
  * namespace the oracle loads before the program ({@link #isStartup}), whose file a
  * project never shadows. What Clojure would spell through generic verbs at ten times the
- * size lives in the {@link ClojureRingUtilLowering} kernels, which only these files can
+ * size lives in the {@link ClojureKernelLowering} kernels, which only these files can
  * require.
  *
  * <p>
@@ -41,7 +41,12 @@ final class ClojureBuiltinNamespaces {
 					"form-encode is a function, not a protocol, here", "FormEncodeable",
 					"form-encode is a function, not a protocol, here"),
 			"ring.util.mime-type", Map.of(), "ring.middleware.params", Map.of(), "ring.middleware.keyword-params",
-			Map.of(), "ring.middleware.content-type", Map.of(), "clojure.walk", Map.of(), "clojure.template", Map.of());
+			Map.of(), "ring.middleware.content-type", Map.of(), "clojure.walk", Map.of(), "clojure.template", Map.of(),
+			"clojure.pprint",
+			Map.of("cl-format", "Common Lisp format directives over Clojure values are not built in", "formatter",
+					"Common Lisp format directives over Clojure values are not built in", "formatter-out",
+					"Common Lisp format directives over Clojure values are not built in", "code-dispatch",
+					"the code layout is not built in; simple-dispatch prints code as data"));
 
 	/**
 	 * The shipped namespaces {@code clj -M} has loaded before the program runs: a
