@@ -17,6 +17,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.Executors;
 import java.util.stream.Collectors;
@@ -217,6 +218,68 @@ class ClojureHttpClientTest {
 		finally {
 			upstream.stop(0);
 		}
+	}
+
+	/**
+	 * A redirect to another origin -- scheme or raw authority -- goes without the
+	 * caller's {@code Authorization}, {@code Cookie}, {@code Origin}, {@code Referer} and
+	 * {@code Host}, as the JDK's {@code newInstanceForRedirection} sends it; one to the
+	 * same origin keeps them. The rule is Lisp over the reply, the same on every
+	 * transport; the corpus has one origin, so the second one is here.
+	 */
+	@Test
+	void aRedirectToAnotherOriginGoesWithoutTheCredentialHeaders() throws Exception {
+		HttpServer other = headerEcho();
+		HttpServer origin = headerEcho();
+		try {
+			redirect(origin, "/same", "/seen");
+			redirect(origin, "/other", "http://127.0.0.1:" + other.getAddress().getPort() + "/seen");
+			String base = "http://127.0.0.1:" + origin.getAddress().getPort();
+			String program = REQUIRE + """
+					(def headers {"authorization" "Bearer t" "cookie" "c=1" "origin" "http://o"
+					              "referer" "http://r" "x-keep" "k"})
+					(println (:body (http/get "%BASE%/same" {:headers headers})))
+					(println (:body (http/get "%BASE%/other" {:headers headers})))
+					""".replace("%BASE%", base);
+			assertThat(interpret(program)).isEqualTo("authorization cookie origin referer x-keep\nx-keep\n");
+		}
+		finally {
+			origin.stop(0);
+			other.stop(0);
+		}
+	}
+
+	/**
+	 * A server whose {@code /seen} answers the names of the caller's headers among the
+	 * credential ones and {@code x-keep}, sorted.
+	 */
+	private static HttpServer headerEcho() throws IOException {
+		HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+		server.createContext("/seen", exchange -> {
+			String names = exchange.getRequestHeaders()
+				.keySet()
+				.stream()
+				.map(name -> name.toLowerCase(Locale.ROOT))
+				.filter(List.of("authorization", "cookie", "origin", "referer", "x-keep")::contains)
+				.sorted()
+				.collect(Collectors.joining(" "));
+			byte[] body = names.getBytes(StandardCharsets.UTF_8);
+			exchange.sendResponseHeaders(200, body.length);
+			try (OutputStream out = exchange.getResponseBody()) {
+				out.write(body);
+			}
+		});
+		server.setExecutor(Executors.newVirtualThreadPerTaskExecutor());
+		server.start();
+		return server;
+	}
+
+	private static void redirect(HttpServer server, String path, String location) {
+		server.createContext(path, exchange -> {
+			exchange.getResponseHeaders().add("Location", location);
+			exchange.sendResponseHeaders(302, -1);
+			exchange.close();
+		});
 	}
 
 	private static String proxy(HttpServer upstream, String handler, int port) {

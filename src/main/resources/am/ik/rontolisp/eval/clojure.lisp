@@ -7583,9 +7583,10 @@
    ExecutionException over its cause, like a CompletableFuture's get."
   (handler-case (rontolisp::%future-force f)
     (error (c)
-      (error (c%e-new '("java.util.concurrent.ExecutionException"
-                        "java.lang.Exception" "java.lang.Throwable")
-                      (rontolisp::%clojure-http-text c) nil c)))))
+      (error
+       (c%e-new '("java.util.concurrent.ExecutionException"
+                  "java.lang.Exception" "java.lang.Throwable")
+                (rontolisp::%clojure-http-text c) nil c)))))
 
 (defun rontolisp::%clojure-future-or-host-p (x no)
   "future?: T for a rontolisp future or a host Future, NO for anything else.
@@ -10075,8 +10076,7 @@
   (let ((out (make-hash-table :test 'equal)) (drop nil))
     (setf (gethash (list :c%keyword "accept") out) "*/*")
     (let ((given (rontolisp::%clojure-http-table headers ":headers")))
-      (if given
-          (maphash (lambda (k v) (setf (gethash k out) v)) given)))
+      (if given (maphash (lambda (k v) (setf (gethash k out) v)) given)))
     (maphash (lambda (k v)
                (declare (ignore v))
                (if (rontolisp::%clojure-keyword-p k)
@@ -10085,8 +10085,7 @@
                               (gethash (rontolisp::%clojure-http-capitalize s)
                                        out))
                              (rontolisp::%clojure-truthy (gethash s out)))
-                         (setq drop (cons k drop))))))
-             out)
+                         (setq drop (cons k drop)))))) out)
     (dolist (k drop) (remhash k out))
     out))
 
@@ -10117,10 +10116,9 @@
                  (if (rontolisp::%clojure-ring-sequential-p v)
                      (dolist (one (rontolisp::%clojure-seq-all v))
                        (setq out
-                             (cons (rontolisp::%clojure-http-field name one)
-                                   out)))
+                        (cons (rontolisp::%clojure-http-field name one) out)))
                      (setq out
-                           (cons (rontolisp::%clojure-http-field name v) out)))))
+                      (cons (rontolisp::%clojure-http-field name v) out)))))
              headers)
     (nreverse out)))
 
@@ -10132,13 +10130,13 @@
          (cond ((null m) "GET")
                ((rontolisp::%clojure-keyword-p m)
                 (let* ((s (car (cdr m))) (slash (position #\/ s)))
-                  (string-upcase (if (and slash (> slash 0)) (subseq s (+ slash 1)) s))))
+                  (string-upcase
+                   (if (and slash (> slash 0)) (subseq s (+ slash 1)) s))))
                ((stringp m) (string-upcase m))
                (t (rontolisp::%clojure-class-cast-exception-of
                    (concatenate 'string
-                                "rontolisp.http-client: :method must be a keyword, not "
-                                (rontolisp::%clojure-str-of m "nil" t))
-                   m)))))
+                    "rontolisp.http-client: :method must be a keyword, not "
+                    (rontolisp::%clojure-str-of m "nil" t)) m)))))
     (if (member name '("GET" "HEAD" "POST" "PUT" "DELETE" "OPTIONS" "PATCH")
                 :test #'string=)
         name
@@ -10152,9 +10150,10 @@
    or a character past ASCII that is no control and no space."
   (let ((code (char-code c)))
     (cond ((>= code 128)
-           (not (or (<= code 160) (= code 5760) (and (>= code 8192) (<= code 8202))
-                    (= code 8232) (= code 8233) (= code 8239) (= code 8287)
-                    (= code 12288))))
+           (not
+            (or (<= code 160) (= code 5760) (and (>= code 8192) (<= code 8202))
+                (= code 8232) (= code 8233) (= code 8239) (= code 8287)
+                (= code 12288))))
           ((or (and (>= code 48) (<= code 57)) (and (>= code 65) (<= code 90))
                (and (>= code 97) (<= code 122)))
            t)
@@ -10179,10 +10178,12 @@
                         (rontolisp::%clojure-ring-hex (char url (+ i 1)))
                         (rontolisp::%clojure-ring-hex (char url (+ i 2))))
                    (setq i (+ i 3))
-                   (rontolisp::%clojure-http-bad-url "Malformed escape pair" url i)))
+                   (rontolisp::%clojure-http-bad-url "Malformed escape pair" url
+                                                     i)))
               ((rontolisp::%clojure-http-uri-char-p c set) (setq i (+ i 1)))
-              (t (rontolisp::%clojure-http-bad-url
-                  (concatenate 'string "Illegal character in " what) url i)))))))
+              (t
+               (rontolisp::%clojure-http-bad-url
+                (concatenate 'string "Illegal character in " what) url i)))))))
 
 (defun rontolisp::%clojure-http-first-of (url chars start)
   "The index of the first character of URL from START that is one of CHARS,
@@ -10202,8 +10203,9 @@
          (rontolisp::%clojure-null-pointer-exception
           "rontolisp.http-client: the request has no :uri"))
         (t (rontolisp::%clojure-class-cast-exception
-            (concatenate 'string "rontolisp.http-client: the :uri must be a string, not "
-                         (rontolisp::%clojure-str-of uri "nil" t)))))
+            (concatenate 'string
+             "rontolisp.http-client: the :uri must be a string, not "
+             (rontolisp::%clojure-str-of uri "nil" t)))))
   (let* ((n (length uri))
          (stop (rontolisp::%clojure-http-first-of uri "/?#" 0))
          (colon (position #\: uri :end stop))
@@ -10215,18 +10217,21 @@
               (rontolisp::%clojure-http-bad-url "Expected scheme name" uri 0))
           (dotimes (i colon)
             (let ((c (char uri i)))
-              (if (not (or (alpha-char-p c)
-                           (and (> i 0) (or (digit-char-p c) (find c "+-.")))))
+              (if (not
+                   (or (alpha-char-p c)
+                       (and (> i 0) (or (digit-char-p c) (find c "+-.")))))
                   (rontolisp::%clojure-http-bad-url
                    "Illegal character in scheme name" uri i))))
           (setq scheme (string-downcase (subseq uri 0 colon)))
           (setq p (+ colon 1))))
     (let ((authority nil))
-      (if (and (< (+ p 1) n) (char= (char uri p) #\/) (char= (char uri (+ p 1)) #\/))
+      (if (and (< (+ p 1) n) (char= (char uri p) #\/)
+               (char= (char uri (+ p 1)) #\/))
           (let ((q (rontolisp::%clojure-http-first-of uri "/?#" (+ p 2))))
             (if (and (= q (+ p 2)) (= q n))
                 (rontolisp::%clojure-http-bad-url "Expected authority" uri q))
-            (rontolisp::%clojure-http-scan-url uri (+ p 2) q ";:@&=+$,[]" "authority")
+            (rontolisp::%clojure-http-scan-url uri (+ p 2) q ";:@&=+$,[]"
+                                               "authority")
             (if (> q (+ p 2)) (setq authority t))
             (setq p q)))
       (let ((q (rontolisp::%clojure-http-first-of uri "?#" p)))
@@ -10234,10 +10239,12 @@
         (setq p q))
       (if (and (< p n) (char= (char uri p) #\?))
           (let ((q (rontolisp::%clojure-http-first-of uri "#" (+ p 1))))
-            (rontolisp::%clojure-http-scan-url uri (+ p 1) q ";/?:@&=+$,[]" "query")
+            (rontolisp::%clojure-http-scan-url uri (+ p 1) q ";/?:@&=+$,[]"
+                                               "query")
             (setq p q)))
       (if (< p n)
-          (rontolisp::%clojure-http-scan-url uri (+ p 1) n ";/?:@&=+$,[]" "fragment"))
+          (rontolisp::%clojure-http-scan-url uri (+ p 1) n ";/?:@&=+$,[]"
+                                             "fragment"))
       (cond ((null scheme)
              (rontolisp::%clojure-illegal-argument-exception
               "URI with undefined scheme"))
@@ -10262,8 +10269,7 @@
    UTF-8, the key as coerce-key spells it, the value through str."
   (concatenate 'string
                (rontolisp::%clojure-ring-form-encode
-                (rontolisp::%clojure-http-key-name k) nil)
-               "="
+                (rontolisp::%clojure-http-key-name k) nil) "="
                (rontolisp::%clojure-ring-form-encode
                 (rontolisp::%clojure-str-of v "" nil) nil)))
 
@@ -10275,14 +10281,14 @@
                  (rontolisp::%clojure-seq-all params)))
         (parts nil))
     (loop
-      (if (null pending) (return (rontolisp::%clojure-http-join (nreverse parts))))
+      (if (null pending)
+          (return (rontolisp::%clojure-http-join (nreverse parts))))
       (let ((k (car (car pending))) (v (cdr (car pending))))
         (setq pending (cdr pending))
         (if (rontolisp::%clojure-is-coll v)
             (setq pending
                   (append (mapcar (lambda (one) (cons k one))
-                                  (rontolisp::%clojure-seq-all v))
-                          pending))
+                                  (rontolisp::%clojure-seq-all v)) pending))
             (setq parts (cons (rontolisp::%clojure-http-pair k v) parts)))))))
 
 (defun rontolisp::%clojure-http-form (params)
@@ -10295,8 +10301,7 @@
 (defun rontolisp::%clojure-http-with-query (url query)
   "URL with QUERY joined to its query (after an & when it has one), ahead of
    its fragment."
-  (let* ((hash (position #\# url))
-         (base (if hash (subseq url 0 hash) url)))
+  (let* ((hash (position #\# url)) (base (if hash (subseq url 0 hash) url)))
     (concatenate 'string base (if (position #\? base) "&" "?") query
                  (if hash (subseq url hash) ""))))
 
@@ -10310,28 +10315,31 @@
          (i 0))
     (loop
       (if (>= i n) (return (get-output-stream-string out)))
-      (let ((w (+ (ash (aref octets i) 16)
-                  (if (< (+ i 1) n) (ash (aref octets (+ i 1)) 8) 0)
-                  (if (< (+ i 2) n) (aref octets (+ i 2)) 0))))
+      (let ((w
+             (+ (ash (aref octets i) 16)
+                (if (< (+ i 1) n) (ash (aref octets (+ i 1)) 8) 0)
+                (if (< (+ i 2) n) (aref octets (+ i 2)) 0))))
         (write-char (char alphabet (logand (ash w -18) 63)) out)
         (write-char (char alphabet (logand (ash w -12) 63)) out)
-        (write-char (if (< (+ i 1) n) (char alphabet (logand (ash w -6) 63)) #\=)
-                    out)
+        (write-char
+         (if (< (+ i 1) n) (char alphabet (logand (ash w -6) 63)) #\=) out)
         (write-char (if (< (+ i 2) n) (char alphabet (logand w 63)) #\=) out)
         (setq i (+ i 3))))))
 
 (defun rontolisp::%clojure-http-basic-auth (auth)
   "The Authorization value of :basic-auth AUTH, [user pass] or {:user :pass}."
-  (let ((user (if (rontolisp::%clojure-ring-sequential-p auth)
-                  (rontolisp::%clojure-nth auth 0 nil)
-                  (rontolisp::%clojure-http-option auth "user")))
-        (pass (if (rontolisp::%clojure-ring-sequential-p auth)
-                  (rontolisp::%clojure-nth auth 1 nil)
-                  (rontolisp::%clojure-http-option auth "pass"))))
+  (let ((user
+         (if (rontolisp::%clojure-ring-sequential-p auth)
+             (rontolisp::%clojure-nth auth 0 nil)
+             (rontolisp::%clojure-http-option auth "user")))
+        (pass
+         (if (rontolisp::%clojure-ring-sequential-p auth)
+             (rontolisp::%clojure-nth auth 1 nil)
+             (rontolisp::%clojure-http-option auth "pass"))))
     (concatenate 'string "Basic "
                  (rontolisp::%clojure-http-base64
-                  (concatenate 'string (rontolisp::%clojure-str-of user "" nil) ":"
-                               (rontolisp::%clojure-str-of pass "" nil))))))
+                  (concatenate 'string (rontolisp::%clojure-str-of user "" nil)
+                               ":" (rontolisp::%clojure-str-of pass "" nil))))))
 
 (defun rontolisp::%clojure-http-body (body)
   "The request body fetch sends for the :body option BODY: a string as it is,
@@ -10346,27 +10354,31 @@
          (let ((text (rontolisp::%clojure-read-to-end body)))
            (close body)
            text))
-        (t (error (rontolisp::%clojure-ex-info
-                   (concatenate 'string "Don't know how to convert "
-                                (rontolisp::%clojure-str-of body "nil" t)
-                                " to body")
-                   (rontolisp::%clojure-http-assoc nil (list "body" body)) nil)))))
+        (t (error
+            (rontolisp::%clojure-ex-info
+             (concatenate 'string "Don't know how to convert "
+                          (rontolisp::%clojure-str-of body "nil" t) " to body")
+             (rontolisp::%clojure-http-assoc nil (list "body" body)) nil)))))
 
 (defun rontolisp::%clojure-http-refuse-options (req)
   "Refuses by name an option of REQ no transport here honours."
   (dolist (refused
-           '(("client" . "a client is the transport rontolisp:fetch picks for the target")
+           '(("client" .
+              "a client is the transport rontolisp:fetch picks for the target")
              ("interceptors" . "the request and response steps are built in")
              ("timeout" . "rontolisp:fetch has no timeout yet")
              ("version" . "the transport chooses the HTTP version")
              ("multipart" . "a multipart body is not built in")
              ("raw" . "the response is always the response map")
-             ("expect-continue" . "the transport decides whether to expect 100-continue")))
-    (if (rontolisp::%clojure-truthy (rontolisp::%clojure-http-option req (car refused)))
+             ("expect-continue" .
+              "the transport decides whether to expect 100-continue")))
+    (if (rontolisp::%clojure-truthy
+         (rontolisp::%clojure-http-option req (car refused)))
         (rontolisp::%clojure-unsupported-operation-exception
          (concatenate 'string "rontolisp.http-client: :" (car refused)
                       " is not supported: " (cdr refused)))))
-  (if (equal (rontolisp::%clojure-http-option req "as") (list :c%keyword "bytes"))
+  (if (equal (rontolisp::%clojure-http-option req "as")
+             (list :c%keyword "bytes"))
       (rontolisp::%clojure-unsupported-operation-exception
        "rontolisp.http-client: :as :bytes is not supported: no value here is a byte array; take :as :stream")))
 
@@ -10395,7 +10407,8 @@
     (rontolisp::%clojure-http-refuse-options given)
     (if (rontolisp::%clojure-truthy accept)
         (if (equal accept (list :c%keyword "json"))
-            (setf (gethash (list :c%keyword "accept") headers) "application/json")
+            (setf (gethash (list :c%keyword "accept") headers)
+                  "application/json")
             (rontolisp::%clojure-illegal-argument-exception
              (concatenate 'string "No matching clause: "
                           (rontolisp::%clojure-str-of accept "nil" t)))))
@@ -10413,14 +10426,16 @@
     (if (rontolisp::%clojure-truthy form)
         (progn
           (setq body (rontolisp::%clojure-http-form form))
-          (if (not (rontolisp::%clojure-truthy
-                    (gethash (list :c%keyword "content-type") headers)))
+          (if (not
+               (rontolisp::%clojure-truthy
+                (gethash (list :c%keyword "content-type") headers)))
               (setf (gethash (list :c%keyword "content-type") headers)
                     "application/x-www-form-urlencoded"))))
-    (let ((req (rontolisp::%clojure-http-assoc given
-                (append (list "headers" headers "uri" url)
-                        (if method (list "method" method))
-                        (if (rontolisp::%clojure-truthy form) (list "body" body))))))
+    (let* ((sent
+            (append (list "headers" headers "uri" url)
+                    (if method (list "method" method))
+                    (if (rontolisp::%clojure-truthy form) (list "body" body))))
+           (req (rontolisp::%clojure-http-assoc given sent)))
       (list req url (rontolisp::%clojure-http-method method)
             (rontolisp::%clojure-http-fields headers)
             (rontolisp::%clojure-http-body body)))))
@@ -10461,8 +10476,11 @@
                    (setq segments (cdr segments))
                    (setq segments (cons segment segments)))
                (setq directory t))
-              ((string= segment "") (if (null slash) (setq directory (or directory segments))))
-              (t (setq segments (cons segment segments)) (setq directory nil)))
+              ((string= segment "")
+               (if (null slash) (setq directory (or directory segments))))
+              (t
+               (setq segments (cons segment segments))
+               (setq directory nil)))
         (if (null slash) (return nil))
         (setq start (+ slash 1))))
     (let ((out (make-string-output-stream)) (first t))
@@ -10480,20 +10498,29 @@
         (c (rontolisp::%clojure-http-split location)))
     (if (car c)
         location
-        (let ((scheme (car b)) (authority (nth 1 b)) (path (nth 2 b))
-              (query (nth 3 c)) (fragment (nth 4 c)) (cpath (nth 2 c)))
+        (let ((scheme (car b))
+              (authority (nth 1 b))
+              (path (nth 2 b))
+              (query (nth 3 c))
+              (fragment (nth 4 c))
+              (cpath (nth 2 c)))
           (cond ((and (null (nth 1 c)) (string= cpath "") fragment (null query))
                  (setq query (nth 3 b))
                  (setq path (nth 2 b)))
-                ((nth 1 c) (setq authority (nth 1 c)) (setq path cpath))
-                ((and (> (length cpath) 0) (char= (char cpath 0) #\/)) (setq path cpath))
+                ((nth 1 c)
+                 (setq authority (nth 1 c))
+                 (setq path cpath))
+                ((and (> (length cpath) 0) (char= (char cpath 0) #\/))
+                 (setq path cpath))
                 (t (let ((slash (position #\/ path :from-end t)))
                      (setq path
                            (rontolisp::%clojure-http-normalize
                             (if slash
-                                (concatenate 'string (subseq path 0 (+ slash 1)) cpath)
+                                (concatenate 'string (subseq path 0 (+ slash 1))
+                                             cpath)
                                 (concatenate 'string "/" cpath)))))))
-          (concatenate 'string scheme ":" (if authority (concatenate 'string "//" authority) "")
+          (concatenate 'string scheme ":"
+                       (if authority (concatenate 'string "//" authority) "")
                        path (if query (concatenate 'string "?" query) "")
                        (if fragment (concatenate 'string "#" fragment) ""))))))
 
@@ -10506,7 +10533,8 @@
    Cookie, Origin, Referer and Host."
   (let ((status (getf res :status)))
     (if (and (member status '(301 302 303 307 308)) (< (+ hops 1) 5))
-        (let ((location (cdr (assoc "location" (getf res :headers) :test #'string=))))
+        (let ((location
+               (cdr (assoc "location" (getf res :headers) :test #'string=))))
           (if (null location)
               (rontolisp::%clojure-io-exception
                "java.io.UncheckedIOException: java.io.IOException: Invalid redirection"))
@@ -10515,19 +10543,27 @@
                  (to (rontolisp::%clojure-http-split target))
                  (next-method
                   (cond ((= status 303) "GET")
-                        ((and (member status '(301 302)) (string= method "POST")) "GET")
+                        ((and (member status '(301 302))
+                              (string= method "POST"))
+                         "GET")
                         (t method))))
-            (if (or (string-equal (car to) (car from)) (string-equal (car to) "https"))
-                (list target next-method
-                      (if (and (string-equal (car to) (car from))
-                               (equal (nth 1 to) (nth 1 from)))
-                          fields
-                          (remove-if (lambda (f)
-                                       (member (string-downcase (car f))
-                                               '("authorization" "cookie" "origin" "referer" "host")
-                                               :test #'string=))
-                                     fields))
-                      (if (and (/= status 303) (string= next-method method)) body nil))))))))
+            (if (or (string-equal (car to) (car from))
+                    (string-equal (car to) "https"))
+                (let ((same-origin
+                       (and (string-equal (car to) (car from))
+                            (equal (nth 1 to) (nth 1 from))))
+                      (dropped
+                       '("authorization" "cookie" "origin" "referer" "host")))
+                  (list target next-method
+                        (if same-origin
+                            fields
+                            (remove-if (lambda (f)
+                                         (member (string-downcase (car f))
+                                                 dropped
+                                                 :test #'string=)) fields))
+                        (if (and (/= status 303) (string= next-method method))
+                            body
+                            nil)))))))))
 
 (defun rontolisp::%clojure-http-text (c)
   "The oracle's toString of the condition C: an exception's report already
@@ -10546,11 +10582,11 @@
    its reply, a transport failure signalled as the oracle's IOException."
   (funcall
    (rontolisp:async-lambda ()
-     (handler-case
-         (let ((res (rontolisp:await
-                     (funcall transport url
-                              (list :method method :headers fields :body body)))))
-           res)
+     (handler-case (let ((res
+                          (rontolisp:await
+                           (funcall transport url
+                            (list :method method :headers fields :body body)))))
+                     res)
        (error (c) (rontolisp::%clojure-io-exception (princ-to-string c)))))))
 
 (defun rontolisp::%clojure-http-follow (request transport)
@@ -10564,9 +10600,10 @@
            (body (nth 3 request))
            (hops 0))
        (loop
-         (let ((res (rontolisp:await
-                     (rontolisp::%clojure-http-send url method fields body
-                                                    transport))))
+         (let ((res
+                (rontolisp:await
+                 (rontolisp::%clojure-http-send url method fields body
+                                                transport))))
            (let ((next
                   (rontolisp::%clojure-http-redirect res url method fields body
                                                      hops)))
@@ -10589,7 +10626,8 @@
               (cond ((null had) (cdr f))
                     ((stringp had) (vector had (cdr f)))
                     (t (let ((grown (make-array (+ (length had) 1))))
-                         (dotimes (i (length had)) (setf (aref grown i) (aref had i)))
+                         (dotimes (i (length had))
+                           (setf (aref grown i) (aref had i)))
                          (setf (aref grown (length had)) (cdr f))
                          grown))))))
     out))
@@ -10601,16 +10639,19 @@
   (let ((encoding
          (cdr (assoc "content-encoding" (getf res :headers) :test #'string=))))
     (if (and encoding
-             (member (string-downcase encoding) '("gzip" "deflate") :test #'string=)
-             (not (eq (rontolisp::%clojure-http-option req "decompress-body")
-                      rontolisp::%clojure-false))
-             (not (equal (rontolisp::%clojure-http-option req "method")
-                         (list :c%keyword "head"))))
+         (member (string-downcase encoding) '("gzip" "deflate") :test #'string=)
+         (not
+          (eq (rontolisp::%clojure-http-option req "decompress-body")
+              rontolisp::%clojure-false))
+         (not
+          (equal (rontolisp::%clojure-http-option req "method")
+                 (list :c%keyword "head"))))
         (rontolisp::%clojure-unsupported-operation-exception
          (concatenate 'string "rontolisp.http-client: a " encoding
                       " response body is not decompressed")))
-    (if (not (or (null as) (equal as (list :c%keyword "string"))
-                 (equal as (list :c%keyword "stream"))))
+    (if (not
+         (or (null as) (equal as (list :c%keyword "string"))
+             (equal as (list :c%keyword "stream"))))
         (rontolisp::%clojure-illegal-argument-exception
          (concatenate 'string "No matching clause: "
                       (rontolisp::%clojure-str-of as "nil" t))))))
@@ -10621,34 +10662,35 @@
   (funcall
    (rontolisp:async-lambda ()
      (let* ((req (car prepared))
-            (reply (rontolisp:await
-                    (rontolisp::%clojure-http-follow (cdr prepared) transport)))
+            (reply
+             (rontolisp:await
+              (rontolisp::%clojure-http-follow (cdr prepared) transport)))
             (res (car reply))
             (status (getf res :status))
             (as (rontolisp::%clojure-http-option req "as"))
             (checked (rontolisp::%clojure-http-check-body res req as))
-            (text (rontolisp:await
-                   (if (equal as (list :c%keyword "stream"))
-                       nil
-                       (rontolisp:read-all (getf res :body)))))
-            (resp (rontolisp::%clojure-http-assoc nil
-                   (list "status" status
-                         "headers" (rontolisp::%clojure-http-header-map
-                                    (getf res :headers))
-                         "body" (if (equal as (list :c%keyword "stream"))
-                                    (getf res :body)
-                                    text)
-                         "uri" (cdr reply) "request" req))))
+            (text
+             (rontolisp:await
+              (if (equal as (list :c%keyword "stream"))
+                  nil
+                  (rontolisp:read-all (getf res :body)))))
+            (resp
+             (rontolisp::%clojure-http-assoc nil
+              (list "status" status "headers"
+               (rontolisp::%clojure-http-header-map (getf res :headers)) "body"
+               (if (equal as (list :c%keyword "stream")) (getf res :body) text)
+               "uri" (cdr reply) "request" req))))
        (declare (ignore checked))
-       (if (and (not (eq (rontolisp::%clojure-http-option req "throw")
-                         rontolisp::%clojure-false))
-                (not (member status
-                             '(200 201 202 203 204 205 206 207 300 301 302 303
-                               304 307))))
-           (error (rontolisp::%clojure-ex-info
-                   (concatenate 'string "Exceptional status code: "
-                                (rontolisp::%clojure-str-of status "" nil))
-                   resp nil)))
+       (if (and (not
+                 (eq (rontolisp::%clojure-http-option req "throw")
+                     rontolisp::%clojure-false))
+                (not
+                 (member status
+                  '(200 201 202 203 204 205 206 207 300 301 302 303 304 307))))
+           (let ((message
+                  (concatenate 'string "Exceptional status code: "
+                               (princ-to-string status))))
+             (error (rontolisp::%clojure-ex-info message resp nil))))
        resp))))
 
 (defun rontolisp::%clojure-http-call (f x)
@@ -10660,14 +10702,16 @@
   "What :async-catch is handed for the failure C of the request REQ, the
    oracle's map: the CompletionException over C, C itself, its data, its
    message and the request."
-  (rontolisp::%clojure-http-assoc nil
-   (list "ex"
+  (let ((ex
          (c%e-new '("java.util.concurrent.CompletionException"
                     "java.lang.RuntimeException" "java.lang.Exception"
-                    "java.lang.Throwable")
-                  (rontolisp::%clojure-http-text c) nil c)
-         "ex-cause" c "ex-data" (rontolisp::%clojure-ex-data c)
-         "ex-message" (rontolisp::%clojure-ex-message c) "request" req)))
+                    "java.lang.Throwable") (rontolisp::%clojure-http-text c) nil
+                  c))
+        (data (rontolisp::%clojure-ex-data c))
+        (message (rontolisp::%clojure-ex-message c)))
+    (rontolisp::%clojure-http-assoc nil
+                                    (list "ex" ex "ex-cause" c "ex-data" data
+                                          "ex-message" message "request" req))))
 
 (defun rontolisp::%clojure-http-exchange (prepared transport async)
   "The future of the response map of the prepared request PREPARED, through
@@ -10676,19 +10720,22 @@
    (rontolisp:async-lambda ()
      (let* ((req (car prepared))
             (then (if async (rontolisp::%clojure-http-option req "async-then")))
-            (catch (if async (rontolisp::%clojure-http-option req "async-catch"))))
+            (catch
+             (if async (rontolisp::%clojure-http-option req "async-catch"))))
        (if (rontolisp::%clojure-truthy catch)
-           (handler-case
-               (let ((resp (rontolisp:await
-                            (rontolisp::%clojure-http-respond prepared transport))))
-                 (if (rontolisp::%clojure-truthy then)
-                     (rontolisp::%clojure-http-call then resp)
-                     resp))
+           (handler-case (let ((resp
+                                (rontolisp:await
+                                 (rontolisp::%clojure-http-respond prepared
+                                                                   transport))))
+                           (if (rontolisp::%clojure-truthy then)
+                               (rontolisp::%clojure-http-call then resp)
+                               resp))
              (error (c)
                (rontolisp::%clojure-http-call catch
                 (rontolisp::%clojure-http-failure c req))))
-           (let ((resp (rontolisp:await
-                        (rontolisp::%clojure-http-respond prepared transport))))
+           (let ((resp
+                  (rontolisp:await
+                   (rontolisp::%clojure-http-respond prepared transport))))
              (if (rontolisp::%clojure-truthy then)
                  (rontolisp::%clojure-http-call then resp)
                  resp)))))))
@@ -10698,8 +10745,9 @@
    sent through TRANSPORT (the call site's rontolisp:fetch); the future of it
    under :async true. The options are read and refused here, at the call."
   (let* ((prepared (rontolisp::%clojure-http-prepare opts))
-         (async (rontolisp::%clojure-truthy
-                 (rontolisp::%clojure-http-option (car prepared) "async")))
+         (async
+          (rontolisp::%clojure-truthy
+           (rontolisp::%clojure-http-option (car prepared) "async")))
          (future (rontolisp::%clojure-http-exchange prepared transport async)))
     (if async future (rontolisp::%future-force future))))
 

@@ -1234,14 +1234,22 @@ new, and the five fetch has (the JDK's on the interpreter and the JVM, `wasi:htt
   times out; the `--host-fetch` host's JS `fetch` follows redirects itself (20 hops, `:uri`
   the requested URL); a transport failure's text is the transport's (`java.net.ConnectException`,
   `the WIT call answered its error arm: :CONNECTION-REFUSED`, `fetch: cannot connect to ...`).
+- Cloudflare Workers, verified 2026-10-08 under `wrangler dev` 4.148.0: a Ring handler
+  proxying a local upstream through the client (`--no-wasi --host-fetch
+  --host-boundary=streaming --emit-js-glue`, the three-line `index.js` of the other Workers)
+  relays a 70,000 B binary reply byte for byte under `:as :stream`, answers `:async true` +
+  `deref`, and catches the 404 `ex-info`.
 - Oracle (clj 1.12.6 + babashka.http-client 0.4.23 against the corpus origin, 2026-10-08):
   identical but the response's missing `:version` and the `java.net.URI` `:uri` (a string
   here), `accept-encoding`, the User-Agent (fetch's), a transport failure's class (an
   `IOException`; the oracle's `ConnectException` is one), map key order, `:as :bytes`.
+  What waits on a value kind or a transport feature (`:as :bytes`, compression,
+  `:multipart`, a lazy reader over the stream body, `:timeout`, the arity words): todo `e63`.
 - Pins: `FetchSpecE2eTest#clojureHttpClient` (`clojure-http-spec.yaml`: interpreter, JVM,
   `--native`, component), `ClojureHttpClientTest` (the lowering, the refusals, the FETCH
   strip, the P1 and `--no-wasi` refusals, a Ring proxy relaying a binary reply on the
-  interpreter and the JVM), `ClojureHttpClientHostFetchE2eTest` (node `--experimental-wasm-jspi`
+  interpreter and the JVM, a redirect to a second origin dropping the credential headers --
+  the corpus has one origin), `ClojureHttpClientHostFetchE2eTest` (node `--experimental-wasm-jspi`
   over the generated glue's `defaultHost()`: the client, and a Ring proxy through
   `worker(module)`), `ServeRingComponentE2eTest#wasmtimeServeRelaysAFetchedReplyByteForByte`
   (opt-in), the `http-client.md` doc examples (`DocExamplesTest` points their URLs at its
