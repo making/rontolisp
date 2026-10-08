@@ -15,6 +15,7 @@ import java.util.Objects;
 import java.util.Set;
 import java.util.function.BiConsumer;
 import java.util.function.Consumer;
+import java.util.function.Supplier;
 
 import am.ik.rontolisp.ClosRegistry;
 import am.ik.rontolisp.LambdaLists;
@@ -5697,6 +5698,35 @@ public final class LispEvaluator {
 			finally {
 				this.packageResolver.setCurrentPackage(savedPackage);
 			}
+		});
+	}
+
+	/**
+	 * Registers a global whose value form runs only when something reads it -- the
+	 * Clojure front end's macro-time {@code def} roots ({@code ClojureMacroTime}). Unlike
+	 * {@link #registerLazyGlobal}, a value form that fails propagates to the read, where
+	 * the expansion reading it reports it. A value form reading the name itself
+	 * ({@code (def x (inc x))}, an {@code alter-var-root}) reads the root it supersedes,
+	 * forced only then.
+	 * @param name the global's name
+	 * @param valueForm the unresolved value form
+	 * @param special whether the name is proclaimed special
+	 * @param once whether a name already bound (or pending) keeps its value
+	 */
+	public void defineLazyGlobal(String name, LispVal valueForm, boolean special, boolean once) {
+		if (special) {
+			this.specialVars.add(name);
+		}
+		if (once && this.globalEnv.isBound(name)) {
+			return;
+		}
+		Supplier<@Nullable LispVal> previous = this.globalEnv.rootOf(name);
+		this.globalEnv.defineLazy(name, () -> {
+			LispVal old = previous == null ? null : previous.get();
+			if (old != null) {
+				this.globalEnv.set(name, old);
+			}
+			return eval(valueForm);
 		});
 	}
 

@@ -985,8 +985,10 @@ final class ClojureStateLowering {
 			// probe and no set flag beside the var is needed. The probe survives
 			// the compile-time boundp fold -- the init's assignment poisons the
 			// name -- like the loaded flag's plain-variable test.
-			return ClojureLowerUtil.list(ClojureLowerUtil.sym("unless"), boundTest(ctx, key, var),
-					ClojureLowerUtil.list(ClojureLowerUtil.sym("setq"), var, value));
+			LispVal store = ClojureLowerUtil.list(ClojureLowerUtil.sym("setq"), var, value);
+			LispVal guarded = ClojureLowerUtil.list(ClojureLowerUtil.sym("unless"), boundTest(ctx, key, var), store);
+			ctx.defonceStores.put(guarded, store);
+			return guarded;
 		}
 		else {
 			set = dynamic
@@ -996,11 +998,14 @@ final class ClojureStateLowering {
 									ClojureLowering.boundDepthSym(key), new LispInteger(0)))
 					: ClojureLowerUtil.list(ClojureLowerUtil.sym("setq"), var, value);
 		}
+		LispVal store = set;
 		if (echo != null) {
 			set = ClojureLowerUtil.list(ClojureLowerUtil.sym("progn"), set, echo.get());
 		}
-		return ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), boundTest(ctx, key, var),
+		LispVal guarded = ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), boundTest(ctx, key, var),
 				echo != null ? ClojureLowering.NIL_CONST : var, set);
+		ctx.defonceStores.put(guarded, store);
+		return guarded;
 	}
 
 	/**

@@ -2943,6 +2943,43 @@ cases:
       (+ 1 2)
       true
       true
+  - name: a-macro-body-calls-the-programs-definitions
+    # A macro body runs at lower time over the top-level definitions above it, like the
+    # oracle's form-by-form load: a private and a multi-arity helper, a def'd table, a
+    # dynamic var the body rebinds, a multimethod, a protocol over a record, a catch and
+    # an ex-info. A def's value runs at lower time only if a body reads it, so
+    # mtc-loud prints once, at run time. clj 1.12.6, oracle-identical.
+    source: |
+      (def mtc-ops {:add '+ :mul '*})
+      (def ^:dynamic *mtc-wrap* 'list)
+      (def mtc-loud (do (println "mtc-loud runs once") 7))
+      (defn- mtc-op [k] (get mtc-ops k))
+      (defn mtc-arity ([x] [x]) ([x y] [x y]))
+      (defmulti mtc-shape (fn [x] (if (symbol? x) :sym :other)))
+      (defmethod mtc-shape :sym [x] (list 'quote x))
+      (defmethod mtc-shape :other [x] x)
+      (defprotocol MtcWrap (mtc-unwrap [x]))
+      (defrecord MtcBox [v])
+      (extend-protocol MtcWrap MtcBox (mtc-unwrap [b] (:v b)))
+      (defn mtc-ratio [s] (try (/ 12 (count s)) (catch ArithmeticException _ -1)))
+      (defn mtc-checked [x] (if (number? x) x (throw (ex-info "not a number" {:x x}))))
+      (defmacro mtc-calc [k & args] (cons (mtc-op k) args))
+      (defmacro mtc-wrapped [x] (list *mtc-wrap* x))
+      (defmacro mtc-rebound [x] (binding [*mtc-wrap* 'vector] (list *mtc-wrap* x)))
+      (defmacro mtc-arities [] (list 'quote [(mtc-arity 1) (mtc-arity 1 2)]))
+      (defmacro mtc-shaped [x] (mtc-shape x))
+      (defmacro mtc-boxed [x] (mtc-unwrap (->MtcBox x)))
+      (defmacro mtc-ratioed [s] (mtc-ratio s))
+      (defmacro mtc-guarded [x]
+        (try (mtc-checked x) (catch clojure.lang.ExceptionInfo e (list 'quote (ex-data e)))))
+      (println (mtc-calc :add 1 2) (mtc-calc :mul 3 4) (mtc-wrapped 1) (mtc-rebound 2))
+      (println (mtc-arities) (mtc-shaped foo) (mtc-shaped 3) (mtc-boxed 5))
+      (println (mtc-ratioed "abc") (mtc-ratioed "") (mtc-guarded 4) (mtc-guarded :k) mtc-loud)
+    expected: |
+      mtc-loud runs once
+      3 12 (1) [2]
+      [[1] [1 2]] foo 3 5
+      4 -1 4 {:x :k} 7
   - name: a-macro-argument-holding-a-regex-literal-expands
     # A macro argument travels quoted into the expander and its answer reads back as a
     # datum: a regex literal answers its pattern, which reads back as the literal (the
@@ -7878,3 +7915,333 @@ cases:
       "Assert failed: (every? symbol? argv)"
       [1 2] {:k :k}
       6
+  - name: clojure-pprint-lays-data-out-like-the-oracle
+    # The built-in clojure.pprint (.kb/clojure-frontend.md "clojure.jar namespaces"): its
+    # layout replays the oracle's pretty writer, so linear breaks, *print-right-margin*,
+    # *print-length*, *print-level*, *print-meta*, reader macros and namespace maps lay
+    # out alike. Every line is the oracle's (clj 1.12.6), on all four backends; maps
+    # with several keys are sorted, since a hash map's walk order differs on wasm.
+    source: |
+      (ns pp-layout (:require [clojure.pprint :as pp]))
+      (pp/pprint [(sorted-map :name "alice" :roles [:admin :dev] :settings (sorted-map :font-size 14 :plugins ["a" "b" "c"] :theme "dark"))
+                  (list 1 2 3 (range 20)) #{:only} "a string" \c 1.5 22/7 nil true])
+      (binding [pp/*print-right-margin* 30]
+        (pp/pprint [(sorted-map :name "alice" :roles [:admin :dev] :settings (sorted-map :font-size 14 :plugins ["a" "b" "c"]))
+                    (list 1 2 3 (range 8))]))
+      (binding [pp/*print-right-margin* 10] (pp/pprint (sorted-map :a [1 2 3] :b {:c 4})))
+      (pp/pprint (list :a (list :b (list :c (vec (range 25))))))
+      (pp/pprint ['(quote x) '(var y) '(clojure.core/deref z) '(clojure.core/unquote w) '(quote a b)])
+      (binding [pp/*print-right-margin* 10] (pp/pprint ''(aaaa bbbb cccc dddd)))
+      (binding [*print-length* 2 pp/*print-right-margin* 10] (pp/pprint [(range 5) (sorted-map :a 1 :b 2 :c 3) #{1} [4 5 6]]))
+      (binding [*print-level* 2] (pp/pprint [1 [2 [3]] {:a {:b 1}} (list 4 (list 5))]))
+      (binding [*print-meta* true pp/*print-right-margin* 20] (pp/pprint [(with-meta [1 2] {:k 1}) (with-meta {:a 1} {:m (vec (range 9))})]))
+      (pp/pprint (sorted-map :x/a 1 :x/b (sorted-map :y/c 2)))
+      (binding [*print-namespace-maps* false] (pp/pprint {:x/a 1}))
+      (binding [pp/*print-suppress-namespaces* true] (pp/pprint '[a/b {:c/d e/f}]))
+      (binding [pp/*print-right-margin* nil] (pp/pprint (vec (range 30))))
+      (in-ns 'user)
+    expected: |
+      [{:name "alice",
+        :roles [:admin :dev],
+        :settings {:font-size 14, :plugins ["a" "b" "c"], :theme "dark"}}
+       (1 2 3 (0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19))
+       #{:only}
+       "a string"
+       \c
+       1.5
+       22/7
+       nil
+       true]
+      [{:name "alice",
+        :roles [:admin :dev],
+        :settings
+        {:font-size 14,
+         :plugins ["a" "b" "c"]}}
+       (1 2 3 (0 1 2 3 4 5 6 7))]
+      {:a
+       [1 2 3],
+       :b
+       {:c 4}}
+      (:a
+       (:b
+        (:c
+         [0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24])))
+      ['x #'y @z ~w (quote a b)]
+      '(aaaa
+        bbbb
+        cccc
+        dddd)
+      [(0
+        1
+        ...)
+       {:a 1,
+        :b 2,
+        ...}
+       ...]
+      [1 [2 #] {#} (4 #)]
+      [^{:k 1}
+       [1 2]
+       ^{:m
+         [0
+          1
+          2
+          3
+          4
+          5
+          6
+          7
+          8]}
+       {:a 1}]
+      #:x{:a 1, :b #:y{:c 2}}
+      {:x/a 1}
+      [b #:c{:d f}]
+      [0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29]
+  - name: clojure-pprint-dispatch-logical-blocks-write-and-print-table
+    # simple-dispatch takes a method per record class, *print-pprint-dispatch* a function
+    # whose logical blocks take fill, miser, mandatory and per-line-prefix newlines and
+    # indentation like the oracle's; write, the radix printing (its negative-number
+    # quirks included) and print-table answer alike. Every line is the oracle's
+    # (clj 1.12.6), on all four backends.
+    source: |
+      (ns pp-api (:require [clojure.pprint :as pp :refer [pprint]]))
+      (defrecord PPoint [x y])
+      (pprint (->PPoint 1 [2 3]))
+      (defmethod pp/simple-dispatch PPoint [p] (print (str "<" (:x p) "," (:y p) ">")))
+      (pprint [(->PPoint 1 2) (->PPoint 3 4)])
+      (pp/with-pprint-dispatch (fn [x] (if (number? x) (print (str "#" x)) (pp/simple-dispatch x))) (pprint [1 [2 "s"]]))
+      (println (pp/write [1 2 3] :stream nil) (pp/write (vec (range 12)) :stream nil :right-margin 10 :length 3))
+      (pp/write {:a 1} :pretty false)
+      (println)
+      (prn (with-out-str (pprint "x")) (with-out-str (pprint {:k "v"} *out*)))
+      (defn fill-dispatch [x]
+        (if (sequential? x)
+          (pp/pprint-logical-block :prefix "<<" :suffix ">>"
+            (pp/print-length-loop [s (seq x)]
+              (when s
+                (pp/write-out (first s))
+                (when (next s) (print " ") (pp/pprint-newline :fill) (recur (next s))))))
+          (pr x)))
+      (binding [pp/*print-right-margin* 20] (pp/with-pprint-dispatch fill-dispatch (pprint (range 25))))
+      (binding [pp/*print-right-margin* 20 pp/*print-miser-width* nil] (pp/with-pprint-dispatch fill-dispatch (pprint (range 25))))
+      (defn per-line [x]
+        (pp/pprint-logical-block :per-line-prefix ";; "
+          (doseq [y x] (pr y) (pp/pprint-newline :mandatory))))
+      (prn (with-out-str (pp/with-pprint-dispatch per-line (pprint [1 2 3]))))
+      (defn indented [x]
+        (pp/pprint-logical-block :prefix "(" :suffix ")"
+          (print "head ") (pp/pprint-indent :block 1) (pp/pprint-newline :linear)
+          (print "aaaaaaaaaaaaaaaaaaaa ") (pp/pprint-newline :linear) (print "bbbbbbbbbbbbbbbbbbbbbbbbbbbb")))
+      (prn (with-out-str (binding [pp/*print-right-margin* 30] (pp/with-pprint-dispatch indented (pprint nil)))))
+      (prn (try (pp/pprint-newline :bogus) (catch IllegalArgumentException e (ex-message e))))
+      (prn (try (pp/pprint-tab :line 1 1) (catch UnsupportedOperationException e (ex-message e))))
+      (binding [pp/*print-base* 16 pp/*print-radix* true] (pprint [0 -3 255 1/2 -7/3 1.5]))
+      (binding [pp/*print-base* 2] (pprint [10 255]))
+      (binding [pp/*print-radix* true] (pprint [10 22/7]))
+      (pp/print-table [:a :b] [{:a 1 :b "two"} {:a 33 :b "four"}])
+      (pp/print-table [:b] [{:a 1 :b "two"} {:a 33 :b nil}])
+      (pp/print-table [])
+      (prn [pp/*print-pretty* pp/*print-right-margin* pp/*print-miser-width* pp/*print-suppress-namespaces* pp/*print-radix* pp/*print-base*])
+      (in-ns 'user)
+    expected: |
+      {:x 1, :y [2 3]}
+      [<1,2> <3,4>]
+      [#1 [#2 "s"]]
+      [1 2 3] [0
+       1
+       2
+       ...]
+      {:a 1}
+      "\"x\"\n" "{:k \"v\"}\n"
+      <<0
+        1
+        2
+        3
+        4
+        5
+        6
+        7
+        8
+        9
+        10
+        11
+        12
+        13
+        14
+        15
+        16
+        17
+        18
+        19
+        20 21 22 23 24>>
+      <<0 1 2 3 4 5 6 7 8
+        9 10 11 12 13 14
+        15 16 17 18 19 20
+        21 22 23 24>>
+      "1\n;; 2\n;; 3\n;; \n"
+      "(head \n  aaaaaaaaaaaaaaaaaaaa\n  bbbbbbbbbbbbbbbbbbbbbbbbbbbb)\n"
+      "Bad argument: :bogus. It must be one of #{:mandatory :miser :fill :linear}"
+      "pprint-tab is not yet implemented"
+      [#x0 #xfffffffffffffffd #xff #x1/2 #x-7/3 1.5]
+      [1010 11111111]
+      [10. #10r22/7]
+
+      | :a |   :b |
+      |----+------|
+      |  1 |  two |
+      | 33 | four |
+
+      |  :b |
+      |-----|
+      | two |
+      |     |
+      [true 72 40 nil nil 10]
+  - name: clojure-pprint-code-dispatch-lays-code-out-like-the-oracle
+    # code-dispatch (.kb/clojure-frontend.md "clojure.jar namespaces"): defn, let, if, cond,
+    # condp, ->, ns and the #(...) literal each in the oracle's layout, its quirks included
+    # (the blank after a broken head, (let [a 1] ), ((let x y)), a nested literal's
+    # parameters, a libspec kept on one line), *print-length* cutting a run short, and write
+    # with :dispatch. Every line is the oracle's (clj 1.12.6), on all four backends.
+    source: |
+      (ns pp-code (:require [clojure.pprint :as pp]))
+      (defn code [margin miser form]
+        (binding [pp/*print-right-margin* margin pp/*print-miser-width* miser]
+          (prn (with-out-str (pp/with-pprint-dispatch pp/code-dispatch (pp/pprint form))))))
+      (code 72 40 '(defn greet "Greets a person." {:added "1.0"} [person] (let [n (:name person) title (:title person "friend")] (when (seq n) (println "Hello," title n)))))
+      (code 30 40 '(defn greet [person] (let [n (:name person)] (println "Hello," n))))
+      (code 40 nil '(defn area ([r] (area r r)) ([w h] (cond (neg? w) :negative (zero? w) :zero :else (* w h)))))
+      (code 24 nil '(condp = mode :fast (go-fast) :slow (go-slow) (stay)))
+      (code 20 nil '(if (pos? x) (println "positive number") (println "negative number")))
+      (code 30 nil '(-> request (assoc :user user) (update :count inc) (dissoc :password)))
+      (code 72 40 '(fn* [p1 p2] (map (fn* [q] (+ p1 q)) (range p2))))
+      (code 72 40 '(fn* [a & more] (apply + a more)))
+      (code 40 nil '(ns my.app.core "The application." (:require [clojure.string :as str] [clojure.set :refer [union intersection difference]] my.app.util) (:import (java.util Date UUID) (java.io File)) (:gen-class)))
+      (code 72 40 '(let [{:keys [a b]} m] a))
+      (code 72 40 '(let [a 1]))
+      (code 72 40 '(let x y))
+      (code 72 40 '(clojure.core/when-let [x (f)] (g x)))
+      (code 15 40 '(loop [i 0 acc []] (recur (inc i) (conj acc i))))
+      (code 72 40 '(quote x))
+      (code 72 40 '[(quote a) (var b) (clojure.core/deref c) {:k (inc x)} #{1}])
+      (binding [*print-length* 2]
+        (code 72 40 '(defn f [x] a b c))
+        (code 72 40 '(condp = x 1 2 3 4))
+        (code 72 40 '(ns a (:require b c d))))
+      (binding [*print-level* 2]
+        (code 72 40 '(defn f [x] (let [a (b (c))] a))))
+      (prn (with-out-str (pp/write '(when-not done (recur)) :dispatch pp/code-dispatch :right-margin 12)))
+      (in-ns 'user)
+    expected: |
+      "(defn greet\n  \"Greets a person.\"\n  {:added \"1.0\"}\n  [person]\n  (let [n (:name person) title (:title person \"friend\")]\n    (when (seq n) (println \"Hello,\" title n))))\n"
+      "(defn \n  greet\n  [person]\n  (let \n    [n (:name person)]\n    (println \"Hello,\" n)))\n"
+      "(defn area\n  ([r] (area r r))\n  ([w h]\n    (cond\n      (neg? w) :negative\n      (zero? w) :zero\n      :else (* w h))))\n"
+      "(condp = mode\n  :fast (go-fast)\n  :slow (go-slow)\n  (stay))\n"
+      "(if (pos? x)\n  (println\n    \"positive number\")\n  (println\n    \"negative number\"))\n"
+      "(-> request\n (assoc :user user)\n (update :count inc)\n (dissoc :password))\n"
+      "#(map #(+ p1 %) (range %2))\n"
+      "#(apply + %1 %3)\n"
+      "(ns my.app.core\n  \"The application.\"\n  (:require [clojure.string :as str]\n            [clojure.set :refer [union\n                                 intersection\n                                 difference]]\n            my.app.util)\n  (:import (java.util Date UUID)\n           (java.io File))\n  (:gen-class))\n"
+      "(let [{:keys [a b]} m] a)\n"
+      "(let [a 1] )\n"
+      "((let x y))\n"
+      "(clojure.core/when-let [x (f)] (g x))\n"
+      "(loop \n  [i 0 acc []]\n  (recur\n    (inc i)\n    (conj\n      acc\n      i)))\n"
+      "'x\n"
+      "['a #'b @c {:k (inc x)} #{1}]\n"
+      "(defn f ...)\n"
+      "(condp = ...1 2 3 4)\n"
+      "(ns a\n  (:require b ... ...))\n"
+      "(defn f [x] (let # a))\n"
+      "(when-not\n  done\n  (recur))"
+  - name: clojure-data-diff-compares-like-the-oracle
+    # The built-in clojure.data (.kb/clojure-frontend.md "clojure.jar namespaces"): diff over
+    # atoms, maps (a lazy seq of three), sequential collections (vectors of three, index by
+    # index), sets and records, the equality partitions, diff-similar, and a deftype extending
+    # both protocols. Every line is the oracle's (clj 1.12.6), on all four backends; no
+    # answer holds a map of two keys, since a hash map's walk order differs.
+    source: |
+      (ns data-diff (:require [clojure.data :as d :refer [diff]]))
+      (prn (diff 1 1) (diff 1 2) (diff 1 "1") (diff nil 1) (diff nil nil) (diff "abc" "abd"))
+      (prn (diff {:a 1} {:a 2}) (seq? (diff {:a 1} {:a 2})) (vector? (diff [1] [2])))
+      (prn (diff [1 2 3] [5 2 3]) (diff [1 2] [1 2 3]) (diff [1 2 3] [1 2]) (diff [] [1]) (diff [nil 1] [nil 2]))
+      (prn (diff '(1 2) [1 3]) (diff [1] '(1)) (diff (range 4) (range 2)) (diff [1 2 3 4 5] [1 0 3 0 5]))
+      (prn (diff #{1 2} #{2 3}) (diff #{1} #{2}) (diff #{} #{1}))
+      (prn (diff {:a {:b 1 :c 2}} {:a {:b 1 :c 3}}) (diff {:a [1 2]} {:a [1 3]}) (diff {:a #{1}} {:a #{2}}))
+      (prn (diff {:a nil} {:b nil}) (diff {:a nil} {:a nil}) (diff {:a nil} {}) (diff {:a 1} {:a nil}) (diff {:a 1} [1]))
+      (prn (diff [[1 2] 3] [[1 5] 3]) (diff [1 {:a 1}] [1 {:a 2}]))
+      (prn (map d/equality-partition [1 [1] '(1) {} #{} nil "s" (range 3) (sorted-map) (sorted-set)]))
+      (prn (d/diff-similar [1 2] [1 3]) (d/diff-similar #{1} #{2}) (d/diff-similar 1 2))
+      (defrecord Point [x y])
+      (prn (diff (->Point 1 2) (->Point 1 3)) (d/equality-partition (->Point 1 2)))
+      (deftype Opaque [v])
+      (extend-protocol d/EqualityPartition Opaque (equality-partition [_] :opaque))
+      (extend-protocol d/Diff Opaque (diff-similar [a b] [(.-v a) (.-v b) :compared]))
+      (prn (diff (Opaque. 1) (Opaque. 2)) (let [[a b both] (diff (Opaque. 1) 1)] [(.-v a) b both]))
+      (in-ns 'user)
+    expected: |
+      [nil nil 1] [1 2 nil] [1 "1" nil] [nil 1 nil] [nil nil nil] ["abc" "abd" nil]
+      ({:a 1} {:a 2} nil) true true
+      [[1] [5] [nil 2 3]] [nil [nil nil 3] [1 2]] [[nil nil 3] nil [1 2]] [nil [1] nil] [[nil 1] [nil 2] [nil]]
+      [[nil 2] [nil 3] [1]] [nil nil [1]] [[nil nil 2 3] nil [0 1]] [[nil 2 nil 4] [nil 0 nil 0] [1 nil 3 nil 5]]
+      [#{1} #{3} #{2}] [#{1} #{2} nil] [nil #{1} nil]
+      ({:a {:c 2}} {:a {:c 3}} {:a {:b 1}}) ({:a [nil 2]} {:a [nil 3]} {:a [1]}) ({:a #{1}} {:a #{2}} nil)
+      ({:a nil} {:b nil} nil) [nil nil {:a nil}] ({:a nil} nil nil) ({:a 1} {:a nil} nil) [{:a 1} [1] nil]
+      [[[nil 2]] [[nil 5]] [[1] 3]] [[nil {:a 1}] [nil {:a 2}] [1]]
+      (:atom :sequential :sequential :map :set :atom :atom :sequential :map :set)
+      [[nil 2] [nil 3] [1]] [#{1} #{2} nil] [1 2 nil]
+      ({:y 2} {:y 3} {:x 1}) :map
+      [1 2 :compared] [1 1 nil]
+  - name: clojure-zip-moves-and-edits-like-the-oracle
+    # The built-in clojure.zip (.kb/clojure-frontend.md "clojure.jar namespaces"): vector, seq,
+    # xml and custom zippers, every move, edit, insertion and removal, the depth-first walk
+    # to its end loc, the refusals, and a loc's own shape. Every line is the oracle's
+    # (clj 1.12.6), on all four backends; no answer holds a map of two keys, since a hash
+    # map's walk order differs.
+    source: |
+      (ns zip-walk (:require [clojure.zip :as z]))
+      (def v (z/vector-zip [1 [2 3] [4 [5 6]] 7]))
+      (prn (z/node v) (z/branch? v) (z/children v) (z/path v) (z/lefts v) (z/rights v) (z/up v) (z/prev v))
+      (def d (z/down v))
+      (prn (z/node d) (z/path d) (z/lefts d) (z/rights d) (z/branch? d) (z/left d))
+      (prn (-> d z/right z/node) (-> d z/right z/down z/right z/node) (-> d z/right z/down z/up z/node))
+      (prn (-> d z/rightmost z/node) (-> d z/rightmost z/left z/node) (-> d z/rightmost z/leftmost z/node) (z/right (z/rightmost d)))
+      (prn (loop [loc v acc []] (if (z/end? loc) acc (recur (z/next loc) (conj acc (z/node loc))))))
+      (prn (z/root (z/edit (-> d z/right z/down) * 10)) (z/root (z/replace (z/right d) :x)))
+      (prn (z/root (z/insert-left d 0)) (z/root (z/insert-right d 0)))
+      (prn (z/root (z/insert-child (z/right d) :first)) (z/root (z/append-child (z/right d) :last)))
+      (prn (z/root (z/remove (-> d z/right z/down))) (z/node (z/remove (-> d z/right z/down))))
+      (prn (z/root (z/remove (-> d z/right z/right))) (z/node (z/remove (-> d z/right z/right))))
+      (prn (z/node (z/prev (-> d z/right z/right))) (z/node (z/prev (z/rightmost d))))
+      (def walked (loop [loc v] (if (z/end? loc) loc (recur (z/next (if (and (number? (z/node loc)) (odd? (z/node loc))) (z/edit loc inc) loc))))))
+      (prn (z/root walked) (z/end? walked) (z/node walked) (z/end? (z/next walked)))
+      (def s (z/seq-zip '(a (b c) (d (e)))))
+      (prn (z/node (z/down s)) (z/node (-> s z/down z/right z/down)) (z/root (-> s z/down z/right z/down (z/replace 'x))))
+      (prn (z/root (z/append-child s '(f))) (z/root (-> s z/down z/right z/remove)))
+      (def x (z/xml-zip {:tag :a :content [{:tag :b :content ["text"]}]}))
+      (prn (:tag (z/node (z/down x))) (z/node (-> x z/down z/down)) (z/branch? (-> x z/down z/down)))
+      (prn (-> (z/root (-> x z/down z/down (z/replace "new"))) :content first :content))
+      (prn (try (z/children d) (catch Exception e (ex-message e))))
+      (prn (try (z/insert-left v 0) (catch Exception e (ex-message e))) (try (z/remove v) (catch Exception e (ex-message e))))
+      (prn (mapv (juxt :id :seen) (:kids (z/root (z/edit (z/down (z/zipper map? (comp seq :kids) (fn [n c] (assoc n :kids (vec c))) {:kids [{:id 2}]})) assoc :seen true)))))
+      (prn [(d 0) (into (sorted-map) (d 1))])
+      (in-ns 'user)
+    expected: |
+      [1 [2 3] [4 [5 6]] 7] true (1 [2 3] [4 [5 6]] 7) nil nil nil nil nil
+      1 [[1 [2 3] [4 [5 6]] 7]] nil ([2 3] [4 [5 6]] 7) false nil
+      [2 3] 3 [2 3]
+      7 [4 [5 6]] 1 nil
+      [[1 [2 3] [4 [5 6]] 7] 1 [2 3] 2 3 [4 [5 6]] 4 [5 6] 5 6 7]
+      [1 [20 3] [4 [5 6]] 7] [1 :x [4 [5 6]] 7]
+      [0 1 [2 3] [4 [5 6]] 7] [1 0 [2 3] [4 [5 6]] 7]
+      [1 [:first 2 3] [4 [5 6]] 7] [1 [2 3 :last] [4 [5 6]] 7]
+      [1 [3] [4 [5 6]] 7] [3]
+      [1 [2 3] 7] 3
+      3 6
+      [2 [2 4] [4 [6 6]] 8] true [2 [2 4] [4 [6 6]] 8] true
+      a b (a (x c) (d (e)))
+      (a (b c) (d (e)) (f)) (a (d (e)))
+      :b "text" false
+      ["new"]
+      "called children on a leaf node"
+      "Insert at top" "Remove at top"
+      [[2 true]]
+      [1 {:l [], :pnodes [[1 [2 3] [4 [5 6]] 7]], :ppath nil, :r ([2 3] [4 [5 6]] 7)}]

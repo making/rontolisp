@@ -190,8 +190,11 @@ one application of the lowered body, the answer decodes back to a datum and lowe
 like any other form -- so every backend, and the interpreter's own `eval` of a macro
 call, runs expanded code. Parameters bind unevaluated forms (`&` rest, destructuring
 and several arities like `defn`; a docstring and an attr map are skipped);
-`&form`/`&env` are refused. A body sees the core builtins and the `clojure.lisp`
-library, not the program's own definitions. The definition also registers a runtime
+`&form`/`&env` are refused. A body sees the core builtins, the `clojure.lisp`
+library and the program's top-level definitions above the call site -- its own file's,
+a required namespace's, an earlier REPL input's -- like the oracle's form-by-form load;
+a `def`'s value is built for an expansion only when the body reads it. The definition
+also registers a runtime
 table entry of the same expander, answers `nil`, and works session-wide; a call above
 its definition is an error, a macro has no function value, and a later `def`/`defn` of
 the same name wins back the call sites. A `defmacro` of a core name (`with-out-str`,

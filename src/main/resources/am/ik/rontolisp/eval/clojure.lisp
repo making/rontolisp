@@ -10507,3 +10507,524 @@
                (and slash (rontolisp::%clojure-ring-keyword-part-p s 0 slash t)
                     (rontolisp::%clojure-ring-keyword-part-p s (+ slash 1) n
                                                              nil)))))))
+
+;;;; The clojure.pprint kernels: rontolisp.internal.pprint, the namespace only
+;;;; the built-in clojure.pprint requires, lowers each var to one of these.
+;;;;
+;;;; A pretty print runs its dispatch with *standard-output* bound to a capture
+;;;; stream: each logical block start and end, conditional newline,
+;;;; indentation and fresh line becomes an event beside the text captured since
+;;;; the last one. Once the dispatch returns, the events are replayed through
+;;;; the oracle's pretty writer, so its layout decisions are the oracle's own:
+;;;; text is written at once until a conditional newline is met, then buffered;
+;;;; whenever the buffer no longer fits before the right margin, its first
+;;;; newline is decided -- a linear one taken once its block has broken or when
+;;;; what follows it up to the next newline of an enclosing block does not fit,
+;;;; a fill one when a nested block broke since its block last did or the
+;;;; section up to its block's next newline does not fit, or in miser mode as a
+;;;; linear one, a miser one only in miser mode (a block starting at or past
+;;;; margin - miser width) -- and the section after an untaken one is decided
+;;;; the same way while the rest does not fit. What is still buffered at the
+;;;; end is written with only the mandatory newlines, and the linear and miser
+;;;; ones of a block that has broken, taken. The blanks ending a write are held
+;;;; back, dropped before a taken newline. A newline in the text forces the
+;;;; buffer out and starts a line at column 0, as the oracle's writer does.
+;;;;
+;;;; A block is #(parent prefix per-line-prefix suffix start-col indent done-nl
+;;;; intra-nl saved-length); the capture state #(stream events block level
+;;;; length); the writer #(out column blanks buffer mode margin miser block
+;;;; buffer-tail).
+
+(defvar rontolisp::%clojure-pp-state
+  nil
+  "The pretty print in progress, or NIL outside one.")
+
+(defun rontolisp::%clojure-pp-push (state event)
+  "EVENT added to STATE's events, newest first."
+  (setf (aref state 1) (cons event (aref state 1))))
+
+(defun rontolisp::%clojure-pp-flush (state)
+  "The text captured since the last event, as a text event."
+  (let ((text (get-output-stream-string (aref state 0))))
+    (if (> (length text) 0)
+        (rontolisp::%clojure-pp-push state (cons :text text)))))
+
+(defun rontolisp::%clojure-pp-call (thunk margin miser)
+  "THUNK run as a pretty print: its output laid out within the right MARGIN
+   (nil for none) and MISER width, then written to *standard-output*; answers
+   THUNK's value. Inside a pretty print already, THUNK just adds to it."
+  (if rontolisp::%clojure-pp-state
+      (funcall thunk)
+      (let* ((root (vector nil nil nil nil 0 0 nil nil nil))
+             (state (vector (make-string-output-stream) nil root 0 nil))
+             (value
+              (let ((rontolisp::%clojure-pp-state state)
+                    (*standard-output* (aref state 0)))
+                (prog1 (funcall thunk) (rontolisp::%clojure-pp-flush state)))))
+        (write-string
+         (rontolisp::%clojure-pp-layout (reverse (aref state 1)) root margin
+                                        miser))
+        value)))
+
+(defun rontolisp::%clojure-pp-start (prefix per-line suffix level-limit)
+  "Start a logical block, answering true, or write # and answer false when
+   the pretty print is LEVEL-LIMIT (*print-level*) blocks deep. A per-line
+   prefix is written after each newline the block takes. Outside a pretty
+   print the prefix is plain text."
+  (let ((state rontolisp::%clojure-pp-state))
+    (cond ((null state)
+           (if prefix (write-string prefix))
+           t)
+          ((and level-limit (>= (aref state 3) level-limit))
+           (write-string "#")
+           rontolisp::%clojure-false)
+          (t
+           (rontolisp::%clojure-pp-flush state)
+           (let ((block
+                  (vector (aref state 2) prefix per-line suffix 0 0 nil nil
+                          (aref state 4))))
+             (rontolisp::%clojure-pp-push state (cons :start block))
+             (setf (aref state 2) block)
+             (setf (aref state 3) (+ (aref state 3) 1))
+             (setf (aref state 4) 0)
+             t)))))
+
+(defun rontolisp::%clojure-pp-end (suffix)
+  "End the current logical block (its suffix written at the layout; SUFFIX
+   is written as plain text outside a pretty print)."
+  (let ((state rontolisp::%clojure-pp-state))
+    (if state
+        (let ((block (aref state 2)))
+          (rontolisp::%clojure-pp-flush state)
+          (rontolisp::%clojure-pp-push state (cons :end block))
+          (setf (aref state 2) (aref block 0))
+          (setf (aref state 3) (- (aref state 3) 1))
+          (setf (aref state 4) (aref block 8)))
+        (if suffix (write-string suffix)))
+    nil))
+
+(defun rontolisp::%clojure-pp-keyword (k choices what)
+  "The CL keyword CHOICES pairs with the spelling of the Clojure keyword K,
+   CHOICES an alist of spellings to CL keywords; else the oracle's refusal
+   naming WHAT, the set it prints."
+  (let ((spelling (if (rontolisp::%clojure-keyword-p k) (car (cdr k)) nil))
+        (found nil))
+    (dolist (choice choices)
+      (if (and spelling (null found) (string= spelling (car choice)))
+          (setq found (cdr choice))))
+    (or found
+        (rontolisp::%clojure-illegal-argument-exception
+         (concatenate 'string "Bad argument: "
+                      (rontolisp::%clojure-str-of k "null" t)
+                      ". It must be one of " what)))))
+
+(defun rontolisp::%clojure-pp-newline (kind)
+  "A conditional newline of KIND (:linear :miser :fill :mandatory) in the
+   current logical block; nothing outside a pretty print."
+  (let ((k
+         (rontolisp::%clojure-pp-keyword kind
+                                         (list (cons "linear" :linear)
+                                               (cons "miser" :miser)
+                                               (cons "fill" :fill)
+                                               (cons "mandatory" :mandatory))
+                                         "#{:mandatory :miser :fill :linear}"))
+        (state rontolisp::%clojure-pp-state))
+    (if state
+        (progn
+          (rontolisp::%clojure-pp-flush state)
+          (rontolisp::%clojure-pp-push state (list :nl k (aref state 2)))))
+    nil))
+
+(defun rontolisp::%clojure-pp-indent (relative-to n)
+  "Set the current block's indentation to N columns past its start (:block)
+   or past the current column (:current); nothing outside a pretty print."
+  (let ((k
+         (rontolisp::%clojure-pp-keyword relative-to
+          (list (cons "block" :block) (cons "current" :current))
+          "#{:block :current}"))
+        (state rontolisp::%clojure-pp-state))
+    (if state
+        (progn
+          (rontolisp::%clojure-pp-flush state)
+          (rontolisp::%clojure-pp-push state
+                                       (list :indent k n (aref state 2)))))
+    nil))
+
+(defun rontolisp::%clojure-pp-fresh-line ()
+  "A newline unless the output is at the start of a line."
+  (let ((state rontolisp::%clojure-pp-state))
+    (if state
+        (progn
+          (rontolisp::%clojure-pp-flush state)
+          (rontolisp::%clojure-pp-push state (list :fresh)))
+        (fresh-line))
+    nil))
+
+(defun rontolisp::%clojure-pp-length-reached (limit)
+  "Whether the current block has written LIMIT (*print-length*) objects."
+  (let ((state rontolisp::%clojure-pp-state))
+    (if (and state limit (aref state 4) (>= (aref state 4) limit))
+        t
+        rontolisp::%clojure-false)))
+
+(defun rontolisp::%clojure-pp-count-object ()
+  "Count one more object written in the current block."
+  (let ((state rontolisp::%clojure-pp-state))
+    (if (and state (aref state 4)) (setf (aref state 4) (+ (aref state 4) 1)))
+    nil))
+
+(defun rontolisp::%clojure-pp-reset-length ()
+  "Count the current block's objects from zero again."
+  (let ((state rontolisp::%clojure-pp-state))
+    (if state (setf (aref state 4) 0))
+    nil))
+
+(defun rontolisp::%clojure-pp-members (x)
+  "The entries of a hash map or record, or the members of a hash set, in the
+   order the printer writes them (seq walks a table the other way round); NIL
+   for anything else."
+  (let ((acc nil))
+    (cond ((hash-table-p x)
+           (maphash (lambda (k v) (setq acc (cons (vector k v) acc))) x)
+           (nreverse acc))
+          ((rontolisp::%clojure-set-p x)
+           (maphash (lambda (k v)
+                      (declare (ignore v))
+                      (setq acc (cons k acc))) (car (cdr x)))
+           (nreverse acc))
+          ((rontolisp::%clojure-record-p x)
+           (maphash (lambda (k v) (setq acc (cons (vector k v) acc)))
+                    (car (cdr (cdr (cdr x)))))
+           (nreverse acc))
+          (t nil))))
+
+(defun rontolisp::%clojure-pp-out (w s)
+  "S written to the writer W's output, its column following."
+  (let ((last -1))
+    (dotimes (i (length s)) (if (char= (char s i) #\Newline) (setq last i)))
+    (write-string s (aref w 0))
+    (setf (aref w 1)
+          (if (>= last 0) (- (length s) last 1) (+ (aref w 1) (length s))))))
+
+(defun rontolisp::%clojure-pp-blanks (w)
+  "The blanks W holds back, written."
+  (if (aref w 2)
+      (progn
+        (rontolisp::%clojure-pp-out w (aref w 2))
+        (setf (aref w 2) nil))))
+
+(defun rontolisp::%clojure-pp-fits (w tokens)
+  "Whether the buffered TOKENS fit on the line before W's right margin."
+  (let ((margin (aref w 5)))
+    (if (null margin)
+        t
+        (let ((room (- margin (aref w 1))) (len 0))
+          (do ((rest tokens (cdr rest)))
+              ((or (null rest) (>= len room)) (< len room))
+            (let ((token (car rest)))
+              (cond ((eq (car token) :blob)
+                     (setq len
+                           (+ len (length (car (cdr token)))
+                              (length (car (cdr (cdr token)))))))
+                    ((eq (car token) :start)
+                     (setq len (+ len (length (or (aref (cdr token) 1) "")))))
+                    ((eq (car token) :end)
+                     (setq len
+                      (+ len (length (or (aref (cdr token) 3) ""))))))))))))
+
+(defun rontolisp::%clojure-pp-broke (block)
+  "Note a newline taken in BLOCK: it and every enclosing block have broken,
+   and a nested block broke for each enclosing one."
+  (setf (aref block 6) t)
+  (setf (aref block 7) nil)
+  (do ((p (aref block 0) (aref p 0)))
+      ((null p))
+    (setf (aref p 6) t)
+    (setf (aref p 7) t)))
+
+(defun rontolisp::%clojure-pp-emit-nl (w nl)
+  "The newline NL taken: its block's per-line prefix and indentation follow,
+   the blanks held back are dropped."
+  (let* ((block (car (cdr (cdr nl)))) (lead (aref block 2)))
+    (rontolisp::%clojure-pp-out w (string #\Newline))
+    (setf (aref w 2) nil)
+    (if lead (rontolisp::%clojure-pp-out w lead))
+    (dotimes (i (- (aref block 5) (length (or lead ""))))
+      (rontolisp::%clojure-pp-out w " "))
+    (rontolisp::%clojure-pp-broke block)))
+
+(defun rontolisp::%clojure-pp-write-token (w token)
+  "The buffered TOKEN written out: a newline only when mandatory, or linear
+   or miser in a block that has broken."
+  (let ((kind (car token)))
+    (cond ((eq kind :blob) (rontolisp::%clojure-pp-out w (car (cdr token))))
+          ((eq kind :start)
+           (let ((block (cdr token)))
+             (if (aref block 1) (rontolisp::%clojure-pp-out w (aref block 1)))
+             (setf (aref block 4) (aref w 1))
+             (setf (aref block 5) (aref w 1))))
+          ((eq kind :end)
+           (if (aref (cdr token) 3)
+               (rontolisp::%clojure-pp-out w (aref (cdr token) 3))))
+          ((eq kind :indent)
+           (let ((block (car (cdr (cdr (cdr token))))))
+             (setf (aref block 5)
+                   (+ (car (cdr (cdr token)))
+                      (if (eq (car (cdr token)) :block)
+                          (aref block 4)
+                          (aref w 1))))))
+          (t (let ((how (car (cdr token))))
+               (if (or (eq how :mandatory)
+                    (and (not (eq how :fill)) (aref (car (cdr (cdr token))) 6)))
+                   (rontolisp::%clojure-pp-emit-nl w token)
+                   (rontolisp::%clojure-pp-blanks w))
+               (setf (aref w 2) nil))))))
+
+(defun rontolisp::%clojure-pp-write-tokens (w tokens force)
+  "TOKENS written out in order, the blanks of each write held back until the
+   next; with FORCE the last ones are written too."
+  (dolist (token tokens)
+    (if (not (eq (car token) :nl)) (rontolisp::%clojure-pp-blanks w))
+    (rontolisp::%clojure-pp-write-token w token)
+    (setf (aref w 2) (if (eq (car token) :blob) (car (cdr (cdr token))) nil)))
+  (if force (rontolisp::%clojure-pp-blanks w)))
+
+(defun rontolisp::%clojure-pp-ancestor-p (a b)
+  "Whether the block A strictly encloses the block B."
+  (let ((found nil))
+    (do ((p (aref b 0) (aref p 0)))
+        ((or found (null p)) found)
+      (if (eq p a) (setq found t)))))
+
+(defun rontolisp::%clojure-pp-section (tokens subsection)
+  "The tokens after the newline heading TOKENS up to the next newline of an
+   enclosing block (of its own block too for a SUBSECTION), as a fresh list,
+   and the rest from that newline on: (section . rest)."
+  (let ((block (car (cdr (cdr (car tokens))))) (acc nil) (rest (cdr tokens)))
+    (do ()
+        ((or (null rest)
+             (and (eq (car (car rest)) :nl)
+                  (let ((owner (car (cdr (cdr (car rest))))))
+                    (or (rontolisp::%clojure-pp-ancestor-p owner block)
+                        (and subsection (eq owner block))))))
+         (cons (nreverse acc) rest))
+      (setq acc (cons (car rest) acc))
+      (setq rest (cdr rest)))))
+
+(defun rontolisp::%clojure-pp-take-p (w tokens)
+  "Whether the newline heading the buffered TOKENS is taken, its section and
+   subsection read from them only when the decision needs them."
+  (let* ((nl (car tokens))
+         (how (car (cdr nl)))
+         (block (car (cdr (cdr nl))))
+         (margin (aref w 5))
+         (miser (aref w 6))
+         (miser-p (and miser margin (>= (aref block 4) (- margin miser)))))
+    (cond ((eq how :mandatory) t)
+          ((eq how :linear)
+           (or (aref block 6)
+               (not
+                (rontolisp::%clojure-pp-fits w
+                 (car (rontolisp::%clojure-pp-section tokens nil))))))
+          ((eq how :miser)
+           (and miser-p
+                (or (aref block 6)
+                    (not
+                     (rontolisp::%clojure-pp-fits w
+                      (car (rontolisp::%clojure-pp-section tokens nil)))))))
+          (t
+           (or (aref block 7)
+               (not
+                (rontolisp::%clojure-pp-fits w
+                 (car (rontolisp::%clojure-pp-section tokens t))))
+               (and miser-p
+                    (or (aref block 6)
+                        (not
+                         (rontolisp::%clojure-pp-fits w
+                          (car
+                           (rontolisp::%clojure-pp-section tokens nil)))))))))))
+
+(defun rontolisp::%clojure-pp-write-section (w tokens)
+  "Write TOKENS up to their first newline, decide it, and while what follows
+   does not fit decide the newlines of the section after it the same way;
+   answers the tokens left (TOKENS itself when nothing could be written)."
+  (let ((before nil) (rest tokens))
+    (do ()
+        ((or (null rest) (eq (car (car rest)) :nl)))
+      (setq before (cons (car rest) before))
+      (setq rest (cdr rest)))
+    (if before (rontolisp::%clojure-pp-write-tokens w (nreverse before) nil))
+    (if (null rest)
+        nil
+        (let ((result
+               (if (rontolisp::%clojure-pp-take-p w rest)
+                   (progn
+                     (rontolisp::%clojure-pp-emit-nl w (car rest))
+                     (cdr rest))
+                   rest)))
+          (if (rontolisp::%clojure-pp-fits w result)
+              result
+              (let* ((split (rontolisp::%clojure-pp-section rest nil))
+                     (section (car split))
+                     (remainder (cdr split))
+                     (left (rontolisp::%clojure-pp-write-section w section)))
+                (if (eq left section)
+                    (progn
+                      (rontolisp::%clojure-pp-write-tokens w section nil)
+                      remainder)
+                    (append left remainder))))))))
+
+(defun rontolisp::%clojure-pp-write-line (w)
+  "Decide the buffer's newlines while it does not fit on the line."
+  (let ((buffer (aref w 3)) (done nil))
+    (do ()
+        (done)
+      (setf (aref w 3) buffer)
+      (if (rontolisp::%clojure-pp-fits w buffer)
+          (setq done t)
+          (let ((left (rontolisp::%clojure-pp-write-section w buffer)))
+            (if (eq left buffer) (setq done t) (setq buffer left)))))
+    (setf (aref w 8) (last (aref w 3)))))
+
+(defun rontolisp::%clojure-pp-buffer (w token)
+  "TOKEN added to W's buffer, which is written out as far as it no longer
+   fits; the buffer's last cell is kept, so adding costs no walk."
+  (let ((cell (list token)))
+    (if (aref w 3) (rplacd (aref w 8) cell) (setf (aref w 3) cell))
+    (setf (aref w 8) cell))
+  (if (not (rontolisp::%clojure-pp-fits w (aref w 3)))
+      (rontolisp::%clojure-pp-write-line w)))
+
+(defun rontolisp::%clojure-pp-text (w s)
+  "The text S written: its blanks held back, buffered while a newline is
+   pending; a newline in it forces the buffer out and starts its next line at
+   column 0 (the lines between are followed by the current block's per-line
+   prefix), as the oracle's writer does."
+  (let ((start 0) (line 0))
+    (dotimes (i (length s))
+      (if (char= (char s i) #\Newline)
+          (progn
+            (if (= line 0)
+                (let ((first (subseq s 0 i)))
+                  (if (eq (aref w 4) :buffering)
+                      (progn
+                        (rontolisp::%clojure-pp-buffer w (list :blob first ""))
+                        (rontolisp::%clojure-pp-write-line w)
+                        (rontolisp::%clojure-pp-write-tokens w (aref w 3) t)
+                        (setf (aref w 3) nil)
+                        (setf (aref w 8) nil))
+                      (progn
+                        (rontolisp::%clojure-pp-blanks w)
+                        (rontolisp::%clojure-pp-out w first)))
+                  (rontolisp::%clojure-pp-out w (string #\Newline)))
+                (progn
+                  (rontolisp::%clojure-pp-out w (subseq s start i))
+                  (rontolisp::%clojure-pp-out w (string #\Newline))
+                  (if (aref (aref w 7) 2)
+                      (rontolisp::%clojure-pp-out w (aref (aref w 7) 2)))))
+            (setq line (+ line 1))
+            (setq start (+ i 1)))))
+    (let* ((rest (subseq s start)) (end (length rest)))
+      (do ()
+          ((or (= end 0)
+               (not
+                (member (char rest (- end 1))
+                 (list #\Space #\Tab #\Return (code-char 11) (code-char 12))))))
+        (setq end (- end 1)))
+      (if (eq (aref w 4) :writing)
+          (progn
+            (rontolisp::%clojure-pp-blanks w)
+            (rontolisp::%clojure-pp-out w (subseq rest 0 end))
+            (setf (aref w 2) (subseq rest end)))
+          (rontolisp::%clojure-pp-buffer w
+           (list :blob (subseq rest 0 end) (subseq rest end)))))))
+
+(defun rontolisp::%clojure-pp-layout (events root margin miser)
+  "The text of the EVENTS of a pretty print rooted at the block ROOT, as the
+   oracle's pretty writer lays them out within MARGIN and MISER."
+  (let ((w
+         (vector (make-string-output-stream) 0 nil nil
+                 :writing margin miser root nil)))
+    (dolist (event events)
+      (let ((kind (car event)))
+        (cond ((eq kind :text) (rontolisp::%clojure-pp-text w (cdr event)))
+              ((eq kind :start)
+               (setf (aref w 7) (cdr event))
+               (if (eq (aref w 4) :writing)
+                   (progn
+                     (rontolisp::%clojure-pp-blanks w)
+                     (rontolisp::%clojure-pp-write-token w event))
+                   (rontolisp::%clojure-pp-buffer w event)))
+              ((eq kind :end)
+               (setf (aref w 7) (aref (cdr event) 0))
+               (if (eq (aref w 4) :writing)
+                   (progn
+                     (rontolisp::%clojure-pp-blanks w)
+                     (rontolisp::%clojure-pp-write-token w event))
+                   (rontolisp::%clojure-pp-buffer w event)))
+              ((eq kind :nl)
+               (setf (aref w 4) :buffering)
+               (rontolisp::%clojure-pp-buffer w event))
+              ((eq kind :indent)
+               (if (eq (aref w 4) :writing)
+                   (progn
+                     (rontolisp::%clojure-pp-blanks w)
+                     (rontolisp::%clojure-pp-write-token w event))
+                   (rontolisp::%clojure-pp-buffer w event)))
+              (t (if (/= (aref w 1) 0)
+                     (rontolisp::%clojure-pp-text w (string #\Newline)))))))
+    (if (eq (aref w 4) :buffering)
+        (rontolisp::%clojure-pp-write-tokens w (aref w 3) t)
+        (rontolisp::%clojure-pp-blanks w))
+    (get-output-stream-string (aref w 0))))
+
+(defun rontolisp::%clojure-pp-digits (n base)
+  "The non-negative integer N in BASE (2 to 36), lowercase; empty for a
+   negative N, as the oracle's base-str answers."
+  (cond ((= n 0) "0")
+        ((< n 0) "")
+        (t (let ((chars nil))
+             (do ((m n (floor m base)))
+                 ((= m 0) (coerce chars 'string))
+               (setq chars
+                     (cons
+                      (char "0123456789abcdefghijklmnopqrstuvwxyz" (mod m base))
+                      chars)))))))
+
+(defun rontolisp::%clojure-pp-base-string (n base long-range)
+  "The integer N in BASE the oracle's way: a value it holds as a Java integer
+   (a long when LONG-RANGE, a ratio's part otherwise) through Java's format in
+   base 8, 10 and 16 -- a negative long as its 64-bit two's complement in 8
+   and 16 -- anything else through its digit walk, empty when negative."
+  (let ((java
+         (and (member base '(8 10 16))
+              (or (not long-range)
+               (and (>= n -9223372036854775808) (<= n 9223372036854775807))))))
+    (cond ((and java (= base 10)) (princ-to-string n))
+          ((and java (< n 0))
+           (if long-range
+               (rontolisp::%clojure-pp-digits (+ n 18446744073709551616) base)
+               (concatenate 'string "-"
+                            (rontolisp::%clojure-pp-digits (- n) base))))
+          (t (rontolisp::%clojure-pp-digits n base)))))
+
+(defun rontolisp::%clojure-pp-number-string (x base radix)
+  "The integer or ratio X in BASE under *print-radix* RADIX, as pprint writes
+   it, or NIL for anything else (written as pr writes it)."
+  (let ((mark
+         (cond ((not (rontolisp::%clojure-truthy radix)) "")
+               ((= base 2) "#b")
+               ((= base 8) "#o")
+               ((= base 16) "#x")
+               (t (concatenate 'string "#" (princ-to-string base) "r")))))
+    (cond ((integerp x)
+           (if (= base 10)
+               (concatenate 'string (princ-to-string x)
+                            (if (rontolisp::%clojure-truthy radix) "." ""))
+               (concatenate 'string mark
+                            (rontolisp::%clojure-pp-base-string x base t))))
+          ((rationalp x)
+           (concatenate 'string mark
+            (rontolisp::%clojure-pp-base-string (numerator x) base nil) "/"
+            (rontolisp::%clojure-pp-base-string (denominator x) base nil)))
+          (t nil))))

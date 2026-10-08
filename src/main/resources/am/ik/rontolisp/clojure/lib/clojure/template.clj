@@ -17,17 +17,4 @@
   of argv replaced by its group's values; values are cut into groups of argv's
   size and a short last group is dropped."
   [argv expr & values]
-  ;; a macro body reaches no function of the program, so the substitution is
-  ;; spelled here rather than through apply-template
-  (assert (every? symbol? argv))
-  (letfn [(substitute [smap form]
-            (let [rebuilt (cond
-                            (seq? form) (apply list (map (fn [x] (substitute smap x)) form))
-                            (map? form) (into (empty form)
-                                              (map (fn [[k v]] [(substitute smap k) (substitute smap v)])
-                                                   form))
-                            (coll? form) (into (empty form) (map (fn [x] (substitute smap x)) form))
-                            :else form)]
-              (if (contains? smap rebuilt) (get smap rebuilt) rebuilt)))]
-    `(do ~@(map (fn [group] (substitute (zipmap argv group) expr))
-                (partition (count argv) values)))))
+  (cons 'do (map #(apply-template argv expr %) (partition (count argv) values))))
