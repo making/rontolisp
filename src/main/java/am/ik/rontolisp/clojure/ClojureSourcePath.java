@@ -1,12 +1,17 @@
 package am.ik.rontolisp.clojure;
 
 import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
-import am.ik.rontolisp.LispString;
-import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.clojure.ClojureDepsEdn.DepsMap;
+import am.ik.rontolisp.clojure.ClojureDepsEdn.Lib;
+import am.ik.rontolisp.clojure.ClojureDepsGraph.Root;
+import am.ik.rontolisp.clojure.ClojureDepsGraph.Selected;
 import am.ik.rontolisp.reader.LispReadException;
 import org.jspecify.annotations.Nullable;
 
@@ -14,18 +19,21 @@ import org.jspecify.annotations.Nullable;
  * Where a project namespace's file is found: the source roots of the program a lowering
  * reads, and the file a namespace name maps to below them. The roots are, in order, the
  * directory the entry file's own namespace names (its own directory for a file without
- * one, the working directory for a read without a file), then the {@code :paths} of the
- * nearest {@code deps.edn} at or above the entry file's directory, resolved against that
- * file's directory ({@code ["src"]} when it names none) -- or, with no {@code deps.edn}
- * anywhere, {@code src} under the working directory, the oracle's default. Computed on
- * the first project {@code require}, so a program that loads nothing never looks.
+ * one, the working directory for a read without a file), then the project's
+ * {@code :paths}, then the roots of every library its {@code :deps} select, in the
+ * oracle's source path order ({@link ClojureDepsGraph}), then the built-in namespaces.
+ * The project map is the oracle's root map, the user-level {@code deps.edn} and the
+ * nearest {@code deps.edn} at or above the entry file's directory, merged in that order;
+ * with no {@code deps.edn} anywhere, the working directory is the project's ({@code src}
+ * below it). Computed on the first lookup, so a program that loads nothing never looks.
  */
 final class ClojureSourcePath {
 
 	/**
 	 * One namespace file found.
 	 *
-	 * @param path the path it was read from, for positions
+	 * @param path the path it was read from, for positions ({@code lib.jar!/a/b.clj} in a
+	 * jar)
 	 * @param resource its path below its root ({@code my_app/core.cljc}), the oracle's
 	 * {@code *file*} while it loads
 	 * @param text its contents
@@ -41,7 +49,16 @@ final class ClojureSourcePath {
 
 	private @Nullable String entryNs;
 
-	private @Nullable List<String> roots;
+	private @Nullable List<Root> roots;
+
+	/** The selected libraries, known with the roots. */
+	private List<Selected> libs = List.of();
+
+	/** Each jar root's entry names. */
+	private final Map<String, Set<String>> archives = new HashMap<>();
+
+	/** The namespaces found so far: one read per file per lowering. */
+	private final Map<String, Found> found = new HashMap<>();
 
 	ClojureSourcePath(ClojureFiles files, @Nullable String entryFile) {
 		this.files = files;
@@ -105,21 +122,64 @@ final class ClojureSourcePath {
 	 * holding one -- so a {@code .clj} under any root wins over a {@code .cljc} under an
 	 * earlier one, measured on {@code clj} 1.12.6 (2026-10-08) -- else the built-in one
 	 * ({@link ClojureBuiltinNamespaces}): a project file shadows a built-in namespace, as
-	 * a source directory precedes a dependency jar on the oracle's classpath.
+	 * a source directory precedes a dependency jar on the oracle's classpath. A namespace
+	 * a jar holds only compiled ahead of time is refused: only source lowers.
 	 * @param ns the namespace
 	 * @return the file, or {@code null} when neither a root nor the built-ins hold one
 	 */
 	@Nullable Found find(String ns) {
+		Found known = this.found.get(ns);
+		if (known != null) {
+			return known;
+		}
 		String base = scriptBaseOf(ns);
 		for (String extension : List.of(".clj", ".cljc")) {
 			Found project = findFile(base + extension);
 			if (project != null) {
+				this.found.put(ns, project);
 				return project;
 			}
 		}
+		for (Root root : roots()) {
+			if (root.archive() && entriesOf(root).contains(base + "__init.class")) {
+				throw new LispReadException(ns + " is compiled ahead of time in " + root.path()
+						+ " without its source, and only a namespace's source is read");
+			}
+		}
 		String builtin = ClojureBuiltinNamespaces.source(ns);
+		if (builtin == null) {
+			return null;
+		}
+		refuseBuiltinStandIn(ns);
 		String relative = resourceOf(ns);
-		return builtin == null ? null : new Found(relative, relative, builtin, true);
+		Found shipped = new Found(relative, relative, builtin, true);
+		this.found.put(ns, shipped);
+		return shipped;
+	}
+
+	/**
+	 * Refuses a built-in namespace where the project selects its library in a form the
+	 * shipped file cannot stand in for: a Maven version newer than the one shipped (the
+	 * shipped one stands in for an older one, as the oracle's newest-wins selection
+	 * assumes), or the library's own source that does not hold the namespace.
+	 */
+	private void refuseBuiltinStandIn(String ns) {
+		Lib lib = ClojureBuiltinLibs.libOf(ns);
+		for (Selected selected : this.libs) {
+			if (!selected.lib().equals(lib)) {
+				continue;
+			}
+			if (!selected.contribution().builtin()) {
+				throw new LispReadException(ns + ": the deps.edn selects " + lib + " " + selected.coord().print()
+						+ ", which holds no " + resourceOf(ns) + " this build reads");
+			}
+			String shipped = ClojureBuiltinLibs.shippedVersion(lib);
+			String wanted = selected.coord().string(":mvn/version");
+			if (shipped != null && wanted != null && ClojureMavenVersions.compare(wanted, shipped) > 0) {
+				throw new LispReadException(ns + ": the deps.edn selects " + lib + " " + wanted
+						+ ", newer than the built-in " + lib.name() + " " + shipped);
+			}
+		}
 	}
 
 	/**
@@ -129,14 +189,33 @@ final class ClojureSourcePath {
 	 * @return the file, or {@code null} when no root holds it
 	 */
 	@Nullable Found findFile(String relative) {
-		for (String root : roots()) {
-			String path = this.files.resolve(root, relative);
+		for (Root root : roots()) {
+			if (root.archive()) {
+				if (entriesOf(root).contains(relative)) {
+					String text = this.files.readArchiveEntry(root.path(), relative);
+					if (text != null) {
+						return new Found(root.path() + "!/" + relative, relative, text, false);
+					}
+				}
+				continue;
+			}
+			String path = this.files.resolve(root.path(), relative);
 			String text = this.files.read(path);
 			if (text != null) {
 				return new Found(path, relative, text, false);
 			}
 		}
 		return null;
+	}
+
+	private Set<String> entriesOf(Root root) {
+		Set<String> known = this.archives.get(root.path());
+		if (known == null) {
+			List<String> entries = this.files.archiveEntries(root.path());
+			known = entries == null ? Set.of() : new HashSet<>(entries);
+			this.archives.put(root.path(), known);
+		}
+		return known;
 	}
 
 	/**
@@ -149,18 +228,40 @@ final class ClojureSourcePath {
 			return " (the program was read without files)";
 		}
 		List<String> shown = new ArrayList<>();
-		for (String root : roots()) {
-			shown.add(root.isEmpty() ? "." : root);
+		for (Root root : roots()) {
+			shown.add(root.path().isEmpty() ? "." : root.path());
 		}
-		return ": " + String.join(", ", shown);
+		return ": " + String.join(", ", shown) + notSearched();
+	}
+
+	/**
+	 * What the source path leaves out because this build does not read it -- a Maven or
+	 * git coordinate, a jar's {@code pom.xml} -- for a refusal of a namespace no root
+	 * holds: {@code "; not searched: org.clojure/data.json 2.5.1 (a Maven coordinate, not
+	 * fetched)"}, or nothing.
+	 * @return the text, starting with its separator, or the empty string
+	 */
+	String notSearched() {
+		if (this.files == ClojureFiles.NONE) {
+			return "";
+		}
+		roots();
+		List<String> unread = new ArrayList<>();
+		for (Selected selected : this.libs) {
+			String note = selected.contribution().unread();
+			if (note != null) {
+				unread.add(note);
+			}
+		}
+		return unread.isEmpty() ? "" : "; not searched: " + String.join(", ", unread);
 	}
 
 	/**
 	 * The source roots, in search order; an empty string is the working directory.
 	 * @return the roots
 	 */
-	List<String> roots() {
-		List<String> known = this.roots;
+	List<Root> roots() {
+		List<Root> known = this.roots;
 		if (known == null) {
 			known = computeRoots();
 			this.roots = known;
@@ -168,25 +269,50 @@ final class ClojureSourcePath {
 		return known;
 	}
 
-	private List<String> computeRoots() {
-		Set<String> out = new LinkedHashSet<>();
+	private List<Root> computeRoots() {
+		Set<Root> out = new LinkedHashSet<>();
 		String dir = this.entryFile == null ? "" : this.files.parent(this.entryFile);
 		if (dir == null) {
 			dir = "";
 		}
-		out.add(inferredRoot(dir));
+		out.add(new Root(inferredRoot(dir), false));
+		if (this.files == ClojureFiles.NONE) {
+			out.add(new Root("src", false));
+			return List.copyOf(out);
+		}
+		String projectDir = null;
+		DepsMap project = null;
 		for (String probe = dir; probe != null; probe = this.entryFile == null ? null : this.files.parent(probe)) {
 			String depsFile = this.files.resolve(probe, "deps.edn");
 			String deps = this.files.read(depsFile);
 			if (deps != null) {
-				for (String path : depsPaths(deps, depsFile)) {
-					out.add(this.files.resolve(probe, path));
-				}
-				return List.copyOf(out);
+				projectDir = probe;
+				project = ClojureDepsEdn.read(deps, depsFile);
+				break;
 			}
 		}
-		// no deps.edn anywhere: the oracle's default, src under the working directory
-		out.add(this.files.resolve(null, "src"));
+		List<DepsMap> maps = new ArrayList<>();
+		maps.add(ClojureDepsEdn.ROOT);
+		String userDir = this.files.userConfigDir();
+		if (userDir != null) {
+			String userFile = this.files.resolve(userDir, "deps.edn");
+			String user = this.files.read(userFile);
+			if (user != null) {
+				maps.add(ClojureDepsEdn.read(user, userFile));
+			}
+		}
+		if (project != null) {
+			maps.add(project);
+		}
+		DepsMap merged = ClojureDepsEdn.merge(maps);
+		for (String path : ClojureDepsEdn.flattenPaths(merged)) {
+			out.add(new Root(this.files.resolve(projectDir, path), false));
+		}
+		this.libs = merged.deps() == null ? List.of()
+				: ClojureDepsGraph.resolve(merged.deps(), projectDir, new ClojureDepsProcurer(this.files));
+		for (Selected selected : this.libs) {
+			out.addAll(selected.contribution().roots());
+		}
 		return List.copyOf(out);
 	}
 
@@ -225,44 +351,6 @@ final class ClojureSourcePath {
 	static String lastSegmentOf(String path) {
 		int cut = Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\'));
 		return path.substring(cut + 1);
-	}
-
-	/**
-	 * The {@code :paths} strings of a {@code deps.edn}, read as EDN by the Clojure
-	 * reader; {@code ["src"]} when the map names none (the oracle's default) or the file
-	 * does not read as a map. An alias keyword among the paths is skipped (aliases are
-	 * opt-in on the oracle's command line).
-	 */
-	static List<String> depsPaths(String text, String path) {
-		List<LispVal> datums;
-		try {
-			datums = new ClojureReader(text, path).readAll();
-		}
-		catch (LispReadException ex) {
-			return List.of("src");
-		}
-		if (datums.isEmpty()) {
-			return List.of("src");
-		}
-		List<LispVal> map = ClojureLowerUtil.items(datums.get(0));
-		if (map == null || map.isEmpty() || !ClojureLowerUtil.isSymbolNamed(map.get(0), "%hash-map")) {
-			return List.of("src");
-		}
-		for (int i = 1; i + 1 < map.size(); i += 2) {
-			if (ClojureLowerUtil.isSymbolNamed(map.get(i), ":paths")) {
-				List<LispVal> paths = ClojureLowerUtil.items(map.get(i + 1));
-				List<String> out = new ArrayList<>();
-				if (paths != null) {
-					for (LispVal element : paths) {
-						if (element instanceof LispString root) {
-							out.add(root.value());
-						}
-					}
-				}
-				return out;
-			}
-		}
-		return List.of("src");
 	}
 
 }

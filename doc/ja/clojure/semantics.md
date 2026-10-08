@@ -37,8 +37,7 @@ Common Lisp ファイルはこの名前で呼び出します。
 ロードします。`my-app.core` は `my_app/core.clj` で、それを含む最初のソースルートから
 読みます。どのルートにもなければ `my_app/core.cljc` を同じ順で探します（オラクルと同じく、どのルートの `.clj` も `.cljc` より優先します）。ルートは、エントリファイル自身の名前空間が示すディレクトリ（`demo.main` を宣言
 する `src/demo/main.clj` なら `src`、`ns` のないファイルならそのファイルのディレクトリ）、
-次にエントリファイルの位置から上へたどって最初に見つかる `deps.edn` の `:paths`（指定が
-なければ `["src"]`）の順で、`deps.edn` がどこにもなければ作業ディレクトリの `src` です。
+次にプロジェクトの `:paths` と依存ライブラリのルートの順です（[プロジェクト](#projects-depsedn)）。
 ファイルはプログラムにつき 1 度だけ lower されます。定義は require したフォームより前に
 残り、それ以外のトップレベルフォームは `require` の実行時に走ります。関数本体の中の
 `require` も、本体の実行時にロードします。2 度目の `require` は何もロードしません。
@@ -60,6 +59,46 @@ oracle と同じ文言のエラーになります。
 # deps.edn は {:paths ["src"]}、demo.main と demo.main-test が demo.lib を require する
 rontolisp src/demo/main.clj          # ルート: src（自身の ns）、src（deps.edn）
 rontolisp test/demo/main_test.clj    # ルート: test（自身の ns）、src（deps.edn）
+```
+
+## プロジェクト: deps.edn
+
+プログラムのプロジェクトは、エントリファイルの位置から上へたどって最初に見つかる `deps.edn`
+（REPL では作業ディレクトリのもの）です。oracle の `clj` と同じくファイル全体を読み、組み込みの
+ルートマップ（`:paths ["src"]` と `org.clojure/clojure`）、ユーザーレベルの `deps.edn`
+（`$CLJ_CONFIG`、なければ `$XDG_CONFIG_HOME/clojure`、なければ `~/.clojure`）、プロジェクトの
+`deps.edn` の順にマージします。`deps.edn` がなければ作業ディレクトリがプロジェクトです。oracle が使わないキーは
+oracle と同じく無視します。oracle の spec が拒否する値、どの種類にも当たらない座標、oracle が
+解決できない依存は、oracle と同じ文言のエラーになります。
+
+- `:paths` はプロジェクトのソースルートを、その `deps.edn` からの相対パスで指定します。並びの
+  中のエイリアスのキーワードは、そのエイリアスが並べるパスを表します。
+- `:deps` は依存ライブラリを指定します。`{:local/root "../lib"}` はディレクトリか jar です。
+  ディレクトリなら、それ自身の `deps.edn` が `:paths`（そのディレクトリからの相対パスで、既定は
+  `["src"]`）と `:deps` を与えます。jar なら、中の `.clj` と `.cljc` のファイルを展開せずに読みます。
+  ライブラリは oracle と同じ規則で選びます。トップレベルの依存が優先し、それ以外はツリー全体で
+  最も新しいバージョンを選びます。`:exclusions` はそれを書いた座標より下からそのライブラリを除き、
+  循環は選択済みのライブラリで止まります。
+- ソースパスは、エントリファイル自身のルート、プロジェクトの `:paths`、選ばれた各ライブラリの
+  ルート（oracle のクラスパスと同じく、ツリーの上から）、最後に組み込みの名前空間の順です。
+- `org.clojure/clojure`、`org.clojure/spec.alpha`、`org.clojure/core.specs.alpha` は、バージョンに
+  かかわらずこのフロントエンド自身です。`ring/ring-core` と `ring/ring-codec` は、同梱のバージョン
+  （ring-core 1.15.5、ring-codec 1.3.0）以下の Maven バージョンなら組み込みの Ring 名前空間です。
+  それより新しいバージョンは、Ring 名前空間をロードする時点で拒否します。
+- このフロントエンドが提供しない `clojure.*` 名前空間も、ほかの名前空間と同じくソースパスから
+  ロードします（`:local/root` に置いた `org.clojure` の contrib ライブラリなど）。どこにもなければ
+  未知の名前空間です。
+- それ以外のライブラリの Maven 座標（`:mvn/version`）と git 座標（`:git/url`、`:git/sha`）は
+  取得しません。ルートを加えず、どのルートにもない名前空間は、それらの座標を挙げて拒否します。
+  jar 自身の `pom.xml` と、`deps.edn` がなく `pom.xml` だけを持つ `:local/root` のプロジェクトも
+  読みません。`:aliases` は読みますが、適用はしません。
+
+```console
+$ cat deps.edn
+{:paths ["src"]
+ :deps {my/util {:local/root "../util"}
+        my/parser {:local/root "../parser.jar"}}}
+$ rontolisp src/app/main.clj      # roots: src, ../parser.jar, ../util/src
 ```
 
 ## 束縛

@@ -853,8 +853,9 @@ a program without `ns` lowers unqualified. A quoted `'n/x` is the symbol of var 
   `require` with a bare `:only` refers nothing, like the oracle's `load-lib`. `:reload`,
   `:reload-all`, `:verbose` flags; quoted libspecs and prefix lists `(prefix [sub ...])`
   go through one spec parser. `clojure.string`, `clojure.set`, `clojure.java.io` (`reader`
-  only), `clojure.test` and `ring.adapter.rontolisp` resolve; any other `clojure.*` is
-  `unknown namespace: x`. The built-in Ring namespaces load as project files from the jar
+  only), `clojure.test` and `ring.adapter.rontolisp` resolve; any other `clojure.*` loads
+  from the source path like a project namespace and is `unknown namespace: x` when no root
+  holds it ("deps.edn"). The built-in Ring namespaces load as project files from the jar
   when no root holds them ("Ring util namespaces").
 - **ns clauses and libspec options** (measured on `clj` 1.12.6, 2026-10-08):
   `(:gen-class ...)` is a no-op outside an AOT compile, options included, so the clause
@@ -896,11 +897,11 @@ a program without `ns` lowers unqualified. A quoted `'n/x` is the symbol of var 
 - **Refusals in the oracle's words**: `Could not locate a/b.clj or a/b.cljc on the source
   path: <roots>`, `Cyclic load dependency: [ /a ]->/b->[ /a ]`, `namespace 'x' not found after
   loading '/x'`, `x does not exist`, `x is not public`.
-- **Source path** (`ClojureSourcePath`, on the first project require): the root the entry
-  file's namespace names (`src` for `src/demo/main.clj` declaring `demo.main`; else the
-  file's directory; a session's working directory), then the `:paths` of the nearest
-  `deps.edn` walking up (read as EDN; `["src"]` when absent), else `src` -- the `clj`
-  default. `deps.edn` over a new flag: it is the oracle's own declaration. The file is the
+- **Source path** (`ClojureSourcePath`, on the first lookup): the root the entry file's
+  namespace names (`src` for `src/demo/main.clj` declaring `demo.main`; else the file's
+  directory; a session's working directory), then the project's `:paths` and its
+  dependencies' roots ("deps.edn"). `deps.edn` over a new flag: it is the oracle's own
+  declaration. The file is the
   oracle's `RT.load` order: `ns.clj` under every root, then `ns.cljc` under every root, so a
   `.clj` under a later root beats a `.cljc` under an earlier one (measured on `clj` 1.12.6,
   2026-10-08; instaparse 1.5.0 ships both for 14 namespaces). `Found.resource` is the file
@@ -909,6 +910,83 @@ a program without `ns` lowers unqualified. A quoted `'n/x` is the symbol of var 
   refused by name).
 - **Records** keep the simple-name tag; `typeKeyOf` resolves own, then an imported or
   dotted name matching the class, else the only one of that simple name.
+
+## deps.edn
+
+**Invariant: the source path is the oracle's classpath, minus what this build does not
+read, named when a lookup misses.** `ClojureSourcePath.computeRoots`: the entry's own root,
+the merged map's `:paths`, every library `ClojureDepsGraph.resolve` selects in the oracle's
+order, then `Found.builtin`. Every rule below was measured 2026-10-08 on `clj` 1.12.6.1673
+(`clj -Srepro -Spath` over fixture trees; tools.deps read from the CLI jar).
+- **Maps** (`ClojureDepsEdn`): the oracle's root `deps.edn` (`ROOT_TEXT`, verbatim), the
+  user-level one, the project's (nearest at or above the entry file; the oracle reads the
+  working directory's), merged like `merge-edns` (a map value merges, anything else
+  replaces). A `:local/root` library's map merges over the root map alone (`deps-map`), so
+  its `:paths` default to `["src"]`. Read by `ClojureReader.forEdn` (any tagged literal is
+  data); one value; no repeated key (checked here: the code reader checks set elements
+  only).
+- **Validation** in the oracle's words, `Error validating deps in F. Found: v, expected: p,
+  in: [path]`, walked in map order (the oracle sorts its problems; one problem, the common
+  case, reads the same). **An unknown key passes**: measured (`:foo`, `:foo/bar`,
+  `:deps/whatever`), the spec's `s/keys` is open. The plan said refuse it; that would block a
+  valid `deps.edn` of a dependency its user cannot edit. Registered qualified keys
+  (`:mvn/version`, `:local/root`, `:git/*`, `:deps/root`, `:deps/manifest`) are checked
+  wherever a map holds one, like `s/keys`.
+- **Selection** (`ClojureDepsGraph`, a port of `expand-deps` and `flatten-libs`): breadth
+  first, `include-coord?`'s order (top, excluded, use-top, parent-missing, new, same,
+  newer, older), `update-excl` (a same-version revisit queues only what an earlier visit's
+  exclusions cut and this one does not exclude: `a4 (excl z4)` + `b4` includes `z4` in
+  either order), `deselect-orphans`, then every tree path sorted by length and lib by lib.
+  `Lib.compareTo` is `Symbol.compareTo` (namespace, then name), not the `ns/name` string.
+  Maven versions by `ClojureMavenVersions`, a port of `GenericVersionScheme`
+  (maven-resolver-util 1.9.27) from its class files, pinned by the oracle's 121x121 sign
+  matrix; local roots equal or `No known ancestor relationship`; two types `Unable to compare
+  versions`; git commits by descent (`Procurer.compareGit`, the first stays while unfetched).
+  The Maven graphs the oracle resolved from a `file:` repository fixture (newest wins,
+  orphans, exclusion narrowing, order, cycles) are pinned through
+  `ClojureDepsGraphTest.FakeRepository`: the selection is complete, only the procurer fetches
+  nothing. `:override-deps`/`:default-deps` (alias arguments) are not taken yet: a `nil`
+  coordinate is the oracle's `Bad coordinate`.
+- **Procurer** (`ClojureDepsProcurer`): `:local/root` canonical (`SourceLoader.canonicalPath`,
+  `toRealPath`) and checked (`Local lib X not found: R`); its manifest `:deps`, `:jar`, `:pom`
+  (not read), none (`Manifest file not found ...`) or another (`Manifest type :lein not loaded
+  ...`); the git checks that need no repository (missing sha, prefix sha without a tag, both
+  spellings of the sha or the tag, the inferred forge URL); `:deps/prep-lib` checked after
+  every contribution (`The following libs must be prepared before use: [..]`), never run.
+- **A jar is read in place** (`SourceLoader.listArchive`/`loadArchiveEntry`: the central
+  directory, an entry opened only when listed). Extracting it (`Archives.extractZip`, the
+  plan) would need a cache keyed by content and invalidated when the jar changes, for
+  nothing a read in place lacks; fetched Maven jars take the same path. `Found.path` is
+  `jar!/entry`, `Found.resource` the entry (`*file*`, measured `lib/core.clj`). A namespace a
+  jar holds only as `__init.class` is refused by name.
+- **Unfetched, refused when missed**: a non-built-in Maven coordinate, a git coordinate, a
+  jar's `pom.xml` dependencies and a `:pom` project add no root and a note
+  (`Contribution.unread`); a lookup that finds nothing appends them (`notSearched`) to
+  `Could not locate` and to `unknown namespace`. Refusing at the first lookup was rejected: a
+  project with any Maven dependency (nearly all) would stop where the program needs only its
+  local namespaces. A lookup steps past an unfetched library's place in the order (an earlier
+  unfetched jar holding the same namespace is not detected).
+- **Built-in coordinates** (`ClojureBuiltinLibs`): `org.clojure/clojure`, `spec.alpha` and
+  `core.specs.alpha` at any Maven version are the front end; `ring/ring-core` up to 1.15.5 and
+  `ring/ring-codec` up to 1.3.0 are the shipped Ring files, standing in for an older version
+  as newest-wins assumes. A newer one, or the library as a local or git coordinate that lacks
+  the namespace, is refused when the built-in file would load (`refuseBuiltinStandIn`); with
+  no coordinate at all the files load as before (the oracle would fail).
+- **`clojure.*`** (`ClojureNamespaceLowering.requireOne`): a name that is no lowering is
+  looked up first, `unknown namespace` only when found nowhere. Measured: a
+  `clojure.data.simple` under `src` loads on the oracle; a project `clojure/walk.clj` breaks
+  the oracle's own startup (cyclic load through spec), so shadowing is not pinned.
+- **User-level map**: `SourceStandards.clojureConfigDir` (`CLJ_CONFIG`, `XDG_CONFIG_HOME/clojure`,
+  `~/.clojure`), read from the environment by `RontoLispCli` alone and carried to every read
+  (interpreter, compile path, REPL); `SourceStandards.DEFAULT` (tests, `JvmSourceCompiler`, the
+  playground) reads none. Merged, measured: its `:paths` apply where the project has none, its
+  `:deps` join, a relative path resolves against the project's directory.
+- Read, applied by nothing yet: `:aliases`, `:mvn/repos`, `:mvn/local-repo`. More than eight
+  top deps iterate in the oracle's hash order, here in file order.
+- Pins: `ClojureDepsEdnTest`, `ClojureDepsGraphTest`, `ClojureMavenVersionsTest`,
+  `ClojureDepsProjectTest` (the four backends over a `:local/root` directory with its own
+  dependency, a jar, a `clojure.*` contrib namespace; the refusals, Ring versions, the user
+  map, a session), `PlaygroundReplTest#aClojureRequireReadsTheUploadedDepsEdnLikeEveryOtherRoute`.
 
 ## Ring adapter
 
@@ -973,7 +1051,8 @@ serve`, and a war on embedded Tomcat; plain P1 compiles and signals the directiv
 `ring.util.response` `request` `codec` `mime-type`, `ring.middleware.params`
 `keyword-params` `content-type`. `ClojureSourcePath.find` reads one AFTER every source root
 (`Found.builtin`), so a project file of the name wins, as `src` precedes a jar on the
-oracle's classpath. Loaded through `loadNamespace` like any project namespace: vars, privacy,
+oracle's classpath; a `deps.edn` ring-core newer than the shipped one refuses them
+("deps.edn"). Loaded through `loadNamespace` like any project namespace: vars, privacy,
 `:refer :all`, `#'`, init statements, all unchanged.
 - **Shipping mechanism, measured 2026-10-08 (wasm-GC P1, raw bytes)**: the plan preferred the
   resource. Pure-Clojure ports were oracle-identical on the interpreter but heavy wherever

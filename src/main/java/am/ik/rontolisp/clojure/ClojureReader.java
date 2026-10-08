@@ -84,9 +84,10 @@ final class ClojureReader {
 	/**
 	 * Heads what a tagged literal or {@code #=} reads as in a branch not taken,
 	 * {@code (%tagged tag form)}: the branch drops, so only a set's duplicate check ever
-	 * sees one, telling two literals apart by their forms like the oracle's.
+	 * sees one, telling two literals apart by their forms like the oracle's. EDN data
+	 * ({@link #forEdn}) keeps every tagged literal this way.
 	 */
-	private static final LispSymbol TAGGED = new LispSymbol("%tagged");
+	static final LispSymbol TAGGED = new LispSymbol("%tagged");
 
 	private final String source;
 
@@ -123,6 +124,13 @@ final class ClojureReader {
 	private final boolean conditionals;
 
 	/**
+	 * Whether the text is EDN data rather than code: a tagged literal of any tag reads as
+	 * {@code (%tagged tag form)}, like the oracle's {@code clojure.edn/read} with
+	 * {@code :default tagged-literal}.
+	 */
+	private final boolean edn;
+
+	/**
 	 * The forms a splicing reader conditional left for the list being read, taken ahead
 	 * of the source by every read; null at the top level, where a splice is refused.
 	 */
@@ -153,9 +161,25 @@ final class ClojureReader {
 	 * session) rather than being refused
 	 */
 	ClojureReader(String source, @Nullable String file, boolean conditionals) {
+		this(source, file, conditionals, false);
+	}
+
+	private ClojureReader(String source, @Nullable String file, boolean conditionals, boolean edn) {
 		this.source = source;
 		this.file = file;
 		this.conditionals = conditionals;
+		this.edn = edn;
+	}
+
+	/**
+	 * A reader of EDN data, a {@code deps.edn}: no reader conditional, and a tagged
+	 * literal of any tag is data ({@code (%tagged tag form)}).
+	 * @param source the text
+	 * @param file the file it came from
+	 * @return the reader
+	 */
+	static ClojureReader forEdn(String source, String file) {
+		return new ClojureReader(source, file, false, true);
 	}
 
 	/**
@@ -579,7 +603,7 @@ final class ClojureReader {
 			next();
 		}
 		String tag = this.source.substring(start, this.pos);
-		if (this.suppress) { // a branch not taken needs no reader for its tag
+		if (this.suppress || this.edn) { // a branch not taken needs no reader for its tag
 			return list(List.of(TAGGED, new LispSymbol(tag), readRequired()));
 		}
 		if (tag.indexOf('.') < 0) {

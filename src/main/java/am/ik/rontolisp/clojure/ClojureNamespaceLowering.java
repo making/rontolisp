@@ -479,9 +479,12 @@ final class ClojureNamespaceLowering {
 			ctx.requiredLibraries.add(ns);
 		}
 		else {
-			if (ns.startsWith("clojure.")) {
-				// the language's own libraries are lowerings, never project files
-				throw new LispReadException("unknown namespace: " + ns);
+			if (ns.startsWith("clojure.") && !ctx.loadedNamespaces.contains(ns) && !ctx.loadingNamespaces.contains(ns)
+					&& ctx.sourcePath.find(ns) == null) {
+				// a clojure.* namespace this front end does not lower loads from the
+				// source path like any other (an org.clojure contrib library under a
+				// :local/root); found nowhere, it is unknown
+				throw new LispReadException("unknown namespace: " + ns + ctx.sourcePath.notSearched());
 			}
 			// a dependency edge for :reload-all: the file being lowered owns it
 			// (the innermost file on the loading stack), or the entry program's
