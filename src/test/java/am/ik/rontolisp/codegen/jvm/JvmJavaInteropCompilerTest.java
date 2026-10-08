@@ -779,6 +779,16 @@ class JvmJavaInteropCompilerTest {
 			.isEqualTo(JavaImplementationPrograms.PROXY_SEVERAL_OUTPUT);
 	}
 
+	// Mirrors
+	// JavaInteropTest#aFunctionAtAFunctionalSiteImplementsItsInterfaceByItsArguments:
+	// the resolved and dispatched sites convert through the generated class, the site of
+	// no known receiver through the bridge.
+	@Test
+	void aFunctionAtAFunctionalSiteImplementsItsInterfaceByItsArguments() throws Exception {
+		assertThat(compileAndRun(JavaImplementationPrograms.FUNCTIONAL))
+			.isEqualTo(JavaImplementationPrograms.FUNCTIONAL_OUTPUT);
+	}
+
 	// Passed where one of its interfaces is expected, a java:proxy of several resolves
 	// the call: no bridge, no warning; a declaration of one interface's implementation
 	// holding it is refused as the interpreter refuses it.

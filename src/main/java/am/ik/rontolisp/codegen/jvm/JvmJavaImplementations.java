@@ -173,6 +173,17 @@ final class JvmJavaImplementations {
 	}
 
 	/**
+	 * The factory of the class a function value passed where the interface is expected at
+	 * a site ending in {@code :functional} becomes: every abstract method calls the
+	 * function with its arguments ({@link JavaImplementations#functional}).
+	 * @param iface a linkable interface
+	 * @return the factory, taking a one-element array holding the function
+	 */
+	MethodRefEntry functionalFactory(JavaType iface) {
+		return factory(JavaImplementations.functional(iface, this.lookup));
+	}
+
+	/**
 	 * The construction dispatcher of the class a resolved {@code java:subclass} extends
 	 * its superclass with: {@code _jsubclass$N(Object callable, Object[]
 	 * constructorArguments)}, answering the new object. The dispatcher chooses the

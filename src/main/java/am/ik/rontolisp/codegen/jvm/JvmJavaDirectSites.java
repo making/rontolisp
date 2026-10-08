@@ -655,6 +655,10 @@ final class JvmJavaDirectSites {
 		StringBuilder key = new StringBuilder();
 		key.append(site.operator()).append('|').append(site.staticClass()).append('|').append(site.designator());
 		key.append('|').append(site.packed()).append('|').append(staticField).append('|').append(packedValues);
+		if (site.functional()) {
+			// a function argument converts by its arguments (Body.functional)
+			key.append("|functional");
+		}
 		for (JavaSite.Argument argument : site.arguments()) {
 			key.append('|');
 			for (JavaKind kind : argument.kinds()) {
@@ -911,6 +915,7 @@ final class JvmJavaDirectSites {
 					JvmJavaDirectSites.this.lookup.find(Objects.requireNonNull(site.staticClass())), "resolved class");
 			this.owner = cls(this.type);
 			this.operator = "java:" + site.operator().name().toLowerCase(java.util.Locale.ROOT);
+			this.functional = site.functional();
 			this.valueSlots = new int[valueCount];
 			for (int i = 0; i < valueCount; i++) {
 				if (packedValues) {
@@ -1361,7 +1366,7 @@ final class JvmJavaDirectSites {
 				JavaType param = params.get(j);
 				a.aload(this.valueSlots[firstValue + j]);
 				boolean open = arguments.get(j).mayBeFunction();
-				a.invokestatic(convert(param, open, open));
+				a.invokestatic(convert(param, open, open, open && this.functional));
 				converted[j] = this.nextSlot;
 				this.nextSlot += width(param);
 				store(param, converted[j]);
@@ -1377,7 +1382,7 @@ final class JvmJavaDirectSites {
 					a.loadConstant(j - fixed);
 					a.aload(this.valueSlots[firstValue + j]);
 					boolean open = arguments.get(j).mayBeFunction();
-					a.invokestatic(convert(component, open, open));
+					a.invokestatic(convert(component, open, open, open && this.functional));
 					a.arrayStore(typeKind(component));
 				}
 				converted[fixed] = array;
@@ -1408,6 +1413,10 @@ final class JvmJavaDirectSites {
 		final int objectTemp;
 
 		final int longTemp;
+
+		// Whether a function converts to an interface by its arguments (a site ending
+		// in :functional, JavaImplementations.functional) rather than as its proxy.
+		boolean functional;
 
 		/**
 		 * @param firstFree the first local the parameters leave free
@@ -1687,14 +1696,17 @@ final class JvmJavaDirectSites {
 				}
 				case FUNCTION -> {
 					// The interface's generated proxy class over the function, as the
-					// bridge makes it a Proxy: of(new Object[] { function }).
+					// bridge makes it a Proxy -- at a :functional site the class
+					// implementing its abstract methods by their arguments: of(new
+					// Object[] { function }).
 					a.loadConstant(1);
 					a.anewarray(cls("java/lang/Object"));
 					a.dup();
 					a.loadConstant(0);
 					a.aload(slot);
 					a.aastore();
-					a.invokestatic(implementations().proxyFactory(target));
+					a.invokestatic(this.functional ? implementations().functionalFactory(target)
+							: implementations().proxyFactory(target));
 				}
 			}
 		}
@@ -2060,14 +2072,23 @@ final class JvmJavaDirectSites {
 	 * sequences without functions.
 	 */
 	private MethodRefEntry convert(JavaType target, boolean functions, boolean sequences) {
-		String key = target.name() + (functions ? " functions" : "") + (sequences ? " sequences" : "");
+		return convert(target, functions, sequences, false);
+	}
+
+	/**
+	 * {@code _jconv$N} as above, a function converted by its arguments when
+	 * {@code functional} (a site ending in {@code :functional}).
+	 */
+	private MethodRefEntry convert(JavaType target, boolean functions, boolean sequences, boolean functional) {
+		String key = target.name() + (functions ? " functions" : "") + (sequences ? " sequences" : "")
+				+ (functional ? " functional" : "");
 		MethodRefEntry ref = this.converts.get(key);
 		if (ref == null) {
 			Utf8Entry name = this.cp.utf8Entry(CONVERT_PREFIX + this.converts.size());
 			Utf8Entry desc = this.cp.utf8Entry("(Ljava/lang/Object;)" + descriptor(target));
 			ref = this.cp.methodRef(this.thisClass, name, desc);
 			this.converts.put(key, ref);
-			this.methods.add(buildConvert(name, desc, target, functions, sequences));
+			this.methods.add(buildConvert(name, desc, target, functions, sequences, functional));
 		}
 		return ref;
 	}
@@ -2750,8 +2771,10 @@ final class JvmJavaDirectSites {
 	// host object itself, and in the open variant a function's proxy and a sequence's
 	// array or list. A value no arm takes was costed NO_MATCH, so the site never passes
 	// one.
-	private Method buildConvert(Utf8Entry name, Utf8Entry desc, JavaType target, boolean functions, boolean sequences) {
+	private Method buildConvert(Utf8Entry name, Utf8Entry desc, JavaType target, boolean functions, boolean sequences,
+			boolean functional) {
 		Body body = new Body(2);
+		body.functional = functional;
 		MethodCode a = body.a;
 		int code = 1;
 		MethodCode.Label reject = a.newLabel();
@@ -2800,7 +2823,7 @@ final class JvmJavaDirectSites {
 			a.astore(elements);
 			a.aload(elements);
 			a.ifnull(reject);
-			MethodRefEntry each = convert(element, functions, sequences);
+			MethodRefEntry each = convert(element, functions, sequences, functional);
 			if (target.isArray()) {
 				a.aload(elements);
 				a.arraylength();

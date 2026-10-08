@@ -507,6 +507,30 @@ Per call the uncached bridge paid `getMethods()` (~2.5 us), `select()` (250 ns -
   reify/proxy do not coerce return values either; an interface return is a
   `java:reify`/`java:proxy` object.
   Function -> interface stays for ARGUMENTS (Clojure 1.12's direction).
+- `:functional` (e66, 2026-10-08): a `java:new` / `java:call` / `java:static` whose LAST
+  element is the keyword (`LispNames.JAVA_FUNCTIONAL_MARKER`, after the arguments; a
+  keyword is never an argument a member takes) converts a function argument by
+  `JavaImplementations.functional` instead of `proxy`: a reify whose one function
+  implements every group with an abstract variant (Object's three aside, each variant of
+  the group), defaults keep their bodies, `#<java-reify I>`. COSTS are unchanged (a
+  function still costs `COST_PROXY` against any interface), so overload choice and the
+  memos are the same in both modes; only the conversion differs. Resolved sites:
+  `JavaSiteResolver.resolve` strips the marker and answers `JavaSite.functional()`;
+  the interpreter's `evalJavaSite` drops the evaluated marker and passes
+  `JavaInterop.functional(caller)` (`Caller.functional()`, read by `convert`'s function
+  arm); the direct sites' `Body.functional` picks `functionalFactory` in the FUNCTION
+  arm and a `_jconv$N` keyed `" functional"`, and `shapeKey` carries it (two sites
+  differing only in the marker are two `_jsite$N`: the program's last two calls pin it).
+  Run-time paths read it off the evaluated
+  arguments (`JavaInterop.endsFunctional`, the bridge's `functionsOf`: a keyword compiles
+  to its name, `":FUNCTIONAL"`), so `apply #'java:call` takes it too; the bridge threads
+  `FUNCTIONS_NONE/PROXY/BY_ARGUMENTS` where it threaded `proxies`. `java:field` takes none;
+  `java:subclass` constructor arguments do not read it. The Clojure lowering ends every
+  host call with a non-literal argument in it (`ClojureInteropLowering.hostCall`). Pinned:
+  `JavaImplementationPrograms.FUNCTIONAL` (both backends; resolved, dispatched, bridge,
+  constructor, static, a default method), `JavaImplementationsTest#aFunctionalImplementation...`,
+  `JavaBridgeTemplateParityTest#theTemplateImplementsAFunctionalArgument...`,
+  `JavaSiteResolverTest#aTrailingFunctionalMarkerIsSetAside`.
 - The object's KIND is `compiler/JavaImplementationType` (canonical per interface in each lookup,
   `JavaClassLookup.implementationOf`): assignable to Object, `java.io.Serializable`, the interface
   and its superinterfaces -- a `java.lang.reflect.Proxy` class's supertypes less `Proxy` -- so its

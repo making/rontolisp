@@ -5297,6 +5297,11 @@ public final class LispEvaluator {
 			return apply(builtin, args, env);
 		}
 		JavaInterop.Caller caller = this.javaCaller;
+		if (site.functional()) {
+			// The arguments end in the :functional marker the resolution set aside.
+			args = args.subList(0, args.size() - 1);
+			caller = JavaInterop.functional(caller);
+		}
 		LispVal result = switch (site.operator()) {
 			case NEW -> JavaInterop.invokeResolved(site, null, args.subList(1, args.size()), caller);
 			case STATIC -> JavaInterop.invokeResolved(site, null, args.subList(2, args.size()), caller);

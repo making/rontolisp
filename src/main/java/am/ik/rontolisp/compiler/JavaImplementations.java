@@ -327,6 +327,36 @@ public final class JavaImplementations {
 	}
 
 	/**
+	 * How a function passed where the interface is expected implements it at a
+	 * {@code :functional} site (a Clojure fn, as Java implements a lambda): every method
+	 * a class must implement -- an abstract one, {@code Object}'s three aside -- calls
+	 * the function with the method's arguments alone; a default method keeps its body and
+	 * {@code Object}'s three their identity behavior. A {@code java:reify} whose one
+	 * function implements every abstract method.
+	 * @param iface the interface
+	 * @param lookup unused; for symmetry with {@link #reify}
+	 * @return the implementation
+	 */
+	public static JavaImplementation functional(JavaType iface, JavaClassLookup lookup) {
+		List<JavaImplementation.Slot> slots = new ArrayList<>();
+		for (Group group : groups(iface).values()) {
+			if (OBJECT_METHODS.contains(group.key())) {
+				continue;
+			}
+			boolean abstractMethod = false;
+			for (Variant variant : group.variants()) {
+				abstractMethod |= variant.mustImplement();
+			}
+			if (abstractMethod) {
+				for (Variant variant : group.variants()) {
+					slots.add(slot(group, variant, 0));
+				}
+			}
+		}
+		return new JavaImplementation(false, List.of(iface), slots, null);
+	}
+
+	/**
 	 * How {@code (java:proxy "I" callable)} implements the interface: every method but
 	 * {@code Object}'s three calls the callable.
 	 * @param iface the interface

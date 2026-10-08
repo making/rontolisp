@@ -253,6 +253,22 @@ class JavaBridgeTemplateParityTest {
 		}
 	}
 
+	// A function passed at a :functional site the bridge converts when it runs declares
+	// the slots the shared rule chooses (compiler/JavaImplementations.functional).
+	@Test
+	void theTemplateImplementsAFunctionalArgumentAsTheSharedRuleDoes() throws Exception {
+		for (String name : List.of("java.util.Comparator", "java.util.function.Function", "java.lang.Runnable",
+				"java.util.Iterator", "java.lang.CharSequence", "java.util.List", "java.awt.event.KeyListener",
+				"am.ik.rontolisp.compiler.JavaImplementationsTest$Narrowed")) {
+			Class<?> iface = Class.forName(name);
+			assertThat(String.valueOf(new java.util.TreeMap<>(
+					(java.util.Map<?, ?>) invoke("functionalSlots", new Class<?>[] { Class.class }, iface))))
+				.as("%s", name)
+				.isEqualTo(slots(am.ik.rontolisp.compiler.JavaImplementations
+					.functional(ReflectiveJavaClasses.of(iface), ReflectiveJavaClasses.instance())));
+		}
+	}
+
 	// The shared rule's slots in the template's shape: dispatch key -> implementation.
 	private static String slots(am.ik.rontolisp.compiler.JavaImplementation implementation) {
 		java.util.TreeMap<String, Integer> slots = new java.util.TreeMap<>();

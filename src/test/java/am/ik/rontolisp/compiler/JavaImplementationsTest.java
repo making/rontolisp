@@ -125,6 +125,24 @@ class JavaImplementationsTest {
 			.noneMatch(slot -> slot.startsWith("equals("));
 	}
 
+	// A function passed at a :functional site implements every abstract method (each
+	// return-type variant of it) by its arguments; a default method and Object's three --
+	// a redeclared equals too -- are no slot.
+	@Test
+	void aFunctionalImplementationRoutesEveryAbstractMethodAndNoOther() {
+		assertThat(slots(JavaImplementations.functional(type("java.util.function.Function"), CLASSES)))
+			.containsExactly("apply(java.lang.Object)java.lang.Object=0");
+		assertThat(slots(JavaImplementations.functional(type("java.util.Comparator"), CLASSES)))
+			.containsExactly("compare(java.lang.Object,java.lang.Object)int=0");
+		assertThat(slots(JavaImplementations.functional(type("java.util.Iterator"), CLASSES)))
+			.containsExactly("hasNext()boolean=0", "next()java.lang.Object=0");
+		assertThat(slots(JavaImplementations.functional(type(Narrowed.class.getName()), CLASSES)))
+			.containsExactly("get()java.lang.Object=0", "get()java.lang.String=0");
+		JavaImplementation runnable = JavaImplementations.functional(type("java.lang.Runnable"), CLASSES);
+		assertThat(runnable.proxy()).isFalse();
+		assertThat(runnable.defaultToString()).isEqualTo("#<java-reify java.lang.Runnable>");
+	}
+
 	// A form resolves before it runs only when a compiled program can implement it:
 	// literal names, a public interface found, every return type public.
 	@Test

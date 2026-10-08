@@ -42,6 +42,7 @@ import am.ik.rontolisp.compiler.JavaImplementations;
 import am.ik.rontolisp.compiler.JavaKind;
 import am.ik.rontolisp.compiler.JavaOverloads;
 import am.ik.rontolisp.compiler.JavaSite;
+import am.ik.rontolisp.compiler.JavaSiteResolver;
 import am.ik.rontolisp.compiler.JavaType;
 import am.ik.rontolisp.compiler.ReflectiveJavaClasses;
 
@@ -87,6 +88,47 @@ final class JavaInterop {
 		 */
 		ReflectiveJavaClasses classes();
 
+		/**
+		 * Whether the call ends in {@code :functional}: a function argument converted to
+		 * an interface implements it by its arguments
+		 * ({@link JavaImplementations#functional}), not as a {@code java:proxy}.
+		 * @return whether functions convert so
+		 */
+		default boolean functional() {
+			return false;
+		}
+
+	}
+
+	// The caller of a call ending in :functional.
+	static Caller functional(Caller caller) {
+		if (caller.functional()) {
+			return caller;
+		}
+		return new Caller() {
+
+			@Override
+			public LispVal call(LispVal function, List<LispVal> args) {
+				return caller.call(function, args);
+			}
+
+			@Override
+			public ReflectiveJavaClasses classes() {
+				return caller.classes();
+			}
+
+			@Override
+			public boolean functional() {
+				return true;
+			}
+
+		};
+	}
+
+	// Whether evaluated arguments end in the :functional marker
+	// (compiler/JavaSiteResolver.FUNCTIONAL).
+	private static boolean endsFunctional(List<LispVal> args) {
+		return !args.isEmpty() && JavaSiteResolver.isFunctionalMarker(args.get(args.size() - 1));
 	}
 
 	private static final ReflectiveJavaClasses CLASSES = ReflectiveJavaClasses.instance();
@@ -160,6 +202,9 @@ final class JavaInterop {
 	}
 
 	static LispVal newInstance(String classDesignator, List<LispVal> rawArgs, Caller caller) {
+		if (endsFunctional(rawArgs)) {
+			return newInstance(classDesignator, rawArgs.subList(0, rawArgs.size() - 1), functional(caller));
+		}
 		List<LispVal> args = hostArguments(rawArgs, caller);
 		boolean tagged = isTagged(classDesignator);
 		String name = tagged ? member(classDesignator).name() : classDesignator;
@@ -200,6 +245,9 @@ final class JavaInterop {
 	// so its choices are remembered apart from an instance call's of the same name.
 	private static LispVal invoke(ReflectiveJavaClasses.Type type, @Nullable Object receiver, String methodName,
 			List<LispVal> rawArgs, Caller caller) {
+		if (endsFunctional(rawArgs)) {
+			return invoke(type, receiver, methodName, rawArgs.subList(0, rawArgs.size() - 1), functional(caller));
+		}
 		List<LispVal> args = hostArguments(rawArgs, caller);
 		boolean statics = receiver == null;
 		// The designator is parsed only when the candidates are needed: a remembered
@@ -830,8 +878,27 @@ final class JavaInterop {
 		return implement(dispatch, functions, caller);
 	}
 
+	// A function passed where an interface is expected: the interface's java:proxy, or,
+	// at a call ending in :functional, the implementation calling the function with each
+	// abstract method's arguments (compiler/JavaImplementations.functional).
+	private static LispVal implementation(Class<?> iface, LispVal function, Caller caller) {
+		if (!caller.functional()) {
+			return proxy(iface.getName(), function, caller);
+		}
+		List<Object> key = List.of(iface, FUNCTIONAL_KEY);
+		Dispatch dispatch = IMPLEMENTATIONS.get(key);
+		if (dispatch == null) {
+			dispatch = new Dispatch(JavaImplementations.functional(ReflectiveJavaClasses.of(iface), CLASSES));
+			remember(IMPLEMENTATIONS, key, dispatch);
+		}
+		return implement(dispatch, List.of(function), caller);
+	}
+
 	// The designators-list stand-in of a java:proxy's key.
 	private static final String PROXY_KEY = "proxy";
+
+	// The designators-list stand-in of a function's :functional implementation's key.
+	private static final String FUNCTIONAL_KEY = "functional";
 
 	// How a java:proxy of an interface class, or a java:reify of (interface class,
 	// designators), implements it: resolved once.
@@ -1133,8 +1200,8 @@ final class JavaInterop {
 						|| target.isAssignableFrom(Character.class)) ? (Object) (char) cp : (Object) cp;
 			}
 			case LispJavaObject obj -> obj.ref();
-			case LispLambda lambda -> ((LispJavaObject) proxy(target.getName(), lambda, caller)).ref();
-			case LispFunction function -> ((LispJavaObject) proxy(target.getName(), function, caller)).ref();
+			case LispLambda lambda -> ((LispJavaObject) implementation(target, lambda, caller)).ref();
+			case LispFunction function -> ((LispJavaObject) implementation(target, function, caller)).ref();
 			default -> throw new IllegalArgumentException("no kind: " + value.print());
 		};
 	}
