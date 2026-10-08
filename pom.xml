@@ -24,7 +24,7 @@
 			consumer project declares these same versions, so it resolves exactly what this
 			module's own build executed in full.
 		-->
-		<maven-resources-plugin.version>3.4.0</maven-resources-plugin.version>
+		<maven-resources-plugin.version>3.5.0</maven-resources-plugin.version>
 		<maven-compiler-plugin.version>3.16.0</maven-compiler-plugin.version>
 		<maven-install-plugin.version>3.1.4</maven-install-plugin.version>
 		<!-- The native executable output's precompile shim and runner stub
