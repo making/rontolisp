@@ -4668,8 +4668,9 @@ public final class WasmLispCompiler implements LispCompiler {
 		// A package walk arms every name the baked universes carry (registryFuncIds
 		// reads walkSpellings), the trig names among them.
 		Set<String> walkSpellings = RuntimeNameProducers.packageWalkSpellings(program);
+		// %strict-math reaches the trig through its :sin/:cos/:tan keywords.
 		for (String name : new String[] { LispNames.SIN, LispNames.COS, LispNames.TAN, LispNames.EXP, LispNames.EXPT,
-				LispNames.CIS, LispNames.SINH, LispNames.COSH, LispNames.TANH }) {
+				LispNames.CIS, LispNames.SINH, LispNames.COSH, LispNames.TANH, LispNames.STRICT_MATH_INTERNAL }) {
 			mayReachTrig |= programUsesSymbol(program, name)
 					|| (symbolBuildersForTrig && programSpellsStringLiteral(program, name))
 					|| walkSpellings.contains(name);

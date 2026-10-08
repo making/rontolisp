@@ -42835,9 +42835,13 @@ public final class LispMacroExpander {
 	 * {@code type-error} under {@code scale-float} -- so the product's own checks never
 	 * see a complex or a non-number. The exponent is clamped to ±2200 (beyond which every
 	 * finite double has saturated to 0/infinity anyway, a bignum included) and split into
-	 * three chunks of at most ±1000 so each {@code (expt 2.0 chunk)} factor stays finite
-	 * and nonzero -- multiplying by such a factor is exact until the final step
-	 * over/underflows, which reproduces {@code Math.scalb} including the subnormal range.
+	 * its remainder by 1000 and up to two whole chunks of ±1000, so each
+	 * {@code (expt 2.0 chunk)} factor stays finite and nonzero. The remainder multiplies
+	 * FIRST: only one step of the product can round, the one entering the subnormal
+	 * range, and any step after it scales a value below 2^-1022 by 2^-1000 to the zero
+	 * the exact product rounds to as well -- which reproduces {@code Math.scalb}. Whole
+	 * chunks first rounded twice: a first 2^-1000 landing in the subnormal range and a
+	 * later 2^-50 turned 2^-1075 + 2^-1127 into the tie 2^-1075 and then 0.
 	 * @param cons the scale-float expression
 	 * @return the expanded expression
 	 */
@@ -42854,13 +42858,13 @@ public final class LispMacroExpander {
 		LispSymbol b = new LispSymbol(prefix + "_b");
 		LispSymbol c = new LispSymbol(prefix + "_c");
 		LispVal ncInit = clampInt(raw, 2200);
-		LispVal aInit = clampInt(nc, 1000);
-		LispVal bInit = clampInt(mvCall(LispNames.SUB, nc, a), 1000);
-		LispVal cInit = mvCall(LispNames.SUB, nc, a, b);
-		LispVal product = mvCall(LispNames.MUL, mvCall(LispNames.MUL, mvCall(LispNames.MUL, f, pow2(a)), pow2(b)),
-				pow2(c));
-		LispVal scaled = nestMvBindings(List.of(new MvBinding(nc, ncInit), new MvBinding(a, aInit),
-				new MvBinding(b, bInit), new MvBinding(c, cInit)), product);
+		LispVal cInit = mvCall(LispNames.REM, nc, new LispInteger(1000));
+		LispVal aInit = clampInt(mvCall(LispNames.SUB, nc, c), 1000);
+		LispVal bInit = mvCall(LispNames.SUB, nc, c, a);
+		LispVal product = mvCall(LispNames.MUL, mvCall(LispNames.MUL, mvCall(LispNames.MUL, f, pow2(c)), pow2(a)),
+				pow2(b));
+		LispVal scaled = nestMvBindings(List.of(new MvBinding(nc, ncInit), new MvBinding(c, cInit),
+				new MvBinding(a, aInit), new MvBinding(b, bInit)), product);
 		LispVal checked = mvCall(LispNames.PROGN, scaleFloatCheck(LispNames.FLOATP, f, "FLOAT"),
 				scaleFloatCheck(LispNames.INTEGERP, raw, "INTEGER"), scaled);
 		return nestMvBindings(List.of(new MvBinding(f, parts.get(1)), new MvBinding(raw, parts.get(2))), checked);

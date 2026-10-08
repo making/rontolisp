@@ -85,6 +85,7 @@ import am.ik.rontolisp.compiler.FixedDecimal;
 import am.ik.rontolisp.compiler.OpenModes;
 import am.ik.rontolisp.compiler.OperandTypes;
 import am.ik.rontolisp.compiler.StreamDesignators;
+import am.ik.rontolisp.compiler.StrictMathFunction;
 import am.ik.rontolisp.macro.LispMacroExpander;
 import am.ik.rontolisp.macro.StreamElementType;
 import am.ik.rontolisp.reader.LispLexer;
@@ -3147,6 +3148,11 @@ public final class Environment implements Scope {
 					requireArgCount(LispNames.IEEE754_DOUBLE_FROM_BITS, args, 1);
 					return new LispDouble(Double.longBitsToDouble(asBigInteger(args.get(0)).longValue()));
 				}));
+		// (%strict-math :name x [y]): java.lang.StrictMath's double method of that name,
+		// never leaving the reals -- the bits the JVM's invokestatic and wasm's fdlibm
+		// runtime answer (StrictMathFunction, .kb/transcendentals.md).
+		env.defineFunction(LispNames.STRICT_MATH_INTERNAL,
+				new LispFunction(LispNames.STRICT_MATH_INTERNAL, Environment::strictMath));
 		env.defineFunction(LispNames.IEEE754_SINGLE_BITS, new LispFunction(LispNames.IEEE754_SINGLE_BITS, args -> {
 			requireArgCount(LispNames.IEEE754_SINGLE_BITS, args, 1);
 			int bits = Float.floatToRawIntBits((float) asDouble(args.get(0)));
@@ -9187,6 +9193,37 @@ public final class Environment implements Scope {
 			return i.value();
 		}
 		throw OperandTypeException.of(val, OperandTypes.Kind.INTEGER);
+	}
+
+	/**
+	 * {@code (%strict-math :name x [y])}: the {@code java.lang.StrictMath} method the
+	 * keyword names over the arguments as doubles ({@link StrictMathFunction}).
+	 * {@code :scalb}'s exponent is an integer, clamped as {@code scale-float} clamps.
+	 * @param args the keyword, then the arguments
+	 * @return the method's value: a double, or an integer for {@code :get-exponent}
+	 */
+	private static LispVal strictMath(List<LispVal> args) {
+		StrictMathFunction fn = args.isEmpty() || !(args.get(0) instanceof LispSymbol keyword) ? null
+				: StrictMathFunction.ofKeyword(keyword.name());
+		if (fn == null) {
+			throw new LispEvalException(LispNames.STRICT_MATH_INTERNAL + ": no StrictMath function "
+					+ (args.isEmpty() ? "named" : args.get(0).print()));
+		}
+		requireArgCount(LispNames.STRICT_MATH_INTERNAL, args, 1 + fn.shape().arity());
+		double x = asDouble(args.get(1));
+		return switch (fn.shape()) {
+			case UNARY -> new LispDouble(fn.apply(x));
+			case BINARY -> new LispDouble(fn.apply(x, asDouble(args.get(2))));
+			case TO_INT -> new LispInteger(fn.applyToInt(x));
+			case SCALE -> new LispDouble(fn.applyScaled(x, switch (args.get(2)) {
+				case LispInteger n -> (int) Math.max(-StrictMathFunction.SCALB_CLAMP,
+						Math.min(StrictMathFunction.SCALB_CLAMP, n.value()));
+				case LispBigInteger n ->
+					n.value().signum() < 0 ? -StrictMathFunction.SCALB_CLAMP : StrictMathFunction.SCALB_CLAMP;
+				default -> throw OperandTypeException.of(args.get(2), OperandTypes.Kind.INTEGER,
+						LispNames.STRICT_MATH_INTERNAL);
+			}));
+		};
 	}
 
 	private static double asDouble(LispVal val) {

@@ -1730,6 +1730,7 @@ final class WasmExprCompiler {
 				WasmExprCompiler.compileExpr(ieee754Let(bits, cons.toList().get(1),
 						list(new LispSymbol(LispNames.IEEE754_DOUBLE_FROM_SIGNED_BITS), signed)), ctx);
 			}
+			case LispNames.STRICT_MATH_INTERNAL -> WasmStrictMathCompiler.compile(cons, ctx);
 			case LispNames.READ_EVAL, LispNames.READ_EVAL_TEMPLATE ->
 				// Identity: a #. marker split into code position by a backquote
 				// template

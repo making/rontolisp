@@ -144,6 +144,7 @@ answered `2 5 3` before).
 | `clojure.data` `clojure.zip` `clojure.datafy` `clojure.stacktrace` | the same, loaded at its `require` | "clojure.jar namespaces" |
 | `clojure.core.protocols` | the same, a startup namespace like `clojure.walk` | "clojure.jar namespaces" |
 | `clojure.pprint` | the same; its layout engine is `rontolisp.internal.pprint/NAME`, one call to `rontolisp::%clojure-pp-NAME` (`ClojureKernelLowering`) | "clojure.jar namespaces" |
+| `clojure.math` | the same, loaded at its `require`; a double function's body is `rontolisp.internal.math/NAME`, lowered in place to `(%strict-math :name (rontolisp::%clojure-double a) ...)`, `round` and the long arithmetic one call to `rontolisp::%clojure-math-NAME` (`ClojureKernelLowering`) | "clojure.jar namespaces" |
 | `subs`, `.substring` | `%clojure-subs`, the refusal family's alias of `subseq` ("Refusals") | a bound outside a string is the oracle's `StringIndexOutOfBoundsException` where a class is read; a double or ratio bound is truncated (`%clojure-string-bound`), a non-number one is refused as the oracle does ("Refusals") |
 | `format` | the Java directives translated to `format` over Clojure-rendered arguments | literal format string only; `%s` like `str` (nil spells `null`), `%b`; `%e`/`%g`, flags and the rest refused |
 | `spit` `slurp` `line-seq` `clojure.java.io/reader` | `with-open-file` of the `str` spelling / `rontolisp::%clojure-slurp` / a `read-line` loop / `%clojure-reader` (`open`) | every backend; wasm needs a `--dir` preopen (without it the open signals). `spit` supersedes unless `:append` is truthy, `nil` writes nothing. `slurp`, `line-seq` and `reader` take a path or an open stream (`streamp`, so a Gray instance -- the Ring `:body` -- too): `slurp` reads a stream to its end and closes it (the oracle's `with-open`; until 2026-10-08 it left it open), `reader` answers it, `line-seq` reads it strictly and never closes it. A read of a CLOSED stream -- `slurp`, `line-seq`, `.read`, `.readLine`, `read-line` -- goes through `%clojure-open-reader` (`open-stream-p`, else the `%clojure-io-exception` carrier: the oracle's `IOException: Stream closed`); before it the interpreter said `READ-CHAR expects an input stream`, the JVM an NPE, and both wasm backends READ a closed string input stream (its record is never marked closed, `.kb/read-load-streams.md`). `read` is not guarded: the oracle wraps the failure in a `LispReader$ReaderException` over a `LineNumberingPushbackReader` and not over a `PushbackReader`, which share one stream kind here. A second close is harmless on every backend (`.kb/read-load-streams.md`, "close on an already-closed stream"). Pins: clojure-spec `slurp-closes-the-stream-it-reads`, `ClojureInteropTest#filesRoundTripThroughReaderAndLineSeq`, `ClojureWasmFileIoTest`. `slurp` was an inline `read-char` loop per site until 2026-10-08. `file-seq` and every other `clojure.java.io` fn are refused |
@@ -1490,7 +1491,7 @@ function and a directive must be a top-level form.
 end** (`src/main/resources/am/ik/rontolisp/clojure/lib/clojure/**`, the
 `ClojureBuiltinNamespaces` mechanism of "Ring util namespaces"): `clojure.walk`,
 `clojure.template`, `clojure.pprint`, `clojure.data`, `clojure.zip`, `clojure.core.protocols`,
-`clojure.datafy`, `clojure.stacktrace`.
+`clojure.datafy`, `clojure.stacktrace`, `clojure.math`.
 - **Licensing**: clojure.jar is EPL-1.0, this project Apache-2.0, so nothing of it is
   copied -- no code, no docstring. Each file is written from the documented behaviour and
   diffed against the oracle; a one-line var dictated by its contract
@@ -1618,10 +1619,42 @@ end** (`src/main/resources/am/ik/rontolisp/clojure/lib/clojure/**`, the
   clojure-spec `clojure-stacktrace-prints-no-frames`; `print-trace-element` is the oracle's
   over a host `StackTraceElement` (interpreter and JVM,
   `ClojureInteropTest#printTraceElementSpellsAHostStackTraceElementLikeTheOracle`).
+- `clojure.math` (2026-10-08): all 45 vars, each `defn` a one-line body over a kernel of
+  `rontolisp.internal.math`. A double function's kernel is lowered IN PLACE
+  (`ClojureKernelLowering.Kernels.inline`, `STRICT_MATH`): `(%strict-math :name ...)` over
+  `%clojure-double` of each argument -- the oracle's own wrapper is one `Math` call over
+  `(double x)` -- so a call costs the `defn` and the primitive (`.kb/transcendentals.md`,
+  "%strict-math": `StrictMath`'s bits on all four backends, NaN where the CL function would
+  answer a complex). `round` (the floor of a + 1/2 over the exact rational, saturating at the
+  long range, NaN 0) and the long arithmetic (`floor-div`/`floor-mod`, the `-exact` six:
+  `ArithmeticException` "long overflow" / "/ by zero") are workers `%clojure-math-NAME` over
+  `%clojure-long-cast`, the oracle's `RT.longCast` of an object (a double or ratio truncated,
+  NaN 0, 2^63 itself the largest long as Java's `(long)` saturates, past it
+  `IllegalArgumentException`, a character its code); `scalb`'s exponent goes through
+  `%clojure-int-cast` (`RT.intCast`: past the int range "integer overflow"). The two casts are
+  shared with `vector-of`'s integer kinds, whose copy refused 2^63 until 2026-10-08 (the
+  oracle stores Long/MAX_VALUE). `E`, `PI`, `to-radians`, `to-degrees` (one multiply, Java's
+  constants) and `random` (`rand`) are plain Clojure. Not a startup namespace: a qualified
+  name without a `require` is the oracle's class lookup failure. Deviations, each in the user
+  doc: the `StrictMath` bits (`Math` differs in the last place on 1-8% of arguments for nine
+  functions, measured in `.kb/transcendentals.md`); `copy-sign` reads a NaN sign as positive;
+  a ratio converts to its nearest double (the oracle's `Ratio.doubleValue` rounds to 16 digits
+  first: `(double 2/3)` 0.6666666666666666 here, ...667 there -- `double` alike); `scalb` of a
+  LITERAL double exponent past the int range is the oracle's other cast
+  (`IllegalArgumentException` "Value out of range for int", a non-literal one "integer
+  overflow" as here); a character is accepted as a long through a function value too (the
+  oracle's value path casts to `Number` first). Size, wasm P1 (2026-10-08): `(m/sqrt 2.0)`
+  printed 25,926 B against 25,061 B for printing a double product, `(m/sin 2.0)` 30,554 B (the
+  fdlibm sin and its tables), `(m/floor-div 7 2)` 19,502 B -- the shaker drops every other var.
+  Pins: clojure-spec `clojure-math-*` (four oracle-identical cases and the `StrictMath`
+  deviation, all four backends), `ClojureLanguageNamespacesTest`
+  (`clojureMathLowersEachDoubleFunctionToOneStrictMathCallAtItsRequire`,
+  `everyStrictMathFunctionIsAClojureMathKernelOfItsArity`: the kernel table against
+  `StrictMathFunction`, which this package may not import).
 - Not shipped, with what each waits on (decided 2026-10-08): `clojure.java.io` beyond
   `reader` (a portable File and byte streams, e55), `clojure.core.reducers` and
   `CollReduce` (multi-arity protocol methods and a `reduce` that consults a protocol,
-  e56), `clojure.math` (fdlibm functions the runtime lacks on every backend, e57), pprint's
+  e56), pprint's
   `cl-format`/`formatter`/`formatter-out` (e58), `clojure.instant`/`clojure.uuid` and the
   `#inst`/`#uuid` values (e59), `Throwable->map` and `extend-protocol` to
   `Throwable`/`IRef` (e60), `clojure.repl`/`main`/`java.shell`/`xml` (e61).

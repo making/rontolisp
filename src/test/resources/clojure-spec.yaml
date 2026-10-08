@@ -7531,12 +7531,14 @@ cases:
       (prn (vector-of :boolean true false) (vector-of :boolean 1) (vector-of :int) (vector-of :double 1/2) (vector-of :long 1.5) (vector-of :int ##NaN))
       (prn (vector-of :boolean false nil 0) (vector-of :char 97.6) (vector-of :int \a) (vector-of :byte 1.9) (vector-of :short 32767 -32768) (vector-of :int 2147483647 -2147483648))
       (prn (= (vector-of :int 1 2) [1 2]) (vector? (vector-of :int 1 2)) (map (partial vector-of :int) [1 2]) (apply vector-of :int [1 2.5]))
+      (prn (vector-of :long 9.223372036854776E18 -9.223372036854776E18 9.223372036854774E18))
       (prn (conj (vector-of :int 1) 2.5))
     expected: |
       [1 2] [1 -1] [1 2] [1.0 2.0] [1.0 2.0] [\a \b] [\a]
       [true false] [true] [] [0.5] [1] [0]
       [false false true] [\a] [97] [1] [32767 -32768] [2147483647 -2147483648]
       true true ([1] [2]) [1 2]
+      [9223372036854775807 -9223372036854775808 9223372036854773760]
       [1 2.5]
   - name: primitive-casts-double-float-byte-short-and-num
     # Oracle-identical (clj 1.12.6) but for two deviations: float answers a double (the
@@ -8574,3 +8576,105 @@ cases:
       java.lang.Exception: outer
        at [empty stack trace]
       "java.lang.Exception: outer\n at [empty stack trace]\nCaused by: clojure.lang.ExceptionInfo: boom\n{:x 1}\n at [empty stack trace]\n"
+  - name: clojure-math-double-functions-print-full-digits
+    # The built-in clojure.math (.kb/clojure-frontend.md "clojure.jar namespaces"): every
+    # double function over arguments where java.lang.Math, which the oracle calls, and
+    # java.lang.StrictMath, which every backend here answers, agree on x86-64 (the
+    # measurement is in .kb/transcendentals.md), printed in full digits; then the edges
+    # that stay real where the Common Lisp functions would answer a complex. Every line is
+    # the oracle's (clj 1.12.6), on all four backends.
+    source: |
+      (ns math-digits (:require [clojure.math :as m]))
+      (prn (m/sin 0.5) (m/sin 2.0) (m/sin 1e22) (m/sin m/PI) (m/cos 1.0) (m/cos 3.0) (m/tan 0.5) (m/tan 1.5))
+      (prn (m/asin 0.5) (m/acos 0.5) (m/atan 1.0) (m/atan2 1 -1) (m/atan2 -0.0 -1) (m/sinh 1) (m/cosh 1) (m/tanh 0.5))
+      (prn (m/exp 0.5) (m/exp -1.0) (m/expm1 1e-5) (m/log 10) (m/log 0.5) (m/log1p 1e-5) (m/log10 2.0) (m/log10 1e-300))
+      (prn (m/sqrt 2) (m/cbrt 3) (m/cbrt -2.0) (m/hypot 3 4) (m/hypot 1e200 1e200) (m/pow 2 0.5) (m/pow 1.1 10) (m/pow 1.0001 10000))
+      (prn (m/to-radians 90) (m/to-degrees m/PI) (m/to-radians 1/3) m/E m/PI (map m/sqrt [4 2 0]) (apply m/pow [2 10]) (<= 0.0 (m/random) 1.0))
+      (prn (m/log -1.0) (m/log 0) (m/log10 -0.0) (m/sqrt -1) (m/sqrt -0.0) (m/asin 2) (m/acos -1.5) (m/pow -8 0.5) (m/pow -2 3) (m/pow 0 -1))
+      (prn (m/log1p -2) (m/expm1 -1000) (m/exp 710) (m/cosh ##-Inf) (m/sin ##Inf) (m/tan -0.0) (m/atan ##Inf) (m/cbrt ##-Inf) (m/hypot ##Inf ##NaN))
+      (in-ns 'user)
+    expected: |
+      0.479425538604203 0.9092974268256817 -0.8522008497671888 1.2246467991473532E-16 0.5403023058681398 -0.9899924966004454 0.5463024898437905 14.101419947171719
+      0.5235987755982989 1.0471975511965979 0.7853981633974483 2.356194490192345 -3.141592653589793 1.1752011936438014 1.543080634815244 0.46211715726000974
+      1.6487212707001282 0.36787944117144233 1.0000050000166668E-5 2.302585092994046 -0.6931471805599453 9.999950000333332E-6 0.3010299956639812 -300.0
+      1.4142135623730951 1.4422495703074083 -1.2599210498948732 5.0 1.414213562373095E200 1.4142135623730951 2.5937424601000023 2.7181459268249255
+      1.5707963267948966 180.0 0.005817764173314432 2.718281828459045 3.141592653589793 (2.0 1.4142135623730951 0.0) 1024.0 true
+      ##NaN ##-Inf ##-Inf ##NaN -0.0 ##NaN ##NaN ##NaN -8.0 ##Inf
+      ##NaN -1.0 ##Inf ##Inf ##NaN -0.0 1.5707963267948966 ##-Inf ##Inf
+  - name: clojure-math-rounding-and-the-neighbours-of-a-double
+    # clojure.math's exact operations: ceil/floor/rint keep a zero's sign, round is the
+    # floor of a + 1/2 saturating at the long range, the neighbours and the exponent of a
+    # double, scalb rounding once into the subnormal range, IEEE-remainder. Every line is
+    # the oracle's (clj 1.12.6), on all four backends.
+    source: |
+      (ns math-bits (:require [clojure.math :as m]))
+      (prn (m/ceil -0.5) (m/ceil 1.2) (m/floor -0.5) (m/floor -1.2) (m/floor -0.0) (m/rint 2.5) (m/rint 3.5) (m/rint -2.5) (m/rint -0.4) (m/ceil ##-Inf) (m/floor ##NaN))
+      (prn (m/round 2.5) (m/round -2.5) (m/round -0.5) (m/round 0.49999999999999994) (m/round 4503599627370497.0) (m/round 1e20) (m/round -1e300) (m/round ##NaN) (m/round ##Inf) (m/round 7) (m/round 2/3))
+      (prn (m/signum -3) (m/signum 0) (m/signum -0.0) (m/signum ##NaN) (m/signum 1e-320) (m/copy-sign 3 -0.0) (m/copy-sign -0.0 1) (m/copy-sign 2 ##NaN))
+      (prn (m/ulp 1) (m/ulp 0) (m/ulp 1e300) (m/ulp 1e-320) (m/ulp 4.450147717014403E-308) (m/ulp ##Inf) (m/ulp ##NaN) (m/ulp -1.0))
+      (prn (m/get-exponent 1) (m/get-exponent 0) (m/get-exponent 1e300) (m/get-exponent -1e-320) (m/get-exponent ##NaN) (m/get-exponent ##-Inf))
+      (prn (m/next-up 1) (m/next-down 1) (m/next-up -0.0) (m/next-down 0.0) (m/next-up ##Inf) (m/next-down ##-Inf) (m/next-down 1e-320))
+      (prn (m/next-after 1 2) (m/next-after 1 0) (m/next-after 0.0 -0.0) (m/next-after -0.0 0.0) (m/next-after ##Inf 0) (m/next-after 4.9E-324 0) (m/next-after 1.7976931348623157E308 ##Inf) (m/next-after 1 ##NaN))
+      (prn (m/scalb 1 3) (m/scalb 1 -1074) (m/scalb 1.5 -1075) (m/scalb 3 1024) (m/scalb -0.0 5) (m/scalb (+ (m/pow 2 -25) (m/pow 2 -77)) -1050) (m/scalb -2.3779429016845906E285 -2004) (m/scalb 3 1.5) (m/scalb 3 \a))
+      (prn (m/IEEE-remainder 10 3) (m/IEEE-remainder 11 3) (m/IEEE-remainder -11 3) (m/IEEE-remainder 2.5 1) (m/IEEE-remainder -0.0 1) (m/IEEE-remainder 5 ##Inf) (m/IEEE-remainder ##Inf 5) (m/IEEE-remainder 1 0) (m/IEEE-remainder 1e300 1e-300))
+      (in-ns 'user)
+    expected: |
+      -0.0 2.0 -1.0 -2.0 -0.0 2.0 4.0 -2.0 -0.0 ##-Inf ##NaN
+      3 -2 0 0 4503599627370497 9223372036854775807 -9223372036854775808 0 9223372036854775807 7 1
+      -1.0 0.0 -0.0 ##NaN 1.0 -3.0 0.0 2.0
+      2.220446049250313E-16 4.9E-324 1.487016908477783E284 4.9E-324 9.9E-324 ##Inf ##NaN 2.220446049250313E-16
+      0 -1023 996 -1023 1024 1024
+      1.0000000000000002 0.9999999999999999 4.9E-324 -4.9E-324 ##Inf ##-Inf 9.995E-321
+      1.0000000000000002 0.9999999999999999 -0.0 0.0 1.7976931348623157E308 0.0 ##Inf ##NaN
+      8.0 4.9E-324 4.9E-324 ##Inf -0.0 4.9E-324 -1.294467E-318 6.0 4.75368975085586E29
+      1.0 -1.0 1.0 0.5 -0.0 5.0 ##NaN ##NaN 4.891554850853602E-301
+  - name: clojure-math-long-arithmetic-refuses-overflow
+    # clojure.math's long functions take their arguments through the oracle's longCast
+    # (a double or ratio truncated, NaN 0, 2^63 the largest long, a character its code)
+    # and refuse past the long range with its classes and messages; scalb's exponent goes
+    # through its intCast (an exponent the oracle reads as a literal double is its other
+    # cast, "Value out of range for int", so the case hands those over through identity).
+    # Every line is the oracle's (clj 1.12.6), on all four backends.
+    source: |
+      (ns math-longs (:require [clojure.math :as m]))
+      (defmacro long-of [form] `(try ~form (catch ArithmeticException e# [:arithmetic (ex-message e#)]) (catch IllegalArgumentException e# [:illegal-argument (ex-message e#)])))
+      (prn (m/floor-div 7 2) (m/floor-div -7 2) (m/floor-div 7 -2) (m/floor-div -9223372036854775808 -1) (m/floor-mod -7 2) (m/floor-mod 7 -2) (m/floor-mod -9223372036854775808 -1))
+      (prn (m/floor-div 7.5 2) (m/floor-div 7/2 2) (m/floor-div \a 2) (m/floor-div ##NaN 2) (m/floor-div 9.223372036854776E18 7) (m/floor-div -9.223372036854776E18 7))
+      (prn (long-of (m/floor-div 7 0)) (long-of (m/floor-mod 7 0)) (long-of (m/floor-div 1e19 2)) (long-of (m/floor-div ##Inf 2)) (long-of (m/floor-div 9223372036854775808 2)) (long-of (m/add-exact -9.223372036854778E18 0)))
+      (prn (m/add-exact 1 2) (m/subtract-exact 5 7) (m/multiply-exact 3037000499 3037000499) (m/increment-exact -1) (m/decrement-exact 0) (m/negate-exact -9223372036854775807) (m/add-exact 1.9 1.9) (m/add-exact 7/2 1))
+      (prn (long-of (m/add-exact 9223372036854775807 1)) (long-of (m/subtract-exact -9223372036854775808 1)) (long-of (m/multiply-exact 3037000500 3037000500)) (long-of (m/increment-exact 9223372036854775807)) (long-of (m/decrement-exact -9223372036854775808)) (long-of (m/negate-exact -9223372036854775808)))
+      (prn (long-of (m/scalb 3 3000000000)) (long-of (m/scalb 3 (identity 1e10))) (long-of (m/scalb 3 (identity 1e19))))
+      (in-ns 'user)
+    expected: |
+      3 -4 -4 -9223372036854775808 1 -1 0
+      3 1 48 0 1317624576693539401 -1317624576693539402
+      [:arithmetic "/ by zero"] [:arithmetic "/ by zero"] [:illegal-argument "Value out of range for long: 1.0E19"] [:illegal-argument "Value out of range for long: Infinity"] [:illegal-argument "Value out of range for long: 9223372036854775808"] [:illegal-argument "Value out of range for long: -9.223372036854778E18"]
+      3 -2 9223372030926249001 0 -1 9223372036854775807 2 4
+      [:arithmetic "long overflow"] [:arithmetic "long overflow"] [:arithmetic "long overflow"] [:arithmetic "long overflow"] [:arithmetic "long overflow"] [:arithmetic "long overflow"]
+      [:arithmetic "integer overflow"] [:arithmetic "integer overflow"] [:illegal-argument "Value out of range for long: 1.0E19"]
+  - name: clojure-math-casts-refuse-with-the-oracles-classes
+    # A clojure.math argument that is no number is the oracle's NullPointerException for
+    # nil and ClassCastException otherwise (a character too, except where a long is cast);
+    # a ratio, a bigint and a decimal are numbers. Oracle-identical (clj 1.12.6); the
+    # messages are ours and not printed.
+    source: |
+      (ns math-casts (:require [clojure.math :as m]))
+      (defmacro cast-of [form] `(try ~form :none (catch NullPointerException e# :npe) (catch ClassCastException e# :cce)))
+      (prn [(cast-of (m/sin nil)) (cast-of (m/sin "x")) (cast-of (m/sin \a)) (cast-of (m/sin true)) (cast-of (m/round nil)) (cast-of (m/pow 2 "x")) (cast-of (m/floor-div nil 2)) (cast-of (m/floor-div "x" 2)) (cast-of (m/scalb 3 nil)) (cast-of (m/scalb 3 "x"))])
+      (prn (m/sin 1/2) (m/sin 1N) (m/sin 0.5M) (m/round 1N) (m/get-exponent 2.5) (m/floor-div 7N 2))
+      (in-ns 'user)
+    expected: |
+      [:npe :cce :cce :cce :npe :cce :npe :cce :npe :cce]
+      0.479425538604203 0.8414709848078965 0.479425538604203 1 1 3
+  - name: clojure-math-answers-strictmath-where-the-oracle-calls-math
+    # A deviation: clojure.math's double functions answer java.lang.StrictMath's bits on
+    # every backend; the oracle calls java.lang.Math, whose x86-64 intrinsics for sin,
+    # cos, tan, exp, log, log10, cbrt, tanh and pow differ in the last place on 1-8% of
+    # arguments (.kb/transcendentals.md). The oracle prints 2.718281828459045
+    # 1.0986122886681098 0.9950041652780258 1.1578212823495775 9.882117688026186.
+    source: |
+      (ns math-strict (:require [clojure.math :as m]))
+      (prn (m/exp 1) (m/log 3) (m/cos 0.1) (m/tan 4.0) (m/pow 2.5 2.5))
+      (in-ns 'user)
+    expected: |
+      2.7182818284590455 1.0986122886681096 0.9950041652780257 1.1578212823495777 9.882117688026185

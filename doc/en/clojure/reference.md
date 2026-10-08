@@ -27,6 +27,7 @@ has them.
 | [clojure.data](reference/clojure-data.md) | Recursive comparison: `diff` answering what only each side holds and what both hold |
 | [clojure.datafy](reference/clojure-datafy.md) | Values as data and navigation from data: `datafy`/`nav` over the `clojure.core.protocols` protocols |
 | [clojure.edn](reference/clojure-edn.md) | Reading EDN data: `read-string`/`read` with `:eof`, `:readers` and `:default` |
+| [clojure.math](reference/clojure-math.md) | Functions over doubles that answer the same bits on every backend, rounding and the neighbors of a double, and long arithmetic that refuses to overflow |
 | [clojure.pprint](reference/clojure-pprint.md) | Pretty printing: `pprint`/`write` within a right margin, `print-table`, `code-dispatch` for code, and the dispatch a program extends or replaces |
 | [clojure.stacktrace](reference/clojure-stacktrace.md) | Printing throwables and their causes: `root-cause`, `print-throwable`, `print-stack-trace`, `print-cause-trace` |
 | [clojure.template](reference/clojure-template.md) | Expression templates: `apply-template`, `do-template` |

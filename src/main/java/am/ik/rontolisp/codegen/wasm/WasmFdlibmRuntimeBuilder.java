@@ -77,7 +77,23 @@ final class WasmFdlibmRuntimeBuilder {
 		ATAN("atan", "_fd_atan", new Ty[] { Ty.D }, Ty.D), ATAN2("atan2", "_fd_atan2", new Ty[] { Ty.D, Ty.D }, Ty.D),
 		SINH("sinh", "_fd_sinh", new Ty[] { Ty.D }, Ty.D), COSH("cosh", "_fd_cosh", new Ty[] { Ty.D }, Ty.D),
 		TANH("tanh", "_fd_tanh", new Ty[] { Ty.D }, Ty.D), POW("pow", "_fd_pow", new Ty[] { Ty.D, Ty.D }, Ty.D),
-		HYPOT("hypot", "_fd_hypot", new Ty[] { Ty.D, Ty.D }, Ty.D);
+		HYPOT("hypot", "_fd_hypot", new Ty[] { Ty.D, Ty.D }, Ty.D),
+		// The rest of StrictMath's double methods, for %strict-math: two more fdlibm
+		// algorithms, the exact remainder and its fmod, and the bit-level operations.
+		// Appended, so every slot above keeps its index.
+		LOG10("log10", "_fd_log10", new Ty[] { Ty.D }, Ty.D), CBRT("cbrt", "_fd_cbrt", new Ty[] { Ty.D }, Ty.D),
+		IEEE_REMAINDER("remainder", "_fd_remainder", new Ty[] { Ty.D, Ty.D }, Ty.D),
+		FMOD("fmod", "_fd_fmod", new Ty[] { Ty.D, Ty.D }, Ty.D),
+		ILOGB("ilogb", "_fd_ilogb", new Ty[] { Ty.I, Ty.I }, Ty.I), ULP("ulp", "_fd_ulp", new Ty[] { Ty.D }, Ty.D),
+		SIGNUM("signum", "_fd_signum", new Ty[] { Ty.D }, Ty.D),
+		NEXT_UP("next_up", "_fd_next_up", new Ty[] { Ty.D }, Ty.D),
+		NEXT_DOWN("next_down", "_fd_next_down", new Ty[] { Ty.D }, Ty.D),
+		NEXT_AFTER("next_after", "_fd_next_after", new Ty[] { Ty.D, Ty.D }, Ty.D),
+		COPY_SIGN("copy_sign", "_fd_copy_sign", new Ty[] { Ty.D, Ty.D }, Ty.D),
+		GET_EXPONENT("get_exponent", "_fd_get_exponent", new Ty[] { Ty.D }, Ty.I),
+		// scalb's exponent travels as a double (an integer, exact), so the function
+		// shares (f64, f64) -> f64 and needs no signature of its own.
+		SCALB("scale", "_fd_scalb", new Ty[] { Ty.D, Ty.D }, Ty.D);
 
 		final String cname;
 
@@ -103,6 +119,10 @@ final class WasmFdlibmRuntimeBuilder {
 				case ATAN2 -> EnumSet.of(ATAN);
 				case SINH, COSH -> EnumSet.of(EXPM1, EXP);
 				case TANH -> EnumSet.of(EXPM1);
+				case LOG10 -> EnumSet.of(LOG);
+				case IEEE_REMAINDER -> EnumSet.of(FMOD);
+				case FMOD -> EnumSet.of(ILOGB);
+				case NEXT_AFTER -> EnumSet.of(NEXT_UP, NEXT_DOWN);
 				default -> EnumSet.noneOf(Fn.class);
 			};
 		}
@@ -1134,6 +1154,14 @@ final class WasmFdlibmRuntimeBuilder {
 					sig = new Ty[] { Ty.I, Ty.I };
 					result = Ty.D;
 				}
+				case "BITS" -> {
+					sig = new Ty[] { Ty.D };
+					result = Ty.L;
+				}
+				case "FROM_BITS" -> {
+					sig = new Ty[] { Ty.L };
+					result = Ty.D;
+				}
 				case "abs", "sqrt", "floor" -> {
 					sig = new Ty[] { Ty.D };
 					result = Ty.D;
@@ -1608,6 +1636,16 @@ final class WasmFdlibmRuntimeBuilder {
 					this.w.write(Instruction.I64_OR);
 					this.w.write(Instruction.F64_REINTERPRET_I64);
 				}
+				case "BITS" -> {
+					// Double.doubleToRawLongBits
+					expr(a.get(0));
+					this.w.write(Instruction.I64_REINTERPRET_F64);
+				}
+				case "FROM_BITS" -> {
+					// Double.longBitsToDouble
+					expr(a.get(0));
+					this.w.write(Instruction.F64_REINTERPRET_I64);
+				}
 				case "abs" -> {
 					expr(a.get(0));
 					this.w.write(Instruction.F64_ABS);
@@ -1672,7 +1710,11 @@ final class WasmFdlibmRuntimeBuilder {
 	 * the {@code __HI}/{@code __LO} accessors as {@code HI}/{@code LO}/
 	 * {@code SET_HI}/{@code SET_LO}/{@code HI_LO}, {@code Math.scalb} as {@code scalb}
 	 * where the power of two is normal, and the multi-valued {@code y[]} of the reduction
-	 * as the {@code y} scratch array in linear memory.
+	 * as the {@code y} scratch array in linear memory. The bit-level operations
+	 * ({@link Fn#ULP} through {@link Fn#SCALB}) are no fdlibm: each is written from the
+	 * StrictMath method's specification, over {@code BITS}/{@code FROM_BITS} (the raw
+	 * long bits), and {@link Fn#SCALB} multiplies the exponent's remainder by 1000 first,
+	 * so only one step can round.
 	 */
 	private static final class Sources {
 
@@ -1681,6 +1723,19 @@ final class WasmFdlibmRuntimeBuilder {
 
 		static String of(Fn fn) {
 			return switch (fn) {
+				case LOG10 -> LOG10;
+				case CBRT -> CBRT;
+				case IEEE_REMAINDER -> IEEE_REMAINDER;
+				case FMOD -> FMOD;
+				case ILOGB -> ILOGB;
+				case ULP -> ULP;
+				case SIGNUM -> SIGNUM;
+				case NEXT_UP -> NEXT_UP;
+				case NEXT_DOWN -> NEXT_DOWN;
+				case NEXT_AFTER -> NEXT_AFTER;
+				case COPY_SIGN -> COPY_SIGN;
+				case GET_EXPONENT -> GET_EXPONENT;
+				case SCALB -> SCALB;
 				case EXP -> EXP;
 				case EXPM1 -> EXPM1;
 				case LOG -> LOG;
@@ -2982,6 +3037,314 @@ final class WasmFdlibmRuntimeBuilder {
 				  }
 				  if (k != 0) return pow2(k) * w;
 				  else return w;
+				}
+				""";
+
+		static final String LOG10 = """
+				const double ivln10 = 0x1.bcb7b1526e50ep-2;
+				const double log10_2hi = 0x1.34413509f6p-2;
+				const double log10_2lo = 0x1.9fef311f12b36p-42;
+				double log10(double x) {
+				  double y, z;
+				  int i, k, hx, lx;
+				  hx = HI(x);
+				  lx = LO(x);
+				  k = 0;
+				  if (hx < 0x00100000) {
+				    if (((hx & EXP_SIGNIF_BITS) | lx) == 0) return -TWO54 / 0.0;
+				    if (hx < 0) return (x - x) / 0.0;
+				    k = k - 54;
+				    x = x * TWO54;
+				    hx = HI(x);
+				  }
+				  if (hx >= EXP_BITS) return x + x;
+				  k = k + ((hx >> 20) - 1023);
+				  i = (k & SIGN_BIT) >>> 31;
+				  hx = (hx & 0x000fffff) | ((0x3ff - i) << 20);
+				  y = (double) (k + i);
+				  x = SET_HI(x, hx);
+				  z = y * log10_2lo + ivln10 * log(x);
+				  return z + y * log10_2hi;
+				}
+				""";
+
+		static final String CBRT = """
+				const int B1 = 715094163;
+				const int B2 = 696219795;
+				const double C = 0x1.15f15f15f15f1p-1;
+				const double D = -0x1.691de2532c834p-1;
+				const double E = 0x1.6a0ea0ea0ea0fp0;
+				const double F = 0x1.9b6db6db6db6ep0;
+				const double G = 0x1.6db6db6db6db7p-2;
+				double cbrt(double x) {
+				  double t = 0.0, sign, r, s, w;
+				  int hx;
+				  if (x == 0.0 || !isfinite(x)) return x;
+				  sign = (x < 0.0) ? -1.0 : 1.0;
+				  x = abs(x);
+				  if (x < DBL_MIN_NORMAL) {
+				    t = TWO54;
+				    t = t * x;
+				    t = SET_HI(t, HI(t) / 3 + B2);
+				  } else {
+				    hx = HI(x);
+				    t = SET_HI(t, hx / 3 + B1);
+				  }
+				  r = t * t / x;
+				  s = C + r * t;
+				  t = t * (G + F / (s + E + D / s));
+				  t = SET_LO(t, 0);
+				  t = SET_HI(t, HI(t) + 0x00000001);
+				  s = t * t;
+				  r = x / s;
+				  w = t + t;
+				  r = (r - t) / (w + r);
+				  t = t + t * r;
+				  return sign * t;
+				}
+				""";
+
+		static final String IEEE_REMAINDER = """
+				double remainder(double x, double p) {
+				  int hx, hp, sx, lx, lp;
+				  double p_half;
+				  hx = HI(x);
+				  lx = LO(x);
+				  hp = HI(p);
+				  lp = LO(p);
+				  sx = hx & SIGN_BIT;
+				  hp = hp & EXP_SIGNIF_BITS;
+				  hx = hx & EXP_SIGNIF_BITS;
+				  if ((hp | lp) == 0) return (x * p) / (x * p);
+				  if (hx >= EXP_BITS || (hp >= EXP_BITS && ((hp - EXP_BITS) | lp) != 0)) return (x * p) / (x * p);
+				  if (hp <= 0x7fdfffff) x = fmod(x, p + p);
+				  if (((hx - hp) | (lx - lp)) == 0) return 0.0 * x;
+				  x = abs(x);
+				  p = abs(p);
+				  if (hp < 0x00200000) {
+				    if (x + x > p) {
+				      x = x - p;
+				      if (x + x >= p) x = x - p;
+				    }
+				  } else {
+				    p_half = 0.5 * p;
+				    if (x > p_half) {
+				      x = x - p;
+				      if (x >= p_half) x = x - p;
+				    }
+				  }
+				  return SET_HI(x, HI(x) ^ sx);
+				}
+				""";
+
+		// __ieee754_fmod; Integer.compareUnsigned(a, b) < 0 is !ule(b, a), and Java's
+		// while (n-- != 0) a test of n before its decrement.
+		static final String FMOD = """
+				double fmod(double x, double y) {
+				  int n, hx, hy, hz, ix, iy, sx, lx, ly, lz;
+				  hx = HI(x);
+				  lx = LO(x);
+				  hy = HI(y);
+				  ly = LO(y);
+				  sx = hx & SIGN_BIT;
+				  hx = hx ^ sx;
+				  hy = hy & EXP_SIGNIF_BITS;
+				  if ((hy | ly) == 0 || hx >= EXP_BITS || (hy | ((ly | -ly) >>> 31)) > EXP_BITS) return (x * y) / (x * y);
+				  if (hx <= hy) {
+				    if (hx < hy || !ule(ly, lx)) return x;
+				    if (lx == ly) return 0.0 * (double) sx;
+				  }
+				  ix = ilogb(hx, lx);
+				  iy = ilogb(hy, ly);
+				  if (ix >= -1022) {
+				    hx = 0x00100000 | (0x000fffff & hx);
+				  } else {
+				    n = -1022 - ix;
+				    if (n <= 31) {
+				      hx = (hx << n) | (lx >>> (32 - n));
+				      lx = lx << n;
+				    } else {
+				      hx = lx << (n - 32);
+				      lx = 0;
+				    }
+				  }
+				  if (iy >= -1022) {
+				    hy = 0x00100000 | (0x000fffff & hy);
+				  } else {
+				    n = -1022 - iy;
+				    if (n <= 31) {
+				      hy = (hy << n) | (ly >>> (32 - n));
+				      ly = ly << n;
+				    } else {
+				      hy = ly << (n - 32);
+				      ly = 0;
+				    }
+				  }
+				  n = ix - iy;
+				  while (n != 0) {
+				    n = n - 1;
+				    hz = hx - hy;
+				    lz = lx - ly;
+				    if (!ule(ly, lx)) hz = hz - 1;
+				    if (hz < 0) {
+				      hx = hx + hx + (lx >>> 31);
+				      lx = lx + lx;
+				    } else {
+				      if ((hz | lz) == 0) return 0.0 * (double) sx;
+				      hx = hz + hz + (lz >>> 31);
+				      lx = lz + lz;
+				    }
+				  }
+				  hz = hx - hy;
+				  lz = lx - ly;
+				  if (!ule(ly, lx)) hz = hz - 1;
+				  if (hz >= 0) {
+				    hx = hz;
+				    lx = lz;
+				  }
+				  if ((hx | lx) == 0) return 0.0 * (double) sx;
+				  while (hx < 0x00100000) {
+				    hx = hx + hx + (lx >>> 31);
+				    lx = lx + lx;
+				    iy = iy - 1;
+				  }
+				  if (iy >= -1022) {
+				    hx = (hx - 0x00100000) | ((iy + 1023) << 20);
+				    x = HI_LO(hx | sx, lx);
+				  } else {
+				    n = -1022 - iy;
+				    if (n <= 20) {
+				      lx = (lx >>> n) | (hx << (32 - n));
+				      hx = hx >> n;
+				    } else if (n <= 31) {
+				      lx = (hx << (32 - n)) | (lx >>> n);
+				      hx = sx;
+				    } else {
+				      lx = hx >> (n - 32);
+				      hx = sx;
+				    }
+				    x = HI_LO(hx | sx, lx);
+				    x = x * 1.0;
+				  }
+				  return x;
+				}
+				""";
+
+		static final String ILOGB = """
+				int ilogb(int hz, int lz) {
+				  int iz, i;
+				  if (hz < 0x00100000) {
+				    if (hz == 0) {
+				      iz = -1043;
+				      i = lz;
+				    } else {
+				      iz = -1022;
+				      i = hz << 11;
+				    }
+				    while (i > 0) {
+				      iz = iz - 1;
+				      i = i << 1;
+				    }
+				  } else {
+				    iz = (hz >> 20) - 1023;
+				  }
+				  return iz;
+				}
+				""";
+
+		// 2^(e - 52) for a normal d of biased exponent e, the subnormal 2^-1074 * 2^(e -
+		// 1075
+		// + 1074) below 2^-1022, the least subnormal at a zero or subnormal d, NaN of NaN
+		// and
+		// +infinity of an infinity.
+		static final String ULP = """
+				double ulp(double d) {
+				  int e;
+				  e = (HI(d) >> 20) & 0x7ff;
+				  if (e == 0x7ff) return abs(d);
+				  if (e == 0) return 0x1.0p-1074;
+				  e = e - 1075;
+				  if (e >= -1022) return pow2(e);
+				  return scalb(0x1.0p-1074, e + 1074);
+				}
+				""";
+
+		static final String SIGNUM = """
+				double signum(double d) {
+				  if (d == 0.0 || d != d) return d;
+				  return (d < 0.0) ? -1.0 : 1.0;
+				}
+				""";
+
+		// d + 0.0 turns -0.0 into +0.0, whose next double up is the least subnormal.
+		static final String NEXT_UP = """
+				double next_up(double d) {
+				  long t;
+				  if (d < INFINITY) {
+				    t = BITS(d + 0.0);
+				    return FROM_BITS(t + ((t >= 0L) ? 1L : -1L));
+				  }
+				  return d;
+				}
+				""";
+
+		static final String NEXT_DOWN = """
+				double next_down(double d) {
+				  if (d != d || d == -INFINITY) return d;
+				  if (d == 0.0) return -0x1.0p-1074;
+				  return FROM_BITS(BITS(d) + ((d > 0.0) ? -1L : 1L));
+				}
+				""";
+
+		// Equal arguments answer the direction (nextAfter(0.0, -0.0) is -0.0); a NaN
+		// answers NaN.
+		static final String NEXT_AFTER = """
+				double next_after(double start, double direction) {
+				  if (start > direction) return next_down(start);
+				  if (start < direction) return next_up(start);
+				  if (start == direction) return direction;
+				  return start + direction;
+				}
+				""";
+
+		// StrictMath.copySign: a NaN sign reads as positive, whatever its sign bit.
+		static final String COPY_SIGN = """
+				double copy_sign(double magnitude, double sign) {
+				  if (sign != sign) sign = 1.0;
+				  return FROM_BITS((BITS(magnitude) & 0x7fffffffffffffffL) | (BITS(sign) & 0x8000000000000000L));
+				}
+				""";
+
+		static final String GET_EXPONENT = """
+				int get_exponent(double d) {
+				  return ((HI(d) >> 20) & 0x7ff) - 1023;
+				}
+				""";
+
+		// d * 2^n rounded once: the exponent, clamped where every double has saturated,
+		// multiplies its remainder by 1000 first and then whole steps of 2^+-1000. Only
+		// the
+		// step entering the subnormal range rounds; one after it takes a value below
+		// 2^-1022
+		// to the zero the exact product rounds to as well.
+		static final String SCALB = """
+				double scale(double d, double n) {
+				  int k, r;
+				  if (n > 2200.0) n = 2200.0;
+				  if (n < -2200.0) n = -2200.0;
+				  k = (int) n;
+				  r = k % 1000;
+				  d = d * pow2(r);
+				  k = k - r;
+				  while (k > 0) {
+				    d = d * 0x1.0p1000;
+				    k = k - 1000;
+				  }
+				  while (k < 0) {
+				    d = d * 0x1.0p-1000;
+				    k = k + 1000;
+				  }
+				  return d;
 				}
 				""";
 

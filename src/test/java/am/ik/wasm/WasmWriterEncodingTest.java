@@ -86,4 +86,17 @@ class WasmWriterEncodingTest {
 		assertThat(enc(w -> w.writeMemory(memories -> memories.addMemory(1)))).isNotEmpty();
 	}
 
+	@Test
+	void aMemoryLimitIsAU32() {
+		// 128 pages (8 MiB) and up take a second LEB byte; a limit written as one raw
+		// byte
+		// left 200 as 0xC8, a continuation byte the section's size did not cover.
+		assertThat(enc(w -> w.writeMemory(memories -> memories.addMemory(200)))).containsExactly(Section.MEMORY.code(),
+				4, 1, 0x00, 0xC8, 0x01);
+		assertThat(enc(w -> w.writeMemory(memories -> memories.addMemory(127)))).containsExactly(Section.MEMORY.code(),
+				3, 1, 0x00, 0x7F);
+		assertThat(enc(w -> w.writeMemory(memories -> memories.addMemory(1, 300))))
+			.containsExactly(Section.MEMORY.code(), 5, 1, 0x01, 0x01, 0xAC, 0x02);
+	}
+
 }
