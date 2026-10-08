@@ -7591,6 +7591,28 @@ cases:
       Value out of range for byte | Value out of range for short | Value out of range for float | Value out of range for float | Value out of range for float | Value out of range for float
       :refused :refused :refused :refused :refused :refused :refused :refused
       [1] [127] "Value out of range for float"
+  - name: int-and-long-are-the-oracles-range-checked-casts
+    # Oracle-identical (clj 1.12.6), messages included: a literal argument takes the cast
+    # of its own type (a double literal's "Value out of range for int: 1.0E10"), any other
+    # the object cast (longCast first, so the same double through a var is "integer
+    # overflow"). Only the class of a non-number's refusal is pinned (the texts differ).
+    source: |
+      (defn ilc [f] (try (pr-str (f)) (catch Exception e (str (cond (instance? ArithmeticException e) "AE" (instance? IllegalArgumentException e) "IAE" :else "other") " " (ex-message e)))))
+      (defn ilc-refused [f] (try (f) :no (catch Exception e :refused)))
+      (def ilc-d10 1e10) (def ilc-d19 1e19) (def ilc-l 3000000000) (def ilc-r 30000000001/2) (def ilc-inf ##-Inf) (def ilc-nan ##NaN) (def ilc-big 92233720368547758080)
+      (println (ilc #(long 1e19)) "|" (ilc #(long 9.223372036854776E18)) "|" (ilc #(long -9.223372036854776E18)) "|" (ilc #(long 92233720368547758080N)) "|" (ilc #(long ##NaN)) "|" (ilc #(long ##Inf)))
+      (println (ilc #(int 3000000000)) "|" (ilc #(int 1e10)) "|" (ilc #(int ##Inf)) "|" (ilc #(int ##NaN)) "|" (ilc #(int -2147483648.5)) "|" (ilc #(int 99999999999999999999)))
+      (println (int 2.7) (long -2.7) (int 7/2) (long -7/2) (int \a) (long \a) (int 2147483647) (int -2147483648) (long 9223372036854775807) (long -9223372036854775808) (long 1.5e18))
+      (println (ilc #(int ilc-d10)) "|" (ilc #(long ilc-d19)) "|" (ilc #(int ilc-l)) "|" (ilc #(int ilc-r)) "|" (ilc #(long ilc-inf)) "|" (ilc #(long ilc-nan)) "|" (ilc #(int ilc-big)))
+      (println (ilc #(doall (map int [1e10]))) "|" (ilc #(doall (map long [1e19]))) "|" (ilc #(apply int [3000000000])) "|" (map int [2.5 -2.5 1/2]) (map long [\b 7]) (apply long [9.5]))
+      (println (map ilc-refused [#(int nil) #(long nil) #(int "a") #(long :k) #(apply int [1 2])]))
+    expected: |
+      IAE Value out of range for long: 1.0E19 | 9223372036854775807 | -9223372036854775808 | IAE Value out of range for long: 92233720368547758080 | 0 | IAE Value out of range for long: Infinity
+      AE integer overflow | IAE Value out of range for int: 1.0E10 | IAE Value out of range for int: Infinity | 0 | IAE Value out of range for int: -2.1474836485E9 | IAE Value out of range for long: 99999999999999999999
+      2 -2 3 -3 97 97 2147483647 -2147483648 9223372036854775807 -9223372036854775808 1500000000000000000
+      AE integer overflow | IAE Value out of range for long: 1.0E19 | AE integer overflow | AE integer overflow | IAE Value out of range for long: -Infinity | 0 | IAE Value out of range for long: 92233720368547758080
+      AE integer overflow | IAE Value out of range for long: 1.0E19 | AE integer overflow | (2 -2 0) (98 7) 9
+      (:refused :refused :refused :refused :refused)
   - name: number-conversions-bigint-bigdec-rationalize-and-the-unchecked-casts
     # Oracle-identical (clj 1.12.6) in the values; the representation deviates (see
     # decimal-and-bigint-literals-are-plain-rationals), so a bigint prints through str and a

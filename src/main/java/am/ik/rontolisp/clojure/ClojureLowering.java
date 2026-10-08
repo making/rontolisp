@@ -3920,9 +3920,6 @@ public final class ClojureLowering {
 			case "class":
 				ClojureLowerUtil.isTrue(n == 1, "class takes one value");
 				return ClojureDispatchLowering.classForm(this, lower(items.get(1)));
-			case "int", "long":
-				ClojureLowerUtil.isTrue(n == 1, name + " takes one value");
-				return ClojureDispatchLowering.intForm(this, lower(items.get(1)));
 			case "spit":
 				return ClojureStringLowering.spitOf(this, items);
 			case "slurp":
@@ -4175,7 +4172,6 @@ public final class ClojureLowering {
 			case "string?" -> ClojureFnLowering.stringPredValue(this);
 			case "symbol?" -> ClojureFnLowering.symbolPredValue(this);
 			case "class" -> ClojureDispatchLowering.classValue(this);
-			case "int", "long" -> ClojureDispatchLowering.intValue(this);
 			case "spit" -> ClojureStringLowering.spitValue(this);
 			case "slurp" -> ClojureStringLowering.slurpValue(this);
 			case "line-seq" -> ClojureStringLowering.lineSeqValue(this);

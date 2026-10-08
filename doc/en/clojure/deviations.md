@@ -267,10 +267,11 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
 - The `unchecked-` arithmetic verbs wrap integers at 64 bits (`-int` verbs at 32) and the casts
   `short`, `byte`, `char` and `float` match the oracle, with one deviation: an integer past 64
   bits is a plain integer here, so the oracle's unwrapped bigint operand
-  (`(unchecked-add 9223372036854775807N 1)`) wraps too. `int` and `long` truncate without the
-  oracle's range checks (`(long 1e19)` is `10000000000000000000`, where the oracle throws an
-  `IllegalArgumentException`, and `(long ##NaN)` signals, where the oracle answers `0`), and
-  `double` of a ratio is its nearest double (`(double 2/3)` is `0.6666666666666666`), where the
+  (`(unchecked-add 9223372036854775807N 1)`) wraps too. `int` and `long` are the oracle's casts,
+  range checks and messages included. A literal argument takes the cast of its own type, any
+  other the object cast: a double the oracle's compiler types as a primitive (a `let` local
+  bound to a double literal, `(* 2.0 x)`) refuses with `Value out of range for int: 2.0E10`
+  there and `integer overflow` here. `double` of a ratio is its nearest double (`(double 2/3)` is `0.6666666666666666`), where the
   oracle rounds it to 16 significant digits first (`0.6666666666666667`). `inc`, `dec` and the
   checked verbs never overflow (integers are bignums).
 - `bigint` and `biginteger` answer a plain integer, and `bigdec` a plain rational (`(bigdec "1.5")`
@@ -303,8 +304,7 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   `(0 0)` and `(-1 0)`, where the oracle compares it with the core functions. `compare`
   orders strings by code point (the oracle by UTF-16 unit, which differs past U+FFFF).
 - `float` answers a double, so `(float 1/3)` is `0.3333333333333333` (the oracle's Float prints
-  `0.33333334`); a value past the float range still signals. `int` and `long` truncate and do not
-  refuse a value out of range (the oracle: `integer overflow`, `Value out of range for long: ...`).
+  `0.33333334`); a value past the float range still signals.
 - `mod` and `rem` of a NaN or infinite dividend throw an `ArithmeticException` (the oracle: a
   `NumberFormatException`).
 - `vector-of` answers an ordinary vector: a later `conj` or `assoc` stores its value as

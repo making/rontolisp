@@ -397,27 +397,6 @@ final class ClojureDispatchLowering {
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(one), classForm(ctx, one));
 	}
 
-	/**
-	 * {@code int}/{@code long} over an already-lowered value: a character reads back
-	 * through {@code char-code} (round-tripping {@code char}), anything else truncates,
-	 * like the oracle.
-	 */
-	static LispVal intForm(ClojureLowering ctx, LispVal lowered) {
-		LispSymbol one = ctx.freshTemp();
-		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
-				ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(one, lowered))),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("characterp"), one),
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("char-code"), one),
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("truncate"), one)));
-	}
-
-	/** {@code int}/{@code long} as a value: truncation, like the call. */
-	static LispVal intValue(ClojureLowering ctx) {
-		LispSymbol one = new LispSymbol(ClojureLowering.mangle("int-one"));
-		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(one), intForm(ctx, one));
-	}
-
 	// IO entry points: spit/slurp/line-seq over the eval IO layer (plus the
 	// clojure.java.io/reader constructor and the line-seq reader arity)
 

@@ -7250,9 +7250,9 @@
 
 ;;;; The oracle's long and int casts, and clojure.math's round and long arithmetic.
 ;;
-;; The two casts are the oracle's RT.longCast and RT.intCast of an object: what a
-;; ^long parameter and (int x) apply, and what vector-of stores an integer kind
-;; through. The double functions of clojure.math are one (%strict-math :name ...)
+;; The two casts are the oracle's RT.longCast and RT.intCast of an object: what
+;; (long x), (int x), a ^long parameter apply, and what vector-of stores an integer
+;; kind through. The double functions of clojure.math are one (%strict-math :name ...)
 ;; each, over arguments cast by %clojure-double, lowered in place by the
 ;; rontolisp.internal.math kernels (ClojureKernelLowering); the functions below are
 ;; the kernels that are workers.
@@ -7261,33 +7261,53 @@
   "X as the oracle's longCast takes an object: an integer in the long range, a
    ratio truncated toward zero, a double truncated (NaN is 0, 2^63 itself the
    largest long, as Java's (long) saturates, one past it refused), a
-   character's code; anything else signals, so does a value out of range."
+   character's code; anything else signals, so does a value out of range. The
+   refusal spells the value as the oracle's toString through princ, not the str
+   runtime."
   (let ((n
-         (cond ((characterp x) (char-code x))
-               ((integerp x) x)
+         (cond ((integerp x) x)
+               ((characterp x) (char-code x))
                ((floatp x)
-                (cond ((/= x x) 0)
-                      ((or (> x 9.223372036854775807e18)
-                           (< x -9.223372036854775808e18))
-                       nil)
-                      ((>= x 9.223372036854775807e18) 9223372036854775807)
-                      (t (truncate x))))
+                ;; one float comparison on the common path: a generic one costs
+                ;; more than the truncation on wasm
+                (cond ((< (abs x) 9.223372036854775807e18) (truncate x))
+                      ((/= x x) 0)
+                      ((= x 9.223372036854775807e18) 9223372036854775807)
+                      ((= x -9.223372036854775808e18) -9223372036854775808)
+                      (t nil)))
                ((numberp x) (truncate x))
                (t (rontolisp::%clojure-class-cast-exception-of
                    "long needs a number or a character" x)))))
     (if (or (null n) (> n 9223372036854775807) (< n -9223372036854775808))
         (rontolisp::%clojure-illegal-argument-exception
          (concatenate 'string "Value out of range for long: "
-          (rontolisp::%clojure-str-of (if (null n) x n) "null" nil)))
+                      (cond (n (princ-to-string n))
+                            ;; Double.toString: Infinity, 1.0E19
+                            ((rontolisp::%clojure-symbolic-float-p x)
+                             (princ-to-string x))
+                            (t (string-upcase (princ-to-string x))))))
         n)))
 
 (defun rontolisp::%clojure-int-cast (x)
   "X as the oracle's intCast takes an object: its longCast, refused past the
-   int range as the oracle's integer overflow."
-  (let ((n (rontolisp::%clojure-long-cast x)))
-    (if (or (< n -2147483648) (> n 2147483647))
-        (rontolisp::%clojure-arithmetic-exception "integer overflow")
-        n)))
+   int range as the oracle's integer overflow. An integer in the int range
+   answers itself without the longCast call."
+  (if (and (integerp x) (>= x -2147483648) (<= x 2147483647))
+      x
+      (let ((n (rontolisp::%clojure-long-cast x)))
+        (if (or (< n -2147483648) (> n 2147483647))
+            (rontolisp::%clojure-arithmetic-exception "integer overflow")
+            n))))
+
+(defun rontolisp::%clojure-long-v (&rest args)
+  "long as a value."
+  (rontolisp::%clojure-check-arity args 1 1 "long")
+  (rontolisp::%clojure-long-cast (car args)))
+
+(defun rontolisp::%clojure-int-v (&rest args)
+  "int as a value."
+  (rontolisp::%clojure-check-arity args 1 1 "int")
+  (rontolisp::%clojure-int-cast (car args)))
 
 (defun rontolisp::%clojure-math-round (a)
   "(clojure.math/round a): the long nearest the double of A, a tie rounding up
