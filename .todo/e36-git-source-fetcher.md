@@ -2,8 +2,8 @@
 
 Difficulty: Medium
 
-Needed by `deps.edn` `:git/url` coordinates (`e39`). Builds on `e33` (cache root, atomic
-install). Nothing in `src/main/java` starts a subprocess today (no `ProcessBuilder`).
+Needed by `deps.edn` `:git/url` coordinates (`e39`). Builds on `am.ik.artifact`
+(`ArtifactCache` root, `AtomicInstall`; `.kb/dists.md`). Nothing in `src/main/java` starts a subprocess today (no `ProcessBuilder`).
 
 ## Scope
 

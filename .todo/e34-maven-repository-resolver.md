@@ -4,7 +4,7 @@ Difficulty: High
 
 Needed by `deps.edn` `:mvn/version` coordinates (`e39`) and by Java libraries for CL programs
 (`e35`). Nothing in the tree reads a POM or a Maven repository; `--emit-pom` only writes one
-(`.kb/jvm-export.md`). Builds on `e33`.
+(`.kb/jvm-export.md`). Builds on `am.ik.artifact` (`.kb/dists.md`).
 
 ## Scope
 

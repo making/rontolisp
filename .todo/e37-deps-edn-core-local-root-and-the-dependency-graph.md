@@ -11,7 +11,7 @@ silently. This item builds the offline core; network coordinates are `e39`, alia
 1. Parse the whole `deps.edn` (`:paths`, `:deps`, `:aliases`, `:mvn/repos`,
    `:mvn/local-repo`); an unknown key or coordinate type is refused by name, never ignored.
 2. `:local/root` to a directory: its own `deps.edn` read recursively (`:paths` relative to
-   it); to a jar: extracted through `e33`.
+   it); to a jar: extracted through `am.ik.artifact.Archives.extractZip`.
 3. Graph and selection with tools.deps' rules: top-level deps win, otherwise newest version
    across the tree, `:exclusions`, cycle tolerance; deterministic order
    (`.kb/emitted-output-determinism.md`).

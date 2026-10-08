@@ -91,7 +91,10 @@ CL-USER> (split-sequence:split-sequence #\, "a,b,c")
 ダウンロードは Quicklisp の dist メタデータ (依存解決の `systems.txt`、tarball URL の
 `releases.txt`) に基づきます。各リリースは展開され `~/.rontolisp/quicklisp/` 以下に
 キャッシュされる (`RONTOLISP_QUICKLISP_HOME` で変更可能) ため、2 回目以降の
-`quickload` はネットワーク I/O を行いません。ダウンロードはインタプリタ実行時または
+`quickload` はネットワーク I/O を行いません。各 tarball は展開前に `releases.txt`
+の行が示すサイズと MD5 で検査され、一致しなければ `quickload` は失敗し、何も
+キャッシュされません。60 秒間データを送ってこないサーバーに対しては、待ち続けずに
+ダウンロードを失敗させます。ダウンロードはインタプリタ実行時または
 コンパイル時に (Java 側で) 行われ、コンパイル済みプログラムはソースを内包していて
 実行時にはフェッチしないので、`ql:quickload` は 4 バックエンドすべてで動作します。
 ロード自体は `asdf` サブセットを経由するため、同じ制約が当てはまります — ダウンロード

@@ -1073,9 +1073,9 @@ public final class LispEvaluator {
 	 * Installs the dist downloader used by {@code ql:quickload} and
 	 * {@code ql-dist:install-dist}. The CLI passes one carrying the {@code --dist} /
 	 * {@code RONTOLISP_DISTS} dists; a test injects one with an in-memory
-	 * {@link DistClient.Downloader} and a temporary cache directory. Left {@code null}
-	 * otherwise, where the default client ({@link DistClient#createDefault}) is created
-	 * on first use.
+	 * {@link am.ik.artifact.Downloader} and a temporary cache directory. Left
+	 * {@code null} otherwise, where the default client ({@link DistClient#createDefault})
+	 * is created on first use.
 	 * @param client the dist client
 	 */
 	public void setDistClient(DistClient client) {

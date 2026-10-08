@@ -468,7 +468,7 @@ class LoadInlinerTest {
 	private static DistClient quicklispClient(Path home, String componentBody) {
 		return new DistClient(home, DistTestSupport.dist(//
 				"mylib mylib mylib\n", //
-				"mylib " + QL_MYLIB_URL + " 100 md5 sha1 mylib-1.0 mylib\n", //
+				"mylib " + QL_MYLIB_URL + " {sums} mylib-1.0 mylib\n", //
 				Map.of(QL_MYLIB_URL, DistTestSupport.tarGz(Map.of(//
 						"mylib-1.0/mylib.asd", "(defsystem \"mylib\" :components ((:file \"mylib\")))", //
 						"mylib-1.0/mylib.lisp", componentBody)))));
@@ -485,7 +485,7 @@ class LoadInlinerTest {
 				DistTestSupport.quicklisp("", "", Map.of()), //
 				DistTestSupport.ultralisp(//
 						"fresh fresh fresh\n", //
-						"fresh " + UL_FRESH_URL + " 100 md5 sha1 fresh-1.0 fresh\n", //
+						"fresh " + UL_FRESH_URL + " {sums} fresh-1.0 fresh\n", //
 						Map.of(UL_FRESH_URL, DistTestSupport.tarGz(Map.of(//
 								"fresh-1.0/fresh.asd", "(defsystem \"fresh\" :components ((:file \"fresh\")))", //
 								"fresh-1.0/fresh.lisp", "(defun fresh-answer () 42)"))))));

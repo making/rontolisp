@@ -42,7 +42,7 @@ Format, not vendor: distinfo (`name:`, `system-index-url:`, `release-index-url:`
 
 - **Installs are atomic, because existence IS the "installed" mark** (`ensureProject`
   reuses any `software/<prefix>/` directory): a tarball extracts into a private
-  `software/.extracting-*` staging dir and the finished prefix dir is RENAMED into place;
+  `software/.staging-*` dir and the finished prefix dir is RENAMED into place;
   a failed or crashed extraction leaves no `<prefix>/` (a stale staging dir at worst,
   ignored), and losing the rename to another installer means using the winner's tree. The
   indexes are written temp + `ATOMIC_MOVE`, `releases.txt` before `systems.txt`. Before
@@ -52,17 +52,42 @@ Format, not vendor: distinfo (`name:`, `system-index-url:`, `release-index-url:`
   `aReleaseAnotherInstallerFinishedFirstIsUsedAsItIs`. A partial tree written by an older
   build is not detected; delete it by hand.
 
+## The shared artifact layer (`am.ik.artifact`)
+Language-independent (no rontolisp import, `PackageCycleTest`); DistClient is its first
+consumer, the Maven resolver and the git fetcher build on it. `ArtifactCache` (root =
+`RONTOLISP_DIST_HOME` / `~/.rontolisp`, read only in `createDefault`; `area(name)` per
+consumer; `download(url, size, Checksum...)`), `HttpDownloader`, `Checksum`, `Archives`
+(tar.gz incl. GNU `L` and PAX `path`; zip; `safeResolve`), `AtomicInstall`
+(`installDirectory` via `.staging-*` + rename, `writeFile`). Layer messages name no
+caller; DistClient prefixes `ql:quickload:` (`quickloadStep`).
+- **Verification: size + `file-md5`, never the `sha1` column.** Measured 2026-10-08: on
+  Quicklisp (alexandria, split-sequence) and Ultralisp (4 releases) the archive's size
+  and MD5 match the index; the archive's SHA-1 never does. Quicklisp's `content-sha1` is
+  the SHA-1 of every regular file's bytes concatenated in sorted path order; Ultralisp's
+  matches neither that nor a name+content variant. Checked before extraction, so a
+  refused download installs nothing (`DistClientTest.aTruncatedDownload...`,
+  `anArchiveWhoseBytesDoNotMatchTheIndexedMd5...`, `...IndexedMd5IsMalformed...`).
+- **Timeouts**: connect 30 s, IDLE 60 s (no byte, headers or body; a slow large body is
+  fine) -- `sendAsync` + a counting body subscriber, cancelled on a silent slice
+  (`HttpDownloaderTest`).
+- **zip**: refused without an end-of-central-directory record -- `ZipInputStream` reads a
+  zip cut at an entry boundary as a complete shorter one (`ArchivesTest`).
+
 ## Compile path and browser
 - `LoadInliner.distDirective` matches a literal top-level `ql-dist:install-dist` /
   `ql:update-dist`, applies it to `ctx.dists()` WHILE SPLICING (dists must be configured
   before the `quickload` forms below them) and consumes the form. Computed argument =
   hard error; NESTED occurrences rejected by both compilers in the same `case` as
   `REQUIRE`/`PROVIDE`/`ASDF_DEFSYSTEM`.
-- `Target_DistClient` (web profile) substitutes `createDefault`; downloads raise "not
-  available in the browser playground", so the failure lands on the `quickload`.
+- Web profile: `Target_HttpDownloader` substitutes `get` (the only path to `HttpClient`)
+  and refuses every download; the consumer's prefix makes it land on its own call site
+  (`ql:quickload: downloading ... is not available in the browser playground`).
+  `Target_Checksum` keeps the JCA `MessageDigest` lookup out of the image (why
+  `Checksum` validates digest length from a table, not `MessageDigest`).
 
 ## Tests and docs
-`DistClientTest`, `LispEvaluatorQuicklispTest`,
+`DistClientTest` (fixtures write `{sums}`, filled by `DistTestSupport` with the served
+tarball's size and MD5), `LispEvaluatorQuicklispTest`,
 `LoadInlinerTest.installDistIsConsumedAtCompileTimeAndTheQuickloadBelowItUsesTheDist`,
 `RontoLispCliTest.distSpecsReadTheOptionThenTheEnvironment`. **No automated E2E hits the
 real network**; the four-backend Ultralisp check is manual. Docs:

@@ -70,13 +70,14 @@ class PackageCycleTest {
 		Map<String, Set<String>> graph = packageGraph();
 		assertThat(graph).hasSizeGreaterThan(10);
 		assertThat(graph.getOrDefault("am.ik.rontolisp.eval", Set.of())).contains("am.ik.rontolisp.macro",
-				"am.ik.rontolisp.reader", "am.ik.gpu", "am.ik.objc", "am.ik.ffi");
+				"am.ik.rontolisp.reader", "am.ik.gpu", "am.ik.objc", "am.ik.ffi", "am.ik.artifact");
 		// The JVM backend embeds both libraries (the bridge templates are written
 		// against them and type-checked by javac).
 		assertThat(graph.getOrDefault("am.ik.rontolisp.codegen.jvm", Set.of())).contains("am.ik.gpu", "am.ik.objc");
 		// The language-independent libraries import no project package.
 		assertThat(graph.getOrDefault("am.ik.objc", Set.of())).isEmpty();
 		assertThat(graph.getOrDefault("am.ik.ffi", Set.of())).isEmpty();
+		assertThat(graph.getOrDefault("am.ik.artifact", Set.of())).isEmpty();
 		assertThat(graph.getOrDefault("am.ik.rontolisp.reader", Set.of())).doesNotContain("am.ik.rontolisp.eval");
 		// The Scheme front end produces core forms and nothing else: it sees the AST
 		// types and the reader, and is reached only through eval's source-language seam.
