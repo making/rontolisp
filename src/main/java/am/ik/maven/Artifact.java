@@ -22,7 +22,9 @@ public record Artifact(String groupId, String artifactId, String version, String
 	private static final Pattern COORDINATES = Pattern.compile("([^: ]+):([^: ]+)(:([^: ]*)(:([^: ]+))?)?:([^: ]+)");
 
 	/** A snapshot deployed under a timestamp ({@code 1.0-20240101.123456-1}). */
-	private static final Pattern TIMESTAMPED_SNAPSHOT = Pattern.compile("^(.*-)?(\\d{8}\\.\\d{6})-(\\d+)$");
+	private static final Pattern TIMESTAMPED_SNAPSHOT = Pattern.compile("^(.*-)?([0-9]{8}\\.[0-9]{6}-[0-9]+)$");
+
+	private static final String SNAPSHOT = "SNAPSHOT";
 
 	/**
 	 * Validates that no part is {@code null}.
@@ -80,13 +82,15 @@ public record Artifact(String groupId, String artifactId, String version, String
 
 	/**
 	 * Returns the path of this artifact in the Maven 2 repository layout, relative to the
-	 * repository root: {@code org/example/lib/1.0/lib-1.0-sources.jar}.
+	 * repository root: {@code org/example/lib/1.0/lib-1.0-sources.jar}. A timestamped
+	 * snapshot is in its base version's directory
+	 * ({@code lib/1.0-SNAPSHOT/lib-1.0-20240101.123456-1.jar}).
 	 * @return the relative path, {@code /}-separated
 	 */
 	public String path() {
 		StringBuilder path = new StringBuilder(128);
 		path.append(this.groupId.replace('.', '/')).append('/');
-		path.append(this.artifactId).append('/').append(this.version).append('/');
+		path.append(this.artifactId).append('/').append(baseVersion()).append('/');
 		path.append(this.artifactId).append('-').append(this.version);
 		if (!this.classifier.isEmpty()) {
 			path.append('-').append(this.classifier);
@@ -105,27 +109,38 @@ public record Artifact(String groupId, String artifactId, String version, String
 	}
 
 	/**
-	 * Answers why the version cannot be resolved here: it needs
-	 * {@code maven-metadata.xml}, which this resolver does not read -- a
-	 * {@code -SNAPSHOT} or timestamped snapshot, a version range, or the
-	 * {@code LATEST}/{@code RELEASE} meta versions.
-	 * @return the reason, or {@code null} for a plain release version
+	 * Whether the version is a snapshot: {@code -SNAPSHOT}, or one deployed under a
+	 * timestamp ({@code 1.0-20240101.123456-1}).
+	 * @return whether it is a snapshot
 	 */
-	public @Nullable String unsupportedVersion() {
-		return unsupportedVersion(this.version);
+	public boolean isSnapshot() {
+		return this.version.endsWith(SNAPSHOT) || TIMESTAMPED_SNAPSHOT.matcher(this.version).matches();
 	}
 
-	static @Nullable String unsupportedVersion(String version) {
-		if (version.startsWith("[") || version.startsWith("(")) {
-			return "version ranges are not supported (resolving one needs maven-metadata.xml)";
+	/**
+	 * Returns the version a snapshot is deployed under -- {@code 1.0-SNAPSHOT} for
+	 * {@code 1.0-20240101.123456-1} -- and any other version itself. It names the
+	 * directory the artifact's files are in.
+	 * @return the base version
+	 */
+	public String baseVersion() {
+		if (VersionConstraint.isRange(this.version)) {
+			return this.version;
 		}
-		if (version.endsWith("SNAPSHOT") || TIMESTAMPED_SNAPSHOT.matcher(version).matches()) {
-			return "SNAPSHOT versions are not supported (resolving one needs maven-metadata.xml)";
+		Matcher m = TIMESTAMPED_SNAPSHOT.matcher(this.version);
+		if (!m.matches()) {
+			return this.version;
 		}
-		if (version.equals("LATEST") || version.equals("RELEASE")) {
-			return "the LATEST and RELEASE meta versions are not supported (resolving one needs maven-metadata.xml)";
-		}
-		return null;
+		return m.group(1) == null ? SNAPSHOT : m.group(1) + SNAPSHOT;
+	}
+
+	/**
+	 * Whether the version is a range ({@code [1.0,2.0)}, {@code (,1.0]}, ...), which
+	 * names no single artifact.
+	 * @return whether it is a range
+	 */
+	public boolean isVersionRange() {
+		return VersionConstraint.isRange(this.version);
 	}
 
 	/**

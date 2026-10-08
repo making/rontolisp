@@ -2,8 +2,9 @@
 
 `(reader-conditional? x)`
 
-`clojure.core/reader-conditional?`: どの値にも `false` を返します。リーダー条件式は選ばれた分岐として読まれ、それを値として組む `{:read-cond :preserve}` は拒否されるため、リーダー条件式の値はありません。引数は評価されます。値としては1引数の関数です。
+`clojure.core/reader-conditional?`: `x` が [reader-conditional](reader-conditional.md) かどうかを返します。これを作るのは `{:read-cond :preserve}` とコンストラクタだけです（ソース中や `:allow` の下のリーダ条件は選ばれた分岐として読まれます）。値としては1引数の関数です。
 
 ```clojure
+(println (reader-conditional? (read-string {:read-cond :preserve} "#?(:clj 1)")))  ; true
 (println (reader-conditional? '(1)))  ; false
 ```

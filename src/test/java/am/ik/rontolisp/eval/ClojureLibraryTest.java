@@ -89,6 +89,27 @@ class ClojureLibraryTest {
 	}
 
 	@Test
+	void aProgramReadingWithoutOptionsSplicesTheReaderWithoutItsPreserveClauses() {
+		// only a read that may take {:read-cond :preserve} and the two constructors make
+		// a reader conditional or tagged literal: a plain read-string compiles the
+		// preserve clauses, the printer's arm and the predicates' tests away
+		List<LispVal> plain = ClojureLibrary
+			.process(Clojure.read("(prn (read-string \"[1]\") (reader-conditional? 1) (= [1] [1]))", null));
+		for (String reader : List.of("RONTOLISP::%CLOJURE-RD-CONDITIONAL", "RONTOLISP::%CLOJURE-RD-RECORD",
+				"RONTOLISP::%CLOJURE-WRITE", "RONTOLISP::%CLOJURE-EQUAL")) {
+			assertThat(defun(plain, reader)).as(reader)
+				.doesNotContain("%CLOJURE-RD-PRESERV")
+				.doesNotContain("%CLOJURE-READER-VALUE");
+		}
+		assertThat(plain.get(plain.size() - 1).print()).doesNotContain("%CLOJURE-IS-READER-CONDITIONAL");
+		List<LispVal> preserving = ClojureLibrary
+			.process(Clojure.read("(prn (read-string {:read-cond :preserve} \"#?(:clj 1)\"))", null));
+		assertThat(defun(preserving, "RONTOLISP::%CLOJURE-RD-CONDITIONAL"))
+			.contains("(RONTOLISP::%CLOJURE-RD-PRESERVE-P MODE)");
+		assertThat(defun(preserving, "RONTOLISP::%CLOJURE-WRITE")).contains("%CLOJURE-READER-VALUE-P");
+	}
+
+	@Test
 	void vecRefusesANonCollectionAsRuntimeExceptionOnlyWhereAClassIsRead() {
 		// the oracle's vec casts to an array before it seqs: the argument check is the
 		// refusal family's view, so a program reading no class compiles the bare coercion
@@ -246,9 +267,9 @@ class ClojureLibraryTest {
 		// map's fixed key names and a method or scheme, HTTP tokens that admit no slash;
 		// the HTTP client its options' and response map's fixed key names
 		Set<String> slashless = Set.of("RONTOLISP::%CLOJURE-EXCEPTION-CLASS", "RONTOLISP::%CLOJURE-CLASS-KEYWORDS",
-				"RONTOLISP::%CLOJURE-HOST-CLASS-KEYS", "RONTOLISP::%CLOJURE-NS-NAME",
-				"RONTOLISP::%CLOJURE-RING-KEYWORD", "RONTOLISP::%CLOJURE-RING-MAP", "RONTOLISP::%CLOJURE-RING-OPTION",
-				"RONTOLISP::%CLOJURE-HTTP-ASSOC", "RONTOLISP::%CLOJURE-HTTP-OPTION");
+				"RONTOLISP::%CLOJURE-READER-VALUE-CLASS", "RONTOLISP::%CLOJURE-HOST-CLASS-KEYS",
+				"RONTOLISP::%CLOJURE-NS-NAME", "RONTOLISP::%CLOJURE-RING-KEYWORD", "RONTOLISP::%CLOJURE-RING-MAP",
+				"RONTOLISP::%CLOJURE-RING-OPTION", "RONTOLISP::%CLOJURE-HTTP-ASSOC", "RONTOLISP::%CLOJURE-HTTP-OPTION");
 		builders.removeAll(slashless);
 		boolean grew = true;
 		while (grew) {

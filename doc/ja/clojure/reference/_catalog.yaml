@@ -488,6 +488,8 @@ categories:
       - { slug: reader, name: "clojure.java.io/reader" }
       - { slug: read-string, name: "read-string" }
       - { slug: read, name: "read" }
+      - { slug: reader-conditional, name: "reader-conditional" }
+      - { slug: tagged-literal, name: "tagged-literal" }
       - { slug: format, name: "format" }
       - { slug: with-open, name: "with-open" }
       - { slug: with-out-str, name: "with-out-str" }

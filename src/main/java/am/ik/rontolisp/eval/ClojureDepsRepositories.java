@@ -86,14 +86,33 @@ public final class ClojureDepsRepositories implements ClojureRepositories {
 		return new Builder();
 	}
 
+	/**
+	 * The oracle's {@code canonicalize :mvn}: {@code RELEASE} and {@code LATEST} through
+	 * Maven's version resolver, a range to the highest version Maven's version range
+	 * resolver admits ({@code Unable to resolve LIB version: RANGE} when none), any other
+	 * version itself.
+	 */
 	@Override
 	public String mavenVersion(MavenSource source, MavenArtifact artifact) {
 		Artifact named = artifactOf(artifact);
-		String unsupported = named.unsupportedVersion();
-		if (unsupported != null) {
-			throw new FetchFailure(named + ": " + unsupported);
+		try {
+			if (named.isVersionRange()) {
+				List<String> versions = resolver(source).versions(named);
+				if (versions.isEmpty()) {
+					throw new FetchFailure("Unable to resolve " + named.groupId() + "/" + named.artifactId()
+							+ (named.classifier().isEmpty() ? "" : "$" + named.classifier()) + " version: "
+							+ named.version());
+				}
+				return versions.get(versions.size() - 1);
+			}
+			if (named.version().equals("RELEASE") || named.version().equals("LATEST")) {
+				return resolver(source).version(named);
+			}
+			return named.version();
 		}
-		return named.version();
+		catch (MavenResolutionException ex) {
+			throw new FetchFailure(String.valueOf(ex.getMessage()));
+		}
 	}
 
 	@Override

@@ -683,6 +683,10 @@
         ((rontolisp::%clojure-keyword-p x)
          (write-char #\: stream)
          (write-string (car (cdr x)) stream))
+        ;; no collection and no metadata: ahead of the flags' arms
+        ((rontolisp::%clojure-reader-value-p x)
+         (rontolisp::%clojure-write-reader-value x nil-replacement readable
+                                                 stream labels))
         ((rontolisp::%clojure-print-meta-p x readable stream labels))
         ((rontolisp::%clojure-print-deep-p x) (write-char #\# stream))
         ((rontolisp::%clojure-lazy-p x)
@@ -864,6 +868,8 @@
                ((rontolisp::%clojure-unbound-p x)
                 (concatenate 'string "Unbound: #'" (car (cdr x))))
                ((rontolisp::%clojure-ns-object-p x) (car (cdr x)))
+               ((rontolisp::%clojure-reader-value-p x)
+                (rontolisp::%clojure-reader-value-string x))
                (t (or (rontolisp::%clojure-host-string x)
                       (rontolisp::%clojure-str-of x "nil" t)))))
         ((rontolisp::%clojure-re-pattern-p x)
@@ -2028,6 +2034,8 @@
          (= a b))
         ((or (rontolisp::%clojure-sorted-p a) (rontolisp::%clojure-sorted-p b))
          (rontolisp::%clojure-sorted-equal a b))
+        ((rontolisp::%clojure-reader-value-p a)
+         (rontolisp::%clojure-reader-value-equal a b))
         ;; equal hands a host object no collection, so a host collection and a
         ;; Clojure one reach the host-object family's arm
         (t (or (equal a b) (rontolisp::%clojure-host-equal-p a b)))))
@@ -2337,7 +2345,8 @@
            (cond ((eq h :C%KEYWORD) nil)
                  ((keywordp h)
                   (or (eq h :C%SET) (eq h :C%LAZY) (eq h :C%RECORD)
-                      (rontolisp::%clojure-sorted-p k)))
+                      (rontolisp::%clojure-sorted-p k)
+                      (rontolisp::%clojure-reader-value-p k)))
                  (t t))))
         ((vectorp k) (not (stringp k)))
         (t (hash-table-p k))))
@@ -2402,6 +2411,8 @@
                              1048575))
                (setq s (rontolisp::%clojure-seq (cdr s))))))
           ((rontolisp::%clojure-sorted-p x) (rontolisp::%clojure-sorted-hash x))
+          ((rontolisp::%clojure-reader-value-p x)
+           (rontolisp::%clojure-reader-value-hash x))
           (t 0)))
         ((characterp x) (char-code x))
         ((symbolp x) (rontolisp::%clojure-hash-string (symbol-name x)))
@@ -2645,6 +2656,8 @@
         ((hash-table-p coll) (gethash k coll dflt))
         ((rontolisp::%clojure-sorted-p coll)
          (rontolisp::%clojure-sorted-get coll k dflt))
+        ((rontolisp::%clojure-reader-value-p coll)
+         (rontolisp::%clojure-reader-value-get coll k dflt))
         (t dflt)))
 
 ;;;; Lazy seqs: memoized-thunk wrappers over the strict seq view.
@@ -8419,6 +8432,10 @@
   0
   "The last number a generated #(...) parameter took in the datum being read.")
 
+;; :C%PRESERVE reads a reader conditional as a value (%clojure-rd-preserved),
+;; and :C%PRESERVING is the mode inside one. The docstring below predates them
+;; and stays byte for byte: the JVM backend emits a docstring into the class of
+;; every program splicing the definition.
 (defvar rontolisp::%clojure-rd-cond
   nil
   "How the read takes a reader conditional, from its options map: NIL refuses
@@ -9233,6 +9250,8 @@
      (t (rontolisp::%clojure-runtime-exception
          (concatenate 'string "unsupported reader form #" (string c)))))))
 
+;; Under :preserve the whole list reads into a reader conditional
+;; (%clojure-rd-preserved).
 (defun rontolisp::%clojure-rd-conditional (rd)
   "#?(...) or #?@(...), the #? consumed: the oracle's readCondDelimited. The
    features and the taken branch read as ever; after a feature not taken, and
@@ -9245,9 +9264,6 @@
         (splicing nil))
     (if (null mode)
         (rontolisp::%clojure-runtime-exception "Conditional read not allowed"))
-    (if (eq mode :C%PRESERVE)
-        (error "~A"
-               "read-cond :preserve is not supported: no reader-conditional or tagged-literal value exists here"))
     (if (eql c #\@)
         (progn
           (setq splicing t)
@@ -9259,38 +9275,180 @@
         (rontolisp::%clojure-runtime-exception "EOF while reading character"))
     (if (not (char= c #\())
         (rontolisp::%clojure-runtime-exception "read-cond body must be a list"))
-    (let ((top (null rontolisp::%clojure-rd-pending)))
-      (let ((rontolisp::%clojure-rd-pending
-             (or rontolisp::%clojure-rd-pending (list :C%PENDING)))
-            (result :C%READ-SKIP)
-            (done nil))
-        (do ()
-            (done)
-          (if (eq result :C%READ-SKIP)
-              (let ((feature (rontolisp::%clojure-rd-item rd #\))))
-                (cond ((eq feature :C%READ-END) (setq done t))
-                      ((rontolisp::%clojure-rd-feature-p feature (cdr mode))
-                       (setq result (rontolisp::%clojure-rd-item rd #\)))
-                       (if (eq result :C%READ-END)
-                           (rontolisp::%clojure-runtime-exception
-                            "read-cond requires an even number of forms.")))
-                      (t (setq done (rontolisp::%clojure-rd-suppressed rd)))))
-              (setq done (rontolisp::%clojure-rd-suppressed rd))))
-        (cond ((or (eq result :C%READ-SKIP) (not splicing)) result)
-              ((not
-                (or (and (listp result) (not (keywordp (car result))))
-                    (and (vectorp result) (not (stringp result)))))
-               ;; a wrapper (:C%SET ...), (:C%KEYWORD ...) is no list read
-               (rontolisp::%clojure-runtime-exception
-                "Spliced form list in read-cond-splicing must implement java.util.List"))
-              (top
-               (rontolisp::%clojure-runtime-exception
-                "Reader conditional splicing not allowed at the top level."))
-              (t
-               (rplacd rontolisp::%clojure-rd-pending
-                       (append (coerce result 'list)
-                               (cdr rontolisp::%clojure-rd-pending)))
-               :C%READ-SKIP))))))
+    (if (rontolisp::%clojure-rd-preserve-p mode)
+        (rontolisp::%clojure-rd-preserved rd splicing)
+        (let ((top (null rontolisp::%clojure-rd-pending)))
+          (let ((rontolisp::%clojure-rd-pending
+                 (or rontolisp::%clojure-rd-pending (list :C%PENDING)))
+                (result :C%READ-SKIP)
+                (done nil))
+            (do ()
+                (done)
+              (if (eq result :C%READ-SKIP)
+                  (let ((feature (rontolisp::%clojure-rd-item rd #\))))
+                    (cond ((eq feature :C%READ-END) (setq done t))
+                     ((rontolisp::%clojure-rd-feature-p feature (cdr mode))
+                      (setq result (rontolisp::%clojure-rd-item rd #\)))
+                      (if (eq result :C%READ-END)
+                          (rontolisp::%clojure-runtime-exception
+                           "read-cond requires an even number of forms.")))
+                     (t (setq done (rontolisp::%clojure-rd-suppressed rd)))))
+                  (setq done (rontolisp::%clojure-rd-suppressed rd))))
+            (cond ((or (eq result :C%READ-SKIP) (not splicing)) result)
+             ((not
+               (or (and (listp result) (not (keywordp (car result))))
+                   (and (vectorp result) (not (stringp result)))))
+              ;; a wrapper (:C%SET ...), (:C%KEYWORD ...) is no list read
+              (rontolisp::%clojure-runtime-exception
+               "Spliced form list in read-cond-splicing must implement java.util.List"))
+             (top (rontolisp::%clojure-runtime-exception
+                   "Reader conditional splicing not allowed at the top level."))
+             (t
+              (rplacd rontolisp::%clojure-rd-pending
+                      (append (coerce result 'list)
+                              (cdr rontolisp::%clojure-rd-pending)))
+              :C%READ-SKIP)))))))
+
+(defun rontolisp::%clojure-rd-preserve-p (mode)
+  "Whether the read MODE (%clojure-rd-cond) preserves a reader conditional: a
+   read under {:read-cond :preserve}, inside one or not."
+  (or (eq mode :C%PRESERVE) (eq mode :C%PRESERVING)))
+
+(defun rontolisp::%clojure-rd-preserving-p ()
+  "Whether the datum being read is inside a preserved reader conditional,
+   where a tagged literal reads as one (the oracle's READ_COND_ENV)."
+  (eq rontolisp::%clojure-rd-cond :C%PRESERVING))
+
+(defun rontolisp::%clojure-rd-preserved (rd splicing)
+  "#?(...) or #?@(...) under {:read-cond :preserve}, read through its (: the
+   reader conditional over the whole list, its features never asked and a
+   splice inside it kept as one more reader conditional, like the oracle's
+   ReaderConditional; a splice at the top level reads too."
+  (let ((rontolisp::%clojure-rd-cond :C%PRESERVING))
+    (list :C%READER-COND (rontolisp::%clojure-rd-seq rd #\))
+          (if splicing t rontolisp::%clojure-false))))
+
+;;;; Reader conditionals and tagged literals as values.
+;;
+;; {:read-cond :preserve} reads #?(...) as (:C%READER-COND form splicing), the
+;; oracle's clojure.lang.ReaderConditional with SPLICING a Clojure boolean, and a
+;; tagged literal inside one as (:C%TAGGED form tag), its TaggedLiteral;
+;; reader-conditional and tagged-literal build them too. Each is an ILookup
+;; (:form, then :splicing? or :tag), = by its parts, printed back as it was
+;; read. Every test of one is an arm of the reader-value family
+;; (clojure/ClojureArms): a program that names neither constructor nor a read
+;; that may take :preserve sheds them.
+
+(defun rontolisp::%clojure-reader-value-p (x)
+  "Whether X is a reader conditional or a tagged literal."
+  (and (consp x) (or (eq (car x) :C%READER-COND) (eq (car x) :C%TAGGED))))
+
+(defun rontolisp::%clojure-reader-cond-p (x)
+  "Whether X is a reader conditional."
+  (and (consp x) (eq (car x) :C%READER-COND)))
+
+(defun rontolisp::%clojure-tagged-literal-p (x)
+  "Whether X is a tagged literal."
+  (and (consp x) (eq (car x) :C%TAGGED)))
+
+(defun rontolisp::%clojure-is-reader-conditional (x no)
+  "reader-conditional?: T for a reader conditional, else NO (false)."
+  (if (rontolisp::%clojure-reader-cond-p x) t no))
+
+(defun rontolisp::%clojure-is-tagged-literal (x no)
+  "tagged-literal?: T for a tagged literal, else NO (false)."
+  (if (rontolisp::%clojure-tagged-literal-p x) t no))
+
+(defun rontolisp::%clojure-reader-conditional (form splicing)
+  "(reader-conditional form splicing?): SPLICING must be a boolean, like the
+   oracle's Boolean cast (nil its NullPointerException)."
+  (if (or (eq splicing t) (eq splicing rontolisp::%clojure-false))
+      (list :C%READER-COND form splicing)
+      (rontolisp::%clojure-class-cast-exception-of
+       "reader-conditional needs a boolean splicing?" splicing)))
+
+(defun rontolisp::%clojure-reader-conditional-v (&rest args)
+  "reader-conditional as a value."
+  (rontolisp::%clojure-check-arity args 2 2 "reader-conditional")
+  (rontolisp::%clojure-reader-conditional (car args) (car (cdr args))))
+
+(defun rontolisp::%clojure-tagged-literal (tag form)
+  "(tagged-literal tag form): TAG must be a symbol or nil, like the oracle's
+   Symbol cast."
+  (if (or (null tag) (rontolisp::%clojure-real-symbol-p tag))
+      (list :C%TAGGED form tag)
+      (rontolisp::%clojure-class-cast-exception
+       "tagged-literal needs a symbol tag")))
+
+(defun rontolisp::%clojure-tagged-literal-v (&rest args)
+  "tagged-literal as a value."
+  (rontolisp::%clojure-check-arity args 2 2 "tagged-literal")
+  (rontolisp::%clojure-tagged-literal (car args) (car (cdr args))))
+
+(defun rontolisp::%clojure-reader-value-get (x key dflt)
+  "The ILookup read of the reader conditional or tagged literal X: :form, then
+   :splicing? of the one and :tag of the other; DFLT for any other key."
+  (let ((name (if (rontolisp::%clojure-keyword-p key) (car (cdr key)) nil)))
+    (cond ((equal name "form") (car (cdr x)))
+          ((equal name (if (eq (car x) :C%READER-COND) "splicing?" "tag"))
+           (car (cdr (cdr x))))
+          (t dflt))))
+
+(defun rontolisp::%clojure-reader-value-equal (a b)
+  "= of the reader conditional or tagged literal A and B: one of the same
+   kind whose parts are =."
+  (and (consp b) (eq (car a) (car b))
+       (rontolisp::%clojure-equal (car (cdr a)) (car (cdr b)))
+       (rontolisp::%clojure-equal (car (cdr (cdr a))) (car (cdr (cdr b))))))
+
+(defun rontolisp::%clojure-reader-value-hash (x)
+  "The hash of the reader conditional or tagged literal X, over its parts."
+  (logand (+ (* (rontolisp::%clojure-hash (car (cdr x))) 31)
+             (rontolisp::%clojure-hash (car (cdr (cdr x))))
+             (if (eq (car x) :C%READER-COND) 7 13)) 1048575))
+
+(defun rontolisp::%clojure-reader-value-class-name (x)
+  "The class of the reader conditional or tagged literal X."
+  (if (eq (car x) :C%READER-COND)
+      "clojure.lang.ReaderConditional"
+      "clojure.lang.TaggedLiteral"))
+
+(defun rontolisp::%clojure-reader-value-class (x)
+  "class of the reader conditional or tagged literal X, as a keyword."
+  (list :C%KEYWORD (rontolisp::%clojure-reader-value-class-name x)))
+
+(defun rontolisp::%clojure-reader-value-string (x)
+  "str of the reader conditional or tagged literal X: the oracle's Object
+   toString, Class@hash, over this hash."
+  (let ((h (rontolisp::%clojure-reader-value-hash x)) (digits nil))
+    (do ()
+        ((and digits (= h 0)))
+      (setq digits (cons (char "0123456789abcdef" (logand h 15)) digits))
+      (setq h (ash h -4)))
+    (concatenate 'string (rontolisp::%clojure-reader-value-class-name x) "@"
+                 (coerce digits 'string))))
+
+(defun rontolisp::%clojure-write-reader-value
+    (x nil-replacement readable stream labels)
+  "Write the reader conditional or tagged literal X as the oracle's
+   print-method does: #?(...) or #?@(...), and #tag form. A reader
+   conditional over an empty list writes it as ()."
+  (let ((form (car (cdr x))))
+    (if (eq (car x) :C%READER-COND)
+        (progn
+          (write-string "#?" stream)
+          (if (eq (car (cdr (cdr x))) t) (write-char #\@ stream))
+          (if (null form)
+              (write-string "()" stream)
+              (rontolisp::%clojure-write form nil-replacement readable stream
+                                         labels)))
+        (progn
+          (write-char #\# stream)
+          (rontolisp::%clojure-write (car (cdr (cdr x))) nil-replacement
+                                     readable stream labels)
+          (write-char #\Space stream)
+          (rontolisp::%clojure-write form nil-replacement readable stream
+                                     labels)))))
 
 (defun rontolisp::%clojure-rd-suppressed (rd)
   "Read and drop the next form of a reader conditional, suppressed: whether
@@ -9461,6 +9619,8 @@
               (setq chars (cons (rontolisp::%clojure-rd-next rd) chars))
               (setq done t)))))))
 
+;; Inside a preserved reader conditional any tag, a record's too, reads as a
+;; tagged literal.
 (defun rontolisp::%clojure-rd-record (rd)
   "A record literal #ns.Name{:k v ...} or #ns.Name[v ...], the hash consumed:
    the record over the body read as data (never evaluated); an undotted tag
@@ -9469,9 +9629,12 @@
    literals apart like the oracle's."
   (let ((tag
          (rontolisp::%clojure-rd-token rd (rontolisp::%clojure-rd-next rd))))
-    (if rontolisp::%clojure-rd-suppress
-        (list tag (rontolisp::%clojure-rd-required rd))
-        (rontolisp::%clojure-rd-record-of rd tag))))
+    (cond (rontolisp::%clojure-rd-suppress
+           (list tag (rontolisp::%clojure-rd-required rd)))
+          ((rontolisp::%clojure-rd-preserving-p)
+           (list :C%TAGGED (rontolisp::%clojure-rd-required rd)
+                 (rontolisp::%clojure-rd-symbol tag)))
+          (t (rontolisp::%clojure-rd-record-of rd tag)))))
 
 (defun rontolisp::%clojure-rd-record-of (rd tag)
   "The record literal of the class TAG, its tag consumed (%clojure-rd-record)."

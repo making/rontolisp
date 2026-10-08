@@ -56,6 +56,13 @@ class ClojureDepsFetchCliTest {
 		Path repo = Files.createDirectories(dir.resolve("repo"));
 		publish(repo, "words", "1.0", "", sources("fixture/words.clj", "(ns fixture.words) (defn word [] \"hello\")"));
 		publish(repo, "words", "2.0", "", sources("fixture/words.clj", "(ns fixture.words) (defn word [] \"hi\")"));
+		published(repo.resolve("fixture/words/maven-metadata.xml"),
+				"""
+						<metadata><groupId>fixture</groupId><artifactId>words</artifactId><versioning>
+						<latest>2.0</latest><release>2.0</release><versions><version>1.0</version><version>2.0</version></versions>
+						<lastUpdated>20240101000000</lastUpdated></versioning></metadata>
+						"""
+					.getBytes(StandardCharsets.UTF_8));
 		publish(repo, "greeting", "1.0",
 				dependency("words", "1.0", "") + dependency("absent-optional", "1.0", "<optional>true</optional>")
 						+ dependency("absent-test", "1.0", "<scope>test</scope>"),
@@ -186,6 +193,24 @@ class ClojureDepsFetchCliTest {
 		finally {
 			Files.move(moved, dir.resolve("repo"));
 		}
+	}
+
+	@Test
+	void aRangeReleaseAndLatestResolveThroughTheRepositorysMetadata() throws Exception {
+		// the oracle's answers over the same repository (clj 1.12.6, 2026-10-08): the
+		// highest version in range, the release, the latest
+		String[][] cases = { { "ranged", "[1.0,2.0)", "hello\n" }, { "released", "RELEASE", "hi\n" },
+				{ "latest", "LATEST", "hi\n" } };
+		for (String[] c : cases) {
+			project(c[0], "fixture/words {:mvn/version \"" + c[1] + "\"}", " :mvn/local-repo \"m2-meta\"");
+			Path main = write(dir.resolve(c[0] + "/main.clj"),
+					"(require '[fixture.words :as w])\n(println (w/word))\n");
+			assertThat(runCli(main.toString())).as(c[1]).isEqualTo(c[2]);
+		}
+		project("unranged", "fixture/words {:mvn/version \"[5.0,6.0)\"}", " :mvn/local-repo \"m2-meta\"");
+		Path none = write(dir.resolve("unranged/main.clj"), "(println :never)\n");
+		assertThatThrownBy(() -> runCli(none.toString()))
+			.hasMessage(none + ":1:1: Unable to resolve fixture/words version: [5.0,6.0)");
 	}
 
 	@Test

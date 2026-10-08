@@ -17,6 +17,9 @@ import org.jspecify.annotations.Nullable;
  * version a path reaches stays a node.
  *
  * <ul>
+ * <li>A dependency whose version is a range becomes one node per version the repositories
+ * list in that range, ascending (none listed: the collection fails), each carrying the
+ * range; the conflict resolver chooses among them.</li>
  * <li>A dependency is selected before it is managed. Below the requested dependencies
  * (depth 2 on) a {@code test} or {@code provided} one is dropped -- {@code system} and
  * unknown scopes are kept, as Maven keeps them: one can win a version conflict, and below
@@ -52,10 +55,26 @@ final class DependencyCollector {
 
 	}
 
+	/** Resolves version ranges. */
+	@FunctionalInterface
+	interface Versions {
+
+		/**
+		 * Resolves the versions a dependency's version admits.
+		 * @param artifact the artifact, its version the constraint
+		 * @return the versions
+		 * @throws MavenResolutionException if the constraint is invalid
+		 */
+		VersionRangeResult versions(Artifact artifact) throws MavenResolutionException;
+
+	}
+
 	private record PoolKey(Artifact artifact, Set<Exclusion> exclusions) {
 	}
 
 	private final Descriptors descriptors;
+
+	private final Versions versions;
 
 	private final Map<String, String> managedVersions = new HashMap<>();
 
@@ -72,10 +91,12 @@ final class DependencyCollector {
 	/**
 	 * Creates a collector.
 	 * @param descriptors where descriptors come from
+	 * @param versions where version ranges are resolved
 	 * @param managed the dependency management the request brings
 	 */
-	DependencyCollector(Descriptors descriptors, List<Dependency> managed) {
+	DependencyCollector(Descriptors descriptors, Versions versions, List<Dependency> managed) {
 		this.descriptors = descriptors;
+		this.versions = versions;
 		for (Dependency entry : managed) {
 			String key = entry.artifact().versionlessKey();
 			if (!entry.artifact().version().isEmpty()) {
@@ -119,60 +140,73 @@ final class DependencyCollector {
 			return;
 		}
 		Managed managed = manage(dependency, depth, keepVersion);
-		Artifact artifact = managed.dependency().artifact();
-		if (artifact.version().isEmpty()) {
-			throw failure(path, artifact, "no version");
+		Dependency managedDependency = managed.dependency();
+		Artifact requested = managedDependency.artifact();
+		if (requested.version().isEmpty()) {
+			throw failure(path, requested, "no version");
 		}
-		String unsupported = artifact.unsupportedVersion();
-		if (unsupported != null) {
-			throw failure(path, artifact, unsupported);
-		}
-		ArtifactDescriptor descriptor;
+		// A system dependency is a file at its systemPath: Maven reads no POM for it.
+		boolean noDescriptor = managedDependency.scope().equals("system");
+		VersionRangeResult range;
 		try {
-			// A system dependency is a file at its systemPath: Maven reads no POM for it.
-			descriptor = managed.dependency().scope().equals("system")
-					? new ArtifactDescriptor(artifact, List.of(), List.of(), List.of(), List.of())
-					: this.descriptors.read(artifact);
+			range = this.versions.versions(requested);
 		}
 		catch (MavenResolutionException ex) {
-			throw new MavenResolutionException("while collecting " + render(path, artifact) + ": " + ex.getMessage(),
-					ex);
+			throw failure(path, requested, String.valueOf(ex.getMessage()));
 		}
-		this.warnings.addAll(descriptor.warnings());
-		Dependency resolved = managed.dependency().withArtifact(descriptor.artifact());
-		if (onPath(path, descriptor.artifact())) {
-			out.add(new DependencyNode(resolved, relocations, managed.premanagedVersion(), managed.premanagedScope(),
-					managed.premanagedOptional(), true, List.of()));
-			return;
+		if (range.versions().isEmpty()) {
+			throw failure(path, requested, "No versions available for " + requested + " within specified range"
+					+ (range.problems().isEmpty() ? "" : " (" + String.join("; ", range.problems()) + ")"));
 		}
-		if (!descriptor.relocations().isEmpty()) {
-			boolean sameArtifact = artifact.groupId().equals(descriptor.artifact().groupId())
-					&& artifact.artifactId().equals(descriptor.artifact().artifactId());
-			processDependency(resolved, depth, exclusions, path, out, descriptor.relocations(), sameArtifact);
-			return;
-		}
-		List<DependencyNode> children = List.of();
-		if (!ArtifactTypes.includesDependencies(resolved.type()) && !descriptor.dependencies().isEmpty()) {
-			Set<Exclusion> childExclusions = new LinkedHashSet<>(exclusions);
-			childExclusions.addAll(resolved.exclusions());
-			PoolKey key = new PoolKey(resolved.artifact(), Set.copyOf(childExclusions));
-			List<DependencyNode> pooled = this.pool.get(key);
-			if (pooled == null) {
-				List<DependencyNode> built = new ArrayList<>();
-				path.add(resolved.artifact());
-				try {
-					process(descriptor.dependencies(), depth + 1, key.exclusions(), path, built);
-				}
-				finally {
-					path.remove(path.size() - 1);
-				}
-				pooled = List.copyOf(built);
-				this.pool.put(key, pooled);
+		String constraint = range.constraint().isRange() ? range.constraint().toString() : null;
+		for (String version : range.versions()) {
+			Artifact artifact = requested.withVersion(version);
+			ArtifactDescriptor descriptor;
+			try {
+				descriptor = noDescriptor ? new ArtifactDescriptor(artifact, List.of(), List.of(), List.of(), List.of())
+						: this.descriptors.read(artifact);
 			}
-			children = pooled;
+			catch (MavenResolutionException ex) {
+				throw new MavenResolutionException(
+						"while collecting " + render(path, artifact) + ": " + ex.getMessage(), ex);
+			}
+			this.warnings.addAll(descriptor.warnings());
+			Dependency resolved = managedDependency.withArtifact(descriptor.artifact());
+			if (onPath(path, descriptor.artifact())) {
+				out.add(new DependencyNode(resolved, relocations, constraint, managed.premanagedVersion(),
+						managed.premanagedScope(), managed.premanagedOptional(), true, List.of()));
+				continue;
+			}
+			if (!descriptor.relocations().isEmpty()) {
+				boolean sameArtifact = artifact.groupId().equals(descriptor.artifact().groupId())
+						&& artifact.artifactId().equals(descriptor.artifact().artifactId());
+				processDependency(resolved, depth, exclusions, path, out, descriptor.relocations(), sameArtifact);
+				return;
+			}
+			List<DependencyNode> children = List.of();
+			if (!noDescriptor && !ArtifactTypes.includesDependencies(resolved.type())
+					&& !descriptor.dependencies().isEmpty()) {
+				Set<Exclusion> childExclusions = new LinkedHashSet<>(exclusions);
+				childExclusions.addAll(resolved.exclusions());
+				PoolKey key = new PoolKey(resolved.artifact(), Set.copyOf(childExclusions));
+				List<DependencyNode> pooled = this.pool.get(key);
+				if (pooled == null) {
+					List<DependencyNode> built = new ArrayList<>();
+					path.add(resolved.artifact());
+					try {
+						process(descriptor.dependencies(), depth + 1, key.exclusions(), path, built);
+					}
+					finally {
+						path.remove(path.size() - 1);
+					}
+					pooled = List.copyOf(built);
+					this.pool.put(key, pooled);
+				}
+				children = pooled;
+			}
+			out.add(new DependencyNode(resolved, relocations, constraint, managed.premanagedVersion(),
+					managed.premanagedScope(), managed.premanagedOptional(), false, children));
 		}
-		out.add(new DependencyNode(resolved, relocations, managed.premanagedVersion(), managed.premanagedScope(),
-				managed.premanagedOptional(), false, children));
 	}
 
 	private static boolean selected(Dependency dependency, int depth, Set<Exclusion> exclusions) {

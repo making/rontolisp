@@ -445,6 +445,47 @@ class ClojureReaderTest {
 			.hasMessageContaining("Duplicate key: 1");
 		assertThat(read("#{1 2}")).hasSize(1);
 		assertThat(read("#{}")).hasSize(1);
+		// the later member is named, and a vector equals a list of the same members
+		assertThatThrownBy(() -> read("#{[1] (1)}")).hasMessage("Duplicate key: (1)");
+		assertThatThrownBy(() -> read("#{\"a\" \"a\"}")).hasMessage("Duplicate key: a");
+	}
+
+	@Test
+	void aRepeatedMapKeyIsAnErrorNamingTheEarlierKeyAfterTheBrace() {
+		assertThatThrownBy(() -> new ClojureReader("{:a 1 :a 2}", "dup.clj").readAll())
+			.isInstanceOf(LispReadException.class)
+			.hasMessage("dup.clj:1:12: Duplicate key: :a");
+		assertThatThrownBy(() -> read("{:a 1 :b 2 :a 3}")).hasMessage("Duplicate key: :a");
+		assertThat(read("{:a 1 :b 2}")).hasSize(1);
+		assertThat(read("{}")).hasSize(1);
+		assertThat(read("{:a 1 ::a 2}")).hasSize(1);
+	}
+
+	@Test
+	void aMapKeyRepeatsWhenTheReadFormsAreEqual() {
+		// the oracle's toString spells the key; = decides, not the spelling
+		assertThatThrownBy(() -> read("{1 :a 1N :b}")).hasMessage("Duplicate key: 1");
+		assertThatThrownBy(() -> read("{[1] :a (1) :b}")).hasMessage("Duplicate key: [1]");
+		assertThatThrownBy(() -> read("{(1) :a [1] :b}")).hasMessage("Duplicate key: (1)");
+		assertThatThrownBy(() -> read("{() :a [] :b}")).hasMessage("Duplicate key: ()");
+		assertThatThrownBy(() -> read("{\"a\" 1 \"a\" 2}")).hasMessage("Duplicate key: a");
+		assertThatThrownBy(() -> read("{nil 1 nil 2}")).hasMessage("Duplicate key: null");
+		assertThatThrownBy(() -> read("{\\a 1 \\a 2}")).hasMessage("Duplicate key: a");
+		assertThatThrownBy(() -> read("{(f) 1 (f) 2}")).hasMessage("Duplicate key: (f)");
+		assertThatThrownBy(() -> read("{'a 1 'a 2}")).hasMessage("Duplicate key: (quote a)");
+		assertThatThrownBy(() -> read("{#{1 2} 1 #{2 1} 2}")).hasMessage("Duplicate key: #{1 2}");
+		assertThatThrownBy(() -> read("{{:a 1 :b 2} 1 {:b 2 :a 1} 2}")).hasMessage("Duplicate key: {:a 1, :b 2}");
+		assertThatThrownBy(() -> read("{[1 [2]] 1 (1 (2)) 2}")).hasMessage("Duplicate key: [1 [2]]");
+		assertThatThrownBy(() -> read("{-0.0 1 0.0 2}")).hasMessageContaining("Duplicate key:");
+		assertThatThrownBy(() -> read("{##NaN 1 ##NaN 2}")).hasMessageContaining("Duplicate key:");
+		assertThatThrownBy(() -> read("{^:m a 1 a 2}")).hasMessage("Duplicate key: a");
+		assertThatThrownBy(() -> read("{#_x :a 1 :a 2}")).hasMessage("Duplicate key: :a");
+		// distinct under =: another type, another category, a regex, a different member
+		assertThat(read("{1 :a 1.0 :b}")).hasSize(1);
+		assertThat(read("{\\a 1 \"a\" 2}")).hasSize(1);
+		assertThat(read("{#\"a\" 1 #\"a\" 2}")).hasSize(1);
+		assertThat(read("{[1] :a [2] :b {} :c #{} :d}")).hasSize(1);
+		assertThat(read("{:a/b 1 :a 2 a/b 3}")).hasSize(1);
 	}
 
 }

@@ -96,9 +96,11 @@ no known type and a dependency the oracle cannot resolve are errors in its words
 - A Maven coordinate (`:mvn/version`) is fetched from the `:mvn/repos` (Maven Central, then
   Clojars, then any a map adds; `nil` removes one) into the `:mvn/local-repo`, else
   `~/.m2/repository`. Its POM's compile and runtime dependencies, not the optional ones,
-  join the tree; its jar is read in place. `"[1.0]"` is 1.0. A version range, `RELEASE`,
-  `LATEST`, a `SNAPSHOT`, an `http:` repository and a repository a `~/.m2/settings.xml`
-  mirror or proxy covers are refused.
+  join the tree; its jar is read in place. `"[1.0]"` is 1.0. A version range is the highest
+  version the repositories' `maven-metadata.xml` lists in it; `RELEASE`, `LATEST` and a
+  `SNAPSHOT` resolve through that metadata too, which the local repository keeps and asks
+  for again once a day. An `http:` repository and a repository a `~/.m2/settings.xml` mirror
+  or proxy covers are refused.
 - A git coordinate (`:git/url`, or the URL an `io.github.user/repo` name implies, with
   `:git/sha`, `:git/tag`, `:deps/root`) is checked out at its commit with the `git` command,
   into `~/.rontolisp/gitlibs` (`$RONTOLISP_DIST_HOME/gitlibs`). A tag must name the commit,

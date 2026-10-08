@@ -170,6 +170,12 @@ final class ClojureValueClasses {
 		NAMESPACE(List.of("clojure.lang.Namespace", "clojure.lang.AReference", "clojure.lang.IMeta",
 				"clojure.lang.IReference", SERIALIZABLE)),
 
+		/** {@code clojure.lang.ReaderConditional}. */
+		READER_CONDITIONAL(List.of("clojure.lang.ReaderConditional", "clojure.lang.ILookup")),
+
+		/** {@code clojure.lang.TaggedLiteral}. */
+		TAGGED_LITERAL(List.of("clojure.lang.TaggedLiteral", "clojure.lang.ILookup")),
+
 		/** A record: what every record class implements. */
 		RECORD(List.of("clojure.lang.Associative", "clojure.lang.Counted", "clojure.lang.IHashEq",
 				"clojure.lang.IKeywordLookup", "clojure.lang.ILookup", "clojure.lang.IMeta", "clojure.lang.IObj",

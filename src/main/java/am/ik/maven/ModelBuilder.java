@@ -31,27 +31,42 @@ import org.jspecify.annotations.Nullable;
  * path, and its exclusions when it has none; the optional flag is never managed;</li>
  * <li>an absent scope becomes {@code compile}, and the model is validated.</li>
  * </ol>
- * A missing parent or imported POM is a {@link MavenResolutionException}; anything else
- * Maven's builder rejects is an {@link InvalidPomException}.
+ * A parent's version range resolves to the highest version the repositories list, as
+ * Maven's model resolver resolves it (an open upper bound refused); an import's is looked
+ * up as written, which no repository has. A missing parent or imported POM is a
+ * {@link MavenResolutionException}; anything else Maven's builder rejects is an
+ * {@link InvalidPomException}.
  */
 final class ModelBuilder {
 
 	/** Reads POM files. */
-	@FunctionalInterface
 	interface PomSource {
 
 		/**
-		 * Reads a POM.
+		 * Reads a POM, its version resolved first when it is a {@code SNAPSHOT},
+		 * {@code LATEST} or {@code RELEASE}.
 		 * @param pom the POM's coordinates
 		 * @return its bytes, or {@code null} when no repository has it
 		 * @throws MavenResolutionException if a repository cannot be read
 		 */
 		byte @Nullable [] read(Artifact pom) throws MavenResolutionException;
 
+		/**
+		 * Resolves a version range.
+		 * @param pom the POM's coordinates, the version the range
+		 * @return the versions the range admits
+		 * @throws MavenResolutionException if the range is invalid
+		 */
+		VersionRangeResult versionRange(Artifact pom) throws MavenResolutionException;
+
 	}
 
 	/** Marks a POM no repository has. */
 	private static final Object MISSING = new Object();
+
+	/** The raw child versions that name the parent's version. */
+	private static final Set<String> PARENT_VERSION_REFERENCES = Set.of("${pom.version}", "${project.version}",
+			"${pom.parent.version}", "${project.parent.version}");
 
 	private final PomSource source;
 
@@ -166,6 +181,8 @@ final class ModelBuilder {
 		List<PomModel> lineage = new ArrayList<>();
 		Set<String> parentIds = new LinkedHashSet<>();
 		PomModel current = input;
+		// a fatal problem Maven reports on the next parent it reads
+		boolean fatalPending = false;
 		while (true) {
 			// A raw-model failure is fatal and stops the build; the errors collected so
 			// far (profile activation) only invalidate it at the end, as in Maven.
@@ -182,18 +199,26 @@ final class ModelBuilder {
 			}
 			String parentGroup = nonNull(parent.groupId());
 			String parentArtifact = nonNull(parent.artifactId());
-			String parentVersion = nonNull(parent.version());
-			String parentId = parent.id();
+			String writtenVersion = nonNull(parent.version());
+			String writtenChildId = (current.groupId() == null ? parentGroup : current.groupId()) + ":"
+					+ current.artifactId() + ":" + (current.version() == null ? writtenVersion : current.version());
+			String parentVersion = parentVersion(parentGroup, parentArtifact, writtenVersion, writtenChildId);
+			String parentId = parentGroup + ":" + parentArtifact + ":" + parentVersion;
 			String childId = (current.groupId() == null ? parentGroup : current.groupId()) + ":" + current.artifactId()
 					+ ":" + (current.version() == null ? parentVersion : current.version());
-			String unsupported = Artifact.unsupportedVersion(parentVersion);
-			if (unsupported != null) {
-				throw new MavenResolutionException("the parent of " + childId + " is " + parentId + ": " + unsupported);
-			}
 			PomModel parentModel = raw(new Artifact(parentGroup, parentArtifact, parentVersion, "", "pom"));
 			if (parentModel == null) {
 				throw new MavenResolutionException(
 						"Non-resolvable parent POM " + parentId + " for " + childId + ": no repository has it");
+			}
+			if (fatalPending) {
+				throw new InvalidPomException(problems);
+			}
+			if (!parentVersion.equals(writtenVersion)
+					&& (current.version() == null || PARENT_VERSION_REFERENCES.contains(current.version()))) {
+				// a version range resolved: the child cannot inherit what it resolved to
+				problems.add("Version must be a constant");
+				fatalPending = true;
 			}
 			if (lineage.size() == 1) {
 				// Maven records the child, its group and version inherited, then each
@@ -219,6 +244,35 @@ final class ModelBuilder {
 			throw new InvalidPomException(problems);
 		}
 		return model;
+	}
+
+	/**
+	 * A parent's version as Maven's model resolver resolves it: a range to the highest
+	 * version the repositories list, which it must bound from above; any other version
+	 * itself.
+	 */
+	private String parentVersion(String groupId, String artifactId, String version, String childId)
+			throws MavenResolutionException {
+		String parentId = groupId + ":" + artifactId + ":" + version;
+		VersionRangeResult range;
+		try {
+			range = this.source.versionRange(new Artifact(groupId, artifactId, version, "", "pom"));
+		}
+		catch (MavenResolutionException ex) {
+			throw new MavenResolutionException(
+					"Non-resolvable parent POM " + parentId + " for " + childId + ": " + ex.getMessage(), ex);
+		}
+		String highest = range.highest();
+		if (highest == null) {
+			throw new MavenResolutionException("Non-resolvable parent POM " + parentId + " for " + childId
+					+ ": No versions matched the requested parent version range '" + version + "'"
+					+ (range.problems().isEmpty() ? "" : " (" + String.join("; ", range.problems()) + ")"));
+		}
+		if (range.constraint().isRange() && range.constraint().upperBound() == null) {
+			throw new MavenResolutionException("Non-resolvable parent POM " + parentId + " for " + childId
+					+ ": The requested parent version range '" + version + "' does not specify an upper bound");
+		}
+		return highest;
 	}
 
 	private static String nonNull(@Nullable String value) {
@@ -522,9 +576,11 @@ final class ModelBuilder {
 		if (cached != null) {
 			return cached;
 		}
-		String unsupported = Artifact.unsupportedVersion(version);
-		if (unsupported != null) {
-			throw new MavenResolutionException("the import " + id + " in " + importing + ": " + unsupported);
+		if (VersionConstraint.isRange(version)) {
+			// Maven 3.9 resolves an import's version as written, never as a range: the
+			// lookup of that literal path is spared, its answer is the same
+			throw new MavenResolutionException("Non-resolvable import POM " + id + " in " + importing
+					+ ": an import's version range is looked up as a version, which no repository has");
 		}
 		try {
 			PomModel importRaw = raw(new Artifact(group, artifact, version, "", "pom"));

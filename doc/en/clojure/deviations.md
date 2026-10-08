@@ -66,7 +66,8 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   (the oracle's lazy or chunked seq: `false`); no seq is chunked (`chunked-seq?` is always
   `false`), and an `iterate`/`cycle` seq is `realized?` only once forced. A decimal or `N`
   literal is a plain rational, so `decimal?` is always `false` and `ratio?`, `integer?` and
-  `int?` answer for the rational (`(ratio? 1.5M)`, `(int? 2N)` are `true`). `identical?`
+  `int?` answer for the rational (`(ratio? 1.5M)`, `(int? 2N)` are `true`); for the same
+  reason a map or set literal holding `1` and `1M` is refused as a duplicate. `identical?`
   compares numbers, characters and symbols by value (`(identical? 1000 1000)` is `true`) and
   two keywords of one spelling as one object.
 - A program's own top-level definition of a core name (`(defn peek ...)`) shadows the
@@ -370,9 +371,11 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   built-in Ring namespaces load without a `ring/ring-core` coordinate (the oracle needs one)
   and stand in for an older ring-core than the one shipped. A `pom.xml` project is not read,
   nor is a library's `data_readers.clj`: its tags are refused like any unknown tag. A
-  version range, `RELEASE`, `LATEST`, a `SNAPSHOT` and a repository a `settings.xml` mirror
-  or proxy covers are refused (the oracle resolves them), and a download is always checked
-  against its `.sha1` (the oracle's default only warns). A git tag is checked against the
+  repository a `settings.xml` mirror or proxy covers is refused (the oracle resolves it), and
+  a download, `maven-metadata.xml` included, is always checked against its `.sha1` (the
+  oracle's default only warns). A file no repository had is not asked for again until the
+  next day (the oracle asks on every run); one update policy, daily, serves every repository
+  (a repository's `:update` is not read). A git tag is checked against the
   local clone, which is fetched only when the tag is missing or names another commit (the
   oracle fetches on every resolution); checkouts live in `~/.rontolisp/gitlibs`, not
   `~/.gitlibs`. Two commits of one library neither of which descends from the other are
@@ -391,8 +394,10 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   the oracle's classpath does not hold. `rontolisp test` is no `clj` command: it follows
   the cognitect test-runner's defaults (namespaces ending in `-test` under `test`).
 - A reader conditional takes `:rontolisp` too, ahead of `:clj` where a form names it
-  first. `{:read-cond :preserve}` is refused at the first `#?` (no reader-conditional or
-  tagged-literal value exists), so `reader-conditional?` stays `false`. In a branch not
+  first. Under `{:read-cond :preserve}`, `class` of a reader conditional or tagged literal
+  answers `:clojure.lang.ReaderConditional`/`:clojure.lang.TaggedLiteral` like every class
+  keyword here, `str` spells the hash `=` keeps (not the oracle's `hashCode`), and
+  `(reader-conditional nil false)` prints `#?()`, as one read from `#?()` does. In a branch not
   taken, `::alias/kw` of an unknown alias reads (the oracle refuses it); the runtime
   reader splices `#?@(:clj nil)` as nothing (the oracle refuses it) and takes `:features`
   as a hash set only.

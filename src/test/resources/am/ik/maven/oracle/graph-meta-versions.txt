@@ -1,0 +1,6 @@
+# collect test.meta:user:1
+test.meta:user:jar::1 scope=compile optional=null
+  test.meta:lib:jar::LATEST scope=compile optional=null
+    test.meta:two:jar::1 scope=compile optional=null
+  test.meta:snaplatest:jar::RELEASE scope=compile optional=null
+    test.meta:one:jar::1 scope=compile optional=null

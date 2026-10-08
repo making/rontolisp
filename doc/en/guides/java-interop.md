@@ -564,8 +564,10 @@ a library meet, the one nearest the requested coordinates wins, and the jars joi
 class path after the `--java-classpath` entries, in Maven's class path order. They come
 from Maven Central through the local repository `mvn` uses -- `~/.m2/repository`, or
 the `localRepository` of `~/.m2/settings.xml`, whose `offline` is honored. A SNAPSHOT,
-a version range, or a `settings.xml` mirror or proxy covering Central is refused by
-name. A Clojure program's `deps.edn` dependencies that hold classes join the class path
+`LATEST`, `RELEASE` or version range, given or in a dependency's POM, resolves through
+Central's `maven-metadata.xml` as Maven resolves it. The local repository keeps that
+metadata and asks Central again once a day, as it does for a file Central did not have.
+A `settings.xml` mirror or proxy covering Central is refused by name. A Clojure program's `deps.edn` dependencies that hold classes join the class path
 after these ([Projects: deps.edn](../clojure/semantics.md#projects-depsedn)).
 
 What each output carries:

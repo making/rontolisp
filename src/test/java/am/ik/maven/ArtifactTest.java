@@ -6,8 +6,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
- * Coordinates in Maven Resolver's spelling, the repository layout path, and the versions
- * that need {@code maven-metadata.xml}.
+ * Coordinates in Maven Resolver's spelling, the repository layout path, snapshots and
+ * version ranges.
  */
 class ArtifactTest {
 
@@ -44,14 +44,24 @@ class ArtifactTest {
 	}
 
 	@Test
-	void versionsThatNeedMetadataAreNamed() {
-		assertThat(Artifact.parse("g:a:1.0").unsupportedVersion()).isNull();
-		assertThat(Artifact.parse("g:a:1.0-SNAPSHOT").unsupportedVersion()).startsWith("SNAPSHOT versions");
-		assertThat(Artifact.parse("g:a:1.0-20240101.123456-7").unsupportedVersion()).startsWith("SNAPSHOT versions");
-		assertThat(Artifact.parse("g:a:[1.0,2.0)").unsupportedVersion()).startsWith("version ranges");
-		assertThat(Artifact.parse("g:a:(,2.0]").unsupportedVersion()).startsWith("version ranges");
-		assertThat(Artifact.parse("g:a:LATEST").unsupportedVersion()).startsWith("the LATEST and RELEASE");
-		assertThat(Artifact.parse("g:a:RELEASE").unsupportedVersion()).startsWith("the LATEST and RELEASE");
+	void aTimestampedSnapshotIsInItsBaseVersionsDirectory() {
+		Artifact deployed = Artifact.parse("org.example:lib:1.0-20240101.123456-7");
+
+		assertThat(deployed.isSnapshot()).isTrue();
+		assertThat(deployed.baseVersion()).isEqualTo("1.0-SNAPSHOT");
+		assertThat(deployed.path()).isEqualTo("org/example/lib/1.0-SNAPSHOT/lib-1.0-20240101.123456-7.jar");
+		assertThat(Artifact.parse("g:a:20240101.123456-7").baseVersion()).isEqualTo("SNAPSHOT");
+		assertThat(Artifact.parse("g:a:1.0-SNAPSHOT").isSnapshot()).isTrue();
+		assertThat(Artifact.parse("g:a:1.0-SNAPSHOT").baseVersion()).isEqualTo("1.0-SNAPSHOT");
+		assertThat(Artifact.parse("g:a:1.0").isSnapshot()).isFalse();
+	}
+
+	@Test
+	void aVersionRangeIsNamedAsOne() {
+		assertThat(Artifact.parse("g:a:[1.0,2.0)").isVersionRange()).isTrue();
+		assertThat(Artifact.parse("g:a:(,2.0]").isVersionRange()).isTrue();
+		assertThat(Artifact.parse("g:a:LATEST").isVersionRange()).isFalse();
+		assertThat(Artifact.parse("g:a:1.0").isVersionRange()).isFalse();
 	}
 
 }

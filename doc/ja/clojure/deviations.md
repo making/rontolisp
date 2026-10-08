@@ -66,7 +66,8 @@
  `false`）。チャンク化された seq はなく（`chunked-seq?` は常に `false`）、`iterate`/`cycle` の seq は
  一度強制されてから `realized?` になります。decimal と `N` のリテラルは通常の有理数なので、
  `decimal?` は常に `false` で、`ratio?`・`integer?`・`int?` はその有理数に対して答えます
- （`(ratio? 1.5M)` と `(int? 2N)` は `true`）。`identical?` は数値・文字・シンボルを値で比較し
+ （`(ratio? 1.5M)` と `(int? 2N)` は `true`）。同じ理由で、`1` と `1M` を含むマップ・セットリテラルは
+ 重複として拒否されます。`identical?` は数値・文字・シンボルを値で比較し
  （`(identical? 1000 1000)` は `true`）、綴りが同じ2つのキーワードを同じオブジェクトとして扱います。
 
 - プログラム自身がトップレベルで定義したコア名（`(defn peek ...)`）は、定義より上の呼び出しも
@@ -359,9 +360,11 @@
   動きます。組み込みのライブラリは、その依存も含めて何も取得しません。組み込みの Ring 名前空間は
   `ring/ring-core` の座標がなくてもロードでき（oracle では座標が必要です）、同梱より古い ring-core
   の代わりにもなります。`pom.xml` のプロジェクトは読まず、ライブラリの `data_readers.clj` も
-  読みません。そのタグはほかの未知のタグと同じく拒否します。バージョン範囲、`RELEASE`、`LATEST`、
-  `SNAPSHOT`、`settings.xml` の mirror や proxy がかかるリポジトリは拒否し（oracle は解決します）、
-  ダウンロードは常に `.sha1` と照合します（oracle の既定は警告だけです）。git のタグはローカルの
+  読みません。そのタグはほかの未知のタグと同じく拒否します。`settings.xml` の mirror や proxy が
+  かかるリポジトリは拒否し（oracle は解決します）、ダウンロードは `maven-metadata.xml` も含めて
+  常に `.sha1` と照合します（oracle の既定は警告だけです）。どのリポジトリにもなかったファイルは
+  翌日まで問い合わせ直しません（oracle は実行のたびに問い合わせます）。更新ポリシーはすべての
+  リポジトリで 1 つ、daily です（リポジトリの `:update` は読みません）。git のタグはローカルの
   クローンで確認し、タグがないか別のコミットを指すときだけ取得します（oracle は解決のたびに
   取得します）。チェックアウトは `~/.gitlibs` ではなく `~/.rontolisp/gitlibs` に置きます。1 つの
   ライブラリの 2 つのコミットのどちらも他方の子孫でないときは、両方を挙げて拒否します（oracle は
@@ -379,8 +382,11 @@
   `rontolisp test` は `clj` のコマンドではなく、cognitect test-runner の既定（`test` 以下の、
   名前が `-test` で終わる名前空間）に従います。
 - リーダ条件は `:rontolisp` も選びます。フォームが `:clj` より先に挙げていればそちらが先です。
-  `{:read-cond :preserve}` は最初の `#?` で拒否されます（リーダ条件やタグ付きリテラルの値が
-  ないため）。そのため `reader-conditional?` は `false` のままです。選ばれない分岐の中では、
+  `{:read-cond :preserve}` で読んだリーダ条件やタグ付きリテラルの `class` は、ここでのほかの
+  クラスと同じくキーワード（`:clojure.lang.ReaderConditional`・`:clojure.lang.TaggedLiteral`）
+  を返します。`str` が綴るハッシュは `=` に従うこの実装のもので、オラクルの `hashCode` では
+  ありません。`(reader-conditional nil false)` は `#?()` から読んだものと同じく `#?()` と
+  印字されます。選ばれない分岐の中では、
   未知のエイリアスの `::alias/kw` も読めます（オラクルは拒否します）。実行時のリーダは
   `#?@(:clj nil)` を何も展開しないものとして読み（オラクルは拒否します）、`:features` は
   ハッシュセットだけを受け取ります。

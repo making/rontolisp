@@ -39,8 +39,10 @@ import org.jspecify.annotations.Nullable;
  * <p>
  * Coordinates resolve from Maven Central through the local repository {@code mvn} uses --
  * {@code ~/.m2/repository}, or the one {@code ~/.m2/settings.xml} names -- honoring that
- * file's {@code <offline>}; what the resolver cannot do faithfully (a SNAPSHOT, a version
- * range, a mirror or proxy covering Central) is refused by name.
+ * file's {@code <offline>}; a SNAPSHOT, {@code LATEST}, {@code RELEASE} or version range
+ * resolves through the repository's {@code maven-metadata.xml} as Maven's does, and what
+ * the resolver cannot do faithfully (a mirror or proxy covering Central) is refused by
+ * name.
  */
 final class JavaClassPath implements AutoCloseable {
 

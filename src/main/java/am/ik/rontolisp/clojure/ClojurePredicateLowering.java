@@ -78,12 +78,28 @@ final class ClojurePredicateLowering {
 
 	/**
 	 * The predicates of a kind no value here can have: no chunked seq, decimal, byte
-	 * array, delay, reader conditional or tagged literal exists on any backend, so each
-	 * answers false for every value, which is the oracle's answer for every value a
-	 * program here can build.
+	 * array or delay exists on any backend, so each answers false for every value, which
+	 * is the oracle's answer for every value a program here can build.
 	 */
-	private static final List<String> NEVER = List.of("chunked-seq?", "decimal?", "bytes?", "delay?",
-			"reader-conditional?", "tagged-literal?");
+	private static final List<String> NEVER = List.of("chunked-seq?", "decimal?", "bytes?", "delay?");
+
+	/**
+	 * The predicates of a reader conditional and a tagged literal, each to its library
+	 * function {@code (p value false)}: an alias of {@code progn} in a program that makes
+	 * neither ({@link ClojureArms.Family#READER_VALUE}), where it answers false like
+	 * {@link #NEVER}'s.
+	 */
+	private static final Map<String, String> READER_VALUE_PREDICATES = Map.of("reader-conditional?",
+			"RONTOLISP::%CLOJURE-IS-READER-CONDITIONAL", "tagged-literal?", "RONTOLISP::%CLOJURE-IS-TAGGED-LITERAL");
+
+	/** The reader-value family's test of either kind ({@code clojure.lisp}). */
+	static final String READER_VALUE_P = "RONTOLISP::%CLOJURE-READER-VALUE-P";
+
+	/** The reader-value family's test of a reader conditional. */
+	static final String READER_COND_P = "RONTOLISP::%CLOJURE-READER-COND-P";
+
+	/** The reader-value family's test of a tagged literal. */
+	static final String TAGGED_LITERAL_P = "RONTOLISP::%CLOJURE-TAGGED-LITERAL-P";
 
 	/**
 	 * The verbs of a host {@code Future}, each to the library function reading it (an arm
@@ -126,6 +142,11 @@ final class ClojurePredicateLowering {
 		if (name.equals("future?")) {
 			ClojureCoreLowering.arity(name, n, 1, 1);
 			return hostFuture(ctx, ctx.lower(items.get(1)));
+		}
+		String readerValue = READER_VALUE_PREDICATES.get(name);
+		if (readerValue != null) {
+			ClojureCoreLowering.arity(name, n, 1, 1);
+			return ClojureLowerUtil.list(new LispSymbol(readerValue), ctx.lower(items.get(1)), ctx.falseVariable);
 		}
 		String verb = FUTURE_VERBS.get(name);
 		if (verb != null) {
@@ -183,6 +204,12 @@ final class ClojurePredicateLowering {
 			LispSymbol one = ctx.freshTemp();
 			return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(one),
 					hostFuture(ctx, one));
+		}
+		String readerValue = READER_VALUE_PREDICATES.get(name);
+		if (readerValue != null) {
+			LispSymbol one = ctx.freshTemp();
+			return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(one),
+					ClojureLowerUtil.list(new LispSymbol(readerValue), one, ctx.falseVariable));
 		}
 		String verb = FUTURE_VERBS.get(name);
 		if (verb != null) {

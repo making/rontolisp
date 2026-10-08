@@ -2,6 +2,8 @@ package am.ik.rontolisp.clojure;
 
 import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.IdentityHashMap;
 import java.util.List;
@@ -119,6 +121,9 @@ final class ClojureReader {
 	 * same wherever it sits in its file.
 	 */
 	private int anonId;
+
+	/** Numbers the regex literals {@link #equivKey} has told apart. */
+	private int unique;
 
 	/** Whether a reader conditional reads here, rather than being refused. */
 	private final boolean conditionals;
@@ -546,6 +551,11 @@ final class ClojureReader {
 	 * character bare, nil as {@code null}, a collection the way {@code pr} writes it.
 	 */
 	private static String strOf(LispVal form) {
+		List<LispVal> parts = ClojureLowerUtil.items(form);
+		if (parts != null && parts.size() == 3
+				&& ClojureLowerUtil.isSymbolNamed(parts.get(0), ClojureLowerUtil.READER_META)) {
+			return strOf(parts.get(1));
+		}
 		if (form instanceof LispString string) {
 			return string.value();
 		}
@@ -878,31 +888,87 @@ final class ClojureReader {
 		return new LispSymbol((n == -1 ? "rest" : "p" + n) + "__" + this.anonId + "#");
 	}
 
+	/**
+	 * One map literal: the items as read, refusing a repeated key like the oracle's
+	 * reader ({@code Duplicate key: k}, k the earlier key as its {@code toString} spells
+	 * it, positioned after the closing brace). A key repeats when the two read forms are
+	 * {@code =} ({@link #equivKey}); two forms that only evaluate to equal keys are the
+	 * runtime's to refuse. EDN data keeps its own check, which words the refusal as
+	 * {@code tools.deps} does.
+	 */
 	private LispVal readBraced() {
 		next();
 		List<LispVal> items = readSeq('}');
 		if (items.size() % 2 != 0) {
 			throw error("a map literal needs an even number of forms");
 		}
+		if (!this.edn) {
+			Map<String, LispVal> seen = new HashMap<>();
+			for (int i = 0; i < items.size(); i += 2) {
+				LispVal earlier = seen.putIfAbsent(equivKey(items.get(i)), items.get(i));
+				if (earlier != null) {
+					throw error("Duplicate key: " + strOf(earlier));
+				}
+			}
+		}
 		return marked(HASH_MAP, items);
 	}
 
 	/**
-	 * One set literal: the items as read, refusing a repeated element by its spelling.
-	 * The spelling check is what makes the common duplicate ({@code #{1 1}}) fail like
-	 * the oracle's {@code Duplicate key}; two differently-spelled elements that happen to
-	 * be equal at run time still dedupe silently.
+	 * One set literal: the items as read, refusing a repeated element ({@code =} read
+	 * forms, {@link #equivKey}) with the oracle's {@code Duplicate key: x}, x the later
+	 * member. Two forms that only evaluate to equal members still dedupe silently.
 	 */
 	private LispVal readSet() {
 		List<LispVal> items = readSeq('}');
 		Set<String> seen = new HashSet<>();
 		for (LispVal item : items) {
-			String spelling = item.print();
-			if (!seen.add(spelling)) {
-				throw error("Duplicate key: " + spelling);
+			if (!seen.add(equivKey(item))) {
+				throw error("Duplicate key: " + strOf(item));
 			}
 		}
 		return marked(HASH_SET, items);
+	}
+
+	/**
+	 * A string that is equal for two read forms exactly when the oracle's {@code =} holds
+	 * for them: reader metadata ignored, a vector equal to a list of the same members, a
+	 * map or set by its members in any order, {@code -0.0} equal to {@code 0.0} and
+	 * {@code ##NaN} to itself (the oracle's reader compares keys that way), a regex never
+	 * equal to another.
+	 */
+	private String equivKey(LispVal form) {
+		if (form instanceof LispDouble number) {
+			return "d" + (number.value() == 0 ? 0.0 : number.value());
+		}
+		List<LispVal> items = ClojureLowerUtil.items(form);
+		if (items == null) {
+			return form.print();
+		}
+		if (items.size() == 3 && ClojureLowerUtil.isSymbolNamed(items.get(0), ClojureLowerUtil.READER_META)) {
+			return equivKey(items.get(1));
+		}
+		LispVal head = items.isEmpty() ? null : items.get(0);
+		if (head == REGEX) {
+			return "regex#" + this.unique++;
+		}
+		if (head == HASH_MAP || head == HASH_SET) {
+			List<String> members = new ArrayList<>();
+			for (int i = 1; i < items.size(); i += head == HASH_MAP ? 2 : 1) {
+				members.add(head == HASH_MAP ? equivKey(items.get(i)) + " " + equivKey(items.get(i + 1))
+						: equivKey(items.get(i)));
+			}
+			Collections.sort(members);
+			return (head == HASH_MAP ? "{" : "#{") + String.join(",", members) + "}";
+		}
+		if (head == RECORD || head == TAGGED) {
+			return prOf(form);
+		}
+		StringBuilder key = new StringBuilder("(");
+		for (int i = head == VECTOR ? 1 : 0; i < items.size(); i++) {
+			key.append(equivKey(items.get(i))).append(' ');
+		}
+		return key.append(')').toString();
 	}
 
 	private List<LispVal> readSeq(char close) {
