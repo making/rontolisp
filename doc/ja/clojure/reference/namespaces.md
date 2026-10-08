@@ -17,8 +17,9 @@
 
 Clojure で書かれた組み込みの名前空間は、プロジェクトのファイルと同じ手順で、すべてのソースルートの
 あとに読み込まれます。そのため、ソースパス上に同じ名前のファイルがあればそちらが優先されます。
-例外は `clojure.walk` で、Clojure と同じくプログラムより先に読み込まれており、`clojure.walk/postwalk`
-のような修飾名は、`clojure.edn` や `clojure.string` の修飾名と同じく `require` なしで届きます。Clojure 本体に含まれない `clojure.*` 名前空間
+例外は `clojure.walk` と `clojure.core.protocols` で、Clojure と同じくプログラムより先に読み込まれており、
+`clojure.walk/postwalk` のような修飾名は、`clojure.edn` や `clojure.string` の修飾名と同じく `require`
+なしで届きます。Clojure 本体に含まれない `clojure.*` 名前空間
 （`clojure.data.json` などの contrib ライブラリ）は、ほかのライブラリと同じくソースパスから
 読み込みます。それ以外の Clojure 本体の名前空間はエラーです。
 
@@ -30,6 +31,7 @@ Clojure で書かれた組み込みの名前空間は、プロジェクトのフ
 | `clojure.edn` | [clojure.edn](clojure-edn.md) |
 | `clojure.data` | [clojure.data](clojure-data.md) |
 | `clojure.zip` | [clojure.zip](clojure-zip.md) |
+| `clojure.datafy`, `clojure.core.protocols` | [clojure.datafy](clojure-datafy.md) |
 | `clojure.pprint` | [clojure.pprint](clojure-pprint.md) |
 | `clojure.template` | [clojure.template](clojure-template.md) |
 | `clojure.java.io`（`reader` のみ） | [入出力](io.md) |

@@ -47,6 +47,11 @@ final class ClojureBuiltinNamespaces {
 			Map.entry("ring.middleware.keyword-params", Map.of()), Map.entry("ring.middleware.content-type", Map.of()),
 			Map.entry("clojure.walk", Map.of()), Map.entry("clojure.template", Map.of()),
 			Map.entry("clojure.data", Map.of()), Map.entry("clojure.zip", Map.of()),
+			Map.entry("clojure.core.protocols",
+					Map.of("CollReduce", "a protocol method of two arities is not built in", "coll-reduce",
+							"a protocol method of two arities is not built in", "iterator-reduce!",
+							"it reduces a java.util.Iterator")),
+			Map.entry("clojure.datafy", Map.of()),
 			Map.entry("clojure.pprint",
 					Map.of("cl-format", "Common Lisp format directives over Clojure values are not built in",
 							"formatter", "Common Lisp format directives over Clojure values are not built in",
@@ -57,7 +62,7 @@ final class ClojureBuiltinNamespaces {
 	 * qualified name reaches one without a {@code require}, and a {@code require} of one
 	 * reads no project file.
 	 */
-	private static final Set<String> STARTUP = Set.of("clojure.walk");
+	private static final Set<String> STARTUP = Set.of("clojure.walk", "clojure.core.protocols");
 
 	/**
 	 * The namespaces clojure.jar 1.12.6 defines, plus those of the spec jars it depends

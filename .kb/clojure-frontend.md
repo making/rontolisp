@@ -134,7 +134,8 @@ answered `2 5 3` before).
 | `clojure.edn` (`read-string` `read`) | `ClojureEdnLowering`: one call to `rontolisp::%clojure-edn-read-string-1` / `-read-string` / `-read` after a lower-time arity check in the oracle's wording; as a value `#'...-v` | "Reading", clojure.edn |
 | `clojure.walk` | Clojure source in the jar written for this front end, loaded like a project file (a startup namespace: on its first qualified name too) | "clojure.jar namespaces" |
 | `clojure.template` | the same, loaded at its `require` | "clojure.jar namespaces" |
-| `clojure.data` `clojure.zip` | the same, loaded at its `require` | "clojure.jar namespaces" |
+| `clojure.data` `clojure.zip` `clojure.datafy` | the same, loaded at its `require` | "clojure.jar namespaces" |
+| `clojure.core.protocols` | the same, a startup namespace like `clojure.walk` | "clojure.jar namespaces" |
 | `clojure.pprint` | the same; its layout engine is `rontolisp.internal.pprint/NAME`, one call to `rontolisp::%clojure-pp-NAME` (`ClojureKernelLowering`) | "clojure.jar namespaces" |
 | `subs`, `.substring` | `%clojure-subs`, the refusal family's alias of `subseq` ("Refusals") | a bound outside a string is the oracle's `StringIndexOutOfBoundsException` where a class is read; a double or ratio bound is truncated (`%clojure-string-bound`), a non-number one is refused as the oracle does ("Refusals") |
 | `format` | the Java directives translated to `format` over Clojure-rendered arguments | literal format string only; `%s` like `str` (nil spells `null`), `%b`; `%e`/`%g`, flags and the rest refused |
@@ -1237,7 +1238,8 @@ function and a directive must be a top-level form.
 **The map-shaped namespaces of clojure.jar ship as Clojure source written for this front
 end** (`src/main/resources/am/ik/rontolisp/clojure/lib/clojure/**`, the
 `ClojureBuiltinNamespaces` mechanism of "Ring util namespaces"): `clojure.walk`,
-`clojure.template`, `clojure.pprint`, `clojure.data`, `clojure.zip`.
+`clojure.template`, `clojure.pprint`, `clojure.data`, `clojure.zip`, `clojure.core.protocols`,
+`clojure.datafy`.
 - **Licensing**: clojure.jar is EPL-1.0, this project Apache-2.0, so nothing of it is
   copied -- no code, no docstring. Each file is written from the documented behaviour and
   diffed against the oracle; a one-line var dictated by its contract
@@ -1252,8 +1254,8 @@ end** (`src/main/resources/am/ik/rontolisp/clojure/lib/clojure/**`, the
   `uuid`, `template`, `repl`, `math`, `instant`, `core.reducers`, and none for
   `clojure.data`, `main`, `java.shell`. Among the probes: malli's `core` and
   camel-snake-kebab require `walk`, data.json and reitit `pprint`, honeysql `template`.
-- **Startup namespaces** (`ClojureBuiltinNamespaces.STARTUP`): `clj -M` has loaded
-  `clojure.walk` (with `core.protocols`, `core.server`, `edn`, `instant`, `java.io`,
+- **Startup namespaces** (`ClojureBuiltinNamespaces.STARTUP`, shipped: `clojure.walk`,
+  `clojure.core.protocols`): `clj -M` has loaded `clojure.walk` (with `core.protocols`, `core.server`, `edn`, `instant`, `java.io`,
   `main`, `spec.alpha`, `spec.gen.alpha`, `string`, `uuid`) before the program, so a
   qualified name reaches it with no `require` and a `require` reads no project file
   (`ClojureSourcePath.find` skips the roots). Here `ClojureLowering.projectNamespaceOf`
@@ -1346,10 +1348,23 @@ end** (`src/main/resources/am/ik/rontolisp/clojure/lib/clojure/**`, the
   end loc `[node :end]` without metadata) since programs print and destructure locs; the
   error words (`called children on a leaf node`, `Insert at top`, `Remove at top`, as
   `Exception`) are the oracle's.
+- `clojure.core.protocols` / `clojure.datafy`: `Datafiable` and `Navigable` with
+  `:extend-via-metadata`, `IKVReduce` and `InternalReduce` with nil and `Object` rows;
+  `CollReduce`/`coll-reduce` (two arities: `defprotocol` takes one per method here) and
+  `iterator-reduce!` are refused by name. `reduce`/`reduce-kv` stay lowerings that consult
+  no protocol, so an extension is reached only through `kv-reduce`/`internal-reduce`
+  themselves. `extend-protocol` takes no `Throwable` or `IRef` target here ("needs a core
+  type", measured 2026-10-08), so `clojure.datafy` re-extends the `Object` row with the
+  oracle's `IRef` answer (`[value]` with the ref's metadata) and an exception datafies to
+  itself (no `Throwable->map` here). `:clojure.datafy/class` comes from
+  `rontolisp.internal.datafy/class-name-of`, i.e. `%clojure-class-name-of`, the oracle's
+  class names `%clojure-no-method` already spelled (now shared), since `class` answers a
+  kind keyword.
 - Pins: clojure-spec `clojure-walk-*` (all four backends, oracle-identical, the first
   case loading `clojure.walk` through a qualified name only),
   `clojure-template-substitutes-per-group-of-values`, `clojure-pprint-*`,
   `clojure-data-diff-compares-like-the-oracle`, `clojure-zip-moves-and-edits-like-the-oracle`,
+  `clojure-datafy-and-core-protocols-like-the-oracle`,
   `ClojureLanguageNamespacesTest` (the startup load, a project file never shadowing a
   startup namespace, a contrib `clojure.*` namespace on the source path, the refusal of
   one not built in).
