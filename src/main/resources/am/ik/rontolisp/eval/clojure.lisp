@@ -687,6 +687,12 @@
         ((rontolisp::%clojure-reader-value-p x)
          (rontolisp::%clojure-write-reader-value x nil-replacement readable
                                                  stream labels))
+        ;; an instant or a UUID prints its tagged literal under print and pr
+        ;; alike, like the oracle's print-method
+        ((rontolisp::%clojure-instant-p x)
+         (rontolisp::%clojure-write-inst-literal x stream))
+        ((rontolisp::%clojure-uuid-p x)
+         (rontolisp::%clojure-write-uuid-literal x stream))
         ((rontolisp::%clojure-print-meta-p x readable stream labels))
         ((rontolisp::%clojure-print-deep-p x) (write-char #\# stream))
         ((rontolisp::%clojure-lazy-p x)
@@ -870,6 +876,10 @@
                ((rontolisp::%clojure-ns-object-p x) (car (cdr x)))
                ((rontolisp::%clojure-reader-value-p x)
                 (rontolisp::%clojure-reader-value-string x))
+               ((rontolisp::%clojure-instant-p x)
+                (rontolisp::%clojure-instant-string x))
+               ((rontolisp::%clojure-uuid-p x)
+                (rontolisp::%clojure-uuid-to-string x))
                (t (or (rontolisp::%clojure-host-string x)
                       (rontolisp::%clojure-str-of x "nil" t)))))
         ((rontolisp::%clojure-re-pattern-p x)
@@ -1580,6 +1590,9 @@
         ((rontolisp::%clojure-atom-p x) "clojure.lang.Atom")
         ((and (consp x) (eq (car x) :C%PATTERN)) "java.util.regex.Pattern")
         ((and (consp x) (eq (car x) :C%VAR)) "clojure.lang.Var")
+        ((rontolisp::%clojure-instant-p x)
+         (rontolisp::%clojure-instant-class-name x))
+        ((rontolisp::%clojure-uuid-p x) "java.util.UUID")
         ((and (consp x) (keywordp (car x))) "java.lang.Object")
         ((consp x) "clojure.lang.PersistentList")
         ((hash-table-p x)
@@ -2065,6 +2078,8 @@
          (rontolisp::%clojure-sorted-equal a b))
         ((rontolisp::%clojure-reader-value-p a)
          (rontolisp::%clojure-reader-value-equal a b))
+        ;; a Date is = to a Timestamp of its milliseconds, not the other way
+        ((rontolisp::%clojure-instant-p a) (rontolisp::%clojure-inst-equal a b))
         ;; equal hands a host object no collection, so a host collection and a
         ;; Clojure one reach the host-object family's arm
         (t (or (equal a b) (rontolisp::%clojure-host-equal-p a b)))))
@@ -2442,6 +2457,11 @@
           ((rontolisp::%clojure-sorted-p x) (rontolisp::%clojure-sorted-hash x))
           ((rontolisp::%clojure-reader-value-p x)
            (rontolisp::%clojure-reader-value-hash x))
+          ;; an instant by its milliseconds, so a Date and a Timestamp = to it
+          ;; hash alike
+          ((rontolisp::%clojure-instant-p x) (logand (car (cdr x)) 1048575))
+          ((rontolisp::%clojure-uuid-p x)
+           (logand (logxor (car (cdr x)) (car (cdr (cdr x)))) 1048575))
           (t 0)))
         ((characterp x) (char-code x))
         ((symbolp x) (rontolisp::%clojure-hash-string (symbol-name x)))
@@ -5478,9 +5498,12 @@
   "bound? as a value."
   (if (rontolisp::%clojure-is-bound args) t rontolisp::%clojure-false))
 
+;; A Date or a Timestamp (the instant family's arm, so a program making no
+;; instant keeps the two host tests alone), else a host Date or Instant.
 (defun rontolisp::%clojure-is-inst (x)
   "inst?: a host java.util.Date or java.time.Instant."
-  (or (rontolisp::%clojure-host-instance-p x "java.util.Date")
+  (or (rontolisp::%clojure-inst-p x)
+      (rontolisp::%clojure-host-instance-p x "java.util.Date")
       (rontolisp::%clojure-host-instance-p x "java.time.Instant")))
 
 ;;;; clojure.set: the relational set library over the set wrapper.
@@ -6047,6 +6070,10 @@
      (rontolisp::%clojure-symbol-full-name b)))
    ((and (vectorp a) (not (stringp a)) (vectorp b) (not (stringp b)))
     (rontolisp::%clojure-compare-vectors a b))
+   ;; an instant or a UUID orders against its own kind, like the oracle's
+   ;; compareTo
+   ((rontolisp::%clojure-instant-p a) (rontolisp::%clojure-instant-compare a b))
+   ((rontolisp::%clojure-uuid-p a) (rontolisp::%clojure-uuid-compare a b))
    (t (rontolisp::%clojure-class-cast-exception
        "compare needs two values of one comparable kind"))))
 
@@ -6060,7 +6087,8 @@
    boolean, a keyword, a symbol or a vector -- the oracle's nil, Number or
    Comparable."
   (or (symbolp x) (numberp x) (stringp x) (characterp x)
-      (rontolisp::%clojure-keyword-p x) (and (vectorp x) (not (stringp x)))))
+      (rontolisp::%clojure-keyword-p x) (and (vectorp x) (not (stringp x)))
+      (rontolisp::%clojure-instant-p x) (rontolisp::%clojure-uuid-p x)))
 
 (defun rontolisp::%clojure-cmp-call (cmp a b)
   "The order the comparator function CMP puts A and B in, the oracle's
@@ -9434,7 +9462,8 @@
           ((or (string= alias (car ctx)) (string= alias "clojure.string")
                (string= alias "clojure.set") (string= alias "clojure.edn")
                (string= alias "clojure.java.io") (string= alias "clojure.test")
-               (string= alias "clojure.walk"))
+               (string= alias "clojure.walk") (string= alias "clojure.instant")
+               (string= alias "clojure.uuid"))
            alias)
           (t nil))))
 
@@ -9933,30 +9962,32 @@
           (t (rontolisp::%clojure-rd-record-of rd tag)))))
 
 (defun rontolisp::%clojure-rd-record-of (rd tag)
-  "The record literal of the class TAG, its tag consumed (%clojure-rd-record)."
-  (progn
-    (if (not (search "." tag))
-        (progn
-          ;; like the oracle, the value reads before its reader is looked for
-          (rontolisp::%clojure-rd-required rd)
-          (if (or (string= tag "inst") (string= tag "uuid"))
-              (error "~A" (concatenate 'string "unsupported reader form #" tag))
-              (rontolisp::%clojure-runtime-exception
-               (concatenate 'string "No reader function for tag " tag)))))
-    (rontolisp::%clojure-rd-skip rd)
-    (let ((c (rontolisp::%clojure-rd-peek rd)))
-      (cond ((eql c #\[)
-             (rontolisp::%clojure-rd-next rd)
-             (rontolisp::%clojure-rd-build-record tag
-              (rontolisp::%clojure-rd-seq rd #\]) nil))
-            ((eql c #\{)
-             (rontolisp::%clojure-rd-next rd)
-             (rontolisp::%clojure-rd-build-record tag
-              (rontolisp::%clojure-rd-seq rd #\}) t))
-            (t (rontolisp::%clojure-runtime-exception
-                (concatenate 'string
-                             "Unreadable constructor form starting with \"#" tag
-                             "\"")))))))
+  "The record literal of the class TAG, its tag consumed (%clojure-rd-record).
+   An undotted tag is a tagged literal: #inst and #uuid answer what their
+   default readers make of the value, any other tag is the oracle's refusal."
+  (if (not (search "." tag))
+      ;; like the oracle, the value reads before its reader is looked for
+      (let ((value (rontolisp::%clojure-rd-required rd)))
+        (cond
+         ((string= tag "inst") (rontolisp::%clojure-instant-read-date value))
+         ((string= tag "uuid") (rontolisp::%clojure-read-uuid value))
+         (t (rontolisp::%clojure-runtime-exception
+             (concatenate 'string "No reader function for tag " tag)))))
+      (progn
+        (rontolisp::%clojure-rd-skip rd)
+        (let ((c (rontolisp::%clojure-rd-peek rd)))
+          (cond ((eql c #\[)
+                 (rontolisp::%clojure-rd-next rd)
+                 (rontolisp::%clojure-rd-build-record tag
+                  (rontolisp::%clojure-rd-seq rd #\]) nil))
+                ((eql c #\{)
+                 (rontolisp::%clojure-rd-next rd)
+                 (rontolisp::%clojure-rd-build-record tag
+                  (rontolisp::%clojure-rd-seq rd #\}) t))
+                (t (rontolisp::%clojure-runtime-exception
+                    (concatenate 'string
+                                 "Unreadable constructor form starting with \"#"
+                                 tag "\""))))))))
 
 (defun rontolisp::%clojure-rd-build-record (tag items map-body)
   "The record of class TAG over the body ITEMS: keyword/value pairs when
@@ -10113,6 +10144,625 @@
      (t (rontolisp::%clojure-read (car args) (car (cdr args))
                                   (car (cdr (cdr args))) ctx)))))
 
+;;;; Instants and UUIDs: the values #inst and #uuid read as.
+;;
+;; An instant is the oracle's java.util.Date, (:C%INST ms): MS the milliseconds
+;; since 1970-01-01T00:00:00Z. clojure.instant's two other readers make the
+;; oracle's other instants: a java.sql.Timestamp, (:C%TIMESTAMP ms nanos), MS
+;; its getTime and NANOS the nanoseconds of its second; a GregorianCalendar,
+;; (:C%CALENDAR ms offset zone), OFFSET its zone's offset in minutes and ZONE the
+;; zone's id (GMT-05:30), which its = compares, so -00:00 and Z read unequal
+;; like the oracle's. A UUID is the oracle's java.util.UUID, (:C%UUID msb lsb),
+;; its two halves as signed 64-bit integers. Each is a tagged wrapper, so no seq
+;; verb takes one, and = of two is equal of the wrappers but for a Date against
+;; a Timestamp (the oracle's Date.equals reads the Timestamp's getTime, while
+;; Timestamp.equals takes no Date).
+;;
+;; A date's fields are the oracle's GregorianCalendar's: the Julian calendar
+;; before 1582-10-15, the Gregorian one from then on, and a year before 1 as its
+;; year of the era, so #inst "0000" prints as 0001 like the oracle's. Every
+;; instant prints in UTC, a Calendar at its own offset. Every test of one is an
+;; arm of the instant or the UUID family (clojure/ClojureArms): only the #inst
+;; and #uuid literals, the readers, the clojure.instant kernels, random-uuid and
+;; parse-uuid make one, so a program naming none of them sheds them.
+
+(defun rontolisp::%clojure-instant-p (x)
+  "Whether X is an instant: a Date, a Timestamp or a Calendar."
+  (and (consp x)
+       (or (eq (car x) :C%INST) (eq (car x) :C%TIMESTAMP)
+           (eq (car x) :C%CALENDAR))))
+
+(defun rontolisp::%clojure-inst-p (x)
+  "Whether X is an instant inst? takes and inst-ms reads: a Date or a
+   Timestamp (a Calendar is no Inst, like the oracle's)."
+  (and (consp x) (or (eq (car x) :C%INST) (eq (car x) :C%TIMESTAMP))))
+
+(defun rontolisp::%clojure-date-p (x)
+  "Whether X is a Date, the instant #inst reads."
+  (and (consp x) (eq (car x) :C%INST)))
+
+(defun rontolisp::%clojure-timestamp-p (x)
+  "Whether X is a Timestamp."
+  (and (consp x) (eq (car x) :C%TIMESTAMP)))
+
+(defun rontolisp::%clojure-calendar-p (x)
+  "Whether X is a Calendar."
+  (and (consp x) (eq (car x) :C%CALENDAR)))
+
+(defun rontolisp::%clojure-make-inst (ms)
+  "The Date of the milliseconds MS: what an #inst literal lowers to."
+  (list :C%INST ms))
+
+(defun rontolisp::%clojure-days-from-civil (y m d julian)
+  "The days from 1970-01-01 to the date Y-M-D of the Julian calendar when
+   JULIAN, else of the proleptic Gregorian one, year 0 being 1 BC: counted from
+   March 1 of the date's cycle, 4 years in the one and 400 in the other."
+  (let* ((y (if (<= m 2) (- y 1) y))
+         (era (floor y (if julian 4 400)))
+         (yoe (- y (* era (if julian 4 400))))
+         (doy (+ (floor (+ (* 153 (if (> m 2) (- m 3) (+ m 9))) 2) 5) (- d 1))))
+    (+ (* era (if julian 1461 146097)) (* yoe 365) (floor yoe 4)
+       (- (floor yoe 100)) doy (if julian -719470 -719468))))
+
+(defun rontolisp::%clojure-civil-from-days (z julian)
+  "The (year month day) of the day Z after 1970-01-01 in the Julian calendar
+   when JULIAN, else in the proleptic Gregorian one."
+  (let* ((cycle (if julian 1461 146097))
+         (z (+ z (if julian 719470 719468)))
+         (era (floor z cycle))
+         (doe (- z (* era cycle)))
+         (yoe
+          (floor
+           (+ (- doe (floor doe 1460)) (floor doe 36524) (- (floor doe 146096)))
+           365))
+         (doy (- doe (+ (* 365 yoe) (floor yoe 4) (- (floor yoe 100)))))
+         (mp (floor (+ (* 5 doy) 2) 153))
+         (m (if (< mp 10) (+ mp 3) (- mp 9))))
+    (list (+ yoe (* era (if julian 4 400)) (if (<= m 2) 1 0)) m
+          (+ (- doy (floor (+ (* 153 mp) 2) 5)) 1))))
+
+(defun rontolisp::%clojure-instant-fields (ms offset)
+  "The oracle's GregorianCalendar fields of the instant MS seen OFFSET minutes
+   east of UTC: (year month day hour minute second millisecond weekday), the
+   date the Julian calendar's before 1582-10-15, a year before 1 its year of
+   the era, WEEKDAY 0 for a Sunday."
+  (let* ((local (+ ms (* offset 60000)))
+         (day (floor local 86400000))
+         (time (- local (* day 86400000)))
+         (date (rontolisp::%clojure-civil-from-days day (< day -141427)))
+         (year (car date)))
+    (list (if (< year 1) (- 1 year) year) (car (cdr date))
+          (car (cdr (cdr date))) (floor time 3600000)
+          (mod (floor time 60000) 60) (mod (floor time 1000) 60) (mod time 1000)
+          (mod (+ day 4) 7))))
+
+(defun rontolisp::%clojure-instant-millis
+    (years months days hours minutes seconds millis sign oh om)
+  "The milliseconds of the date and time the fields spell at the offset SIGN
+   OH:OM, as the oracle's lenient GregorianCalendar computes them: the time of
+   day first (a 60th second carries into the next day), then the day, Julian
+   before 1582 and Gregorian after; in 1582 the Gregorian day when it falls on
+   or after the cutover, else the Julian one, so 1582-10-10 is the Julian date
+   of 1582-10-20."
+  (let* ((time (+ (* (+ (* (+ (* hours 60) minutes) 60) seconds) 1000) millis))
+         (carry (floor time 86400000))
+         (gregorian
+          (+ (rontolisp::%clojure-days-from-civil years months days nil) carry))
+         (day
+          (if (or (> years 1582) (and (= years 1582) (>= gregorian -141427)))
+              gregorian
+              (+ (rontolisp::%clojure-days-from-civil years months days t)
+                 carry))))
+    ;; the zone is GMT+ unless SIGN is negative, as the oracle spells it
+    (- (+ (* day 86400000) (- time (* carry 86400000)))
+       (* (if (< sign 0) -1 1) (+ (* oh 60) om) 60000))))
+
+(defun rontolisp::%clojure-instant-digits (s i n)
+  "The value of the N decimal digits of S from I, or NIL when S has not N
+   ASCII digits there (the oracle's \\d)."
+  (let ((v 0))
+    (dotimes (k n v)
+      (let ((c (if (< (+ i k) (length s)) (char s (+ i k)) nil)))
+        (if (and v c (char<= #\0 c) (char<= c #\9))
+            (setq v (+ (* v 10) (- (char-code c) 48)))
+            (setq v nil))))))
+
+(defun rontolisp::%clojure-instant-offset (s i n)
+  "The (sign hours minutes) of the time offset spanning S from I to its end N:
+   nothing or Z is (0 0 0), +hh:mm or -hh:mm its sign and numbers; NIL when
+   the rest of S is no offset."
+  (cond ((= i n) (list 0 0 0))
+        ((and (char= (char s i) #\Z) (= (+ i 1) n)) (list 0 0 0))
+        ((and (= (+ i 6) n) (or (char= (char s i) #\+) (char= (char s i) #\-))
+              (char= (char s (+ i 3)) #\:)
+              (rontolisp::%clojure-instant-digits s (+ i 1) 2)
+              (rontolisp::%clojure-instant-digits s (+ i 4) 2))
+         (list (if (char= (char s i) #\-) -1 1)
+               (rontolisp::%clojure-instant-digits s (+ i 1) 2)
+               (rontolisp::%clojure-instant-digits s (+ i 4) 2)))
+        (t nil)))
+
+(defun rontolisp::%clojure-instant-parse (cs)
+  "clojure.instant's parse-timestamp over the string CS: the ten integers its
+   new-instant takes -- years, months, days, hours, minutes, seconds,
+   nanoseconds, offset sign, offset hours and offset minutes, an omitted one
+   its default -- matched the way the oracle's pattern matches: the most
+   components first, then fewer while what follows them is no offset reaching
+   the end, so 2020-05:30 is the year 2020 at -05:30. A fraction keeps its
+   first nine digits. Anything else is the oracle's Unrecognized date/time
+   syntax."
+  (if (not (stringp cs))
+      (rontolisp::%clojure-class-cast-exception-of "a timestamp needs a string"
+                                                   cs))
+  (let* ((n (length cs))
+         (year (rontolisp::%clojure-instant-digits cs 0 4))
+         (levels (if year (list (cons 4 year)) nil))
+         (i 4)
+         (result nil))
+    (dotimes (k 5)
+      (if (and (= (length levels) (+ k 1)) (< i n)
+               (char= (char cs i) (char "--T::" k))
+               (rontolisp::%clojure-instant-digits cs (+ i 1) 2))
+          (progn
+            (setq levels
+                  (cons (cons (+ i 3)
+                              (rontolisp::%clojure-instant-digits cs (+ i 1) 2))
+                        levels))
+            (setq i (+ i 3)))))
+    (if (and (= (length levels) 6) (< (+ i 1) n) (char= (char cs i) #\.)
+             (rontolisp::%clojure-instant-digits cs (+ i 1) 1))
+        (let ((j (+ i 1)) (nanos 0) (count 0))
+          (do ()
+              ((not (and (< j n) (rontolisp::%clojure-instant-digits cs j 1))))
+            (if (< count 9)
+                (setq nanos
+                 (+ (* nanos 10) (rontolisp::%clojure-instant-digits cs j 1))))
+            (setq count (+ count 1))
+            (setq j (+ j 1)))
+          (dotimes (k (- 9 (min count 9))) (setq nanos (* nanos 10)))
+          (setq levels (cons (cons j nanos) levels))))
+    (do ((rest levels (cdr rest)))
+        ((or result (null rest)))
+      (let ((offset (rontolisp::%clojure-instant-offset cs (car (car rest)) n)))
+        (if offset
+            (let ((fields nil))
+              (dolist (level rest) (setq fields (cons (cdr level) fields)))
+              (setq result
+                    (append fields
+                            (nthcdr (- (length fields) 1) (list 1 1 0 0 0 0))
+                            offset))))))
+    (or result
+        (rontolisp::%clojure-runtime-exception
+         (concatenate 'string "Unrecognized date/time syntax: " cs)))))
+
+(defun rontolisp::%clojure-days-in-month (month year)
+  "The days of MONTH (1 to 12) in YEAR, February's 29 in a Gregorian leap
+   year."
+  (cond ((/= month 2) (if (member month '(4 6 9 11)) 30 31))
+        ((and (zerop (rem year 4))
+              (or (not (zerop (rem year 100))) (zerop (rem year 400))))
+         29)
+        (t 28)))
+
+(defun rontolisp::%clojure-instant-check (f)
+  "clojure.instant's validated checks over the ten fields F (years, months,
+   days, hours, minutes, seconds, nanoseconds, offset sign, hours and minutes),
+   in the oracle's order: the first that fails is the oracle's
+   RuntimeException quoting it. The years go unchecked, like the oracle's, and
+   the month's days are the Gregorian calendar's."
+  (let* ((months (nth 1 f))
+         (minutes (nth 4 f))
+         (failed
+          (cond ((not (<= 1 months 12)) "(<= 1 months 12)")
+           ((not
+             (<= 1 (nth 2 f)
+                 (rontolisp::%clojure-days-in-month months (car f))))
+            "(<= 1 days (days-in-month months (leap-year? years)))")
+           ((not (<= 0 (nth 3 f) 23)) "(<= 0 hours 23)")
+           ((not (<= 0 minutes 59)) "(<= 0 minutes 59)")
+           ((not (<= 0 (nth 5 f) (if (= minutes 59) 60 59)))
+            "(<= 0 seconds (if (= minutes 59) 60 59))")
+           ((not (<= 0 (nth 6 f) 999999999)) "(<= 0 nanoseconds 999999999)")
+           ((not (<= -1 (nth 7 f) 1)) "(<= -1 offset-sign 1)")
+           ((not (<= 0 (nth 8 f) 23)) "(<= 0 offset-hours 23)")
+           ((not (<= 0 (nth 9 f) 59)) "(<= 0 offset-minutes 59)")
+           (t nil))))
+    (if failed
+        (rontolisp::%clojure-runtime-exception
+         (concatenate 'string "failed: " failed)))))
+
+(defun rontolisp::%clojure-instant-validate
+    (years months days hours minutes seconds nanos sign oh om)
+  "The checks of clojure.instant's validated over its ten arguments."
+  (rontolisp::%clojure-instant-check
+   (list years months days hours minutes seconds nanos sign oh om)))
+
+(defun rontolisp::%clojure-instant-of (f kind)
+  "The instant of the ten fields F, by KIND the oracle's construct-date
+   (:date, its milliseconds truncated from the nanoseconds), construct-timestamp
+   (:timestamp, the second's milliseconds plus the whole milliseconds of the
+   nanoseconds, which it keeps) or construct-calendar (:calendar, in the zone
+   GMT plus or minus the offset)."
+  (let* ((nanos (nth 6 f))
+         (sign (nth 7 f))
+         (oh (nth 8 f))
+         (om (nth 9 f))
+         (ms
+          (rontolisp::%clojure-instant-millis (car f) (nth 1 f) (nth 2 f)
+           (nth 3 f) (nth 4 f) (nth 5 f)
+           (if (eq kind :timestamp) 0 (floor nanos 1000000)) sign oh om)))
+    (cond ((eq kind :date) (list :C%INST ms))
+          ((eq kind :timestamp)
+           (list :C%TIMESTAMP (+ ms (floor nanos 1000000)) nanos))
+          (t (let ((zone (make-string-output-stream)))
+               (write-string (if (< sign 0) "GMT-" "GMT+") zone)
+               (rontolisp::%clojure-write-padded oh 2 zone)
+               (write-char #\: zone)
+               (rontolisp::%clojure-write-padded om 2 zone)
+               (list :C%CALENDAR ms (* (if (< sign 0) -1 1) (+ (* oh 60) om))
+                     (get-output-stream-string zone)))))))
+
+(defun rontolisp::%clojure-instant-read (cs kind)
+  "The instant of KIND (%clojure-instant-of) the timestamp CS spells, through
+   parse-timestamp and validated."
+  (let ((f (rontolisp::%clojure-instant-parse cs)))
+    (rontolisp::%clojure-instant-check f)
+    (rontolisp::%clojure-instant-of f kind)))
+
+(defun rontolisp::%clojure-instant-read-date (cs)
+  "clojure.instant's read-instant-date, the #inst reader: the Date the
+   timestamp CS spells."
+  (rontolisp::%clojure-instant-read cs :date))
+
+(defun rontolisp::%clojure-instant-read-timestamp (cs)
+  "clojure.instant's read-instant-timestamp: the Timestamp the timestamp CS
+   spells."
+  (rontolisp::%clojure-instant-read cs :timestamp))
+
+(defun rontolisp::%clojure-instant-read-calendar (cs)
+  "clojure.instant's read-instant-calendar: the Calendar the timestamp CS
+   spells."
+  (rontolisp::%clojure-instant-read cs :calendar))
+
+(defun rontolisp::%clojure-write-padded (n width stream)
+  "Write the non-negative integer N to STREAM in decimal, zero-padded to WIDTH
+   digits."
+  (let ((digits (princ-to-string n)))
+    (dotimes (i (- width (length digits))) (write-char #\0 stream))
+    (write-string digits stream)))
+
+(defun rontolisp::%clojure-write-instant-time (f stream)
+  "Write the hour, minute and second of the fields F as HH:mm:ss."
+  (rontolisp::%clojure-write-padded (nth 3 f) 2 stream)
+  (write-char #\: stream)
+  (rontolisp::%clojure-write-padded (nth 4 f) 2 stream)
+  (write-char #\: stream)
+  (rontolisp::%clojure-write-padded (nth 5 f) 2 stream))
+
+(defun rontolisp::%clojure-write-inst-literal (x stream)
+  "Write the instant X as the oracle's print-method does: #inst \"...\" in
+   UTC to the millisecond for a Date and to the nanosecond for a Timestamp, a
+   Calendar at its own offset."
+  (let* ((offset (if (eq (car x) :C%CALENDAR) (car (cdr (cdr x))) 0))
+         (f (rontolisp::%clojure-instant-fields (car (cdr x)) offset)))
+    (write-string "#inst \"" stream)
+    (rontolisp::%clojure-write-padded (car f) 4 stream)
+    (write-char #\- stream)
+    (rontolisp::%clojure-write-padded (nth 1 f) 2 stream)
+    (write-char #\- stream)
+    (rontolisp::%clojure-write-padded (nth 2 f) 2 stream)
+    (write-char #\T stream)
+    (rontolisp::%clojure-write-instant-time f stream)
+    (write-char #\. stream)
+    (if (eq (car x) :C%TIMESTAMP)
+        (rontolisp::%clojure-write-padded (car (cdr (cdr x))) 9 stream)
+        (rontolisp::%clojure-write-padded (nth 6 f) 3 stream))
+    (if (eq (car x) :C%CALENDAR)
+        (progn
+          (write-char (if (< offset 0) #\- #\+) stream)
+          (rontolisp::%clojure-write-padded (floor (abs offset) 60) 2 stream)
+          (write-char #\: stream)
+          (rontolisp::%clojure-write-padded (mod (abs offset) 60) 2 stream))
+        (write-string "-00:00" stream))
+    (write-char #\" stream)))
+
+(defun rontolisp::%clojure-instant-string (x)
+  "str of the instant X: the oracle's toString in UTC, a Date's Wed Jan 01
+   00:00:00 UTC 2020 and a Timestamp's 2020-01-01 00:00:00.5 (the
+   nanoseconds without their trailing zeros); a Calendar answers its printed
+   form, where the oracle's dumps its fields."
+  (let ((out (make-string-output-stream))
+        (f (rontolisp::%clojure-instant-fields (car (cdr x)) 0)))
+    (cond
+     ((eq (car x) :C%CALENDAR) (rontolisp::%clojure-write-inst-literal x out))
+     ((eq (car x) :C%INST)
+      (write-string
+       (subseq "SunMonTueWedThuFriSat" (* 3 (nth 7 f)) (+ 3 (* 3 (nth 7 f))))
+       out)
+      (write-char #\Space out)
+      (write-string (subseq "JanFebMarAprMayJunJulAugSepOctNovDec"
+                            (* 3 (- (nth 1 f) 1)) (* 3 (nth 1 f))) out)
+      (write-char #\Space out)
+      (rontolisp::%clojure-write-padded (nth 2 f) 2 out)
+      (write-char #\Space out)
+      (rontolisp::%clojure-write-instant-time f out)
+      (write-string " UTC " out)
+      (write-string (princ-to-string (car f)) out))
+     (t
+      (let ((nanos (make-string-output-stream)))
+        (rontolisp::%clojure-write-padded (car (cdr (cdr x))) 9 nanos)
+        (rontolisp::%clojure-write-padded (car f) 4 out)
+        (write-char #\- out)
+        (rontolisp::%clojure-write-padded (nth 1 f) 2 out)
+        (write-char #\- out)
+        (rontolisp::%clojure-write-padded (nth 2 f) 2 out)
+        (write-char #\Space out)
+        (rontolisp::%clojure-write-instant-time f out)
+        (write-char #\. out)
+        (let* ((digits (get-output-stream-string nanos)) (end (length digits)))
+          (do ()
+              ((or (= end 1) (char/= (char digits (- end 1)) #\0)))
+            (setq end (- end 1)))
+          (write-string (subseq digits 0 end) out)))))
+    (get-output-stream-string out)))
+
+(defun rontolisp::%clojure-instant-class-name (x)
+  "The oracle's class of the instant X."
+  (cond ((eq (car x) :C%INST) "java.util.Date")
+        ((eq (car x) :C%TIMESTAMP) "java.sql.Timestamp")
+        (t "java.util.GregorianCalendar")))
+
+(defun rontolisp::%clojure-instant-class (x)
+  "class of the instant X, as a keyword."
+  (list :C%KEYWORD (rontolisp::%clojure-instant-class-name x)))
+
+(defun rontolisp::%clojure-inst-equal (a b)
+  "= of the instant A and B: equal wrappers, or a Date and a Timestamp of the
+   same milliseconds (the oracle's Date.equals; Timestamp.equals takes no
+   Date)."
+  (or (equal a b)
+      (and (eq (car a) :C%INST) (consp b) (eq (car b) :C%TIMESTAMP)
+           (= (car (cdr a)) (car (cdr b))))))
+
+(defun rontolisp::%clojure-instant-compare (a b)
+  "compare of the instant A with B, the oracle's compareTo: a Date by
+   milliseconds against a Date or a Timestamp, a Timestamp by milliseconds
+   and then nanoseconds (a Date's being its milliseconds' fraction), a
+   Calendar by milliseconds against a Calendar; anything else signals like
+   the oracle's cast."
+  (if (and (consp b)
+           (if (eq (car a) :C%CALENDAR)
+               (eq (car b) :C%CALENDAR)
+               (or (eq (car b) :C%INST) (eq (car b) :C%TIMESTAMP))))
+      (let ((x (car (cdr a))) (y (car (cdr b))))
+        (if (and (= x y) (eq (car a) :C%TIMESTAMP))
+            (progn
+              (setq x (car (cdr (cdr a))))
+              (setq y
+                    (if (eq (car b) :C%TIMESTAMP)
+                        (car (cdr (cdr b)))
+                        (* (mod y 1000) 1000000)))))
+        (cond ((< x y) -1) ((> x y) 1) (t 0)))
+      (rontolisp::%clojure-class-cast-exception
+       "compare needs two values of one comparable kind")))
+
+(defun rontolisp::%clojure-inst-ms (x)
+  "inst-ms: the milliseconds of a Date or a Timestamp (its getTime), or of a
+   host java.util.Date or java.time.Instant; anything else is the oracle's
+   refusal of a value the Inst protocol has no implementation for."
+  (cond ((rontolisp::%clojure-inst-p x) (car (cdr x)))
+        ((rontolisp::%clojure-host-instance-p x "java.util.Date")
+         (rontolisp::%clojure-host-method x "getTime"))
+        ((rontolisp::%clojure-host-instance-p x "java.time.Instant")
+         (rontolisp::%clojure-host-method x "toEpochMilli"))
+        (t (rontolisp::%clojure-illegal-argument-exception
+            (concatenate 'string
+             "No implementation of method: :inst-ms* of protocol: #'clojure.core/Inst found for class: "
+             (if (null x) "nil" (rontolisp::%clojure-class-name-of x)))))))
+
+(defun rontolisp::%clojure-inst-ms-v (&rest args)
+  "inst-ms as a value."
+  (rontolisp::%clojure-check-arity args 1 1 "inst-ms")
+  (rontolisp::%clojure-inst-ms (car args)))
+
+(defun rontolisp::%clojure-uuid-p (x)
+  "Whether X is a UUID."
+  (and (consp x) (eq (car x) :C%UUID)))
+
+(defun rontolisp::%clojure-make-uuid (msb lsb)
+  "The UUID of the signed 64-bit halves MSB and LSB: what a #uuid literal
+   lowers to."
+  (list :C%UUID msb lsb))
+
+(defun rontolisp::%clojure-is-uuid (x class-name)
+  "uuid?: a UUID, or a host object of the class CLASS-NAME, java.util.UUID. A
+   program that makes no UUID calls %clojure-host-instance-p in its place (the
+   strip's alias)."
+  (or (rontolisp::%clojure-uuid-p x)
+      (rontolisp::%clojure-host-instance-p x class-name)))
+
+(defun rontolisp::%clojure-signed-64 (n)
+  "The unsigned 64-bit integer N as the signed long of the same bits."
+  (if (>= n 9223372036854775808) (- n 18446744073709551616) n))
+
+(defun rontolisp::%clojure-write-hex (n width stream)
+  "Write the low WIDTH hex digits of the integer N to STREAM, lowercase (a
+   negative N as its two's complement)."
+  (do ((shift (* 4 (- width 1)) (- shift 4)))
+      ((< shift 0))
+    (write-char (char "0123456789abcdef" (logand (ash n (- shift)) 15))
+                stream)))
+
+(defun rontolisp::%clojure-uuid-to-string (x)
+  "str of the UUID X: the oracle's toString, its 32 hex digits lowercase in
+   groups of 8, 4, 4, 4 and 12."
+  (let ((out (make-string-output-stream))
+        (msb (car (cdr x)))
+        (lsb (car (cdr (cdr x)))))
+    (rontolisp::%clojure-write-hex (ash msb -32) 8 out)
+    (write-char #\- out)
+    (rontolisp::%clojure-write-hex (ash msb -16) 4 out)
+    (write-char #\- out)
+    (rontolisp::%clojure-write-hex msb 4 out)
+    (write-char #\- out)
+    (rontolisp::%clojure-write-hex (ash lsb -48) 4 out)
+    (write-char #\- out)
+    (rontolisp::%clojure-write-hex lsb 12 out)
+    (get-output-stream-string out)))
+
+(defun rontolisp::%clojure-write-uuid-literal (x stream)
+  "Write the UUID X as the oracle's print-method does: #uuid \"...\"."
+  (write-string "#uuid \"" stream)
+  (write-string (rontolisp::%clojure-uuid-to-string x) stream)
+  (write-char #\" stream))
+
+(defun rontolisp::%clojure-uuid-hex (c)
+  "The value of the hex digit C, or NIL: ASCII digits and letters only."
+  (let ((code (char-code c)))
+    (cond ((and (>= code 48) (<= code 57)) (- code 48))
+          ((and (>= code 97) (<= code 102)) (- code 87))
+          ((and (>= code 65) (<= code 70)) (- code 55))
+          (t nil))))
+
+(defun rontolisp::%clojure-uuid-group (s start end mask strict)
+  "The group of the string S from START to END as java.lang.Long's parseLong
+   reads it in radix 16 -- an optional + first, then hex digits worth at most
+   2^63 - 1 -- masked to MASK. A group that is no such number answers NIL when
+   not STRICT, else signals the oracle's NumberFormatException, which names
+   where the read stopped."
+  (let ((i start) (v 0) (stop nil))
+    (if (< i end)
+        (progn
+          (if (char= (char s i) #\+) (setq i (+ i 1)))
+          (if (= i end) (setq stop i))
+          (do ()
+              ((or stop (>= i end)))
+            (let ((d (rontolisp::%clojure-uuid-hex (char s i))))
+              (if (or (null d) (> v 576460752303423487))
+                  (setq stop i)
+                  (progn
+                    (setq v (+ (* v 16) d))
+                    (setq i (+ i 1)))))))
+        (setq stop :empty))
+    (cond ((null stop) (logand v mask))
+          ((not strict) nil)
+          ((eq stop :empty)
+           (rontolisp::%clojure-number-format-exception
+            "For input string: \"\" under radix 16"))
+          (t (rontolisp::%clojure-number-format-exception
+              (concatenate 'string "Error at index "
+                           (princ-to-string (- stop start)) " in: \""
+                           (subseq s start end) "\""))))))
+
+(defun rontolisp::%clojure-uuid-of (s strict)
+  "The UUID the string S spells, the oracle's java.util.UUID/fromString: at
+   most 36 characters, five groups between exactly four dashes, each read in
+   radix 16 and masked to its width (so 1-1-1-1-1 reads). A string that is no
+   UUID answers NIL when not STRICT, else signals the oracle's exception."
+  (let ((n (length s)) (dashes nil))
+    (dotimes (i n) (if (char= (char s i) #\-) (setq dashes (cons i dashes))))
+    (setq dashes (reverse dashes))
+    (cond ((> n 36)
+           (if strict
+               (rontolisp::%clojure-illegal-argument-exception
+                "UUID string too large")))
+          ((/= (length dashes) 4)
+           (if strict
+               (rontolisp::%clojure-illegal-argument-exception
+                (concatenate 'string "Invalid UUID string: " s))))
+          (t
+           (let* ((d1 (car dashes))
+                  (d2 (car (cdr dashes)))
+                  (d3 (car (cdr (cdr dashes))))
+                  (d4 (car (cdr (cdr (cdr dashes)))))
+                  (g1 (rontolisp::%clojure-uuid-group s 0 d1 4294967295 strict))
+                  (g2
+                   (and g1
+                        (rontolisp::%clojure-uuid-group s (+ d1 1) d2 65535
+                                                        strict)))
+                  (g3
+                   (and g2
+                        (rontolisp::%clojure-uuid-group s (+ d2 1) d3 65535
+                                                        strict)))
+                  (g4
+                   (and g3
+                        (rontolisp::%clojure-uuid-group s (+ d3 1) d4 65535
+                                                        strict)))
+                  (g5
+                   (and g4
+                        (rontolisp::%clojure-uuid-group s (+ d4 1) n
+                                                        281474976710655
+                                                        strict))))
+             (if g5
+                 (list :C%UUID (rontolisp::%clojure-signed-64
+                                (logior (ash g1 32) (ash g2 16) g3))
+                       (rontolisp::%clojure-signed-64 (logior (ash g4 48) g5)))
+                 nil))))))
+
+(defun rontolisp::%clojure-parse-uuid (s)
+  "parse-uuid: the UUID the string S spells, nil when it is no UUID; a value
+   that is no string is the oracle's ClassCastException, nil its
+   NullPointerException."
+  (if (stringp s)
+      (rontolisp::%clojure-uuid-of s nil)
+      (rontolisp::%clojure-class-cast-exception-of "parse-uuid needs a string"
+                                                   s)))
+
+(defun rontolisp::%clojure-parse-uuid-v (&rest args)
+  "parse-uuid as a value."
+  (rontolisp::%clojure-check-arity args 1 1 "parse-uuid")
+  (rontolisp::%clojure-parse-uuid (car args)))
+
+(defun rontolisp::%clojure-read-uuid (form)
+  "The #uuid reader: the UUID the string FORM spells, the oracle's exception
+   for one that is no UUID, its refusal of a FORM that is no string."
+  (if (stringp form)
+      (rontolisp::%clojure-uuid-of form t)
+      (rontolisp::%clojure-illegal-argument-exception
+       "#uuid data reader expected string")))
+
+(defun rontolisp::%clojure-random-uuid ()
+  "random-uuid: a version 4 UUID of 122 random bits from
+   rontolisp:random-bytes (the oracle's is SecureRandom's), its version and
+   variant bits set like java.util.UUID's randomUUID."
+  (let ((bytes (rontolisp:random-bytes 16)) (msb 0) (lsb 0))
+    (setf (aref bytes 6) (logior (logand (aref bytes 6) 15) 64))
+    (setf (aref bytes 8) (logior (logand (aref bytes 8) 63) 128))
+    (dotimes (i 8)
+      (setq msb (logior (ash msb 8) (aref bytes i)))
+      (setq lsb (logior (ash lsb 8) (aref bytes (+ i 8)))))
+    (list :C%UUID (rontolisp::%clojure-signed-64 msb)
+          (rontolisp::%clojure-signed-64 lsb))))
+
+(defun rontolisp::%clojure-random-uuid-v (&rest args)
+  "random-uuid as a value."
+  (rontolisp::%clojure-check-arity args 0 0 "random-uuid")
+  (rontolisp::%clojure-random-uuid))
+
+(defun rontolisp::%clojure-uuid-compare (a b)
+  "compare of the UUID A with B, the oracle's UUID.compareTo: the halves as
+   signed longs, the most significant first; anything else signals like the
+   oracle's cast."
+  (if (and (consp b) (eq (car b) :C%UUID))
+      (let ((x (car (cdr a))) (y (car (cdr b))))
+        (if (= x y)
+            (progn
+              (setq x (car (cdr (cdr a))))
+              (setq y (car (cdr (cdr b))))))
+        (cond ((< x y) -1) ((> x y) 1) (t 0)))
+      (rontolisp::%clojure-class-cast-exception
+       "compare needs two values of one comparable kind")))
+
+(defun rontolisp::%clojure-uuid-version (x)
+  ".version of the UUID X: the four bits after its third group's start."
+  (logand (ash (car (cdr x)) -12) 15))
+
+(defun rontolisp::%clojure-uuid-variant (x)
+  ".variant of the UUID X, java.util.UUID's: 0 when the low half's top bit
+   is clear, 2 for 10, else its top three bits."
+  (let ((top (logand (ash (car (cdr (cdr x))) -61) 7)))
+    (cond ((< top 4) 0) ((< top 6) 2) (t top))))
+
 ;;;; clojure.edn: read-string and read over the reader above in EDN mode.
 ;;
 ;; The oracle's EdnReader reads data only: the quote is a symbol constituent, a
@@ -10243,11 +10893,10 @@
          (f
           (if readers (rontolisp::%clojure-call-keyword tag readers nil) nil)))
     (cond (f (rontolisp::%clojure-rd-edn-call f (list value)))
-          ((or (eq tag (rontolisp::%clojure-rd-symbol "inst"))
-               (eq tag (rontolisp::%clojure-rd-symbol "uuid")))
-           (error "~A"
-                  (concatenate 'string "unsupported reader form #"
-                               (rontolisp::%clojure-symbol-full-name tag))))
+          ((eq tag (rontolisp::%clojure-rd-symbol "inst"))
+           (rontolisp::%clojure-instant-read-date value))
+          ((eq tag (rontolisp::%clojure-rd-symbol "uuid"))
+           (rontolisp::%clojure-read-uuid value))
           (dflt (rontolisp::%clojure-rd-edn-call dflt (list tag value)))
           (t (rontolisp::%clojure-runtime-exception
               (concatenate 'string "No reader function for tag "

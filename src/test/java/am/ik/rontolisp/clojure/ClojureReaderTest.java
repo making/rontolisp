@@ -302,8 +302,46 @@ class ClojureReaderTest {
 			.hasMessageContaining("key must be of type clojure.lang.Keyword, got \"a\"");
 		assertThatThrownBy(() -> read("#user.P{:a 1 :a 2}")).isInstanceOf(LispReadException.class)
 			.hasMessageContaining("Duplicate key: :a");
-		assertThatThrownBy(() -> read("#inst \"2020\"")).isInstanceOf(LispReadException.class)
-			.hasMessageContaining("unsupported reader form #inst");
+	}
+
+	@Test
+	void instAndUuidReadThroughTheOraclesDefaultDataReaders() {
+		// the instant's milliseconds and the UUID's halves, which the lowering builds
+		assertThat(printed("#inst \"2020-01-01T01:00:00+01:00\" #inst\"1970\" #uuid \"1-1-1-1-1\""))
+			.isEqualTo("[(|%inst| 1577836800000), (|%inst| 0), (|%uuid| 4295032833 281474976710657)]");
+		assertThat(printed("#inst \"1582-10-10\" [#uuid \"ffffffff-ffff-ffff-ffff-ffffffffffff\"]"))
+			.isEqualTo("[(|%inst| -12218860800000), (|%vector| (|%uuid| -1 -1))]");
+		// a branch not taken needs no reader, like any tag
+		assertThat(new ClojureReader("#?(:cljs #inst \"x\" :clj 1)", "a.cljc").readAll().toString()).contains("1");
+	}
+
+	@Test
+	void instAndUuidRefusalsAreTheOraclesAfterTheirForm() {
+		assertThatThrownBy(() -> new ClojureReader("(def x #inst \"2021-02-29\")", "a.clj").readAll())
+			.isInstanceOf(LispReadException.class)
+			.hasMessage("a.clj:1:26: failed: (<= 1 days (days-in-month months (leap-year? years)))");
+		assertThatThrownBy(() -> new ClojureReader("[1 #uuid \"bad\"]", "a.clj").readAll())
+			.isInstanceOf(LispReadException.class)
+			.hasMessage("a.clj:1:15: Invalid UUID string: bad");
+		assertThatThrownBy(() -> read("#inst \"2020-1-1\"")).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Unrecognized date/time syntax: 2020-1-1");
+		assertThatThrownBy(() -> read("#inst 2020")).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("a timestamp needs a string");
+		assertThatThrownBy(() -> read("#uuid :a")).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("#uuid data reader expected string");
+		assertThatThrownBy(() -> read("#uuid \"1-1-1-1-8000000000000000\"")).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Error at index 15 in: \"8000000000000000\"");
+		// a repeated key names the oracle's toString of the earlier one
+		assertThatThrownBy(() -> read("{#inst \"2020\" 1 #inst \"2020-01-01T00:00:00Z\" 2}"))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Duplicate key: Wed Jan 01 00:00:00 UTC 2020");
+		assertThatThrownBy(() -> read("#{#uuid \"1-1-1-1-1\" #uuid \"00000001-0001-0001-0001-000000000001\"}"))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Duplicate key: 00000001-0001-0001-0001-000000000001");
+		// a splice of one is no list
+		assertThatThrownBy(() -> new ClojureReader("[#?@(:clj #inst \"2020\")]", "a.cljc").readAll())
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Spliced form list in read-cond-splicing must implement java.util.List");
 	}
 
 	@Test

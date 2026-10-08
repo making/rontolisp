@@ -360,6 +360,11 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   the class loaded first); a deftype literal is refused. `read` takes a stream -- a
   plain `clojure.java.io/reader` too, where the oracle requires a `PushbackReader` -- and
   refuses a host reader.
+- `#inst` and `#uuid` read as the oracle's `java.util.Date` and `java.util.UUID` on every
+  backend; [Instants and UUIDs](reference/instants.md) lists the few differences (`str` of an
+  instant answers in UTC, a host value from interop is never `=` to a read one).
+  `*data-readers*` and `data_readers.clj` are not read, so no other undotted tag has a
+  reader function, in source or under `read-string`.
 - `*out*`/`*in*`/`*err*` are `*standard-output*`/`*standard-input*`/`*error-output*`
   (rebinding rebinds the standard streams); read at the root, `*out*` and `*in*` are
   stream values over the process standard streams;

@@ -81,6 +81,23 @@ final class ClojureValueMethodLowering {
 	/** The predicates whose kinds include the list, which nil stands for when empty. */
 	private static final List<String> LIST_KINDS = List.of("coll?", "seq?", "list?", "sequential?");
 
+	/** Any instant's kind: a Date, a Timestamp or a Calendar. */
+	private static final String INSTANT = "instant";
+
+	/** The kind of an instant that is a {@code java.util.Date}: a Date or a Timestamp. */
+	private static final String DATE = "date";
+
+	/** The UUID's kind. */
+	private static final String UUID = "uuid";
+
+	/**
+	 * The kinds no one-argument predicate names exactly, each to its family's test, which
+	 * a program making no such value folds ({@link ClojureArms.Family#INSTANT},
+	 * {@link ClojureArms.Family#UUID}).
+	 */
+	private static final Map<String, String> FAMILY_KINDS = Map.of(INSTANT, ClojurePredicateLowering.INSTANT_P, DATE,
+			ClojurePredicateLowering.INST_P, UUID, ClojurePredicateLowering.UUID_P);
+
 	/** The rows, by {@code method/arity}. */
 	private static final Map<String, List<Arm>> ROWS = new HashMap<>();
 
@@ -90,6 +107,7 @@ final class ClojureValueMethodLowering {
 		functionRows();
 		updateRows();
 		nameAndNumberRows();
+		timeValueRows();
 	}
 
 	private static void collectionRows() {
@@ -158,7 +176,27 @@ final class ClojureValueMethodLowering {
 		for (String equal : List.of("equiv", "equals")) {
 			row(equal, 1, arm(List.of(), core("=", R, A)));
 		}
-		row("compareTo", 1, arm(List.of("indexed?", "ident?", "ratio?"), core("compare", R, A)));
+		row("compareTo", 1, arm(List.of("indexed?", "ident?", "ratio?", INSTANT, UUID), core("compare", R, A)));
+	}
+
+	/**
+	 * The methods of the instants and the UUID a program reads: a Date's (or a
+	 * Timestamp's) {@code getTime}, {@code before} and {@code after} (by milliseconds,
+	 * {@code Date}'s), a UUID's halves, version and variant.
+	 */
+	private static void timeValueRows() {
+		row("getTime", 0, arm(List.of(DATE), core("inst-ms", R)));
+		row("before", 1, arm(List.of(DATE), core("<", core("inst-ms", R), core("inst-ms", A))));
+		row("after", 1, arm(List.of(DATE), core(">", core("inst-ms", R), core("inst-ms", A))));
+		row("getMostSignificantBits", 0, new Arm(List.of(UUID), ctx -> part(ctx, "CADR")));
+		row("getLeastSignificantBits", 0, new Arm(List.of(UUID), ctx -> part(ctx, "CADDR")));
+		row("version", 0, new Arm(List.of(UUID), ctx -> part(ctx, "RONTOLISP::%CLOJURE-UUID-VERSION")));
+		row("variant", 0, new Arm(List.of(UUID), ctx -> part(ctx, "RONTOLISP::%CLOJURE-UUID-VARIANT")));
+	}
+
+	/** The function applied to the bound receiver. */
+	private static LispVal part(ClojureLowering ctx, String function) {
+		return ClojureLowerUtil.list(new LispSymbol(function), ctx.localSym(RECV));
 	}
 
 	private static void nameAndNumberRows() {
@@ -389,6 +427,11 @@ final class ClojureValueMethodLowering {
 		}
 		List<LispVal> tests = new ArrayList<>();
 		for (String kind : arm.kinds()) {
+			String family = FAMILY_KINDS.get(kind);
+			if (family != null) {
+				tests.add(ClojureLowerUtil.list(new LispSymbol(family), self));
+				continue;
+			}
 			tests.add(switch (kind) {
 				case ATOM -> ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-ATOM-P"), self);
 				case FUNCTION -> ClojureLowerUtil.list(ClojureLowerUtil.sym("functionp"), self);

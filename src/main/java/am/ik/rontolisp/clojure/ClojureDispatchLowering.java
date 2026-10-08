@@ -218,6 +218,10 @@ final class ClojureDispatchLowering {
 			case NAMESPACE -> runtime(Use.VARIABLE, "RONTOLISP::%CLOJURE-NS-OBJECT-P");
 			case READER_CONDITIONAL -> runtime(Use.VARIABLE, ClojurePredicateLowering.READER_COND_P);
 			case TAGGED_LITERAL -> runtime(Use.VARIABLE, ClojurePredicateLowering.TAGGED_LITERAL_P);
+			case DATE -> runtime(Use.VARIABLE, ClojurePredicateLowering.DATE_P);
+			case TIMESTAMP -> runtime(Use.VARIABLE, ClojurePredicateLowering.TIMESTAMP_P);
+			case CALENDAR -> runtime(Use.VARIABLE, ClojurePredicateLowering.CALENDAR_P);
+			case UUID -> runtime(Use.VARIABLE, ClojurePredicateLowering.UUID_P);
 			case RECORD -> new Arm(Use.MANY, ClojureProtocolLowering::isRecordForm);
 			case DEFTYPE -> new Arm(Use.MANY, ClojureProtocolLowering::isDeftypeForm);
 			case REIFY -> new Arm(Use.MANY, ClojureProtocolLowering::isReifyForm);
@@ -270,6 +274,22 @@ final class ClojureDispatchLowering {
 	static final String INSTANCE_OF = "RONTOLISP::%CLOJURE-INSTANCE-OF";
 
 	/**
+	 * The {@code cond} branches answering the class keyword of an instant or a UUID, the
+	 * oracle's class's name ({@code :java.util.Date}): arms a program making neither
+	 * sheds ({@link ClojureArms.Family#INSTANT}, {@link ClojureArms.Family#UUID}). Ahead
+	 * of the list's branch, which a tagged wrapper's cons would otherwise take.
+	 * @param one the variable holding the value
+	 * @return the branches
+	 */
+	static List<LispVal> timeValueClassBranches(LispSymbol one) {
+		return List.of(
+				ClojureLowerUtil.list(ClojureLowerUtil.list(new LispSymbol(ClojurePredicateLowering.INSTANT_P), one),
+						ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-INSTANT-CLASS"), one)),
+				ClojureLowerUtil.list(ClojureLowerUtil.list(new LispSymbol(ClojurePredicateLowering.UUID_P), one),
+						ClojureCollectionLowering.keywordForm("java.util.UUID")));
+	}
+
+	/**
 	 * {@code class}: the value's kind as a keyword. The oracle answers host classes,
 	 * which no wasm backend has -- the keyword names the kind instead, on every backend
 	 * alike. A value of no Clojure kind answers its host class when it is a host object
@@ -303,6 +323,7 @@ final class ClojureDispatchLowering {
 		branches.add(ClojureLowerUtil.list(
 				ClojureLowerUtil.list(new LispSymbol(ClojurePredicateLowering.READER_VALUE_P), one),
 				ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-READER-VALUE-CLASS"), one)));
+		branches.addAll(timeValueClassBranches(one));
 		branches.add(ClojureLowerUtil.list(ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), one),
 				ctx.inDispatchFn ? ClojureLowering.NIL_CONST : ClojureCollectionLowering.keywordForm("nil")));
 		branches.add(ClojureLowerUtil.list(ClojureLowerUtil.list(ClojureLowerUtil.sym("eq"), one, ctx.falseVariable),

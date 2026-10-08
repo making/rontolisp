@@ -291,6 +291,39 @@ class ClojureArmsTest {
 	}
 
 	@Test
+	void theInstantAndUuidFamiliesFoldTheirArmsInAProgramMakingNeither() {
+		// only an #inst or #uuid literal, a read, the clojure.instant kernels,
+		// random-uuid and parse-uuid make one: uuid? is the host test again, and the
+		// class branch, the instance? arms and an instance call's clause go
+		List<LispVal> forms = read("(rontolisp::%clojure-is-uuid x \"java.util.UUID\")"
+				+ " (cond ((rontolisp::%clojure-instant-p c) (rontolisp::%clojure-instant-class c))"
+				+ " ((rontolisp::%clojure-uuid-p c) (list :c%keyword \"java.util.UUID\")) (t c))"
+				+ " (or (rontolisp::%clojure-date-p v) (rontolisp::%clojure-timestamp-p v) (stringp v))"
+				+ " (cond ((rontolisp::%clojure-inst-p r) (rontolisp::%clojure-inst-ms r)) (t (refuse r)))");
+		for (ClojureArms.Family family : List.of(ClojureArms.Family.INSTANT, ClojureArms.Family.UUID)) {
+			ClojureArms.Scan scan = ClojureArms.scan(forms, family);
+			assertThat(scan.builds()).isFalse();
+			assertThat(scan.strips()).isTrue();
+		}
+		List<LispVal> stripped = ClojureArms.strip(ClojureArms.strip(forms, ClojureArms.Family.INSTANT),
+				ClojureArms.Family.UUID);
+		assertThat(stripped.stream().map(LispVal::print)).containsExactly(
+				"(RONTOLISP::%CLOJURE-HOST-INSTANCE-P X \"java.util.UUID\")", "(COND (T C))", "(STRINGP V)",
+				"(COND (T (REFUSE R)))");
+		for (String producer : List.of("(rontolisp::%clojure-make-inst 0)", "(rontolisp::%clojure-read-string s ctx)",
+				"(function rontolisp::%clojure-edn-read-string-v)", "(rontolisp::%clojure-instant-read-calendar s)")) {
+			assertThat(ClojureArms.scan(read(producer), ClojureArms.Family.INSTANT).builds()).as(producer).isTrue();
+		}
+		for (String producer : List.of("(rontolisp::%clojure-make-uuid 0 0)", "(rontolisp::%clojure-random-uuid)",
+				"(function rontolisp::%clojure-parse-uuid-v)", "(rontolisp::%clojure-read s nil nil ctx)")) {
+			assertThat(ClojureArms.scan(read(producer), ClojureArms.Family.UUID).builds()).as(producer).isTrue();
+		}
+		// inst-ms reads one, it makes none
+		assertThat(ClojureArms.scan(read("(rontolisp::%clojure-inst-ms x)"), ClojureArms.Family.INSTANT).builds())
+			.isFalse();
+	}
+
+	@Test
 	void theRefusalFamilyFoldsVecsArgumentCheckToTheArgument() {
 		// vec's RuntimeException for a non-collection is read only where a class is
 		List<LispVal> forms = read(

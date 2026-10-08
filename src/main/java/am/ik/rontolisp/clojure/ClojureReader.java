@@ -490,7 +490,8 @@ final class ClojureReader {
 		if (head == VECTOR) {
 			return items.subList(1, items.size());
 		}
-		if (head == HASH_MAP || head == HASH_SET || head == REGEX || head == RECORD || head == TAGGED) {
+		if (head == HASH_MAP || head == HASH_SET || head == REGEX || head == RECORD || head == TAGGED
+				|| ClojureDefaultReaders.isMarker(head)) {
 			return null;
 		}
 		return items;
@@ -565,7 +566,8 @@ final class ClojureReader {
 		if (form instanceof LispSymbol symbol && symbol.name().equals("nil")) {
 			return "null";
 		}
-		return prOf(form);
+		String tagged = parts == null ? null : ClojureDefaultReaders.text(parts);
+		return tagged != null ? tagged : prOf(form);
 	}
 
 	/** The datum as {@code pr} writes it, for {@link #strOf}. */
@@ -576,6 +578,10 @@ final class ClojureReader {
 		List<LispVal> items = ClojureLowerUtil.items(form);
 		if (items == null) {
 			return form.print();
+		}
+		String tagged = ClojureDefaultReaders.printed(items);
+		if (tagged != null) {
+			return tagged;
 		}
 		LispVal head = items.isEmpty() ? LispNil.INSTANCE : items.get(0);
 		String open = head == VECTOR ? "[" : head == HASH_SET ? "#{" : head == HASH_MAP ? "{" : "(";
@@ -603,14 +609,6 @@ final class ClojureReader {
 		return list(ClojureLowerUtil.READER_META, readRequired(), meta);
 	}
 
-	/**
-	 * One record literal {@code #ns.Name{:k v ...}} / {@code #ns.Name[v ...]}, positioned
-	 * after the hash: {@code (%record ns.Name body)}, the body read as data (the oracle
-	 * never evaluates it). Like the oracle, only a dotted class name is a record literal
-	 * (an undotted tag is a tagged literal, and no reader function is installed for one);
-	 * a body that is neither a map nor a vector is unreadable, and a map body takes
-	 * distinct keyword keys only.
-	 */
 	/**
 	 * A namespace map, positioned after {@code #:}: the oracle's
 	 * {@code NamespaceMapReader}. {@code #:ns{...}} gives each unqualified keyword or
@@ -715,6 +713,15 @@ final class ClojureReader {
 		}
 	}
 
+	/**
+	 * One record literal {@code #ns.Name{:k v ...}} / {@code #ns.Name[v ...]}, positioned
+	 * after the hash: {@code (%record ns.Name body)}, the body read as data (the oracle
+	 * never evaluates it). Like the oracle, only a dotted class name is a record literal;
+	 * an undotted tag is a tagged literal, of which {@code #inst} and {@code #uuid} read
+	 * through the oracle's default data readers ({@link ClojureDefaultReaders}) and any
+	 * other has no reader function. A body that is neither a map nor a vector is
+	 * unreadable, and a map body takes distinct keyword keys only.
+	 */
 	private LispVal readRecordLiteral() {
 		int start = this.pos;
 		while (this.pos < this.source.length() && DELIMS.indexOf(peek()) < 0) {
@@ -726,7 +733,14 @@ final class ClojureReader {
 		}
 		if (tag.indexOf('.') < 0) {
 			if (tag.equals("inst") || tag.equals("uuid")) {
-				throw error("unsupported reader form #" + tag);
+				// the oracle's default data readers, which run as the form is read
+				LispVal form = readRequired();
+				try {
+					return tag.equals("inst") ? ClojureDefaultReaders.instant(form) : ClojureDefaultReaders.uuid(form);
+				}
+				catch (IllegalArgumentException ex) {
+					throw error(String.valueOf(ex.getMessage()));
+				}
 			}
 			throw error("No reader function for tag " + tag);
 		}
@@ -961,7 +975,7 @@ final class ClojureReader {
 			Collections.sort(members);
 			return (head == HASH_MAP ? "{" : "#{") + String.join(",", members) + "}";
 		}
-		if (head == RECORD || head == TAGGED) {
+		if (head == RECORD || head == TAGGED || head != null && ClojureDefaultReaders.isMarker(head)) {
 			return prOf(form);
 		}
 		StringBuilder key = new StringBuilder("(");

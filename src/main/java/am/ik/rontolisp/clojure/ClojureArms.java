@@ -1,6 +1,7 @@
 package am.ik.rontolisp.clojure;
 
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -115,6 +116,33 @@ public final class ClojureArms {
 	}
 
 	private ClojureArms() {
+	}
+
+	/**
+	 * The run-time reads a program names -- {@code read-string}, {@code read} and
+	 * {@code clojure.edn}'s, each of which may make an instant or a UUID through its
+	 * default {@code #inst} and {@code #uuid} readers -- held apart from {@link Family}
+	 * so its constants can name them.
+	 */
+	private static final class Reads {
+
+		private static final Set<String> ENTRIES = Set.of("RONTOLISP::%CLOJURE-READ", "RONTOLISP::%CLOJURE-READ-V",
+				"RONTOLISP::%CLOJURE-READ-OPTS", "RONTOLISP::%CLOJURE-READ-FROM", "RONTOLISP::%CLOJURE-READ-STRING",
+				"RONTOLISP::%CLOJURE-READ-STRING-V", "RONTOLISP::%CLOJURE-READ-STRING-OPTS",
+				"RONTOLISP::%CLOJURE-EDN-FROM", "RONTOLISP::%CLOJURE-EDN-READ-STRING-1",
+				"RONTOLISP::%CLOJURE-EDN-READ-STRING", "RONTOLISP::%CLOJURE-EDN-READ",
+				"RONTOLISP::%CLOJURE-EDN-READ-STRING-V", "RONTOLISP::%CLOJURE-EDN-READ-V");
+
+		private Reads() {
+		}
+
+		/** The reads and the other producers. */
+		static Set<String> with(String... producers) {
+			Set<String> all = new HashSet<>(ENTRIES);
+			all.addAll(List.of(producers));
+			return Set.copyOf(all);
+		}
+
 	}
 
 	/**
@@ -310,6 +338,42 @@ public final class ClojureArms {
 						"RONTOLISP::%CLOJURE-READ-STRING-V", "RONTOLISP::%CLOJURE-READ-V",
 						"RONTOLISP::%CLOJURE-READER-CONDITIONAL", "RONTOLISP::%CLOJURE-READER-CONDITIONAL-V",
 						"RONTOLISP::%CLOJURE-TAGGED-LITERAL", "RONTOLISP::%CLOJURE-TAGGED-LITERAL-V"),
+				Set.of()),
+
+		/**
+		 * An instant -- a Date, a Timestamp or a Calendar -- which the printer,
+		 * {@code str}, {@code =}, {@code compare} (and the sorted collections' default
+		 * comparator), the structural keys' hash, {@code class} and its class name,
+		 * {@code instance?}, {@code inst?} and the instance calls read: only an
+		 * {@code #inst} literal, a read ({@code read-string}, {@code read},
+		 * {@code clojure.edn}), whose default {@code #inst} reader makes one, and the
+		 * {@code clojure.instant} kernels make one.
+		 */
+		INSTANT("instant",
+				Set.of(ClojurePredicateLowering.INSTANT_P, ClojurePredicateLowering.INST_P,
+						ClojurePredicateLowering.DATE_P, ClojurePredicateLowering.TIMESTAMP_P,
+						ClojurePredicateLowering.CALENDAR_P),
+				Set.of(), Map.of(),
+				Reads.with(ClojureDefaultReaders.MAKE_INST, "RONTOLISP::%CLOJURE-INSTANT-READ-DATE",
+						"RONTOLISP::%CLOJURE-INSTANT-READ-TIMESTAMP", "RONTOLISP::%CLOJURE-INSTANT-READ-CALENDAR",
+						"RONTOLISP::%CLOJURE-INSTANT-READ", "RONTOLISP::%CLOJURE-INSTANT-OF"),
+				Set.of()),
+
+		/**
+		 * A UUID, which the printer, {@code str}, {@code compare} (and the sorted
+		 * collections' default comparator), the structural keys' hash, {@code class} and
+		 * its class name, {@code instance?}, {@code uuid?} and the instance calls read:
+		 * only a {@code #uuid} literal, a read, whose default {@code #uuid} reader makes
+		 * one, {@code random-uuid} and {@code parse-uuid} make one. The alias is
+		 * {@code uuid?}'s call {@code (is-uuid value "java.util.UUID")}, which stands for
+		 * the host test it made before.
+		 */
+		UUID("uuid", Set.of(ClojurePredicateLowering.UUID_P), Set.of(),
+				Map.of(ClojurePredicateLowering.IS_UUID, "RONTOLISP::%CLOJURE-HOST-INSTANCE-P"),
+				Reads.with(ClojureDefaultReaders.MAKE_UUID, "RONTOLISP::%CLOJURE-RANDOM-UUID",
+						"RONTOLISP::%CLOJURE-RANDOM-UUID-V", "RONTOLISP::%CLOJURE-PARSE-UUID",
+						"RONTOLISP::%CLOJURE-PARSE-UUID-V", "RONTOLISP::%CLOJURE-READ-UUID",
+						"RONTOLISP::%CLOJURE-UUID-OF"),
 				Set.of()),
 
 		/**

@@ -52,8 +52,8 @@ or set is a map or set to every predicate, and `sorted?` and `reversible?` hold 
 | `not-every?` | `(not-every? odd? [1 2])` | `true` |
 | `distinct?` | `(distinct? 1 2 1)` | `false` |
 | `identical?` | `(identical? :a :a)` | `true` |
-| `inst?` | `(inst? "2020-01-01")` | `false` |
-| `uuid?` | `(uuid? "x")` | `false` |
+| `inst?` | `(inst? #inst "2020-01-01")` | `true` |
+| `uuid?` | `(uuid? #uuid "1-1-1-1-1")` | `true` |
 | `uri?` | `(uri? "http://a")` | `false` |
 | `var?` | `(var? 'x)` | `false` |
 | `volatile?` | `(volatile? (atom 1))` | `false` |

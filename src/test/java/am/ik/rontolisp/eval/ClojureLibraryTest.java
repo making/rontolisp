@@ -141,6 +141,31 @@ class ClojureLibraryTest {
 	}
 
 	@Test
+	void aProgramMakingNoInstantOrUuidSplicesTheLibraryWithoutTheirArms() {
+		// only an #inst or #uuid literal, a read, the clojure.instant kernels,
+		// random-uuid and parse-uuid make one: a program comparing, printing and asking
+		// inst? and uuid? of other values compiles every arm away, uuid? to the host test
+		List<LispVal> plain = ClojureLibrary.process(Clojure
+			.read("(prn (sort [2 1]) (= [1] [1]) (str 1) (inst? 1) (uuid? 2) (class 3) (get {[1] 2} [1]))", null));
+		for (String verb : List.of("RONTOLISP::%CLOJURE-WRITE", "RONTOLISP::%CLOJURE-STR-OF",
+				"RONTOLISP::%CLOJURE-EQUAL", "RONTOLISP::%CLOJURE-COMPARE", "RONTOLISP::%CLOJURE-HASH",
+				"RONTOLISP::%CLOJURE-IS-INST", "RONTOLISP::%CLOJURE-CLASS-NAME-OF")) {
+			assertThat(defun(plain, verb)).as(verb).doesNotContain("%CLOJURE-INSTANT").doesNotContain("%CLOJURE-UUID");
+		}
+		assertThat(plain.get(plain.size() - 1).print()).doesNotContain("%CLOJURE-IS-UUID")
+			.contains("(RONTOLISP::%CLOJURE-HOST-INSTANCE-P ")
+			.doesNotContain("%CLOJURE-INSTANT-P");
+		List<LispVal> making = ClojureLibrary.process(Clojure.read("(prn #inst \"2020\" (random-uuid))", null));
+		assertThat(defun(making, "RONTOLISP::%CLOJURE-WRITE")).contains("(RONTOLISP::%CLOJURE-INSTANT-P X)")
+			.contains("(RONTOLISP::%CLOJURE-UUID-P X)");
+		// a read may make either
+		List<LispVal> reading = ClojureLibrary.process(Clojure.read("(prn (read-string \"1\"))", null));
+		assertThat(defun(reading, "RONTOLISP::%CLOJURE-RD-RECORD-OF")).contains("RONTOLISP::%CLOJURE-INSTANT-READ-DATE")
+			.contains("RONTOLISP::%CLOJURE-READ-UUID");
+		assertThat(defun(reading, "RONTOLISP::%CLOJURE-WRITE")).contains("%CLOJURE-INSTANT-P");
+	}
+
+	@Test
 	void vecRefusesANonCollectionAsRuntimeExceptionOnlyWhereAClassIsRead() {
 		// the oracle's vec casts to an array before it seqs: the argument check is the
 		// refusal family's view, so a program reading no class compiles the bare coercion
@@ -298,9 +323,10 @@ class ClojureLibraryTest {
 		// map's fixed key names and a method or scheme, HTTP tokens that admit no slash;
 		// the HTTP client its options' and response map's fixed key names
 		Set<String> slashless = Set.of("RONTOLISP::%CLOJURE-EXCEPTION-CLASS", "RONTOLISP::%CLOJURE-CLASS-KEYWORDS",
-				"RONTOLISP::%CLOJURE-READER-VALUE-CLASS", "RONTOLISP::%CLOJURE-HOST-CLASS-KEYS",
-				"RONTOLISP::%CLOJURE-NS-NAME", "RONTOLISP::%CLOJURE-RING-KEYWORD", "RONTOLISP::%CLOJURE-RING-MAP",
-				"RONTOLISP::%CLOJURE-RING-OPTION", "RONTOLISP::%CLOJURE-HTTP-ASSOC", "RONTOLISP::%CLOJURE-HTTP-OPTION");
+				"RONTOLISP::%CLOJURE-READER-VALUE-CLASS", "RONTOLISP::%CLOJURE-INSTANT-CLASS",
+				"RONTOLISP::%CLOJURE-HOST-CLASS-KEYS", "RONTOLISP::%CLOJURE-NS-NAME",
+				"RONTOLISP::%CLOJURE-RING-KEYWORD", "RONTOLISP::%CLOJURE-RING-MAP", "RONTOLISP::%CLOJURE-RING-OPTION",
+				"RONTOLISP::%CLOJURE-HTTP-ASSOC", "RONTOLISP::%CLOJURE-HTTP-OPTION");
 		builders.removeAll(slashless);
 		boolean grew = true;
 		while (grew) {
