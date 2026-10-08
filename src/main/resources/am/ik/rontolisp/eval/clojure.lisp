@@ -8446,29 +8446,31 @@
 
 (defun rontolisp::%clojure-rd-form-at (rd)
   "The datum starting at RD's next character, or :C%READ-SKIP after a #_
-   discard; the end of input signals."
+   discard; the end of input signals. clojure.edn's read takes its own grammar
+   (%clojure-rd-edn-form-at)."
   (let ((c (rontolisp::%clojure-rd-next rd)))
     (cond ((null c) (rontolisp::%clojure-runtime-exception "EOF while reading"))
-          ((char= c #\() (rontolisp::%clojure-rd-seq rd #\)))
-          ((char= c #\[) (coerce (rontolisp::%clojure-rd-seq rd #\]) 'vector))
-          ((char= c #\{) (rontolisp::%clojure-rd-map rd))
-          ((or (char= c #\)) (char= c #\]) (char= c #\}))
-           (rontolisp::%clojure-runtime-exception
-            (concatenate 'string "Unmatched delimiter: " (string c))))
-          ((char= c #\") (rontolisp::%clojure-rd-string rd))
-          ((char= c #\\) (rontolisp::%clojure-rd-char rd))
-          ((char= c #\') (rontolisp::%clojure-rd-wrap rd "quote"))
-          ((char= c #\`) (rontolisp::%clojure-rd-wrap rd "syntax-quote"))
-          ((char= c #\~)
-           (if (eql (rontolisp::%clojure-rd-peek rd) #\@)
-               (progn
-                 (rontolisp::%clojure-rd-next rd)
-                 (rontolisp::%clojure-rd-wrap rd "unquote-splicing"))
-               (rontolisp::%clojure-rd-wrap rd "unquote")))
-          ((char= c #\@) (rontolisp::%clojure-rd-wrap rd "deref"))
-          ((char= c #\^) (rontolisp::%clojure-rd-meta rd))
-          ((char= c #\#) (rontolisp::%clojure-rd-dispatch rd))
-          (t (rontolisp::%clojure-rd-atom rd c)))))
+     ((rontolisp::%clojure-rd-edn-p) (rontolisp::%clojure-rd-edn-form-at rd c))
+     ((char= c #\() (rontolisp::%clojure-rd-seq rd #\)))
+     ((char= c #\[) (coerce (rontolisp::%clojure-rd-seq rd #\]) 'vector))
+     ((char= c #\{) (rontolisp::%clojure-rd-map rd))
+     ((or (char= c #\)) (char= c #\]) (char= c #\}))
+      (rontolisp::%clojure-runtime-exception
+       (concatenate 'string "Unmatched delimiter: " (string c))))
+     ((char= c #\") (rontolisp::%clojure-rd-string rd))
+     ((char= c #\\) (rontolisp::%clojure-rd-char rd))
+     ((char= c #\') (rontolisp::%clojure-rd-wrap rd "quote"))
+     ((char= c #\`) (rontolisp::%clojure-rd-wrap rd "syntax-quote"))
+     ((char= c #\~)
+      (if (eql (rontolisp::%clojure-rd-peek rd) #\@)
+          (progn
+            (rontolisp::%clojure-rd-next rd)
+            (rontolisp::%clojure-rd-wrap rd "unquote-splicing"))
+          (rontolisp::%clojure-rd-wrap rd "unquote")))
+     ((char= c #\@) (rontolisp::%clojure-rd-wrap rd "deref"))
+     ((char= c #\^) (rontolisp::%clojure-rd-meta rd))
+     ((char= c #\#) (rontolisp::%clojure-rd-dispatch rd))
+     (t (rontolisp::%clojure-rd-atom rd c)))))
 
 (defun rontolisp::%clojure-rd-required (rd)
   "The next datum at RD past whitespace and #_ discards; the end of input
@@ -8489,10 +8491,48 @@
         (rontolisp::%clojure-rd-required rd)))
 
 (defun rontolisp::%clojure-rd-meta (rd)
-  "^meta form, the caret consumed: the form, its metadata read and dropped
-   (a quote drops reader metadata too)."
-  (rontolisp::%clojure-rd-required rd)
-  (rontolisp::%clojure-rd-required rd))
+  "^meta form, the caret consumed: the form carrying the metadata over its own
+   (the outer ^ wins), like the oracle's MetaReader. A keyword is {k true}, a
+   symbol or a string {:tag m}, a vector {:param-tags v} (not in EDN); a symbol
+   form keeps none (a symbol carries no metadata here)."
+  (let* ((m (rontolisp::%clojure-rd-required rd))
+         (form (rontolisp::%clojure-rd-required rd))
+         (meta
+          (cond ((hash-table-p m) m)
+                ((rontolisp::%clojure-keyword-p m)
+                 (rontolisp::%clojure-plist-table nil (list m t)))
+                ((or (stringp m) (rontolisp::%clojure-real-symbol-p m))
+                 (rontolisp::%clojure-plist-table nil
+                  (list (list :C%KEYWORD "tag") m)))
+                ((and (vectorp m) (not (stringp m)))
+                 (if (rontolisp::%clojure-rd-edn-p)
+                     (rontolisp::%clojure-illegal-argument-exception
+                      "Metadata must be Symbol,Keyword,String or Map")
+                     (rontolisp::%clojure-plist-table nil
+                      (list (list :C%KEYWORD "param-tags") m))))
+                ((rontolisp::%clojure-rd-edn-p)
+                 (rontolisp::%clojure-illegal-argument-exception
+                  "Metadata must be Symbol,Keyword,String or Map"))
+                (t (rontolisp::%clojure-illegal-argument-exception
+                    "Metadata must be Symbol,Keyword,String,Vector or Map")))))
+    (cond ((or (null form) (rontolisp::%clojure-real-symbol-p form)) form)
+          ((or (hash-table-p form) (and (vectorp form) (not (stringp form)))
+               (rontolisp::%clojure-set-p form)
+               (rontolisp::%clojure-record-p form)
+               (and (consp form) (not (keywordp (car form)))))
+           (let ((old (rontolisp::%clojure-meta form)))
+             ;; a map already: stored without with-meta's check
+             (if (null rontolisp::%clojure-meta-table)
+                 (setq rontolisp::%clojure-meta-table
+                       (make-hash-table :test 'eq)))
+             (setf (gethash form rontolisp::%clojure-meta-table)
+                   (if old
+                       (rontolisp::%clojure-plist-table old
+                        (rontolisp:hash-table-plist meta))
+                       meta))
+             form))
+          (t (rontolisp::%clojure-illegal-argument-exception
+              "Metadata can only be applied to IMetas")))))
 
 (defun rontolisp::%clojure-rd-seq (rd close)
   "The datums up to the character CLOSE, consumed, as a list; the end of
@@ -8526,18 +8566,31 @@
                     (t (setq form (rontolisp::%clojure-rd-form-at rd))))))))))
 
 (defun rontolisp::%clojure-rd-map (rd)
-  "A map literal's entries up to }, as a map whose keys go through the
-   structural-key store like a literal's; a later key wins, like a map literal
-   in source."
+  "A map literal's entries up to }, as a map (%clojure-rd-map-of)."
   (let ((items (rontolisp::%clojure-rd-seq rd #\})))
     (if (oddp (length items))
         (rontolisp::%clojure-runtime-exception
          "Map literal must contain an even number of forms"))
-    (rontolisp::%clojure-plist-table nil items)))
+    (rontolisp::%clojure-rd-map-of items)))
+
+(defun rontolisp::%clojure-rd-map-of (items)
+  "The map of the alternating keys and values ITEMS, each key stored through
+   the structural-key store like a literal's; a key = to an earlier one is the
+   oracle's Duplicate key, naming the earlier as its toString does."
+  (let ((table (make-hash-table :test 'equal)) (miss (list nil)))
+    (do ((p items (cdr (cdr p))))
+        ((null p) table)
+      (let ((held (rontolisp::%clojure-table-key (car p) table)))
+        (if (not (eq (gethash held table miss) miss))
+            (rontolisp::%clojure-illegal-argument-exception
+             (concatenate 'string "Duplicate key: "
+                          (rontolisp::%clojure-str-of held "null" nil)))))
+      (setf (gethash (rontolisp::%clojure-store-key (car p) table) table)
+            (car (cdr p))))))
 
 (defun rontolisp::%clojure-rd-set (rd)
   "A set literal's members up to }, as the set wrapper; a repeated member
-   signals, like the source reader."
+   signals, naming it as the oracle's toString does."
   (let ((table (make-hash-table :test 'equal)) (miss (list nil)))
     (dolist (x (rontolisp::%clojure-rd-seq rd #\}))
       (if (not
@@ -8545,7 +8598,7 @@
                miss))
           (rontolisp::%clojure-illegal-argument-exception
            (concatenate 'string "Duplicate key: "
-                        (rontolisp::%clojure-str-of x "nil" t))))
+                        (rontolisp::%clojure-str-of x "null" nil))))
       (rontolisp::%clojure-set-put table x))
     (list :C%SET table)))
 
@@ -8660,44 +8713,127 @@
   (let ((first (rontolisp::%clojure-rd-next rd)))
     (if (null first)
         (rontolisp::%clojure-runtime-exception "EOF while reading character"))
-    (let* ((token (rontolisp::%clojure-rd-token rd first))
-           (n (length token))
-           (code
-            (cond ((= n 1) (char-code first))
-                  ((and (= n 5) (char= first #\u))
-                   (let ((cp (rontolisp::%clojure-rd-integer token 1 5 16)))
-                     (if (and cp (or (< cp 55296) (> cp 57343))) cp nil)))
-                  ((and (char= first #\o) (<= n 4))
-                   (rontolisp::%clojure-rd-integer token 1 n 8))
-                  ((string= token "newline") 10)
-                  ((string= token "space") 32)
-                  ((string= token "tab") 9)
-                  ((string= token "return") 13)
-                  ((string= token "backspace") 8)
-                  ((string= token "formfeed") 12)
-                  (t nil))))
-      (if (null code)
-          (rontolisp::%clojure-runtime-exception
-           (concatenate 'string "Unsupported character: \\" token))
-          (code-char code)))))
+    (let* ((token
+            (if (rontolisp::%clojure-rd-edn-p)
+                (rontolisp::%clojure-rd-edn-token rd first nil)
+                (rontolisp::%clojure-rd-token rd first)))
+           (n (length token)))
+      (cond ((= n 1) first)
+            ((string= token "newline") (code-char 10))
+            ((string= token "space") (code-char 32))
+            ((string= token "tab") (code-char 9))
+            ((string= token "backspace") (code-char 8))
+            ((string= token "formfeed") (code-char 12))
+            ((string= token "return") (code-char 13))
+            ((char= first #\u)
+             (let ((cp (rontolisp::%clojure-rd-char-code token 16 4)))
+               (if (and (>= cp 55296) (<= cp 57343))
+                   (rontolisp::%clojure-runtime-exception
+                    (concatenate 'string "Invalid character constant: \\ud"
+                     (string (char "0123456789abcdef" (floor (- cp 53248) 256)))
+                     (string (char "0123456789abcdef" (floor (mod cp 256) 16)))
+                     (string (char "0123456789abcdef" (mod cp 16)))))
+                   (code-char cp))))
+            ((char= first #\o)
+             (if (> n 4)
+                 (rontolisp::%clojure-runtime-exception
+                  (concatenate 'string "Invalid octal escape sequence length: "
+                               (princ-to-string (- n 1)))))
+             (let ((cp (rontolisp::%clojure-rd-char-code token 8 (- n 1))))
+               (if (> cp 255)
+                   (rontolisp::%clojure-runtime-exception
+                    "Octal escape sequence must be in range [0, 377].")
+                   (code-char cp))))
+            (t (rontolisp::%clojure-runtime-exception
+                (concatenate 'string "Unsupported character: \\" token)))))))
+
+(defun rontolisp::%clojure-rd-char-code (token radix digits)
+  "The code the DIGITS digits of RADIX after TOKEN's first character spell, a
+   \\u or \\o character's; another length or a non-digit is the oracle's
+   refusal."
+  (if (/= (length token) (+ 1 digits))
+      (rontolisp::%clojure-illegal-argument-exception
+       (concatenate 'string "Invalid unicode character: \\" token)))
+  (let ((code 0))
+    (do ((i 1 (+ i 1)))
+        ((>= i (length token)) code)
+      (let ((d (rontolisp::%clojure-rd-digit (char token i) radix)))
+        (if (null d)
+            (rontolisp::%clojure-illegal-argument-exception
+             (concatenate 'string "Invalid digit: " (string (char token i)))))
+        (setq code (+ (* code radix) d))))))
+
+(defun rontolisp::%clojure-rd-name-part-p (s start)
+  "Whether S from START is the name part of a symbol token: the lone slash, or
+   a character no digit or slash followed by no slash."
+  (let ((n (length s)))
+    (cond ((>= start n) nil)
+          ((and (= start (- n 1)) (char= (char s start) #\/)) t)
+          ((or (char= (char s start) #\/)
+               (rontolisp::%clojure-rd-digit (char s start) 10))
+           nil)
+          (t (< (rontolisp::%clojure-rd-index s #\/ (+ start 1)) 0)))))
+
+(defun rontolisp::%clojure-rd-token-valid-p (s)
+  "Whether the reader takes the keyword or symbol token S, as the oracle's
+   matchSymbol does: the first match of its pattern -- an optional colon, an
+   optional namespace part (a character no digit or slash, anything, a slash;
+   the longest first), a name part -- with no namespace ending in :/, no name
+   ending in a colon and no :: past the first character. Outside EDN a symbol
+   ns/N with N a digit 1 to 9 is an array class, as in Clojure 1.12."
+  (let ((n (length s)) (match nil) (ns-end nil))
+    (dolist (c (if (and (> n 0) (char= (char s 0) #\:)) (list 1 0) (list 0)))
+      (if (and (null match) (< c n) (not (char= (char s c) #\/))
+               (not (rontolisp::%clojure-rd-digit (char s c) 10)))
+          (do ((p (- n 1) (- p 1)))
+              ((or match (<= p c)))
+            (if (and (char= (char s p) #\/)
+                     (rontolisp::%clojure-rd-name-part-p s (+ p 1)))
+                (progn
+                  (setq match t)
+                  (setq ns-end p)))))
+      (if (and (null match) (rontolisp::%clojure-rd-name-part-p s c))
+          (setq match t)))
+    (if match
+        (and (not (and ns-end (char= (char s (- ns-end 1)) #\:)))
+             (not (char= (char s (- n 1)) #\:))
+             (let ((ok t))
+               (do ((i 1 (+ i 1)))
+                   ((or (not ok) (>= (+ i 1) n)) ok)
+                 (if (and (char= (char s i) #\:) (char= (char s (+ i 1)) #\:))
+                     (setq ok nil)))))
+        (if (rontolisp::%clojure-rd-edn-p)
+            nil
+            (and (> n 2) (not (char= (char s 0) #\:))
+                 (not (char= (char s 0) #\/)) (char= (char s (- n 2)) #\/)
+                 (rontolisp::%clojure-rd-digit (char s (- n 1)) 10)
+                 (not (char= (char s (- n 1)) #\0)))))))
 
 (defun rontolisp::%clojure-rd-atom (rd first)
-  "An atom starting with the character FIRST: nil, true, false, a number when
-   the token is number-shaped, a keyword after a colon, else a symbol."
-  (let ((token (rontolisp::%clojure-rd-token rd first)))
-    (cond ((string= token "nil") nil)
-          ((string= token "true") t)
-          ((string= token "false") rontolisp::%clojure-false)
-          ((rontolisp::%clojure-rd-number-shaped-p token)
-           (let ((number (rontolisp::%clojure-rd-number token)))
-             (if (null number)
-                 (rontolisp::%clojure-number-format-exception
-                  (concatenate 'string "Invalid number: " token))
-                 number)))
-          ((char= first #\:) (rontolisp::%clojure-rd-keyword rd token))
-          ((and rontolisp::%clojure-rd-args (char= first #\%))
-           (rontolisp::%clojure-rd-arg token))
-          (t (rontolisp::%clojure-rd-symbol token)))))
+  "An atom starting with the character FIRST (%clojure-rd-atom-of)."
+  (rontolisp::%clojure-rd-atom-of rd (rontolisp::%clojure-rd-token rd first)
+                                  first))
+
+(defun rontolisp::%clojure-rd-atom-of (rd token first)
+  "The atom TOKEN spells, FIRST its first character: nil, true, false, a number
+   when the token is number-shaped, a keyword after a colon, else a symbol; a
+   keyword or symbol the oracle's reader does not take is its Invalid token."
+  (cond ((string= token "nil") nil)
+        ((string= token "true") t)
+        ((string= token "false") rontolisp::%clojure-false)
+        ((rontolisp::%clojure-rd-number-shaped-p token)
+         (let ((number (rontolisp::%clojure-rd-number token)))
+           (if (null number)
+               (rontolisp::%clojure-number-format-exception
+                (concatenate 'string "Invalid number: " token))
+               number)))
+        ((not (rontolisp::%clojure-rd-token-valid-p token))
+         (rontolisp::%clojure-runtime-exception
+          (concatenate 'string "Invalid token: " token)))
+        ((char= first #\:) (rontolisp::%clojure-rd-keyword rd token))
+        ((and rontolisp::%clojure-rd-args (char= first #\%))
+         (rontolisp::%clojure-rd-arg token))
+        (t (rontolisp::%clojure-rd-symbol token))))
 
 (defun rontolisp::%clojure-rd-number-shaped-p (token)
   "Whether TOKEN reads as a number: a leading digit, a sign before a digit or
@@ -8843,7 +8979,7 @@
   (let ((ctx (cdr rd)))
     (if (< (length token) 2)
         (rontolisp::%clojure-runtime-exception
-         (concatenate 'string "a keyword needs a name: " token)))
+         (concatenate 'string "Invalid token: " token)))
     (if (not (char= (char token 1) #\:))
         (list :C%KEYWORD (subseq token 1))
         (let* ((rest (subseq token 2)) (slash (search "/" rest)))
@@ -8864,15 +9000,17 @@
 (defun rontolisp::%clojure-rd-alias (ctx alias)
   "The namespace ALIAS names in CTX: an alias of the calling namespace, the
    namespace's own name, or a library known without a require (the libraries
-   ClojureNamespaceLowering.isKnownNamespace names); else NIL."
+   ClojureNamespaceLowering.isKnownNamespace names and the shipped ones the
+   oracle loads before the program); else NIL."
   (let ((found nil))
     (dolist (pair (cdr ctx))
       (if (and (null found) (string= (car pair) alias))
           (setq found (car (cdr pair)))))
     (cond (found found)
           ((or (string= alias (car ctx)) (string= alias "clojure.string")
-               (string= alias "clojure.set") (string= alias "clojure.java.io")
-               (string= alias "clojure.test"))
+               (string= alias "clojure.set") (string= alias "clojure.edn")
+               (string= alias "clojure.java.io") (string= alias "clojure.test")
+               (string= alias "clojure.walk"))
            alias)
           (t nil))))
 
@@ -8938,42 +9076,51 @@
             param)))))
 
 (defun rontolisp::%clojure-rd-dispatch (rd)
-  "A # form, the hash consumed: #' #_ #( #{ #\" #^ and a record literal;
-   anything else is the source reader's refusal."
+  "A # form, the hash consumed: #' #_ #( #{ #\" #^ ## #? #: #! and a record
+   literal; #< and anything else are the oracle's refusals."
   (let ((c (rontolisp::%clojure-rd-peek rd)))
     (cond ((null c) (rontolisp::%clojure-runtime-exception "EOF while reading"))
-          ((char= c #\')
-           (rontolisp::%clojure-rd-next rd)
-           (rontolisp::%clojure-rd-wrap rd "var"))
-          ((char= c #\_)
-           (rontolisp::%clojure-rd-next rd)
-           (rontolisp::%clojure-rd-required rd)
-           :C%READ-SKIP)
-          ((char= c #\()
-           (rontolisp::%clojure-rd-next rd)
-           (rontolisp::%clojure-rd-anon-fn rd))
-          ((char= c #\{)
-           (rontolisp::%clojure-rd-next rd)
-           (rontolisp::%clojure-rd-set rd))
-          ((char= c #\")
-           (rontolisp::%clojure-rd-next rd)
-           (rontolisp::%clojure-rd-regex rd))
-          ((char= c #\^)
-           (rontolisp::%clojure-rd-next rd)
-           (rontolisp::%clojure-rd-meta rd))
-          ((char= c #\#)
-           (rontolisp::%clojure-rd-next rd)
-           (rontolisp::%clojure-rd-symbolic rd))
-          ((char= c #\?)
-           (rontolisp::%clojure-rd-next rd)
-           (rontolisp::%clojure-rd-conditional rd))
-          ((alpha-char-p c) (rontolisp::%clojure-rd-record rd))
-          ((and (char= c #\=) rontolisp::%clojure-rd-suppress)
-           (rontolisp::%clojure-rd-next rd)
-           (rontolisp::%clojure-rd-required rd)
-           nil)
-          (t (rontolisp::%clojure-runtime-exception
-              (concatenate 'string "unsupported reader form #" (string c)))))))
+     ((char= c #\')
+      (rontolisp::%clojure-rd-next rd)
+      (rontolisp::%clojure-rd-wrap rd "var"))
+     ((char= c #\_)
+      (rontolisp::%clojure-rd-next rd)
+      (rontolisp::%clojure-rd-required rd)
+      :C%READ-SKIP)
+     ((char= c #\()
+      (rontolisp::%clojure-rd-next rd)
+      (rontolisp::%clojure-rd-anon-fn rd))
+     ((char= c #\{)
+      (rontolisp::%clojure-rd-next rd)
+      (rontolisp::%clojure-rd-set rd))
+     ((char= c #\")
+      (rontolisp::%clojure-rd-next rd)
+      (rontolisp::%clojure-rd-regex rd))
+     ((char= c #\^)
+      (rontolisp::%clojure-rd-next rd)
+      (rontolisp::%clojure-rd-meta rd))
+     ((char= c #\#)
+      (rontolisp::%clojure-rd-next rd)
+      (rontolisp::%clojure-rd-symbolic rd))
+     ((char= c #\?)
+      (rontolisp::%clojure-rd-next rd)
+      (rontolisp::%clojure-rd-conditional rd))
+     ((char= c #\:)
+      (rontolisp::%clojure-rd-next rd)
+      (rontolisp::%clojure-rd-ns-map rd))
+     ((char= c #\!)
+      (do ((d
+            (rontolisp::%clojure-rd-next rd)
+            (rontolisp::%clojure-rd-next rd)))
+          ((or (null d) (char= d #\Newline) (char= d #\Return)) :C%READ-SKIP)))
+     ((char= c #\<) (rontolisp::%clojure-runtime-exception "Unreadable form"))
+     ((alpha-char-p c) (rontolisp::%clojure-rd-record rd))
+     ((and (char= c #\=) rontolisp::%clojure-rd-suppress)
+      (rontolisp::%clojure-rd-next rd)
+      (rontolisp::%clojure-rd-required rd)
+      nil)
+     (t (rontolisp::%clojure-runtime-exception
+         (concatenate 'string "unsupported reader form #" (string c)))))))
 
 (defun rontolisp::%clojure-rd-conditional (rd)
   "#?(...) or #?@(...), the #? consumed: the oracle's readCondDelimited. The
@@ -9087,6 +9234,84 @@
               (concatenate 'string "Invalid token: ##"
                            (rontolisp::%clojure-str-of form "null" nil)))))))
 
+(defun rontolisp::%clojure-rd-skip-space (rd)
+  "Skip the whitespace and commas ahead of RD's next character (no comment)."
+  (do ((c (rontolisp::%clojure-rd-peek rd) (rontolisp::%clojure-rd-peek rd)))
+      ((not (and c (rontolisp::%clojure-rd-space-p c))))
+    (rontolisp::%clojure-rd-next rd)))
+
+(defun rontolisp::%clojure-rd-ns-map (rd)
+  "A namespace map, the #: consumed: #:ns{...}, or #::{...} and #::alias{...}
+   resolved against the calling namespace and its aliases, like the oracle's
+   NamespaceMapReader (whitespace may stand before the { and, after #::, before
+   the namespace)."
+  (let ((auto nil) (sym nil) (c (rontolisp::%clojure-rd-peek rd)))
+    (if (eql c #\:)
+        (progn
+          (rontolisp::%clojure-rd-next rd)
+          (setq auto t)
+          (setq c (rontolisp::%clojure-rd-peek rd))))
+    (cond ((and c (rontolisp::%clojure-rd-space-p c))
+           (if (not auto)
+               (rontolisp::%clojure-runtime-exception
+                "Namespaced map must specify a namespace"))
+           (rontolisp::%clojure-rd-skip-space rd))
+          ((not (eql c #\{))
+           (setq sym (rontolisp::%clojure-rd-required rd))
+           (rontolisp::%clojure-rd-skip-space rd)))
+    (rontolisp::%clojure-rd-ns-map-of rd
+     (cond ((and auto (null sym)) (car (cdr rd)))
+           ((or (not (rontolisp::%clojure-real-symbol-p sym))
+                (rontolisp::%clojure-slash-at
+                 (rontolisp::%clojure-symbol-full-name sym)))
+            (rontolisp::%clojure-runtime-exception
+             (concatenate 'string
+                          "Namespaced map must specify a valid namespace: "
+                          (rontolisp::%clojure-str-of sym "null" nil))))
+           (auto
+            (or (rontolisp::%clojure-rd-alias (cdr rd)
+                 (rontolisp::%clojure-symbol-full-name sym))
+                (rontolisp::%clojure-runtime-exception
+                 (concatenate 'string "Unknown auto-resolved namespace alias: "
+                              (rontolisp::%clojure-symbol-full-name sym)))))
+           (t (rontolisp::%clojure-symbol-full-name sym))))))
+
+(defun rontolisp::%clojure-rd-ns-map-of (rd ns)
+  "The map of a namespace map in NS, RD at its {: each unqualified keyword or
+   symbol key qualified by NS, each one qualified by _ unqualified, anything
+   else kept; a key = to an earlier one signals, like a map literal."
+  (if (not (eql (rontolisp::%clojure-rd-next rd) #\{))
+      (rontolisp::%clojure-runtime-exception
+       "Namespaced map must specify a map"))
+  (let ((items (rontolisp::%clojure-rd-seq rd #\})) (keyed nil) (key t))
+    (if (oddp (length items))
+        (rontolisp::%clojure-runtime-exception
+         "Namespaced map literal must contain an even number of forms"))
+    (dolist (x items)
+      (setq keyed (cons (if key (rontolisp::%clojure-rd-ns-key x ns) x) keyed))
+      (setq key (not key)))
+    (rontolisp::%clojure-rd-map-of (nreverse keyed))))
+
+(defun rontolisp::%clojure-rd-ns-key (k ns)
+  "A key K of a namespace map in NS: an unqualified keyword or symbol takes NS,
+   one qualified by _ loses its namespace, anything else is K."
+  (let ((spelling (rontolisp::%clojure-ident-spelling k)))
+    (if (null spelling)
+        k
+        (let ((at (rontolisp::%clojure-slash-at spelling)))
+          (cond ((null at)
+                 (rontolisp::%clojure-rd-ident k
+                  (concatenate 'string ns "/" spelling)))
+                ((and (= at 1) (char= (char spelling 0) #\_))
+                 (rontolisp::%clojure-rd-ident k (subseq spelling 2)))
+                (t k))))))
+
+(defun rontolisp::%clojure-rd-ident (k spelling)
+  "A keyword spelled SPELLING when K is a keyword, else the symbol."
+  (if (rontolisp::%clojure-keyword-p k)
+      (list :C%KEYWORD spelling)
+      (rontolisp::%clojure-rd-symbol spelling)))
+
 (defun rontolisp::%clojure-rd-regex (rd)
   "A regex literal, its #\" consumed: the source verbatim up to the closing
    quote (an escaped character stays escaped, \\Q copies raw through \\E),
@@ -9141,10 +9366,13 @@
   "The record literal of the class TAG, its tag consumed (%clojure-rd-record)."
   (progn
     (if (not (search "." tag))
-        (if (or (string= tag "inst") (string= tag "uuid"))
-            (error "~A" (concatenate 'string "unsupported reader form #" tag))
-            (rontolisp::%clojure-runtime-exception
-             (concatenate 'string "No reader function for tag " tag))))
+        (progn
+          ;; like the oracle, the value reads before its reader is looked for
+          (rontolisp::%clojure-rd-required rd)
+          (if (or (string= tag "inst") (string= tag "uuid"))
+              (error "~A" (concatenate 'string "unsupported reader form #" tag))
+              (rontolisp::%clojure-runtime-exception
+               (concatenate 'string "No reader function for tag " tag)))))
     (rontolisp::%clojure-rd-skip rd)
     (let ((c (rontolisp::%clojure-rd-peek rd)))
       (cond ((eql c #\[)
@@ -9314,6 +9542,221 @@
      ((= n 2) (rontolisp::%clojure-read-opts (car args) (car (cdr args)) ctx))
      (t (rontolisp::%clojure-read (car args) (car (cdr args))
                                   (car (cdr (cdr args))) ctx)))))
+
+;;;; clojure.edn: read-string and read over the reader above in EDN mode.
+;;
+;; The oracle's EdnReader reads data only: the quote is a symbol constituent, a
+;; leading ` ~ or @ is refused and so is one inside a token, an auto-resolved
+;; ::keyword is an invalid token, a number starts with a digit (or a sign and
+;; a digit), and # dispatches to sets, discards, ##symbolic values, namespace
+;; maps, metadata and tagged literals only. A tag reads through the :readers
+;; map of the options, then the built-in #inst and #uuid, then the :default
+;; function of the tag and the value, else it is refused; each is called like
+;; any IFn (%clojure-call), so a var or a keyword serves too. A read binds
+;; %clojure-rd-edn; every reader clause it decides is an arm of
+;; ClojureArms.Family.EDN, whose producers are the entries below, so a program
+;; that never reads EDN carries none of them.
+
+(defvar rontolisp::%clojure-rd-edn
+  nil
+  "Inside clojure.edn's read, (readers . default): the :readers map and the
+   :default function of its options, NIL each when absent; NIL elsewhere.")
+
+(defun rontolisp::%clojure-rd-edn-p ()
+  "Whether clojure.edn is reading: the EDN family's arm test."
+  rontolisp::%clojure-rd-edn)
+
+(defun rontolisp::%clojure-rd-edn-form-at (rd c)
+  "The EDN datum starting with the consumed character C."
+  (cond ((char= c #\() (rontolisp::%clojure-rd-seq rd #\)))
+        ((char= c #\[) (coerce (rontolisp::%clojure-rd-seq rd #\]) 'vector))
+        ((char= c #\{) (rontolisp::%clojure-rd-map rd))
+        ((or (char= c #\)) (char= c #\]) (char= c #\}))
+         (rontolisp::%clojure-runtime-exception
+          (concatenate 'string "Unmatched delimiter: " (string c))))
+        ((char= c #\") (rontolisp::%clojure-rd-string rd))
+        ((char= c #\\) (rontolisp::%clojure-rd-char rd))
+        ((or (char= c #\`) (char= c #\~) (char= c #\@))
+         (rontolisp::%clojure-runtime-exception
+          (concatenate 'string "Invalid leading character: " (string c))))
+        ((char= c #\^) (rontolisp::%clojure-rd-meta rd))
+        ((char= c #\#) (rontolisp::%clojure-rd-edn-dispatch rd))
+        (t (rontolisp::%clojure-rd-edn-atom rd c))))
+
+(defun rontolisp::%clojure-rd-edn-token (rd first number)
+  "FIRST and the characters after it up to an EDN token end, as a string: a
+   ` ~ or @ inside it is EdnReader's refusal, except in a NUMBER, whose parse
+   refuses it instead."
+  (let ((chars (list first)))
+    (do ((c (rontolisp::%clojure-rd-peek rd) (rontolisp::%clojure-rd-peek rd)))
+        ((or (null c)
+             (and (rontolisp::%clojure-rd-ends-token-p c) (not (char= c #\`))
+                  (not (char= c #\~)) (not (char= c #\@))))
+         (coerce (nreverse chars) 'string))
+      (if (and (not number) (or (char= c #\`) (char= c #\~) (char= c #\@)))
+          (rontolisp::%clojure-runtime-exception
+           (concatenate 'string "Invalid constituent character: " (string c))))
+      (setq chars (cons (rontolisp::%clojure-rd-next rd) chars)))))
+
+(defun rontolisp::%clojure-rd-edn-atom (rd first)
+  "An EDN atom starting with FIRST: a number only after a digit or a sign and a
+   digit (.5 and +.5 are symbols, like EdnReader's), an auto-resolved
+   ::keyword refused, anything else the Clojure reader's atom."
+  (let* ((number
+          (or (rontolisp::%clojure-rd-digit first 10)
+              (and (or (char= first #\+) (char= first #\-))
+                   (rontolisp::%clojure-rd-peek rd)
+                   (rontolisp::%clojure-rd-digit
+                    (rontolisp::%clojure-rd-peek rd) 10))))
+         (token (rontolisp::%clojure-rd-edn-token rd first number)))
+    (cond (number (let ((value (rontolisp::%clojure-rd-number token)))
+                    (if (null value)
+                        (rontolisp::%clojure-number-format-exception
+                         (concatenate 'string "Invalid number: " token))
+                        value)))
+          ((rontolisp::%clojure-rd-number-shaped-p token)
+           (rontolisp::%clojure-rd-symbol token))
+          ((and (char= first #\:) (> (length token) 1)
+                (char= (char token 1) #\:))
+           (rontolisp::%clojure-runtime-exception
+            (concatenate 'string "Invalid token: " token)))
+          (t (rontolisp::%clojure-rd-atom-of rd token first)))))
+
+(defun rontolisp::%clojure-rd-edn-dispatch (rd)
+  "An EDN # form, the hash consumed: a set, a discard, a ##symbolic value, a
+   namespace map, metadata or a tagged literal; anything else is EdnReader's
+   refusal."
+  (let ((c (rontolisp::%clojure-rd-peek rd)))
+    (cond
+     ((null c)
+      (rontolisp::%clojure-runtime-exception "EOF while reading character"))
+     ((char= c #\{)
+      (rontolisp::%clojure-rd-next rd)
+      (rontolisp::%clojure-rd-set rd))
+     ((char= c #\_)
+      (rontolisp::%clojure-rd-next rd)
+      (rontolisp::%clojure-rd-required rd)
+      :C%READ-SKIP)
+     ((char= c #\#)
+      (rontolisp::%clojure-rd-next rd)
+      (rontolisp::%clojure-rd-symbolic rd))
+     ((char= c #\:)
+      (rontolisp::%clojure-rd-next rd)
+      (let ((sym (rontolisp::%clojure-rd-required rd)))
+        (if (or (not (rontolisp::%clojure-real-symbol-p sym))
+                (rontolisp::%clojure-slash-at
+                 (rontolisp::%clojure-symbol-full-name sym)))
+            (rontolisp::%clojure-runtime-exception
+             (concatenate 'string
+                          "Namespaced map must specify a valid namespace: "
+                          (rontolisp::%clojure-str-of sym "null" nil))))
+        (rontolisp::%clojure-rd-skip-space rd)
+        (rontolisp::%clojure-rd-ns-map-of rd
+         (rontolisp::%clojure-symbol-full-name sym))))
+     ((char= c #\^)
+      (rontolisp::%clojure-rd-next rd)
+      (rontolisp::%clojure-rd-meta rd))
+     ((char= c #\<) (rontolisp::%clojure-runtime-exception "Unreadable form"))
+     ((alpha-char-p c) (rontolisp::%clojure-rd-edn-tagged rd))
+     (t (rontolisp::%clojure-runtime-exception
+         (concatenate 'string "No dispatch macro for: " (string c)))))))
+
+(defun rontolisp::%clojure-rd-edn-tagged (rd)
+  "A tagged literal #tag value, the hash consumed: the value through the
+   :readers function of the tag, else the built-in #inst or #uuid, else the
+   :default function of the tag and the value; with none of them the oracle's
+   No reader function."
+  (let* ((tag (rontolisp::%clojure-rd-required rd))
+         (value (rontolisp::%clojure-rd-required rd))
+         (readers (car rontolisp::%clojure-rd-edn))
+         (dflt (cdr rontolisp::%clojure-rd-edn))
+         (f
+          (if readers (rontolisp::%clojure-call-keyword tag readers nil) nil)))
+    (cond (f (rontolisp::%clojure-rd-edn-call f (list value)))
+          ((or (eq tag (rontolisp::%clojure-rd-symbol "inst"))
+               (eq tag (rontolisp::%clojure-rd-symbol "uuid")))
+           (error "~A"
+                  (concatenate 'string "unsupported reader form #"
+                               (rontolisp::%clojure-symbol-full-name tag))))
+          (dflt (rontolisp::%clojure-rd-edn-call dflt (list tag value)))
+          (t (rontolisp::%clojure-runtime-exception
+              (concatenate 'string "No reader function for tag "
+                           (rontolisp::%clojure-str-of tag "null" nil)))))))
+
+(defun rontolisp::%clojure-rd-edn-call (f args)
+  "F applied to ARGS like any IFn, outside the read in progress, so a read F
+   makes starts afresh."
+  (let ((rontolisp::%clojure-rd-edn nil)
+        (rontolisp::%clojure-rd-pending nil)
+        (rontolisp::%clojure-rd-suppress nil)
+        (rontolisp::%clojure-rd-cond nil))
+    (rontolisp::%clojure-call f args)))
+
+(defun rontolisp::%clojure-edn-from (rd opts eof-error eof-value)
+  "One EDN datum from RD under the options map OPTS (NIL for none): its
+   :readers and :default bound for the tagged literals."
+  (let ((rontolisp::%clojure-rd-edn
+         (cons (rontolisp::%clojure-call-keyword (list :C%KEYWORD "readers")
+                                                 opts nil)
+               (rontolisp::%clojure-call-keyword (list :C%KEYWORD "default")
+                                                 opts nil)))
+        (rontolisp::%clojure-rd-pending nil)
+        (rontolisp::%clojure-rd-suppress nil)
+        (rontolisp::%clojure-rd-args nil)
+        (rontolisp::%clojure-rd-cond nil))
+    (rontolisp::%clojure-read-from rd eof-error eof-value)))
+
+(defun rontolisp::%clojure-edn-read-string-1 (s)
+  "(clojure.edn/read-string s): the first datum of the string S, nil at its
+   end and for a nil S."
+  (cond ((null s) nil)
+   ((stringp s) (rontolisp::%clojure-edn-from (list (cons s 0)) nil nil nil))
+   (t (rontolisp::%clojure-class-cast-exception-of
+       "clojure.edn/read-string needs a string" s))))
+
+(defun rontolisp::%clojure-edn-read-string (opts s)
+  "(clojure.edn/read-string opts s): the first datum of the string S, the
+   options map OPTS deciding the end of input (:eof, else an error) and the
+   tagged literals; nil for a nil S."
+  (cond ((null s) nil)
+        ((stringp s)
+         (let ((eof (rontolisp::%clojure-read-opt-eof opts)))
+           (rontolisp::%clojure-edn-from (list (cons s 0)) opts (car eof)
+                                         (cdr eof))))
+        (t (rontolisp::%clojure-class-cast-exception-of
+            "clojure.edn/read-string needs a string" s))))
+
+(defun rontolisp::%clojure-edn-read (opts stream)
+  "(clojure.edn/read opts stream): one datum from STREAM, which is left right
+   after it, the options map OPTS (NIL for none) deciding the end of input and
+   the tagged literals."
+  (let ((eof (rontolisp::%clojure-read-opt-eof opts)))
+    (rontolisp::%clojure-edn-from
+     (list (rontolisp::%clojure-read-stream stream)) opts (car eof) (cdr eof))))
+
+(defun rontolisp::%clojure-edn-arity (args min max name)
+  "The count of ARGS, or the oracle's arity error for clojure.edn/NAME when it
+   falls outside MIN..MAX."
+  (let ((n (length args)))
+    (if (or (< n min) (> n max))
+        (rontolisp::%clojure-arity-exception
+         (concatenate 'string "Wrong number of args (" (princ-to-string n)
+                      ") passed to: clojure.edn/" name))
+        n)))
+
+(defun rontolisp::%clojure-edn-read-string-v (&rest args)
+  "clojure.edn/read-string as a value, the count checked at run time."
+  (if (= (rontolisp::%clojure-edn-arity args 1 2 "read-string") 1)
+      (rontolisp::%clojure-edn-read-string-1 (car args))
+      (rontolisp::%clojure-edn-read-string (car args) (car (cdr args)))))
+
+(defun rontolisp::%clojure-edn-read-v (&rest args)
+  "clojure.edn/read as a value, the count checked at run time: none reads *in*,
+   one a stream, two options and a stream."
+  (let ((n (rontolisp::%clojure-edn-arity args 0 2 "read")))
+    (cond ((= n 0) (rontolisp::%clojure-edn-read nil *standard-input*))
+          ((= n 1) (rontolisp::%clojure-edn-read nil (car args)))
+          (t (rontolisp::%clojure-edn-read (car args) (car (cdr args)))))))
 
 ;;;; ring.adapter.rontolisp: a Ring handler served as the Clack application
 ;;;; every transport serves (http-serve.lisp). run-server lowers to

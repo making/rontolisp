@@ -6,8 +6,8 @@ with a core form or built-in; a quoted symbol demangles, so `'e2e-foo` prints `e
 
 ## Dispatch and comment syntax
 
-, is whitespace, as in Clojure. `#!` starts a shebang comment on the first line; `;`
-starts a line comment; `#_` skips the next form (one before a closing bracket or at the
+, is whitespace, as in Clojure. `;` and `#!` start a line comment (`#!` serves for a
+shebang line); `#_` skips the next form (one before a closing bracket or at the
 end of the file discards too, so `[1 #_ 2]` is `[1]`). A regex literal (`#"..."`) reads to
 a pattern value (see [Regular expressions](reference/regex.md)); `#'x` reads as
 `(var x)`, the var of a definition (see [var](reference/var.md)); syntax-quote
@@ -16,7 +16,10 @@ a pattern value (see [Regular expressions](reference/regex.md)); `#'x` reads as
 literal it attaches like `with-meta` (see
 [Semantics](semantics.md#state-and-dynamic-scope)). A record literal
 (`#ns.Name{...}` / `#ns.Name[...]`) reads to the record over its unevaluated body (see
-[defrecord](reference/defrecord.md)).
+[defrecord](reference/defrecord.md)). A namespace map gives its keys a namespace:
+`#:user{:id 1 :_/raw 2 name 3}` reads as `{:user/id 1 :raw 2 user/name 3}` (each keyword or
+symbol key without a namespace takes it, one qualified by `_` loses it), and `#::{...}` /
+`#::alias{...}` take the current namespace or the alias's for their keyword keys.
 
 ## Reader conditionals
 

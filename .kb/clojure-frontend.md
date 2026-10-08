@@ -127,6 +127,7 @@ answered `2 5 3` before).
 | `clojure.set` (`union` `intersection` `difference` `select` `project` `rename-keys` `rename` `index` `map-invert` `join` `subset?` `superset?`: every public var) | `ClojureSetLowering`: one call to the spliced `rontolisp::%clojure-set-NAME` worker (`?` spelled `-p`, the variadic three over one list of their sets, `join` with a key map `-join-km`) after a lower-time arity check in the oracle's wording (`... passed to: clojure.set/NAME`); as a value `#'...-v` | the oracle's own algorithms, so an answer's kind follows the same input: `union` grows its largest input (bubble order and all; a vector or list there answers one, a map signals), `intersection` shrinks its smallest, `difference`/`select` the first; nil stays nil, an unchanged input is answered itself, a set changes in a fresh copy. Membership goes through the structural-key runtime; `contains?` on a vector is by index, like the oracle's. Relation members may be records: `join`'s merge keeps the first's record, `rename-keys` keeps it unless a declared field is renamed away. Answers carry no metadata. Corpus witness: shcloj4 `examples.test.sequences` `test-sets`/`test-joins` (`ClojureProjectNamespacesTest`); the whole namespace stays red on `examples.utils` (the `?.` macro), `clojure.xml` and `file-seq` (measured 2026-10-03: the load stops at `utils.clj:37:1`) |
 | `ring.adapter.rontolisp` (`run-server`) | `(rontolisp::%http-serve (%clojure-ring-app f opts) (%clojure-ring-port opts) (%clojure-ring-host opts) (%clojure-ring-join opts))` (`ClojureRingLowering`) | "Ring adapter" |
 | `ring.util.response` `ring.util.request` `ring.util.codec` `ring.util.mime-type` `ring.middleware.params` `ring.middleware.keyword-params` `ring.middleware.content-type` | Clojure source in the jar, loaded like a project file; `rontolisp.internal.ring/NAME` (their kernels) is one call to `rontolisp::%clojure-ring-NAME` (`ClojureRingUtilLowering`) | "Ring util namespaces" |
+| `clojure.edn` (`read-string` `read`) | `ClojureEdnLowering`: one call to `rontolisp::%clojure-edn-read-string-1` / `-read-string` / `-read` after a lower-time arity check in the oracle's wording; as a value `#'...-v` | "Reading", clojure.edn |
 | `clojure.walk` | Clojure source in the jar written for this front end, loaded like a project file (a startup namespace: on its first qualified name too) | "clojure.jar namespaces" |
 | `subs`, `.substring` | `%clojure-subs`, the refusal family's alias of `subseq` ("Refusals") | a bound outside a string is the oracle's `StringIndexOutOfBoundsException` where a class is read; a double or ratio bound is truncated (`%clojure-string-bound`), a non-number one is refused as the oracle does ("Refusals") |
 | `format` | the Java directives translated to `format` over Clojure-rendered arguments | literal format string only; `%s` like `str` (nil spells `null`), `%b`; `%e`/`%g`, flags and the rest refused |
@@ -853,8 +854,9 @@ a program without `ns` lowers unqualified. A quoted `'n/x` is the symbol of var 
   name. Names are referred only by `use` or `:refer` (`:only`/`:exclude` narrow); a
   `require` with a bare `:only` refers nothing, like the oracle's `load-lib`. `:reload`,
   `:reload-all`, `:verbose` flags; quoted libspecs and prefix lists `(prefix [sub ...])`
-  go through one spec parser. `clojure.string`, `clojure.set`, `clojure.java.io` (`reader`
-  only), `clojure.test` and `ring.adapter.rontolisp` resolve as lowerings; any other
+  go through one spec parser. `clojure.string`, `clojure.set`, `clojure.edn`,
+  `clojure.java.io` (`reader` only), `clojure.test` and `ring.adapter.rontolisp` resolve as
+  lowerings; any other
   namespace clojure.jar defines (`ClojureBuiltinNamespaces.LANGUAGE`) is a built-in file
   ("clojure.jar namespaces") or `unknown namespace: x`. A `clojure.*` namespace OUTSIDE
   that list (a contrib library, `clojure.data.json`) is an ordinary library on the source
@@ -1865,13 +1867,68 @@ through it. Pinned on all four backends by clojure-spec `a-double-prints-its-exp
 source reader's language, answering what a quote of the same text answers**, so `(=
 (read-string s) 's)` holds: `@x` reads `(deref x)` and `` `x `` `(syntax-quote x)` like a
 quote does (the oracle: `clojure.core/deref`, the expansion), `#(...)` the source reader's
-`(fn* [p1__N# ...] (body))` (N per datum read, through the specials `%clojure-rd-args`/`%clojure-rd-arg-id`), metadata drops, `#=`/`#inst` are its refusals, and `#?` reads under `{:read-cond :allow}` ("Reader conditionals"). A read map
-or set stores its keys through "Structural keys" (`%clojure-plist-table`,
-`%clojure-set-put`), so it finds `=` keys and refuses an `=` duplicate member like a
-literal. `::kw` resolves against the context each call site passes, `("ns" ("alias"
-"full.ns") ...)`, plus the libraries `isKnownNamespace` names (mirrored in
-`%clojure-rd-alias`).
+`(fn* [p1__N# ...] (body))` (N per datum read, through the specials `%clojure-rd-args`/`%clojure-rd-arg-id`), `#=`/`#inst` are its refusals, and `#?` reads under `{:read-cond :allow}` ("Reader conditionals"). A read map
+or set stores its keys through "Structural keys" (`%clojure-rd-map-of`, `%clojure-set-put`),
+so it finds `=` keys and refuses an `=` duplicate like the oracle (`Duplicate key: k`, k's
+toString: a map names the earlier key, a set the later member). `::kw` resolves against the
+context each call site passes, `("ns" ("alias" "full.ns") ...)`, plus the libraries
+`isKnownNamespace` names and the startup ones (mirrored in `%clojure-rd-alias`).
 `eval`/`load-string` stay unknown names: no compiler runs at run time.
+
+**Oracle-checked 2026-10-08 (clj 1.12.6), shared by `read-string`/`read` and clojure.edn:**
+- Metadata attaches (`%clojure-rd-meta`, the oracle's MetaReader): a keyword `{k true}`, a
+  symbol or string `{:tag x}`, a vector `{:param-tags v}` (EDN refuses it), merged over the
+  form's own with the outer winning; a non-IMeta form (number, string, keyword, char,
+  boolean, pattern) is `Metadata can only be applied to IMetas`; a symbol form takes none
+  (symbols carry no metadata here), nil is left alone (`()` reads as nil). Until then the
+  reader dropped it.
+- Namespace maps (`%clojure-rd-ns-map`, the oracle's NamespaceMapReader): `#:ns{}`,
+  `#::{}`/`#::alias{}` against the call site's context; refusals in the oracle's words.
+  The source reader takes them too (`ClojureReader.readNamespaceMap`): `#::` spells a
+  keyword key `::k`/`::alias/k` for the lowering to resolve, and refuses a symbol key by
+  name (no auto-resolved symbol spelling exists).
+- A symbol or keyword token goes through the oracle's `matchSymbol` rules
+  (`%clojure-rd-token-valid-p`: the pattern's first match by its backtracking order, then
+  no ns ending `:/`, no name ending `:`, no `::` past the first character; `a/9` is a
+  1.12 array-class symbol outside EDN). Character literals refuse like the oracle's
+  (`Invalid unicode character`, `Invalid digit`, `Invalid character constant`, octal range
+  and length). `#!` is a line comment, `#<` `Unreadable form`, and a tagged literal reads
+  its value before refusing (`#a` at the end is `EOF while reading`). The source reader's
+  `#!` is a comment anywhere too, where it was the first line only.
+- Size, measured 2026-10-08 (wasm P1, `(prn (read-string "[1 {:a 2}]"))` plus a `defn`):
+  134,269 -> 146,539 B. Of that, reverting one feature at a time: metadata 5.9 KB (the
+  `eq` side table and its reads), token validation 2.6 KB, namespace maps 1.6 KB, the
+  duplicate-key refusal 1.0 KB; `string-downcase` in the `\ud800` message alone had cost
+  8 KB (the Unicode case table), so the hex digits are spelled by hand. A program that
+  reads nothing is byte-identical.
+- Pinned by clojure-spec `read-string-metadata-namespace-maps-and-token-refusals`,
+  `ClojureReaderTest#aNamespaceMapQualifiesItsKeys`.
+
+**clojure.edn** (`ClojureEdnLowering`, a known namespace like `clojure.string`, so its
+qualified names need no `require` -- the oracle loads it before the program) reads through
+the same reader in EDN mode: the entries `%clojure-edn-read-string-1`/`-read-string`/`-read`
+bind `%clojure-rd-edn` to `(readers . default)` from the options, and every reader clause
+the EDN grammar decides is behind `(%clojure-rd-edn-p)`, the arm test of
+`ClojureArms.Family.EDN` (producers: the entries), so a `read-string` program carries none
+of them. EdnReader's grammar, measured on the oracle: the quote is a constituent; a leading
+`` ` ``/`~`/`@` is `Invalid leading character`, one inside a token `Invalid constituent
+character` (a number's parse refuses it instead); `::kw` and `#::` are `Invalid token`; a
+number needs a digit or a sign and a digit first (`.5` is a symbol here only in EDN: the
+source reader and `read-string` read it as 0.5, the leniency the source reader keeps);
+`#` dispatches to `{` `_` `#` `:` `^` and a letter (a tagged literal; `<` is `Unreadable
+form`), anything else `No dispatch macro for: c`; `#:` reads its namespace as a whole form.
+A tag calls the `:readers` value, then the built-in `#inst`/`#uuid` (refused while no such
+value exists), then `:default` with tag and value, through `%clojure-call` -- a var or
+keyword reader works -- outside the read in progress (`%clojure-rd-edn-call` rebinds the
+read specials, so a read inside the reader function starts afresh). `(read-string s)` is
+`{:eof nil}` (a nil `s` answers nil); `read`'s stream is any character stream.
+Measured 2026-10-08, wasm P1: the same program through `clojure.edn/read-string` 158,257 B
+against 146,539 B through `read-string`; of the 11.7 KB, about 7 KB is the IFn dispatcher
+the tag readers go through (a `read-string` program naming it measured 134,269 -> 141,165 B
+before the reader changes above).
+Pins: clojure-spec `clojure-edn-reads-data-only`,
+`clojure-edn-tagged-literals-options-and-streams` (all four backends, oracle-identical),
+`ClojureLibraryTest#aProgramReadingNoEdnSplicesTheReaderWithoutItsEdnClauses`.
 
 - Source: a `(string . index)` cursor (`read-string`) or a CL character input stream
   (`read`) through `peek-char`/`read-char`, so a read leaves the stream right after its

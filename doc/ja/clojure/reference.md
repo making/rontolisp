@@ -23,6 +23,7 @@ interop エントリのすべてを、分野ごとにまとめています。**�
 | [名前とキーワード](reference/names.md) | `name`/`namespace`/`keyword`/`symbol` |
 | [(clojure.string)](reference/string.md) | 文字列ライブラリと核の `subs` |
 | [(clojure.set)](reference/clojure-set.md) | 関係演算の集合ライブラリ: `union`/`intersection`/`difference`、`select`/`project`/`rename`、`index`/`join`、`subset?`/`superset?` |
+| [clojure.edn](reference/clojure-edn.md) | EDN データの読み取り: `:eof`・`:readers`・`:default` を取る `read-string`/`read` |
 | [clojure.walk](reference/clojure-walk.md) | 入れ子のデータの汎用走査: `walk`/`postwalk`/`prewalk`、`-replace` の組、`keywordize-keys`/`stringify-keys` |
 | [正規表現](reference/regex.md) | `re-find`/`re-seq`/`re-matches`、`re-matcher`/`re-groups`、`re-pattern` とパターンの `split`/`replace` |
 | [Ring アダプター](reference/ring.md) | `ring.adapter.rontolisp/run-server`: Ring ハンドラをすべてのトランスポートで提供 |

@@ -5,7 +5,11 @@
 Reads the first datum of the string and answers it as data: what a quote of the same
 text answers, so `(= (read-string "[1 :k]") '[1 :k])` holds. Numbers, strings,
 characters, keywords (`::kw` in the calling namespace), symbols, lists, vectors, maps and
-sets read like the source reader reads them; reader metadata drops and `#_` discards. A
+sets read like the source reader reads them, namespace maps (`#:ns{...}`, `#::{...}`)
+included; reader metadata attaches like the oracle's (`^:k` is `{:k true}`, a symbol or
+string `{:tag x}`, a vector `{:param-tags v}`; a symbol carries none) and `#_` discards. A
+repeated map key or set member is the oracle's `Duplicate key`, and a keyword or symbol the
+oracle does not read (`a:`, `x/`, `//`) its `Invalid token`. A
 record literal (`#ns.Name{...}` / `#ns.Name[...]`) builds the record of a class the
 program defines, over its unevaluated body. Text after the first datum is ignored. Empty
 input signals `EOF while reading`, unless the options map has an `:eof` entry, which is

@@ -7768,3 +7768,82 @@ cases:
       Walked: [1]
       Walked: 1
       {:a [1]}
+  - name: clojure-edn-reads-data-only
+    # clojure.edn reads data only, like the oracle's EdnReader (.kb/clojure-frontend.md
+    # "Reading"): the quote is a symbol constituent, the reader macros of code and
+    # an auto-resolved keyword are refused, .5 is a symbol, metadata attaches. Every
+    # line is the oracle's (clj 1.12.6), on all four backends.
+    source: |
+      (ns edn-data (:require [clojure.edn :as edn]))
+      (defn edn-err [s] (try (edn/read-string s) (catch Exception e (ex-message e))))
+      (prn (edn/read-string "[1 -2 3.5 1/2 \"s\\t\" \\c :k :a/b sym a/b nil true false #{1} {:m [(1)]} ##Inf]"))
+      (prn (edn/read-string "") (edn/read-string nil) (edn/read-string "  ; just a comment") (edn/read-string "1 2"))
+      (prn (edn/read-string "'quoted") (edn/read-string ".5") (edn/read-string "a'b#c") (edn/read-string "#_ignored [kept #_ 1]"))
+      (let [person (edn/read-string "#:person{:name \"ann\" :_/id 7}")]
+        (prn (map person [:person/name :id :name]) (edn/read-string "#:p {:a 1}")))
+      (prn (map edn-err ["`a" "@a" "~a" "a@b" "#'a" "#\"re\"" "#(inc %)" "#=(+ 1 2)" "#?(:clj 1)" "::kw" "#::{:a 1}"]))
+      (prn (map edn-err ["#<x>" "(1" "{:a}" "{:a 1 :a 2}" "#{1 1}" "a:" "//" "a/1" "\\o477" "#foo/bar 1"]))
+      (prn (meta (edn/read-string "^:private [1]")) (meta (edn/read-string "^Tag (1)")) (into (sorted-map) (meta (edn/read-string "^:a ^:b {}"))))
+      (prn (map edn-err ["^:k 5" "^[1] x"]))
+      (in-ns 'user)
+    expected: |
+      [1 -2 3.5 1/2 "s\t" \c :k :a/b sym a/b nil true false #{1} {:m [(1)]} ##Inf]
+      nil nil nil 1
+      'quoted .5 a'b#c [kept]
+      ("ann" 7 nil) #:p{:a 1}
+      ("Invalid leading character: `" "Invalid leading character: @" "Invalid leading character: ~" "Invalid constituent character: @" "No dispatch macro for: '" "No dispatch macro for: \"" "No dispatch macro for: (" "No dispatch macro for: =" "No dispatch macro for: ?" "Invalid token: ::kw" "Invalid token: :")
+      ("Unreadable form" "EOF while reading" "Map literal must contain an even number of forms" "Duplicate key: :a" "Duplicate key: 1" "Invalid token: a:" "Invalid token: //" "Invalid token: a/1" "Octal escape sequence must be in range [0, 377]." "No reader function for tag foo/bar")
+      {:private true} {:tag Tag} {:a true, :b true}
+      ("Metadata can only be applied to IMetas" "Metadata must be Symbol,Keyword,String or Map")
+  - name: clojure-edn-tagged-literals-options-and-streams
+    # A tag reads through :readers (any IFn: a function, a var, a keyword), else
+    # :default; :eof answers the end of input; read takes a stream and leaves it right
+    # after the datum. Every line is the oracle's (clj 1.12.6), on all four backends.
+    source: |
+      (ns edn-opts (:require [clojure.edn :as edn]))
+      (defn edn-tag [x] [:tagged x])
+      (prn (edn/read-string {:readers {'my/tag edn-tag}} "[#my/tag 1 #my/tag #my/tag :k]"))
+      (prn (edn/read-string {:readers {'my/kw :k}} "#my/kw {:k 3}") (edn/read-string {:readers {'my/var #'edn-tag}} "#my/var 2"))
+      (prn (edn/read-string {:default (fn [tag v] [:default tag v])} "#other.tag {:a 1}"))
+      (prn (edn/read-string {:readers {'my/tag edn-tag} :default (fn [tag v] tag)} "[#my/tag 1 #your/tag 2]"))
+      (prn (try (edn/read-string {:readers {'my/tag nil}} "#my/tag 1") (catch Exception e (ex-message e))))
+      (prn (edn/read-string {:eof :done} "") (edn/read-string {:eof :done} "7") (try (edn/read-string {} "") (catch Exception e (ex-message e))))
+      (prn (edn/read-string {:readers {'my/nested (fn [s] [(read-string s) (edn/read-string s)])}} "#my/nested \"'x\""))
+      (let [r (java.io.PushbackReader. (java.io.StringReader. "{:a 1} [2] ; end"))]
+        (prn (edn/read r) (edn/read r) (edn/read {:eof :eof} r)))
+      (prn (with-in-str "(1 2) :next" [(edn/read) (edn/read)]))
+      (prn (map (partial edn/read-string {:eof 0}) ["1" "" "[2]"]) (map edn/read-string ["3" "#{}"]) (clojure.edn/read-string "{:q 1}"))
+      (in-ns 'user)
+    expected: |
+      [[:tagged 1] [:tagged [:tagged :k]]]
+      3 [:tagged 2]
+      [:default other.tag {:a 1}]
+      [[:tagged 1] your/tag]
+      "No reader function for tag my/tag"
+      :done 7 "EOF while reading"
+      [(quote x) 'x]
+      {:a 1} [2] :eof
+      [(1 2) :next]
+      (1 0 [2]) (3 #{}) {:q 1}
+  - name: read-string-metadata-namespace-maps-and-token-refusals
+    # read-string attaches metadata, reads namespace maps (#:ns{} and #::{} against
+    # the calling namespace), refuses a duplicate key and the tokens the oracle's
+    # matchSymbol refuses, and words its character refusals like the oracle; a source
+    # #:ns{} literal reads too. Every line is the oracle's (clj 1.12.6), on all four
+    # backends.
+    source: |
+      (defn rs-err [s] (try (read-string s) (catch Exception e (ex-message e))))
+      (prn (into (sorted-map) (meta (read-string "^:k ^{:x 2} [1]"))) (meta (read-string "^String (s)")) (meta (read-string "^[int] [f]")))
+      (let [m (read-string "#:ns{:a 1 :_/b 2 c 3}")]
+        (prn (map m [:ns/a :b 'ns/c]) (read-string "#::{:a 1}") (read-string "#!skipped\n7")))
+      (prn (map rs-err ["{1 2 1 3}" "#{\"a\" \"a\"}" "{[1] 1 (1) 2}" "^:k 5" "^1 [1]" "#<x>" "#a" "a:" "a/" "//" ":a/1"]))
+      (prn (map rs-err ["\\o477" "\\o1234" "\\u00" "\\ud800" "\\uzzzz" ":" "#:ns [1]" "#:{:a 1}" "#::nope{:a 1}"]))
+      (prn (read-string "a/9") (read-string "a//b") (read-string ":1") (read-string "a/:b"))
+      (prn #:item{:id 1} (:item/id #:item{:id 2}) '#:it{name 1} #::{:local 3})
+    expected: |
+      {:k true, :x 2} {:tag String} {:param-tags [int]}
+      (1 2 3) #:user{:a 1} 7
+      ("Duplicate key: 1" "Duplicate key: a" "Duplicate key: [1]" "Metadata can only be applied to IMetas" "Metadata must be Symbol,Keyword,String,Vector or Map" "Unreadable form" "EOF while reading" "Invalid token: a:" "Invalid token: a/" "Invalid token: //" "Invalid token: :a/1")
+      ("Octal escape sequence must be in range [0, 377]." "Invalid octal escape sequence length: 4" "Invalid unicode character: \\u00" "Invalid character constant: \\ud800" "Invalid digit: z" "Invalid token: :" "Namespaced map must specify a map" "Namespaced map must specify a valid namespace: null" "Unknown auto-resolved namespace alias: nope")
+      a/9 a//b :1 a/:b
+      #:item{:id 1} 2 #:it{name 1} #:user{:local 3}

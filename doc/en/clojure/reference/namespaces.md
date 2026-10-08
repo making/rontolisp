@@ -18,7 +18,8 @@ Every namespace has its own vars: a definition belongs to the current namespace,
 A built-in namespace written in Clojure loads like a project file, after every source root,
 so a file of its name on the source path takes precedence -- except `clojure.walk`, which
 is loaded before the program, as in Clojure: a qualified name such as
-`clojure.walk/postwalk` reaches it without a `require`. A `clojure.*` namespace that is not
+`clojure.walk/postwalk` reaches it without a `require`, as it does `clojure.edn`'s and
+`clojure.string`'s. A `clojure.*` namespace that is not
 part of Clojure itself (a contrib library such as `clojure.data.json`) loads from the
 source path like any other; any other namespace of Clojure's own is an error.
 
@@ -27,6 +28,7 @@ source path like any other; any other namespace of Clojure's own is an error.
 | `clojure.string` | [(clojure.string)](string.md) |
 | `clojure.set` | [(clojure.set)](clojure-set.md) |
 | `clojure.walk` | [clojure.walk](clojure-walk.md) |
+| `clojure.edn` | [clojure.edn](clojure-edn.md) |
 | `clojure.java.io` (`reader` only) | [IO](io.md) |
 | `clojure.test` | [Tests (clojure.test)](test.md) |
 | `ring.adapter.rontolisp` | [Ring adapter](ring.md) |

@@ -334,6 +334,10 @@ final class ClojureReader {
 			next();
 			return readConditional();
 		}
+		if (peek() == ':') {
+			next();
+			return readNamespaceMap();
+		}
 		if (Character.isLetter(peek())) {
 			return readRecordLiteral();
 		}
@@ -573,6 +577,110 @@ final class ClojureReader {
 	 * a body that is neither a map nor a vector is unreadable, and a map body takes
 	 * distinct keyword keys only.
 	 */
+	/**
+	 * A namespace map, positioned after {@code #:}: the oracle's
+	 * {@code NamespaceMapReader}. {@code #:ns{...}} gives each unqualified keyword or
+	 * symbol key the namespace and strips the {@code _} of a {@code _}-qualified one;
+	 * {@code #::{...}} and {@code #::alias{...}} spell each unqualified keyword key
+	 * {@code ::name} / {@code ::alias/name}, which the lowering resolves against the
+	 * current namespace like any auto-resolved keyword (a symbol key there has no such
+	 * spelling and is refused by name). Whitespace may stand before the {@code {} and,
+	 * after {@code #::}, before the namespace.
+	 */
+	private LispVal readNamespaceMap() {
+		boolean auto = false;
+		if (this.pos < this.source.length() && peek() == ':') {
+			next();
+			auto = true;
+		}
+		LispVal sym = null;
+		if (this.pos < this.source.length() && isBlank(peek())) {
+			if (!auto) {
+				throw error("Namespaced map must specify a namespace");
+			}
+			skipBlanks();
+		}
+		else if (this.pos >= this.source.length() || peek() != '{') {
+			sym = readRequired();
+			skipBlanks();
+		}
+		if (this.pos >= this.source.length() || peek() != '{') {
+			throw error("Namespaced map must specify a map");
+		}
+		String ns;
+		if (auto && sym == null) {
+			ns = "";
+		}
+		else if (!(sym instanceof LispSymbol named) || named.name().startsWith(":") || isValueSymbol(named.name())
+				|| named.name().indexOf('/') > 0) {
+			String shown = sym == null ? "null" : sym instanceof LispSymbol s ? s.name() : sym.print();
+			throw error("Namespaced map must specify a valid namespace: " + shown);
+		}
+		else {
+			ns = named.name();
+		}
+		next();
+		List<LispVal> items = readSeq('}');
+		if (items.size() % 2 != 0) {
+			throw error("Namespaced map literal must contain an even number of forms");
+		}
+		List<LispVal> qualified = new ArrayList<>(items.size());
+		for (int i = 0; i < items.size(); i++) {
+			qualified.add(i % 2 == 0 ? namespaceMapKey(items.get(i), ns, auto) : items.get(i));
+		}
+		return marked(HASH_MAP, qualified);
+	}
+
+	/**
+	 * A key of a namespace map in {@code ns}: an unqualified keyword or symbol takes the
+	 * namespace (under {@code #::} a keyword is spelled auto-resolved: {@code ::name}, or
+	 * {@code ::alias/name} with {@code ns} the alias), a {@code _}-qualified one loses
+	 * its namespace, anything else is itself.
+	 */
+	private LispVal namespaceMapKey(LispVal key, String ns, boolean auto) {
+		if (!(key instanceof LispSymbol named) || isValueSymbol(named.name())) {
+			return key;
+		}
+		String name = named.name();
+		boolean keyword = name.startsWith(":");
+		if (keyword && name.startsWith("::")) {
+			return key; // already auto-resolved: qualified
+		}
+		String spelling = keyword ? name.substring(1) : name;
+		int slash = spelling.indexOf('/');
+		if (slash < 0 || spelling.equals("/")) {
+			if (!auto) {
+				return new LispSymbol((keyword ? ":" : "") + ns + "/" + spelling);
+			}
+			if (!keyword) {
+				throw error("a symbol key of an auto-resolved namespace map is not supported: " + name);
+			}
+			return new LispSymbol(ns.isEmpty() ? "::" + spelling : "::" + ns + "/" + spelling);
+		}
+		if (slash == 1 && spelling.charAt(0) == '_') {
+			return new LispSymbol((keyword ? ":" : "") + spelling.substring(2));
+		}
+		return key;
+	}
+
+	/**
+	 * {@code nil}, {@code true} and {@code false}: values the reader keeps as symbols.
+	 */
+	private static boolean isValueSymbol(String name) {
+		return name.equals("nil") || name.equals("true") || name.equals("false");
+	}
+
+	/** Whitespace or a comma, which a namespace map skips (a comment is no blank). */
+	private static boolean isBlank(char c) {
+		return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f' || c == ',';
+	}
+
+	private void skipBlanks() {
+		while (this.pos < this.source.length() && isBlank(peek())) {
+			next();
+		}
+	}
+
 	private LispVal readRecordLiteral() {
 		int start = this.pos;
 		while (this.pos < this.source.length() && DELIMS.indexOf(peek()) < 0) {
@@ -1256,7 +1364,7 @@ final class ClojureReader {
 	private void skipSpace() {
 		while (this.pos < this.source.length()) {
 			char c = peek();
-			if (c == ';' || (c == '#' && this.pos == 0 && this.source.startsWith("#!", this.pos))) {
+			if (c == ';' || (c == '#' && this.source.startsWith("#!", this.pos))) {
 				while (this.pos < this.source.length() && peek() != '\n') {
 					next();
 				}

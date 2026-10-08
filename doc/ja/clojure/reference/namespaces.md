@@ -18,7 +18,7 @@
 Clojure で書かれた組み込みの名前空間は、プロジェクトのファイルと同じ手順で、すべてのソースルートの
 あとに読み込まれます。そのため、ソースパス上に同じ名前のファイルがあればそちらが優先されます。
 例外は `clojure.walk` で、Clojure と同じくプログラムより先に読み込まれており、`clojure.walk/postwalk`
-のような修飾名は `require` なしで届きます。Clojure 本体に含まれない `clojure.*` 名前空間
+のような修飾名は、`clojure.edn` や `clojure.string` の修飾名と同じく `require` なしで届きます。Clojure 本体に含まれない `clojure.*` 名前空間
 （`clojure.data.json` などの contrib ライブラリ）は、ほかのライブラリと同じくソースパスから
 読み込みます。それ以外の Clojure 本体の名前空間はエラーです。
 
@@ -27,6 +27,7 @@ Clojure で書かれた組み込みの名前空間は、プロジェクトのフ
 | `clojure.string` | [(clojure.string)](string.md) |
 | `clojure.set` | [(clojure.set)](clojure-set.md) |
 | `clojure.walk` | [clojure.walk](clojure-walk.md) |
+| `clojure.edn` | [clojure.edn](clojure-edn.md) |
 | `clojure.java.io`（`reader` のみ） | [入出力](io.md) |
 | `clojure.test` | [テスト (clojure.test)](test.md) |
 | `ring.adapter.rontolisp` | [Ring アダプター](ring.md) |
