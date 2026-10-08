@@ -342,8 +342,9 @@ public final class ClojureLowering {
 
 	/**
 	 * The file of each loaded namespace and {@code load} unit
-	 * ({@link ClojureNamespaceLowering#loadOne}) -- the key its init is stored under -- to
-	 * its root-relative path ({@code my_app/core.cljc}), the {@code *file*} it loads under.
+	 * ({@link ClojureNamespaceLowering#loadOne}) -- the key its init is stored under --
+	 * to its root-relative path ({@code my_app/core.cljc}), the {@code *file*} it loads
+	 * under.
 	 */
 	final Map<String, String> unitFiles = new HashMap<>();
 
