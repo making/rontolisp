@@ -54,13 +54,22 @@ final class WasmFetchCompiler {
 	 */
 	static void reject(boolean noWasi) {
 		if (noWasi) {
-			throw new UnsupportedOperationException("rontolisp:fetch requires the component's wasi:http imports, "
+			throw new UnsupportedOperationException("rontolisp:fetch" + CLOJURE_CLIENT
+					+ " requires the component's wasi:http imports, "
 					+ "which --no-wasi excludes (a --no-wasi build imports nothing by default); add --host-fetch "
 					+ "to route fetch at a host import (env.fetch), or drop --no-wasi");
 		}
-		throw new UnsupportedOperationException("rontolisp:fetch is only available in WASM component mode"
+		throw new UnsupportedOperationException("rontolisp:fetch" + CLOJURE_CLIENT
+				+ " is only available in WASM component mode"
 				+ " (--component) or a --native executable, not in a Preview 1 .wasm (no host of one answers HTTP)");
 	}
+
+	/**
+	 * The surface a Clojure program fetches through, named beside fetch so the refusal
+	 * reads from a {@code .clj} file too: {@code rontolisp.http-client} sends every
+	 * request through {@code rontolisp:fetch}.
+	 */
+	private static final String CLOJURE_CLIENT = " (and Clojure's rontolisp.http-client, which sends through it)";
 
 	// Rejects a statically-known unsupported literal method; null (unknown/runtime)
 	// means GET and passes.

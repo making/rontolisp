@@ -264,11 +264,12 @@ class ClojureLibraryTest {
 		// class answers a class name as a keyword, and a class name has no slash (the
 		// class rows' bases neither, nor a host class's keys); ns-name a namespace's name
 		// as a symbol, which has none either; the Ring adapter its options' and request
-		// map's fixed key names and a method or scheme, HTTP tokens that admit no slash
+		// map's fixed key names and a method or scheme, HTTP tokens that admit no slash;
+		// the HTTP client its options' and response map's fixed key names
 		Set<String> slashless = Set.of("RONTOLISP::%CLOJURE-EXCEPTION-CLASS", "RONTOLISP::%CLOJURE-CLASS-KEYWORDS",
 				"RONTOLISP::%CLOJURE-READER-VALUE-CLASS", "RONTOLISP::%CLOJURE-HOST-CLASS-KEYS",
 				"RONTOLISP::%CLOJURE-NS-NAME", "RONTOLISP::%CLOJURE-RING-KEYWORD", "RONTOLISP::%CLOJURE-RING-MAP",
-				"RONTOLISP::%CLOJURE-RING-OPTION");
+				"RONTOLISP::%CLOJURE-RING-OPTION", "RONTOLISP::%CLOJURE-HTTP-ASSOC", "RONTOLISP::%CLOJURE-HTTP-OPTION");
 		builders.removeAll(slashless);
 		boolean grew = true;
 		while (grew) {

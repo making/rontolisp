@@ -6128,6 +6128,21 @@ public final class LispNames {
 	public static final String FUTURE_FORCE_INTERNAL = "%FUTURE-FORCE";
 
 	/**
+	 * The internal {@code rontolisp::%future-settled-p} primitive: whether a future has
+	 * settled -- fulfilled or rejected -- without waiting for it ({@code t} for any value
+	 * that is no future, which an await answers at once). Per backend: the interpreter's
+	 * {@code LispFuture} and the JVM's {@code CompletableFuture} answer {@code isDone}, a
+	 * {@code --component}'s future its state, and a degenerate Preview 1 future is
+	 * settled from the start but a deferred one ({@link #FUTURE_DEFERRED_INTERNAL}),
+	 * which settles at its first await. It scans nothing and drives no scheduler: on a
+	 * {@code --component} a pending future settles only while something blocks on the
+	 * scheduler. Its consumer is the Clojure front end's {@code future-done?} and timed
+	 * {@code deref} of the future {@code rontolisp.http-client} answers under
+	 * {@code :async true} ({@code clojure.lisp}).
+	 */
+	public static final String FUTURE_SETTLED_INTERNAL = "%FUTURE-SETTLED-P";
+
+	/**
 	 * The internal {@code rontolisp::%future-deferred} primitive of the degenerate
 	 * (Preview 1) tier: {@code (%future-deferred thunk)} is a future that settles on its
 	 * first await, to what {@code thunk} answers there -- every await calls it, so the
@@ -7628,6 +7643,12 @@ public final class LispNames {
 	 * answer on every backend.
 	 */
 	public static final String FUTURE_FORCE_QUALIFIED = RONTOLISP_PKG + "::" + FUTURE_FORCE_INTERNAL;
+
+	/**
+	 * The canonical internal-qualified spelling of {@code rontolisp::%future-settled-p}
+	 * ({@link #FUTURE_SETTLED_INTERNAL}), which the JVM backend gates its helper on.
+	 */
+	public static final String FUTURE_SETTLED_QUALIFIED = RONTOLISP_PKG + "::" + FUTURE_SETTLED_INTERNAL;
 
 	/**
 	 * The canonical internal-qualified spelling of {@code rontolisp::%future-deferred}

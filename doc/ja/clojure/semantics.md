@@ -411,6 +411,15 @@ ClojureScript の `^:mutable` は指定になりません。ローカル・パ�
 それより上でも呼べます。エクスポートはファイル全体の低下が終わってから var を解決するので、
 var はエクスポートより下で定義してかまいません。
 
+## HTTP クライアント
+
+`rontolisp.http-client` は Clojure で書かれた組み込みの名前空間で、どのリクエストも
+`rontolisp:fetch` を呼びます。そのため Clojure のプログラムはターゲットが fetch に与える
+トランスポートでリクエストを送り、トランスポートのないターゲットではコンパイルの時点で
+プログラムが拒否されます（[HTTP クライアント](reference/http-client.md)）。`:async true` で
+返るフューチャーは rontolisp のフューチャーで、`deref` は `rontolisp:await` と同じ仕組みで
+それを待ちます。
+
 ## 未対応
 
 各拒否は `unknown name` ではなく欠けた設計を名指します:

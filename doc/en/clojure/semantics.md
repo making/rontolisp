@@ -419,6 +419,14 @@ exist below its form, like a `require`'s alias, while a `defimport` may be calle
 a `defn`. An export resolves its var once the whole file has lowered, so the var may be
 defined below it.
 
+## HTTP client
+
+`rontolisp.http-client` is a built-in namespace written in Clojure whose every request calls
+`rontolisp:fetch`, so a Clojure program fetches through whatever transport the target gives
+fetch, and a target without one refuses the program when it compiles
+([HTTP client](reference/http-client.md)). Its future under `:async true` is a rontolisp
+future: `deref` waits for it through the same mechanism as `rontolisp:await`.
+
 ## Not yet
 
 Each refusal names the missing design, never `unknown name`:

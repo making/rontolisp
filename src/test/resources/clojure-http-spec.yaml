@@ -1,0 +1,274 @@
+# The cross-transport corpus of the Clojure HTTP client, rontolisp.http-client
+# (FetchSpecE2eTest#clojureHttpClient): the fetch-spec.yaml origin and legs -- the
+# interpreter and the JVM (the JDK's HttpClient), a --native output (the runner's rlhttp
+# host) and a --component under `wasmtime run -S http=y` (wasi:http) -- over one .clj
+# program per leg, sliced back per case. @ORIGIN@ is the origin's http://127.0.0.1:<port>.
+#
+# Every expected line was diffed against the oracle, clj 1.12.6 with
+# babashka.http-client 0.4.23 required as `http` against the same origin (2026-10-08),
+# and differs from it only where a comment says so: the response map has no :version
+# (no transport here reports one) and the client asks for no compression (no
+# accept-encoding), :as :bytes is refused, and a transport failure is an IOException
+# carrying the transport's message (the oracle's ConnectException is one).
+#
+# The origin's endpoints beyond fetch-spec.yaml's: /headers (the request's header
+# fields as {name=[values]}, sorted, without host, connection, content-length,
+# user-agent and transfer-encoding), /query (the raw query), /form ("<content-type>|<body>"),
+# /status/500, /status/308 (to /hello), /redirect-post and /redirect-307 (302 and 307 to
+# /echo), /redirect-303 (303 to the relative "echo"), /loop (302 to /loop?<n+1>, body
+# "hop <n>"), /no-location (302 without a Location), /lines (two lines of UTF-8 text).
+cases:
+  - name: the-origin-and-the-client
+    source: |
+      (ns http-spec
+        (:require [rontolisp.http-client :as http]
+                  [clojure.java.io :as io]))
+      (def origin "@ORIGIN@")
+      (defn url [p] (str origin p))
+      (println (subs (url "/hello") 0 17))
+    expected: |
+      http://127.0.0.1:
+  - name: a-get-answers-the-response-map
+    source: |
+      (let [r (http/get (url "/hello"))]
+        (prn (:status r))
+        (prn (:body r))
+        (prn (get-in r [:headers "x-test"]))
+        (prn (= (url "/hello") (:uri r)))
+        ;; the oracle's map holds :version too (:http1.1)
+        (prn (sort (keys r))))
+    expected: |
+      200
+      "hello-from-fetch"
+      "ok"
+      true
+      (:body :headers :request :status :uri)
+  - name: header-names-are-strings-a-repeated-field-a-vector
+    source: |
+      (prn (sort (keys (:headers (http/get (url "/hello"))))))
+      (prn (get-in (http/get (url "/cookies")) [:headers "set-cookie"]))
+    expected: |
+      ("content-length" "date" "x-test")
+      ["a=1" "b=2"]
+  - name: request-headers-take-string-and-keyword-names
+    source: |
+      (prn (:body (http/get (url "/hello") {:headers {"X-Custom" "abc"}})))
+      (prn (:body (http/get (url "/hello") {:headers {:x-custom "abc"}})))
+      ;; the oracle also sends accept-encoding: gzip, deflate
+      (prn (:body (http/get (url "/headers"))))
+      (prn (:body (http/get (url "/headers") {:headers {"x-many" ["1" "2"]}})))
+      (prn (:body (http/get (url "/headers") {:headers {:accept "text/plain" "Accept" "x/y"}})))
+    expected: |
+      "got-header"
+      "got-header"
+      "{accept=[*/*]}"
+      "{accept=[*/*], x-many=[1, 2]}"
+      "{accept=[x/y]}"
+  - name: the-verbs-send-their-methods-and-bodies
+    source: |
+      (prn (:body (http/post (url "/echo") {:body "héllo"})))
+      (prn (:body (http/put (url "/echo") {:body "x"})))
+      (prn (:body (http/patch (url "/echo") {:body "y"})))
+      (prn (:body (http/delete (url "/echo"))))
+      (let [r (http/head (url "/hello"))]
+        (prn [(:status r) (:body r) (get-in r [:headers "x-test"])]))
+    expected: |
+      "POST:héllo"
+      "PUT:x"
+      "PATCH:y"
+      "DELETE:"
+      [200 "" "ok"]
+  - name: request-takes-the-whole-options-map
+    source: |
+      (prn (:body (http/request {:method :post :uri (url "/echo") :body "r"})))
+      (prn (:body (http/request {:method :get :url (url "/hello")})))
+      (prn (:body (http/request {:request-method :post :uri (url "/echo") :body "rm"})))
+      (prn (:body (http/request {:uri (url "/echo")})))
+      (prn (:body (http/request {:method :options :uri (url "/echo")})))
+    expected: |
+      "POST:r"
+      "hello-from-fetch"
+      "POST:rm"
+      "GET:"
+      "OPTIONS:"
+  - name: query-params-are-appended-url-encoded
+    source: |
+      (prn (:body (http/get (url "/query") {:query-params {"b" ["x y" "z&"]}})))
+      (prn (:body (http/get (url "/query") {:query-params {:c 3}})))
+      (prn (:body (http/get (url "/query?q=0") {:query-params {"a" "1"}})))
+    expected: |
+      "b=x+y&b=z%26"
+      "c=3"
+      "q=0&a=1"
+  - name: form-params-become-a-urlencoded-body
+    source: |
+      (prn (:body (http/post (url "/form") {:form-params {"a" "1 2"}})))
+      (prn (:body (http/post (url "/form") {:form-params {:b ["x" "y"]}})))
+      (prn (:body (http/post (url "/form") {:form-params {"c" nil}})))
+      (prn (:body (http/post (url "/form") {:form-params {"a" "1"} :headers {:content-type "text/plain"}})))
+    expected: |
+      "application/x-www-form-urlencoded|a=1+2"
+      "application/x-www-form-urlencoded|b=%5B%22x%22+%22y%22%5D"
+      "application/x-www-form-urlencoded|c="
+      "text/plain|a=1"
+  - name: an-exceptional-status-throws-ex-info-over-the-response
+    source: |
+      (prn (try (http/get (url "/status/404"))
+                (catch clojure.lang.ExceptionInfo e
+                  [(ex-message e) (:status (ex-data e)) (:body (ex-data e))])))
+      (prn (try (http/get (url "/status/500"))
+                (catch Exception e (ex-message e))))
+      (prn (try (http/get (url "/status/404"))
+                (catch clojure.lang.ExceptionInfo e (sort (keys (ex-data e))))))
+    expected: |
+      ["Exceptional status code: 404" 404 "missing"]
+      "Exceptional status code: 500"
+      (:body :headers :request :status :uri)
+  - name: throw-false-answers-every-status
+    source: |
+      (let [r (http/get (url "/status/404") {:throw false})] (prn [(:status r) (:body r)]))
+      (prn (try (http/get (url "/status/404") {:throw nil}) (catch Exception e :thrown)))
+      (let [r (http/get (url "/status/204"))] (prn [(:status r) (:body r)]))
+    expected: |
+      [404 "missing"]
+      :thrown
+      [204 ""]
+  - name: redirects-are-followed-like-the-jdk-normal-policy
+    source: |
+      (defn hop [r] [(:status r) (:body r) (subs (:uri r) (count origin))])
+      (prn (hop (http/get (url "/redirect"))))
+      (prn (hop (http/get (url "/status/308"))))
+      (prn (:body (http/post (url "/redirect-post") {:body "data"})))
+      (prn (:body (http/post (url "/redirect-307") {:body "data"})))
+      (prn (:body (http/post (url "/redirect-303") {:body "data"})))
+      (prn (:body (http/put (url "/redirect-post") {:body "data"})))
+      (prn (hop (http/get (url "/loop"))))
+      (prn (try (http/get (url "/no-location")) (catch java.io.IOException e (ex-message e))))
+    expected: |
+      [200 "hello-from-fetch" "/hello"]
+      [200 "hello-from-fetch" "/hello"]
+      "GET:"
+      "POST:data"
+      "GET:"
+      "PUT:data"
+      [302 "hop 4" "/loop?4"]
+      "java.io.UncheckedIOException: java.io.IOException: Invalid redirection"
+  - name: the-body-decodes-as-utf-8-or-stays-a-stream
+    source: |
+      (prn (:body (http/get (url "/lines"))))
+      (prn (slurp (:body (http/get (url "/lines") {:as :stream}))))
+      (prn (vec (line-seq (io/reader (:body (http/get (url "/lines") {:as :stream}))))))
+      (prn (with-open [b (:body (http/get (url "/lines") {:as :stream}))] (count (slurp b))))
+    expected: |
+      "héllo, 世界\nsecond line\n"
+      "héllo, 世界\nsecond line\n"
+      ["héllo, 世界" "second line"]
+      22
+  - name: an-async-request-answers-a-future-deref-reads
+    source: |
+      (let [f (http/get (url "/hello") {:async true})]
+        (prn [(future? f) (:status @f) (:body @f) (:status (deref f))]))
+      (prn @(http/get (url "/hello") {:async true :async-then (fn [r] (:status r))}))
+      (prn @(http/get (url "/hello") {:async true :async-then :body}))
+      (prn (:status (http/get (url "/hello") {:async-then (fn [r] :then)})))
+    expected: |
+      [true 200 "hello-from-fetch" 200]
+      200
+      "hello-from-fetch"
+      200
+  - name: the-future-verbs-and-a-timed-deref-read-the-async-answer
+    source: |
+      (let [f (http/get (url "/hello") {:async true})]
+        (prn [(:status (deref f 10000 :timeout)) (future-done? f) (future-cancelled? f) (future-cancel f)]))
+      (prn (try (realized? (http/get (url "/hello") {:async true})) (catch ClassCastException e :cast)))
+      (prn (try (deref (http/get (url "/hello") {:async true}) "x" :t) (catch ClassCastException e :cast)))
+    expected: |
+      [200 true false false]
+      :cast
+      :cast
+  - name: a-timed-deref-answers-its-default-while-the-reply-is-pending
+    skip:
+      native: a Preview 1 module runs an async body to its end at the call, so the reply is in by the deref
+    source: |
+      (let [f (http/get (url "/slow") {:async true})]
+        (prn (deref f 50 :timeout))
+        (prn (future-done? f))
+        (prn (:body @f))
+        (prn (future-done? f)))
+    expected: |
+      :timeout
+      false
+      "slow"
+      true
+  - name: an-async-failure-is-an-execution-exception-over-its-cause
+    source: |
+      (prn (try @(http/get (url "/status/404") {:async true})
+                (catch clojure.lang.ExceptionInfo e :caught-ex-info)
+                (catch java.util.concurrent.ExecutionException e
+                  [:execution (:status (ex-data (ex-cause e)))])))
+      (let [r @(http/get (url "/status/404") {:async true :async-catch (fn [m] m)})]
+        (prn [(sort (keys r)) (instance? java.util.concurrent.CompletionException (:ex r))
+              (instance? clojure.lang.ExceptionInfo (:ex-cause r)) (:ex-message r) (:status (:ex-data r))]))
+    expected: |
+      [:execution 404]
+      [(:ex :ex-cause :ex-data :ex-message :request) true true "Exceptional status code: 404" 404]
+  - name: a-transport-failure-is-an-io-exception
+    source: |
+      ;; the oracle's is a java.net.ConnectException, an IOException
+      (prn (try (http/get "http://127.0.0.1:1/refused") (catch java.io.IOException e :io)))
+      (prn (try @(http/get "http://127.0.0.1:1/refused" {:async true})
+                (catch java.util.concurrent.ExecutionException e
+                  (instance? java.io.IOException (ex-cause e)))))
+    expected: |
+      :io
+      true
+  - name: a-url-the-jdk-refuses-is-refused-at-the-call
+    source: |
+      (prn (try (http/get (str (url "/a b"))) (catch IllegalArgumentException e (subs (ex-message e) 0 32))))
+      (prn (try (http/get "example.com") (catch IllegalArgumentException e (ex-message e))))
+      (prn (try (http/get "ftp://example.com/x") (catch IllegalArgumentException e (ex-message e))))
+      (prn (try (http/get (url "/hello") {:headers {"Host" "x"}}) (catch IllegalArgumentException e (ex-message e))))
+      (prn (try (http/get (url "/hello") {:headers {"x-num" 5}}) (catch IllegalArgumentException e (ex-message e))))
+    expected: |
+      "Illegal character in path at ind"
+      "URI with undefined scheme"
+      "invalid URI scheme ftp"
+      "restricted header name: \"Host\""
+      "array element type mismatch"
+  - name: auth-and-accept-set-their-headers
+    source: |
+      (prn (:body (http/get (url "/headers") {:basic-auth ["user" "päss"]})))
+      (prn (:body (http/get (url "/headers") {:basic-auth {:user "u" :pass "p"}})))
+      (prn (:body (http/get (url "/headers") {:oauth-token "tok"})))
+      (prn (:body (http/get (url "/headers") {:accept :json})))
+      (prn (try (http/get (url "/headers") {:accept :xml}) (catch IllegalArgumentException e (ex-message e))))
+    expected: |
+      "{accept=[*/*], authorization=[Basic dXNlcjpww6Rzcw==]}"
+      "{accept=[*/*], authorization=[Basic dTpw]}"
+      "{accept=[*/*], authorization=[Bearer tok]}"
+      "{accept=[application/json]}"
+      "No matching clause: :xml"
+  - name: the-verbs-are-values-and-the-request-rides-the-response
+    source: |
+      (prn (mapv #(:status (% (url "/hello"))) [http/get http/head]))
+      (prn (:status (http/get (url "/hello") nil)))
+      (prn (:body (http/post (url "/echo") {:body nil})))
+      (prn (sort (keys (:request (http/get (url "/hello"))))))
+      (prn (:method (:request (http/get (url "/hello")))))
+      (prn (get-in (http/get (url "/hello") {:headers {"X-Custom" "abc"}}) [:request :headers "X-Custom"]))
+    expected: |
+      [200 200]
+      200
+      "POST:"
+      (:headers :method :uri)
+      :get
+      "abc"
+  - name: what-no-transport-here-offers-is-refused-by-name
+    source: |
+      (prn (try (http/get (url "/lines") {:as :bytes}) (catch UnsupportedOperationException e (ex-message e))))
+      (prn (try (http/get (url "/hello") {:timeout 1000}) (catch UnsupportedOperationException e (ex-message e))))
+      (prn (try (http/get (url "/lines") {:as :json}) (catch IllegalArgumentException e (ex-message e))))
+    expected: |
+      "rontolisp.http-client: :as :bytes is not supported: no value here is a byte array; take :as :stream"
+      "rontolisp.http-client: :timeout is not supported: rontolisp:fetch has no timeout yet"
+      "No matching clause: :json"

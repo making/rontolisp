@@ -220,6 +220,16 @@ scheduler it blocks on the task waitable-set, without one it is a poll
 (`WasmFutureRuntimeBuilder.buildSyncForce` -> `OFF_POLL`). Used by the host-driven reactor transport
 (`http-reactor.lisp`, `.kb/clack.md`); deliberately undocumented.
 
+## `%future-settled-p`
+Internal; whether a future has settled without waiting (`t` for a non-future). Interpreter
+`LispFuture.future().isDone()`; JVM `_future_settled` (`JvmAsyncRuntimeBuilder`, emitted only
+for a program naming it, so every other class is unchanged); non-asyncMode WASM a
+`TYPE_P1_FUTURE` of any kind but the deferred one (3); asyncMode `TYPE_FUTURE`'s state field
+(0 pending). It drives nothing: on a component a pending future settles only while something
+blocks on the scheduler. Its consumer is Clojure's `future-done?` and timed `deref` of the
+HTTP client's future (`.kb/clojure-frontend.md`, "HTTP client"), pinned on all four legs by
+`clojure-http-spec.yaml`.
+
 ## http-handler interaction
 A handler that awaits must itself be an async-defun; the servers await its future (interpreter
 `invokeHttpHandler`, the JVM generated `handle()`, http.lisp's `%serve-handle` -- itself an

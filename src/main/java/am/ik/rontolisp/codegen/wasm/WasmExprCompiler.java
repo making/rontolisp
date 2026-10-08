@@ -585,6 +585,7 @@ final class WasmExprCompiler {
 						|| LispNames.SUBTASK_FUTURE_INTERNAL.equals(qn.member())
 						|| LispNames.STREAM_NEW_INTERNAL.equals(qn.member())
 						|| LispNames.FUTURE_FORCE_INTERNAL.equals(qn.member())
+						|| LispNames.FUTURE_SETTLED_INTERNAL.equals(qn.member())
 						|| LispNames.FUTURE_DEFERRED_INTERNAL.equals(qn.member())) {
 					WasmFutureInternalCompiler.compile(qn.member(), cons, ctx);
 					return;

@@ -16,6 +16,10 @@ assumes; here we cover only what is particular to making requests.
 | [`rontolisp:json-parse`](../reference/functions/rontolisp-json-parse.md) | Parse a JSON string into Lisp values |
 | [`rontolisp:json-stringify`](../reference/functions/rontolisp-json-stringify.md) | Serialize a Lisp value to a JSON string |
 
+A Clojure program sends its requests through
+[`rontolisp.http-client`](../clojure/reference/http-client.md), babashka.http-client's API
+over this same `fetch`.
+
 > **Backend support.** The interpreter and JVM-compiled classes use the JDK
 > `java.net.http.HttpClient`; the request runs on a background thread from the
 > moment `fetch` returns. On WASM `fetch` needs a host that can make the call

@@ -39,3 +39,4 @@ Clojure で書かれた組み込みの名前空間は、プロジェクトのフ
 | `clojure.test` | [テスト (clojure.test)](test.md) |
 | `ring.adapter.rontolisp` | [Ring アダプター](ring.md) |
 | `ring.util.*`、`ring.middleware.*` | [Ring ユーティリティ](ring-util.md) |
+| `rontolisp.http-client` | [HTTP クライアント](http-client.md) |

@@ -98,7 +98,7 @@ final class ClojureNamespaceLowering {
 			return ClojureRingLowering.ringValue(ref.var());
 		}
 		if (ClojureKernelLowering.isKernelNamespace(ref.ns())) {
-			return ClojureKernelLowering.kernelValue(ref.ns(), ref.var());
+			return ClojureKernelLowering.kernelValue(ctx, ref.ns(), ref.var());
 		}
 		if (ref.ns().equals(ClojureWasmLowering.NAMESPACE)) {
 			return ClojureWasmLowering.value(ref.var());
