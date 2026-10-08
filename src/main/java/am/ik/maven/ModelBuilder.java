@@ -120,6 +120,20 @@ final class ModelBuilder {
 		return (PomModel) cached;
 	}
 
+	/**
+	 * Returns the effective model of a POM given as bytes rather than coordinates -- one
+	 * shipped inside a jar -- built like a repository POM's, its parents and imports read
+	 * from the source.
+	 * @param pom the POM's bytes
+	 * @return the model
+	 * @throws InvalidPomException if Maven's model builder would reject the POM
+	 * @throws MavenResolutionException if a parent or import cannot be resolved
+	 */
+	PomModel effective(byte[] pom) throws InvalidPomException, MavenResolutionException {
+		PomModel input = PomReader.read(pom);
+		return build(input, Map.of("packaging", input.effectivePackaging()), new LinkedHashSet<>());
+	}
+
 	private @Nullable PomModel raw(Artifact pom) throws InvalidPomException, MavenResolutionException {
 		Object cached = this.raw.get(pom);
 		if (cached == null) {

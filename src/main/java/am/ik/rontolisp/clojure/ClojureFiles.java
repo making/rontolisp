@@ -7,12 +7,13 @@ import org.jspecify.annotations.Nullable;
 /**
  * The files a Clojure program names besides itself: the project namespaces a
  * {@code require} loads, the {@code deps.edn} files naming their source roots and
- * dependencies, a dependency's directory or jar, the user-level {@code deps.edn}, and the
- * classes of its Java class path. This package has no filesystem of its own -- the
- * browser playground has none at all -- so the source-language seam hands one in, over
- * the loader the rest of the program reads through ({@code eval/SourceLanguage}). Where
- * the roots are and which file a namespace maps to is decided here
- * ({@link ClojureSourcePath}, {@link ClojureDepsGraph}); the seam only reads.
+ * dependencies, a dependency's directory or jar, the user-level {@code deps.edn}, the
+ * repositories its Maven and git coordinates come from, and the classes of its Java class
+ * path. This package has no filesystem of its own -- the browser playground has none at
+ * all -- so the source-language seam hands one in, over the loader the rest of the
+ * program reads through ({@code eval/SourceLanguage}). Where the roots are and which file
+ * a namespace maps to is decided here ({@link ClojureSourcePath},
+ * {@link ClojureDepsGraph}); the seam only reads.
  */
 public interface ClojureFiles {
 
@@ -143,6 +144,28 @@ public interface ClojureFiles {
 	 */
 	default @Nullable List<String> list(String dir) {
 		return null;
+	}
+
+	/**
+	 * Where a {@code deps.edn}'s Maven and git coordinates are fetched from -- chosen
+	 * once, where the environment is read, never here.
+	 * @return the repositories, or {@code null} when nothing is fetched (the default):
+	 * every Maven and git coordinate stays unfetched, named when a lookup misses
+	 */
+	default @Nullable ClojureRepositories repositories() {
+		return null;
+	}
+
+	/**
+	 * Adds a jar the program's dependencies bring to its Java class path -- what its
+	 * {@link #javaClassLoader()} loads from from now on, and what a compiled program
+	 * carries. The default adds nothing: a host without a Java class path of its own.
+	 * @param jar the jar's path
+	 * @param mavenCoordinate its Maven coordinates
+	 * ({@code groupId:artifactId[:extension[:classifier]]:version}) when a Maven
+	 * coordinate brought it, else {@code null}
+	 */
+	default void addJavaClassPath(String jar, @Nullable String mavenCoordinate) {
 	}
 
 }

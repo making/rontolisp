@@ -25,21 +25,35 @@ final class MemoryClojureFiles implements ClojureFiles {
 
 	private final List<String> aliases;
 
+	private final @Nullable ClojureRepositories repositories;
+
+	/**
+	 * What the lowering added to the Java class path: {@code jar} or
+	 * {@code jar coordinate}.
+	 */
+	final List<String> javaClassPath = new ArrayList<>();
+
 	MemoryClojureFiles(Map<String, String> files) {
 		this(files, Map.of(), null);
 	}
 
 	MemoryClojureFiles(Map<String, String> files, Map<String, Map<String, String>> archives,
 			@Nullable String userConfigDir) {
-		this(files, archives, userConfigDir, List.of());
+		this(files, archives, userConfigDir, List.of(), null);
 	}
 
 	MemoryClojureFiles(Map<String, String> files, Map<String, Map<String, String>> archives,
 			@Nullable String userConfigDir, List<String> aliases) {
+		this(files, archives, userConfigDir, aliases, null);
+	}
+
+	MemoryClojureFiles(Map<String, String> files, Map<String, Map<String, String>> archives,
+			@Nullable String userConfigDir, List<String> aliases, @Nullable ClojureRepositories repositories) {
 		this.files = files;
 		this.archives = archives;
 		this.userConfigDir = userConfigDir;
 		this.aliases = aliases;
+		this.repositories = repositories;
 	}
 
 	/**
@@ -48,7 +62,27 @@ final class MemoryClojureFiles implements ClojureFiles {
 	 * @return the files
 	 */
 	MemoryClojureFiles withAliases(String... selected) {
-		return new MemoryClojureFiles(this.files, this.archives, this.userConfigDir, List.of(selected));
+		return new MemoryClojureFiles(this.files, this.archives, this.userConfigDir, List.of(selected),
+				this.repositories);
+	}
+
+	/**
+	 * These files with coordinates fetched from the repositories.
+	 * @param fetched the repositories
+	 * @return the files
+	 */
+	MemoryClojureFiles withRepositories(ClojureRepositories fetched) {
+		return new MemoryClojureFiles(this.files, this.archives, this.userConfigDir, this.aliases, fetched);
+	}
+
+	@Override
+	public @Nullable ClojureRepositories repositories() {
+		return this.repositories;
+	}
+
+	@Override
+	public void addJavaClassPath(String jar, @Nullable String mavenCoordinate) {
+		this.javaClassPath.add(mavenCoordinate == null ? jar : jar + " " + mavenCoordinate);
 	}
 
 	@Override

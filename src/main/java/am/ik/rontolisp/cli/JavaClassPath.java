@@ -30,9 +30,11 @@ import org.jspecify.annotations.Nullable;
 /**
  * A program's Java class path: the {@code --java-classpath} entries, then the jars the
  * {@code --java-dep} coordinates resolve to, in the order Maven puts them on a project's
- * runtime class path (Maven's nearest-wins selection, {@code MavenResolver#resolve}). The
- * interpreter loads classes from it ({@link #classLoader()}), a JVM compile resolves
- * {@code java:} sites against it, and a compiled program jar names it in its manifest.
+ * runtime class path (Maven's nearest-wins selection, {@code MavenResolver#resolve}),
+ * then the jars a Clojure program's {@code deps.edn} dependencies bring, as its lowering
+ * resolves them ({@link #add}). The interpreter loads classes from it
+ * ({@link #classLoader()}), a JVM compile resolves {@code java:} sites against it, and a
+ * compiled program jar names it in its manifest.
  *
  * <p>
  * Coordinates resolve from Maven Central through the local repository {@code mvn} uses --
@@ -40,10 +42,15 @@ import org.jspecify.annotations.Nullable;
  * file's {@code <offline>}; what the resolver cannot do faithfully (a SNAPSHOT, a version
  * range, a mirror or proxy covering Central) is refused by name.
  */
-final class JavaClassPath {
+final class JavaClassPath implements AutoCloseable {
 
-	/** No class path: the classes rontolisp runs with. */
-	static final JavaClassPath NONE = new JavaClassPath(List.of(), List.of());
+	/**
+	 * No class path, and none to grow: the classes rontolisp runs with -- what a target
+	 * without Java classes (wasm) compiles against.
+	 */
+	static final JavaClassPath NONE = new JavaClassPath(List.of(), List.of(), false);
+
+	private final boolean growable;
 
 	private final List<Path> entries;
 
@@ -51,9 +58,24 @@ final class JavaClassPath {
 
 	private @Nullable ClassLoader loader;
 
-	private JavaClassPath(List<Path> entries, List<Artifact> dependencies) {
-		this.entries = List.copyOf(entries);
-		this.dependencies = List.copyOf(dependencies);
+	private JavaClassPath(List<Path> entries, List<Artifact> dependencies, boolean growable) {
+		this.entries = new ArrayList<>(entries);
+		this.dependencies = new ArrayList<>(dependencies);
+		this.growable = growable;
+	}
+
+	/**
+	 * A class path of the entries given, growing as a program's dependencies resolve: an
+	 * embedder's, whose entries are its own.
+	 * @param entries the directories and jars, in search order
+	 * @return the class path
+	 */
+	static JavaClassPath of(List<Path> entries) {
+		List<Path> absolute = new ArrayList<>();
+		for (Path entry : entries) {
+			absolute.add(entry.toAbsolutePath().normalize());
+		}
+		return new JavaClassPath(absolute, List.of(), true);
 	}
 
 	/**
@@ -68,7 +90,7 @@ final class JavaClassPath {
 	 */
 	static JavaClassPath of(JavaResolutionOptions options, @Nullable MavenResolver resolver, PrintStream err) {
 		if (!options.namesClassPath()) {
-			return NONE;
+			return new JavaClassPath(List.of(), List.of(), true);
 		}
 		List<Path> entries = new ArrayList<>();
 		for (Path entry : options.classpath()) {
@@ -103,7 +125,36 @@ final class JavaClassPath {
 				throw new IllegalArgumentException("--java-dep: " + ex.getMessage(), ex);
 			}
 		}
-		return new JavaClassPath(entries, coordinates);
+		return new JavaClassPath(entries, coordinates, true);
+	}
+
+	/**
+	 * Adds a jar a program's dependencies bring -- a Clojure {@code deps.edn} library's
+	 * -- after the entries already there, each once: what {@link #classLoader()} loads
+	 * from from now on, what a compile resolves against and a compiled jar carries. Its
+	 * Maven coordinates, when a coordinate brought it, join the {@link #dependencies()} a
+	 * generated pom names. {@link #NONE} adds nothing.
+	 * @param jar the jar's path
+	 * @param mavenCoordinate its coordinates
+	 * ({@code groupId:artifactId[:extension[:classifier]]:version}), or {@code null}
+	 */
+	synchronized void add(String jar, @Nullable String mavenCoordinate) {
+		if (!this.growable) {
+			return;
+		}
+		Path path = Path.of(jar).toAbsolutePath().normalize();
+		if (!this.entries.contains(path)) {
+			this.entries.add(path);
+			if (this.loader instanceof ProgramClassLoader program) {
+				program.add(url(path));
+			}
+		}
+		if (mavenCoordinate != null) {
+			Artifact artifact = Artifact.parse(mavenCoordinate);
+			if (!this.dependencies.contains(artifact)) {
+				this.dependencies.add(artifact);
+			}
+		}
 	}
 
 	// Maven's default remote, through the local repository and offline flag of the
@@ -127,16 +178,16 @@ final class JavaClassPath {
 	/**
 	 * @return the directories and jars, in search order (absolute)
 	 */
-	List<Path> entries() {
-		return this.entries;
+	synchronized List<Path> entries() {
+		return List.copyOf(this.entries);
 	}
 
 	/**
-	 * @return the {@code --java-dep} coordinates as given: the dependencies a generated
-	 * pom names
+	 * @return the {@code --java-dep} coordinates as given, then those of the
+	 * {@code deps.edn} jars added: the dependencies a generated pom names
 	 */
-	List<Artifact> dependencies() {
-		return this.dependencies;
+	synchronized List<Artifact> dependencies() {
+		return List.copyOf(this.dependencies);
 	}
 
 	/**
@@ -160,7 +211,7 @@ final class JavaClassPath {
 	 * search order
 	 * @throws IllegalArgumentException when two entries have one file name
 	 */
-	List<String> copyBeside(Path jar) {
+	synchronized List<String> copyBeside(Path jar) {
 		String directory = libraryDirectory(jar);
 		Path library = jar.toAbsolutePath().resolveSibling(directory);
 		List<String> classPath = new ArrayList<>();
@@ -193,7 +244,7 @@ final class JavaClassPath {
 	 * @throws IllegalArgumentException when two entries have one file name, or a
 	 * directory holds a file at a path another entry takes
 	 */
-	Map<String, byte[]> warEntries() {
+	synchronized Map<String, byte[]> warEntries() {
 		Map<String, byte[]> entries = new TreeMap<>();
 		for (Map.Entry<String, Path> named : named().entrySet()) {
 			Path entry = named.getValue();
@@ -262,33 +313,74 @@ final class JavaClassPath {
 
 	/**
 	 * The loader of the program's Java classes: the entries over the classes rontolisp
-	 * runs with, made once. A native image defines no class at run time, so there the
-	 * entries reach a JVM compile's class-file lookup and a jar's manifest, not a loader.
-	 * @return the loader (rontolisp's own when there are no entries, or in a native
-	 * image)
+	 * runs with, made once, which loads from every entry {@link #add} adds later too. A
+	 * native image defines no class at run time, so there the entries reach a JVM
+	 * compile's class-file lookup and a jar's manifest, not a loader.
+	 * @return the loader (rontolisp's own for {@link #NONE}, or in a native image)
 	 */
 	synchronized ClassLoader classLoader() {
 		ClassLoader made = this.loader;
 		if (made == null) {
 			ClassLoader parent = JavaClassPath.class.getClassLoader();
-			if (this.entries.isEmpty() || System.getProperty("org.graalvm.nativeimage.imagecode") != null) {
+			if ((!this.growable && this.entries.isEmpty())
+					|| System.getProperty("org.graalvm.nativeimage.imagecode") != null) {
 				made = parent;
 			}
 			else {
 				URL[] urls = new URL[this.entries.size()];
 				for (int i = 0; i < urls.length; i++) {
-					try {
-						urls[i] = this.entries.get(i).toUri().toURL();
-					}
-					catch (MalformedURLException ex) {
-						throw new IllegalArgumentException("--java-classpath: " + this.entries.get(i), ex);
-					}
+					urls[i] = url(this.entries.get(i));
 				}
-				made = new URLClassLoader("rontolisp-java-classpath", urls, parent);
+				made = new ProgramClassLoader(urls, parent);
 			}
 			this.loader = made;
 		}
 		return made;
+	}
+
+	/**
+	 * Closes the loader's jars, for a caller done with the program's classes before its
+	 * process ends -- an embedder's compile. The command line never closes it: the
+	 * program it runs uses those classes until it exits.
+	 */
+	@Override
+	public synchronized void close() {
+		if (this.loader instanceof ProgramClassLoader program) {
+			try {
+				program.close();
+			}
+			catch (IOException ex) {
+				// a jar that cannot be closed now is closed when the process ends
+			}
+		}
+	}
+
+	private static URL url(Path entry) {
+		try {
+			return entry.toUri().toURL();
+		}
+		catch (MalformedURLException ex) {
+			throw new IllegalArgumentException("the Java class path entry " + entry + " names no URL", ex);
+		}
+	}
+
+	/**
+	 * The program's class loader: its class path, which grows as dependencies resolve.
+	 */
+	private static final class ProgramClassLoader extends URLClassLoader {
+
+		static {
+			ClassLoader.registerAsParallelCapable();
+		}
+
+		ProgramClassLoader(URL[] urls, ClassLoader parent) {
+			super("rontolisp-java-classpath", urls, parent);
+		}
+
+		void add(URL url) {
+			addURL(url);
+		}
+
 	}
 
 }

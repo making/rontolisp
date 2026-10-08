@@ -348,13 +348,24 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
 - A `_` param tag leaves that parameter to the cost rule of the `java:` surface, so
   `(^[_] Math/abs -2)` answers `2` where the oracle refuses tags that leave more than one
   overload.
-- Only `.clj` and `.cljc` files below the source roots are read (no classpath). The
-  project's `deps.edn` is the nearest one at or above the entry file, where the oracle
-  reads the working directory's. A Maven or git coordinate is not fetched and a jar's
-  `pom.xml` is not read: a namespace only they could hold is refused, naming them, and the
-  rest of the program runs. The built-in Ring namespaces load without a `ring/ring-core`
-  coordinate (the oracle needs one) and stand in for an older ring-core than the one
-  shipped. A dependency's `:deps/prep-lib` is checked, never run. Top-level dependencies are
+- Only `.clj` and `.cljc` files below the source roots are read. A dependency's jar holding
+  classes also joins the Java class path; a directory's classes do not (give a prepped
+  library's `target/classes` with `--java-classpath`). The project's `deps.edn` is the
+  nearest one at or above the entry file, where the oracle reads the working directory's.
+  Without the command line (an embedder, the browser playground) a Maven or git coordinate
+  is not fetched: a namespace only it could hold is refused, naming it, and the rest of the
+  program runs. A built-in library fetches nothing, its own dependencies included; the
+  built-in Ring namespaces load without a `ring/ring-core` coordinate (the oracle needs one)
+  and stand in for an older ring-core than the one shipped. A `pom.xml` project is not read,
+  nor is a library's `data_readers.clj`: its tags are refused like any unknown tag. A
+  version range, `RELEASE`, `LATEST`, a `SNAPSHOT` and a repository a `settings.xml` mirror
+  or proxy covers are refused (the oracle resolves them), and a download is always checked
+  against its `.sha1` (the oracle's default only warns). A git tag is checked against the
+  local clone, which is fetched only when the tag is missing or names another commit (the
+  oracle fetches on every resolution); checkouts live in `~/.rontolisp/gitlibs`, not
+  `~/.gitlibs`. Two commits of one library neither of which descends from the other are
+  refused naming both, where the oracle throws without a message. A dependency's
+  `:deps/prep-lib` is checked, never run. Top-level dependencies are
   expanded in the file's order, where the oracle takes a map of more than eight in its hash
   order: the two differ only where the selection rests on which was seen first (one
   version spelled two ways, `1.0` and `1.0.0`).

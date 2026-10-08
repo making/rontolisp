@@ -15,6 +15,7 @@ import am.ik.rontolisp.reader.LispReadException;
 import am.ik.rontolisp.reader.LispReader;
 import am.ik.rontolisp.clojure.Clojure;
 import am.ik.rontolisp.clojure.ClojureFiles;
+import am.ik.rontolisp.clojure.ClojureRepositories;
 import am.ik.rontolisp.scheme.Scheme;
 import am.ik.rontolisp.scheme.SchemeFiles;
 
@@ -235,12 +236,13 @@ public enum SourceLanguage {
 	/**
 	 * The files a Clojure program names, through a loader: the project namespaces a
 	 * {@code require} loads, the {@code deps.edn} files naming their roots and
-	 * dependencies, a dependency's directory or jar (read in place), and the user-level
-	 * {@code deps.edn} and the aliases the standards name. Where the roots are is the
-	 * front end's decision ({@code clojure/ClojureSourcePath}); this only reads and joins
-	 * paths. A parent directory is absolute, so the search for a {@code deps.edn} walks
-	 * past the top of a relative entry path; a host with no working directory (the
-	 * browser) keeps the lexical parent.
+	 * dependencies, a dependency's directory or jar (read in place), the user-level
+	 * {@code deps.edn}, the aliases and the repositories the standards name, and the
+	 * loader's Java class path, which the jars of the program's dependencies join. Where
+	 * the roots are is the front end's decision ({@code clojure/ClojureSourcePath}); this
+	 * only reads and joins paths. A parent directory is absolute, so the search for a
+	 * {@code deps.edn} walks past the top of a relative entry path; a host with no
+	 * working directory (the browser) keeps the lexical parent.
 	 * @param loader the loader, or {@code null} for none
 	 * @param standards where the user-level {@code deps.edn} is, and the selected aliases
 	 * @return the files
@@ -251,6 +253,7 @@ public enum SourceLanguage {
 		}
 		String userConfigDir = standards.clojureConfigDir();
 		List<String> aliases = standards.clojureAliases();
+		ClojureRepositories repositories = standards.clojureRepositories();
 		return new ClojureFiles() {
 			@Override
 			public @Nullable String read(String path) {
@@ -329,6 +332,16 @@ public enum SourceLanguage {
 			@Override
 			public @Nullable List<String> list(String dir) {
 				return loader.listDirectory(dir.isEmpty() ? "." : dir);
+			}
+
+			@Override
+			public @Nullable ClojureRepositories repositories() {
+				return repositories;
+			}
+
+			@Override
+			public void addJavaClassPath(String jar, @Nullable String mavenCoordinate) {
+				loader.addJavaClassPath(jar, mavenCoordinate);
 			}
 		};
 	}

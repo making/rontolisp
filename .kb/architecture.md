@@ -39,7 +39,11 @@ for `.clj` and `.cljc`, lowered to the same core forms so no backend learns a Cl
 - `am.ik.maven` -- Maven coordinates to descriptors, dependency graphs (collected, or
   resolved nearest-wins with Maven's class path) and jars through the `~/.m2` local
   repository, built on `am.ik.artifact` and on nothing else of ours; reached from
-  `cli/JavaClassPath` (`--java-dep`, `.kb/maven-resolver.md`).
+  `cli/JavaClassPath` (`--java-dep`, `.kb/maven-resolver.md`) and from
+  `eval/ClojureDepsRepositories` (`deps.edn` coordinates, with `am.ik.artifact.GitFetcher`).
+  That class lives in `eval`, not `cli`, because it implements the Clojure front end's
+  `ClojureRepositories` and `cli` names no language package; the command line only creates
+  it and hands it through `SourceStandards`.
 - `am.ik.gpu` -- the device half of `--gpu`, CUDA and Metal behind one sealed `GpuDevice`
   seam; imports nothing at all (`.kb/gpu.md`). The interpreter reaches it through
   `eval/LinalgGpu` -> `eval/LinalgGpuKernels`; the JVM backend EMBEDS its class files in the
@@ -65,7 +69,7 @@ cli -> eval, compiler, codegen.*, macro, reader, format, am.ik.wit, am.ik.maven
 codegen.jvm -> compiler, macro, runtime, am.ik.jvm, am.ik.gpu, am.ik.objc
 codegen.wasm -> compiler, macro, am.ik.wasm, am.ik.wit
 compiler -> macro, runtime, rontolisp (AST types only), am.ik.wit
-eval -> macro, compiler, reader, scheme, clojure, runtime, rontolisp (AST types only), am.ik.gpu, am.ik.objc, am.ik.artifact
+eval -> macro, compiler, reader, scheme, clojure, runtime, rontolisp (AST types only), am.ik.gpu, am.ik.objc, am.ik.artifact, am.ik.maven
 scheme -> reader, rontolisp (AST types only)
 clojure -> reader, rontolisp (AST types only)
 macro -> reader, rontolisp (AST types only)

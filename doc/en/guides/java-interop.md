@@ -565,7 +565,8 @@ class path after the `--java-classpath` entries, in Maven's class path order. Th
 from Maven Central through the local repository `mvn` uses -- `~/.m2/repository`, or
 the `localRepository` of `~/.m2/settings.xml`, whose `offline` is honored. A SNAPSHOT,
 a version range, or a `settings.xml` mirror or proxy covering Central is refused by
-name.
+name. A Clojure program's `deps.edn` dependencies that hold classes join the class path
+after these ([Projects: deps.edn](../clojure/semantics.md#projects-depsedn)).
 
 What each output carries:
 

@@ -13,6 +13,7 @@ import am.ik.rontolisp.clojure.ClojureDepsEdn.Lib;
 import am.ik.rontolisp.clojure.ClojureDepsGraph.Contribution;
 import am.ik.rontolisp.clojure.ClojureDepsGraph.Root;
 import am.ik.rontolisp.clojure.ClojureDepsGraph.Selected;
+import am.ik.rontolisp.clojure.ClojureRepositories.MavenSource;
 import org.jspecify.annotations.Nullable;
 
 /**
@@ -167,8 +168,8 @@ final class ClojureBasis {
 		}
 		Map<Lib, @Nullable Coord> overrides = orEmpty(this.args.libs(":override-deps"));
 		Map<Lib, @Nullable Coord> defaults = orEmpty(this.args.libs(":default-deps"));
-		List<Selected> selected = ClojureDepsGraph.resolve(deps, this.projectDir, new ClojureDepsProcurer(this.files),
-				overrides, defaults);
+		List<Selected> selected = ClojureDepsGraph.resolve(deps, this.projectDir,
+				new ClojureDepsProcurer(this.files, this::mavenSource), overrides, defaults);
 		Map<Lib, String> classpathOverrides = this.args.classpathOverrides();
 		if (classpathOverrides.isEmpty()) {
 			return selected;
@@ -189,6 +190,16 @@ final class ClojureBasis {
 
 	private static Map<Lib, @Nullable Coord> orEmpty(@Nullable Map<Lib, @Nullable Coord> map) {
 		return map == null ? Map.of() : map;
+	}
+
+	/**
+	 * The Maven repositories the merged map names ({@link ClojureDepsEdn#mavenSource}), a
+	 * relative {@code :mvn/local-repo} resolved against the project's directory like the
+	 * oracle's working directory.
+	 * @return the repositories
+	 */
+	MavenSource mavenSource() {
+		return ClojureDepsEdn.mavenSource(this.merged, this.files, this.projectDir);
 	}
 
 }

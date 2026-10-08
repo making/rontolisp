@@ -296,6 +296,63 @@ class MavenRepositoryTest {
 			.isEqualTo(this.local.toAbsolutePath().normalize());
 	}
 
+	@Test
+	void aPomGivenAsBytesAnswersItsModelsDependenciesWithTheClassifiersWritten() throws IOException {
+		// What a jar ships as META-INF/maven/.../pom.xml: its parent comes from the
+		// repositories, which manages one version and adds one dependency.
+		byte[] parent = """
+				<project><modelVersion>4.0.0</modelVersion>
+				  <groupId>org.example</groupId><artifactId>parent</artifactId><version>1</version>
+				  <packaging>pom</packaging>
+				  <dependencyManagement><dependencies>
+				    <dependency><groupId>org.example</groupId><artifactId>managed</artifactId><version>2.0</version></dependency>
+				  </dependencies></dependencyManagement>
+				  <dependencies>
+				    <dependency><groupId>org.example</groupId><artifactId>inherited</artifactId><version>1.0</version></dependency>
+				  </dependencies>
+				</project>
+				"""
+			.getBytes(StandardCharsets.UTF_8);
+		byte[] pom = """
+				<project><modelVersion>4.0.0</modelVersion>
+				  <parent><groupId>org.example</groupId><artifactId>parent</artifactId><version>1</version></parent>
+				  <artifactId>shipped</artifactId><version>3.0</version>
+				  <dependencies>
+				    <dependency><groupId>org.example</groupId><artifactId>managed</artifactId></dependency>
+				    <dependency><groupId>org.example</groupId><artifactId>helper</artifactId><version>1.0</version><type>test-jar</type></dependency>
+				    <dependency><groupId>org.example</groupId><artifactId>native</artifactId><version>1.0</version><classifier>linux</classifier></dependency>
+				    <dependency><groupId>org.example</groupId><artifactId>bom-like</artifactId><version>1.0</version><type>pom</type></dependency>
+				    <dependency><groupId>org.example</groupId><artifactId>maybe</artifactId><version>1.0</version><optional>true</optional>
+				      <exclusions><exclusion><groupId>org.example</groupId><artifactId>gone</artifactId></exclusion></exclusions></dependency>
+				    <dependency><groupId>org.example</groupId><artifactId>tested</artifactId><version>1.0</version><scope>test</scope></dependency>
+				  </dependencies>
+				</project>
+				"""
+			.getBytes(StandardCharsets.UTF_8);
+		Served served = new Served().file(CENTRAL + "org/example/parent/1/parent-1.pom", parent);
+		// no repository has the parent yet, nor does the local repository
+		assertThatThrownBy(() -> resolver(new Served(), CENTRAL).projectDependencies(pom))
+			.isInstanceOf(MavenResolutionException.class)
+			.hasMessageContaining("Non-resolvable parent POM org.example:parent:1");
+
+		List<String> dependencies = resolver(served, CENTRAL).projectDependencies(pom)
+			.stream()
+			.map(MavenTestRepository::format)
+			.toList();
+
+		assertThat(dependencies).containsExactly("org.example:managed:jar::2.0 scope=compile optional=null",
+				"org.example:helper:jar::1.0 scope=compile optional=null",
+				"org.example:native:jar:linux:1.0 scope=compile optional=null",
+				"org.example:bom-like:pom::1.0 scope=compile optional=null",
+				"org.example:maybe:jar::1.0 scope=compile optional=true exclusions=org.example:gone",
+				"org.example:tested:jar::1.0 scope=test optional=null",
+				"org.example:inherited:jar::1.0 scope=compile optional=null");
+		assertThatThrownBy(() -> resolver(new Served(), CENTRAL).projectDependencies(
+				"<project><dependencies><dependency/></dependencies></project>".getBytes(StandardCharsets.UTF_8)))
+			.isInstanceOf(MavenResolutionException.class)
+			.hasMessageStartingWith("the POM is invalid: ");
+	}
+
 	private static List<String> entriesOf(Path dir) throws IOException {
 		try (Stream<Path> entries = Files.list(dir)) {
 			return entries.map(path -> path.getFileName().toString()).sorted().toList();

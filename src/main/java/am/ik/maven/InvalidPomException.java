@@ -5,7 +5,9 @@ import java.util.List;
 /**
  * A POM Maven's model builder would reject: unreadable XML, a failed validation, a cycle.
  * Maven's descriptor reader turns this into "no dependencies" plus a warning, and so does
- * {@link MavenResolver}; it is never a {@link MavenResolutionException}.
+ * {@link MavenResolver#descriptor}; only a POM read from bytes
+ * ({@link MavenResolver#projectDependencies}), which has no descriptor to fall back to,
+ * turns it into a {@link MavenResolutionException}.
  */
 final class InvalidPomException extends Exception {
 

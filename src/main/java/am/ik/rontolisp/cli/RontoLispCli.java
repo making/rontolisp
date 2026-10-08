@@ -31,6 +31,7 @@ import am.ik.rontolisp.compiler.HostGlueEmitter;
 import am.ik.rontolisp.compiler.OptimizeLevel;
 import am.ik.rontolisp.compiler.UncaughtReport;
 import am.ik.rontolisp.eval.ClojureCommandLine;
+import am.ik.rontolisp.eval.ClojureDepsRepositories;
 import am.ik.rontolisp.eval.HttpLibrary;
 import am.ik.rontolisp.eval.LinalgBlas;
 import am.ik.rontolisp.eval.LinalgGpu;
@@ -64,6 +65,8 @@ public final class RontoLispCli {
 
 	private @Nullable MavenResolver javaDependencyResolver;
 
+	private @Nullable ClojureDepsRepositories clojureRepositories;
+
 	/**
 	 * Create a new CLI instance.
 	 * @param in the input stream
@@ -81,6 +84,16 @@ public final class RontoLispCli {
 	 */
 	void javaDependencyResolver(MavenResolver resolver) {
 		this.javaDependencyResolver = resolver;
+	}
+
+	/**
+	 * Where a Clojure program's {@code deps.edn} Maven and git coordinates are fetched
+	 * from -- a test's fixture repositories; by default the network through the user's
+	 * caches ({@link ClojureDepsRepositories#createDefault()}).
+	 * @param repositories the repositories
+	 */
+	void clojureRepositories(ClojureDepsRepositories repositories) {
+		this.clojureRepositories = repositories;
 	}
 
 	/**
@@ -173,7 +186,11 @@ public final class RontoLispCli {
 		// located here, from the environment the oracle's clj reads, and nowhere else.
 		SourceStandards standards = SourceStandards.parse(options.get("--scheme-standard"))
 			.withClojureConfigDir(SourceStandards.clojureConfigDir(System.getenv("CLJ_CONFIG"),
-					System.getenv("XDG_CONFIG_HOME"), System.getProperty("user.home")));
+					System.getenv("XDG_CONFIG_HOME"), System.getProperty("user.home")))
+			// and so are the repositories its Maven and git coordinates come from:
+			// nothing is read or fetched until a deps.edn names one
+			.withClojureRepositories(this.clojureRepositories != null ? this.clojureRepositories
+					: ClojureDepsRepositories.createDefault());
 
 		// --java-classpath / --java-dep / --java-release / --warn-java-reflection: the
 		// program's Java classes and how java: call sites resolve
@@ -544,7 +561,7 @@ public final class RontoLispCli {
 		evaluator.setDeclaredFeatures(declaredFeatures);
 		evaluator.setCommandLineArguments(commandLine);
 		evaluator.setDistClient(dists);
-		SourceLoader files = SourceLoader.fileSystem(javaClassPath.classLoader());
+		SourceLoader files = SourceLoader.fileSystem(javaClassPath.classLoader(), javaClassPath::add);
 		evaluator.setSourceLoader(files);
 		requireSimdForParallel(simd, parallel);
 		if (simd) {
@@ -731,6 +748,7 @@ public final class RontoLispCli {
 				.dists(dists)
 				.declaredFeatures(declaredFeatures)
 				.javaClassLoader(javaClassPath.classLoader())
+				.javaClassPath(javaClassPath::add)
 				.options(CompileFrontend.Options.builder().baseDir(baseDir).dynamic(dynamic).noPrune(noPrune).build())
 				.build());
 			for (LispVal form : frontend.program()) {
@@ -755,8 +773,9 @@ public final class RontoLispCli {
 			SourceStandards standards, boolean warnJavaReflection, JavaClassPath javaClassPath) {
 		LispEvaluator evaluator = new LispEvaluator(this.out, this.in);
 		evaluator.setWarnOnJavaReflection(warnJavaReflection);
-		// java: and a Clojure host form see the program's Java class path.
-		evaluator.setSourceLoader(SourceLoader.fileSystem(javaClassPath.classLoader()));
+		// java: and a Clojure host form see the program's Java class path, which the
+		// jars of a Clojure program's dependencies join as it lowers.
+		evaluator.setSourceLoader(SourceLoader.fileSystem(javaClassPath.classLoader(), javaClassPath::add));
 		evaluator.setLoadBaseDir(baseDir);
 		evaluator.setSystemPath(systemPath);
 		// The entry file, every file it loads and every ASDF component under it read
@@ -1009,6 +1028,7 @@ public final class RontoLispCli {
 			.dists(dists)
 			.declaredFeatures(declaredFeatures)
 			.javaClassLoader(javaClassPath.classLoader())
+			.javaClassPath(javaClassPath::add)
 			.options(CompileFrontend.Options.builder()
 				.baseDir(baseDir)
 				.wasm(wasmOutput)

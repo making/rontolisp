@@ -908,7 +908,7 @@ a program without `ns` lowers unqualified. A quoted `'n/x` is the symbol of var 
 - **Refusals in the oracle's words**: `Could not locate a/b.clj or a/b.cljc on the source
   path: <roots>`, `Cyclic load dependency: [ /a ]->/b->[ /a ]`, `namespace 'x' not found after
   loading '/x'`, `x does not exist`, `x is not public`.
-- **Source path** (`ClojureSourcePath`, on the first lookup): the root the entry file's
+- **Source path** (`ClojureSourcePath`, computed when a lowering starts): the root the entry file's
   namespace names (`src` for `src/demo/main.clj` declaring `demo.main`; else the file's
   directory; a session's working directory), then the project's `:paths` and its
   dependencies' roots ("deps.edn"). `deps.edn` over a new flag: it is the oracle's own
@@ -928,10 +928,13 @@ a program without `ns` lowers unqualified. A quoted `'n/x` is the symbol of var 
 ## deps.edn
 
 **Invariant: the source path is the oracle's classpath, minus what this build does not
-read, named when a lookup misses.** `ClojureSourcePath.computeRoots`: the entry's own root,
+read, named when a lookup misses; its jars holding classes are the program's Java class
+path too.** `ClojureSourcePath.computeRoots`: the entry's own root,
 the merged map's `:paths`, every library `ClojureDepsGraph.resolve` selects in the oracle's
 order, then `Found.builtin`. Every rule below was measured 2026-10-08 on `clj` 1.12.6.1673
-(`clj -Srepro -Spath` over fixture trees; tools.deps read from the CLI jar).
+(`clj -Srepro -Spath` over fixture trees -- a `file:` Maven repository with
+`:mvn/local-repo` seeded from `~/.m2` minus its `_remote.repositories`, `file://` git
+repositories, `GITLIBS` set; tools.deps read from the CLI jar).
 - **Maps** (`ClojureDepsEdn`): the oracle's root `deps.edn` (`ROOT_TEXT`, verbatim), the
   user-level one, the project's (nearest at or above the entry file; the oracle reads the
   working directory's), merged like `merge-edns` (a map value merges, anything else
@@ -958,28 +961,98 @@ order, then `Found.builtin`. Every rule below was measured 2026-10-08 on `clj` 1
   versions`; git commits by descent (`Procurer.compareGit`, the first stays while unfetched).
   The Maven graphs the oracle resolved from a `file:` repository fixture (newest wins,
   orphans, exclusion narrowing, order, cycles) are pinned through
-  `ClojureDepsGraphTest.FakeRepository`: the selection is complete, only the procurer fetches
-  nothing. `:override-deps`/`:default-deps` (alias arguments) are `choose-coord`
+  `ClojureDepsGraphTest.FakeRepository`; over fetched descriptors by `ClojureDepsFetchTest`.
+  `:override-deps`/`:default-deps` (alias arguments) are `choose-coord`
   (`ClojureDepsGraph.chooseCoord`), canonicalized against the project when first used.
-- **Procurer** (`ClojureDepsProcurer`): `:local/root` canonical (`SourceLoader.canonicalPath`,
-  `toRealPath`) and checked (`Local lib X not found: R`); its manifest `:deps`, `:jar`, `:pom`
-  (not read), none (`Manifest file not found ...`) or another (`Manifest type :lein not loaded
-  ...`); the git checks that need no repository (missing sha, prefix sha without a tag, both
-  spellings of the sha or the tag, the inferred forge URL); `:deps/prep-lib` checked after
-  every contribution (`The following libs must be prepared before use: [..]`), never run.
+- **Procurer** (`ClojureDepsProcurer`, the oracle's extensions): `:local/root` canonical
+  (`SourceLoader.canonicalPath`, `toRealPath`) and checked (`Local lib X not found: R`); a
+  manifest `:deps`, `:jar`, `:pom` (not read: a note), none (`Manifest file not found ...`) or
+  another (`Manifest type :lein not loaded ...`; tools.deps has no lein reader);
+  `:deps/prep-lib` checked after every contribution, local or git (`The following libs must be
+  prepared before use: [..]`), never run. It fetches through `ClojureFiles.repositories()`
+  (`ClojureRepositories`), the host's; null = fetch nothing (below).
+- **Maven** (`coord-deps :mvn`, `coord-paths :mvn`): the descriptor's dependencies
+  (`ClojureRepositories.mavenDependencies`, `MavenResolver.descriptor`: classifier and
+  extension from the type) kept when compile/runtime and not optional, each lib
+  `group/artifact$classifier`, its coord `:mvn/version`, `:extension` when not jar, `:exclusions`
+  as a set of `group/artifact` (a POM's `*:*` is no lib's name: measured, excludes nothing).
+  The jar (`mavenArtifact`) only for extension jar (`:extension "pom"`: children, no root).
+  `canonicalize`: `[1.0]` is 1.0; a range/`RELEASE`/`LATEST` goes to `mavenVersion`, refused by
+  name until `e47`; SNAPSHOT refused at the fetch. A `:classifier` key is the oracle's `Invalid
+  library spec` refusal. Repositories (`ClojureBasis.mavenSource`, `remote-repos`): central,
+  clojars, then the merged maps' others in order, `nil` removes one, `:releases {:enabled
+  false}` drops one, `http:` refused (`Invalid repo url (http not supported)`) unless
+  `CLOJURE_CLI_ALLOW_HTTP_REPO`. Local repository: `:mvn/local-repo` against the project
+  directory, else `~/.m2/repository`; measured, `clj` reads neither `settings.xml`'s
+  `localRepository` nor its `offline` (`eval/ClojureDepsRepositories` passes mirrors/proxies on,
+  refused by name like `--java-dep`). Only the top-level maps name repositories: a
+  dependency's own `:mvn/repos` is never read. A built-in coordinate fetches nothing, children
+  included (the oracle's classpath has clojure's spec jars; here they contribute no root).
+- **A jar's own `pom.xml`** (`coord-deps :jar`): the first `META-INF/**/pom.xml` entry read as a
+  project model (`ClojureRepositories.pomDependencies`, `MavenResolver.projectDependencies`:
+  parents and imports from the repositories, classifier AS WRITTEN, type ignored), compile
+  and runtime kept, OPTIONAL KEPT, coord `:mvn/version :scope [:optional]`. Measured: a
+  test-jar typed dependency is the plain jar, a pom typed one the oracle tries as a jar and
+  fails on.
+- **git** (`canonicalize`/`manifest-type`/`compare-versions :git`): both spellings refused,
+  URL given or inferred (the oracle's regex table, here only -- `GitFetcher` has none), then
+  against the repository: a tag must exist (`Library L has invalid tag: t`), sha and tag must
+  name one commit (`... point to different commits`), an abbreviated sha needs a tag and is
+  replaced by the full one, no sha `has coord with missing sha`. The manifest checks the
+  commit out (`gitCheckout`; absent: `Commit not found for L in repo U at S`), roots
+  `:deps/root` below it (an absolute one as written, like the oracle) and detects
+  `deps.edn`/`pom.xml`. Of two commits the descendant is newer (`gitDescendant`, asked of
+  both repositories when the URLs differ); none: `No known ancestor relationship between git
+  versions for L\n  U at X\n  U at Y` -- measured, the oracle throws an EMPTY message for
+  two unrelated commits of one repository (`commit-comparator`'s `(ex-info "" {})`); here its
+  own wording for the unknown case. Tags and commits are asked once per resolution.
 - **A jar is read in place** (`SourceLoader.listArchive`/`loadArchiveEntry`: the central
   directory, an entry opened only when listed). Extracting it (`Archives.extractZip`, the
   plan) would need a cache keyed by content and invalidated when the jar changes, for
   nothing a read in place lacks; fetched Maven jars take the same path. `Found.path` is
   `jar!/entry`, `Found.resource` the entry (`*file*`, measured `lib/core.clj`). A namespace a
   jar holds only as `__init.class` is refused by name.
-- **Unfetched, refused when missed**: a non-built-in Maven coordinate, a git coordinate, a
-  jar's `pom.xml` dependencies and a `:pom` project add no root and a note
-  (`Contribution.unread`); a lookup that finds nothing appends them (`notSearched`) to
-  `Could not locate` and to `unknown namespace`. Refusing at the first lookup was rejected: a
-  project with any Maven dependency (nearly all) would stop where the program needs only its
-  local namespaces. A lookup steps past an unfetched library's place in the order (an earlier
-  unfetched jar holding the same namespace is not detected).
+- **Who fetches**: the command line alone -- `RontoLispCli` puts
+  `eval/ClojureDepsRepositories.createDefault()` (am.ik.maven + `GitFetcher` over
+  `ArtifactCache`'s `gitlibs`) on `SourceStandards.clojureRepositories`, the seam hands it to
+  `ClojureFiles.repositories()`. An embedder (`JvmSourceCompiler`), the tests and the browser
+  (`SourceStandards.DEFAULT`) fetch nothing, the env-read rule of the user-level map. A fetch
+  failure is a refusal (`FetchFailure` -> `LispReadException`) in the resolver's words.
+- **Unfetched where nothing fetches, refused when missed**: a non-built-in Maven coordinate, a
+  git coordinate and a jar's `pom.xml` dependencies -- and a `:pom` project everywhere -- add
+  no root and a note (`Contribution.unread`); a lookup that finds nothing appends them
+  (`notSearched`) to `Could not locate` and to `unknown namespace`. A lookup steps past an
+  unfetched library's place in the order (an earlier unfetched jar holding the same namespace
+  is not detected). The browser's refusal by name is this.
+- **Resolved when a lowering starts** (`ClojureLowering.resolveProject`, a file's and each
+  session buffer's): the roots compute before `declare`, a refusal positioned at the first
+  datum -- so a class a dependency's jar holds is the lowering's (an `(:import ...)` before any
+  `require` asks for it) and an unresolvable dependency stops the program before it runs, as
+  the oracle's classpath does. Until 2026-10-08 the first lookup computed them (a program
+  requiring nothing never read its `deps.edn`).
+- **The Java class path** (gap 3 of `e39`): after the roots, each selected archive root holding
+  a `.class` entry goes to `ClojureFiles.addJavaClassPath(jar, coordinate)` ->
+  `SourceLoader.addJavaClassPath` -> the CLI's `JavaClassPath.add` (`.kb/java-interop.md`): the
+  interpreter's loader grows, a JVM compile resolves against it, a program jar copies it, a
+  generated pom lists the Maven coordinate. Directories never join (a `src` tree would be
+  copied beside every jar, and two `src` names collide); a prepped library's
+  `target/classes` is `--java-classpath`'s. A source-only jar (most Clojars libraries) does not
+  join. Wasm: the jars contribute sources only; Java stays refused at call time.
+- **`data_readers.clj`** (gap 4): not read. Honoring one means calling a library function at
+  READ time, and a whole file is read before its first `require` lowers (`Clojure.read`), so
+  the reader function's namespace could never be loaded in time; a tag it defines is the
+  reader's `No reader function for tag t`, the oracle's words when none is installed, and
+  `*data-readers*` stays `{}`.
+- **No resolved-graph cache** (gap 5, measured 2026-10-08): the `.cpcache` idea was the plan;
+  the caches under the resolution already make a second run network-free -- a local
+  repository file is used as is, an installed checkout needs no git, a tag is checked against
+  the clone. cheshire 5.13.0 + clj-http 3.13.0 + core.async 1.6.681 + malli 0.16.4 (33 jars,
+  54 POMs): first run 8.67 s; warm 1.79-1.89 s against 1.66-1.78 s for an empty `deps.edn`
+  (`java -jar`, this machine), so re-resolving costs ~0.1 s, and the warm run passes with both
+  repositories pointed at an unreachable host. A cache keyed by `deps.edn` content would save
+  that 0.1 s for an invalidation scheme (local roots' manifests, jar times) whose failure is a
+  stale classpath. Not built. Left open: a POM no repository has is asked again every run
+  (am.ik.maven writes no `.lastUpdated`), so that one case needs the network.
 - **Built-in coordinates** (`ClojureBuiltinLibs`): `org.clojure/clojure`, `spec.alpha` and
   `core.specs.alpha` at any Maven version are the front end; `ring/ring-core` up to 1.15.5 and
   `ring/ring-codec` up to 1.3.0 are the shipped Ring files, standing in for an older version
@@ -996,8 +1069,7 @@ order, then `Found.builtin`. Every rule below was measured 2026-10-08 on `clj` 1
   (interpreter, compile path, REPL); `SourceStandards.DEFAULT` (tests, `JvmSourceCompiler`, the
   playground) reads none. Merged, measured: its `:paths` apply where the project has none, its
   `:deps` join, a relative path resolves against the project's directory.
-- Read, applied by nothing yet: `:mvn/repos`, `:mvn/local-repo`. More than eight
-  top deps iterate in the oracle's hash order, here in file order.
+- More than eight top deps iterate in the oracle's hash order, here in file order.
 - **Aliases** (`ClojureBasis`, the oracle's `create-basis`; measured 2026-10-08): alias data
   is `merge-with merge` over root/user/project (a project `:test` keeps the root's
   `:extra-paths ["test"]`); the selection merges by `merge-alias-maps`' per-key rules
@@ -1026,7 +1098,15 @@ order, then `Found.builtin`. Every rule below was measured 2026-10-08 on `clj` 1
   `System/exit`), `CliOptionsTest#theAliasFlags...`, `ClojureDepsEdnTest`, `ClojureDepsGraphTest`, `ClojureMavenVersionsTest`,
   `ClojureDepsProjectTest` (the four backends over a `:local/root` directory with its own
   dependency, a jar, a `clojure.*` contrib namespace; the refusals, Ring versions, the user
-  map, a session), `PlaygroundReplTest#aClojureRequireReadsTheUploadedDepsEdnLikeEveryOtherRoute`.
+  map, a session), `PlaygroundReplTest#aClojureRequireReadsTheUploadedDepsEdnLikeEveryOtherRoute`,
+  `ClojureDepsFetchTest` (Maven and git through in-memory repositories: the measured
+  classpaths -- scopes, optional, exclusions, `*/*`, pom and classified types, `[1.0]`, a jar's
+  pom, `:deps/root`, tags, abbreviated shas, the descendant -- and every refusal; the class path
+  reported before the lowering), `ClojureDepsFetchCliTest` (the CLI over a `file:` Maven
+  repository and on-disk git repositories: four backends, newest-wins across Maven and git,
+  what is fetched and what not, a Java jar on the interpreter's class path and beside a jar
+  and in its pom, a second run with the remote gone and no git, refusals; the output the
+  oracle's over the same repositories), `GitFetcherTest`, `MavenRepositoryTest#aPomGivenAsBytes...`.
 
 ## Ring adapter
 
