@@ -33,27 +33,36 @@ final class ClojureBuiltinNamespaces {
 	 * The shipped namespaces, each with the public vars of the oracle's namespace
 	 * (ring-core 1.15.5, ring-codec 1.3.0, clj 1.12.6) it leaves out and why.
 	 */
-	private static final Map<String, Map<String, String>> SHIPPED = Map.of("ring.util.response", Map.of("file-response",
-			"it serves a java.io.File", "url-response", "it reads a java.net.URL", "resource-response",
-			"it reads a class-loader resource", "resource-data", "it reads a java.net.URL"), "ring.util.request",
-			Map.of(), "ring.util.codec",
-			Map.of("base64-encode", "it takes a byte array", "base64-decode", "it answers a byte array", "form-encode*",
-					"form-encode is a function, not a protocol, here", "FormEncodeable",
-					"form-encode is a function, not a protocol, here"),
-			"ring.util.mime-type", Map.of(), "ring.middleware.params", Map.of(), "ring.middleware.keyword-params",
-			Map.of(), "ring.middleware.content-type", Map.of(), "clojure.walk", Map.of(), "clojure.template", Map.of(),
-			"clojure.pprint",
-			Map.of("cl-format", "Common Lisp format directives over Clojure values are not built in", "formatter",
-					"Common Lisp format directives over Clojure values are not built in", "formatter-out",
-					"Common Lisp format directives over Clojure values are not built in", "code-dispatch",
-					"the code layout is not built in; simple-dispatch prints code as data"));
+	private static final Map<String, Map<String, String>> SHIPPED = Map.ofEntries(
+			Map.entry("ring.util.response",
+					Map.of("file-response", "it serves a java.io.File", "url-response", "it reads a java.net.URL",
+							"resource-response", "it reads a class-loader resource", "resource-data",
+							"it reads a java.net.URL")),
+			Map.entry("ring.util.request", Map.of()),
+			Map.entry("ring.util.codec",
+					Map.of("base64-encode", "it takes a byte array", "base64-decode", "it answers a byte array",
+							"form-encode*", "form-encode is a function, not a protocol, here", "FormEncodeable",
+							"form-encode is a function, not a protocol, here")),
+			Map.entry("ring.util.mime-type", Map.of()), Map.entry("ring.middleware.params", Map.of()),
+			Map.entry("ring.middleware.keyword-params", Map.of()), Map.entry("ring.middleware.content-type", Map.of()),
+			Map.entry("clojure.walk", Map.of()), Map.entry("clojure.template", Map.of()),
+			Map.entry("clojure.data", Map.of()), Map.entry("clojure.zip", Map.of()),
+			Map.entry("clojure.core.protocols",
+					Map.of("CollReduce", "a protocol method of two arities is not built in", "coll-reduce",
+							"a protocol method of two arities is not built in", "iterator-reduce!",
+							"it reduces a java.util.Iterator")),
+			Map.entry("clojure.datafy", Map.of()),
+			Map.entry("clojure.pprint",
+					Map.of("cl-format", "Common Lisp format directives over Clojure values are not built in",
+							"formatter", "Common Lisp format directives over Clojure values are not built in",
+							"formatter-out", "Common Lisp format directives over Clojure values are not built in")));
 
 	/**
 	 * The shipped namespaces {@code clj -M} has loaded before the program runs: a
 	 * qualified name reaches one without a {@code require}, and a {@code require} of one
 	 * reads no project file.
 	 */
-	private static final Set<String> STARTUP = Set.of("clojure.walk");
+	private static final Set<String> STARTUP = Set.of("clojure.walk", "clojure.core.protocols");
 
 	/**
 	 * The namespaces clojure.jar 1.12.6 defines, plus those of the spec jars it depends

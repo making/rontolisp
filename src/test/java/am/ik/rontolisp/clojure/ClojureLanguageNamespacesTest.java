@@ -81,6 +81,16 @@ class ClojureLanguageNamespacesTest {
 	}
 
 	@Test
+	void coreProtocolsLoadsAtStartupAndRefusesItsTwoArityProtocol() {
+		assertThat(lowered("(clojure.core.protocols/datafy 1)", Map.of()))
+			.contains("(DEFUN |c%clojure.core.protocols/datafy|");
+		assertThatThrownBy(() -> Clojure.read("(require '[clojure.core.protocols :as p]) (p/coll-reduce [1] +)", null))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining(
+					"clojure.core.protocols/coll-reduce is not built in: a protocol method of two arities is not built in");
+	}
+
+	@Test
 	void aLanguageNamespaceNotBuiltInIsRefused() {
 		assertThatThrownBy(() -> Clojure.read("(ns a (:require [clojure.inspector :as i]))", null))
 			.isInstanceOf(LispReadException.class)

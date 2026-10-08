@@ -13,6 +13,7 @@ every backend.
 | `write` | `(write x & options)`: `x` written as the options say: `:stream` (a writer; `true`, the default, for `*out*`; `nil` to answer the text), `:pretty`, `:right-margin`, `:miser-width`, `:dispatch`, `:length`, `:level`, `:readably`, `:suppress-namespaces`, `:base`, `:radix` |
 | `print-table` | `(print-table rows)`, `(print-table ks rows)`: the maps of `rows` as a table, one right-aligned column per key of `ks` (the first row's keys when absent) |
 | `simple-dispatch` | The default dispatch, a multimethod on `class`; a program adds a method for its own record or type |
+| `code-dispatch` | The dispatch for Clojure code, a multimethod on `class` too: each defining and control form in its own layout |
 | `*print-pprint-dispatch*`, `with-pprint-dispatch`, `set-pprint-dispatch` | The function `pprint` hands each value to: bound for a body, or replaced |
 | `pprint-logical-block` | `(pprint-logical-block options* body)`: `body` as a logical block, the unit a layout breaks; options `:prefix`, `:per-line-prefix`, `:suffix`. Past `*print-level*` it writes `#` |
 | `print-length-loop` | A `loop` whose body runs at most `*print-length*` times, then writes `...` |
@@ -105,10 +106,33 @@ A dispatch function of its own lays a value out with logical blocks and conditio
  18 19>
 ```
 
+`code-dispatch` lays code out the way Clojure's pretty printer does: `defn`, `let`, `if`,
+`cond`, `condp`, `->`, `ns` and the like each in their own layout, and an anonymous function
+form as its `#(...)` literal:
+
+```clojure
+(require '[clojure.pprint :as pp])
+(pp/with-pprint-dispatch pp/code-dispatch
+  (pp/pprint '(defn greet "Greets a person." [person]
+                (let [n (:name person)]
+                  (when (seq n) (println "Hello," n "- glad to see you again"))))))
+(pp/with-pprint-dispatch pp/code-dispatch
+  (pp/pprint '(fn* [p1 p2] (+ p1 (* p2 p2)))))
+```
+
+```
+(defn greet
+  "Greets a person."
+  [person]
+  (let [n (:name person)]
+    (when (seq n) (println "Hello," n "- glad to see you again"))))
+#(+ %1 (* %2 %2))
+```
+
 ## Differences
 
-- `cl-format`, `formatter`, `formatter-out` and `code-dispatch` are not built in; naming one
-  is an error that says so.
+- `cl-format`, `formatter` and `formatter-out` are not built in; naming one is an error that
+  says so.
 - `get-pretty-writer` answers its writer unchanged: each `pprint` or `write` lays its
   output out by itself, from column 0, within the margin bound when it runs. Clojure's
   pretty writer keeps the margin it was made with and continues from the column of what
