@@ -91,8 +91,8 @@ class ClojureReaderTest {
 		assertThat(printed("#\"a\\Qb\\Ec\"")).isEqualTo("[(|%regex| \"a\\\\Qb\\\\Ec\")]");
 		assertThatThrownBy(() -> read("#\"\\q\"")).isInstanceOf(LispReadException.class)
 			.hasMessageContaining("Illegal/unsupported escape sequence");
-		assertThatThrownBy(() -> read("#:x")).isInstanceOf(LispReadException.class)
-			.hasMessageContaining("unsupported reader form #:");
+		assertThatThrownBy(() -> read("#%x")).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("unsupported reader form #%");
 	}
 
 	@Test
@@ -304,6 +304,33 @@ class ClojureReaderTest {
 			.hasMessageContaining("Duplicate key: :a");
 		assertThatThrownBy(() -> read("#inst \"2020\"")).isInstanceOf(LispReadException.class)
 			.hasMessageContaining("unsupported reader form #inst");
+	}
+
+	@Test
+	void aNamespaceMapQualifiesItsKeys() {
+		assertThat(printed("#:ns{:a 1 :_/b 2 :c/d 3 e 4 \"s\" 5 nil 6}"))
+			.isEqualTo("[(|%hash-map| :|ns/a| 1 :|b| 2 :|c/d| 3 |ns/e| 4 \"s\" 5 |nil| 6)]");
+		assertThat(printed("#:ns {:a 1}")).isEqualTo("[(|%hash-map| :|ns/a| 1)]");
+		// #:: keys are spelled auto-resolved, which the lowering resolves
+		assertThat(printed("#::{:a 1 ::b 2} #::s{:a 1} #:: {:c 3}"))
+			.isEqualTo("[(|%hash-map| :|:a| 1 :|:b| 2), (|%hash-map| :|:s/a| 1), (|%hash-map| :|:c| 3)]");
+		assertThatThrownBy(() -> read("#: {:a 1}")).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Namespaced map must specify a namespace");
+		assertThatThrownBy(() -> read("#:{:a 1}")).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Namespaced map must specify a valid namespace: null");
+		assertThatThrownBy(() -> read("#:a/b{:a 1}")).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Namespaced map must specify a valid namespace: a/b");
+		assertThatThrownBy(() -> read("#:ns [1]")).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Namespaced map must specify a map");
+		assertThatThrownBy(() -> read("#:ns{:a}")).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Namespaced map literal must contain an even number of forms");
+		assertThatThrownBy(() -> read("#::{a 1}")).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("a symbol key of an auto-resolved namespace map is not supported: a");
+	}
+
+	@Test
+	void aHashBangLineIsACommentAnywhere() {
+		assertThat(printed("1 #!skipped (\n2")).isEqualTo("[1, 2]");
 	}
 
 	@Test

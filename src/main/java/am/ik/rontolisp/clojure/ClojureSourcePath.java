@@ -122,8 +122,9 @@ final class ClojureSourcePath {
 	 * holding one -- so a {@code .clj} under any root wins over a {@code .cljc} under an
 	 * earlier one, measured on {@code clj} 1.12.6 (2026-10-08) -- else the built-in one
 	 * ({@link ClojureBuiltinNamespaces}): a project file shadows a built-in namespace, as
-	 * a source directory precedes a dependency jar on the oracle's classpath. A namespace
-	 * a jar holds only compiled ahead of time is refused: only source lowers.
+	 * a source directory precedes a dependency jar on the oracle's classpath -- except
+	 * one the oracle loads before the program, which a {@code require} never reads again.
+	 * A namespace a jar holds only compiled ahead of time is refused: only source lowers.
 	 * @param ns the namespace
 	 * @return the file, or {@code null} when neither a root nor the built-ins hold one
 	 */
@@ -133,14 +134,15 @@ final class ClojureSourcePath {
 			return known;
 		}
 		String base = scriptBaseOf(ns);
-		for (String extension : List.of(".clj", ".cljc")) {
+		boolean startup = ClojureBuiltinNamespaces.isStartup(ns);
+		for (String extension : startup ? List.<String>of() : List.of(".clj", ".cljc")) {
 			Found project = findFile(base + extension);
 			if (project != null) {
 				this.found.put(ns, project);
 				return project;
 			}
 		}
-		for (Root root : roots()) {
+		for (Root root : startup ? List.<Root>of() : roots()) {
 			if (root.archive() && entriesOf(root).contains(base + "__init.class")) {
 				throw new LispReadException(ns + " is compiled ahead of time in " + root.path()
 						+ " without its source, and only a namespace's source is read");

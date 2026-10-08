@@ -55,6 +55,9 @@ final class ClojureNamespaceLowering {
 		if (ref.ns().equals(ClojureSetLowering.NAMESPACE)) {
 			return ClojureSetLowering.setCall(ctx, ref.var(), items);
 		}
+		if (ref.ns().equals(ClojureEdnLowering.NAMESPACE)) {
+			return ClojureEdnLowering.ednCall(ctx, ref.var(), items);
+		}
 		if (ref.ns().equals("clojure.java.io")) {
 			return jioCall(ctx, ref.var(), items);
 		}
@@ -78,6 +81,9 @@ final class ClojureNamespaceLowering {
 		}
 		if (ref.ns().equals(ClojureSetLowering.NAMESPACE)) {
 			return ClojureSetLowering.setValue(ref.var());
+		}
+		if (ref.ns().equals(ClojureEdnLowering.NAMESPACE)) {
+			return ClojureEdnLowering.ednValue(ref.var());
 		}
 		if (ref.ns().equals("clojure.java.io")) {
 			return jioValue(ref.var());
@@ -121,12 +127,13 @@ final class ClojureNamespaceLowering {
 
 	/**
 	 * The namespaces whose vars lower to core forms: {@code clojure.string},
-	 * {@code clojure.set}, {@code clojure.java.io}, {@code clojure.test}, the Ring
-	 * adapter {@code ring.adapter.rontolisp} and the kernels of the built-in Ring
-	 * namespaces, {@code rontolisp.internal.ring}.
+	 * {@code clojure.set}, {@code clojure.edn}, {@code clojure.java.io},
+	 * {@code clojure.test}, the Ring adapter {@code ring.adapter.rontolisp} and the
+	 * kernels of the built-in Ring namespaces, {@code rontolisp.internal.ring}.
 	 */
 	static boolean isKnownNamespace(String ns) {
-		return ns.equals("clojure.string") || ns.equals(ClojureSetLowering.NAMESPACE) || ns.equals("clojure.java.io")
+		return ns.equals("clojure.string") || ns.equals(ClojureSetLowering.NAMESPACE)
+				|| ns.equals(ClojureEdnLowering.NAMESPACE) || ns.equals("clojure.java.io")
 				|| ns.equals(ClojureTestLowering.NAMESPACE) || ns.equals(ClojureRingLowering.NAMESPACE)
 				|| ns.equals(ClojureRingUtilLowering.NAMESPACE);
 	}
@@ -135,6 +142,7 @@ final class ClojureNamespaceLowering {
 	static boolean isKnownVar(String ns, String var) {
 		return ns.equals("clojure.string") && STRING_VARS.contains(var)
 				|| ns.equals(ClojureSetLowering.NAMESPACE) && ClojureSetLowering.VARS.contains(var)
+				|| ns.equals(ClojureEdnLowering.NAMESPACE) && ClojureEdnLowering.VARS.contains(var)
 				|| ns.equals("clojure.java.io") && JIO_VARS.contains(var)
 				|| ns.equals(ClojureTestLowering.NAMESPACE) && ClojureTestLowering.VARS.contains(var)
 				|| ns.equals(ClojureRingLowering.NAMESPACE) && ClojureRingLowering.VARS.contains(var)
@@ -154,6 +162,9 @@ final class ClojureNamespaceLowering {
 		}
 		if (ns.equals(ClojureSetLowering.NAMESPACE)) {
 			return ClojureSetLowering.VARS;
+		}
+		if (ns.equals(ClojureEdnLowering.NAMESPACE)) {
+			return ClojureEdnLowering.VARS;
 		}
 		if (ns.equals(ClojureRingLowering.NAMESPACE)) {
 			return ClojureRingLowering.VARS;
@@ -479,12 +490,10 @@ final class ClojureNamespaceLowering {
 			ctx.requiredLibraries.add(ns);
 		}
 		else {
-			if (ns.startsWith("clojure.") && !ctx.loadedNamespaces.contains(ns) && !ctx.loadingNamespaces.contains(ns)
-					&& ctx.sourcePath.find(ns) == null) {
-				// a clojure.* namespace this front end does not lower loads from the
-				// source path like any other (an org.clojure contrib library under a
-				// :local/root); found nowhere, it is unknown
-				throw new LispReadException("unknown namespace: " + ns + ctx.sourcePath.notSearched());
+			if (ClojureBuiltinNamespaces.isLanguage(ns) && !ClojureBuiltinNamespaces.isShipped(ns)) {
+				// the language's own libraries are lowerings or built-in files, never
+				// project files; a contrib clojure.* library is found like any other
+				throw new LispReadException("unknown namespace: " + ns);
 			}
 			// a dependency edge for :reload-all: the file being lowered owns it
 			// (the innermost file on the loading stack), or the entry program's
@@ -618,6 +627,22 @@ final class ClojureNamespaceLowering {
 		}
 		ctx.loadFile(ns, found);
 		ctx.emitNamespaceInit(ns);
+	}
+
+	/**
+	 * Loads a shipped namespace the oracle loads before the program
+	 * ({@link ClojureBuiltinNamespaces#isStartup}) where a qualified name first reaches
+	 * it: its definitions ahead of the top-level datum at hand, its init (if any) run
+	 * there behind its loaded flag.
+	 * @param ctx the hub
+	 * @param ns the namespace
+	 */
+	static void preload(ClojureLowering ctx, String ns) {
+		loadNamespace(ctx, ns);
+		LispVal init = ctx.requireCall(ns, ClojureLowering.LoadMode.GUARDED);
+		if (init != null) {
+			ctx.hoisted.add(init);
+		}
 	}
 
 	/**

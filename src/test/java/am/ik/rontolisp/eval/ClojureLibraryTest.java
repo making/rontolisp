@@ -73,6 +73,22 @@ class ClojureLibraryTest {
 	}
 
 	@Test
+	void aProgramReadingNoEdnSplicesTheReaderWithoutItsEdnClauses() {
+		// only clojure.edn's entries start an EDN read: a program reading with
+		// read-string
+		// alone compiles every reader clause the EDN grammar decides away
+		assertThat(defun(ClojureLibrary.forms(), "RONTOLISP::%CLOJURE-RD-FORM-AT"))
+			.contains("(RONTOLISP::%CLOJURE-RD-EDN-P)");
+		List<LispVal> plain = ClojureLibrary.process(Clojure.read("(prn (read-string \"[1]\"))", null));
+		for (String reader : List.of("RONTOLISP::%CLOJURE-RD-FORM-AT", "RONTOLISP::%CLOJURE-RD-CHAR",
+				"RONTOLISP::%CLOJURE-RD-META", "RONTOLISP::%CLOJURE-RD-TOKEN-VALID-P")) {
+			assertThat(defun(plain, reader)).as(reader).doesNotContain("%CLOJURE-RD-EDN");
+		}
+		List<LispVal> edn = ClojureLibrary.process(Clojure.read("(prn (clojure.edn/read-string \"[1]\"))", null));
+		assertThat(defun(edn, "RONTOLISP::%CLOJURE-RD-FORM-AT")).contains("(RONTOLISP::%CLOJURE-RD-EDN-P)");
+	}
+
+	@Test
 	void vecRefusesANonCollectionAsRuntimeExceptionOnlyWhereAClassIsRead() {
 		// the oracle's vec casts to an array before it seqs: the argument check is the
 		// refusal family's view, so a program reading no class compiles the bare coercion

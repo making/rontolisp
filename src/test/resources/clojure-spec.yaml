@@ -7704,3 +7704,177 @@ cases:
       clojure.core/map rn-ns/map
       [:mine 1 2]
       (2)
+  - name: clojure-walk-is-loaded-before-the-program
+    # The oracle loads clojure.walk at startup, so a qualified name reaches it
+    # without a require; here its first qualified name loads it.
+    source: |
+      (defn walk-ids [] (clojure.walk/postwalk-replace {:id 1} [:id #{:id}]))
+      (prn (walk-ids) (some? (find-ns 'clojure.walk)) (clojure.walk/keywordize-keys {"q" 1}))
+      (prn #'clojure.walk/prewalk (map clojure.walk/stringify-keys [{:a 1} {:b 2}]))
+    expected: |
+      [1 #{1}] true {:q 1}
+      #'clojure.walk/prewalk ({"a" 1} {"b" 2})
+  - name: clojure-walk-rebuilds-every-kind-of-collection
+    # The built-in clojure.walk (Clojure source written for this front end,
+    # .kb/clojure-frontend.md "clojure.jar namespaces"); every line is the oracle's
+    # (clj 1.12.6), on all four backends. A sorted collection keeps its comparator, a
+    # record its type and extra keys, every kind its metadata.
+    source: |
+      (ns walk-kinds (:require [clojure.walk :as w]))
+      (defrecord WR [a b])
+      (prn (w/postwalk #(if (number? %) (inc %) %) [1 '(2 [3]) #{4} {:k 5} (sorted-map 2 :b 1 :a)]))
+      (prn (w/prewalk #(if (vector? %) (vec (reverse %)) %) [[1 2] '(3 [4 5])]))
+      (prn (w/walk inc #(apply + %) [1 2 3]) (w/walk inc identity '(1 2)) (w/walk inc identity nil) (w/walk inc identity "s"))
+      (prn (w/postwalk #(if (number? %) (* 10 %) %) (->WR 1 (assoc (->WR 2 3) :z 4))))
+      (prn (w/postwalk #(if (number? %) (inc %) %) (sorted-set-by > 1 3 2)))
+      (prn (w/postwalk #(if (number? %) (inc %) %) (lazy-seq [1 (lazy-seq [2 3])])))
+      (prn (map meta [(w/postwalk identity (with-meta [1] {:v 1})) (w/postwalk identity (with-meta '(1) {:l 1}))
+                      (w/prewalk identity (with-meta {:a 1} {:m 1})) (w/prewalk identity (with-meta #{1} {:s 1}))
+                      (w/postwalk identity (with-meta (->WR 1 2) {:r 1}))]))
+      (prn (w/prewalk #(if (and (vector? %) (keyword? (first %))) [(first %) :x] %) {:a 1}))
+      (in-ns 'user)
+    expected: |
+      [2 (3 [4]) #{5} {:k 6} {2 :a, 3 :b}]
+      [(3 [5 4]) [2 1]]
+      9 (2 3) nil "s"
+      #walk_kinds.WR{:a 10, :b #walk_kinds.WR{:a 20, :b 30, :z 40}}
+      #{4 3 2}
+      (2 (3 4))
+      ({:v 1} {:l 1} {:m 1} {:s 1} {:r 1})
+      {:a :x}
+  - name: clojure-walk-converts-keys-and-replaces-values
+    source: |
+      (ns walk-keys (:require [clojure.walk :refer [keywordize-keys stringify-keys prewalk-replace postwalk-replace postwalk-demo prewalk-demo]]))
+      (prn (keywordize-keys {"a" {"b" [{"c" 1}]}}) (keywordize-keys {"x y" 1}) (keywordize-keys [{1 2} nil]))
+      (prn (stringify-keys {:a {:ns/b [{:c 1}]}}) (stringify-keys {1 :k}))
+      (prn (prewalk-replace {:a :b} [:a {:a :a} '(:a)]) (postwalk-replace {[1] :one} [[1] [[1]]]))
+      (prn (prewalk-replace {[1] :one} [[1] [[1]]]) (postwalk-replace '{x 1} '(+ x (* x 2))))
+      (prn (postwalk-demo [1 '(2)]))
+      (prn (prewalk-demo {:a [1]}))
+      (in-ns 'user)
+    expected: |
+      {:a {:b [{:c 1}]}} {:x y 1} [{1 2} nil]
+      {"a" {"b" [{"c" 1}]}} {1 :k}
+      [:b {:b :b} (:b)] [:one [:one]]
+      [:one [:one]] (+ 1 (* 1 2))
+      Walked: 1
+      Walked: 2
+      Walked: (2)
+      Walked: [1 (2)]
+      [1 (2)]
+      Walked: {:a [1]}
+      Walked: [:a [1]]
+      Walked: :a
+      Walked: [1]
+      Walked: 1
+      {:a [1]}
+  - name: clojure-edn-reads-data-only
+    # clojure.edn reads data only, like the oracle's EdnReader (.kb/clojure-frontend.md
+    # "Reading"): the quote is a symbol constituent, the reader macros of code and
+    # an auto-resolved keyword are refused, .5 is a symbol, metadata attaches. Every
+    # line is the oracle's (clj 1.12.6), on all four backends.
+    source: |
+      (ns edn-data (:require [clojure.edn :as edn]))
+      (defn edn-err [s] (try (edn/read-string s) (catch Exception e (ex-message e))))
+      (prn (edn/read-string "[1 -2 3.5 1/2 \"s\\t\" \\c :k :a/b sym a/b nil true false #{1} {:m [(1)]} ##Inf]"))
+      (prn (edn/read-string "") (edn/read-string nil) (edn/read-string "  ; just a comment") (edn/read-string "1 2"))
+      (prn (edn/read-string "'quoted") (edn/read-string ".5") (edn/read-string "a'b#c") (edn/read-string "#_ignored [kept #_ 1]"))
+      (let [person (edn/read-string "#:person{:name \"ann\" :_/id 7}")]
+        (prn (map person [:person/name :id :name]) (edn/read-string "#:p {:a 1}")))
+      (prn (map edn-err ["`a" "@a" "~a" "a@b" "#'a" "#\"re\"" "#(inc %)" "#=(+ 1 2)" "#?(:clj 1)" "::kw" "#::{:a 1}"]))
+      (prn (map edn-err ["#<x>" "(1" "{:a}" "{:a 1 :a 2}" "#{1 1}" "a:" "//" "a/1" "\\o477" "#foo/bar 1"]))
+      (prn (meta (edn/read-string "^:private [1]")) (meta (edn/read-string "^Tag (1)")) (into (sorted-map) (meta (edn/read-string "^:a ^:b {}"))))
+      (prn (map edn-err ["^:k 5" "^[1] x"]))
+      (in-ns 'user)
+    expected: |
+      [1 -2 3.5 1/2 "s\t" \c :k :a/b sym a/b nil true false #{1} {:m [(1)]} ##Inf]
+      nil nil nil 1
+      'quoted .5 a'b#c [kept]
+      ("ann" 7 nil) #:p{:a 1}
+      ("Invalid leading character: `" "Invalid leading character: @" "Invalid leading character: ~" "Invalid constituent character: @" "No dispatch macro for: '" "No dispatch macro for: \"" "No dispatch macro for: (" "No dispatch macro for: =" "No dispatch macro for: ?" "Invalid token: ::kw" "Invalid token: :")
+      ("Unreadable form" "EOF while reading" "Map literal must contain an even number of forms" "Duplicate key: :a" "Duplicate key: 1" "Invalid token: a:" "Invalid token: //" "Invalid token: a/1" "Octal escape sequence must be in range [0, 377]." "No reader function for tag foo/bar")
+      {:private true} {:tag Tag} {:a true, :b true}
+      ("Metadata can only be applied to IMetas" "Metadata must be Symbol,Keyword,String or Map")
+  - name: clojure-edn-tagged-literals-options-and-streams
+    # A tag reads through :readers (any IFn: a function, a var, a keyword), else
+    # :default; :eof answers the end of input; read takes a stream and leaves it right
+    # after the datum. Every line is the oracle's (clj 1.12.6), on all four backends.
+    source: |
+      (ns edn-opts (:require [clojure.edn :as edn]))
+      (defn edn-tag [x] [:tagged x])
+      (prn (edn/read-string {:readers {'my/tag edn-tag}} "[#my/tag 1 #my/tag #my/tag :k]"))
+      (prn (edn/read-string {:readers {'my/kw :k}} "#my/kw {:k 3}") (edn/read-string {:readers {'my/var #'edn-tag}} "#my/var 2"))
+      (prn (edn/read-string {:default (fn [tag v] [:default tag v])} "#other.tag {:a 1}"))
+      (prn (edn/read-string {:readers {'my/tag edn-tag} :default (fn [tag v] tag)} "[#my/tag 1 #your/tag 2]"))
+      (prn (try (edn/read-string {:readers {'my/tag nil}} "#my/tag 1") (catch Exception e (ex-message e))))
+      (prn (edn/read-string {:eof :done} "") (edn/read-string {:eof :done} "7") (try (edn/read-string {} "") (catch Exception e (ex-message e))))
+      (prn (edn/read-string {:readers {'my/nested (fn [s] [(read-string s) (edn/read-string s)])}} "#my/nested \"'x\""))
+      (let [r (java.io.PushbackReader. (java.io.StringReader. "{:a 1} [2] ; end"))]
+        (prn (edn/read r) (edn/read r) (edn/read {:eof :eof} r)))
+      (prn (with-in-str "(1 2) :next" [(edn/read) (edn/read)]))
+      (prn (map (partial edn/read-string {:eof 0}) ["1" "" "[2]"]) (map edn/read-string ["3" "#{}"]) (clojure.edn/read-string "{:q 1}"))
+      (in-ns 'user)
+    expected: |
+      [[:tagged 1] [:tagged [:tagged :k]]]
+      3 [:tagged 2]
+      [:default other.tag {:a 1}]
+      [[:tagged 1] your/tag]
+      "No reader function for tag my/tag"
+      :done 7 "EOF while reading"
+      [(quote x) 'x]
+      {:a 1} [2] :eof
+      [(1 2) :next]
+      (1 0 [2]) (3 #{}) {:q 1}
+  - name: read-string-metadata-namespace-maps-and-token-refusals
+    # read-string attaches metadata, reads namespace maps (#:ns{} and #::{} against
+    # the calling namespace), refuses a duplicate key and the tokens the oracle's
+    # matchSymbol refuses, and words its character refusals like the oracle; a source
+    # #:ns{} literal reads too. Every line is the oracle's (clj 1.12.6), on all four
+    # backends.
+    source: |
+      (defn rs-err [s] (try (read-string s) (catch Exception e (ex-message e))))
+      (prn (into (sorted-map) (meta (read-string "^:k ^{:x 2} [1]"))) (meta (read-string "^String (s)")) (meta (read-string "^[int] [f]")))
+      (let [m (read-string "#:ns{:a 1 :_/b 2 c 3}")]
+        (prn (map m [:ns/a :b 'ns/c]) (read-string "#::{:a 1}") (read-string "#!skipped\n7")))
+      (prn (map rs-err ["{1 2 1 3}" "#{\"a\" \"a\"}" "{[1] 1 (1) 2}" "^:k 5" "^1 [1]" "#<x>" "#a" "a:" "a/" "//" ":a/1"]))
+      (prn (map rs-err ["\\o477" "\\o1234" "\\u00" "\\ud800" "\\uzzzz" ":" "#:ns [1]" "#:{:a 1}" "#::nope{:a 1}"]))
+      (prn (read-string "a/9") (read-string "a//b") (read-string ":1") (read-string "a/:b"))
+      (prn #:item{:id 1} (:item/id #:item{:id 2}) '#:it{name 1} #::{:local 3})
+    expected: |
+      {:k true, :x 2} {:tag String} {:param-tags [int]}
+      (1 2 3) #:user{:a 1} 7
+      ("Duplicate key: 1" "Duplicate key: a" "Duplicate key: [1]" "Metadata can only be applied to IMetas" "Metadata must be Symbol,Keyword,String,Vector or Map" "Unreadable form" "EOF while reading" "Invalid token: a:" "Invalid token: a/" "Invalid token: //" "Invalid token: :a/1")
+      ("Octal escape sequence must be in range [0, 377]." "Invalid octal escape sequence length: 4" "Invalid unicode character: \\u00" "Invalid character constant: \\ud800" "Invalid digit: z" "Invalid token: :" "Namespaced map must specify a map" "Namespaced map must specify a valid namespace: null" "Unknown auto-resolved namespace alias: nope")
+      a/9 a//b :1 a/:b
+      #:item{:id 1} 2 #:it{name 1} #:user{:local 3}
+  - name: clojure-template-substitutes-per-group-of-values
+    # The built-in clojure.template (.kb/clojure-frontend.md "clojure.jar namespaces"):
+    # apply-template substitutes at any depth, do-template expands to one copy per
+    # group of values (a short last group dropped), also from a macro's expansion. Every
+    # line is the oracle's (clj 1.12.6), on all four backends.
+    source: |
+      (ns tmpl (:require [clojure.template :as t :refer [do-template]]))
+      (prn (t/apply-template '[x] '(+ x x) '[2]))
+      (prn (t/apply-template '[x y] '[x {:k y} #{x} (f (g y))] '[1 2]))
+      (prn (macroexpand '(do-template [x y] (+ y x) 2 4 3 5)))
+      (prn (do-template [x y] (+ y x) 2 4 3 5))
+      (do-template [a b] (println a "->" b) 1 :one 2 :two 3)
+      (def results (atom []))
+      (do-template [op v] (swap! results conj (op v 10)) + 1 - 2 * 3)
+      (prn @results)
+      (prn (try (t/apply-template '[1] '(+ 1) '[2]) (catch AssertionError e (ex-message e))))
+      (prn (t/apply-template '[x] 'x '[[1 2]]) (t/apply-template '[x] '{x x} '[:k]))
+      (defmacro twice [x] `(do-template [y#] (inc y#) ~x ~x))
+      (prn (twice 5))
+      (in-ns 'user)
+    expected: |
+      (+ 2 2)
+      [1 {:k 2} #{1} (f (g 2))]
+      (do (+ 4 2) (+ 5 3))
+      8
+      1 -> :one
+      2 -> :two
+      [11 -8 30]
+      "Assert failed: (every? symbol? argv)"
+      [1 2] {:k :k}
+      6

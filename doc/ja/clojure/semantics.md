@@ -45,7 +45,8 @@ Common Lisp ファイルはこの名前で呼び出します。
 `:reload-all` は依存先を先に再実行します。いずれも oracle と同じです。`ns` フォームのないファイルは、require した側の
 名前空間に定義を追加します。`(load "path")` と ns の `(:load "path" ...)` 節は、現在の名前空間のファイルがあるディレクトリからの相対パス（先頭が `/` ならソースルートから）でファイル（`path.clj`、なければ `path.cljc`）を読み、現在の名前空間で実行します。呼ぶたびに再実行し、`nil` を返し、ファイル内の `in-ns` は終了後に残りません。パスは文字列リテラルで、ファイルは lower の間に読まれます。`use` と `:refer :all` は public な var をすべて refer します。
 どのルートにもないファイル、require の循環、存在しない var や private な var の refer は、
-oracle と同じ文言のエラーになります。
+oracle と同じ文言のエラーになります。[組み込みの名前空間](reference/namespaces.md#built-in-namespaces)
+はファイルを必要としません。
 
 `*ns*` は現在の名前空間を値として持ちます。`ns` と `in-ns` が実行された時点で切り替わり、
 読むコードの実行時に読まれるため、関数は呼び出し側の名前空間を答えます。require された
@@ -85,9 +86,8 @@ oracle と同じく無視します。oracle の spec が拒否する値、どの
   かかわらずこのフロントエンド自身です。`ring/ring-core` と `ring/ring-codec` は、同梱のバージョン
   （ring-core 1.15.5、ring-codec 1.3.0）以下の Maven バージョンなら組み込みの Ring 名前空間です。
   それより新しいバージョンは、Ring 名前空間をロードする時点で拒否します。
-- このフロントエンドが提供しない `clojure.*` 名前空間も、ほかの名前空間と同じくソースパスから
-  ロードします（`:local/root` に置いた `org.clojure` の contrib ライブラリなど）。どこにもなければ
-  未知の名前空間です。
+- Clojure 本体に属さない `clojure.*` 名前空間（`:local/root` に置いた `org.clojure` の contrib
+  ライブラリなど）は、ほかの名前空間と同じくソースパスからロードします。
 - それ以外のライブラリの Maven 座標（`:mvn/version`）と git 座標（`:git/url`、`:git/sha`）は
   取得しません。ルートを加えず、どのルートにもない名前空間は、それらの座標を挙げて拒否します。
   jar 自身の `pom.xml` と、`deps.edn` がなく `pom.xml` だけを持つ `:local/root` のプロジェクトも

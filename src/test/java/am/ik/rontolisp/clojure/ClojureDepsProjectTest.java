@@ -130,15 +130,17 @@ class ClojureDepsProjectTest {
 				+ "(a git coordinate, not fetched), the dependencies the pom.xml in " + real("withpom.jar")
 				+ " declares (a jar's pom.xml is not read), org.clojure/data.json 2.5.1 (a Maven coordinate, not "
 				+ "fetched)";
+		String roots = dir.resolve("unfetched") + ", " + dir.resolve("unfetched/src") + ", " + real("withpom.jar");
+		// a contrib clojure.* library is a library like any other
 		Path json = write("unfetched/main.clj", "(require '[clojure.data.json :as json])\n");
 		assertThatThrownBy(() -> read(json, SourceStandards.DEFAULT)).isInstanceOf(LispReadException.class)
-			.hasMessage(json + ":1:1: unknown namespace: clojure.data.json" + notSearched);
+			.hasMessage(json + ":1:1: Could not locate clojure/data/json.clj or clojure/data/json.cljc on the source "
+					+ "path: " + roots + notSearched);
 		Path missing = write("unfetched/missing.clj", "(require 'nowhere.at-all)\n");
 		assertThatThrownBy(() -> read(missing, SourceStandards.DEFAULT)).isInstanceOf(LispReadException.class)
 			.hasMessage(
 					missing + ":1:1: Could not locate nowhere/at_all.clj or nowhere/at_all.cljc on the source path: "
-							+ dir.resolve("unfetched") + ", " + dir.resolve("unfetched/src") + ", "
-							+ real("withpom.jar") + notSearched);
+							+ roots + notSearched);
 		// what the jar holds still loads
 		Path found = write("unfetched/found.clj", "(require 'withpom.core) (println :ok)\n");
 		assertThat(interpret(found, SourceStandards.DEFAULT)).isEqualTo(":ok\n");
