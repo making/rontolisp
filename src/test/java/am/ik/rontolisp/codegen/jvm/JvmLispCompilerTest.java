@@ -2223,6 +2223,20 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunFloatComparisonOperand() throws Exception {
+		// The interpreter twin is LispEvaluatorTest#floatComparisonOperand.
+		for (OptimizeLevel level : List.of(OptimizeLevel.DEFAULT, OptimizeLevel.SIZE)) {
+			assertThat(compileAndRun(fixtureProgram(am.ik.rontolisp.FloatComparisonOperandFixture.SOURCE), level))
+				.as("level %s", level)
+				.isEqualTo(am.ik.rontolisp.FloatComparisonOperandFixture.EXPECTED);
+			assertThat(
+					compileAndRun(fixtureProgram(am.ik.rontolisp.FloatComparisonOperandFixture.COMPLEX_SOURCE), level))
+				.as("complex, level %s", level)
+				.isEqualTo(am.ik.rontolisp.FloatComparisonOperandFixture.COMPLEX_EXPECTED);
+		}
+	}
+
+	@Test
 	void compileAndRunSequenceAndAccessorOperatorsNameTheirWrongTypeArgument() throws Exception {
 		// Through the CLI's front end, which splices the prelude defuns (mismatch,
 		// search, count-if-not) the program reaches. The interpreter twin is

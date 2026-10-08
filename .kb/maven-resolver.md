@@ -44,7 +44,7 @@ or `version` (`RELEASE`/`LATEST`) -- and builds its resolver as `clj` does:
   dependencies as the MODEL holds them: the classifier written (a `test-jar` type implies
   none here, `tests` in a descriptor), the type's extension. An invalid POM is a
   `MavenResolutionException` here (no descriptor to fall back to). What tools.deps'
-  `coord-deps :jar` reads (`model-dep->data`).
+  `coord-deps :jar` reads (`model-dep->data`), at its level, STRICT ("Validation levels").
 - `project(Path pom, Map extraSystemProperties)` -> `MavenProject`: a `pom.xml` built as
   Maven builds a `FileModelSource` without a project directory (tools.deps' `read-model-file`:
   no `request.setPomFile`, so `${project.basedir}` / `${basedir}` reflect nothing and the
@@ -60,12 +60,11 @@ or `version` (`RELEASE`/`LATEST`) -- and builds its resolver as `clj` does:
   Maven's `readParentLocally` uses maven-artifact's `DefaultArtifactVersion`); else the
   repositories. Up a chain of files.
   A repository parent's own relatedSource (Maven's: beside `~/.m2/.../a-v.pom`) is never
-  looked at. Validated at the MINIMAL level like a repository POM; tools.deps' request is
-  Maven's default STRICT (measured: `'build.resources.resource.directory' is missing.`
-  refused there), so a POM only the strict checks refuse is accepted here.
+  looked at. Validated at tools.deps' level, STRICT ("Validation levels"); until
+  2026-10-08 at the minimal one, so `<resource/>` was read where `clj` refuses it.
 
 ## Effective model (`ModelBuilder`, `ProfileActivator`, `Interpolator`)
-Maven's `DefaultModelBuilder` at validation level minimal, no project directory:
+Maven's `DefaultModelBuilder` at a validation level ("Validation levels"), no project directory:
 - Per POM of the parent chain: duplicate dependencies collapse (last declaration, first
   position); profile activation is interpolated against that POM's OWN raw properties, then
   user, then system properties -- a property only the parent defines leaves `${...}` and the
@@ -135,12 +134,58 @@ default map, `XhtmlEntities`), a DOCTYPE whose entities never resolve, any root 
 whitespace before the declaration. Also: no external entity can ever be fetched, no JAXP
 factory lookup or xerces in a native image, nothing for the web profile to substitute.
 Measured 2026-10-08: no POM of a developer `~/.m2` (1552) uses an undeclared entity outside
-CDATA, so the table is parity, not a hot path. `PomReader` refuses what the lenient reader
-refuses in the sections it reads (a known field twice, text in a structure, an element in a
-value); the others (`reporting`, a plugin's dependencies, ...) are skipped unvalidated, and
-the reader's unbalanced skip of an unknown element inside a list is not reproduced.
+CDATA, so the table is parity, not a hot path. `PomSchema` checks the whole 4.0.0 tree as
+`MavenXpp3Reader` reads it (its table read off the generated `parse*` methods), either mode:
+both refuse a known field twice, an element in a value, text between a list's items or a
+`properties` map's; only the strict one refuses a root other than `project`, an unknown
+element, an undeclared unprefixed attribute (a list's or a value's own are never read) and
+text between a structure's fields -- the lenient `nextTag` steps over one text event (until
+2026-10-08 that text was refused, and `reporting`, `scm`, a plugin's dependencies ... were
+skipped unchecked; `oracle/lenient.txt`). The reader's unbalanced skip of an unknown element
+inside a list is not reproduced.
 `XmlElement` keeps attributes and whether it was `<a/>` (an `Xpp3Dom` value is `null` then,
 `""` for `<a></a>`, the trimmed text otherwise, none with children).
+
+## Validation levels (`ModelValidator`, `PomSchema`, `ModelProblems`)
+`DefaultModelValidator` 3.9.16 ported check by check, at `ModelBuildingRequest`'s levels
+(minimal 0, 2.0 20, 3.0 30, 3.1 31; `errOn30`/`errOn31` a warning below the level, an error
+from it). Who builds at which: a descriptor and every import, minimal; `project` and
+`projectDependencies`, STRICT = 3.0 (tools.deps' bare `DefaultModelBuildingRequest`); a parent
+beside the file at the request's level, a repository parent at 2.0 at most
+(`readParentExternally`'s lenient request: measured, duplicate profile ids refuse a local
+parent and pass in a repository one).
+- Reading (`readModel`): the strict reader from 2.0 on; when only the lenient one reads the
+  POM, `Malformed POM <where>: <strict message>` -- an ERROR when the request names the POM
+  file, else a WARNING. tools.deps names none, so its `pom.xml` and a jar's pom only warn and
+  a parent beside the file errs (measured 2026-10-08, `clj` 1.12.6: `<foo/>` in the project
+  accepted, in its `../pom.xml` refused). Neither reader -> fatal `Non-parseable POM`, the
+  strict message.
+- Problems carry Maven's severity in collection order: a fatal one stops the build at the
+  next POM read (`hasFatalErrors` after each `readModel`; `Version must be a constant` waits
+  there too), an error rejects the built model, warnings travel only inside a refusal,
+  marked `[WARNING]` (as `clj` prints them). A POM missing `modelVersion` reports it twice,
+  raw and effective (measured).
+- Raw (2.0 on): `modelVersion` (4.0.0; a newer/older one fatal, else an error; a segment
+  that is no number throws `NumberFormatException` out of Maven's builder, `clj` crashes
+  with it -- here a fatal problem naming it), ids and versions without expressions (version:
+  the CI-friendly `revision`/`changelist`/`sha1` only), raw dependencies (import type and
+  classifier, system path, duplicates), a dependency on the model itself (fatal), raw
+  repositories (id, url, duplicates), raw plugins (fatal empty coordinates, duplicates,
+  duplicate execution ids), profile ids and `${project.*}` in activations. Minimal: duplicate
+  profile ids warn. Every level: the parent checks.
+- Effective: every level the ids, packaging, a blank `<module>` (an error at every level;
+  until 2026-10-08 unchecked, `oracle/lenient.txt`), dependencies; 2.0 on duplicate modules,
+  the version's characters and expressions, plugins (version, `inherited`, `extensions`,
+  their dependencies' scope), resources (directory, `filtering`), reporting plugin ids,
+  repositories, `distributionManagement.status`. `checkPluginVersions` (2.0 on) warns of a
+  plugin no POM versions or manages, in Maven's `HashMap` order.
+- The model keeps what only validation reads (`PomModel.Ancillary`: repositories, the
+  distribution's status and repositories, reporting plugin coordinates; plugin
+  `extensions` and dependencies, resource `filtering`), merged as Maven merges it
+  (`AncillaryMerger`, `BuildMerger`); the super POM's `central` repositories are in, as they
+  collapse a POM's same-id repositories (measured: two `local` repositories, one warning).
+- An import's problems join every importer's, also when its contribution is cached (Maven
+  without a session cache; a descriptor's session reports them once).
 
 ## Collected graph (`DependencyCollector`)
 Maven Resolver's depth-first collector under Maven's session, conflict resolver off:
@@ -369,7 +414,8 @@ were refused then).
 
 ## Tests
 `MavenOracleParityTest`, `MavenProjectTest` (`project`: the build, its merges and local
-parents, each case measured through `clj -Srepro -Spath` 1.12.6), `MavenRepositoryTest` (metadata caching, update policy, not-found
+parents, the strict level's refusals and warnings, a jar's pom, each case measured through
+`clj -Srepro -Spath` 1.12.6), `MavenRepositoryTest` (metadata caching, update policy, not-found
 records, snapshots, `LATEST`/`RELEASE`, ranges across repositories, mirror routing, blocked
 mirrors, the access a route carries, per-repository release/snapshot policies;
 `oracle/policy-*.txt` are the same measured against Maven), `ClojureDepsFetchCliTest`

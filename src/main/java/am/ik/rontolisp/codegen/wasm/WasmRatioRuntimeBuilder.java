@@ -716,8 +716,11 @@ final class WasmRatioRuntimeBuilder {
 	// comparison call sites AND the operator's accepted mask and test nonzero, so NaN
 	// fails every one of = < > <= >= (IEEE); _rat_cmp's -1/0/1 signum against zero
 	// cannot express "unordered" (it answered "equal"). Non-float operands delegate to
-	// _rat_cmp (exact, never unordered). A float against an exact integer or ratio
-	// compares EXACT values -- the float's exact binary value (as `rational` answers
+	// _rat_cmp (exact, never unordered). A float against a float, an i31 or a boxed
+	// i64 within 2^53 compares the two f64 values, which a double holds exactly (the
+	// f64 arm, read straight from the boxes). A float against any other exact integer
+	// or a ratio compares EXACT values -- the float's exact binary value (as `rational`
+	// answers
 	// it) against the exact operand -- through the existing big-tier helpers alone
 	// (`_int_new` of the decomposed mantissa, `_big_ash`, `_big_mul`, `_big_cmp`; no
 	// new runtime function), so a near tie decides strictly: `(= 0.6666666666666666
@@ -735,10 +738,11 @@ final class WasmRatioRuntimeBuilder {
 		// when the float is operand a and -1 when it is operand b: the
 		// cross-multiplication reads (FL vs EX), so a float in b position has
 		// the resulting signum flipped to answer (a vs b), and the infinities
-		// pick their bit by the same sign.
+		// pick their bit by the same sign. 14=FA, 15=FB (f64): the operands'
+		// values on the f64 arm.
 		final int fl = 2, ex = 3, d = 4, bits = 5, mant = 6, exp = 7, sgn = 8, tmp = 9, nf = 10, df = 11, ne = 12,
-				de = 13;
-		w.write(5);
+				de = 13, fa = 14, fb = 15;
+		w.write(6);
 		w.write(2);
 		w.writeRefType(true, Type.EQ.code());
 		w.write(1);
@@ -749,46 +753,46 @@ final class WasmRatioRuntimeBuilder {
 		w.write(Type.I32);
 		w.write(4);
 		w.writeRefType(true, Type.EQ.code());
+		w.write(2);
+		w.write(Type.F64);
 
 		emitEitherFloat(w);
 		w.write(Instruction.IF);
 		w.write(Type.I32);
-		emitBothFloat(w);
-		w.write(Instruction.IF);
+		// The f64 arm: when each operand is a float or an integer a double holds
+		// exactly (an i31, or a boxed i64 within 2^53), comparing the two f64
+		// values IS the exact comparison. Each operand is read once, straight from
+		// its box (no _as_f64 call), and the mask is built branch-free: lt -> 1,
+		// eq -> 2, gt -> 4, NaN -> 0. Anything else breaks out to the exact arm.
+		w.write(Instruction.BLOCK);
 		w.write(Type.I32);
-		// lt -> 1, gt -> 4, eq -> 2, else (NaN) -> 0
-		emitLocalToF64(w, 0);
-		emitLocalToF64(w, 1);
+		w.write(Instruction.BLOCK, 0x40);
+		emitExactF64OrBreak(w, 0, mant);
+		setLocal(w, fa);
+		emitExactF64OrBreak(w, 1, mant);
+		setLocal(w, fb);
+		getLocal(w, fa);
+		getLocal(w, fb);
 		w.write(Instruction.F64_LT);
-		w.write(Instruction.IF);
-		w.write(Type.I32);
+		getLocal(w, fa);
+		getLocal(w, fb);
+		w.write(Instruction.F64_EQ);
 		w.write(Instruction.I32_CONST);
 		w.writeSignedLeb128(1);
-		w.write(Instruction.ELSE);
-		emitLocalToF64(w, 0);
-		emitLocalToF64(w, 1);
+		w.write(Instruction.I32_SHL);
+		w.write(Instruction.I32_OR);
+		getLocal(w, fa);
+		getLocal(w, fb);
 		w.write(Instruction.F64_GT);
-		w.write(Instruction.IF);
-		w.write(Type.I32);
-		w.write(Instruction.I32_CONST);
-		w.writeSignedLeb128(4);
-		w.write(Instruction.ELSE);
-		emitLocalToF64(w, 0);
-		emitLocalToF64(w, 1);
-		w.write(Instruction.F64_EQ);
-		w.write(Instruction.IF);
-		w.write(Type.I32);
 		w.write(Instruction.I32_CONST);
 		w.writeSignedLeb128(2);
-		w.write(Instruction.ELSE);
-		w.write(Instruction.I32_CONST);
-		w.writeSignedLeb128(0);
-		w.write(Instruction.END);
-		w.write(Instruction.END);
-		w.write(Instruction.END);
-		w.write(Instruction.ELSE);
-		// Exactly one operand is a float: split the pair so FL holds it, and
-		// record its side in SGN (1 for a, -1 for b).
+		w.write(Instruction.I32_SHL);
+		w.write(Instruction.I32_OR);
+		w.write(Instruction.BR);
+		w.writeUnsignedLeb128(1);
+		w.write(Instruction.END); // end f64-arm block: fall into the exact arm
+		// Exactly one operand is a float (two floats always take the f64 arm): split
+		// the pair so FL holds it, and record its side in SGN (1 for a, -1 for b).
 		getLocal(w, 0);
 		refTestType(w, WasmLispCompiler.TYPE_FLOAT);
 		w.write(Instruction.IF, 0x40);
@@ -1039,7 +1043,7 @@ final class WasmRatioRuntimeBuilder {
 		w.write(Instruction.END);
 		w.write(Instruction.END);
 		w.write(Instruction.END); // end exact-operand if
-		w.write(Instruction.END); // end both-float if
+		w.write(Instruction.END); // end the block the f64 arm answers through
 		w.write(Instruction.ELSE);
 		// exact types: 1 << (_rat_cmp(a, b) + 1) maps -1/0/1 to 1/2/4
 		w.write(Instruction.I32_CONST);
@@ -1055,6 +1059,58 @@ final class WasmRatioRuntimeBuilder {
 
 		w.write(Instruction.END);
 		return body.toByteArray();
+	}
+
+	// Pushes local[slot] as an f64 whose value IS the operand's exact value -- a float,
+	// an i31, or a boxed i64 within [-2^53, 2^53] -- or branches to the block enclosing
+	// the emission (br 2 from inside the two ifs) for any other operand. scratch is an
+	// i64 local the boxed-integer rung may clobber.
+	private static void emitExactF64OrBreak(WasmWriter w, int slot, int scratch) {
+		getLocal(w, slot);
+		refTestType(w, WasmLispCompiler.TYPE_FLOAT);
+		w.write(Instruction.IF);
+		w.write(Type.F64);
+		getLocal(w, slot);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(WasmLispCompiler.TYPE_FLOAT);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_FLOAT);
+		w.writeUnsignedLeb128(0);
+		w.write(Instruction.ELSE);
+		getLocal(w, slot);
+		refTestI31(w);
+		w.write(Instruction.IF);
+		w.write(Type.F64);
+		getLocal(w, slot);
+		WasmEmitHelper.castI31GetS(w);
+		w.write(Instruction.F64_CONVERT_S_I32);
+		w.write(Instruction.ELSE);
+		getLocal(w, slot);
+		refTestType(w, WasmLispCompiler.TYPE_BIGNUM);
+		w.write(Instruction.I32_EQZ);
+		w.write(Instruction.BR_IF);
+		w.writeUnsignedLeb128(2);
+		getLocal(w, slot);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(WasmLispCompiler.TYPE_BIGNUM);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_BIGNUM);
+		w.writeUnsignedLeb128(0);
+		w.write(Instruction.TEE_LOCAL);
+		w.writeUnsignedLeb128(scratch);
+		// |v| <= 2^53 exactly when v + 2^53, read unsigned, is at most 2^54.
+		w.write(Instruction.I64_CONST);
+		w.writeSignedLeb128(1L << 53);
+		w.write(Instruction.I64_ADD);
+		w.write(Instruction.I64_CONST);
+		w.writeSignedLeb128(1L << 54);
+		w.write(Instruction.I64_GT_U);
+		w.write(Instruction.BR_IF);
+		w.writeUnsignedLeb128(2);
+		getLocal(w, scratch);
+		w.write(Instruction.F64_CONVERT_S_I64);
+		w.write(Instruction.END);
+		w.write(Instruction.END);
 	}
 
 	// Emits the test `(a is TYPE_FLOAT) & (b is TYPE_FLOAT)` over locals 0 and 1,

@@ -684,7 +684,10 @@ before the library splice.
   1.30-1.53 s -> 1.48-1.62 s, JVM 0.11-0.12 s both; `(+ s (long (quot i 3)) (int (* i 0.5)))`
   wasm 2.96-3.44 s -> 4.17-4.33 s (a double cast pays one generic float compare,
   `_rat_cmp_bits`, ~20 ns there; the first worker's four compares cost twice that), JVM
-  2.5-2.8 s both. Interpreter, 1M iterations: 3.0 s -> 5.0 s and 3.8 s -> 8.0 s (the worker is
+  2.5-2.8 s both. Since `_rat_cmp_bits`'s f64 arm and the literal-site float test
+  (`.kb/wasm-bignum.md`, 2026-10-08) the second loop is 4.43 -> 4.17 s (best of 5): the
+  `(< (abs x) 9.2e18)` test is now a raw f64 compare, and what is left is the generic `abs`,
+  the two `_as_f64` calls of `truncate` and the integer range tests. Interpreter, 1M iterations: 3.0 s -> 5.0 s and 3.8 s -> 8.0 s (the worker is
   interpreted Lisp). An inline arm answering an in-range integer before the call took the
   interpreter's integer loop to 3.9-4.0 s, left the compiled ones level, and cost ~250 B wasm
   / ~650 B class per call site; not made. A `count` argument is not cast (an int already).
@@ -1057,8 +1060,9 @@ repositories, `GITLIBS` set; tools.deps read from the CLI jar).
   `${basedir}/x` under the root, `${project.build.directory}/gen` -> `target/gen`; a parent's
   inherited and managed build-helper executions, a profile's plugin and resources, duplicate
   plugins all reach the first plugin as Maven merges them; a child plugin listed before the
-  build-helper it shares with its parent makes that child plugin first (no helper dirs). The
-  oracle's model is STRICT-validated, ours minimal (`.kb/maven-resolver.md`, `project`).
+  build-helper it shares with its parent makes that child plugin first (no helper dirs). Both
+  POMs are validated at the oracle's level, STRICT (`.kb/maven-resolver.md`, "Validation
+  levels").
 - **git** (`canonicalize`/`manifest-type`/`compare-versions :git`): both spellings refused,
   URL given or inferred (the oracle's regex table, here only -- `GitFetcher` has none), then
   against the repository: a tag must exist (`Library L has invalid tag: t`), sha and tag must
@@ -2330,7 +2334,7 @@ measured on clj 1.12.6, 2026-10-08).
   name each): `Object` 21, `IFn` 14, `ILookup` 13, `IObj` 12, `IDeref` 11, `Counted` 11,
   `Seqable` 10, `Indexed` 10, then the collection interfaces (`IPersistentCollection`,
   `IHashEq`, `Associative` 9 each ...: e78) and `IReduceInit` 5 (next.jdbc's `plan`,
-  `clojure.core/iteration`: e79). Supported: `IReduceInit`, `IReduce`, `IKVReduce`, `Seqable`,
+  `clojure.core/iteration`, below). Supported: `IReduceInit`, `IReduce`, `IKVReduce`, `Seqable`,
   `Counted`, `Indexed`, `ILookup`, `IFn` with its supers `Callable` and `Runnable`, `IDeref`,
   `IMeta`, `IObj`, and `Object`'s `toString`/`equals`/`hashCode`. Any other interface of the
   jar (`CLOJURE_LANG`, its public list) or loadable host interface is refused by name
@@ -2394,6 +2398,18 @@ measured on clj 1.12.6, 2026-10-08).
   which no typed value is, so no binding changes), and an instance call of a declared method a
   clause calling the row's method (`ClojureInterfaces.instanceTest`; an `if` around the refusal
   where no row maps the method).
+- `iteration` (`ClojureCoreLowering`, one call to `%clojure-iteration` over the step as a real
+  function and the options as a run-time list; `-v` as a value): the oracle's reify in
+  `clojure.lisp`, a fresh `:C%REIFY` tag whose `Seqable` and `IReduceInit` rows the worker
+  stores through the families' stores, so `%clojure-iteration`/`-v` are producers of SEQABLE,
+  REDUCE_INTERFACE and REDUCIBLE (`ClojureInterfaces.ITERATION`). The options are read like
+  the oracle's `& {:keys ...}` (one argument is the map, else pairs with the last key winning
+  and an odd trailing one conj'd like onto a map, `%clojure-iteration-option`); a given
+  option, nil too, is called through `%clojure-as-fn`. `seq` steps from `initk` on every call;
+  each element's `somef`/`vf`/`kf` run when it is built, the next `step` when the lazy rest is
+  realized; `reduce` stops at `reduced` before `kf`. Pin: clojure-spec
+  `iteration-seqs-lazily-and-reduces-through-its-step` (the oracle's, clj 1.12.6, 2026-10-08,
+  all four backends), `ClojureLibraryTest#aProgramStoringNoInterfaceRowSplicesTheVerbsWithoutTheirInterfaceArms`.
 - Deviations (user doc): the `#object` has no identity hash and a reify's class no number;
   `equals`/`hashCode` key no map or set (the tables hold such a value by identity); `sort` and
   `distinct` take a type implementing `Seqable` alone, where the oracle's `to-array` and

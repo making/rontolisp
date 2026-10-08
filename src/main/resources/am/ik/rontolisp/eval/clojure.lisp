@@ -8468,6 +8468,114 @@
         (t (rontolisp::%clojure-truthy
             (funcall (rontolisp::%clojure-interface-entry a "equals") a b)))))
 
+;;;; clojure.core/iteration: a reify implementing Seqable and IReduceInit over a
+;;;; step function, like the oracle's. Its rows are stored through the families'
+;;;; stores, so its constructor is a producer of the seqable and reduce-interface
+;;;; families (clojure/ClojureArms).
+
+(defun rontolisp::%clojure-iteration-option (args key dflt)
+  "The option KEY (a keyword) of iteration's option arguments ARGS, DFLT when
+   none names it, read like the oracle's destructuring of them: one argument
+   is the options map itself, more are key-value pairs (the last of a key
+   wins) and an odd last one is conj'd onto them like onto a map."
+  (if (null (cdr args))
+      (rontolisp::%clojure-call-keyword key (car args) dflt)
+      (let ((found dflt))
+        (do ((p args (cdr (cdr p))))
+            ((null p) found)
+          (if (null (cdr p))
+              (do ((q
+                    (rontolisp::%clojure-merge-entry-plist (car p))
+                    (cdr (cdr q))))
+                  ((null q))
+                (if (equal (car q) key) (setq found (car (cdr q)))))
+              (if (equal (car p) key) (setq found (car (cdr p)))))))))
+
+(defun rontolisp::%clojure-iteration-fn (args key dflt)
+  "The function option KEY (a keyword) of ARGS as a real function, DFLT when
+   none names it. A value given, nil included, is called as an IFn, so a
+   keyword or a set serves and nil fails when called, like the oracle's."
+  (let* ((absent (list nil))
+         (f (rontolisp::%clojure-iteration-option args key absent)))
+    (if (eq f absent) dflt (rontolisp::%clojure-as-fn f))))
+
+(defun rontolisp::%clojure-iteration (step args)
+  "(iteration step & opts): a reify implementing Seqable and IReduceInit over
+   the real function STEP, the options read from ARGS
+   (%clojure-iteration-option) with the oracle's defaults: :somef some?, :vf
+   and :kf identity, :initk nil."
+  (let ((somef
+         (rontolisp::%clojure-iteration-fn args '(:c%keyword "somef")
+                                           (lambda (x) (not (null x)))))
+        (vf
+         (rontolisp::%clojure-iteration-fn args '(:c%keyword "vf")
+                                           (lambda (x) x)))
+        (kf
+         (rontolisp::%clojure-iteration-fn args '(:c%keyword "kf")
+                                           (lambda (x) x)))
+        (initk
+         (rontolisp::%clojure-iteration-option args '(:c%keyword "initk") nil))
+        (self (list :c%reify (gensym "reify"))))
+    (rontolisp::%clojure-seqable-row (car (cdr self)) '("clojure.lang.Seqable")
+                                     (list "seq"
+                                           (lambda (x)
+                                             (declare (ignore x))
+                                             (rontolisp::%clojure-iteration-seq
+                                              step somef vf kf
+                                              (funcall step initk)))))
+    (rontolisp::%clojure-reduce-interface-row (car (cdr self))
+                                              '("clojure.lang.IReduceInit")
+                                              (list "reduce"
+                                                    (lambda (x f init)
+                                                      (declare (ignore x))
+                                                      (rontolisp::%clojure-iteration-reduce
+                                                       step somef vf kf initk f
+                                                       init))))
+    self))
+
+(defun rontolisp::%clojure-iteration-v (&rest args)
+  "iteration as a value."
+  (rontolisp::%clojure-check-arity args 1 nil "iteration")
+  (rontolisp::%clojure-iteration (rontolisp::%clojure-as-fn (car args))
+                                 (cdr args)))
+
+(defun rontolisp::%clojure-iteration-seq (step somef vf kf ret)
+  "The seq of an iteration from the step answer RET: nil once SOMEF refuses
+   it, else (vf RET) ahead of a lazy seq of the answer of STEP over (kf RET),
+   which ends where kf answers nil. SOMEF, VF and KF run now and STEP when the
+   rest is realized, like the oracle's."
+  (if (rontolisp::%clojure-truthy (funcall somef ret))
+      (let* ((v (funcall vf ret)) (k (funcall kf ret)))
+        (cons v
+              (if (null k)
+                  nil
+                  (rontolisp::%clojure-make-lazy
+                   (lambda ()
+                     (rontolisp::%clojure-iteration-seq step somef vf kf
+                                                        (funcall step k)))))))
+      nil))
+
+(defun rontolisp::%clojure-iteration-reduce (step somef vf kf initk f init)
+  "IReduceInit's reduce of an iteration: F over INIT and each (vf ret) in
+   turn, stopping where SOMEF refuses a step's answer, where kf answers nil, or
+   at a reduced value, answered unwrapped before kf is called."
+  (let ((rf (rontolisp::%clojure-as-fn f))
+        (acc init)
+        (ret (funcall step initk))
+        (more t))
+    (do ()
+        ((not more) acc)
+      (if (rontolisp::%clojure-truthy (funcall somef ret))
+          (progn
+            (setq acc (funcall rf acc (funcall vf ret)))
+            (if (rontolisp::%clojure-reduced-p acc)
+                (progn
+                  (setq acc (car (cdr acc)))
+                  (setq more nil))
+                (let ((k (funcall kf ret)))
+                  (if (null k) (setq more nil) (setq ret (funcall step k))))))
+          (setq more nil)))))
+
 (defun rontolisp::%clojure-xf-rf (rf step complete)
   "A reducing function over RF: STEP (a two-argument closure) for the step
    arity, COMPLETE (one argument) for the completion or nil to pass it to RF,

@@ -1,0 +1,7 @@
+# descriptor test.xml:text-in-structure:1 test.desc:blank-module:1 test.xml:dup-in-scm:1
+artifact test.xml:text-in-structure:jar:1
+dep test.lib:a:jar::1 scope=compile optional=null
+artifact test.desc:blank-module:jar:1
+warning invalid test.desc:blank-module:jar:1: 1 problem was encountered while building the effective model for test.desc:blank-module:1 [ERROR] 'modules.module[1]' has been specified without a path to the project directory. @
+artifact test.xml:dup-in-scm:jar:1
+warning invalid test.xml:dup-in-scm:jar:1: 1 problem was encountered while building the effective model [FATAL] Non-parseable POM <local>/test/xml/dup-in-scm/1/dup-in-scm-1.pom: Duplicated tag: 'url' (position: START_TAG seen ...<url>a</url><url>... @7:25)  @ line 7, column 25

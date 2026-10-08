@@ -112,6 +112,8 @@ oracle と同じく無視します。oracle の spec が拒否する値、どの
   ディレクトリ（既定は `src/main/java`）、`src/main/clojure`、リソースディレクトリ（既定は
   `src/main/resources`）、`build-helper-maven-plugin` の `add-source` / `add-resource` の
   ディレクトリを加えます。最後のものは oracle と同じく先頭のプラグインから読みます。
+  どちらの POM も oracle と同じく Maven の strict の水準で検証し、oracle が拒否する POM は
+  Maven の挙げる問題を示して拒否します。
 - クラスを含む依存の jar は、プログラムの Java クラスパスにも加わります。インタプリタと JVM は
   そのクラスを呼べ、`-o app.jar` はその jar を出力の横にコピーします。WebAssembly は呼び出し時に
   Java を拒否するままです。

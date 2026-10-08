@@ -10,92 +10,74 @@ import java.util.Set;
 import org.jspecify.annotations.Nullable;
 
 /**
- * Reads the {@link PomModel} out of a POM the way Maven's reader does for a dependency's
- * POM (lenient mode): the root element's name is not checked, an unknown element is
- * skipped, values are trimmed, and what the reader does reject is rejected -- a field
- * written twice, text between the elements of a structure, an element inside a value.
- *
- * <p>
- * Only the elements a dependency graph or a project's source directories need are read:
- * of {@code build}, the directories, the resources' directories, the filters and the
- * plugins (coordinates, {@code inherited}, executions, configurations) with their
- * management; the rest ({@code reporting}, {@code scm}, a plugin's dependencies, ...) is
- * skipped whole, so malformed content inside it that Maven's full reader would reject is
- * accepted here.
+ * Reads the {@link PomModel} out of a POM the way Maven's reader
+ * ({@code MavenXpp3Reader}) does, in its strict or its lenient mode ({@link PomSchema}
+ * checks the tree as that mode reads it): values are trimmed, and of the model only what
+ * a dependency graph, a project's source directories or the model's validation reads is
+ * kept -- of {@code build}, the directories, the resources (directory and filtering), the
+ * filters and the plugins (coordinates, {@code inherited}, {@code extensions},
+ * executions, configurations, dependencies) with their management; the repositories, the
+ * distribution's status and repositories and the reporting plugins' coordinates.
  */
 final class PomReader {
-
-	/** The fields of a 4.0.0 project; each may appear once. */
-	private static final Set<String> PROJECT_FIELDS = Set.of("modelVersion", "parent", "groupId", "artifactId",
-			"version", "packaging", "name", "description", "url", "inceptionYear", "organization", "licenses",
-			"developers", "contributors", "mailingLists", "prerequisites", "modules", "scm", "issueManagement",
-			"ciManagement", "distributionManagement", "properties", "dependencyManagement", "dependencies",
-			"repositories", "pluginRepositories", "build", "reports", "reporting", "profiles");
-
-	private static final Set<String> PARENT_FIELDS = Set.of("groupId", "artifactId", "version", "relativePath");
-
-	private static final Set<String> DEPENDENCY_FIELDS = Set.of("groupId", "artifactId", "version", "type",
-			"classifier", "scope", "systemPath", "exclusions", "optional");
-
-	private static final Set<String> EXCLUSION_FIELDS = Set.of("groupId", "artifactId");
-
-	private static final Set<String> PROFILE_FIELDS = Set.of("id", "activation", "build", "modules",
-			"distributionManagement", "properties", "dependencyManagement", "dependencies", "repositories",
-			"pluginRepositories", "reports", "reporting");
-
-	private static final Set<String> ACTIVATION_FIELDS = Set.of("activeByDefault", "jdk", "os", "property", "file");
-
-	private static final Set<String> OS_FIELDS = Set.of("name", "family", "arch", "version");
-
-	private static final Set<String> PROPERTY_FIELDS = Set.of("name", "value");
-
-	private static final Set<String> FILE_FIELDS = Set.of("missing", "exists");
-
-	private static final Set<String> DISTRIBUTION_FIELDS = Set.of("repository", "snapshotRepository", "site",
-			"downloadUrl", "relocation", "status");
-
-	private static final Set<String> RELOCATION_FIELDS = Set.of("groupId", "artifactId", "version", "message");
-
-	private static final Set<String> MANAGEMENT_FIELDS = Set.of("dependencies");
-
-	/** A profile's {@code build}, Maven's {@code BuildBase}. */
-	private static final Set<String> BUILD_BASE_FIELDS = Set.of("defaultGoal", "resources", "testResources",
-			"directory", "finalName", "filters", "pluginManagement", "plugins");
-
-	private static final Set<String> BUILD_FIELDS = Set.of("sourceDirectory", "scriptSourceDirectory",
-			"testSourceDirectory", "outputDirectory", "testOutputDirectory", "extensions", "defaultGoal", "resources",
-			"testResources", "directory", "finalName", "filters", "pluginManagement", "plugins");
-
-	private static final Set<String> RESOURCE_FIELDS = Set.of("targetPath", "filtering", "directory", "includes",
-			"excludes");
-
-	private static final Set<String> PLUGIN_MANAGEMENT_FIELDS = Set.of("plugins");
-
-	private static final Set<String> PLUGIN_FIELDS = Set.of("groupId", "artifactId", "version", "extensions",
-			"executions", "dependencies", "goals", "inherited", "configuration");
-
-	private static final Set<String> EXECUTION_FIELDS = Set.of("id", "phase", "goals", "inherited", "configuration");
 
 	private PomReader() {
 	}
 
 	/**
-	 * Reads a POM.
+	 * A POM read.
+	 *
+	 * @param model the model
+	 * @param malformed what the strict reader refused, when only the lenient one read it
+	 */
+	record Read(PomModel model, @Nullable String malformed) {
+	}
+
+	/**
+	 * Reads a POM with the lenient reader.
 	 * @param bytes the POM file
 	 * @return the raw model
 	 * @throws InvalidPomException if Maven's reader would not read it
 	 */
 	static PomModel read(byte[] bytes) throws InvalidPomException {
 		try {
-			return project(XmlParser.parse(bytes));
+			return read(bytes, false).model();
 		}
 		catch (XmlParser.Malformed ex) {
-			throw new InvalidPomException("Non-parseable POM: " + ex.getMessage());
+			throw new InvalidPomException(ModelProblem.fatal("Non-parseable POM: " + ex.getMessage()));
+		}
+	}
+
+	/**
+	 * Reads a POM as Maven's model builder does: strictly when asked, and then, when the
+	 * strict reader refuses it, again leniently.
+	 * @param bytes the POM file
+	 * @param strict whether the strict reader reads it first
+	 * @return the model, and what the strict reader refused
+	 * @throws XmlParser.Malformed if no reader reads it: the first reader's refusal
+	 */
+	static Read read(byte[] bytes, boolean strict) throws XmlParser.Malformed {
+		XmlElement project = XmlParser.parse(bytes);
+		if (!strict) {
+			PomSchema.check(project, false);
+			return new Read(project(project), null);
+		}
+		try {
+			PomSchema.check(project, true);
+			return new Read(project(project), null);
+		}
+		catch (XmlParser.Malformed ex) {
+			try {
+				PomSchema.check(project, false);
+			}
+			catch (XmlParser.Malformed lenient) {
+				throw ex;
+			}
+			return new Read(project(project), ex.getMessage());
 		}
 	}
 
 	private static PomModel project(XmlElement project) throws XmlParser.Malformed {
-		structure(project, PROJECT_FIELDS);
 		XmlElement parent = project.child("parent");
 		XmlElement management = project.child("dependencyManagement");
 		XmlElement distribution = project.child("distributionManagement");
@@ -106,27 +88,59 @@ final class PomReader {
 				properties(project.child("properties")), dependencies(project.child("dependencies")),
 				management == null ? null : management(management), profiles(project.child("profiles")),
 				distribution == null ? null : relocation(distribution), modules(project.child("modules")),
-				build == null ? null : build(build, BUILD_FIELDS));
+				build == null ? null : build(build, true), ancillary(project));
+	}
+
+	/** A model's or a profile's repositories, distribution and reporting plugins. */
+	private static PomModel.Ancillary ancillary(XmlElement base) throws XmlParser.Malformed {
+		XmlElement distribution = base.child("distributionManagement");
+		XmlElement reporting = base.child("reporting");
+		List<PomModel.ReportPlugin> reportPlugins = null;
+		if (reporting != null) {
+			reportPlugins = new ArrayList<>();
+			for (XmlElement plugin : items(reporting.child("plugins"), "plugin")) {
+				String groupId = leaf(plugin, "groupId");
+				reportPlugins.add(new PomModel.ReportPlugin(groupId == null ? "org.apache.maven.plugins" : groupId,
+						leaf(plugin, "artifactId"), leaf(plugin, "inherited")));
+			}
+		}
+		return new PomModel.Ancillary(repositories(base.child("repositories"), "repository"),
+				repositories(base.child("pluginRepositories"), "pluginRepository"),
+				distribution == null ? null
+						: new PomModel.Distribution(leaf(distribution, "status"),
+								repository(distribution.child("repository")),
+								repository(distribution.child("snapshotRepository"))),
+				reportPlugins);
+	}
+
+	private static List<PomModel.Repo> repositories(@Nullable XmlElement list, String itemName)
+			throws XmlParser.Malformed {
+		List<PomModel.Repo> result = new ArrayList<>();
+		for (XmlElement repository : items(list, itemName)) {
+			result.add(repository(repository));
+		}
+		return result;
+	}
+
+	private static PomModel.@Nullable Repo repository(@Nullable XmlElement repository) throws XmlParser.Malformed {
+		return repository == null ? null
+				: new PomModel.Repo(leaf(repository, "id"), leaf(repository, "url"), leaf(repository, "layout"));
 	}
 
 	private static PomModel.Parent parent(XmlElement parent) throws XmlParser.Malformed {
-		structure(parent, PARENT_FIELDS);
 		return new PomModel.Parent(leaf(parent, "groupId"), leaf(parent, "artifactId"), leaf(parent, "version"),
 				leaf(parent, "relativePath"));
 	}
 
 	private static List<PomModel.Dep> management(XmlElement management) throws XmlParser.Malformed {
-		structure(management, MANAGEMENT_FIELDS);
 		return dependencies(management.child("dependencies"));
 	}
 
 	private static List<PomModel.Dep> dependencies(@Nullable XmlElement dependencies) throws XmlParser.Malformed {
 		List<PomModel.Dep> result = new ArrayList<>();
 		for (XmlElement dependency : items(dependencies, "dependency")) {
-			structure(dependency, DEPENDENCY_FIELDS);
 			List<PomModel.Excl> exclusions = new ArrayList<>();
 			for (XmlElement exclusion : items(dependency.child("exclusions"), "exclusion")) {
-				structure(exclusion, EXCLUSION_FIELDS);
 				exclusions.add(new PomModel.Excl(leaf(exclusion, "groupId"), leaf(exclusion, "artifactId")));
 			}
 			result.add(new PomModel.Dep(leaf(dependency, "groupId"), leaf(dependency, "artifactId"),
@@ -140,14 +154,14 @@ final class PomReader {
 	private static List<PomModel.Profile> profiles(@Nullable XmlElement profiles) throws XmlParser.Malformed {
 		List<PomModel.Profile> result = new ArrayList<>();
 		for (XmlElement profile : items(profiles, "profile")) {
-			structure(profile, PROFILE_FIELDS);
 			XmlElement activation = profile.child("activation");
 			XmlElement management = profile.child("dependencyManagement");
 			XmlElement build = profile.child("build");
-			result.add(new PomModel.Profile(leaf(profile, "id"), activation == null ? null : activation(activation),
-					properties(profile.child("properties")), dependencies(profile.child("dependencies")),
-					management == null ? null : management(management), modules(profile.child("modules")),
-					build == null ? null : build(build, BUILD_BASE_FIELDS)));
+			String id = leaf(profile, "id");
+			result.add(new PomModel.Profile(id == null ? "default" : id,
+					activation == null ? null : activation(activation), properties(profile.child("properties")),
+					dependencies(profile.child("dependencies")), management == null ? null : management(management),
+					modules(profile.child("modules")), build == null ? null : build(build, false), ancillary(profile)));
 		}
 		return result;
 	}
@@ -156,9 +170,7 @@ final class PomReader {
 	 * A {@code build}, or a profile's: there the fields a {@code BuildBase} lacks are
 	 * unknown elements, skipped.
 	 */
-	private static PomModel.Build build(XmlElement build, Set<String> fields) throws XmlParser.Malformed {
-		structure(build, fields);
-		boolean full = fields == BUILD_FIELDS;
+	private static PomModel.Build build(XmlElement build, boolean full) throws XmlParser.Malformed {
 		List<String> filters = new ArrayList<>();
 		for (XmlElement filter : items(build.child("filters"), "filter")) {
 			filters.add(value(filter));
@@ -166,7 +178,6 @@ final class PomReader {
 		XmlElement management = build.child("pluginManagement");
 		List<PomModel.Plugin> managed = null;
 		if (management != null) {
-			structure(management, PLUGIN_MANAGEMENT_FIELDS);
 			managed = plugins(management.child("plugins"));
 		}
 		return new PomModel.Build(full ? leaf(build, "sourceDirectory") : null,
@@ -182,8 +193,7 @@ final class PomReader {
 			throws XmlParser.Malformed {
 		List<PomModel.Resource> result = new ArrayList<>();
 		for (XmlElement resource : items(resources, itemName)) {
-			structure(resource, RESOURCE_FIELDS);
-			result.add(new PomModel.Resource(leaf(resource, "directory")));
+			result.add(new PomModel.Resource(leaf(resource, "directory"), leaf(resource, "filtering")));
 		}
 		return result;
 	}
@@ -191,10 +201,8 @@ final class PomReader {
 	private static List<PomModel.Plugin> plugins(@Nullable XmlElement plugins) throws XmlParser.Malformed {
 		List<PomModel.Plugin> result = new ArrayList<>();
 		for (XmlElement plugin : items(plugins, "plugin")) {
-			structure(plugin, PLUGIN_FIELDS);
 			List<PomModel.Execution> executions = new ArrayList<>();
 			for (XmlElement execution : items(plugin.child("executions"), "execution")) {
-				structure(execution, EXECUTION_FIELDS);
 				List<String> goals = new ArrayList<>();
 				for (XmlElement goal : items(execution.child("goals"), "goal")) {
 					goals.add(value(goal));
@@ -206,7 +214,8 @@ final class PomReader {
 			String groupId = leaf(plugin, "groupId");
 			result.add(new PomModel.Plugin(groupId == null ? "org.apache.maven.plugins" : groupId,
 					leaf(plugin, "artifactId"), leaf(plugin, "version"), leaf(plugin, "inherited"),
-					configuration(plugin), executions));
+					configuration(plugin), executions, leaf(plugin, "extensions"),
+					dependencies(plugin.child("dependencies"))));
 		}
 		return result;
 	}
@@ -218,23 +227,19 @@ final class PomReader {
 	}
 
 	private static PomModel.Activation activation(XmlElement activation) throws XmlParser.Malformed {
-		structure(activation, ACTIVATION_FIELDS);
 		XmlElement os = activation.child("os");
 		XmlElement property = activation.child("property");
 		XmlElement file = activation.child("file");
 		PomModel.Os osCondition = null;
 		if (os != null) {
-			structure(os, OS_FIELDS);
 			osCondition = new PomModel.Os(leaf(os, "name"), leaf(os, "family"), leaf(os, "arch"), leaf(os, "version"));
 		}
 		PomModel.Property propertyCondition = null;
 		if (property != null) {
-			structure(property, PROPERTY_FIELDS);
 			propertyCondition = new PomModel.Property(leaf(property, "name"), leaf(property, "value"));
 		}
 		PomModel.FileCheck fileCondition = null;
 		if (file != null) {
-			structure(file, FILE_FIELDS);
 			fileCondition = new PomModel.FileCheck(leaf(file, "exists"), leaf(file, "missing"));
 		}
 		return new PomModel.Activation(leaf(activation, "activeByDefault"), leaf(activation, "jdk"), osCondition,
@@ -242,12 +247,10 @@ final class PomReader {
 	}
 
 	private static PomModel.@Nullable Relocation relocation(XmlElement distribution) throws XmlParser.Malformed {
-		structure(distribution, DISTRIBUTION_FIELDS);
 		XmlElement relocation = distribution.child("relocation");
 		if (relocation == null) {
 			return null;
 		}
-		structure(relocation, RELOCATION_FIELDS);
 		return new PomModel.Relocation(leaf(relocation, "groupId"), leaf(relocation, "artifactId"),
 				leaf(relocation, "version"), leaf(relocation, "message"));
 	}
@@ -257,7 +260,6 @@ final class PomReader {
 		if (properties == null) {
 			return result;
 		}
-		containerText(properties);
 		for (XmlElement property : properties.children()) {
 			result.put(property.name(), value(property));
 		}
@@ -285,8 +287,8 @@ final class PomReader {
 	}
 
 	/**
-	 * Checks a structure element: no text between its elements, and none of its known
-	 * fields twice.
+	 * Checks a structure element of a {@code maven-metadata.xml}: no text between its
+	 * elements, and none of its known fields twice.
 	 */
 	static void structure(XmlElement element, Set<String> fields) throws XmlParser.Malformed {
 		containerText(element);
@@ -317,10 +319,7 @@ final class PomReader {
 	}
 
 	private static String value(XmlElement element) throws XmlParser.Malformed {
-		if (!element.children().isEmpty()) {
-			throw new XmlParser.Malformed("parser must be on START_TAG or TEXT to read text (<" + element.name()
-					+ "> holds <" + element.children().get(0).name() + ">, line " + element.line() + ")");
-		}
+		PomSchema.value(element);
 		return element.text().trim();
 	}
 

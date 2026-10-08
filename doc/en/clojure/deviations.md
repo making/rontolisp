@@ -428,9 +428,7 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   program runs. A built-in library fetches nothing, its own dependencies included; the
   built-in Ring namespaces load without a `ring/ring-core` coordinate (the oracle needs one)
   and stand in for an older ring-core than the one shipped. Without the command line a
-  `pom.xml` project is not read either. Its model is validated at Maven's minimal level,
-  where the oracle's is strict, so a POM only the strict checks refuse (a resource without a
-  directory, say) is read. A library not fetched gives no data readers either: a tag only
+  `pom.xml` project is not read either. A library not fetched gives no data readers either: a tag only
   its `data_readers.clj` maps has no reader function, naming it.
   `settings.xml` credentials answer Basic authentication only (the oracle also answers Digest
   and NTLM), and a download, `maven-metadata.xml` included, is always checked against its `.sha1` (the

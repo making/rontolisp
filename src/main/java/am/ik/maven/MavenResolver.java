@@ -117,7 +117,9 @@ public final class MavenResolver {
 	 * them rather than as {@link #descriptor} converts them: each dependency's artifact
 	 * carries the classifier written in the POM (none where only its type implies one, as
 	 * {@code test-jar} implies {@code tests}) and its type's extension; the scope is
-	 * never empty.
+	 * never empty. Built at Maven's strict validation level, as tools.deps builds it (a
+	 * bare {@code DefaultModelBuildingRequest}); what only the lenient reader reads is a
+	 * warning.
 	 * @param pom the POM's bytes
 	 * @return the dependencies, in model order
 	 * @throws MavenResolutionException if Maven's model builder would reject the POM, or
@@ -126,7 +128,7 @@ public final class MavenResolver {
 	public synchronized List<Dependency> projectDependencies(byte[] pom) throws MavenResolutionException {
 		PomModel model;
 		try {
-			model = this.models.effective(pom);
+			model = this.models.effective(pom, ModelValidator.STRICT);
 		}
 		catch (InvalidPomException ex) {
 			throw new MavenResolutionException("the POM is invalid: " + ex.getMessage(), ex);
@@ -139,8 +141,9 @@ public final class MavenResolver {
 	 * project directory -- what tools.deps reads of a {@code pom.xml} project: a parent
 	 * at its {@code relativePath} beside the file (by default {@code ../pom.xml}, up a
 	 * chain of files) when it names the parent, else from the repositories; imports from
-	 * the repositories; the super POM's build defaults. Validated as a repository POM is
-	 * (Maven's minimal level).
+	 * the repositories; the super POM's build defaults. Validated at Maven's strict
+	 * level, as tools.deps builds it: a parent read beside it strictly too, one from a
+	 * repository at level 2.0, imports at the minimal level.
 	 * @param pom the {@code pom.xml}
 	 * @param systemProperties added over the resolver's system properties for this build
 	 * (tools.deps adds {@code project.basedir=.}, which a {@code ${project.basedir}} then
@@ -155,7 +158,7 @@ public final class MavenResolver {
 		system.putAll(systemProperties);
 		PomModel model;
 		try {
-			model = new ModelBuilder(this.access, system).effective(pom);
+			model = new ModelBuilder(this.access, system).effective(pom, ModelValidator.STRICT);
 		}
 		catch (InvalidPomException ex) {
 			throw new MavenResolutionException("the POM is invalid: " + ex.getMessage(), ex);

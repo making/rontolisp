@@ -117,7 +117,8 @@ no known type and a dependency the oracle cannot resolve are errors in its words
   source roots its build's source directory (by default `src/main/java`),
   `src/main/clojure`, its resource directories (by default `src/main/resources`) and the
   `add-source` / `add-resource` directories of `build-helper-maven-plugin`, read off the
-  first plugin as the oracle reads them.
+  first plugin as the oracle reads them. Both POMs are checked at Maven's strict validation
+  level, as the oracle checks them: a POM it refuses is refused, naming Maven's problems.
 - A dependency's jar holding classes joins the program's Java class path: the interpreter
   and the JVM call its classes, and `-o app.jar` copies it beside the jar. WebAssembly keeps
   refusing Java when called.

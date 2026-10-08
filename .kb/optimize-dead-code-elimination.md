@@ -406,8 +406,8 @@ and what it leaves must validate and re-encode to itself.
 `negated`, which is what an `if` -- whose wasm THEN arm is the Lisp else arm -- and a loop's exit
 `br_if` want). `not`/`null` flip `negated` and recurse; `consp`/`atom` are one `ref.test`;
 `eq`/`eql` the comparison's own i32; a numeric comparison goes to
-`WasmComparisonCompiler.tryCompileConditionI32` (the fused or `_rat_cmp_bits` i32, the hook that
-used to be the whole of this); `and`/`or` short-circuit through `if (result i32)` blocks over their
+`WasmComparisonCompiler.tryCompileConditionI32` (the float paths', the fused or the `_rat_cmp_bits`
+i32, the hook that used to be the whole of this); `and`/`or` short-circuit through `if (result i32)` blocks over their
 operands compiled the same way, so a chain of predicates never materialises a box; `t`/`nil` are
 constants, and `WasmIfCompiler` selects the arm of a constant test at compile time (a `cond`'s
 `(t ...)` clause used to reach the backend as `(if t x nil)`, its `t` a `_t_sym` call tested and
