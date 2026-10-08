@@ -309,6 +309,12 @@
       },
       {
         "condition": {
+          "typeReachable": "am.ik.rontolisp.clojure.ClojureBuiltinNamespaces"
+        },
+        "pattern": "am/ik/rontolisp/clojure/lib/rontolisp/[a-z_]+\\.clj"
+      },
+      {
+        "condition": {
           "typeReachable": "am.ik.rontolisp.eval.UrlLibrary"
         },
         "pattern": "am/ik/rontolisp/eval/url\\.lisp"

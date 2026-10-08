@@ -31,6 +31,7 @@ has them.
 | [Regular expressions](reference/regex.md) | `re-find`/`re-seq`/`re-matches`, `re-matcher`/`re-groups`, `re-pattern` and pattern `split`/`replace` |
 | [Ring adapter](reference/ring.md) | `ring.adapter.rontolisp/run-server`: a Ring handler served on every transport |
 | [Ring utilities](reference/ring-util.md) | The built-in `ring.util.*` and `ring.middleware.*` namespaces: response builders, URL and form coding, parameter middleware |
+| [HTTP client (rontolisp.http-client)](reference/http-client.md) | `request` and `get`/`post`/`put`/`delete`/`head`/`patch` with babashka.http-client's API, over `rontolisp:fetch` on every transport |
 | [WASM host functions (rontolisp.wasm)](reference/wasm.md) | `defimport`/`export`: a host function a module calls, a function the host calls |
 | [WIT contracts (rontolisp.wit)](reference/wit.md) | `import`/`export`/`provide`: a WIT interface called, a WIT world implemented |
 | [Java interop](reference/interop.md) | `.`, `..`, construction, `memfn`, `proxy` |

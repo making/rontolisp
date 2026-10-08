@@ -110,7 +110,7 @@ answered `2 5 3` before).
 | `try`/`catch`/`finally`/`throw` | `handler-case` inside `unwind-protect`; `throw` is `%clojure-throw` | one `handler-case` clause per catch, in order, of the type its class takes ("Catching"); `throw` signals an exception as itself (a caught one rethrows unchanged, a host `Throwable` as the `java:java-exception` carrying it, "Host exceptions"), anything else a `ClassCastException` (nil a `NullPointerException`) whose message is its rendering, so strings keep their message |
 | `ex-info` `ex-data` `ex-message` `ex-cause`, `.getMessage` `.getLocalizedMessage` `.getCause` | one call to the `clojure.lisp` "Exceptions" function | see "Exceptions" |
 | `assert` | `if` around the `AssertionError` carrier ("Refusals") | the `Assert failed:` message evaluates only on failure; it names the failed form, built only in the failure branch: rendered at lower time (`ClojureStringLowering.prSource`: symbols, keywords, integers, strings, chars, lists, vectors, maps) so no printer is linked, else `quote` through the readable `%clojure-str-of` (double, ratio, set, regex...) which links the collection printer (measured 2026-10-03: `(assert (nil? x))` wasm 3171 -> 3282 bytes; with a double in the form 3171 -> 54237 versus 21992 before) |
-| `atom` `deref`/`@` `swap!` `reset!` `compare-and-set!` `volatile!` `vswap!` `vreset!` | reads/writes of the cell | answer the new value; `compare-and-set!` compares with `eql`; `seq`/`first`/`count`/`empty?`/`cons`/`conj` onto a cell signal like the oracle; `deref` also reads a host `Future`, with or without a timeout ("A host `Future` under `deref`") |
+| `atom` `deref`/`@` `swap!` `reset!` `compare-and-set!` `volatile!` `vswap!` `vreset!` | reads/writes of the cell | answer the new value; `compare-and-set!` compares with `eql`; `seq`/`first`/`count`/`empty?`/`cons`/`conj` onto a cell signal like the oracle; `deref` also reads a host `Future`, with or without a timeout ("A host `Future` under `deref`"), and the rontolisp future the HTTP client answers ("HTTP client") |
 | `ref` `dosync` `alter` `commute` `ref-set` `ensure` | the cell under the spliced STM runtime | "State" |
 | `agent` `send` `send-off` `await` `shutdown-agents` | the cell as a synchronous agent | "State" |
 | `binding` / `set!` | `let*` of specials plus a depth counter | "State" |
@@ -131,6 +131,7 @@ answered `2 5 3` before).
 | `rontolisp.wasm` (`defimport` `export`, a `defn`'s `:wasm/export`) | `rontolisp:wasm-import` hoisted ahead of the datum / `rontolisp:wasm-export` after the whole program, each passing the name as written as `:as`; a converting crossing behind a wrapper `defun` (`ClojureWasmLowering`) | "Host boundary" |
 | `rontolisp.wit` (`import` `export` `provide`) | `rontolisp:wit-import` (hoisted) / `rontolisp:wit-export` (after the whole program), each with a `:names` table of the vars' symbols; `rontolisp:wit-provide` (`ClojureWitLowering`) | "Host boundary" |
 | `ring.util.response` `ring.util.request` `ring.util.codec` `ring.util.mime-type` `ring.middleware.params` `ring.middleware.keyword-params` `ring.middleware.content-type` | Clojure source in the jar, loaded like a project file; `rontolisp.internal.ring/NAME` (their kernels) is one call to `rontolisp::%clojure-ring-NAME` (`ClojureKernelLowering`, which holds every `rontolisp.internal.*` kernel namespace with its arities) | "Ring util namespaces" |
+| `rontolisp.http-client` (`request` `get` `post` `put` `delete` `head` `patch`) | Clojure source in the jar, loaded like a project file; `rontolisp.internal.http/request` is `rontolisp::%clojure-http-request`, `rontolisp.internal.http/fetch` is `rontolisp:fetch` itself (`ClojureKernelLowering`'s worker override) | "HTTP client" |
 | `clojure.edn` (`read-string` `read`) | `ClojureEdnLowering`: one call to `rontolisp::%clojure-edn-read-string-1` / `-read-string` / `-read` after a lower-time arity check in the oracle's wording; as a value `#'...-v` | "Reading", clojure.edn |
 | `clojure.walk` | Clojure source in the jar written for this front end, loaded like a project file (a startup namespace: on its first qualified name too) | "clojure.jar namespaces" |
 | `clojure.template` | the same, loaded at its `require` | "clojure.jar namespaces" |
@@ -867,8 +868,9 @@ a program without `ns` lowers unqualified. A quoted `'n/x` is the symbol of var 
   ("clojure.jar namespaces") or `unknown namespace: x`. A `clojure.*` namespace OUTSIDE
   that list (a contrib library, `clojure.data.json`) is an ordinary library on the source
   path, a `:local/root` dependency's or a project's (until 2026-10-08 every `clojure.*` was
-  refused; "deps.edn"). The built-in Ring namespaces load as project files from the jar
-  when no root holds them ("Ring util namespaces").
+  refused; "deps.edn"). The built-in Ring namespaces and `rontolisp.http-client` load as
+  project files from the jar when no root holds them ("Ring util namespaces", "HTTP
+  client").
 - **ns clauses and libspec options** (measured on `clj` 1.12.6, 2026-10-08):
   `(:gen-class ...)` is a no-op outside an AOT compile, options included, so the clause
   declares nothing (a top-level `gen-class` stays refused). `:as-alias` is a real alias
@@ -1150,6 +1152,98 @@ oracle's classpath; a `deps.edn` ring-core newer than the shipped one refuses th
   clojure-spec `ring-util-*` and `ring-middleware-*` (all four backends, oracle-identical),
   `examples/clojure/ring-hello.clj` (verified by hand 2026-10-08 under curl on the
   interpreter, the JVM class and `wasmtime serve`).
+
+## HTTP client
+
+**`rontolisp.http-client` is babashka.http-client's API (0.4.23) as a built-in Clojure
+namespace whose every request is the program's own `rontolisp:fetch` call: no transport is
+new, and the five fetch has (the JDK's on the interpreter and the JVM, `wasi:http`, the
+`--host-fetch` reactor's `env.fetch`, the `--native` runner) all carry it.**
+- Shape: `clojure/lib/rontolisp/http_client.clj` (`request` and six verbs, each `(request
+  (assoc opts :uri uri :method m))`) over the kernel namespace `rontolisp.internal.http`
+  (`ClojureKernelLowering`): `request` is `rontolisp::%clojure-http-request opts transport`,
+  `fetch` is `RONTOLISP:FETCH` itself (`Kernels.workers`). The namespace's transport `(fn [url
+  options] (kernel/fetch url options))` makes the PROGRAM name fetch, which is what the
+  transport splices read (`HostFetchLibrary`, `processForRunner`, `HttpLibrary` all run
+  before `ClojureLibrary`, the library's own references are invisible to them) and what makes
+  plain P1 and `--no-wasi` without `--host-fetch` refuse at compile time
+  (`WasmFetchCompiler.reject`, whose words name the client too). A kernel call sets
+  `usedExInfo` (`Kernels.exceptions`).
+- Decided 2026-10-08: babashka.http-client over hato and clj-http, being the smallest API
+  over the same `java.net.http` client fetch's JDK leg is. A built-in file rather than a
+  lowering slice like `ring.adapter.rontolisp`: the verbs are real vars (values, `#'`,
+  `:refer`), the `assoc` onto the options is the core's own; the cost is the front end's
+  defn arity words (`wrong number of arguments passed to: get`, an `ArityException`; the
+  oracle's `Wrong number of args (0) passed to: babashka.http-client/get`). The name
+  `babashka.http-client` (and its sub-namespaces) is refused when no root holds it, pointing
+  here (`ClojureBuiltinNamespaces.notShipped`: a claimed name promises its options, and
+  `:client`, `:interceptors`, `:version` and its `java.net.URI` `:uri` have no value kind
+  on wasm); its vars that build a Java client (`client`, `default-client-opts`, the `->X`
+  builders) are refused by name (`leftOut`).
+- The request (`clojure.lisp` "rontolisp.http-client"), at the call: the oracle's request
+  interceptors in their order -- headers merged under `{:accept "*/*"}` with
+  `prefer-string-keys` (a keyword name dropped beside a string one, written or
+  capitalized), `:request-method`, `:url`, `:accept :json`, `:basic-auth` (base64 of the
+  UTF-8 octets), `:oauth-token`, `:query-params` (`URLEncoder` through the Ring kernel
+  `%clojure-ring-form-encode`, a collection value repeating its key at any depth),
+  `:form-params` (content type unless the KEYWORD key names one, like the oracle's
+  `get-in`) -- then `java.net.URI/create`'s and the JDK client's refusals of the URL
+  (illegal character per component, malformed escape, `URI with undefined scheme`,
+  `invalid URI scheme`, `unsupported URI`), the client's restricted header names and
+  non-string values, and by name what no transport here honours (`:client`,
+  `:interceptors`, `:timeout` until todo 148, `:version`, `:multipart`, `:raw`,
+  `:expect-continue`, `:as :bytes`). A method fetch does not send is refused by name.
+- The exchange: plain defuns each answering an `async-lambda`'s future, never
+  `async-defun`s -- `LibraryDefunPruner` drops an unreached DEFUN and keeps every other
+  top-level form, so an async-defun in `clojure.lisp` rode every Clojure program (caught by
+  `ClojureLoweringTest#aProgramPassingRealFunctionsSplicesNoDispatcher`). `send` is fetch
+  with a transport failure as the `%clojure-io-exception` carrier over the transport's own
+  text; `follow` is the JDK's `RedirectFilter` under the oracle's default NORMAL policy
+  (301/302/303/307/308, `++hops < 5`, never https to http, 303 and a POST's 301/302 to GET,
+  the body kept only for an unchanged method off a 303, `ALLOWED_REDIRECT_HEADERS` across
+  origins, `URI.resolve` ported with its RFC 2396 empty-path rule; a hop's body
+  stream-closed); `respond` refuses a `gzip`/`deflate` body (nothing decompresses, so no
+  `accept-encoding` is sent) and an `:as` with no clause, drains through `read-all` unless
+  `:as :stream`, builds `{:status :headers :body :uri :request}` (headers a string-keyed
+  map, a repeated field a vector in wire order) and throws `ex-info` `Exceptional status
+  code: N` over it outside the oracle's unexceptional set unless `:throw false`; `exchange`
+  applies `:async-then`/`:async-catch` (the latter handed `{:ex CompletionException :ex-cause
+  :ex-data :ex-message :request}`) in async mode only. A plain call `%future-force`s it;
+  `:async true` answers it.
+- The rontolisp future and stream under the core verbs are arms of
+  `ClojureArms.Family.FETCH` (tests `%clojure-future-p`, `%clojure-async-stream-p`; the
+  alias `%clojure-future-or-host-p` -> `%clojure-host-future-p`, which the HOST family folds
+  in turn, so FETCH precedes HOST in the enum; producer the kernel's `%clojure-http-request`
+  alone). `deref`: a clause of `%clojure-deref-other` ahead of the host one (on the JVM the
+  future IS a `CompletableFuture`, whose settled EMARKER/VMARKER payload only `_await`
+  reads), a failure re-signalled as `java.util.concurrent.ExecutionException` over it (a
+  C%E with the cause), like `get`. Timed `deref`: `%clojure-future-get-within` polls the
+  new internal `rontolisp::%future-settled-p` between `(sleep 0.001)`s; on a component that
+  sleep is wait.lisp's `%future-force` of a timer, which drives the scheduler, so
+  `WaitForLibrary` splices it where `ClojureArms.sleepsOnAFuture` (a producer and the
+  timed arm). `future?` T; `future-done?` is `%future-settled-p`; `future-cancelled?` and
+  `future-cancel` false (cancel's "not possible"); `realized?` stays the
+  `ClassCastException` the oracle throws for a `CompletableFuture`. `:as :stream` is
+  fetch's body stream itself: `slurp` and `clojure.java.io/reader` drain it through
+  `read-all` (the reader into a string stream), `.close` is `stream-close`, and a Ring
+  response body passes it to the transport as it is, so a relay is byte-exact.
+- Per transport: on P1 (`--native`, `--host-fetch`) an async body runs to its end at the
+  call, so an `:async` request has completed when `get` returns and a timed deref never
+  times out; the `--host-fetch` host's JS `fetch` follows redirects itself (20 hops, `:uri`
+  the requested URL); a transport failure's text is the transport's (`java.net.ConnectException`,
+  `the WIT call answered its error arm: :CONNECTION-REFUSED`, `fetch: cannot connect to ...`).
+- Oracle (clj 1.12.6 + babashka.http-client 0.4.23 against the corpus origin, 2026-10-08):
+  identical but the response's missing `:version` and the `java.net.URI` `:uri` (a string
+  here), `accept-encoding`, the User-Agent (fetch's), a transport failure's class (an
+  `IOException`; the oracle's `ConnectException` is one), map key order, `:as :bytes`.
+- Pins: `FetchSpecE2eTest#clojureHttpClient` (`clojure-http-spec.yaml`: interpreter, JVM,
+  `--native`, component), `ClojureHttpClientTest` (the lowering, the refusals, the FETCH
+  strip, the P1 and `--no-wasi` refusals, a Ring proxy relaying a binary reply on the
+  interpreter and the JVM), `ClojureHttpClientHostFetchE2eTest` (node `--experimental-wasm-jspi`
+  over the generated glue's `defaultHost()`: the client, and a Ring proxy through
+  `worker(module)`), `ServeRingComponentE2eTest#wasmtimeServeRelaysAFetchedReplyByteForByte`
+  (opt-in), the `http-client.md` doc examples (`DocExamplesTest` points their URLs at its
+  local origin).
 
 ## Host boundary
 
@@ -2647,6 +2741,8 @@ in-scope program needs `valid?`/`conform` (then `explain-data` stays refused).
   `ClojureWasmInteropRefusalTest`, `ClojureWasmFileIoTest`, `ClojureWasmFileRefusalTest`.
 - `ClojureArmsTest` (the sorted-collection, unbound-root, matcher and refusal strips).
 - `ClojureRingAdapterTest`, `ClojureRingUtilTest` (the Ring namespaces),
+  `ClojureHttpClientTest`, `ClojureHttpClientHostFetchE2eTest` and
+  `FetchSpecE2eTest#clojureHttpClient` (the HTTP client),
   `ClojureWasmBoundaryTest`, `ClojureWitBoundaryTest` (the host boundary),
   `ClojureLanguageNamespacesTest` (where the clojure.jar namespaces come from).
 - `ClojureLibraryTest` (the splice), `SourceLanguageTest`, `RontoLispCliTest` and

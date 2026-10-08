@@ -12,8 +12,9 @@ import am.ik.rontolisp.LispVal;
  * onto {@code JvmAsyncRuntimeBuilder} helpers: {@code %async-run} (the lowered
  * {@code async-defun}/{@code async-lambda} primitive), {@code futurep}, {@code streamp},
  * {@code make-stream}, {@code %stream-new} (the internal from-thunk PULL constructor),
- * {@code stream-read}, {@code stream-write} and {@code stream-close}. Each compiles its
- * evaluated arguments and one {@code invokestatic}.
+ * {@code stream-read}, {@code stream-write}, {@code stream-close} and
+ * {@code %future-settled-p}. Each compiles its evaluated arguments and one
+ * {@code invokestatic}.
  */
 final class JvmAsyncOpsCompiler {
 
@@ -24,7 +25,7 @@ final class JvmAsyncOpsCompiler {
 		return switch (member) {
 			case LispNames.ASYNC_RUN, LispNames.FUTUREP, LispNames.ASYNC_STREAMP, LispNames.MAKE_STREAM,
 					LispNames.STREAM_NEW_INTERNAL, LispNames.STREAM_READ, LispNames.STREAM_WRITE,
-					LispNames.STREAM_CLOSE, LispNames.WAIT_FOR ->
+					LispNames.STREAM_CLOSE, LispNames.WAIT_FOR, LispNames.FUTURE_SETTLED_INTERNAL ->
 				true;
 			default -> false;
 		};
@@ -51,6 +52,7 @@ final class JvmAsyncOpsCompiler {
 			case LispNames.STREAM_WRITE -> ctx.streamWriteHelper;
 			case LispNames.STREAM_CLOSE -> ctx.streamCloseHelper;
 			case LispNames.WAIT_FOR -> ctx.waitForHelper;
+			case LispNames.FUTURE_SETTLED_INTERNAL -> ctx.futureSettledHelper;
 			default -> null;
 		};
 		if (helper == null) {

@@ -12,8 +12,10 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
+import java.util.TreeMap;
 import java.util.concurrent.Callable;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executors;
@@ -50,7 +52,10 @@ import static org.junit.jupiter.api.DynamicTest.dynamicTest;
  * ({@code rontolisp-native/runner/src/http}), a {@code --component} through
  * {@code wasi:http} under {@code wasmtime run -S http=y} (.kb/fetch-http.md). The
  * {@code ci-spec.yaml} idea: the cases are concatenated into one program per leg and the
- * output is sliced back per case, so a failure names its case and its leg.
+ * output is sliced back per case, so a failure names its case and its leg. The second
+ * corpus, {@code clojure-http-spec.yaml}, is the Clojure client
+ * ({@code rontolisp.http-client}) over the same origin and legs, one {@code .clj} program
+ * per leg.
  *
  * <p>
  * Every leg goes through the command line -- this JVM's {@link RontoLispCli}, or the
@@ -65,6 +70,16 @@ import static org.junit.jupiter.api.DynamicTest.dynamicTest;
 class FetchSpecE2eTest {
 
 	private static final String SPEC_RESOURCE = "/fetch-spec.yaml";
+
+	private static final String CLOJURE_SPEC_RESOURCE = "/clojure-http-spec.yaml";
+
+	/**
+	 * The request fields {@code /headers} leaves out: what the transports add on their
+	 * own (the default User-Agent included, which differs by target), not what the
+	 * program asked for.
+	 */
+	private static final List<String> UNSHOWN_FIELDS = List.of("host", "connection", "content-length", "http2-settings",
+			"upgrade", "user-agent", "transfer-encoding");
 
 	private static final String ORIGIN_MARK = "@ORIGIN@";
 
@@ -193,6 +208,59 @@ class FetchSpecE2eTest {
 			exchange.getResponseHeaders().add("Set-Cookie", "b=2");
 			answer(exchange, 200, "two");
 		});
+		// The Clojure client's (clojure-http-spec.yaml) beyond those.
+		server.createContext("/headers", exchange -> {
+			Map<String, List<String>> fields = new TreeMap<>();
+			exchange.getRequestHeaders().forEach((name, values) -> {
+				String field = name.toLowerCase(Locale.ROOT);
+				if (!UNSHOWN_FIELDS.contains(field)) {
+					fields.computeIfAbsent(field, k -> new ArrayList<>()).addAll(values);
+				}
+			});
+			answer(exchange, 200, fields.toString());
+		});
+		server.createContext("/query",
+				exchange -> answer(exchange, 200, String.valueOf(exchange.getRequestURI().getRawQuery())));
+		server.createContext("/form",
+				exchange -> answer(exchange, 200, exchange.getRequestHeaders().getFirst("Content-Type") + "|"
+						+ new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8)));
+		server.createContext("/status/500", exchange -> answer(exchange, 500, "broken"));
+		server.createContext("/status/308", exchange -> {
+			exchange.getResponseHeaders().add("Location", "/hello");
+			answer(exchange, 308, "moved");
+		});
+		server.createContext("/redirect-post", exchange -> {
+			exchange.getResponseHeaders().add("Location", "/echo");
+			answer(exchange, 302, "moved");
+		});
+		server.createContext("/redirect-307", exchange -> {
+			exchange.getResponseHeaders().add("Location", "/echo");
+			answer(exchange, 307, "moved");
+		});
+		server.createContext("/redirect-303", exchange -> {
+			exchange.getResponseHeaders().add("Location", "echo");
+			answer(exchange, 303, "moved");
+		});
+		server.createContext("/loop", exchange -> {
+			String query = exchange.getRequestURI().getRawQuery();
+			long hop = query == null ? 0 : Long.parseLong(query);
+			exchange.getResponseHeaders().add("Location", "/loop?" + (hop + 1));
+			answer(exchange, 302, "hop " + hop);
+		});
+		server.createContext("/no-location", exchange -> answer(exchange, 302, "nowhere"));
+		server.createContext("/slow", exchange -> {
+			try {
+				Thread.sleep(1000);
+			}
+			catch (InterruptedException ex) {
+				Thread.currentThread().interrupt();
+			}
+			answer(exchange, 200, "slow");
+		});
+		server.createContext("/lines", exchange -> {
+			exchange.getResponseHeaders().add("Content-Type", "text/plain; charset=utf-8");
+			answer(exchange, 200, "héllo, 世界\nsecond line\n");
+		});
 		server.setExecutor(Executors.newVirtualThreadPerTaskExecutor());
 		server.start();
 		origin = server;
@@ -224,7 +292,21 @@ class FetchSpecE2eTest {
 
 	@TestFactory
 	Stream<DynamicNode> e2e() throws Exception {
-		Spec spec = loadSpec();
+		return corpus(SPEC_RESOURCE, "fetch-spec.lisp");
+	}
+
+	/**
+	 * The Clojure client, {@code rontolisp.http-client}, over the same origin and legs
+	 * ({@code clojure-http-spec.yaml}): every request it makes goes through
+	 * {@code rontolisp:fetch}, so each transport is one leg here too.
+	 */
+	@TestFactory
+	Stream<DynamicNode> clojureHttpClient() throws Exception {
+		return corpus(CLOJURE_SPEC_RESOURCE, "http-spec.clj");
+	}
+
+	private static Stream<DynamicNode> corpus(String resource, String fileName) throws Exception {
+		Spec spec = loadSpec(resource);
 		String originUrl = "http://127.0.0.1:" + Objects.requireNonNull(origin).getAddress().getPort();
 		// The four runs share nothing but the origin, which serves each request on a
 		// thread of its own, so they run at once; the slices are built once all four
@@ -232,7 +314,7 @@ class FetchSpecE2eTest {
 		List<Callable<String>> runs = new ArrayList<>();
 		for (Leg leg : Leg.values()) {
 			String program = program(spec.on(leg), originUrl);
-			runs.add(started(leg, () -> run(leg, program)));
+			runs.add(started(leg, () -> run(leg, program, fileName)));
 		}
 		List<DynamicNode> legs = new ArrayList<>();
 		for (Leg leg : Leg.values()) {
@@ -290,9 +372,10 @@ class FetchSpecE2eTest {
 
 	}
 
-	private static String run(Leg leg, String program) throws Exception {
-		Path dir = Files.createDirectories(workDir.resolve(leg.key()));
-		Path source = dir.resolve("fetch-spec.lisp");
+	private static String run(Leg leg, String program, String fileName) throws Exception {
+		String stem = fileName.substring(0, fileName.lastIndexOf('.'));
+		Path dir = Files.createDirectories(workDir.resolve(stem + "-" + leg.key()));
+		Path source = dir.resolve(fileName);
 		Files.writeString(source, program, StandardCharsets.UTF_8);
 		return switch (leg) {
 			case INTERPRETER -> interpret(source);
@@ -302,7 +385,7 @@ class FetchSpecE2eTest {
 						dir.toString(), "FetchSpec"));
 			}
 			case NATIVE -> {
-				Path executable = dir.resolve("fetch-spec");
+				Path executable = dir.resolve(stem);
 				try {
 					compile(source, executable, "--native");
 				}
@@ -319,7 +402,7 @@ class FetchSpecE2eTest {
 				if (!HostWasmtime.isAvailable()) {
 					throw new Skipped("no usable wasmtime on PATH");
 				}
-				Path component = dir.resolve("fetch-spec.wasm");
+				Path component = dir.resolve(stem + ".wasm");
 				compile(source, component, "--component");
 				yield exec(dir, List.of("wasmtime", "run", "-W", "gc=y", "-W", "exceptions=y", "-S", "http=y",
 						component.toString()));
@@ -409,9 +492,9 @@ class FetchSpecE2eTest {
 		};
 	}
 
-	private static Spec loadSpec() throws IOException {
-		try (InputStream in = FetchSpecE2eTest.class.getResourceAsStream(SPEC_RESOURCE)) {
-			assertThat(in).as("test resource %s", SPEC_RESOURCE).isNotNull();
+	private static Spec loadSpec(String resource) throws IOException {
+		try (InputStream in = FetchSpecE2eTest.class.getResourceAsStream(resource)) {
+			assertThat(in).as("test resource %s", resource).isNotNull();
 			return YAMLMapper.builder()
 				.build()
 				.readValue(YamlResources.safeReader(new String(in.readAllBytes(), StandardCharsets.UTF_8)), Spec.class);

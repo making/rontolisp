@@ -14,6 +14,7 @@ import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.PackageRegistry;
+import am.ik.rontolisp.clojure.ClojureArms;
 import am.ik.rontolisp.compiler.WitExportDirective;
 import am.ik.rontolisp.compiler.WitImportDirective;
 import am.ik.rontolisp.reader.Features;
@@ -79,6 +80,11 @@ public final class WaitForLibrary {
 				break;
 			}
 		}
+		// A Clojure timed deref of a rontolisp future polls between sleeps
+		// (clojure.lisp's %clojure-future-get-within), and that library splices later in
+		// the pipeline too: its sleep call site counts where the program can make such a
+		// future and waits on one with a timeout.
+		referenced |= ClojureArms.sleepsOnAFuture(program);
 		if (!referenced || definesWaitFor(program)) {
 			return program;
 		}

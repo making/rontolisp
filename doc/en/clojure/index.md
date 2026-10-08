@@ -36,7 +36,7 @@ the seq verbs over strict list views of every collection, the persistent map and
 operations over `equal` hash tables, the numeric and predicate core, atoms and volatiles,
 multimethods with hierarchies, `try`/`catch`/`finally` with `ex-info`, namespaces across
 files (`ns`/`require` of project files) and `clojure.string`, `clojure.set`, `clojure.walk`, `clojure.edn`, `clojure.pprint`, `clojure.test` with its summary runner, a Ring adapter serving a handler on every
-backend (`ring.adapter.rontolisp`), the WASM host boundary and WIT contracts (`rontolisp.wasm`,
+backend (`ring.adapter.rontolisp`), an HTTP client sending through `rontolisp:fetch` on every backend that has it (`rontolisp.http-client`), the WASM host boundary and WIT contracts (`rontolisp.wasm`,
 `rontolisp.wit`), and Java interop. What each form lowers to, and what stays
 refused, is [Semantics](semantics.md); the reader rules are [Syntax](syntax.md); the
 departures from the oracle are [Deviations](deviations.md).

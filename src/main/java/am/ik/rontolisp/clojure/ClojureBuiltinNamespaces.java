@@ -31,22 +31,39 @@ final class ClojureBuiltinNamespaces {
 
 	/**
 	 * The shipped namespaces, each with the public vars of the oracle's namespace
-	 * (ring-core 1.15.5, ring-codec 1.3.0, clj 1.12.6) it leaves out and why.
+	 * (ring-core 1.15.5, ring-codec 1.3.0, clj 1.12.6; babashka.http-client 0.4.23 for
+	 * {@code rontolisp.http-client}, which has its API) it leaves out and why.
 	 */
-	private static final Map<String, Map<String, String>> SHIPPED = Map.of("ring.util.response", Map.of("file-response",
-			"it serves a java.io.File", "url-response", "it reads a java.net.URL", "resource-response",
-			"it reads a class-loader resource", "resource-data", "it reads a java.net.URL"), "ring.util.request",
-			Map.of(), "ring.util.codec",
-			Map.of("base64-encode", "it takes a byte array", "base64-decode", "it answers a byte array", "form-encode*",
-					"form-encode is a function, not a protocol, here", "FormEncodeable",
-					"form-encode is a function, not a protocol, here"),
-			"ring.util.mime-type", Map.of(), "ring.middleware.params", Map.of(), "ring.middleware.keyword-params",
-			Map.of(), "ring.middleware.content-type", Map.of(), "clojure.walk", Map.of(), "clojure.template", Map.of(),
-			"clojure.pprint",
-			Map.of("cl-format", "Common Lisp format directives over Clojure values are not built in", "formatter",
-					"Common Lisp format directives over Clojure values are not built in", "formatter-out",
-					"Common Lisp format directives over Clojure values are not built in", "code-dispatch",
-					"the code layout is not built in; simple-dispatch prints code as data"));
+	private static final Map<String, Map<String, String>> SHIPPED = Map.ofEntries(
+			Map.entry("ring.util.response",
+					Map.of("file-response", "it serves a java.io.File", "url-response", "it reads a java.net.URL",
+							"resource-response", "it reads a class-loader resource", "resource-data",
+							"it reads a java.net.URL")),
+			Map.entry("ring.util.request", Map.of()),
+			Map.entry("ring.util.codec",
+					Map.of("base64-encode", "it takes a byte array", "base64-decode", "it answers a byte array",
+							"form-encode*", "form-encode is a function, not a protocol, here", "FormEncodeable",
+							"form-encode is a function, not a protocol, here")),
+			Map.entry("ring.util.mime-type", Map.of()), Map.entry("ring.middleware.params", Map.of()),
+			Map.entry("ring.middleware.keyword-params", Map.of()), Map.entry("ring.middleware.content-type", Map.of()),
+			Map.entry("clojure.walk", Map.of()), Map.entry("clojure.template", Map.of()),
+			Map.entry("clojure.pprint",
+					Map.of("cl-format", "Common Lisp format directives over Clojure values are not built in",
+							"formatter", "Common Lisp format directives over Clojure values are not built in",
+							"formatter-out", "Common Lisp format directives over Clojure values are not built in",
+							"code-dispatch", "the code layout is not built in; simple-dispatch prints code as data")),
+			Map.entry("rontolisp.http-client", httpClientLeftOut()));
+
+	/**
+	 * The public vars of babashka.http-client 0.4.23 that {@code rontolisp.http-client}
+	 * leaves out: each builds or configures a {@code java.net.http.HttpClient}, and the
+	 * transport here is {@code rontolisp:fetch}, which the target picks.
+	 */
+	private static Map<String, String> httpClientLeftOut() {
+		String why = "it builds a java.net.http client; the transport is rontolisp:fetch, which the target picks";
+		return Map.of("client", why, "default-client-opts", why, "->ProxySelector", why, "->SSLContext", why,
+				"->Authenticator", why, "->CookieHandler", why, "->SSLParameters", why, "->Executor", why);
+	}
 
 	/**
 	 * The shipped namespaces {@code clj -M} has loaded before the program runs: a
@@ -145,13 +162,18 @@ final class ClojureBuiltinNamespaces {
 
 	/**
 	 * Why a namespace no root holds is refused, when it is one of the oracle's Ring
-	 * namespaces this front end does not ship.
+	 * namespaces this front end does not ship, or babashka.http-client's, whose API
+	 * {@code rontolisp.http-client} has under its own name.
 	 * @param ns the namespace
 	 * @return the refusal, or {@code null} for any other namespace
 	 */
 	static @Nullable String notShipped(String ns) {
 		if (ns.equals("ring.adapter.jetty")) {
 			return "ring.adapter.jetty is not built in: serve a Ring handler with ring.adapter.rontolisp/run-server";
+		}
+		if (ns.equals("babashka.http-client") || ns.startsWith("babashka.http-client.")) {
+			// a claimed name promises its options; the client here has a name of its own
+			return ns + " is not built in: rontolisp.http-client has its API over rontolisp:fetch";
 		}
 		return NOT_SHIPPED.contains(ns) ? ns + " is not built in: " + shippedRingList() : null;
 	}

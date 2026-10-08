@@ -35,3 +35,4 @@ source path like any other; any other namespace of Clojure's own is an error.
 | `clojure.test` | [Tests (clojure.test)](test.md) |
 | `ring.adapter.rontolisp` | [Ring adapter](ring.md) |
 | `ring.util.*`, `ring.middleware.*` | [Ring utilities](ring-util.md) |
+| `rontolisp.http-client` | [HTTP client](http-client.md) |

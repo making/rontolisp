@@ -30,6 +30,7 @@ interop エントリのすべてを、分野ごとにまとめています。**�
 | [正規表現](reference/regex.md) | `re-find`/`re-seq`/`re-matches`、`re-matcher`/`re-groups`、`re-pattern` とパターンの `split`/`replace` |
 | [Ring アダプター](reference/ring.md) | `ring.adapter.rontolisp/run-server`: Ring ハンドラをすべてのトランスポートで提供 |
 | [Ring ユーティリティ](reference/ring-util.md) | 組み込みの `ring.util.*` と `ring.middleware.*`: レスポンスの組み立て、URL とフォームの符号化、パラメーターのミドルウェア |
+| [HTTP クライアント (rontolisp.http-client)](reference/http-client.md) | babashka.http-client と同じ API の `request` と `get`/`post`/`put`/`delete`/`head`/`patch`。どのトランスポートでも `rontolisp:fetch` を通る |
 | [WASM ホスト関数 (rontolisp.wasm)](reference/wasm.md) | `defimport`/`export`: モジュールが呼ぶホスト関数、ホストが呼ぶ関数 |
 | [WIT 契約 (rontolisp.wit)](reference/wit.md) | `import`/`export`/`provide`: 呼び出す WIT インターフェース、実装する WIT world |
 | [Java interop](reference/interop.md) | `.`、`..`、構築、`memfn`、`proxy` |
