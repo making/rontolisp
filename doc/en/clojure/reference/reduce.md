@@ -8,6 +8,12 @@ value, collection; the 2-arity folds with no seed, answering `(f)` of an empty c
 and the lone member of a one-member one. A [`reduced`](reduced.md) answer stops the fold
 and answers its value.
 
+A record, deftype or `reify` whose type has its own row of
+`clojure.core.protocols/CollReduce`, in its body or extended to it, reduces through that
+row's `coll-reduce`, like the oracle; so do the verbs built on `reduce`: `into`,
+`transduce`, the `cat` transducer, `run!`, `mapv` and `filterv` of one collection,
+`group-by` and `frequencies` ([clojure.datafy](clojure-datafy.md)).
+
 ```clojure
 (println (reduce + '(1 2 3)))  ; 6
 (println (reduce + 0 [1 2 3])) ; 6

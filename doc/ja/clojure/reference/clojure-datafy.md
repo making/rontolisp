@@ -12,7 +12,8 @@ Clojure の同名の名前空間について文書化された振る舞いをも
 | `clojure.datafy/nav` | `(nav coll k v)`: `coll` の `k` の位置にある `v` が表すもの。`Navigable` を通し、拡張されていなければ `v` 自身 |
 | `clojure.core.protocols/Datafiable`、`datafy` | `datafy` のもとになるプロトコル。`nil` もほかの値も自分自身を返す。メタデータで拡張できる |
 | `clojure.core.protocols/Navigable`、`nav` | `nav` のもとになるプロトコル。メタデータで拡張できる |
-| `clojure.core.protocols/IKVReduce`、`kv-reduce` | `(kv-reduce amap f init)`: プログラムが自分の型に拡張できるプロトコルとしての `reduce-kv` |
+| `clojure.core.protocols/CollReduce`、`coll-reduce` | `(coll-reduce coll f)` / `(coll-reduce coll f val)`: コレクション自身による `reduce`。これを拡張した record・deftype・`reify` は、`reduce`・`into`・`transduce` など `reduce` の上に作られた動詞でもこれを通して畳み込まれる（[reduce](reduce.md)） |
+| `clojure.core.protocols/IKVReduce`、`kv-reduce` | `(kv-reduce amap f init)`: コレクション自身による `reduce-kv`。これを拡張した record・deftype・`reify` には `reduce-kv`・`update-vals`・`update-keys` が届く |
 | `clojure.core.protocols/InternalReduce`、`internal-reduce` | `(internal-reduce s f start)`: プロトコルとしてのシーケンスの `reduce` |
 
 メタデータで拡張できるプロトコルは、値のメタデータのうちメソッドの修飾シンボルのキーにあるメソッドを、
@@ -30,11 +31,29 @@ Clojure の同名の名前空間について文書化された振る舞いをも
 (d/nav (->Node 1) :parent 0) ; => #user.Node{:id 0}
 ```
 
+型は自前の `CollReduce` や `IKVReduce` の行を通して畳み込まれます。
+
+```clojure
+(require '[clojure.core.protocols :as p])
+(defrecord Bag [items])
+(extend-protocol p/CollReduce Bag
+  (coll-reduce ([b f] (reduce f (:items b))) ([b f init] (reduce f init (:items b)))))
+(reduce + 10 (->Bag [1 2 3])) ; => 16
+(into [:x] (->Bag [1 2])) ; => [:x 1 2]
+(deftype Pair [a b]
+  p/IKVReduce
+  (kv-reduce [_ f init] (f (f init :a a) :b b)))
+(reduce-kv (fn [acc k v] (conj acc k v)) [] (Pair. 1 2)) ; => [:a 1 :b 2]
+```
+
 ## 違い
 
-- `CollReduce` と `coll-reduce`（2 つのアリティを持つプロトコルメソッド）、`iterator-reduce!` は
-  組み込まれておらず、名前を使うとそのことを告げるエラーになります。
-- `reduce` と `reduce-kv` は `InternalReduce` や `IKVReduce` を参照しません。拡張を使うには
-  `internal-reduce` や `kv-reduce` を直接呼びます。
+- `iterator-reduce!` は組み込まれていません（`java.util.Iterator` を畳み込む関数です）。名前を使うと
+  そのことを告げるエラーになります。
+- `reduce` と `reduce-kv` が `CollReduce` と `IKVReduce` を参照するのは record・deftype・`reify` に
+  対してだけです。どちらかのプロトコルを `nil`、`Object`、コアの種類（`String`、マップ）へ拡張した
+  ものには、`coll-reduce` や `kv-reduce` を直接呼んで届きます。Clojure の `reduce` は、自分では
+  畳み込まないコレクション（文字列、マップ）についてもその拡張を使います。`reduce` は
+  `InternalReduce` を参照しません。
 - 例外は自分自身にデータ化されます（Clojure は `Throwable->map` のマップを返します）。名前空間や
   クラスも自分自身になります。

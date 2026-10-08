@@ -269,6 +269,18 @@ public final class ClojureArms {
 				Set.of("RONTOLISP::%CLOJURE-RE-MATCHER"), Set.of()),
 
 		/**
+		 * A record, deftype or reify whose type has its own row of
+		 * {@code clojure.core.protocols}' {@code CollReduce} or {@code IKVReduce}, which
+		 * {@code reduce}, {@code reduce-kv} and the verbs the oracle builds on them hand
+		 * to that row: only the store of such a row makes one
+		 * ({@link ClojureLowering.ProtocolDef#reducerRow}). The view is the members such
+		 * a reduction steps, which {@code group-by} and {@code frequencies} walk.
+		 */
+		REDUCIBLE("reducible", Set.of("RONTOLISP::%CLOJURE-COLL-REDUCIBLE-P", "RONTOLISP::%CLOJURE-KV-REDUCIBLE-P"),
+				Set.of(ClojureSeqLowering.REDUCIBLE_ITEMS), Map.of(),
+				Set.of("RONTOLISP::%CLOJURE-COLL-REDUCER-ROW", "RONTOLISP::%CLOJURE-KV-REDUCER-ROW"), Set.of()),
+
+		/**
 		 * A read in clojure.edn's grammar, which the run-time reader's EDN clauses take:
 		 * only the {@code clojure.edn} entries ({@link ClojureEdnLowering}) start one.
 		 */

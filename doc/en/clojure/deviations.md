@@ -254,6 +254,16 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   protocol's interface (`user.P`) knows the records and deftypes defined when the site is
   lowered, so one a later REPL input defines is not an instance there; the protocol's own
   name (`P`, a var) is an unknown name, where the oracle throws a `ClassCastException`.
+- `reduce` and `reduce-kv` (and the verbs built on them) consult
+  `clojure.core.protocols/CollReduce` and `IKVReduce` for a record, deftype or `reify`
+  only: an extension of either to `nil`, `Object` or a core kind is reached through
+  `coll-reduce` or `kv-reduce` themselves, where the oracle's `reduce` also takes one for
+  a collection that does not reduce itself (a string, a map). A call of a protocol method
+  with a count an inline body leaves out signals an `ArityException` (the oracle: an
+  `AbstractMethodError`).
+- `clojure.core.reducers` folds on the calling thread, its parts one after the other, and
+  `cat` of two non-empty collections answers one accumulator (a vector) holding both, where
+  the oracle answers a `Cat` tree whose fold combines its halves' folds.
 - The `unchecked-` arithmetic verbs wrap integers at 64 bits (`-int` verbs at 32) and the casts
   `short`, `byte`, `char` and `float` match the oracle, with one deviation: an integer past 64
   bits is a plain integer here, so the oracle's unwrapped bigint operand
@@ -308,8 +318,9 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
 - Transducers are the oracle's functions over reducing functions, but an `eduction` is
   the `sequence` of its input through them, computed once (strictly over a strict input,
   lazily over a lazy one), where the oracle re-runs the transformation every time it is
-  reduced; `println` prints it as that seq where the oracle prints the object. A
-  `reduced` value prints as its wrapper list.
+  reduced; `println` prints it as that seq where the oracle prints the object. An input
+  reducing through its own `CollReduce` row is reduced at the `eduction`, so its `seq`
+  answers where the oracle's refuses. A `reduced` value prints as its wrapper list.
 - Transactions are single-threaded extents: `dosync` never retries, `commute`
   runs its function once (the oracle may run it twice), validators run on the
   write and a failed one leaves the old value; `alter` and friends outside

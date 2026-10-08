@@ -1047,10 +1047,14 @@ public final class ClojureLowering {
 	 * {@code defrecord}/{@code deftype}/{@code reify} body holds, which win over the
 	 * target's metadata, which wins over the extension rows, like the oracle; null for
 	 * every other protocol, whose inline rows share the method table. {@code arities}
-	 * maps each method to its signature's parameter count, the target included.
+	 * maps each method to the parameter counts of its signatures, the target included.
+	 * {@code reducerRow} is the library function storing a record's, deftype's or reify's
+	 * row of {@code clojure.core.protocols}' {@code CollReduce} or {@code IKVReduce},
+	 * which {@code reduce} and {@code reduce-kv} hand such a value to; null for every
+	 * other protocol.
 	 */
-	record ProtocolDef(Set<String> methods, Map<String, Integer> arities, LispSymbol methodsVar, LispSymbol defaultVar,
-			@Nullable LispSymbol inlineVar) {
+	record ProtocolDef(Set<String> methods, Map<String, Set<Integer>> arities, LispSymbol methodsVar,
+			LispSymbol defaultVar, @Nullable LispSymbol inlineVar, @Nullable String reducerRow) {
 
 		/** The table an inline (body) implementation is stored in. */
 		LispSymbol inlineTable() {
@@ -3831,7 +3835,7 @@ public final class ClojureLowering {
 			case "group-by":
 				ClojureLowerUtil.isTrue(n == 2, "group-by takes a function and a collection");
 				return ClojureFilterLowering.groupByForm(this, ClojureBindingLowering.fnArg(this, items.get(1)),
-						ClojureSeqLowering.seqAllForm(this, lower(items.get(2))));
+						ClojureSeqLowering.reducedAllForm(this, lower(items.get(2))));
 			case "sort":
 				return ClojureFilterLowering.sortOf(this, items);
 			case "sort-by":
@@ -3877,7 +3881,7 @@ public final class ClojureLowering {
 			case "frequencies":
 				ClojureLowerUtil.isTrue(n == 1, "frequencies takes one collection");
 				return ClojureUpdateLowering.frequenciesForm(this,
-						ClojureSeqLowering.seqAllForm(this, lower(items.get(1))));
+						ClojureSeqLowering.reducedAllForm(this, lower(items.get(1))));
 			case "comp":
 				return ClojureFnLowering.compOf(this, items);
 			case "partial":
@@ -4589,9 +4593,21 @@ public final class ClojureLowering {
 	// errors: try over handler-case and unwind-protect, throw over error
 
 	/**
-	 * One parsed method implementation: the method name, its parameter vector and body.
+	 * One parsed method implementation: the method name and its arities, one or more. An
+	 * inline body ({@code defrecord}, {@code deftype}, {@code reify}) spells each arity
+	 * as the method name again over another parameter vector; an extension spells them as
+	 * the clauses of a {@code fn}, {@code (m ([x] ...) ([x y] ...))}.
 	 */
-	record TypeMethod(String method, LispVal params, List<LispVal> body) {
+	record TypeMethod(String method, List<MethodArity> arities) {
+
+		TypeMethod(String method, LispVal params, List<LispVal> body) {
+			this(method, List.of(new MethodArity(params, body)));
+		}
+
+	}
+
+	/** One arity of a method implementation: its parameter vector and body. */
+	record MethodArity(LispVal params, List<LispVal> body) {
 	}
 
 	/** One parsed implementation group: the protocol plus its method implementations. */
