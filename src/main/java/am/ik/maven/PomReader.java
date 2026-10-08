@@ -185,7 +185,7 @@ final class PomReader {
 	 * The items of a list element; any other child is skipped, as the lenient reader
 	 * does.
 	 */
-	private static List<XmlElement> items(@Nullable XmlElement list, String itemName) throws XmlParser.Malformed {
+	static List<XmlElement> items(@Nullable XmlElement list, String itemName) throws XmlParser.Malformed {
 		if (list == null) {
 			return List.of();
 		}
@@ -197,7 +197,7 @@ final class PomReader {
 	 * Checks a structure element: no text between its elements, and none of its known
 	 * fields twice.
 	 */
-	private static void structure(XmlElement element, Set<String> fields) throws XmlParser.Malformed {
+	static void structure(XmlElement element, Set<String> fields) throws XmlParser.Malformed {
 		containerText(element);
 		Set<String> seen = new HashSet<>();
 		for (XmlElement child : element.children()) {
@@ -220,7 +220,7 @@ final class PomReader {
 	}
 
 	/** The trimmed value of the first child of that name, {@code null} without one. */
-	private static @Nullable String leaf(XmlElement parent, String name) throws XmlParser.Malformed {
+	static @Nullable String leaf(XmlElement parent, String name) throws XmlParser.Malformed {
 		XmlElement child = parent.child(name);
 		return child == null ? null : value(child);
 	}

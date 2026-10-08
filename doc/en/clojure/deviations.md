@@ -363,9 +363,11 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   built-in Ring namespaces load without a `ring/ring-core` coordinate (the oracle needs one)
   and stand in for an older ring-core than the one shipped. A `pom.xml` project is not read,
   nor is a library's `data_readers.clj`: its tags are refused like any unknown tag. A
-  version range, `RELEASE`, `LATEST`, a `SNAPSHOT` and a repository a `settings.xml` mirror
-  or proxy covers are refused (the oracle resolves them), and a download is always checked
-  against its `.sha1` (the oracle's default only warns). A git tag is checked against the
+  repository a `settings.xml` mirror or proxy covers is refused (the oracle resolves it), and
+  a download, `maven-metadata.xml` included, is always checked against its `.sha1` (the
+  oracle's default only warns). A file no repository had is not asked for again until the
+  next day (the oracle asks on every run); one update policy, daily, serves every repository
+  (a repository's `:update` is not read). A git tag is checked against the
   local clone, which is fetched only when the tag is missing or names another commit (the
   oracle fetches on every resolution); checkouts live in `~/.rontolisp/gitlibs`, not
   `~/.gitlibs`. Two commits of one library neither of which descends from the other are

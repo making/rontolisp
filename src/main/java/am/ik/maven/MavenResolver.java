@@ -22,10 +22,15 @@ import org.jspecify.annotations.Nullable;
  * repository in the layout {@code mvn} and {@code clj} share.
  *
  * <p>
- * What needs {@code maven-metadata.xml} is refused by name: SNAPSHOT versions, version
- * ranges, {@code LATEST}/{@code RELEASE}. So are a {@code settings.xml} mirror or proxy
- * covering a repository about to be contacted. Repositories a POM declares are never
- * consulted; the caller's list is the only one.
+ * Versions resolve through the repositories' {@code maven-metadata.xml}, as Maven's do: a
+ * {@code SNAPSHOT} to the build deployed last (or installed locally), {@code LATEST} and
+ * {@code RELEASE} to the version the metadata names, a version range in a dependency or a
+ * parent to the versions the metadata lists. The metadata is cached in the local
+ * repository and asked for again under the update policy (Maven's default, daily), which
+ * also governs when a repository that had no copy of a file is asked again. A
+ * {@code settings.xml} mirror or proxy covering a repository about to be contacted is
+ * refused by name. Repositories a POM declares are never consulted; the caller's list is
+ * the only one.
  *
  * <p>
  * Every public method holds the instance lock: one resolver serves several threads, one
@@ -42,7 +47,7 @@ public final class MavenResolver {
 
 	private MavenResolver(RepositoryAccess access, Map<String, String> systemProperties) {
 		this.access = access;
-		this.models = new ModelBuilder(access::read, systemProperties);
+		this.models = new ModelBuilder(access, systemProperties);
 	}
 
 	/**
@@ -79,10 +84,12 @@ public final class MavenResolver {
 
 	/**
 	 * Reads an artifact's descriptor, following relocations. A POM no repository has, or
-	 * one Maven would reject, answers no dependencies and a warning.
+	 * one Maven would reject, answers no dependencies and a warning. A {@code SNAPSHOT},
+	 * {@code LATEST} or {@code RELEASE} version reads the POM of the version it resolves
+	 * to, the descriptor's artifact keeping the version asked for (as Maven's does).
 	 * @param artifact the artifact
 	 * @return the descriptor
-	 * @throws MavenResolutionException if the version needs {@code maven-metadata.xml}, a
+	 * @throws MavenResolutionException if the version is a range or cannot be resolved, a
 	 * repository fails, or a parent or imported POM cannot be resolved
 	 */
 	public synchronized ArtifactDescriptor descriptor(Artifact artifact) throws MavenResolutionException {
@@ -137,21 +144,23 @@ public final class MavenResolver {
 	 */
 	public synchronized DependencyGraph collect(List<Dependency> dependencies, List<Dependency> managedDependencies)
 			throws MavenResolutionException {
-		return new DependencyCollector(this::descriptor, managedDependencies).collect(dependencies);
+		return new DependencyCollector(this::descriptor, this.access::versionRange, managedDependencies)
+			.collect(dependencies);
 	}
 
 	/**
 	 * Resolves the dependency graph below {@code dependencies} as Maven resolves a
 	 * project's: the collected graph ({@link #collect}) with one node kept per artifact
 	 * by Maven Resolver's conflict resolution under Maven's session -- the nearest
-	 * occurrence wins (between two children of one parent, the higher version), its scope
-	 * is chosen over the scopes every path derives for it, and its optional flag
-	 * likewise. {@link DependencyGraph#runtimeClassPath()} reads the class path off the
-	 * result.
+	 * occurrence wins (between two children of one parent, the higher version) among
+	 * those every version range met so far admits, its scope is chosen over the scopes
+	 * every path derives for it, and its optional flag likewise.
+	 * {@link DependencyGraph#runtimeClassPath()} reads the class path off the result.
 	 * @param dependencies the requested dependencies, the graph's roots
 	 * @param managedDependencies the dependency management (may be empty)
 	 * @return the resolved graph
-	 * @throws MavenResolutionException if a node cannot be resolved or is refused
+	 * @throws MavenResolutionException if a node cannot be resolved or is refused, or no
+	 * version satisfies every range met for an artifact
 	 */
 	public synchronized DependencyGraph resolve(List<Dependency> dependencies, List<Dependency> managedDependencies)
 			throws MavenResolutionException {
@@ -160,14 +169,16 @@ public final class MavenResolver {
 
 	/**
 	 * Returns an artifact's file in the local repository, downloading and verifying it
-	 * first when it is not there.
+	 * first when it is not there. A {@code SNAPSHOT}, {@code LATEST} or {@code RELEASE}
+	 * version is resolved first ({@link #version}); a snapshot deployed under a timestamp
+	 * answers its copy under the {@code -SNAPSHOT} name.
 	 * @param artifact the artifact
 	 * @return the file
 	 * @throws MavenResolutionException if no repository has it, a repository fails, or
-	 * the version needs {@code maven-metadata.xml}
+	 * the version is a range or cannot be resolved
 	 */
 	public synchronized Path artifact(Artifact artifact) throws MavenResolutionException {
-		refuseUnsupported(artifact);
+		refuseRange(artifact);
 		Path path = this.access.fetch(artifact);
 		if (path == null) {
 			StringJoiner searched = new StringJoiner(", ");
@@ -180,49 +191,92 @@ public final class MavenResolver {
 		return path;
 	}
 
-	private static void refuseUnsupported(Artifact artifact) throws MavenResolutionException {
+	/**
+	 * Resolves a version the way Maven's version resolver does: {@code RELEASE} to the
+	 * release the artifact's {@code maven-metadata.xml} names, {@code LATEST} to the
+	 * latest (else the release; a snapshot resolved further), a {@code -SNAPSHOT} to the
+	 * build its file was deployed as -- the newest record across the local repository and
+	 * the remote ones, or the version itself when none names one -- and any other version
+	 * to itself.
+	 * @param artifact the artifact; its classifier and extension pick a snapshot's file
+	 * @return the version
+	 * @throws MavenResolutionException if {@code RELEASE} or {@code LATEST} resolves to
+	 * nothing, the version is a range, or a repository is refused
+	 */
+	public synchronized String version(Artifact artifact) throws MavenResolutionException {
+		refuseRange(artifact);
+		return this.access.resolveVersion(artifact).version();
+	}
+
+	/**
+	 * Resolves a version range the way Maven's version range resolver does: the versions
+	 * the artifact's {@code maven-metadata.xml} lists -- the local repository's and every
+	 * remote one's -- that the range contains, ascending. A plain version, or a range of
+	 * one version ({@code [1.0]}), answers itself without any metadata.
+	 * @param artifact the artifact, its version the range
+	 * @return the versions, ascending; empty when the metadata lists none in range
+	 * @throws MavenResolutionException if the version is not a valid range, or a
+	 * repository is refused
+	 */
+	public synchronized List<String> versions(Artifact artifact) throws MavenResolutionException {
 		if (artifact.version().isEmpty()) {
 			throw new MavenResolutionException(artifact + ": no version");
 		}
-		String unsupported = artifact.unsupportedVersion();
-		if (unsupported != null) {
-			throw new MavenResolutionException(artifact + ": " + unsupported);
+		return this.access.versionRange(artifact).versions();
+	}
+
+	private static void refuseRange(Artifact artifact) throws MavenResolutionException {
+		if (artifact.version().isEmpty()) {
+			throw new MavenResolutionException(artifact + ": no version");
+		}
+		if (artifact.isVersionRange()) {
+			throw new MavenResolutionException(
+					artifact + ": a version range names no single artifact (versions(..) resolves it)");
 		}
 	}
 
-	/** Maven's descriptor reader: follow relocations until a POM has none. */
+	/**
+	 * Maven's descriptor reader: follow relocations until a POM has none. Each POM is
+	 * read at its resolved version; the descriptor keeps the version asked for until a
+	 * relocation names another artifact, and the warnings and relocations name the
+	 * resolved one.
+	 */
 	private ArtifactDescriptor readDescriptor(Artifact requested) throws MavenResolutionException {
 		List<Artifact> relocations = new ArrayList<>();
 		Set<String> visited = new LinkedHashSet<>();
+		Artifact described = requested;
 		Artifact artifact = requested;
 		while (true) {
-			refuseUnsupported(artifact);
-			if (!visited.add(artifact.groupId() + ":" + artifact.artifactId() + ":" + artifact.version())) {
-				return empty(artifact, relocations, invalid(artifact, "Artifact relocations form a cycle: " + visited));
+			refuseRange(artifact);
+			Artifact resolved = artifact.withVersion(this.access.resolveVersion(artifact).version());
+			if (!visited.add(resolved.groupId() + ":" + resolved.artifactId() + ":" + resolved.baseVersion())) {
+				return empty(described, relocations,
+						invalid(resolved, "Artifact relocations form a cycle: " + visited));
 			}
 			PomModel model;
 			try {
 				model = this.models.effective(artifact.pom());
 			}
 			catch (InvalidPomException ex) {
-				return empty(artifact, relocations, invalid(artifact, ex.getMessage()));
+				return empty(described, relocations, invalid(resolved, ex.getMessage()));
 			}
 			if (model == null) {
-				return empty(artifact, relocations,
-						"The POM for " + artifact + " is missing, no dependency information available");
+				return empty(described, relocations,
+						"The POM for " + resolved + " is missing, no dependency information available");
 			}
 			PomModel.Relocation relocation = model.relocation();
 			if (relocation == null) {
-				return descriptorOf(artifact, relocations, model);
+				return descriptorOf(described, relocations, model);
 			}
-			Artifact target = new Artifact(or(relocation.groupId(), artifact.groupId()),
-					or(relocation.artifactId(), artifact.artifactId()), or(relocation.version(), artifact.version()),
-					artifact.classifier(), artifact.extension());
-			if (target.equals(artifact)) {
-				return descriptorOf(artifact, relocations, model);
+			Artifact target = new Artifact(or(relocation.groupId(), resolved.groupId()),
+					or(relocation.artifactId(), resolved.artifactId()), or(relocation.version(), resolved.version()),
+					resolved.classifier(), resolved.extension());
+			if (target.equals(resolved)) {
+				return descriptorOf(described, relocations, model);
 			}
-			relocations.add(artifact);
+			relocations.add(resolved);
 			artifact = target;
+			described = target;
 		}
 	}
 
@@ -288,7 +342,23 @@ public final class MavenResolver {
 
 		private @Nullable Map<String, String> systemProperties;
 
+		private UpdatePolicy updatePolicy = UpdatePolicy.DAILY;
+
 		private Builder() {
+		}
+
+		/**
+		 * Sets when a remote repository is asked again for a {@code maven-metadata.xml}
+		 * the local repository caches, and for a file it did not have, in Maven's
+		 * spellings (default: {@code daily}, Maven's).
+		 * @param policy {@code always}, {@code daily}, {@code never} or
+		 * {@code interval:MINUTES}
+		 * @return this builder
+		 * @throws IllegalArgumentException for any other spelling
+		 */
+		public Builder updatePolicy(String policy) {
+			this.updatePolicy = UpdatePolicy.parse(policy);
+			return this;
 		}
 
 		/**
@@ -365,7 +435,9 @@ public final class MavenResolver {
 				properties = snapshot;
 			}
 			Downloader chosen = this.downloader != null ? this.downloader : new HttpDownloader();
-			return new MavenResolver(new RepositoryAccess(local, this.repositories, chosen, this.settings), properties);
+			return new MavenResolver(
+					new RepositoryAccess(local, this.repositories, chosen, this.settings, this.updatePolicy),
+					properties);
 		}
 
 	}

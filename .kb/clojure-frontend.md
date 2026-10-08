@@ -980,8 +980,10 @@ repositories, `GITLIBS` set; tools.deps read from the CLI jar).
   `group/artifact$classifier`, its coord `:mvn/version`, `:extension` when not jar, `:exclusions`
   as a set of `group/artifact` (a POM's `*:*` is no lib's name: measured, excludes nothing).
   The jar (`mavenArtifact`) only for extension jar (`:extension "pom"`: children, no root).
-  `canonicalize`: `[1.0]` is 1.0; a range/`RELEASE`/`LATEST` goes to `mavenVersion`, refused by
-  name until `e47`; SNAPSHOT refused at the fetch. A `:classifier` key is the oracle's `Invalid
+  `canonicalize`: `[1.0]` is 1.0; a range goes to `mavenVersion` -> `MavenResolver.versions`, its
+  highest (`Unable to resolve LIB version: RANGE` when none, the oracle's words), `RELEASE`/`LATEST`
+  -> `MavenResolver.version`; a SNAPSHOT resolves at the fetch (`ClojureDepsFetchCliTest`,
+  measured against clj 1.12.6 2026-10-08). A `:classifier` key is the oracle's `Invalid
   library spec` refusal. Repositories (`ClojureBasis.mavenSource`, `remote-repos`): central,
   clojars, then the merged maps' others in order, `nil` removes one, `:releases {:enabled
   false}` drops one, `http:` refused (`Invalid repo url (http not supported)`) unless
@@ -1056,8 +1058,9 @@ repositories, `GITLIBS` set; tools.deps read from the CLI jar).
   (`java -jar`, this machine), so re-resolving costs ~0.1 s, and the warm run passes with both
   repositories pointed at an unreachable host. A cache keyed by `deps.edn` content would save
   that 0.1 s for an invalidation scheme (local roots' manifests, jar times) whose failure is a
-  stale classpath. Not built. Left open: a POM no repository has is asked again every run
-  (am.ik.maven writes no `.lastUpdated`), so that one case needs the network.
+  stale classpath. Not built. A POM no repository has is recorded as Maven records it
+  (`FILE.lastUpdated`) and not asked again within the update policy (daily), nor is cached
+  `maven-metadata.xml` (`.kb/maven-resolver.md`, "Repositories"), so that case is network-free too.
 - **Built-in coordinates** (`ClojureBuiltinLibs`): `org.clojure/clojure`, `spec.alpha` and
   `core.specs.alpha` at any Maven version are the front end; `ring/ring-core` up to 1.15.5 and
   `ring/ring-codec` up to 1.3.0 are the shipped Ring files, standing in for an older version

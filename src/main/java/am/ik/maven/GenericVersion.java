@@ -20,9 +20,12 @@ import org.jspecify.annotations.Nullable;
  */
 final class GenericVersion implements Comparable<GenericVersion> {
 
+	private final String text;
+
 	private final List<Item> items;
 
-	private GenericVersion(List<Item> items) {
+	private GenericVersion(String text, List<Item> items) {
+		this.text = text;
 		this.items = items;
 	}
 
@@ -37,7 +40,7 @@ final class GenericVersion implements Comparable<GenericVersion> {
 			items.add(tokenizer.toItem());
 		}
 		trimPadding(items);
-		return new GenericVersion(items);
+		return new GenericVersion(version, items);
 	}
 
 	private static void trimPadding(List<Item> items) {
@@ -109,6 +112,15 @@ final class GenericVersion implements Comparable<GenericVersion> {
 	@Override
 	public int hashCode() {
 		return this.items.hashCode();
+	}
+
+	/**
+	 * The version as written.
+	 * @return the text
+	 */
+	@Override
+	public String toString() {
+		return this.text;
 	}
 
 	private static final class Tokenizer {

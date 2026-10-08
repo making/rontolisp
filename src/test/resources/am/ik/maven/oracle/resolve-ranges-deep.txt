@@ -1,0 +1,7 @@
+# resolve test.range:deep:1
+test.range:deep:jar::1 scope=compile optional=false
+  test.range:mid:jar::1 scope=compile optional=false
+    test.range:lib:jar::1.5 scope=compile optional=false range=[1.0,1.5]
+      test.range:leaf:jar::1 scope=compile optional=false
+  test.range:mid2:jar::1 scope=compile optional=false
+warning missing test.range:lib:jar:1.7
