@@ -8152,3 +8152,41 @@ cases:
       "(ns a\n  (:require b ... ...))\n"
       "(defn f [x] (let # a))\n"
       "(when-not\n  done\n  (recur))"
+  - name: clojure-data-diff-compares-like-the-oracle
+    # The built-in clojure.data (.kb/clojure-frontend.md "clojure.jar namespaces"): diff over
+    # atoms, maps (a lazy seq of three), sequential collections (vectors of three, index by
+    # index), sets and records, the equality partitions, diff-similar, and a deftype extending
+    # both protocols. Every line is the oracle's (clj 1.12.6), on all four backends; no
+    # answer holds a map of two keys, since a hash map's walk order differs.
+    source: |
+      (ns data-diff (:require [clojure.data :as d :refer [diff]]))
+      (prn (diff 1 1) (diff 1 2) (diff 1 "1") (diff nil 1) (diff nil nil) (diff "abc" "abd"))
+      (prn (diff {:a 1} {:a 2}) (seq? (diff {:a 1} {:a 2})) (vector? (diff [1] [2])))
+      (prn (diff [1 2 3] [5 2 3]) (diff [1 2] [1 2 3]) (diff [1 2 3] [1 2]) (diff [] [1]) (diff [nil 1] [nil 2]))
+      (prn (diff '(1 2) [1 3]) (diff [1] '(1)) (diff (range 4) (range 2)) (diff [1 2 3 4 5] [1 0 3 0 5]))
+      (prn (diff #{1 2} #{2 3}) (diff #{1} #{2}) (diff #{} #{1}))
+      (prn (diff {:a {:b 1 :c 2}} {:a {:b 1 :c 3}}) (diff {:a [1 2]} {:a [1 3]}) (diff {:a #{1}} {:a #{2}}))
+      (prn (diff {:a nil} {:b nil}) (diff {:a nil} {:a nil}) (diff {:a nil} {}) (diff {:a 1} {:a nil}) (diff {:a 1} [1]))
+      (prn (diff [[1 2] 3] [[1 5] 3]) (diff [1 {:a 1}] [1 {:a 2}]))
+      (prn (map d/equality-partition [1 [1] '(1) {} #{} nil "s" (range 3) (sorted-map) (sorted-set)]))
+      (prn (d/diff-similar [1 2] [1 3]) (d/diff-similar #{1} #{2}) (d/diff-similar 1 2))
+      (defrecord Point [x y])
+      (prn (diff (->Point 1 2) (->Point 1 3)) (d/equality-partition (->Point 1 2)))
+      (deftype Opaque [v])
+      (extend-protocol d/EqualityPartition Opaque (equality-partition [_] :opaque))
+      (extend-protocol d/Diff Opaque (diff-similar [a b] [(.-v a) (.-v b) :compared]))
+      (prn (diff (Opaque. 1) (Opaque. 2)) (let [[a b both] (diff (Opaque. 1) 1)] [(.-v a) b both]))
+      (in-ns 'user)
+    expected: |
+      [nil nil 1] [1 2 nil] [1 "1" nil] [nil 1 nil] [nil nil nil] ["abc" "abd" nil]
+      ({:a 1} {:a 2} nil) true true
+      [[1] [5] [nil 2 3]] [nil [nil nil 3] [1 2]] [[nil nil 3] nil [1 2]] [nil [1] nil] [[nil 1] [nil 2] [nil]]
+      [[nil 2] [nil 3] [1]] [nil nil [1]] [[nil nil 2 3] nil [0 1]] [[nil 2 nil 4] [nil 0 nil 0] [1 nil 3 nil 5]]
+      [#{1} #{3} #{2}] [#{1} #{2} nil] [nil #{1} nil]
+      ({:a {:c 2}} {:a {:c 3}} {:a {:b 1}}) ({:a [nil 2]} {:a [nil 3]} {:a [1]}) ({:a #{1}} {:a #{2}} nil)
+      ({:a nil} {:b nil} nil) [nil nil {:a nil}] ({:a nil} nil nil) ({:a 1} {:a nil} nil) [{:a 1} [1] nil]
+      [[[nil 2]] [[nil 5]] [[1] 3]] [[nil {:a 1}] [nil {:a 2}] [1]]
+      (:atom :sequential :sequential :map :set :atom :atom :sequential :map :set)
+      [[nil 2] [nil 3] [1]] [#{1} #{2} nil] [1 2 nil]
+      ({:y 2} {:y 3} {:x 1}) :map
+      [1 2 :compared] [1 1 nil]

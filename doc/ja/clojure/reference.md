@@ -23,6 +23,7 @@ interop エントリのすべてを、分野ごとにまとめています。**�
 | [名前とキーワード](reference/names.md) | `name`/`namespace`/`keyword`/`symbol` |
 | [(clojure.string)](reference/string.md) | 文字列ライブラリと核の `subs` |
 | [(clojure.set)](reference/clojure-set.md) | 関係演算の集合ライブラリ: `union`/`intersection`/`difference`、`select`/`project`/`rename`、`index`/`join`、`subset?`/`superset?` |
+| [clojure.data](reference/clojure-data.md) | 再帰的な比較: 片側だけにあるものと両方にあるものを返す `diff` |
 | [clojure.edn](reference/clojure-edn.md) | EDN データの読み取り: `:eof`・`:readers`・`:default` を取る `read-string`/`read` |
 | [clojure.pprint](reference/clojure-pprint.md) | プリティプリント: 右マージンの内側にレイアウトする `pprint`/`write`、`print-table`、コード用の `code-dispatch`、プログラムが拡張・置換できるディスパッチ |
 | [clojure.template](reference/clojure-template.md) | 式のテンプレート: `apply-template`、`do-template` |
