@@ -11,8 +11,8 @@ on:
     - pom.xml
     - rontolisp-maven-plugin/**
     - rontolisp-native/**
-    # The wrapper's Maven version names the default lifecycle bindings the
-    # plugin's offline fixture must match, so a bump needs this workflow.
+    # The plugin's E2E runs its consumer builds on the wrapper's Maven, so a
+    # bump needs this workflow.
     - .mvn/**
     - .github/workflows/ci.yaml
   pull_request:
