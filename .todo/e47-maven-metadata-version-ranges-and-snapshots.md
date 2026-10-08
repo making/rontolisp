@@ -19,6 +19,11 @@ Maven and `clj` resolve it.
   stay the caller's.
 - SNAPSHOT: a locally installed `-SNAPSHOT` (`maven-metadata-local.xml`) and a remote
   timestamped one (`<snapshotVersions>`, the base-version directory); `LATEST`/`RELEASE`.
+- A POM no repository has is asked of every repository again on each resolution (no
+  `.lastUpdated` is written), so a `deps.edn` project depending on one needs the network on
+  every run, where the rest of a second run is network-free (`e39`); the same update policy
+  covers it. `deps.edn` ranges and `RELEASE`/`LATEST` arrive through
+  `ClojureRepositories.mavenVersion` (`eval/ClojureDepsRepositories`), refused there today.
 - Oracle: metadata files in the fixture repository and new case files
   (`src/test/resources/am/ik/maven/oracle/MavenOracle.java` with the checksum policy and
   metadata it needs).
