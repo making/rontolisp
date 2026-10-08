@@ -1,15 +1,15 @@
 # clojure.java.io/reader
 
-`(clojure.java.io/reader path-or-reader)` / `(jio/reader path)` with `[clojure.java.io :as jio]`
+`(clojure.java.io/reader x & opts)` / `(jio/reader path)` with `[clojure.java.io :as jio]`
 
-Opens a buffered reader over the file, through the same file-stream runtime
-`slurp` reads through; of an open reader (a Ring request [`:body`](ring.md)) it
-answers that reader. `line-seq` reads its lines without closing it;
-`with-open` closes it. Wires like `clojure.string` (`:as`, `:refer`, or the
-fully-qualified spelling); it is the only `clojure.java.io` var, and any other
-is an error. Runs on the interpreter and the JVM; on wasm it needs a `--dir`
-preopen covering the path -- without one the open signals the file-error.
-As a value a one-argument lambda over the same open.
+Opens a buffered reader over a path, a File, a URL, a URI or a byte stream, through the
+`IOFactory` protocol of [clojure.java.io](clojure-java-io.md); `:encoding` names the
+charset, UTF-8 by default. Of an open reader (a Ring request [`:body`](ring.md)) it
+answers that reader. `line-seq` reads its lines without closing it; `with-open` closes it.
+Wires like `clojure.string` (`:as`, `:refer`, or the fully-qualified spelling). Runs on
+every backend; on wasm a file needs a `--dir` preopen covering it -- without one the open
+is the oracle's `java.io.FileNotFoundException`. As a value a function of the same
+arguments.
 
 ```console
 clojure> (ns demo (:require [clojure.java.io :as jio]))

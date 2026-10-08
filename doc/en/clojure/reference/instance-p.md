@@ -15,11 +15,12 @@ implements ([reify](reify.md#host-interfaces): `Counted`, `IFn` ...) is `true` o
 and so is each of its supers (`Counted` of an `Indexed`). A throwable class (`Exception`,
 `IllegalArgumentException`, `clojure.lang.ExceptionInfo`, a dotted or imported one) tests an
 exception or a runtime error by its class -- the class `class` answers or a subclass of it.
-On the interpreter and the JVM a host object answers by its host class, so
-`(instance? java.io.File (java.io.File. "x"))` and
-`(instance? Number (java.math.BigDecimal. "1"))` are `true`; a class no value here has
-(`java.io.File` of a Clojure value, `Integer`) answers `false`, and a name no class has is
-`unknown name`.
+A [clojure.java.io](clojure-java-io.md) value answers by its class and supers on every
+backend, so `(instance? java.io.File (java.io.File. "x"))` and
+`(instance? java.io.Closeable (clojure.java.io/input-stream f))` are `true`. On the
+interpreter and the JVM a host object answers by its host class, so
+`(instance? Number (java.math.BigDecimal. "1"))` is `true`; a class no value here has
+(`Integer`) answers `false`, and a name no class has is `unknown name`.
 
 ```clojure
 (println (instance? String "a") (instance? String 1)) ; true false

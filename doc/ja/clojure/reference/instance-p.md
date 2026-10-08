@@ -16,11 +16,12 @@
 ついて `true` で、そのスーパーインタフェース（`Indexed` に対する `Counted`）も同様です。
 throwable クラス（`Exception`、`IllegalArgumentException`、`clojure.lang.ExceptionInfo`、
 ドット付きや import した名前）は、例外と実行時エラーをそのクラス（`class` が返すクラス）か
-そのサブクラスであるかで検査します。インタプリタと JVM ではホストのオブジェクトをホストの
-クラスで検査するので、`(instance? java.io.File (java.io.File. "x"))` と
+そのサブクラスであるかで検査します。[clojure.java.io](clojure-java-io.md) の値はどの
+バックエンドでもそのクラスと上位型で検査するので、`(instance? java.io.File (java.io.File. "x"))`
+と `(instance? java.io.Closeable (clojure.java.io/input-stream f))` は `true` です。インタプリタと
+JVM ではホストのオブジェクトをホストのクラスで検査するので、
 `(instance? Number (java.math.BigDecimal. "1"))` は `true` です。ここではどの値もインスタンスに
-ならないクラス（Clojure の値に対する `java.io.File`、`Integer`）は `false`、どのクラスでもない
-名前は `unknown name` になります。
+ならないクラス（`Integer`）は `false`、どのクラスでもない名前は `unknown name` になります。
 
 ```clojure
 (println (instance? String "a") (instance? String 1)) ; true false

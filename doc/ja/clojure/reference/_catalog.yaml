@@ -494,6 +494,7 @@ categories:
       - { slug: spit, name: "spit" }
       - { slug: slurp, name: "slurp" }
       - { slug: line-seq, name: "line-seq" }
+      - { slug: file-seq, name: "file-seq" }
       - { slug: reader, name: "clojure.java.io/reader" }
       - { slug: read-string, name: "read-string" }
       - { slug: read, name: "read" }

@@ -15,11 +15,11 @@ import static org.junit.jupiter.api.Assumptions.abort;
 
 /**
  * The filesystem refusal of the {@code clojure.java.io/reader} program on both WASM
- * backends: without a preopened directory covering the path, opening the fixture signals
- * the file-error instead of answering a reader. (With a preopen the same program reads,
- * like every backend -- pinned in {@link ClojureWasmFileIoTest} -- but the spec suite's
- * shared yaml cannot pin file IO, so the interpreter and JVM legs live in
- * {@link ClojureInteropTest}.)
+ * backends: without a preopened directory covering the path, the fixture is not there for
+ * the module, so opening it is the oracle's {@code FileNotFoundException} naming the path
+ * instead of a reader. (With a preopen the same program reads, like every backend --
+ * pinned in {@link ClojureWasmFileIoTest} -- but the spec suite's shared yaml cannot pin
+ * file IO, so the interpreter and JVM legs live in {@link ClojureInteropTest}.)
  */
 class ClojureWasmFileRefusalTest {
 
@@ -65,7 +65,8 @@ class ClojureWasmFileRefusalTest {
 			assertThat(process.exitValue()).as("wasmtime exit code without a preopen").isNotZero();
 			String transcript = Files.readString(outFile, StandardCharsets.UTF_8)
 					+ Files.readString(errFile, StandardCharsets.UTF_8);
-			assertThat(transcript).as("the filesystem refusal names the failed open").contains("cannot open file");
+			assertThat(transcript).as("the filesystem refusal names the file it cannot open")
+				.contains(fixture + " (No such file or directory)");
 		}
 		finally {
 			Files.deleteIfExists(outFile);

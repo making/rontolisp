@@ -465,7 +465,8 @@ var はエクスポートより下で定義してかまいません。
 | `defmacro` パラメータの `&form`/`&env` | 名前で | マクロはコンパイル環境を受け取らない |
 | 未知のエイリアスの `::alias/kw` | `Invalid token: ...` | 解決するのは require のエイリアス、ファイル自身の ns、既知の名前空間のみ |
 | `--no-gc` ビルド | 名前で | そのバックエッドにはペアもシンボルもクロージャもない |
-| `file-seq`、`clojure.java.io`（`reader` 以外） | `file-seq` / `unknown name: clojure.java.io/...` | ディレクトリ走査なし。解決するのは `reader` のみで、ファイルストリームのリーダーを開く |
+| バイト配列への `read`、`readAllBytes`、バイト配列の `write` | `... of a byte array is not supported: byte arrays are not built in` | どのバックエンドにもバイト配列の種類がない（`bytes?` は `false`） |
+| `http:`（ほか `file:` 以外）の URL の読み取り | `reading the http: URL ... is not built in` | `clojure.java.io` の下に接続の実行系がない。取得は [rontolisp.http-client](reference/http-client.md) が行う |
 | `clojure.core` の var、マクロ、マルチメソッド、プロトコルメソッドの `with-redefs`。REPL では、以前の入力が `^:redef` なしで定義した `defn` の `with-redefs` | `with-redefs of ... is not supported...`、`... define it ^:redef to redefine it` | コアの関数は呼び出しごとにインライン展開される。置き換えるルートを持つのは `def`/`defn`/`declare` の var だけで、REPL の入力は直接呼び出しのまま実行済み |
 | 非同期の Ring ハンドラ（`:async? true` 付きの `run-server`） | `asynchronous handlers (:async? true) are not supported` | トランスポートに respond/raise の仕組みがない |
 | `rontolisp.wasm` の宣言の `:async`、`async func` の WIT メンバーやエクスポート | `:async is not supported yet ...`、`... is an async func ...` | 中断する呼び出しが答える future は Clojure の future ではない |

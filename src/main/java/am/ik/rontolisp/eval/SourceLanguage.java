@@ -305,6 +305,17 @@ public enum SourceLanguage {
 			}
 
 			@Override
+			public String absolute(String path) {
+				try {
+					return java.nio.file.Path.of(path.isEmpty() ? "." : path).toAbsolutePath().normalize().toString();
+				}
+				catch (RuntimeException ex) {
+					// a host with no working directory (the browser) keeps the spelling
+					return path;
+				}
+			}
+
+			@Override
 			public @Nullable List<String> archiveEntries(String path) {
 				return loader.listArchive(path);
 			}

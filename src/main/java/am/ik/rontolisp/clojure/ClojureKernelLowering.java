@@ -55,6 +55,10 @@ import org.jspecify.annotations.Nullable;
  * oracle's own wrapper is one {@code Math} call; {@code round} and the long arithmetic
  * ({@code floor-div}, the {@code -exact} six) are workers over the oracle's
  * {@code longCast}.</li>
+ * <li>{@code rontolisp.internal.io} for {@code clojure.java.io}: the File, URL and byte
+ * stream values and the opening of every stream kind over them
+ * ({@link ClojureIoLowering}); {@code resource} is lowered in place over the program's
+ * directory roots.</li>
  * </ul>
  *
  * <p>
@@ -94,10 +98,11 @@ final class ClojureKernelLowering {
 
 		/**
 		 * The kernel's form.
+		 * @param ctx the hub, whose program the kernel may read (its source path)
 		 * @param args the lowered arguments, as many as its arity
 		 * @return the form
 		 */
-		LispVal lower(List<LispVal> args);
+		LispVal lower(ClojureLowering ctx, List<LispVal> args);
 
 	}
 
@@ -141,7 +146,7 @@ final class ClojureKernelLowering {
 		Map<String, Integer> arity = new HashMap<>(STRICT_MATH);
 		Map<String, Inline> inline = new HashMap<>();
 		for (String name : STRICT_MATH.keySet()) {
-			inline.put(name, args -> strictMathCall(name, args));
+			inline.put(name, (ctx, args) -> strictMathCall(name, args));
 		}
 		for (String name : List.of("round", "increment-exact", "decrement-exact", "negate-exact")) {
 			arity.put(name, 1);
@@ -202,7 +207,7 @@ final class ClojureKernelLowering {
 			new Kernels("rontolisp.http-client", "RONTOLISP::%CLOJURE-HTTP-",
 					Map.ofEntries(Map.entry("request", 2), Map.entry("fetch", 2)), Map.of("fetch", "RONTOLISP:FETCH"),
 					true),
-			"rontolisp.internal.math", mathKernels());
+			"rontolisp.internal.math", mathKernels(), ClojureIoLowering.NAMESPACE, ClojureIoLowering.kernels());
 
 	private ClojureKernelLowering() {
 	}
@@ -268,7 +273,7 @@ final class ClojureKernelLowering {
 		ctx.usedExInfo |= kernels.exceptions();
 		Inline inline = kernels.inline().get(var);
 		if (inline != null) {
-			return inline.lower(ctx.lowers(items, 1));
+			return inline.lower(ctx, ctx.lowers(items, 1));
 		}
 		return ClojureLowerUtil.cons(worker(kernels, var), ctx.lowers(items, 1));
 	}
@@ -294,7 +299,7 @@ final class ClojureKernelLowering {
 				params.add(new LispSymbol("ARG" + i + "%"));
 			}
 			return ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), ClojureLowerUtil
-				.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(params), inline.lower(params)));
+				.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(params), inline.lower(ctx, params)));
 		}
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), worker(kernels, var));
 	}

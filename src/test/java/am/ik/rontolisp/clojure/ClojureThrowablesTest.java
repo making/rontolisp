@@ -40,8 +40,10 @@ class ClojureThrowablesTest {
 				"clojure.lang.ExceptionInfo", "java.lang.RuntimeException", "java.lang.Exception",
 				"java.lang.Throwable");
 		// beyond the table, reflection
-		assertThat(ClojureThrowables.chainOf("java.io.FileNotFoundException")).containsExactly(
-				"java.io.FileNotFoundException", "java.io.IOException", "java.lang.Exception", "java.lang.Throwable");
+		assertThat(ClojureThrowables.chainOf("java.util.zip.ZipException")).containsExactly(
+				"java.util.zip.ZipException", "java.io.IOException", "java.lang.Exception", "java.lang.Throwable");
+		// what clojure.java.io refuses a file with, in the table
+		assertThat(ClojureThrowables.PARENTS).containsKey("java.io.FileNotFoundException");
 		// no throwable, no class
 		assertThat(ClojureThrowables.chainOf("java.lang.String")).isNull();
 		assertThat(ClojureThrowables.chainOf("no.such.Thing")).isNull();

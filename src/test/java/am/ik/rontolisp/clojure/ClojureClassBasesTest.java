@@ -19,6 +19,7 @@ class ClojureClassBasesTest {
 		List<String> names = new ArrayList<>(ClojureThrowables.PARENTS.keySet());
 		names.addAll(ClojureClassBases.STREAM_SUPERS.keySet());
 		names.addAll(ClojureClassBases.STREAM_SUPERS.values());
+		names.addAll(ClojureClassBases.IO_SUPERS.keySet());
 		names.addAll(ClojureClassBases.TABLED_INTERFACES);
 		names.addAll(ClojureClassBases.TIME_VALUE_DISPATCH.keySet());
 		names.addAll(List.of(ClojureThrowables.THROWABLE, ClojureClassBases.OBJECT));

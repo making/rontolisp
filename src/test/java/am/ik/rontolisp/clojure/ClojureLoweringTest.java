@@ -2249,21 +2249,20 @@ class ClojureLoweringTest {
 		assertThat(lowered("(slurp \"f\")")).contains("(RONTOLISP::%CLOJURE-SLURP \"f\")");
 		assertThat(lowered("(line-seq \"f\")")).contains("READ-LINE").contains("STREAMP");
 		assertThat(lowered("(ns t (:require [clojure.java.io :as jio])) (jio/reader \"f\")"))
-			.contains("(RONTOLISP::%CLOJURE-READER \"f\")");
+			.contains("(|c%clojure.java.io/reader| \"f\")");
 		assertThat(lowered("(ns t (:require [clojure.java.io :as jio])) (line-seq (jio/reader \"f\"))"))
 			.contains("READ-LINE")
 			.contains("STREAMP");
 		assertThat(lowered("(format \"%s=%d\" :a 1)")).contains("FORMAT").contains("~A");
-		assertThatThrownBy(() -> Clojure.read("(file-seq \".\")", null)).isInstanceOf(LispReadException.class)
-			.hasMessageContaining("file-seq is not supported yet");
+		// file-seq walks a java.io.File (the clojure.java.io runtime), slurp and spit
+		// take an encoding through the namespace's reader and writer
+		assertThat(lowered("(def x 1) (file-seq x)")).contains("(RONTOLISP::%CLOJURE-IO-FILE-SEQ |c%x|)");
+		assertThat(lowered("(slurp \"f\" :encoding \"UTF-8\")"))
+			.contains("(RONTOLISP::%CLOJURE-IO-SLURP \"f\" \"UTF-8\")");
+		assertThat(lowered("(spit \"f\" 1 :encoding \"UTF-8\")"))
+			.contains("(RONTOLISP::%CLOJURE-IO-SPIT \"f\" 1 NIL \"UTF-8\")");
 		assertThatThrownBy(() -> Clojure.read("(reader \"f\")", null)).isInstanceOf(LispReadException.class)
 			.hasMessageContaining("unknown name: reader");
-		assertThatThrownBy(() -> Clojure.read("(ns t (:require [clojure.java.io :as jio])) (jio/writer \"f\")", null))
-			.isInstanceOf(LispReadException.class)
-			.hasMessageContaining("unknown name: clojure.java.io/writer");
-		assertThatThrownBy(() -> Clojure.read("(ns t (:require [clojure.java.io :as jio])) (jio/file \".\")", null))
-			.isInstanceOf(LispReadException.class)
-			.hasMessageContaining("unknown name: clojure.java.io/file");
 		assertThatThrownBy(() -> Clojure.read("(format \"%e\" 1.5)", null)).isInstanceOf(LispReadException.class)
 			.hasMessageContaining("format directive %e is not supported yet");
 		assertThatThrownBy(() -> Clojure.read("(format x 1)", null)).isInstanceOf(LispReadException.class)
@@ -2271,29 +2270,24 @@ class ClojureLoweringTest {
 	}
 
 	@Test
-	void javaIoReaderWiresLikeClojureString() {
+	void javaIoIsABuiltInNamespaceLoadedAtItsFirstQualifiedName() {
+		// clojure.java.io is Clojure source in the jar, loaded like clojure.walk on its
+		// first qualified name too (the oracle has it loaded before the program): its
+		// vars are the namespace's, called directly
 		assertThat(lowered("(ns t (:require [clojure.java.io :as jio])) (jio/reader \"f\")"))
-			.contains("(RONTOLISP::%CLOJURE-READER \"f\")");
-		assertThat(lowered("(ns t (:require [clojure.java.io :as jio])) (clojure.java.io/reader \"f\")"))
-			.contains("(RONTOLISP::%CLOJURE-READER \"f\")");
+			.contains("(|c%clojure.java.io/reader| \"f\")");
+		assertThat(lowered("(clojure.java.io/reader \"f\")")).contains("(|c%clojure.java.io/reader| \"f\")");
 		assertThat(lowered("(ns t (:require [clojure.java.io :as jio :refer [reader]])) (reader \"f\")"))
-			.contains("(RONTOLISP::%CLOJURE-READER \"f\")");
-		assertThat(lowered("(ns t (:require [clojure.java.io :refer :all])) (reader \"f\")"))
-			.contains("(RONTOLISP::%CLOJURE-READER \"f\")");
+			.contains("(|c%clojure.java.io/reader| \"f\")");
+		assertThat(lowered("(ns t (:require [clojure.java.io :refer :all])) (file \"f\")"))
+			.contains("(|c%clojure.java.io/file| \"f\")");
 		assertThat(lowered("(ns t (:require [clojure.java.io :as jio])) jio/reader"))
-			.contains("#'RONTOLISP::%CLOJURE-READER");
-		assertThat(lowered("(ns t (:require [clojure.java.io :refer [reader]])) reader"))
-			.contains("#'RONTOLISP::%CLOJURE-READER");
-		assertThatThrownBy(() -> Clojure.read("(ns t (:require [clojure.java.io :refer [writer]]))", null))
+			.contains("#'|c%clojure.java.io/reader|");
+		// its kernels are the rontolisp.internal.io workers, which only it may require
+		assertThat(lowered("(clojure.java.io/as-file \"f\")")).contains("(RONTOLISP::%CLOJURE-IO-FILE ");
+		assertThatThrownBy(() -> Clojure.read("(ns t (:require [rontolisp.internal.io :as k]))", null))
 			.isInstanceOf(LispReadException.class)
-			.hasMessageContaining("unknown name: clojure.java.io/writer");
-		assertThatThrownBy(() -> Clojure.read("(ns t (:require [clojure.java.io :as jio])) (jio/reader)", null))
-			.isInstanceOf(LispReadException.class)
-			.hasMessageContaining("reader takes one path");
-		assertThatThrownBy(
-				() -> Clojure.read("(ns t (:require [clojure.java.io :as jio])) (jio/reader \"a\" \"b\")", null))
-			.isInstanceOf(LispReadException.class)
-			.hasMessageContaining("reader takes one path");
+			.hasMessageContaining("rontolisp.internal.io is internal to clojure.java.io");
 	}
 
 	@Test
@@ -2536,7 +2530,7 @@ class ClojureLoweringTest {
 			.endsWith("(RONTOLISP::%CLOJURE-STRING-READER \"x\")");
 		assertThat(lowered(
 				"(ns rdj (:require [clojure.java.io :refer [reader]])) (java.io.PushbackReader. (reader \"f\"))"))
-			.endsWith("(RONTOLISP::%CLOJURE-READER \"f\")");
+			.endsWith("(|c%clojure.java.io/reader| \"f\")");
 		assertThat(lowered("(java.io.PushbackReader. *in*)")).endsWith("(RONTOLISP::%CLOJURE-IN)");
 		assertThat(lowered("(defn f [r] (java.io.PushbackReader. r))")).contains("(STREAMP ")
 			.contains("(JAVA:NEW \"java.io.PushbackReader\" ");

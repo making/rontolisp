@@ -103,7 +103,7 @@ final class ClojurePredicateLowering {
 			Map.entry("realized?", helper("IS-REALIZED")), Map.entry("special-symbol?", helper("IS-SPECIAL-SYMBOL")),
 			Map.entry("inst?", helper("IS-INST")),
 			Map.entry("uuid?", new Test(IS_UUID, List.of(LispString.literal("java.util.UUID")))),
-			Map.entry("uri?", host("java.net.URI")), Map.entry("class?", host("java.lang.Class")));
+			Map.entry("uri?", helper("IS-URI")), Map.entry("class?", host("java.lang.Class")));
 
 	/**
 	 * The predicates of a kind no value here can have: no chunked seq, decimal, byte

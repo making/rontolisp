@@ -151,7 +151,7 @@ answered `2 5 3` before).
 | `clojure.math` | the same, loaded at its `require`; a double function's body is `rontolisp.internal.math/NAME`, lowered in place to `(%strict-math :name (rontolisp::%clojure-double a) ...)`, `round` and the long arithmetic one call to `rontolisp::%clojure-math-NAME` (`ClojureKernelLowering`) | "clojure.jar namespaces" |
 | `subs`, `.substring` | `%clojure-subs`, the refusal family's alias of `subseq` ("Refusals") | a bound outside a string is the oracle's `StringIndexOutOfBoundsException` where a class is read; a double or ratio bound is truncated (`%clojure-string-bound`), a non-number one is refused as the oracle does ("Refusals") |
 | `format` | the Java directives translated to `format` over Clojure-rendered arguments | literal format string only; `%s` like `str` (nil spells `null`), `%b`; `%e`/`%g`, flags and the rest refused |
-| `spit` `slurp` `line-seq` `clojure.java.io/reader` | `with-open-file` of the `str` spelling / `rontolisp::%clojure-slurp` / a `read-line` loop / `%clojure-reader` (`open`) | every backend; wasm needs a `--dir` preopen (without it the open signals). `spit` supersedes unless `:append` is truthy, `nil` writes nothing. `slurp`, `line-seq` and `reader` take a path or an open stream (`streamp`, so a Gray instance -- the Ring `:body` -- too): `slurp` reads a stream to its end and closes it (the oracle's `with-open`; until 2026-10-08 it left it open), `reader` answers it, `line-seq` reads it strictly and never closes it. A read of a CLOSED stream -- `slurp`, `line-seq`, `.read`, `.readLine`, `read-line` -- goes through `%clojure-open-reader` (`open-stream-p`, else the `%clojure-io-exception` carrier: the oracle's `IOException: Stream closed`); before it the interpreter said `READ-CHAR expects an input stream`, the JVM an NPE, and both wasm backends READ a closed string input stream (its record is never marked closed, `.kb/read-load-streams.md`). `read` is not guarded: the oracle wraps the failure in a `LispReader$ReaderException` over a `LineNumberingPushbackReader` and not over a `PushbackReader`, which share one stream kind here. A second close is harmless on every backend (`.kb/read-load-streams.md`, "close on an already-closed stream"). Pins: clojure-spec `slurp-closes-the-stream-it-reads`, `ClojureInteropTest#filesRoundTripThroughReaderAndLineSeq`, `ClojureWasmFileIoTest`. `slurp` was an inline `read-char` loop per site until 2026-10-08. `file-seq` and every other `clojure.java.io` fn are refused |
+| `spit` `slurp` `line-seq` `file-seq` | `with-open-file` of the `str` spelling / `rontolisp::%clojure-slurp` / a `read-line` loop / `%clojure-io-file-seq`, each with the io family's arm ("clojure.java.io"); with `:encoding` `%clojure-io-spit`/`-slurp` | every backend; wasm needs a `--dir` preopen (without it the open signals). `spit` supersedes unless `:append` is truthy, `nil` writes nothing. `slurp`, `line-seq` and `reader` take a path or an open stream (`streamp`, so a Gray instance -- the Ring `:body` -- too): `slurp` reads a stream to its end and closes it (the oracle's `with-open`; until 2026-10-08 it left it open), `reader` answers it, `line-seq` reads it strictly and never closes it. A read of a CLOSED stream -- `slurp`, `line-seq`, `.read`, `.readLine`, `read-line` -- goes through `%clojure-open-reader` (`open-stream-p`, else the `%clojure-io-exception` carrier: the oracle's `IOException: Stream closed`); before it the interpreter said `READ-CHAR expects an input stream`, the JVM an NPE, and both wasm backends READ a closed string input stream (its record is never marked closed, `.kb/read-load-streams.md`). `read` is not guarded: the oracle wraps the failure in a `LispReader$ReaderException` over a `LineNumberingPushbackReader` and not over a `PushbackReader`, which share one stream kind here. A second close is harmless on every backend (`.kb/read-load-streams.md`, "close on an already-closed stream"). Pins: clojure-spec `slurp-closes-the-stream-it-reads`, `ClojureInteropTest#filesRoundTripThroughReaderAndLineSeq`, `ClojureWasmFileIoTest`. `slurp` was an inline `read-char` loop per site until 2026-10-08. `clojure.java.io/reader` is the namespace's var since 2026-10-08 (before: `%clojure-reader`, a lowering), `file-seq` a lazy walk of Files ("clojure.java.io") |
 | `read-string` `read` | `rontolisp::%clojure-read-string`/`-read` (`-opts` for an options map, `-v` as values) over the call site's namespace context | "Reading"; every backend |
 | regex `#"..."`, `re-pattern` `re-matcher` `re-find` `re-seq` `re-matches` `re-groups` | `RONTOLISP::%CLOJURE-RE-COMPILE` and the spliced matcher | "Regex" |
 | `map` `filter` `concat` | `rontolisp::%clojure-map`/`-filter`/`-concat` | any number of collections (`map` stops at the shortest); lazy when an input is lazy, strict otherwise ("Laziness"); a false object drops like nil |
@@ -907,8 +907,8 @@ a program without `ns` lowers unqualified. A quoted `'n/x` is the symbol of var 
   `require` with a bare `:only` refers nothing, like the oracle's `load-lib`. `:reload`,
   `:reload-all`, `:verbose` flags; quoted libspecs and prefix lists `(prefix [sub ...])`
   go through one spec parser. `clojure.string`, `clojure.set`, `clojure.edn`,
-  `clojure.java.io` (`reader` only), `clojure.test` and `ring.adapter.rontolisp` resolve as
-  lowerings; any other
+  `clojure.test` and `ring.adapter.rontolisp` resolve as lowerings (`clojure.java.io` did,
+  `reader` only, until it shipped as a file on 2026-10-08); any other
   namespace clojure.jar defines (`ClojureBuiltinNamespaces.LANGUAGE`) is a built-in file
   ("clojure.jar namespaces") or `unknown namespace: x`. A `clojure.*` namespace OUTSIDE
   that list (a contrib library, `clojure.data.json`) is an ordinary library on the source
@@ -1546,7 +1546,8 @@ end** (`src/main/resources/am/ik/rontolisp/clojure/lib/clojure/**`, the
 `ClojureBuiltinNamespaces` mechanism of "Ring util namespaces"): `clojure.walk`,
 `clojure.template`, `clojure.pprint`, `clojure.data`, `clojure.zip`, `clojure.core.protocols`,
 `clojure.datafy`, `clojure.stacktrace`, `clojure.math`, `clojure.core.reducers`,
-`clojure.instant`, `clojure.uuid` ("Instants and UUIDs").
+`clojure.instant`, `clojure.uuid` ("Instants and UUIDs"), `clojure.java.io`
+("clojure.java.io").
 - **Licensing**: clojure.jar is EPL-1.0, this project Apache-2.0, so nothing of it is
   copied -- no code, no docstring. Each file is written from the documented behaviour and
   diffed against the oracle; a one-line var dictated by its contract
@@ -1562,7 +1563,7 @@ end** (`src/main/resources/am/ik/rontolisp/clojure/lib/clojure/**`, the
   `clojure.data`, `main`, `java.shell`. Among the probes: malli's `core` and
   camel-snake-kebab require `walk`, data.json and reitit `pprint`, honeysql `template`.
 - **Startup namespaces** (`ClojureBuiltinNamespaces.STARTUP`, shipped: `clojure.walk`,
-  `clojure.core.protocols`, `clojure.instant`, `clojure.uuid`): `clj -M` has loaded `clojure.walk` (with `core.protocols`, `core.server`, `edn`, `instant`, `java.io`,
+  `clojure.core.protocols`, `clojure.instant`, `clojure.uuid`, `clojure.java.io`): `clj -M` has loaded `clojure.walk` (with `core.protocols`, `core.server`, `edn`, `instant`, `java.io`,
   `main`, `spec.alpha`, `spec.gen.alpha`, `string`, `uuid`) before the program, so a
   qualified name reaches it with no `require` and a `require` reads no project file
   (`ClojureSourcePath.find` skips the roots). Here `ClojureLowering.projectNamespaceOf`
@@ -1759,8 +1760,7 @@ end** (`src/main/resources/am/ik/rontolisp/clojure/lib/clojure/**`, the
   `foldcat` result could not be counted; the cost is one copy per combine level and a
   fold of a joined result reducing it whole (deviation, user doc). Size, wasm P1 / JVM
   class: `(prn (r/fold + (r/map inc [1 2 3])))` 143,501 / 131,041 B.
-- Not shipped, with what each waits on (decided 2026-10-08): `clojure.java.io` beyond
-  `reader` (a portable File and byte streams, e55), pprint's
+- Not shipped, with what each waits on (decided 2026-10-08): pprint's
   `cl-format`/`formatter`/`formatter-out` (e58), `clojure.repl`/`main`/`java.shell`/`xml`
   (e61).
 - Pins: clojure-spec `clojure-walk-*` (all four backends, oracle-identical, the first
@@ -1777,6 +1777,103 @@ end** (`src/main/resources/am/ik/rontolisp/clojure/lib/clojure/**`, the
   `ClojureLibraryTest#aProgramStoringNoReducerRowSplicesTheReduceVerbsWithoutTheirProtocolArms`,
   `ClojureArmsTest#theReducibleFamilyIsMadeByATypedRowOfCollReduceOrIKVReduce`,
   `ClojureLoweringTest#aTypedRowOfCollReduceOrIKVReduceIsStoredThroughTheLibrary`.
+
+## clojure.java.io
+
+**`clojure.java.io` is a built-in, startup namespace of Clojure source**
+(`clojure/lib/clojure/java/io.clj`, 2026-10-08) over the kernel namespace
+`rontolisp.internal.io` (`ClojureIoLowering.kernels()`; `clojure.lisp` "clojure.java.io:
+rontolisp.internal.io"). `Coercions` and `IOFactory` are real protocols (`extend-protocol` in
+the file), `default-streams-impl` a map. Until then only `reader` resolved, as a lowering.
+- **Values of the front end's own** (decided 2026-10-08): `java:` is a call-time error on
+  wasm, and `reader`/`slurp`/`spit` already ran there over WASI preopens. Wrappers: `(:C%FILE
+  path)` (normalized as `java.io.File` does on Unix), `(:C%URL spec)`, `(:C%URI spec)`,
+  `(:C%INPUT-STREAM #(s octets i closed))`, `(:C%OUTPUT-STREAM #(s closed))` over binary file
+  streams; a reader decoding / writer encoding a byte stream is a CL string stream registered
+  in `%clojure-io-streams` (`eq` table, `#(kind sink charset)`); a file's own reader and
+  writer are plain file streams (the STREAM family's `BufferedReader`/`BufferedWriter`). A
+  wrapper is a list, so `equal` (and with it `=`, map keys) compares by spelling: no `=` arm
+  (one made the interpreter's `=` measurably slower and was dropped). A URL keeps only its
+  spelling; a resource's text lives in `%clojure-io-resources` (`equal` table by spelling).
+- **Arms** (`ClojureArms.Family.IO`: tests `%clojure-io-p`, `%clojure-io-instance-p`,
+  `%clojure-io-openable-p`, view `%clojure-io-host`, producers `ClojureIoLowering.PRODUCERS`,
+  the kernels and the lowering's `java.io` constructions): the printer, `str`, the
+  structural hash, `class` and its name, `instance?`, a protocol's tag, `slurp`, `spit`,
+  `line-seq`, every instance call (`ClojureIoLowering.methodArm`). A program making no io
+  value compiles byte-identical (measured 2026-10-08 on `demo.clj`, print, protocol,
+  multimethod and spit/slurp/line-seq programs; pinned by
+  `ClojureLibraryTest#aProgramMakingNoIoValueSplicesTheLibraryWithoutItsIoArms`). The
+  interpreter keeps every arm (`ClojureLibrary.process` is the compile path's): `str` of a
+  non-io value pays one `%clojure-io-p` call, ~5% of a `str`-bound loop (bench 2026-10-08:
+  300k `(str i :k)` 19.3 -> 20.4 s mean of five on a loaded host; `=` and `pr-str` within
+  noise). `%clojure-io-p` is one call however it answers (the registry is read only once a
+  stream is in it).
+- **Prelude trap** (measured 2026-10-08): a `clojure.lisp` parameter named `write` grew every
+  Clojure program (+29 KB `demo.clj`): any symbol of the library, even in a defun nothing
+  calls, counts for `LispPreludeLibrary` selection, and `WRITE` pulled the printer renderer.
+  Renamed `for-write`; check a new library symbol against the prelude's names.
+- **The `java:` boundary**: `ClojureIoLowering.crossing` wraps every computed
+  `java:call`/`new`/`static` operand, and a call's receiver, in the view `%clojure-io-host`
+  (a File, URL, URI to the host object; the HOST family's arm), so `(.toPath f)` and
+  `(Objects/toString f)` see a `java.io.File`. A host File/URL/URI a member answers stays
+  host: `slurp`/`spit`/`line-seq` take one through the HOST view `%clojure-host-file-path`
+  in path position (an `or` of arms over the io runtime there carried +69 KB of JVM class
+  into every `java:`-naming spit program), the kernels through `%clojure-io-from-host`, a
+  protocol through `hostTagArms` (`:java.io.File`). `java.net.URL.`/`URI.` constructions stay
+  host (a `URISyntaxException` test pins one).
+- **Classes**: `class` answers `:java.io.File`, `:java.net.URL`, `:java.net.URI`,
+  `:java.io.BufferedInputStream`, `:java.io.BufferedOutputStream` (character streams
+  `:java.io.BufferedReader`/`Writer`); `ClojureClassBases.IO_SUPERS` + `INTERFACES` chain
+  them, so a dispatch value or hierarchy argument spelling one is its keyword ("Dispatch")
+  and `instance?` asks `%clojure-io-instance-p` (`%clojure-io-supers`). A protocol extended
+  to File/URL/URI keys the exact keyword (`ClojureIoLowering.EXTENDABLE`, never a walked
+  class: `walkTargetOf` answers null for them, merged with e60's walk 2026-10-08); one
+  extended to `java.io.InputStream`/`Closeable` walks.
+- **Methods**: `ClojureIoLowering.METHODS` (name x arity -> `%clojure-io-m-*`, each refusing
+  another kind in the oracle's `No matching method m found taking n args for class C`); any
+  other member of an io value is the host object's (interpreter, JVM). Constructions
+  (`ClojureIoLowering.construction`): `File.` of 1/2, `FileInputStream.`,
+  `FileOutputStream.` (append), `FileReader.`, `FileWriter.` (append), `Buffered*.` (the
+  stream itself), `OutputStreamWriter.`, `InputStreamReader.` over a byte stream.
+- **Resources**: a literal name is found while lowering (`ClojureSourcePath.findResource`):
+  a directory root answers `file:` + its absolute path (`ClojureFiles.absolute`, link not
+  resolved), a jar root `jar:file:<abs jar>!/name`; the text is embedded
+  (`%clojure-io-url-found spec text`), so a jar's entry reads on wasm too. A computed name
+  is `%clojure-io-resource name '(roots)` at run time, below the directory roots only (the
+  jar case is the documented deviation). A loader argument still runs and is ignored.
+- **Charsets**: UTF-8, ISO-8859-1, US-ASCII and aliases; any other name the oracle's
+  `UnsupportedEncodingException`. A non-UTF-8 reader decodes the rest of its byte stream at
+  once; a registered writer encodes into its byte stream at flush/close.
+- **slurp/spit through `IOFactory`**: io.clj's last form `(k/install reader writer)` sets
+  `%clojure-io-factory`; `%clojure-io-openable-p` (an io test) sends `slurp`/`spit` of any
+  non-string to `%clojure-io-slurp`/`-spit`, which ask the namespace's `reader`/`writer`
+  (with `:encoding`/`:append`) when no kernel opens the value -- a type extended to
+  `IOFactory`, and the oracle's `Cannot open <1> as an InputStream.` for `(slurp 1)`. A
+  program not loading the namespace keeps the path-only `slurp`.
+- **`extend` of a computed map** (2026-10-08, needed for `default-streams-impl`):
+  `ClojureProtocolLowering.computedRows` -> `%clojure-extend-rows (lambda (method fn)
+  store) map '(methods)`, the store the literal map's row takes, an entry naming no method
+  skipped (the oracle stores it but never reads it); `extend` takes several protocol/map
+  pairs. Answers nil (a literal map's `extend` still answers the last lambda, e72).
+- **Measured cost of a java.io-naming program** (2026-10-08, wasm P1 / size / component /
+  class, before -> after): `(spit f x :append true)` 66,852 -> 66,803 / 58,450 -> 58,401 /
+  72,788 -> 72,737 / 74,662 -> 74,659; `.write` on a `StringWriter` 52,383 -> 52,741 /
+  44,383 -> 44,741 / 55,918 -> 56,289 / 102,833 -> 103,383 (the instance call's io arm).
+- **Deviations** (user doc `clojure-java-io.md`): no identity hash in `#object`; a URL's
+  `.hashCode`/`=` by spelling; reading a non-`file:` URL refused by name; no byte arrays
+  (`read` into a buffer, `readAllBytes`, `write` of one refused); three charsets; a computed
+  resource name never inside a jar; wasm: an empty directory is not deleted (WASI unlink),
+  `lastModified` 0 (no `file-write-date`), `getAbsolutePath` of a relative File refused (no
+  cwd); `canRead` is `exists`; `line-seq` takes a File/URL/byte stream like a path.
+- Pins: clojure-spec `clojure-java-io-*`, `a-java-io-file-prints-as-the-host-object-*`,
+  `java-io-files-are-made-renamed-and-deleted`, `extend-takes-a-map-computed-at-run-time`
+  (all four backends, oracle-identical but the hash/`class` case); `ClojureJavaIoTest`
+  (directories, the empty-directory deviation, a deps.edn project's directory and jar
+  resources on all four backends, the non-file URL refusals);
+  `ClojureInteropTest#aJavaIoFileCrossesTheJavaBoundaryAsTheHostFile`;
+  `ClojureArmsTest#theIoFamilyIsMadeByClojureJavaIoAndFoldsTheArmsOfAProgramMakingNone`;
+  `ClojureLoweringTest#javaIoIsABuiltInNamespaceLoadedAtItsFirstQualifiedName`;
+  `ClojureWasmFileRefusalTest` (no preopen: the oracle's `FileNotFoundException`).
 
 ## Macros
 
@@ -2169,7 +2266,8 @@ constructor and consumer, and a regex `replace` with a function replacement.
   `unknown name: X` (the oracle's `Unable to resolve symbol`). Rejected: storing under the
   class keyword (`:java.io.File`, `java:`-free) -- no row relates two such keywords, so
   `AbstractList` and `AbstractCollection` methods tie (`Multiple methods`) where the oracle
-  picks the subclass. Size, measured 2026-10-04 (wasm P1 / `--optimize=size` / component
+  picks the subclass. (`java.io.File` itself is a chained class since 2026-10-08, its
+  keyword what `class` answers for a clojure.java.io File: "clojure.java.io".) Size, measured 2026-10-04 (wasm P1 / `--optimize=size` / component
   / JVM class): the `Exception`, `java.io.Writer` and keyword multimethods and
   `examples/clojure/demo.clj` byte-identical (187,603 / 152,656 / 191,427 / 158,997;
   89,846 / 75,050 / 91,238 / 99,415; 94,778 / 77,919 / 96,124 / 103,647; 91,151 / 78,254
@@ -3292,7 +3390,8 @@ resolve var`.
   `str`'s `%clojure-stream-p` tests are `ClojureArms.Family.STREAM`, whose producers are the
   Clojure-only wrappers a stream reaches a program through -- `%clojure-out`/`-in`/`-err`,
   `%clojure-string-writer` (`(StringWriter.)`), `%clojure-string-reader` (a reader over a
-  StringReader), `%clojure-reader` (`clojure.java.io/reader`) -- never `open` or
+  StringReader), `%clojure-reader`, and the io kernels opening a file
+  (`ClojureIoLowering.STREAM_PRODUCERS`, "clojure.java.io") -- never `open` or
   `make-string-output-stream`, which `ClojureLibrary.references` would read as a library
   reference in a Common Lisp program; `with-out-str`'s own stream reaches a value only
   through a read of `*out*`. Measured 2026-10-04 (wasm / class bytes, before -> after):
@@ -3594,7 +3693,8 @@ in-scope program needs `valid?`/`conform` (then `explain-data` stays refused).
   `ClojureDefaultReadersTest` (`#inst`/`#uuid` against the JDK, both halves);
   `ClojureDataReadersTest` (`data_readers` files, four backends).
 - Interop and host IO: `ClojureInteropTest` (interpreter and JVM),
-  `ClojureWasmInteropRefusalTest`, `ClojureWasmFileIoTest`, `ClojureWasmFileRefusalTest`.
+  `ClojureWasmInteropRefusalTest`, `ClojureWasmFileIoTest`, `ClojureWasmFileRefusalTest`,
+  `ClojureJavaIoTest` (clojure.java.io's directories and resources, four backends).
 - `ClojureArmsTest` (the sorted-collection, unbound-root, matcher, reducible, interface and
   refusal strips).
 - `ClojureRingAdapterTest`, `ClojureRingUtilTest` (the Ring namespaces),

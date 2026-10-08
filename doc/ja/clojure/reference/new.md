@@ -2,7 +2,7 @@
 
 `(new Class args...)`
 
-ホストオブジェクトを構築します。`(Class. args)` の接尾辞の綴りと `(Class/new args)`（[Class/member](class-member.md)）は同じ操作です。インスタンスはほかのどの interop 動詞にも応えます。インタープリターと JVM でのみ動作し、wasm バックエンドは `java:` を拒否します。次の3つの構築は、どのバックエンドでもホストオブジェクトではなくストリームになります。引数なしの `java.io.StringWriter`（[with-out-str](with-out-str.md) 参照）、ストリーム（`clojure.java.io/reader`、`*in*`）の上の `java.io.PushbackReader` と `java.io.BufferedReader`（そのストリーム自身）、`java.io.StringReader` の構築の上のそれら（文字列のリーダ）です。後の2つは [read](read.md) が読むものです。メッセージと cause だけを持つ throwable クラス（`Exception`、`IllegalArgumentException`、`java.io.IOException` など）の構築は、これもどのバックエンドでも例外になります（[throw](throw.md) 参照）。
+ホストオブジェクトを構築します。`(Class. args)` の接尾辞の綴りと `(Class/new args)`（[Class/member](class-member.md)）は同じ操作です。インスタンスはほかのどの interop 動詞にも応えます。インタープリターと JVM でのみ動作し、wasm バックエンドは `java:` を拒否します。次の3つの構築は、どのバックエンドでもホストオブジェクトではなくストリームになります。引数なしの `java.io.StringWriter`（[with-out-str](with-out-str.md) 参照）、ストリーム（`clojure.java.io/reader`、`*in*`）の上の `java.io.PushbackReader` と `java.io.BufferedReader`（そのストリーム自身）、`java.io.StringReader` の構築の上のそれら（文字列のリーダ）です。後の2つは [read](read.md) が読むものです。パスか親と子からの `java.io.File`、パスか File の上の `FileReader`・`FileWriter`・`FileInputStream`・`FileOutputStream`、バイトストリームの上の `InputStreamReader`・`OutputStreamWriter`、ストリームの上の `BufferedInputStream`・`BufferedOutputStream`・`BufferedWriter`（そのストリーム自身）の構築は、これもどのバックエンドでも [clojure.java.io](clojure-java-io.md) の値になります。メッセージと cause だけを持つ throwable クラス（`Exception`、`IllegalArgumentException`、`java.io.IOException` など）の構築は、これもどのバックエンドでも例外になります（[throw](throw.md) 参照）。
 
 ```clojure
 (println (.length (new String "hi"))) ; 2

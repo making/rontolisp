@@ -29,6 +29,7 @@ interop エントリのすべてを、分野ごとにまとめています。**�
 | [clojure.core.reducers](reference/clojure-core-reducers.md) | レデューサーとフォルダー: 畳み込み可能なビューとしての `map`/`filter`/`mapcat`/`take` など、部分ごとの `fold`、`foldcat`/`cat`/`append!`、`monoid` |
 | [clojure.edn](reference/clojure-edn.md) | EDN データの読み取り: `:eof`・`:readers`・`:default` を取る `read-string`/`read` |
 | [clojure.instant](reference/clojure-instant.md) | RFC 3339 タイムスタンプの読み取り: `parse-timestamp`、`validated`、`read-instant-date`/`-timestamp`/`-calendar` |
+| [clojure.java.io](reference/clojure-java-io.md) | ファイル、URL と、その上のストリーム: `file`、`reader`/`writer`、`input-stream`/`output-stream`、`copy`、`resource`、`Coercions`/`IOFactory` プロトコル |
 | [clojure.math](reference/clojure-math.md) | どのバックエンドでも同じビットを返す double の関数、丸めと隣の double、オーバーフローを拒否する long の算術 |
 | [clojure.pprint](reference/clojure-pprint.md) | プリティプリント: 右マージンの内側にレイアウトする `pprint`/`write`、`print-table`、コード用の `code-dispatch`、プログラムが拡張・置換できるディスパッチ |
 | [clojure.stacktrace](reference/clojure-stacktrace.md) | スロー可能オブジェクトとその原因の出力: `root-cause`、`print-throwable`、`print-stack-trace`、`print-cause-trace` |
@@ -43,6 +44,6 @@ interop エントリのすべてを、分野ごとにまとめています。**�
 | [WIT 契約 (rontolisp.wit)](reference/wit.md) | `import`/`export`/`provide`: 呼び出す WIT インターフェース、実装する WIT world |
 | [Java interop](reference/interop.md) | `.`、`..`、構築、`memfn`、`proxy` |
 | [トランスデューサー](reference/transducers.md) | `transduce`・`eduction`・`sequence`・`completing`、`reduced` とその仲間、`cat`、seq 関数の1引数形 |
-| [入出力](reference/io.md) | `spit`・`slurp`・`line-seq`・`clojure.java.io/reader` と `format` |
+| [入出力](reference/io.md) | `spit`・`slurp`・`line-seq`・`file-seq`・`clojure.java.io/reader` と `format` |
 | [テスト (clojure.test)](reference/test.md) | `deftest`/`is`/`are`/`testing` と `run-tests` の集計ランナー |
 | [マクロ](reference/macros.md) | `defmacro`、syntax-quote、`gensym`、`macroexpand-1`、`macroexpand` |
