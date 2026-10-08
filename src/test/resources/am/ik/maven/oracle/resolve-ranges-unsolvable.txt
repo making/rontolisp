@@ -1,0 +1,3 @@
+# resolve test.range:clash:1
+error Failed to collect dependencies for [test.range:clash:jar:1 (compile)] <- Could not resolve version conflict among [test.range:clash:jar:1 -> test.range:a:jar:1 -> test.range:lib:jar:[1.0,1.2], test.range:clash:jar:1 -> test.range:b:jar:1 -> test.range:lib:jar:[1.5,2.0]]
+warning missing test.range:lib:jar:1.7

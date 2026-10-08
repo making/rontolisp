@@ -4,6 +4,7 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.attribute.FileTime;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -21,7 +22,9 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 /**
  * The local repository and the remote ones behind it: a file already local is used as it
  * is, a missing one comes from the first repository whose copy matches its {@code .sha1},
- * and what cannot be verified or is refused by name is never written.
+ * and what cannot be verified or is refused by name is never written; metadata is cached
+ * per repository and asked for again, like a file no repository had, under the update
+ * policy; snapshots, {@code LATEST}, {@code RELEASE} and ranges resolve through it.
  */
 class MavenRepositoryTest {
 
@@ -32,6 +35,8 @@ class MavenRepositoryTest {
 	private static final Artifact LIB = Artifact.parse("org.example:lib:1.0");
 
 	private static final byte[] JAR = "jar bytes".getBytes(StandardCharsets.UTF_8);
+
+	private static final String LIB_METADATA = "org/example/lib/maven-metadata.xml";
 
 	@TempDir
 	Path local;
@@ -74,6 +79,14 @@ class MavenRepositoryTest {
 	}
 
 	private MavenResolver resolver(Downloader downloader, MavenSettings settings, String... urls) {
+		return configured(downloader, settings, "daily", urls);
+	}
+
+	private MavenResolver policyResolver(Downloader downloader, String policy, String... urls) {
+		return configured(downloader, MavenSettings.none(), policy, urls);
+	}
+
+	private MavenResolver configured(Downloader downloader, MavenSettings settings, String policy, String... urls) {
 		List<RemoteRepository> repositories = new ArrayList<>();
 		for (int i = 0; i < urls.length; i++) {
 			repositories.add(new RemoteRepository(i == 0 ? "central" : "repo" + i, urls[i]));
@@ -83,6 +96,7 @@ class MavenRepositoryTest {
 			.repositories(repositories)
 			.downloader(downloader)
 			.settings(settings)
+			.updatePolicy(policy)
 			.systemProperties(MavenTestRepository.SYSTEM)
 			.build();
 	}
@@ -248,20 +262,229 @@ class MavenRepositoryTest {
 	}
 
 	@Test
-	void versionsThatNeedMetadataAreRefusedByName() {
+	void aVersionRangeNamesNoSingleArtifact() {
 		MavenResolver resolver = resolver(new Served(), CENTRAL);
 
-		assertThatThrownBy(() -> resolver.artifact(Artifact.parse("g:a:1.0-SNAPSHOT")))
+		assertThatThrownBy(() -> resolver.artifact(Artifact.parse("g:a:[1,2)")))
 			.isInstanceOf(MavenResolutionException.class)
-			.hasMessage("g:a:jar:1.0-SNAPSHOT: SNAPSHOT versions are not supported (resolving one needs "
-					+ "maven-metadata.xml)");
-		assertThatThrownBy(() -> resolver.descriptor(Artifact.parse("g:a:[1,2)")))
+			.hasMessage("g:a:jar:[1,2): a version range names no single artifact (versions(..) resolves it)");
+		assertThatThrownBy(() -> resolver.descriptor(Artifact.parse("g:a:(,2]")))
 			.isInstanceOf(MavenResolutionException.class)
-			.hasMessage("g:a:jar:[1,2): version ranges are not supported (resolving one needs maven-metadata.xml)");
-		assertThatThrownBy(() -> resolver.collect(List.of(Dependency.of(Artifact.parse("g:a:LATEST"))), List.of()))
+			.hasMessageStartingWith("g:a:jar:(,2]: a version range names no single artifact");
+		assertThatThrownBy(() -> resolver.version(Artifact.parse("g:a:[1,2)")))
+			.isInstanceOf(MavenResolutionException.class);
+	}
+
+	@Test
+	void aRangeAdmitsWhatTheMetadataOfEveryRepositoryAndTheLocalOneLists() throws IOException {
+		String other = "https://other.example/repo/";
+		Served served = new Served().file(CENTRAL + LIB_METADATA, versions("2.0", "1.0", "1.5"))
+			.file(other + LIB_METADATA, versions("1.2", "3.0"));
+		write(this.local.resolve("org/example/lib/maven-metadata-local.xml"), versions("1.7"));
+
+		assertThat(resolver(served, CENTRAL, other).versions(Artifact.parse("org.example:lib:[1.0,3.0)")))
+			.containsExactly("1.0", "1.2", "1.5", "1.7", "2.0");
+		// each repository's copy is cached under its id, beside its .sha1 and Maven's
+		// record
+		Path directory = this.local.resolve("org/example/lib");
+		assertThat(entriesOf(directory)).containsExactly("maven-metadata-central.xml",
+				"maven-metadata-central.xml.sha1", "maven-metadata-local.xml", "maven-metadata-repo1.xml",
+				"maven-metadata-repo1.xml.sha1", "resolver-status.properties");
+		assertThat(TrackingFile.read(directory.resolve("resolver-status.properties")))
+			.containsKeys("maven-metadata-central.xml.lastUpdated", "maven-metadata-repo1.xml.lastUpdated");
+		// a plain version, and a range of one, need no metadata
+		Served none = new Served();
+		assertThat(resolver(none, CENTRAL).versions(Artifact.parse("g:a:1.0"))).containsExactly("1.0");
+		assertThat(resolver(none, CENTRAL).versions(Artifact.parse("g:a:[1.0]"))).containsExactly("1.0");
+		assertThat(none.requested).isEmpty();
+		assertThatThrownBy(() -> resolver(none, CENTRAL).versions(Artifact.parse("g:a:[1.0,2.0")))
 			.isInstanceOf(MavenResolutionException.class)
-			.hasMessage("while collecting g:a:jar:LATEST: the LATEST and RELEASE meta versions are not supported "
-					+ "(resolving one needs maven-metadata.xml)");
+			.hasMessage("Unbounded version range [1.0,2.0");
+	}
+
+	@Test
+	void metadataIsAskedForAgainOnlyUnderTheUpdatePolicy() throws IOException {
+		Served served = new Served().file(CENTRAL + LIB_METADATA, versions("1.0"));
+		Artifact range = Artifact.parse("org.example:lib:[1,2)");
+		assertThat(resolver(served, CENTRAL).versions(range)).containsExactly("1.0");
+		assertThat(served.requested).hasSize(2);
+
+		// the repository publishes 1.1: daily, the cached copy answers until midnight
+		served.file(CENTRAL + LIB_METADATA, versions("1.0", "1.1"));
+		served.requested.clear();
+		assertThat(resolver(served, CENTRAL).versions(range)).containsExactly("1.0");
+		assertThat(served.requested).isEmpty();
+		assertThat(policyResolver(served, "never", CENTRAL).versions(range)).containsExactly("1.0");
+		assertThat(served.requested).isEmpty();
+
+		// one resolver asks once, whatever the policy
+		MavenResolver always = policyResolver(served, "always", CENTRAL);
+		assertThat(always.versions(range)).containsExactly("1.0", "1.1");
+		assertThat(always.versions(Artifact.parse("org.example:lib:[1,3)"))).containsExactly("1.0", "1.1");
+		assertThat(served.requested).hasSize(2);
+
+		// a record from yesterday is asked again under daily
+		served.file(CENTRAL + LIB_METADATA, versions("1.0", "1.1", "1.2"));
+		Path tracking = this.local.resolve("org/example/lib/resolver-status.properties");
+		TrackingFile.update(tracking, Map.of("maven-metadata-central.xml.lastUpdated",
+				Long.toString(System.currentTimeMillis() - 2 * 24 * 60 * 60 * 1000L)));
+		assertThat(resolver(served, CENTRAL).versions(range)).containsExactly("1.0", "1.1", "1.2");
+	}
+
+	@Test
+	void metadataGoneFromTheRepositoryLeavesTheCacheAndIsRemembered() throws IOException {
+		Served served = new Served().file(CENTRAL + LIB_METADATA, versions("1.0"));
+		Artifact range = Artifact.parse("org.example:lib:[1,2)");
+		assertThat(resolver(served, CENTRAL).versions(range)).containsExactly("1.0");
+
+		served.answers.clear();
+		served.requested.clear();
+		assertThat(policyResolver(served, "always", CENTRAL).versions(range)).isEmpty();
+		assertThat(this.local.resolve("org/example/lib/maven-metadata-central.xml")).doesNotExist();
+		assertThat(served.requested).containsExactly(CENTRAL + LIB_METADATA);
+
+		// "not found" is remembered under the policy
+		served.requested.clear();
+		assertThat(resolver(served, CENTRAL).versions(range)).isEmpty();
+		assertThat(served.requested).isEmpty();
+	}
+
+	@Test
+	void metadataThatCannotBeVerifiedIsNotTakenAndTheFailureIsNamed() {
+		Served served = new Served().answer(CENTRAL + LIB_METADATA, versions("1.0"));
+
+		assertThatThrownBy(() -> resolver(served, CENTRAL)
+			.collect(List.of(Dependency.of(Artifact.parse("org.example:lib:[1,2)"))), List.of()))
+			.isInstanceOf(MavenResolutionException.class)
+			.hasMessage("while collecting org.example:lib:jar:[1,2): No versions available for "
+					+ "org.example:lib:jar:[1,2) within specified range (central: publishes no " + LIB_METADATA
+					+ ".sha1 to verify it against)");
+		assertThat(this.local.resolve("org/example/lib/maven-metadata-central.xml")).doesNotExist();
+	}
+
+	@Test
+	void offlineTheCachedMetadataAloneIsRead() throws IOException {
+		MavenSettings offline = new MavenSettings(null, true, List.of(), List.of(), List.of());
+		Served served = new Served().file(CENTRAL + LIB_METADATA, versions("1.0", "1.1"));
+		Artifact range = Artifact.parse("org.example:lib:[1,2)");
+
+		assertThat(resolver(served, offline, CENTRAL).versions(range)).isEmpty();
+		assertThat(served.requested).isEmpty();
+
+		resolver(served, CENTRAL).versions(range);
+		served.requested.clear();
+		assertThat(resolver(served, offline, CENTRAL).versions(range)).containsExactly("1.0", "1.1");
+		assertThat(served.requested).isEmpty();
+	}
+
+	@Test
+	void aFileNoRepositoryHadIsAskedForAgainOnlyUnderTheUpdatePolicy() throws IOException {
+		Served served = new Served();
+		assertThatThrownBy(() -> resolver(served, CENTRAL).artifact(LIB)).isInstanceOf(MavenResolutionException.class)
+			.hasMessageStartingWith("org.example:lib:jar:1.0 is in neither the local repository");
+		Path tracking = this.local.resolve("org/example/lib/1.0/lib-1.0.jar.lastUpdated");
+		assertThat(TrackingFile.read(tracking)).containsEntry(CENTRAL + ".error", "")
+			.containsKey(CENTRAL + ".lastUpdated");
+
+		// what mvn and clj record is honored: no second request today
+		served.file(CENTRAL + LIB.path(), JAR);
+		served.requested.clear();
+		assertThatThrownBy(() -> resolver(served, CENTRAL).artifact(LIB)).isInstanceOf(MavenResolutionException.class);
+		assertThat(served.requested).isEmpty();
+		// a missing POM is no request either: a second run needs no network
+		ArtifactDescriptor missing = resolver(served, CENTRAL).descriptor(Artifact.parse("org.example:gone:1"));
+		assertThat(missing.warnings()).hasSize(1);
+		served.requested.clear();
+		assertThat(resolver(served, CENTRAL).descriptor(Artifact.parse("org.example:gone:1")).warnings()).hasSize(1);
+		assertThat(served.requested).isEmpty();
+
+		assertThat(policyResolver(served, "always", CENTRAL).artifact(LIB)).hasBinaryContent(JAR);
+		assertThat(tracking).doesNotExist();
+	}
+
+	@Test
+	void aSnapshotResolvesToItsLatestBuildAcrossRepositories() throws IOException {
+		String other = "https://other.example/repo/";
+		Artifact snapshot = Artifact.parse("org.example:lib:1.0-SNAPSHOT");
+		String directory = "org/example/lib/1.0-SNAPSHOT/";
+		Served served = new Served()
+			.file(CENTRAL + directory + "maven-metadata.xml", snapshots("1.0-20240101.000000-1", "20240101000000"))
+			.file(other + directory + "maven-metadata.xml", snapshots("1.0-20240202.000000-2", "20240202000000"))
+			.file(other + directory + "lib-1.0-20240202.000000-2.jar", JAR);
+		MavenResolver resolver = resolver(served, CENTRAL, other);
+
+		assertThat(resolver.version(snapshot)).isEqualTo("1.0-20240202.000000-2");
+		Path file = resolver.artifact(snapshot);
+
+		// fetched from the repository that named the build, copied to the -SNAPSHOT name
+		assertThat(file).isEqualTo(this.local.resolve(directory + "lib-1.0-SNAPSHOT.jar")).hasBinaryContent(JAR);
+		assertThat(this.local.resolve(directory + "lib-1.0-20240202.000000-2.jar")).hasBinaryContent(JAR);
+		assertThat(served.requested).noneMatch(url -> url.startsWith(CENTRAL + directory + "lib-"));
+		assertThat(resolver.artifact(Artifact.parse("org.example:lib:1.0-20240202.000000-2")))
+			.isEqualTo(this.local.resolve(directory + "lib-1.0-SNAPSHOT.jar"));
+	}
+
+	@Test
+	void aSnapshotInstalledTodaySparesTheRemoteRepositories() throws IOException {
+		Artifact snapshot = Artifact.parse("org.example:lib:1.0-SNAPSHOT");
+		String directory = "org/example/lib/1.0-SNAPSHOT/";
+		write(this.local.resolve(directory + "maven-metadata-local.xml"), snapshots("1.0-SNAPSHOT", "20200101000000"));
+		write(this.local.resolve(directory + "lib-1.0-SNAPSHOT.jar"), JAR);
+		Served served = new Served().file(CENTRAL + directory + "maven-metadata.xml",
+				snapshots("1.0-20240202.000000-2", "20240202000000"));
+
+		assertThat(resolver(served, CENTRAL).artifact(snapshot)).hasBinaryContent(JAR);
+		assertThat(served.requested).isEmpty();
+		// installed before today, the newer deployed build wins
+		Files.setLastModifiedTime(this.local.resolve(directory + "maven-metadata-local.xml"),
+				FileTime.fromMillis(System.currentTimeMillis() - 2 * 24 * 60 * 60 * 1000L));
+		assertThat(resolver(served, CENTRAL).version(snapshot)).isEqualTo("1.0-20240202.000000-2");
+	}
+
+	@Test
+	void latestAndReleaseResolveThroughTheMetadata() throws MavenResolutionException {
+		Served served = new Served().file(CENTRAL + LIB_METADATA, ("""
+				<metadata><versioning><latest>2.0-beta</latest><release>1.5</release>
+				<lastUpdated>20240101000000</lastUpdated></versioning></metadata>
+				""").getBytes(StandardCharsets.UTF_8));
+		MavenResolver resolver = resolver(served, CENTRAL);
+
+		assertThat(resolver.version(Artifact.parse("org.example:lib:LATEST"))).isEqualTo("2.0-beta");
+		assertThat(resolver.version(Artifact.parse("org.example:lib:RELEASE"))).isEqualTo("1.5");
+		assertThat(resolver.version(Artifact.parse("org.example:lib:1.0"))).isEqualTo("1.0");
+		assertThatThrownBy(() -> resolver.version(Artifact.parse("org.example:none:RELEASE")))
+			.isInstanceOf(MavenResolutionException.class)
+			.hasMessage("Failed to resolve version for org.example:none:jar:RELEASE: Could not find metadata "
+					+ "org.example:none/maven-metadata.xml in local (" + this.local.toAbsolutePath().normalize() + ")");
+	}
+
+	@Test
+	void theUpdatePolicyIsSpelledAsMavenSpellsIt() {
+		assertThat(MavenResolver.builder().updatePolicy("interval:30")).isNotNull();
+		assertThatThrownBy(() -> MavenResolver.builder().updatePolicy("hourly"))
+			.isInstanceOf(IllegalArgumentException.class)
+			.hasMessage("not a Maven update policy (always, daily, never or interval:MINUTES): 'hourly'");
+	}
+
+	private static byte[] versions(String... versions) {
+		StringBuilder text = new StringBuilder(
+				"<metadata><groupId>org.example</groupId><artifactId>lib</artifactId><versioning><versions>");
+		for (String version : versions) {
+			text.append("<version>").append(version).append("</version>");
+		}
+		return text.append("</versions></versioning></metadata>").toString().getBytes(StandardCharsets.UTF_8);
+	}
+
+	private static byte[] snapshots(String value, String updated) {
+		return ("<metadata><versioning><snapshotVersions><snapshotVersion><extension>jar</extension><value>" + value
+				+ "</value><updated>" + updated + "</updated></snapshotVersion></snapshotVersions></versioning>"
+				+ "</metadata>")
+			.getBytes(StandardCharsets.UTF_8);
+	}
+
+	private static void write(Path file, byte[] bytes) throws IOException {
+		Files.createDirectories(file.getParent());
+		Files.write(file, bytes);
 	}
 
 	@Test
@@ -335,7 +558,8 @@ class MavenRepositoryTest {
 			.isInstanceOf(MavenResolutionException.class)
 			.hasMessageContaining("Non-resolvable parent POM org.example:parent:1");
 
-		List<String> dependencies = resolver(served, CENTRAL).projectDependencies(pom)
+		// published since: asked again once the update policy allows
+		List<String> dependencies = policyResolver(served, "always", CENTRAL).projectDependencies(pom)
 			.stream()
 			.map(MavenTestRepository::format)
 			.toList();

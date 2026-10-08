@@ -1,0 +1,17 @@
+# descriptor test.prange:child:1 test.prange:inherits:1.5 test.prange:refs:1 test.prange:open:1 test.prange:exact:1 test.prange:none:1 test.prange:release:1 test.prange:import-range:1 test.prange:import-release:1
+artifact test.prange:child:jar:1
+dep test.prange:from-15:jar::1 scope=compile optional=null
+artifact test.prange:inherits:jar:1.5
+warning invalid test.prange:inherits:jar:1.5: 1 problem was encountered while building the effective model for test.prange:inherits:1.5 [FATAL] Version must be a constant @ test.prange:parent:1.5
+artifact test.prange:refs:jar:1
+warning invalid test.prange:refs:jar:1: 1 problem was encountered while building the effective model for test.prange:refs:[1,2) [FATAL] Version must be a constant @ test.prange:parent:1.5
+error Failed to read artifact descriptor for test.prange:open:jar:1 <- The requested parent version range '[1,)' does not specify an upper bound
+artifact test.prange:exact:jar:1
+dep test.prange:from-10:jar::1 scope=compile optional=null
+error Failed to read artifact descriptor for test.prange:none:jar:1 <- No versions matched the requested parent version range '[3,4)'
+artifact test.prange:release:jar:1
+dep test.prange:from-20:jar::1 scope=compile optional=null
+error Failed to read artifact descriptor for test.prange:import-range:jar:1 <- The following artifacts could not be resolved: test.prange:bom:pom:[1,2) (absent): Could not find artifact test.prange:bom:pom:[1,2) in fixture (<repo>) <- The following artifacts could not be resolved: test.prange:bom:pom:[1,2) (absent): Could not find artifact test.prange:bom:pom:[1,2) in fixture (<repo>) <- Could not find artifact test.prange:bom:pom:[1,2) in fixture (<repo>)
+artifact test.prange:import-release:jar:1
+dep test.prange:managed:jar::7 scope=compile optional=null
+managed test.prange:managed:jar::7 scope= optional=null

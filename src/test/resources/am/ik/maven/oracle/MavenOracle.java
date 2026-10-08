@@ -60,7 +60,9 @@ import org.eclipse.aether.util.graph.manager.DependencyManagerUtils;
  * so a missing or invalid POM is a warning -- with checksums ignored (the fixture carries
  * none) and POM-declared repositories ignored (as MavenResolver ignores them), over fixed
  * system properties: java.version 25.0.4, os Linux amd64 6.8.0, java.home
- * /nonexistent/jdk.
+ * /nonexistent/jdk. The local repository starts as a copy of {@code local} beside the
+ * fixture repository (what {@code mvn install} left there: {@code maven-metadata-local.xml}
+ * files and their artifacts). A node whose version came from a range prints that range.
  */
 public class MavenOracle {
 
@@ -110,6 +112,16 @@ public class MavenOracle {
 		RepositorySystem system = locator.getService(RepositorySystem.class);
 		DefaultRepositorySystemSession session = MavenRepositorySystemUtils.newSession();
 		Path local = Files.createTempDirectory("oracle-local");
+		Path installed = repo.resolveSibling("local");
+		if (Files.isDirectory(installed)) {
+			try (java.util.stream.Stream<Path> files = Files.walk(installed)) {
+				for (Path file : files.filter(Files::isRegularFile).toList()) {
+					Path target = local.resolve(installed.relativize(file).toString());
+					Files.createDirectories(target.getParent());
+					Files.copy(file, target);
+				}
+			}
+		}
 		localPrefix = local.toString();
 		repoPrefix = repo.toUri().toString();
 		session.setLocalRepositoryManager(system.newLocalRepositoryManager(session, new LocalRepository(local.toFile())));
@@ -255,6 +267,11 @@ public class MavenOracle {
 	static void print(DependencyNode n, String indent, List<List<DependencyNode>> path) {
 		if (n.getDependency() != null) {
 			StringBuilder sb = new StringBuilder(indent + fmt(n.getDependency()));
+			if (n.getVersionConstraint() != null && n.getVersionConstraint().getRange() != null) {
+				// a union prints its ranges in hash order: sorted here
+				sb.append(" range=")
+					.append(String.join(", ", java.util.Arrays.stream(n.getVersionConstraint().toString().split(", ")).sorted().toList()));
+			}
 			String version = DependencyManagerUtils.getPremanagedVersion(n);
 			if (version != null) {
 				sb.append(" premanaged-version=").append(version);

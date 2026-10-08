@@ -1,0 +1,2 @@
+# resolve test.range:none:1
+error Failed to collect dependencies at test.range:none:jar:1 -> test.range:lib:jar:[3,4) <- No versions available for test.range:lib:jar:[3,4) within specified range

@@ -1,0 +1,2 @@
+# collect test.meta:broken:1
+error Failed to collect dependencies at test.meta:broken:jar:1 -> test.meta:nometa:jar:LATEST <- Failed to read artifact descriptor for test.meta:nometa:jar:LATEST <- Failed to resolve version for test.meta:nometa:jar:LATEST: Could not find metadata test.meta:nometa/maven-metadata.xml in local (<local>) <- Could not find metadata test.meta:nometa/maven-metadata.xml in local (<local>)

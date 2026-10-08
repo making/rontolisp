@@ -27,6 +27,12 @@ final class MavenTestRepository {
 	static final Path FIXTURE = Path.of("src/test/resources/am/ik/maven/repo");
 
 	/**
+	 * What {@code mvn install} left in a local repository, copied into the one each
+	 * {@link #resolver} reads (as {@code MavenOracle} copies it into Maven's).
+	 */
+	static final Path INSTALLED = Path.of("src/test/resources/am/ik/maven/local");
+
+	/**
 	 * The oracle's system properties: Java 25.0.4 on Linux amd64, no JDK at java.home.
 	 */
 	static final Map<String, String> SYSTEM = Map.of("java.version", "25.0.4", "java.home", "/nonexistent/jdk",
@@ -65,13 +71,22 @@ final class MavenTestRepository {
 
 	/**
 	 * A resolver over a {@code file:} copy of the fixture, with the oracle's system
-	 * properties plus {@code extra}.
+	 * properties plus {@code extra}, its local repository holding what the fixture
+	 * installed.
 	 * @param remote the copy, from {@link #remote}
 	 * @param local an empty local repository
 	 * @param extra system properties added or replaced
 	 * @return the resolver
+	 * @throws IOException if the installed files cannot be copied
 	 */
-	static MavenResolver resolver(Path remote, Path local, Map<String, String> extra) {
+	static MavenResolver resolver(Path remote, Path local, Map<String, String> extra) throws IOException {
+		try (Stream<Path> files = Files.walk(INSTALLED)) {
+			for (Path file : files.filter(Files::isRegularFile).toList()) {
+				Path target = local.resolve(INSTALLED.relativize(file).toString());
+				Files.createDirectories(target.getParent());
+				Files.copy(file, target);
+			}
+		}
 		Map<String, String> system = new LinkedHashMap<>(SYSTEM);
 		system.putAll(extra);
 		return MavenResolver.builder()
@@ -131,6 +146,10 @@ final class MavenTestRepository {
 
 	private static void render(DependencyNode node, String indent, List<String> lines) {
 		StringBuilder line = new StringBuilder(indent).append(format(node.dependency()));
+		if (node.versionRange() != null) {
+			line.append(" range=")
+				.append(String.join(", ", Stream.of(node.versionRange().split(", ")).sorted().toList()));
+		}
 		if (node.premanagedVersion() != null) {
 			line.append(" premanaged-version=").append(node.premanagedVersion());
 		}

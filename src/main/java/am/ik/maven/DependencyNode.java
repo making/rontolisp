@@ -17,6 +17,8 @@ import org.jspecify.annotations.Nullable;
  *
  * @param dependency the dependency, as managed
  * @param relocations the artifacts its POM relocated away from (empty when none)
+ * @param versionRange the version range the dependency wrote, its version one the
+ * repositories list in it, or {@code null} when it wrote one version
  * @param premanagedVersion the version before dependency management changed it, or
  * {@code null} when management left it alone
  * @param premanagedScope the scope before dependency management changed it, or
@@ -26,14 +28,15 @@ import org.jspecify.annotations.Nullable;
  * @param cycle whether the node closes a cycle
  * @param children the nodes below it
  */
-public record DependencyNode(Dependency dependency, List<Artifact> relocations, @Nullable String premanagedVersion,
-		@Nullable String premanagedScope, @Nullable Boolean premanagedOptional, boolean cycle,
-		List<DependencyNode> children) {
+public record DependencyNode(Dependency dependency, List<Artifact> relocations, @Nullable String versionRange,
+		@Nullable String premanagedVersion, @Nullable String premanagedScope, @Nullable Boolean premanagedOptional,
+		boolean cycle, List<DependencyNode> children) {
 
 	/**
 	 * Copies the lists.
 	 * @param dependency the dependency
 	 * @param relocations the relocated-away-from artifacts
+	 * @param versionRange the version range written, or {@code null}
 	 * @param premanagedVersion the version before management, or {@code null}
 	 * @param premanagedScope the scope before management, or {@code null}
 	 * @param premanagedOptional the optional flag before management, or {@code null}

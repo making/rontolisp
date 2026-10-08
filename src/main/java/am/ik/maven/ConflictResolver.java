@@ -7,6 +7,7 @@ import java.util.HashSet;
 import java.util.IdentityHashMap;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.ListIterator;
 import java.util.Map;
@@ -21,16 +22,17 @@ import org.jspecify.annotations.Nullable;
  * groups the nodes that are one artifact (relocations join a group),
  * {@code ConflictIdSorter} orders the groups parents first, and each group keeps one
  * node: the nearest ({@code NearestVersionSelector}; between two children of one parent,
- * the higher version), its scope chosen by {@code JavaScopeSelector} over the scopes
- * {@code JavaScopeDeriver} derives along every path, its optional flag by
+ * the higher version) among the versions every range met so far admits -- a range that
+ * excludes the current choice backtracks to the nearest earlier candidate it admits, and
+ * no such candidate fails the resolution -- its scope chosen by {@code JavaScopeSelector}
+ * over the scopes {@code JavaScopeDeriver} derives along every path, its optional flag by
  * {@code SimpleOptionalitySelector}. Every other node of the group is removed from the
  * child list it sits in, which removes it under every parent sharing that list.
  *
  * <p>
  * A port, not a re-derivation: the traversal orders, the hash-ordered collections and the
  * order-dependent loser removal are Maven Resolver 1.9's, so a tie breaks the way Maven
- * breaks it. Version ranges never reach here (the collector refuses them), so the
- * selector's range constraints and backtracking are absent.
+ * breaks it.
  */
 final class ConflictResolver {
 
@@ -42,8 +44,10 @@ final class ConflictResolver {
 	 * @param collected the graph {@link DependencyCollector} answered
 	 * @return the graph with one node per artifact, each with its selected scope and
 	 * optional flag
+	 * @throws MavenResolutionException if no version of an artifact satisfies every range
+	 * met for it
 	 */
-	static DependencyGraph resolve(DependencyGraph collected) {
+	static DependencyGraph resolve(DependencyGraph collected) throws MavenResolutionException {
 		Node root = Node.of(collected);
 		Map<Node, Integer> conflictIds = mark(root);
 		Sorted sorted = sort(root, conflictIds);
@@ -151,14 +155,22 @@ final class ConflictResolver {
 				}
 			}
 			DependencyNode record = new DependencyNode(Objects.requireNonNull(this.dependency), source.relocations(),
-					source.premanagedVersion(), source.premanagedScope(), source.premanagedOptional(), source.cycle(),
-					records);
+					source.versionRange(), source.premanagedVersion(), source.premanagedScope(),
+					source.premanagedOptional(), source.cycle(), records);
 			done.put(this, record);
 			return record;
 		}
 
 		Artifact artifact() {
 			return Objects.requireNonNull(this.dependency).artifact();
+		}
+
+		/**
+		 * The node's version constraint as Maven prints it: the range, else the version.
+		 */
+		String constraint() {
+			String range = this.source == null ? null : this.source.versionRange();
+			return range != null ? range : artifact().version();
 		}
 
 		boolean managedScope() {
@@ -513,6 +525,10 @@ final class ConflictResolver {
 
 		final Node node;
 
+		final GenericVersion version;
+
+		final @Nullable VersionConstraint constraint;
+
 		int depth;
 
 		final Set<String> scopes = new HashSet<>();
@@ -523,9 +539,11 @@ final class ConflictResolver {
 
 		static final int OPTIONAL_TRUE = 0x02;
 
-		Item(@Nullable Node parent, Node node, String scope, boolean optional) {
+		Item(@Nullable Node parent, Node node, String scope, boolean optional, @Nullable VersionConstraint constraint) {
 			this.parent = parent == null ? null : parent.children;
 			this.node = node;
+			this.version = GenericVersion.parse(node.artifact().version());
+			this.constraint = constraint;
 			this.scopes.add(scope);
 			this.optionalities = optional ? OPTIONAL_TRUE : OPTIONAL_FALSE;
 		}
@@ -617,13 +635,15 @@ final class ConflictResolver {
 
 		private @Nullable Item winner;
 
+		private final Map<String, VersionConstraint> constraints = new HashMap<>();
+
 		Resolution(Node root, Map<Node, Integer> conflictIds, Sorted sorted) {
 			this.root = root;
 			this.conflictIds = conflictIds;
 			this.sorted = sorted;
 		}
 
-		void run() {
+		void run() throws MavenResolutionException {
 			Map<Object, Collection<Object>> cyclicPredecessors = new HashMap<>();
 			for (Collection<Integer> cycle : this.sorted.cycles()) {
 				for (Integer conflictId : cycle) {
@@ -786,7 +806,26 @@ final class ConflictResolver {
 
 		private Item newItem(@Nullable Node parent, Node node) {
 			return new Item(parent, node, Objects.requireNonNullElse(deriveScope(node, null), ""),
-					deriveOptional(node, null));
+					deriveOptional(node, null), constraintOf(node));
+		}
+
+		/** A node's range, parsed once per spelling. */
+		private @Nullable VersionConstraint constraintOf(Node node) {
+			String range = node.source == null ? null : node.source.versionRange();
+			if (range == null) {
+				return null;
+			}
+			VersionConstraint known = this.constraints.get(range);
+			if (known == null) {
+				try {
+					known = VersionConstraint.parse(range);
+				}
+				catch (MavenResolutionException ex) {
+					throw new IllegalStateException("a collected node with an invalid range: " + range, ex);
+				}
+				this.constraints.put(range, known);
+			}
+			return known;
 		}
 
 		// JavaScopeDeriver along the walked path, unless the scope is settled.
@@ -836,22 +875,113 @@ final class ConflictResolver {
 			return depth > 0 && this.parentOptionals.get(depth - 1);
 		}
 
-		// NearestVersionSelector without version ranges: the shallowest occurrence, or
-		// between two children of one parent the higher version; the first on a tie.
-		private Item selectVersion() {
+		// NearestVersionSelector: the shallowest occurrence, or between two children of
+		// one parent the higher version, the first on a tie -- among the versions every
+		// range met so far admits; a range excluding the current winner backtracks over
+		// the candidates.
+		private Item selectVersion() throws MavenResolutionException {
+			Set<VersionConstraint> ranges = new HashSet<>();
+			List<Item> candidates = new ArrayList<>(64);
 			Item selected = null;
 			for (Item item : this.items) {
-				if (selected == null || isNearer(item, selected)) {
-					selected = item;
+				VersionConstraint constraint = item.constraint;
+				boolean backtrack = false;
+				if (constraint != null && ranges.add(constraint) && selected != null
+						&& !constraint.contains(selected.version)) {
+					backtrack = true;
+				}
+				if (isAcceptable(ranges, item.version)) {
+					candidates.add(item);
+					if (backtrack) {
+						selected = backtrack(ranges, candidates);
+					}
+					else if (selected == null || isNearer(item, selected)) {
+						selected = item;
+					}
+				}
+				else if (backtrack) {
+					selected = backtrack(ranges, candidates);
 				}
 			}
-			return Objects.requireNonNull(selected);
+			if (selected == null) {
+				throw new MavenResolutionException("conflict resolver did not select winner among " + this.items);
+			}
+			return selected;
+		}
+
+		private Item backtrack(Set<VersionConstraint> ranges, List<Item> candidates) throws MavenResolutionException {
+			Item selected = null;
+			for (Iterator<Item> it = candidates.iterator(); it.hasNext();) {
+				Item candidate = it.next();
+				if (!isAcceptable(ranges, candidate.version)) {
+					it.remove();
+				}
+				else if (selected == null || isNearer(candidate, selected)) {
+					selected = candidate;
+				}
+			}
+			if (selected == null) {
+				throw unsolvable();
+			}
+			return selected;
+		}
+
+		private static boolean isAcceptable(Set<VersionConstraint> ranges, GenericVersion version) {
+			for (VersionConstraint range : ranges) {
+				if (!range.contains(version)) {
+					return false;
+				}
+			}
+			return true;
+		}
+
+		/**
+		 * {@code UnsolvableVersionConflictException}: every path from the root to a node
+		 * of the group, each node with its constraint, the walk not descending below a
+		 * node of the group.
+		 */
+		private MavenResolutionException unsolvable() {
+			Set<String> paths = new LinkedHashSet<>();
+			paths(this.root, new ArrayList<>(), new IdentityHashMap<>(), paths);
+			return new MavenResolutionException("Could not resolve version conflict among " + paths);
+		}
+
+		private void paths(Node node, List<Node> path, Map<Node, Boolean> visited, Set<String> paths) {
+			if (visited.put(node, Boolean.TRUE) != null) {
+				return;
+			}
+			path.add(node);
+			if (node.dependency != null && this.currentId.equals(this.conflictIds.get(node))) {
+				StringBuilder text = new StringBuilder();
+				for (Node step : path) {
+					if (step.dependency == null) {
+						continue;
+					}
+					Artifact artifact = step.artifact();
+					text.append(text.isEmpty() ? "" : " -> ")
+						.append(artifact.groupId())
+						.append(':')
+						.append(artifact.artifactId())
+						.append(':')
+						.append(artifact.extension());
+					if (!artifact.classifier().isEmpty()) {
+						text.append(':').append(artifact.classifier());
+					}
+					text.append(':').append(step.constraint());
+				}
+				paths.add(text.toString());
+			}
+			else {
+				for (Node child : node.children) {
+					paths(child, path, visited, paths);
+				}
+			}
+			path.remove(path.size() - 1);
 		}
 
 		private static boolean isNearer(Item item1, Item item2) {
 			if (item1.isSibling(item2)) {
-				return GenericVersion.parse(item1.dependency().artifact().version())
-					.compareTo(GenericVersion.parse(item2.dependency().artifact().version())) > 0;
+				return item1.version.compareTo(item2.version) > 0;
 			}
 			return item1.depth < item2.depth;
 		}

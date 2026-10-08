@@ -93,6 +93,18 @@ class MavenOracleParityTest {
 			}
 			catch (MavenResolutionException ex) {
 				ours.add("error " + ex.getMessage());
+				if (!request.mode().equals("collect")) {
+					// a version conflict no candidate settles fails after the collection,
+					// whose warnings Maven reports with the failure
+					try {
+						resolver.collect(request.dependencies(), request.managed())
+							.warnings()
+							.forEach(warning -> ours.add("warning " + warning));
+					}
+					catch (MavenResolutionException collecting) {
+						// failed while collecting: no warnings, as in Maven's answers
+					}
+				}
 			}
 		}
 		else {
