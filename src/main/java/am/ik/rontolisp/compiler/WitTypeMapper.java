@@ -1,5 +1,7 @@
 package am.ik.rontolisp.compiler;
 
+import java.util.List;
+
 import am.ik.wit.WitItem;
 import am.ik.wit.WitType;
 
@@ -147,16 +149,44 @@ public final class WitTypeMapper {
 	/**
 	 * A WIT type use resolved to its house representation, for a front end that binds a
 	 * WIT surface before the lowering runs ({@link WitImportDirective#describe},
-	 * {@link WitExportDirective#describe}): the representation, plus the one nested type
-	 * a value of it can carry unchanged -- an {@code option}'s element, a
-	 * {@code result}'s ok arm ({@code null} for a payload-less arm, and for every other
-	 * representation).
+	 * {@link WitExportDirective#describe}) and converts its own values to and from the
+	 * representation: the representation plus every type nested in it, aliases followed.
 	 *
 	 * @param rep the house representation
-	 * @param element the option's element or the result's ok arm, or {@code null}
-	 * @param wit the type as the WIT spells it, for a message
+	 * @param element an {@code option}'s element, a {@code result}'s ok arm or a
+	 * {@code list}'s element ({@code null} for a payload-less arm, and for every other
+	 * representation)
+	 * @param wit the type as the WIT spells it where it is used, for a message
+	 * @param error a {@code result}'s error arm, {@code null} for a payload-less arm and
+	 * for every other representation
+	 * @param parts a {@code record}'s fields, a {@code variant}'s cases (a payload-less
+	 * case with no shape), an {@code enum}'s or a {@code flags}' labels (no shapes) and a
+	 * {@code tuple}'s elements (labelled by position), in WIT order; empty for every
+	 * other representation
 	 */
-	public record Shape(Rep rep, @Nullable Shape element, String wit) {
+	public record Shape(Rep rep, @Nullable Shape element, String wit, @Nullable Shape error, List<Part> parts) {
+
+		/**
+		 * A shape nesting nothing but an element.
+		 * @param rep the house representation
+		 * @param element the element, or {@code null}
+		 * @param wit the type as the WIT spells it
+		 */
+		public Shape(Rep rep, @Nullable Shape element, String wit) {
+			this(rep, element, wit, null, List.of());
+		}
+
+	}
+
+	/**
+	 * A labelled member of a {@link Shape}: a record's field, a variant's case, an enum's
+	 * or a flags' label, a tuple's element.
+	 *
+	 * @param label the WIT label as written ({@code DNS-error}), or the element's
+	 * position
+	 * @param shape its type, or {@code null} for a payload-less case and a label
+	 */
+	public record Part(String label, @Nullable Shape shape) {
 	}
 
 	/**

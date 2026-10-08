@@ -1,7 +1,9 @@
 hits per page:
+  /docs = 1
   /index = 3
   /pricing = 2
-  /docs = 1
 /docs exists?     true
 /docs exists now? false
+keys:             ("/index" "/pricing")
 values:           [3 2 nil]
+bad store:        :no-such-store

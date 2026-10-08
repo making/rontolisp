@@ -388,10 +388,14 @@ public final class WitImportDirective {
 				}
 				if (isResultReturning(func, resolver, iface)) {
 					// The raw synthetic defun returns the (:ok . V) / (:error . E)
-					// envelope; the public wrapper unwraps it and signals the error arm.
+					// envelope; the public wrapper unwraps it and signals the error
+					// arm. A front end reading the envelope itself names the raw
+					// binding alone and gets no wrapper (rawOnly).
 					String raw = rawName(directive, member);
 					componentMembers.add(memberBinding(member, raw));
-					bindings.add(resultWrapperDefun(name, raw, params));
+					if (!rawOnly(memberFilter, directive, member)) {
+						bindings.add(resultWrapperDefun(name, raw, params));
+					}
 				}
 				else {
 					componentMembers.add(memberBinding(member, name));
@@ -552,8 +556,9 @@ public final class WitImportDirective {
 		// only knowable once every import is in hand, so the component path defers the
 		// judgement to WasmComponentBuilder.appendUserImports. On every other backend an
 		// interface is a set of callable functions and nothing else, so an unused one is
-		// a mistake worth naming.
-		if (boundMembers.isEmpty() && !component) {
+		// a mistake worth naming -- unless a filter left every member out: then the
+		// program names none, which binds nothing.
+		if (boundMembers.isEmpty() && !component && memberFilter == null) {
 			throw new UnsupportedOperationException(witPath + ":" + locations.lineOf(iface) + ": interface '"
 					+ iface.name() + "': the program calls none of its functions");
 		}
@@ -757,31 +762,104 @@ public final class WitImportDirective {
 	}
 
 	// A WIT type use resolved to its house representation: aliases followed (across
-	// interfaces), a named type classified by its definition, and an option's element or
-	// a result's ok arm described in the scope THAT type is written in.
+	// interfaces), a named type classified by its definition. A type naming no definition
+	// is the member's error, as lower() makes it.
 	private static WitTypeMapper.Shape shapeOf(WitType type, WitResolver resolver, WitItem.InterfaceDef iface,
 			String witPath, WitLocations locations, WitItem anchor, String member, String what) {
 		Scoped scoped = resolveAliases(type, resolver, iface);
+		if (scoped.type() instanceof WitType.Named named
+				&& resolver.resolveOwned(scoped.iface(), named.name()) == null) {
+			throw undefinedType(witPath, locations, anchor, member, what, named);
+		}
+		return shapeOf(type, resolver, iface, new ArrayList<>());
+	}
+
+	// The whole shape, every nested type described in the scope THAT type is written in
+	// (an option's element, a result's arms, a list's element, a record's fields, a
+	// variant's payloads, a tuple's elements). A nested type naming no definition, or a
+	// definition containing itself, has no representation: lower() reaches neither on the
+	// interpreter and the JVM, so the member is the front end's to refuse where a program
+	// calls it, never the whole interface's. `path` holds the definitions being
+	// described.
+	private static WitTypeMapper.Shape shapeOf(WitType type, WitResolver resolver, WitItem.InterfaceDef iface,
+			List<WitItem> path) {
+		Scoped scoped = resolveAliases(type, resolver, iface);
 		WitType t = scoped.type();
-		WitTypeMapper.Rep rep;
-		if (t instanceof WitType.Named named) {
-			WitResolver.Owned owned = resolver.resolveOwned(scoped.iface(), named.name());
-			if (owned == null) {
-				throw undefinedType(witPath, locations, anchor, member, what, named);
+		WitItem.InterfaceDef in = scoped.iface();
+		String wit = am.ik.wit.WitPrinter.type(type);
+		switch (t) {
+			case WitType.Named named -> {
+				WitResolver.Owned owned = resolver.resolveOwned(in, named.name());
+				if (owned == null || path.stream().anyMatch(seen -> seen == owned.item())) {
+					return new WitTypeMapper.Shape(WitTypeMapper.Rep.UNSUPPORTED, null, wit);
+				}
+				path.add(owned.item());
+				try {
+					List<WitTypeMapper.Part> parts = new ArrayList<>();
+					switch (owned.item()) {
+						case WitItem.RecordDef record -> {
+							for (WitItem.Field field : record.fields()) {
+								parts.add(new WitTypeMapper.Part(field.name(),
+										shapeOf(field.type(), resolver, owned.owner(), path)));
+							}
+						}
+						case WitItem.VariantDef variant -> {
+							for (WitItem.Case c : variant.cases()) {
+								parts.add(new WitTypeMapper.Part(c.name(), c.payload() == null ? null
+										: shapeOf(c.payload(), resolver, owned.owner(), path)));
+							}
+						}
+						case WitItem.EnumDef enumDef -> {
+							for (WitItem.Case c : enumDef.cases()) {
+								parts.add(new WitTypeMapper.Part(c.name(), null));
+							}
+						}
+						case WitItem.FlagsDef flags -> {
+							for (WitItem.Case c : flags.cases()) {
+								parts.add(new WitTypeMapper.Part(c.name(), null));
+							}
+						}
+						default -> {
+							// a resource: an opaque handle
+						}
+					}
+					return new WitTypeMapper.Shape(WitTypeMapper.repOfDefinition(owned.item()), null, wit, null,
+							List.copyOf(parts));
+				}
+				finally {
+					path.removeLast();
+				}
 			}
-			rep = WitTypeMapper.repOfDefinition(owned.item());
+			case WitType.OptionOf option -> {
+				return new WitTypeMapper.Shape(WitTypeMapper.Rep.NIL_OR_VALUE,
+						shapeOf(option.element(), resolver, in, path), wit);
+			}
+			case WitType.ResultOf result -> {
+				return new WitTypeMapper.Shape(WitTypeMapper.Rep.RESULT,
+						result.ok() == null ? null : shapeOf(result.ok(), resolver, in, path), wit,
+						result.err() == null ? null : shapeOf(result.err(), resolver, in, path), List.of());
+			}
+			case WitType.ListOf list -> {
+				// a list of bytes is a byte string whatever alias names its element, as
+				// the canonical ABI lifts it (WasmComponentImportCompiler's isU8)
+				if (isU8(list.element(), resolver, in)) {
+					return new WitTypeMapper.Shape(WitTypeMapper.Rep.BYTE_STRING, null, wit);
+				}
+				return new WitTypeMapper.Shape(WitTypeMapper.Rep.LIST, shapeOf(list.element(), resolver, in, path),
+						wit);
+			}
+			case WitType.TupleOf tuple -> {
+				List<WitTypeMapper.Part> parts = new ArrayList<>();
+				for (WitType element : tuple.elements()) {
+					parts.add(new WitTypeMapper.Part(Integer.toString(parts.size()),
+							shapeOf(element, resolver, in, path)));
+				}
+				return new WitTypeMapper.Shape(WitTypeMapper.Rep.TUPLE_LIST, null, wit, null, List.copyOf(parts));
+			}
+			default -> {
+				return new WitTypeMapper.Shape(WitTypeMapper.rep(t), null, wit);
+			}
 		}
-		else {
-			rep = WitTypeMapper.rep(t);
-		}
-		WitTypeMapper.Shape element = null;
-		if (t instanceof WitType.OptionOf option) {
-			element = shapeOf(option.element(), resolver, scoped.iface(), witPath, locations, anchor, member, what);
-		}
-		else if (t instanceof WitType.ResultOf result && result.ok() != null) {
-			element = shapeOf(result.ok(), resolver, scoped.iface(), witPath, locations, anchor, member, what);
-		}
-		return new WitTypeMapper.Shape(rep, element, am.ik.wit.WitPrinter.type(type));
 	}
 
 	private static final String NO_GC_COMPONENT_RESOURCE_REASON = " (a resource handle has no scalar component"
@@ -858,13 +936,28 @@ public final class WitImportDirective {
 
 	// Whether a reference filter (the members the program names) rules the member out.
 	// Under a :names table the program names the BOUND name, which the filter holds as
-	// it is spelled; otherwise the WIT label, whose reader spellings the filter holds.
+	// it is spelled, or the raw binding behind it (rawName: a front end that reads a
+	// result's envelope itself calls that); otherwise the WIT label, whose reader
+	// spellings the filter holds.
 	private static boolean filtered(@Nullable Set<String> filter, Directive directive, String member) {
 		if (filter == null) {
 			return false;
 		}
 		Map<String, String> names = directive.names();
-		return !filter.contains(names == null ? member : names.get(member));
+		if (names == null) {
+			return !filter.contains(member);
+		}
+		String name = names.get(member);
+		return !filter.contains(name) && !filter.contains(name + "%raw");
+	}
+
+	// Whether a result-returning member is named only through its raw binding: the front
+	// end unwraps the envelope itself, so the public wrapper -- and the wit.lisp runtime
+	// its %wit-result call splices -- would be dead code (--component skips the tree
+	// shaker).
+	private static boolean rawOnly(@Nullable Set<String> filter, Directive directive, String member) {
+		Map<String, String> names = directive.names();
+		return filter != null && names != null && !filter.contains(names.get(member));
 	}
 
 	// The Lisp name one binding is DEFINED under: the :names table's, when the directive

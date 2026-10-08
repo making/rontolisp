@@ -319,18 +319,34 @@ the provider's member strings, the Preview 1 fields and the component's import/e
   verbatim; an unlisted one is neither bound nor checked against the backend's tier (the front
   end judged it). The internal names follow the bound name behind a lone `%` (`<name>%raw`,
   `%start`, `%lift`), which no Clojure identifier spells. The component reference filter
-  compares the bound name. `:package` beside it is an error.
+  compares the bound name, or the raw binding: a front end that reads a result's envelope
+  itself names `<name>%raw` alone, and the member is then bound without its `%wit-result`
+  wrapper (`rawOnly`), which would splice wit.lisp for nothing. A table directive is filtered
+  by reference on Preview 1 too (`WitImportInliner`; `--no-prune` binds the whole table):
+  the table lists the front end's whole tier, so a member the core import cannot carry fails
+  the build only where the program calls it, and a filter leaving every member out binds
+  nothing instead of the "calls none of its functions" refusal. `:package` beside it is an
+  error.
 - **`wit-export`**: each world export is implemented by the function the table names and
   emitted with `:as "label"` (a `c%...` symbol, lowercased, is no label); a label the table
   leaves out is the usual missing-`defun` error.
 - **`describe`** (`WitImportDirective.describe`, `WitExportDirective.describe`): the members a
-  lowering would bind / the world's exports, each typed as a `WitTypeMapper.Shape`
-  (representation, the element of an `option` or a `result`'s ok arm, the WIT spelling) with its
+  lowering would bind / the world's exports, each typed as a `WitTypeMapper.Shape` with its
   line, after the same passes and checks as `lower` but before any program exists, so a front
-  end binds its names before lowering. The built-ins of a type alias whose target names no
-  definition describe as `UNSUPPORTED`: `lower` checks that target only where it binds them.
+  end binds its names before lowering. A shape is the whole type, aliases followed and each
+  nested type resolved in the interface that writes it (`use` crossed): the element of an
+  `option`, a `list` or a `result`'s ok arm, the error arm, and `parts` -- a record's fields, a
+  variant's cases (a payload-less one shapeless), an enum's and a flags' labels, a tuple's
+  elements -- which is what a front end converts its own values by (the Clojure walker,
+  `.kb/clojure-frontend.md`, "Host boundary"). A `list` of an alias of `u8` is a byte string,
+  as the component lifts it. A top-level type naming no definition is `lower`'s error; a
+  NESTED one, or a definition containing itself, describes as `UNSUPPORTED` -- the
+  interpreter's `lower` never looks inside a record, so only the member reaching it is the
+  front end's to refuse. The built-ins of a type alias whose target names no definition
+  describe as `UNSUPPORTED`: `lower` checks that target only where it binds them.
 - Pins: `WitNamingHookTest` (every backend's binding names, the internal names, the filter,
-  the parse refusals, both `describe`s).
+  the raw-only binding, the parse refusals, both `describe`s and the nested shapes),
+  `WitImportInlinerTest.aNamesTableBindsOnPreview1TheMembersTheProgramNames`.
 
 ### The gl.lisp migration
 `examples/browser/webgl-common/gl.wit` is checked in; gl.lisp binds `local:webgl/gl` and

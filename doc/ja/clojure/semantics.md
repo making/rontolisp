@@ -386,9 +386,12 @@ ClojureScript の `^:mutable` は指定になりません。ローカル・パ�
 プログラムと同じように結びます（[WASM ホスト関数](reference/wasm.md)、[WIT 契約](reference/wit.md)）。
 ホストに見える名前は書いたとおりの名前で、マングルしたシンボルではありません。`false` は
 ホストの偽として渡り、`false` として戻ります。`:s-expr` は Clojure のプリンタのテキストとして
-渡ります。WIT の import の var は、`require` のエイリアスと同じくそのフォームより下で存在し、
-`defimport` は `defn` と同じくそれより上でも呼べます。エクスポートはファイル全体の低下が
-終わってから var を解決するので、var はエクスポートより下で定義してかまいません。
+渡ります。それより豊かな WIT の値は両方向で Clojure の綴りで渡り（レコードはマップ、enum や
+バリアントのケースはキーワードか `[:case payload]`、フラグは集合、タプルやリストはベクタ）、
+`result` のエラー側はエラーの値を持つ `ExceptionInfo` として渡ります。WIT の import の var
+は、`require` のエイリアスと同じくそのフォームより下で存在し、`defimport` は `defn` と同じく
+それより上でも呼べます。エクスポートはファイル全体の低下が終わってから var を解決するので、
+var はエクスポートより下で定義してかまいません。
 
 ## 未対応
 
@@ -412,7 +415,7 @@ ClojureScript の `^:mutable` は指定になりません。ローカル・パ�
 | `file-seq`、`clojure.java.io`（`reader` 以外） | `file-seq` / `unknown name: clojure.java.io/...` | ディレクトリ走査なし。解決するのは `reader` のみで、ファイルストリームのリーダーを開く |
 | 非同期の Ring ハンドラ（`:async? true` 付きの `run-server`） | `asynchronous handlers (:async? true) are not supported` | トランスポートに respond/raise の仕組みがない |
 | `rontolisp.wasm` の宣言の `:async`、`async func` の WIT メンバーやエクスポート | `:async is not supported yet ...`、`... is an async func ...` | 中断する呼び出しが答える future は Clojure の future ではない |
-| レコード、variant、enum、flags、タプル、リスト（`list<u8>` を除く）、stream、future を受け取るか答える WIT メンバー | `... which the Clojure tier does not carry yet (file.wit:N)` | それらの Clojure の値と境界の値の変換がまだない |
+| stream か future を受け取るか答える WIT メンバー | `... which the Clojure tier does not carry yet (file.wit:N)` | 非同期 canonical ABI のハンドルが答える Clojure の future がまだない |
 | `rontolisp.wasm` の宣言の `:bytes` | `:bytes does not cross from Clojure ...` | `(unsigned-byte 8)` のベクタを渡すが、それに当たる Clojure の値がない |
 
 ## エラーと位置

@@ -22,7 +22,9 @@ macros calling program functions, or WIT rich types. Each needs a runnable examp
 - HTTP client over `rontolisp:fetch` (e44): a leg that needs no external host, or a
   compile-only leg as `ring-hello.clj` does.
 - Macro bodies calling the program's functions (e46).
-- WIT rich types (e50): extend `greeter/` or add a world beside it.
+- WIT rich types (e50): an import, since a world's exports carry primitives only
+  (`wit/keyvalue/page-hits.clj` already answers a record and catches an error arm); one
+  under `examples/clojure/` crossing a variant, flags and a `result` argument.
 
 ## Plan
 

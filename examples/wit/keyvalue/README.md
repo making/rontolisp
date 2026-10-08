@@ -256,8 +256,11 @@ $ rontolisp page-hits.clj -o page-hits-clj.wasm --component && wasmtime run -S k
 ```
 
 All three print the same lines. On the component the `wit/provide` binds nothing:
-wasmtime is the store. `bucket.list-keys` is not called, because it answers a
-record, which the Clojure side does not carry yet.
+wasmtime is the store. Every value crosses in its Clojure spelling, the provider's
+included: `bucket.list-keys` answers the `key-response` record as a map
+(`(:keys (kv/bucket-list-keys bucket nil))`), and `open`'s error arm is an
+`ExceptionInfo` whose `ex-data` holds the `error` variant's case under
+`::wit/error` -- `:no-such-store`, from wasmtime's store and the Clojure one alike.
 
 ## Limitations
 
