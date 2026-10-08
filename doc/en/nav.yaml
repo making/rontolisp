@@ -273,6 +273,8 @@ sections:
             title: "(clojure.zip)"
           - file: clojure/reference/clojure-data.md
             title: "(clojure.data)"
+          - file: clojure/reference/clojure-datafy.md
+            title: "(clojure.datafy)"
           - file: clojure/reference/clojure-edn.md
             title: "(clojure.edn)"
           - file: clojure/reference/clojure-pprint.md

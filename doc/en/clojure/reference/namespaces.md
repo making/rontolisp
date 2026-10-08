@@ -16,10 +16,10 @@ Every namespace has its own vars: a definition belongs to the current namespace,
 ## Built-in namespaces
 
 A built-in namespace written in Clojure loads like a project file, after every source root,
-so a file of its name on the source path takes precedence -- except `clojure.walk`, which
-is loaded before the program, as in Clojure: a qualified name such as
-`clojure.walk/postwalk` reaches it without a `require`, as it does `clojure.edn`'s and
-`clojure.string`'s. A `clojure.*` namespace that is not
+so a file of its name on the source path takes precedence -- except `clojure.walk` and
+`clojure.core.protocols`, which are loaded before the program, as in Clojure: a qualified
+name such as `clojure.walk/postwalk` reaches one without a `require`, as it does
+`clojure.edn`'s and `clojure.string`'s. A `clojure.*` namespace that is not
 part of Clojure itself (a contrib library such as `clojure.data.json`) loads from the
 source path like any other; any other namespace of Clojure's own is an error.
 
@@ -31,6 +31,7 @@ source path like any other; any other namespace of Clojure's own is an error.
 | `clojure.edn` | [clojure.edn](clojure-edn.md) |
 | `clojure.data` | [clojure.data](clojure-data.md) |
 | `clojure.zip` | [clojure.zip](clojure-zip.md) |
+| `clojure.datafy`, `clojure.core.protocols` | [clojure.datafy](clojure-datafy.md) |
 | `clojure.pprint` | [clojure.pprint](clojure-pprint.md) |
 | `clojure.template` | [clojure.template](clojure-template.md) |
 | `clojure.java.io` (`reader` only) | [IO](io.md) |

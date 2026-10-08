@@ -28,6 +28,8 @@ import org.jspecify.annotations.Nullable;
  * is a 26,940 B module.</li>
  * <li>{@code rontolisp.internal.pprint} for {@code clojure.pprint}: the pretty print's
  * token buffer and its layout, and the radix spelling of a number.</li>
+ * <li>{@code rontolisp.internal.datafy} for {@code clojure.datafy}: the oracle's class
+ * name of a value, which {@code class} (a kind keyword here) does not answer.</li>
  * </ul>
  *
  * <p>
@@ -58,7 +60,9 @@ final class ClojureKernelLowering {
 					Map.ofEntries(Map.entry("call", 3), Map.entry("start", 4), Map.entry("end", 1),
 							Map.entry("newline", 1), Map.entry("indent", 2), Map.entry("fresh-line", 0),
 							Map.entry("length-reached", 1), Map.entry("count-object", 0), Map.entry("reset-length", 0),
-							Map.entry("number-string", 3), Map.entry("members", 1))));
+							Map.entry("number-string", 3), Map.entry("members", 1))),
+			"rontolisp.internal.datafy",
+			new Kernels("clojure.datafy", "RONTOLISP::%CLOJURE-", Map.of("class-name-of", 1)));
 
 	private ClojureKernelLowering() {
 	}

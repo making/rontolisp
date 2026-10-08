@@ -8245,3 +8245,40 @@ cases:
       "Insert at top" "Remove at top"
       [[2 true]]
       [1 {:l [], :pnodes [[1 [2 3] [4 [5 6]] 7]], :ppath nil, :r ([2 3] [4 [5 6]] 7)}]
+  - name: clojure-datafy-and-core-protocols-like-the-oracle
+    # The built-in clojure.core.protocols and clojure.datafy (.kb/clojure-frontend.md
+    # "clojure.jar namespaces"): a qualified name reaching the startup namespace, datafy and
+    # nav through metadata and through extension rows (record, the atom row and its ::class),
+    # IKVReduce extended to a deftype, InternalReduce. Every line is the oracle's
+    # (clj 1.12.6), on all four backends.
+    source: |
+      (prn (clojure.core.protocols/datafy 1) (clojure.core.protocols/datafy nil) (clojure.core.protocols/nav {:a 1} :a 1))
+      (ns datafy-nav (:require [clojure.datafy :as d] [clojure.core.protocols :as p]))
+      (def v (with-meta [1 2] {`p/datafy (fn [x] {:items (count x)})}))
+      (prn (d/datafy v) (::d/obj (meta (d/datafy v))) (::d/class (meta (d/datafy v))))
+      (prn (d/nav (with-meta {:a 1} {`p/nav (fn [coll k v] [:navigated k v])}) :a 1) (d/nav {:a 1} :a 1))
+      (prn (d/datafy (atom 5)) (::d/class (meta (d/datafy (atom 5)))) (d/datafy "s") (d/datafy [1 2]) (d/datafy nil))
+      (defrecord Account [id balance])
+      (extend-protocol p/Datafiable Account (datafy [a] {:account (:id a)}))
+      (prn (d/datafy (->Account 7 100)) (::d/class (meta (d/datafy (->Account 7 100)))))
+      (prn (::d/obj (meta (d/datafy (->Account 7 100)))))
+      (deftype Pair [a b])
+      (extend-protocol p/IKVReduce Pair (kv-reduce [p f init] (f (f init :a (.-a p)) :b (.-b p))))
+      (prn (p/kv-reduce (Pair. 1 2) (fn [acc k v] (conj acc k v)) []))
+      (prn (p/kv-reduce {:x 1} (fn [acc k v] (conj acc k v)) []) (p/kv-reduce nil (fn [acc k v] acc) :init))
+      (prn (p/internal-reduce (seq [1 2 3]) + 0) (p/internal-reduce nil + 0))
+      (defrecord Node [id])
+      (extend-protocol p/Navigable Node (nav [n k v] (if (= k :parent) (->Node v) v)))
+      (prn (d/nav (->Node 1) :parent 0) (d/nav (->Node 1) :other 5))
+      (in-ns 'user)
+    expected: |
+      1 nil 1
+      {:items 2} [1 2] clojure.lang.PersistentVector
+      [:navigated :a 1] 1
+      [5] clojure.lang.Atom "s" [1 2] nil
+      {:account 7} datafy_nav.Account
+      #datafy_nav.Account{:id 7, :balance 100}
+      [:a 1 :b 2]
+      [:x 1] :init
+      6 0
+      #datafy_nav.Node{:id 0} 5
