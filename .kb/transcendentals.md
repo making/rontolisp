@@ -8,7 +8,32 @@ cross-backend corpus may print their full digits (`ci-spec.yaml`'s
 `transcendentals-bit-identical-cross-backend` does, over the large-argument trig
 reduction, the subnormal log, the overflow edges, the plane escapes and the complex
 arms). `sqrt` stays `Math.sqrt` / `f64.sqrt`, correctly rounded and identical everywhere.
-The one stated exception is `--gpu`'s transcendental tier (`.kb/linalg-simd.md`).
+The one stated exception is `--gpu`'s transcendental tier (`.kb/linalg-simd.md`). So does
+every function of the internal `(%strict-math :name x [y])` ("%strict-math" below), which
+Clojure's `clojure.math` is built on.
+
+## `%strict-math`
+
+`(%strict-math :name x [y])` IS `java.lang.StrictMath.name(x[, y])` over doubles: the
+functions above plus `log10 cbrt sqrt ceil floor rint expm1 log1p ulp signum next-up
+next-down ieee-remainder copy-sign next-after get-exponent scalb`, one keyword each
+(`compiler.StrictMathFunction`, the table every backend reads). Unlike `log`/`sqrt`/`asin`/
+`expt` it never leaves the reals or reads a complex: `:log` of -1.0 is NaN, `:ceil` of -0.5
+is -0.0, `:pow` of -8.0 and 0.5 NaN -- Java's answers, special cases included. Internal
+(`CL_INTERNALS`), emitted by the Clojure lowering only; the keyword must be a literal on the
+compile path. `:scalb`'s exponent is an integer clamped to +-2200 (past which every double has
+saturated) and `:get-exponent` answers an integer.
+
+- Interpreter: `Environment.strictMath` -> `StrictMathFunction.apply`, the `StrictMath`
+  method (`Math`'s for the exact `sqrt ceil floor rint`, the same answer).
+- JVM: `JvmStrictMathCompiler`, one `invokestatic` of that method over the arguments unboxed
+  through `compileUnboxedOperand(s)` (both evaluated before either converts); `:scalb`'s
+  exponent unboxes as a double, `Math.min`/`max` clamp it, `d2i`.
+- WASM GC: `WasmStrictMathCompiler`, both arguments evaluated into temporaries, then each
+  through `_as_f64`; `f64.sqrt/ceil/floor/nearest` inline, every other keyword a call of its
+  `Fn`; `:get-exponent` boxes as an i31. `%STRICT-MATH` is in the trig pre-scan's names, so
+  the tables blob is placed wherever it is spelled and shaken where no trig body survives.
+- `--no-gc`: not lowered ("unsupported operation"); the Clojure front end is refused there.
 
 ## Where each lives
 
@@ -22,7 +47,13 @@ The one stated exception is `--gpu`'s transcendental tier (`.kb/linalg-simd.md`)
 - WASM (no transcendental instruction): `codegen/wasm/WasmFdlibmRuntimeBuilder`, one
   runtime FUNCTION per algorithm (`Fn`: the 13 public ones plus `k_sin`/`k_cos`/`k_tan`,
   `rem_pio2`/`krem` and `expm1`/`log1p`/`hypot`), shared by the GC backend and
-  `--no-gc`. The sources are fdlibm transliterated statement for statement from the
+  `--no-gc`. Appended for `%strict-math` (every earlier slot keeps its index): FdLibm's
+  `log10`, `cbrt` and `IEEEremainder` with its `__ieee754_fmod` and `ilogb` (`FMOD`, `ILOGB`),
+  then the bit-level `ULP SIGNUM NEXT_UP NEXT_DOWN NEXT_AFTER COPY_SIGN GET_EXPONENT SCALB`,
+  written from StrictMath's specification over the subset's `BITS`/`FROM_BITS` (the raw long
+  bits). `SCALB` multiplies its exponent's remainder by 1000 first, then whole 2^+-1000
+  steps (the `scale-float` trap below); its exponent travels as an f64, an exact integer, so
+  it shares `(f64, f64) -> f64` and no fixed type was added. The sources are fdlibm transliterated statement for statement from the
   JDK's own `java.lang.FdLibm` into a C-like subset (`Sources`), which a small
   compiler in the same class (lexer, parser, emitter over raw `f64`/`i32`/`i64`
   locals) turns into a body; the `__HI`/`__LO` word accessors are `i64.reinterpret`
@@ -98,6 +129,25 @@ The one stated exception is `--gpu`'s transcendental tier (`.kb/linalg-simd.md`)
   unaffected, and no kernel in the repo spends its time in `pow`; the numbers are the
   cost of the invariant, not a regression to fix.
 
+## `Math` against `StrictMath` on x86-64 (measured 2026-10-08)
+
+Clojure's `clojure.math` calls `java.lang.Math`; every backend here answers `StrictMath`'s
+bits. Per function, 600k arguments (random bit patterns, uniform over the function's range,
+log-uniform magnitudes 1e-10..1e10, 62 edges; the binary ones also edge x edge), Intel Xeon
+E5-2697A v4, GraalVM 25.0.4 -- identical counts under the Graal JIT, C2 and `-Xint`, since all
+three tiers call one intrinsic stub:
+
+| differ | functions |
+|---|---|
+| 1-8.3% of arguments, by 1 ulp (2 for `log10`, `tanh`) | `sin` 2.26%, `cos` 2.29%, `tan` 2.45%, `exp` 3.90%, `log` 0.97%, `log10` 1.51%, `cbrt` 8.31%, `tanh` 6.05%, `pow` 1.98% -- the x86-64 intrinsics |
+| 0.007% | `copySign`: `Math` takes a NaN sign's bit (an x86 computed NaN has it set), `StrictMath` reads it as positive |
+| never | `asin acos atan atan2 sinh cosh expm1 log1p hypot IEEEremainder` (`Math` delegates to `StrictMath`); `sqrt ceil floor rint round ulp signum getExponent nextUp nextDown nextAfter scalb toRadians toDegrees` (exact) |
+
+Decided: fdlibm stays; the difference is the stated deviation (`(m/exp 1)` is
+`2.7182818284590455` here, `2.718281828459045` in the oracle; doc
+`clojure/reference/clojure-math.md`, clojure-spec
+`clojure-math-answers-strictmath-where-the-oracle-calls-math`).
+
 ## Traps
 
 - **`scale-float`'s compiled split rounded twice** (`LispMacroExpander.expandScaleFloat`,
@@ -107,8 +157,9 @@ The one stated exception is `--gpu`'s transcendental tier (`.kb/linalg-simd.md`)
   answers 4.9e-324; 103 of 20M random `(f, n)` pairs differed. Since 2026-10-08 the exponent's
   remainder by 1000 multiplies first: only the step entering the subnormal range rounds, and
   a step after it takes a value below 2^-1022 to the zero the exact product rounds to as well
-  (0 of the 20M differ). Pinned by
-  `JvmLispCompilerTest`/`WasmLispCompilerIntegrationTest#scaleFloatRoundsOnceIntoTheSubnormalRange`.
+  (0 of the 20M differ). `%strict-math :scalb`'s wasm `SCALB` is the same order. Pinned by
+  `JvmLispCompilerTest`/`WasmLispCompilerIntegrationTest#scaleFloatRoundsOnceIntoTheSubnormalRange`
+  and `StrictMathE2eTest`.
 - The 0xFD byte of a no-gc probe: fdlibm's coefficients (asin's `0x1.23de10dfdf709p-15`)
   and LEB immediates (sinh's `0x8fb9f87d`) contain it, so a "no SIMD prefix" scan must
   step over float immediates and read the user's body only
@@ -131,7 +182,10 @@ The one stated exception is `--gpu`'s transcendental tier (`.kb/linalg-simd.md`)
 
 ## Pinning tests
 
-`WasmFdlibmRuntimeBuilderTest` (bits against `StrictMath`), `ci-spec.yaml`'s
+`WasmFdlibmRuntimeBuilderTest` (bits against `StrictMath`, the appended functions included:
+`getExponent` widened, `scalb` over an exponent read off the second input's low word),
+`StrictMathE2eTest` (every `%strict-math` function and `scale-float`, raw bits against the
+JDK, all four backends), clojure-spec `clojure-math-*`, `ci-spec.yaml`'s
 `transcendentals-bit-identical-cross-backend` (four backends x `--simd`, digits),
 `NoGcWasmCompilerTest`'s `{expAndSign,logAndTanh,sinCosTan,arcAndHyperbolic}LowerNativelyOnNoGc`
 and `scalarTranscendentalsLowerNativelyOnNoGc`/`exptOfTwoNonFloatOperandsIsCompileError`

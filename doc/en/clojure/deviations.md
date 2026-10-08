@@ -255,10 +255,14 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   lowered, so one a later REPL input defines is not an instance there; the protocol's own
   name (`P`, a var) is an unknown name, where the oracle throws a `ClassCastException`.
 - The `unchecked-` arithmetic verbs wrap integers at 64 bits (`-int` verbs at 32) and the casts
-  (`int`, `long`, `short`, `byte`, `char`, `double`, `float`) match the oracle, with one deviation:
-  an integer past 64 bits is a plain integer here, so the oracle's unwrapped bigint operand
-  (`(unchecked-add 9223372036854775807N 1)`) wraps too. `inc`, `dec` and the checked verbs never
-  overflow (integers are bignums).
+  `short`, `byte`, `char` and `float` match the oracle, with one deviation: an integer past 64
+  bits is a plain integer here, so the oracle's unwrapped bigint operand
+  (`(unchecked-add 9223372036854775807N 1)`) wraps too. `int` and `long` truncate without the
+  oracle's range checks (`(long 1e19)` is `10000000000000000000`, where the oracle throws an
+  `IllegalArgumentException`, and `(long ##NaN)` signals, where the oracle answers `0`), and
+  `double` of a ratio is its nearest double (`(double 2/3)` is `0.6666666666666666`), where the
+  oracle rounds it to 16 significant digits first (`0.6666666666666667`). `inc`, `dec` and the
+  checked verbs never overflow (integers are bignums).
 - `bigint` and `biginteger` answer a plain integer, and `bigdec` a plain rational (`(bigdec "1.5")`
   prints `3/2`, the oracle `1.5M`), like the `N` and `M` literals; `bigdec` of a ratio with an infinite
   decimal expansion signals, like the oracle.

@@ -9890,6 +9890,16 @@ public final class LispNames {
 	public static final String IEEE754_DOUBLE_FROM_BITS = "%IEEE754-DOUBLE-FROM-BITS";
 
 	/**
+	 * {@code %strict-math} -- {@code (%strict-math :name x [y])} is
+	 * {@code java.lang.StrictMath.name(x[, y])} over doubles, the same bits on every
+	 * backend: {@code compiler.StrictMathFunction} lists the names and their shapes. It
+	 * never leaves the reals ({@code :log} of a negative is NaN, where {@code log}
+	 * answers a complex). The keyword must be a literal on the compile path. The Clojure
+	 * front end's {@code clojure.math} is built on it.
+	 */
+	public static final String STRICT_MATH_INTERNAL = "%STRICT-MATH";
+
+	/**
 	 * The {@code %decimal-double} internal prelude helper: the double nearest
 	 * {@code mantissa * 10^exponent} (a non-negative integer mantissa), ties to even --
 	 * {@code float} of the exact rational, which every backend rounds once -- with a

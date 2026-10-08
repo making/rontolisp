@@ -51,9 +51,15 @@ class WasmFdlibmRuntimeBuilderTest {
 
 	// The unary functions the driver prints, in output order, then the binary ones.
 	private static final Fn[] UNARY = { Fn.EXP, Fn.EXPM1, Fn.LOG, Fn.LOG1P, Fn.SIN, Fn.COS, Fn.TAN, Fn.ASIN, Fn.ACOS,
-			Fn.ATAN, Fn.SINH, Fn.COSH, Fn.TANH };
+			Fn.ATAN, Fn.SINH, Fn.COSH, Fn.TANH, Fn.LOG10, Fn.CBRT, Fn.ULP, Fn.SIGNUM, Fn.NEXT_UP, Fn.NEXT_DOWN };
 
-	private static final Fn[] BINARY = { Fn.ATAN2, Fn.POW, Fn.HYPOT };
+	private static final Fn[] BINARY = { Fn.ATAN2, Fn.POW, Fn.HYPOT, Fn.IEEE_REMAINDER, Fn.FMOD, Fn.NEXT_AFTER,
+			Fn.COPY_SIGN };
+
+	// Printed after the binary functions: getExponent(x) widened to a long, then
+	// scalb(x, n) for an integer n in (-2300, 2300) read off the second input's low
+	// word, so the exponents cover every regime (scalbExponent).
+	private static final int EXTRA = 2;
 
 	private static DoubleUnaryOperator strict(Fn fn) {
 		return switch (fn) {
@@ -70,6 +76,12 @@ class WasmFdlibmRuntimeBuilderTest {
 			case SINH -> StrictMath::sinh;
 			case COSH -> StrictMath::cosh;
 			case TANH -> StrictMath::tanh;
+			case LOG10 -> StrictMath::log10;
+			case CBRT -> StrictMath::cbrt;
+			case ULP -> StrictMath::ulp;
+			case SIGNUM -> StrictMath::signum;
+			case NEXT_UP -> StrictMath::nextUp;
+			case NEXT_DOWN -> StrictMath::nextDown;
 			default -> throw new IllegalArgumentException(fn.toString());
 		};
 	}
@@ -79,8 +91,19 @@ class WasmFdlibmRuntimeBuilderTest {
 			case ATAN2 -> StrictMath::atan2;
 			case POW -> StrictMath::pow;
 			case HYPOT -> StrictMath::hypot;
+			case IEEE_REMAINDER -> StrictMath::IEEEremainder;
+			// Java's % over doubles is fdlibm's fmod: exact, truncated.
+			case FMOD -> (x, y) -> x % y;
+			case NEXT_AFTER -> StrictMath::nextAfter;
+			case COPY_SIGN -> StrictMath::copySign;
 			default -> throw new IllegalArgumentException(fn.toString());
 		};
+	}
+
+	// The exponent the driver hands scalb for a second input: its raw bits' low word,
+	// remaindered by 2300 (Java's (int) and % are wasm's i32.wrap_i64 and i32.rem_s).
+	private static int scalbExponent(double x2) {
+		return (int) Double.doubleToRawLongBits(x2) % 2300;
 	}
 
 	@Test
@@ -93,7 +116,7 @@ class WasmFdlibmRuntimeBuilderTest {
 		HostWasmtime.ExecResult result = wasmtime.execInContainer("wasmtime", "run", path);
 		assertThat(result.getExitCode()).as("stderr: %s", result.getStderr()).isZero();
 		String[] lines = result.getStdout().split("\n");
-		int perInput = UNARY.length + BINARY.length;
+		int perInput = UNARY.length + BINARY.length + EXTRA;
 		assertThat(lines.length).isEqualTo(inputs.length * perInput);
 		Map<Fn, Integer> counts = new EnumMap<>(Fn.class);
 		List<String> examples = new ArrayList<>();
@@ -107,8 +130,23 @@ class WasmFdlibmRuntimeBuilderTest {
 			for (Fn fn : BINARY) {
 				check(counts, examples, fn, x, x2, strict2(fn).applyAsDouble(x, x2), lines[line++]);
 			}
+			checkBits(counts, examples, Fn.GET_EXPONENT, x, StrictMath.getExponent(x), lines[line++]);
+			int n = scalbExponent(x2);
+			check(counts, examples, Fn.SCALB, x, n, StrictMath.scalb(x, n), lines[line++]);
 		}
 		assertThat(counts).as("results differing from StrictMath, per function; examples: %s", examples).isEmpty();
+	}
+
+	// An integer result, compared as the long the driver widened it to.
+	private static void checkBits(Map<Fn, Integer> counts, List<String> examples, Fn fn, double x, long expected,
+			String hex) {
+		long got = Long.parseUnsignedLong(hex, 16);
+		if (got != expected) {
+			int n = counts.merge(fn, 1, Integer::sum);
+			if (n <= 3) {
+				examples.add(fn + "(" + x + ") = " + got + ", StrictMath " + expected);
+			}
+		}
 	}
 
 	private static void check(Map<Fn, Integer> counts, List<String> examples, Fn fn, double x, double y,
@@ -196,7 +234,7 @@ class WasmFdlibmRuntimeBuilderTest {
 			funcs.addFunction(7);
 			funcs.addFunction(1);
 		});
-		int outBytes = inputs.length * (UNARY.length + BINARY.length) * LINE;
+		int outBytes = inputs.length * (UNARY.length + BINARY.length + EXTRA) * LINE;
 		int pages = (OUT_BASE + outBytes + 0xffff) >>> 16;
 		w.writeMemory(mem -> mem.addMemory(pages));
 		w.writeExport(exports -> {
@@ -332,6 +370,26 @@ class WasmFdlibmRuntimeBuilderTest {
 			w.write(Instruction.CALL).writeUnsignedLeb128(hex);
 			advance(w, p);
 		}
+		// getExponent(x), widened
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(x);
+		w.write(Instruction.CALL).writeUnsignedLeb128(fnBase + Fn.GET_EXPONENT.ordinal());
+		w.write(Instruction.I64_EXTEND_S_I32);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(p);
+		w.write(Instruction.CALL).writeUnsignedLeb128(hex);
+		advance(w, p);
+		// scalb(x, (f64) ((i32) bits(x2) % 2300))
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(x);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(x2);
+		w.write(Instruction.I64_REINTERPRET_F64);
+		w.write(Instruction.I32_WRAP_I64);
+		w.write(Instruction.I32_CONST).writeSignedLeb128(2300);
+		w.write(Instruction.I32_REM_S);
+		w.write(Instruction.F64_CONVERT_S_I32);
+		w.write(Instruction.CALL).writeUnsignedLeb128(fnBase + Fn.SCALB.ordinal());
+		w.write(Instruction.I64_REINTERPRET_F64);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(p);
+		w.write(Instruction.CALL).writeUnsignedLeb128(hex);
+		advance(w, p);
 		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(i);
 		w.write(Instruction.I32_CONST).writeSignedLeb128(1);
 		w.write(Instruction.I32_ADD);

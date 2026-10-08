@@ -7103,28 +7103,6 @@
   (rontolisp::%clojure-check-arity args 1 1 "num")
   (rontolisp::%clojure-num (car args)))
 
-(defun rontolisp::%clojure-vector-of-long (x)
-  "The oracle's longCast of X: a character's code, an integer in the long range,
-   a ratio truncated, a double truncated toward zero (NaN 0) when it is in
-   range; anything else signals, so does a value out of range."
-  (let ((n
-         (cond ((characterp x) (char-code x))
-               ((integerp x) x)
-               ((floatp x)
-                (cond ((/= x x) 0)
-                      ((or (> x 9.223372036854775807e18)
-                           (< x -9.223372036854775808e18))
-                       nil)
-                      (t (truncate x))))
-               ((numberp x) (truncate x))
-               (t (rontolisp::%clojure-class-cast-exception-of
-                   "vector-of needs a number or a character" x)))))
-    (if (or (null n) (> n 9223372036854775807) (< n -9223372036854775808))
-        (rontolisp::%clojure-illegal-argument-exception
-         (concatenate 'string "Value out of range for long: "
-                      (rontolisp::%clojure-str-of x "null" nil)))
-        n)))
-
 (defun rontolisp::%clojure-vector-of-range (x n lo hi kind)
   "N (X's integer value) when it lies in LO..HI, else the oracle's refusal for
    the primitive KIND, spelling X."
@@ -7140,18 +7118,16 @@
    its code) and refuse one out of range (through longCast, unlike byte and
    short, which compare a double first), :double and :float widen to a double
    (:float refusing one past the float range), :char takes a character or a code, :boolean is the truthiness."
-  (cond ((equal kind "long") (rontolisp::%clojure-vector-of-long x))
-        ((equal kind "int")
-         (let ((n (rontolisp::%clojure-vector-of-long x)))
-           (if (or (< n -2147483648) (> n 2147483647))
-               (rontolisp::%clojure-arithmetic-exception "integer overflow")
-               n)))
+  (cond ((equal kind "long") (rontolisp::%clojure-long-cast x))
+        ((equal kind "int") (rontolisp::%clojure-int-cast x))
         ((equal kind "short")
          (rontolisp::%clojure-vector-of-range x
-          (rontolisp::%clojure-vector-of-long x) -32768 32767 "short"))
+                                              (rontolisp::%clojure-long-cast x)
+                                              -32768 32767 "short"))
         ((equal kind "byte")
          (rontolisp::%clojure-vector-of-range x
-          (rontolisp::%clojure-vector-of-long x) -128 127 "byte"))
+                                              (rontolisp::%clojure-long-cast x)
+                                              -128 127 "byte"))
         ((equal kind "double") (rontolisp::%clojure-double x))
         ((equal kind "float") (rontolisp::%clojure-float x))
         ((equal kind "char")
@@ -7193,6 +7169,116 @@
   "vector-of as a value."
   (rontolisp::%clojure-check-arity args 1 nil "vector-of")
   (rontolisp::%clojure-vector-of (car args) (cdr args)))
+
+;;;; The oracle's long and int casts, and clojure.math's round and long arithmetic.
+;;
+;; The two casts are the oracle's RT.longCast and RT.intCast of an object: what a
+;; ^long parameter and (int x) apply, and what vector-of stores an integer kind
+;; through. The double functions of clojure.math are one (%strict-math :name ...)
+;; each, over arguments cast by %clojure-double, lowered in place by the
+;; rontolisp.internal.math kernels (ClojureKernelLowering); the functions below are
+;; the kernels that are workers.
+
+(defun rontolisp::%clojure-long-cast (x)
+  "X as the oracle's longCast takes an object: an integer in the long range, a
+   ratio truncated toward zero, a double truncated (NaN is 0, 2^63 itself the
+   largest long, as Java's (long) saturates, one past it refused), a
+   character's code; anything else signals, so does a value out of range."
+  (let ((n
+         (cond ((characterp x) (char-code x))
+               ((integerp x) x)
+               ((floatp x)
+                (cond ((/= x x) 0)
+                      ((or (> x 9.223372036854775807e18)
+                           (< x -9.223372036854775808e18))
+                       nil)
+                      ((>= x 9.223372036854775807e18) 9223372036854775807)
+                      (t (truncate x))))
+               ((numberp x) (truncate x))
+               (t (rontolisp::%clojure-class-cast-exception-of
+                   "long needs a number or a character" x)))))
+    (if (or (null n) (> n 9223372036854775807) (< n -9223372036854775808))
+        (rontolisp::%clojure-illegal-argument-exception
+         (concatenate 'string "Value out of range for long: "
+          (rontolisp::%clojure-str-of (if (null n) x n) "null" nil)))
+        n)))
+
+(defun rontolisp::%clojure-int-cast (x)
+  "X as the oracle's intCast takes an object: its longCast, refused past the
+   int range as the oracle's integer overflow."
+  (let ((n (rontolisp::%clojure-long-cast x)))
+    (if (or (< n -2147483648) (> n 2147483647))
+        (rontolisp::%clojure-arithmetic-exception "integer overflow")
+        n)))
+
+(defun rontolisp::%clojure-math-round (a)
+  "(clojure.math/round a): the long nearest the double of A, a tie rounding up
+   -- the floor of a + 1/2, exactly; NaN is 0, and a double past either end of
+   the long range is that end, like Java's Math.round."
+  (let ((x (rontolisp::%clojure-double a)))
+    (cond ((/= x x) 0)
+          ((>= x 9.223372036854775807e18) 9223372036854775807)
+          ((<= x -9.223372036854775808e18) -9223372036854775808)
+          ((>= (abs x) 4.503599627370496e15) (truncate x))
+          (t (floor (+ (rational x) 1/2))))))
+
+(defun rontolisp::%clojure-math-floor-div (x y)
+  "(clojure.math/floor-div x y): the largest long not above x / y, both longs;
+   the one quotient past the long range (Long/MIN_VALUE by -1) wraps, and a
+   zero divisor is the oracle's ArithmeticException."
+  (let ((a (rontolisp::%clojure-long-cast x))
+        (b (rontolisp::%clojure-long-cast y)))
+    (if (= b 0)
+        (rontolisp::%clojure-arithmetic-exception "/ by zero")
+        (rontolisp::%clojure-wrap-long (floor a b)))))
+
+(defun rontolisp::%clojure-math-floor-mod (x y)
+  "(clojure.math/floor-mod x y): x minus (floor-div x y) times y, both longs,
+   which takes y's sign; a zero divisor is the oracle's ArithmeticException."
+  (let ((a (rontolisp::%clojure-long-cast x))
+        (b (rontolisp::%clojure-long-cast y)))
+    (if (= b 0)
+        (rontolisp::%clojure-arithmetic-exception "/ by zero")
+        (mod a b))))
+
+(defun rontolisp::%clojure-math-exact (n)
+  "N when it is a long, else the oracle's ArithmeticException, long overflow."
+  (if (or (< n -9223372036854775808) (> n 9223372036854775807))
+      (rontolisp::%clojure-arithmetic-exception "long overflow")
+      n))
+
+(defun rontolisp::%clojure-math-add-exact (x y)
+  "(clojure.math/add-exact x y): the sum of two longs, refused past the long
+   range."
+  (rontolisp::%clojure-math-exact
+   (+ (rontolisp::%clojure-long-cast x) (rontolisp::%clojure-long-cast y))))
+
+(defun rontolisp::%clojure-math-subtract-exact (x y)
+  "(clojure.math/subtract-exact x y): the difference of two longs, refused past
+   the long range."
+  (rontolisp::%clojure-math-exact
+   (- (rontolisp::%clojure-long-cast x) (rontolisp::%clojure-long-cast y))))
+
+(defun rontolisp::%clojure-math-multiply-exact (x y)
+  "(clojure.math/multiply-exact x y): the product of two longs, refused past
+   the long range."
+  (rontolisp::%clojure-math-exact
+   (* (rontolisp::%clojure-long-cast x) (rontolisp::%clojure-long-cast y))))
+
+(defun rontolisp::%clojure-math-increment-exact (a)
+  "(clojure.math/increment-exact a): the long A plus one, refused past the long
+   range."
+  (rontolisp::%clojure-math-exact (+ (rontolisp::%clojure-long-cast a) 1)))
+
+(defun rontolisp::%clojure-math-decrement-exact (a)
+  "(clojure.math/decrement-exact a): the long A minus one, refused past the long
+   range."
+  (rontolisp::%clojure-math-exact (- (rontolisp::%clojure-long-cast a) 1)))
+
+(defun rontolisp::%clojure-math-negate-exact (a)
+  "(clojure.math/negate-exact a): minus the long A, refused past the long range
+   (Long/MIN_VALUE has no long negation)."
+  (rontolisp::%clojure-math-exact (- (rontolisp::%clojure-long-cast a))))
 
 ;;;; Metadata: with-meta and meta over an identity side table.
 ;;
