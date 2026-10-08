@@ -7945,6 +7945,20 @@ cases:
       ("Octal escape sequence must be in range [0, 377]." "Invalid octal escape sequence length: 4" "Invalid unicode character: \\u00" "Invalid character constant: \\ud800" "Invalid digit: z" "Invalid token: :" "Namespaced map must specify a map" "Namespaced map must specify a valid namespace: null" "Unknown auto-resolved namespace alias: nope")
       a/9 a//b :1 a/:b
       #:item{:id 1} 2 #:it{name 1} #:user{:local 3}
+  - name: read-string-map-and-set-keys-repeat-by-equality-not-spelling
+    # A map or set literal refuses a key that is = to an earlier one, whatever its
+    # spelling (1 and 1N, a vector and a list, maps and sets in any order), naming the
+    # earlier key in a map and the later member in a set; keys of different types or
+    # categories stay apart. The source reader refuses the same way at read time
+    # (ClojureReaderTest). Every line is the oracle's (clj 1.12.6), on all four
+    # backends.
+    source: |
+      (defn rs-err [s] (try (read-string s) (catch Exception e (ex-message e))))
+      (prn (map rs-err ["{1 :a 1N :b}" "{(1) 1 [1] 2}" "{[1] 1 (1) 2}" "{{:a 1 :b 2} 1 {:b 2 :a 1} 2}" "{#{1 2} 1 #{2 1} 2}" "{\"a\" 1 \"a\" 2}" "{nil 1 nil 2}" "{\\a 1 \\a 2}" "{^:m a 1 a 2}" "#{[1] (1)}" "#{(1) [1]}"]))
+      (prn (let [m (read-string "{1 :a 1.0 :b}")] [(m 1) (m 1.0) (count m)]) (count (read-string "{\\a 1 \"a\" 2 :a 3 a 4}")) (rs-err "{:a 1 :b 2 :a}"))
+    expected: |
+      ("Duplicate key: 1" "Duplicate key: (1)" "Duplicate key: [1]" "Duplicate key: {:a 1, :b 2}" "Duplicate key: #{1 2}" "Duplicate key: a" "Duplicate key: null" "Duplicate key: a" "Duplicate key: a" "Duplicate key: (1)" "Duplicate key: [1]")
+      [:a :b 2] 4 "Map literal must contain an even number of forms"
   - name: clojure-template-substitutes-per-group-of-values
     # The built-in clojure.template (.kb/clojure-frontend.md "clojure.jar namespaces"):
     # apply-template substitutes at any depth, do-template expands to one copy per

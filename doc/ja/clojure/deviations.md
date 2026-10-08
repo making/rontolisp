@@ -66,7 +66,8 @@
  `false`）。チャンク化された seq はなく（`chunked-seq?` は常に `false`）、`iterate`/`cycle` の seq は
  一度強制されてから `realized?` になります。decimal と `N` のリテラルは通常の有理数なので、
  `decimal?` は常に `false` で、`ratio?`・`integer?`・`int?` はその有理数に対して答えます
- （`(ratio? 1.5M)` と `(int? 2N)` は `true`）。`identical?` は数値・文字・シンボルを値で比較し
+ （`(ratio? 1.5M)` と `(int? 2N)` は `true`）。同じ理由で、`1` と `1M` を含むマップ・セットリテラルは
+ 重複として拒否されます。`identical?` は数値・文字・シンボルを値で比較し
  （`(identical? 1000 1000)` は `true`）、綴りが同じ2つのキーワードを同じオブジェクトとして扱います。
 
 - プログラム自身がトップレベルで定義したコア名（`(defn peek ...)`）は、定義より上の呼び出しも

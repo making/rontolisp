@@ -66,7 +66,8 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   (the oracle's lazy or chunked seq: `false`); no seq is chunked (`chunked-seq?` is always
   `false`), and an `iterate`/`cycle` seq is `realized?` only once forced. A decimal or `N`
   literal is a plain rational, so `decimal?` is always `false` and `ratio?`, `integer?` and
-  `int?` answer for the rational (`(ratio? 1.5M)`, `(int? 2N)` are `true`). `identical?`
+  `int?` answer for the rational (`(ratio? 1.5M)`, `(int? 2N)` are `true`); for the same
+  reason a map or set literal holding `1` and `1M` is refused as a duplicate. `identical?`
   compares numbers, characters and symbols by value (`(identical? 1000 1000)` is `true`) and
   two keywords of one spelling as one object.
 - A program's own top-level definition of a core name (`(defn peek ...)`) shadows the

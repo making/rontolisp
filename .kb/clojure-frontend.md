@@ -49,7 +49,7 @@ The oracle is `clj` 1.12.6.1673: a behavior is decided by running it there, and 
 | `false` | the value of `rontolisp::%clojure-false`, a distinct non-`NIL` symbol spelled `false` | the `#f` treatment of `scheme.lisp`; every lowered test is an explicit null-or-false check on a temporary |
 | `:foo`, `:a/b` | `(:C%KEYWORD "foo")`, spelling verbatim | compared by `equal`; `::kw` / `::alias/kw` resolve at lower time against the current namespace (an unknown alias is the oracle's `Invalid token`) |
 | `{k v}` | an `equal` hash table (`rontolisp:plist-hash-table`), never mutated: every verb builds a fresh one | the shared runtime (`.kb/hash-tables.md`), so persistence holds on all four backends with no per-backend code; a persistent-map library would add a representation every backend prints, hashes and compares. Collection keys go through "Structural keys" |
-| `#{..}` | `(:C%SET table)`, each member under itself | a repeated literal element is refused by spelling (`Duplicate key`) |
+| `#{..}` | `(:C%SET table)`, each member under itself | a repeated literal element is refused when the read forms are `=` (`ClojureReader.equivKey`: `1`/`1N`, `[1]`/`(1)`, maps and sets in any order; `Duplicate key`) |
 | `sorted-map` / `sorted-set` (and `-by`) | `(:C%SORTED setp cmp items)`: a vector of `[k v]` entries or members in comparator order | "Sorted collections" |
 | `[..]` | a CL vector (a `vector` call) | a string is a CL vector too, so `vector?`/`coll?` exclude strings |
 | list, seq | a CL list | lazy seq: `(:C%LAZY cell)`, memoized through `rplaca`/`rplacd` ("Laziness") |
@@ -2452,6 +2452,19 @@ so it finds `=` keys and refuses an `=` duplicate like the oracle (`Duplicate ke
 toString: a map names the earlier key, a set the later member). `::kw` resolves against the
 context each call site passes, `("ns" ("alias" "full.ns") ...)`, plus the libraries
 `isKnownNamespace` names and the startup ones (mirrored in `%clojure-rd-alias`).
+The source reader refuses the same duplicates at read time, positioned after the closing
+brace (`readBraced`/`readSet`, measured on `clj` 1.12.6, 2026-10-08): the oracle's
+`PersistentArrayMap.createWithCheck` compares the READ forms, so `{1 :a 1N :b}`,
+`{[1] :a (1) :b}`, `{{:a 1 :b 2} 1 {:b 2 :a 1} 2}` and `{-0.0 1 0.0 2}` are refused and
+`{1 :a 1.0 :b}`, `{1 :a 1M :b}`, `{#"a" 1 #"a" 2}` and `{:a 1 ::a 2}` are not; keys equal
+only once evaluated (`{(+ 1 2) 1 3 2}`, `{[1] :a (list 1) :b}`) are the oracle's RUNTIME
+`Duplicate key`, and `{[1] :a '(1) :b}` its compile-time `Duplicate constant keys in map`;
+none of those three is checked (map literals with non-constant keys build last-wins).
+`1M` reads as the rational `1` (`doc/en/clojure/deviations.md`), so `{1 :a 1M :b}` is
+refused where the oracle reads it. A `deps.edn` read (`forEdn`) leaves maps to
+`ClojureDepsEdn.duplicateKey`, whose wording (`Error reading edn. Duplicate key: k (path)`)
+the reader's positioned message cannot give. The runtime reader still tells `()` and `[]`
+apart as keys (`(= () [])` holds, `(get {[] 1} ())` answers `nil`).
 `eval`/`load-string` stay unknown names: no compiler runs at run time.
 
 **Oracle-checked 2026-10-08 (clj 1.12.6), shared by `read-string`/`read` and clojure.edn:**
