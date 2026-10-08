@@ -2888,7 +2888,8 @@ milliseconds; the reverse false, the oracle's one-sided `equals`).
 - `inst-ms`/`inst-ms*` read a Date or Timestamp, a host `Date`/`Instant` through the host
   arms, else the oracle's `No implementation of method: :inst-ms* of protocol:
   #'clojure.core/Inst found for class: C`. A host Date or UUID stays a host object: never `=`
-  to a read one (deviation).
+  to a read one (deviation), and `(java.util.Date.)`, `UUID/randomUUID` and their kin stay
+  `java:` calls, refused on wasm (`e76`).
 - `clojure.instant` (parse-timestamp, validated, read-instant-date/-timestamp/-calendar)
   and `clojure.uuid` (no vars) ship as startup namespaces ("clojure.jar namespaces") over the
   kernels `rontolisp.internal.instant` (`parse`, `validate`, `read-date`, `read-timestamp`,
