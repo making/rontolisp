@@ -8433,17 +8433,15 @@
   (let ((items (rontolisp::%clojure-realize-all s)))
     (cond ((null items) (make-hash-table :test 'equal))
           ((null (cdr items)) (car items))
-          (t (let ((pairs nil) (p items))
-               (do ()
-                   ((or (null p) (null (cdr p))))
-                 (setq pairs (cons (car (cdr p)) (cons (car p) pairs)))
-                 (setq p (cdr (cdr p))))
-               (rontolisp::%clojure-plist-table
-                nil
-                (append (reverse pairs)
-                        (if p
-                            (rontolisp::%clojure-merge-entry-plist (car p))
-                            nil))))))))
+          (t
+           (let ((pairs nil) (p items))
+             (do ()
+                 ((or (null p) (null (cdr p))))
+               (setq pairs (cons (car (cdr p)) (cons (car p) pairs)))
+               (setq p (cdr (cdr p))))
+             (rontolisp::%clojure-plist-table nil
+              (append (reverse pairs)
+               (if p (rontolisp::%clojure-merge-entry-plist (car p)) nil))))))))
 
 (defun rontolisp::%clojure-seq-to-map-for-destructuring-v (&rest args)
   "seq-to-map-for-destructuring as a value."
