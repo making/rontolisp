@@ -1,19 +1,12 @@
 package am.ik.rontolisp.eval;
 
-import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.net.URI;
-import java.net.http.HttpClient;
-import java.net.http.HttpRequest;
-import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.InvalidPathException;
-import java.nio.file.LinkOption;
 import java.nio.file.Path;
-import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
-import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
@@ -23,8 +16,12 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.stream.Stream;
-import java.util.zip.GZIPInputStream;
 
+import am.ik.artifact.Archives;
+import am.ik.artifact.ArtifactCache;
+import am.ik.artifact.AtomicInstall;
+import am.ik.artifact.Checksum;
+import am.ik.artifact.Downloader;
 import org.jspecify.annotations.Nullable;
 
 /**
@@ -60,19 +57,15 @@ import org.jspecify.annotations.Nullable;
  * (rebuilt every few minutes) needs.
  *
  * <p>
- * The {@link Downloader} is injectable so tests can serve an in-memory dist without
- * touching the network; {@link #createDefault()} uses the JDK {@link HttpClient}. Because
- * the download happens at interpret time or compile time (Java-side), a compiled program
- * has the sources spliced in and never fetches at runtime -- the WASM {@code fetch}
- * limitation does not apply.
+ * Transport, verification, extraction and the atomic install are the shared artifact
+ * layer's ({@link ArtifactCache}, {@link Archives}, {@link AtomicInstall}); a release
+ * archive is checked against the size and MD5 its {@code releases.txt} line publishes
+ * before anything is extracted. The {@link Downloader} is injectable so tests can serve
+ * an in-memory dist without touching the network. Because the download happens at
+ * interpret time or compile time (Java-side), a compiled program has the sources spliced
+ * in and never fetches at runtime -- the WASM {@code fetch} limitation does not apply.
  */
 public final class DistClient {
-
-	/**
-	 * The name prefix of a release's private staging directory under {@code software/}.
-	 * The leading dot keeps it apart from every release prefix.
-	 */
-	private static final String STAGING_PREFIX = ".extracting-";
 
 	/** The name of the Quicklisp dist, installed by default. */
 	public static final String QUICKLISP = "quicklisp";
@@ -101,23 +94,6 @@ public final class DistClient {
 			"ultralisp.org", ULTRALISP);
 
 	/**
-	 * Fetches the bytes at a URL. Injectable so tests can serve an in-memory distribution
-	 * without network access.
-	 */
-	@FunctionalInterface
-	public interface Downloader {
-
-		/**
-		 * Returns the bytes at {@code url}.
-		 * @param url the URL to fetch
-		 * @return the response body bytes
-		 * @throws IOException if the fetch fails
-		 */
-		byte[] get(String url) throws IOException;
-
-	}
-
-	/**
 	 * A {@code systems.txt} entry: the release project that provides the system and the
 	 * names of the systems it depends on.
 	 */
@@ -125,12 +101,13 @@ public final class DistClient {
 	}
 
 	/**
-	 * A {@code releases.txt} entry: the tarball URL, the archive's top-level directory
+	 * A {@code releases.txt} entry: the tarball URL, its published size and MD5 (kept as
+	 * written, checked when the release is downloaded), the archive's top-level directory
 	 * name (the extraction prefix) and the {@code .asd} files the index attributes to the
 	 * release, as paths relative to that directory ({@code alexandria.asd},
 	 * {@code src/com.inuoe.jzon.asd}).
 	 */
-	private record ReleaseEntry(String url, String prefix, List<String> asdFiles) {
+	private record ReleaseEntry(String url, String size, String md5, String prefix, List<String> asdFiles) {
 	}
 
 	/**
@@ -162,9 +139,7 @@ public final class DistClient {
 	private record Located(Dist dist, SystemEntry entry) {
 	}
 
-	private final Path base;
-
-	private final Downloader downloader;
+	private final ArtifactCache cache;
 
 	private final Map<String, Path> homeOverrides;
 
@@ -178,7 +153,7 @@ public final class DistClient {
 	 * @param downloader the byte fetcher
 	 */
 	public DistClient(Path base, Downloader downloader) {
-		this(base, downloader, List.of(), Map.of());
+		this(new ArtifactCache(base, downloader), List.of(), Map.of());
 	}
 
 	/**
@@ -188,12 +163,11 @@ public final class DistClient {
 	 * @param distSpecs dist names or distinfo URLs to install, in search order
 	 */
 	public DistClient(Path base, Downloader downloader, List<String> distSpecs) {
-		this(base, downloader, distSpecs, Map.of());
+		this(new ArtifactCache(base, downloader), distSpecs, Map.of());
 	}
 
-	private DistClient(Path base, Downloader downloader, List<String> distSpecs, Map<String, Path> homeOverrides) {
-		this.base = base;
-		this.downloader = downloader;
+	private DistClient(ArtifactCache cache, List<String> distSpecs, Map<String, Path> homeOverrides) {
+		this.cache = cache;
 		this.homeOverrides = Map.copyOf(homeOverrides);
 		// Quicklisp is installed first unless the caller named it itself -- naming it is
 		// how the search order is changed, since the first dist listing a system wins.
@@ -207,8 +181,8 @@ public final class DistClient {
 	}
 
 	/**
-	 * Creates the default client: cache under {@code ~/.rontolisp/} (or
-	 * {@code RONTOLISP_DIST_HOME}) and the JDK {@link HttpClient} as the downloader, with
+	 * Creates the default client over {@link ArtifactCache#createDefault()} (cache under
+	 * {@code ~/.rontolisp/} or {@code RONTOLISP_DIST_HOME}, the network downloader), with
 	 * only the Quicklisp dist installed.
 	 * @return the default client
 	 */
@@ -230,20 +204,7 @@ public final class DistClient {
 		if (quicklispHome != null && !quicklispHome.isBlank()) {
 			overrides.put(QUICKLISP, Path.of(quicklispHome));
 		}
-		return new DistClient(defaultBase(), DistClient::httpGet, distSpecs, overrides);
-	}
-
-	/**
-	 * Returns the default cache base directory: {@code RONTOLISP_DIST_HOME} if set,
-	 * otherwise {@code ~/.rontolisp}. Each dist caches under {@code <base>/<dist-name>}.
-	 * @return the default cache base directory
-	 */
-	public static Path defaultBase() {
-		String override = System.getenv("RONTOLISP_DIST_HOME");
-		if (override != null && !override.isBlank()) {
-			return Path.of(override);
-		}
-		return Path.of(System.getProperty("user.home", "."), ".rontolisp");
+		return new DistClient(ArtifactCache.createDefault(), distSpecs, overrides);
 	}
 
 	/**
@@ -397,13 +358,13 @@ public final class DistClient {
 	 * the {@code .asd} files the index attributes to the release. An already-extracted
 	 * project is reused (no network I/O).
 	 * <p>
-	 * The directory's existence IS the "installed" mark, so it must never be seen
-	 * half-written: the archive is extracted into a private staging directory beside it
-	 * (same parent, so the same file system) and the finished prefix directory is renamed
-	 * into place in one step. A failed extraction leaves nothing behind, and the next
-	 * quickload downloads again. Another process (or client) that installed the same
-	 * release in the meantime wins: its tree is complete by the same argument, so it is
-	 * used and this one's is discarded.
+	 * The directory's existence IS the "installed" mark, so the archive is verified
+	 * against the size and MD5 its index line publishes before anything is extracted, and
+	 * installed through {@link AtomicInstall#installDirectory}: extracted into a private
+	 * staging directory and the finished prefix directory renamed into place. A refused
+	 * download or a failed extraction leaves nothing behind, and the next quickload
+	 * downloads again. Another process (or client) that installed the same release in the
+	 * meantime wins: its tree is complete by the same argument, so it is used.
 	 */
 	private Extracted ensureProject(ProjectRef ref) throws IOException {
 		ReleaseEntry release = releases(ref.dist()).get(ref.project());
@@ -411,67 +372,61 @@ public final class DistClient {
 			throw new IOException("ql:quickload: no release found for project '" + ref.project() + "' in dist '"
 					+ ref.dist().name + "'");
 		}
-		Path software = ref.dist().home.resolve("software");
-		Path root = software.resolve(release.prefix());
+		Path root = ref.dist().home.resolve("software").resolve(release.prefix());
 		if (Files.isDirectory(root)) {
 			return new Extracted(root, release.asdFiles());
 		}
-		byte[] tarGz = this.downloader.get(release.url());
-		Files.createDirectories(software);
-		Path staging = Files.createTempDirectory(software, STAGING_PREFIX);
+		long size;
+		Checksum md5;
 		try {
-			extractTarGz(tarGz, staging);
+			size = Long.parseLong(release.size());
+			md5 = Checksum.md5(release.md5());
+		}
+		catch (IllegalArgumentException ex) {
+			throw new IOException(
+					"ql:quickload: the index line of release '" + ref.project() + "' in dist '" + ref.dist().name
+							+ "' has no valid size and MD5 ('" + release.size() + "', '" + release.md5() + "')",
+					ex);
+		}
+		byte[] tarGz = quickloadStep(() -> this.cache.download(release.url(), size, md5));
+		AtomicInstall.installDirectory(root, staging -> {
+			quickloadStep(() -> {
+				Archives.extractTarGz(tarGz, staging);
+				return staging;
+			});
 			Path extracted = staging.resolve(release.prefix());
 			if (!Files.isDirectory(extracted)) {
 				throw new IOException("ql:quickload: archive for '" + ref.project()
 						+ "' did not contain the expected directory '" + release.prefix() + "'");
 			}
-			try {
-				Files.move(extracted, root, StandardCopyOption.ATOMIC_MOVE);
-			}
-			catch (IOException ex) {
-				// rename(2) onto an existing non-empty directory fails; which exception
-				// that surfaces as differs by platform, so the answer is the directory.
-				if (!Files.isDirectory(root)) {
-					throw ex;
-				}
-			}
-		}
-		finally {
-			deleteRecursively(staging);
-		}
+			return extracted;
+		});
 		return new Extracted(root, release.asdFiles());
 	}
 
-	/**
-	 * Deletes {@code dir} and everything under it, if it exists.
-	 */
-	private static void deleteRecursively(Path dir) throws IOException {
-		if (!Files.exists(dir, LinkOption.NOFOLLOW_LINKS)) {
-			return;
-		}
-		try (Stream<Path> walk = Files.walk(dir)) {
-			for (Path path : walk.sorted(Comparator.reverseOrder()).toList()) {
-				Files.deleteIfExists(path);
-			}
-		}
+	/** A step through the shared artifact layer, whose messages name no caller. */
+	@FunctionalInterface
+	private interface IoStep<T> {
+
+		T run() throws IOException;
+
 	}
 
 	/**
-	 * Writes {@code bytes} to {@code target} through a temporary file in the same
-	 * directory and an atomic rename, so a concurrent reader sees the old file, no file,
-	 * or the whole new one -- never a prefix of it.
+	 * Runs {@code step}, prefixing a failure's message with {@code ql:quickload:} so the
+	 * error names the operation the user wrote.
 	 */
-	private static void writeAtomically(Path target, byte[] bytes) throws IOException {
-		Path dir = Objects.requireNonNull(target.getParent());
-		Path temp = Files.createTempFile(dir, "." + target.getFileName(), ".tmp");
+	private static <T> T quickloadStep(IoStep<T> step) throws IOException {
 		try {
-			Files.write(temp, bytes);
-			Files.move(temp, target, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
+			return step.run();
 		}
-		finally {
-			Files.deleteIfExists(temp);
+		catch (IOException ex) {
+			throw new IOException("ql:quickload: " + ex.getMessage(), ex);
 		}
+	}
+
+	private byte[] fetch(String url) throws IOException {
+		return quickloadStep(() -> this.cache.download(url));
 	}
 
 	private Map<String, SystemEntry> systems(Dist dist) throws IOException {
@@ -497,15 +452,15 @@ public final class DistClient {
 		Path systemsFile = dist.home.resolve("systems.txt");
 		Path releasesFile = dist.home.resolve("releases.txt");
 		if (!Files.isRegularFile(systemsFile) || !Files.isRegularFile(releasesFile)) {
-			String distinfo = new String(this.downloader.get(dist.distinfoUrl), StandardCharsets.UTF_8);
+			String distinfo = new String(fetch(dist.distinfoUrl), StandardCharsets.UTF_8);
 			String systemsUrl = distinfoValue(distinfo, "system-index-url");
 			String releasesUrl = distinfoValue(distinfo, "release-index-url");
-			byte[] systemsBytes = this.downloader.get(systemsUrl);
-			byte[] releasesBytes = this.downloader.get(releasesUrl);
+			byte[] systemsBytes = fetch(systemsUrl);
+			byte[] releasesBytes = fetch(releasesUrl);
 			// releases.txt first: a systems.txt that exists then implies a complete
 			// releases.txt beside it, from this fetch or a later one.
-			writeAtomically(releasesFile, releasesBytes);
-			writeAtomically(systemsFile, systemsBytes);
+			AtomicInstall.writeFile(releasesFile, releasesBytes);
+			AtomicInstall.writeFile(systemsFile, systemsBytes);
 		}
 		dist.systems = parseSystems(Files.readString(systemsFile, StandardCharsets.UTF_8));
 		dist.releases = parseReleases(Files.readString(releasesFile, StandardCharsets.UTF_8));
@@ -547,7 +502,7 @@ public final class DistClient {
 
 	private Path homeFor(String name) {
 		Path override = this.homeOverrides.get(name);
-		return override != null ? override : this.base.resolve(name);
+		return override != null ? override : this.cache.area(name);
 	}
 
 	/**
@@ -641,6 +596,13 @@ public final class DistClient {
 	 * {@code project url size md5 sha1 prefix file...}, keyed by project. The trailing
 	 * {@code file...} column names the release's {@code .asd} files and is what decides
 	 * its search-path contribution ({@link #collectAsdDirs}).
+	 * <p>
+	 * The {@code sha1} column is dropped: it is a CONTENT hash, not the archive's, and
+	 * not one function of the archive across dists -- Quicklisp's is the SHA-1 of every
+	 * regular file's bytes concatenated in sorted path order, Ultralisp's matches no such
+	 * reconstruction (measured 2026-10-08, {@code .kb/dists.md}). The archive's size and
+	 * MD5 are what both dists publish correctly, so those are what a download is checked
+	 * against.
 	 */
 	private static Map<String, ReleaseEntry> parseReleases(String text) {
 		Map<String, ReleaseEntry> index = new HashMap<>();
@@ -653,7 +615,7 @@ public final class DistClient {
 				continue;
 			}
 			List<String> files = parts.length > 6 ? List.copyOf(List.of(parts).subList(6, parts.length)) : List.of();
-			index.put(parts[0], new ReleaseEntry(parts[1], parts[5], files));
+			index.put(parts[0], new ReleaseEntry(parts[1], parts[2], parts[3], parts[5], files));
 		}
 		return index;
 	}
@@ -689,7 +651,7 @@ public final class DistClient {
 			if (!file.endsWith(".asd")) {
 				continue;
 			}
-			// Confined to the release, like the tar extractor's traversal guard.
+			// Confined to the release, like Archives.safeResolve.
 			Path candidate = root.resolve(file).normalize();
 			if (candidate.startsWith(root) && Files.isRegularFile(candidate)) {
 				asdFiles.add(candidate);
@@ -727,123 +689,6 @@ public final class DistClient {
 					out.add(dir);
 				}
 			});
-	}
-
-	// --- tar.gz extraction (USTAR / GNU tar, no external dependencies) ---
-
-	/**
-	 * Extracts a gzip-compressed tar archive into {@code destDir}. Handles the USTAR
-	 * {@code name}/{@code prefix} split and GNU long-name ({@code L}) entries, creates
-	 * directories and regular files, and skips other entry types. Entry paths are
-	 * normalized and confined to {@code destDir} (a path-traversal guard).
-	 */
-	private static void extractTarGz(byte[] tarGz, Path destDir) throws IOException {
-		Path base = destDir.toAbsolutePath().normalize();
-		try (GZIPInputStream in = new GZIPInputStream(new ByteArrayInputStream(tarGz))) {
-			String longName = null;
-			while (true) {
-				byte[] header = in.readNBytes(512);
-				if (header.length < 512 || isZeroBlock(header)) {
-					break;
-				}
-				long size = parseOctal(header, 124, 12);
-				int dataBlocks = (int) ((size + 511) / 512);
-				char type = (char) (header[156] & 0xff);
-				if (type == 'L') {
-					// GNU long name: the entry data is the next entry's full name.
-					byte[] data = in.readNBytes(dataBlocks * 512);
-					longName = trimNul(new String(data, 0, (int) size, StandardCharsets.UTF_8));
-					continue;
-				}
-				String name = longName != null ? longName : combineName(header);
-				longName = null;
-				if (type == '5') {
-					Files.createDirectories(safeResolve(base, name));
-				}
-				else if (type == '0' || type == '\0') {
-					byte[] data = in.readNBytes(dataBlocks * 512);
-					Path target = safeResolve(base, name);
-					Path parent = target.getParent();
-					if (parent != null) {
-						Files.createDirectories(parent);
-					}
-					Files.write(target, java.util.Arrays.copyOf(data, (int) size));
-					continue;
-				}
-				// Consume the data of skipped entry types (symlinks, GNU long link, ...).
-				if (type != '5') {
-					in.skipNBytes((long) dataBlocks * 512);
-				}
-			}
-		}
-	}
-
-	private static String combineName(byte[] header) {
-		String name = parseString(header, 0, 100);
-		String prefix = parseString(header, 345, 155);
-		return prefix.isEmpty() ? name : prefix + "/" + name;
-	}
-
-	private static Path safeResolve(Path base, String name) throws IOException {
-		Path resolved = base.resolve(name).normalize();
-		if (!resolved.startsWith(base)) {
-			throw new IOException("ql:quickload: unsafe path in archive: " + name);
-		}
-		return resolved;
-	}
-
-	private static boolean isZeroBlock(byte[] block) {
-		for (byte b : block) {
-			if (b != 0) {
-				return false;
-			}
-		}
-		return true;
-	}
-
-	private static String parseString(byte[] block, int offset, int length) {
-		int end = offset;
-		int limit = offset + length;
-		while (end < limit && block[end] != 0) {
-			end++;
-		}
-		return new String(block, offset, end - offset, StandardCharsets.UTF_8);
-	}
-
-	private static String trimNul(String s) {
-		int end = s.indexOf('\0');
-		return (end < 0 ? s : s.substring(0, end)).trim();
-	}
-
-	private static long parseOctal(byte[] block, int offset, int length) {
-		long value = 0;
-		int i = offset;
-		int limit = offset + length;
-		// Skip leading spaces and NULs.
-		while (i < limit && (block[i] == ' ' || block[i] == 0)) {
-			i++;
-		}
-		while (i < limit && block[i] >= '0' && block[i] <= '7') {
-			value = (value << 3) + (block[i] - '0');
-			i++;
-		}
-		return value;
-	}
-
-	private static byte[] httpGet(String url) throws IOException {
-		HttpClient client = HttpClient.newBuilder().followRedirects(HttpClient.Redirect.NORMAL).build();
-		HttpRequest request = HttpRequest.newBuilder(URI.create(url)).GET().build();
-		try {
-			HttpResponse<byte[]> response = client.send(request, HttpResponse.BodyHandlers.ofByteArray());
-			if (response.statusCode() != 200) {
-				throw new IOException("ql:quickload: HTTP " + response.statusCode() + " for " + url);
-			}
-			return response.body();
-		}
-		catch (InterruptedException ex) {
-			Thread.currentThread().interrupt();
-			throw new IOException("ql:quickload: download interrupted for " + url, ex);
-		}
 	}
 
 }

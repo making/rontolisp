@@ -4,7 +4,7 @@ Difficulty: High
 
 Needed by `deps.edn` `:mvn/version` coordinates (`e39`) and by Java libraries for CL programs
 (`e35`). Nothing in the tree reads a POM or a Maven repository; `--emit-pom` only writes one
-(`.kb/jvm-export.md`). Builds on `e33`.
+(`.kb/jvm-export.md`). Builds on `am.ik.artifact` (`.kb/dists.md`).
 
 ## Scope
 
@@ -28,4 +28,4 @@ Needed by `deps.edn` `:mvn/version` coordinates (`e39`) and by Java libraries fo
    (a language-independent `am.ik.*` library fits: it needs no rontolisp type).
 2. Unit tests over a fixture repository on disk (file: URLs or a stub `Downloader`); no
    automated test hits the network (`.kb/dists.md` convention).
-3. New `.kb/maven-resolver.md` + README index row.
+3. A new `.kb` file for the resolver (maven-resolver.md) + README index row.

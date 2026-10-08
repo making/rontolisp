@@ -136,7 +136,7 @@ final class ClojureVarLowering {
 	private static String fileOf(ClojureLowering ctx, @Nullable SourceLocation at) {
 		String loading = ctx.loadingNamespaces.peek();
 		if (loading != null) {
-			return ctx.namespaceResources.getOrDefault(loading, ClojureSourcePath.resourceOf(loading));
+			return ctx.fileOf(loading);
 		}
 		return at != null && at.file() != null ? at.file() : "NO_SOURCE_PATH";
 	}

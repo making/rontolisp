@@ -856,6 +856,26 @@ a program without `ns` lowers unqualified. A quoted `'n/x` is the symbol of var 
   only), `clojure.test` and `ring.adapter.rontolisp` resolve; any other `clojure.*` is
   `unknown namespace: x`. The built-in Ring namespaces load as project files from the jar
   when no root holds them ("Ring util namespaces").
+- **ns clauses and libspec options** (measured on `clj` 1.12.6, 2026-10-08):
+  `(:gen-class ...)` is a no-op outside an AOT compile, options included, so the clause
+  declares nothing (a top-level `gen-class` stays refused). `:as-alias` is a real alias
+  (`::a/k`, `` `a/x ``, and a loaded library's vars through it) that loads and creates
+  nothing, so a file behind it is never read and `a/f` of a namespace without that var is
+  `No such var`; here it is `aliases.put` and no `requireCall`. `:rename {old new}` applies
+  only to what `:refer`/`use` bring in (the old name is then not referred, a key outside
+  the referred set is ignored, no `:refer` ignores it). `(:refer-clojure :rename {old
+  new})` excludes `old` and spells the core var as `new` (`ClojureNsState.coreRenames`,
+  read by `ClojureLowering.renamedCore` at a call head and in value position, and by the
+  syntax-quote qualifier, which spells `clojure.core/old`); a program definition or local
+  of `new` wins like any refer.
+- **`load` and `(:load ...)`**: a path is relative to the directory of the current
+  namespace's resource (`app.ld` -> `app/`; `user` -> the root), a leading `/` is
+  root-relative, `.clj` is appended (else `.cljc`, `RT.load`'s order), the file evaluates in the current `*ns*` at EVERY call
+  (a `def` resets, a `defonce` keeps) and `*ns*` is restored after it. It lowers like a
+  required file under a unit key `load:<ns>:<path>` (`ClojureNamespaceLowering.loadOne`,
+  `ClojureLowering.unitFiles` for its `*file*`, a required namespace's file too), once per lowering, and each call site runs
+  its init unconditionally (`LoadMode.RELOAD`). The path must be a string literal because
+  the file is read while lowering; a computed path is refused by name.
 - **Loading** (`ClojureNamespaceLowering.loadNamespace`, `ClojureLowering.loadFile`): an
   `ns` form marks its namespace loaded AFTER its clauses (marking first hid the cycle),
   so a single-file program's later `(:require [a])` reads nothing. Any other project

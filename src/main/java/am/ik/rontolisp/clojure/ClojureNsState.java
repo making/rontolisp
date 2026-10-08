@@ -44,6 +44,13 @@ final class ClojureNsState {
 	final Set<String> referClojureExclude = new HashSet<>();
 
 	/**
+	 * What {@code (:refer-clojure :rename {old new})} added: the new name to the core
+	 * name it spells. The old name is excluded, so only the new spelling reaches the core
+	 * var.
+	 */
+	final Map<String, String> coreRenames = new HashMap<>();
+
+	/**
 	 * The vars this namespace interns, in definition order: the name to whether it is
 	 * private ({@code defn-}, {@code ^:private}). A private var is never referred and a
 	 * qualified reference from another namespace is refused, like the oracle.

@@ -260,6 +260,11 @@ final class ClojureNamespaceLowering {
 				case ":use" -> calls.addAll(requireSpecs(ctx, parts.subList(1, parts.size()), true));
 				case ":import" -> importSpecs(ctx, parts.subList(1, parts.size()));
 				case ":refer-clojure" -> referClojure(ctx, parts.subList(1, parts.size()));
+				case ":load" -> calls.addAll(loadForms(ctx, parts.subList(1, parts.size())));
+				case ":gen-class" -> {
+					// a class is generated only by an AOT compile, which this front end
+					// has no use for: the clause (and its options) declares nothing
+				}
 				default -> throw new LispReadException("ns clause " + head.name() + " is not supported yet");
 			}
 		}
@@ -415,10 +420,12 @@ final class ClojureNamespaceLowering {
 			ns = prefix + "." + ns;
 		}
 		String alias = null;
+		String asAlias = null;
 		boolean all = use;
 		boolean refer = use;
 		List<String> only = null;
 		Set<String> exclude = new HashSet<>();
+		Map<String, String> rename = Map.of();
 		for (int i = 1; i < parts.size(); i += 2) {
 			if (i + 1 >= parts.size() || !(parts.get(i) instanceof LispSymbol opt)) {
 				throw new LispReadException("require takes option/value pairs, not " + spec.print());
@@ -431,6 +438,12 @@ final class ClojureNamespaceLowering {
 					}
 					alias = named.name();
 				}
+				case ":as-alias" -> {
+					if (!(arg instanceof LispSymbol named)) {
+						throw new LispReadException(":as-alias takes an alias, not " + arg.print());
+					}
+					asAlias = named.name();
+				}
 				case ":refer" -> {
 					refer = true;
 					if (arg instanceof LispSymbol every && every.name().equals(":all")) {
@@ -442,9 +455,14 @@ final class ClojureNamespaceLowering {
 				}
 				case ":only" -> only = referNames(arg, spec);
 				case ":exclude" -> exclude.addAll(referNames(arg, spec));
-				case ":rename" -> throw new LispReadException(":rename is not supported yet: " + spec.print());
+				case ":rename" -> rename = renameMap(arg, spec);
 				default -> throw new LispReadException("require option " + opt.name() + " is not supported yet");
 			}
+		}
+		if (asAlias != null && alias == null && !refer) {
+			// an alias for the namespace's name alone: nothing is loaded or created
+			ctx.ns().aliases.put(asAlias, ns);
+			return null;
 		}
 		boolean library = isKnownNamespace(ns);
 		if (ns.equals(ClojureRingUtilLowering.NAMESPACE)) {
@@ -483,6 +501,9 @@ final class ClojureNamespaceLowering {
 		if (alias != null) {
 			ctx.ns().aliases.put(alias, ns);
 		}
+		if (asAlias != null) {
+			ctx.ns().aliases.put(asAlias, ns);
+		}
 		if (!refer) {
 			return ctx.requireCall(ns, mode);
 		}
@@ -490,14 +511,14 @@ final class ClojureNamespaceLowering {
 			for (String var : only) {
 				if (!exclude.contains(var)) {
 					checkReferable(ctx, ns, var, library);
-					ctx.ns().refers.put(var, new ClojureLowering.VarRef(ns, var));
+					ctx.ns().refers.put(rename.getOrDefault(var, var), new ClojureLowering.VarRef(ns, var));
 				}
 			}
 		}
 		else if (all) {
 			for (String var : library ? varsOf(ns) : publicVarsOf(ctx, ns)) {
 				if (!exclude.contains(var)) {
-					ctx.ns().refers.put(var, new ClojureLowering.VarRef(ns, var));
+					ctx.ns().refers.put(rename.getOrDefault(var, var), new ClojureLowering.VarRef(ns, var));
 				}
 			}
 		}
@@ -686,6 +707,7 @@ final class ClojureNamespaceLowering {
 	 * {@code :exclude}.
 	 */
 	static void referClojure(ClojureLowering ctx, List<LispVal> opts) {
+		Map<String, String> rename = Map.of();
 		for (int i = 0; i < opts.size(); i += 2) {
 			if (i + 1 >= opts.size() || !(opts.get(i) instanceof LispSymbol opt)) {
 				throw new LispReadException(":refer-clojure takes option/value pairs");
@@ -693,10 +715,95 @@ final class ClojureNamespaceLowering {
 			switch (opt.name()) {
 				case ":only" -> ctx.ns().referClojureOnly = new HashSet<>(referNames(opts.get(i + 1), opts.get(i + 1)));
 				case ":exclude" -> ctx.ns().referClojureExclude.addAll(referNames(opts.get(i + 1), opts.get(i + 1)));
-				case ":rename" -> throw new LispReadException(":rename is not supported yet in :refer-clojure");
+				case ":rename" -> rename = renameMap(opts.get(i + 1), opts.get(i + 1));
 				default -> throw new LispReadException(":refer-clojure option " + opt.name() + " is not supported yet");
 			}
 		}
+		// a renamed core var is referred under its new name only; a name the clause
+		// leaves out of the core renames nothing
+		for (Map.Entry<String, String> entry : rename.entrySet()) {
+			if (coreAllowed(ctx, entry.getKey())) {
+				ctx.ns().referClojureExclude.add(entry.getKey());
+				ctx.ns().coreRenames.put(entry.getValue(), entry.getKey());
+			}
+		}
+	}
+
+	/**
+	 * The {@code :rename {old new}} map of a libspec or a {@code :refer-clojure} clause,
+	 * as old name to new name.
+	 */
+	static Map<String, String> renameMap(LispVal arg, LispVal spec) {
+		List<LispVal> entries = ClojureLowerUtil.items(arg);
+		if (entries == null || entries.isEmpty() || !ClojureLowerUtil.isSymbolNamed(entries.get(0), "%hash-map")
+				|| entries.size() % 2 == 0) {
+			throw new LispReadException(":rename takes a map of names, not " + spec.print());
+		}
+		Map<String, String> renames = new LinkedHashMap<>();
+		for (int i = 1; i < entries.size(); i += 2) {
+			if (!(entries.get(i) instanceof LispSymbol from) || !(entries.get(i + 1) instanceof LispSymbol to)
+					|| from.name().startsWith(":") || to.name().startsWith(":")) {
+				throw new LispReadException(":rename takes a map of names, not " + spec.print());
+			}
+			renames.put(from.name(), to.name());
+		}
+		return renames;
+	}
+
+	/**
+	 * The files of a {@code (load "path" ...)} call or a {@code (:load "path" ...)} ns
+	 * clause: each lowered in place (once per program read, like a namespace file) and
+	 * run unconditionally where the call stands, in the current namespace -- the file
+	 * evaluates there and its own {@code in-ns} does not outlive it. A path is a string
+	 * literal: the file is read while the program lowers.
+	 * @return the calls that run the files' statements, in order
+	 */
+	static List<LispVal> loadForms(ClojureLowering ctx, List<LispVal> paths) {
+		List<LispVal> calls = new ArrayList<>();
+		for (LispVal arg : paths) {
+			if (!(arg instanceof LispString path)) {
+				throw new LispReadException("load takes string literal paths: " + arg.print());
+			}
+			LispVal call = loadOne(ctx, path.value());
+			if (call != null) {
+				calls.add(call);
+			}
+		}
+		return calls;
+	}
+
+	/**
+	 * One {@code load}: a path with a leading slash is root-relative, any other is
+	 * relative to the directory of the current namespace's file, like the oracle's.
+	 */
+	private static @Nullable LispVal loadOne(ClojureLowering ctx, String path) {
+		String relative;
+		if (path.startsWith("/")) {
+			relative = path.substring(1);
+		}
+		else {
+			String own = ClojureSourcePath.resourceOf(ctx.currentNs);
+			relative = own.substring(0, own.lastIndexOf('/') + 1) + path;
+		}
+		String unit = "load:" + ctx.currentNs + ":" + relative;
+		if (!ctx.loadedNamespaces.contains(unit)) {
+			if (ctx.loadingNamespaces.contains(unit)) {
+				throw new LispReadException("Cyclic load dependency: /" + relative);
+			}
+			// the oracle's RT.load: the .clj under any root, then the .cljc
+			ClojureSourcePath.Found found = ctx.sourcePath.findFile(relative + ".clj");
+			if (found == null) {
+				found = ctx.sourcePath.findFile(relative + ".cljc");
+			}
+			if (found == null) {
+				throw new LispReadException("Could not locate " + relative + ".clj or " + relative
+						+ ".cljc on the source path" + ctx.sourcePath.describeRoots());
+			}
+			ctx.unitFiles.put(unit, found.resource());
+			ctx.loadFile(unit, found);
+			ctx.emitNamespaceInit(unit);
+		}
+		return ctx.requireCall(unit, ClojureLowering.LoadMode.RELOAD);
 	}
 
 	/**

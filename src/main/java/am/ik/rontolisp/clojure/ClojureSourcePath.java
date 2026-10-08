@@ -112,18 +112,31 @@ final class ClojureSourcePath {
 	@Nullable Found find(String ns) {
 		String base = scriptBaseOf(ns);
 		for (String extension : List.of(".clj", ".cljc")) {
-			String relative = base + extension;
-			for (String root : roots()) {
-				String path = this.files.resolve(root, relative);
-				String text = this.files.read(path);
-				if (text != null) {
-					return new Found(path, relative, text, false);
-				}
+			Found project = findFile(base + extension);
+			if (project != null) {
+				return project;
 			}
 		}
 		String builtin = ClojureBuiltinNamespaces.source(ns);
 		String relative = resourceOf(ns);
 		return builtin == null ? null : new Found(relative, relative, builtin, true);
+	}
+
+	/**
+	 * A file below the first root holding it, for {@code load}: a root-relative path, not
+	 * a namespace.
+	 * @param relative the path, extension included
+	 * @return the file, or {@code null} when no root holds it
+	 */
+	@Nullable Found findFile(String relative) {
+		for (String root : roots()) {
+			String path = this.files.resolve(root, relative);
+			String text = this.files.read(path);
+			if (text != null) {
+				return new Found(path, relative, text, false);
+			}
+		}
+		return null;
 	}
 
 	/**

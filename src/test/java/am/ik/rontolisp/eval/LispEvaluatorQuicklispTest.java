@@ -40,7 +40,7 @@ class LispEvaluatorQuicklispTest {
 	void quickloadDownloadsAndLoadsASystem(@TempDir Path base) {
 		DistClient client = new DistClient(base, DistTestSupport.dist(//
 				"mylib mylib mylib\n", //
-				"mylib " + MYLIB_URL + " 100 md5 sha1 mylib-1.0 mylib\n", //
+				"mylib " + MYLIB_URL + " {sums} mylib-1.0 mylib\n", //
 				Map.of(MYLIB_URL, DistTestSupport.tarGz(Map.of(//
 						"mylib-1.0/mylib.asd", "(defsystem \"mylib\" :components ((:file \"mylib\")))", //
 						"mylib-1.0/mylib.lisp", "(defun mylib-answer () (* 6 7))")))));
@@ -54,7 +54,7 @@ class LispEvaluatorQuicklispTest {
 	void quickloadReturnsTheListOfLoadedSystemNames(@TempDir Path base) {
 		DistClient client = new DistClient(base, DistTestSupport.dist(//
 				"mylib mylib mylib\n", //
-				"mylib " + MYLIB_URL + " 100 md5 sha1 mylib-1.0 mylib\n", //
+				"mylib " + MYLIB_URL + " {sums} mylib-1.0 mylib\n", //
 				Map.of(MYLIB_URL, DistTestSupport.tarGz(Map.of(//
 						"mylib-1.0/mylib.asd", "(defsystem \"mylib\" :components ((:file \"mylib\")))", //
 						"mylib-1.0/mylib.lisp", "(defun mylib-answer () 42)")))));
@@ -73,7 +73,7 @@ class LispEvaluatorQuicklispTest {
 				DistTestSupport.quicklisp("", "", Map.of()), //
 				DistTestSupport.ultralisp(//
 						"fresh fresh fresh\n", //
-						"fresh " + FRESH_URL + " 100 md5 sha1 fresh-1.0 fresh\n", //
+						"fresh " + FRESH_URL + " {sums} fresh-1.0 fresh\n", //
 						Map.of(FRESH_URL, DistTestSupport.tarGz(Map.of(//
 								"fresh-1.0/fresh.asd", "(defsystem \"fresh\" :components ((:file \"fresh\")))", //
 								"fresh-1.0/fresh.lisp", "(defun fresh-answer () (* 6 7))"))))));
@@ -90,8 +90,8 @@ class LispEvaluatorQuicklispTest {
 	@Test
 	void quickloadWithoutTheDistInstalledReportsTheDistsItSearched(@TempDir Path base) {
 		DistClient client = new DistClient(base,
-				DistTestSupport.dists(DistTestSupport.quicklisp("", "", Map.of()), DistTestSupport.ultralisp(
-						"fresh fresh fresh\n", "fresh " + FRESH_URL + " 100 md5 sha1 fresh-1.0 fresh\n", Map.of())));
+				DistTestSupport.dists(DistTestSupport.quicklisp("", "", Map.of()), DistTestSupport
+					.ultralisp("fresh fresh fresh\n", "fresh " + FRESH_URL + " {sums} fresh-1.0 fresh\n", Map.of())));
 
 		assertThatThrownBy(() -> run("(ql:quickload \"fresh\")", client)).isInstanceOf(LispEvalException.class)
 			.hasMessageContaining("fresh")

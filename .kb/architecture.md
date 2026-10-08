@@ -30,9 +30,12 @@ for `.clj` and `.cljc`, lowered to the same core forms so no backend learns a Cl
 
 ## Language-independent libraries
 
-`am.ik.jvm`, `am.ik.wasm`, `am.ik.wit`, `am.ik.gpu` and `am.ik.objc` may import no rontolisp
-package and no external dependency.
+`am.ik.jvm`, `am.ik.wasm`, `am.ik.wit`, `am.ik.gpu`, `am.ik.objc` and `am.ik.artifact` may
+import no rontolisp package and no external dependency.
 
+- `am.ik.artifact` -- the one fetch-and-cache layer under every downloader (HTTP with
+  timeouts, checksums, tar.gz/zip extraction, atomic install, the cache root); reached from
+  `eval/DistClient` (`.kb/dists.md`).
 - `am.ik.gpu` -- the device half of `--gpu`, CUDA and Metal behind one sealed `GpuDevice`
   seam; imports nothing at all (`.kb/gpu.md`). The interpreter reaches it through
   `eval/LinalgGpu` -> `eval/LinalgGpuKernels`; the JVM backend EMBEDS its class files in the
@@ -58,7 +61,7 @@ cli -> eval, compiler, codegen.*, macro, reader, format, am.ik.wit
 codegen.jvm -> compiler, macro, runtime, am.ik.jvm, am.ik.gpu, am.ik.objc
 codegen.wasm -> compiler, macro, am.ik.wasm, am.ik.wit
 compiler -> macro, runtime, rontolisp (AST types only), am.ik.wit
-eval -> macro, compiler, reader, scheme, clojure, runtime, rontolisp (AST types only), am.ik.gpu, am.ik.objc
+eval -> macro, compiler, reader, scheme, clojure, runtime, rontolisp (AST types only), am.ik.gpu, am.ik.objc, am.ik.artifact
 scheme -> reader, rontolisp (AST types only)
 clojure -> reader, rontolisp (AST types only)
 macro -> reader, rontolisp (AST types only)
@@ -67,6 +70,7 @@ format -> (nothing)
 runtime -> (nothing)
 am.ik.gpu -> (nothing)
 am.ik.objc -> (nothing)
+am.ik.artifact -> (nothing)
 ```
 
 ## Package rules

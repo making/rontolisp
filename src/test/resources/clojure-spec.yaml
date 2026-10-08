@@ -7654,3 +7654,53 @@ cases:
       {"Content-Type" "x/foo"}
       {"content-type" "a/b"}
       nil "text/html" nil nil
+  - name: ns-gen-class-clause-declares-nothing
+    # (:gen-class ...) generates a class only under an AOT compile; a script or a
+    # -main run reads it as nothing, options included. Every line is the oracle's
+    # (clj 1.12.6), on all four backends.
+    source: |
+      (ns gc-ns (:gen-class :name gc.Main :main true :methods [[hi [] String]]) (:require [clojure.string :as s]))
+      (defn -main [& args] (println "main" (s/join "," args)))
+      (-main "a" "b")
+      (in-ns 'user)
+    expected: |
+      main a,b
+  - name: require-as-alias-names-a-namespace-without-loading-it
+    # :as-alias registers the alias for ::alias/k, syntax-quote and a loaded
+    # library's vars; the namespace need not exist. Every line is the oracle's
+    # (clj 1.12.6), on all four backends.
+    source: |
+      (ns aa-ns (:require [clojure.string :as-alias str-a] [nowhere.lib :as-alias nw]))
+      (println ::str-a/k ::nw/k `nw/x `str-a/join)
+      (println (str-a/upper-case "x"))
+      (in-ns 'user)
+    expected: |
+      :clojure.string/k :nowhere.lib/k nowhere.lib/x clojure.string/join
+      X
+  - name: rename-refers-a-var-under-another-name
+    # :rename in a libspec renames the vars :refer brings in (the old name is no
+    # longer referred); (:refer-clojure :rename {old new}) spells a core var as
+    # new and leaves old free for the program, syntax-quote included. Every line
+    # is the oracle's (clj 1.12.6), on all four backends.
+    source: |
+      (ns rn-ns
+        (:require [clojure.set :as set :refer [union difference] :rename {union set-union}]
+                  [clojure.string :refer [join] :rename {join str-join}])
+        (:refer-clojure :rename {map core-map filter core-filter}))
+      (println (set-union #{1} #{2}) (difference #{1 2} #{2}))
+      (println (str-join "-" [1 2]))
+      (println (core-map inc [1 2 3]) (core-filter odd? [1 2 3]) (map-indexed vector [:a]))
+      (println (apply core-map [inc [1]]) (reduce + (core-map identity [1 2])))
+      (println `core-map `map)
+      (defn map [f xs] [:mine f xs])
+      (println (map 1 2))
+      (in-ns 'user)
+      (println (map inc [1]))
+    expected: |
+      #{1 2} #{1}
+      1-2
+      (2 3 4) (1 3) ([0 :a])
+      (2) 3
+      clojure.core/map rn-ns/map
+      [:mine 1 2]
+      (2)

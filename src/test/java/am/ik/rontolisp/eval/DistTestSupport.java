@@ -3,16 +3,21 @@ package am.ik.rontolisp.eval;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.util.HashMap;
+import java.util.HexFormat;
 import java.util.Map;
 import java.util.zip.GZIPOutputStream;
+
+import am.ik.artifact.Downloader;
 
 /**
  * Test helpers for the {@link DistClient}: builds one or more in-memory Quicklisp-format
  * distributions (distinfo + {@code systems.txt} + {@code releases.txt} + release
- * tarballs) and a {@link DistClient.Downloader} serving them, so quickload can be
- * exercised with no network access. The tarball writer emits a minimal USTAR archive
- * (name, size, regular-file typeflag) which is all {@link DistClient}'s extractor reads.
+ * tarballs) and a {@link Downloader} serving them, so quickload can be exercised with no
+ * network access. The tarball writer emits a minimal USTAR archive (name, size,
+ * regular-file typeflag) which is all {@link DistClient}'s extractor reads.
  */
 public final class DistTestSupport {
 
@@ -78,6 +83,13 @@ public final class DistTestSupport {
 	}
 
 	/**
+	 * The placeholder a {@code releases.txt} line writes for its {@code size file-md5
+	 * content-sha1} columns: {@link #dists} replaces it with the size and MD5 of the
+	 * tarball the fixture serves at that line's URL, which is what the client verifies.
+	 */
+	public static final String SUMS = "{sums}";
+
+	/**
 	 * Builds a downloader serving every given distribution.
 	 * @param fixtures the distributions to serve
 	 * @return a recording downloader serving all of them
@@ -89,17 +101,53 @@ public final class DistTestSupport {
 					+ "\nrelease-index-url: " + fixture.releasesUrl() + "\n";
 			responses.put(fixture.distinfoUrl(), distinfo.getBytes(StandardCharsets.UTF_8));
 			responses.put(fixture.systemsUrl(), fixture.systemsTxt().getBytes(StandardCharsets.UTF_8));
-			responses.put(fixture.releasesUrl(), fixture.releasesTxt().getBytes(StandardCharsets.UTF_8));
+			responses.put(fixture.releasesUrl(),
+					withSums(fixture.releasesTxt(), fixture.tarballs()).getBytes(StandardCharsets.UTF_8));
 			responses.putAll(fixture.tarballs());
 		}
 		return new RecordingDownloader(responses);
 	}
 
 	/**
+	 * Replaces each line's {@link #SUMS} placeholder with the columns {@link #sums} gives
+	 * the tarball served at that line's URL (the second column); a line whose URL serves
+	 * nothing gets zeros, which only matters if a test downloads it.
+	 */
+	private static String withSums(String releasesTxt, Map<String, byte[]> tarballs) {
+		StringBuilder out = new StringBuilder();
+		for (String line : releasesTxt.split("\n", -1)) {
+			String filled = line;
+			if (line.contains(SUMS)) {
+				String[] parts = line.trim().split("\\s+");
+				byte[] tarball = parts.length > 1 ? tarballs.get(parts[1]) : null;
+				filled = line.replace(SUMS, tarball == null ? "0 0 0" : sums(tarball));
+			}
+			out.append(filled).append('\n');
+		}
+		return out.substring(0, out.length() - 1);
+	}
+
+	/**
+	 * The {@code size file-md5 content-sha1} columns of a release served as
+	 * {@code tarball}. The client does not verify the content SHA-1, so it is a dummy.
+	 * @param tarball the archive bytes
+	 * @return the three columns, space-separated
+	 */
+	public static String sums(byte[] tarball) {
+		try {
+			return tarball.length + " " + HexFormat.of().formatHex(MessageDigest.getInstance("MD5").digest(tarball))
+					+ " 0000000000000000000000000000000000000000";
+		}
+		catch (NoSuchAlgorithmException ex) {
+			throw new IllegalStateException(ex);
+		}
+	}
+
+	/**
 	 * A recording downloader that serves a fixed URL-to-bytes map and counts how many
 	 * times each URL was fetched (so a test can assert the cache prevents re-downloads).
 	 */
-	public static final class RecordingDownloader implements DistClient.Downloader {
+	public static final class RecordingDownloader implements Downloader {
 
 		private final Map<String, byte[]> responses;
 

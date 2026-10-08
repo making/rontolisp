@@ -335,16 +335,27 @@ public final class ClojureLowering {
 	final Set<String> builtinNamespaces = new HashSet<>();
 
 	/**
-	 * The file each loaded project namespace came from, below its source root
-	 * ({@code my_app/core.cljc}): the {@code *file*} its init runs under.
-	 */
-	final Map<String, String> namespaceResources = new HashMap<>();
-
-	/**
 	 * The namespaces whose files are lowering, innermost first: a {@code require} of one
 	 * of them is the oracle's cyclic-load refusal.
 	 */
 	final Deque<String> loadingNamespaces = new ArrayDeque<>();
+
+	/**
+	 * The file of each loaded namespace and {@code load} unit
+	 * ({@link ClojureNamespaceLowering#loadOne}) -- the key its init is stored under -- to
+	 * its root-relative path ({@code my_app/core.cljc}), the {@code *file*} it loads under.
+	 */
+	final Map<String, String> unitFiles = new HashMap<>();
+
+	/**
+	 * The root-relative file a namespace or {@code load} unit key was read from.
+	 * @param unit the key
+	 * @return its path
+	 */
+	String fileOf(String unit) {
+		String file = this.unitFiles.get(unit);
+		return file != null ? file : ClojureSourcePath.resourceOf(unit);
+	}
 
 	/** Where a project namespace's file is found. */
 	ClojureSourcePath sourcePath = new ClojureSourcePath(ClojureFiles.NONE, null);
@@ -1990,8 +2001,8 @@ public final class ClojureLowering {
 		boolean outerEcho = this.nestedDefAnswersVar;
 		String outerFile = this.loadingFile;
 		String outerSourcePath = this.loadingSourcePath;
-		this.namespaceResources.put(ns, found.resource());
-		this.loadingFile = found.resource();
+		this.unitFiles.put(ns, found.resource());
+		this.loadingFile = fileOf(ns);
 		this.loadingSourcePath = ClojureSourcePath.lastSegmentOf(this.loadingFile);
 		this.nestedDefAnswersVar = false;
 		this.scopes.clear();
@@ -2188,7 +2199,7 @@ public final class ClojureLowering {
 	 * @return the call under the bindings
 	 */
 	private LispVal loading(String ns, LispVal run) {
-		String file = this.namespaceResources.getOrDefault(ns, ClojureSourcePath.resourceOf(ns));
+		String file = fileOf(ns);
 		this.usedSpecials.addAll(List.of("*ns*", "*file*", "*source-path*"));
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let"), ClojureLowerUtil.list(
 				ClojureLowerUtil.list(ClojureCoreSpecials.NS, ClojureCoreSpecials.NS),
@@ -2623,6 +2634,9 @@ public final class ClojureLowering {
 		}
 		if (items.get(0) instanceof LispSymbol op) {
 			String core = ClojureCoreNames.coreSpelling(op.name());
+			if (core == null) {
+				core = renamedCore(op.name());
+			}
 			if (core != null) {
 				// clojure.core/name: the core meaning whatever the program defines
 				// under that name, like the oracle's qualified var
@@ -2641,6 +2655,19 @@ public final class ClojureLowering {
 			}
 		}
 		return lowerRow(form, items, false);
+	}
+
+	/**
+	 * The core name a {@code (:refer-clojure :rename {old new})} spelling stands for, or
+	 * null: a local or a var of the program under the same name wins, like any refer.
+	 */
+	@Nullable String renamedCore(String name) {
+		Map<String, String> renames = ns().coreRenames;
+		if (renames.isEmpty()) {
+			return null;
+		}
+		String core = renames.get(name);
+		return core != null && !known(name) ? core : null;
 	}
 
 	/**
@@ -2916,6 +2943,11 @@ public final class ClojureLowering {
 		if (ClojureLowerUtil.isSymbolNamed(head, "require")) {
 			List<LispVal> calls = ClojureNamespaceLowering.requireSpecs(this,
 					ClojureNamespaceLowering.specsOf(items, "require"), false);
+			return calls.isEmpty() ? NIL_CONST : ClojureLowerUtil.cons(ClojureLowerUtil.sym("progn"), withNil(calls));
+		}
+		if (ClojureLowerUtil.isSymbolNamed(head, "load")
+				&& (coreOnly || !known("load") && ClojureNamespaceLowering.coreAllowed(this, "load"))) {
+			List<LispVal> calls = ClojureNamespaceLowering.loadForms(this, items.subList(1, items.size()));
 			return calls.isEmpty() ? NIL_CONST : ClojureLowerUtil.cons(ClojureLowerUtil.sym("progn"), withNil(calls));
 		}
 		if (ClojureLowerUtil.isSymbolNamed(head, "use")) {
@@ -4100,6 +4132,9 @@ public final class ClojureLowering {
 			return s;
 		}
 		String core = ClojureCoreNames.coreSpelling(name);
+		if (core == null) {
+			core = renamedCore(name);
+		}
 		if (core != null) {
 			// clojure.core/name: the core value whatever the program defines under
 			// that name
