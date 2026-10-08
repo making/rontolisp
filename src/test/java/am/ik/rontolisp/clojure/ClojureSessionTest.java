@@ -265,6 +265,15 @@ class ClojureSessionTest {
 	}
 
 	@Test
+	void aMacroOfALaterBufferCallsWhatAnEarlierOneDefined() {
+		// the oracle's REPL evaluates each input before reading the next, so a macro body
+		// calls a helper and reads a def of an earlier input
+		assertThat(runSession("(defn sx-helper [x] (list 'inc x)) (def sx-n 10)",
+				"(defmacro sx-m [x] (list '+ sx-n (sx-helper x)))", "(println (sx-m 1))"))
+			.isEqualTo("12\n");
+	}
+
+	@Test
 	void aSessionReadsAClassKeywordsSupersInALaterBuffer() {
 		// the hierarchy runtime of a first buffer without a class takes the class rows'
 		// readers when a later one spells a class, and a later record joins the rows

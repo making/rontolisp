@@ -1468,6 +1468,33 @@ class ClojureLoweringTest {
 	}
 
 	@Test
+	void aMacroBodyCallsAHelperDefinedAboveIt() {
+		// the oracle evaluates each top-level form before the next compiles
+		assertThat(loweredWithMacros("(defn mu-helper [x] (list 'inc x)) (defmacro mu-m [x] (mu-helper x)) (mu-m 1)"))
+			.endsWith("(+ 1 1)");
+	}
+
+	@Test
+	void aDefValueRunsAtMacroTimeOnlyWhenAnExpansionReadsIt() {
+		// a def the body never reads is never built at lower time: the throwing one
+		// below fails the compile only once a macro body reads it, naming the macro
+		String unread = "(def mu-boom (throw (ex-info \"built\" {}))) (def mu-n 2) (defmacro mu-k [] mu-n) (mu-k)";
+		assertThat(loweredWithMacros(unread)).endsWith("2");
+		assertThatThrownBy(() -> loweredWithMacros(unread.replace("[] mu-n", "[] mu-boom")))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("in macro `mu-k`")
+			.hasMessageContaining("built");
+	}
+
+	@Test
+	void aRedefinitionReadsTheRootItSupersedesAtMacroTime() {
+		// a lazy root reading its own var sees the earlier one, and a defonce keeps it
+		assertThat(loweredWithMacros(
+				"(def mu-r 1) (def mu-r (+ mu-r 10)) (defonce mu-r 99) (defmacro mu-read [] mu-r) (mu-read)"))
+			.endsWith("11");
+	}
+
+	@Test
 	void macroCallsAboveTheirDefinitionNameTheMissingExpander() {
 		assertThatThrownBy(
 				() -> Clojure.read("(mu-early 1) (defmacro mu-early [x] x)", null, ClojureMacroTime.create()))

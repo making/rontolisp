@@ -664,6 +664,22 @@ public final class Environment implements Scope {
 	}
 
 	/**
+	 * What this scope holds for a name, WITHOUT running a pending value expression: the
+	 * bound value, or the pending expression itself, or {@code null} when neither. A lazy
+	 * redefinition reads the root it supersedes through it ({@code (def x (inc x))}), and
+	 * only when it is forced itself.
+	 * @param name the variable name
+	 * @return the current root as a supplier, or {@code null}
+	 */
+	public @Nullable Supplier<@Nullable LispVal> rootOf(String name) {
+		LispVal bound = this.bindings.get(name);
+		if (bound != null) {
+			return () -> bound;
+		}
+		return this.pending == null ? null : this.pending.get(name);
+	}
+
+	/**
 	 * Evaluates a pending value expression, if any, and installs the result. The entry is
 	 * removed BEFORE the supplier runs, so an init form that reads its own variable sees
 	 * it unbound rather than recursing.

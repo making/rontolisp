@@ -153,6 +153,7 @@ final class ClojureMacroLowering {
 			// the macro-time table entry, so a macro body calling macroexpand-1
 			// at expansion time sees the macros defined so far
 			try {
+				handOverCaughtClasses(ctx, ctx.macroEvaluator);
 				ctx.macroEvaluator.evaluate(setq);
 			}
 			catch (RuntimeException ex) {
@@ -164,6 +165,100 @@ final class ClojureMacroLowering {
 		forms.addAll(metaStore);
 		forms.add(ClojureLowering.NIL_CONST);
 		return List.of(ClojureLowerUtil.cons(ClojureLowerUtil.sym("progn"), forms));
+	}
+
+	/**
+	 * The heads of a top-level datum whose every lowered form is a definition -- a
+	 * function, a method or protocol table store, a record's constructors -- so the macro
+	 * evaluator replays all of it. Any other datum's statements ({@code prn}, a
+	 * {@code swap!}, a server start) run only in the program.
+	 */
+	private static final Set<String> DEFINITION_HEADS = Set.of("defn", "defn-", "defmulti", "defmethod", "defprotocol",
+			"defrecord", "deftype", "extend-protocol", "extend-type", "extend", "defstruct");
+
+	/**
+	 * Hands one top-level datum's lowered forms to the macro evaluator, so a macro body
+	 * expanding below it calls what it defined, like the oracle's form-by-form load. A
+	 * {@code defun} and a {@code declaim} go as they are; a {@code def}'s store
+	 * ({@code setq}, a dynamic var's {@code defparameter}) as a root whose value runs
+	 * only when an expansion reads it; a {@code defonce}'s the same, unless the var is
+	 * bound; a {@code progn} member by member; any other form only from a datum
+	 * {@link #DEFINITION_HEADS} names. The predicates of the classes caught so far go
+	 * first. Nothing runs here: the evaluator queues it for its next evaluation.
+	 * @param ctx the lowering
+	 * @param datum the top-level datum
+	 * @param forms its lowered forms
+	 */
+	static void handOver(ClojureLowering ctx, LispVal datum, List<LispVal> forms) {
+		ClojureMacroEvaluator evaluator = ctx.macroEvaluator;
+		if (evaluator == null) {
+			return;
+		}
+		handOverCaughtClasses(ctx, evaluator);
+		List<LispVal> items = ClojureLowerUtil.items(datum);
+		if (items != null && !items.isEmpty() && ClojureLowerUtil.isSymbolNamed(items.get(0), "defmacro")) {
+			return; // its expander is already there
+		}
+		boolean definitions = items != null && !items.isEmpty() && items.get(0) instanceof LispSymbol head
+				&& DEFINITION_HEADS.contains(head.name()) && ctx.lookupVar(head.name()) == null;
+		for (LispVal form : forms) {
+			handOverForm(ctx, evaluator, form, definitions, false);
+		}
+	}
+
+	/**
+	 * The predicates of the classes a {@code catch} named since the last hand-over: a
+	 * lowered body that catches calls one by name, and a program defines only the ones it
+	 * catches.
+	 */
+	static void handOverCaughtClasses(ClojureLowering ctx, ClojureMacroEvaluator evaluator) {
+		List<List<String>> fresh = new ArrayList<>();
+		for (Map.Entry<String, List<String>> caught : ctx.caughtChains.entrySet()) {
+			if (ctx.macroTimeChains.add(caught.getKey())) {
+				fresh.add(caught.getValue());
+			}
+		}
+		for (LispVal predicate : ClojureThrowables.catchRuntime(fresh, false)) {
+			evaluator.define(predicate);
+		}
+	}
+
+	private static void handOverForm(ClojureLowering ctx, ClojureMacroEvaluator evaluator, LispVal form,
+			boolean definitions, boolean once) {
+		LispVal guarded = ctx.defonceStores.get(form);
+		if (guarded != null) {
+			handOverForm(ctx, evaluator, guarded, definitions, true);
+			return;
+		}
+		List<LispVal> items = ClojureLowerUtil.items(form);
+		if (items == null || items.isEmpty() || !(items.get(0) instanceof LispSymbol head)) {
+			return;
+		}
+		switch (head.name().toUpperCase(java.util.Locale.ROOT)) {
+			case "PROGN" -> {
+				for (LispVal member : items.subList(1, items.size())) {
+					handOverForm(ctx, evaluator, member, definitions, once);
+				}
+			}
+			case "DEFUN", "DECLAIM" -> evaluator.define(form);
+			case "SETQ" -> {
+				for (int i = 1; i + 1 < items.size(); i += 2) {
+					if (items.get(i) instanceof LispSymbol var) {
+						evaluator.defineLazy(var, items.get(i + 1), false, once);
+					}
+				}
+			}
+			case "DEFPARAMETER" -> {
+				if (items.size() == 3 && items.get(1) instanceof LispSymbol var) {
+					evaluator.defineLazy(var, items.get(2), true, once);
+				}
+			}
+			default -> {
+				if (definitions) {
+					evaluator.define(form);
+				}
+			}
+		}
 	}
 
 	/**
@@ -292,6 +387,7 @@ final class ClojureMacroLowering {
 				ClojureLowerUtil.list(ClojureCoreSpecials.SOURCE_PATH, LispString.literal(ctx.loadingSourcePath))),
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("funcall"), expander,
 						ClojureLowerUtil.cons(ClojureLowerUtil.sym("list"), quoted)));
+		handOverCaughtClasses(ctx, ctx.macroEvaluator);
 		LispVal value;
 		try {
 			value = ctx.macroEvaluator.evaluate(invocation);

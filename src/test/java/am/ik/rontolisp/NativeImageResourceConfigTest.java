@@ -38,7 +38,7 @@ class NativeImageResourceConfigTest {
 	private static final List<String> BUNDLED_DIRS = List.of("am/ik/rontolisp/eval", "am/ik/rontolisp/macro",
 			"am/ik/rontolisp/codegen/wasm/component", "am/ik/rontolisp/clojure/lib/ring/util",
 			"am/ik/rontolisp/clojure/lib/ring/middleware", "am/ik/rontolisp/clojure/lib/clojure",
-			"am/ik/rontolisp/clojure/lib/rontolisp");
+			"am/ik/rontolisp/clojure/lib/clojure/core", "am/ik/rontolisp/clojure/lib/rontolisp");
 
 	@Test
 	void everyBundledResourceIsRegistered() throws IOException {

@@ -135,6 +135,8 @@ answered `2 5 3` before).
 | `clojure.edn` (`read-string` `read`) | `ClojureEdnLowering`: one call to `rontolisp::%clojure-edn-read-string-1` / `-read-string` / `-read` after a lower-time arity check in the oracle's wording; as a value `#'...-v` | "Reading", clojure.edn |
 | `clojure.walk` | Clojure source in the jar written for this front end, loaded like a project file (a startup namespace: on its first qualified name too) | "clojure.jar namespaces" |
 | `clojure.template` | the same, loaded at its `require` | "clojure.jar namespaces" |
+| `clojure.data` `clojure.zip` `clojure.datafy` | the same, loaded at its `require` | "clojure.jar namespaces" |
+| `clojure.core.protocols` | the same, a startup namespace like `clojure.walk` | "clojure.jar namespaces" |
 | `clojure.pprint` | the same; its layout engine is `rontolisp.internal.pprint/NAME`, one call to `rontolisp::%clojure-pp-NAME` (`ClojureKernelLowering`) | "clojure.jar namespaces" |
 | `subs`, `.substring` | `%clojure-subs`, the refusal family's alias of `subseq` ("Refusals") | a bound outside a string is the oracle's `StringIndexOutOfBoundsException` where a class is read; a double or ratio bound is truncated (`%clojure-string-bound`), a non-number one is refused as the oracle does ("Refusals") |
 | `format` | the Java directives translated to `format` over Clojure-rendered arguments | literal format string only; `%s` like `str` (nil spells `null`), `%b`; `%e`/`%g`, flags and the rest refused |
@@ -1330,7 +1332,8 @@ function and a directive must be a top-level form.
 **The map-shaped namespaces of clojure.jar ship as Clojure source written for this front
 end** (`src/main/resources/am/ik/rontolisp/clojure/lib/clojure/**`, the
 `ClojureBuiltinNamespaces` mechanism of "Ring util namespaces"): `clojure.walk`,
-`clojure.template`, `clojure.pprint`.
+`clojure.template`, `clojure.pprint`, `clojure.data`, `clojure.zip`, `clojure.core.protocols`,
+`clojure.datafy`.
 - **Licensing**: clojure.jar is EPL-1.0, this project Apache-2.0, so nothing of it is
   copied -- no code, no docstring. Each file is written from the documented behaviour and
   diffed against the oracle; a one-line var dictated by its contract
@@ -1345,8 +1348,8 @@ end** (`src/main/resources/am/ik/rontolisp/clojure/lib/clojure/**`, the
   `uuid`, `template`, `repl`, `math`, `instant`, `core.reducers`, and none for
   `clojure.data`, `main`, `java.shell`. Among the probes: malli's `core` and
   camel-snake-kebab require `walk`, data.json and reitit `pprint`, honeysql `template`.
-- **Startup namespaces** (`ClojureBuiltinNamespaces.STARTUP`): `clj -M` has loaded
-  `clojure.walk` (with `core.protocols`, `core.server`, `edn`, `instant`, `java.io`,
+- **Startup namespaces** (`ClojureBuiltinNamespaces.STARTUP`, shipped: `clojure.walk`,
+  `clojure.core.protocols`): `clj -M` has loaded `clojure.walk` (with `core.protocols`, `core.server`, `edn`, `instant`, `java.io`,
   `main`, `spec.alpha`, `spec.gen.alpha`, `string`, `uuid`) before the program, so a
   qualified name reaches it with no `require` and a `require` reads no project file
   (`ClojureSourcePath.find` skips the roots). Here `ClojureLowering.projectNamespaceOf`
@@ -1363,10 +1366,9 @@ end** (`src/main/resources/am/ik/rontolisp/clojure/lib/clojure/**`, the
   `LongRange` as a seq: printed alike). Deviation: `macroexpand-all` expands only the
   program's macros -- the core forms are lowering rows, not macros, so `(when x y)` stays
   where the oracle answers `(if x (do y))`.
-- `clojure.template`: `do-template` substitutes in its own body (a `letfn` postwalk
-  replace) instead of calling `apply-template`, because a macro body runs in the
-  macro-time evaluator, which holds the core and `clojure.lisp` but no program function
-  ("Macros"); the oracle's calls `apply-template`. Same answers.
+- `clojure.template`: `do-template` calls `apply-template`, which calls
+  `clojure.walk/postwalk-replace`, at expansion time ("Macros": a body sees the
+  definitions above it, a required namespace's too).
 - `clojure.pprint`: the API (the dynamic vars, `pprint-logical-block`,
   `print-length-loop`, `simple-dispatch`, `write`, `print-table`) is Clojure source; the
   layout is the kernel namespace `rontolisp.internal.pprint` (`clojure.lisp`, "The
@@ -1401,14 +1403,62 @@ end** (`src/main/resources/am/ik/rontolisp/clojure/lib/clojure/**`, the
     four-key maps, 129/109/125 KB of output): JVM class 0.48/0.24/0.54 s, the oracle
     1.34/0.30/1.44 s (cold), wasm P1 and component 1.5/0.5/2.6 s, the interpreter
     13/3.9/22 s.
+  - `code-dispatch` (a multimethod on `class`, like the oracle's) emits, per head symbol,
+    the event sequence of the oracle's code layout, inferred from its output only
+    (2026-10-08): the oracle spells most layouts as format directives, so a run of
+    writes stops at the first object `*print-length*` cuts (`write-run`, `code-head`;
+    `(condp = ...1 2)` and `(defn f ... ...)` follow), while the plain list, `cond`'s and
+    the bindings' pairs use `print-length-loop`. The quirks kept: a blank before a broken
+    head's miser newline (`(defn \n  f`), `(let [a 1] )`, `((let x))` for a non-vector
+    second, a nested `#(...)` rebinding the parameter spellings, the ns docstring
+    unescaped, a 3-member libspec with a keyword second (`[lib :as x]`,
+    `[lib :refer [a b]]`) never broken and its list value filled, any other part's
+    members filled past its first, a reference's arguments one column past its keyword
+    with a linear newline after a list or vector argument and a fill one after any other
+    (a `:current` indent set only when the keyword was not cut). `special-symbol?` heads
+    (`def` `if` `fn*` `.`) match unqualified only, the rest as `clojure.core/` too.
+    Verified the same day: 2,200 generated forms (the table's heads, plain calls,
+    bindings, ns forms, at random margins, miser widths, lengths and levels) identical
+    to clj 1.12.6 on the interpreter, 1,500 of them on all four backends. Deviations:
+    `(ns)` alone prints as a list where the oracle overflows its stack; an empty list in
+    a reference (`(:require ())`, `[x :refer ()]`) is nil here ("Deviations"), so it
+    prints `nil` where the oracle signals or prints `()` (an empty vector part signals
+    the oracle's `Exception` alike).
   - Left out, refused by name (`refuseLeftOut`): `cl-format`, `formatter`,
-    `formatter-out` (Common Lisp format directives over Clojure values) and
-    `code-dispatch`. Deviation: `get-pretty-writer` answers its writer, so each `pprint`
-    lays out from column 0 within the margin bound when it runs; the oracle's pretty
-    writer keeps its creation margin and its column across calls.
+    `formatter-out` (Common Lisp format directives over Clojure values). Deviation:
+    `get-pretty-writer` answers its writer, so each `pprint` lays out from column 0
+    within the margin bound when it runs; the oracle's pretty writer keeps its creation
+    margin and its column across calls.
+- `clojure.data`: `EqualityPartition` and `Diff` are protocols extended to nil,
+  `java.util.Set`, `java.util.List`, `IPersistentVector`, `java.util.Map` and `Object`,
+  whose arm sends a `map?` value to the map diff: a record reaches neither the `Map` nor a
+  vector row here (measured 2026-10-08), where the oracle's record is a `java.util.Map`. The
+  map diff walks `(set/union (keys a) (keys b))` over the key SEQS, like the oracle's (a
+  shared key comes twice and merges alike), and answers a lazy seq; the sequential diff
+  answers vectors. Deviation: a part that is a map of several keys may print its keys in
+  another order (a key merged again moves to the end here; "Deviations": walk order).
+- `clojure.zip`: a loc is the oracle's own shape (`[node path]`, the path a map of `:l`
+  `:pnodes` `:ppath` `:r` and `:changed?`, the zipper functions in the loc's metadata, the
+  end loc `[node :end]` without metadata) since programs print and destructure locs; the
+  error words (`called children on a leaf node`, `Insert at top`, `Remove at top`, as
+  `Exception`) are the oracle's.
+- `clojure.core.protocols` / `clojure.datafy`: `Datafiable` and `Navigable` with
+  `:extend-via-metadata`, `IKVReduce` and `InternalReduce` with nil and `Object` rows;
+  `CollReduce`/`coll-reduce` (two arities: `defprotocol` takes one per method here) and
+  `iterator-reduce!` are refused by name. `reduce`/`reduce-kv` stay lowerings that consult
+  no protocol, so an extension is reached only through `kv-reduce`/`internal-reduce`
+  themselves. `extend-protocol` takes no `Throwable` or `IRef` target here ("needs a core
+  type", measured 2026-10-08), so `clojure.datafy` re-extends the `Object` row with the
+  oracle's `IRef` answer (`[value]` with the ref's metadata) and an exception datafies to
+  itself (no `Throwable->map` here). `:clojure.datafy/class` comes from
+  `rontolisp.internal.datafy/class-name-of`, i.e. `%clojure-class-name-of`, the oracle's
+  class names `%clojure-no-method` already spelled (now shared), since `class` answers a
+  kind keyword.
 - Pins: clojure-spec `clojure-walk-*` (all four backends, oracle-identical, the first
   case loading `clojure.walk` through a qualified name only),
   `clojure-template-substitutes-per-group-of-values`, `clojure-pprint-*`,
+  `clojure-data-diff-compares-like-the-oracle`, `clojure-zip-moves-and-edits-like-the-oracle`,
+  `clojure-datafy-and-core-protocols-like-the-oracle`,
   `ClojureLanguageNamespacesTest` (the startup load, a project file never shadowing a
   startup namespace, a contrib `clojure.*` namespace on the source path, the refusal of
   one not built in).
@@ -1419,10 +1469,43 @@ end** (`src/main/resources/am/ik/rontolisp/clojure/lib/clojure/**`, the
   parameters with their destructuring prologue) plus a `c%name%macro` table global. The
   same lambda expands call sites datum-to-datum at lower time (through
   `eval/ClojureMacroTime`, one per file or session) and serves `macroexpand-1` at run
-  time. Docstring and attr map skipped, `&` rest works, `&form`/`&env` refused. A body
-  sees the core builtins and `clojure.lisp`, not the program's definitions. A call above
-  the definition names the missing expander; a macro has no function value; a later
-  `def`/`defn` wins the call sites back.
+  time. Docstring and attr map skipped, `&` rest works, `&form`/`&env` refused. A call
+  above the definition names the missing expander; a macro has no function value; a
+  later `def`/`defn` wins the call sites back.
+- **A body sees the program's top-level definitions above the call site** (the
+  oracle's form-by-form load). `ClojureMacroLowering.handOver` gives the macro evaluator
+  each top-level datum's lowered forms once the datum lowered (`topLevels`, and
+  `loadFile` per datum of a required namespace, the init `def`s included): `defun` and
+  `declaim` as they are, a `setq`/`defparameter` store as a LAZY root
+  (`LispEvaluator.defineLazyGlobal`: its value runs only when an expansion reads the
+  var, reading the root it supersedes for `(def x (inc x))`), a `defonce`'s store the
+  same unless bound (`ClojureLowering.defonceStores` maps the guarded form to it),
+  `progn` member by member, and every other form only from a datum headed
+  `DEFINITION_HEADS` (`defn`, `defmethod`, `extend-protocol`, `defrecord`, ...). The
+  evaluator queues them and runs them before its next evaluation, so a macro-free
+  program builds nothing; one that fails is dropped (a later expansion reading it names
+  what it misses). The caught classes' predicates go over as the lowering meets them
+  (`handOverCaughtClasses`, also before a `defmacro` or an expansion evaluates). The
+  evaluator holds every per-program runtime from its start
+  (`ClojureLowering.macroTimeRuntimeForms`: STM, ex-info, protocol, hierarchy, macro;
+  built-in class rows only, no host exceptions), since a helper may use one before the
+  lowering met a use. Deviations: no other statement runs at lower time, and what a body
+  changes (a `swap!` of a program atom) the program never sees -- the oracle's `@seen`
+  after two counting expansions is 2, here 0; a `defmethod` a program macro expands to,
+  or a definition inside a top-level `let`, is not replayed.
+  `def` lazily, not eagerly (measured 2026-10-08 over the probe jars in `~/.m2`):
+  macro bodies calling a same-file `defn` -- camel-snake-kebab `defconversion`, hiccup
+  `defelem`/`build-string`/`html5`, malli `assert` and its instrument macros, data.json
+  `codepoint-case`; one reading a `def` through its helpers -- hiccup's `html` compiles
+  through `container-tag?` (the private `void-tags` set) and `util/*html-mode*`. No probe
+  macro builds a value with an effect, but a `(defonce server (run-server ...))` above a
+  macro call would start at every compile if a `def` ran eagerly.
+  Pins: clojure-spec `a-macro-body-calls-the-programs-definitions` (all four backends,
+  oracle-identical), `ClojureLoweringTest#aMacroBodyCallsAHelperDefinedAboveIt`,
+  `#aDefValueRunsAtMacroTimeOnlyWhenAnExpansionReadsIt`,
+  `#aRedefinitionReadsTheRootItSupersedesAtMacroTime`,
+  `ClojureProjectNamespacesTest#aRequiredNamespacesMacrosCallItsFunctions` (all four),
+  `ClojureSessionTest#aMacroOfALaterBufferCallsWhatAnEarlierOneDefined`.
 - **A program macro wins over every lowering row of its name from its definition on;
   above it the core meaning holds**, like the oracle's form-by-form compile. `lowerInner`
   tries the macro before any row, except for `isReservedHead` (the oracle's special forms

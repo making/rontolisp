@@ -187,9 +187,14 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
 - Verbs assume the right collection kind; misuse may signal the Common Lisp type error
   instead of the oracle's.
 - Macros expand while lowering, so every backend runs expanded code; the interpreter's
-  `eval` of a macro call expands the same way. A macro body sees the core builtins and
-  the `clojure.lisp` library, not the program's own definitions; a call above its
-  definition is refused, and a macro has no function value. A `defmacro` of a special
+  `eval` of a macro call expands the same way. A macro body runs at compile time,
+  apart from the program: it sees the top-level definitions above the call site
+  (functions, multimethods, protocol extensions, and a `def`'s value, built when the
+  body first reads it), but no other top-level statement runs there, and what the body
+  changes (a `swap!` of a program atom) the program never sees -- the oracle compiles
+  and runs in one process. A `defmethod` or protocol extension a program macro expands
+  to is not seen there. A call above a macro's definition is refused, and a macro has
+  no function value. A `defmacro` of a special
   form (`if`, `do`, `let*`, `new`, ...), of a head the reader spells (`deref`,
   `syntax-quote`, `ns`, `in-ns`) is refused by name, where the oracle
   accepts it (and ignores it at call sites, for a special form).
