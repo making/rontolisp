@@ -1527,8 +1527,9 @@
            (data (rontolisp::%clojure-ex-data e))
            (own (rontolisp::%clojure-ex-data top))
            (fields (if (rontolisp::%clojure-record-p own) (nth 3 own) own))
-           (phase (if (hash-table-p fields)
-                      (gethash '(:c%keyword "clojure.error/phase") fields))))
+           (phase
+            (if (hash-table-p fields)
+                (gethash '(:c%keyword "clojure.error/phase") fields))))
       (setf (gethash '(:c%keyword "via") m) (coerce (reverse via) 'vector))
       (setf (gethash '(:c%keyword "trace") m) (vector))
       (if message (setf (gethash '(:c%keyword "cause") m) message))
