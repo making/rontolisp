@@ -128,6 +128,7 @@ categories:
       - { slug: dorun, name: "dorun" }
       - { slug: doall, name: "doall" }
       - { slug: run-bang, name: "run!" }
+      - { slug: core-iteration, name: "iteration" }
   - title: "Maps, sets and vectors"
     index_page: clojure/reference/collections.md
     functions:

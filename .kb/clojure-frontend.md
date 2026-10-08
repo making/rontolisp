@@ -2236,7 +2236,7 @@ measured on clj 1.12.6, 2026-10-08).
   name each): `Object` 21, `IFn` 14, `ILookup` 13, `IObj` 12, `IDeref` 11, `Counted` 11,
   `Seqable` 10, `Indexed` 10, then the collection interfaces (`IPersistentCollection`,
   `IHashEq`, `Associative` 9 each ...: e78) and `IReduceInit` 5 (next.jdbc's `plan`,
-  `clojure.core/iteration`: e79). Supported: `IReduceInit`, `IReduce`, `IKVReduce`, `Seqable`,
+  `clojure.core/iteration`, below). Supported: `IReduceInit`, `IReduce`, `IKVReduce`, `Seqable`,
   `Counted`, `Indexed`, `ILookup`, `IFn` with its supers `Callable` and `Runnable`, `IDeref`,
   `IMeta`, `IObj`, and `Object`'s `toString`/`equals`/`hashCode`. Any other interface of the
   jar (`CLOJURE_LANG`, its public list) or loadable host interface is refused by name
@@ -2300,6 +2300,18 @@ measured on clj 1.12.6, 2026-10-08).
   which no typed value is, so no binding changes), and an instance call of a declared method a
   clause calling the row's method (`ClojureInterfaces.instanceTest`; an `if` around the refusal
   where no row maps the method).
+- `iteration` (`ClojureCoreLowering`, one call to `%clojure-iteration` over the step as a real
+  function and the options as a run-time list; `-v` as a value): the oracle's reify in
+  `clojure.lisp`, a fresh `:C%REIFY` tag whose `Seqable` and `IReduceInit` rows the worker
+  stores through the families' stores, so `%clojure-iteration`/`-v` are producers of SEQABLE,
+  REDUCE_INTERFACE and REDUCIBLE (`ClojureInterfaces.ITERATION`). The options are read like
+  the oracle's `& {:keys ...}` (one argument is the map, else pairs with the last key winning
+  and an odd trailing one conj'd like onto a map, `%clojure-iteration-option`); a given
+  option, nil too, is called through `%clojure-as-fn`. `seq` steps from `initk` on every call;
+  each element's `somef`/`vf`/`kf` run when it is built, the next `step` when the lazy rest is
+  realized; `reduce` stops at `reduced` before `kf`. Pin: clojure-spec
+  `iteration-seqs-lazily-and-reduces-through-its-step` (the oracle's, clj 1.12.6, 2026-10-08,
+  all four backends), `ClojureLibraryTest#aProgramStoringNoInterfaceRowSplicesTheVerbsWithoutTheirInterfaceArms`.
 - Deviations (user doc): the `#object` has no identity hash and a reify's class no number;
   `equals`/`hashCode` key no map or set (the tables hold such a value by identity); `sort` and
   `distinct` take a type implementing `Seqable` alone, where the oracle's `to-array` and

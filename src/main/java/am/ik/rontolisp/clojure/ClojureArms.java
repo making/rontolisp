@@ -302,13 +302,14 @@ public final class ClojureArms {
 		 * {@code clojure.core.protocols}' {@code CollReduce} or {@code IKVReduce}, which
 		 * {@code reduce}, {@code reduce-kv} and the verbs the oracle builds on them hand
 		 * to that row: only the store of such a row makes one
-		 * ({@link ClojureLowering.ProtocolDef#reducerRow}). The view is the members such
-		 * a reduction steps, which {@code group-by} and {@code frequencies} walk.
+		 * ({@link ClojureLowering.ProtocolDef#reducerRow}), or of an interface row of
+		 * {@link #REDUCE_INTERFACE}, {@code iteration}'s too. The view is the members
+		 * such a reduction steps, which {@code group-by} and {@code frequencies} walk.
 		 */
 		REDUCIBLE("reducible", Set.of("RONTOLISP::%CLOJURE-COLL-REDUCIBLE-P", "RONTOLISP::%CLOJURE-KV-REDUCIBLE-P"),
 				Set.of(ClojureSeqLowering.REDUCIBLE_ITEMS), Map.of(),
 				Set.of("RONTOLISP::%CLOJURE-COLL-REDUCER-ROW", "RONTOLISP::%CLOJURE-KV-REDUCER-ROW",
-						ClojureInterfaces.REDUCE_ROW),
+						ClojureInterfaces.REDUCE_ROW, ClojureInterfaces.ITERATION, ClojureInterfaces.ITERATION_V),
 				Set.of()),
 
 		/**
@@ -316,25 +317,29 @@ public final class ClojureArms {
 		 * {@code clojure.lang.IReduceInit}, {@code IReduce} or {@code IKVReduce}, which
 		 * {@code reduce} and {@code reduce-kv} call ahead of the reducing protocols, like
 		 * the oracle, and {@code vec} and {@code set} reduce: only the store of such a
-		 * row makes one ({@link ClojureInterfaces}), which makes a value of
-		 * {@link #REDUCIBLE} too, whose functions hold these arms. The view is the
-		 * members such a reduction steps, which {@code vec} and {@code set} walk.
+		 * row makes one ({@link ClojureInterfaces}), {@code iteration}'s included, which
+		 * makes a value of {@link #REDUCIBLE} too, whose functions hold these arms. The
+		 * view is the members such a reduction steps, which {@code vec} and {@code set}
+		 * walk.
 		 */
 		REDUCE_INTERFACE("reduce-interface",
 				Set.of("RONTOLISP::%CLOJURE-REDUCE-INIT-P", "RONTOLISP::%CLOJURE-IREDUCE-P",
 						"RONTOLISP::%CLOJURE-KVREDUCE-P", "RONTOLISP::%CLOJURE-KV-INTERFACE-P"),
-				Set.of(ClojureInterfaces.REDUCE_INIT_ITEMS), Map.of(), Set.of(ClojureInterfaces.REDUCE_ROW), Set.of()),
+				Set.of(ClojureInterfaces.REDUCE_INIT_ITEMS), Map.of(),
+				Set.of(ClojureInterfaces.REDUCE_ROW, ClojureInterfaces.ITERATION, ClojureInterfaces.ITERATION_V),
+				Set.of()),
 
 		/**
 		 * A record, deftype or reify whose body implements {@code clojure.lang.Seqable},
 		 * which the seq view ({@code seq}, {@code first}, {@code map}, {@code into} ...)
 		 * and {@code seqable?} read through its {@code seq}: only the store of such a row
-		 * makes one. The alias is the lazy-or-strict verbs' test of a lazy input, which
-		 * takes such a value as one.
+		 * makes one, {@code iteration}'s included. The alias is the lazy-or-strict verbs'
+		 * test of a lazy input, which takes such a value as one.
 		 */
 		SEQABLE("seqable", Set.of("RONTOLISP::%CLOJURE-SEQABLE-P"), Set.of(),
 				Map.of("RONTOLISP::%CLOJURE-LAZY-INPUT-P", "RONTOLISP::%CLOJURE-LAZY-P"),
-				Set.of(ClojureInterfaces.SEQABLE_ROW), Set.of()),
+				Set.of(ClojureInterfaces.SEQABLE_ROW, ClojureInterfaces.ITERATION, ClojureInterfaces.ITERATION_V),
+				Set.of()),
 
 		/**
 		 * A record, deftype or reify whose body implements {@code clojure.lang.Counted}

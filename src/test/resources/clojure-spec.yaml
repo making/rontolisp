@@ -9275,6 +9275,50 @@ cases:
       [:a :b :c] "abc" false true true false false
       (1 2 3) ("a" "b" "c") :c (:c :b :a)
       :no-count :no-nth :not-a-seq
+  - name: iteration-seqs-lazily-and-reduces-through-its-step
+    # clojure.core/iteration (.kb/clojure-frontend.md "Host interfaces"): a value
+    # implementing Seqable and IReduceInit over the step function. seq calls step, somef,
+    # vf and kf for one element and steps the rest lazily; a reduction stops at reduced
+    # before kf; the options are keyword arguments or a map (an odd trailing map merged,
+    # the last key winning); the init-less reduce and count stay refused. Every line is
+    # the oracle's (clj 1.12.6), on all four backends.
+    source: |
+      (ns core-iteration)
+      (def it (iteration (fn [k] (when (< k 3) {:k k :v (* k 10)})) :initk 0 :kf (comp inc :k) :vf :v))
+      (prn (vec it) (seq it) (into [] it) (into [] (map inc) it) (reduce + 0 it) (transduce (take 2) conj it))
+      (prn (first it) (rest it) (map inc it) (seqable? it) (coll? it) (sequential? it) (sequence it) (mapv identity it))
+      (prn (try (reduce + it) (catch ClassCastException e :no-ireduce)) (try (count it) (catch UnsupportedOperationException e :no-count)))
+      (def log (atom []))
+      (def logged (iteration (fn [k] (swap! log conj [:step k]) (when (< k 5) k)) :initk 0
+                    :somef (fn [r] (swap! log conj [:somef r]) (some? r))
+                    :vf (fn [r] (swap! log conj [:vf r]) r)
+                    :kf (fn [r] (swap! log conj [:kf r]) (inc r))))
+      (prn @log)
+      (def s (seq logged))
+      (prn @log)
+      (reset! log [])
+      (prn (first (rest s)) @log)
+      (reset! log [])
+      (prn (reduce (fn [a x] (if (= x 2) (reduced (conj a x)) (conj a x))) [] logged) @log)
+      (prn (seq (iteration (constantly nil))) (vec (iteration (constantly nil))) (take 5 (iteration inc :initk 0)) (seq (iteration (fn [k] (if (nil? k) 1 (when (< k 3) (inc k)))))))
+      (prn (vec (iteration (fn [k] [k]) :initk false :kf (fn [r] (if (first r) nil true)))) (vec (iteration (fn [k] (when (< k 3) k)) {:initk 0 :kf inc})) (vec (iteration (fn [k] k) :initk 0 :somef #(< % 3) :kf inc)) (vec (iteration (fn [k] (when (< k 3) k)) :initk 0 :kf inc :vf #{1})))
+      (prn (seq (apply iteration (fn [k] (when (< k 3) k)) [:initk 0 :kf inc])) (vec (iteration (fn [k] (when (< k 3) k)) :initk 0 {:kf inc})) (vec (iteration (fn [k] (when (< k 3) k)) :initk 0 :kf dec :kf inc)) (vec (iteration (fn [k] k) :initk)))
+      (prn (try (iteration (fn [k] k) :initk 0 :kf) (catch IllegalArgumentException e :no-seq)) (try (vec (iteration (fn [k] 1) :vf false)) (catch ClassCastException e :not-a-fn)))
+      (prn (instance? clojure.lang.Seqable it) (instance? clojure.lang.IReduceInit it) (instance? clojure.lang.IReduce it) (instance? clojure.lang.Counted it))
+      (in-ns 'user)
+    expected: |
+      [0 10 20] (0 10 20) [0 10 20] [1 11 21] 30 [0 10]
+      0 (10 20) (1 11 21) true false false (0 10 20) [0 10 20]
+      :no-ireduce :no-count
+      []
+      [[:step 0] [:somef 0] [:vf 0] [:kf 0]]
+      1 [[:step 1] [:somef 1] [:vf 1] [:kf 1]]
+      [0 1 2] [[:step 0] [:somef 0] [:vf 0] [:kf 0] [:step 1] [:somef 1] [:vf 1] [:kf 1] [:step 2] [:somef 2] [:vf 2]]
+      nil [] (1 2 3 4 5) (1 2 3)
+      [[false] [true]] [0 1 2] [0 1 2] [nil 1 nil]
+      (0 1 2) [0 1 2] [0 1 2] []
+      :no-seq :not-a-fn
+      true true false false
   - name: a-counted-or-indexed-type-counts-and-indexes-through-its-methods
     # clojure.lang.Counted and Indexed (.kb/clojure-frontend.md "Host interfaces"): count,
     # counted?, empty? (counted? first, like the oracle's) and .count read count; nth of

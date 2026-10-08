@@ -2556,6 +2556,8 @@ class ClojureLoweringTest {
 			.hasMessageContaining("Wrong number of args (5) passed to: clojure.core/fnil");
 		assertThatThrownBy(() -> Clojure.read("(juxt)", null)).isInstanceOf(LispReadException.class)
 			.hasMessageContaining("Wrong number of args (0) passed to: clojure.core/juxt");
+		assertThatThrownBy(() -> Clojure.read("(iteration)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Wrong number of args (0) passed to: clojure.core/iteration");
 		assertThatThrownBy(() -> Clojure.read("(reduce-kv + 0)", null)).isInstanceOf(LispReadException.class)
 			.hasMessageContaining("Wrong number of args (2) passed to: clojure.core/reduce-kv");
 		assertThatThrownBy(() -> Clojure.read("(pmap inc)", null)).isInstanceOf(LispReadException.class)

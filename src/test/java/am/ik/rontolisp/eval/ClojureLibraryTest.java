@@ -114,6 +114,15 @@ class ClojureLibraryTest {
 		assertThat(defun(seqable, "RONTOLISP::%CLOJURE-STRICT-SEQ")).contains("%CLOJURE-SEQABLE-P");
 		assertThat(defun(seqable, "RONTOLISP::%CLOJURE-STR-OF")).doesNotContain("%CLOJURE-TO-STRING-P");
 		assertThat(defun(seqable, "RONTOLISP::%CLOJURE-NTH")).doesNotContain("%CLOJURE-INDEXED-P");
+		// iteration stores a Seqable and an IReduceInit row itself, called or as a value
+		for (String source : List.of("(println (vec (iteration (fn [k] k))))",
+				"(println (map vec [(apply iteration (fn [k] k) [])]))")) {
+			List<LispVal> iteration = ClojureLibrary.process(Clojure.read(source, null));
+			assertThat(defun(iteration, "RONTOLISP::%CLOJURE-STRICT-SEQ")).as(source).contains("%CLOJURE-SEQABLE-P");
+			assertThat(defun(iteration, "RONTOLISP::%CLOJURE-COLL-REDUCE-3")).as(source)
+				.contains("%CLOJURE-REDUCE-INIT-P");
+			assertThat(defun(iteration, "RONTOLISP::%CLOJURE-NTH")).as(source).doesNotContain("%CLOJURE-INDEXED-P");
+		}
 	}
 
 	@Test
