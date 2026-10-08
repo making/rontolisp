@@ -100,6 +100,15 @@ The one stated exception is `--gpu`'s transcendental tier (`.kb/linalg-simd.md`)
 
 ## Traps
 
+- **`scale-float`'s compiled split rounded twice** (`LispMacroExpander.expandScaleFloat`,
+  JVM and WASM; the interpreter's `Math.scalb` was right): whole 2^+-1000 chunks first, so a
+  first chunk landing in the subnormal range rounded there and a later 2^-50 rounded again --
+  `(scale-float (+ 2^-25 2^-77) -1050)` was the tie 2^-1075, so 0.0, where `Math.scalb`
+  answers 4.9e-324; 103 of 20M random `(f, n)` pairs differed. Since 2026-10-08 the exponent's
+  remainder by 1000 multiplies first: only the step entering the subnormal range rounds, and
+  a step after it takes a value below 2^-1022 to the zero the exact product rounds to as well
+  (0 of the 20M differ). Pinned by
+  `JvmLispCompilerTest`/`WasmLispCompilerIntegrationTest#scaleFloatRoundsOnceIntoTheSubnormalRange`.
 - The 0xFD byte of a no-gc probe: fdlibm's coefficients (asin's `0x1.23de10dfdf709p-15`)
   and LEB immediates (sinh's `0x8fb9f87d`) contain it, so a "no SIMD prefix" scan must
   step over float immediates and read the user's body only
