@@ -928,12 +928,22 @@
   (rontolisp::%clojure-check-arity args 0 0 "read-line")
   (read-line (rontolisp::%clojure-open-reader *standard-input*) nil nil))
 
+;; A COLL reducing through its own CollReduce row runs F through that reduction,
+;; the oracle's (reduce #(proc %2) nil coll): an arm of the reducible family
+;; (clojure/ClojureArms), "CollReduce and IKVReduce" below.
 (defun rontolisp::%clojure-run! (f coll)
   "(run! f coll): F called on every member of COLL for effect, a lazy one
    realizing member by member; answers nil."
-  (do ((s (rontolisp::%clojure-seq coll) (rontolisp::%clojure-seq-rest s)))
-      ((null s) nil)
-    (funcall f (car s))))
+  (if (rontolisp::%clojure-coll-reducible-p coll)
+      (progn
+        (rontolisp::%clojure-coll-reduce-3 coll
+                                           (lambda (acc x)
+                                             (declare (ignore acc))
+                                             (funcall f x)) nil)
+        nil)
+      (do ((s (rontolisp::%clojure-seq coll) (rontolisp::%clojure-seq-rest s)))
+          ((null s) nil)
+        (funcall f (car s)))))
 
 (defun rontolisp::%clojure-run!-v (&rest args)
   "run! as a value."
@@ -3361,16 +3371,44 @@
                                                                     depth))))
                          (setq done t))))))))))
 
+;; One collection reducing through its own CollReduce row maps through that
+;; reduction, as the oracle's mapv of one collection reduces it (several
+;; collections go through map, a seq, like the oracle's): an arm of the
+;; reducible family, "CollReduce and IKVReduce" below.
 (defun rontolisp::%clojure-mapv (f colls)
   "Map the real function F over the COLLS list, answering a vector (of empty,
    the empty vector)."
-  (coerce (apply #'mapcar f (mapcar #'rontolisp::%clojure-realize-all colls))
-          'vector))
+  (if (rontolisp::%clojure-coll-reducible-p (car colls))
+      (rontolisp::%clojure-mapv-reduced f colls)
+      (coerce
+       (apply #'mapcar f (mapcar #'rontolisp::%clojure-realize-all colls))
+       'vector)))
 
+(defun rontolisp::%clojure-mapv-reduced (f colls)
+  "mapv over the COLLS list whose first member reduces through its own
+   CollReduce row: alone, the vector of F over what that reduction steps."
+  (if (cdr colls)
+      (coerce
+       (apply #'mapcar f (mapcar #'rontolisp::%clojure-realize-all colls))
+       'vector)
+      (coerce (reverse
+               (rontolisp::%clojure-coll-reduce-3 (car colls)
+                (lambda (acc x) (cons (funcall f x) acc)) nil)) 'vector)))
+
+;; A COLL reducing through its own CollReduce row filters through that reduction,
+;; the oracle's filterv: an arm of the reducible family.
 (defun rontolisp::%clojure-filterv (pred coll)
   "Filter COLL through PRED under Clojure truthiness, answering a vector."
-  (coerce (remove-if-not (lambda (x) (rontolisp::%clojure-filter-test pred x))
-                         (rontolisp::%clojure-realize-all coll)) 'vector))
+  (if (rontolisp::%clojure-coll-reducible-p coll)
+      (coerce (reverse
+               (rontolisp::%clojure-coll-reduce-3 coll
+                (lambda (acc x)
+                  (if (rontolisp::%clojure-filter-test pred x)
+                      (cons x acc)
+                      acc)) nil)) 'vector)
+      (coerce (remove-if-not
+               (lambda (x) (rontolisp::%clojure-filter-test pred x))
+               (rontolisp::%clojure-realize-all coll)) 'vector)))
 
 (defun rontolisp::%clojure-mapcat (f colls)
   "Map the real function F over the COLLS list and concat the mapped seq
@@ -5170,18 +5208,22 @@
         (t (rontolisp::%clojure-map-entry-refusal
             (format nil "~A needs a map or a vector" name) coll))))
 
+;; A COLL reducing through its own IKVReduce row is handed to it, the oracle's
+;; kv-reduce: an arm of the reducible family, "CollReduce and IKVReduce" below.
 (defun rontolisp::%clojure-reduce-kv (f init coll)
   "(f acc k v) folded over COLL's pairs from INIT, stopping at a reduced
    answer (unwrapped)."
-  (let ((acc init) (pairs (rontolisp::%clojure-kv-pairs coll "reduce-kv")))
-    (do ()
-        ((null pairs) acc)
-      (setq acc (funcall f acc (car (car pairs)) (cdr (car pairs))))
-      (if (rontolisp::%clojure-reduced-p acc)
-          (progn
-            (setq acc (car (cdr acc)))
-            (setq pairs nil))
-          (setq pairs (cdr pairs))))))
+  (if (rontolisp::%clojure-kv-reducible-p coll)
+      (rontolisp::%clojure-kv-reduce-3 coll f init)
+      (let ((acc init) (pairs (rontolisp::%clojure-kv-pairs coll "reduce-kv")))
+        (do ()
+            ((null pairs) acc)
+          (setq acc (funcall f acc (car (car pairs)) (cdr (car pairs))))
+          (if (rontolisp::%clojure-reduced-p acc)
+              (progn
+                (setq acc (car (cdr acc)))
+                (setq pairs nil))
+              (setq pairs (cdr pairs)))))))
 
 (defun rontolisp::%clojure-reduce-kv-v (&rest args)
   "reduce-kv as a value."
@@ -5189,13 +5231,23 @@
   (rontolisp::%clojure-reduce-kv (rontolisp::%clojure-as-fn (car args))
                                  (car (cdr args)) (car (cdr (cdr args)))))
 
+;; update-keys and update-vals of an M reducing through its own IKVReduce row
+;; build the fresh map through that reduction, the oracle's reduce-kv into an
+;; empty map: arms of the reducible family, "CollReduce and IKVReduce" below.
 (defun rontolisp::%clojure-update-keys (m f)
   "A fresh map of M's entries under (f key) (a colliding key keeps one entry)."
-  (let ((out (make-hash-table :test 'equal)))
-    (dolist (kv (rontolisp::%clojure-kv-pairs m "update-keys") out)
-      (setf
-       (gethash (rontolisp::%clojure-store-key (funcall f (car kv)) out) out)
-       (cdr kv)))))
+  (if (rontolisp::%clojure-kv-reducible-p m)
+      (rontolisp::%clojure-kv-reduce-3 m
+                                       (lambda (out k v)
+                                         (setf (gethash
+                                                (rontolisp::%clojure-store-key
+                                                 (funcall f k) out) out) v)
+                                         out) (make-hash-table :test 'equal))
+      (let ((out (make-hash-table :test 'equal)))
+        (dolist (kv (rontolisp::%clojure-kv-pairs m "update-keys") out)
+          (setf (gethash
+                 (rontolisp::%clojure-store-key (funcall f (car kv)) out) out)
+                (cdr kv))))))
 
 (defun rontolisp::%clojure-update-keys-v (&rest args)
   "update-keys as a value."
@@ -5206,11 +5258,18 @@
 (defun rontolisp::%clojure-update-vals (m f)
   "M with (f value) for every value: a vector stays a vector, a map or record
    answers a fresh map, nil the empty map."
-  (if (and (vectorp m) (not (stringp m)))
-      (coerce (mapcar f (coerce m 'list)) 'vector)
-      (let ((out (make-hash-table :test 'equal)))
-        (dolist (kv (rontolisp::%clojure-kv-pairs m "update-vals") out)
-          (setf (gethash (car kv) out) (funcall f (cdr kv)))))))
+  (if (rontolisp::%clojure-kv-reducible-p m)
+      (rontolisp::%clojure-kv-reduce-3 m
+                                       (lambda (out k v)
+                                         (setf (gethash
+                                                (rontolisp::%clojure-store-key k
+                                                 out) out) (funcall f v))
+                                         out) (make-hash-table :test 'equal))
+      (if (and (vectorp m) (not (stringp m)))
+          (coerce (mapcar f (coerce m 'list)) 'vector)
+          (let ((out (make-hash-table :test 'equal)))
+            (dolist (kv (rontolisp::%clojure-kv-pairs m "update-vals") out)
+              (setf (gethash (car kv) out) (funcall f (cdr kv))))))))
 
 (defun rontolisp::%clojure-update-vals-v (&rest args)
   "update-vals as a value."
@@ -7793,18 +7852,128 @@
             (setq done t))
           (setq s (rontolisp::%clojure-seq-rest s))))))
 
+;; reduce and reduce-init hand a COLL reducing through its own CollReduce row to
+;; it: arms of the reducible family, "CollReduce and IKVReduce" below. into,
+;; transduce and the cat transducer reduce through reduce-init.
 (defun rontolisp::%clojure-reduce (f coll)
   "(reduce f coll): (f) of empty, the lone member of one, else F folded from
    the head over the rest."
-  (let ((s (rontolisp::%clojure-seq coll)))
-    (if (null s)
-        (funcall f)
-        (rontolisp::%clojure-reduce-seq f (car s)
-                                        (rontolisp::%clojure-seq-rest s)))))
+  (if (rontolisp::%clojure-coll-reducible-p coll)
+      (rontolisp::%clojure-coll-reduce-2 coll f)
+      (let ((s (rontolisp::%clojure-seq coll)))
+        (if (null s)
+            (funcall f)
+            (rontolisp::%clojure-reduce-seq f (car s)
+             (rontolisp::%clojure-seq-rest s))))))
 
 (defun rontolisp::%clojure-reduce-init (f init coll)
   "(reduce f init coll)."
-  (rontolisp::%clojure-reduce-seq f init (rontolisp::%clojure-seq coll)))
+  (if (rontolisp::%clojure-coll-reducible-p coll)
+      (rontolisp::%clojure-coll-reduce-3 coll f init)
+      (rontolisp::%clojure-reduce-seq f init (rontolisp::%clojure-seq coll))))
+
+;; CollReduce and IKVReduce (clojure.core.protocols). The oracle's reduce asks
+;; CollReduce for a collection that does not reduce itself, and reduce-kv asks
+;; IKVReduce, so a record, deftype or reify whose type has its own row of either
+;; -- in its body or extended to it -- reduces through that row; so do the verbs
+;; the oracle builds on reduce (into, transduce, the cat transducer, run!, mapv
+;; and filterv of one collection, group-by and frequencies through
+;; %clojure-reducible-items) and on reduce-kv (update-keys, update-vals). Every
+;; other value takes the verb's own walk, which answers what the oracle's rows
+;; for the core collections do (an extension of either protocol to nil, Object
+;; or a core kind is reached through coll-reduce or kv-reduce themselves).
+;;
+;; A typed row of the two protocols is stored through %clojure-coll-reducer-row
+;; or %clojure-kv-reducer-row, which keep the protocol's table for these arms:
+;; the two are the producers of the reducible family (clojure/ClojureArms
+;; REDUCIBLE), so a program storing no such row has every arm folded and
+;; compiles as before.
+
+(defvar rontolisp::%clojure-coll-reducers nil)
+
+(defvar rontolisp::%clojure-kv-reducers nil)
+
+(defun rontolisp::%clojure-reducer-row (table tag method fn)
+  "Stores FN as METHOD of the row TAG has in the protocol TABLE, the row made
+   on first use, and answers TABLE."
+  (let ((row (gethash tag table)))
+    (if (null row)
+        (progn
+          (setq row (make-hash-table :test 'equal))
+          (setf (gethash tag table) row)))
+    (setf (gethash method row) fn)
+    table))
+
+(defun rontolisp::%clojure-coll-reducer-row (table tag fn)
+  "Stores FN as the coll-reduce method of the record, deftype or reify type TAG
+   in CollReduce's method TABLE, which reduce and the verbs built on it read
+   from then on."
+  (setq rontolisp::%clojure-coll-reducers
+   (rontolisp::%clojure-reducer-row table tag '(:c%keyword "coll-reduce") fn)))
+
+(defun rontolisp::%clojure-kv-reducer-row (table tag fn)
+  "Stores FN as the kv-reduce method of the record, deftype or reify type TAG in
+   IKVReduce's method TABLE, which reduce-kv and the verbs built on it read
+   from then on."
+  (setq rontolisp::%clojure-kv-reducers
+   (rontolisp::%clojure-reducer-row table tag '(:c%keyword "kv-reduce") fn)))
+
+(defun rontolisp::%clojure-typed-reducer (x table method)
+  "The METHOD function of the row the type of the record, deftype or reify X
+   holds in the protocol TABLE, or nil: no table yet, any other value, no row,
+   no such method."
+  (if (and table (consp x)
+       (or (eq (car x) :c%record) (eq (car x) :c%type) (eq (car x) :c%reify)))
+      (let ((row (gethash (car (cdr x)) table)))
+        (if row (gethash method row) nil))
+      nil))
+
+(defun rontolisp::%clojure-coll-reducible-p (x)
+  "Whether X reduces through its own CollReduce row: the reducible family's
+   test."
+  (if (rontolisp::%clojure-typed-reducer x rontolisp::%clojure-coll-reducers
+                                         '(:c%keyword "coll-reduce"))
+      t
+      nil))
+
+(defun rontolisp::%clojure-kv-reducible-p (x)
+  "Whether X reduces through its own IKVReduce row: the reducible family's
+   test."
+  (if (rontolisp::%clojure-typed-reducer x rontolisp::%clojure-kv-reducers
+                                         '(:c%keyword "kv-reduce"))
+      t
+      nil))
+
+(defun rontolisp::%clojure-coll-reduce-2 (coll f)
+  "(coll-reduce coll f) through COLL's own CollReduce row."
+  (funcall (rontolisp::%clojure-typed-reducer coll
+                                              rontolisp::%clojure-coll-reducers
+                                              '(:c%keyword "coll-reduce")) coll
+           f))
+
+(defun rontolisp::%clojure-coll-reduce-3 (coll f init)
+  "(coll-reduce coll f init) through COLL's own CollReduce row."
+  (funcall (rontolisp::%clojure-typed-reducer coll
+                                              rontolisp::%clojure-coll-reducers
+                                              '(:c%keyword "coll-reduce")) coll
+           f init))
+
+(defun rontolisp::%clojure-kv-reduce-3 (coll f init)
+  "(kv-reduce coll f init) through COLL's own IKVReduce row."
+  (funcall (rontolisp::%clojure-typed-reducer coll
+                                              rontolisp::%clojure-kv-reducers
+                                              '(:c%keyword "kv-reduce")) coll f
+           init))
+
+(defun rontolisp::%clojure-reducible-items (coll)
+  "COLL, unless it reduces through its own CollReduce row: then the list of
+   what that reduction steps, in order. The reducible family's view, which
+   group-by and frequencies walk."
+  (if (rontolisp::%clojure-coll-reducible-p coll)
+      (reverse
+       (rontolisp::%clojure-coll-reduce-3 coll (lambda (acc x) (cons x acc))
+                                          nil))
+      coll))
 
 (defun rontolisp::%clojure-xf-rf (rf step complete)
   "A reducing function over RF: STEP (a two-argument closure) for the step
@@ -8145,14 +8314,16 @@
         (rontolisp::%clojure-transduce-3 xf f (car more))
         (rontolisp::%clojure-transduce xf f (car more) (car (cdr more))))))
 
+;; A collection reducing through its own CollReduce row steps what that reduction
+;; steps (the reducible family's view, "CollReduce and IKVReduce").
 (defun rontolisp::%clojure-eduction-v (&rest args)
   "eduction as a value: transducers then one collection."
   (rontolisp::%clojure-check-arity args 1 nil "eduction")
   (let ((rev (reverse args)))
-    (rontolisp::%clojure-sequence-xf (rontolisp::%clojure-xf-comp
-                                      (mapcar #'rontolisp::%clojure-as-fn
-                                              (reverse (cdr rev))))
-                                     (list (car rev)))))
+    (rontolisp::%clojure-sequence-xf
+     (rontolisp::%clojure-xf-comp
+      (mapcar #'rontolisp::%clojure-as-fn (reverse (cdr rev))))
+     (list (rontolisp::%clojure-reducible-items (car rev))))))
 
 (defun rontolisp::%clojure-sequence-v (&rest args)
   "sequence as a value: [coll] or [xf coll...]."
@@ -11644,6 +11815,45 @@
                (and slash (rontolisp::%clojure-ring-keyword-part-p s 0 slash t)
                     (rontolisp::%clojure-ring-keyword-part-p s (+ slash 1) n
                                                              nil)))))))
+
+;;;; The clojure.core.reducers kernels: rontolisp.internal.reducers, the
+;;;; namespace only the built-in clojure.core.reducers requires, lowers each var
+;;;; to one of these. cat's accumulator, the oracle's java.util.ArrayList, is a
+;;;; growable vector here (adjustable, with a fill pointer): it counts, seqs,
+;;;; prints and reduces as a vector on every backend, append! pushes onto it,
+;;;; and cat of two non-empty collections answers a fresh one holding both in
+;;;; order -- where the oracle answers a Cat, a tree of the two, which folds
+;;;; part by part; a fold reduces an accumulator whole, like the oracle's
+;;;; ArrayList.
+
+(defun rontolisp::%clojure-reducers-accumulator ()
+  "A fresh empty accumulator: (cat)."
+  (make-array 0 :adjustable t :fill-pointer 0))
+
+(defun rontolisp::%clojure-reducers-accumulator-p (x)
+  "Whether X is an accumulator cat made, T or NIL."
+  (and (vectorp x) (not (stringp x)) (array-has-fill-pointer-p x)))
+
+(defun rontolisp::%clojure-reducers-append (acc x)
+  "append!: X pushed onto the accumulator ACC, answering ACC. Any other ACC
+   takes no add: nil is the oracle's NullPointerException, anything else its
+   UnsupportedOperationException."
+  (cond ((rontolisp::%clojure-reducers-accumulator-p acc)
+         (vector-push-extend x acc)
+         acc)
+        ((null acc)
+         (rontolisp::%clojure-null-pointer-exception
+          "append! needs an accumulator cat made, not nil"))
+        (t (rontolisp::%clojure-unsupported-operation-exception
+            "append! needs an accumulator cat made"))))
+
+(defun rontolisp::%clojure-reducers-joined (left right)
+  "cat of two non-empty collections: a fresh accumulator holding the members
+   of LEFT, then those of RIGHT."
+  (let ((out (make-array 0 :adjustable t :fill-pointer 0)))
+    (dolist (x (rontolisp::%clojure-seq-all left)) (vector-push-extend x out))
+    (dolist (x (rontolisp::%clojure-seq-all right)) (vector-push-extend x out))
+    out))
 
 ;;;; The clojure.pprint kernels: rontolisp.internal.pprint, the namespace only
 ;;;; the built-in clojure.pprint requires, lowers each var to one of these.

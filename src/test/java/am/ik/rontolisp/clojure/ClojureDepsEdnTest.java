@@ -129,6 +129,31 @@ class ClojureDepsEdnTest {
 			.hasMessage("Coord type is ambiguous: {:mvn/version \"1\", :local/root \"b\"}");
 	}
 
+	@Test
+	void aRepositorysPoliciesReachTheResolverAsTheOraclesRepoPolicyReadsThem() {
+		// tools.deps' repo-policy (clj 1.12.6, 2026-10-08): :enabled defaults to true and
+		// :update to :daily; an integer :update is handed to Maven as the string "5",
+		// which Maven treats as never (measured: no metadata request two days on)
+		DepsMap map = ClojureDepsEdn.read("""
+				{:mvn/repos {"plain" {:url "https://plain.example/"}
+				             "gated" {:url "https://gated.example/"
+				                      :releases {:enabled false :update :always}
+				                      :snapshots {:update 5}}
+				             "gone" nil}}
+				""", "deps.edn");
+		List<ClojureRepositories.MavenRepository> repositories = ClojureDepsEdn
+			.mavenSource(ClojureDepsEdn.merge(List.of(ClojureDepsEdn.ROOT, map)), ClojureFiles.NONE, null)
+			.repositories();
+
+		assertThat(repositories).extracting(ClojureRepositories.MavenRepository::id)
+			.containsExactly("central", "clojars", "plain", "gated");
+		ClojureRepositories.MavenPolicy defaults = ClojureRepositories.MavenPolicy.DEFAULT;
+		assertThat(repositories.get(2).releases()).isEqualTo(defaults);
+		assertThat(repositories.get(2).snapshots()).isEqualTo(defaults);
+		assertThat(repositories.get(3).releases()).isEqualTo(new ClojureRepositories.MavenPolicy(false, "always"));
+		assertThat(repositories.get(3).snapshots()).isEqualTo(new ClojureRepositories.MavenPolicy(true, "never"));
+	}
+
 	private static List<String> paths(DepsMap map) {
 		return ClojureDepsEdn.flattenPaths(ClojureDepsEdn.merge(List.of(ClojureDepsEdn.ROOT, map)));
 	}

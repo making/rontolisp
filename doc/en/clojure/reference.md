@@ -25,7 +25,8 @@ has them.
 | [(clojure.string)](reference/string.md) | The string library, plus the core `subs` |
 | [(clojure.set)](reference/clojure-set.md) | The relational set library: `union`/`intersection`/`difference`, `select`/`project`/`rename`, `index`/`join`, `subset?`/`superset?` |
 | [clojure.data](reference/clojure-data.md) | Recursive comparison: `diff` answering what only each side holds and what both hold |
-| [clojure.datafy](reference/clojure-datafy.md) | Values as data and navigation from data: `datafy`/`nav` over the `clojure.core.protocols` protocols |
+| [clojure.datafy](reference/clojure-datafy.md) | Values as data and navigation from data: `datafy`/`nav` over the `clojure.core.protocols` protocols, and `CollReduce`/`IKVReduce`, which `reduce`/`reduce-kv` consult |
+| [clojure.core.reducers](reference/clojure-core-reducers.md) | Reducers and folders: `map`/`filter`/`mapcat`/`take`... as reducible views, `fold` in parts, `foldcat`/`cat`/`append!`, `monoid` |
 | [clojure.edn](reference/clojure-edn.md) | Reading EDN data: `read-string`/`read` with `:eof`, `:readers` and `:default` |
 | [clojure.math](reference/clojure-math.md) | Functions over doubles that answer the same bits on every backend, rounding and the neighbors of a double, and long arithmetic that refuses to overflow |
 | [clojure.pprint](reference/clojure-pprint.md) | Pretty printing: `pprint`/`write` within a right margin, `print-table`, `code-dispatch` for code, and the dispatch a program extends or replaces |

@@ -4,6 +4,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.TreeMap;
 import java.util.function.Function;
 import am.ik.rontolisp.LispString;
@@ -276,12 +277,12 @@ final class ClojureValueMethodLowering {
 		boolean named = false;
 		List<InlineCall> calls = new ArrayList<>();
 		for (Map.Entry<String, ClojureLowering.ProtocolDef> protocol : new TreeMap<>(ctx.protocols).entrySet()) {
-			Integer arity = protocol.getValue().arities().get(method);
-			if (arity == null) {
+			Set<Integer> arities = protocol.getValue().arities().get(method);
+			if (arities == null) {
 				continue;
 			}
 			named = true;
-			if (arity == n + 1) {
+			if (arities.contains(n + 1)) {
 				String inline = ClojureLowering.inlineMethodKey(protocol.getKey(), method);
 				List<String> classes = ctx.types.values()
 					.stream()

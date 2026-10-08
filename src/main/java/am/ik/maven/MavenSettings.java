@@ -25,17 +25,20 @@ import org.jspecify.annotations.Nullable;
  * {@code mirrorOfLayouts}, {@code blocked}), proxies ({@code nonProxyHosts}, credentials)
  * and servers (credentials, {@code <configuration>}'s {@code httpHeaders},
  * {@code connectTimeout} and {@code requestTimeout}), passwords decrypted through
- * {@code settings-security.xml}. {@link #readGlobalAndUser()} merges the global file into
- * the user's as Maven does.
+ * {@code settings-security.xml}, and the {@code <repositories>} of the profiles that are
+ * active ({@code <activeProfiles>}, {@code <activation>}). {@link #readGlobalAndUser()}
+ * merges the global file into the user's as Maven does.
  *
  * @param localRepository the {@code <localRepository>}, or {@code null} for the default
  * @param offline the {@code <offline>} flag
  * @param mirrors the {@code <mirror>} entries, in order
  * @param proxies the {@code <proxy>} entries, in order
  * @param servers the {@code <server>} entries, in order
+ * @param profiles the {@code <profile>} entries, in order
+ * @param activeProfiles the {@code <activeProfile>} ids
  */
 public record MavenSettings(@Nullable Path localRepository, boolean offline, List<Mirror> mirrors, List<Proxy> proxies,
-		List<Server> servers) {
+		List<Server> servers, List<Profile> profiles, List<String> activeProfiles) {
 
 	/**
 	 * A {@code <mirror>} entry.
@@ -131,6 +134,44 @@ public record MavenSettings(@Nullable Path localRepository, boolean offline, Lis
 	}
 
 	/**
+	 * A {@code <profile>} entry: what bears on resolution is its repositories.
+	 *
+	 * @param id the profile id
+	 * @param active whether its {@code <activation>} activates it: a condition that holds
+	 * or {@code activeByDefault} (a settings profile, unlike a POM's, is not subject to
+	 * the rule that an activated profile retires the {@code activeByDefault} ones)
+	 * @param repositories its {@code <repositories>}, in order
+	 */
+	public record Profile(String id, boolean active, List<ProfileRepository> repositories) {
+
+		/**
+		 * Copies the repositories.
+		 * @param id the id
+		 * @param active whether its activation holds
+		 * @param repositories the repositories
+		 */
+		public Profile {
+			repositories = List.copyOf(repositories);
+		}
+
+	}
+
+	/**
+	 * A {@code <repository>} of a profile, as written: it is read as a
+	 * {@link RemoteRepository} only once its profile is active.
+	 *
+	 * @param id the repository id
+	 * @param url the base URL
+	 * @param layout the layout ({@code default}; a repository of any other is refused
+	 * when contacted, as Maven refuses {@code legacy})
+	 * @param releases what it serves of releases
+	 * @param snapshots what it serves of snapshots
+	 */
+	public record ProfileRepository(String id, String url, String layout, RepositoryPolicy releases,
+			RepositoryPolicy snapshots) {
+	}
+
+	/**
 	 * A user name and password.
 	 *
 	 * @param username the user name
@@ -174,6 +215,21 @@ public record MavenSettings(@Nullable Path localRepository, boolean offline, Lis
 		mirrors = List.copyOf(mirrors);
 		proxies = List.copyOf(proxies);
 		servers = List.copyOf(servers);
+		profiles = List.copyOf(profiles);
+		activeProfiles = List.copyOf(activeProfiles);
+	}
+
+	/**
+	 * Settings without profiles.
+	 * @param localRepository the local repository, or {@code null}
+	 * @param offline the offline flag
+	 * @param mirrors the mirrors
+	 * @param proxies the proxies
+	 * @param servers the servers
+	 */
+	public MavenSettings(@Nullable Path localRepository, boolean offline, List<Mirror> mirrors, List<Proxy> proxies,
+			List<Server> servers) {
+		this(localRepository, offline, mirrors, proxies, servers, List.of(), List.of());
 	}
 
 	/**
@@ -182,6 +238,69 @@ public record MavenSettings(@Nullable Path localRepository, boolean offline, Lis
 	 */
 	public static MavenSettings none() {
 		return new MavenSettings(null, false, List.of(), List.of(), List.of());
+	}
+
+	/**
+	 * The repositories of the active profiles, in the order Maven searches them. A
+	 * profile is active when {@code <activeProfiles>} names it or its activation holds.
+	 * Maven injects the profiles one after another, each ahead of what is there, so the
+	 * last profile defined is searched first and a profile's own repositories in order;
+	 * an id repeated keeps its first position and its last definition (within a profile)
+	 * or its latest profile's (across profiles). Measured on Maven 3.9.16.
+	 * @return the repositories
+	 * @throws IllegalArgumentException if an active profile's repository has a URL this
+	 * resolver cannot read
+	 */
+	public List<RemoteRepository> repositories() {
+		List<RemoteRepository> repositories = new ArrayList<>();
+		for (ProfileEntry entry : activeRepositories()) {
+			ProfileRepository repository = entry.repository();
+			try {
+				repositories.add(new RemoteRepository(repository.id(), repository.url(), repository.releases(),
+						repository.snapshots()));
+			}
+			catch (IllegalArgumentException ex) {
+				throw new IllegalArgumentException("settings.xml profile '" + entry.profile() + "': " + ex.getMessage(),
+						ex);
+			}
+		}
+		return repositories;
+	}
+
+	/** An active profile's repository, with the profile it came from. */
+	private record ProfileEntry(String profile, ProfileRepository repository) {
+	}
+
+	private List<ProfileEntry> activeRepositories() {
+		List<ProfileEntry> result = new ArrayList<>();
+		for (Profile profile : this.profiles) {
+			if (!profile.active() && !this.activeProfiles.contains(profile.id())) {
+				continue;
+			}
+			Map<String, ProfileEntry> own = new LinkedHashMap<>();
+			for (ProfileRepository repository : profile.repositories()) {
+				own.put(repository.id(), new ProfileEntry(profile.id(), repository));
+			}
+			for (ProfileEntry earlier : result) {
+				own.putIfAbsent(earlier.repository().id(), earlier);
+			}
+			result = new ArrayList<>(own.values());
+		}
+		return result;
+	}
+
+	/**
+	 * The layout of the active profile repository of an id.
+	 * @param id the repository id
+	 * @return its layout, {@code default} for any other repository
+	 */
+	String layoutOf(String id) {
+		for (ProfileEntry entry : activeRepositories()) {
+			if (entry.repository().id().equals(id)) {
+				return entry.repository().layout();
+			}
+		}
+		return "default";
 	}
 
 	/**
@@ -230,14 +349,17 @@ public record MavenSettings(@Nullable Path localRepository, boolean offline, Lis
 
 	/**
 	 * Maven's merge of the global settings into the user's: the user's local repository,
-	 * else the global one; the user's offline flag alone; the user's mirrors, proxies and
-	 * servers, then each global one whose id the user's do not use.
+	 * else the global one; the user's offline flag alone; the user's mirrors, proxies,
+	 * servers and profiles, then each global one whose id the user's do not use (a
+	 * profile of the same id is the user's whole, not merged); the active profile ids of
+	 * both (measured with {@code mvn -gs -s}, 3.9.16).
 	 */
 	static MavenSettings merge(MavenSettings user, MavenSettings global) {
 		return new MavenSettings(user.localRepository != null ? user.localRepository : global.localRepository,
 				user.offline, mergeById(user.mirrors, global.mirrors, Mirror::id),
-				mergeById(user.proxies, global.proxies, Proxy::id),
-				mergeById(user.servers, global.servers, Server::id));
+				mergeById(user.proxies, global.proxies, Proxy::id), mergeById(user.servers, global.servers, Server::id),
+				mergeById(user.profiles, global.profiles, Profile::id),
+				mergeById(user.activeProfiles, global.activeProfiles, id -> id));
 	}
 
 	private static <T> List<T> mergeById(List<T> dominant, List<T> recessive, Function<T, String> id) {
@@ -350,9 +472,102 @@ public record MavenSettings(@Nullable Path localRepository, boolean offline, Lis
 			}
 			servers.add(new Server(id, login(values, server, passwords), headers, connectTimeout, requestTimeout));
 		}
+		Map<String, String> conditions = new HashMap<>(system);
+		env.forEach((name, value) -> conditions.putIfAbsent("env." + name, value));
+		List<Profile> profiles = new ArrayList<>();
+		for (XmlElement profile : list(settings, "profiles", "profile")) {
+			profiles.add(profile(values, source, profile, conditions));
+		}
+		List<String> activeProfiles = new ArrayList<>();
+		for (XmlElement active : list(settings, "activeProfiles", "activeProfile")) {
+			activeProfiles.add(values.text(active));
+		}
 		return new MavenSettings(
 				localRepository == null || localRepository.isEmpty() ? null : Path.of(localRepository).toAbsolutePath(),
-				Boolean.parseBoolean(values.leaf(settings, "offline", "false")), mirrors, proxies, servers);
+				Boolean.parseBoolean(values.leaf(settings, "offline", "false")), mirrors, proxies, servers, profiles,
+				activeProfiles);
+	}
+
+	/**
+	 * A profile: whether its activation holds (the conditions of a POM's profile, against
+	 * the system properties and {@code env.NAME}) or it is {@code activeByDefault}, and
+	 * its repositories. A repository without an id or URL is refused, as Maven's settings
+	 * validation refuses it whether or not the profile is active.
+	 */
+	private static Profile profile(Values values, String source, XmlElement profile, Map<String, String> conditions)
+			throws MavenResolutionException {
+		String id = values.leaf(profile, "id", "default");
+		boolean active = false;
+		XmlElement activationElement = profile.child("activation");
+		if (activationElement != null) {
+			PomModel.Activation activation = activation(values, activationElement);
+			List<String> problems = new ArrayList<>();
+			active = ProfileActivator.isActive(id, activation, Map.of(), conditions, problems)
+					|| Boolean.parseBoolean(activation.activeByDefault());
+			if (!problems.isEmpty()) {
+				throw new MavenResolutionException(source + ": profile '" + id + "': " + problems.get(0));
+			}
+		}
+		List<ProfileRepository> repositories = new ArrayList<>();
+		for (XmlElement repository : list(profile, "repositories", "repository")) {
+			String repositoryId = values.leaf(repository, "id", "");
+			String url = values.leaf(repository, "url", "");
+			String where = "'profiles.profile[" + id + "].repositories.repository.";
+			if (url.isEmpty()) {
+				throw new MavenResolutionException(source + ": " + where + "url' for " + repositoryId + " is missing");
+			}
+			if (repositoryId.isEmpty()) {
+				throw new MavenResolutionException(source + ": " + where + "id' for " + url + " is missing");
+			}
+			repositories.add(new ProfileRepository(repositoryId, url, values.leaf(repository, "layout", "default"),
+					policy(values, repository.child("releases")), policy(values, repository.child("snapshots"))));
+		}
+		return new Profile(id, active, repositories);
+	}
+
+	private static PomModel.Activation activation(Values values, XmlElement activation)
+			throws MavenResolutionException {
+		XmlElement os = activation.child("os");
+		XmlElement property = activation.child("property");
+		XmlElement file = activation.child("file");
+		return new PomModel.Activation(values.leaf(activation, "activeByDefault"), values.leaf(activation, "jdk"),
+				os == null ? null
+						: new PomModel.Os(values.leaf(os, "name"), values.leaf(os, "family"), values.leaf(os, "arch"),
+								values.leaf(os, "version")),
+				property == null ? null
+						: new PomModel.Property(values.leaf(property, "name"), values.leaf(property, "value")),
+				file == null ? null
+						: new PomModel.FileCheck(values.leaf(file, "exists"), values.leaf(file, "missing")));
+	}
+
+	/**
+	 * A repository's {@code <releases>} or {@code <snapshots>}: enabled and {@code daily}
+	 * unless written. Maven Resolver runs an update policy it does not know as
+	 * {@code never}, an {@code interval:} it cannot parse as a day's minutes.
+	 */
+	private static RepositoryPolicy policy(Values values, @Nullable XmlElement element)
+			throws MavenResolutionException {
+		if (element == null) {
+			return RepositoryPolicy.DEFAULT;
+		}
+		String update = values.leaf(element, "updatePolicy", "daily");
+		try {
+			UpdatePolicy.parse(update);
+		}
+		catch (IllegalArgumentException ex) {
+			update = update.startsWith("interval:") ? (isNegativeInterval(update) ? "always" : "interval:1440")
+					: "never";
+		}
+		return new RepositoryPolicy(Boolean.parseBoolean(values.leaf(element, "enabled", "true")), update);
+	}
+
+	private static boolean isNegativeInterval(String update) {
+		try {
+			return Integer.parseInt(update.substring("interval:".length())) < 0;
+		}
+		catch (NumberFormatException ex) {
+			return false;
+		}
 	}
 
 	/** A username and its password, decrypted; none without a username. */
@@ -401,11 +616,12 @@ public record MavenSettings(@Nullable Path localRepository, boolean offline, Lis
 
 		@Nullable String leaf(XmlElement parent, String name) throws MavenResolutionException {
 			XmlElement child = parent.child(name);
-			if (child == null) {
-				return null;
-			}
+			return child == null ? null : text(child);
+		}
+
+		String text(XmlElement element) throws MavenResolutionException {
 			try {
-				return this.interpolator.interpolate(child.text().trim());
+				return this.interpolator.interpolate(element.text().trim());
 			}
 			catch (Interpolator.CycleException ex) {
 				throw new MavenResolutionException(this.source + ": " + ex.getMessage(), ex);
@@ -436,27 +652,28 @@ public record MavenSettings(@Nullable Path localRepository, boolean offline, Lis
 	/**
 	 * Maven's mirror selection ({@code DefaultMirrorSelector}): an entry naming the
 	 * repository's id exactly wins, else the first whose pattern matches -- each only
-	 * when its {@code mirrorOfLayouts} admit the repository's {@code default} layout.
+	 * when its {@code mirrorOfLayouts} admit the repository's layout (an active profile
+	 * repository's own, else {@code default}).
 	 * @param repository the repository
 	 * @return the mirror, or {@code null}
 	 */
 	@Nullable Mirror mirrorFor(RemoteRepository repository) {
+		String layout = layoutOf(repository.id());
 		for (Mirror mirror : this.mirrors) {
-			if (mirror.mirrorOf().equals(repository.id()) && matchesLayout(mirror.mirrorOfLayouts())) {
+			if (mirror.mirrorOf().equals(repository.id()) && matchesLayout(mirror.mirrorOfLayouts(), layout)) {
 				return mirror;
 			}
 		}
 		for (Mirror mirror : this.mirrors) {
-			if (matchesPattern(repository, mirror.mirrorOf()) && matchesLayout(mirror.mirrorOfLayouts())) {
+			if (matchesPattern(repository, mirror.mirrorOf()) && matchesLayout(mirror.mirrorOfLayouts(), layout)) {
 				return mirror;
 			}
 		}
 		return null;
 	}
 
-	/** {@code DefaultMirrorSelector.matchesType} for a {@code default} repository. */
-	private static boolean matchesLayout(String mirrorOfLayouts) {
-		String layout = "default";
+	/** {@code DefaultMirrorSelector.matchesType}. */
+	private static boolean matchesLayout(String mirrorOfLayouts, String layout) {
 		if (mirrorOfLayouts.isEmpty() || mirrorOfLayouts.equals("*") || mirrorOfLayouts.equals(layout)) {
 			return true;
 		}

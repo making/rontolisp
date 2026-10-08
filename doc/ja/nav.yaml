@@ -275,6 +275,8 @@ sections:
             title: "(clojure.data)"
           - file: clojure/reference/clojure-datafy.md
             title: "(clojure.datafy)"
+          - file: clojure/reference/clojure-core-reducers.md
+            title: "(clojure.core.reducers)"
           - file: clojure/reference/clojure-edn.md
             title: "(clojure.edn)"
           - file: clojure/reference/clojure-math.md

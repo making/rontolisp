@@ -603,7 +603,8 @@ from Maven Central through the local repository `mvn` uses -- `~/.m2/repository`
 the `localRepository` of `settings.xml`. A SNAPSHOT, `LATEST`, `RELEASE` or version range,
 given or in a dependency's POM, resolves through Central's `maven-metadata.xml` as Maven
 resolves it. The local repository keeps that metadata and asks Central again once a day,
-as it does for a file Central did not have.
+as it does for a file Central did not have. Central serves no SNAPSHOT, as in Maven: a
+SNAPSHOT is looked up only in the repositories named with `--java-repository`.
 
 A library Central does not hold -- Clojars, a company repository, a `file:` directory --
 is named with `--java-repository [ID=]URL` (repeatable; `https:`, `http:` or `file:`).
@@ -624,6 +625,12 @@ carries the requests, and the `<server>` of the repository contacted supplies Ba
 credentials, `httpHeaders` and timeouts. A password encrypted with
 `mvn --encrypt-password` is decrypted with the master password in
 `~/.m2/settings-security.xml`.
+
+The `<repositories>` of the active `settings.xml` profiles (named in `<activeProfiles>`,
+or holding to their `<activation>`; the global and the user's file together) are searched
+as `mvn` searches them: ahead of Central and the `--java-repository` ones, the profile
+defined last first, a profile's own repositories in order. A profile repository with the
+id of one of those replaces it.
 
 A Clojure program's `deps.edn` dependencies that hold classes join the class path
 after these ([Projects: deps.edn](../clojure/semantics.md#projects-depsedn)).

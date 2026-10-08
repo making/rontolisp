@@ -26,6 +26,7 @@ import am.ik.maven.MavenResolutionException;
 import am.ik.maven.MavenResolver;
 import am.ik.maven.MavenSettings;
 import am.ik.maven.RemoteRepository;
+import am.ik.maven.RepositoryPolicy;
 import org.jspecify.annotations.Nullable;
 
 /**
@@ -154,10 +155,11 @@ final class JavaClassPath implements AutoCloseable {
 
 	// Central first, then the repositories given in order; one named central takes
 	// Central's place (Maven's own redefinition of the id). Their ids are what a
-	// settings.xml server and mirror name.
+	// settings.xml server and mirror name. Central serves no snapshot, as in Maven's
+	// super POM: a SNAPSHOT is never asked of it.
 	static List<RemoteRepository> repositories(List<RemoteRepository> given) {
 		List<RemoteRepository> all = new ArrayList<>();
-		all.add(RemoteRepository.CENTRAL);
+		all.add(RemoteRepository.CENTRAL.withSnapshots(RepositoryPolicy.DISABLED));
 		for (RemoteRepository repository : given) {
 			if (repository.id().equals(RemoteRepository.CENTRAL.id())) {
 				all.set(0, repository);

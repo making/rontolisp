@@ -1,0 +1,4 @@
+# collect --no-releases test.meta:snaplatest:[1.0,4.0)
+test.meta:snaplatest:jar::3.0-SNAPSHOT scope=compile optional=null range=[1.0,4.0)
+  test.meta:two:jar::1 scope=compile optional=null
+warning missing test.meta:two:jar:1

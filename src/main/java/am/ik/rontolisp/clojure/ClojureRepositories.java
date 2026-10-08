@@ -46,8 +46,35 @@ public interface ClojureRepositories {
 	 *
 	 * @param id its id, what a {@code settings.xml} mirror or server names
 	 * @param url its base URL
+	 * @param releases what it serves of releases
+	 * @param snapshots what it serves of snapshots
 	 */
-	record MavenRepository(String id, String url) {
+	record MavenRepository(String id, String url, MavenPolicy releases, MavenPolicy snapshots) {
+
+		/**
+		 * A repository with the default policies.
+		 * @param id its id
+		 * @param url its base URL
+		 */
+		public MavenRepository(String id, String url) {
+			this(id, url, MavenPolicy.DEFAULT, MavenPolicy.DEFAULT);
+		}
+
+	}
+
+	/**
+	 * What a repository serves of one kind, a {@code :releases} or {@code :snapshots}
+	 * map.
+	 *
+	 * @param enabled whether the repository is asked for this kind
+	 * @param update Maven's spelling of the update policy: {@code daily}, {@code always}
+	 * or {@code never}
+	 */
+	record MavenPolicy(boolean enabled, String update) {
+
+		/** Enabled and daily: what a repository with no map serves. */
+		public static final MavenPolicy DEFAULT = new MavenPolicy(true, "daily");
+
 	}
 
 	/**

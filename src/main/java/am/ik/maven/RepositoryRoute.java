@@ -42,7 +42,9 @@ record RepositoryRoute(RemoteRepository repository, List<RemoteRepository> mirro
 			RemoteRepository target = repository;
 			if (mirror != null) {
 				try {
-					target = new RemoteRepository(mirror.id(), mirror.url());
+					// the mirror serves what the repository it stands for serves
+					target = new RemoteRepository(mirror.id(), mirror.url(), repository.releases(),
+							repository.snapshots());
 				}
 				catch (IllegalArgumentException ex) {
 					throw new MavenResolutionException(
@@ -53,6 +55,12 @@ record RepositoryRoute(RemoteRepository repository, List<RemoteRepository> mirro
 				if (contacted.get(i).id().equals(target.id())) {
 					if (mirror != null && mirrors.get(i) != null && !contains(mirroredLists.get(i), repository)) {
 						mirroredLists.get(i).add(repository);
+						// mergeMirrors: the policies of the repositories one mirror
+						// covers
+						RemoteRepository dominant = contacted.get(i);
+						contacted.set(i, dominant
+							.withReleases(RepositoryPolicy.merge(dominant.releases(), repository.releases()))
+							.withSnapshots(RepositoryPolicy.merge(dominant.snapshots(), repository.snapshots())));
 					}
 					continue next;
 				}
@@ -82,6 +90,12 @@ record RepositoryRoute(RemoteRepository repository, List<RemoteRepository> mirro
 				unavailable = "Cannot access " + repository + " with type " + mirror.layout()
 						+ " (settings.xml mirror layout); only the default layout is read";
 			}
+			else if (mirror == null && !settings.layoutOf(repository.id()).equals("default")) {
+				// a profile repository of a layout other than default (Maven's legacy)
+				String layout = settings.layoutOf(repository.id());
+				unavailable = "Cannot access " + repository + " with type " + layout
+						+ " using the available layout factories: Unsupported repository layout " + layout;
+			}
 			routes.add(new RepositoryRoute(repository, List.copyOf(mirrored), unavailable,
 					settings.proxyFor(repository), settings.server(repository.id())));
 		}
@@ -95,6 +109,34 @@ record RepositoryRoute(RemoteRepository repository, List<RemoteRepository> mirro
 			}
 		}
 		return false;
+	}
+
+	/**
+	 * What a request may ask of this repository: Maven Resolver's
+	 * {@code getPolicy(session, repository, releases, snapshots)}. A request for releases
+	 * (an artifact that is not a snapshot, a {@code RELEASE} lookup) consults the release
+	 * policy, one for snapshots the snapshot policy, one for either (a version range,
+	 * {@code LATEST}) both: enabled when either is, updated as often as the more
+	 * frequent.
+	 * @param releases whether releases are wanted
+	 * @param snapshots whether snapshots are wanted
+	 * @param override the update policy of the whole session, which replaces the
+	 * repository's own, or {@code null}
+	 * @return the repository's answer
+	 */
+	Effective effective(boolean releases, boolean snapshots, @Nullable UpdatePolicy override) {
+		RepositoryPolicy policy = RepositoryPolicy.merge(this.repository.policy(snapshots),
+				this.repository.policy(!releases));
+		return new Effective(policy.enabled(), override != null ? override : policy.updatePolicy());
+	}
+
+	/**
+	 * A repository's answer to one kind of request.
+	 *
+	 * @param enabled whether it is asked at all
+	 * @param update when something cached from it is asked for again
+	 */
+	record Effective(boolean enabled, UpdatePolicy update) {
 	}
 
 	/**

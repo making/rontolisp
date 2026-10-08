@@ -698,7 +698,8 @@ Per call the uncached bridge paid `getMethods()` (~2.5 us), `select()` (250 ns -
   repositories in the order given (`JavaResolutionOptions.repositories`; no id ->
   `java-repository-N`, an id given twice refused, `central` replaces Central's URL in place,
   the flag without `--java-dep` refused; Central stays first because a mirror in
-  `settings.xml` is the way to stop asking it), through `settings.xml`'s (user's over `$MAVEN_HOME`'s)
+  `settings.xml` is the way to stop asking it; the active `settings.xml` profiles' repositories
+  go AHEAD of both, in Maven's order, `.kb/maven-resolver.md` "Repositories"), through `settings.xml`'s (user's over `$MAVEN_HOME`'s)
   local repository / `offline` / mirror / proxy / server (`RontoLispCli.javaDependencyResolver` injects a fixture repository, or a factory over the repository list, in tests),
   then the jars a Clojure program's `deps.edn` dependencies bring, holding classes
   (`JavaClassPath.add`, reached through `SourceLoader.addJavaClassPath` /

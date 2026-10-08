@@ -8699,3 +8699,175 @@ cases:
       (in-ns 'user)
     expected: |
       2.7182818284590455 1.0986122886681096 0.9950041652780257 1.1578212823495777 9.882117688026185
+  - name: protocol-methods-of-several-arities-dispatch-by-count
+    # A protocol method declares one parameter vector per arity; an inline body (defrecord,
+    # deftype -- mutable fields too -- and reify) names the method again for another arity,
+    # an extension (extend-protocol, extend-type, extend) spells fn clauses, and a call
+    # reaches the arity of its count, an instance call too; one no arity takes is the
+    # oracle's ArityException. Every line is the oracle's (clj 1.12.6), on all four
+    # backends.
+    source: |
+      (ns protocol-arities)
+      (defprotocol Shape
+        (area [s] [s scale] "the area, optionally scaled")
+        (label [s prefix]))
+      (defmacro arity-of [form] `(try ~form (catch clojure.lang.ArityException e# :arity)))
+      (defrecord Square [side]
+        Shape
+        (area [_] (* side side))
+        (area [this k] (* k (area this)))
+        (label [_ prefix] (str prefix "square")))
+      (deftype Counter [^:unsynchronized-mutable n]
+        Shape
+        (area [_] n)
+        (area [this k] (set! n (+ n k)) this)
+        (label [_ prefix] (str prefix n)))
+      (def circle (reify Shape (area [_] 3) (area [_ k] (* 3 k)) (label [_ p] (str p "circle"))))
+      (extend-protocol Shape
+        String
+        (area ([s] (count s)) ([s k] (* k (count s))))
+        (label [s p] (str p s)))
+      (extend-type Long Shape (area ([n] n) ([n k] (* n k))))
+      (defrecord Tri [b h])
+      (extend Tri Shape {:area (fn ([t] (/ (* (:b t) (:h t)) 2)) ([t k] (* k (area t))))})
+      (prn (area (->Square 3)) (area (->Square 3) 2) (label (->Square 3) "a ") (.area (->Square 4)) (.area (->Square 4) 3))
+      (let [c (Counter. 1)] (area c 5) (area c 2) (prn (area c) (label c "n=")))
+      (prn (area circle) (area circle 4) (label circle "the "))
+      (prn (area "abc") (area "abc" 2) (label "x" "y") (area 7) (area 7 6) (area (->Tri 4 3)) (area (->Tri 4 3) 10))
+      (prn (arity-of (apply area [7 1 2])) (satisfies? Shape circle) (map area ["a" "bb"]) (map area ["a" "bb"] [10 100]))
+      (in-ns 'user)
+    expected: |
+      9 18 "a square" 16 48
+      8 "n=8"
+      3 12 "the circle"
+      3 6 "yx" 7 42 6 60
+      :arity true (1 2) (10 200)
+  - name: reduce-and-the-verbs-built-on-it-reach-a-coll-reduce-row
+    # clojure.core.protocols/CollReduce (.kb/clojure-frontend.md "clojure.jar namespaces"):
+    # reduce of both arities, into, transduce, the cat transducer, mapv, filterv,
+    # frequencies, group-by and run! hand a record, deftype or reify with its own row --
+    # in its body or extended to it -- to that row, which stops at reduced like any
+    # reduction; seq and count of one stay refused, a record without a row reduces its
+    # entries, and coll-reduce itself reaches the nil and Object rows. Every line is the
+    # oracle's (clj 1.12.6), on all four backends.
+    source: |
+      (ns coll-reduce-reify (:require [clojure.core.protocols :as p]))
+      (def three (reify p/CollReduce
+                   (coll-reduce [this f] (p/coll-reduce this f (f)))
+                   (coll-reduce [_ f init] (reduce f init [1 2 3]))))
+      (prn (reduce + three) (reduce + 10 three) (into [] three) (into [:a] (map inc) three) (transduce (map inc) + three) (transduce (map inc) + 100 three))
+      (prn (reduce (fn [a x] (if (= x 2) (reduced a) (conj a x))) [] three) (sort (into #{} three)) (into [] cat [three [4]]) (into [] (mapcat (fn [x] [x x])) three))
+      (prn (mapv inc three) (filterv odd? three) (get (frequencies three) 2) (get (group-by odd? three) true))
+      (run! prn three)
+      (prn (try (seq three) (catch IllegalArgumentException e :no-seq)) (try (count three) (catch UnsupportedOperationException e :no-count)))
+      (deftype Only3 [] p/CollReduce (coll-reduce [_ f init] (f init :only3)))
+      (prn (reduce conj [] (Only3.)) (into [:x] (Only3.)) (satisfies? p/CollReduce (Only3.)))
+      (defrecord Bag [items])
+      (extend-protocol p/CollReduce Bag
+        (coll-reduce ([b f] (reduce f (:items b))) ([b f init] (reduce f init (:items b)))))
+      (defrecord One [x])
+      (prn (reduce + (->Bag [1 2 3])) (reduce + 1 (->Bag [1 2 3])) (into [] (->Bag [4 5])) (into [] (->One 1)))
+      (prn (p/coll-reduce [1 2 3] + 0) (p/coll-reduce nil + 7) (p/coll-reduce nil +) (p/coll-reduce [1 2] +))
+      (in-ns 'user)
+    expected: |
+      6 16 [1 2 3] [:a 2 3 4] 9 109
+      [1] (1 2 3) [1 2 3 4] [1 1 2 2 3 3]
+      [2 3 4] [1 3] 1 [1 3]
+      1
+      2
+      3
+      :no-seq :no-count
+      [:only3] [:x :only3] true
+      6 7 [4 5] [[:x 1]]
+      6 7 0 3
+  - name: reduce-kv-and-update-vals-reach-an-ikv-reduce-row
+    # clojure.core.protocols/IKVReduce: reduce-kv, update-vals and update-keys hand a
+    # deftype or record with its own row -- in its body or through extend -- to that row,
+    # while reduce of the record still walks its entries. Every line is the oracle's
+    # (clj 1.12.6), on all four backends.
+    source: |
+      (ns kv-reduce-types (:require [clojure.core.protocols :as p]))
+      (deftype KV [m] p/IKVReduce (kv-reduce [_ f init] (reduce-kv f init m)))
+      (defrecord RKV [a] p/IKVReduce (kv-reduce [_ f init] (f init :custom a)))
+      (defrecord Ext [a])
+      (extend Ext p/IKVReduce {:kv-reduce (fn [r f init] (f init :ext (:a r)))})
+      (prn (reduce-kv (fn [a k v] (conj a [k v])) [] (KV. {:a 1})) (reduce-kv (fn [acc k v] (conj acc k v)) [] (->RKV 1)) (reduce conj [] (->RKV 1)))
+      (prn (reduce-kv (fn [acc k v] (conj acc k v)) [] (->Ext 9)) (update-vals (KV. {:a 1}) inc) (update-keys (KV. {:a 1}) name) (p/kv-reduce {:x 1} (fn [a k v] (conj a k v)) []))
+      (in-ns 'user)
+    expected: |
+      [[:a 1]] [:custom 1] [[:a 1]]
+      [:ext 9] {:a 2} {"a" 1} [:x 1]
+  - name: clojure-core-reducers-transform-a-reduction-like-the-oracle
+    # The built-in clojure.core.reducers (.kb/clojure-frontend.md "clojure.jar namespaces"):
+    # map, filter, remove, mapcat, take, drop, take-while and flatten as reducible views,
+    # curried, and reducer itself; reduce of a map through kv-reduce, (f) as the missing
+    # init, reduced stopping a reduction, a reducer refusing seq. Every line is the
+    # oracle's (clj 1.12.6), on all four backends.
+    source: |
+      (ns reducers-reduce (:require [clojure.core.reducers :as r]))
+      (prn (into [] (r/map inc [1 2 3])) (into [] (r/filter odd? [1 2 3 4 5])) (into [] (r/remove odd? [1 2 3 4 5])) (into [] (r/mapcat (fn [x] [x x]) [1 2])))
+      (prn (into [] (r/take 2 [1 2 3])) (into [] (r/drop 1 [1 2 3])) (into [] (r/take-while #(< % 3) [1 2 3 4 1])) (into [] (r/flatten [1 [2 [3 4]] '(5) #{6}])))
+      (prn (reduce + (r/map inc [1 2 3])) (r/reduce + (r/map inc [1 2 3])) (r/reduce + 0 [1 2 3]) (r/reduce (fn [acc k v] (conj acc k v)) [] {:a 1}) (r/reduce (fn ([] [:init]) ([acc x] (conj acc x))) [1]))
+      (prn (into [] ((r/map inc) [1 2])) (into [] (r/reducer [1 2 3] (fn [rf] (fn ([] (rf)) ([a x] (rf a (* 10 x))))))) (into [] (r/take 2 (r/map inc (range 10)))) (transduce (map inc) + (r/map inc [1 2 3])))
+      (prn (r/reduce (fn [a x] (if (> x 2) (reduced a) (+ a x))) 0 (r/map inc [1 2 3 4])) (into [] (r/take 1 (r/mapcat (fn [x] [x x]) [1 2 3]))) (into [] (r/take 0 [1 2 3])) (into [] (r/drop -1 [1 2 3])))
+      (prn (try (seq (r/map inc [1])) (catch IllegalArgumentException e :no-seq)) (r/reduce + 0 (r/map inc (sorted-set 1 2))) (r/reduce (fn [a k v] (+ a v)) 0 (sorted-map 1 2)))
+      (in-ns 'user)
+    expected: |
+      [2 3 4] [1 3 5] [2 4] [1 1 2 2]
+      [1 2] [2 3] [1 2] [1 2 3 4 5 #{6}]
+      9 9 6 [:a 1] [:init 1]
+      [2 3] [10 20 30] [1 2] 12
+      2 [1] [] [1 2 3]
+      :no-seq 5 2
+  - name: clojure-core-reducers-fold-splits-and-combines-like-the-oracle
+    # fold halves a vector down to n members (512 by default), each part reduced from
+    # (combinef) and the parts combined in order -- the combine tree shows through a
+    # non-associative combinef; a folder folds through its source, a reducer and any other
+    # collection reduce once, a map or record through kv-reduce; monoid, foldcat, cat and
+    # append! over cat's accumulator. Every line is the oracle's (clj 1.12.6), on all four
+    # backends.
+    source: |
+      (ns reducers-fold (:require [clojure.core.reducers :as r]))
+      (defn tree ([] [:i]) ([a b] [:c a b]))
+      (defn step ([acc x] (conj acc x)) ([acc k v] (conj acc k v)))
+      (prn (r/fold + [1 2 3 4 5]) (r/fold + (r/map inc [1 2 3])) (r/fold + (r/filter odd? (vec (range 1000)))) (r/fold + + [1 2 3]) (r/fold 2 + + [1 2 3 4 5]))
+      (prn (r/fold 2 (fn ([] []) ([a b] (conj a b))) conj [1 2 3 4 5]))
+      (prn (r/fold 2 tree step (vec (range 5))) (r/fold 1 tree step (vec (range 3))) (r/fold 2.5 tree step (vec (range 5))) (r/fold 2 tree step (subvec [1 2 3 4 5] 1)))
+      (prn (r/fold 2 tree step (r/map inc (vec (range 5)))) (r/fold 2 tree step (r/filter odd? (vec (range 7)))) (r/fold 2 tree step (r/take 3 (vec (range 7)))))
+      (defrecord FoldPoint [x])
+      (prn (r/fold tree step {:a 1}) (r/fold tree step (->FoldPoint 1)) (r/fold tree step (sorted-map 1 2 3 4)) (r/fold tree step #{1}) (r/fold tree step (range 5)) (r/fold tree step nil))
+      (prn (r/fold + nil) (r/fold + []) (r/fold + (r/take 2 [1 2 3])) (r/fold + (r/take-while odd? [1 3 4])) (r/fold + (r/drop 1 [1 2 3])) (r/fold (r/monoid + (constantly 10)) + [1 2 3]))
+      (prn ((r/monoid + (constantly 0))) ((r/monoid + (constantly 0)) 1 2) (r/fold (r/monoid conj (constantly [])) conj (vec (range 3))) (count (r/fold (r/monoid into vector) conj (vec (range 1100)))))
+      (prn (r/foldcat [1 2 3]) (r/foldcat (vec (range 5))) (count (r/foldcat (r/map inc (vec (range 600))))) (= (seq (r/foldcat (r/map inc (vec (range 1000))))) (range 1 1001)) (r/fold 1 tree step (r/foldcat (vec (range 4)))))
+      (prn (r/cat) (r/cat [] [2]) (r/cat [1] []) (r/cat nil [1]) (r/append! (r/cat) 1) (into [] (r/cat [1 2] [3])) (count (r/cat [1 2] [3])) (seq (r/cat [1 2] [3])))
+      (prn (let [a (r/cat)] (r/append! a 1) (r/append! a 2) [a (count a) (= a [1 2])]) (r/fold + + (r/cat [1 2] [3])) (try (r/append! [] 1) (catch UnsupportedOperationException e :unsupported)))
+      (in-ns 'user)
+    expected: |
+      15 9 250000 6 15
+      [1 2 [3 [4 5]]]
+      [:c [:i 0 1] [:c [:i 2] [:i 3 4]]] [:c [:i 0] [:c [:i 1] [:i 2]]] [:c [:i 0 1] [:c [:i 2] [:i 3 4]]] [:c [:i 2 3] [:i 4 5]]
+      [:c [:i 1 2] [:c [:i 3] [:i 4 5]]] [:c [:c [:i] [:i 1]] [:c [:i 3] [:i 5]]] [:i 0 1 2]
+      [:i :a 1] [:i :x 1] [:i 1 2 3 4] [:i 1] [:i 0 1 2 3 4] [:i]
+      0 0 3 4 5 16
+      0 3 [0 1 2] 1100
+      [1 2 3] [0 1 2 3 4] 600 true [:i 0 1 2 3]
+      [] [2] [1] [1] [1] [1 2 3] 3 (1 2 3)
+      [[1 2] 2 true] 6 :unsupported
+  - name: clojure-core-reducers-cat-is-one-accumulator
+    # A deviation: cat of two non-empty collections answers one accumulator holding both,
+    # where the oracle answers a Cat, a tree of the two (prn: #object[clojure.core.reducers.Cat
+    # ...]) whose fold folds each half and combines them: [:c [:c [:i 1] [:i 2 3]] [:i 4 5]]
+    # for the fold below. An eduction over a collection reducing through its own CollReduce
+    # row reduces it at the eduction: into, transduce and a reduce with an init answer the
+    # oracle's, while the oracle refuses the seq and the init-less reduce of such an
+    # eduction.
+    source: |
+      (ns reducers-cat-deviation (:require [clojure.core.reducers :as r] [clojure.core.protocols :as p]))
+      (defn tree ([] [:i]) ([a b] [:c a b]))
+      (prn (r/cat [1 2] [3]) (r/fold 2 tree conj (r/cat [1 2 3] [4 5])))
+      (def three (reify p/CollReduce (coll-reduce [this f] (p/coll-reduce this f (f))) (coll-reduce [_ f init] (reduce f init [1 2 3]))))
+      (prn (into [] (eduction (map inc) three)) (transduce (map inc) + (eduction (filter odd?) three)) (reduce + 0 (eduction (filter odd?) three)) (seq (eduction (map inc) three)))
+      (in-ns 'user)
+    expected: |
+      [1 2 3] [:i 1 2 3 4 5]
+      [2 3 4] 6 4 (2 3 4)

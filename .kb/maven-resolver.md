@@ -29,9 +29,12 @@ or `version` (`RELEASE`/`LATEST`) -- and builds its resolver as `clj` does:
   methods hold the instance lock, and the instance is Maven's session: a repository is asked
   for a file or metadata at most once per resolver, whatever the policy.
 - `descriptor`/`artifact`/`version` refuse a range by name (it names no single artifact; Maven
-  would look the range up as a literal path). `Builder.updatePolicy` takes Maven's spellings
-  (`daily` default, `always`, `never`, `interval:N`; anything else an
-  `IllegalArgumentException`, where Maven warns and uses `never`).
+  would look the range up as a literal path). `RepositoryPolicy.update` and
+  `Builder.updatePolicy` take Maven's spellings (`daily` default, `always`, `never`,
+  `interval:N`; anything else an `IllegalArgumentException`, where Maven warns and uses
+  `never`). `Builder.updatePolicy` is Maven's SESSION policy (`mvn -U` = `always`): when set
+  it replaces every repository's own; unset (default), each repository's policy for the kind
+  asked applies ("Repositories", below).
 - `Artifact.path()` puts a timestamped snapshot in its base version's directory
   (`1.0-SNAPSHOT/lib-1.0-20240101.123456-1.jar`); `baseVersion()`, `isSnapshot()`,
   `isVersionRange()` are `DefaultArtifact`'s.
@@ -193,10 +196,38 @@ reports the collection's warnings with that failure; the parity test re-collects
   metadata. Never "favor local". Known difference: Maven fetches a range-chosen version's jar
   only from the repository whose metadata listed it (`getRemoteRepositories`); `artifact`
   searches them all.
-- Update policy: Maven's `DefaultUpdatePolicyAnalyzer` (`daily` = local midnight), one for all
-  repositories (tools.deps' per-repository `:update` is not read). Every repository serves
-  releases and snapshots (as `clj`'s do; Maven's super-POM Central does not serve snapshots,
-  but repositories here are the caller's list).
+- Update policy: Maven's `DefaultUpdatePolicyAnalyzer` (`daily` = local midnight).
+- **Per-repository policies** (`RemoteRepository.releases()` / `snapshots()`, each a
+  `RepositoryPolicy(enabled, update)`, default enabled + `daily`; tools.deps' `:releases` /
+  `:snapshots`). `RepositoryRoute.effective(releases, snapshots, override)` is
+  `DefaultRemoteRepositoryManager.getPolicy`: policy1 = the snapshot policy when snapshots
+  are wanted, policy2 = the release policy unless releases are wanted; a disabled one gives
+  way to the other, two enabled ones update as often as the more frequent (`always` 0,
+  `interval:N` N, `daily` 1440, `never` MAX), the session override replacing the update.
+  Consulted exactly where Maven consults it (measured 2026-10-08 against Maven 3.9.16 /
+  resolver 1.9.27 with a probe over a `file:` repository and a listener on the downloads,
+  and the oracle with `--no-releases` / `--no-snapshots`, `oracle/policy-*.txt`):
+  - artifact files (`DefaultArtifactResolver`): the artifact's own kind (`isSnapshot`, a
+    timestamped build included); a disabled repository is skipped before the offline check.
+  - metadata (`DefaultMetadataResolver.getEnabledSourceRepositories`) by the nature asked:
+    `RELEASE` -> release policy, a `-SNAPSHOT`'s own `maven-metadata.xml` -> snapshot policy,
+    `LATEST` and a range's `g/a/maven-metadata.xml` -> either (enabled when one is, the
+    more frequent update). A repository not enabled for the nature is neither asked NOR
+    read: a copy it cached earlier is ignored, and no exception names it.
+  - a range (`DefaultVersionRangeResolver.filterVersionsByRepositoryType`): each REMOTE
+    repository's list keeps a version only when that repository serves its kind, by
+    `ArtifactUtils.isSnapshot` (case-blind `SNAPSHOT` suffix, `^(.*)-\d{8}\.\d{6}-\d+$`: not
+    `Artifact.isSnapshot`'s pattern); the local repository's list is unfiltered.
+  - a mirror serves what the repositories it covers serve (`mergeMirrors`: policies merged as
+    above, the first dominant).
+  Defaults stay clj's: `CENTRAL` serves snapshots (tools.deps' `standard-repos` set no
+  policy); `--java-dep` declares Central with snapshots disabled, as Maven's super POM does,
+  so a SNAPSHOT is never asked of it (`JavaClassPath.repositories`).
+  tools.deps `repo-policy` (clj 1.12.6.1673, `:update` read from its source and measured):
+  `:enabled` defaults true, `:update` `:daily`; an INTEGER `:update` is passed on as
+  `(str update)`, the string `"5"`, which Maven reads as an unknown policy and runs as `never`
+  (measured: no metadata request two days after the record, where `:daily` asks) -- not the
+  minutes its docstring promises; `ClojureDepsEdn.repositoryPolicy` does the same.
 - `file:` repositories are read in place. URLs are the layout path percent-encoded
   (Resolver's `new URI(null, null, path, null)`); a path leaving the repository's base or
   the local root is never fetched.
@@ -238,7 +269,34 @@ reports the collection's warnings with that failure; the parity test re-collects
   with `settings.security`. Fixtures in `MavenSettingsTest` are `mvn --encrypt-master-password`
   / `--encrypt-password` output of 3.9.16. Undecryptable: kept as written (Maven's
   `DefaultSettingsDecrypter` does the same) and the reason joins the 401 message.
-- Not read: `settings.xml` `<profiles>` / `<activeProfiles>` (their `<repositories>`; e67).
+- Profile repositories (`MavenSettings.repositories()`; `MavenResolver.Builder.build` puts them
+  AHEAD of the builder's list, an id the builder also names dropped there). Measured 2026-10-08,
+  Maven 3.9.16 (`mvn -X dependency:resolve`, `file:` repositories, "Repositories (dependencies)"):
+  Maven printed `[profile repositories, project repositories, central]` -- so a profile
+  repository is searched BEFORE Central, not after. Each active profile is injected ahead of
+  what is there: profiles defined pa, pb, pc give `[pc.., pb.., pa..]` whatever order
+  `<activeProfiles>` lists them, a profile's repositories in order; an id repeated keeps its
+  FIRST position with its LAST definition within a profile, and across profiles the later
+  profile's definition (a profile repository also beats a POM's of the same id); `central`
+  redefined by a profile sits at the profile's position with the profile's URL. Active =
+  named in `<activeProfiles>` (an unknown id ignored) OR activation holds (`jdk`, `os`,
+  `property` -- `env.NAME` included --, `file`, ANDed, as for a POM: `ProfileActivator`) OR
+  `activeByDefault`; a settings profile's `activeByDefault` is NOT retired by an activated one
+  (that rule is for POM-source profiles only; `<activation/>` empty -> inactive). Global and
+  user files: profiles user's first then each global id the user's lack (a same-id profile is
+  the user's whole), `<activeProfiles>` the union (`mvn -gs -s`). Policies: `<releases>` /
+  `<snapshots>` `enabled` (default true) and `updatePolicy` (unknown -> `never`, an
+  unparseable `interval:` -> 1440, as Resolver reads them). A repository without `url` or `id`
+  is refused whether or not its profile is active (`'profiles.profile[p].repositories
+  .repository.url' for X is missing`, Maven's wording); a `layout` other than `default` is
+  kept and fails without a request when contacted (`RepositoryRoute.unavailable`, Maven's
+  `Unsupported repository layout legacy`), and takes its mirror by `mirrorOfLayouts`. A URL
+  this resolver cannot read is `IllegalArgumentException` from `build()`, only for an active
+  profile. `deps.edn` does NOT honor them: `clj` 1.12.6 with a profile-only repository
+  (global `settings.xml` via `MAVEN_HOME`, the artifact only in that repository) fails
+  `Could not find artifact ... in central`, the same settings with a `central` mirror
+  resolves it; `ClojureDepsRepositories` builds its `MavenSettings` without profiles. The
+  item that asked for them after Central was written before this was measured.
 - POM-declared `<repositories>` are never consulted (`MavenBoundaryTest`).
 - Browser: no substitution of its own; a download reaches `Target_HttpDownloader`'s
   refusal (`get(String, HttpAccess)`, where every download converges). Native image: plain Java, no reflection or resources -- a `native-image` build of
@@ -270,7 +328,9 @@ were refused then).
 ## Tests
 `MavenOracleParityTest`, `MavenRepositoryTest` (metadata caching, update policy, not-found
 records, snapshots, `LATEST`/`RELEASE`, ranges across repositories, mirror routing, blocked
-mirrors, the access a route carries), `MavenSettingsTest` (parsing, decryption, global merge),
+mirrors, the access a route carries, per-repository release/snapshot policies;
+`oracle/policy-*.txt` are the same measured against Maven), `ClojureDepsFetchCliTest`
+(`:releases` / `:snapshots` of a `deps.edn` repository, measured against `clj`), `MavenSettingsTest` (parsing, decryption, global merge, profile repositories: order, activation, merge),
 `MavenSettingsTransportTest` (mirror behind an authenticating proxy over `HttpDownloader` and
 a local `HttpServer`), `HttpDownloaderAccessTest` (challenge, redirect scoping, headers, http
 proxy, the TLS tunnel through a `CONNECT` proxy with a keytool certificate), `MavenBoundaryTest`,

@@ -63,6 +63,8 @@ class ClojureDepsFetchCliTest {
 						<lastUpdated>20240101000000</lastUpdated></versioning></metadata>
 						"""
 					.getBytes(StandardCharsets.UTF_8));
+		publish(repo, "snap", "1.0-SNAPSHOT", "",
+				sources("fixture/snap.clj", "(ns fixture.snap) (defn tag [] \"snapshot\")"));
 		publish(repo, "greeting", "1.0",
 				dependency("words", "1.0", "") + dependency("absent-optional", "1.0", "<optional>true</optional>")
 						+ dependency("absent-test", "1.0", "<scope>test</scope>"),
@@ -214,6 +216,37 @@ class ClojureDepsFetchCliTest {
 	}
 
 	@Test
+	void aRepositoryServesOnlyTheKindsItsPoliciesEnable() throws Exception {
+		// the oracle's answers over a repository holding a release and a snapshot (clj
+		// 1.12.6, 2026-10-08): :releases {:enabled false} leaves the release absent and
+		// the snapshot found, :snapshots {:enabled false} the reverse
+		assertThat(fetched("snapshots-only", ":releases {:enabled false}", "fixture/snap", "1.0-SNAPSHOT"))
+			.isEqualTo("snapshot\n");
+		assertThat(fetched("releases-only", ":snapshots {:enabled false}", "fixture/words", "1.0"))
+			.isEqualTo("hello\n");
+		assertThat(fetched("always", ":snapshots {:update :always}", "fixture/snap", "1.0-SNAPSHOT"))
+			.isEqualTo("snapshot\n");
+		assertThat(refusal("no-release", ":releases {:enabled false}", "fixture/words", "1.0"))
+			.contains("fixture:words:jar:1.0 is in neither the local repository");
+		assertThat(refusal("no-snapshot", ":snapshots {:enabled false}", "fixture/snap", "1.0-SNAPSHOT"))
+			.contains("fixture:snap:jar:1.0-SNAPSHOT is in neither the local repository");
+	}
+
+	private static String fetched(String name, String policies, String lib, String version) throws Exception {
+		policyProject(name, policies, lib + " {:mvn/version \"" + version + "\"}");
+		String call = lib.equals("fixture/snap") ? "tag" : "word";
+		Path main = write(dir.resolve(name + "/main.clj"),
+				"(require '[" + lib.replace('/', '.') + " :as x])\n(println (x/" + call + "))\n");
+		return runCli(main.toString());
+	}
+
+	private static String refusal(String name, String policies, String lib, String version) throws Exception {
+		policyProject(name, policies, lib + " {:mvn/version \"" + version + "\"}");
+		Path main = write(dir.resolve(name + "/main.clj"), "(println :never)\n");
+		return String.valueOf(assertThatThrownBy(() -> runCli(main.toString())).actual().getMessage());
+	}
+
+	@Test
 	void aCoordinateTheOracleRefusesStopsTheProgramInItsWords() throws Exception {
 		project("badtag", "my/gitlib {:git/url \"" + dir.resolve("git/gitlib").toUri()
 				+ "\" :git/tag \"v9\" :git/sha \"" + c1 + "\"}", "");
@@ -277,6 +310,16 @@ class ClojureDepsFetchCliTest {
 		write(dir.resolve(name + "/deps.edn"),
 				"{:paths [\"src\"]" + more + " :mvn/repos {\"central\" nil \"clojars\" nil \"fixture\" {:url \""
 						+ dir.resolve("repo").toUri() + "\"}} :deps {" + deps + "}}\n");
+	}
+
+	/**
+	 * A project fetching from the fixture repository declared with the given policies.
+	 */
+	private static void policyProject(String name, String policies, String deps) throws IOException {
+		write(dir.resolve(name + "/deps.edn"),
+				"{:paths [\"src\"] :mvn/local-repo \"m2-" + name
+						+ "\" :mvn/repos {\"central\" nil \"clojars\" nil \"fixture\" {:url \""
+						+ dir.resolve("repo").toUri() + "\" " + policies + "}} :deps {" + deps + "}}\n");
 	}
 
 	private static String dependency(String artifact, String version, String more) {

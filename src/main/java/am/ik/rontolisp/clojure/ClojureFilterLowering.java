@@ -400,7 +400,7 @@ final class ClojureFilterLowering {
 		LispSymbol fun = new LispSymbol(ClojureLowering.mangle("group-by-fn"));
 		LispSymbol coll = new LispSymbol(ClojureLowering.mangle("group-by-coll"));
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(List.of(fun, coll)),
-				groupByForm(ctx, ClojureBindingLowering.FnArg.of(fun), ClojureSeqLowering.seqAllForm(ctx, coll)));
+				groupByForm(ctx, ClojureBindingLowering.FnArg.of(fun), ClojureSeqLowering.reducedAllForm(ctx, coll)));
 	}
 
 	/** {@code sort}: the seq view copied and sorted, with an optional comparator. */

@@ -16,6 +16,7 @@ import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispString;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.clojure.ClojureRepositories.MavenPolicy;
 import am.ik.rontolisp.clojure.ClojureRepositories.MavenRepository;
 import am.ik.rontolisp.clojure.ClojureRepositories.MavenSource;
 import am.ik.rontolisp.reader.LispReadException;
@@ -338,10 +339,9 @@ final class ClojureDepsEdn {
 	/**
 	 * The Maven repositories a merged map names, the oracle's {@code remote-repos}:
 	 * {@code central}, then {@code clojars}, then the others in the map's order, a
-	 * {@code nil} one removed and one whose {@code :releases} are disabled left out (it
-	 * serves no release, the only versions fetched here); and its
-	 * {@code :mvn/local-repo}. Only the top-level maps name them: a dependency's own
-	 * {@code :mvn/repos} is never read, as the oracle reads none.
+	 * {@code nil} one removed, each with its {@code :releases} and {@code :snapshots}
+	 * policies; and its {@code :mvn/local-repo}. Only the top-level maps name them: a
+	 * dependency's own {@code :mvn/repos} is never read, as the oracle reads none.
 	 * @param merged the merged map
 	 * @param files where a relative {@code :mvn/local-repo} is resolved
 	 * @param projectDir the directory it is relative to, or {@code null} for the working
@@ -362,18 +362,43 @@ final class ClojureDepsEdn {
 			if (config == null || isNil(config)) {
 				continue;
 			}
-			LispVal releases = mapGet(config, new LispSymbol(":releases"));
-			LispVal enabled = releases == null ? null : mapGet(releases, new LispSymbol(":enabled"));
-			if (enabled != null && ClojureLowerUtil.isSymbolNamed(enabled, "false")) {
-				continue;
-			}
 			if (!(mapGet(config, new LispSymbol(":url")) instanceof LispString url)) {
 				throw new LispReadException("the :mvn/repos entry \"" + id + "\" names no :url");
 			}
-			out.add(new MavenRepository(id, url.value()));
+			out.add(new MavenRepository(id, url.value(), repositoryPolicy(mapGet(config, new LispSymbol(":releases"))),
+					repositoryPolicy(mapGet(config, new LispSymbol(":snapshots")))));
 		}
 		String local = merged.mvnLocalRepo();
 		return new MavenSource(out, local == null ? null : files.resolve(projectDir, local));
+	}
+
+	/**
+	 * A {@code :releases} or {@code :snapshots} map as tools.deps' {@code repo-policy}
+	 * reads it: {@code :enabled} (default true) and {@code :update} (default
+	 * {@code :daily}). An integer {@code :update} is documented as minutes, but
+	 * tools.deps hands Maven the string {@code "5"} (measured with clj 1.12.6,
+	 * 2026-10-08), which Maven reads as an unknown policy and treats as {@code never}.
+	 * @param map the map, or {@code null} when the repository names none
+	 * @return the policy
+	 */
+	private static MavenPolicy repositoryPolicy(@Nullable LispVal map) {
+		if (map == null || !isMap(map)) {
+			return MavenPolicy.DEFAULT;
+		}
+		LispVal enabled = mapGet(map, new LispSymbol(":enabled"));
+		LispVal update = mapGet(map, new LispSymbol(":update"));
+		String spelling = "daily";
+		if (update instanceof LispInteger) {
+			spelling = "never";
+		}
+		else if (update != null) {
+			for (String name : List.of("always", "never", "daily")) {
+				if (ClojureLowerUtil.isSymbolNamed(update, ":" + name)) {
+					spelling = name;
+				}
+			}
+		}
+		return new MavenPolicy(enabled == null || !ClojureLowerUtil.isSymbolNamed(enabled, "false"), spelling);
 	}
 
 	private static <K, V> @Nullable SequencedMap<K, V> mergeMaps(@Nullable SequencedMap<K, V> into,

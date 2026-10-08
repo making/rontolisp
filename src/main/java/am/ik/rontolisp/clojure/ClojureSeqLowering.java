@@ -370,6 +370,36 @@ final class ClojureSeqLowering {
 	}
 
 	/**
+	 * The view of a collection a verb the oracle builds on {@code reduce} walks as a list
+	 * ({@code clojure.lisp}, "CollReduce and IKVReduce"): a record, deftype or reify with
+	 * its own {@code CollReduce} row answers what that reduction steps, anything else
+	 * itself -- an arm a program storing no such row sheds
+	 * ({@link ClojureArms.Family#REDUCIBLE}).
+	 */
+	static final String REDUCIBLE_ITEMS = "RONTOLISP::%CLOJURE-REDUCIBLE-ITEMS";
+
+	/**
+	 * The whole-collection view of an already-lowered collection a verb the oracle builds
+	 * on {@code reduce} walks ({@code group-by}, {@code frequencies}): the
+	 * {@link #REDUCIBLE_ITEMS} view under {@link #seqAllForm}.
+	 * @param lowered the lowered collection
+	 * @return the form answering the realized list view
+	 */
+	static LispVal reducedAllForm(ClojureLowering ctx, LispVal lowered) {
+		return seqAllForm(ctx, reducibleItemsForm(lowered));
+	}
+
+	/**
+	 * An already-lowered collection behind the {@link #REDUCIBLE_ITEMS} view: what an
+	 * {@code eduction} steps, which the oracle reduces.
+	 * @param lowered the lowered collection
+	 * @return the view
+	 */
+	static LispVal reducibleItemsForm(LispVal lowered) {
+		return ClojureLowerUtil.list(new LispSymbol(REDUCIBLE_ITEMS), lowered);
+	}
+
+	/**
 	 * The step past the head of an already-realized seq: {@code %clojure-seq-rest},
 	 * realizing the tail one level when it is a lazy wrapper (a strict tail is already a
 	 * seq). The loops over a {@link #seqForm} view step with it instead of {@code cdr}.

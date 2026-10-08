@@ -15,6 +15,7 @@ import java.util.zip.ZipInputStream;
 
 import am.ik.maven.MavenResolver;
 import am.ik.maven.RemoteRepository;
+import am.ik.maven.RepositoryPolicy;
 import am.ik.rontolisp.testsupport.JavaLibraryJar;
 import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.Test;
@@ -192,7 +193,11 @@ class JavaClassPathCliTest {
 					new RemoteRepository("clojars", RemoteRepository.CLOJARS.url())));
 		assertThat(all).extracting(RemoteRepository::id).containsExactly("central", "clojars");
 		assertThat(all.get(0).url()).isEqualTo("https://mirror.example/maven2/");
-		assertThat(JavaClassPath.repositories(List.of())).containsExactly(RemoteRepository.CENTRAL);
+		// Maven's super POM declares Central without snapshots: a SNAPSHOT is never asked
+		// of it, though a repository given (or redefining the id) serves them
+		assertThat(JavaClassPath.repositories(List.of()))
+			.containsExactly(RemoteRepository.CENTRAL.withSnapshots(RepositoryPolicy.DISABLED));
+		assertThat(all.get(0).snapshots()).isEqualTo(RepositoryPolicy.DEFAULT);
 	}
 
 	@Test
