@@ -28,6 +28,7 @@ interop エントリのすべてを、分野ごとにまとめています。**�
 | [clojure.pprint](reference/clojure-pprint.md) | プリティプリント: 右マージンの内側にレイアウトする `pprint`/`write`、`print-table`、コード用の `code-dispatch`、プログラムが拡張・置換できるディスパッチ |
 | [clojure.template](reference/clojure-template.md) | 式のテンプレート: `apply-template`、`do-template` |
 | [clojure.walk](reference/clojure-walk.md) | 入れ子のデータの汎用走査: `walk`/`postwalk`/`prewalk`、`-replace` の組、`keywordize-keys`/`stringify-keys` |
+| [clojure.zip](reference/clojure-zip.md) | ジッパーによる関数的な木の編集: `vector-zip`/`seq-zip`/`xml-zip`、移動、編集、深さ優先の巡回 |
 | [正規表現](reference/regex.md) | `re-find`/`re-seq`/`re-matches`、`re-matcher`/`re-groups`、`re-pattern` とパターンの `split`/`replace` |
 | [Ring アダプター](reference/ring.md) | `ring.adapter.rontolisp/run-server`: Ring ハンドラをすべてのトランスポートで提供 |
 | [Ring ユーティリティ](reference/ring-util.md) | 組み込みの `ring.util.*` と `ring.middleware.*`: レスポンスの組み立て、URL とフォームの符号化、パラメーターのミドルウェア |

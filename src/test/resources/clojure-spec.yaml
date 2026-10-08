@@ -8190,3 +8190,58 @@ cases:
       [[nil 2] [nil 3] [1]] [#{1} #{2} nil] [1 2 nil]
       ({:y 2} {:y 3} {:x 1}) :map
       [1 2 :compared] [1 1 nil]
+  - name: clojure-zip-moves-and-edits-like-the-oracle
+    # The built-in clojure.zip (.kb/clojure-frontend.md "clojure.jar namespaces"): vector, seq,
+    # xml and custom zippers, every move, edit, insertion and removal, the depth-first walk
+    # to its end loc, the refusals, and a loc's own shape. Every line is the oracle's
+    # (clj 1.12.6), on all four backends; no answer holds a map of two keys, since a hash
+    # map's walk order differs.
+    source: |
+      (ns zip-walk (:require [clojure.zip :as z]))
+      (def v (z/vector-zip [1 [2 3] [4 [5 6]] 7]))
+      (prn (z/node v) (z/branch? v) (z/children v) (z/path v) (z/lefts v) (z/rights v) (z/up v) (z/prev v))
+      (def d (z/down v))
+      (prn (z/node d) (z/path d) (z/lefts d) (z/rights d) (z/branch? d) (z/left d))
+      (prn (-> d z/right z/node) (-> d z/right z/down z/right z/node) (-> d z/right z/down z/up z/node))
+      (prn (-> d z/rightmost z/node) (-> d z/rightmost z/left z/node) (-> d z/rightmost z/leftmost z/node) (z/right (z/rightmost d)))
+      (prn (loop [loc v acc []] (if (z/end? loc) acc (recur (z/next loc) (conj acc (z/node loc))))))
+      (prn (z/root (z/edit (-> d z/right z/down) * 10)) (z/root (z/replace (z/right d) :x)))
+      (prn (z/root (z/insert-left d 0)) (z/root (z/insert-right d 0)))
+      (prn (z/root (z/insert-child (z/right d) :first)) (z/root (z/append-child (z/right d) :last)))
+      (prn (z/root (z/remove (-> d z/right z/down))) (z/node (z/remove (-> d z/right z/down))))
+      (prn (z/root (z/remove (-> d z/right z/right))) (z/node (z/remove (-> d z/right z/right))))
+      (prn (z/node (z/prev (-> d z/right z/right))) (z/node (z/prev (z/rightmost d))))
+      (def walked (loop [loc v] (if (z/end? loc) loc (recur (z/next (if (and (number? (z/node loc)) (odd? (z/node loc))) (z/edit loc inc) loc))))))
+      (prn (z/root walked) (z/end? walked) (z/node walked) (z/end? (z/next walked)))
+      (def s (z/seq-zip '(a (b c) (d (e)))))
+      (prn (z/node (z/down s)) (z/node (-> s z/down z/right z/down)) (z/root (-> s z/down z/right z/down (z/replace 'x))))
+      (prn (z/root (z/append-child s '(f))) (z/root (-> s z/down z/right z/remove)))
+      (def x (z/xml-zip {:tag :a :content [{:tag :b :content ["text"]}]}))
+      (prn (:tag (z/node (z/down x))) (z/node (-> x z/down z/down)) (z/branch? (-> x z/down z/down)))
+      (prn (-> (z/root (-> x z/down z/down (z/replace "new"))) :content first :content))
+      (prn (try (z/children d) (catch Exception e (ex-message e))))
+      (prn (try (z/insert-left v 0) (catch Exception e (ex-message e))) (try (z/remove v) (catch Exception e (ex-message e))))
+      (prn (mapv (juxt :id :seen) (:kids (z/root (z/edit (z/down (z/zipper map? (comp seq :kids) (fn [n c] (assoc n :kids (vec c))) {:kids [{:id 2}]})) assoc :seen true)))))
+      (prn [(d 0) (into (sorted-map) (d 1))])
+      (in-ns 'user)
+    expected: |
+      [1 [2 3] [4 [5 6]] 7] true (1 [2 3] [4 [5 6]] 7) nil nil nil nil nil
+      1 [[1 [2 3] [4 [5 6]] 7]] nil ([2 3] [4 [5 6]] 7) false nil
+      [2 3] 3 [2 3]
+      7 [4 [5 6]] 1 nil
+      [[1 [2 3] [4 [5 6]] 7] 1 [2 3] 2 3 [4 [5 6]] 4 [5 6] 5 6 7]
+      [1 [20 3] [4 [5 6]] 7] [1 :x [4 [5 6]] 7]
+      [0 1 [2 3] [4 [5 6]] 7] [1 0 [2 3] [4 [5 6]] 7]
+      [1 [:first 2 3] [4 [5 6]] 7] [1 [2 3 :last] [4 [5 6]] 7]
+      [1 [3] [4 [5 6]] 7] [3]
+      [1 [2 3] 7] 3
+      3 6
+      [2 [2 4] [4 [6 6]] 8] true [2 [2 4] [4 [6 6]] 8] true
+      a b (a (x c) (d (e)))
+      (a (b c) (d (e)) (f)) (a (d (e)))
+      :b "text" false
+      ["new"]
+      "called children on a leaf node"
+      "Insert at top" "Remove at top"
+      [[2 true]]
+      [1 {:l [], :pnodes [[1 [2 3] [4 [5 6]] 7]], :ppath nil, :r ([2 3] [4 [5 6]] 7)}]

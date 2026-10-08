@@ -134,7 +134,7 @@ answered `2 5 3` before).
 | `clojure.edn` (`read-string` `read`) | `ClojureEdnLowering`: one call to `rontolisp::%clojure-edn-read-string-1` / `-read-string` / `-read` after a lower-time arity check in the oracle's wording; as a value `#'...-v` | "Reading", clojure.edn |
 | `clojure.walk` | Clojure source in the jar written for this front end, loaded like a project file (a startup namespace: on its first qualified name too) | "clojure.jar namespaces" |
 | `clojure.template` | the same, loaded at its `require` | "clojure.jar namespaces" |
-| `clojure.data` | the same, loaded at its `require` | "clojure.jar namespaces" |
+| `clojure.data` `clojure.zip` | the same, loaded at its `require` | "clojure.jar namespaces" |
 | `clojure.pprint` | the same; its layout engine is `rontolisp.internal.pprint/NAME`, one call to `rontolisp::%clojure-pp-NAME` (`ClojureKernelLowering`) | "clojure.jar namespaces" |
 | `subs`, `.substring` | `%clojure-subs`, the refusal family's alias of `subseq` ("Refusals") | a bound outside a string is the oracle's `StringIndexOutOfBoundsException` where a class is read; a double or ratio bound is truncated (`%clojure-string-bound`), a non-number one is refused as the oracle does ("Refusals") |
 | `format` | the Java directives translated to `format` over Clojure-rendered arguments | literal format string only; `%s` like `str` (nil spells `null`), `%b`; `%e`/`%g`, flags and the rest refused |
@@ -1237,7 +1237,7 @@ function and a directive must be a top-level form.
 **The map-shaped namespaces of clojure.jar ship as Clojure source written for this front
 end** (`src/main/resources/am/ik/rontolisp/clojure/lib/clojure/**`, the
 `ClojureBuiltinNamespaces` mechanism of "Ring util namespaces"): `clojure.walk`,
-`clojure.template`, `clojure.pprint`, `clojure.data`.
+`clojure.template`, `clojure.pprint`, `clojure.data`, `clojure.zip`.
 - **Licensing**: clojure.jar is EPL-1.0, this project Apache-2.0, so nothing of it is
   copied -- no code, no docstring. Each file is written from the documented behaviour and
   diffed against the oracle; a one-line var dictated by its contract
@@ -1341,10 +1341,15 @@ end** (`src/main/resources/am/ik/rontolisp/clojure/lib/clojure/**`, the
   shared key comes twice and merges alike), and answers a lazy seq; the sequential diff
   answers vectors. Deviation: a part that is a map of several keys may print its keys in
   another order (a key merged again moves to the end here; "Deviations": walk order).
+- `clojure.zip`: a loc is the oracle's own shape (`[node path]`, the path a map of `:l`
+  `:pnodes` `:ppath` `:r` and `:changed?`, the zipper functions in the loc's metadata, the
+  end loc `[node :end]` without metadata) since programs print and destructure locs; the
+  error words (`called children on a leaf node`, `Insert at top`, `Remove at top`, as
+  `Exception`) are the oracle's.
 - Pins: clojure-spec `clojure-walk-*` (all four backends, oracle-identical, the first
   case loading `clojure.walk` through a qualified name only),
   `clojure-template-substitutes-per-group-of-values`, `clojure-pprint-*`,
-  `clojure-data-diff-compares-like-the-oracle`,
+  `clojure-data-diff-compares-like-the-oracle`, `clojure-zip-moves-and-edits-like-the-oracle`,
   `ClojureLanguageNamespacesTest` (the startup load, a project file never shadowing a
   startup namespace, a contrib `clojure.*` namespace on the source path, the refusal of
   one not built in).

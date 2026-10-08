@@ -46,7 +46,7 @@ final class ClojureBuiltinNamespaces {
 			Map.entry("ring.util.mime-type", Map.of()), Map.entry("ring.middleware.params", Map.of()),
 			Map.entry("ring.middleware.keyword-params", Map.of()), Map.entry("ring.middleware.content-type", Map.of()),
 			Map.entry("clojure.walk", Map.of()), Map.entry("clojure.template", Map.of()),
-			Map.entry("clojure.data", Map.of()),
+			Map.entry("clojure.data", Map.of()), Map.entry("clojure.zip", Map.of()),
 			Map.entry("clojure.pprint",
 					Map.of("cl-format", "Common Lisp format directives over Clojure values are not built in",
 							"formatter", "Common Lisp format directives over Clojure values are not built in",

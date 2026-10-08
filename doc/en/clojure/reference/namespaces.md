@@ -30,6 +30,7 @@ source path like any other; any other namespace of Clojure's own is an error.
 | `clojure.walk` | [clojure.walk](clojure-walk.md) |
 | `clojure.edn` | [clojure.edn](clojure-edn.md) |
 | `clojure.data` | [clojure.data](clojure-data.md) |
+| `clojure.zip` | [clojure.zip](clojure-zip.md) |
 | `clojure.pprint` | [clojure.pprint](clojure-pprint.md) |
 | `clojure.template` | [clojure.template](clojure-template.md) |
 | `clojure.java.io` (`reader` only) | [IO](io.md) |
