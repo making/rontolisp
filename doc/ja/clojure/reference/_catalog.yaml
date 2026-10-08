@@ -315,6 +315,12 @@ categories:
       - { slug: special-symbol-p, name: "special-symbol?" }
       - { slug: reader-conditional-p, name: "reader-conditional?" }
       - { slug: tagged-literal-p, name: "tagged-literal?" }
+  - title: "インスタントと UUID"
+    index_page: clojure/reference/instants.md
+    functions:
+      - { slug: inst-ms, name: "inst-ms" }
+      - { slug: random-uuid, name: "random-uuid" }
+      - { slug: parse-uuid, name: "parse-uuid" }
   - title: "状態"
     index_page: clojure/reference/state.md
     functions:

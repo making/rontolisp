@@ -159,6 +159,17 @@ final class ClojureCoreLowering {
 			case "reader-conditional", "tagged-literal":
 				arity(name, n, 2, 2);
 				return worker(name, ctx.lower(items.get(1)), ctx.lower(items.get(2)));
+			case "inst-ms", "inst-ms*":
+				// the Inst protocol's one method: a Date's or a Timestamp's
+				// milliseconds, a host Date's or Instant's
+				arity(name, n, 1, 1);
+				return worker("inst-ms", ctx.lower(items.get(1)));
+			case "parse-uuid":
+				arity(name, n, 1, 1);
+				return worker(name, ctx.lower(items.get(1)));
+			case "random-uuid":
+				arity(name, n, 0, 0);
+				return worker(name);
 			case "read-line":
 				// the next line of *in*, nil past the end, a closed one's IOException,
 				// like the oracle's
@@ -190,8 +201,9 @@ final class ClojureCoreLowering {
 					"unchecked-add", "unchecked-subtract", "unchecked-multiply", "unchecked-add-int",
 					"unchecked-subtract-int", "unchecked-multiply-int", "unchecked-divide-int",
 					"unchecked-remainder-int", "run!", "println", "print", "prn", "pr", "read-line",
-					"reader-conditional", "tagged-literal" ->
+					"reader-conditional", "tagged-literal", "inst-ms", "parse-uuid", "random-uuid" ->
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), runtime(name + "-v"));
+			case "inst-ms*" -> ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), runtime("inst-ms-v"));
 			case "map-entry?" -> ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), runtime("map-entry-p-v"));
 			case "pmap" -> ClojureSeqLowering.mapValue(ctx);
 			case "test" -> ClojureVarLowering.testValue();

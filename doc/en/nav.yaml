@@ -251,6 +251,8 @@ sections:
             title: "Numbers and predicates"
           - file: clojure/reference/predicates.md
             title: "Type and collection predicates"
+          - file: clojure/reference/instants.md
+            title: "Instants and UUIDs"
           - file: clojure/reference/state.md
             title: "State"
           - file: clojure/reference/multimethods.md
@@ -277,6 +279,8 @@ sections:
             title: "(clojure.datafy)"
           - file: clojure/reference/clojure-edn.md
             title: "(clojure.edn)"
+          - file: clojure/reference/clojure-instant.md
+            title: "(clojure.instant)"
           - file: clojure/reference/clojure-pprint.md
             title: "(clojure.pprint)"
           - file: clojure/reference/clojure-stacktrace.md

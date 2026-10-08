@@ -15,6 +15,7 @@ interop エントリのすべてを、分野ごとにまとめています。**�
 | [高階関数](reference/higher-order.md) | `comp`・`partial`・`complement`・`constantly`・`identity`・`memoize`・`trampoline`、`juxt`・`fnil`・`every-pred`・`some-fn`・`min-key`・`max-key` |
 | [数値と述語](reference/numbers.md) | 算術、比較、型述語 |
 | [型・コレクション述語](reference/predicates.md) | `seq?`/`map?`/`keyword?`/`int?` などの種類の判定、`identical?`、`distinct?`、`extends?` |
+| [インスタントと UUID](reference/instants.md) | `#inst` と `#uuid` の値: `inst-ms`、`random-uuid`、`parse-uuid` |
 | [状態](reference/state.md) | `atom`/`deref`/`swap!` と volatile 三兄弟 |
 | [マルチメソッドと階層](reference/multimethods.md) | `defmulti`/`defmethod`、`derive` と階層参照 |
 | [プロトコル、レコード、型](reference/protocols.md) | `defprotocol`・`defrecord`・`deftype`、`reify`、`extend` 系と `satisfies?` |
@@ -26,6 +27,7 @@ interop エントリのすべてを、分野ごとにまとめています。**�
 | [clojure.data](reference/clojure-data.md) | 再帰的な比較: 片側だけにあるものと両方にあるものを返す `diff` |
 | [clojure.datafy](reference/clojure-datafy.md) | 値のデータ化とデータからの移動: `clojure.core.protocols` のプロトコルの上の `datafy`/`nav` |
 | [clojure.edn](reference/clojure-edn.md) | EDN データの読み取り: `:eof`・`:readers`・`:default` を取る `read-string`/`read` |
+| [clojure.instant](reference/clojure-instant.md) | RFC 3339 タイムスタンプの読み取り: `parse-timestamp`、`validated`、`read-instant-date`/`-timestamp`/`-calendar` |
 | [clojure.pprint](reference/clojure-pprint.md) | プリティプリント: 右マージンの内側にレイアウトする `pprint`/`write`、`print-table`、コード用の `code-dispatch`、プログラムが拡張・置換できるディスパッチ |
 | [clojure.stacktrace](reference/clojure-stacktrace.md) | スロー可能オブジェクトとその原因の出力: `root-cause`、`print-throwable`、`print-stack-trace`、`print-cause-trace` |
 | [clojure.template](reference/clojure-template.md) | 式のテンプレート: `apply-template`、`do-template` |

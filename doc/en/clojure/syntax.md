@@ -16,7 +16,9 @@ a pattern value (see [Regular expressions](reference/regex.md)); `#'x` reads as
 literal it attaches like `with-meta` (see
 [Semantics](semantics.md#state-and-dynamic-scope)). A record literal
 (`#ns.Name{...}` / `#ns.Name[...]`) reads to the record over its unevaluated body (see
-[defrecord](reference/defrecord.md)). A namespace map gives its keys a namespace:
+[defrecord](reference/defrecord.md)); `#inst` and `#uuid` read as the values of
+[Tagged literals](#tagged-literals), and any other undotted tag has no reader function. A
+namespace map gives its keys a namespace:
 `#:user{:id 1 :_/raw 2 name 3}` reads as `{:user/id 1 :raw 2 user/name 3}` (each keyword or
 symbol key without a namespace takes it, one qualified by `_` loses it), and `#::{...}` /
 `#::alias{...}` take the current namespace or the alias's for their keyword keys.
@@ -75,3 +77,25 @@ the literals whose lowering [Semantics](semantics.md) describes. A map or set li
 key that is `=` to an earlier one (`Duplicate key`): `{1 :a 1N :b}` and `#{[1] (1)}` are
 refused, `{1 :a 1.0 :b}` is not. Keys that are only equal once evaluated, as in
 `{(+ 1 2) :a 3 :b}`, are not checked.
+
+## Tagged literals
+
+`#inst` and `#uuid` read through the oracle's default data readers while the form is read:
+`#inst "2020-06-15T10:20:30.456+02:00"` is an instant (the oracle's `java.util.Date`),
+`#uuid "550e8400-e29b-41d4-a716-446655440000"` a UUID (its `java.util.UUID`). A timestamp is
+`yyyy`, then optionally `-MM`, `-dd`, `Thh`, `:mm`, `:ss` and a fraction, each part needing
+the ones before it, then optionally `Z` or an offset `+hh:mm`/`-hh:mm`; a date before
+1582-10-15 is the Julian calendar's, like the oracle's. A field out of range
+(`#inst "2021-02-29"`), a timestamp of another shape and a malformed UUID are the oracle's
+read errors, positioned after the string. [Instants and UUIDs](reference/instants.md) has
+what the two values print, compare and answer.
+
+```clojure
+(prn #inst "2020-06-15T10:20:30.456+02:00" #uuid "1-1-1-1-1")
+(println (str #inst "2020") (inst-ms #inst "1970-01-01T00:00:01Z"))
+```
+
+```
+#inst "2020-06-15T08:20:30.456-00:00" #uuid "00000001-0001-0001-0001-000000000001"
+Wed Jan 01 00:00:00 UTC 2020 1000
+```

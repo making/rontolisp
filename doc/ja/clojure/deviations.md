@@ -325,6 +325,11 @@
   （オラクルは先にクラスが読み込まれている必要があります）。deftype のリテラルは
   拒否されます。`read` はストリームを取り、素の `clojure.java.io/reader` も受け付けます
   （オラクルは `PushbackReader` を要求します）。ホストのリーダは拒否します。
+- `#inst` と `#uuid` は、すべてのバックエンドでオラクルの `java.util.Date` と
+  `java.util.UUID` として読まれます。わずかな違い（インスタントの `str` は UTC で答える、
+  interop で得たホストの値は読んだ値と `=` にならない）は[インスタントと UUID](reference/instants.md)
+  にあります。`*data-readers*` と `data_readers.clj` は読まないため、ドットを含まないそれ以外の
+  タグには、ソースでも `read-string` でもリーダ関数がありません。
 - `*out*`/`*in*`/`*err*` は `*standard-output*`/`*standard-input*`/`*error-output*`
   です（再束縛は標準ストリームの再束縛になります）。ルートで読んだ `*out*` と `*in*` は
   プロセスの標準ストリームを指すストリーム値です。

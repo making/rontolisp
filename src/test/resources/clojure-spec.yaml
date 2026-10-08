@@ -7959,6 +7959,183 @@ cases:
     expected: |
       ("Duplicate key: 1" "Duplicate key: (1)" "Duplicate key: [1]" "Duplicate key: {:a 1, :b 2}" "Duplicate key: #{1 2}" "Duplicate key: a" "Duplicate key: null" "Duplicate key: a" "Duplicate key: a" "Duplicate key: (1)" "Duplicate key: [1]")
       [:a :b 2] 4 "Map literal must contain an even number of forms"
+  - name: inst-literals-print-compare-and-key-like-the-oracles-dates
+    # An #inst literal is the oracle's java.util.Date: printed as #inst in UTC under
+    # print and pr alike, str its toString in UTC, = and compare by its milliseconds, a map
+    # or set key found by =. Every line is the oracle's (clj 1.12.6), on all four backends.
+    source: |
+      (def tv-d #inst "2020-06-15T10:20:30.456+02:00")
+      (prn tv-d)
+      (println tv-d (str tv-d) (inst? tv-d) (inst-ms tv-d))
+      (println (= tv-d #inst "2020-06-15T08:20:30.456Z") (compare tv-d #inst "2021") (compare #inst "2021" tv-d) (compare tv-d nil))
+      (prn (sort [#inst "2021" #inst "1000-01-01" tv-d]) (sorted-set #inst "2021" #inst "2019" #inst "2020"))
+      (prn [#inst "2020" #inst "2020-02" #inst "2020-02-29T23:59:60-01:30" #inst "2020-01-01T10:20:30.123456789Z"])
+      (prn (str [tv-d]) (pr-str tv-d) (print-str tv-d) (format "%s" #inst "2020"))
+      (println (get {#inst "2020" :a} #inst "2020-01-01T00:00:00Z") (contains? #{tv-d} #inst "2020-06-15T08:20:30.456Z"))
+      (prn (distinct [#inst "2020" #inst "2020-01-01T00:00Z" #inst "2021"]))
+    expected: |
+      #inst "2020-06-15T08:20:30.456-00:00"
+      #inst "2020-06-15T08:20:30.456-00:00" Mon Jun 15 08:20:30 UTC 2020 true 1592209230456
+      true -1 1 1
+      (#inst "1000-01-01T00:00:00.000-00:00" #inst "2020-06-15T08:20:30.456-00:00" #inst "2021-01-01T00:00:00.000-00:00") #{#inst "2019-01-01T00:00:00.000-00:00" #inst "2020-01-01T00:00:00.000-00:00" #inst "2021-01-01T00:00:00.000-00:00"}
+      [#inst "2020-01-01T00:00:00.000-00:00" #inst "2020-02-01T00:00:00.000-00:00" #inst "2020-03-01T01:30:00.000-00:00" #inst "2020-01-01T10:20:30.123-00:00"]
+      "[#inst \"2020-06-15T08:20:30.456-00:00\"]" "#inst \"2020-06-15T08:20:30.456-00:00\"" "#inst \"2020-06-15T08:20:30.456-00:00\"" "Wed Jan 01 00:00:00 UTC 2020"
+      :a true
+      (#inst "2020-01-01T00:00:00.000-00:00" #inst "2021-01-01T00:00:00.000-00:00")
+  - name: inst-literals-take-the-julian-calendar-before-1582-like-the-oracle
+    # A date before 1582-10-15 is the Julian calendar's, like the oracle's
+    # GregorianCalendar (1582-10-10 is the Julian date of 1582-10-20). The oracle's compiler
+    # embeds a Date constant by printing it and reading it back, so a literal of the year 0
+    # (1 BC) comes back as the year 1. Every line is the oracle's (clj 1.12.6), on all four
+    # backends.
+    source: |
+      (prn [#inst "1582-10-04" #inst "1582-10-10" #inst "1582-10-15" #inst "1000-01-01"])
+      (println (map inst-ms [#inst "1582-10-04" #inst "1582-10-15" #inst "1000-01-01" #inst "0001-01-01"]))
+      (println (str #inst "0999-03-04T05:06:07") "/" (str #inst "1582-10-04"))
+      (prn #inst "0000-01-01" (inst-ms #inst "0000-01-01") (str #inst "0000-01-01T00:00:00+01:00"))
+      (prn (read-string "#inst \"0000-01-01T00:00:00+01:00\"") (str (read-string "#inst \"0000-01-01T00:00:00+01:00\"")))
+    expected: |
+      [#inst "1582-10-04T00:00:00.000-00:00" #inst "1582-10-20T00:00:00.000-00:00" #inst "1582-10-15T00:00:00.000-00:00" #inst "1000-01-01T00:00:00.000-00:00"]
+      (-12219379200000 -12219292800000 -30609792000000 -62135769600000)
+      Sat Mar 04 05:06:07 UTC 999 / Thu Oct 04 00:00:00 UTC 1582
+      #inst "0001-01-01T00:00:00.000-00:00" -62135769600000 "Sun Dec 31 23:00:00 UTC 2"
+      #inst "0002-12-31T23:00:00.000-00:00" "Wed Dec 31 23:00:00 UTC 2"
+  - name: uuid-literals-print-compare-and-parse-like-the-oracles-uuids
+    # A #uuid literal is the oracle's java.util.UUID: printed as #uuid, str its
+    # canonical lowercase spelling, compare by its halves as signed longs (so f... sorts
+    # before 0...), parse-uuid UUID.fromString's lenient read or nil. Every line is the
+    # oracle's (clj 1.12.6), on all four backends.
+    source: |
+      (def tv-u #uuid "550e8400-e29b-41d4-a716-446655440000")
+      (prn tv-u #uuid "1-1-1-1-1")
+      (println tv-u (str tv-u) (uuid? tv-u) (uuid? (str tv-u)) (= tv-u (parse-uuid "550E8400-E29B-41D4-A716-446655440000")))
+      (println (compare tv-u #uuid "f50e8400-e29b-41d4-a716-446655440001") (compare tv-u tv-u) (compare nil tv-u))
+      (prn (sort [#uuid "80000000-0000-0000-0000-000000000000" #uuid "00000000-0000-0000-0000-000000000002" #uuid "7fffffff-0000-0000-0000-000000000000"]))
+      (prn (map parse-uuid ["1-1-1-1-1" "+1-1-1-1-1" "123456789-1-1-1-1" "1-1-1-1-fffffffffffff" "-1-1-1-1-1" "1--1-1-1-1" "1-1-1-1-1-1" "550e8400-e29b-41d4-a716-4466554400000" "" "0x1-1-1-1-1" "550e8400-e29b-41d4-a716-44665544000g"]))
+      (let [r (random-uuid)] (println (uuid? r) (.version r) (.variant r) (= r (parse-uuid (str r))) (count (str r)) (= r (random-uuid))))
+      (prn (into (sorted-map) {#uuid "2-2-2-2-2" :b #uuid "1-1-1-1-1" :a}) (get {tv-u 1} (parse-uuid (str tv-u))))
+    expected: |
+      #uuid "550e8400-e29b-41d4-a716-446655440000" #uuid "00000001-0001-0001-0001-000000000001"
+      #uuid "550e8400-e29b-41d4-a716-446655440000" 550e8400-e29b-41d4-a716-446655440000 true false true
+      1 0 -1
+      (#uuid "80000000-0000-0000-0000-000000000000" #uuid "00000000-0000-0000-0000-000000000002" #uuid "7fffffff-0000-0000-0000-000000000000")
+      (#uuid "00000001-0001-0001-0001-000000000001" #uuid "00000001-0001-0001-0001-000000000001" #uuid "23456789-0001-0001-0001-000000000001" #uuid "00000001-0001-0001-0001-ffffffffffff" nil nil nil nil nil nil nil)
+      true 4 2 true 36 false
+      {#uuid "00000001-0001-0001-0001-000000000001" :a, #uuid "00000002-0002-0002-0002-000000000002" :b} 1
+  - name: inst-and-uuid-predicates-and-refusals-are-the-oracles
+    # inst? takes a Date (and a Timestamp), uuid? a UUID; inst-ms of anything else
+    # is the Inst protocol's refusal, and compare across kinds the oracle's
+    # ClassCastException. Every line is the oracle's (clj 1.12.6), on all four backends.
+    source: |
+      (println (map inst? [#inst "2020" #uuid "1-1-1-1-1" nil "2020" 1]) (map uuid? [#inst "2020" #uuid "1-1-1-1-1" nil "x"]))
+      (println (try (inst-ms "2020") (catch IllegalArgumentException e (ex-message e))))
+      (println (try (inst-ms* nil) (catch IllegalArgumentException e (ex-message e))))
+      (println (try (compare #inst "2020" #uuid "1-1-1-1-1") (catch ClassCastException e "ClassCastException")))
+      (println (try (parse-uuid nil) (catch NullPointerException e "NullPointerException")) (try (parse-uuid 1) (catch ClassCastException e "ClassCastException")))
+      (println (.getTime #inst "1970-01-01T00:00:01Z") (.before #inst "2020" #inst "2021") (.after #inst "2020" #inst "2021") (.compareTo #inst "2020" #inst "2021"))
+      (println (.getMostSignificantBits #uuid "1-1-1-1-1") (.getLeastSignificantBits #uuid "ffffffff-ffff-ffff-ffff-ffffffffffff") (.variant #uuid "1-1-1-c000-1") (.toString #uuid "1-1-1-1-1"))
+    expected: |
+      (true false false false false) (false true false false)
+      No implementation of method: :inst-ms* of protocol: #'clojure.core/Inst found for class: java.lang.String
+      No implementation of method: :inst-ms* of protocol: #'clojure.core/Inst found for class: nil
+      ClassCastException
+      NullPointerException ClassCastException
+      1000 true false -1
+      4295032833 -1 6 00000001-0001-0001-0001-000000000001
+  - name: read-string-and-clojure-edn-read-inst-and-uuid-like-the-oracle
+    # read-string and clojure.edn read #inst and #uuid through the oracle's default
+    # data readers (EDN's :readers first, then those, then :default), refusing a timestamp
+    # or UUID they do not take in the oracle's words; inside a preserved reader conditional
+    # a tag stays a tagged literal. Every line is the oracle's (clj 1.12.6), on all four
+    # backends.
+    source: |
+      (prn (read-string "[#inst \"1582-10-10\" #uuid \"1-1-1-1-1\" #inst \"2020-01-01T23:59:60+01:00\"]"))
+      (prn (clojure.edn/read-string "#inst \"2020-01-01T10:20:30.123456789+05:30\"") (clojure.edn/read-string "#uuid \"FFFFFFFF-ffff-FFFF-ffff-FFFFFFFFFFFF\""))
+      (prn (clojure.edn/read-string {:readers {'inst identity}} "#inst \"2020\"") (clojure.edn/read-string {:readers {'uuid str}} "#uuid \"x\"") (clojure.edn/read-string {:default vector} "#inst \"2020\""))
+      (prn (read-string {:read-cond :preserve} "#?(:clj #inst \"2020\")") (read-string {:read-cond :allow} "#?(:clj #inst \"2020\")"))
+      (doseq [s ["#inst \"2021-02-29\"" "#inst \"2020-13\"" "#inst \"2020-01-01T24:00\"" "#inst \"2020-01-01T23:58:60\"" "#inst \"2020-01-01T10:20:30+24:00\"" "#inst \"2020-01-01T10:20:30+0530\"" "#inst \"2020-1-1\"" "#uuid \"bad\"" "#uuid \"1-1-1-1-g\"" "#uuid \"1-1-1-1-8000000000000000\"" "#uuid \"1-1-1-1-\"" "#uuid \"0000000000000000000000000000000000001\"" "#uuid 1" "{#inst \"2020\" 1 #inst \"2020-01-01T00:00:00Z\" 2}" "#{#uuid \"1-1-1-1-1\" #uuid \"00000001-0001-0001-0001-000000000001\"}"]]
+        (println (try (read-string s) (catch Exception e (str (.getName (class e)) ": " (ex-message e))))))
+    expected: |
+      [#inst "1582-10-20T00:00:00.000-00:00" #uuid "00000001-0001-0001-0001-000000000001" #inst "2020-01-01T23:00:00.000-00:00"]
+      #inst "2020-01-01T04:50:30.123-00:00" #uuid "ffffffff-ffff-ffff-ffff-ffffffffffff"
+      "2020" "x" #inst "2020-01-01T00:00:00.000-00:00"
+      #?(:clj #inst "2020") #inst "2020-01-01T00:00:00.000-00:00"
+      java.lang.RuntimeException: failed: (<= 1 days (days-in-month months (leap-year? years)))
+      java.lang.RuntimeException: failed: (<= 1 months 12)
+      java.lang.RuntimeException: failed: (<= 0 hours 23)
+      java.lang.RuntimeException: failed: (<= 0 seconds (if (= minutes 59) 60 59))
+      java.lang.RuntimeException: failed: (<= 0 offset-hours 23)
+      java.lang.RuntimeException: Unrecognized date/time syntax: 2020-01-01T10:20:30+0530
+      java.lang.RuntimeException: Unrecognized date/time syntax: 2020-1-1
+      java.lang.IllegalArgumentException: Invalid UUID string: bad
+      java.lang.NumberFormatException: Error at index 0 in: "g"
+      java.lang.NumberFormatException: Error at index 15 in: "8000000000000000"
+      java.lang.NumberFormatException: For input string: "" under radix 16
+      java.lang.IllegalArgumentException: UUID string too large
+      java.lang.IllegalArgumentException: #uuid data reader expected string
+      java.lang.IllegalArgumentException: Duplicate key: Wed Jan 01 00:00:00 UTC 2020
+      java.lang.IllegalArgumentException: Duplicate key: 00000001-0001-0001-0001-000000000001
+  - name: clojure-instant-parses-validates-and-reads-three-instants
+    # The built-in clojure.instant: parse-timestamp matches like the oracle's pattern
+    # (2020-05:30 is the year 2020 at -05:30), validated checks in the oracle's order and
+    # words, and the three readers make a Date, a Timestamp (nanoseconds kept, = and compare
+    # against a Date one-sided like the oracle's) and a Calendar (its offset kept, = by
+    # instant and zone). Every line is the oracle's (clj 1.12.6), on all four backends.
+    source: |
+      (require '[clojure.instant :as tv-inst])
+      (prn (tv-inst/parse-timestamp vector "2020-01-01T10:20:30.123456789+05:30") (tv-inst/parse-timestamp vector "2020-05:30") (tv-inst/parse-timestamp vector "2020Z"))
+      (prn ((tv-inst/validated vector) 2020 2 29 0 59 60 0 -1 23 59))
+      (println (try ((tv-inst/validated vector) 2021 2 29 0 0 0 0 0 0 0) (catch RuntimeException e (ex-message e))))
+      (println (try (tv-inst/parse-timestamp vector "2020-01-01T10:20:30.Z") (catch RuntimeException e (ex-message e))))
+      (prn (tv-inst/read-instant-date "2020-01-01T10:20:30.5-01:00") (tv-inst/read-instant-timestamp "1969-12-31T23:59:59.5Z") (inst-ms (tv-inst/read-instant-timestamp "1969-12-31T23:59:59.5Z")))
+      (println (str (tv-inst/read-instant-timestamp "2020-01-01T00:00:00.120")) (str (tv-inst/read-instant-timestamp "2020-01-01")))
+      (prn (tv-inst/read-instant-calendar "2020-01-01T10:20:30.123456789+05:30") (tv-inst/read-instant-calendar "2020-01-01T00:00:00-00:00"))
+      (println (= (tv-inst/read-instant-calendar "2020-01-01T00:00:00-00:00") (tv-inst/read-instant-calendar "2020-01-01T00:00:00Z")) (= (tv-inst/read-instant-calendar "2020") (tv-inst/read-instant-calendar "2020-01-01T00:00:00Z")))
+      (println (inst? (tv-inst/read-instant-calendar "2020")) (inst? (tv-inst/read-instant-timestamp "2020")))
+      (let [d #inst "2020" ts (tv-inst/read-instant-timestamp "2020-01-01T00:00:00.0005Z")] (println (= d ts) (= ts d) (compare d ts) (compare ts d)))
+      (prn (clojure.edn/read-string {:readers {'inst tv-inst/read-instant-timestamp}} "#inst \"2020-01-01T00:00:00.123456789+01:00\""))
+    expected: |
+      [2020 1 1 10 20 30 123456789 1 5 30] [2020 1 1 0 0 0 0 -1 5 30] [2020 1 1 0 0 0 0 0 0 0]
+      [2020 2 29 0 59 60 0 -1 23 59]
+      failed: (<= 1 days (days-in-month months (leap-year? years)))
+      Unrecognized date/time syntax: 2020-01-01T10:20:30.Z
+      #inst "2020-01-01T11:20:30.500-00:00" #inst "1969-12-31T23:59:59.500000000-00:00" -500
+      2020-01-01 00:00:00.12 2020-01-01 00:00:00.0
+      #inst "2020-01-01T10:20:30.123+05:30" #inst "2020-01-01T00:00:00.000+00:00"
+      false true
+      false true
+      true false 0 1
+      #inst "2019-12-31T23:00:00.123456789-00:00"
+  - name: inst-and-uuid-values-dispatch-and-cross-macros-like-the-oracles
+    # A multimethod on class and a protocol dispatch on java.util.Date and
+    # java.util.UUID (a Timestamp takes the Date method through the class hierarchy), instance?
+    # reads their classes, and a macro both takes and answers one. Every line is the
+    # oracle's (clj 1.12.6), on all four backends.
+    source: |
+      (defmulti tv-kind class)
+      (defmethod tv-kind java.util.Date [_] :date)
+      (defmethod tv-kind java.util.UUID [_] :uuid)
+      (defmethod tv-kind :default [_] :other)
+      (println (map tv-kind [#inst "2020" #uuid "1-1-1-1-1" (clojure.instant/read-instant-timestamp "2020") (clojure.instant/read-instant-calendar "2020") 1]))
+      (defprotocol TvStamp (tv-stamp [x]))
+      (extend-protocol TvStamp java.util.Date (tv-stamp [x] (inst-ms x)) java.util.UUID (tv-stamp [x] (str x)))
+      (println (map tv-stamp [#inst "1970-01-01T00:00:01Z" #uuid "1-1-1-1-1"]) (satisfies? TvStamp #inst "2020"))
+      (println (instance? java.util.Date #inst "2020") (instance? Comparable #uuid "1-1-1-1-1") (instance? java.util.UUID #inst "2020") (instance? java.util.Date (clojure.instant/read-instant-timestamp "2020")) (instance? java.util.Calendar (clojure.instant/read-instant-calendar "2020")))
+      (defmacro tv-macro-inst [] #inst "2021-03-04")
+      (defmacro tv-macro-ms [x] (inst-ms x))
+      (println (tv-macro-inst) (tv-macro-ms #inst "1970-01-01T00:00:02Z"))
+      (prn '[#inst "2020" #uuid "1-1-1-1-1"] `(tv-a #inst "2020"))
+      (require '[clojure.pprint :as tv-pp])
+      (tv-pp/pprint [#inst "2020-06-15T10:20:30.456Z" #uuid "550e8400-e29b-41d4-a716-446655440000" {:at #inst "2020"}])
+    expected: |
+      (:date :uuid :date :other :other)
+      (1000 00000001-0001-0001-0001-000000000001) true
+      true true false true true
+      #inst "2021-03-04T00:00:00.000-00:00" 2000
+      [#inst "2020-01-01T00:00:00.000-00:00" #uuid "00000001-0001-0001-0001-000000000001"] (user/tv-a #inst "2020-01-01T00:00:00.000-00:00")
+      [#inst "2020-06-15T10:20:30.456-00:00"
+       #uuid "550e8400-e29b-41d4-a716-446655440000"
+       {:at #inst "2020-01-01T00:00:00.000-00:00"}]
   - name: clojure-template-substitutes-per-group-of-values
     # The built-in clojure.template (.kb/clojure-frontend.md "clojure.jar namespaces"):
     # apply-template substitutes at any depth, do-template expands to one copy per

@@ -2402,7 +2402,9 @@ class ClojureLoweringTest {
 			.contains("RONTOLISP::%CLOJURE-FALSE");
 		assertThat(lowered("(fn [x] (number? x))")).contains("(NUMBERP ");
 		assertThat(lowered("(fn [x] (qualified-keyword? x))")).contains("(RONTOLISP::%CLOJURE-IS-QUALIFIED ");
-		assertThat(lowered("(fn [x] (uuid? x))")).contains("(RONTOLISP::%CLOJURE-HOST-INSTANCE-P ")
+		// a UUID or a host one: the UUID family's alias of the host test, which a
+		// program making no UUID calls in its place
+		assertThat(lowered("(fn [x] (uuid? x))")).contains("(RONTOLISP::%CLOJURE-IS-UUID ")
 			.contains("\"java.util.UUID\"");
 		assertThat(lowered("(map map? [1])")).contains("LAMBDA").contains("(RONTOLISP::%CLOJURE-IS-MAP ");
 		// a kind no value here has: false, the argument still evaluated
@@ -2489,9 +2491,9 @@ class ClojureLoweringTest {
 		}
 		assertThatThrownBy(() -> Clojure.read("(extends? Nope String)", null)).isInstanceOf(LispReadException.class)
 			.hasMessageContaining("No such protocol: Nope");
-		assertThatThrownBy(() -> Clojure.read("(defprotocol P (m [x])) (extends? P java.util.Date)", null))
+		assertThatThrownBy(() -> Clojure.read("(defprotocol P (m [x])) (extends? P java.time.Instant)", null))
 			.isInstanceOf(LispReadException.class)
-			.hasMessageContaining("extends? needs a core type, not java.util.Date");
+			.hasMessageContaining("extends? needs a core type, not java.time.Instant");
 		for (String name : new String[] { "future?", "future-done?", "future-cancelled?", "future-cancel" }) {
 			assertThatThrownBy(() -> Clojure.read("(" + name + ")", null)).isInstanceOf(LispReadException.class)
 				.hasMessageContaining("Wrong number of args (0) passed to: clojure.core/" + name);

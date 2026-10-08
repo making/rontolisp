@@ -16,6 +16,7 @@ has them.
 | [Higher-order functions](reference/higher-order.md) | `comp`/`partial`/`complement`/`constantly`/`identity`/`memoize`/`trampoline`, `juxt`/`fnil`/`every-pred`/`some-fn`/`min-key`/`max-key` |
 | [Numbers and predicates](reference/numbers.md) | Arithmetic, comparison and the type predicates |
 | [Type and collection predicates](reference/predicates.md) | `seq?`/`map?`/`keyword?`/`int?` and the other kind tests, `identical?`, `distinct?`, `extends?` |
+| [Instants and UUIDs](reference/instants.md) | The `#inst` and `#uuid` values: `inst-ms`, `random-uuid`, `parse-uuid` |
 | [State](reference/state.md) | `atom`/`deref`/`swap!` and the volatile trio |
 | [Multimethods and hierarchies](reference/multimethods.md) | `defmulti`/`defmethod`, `derive` and the hierarchy reads |
 | [Protocols, records and types](reference/protocols.md) | `defprotocol`/`defrecord`/`deftype`, `reify`, the `extend` family and `satisfies?` |
@@ -27,6 +28,7 @@ has them.
 | [clojure.data](reference/clojure-data.md) | Recursive comparison: `diff` answering what only each side holds and what both hold |
 | [clojure.datafy](reference/clojure-datafy.md) | Values as data and navigation from data: `datafy`/`nav` over the `clojure.core.protocols` protocols |
 | [clojure.edn](reference/clojure-edn.md) | Reading EDN data: `read-string`/`read` with `:eof`, `:readers` and `:default` |
+| [clojure.instant](reference/clojure-instant.md) | Reading RFC 3339 timestamps: `parse-timestamp`, `validated`, `read-instant-date`/`-timestamp`/`-calendar` |
 | [clojure.pprint](reference/clojure-pprint.md) | Pretty printing: `pprint`/`write` within a right margin, `print-table`, `code-dispatch` for code, and the dispatch a program extends or replaces |
 | [clojure.stacktrace](reference/clojure-stacktrace.md) | Printing throwables and their causes: `root-cause`, `print-throwable`, `print-stack-trace`, `print-cause-trace` |
 | [clojure.template](reference/clojure-template.md) | Expression templates: `apply-template`, `do-template` |

@@ -948,7 +948,8 @@ public final class ClojureLowering {
 	 * Records a class spelled in a dispatch or hierarchy position, and every class a
 	 * value may have without the program naming it whose supers hold it (the runtime
 	 * errors', the streams'), so {@code isa?} walks from the class {@code class} answers
-	 * to it; {@code Object} records them all.
+	 * to it; {@code Object} records them all. A class of the instants records the ones
+	 * below it ({@code Date} a {@code Timestamp}), which no other spelling records.
 	 * @param name the class's binary name
 	 */
 	void recordSpelledClass(String name) {
@@ -962,6 +963,9 @@ public final class ClojureLowering {
 			if (implicit.equals(name) || ClojureClassBases.supersOf(implicit).contains(name)) {
 				recordClass(implicit);
 			}
+		}
+		for (String subclass : ClojureClassBases.timeValueSubclassesOf(name)) {
+			recordClass(subclass);
 		}
 	}
 
@@ -3149,6 +3153,9 @@ public final class ClojureLowering {
 		if (ClojureLowerUtil.isSymbolNamed(head, "%record")) {
 			return ClojureProtocolLowering.recordLiteral(this, items);
 		}
+		if (ClojureDefaultReaders.isMarker(head)) {
+			return ClojureDefaultReaders.construction(items);
+		}
 		if (ClojureLowerUtil.isSymbolNamed(head, "if")) {
 			ClojureLowerUtil.isTrue(items.size() == 3 || items.size() == 4,
 					"if takes a condition, a then and an optional else");
@@ -4410,6 +4417,10 @@ public final class ClojureLowering {
 			}
 			if (!items.isEmpty() && ClojureLowerUtil.isSymbolNamed(items.get(0), "%record")) {
 				return ClojureProtocolLowering.recordLiteral(this, items);
+			}
+			if (!items.isEmpty() && ClojureDefaultReaders.isMarker(items.get(0))) {
+				// an #inst or #uuid literal is already a value: built in place
+				return ClojureDefaultReaders.construction(items);
 			}
 			// one constant when every element is one; a nested vector, map, set or
 			// regex literal is built at run time, so the list is too (its element
