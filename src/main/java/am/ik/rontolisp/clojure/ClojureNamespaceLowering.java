@@ -141,8 +141,8 @@ final class ClojureNamespaceLowering {
 	 * The namespaces whose vars lower to core forms: {@code clojure.string},
 	 * {@code clojure.set}, {@code clojure.edn}, {@code clojure.java.io},
 	 * {@code clojure.test}, the Ring adapter {@code ring.adapter.rontolisp}, the kernels
-	 * of the built-in namespaces ({@link ClojureKernelLowering}), and the host
-	 * boundary's {@code rontolisp.wasm} and {@code rontolisp.wit}.
+	 * of the built-in namespaces ({@link ClojureKernelLowering}), and the host boundary's
+	 * {@code rontolisp.wasm} and {@code rontolisp.wit}.
 	 */
 	static boolean isKnownNamespace(String ns) {
 		return ns.equals("clojure.string") || ns.equals(ClojureSetLowering.NAMESPACE)
