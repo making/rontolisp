@@ -36,7 +36,8 @@ class NativeImageResourceConfigTest {
 
 	/** The bundled directories whose every file must be reachable from the binary. */
 	private static final List<String> BUNDLED_DIRS = List.of("am/ik/rontolisp/eval", "am/ik/rontolisp/macro",
-			"am/ik/rontolisp/codegen/wasm/component");
+			"am/ik/rontolisp/codegen/wasm/component", "am/ik/rontolisp/clojure/lib/ring/util",
+			"am/ik/rontolisp/clojure/lib/ring/middleware");
 
 	@Test
 	void everyBundledResourceIsRegistered() throws IOException {

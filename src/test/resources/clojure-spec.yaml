@@ -7438,3 +7438,146 @@ cases:
       [true true false nil nil nil nil]
       (true true true true true true false)
       "Can't change/establish root binding of: *repl* with set" 5 5 [1 true]
+  - name: ring-util-response-builds-and-augments-response-maps
+    # The built-in ring.util.response (a Clojure source resource, .kb/clojure-frontend.md
+    # "Ring util namespaces"); clj 1.12.6 + ring-core 1.15.5 prints the same. Each map
+    # prints through its keys in a fixed order (map walk order is unspecified here).
+    source: |
+      (ns ring-resp (:require [ring.util.response :as r :refer [response]]))
+      (def shape (juxt :status :headers :body))
+      (prn (= (response "hi") {:status 200 :headers {} :body "hi"}) (shape (response "hi")))
+      (prn (map shape [(r/redirect "/next") (r/redirect "/next" :see-other) (r/redirect "/next" 307)]))
+      (prn (map shape [(r/created "/item/1") (r/created "/item/1" "made")]))
+      (prn (map shape [(r/not-found "nf") (r/bad-request "br") (r/status 204) (r/redirect-after-post "/p")]))
+      (let [resp (-> (response "x") (r/status 201) (r/header "X-Count" 3) (r/content-type "text/html"))]
+        (prn (:status resp) (:body resp) (into (sorted-map) (:headers resp))))
+      (prn (shape (r/status {:status 200 :headers {} :body "b"} 500)))
+      (prn (into (sorted-map) (get-in (r/set-cookie (response "") "session" "abc" {:max-age 60}) [:cookies "session"])))
+      (prn (:cookies (r/set-cookie (response "") "session" "abc")))
+      (prn (r/response? (response "")) (r/response? {:status "200" :headers {}}) (r/response? nil))
+      (prn (r/redirect-status-codes :permanent-redirect) (map (comp shape r/response) ["a" "b"]))
+    expected: |
+      true [200 {} "hi"]
+      ([302 {"Location" "/next"} ""] [303 {"Location" "/next"} ""] [307 {"Location" "/next"} ""])
+      ([201 {"Location" "/item/1"} nil] [201 {"Location" "/item/1"} "made"])
+      ([404 {} "nf"] [400 {} "br"] [204 {} nil] [303 {"Location" "/p"} ""])
+      201 "x" {"Content-Type" "text/html", "X-Count" "3"}
+      [500 {} "b"]
+      {:max-age 60, :value "abc"}
+      {"session" {:value "abc"}}
+      true false false
+      308 ([200 {} "a"] [200 {} "b"])
+  - name: ring-util-response-reads-headers-case-insensitively
+    source: |
+      (ns ring-hdr (:require [ring.util.response :as r]))
+      (def page {:status 200 :headers {"content-type" "text/html; charset=ISO-8859-1"} :body ""})
+      (prn (r/get-header page "Content-Type") (r/find-header page "CONTENT-TYPE") (r/get-header page "X-None"))
+      (prn (r/get-charset page) (r/get-charset (r/content-type (r/response "") "text/plain")))
+      (prn (:headers (r/charset page "UTF-8")))
+      (prn (:headers (r/charset (r/response "") "UTF-8")))
+      (prn (:headers (r/update-header page "Content-Type" str ";q=1")))
+      (prn (r/get-charset {:headers {"Content-Type" "text/plain; Charset=\"utf-16\" ; x=y"}}))
+    expected: |
+      "text/html; charset=ISO-8859-1" ["content-type" "text/html; charset=ISO-8859-1"] nil
+      "ISO-8859-1" nil
+      {"content-type" "text/html; charset=UTF-8"}
+      {"Content-Type" "text/plain; charset=UTF-8"}
+      {"content-type" "text/html; charset=ISO-8859-1;q=1"}
+      "utf-16"
+  - name: ring-util-codec-percent-and-url-coding
+    # A malformed UTF-8 escape run decodes as the JDK's new String replaces it (one
+    # U+FFFD per ill-formed subpart, a truncated tail ending the run); oracle-identical.
+    source: |
+      (ns ring-codec (:require [ring.util.codec :as codec]))
+      (prn (codec/url-encode "a b+c/é~日") (codec/url-decode "a%20b+c%2F%C3%A9%E6%97%A5"))
+      (prn (codec/percent-encode "aé") (codec/percent-decode "%41%42c"))
+      (prn (mapv int (codec/url-decode "%C0%80%ED%A0%80%E6%97%41%F0%9F%98")))
+      (prn (codec/url-decode "%zz%4") (codec/url-encode "é" "ISO-8859-1") (codec/url-decode "%E9" "latin1"))
+      (prn (codec/url-decode "%E9%41" "US-ASCII"))
+      (prn (try (codec/url-decode "x" "EBCDIC-NOPE") (catch IllegalArgumentException e (ex-message e))))
+    expected: |
+      "a%20b+c%2F%C3%A9~%E6%97%A5" "a b+c/é日"
+      "%61%C3%A9" "ABc"
+      [65533 65533 65533 65533 65 65533]
+      "%zz%4" "%E9" "é"
+      "�A"
+      "EBCDIC-NOPE"
+  - name: ring-util-codec-form-coding
+    source: |
+      (ns ring-form (:require [ring.util.codec :as codec]))
+      (prn (codec/form-encode "a b&c=é*.-_~") (codec/form-encode {"q" "x y"}) (codec/form-encode {:a [1 2]}))
+      (prn (codec/form-encode {:a #{"y" "x"}}) (codec/form-encode nil) (codec/form-encode :k) (codec/form-encode 12))
+      (prn (codec/form-decode-str "a+b%20c") (codec/form-decode-str "%zz") (codec/form-decode-str "plain"))
+      (prn (into (sorted-map) (codec/form-decode "a=1&b=2&a=3&&c&=x&d=%zz")) (codec/form-decode "a+b"))
+      (prn (codec/form-decode-map "") (codec/assoc-conj {:a 1} :a 2) (codec/assoc-conj {:a [1]} :a 2))
+    expected: |
+      "a+b%26c%3D%C3%A9*.-_%7E" "q=x+y" "a=1&a=2"
+      "a=x&a=y" "" "%3Ak" "12"
+      "a b c" nil "plain"
+      {"" "x", "a" ["1" "3"], "b" "2", "c" ""} "a b"
+      {} {:a [1 2]} {:a [1 2]}
+  - name: ring-util-request-reads-the-request-map
+    # The oracle's :body here is a ByteArrayInputStream; a BufferedReader over a
+    # StringReader is the string stream on every backend. Output oracle-identical.
+    source: |
+      (ns ring-req (:require [ring.util.request :as req]))
+      (def request {:scheme :http :uri "/app/page" :query-string "q=1" :request-method :post
+                    :headers {"host" "example.com:8080" "content-type" "application/x-www-form-urlencoded; charset=UTF-8"
+                              "content-length" "42"}
+                    :body (java.io.BufferedReader. (java.io.StringReader. "a=1"))})
+      (prn (req/request-url request) (req/content-type request) (req/content-length request))
+      (prn (req/character-encoding request) (req/urlencoded-form? request) (req/urlencoded-form? {:headers {}}))
+      (prn (req/path-info request) (req/in-context? request "/app") (req/in-context? request "/other"))
+      (let [ctx (req/set-context request "/app")] (prn (:context ctx) (:path-info ctx) (req/path-info ctx)))
+      (prn (req/body-string request) (req/body-string {:body "s"}) (req/body-string {:body nil}))
+      (prn (try (req/content-length {:headers {"content-length" "4x"}}) (catch NumberFormatException e (ex-message e))))
+    expected: |
+      "http://example.com:8080/app/page?q=1" "application/x-www-form-urlencoded" 42
+      "UTF-8" true nil
+      "/app/page" true false
+      "/app" "/page" "/page"
+      "a=1" "s" nil
+      "For input string: \"4x\""
+  - name: ring-middleware-params-and-keyword-params-parse-query-and-form
+    # Oracle-identical (its form :body a ByteArrayInputStream); the three-argument
+    # arity is the asynchronous handler's.
+    source: |
+      (ns ring-params
+        (:require [ring.middleware.params :refer [wrap-params]]
+                  [ring.middleware.keyword-params :refer [wrap-keyword-params]]))
+      (def handler
+        (-> (fn [req]
+              {:status 200
+               :body [(into (sorted-map) (:query-params req)) (into (sorted-map) (:form-params req))
+                      (into (sorted-map) (:params req))]})
+            wrap-params))
+      (prn (:body (handler {:query-string "a=1&b=x%20y&a=2" :headers {}})))
+      (prn (:body (handler {:query-string "q=1" :request-method :post
+                            :headers {"content-type" "application/x-www-form-urlencoded"}
+                            :body (java.io.BufferedReader. (java.io.StringReader. "f=%C3%A9&q=2"))})))
+      (def keyed (-> (fn [req] (:params req)) wrap-keyword-params wrap-params))
+      (let [params (keyed {:query-string "name=ann&2x=1&a.b=3&名前=v&ns/k=w" :headers {}})]
+        (prn (get params :name) (get params "2x") (get params "a.b") (get params :名前) (get params "ns/k")))
+      (prn (get ((wrap-keyword-params :params {:parse-namespaces? true}) {:params {"ns/k" 1}}) :ns/k))
+      (prn ((wrap-params (fn [req respond raise] (respond (:params req))) {}) {:query-string "z=9" :headers {}} identity identity))
+    expected: |
+      [{"a" ["1" "2"], "b" "x y"} {} {"a" ["1" "2"], "b" "x y"}]
+      [{"q" "1"} {"f" "é", "q" "2"} {"f" "é", "q" "1"}]
+      "ann" "1" "3" "v" "w"
+      1
+      {"z" "9"}
+  - name: ring-middleware-content-type-guesses-from-the-uri
+    source: |
+      (ns ring-ctype
+        (:require [ring.middleware.content-type :refer [wrap-content-type content-type-response]]
+                  [ring.util.mime-type :refer [ext-mime-type]]))
+      (def h (wrap-content-type (fn [req] {:status 200 :headers {} :body ""})))
+      (prn (:headers (h {:uri "/style.CSS"})) (:headers (h {:uri "/data"})) (:headers (h {:uri "/a.b/c"})))
+      (prn (:headers ((wrap-content-type (fn [_] {:status 200 :headers {} :body ""}) {:mime-types {"foo" "x/foo"}}) {:uri "/x.foo"})))
+      (prn (:headers (content-type-response {:status 200 :headers {"content-type" "a/b"}} {:uri "/x.png"})))
+      (prn (content-type-response nil {:uri "/x.png"}) (ext-mime-type "index.html") (ext-mime-type "x.") (ext-mime-type "x"))
+    expected: |
+      {"Content-Type" "text/css"} {"Content-Type" "application/octet-stream"} {"Content-Type" "application/octet-stream"}
+      {"Content-Type" "x/foo"}
+      {"content-type" "a/b"}
+      nil "text/html" nil nil

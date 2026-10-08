@@ -64,4 +64,5 @@ every backend. The stream is buffered, so the read never waits on the network.
 | `:body` | a string, a seq whose members are sent through `str`, an input stream (read to its end and closed), or `nil` |
 
 A handler that answers anything but a map, or a body of any other kind (a `java.io.File`
-included), signals; the transport answers 500.
+included), signals; the transport answers 500. The response builders and the parameter
+middleware are the built-in [Ring utilities](ring-util.md).

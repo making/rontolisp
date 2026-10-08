@@ -126,6 +126,7 @@ answered `2 5 3` before).
 | `clojure.string` (`join` `split` `split-lines` `upper-case` `lower-case` `capitalize` `trim` `triml` `trimr` `trim-newline` `blank?` `starts-with?` `ends-with?` `includes?` `index-of` `last-index-of` `replace` `replace-first` `escape` `re-quote-replacement` `reverse`) | core string operations | reached as `alias/var`, `clojure.string/var` or a referred var. `split`/`replace` take a pattern (through the regex runtime) or a literal string/char (a plain string never compiles to a pattern). Empty literal-`split` input is `nil` (a pattern answers one empty part); a positive `split` limit caps, a negative keeps every part, else trailing empties drop. `index-of`'s start (and `.indexOf`'s) is clamped into `[0, length]` before CL's `search`, which refuses a start outside the string, so it reads like Java's: past the end nothing is found (an empty match is the length), a negative one is 0 (`ClojureStringLowering.searchFrom`) |
 | `clojure.set` (`union` `intersection` `difference` `select` `project` `rename-keys` `rename` `index` `map-invert` `join` `subset?` `superset?`: every public var) | `ClojureSetLowering`: one call to the spliced `rontolisp::%clojure-set-NAME` worker (`?` spelled `-p`, the variadic three over one list of their sets, `join` with a key map `-join-km`) after a lower-time arity check in the oracle's wording (`... passed to: clojure.set/NAME`); as a value `#'...-v` | the oracle's own algorithms, so an answer's kind follows the same input: `union` grows its largest input (bubble order and all; a vector or list there answers one, a map signals), `intersection` shrinks its smallest, `difference`/`select` the first; nil stays nil, an unchanged input is answered itself, a set changes in a fresh copy. Membership goes through the structural-key runtime; `contains?` on a vector is by index, like the oracle's. Relation members may be records: `join`'s merge keeps the first's record, `rename-keys` keeps it unless a declared field is renamed away. Answers carry no metadata. Corpus witness: shcloj4 `examples.test.sequences` `test-sets`/`test-joins` (`ClojureProjectNamespacesTest`); the whole namespace stays red on `examples.utils` (the `?.` macro), `clojure.xml` and `file-seq` (measured 2026-10-03: the load stops at `utils.clj:37:1`) |
 | `ring.adapter.rontolisp` (`run-server`) | `(rontolisp::%http-serve (%clojure-ring-app f opts) (%clojure-ring-port opts) (%clojure-ring-host opts) (%clojure-ring-join opts))` (`ClojureRingLowering`) | "Ring adapter" |
+| `ring.util.response` `ring.util.request` `ring.util.codec` `ring.util.mime-type` `ring.middleware.params` `ring.middleware.keyword-params` `ring.middleware.content-type` | Clojure source in the jar, loaded like a project file; `rontolisp.internal.ring/NAME` (their kernels) is one call to `rontolisp::%clojure-ring-NAME` (`ClojureRingUtilLowering`) | "Ring util namespaces" |
 | `subs`, `.substring` | `%clojure-subs`, the refusal family's alias of `subseq` ("Refusals") | a bound outside a string is the oracle's `StringIndexOutOfBoundsException` where a class is read; a double or ratio bound is truncated (`%clojure-string-bound`), a non-number one is refused as the oracle does ("Refusals") |
 | `format` | the Java directives translated to `format` over Clojure-rendered arguments | literal format string only; `%s` like `str` (nil spells `null`), `%b`; `%e`/`%g`, flags and the rest refused |
 | `spit` `slurp` `line-seq` `clojure.java.io/reader` | `with-open-file` of the `str` spelling / `rontolisp::%clojure-slurp` / a `read-line` loop / `%clojure-reader` (`open`) | every backend; wasm needs a `--dir` preopen (without it the open signals). `spit` supersedes unless `:append` is truthy, `nil` writes nothing. `slurp`, `line-seq` and `reader` take a path or an open stream (`streamp`, so a Gray instance -- the Ring `:body` -- too): `slurp` reads a stream to its end and leaves it open (the oracle closes it), `reader` answers it, `line-seq` reads it strictly and never closes it. `slurp` was an inline `read-char` loop per site until 2026-10-08. `file-seq` and every other `clojure.java.io` fn are refused |
@@ -853,7 +854,8 @@ a program without `ns` lowers unqualified. A quoted `'n/x` is the symbol of var 
   `:reload-all`, `:verbose` flags; quoted libspecs and prefix lists `(prefix [sub ...])`
   go through one spec parser. `clojure.string`, `clojure.set`, `clojure.java.io` (`reader`
   only), `clojure.test` and `ring.adapter.rontolisp` resolve; any other `clojure.*` is
-  `unknown namespace: x`.
+  `unknown namespace: x`. The built-in Ring namespaces load as project files from the jar
+  when no root holds them ("Ring util namespaces").
 - **Loading** (`ClojureNamespaceLowering.loadNamespace`, `ClojureLowering.loadFile`): an
   `ns` form marks its namespace loaded AFTER its clauses (marking first hid the cycle),
   so a single-file program's later `(:require [a])` reads nothing. Any other project
@@ -916,13 +918,79 @@ serve`, and a war on embedded Tomcat; plain P1 compiles and signals the directiv
   beside `PushbackReader`/`BufferedReader`) -- the measured `no matching constructor` on the
   JVM is gone on every backend. Over a `StringReader` it also answers the string stream,
   where the oracle has no such constructor (a leniency, not pinned).
-- Not done: `ring.adapter.jetty` as an alias (would claim Jetty options), a `stop-server`
-  (Jetty's is `(.stop server)`, interop on the handle), util namespaces (`.todo/e29`).
+- Not done: `ring.adapter.jetty` as an alias (would claim Jetty options; refused by name,
+  pointing here), a `stop-server` (Jetty's is `(.stop server)`, interop on the handle). The
+  util namespaces are "Ring util namespaces".
 - Pins: `ClojureRingAdapterTest` (interpreter, JVM through a var, the `--no-wasi` export via
   node, the war's registration, the refusals, `run-server` as a value),
   `ServeRingComponentE2eTest` (opt-in), `WarE2eTest#aRingHandlerServesFromTheWarOnTomcat`
   (opt-in), clojure-spec `slurp-and-the-reader-take-an-open-stream`,
   `examples/clojure/ring-hello.clj` (the four compile legs).
+
+## Ring util namespaces
+
+**The pure-function subset of ring-core 1.15.5 / ring-codec 1.3.0 ships as Clojure source**
+(`src/main/resources/am/ik/rontolisp/clojure/lib/ring/**`, `ClojureBuiltinNamespaces`):
+`ring.util.response` `request` `codec` `mime-type`, `ring.middleware.params`
+`keyword-params` `content-type`. `ClojureSourcePath.find` reads one AFTER every source root
+(`Found.builtin`), so a project file of the name wins, as `src` precedes a jar on the
+oracle's classpath. Loaded through `loadNamespace` like any project namespace: vars, privacy,
+`:refer :all`, `#'`, init statements, all unchanged.
+- **Shipping mechanism, measured 2026-10-08 (wasm-GC P1, raw bytes)**: the plan preferred the
+  resource. Pure-Clojure ports were oracle-identical on the interpreter but heavy wherever
+  they process bytes or strings: `(form-decode-str "a+%41")` 340,532 B, `(url-decode
+  "a%41")` 357,787 B, `wrap-params` over a query 500,960 B -- generic `conj`/`apply
+  str`/`throw` and the regex engine per program -- against 26,940 B for the Common Lisp
+  `rontolisp:url-decode`. And no core verb tests a Unicode letter (`\p{L}` of
+  `wrap-keyword-params`; `alpha-char-p` is ASCII on wasm, the regex engine has no `\p`).
+  Decided: the namespaces stay Clojure source (the oracle's own code where it is
+  map-shaped), and the byte/string work is Common Lisp kernels (`clojure.lisp`, "The
+  ring.util kernels"), reached through `rontolisp.internal.ring`, a known namespace only a
+  built-in file may require (`ctx.builtinNamespaces`; anything else is refused by name).
+  After: 61,083 B / 63,478 B / 167,936 B; `(r/response "hi")` 34,768 B against 30,077 B for
+  an inline `defn`. Rejected: lowering rows for every var (the `clojure.set` shape) -- a
+  Java arity/value row per var for the map-shaped vars that cost nothing as Clojure.
+- **Init statements carry code**: a `def` of a regex in a required namespace compiles the
+  regex engine into every program requiring it (the first draft's `ring.util.parsing`
+  regexes made `ring.util.response` +30 KB). So `ring.util.parsing` is not shipped; the
+  charset match is the kernel `content-type-charset`, the regex's search order spelled out
+  (leftmost `;`, greedy `.*\s` from the last space, then none; token before quoted string,
+  with the quoted-string backtracking; `$` before one final line terminator).
+- **Oracle behaviour, pinned against the JDK code the oracle runs** (`ClojureRingUtilTest`,
+  seeded random inputs): percent-decode is `new String(bytes, charset)` per `%XX` run,
+  ported from `String.decodeUTF8_UTF16` (how many bytes one U+FFFD takes, a truncated tail
+  ending the run); form-decode-str is `URLDecoder.decode` (strict hex, nil where it throws);
+  the encoders are `getBytes` (`?` for the unmappable and a lone surrogate) and
+  `URLEncoder.encode`; the charset match is the oracle's `re-charset`; the keyword test the
+  oracle's two regexes, `\p{L}` from a generated table (`%clojure-ring-letter-table`, 675
+  ranges past ASCII, decoded on first use; the test regenerates it from
+  `Character.isLetter`). Differential runs against clj 1.12.6 + ring-core 1.15.5 the same
+  day: 460 codec inputs (eight calls each), 3,000 content types and 3,000 parameter names,
+  identical but the surrogate-pair spelling of `(mapv int s)` (code points here).
+- Charsets: UTF-8, ISO-8859-1, US-ASCII and the JDK's aliases, case-insensitively; any other
+  is an `IllegalArgumentException` whose message is the name (the oracle's
+  `UnsupportedCharsetException`), where the oracle would accept the JDK's other charsets.
+  Checked where the oracle checks it (`form-decode-str` only when the string holds `+` or
+  `%`; `form-encode` of nil or a map of no strings never).
+- Refusals: a var the oracle's namespace has and the built-in one leaves out
+  (`file-response`, `url-response`, `resource-response`, `resource-data`, `base64-*`,
+  `form-encode*`, `FormEncodeable`) is `ns/var is not built in: <why>` qualified and
+  referred (`refuseLeftOut`, only when the namespace came from the built-in file); a
+  ring-core namespace not shipped (cookies, session, flash, multipart, nested-params,
+  not-modified -- HTTP dates over `java.util.Date` -- file, resource, head, content-length,
+  `ring.util.io`/`time`/`parsing`/`test`/`async`, `ring.websocket`) is `x is not built in:
+  the built-in Ring namespaces are ...`, and `ring.adapter.jetty` points at `run-server`.
+- Deviations: `body-string` is a `cond`, not a multimethod (`class` of a string is no
+  class object on wasm); `content-length` reads ASCII digits (`Long/valueOf` takes any `Nd`);
+  `wrap-params` slurps the body (already characters; the encoding governs the
+  percent-decoding as in Ring); `form-encode` of a map is a function, not the protocol.
+- Native image and the web image: `resource-config.json` registers `clojure/lib/ring/...`
+  (`NativeImageResourceConfigTest` lists both directories).
+- Pins: `ClojureRingUtilTest` (the four JDK differentials, the letter table, the refusals,
+  the shadowing project file, a real POST through `wrap-params` on the interpreter),
+  clojure-spec `ring-util-*` and `ring-middleware-*` (all four backends, oracle-identical),
+  `examples/clojure/ring-hello.clj` (verified by hand 2026-10-08 under curl on the
+  interpreter, the JVM class and `wasmtime serve`).
 
 ## Macros
 
@@ -2130,6 +2198,7 @@ in-scope program needs `valid?`/`conform` (then `explain-data` stays refused).
 - Interop and host IO: `ClojureInteropTest` (interpreter and JVM),
   `ClojureWasmInteropRefusalTest`, `ClojureWasmFileIoTest`, `ClojureWasmFileRefusalTest`.
 - `ClojureArmsTest` (the sorted-collection, unbound-root, matcher and refusal strips).
+- `ClojureRingAdapterTest`, `ClojureRingUtilTest` (the Ring namespaces).
 - `ClojureLibraryTest` (the splice), `SourceLanguageTest`, `RontoLispCliTest` and
   `PlaygroundReplTest` (the `clojure>` transcript, `--no-gc`), `examples/clojure/demo.clj`
   through `ExamplesE2eTest`.

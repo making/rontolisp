@@ -277,6 +277,8 @@ sections:
             title: "入出力"
           - file: clojure/reference/ring.md
             title: "Ring アダプター"
+          - file: clojure/reference/ring-util.md
+            title: "Ring ユーティリティ"
           - file: clojure/reference/interop.md
             title: "Java interop"
           - file: clojure/reference/test.md

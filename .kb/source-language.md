@@ -83,7 +83,9 @@ until a language brings its own.
 NOT user source, so NOT through the seam (pinned by `SourceLanguageSeamTest`, next to
 `PackageCycleTest`): library source shipped in the jar -- or a form the implementation
 synthesizes itself -- which is Common Lisp whatever the user's language is (every
-`*Library` splice, `ShimLibraries`, `UiopLibrary`, the four `macro` readers);
+`*Library` splice, `ShimLibraries`, `UiopLibrary`, the four `macro` readers; the built-in
+Ring namespaces are Clojure, read by the Clojure lowering's own namespace loader, after the
+seam);
 `Environment`'s runtime `read`/`read-from-string` of DATA; `AsdfSystems`' `.asd`
 metadata (tolerant `#.`-skipping read) and leading-`defpackage` scans;
 `cli.CompileTimePathnameFolder`'s compile-time fold of a constant string embedded in a

@@ -10,8 +10,9 @@ namespace other than `clojure.string`, `clojure.set`, `clojure.java.io` (`reader
 `ring.adapter.rontolisp` ([Ring adapter](ring.md))
 is a project namespace: one an earlier `ns` form of the program declared, or one whose
 file on the source path loads when the clause runs -- once per program, again under
-`:reload` ([Semantics](../semantics.md#namespaces-and-files)); a file
-no root holds is an error.
+`:reload` ([Semantics](../semantics.md#namespaces-and-files)). The built-in
+[Ring utilities](ring-util.md) load the same way when no root holds a file of their name;
+any other file no root holds is an error.
 
 ```clojure
 (ns demo (:require [clojure.string :as s :refer [join]]))

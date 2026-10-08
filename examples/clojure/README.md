@@ -9,7 +9,7 @@ interpreter, the JVM, WASM and `--component`, and each is checked in
 | Program | Shows |
 | --- | --- |
 | [`demo.clj`](demo.clj) | Recursion, `loop`/`recur`, `#(...)`, higher-order `map`/`filter`/`reduce`, vectors, keywords, `cond`, `let`, a directly called `fn` |
-| [`ring-hello.clj`](ring-hello.clj) | A Ring handler served by `ring.adapter.rontolisp/run-server`: one source for a socket (interpreter, JVM), `-o app.war`, `--component` under `wasmtime serve` and a `--no-wasi` reactor |
+| [`ring-hello.clj`](ring-hello.clj) | A Ring handler served by `ring.adapter.rontolisp/run-server`, built with the built-in `ring.util.response` and the parameter middleware: one source for a socket (interpreter, JVM), `-o app.war`, `--component` under `wasmtime serve` and a `--no-wasi` reactor |
 
 ```bash
 JAR=target/rontolisp-0.1.0-SNAPSHOT-exec.jar

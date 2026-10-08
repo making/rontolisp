@@ -61,6 +61,9 @@ final class ClojureNamespaceLowering {
 		if (ref.ns().equals(ClojureRingLowering.NAMESPACE)) {
 			return ClojureRingLowering.ringCall(ctx, ref.var(), items);
 		}
+		if (ref.ns().equals(ClojureRingUtilLowering.NAMESPACE)) {
+			return ClojureRingUtilLowering.kernelCall(ctx, ref.var(), items);
+		}
 		return ClojureStringLowering.stringCall(ctx, ref.var(), items);
 	}
 
@@ -81,6 +84,9 @@ final class ClojureNamespaceLowering {
 		}
 		if (ref.ns().equals(ClojureRingLowering.NAMESPACE)) {
 			return ClojureRingLowering.ringValue(ref.var());
+		}
+		if (ref.ns().equals(ClojureRingUtilLowering.NAMESPACE)) {
+			return ClojureRingUtilLowering.kernelValue(ref.var());
 		}
 		return ClojureStringLowering.stringValue(ctx, ref.var());
 	}
@@ -115,12 +121,14 @@ final class ClojureNamespaceLowering {
 
 	/**
 	 * The namespaces whose vars lower to core forms: {@code clojure.string},
-	 * {@code clojure.set}, {@code clojure.java.io}, {@code clojure.test} and the Ring
-	 * adapter {@code ring.adapter.rontolisp}.
+	 * {@code clojure.set}, {@code clojure.java.io}, {@code clojure.test}, the Ring
+	 * adapter {@code ring.adapter.rontolisp} and the kernels of the built-in Ring
+	 * namespaces, {@code rontolisp.internal.ring}.
 	 */
 	static boolean isKnownNamespace(String ns) {
 		return ns.equals("clojure.string") || ns.equals(ClojureSetLowering.NAMESPACE) || ns.equals("clojure.java.io")
-				|| ns.equals(ClojureTestLowering.NAMESPACE) || ns.equals(ClojureRingLowering.NAMESPACE);
+				|| ns.equals(ClojureTestLowering.NAMESPACE) || ns.equals(ClojureRingLowering.NAMESPACE)
+				|| ns.equals(ClojureRingUtilLowering.NAMESPACE);
 	}
 
 	/** Whether the namespace exports the var as a lowering. */
@@ -129,7 +137,8 @@ final class ClojureNamespaceLowering {
 				|| ns.equals(ClojureSetLowering.NAMESPACE) && ClojureSetLowering.VARS.contains(var)
 				|| ns.equals("clojure.java.io") && JIO_VARS.contains(var)
 				|| ns.equals(ClojureTestLowering.NAMESPACE) && ClojureTestLowering.VARS.contains(var)
-				|| ns.equals(ClojureRingLowering.NAMESPACE) && ClojureRingLowering.VARS.contains(var);
+				|| ns.equals(ClojureRingLowering.NAMESPACE) && ClojureRingLowering.VARS.contains(var)
+				|| ns.equals(ClojureRingUtilLowering.NAMESPACE) && ClojureRingUtilLowering.VARS.contains(var);
 	}
 
 	/**
@@ -148,6 +157,9 @@ final class ClojureNamespaceLowering {
 		}
 		if (ns.equals(ClojureRingLowering.NAMESPACE)) {
 			return ClojureRingLowering.VARS;
+		}
+		if (ns.equals(ClojureRingUtilLowering.NAMESPACE)) {
+			return ClojureRingUtilLowering.VARS;
 		}
 		return STRING_VARS;
 	}
@@ -435,7 +447,15 @@ final class ClojureNamespaceLowering {
 			}
 		}
 		boolean library = isKnownNamespace(ns);
-		if (library) {
+		if (ns.equals(ClojureRingUtilLowering.NAMESPACE)) {
+			// the kernels are the built-in Ring namespaces' own, no user surface
+			String owner = ctx.loadingNamespaces.peek();
+			if (owner == null || !ctx.builtinNamespaces.contains(owner)) {
+				throw new LispReadException(ns + " is internal to the built-in Ring namespaces");
+			}
+			ctx.ns().aliases.putIfAbsent(ns, ns);
+		}
+		else if (library) {
 			ctx.ns().aliases.putIfAbsent(ns, ns); // the fully-qualified spelling always
 													// resolves
 			ctx.requiredLibraries.add(ns);
@@ -489,6 +509,7 @@ final class ClojureNamespaceLowering {
 	 * var by name, a project namespace's missing or private var with the oracle's words.
 	 */
 	static void checkReferable(ClojureLowering ctx, String ns, String var, boolean library) {
+		refuseLeftOut(ctx, ns, var);
 		if (library) {
 			if (!isKnownVar(ns, var)) {
 				throw new LispReadException("unknown name: " + ns + "/" + var);
@@ -561,8 +582,15 @@ final class ClojureNamespaceLowering {
 		}
 		ClojureSourcePath.Found found = ctx.sourcePath.find(ns);
 		if (found == null) {
+			String notShipped = ClojureBuiltinNamespaces.notShipped(ns);
+			if (notShipped != null) {
+				throw new LispReadException(notShipped);
+			}
 			throw new LispReadException("Could not locate " + ClojureSourcePath.resourceOf(ns) + " on the source path"
 					+ ctx.sourcePath.describeRoots());
+		}
+		if (found.builtin()) {
+			ctx.builtinNamespaces.add(ns);
 		}
 		ctx.loadFile(ns, found);
 		ctx.emitNamespaceInit(ns);
@@ -585,8 +613,22 @@ final class ClojureNamespaceLowering {
 	 */
 	static void refuseMissingVar(ClojureLowering ctx, String name) {
 		int slash = ClojureLowering.qualifierSlash(name);
-		if (slash > 0 && ctx.projectNamespaceOf(name.substring(0, slash)) != null && ctx.lookupVar(name) == null) {
+		String ns = slash > 0 ? ctx.projectNamespaceOf(name.substring(0, slash)) : null;
+		if (ns != null && ctx.lookupVar(name) == null) {
+			refuseLeftOut(ctx, ns, name.substring(slash + 1));
 			throw new LispReadException("No such var: " + name);
+		}
+	}
+
+	/**
+	 * Refuses by name a var the oracle's namespace has and the built-in one leaves out
+	 * ({@code ring.util.response/file-response}), when the namespace was loaded from the
+	 * built-in file.
+	 */
+	static void refuseLeftOut(ClojureLowering ctx, String ns, String var) {
+		String why = ctx.builtinNamespaces.contains(ns) ? ClojureBuiltinNamespaces.leftOut(ns, var) : null;
+		if (why != null) {
+			throw new LispReadException(why);
 		}
 	}
 

@@ -328,6 +328,13 @@ public final class ClojureLowering {
 	final Set<String> loadedNamespaces = new HashSet<>();
 
 	/**
+	 * The namespaces loaded from a built-in file ({@link ClojureBuiltinNamespaces}): the
+	 * only ones that may require {@code rontolisp.internal.ring}, and whose left-out vars
+	 * are refused by name.
+	 */
+	final Set<String> builtinNamespaces = new HashSet<>();
+
+	/**
 	 * The namespaces whose files are lowering, innermost first: a {@code require} of one
 	 * of them is the oracle's cyclic-load refusal.
 	 */

@@ -9270,3 +9270,601 @@
          (rontolisp::%clojure-ring-option response "headers" nil))
         (rontolisp::%clojure-ring-body
          (rontolisp::%clojure-ring-option response "body" nil))))
+
+;;;; The ring.util kernels: rontolisp.internal.ring, the namespace only the
+;;;; built-in Ring namespaces (src/main/resources/am/ik/rontolisp/clojure/lib)
+;;;; require, lowers each var to one of these. The namespaces are Clojure
+;;;; source; what Clojure would spell through generic verbs at ten times the
+;;;; size -- bytes, charsets, the JDK's URL coders, a Unicode letter test -- is
+;;;; spelled here over plain strings.
+
+(defun rontolisp::%clojure-ring-charset (encoding)
+  "The charset ENCODING names, case-insensitively like Charset/forName: :utf-8
+   (also for nil, ring.util.codec's default), :latin-1 or :ascii. Any other
+   name is refused as the oracle's UnsupportedCharsetException, an
+   IllegalArgumentException whose message is the name."
+  (if (null encoding)
+      :utf-8 (let ((name
+                    (if (stringp encoding)
+                        (string-upcase encoding)
+                        (rontolisp::%clojure-class-cast-exception
+                         (concatenate 'string
+                          (rontolisp::%clojure-str-of encoding "nil" t)
+                          " cannot be cast to java.nio.charset.Charset")))))
+               (cond ((member name '("UTF-8" "UTF8" "UNICODE-1-1-UTF-8")
+                              :test #'string=)
+                      :utf-8)
+                     ((member name
+                              '("ISO-8859-1" "IBM-819" "8859_1" "ISO_8859-1"
+                                "L1" "819" "ISO8859_1" "ISO_8859-1:1987"
+                                "ISO-IR-100" "ISO8859-1" "LATIN1" "IBM819"
+                                "CSISOLATIN1" "ISO_8859_1" "CP819")
+                              :test #'string=)
+                      :latin-1)
+                     ((member name
+                              '("US-ASCII" "ASCII7" "IBM367" "CSASCII"
+                                "ISO_646.IRV:1991" "ISO646-US" "646" "US"
+                                "ANSI_X3.4-1986" "CP367" "ISO-IR-6" "ASCII"
+                                "ISO_646.IRV:1983" "ANSI_X3.4-1968")
+                              :test #'string=)
+                      :ascii)
+                     (t (rontolisp::%clojure-illegal-argument-exception
+                         encoding))))))
+
+(defun rontolisp::%clojure-ring-string (x)
+  "X, which a ring.util.codec function reads as a String: nil is the oracle's
+   NullPointerException, any other non-string its ClassCastException."
+  (if (stringp x)
+      x
+      (rontolisp::%clojure-class-cast-exception-of
+       (concatenate 'string "ring.util.codec takes a string, not "
+                    (rontolisp::%clojure-str-of x "nil" t)) x)))
+
+(defun rontolisp::%clojure-ring-write-char-bytes (code charset out)
+  "Writes %XX (upper-case hex) for each byte of the character CODE in
+   CHARSET to the stream OUT. A character the charset cannot encode -- and a
+   lone surrogate -- is the byte of ?, like the JDK's encoders."
+  (dolist (b
+           (cond ((not (eq charset :utf-8))
+                  (list
+                   (if (< code (if (eq charset :latin-1) 256 128)) code 63)))
+                 ((< code 128) (list code))
+                 ((< code 2048)
+                  (list (+ 192 (ash code -6)) (+ 128 (logand code 63))))
+                 ((and (>= code 55296) (<= code 57343)) (list 63))
+                 ((< code 65536)
+                  (list (+ 224 (ash code -12)) (+ 128 (logand (ash code -6) 63))
+                        (+ 128 (logand code 63))))
+                 (t (list (+ 240 (ash code -18))
+                          (+ 128 (logand (ash code -12) 63))
+                          (+ 128 (logand (ash code -6) 63))
+                          (+ 128 (logand code 63))))))
+    (write-char #\% out)
+    (write-char (char "0123456789ABCDEF" (ash b -4)) out)
+    (write-char (char "0123456789ABCDEF" (logand b 15)) out)))
+
+(defun rontolisp::%clojure-ring-utf-8-continuation-p (b)
+  (and (>= b 128) (<= b 191)))
+
+(defun rontolisp::%clojure-ring-write-utf-8 (bytes out)
+  "Writes the characters the UTF-8 BYTES (a simple vector) decode to on OUT,
+   each malformed sequence as U+FFFD exactly as the JDK's new String(bytes,
+   UTF_8) replaces it (String.decodeUTF8_UTF16: how many bytes one
+   replacement takes, and that a truncated tail ends the decoding)."
+  (let ((n (length bytes)) (i 0) (repl (code-char 65533)))
+    (loop
+      (if (>= i n) (return nil))
+      (let ((b1 (svref bytes i)))
+        (setq i (+ i 1))
+        (cond ((< b1 128) (write-char (code-char b1) out))
+              ((and (>= b1 194) (<= b1 223))
+               (cond ((>= i n)
+                      (write-char repl out)
+                      (return nil))
+                     ((rontolisp::%clojure-ring-utf-8-continuation-p
+                       (svref bytes i))
+                      (write-char
+                       (code-char (+ (* 64 (- b1 192)) (- (svref bytes i) 128)))
+                       out)
+                      (setq i (+ i 1)))
+                     (t (write-char repl out))))
+              ((and (>= b1 224) (<= b1 239))
+               (if (< (+ i 1) n)
+                   (let* ((b2 (svref bytes i))
+                          (b3 (svref bytes (+ i 1)))
+                          (bad2
+                           (or (and (= b1 224) (< b2 160))
+                               (not
+                                (rontolisp::%clojure-ring-utf-8-continuation-p
+                                 b2)))))
+                     (cond ((or bad2
+                                (not
+                                 (rontolisp::%clojure-ring-utf-8-continuation-p
+                                  b3)))
+                            (write-char repl out)
+                            (if (not bad2) (setq i (+ i 1))))
+                           (t (let ((c
+                                     (+ (* 4096 (- b1 224)) (* 64 (- b2 128))
+                                        (- b3 128))))
+                                (write-char (if (and (>= c 55296) (<= c 57343))
+                                                repl
+                                                (code-char c)) out)
+                                (setq i (+ i 2))))))
+                   (progn
+                     (write-char repl out)
+                     (if (not
+                          (and (< i n)
+                               (let ((b2 (svref bytes i)))
+                                 (or (and (= b1 224) (< b2 160))
+                                     (not
+                                      (rontolisp::%clojure-ring-utf-8-continuation-p
+                                       b2))))))
+                         (return nil)))))
+              ((and (>= b1 240) (<= b1 247))
+               (if (< (+ i 2) n)
+                   (let* ((b2 (svref bytes i))
+                          (b3 (svref bytes (+ i 1)))
+                          (b4 (svref bytes (+ i 2)))
+                          (uc
+                           (+ (* 262144 (- b1 240)) (* 4096 (- b2 128))
+                              (* 64 (- b3 128)) (- b4 128))))
+                     (if (or (not
+                              (rontolisp::%clojure-ring-utf-8-continuation-p
+                               b2))
+                             (not
+                              (rontolisp::%clojure-ring-utf-8-continuation-p
+                               b3))
+                             (not
+                              (rontolisp::%clojure-ring-utf-8-continuation-p
+                               b4)) (< uc 65536) (> uc 1114111))
+                         (progn
+                           (write-char repl out)
+                           (cond
+                            ((or (> b1 244) (and (= b1 240) (< b2 144))
+                                 (and (= b1 244) (> b2 143))
+                                 (not
+                                  (rontolisp::%clojure-ring-utf-8-continuation-p
+                                   b2))))
+                            ((not
+                              (rontolisp::%clojure-ring-utf-8-continuation-p
+                               b3))
+                             (setq i (+ i 1)))
+                            (t (setq i (+ i 2)))))
+                         (progn
+                           (write-char (code-char uc) out)
+                           (setq i (+ i 3)))))
+                   (progn
+                     (write-char repl out)
+                     (cond ((or (> b1 244)
+                             (and (< i n)
+                              (let ((b2 (svref bytes i)))
+                                (or (and (= b1 240) (< b2 144))
+                                 (and (= b1 244) (> b2 143))
+                                 (not
+                                  (rontolisp::%clojure-ring-utf-8-continuation-p
+                                   b2)))))))
+                           ((and (< (+ i 1) n)
+                                 (not
+                                  (rontolisp::%clojure-ring-utf-8-continuation-p
+                                   (svref bytes (+ i 1)))))
+                            (setq i (+ i 1)))
+                           (t (return nil))))))
+              (t (write-char repl out)))))))
+
+(defun rontolisp::%clojure-ring-write-bytes (bytes charset out)
+  "Writes the characters BYTES (a list, in order) decode to in CHARSET on
+   OUT; a byte US-ASCII has no character for is U+FFFD."
+  (cond ((eq charset :utf-8)
+         (rontolisp::%clojure-ring-write-utf-8 (coerce bytes 'simple-vector)
+                                               out))
+        (t (dolist (b bytes)
+             (write-char (if (or (eq charset :latin-1) (< b 128))
+                             (code-char b)
+                             (code-char 65533)) out)))))
+
+(defun rontolisp::%clojure-ring-hex (c)
+  "The value of the hex digit character C, nil for any other."
+  (let ((code (char-code c)))
+    (cond ((and (>= code 48) (<= code 57)) (- code 48))
+          ((and (>= code 65) (<= code 70)) (- code 55))
+          ((and (>= code 97) (<= code 102)) (- code 87))
+          (t nil))))
+
+(defun rontolisp::%clojure-ring-escape (s i)
+  "The byte of a %XX escape at index I of S, nil when there is none."
+  (if (and (< (+ i 2) (length s)) (char= (char s i) #\%))
+      (let ((hi (rontolisp::%clojure-ring-hex (char s (+ i 1))))
+            (lo (rontolisp::%clojure-ring-hex (char s (+ i 2)))))
+        (if (and hi lo) (+ (* 16 hi) lo) nil))
+      nil))
+
+(defun rontolisp::%clojure-ring-percent-encode (s encoding)
+  "ring.util.codec/percent-encode: every character of S as the %XX escapes of
+   its bytes in the charset ENCODING names."
+  (let* ((charset (rontolisp::%clojure-ring-charset encoding))
+         (s (rontolisp::%clojure-ring-string s))
+         (out (make-string-output-stream)))
+    (dotimes (i (length s))
+      (rontolisp::%clojure-ring-write-char-bytes (char-code (char s i)) charset
+                                                 out))
+    (get-output-stream-string out)))
+
+(defun rontolisp::%clojure-ring-percent-decode (s encoding)
+  "ring.util.codec/percent-decode: each run of %XX escapes in S decoded as
+   bytes of the charset ENCODING names; anything else (a % without two hex
+   digits) is kept."
+  (let* ((charset (rontolisp::%clojure-ring-charset encoding))
+         (s (rontolisp::%clojure-ring-string s))
+         (out (make-string-output-stream))
+         (i 0))
+    (loop
+      (if (>= i (length s)) (return (get-output-stream-string out)))
+      (if (rontolisp::%clojure-ring-escape s i)
+          (let ((bytes nil))
+            (loop
+              (let ((b (rontolisp::%clojure-ring-escape s i)))
+                (if (null b) (return nil))
+                (setq bytes (cons b bytes))
+                (setq i (+ i 3))))
+            (rontolisp::%clojure-ring-write-bytes (nreverse bytes) charset out))
+          (progn
+            (write-char (char s i) out)
+            (setq i (+ i 1)))))))
+
+(defun rontolisp::%clojure-ring-url-encode (s encoding)
+  "ring.util.codec/url-encode: every character of S outside A-Z a-z 0-9 _ ~ .
+   + - as the %XX escapes of its bytes in the charset ENCODING names."
+  (let* ((charset (rontolisp::%clojure-ring-charset encoding))
+         (s (rontolisp::%clojure-ring-string s))
+         (out (make-string-output-stream)))
+    (dotimes (i (length s))
+      (let* ((c (char s i)) (code (char-code c)))
+        (if (or (and (>= code 65) (<= code 90)) (and (>= code 97) (<= code 122))
+                (and (>= code 48) (<= code 57))
+                (member c '(#\_ #\~ #\. #\+ #\-)))
+            (write-char c out)
+            (rontolisp::%clojure-ring-write-char-bytes code charset out))))
+    (get-output-stream-string out)))
+
+(defun rontolisp::%clojure-ring-form-encode (s encoding)
+  "java.net.URLEncoder/encode of the string S in the charset ENCODING names:
+   A-Z a-z 0-9 . - * _ kept, a space as +, anything else the %XX escapes of
+   its bytes."
+  (let ((charset (rontolisp::%clojure-ring-charset encoding))
+        (out (make-string-output-stream)))
+    (dotimes (i (length s))
+      (let* ((c (char s i)) (code (char-code c)))
+        (cond
+         ((or (and (>= code 65) (<= code 90)) (and (>= code 97) (<= code 122))
+              (and (>= code 48) (<= code 57)) (member c '(#\. #\- #\* #\_)))
+          (write-char c out))
+         ((= code 32) (write-char #\+ out))
+         (t (rontolisp::%clojure-ring-write-char-bytes code charset out)))))
+    (get-output-stream-string out)))
+
+(defun rontolisp::%clojure-ring-form-decode-str (s encoding)
+  "ring.util.codec/form-decode-str: S itself unless it holds a + or a %, else
+   java.net.URLDecoder/decode in the charset ENCODING names (+ is a space, each
+   run of %XX escapes its bytes), nil where URLDecoder throws: a % without two
+   hex digits behind it."
+  (let ((s (rontolisp::%clojure-ring-string s)))
+    (if (not (or (position #\+ s) (position #\% s)))
+        s
+        (let ((charset (rontolisp::%clojure-ring-charset encoding))
+              (out (make-string-output-stream))
+              (n (length s))
+              (i 0))
+          (loop
+            (if (>= i n) (return (get-output-stream-string out)))
+            (let ((c (char s i)))
+              (cond ((char= c #\+)
+                     (write-char #\Space out)
+                     (setq i (+ i 1)))
+                    ((char= c #\%)
+                     (let ((bytes nil))
+                       (loop
+                         (if (not (and (< i n) (char= (char s i) #\%)))
+                             (return nil))
+                         (let ((b (rontolisp::%clojure-ring-escape s i)))
+                           (if (null b) (return nil))
+                           (setq bytes (cons b bytes))
+                           (setq i (+ i 3))))
+                       (if (and (< i n) (char= (char s i) #\%)) (return nil))
+                       (rontolisp::%clojure-ring-write-bytes (nreverse bytes)
+                                                             charset out)))
+                    (t
+                     (write-char c out)
+                     (setq i (+ i 1))))))))))
+
+(defun rontolisp::%clojure-ring-form-decode-map (s encoding)
+  "ring.util.codec/form-decode-map: the parameters of the
+   www-form-urlencoded S as a map of string keys -- tokens between &s (an empty
+   one skipped), each split at its first =, both halves through
+   form-decode-str, a pair either half of which does not decode skipped, a
+   repeated key collecting its values into a vector in order."
+  (let ((s (rontolisp::%clojure-ring-string s))
+        (table (rontolisp:plist-hash-table nil :test 'equal))
+        (start 0))
+    (loop
+      (let* ((end (or (position #\& s :start start) (length s)))
+             (token (subseq s start end)))
+        (if (> (length token) 0)
+            (let* ((eq-at (position #\= token))
+                   (k
+                    (rontolisp::%clojure-ring-form-decode-str
+                     (if eq-at (subseq token 0 eq-at) token) encoding))
+                   (v
+                    (rontolisp::%clojure-ring-form-decode-str
+                     (if eq-at (subseq token (+ eq-at 1)) "") encoding)))
+              (if (and k v)
+                  (let ((cur (gethash k table)))
+                    (setf (gethash k table)
+                          (cond ((null cur) v)
+                                ((and (vectorp cur) (not (stringp cur)))
+                                 (let ((grown (make-array (+ (length cur) 1))))
+                                   (dotimes (j (length cur))
+                                     (setf (svref grown j) (svref cur j)))
+                                   (setf (svref grown (length cur)) v)
+                                   grown))
+                                (t (vector cur v))))))))
+        (if (>= end (length s)) (return table))
+        (setq start (+ end 1))))))
+
+(defun rontolisp::%clojure-ring-form-decode (s encoding)
+  "ring.util.codec/form-decode: S without an = through form-decode-str, else
+   through form-decode-map."
+  (if (position #\= (rontolisp::%clojure-ring-string s))
+      (rontolisp::%clojure-ring-form-decode-map s encoding)
+      (rontolisp::%clojure-ring-form-decode-str s encoding)))
+
+(defun rontolisp::%clojure-ring-parse-long (s)
+  "Long/valueOf of the string S: an optional sign and decimal digits in the
+   long range, else the oracle's NumberFormatException."
+  (let* ((n (length s))
+         (sign (and (> n 0) (member (char s 0) '(#\+ #\-))))
+         (digits (if sign (subseq s 1) s)))
+    (if (and (> (length digits) 0)
+             (every (lambda (c) (and (char>= c #\0) (char<= c #\9))) digits))
+        (let ((value (parse-integer digits)))
+          (if (char= (if sign (char s 0) #\+) #\-) (setq value (- value)))
+          (if (and (>= value -9223372036854775808)
+                   (<= value 9223372036854775807))
+              value
+              (rontolisp::%clojure-number-format-exception
+               (concatenate 'string "For input string: \"" s "\""))))
+        (rontolisp::%clojure-number-format-exception
+         (concatenate 'string "For input string: \"" s "\"")))))
+
+(defun rontolisp::%clojure-ring-space-p (c)
+  "Whether C is a regex \\s: space, tab, newline, vertical tab, form feed or
+   carriage return."
+  (member (char-code c) '(32 9 10 11 12 13)))
+
+(defun rontolisp::%clojure-ring-line-end-p (c)
+  "Whether C ends a line for a regex: what . does not match."
+  (member (char-code c) '(10 13 133 8232 8233)))
+
+(defun rontolisp::%clojure-ring-param-end-p (s j)
+  "Whether \\s*(?:;|$) matches at index J of S: spaces, then a ; or the end
+   of S -- which $ also finds before one line terminator ending S."
+  (let ((n (length s)))
+    (loop
+      (if (or (>= j n) (not (rontolisp::%clojure-ring-space-p (char s j))))
+          (return nil))
+      (setq j (+ j 1)))
+    (or (>= j n) (char= (char s j) #\;)
+        (and (= j (- n 1)) (rontolisp::%clojure-ring-line-end-p (char s j)))
+        (and (= j (- n 2)) (char= (char s j) #\Return)
+             (char= (char s (+ j 1)) #\Newline)))))
+
+(defun rontolisp::%clojure-ring-token-char-p (c)
+  "Whether C is an HTTP token character (ring.util.parsing/re-token)."
+  (let ((code (char-code c)))
+    (or (and (>= code 48) (<= code 57)) (and (>= code 65) (<= code 90))
+        (and (>= code 97) (<= code 122)) (find c "!#$%&'*-+.^_`|~"))))
+
+(defun rontolisp::%clojure-ring-charset-value (s r)
+  "The charset value of S starting at index R when the rest of the parameter
+   reads as one -- a token, else a quoted string -- or nil: the value
+   alternation of ring.util.parsing/re-charset, its backtracking included."
+  (let ((n (length s)) (e r))
+    (loop
+      (if (or (>= e n) (not (rontolisp::%clojure-ring-token-char-p (char s e))))
+          (return nil))
+      (setq e (+ e 1)))
+    (if (and (> e r) (rontolisp::%clojure-ring-param-end-p s e))
+        (subseq s r e)
+        (if (and (< r n) (char= (char s r) #\"))
+            ;; the greedy run stops at the first quote not escaped by a
+            ;; backslash; giving back an escaped pair closes at its quote
+            (let ((x (+ r 1)) (closers nil))
+              (loop
+                (cond ((>= x n) (return nil))
+                      ((and (char= (char s x) #\\) (< (+ x 1) n)
+                            (char= (char s (+ x 1)) #\"))
+                       (setq closers (cons (+ x 1) closers))
+                       (setq x (+ x 2)))
+                      ((char= (char s x) #\")
+                       (setq closers (cons x closers))
+                       (return nil))
+                      (t (setq x (+ x 1)))))
+              (dolist (c closers nil)
+                (if (rontolisp::%clojure-ring-param-end-p s (+ c 1))
+                    (return (subseq s (+ r 1) c)))))
+            nil))))
+
+(defun rontolisp::%clojure-ring-charset-at (s q)
+  "The charset value of a charset= parameter starting at index Q of S
+   (charset case-insensitively), or nil."
+  (if (and (<= (+ q 8) (length s)) (string-equal (subseq s q (+ q 7)) "charset")
+           (char= (char s (+ q 7)) #\=))
+      (rontolisp::%clojure-ring-charset-value s (+ q 8))
+      nil))
+
+(defun rontolisp::%clojure-ring-content-type-charset (s)
+  "ring.util.parsing/find-content-type-charset: the first match of
+   ;(?:.*\\s)?(?i:charset)=(?:(token)|\"(quoted)\")\\s*(?:;|$) in the string S,
+   its token or quoted text, or nil -- the regex's search order spelled out:
+   the leftmost ;, then the greedy .*\\s (the last space a match follows
+   first), then no .*\\s at all."
+  (let ((n (length s)) (found nil) (p 0))
+    (loop
+      (if (or found (>= p n)) (return found))
+      (if (char= (char s p) #\;)
+          (let ((stop (+ p 1)) (q nil))
+            (loop
+              (if (or (>= stop n)
+                      (rontolisp::%clojure-ring-line-end-p (char s stop)))
+                  (return nil))
+              (setq stop (+ stop 1)))
+            (setq q (min n (+ stop 1)))
+            (loop
+              (if (or found (< q (+ p 2))) (return nil))
+              (if (rontolisp::%clojure-ring-space-p (char s (- q 1)))
+                  (setq found (rontolisp::%clojure-ring-charset-at s q)))
+              (setq q (- q 1)))
+            (if (null found)
+                (setq found (rontolisp::%clojure-ring-charset-at s (+ p 1))))))
+      (setq p (+ p 1)))))
+
+(defvar rontolisp::%clojure-ring-letters nil)
+
+(defun rontolisp::%clojure-ring-letter-table ()
+  "The non-ASCII letters -- \\p{L}, the Unicode general category L, which
+   Character/isLetter answers -- as a simple vector of sorted [from to] code
+   point bounds, decoded on first use from text generated from the JDK: four
+   base-64 digits per bound, the digit d spelled 48 + d with the backslash
+   skipped, line breaks ignored (ClojureRingUtilTest pins it to the JDK)."
+  (or rontolisp::%clojure-ring-letters
+      (let ((text
+             "
+002Z002Z002f002f002k002k0030003F003H003g003i00;100;600;A00;P00;T00;]00;]00;_
+00;_00=a00=e00=g00=h00=k00=n00=p00=p00>600>600>800>:00><00><00>>00>Q00>S00?f
+00?h00B100B:00D`00Db00EF00EI00EI00EP00F800G@00GZ00G`00Gc00HP00I:00I_00I`00Ib
+00KC00KE00KE00KU00KV00K_00K`00Kk00Km00Kp00Kp00L@00L@00LB00L`00M=00NU00Nb00Nb
+00O:00OZ00Oe00Of00Ok00Ok00P000PE00PJ00PJ00PT00PT00PX00PX00Q000QH00QP00QZ00Qa
+00R700R900R>00RP00S900T400Tj00Tn00Tn00U@00U@00UH00UQ00Ub00V000V500V<00V?00V@
+00VC00VX00VZ00Va00Vc00Vc00Vg00Vj00Vn00Vn00W>00W>00WL00WM00WO00WQ00Wa00Wb00Wm
+00Wm00X500X:00X?00X@00XC00XX00XZ00Xa00Xc00Xd00Xf00Xg00Xi00Xj00YI00YL00YN00YN
+00Yc00Ye00Z500Z=00Z?00ZA00ZC00ZX00ZZ00Za00Zc00Zd00Zf00Zj00Zn00Zn00[@00[@00[P
+00[Q00[j00[j00]500]<00]?00]@00]C00]X00]Z00]a00]c00]d00]f00]j00]n00]n00^L00^M
+00^O00^Q00^b00^b00_300_300_500_:00_>00_@00_B00_E00_I00_J00_L00_L00_N00_O00_S
+00_T00_X00_Z00__00_j00`@00`@00a500a<00a>00a@00aB00aX00aZ00aj00an00an00bH00bJ
+00bM00bM00bP00bQ00c000c000c500c<00c>00c@00cB00cX00cZ00cd00cf00cj00cn00cn00dM
+00dN00dP00dQ00db00dc00e400e<00e>00e@00eB00ek00en00en00f>00f>00fD00fF00fO00fQ
+00fk00fp00g500gF00gJ00gb00gd00gl00gn00gn00h000h600i100ia00ic00id00j000j600k1
+00k200k400k400k600k:00k<00kS00kU00kU00kW00ka00kc00kd00kn00kn00l000l400l600l6
+00lL00lO00m000m000n000n700n900n]00o800o<0100010Z010p010p011@011E011J011M011Q
+011Q011U011V011_011a011f0121012>012>012P013501370137013=013=013@013k013m0198
+019:019=019@019F019H019H019J019M019P01:801::01:=01:@01:a01:c01:f01:i01:o01;0
+01;001;201;501;801;F01;H01<@01<B01<E01<H01=J01>001>?01>P01?f01?i01?n01@101I]
+01I`01Ip01J101JJ01JP01KZ01Kb01Ki01L001LA01LO01Lb01M001MA01MP01M]01M_01Ma01N0
+01Nd01OG01OG01OL01OL01PP01Qi01R001R401R701RX01RZ01RZ01Ra01Sf01T001TN01U@01U^
+01Ua01Ue01V001V[01Va01W901X001XF01XP01YD01ZW01ZW01]501]d01^501^<01_301_P01__
+01_`01_k01`U01a001aS01b=01b?01bJ01bn01c001c:01c@01ck01cn01cp01dY01d]01d_01dd
+01df01dg01dk01dk01e001gp01i001mE01mH01mM01mP01n501n801n=01n@01nG01nI01nI01nK
+01nK01nM01nM01nO01nn01o001oe01og01om01oo01oo01p201p401p601p<01p@01pC01pF01pK
+01pP01p]01pc01pe01pg01pm021b021b021p021p022@022L0242024202470247024:024C024E
+024E024I024M024T024T024V024V024X024X024Z024^024`024j024m024p02550259025>025>
+0263026402a002dT02d[02d_02dc02dd02e002eU02eW02eW02e^02e^02ea02fW02f`02f`02g0
+02gF02gP02gV02gX02g_02ga02gg02gi02go02h002h602h802h>02h@02hF02hH02hN02i`02i`
+03050306030b030f030l030m0311032F032M032O032Q033k033m033p0345034`034b036>036P
+036p037a037p03@004gp04i00:B<0:C@0:Cn0:D00:H<0:H@0:HO0:HZ0:H[0:I00:I_0:Ip0:JM
+0:JP0:KU0:LG0:LO0:LR0:N80:N;0:O=0:O@0:OA0:OC0:OC0:OE0:OL0:Oc0:P10:P30:P50:P7
+0:P:0:P<0:PR0:Q00:Qd0:R20:Rd0:Sc0:Sh0:Sl0:Sl0:Sn0:So0:T:0:TU0:Ta0:U60:UP0:Um
+0:V40:Vc0:W?0:W?0:WP0:WT0:WV0:W`0:Wk0:Wo0:X00:XX0:Y00:Y20:Y40:Y;0:YP0:Yg0:Yk
+0:Yk0:Yo0:Z`0:Zb0:Zb0:Zf0:Zg0:Zj0:Zn0:[00:[00:[20:[20:[K0:[M0:[P0:[Z0:[c0:[e
+0:]10:]60:]90:]>0:]A0:]F0:]P0:]V0:]X0:]_0:]a0:^J0:^L0:^Y0:^a0:`R0:a00=NS0=Na
+0=O60=O;0=Ol0?T00?Y^0?Ya0?[I0?]00?]60?]C0?]G0?]M0?]M0?]O0?]X0?]Z0?]g0?]i0?]m
+0?]o0?]o0?^00?^10?^30?^40?^60?_b0?`C0?en0?f@0?g?0?gB0?h70?ha0?hl0?ja0?je0?jg
+0?lm0?mQ0?mk0?n10?nJ0?nV0?oo0?p20?p70?p:0?p?0?pB0?pG0?pJ0?pL0@000@0;0@0=0@0V
+0@0X0@0k0@0m0@0n0@0p0@1=0@1@0@1M0@200@3k0@:00@:L0@:P0@;@0@<00@<O0@<^0@=00@=2
+0@=90@=@0@=f0@>00@>M0@>P0@?30@?80@??0@@00@BM0@Ba0@CC0@CH0@Cl0@D00@DW0@Da0@ES
+0@Ea0@Ek0@Em0@F:0@F<0@FB0@FD0@FE0@FG0@FQ0@FS0@Fb0@Fd0@Fj0@Fl0@Fm0@G00@Gd0@H0
+0@Lg0@M00@ME0@MP0@MW0@N00@N50@N70@Na0@Nc0@Nk0@P00@P50@P80@P80@P:0@Pf0@Ph0@Pi
+0@Pm0@Pm0@Pp0@QE0@QP0@Qg0@R00@RN0@SP0@Sc0@Se0@Sf0@T00@TE0@TP0@Tj0@V00@Vh0@Vo
+0@Vp0@X00@X00@X@0@XC0@XE0@XG0@XI0@Xf0@YP0@Ym0@Z00@ZL0@[00@[70@[90@[T0@]00@]f
+0@^00@^E0@^P0@^c0@_00@_A0@a00@b80@c00@cc0@d00@dc0@e00@eS0@f:0@fU0@f`0@g50@k0
+0@kY0@ka0@kb0@l20@l40@m00@mL0@mW0@mW0@ma0@n50@na0@o10@oa0@p40@pP0@pg0A030A0h
+0A1b0A1c0A1f0A1f0A230A2`0A3@0A3X0A430A4V0A540A540A570A570A5@0A5c0A5g0A5g0A63
+0A6c0A710A740A7J0A7J0A7L0A7L0A800A8A0A8C0A8[0A8p0A900A:00A:60A:80A:80A::0A:=
+0A:?0A:M0A:O0A:X0A:a0A;N0A<50A<<0A<?0A<@0A<C0A<X0A<Z0A<a0A<c0A<d0A<f0A<j0A<n
+0A<n0A=@0A=@0A=M0A=Q0A>00A>90A>;0A>;0A>>0A>>0A>@0A>f0A>h0A>h0A?A0A?A0A?C0A?C
+0A@00A@e0AA70AA:0AAO0AAQ0AB00AB`0AC40AC50AC70AC70AF00AF_0AGH0AGK0AH00AH`0AI4
+0AI40AJ00AJZ0AJi0AJi0AL00ALJ0AM00AM60AP00AP[0ARP0ASO0ASp0AT60AT90AT90AT<0ATC
+0ATE0ATF0ATH0AT`0ATp0ATp0AU10AU10AVP0AVW0AVZ0AW@0AWQ0AWQ0AWS0AWS0AX00AX00AX;
+0AXc0AXk0AXk0AY@0AY@0AYL0AZ90AZM0AZM0AZa0A[i0A`00A`P0Aa00Aa80Aa:0Aa_0Ab00Ab0
+0Abc0Ac?0Ae00Ae60Ae80Ae90Ae;0Aea0Af60Af60AfP0AfU0AfW0AfX0AfZ0Ag90AgH0AgH0AlP
+0Alc0Am20Am20Am40Am@0AmB0Amd0Aoa0Aoa0B000B>I0BB00BE30Bo@0Bpa0C000C@`0CA10CA6
+0CAP0D?k0D@00DI60F400F4M0FP00FXi0FY00FYN0FYa0FZo0F[@0F[^0F]00F]`0F^00F^30F^S
+0F^h0F^n0F_?0Ff00Ff]0Fj00Fjp0Fm00Fn:0Fn@0Fn@0FoC0FoO0FpP0FpQ0FpS0FpS0G000HOh
+0HP00HdE0Hdp0He80Jpa0Jpd0Jpf0Jpl0Jpn0Jpo0K000K4R0K4c0K4c0K5@0K5B0K5E0K5E0K5T
+0K5W0K5a0K;l0Ka00KbZ0Kba0Kbm0Kc00Kc80Kc@0KcI0M@00MAD0MAF0MBL0MBN0MBO0MBR0MBR
+0MBU0MBV0MBY0MB]0MB_0MBj0MBl0MBl0MBn0MC30MC50MD50MD70MD:0MD=0MDD0MDF0MDL0MDN
+0MDj0MDl0MDo0ME00ME40ME60ME60ME:0ME@0MEB0MJU0MJX0MK00MK20MKJ0MKL0MKk0MKm0MLD
+0MLF0MLe0MLg0MM>0MM@0MM_0MMa0MN80MN:0MNX0MNZ0MO20MO40MO;0Mm00MmN0MmU0MmZ0N0a
+0N1^0N400N4]0N4h0N4n0N5>0N5>0N:@0N:^0N;00N;[0NC@0NC[0NG@0NG^0NGa0NGa0NOP0NOV
+0NOX0NO[0NO^0NO_0NOa0NOo0NP00NS40NT00NU30NU;0NU;0Ni00Ni30Ni50NiO0NiQ0NiR0NiT
+0NiT0NiW0NiW0NiY0Nic0Nie0Nih0Nij0Nij0Nil0Nil0Nj20Nj20Nj70Nj70Nj90Nj90Nj;0Nj;
+0Nj=0Nj?0NjA0NjB0NjD0NjD0NjG0NjG0NjI0NjI0NjK0NjK0NjM0NjM0NjO0NjO0NjQ0NjR0NjT
+0NjT0NjW0NjZ0Nj]0Njc0Nje0Njh0Njj0Njm0Njo0Njo0Nk00Nk90Nk;0NkK0NkQ0NkS0NkU0NkY
+0Nk[0Nkl0P000ZKO0ZL00[Lj0[M00[PM0[PP0]kQ0]ka0_`P0_`a0_jM0`P00`XM0a000b=:0b=@
+0c>`")
+            (bounds nil)
+            (value 0)
+            (count 0))
+        (dotimes (i (length text))
+          (let ((code (char-code (char text i))))
+            (if (>= code 48)
+                (progn
+                  (setq value (+ (* value 64) (- code (if (> code 92) 49 48))))
+                  (setq count (+ count 1))
+                  (if (= count 4)
+                      (progn
+                        (setq bounds (cons value bounds))
+                        (setq value 0)
+                        (setq count 0)))))))
+        (setq rontolisp::%clojure-ring-letters
+              (coerce (nreverse bounds) 'simple-vector)))))
+
+(defun rontolisp::%clojure-ring-letter-p (c)
+  "Whether the character C is a letter, the regex class \\p{L}."
+  (let ((code (char-code c)))
+    (if (< code 128)
+        (or (and (>= code 65) (<= code 90)) (and (>= code 97) (<= code 122)))
+        (let* ((table (rontolisp::%clojure-ring-letter-table))
+               (lo 0)
+               (hi (- (floor (length table) 2) 1)))
+          (loop
+            (if (> lo hi) (return nil))
+            (let ((mid (floor (+ lo hi) 2)))
+              (cond ((< code (svref table (* 2 mid))) (setq hi (- mid 1)))
+                    ((> code (svref table (+ (* 2 mid) 1))) (setq lo (+ mid 1)))
+                    (t (return t)))))))))
+
+(defun rontolisp::%clojure-ring-keyword-part-p (s start end dot)
+  "Whether S from START to END reads [\\p{L}*+!_?-][\\p{L}\\d*+!_?-]*, a dot
+   allowed after the first character when DOT."
+  (and (< start end)
+       (let ((c (char s start)))
+         (or (rontolisp::%clojure-ring-letter-p c) (find c "*+!_?-")))
+       (do ((i (+ start 1) (+ i 1)))
+           ((>= i end) t)
+         (let ((c (char s i)))
+           (if (not
+                (or (rontolisp::%clojure-ring-letter-p c)
+                    (and (char>= c #\0) (char<= c #\9)) (find c "*+!_?-")
+                    (and dot (char= c #\.))))
+               (return nil))))))
+
+(defun rontolisp::%clojure-ring-keyword-syntax-p (s parse-namespaces)
+  "Whether the parameter name S becomes a keyword under
+   wrap-keyword-params: a plain keyword name, or with PARSE-NAMESPACES a
+   namespace (dots allowed), a slash and a plain name."
+  (let ((n (length s)))
+    (or (rontolisp::%clojure-ring-keyword-part-p s 0 n nil)
+        (and (rontolisp::%clojure-truthy parse-namespaces)
+             (let ((slash (position #\/ s)))
+               (and slash (rontolisp::%clojure-ring-keyword-part-p s 0 slash t)
+                    (rontolisp::%clojure-ring-keyword-part-p s (+ slash 1) n
+                                                             nil)))))))

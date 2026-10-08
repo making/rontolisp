@@ -27,8 +27,10 @@ final class ClojureSourcePath {
 	 *
 	 * @param path the path it was read from, for positions
 	 * @param text its contents
+	 * @param builtin whether it is a built-in namespace's file
+	 * ({@link ClojureBuiltinNamespaces}) rather than the project's
 	 */
-	record Found(String path, String text) {
+	record Found(String path, String text, boolean builtin) {
 	}
 
 	private final ClojureFiles files;
@@ -86,9 +88,11 @@ final class ClojureSourcePath {
 	}
 
 	/**
-	 * The file of a namespace, from the first root holding it.
+	 * The file of a namespace, from the first root holding it, else the built-in one
+	 * ({@link ClojureBuiltinNamespaces}): a project file shadows a built-in namespace, as
+	 * a source directory precedes a dependency jar on the oracle's classpath.
 	 * @param ns the namespace
-	 * @return the file, or {@code null} when no root holds one
+	 * @return the file, or {@code null} when neither a root nor the built-ins hold one
 	 */
 	@Nullable Found find(String ns) {
 		String relative = resourceOf(ns);
@@ -96,10 +100,11 @@ final class ClojureSourcePath {
 			String path = this.files.resolve(root, relative);
 			String text = this.files.read(path);
 			if (text != null) {
-				return new Found(path, text);
+				return new Found(path, text, false);
 			}
 		}
-		return null;
+		String builtin = ClojureBuiltinNamespaces.source(ns);
+		return builtin == null ? null : new Found(relative, builtin, true);
 	}
 
 	/**

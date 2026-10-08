@@ -26,6 +26,7 @@ has them.
 | [(clojure.set)](reference/clojure-set.md) | The relational set library: `union`/`intersection`/`difference`, `select`/`project`/`rename`, `index`/`join`, `subset?`/`superset?` |
 | [Regular expressions](reference/regex.md) | `re-find`/`re-seq`/`re-matches`, `re-matcher`/`re-groups`, `re-pattern` and pattern `split`/`replace` |
 | [Ring adapter](reference/ring.md) | `ring.adapter.rontolisp/run-server`: a Ring handler served on every transport |
+| [Ring utilities](reference/ring-util.md) | The built-in `ring.util.*` and `ring.middleware.*` namespaces: response builders, URL and form coding, parameter middleware |
 | [Java interop](reference/interop.md) | `.`, `..`, construction, `memfn`, `proxy` |
 | [Transducers](reference/transducers.md) | `transduce`/`eduction`/`sequence`/`completing`, `reduced` and its companions, `cat`, and the one-argument arities of the seq verbs |
 | [IO](reference/io.md) | `spit`/`slurp`/`line-seq`, `clojure.java.io/reader` and `format` |
