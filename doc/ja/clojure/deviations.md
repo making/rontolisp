@@ -110,7 +110,8 @@
   投げます）。文字列の範囲を超える `subs`、`.substring`、`.charAt` は
   `StringIndexOutOfBoundsException` を投げます（int の範囲を超える double の境界も同じで、
   オラクルの `subs` は `ArithmeticException` か `IllegalArgumentException` を投げます）。catch が名指すクラスはこの
-  ホストで解決できなければなりません（`java.*`、`clojure.lang` の throwable）。オラクルの
+  ホストで解決できなければなりません（`java.*`、`clojure.lang` の throwable、プログラムの
+  Java クラスパス `--java-classpath`・`--java-dep` のクラス）。オラクルの
   クラスパスにしかないクラスは拒否します。
 - 例外はクラス、メッセージ、データ、cause を持つコンディションです。実行時エラーは
   ランタイムがシグナルする Common Lisp のコンディションで、そのメッセージは Common Lisp の

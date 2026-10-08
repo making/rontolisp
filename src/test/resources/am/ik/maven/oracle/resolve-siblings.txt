@@ -1,0 +1,5 @@
+# resolve test.resolve:x:1 test.resolve:x:2 test.resolve:tie:1
+test.resolve:x:jar::2 scope=compile optional=false
+test.resolve:tie:jar::1 scope=compile optional=false
+  test.resolve:a2:jar::1 scope=compile optional=false
+  test.resolve:b2:jar::1 scope=compile optional=false

@@ -242,11 +242,13 @@ release. A call left to run time goes through a reflection bridge (compiled
 with the project's own Java release) the compiler writes beside the class,
 which needs a JRE at least as new as the one rontolisp was built with.
 
-`--java-release N` and `--java-classpath` choose which class files, `--warn-java-reflection`
-reports the calls left to run time, and `--java-static` makes each of them a compile error,
-so the class carries no reflection and GraalVM `native-image` builds it with no
-reachability metadata (the guide's [Resolving calls before they
-run](../guides/java-interop.md#resolving-calls-before-they-run)).
+`--java-release N` and the program's class path (`--java-classpath`, `--java-dep`)
+choose which class files, `--warn-java-reflection` reports the calls left to run time, and
+`--java-static` makes each of them a compile error, so the class carries no reflection and
+GraalVM `native-image` builds it with no reachability metadata (the guide's [Resolving
+calls before they run](../guides/java-interop.md#resolving-calls-before-they-run)). A
+program jar carries its class path beside it and names it in its manifest, a war in
+`WEB-INF/lib` (the guide's [Java libraries](../guides/java-interop.md#java-libraries)).
 
 ## Skip the JIT Warm-Up with an AOT Cache
 

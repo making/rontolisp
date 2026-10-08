@@ -1,0 +1,7 @@
+# resolve test.resolve:pom-type:1
+test.resolve:pom-type:jar::1 scope=compile optional=false
+  test.resolve:bom-like:pom::1 scope=compile optional=false
+  test.resolve:x:jar::2 scope=compile optional=false
+  test.resolve:x-doc:jar:javadoc:1 scope=compile optional=false
+  test.resolve:x-src:jar:sources:1 scope=compile optional=false
+  test.resolve:x-bundle:bundle::1 scope=compile optional=false

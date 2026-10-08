@@ -1,0 +1,10 @@
+# resolve test.graph:b:1 test.graph:c:1@test test.graph:managed-root:1 --managed test.graph:c:5@runtime test.graph:b:9#test.graph:x test.graph:x-child:2? test.graph:mr-child:2 test.graph:mr-grandchild:1@test
+test.graph:b:jar::1 scope=compile optional=false exclusions=test.graph:x
+  test.graph:cycle-back:jar::1 scope=compile optional=false
+  test.reloc.new:old:jar::1 scope=compile optional=false relocations=[test.reloc:old:jar:1]
+    test.lib:after-reloc:jar::1 scope=compile optional=false
+test.graph:c:jar::1 scope=test optional=false
+  test.graph:c-child:jar::1 scope=test optional=false
+test.graph:managed-root:jar::1 scope=compile optional=false
+  test.graph:mr-child:jar::2 scope=compile optional=false premanaged-version=1
+    test.graph:mr-grandchild:jar::1 scope=test optional=false premanaged-version=2 premanaged-scope=compile

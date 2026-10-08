@@ -50,7 +50,10 @@ public final class ReflectiveJavaClasses implements JavaClassLookup {
 			char.class, "short", short.class, "int", int.class, "long", long.class, "float", float.class, "double",
 			double.class, "void", void.class);
 
-	private static final ReflectiveJavaClasses INSTANCE = new ReflectiveJavaClasses();
+	private static final ReflectiveJavaClasses INSTANCE = new ReflectiveJavaClasses(
+			ReflectiveJavaClasses.class.getClassLoader());
+
+	private final ClassLoader loader;
 
 	// Class.forName is ~500 ns; a name's answer (including "absent") is remembered.
 	private final ConcurrentHashMap<String, Object> byName = new ConcurrentHashMap<>();
@@ -59,7 +62,8 @@ public final class ReflectiveJavaClasses implements JavaClassLookup {
 
 	private static final int CACHE_LIMIT = 4096;
 
-	private ReflectiveJavaClasses() {
+	private ReflectiveJavaClasses(ClassLoader loader) {
+		this.loader = loader;
 	}
 
 	/**
@@ -67,6 +71,25 @@ public final class ReflectiveJavaClasses implements JavaClassLookup {
 	 */
 	public static ReflectiveJavaClasses instance() {
 		return INSTANCE;
+	}
+
+	/**
+	 * The lookup over the classes a loader sees -- a program's Java class path on top of
+	 * the classes rontolisp runs with. A type stays canonical per {@link Class}, so the
+	 * lookups of two loaders agree on every class both see. The caller keeps the lookup
+	 * for as long as it uses the loader: its cache of names lives in it.
+	 * @param loader the loader names are resolved through
+	 * @return a lookup over it ({@link #instance()} for rontolisp's own loader)
+	 */
+	public static ReflectiveJavaClasses over(ClassLoader loader) {
+		return loader == INSTANCE.loader ? INSTANCE : new ReflectiveJavaClasses(loader);
+	}
+
+	/**
+	 * @return the loader names are resolved through
+	 */
+	public ClassLoader loader() {
+		return this.loader;
 	}
 
 	/**
@@ -82,7 +105,7 @@ public final class ReflectiveJavaClasses implements JavaClassLookup {
 	public @Nullable Type find(String name) {
 		Object cached = this.byName.get(name);
 		if (cached == null) {
-			Class<?> type = load(name);
+			Class<?> type = load(name, this.loader);
 			cached = type == null ? ABSENT : type;
 			if (this.byName.size() >= CACHE_LIMIT) {
 				this.byName.clear();
@@ -114,13 +137,13 @@ public final class ReflectiveJavaClasses implements JavaClassLookup {
 				types -> new JavaImplementationType(types.get(0), types.subList(1, types.size())));
 	}
 
-	private static @Nullable Class<?> load(String name) {
+	private static @Nullable Class<?> load(String name, ClassLoader loader) {
 		Class<?> primitive = PRIMITIVES.get(name);
 		if (primitive != null) {
 			return primitive;
 		}
 		try {
-			return Class.forName(name, false, ReflectiveJavaClasses.class.getClassLoader());
+			return Class.forName(name, false, loader);
 		}
 		catch (ClassNotFoundException | LinkageError ex) {
 			return null;

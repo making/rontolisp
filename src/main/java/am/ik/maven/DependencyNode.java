@@ -21,11 +21,14 @@ import org.jspecify.annotations.Nullable;
  * {@code null} when management left it alone
  * @param premanagedScope the scope before dependency management changed it, or
  * {@code null} when management left it alone
+ * @param premanagedOptional whether the dependency was optional before dependency
+ * management set its optional flag, or {@code null} when management left it alone
  * @param cycle whether the node closes a cycle
  * @param children the nodes below it
  */
 public record DependencyNode(Dependency dependency, List<Artifact> relocations, @Nullable String premanagedVersion,
-		@Nullable String premanagedScope, boolean cycle, List<DependencyNode> children) {
+		@Nullable String premanagedScope, @Nullable Boolean premanagedOptional, boolean cycle,
+		List<DependencyNode> children) {
 
 	/**
 	 * Copies the lists.
@@ -33,6 +36,7 @@ public record DependencyNode(Dependency dependency, List<Artifact> relocations, 
 	 * @param relocations the relocated-away-from artifacts
 	 * @param premanagedVersion the version before management, or {@code null}
 	 * @param premanagedScope the scope before management, or {@code null}
+	 * @param premanagedOptional the optional flag before management, or {@code null}
 	 * @param cycle whether the node closes a cycle
 	 * @param children the nodes below it
 	 */

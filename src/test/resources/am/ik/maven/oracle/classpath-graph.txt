@@ -1,0 +1,18 @@
+# classpath test.graph:app:1
+classpath test.graph:app:jar::1
+classpath test.graph:b:jar::1
+classpath test.graph:c:jar::2
+classpath test.graph:c-child:jar::2
+classpath test.graph:cycle-back:jar::1
+classpath test.reloc.new:old:jar::1
+classpath test.lib:after-reloc:jar::1
+classpath test.graph:x:jar::1
+classpath test.graph:x-child:jar::1
+classpath test.graph:f:jar::1
+classpath test.graph:r1:jar::1
+classpath test.graph:gone:jar::1
+classpath test.graph:weird:jar::1
+classpath test.graph:excl-holder:jar::1
+classpath test.graph:keep:jar::1
+classpath test.graph:kept-child:jar::1
+classpath test.graph:wild:jar::1

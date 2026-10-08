@@ -4,10 +4,12 @@ import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
+import java.util.List;
 import java.util.Map;
 import java.util.TreeMap;
 import java.util.zip.ZipOutputStream;
 
+import am.ik.maven.Artifact;
 import org.jspecify.annotations.Nullable;
 
 /**
@@ -19,7 +21,12 @@ import org.jspecify.annotations.Nullable;
  * WEB-INF/classes/App.class                         the program
  * WEB-INF/classes/am/ik/rontolisp/runtime/*.class   the travelling closure + the servlet transport
  * WEB-INF/classes/META-INF/services/jakarta.servlet.ServletContainerInitializer
+ * WEB-INF/lib/*.jar                                 the Java class path's jars
  * </pre>
+ * <p>
+ * A directory of the program's Java class path ({@code --java-classpath}) is carried as
+ * its files under {@code WEB-INF/classes/}; one that would replace a file of the program
+ * is refused.
  *
  * <p>
  * <b>No {@code web.xml}, and no file naming the program class.</b> The service
@@ -62,18 +69,33 @@ final class JvmWarWriter {
 	 * @param coordinates the Maven coordinates to embed (a war IS a Maven artifact), or
 	 * {@code null} for none
 	 * @param simd whether the class was compiled with {@code --simd}
+	 * @param classPath the Java class path's entries ({@link JavaClassPath#warEntries()})
+	 * @param dependencies the {@code --java-dep} coordinates the embedded pom names
 	 * @return the war bytes
 	 */
 	static byte[] war(String className, byte[] classBytes, Map<String, byte[]> runtimeClasses,
-			@Nullable MavenCoordinates coordinates, boolean simd) {
+			@Nullable MavenCoordinates coordinates, boolean simd, Map<String, byte[]> classPath,
+			List<Artifact> dependencies) {
+		Map<String, byte[]> own = new TreeMap<>();
+		own.put(CLASSES + className + ".class", classBytes);
+		for (Map.Entry<String, byte[]> runtimeClass : runtimeClasses.entrySet()) {
+			own.put(CLASSES + runtimeClass.getKey(), runtimeClass.getValue());
+		}
+		own.put(SERVICE_FILE, (INITIALIZER + "\n").getBytes(StandardCharsets.UTF_8));
+		for (String name : classPath.keySet()) {
+			if (own.containsKey(name)) {
+				throw new IllegalArgumentException(
+						"the Java class path holds " + name + ", which the war carries for the program itself");
+			}
+		}
 		ByteArrayOutputStream out = new ByteArrayOutputStream();
 		try (ZipOutputStream zip = new ZipOutputStream(out, StandardCharsets.UTF_8)) {
 			JvmJarWriter.write(zip, "META-INF/MANIFEST.MF",
-					JvmJarWriter.manifest(className, false).getBytes(StandardCharsets.UTF_8));
+					JvmJarWriter.manifest(className, false, List.of()).getBytes(StandardCharsets.UTF_8));
 			if (coordinates != null) {
 				String directory = coordinates.metaInfDirectory();
 				JvmJarWriter.write(zip, directory + "pom.xml",
-						coordinates.pomXml(simd).getBytes(StandardCharsets.UTF_8));
+						coordinates.pomXml(simd, dependencies).getBytes(StandardCharsets.UTF_8));
 				JvmJarWriter.write(zip, directory + "pom.properties",
 						coordinates.pomProperties().getBytes(StandardCharsets.UTF_8));
 			}
@@ -84,6 +106,11 @@ final class JvmWarWriter {
 				JvmJarWriter.write(zip, CLASSES + runtimeClass.getKey(), runtimeClass.getValue());
 			}
 			JvmJarWriter.write(zip, SERVICE_FILE, (INITIALIZER + "\n").getBytes(StandardCharsets.UTF_8));
+			// The program's Java class path, where a container's web application loader
+			// reads it: WEB-INF/lib's jars and WEB-INF/classes.
+			for (Map.Entry<String, byte[]> entry : new TreeMap<>(classPath).entrySet()) {
+				JvmJarWriter.write(zip, entry.getKey(), entry.getValue());
+			}
 		}
 		catch (IOException ex) {
 			throw new UncheckedIOException(ex);

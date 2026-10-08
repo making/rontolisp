@@ -17,9 +17,9 @@ import org.jspecify.annotations.Nullable;
 /**
  * Resolves Maven coordinates against Maven repositories: an artifact's descriptor (what
  * its POM says, after Maven's model building), the dependency graph below a set of
- * dependencies (every version seen; which one wins is the caller's policy), and the
- * artifact files themselves, through a local repository in the layout {@code mvn} and
- * {@code clj} share.
+ * dependencies (every version seen, for a caller with its own policy, or resolved the way
+ * Maven resolves a project's), and the artifact files themselves, through a local
+ * repository in the layout {@code mvn} and {@code clj} share.
  *
  * <p>
  * What needs {@code maven-metadata.xml} is refused by name: SNAPSHOT versions, version
@@ -106,6 +106,24 @@ public final class MavenResolver {
 	public synchronized DependencyGraph collect(List<Dependency> dependencies, List<Dependency> managedDependencies)
 			throws MavenResolutionException {
 		return new DependencyCollector(this::descriptor, managedDependencies).collect(dependencies);
+	}
+
+	/**
+	 * Resolves the dependency graph below {@code dependencies} as Maven resolves a
+	 * project's: the collected graph ({@link #collect}) with one node kept per artifact
+	 * by Maven Resolver's conflict resolution under Maven's session -- the nearest
+	 * occurrence wins (between two children of one parent, the higher version), its scope
+	 * is chosen over the scopes every path derives for it, and its optional flag
+	 * likewise. {@link DependencyGraph#runtimeClassPath()} reads the class path off the
+	 * result.
+	 * @param dependencies the requested dependencies, the graph's roots
+	 * @param managedDependencies the dependency management (may be empty)
+	 * @return the resolved graph
+	 * @throws MavenResolutionException if a node cannot be resolved or is refused
+	 */
+	public synchronized DependencyGraph resolve(List<Dependency> dependencies, List<Dependency> managedDependencies)
+			throws MavenResolutionException {
+		return ConflictResolver.resolve(collect(dependencies, managedDependencies));
 	}
 
 	/**

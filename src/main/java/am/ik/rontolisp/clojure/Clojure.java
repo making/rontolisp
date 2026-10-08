@@ -101,7 +101,8 @@ public final class Clojure {
 			@Nullable ClojureMacroEvaluator macroEvaluator, ClojureFiles files, boolean hostTarget,
 			ClojureBoundary boundary) {
 		ClojureReader reader = new ClojureReader(source, file);
-		return ClojureLowering.lower(reader.readAll(), reader, macroEvaluator, files, hostTarget, boundary);
+		return ClojureHostClasses.lowering(files.javaClassLoader(),
+				() -> ClojureLowering.lower(reader.readAll(), reader, macroEvaluator, files, hostTarget, boundary));
 	}
 
 	/**

@@ -73,12 +73,19 @@ import am.ik.rontolisp.compiler.ReflectiveJavaClasses;
 final class JavaInterop {
 
 	/**
-	 * Calls back into the interpreter to apply a Lisp function/lambda (used by proxies).
+	 * The interpreter as a {@code java:} call sees it: what applies a Lisp function a
+	 * proxy calls back, and the classes a class name resolves to.
 	 */
-	@FunctionalInterface
 	interface Caller {
 
 		LispVal call(LispVal function, List<LispVal> args);
+
+		/**
+		 * The classes a class name resolves to: the program's Java class path over the
+		 * classes rontolisp runs with.
+		 * @return the lookup
+		 */
+		ReflectiveJavaClasses classes();
 
 	}
 
@@ -156,7 +163,7 @@ final class JavaInterop {
 		List<LispVal> args = hostArguments(rawArgs, caller);
 		boolean tagged = isTagged(classDesignator);
 		String name = tagged ? member(classDesignator).name() : classDesignator;
-		ReflectiveJavaClasses.Type type = loadClass(name);
+		ReflectiveJavaClasses.Type type = loadClass(name, caller);
 		// A tagged java:new is remembered under its designator, which no method name can
 		// spell, so it never answers an untagged one's choice.
 		JavaOverloads.Overload overload = resolve(type, tagged ? classDesignator : CONSTRUCTOR,
@@ -186,7 +193,7 @@ final class JavaInterop {
 	}
 
 	static LispVal callStatic(String className, String methodName, List<LispVal> args, Caller caller) {
-		return invoke(loadClass(className), null, methodName, args, caller);
+		return invoke(loadClass(className, caller), null, methodName, args, caller);
 	}
 
 	// A static call chooses among the static methods only (JavaOverloads.staticMethods),
@@ -380,10 +387,10 @@ final class JavaInterop {
 
 	// (java:field "class.Name" "CONSTANT") -> static field; (java:field obj "name") ->
 	// instance field.
-	static LispVal field(LispVal classOrObject, String fieldName) {
+	static LispVal field(LispVal classOrObject, String fieldName, Caller caller) {
 		try {
 			if (classOrObject instanceof LispString s) {
-				ReflectiveJavaClasses.Type type = loadClass(s.value());
+				ReflectiveJavaClasses.Type type = loadClass(s.value(), caller);
 				ReflectiveJavaClasses.FieldMember member = type.field(fieldName);
 				if (member != null && !member.isStatic()) {
 					throw new LispEvalException("java:field: "
@@ -436,7 +443,7 @@ final class JavaInterop {
 						call ? "java:call expects a java object as the first argument, got " + receiver.print()
 								: "java:field expects a class-name string or a java object, got " + receiver.print());
 			}
-			if (!loadClass(className).type().isInstance(target)) {
+			if (!loadClass(className, caller).type().isInstance(target)) {
 				throw new LispEvalException(operator + ": the " + (call ? "receiver" : "object") + " is not a "
 						+ className + ", got " + receiver.print());
 			}
@@ -452,7 +459,7 @@ final class JavaInterop {
 		}
 		List<JavaSite.Argument> promised = site.arguments();
 		for (int i = 0; i < args.size(); i++) {
-			if (!keepsPromise(args.get(i), promised.get(i))) {
+			if (!keepsPromise(args.get(i), promised.get(i), caller)) {
 				throw new LispEvalException(operator + ": argument " + (i + 1) + " is not " + promised.get(i).expected()
 						+ ", got " + args.get(i).print());
 			}
@@ -529,7 +536,7 @@ final class JavaInterop {
 
 	// Whether a value is what a resolved site counted on for its argument: one of the
 	// kinds, nil or an instance of the bound, or -- known only when it runs -- anything.
-	private static boolean keepsPromise(LispVal value, JavaSite.Argument argument) {
+	private static boolean keepsPromise(LispVal value, JavaSite.Argument argument, Caller caller) {
 		if (argument.known()) {
 			JavaKind kind = kindOf(value);
 			return kind != null && argument.kinds().contains(kind);
@@ -538,7 +545,7 @@ final class JavaInterop {
 		if (bound == null || value instanceof LispNil) {
 			return true;
 		}
-		return value instanceof LispJavaObject obj && loadClass(bound).type().isInstance(obj.ref());
+		return value instanceof LispJavaObject obj && loadClass(bound, caller).type().isInstance(obj.ref());
 	}
 
 	private static Field publicField(ReflectiveJavaClasses.Type type, String fieldName) throws NoSuchFieldException {
@@ -564,7 +571,7 @@ final class JavaInterop {
 		List<JavaType> types = new ArrayList<>();
 		List<Class<?>> classes = new ArrayList<>();
 		for (String interfaceName : interfaceNames) {
-			ReflectiveJavaClasses.Type type = loadClass(interfaceName);
+			ReflectiveJavaClasses.Type type = loadClass(interfaceName, caller);
 			if (!type.isInterface()) {
 				throw new LispEvalException(JavaImplementations.notAnInterface(true, interfaceName));
 			}
@@ -599,7 +606,7 @@ final class JavaInterop {
 		}
 		List<LispVal> ctorArgs = args.subList(3, args.size() - 1);
 		LispVal callable = args.get(args.size() - 1);
-		ReflectiveJavaClasses.Type superclass = loadClass(superName.value());
+		ReflectiveJavaClasses.Type superclass = loadClass(superName.value(), caller);
 		if (superclass.isInterface()) {
 			throw new LispEvalException(JavaImplementations.notAClass(superName.value()));
 		}
@@ -609,7 +616,7 @@ final class JavaInterop {
 		List<JavaType> interfaces = new ArrayList<>();
 		List<Class<?>> ifaceClasses = new ArrayList<>();
 		for (String interfaceName : interfaceNames) {
-			ReflectiveJavaClasses.Type type = loadClass(interfaceName);
+			ReflectiveJavaClasses.Type type = loadClass(interfaceName, caller);
 			if (!type.isInterface()) {
 				throw new LispEvalException(JavaImplementations.subclassNotAnInterface(interfaceName));
 			}
@@ -640,7 +647,7 @@ final class JavaInterop {
 		Constructor<?> constructor = (Constructor<?>) ((ReflectiveJavaClasses.Member) overload.executable())
 			.executable();
 		Class<?> proxyClass = ClassProxyMaker.proxyClass(superclass.type(), ifaceClasses, dispatch.implementation,
-				constructor);
+				constructor, caller.classes().loader());
 		SUBCLASS_KINDS.putIfAbsent(proxyClass, dispatch.kind);
 		@Nullable Object[] javaArgs = marshalArguments(overload, ctorArgs, caller);
 		try {
@@ -805,7 +812,7 @@ final class JavaInterop {
 			designators.add(designator.value());
 			functions.add(args.get(i + 1));
 		}
-		ReflectiveJavaClasses.Type type = loadClass(interfaceName.value());
+		ReflectiveJavaClasses.Type type = loadClass(interfaceName.value(), caller);
 		if (!type.isInterface()) {
 			throw new LispEvalException(JavaImplementations.notAnInterface(false, interfaceName.value()));
 		}
@@ -1242,8 +1249,8 @@ final class JavaInterop {
 		return result;
 	}
 
-	private static ReflectiveJavaClasses.Type loadClass(String name) {
-		ReflectiveJavaClasses.Type type = CLASSES.find(name);
+	private static ReflectiveJavaClasses.Type loadClass(String name, Caller caller) {
+		ReflectiveJavaClasses.Type type = caller.classes().find(name);
 		if (type == null || type.isPrimitive() || type.isArray()) {
 			throw new LispEvalException("No such class: " + name);
 		}

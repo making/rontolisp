@@ -1,0 +1,10 @@
+# resolve test.resolve:shared:1
+test.resolve:shared:jar::1 scope=compile optional=false
+  test.resolve:s1:jar::1 scope=compile optional=false
+    test.resolve:common:jar::1 scope=compile optional=false
+      test.resolve:w:jar::1 scope=compile optional=false
+      test.resolve:v:jar::1 scope=compile optional=false
+  test.resolve:s2:jar::1 scope=compile optional=false
+    test.resolve:s3:jar::1 scope=compile optional=false
+  test.resolve:t:jar::1 scope=compile optional=false
+    test.resolve:u:jar::1 scope=compile optional=false

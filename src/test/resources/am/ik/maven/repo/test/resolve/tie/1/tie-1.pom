@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>test.resolve</groupId>
+  <artifactId>tie</artifactId>
+  <version>1</version>
+  <dependencies>
+      <dependency><groupId>test.resolve</groupId><artifactId>a2</artifactId><version>1</version></dependency>
+      <dependency><groupId>test.resolve</groupId><artifactId>b2</artifactId><version>1</version></dependency>
+  </dependencies>
+</project>

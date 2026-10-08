@@ -7,12 +7,12 @@ import org.jspecify.annotations.Nullable;
 /**
  * The files a Clojure program names besides itself: the project namespaces a
  * {@code require} loads, the {@code deps.edn} files naming their source roots and
- * dependencies, a dependency's directory or jar, and the user-level {@code deps.edn}.
- * This package has no filesystem of its own -- the browser playground has none at all --
- * so the source-language seam hands one in, over the loader the rest of the program reads
- * through ({@code eval/SourceLanguage}). Where the roots are and which file a namespace
- * maps to is decided here ({@link ClojureSourcePath}, {@link ClojureDepsGraph}); the seam
- * only reads.
+ * dependencies, a dependency's directory or jar, the user-level {@code deps.edn}, and the
+ * classes of its Java class path. This package has no filesystem of its own -- the
+ * browser playground has none at all -- so the source-language seam hands one in, over
+ * the loader the rest of the program reads through ({@code eval/SourceLanguage}). Where
+ * the roots are and which file a namespace maps to is decided here
+ * ({@link ClojureSourcePath}, {@link ClojureDepsGraph}); the seam only reads.
  */
 public interface ClojureFiles {
 
@@ -55,6 +55,17 @@ public interface ClojureFiles {
 	 * @return the resolved path
 	 */
 	String resolve(@Nullable String dir, String relative);
+
+	/**
+	 * The class loader the program's host classes come from -- the program's Java class
+	 * path over the classes rontolisp runs with -- which the lowering asks what a class
+	 * name is (its members' arities, a throwable's chain). The default is rontolisp's own
+	 * loader.
+	 * @return the loader
+	 */
+	default ClassLoader javaClassLoader() {
+		return ClojureFiles.class.getClassLoader();
+	}
 
 	/**
 	 * Whether a file or directory exists at a path. The default reads it.

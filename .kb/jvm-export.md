@@ -129,8 +129,10 @@ so embedders get it too — a program with no jvm-export; it also decides a jar'
   `runtimeClassFiles()` SORTED (`Map.copyOf` iterates randomly), under one fixed DOS timestamp
   (`setTimeLocal`). **Omitting them is a `NoClassDefFoundError` in the CONSUMER.**
 - The embedded `META-INF/maven/<g>/<a>/pom.xml` + `pom.properties` let `install:install-file`
-  run with no coordinate flags; `<dependencies/>` is EMPTY, not omitted; `--emit-pom` writes
-  the pom beside the jar, guarded against `MavenCoordinates.POM_MARKER`.
+  run with no coordinate flags; `<dependencies>` lists the `--java-dep` coordinates and is
+  `<dependencies/>` (EMPTY, not omitted) without any; `--emit-pom` writes the pom beside the
+  jar, guarded against `MavenCoordinates.POM_MARKER`. A program jar's manifest carries
+  `Class-Path` into `<stem>-lib/` (`.kb/java-interop.md`, "The program's Java class path").
 
 ## `rontolisp-maven-plugin` — `src/main/lisp` as a source set
 

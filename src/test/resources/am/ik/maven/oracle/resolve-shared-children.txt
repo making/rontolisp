@@ -1,0 +1,6 @@
+# resolve test.graph2:diamond:1 --managed test.graph2:shared:1?
+test.graph2:diamond:jar::1 scope=compile optional=false
+  test.graph2:left:jar::1 scope=compile optional=false exclusions=test.graph2:shared-child
+    test.graph2:shared:jar::1 scope=compile optional=true premanaged-version=1
+  test.graph2:right:jar::1 scope=compile optional=false
+  test.graph2:right2:jar::1 scope=compile optional=false

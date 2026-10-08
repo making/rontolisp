@@ -18,10 +18,10 @@ import org.jspecify.annotations.Nullable;
  *
  * <ul>
  * <li>A dependency is selected before it is managed. Below the requested dependencies
- * (depth 2 on) only {@code compile} and {@code runtime} scopes are kept -- Maven keeps
- * {@code system} and unknown scopes too; neither is ever on a class path from a
- * repository -- and an optional one is dropped. An exclusion anywhere on the path drops
- * the dependency at any depth.</li>
+ * (depth 2 on) a {@code test} or {@code provided} one is dropped -- {@code system} and
+ * unknown scopes are kept, as Maven keeps them: one can win a version conflict, and below
+ * a {@code runtime} parent an unknown scope derives {@code runtime} -- and so is an
+ * optional one. An exclusion anywhere on the path drops the dependency at any depth.</li>
  * <li>The requested dependency management applies from depth 2 (version, scope, optional
  * flag) and adds its exclusions at every depth; the first entry of a key wins. A POM's
  * own dependency management only shaped its own descriptor.</li>
@@ -30,7 +30,8 @@ import org.jspecify.annotations.Nullable;
  * <li>An artifact (any version) already on its own path is a cycle node, not
  * expanded.</li>
  * <li>{@code war}, {@code ear}, {@code rar} and {@code par} dependencies are not
- * descended into.</li>
+ * descended into, and no POM is read for a {@code system} one (its file is its
+ * {@code systemPath}).</li>
  * <li>The children of an artifact are computed once per set of exclusions in force and
  * shared after that, as Maven's data pool shares them.</li>
  * </ul>
@@ -128,7 +129,10 @@ final class DependencyCollector {
 		}
 		ArtifactDescriptor descriptor;
 		try {
-			descriptor = this.descriptors.read(artifact);
+			// A system dependency is a file at its systemPath: Maven reads no POM for it.
+			descriptor = managed.dependency().scope().equals("system")
+					? new ArtifactDescriptor(artifact, List.of(), List.of(), List.of(), List.of())
+					: this.descriptors.read(artifact);
 		}
 		catch (MavenResolutionException ex) {
 			throw new MavenResolutionException("while collecting " + render(path, artifact) + ": " + ex.getMessage(),
@@ -138,7 +142,7 @@ final class DependencyCollector {
 		Dependency resolved = managed.dependency().withArtifact(descriptor.artifact());
 		if (onPath(path, descriptor.artifact())) {
 			out.add(new DependencyNode(resolved, relocations, managed.premanagedVersion(), managed.premanagedScope(),
-					true, List.of()));
+					managed.premanagedOptional(), true, List.of()));
 			return;
 		}
 		if (!descriptor.relocations().isEmpty()) {
@@ -167,14 +171,14 @@ final class DependencyCollector {
 			}
 			children = pooled;
 		}
-		out.add(new DependencyNode(resolved, relocations, managed.premanagedVersion(), managed.premanagedScope(), false,
-				children));
+		out.add(new DependencyNode(resolved, relocations, managed.premanagedVersion(), managed.premanagedScope(),
+				managed.premanagedOptional(), false, children));
 	}
 
 	private static boolean selected(Dependency dependency, int depth, Set<Exclusion> exclusions) {
 		if (depth >= 2) {
 			String scope = dependency.scope();
-			if (!scope.equals("compile") && !scope.equals("runtime")) {
+			if (scope.equals("test") || scope.equals("provided")) {
 				return false;
 			}
 			if (dependency.isOptional()) {
@@ -189,8 +193,8 @@ final class DependencyCollector {
 		return true;
 	}
 
-	private record Managed(Dependency dependency, @Nullable String premanagedVersion,
-			@Nullable String premanagedScope) {
+	private record Managed(Dependency dependency, @Nullable String premanagedVersion, @Nullable String premanagedScope,
+			@Nullable Boolean premanagedOptional) {
 	}
 
 	private Managed manage(Dependency dependency, int depth, boolean keepVersion) {
@@ -201,6 +205,7 @@ final class DependencyCollector {
 		List<Exclusion> exclusions = dependency.exclusions();
 		String premanagedVersion = null;
 		String premanagedScope = null;
+		Boolean premanagedOptional = null;
 		if (depth >= 2) {
 			String version = this.managedVersions.get(key);
 			if (version != null && !keepVersion) {
@@ -214,6 +219,7 @@ final class DependencyCollector {
 			}
 			Boolean managedOptional = this.managedOptionals.get(key);
 			if (managedOptional != null) {
+				premanagedOptional = dependency.isOptional();
 				optional = managedOptional;
 			}
 		}
@@ -224,7 +230,7 @@ final class DependencyCollector {
 			exclusions = new ArrayList<>(all);
 		}
 		return new Managed(new Dependency(artifact, dependency.type(), scope, optional, exclusions), premanagedVersion,
-				premanagedScope);
+				premanagedScope, premanagedOptional);
 	}
 
 	private static boolean onPath(List<Artifact> path, Artifact artifact) {

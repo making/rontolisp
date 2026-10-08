@@ -111,7 +111,7 @@ final class ClojureThrowables {
 		}
 		Class<?> type;
 		try {
-			type = Class.forName(className, false, ClojureThrowables.class.getClassLoader());
+			type = ClojureHostClasses.load(className);
 		}
 		catch (ClassNotFoundException | LinkageError _) {
 			return null;
@@ -160,7 +160,7 @@ final class ClojureThrowables {
 
 	private static boolean isClass(String className) {
 		try {
-			Class.forName(className, false, ClojureThrowables.class.getClassLoader());
+			ClojureHostClasses.load(className);
 			return true;
 		}
 		catch (ClassNotFoundException | LinkageError _) {

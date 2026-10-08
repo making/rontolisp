@@ -2,6 +2,9 @@ package am.ik.rontolisp.eval;
 
 import java.io.ByteArrayOutputStream;
 import java.io.PrintStream;
+import java.net.URL;
+import java.net.URLClassLoader;
+import java.nio.file.Path;
 
 import am.ik.rontolisp.LispDouble;
 import am.ik.rontolisp.LispInteger;
@@ -12,8 +15,10 @@ import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.reader.LispReader;
 import am.ik.rontolisp.testsupport.JavaImplementationPrograms;
 import am.ik.rontolisp.testsupport.JavaInteropPrograms;
+import am.ik.rontolisp.testsupport.JavaLibraryJar;
 import am.ik.rontolisp.testsupport.ThreadStdio;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -887,6 +892,29 @@ class JavaInteropTest {
 						"""))
 			.isInstanceOf(LispEvalException.class)
 			.hasMessageContaining("java.lang.UnsupportedOperationException: get");
+	}
+
+	// A class of the program's Java class path -- the source loader's Java class loader,
+	// which the CLI builds from --java-classpath / --java-dep -- is reached by every
+	// java: operator, a resolved site and one left to run time alike, and only there.
+	// The compiled program reaches it the same way
+	// (JvmJavaInteropCompilerTest#aClassOnTheJavaClassPathIsCalledDirectly).
+	@Test
+	void aClassOnTheProgramsJavaClassPathIsReachable(@TempDir Path dir) throws Exception {
+		Path jar = JavaLibraryJar.build(dir);
+		try (URLClassLoader loader = new URLClassLoader(new URL[] { jar.toUri().toURL() },
+				LispEvaluator.class.getClassLoader())) {
+			ByteArrayOutputStream out = new ByteArrayOutputStream();
+			LispEvaluator evaluator = new LispEvaluator(new PrintStream(out));
+			evaluator.setSourceLoader(SourceLoader.fileSystem(loader));
+			for (LispVal expr : LispReader.readAllFromString(JavaLibraryJar.LIBRARY_PROGRAM)) {
+				evaluator.eval(expr);
+			}
+			assertThat(String.join("\n", out.toString().strip().lines().map(String::strip).toList()))
+				.isEqualTo(JavaLibraryJar.LIBRARY_OUTPUT);
+		}
+		assertThatThrownBy(() -> eval("(java:new \"fixture.lib.Greeter\" \"x\")"))
+			.hasMessageContaining("No such class: fixture.lib.Greeter");
 	}
 
 }

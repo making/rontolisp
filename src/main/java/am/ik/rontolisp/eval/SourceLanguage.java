@@ -282,6 +282,11 @@ public enum SourceLanguage {
 			}
 
 			@Override
+			public ClassLoader javaClassLoader() {
+				return loader.javaClassLoader();
+			}
+
+			@Override
 			public boolean exists(String path) {
 				return loader.exists(path);
 			}

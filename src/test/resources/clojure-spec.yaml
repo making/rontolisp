@@ -7915,3 +7915,183 @@ cases:
       "Assert failed: (every? symbol? argv)"
       [1 2] {:k :k}
       6
+  - name: clojure-pprint-lays-data-out-like-the-oracle
+    # The built-in clojure.pprint (.kb/clojure-frontend.md "clojure.jar namespaces"): its
+    # layout replays the oracle's pretty writer, so linear breaks, *print-right-margin*,
+    # *print-length*, *print-level*, *print-meta*, reader macros and namespace maps lay
+    # out alike. Every line is the oracle's (clj 1.12.6), on all four backends; maps
+    # with several keys are sorted, since a hash map's walk order differs on wasm.
+    source: |
+      (ns pp-layout (:require [clojure.pprint :as pp]))
+      (pp/pprint [(sorted-map :name "alice" :roles [:admin :dev] :settings (sorted-map :font-size 14 :plugins ["a" "b" "c"] :theme "dark"))
+                  (list 1 2 3 (range 20)) #{:only} "a string" \c 1.5 22/7 nil true])
+      (binding [pp/*print-right-margin* 30]
+        (pp/pprint [(sorted-map :name "alice" :roles [:admin :dev] :settings (sorted-map :font-size 14 :plugins ["a" "b" "c"]))
+                    (list 1 2 3 (range 8))]))
+      (binding [pp/*print-right-margin* 10] (pp/pprint (sorted-map :a [1 2 3] :b {:c 4})))
+      (pp/pprint (list :a (list :b (list :c (vec (range 25))))))
+      (pp/pprint ['(quote x) '(var y) '(clojure.core/deref z) '(clojure.core/unquote w) '(quote a b)])
+      (binding [pp/*print-right-margin* 10] (pp/pprint ''(aaaa bbbb cccc dddd)))
+      (binding [*print-length* 2 pp/*print-right-margin* 10] (pp/pprint [(range 5) (sorted-map :a 1 :b 2 :c 3) #{1} [4 5 6]]))
+      (binding [*print-level* 2] (pp/pprint [1 [2 [3]] {:a {:b 1}} (list 4 (list 5))]))
+      (binding [*print-meta* true pp/*print-right-margin* 20] (pp/pprint [(with-meta [1 2] {:k 1}) (with-meta {:a 1} {:m (vec (range 9))})]))
+      (pp/pprint (sorted-map :x/a 1 :x/b (sorted-map :y/c 2)))
+      (binding [*print-namespace-maps* false] (pp/pprint {:x/a 1}))
+      (binding [pp/*print-suppress-namespaces* true] (pp/pprint '[a/b {:c/d e/f}]))
+      (binding [pp/*print-right-margin* nil] (pp/pprint (vec (range 30))))
+      (in-ns 'user)
+    expected: |
+      [{:name "alice",
+        :roles [:admin :dev],
+        :settings {:font-size 14, :plugins ["a" "b" "c"], :theme "dark"}}
+       (1 2 3 (0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19))
+       #{:only}
+       "a string"
+       \c
+       1.5
+       22/7
+       nil
+       true]
+      [{:name "alice",
+        :roles [:admin :dev],
+        :settings
+        {:font-size 14,
+         :plugins ["a" "b" "c"]}}
+       (1 2 3 (0 1 2 3 4 5 6 7))]
+      {:a
+       [1 2 3],
+       :b
+       {:c 4}}
+      (:a
+       (:b
+        (:c
+         [0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24])))
+      ['x #'y @z ~w (quote a b)]
+      '(aaaa
+        bbbb
+        cccc
+        dddd)
+      [(0
+        1
+        ...)
+       {:a 1,
+        :b 2,
+        ...}
+       ...]
+      [1 [2 #] {#} (4 #)]
+      [^{:k 1}
+       [1 2]
+       ^{:m
+         [0
+          1
+          2
+          3
+          4
+          5
+          6
+          7
+          8]}
+       {:a 1}]
+      #:x{:a 1, :b #:y{:c 2}}
+      {:x/a 1}
+      [b #:c{:d f}]
+      [0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29]
+  - name: clojure-pprint-dispatch-logical-blocks-write-and-print-table
+    # simple-dispatch takes a method per record class, *print-pprint-dispatch* a function
+    # whose logical blocks take fill, miser, mandatory and per-line-prefix newlines and
+    # indentation like the oracle's; write, the radix printing (its negative-number
+    # quirks included) and print-table answer alike. Every line is the oracle's
+    # (clj 1.12.6), on all four backends.
+    source: |
+      (ns pp-api (:require [clojure.pprint :as pp :refer [pprint]]))
+      (defrecord PPoint [x y])
+      (pprint (->PPoint 1 [2 3]))
+      (defmethod pp/simple-dispatch PPoint [p] (print (str "<" (:x p) "," (:y p) ">")))
+      (pprint [(->PPoint 1 2) (->PPoint 3 4)])
+      (pp/with-pprint-dispatch (fn [x] (if (number? x) (print (str "#" x)) (pp/simple-dispatch x))) (pprint [1 [2 "s"]]))
+      (println (pp/write [1 2 3] :stream nil) (pp/write (vec (range 12)) :stream nil :right-margin 10 :length 3))
+      (pp/write {:a 1} :pretty false)
+      (println)
+      (prn (with-out-str (pprint "x")) (with-out-str (pprint {:k "v"} *out*)))
+      (defn fill-dispatch [x]
+        (if (sequential? x)
+          (pp/pprint-logical-block :prefix "<<" :suffix ">>"
+            (pp/print-length-loop [s (seq x)]
+              (when s
+                (pp/write-out (first s))
+                (when (next s) (print " ") (pp/pprint-newline :fill) (recur (next s))))))
+          (pr x)))
+      (binding [pp/*print-right-margin* 20] (pp/with-pprint-dispatch fill-dispatch (pprint (range 25))))
+      (binding [pp/*print-right-margin* 20 pp/*print-miser-width* nil] (pp/with-pprint-dispatch fill-dispatch (pprint (range 25))))
+      (defn per-line [x]
+        (pp/pprint-logical-block :per-line-prefix ";; "
+          (doseq [y x] (pr y) (pp/pprint-newline :mandatory))))
+      (prn (with-out-str (pp/with-pprint-dispatch per-line (pprint [1 2 3]))))
+      (defn indented [x]
+        (pp/pprint-logical-block :prefix "(" :suffix ")"
+          (print "head ") (pp/pprint-indent :block 1) (pp/pprint-newline :linear)
+          (print "aaaaaaaaaaaaaaaaaaaa ") (pp/pprint-newline :linear) (print "bbbbbbbbbbbbbbbbbbbbbbbbbbbb")))
+      (prn (with-out-str (binding [pp/*print-right-margin* 30] (pp/with-pprint-dispatch indented (pprint nil)))))
+      (prn (try (pp/pprint-newline :bogus) (catch IllegalArgumentException e (ex-message e))))
+      (prn (try (pp/pprint-tab :line 1 1) (catch UnsupportedOperationException e (ex-message e))))
+      (binding [pp/*print-base* 16 pp/*print-radix* true] (pprint [0 -3 255 1/2 -7/3 1.5]))
+      (binding [pp/*print-base* 2] (pprint [10 255]))
+      (binding [pp/*print-radix* true] (pprint [10 22/7]))
+      (pp/print-table [:a :b] [{:a 1 :b "two"} {:a 33 :b "four"}])
+      (pp/print-table [:b] [{:a 1 :b "two"} {:a 33 :b nil}])
+      (pp/print-table [])
+      (prn [pp/*print-pretty* pp/*print-right-margin* pp/*print-miser-width* pp/*print-suppress-namespaces* pp/*print-radix* pp/*print-base*])
+      (in-ns 'user)
+    expected: |
+      {:x 1, :y [2 3]}
+      [<1,2> <3,4>]
+      [#1 [#2 "s"]]
+      [1 2 3] [0
+       1
+       2
+       ...]
+      {:a 1}
+      "\"x\"\n" "{:k \"v\"}\n"
+      <<0
+        1
+        2
+        3
+        4
+        5
+        6
+        7
+        8
+        9
+        10
+        11
+        12
+        13
+        14
+        15
+        16
+        17
+        18
+        19
+        20 21 22 23 24>>
+      <<0 1 2 3 4 5 6 7 8
+        9 10 11 12 13 14
+        15 16 17 18 19 20
+        21 22 23 24>>
+      "1\n;; 2\n;; 3\n;; \n"
+      "(head \n  aaaaaaaaaaaaaaaaaaaa\n  bbbbbbbbbbbbbbbbbbbbbbbbbbbb)\n"
+      "Bad argument: :bogus. It must be one of #{:mandatory :miser :fill :linear}"
+      "pprint-tab is not yet implemented"
+      [#x0 #xfffffffffffffffd #xff #x1/2 #x-7/3 1.5]
+      [1010 11111111]
+      [10. #10r22/7]
+
+      | :a |   :b |
+      |----+------|
+      |  1 |  two |
+      | 33 | four |
+
+      |  :b |
+      |-----|
+      | two |
+      |     |
+      [true 72 40 nil nil 10]

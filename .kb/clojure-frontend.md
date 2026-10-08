@@ -130,10 +130,11 @@ answered `2 5 3` before).
 | `ring.adapter.rontolisp` (`run-server`) | `(rontolisp::%http-serve (%clojure-ring-app f opts) (%clojure-ring-port opts) (%clojure-ring-host opts) (%clojure-ring-join opts))` (`ClojureRingLowering`) | "Ring adapter" |
 | `rontolisp.wasm` (`defimport` `export`, a `defn`'s `:wasm/export`) | `rontolisp:wasm-import` hoisted ahead of the datum / `rontolisp:wasm-export` after the whole program, each passing the name as written as `:as`; a converting crossing behind a wrapper `defun` (`ClojureWasmLowering`) | "Host boundary" |
 | `rontolisp.wit` (`import` `export` `provide`) | `rontolisp:wit-import` (hoisted) / `rontolisp:wit-export` (after the whole program), each with a `:names` table of the vars' symbols; `rontolisp:wit-provide` (`ClojureWitLowering`) | "Host boundary" |
-| `ring.util.response` `ring.util.request` `ring.util.codec` `ring.util.mime-type` `ring.middleware.params` `ring.middleware.keyword-params` `ring.middleware.content-type` | Clojure source in the jar, loaded like a project file; `rontolisp.internal.ring/NAME` (their kernels) is one call to `rontolisp::%clojure-ring-NAME` (`ClojureRingUtilLowering`) | "Ring util namespaces" |
+| `ring.util.response` `ring.util.request` `ring.util.codec` `ring.util.mime-type` `ring.middleware.params` `ring.middleware.keyword-params` `ring.middleware.content-type` | Clojure source in the jar, loaded like a project file; `rontolisp.internal.ring/NAME` (their kernels) is one call to `rontolisp::%clojure-ring-NAME` (`ClojureKernelLowering`, which holds every `rontolisp.internal.*` kernel namespace with its arities) | "Ring util namespaces" |
 | `clojure.edn` (`read-string` `read`) | `ClojureEdnLowering`: one call to `rontolisp::%clojure-edn-read-string-1` / `-read-string` / `-read` after a lower-time arity check in the oracle's wording; as a value `#'...-v` | "Reading", clojure.edn |
 | `clojure.walk` | Clojure source in the jar written for this front end, loaded like a project file (a startup namespace: on its first qualified name too) | "clojure.jar namespaces" |
 | `clojure.template` | the same, loaded at its `require` | "clojure.jar namespaces" |
+| `clojure.pprint` | the same; its layout engine is `rontolisp.internal.pprint/NAME`, one call to `rontolisp::%clojure-pp-NAME` (`ClojureKernelLowering`) | "clojure.jar namespaces" |
 | `subs`, `.substring` | `%clojure-subs`, the refusal family's alias of `subseq` ("Refusals") | a bound outside a string is the oracle's `StringIndexOutOfBoundsException` where a class is read; a double or ratio bound is truncated (`%clojure-string-bound`), a non-number one is refused as the oracle does ("Refusals") |
 | `format` | the Java directives translated to `format` over Clojure-rendered arguments | literal format string only; `%s` like `str` (nil spells `null`), `%b`; `%e`/`%g`, flags and the rest refused |
 | `spit` `slurp` `line-seq` `clojure.java.io/reader` | `with-open-file` of the `str` spelling / `rontolisp::%clojure-slurp` / a `read-line` loop / `%clojure-reader` (`open`) | every backend; wasm needs a `--dir` preopen (without it the open signals). `spit` supersedes unless `:append` is truthy, `nil` writes nothing. `slurp`, `line-seq` and `reader` take a path or an open stream (`streamp`, so a Gray instance -- the Ring `:body` -- too): `slurp` reads a stream to its end and closes it (the oracle's `with-open`; until 2026-10-08 it left it open), `reader` answers it, `line-seq` reads it strictly and never closes it. A read of a CLOSED stream -- `slurp`, `line-seq`, `.read`, `.readLine`, `read-line` -- goes through `%clojure-open-reader` (`open-stream-p`, else the `%clojure-io-exception` carrier: the oracle's `IOException: Stream closed`); before it the interpreter said `READ-CHAR expects an input stream`, the JVM an NPE, and both wasm backends READ a closed string input stream (its record is never marked closed, `.kb/read-load-streams.md`). `read` is not guarded: the oracle wraps the failure in a `LispReader$ReaderException` over a `LineNumberingPushbackReader` and not over a `PushbackReader`, which share one stream kind here. A second close is harmless on every backend (`.kb/read-load-streams.md`, "close on an already-closed stream"). Pins: clojure-spec `slurp-closes-the-stream-it-reads`, `ClojureInteropTest#filesRoundTripThroughReaderAndLineSeq`, `ClojureWasmFileIoTest`. `slurp` was an inline `read-char` loop per site until 2026-10-08. `file-seq` and every other `clojure.java.io` fn are refused |
@@ -918,7 +919,10 @@ a program without `ns` lowers unqualified. A quoted `'n/x` is the symbol of var 
   2026-10-08; instaparse 1.5.0 ships both for 14 namespaces). `Found.resource` is the file
   below its root, the `*file*` and `:file` of the load (`app/portable.cljc`). Files come
   through `ClojureFiles` (`SourceLanguage.clojureFiles` adapts the site's loader; none is
-  refused by name).
+  refused by name), and so does the program's Java class loader: every reflective question
+  the lowering asks of a class name goes through `ClojureHostClasses.load`, bound for the
+  lowering from `ClojureFiles.javaClassLoader()` (`.kb/java-interop.md`, "The program's
+  Java class path").
 - **Records** keep the simple-name tag; `typeKeyOf` resolves own, then an imported or
   dotted name matching the class, else the only one of that simple name.
 
@@ -1232,7 +1236,7 @@ function and a directive must be a top-level form.
 **The map-shaped namespaces of clojure.jar ship as Clojure source written for this front
 end** (`src/main/resources/am/ik/rontolisp/clojure/lib/clojure/**`, the
 `ClojureBuiltinNamespaces` mechanism of "Ring util namespaces"): `clojure.walk`,
-`clojure.template`.
+`clojure.template`, `clojure.pprint`.
 - **Licensing**: clojure.jar is EPL-1.0, this project Apache-2.0, so nothing of it is
   copied -- no code, no docstring. Each file is written from the documented behaviour and
   diffed against the oracle; a one-line var dictated by its contract
@@ -1268,9 +1272,48 @@ end** (`src/main/resources/am/ik/rontolisp/clojure/lib/clojure/**`, the
 - `clojure.template`: `do-template` calls `apply-template`, which calls
   `clojure.walk/postwalk-replace`, at expansion time ("Macros": a body sees the
   definitions above it, a required namespace's too).
+- `clojure.pprint`: the API (the dynamic vars, `pprint-logical-block`,
+  `print-length-loop`, `simple-dispatch`, `write`, `print-table`) is Clojure source; the
+  layout is the kernel namespace `rontolisp.internal.pprint` (`clojure.lisp`, "The
+  clojure.pprint kernels"). The dispatch runs with `*standard-output*` bound to a capture
+  stream, each block start/end, conditional newline, indentation and fresh line an event
+  beside the text since the last; the events are then replayed through the oracle's
+  pretty writer's decision procedure (what its docstring states: write at once until the
+  first conditional newline, then buffer; decide the buffer's first newline only when it
+  overflows, `tokens-fit?` strict, the held-back trailing blanks not counted; the final
+  flush takes only mandatory newlines and the linear/miser ones of a broken block).
+  - Why a replay (measured 2026-10-08): the first draft laid the event tree out with full
+    knowledge (a block breaks iff it does not fit, Oppen/XP style). It matched the oracle
+    on linear-only data but not on fill, miser and per-line-prefix blocks, nor on the
+    final flush: the oracle decides incrementally, so a newline's fate depends on when the
+    buffer overflowed, which only the replay reproduces.
+  - Fidelity, the same day against clj 1.12.6: 1,500 generated layouts (nested vectors,
+    lists, maps up to eight keys, sets, scalars, each at a random margin) identical on the
+    interpreter and the JVM class; 500 with one-key maps identical on both wasm legs (a
+    hash map's walk order is the backend's, "Deviations", so several keys differ there as
+    `pr` does); the feature probes (fill/miser/mandatory, `:current`/`:block` indent,
+    per-line prefix, `*print-length*`/`*print-level*`/`*print-meta*`, reader macros,
+    namespace maps, radix printing with its negative-number quirk, `print-table`)
+    identical on all four.
+  - Map and set members come in printer order (`kernel/members`, maphash order): `seq`
+    walks a table the other way round, so `seq` would print `{:a 1, :b 2}` as
+    `{:b 2, :a 1}` under `pprint` only.
+  - `simple-dispatch` has an exact method per common value class (vector, map, set, list,
+    number, string, keyword, symbol, boolean, character) beside `:default`: a dispatch
+    value with no method of its own tests `isa?` against every method on each call (the
+    multimethod keeps no cache, "Dispatch"), once per value printed.
+  - Cost (2026-10-08, `pprint` of `(vec (range 20000))` / the same without a margin / 2,000
+    four-key maps, 129/109/125 KB of output): JVM class 0.48/0.24/0.54 s, the oracle
+    1.34/0.30/1.44 s (cold), wasm P1 and component 1.5/0.5/2.6 s, the interpreter
+    13/3.9/22 s.
+  - Left out, refused by name (`refuseLeftOut`): `cl-format`, `formatter`,
+    `formatter-out` (Common Lisp format directives over Clojure values) and
+    `code-dispatch`. Deviation: `get-pretty-writer` answers its writer, so each `pprint`
+    lays out from column 0 within the margin bound when it runs; the oracle's pretty
+    writer keeps its creation margin and its column across calls.
 - Pins: clojure-spec `clojure-walk-*` (all four backends, oracle-identical, the first
   case loading `clojure.walk` through a qualified name only),
-  `clojure-template-substitutes-per-group-of-values`,
+  `clojure-template-substitutes-per-group-of-values`, `clojure-pprint-*`,
   `ClojureLanguageNamespacesTest` (the startup load, a project file never shadowing a
   startup namespace, a contrib `clojure.*` namespace on the source path, the refusal of
   one not built in).
@@ -2580,6 +2623,12 @@ its inits evaluate against the OLD binding (like one file). `SourceSession` prom
 bracket counting over `()[]{}` (outside strings and comments) plus a reader probe for a
 trailing dispatch prefix. A buffer's `require` loads from the working directory's source
 path; an `ns` buffer echoes nothing; `*ns*` carries across buffers.
+
+The runtimes a buffer first needs (hierarchy, protocols, macros, specials, ...) travel ahead
+of it, and the false binding ahead of them all: a special's root may be the false object
+(`*print-meta*`), so a first buffer reading a print flag failed on an unbound
+`%clojure-false` until 2026-10-08
+(`ClojureSessionTest#theFalseBindingGoesAheadOfTheRuntimesOfTheFirstBuffer`).
 
 Each input's forms evaluate as one `(handler-bind ((error #'%clojure-repl-error))
 (%clojure-repl-result (progn FORMS...)))` (`ClojureLowering.evaluated`): the value rotates

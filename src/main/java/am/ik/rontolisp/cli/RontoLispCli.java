@@ -18,6 +18,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 
+import am.ik.maven.MavenResolver;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.Version;
@@ -61,6 +62,8 @@ public final class RontoLispCli {
 
 	private @Nullable Boolean assumedTerminal;
 
+	private @Nullable MavenResolver javaDependencyResolver;
+
 	/**
 	 * Create a new CLI instance.
 	 * @param in the input stream
@@ -69,6 +72,15 @@ public final class RontoLispCli {
 	public RontoLispCli(InputStream in, PrintStream out) {
 		this.in = in;
 		this.out = out;
+	}
+
+	/**
+	 * Where {@code --java-dep} coordinates resolve -- a test's fixture repository; by
+	 * default Maven Central through the user's local repository.
+	 * @param resolver the resolver
+	 */
+	void javaDependencyResolver(MavenResolver resolver) {
+		this.javaDependencyResolver = resolver;
 	}
 
 	/**
@@ -163,9 +175,11 @@ public final class RontoLispCli {
 			.withClojureConfigDir(SourceStandards.clojureConfigDir(System.getenv("CLJ_CONFIG"),
 					System.getenv("XDG_CONFIG_HOME"), System.getProperty("user.home")));
 
-		// --java-release / --java-classpath / --warn-java-reflection: how java: call
-		// sites resolve (compiler/JavaSiteResolver). Read once here so a malformed
-		// release number fails before any file is read.
+		// --java-classpath / --java-dep / --java-release / --warn-java-reflection: the
+		// program's Java classes and how java: call sites resolve
+		// (compiler/JavaSiteResolver). Read once here so a malformed release number or
+		// coordinate fails before any file is read; the coordinates resolve where the
+		// program runs or compiles.
 		JavaResolutionOptions javaResolution = JavaResolutionOptions.from(options);
 
 		// -e/--eval "FORMS": the program is the argument itself rather than a file, and
@@ -212,10 +226,10 @@ public final class RontoLispCli {
 			}
 		}
 		if (!test && inline == null && positional == null && generated == null) {
-			refuseJavaClassFiles(javaResolution);
+			refuseCompileOnlyJavaOptions(javaResolution);
 			repl(systemPath, dists, features, options.contains("--simd"), options.contains("--blas"),
 					options.contains("--gpu"), options.contains("--parallel"), commandLine(null, programArguments),
-					sourceLanguage, standards, javaResolution.warnReflection());
+					sourceLanguage, standards, javaResolution.warnReflection(), javaClassPath(javaResolution));
 			return;
 		}
 
@@ -270,7 +284,7 @@ public final class RontoLispCli {
 						"--dump-ir prints the IR and exits: it compiles nothing, so it takes no -o");
 			}
 			dumpIr(source, baseDir, systemPath, dists, features, inputFile, sourceLanguage, standards,
-					options.contains("--dynamic"), options.contains("--no-prune"));
+					javaClassPath(javaResolution), options.contains("--dynamic"), options.contains("--no-prune"));
 			return;
 		}
 		if (options.contains("-o")) {
@@ -343,11 +357,11 @@ public final class RontoLispCli {
 							+ " describes a compiled JVM artifact, so it needs -o <file>.class" + " or -o <file>.jar");
 				}
 			}
-			refuseJavaClassFiles(javaResolution);
+			refuseCompileOnlyJavaOptions(javaResolution);
 			interpret(source, baseDir, systemPath, dists, features, options.contains("--simd"),
 					options.contains("--blas"), options.contains("--gpu"), options.contains("--parallel"), inputFile,
 					commandLine(inputFile, programArguments), sourceLanguage, standards,
-					javaResolution.warnReflection());
+					javaResolution.warnReflection(), javaClassPath(javaResolution));
 		}
 	}
 
@@ -397,13 +411,19 @@ public final class RontoLispCli {
 	}
 
 	// The interpreter resolves java: sites against the classes it runs with, by
-	// reflection: a class-file option would be silently ignored, so it is refused.
-	private static void refuseJavaClassFiles(JavaResolutionOptions javaResolution) {
-		if (javaResolution.namesClassFiles()) {
-			throw new UnsupportedOperationException("--java-release, --java-classpath and --java-static decide how a"
-					+ " compiled JVM program calls Java, so they need -o <file>.class or -o <file>.jar; the"
-					+ " interpreter resolves against the classes it runs with (java -cp ... to add some)");
+	// reflection: a JDK-release or no-reflection option would be silently ignored, so it
+	// is refused. The class path is the interpreter's too.
+	private static void refuseCompileOnlyJavaOptions(JavaResolutionOptions javaResolution) {
+		if (javaResolution.namesCompileOnly()) {
+			throw new UnsupportedOperationException("--java-release and --java-static decide how a compiled JVM"
+					+ " program calls Java, so they need -o <file>.class or -o <file>.jar; the interpreter resolves"
+					+ " against the JDK it runs on and its --java-classpath / --java-dep classes");
 		}
+	}
+
+	// The program's Java class path, the coordinates resolved now.
+	private JavaClassPath javaClassPath(JavaResolutionOptions javaResolution) {
+		return JavaClassPath.of(javaResolution, this.javaDependencyResolver, System.err);
 	}
 
 	/**
@@ -517,13 +537,15 @@ public final class RontoLispCli {
 
 	private void repl(List<String> systemPath, DistClient dists, List<String> declaredFeatures, boolean simd,
 			boolean blas, boolean gpu, boolean parallel, List<String> commandLine, @Nullable String sourceLanguage,
-			SourceStandards standards, boolean warnJavaReflection) {
+			SourceStandards standards, boolean warnJavaReflection, JavaClassPath javaClassPath) {
 		LispEvaluator evaluator = new LispEvaluator(this.out, this.in);
 		evaluator.setWarnOnJavaReflection(warnJavaReflection);
 		evaluator.setSystemPath(systemPath);
 		evaluator.setDeclaredFeatures(declaredFeatures);
 		evaluator.setCommandLineArguments(commandLine);
 		evaluator.setDistClient(dists);
+		SourceLoader files = SourceLoader.fileSystem(javaClassPath.classLoader());
+		evaluator.setSourceLoader(files);
 		requireSimdForParallel(simd, parallel);
 		if (simd) {
 			enableSimd(evaluator, parallel);
@@ -538,8 +560,7 @@ public final class RontoLispCli {
 			evaluator.setParallel(true);
 		}
 		// The REPL has no file to pick a language from: the override, else the default.
-		SourceSession session = new SourceSession(SourceLanguage.forFile(null, sourceLanguage), standards,
-				SourceLoader.fileSystem());
+		SourceSession session = new SourceSession(SourceLanguage.forFile(null, sourceLanguage), standards, files);
 		evaluator.setSourceStandards(standards);
 		boolean systemTerminal = this.in == System.in && System.console() != null && System.console().isTerminal();
 		boolean terminal = this.assumedTerminal != null ? this.assumedTerminal : systemTerminal;
@@ -699,7 +720,7 @@ public final class RontoLispCli {
 	// the same program). Warnings surface as on a compile, via CompileDiagnostics.
 	private void dumpIr(String source, @Nullable String baseDir, List<String> systemPath, DistClient dists,
 			List<String> declaredFeatures, @Nullable String entryFile, @Nullable String sourceLanguage,
-			SourceStandards standards, boolean dynamic, boolean noPrune) {
+			SourceStandards standards, JavaClassPath javaClassPath, boolean dynamic, boolean noPrune) {
 		CompileDiagnostics.recording(dists, () -> {
 			CompileFrontend.Result frontend = CompileFrontend.run(CompileFrontend.Request.builder()
 				.source(source)
@@ -709,6 +730,7 @@ public final class RontoLispCli {
 				.systemPath(systemPath)
 				.dists(dists)
 				.declaredFeatures(declaredFeatures)
+				.javaClassLoader(javaClassPath.classLoader())
 				.options(CompileFrontend.Options.builder().baseDir(baseDir).dynamic(dynamic).noPrune(noPrune).build())
 				.build());
 			for (LispVal form : frontend.program()) {
@@ -730,9 +752,11 @@ public final class RontoLispCli {
 	private void interpret(String source, @Nullable String baseDir, List<String> systemPath, DistClient dists,
 			List<String> declaredFeatures, boolean simd, boolean blas, boolean gpu, boolean parallel,
 			@Nullable String entryFile, List<String> commandLine, @Nullable String sourceLanguage,
-			SourceStandards standards, boolean warnJavaReflection) {
+			SourceStandards standards, boolean warnJavaReflection, JavaClassPath javaClassPath) {
 		LispEvaluator evaluator = new LispEvaluator(this.out, this.in);
 		evaluator.setWarnOnJavaReflection(warnJavaReflection);
+		// java: and a Clojure host form see the program's Java class path.
+		evaluator.setSourceLoader(SourceLoader.fileSystem(javaClassPath.classLoader()));
 		evaluator.setLoadBaseDir(baseDir);
 		evaluator.setSystemPath(systemPath);
 		// The entry file, every file it loads and every ASDF component under it read
@@ -853,12 +877,13 @@ public final class RontoLispCli {
 					+ " library jar has to name it: add --class-name com.example.Kernels."
 					+ " Only a program jar derives its class name from the -o file name");
 		}
-		// --java-release / --java-classpath name the class files a JVM compile resolves
-		// java: sites against, --java-static refuses the sites that need reflection;
-		// java: has no WASM lowering at all.
-		if (javaResolution.namesClassFiles() && !jvmOutput(outputFile)) {
-			throw new UnsupportedOperationException("--java-release, --java-classpath and --java-static decide how a"
-					+ " compiled JVM program calls Java, so they need a .class, .jar or .war output");
+		// --java-classpath / --java-dep / --java-release name the class files a JVM
+		// compile resolves java: sites against, --java-static refuses the sites that
+		// need reflection; java: has no WASM lowering at all.
+		if ((javaResolution.namesCompileOnly() || javaResolution.namesClassPath()) && !jvmOutput(outputFile)) {
+			throw new UnsupportedOperationException("--java-classpath, --java-dep, --java-release and --java-static"
+					+ " decide how a JVM program calls Java, so they need a .class, .jar or .war output (or no -o:"
+					+ " the interpreter takes the class path too)");
 		}
 		if (jvmArtifact.className() != null && !jvmOutput(outputFile)) {
 			throw new UnsupportedOperationException("--class-name names the class a JVM compile emits, so it needs a"
@@ -972,6 +997,9 @@ public final class RontoLispCli {
 		// macro expansion, the library splice chain, the WIT lowerings, the boundp fold
 		// and the library tree-shaker -- in the one place all four backends and the
 		// embedded JVM seam (JvmSourceCompiler) share (CompileFrontend).
+		// The program's Java class path: what its java: sites resolve against and what a
+		// jar or war carries.
+		JavaClassPath javaClassPath = jvmOutput(outputFile) ? javaClassPath(javaResolution) : JavaClassPath.NONE;
 		CompileFrontend.Result frontend = CompileFrontend.run(CompileFrontend.Request.builder()
 			.source(source)
 			.entryFile(entryFile)
@@ -980,6 +1008,7 @@ public final class RontoLispCli {
 			.systemPath(systemPath)
 			.dists(dists)
 			.declaredFeatures(declaredFeatures)
+			.javaClassLoader(javaClassPath.classLoader())
 			.options(CompileFrontend.Options.builder()
 				.baseDir(baseDir)
 				.wasm(wasmOutput)
@@ -1111,7 +1140,7 @@ public final class RontoLispCli {
 				.servlet(outputFile.endsWith(".war"))
 				.baseDir(baseDir)
 				.javaRelease(javaResolution.release())
-				.javaClasspath(javaResolution.classpath())
+				.javaClasspath(javaClassPath.entries())
 				.warnJavaReflection(javaResolution.warnReflection())
 				.javaStatic(javaResolution.javaStatic())
 				.compileProgram(program, features);
@@ -1133,22 +1162,28 @@ public final class RontoLispCli {
 				// A jar is the same bytecode with the packaging a consumer needs around
 				// it: the manifest, the runtime classes (which the .class path writes
 				// beside the output -- leaving them out is a NoClassDefFoundError in the
-				// consumer, not an error here), and the coordinates when given.
+				// consumer, not an error here), and the coordinates when given. A program
+				// jar's manifest names its Java class path, copied beside it so that
+				// java -jar finds it; a library jar's pom names the --java-dep
+				// coordinates and leaves the class path to its consumer.
+				List<String> classPath = noMain ? List.of() : javaClassPath.copyBeside(outputPath);
 				Files.write(outputPath, JvmJarWriter.jar(Objects.requireNonNull(jvmClassName), bytes, jvmRuntimeClasses,
-						!noMain, jvmArtifact.coordinates(), simd));
+						!noMain, jvmArtifact.coordinates(), simd, classPath, javaClassPath.dependencies()));
 				if (jvmArtifact.emitPom()) {
-					writePom(outputFile, Objects.requireNonNull(jvmArtifact.coordinates()), simd);
+					writePom(outputFile, Objects.requireNonNull(jvmArtifact.coordinates()), simd,
+							javaClassPath.dependencies());
 				}
 			}
 			else if (outputFile.endsWith(".war")) {
 				// A war is the same bytecode (compiled in servlet mode) inside
 				// WEB-INF/classes, plus the one-line service declaration that lets any
 				// Servlet 6 container discover the program itself -- no web.xml, no
-				// configuration (JvmWarWriter).
+				// configuration (JvmWarWriter). The Java class path rides in WEB-INF/lib.
 				Files.write(outputPath, JvmWarWriter.war(Objects.requireNonNull(jvmClassName), bytes, jvmRuntimeClasses,
-						jvmArtifact.coordinates(), simd));
+						jvmArtifact.coordinates(), simd, javaClassPath.warEntries(), javaClassPath.dependencies()));
 				if (jvmArtifact.emitPom()) {
-					writePom(outputFile, Objects.requireNonNull(jvmArtifact.coordinates()), simd);
+					writePom(outputFile, Objects.requireNonNull(jvmArtifact.coordinates()), simd,
+							javaClassPath.dependencies());
 				}
 			}
 			else if (nativeTarget != null) {
@@ -1315,7 +1350,8 @@ public final class RontoLispCli {
 	 * {@code deploy-file} that wants the pom as a separate file. Only a pom this flag
 	 * wrote before is overwritten; anything else is someone's own and is refused by name.
 	 */
-	private static void writePom(String outputFile, MavenCoordinates coordinates, boolean simd) throws IOException {
+	private static void writePom(String outputFile, MavenCoordinates coordinates, boolean simd,
+			List<am.ik.maven.Artifact> dependencies) throws IOException {
 		// .jar and .war are the same length, so one cut serves both archive outputs.
 		Path pom = Path.of(outputFile.substring(0, outputFile.length() - ".jar".length()) + ".pom");
 		if (Files.exists(pom)
@@ -1324,7 +1360,7 @@ public final class RontoLispCli {
 					+ ", which it did not write (it does not start with \"" + MavenCoordinates.POM_MARKER
 					+ "\"). Compile to a different -o name, or move that file aside");
 		}
-		Files.writeString(pom, coordinates.pomXml(simd));
+		Files.writeString(pom, coordinates.pomXml(simd, dependencies));
 	}
 
 	// Emits a one-line warning to stderr. Kept off stdout (this.out) so it never corrupts
@@ -1440,9 +1476,9 @@ public final class RontoLispCli {
 		this.out.println("                     With a .jar or .war output: embed META-INF/maven/G/A/pom.xml and");
 		this.out.println("                     pom.properties, so the coordinates travel INSIDE the jar and");
 		this.out.println("                     `mvn install:install-file -Dfile=out.jar` needs no -DgroupId,");
-		this.out.println("                     -DartifactId, -Dversion or -DpomFile. The generated pom has an");
-		this.out.println("                     empty <dependencies>, which is the truth: a compiled class");
-		this.out.println("                     embeds everything it calls");
+		this.out.println("                     -DartifactId, -Dversion or -DpomFile. The generated pom's");
+		this.out.println("                     <dependencies> are the --java-dep coordinates, empty without");
+		this.out.println("                     any: a compiled class embeds everything else it calls");
 		this.out.println("  --emit-pom         Write that same pom next to the jar as out.pom (for");
 		this.out.println("                     deploy-file), the way --emit-wit writes the world next to the");
 		this.out.println("                     .wasm. Needs --maven-coordinates");
@@ -1450,8 +1486,17 @@ public final class RontoLispCli {
 		this.out.println("                     Java release N's API, read from the JDK's lib/ct.sym (default:");
 		this.out.println("                     the newest the JDK holds -- its own)");
 		this.out.println("  --java-classpath PATHS");
-		this.out.println("                     With a .class, .jar or .war output: directories and jars whose");
-		this.out.println("                     classes java: calls resolve against after the JDK's");
+		this.out.println("                     The program's Java class path: directories and jars whose");
+		this.out.println("                     classes the interpreter loads and a .class, .jar or .war");
+		this.out.println("                     output resolves java: calls against after the JDK's. A");
+		this.out.println("                     program jar copies them into NAME-lib/ beside it and names");
+		this.out.println("                     them in its manifest's Class-Path; a war carries them in");
+		this.out.println("                     WEB-INF/lib");
+		this.out.println("  --java-dep G:A:V   Repeatable. A Java library by Maven coordinates, with what it");
+		this.out.println("                     depends on (Maven's nearest-wins selection), from Maven");
+		this.out.println("                     Central through ~/.m2/repository (or settings.xml's");
+		this.out.println("                     localRepository); its jars join the class path after");
+		this.out.println("                     --java-classpath, and a generated pom lists the coordinates");
 		this.out.println("  --warn-java-reflection");
 		this.out.println("                     Report every java: call that cannot be resolved before it runs");
 		this.out.println("                     (a compile warning; the interpreter sets java:*warn-on-reflection*)");

@@ -97,6 +97,15 @@ class ClojureSessionTest {
 	}
 
 	@Test
+	void theFalseBindingGoesAheadOfTheRuntimesOfTheFirstBuffer() {
+		// the specials travel ahead of the buffer that first uses one, and a flag's
+		// root is the false object, so the false binding goes ahead of them too
+		assertThat(runSession("(prn *print-meta* *print-dup*)")).isEqualTo("false false\n");
+		assertThat(forms(new ClojureSession().read("(prn *print-meta*)")).get(0))
+			.isEqualTo("(SETQ RONTOLISP::%CLOJURE-FALSE '|false|)");
+	}
+
+	@Test
 	void aLaterBufferDefmultiOfAMultimethodKeepsTheEarlierOne() {
 		// the oracle's defmulti defines only when the var holds no multimethod, so a
 		// REPL re-entry changes nothing (neither the dispatch function nor the table)

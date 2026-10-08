@@ -28,6 +28,7 @@ Clojure で書かれた組み込みの名前空間は、プロジェクトのフ
 | `clojure.set` | [(clojure.set)](clojure-set.md) |
 | `clojure.walk` | [clojure.walk](clojure-walk.md) |
 | `clojure.edn` | [clojure.edn](clojure-edn.md) |
+| `clojure.pprint` | [clojure.pprint](clojure-pprint.md) |
 | `clojure.template` | [clojure.template](clojure-template.md) |
 | `clojure.java.io`（`reader` のみ） | [入出力](io.md) |
 | `clojure.test` | [テスト (clojure.test)](test.md) |

@@ -16,6 +16,8 @@ public final class ClojureSession {
 
 	private final ClojureLowering lowering = new ClojureLowering();
 
+	private final ClassLoader javaClasses;
+
 	/** A session that reads no files: a project {@code require} is refused by name. */
 	public ClojureSession() {
 		this(ClojureFiles.NONE);
@@ -29,6 +31,7 @@ public final class ClojureSession {
 	public ClojureSession(ClojureFiles files) {
 		this.lowering.sourcePath = new ClojureSourcePath(files, null);
 		this.lowering.files = files;
+		this.javaClasses = files.javaClassLoader();
 	}
 
 	/**
@@ -38,7 +41,8 @@ public final class ClojureSession {
 	 * @return one entry per top-level datum, in order
 	 */
 	public List<ClojureTopLevel> read(String source) {
-		return this.lowering.interact(new ClojureReader(source, null, true));
+		return ClojureHostClasses.lowering(this.javaClasses,
+				() -> this.lowering.interact(new ClojureReader(source, null, true)));
 	}
 
 	/**
