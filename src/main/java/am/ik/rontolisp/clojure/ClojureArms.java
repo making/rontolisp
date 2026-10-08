@@ -189,7 +189,13 @@ public final class ClojureArms {
 				"RONTOLISP::%CLOJURE-RD-META", "RONTOLISP::%CLOJURE-RD-RECORD", "RONTOLISP::%CLOJURE-RD-RECORD-OF",
 				"RONTOLISP::%CLOJURE-RD-REQUIRED", "RONTOLISP::%CLOJURE-RD-SEQ", "RONTOLISP::%CLOJURE-RD-SET",
 				"RONTOLISP::%CLOJURE-RD-SUPPRESSED", "RONTOLISP::%CLOJURE-RD-SYMBOL", "RONTOLISP::%CLOJURE-RD-SYMBOLIC",
-				"RONTOLISP::%CLOJURE-RD-WRAP"), Set.of(), true),
+				"RONTOLISP::%CLOJURE-RD-WRAP", "RONTOLISP::%CLOJURE-RD-ATOM-OF", "RONTOLISP::%CLOJURE-RD-NS-MAP",
+				"RONTOLISP::%CLOJURE-RD-NS-MAP-OF", "RONTOLISP::%CLOJURE-RD-NS-KEY", "RONTOLISP::%CLOJURE-RD-IDENT",
+				"RONTOLISP::%CLOJURE-RD-EDN-FORM-AT", "RONTOLISP::%CLOJURE-RD-EDN-ATOM",
+				"RONTOLISP::%CLOJURE-RD-EDN-DISPATCH", "RONTOLISP::%CLOJURE-RD-EDN-TAGGED",
+				"RONTOLISP::%CLOJURE-EDN-FROM", "RONTOLISP::%CLOJURE-EDN-READ-STRING-1",
+				"RONTOLISP::%CLOJURE-EDN-READ-STRING", "RONTOLISP::%CLOJURE-EDN-READ",
+				"RONTOLISP::%CLOJURE-EDN-READ-STRING-V", "RONTOLISP::%CLOJURE-EDN-READ-V"), Set.of(), true),
 
 		/**
 		 * An exception or a runtime error, which {@code class} reads the class of: only a
@@ -223,6 +229,16 @@ public final class ClojureArms {
 		 */
 		MATCHER("matcher", Set.of("RONTOLISP::%CLOJURE-MATCHER-VALUE-P"), Set.of(), Map.of(),
 				Set.of("RONTOLISP::%CLOJURE-RE-MATCHER"), Set.of()),
+
+		/**
+		 * A read in clojure.edn's grammar, which the run-time reader's EDN clauses take:
+		 * only the {@code clojure.edn} entries ({@link ClojureEdnLowering}) start one.
+		 */
+		EDN("edn-read", Set.of("RONTOLISP::%CLOJURE-RD-EDN-P"), Set.of(), Map.of(),
+				Set.of("RONTOLISP::%CLOJURE-EDN-READ-STRING-1", "RONTOLISP::%CLOJURE-EDN-READ-STRING",
+						"RONTOLISP::%CLOJURE-EDN-READ", "RONTOLISP::%CLOJURE-EDN-READ-STRING-V",
+						"RONTOLISP::%CLOJURE-EDN-READ-V"),
+				Set.of()),
 
 		/**
 		 * A namespace, which the printer, {@code str} and {@code class} spell: only a

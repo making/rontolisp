@@ -1,0 +1,50 @@
+# descriptor test.mgmt:user:1 test.mgmt:inherit-import-child:1 test.mgmt:merge:1 test.mgmt:types:1 test.mgmt:missing-version:1 test.mgmt:import-cycle-user:1 test.mgmt:import-no-type:1 test.mgmt:import-profile-user:1 test.mgmt:self-ref-user:5
+artifact test.mgmt:user:jar:1
+dep test.lib:x:jar::1.0 scope=compile optional=null
+dep test.lib:y:jar::1.0 scope=runtime optional=null
+dep test.lib:z:jar::9.0 scope=compile optional=null
+dep test.lib:w:jar::2.0 scope=compile optional=null
+dep test.lib:u:jar::4.0 scope=compile optional=null
+dep test.lib:v:jar::3.0 scope=compile optional=null
+managed test.lib:z:jar::9.0 scope= optional=null
+managed test.lib:x:jar::1.0 scope= optional=null
+managed test.lib:y:jar::1.0 scope=runtime optional=null
+managed test.lib:w:jar::2.0 scope= optional=null
+managed test.lib:u:jar::4.0 scope= optional=null
+managed test.lib:v:jar::3.0 scope= optional=null
+artifact test.mgmt:inherit-import-child:jar:1
+dep test.lib:q:jar::2.0 scope=compile optional=null
+managed test.lib:q:jar::2.0 scope= optional=null
+artifact test.mgmt:merge:jar:1
+dep test.lib:m:jar::1.0 scope=test optional=null exclusions=ex.one:one
+dep test.lib:n:jar::1.0 scope=compile optional=null exclusions=ex.own:own
+dep test.lib:o:jar::1.0 scope=runtime optional=null
+dep test.lib:sys:jar::1.0 scope=system optional=null
+managed test.lib:m:jar::1.0 scope=test optional=true exclusions=ex.one:one
+managed test.lib:n:jar::1.0 scope= optional=null exclusions=ex.managed:managed
+managed test.lib:o:jar::1.0 scope=test optional=null
+managed test.lib:sys:jar::1.0 scope=system optional=null
+artifact test.mgmt:types:jar:1
+dep test.lib:t:jar:tests:2.0 scope=compile optional=null
+dep test.lib:t:jar::1.0 scope=compile optional=null
+dep test.lib:k:jar:cls:3.0 scope=compile optional=null
+dep test.lib:k:jar:tests:5.0 scope=compile optional=null
+managed test.lib:t:jar::1.0 scope= optional=null
+managed test.lib:t:jar:tests:2.0 scope= optional=null
+managed test.lib:k:jar:cls:3.0 scope= optional=null
+managed test.lib:k:jar::4.0 scope= optional=null
+artifact test.mgmt:missing-version:jar:1
+warning invalid test.mgmt:missing-version:jar:1: 1 problem was encountered while building the effective model for test.mgmt:missing-version:1 [ERROR] 'dependencies.dependency.version' for test.lib:nov:jar is missing. @
+artifact test.mgmt:import-cycle-user:jar:1
+warning invalid test.mgmt:import-cycle-user:jar:1: 1 problem was encountered while building the effective model for test.mgmt:import-cycle-user:1 [ERROR] The dependencies of type=pom and with scope=import form a cycle: test.mgmt:import-cycle-user:1 -> test.mgmt:import-cycle-a:1 -> test.mgmt:import-cycle-b:1 -> test.mgmt:import-cycle-a:1 @ test.mgmt:import-cycle-b:1
+artifact test.mgmt:import-no-type:jar:1
+dep test.lib:x:jar::7 scope=compile optional=null
+managed test.mgmt:bom-a:jar::1 scope=import optional=null
+artifact test.mgmt:import-profile-user:jar:1
+dep test.lib:from-bom-profile:jar::1.0 scope=compile optional=null
+managed test.lib:from-bom-profile:jar::1.0 scope= optional=null
+artifact test.mgmt:self-ref-user:jar:5
+dep test.lib:sr:jar::1 scope=compile optional=null
+dep test.mgmt:sibling:jar::1 scope=compile optional=null
+managed test.lib:sr:jar::1 scope= optional=null
+managed test.mgmt:sibling:jar::1 scope= optional=null

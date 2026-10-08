@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>test.xml</groupId>
+  <artifactId>nested-unknown</artifactId>
+  <version>1</version>
+  <build><plugins><plugin><configuration><dependencies>x</dependencies></configuration></plugin></plugins></build>
+  <dependencies>
+      <dependency><groupId>test.lib</groupId><artifactId>a</artifactId><version>1</version></dependency>
+  </dependencies>
+</project>

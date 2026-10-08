@@ -1,0 +1,5 @@
+# collect test.graph2:version-relocation:1 --managed test.reloc:version-only:1
+test.graph2:version-relocation:jar::1 scope=compile optional=null
+  test.reloc:version-only:jar::2 scope=compile optional=null relocations=[test.reloc:version-only:jar:1]
+    test.lib:v2-dep:jar::1 scope=compile optional=null
+warning missing test.lib:v2-dep:jar:1

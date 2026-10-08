@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>test.profiles</groupId>
+  <artifactId>override</artifactId>
+  <version>1</version>
+  <properties>
+    <over>model</over>
+  </properties>
+  <dependencies>
+      <dependency><groupId>test.lib</groupId><artifactId>same</artifactId><version>1.0</version><scope>test</scope></dependency>
+      <dependency><groupId>test.lib</groupId><artifactId>uses-prop</artifactId><version>${over}</version></dependency>
+  </dependencies>
+  <dependencyManagement>
+    <dependencies>
+      <dependency><groupId>test.lib</groupId><artifactId>m</artifactId><version>1.0</version></dependency>
+    </dependencies>
+  </dependencyManagement>
+  <profiles>
+    <profile><id>p</id><activation><jdk>[11,)</jdk></activation>
+  <properties>
+    <over>profile</over>
+  </properties>
+  <dependencies>
+      <dependency><groupId>test.lib</groupId><artifactId>same</artifactId><version>2.0</version></dependency>
+      <dependency><groupId>test.lib</groupId><artifactId>extra</artifactId><version>1</version></dependency>
+  </dependencies>
+  <dependencyManagement>
+    <dependencies>
+      <dependency><groupId>test.lib</groupId><artifactId>m</artifactId><version>2.0</version></dependency>
+    </dependencies>
+  </dependencyManagement>
+    </profile>
+  </profiles>
+</project>

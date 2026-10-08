@@ -1,0 +1,6 @@
+# collect test.graph2:excluded-relocation:1
+test.graph2:excluded-relocation:jar::1 scope=compile optional=null
+  test.reloc.new:old:jar::1 scope=compile optional=null relocations=[test.reloc:old:jar:1]
+    test.lib:after-reloc:jar::1 scope=compile optional=null
+  test.graph2:holder:jar::1 scope=compile optional=null exclusions=test.reloc.new:old
+    test.lib:after-reloc:jar::1 scope=compile optional=null

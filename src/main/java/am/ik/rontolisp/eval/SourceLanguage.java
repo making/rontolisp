@@ -172,8 +172,10 @@ public enum SourceLanguage {
 			}
 			// The host is wherever the target is no wasm one: a java: member can throw
 			// and take an exception there.
-			return new LispReader.ReadPrefix(Clojure.read(source, file, ClojureMacroTime.create(), clojureFiles(loader),
-					!features.contains("rontolisp-wasm"), ClojureHostBoundary.INSTANCE), null);
+			return new LispReader.ReadPrefix(
+					Clojure.read(source, file, ClojureMacroTime.create(), clojureFiles(loader, standards),
+							!features.contains("rontolisp-wasm"), ClojureHostBoundary.INSTANCE),
+					null);
 		}
 		catch (LispReadException ex) {
 			return new LispReader.ReadPrefix(List.of(), ex);
@@ -232,18 +234,22 @@ public enum SourceLanguage {
 
 	/**
 	 * The files a Clojure program names, through a loader: the project namespaces a
-	 * {@code require} loads and the {@code deps.edn} naming their roots. Where the roots
-	 * are is the front end's decision ({@code clojure/ClojureSourcePath}); this only
-	 * reads and joins paths. A parent directory is absolute, so the search for a
-	 * {@code deps.edn} walks past the top of a relative entry path; a host with no
-	 * working directory (the browser) keeps the lexical parent.
+	 * {@code require} loads, the {@code deps.edn} files naming their roots and
+	 * dependencies, a dependency's directory or jar (read in place), and the user-level
+	 * {@code deps.edn} the standards locate. Where the roots are is the front end's
+	 * decision ({@code clojure/ClojureSourcePath}); this only reads and joins paths. A
+	 * parent directory is absolute, so the search for a {@code deps.edn} walks past the
+	 * top of a relative entry path; a host with no working directory (the browser) keeps
+	 * the lexical parent.
 	 * @param loader the loader, or {@code null} for none
+	 * @param standards where the user-level {@code deps.edn} is
 	 * @return the files
 	 */
-	static ClojureFiles clojureFiles(@Nullable SourceLoader loader) {
+	static ClojureFiles clojureFiles(@Nullable SourceLoader loader, SourceStandards standards) {
 		if (loader == null) {
 			return ClojureFiles.NONE;
 		}
+		String userConfigDir = standards.clojureConfigDir();
 		return new ClojureFiles() {
 			@Override
 			public @Nullable String read(String path) {
@@ -272,6 +278,41 @@ public enum SourceLanguage {
 			@Override
 			public String resolve(@Nullable String dir, String relative) {
 				return SourceLoader.resolve(dir, relative);
+			}
+
+			@Override
+			public boolean exists(String path) {
+				return loader.exists(path);
+			}
+
+			@Override
+			public boolean isDirectory(String path) {
+				return loader.listDirectory(path) != null;
+			}
+
+			@Override
+			public String canonical(String path) {
+				return loader.canonicalPath(path);
+			}
+
+			@Override
+			public @Nullable List<String> archiveEntries(String path) {
+				return loader.listArchive(path);
+			}
+
+			@Override
+			public @Nullable String readArchiveEntry(String archive, String entry) {
+				try {
+					return loader.loadArchiveEntry(archive, entry);
+				}
+				catch (IOException ex) {
+					return null;
+				}
+			}
+
+			@Override
+			public @Nullable String userConfigDir() {
+				return userConfigDir;
 			}
 		};
 	}

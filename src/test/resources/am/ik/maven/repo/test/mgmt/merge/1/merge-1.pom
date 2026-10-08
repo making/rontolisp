@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>test.mgmt</groupId>
+  <artifactId>merge</artifactId>
+  <version>1</version>
+  <dependencyManagement>
+    <dependencies>
+      <dependency><groupId>test.lib</groupId><artifactId>m</artifactId><version>1.0</version><scope>test</scope><optional>true</optional><exclusions><exclusion><groupId>ex.one</groupId><artifactId>one</artifactId></exclusion></exclusions></dependency>
+      <dependency><groupId>test.lib</groupId><artifactId>n</artifactId><version>1.0</version><exclusions><exclusion><groupId>ex.managed</groupId><artifactId>managed</artifactId></exclusion></exclusions></dependency>
+      <dependency><groupId>test.lib</groupId><artifactId>o</artifactId><version>1.0</version><scope>test</scope></dependency>
+      <dependency><groupId>test.lib</groupId><artifactId>sys</artifactId><version>1.0</version><scope>system</scope><systemPath>/opt/managed.jar</systemPath></dependency>
+    </dependencies>
+  </dependencyManagement>
+  <dependencies>
+      <dependency><groupId>test.lib</groupId><artifactId>m</artifactId></dependency>
+      <dependency><groupId>test.lib</groupId><artifactId>n</artifactId><exclusions><exclusion><groupId>ex.own</groupId><artifactId>own</artifactId></exclusion></exclusions></dependency>
+      <dependency><groupId>test.lib</groupId><artifactId>o</artifactId><scope>runtime</scope></dependency>
+      <dependency><groupId>test.lib</groupId><artifactId>sys</artifactId></dependency>
+  </dependencies>
+</project>

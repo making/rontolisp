@@ -1,0 +1,3 @@
+# descriptor test.desc:missing-parent:1 test.desc:parent-range:1
+error Failed to read artifact descriptor for test.desc:missing-parent:jar:1 <- The following artifacts could not be resolved: test.desc:no-such-parent:pom:1 (absent): Could not find artifact test.desc:no-such-parent:pom:1 in fixture (<repo>) <- The following artifacts could not be resolved: test.desc:no-such-parent:pom:1 (absent): Could not find artifact test.desc:no-such-parent:pom:1 in fixture (<repo>) <- Could not find artifact test.desc:no-such-parent:pom:1 in fixture (<repo>)
+error Failed to read artifact descriptor for test.desc:parent-range:jar:1 <- No versions matched the requested parent version range '[1,2)'

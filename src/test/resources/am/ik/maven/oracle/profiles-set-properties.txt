@@ -1,0 +1,11 @@
+# descriptor -Dflag=x -Dmode=slow -Ddeclared=1 -Ddeclared.flag=1 test.profiles:props:1 test.profiles:interp-activation:1 test.profiles:combined:1
+artifact test.profiles:props:jar:1
+dep test.lib:has-flag:jar::1 scope=compile optional=null
+dep test.lib:mode-not-fast:jar::1 scope=compile optional=null
+dep test.lib:model-prop:jar::1 scope=compile optional=null
+artifact test.profiles:interp-activation:jar:1
+dep test.lib:interpolated-jdk:jar::1 scope=compile optional=null
+dep test.lib:interpolated-prop:jar::1 scope=compile optional=null
+artifact test.profiles:combined:jar:1
+dep test.lib:jdk-and-flag:jar::1 scope=compile optional=null
+dep test.lib:jdk-and-unix:jar::1 scope=compile optional=null

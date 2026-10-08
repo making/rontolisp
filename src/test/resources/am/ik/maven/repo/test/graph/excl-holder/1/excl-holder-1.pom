@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>test.graph</groupId>
+  <artifactId>excl-holder</artifactId>
+  <version>1</version>
+  <dependencies>
+      <dependency><groupId>test.graph</groupId><artifactId>gone</artifactId><version>1</version></dependency>
+      <dependency><groupId>test.graph</groupId><artifactId>keep</artifactId><version>1</version></dependency>
+      <dependency><groupId>test.graph</groupId><artifactId>wild</artifactId><version>1</version><exclusions><exclusion><groupId>*</groupId><artifactId>*</artifactId></exclusion></exclusions></dependency>
+  </dependencies>
+</project>

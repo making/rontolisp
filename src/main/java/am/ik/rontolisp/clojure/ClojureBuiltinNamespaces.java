@@ -41,7 +41,7 @@ final class ClojureBuiltinNamespaces {
 					"form-encode is a function, not a protocol, here", "FormEncodeable",
 					"form-encode is a function, not a protocol, here"),
 			"ring.util.mime-type", Map.of(), "ring.middleware.params", Map.of(), "ring.middleware.keyword-params",
-			Map.of(), "ring.middleware.content-type", Map.of(), "clojure.walk", Map.of());
+			Map.of(), "ring.middleware.content-type", Map.of(), "clojure.walk", Map.of(), "clojure.template", Map.of());
 
 	/**
 	 * The shipped namespaces {@code clj -M} has loaded before the program runs: a

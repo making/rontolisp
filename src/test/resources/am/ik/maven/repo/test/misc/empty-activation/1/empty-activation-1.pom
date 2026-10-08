@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>test.misc</groupId>
+  <artifactId>empty-activation</artifactId>
+  <version>1</version>
+  <profiles>
+    <profile><id>empty</id><activation></activation>
+  <dependencies>
+      <dependency><groupId>test.lib</groupId><artifactId>empty</artifactId><version>1</version></dependency>
+  </dependencies>
+    </profile>
+    <profile><id>false-default</id><activation><activeByDefault>false</activeByDefault></activation>
+  <dependencies>
+      <dependency><groupId>test.lib</groupId><artifactId>false-default</artifactId><version>1</version></dependency>
+  </dependencies>
+    </profile>
+    <profile><id>upper-default</id><activation><activeByDefault>TRUE</activeByDefault></activation>
+  <dependencies>
+      <dependency><groupId>test.lib</groupId><artifactId>upper-default</artifactId><version>1</version></dependency>
+  </dependencies>
+    </profile>
+  </profiles>
+</project>

@@ -132,7 +132,8 @@ final class ClojureCollectionLowering {
 		}
 		String ns = ctx.ns().aliases.get(alias);
 		if (ns == null) {
-			if (alias.equals(ctx.currentNs) || ClojureNamespaceLowering.isKnownNamespace(alias)) {
+			if (alias.equals(ctx.currentNs) || ClojureNamespaceLowering.isKnownNamespace(alias)
+					|| ClojureBuiltinNamespaces.isStartup(alias)) {
 				ns = alias;
 			}
 			else {

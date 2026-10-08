@@ -347,7 +347,16 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
 - A `_` param tag leaves that parameter to the cost rule of the `java:` surface, so
   `(^[_] Math/abs -2)` answers `2` where the oracle refuses tags that leave more than one
   overload.
-- Only `.clj` and `.cljc` files below the source roots are read (no classpath).
+- Only `.clj` and `.cljc` files below the source roots are read (no classpath). The
+  project's `deps.edn` is the nearest one at or above the entry file, where the oracle
+  reads the working directory's. A Maven or git coordinate is not fetched and a jar's
+  `pom.xml` is not read: a namespace only they could hold is refused, naming them, and the
+  rest of the program runs. The built-in Ring namespaces load without a `ring/ring-core`
+  coordinate (the oracle needs one) and stand in for an older ring-core than the one
+  shipped. A dependency's `:deps/prep-lib` is checked, never run. Top-level dependencies are
+  expanded in the file's order, where the oracle takes a map of more than eight in its hash
+  order: the two differ only where the selection rests on which was seen first (one
+  version spelled two ways, `1.0` and `1.0.0`).
 - A reader conditional takes `:rontolisp` too, ahead of `:clj` where a form names it
   first. `{:read-cond :preserve}` is refused at the first `#?` (no reader-conditional or
   tagged-literal value exists), so `reader-conditional?` stays `false`. In a branch not

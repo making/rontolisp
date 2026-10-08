@@ -131,7 +131,9 @@ answered `2 5 3` before).
 | `rontolisp.wasm` (`defimport` `export`, a `defn`'s `:wasm/export`) | `rontolisp:wasm-import` hoisted ahead of the datum / `rontolisp:wasm-export` after the whole program, each passing the name as written as `:as`; a converting crossing behind a wrapper `defun` (`ClojureWasmLowering`) | "Host boundary" |
 | `rontolisp.wit` (`import` `export` `provide`) | `rontolisp:wit-import` (hoisted) / `rontolisp:wit-export` (after the whole program), each with a `:names` table of the vars' symbols; `rontolisp:wit-provide` (`ClojureWitLowering`) | "Host boundary" |
 | `ring.util.response` `ring.util.request` `ring.util.codec` `ring.util.mime-type` `ring.middleware.params` `ring.middleware.keyword-params` `ring.middleware.content-type` | Clojure source in the jar, loaded like a project file; `rontolisp.internal.ring/NAME` (their kernels) is one call to `rontolisp::%clojure-ring-NAME` (`ClojureRingUtilLowering`) | "Ring util namespaces" |
+| `clojure.edn` (`read-string` `read`) | `ClojureEdnLowering`: one call to `rontolisp::%clojure-edn-read-string-1` / `-read-string` / `-read` after a lower-time arity check in the oracle's wording; as a value `#'...-v` | "Reading", clojure.edn |
 | `clojure.walk` | Clojure source in the jar written for this front end, loaded like a project file (a startup namespace: on its first qualified name too) | "clojure.jar namespaces" |
+| `clojure.template` | the same, loaded at its `require` | "clojure.jar namespaces" |
 | `subs`, `.substring` | `%clojure-subs`, the refusal family's alias of `subseq` ("Refusals") | a bound outside a string is the oracle's `StringIndexOutOfBoundsException` where a class is read; a double or ratio bound is truncated (`%clojure-string-bound`), a non-number one is refused as the oracle does ("Refusals") |
 | `format` | the Java directives translated to `format` over Clojure-rendered arguments | literal format string only; `%s` like `str` (nil spells `null`), `%b`; `%e`/`%g`, flags and the rest refused |
 | `spit` `slurp` `line-seq` `clojure.java.io/reader` | `with-open-file` of the `str` spelling / `rontolisp::%clojure-slurp` / a `read-line` loop / `%clojure-reader` (`open`) | every backend; wasm needs a `--dir` preopen (without it the open signals). `spit` supersedes unless `:append` is truthy, `nil` writes nothing. `slurp`, `line-seq` and `reader` take a path or an open stream (`streamp`, so a Gray instance -- the Ring `:body` -- too): `slurp` reads a stream to its end and closes it (the oracle's `with-open`; until 2026-10-08 it left it open), `reader` answers it, `line-seq` reads it strictly and never closes it. A read of a CLOSED stream -- `slurp`, `line-seq`, `.read`, `.readLine`, `read-line` -- goes through `%clojure-open-reader` (`open-stream-p`, else the `%clojure-io-exception` carrier: the oracle's `IOException: Stream closed`); before it the interpreter said `READ-CHAR expects an input stream`, the JVM an NPE, and both wasm backends READ a closed string input stream (its record is never marked closed, `.kb/read-load-streams.md`). `read` is not guarded: the oracle wraps the failure in a `LispReader$ReaderException` over a `LineNumberingPushbackReader` and not over a `PushbackReader`, which share one stream kind here. A second close is harmless on every backend (`.kb/read-load-streams.md`, "close on an already-closed stream"). Pins: clojure-spec `slurp-closes-the-stream-it-reads`, `ClojureInteropTest#filesRoundTripThroughReaderAndLineSeq`, `ClojureWasmFileIoTest`. `slurp` was an inline `read-char` loop per site until 2026-10-08. `file-seq` and every other `clojure.java.io` fn are refused |
@@ -857,13 +859,15 @@ a program without `ns` lowers unqualified. A quoted `'n/x` is the symbol of var 
   name. Names are referred only by `use` or `:refer` (`:only`/`:exclude` narrow); a
   `require` with a bare `:only` refers nothing, like the oracle's `load-lib`. `:reload`,
   `:reload-all`, `:verbose` flags; quoted libspecs and prefix lists `(prefix [sub ...])`
-  go through one spec parser. `clojure.string`, `clojure.set`, `clojure.java.io` (`reader`
-  only), `clojure.test` and `ring.adapter.rontolisp` resolve as lowerings; any other
+  go through one spec parser. `clojure.string`, `clojure.set`, `clojure.edn`,
+  `clojure.java.io` (`reader` only), `clojure.test` and `ring.adapter.rontolisp` resolve as
+  lowerings; any other
   namespace clojure.jar defines (`ClojureBuiltinNamespaces.LANGUAGE`) is a built-in file
   ("clojure.jar namespaces") or `unknown namespace: x`. A `clojure.*` namespace OUTSIDE
   that list (a contrib library, `clojure.data.json`) is an ordinary library on the source
-  path (until 2026-10-08 every `clojure.*` was refused). The built-in Ring namespaces load
-  as project files from the jar when no root holds them ("Ring util namespaces").
+  path, a `:local/root` dependency's or a project's (until 2026-10-08 every `clojure.*` was
+  refused; "deps.edn"). The built-in Ring namespaces load as project files from the jar
+  when no root holds them ("Ring util namespaces").
 - **ns clauses and libspec options** (measured on `clj` 1.12.6, 2026-10-08):
   `(:gen-class ...)` is a no-op outside an AOT compile, options included, so the clause
   declares nothing (a top-level `gen-class` stays refused). `:as-alias` is a real alias
@@ -904,11 +908,11 @@ a program without `ns` lowers unqualified. A quoted `'n/x` is the symbol of var 
 - **Refusals in the oracle's words**: `Could not locate a/b.clj or a/b.cljc on the source
   path: <roots>`, `Cyclic load dependency: [ /a ]->/b->[ /a ]`, `namespace 'x' not found after
   loading '/x'`, `x does not exist`, `x is not public`.
-- **Source path** (`ClojureSourcePath`, on the first project require): the root the entry
-  file's namespace names (`src` for `src/demo/main.clj` declaring `demo.main`; else the
-  file's directory; a session's working directory), then the `:paths` of the nearest
-  `deps.edn` walking up (read as EDN; `["src"]` when absent), else `src` -- the `clj`
-  default. `deps.edn` over a new flag: it is the oracle's own declaration. The file is the
+- **Source path** (`ClojureSourcePath`, on the first lookup): the root the entry file's
+  namespace names (`src` for `src/demo/main.clj` declaring `demo.main`; else the file's
+  directory; a session's working directory), then the project's `:paths` and its
+  dependencies' roots ("deps.edn"). `deps.edn` over a new flag: it is the oracle's own
+  declaration. The file is the
   oracle's `RT.load` order: `ns.clj` under every root, then `ns.cljc` under every root, so a
   `.clj` under a later root beats a `.cljc` under an earlier one (measured on `clj` 1.12.6,
   2026-10-08; instaparse 1.5.0 ships both for 14 namespaces). `Found.resource` is the file
@@ -917,6 +921,84 @@ a program without `ns` lowers unqualified. A quoted `'n/x` is the symbol of var 
   refused by name).
 - **Records** keep the simple-name tag; `typeKeyOf` resolves own, then an imported or
   dotted name matching the class, else the only one of that simple name.
+
+## deps.edn
+
+**Invariant: the source path is the oracle's classpath, minus what this build does not
+read, named when a lookup misses.** `ClojureSourcePath.computeRoots`: the entry's own root,
+the merged map's `:paths`, every library `ClojureDepsGraph.resolve` selects in the oracle's
+order, then `Found.builtin`. Every rule below was measured 2026-10-08 on `clj` 1.12.6.1673
+(`clj -Srepro -Spath` over fixture trees; tools.deps read from the CLI jar).
+- **Maps** (`ClojureDepsEdn`): the oracle's root `deps.edn` (`ROOT_TEXT`, verbatim), the
+  user-level one, the project's (nearest at or above the entry file; the oracle reads the
+  working directory's), merged like `merge-edns` (a map value merges, anything else
+  replaces). A `:local/root` library's map merges over the root map alone (`deps-map`), so
+  its `:paths` default to `["src"]`. Read by `ClojureReader.forEdn` (any tagged literal is
+  data); one value; no repeated key (checked here: the code reader checks set elements
+  only).
+- **Validation** in the oracle's words, `Error validating deps in F. Found: v, expected: p,
+  in: [path]`, walked in map order (the oracle sorts its problems; one problem, the common
+  case, reads the same). **An unknown key passes**: measured (`:foo`, `:foo/bar`,
+  `:deps/whatever`), the spec's `s/keys` is open. The plan said refuse it; that would block a
+  valid `deps.edn` of a dependency its user cannot edit. Registered qualified keys
+  (`:mvn/version`, `:local/root`, `:git/*`, `:deps/root`, `:deps/manifest`) are checked
+  wherever a map holds one, like `s/keys`.
+- **Selection** (`ClojureDepsGraph`, a port of `expand-deps` and `flatten-libs`): breadth
+  first, `include-coord?`'s order (top, excluded, use-top, parent-missing, new, same,
+  newer, older), `update-excl` (a same-version revisit queues only what an earlier visit's
+  exclusions cut and this one does not exclude: `a4 (excl z4)` + `b4` includes `z4` in
+  either order), `deselect-orphans`, then every tree path sorted by length and lib by lib.
+  `Lib.compareTo` is `Symbol.compareTo` (namespace, then name), not the `ns/name` string.
+  Maven versions by `ClojureMavenVersions`, a port of `GenericVersionScheme`
+  (maven-resolver-util 1.9.27) from its class files, pinned by the oracle's 121x121 sign
+  matrix; local roots equal or `No known ancestor relationship`; two types `Unable to compare
+  versions`; git commits by descent (`Procurer.compareGit`, the first stays while unfetched).
+  The Maven graphs the oracle resolved from a `file:` repository fixture (newest wins,
+  orphans, exclusion narrowing, order, cycles) are pinned through
+  `ClojureDepsGraphTest.FakeRepository`: the selection is complete, only the procurer fetches
+  nothing. `:override-deps`/`:default-deps` (alias arguments) are not taken yet: a `nil`
+  coordinate is the oracle's `Bad coordinate`.
+- **Procurer** (`ClojureDepsProcurer`): `:local/root` canonical (`SourceLoader.canonicalPath`,
+  `toRealPath`) and checked (`Local lib X not found: R`); its manifest `:deps`, `:jar`, `:pom`
+  (not read), none (`Manifest file not found ...`) or another (`Manifest type :lein not loaded
+  ...`); the git checks that need no repository (missing sha, prefix sha without a tag, both
+  spellings of the sha or the tag, the inferred forge URL); `:deps/prep-lib` checked after
+  every contribution (`The following libs must be prepared before use: [..]`), never run.
+- **A jar is read in place** (`SourceLoader.listArchive`/`loadArchiveEntry`: the central
+  directory, an entry opened only when listed). Extracting it (`Archives.extractZip`, the
+  plan) would need a cache keyed by content and invalidated when the jar changes, for
+  nothing a read in place lacks; fetched Maven jars take the same path. `Found.path` is
+  `jar!/entry`, `Found.resource` the entry (`*file*`, measured `lib/core.clj`). A namespace a
+  jar holds only as `__init.class` is refused by name.
+- **Unfetched, refused when missed**: a non-built-in Maven coordinate, a git coordinate, a
+  jar's `pom.xml` dependencies and a `:pom` project add no root and a note
+  (`Contribution.unread`); a lookup that finds nothing appends them (`notSearched`) to
+  `Could not locate` and to `unknown namespace`. Refusing at the first lookup was rejected: a
+  project with any Maven dependency (nearly all) would stop where the program needs only its
+  local namespaces. A lookup steps past an unfetched library's place in the order (an earlier
+  unfetched jar holding the same namespace is not detected).
+- **Built-in coordinates** (`ClojureBuiltinLibs`): `org.clojure/clojure`, `spec.alpha` and
+  `core.specs.alpha` at any Maven version are the front end; `ring/ring-core` up to 1.15.5 and
+  `ring/ring-codec` up to 1.3.0 are the shipped Ring files, standing in for an older version
+  as newest-wins assumes. A newer one, or the library as a local or git coordinate that lacks
+  the namespace, is refused when the built-in file would load (`refuseBuiltinStandIn`); with
+  no coordinate at all the files load as before (the oracle would fail).
+- **`clojure.*`**: a contrib namespace (outside `ClojureBuiltinNamespaces.LANGUAGE`) loads
+  from a dependency's roots like any library, and a miss is `Could not locate` with the
+  not-searched note; clojure.jar's own never comes from a root ("Namespaces and project
+  files"). Measured: `clojure.data.simple` under a `:local/root` loads on the oracle; a
+  project `clojure/walk.clj` breaks the oracle's own startup (cyclic load through spec).
+- **User-level map**: `SourceStandards.clojureConfigDir` (`CLJ_CONFIG`, `XDG_CONFIG_HOME/clojure`,
+  `~/.clojure`), read from the environment by `RontoLispCli` alone and carried to every read
+  (interpreter, compile path, REPL); `SourceStandards.DEFAULT` (tests, `JvmSourceCompiler`, the
+  playground) reads none. Merged, measured: its `:paths` apply where the project has none, its
+  `:deps` join, a relative path resolves against the project's directory.
+- Read, applied by nothing yet: `:aliases`, `:mvn/repos`, `:mvn/local-repo`. More than eight
+  top deps iterate in the oracle's hash order, here in file order.
+- Pins: `ClojureDepsEdnTest`, `ClojureDepsGraphTest`, `ClojureMavenVersionsTest`,
+  `ClojureDepsProjectTest` (the four backends over a `:local/root` directory with its own
+  dependency, a jar, a `clojure.*` contrib namespace; the refusals, Ring versions, the user
+  map, a session), `PlaygroundReplTest#aClojureRequireReadsTheUploadedDepsEdnLikeEveryOtherRoute`.
 
 ## Ring adapter
 
@@ -981,7 +1063,8 @@ serve`, and a war on embedded Tomcat; plain P1 compiles and signals the directiv
 `ring.util.response` `request` `codec` `mime-type`, `ring.middleware.params`
 `keyword-params` `content-type`. `ClojureSourcePath.find` reads one AFTER every source root
 (`Found.builtin`), so a project file of the name wins, as `src` precedes a jar on the
-oracle's classpath. Loaded through `loadNamespace` like any project namespace: vars, privacy,
+oracle's classpath; a `deps.edn` ring-core newer than the shipped one refuses them
+("deps.edn"). Loaded through `loadNamespace` like any project namespace: vars, privacy,
 `:refer :all`, `#'`, init statements, all unchanged.
 - **Shipping mechanism, measured 2026-10-08 (wasm-GC P1, raw bytes)**: the plan preferred the
   resource. Pure-Clojure ports were oracle-identical on the interpreter but heavy wherever
@@ -1123,7 +1206,8 @@ function and a directive must be a top-level form.
 
 **The map-shaped namespaces of clojure.jar ship as Clojure source written for this front
 end** (`src/main/resources/am/ik/rontolisp/clojure/lib/clojure/**`, the
-`ClojureBuiltinNamespaces` mechanism of "Ring util namespaces"): `clojure.walk`.
+`ClojureBuiltinNamespaces` mechanism of "Ring util namespaces"): `clojure.walk`,
+`clojure.template`.
 - **Licensing**: clojure.jar is EPL-1.0, this project Apache-2.0, so nothing of it is
   copied -- no code, no docstring. Each file is written from the documented behaviour and
   diffed against the oracle; a one-line var dictated by its contract
@@ -1156,8 +1240,13 @@ end** (`src/main/resources/am/ik/rontolisp/clojure/lib/clojure/**`, the
   `LongRange` as a seq: printed alike). Deviation: `macroexpand-all` expands only the
   program's macros -- the core forms are lowering rows, not macros, so `(when x y)` stays
   where the oracle answers `(if x (do y))`.
+- `clojure.template`: `do-template` substitutes in its own body (a `letfn` postwalk
+  replace) instead of calling `apply-template`, because a macro body runs in the
+  macro-time evaluator, which holds the core and `clojure.lisp` but no program function
+  ("Macros"); the oracle's calls `apply-template`. Same answers.
 - Pins: clojure-spec `clojure-walk-*` (all four backends, oracle-identical, the first
   case loading `clojure.walk` through a qualified name only),
+  `clojure-template-substitutes-per-group-of-values`,
   `ClojureLanguageNamespacesTest` (the startup load, a project file never shadowing a
   startup namespace, a contrib `clojure.*` namespace on the source path, the refusal of
   one not built in).
@@ -1949,13 +2038,68 @@ through it. Pinned on all four backends by clojure-spec `a-double-prints-its-exp
 source reader's language, answering what a quote of the same text answers**, so `(=
 (read-string s) 's)` holds: `@x` reads `(deref x)` and `` `x `` `(syntax-quote x)` like a
 quote does (the oracle: `clojure.core/deref`, the expansion), `#(...)` the source reader's
-`(fn* [p1__N# ...] (body))` (N per datum read, through the specials `%clojure-rd-args`/`%clojure-rd-arg-id`), metadata drops, `#=`/`#inst` are its refusals, and `#?` reads under `{:read-cond :allow}` ("Reader conditionals"). A read map
-or set stores its keys through "Structural keys" (`%clojure-plist-table`,
-`%clojure-set-put`), so it finds `=` keys and refuses an `=` duplicate member like a
-literal. `::kw` resolves against the context each call site passes, `("ns" ("alias"
-"full.ns") ...)`, plus the libraries `isKnownNamespace` names (mirrored in
-`%clojure-rd-alias`).
+`(fn* [p1__N# ...] (body))` (N per datum read, through the specials `%clojure-rd-args`/`%clojure-rd-arg-id`), `#=`/`#inst` are its refusals, and `#?` reads under `{:read-cond :allow}` ("Reader conditionals"). A read map
+or set stores its keys through "Structural keys" (`%clojure-rd-map-of`, `%clojure-set-put`),
+so it finds `=` keys and refuses an `=` duplicate like the oracle (`Duplicate key: k`, k's
+toString: a map names the earlier key, a set the later member). `::kw` resolves against the
+context each call site passes, `("ns" ("alias" "full.ns") ...)`, plus the libraries
+`isKnownNamespace` names and the startup ones (mirrored in `%clojure-rd-alias`).
 `eval`/`load-string` stay unknown names: no compiler runs at run time.
+
+**Oracle-checked 2026-10-08 (clj 1.12.6), shared by `read-string`/`read` and clojure.edn:**
+- Metadata attaches (`%clojure-rd-meta`, the oracle's MetaReader): a keyword `{k true}`, a
+  symbol or string `{:tag x}`, a vector `{:param-tags v}` (EDN refuses it), merged over the
+  form's own with the outer winning; a non-IMeta form (number, string, keyword, char,
+  boolean, pattern) is `Metadata can only be applied to IMetas`; a symbol form takes none
+  (symbols carry no metadata here), nil is left alone (`()` reads as nil). Until then the
+  reader dropped it.
+- Namespace maps (`%clojure-rd-ns-map`, the oracle's NamespaceMapReader): `#:ns{}`,
+  `#::{}`/`#::alias{}` against the call site's context; refusals in the oracle's words.
+  The source reader takes them too (`ClojureReader.readNamespaceMap`): `#::` spells a
+  keyword key `::k`/`::alias/k` for the lowering to resolve, and refuses a symbol key by
+  name (no auto-resolved symbol spelling exists).
+- A symbol or keyword token goes through the oracle's `matchSymbol` rules
+  (`%clojure-rd-token-valid-p`: the pattern's first match by its backtracking order, then
+  no ns ending `:/`, no name ending `:`, no `::` past the first character; `a/9` is a
+  1.12 array-class symbol outside EDN). Character literals refuse like the oracle's
+  (`Invalid unicode character`, `Invalid digit`, `Invalid character constant`, octal range
+  and length). `#!` is a line comment, `#<` `Unreadable form`, and a tagged literal reads
+  its value before refusing (`#a` at the end is `EOF while reading`). The source reader's
+  `#!` is a comment anywhere too, where it was the first line only.
+- Size, measured 2026-10-08 (wasm P1, `(prn (read-string "[1 {:a 2}]"))` plus a `defn`):
+  134,269 -> 146,539 B. Of that, reverting one feature at a time: metadata 5.9 KB (the
+  `eq` side table and its reads), token validation 2.6 KB, namespace maps 1.6 KB, the
+  duplicate-key refusal 1.0 KB; `string-downcase` in the `\ud800` message alone had cost
+  8 KB (the Unicode case table), so the hex digits are spelled by hand. A program that
+  reads nothing is byte-identical.
+- Pinned by clojure-spec `read-string-metadata-namespace-maps-and-token-refusals`,
+  `ClojureReaderTest#aNamespaceMapQualifiesItsKeys`.
+
+**clojure.edn** (`ClojureEdnLowering`, a known namespace like `clojure.string`, so its
+qualified names need no `require` -- the oracle loads it before the program) reads through
+the same reader in EDN mode: the entries `%clojure-edn-read-string-1`/`-read-string`/`-read`
+bind `%clojure-rd-edn` to `(readers . default)` from the options, and every reader clause
+the EDN grammar decides is behind `(%clojure-rd-edn-p)`, the arm test of
+`ClojureArms.Family.EDN` (producers: the entries), so a `read-string` program carries none
+of them. EdnReader's grammar, measured on the oracle: the quote is a constituent; a leading
+`` ` ``/`~`/`@` is `Invalid leading character`, one inside a token `Invalid constituent
+character` (a number's parse refuses it instead); `::kw` and `#::` are `Invalid token`; a
+number needs a digit or a sign and a digit first (`.5` is a symbol here only in EDN: the
+source reader and `read-string` read it as 0.5, the leniency the source reader keeps);
+`#` dispatches to `{` `_` `#` `:` `^` and a letter (a tagged literal; `<` is `Unreadable
+form`), anything else `No dispatch macro for: c`; `#:` reads its namespace as a whole form.
+A tag calls the `:readers` value, then the built-in `#inst`/`#uuid` (refused while no such
+value exists), then `:default` with tag and value, through `%clojure-call` -- a var or
+keyword reader works -- outside the read in progress (`%clojure-rd-edn-call` rebinds the
+read specials, so a read inside the reader function starts afresh). `(read-string s)` is
+`{:eof nil}` (a nil `s` answers nil); `read`'s stream is any character stream.
+Measured 2026-10-08, wasm P1: the same program through `clojure.edn/read-string` 158,257 B
+against 146,539 B through `read-string`; of the 11.7 KB, about 7 KB is the IFn dispatcher
+the tag readers go through (a `read-string` program naming it measured 134,269 -> 141,165 B
+before the reader changes above).
+Pins: clojure-spec `clojure-edn-reads-data-only`,
+`clojure-edn-tagged-literals-options-and-streams` (all four backends, oracle-identical),
+`ClojureLibraryTest#aProgramReadingNoEdnSplicesTheReaderWithoutItsEdnClauses`.
 
 - Source: a `(string . index)` cursor (`read-string`) or a CL character input stream
   (`read`) through `peek-char`/`read-char`, so a read leaves the stream right after its

@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>test.profiles</groupId>
+  <artifactId>bydefault</artifactId>
+  <version>1</version>
+  <profiles>
+    <profile><id>first</id><activation><activeByDefault>true</activeByDefault></activation>
+  <dependencies>
+      <dependency><groupId>test.lib</groupId><artifactId>first</artifactId><version>1</version></dependency>
+  </dependencies>
+    </profile>
+    <profile><id>never</id><activation><property><name>never.set</name></property></activation>
+  <dependencies>
+      <dependency><groupId>test.lib</groupId><artifactId>never</artifactId><version>1</version></dependency>
+  </dependencies>
+    </profile>
+    <profile><id>second</id><activation><activeByDefault>true</activeByDefault></activation>
+  <dependencies>
+      <dependency><groupId>test.lib</groupId><artifactId>second</artifactId><version>1</version></dependency>
+  </dependencies>
+    </profile>
+    <profile><id>noactivation</id>
+  <dependencies>
+      <dependency><groupId>test.lib</groupId><artifactId>noactivation</artifactId><version>1</version></dependency>
+  </dependencies>
+    </profile>
+  </profiles>
+</project>

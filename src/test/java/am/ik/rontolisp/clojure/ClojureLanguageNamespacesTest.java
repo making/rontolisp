@@ -47,6 +47,22 @@ class ClojureLanguageNamespacesTest {
 	}
 
 	@Test
+	void clojureEdnIsALoweringReachedWithoutARequire() {
+		assertThat(lowered("(clojure.edn/read-string \"1\")", Map.of()))
+			.contains("(RONTOLISP::%CLOJURE-EDN-READ-STRING-1 \"1\")");
+		assertThat(
+				lowered("(ns a (:require [clojure.edn :as e])) (map e/read-string [\"1\"]) (e/read {} *in*)", Map.of()))
+			.contains("#'RONTOLISP::%CLOJURE-EDN-READ-STRING-V")
+			.contains("(RONTOLISP::%CLOJURE-EDN-READ ");
+		assertThatThrownBy(() -> Clojure.read("(clojure.edn/read-string {} \"x\" \"y\")", null))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Wrong number of args (3) passed to: clojure.edn/read-string");
+		assertThatThrownBy(() -> Clojure.read("(clojure.edn/read-str \"x\")", null))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("unknown name: clojure.edn/read-str");
+	}
+
+	@Test
 	void aLanguageNamespaceNotBuiltInIsRefused() {
 		assertThatThrownBy(() -> Clojure.read("(ns a (:require [clojure.inspector :as i]))", null))
 			.isInstanceOf(LispReadException.class)

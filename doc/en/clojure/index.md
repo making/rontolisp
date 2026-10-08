@@ -32,7 +32,7 @@ binding and control forms with sequential and map destructuring, the threading m
 the seq verbs over strict list views of every collection, the persistent map and set
 operations over `equal` hash tables, the numeric and predicate core, atoms and volatiles,
 multimethods with hierarchies, `try`/`catch`/`finally` with `ex-info`, namespaces across
-files (`ns`/`require` of project files) and `clojure.string`, `clojure.set`, `clojure.walk`, `clojure.test` with its summary runner, a Ring adapter serving a handler on every
+files (`ns`/`require` of project files) and `clojure.string`, `clojure.set`, `clojure.walk`, `clojure.edn`, `clojure.test` with its summary runner, a Ring adapter serving a handler on every
 backend (`ring.adapter.rontolisp`), the WASM host boundary and WIT contracts (`rontolisp.wasm`,
 `rontolisp.wit`), and Java interop. What each form lowers to, and what stays
 refused, is [Semantics](semantics.md); the reader rules are [Syntax](syntax.md); the

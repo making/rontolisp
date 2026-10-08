@@ -38,9 +38,8 @@ A `require`, `use` or `ns` clause naming a namespace the program has not declare
 file: `my-app.core` is `my_app/core.clj`, read from the first source root holding it, else
 `my_app/core.cljc` from the first holding that (a `.clj` under any root wins, like the oracle) --
 the directory the entry file's own namespace names (`src` for `src/demo/main.clj` declaring
-`demo.main`, the file's directory without an `ns`), then the `:paths` of the nearest
-`deps.edn` at or above the entry file (`["src"]` when it names none), or `src` under the
-working directory when there is no `deps.edn`. A file lowers once per program: its definitions stay ahead of
+`demo.main`, the file's directory without an `ns`), then the project's `:paths` and the
+roots of its dependencies ([Projects](#projects-depsedn)). A file lowers once per program: its definitions stay ahead of
 the form that required it, while its other top-level forms run when the `require` runs --
 including a `require` inside a function body, which loads when the body runs. A second
 `require` loads nothing; `:reload` runs the file again (`def` resets, `defonce` keeps its
@@ -65,6 +64,46 @@ path. [the-ns](reference/the-ns.md), [find-ns](reference/find-ns.md) and
 # deps.edn holds {:paths ["src"]}; demo.main and demo.main-test require demo.lib
 rontolisp src/demo/main.clj          # roots: src (its ns), src (deps.edn)
 rontolisp test/demo/main_test.clj    # roots: test (its ns), src (deps.edn)
+```
+
+## Projects: deps.edn
+
+A program's project is the nearest `deps.edn` at or above the entry file (the working
+directory's for a REPL), read whole the way the oracle's `clj` reads one and merged over
+two maps before it: the built-in root map (`:paths ["src"]` and `org.clojure/clojure`),
+then the user-level `deps.edn` (`$CLJ_CONFIG`, else `$XDG_CONFIG_HOME/clojure`, else
+`~/.clojure`). Without a `deps.edn`, the working directory is the project. A key the oracle
+does not use is ignored, as it is there; a value the oracle's spec refuses, a coordinate of
+no known type and a dependency the oracle cannot resolve are errors in its words.
+
+- `:paths` names the project's source roots, relative to its `deps.edn`; an alias keyword
+  among them stands for the paths its alias lists.
+- `:deps` names the dependencies. `{:local/root "../lib"}` is a directory, whose own
+  `deps.edn` gives its `:paths` (relative to it, `["src"]` by default) and its own `:deps`,
+  or a jar, whose `.clj` and `.cljc` files are read in place. The libraries are selected
+  as the oracle selects them: a top-level dependency wins, otherwise the newest version
+  across the tree; `:exclusions` drop a library below the coordinate naming it; a cycle
+  ends at the library already selected.
+- The source path is the entry file's own root, the project's `:paths`, each selected
+  library's roots in the oracle's classpath order (the top of the tree first), then the
+  built-in namespaces.
+- `org.clojure/clojure`, `org.clojure/spec.alpha` and `org.clojure/core.specs.alpha` are
+  this front end at any version. `ring/ring-core` and `ring/ring-codec` at a Maven version
+  up to the one shipped (ring-core 1.15.5, ring-codec 1.3.0) are the built-in Ring
+  namespaces; a newer one is refused when a Ring namespace loads.
+- A `clojure.*` namespace that is not part of Clojure itself (an `org.clojure` contrib
+  library under a `:local/root`) loads from the source path like any other.
+- A Maven (`:mvn/version`) or git (`:git/url`, `:git/sha`) coordinate of any other library
+  is not fetched: it adds no root, and a namespace no root holds is refused naming it. A
+  jar's own `pom.xml`, and a `:local/root` project with a `pom.xml` but no `deps.edn`, are
+  not read either. `:aliases` are read and not applied.
+
+```console
+$ cat deps.edn
+{:paths ["src"]
+ :deps {my/util {:local/root "../util"}
+        my/parser {:local/root "../parser.jar"}}}
+$ rontolisp src/app/main.clj      # roots: src, ../parser.jar, ../util/src
 ```
 
 ## Binding

@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>test.interp</groupId>
+  <artifactId>unused-cycle</artifactId>
+  <version>1</version>
+  <properties>
+    <x>${y}</x>
+    <y>${x}</y>
+  </properties>
+  <dependencies>
+      <dependency><groupId>test.lib</groupId><artifactId>d</artifactId><version>1</version></dependency>
+  </dependencies>
+</project>

@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>test.desc</groupId>
+  <artifactId>entities</artifactId>
+  <version>1</version>
+  <description>&copy; &nbsp; caf&eacute; &lt;&amp;&gt;</description>
+  <dependencies>
+      <dependency><groupId>test.lib</groupId><artifactId>a</artifactId><version>1&#46;0</version></dependency>
+      <dependency><groupId>test.lib</groupId><artifactId>b</artifactId><version>&#x32;.0</version></dependency>
+      <dependency><groupId>test.lib</groupId><artifactId>c</artifactId><version><![CDATA[3.0]]></version></dependency>
+      <dependency><groupId>test.lib</groupId><artifactId>d</artifactId><version>4<!-- comment -->.0</version></dependency>
+      <dependency><groupId>test.lib</groupId><artifactId>e</artifactId><version>5&#x2E;0&amp;</version></dependency>
+  </dependencies>
+</project>
