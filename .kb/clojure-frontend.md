@@ -978,7 +978,7 @@ repositories, `GITLIBS` set; tools.deps read from the CLI jar).
   (`ClojureDepsGraph.chooseCoord`), canonicalized against the project when first used.
 - **Procurer** (`ClojureDepsProcurer`, the oracle's extensions): `:local/root` canonical
   (`SourceLoader.canonicalPath`, `toRealPath`) and checked (`Local lib X not found: R`); a
-  manifest `:deps`, `:jar`, `:pom` (not read: a note), none (`Manifest file not found ...`) or
+  manifest `:deps`, `:jar`, `:pom` (below), none (`Manifest file not found ...`) or
   another (`Manifest type :lein not loaded ...`; tools.deps has no lein reader);
   `:deps/prep-lib` checked after every contribution, local or git (`The following libs must be
   prepared before use: [..]`), never run. It fetches through `ClojureFiles.repositories()`
@@ -1010,6 +1010,22 @@ repositories, `GITLIBS` set; tools.deps read from the CLI jar).
   and runtime kept, OPTIONAL KEPT, coord `:mvn/version :scope [:optional]`. Measured: a
   test-jar typed dependency is the plain jar, a pom typed one the oracle tries as a jar and
   fails on.
+- **A `pom.xml` project** (`coord-deps`/`coord-paths :pom`, `ClojureRepositories.pomProject`
+  -> `MavenResolver.project(file, {project.basedir=.})`, read once per resolution): children
+  as a jar's pom (`modelChildren`); roots, `pomRoots`: the effective `sourceDirectory`,
+  `src/main/clojure`, each resource directory, then the build-helper directories, each
+  `canonical(resolve(root, p))` (absent ones included), each once. Build-helper
+  (`get-build-helper-paths`): when ANY plugin is `org.codehaus.mojo:build-helper-maven-plugin`,
+  the FIRST plugin's executions with goal `add-source` give `<sources>`' children's values,
+  then `add-resource`'s `<resources>` -- a value-less child (`<source/>`, a nested
+  `<resource><directory>`) dropped, an empty one the root. Measured 2026-10-08 on `clj`
+  1.12.6 (`MavenProjectTest`'s cases): no build -> `src/main/java`, `src/main/clojure`,
+  `src/main/resources`; `${project.basedir}/x` -> `x`, `${basedir}/x` -> the literal
+  `${basedir}/x` under the root, `${project.build.directory}/gen` -> `target/gen`; a parent's
+  inherited and managed build-helper executions, a profile's plugin and resources, duplicate
+  plugins all reach the first plugin as Maven merges them; a child plugin listed before the
+  build-helper it shares with its parent makes that child plugin first (no helper dirs). The
+  oracle's model is STRICT-validated, ours minimal (`.kb/maven-resolver.md`, `project`).
 - **git** (`canonicalize`/`manifest-type`/`compare-versions :git`): both spellings refused,
   URL given or inferred (the oracle's regex table, here only -- `GitFetcher` has none), then
   against the repository: a tag must exist (`Library L has invalid tag: t`), sha and tag must
@@ -1035,8 +1051,8 @@ repositories, `GITLIBS` set; tools.deps read from the CLI jar).
   (`SourceStandards.DEFAULT`) fetch nothing, the env-read rule of the user-level map. A fetch
   failure is a refusal (`FetchFailure` -> `LispReadException`) in the resolver's words.
 - **Unfetched where nothing fetches, refused when missed**: a non-built-in Maven coordinate, a
-  git coordinate and a jar's `pom.xml` dependencies -- and a `:pom` project everywhere -- add
-  no root and a note (`Contribution.unread`); a lookup that finds nothing appends them
+  git coordinate, a jar's `pom.xml` dependencies and a `:pom` project add no root and a note
+  (`Contribution.unread`); a lookup that finds nothing appends them
   (`notSearched`) to `Could not locate` and to `unknown namespace`. A lookup steps past an
   unfetched library's place in the order (an earlier unfetched jar holding the same namespace
   is not detected). The browser's refusal by name is this.
@@ -1120,11 +1136,12 @@ repositories, `GITLIBS` set; tools.deps read from the CLI jar).
   map, a session), `PlaygroundReplTest#aClojureRequireReadsTheUploadedDepsEdnLikeEveryOtherRoute`,
   `ClojureDepsFetchTest` (Maven and git through in-memory repositories: the measured
   classpaths -- scopes, optional, exclusions, `*/*`, pom and classified types, `[1.0]`, a jar's
-  pom, `:deps/root`, tags, abbreviated shas, the descendant -- and every refusal; the class path
+  pom, a `pom.xml` project's roots, `:deps/root`, tags, abbreviated shas, the descendant -- and every refusal; the class path
   reported before the lowering), `ClojureDepsFetchCliTest` (the CLI over a `file:` Maven
   repository and on-disk git repositories: four backends, newest-wins across Maven and git,
   what is fetched and what not, a Java jar on the interpreter's class path and beside a jar
-  and in its pom, a second run with the remote gone and no git, refusals; the output the
+  and in its pom, a `pom.xml` monorepo module (local parent, managed build-helper) on four
+  backends, a second run with the remote gone and no git, refusals; the output the
   oracle's over the same repositories), `GitFetcherTest`, `MavenRepositoryTest#aPomGivenAsBytes...`.
 
 ## Ring adapter

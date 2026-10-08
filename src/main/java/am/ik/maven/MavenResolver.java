@@ -47,10 +47,13 @@ public final class MavenResolver {
 
 	private final ModelBuilder models;
 
+	private final Map<String, String> systemProperties;
+
 	private final Map<Artifact, ArtifactDescriptor> descriptors = new HashMap<>();
 
 	private MavenResolver(RepositoryAccess access, Map<String, String> systemProperties) {
 		this.access = access;
+		this.systemProperties = Map.copyOf(systemProperties);
 		this.models = new ModelBuilder(access, systemProperties);
 	}
 
@@ -128,6 +131,62 @@ public final class MavenResolver {
 		catch (InvalidPomException ex) {
 			throw new MavenResolutionException("the POM is invalid: " + ex.getMessage(), ex);
 		}
+		return modelDependencies(model);
+	}
+
+	/**
+	 * Reads a project's {@code pom.xml} as Maven builds a model from a file without a
+	 * project directory -- what tools.deps reads of a {@code pom.xml} project: a parent
+	 * at its {@code relativePath} beside the file (by default {@code ../pom.xml}, up a
+	 * chain of files) when it names the parent, else from the repositories; imports from
+	 * the repositories; the super POM's build defaults. Validated as a repository POM is
+	 * (Maven's minimal level).
+	 * @param pom the {@code pom.xml}
+	 * @param systemProperties added over the resolver's system properties for this build
+	 * (tools.deps adds {@code project.basedir=.}, which a {@code ${project.basedir}} then
+	 * reads, there being no project directory)
+	 * @return the dependencies and the build's sources
+	 * @throws MavenResolutionException if the file cannot be read, Maven's model builder
+	 * would reject it, or a parent or import cannot be resolved
+	 */
+	public synchronized MavenProject project(Path pom, Map<String, String> systemProperties)
+			throws MavenResolutionException {
+		Map<String, String> system = new HashMap<>(this.systemProperties);
+		system.putAll(systemProperties);
+		PomModel model;
+		try {
+			model = new ModelBuilder(this.access, system).effective(pom);
+		}
+		catch (InvalidPomException ex) {
+			throw new MavenResolutionException("the POM is invalid: " + ex.getMessage(), ex);
+		}
+		PomModel.Build build = model.build();
+		List<String> resources = new ArrayList<>();
+		List<MavenProject.Plugin> plugins = new ArrayList<>();
+		if (build != null) {
+			for (PomModel.Resource resource : build.resources()) {
+				if (resource.directory() != null) {
+					resources.add(resource.directory());
+				}
+			}
+			for (PomModel.Plugin plugin : build.plugins()) {
+				List<MavenProject.Execution> executions = new ArrayList<>();
+				for (PomModel.Execution execution : plugin.executions()) {
+					executions
+						.add(new MavenProject.Execution(execution.id(), execution.goals(), execution.configuration()));
+				}
+				plugins.add(new MavenProject.Plugin(plugin.groupId(), plugin.artifactId(), executions));
+			}
+		}
+		return new MavenProject(modelDependencies(model), build == null ? null : build.sourceDirectory(), resources,
+				plugins);
+	}
+
+	/**
+	 * A model's dependencies as it holds them: the classifier written, the type's
+	 * extension.
+	 */
+	private static List<Dependency> modelDependencies(PomModel model) {
 		List<Dependency> dependencies = new ArrayList<>();
 		for (PomModel.Dep dep : model.dependencies()) {
 			String type = dep.effectiveType();

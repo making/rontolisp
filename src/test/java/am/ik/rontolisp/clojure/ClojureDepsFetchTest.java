@@ -115,12 +115,65 @@ class ClojureDepsFetchTest {
 		assertThat(roots(fixture.files("{:deps {my/mono {:git/url \"file:///git/gitmono\" :git/sha \"" + fixture.mono
 				+ "\" :deps/root \"mod\"}}}")))
 			.isEqualTo(": ., src, gitlibs/gitmono/" + fixture.mono + "/mod/src");
-		// a pom.xml project is not read, and says so when a lookup misses
-		ClojureSourcePath pom = new ClojureSourcePath(
-				fixture.files("{:deps {my/gitpom {:git/url \"file:///git/gitpom\" :git/sha \"" + fixture.pom + "\"}}}"),
-				null);
-		assertThat(pom.describeRoots()).isEqualTo(
-				": ., src; not searched: my/gitpom gitlibs/gitpom/" + fixture.pom + " (a pom.xml project, not read)");
+	}
+
+	@Test
+	void aPomXmlProjectBringsItsSourceDirectoriesAndItsModelsDependencies() {
+		Fixture fixture = new Fixture();
+		String deps = "{:deps {my/gitpom {:git/url \"file:///git/gitpom\" :git/sha \"" + fixture.pom + "\"}}}";
+		String checkout = "gitlibs/gitpom/" + fixture.pom;
+		// the source directory, src/main/clojure, the resources, then what the first
+		// plugin's add-source and add-resource executions configure (a value-less element
+		// left out, an empty one the root itself), each once; the compile and runtime
+		// dependencies, optional ones too
+		assertThat(roots(fixture.files(deps))).isEqualTo(": ., src, " + checkout + "/src/main/java, " + checkout
+				+ "/src/main/clojure, " + checkout + "/src/main/resources, " + checkout + "/extra, " + checkout + ", "
+				+ checkout + "/res, " + jar("opt-lib", "1.0") + ", " + jar("rt-lib", "1.0"));
+		assertThat(fixture.repositories.asked).containsOnlyOnce("project " + checkout + "/pom.xml");
+		// the plugin's directories come off the first plugin only, here no build helper
+		fixture.repositories.pomProjects.put(checkout + "/pom.xml",
+				new ClojureRepositories.PomProject(List.of(), "src/main/java", List.of(),
+						List.of(new ClojureRepositories.PomPlugin("x", "other", List.of()), BUILD_HELPER)));
+		assertThat(roots(fixture.files(deps)))
+			.isEqualTo(": ., src, " + checkout + "/src/main/java, " + checkout + "/src/main/clojure");
+		// a project the resolver cannot build is refused in its words
+		fixture.repositories.pomProjects.remove(checkout + "/pom.xml");
+		assertRefused(fixture, deps,
+				checkout + "/pom.xml: Non-resolvable parent POM g:p:1 for g:m:1: no repository has it");
+		// where nothing is fetched it is not read, and says so when a lookup misses
+		Map<String, String> files = new LinkedHashMap<>(fixture.files);
+		files.put("deps.edn",
+				deps.replace("my/gitpom {:git/url \"file:///git/gitpom\" :git/sha \"" + fixture.pom + "\"}",
+						"my/pom {:local/root \"" + checkout + "\"}"));
+		assertThat(roots(new MemoryClojureFiles(files, fixture.archives, null)))
+			.isEqualTo(": ., src; not searched: my/pom " + checkout + " (a pom.xml project, not read)");
+	}
+
+	/**
+	 * A {@code build-helper-maven-plugin} adding sources and resources, and test sources
+	 * no classpath reads.
+	 */
+	private static final ClojureRepositories.PomPlugin BUILD_HELPER = new ClojureRepositories.PomPlugin(
+			"org.codehaus.mojo", "build-helper-maven-plugin", List.of(
+					new ClojureRepositories.PomExecution(List.of("add-source"),
+							configuration("sources", value("source", "extra"), value("source", null),
+									value("source", ""), value("source", "src/main/java"))),
+					new ClojureRepositories.PomExecution(List.of("add-resource"),
+							configuration("resources",
+									new ClojureRepositories.PomConfiguration("resource", null,
+											List.of(value("directory", "nested"))),
+									value("resource", "res"))),
+					new ClojureRepositories.PomExecution(List.of("add-test-source"),
+							configuration("sources", value("source", "test-extra")))));
+
+	private static ClojureRepositories.PomConfiguration configuration(String list,
+			ClojureRepositories.PomConfiguration... items) {
+		return new ClojureRepositories.PomConfiguration("configuration", null,
+				List.of(new ClojureRepositories.PomConfiguration(list, null, List.of(items))));
+	}
+
+	private static ClojureRepositories.PomConfiguration value(String name, @Nullable String value) {
+		return new ClojureRepositories.PomConfiguration(name, value, List.of());
 	}
 
 	@Test
@@ -275,6 +328,17 @@ class ClojureDepsFetchTest {
 					Map.of("mod/deps.edn", "{:paths [\"src\"]}", "mod/src/mono/core.clj", "(ns mono.core)"));
 			commit("file:///git/gitpom", this.pom,
 					Map.of("pom.xml", "<project/>", "src/main/clojure/gitpom/core.clj", "(ns gitpom.core)"));
+			// its model: the super POM's directories as tools.deps reads them
+			// (${project.basedir} is "."), a resource repeating the source directory
+			this.repositories.pomProjects
+				.put("gitlibs/gitpom/" + this.pom + "/pom.xml", new ClojureRepositories.PomProject(
+						List.of(dep("fixture:rt-lib:1.0"), dep("fixture:opt-lib:1.0", "compile", true),
+								dep("fixture:test-lib:1.0", "test", false)),
+						"./src/main/java", List.of("./src/main/resources", "src/main/java"),
+						List.of(BUILD_HELPER,
+								new ClojureRepositories.PomPlugin("org.apache.maven.plugins", "maven-compiler-plugin",
+										List.of(new ClojureRepositories.PomExecution(List.of("add-source"),
+												configuration("sources", value("source", "notread"))))))));
 			commit("file:///git/gitnone", this.none, Map.of("src/x.clj", "(ns x)"));
 		}
 
@@ -335,6 +399,9 @@ class ClojureDepsFetchTest {
 		/** A POM's text to its model's dependencies. */
 		final Map<String, List<MavenDependency>> pomTexts = new LinkedHashMap<>();
 
+		/** A {@code pom.xml} project's file to its model. */
+		final Map<String, PomProject> pomProjects = new LinkedHashMap<>();
+
 		/** Each repository's commits and their checkouts. */
 		final Map<String, Map<String, String>> checkouts = new LinkedHashMap<>();
 
@@ -363,6 +430,16 @@ class ClojureDepsFetchTest {
 		public List<MavenDependency> pomDependencies(MavenSource source, String pom) {
 			this.asked.add("model " + pom);
 			return this.pomTexts.getOrDefault(pom, List.of());
+		}
+
+		@Override
+		public PomProject pomProject(MavenSource source, String pom) {
+			this.asked.add("project " + pom);
+			PomProject project = this.pomProjects.get(pom);
+			if (project == null) {
+				throw new FetchFailure("Non-resolvable parent POM g:p:1 for g:m:1: no repository has it");
+			}
+			return project;
 		}
 
 		@Override

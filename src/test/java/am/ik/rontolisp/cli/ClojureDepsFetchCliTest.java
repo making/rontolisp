@@ -138,6 +138,53 @@ class ClojureDepsFetchCliTest {
 	}
 
 	@Test
+	void aPomXmlProjectReadsAsTheOracleReadsItOnEveryBackend() throws Exception {
+		// a module of a pom.xml monorepo: its parent read beside it, the parent's managed
+		// build-helper-maven-plugin adding a source directory, its dependency fetched,
+		// its test dependency not (the oracle: clj -Srepro -M over the same tree, clj
+		// 1.12.6, 2026-10-08)
+		String pomlib = "pomlib/parent";
+		String helper = "<groupId>org.codehaus.mojo</groupId><artifactId>build-helper-maven-plugin</artifactId>";
+		write(dir.resolve(pomlib + "/pom.xml"), """
+				<project><modelVersion>4.0.0</modelVersion><groupId>g</groupId><artifactId>parent</artifactId>
+				<version>1</version><packaging>pom</packaging>
+				<build><pluginManagement><plugins><plugin>%s<version>3.6.0</version><executions>
+				<execution><id>sources</id><goals><goal>add-source</goal></goals>
+				<configuration><sources><source>${project.basedir}/extra</source></sources></configuration></execution>
+				</executions></plugin></plugins></pluginManagement></build></project>
+				""".formatted(helper));
+		write(dir.resolve(pomlib + "/module/pom.xml"), """
+				<project><modelVersion>4.0.0</modelVersion>
+				<parent><groupId>g</groupId><artifactId>parent</artifactId><version>1</version></parent>
+				<artifactId>module</artifactId>
+				<dependencies>%s%s</dependencies>
+				<build><plugins><plugin>%s</plugin></plugins></build></project>
+				""".formatted(dependency("words", "2.0", ""), dependency("absent-test", "1.0", "<scope>test</scope>"),
+				helper));
+		write(dir.resolve(pomlib + "/module/src/main/clojure/pomlib/core.clj"), """
+				(ns pomlib.core (:require [pomlib.extra :as e] [fixture.words :as w]))
+				(defn hello [] (str (e/tag) "+" (w/word)))
+				""");
+		write(dir.resolve(pomlib + "/module/extra/pomlib/extra.clj"), "(ns pomlib.extra) (defn tag [] \"extra\")\n");
+		project("pom", "my/module {:local/root \"../" + pomlib + "/module\"}", " :mvn/local-repo \"m2-pom\"");
+		Path main = write(dir.resolve("pom/src/pom_app/main.clj"),
+				"(ns pom-app.main (:require [pomlib.core :as p]))\n(println (p/hello))\n");
+		assertThat(runCli(main.toString())).isEqualTo("extra+hi\n");
+		assertThat(dir.resolve("pom/m2-pom/fixture/words/2.0/words-2.0.jar")).exists();
+		assertThat(dir.resolve("pom/m2-pom/fixture/absent-test")).doesNotExist();
+		Path jar = dir.resolve("out/pom.jar");
+		runCli(main.toString(), "-o", jar.toString());
+		assertThat(java("-jar", jar.toString())).isEqualTo("extra+hi\n");
+		assumeTrue(HostWasmtime.isAvailable(), "no usable wasmtime on PATH");
+		Path preview1 = dir.resolve("out/pom.wasm");
+		runCli(main.toString(), "-o", preview1.toString());
+		assertThat(wasmtime(preview1)).isEqualTo("extra+hi\n");
+		Path component = dir.resolve("out/pom-c.wasm");
+		runCli(main.toString(), "-o", component.toString(), "--component");
+		assertThat(wasmtime(component)).isEqualTo("extra+hi\n");
+	}
+
+	@Test
 	void aJavaLibraryAMavenDependencyBringsJoinsTheProgramsClassPath() throws Exception {
 		Path main = dir.resolve("java/src/java_app/main.clj");
 		assertThat(runCli(main.toString())).isEqualTo("DEPS!\n");
