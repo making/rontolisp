@@ -346,6 +346,15 @@
   実行しません。トップレベルの依存はファイルの順に展開します。oracle は 9 個以上の依存を持つ
   マップをハッシュの順に展開するため、どちらを先に見たかで選択が決まる場合（同じバージョンの
   `1.0` と `1.0.0` のような 2 通りの書き方）に限って結果が異なります。
+- `-M -m` と `-X` が指す名前空間や関数がないときは、ほかのプログラムと同じく
+  `Could not locate my/app.clj ...` や `No such var: my.app/-main` になります。oracle は
+  `Namespace could not be found on classpath` や `loaded but function not found` を返し、
+  `-main` がなければ `NullPointerException` を投げます。`clojure.main` の `-e`、`-i`、
+  `--report`、標準入力から読む `-X` の引数（`-`）、`-T` のツールは拒否します。`:jvm-opts` は
+  無視し、値がマップでないエイリアスを選んでも何も加えません。ファイルのない実行（`-M -m`、
+  `-X`、`-e`、REPL）は最初に作業ディレクトリを探しますが、oracle のクラスパスには含まれません。
+  `rontolisp test` は `clj` のコマンドではなく、cognitect test-runner の既定（`test` 以下の、
+  名前が `-test` で終わる名前空間）に従います。
 - リーダ条件は `:rontolisp` も選びます。フォームが `:clj` より先に挙げていればそちらが先です。
   `{:read-cond :preserve}` は最初の `#?` で拒否されます（リーダ条件やタグ付きリテラルの値が
   ないため）。そのため `reader-conditional?` は `false` のままです。選ばれない分岐の中では、

@@ -234,13 +234,13 @@ public enum SourceLanguage {
 	 * The files a Clojure program names, through a loader: the project namespaces a
 	 * {@code require} loads, the {@code deps.edn} files naming their roots and
 	 * dependencies, a dependency's directory or jar (read in place), and the user-level
-	 * {@code deps.edn} the standards locate. Where the roots are is the front end's
-	 * decision ({@code clojure/ClojureSourcePath}); this only reads and joins paths. A
-	 * parent directory is absolute, so the search for a {@code deps.edn} walks past the
-	 * top of a relative entry path; a host with no working directory (the browser) keeps
-	 * the lexical parent.
+	 * {@code deps.edn} and the aliases the standards name. Where the roots are is the
+	 * front end's decision ({@code clojure/ClojureSourcePath}); this only reads and joins
+	 * paths. A parent directory is absolute, so the search for a {@code deps.edn} walks
+	 * past the top of a relative entry path; a host with no working directory (the
+	 * browser) keeps the lexical parent.
 	 * @param loader the loader, or {@code null} for none
-	 * @param standards where the user-level {@code deps.edn} is
+	 * @param standards where the user-level {@code deps.edn} is, and the selected aliases
 	 * @return the files
 	 */
 	static ClojureFiles clojureFiles(@Nullable SourceLoader loader, SourceStandards standards) {
@@ -248,6 +248,7 @@ public enum SourceLanguage {
 			return ClojureFiles.NONE;
 		}
 		String userConfigDir = standards.clojureConfigDir();
+		List<String> aliases = standards.clojureAliases();
 		return new ClojureFiles() {
 			@Override
 			public @Nullable String read(String path) {
@@ -311,6 +312,16 @@ public enum SourceLanguage {
 			@Override
 			public @Nullable String userConfigDir() {
 				return userConfigDir;
+			}
+
+			@Override
+			public List<String> aliases() {
+				return aliases;
+			}
+
+			@Override
+			public @Nullable List<String> list(String dir) {
+				return loader.listDirectory(dir.isEmpty() ? "." : dir);
 			}
 		};
 	}

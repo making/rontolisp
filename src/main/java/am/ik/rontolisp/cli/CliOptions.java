@@ -1,6 +1,7 @@
 package am.ik.rontolisp.cli;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -40,7 +41,34 @@ public class CliOptions {
 
 	private final List<String> arguments;
 
+	private final @Nullable ClojureRun clojureRun;
+
 	private static final String NOKEY = "__";
+
+	/**
+	 * A {@code deps.edn} run the oracle's way, {@code -M[:aliases] args} or
+	 * {@code -X[:aliases] args}: like {@code clj}, the flag ends rontolisp's own options
+	 * and everything after it is the run's, verbatim.
+	 *
+	 * @param exec whether it is {@code -X} (a function called with a map) rather than
+	 * {@code -M} ({@code clojure.main})
+	 * @param aliases the aliases glued to the flag, as keyword spellings ({@code :dev})
+	 * @param arguments the arguments after the flag
+	 */
+	public record ClojureRun(boolean exec, List<String> aliases, List<String> arguments) {
+
+		/**
+		 * The run.
+		 * @param exec whether it is {@code -X}
+		 * @param aliases the aliases
+		 * @param arguments the arguments after the flag
+		 */
+		public ClojureRun {
+			aliases = List.copyOf(aliases);
+			arguments = List.copyOf(arguments);
+		}
+
+	}
 
 	/**
 	 * Create a new instance wrapping the given options map, with no program arguments.
@@ -56,8 +84,60 @@ public class CliOptions {
 	 * @param arguments the arguments after the {@code --} separator, in order
 	 */
 	public CliOptions(Map<String, String> options, List<String> arguments) {
+		this(options, arguments, null);
+	}
+
+	/**
+	 * Create a new instance with a {@code deps.edn} run.
+	 * @param options the parsed options
+	 * @param arguments the arguments after the {@code --} separator, in order
+	 * @param clojureRun the {@code -M}/{@code -X} run, or {@code null}
+	 */
+	public CliOptions(Map<String, String> options, List<String> arguments, @Nullable ClojureRun clojureRun) {
 		this.options = Collections.unmodifiableMap(options);
 		this.arguments = List.copyOf(arguments);
+		this.clojureRun = clojureRun;
+	}
+
+	/**
+	 * The {@code -M}/{@code -X} run the command line ends with.
+	 * @return the run, or {@code null} when there is none
+	 */
+	public @Nullable ClojureRun clojureRun() {
+		return this.clojureRun;
+	}
+
+	/**
+	 * The {@code deps.edn} aliases the command line selects, the oracle's order: the
+	 * {@code -M}/{@code -X} aliases, then every {@code -A}'s.
+	 * @return the aliases' keyword spellings, empty when none is selected
+	 */
+	public List<String> clojureAliases() {
+		List<String> out = new ArrayList<>();
+		if (this.clojureRun != null) {
+			out.addAll(this.clojureRun.aliases());
+		}
+		String repl = this.options.get("-A");
+		if (repl != null) {
+			out.addAll(parseAliases(repl));
+		}
+		return List.copyOf(out);
+	}
+
+	/**
+	 * Concatenated alias names as the oracle's {@code parse-kws} reads them:
+	 * {@code :a:b/c} is {@code :a} and {@code :b/c}, a blank name is skipped.
+	 * @param text the text after the flag
+	 * @return the aliases' keyword spellings
+	 */
+	static List<String> parseAliases(String text) {
+		List<String> out = new ArrayList<>();
+		for (String name : text.split(":", -1)) {
+			if (!name.isBlank()) {
+				out.add(":" + name);
+			}
+		}
+		return out;
 	}
 
 	/**
@@ -123,6 +203,11 @@ public class CliOptions {
 	 * so {@code --optimize -o out.wasm} keeps meaning the bare flag plus an output file
 	 * rather than reading {@code -o} as the level. That is why a valued flag whose bare
 	 * form must keep working can only be spelled with {@code =}.
+	 * <p>
+	 * The oracle's {@code deps.edn} alias flags are written as {@code clj} writes them,
+	 * the aliases glued on ({@code -A:dev}, {@code -M:dev:test}); {@code -M} and
+	 * {@code -X} end the options, everything after one belonging to the run
+	 * ({@link #clojureRun}).
 	 * @param args the command-line arguments
 	 * @return the parsed options
 	 */
@@ -131,7 +216,8 @@ public class CliOptions {
 		final List<String> arguments = new ArrayList<>();
 		String key = null;
 		boolean separated = false;
-		for (String arg : args) {
+		for (int index = 0; index < args.length; index++) {
+			String arg = args[index];
 			// Everything after the FIRST `--` belongs to the program, verbatim: a second
 			// `--`, a leading dash, a name that would otherwise be an option. That is the
 			// only way an interpreted program can be handed an argument at all, and the
@@ -144,6 +230,25 @@ public class CliOptions {
 			if (key == null && "--".equals(arg)) {
 				separated = true;
 				continue;
+			}
+			if (key == null && isClojureFlag(arg)) {
+				char flag = arg.charAt(1);
+				String aliases = arg.substring(2);
+				if (flag == 'T') {
+					throw new IllegalArgumentException("'" + arg + "': tools (clj -T) are not supported; run a"
+							+ " namespace with -M -m, or a function with -X");
+				}
+				if (flag == 'A') {
+					if (aliases.isEmpty()) {
+						throw new IllegalArgumentException("-A requires an alias");
+					}
+					// every -A adds to the selection, like the oracle's repl_aliases
+					options.merge("-A", aliases, String::concat);
+					continue;
+				}
+				// -M / -X end rontolisp's options: what follows is the run's, verbatim
+				return new CliOptions(options, arguments, new ClojureRun(flag == 'X', parseAliases(aliases),
+						List.of(Arrays.copyOfRange(args, index + 1, args.length))));
 			}
 			if (key == null) {
 				// --key=value: everything after the FIRST '=' is the value, so a value
@@ -185,6 +290,22 @@ public class CliOptions {
 			throw new IllegalArgumentException("option '" + key + "' requires a value");
 		}
 		return new CliOptions(options, arguments);
+	}
+
+	/**
+	 * Whether an argument is one of the oracle's alias flags: {@code -A:aliases},
+	 * {@code -M[:aliases]}, {@code -X[:aliases]}, {@code -T...}. The aliases are glued to
+	 * the flag, so the flag takes no following value.
+	 */
+	private static boolean isClojureFlag(String arg) {
+		if (arg.length() < 2 || arg.charAt(0) != '-') {
+			return false;
+		}
+		char flag = arg.charAt(1);
+		if (flag != 'A' && flag != 'M' && flag != 'X' && flag != 'T') {
+			return false;
+		}
+		return arg.length() == 2 || arg.charAt(2) == ':' || flag == 'T';
 	}
 
 	private static void put(Map<String, String> options, String rawKey, String value) {

@@ -17,6 +17,9 @@ rontolisp hello.clj -o hello-c.wasm --component && wasmtime run hello-c.wasm
 rontolisp prog.txt --source-language clojure       # any extension
 ```
 
+A `deps.edn` project runs as `clj` runs it: `rontolisp -M:dev -m my.app args`,
+`rontolisp -X:build`, and `rontolisp test` for its tests ([Semantics](semantics.md)).
+
 `--no-gc` is refused: that backend has no pairs, symbols or closures.
 
 ```clojure

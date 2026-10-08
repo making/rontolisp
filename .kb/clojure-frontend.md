@@ -952,8 +952,8 @@ order, then `Found.builtin`. Every rule below was measured 2026-10-08 on `clj` 1
   The Maven graphs the oracle resolved from a `file:` repository fixture (newest wins,
   orphans, exclusion narrowing, order, cycles) are pinned through
   `ClojureDepsGraphTest.FakeRepository`: the selection is complete, only the procurer fetches
-  nothing. `:override-deps`/`:default-deps` (alias arguments) are not taken yet: a `nil`
-  coordinate is the oracle's `Bad coordinate`.
+  nothing. `:override-deps`/`:default-deps` (alias arguments) are `choose-coord`
+  (`ClojureDepsGraph.chooseCoord`), canonicalized against the project when first used.
 - **Procurer** (`ClojureDepsProcurer`): `:local/root` canonical (`SourceLoader.canonicalPath`,
   `toRealPath`) and checked (`Local lib X not found: R`); its manifest `:deps`, `:jar`, `:pom`
   (not read), none (`Manifest file not found ...`) or another (`Manifest type :lein not loaded
@@ -989,9 +989,34 @@ order, then `Found.builtin`. Every rule below was measured 2026-10-08 on `clj` 1
   (interpreter, compile path, REPL); `SourceStandards.DEFAULT` (tests, `JvmSourceCompiler`, the
   playground) reads none. Merged, measured: its `:paths` apply where the project has none, its
   `:deps` join, a relative path resolves against the project's directory.
-- Read, applied by nothing yet: `:aliases`, `:mvn/repos`, `:mvn/local-repo`. More than eight
+- Read, applied by nothing yet: `:mvn/repos`, `:mvn/local-repo`. More than eight
   top deps iterate in the oracle's hash order, here in file order.
-- Pins: `ClojureDepsEdnTest`, `ClojureDepsGraphTest`, `ClojureMavenVersionsTest`,
+- **Aliases** (`ClojureBasis`, the oracle's `create-basis`; measured 2026-10-08): alias data
+  is `merge-with merge` over root/user/project (a project `:test` keeps the root's
+  `:extra-paths ["test"]`); the selection merges by `merge-alias-maps`' per-key rules
+  (`ClojureDepsEdn.argMap`); `tool` replaces the PROJECT map's `:deps`/`:paths` only;
+  `flattenPaths` chases `:extra-paths` then `:paths`; `:classpath-overrides` re-roots or
+  (blank) drops a selected lib, its children stay. The selection reaches every read through
+  `SourceStandards.clojureAliases` -> `ClojureFiles.aliases`. Undeclared aliases and
+  `:main-opts` under `-A` (any mode) are the oracle's two warnings. A selected non-map alias
+  adds nothing (the oracle: chars destructured, or an error). `:jvm-opts` ignored.
+- **Command line** (`ClojureMain`, through `eval/ClojureCommandLine`; `CliOptions.ClojureRun`):
+  `-A:x` is an option, `-M`/`-X` end the options (clj's order: M/X aliases, then every
+  `-A`'s). `-M` = `:main-opts` (last wins) ++ args into `clojure.main`: `-m ns` is a
+  generated program `(require 'ns)` + `(apply ns/-main *command-line-args*)`, a path a
+  script, nothing the REPL; `-e`/`-i`/`--report` refused. `-X` is `clojure.run.exec` ported:
+  `arg-spec` (a function reading wins when both fit), `qualify-fn`, `apply-overrides`, the
+  map printed by `ClojureEdn.print` under `quote`. The command line's arguments are baked as
+  `(set! *command-line-args* (seq (concat [..] *command-line-args*)))`, so `-o` keeps them
+  ahead of the artifact's own. The project is the working directory's (`ClojureBasis.create`
+  without walking up). `rontolisp test` with no target in a `deps.edn` directory (or with
+  `-A`) runs `-test` namespaces below the selection's `:extra-paths` (default `:test`),
+  exit 0/1 by `successful?` and a nonzero `:test`. `(System/exit n)` lowers to
+  `(%host-exit (logand n 255))` (`ClojureInteropLowering.staticCall`), every backend.
+  A file-less run keeps `.` as its first root (an existing deviation the oracle lacks).
+- Pins: `ClojureDepsAliasesTest` (the measured alias classpaths), `ClojureMainTest`,
+  `ClojureDepsCommandLineTest` (`-M`/`-X`/`test` as processes in the project, four backends,
+  `System/exit`), `CliOptionsTest#theAliasFlags...`, `ClojureDepsEdnTest`, `ClojureDepsGraphTest`, `ClojureMavenVersionsTest`,
   `ClojureDepsProjectTest` (the four backends over a `:local/root` directory with its own
   dependency, a jar, a `clojure.*` contrib namespace; the refusals, Ring versions, the user
   map, a session), `PlaygroundReplTest#aClojureRequireReadsTheUploadedDepsEdnLikeEveryOtherRoute`.

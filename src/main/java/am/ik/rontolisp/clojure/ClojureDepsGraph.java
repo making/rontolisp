@@ -194,6 +194,15 @@ final class ClojureDepsGraph {
 
 	private final @Nullable String dir;
 
+	/** {@code :override-deps}: the coordinate used for a library wherever it appears. */
+	private final Map<Lib, @Nullable Coord> overrides;
+
+	/** {@code :default-deps}: the coordinate used for a library that names none. */
+	private final Map<Lib, @Nullable Coord> defaults;
+
+	/** An override or default canonicalized against the project, once per library. */
+	private final Map<String, Coord> canonicalArgs = new HashMap<>();
+
 	private final Map<Lib, Versions> versions = new LinkedHashMap<>();
 
 	private final Map<List<Lib>, Set<Lib>> exclusions = new HashMap<>();
@@ -202,9 +211,12 @@ final class ClojureDepsGraph {
 
 	private final Map<String, List<Node>> childrenMemo = new HashMap<>();
 
-	private ClojureDepsGraph(Procurer procurer, @Nullable String dir) {
+	private ClojureDepsGraph(Procurer procurer, @Nullable String dir, Map<Lib, @Nullable Coord> overrides,
+			Map<Lib, @Nullable Coord> defaults) {
 		this.procurer = procurer;
 		this.dir = dir;
+		this.overrides = overrides;
+		this.defaults = defaults;
 	}
 
 	/**
@@ -217,7 +229,27 @@ final class ClojureDepsGraph {
 	 * @return the selected libraries in source path order
 	 */
 	static List<Selected> resolve(SequencedMap<Lib, @Nullable Coord> deps, @Nullable String dir, Procurer procurer) {
-		ClojureDepsGraph graph = new ClojureDepsGraph(procurer, dir);
+		return resolve(deps, dir, procurer, Map.of(), Map.of());
+	}
+
+	/**
+	 * {@link #resolve(SequencedMap, String, Procurer)} under the aliases'
+	 * {@code :override-deps} and {@code :default-deps}, the oracle's
+	 * {@code choose-coord}: wherever a library appears, its override if it has one, else
+	 * the coordinate that names it, else its default. Both are read relative to the
+	 * project's directory wherever the library appears, and only when used (measured on
+	 * {@code clj} 1.12.6, 2026-10-08: a relative {@code :local/root} override of a
+	 * transitive library resolves against the project).
+	 * @param deps the top-level deps, in the merged map's order
+	 * @param dir the project's directory (null for the working directory)
+	 * @param procurer what a coordinate brings
+	 * @param overrides {@code :override-deps}
+	 * @param defaults {@code :default-deps}
+	 * @return the selected libraries in source path order
+	 */
+	static List<Selected> resolve(SequencedMap<Lib, @Nullable Coord> deps, @Nullable String dir, Procurer procurer,
+			Map<Lib, @Nullable Coord> overrides, Map<Lib, @Nullable Coord> defaults) {
+		ClojureDepsGraph graph = new ClojureDepsGraph(procurer, dir, overrides, defaults);
 		List<Dep> top = new ArrayList<>();
 		for (Map.Entry<Lib, @Nullable Coord> entry : deps.entrySet()) {
 			top.add(new Dep(entry.getKey(), entry.getValue()));
@@ -248,7 +280,7 @@ final class ClojureDepsGraph {
 			}
 			Lib lib = node.lib();
 			List<Lib> parents = node.parents();
-			Coord coord = node.coord();
+			Coord coord = chooseCoord(lib, node.coord());
 			if (coord == null) {
 				throw new LispReadException("Bad coordinate for library " + lib + ", expected map: nil");
 			}
@@ -261,6 +293,29 @@ final class ClojureDepsGraph {
 				queue.addLast(new Children(lib, coordId, useCoord, usePath, pred));
 			}
 		}
+	}
+
+	/** {@code choose-coord}: the override, else the node's own, else the default. */
+	private @Nullable Coord chooseCoord(Lib lib, @Nullable Coord coord) {
+		Coord override = argCoord("override", lib, this.overrides);
+		if (override != null) {
+			return override;
+		}
+		return coord != null ? coord : argCoord("default", lib, this.defaults);
+	}
+
+	private @Nullable Coord argCoord(String kind, Lib lib, Map<Lib, @Nullable Coord> args) {
+		Coord raw = args.get(lib);
+		if (raw == null) {
+			return null;
+		}
+		String key = kind + " " + lib;
+		Coord known = this.canonicalArgs.get(key);
+		if (known == null) {
+			known = this.procurer.canonicalize(lib, raw, this.dir);
+			this.canonicalArgs.put(key, known);
+		}
+		return known;
 	}
 
 	/**

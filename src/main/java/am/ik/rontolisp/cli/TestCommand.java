@@ -8,8 +8,10 @@ import java.util.List;
 import java.util.Locale;
 
 import am.ik.rontolisp.eval.AsdfSystems;
+import am.ik.rontolisp.eval.ClojureCommandLine;
 import am.ik.rontolisp.eval.SourceLanguage;
 import am.ik.rontolisp.eval.SourceLoader;
+import am.ik.rontolisp.eval.SourceStandards;
 import am.ik.rontolisp.reader.Features;
 import org.jspecify.annotations.Nullable;
 
@@ -40,6 +42,11 @@ import org.jspecify.annotations.Nullable;
  * {@code rove:run-suite} (the README FAQ shape a single test file ends with) never
  * reaches, so without the hook a file that runs its own suite leaves no trace to read and
  * the runner would have to run its tests a second time.
+ * <p>
+ * A Clojure project -- a {@code deps.edn} in the working directory and no target, a
+ * {@code -A} selection, or a {@code .clj}/{@code .cljc} target -- gets a generated
+ * Clojure program instead ({@code eval/ClojureCommandLine.test}): its test namespaces run
+ * through {@code clojure.test} under the {@code :test} alias, the same exit contract.
  */
 final class TestCommand {
 
@@ -63,8 +70,12 @@ final class TestCommand {
 	 *
 	 * @param source the program text
 	 * @param baseDir the directory relative paths resolve against, or {@code null}
+	 * @param sourceLanguage the program's language, or {@code null} for Common Lisp
+	 * @param standards what every file of the program is read against (a Clojure
+	 * project's test run selects its {@code :test} alias)
 	 */
-	record Program(String source, @Nullable String baseDir) {
+	record Program(String source, @Nullable String baseDir, @Nullable String sourceLanguage,
+			SourceStandards standards) {
 	}
 
 	/**
@@ -72,16 +83,24 @@ final class TestCommand {
 	 * @param options the options after the {@code test} subcommand name
 	 * @param systemPath the {@code .asd} search path (--system-path +
 	 * RONTOLISP_SOURCE_REGISTRY)
+	 * @param standards what the program's files are read against
 	 * @return the program, or {@code null} when the command line was wrong -- the message
 	 * is already on standard error and the caller exits 2
 	 */
-	@Nullable static Program build(CliOptions options, List<String> systemPath) {
+	@Nullable static Program build(CliOptions options, List<String> systemPath, SourceStandards standards) {
 		String target = options.getNokey();
-		if (target == null) {
-			return fail("no test target given (try: rontolisp test --help)");
+		if (options.clojureRun() != null) {
+			return fail("-M/-X name what runs, and 'test' runs the tests itself: select the aliases with -A");
 		}
 		if (options.contains("-e")) {
 			return fail("-e/--eval names a program, not a test target, so it cannot be combined with 'test'");
+		}
+		if (target != null ? target.endsWith(".clj") || target.endsWith(".cljc")
+				: options.contains("-A") || Files.isRegularFile(Path.of("deps.edn"))) {
+			return clojure(options, target, standards);
+		}
+		if (target == null) {
+			return fail("no test target given (try: rontolisp test --help)");
 		}
 		String reporter = reporter(options);
 		if (reporter == null) {
@@ -104,6 +123,29 @@ final class TestCommand {
 		// Anything else is an ASDF system designator -- asdf:load-system reports an
 		// unknown one, naming the search path it looked on.
 		return system(target, null, systemPath, reporter, colors);
+	}
+
+	/**
+	 * A Clojure project's tests ({@code rontolisp test} in a directory holding a
+	 * {@code deps.edn}, or with {@code -A}) or one test file's: {@code clojure.test} runs
+	 * the namespaces under the {@code :test} alias -- the root map's {@code {:extra-paths
+	 * ["test"]}} unless the project's says more -- or the aliases {@code -A} selects
+	 * instead, and the exit code is the verdict.
+	 */
+	@Nullable private static Program clojure(CliOptions options, @Nullable String target, SourceStandards standards) {
+		if (options.contains("-r")) {
+			return fail("--reporter picks a rove reporter; a Clojure project's tests report through clojure.test");
+		}
+		if (target != null && !Files.isRegularFile(Path.of(target))) {
+			return fail(target + ": no such file");
+		}
+		SourceStandards selected = options.contains("-A") ? standards : standards.withClojureAliases(List.of(":test"));
+		ClojureCommandLine.Resolved resolved = ClojureCommandLine.test(target, selected, SourceLoader.fileSystem());
+		for (String warning : resolved.warnings()) {
+			System.err.println(warning);
+		}
+		ClojureCommandLine.Program program = (ClojureCommandLine.Program) resolved.entry();
+		return new Program(program.source(), null, "clojure", selected);
 	}
 
 	/**
@@ -143,7 +185,7 @@ final class TestCommand {
 		out.append("               (and package (rove:find-suite package)))))\n");
 		out.append("  (when (and suite (null rove/core/suite:*last-suite-report*))\n");
 		out.append("    (rove:run-suite suite)))\n");
-		return new Program(epilogue(out, path.toString()), baseDir);
+		return new Program(epilogue(out, path.toString()), baseDir, null, SourceStandards.DEFAULT);
 	}
 
 	/**
@@ -162,7 +204,7 @@ final class TestCommand {
 		out.append(";; The system declares no :perform (test-op ...): run its suites directly.\n");
 		out.append("(unless rove/core/suite:*last-suite-report*\n");
 		out.append("  (rove:run ").append(string(name)).append("))\n");
-		return new Program(epilogue(out, name), baseDir);
+		return new Program(epilogue(out, name), baseDir, null, SourceStandards.DEFAULT);
 	}
 
 	/**
@@ -304,7 +346,7 @@ final class TestCommand {
 	}
 
 	static void printUsage(java.io.PrintStream out) {
-		out.println("Usage: rontolisp test [options] <file|system>");
+		out.println("Usage: rontolisp test [options] [file|system]");
 		out.println();
 		out.println("Runs a rove test target and EXITS with its verdict: 0 when every");
 		out.println("test passed, 1 when one did not (and 1 when no test ran at all).");
@@ -322,9 +364,17 @@ final class TestCommand {
 		out.println("  SYSTEM             An ASDF system designator (my-app/tests):");
 		out.println("                     asdf:test-system, then rove:run for a system");
 		out.println("                     that declares no :perform (test-op ...)");
+		out.println("  (none)             In a directory holding a deps.edn: the Clojure");
+		out.println("                     project's tests -- every namespace ending in");
+		out.println("                     -test below the :test alias's :extra-paths");
+		out.println("                     (test), run by clojure.test");
+		out.println("  FILE.clj           That Clojure test namespace (on the source path");
+		out.println("                     the :test alias gives)");
 		out.println();
 		out.println("Options:");
 		out.println("  -r, --reporter S   rove reporter style: spec (default), dot or none");
+		out.println("  -A:ALIASES         The deps.edn aliases a Clojure run selects,");
+		out.println("                     instead of :test (-A:test:dev)");
 		out.println("  --color            Force the ANSI colors on");
 		out.println("  --disable-colors   Force them off. The default follows the output:");
 		out.println("                     a terminal gets colors, a pipe (and every");

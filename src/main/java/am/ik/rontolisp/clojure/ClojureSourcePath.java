@@ -8,7 +8,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
-import am.ik.rontolisp.clojure.ClojureDepsEdn.DepsMap;
 import am.ik.rontolisp.clojure.ClojureDepsEdn.Lib;
 import am.ik.rontolisp.clojure.ClojureDepsGraph.Root;
 import am.ik.rontolisp.clojure.ClojureDepsGraph.Selected;
@@ -19,13 +18,15 @@ import org.jspecify.annotations.Nullable;
  * Where a project namespace's file is found: the source roots of the program a lowering
  * reads, and the file a namespace name maps to below them. The roots are, in order, the
  * directory the entry file's own namespace names (its own directory for a file without
- * one, the working directory for a read without a file), then the project's
- * {@code :paths}, then the roots of every library its {@code :deps} select, in the
- * oracle's source path order ({@link ClojureDepsGraph}), then the built-in namespaces.
- * The project map is the oracle's root map, the user-level {@code deps.edn} and the
- * nearest {@code deps.edn} at or above the entry file's directory, merged in that order;
- * with no {@code deps.edn} anywhere, the working directory is the project's ({@code src}
- * below it). Computed on the first lookup, so a program that loads nothing never looks.
+ * one, the working directory for a read without a file), then the selected aliases'
+ * {@code :extra-paths} and the project's {@code :paths}, then the roots of every library
+ * its {@code :deps} select, in the oracle's source path order ({@link ClojureDepsGraph}),
+ * then the built-in namespaces. The project map is the oracle's root map, the user-level
+ * {@code deps.edn} and the nearest {@code deps.edn} at or above the entry file's
+ * directory, merged in that order with the aliases the files name applied
+ * ({@link ClojureBasis}); with no {@code deps.edn} anywhere, the working directory is the
+ * project's ({@code src} below it). Computed on the first lookup, so a program that loads
+ * nothing never looks.
  */
 final class ClojureSourcePath {
 
@@ -282,36 +283,11 @@ final class ClojureSourcePath {
 			out.add(new Root("src", false));
 			return List.copyOf(out);
 		}
-		String projectDir = null;
-		DepsMap project = null;
-		for (String probe = dir; probe != null; probe = this.entryFile == null ? null : this.files.parent(probe)) {
-			String depsFile = this.files.resolve(probe, "deps.edn");
-			String deps = this.files.read(depsFile);
-			if (deps != null) {
-				projectDir = probe;
-				project = ClojureDepsEdn.read(deps, depsFile);
-				break;
-			}
+		ClojureBasis basis = ClojureBasis.create(this.files, dir, this.entryFile != null);
+		for (String path : basis.paths()) {
+			out.add(new Root(path, false));
 		}
-		List<DepsMap> maps = new ArrayList<>();
-		maps.add(ClojureDepsEdn.ROOT);
-		String userDir = this.files.userConfigDir();
-		if (userDir != null) {
-			String userFile = this.files.resolve(userDir, "deps.edn");
-			String user = this.files.read(userFile);
-			if (user != null) {
-				maps.add(ClojureDepsEdn.read(user, userFile));
-			}
-		}
-		if (project != null) {
-			maps.add(project);
-		}
-		DepsMap merged = ClojureDepsEdn.merge(maps);
-		for (String path : ClojureDepsEdn.flattenPaths(merged)) {
-			out.add(new Root(this.files.resolve(projectDir, path), false));
-		}
-		this.libs = merged.deps() == null ? List.of()
-				: ClojureDepsGraph.resolve(merged.deps(), projectDir, new ClojureDepsProcurer(this.files));
+		this.libs = basis.libraries();
 		for (Selected selected : this.libs) {
 			out.addAll(selected.contribution().roots());
 		}

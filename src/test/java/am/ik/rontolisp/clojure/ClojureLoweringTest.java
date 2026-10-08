@@ -1201,6 +1201,10 @@ class ClojureLoweringTest {
 		assertThat(lowered("(.toUpperCase \"hi\")")).contains("JAVA:CALL").contains("toUpperCase");
 		assertThat(lowered("(. \"hi\" toUpperCase)")).contains("JAVA:CALL");
 		assertThat(lowered("(Math/max 3 7)")).contains("JAVA:STATIC").contains("java.lang.Math");
+		// System/exit ends the process on every backend, wasm included
+		for (String exit : List.of("(System/exit 3)", "(. System exit 3)", "(java.lang.System/exit 3)")) {
+			assertThat(lowered(exit)).as(exit).contains("(%HOST-EXIT (LOGAND 3 255))").doesNotContain("JAVA:");
+		}
 		assertThat(lowered("(String. \"hi\")")).contains("JAVA:NEW").contains("java.lang.String");
 		assertThat(lowered("(Integer/MAX_VALUE)")).contains("JAVA:FIELD");
 		assertThat(lowered("(new String \"hi\")")).contains("JAVA:NEW");

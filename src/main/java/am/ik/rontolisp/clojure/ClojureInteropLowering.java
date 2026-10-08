@@ -609,6 +609,12 @@ final class ClojureInteropLowering {
 	 * designator ({@link #designator}); the boolean rule still reads the bare member.
 	 */
 	static LispVal staticCall(ClojureLowering ctx, String cls, String member, String designator, List<LispVal> args) {
+		if (cls.equals("java.lang.System") && member.equals("exit") && args.size() == 1) {
+			// ends the process on every backend, wasm included, like uiop:quit: the
+			// status the host sees is the low byte, as the oracle's is on a POSIX host
+			return ClojureLowerUtil.list(ClojureLowerUtil.sym("%host-exit"),
+					ClojureLowerUtil.list(ClojureLowerUtil.sym("logand"), args.get(0), new LispInteger(255)));
+		}
 		List<LispVal> call = new ArrayList<>();
 		call.add(LispString.literal(cls));
 		call.add(LispString.literal(designator));

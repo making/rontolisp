@@ -96,7 +96,7 @@ no known type and a dependency the oracle cannot resolve are errors in its words
 - A Maven (`:mvn/version`) or git (`:git/url`, `:git/sha`) coordinate of any other library
   is not fetched: it adds no root, and a namespace no root holds is refused naming it. A
   jar's own `pom.xml`, and a `:local/root` project with a `pom.xml` but no `deps.edn`, are
-  not read either. `:aliases` are read and not applied.
+  not read either. `:aliases` apply when a run selects them (below).
 
 ```console
 $ cat deps.edn
@@ -104,6 +104,50 @@ $ cat deps.edn
  :deps {my/util {:local/root "../util"}
         my/parser {:local/root "../parser.jar"}}}
 $ rontolisp src/app/main.clj      # roots: src, ../parser.jar, ../util/src
+```
+
+## Running a project: -A, -M, -X, test
+
+The flags are `clj`'s, and they act on the working directory's `deps.edn` as `clj` does.
+`-A:dev:test` selects aliases; every Clojure file of the run is read under them.
+`-M[:aliases]` and `-X[:aliases]` select aliases too and end rontolisp's options: what
+follows belongs to the run, so `-o` and the other options come first.
+
+- A selected alias applies as in the oracle. `:extra-paths` go ahead of `:paths`;
+  `:extra-deps` join `:deps`; `:override-deps` replaces a library's coordinate wherever
+  it appears, and `:default-deps` gives one to a library written with `nil`;
+  `:replace-paths` and `:replace-deps` replace the project's own (the root map's
+  `org.clojure/clojure` stays); `:classpath-overrides` points a library at another
+  directory or jar, or drops it with `""`. Several aliases merge the oracle's way: maps
+  merge, path lists append without repeats, and `:main-opts`, `:exec-fn` and
+  `:ns-default` take the last alias's. An alias two `deps.edn` files define is one map.
+  An alias no file defines is warned of. `:jvm-opts` is ignored.
+- `-M` runs `clojure.main` over the aliases' `:main-opts` followed by the arguments.
+  `-m my.app a b` calls `my.app/-main` with `"a" "b"`, which `*command-line-args*` also
+  holds; a path runs that file; nothing starts the REPL.
+- `-X` calls one function with one map. The arguments are `[fn] [key value]... [map]`,
+  each read as EDN. The function is the one the arguments or `:exec-fn` name, qualified
+  by `:ns-default` and `:ns-aliases`. The map is `:exec-args` with each value set at its
+  key (a vector key is a path), the trailing map merged over it.
+- With `-o`, the run compiles like any program. The command line's arguments are fixed
+  into the artifact, and the arguments it is started with follow them.
+- `System/exit` ends the program with its status on every backend.
+- `rontolisp test` in a directory holding a `deps.edn` runs the project's tests: every
+  namespace whose name ends in `-test` below the `:test` alias's `:extra-paths` (`test`,
+  from the root map) goes through `clojure.test/run-tests`. The exit code is 0 when every
+  test passed and 1 when one failed, errored, or none ran. `-A:...` selects other aliases
+  in place of `:test`; a file argument runs that one namespace.
+
+```console
+$ cat deps.edn
+{:paths ["src"]
+ :aliases {:dev {:extra-paths ["dev"]}
+           :run {:main-opts ["-m" "my.app"]}
+           :greet {:exec-fn my.app/greet :exec-args {:name "you"}}}}
+$ rontolisp -M:dev:run a b            # (my.app/-main "a" "b")
+$ rontolisp -X:greet :name '"deps"'   # (my.app/greet {:name "deps"})
+$ rontolisp -o app.wasm -M:run a      # wasmtime run app.wasm b: (my.app/-main "a" "b")
+$ rontolisp test                      # clojure.test over test/**/*_test.clj
 ```
 
 ## Binding

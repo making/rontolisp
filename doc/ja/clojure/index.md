@@ -19,6 +19,9 @@ rontolisp hello.clj -o hello-c.wasm --component && wasmtime run hello-c.wasm
 rontolisp prog.txt --source-language clojure       # 任意の拡張子
 ```
 
+`deps.edn` のプロジェクトは `clj` と同じように実行できます。`rontolisp -M:dev -m my.app args`、
+`rontolisp -X:build`、テストは `rontolisp test` です（[セマンティクス](semantics.md)）。
+
 `--no-gc` は名前で拒否されます:そのバックエッドにはペアもシンボルもクロージャもないからです。
 
 ```clojure

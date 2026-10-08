@@ -55,7 +55,7 @@ runs what the browser runs (`PlaygroundReplTest`, and `DocExamplesTest.runScheme
 **How strictly a language is read is program-wide, not per file**, and travels with the
 seam: `eval/SourceStandards` (the `--scheme-standard` value, `scheme/SchemeStandard`, and
 the directory of the user-level Clojure `deps.edn`, which only `RontoLispCli` locates from
-the environment) is handed to every read of user source -- `read(source,
+the environment, and the `deps.edn` aliases `-A`/`-M`/`-X` select) is handed to every read of user source -- `read(source,
 features, file, standards)`, `SourceSession(language, standards)`, `LoadInliner`,
 `LispEvaluator.setSourceStandards` for run-time `load` -- and to
 `CompileFrontend.Loaded`, whose `SchemeLibrary` splice generates `eval`'s table from it.
