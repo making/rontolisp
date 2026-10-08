@@ -1,5 +1,7 @@
 package am.ik.rontolisp.eval;
 
+import java.util.List;
+
 import org.jspecify.annotations.Nullable;
 
 import am.ik.rontolisp.scheme.SchemeStandard;
@@ -18,11 +20,24 @@ import am.ik.rontolisp.scheme.SchemeStandard;
  * ({@link #clojureConfigDir(String, String, String)}), while an embedder and every test
  * read none, so what a program means does not depend on the machine that happens to build
  * it
+ * @param clojureAliases the {@code deps.edn} aliases every Clojure read applies, the
+ * oracle's {@code -A}/{@code -M}/{@code -X} selection ({@code :test}), in order; none
+ * when the command line selects none
  */
-public record SourceStandards(SchemeStandard scheme, @Nullable String clojureConfigDir) {
+public record SourceStandards(SchemeStandard scheme, @Nullable String clojureConfigDir, List<String> clojureAliases) {
 
 	/** Every language's default: {@code --scheme-standard rontolisp}, no user config. */
-	public static final SourceStandards DEFAULT = new SourceStandards(SchemeStandard.RONTOLISP, null);
+	public static final SourceStandards DEFAULT = new SourceStandards(SchemeStandard.RONTOLISP, null, List.of());
+
+	/**
+	 * The standards.
+	 * @param scheme what a Scheme file is read against
+	 * @param clojureConfigDir the user-level {@code deps.edn} directory, or {@code null}
+	 * @param clojureAliases the selected {@code deps.edn} aliases
+	 */
+	public SourceStandards {
+		clojureAliases = List.copyOf(clojureAliases);
+	}
 
 	/**
 	 * Parses the command-line options that pick a standard.
@@ -31,7 +46,7 @@ public record SourceStandards(SchemeStandard scheme, @Nullable String clojureCon
 	 * @throws IllegalArgumentException when a value names no standard, naming the value
 	 */
 	public static SourceStandards parse(@Nullable String scheme) {
-		return scheme == null ? DEFAULT : new SourceStandards(SchemeStandard.parse(scheme), null);
+		return scheme == null ? DEFAULT : new SourceStandards(SchemeStandard.parse(scheme), null, List.of());
 	}
 
 	/**
@@ -40,7 +55,16 @@ public record SourceStandards(SchemeStandard scheme, @Nullable String clojureCon
 	 * @return the standards
 	 */
 	public SourceStandards withClojureConfigDir(@Nullable String dir) {
-		return new SourceStandards(this.scheme, dir);
+		return new SourceStandards(this.scheme, dir, this.clojureAliases);
+	}
+
+	/**
+	 * These standards with the {@code deps.edn} aliases every Clojure read applies.
+	 * @param aliases the aliases' keyword spellings ({@code :test}), in order
+	 * @return the standards
+	 */
+	public SourceStandards withClojureAliases(List<String> aliases) {
+		return new SourceStandards(this.scheme, this.clojureConfigDir, aliases);
 	}
 
 	/**

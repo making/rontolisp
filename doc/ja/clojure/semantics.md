@@ -91,7 +91,7 @@ oracle と同じく無視します。oracle の spec が拒否する値、どの
 - それ以外のライブラリの Maven 座標（`:mvn/version`）と git 座標（`:git/url`、`:git/sha`）は
   取得しません。ルートを加えず、どのルートにもない名前空間は、それらの座標を挙げて拒否します。
   jar 自身の `pom.xml` と、`deps.edn` がなく `pom.xml` だけを持つ `:local/root` のプロジェクトも
-  読みません。`:aliases` は読みますが、適用はしません。
+  読みません。`:aliases` は実行で選んだときに適用します（次節）。
 
 ```console
 $ cat deps.edn
@@ -99,6 +99,50 @@ $ cat deps.edn
  :deps {my/util {:local/root "../util"}
         my/parser {:local/root "../parser.jar"}}}
 $ rontolisp src/app/main.clj      # roots: src, ../parser.jar, ../util/src
+```
+
+## プロジェクトの実行: -A、-M、-X、test
+
+フラグは `clj` のもので、作業ディレクトリの `deps.edn` に対して `clj` と同じように働きます。
+`-A:dev:test` はエイリアスを選び、実行で読む Clojure のファイルはすべてそのエイリアスの下で
+読みます。`-M[:aliases]` と `-X[:aliases]` もエイリアスを選び、rontolisp のオプションをそこで
+終えます。後ろはすべて実行への引数なので、`-o` などのオプションは前に書きます。
+
+- 選んだエイリアスは oracle と同じく適用します。`:extra-paths` は `:paths` の前に並び、
+  `:extra-deps` は `:deps` に加わります。`:override-deps` はライブラリがどこに現れてもその座標を
+  置き換え、`:default-deps` は `nil` と書かれたライブラリに座標を与えます。`:replace-paths` と
+  `:replace-deps` はプロジェクト自身のものを置き換えます（ルートマップの `org.clojure/clojure`
+  は残ります）。`:classpath-overrides` はライブラリを別のディレクトリや jar に向け、`""` なら
+  外します。複数のエイリアスは oracle の規則でマージします。マップはマージし、パスの並びは
+  重複なしで連結し、`:main-opts`、`:exec-fn`、`:ns-default` は最後のエイリアスのものを使います。
+  2 つの `deps.edn` が定義する同名のエイリアスは 1 つのマップです。どのファイルも定義しない
+  エイリアスは警告します。`:jvm-opts` は無視します。
+- `-M` はエイリアスの `:main-opts` に引数を続けて `clojure.main` として実行します。
+  `-m my.app a b` は `my.app/-main` を `"a" "b"` で呼び、`*command-line-args*` も同じ値を持ちます。
+  パスならそのファイルを実行し、何もなければ REPL を開きます。
+- `-X` は 1 つの関数を 1 つのマップで呼びます。引数は `[fn] [key value]... [map]` で、それぞれを
+  EDN として読みます。関数は引数か `:exec-fn` が指すもので、`:ns-default` と `:ns-aliases` で
+  修飾します。マップは `:exec-args` に各値をそのキー（ベクタのキーはパス）で設定し、末尾の
+  マップを重ねたものです。
+- `-o` を付けると、ほかのプログラムと同じくコンパイルします。コマンドラインの引数は成果物に
+  固定し、起動時の引数はその後ろに続きます。
+- `System/exit` はどのバックエンドでもその終了ステータスでプログラムを終えます。
+- `deps.edn` のあるディレクトリでの `rontolisp test` は、プロジェクトのテストを実行します。
+  `:test` エイリアスの `:extra-paths`（ルートマップから `test`）以下で、名前が `-test` で終わる
+  名前空間をすべて `clojure.test/run-tests` にかけます。終了コードは、すべてのテストが通れば 0、
+  失敗・エラーがあるか 1 つも実行されなければ 1 です。`-A:...` は `:test` の代わりに別の
+  エイリアスを選び、ファイルを渡すとその名前空間だけを実行します。
+
+```console
+$ cat deps.edn
+{:paths ["src"]
+ :aliases {:dev {:extra-paths ["dev"]}
+           :run {:main-opts ["-m" "my.app"]}
+           :greet {:exec-fn my.app/greet :exec-args {:name "you"}}}}
+$ rontolisp -M:dev:run a b            # (my.app/-main "a" "b")
+$ rontolisp -X:greet :name '"deps"'   # (my.app/greet {:name "deps"})
+$ rontolisp -o app.wasm -M:run a      # wasmtime run app.wasm b: (my.app/-main "a" "b")
+$ rontolisp test                      # test/**/*_test.clj を clojure.test で実行
 ```
 
 ## 束縛

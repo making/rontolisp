@@ -30,6 +30,7 @@ import am.ik.rontolisp.compiler.HostBoundary;
 import am.ik.rontolisp.compiler.HostGlueEmitter;
 import am.ik.rontolisp.compiler.OptimizeLevel;
 import am.ik.rontolisp.compiler.UncaughtReport;
+import am.ik.rontolisp.eval.ClojureCommandLine;
 import am.ik.rontolisp.eval.HttpLibrary;
 import am.ik.rontolisp.eval.LinalgBlas;
 import am.ik.rontolisp.eval.LinalgGpu;
@@ -191,10 +192,43 @@ public final class RontoLispCli {
 			throw new IllegalArgumentException("-e/--eval cannot be combined with the input file '" + options.getNokey()
 					+ "': give the program either inline or in a file");
 		}
-		if (!test && inline == null && !options.containsNoKey()) {
+
+		// -A / -M / -X: a deps.edn project run the oracle's way. The aliases reach every
+		// Clojure read through the standards; -M and -X decide what runs -- a generated
+		// program calling a namespace's -main or an :exec-fn, a file, or the REPL.
+		String positional = options.getNokey();
+		List<String> programArguments = options.arguments();
+		String generated = null;
+		List<String> clojureAliases = options.clojureAliases();
+		if (!clojureAliases.isEmpty()) {
+			standards = standards.withClojureAliases(clojureAliases);
+		}
+		if (!test && (options.clojureRun() != null || options.contains("-A"))) {
+			ClojureCommandLine.Resolved resolved = resolveClojureRun(options, standards);
+			for (String warning : resolved.warnings()) {
+				System.err.println(warning);
+			}
+			switch (resolved.entry()) {
+				case ClojureCommandLine.Program program -> {
+					generated = program.source();
+					positional = null;
+					programArguments = List.of();
+					sourceLanguage = "clojure";
+				}
+				case ClojureCommandLine.Script script -> {
+					positional = script.file();
+					programArguments = script.arguments();
+				}
+				case ClojureCommandLine.Repl repl -> {
+					positional = null;
+					programArguments = repl.arguments();
+				}
+			}
+		}
+		if (!test && inline == null && positional == null && generated == null) {
 			refuseCompileOnlyJavaOptions(javaResolution);
 			repl(systemPath, dists, features, options.contains("--simd"), options.contains("--blas"),
-					options.contains("--gpu"), options.contains("--parallel"), commandLine(null, options.arguments()),
+					options.contains("--gpu"), options.contains("--parallel"), commandLine(null, programArguments),
 					sourceLanguage, standards, javaResolution.warnReflection(), javaClassPath(javaResolution));
 			return;
 		}
@@ -206,7 +240,7 @@ public final class RontoLispCli {
 			// The generated program is nobody's file, so it names none: an error inside
 			// it prints line:column, while everything the target itself contributes
 			// keeps the target's own positions.
-			TestCommand.Program program = TestCommand.build(options, systemPath);
+			TestCommand.Program program = TestCommand.build(options, systemPath, standards);
 			if (program == null) {
 				// The command line was wrong, not the tests: 2 keeps that distinct from
 				// the 1 a failing suite exits with, the way `format` separates them.
@@ -216,9 +250,20 @@ public final class RontoLispCli {
 			inputFile = null;
 			source = program.source();
 			baseDir = program.baseDir();
+			standards = program.standards();
+			if (program.sourceLanguage() != null) {
+				sourceLanguage = program.sourceLanguage();
+			}
+		}
+		else if (generated != null) {
+			// A generated program is nobody's file either; its project is the working
+			// directory's, like the oracle's.
+			inputFile = null;
+			source = generated;
+			baseDir = null;
 		}
 		else {
-			inputFile = inline == null ? Objects.requireNonNull(options.getNokey()) : null;
+			inputFile = inline == null ? Objects.requireNonNull(positional) : null;
 			source = inputFile == null ? Objects.requireNonNull(inline) : readFile(inputFile);
 			// Relative (load "...") paths resolve against the entry file's directory, so
 			// a program can be run or compiled from any working directory and still find
@@ -315,9 +360,54 @@ public final class RontoLispCli {
 			refuseCompileOnlyJavaOptions(javaResolution);
 			interpret(source, baseDir, systemPath, dists, features, options.contains("--simd"),
 					options.contains("--blas"), options.contains("--gpu"), options.contains("--parallel"), inputFile,
-					commandLine(inputFile, options.arguments()), sourceLanguage, standards,
+					commandLine(inputFile, programArguments), sourceLanguage, standards,
 					javaResolution.warnReflection(), javaClassPath(javaResolution));
 		}
+	}
+
+	/**
+	 * What a {@code -M}/{@code -X} run, or an {@code -A} selection, runs. {@code -M} and
+	 * {@code -X} take everything after them, so a file or {@code -e} before them is
+	 * refused rather than silently dropped. {@code -A} keeps the ordinary command line --
+	 * a file, {@code -e} or the REPL -- unless its aliases name {@code :main-opts}, which
+	 * the oracle runs (with a warning) ahead of the file and the arguments.
+	 */
+	private static ClojureCommandLine.Resolved resolveClojureRun(CliOptions options, SourceStandards standards) {
+		CliOptions.ClojureRun run = options.clojureRun();
+		SourceLoader files = SourceLoader.fileSystem();
+		if (run != null) {
+			String flag = run.exec() ? "-X" : "-M";
+			if (options.containsNoKey() || options.contains("-e")) {
+				throw new IllegalArgumentException(flag + " ends rontolisp's options, and what runs comes after it"
+						+ " (rontolisp [options] "
+						+ (run.exec() ? "-X:alias [fn] [k v]..." : "-M:alias -m my.app [args]")
+						+ "), so it cannot be combined with "
+						+ (options.containsNoKey() ? "the input file '" + options.getNokey() + "'" : "-e/--eval"));
+			}
+			if (!options.arguments().isEmpty()) {
+				throw new IllegalArgumentException(
+						flag + " passes every argument after it to the run, so '--' has nothing left to separate");
+			}
+			boolean replAliases = options.contains("-A");
+			return run.exec() ? ClojureCommandLine.exec(run.arguments(), replAliases, standards, files)
+					: ClojureCommandLine.main(run.arguments(), replAliases, standards, files);
+		}
+		boolean inline = options.contains("-e");
+		List<String> argv = new ArrayList<>();
+		if (options.containsNoKey()) {
+			argv.add(Objects.requireNonNull(options.getNokey()));
+		}
+		if (!inline) {
+			argv.addAll(options.arguments());
+		}
+		ClojureCommandLine.Resolved resolved = ClojureCommandLine.main(argv, true, standards, files);
+		if (inline && !(resolved.entry() instanceof ClojureCommandLine.Repl)) {
+			throw new IllegalArgumentException("-e/--eval cannot be combined with the :main-opts the -A aliases name;"
+					+ " select them with -M to run them");
+		}
+		return inline
+				? new ClojureCommandLine.Resolved(new ClojureCommandLine.Repl(options.arguments()), resolved.warnings())
+				: resolved;
 	}
 
 	// The interpreter resolves java: sites against the classes it runs with, by
@@ -1629,6 +1719,17 @@ public final class RontoLispCli {
 		this.out.println("                     begins with (import ...), no SICP/MIT or R5RS name, no");
 		this.out.println("                     redefinition of an imported name, eval takes its");
 		this.out.println("                     environment.");
+		this.out.println("  -A:ALIASES         Clojure: the deps.edn aliases (-A:dev:test) every");
+		this.out.println("                     Clojure file of the run is read under, as clj -A");
+		this.out.println("  -M[:ALIASES] ARGS  Clojure: run the working directory's deps.edn project");
+		this.out.println("                     as clj -M does, after every other option: the aliases'");
+		this.out.println("                     :main-opts, then ARGS -- -m my.app ARG... calls");
+		this.out.println("                     my.app/-main, a path runs that file, nothing is the");
+		this.out.println("                     REPL. With -o the run is compiled, its arguments");
+		this.out.println("                     baked in ahead of the artifact's own");
+		this.out.println("  -X[:ALIASES] ARGS  Clojure: call a function with a map, as clj -X does:");
+		this.out.println("                     [fn] [key value]... [map], each read as EDN, over the");
+		this.out.println("                     aliases' :exec-fn and :exec-args");
 	}
 
 	private static String readFile(String path) {

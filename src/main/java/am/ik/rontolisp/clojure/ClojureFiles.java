@@ -126,4 +126,23 @@ public interface ClojureFiles {
 		return null;
 	}
 
+	/**
+	 * The {@code deps.edn} aliases the program is read under, the oracle's {@code -A} /
+	 * {@code -M} / {@code -X} selection -- chosen once, on the command line, never here.
+	 * @return the aliases' keyword spellings ({@code :test}), in order; none by default
+	 */
+	default List<String> aliases() {
+		return List.of();
+	}
+
+	/**
+	 * The entries of a directory, for finding a project's test namespaces.
+	 * @param dir the directory
+	 * @return the names, a directory's with a trailing {@code /}, or {@code null} when
+	 * the path names no readable directory (the default)
+	 */
+	default @Nullable List<String> list(String dir) {
+		return null;
+	}
+
 }

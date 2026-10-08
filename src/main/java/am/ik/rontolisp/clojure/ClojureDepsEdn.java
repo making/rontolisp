@@ -353,21 +353,408 @@ final class ClojureDepsEdn {
 	 * @return the directories, as written
 	 */
 	static List<String> flattenPaths(DepsMap map) {
-		List<String> out = new ArrayList<>();
+		return flattenPaths(map, null);
+	}
+
+	/**
+	 * The directories of the source path's own part, like the oracle's
+	 * {@code flatten-paths}: the selected aliases' {@code :extra-paths} first, then
+	 * {@code :paths}, each resolved through the aliases like {@code chase-key}, where
+	 * {@code :paths} and {@code :extra-paths} are themselves names a keyword may chase.
+	 * @param map the merged map
+	 * @param extraPaths the argument map's {@code :extra-paths}, or {@code null}
+	 * @return the directories, as written
+	 */
+	static List<String> flattenPaths(DepsMap map, @Nullable LispVal extraPaths) {
+		return chasePaths(map, extraPaths, List.of(":extra-paths", ":paths"));
+	}
+
+	/**
+	 * The directories the aliases' {@code :extra-paths} alone name, resolved like
+	 * {@link #flattenPaths(DepsMap, LispVal)}: what a test alias adds.
+	 * @param map the merged map
+	 * @param extraPaths the argument map's {@code :extra-paths}, or {@code null}
+	 * @return the directories, as written
+	 */
+	static List<String> flattenExtraPaths(DepsMap map, @Nullable LispVal extraPaths) {
+		return chasePaths(map, extraPaths, List.of(":extra-paths"));
+	}
+
+	private static List<String> chasePaths(DepsMap map, @Nullable LispVal extraPaths, List<String> keys) {
+		Map<String, LispVal> aliases = new LinkedHashMap<>();
+		if (map.aliases() != null) {
+			aliases.putAll(map.aliases());
+		}
 		List<PathRef> paths = map.paths();
 		if (paths == null) {
-			return out;
+			aliases.remove(":paths");
 		}
-		Map<String, LispVal> aliases = map.aliases() == null ? Map.of() : map.aliases();
+		else {
+			aliases.put(":paths", pathsDatum(paths));
+		}
+		if (extraPaths == null) {
+			aliases.remove(":extra-paths");
+		}
+		else {
+			aliases.put(":extra-paths", extraPaths);
+		}
+		List<String> out = new ArrayList<>();
+		for (String key : keys) {
+			chaseAlias(aliases, key, out, new HashSet<>());
+		}
+		return out;
+	}
+
+	private static LispVal pathsDatum(List<PathRef> paths) {
+		List<LispVal> items = new ArrayList<>();
+		items.add(ClojureReader.VECTOR);
 		for (PathRef ref : paths) {
-			if (!ref.alias()) {
-				out.add(ref.value());
+			items.add(ref.alias() ? new LispSymbol(ref.value()) : LispString.literal(ref.value()));
+		}
+		return ClojureLowerUtil.list(items);
+	}
+
+	private static List<PathRef> pathRefs(LispVal datum) {
+		List<PathRef> out = new ArrayList<>();
+		for (LispVal element : elements(datum)) {
+			if (element instanceof LispString string) {
+				out.add(new PathRef(string.value(), false));
 			}
-			else {
-				chaseAlias(aliases, ref.value(), out, new HashSet<>());
+			else if (element instanceof LispSymbol keyword && keyword.name().startsWith(":")) {
+				out.add(new PathRef(keyword.name(), true));
 			}
 		}
 		return out;
+	}
+
+	/**
+	 * Every alias the maps define, each merged across the maps like the oracle's
+	 * {@code create-basis} ({@code (apply merge-with merge (map :aliases edn-maps))}): an
+	 * alias two maps define is one map, the later map's keys replacing the earlier's, so
+	 * a project's {@code :test} alias keeps the root map's {@code :extra-paths ["test"]}
+	 * unless it names its own (measured on {@code clj} 1.12.6, 2026-10-08). An alias
+	 * value that is no map replaces the earlier one.
+	 * @param maps the maps, earliest first
+	 * @return the aliases by keyword spelling
+	 */
+	static SequencedMap<String, LispVal> aliasData(List<DepsMap> maps) {
+		SequencedMap<String, LispVal> out = new LinkedHashMap<>();
+		for (DepsMap map : maps) {
+			SequencedMap<String, LispVal> aliases = map.aliases();
+			if (aliases == null) {
+				continue;
+			}
+			for (Map.Entry<String, LispVal> alias : aliases.entrySet()) {
+				LispVal earlier = out.get(alias.getKey());
+				out.put(alias.getKey(), earlier != null && isMap(earlier) && isMap(alias.getValue())
+						? mergeMapDatums(earlier, alias.getValue()) : alias.getValue());
+			}
+		}
+		return out;
+	}
+
+	/**
+	 * The arguments the selected aliases name, merged like the oracle's
+	 * {@code merge-alias-maps}: per key, {@code :extra-deps}, {@code :override-deps},
+	 * {@code :default-deps}, {@code :replace-deps}, {@code :deps},
+	 * {@code :classpath-overrides} and {@code :ns-aliases} merge; {@code :extra-paths},
+	 * {@code :replace-paths} and {@code :paths} append without repeats; {@code :jvm-opts}
+	 * appends; {@code :main-opts}, {@code :exec-fn} and {@code :ns-default} take the last
+	 * non-nil value; {@code :exec-args} merges two maps and otherwise takes the last
+	 * non-nil value; any other key merges a map and replaces anything else. An alias no
+	 * map defines contributes nothing (the oracle warns of it,
+	 * {@link #undeclaredAliases}), as does an alias whose value is no map.
+	 * @param aliasData every alias, {@link #aliasData}
+	 * @param selected the selected aliases' keyword spellings, in order
+	 * @return the argument map
+	 */
+	static ArgMap argMap(Map<String, LispVal> aliasData, List<String> selected) {
+		SequencedMap<String, LispVal> out = new LinkedHashMap<>();
+		for (String alias : selected) {
+			LispVal value = aliasData.get(alias);
+			if (value == null || !isMap(value)) {
+				continue;
+			}
+			List<LispVal> kvs = mapEntries(value);
+			for (int i = 0; i + 1 < kvs.size(); i += 2) {
+				String key = kvs.get(i) instanceof LispSymbol symbol ? symbol.name() : ClojureEdn.print(kvs.get(i));
+				LispVal earlier = out.get(key);
+				LispVal merged = mergeArg(key, earlier, kvs.get(i + 1));
+				if (merged == null) {
+					out.remove(key);
+				}
+				else {
+					out.put(key, merged);
+				}
+			}
+		}
+		return new ArgMap(out);
+	}
+
+	private static @Nullable LispVal mergeArg(String key, @Nullable LispVal earlier, LispVal value) {
+		LispVal v = isNil(value) ? null : value;
+		return switch (key) {
+			case ":deps", ":replace-deps", ":extra-deps", ":override-deps", ":default-deps", ":classpath-overrides",
+					":ns-aliases" ->
+				mergeOrKeep(earlier, v);
+			case ":paths", ":replace-paths", ":extra-paths" -> append(earlier, v, true);
+			case ":jvm-opts" -> append(earlier, v, false);
+			case ":main-opts", ":exec-fn", ":ns-default" -> v != null ? v : earlier;
+			case ":exec-args" -> earlier != null && v != null && isMap(earlier) && isMap(v) ? mergeMapDatums(earlier, v)
+					: v != null ? v : earlier;
+			default -> v != null && isMap(v) ? mergeOrKeep(earlier, v) : v;
+		};
+	}
+
+	/** {@code (merge earlier v)}: a nil side is the other side. */
+	private static @Nullable LispVal mergeOrKeep(@Nullable LispVal earlier, @Nullable LispVal v) {
+		if (earlier == null || isNil(earlier)) {
+			return v;
+		}
+		if (v == null) {
+			return earlier;
+		}
+		return isMap(earlier) && isMap(v) ? mergeMapDatums(earlier, v) : v;
+	}
+
+	/** {@code (vec (concat earlier v))}, without repeats when asked. */
+	private static @Nullable LispVal append(@Nullable LispVal earlier, @Nullable LispVal v, boolean unique) {
+		if (earlier == null && v == null) {
+			return null;
+		}
+		List<LispVal> items = new ArrayList<>();
+		items.add(ClojureReader.VECTOR);
+		Set<String> seen = new HashSet<>();
+		for (LispVal side : new LispVal[] { earlier, v }) {
+			if (side == null) {
+				continue;
+			}
+			for (LispVal element : elements(side)) {
+				if (!unique || seen.add(ClojureEdn.print(element))) {
+					items.add(element);
+				}
+			}
+		}
+		return ClojureLowerUtil.list(items);
+	}
+
+	/**
+	 * Two map datums merged like {@code merge}: a key of the second replaces the first's
+	 * in place, a new one is appended. Keys are compared by their printed spelling.
+	 */
+	static LispVal mergeMapDatums(LispVal first, LispVal second) {
+		SequencedMap<String, LispVal[]> entries = new LinkedHashMap<>();
+		for (LispVal map : List.of(first, second)) {
+			List<LispVal> kvs = mapEntries(map);
+			for (int i = 0; i + 1 < kvs.size(); i += 2) {
+				String spelling = ClojureEdn.print(kvs.get(i));
+				LispVal[] known = entries.get(spelling);
+				if (known != null) {
+					known[1] = kvs.get(i + 1);
+				}
+				else {
+					entries.put(spelling, new LispVal[] { kvs.get(i), kvs.get(i + 1) });
+				}
+			}
+		}
+		List<LispVal> items = new ArrayList<>();
+		items.add(new LispSymbol("%hash-map"));
+		for (LispVal[] entry : entries.values()) {
+			items.add(entry[0]);
+			items.add(entry[1]);
+		}
+		return ClojureLowerUtil.list(items);
+	}
+
+	/**
+	 * The selected aliases no map defines, each once, in order: the oracle's
+	 * {@code WARNING: Specified aliases are undeclared and are not being used: [:x]}.
+	 * @param merged the merged map
+	 * @param selected the selected aliases
+	 * @return the undeclared ones
+	 */
+	static List<String> undeclaredAliases(DepsMap merged, List<String> selected) {
+		Set<String> out = new LinkedHashSet<>();
+		Map<String, LispVal> aliases = merged.aliases() == null ? Map.of() : merged.aliases();
+		for (String alias : selected) {
+			if (!aliases.containsKey(alias)) {
+				out.add(alias);
+			}
+		}
+		return List.copyOf(out);
+	}
+
+	/**
+	 * The project map with the argument map's {@code :replace-deps} and
+	 * {@code :replace-paths} (and their older spellings {@code :deps} and {@code :paths})
+	 * in place of its own, like the oracle's {@code tools.deps/tool}: only the project's
+	 * map, so the root and user maps still merge under it -- the root map's
+	 * {@code org.clojure/clojure} stays.
+	 * @param project the project map ({@link #EMPTY} when there is none)
+	 * @param args the argument map
+	 * @return the tooled map
+	 */
+	static DepsMap tool(DepsMap project, ArgMap args) {
+		LispVal deps = args.get(":deps");
+		LispVal replaceDeps = args.get(":replace-deps");
+		LispVal paths = args.get(":paths");
+		LispVal replacePaths = args.get(":replace-paths");
+		SequencedMap<Lib, @Nullable Coord> toolDeps = project.deps();
+		if (deps != null || replaceDeps != null) {
+			LispVal merged = mergeOrKeep(deps, replaceDeps);
+			toolDeps = merged == null ? new LinkedHashMap<>()
+					: args.libs(merged, deps != null ? ":deps" : ":replace-deps");
+		}
+		List<PathRef> toolPaths = project.paths();
+		if (paths != null || replacePaths != null) {
+			LispVal appended = append(paths, replacePaths, false);
+			toolPaths = appended == null ? List.of() : pathRefs(appended);
+		}
+		return new DepsMap(toolPaths, toolDeps, project.aliases(), project.mvnRepos(), project.mvnLocalRepo(),
+				project.prepLib());
+	}
+
+	/**
+	 * The arguments the selected aliases name, merged ({@link #argMap}): keys by keyword
+	 * spelling, values as read. The keys this build applies are read through the
+	 * accessors, each refusing a value of the wrong shape by name.
+	 *
+	 * @param entries the merged arguments
+	 */
+	record ArgMap(SequencedMap<String, LispVal> entries) {
+
+		/** No alias selected. */
+		static final ArgMap EMPTY = new ArgMap(new LinkedHashMap<>());
+
+		/**
+		 * A key's value.
+		 * @param key the keyword spelling
+		 * @return the value, or {@code null} when absent
+		 */
+		@Nullable LispVal get(String key) {
+			return this.entries.get(key);
+		}
+
+		/**
+		 * A {@code lib -> coordinate} argument ({@code :extra-deps},
+		 * {@code :override-deps}, {@code :default-deps}), its lib names canonicalized
+		 * like {@code :deps}.
+		 * @param key the keyword spelling
+		 * @return the libs and coordinates, or {@code null} when absent
+		 */
+		@Nullable SequencedMap<Lib, @Nullable Coord> libs(String key) {
+			LispVal value = this.entries.get(key);
+			return value == null ? null : libs(value, key);
+		}
+
+		SequencedMap<Lib, @Nullable Coord> libs(LispVal value, String key) {
+			if (!isMap(value)) {
+				throw refused(key, value, "a map of libraries to coordinates");
+			}
+			List<LispVal> kvs = mapEntries(value);
+			for (int i = 0; i + 1 < kvs.size(); i += 2) {
+				LispVal coord = kvs.get(i + 1);
+				if (!(kvs.get(i) instanceof LispSymbol lib) || lib.name().startsWith(":") || isNil(kvs.get(i))
+						|| (!isNil(coord) && !isMap(coord))) {
+					throw refused(key, value, "a map of libraries to coordinates");
+				}
+			}
+			return libMap(value);
+		}
+
+		/**
+		 * {@code :classpath-overrides}: a library's source path replaced by one directory
+		 * or jar, or dropped by a blank one.
+		 * @return the overrides by canonical lib, empty when absent
+		 */
+		SequencedMap<Lib, String> classpathOverrides() {
+			SequencedMap<Lib, String> out = new LinkedHashMap<>();
+			LispVal value = this.entries.get(":classpath-overrides");
+			if (value == null) {
+				return out;
+			}
+			if (!isMap(value)) {
+				throw refused(":classpath-overrides", value, "a map of libraries to paths");
+			}
+			List<LispVal> kvs = mapEntries(value);
+			for (int i = 0; i + 1 < kvs.size(); i += 2) {
+				if (!(kvs.get(i) instanceof LispSymbol lib) || !(kvs.get(i + 1) instanceof LispString path)) {
+					throw refused(":classpath-overrides", value, "a map of libraries to paths");
+				}
+				out.put(Lib.of(lib.name()), path.value());
+			}
+			return out;
+		}
+
+		/**
+		 * A vector of strings ({@code :main-opts}).
+		 * @param key the keyword spelling
+		 * @return the strings, empty when absent
+		 */
+		List<String> strings(String key) {
+			LispVal value = this.entries.get(key);
+			if (value == null) {
+				return List.of();
+			}
+			List<LispVal> items = collectionItems(value);
+			if (items == null) {
+				throw refused(key, value, "a vector of strings");
+			}
+			List<String> out = new ArrayList<>();
+			for (LispVal item : items) {
+				if (!(item instanceof LispString string)) {
+					throw refused(key, value, "a vector of strings");
+				}
+				out.add(string.value());
+			}
+			return out;
+		}
+
+		/**
+		 * A symbol ({@code :exec-fn}, {@code :ns-default}).
+		 * @param key the keyword spelling
+		 * @return its spelling, or {@code null} when absent
+		 */
+		@Nullable String symbol(String key) {
+			LispVal value = this.entries.get(key);
+			if (value == null) {
+				return null;
+			}
+			if (!(value instanceof LispSymbol symbol) || symbol.name().startsWith(":") || isNil(value)
+					|| symbol.name().equals("true") || symbol.name().equals("false")) {
+				throw refused(key, value, "a symbol");
+			}
+			return symbol.name();
+		}
+
+		/**
+		 * {@code :ns-aliases}: an alias symbol to the namespace it stands for.
+		 * @return the aliases, empty when absent
+		 */
+		Map<String, String> nsAliases() {
+			Map<String, String> out = new LinkedHashMap<>();
+			LispVal value = this.entries.get(":ns-aliases");
+			if (value == null) {
+				return out;
+			}
+			if (!isMap(value)) {
+				throw refused(":ns-aliases", value, "a map of symbols to symbols");
+			}
+			List<LispVal> kvs = mapEntries(value);
+			for (int i = 0; i + 1 < kvs.size(); i += 2) {
+				if (!(kvs.get(i) instanceof LispSymbol alias) || !(kvs.get(i + 1) instanceof LispSymbol ns)) {
+					throw refused(":ns-aliases", value, "a map of symbols to symbols");
+				}
+				out.put(alias.name(), ns.name());
+			}
+			return out;
+		}
+
+		private static LispReadException refused(String key, LispVal value, String expected) {
+			return new LispReadException(
+					"the aliases' " + key + " must be " + expected + ", got: " + ClojureEdn.print(value));
+		}
+
 	}
 
 	private static void chaseAlias(Map<String, LispVal> aliases, String alias, List<String> out, Set<String> seen) {
@@ -542,12 +929,31 @@ final class ClojureDepsEdn {
 		return ClojureLowerUtil.isSymbolNamed(value, "nil");
 	}
 
-	private static boolean isMap(LispVal value) {
+	/**
+	 * A map datum's value for a key, compared by printed spelling.
+	 * @param map the map datum
+	 * @param key the key
+	 * @return the value, or {@code null} when the key is absent
+	 */
+	static @Nullable LispVal mapGet(LispVal map, LispVal key) {
+		String spelling = ClojureEdn.print(key);
+		List<LispVal> kvs = mapEntries(map);
+		for (int i = 0; i + 1 < kvs.size(); i += 2) {
+			if (ClojureEdn.print(kvs.get(i)).equals(spelling)) {
+				return kvs.get(i + 1);
+			}
+		}
+		return null;
+	}
+
+	/** Whether a datum is a map ({@code (%hash-map k v ...)}). */
+	static boolean isMap(LispVal value) {
 		List<LispVal> items = ClojureLowerUtil.items(value);
 		return items != null && !items.isEmpty() && ClojureLowerUtil.isSymbolNamed(items.get(0), "%hash-map");
 	}
 
-	private static boolean isVector(LispVal value) {
+	/** Whether a datum is a vector. */
+	static boolean isVector(LispVal value) {
 		List<LispVal> items = ClojureLowerUtil.items(value);
 		return items != null && !items.isEmpty() && items.get(0) == ClojureReader.VECTOR;
 	}

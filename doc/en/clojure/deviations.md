@@ -358,6 +358,15 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   expanded in the file's order, where the oracle takes a map of more than eight in its hash
   order: the two differ only where the selection rests on which was seen first (one
   version spelled two ways, `1.0` and `1.0.0`).
+- `-M -m` and `-X` name a namespace or function that is missing the way any program
+  does (`Could not locate my/app.clj ...`, `No such var: my.app/-main`), where the oracle
+  says `Namespace could not be found on classpath`, `loaded but function not found`, or
+  throws a `NullPointerException` for a missing `-main`. `clojure.main`'s `-e`, `-i` and
+  `--report`, `-X` arguments read from standard input (`-`) and `-T` tools are refused.
+  `:jvm-opts` is ignored, and a selected alias whose value is no map adds nothing. A run
+  without a file (`-M -m`, `-X`, `-e`, the REPL) searches the working directory first, which
+  the oracle's classpath does not hold. `rontolisp test` is no `clj` command: it follows
+  the cognitect test-runner's defaults (namespaces ending in `-test` under `test`).
 - A reader conditional takes `:rontolisp` too, ahead of `:clj` where a form names it
   first. `{:read-cond :preserve}` is refused at the first `#?` (no reader-conditional or
   tagged-literal value exists), so `reader-conditional?` stays `false`. In a branch not

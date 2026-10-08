@@ -155,4 +155,29 @@ class CliOptionsTest {
 		assertThat(options.getNokey()).isEqualTo("prog.lisp");
 	}
 
+	@Test
+	void theAliasFlagsAreSpelledAsTheOraclesAndMOrXEndsTheOptions() {
+		// clj's order: the -M/-X aliases first, then every -A's
+		CliOptions options = CliOptions
+			.build(new String[] { "-o", "app.jar", "-A:a", "-A:b/c", "-M:dev:test", "-m", "my.app", "-o", "--", "x" });
+		assertThat(options.get("-o")).isEqualTo("app.jar");
+		assertThat(options.clojureAliases()).containsExactly(":dev", ":test", ":a", ":b/c");
+		CliOptions.ClojureRun run = options.clojureRun();
+		assertThat(run).isNotNull();
+		assertThat(run.exec()).isFalse();
+		assertThat(run.arguments()).containsExactly("-m", "my.app", "-o", "--", "x");
+		assertThat(options.arguments()).isEmpty();
+		CliOptions exec = CliOptions.build(new String[] { "-X", ":k", "1" });
+		assertThat(exec.clojureRun())
+			.isEqualTo(new CliOptions.ClojureRun(true, java.util.List.of(), java.util.List.of(":k", "1")));
+		// -A keeps the ordinary command line; a value or a program argument is no flag
+		CliOptions repl = CliOptions.build(new String[] { "-A:dev", "app.clj", "-e2", "-M" });
+		assertThat(repl.clojureRun()).isNull();
+		assertThat(repl.getNokey()).isEqualTo("app.clj");
+		assertThat(repl.get("-e2")).isEqualTo("-M");
+		assertThat(CliOptions.build(new String[] { "app.clj", "--", "-M:x" }).clojureRun()).isNull();
+		assertThatThrownBy(() -> CliOptions.build(new String[] { "-A" })).hasMessage("-A requires an alias");
+		assertThatThrownBy(() -> CliOptions.build(new String[] { "-T:tool" })).hasMessageContaining("clj -T");
+	}
+
 }

@@ -3,6 +3,7 @@ package am.ik.rontolisp.clojure;
 import java.util.List;
 
 import am.ik.rontolisp.LispChar;
+import am.ik.rontolisp.LispDouble;
 import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispString;
 import am.ik.rontolisp.LispSymbol;
@@ -14,7 +15,10 @@ import org.jspecify.annotations.Nullable;
  * the refusals that quote one in the oracle's words: a map as {@code {:k v, :k v}},
  * lifted to {@code #:ns{:k v}} when every key is a qualified keyword or symbol of one
  * namespace (the oracle's default {@code *print-namespace-maps*}), a vector, a set, a
- * string with its escapes, a tagged literal as {@code #tag form}.
+ * string with its escapes, a character by its name ({@code \\space}), a double as the
+ * oracle prints one ({@code 1.0E10}, {@code ##NaN}), a tagged literal as
+ * {@code #tag form}. What it prints reads back as the same datum, so a generated program
+ * may carry one as source ({@link ClojureMain}).
  */
 final class ClojureEdn {
 
@@ -46,7 +50,21 @@ final class ClojureEdn {
 			return;
 		}
 		if (datum instanceof LispChar character) {
-			out.append('\\').appendCodePoint(character.codePoint());
+			out.append('\\').append(switch (character.codePoint()) {
+				case ' ' -> "space";
+				case '\n' -> "newline";
+				case '\t' -> "tab";
+				case '\r' -> "return";
+				case '\b' -> "backspace";
+				case '\f' -> "formfeed";
+				default -> Character.toString(character.codePoint());
+			});
+			return;
+		}
+		if (datum instanceof LispDouble number) {
+			double value = number.value();
+			out.append(Double.isNaN(value) ? "##NaN"
+					: Double.isInfinite(value) ? (value > 0 ? "##Inf" : "##-Inf") : Double.toString(value));
 			return;
 		}
 		List<LispVal> items = ClojureLowerUtil.items(datum);

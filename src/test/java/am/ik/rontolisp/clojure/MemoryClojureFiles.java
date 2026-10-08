@@ -23,15 +23,32 @@ final class MemoryClojureFiles implements ClojureFiles {
 
 	private final @Nullable String userConfigDir;
 
+	private final List<String> aliases;
+
 	MemoryClojureFiles(Map<String, String> files) {
 		this(files, Map.of(), null);
 	}
 
 	MemoryClojureFiles(Map<String, String> files, Map<String, Map<String, String>> archives,
 			@Nullable String userConfigDir) {
+		this(files, archives, userConfigDir, List.of());
+	}
+
+	MemoryClojureFiles(Map<String, String> files, Map<String, Map<String, String>> archives,
+			@Nullable String userConfigDir, List<String> aliases) {
 		this.files = files;
 		this.archives = archives;
 		this.userConfigDir = userConfigDir;
+		this.aliases = aliases;
+	}
+
+	/**
+	 * These files read under the aliases.
+	 * @param selected the aliases' keyword spellings
+	 * @return the files
+	 */
+	MemoryClojureFiles withAliases(String... selected) {
+		return new MemoryClojureFiles(this.files, this.archives, this.userConfigDir, List.of(selected));
 	}
 
 	@Override
@@ -97,6 +114,28 @@ final class MemoryClojureFiles implements ClojureFiles {
 	@Override
 	public @Nullable String userConfigDir() {
 		return this.userConfigDir;
+	}
+
+	@Override
+	public List<String> aliases() {
+		return this.aliases;
+	}
+
+	@Override
+	public @Nullable List<String> list(String dir) {
+		if (!isDirectory(dir)) {
+			return null;
+		}
+		String prefix = dir.isEmpty() ? "" : dir + "/";
+		java.util.Set<String> out = new java.util.TreeSet<>();
+		for (String name : this.files.keySet()) {
+			if (name.startsWith(prefix)) {
+				String rest = name.substring(prefix.length());
+				int slash = rest.indexOf('/');
+				out.add(slash < 0 ? rest : rest.substring(0, slash + 1));
+			}
+		}
+		return new ArrayList<>(out);
 	}
 
 }
