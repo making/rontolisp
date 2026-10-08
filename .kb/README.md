@@ -214,6 +214,7 @@ deliberate boundaries the audit must not undo: user-facing operator catalogues l
 - [asdf.md](asdf.md) -- the limited `asdf:defsystem`/`load-system`/`test-system` subset
 - [uiop.md](uiop.md) -- uiop as the 15-sub-package bundle upstream is
 - [dists.md](dists.md) -- the download half of `ql:quickload`; `am.ik.artifact`, the fetch-and-cache layer every downloader shares (size + MD5 verification, timeouts, tar.gz/zip, atomic install)
+- [git-fetcher.md](git-fetcher.md) -- `am.ik.artifact.GitFetcher`: a repository at a full sha into the cache through the `git` CLI (why not forge archives), the clone/checkout layout and key, tag checks, inferred `io.github.*` URLs, the refusals
 - [time-environment-builtins.md](time-environment-builtins.md) -- time/environment built-ins and the environment-enquiry family
 - [architecture.md](architecture.md) -- the pipeline, the language-independent libraries, the package dependency graph and the per-package import rules, the `CompileFrontend.expand` no-restatement rule and its drift history, requirements
 - [session-workflow.md](session-workflow.md) -- builds outside the root reactor, the CI deploy job (Maven 3.10 credential scoping, the `sonatype-central` server id), waiting for a long run and the three false greens, working beside other sessions on `develop` (`.todo` number claims), the after-task checks
