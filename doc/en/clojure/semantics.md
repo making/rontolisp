@@ -86,7 +86,8 @@ no known type and a dependency the oracle cannot resolve are errors in its words
   ends at the library already selected.
 - The source path is the entry file's own root, the project's `:paths`, each selected
   library's roots in the oracle's classpath order (the top of the tree first), then the
-  built-in namespaces.
+  built-in namespaces. A root's `data_readers.clj` and `data_readers.cljc` give the
+  program's data readers ([Tagged literals](syntax.md#tagged-literals)).
 - `org.clojure/clojure`, `org.clojure/spec.alpha` and `org.clojure/core.specs.alpha` are
   this front end at any version. `ring/ring-core` and `ring/ring-codec` at a Maven version
   up to the one shipped (ring-core 1.15.5, ring-codec 1.3.0) are the built-in Ring
@@ -340,7 +341,8 @@ handle).
 `binding` rebinds `^:dynamic` vars and the `clojure.core` specials with dynamic
 extent; anything else is refused. `*out*`/`*in*`/`*err*` are `*standard-output*`/
 `*standard-input*`/`*error-output*`; the flags hold the oracle's values under
-`clojure -M` (`*print-length*` `nil`, `*assert*` `true`, `*data-readers*` `{}`,
+`clojure -M` (`*print-length*` `nil`, `*assert*` `true`, `*data-readers*` the program's
+data readers, `{}` without one,
 `*command-line-args*` the program's arguments, `*clojure-version*` 1.12.6, ...), and
 the printer honours `*print-length*`, `*print-level*`, `*print-readably*`,
 `*print-meta*` and `*print-namespace-maps*` (a map whose keys share a namespace prints
@@ -411,7 +413,9 @@ global it signals `Can't change/establish root binding of: ... with set` at run 
 run time on every backend, answering what a quote of the same text answers: the same
 numbers, strings, characters, keywords (`::kw` in the calling namespace) and collections,
 metadata dropped, `#_` discarding. A record literal builds the record of a class the
-program defines; `#=` read-time evaluation and tagged literals are refused like in source,
+program defines; `#=` read-time evaluation is refused like in source, a tagged literal
+reads through `*data-readers*`, the default `#inst` and `#uuid` readers and
+`*default-data-reader-fn*` in that order, like the oracle's,
 and reader conditionals read under `{:read-cond :allow}` like in a `.cljc` file. A reader is a `clojure.java.io/reader`, `*in*`, or a
 `java.io.PushbackReader`/`BufferedReader`/`InputStreamReader` over one or over a `java.io.StringReader`,
 which is a stream on every backend; `read` leaves it right after the datum. `str` of a

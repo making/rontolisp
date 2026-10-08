@@ -36,6 +36,9 @@ import org.jspecify.annotations.Nullable;
  * <li>{@code rontolisp.internal.instant} for {@code clojure.instant}: the timestamp
  * match, {@code validated}'s checks and the three readers, which the run-time reader's
  * default {@code #inst} reader shares.</li>
+ * <li>{@code rontolisp.internal.uuid} for {@code clojure.uuid}: the run-time reader's
+ * default {@code #uuid} reader, which {@code default-data-readers} names as
+ * {@code clojure.uuid/default-uuid-reader}.</li>
  * <li>{@code rontolisp.internal.reducers} for {@code clojure.core.reducers}: the
  * accumulator {@code cat} answers (the oracle's {@code java.util.ArrayList}, a growable
  * vector here, which no Clojure verb makes), the push of {@code append!} onto it and the
@@ -189,6 +192,7 @@ final class ClojureKernelLowering {
 			new Kernels("clojure.instant", "RONTOLISP::%CLOJURE-INSTANT-",
 					Map.ofEntries(Map.entry("parse", 1), Map.entry("validate", 10), Map.entry("read-date", 1),
 							Map.entry("read-timestamp", 1), Map.entry("read-calendar", 1))),
+			"rontolisp.internal.uuid", new Kernels("clojure.uuid", "RONTOLISP::%CLOJURE-", Map.of("read-uuid", 1)),
 			"rontolisp.internal.reducers",
 			new Kernels("clojure.core.reducers", "RONTOLISP::%CLOJURE-REDUCERS-",
 					Map.ofEntries(Map.entry("accumulator", 0), Map.entry("accumulator?", 1), Map.entry("append", 2),

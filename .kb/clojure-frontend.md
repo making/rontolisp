@@ -38,6 +38,8 @@ The oracle is `clj` 1.12.6.1673: a behavior is decided by running it there, and 
 - A whole FILE is lowered at once. Pass one pre-scans every top-level definition name
   (`def`/`defn`/`declare`/`defmacro`/`defrecord`/`deftype`/`deftest`, following `ns`), so
   a form may use a definition below it. A REPL lowers through a session ("A session").
+  Where a tagged literal waits for the data readers, pass two reads the text again a
+  datum at a time ("Data readers").
 - Errors name the innermost form's source position (`.kb/source-positions.md`).
 
 ## Values
@@ -1074,12 +1076,9 @@ repositories, `GITLIBS` set; tools.deps read from the CLI jar).
   join. Wasm: the compile's lowering and macro time see the classes too (a macro body's helper
   calling a dependency's class expands there, `ClojureDepsFetchCliTest`), a run-time call
   stays refused.
-- **`data_readers.clj`** (gap 4): not read. Honoring one means calling a library function at
-  READ time, and a whole file is read before its first `require` lowers (`Clojure.read`), so
-  the reader function's namespace could never be loaded in time; a tag it defines is the
-  reader's `No reader function for tag t`, the oracle's words when none is installed, and
-  `*data-readers*` stays `{}`. The two default tags, `#inst` and `#uuid`, are built into both
-  readers ("Instants and UUIDs").
+- **`data_readers.clj`** (gap 4): every root's `data_readers.clj`, then every root's
+  `.cljc`, read when the project resolves (`ClojureSourcePath.dataReaders`); a tag reads
+  through its var while the source is read again a datum at a time ("Data readers").
 - **No resolved-graph cache** (gap 5, measured 2026-10-08): the `.cpcache` idea was the plan;
   the caches under the resolution already make a second run network-free -- a local
   repository file is used as is, an installed checkout needs no git, a tag is checked against
@@ -2628,7 +2627,7 @@ through it. Pinned on all four backends by clojure-spec `a-double-prints-its-exp
 source reader's language, answering what a quote of the same text answers**, so `(=
 (read-string s) 's)` holds: `@x` reads `(deref x)` and `` `x `` `(syntax-quote x)` like a
 quote does (the oracle: `clojure.core/deref`, the expansion), `#(...)` the source reader's
-`(fn* [p1__N# ...] (body))` (N per datum read, through the specials `%clojure-rd-args`/`%clojure-rd-arg-id`), `#=` is its refusal, `#inst`/`#uuid` read their values ("Instants and UUIDs"), and `#?` reads under `{:read-cond :allow}` ("Reader conditionals"). A read map
+`(fn* [p1__N# ...] (body))` (N per datum read, through the specials `%clojure-rd-args`/`%clojure-rd-arg-id`), `#=` is its refusal, a tag reads through `*data-readers*`, then `#inst`/`#uuid` into their values ("Instants and UUIDs"), then `*default-data-reader-fn*` ("Data readers"), and `#?` reads under `{:read-cond :allow}` ("Reader conditionals"). A read map
 or set stores its keys through "Structural keys" (`%clojure-rd-map-of`, `%clojure-set-put`),
 so it finds `=` keys and refuses an `=` duplicate like the oracle (`Duplicate key: k`, k's
 toString: a map names the earlier key, a set the later member). `::kw` resolves against the
@@ -2865,7 +2864,11 @@ milliseconds; the reverse false, the oracle's one-sided `equals`).
   oracle's compiler embeds a `Date` constant by `RT.printString` and `readString` at class
   init, so a BC date comes back AD (`#inst "0000-01-01"` is year 1) and one past 9999 fails
   when the code runs (lowered to the run-time read of the printed text). A macro answering a
-  Timestamp or Calendar decodes to a Date the same way.
+  Timestamp or Calendar decodes to a Date the same way, and so does one answering a HOST
+  `java.util.Date`/`Timestamp`/`Calendar` or `UUID` (`ClojureMacroLowering.decodeHostValue`:
+  the oracle's `print-dup` prints `#inst`/`#uuid`, read back here as the own values). A form
+  the default reader refuses stays pending on the first read, since a data reader of the tag
+  may take it ("Data readers"); the second read refuses it, at the same position.
 - UUIDs: `UUID.fromString`'s lenient read (at most 36 chars, exactly four dashes, groups
   parsed like `Long.parseLong(s, b, e, 16)` -- optional `+`, overflow past 2^63-1 -- and
   masked), its `IllegalArgumentException`/`NumberFormatException` texts for `#uuid` and nil
@@ -2908,10 +2911,12 @@ milliseconds; the reverse false, the oracle's one-sided `equals`).
   to a read one (deviation), and `(java.util.Date.)`, `UUID/randomUUID` and their kin stay
   `java:` calls, refused on wasm (`e76`).
 - `clojure.instant` (parse-timestamp, validated, read-instant-date/-timestamp/-calendar)
-  and `clojure.uuid` (no vars) ship as startup namespaces ("clojure.jar namespaces") over the
+  and `clojure.uuid` ship as startup namespaces ("clojure.jar namespaces") over the
   kernels `rontolisp.internal.instant` (`parse`, `validate`, `read-date`, `read-timestamp`,
   `read-calendar`); the runtime reader calls `%clojure-instant-read-date` directly.
-  `*data-readers*` is still not read (`e54`), so binding it does not change `read-string`.
+  `clojure.uuid`'s one var is the private `default-uuid-reader` over
+  `rontolisp.internal.uuid/read-uuid` (`%clojure-read-uuid`), which `default-data-readers`
+  names. A data reader of `inst` or `uuid` reads it first ("Data readers").
 - Pins: clojure-spec `inst-literals-*`, `uuid-literals-*`, `inst-and-uuid-*`,
   `read-string-and-clojure-edn-read-inst-and-uuid-like-the-oracle`,
   `clojure-instant-parses-validates-and-reads-three-instants` (all four backends,
@@ -2921,6 +2926,98 @@ milliseconds; the reverse false, the oracle's one-sided `equals`).
   `ClojureReaderTest#instAndUuid*`, `ClojureArmsTest#theInstantAndUuidFamilies*`,
   `ClojureLibraryTest#aProgramMakingNoInstantOrUuid*`,
   `ClojureInteropTest#instMsReadsAHostDateOrInstant*`.
+
+## Data readers
+
+**A tag a `data_readers.clj`/`.cljc` maps calls its var while the source is READ, after the
+datums above it lowered, like the oracle's form-by-form `load`; its answer stands in the
+literal's place, decoded like a macro's.** Measured on `clj` 1.12.6.1673, 2026-10-08
+(fixtures over a `:local/root` directory, a `:local/root` jar and the project's own `src`):
+- Startup (`load-data-readers`): every `data_readers.clj` on the classpath in order, then
+  every `.cljc` (`:read-cond :allow`), ONE form read each (a second is ignored, none is `Not
+  a valid data-reader map`); keys symbols (`Invalid form in data-reader file`; an
+  unqualified tag is accepted), values qualified symbols (`no conversion to symbol`, a
+  number a `Named` cast), a repeated key the reader's `Duplicate key`; a tag two files give
+  different vars `Conflicting data-reader mapping` (the same var twice is fine). The var is
+  INTERNED in a created namespace, not loaded: `find-ns` finds the namespace, a call before
+  something loads it is `Attempting to call unbound fn: #'ns/name` -- a tag above the
+  `require`, in a `#_` discard (the oracle reads the discarded form, reader call included),
+  of a var the namespace lacks. Errors read `Syntax error reading source at (f:l:c)`,
+  positioned after the literal's form.
+- Answers: data (record, symbol, false, pattern, `#inst`, `#uuid`, set, char, ratio,
+  keyword, metadata kept) is the value; a list or symbol is code (`(list 'inc x)` runs, a
+  lazy seq of numbers is a call of a number); `nil` is the dispatch reader's `No dispatch
+  macro for: c`; an atom, a host object without `print-dup` (a `LocalDate`), a closure
+  `Can't embed object in code ...` (a closure's `No matching ctor`).
+- `*data-readers*` prints `{tag #'ns/name}` (`#:ns{...}` when every tag shares one); a
+  `binding` of it reaches `read-string`/`read`, not a literal inside the `binding` (read
+  first); a top-level `set!` reaches the file's later forms; `*default-data-reader-fn*`
+  (bound by `clojure.main` only) takes `(tag value)` of a tag nothing else reads, after
+  `#inst`/`#uuid`; `clojure.edn` asks neither special; a runtime reader's exception
+  propagates unwrapped; `default-data-readers` is `{uuid #'clojure.uuid/default-uuid-reader,
+  inst #'clojure.instant/read-instant-date}`; `#my.ns/tag` is a tagged literal (a record
+  only when the NAME is dotted).
+
+Mechanics:
+- **Discovery** (`ClojureSourcePath.dataReaders`, `ClojureDataReaders.of`): `FILES` over
+  `roots()` (directories through `ClojureFiles.read`, jars by entry), computed in
+  `resolveProject`, so a refusal is the program's first, positioned in the data readers
+  file (`ClojureReader.here` for its read errors, which read with `Tags.NONE`: only the
+  defaults). The map is tag -> `ns/name`, insertion-ordered.
+- **Two reads** (`ClojureLowering.Datums`): the first read (`ClojureReader` without `Tags`)
+  feeds the pre-scan; a tag other than `#inst`/`#uuid`, or one of those whose form the
+  default reader refuses, reads as `(%pending-tag tag form)` (counted; unique for the
+  duplicate-key check, a one-member splice). When the first read left one pending, or took
+  a default tag a data reader maps, pass two reads the text again (`again(Tags)`) a datum at
+  a time (`readTopLevel`), each only after the lowering lowered and handed over the one
+  above -- the entry file, a required file (`loadFile`) and a session buffer alike. A datum
+  whose first read was all pending (or whose defined name was) is pre-scanned again, the
+  lowering's earlier kinds kept (the session's rule); `declareOne` skips a pending name. A
+  pending tag that reaches the lowering (datums lowered without their reader) is `No reader
+  function`. Programs without a pending tag lower as before, read once.
+- **The call** (`ClojureDataReaders.read`, the `Tags` of pass two): an unmapped tag is `No
+  reader function` plus `ClojureSourcePath.notSearched()` (an unfetched library may map
+  it); `#inst`/`#uuid` unmapped fall to the default readers. The var: a startup shipped
+  namespace loads first (`preload`, its hoisted forms ahead of the datum); a project
+  FUNCTION is `(if (fboundp 'cell) (cell 'form) :C%UNBOUND-READER)` over `currentDefnSym`
+  (redefinitions), a value cell `(if (boundp 'cell) (%clojure-call cell (list 'form)) ...)`,
+  a `clojure.core`/known library var its value through `%clojure-call`, a macro the oracle's `Wrong number of args (1)`,
+  anything else unbound. It runs in the macro-time evaluator under the reading file's
+  `*ns*`/`*file*`/`*source-path*`, so it may call Java even for a wasm target, which only
+  receives the decoded answer. The sentinel and a namespace never loaded are the oracle's
+  unbound words; a thrown exception is `in data reader #'v: <message>`; `nil` `No dispatch
+  macro for: c`; an undecodable answer `Can't embed object in code, maybe print-dup not
+  defined: <str>`. The reader positions every refusal after the form.
+- **Run time**: `%clojure-rd-record-of` asks `(%clojure-rd-data-readers-p)`, the arm test of
+  `ClojureArms.Family.DATA_READERS` (producers: the two specials' symbols), before the
+  default clauses; `%clojure-rd-data-read` is the oracle's order through `%clojure-call`
+  outside the read in progress (`%clojure-rd-edn-call`). Both specials are `defvar`'d in
+  `clojure.lisp` (the interpreter keeps every arm); a program with data readers that reads
+  at run time or names `*data-readers*` gets the files' map as its root
+  (`ClojureDataReaders.noteRuntimeReads` -> `ClojureLowering.dataReadersRoot`, a
+  `defparameter`, since a compiled program's library `defvar` runs first): each var a
+  program var's root, a core or known library var's value, else `%clojure-unbound` (a
+  session probes `fboundp`/`boundp`). A program naming neither special and reading nothing
+  through data_readers files splices the reader without the arm (`ClojureLibraryTest`).
+- `default-data-readers` is a value row (`ClojureDataReaders.defaults`), loading
+  `clojure.uuid`/`clojure.instant`; `find-ns` finds the data readers' namespaces
+  (`knownNamespaces`).
+
+Deviations (kept): an answer loses its metadata and needs a datum here -- a function, a
+deftype instance, a host object other than a `UUID`/`Date`/`Calendar` is refused where the
+oracle compiles what its `print-dup` prints (`decodeDatum` is the macro answer's decoder; a
+deftype has no literal, a host value no spelling on wasm); `()` is `nil`, so an empty-list
+answer is `No dispatch macro`; a `set!` of `*data-readers*`/`*default-data-reader-fn*`
+reaches run-time reads only (the macro-time evaluator runs no statement, and the source
+reader's map is the files'); the entry file's own root's `data_readers` files count (it is a
+root here); a refusal names `in data reader` where the oracle prints the bare message.
+Pins: `ClojureDataReadersTest` (the project on all four backends, the answer kinds with
+host-calling readers on wasm too, the unbound/discard/missing/`No reader function` positions,
+the inst override, the files' refusals, a session, the unfetched note), clojure-spec
+`data-readers-read-a-tag-at-run-time-like-the-oracle` (all four backends, oracle-identical),
+`ClojureReaderTest#aFirstReadLeavesATaggedLiteralToTheDataReaders`,
+`#aTagIsARecordClassOnlyWhenItsNameIsDotted`, `#theDataReadersReadATagAfterItsFormLikeTheOracle`,
+`ClojureLibraryTest#aProgramNamingNoDataReaderSplicesTheReaderWithoutItsDataReaderClause`.
 
 ## Vars and metadata
 
@@ -3324,7 +3421,8 @@ in-scope program needs `valid?`/`conform` (then `explain-data` stays refused).
   `ClojureLoweringTest#readingVerbs*`/`#aReaderWrapper*`, `ClojureReaderTest#aDiscard*`/
   `#aCharacterLiteral*`, `ClojureSessionTest#aBufferRegisters*`,
   `ClojureInteropTest#readTakesBackWhatSpitWrote`, `ClojureWasmFileIoTest`;
-  `ClojureDefaultReadersTest` (`#inst`/`#uuid` against the JDK, both halves).
+  `ClojureDefaultReadersTest` (`#inst`/`#uuid` against the JDK, both halves);
+  `ClojureDataReadersTest` (`data_readers` files, four backends).
 - Interop and host IO: `ClojureInteropTest` (interpreter and JVM),
   `ClojureWasmInteropRefusalTest`, `ClojureWasmFileIoTest`, `ClojureWasmFileRefusalTest`.
 - `ClojureArmsTest` (the sorted-collection, unbound-root, matcher, reducible and refusal strips).

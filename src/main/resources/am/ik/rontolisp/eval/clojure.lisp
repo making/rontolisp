@@ -9941,14 +9941,22 @@
                  (rontolisp::%clojure-rd-symbol tag)))
           (t (rontolisp::%clojure-rd-record-of rd tag)))))
 
+;; A tag is undotted when its NAME is, the part after the slash of a qualified
+;; one (#my.ns/tag is a tagged literal, like the oracle's). Where the program
+;; may have data readers -- the DATA_READERS arm, whose producers are
+;; *data-readers* and *default-data-reader-fn* -- a tagged literal reads
+;; through %clojure-rd-data-read, the oracle's whole order; elsewhere only the
+;; two default readers are left.
 (defun rontolisp::%clojure-rd-record-of (rd tag)
   "The record literal of the class TAG, its tag consumed (%clojure-rd-record).
    An undotted tag is a tagged literal: #inst and #uuid answer what their
    default readers make of the value, any other tag is the oracle's refusal."
-  (if (not (search "." tag))
+  (if (not (rontolisp::%clojure-rd-record-tag-p tag))
       ;; like the oracle, the value reads before its reader is looked for
       (let ((value (rontolisp::%clojure-rd-required rd)))
         (cond
+         ((rontolisp::%clojure-rd-data-readers-p)
+          (rontolisp::%clojure-rd-data-read tag value))
          ((string= tag "inst") (rontolisp::%clojure-instant-read-date value))
          ((string= tag "uuid") (rontolisp::%clojure-read-uuid value))
          (t (rontolisp::%clojure-runtime-exception
@@ -9968,6 +9976,71 @@
                     (concatenate 'string
                                  "Unreadable constructor form starting with \"#"
                                  tag "\""))))))))
+
+(defun rontolisp::%clojure-rd-record-tag-p (tag)
+  "Whether the tag TAG names a record class: its name -- what follows the first
+   slash of a qualified tag -- is dotted, the oracle's
+   sym.getName().contains(\".\")."
+  (let ((slash (search "/" tag)))
+    (search "." (if slash (subseq tag (+ slash 1)) tag))))
+
+;;;; Data readers: *data-readers* and *default-data-reader-fn*.
+;;
+;; The oracle's LispReader reads a tagged literal through the function
+;; *data-readers* maps its tag symbol to, then default-data-readers (#inst,
+;; #uuid), then *default-data-reader-fn* of the tag and the value, and refuses
+;; a tag none of them reads; a nil answer is its dispatch reader's No dispatch
+;; macro. Both specials are read here only, through one arm whose producers
+;; are the two specials themselves (ClojureArms DATA_READERS): a program naming
+;; neither -- and having no data_readers.clj, whose map the lowering makes the
+;; root of *data-readers* -- reads as it did before. They are defined here,
+;; ahead of a compiled program's definitions of them, so the interpreter,
+;; which keeps every arm, finds them bound; a program's data readers replace
+;; the empty root (ClojureDataReaders, defparameter).
+
+(defvar rontolisp::%clojure-data-readers
+  (make-hash-table :test 'equal)
+  "*data-readers*: the map from a tag symbol to the function reading its
+   tagged literals.")
+
+(defvar rontolisp::%clojure-default-data-reader-fn
+  nil
+  "*default-data-reader-fn*: the function of a tag and a value reading a
+   tagged literal no data reader reads, or NIL.")
+
+(defun rontolisp::%clojure-rd-data-readers-p ()
+  "Whether a tagged literal reads through *data-readers*: the DATA_READERS
+   arm test, which a program naming neither special folds."
+  t)
+
+(defun rontolisp::%clojure-rd-data-read (tag value)
+  "The tagged literal of TAG over its read VALUE: the function *data-readers*
+   maps the tag's symbol to, else the default #inst and #uuid readers, else
+   *default-data-reader-fn* of the symbol and the value, else the oracle's No
+   reader function. Each is called like any IFn (a var's root, a keyword's
+   lookup), outside the read in progress."
+  (let* ((sym (rontolisp::%clojure-rd-symbol tag))
+         (f
+          (rontolisp::%clojure-call-keyword sym rontolisp::%clojure-data-readers
+                                            nil)))
+    (cond (f (rontolisp::%clojure-rd-data-answer
+              (rontolisp::%clojure-rd-edn-call f (list value)) tag))
+          ((string= tag "inst") (rontolisp::%clojure-instant-read-date value))
+          ((string= tag "uuid") (rontolisp::%clojure-read-uuid value))
+          (rontolisp::%clojure-default-data-reader-fn
+           (rontolisp::%clojure-rd-data-answer
+            (rontolisp::%clojure-rd-edn-call
+             rontolisp::%clojure-default-data-reader-fn (list sym value)) tag))
+          (t (rontolisp::%clojure-runtime-exception
+              (concatenate 'string "No reader function for tag " tag))))))
+
+(defun rontolisp::%clojure-rd-data-answer (x tag)
+  "X, what a reader function answered for the tag TAG, unless it is nil: the
+   oracle's dispatch reader takes a nil answer for no reader at all."
+  (if (null x)
+      (rontolisp::%clojure-runtime-exception
+       (concatenate 'string "No dispatch macro for: " (string (char tag 0))))
+      x))
 
 (defun rontolisp::%clojure-rd-build-record (tag items map-body)
   "The record of class TAG over the body ITEMS: keyword/value pairs when

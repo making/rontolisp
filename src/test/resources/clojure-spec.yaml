@@ -8305,6 +8305,43 @@ cases:
       false true
       true false 0 1
       #inst "2019-12-31T23:00:00.123456789-00:00"
+  - name: data-readers-read-a-tag-at-run-time-like-the-oracle
+    # *data-readers* maps a tag symbol to the function read-string and read call for its
+    # tagged literals (#my.ns/tag too: only a dotted name is a record class), ahead of the
+    # default #inst and #uuid readers; *default-data-reader-fn* takes the tag and the value
+    # of a tag none of them reads; a nil answer is the oracle's No dispatch macro, a
+    # thrown exception the function's own. Without a data_readers file *data-readers* starts
+    # empty, and default-data-readers names the two defaults' vars. Every line is the
+    # oracle's (clj 1.12.6.1673, 2026-10-08), on all four backends.
+    source: |
+      (defn dr-tag [x] [:tagged x])
+      (prn (binding [*data-readers* {'my/tag dr-tag 'my.ns/tag #'dr-tag}] [(read-string "#my/tag 1") (read-string "#my.ns/tag 2")]))
+      (prn (binding [*data-readers* {'my/tag (fn [x] nil)}] (try (read-string "#my/tag 1") (catch Exception e (ex-message e)))))
+      (prn (binding [*data-readers* {'inst (fn [x] [:inst x])}] (read-string "#inst \"2020\"")))
+      (prn (binding [*default-data-reader-fn* (fn [t v] [t v])] [(read-string "#foo/bar 3") (read-string "#inst \"1970\"")]))
+      (prn (binding [*default-data-reader-fn* (fn [t v] nil)] (try (read-string "#foo/bar 1") (catch Exception e (ex-message e)))))
+      (prn (binding [*data-readers* {'k/w :k}] (read-string "#k/w {:k 4}")))
+      (prn (try (read-string "#my.ns/tag 1") (catch Exception e (ex-message e))))
+      (prn *data-readers* *default-data-reader-fn*)
+      (prn (get default-data-readers 'inst) (get default-data-readers 'uuid) (count default-data-readers))
+      (prn ((get default-data-readers 'uuid) "1-1-1-1-1") (try ((get default-data-readers 'uuid) 1) (catch Exception e (ex-message e))))
+      (prn (with-in-str "#my/tag [1 2]" (binding [*data-readers* {'my/tag dr-tag}] (read))))
+      (prn (binding [*data-readers* {'my/tag dr-tag}] (read-string "[#my/tag #my/tag 1 #_#my/tag 2]")))
+      (prn (binding [*data-readers* {'my/tag (fn [x] (throw (ex-info "no" {:x x})))}] (try (read-string "#my/tag 1") (catch clojure.lang.ExceptionInfo e [(ex-message e) (ex-data e)]))))
+    expected: |
+      [[:tagged 1] [:tagged 2]]
+      "No dispatch macro for: m"
+      [:inst "2020"]
+      [[foo/bar 3] #inst "1970-01-01T00:00:00.000-00:00"]
+      "No dispatch macro for: f"
+      4
+      "No reader function for tag my.ns/tag"
+      {} nil
+      #'clojure.instant/read-instant-date #'clojure.uuid/default-uuid-reader 2
+      #uuid "00000001-0001-0001-0001-000000000001" "#uuid data reader expected string"
+      [:tagged [1 2]]
+      [[:tagged [:tagged 1]]]
+      ["no" {:x 1}]
   - name: inst-and-uuid-values-dispatch-and-cross-macros-like-the-oracles
     # A multimethod on class and a protocol dispatch on java.util.Date and
     # java.util.UUID (a Timestamp takes the Date method through the class hierarchy), instance?

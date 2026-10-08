@@ -349,8 +349,15 @@
 - `#inst` と `#uuid` は、すべてのバックエンドでオラクルの `java.util.Date` と
   `java.util.UUID` として読まれます。わずかな違い（インスタントの `str` は UTC で答える、
   interop で得たホストの値は読んだ値と `=` にならない）は[インスタントと UUID](reference/instants.md)
-  にあります。`*data-readers*` と `data_readers.clj` は読まないため、ドットを含まないそれ以外の
-  タグには、ソースでも `read-string` でもリーダ関数がありません。
+  にあります。
+- データリーダはプログラムのコンパイル時に動くので、ソースでの答えはメタデータを失い、ここで
+  綴れる値でなければなりません。関数、deftype のインスタンス、UUID・Date 以外のホストの
+  オブジェクトは `Can't embed object in code` です（オラクルは `print-dup` で印字できるものを
+  コンパイルします）。ここでは `()` が `nil` なので、空リストの答えは `No dispatch macro` です。
+  `*data-readers*` や `*default-data-reader-fn*` の `set!` は `read-string` と `read` の読み方を
+  変えますが、プログラムのソースの読み方は変えません（オラクルのロードはファイルの後続の
+  フォームを、REPL は後続の入力をそれで読みます）。エントリファイル自身のルートの
+  `data_readers` のファイルも数えます（オラクルはクラスパスのものだけを読みます）。
 - `*out*`/`*in*`/`*err*` は `*standard-output*`/`*standard-input*`/`*error-output*`
   です（再束縛は標準ストリームの再束縛になります）。ルートで読んだ `*out*` と `*in*` は
   プロセスの標準ストリームを指すストリーム値です。
@@ -392,8 +399,9 @@
   `ring/ring-core` の座標がなくてもロードでき（oracle では座標が必要です）、同梱より古い ring-core
   の代わりにもなります。コマンドライン以外では `pom.xml` のプロジェクトも読みません。そのモデルの検証は
   oracle の strict ではなく Maven の minimal の水準なので、strict の検査だけが拒否する POM
-  （ディレクトリのないリソースなど）も読みます。ライブラリの `data_readers.clj` は読みません。
-  そのタグはほかの未知のタグと同じく拒否します。`settings.xml` の認証情報で応じるのは
+  （ディレクトリのないリソースなど）も読みます。取得しないライブラリはデータリーダも与えません。
+  その `data_readers.clj` だけが対応づけるタグにはリーダ関数がなく、そのライブラリを挙げて拒否します。
+  `settings.xml` の認証情報で応じるのは
   Basic 認証だけで（oracle は Digest と NTLM にも応じます）、ダウンロードは `maven-metadata.xml` も含めて
   常に `.sha1` と照合します（oracle の既定は警告だけです）。どのリポジトリにもなかったファイルは
   そのリポジトリの更新ポリシーが許すまで問い合わせ直しません。既定は `:daily` で、`:update` で

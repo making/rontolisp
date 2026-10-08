@@ -120,6 +120,24 @@ class ClojureLibraryTest {
 	}
 
 	@Test
+	void aProgramNamingNoDataReaderSplicesTheReaderWithoutItsDataReaderClause() {
+		// only *data-readers* and *default-data-reader-fn* install a data reader (the
+		// lowering names the first for a program whose data_readers files map a tag): a
+		// plain read-string reads a tag through the two default readers alone
+		assertThat(defun(ClojureLibrary.forms(), "RONTOLISP::%CLOJURE-RD-RECORD-OF"))
+			.contains("(RONTOLISP::%CLOJURE-RD-DATA-READERS-P)");
+		List<LispVal> plain = ClojureLibrary.process(Clojure.read("(prn (read-string \"#inst \\\"1970\\\"\"))", null));
+		assertThat(defun(plain, "RONTOLISP::%CLOJURE-RD-RECORD-OF")).doesNotContain("%CLOJURE-RD-DATA-READ")
+			.contains("No reader function for tag ");
+		for (String named : List.of("*data-readers*", "*default-data-reader-fn*")) {
+			List<LispVal> reading = ClojureLibrary.process(Clojure
+				.read("(prn (binding [" + named + " " + named + "] (read-string \"#inst \\\"1970\\\"\")))", null));
+			assertThat(defun(reading, "RONTOLISP::%CLOJURE-RD-RECORD-OF")).as(named)
+				.contains("(RONTOLISP::%CLOJURE-RD-DATA-READERS-P)");
+		}
+	}
+
+	@Test
 	void aProgramReadingWithoutOptionsSplicesTheReaderWithoutItsPreserveClauses() {
 		// only a read that may take {:read-cond :preserve} and the two constructors make
 		// a reader conditional or tagged literal: a plain read-string compiles the

@@ -82,6 +82,8 @@ oracle と同じく無視します。oracle の spec が拒否する値、どの
   循環は選択済みのライブラリで止まります。
 - ソースパスは、エントリファイル自身のルート、プロジェクトの `:paths`、選ばれた各ライブラリの
   ルート（oracle のクラスパスと同じく、ツリーの上から）、最後に組み込みの名前空間の順です。
+  ルートにある `data_readers.clj` と `data_readers.cljc` がプログラムのデータリーダを与えます
+  （[タグ付きリテラル](syntax.md#tagged-literals)）。
 - `org.clojure/clojure`、`org.clojure/spec.alpha`、`org.clojure/core.specs.alpha` は、バージョンに
   かかわらずこのフロントエンド自身です。`ring/ring-core` と `ring/ring-codec` は、同梱のバージョン
   （ring-core 1.15.5、ring-codec 1.3.0）以下の Maven バージョンなら組み込みの Ring 名前空間です。
@@ -323,7 +325,8 @@ docstring の `:doc`、名前のメタデータと attr マップ（定義の位
 `binding` は `^:dynamic` な var と `clojure.core` の特殊変数を動的エクステントで
 再束縛します。それ以外は拒否されます。`*out*`/`*in*`/`*err*` は `*standard-output*`/
 `*standard-input*`/`*error-output*` です。フラグは `clojure -M` でのオラクルの値を持ち
-（`*print-length*` は `nil`、`*assert*` は `true`、`*data-readers*` は `{}`、
+（`*print-length*` は `nil`、`*assert*` は `true`、`*data-readers*` はプログラムの
+データリーダ（なければ `{}`）、
 `*command-line-args*` はプログラムの引数、`*clojure-version*` は 1.12.6 など）、
 プリンタは `*print-length*`、`*print-level*`、`*print-readably*`、`*print-meta*`、
 `*print-namespace-maps*` に従い（キーが一つの名前空間を共有するマップは `#:a{:b 1}` と
@@ -401,8 +404,9 @@ ClojureScript の `^:mutable` は指定になりません。ローカル・パ�
 すべてのバックエンドで読みます。答えは同じテキストをクオートしたときの値と同じです。
 数・文字列・文字・キーワード（`::kw` は呼び出し元の名前空間で解決）・コレクションを
 同じように読み、メタデータは捨て、`#_` は読み飛ばします。レコードリテラルは
-プログラムが定義するクラスのレコードを組みます。`#=` の読み取り時評価とタグ付きリテラルは
-ソースと同様に拒否され、リーダ条件は `{:read-cond :allow}` のとき `.cljc` ファイルと同様に読まれます。リーダとして渡せるのは
+プログラムが定義するクラスのレコードを組みます。`#=` の読み取り時評価はソースと同様に
+拒否され、タグ付きリテラルはオラクルと同じく `*data-readers*`、`#inst` と `#uuid` の既定の
+リーダ、`*default-data-reader-fn*` の順に読まれ、リーダ条件は `{:read-cond :allow}` のとき `.cljc` ファイルと同様に読まれます。リーダとして渡せるのは
 `clojure.java.io/reader`、`*in*`、それらや `java.io.StringReader` の上の
 `java.io.PushbackReader`/`BufferedReader`/`InputStreamReader` で、いずれもどのバックエンドでも
 ストリームです。`read` はリーダをデータの直後に残します。`str` はオラクル同様、

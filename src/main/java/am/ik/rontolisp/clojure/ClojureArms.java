@@ -257,7 +257,8 @@ public final class ClojureArms {
 				"RONTOLISP::%CLOJURE-RD-SET", "RONTOLISP::%CLOJURE-RD-SUPPRESSED", "RONTOLISP::%CLOJURE-RD-SYMBOL",
 				"RONTOLISP::%CLOJURE-RD-SYMBOLIC", "RONTOLISP::%CLOJURE-RD-WRAP", "RONTOLISP::%CLOJURE-RD-ATOM-OF",
 				"RONTOLISP::%CLOJURE-RD-NS-MAP", "RONTOLISP::%CLOJURE-RD-NS-MAP-OF", "RONTOLISP::%CLOJURE-RD-NS-KEY",
-				"RONTOLISP::%CLOJURE-RD-IDENT", "RONTOLISP::%CLOJURE-RD-EDN-FORM-AT", "RONTOLISP::%CLOJURE-RD-EDN-ATOM",
+				"RONTOLISP::%CLOJURE-RD-IDENT", "RONTOLISP::%CLOJURE-RD-DATA-READ",
+				"RONTOLISP::%CLOJURE-RD-EDN-FORM-AT", "RONTOLISP::%CLOJURE-RD-EDN-ATOM",
 				"RONTOLISP::%CLOJURE-RD-EDN-DISPATCH", "RONTOLISP::%CLOJURE-RD-EDN-TAGGED",
 				"RONTOLISP::%CLOJURE-EDN-FROM", "RONTOLISP::%CLOJURE-EDN-READ-STRING-1",
 				"RONTOLISP::%CLOJURE-EDN-READ-STRING", "RONTOLISP::%CLOJURE-EDN-READ",
@@ -317,6 +318,17 @@ public final class ClojureArms {
 						"RONTOLISP::%CLOJURE-EDN-READ", "RONTOLISP::%CLOJURE-EDN-READ-STRING-V",
 						"RONTOLISP::%CLOJURE-EDN-READ-V"),
 				Set.of()),
+
+		/**
+		 * A data reader, which the run-time reader asks for a tagged literal ahead of the
+		 * default {@code #inst} and {@code #uuid}, and {@code *default-data-reader-fn*}
+		 * after them: only a program naming {@code *data-readers*} or
+		 * {@code *default-data-reader-fn*} can install one -- the lowering names the
+		 * first for a program whose {@code data_readers.clj} files map a tag and that
+		 * reads at run time ({@link ClojureDataReaders#noteRuntimeReads}).
+		 */
+		DATA_READERS("data-readers", Set.of("RONTOLISP::%CLOJURE-RD-DATA-READERS-P"), Set.of(), Map.of(),
+				Set.of("RONTOLISP::%CLOJURE-DATA-READERS", "RONTOLISP::%CLOJURE-DEFAULT-DATA-READER-FN"), Set.of()),
 
 		/**
 		 * A reader conditional or a tagged literal, which the printer, {@code str},

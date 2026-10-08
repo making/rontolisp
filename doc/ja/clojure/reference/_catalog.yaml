@@ -496,6 +496,7 @@ categories:
       - { slug: read, name: "read" }
       - { slug: reader-conditional, name: "reader-conditional" }
       - { slug: tagged-literal, name: "tagged-literal" }
+      - { slug: default-data-readers, name: "default-data-readers" }
       - { slug: format, name: "format" }
       - { slug: with-open, name: "with-open" }
       - { slug: with-out-str, name: "with-out-str" }

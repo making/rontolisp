@@ -18,7 +18,16 @@ class ClojureReaderTest {
 	}
 
 	private static String printed(String source) {
-		return read(source).stream().map(LispVal::print).toList().toString();
+		return printedOf(read(source));
+	}
+
+	private static String printedOf(List<LispVal> datums) {
+		return datums.stream().map(LispVal::print).toList().toString();
+	}
+
+	/** The second read of the text, asking the data readers for every undotted tag. */
+	private static List<LispVal> readAgain(String source, ClojureReader.Tags tags) {
+		return new ClojureReader(source, null).again(tags).readAll();
 	}
 
 	@Test
@@ -294,7 +303,7 @@ class ClojureReaderTest {
 	@Test
 	void recordLiteralRefusalsMatchTheOracle() {
 		// an undotted tag is a tagged literal, and none has a reader function
-		assertThatThrownBy(() -> read("#P{:a 1}")).isInstanceOf(LispReadException.class)
+		assertThatThrownBy(() -> readAgain("#P{:a 1}", ClojureReader.Tags.NONE)).isInstanceOf(LispReadException.class)
 			.hasMessageContaining("No reader function for tag P");
 		assertThatThrownBy(() -> read("#user.P(1)")).isInstanceOf(LispReadException.class)
 			.hasMessageContaining("Unreadable constructor form starting with \"#user.P\"");
@@ -317,20 +326,31 @@ class ClojureReaderTest {
 
 	@Test
 	void instAndUuidRefusalsAreTheOraclesAfterTheirForm() {
-		assertThatThrownBy(() -> new ClojureReader("(def x #inst \"2021-02-29\")", "a.clj").readAll())
+		// a data reader of the tag may take what the default refuses, so the second read
+		// refuses, where no data reader takes it
+		assertThatThrownBy(
+				() -> new ClojureReader("(def x #inst \"2021-02-29\")", "a.clj").again(ClojureReader.Tags.NONE)
+					.readAll())
 			.isInstanceOf(LispReadException.class)
 			.hasMessage("a.clj:1:26: failed: (<= 1 days (days-in-month months (leap-year? years)))");
-		assertThatThrownBy(() -> new ClojureReader("[1 #uuid \"bad\"]", "a.clj").readAll())
+		assertThatThrownBy(
+				() -> new ClojureReader("[1 #uuid \"bad\"]", "a.clj").again(ClojureReader.Tags.NONE).readAll())
 			.isInstanceOf(LispReadException.class)
 			.hasMessage("a.clj:1:15: Invalid UUID string: bad");
-		assertThatThrownBy(() -> read("#inst \"2020-1-1\"")).isInstanceOf(LispReadException.class)
+		assertThatThrownBy(() -> readAgain("#inst \"2020-1-1\"", ClojureReader.Tags.NONE))
+			.isInstanceOf(LispReadException.class)
 			.hasMessageContaining("Unrecognized date/time syntax: 2020-1-1");
-		assertThatThrownBy(() -> read("#inst 2020")).isInstanceOf(LispReadException.class)
+		assertThatThrownBy(() -> readAgain("#inst 2020", ClojureReader.Tags.NONE)).isInstanceOf(LispReadException.class)
 			.hasMessageContaining("a timestamp needs a string");
-		assertThatThrownBy(() -> read("#uuid :a")).isInstanceOf(LispReadException.class)
+		assertThatThrownBy(() -> readAgain("#uuid :a", ClojureReader.Tags.NONE)).isInstanceOf(LispReadException.class)
 			.hasMessageContaining("#uuid data reader expected string");
-		assertThatThrownBy(() -> read("#uuid \"1-1-1-1-8000000000000000\"")).isInstanceOf(LispReadException.class)
+		assertThatThrownBy(() -> readAgain("#uuid \"1-1-1-1-8000000000000000\"", ClojureReader.Tags.NONE))
+			.isInstanceOf(LispReadException.class)
 			.hasMessageContaining("Error at index 15 in: \"8000000000000000\"");
+		ClojureReader first = new ClojureReader("[#inst 2020 #uuid :a]", null);
+		assertThat(printedOf(first.readAll()))
+			.isEqualTo("[(|%vector| (|%pending-tag| |inst| 2020) (|%pending-tag| |uuid| :|a|))]");
+		assertThat(first.pendingTags()).isEqualTo(2);
 		// a repeated key names the oracle's toString of the earlier one
 		assertThatThrownBy(() -> read("{#inst \"2020\" 1 #inst \"2020-01-01T00:00:00Z\" 2}"))
 			.isInstanceOf(LispReadException.class)
@@ -342,6 +362,62 @@ class ClojureReaderTest {
 		assertThatThrownBy(() -> new ClojureReader("[#?@(:clj #inst \"2020\")]", "a.cljc").readAll())
 			.isInstanceOf(LispReadException.class)
 			.hasMessageContaining("Spliced form list in read-cond-splicing must implement java.util.List");
+	}
+
+	@Test
+	void aFirstReadLeavesATaggedLiteralToTheDataReaders() {
+		// what reads in its place is the second read's: the first counts it
+		ClojureReader first = new ClojureReader("(f #my/tag [1 2] #inst \"1970\" #?(:cljs #js {}))", "a.cljc");
+		assertThat(printedOf(first.readAll()))
+			.isEqualTo("[(|f| (|%pending-tag| |my/tag| (|%vector| 1 2)) (|%inst| 0))]");
+		assertThat(first.pendingTags()).isEqualTo(1);
+		assertThat(first.defaultTags()).isEqualTo(1);
+		// two of one tag over one form are no duplicate key: their values may differ
+		assertThat(read("#{#my/tag 1 #my/tag 1}")).hasSize(1);
+	}
+
+	@Test
+	void aTagIsARecordClassOnlyWhenItsNameIsDotted() {
+		// measured on clj 1.12.6: #my.ns/tag is a tagged literal, #a.b and #my.ns/a.b
+		// records
+		assertThat(printed("#my.ns/tag 1")).isEqualTo("[(|%pending-tag| |my.ns/tag| 1)]");
+		assertThat(printed("#a.b{} #my.ns/a.b[]"))
+			.isEqualTo("[(|%record| |a.b| (|%hash-map|)), (|%record| |my.ns/a.b| (|%vector|))]");
+	}
+
+	@Test
+	void theDataReadersReadATagAfterItsFormLikeTheOracle() {
+		List<String> asked = new java.util.ArrayList<>();
+		ClojureReader.Tags tags = (tag, form) -> {
+			asked.add(tag + " " + form.print());
+			return tag.startsWith("my/") || tag.equals("inst")
+					? ClojureLowerUtil.list(ClojureReader.VECTOR, new am.ik.rontolisp.LispSymbol(":tagged"), form)
+					: null;
+		};
+		// inner first, a discarded one too; a default tag a data reader takes reads
+		// through it, and any other tag without one is no reader function
+		assertThat(printedOf(readAgain("[#my/a #my/b 1 #_#my/c 2 #inst \"x\" #uuid \"1-1-1-1-1\"]", tags)))
+			.isEqualTo("[(|%vector| (|%vector| :|tagged| (|%vector| :|tagged| 1)) (|%vector| :|tagged| \"x\") "
+					+ "(|%uuid| 4295032833 281474976710657))]");
+		assertThat(asked).containsExactly("my/b 1", "my/a (|%vector| :|tagged| 1)", "my/c 2", "inst \"x\"",
+				"uuid \"1-1-1-1-1\"");
+		// the form reads first: an unfinished one is the end of the input
+		assertThatThrownBy(() -> readAgain("#foo/bar [1", tags)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("unclosed form");
+		assertThatThrownBy(() -> new ClojureReader("(f #foo/bar 1)", "a.clj").again(tags).readAll())
+			.isInstanceOf(LispReadException.class)
+			.hasMessage("a.clj:1:14: No reader function for tag foo/bar");
+		// a refusal of the data reader stands after the form too
+		ClojureReader.Tags refusing = (tag, form) -> {
+			throw new LispReadException("Attempting to call unbound fn: #'x/y");
+		};
+		assertThatThrownBy(() -> new ClojureReader("[#my/tag 1]", "a.clj").again(refusing).readAll())
+			.isInstanceOf(LispReadException.class)
+			.hasMessage("a.clj:1:11: Attempting to call unbound fn: #'x/y");
+		// the values are what a map or set compares
+		ClojureReader.Tags constant = (tag, form) -> new am.ik.rontolisp.LispSymbol(":k");
+		assertThatThrownBy(() -> readAgain("#{#my/tag 1 #my/tag 2}", constant)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Duplicate key: :k");
 	}
 
 	@Test

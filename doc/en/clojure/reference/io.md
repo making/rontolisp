@@ -16,6 +16,7 @@ Clojure-notation arguments.
 | `read` | `(read (java.io.PushbackReader. (jio/reader path)))` | the first datum |
 | `reader-conditional` | `(reader-conditional '(:clj 1) false)` | `#?(:clj 1)` |
 | `tagged-literal` | `(tagged-literal 'js {})` | `#js {}` |
+| `default-data-readers` | `(get default-data-readers 'inst)` | `#'clojure.instant/read-instant-date` |
 | `format` | `(format "%s=%d" :a 5)` | `":a=5"` |
 | `with-open` | `(with-open [] :ok)` | `:ok` |
 | `with-out-str` | `(with-out-str (print 1))` | `"1"` |
