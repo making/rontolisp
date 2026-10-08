@@ -28380,6 +28380,31 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void floatComparisonOperand() throws Exception {
+		// The interpreter twin is LispEvaluatorTest#floatComparisonOperand. A double
+		// literal beside an unproven operand tests it for a float box at the site (not
+		// under --optimize=size), and _rat_cmp_bits compares a float against a float, an
+		// i31 or a boxed i64 within 2^53 as f64 -- exact for every one of them.
+		String[][] fixtures = {
+				{ am.ik.rontolisp.FloatComparisonOperandFixture.SOURCE,
+						am.ik.rontolisp.FloatComparisonOperandFixture.EXPECTED, "fco" },
+				{ am.ik.rontolisp.FloatComparisonOperandFixture.COMPLEX_SOURCE,
+						am.ik.rontolisp.FloatComparisonOperandFixture.COMPLEX_EXPECTED, "fcc" } };
+		for (String[] fixture : fixtures) {
+			List<LispVal> program = am.ik.rontolisp.cli.CompileFrontendAccess.corpus(fixture[0],
+					am.ik.rontolisp.reader.Features.WASM, true, false);
+			for (OptimizeLevel level : OptimizeLevel.values()) {
+				assertThat(runModule(WasmLispCompiler.builder().optimize(level).build().compile(program),
+						fixture[2] + "-" + level + ".wasm"))
+					.as("%s at level %s", fixture[2], level)
+					.isEqualTo(fixture[1]);
+			}
+			assertThat(compileComponentAndRunProgram(program)).as("%s as a component", fixture[2])
+				.isEqualTo(fixture[1]);
+		}
+	}
+
+	@Test
 	void ehAnUncaughtDivisionByZeroReportsBeforeTrapping() throws Exception {
 		// EH mode without a handler around the division: the entry landing pad reports
 		// it as the interpreter does. Outside EH mode it is still the bare trap.

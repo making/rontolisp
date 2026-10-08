@@ -684,7 +684,10 @@ before the library splice.
   1.30-1.53 s -> 1.48-1.62 s, JVM 0.11-0.12 s both; `(+ s (long (quot i 3)) (int (* i 0.5)))`
   wasm 2.96-3.44 s -> 4.17-4.33 s (a double cast pays one generic float compare,
   `_rat_cmp_bits`, ~20 ns there; the first worker's four compares cost twice that), JVM
-  2.5-2.8 s both. Interpreter, 1M iterations: 3.0 s -> 5.0 s and 3.8 s -> 8.0 s (the worker is
+  2.5-2.8 s both. Since `_rat_cmp_bits`'s f64 arm and the literal-site float test
+  (`.kb/wasm-bignum.md`, 2026-10-08) the second loop is 4.43 -> 4.17 s (best of 5): the
+  `(< (abs x) 9.2e18)` test is now a raw f64 compare, and what is left is the generic `abs`,
+  the two `_as_f64` calls of `truncate` and the integer range tests. Interpreter, 1M iterations: 3.0 s -> 5.0 s and 3.8 s -> 8.0 s (the worker is
   interpreted Lisp). An inline arm answering an in-range integer before the call took the
   interpreter's integer loop to 3.9-4.0 s, left the compiled ones level, and cost ~250 B wasm
   / ~650 B class per call site; not made. A `count` argument is not cast (an int already).

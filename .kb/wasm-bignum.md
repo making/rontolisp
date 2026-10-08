@@ -168,8 +168,8 @@ power of ten is built by squaring (`_big_mul`; one `* 10` per digit cost 90 us f
   of the mantissa, `_big_ash`, `_big_mul`, `_big_cmp`; no new runtime function),
   so `(= 0.6666666666666666 2/3)` answers NIL here as on the interpreter and
   the JVM (2/3 sits within 2^-54 of its float -- strictly inside half an ulp,
-  so no component bound could save the old f64 coercion). Both-float pairs
-  keep the f64 ladder (bit-identical values compare identically); NaN stays
+  so no component bound could save the old f64 coercion). A float against a
+  float, an i31 or a boxed i64 within 2^53 takes the f64 arm (below); NaN stays
   unordered; infinities decide by side; a float against a non-exact operand
   keeps the old `_as_f64` behavior including its `_type_err_*` traps. The
   comparison and min/max call sites take the unboxed f64 path only when BOTH
@@ -186,6 +186,26 @@ power of ten is built by squaring (`_big_mul`; one `* 10` per digit cost 90 us f
   interpreter-vs-WASM-GC differential sweep with 0 mismatches. ci-spec
   `float-exact-comparison` pins a 17-digit near tie since the ratio components
   became exact (`--no-gc`, with no ratio, is no ci-spec leg).
+- **The f64 arm and the literal site (2026-10-08)**: `_rat_cmp_bits` compares two f64 values
+  whenever each operand is a float, an i31 or a boxed i64 within [-2^53, 2^53] (the values a
+  double holds exactly, so the f64 answer IS the exact one), reading each box once
+  (`emitExactF64OrBreak`) and building the mask branch-free; it used to call `_as_f64` up to
+  six times for two floats and ran the bignum cross-multiplication for a float against ANY
+  integer. A comparison with ONE double-literal operand and the other unproven
+  (`WasmComparisonCompiler.emitLiteralGuarded`) tests the other for a float box at the site:
+  raw `f64` against the literal, else `_rat_cmp_bits`; a speed trade, so not under
+  `--optimize=size`. The condition path (`tryCompileConditionI32`) no longer declines a
+  double-literal form: it emits the same float paths raw instead of boxing `t`/nil. Measured
+  (P1, 20M calls of `(defun f (x) (if TEST 0 (truncate x)))` over `(* i 0.5)`, best of 5, load
+  ~15, bare `truncate` 565 / 561 ms), before -> after: `(> x 9.2e18)` 871 -> 640;
+  `(> x *global*)` 851 -> 758; `(/= x x)` 1163 -> 684; `(> x 1073741823)` 2621 -> 709;
+  `(> x 2147483647)` 3335 -> 825 ms. Not made: the same guard for TWO unproven operands
+  (`(> x *global*)`, ~5 ns over the literal site): it would add ~30 B and a failed `ref.test`
+  to every generic comparison, most of which meet integers. Pinned by
+  `FloatComparisonOperandFixture` (`LispEvaluatorTest#floatComparisonOperand` and its JVM and
+  WASM twins, every optimize level and the component); a ~21,000-comparison sweep (43 values
+  across every tier and boundary, pairwise and against nine literal sites, value and test
+  position) printed identically on all four backends, `--optimize=size` and the old jar.
 - `isqrt` (`WasmIsqrtCompiler`) takes f64 for an i31 (or float) operand and an exact Newton
   iteration over `_big_intlen`/`_big_ash`/`_big_divrem`/`_big_add`/`_big_cmp` for the two wide
   tiers -- the f64 path trapped past 2^31 and rounded past 2^53 (2026-09-17). `random`'s
