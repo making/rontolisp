@@ -3220,7 +3220,7 @@ cases:
     # mapping, so every backend agrees. A syntax-quoted macro name qualifies with its
     # namespace (this case runs in lit), like the oracle's
     # (lit/sp-chain4 (. a b) (c)); the macroexpand at run time still resolves a
-    # bare head through the call site's namespace (sp-chain2's plain quote).
+    # bare head in *ns*, lit (sp-chain2's plain quote).
     source: |
       (defmacro sp-chain1 [x form] (list '. x form))
       (defmacro sp-chain2 ([x form] (list '. x form)) ([x form & more] (concat (list 'sp-chain2 (list '. x form)) more)))
@@ -8363,6 +8363,31 @@ cases:
     expected: |
       (+ 1 (clojure.core/* 2 (clojure.core/* 2 3)))
       [(clojure.core/* 2 1) {:k (clojure.core/* 2 2)}]
+  - name: a-run-time-expansion-resolves-a-bare-head-in-the-current-namespace
+    # macroexpand resolves its head in *ns* when it runs: macroexpand-all, a
+    # clojure.walk function, expands mac5's bare macro while *ns* is mac5; the user
+    # macro walk-twice is no name there; once *ns* is user again, a mac5 function
+    # resolves a bare head in user. Every line is the oracle's (clj 1.12.6, loading
+    # the file).
+    source: |
+      (ns mac5 (:require [clojure.walk :as w]))
+      (defmacro twice [x] `(* 2 ~x))
+      (defmacro expanded [form] (list 'quote (macroexpand form)))
+      (prn (w/macroexpand-all '(+ 1 (twice (twice 3)))))
+      (prn (expanded (twice 4)))
+      (prn (macroexpand '(walk-twice 1)))
+      (defn mac5-expand [f] (macroexpand f))
+      (in-ns 'user)
+      (prn (mac5/mac5-expand '(twice 1)))
+      (prn (mac5/mac5-expand '(mac5/twice 1)))
+      (prn (mac5/mac5-expand '(walk-twice 1)))
+    expected: |
+      (+ 1 (clojure.core/* 2 (clojure.core/* 2 3)))
+      (clojure.core/* 2 4)
+      (walk-twice 1)
+      (twice 1)
+      (clojure.core/* 2 1)
+      (clojure.core/* 2 1)
   - name: clojure-edn-reads-data-only
     # clojure.edn reads data only, like the oracle's EdnReader (.kb/clojure-frontend.md
     # "Reading"): the quote is a symbol constituent, the reader macros of code and

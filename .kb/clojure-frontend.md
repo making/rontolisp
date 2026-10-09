@@ -2166,9 +2166,11 @@ the file), `default-streams-impl` a map. Until then only `reader` resolved, as a
 - **The run-time table of a whole program holds an index, not the expander**:
   `(setq |c%ns/m%macro| 3)`, and every expander sits in one `C%MACRO-EXPANDER`
   (`(case id (0 expander) ...)`) that only `C%MACRO-FN` calls, which only
-  `C%MACROEXPAND(-1)` call. `ClojureLowering.programMacroRuntimeForms` keys the four in
-  `LibraryDefunPruner`, so a program lowering no `macroexpand`/`macroexpand-1` call or
-  value loses all of them before Pass 2 -- and with them every function an expander's
+  `C%MACROEXPAND(-1)` call. A program lowering no `macroexpand`/`macroexpand-1` call or
+  value carries none of them (`ClojureLowering.expandsAtRunTime`; until 2026-10-09 every
+  `defmacro` spliced them and the pruner took them out), and
+  `ClojureLowering.programMacroRuntimeForms` keys them in `LibraryDefunPruner`, so one
+  whose expansion is dead loses all of them before Pass 2 -- and with them every function an expander's
   body calls and every defun name its template spells. The backends' dispatch gate
   records spellings while Pass 2 emits ALL functions, dead ones included, so leaving the
   expanders to the wasm/JVM shakers did not help: the template's `'|c%ns/helper|` still
@@ -2299,9 +2301,24 @@ the file), `default-streams-impl` a map. Until then only `reader` resolved, as a
   class 196,456 -> 201,150.
 - `macroexpand-1`/`macroexpand` answer the mangled data itself, so `=` against a quoted form
   holds and the printer (demangling `c%`) spells the oracle's lowercase; a non-macro head
-  answers the form. The head resolves through the call site's namespace (the lowering
-  passes an alist of the spellings the table cannot spell itself). `gensym` is the
-  ordinary uninterned symbol.
+  answers the form. **The head resolves in `*ns*` when the expansion runs**, like the
+  oracle (2026-10-09; until then through the call site's namespace, so
+  `clojure.walk/macroexpand-all` called from `(ns mac5)` expanded none of mac5's bare
+  names): `C%MACRO-FN` reads the name out of `%clojure-ns` and asks
+  `C%MACRO-SCOPE`, a `cond` over every namespace the program defines of the alist of
+  spellings the table cannot spell itself (`ClojureMacroLowering.macroScope`: the
+  namespace's own macros but `user`'s, its refers, its alias-qualified names); else a
+  qualified mangled name reaches its table global, and a bare one only in `user`, whose
+  table spells it (a `user` macro's bare name means nothing in `mac5`). A run-time
+  expansion thus reads `*ns*` (it keeps the `NS_SWITCH` arms). A session defines
+  `C%MACRO-SCOPE` again after a buffer that changed it (`macroScopeEmitted`); the
+  macro-time evaluator's calls back into the lowering
+  (`ClojureMacroEvaluator.Lowering.macroScopeForm`), so a macro body's `macroexpand`
+  sees the scopes as they stand. Pins: clojure-spec
+  `a-run-time-expansion-resolves-a-bare-head-in-the-current-namespace` (four backends,
+  oracle-identical), `ClojureLoweringTest#aRunTimeExpansionResolvesItsHeadThroughTheScopeOfTheNamespaceItRunsIn`,
+  `ClojureSessionTest#aRunTimeExpansionResolvesInTheNamespaceALaterBufferSwitchedTo`.
+  `gensym` is the ordinary uninterned symbol.
 
 ## The IFn dispatcher stays at the call site
 
