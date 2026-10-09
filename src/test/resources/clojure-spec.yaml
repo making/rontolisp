@@ -8326,6 +8326,17 @@ cases:
       Walked: [1]
       Walked: 1
       {:a [1]}
+  - name: clojure-walk-macroexpand-all-loads-where-a-program-names-it
+    # macroexpand-all is a part of clojure.walk, loaded at its first name: a program
+    # walking data expands nothing at run time and keeps no macro expander. Outermost
+    # first, as the oracle (clj 1.12.6).
+    source: |
+      (defmacro walk-twice [x] `(* 2 ~x))
+      (prn (clojure.walk/macroexpand-all '(+ 1 (walk-twice (walk-twice 3)))))
+      (prn (clojure.walk/macroexpand-all '[(walk-twice 1) {:k (walk-twice 2)}]))
+    expected: |
+      (+ 1 (clojure.core/* 2 (clojure.core/* 2 3)))
+      [(clojure.core/* 2 1) {:k (clojure.core/* 2 2)}]
   - name: clojure-edn-reads-data-only
     # clojure.edn reads data only, like the oracle's EdnReader (.kb/clojure-frontend.md
     # "Reading"): the quote is a symbol constituent, the reader macros of code and

@@ -1752,14 +1752,16 @@ namespace` but the ones no measured library names (`inspector`, `java.browse`,
       layout events carrying their own function (`:lay`), computed from the column the
       replay has reached, the oracle's base column: blanks held back do not count.
     - The macros build their function's symbol (`(symbol "clojure.pprint" "formatter-fn")`):
-      a template spelling it armed the dispatch gate by name (`.kb/optimize-dead-code-elimination.md`;
-      every `defmacro`'s run-time expander is live, a library's helper kept by any macro of
-      its namespace naming it: e97), which kept the whole executor in every
-      program loading clojure.pprint: wasm P1 of `(prn ...)` after requiring it, 446,930 ->
-      888,123 B; with the built symbol 451,949 B, of which ~1.1 KB the shared kernels
-      (`%clojure-pp-active`, `:flush`, `:lay`), ~1 KB the two expanders, ~2 KB the dispatch
-      ladders the backend sizes before its shake (the unused executor's lambdas), ~0.5 KB
-      `*radix-pr*`.
+      a template spelling it arms the dispatch gate by name (`.kb/optimize-dead-code-elimination.md`)
+      wherever the expanders are live, which keeps the whole executor. Before 2026-10-09
+      every program loading clojure.pprint kept them (wasm P1 of `(prn ...)` after
+      requiring it, 446,930 -> 888,123 B with the plain template; 451,949 B with the
+      built symbol). Since then only a program expanding at run time keeps the expanders
+      ("Macros", the run-time table), and for it the built symbol still matters,
+      measured 2026-10-09 (`(ns x (:require [clojure.pprint])) (defmacro m ...)
+      (prn (macroexpand-1 '(m 1)))`): 456,652 B built, 894,319 B with
+      `` `(#'formatter-fn ~format-in) ``. It goes once a syntax-quote template spells no
+      defun name (an unspelled quote the walkers all read as `quote`).
     - Compiled formats are cached by control string, `cl-format`'s too (the oracle compiles
       per call; a compile is pure), the cache emptied at 512: 2,000 calls of a nine-directive
       string 32.5 -> 7.6 s on the interpreter, 1.66 -> 0.60 s as a JVM class.
@@ -2092,6 +2094,29 @@ the file), `default-streams-impl` a map. Until then only `reader` resolved, as a
   time. Docstring and attr map skipped, `&` rest works, `&form`/`&env` refused. A call
   above the definition names the missing expander; a macro has no function value; a
   later `def`/`defn` wins the call sites back.
+- **The run-time table of a whole program holds an index, not the expander**:
+  `(setq |c%ns/m%macro| 3)`, and every expander sits in one `C%MACRO-EXPANDER`
+  (`(case id (0 expander) ...)`) that only `C%MACRO-FN` calls, which only
+  `C%MACROEXPAND(-1)` call. `ClojureLowering.programMacroRuntimeForms` keys the four in
+  `LibraryDefunPruner`, so a program lowering no `macroexpand`/`macroexpand-1` call or
+  value loses all of them before Pass 2 -- and with them every function an expander's
+  body calls and every defun name its template spells. The backends' dispatch gate
+  records spellings while Pass 2 emits ALL functions, dead ones included, so leaving the
+  expanders to the wasm/JVM shakers did not help: the template's `'|c%ns/helper|` still
+  armed the helper's registry row. A session (and the macro-time evaluator) stores the
+  expander itself: a later input may expand. Measured 2026-10-09, wasm P1,
+  `(ns mac3 (:require [clojure.pprint :as pp]))` + a never-called `defn-` calling
+  `pp/cl-format` + `(prn 1)`: 452,928 B, 890,138 B with
+  ``(defmacro m [x] `(helper-never-called ~x))`` beside it; now 373,353 / 373,364 B
+  (clojure.pprint's own macros' expanders were in every such program too).
+  `clojure.walk/macroexpand-all` is a part of `clojure.walk` (`walk_macroexpand.clj`,
+  `ClojureBuiltinNamespaces.PARTS`) so walking data expands nothing: the same program
+  plus a `postwalk` of `clojure.walk`, 883,549 -> 393,566 B. A program that does expand
+  at run time keeps every expander and, through their templates, every function they
+  name. Pins: `ClojureMacroRuntimeTableTest`,
+  `ClojureLoweringTest#aWholeProgramsTableHoldsAnIndexIntoTheOneFunctionHoldingTheExpanders`,
+  `ClojureSessionTest#aLaterBufferExpandsAMacroAnEarlierOneDefined`, clojure-spec
+  `clojure-walk-macroexpand-all-loads-where-a-program-names-it`.
 - **A body sees the program's top-level definitions above the call site** (the
   oracle's form-by-form load). `ClojureMacroLowering.handOver` gives the macro evaluator
   each top-level datum's lowered forms once the datum lowered (`topLevels`, and

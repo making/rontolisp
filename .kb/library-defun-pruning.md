@@ -22,7 +22,10 @@ six of them -- see `.kb/architecture.md`, "Package rules".
 - **Part 1 — rontolisp's own libraries**: top-level `defun`/`defparameter`/`defvar`/
   `defconstant` whose name is defined by linalg, torch, vec, json (+ its `#'` wrapper defuns),
   url, or the prelude, collected from their `forms()` (`JsonLibrary.wrapperForms()` /
-  `LispPreludeLibrary.names()`).
+  `LispPreludeLibrary.names()`). Also the Clojure lowering's per-program macro runtime
+  (`ClojureLowering.programMacroRuntimeForms`: `C%MACRO-EXPANDER`, `C%MACRO-FN`,
+  `C%MACROEXPAND(-1)`), so a program expanding nothing at run time loses every macro
+  expander and what its template spells (`.kb/clojure-frontend.md`, "Macros").
 - **usocket is excluded entirely**: its `with-*` built-in macros synthesize
   `usocket:socket-close` / `usocket::%usock-guard` / `%usock-resignal` calls absent from the
   pre-expansion AST.

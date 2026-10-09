@@ -1355,6 +1355,12 @@ public final class ClojureLowering {
 	 */
 	boolean usedMacros;
 
+	/**
+	 * A whole program's macro expanders, in definition order: each {@code defmacro}'s
+	 * table global holds its index here ({@link ClojureMacroLowering#macroRuntime}).
+	 */
+	final List<LispVal> macroExpanders = new ArrayList<>();
+
 	/** Whether the macro runtime was already spliced in (files splice it inline). */
 	boolean macrosEmitted;
 
@@ -1489,7 +1495,7 @@ public final class ClojureLowering {
 		lowering.forms.addAll(1, ClojureWitLowering.referencedWrappers(lowering, lowering.forms));
 		if (lowering.usedMacros) {
 			// the macro runtime travels with the program, like the false value
-			lowering.forms.addAll(1, ClojureMacroLowering.macroRuntime(lowering));
+			lowering.forms.addAll(1, ClojureMacroLowering.macroRuntime(lowering, lowering.macroExpanders));
 		}
 		// a hierarchy meets a host class object only where the program names the host
 		lowering.noteHost(lowering.forms);
@@ -1764,7 +1770,7 @@ public final class ClojureLowering {
 		if (this.usedMacros && !this.macrosEmitted) {
 			// The macro runtime travels ahead of the buffer that first needs
 			// it, like the false binding; later buffers reuse it.
-			out.add(0, new ClojureTopLevel(ClojureMacroLowering.macroRuntime(this), false));
+			out.add(0, new ClojureTopLevel(ClojureMacroLowering.macroRuntime(this, null), false));
 			this.macrosEmitted = true;
 		}
 		if (this.usedExInfo && !this.exInfoEmitted) {
@@ -5047,6 +5053,17 @@ public final class ClojureLowering {
 	}
 
 	/**
+	 * The definitions of a whole program's macro runtime, the expander table empty: the
+	 * library pruner keys them by name, so a program no run-time expansion reaches loses
+	 * the table and every expander it holds before a backend reads the templates'
+	 * spellings ({@code ClojureMacroLowering.macroRuntime}).
+	 * @return the forms
+	 */
+	public static List<LispVal> programMacroRuntimeForms() {
+		return ClojureMacroLowering.macroRuntime(new ClojureLowering(), List.of());
+	}
+
+	/**
 	 * Every per-program runtime a lowered definition may call, for the macro-time
 	 * evaluator, in the order a program carries them: the STM, ex-info, protocol,
 	 * hierarchy and macro runtimes. A program carries only the ones it uses, so its
@@ -5063,7 +5080,7 @@ public final class ClojureLowering {
 		// a definition's dispatcher may walk: the walk finds no class at macro time
 		forms.addAll(ClojureProtocolLowering.protocolRuntime(ctx, true));
 		forms.addAll(ClojureHierarchyLowering.hierarchyRuntime(ctx));
-		forms.addAll(ClojureMacroLowering.macroRuntime(ctx));
+		forms.addAll(ClojureMacroLowering.macroRuntime(ctx, null));
 		return forms;
 	}
 

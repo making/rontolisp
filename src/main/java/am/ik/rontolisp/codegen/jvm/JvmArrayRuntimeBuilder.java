@@ -2483,6 +2483,8 @@ final class JvmArrayRuntimeBuilder {
 		// the fill pointer is nil); any other value is returned unchanged. Each element
 		// appends via StringBuilder.appendCodePoint(int) so a supplementary code point
 		// expands to its two-unit UTF-16 pair rather than being narrowed to 16 bits.
+		// The class is exact (a Lisp array is never a subclass of ArrayList): a host
+		// subclass a java: call answered is passed through, its own size / get unasked.
 		// Locals: 0 = o, 1 = list, 2 = header, 3 = n (int), 4 = sb, 5 = i (int).
 		ClassEntry sbClass = cp.classEntry("java/lang/StringBuilder");
 		ClassEntry intArrayClass = cp.classEntry("[I");
@@ -2498,8 +2500,11 @@ final class JvmArrayRuntimeBuilder {
 		MethodCode.Label svRender = sv.newLabel();
 		MethodCode.Label svStr = sv.newLabel();
 		sv.aload(0);
-		sv.instanceOf(arrayListClass);
-		sv.ifeq(svNotCv);
+		sv.ifnull(svNotCv);
+		sv.aload(0);
+		sv.invokevirtual(cp.methodRef(objectClass, "getClass", "()Ljava/lang/Class;"));
+		sv.ldc(arrayListClass);
+		sv.if_acmpne(svNotCv);
 		sv.aload(0);
 		sv.checkcast(arrayListClass);
 		sv.astore(1);

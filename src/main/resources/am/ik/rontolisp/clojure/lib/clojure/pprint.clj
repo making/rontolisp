@@ -1613,9 +1613,9 @@
 
 ;; The two macros name the function they expand to by building its symbol: a
 ;; template spelling the name would keep the function -- and the whole format
-;; executor -- in every program that loads clojure.pprint, the run-time copy of
-;; an expander holding its template's symbols, which the dispatch tables of the
-;; compiled backends count as names a call may resolve.
+;; executor -- in every program that loads clojure.pprint and expands at run
+;; time (macroexpand keeps every expander, and the dispatch tables of the
+;; compiled backends count a template's symbols as names a call may resolve).
 
 (defmacro formatter
   "A function of a stream and arguments that formats them by format-in,

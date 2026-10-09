@@ -126,10 +126,15 @@ final class ClojureBuiltinNamespaces {
 	 * resource responses make a {@code java.io.File} and a byte stream, and every program
 	 * that could make one carries the io family's arms (+44 KB on
 	 * {@code ring-hello.clj}'s wasm module, measured 2026-10-09); as a part, only a
-	 * program naming one of them does.
+	 * program naming one of them does. {@code clojure.walk}'s {@code macroexpand-all}
+	 * expands at run time, which keeps every macro expander of the program
+	 * ({@code ClojureMacroLowering.macroRuntime}); as a part, a program walking data
+	 * keeps none.
 	 */
-	private static final Map<String, Part> PARTS = Map.of("ring.util.response", new Part("ring/util/response_files.clj",
-			Set.of("file-response", "url-response", "resource-response", "resource-data")));
+	private static final Map<String, Part> PARTS = Map.of("ring.util.response",
+			new Part("ring/util/response_files.clj",
+					Set.of("file-response", "url-response", "resource-response", "resource-data")),
+			"clojure.walk", new Part("clojure/walk_macroexpand.clj", Set.of("macroexpand-all")));
 
 	/**
 	 * The part of a shipped namespace defining the var.

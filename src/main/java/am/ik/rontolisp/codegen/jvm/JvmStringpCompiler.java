@@ -58,12 +58,20 @@ final class JvmStringpCompiler {
 			ClassEntry arrayListClass = ctx.cp.classEntry("java/util/ArrayList");
 			MethodRefEntry alSize = ctx.cp.methodRef(arrayListClass, "size", "()I");
 			MethodRefEntry alGet = ctx.cp.methodRef(arrayListClass, "get", "(I)Ljava/lang/Object;");
-			ctx.body.aload(tempSlot).instanceOf(arrayListClass).ifeq(nil);
-			ctx.body.aload(tempSlot).checkcast(arrayListClass);
-			ctx.body.invokevirtual(alSize).ifeq(nil);
-			ctx.body.aload(tempSlot).checkcast(arrayListClass).iconst_0();
-			ctx.body.invokevirtual(alGet).instanceOf(ctx.objectArrayClass);
-			ctx.body.ifeq(nil);
+			JvmJavaSites javaSites = ctx.javaSites;
+			if (javaSites != null) {
+				// In a java: program the shared _jlarr: a call can answer an ArrayList
+				// (or a subclass, whose own size / get must not be asked) of its own.
+				ctx.body.aload(tempSlot).invokestatic(javaSites.direct().lispArray()).ifeq(nil);
+			}
+			else {
+				ctx.body.aload(tempSlot).instanceOf(arrayListClass).ifeq(nil);
+				ctx.body.aload(tempSlot).checkcast(arrayListClass);
+				ctx.body.invokevirtual(alSize).ifeq(nil);
+				ctx.body.aload(tempSlot).checkcast(arrayListClass).iconst_0();
+				ctx.body.invokevirtual(alGet).instanceOf(ctx.objectArrayClass);
+				ctx.body.ifeq(nil);
+			}
 			ctx.body.aload(tempSlot).checkcast(arrayListClass).iconst_0();
 			ctx.body.invokevirtual(alGet).checkcast(ctx.objectArrayClass);
 			ctx.body.arraylength();

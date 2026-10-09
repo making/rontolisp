@@ -2421,7 +2421,6 @@ final class JvmJavaDirectSites {
 		MethodCode a = new MethodCode();
 		ClassEntry string = cls("java/lang/String");
 		ClassEntry objects = cls("[Ljava/lang/Object;");
-		ClassEntry arrayList = cls("java/util/ArrayList");
 		MethodRefEntry length = method("java/lang/String", "length", "()I");
 		MethodCode.Label notNil = a.newLabel();
 		a.aload(0);
@@ -2532,20 +2531,10 @@ final class JvmJavaDirectSites {
 		a.labelBinding(cons);
 		returnCode(a, KIND_CONS);
 		a.labelBinding(notObjects);
-		// An ArrayList whose first element is an Object[] header is a Lisp array.
+		// A Lisp array: the shared test (_jlarr).
 		MethodCode.Label notArray = a.newLabel();
 		a.aload(0);
-		a.instanceOf(arrayList);
-		a.ifeq(notArray);
-		a.aload(0);
-		a.checkcast(arrayList);
-		a.invokevirtual(method("java/util/ArrayList", "isEmpty", "()Z"));
-		a.ifne(notArray);
-		a.aload(0);
-		a.checkcast(arrayList);
-		a.loadConstant(0);
-		a.invokevirtual(method("java/util/ArrayList", "get", "(I)Ljava/lang/Object;"));
-		a.instanceOf(objects);
+		a.invokestatic(lispArray());
 		a.ifeq(notArray);
 		returnCode(a, KIND_ARRAY);
 		a.labelBinding(notArray);
@@ -3322,13 +3311,13 @@ final class JvmJavaDirectSites {
 	}
 
 	// _jlarr(Object)Z: a non-empty ArrayList whose first element is an Object[] header.
+	// The class is exact (a Lisp array is never a subclass of it): a host subclass's own
+	// isEmpty / get are never asked.
 	private Method buildLispArray(Utf8Entry name, Utf8Entry desc) {
 		MethodCode a = new MethodCode();
 		ClassEntry arrayList = cls("java/util/ArrayList");
 		MethodCode.Label no = a.newLabel();
-		a.aload(0);
-		a.instanceOf(arrayList);
-		a.ifeq(no);
+		emitExactClass(a, arrayList, no);
 		a.aload(0);
 		a.checkcast(arrayList);
 		a.invokevirtual(method("java/util/ArrayList", "isEmpty", "()Z"));
@@ -3382,14 +3371,13 @@ final class JvmJavaDirectSites {
 		return new Method(name, desc, a);
 	}
 
-	// _jltab(Object)Z: a LinkedHashMap holding an ArrayList under the order key.
+	// _jltab(Object)Z: a LinkedHashMap holding an ArrayList under the order key. The
+	// class is exact, as _jlarr's is: a host subclass's own get is never asked.
 	private Method buildLispTable(Utf8Entry name, Utf8Entry desc) {
 		MethodCode a = new MethodCode();
 		ClassEntry linkedHashMap = cls(RontoHashTable.MAP_CLASS);
 		MethodCode.Label no = a.newLabel();
-		a.aload(0);
-		a.instanceOf(linkedHashMap);
-		a.ifeq(no);
+		emitExactClass(a, linkedHashMap, no);
 		a.aload(0);
 		a.checkcast(linkedHashMap);
 		a.ldc(str(RontoHashTable.ORDER_KEY));
@@ -3400,6 +3388,16 @@ final class JvmJavaDirectSites {
 		a.loadConstant(0);
 		a.ireturn();
 		return new Method(name, desc, a);
+	}
+
+	// if (v == null || v.getClass() != exact) goto no -- v in local 0.
+	private void emitExactClass(MethodCode a, ClassEntry exact, MethodCode.Label no) {
+		a.aload(0);
+		a.ifnull(no);
+		a.aload(0);
+		a.invokevirtual(method("java/lang/Object", "getClass", "()Ljava/lang/Class;"));
+		a.ldc(exact);
+		a.if_acmpne(no);
 	}
 
 	// _junm(Object)Object: the bridge's unmarshal; _junf with javaFalse, Java's false
