@@ -512,7 +512,12 @@ final class ClojureNamespaceLowering {
 			}
 		}
 		else if (all) {
-			for (String var : library ? varsOf(ns) : publicVarsOf(ctx, ns)) {
+			List<String> vars = new ArrayList<>(library ? varsOf(ns) : publicVarsOf(ctx, ns));
+			if (!library && ctx.builtinNamespaces.contains(ns)) {
+				// a part's vars too, which load where a name first reaches one
+				vars.addAll(ClojureBuiltinNamespaces.partVars(ns));
+			}
+			for (String var : vars) {
 				if (!exclude.contains(var)) {
 					ctx.ns().refers.put(rename.getOrDefault(var, var), new ClojureLowering.VarRef(ns, var));
 				}
@@ -527,6 +532,7 @@ final class ClojureNamespaceLowering {
 	 */
 	static void checkReferable(ClojureLowering ctx, String ns, String var, boolean library) {
 		refuseLeftOut(ctx, ns, var);
+		ctx.loadPartOf(ns, var);
 		if (library) {
 			if (!isKnownVar(ns, var)) {
 				throw new LispReadException("unknown name: " + ns + "/" + var);

@@ -35,11 +35,7 @@ final class ClojureBuiltinNamespaces {
 	 * {@code rontolisp.http-client}, which has its API) it leaves out and why.
 	 */
 	private static final Map<String, Map<String, String>> SHIPPED = Map.ofEntries(
-			Map.entry("ring.util.response",
-					Map.of("file-response", "it serves a java.io.File", "url-response", "it reads a java.net.URL",
-							"resource-response", "it reads a class-loader resource", "resource-data",
-							"it reads a java.net.URL")),
-			Map.entry("ring.util.request", Map.of()),
+			Map.entry("ring.util.response", Map.of()), Map.entry("ring.util.request", Map.of()),
 			Map.entry("ring.util.codec",
 					Map.of("base64-encode", "it takes a byte array", "base64-decode", "it answers a byte array",
 							"form-encode*", "form-encode is a function, not a protocol, here", "FormEncodeable",
@@ -117,6 +113,58 @@ final class ClojureBuiltinNamespaces {
 	 */
 	private static final Map<String, String> HOST_ONLY = Map.of("clojure.java.shell",
 			"sh launches a host process, which the interpreter and the JVM can and a WebAssembly target cannot");
+
+	/**
+	 * A part of a shipped namespace: a file below {@code lib/} defining some of the
+	 * namespace's vars, loaded into it where a program first names one of them.
+	 *
+	 * @param resource the file, below {@code lib/}
+	 * @param vars the public vars it defines
+	 */
+	record Part(String resource, Set<String> vars) {
+	}
+
+	/**
+	 * The parts of the shipped namespaces. {@code ring.util.response}'s file, URL and
+	 * resource responses make a {@code java.io.File} and a byte stream, and every program
+	 * that could make one carries the io family's arms (+44 KB on
+	 * {@code ring-hello.clj}'s wasm module, measured 2026-10-09); as a part, only a
+	 * program naming one of them does.
+	 */
+	private static final Map<String, Part> PARTS = Map.of("ring.util.response", new Part("ring/util/response_files.clj",
+			Set.of("file-response", "url-response", "resource-response", "resource-data")));
+
+	/**
+	 * The part of a shipped namespace defining the var.
+	 * @param ns the namespace
+	 * @param var the var name
+	 * @return the part, or {@code null} when the namespace's own file defines the var or
+	 * no part does
+	 */
+	static @Nullable Part partOf(String ns, String var) {
+		Part part = PARTS.get(ns);
+		return part != null && part.vars().contains(var) ? part : null;
+	}
+
+	/**
+	 * The public vars the parts of a shipped namespace define, which {@code :refer :all}
+	 * refers like the namespace's own.
+	 * @param ns the namespace
+	 * @return the var names
+	 */
+	static Set<String> partVars(String ns) {
+		Part part = PARTS.get(ns);
+		return part == null ? Set.of() : part.vars();
+	}
+
+	/**
+	 * The source of a part.
+	 * @param part the part
+	 * @return its text
+	 */
+	static String partSource(Part part) {
+		return read("lib/" + part.resource());
+	}
 
 	/**
 	 * The shipped namespaces {@code clj -M} has loaded before the program runs: a
@@ -202,7 +250,10 @@ final class ClojureBuiltinNamespaces {
 		if (!isShipped(ns)) {
 			return null;
 		}
-		String resource = "lib/" + ClojureSourcePath.resourceOf(ns);
+		return read("lib/" + ClojureSourcePath.resourceOf(ns));
+	}
+
+	private static String read(String resource) {
 		try (InputStream in = ClojureBuiltinNamespaces.class.getResourceAsStream(resource)) {
 			if (in == null) {
 				throw new IllegalStateException(resource + " is missing from the classpath");

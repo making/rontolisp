@@ -1475,6 +1475,38 @@ cases:
       el
       ello
       (A B)
+  - name: blank-and-the-trims-take-java-whitespace
+    # Character/isWhitespace decides, not just ASCII: the controls 28-31, the Unicode
+    # space separators and the line and paragraph separators count, the no-break spaces
+    # (U+00A0 U+2007 U+202F) do not. Pinned oracle-identical (clj 1.12.6, 2026-10-09).
+    source: |
+      (require '[clojure.string :as s])
+      (defn ws [& codes] (apply str (map char codes)))
+      (println (s/blank? (ws 32 9 10 11 12 13)))
+      (println (s/blank? (ws 28 29 30 31)))
+      (println (s/blank? (ws 5760 8192 8198 8200 8202 8232 8233 8287 12288)))
+      (println (s/blank? (ws 160)))
+      (println (s/blank? (ws 8199)))
+      (println (s/blank? (ws 8239)))
+      (println (s/blank? (str (ws 8195) "x")))
+      (println (count (s/trim (str (ws 28 12288) "ab" (ws 8233 31)))))
+      (println (count (s/triml (str (ws 28 12288) "ab" (ws 8233 31)))))
+      (println (count (s/trimr (str (ws 28 12288) "ab" (ws 8233 31)))))
+      (println (count (s/trim (str (ws 160) "ab" (ws 8239)))))
+      (println (count (s/trim-newline (str "ab" (ws 8232)))))
+    expected: |
+      true
+      true
+      true
+      false
+      false
+      false
+      false
+      2
+      4
+      4
+      4
+      3
   - name: index-of-reads-its-start-as-java-does
     # A start past the end answers nil (the length for an empty match), a negative one
     # is 0, a fractional one truncates -- where CL's search refuses a start outside

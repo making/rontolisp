@@ -309,13 +309,15 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
 - The Ring adapter (`ring.adapter.rontolisp/run-server`) puts `:content-type` and
   `:content-length` in the request map but not `:character-encoding` or
   `:ssl-client-cert`; a request without a body has `:body` `nil` (Jetty's adapter
-  supplies an empty stream). An asynchronous handler, a `java.io.File` body and a
-  second concurrent server are refused or replaced (see [the adapter](reference/ring.md)).
+  supplies an empty stream). An asynchronous handler and a second concurrent server are
+  refused or replaced, and a `java.io.File` body naming no file signals (500) where Jetty
+  answers an empty 200 (see [the adapter](reference/ring.md)).
 - The built-in [Ring utilities](reference/ring-util.md) name a charset by a string (UTF-8,
   ISO-8859-1, US-ASCII and the JDK's aliases for them; any other is refused), have
   `ring.util.request/body-string` as a function rather than an extensible multimethod,
-  read only ASCII digits in `content-length`, and leave out what needs a `java.io.File`, a
-  URL or a byte array.
+  read only ASCII digits in `content-length`, and leave out what needs a byte array. The
+  file responses resolve no symbolic link and find no resource computed at run time inside
+  a jar.
 - A sorted map or set orders, prints and finds keys like the oracle's, but every verb
   copies it (an association costs the collection's size, like a hash map's); `class`
   answers `:map`/`:set`; a `subseq` or

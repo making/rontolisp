@@ -63,11 +63,15 @@ adapter.
 |---|---|
 | `:status` | an integer; 200 when absent |
 | `:headers` | a map of header names (strings or keywords) to a string, or to a seq of strings sent as one header line each |
-| `:body` | a string, a seq whose members are sent through `str`, an input stream (read to its end and closed), or `nil` |
+| `:body` | a string, a seq whose members are sent through `str`, a reader or input stream (read to its end and closed), a `java.io.File` (its bytes as they are), or `nil` |
 
-A handler that answers anything but a map, or a body of any other kind (a `java.io.File`
-included), signals; the transport answers 500. The response builders and the parameter
-middleware are the built-in [Ring utilities](ring-util.md).
+A handler that answers anything but a map, or a body of any other kind, signals; the
+transport answers 500. So does a `java.io.File` naming no file the program can read: the
+WebAssembly serving transports (`wasmtime serve`, the reactor) have no file system, so a file
+is served on the interpreter, the JVM and a war; a byte stream over a
+[resource](clojure-java-io.md) the program carries is served everywhere. The response
+builders, `file-response` and `resource-response` among them, and the parameter middleware
+are the built-in [Ring utilities](ring-util.md).
 
 ## Cloudflare Workers
 
