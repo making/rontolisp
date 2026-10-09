@@ -6126,6 +6126,25 @@ cases:
       1
       :vy :vy
       true nil
+  - name: a-literal-refuses-keys-equal-once-evaluated
+    # A map or set literal whose computed keys or members are = once evaluated is
+    # the oracle's run-time Duplicate key, after every form ran: a map names the
+    # earlier key, a set the later member. hash-map and hash-set keep one, and so
+    # does a set literal of constants. Every line matches the oracle (clj 1.12.6,
+    # 2026-10-08).
+    source: |
+      (defn dupk [f] (try (pr-str (f)) (catch IllegalArgumentException e (ex-message e))))
+      (prn (dupk #(do {(+ 1 2) 1 3 2})) (dupk #(let [a 1 b 1N] {a 1 b 2})) (dupk #(let [a nil b nil] {a 1 b 2})) (dupk #(let [k :a] {:a 1 k 2})))
+      (prn (dupk #(let [a [1] b '(1)] {a 1 b 2 :c 3})) (dupk #(let [a {:a 1}] {a 1 {:a 1} 2})) (dupk #(let [a 0.0 b -0.0] {a 1 b 2})))
+      (prn (dupk #(do #{(+ 1 2) 3})) (dupk #(let [a [1] b '(1)] #{a b})) (dupk #(let [a 0.0 b -0.0] #{a b})) (dupk #(let [x nil] #{x nil})))
+      (prn (dupk #(let [a 1] {a (print "v1 ") (do (print "k2 ") 1) (print "v2 ")})))
+      (prn (hash-map 1 :a 1 :b) (hash-set 1 1) (count #{[1] '(1)}) (count (let [x 2] {x 1 1 2})) (let [x 1] {x 1}) (let [x 1] #{x}))
+    expected: |
+      "Duplicate key: 3" "Duplicate key: 1" "Duplicate key: null" "Duplicate key: :a"
+      "Duplicate key: [1]" "Duplicate key: {:a 1}" "Duplicate key: 0.0"
+      "Duplicate key: 3" "Duplicate key: (1)" "Duplicate key: -0.0" "Duplicate key: null"
+      v1 k2 v2 "Duplicate key: 1"
+      {1 :b} #{1} 1 2 {1 1} #{1}
   - name: clojure-set-relational-algebra
     # clojure.set over the set wrapper, its every var as a call (alias, refer,
     # fully-qualified) and as a value. A result's kind follows the oracle's

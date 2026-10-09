@@ -57,7 +57,8 @@ printing without its mark. Ratios read as `1/2`.
 and `pr`, `prn` and `println` print them in the same spelling (also inside a collection);
 `str` and `format` say `NaN`, `Infinity` and `-Infinity` for the bare value. Any other
 `##name` is an `Unknown symbolic value` refusal. Two NaNs are never `=`; a NaN used as a
-map or set key is found by value here, where the oracle finds only the same boxed object.
+map or set key is found by value here, where the oracle finds only the same boxed object, so
+two computed NaN keys of one literal are a `Duplicate key` (the oracle keeps both).
 
 ## Booleans, nil and keywords
 
@@ -75,8 +76,11 @@ an `Invalid token` refusal. In call position a keyword is the map lookup -- [Sem
 A vector `[1 2 3]`, a map `{:a 1}`, a set `#{1 2}` and a quoted list `'(1 2 3)` read as
 the literals whose lowering [Semantics](semantics.md) describes. A map or set literal refuses a
 key that is `=` to an earlier one (`Duplicate key`): `{1 :a 1N :b}` and `#{[1] (1)}` are
-refused, `{1 :a 1.0 :b}` is not. Keys that are only equal once evaluated, as in
-`{(+ 1 2) :a 3 :b}`, are not checked.
+refused, `{1 :a 1.0 :b}` is not. Keys only equal once evaluated are checked as the oracle's
+compiler checks them: when every key is a constant, `{[1] :a '(1) :b}` is refused before the
+program runs (`Duplicate constant keys in map`); otherwise `{(+ 1 2) :a 3 :b}`, or `#{x 1}`
+with `x` bound to `1`, throws `IllegalArgumentException` `Duplicate key` when evaluated. A set
+of constants such as `#{[1] '(1)}` keeps one member, as do `hash-map` and `hash-set`.
 
 ## Tagged literals
 
