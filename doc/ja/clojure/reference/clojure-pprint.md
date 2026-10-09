@@ -20,11 +20,13 @@
 | `write-out` | `(write-out x)`: ブロックの中で `x` をディスパッチ経由で書く |
 | `pprint-newline` | `(pprint-newline kind)`: 条件付き改行。`:linear`（ブロックが収まらないとき改行）、`:fill`（次の部分が行に収まらないとき改行）、`:miser`（miser スタイルのときだけ改行）、`:mandatory` |
 | `pprint-indent` | `(pprint-indent relative-to n)`: ブロックの継続行のインデントを、ブロックの開始位置（`:block`）または現在の桁（`:current`）から `n` 桁にする |
-| `fresh-line` | 行頭でなければ改行する |
+| `fresh-line` | 進行中のプリティプリントが行頭でなければ改行する。プリティプリントの外では常に改行する |
 | `*print-right-margin*`、`*print-miser-width*` | マージン（既定 72、`nil` で無制限）と、ブロックの開始位置がマージンにどこまで近づくと miser スタイルになるか（既定 40、`nil` で常に通常スタイル） |
 | `*print-pretty*`、`*print-suppress-namespaces*`、`*print-base*`、`*print-radix*` | `write` の既定値。プリティプリントする、名前空間を残す、10 進、基数の印なし |
 | `pprint-tab` | Clojure と同じく `UnsupportedOperationException` を投げる |
 | `get-pretty-writer` | 受け取ったライターをそのまま返す |
+| `cl-format` | `(cl-format writer control & args)`: `control` に書いた Common Lisp の format 指示子で `args` を整形する。`writer` が `nil` なら文字列を返し、`true` なら `*out*` へ、それ以外なら `writer` へ書く。[cl-format](#cl-format) を参照 |
+| `formatter`、`formatter-out` | `(formatter control)`: ライターと引数を受け取って `cl-format` と同じように整形する関数。制御文字列のコンパイルは一度だけ行う。`(formatter-out control)`: 引数を受け取ってその時点の `*out*` へ書く関数で、ディスパッチ関数の中で使う |
 
 行の残りに収まるコレクションはその行に出力します。収まらないコレクションは要素を 1 行に 1 つずつ置き、
 マップのエントリもそれだけで収まらなければ、値をキーの下の行へ送ります。`*print-length*`、
@@ -128,10 +130,86 @@
 #(+ %1 (* %2 %2))
 ```
 
+## cl-format
+
+`cl-format` は Clojure の値を対象にした Common Lisp の `format` です。`~A` と `~S` は `print` と
+`pr` と同じように書き、`~{` は任意のコレクションやシーケンスを走査し、`~:[` は Clojure の真偽で
+判定します。そのため `false` は `nil` と同じく最初の節を選びます。
+
+| 指示子 | 書くもの |
+|---|---|
+| `~A`、`~S` | 引数を `print` / `pr` と同じように書く。整数と比は `*print-base*` と `*print-radix*` に従う。`~mincol,colinc,minpad,padcharA` で幅を埋め、`@` を付けると左側を埋める |
+| `~D`、`~B`、`~O`、`~X`、`~radixR` | 整数を 10、2、8、16 進または `radix` 進で書く。`~mincol,padchar,commachar,intervalD` の形で指定し、`:` で桁を区切り、`@` で正の数にも符号を付ける |
+| `~R`、`~:R`、`~@R`、`~:@R` | 数を英語の基数詞、英語の序数詞、ローマ数字、古い形式のローマ数字で書く |
+| `~P`、`~@P` | 引数が 1 でなければ `s`（`ies`）を書く。`:` を付けると一つ前の引数を見る |
+| `~C`、`~:C`、`~@C` | 文字そのもの、文字の名前、`pr` と同じ表記 |
+| `~F`、`~E`、`~G`、`~$` | 数を固定小数点、指数、一般、金額の各表記で書く。パラメータは Common Lisp と同じ |
+| `~%`、`~&`、`~\|`、`~~`、`~T` | 改行、行頭でなければ改行、改ページ、チルダ、指定の桁までの空白 |
+| `~*`、`~:*`、`~@*` | 引数を飛ばす、前に戻る、指定の位置へ移る |
+| `~[...~;...~]`、`~:[`、`~@[` | 引数で節を選ぶ。添字で選ぶ、真偽で選ぶ、真のときだけ実行する |
+| `~{...~}`、`~:{`、`~@{`、`~:@{` | 本体を繰り返す。コレクションの要素ごと、その部分リストごと、残りの引数ごと、残りの引数を部分リストとして |
+| `~^`、`~:^` | 引数（`~:^` は部分リスト）が残っていなければ、囲んでいる実行を終える |
+| `~(...~)`、`~:(`、`~@(`、`~:@(` | 本体を小文字にする、各単語の先頭を大文字にする、最初の単語の先頭を大文字にする、大文字にする |
+| `~?`、`~@?` | 別の制御文字列を、リスト引数に対して、または残りの引数に対して実行する |
+| `~<...~>` | 節を幅の中に揃えて配置する |
+| `~W`、`~<...~:>`、`~_`、`~I` | 引数をプリティプリントのディスパッチで書く、論理ブロック、条件付き改行（`:` は fill、`@` は miser、`:@` は mandatory）、インデント |
+
+```clojure
+(require '[clojure.pprint :as pp])
+(pp/cl-format true "There ~[are~;is~:;are~]~:* ~d result~:p: ~{~d~^, ~}~%" 3 [46 38 22])
+(println (pp/cl-format nil "~:d ~r ~:r ~@r" 1234567 42 3 1994))
+(println (pp/cl-format nil "~,2f|~10,3e|~$|~8,'0x" 3.14159 12345.678 1.5 255))
+(println (pp/cl-format nil "~:(~a~) ~@(~a~) ~:@(~a~)" "hello world" "hELLO" "loud"))
+(println (pp/cl-format nil "~{~a~^, ~}|~:{<~a ~a>~}|~20<left~;right~>|" [1 2 3] [[1 2] [3 4]]))
+(println (pp/cl-format nil "~a~12t~a~24t~a" "name" "lang" "year"))
+```
+
+```
+There are 3 results: 46, 38, 22
+1,234,567 forty-two third MCMXCIV
+3.14|  1.235E+4|1.50|000000ff
+Hello World Hello LOUD
+1, 2, 3|<1 2><3 4>|left           right|
+name        lang        year
+```
+
+プリティプリント用の指示子は、進行中のプリティプリントに出力を加えます。そのため、ディスパッチ関数は
+`formatter-out` で値をレイアウトできます。プリティプリントの外では、プリティライターを必要とする
+制御文字列（`~W`、`~<`、`~T`、`~&` を含むもの）が専用のプリティライターを使い、0 桁目から出力します。
+
+```clojure
+(require '[clojure.pprint :as pp])
+(defn json-dispatch [x]
+  (cond (map? x) ((pp/formatter-out "~<{~;~@{~<~w:~_~w~:>~^, ~_~}~;}~:>")
+                  (for [[k v] x] [(name k) v]))
+        (sequential? x) ((pp/formatter-out "~<[~;~@{~w~^, ~:_~}~;]~:>") x)
+        (string? x) (pr x)
+        (nil? x) (print "null")
+        :else (print x)))
+(binding [pp/*print-right-margin* 50 pp/*print-miser-width* nil]
+  (pp/with-pprint-dispatch json-dispatch
+    (pp/pprint (sorted-map :name "rontolisp" :tags ["lisp" "clojure" "wasm"] :scores (vec (range 0 60 4))))))
+```
+
+```
+{"name":"rontolisp",
+ "scores":
+ [0, 4, 8, 12, 16, 20, 24, 28, 32, 36, 40, 44,
+  48, 52, 56],
+ "tags":["lisp", "clojure", "wasm"]}
+```
+
+書式の誤った制御文字列は `RuntimeException` になり、そのメッセージには制御文字列と、誤りの位置を
+指す `^` が入ります。
+
 ## 違い
 
-- `cl-format`、`formatter`、`formatter-out` は組み込まれておらず、名前を使うとそのことを告げる
-  エラーになります。
+- 10 進小数のリテラルはここでは比なので、`1.5M` の `~A` は `3/2` を書きます。また整数が long として
+  オーバーフローすることはなく、`-9223372036854775808` の `~D` は、Clojure が例外を投げるところで
+  値をそのまま書きます。
+- Clojure の拒否メッセージが JVM 自身のもの（`*out*` がプリティライターでないときのプリティプリント用
+  指示子の `ClassCastException` や、`NullPointerException`）である場合、クラスは同じでメッセージが
+  異なります。
 - `get-pretty-writer` は受け取ったライターをそのまま返します。`pprint` や `write` は呼び出しごとに
   出力を 0 桁目からレイアウトし、マージンには実行時に束縛されている値を使います。Clojure の
   プリティライターは、作られたときのマージンを保ち、それまでにそのライターへ書かれた内容の続きの桁から

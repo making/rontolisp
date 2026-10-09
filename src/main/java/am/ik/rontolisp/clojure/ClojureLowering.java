@@ -3855,8 +3855,10 @@ public final class ClojureLowering {
 			case "pr":
 				return ClojureStringLowering.prCall(this, items, false);
 			case "newline":
+				// answers nil, like the oracle's (and every print verb's here)
 				ClojureLowerUtil.isTrue(n == 0, "newline takes no argument");
-				return ClojureLowerUtil.list(ClojureLowerUtil.sym("princ"), LispString.literal("\n"));
+				return ClojureLowerUtil.list(ClojureLowerUtil.sym("progn"),
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("princ"), LispString.literal("\n")), NIL_CONST);
 			case "methods":
 				return ClojureDispatchLowering.methodsOf(this, items);
 			case "count":

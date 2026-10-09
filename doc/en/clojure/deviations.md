@@ -31,8 +31,9 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   value the printer does not read. `assert` reads `*assert*` where it expands, so a
   top-level `set!` of it to a literal switches off the asserts after it; a `set!` inside
   a function, or to a computed value, does not (the oracle's takes effect once it runs).
-  `~S`/`~A` on Clojure values stay Common Lisp notation (`format` is a CL surface);
-  `print-method`/`pprint` stay absent.
+  A Common Lisp `format`'s `~S`/`~A` on Clojure values stay Common Lisp notation (it is
+  a CL surface; `clojure.pprint/cl-format` writes them as Clojure); `print-method` stays
+  absent.
 - A map, set or memo key finds an `=` key like the oracle's, vectors, lists, maps and
   sets included, but a stored collection key is the first `=` key of its kind (vector,
   list, lazy seq) the program stored, so its metadata and the spelling of a nested

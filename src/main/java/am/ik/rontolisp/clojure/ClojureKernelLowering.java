@@ -30,7 +30,8 @@ import org.jspecify.annotations.Nullable;
  * {@code throw} and the regex engine), where the Common Lisp {@code rontolisp:url-decode}
  * is a 26,940 B module.</li>
  * <li>{@code rontolisp.internal.pprint} for {@code clojure.pprint}: the pretty print's
- * token buffer and its layout, and the radix spelling of a number.</li>
+ * token buffer and its layout, the radix spelling of a number, and the text of
+ * {@code cl-format}'s number directives and case conversion.</li>
  * <li>{@code rontolisp.internal.datafy} for {@code clojure.datafy}: the oracle's class
  * name of a value, an exception's too, which {@code class} (a kind keyword here) does not
  * answer.</li>
@@ -186,7 +187,12 @@ final class ClojureKernelLowering {
 					Map.ofEntries(Map.entry("call", 3), Map.entry("start", 4), Map.entry("end", 1),
 							Map.entry("newline", 1), Map.entry("indent", 2), Map.entry("fresh-line", 0),
 							Map.entry("length-reached", 1), Map.entry("count-object", 0), Map.entry("reset-length", 0),
-							Map.entry("number-string", 3), Map.entry("members", 1))),
+							Map.entry("number-string", 3), Map.entry("members", 1), Map.entry("active?", 0),
+							Map.entry("tab", 3), Map.entry("eol", 3), Map.entry("padding", 2),
+							Map.entry("integer-text", 10), Map.entry("english", 4), Map.entry("roman", 4),
+							Map.entry("fixed", 7), Map.entry("exponential", 9), Map.entry("general", 9),
+							Map.entry("dollar", 7), Map.entry("case-state", 0), Map.entry("case-convert", 3),
+							Map.entry("case-out", 0), Map.entry("with-case-out", 2))),
 			"rontolisp.internal.datafy",
 			new Kernels("clojure.datafy", "RONTOLISP::%CLOJURE-DATAFY-", Map.of("class-name", 1)),
 			"rontolisp.internal.instant",

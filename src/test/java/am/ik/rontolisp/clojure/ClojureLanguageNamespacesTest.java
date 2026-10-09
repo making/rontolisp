@@ -77,10 +77,22 @@ class ClojureLanguageNamespacesTest {
 		assertThatThrownBy(() -> Clojure.read("(ns a (:require [rontolisp.internal.pprint :as k]))", null))
 			.isInstanceOf(LispReadException.class)
 			.hasMessageContaining("rontolisp.internal.pprint is internal to clojure.pprint");
-		assertThatThrownBy(() -> Clojure.read("(ns a (:require [clojure.pprint :as pp])) (pp/cl-format nil \"~a\" 1)",
-				null, ClojureMacroTime.create()))
-			.isInstanceOf(LispReadException.class)
-			.hasMessageContaining("clojure.pprint/cl-format is not built in");
+	}
+
+	@Test
+	void clFormatIsClojureSourceOverTheNumberAndCaseKernels() {
+		String program = Clojure
+			.read("(ns a (:require [clojure.pprint :as pp])) (pp/cl-format nil \"~,2F ~:R ~:(~a~)\" 1.5 2 \"x\")"
+					+ " ((pp/formatter \"~a\") nil 1) ((pp/formatter-out \"~a\") 1)", null, ClojureMacroTime.create())
+			.stream()
+			.map(LispVal::print)
+			.collect(Collectors.joining("\n"));
+		assertThat(program).contains("(DEFUN |c%clojure.pprint/cl-format|")
+			.contains("(RONTOLISP::%CLOJURE-PP-FIXED ")
+			.contains("(RONTOLISP::%CLOJURE-PP-ENGLISH ")
+			.contains("(RONTOLISP::%CLOJURE-PP-CASE-CONVERT ")
+			.contains("|c%clojure.pprint/formatter-fn|")
+			.contains("|c%clojure.pprint/formatter-out-fn|");
 	}
 
 	@Test
