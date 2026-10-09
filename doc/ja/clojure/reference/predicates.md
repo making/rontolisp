@@ -45,7 +45,7 @@
 | `simple-symbol?` | `(simple-symbol? 'a)` | `true` |
 | `qualified-symbol?` | `(qualified-symbol? 'a/b)` | `true` |
 | `char?` | `(char? \a)` | `true` |
-| `bytes?` | `(bytes? [1 2])` | `false` |
+| `bytes?` | `(bytes? (byte-array 1))` | `true` |
 | `any?` | `(any? nil)` | `true` |
 | `not-any?` | `(not-any? odd? [2 4])` | `true` |
 | `not-every?` | `(not-every? odd? [1 2])` | `true` |

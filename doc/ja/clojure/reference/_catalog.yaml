@@ -187,6 +187,10 @@ categories:
       - { slug: aget, name: "aget" }
       - { slug: aset, name: "aset" }
       - { slug: alength, name: "alength" }
+      - { slug: byte-array, name: "byte-array" }
+      - { slug: bytes, name: "bytes" }
+      - { slug: aclone, name: "aclone" }
+      - { slug: aset-byte, name: "aset-byte" }
       - { slug: hash, name: "hash" }
       - { slug: hash-ordered-coll, name: "hash-ordered-coll" }
       - { slug: hash-unordered-coll, name: "hash-unordered-coll" }

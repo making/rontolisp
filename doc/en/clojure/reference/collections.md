@@ -2,7 +2,8 @@
 
 A map or set is an `equal` hash table, never mutated in place: every verb builds a fresh one, so persistence holds observably. Map/set iteration order is the table's walk order, unspecified. Keys compare by `=`, so a vector, list, map or set key finds an equal one. A sorted map or set (`sorted-map`, `sorted-set`, their `-by` forms) keeps its entries in `compare` or comparator order instead, finds keys by that order, and every map and set verb answers one again; `subseq`/`rsubseq` walk a bounded range of it. Arrays are general:
 `(make-array Class dim...)` ignores the class, reads through `aget`, writes through
-`aset`, and measures through `alength`.
+`aset`, and measures through `alength`; a byte array (`byte-array`, or `make-array` of
+`Byte/TYPE`) holds signed bytes.
 
 | Name | Example | Result |
 |---|---|---|
@@ -58,6 +59,10 @@ A map or set is an `equal` hash table, never mutated in place: every verb builds
 | `aget` | `(let [a (make-array String 1)] (aset a 0 "x") (aget a 0))` | `"x"` |
 | `aset` | `(let [a (make-array String 1)] (aset a 0 "x"))` | `"x"` |
 | `alength` | `(alength (make-array String 2))` | `2` |
+| `byte-array` | `(vec (byte-array [1 -1 300]))` | `[1 -1 44]` |
+| `bytes` | `(bytes nil)` | `nil` |
+| `aclone` | `(vec (aclone (byte-array [1 2])))` | `[1 2]` |
+| `aset-byte` | `(aset-byte (byte-array 1) 0 -5)` | `-5` |
 | `hash` | `(hash [1 2])` | `156247261` |
 | `hash-ordered-coll` | `(hash-ordered-coll '(1 2))` | `156247261` |
 | `hash-unordered-coll` | `(hash-unordered-coll [1 2])` | `460223544` |

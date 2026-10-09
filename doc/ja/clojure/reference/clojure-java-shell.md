@@ -8,7 +8,7 @@
 
 | var | 振る舞い |
 |---|---|
-| `sh` | `(sh & args)`: 先頭の文字列が示すコマンドを実行し、`{:exit code :out text :err text}` を返す。文字列に続くオプションは、`:in` が標準入力にする文字列、File、リーダー、`:in-enc` が `:in` のテキストの文字セット（UTF-8）、`:out-enc` が `:out` の文字セット（UTF-8）、`:dir` が実行するディレクトリ、`:env` が環境を置き換えるマップ。`:err` はプラットフォームの文字セットで復号する |
+| `sh` | `(sh & args)`: 先頭の文字列が示すコマンドを実行し、`{:exit code :out text :err text}` を返す。文字列に続くオプションは、`:in` が標準入力にする文字列、バイト配列、入力ストリーム、File、リーダー、`:in-enc` が `:in` のテキストの文字セット（UTF-8）、`:out-enc` が `:out` の文字セット（UTF-8。`:bytes` なら `:out` はバイト配列）、`:dir` が実行するディレクトリ、`:env` が環境を置き換えるマップ。`:err` はプラットフォームの文字セットで復号する |
 | `with-sh-dir` | `(with-sh-dir dir & forms)`: `*sh-dir*` を `dir` に束縛して `forms` を評価する |
 | `with-sh-env` | `(with-sh-env env & forms)`: `*sh-env*` を `env` に束縛して `forms` を評価する |
 | `*sh-dir*`、`*sh-env*` | `sh` に `:dir` と `:env` がないときの値。`nil` なら現在のもの |
@@ -26,6 +26,5 @@ clojure> (:out (sh "pwd" :dir "/tmp"))
 
 ## 違い
 
-- `:out-enc :bytes` は拒否します。バイト配列がないためです。
-- `:in` は文字列、File、リーダーを受け取り、ホストの `InputStream` やバイト配列は受け取りません。
-  `:env` はマップを受け取り、`String[]` は受け取りません。
+- `:in` は文字列、バイト配列、`clojure.java.io` の入力ストリーム、File、リーダーを受け取り、
+  ホストの `InputStream` は受け取りません。`:env` はマップを受け取り、`String[]` は受け取りません。

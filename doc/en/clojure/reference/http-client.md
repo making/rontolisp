@@ -37,12 +37,12 @@ compile refuses the program, naming the flags that give it one.
 | `:headers` | a map of names (strings or keywords) to a string, or to a seq of strings sent as one field each |
 | `:query-params` | a map joined to the URL's query, URL-encoded; a collection value repeats its key |
 | `:form-params` | a map sent as an `application/x-www-form-urlencoded` body |
-| `:body` | a string; a `java.io.File` or an input stream (a `clojure.java.io` stream, a reply's `:as :stream` body), sent as its octets; a reader, read to its end |
+| `:body` | a string; a byte array, a `java.io.File` or an input stream (a `clojure.java.io` stream, a reply's `:as :stream` body), sent as its octets; a reader, read to its end |
 | `:multipart` | a seq of parts, sent as a `multipart/form-data` body in place of `:body` and `:form-params` |
 | `:basic-auth` | `[user pass]` or `{:user ... :pass ...}`: an `Authorization: Basic` header |
 | `:oauth-token` | an `Authorization: Bearer` header |
 | `:accept` | `:json`: `Accept: application/json` |
-| `:as` | `:string` (the default: the body decoded as UTF-8) or `:stream` (the body unread) |
+| `:as` | `:string` (the default: the body decoded as UTF-8), `:bytes` (the body's octets, a byte array) or `:stream` (the body unread) |
 | `:decompress-body` | `false` leaves a compressed body as it arrived |
 | `:throw` | `false` answers every status |
 | `:async` | `true` answers a future of the response |
@@ -53,8 +53,8 @@ them, plus fetch's own `User-Agent`. Any other `:body` throws an `ex-info`.
 
 ## Multipart bodies
 
-A `:multipart` part is a map of `:name` (or `:part-name`), `:content` (a string, a
-`java.io.File` or an input stream) and, optionally, `:file-name` and `:content-type`. The
+A `:multipart` part is a map of `:name` (or `:part-name`), `:content` (a string, a byte
+array, a `java.io.File` or an input stream) and, optionally, `:file-name` and `:content-type`. The
 body is babashka.http-client's, octet for octet: each part carries `Content-Disposition`
 (with a `filename` for a `File` or a `:file-name`), `Content-Type` (a string's is
 `text/plain; charset=UTF-8`, a `File`'s comes from its extension, anything else's is
@@ -158,11 +158,13 @@ returns, so a timed `deref` answers the response.
 With `:as :stream` the `:body` is a `java.io.InputStream` over the reply's octets, unread:
 the JDK client's response stream, or the `java.util.zip.GZIPInputStream` or
 `InflaterInputStream` a compressed reply is read through. `.read` answers the next octet
-(`-1` at the end) as the reply arrives, `.skip`, `.available`, `.transferTo` and
-`clojure.java.io/copy` (to a `File` or an output stream, octet for octet) take it, `slurp`
-and `clojure.java.io/reader` read it as text (UTF-8 unless `:encoding` names another
-charset), `with-open` and `.close` close it, and a Ring handler may answer it as its
-response `:body`, which relays the octets unchanged as they arrive:
+(`-1` at the end) as the reply arrives, and `.read` of a byte array fills it with the
+octets in hand; `.readNBytes` and `.readAllBytes` read until they have what they ask for.
+`.skip`, `.available`, `.transferTo` and `clojure.java.io/copy` (to a `File` or an output
+stream, octet for octet) take it, `slurp` and `clojure.java.io/reader` read it as text
+(UTF-8 unless `:encoding` names another charset), `with-open` and `.close` close it, and a
+Ring handler may answer it as its response `:body`, which relays the octets unchanged as
+they arrive:
 
 ```clojure
 (ns example
@@ -198,9 +200,7 @@ $ rontolisp proxy.clj -o src/worker.wasm --no-wasi --host-fetch --host-boundary=
 
 - The response has no `:version`, and its `:uri` is a string (babashka.http-client: a
   `java.net.URI`).
-- `:as :bytes` is refused (no value here is a byte array), and so are the byte-array
-  members of the `:stream` body (`.read` into a buffer, `.readAllBytes`).
-  `clojure.java.io/reader` over the `:stream` body reads it whole before its first line
+- `clojure.java.io/reader` over the `:stream` body reads it whole before its first line
   (a `.read` loop over the body itself takes each octet as it arrives); on the JVM the
   transport takes the whole reply before the response is answered.
 - Refused by name: the options `:client`, `:interceptors`, `:timeout`, `:version`, `:raw`

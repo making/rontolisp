@@ -2,8 +2,9 @@
 
 `(bytes? x)`
 
-`clojure.core/bytes?`: `false` for every value: arrays ignore their element class here, so there is no byte array kind. The argument is still evaluated. As a value a one-argument function.
+`clojure.core/bytes?`: `true` for a byte array (what [byte-array](byte-array.md), `.getBytes`
+and the byte readers answer), `false` for anything else. As a value a one-argument function.
 
 ```clojure
-(println (bytes? [1 2]))  ; false
+(println (bytes? (byte-array 2)) (bytes? [1 2]))  ; true false
 ```

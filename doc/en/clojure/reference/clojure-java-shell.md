@@ -8,7 +8,7 @@ refused when the program is lowered.
 
 | Var | Behavior |
 |---|---|
-| `sh` | `(sh & args)`: runs the command the leading strings name and answers `{:exit code :out text :err text}`. The options after them: `:in` a string, a File or a reader for its standard input; `:in-enc` the charset of `:in`'s text (UTF-8); `:out-enc` the charset of `:out` (UTF-8); `:dir` the directory it runs in; `:env` a map replacing its environment. `:err` is decoded in the platform's charset |
+| `sh` | `(sh & args)`: runs the command the leading strings name and answers `{:exit code :out text :err text}`. The options after them: `:in` a string, a byte array, an input stream, a File or a reader for its standard input; `:in-enc` the charset of `:in`'s text (UTF-8); `:out-enc` the charset of `:out` (UTF-8), or `:bytes` for `:out` as a byte array; `:dir` the directory it runs in; `:env` a map replacing its environment. `:err` is decoded in the platform's charset |
 | `with-sh-dir` | `(with-sh-dir dir & forms)`: `forms` with `*sh-dir*` bound to `dir` |
 | `with-sh-env` | `(with-sh-env env & forms)`: `forms` with `*sh-env*` bound to `env` |
 | `*sh-dir*`, `*sh-env*` | The `:dir` and `:env` of a `sh` that gives none; `nil` for the current ones |
@@ -26,6 +26,5 @@ clojure> (:out (sh "pwd" :dir "/tmp"))
 
 ## Differences
 
-- `:out-enc :bytes` is refused: there is no byte array.
-- `:in` takes a string, a File or a reader, not a host `InputStream` or a byte array; `:env`
-  takes a map, not a `String[]`.
+- `:in` takes a string, a byte array, a `clojure.java.io` input stream, a File or a
+  reader, not a host `InputStream`; `:env` takes a map, not a `String[]`.

@@ -4,7 +4,8 @@
 
 値の種類をキーワードで返します。`:map`・`:vector`・`:set`・`:list`・`:string`・
 `:number`・`:keyword`・`:symbol`・`:char`・`:boolean`・`:nil`・`:function`・`:atom` です
-（ソート済みマップは `:map`、ソート済みセットは `:set`）。
+（ソート済みマップは `:map`、ソート済みセットは `:set`）。バイト配列は `byte[]` のバイナリ名
+の `:[B` を返します。
 オラクルはホストクラスを返しますが、wasm バックエンドにはないため、全バックエンド共通で
 種類名のキーワードを返します。record/deftype はタグのキーワードを返します。例外と実行時エラーは
 クラス名をキーワードで返します（`:java.lang.IllegalArgumentException`、`:clojure.lang.ExceptionInfo`。

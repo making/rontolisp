@@ -258,6 +258,12 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
 - `class` answers a keyword naming the kind (`:string`, `:number`, `:keyword`, ...);
   the oracle answers host classes, which no wasm backend has. A record or deftype
   answers its tag keyword instead; a host object (interpreter and JVM) its host class.
+- A [byte array](reference/byte-array.md) prints as the oracle's `#object["[B" ...]` without
+  the identity hash, and `str` answers `[B` (the oracle's `[B@1b6d3586`). `aset` stores any
+  integer from -128 to 127 in one, where the oracle's reflection takes only a `Byte`
+  (`(aset bs 0 5)` is refused there, `(aset bs 0 (byte 5))` is not). A seq over a byte array
+  holds the elements the array had when the seq was taken, where the oracle's reads the
+  array as it walks.
 - An instance call on a collection, keyword, symbol, ratio, atom or fn answers through the core
   functions and shares their deviations (`.getClass` answers what `class` does). A method
   left unmapped is refused as `Method m taking N args is not supported for class C`, where the
@@ -333,8 +339,8 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
 - The built-in [Ring utilities](reference/ring-util.md) name a charset by a string (UTF-8,
   ISO-8859-1, US-ASCII and the JDK's aliases for them; any other is refused), have
   `ring.util.request/body-string` as a function rather than an extensible multimethod,
-  read only ASCII digits in `content-length`, and leave out what needs a byte array. The
-  file responses find no resource computed at run time inside a jar.
+  and read only ASCII digits in `content-length`. The file responses find no resource
+  computed at run time inside a jar.
 - A sorted map or set orders, prints and finds keys like the oracle's, but every verb
   copies it (an association costs the collection's size, like a hash map's); `class`
   answers `:map`/`:set`; a `subseq` or
@@ -407,8 +413,9 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   is `=` to one made here but prints as the host object and is another map key).
 - `clojure.java.io`'s `java.io.File`, `java.net.URL`, `java.net.URI` and byte streams are
   values of this front end's own on every backend; [clojure.java.io](reference/clojure-java-io.md)
-  lists the differences (no byte arrays, three charsets, no connection behind an `http:`
-  URL, a resource found on the source path rather than the class path, WASM's directories).
+  lists the differences (three charsets, no connection behind an `http:` URL, a resource
+  found on the source path rather than the class path, WASM's directories, a byte-array
+  stream `input-stream` answers unwrapped).
 - A data reader runs as the program compiles, so its answer in source loses its metadata
   and needs a spelling here: a function, a deftype instance and a host object other than a
   UUID or Date are `Can't embed object in code`, where the oracle compiles one its
@@ -440,7 +447,9 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   `equals` nor its `hashCode`. A Java array a member answers is a list here, which converts
   back to an array where one is expected and nothing takes the list whole -- so
   `(java.util.Arrays/asList [1 2])` is a list holding the vector, where the oracle throws --
-  and so does an array `make-array` makes, a vector here.
+  and so does an array `make-array` makes, a vector here. A byte array crosses as a read-only
+  `List` of its elements as Java's bytes (class `[B` in Java's messages), which converts where
+  a `byte[]` is expected; a parameter taking any `Object` takes the `List` itself.
 - An integer receiver is called as an `Integer` when it fits one, else as a `Long`
   (the oracle's is always a `Long`): `(.getClass 1)` answers `java.lang.Integer`.
 - A `_` param tag leaves that parameter to the cost rule of the `java:` surface, so

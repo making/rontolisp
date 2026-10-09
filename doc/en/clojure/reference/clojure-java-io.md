@@ -13,9 +13,9 @@ behave the same on the interpreter, the JVM and both WASM targets. On WASM a fil
 | `file` | `(file arg)` / `(file parent child & more)`: the `java.io.File` a path, a File or a `file:` URL names (`nil` for `nil`); each further argument a relative path below the one before |
 | `as-file`, `as-url` | The `Coercions` protocol: what a value stands for as a File or as a URL; `nil` answers `nil` |
 | `as-relative-path` | `(as-relative-path x)`: the path of a relative File or string; an absolute one is an `IllegalArgumentException` |
-| `reader`, `writer` | `(reader x & opts)`: a buffered character stream over a path, a File, a URL, a URI or a byte stream, or the stream itself; `:encoding` names the charset (UTF-8 by default), `:append true` appends a writer's text |
-| `input-stream`, `output-stream` | `(input-stream x & opts)`: a buffered byte stream over a path, a File, a URL or a URI, or the byte stream itself; `:append true` appends an output stream's bytes |
-| `copy` | `(copy input output & opts)`: what a byte stream, a reader, a File or a string holds, written to a byte stream, a writer or a File, characters in `:encoding`; any other pair is the oracle's `IllegalArgumentException` |
+| `reader`, `writer` | `(reader x & opts)`: a buffered character stream over a path, a File, a URL, a URI, a byte array or a byte stream, or the stream itself; `:encoding` names the charset (UTF-8 by default), `:append true` appends a writer's text |
+| `input-stream`, `output-stream` | `(input-stream x & opts)`: a buffered byte stream over a path, a File, a URL, a URI or a byte array, or the byte stream itself; `:append true` appends an output stream's bytes |
+| `copy` | `(copy input output & opts)`: what a byte stream, a byte array, a reader, a File or a string holds, written to a byte stream, a writer or a File, characters in `:encoding`; any other pair is the oracle's `IllegalArgumentException` |
 | `delete-file` | `(delete-file f & [silently])`: deletes the file, answering `true`; when it cannot, answers `silently` if that is truthy and otherwise throws a `java.io.IOException` |
 | `make-parents` | `(make-parents f & more)`: makes the missing directories above the File `(file f & more)`, answering whether it made any |
 | `resource` | `(resource name)`: the URL of the file the source path holds under `name` ([Resources](#resources)), or `nil` |
@@ -88,11 +88,34 @@ included (`java.io.InputStream` for a byte stream).
 
 A reader or writer over a file is a character stream like `*in*` and `*out*`, so `line-seq`,
 `read`, `.readLine`, a `binding` of `*in*` or `*out*` and `with-open` take it. A byte stream
-answers `read` (the next octet, `-1` past the end), `available`, `skip`, `transferTo`, `write`
-of an int's low octet, `flush` and `close`. A reader over a byte stream decodes it, and a
-writer over one encodes its text into it when flushed or closed. `:encoding` names UTF-8,
-ISO-8859-1 or US-ASCII (or one of their aliases); any other name is the oracle's
-`java.io.UnsupportedEncodingException`.
+answers `read` (the next octet, `-1` past the end), `read` into a byte array or a part of one
+(the count read, `-1` past the end), `readNBytes`, `readAllBytes` (a byte array), `available`,
+`skip`, `transferTo`, `write` of an int's low octet or of a byte array or a part of one,
+`flush` and `close`. A reader over a byte stream decodes it, and a writer over one encodes its
+text into it when flushed or closed. `:encoding` names UTF-8, ISO-8859-1 or US-ASCII (or one
+of their aliases); any other name is the oracle's `java.io.UnsupportedEncodingException`.
+
+`(java.io.ByteArrayInputStream. bytes)` reads a byte array in place,
+`(java.io.ByteArrayInputStream. bytes off len)` the part of it from `off`, and
+`(java.io.ByteArrayOutputStream.)` gathers the octets written to it: `toByteArray` answers a
+copy of them, `size` their count, `toString` (like `str`) their text in UTF-8 or the charset
+named, `writeTo` writes them to another byte stream and `reset` empties it. As in Java,
+closing either changes nothing. A stream over octets (a byte array, a resource) keeps the
+position `mark` takes for `reset`; a stream over a file keeps none (`markSupported` is
+false).
+
+```clojure
+(def out (java.io.ByteArrayOutputStream.))
+(.write out (.getBytes "héllo"))
+(.write out 33)
+(vec (.toByteArray out))
+; => [104 -61 -87 108 108 111 33]
+(str out)
+; => "héllo!"
+(let [in (java.io.ByteArrayInputStream. (.toByteArray out)) buf (byte-array 3)]
+  [(.read in buf) (vec buf) (vec (.readAllBytes in))])
+; => [3 [104 -61 -87] [108 108 111 33]]
+```
 
 ## Resources
 
@@ -143,8 +166,10 @@ replaced.
   hosts. A File's `.hashCode` is the oracle's.
 - Reading a URL of another protocol than `file:` is refused by name, but for a `jar:` URL
   `resource` answered; the oracle opens a connection.
-- No byte array exists here: `read` into a buffer, `readAllBytes` and `write` of a byte array
-  are refused by name. `:encoding` knows three charsets, where the oracle knows the JDK's.
+- `:encoding` knows three charsets, where the oracle knows the JDK's.
+- `input-stream` and `output-stream` answer a `ByteArrayInputStream` or a
+  `ByteArrayOutputStream` itself, where the oracle wraps it in a buffered stream, and a
+  stream over a file keeps no `mark`.
 - `resource` finds a name the program computes below the source path's directories only, not
   inside a jar, and never consults a class loader given.
 - `(java.net.URL. s)` and `(java.net.URI. s)` construct host objects (the interpreter and the

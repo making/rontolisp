@@ -2,8 +2,9 @@
 
 `(bytes? x)`
 
-`clojure.core/bytes?`: どの値にも `false` を返します。ここでは配列が要素のクラスを無視するため、バイト配列という種類がありません。引数は評価されます。値としては1引数の関数です。
+`clojure.core/bytes?`: バイト配列（[byte-array](byte-array.md)、`.getBytes`、バイトを読む関数が返す
+もの）には `true`、ほかの値には `false` を返します。値としては1引数の関数です。
 
 ```clojure
-(println (bytes? [1 2]))  ; false
+(println (bytes? (byte-array 2)) (bytes? [1 2]))  ; true false
 ```

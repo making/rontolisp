@@ -58,6 +58,7 @@ The oracle is `clj` 1.12.6.1673: a behavior is decided by running it there, and 
 | atom, volatile, ref, agent | `(:C%ATOM #(value))`; a volatile's cell `#(value :C%VOLATILE)` | one cell shape, so STM verbs accept atoms; the second slot is only what `volatile?` reads |
 | record / deftype / reify | `(:C%RECORD tag fields table class)` / `(:C%TYPE tag fields table class slots?)` / a fresh `:C%REIFY` tag | "Dispatch"; the interfaces a body implements are rows under the tag ("Host interfaces") |
 | `#"re"` | `(:C%PATTERN stamp source ops ngroups)` | the stamp is a gensym, so `=` is identity like the oracle |
+| byte array (`byte-array`, `.getBytes`) | `(:C%BYTES octets)`, `octets` a packed `(unsigned-byte 8)` vector | "Byte arrays" |
 | `reduced`, var, nil dispatch value | `(:C%REDUCED x)`, `(:C%VAR "ns/name" getter)`, `(:C%NIL)` | |
 | `ex-info` | a condition with message and data slots | |
 | `#inst`, `#uuid` | `(:C%INST ms)` (`clojure.instant` also `:C%TIMESTAMP`, `:C%CALENDAR`), `(:C%UUID msb lsb)` | "Instants and UUIDs" |
@@ -176,7 +177,7 @@ answered `2 5 3` before).
 | `comp` `partial` `complement` `constantly` `identity` `memoize` `trampoline` | closures | `(comp)` is `identity`; `memoize` keys the argument list by `=` (`%clojure-memo-key`) |
 | `=` / `not=` | the spliced `%clojure-equal` per neighbouring pair | maps structurally (nested), records by tag plus entries, deftype/reify by identity, sequentials (lists, vectors, lazy seqs, nil) element by element across kinds, two floats by CL `=` (-0.0 = 0.0, NaN not = NaN), else `equal` (a host object on the left asks its `equals`, handed a number, string, character, `true`, nil or host object -- never `false`, a keyword, a symbol or a collection: [eq-numbers.md](eq-numbers.md) "Host objects", `ClojureInteropTest#equalsOfAHostObjectAndAValueAsksTheLeftOperand`); a host `List`/`Map`/`Set` and a Clojure collection of its kind through the host-object family's arm `%clojure-host-equal-p`, either side first ([eq-numbers.md](eq-numbers.md) "Clojure `=` of a host collection"). One shared callee, not a `labels` per site: ten sites measured 87,050 -> 34,004 B of wasm |
 | `<` `>` `<=` `>=` `==` `nil?` `false?` `true?` `boolean?` `boolean` `string?` `symbol?` `vector?` `fn?` | the CL test answering `T`-or-false | `==` is CL `=` (numeric across categories: `(== 1 1.0)`, `(== 0.0 -0.0)`; a non-number signals, `(==)` is refused at lower time); `<` `>` `<=` `>=` `==` as values are `&rest` lambdas over the CL function answering `T`-or-false (`(map < [1 2] [2 1])` is `(true false)`, not `(true nil)`). `fn?` is false for keywords, sets and maps |
-| the type predicates (`coll?` `seq?` `sequential?` `map?` `set?` `list?` `record?` `seqable?` `associative?` `counted?` `indexed?` `reversible?` `ifn?`, `number?` `integer?` `int?` `double?` `float?` `ratio?` `rational?` `nat-int?` `pos-int?` `neg-int?` `infinite?` `NaN?`, `keyword?` `ident?` and the `simple-`/`qualified-` six, `char?` `var?` `volatile?` `realized?` `special-symbol?`, `inst?` `uuid?` `uri?` `class?`) | `ClojurePredicateLowering`: `(if TEST T false)` over one CL type predicate or one spliced `%clojure-is-NAME` helper (CL boolean); as a value a one-argument lambda over the same test | a wrapper is a cons whose car is a CL keyword, so every list test excludes keywords/atoms/vars/records/patterns (`coll?` answered true for them before). The host four go through `%clojure-host-instance-p` (a host arm, `isInstance` of the named class; NIL stand-in without `java:`); `inst?` and `uuid?` also take the program's own instants and UUIDs ("Instants and UUIDs"). `sorted?` is `%clojure-is-sorted`; `set?` and `reversible?` name the sorted-aware `%clojure-is-set`/`%clojure-is-reversible`, which a program building no sorted collection calls as `%clojure-set-p`/`%clojure-is-vector` ("Sorted collections"). `chunked-seq?` `decimal?` `bytes?` `delay?` are `(progn x false)`, and so are `reader-conditional?` `tagged-literal?` where nothing makes one ("Reader conditionals"): no value of that kind exists, which is the oracle's answer for every value a program here builds (not a refusal: `(if (future? x) @x x)` runs); `any?` is `(progn x T)`. `not-any?`/`not-every?` negate the inline `some`/`every?` loops; `identical?` is `eql` plus keyword spelling (keywords are fresh lists), so a host object is identical only to itself (`ClojureInteropTest.identicalOnHostObjectsIsIdentity`, [eq-numbers.md](eq-numbers.md) "Host objects"); `distinct?` goes through `%clojure-distinct-new-p`; `bound?` is false at the first var whose root is the unbound root ("Vars and metadata"; a var whose metadata says `:macro` is bound without taking its root, the oracle's own mark); `extends?` reads the protocol's tables at the type's `extendKeyForm` tag (literal names, no value form). `future?`, `future-done?`, `future-cancelled?` and `future-cancel` read a host `Future` ("A host `Future` under `deref`"). Arity refusals in the oracle's words. Pinned oracle-identical (clj 1.12.6, 2026-10-03) by clojure-spec `collection-predicates-*`, `number-predicates-*`, `name-predicates-*`, `any-not-any-*`, `var-volatile-*`, `predicates-of-kinds-*`, `special-symbol-*`, `extends-*`, `coll-is-false-for-the-tagged-wrappers`; the representation deviations by `the-seq-predicates-follow-the-list-representation`, `decimal-and-bigint-literals-are-plain-rationals`, `identical-compares-numbers-and-symbols-by-value`; the host four by `ClojureInteropTest.hostKindPredicatesTestTheHostClass` |
+| the type predicates (`coll?` `seq?` `sequential?` `map?` `set?` `list?` `record?` `seqable?` `associative?` `counted?` `indexed?` `reversible?` `ifn?`, `number?` `integer?` `int?` `double?` `float?` `ratio?` `rational?` `nat-int?` `pos-int?` `neg-int?` `infinite?` `NaN?`, `keyword?` `ident?` and the `simple-`/`qualified-` six, `char?` `var?` `volatile?` `realized?` `special-symbol?`, `inst?` `uuid?` `uri?` `class?`) | `ClojurePredicateLowering`: `(if TEST T false)` over one CL type predicate or one spliced `%clojure-is-NAME` helper (CL boolean); as a value a one-argument lambda over the same test | a wrapper is a cons whose car is a CL keyword, so every list test excludes keywords/atoms/vars/records/patterns (`coll?` answered true for them before). The host four go through `%clojure-host-instance-p` (a host arm, `isInstance` of the named class; NIL stand-in without `java:`); `inst?` and `uuid?` also take the program's own instants and UUIDs ("Instants and UUIDs"). `sorted?` is `%clojure-is-sorted`; `set?` and `reversible?` name the sorted-aware `%clojure-is-set`/`%clojure-is-reversible`, which a program building no sorted collection calls as `%clojure-set-p`/`%clojure-is-vector` ("Sorted collections"). `chunked-seq?` `decimal?` `delay?` are `(progn x false)`, and so are `reader-conditional?` `tagged-literal?` where nothing makes one ("Reader conditionals") and `bytes?` where nothing makes a byte array ("Byte arrays"): no value of that kind exists, which is the oracle's answer for every value a program here builds (not a refusal: `(if (future? x) @x x)` runs); `any?` is `(progn x T)`. `not-any?`/`not-every?` negate the inline `some`/`every?` loops; `identical?` is `eql` plus keyword spelling (keywords are fresh lists), so a host object is identical only to itself (`ClojureInteropTest.identicalOnHostObjectsIsIdentity`, [eq-numbers.md](eq-numbers.md) "Host objects"); `distinct?` goes through `%clojure-distinct-new-p`; `bound?` is false at the first var whose root is the unbound root ("Vars and metadata"; a var whose metadata says `:macro` is bound without taking its root, the oracle's own mark); `extends?` reads the protocol's tables at the type's `extendKeyForm` tag (literal names, no value form). `future?`, `future-done?`, `future-cancelled?` and `future-cancel` read a host `Future` ("A host `Future` under `deref`"). Arity refusals in the oracle's words. Pinned oracle-identical (clj 1.12.6, 2026-10-03) by clojure-spec `collection-predicates-*`, `number-predicates-*`, `name-predicates-*`, `any-not-any-*`, `var-volatile-*`, `predicates-of-kinds-*`, `special-symbol-*`, `extends-*`, `coll-is-false-for-the-tagged-wrappers`; the representation deviations by `the-seq-predicates-follow-the-list-representation`, `decimal-and-bigint-literals-are-plain-rationals`, `identical-compares-numbers-and-symbols-by-value`; the host four by `ClojureInteropTest.hostKindPredicatesTestTheHostClass` |
 | `int` `long` | `rontolisp::%clojure-int-cast` / `%clojure-long-cast` (`ClojureCoreLowering.castOf`; `-int-v` / `-long-v` as a value, arity checked at run time), a literal argument folded at lower time through the cast of its own type (`foldedCast`: a double literal's `intCast(double)`, a long's, a bigint's or ratio's object cast), an out-of-range literal folding to its refusal carrier with the oracle's message | the oracle's `RT.intCast` / `RT.longCast` of an object: range checks and messages included; a non-literal double takes the object cast (`(int x)` of a var holding `1e10` "integer overflow", where the oracle's primitive-typed double -- a `let` local, `(* 2.0 x)` -- says "Value out of range for int: 2.0E10"); pinned oracle-identical (clj 1.12.6, 2026-10-08) by clojure-spec `int-and-long-are-the-oracles-range-checked-casts` |
 | `char` `quot` | `code-char` / `truncate` | a non-number signals |
 | `double` `float` `byte` `short` `num` | one call to `rontolisp::%clojure-NAME` (`-v` as a value, arity checked at run time); `byte`/`short` through `%clojure-cast-bounded` (a character's code, a ratio or double truncated, a double compared BEFORE truncating so `(byte 127.9)` refuses, NaN refuses; the refusal spells the value with `princ-to-string`), `double`/`float` widen to a double, `float` refusing past `3.4028234663852886e38`, `num` is the number itself or nil | a non-number signals; `float` holds a double (`(float 1/3)` prints `0.3333333333333333`, the oracle `0.33333334`); `vector-of :double`/`:float` call the same workers, `:byte`/`:short` keep the longCast path (the oracle's `(vector-of :byte 127.9)` is `[127]`); pinned by clojure-spec `primitive-casts-double-float-byte-short-and-num` |
@@ -187,7 +188,7 @@ answered `2 5 3` before).
 | `print-str` / `prn-str` / `println-str` | `rontolisp::%clojure-print-str` over `(list parts...)` (a `&rest` lambda as a value) | prints to a private string stream, never a `*standard-output*` rebinding: the parts evaluate in the caller, so what one prints reaches the real output; nested strings follow `print`/`pr` (bare/quoted), unlike `str`/`pr-str` whose nested strings are always quoted |
 | `println` `print` `pr` `prn` | one `%clojure-write-datum` per part straight to `*standard-output*`, `write-char` spaces, `terpri` | answers nil; with several parts and any computed one, every part binds to a temporary first (the oracle evaluates all arguments before printing). `newline` is `(progn (princ "\n") nil)`: until 2026-10-09 it answered the `"\n"` `princ` returns, so `pprint` did too (clojure-spec `clojure-pprint-cl-format-lays-out-through-the-pretty-printer`) |
 | `rand` `rand-int` `rand-nth` `shuffle` | draws from the program-owned generator (`.kb/random.md`) | no domain check; `rand-nth` of nil is nil, of an empty vector signals; `shuffle` pins membership, never order |
-| `make-array` `aget` `aset` `alength` | general arrays (`aref`, `array-dimension`) | the element class is ignored; every backend |
+| `make-array` `aget` `aset` `alength` | general arrays (`aref`, `array-dimension`); of one index the byte-array family's `%clojure-aget`/`-aset`/`-alength` | the element class is ignored but `Byte/TYPE` of one dimension, a byte array ("Byte arrays"); every backend |
 | Java interop | "Java interop" | interpreter and JVM only |
 | `quote` | `quote` with symbols mangled | vectors, maps and sets inside are rebuilt (a quoted list holding one becomes a `list` construction) |
 | `comment` | `nil` | |
@@ -744,9 +745,11 @@ before the library splice.
   `car`/`cdr` read of one, as a `cond` clause's test, an `if`'s test or an `or`'s disjunct;
   a VIEW (`%clojure-sorted-key`, `-items`, `-hashed`, `-shrunk`, `-rewrap`) answering its
   first argument for anything unsorted, its other arguments variables; an ALIAS
-  (`%clojure-is-set` -> `%clojure-set-p`, `%clojure-is-reversible` -> `%clojure-is-vector`).
+  (`%clojure-is-set` -> `%clojure-set-p`, `%clojure-is-reversible` -> `%clojure-is-vector`);
+  a SETTER (`(%clojure-aset a i v)` -> `(setf (aref a i) v)`, the byte-array family's, "Byte
+  arrays").
   `clojure/ClojureArms` (family `SORTED`; `MATCHER` is the regex matcher's, `REDUCIBLE` a typed value's own `CollReduce`/`IKVReduce` row's, "clojure.jar namespaces", `UNBOUND` is the unbound root's,
-  `STREAM_DEPTH` the core specials' counters, "Vars and metadata", `READER_VALUE` "Reader conditionals", `PRINT_FLAGS`,
+  `STREAM_DEPTH` the core specials' counters, "Vars and metadata", `READER_VALUE` "Reader conditionals", `BYTES` "Byte arrays", `PRINT_FLAGS`,
   `PRINT_META` and `NAMESPACE_MAP` the printer's, "State", and `STREAM` the stream printer's, "Streams as values") scans for a PRODUCER (`%clojure-sorted-make` and the four
   constructor `-v` values: no literal makes one) and, without one, strips: a test folds to
   false (its clause, its `if` branch or its disjunct goes; one disjunct left stands alone),
@@ -1396,6 +1399,17 @@ oracle's classpath; a `deps.edn` ring-core newer than the shipped one refuses th
   `UnsupportedCharsetException`), where the oracle would accept the JDK's other charsets.
   Checked where the oracle checks it (`form-decode-str` only when the string holds `+` or
   `%`; `form-encode` of nil or a map of no strings never).
+- **base64 is a PART** (2026-10-09, e81): `base64-encode`/`base64-decode` live in
+  `lib/ring/util/codec_base64.clj` (`ClojureBuiltinNamespaces.PARTS`) over the kernels
+  `%clojure-ring-base64-encode`/`-decode`: `java.util.Base64`'s basic alphabet, padded, and the
+  decoder's refusals in its words (`Input byte[] should at least have 2 bytes for base64
+  bytes`, `Illegal base64 character 21`, `Input byte array has incorrect ending byte at 4`,
+  `Last unit does not have enough valid bits`). A part for the reason the file responses are
+  one: the decode kernel makes a byte array, so in `codec.clj` it would keep the byte-array
+  arms in every program requiring the namespace. Pins: clojure-spec
+  `ring-util-codec-base64-encodes-and-decodes-a-byte-array` (four backends, oracle-identical
+  with ring-codec 1.3.0), `ClojureRingUtilTest#theBase64PairAnswersWhatTheJdksBase64Answers`
+  (seeded random octets against `java.util.Base64`).
 - **File responses are a PART** (2026-10-09): `file-response`, `url-response`,
   `resource-response`, `resource-data` live in `lib/ring/util/response_files.clj`
   (`ClojureBuiltinNamespaces.PARTS`), loaded into `ring.util.response` by
@@ -1491,8 +1505,10 @@ new, and the five fetch has (the JDK's on the interpreter and the JVM, `wasi:htt
   (illegal character per component, malformed escape, `URI with undefined scheme`,
   `invalid URI scheme`, `unsupported URI`), the client's restricted header names and
   non-string values, and by name what no transport here honours (`:client`,
-  `:interceptors`, `:timeout` until todo 148, `:version`, `:raw`, `:expect-continue`,
-  `:as :bytes`). A method fetch does not send is refused by name.
+  `:interceptors`, `:timeout` until todo 148, `:version`, `:raw`, `:expect-continue`). A
+  method fetch does not send is refused by name. `:as :bytes` answers the decoded body's octets
+  as a byte array (`%clojure-http-octets`, 2026-10-09), which makes the request kernel a
+  byte-array producer ("Byte arrays").
 - The request body (2026-10-09), the oracle's `->body-publisher` (`%clojure-http-body`): nil
   none, a string as it is, a `java.io.File` and an InputStream (a `clojure.java.io` byte stream,
   a reply's `:as :stream` body) their octets (`%clojure-http-octets-of`, an `(unsigned-byte 8)`
@@ -1500,7 +1516,8 @@ new, and the five fetch has (the JDK's on the interpreter and the JVM, `wasi:htt
   end (the oracle refuses a Reader; kept while a Ring request `:body` is one, todo `f09`);
   anything else the oracle's `ex-info` `Don't know how to convert class Xto body` (sic). A
   File not there is `FileNotFoundException` `<path> not found` (`ofFile`'s words, not io's `(No
-  such file or directory)`). A byte-array `:body` waits on the byte-array kind (todo `e81`).
+  such file or directory)`). A byte array is sent as its octets, a `ByteArrayInputStream`
+  below its end, and a multipart part opens a byte array as `io/input-stream` does (2026-10-09).
 - `:multipart` (2026-10-09): the oracle's multipart interceptor (hato's format) octet for octet,
   `%clojure-http-multipart`: per part `--b`, `Content-Disposition` (`name` from `:part-name` or
   `:name` through `str`, `filename` from `:file-name` or a File's name), `Content-Type` (`:content-type`,
@@ -1583,10 +1600,12 @@ new, and the five fetch has (the JDK's on the interpreter and the JVM, `wasi:htt
 - Oracle (clj 1.12.6 + babashka.http-client 0.4.23 against the corpus origin, 2026-10-08):
   identical but the response's missing `:version` and the `java.net.URI` `:uri` (a string
   here), the User-Agent (fetch's), a transport failure's class (an `IOException`; the
-  oracle's `ConnectException` is one), map key order, `:as :bytes`. Compression, the
+  oracle's `ConnectException` is one), map key order. Compression, the
   InputStream `:as :stream` body, File/InputStream/stream request bodies and `:multipart`
-  (the boundary normalized) (2026-10-09): identical on the four legs. Waiting: `:as :bytes`
-  and a byte-array `:body` (todo `e81`), `:timeout` (todo `148`), a reader over the stream body
+  (the boundary normalized) (2026-10-09): identical on the four legs; `:as :bytes`, a
+  byte-array `:body` and part and the byte-array reads of the stream body the same day (the
+  oracle against an origin serving the same endpoints). Waiting: `:timeout` (todo `148`), a
+  reader over the stream body
   reading as the reply arrives (todo `f07`), the arity words (todo `f06`).
 - Pins: `FetchSpecE2eTest#clojureHttpClient` (`clojure-http-spec.yaml`: interpreter, JVM,
   `--native`, component), `ClojureHttpClientTest` (the lowering, the refusals, the FETCH
@@ -1624,8 +1643,9 @@ function and a directive must be a top-level form.
   directive to `<var>%import` behind a `defun` of the var (`importWrapper`); an export that
   converts, or names no single-arity top-level `defn` taking exactly its parameters (several
   arities, a rest parameter, a `def`'d fn, a multimethod), goes through `<var>%export[N]`
-  (`exportWrapper`) calling the var. Refused by name: `:bytes` (an `(unsigned-byte 8)`
-  vector, which no Clojure value is), `:async` (its future is no Clojure future).
+  (`exportWrapper`) calling the var. Refused by name: `:bytes` (no crossing converts a byte
+  array to the `(unsigned-byte 8)` vector it transfers yet, todo `f12`), `:async` (its future
+  is no Clojure future).
 - **Order**: `defimport` registers its name in pass one by spelling (like `deftest`), so a
   call above it is a direct call; on the interpreter and the JVM it binds a stub of the
   declared arity throwing `UnsupportedOperationException` in Clojure's words (the
@@ -2066,11 +2086,14 @@ namespace` but the ones no measured library names (`inspector`, `java.browse`,
   `ctx.hostTarget`), not at the first call, the uiop `run-program` stance (`.todo/363`)
   being for Common Lisp, where no program reaches the host at all. Standard input from a
   temporary file (a string encoded in `:in-enc` through a host `PrintStream`, a File as it
-  is, a reader's text), the error output to another, stdout read by `transferTo` into a
-  host `ByteArrayOutputStream` decoded in `:out-enc`: no pipe can fill while another is
-  read, without the oracle's futures. A host `byte[]` crosses the boundary as a Lisp list
-  (empty: nil), so nothing reads one; `:out-enc :bytes` is refused (e81). Measured
-  oracle-identical on the interpreter and the JVM:
+  is, a reader's text; a byte array or a `clojure.java.io` byte stream copied as its octets),
+  the error output to another, stdout read by `transferTo` into a host
+  `ByteArrayOutputStream` decoded in `:out-enc`: no pipe can fill while another is read,
+  without the oracle's futures. The host stream is a param-tagged construction
+  (`(^[] java.io.ByteArrayOutputStream/new)`), which the io lowering leaves to `java:new`,
+  since `ByteArrayOutputStream.` makes the byte-array family's stream. `:out-enc :bytes`
+  answers `(byte-array (.toByteArray out))`: a host `byte[]` crosses back as a Lisp list
+  (empty: nil, todo `f13`). Measured oracle-identical on the interpreter and the JVM:
   `ClojureInteropTest#clojureJavaShellRunsAHostProcessLikeTheOracle`.
 - `clojure.xml` (2026-10-09): `(parse s)` reads the document itself on every backend:
   `slurp` with `:encoding "ISO-8859-1"` (one character per byte), then the kernel
@@ -2119,6 +2142,85 @@ namespace` but the ones no measured library names (`inspector`, `java.browse`,
   `ClojureLibraryTest#aProgramStoringNoReducerRowSplicesTheReduceVerbsWithoutTheirProtocolArms`,
   `ClojureArmsTest#theReducibleFamilyIsMadeByATypedRowOfCollReduceOrIKVReduce`,
   `ClojureLoweringTest#aTypedRowOfCollReduceOrIKVReduceIsStoredThroughTheLibrary`.
+
+## Byte arrays
+
+- **The value** (2026-10-09, e81): `(:C%BYTES octets)` over a packed `(unsigned-byte 8)`
+  vector -- what the byte streams read into and a transport's body is, so a body or a file's
+  contents becomes one uncopied. An element is stored as its octet and read signed
+  (`%clojure-byte-of-octet`). No collection: `coll?`, `vector?`, `sequential?` false, `=`
+  identity (a map key too); seqable, so `count`, `seq`, `nth`, `get`, `contains?` and the seq
+  verbs read its elements (`ClojureCollectionLowering`'s arms). Prints `#object["[B" "[B"]`
+  (the identity hash left out, like a stream's), `str` `[B`, `class` `:[B`
+  (`ClojureDispatchLowering.classForm`), a protocol dispatches it to `Object`.
+- **The verbs** (`ClojureBytesLowering`, `clojure.lisp` "Byte arrays"): `byte-array` (the
+  oracle's `Numbers.byte_array`: a number is the size, a seq's members stored as
+  `Number.byteValue` stores them -- low eight bits, a double saturated to the int range, NaN
+  0 -- and `(byte-array size init)` of a byte or a seq, zeros past its end), `bytes` (the
+  cast), `bytes?` (`%clojure-is-bytes`), `aget`/`aset`/`alength` of one index
+  (`%clojure-aget`/`-aset`/`-alength`), `aclone`, `aset-byte` (`(byte v)`'s range check),
+  `make-array` of `Byte/TYPE` and one dimension; `.getBytes` (`%clojure-string-bytes`) and a
+  `java.lang.String` construction of one to four arguments (`%clojure-string-new`) over
+  UTF-8, ISO-8859-1 or US-ASCII by name or alias, or a host `Charset` by its name -- any other
+  the oracle's `UnsupportedEncodingException` on every backend, the host's other charsets
+  never consulted (todo `f14` for `StandardCharsets` on wasm). UTF-8 decodes through
+  `%clojure-ring-write-utf-8` (the JDK's replacement of malformed input), encoding answers `?`
+  for an unmappable character and a lone surrogate. `aset` takes any integer -128..127, where
+  the oracle's reflection takes only a `Byte` (no Byte kind here to tell `(byte 5)` from `5`).
+  The refusals carry the oracle's classes (`ArrayIndexOutOfBoundsException`,
+  `NegativeArraySizeException`, `ClojureRefusals`) and words.
+- **The family** `ClojureArms.Family.BYTES`, ahead of `HOST` (a String construction's alias
+  is `java:new`, which `HOST` reads as a producer). Tests `%clojure-bytes-p` and
+  `%clojure-io-array-stream-p`; aliases `%clojure-aget` -> `aref`, `%clojure-alength` ->
+  `array-dimension`, `%clojure-is-bytes` -> `progn`, `%clojure-string-new` -> `java:new`,
+  `%clojure-bytes-host-value` -> `%clojure-host-value`; the seventh strip shape, a SETTER:
+  `(%clojure-aset a i v)` -> `(setf (aref a i) v)` (`ClojureArms.Stripper.setterAsSetf`).
+  Producers (`ClojureBytesLowering.PRODUCERS`): `byte-array` as a call (`-2`) and a value
+  (`-v`), `.getBytes`, the byte streams' `readAllBytes`, `readNBytes`, `toByteArray`, the
+  `ByteArrayInputStream`/`ByteArrayOutputStream` constructions, ring's base64 decode kernel and
+  the HTTP client's request kernel (`:as` may name `:bytes` at run time). Measured 2026-10-09
+  against origin/develop 8e24b7237 (wasm P1 / component / JVM class): `demo.clj`,
+  `ring-hello.clj`, `greeter.clj`, an array program and a string program byte-identical; a
+  clojure.java.io program making no byte array 254,262 -> 254,184 / 262,347 -> 262,262 /
+  311,128 -> 311,113 B (the refusal "write of a byte array is not supported" gone); a minimal
+  `rontolisp.http-client` GET 537,060 -> 546,954 B component and 351,022 -> 358,248 B class,
+  the price of the request kernel as a producer.
+- **Byte streams over and into one**: a `ByteArrayInputStream` is `(:C%INPUT-STREAM #(nil
+  octets i closed) #(class end mark))`, reading the array in place below `end`; a
+  `ByteArrayOutputStream` `(:C%OUTPUT-STREAM #(nil closed) #(class buffer count))`, its buffer
+  doubling. Neither closes (the JDK's). Every byte-stream function reaches the third part
+  through `%clojure-io-array-stream-p`. `read` of an array (`%clojure-io-read-into`): a file
+  read is bounded by `file-length` minus `file-position` (a second read past the end traps on
+  the component), a fetched reply's body hands the chunk in hand (`%clojure-io-read-pulled`);
+  `readNBytes` reads until it has what it asks for (`%clojure-io-read-fully`,
+  `%clojure-io-pull-n`), `readAllBytes` the rest (`%clojure-io-octets-from`); `mark`/`reset`
+  over octets (`%clojure-io-marks`, the array stream's own slot), none over a file or a reply.
+  The array paths loop `read-byte`/`write-byte` over a file: naming `read-sequence`,
+  `write-sequence` or a two-argument `file-position` in a function a Ring program splices
+  changed `ring-hello.clj`'s output (the prelude's Gray dispatchers came with them; observed
+  while writing e81, no figure kept).
+- **Consumers elsewhere**: `slurp` of a byte array (UTF-8), `io/input-stream`, `io/reader` and
+  `io/copy` of one; the Ring adapter's body; the HTTP client ("HTTP client"); ring-codec's
+  base64 ("Ring util namespaces"); `clojure.java.shell`'s `:in` and `:out-enc :bytes`
+  ("clojure.jar namespaces"); a `java:` member's argument ("Java interop": a `:list` view).
+- **Deviations** (user docs `byte-array.md`, `deviations.md`): the hash-less `#object` and
+  `str`; `class` a keyword; `aset` of any in-range integer; a seq a snapshot of the elements
+  (the oracle's `ArraySeq` reads the array as it walks: `(1 9 3)` there, `(1 2 3)` here after
+  an `aset` between `seq` and the print); a `byte[]` Java answers a list (todo `f13`); no
+  `:bytes` wasm crossing (todo `f12`).
+- **Pins**: clojure-spec `byte-array-makes-a-mutable-array-of-signed-bytes`,
+  `a-byte-array-is-no-collection-yet-seqs-its-bytes`,
+  `strings-and-byte-arrays-convert-in-a-charset`,
+  `byte-arrays-flow-through-clojure-java-io-streams`,
+  `ring-util-codec-base64-encodes-and-decodes-a-byte-array`,
+  `a-byte-array-prints-as-the-host-object-its-hash-left-out` (four backends; oracle-identical
+  but the last, the deviation); clojure-http-spec `the-body-is-a-byte-array-under-as-bytes`,
+  `the-stream-body-reads-into-byte-arrays`, `a-byte-array-body-and-part-are-sent-as-they-are`;
+  `ClojureBytesTest` (`.getBytes` and `String.` against the JDK over seeded random inputs),
+  `ClojureArmsTest#theByteArrayFamilyFoldsItsArmsAliasesAndSetterToTheFormsBeforeByteArrays`,
+  `ClojureLibraryTest#aProgramMakingNoByteArraySplicesTheLibraryWithoutItsByteArrayArms`,
+  `ClojureInteropTest#aByteArrayCrossesTheJavaBoundaryAsItsBytes`,
+  `#clojureJavaShellRunsAHostProcessLikeTheOracle`, `ClojureRingAdapterTest` (`/bytes`).
 
 ## clojure.java.io
 
@@ -2204,8 +2306,9 @@ the file), `default-streams-impl` a map. Until then only `reader` resolved, as a
   72,788 -> 72,737 / 74,662 -> 74,659; `.write` on a `StringWriter` 52,383 -> 52,741 /
   44,383 -> 44,741 / 55,918 -> 56,289 / 102,833 -> 103,383 (the instance call's io arm).
 - **Deviations** (user doc `clojure-java-io.md`): no identity hash in `#object`; a URL's
-  `.hashCode`/`=` by spelling; reading a non-`file:` URL refused by name; no byte arrays
-  (`read` into a buffer, `readAllBytes`, `write` of one refused); three charsets; a computed
+  `.hashCode`/`=` by spelling; reading a non-`file:` URL refused by name; `input-stream` of
+  a byte-array stream answering it unwrapped and a file stream keeping no mark (todo `f15`);
+  three charsets; a computed
   resource name never inside a jar; `lastModified` in whole seconds (`file-write-date`'s
   resolution, every backend); wasm: `getAbsolutePath` of a relative File refused (no
   cwd); `canRead` is `exists`; `line-seq` takes a File/URL/byte stream like a path.
@@ -3106,7 +3209,12 @@ The `java:` surface (`.kb/java-interop.md`); interpreter and JVM only -- wasm co
   (`%clojure-str-of x "nil" nil`, the `.toString` here), of the oracle's class name
   (`%clojure-class-name-of`), its members converted alike (`%clojure-host-members`: the
   collection itself when every member is plain);
-  a Date/Timestamp/UUID the host object (`%clojure-time-value-host`); a host object itself;
+  a Date/Timestamp/UUID the host object (`%clojure-time-value-host`); a byte array a `:list`
+  view of its elements as Java's bytes, of class `[B` (e81, the byte-array family's arm),
+  which converts where a member takes a `byte[]` (`Arrays/hashCode` of `[-61]` answers the
+  `byte[]` overload's `-30`, measured 2026-10-09) -- a String construction's arguments go
+  through the family's alias `%clojure-bytes-host-value` instead, so a byte array reaches
+  `%clojure-string-new` as itself; a host object itself;
   anything else -- a fn, an atom, a deftype, a reify, a pattern, a var, a condition inside a
   collection -- an identity handle (`%clojure-host-object`: nil hash, the oracle's class name,
   text nil -- `Object`'s spelling `clojure.lang.Atom@hex` -- for a fn, an atom, a reduced and a

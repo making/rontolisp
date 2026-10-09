@@ -685,8 +685,8 @@ final class ClojureWasmLowering {
 
 	/**
 	 * One type keyword: the boundary's vocabulary ({@link ClojureBoundary#designators}),
-	 * {@code :void} for a result; {@code :bytes} is refused -- a Clojure program has no
-	 * {@code (unsigned-byte 8)} vector to transfer.
+	 * {@code :void} for a result; {@code :bytes} is refused -- no crossing converts a
+	 * byte array to the {@code (unsigned-byte 8)} vector it transfers yet.
 	 */
 	private static Designated designated(ClojureLowering ctx, LispVal datum, String what, boolean result) {
 		if (!(datum instanceof LispSymbol keyword) || !keyword.name().startsWith(":")) {
@@ -697,8 +697,8 @@ final class ClojureWasmLowering {
 			return new Designated(upper, Crossing.PLAIN);
 		}
 		if (upper.equals(":BYTES")) {
-			throw new LispReadException(what + ": :bytes does not cross from Clojure -- it transfers an "
-					+ "(unsigned-byte 8) vector, which no Clojure value is; a string crosses as :string");
+			throw new LispReadException(what + ": :bytes does not cross from Clojure yet -- no crossing converts "
+					+ "a byte array to the (unsigned-byte 8) vector it transfers; a string crosses as :string");
 		}
 		Set<String> designators = ctx.boundary.designators();
 		if (!designators.contains(upper)) {

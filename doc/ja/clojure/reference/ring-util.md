@@ -12,7 +12,7 @@ var と同じように振る舞います（`:refer :all`、`#'`、関数値）�
 |---|---|
 | `ring.util.response` | `response` `status` `header` `content-type` `charset` `redirect` `redirect-status-codes` `redirect-after-post` `created` `not-found` `bad-request` `find-header` `get-header` `update-header` `get-charset` `set-cookie` `response?` `file-response` `url-response` `resource-response` `resource-data` |
 | `ring.util.request` | `request-url` `content-type` `content-length` `character-encoding` `urlencoded-form?` `body-string` `path-info` `in-context?` `set-context` |
-| `ring.util.codec` | `url-encode` `url-decode` `percent-encode` `percent-decode` `form-encode` `form-decode` `form-decode-str` `form-decode-map` `assoc-conj` |
+| `ring.util.codec` | `url-encode` `url-decode` `percent-encode` `percent-decode` `form-encode` `form-decode` `form-decode-str` `form-decode-map` `assoc-conj` `base64-encode` `base64-decode` |
 | `ring.util.mime-type` | `default-mime-types` `ext-mime-type` |
 | `ring.middleware.params` | `wrap-params` `params-request` `assoc-query-params` `assoc-form-params` |
 | `ring.middleware.keyword-params` | `wrap-keyword-params` `keyword-params-request` |
@@ -30,6 +30,10 @@ var と同じように振る舞います（`:refer :all`、`#'`、関数値）�
 ; => "q=a+b"
 (get (codec/form-decode "a=1&a=2&b=x+y") "a")
 ; => ["1" "2"]
+(codec/base64-encode (.getBytes "héllo"))
+; => "aMOpbGxv"
+(String. (codec/base64-decode "aMOpbGxv") "UTF-8")
+; => "héllo"
 ```
 
 ミドルウェアは Ring と同じようにハンドラを包みます。`wrap-params` は `:query-params`、
@@ -84,7 +88,6 @@ nil
 次のものは WebAssembly バックエンドにないホストを必要とするので、プログラムが名前を
 挙げると、その名前を示して拒否します。
 
-- `ring.util.codec/base64-encode` と `base64-decode`（バイト配列を使う）。
 - 名前空間 `ring.middleware.cookies`、`session`、`flash`、`multipart-params`、
   `nested-params`、`not-modified`、`file`、`file-info`、`resource`、`head`、
   `content-length`、`ring.util.io`、`time`、`parsing`、`test`、`async`、

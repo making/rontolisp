@@ -274,7 +274,9 @@ lazy なコレクションから先は消費されるにつれて realize され
 `equal` で比較されるデータで、呼び出し位置（`(:k m)`、省略可能なデフォルト付き）や関数値として
 はマップ参照です。配列は general です。`(make-array Class dim...)` はクラスを無視した
 一般配列を作り、`aget` で読み、`aset` で書き、`alength` で測ります（本の
-`interop.clj` の形。Clojure の綴りだけが新しく、どのバックエンドでも動きます）。
+`interop.clj` の形。Clojure の綴りだけが新しく、どのバックエンドでも動きます）。バイト配列
+（`byte-array`、`.getBytes`、`(make-array Byte/TYPE n)`）は `(unsigned-byte 8)` のベクタを
+`(:C%BYTES octets)` と包んだもので、要素は符号付きのバイトとして読み出されます。
 
 seq 群はすべてのコレクションのリストビュー上で動きます:リストはそのまま通り抜け、
 ベクターと文字列は変換され、マップはエントリごとに 2 要素ベクターを、セットは要素ごとに
@@ -472,13 +474,12 @@ var はエクスポートより下で定義してかまいません。
 | `defmacro` パラメータの `&form`/`&env` | 名前で | マクロはコンパイル環境を受け取らない |
 | 未知のエイリアスの `::alias/kw` | `Invalid token: ...` | 解決するのは require のエイリアス、ファイル自身の ns、既知の名前空間のみ |
 | `--no-gc` ビルド | 名前で | そのバックエッドにはペアもシンボルもクロージャもない |
-| バイト配列への `read`、`readAllBytes`、バイト配列の `write` | `... of a byte array is not supported: byte arrays are not built in` | どのバックエンドにもバイト配列の種類がない（`bytes?` は `false`） |
 | `http:`（ほか `file:` 以外）の URL の読み取り | `reading the http: URL ... is not built in` | `clojure.java.io` の下に接続の実行系がない。取得は [rontolisp.http-client](reference/http-client.md) が行う |
 | `clojure.core` の var、マクロ、マルチメソッド、プロトコルメソッドの `with-redefs`。REPL では、以前の入力が `^:redef` なしで定義した `defn` の `with-redefs` | `with-redefs of ... is not supported...`、`... define it ^:redef to redefine it` | コアの関数は呼び出しごとにインライン展開される。置き換えるルートを持つのは `def`/`defn`/`declare` の var だけで、REPL の入力は直接呼び出しのまま実行済み |
 | 非同期の Ring ハンドラ（`:async? true` 付きの `run-server`） | `asynchronous handlers (:async? true) are not supported` | トランスポートに respond/raise の仕組みがない |
 | `rontolisp.wasm` の宣言の `:async`、`async func` の WIT メンバーやエクスポート | `:async is not supported yet ...`、`... is an async func ...` | 中断する呼び出しが答える future は Clojure の future ではない |
 | stream か future を受け取るか答える WIT メンバー | `... which the Clojure tier does not carry yet (file.wit:N)` | 非同期 canonical ABI のハンドルが答える Clojure の future がまだない |
-| `rontolisp.wasm` の宣言の `:bytes` | `:bytes does not cross from Clojure ...` | `(unsigned-byte 8)` のベクタを渡すが、それに当たる Clojure の値がない |
+| `rontolisp.wasm` の宣言の `:bytes` | `:bytes does not cross from Clojure yet ...` | バイト配列を、渡す `(unsigned-byte 8)` のベクタへ変換する仕組みがまだない |
 
 ## エラーと位置
 

@@ -4,7 +4,8 @@
 
 Answers the value's kind as a keyword: `:map`, `:vector`, `:set`, `:list`,
 `:string`, `:number`, `:keyword`, `:symbol`, `:char`, `:boolean`, `:nil`,
-`:function` or `:atom` (a sorted map is `:map`, a sorted set `:set`). The oracle answers
+`:function` or `:atom` (a sorted map is `:map`, a sorted set `:set`); a byte array answers
+`:[B`, `byte[]`'s binary name. The oracle answers
 host classes, which no wasm backend has -- the keyword names the kind instead, on every
 backend alike. A record or deftype answers its tag keyword. An exception or a runtime error
 answers its class name as a keyword (`:java.lang.IllegalArgumentException`,

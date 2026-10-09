@@ -13,9 +13,9 @@ open はオラクルの `java.io.FileNotFoundException` になります。
 | `file` | `(file arg)` / `(file parent child & more)`: パス、File、`file:` URL が指す `java.io.File`（`nil` には `nil`）。2 つ目以降の引数は、それぞれ直前のものの下の相対パス |
 | `as-file`, `as-url` | `Coercions` プロトコル: 値が File として、また URL として表すもの。`nil` は `nil` |
 | `as-relative-path` | `(as-relative-path x)`: 相対の File か文字列のパス。絶対パスは `IllegalArgumentException` |
-| `reader`, `writer` | `(reader x & opts)`: パス、File、URL、URI、バイトストリームの上のバッファ付き文字ストリーム、またはストリームそのもの。`:encoding` で文字セットを指定し（既定は UTF-8）、`:append true` で writer のテキストを追記する |
-| `input-stream`, `output-stream` | `(input-stream x & opts)`: パス、File、URL、URI の上のバッファ付きバイトストリーム、またはバイトストリームそのもの。`:append true` で出力ストリームのバイトを追記する |
-| `copy` | `(copy input output & opts)`: バイトストリーム、リーダー、File、文字列の中身を、バイトストリーム、ライター、File に書く。文字は `:encoding` で変換する。ほかの組み合わせはオラクルの `IllegalArgumentException` |
+| `reader`, `writer` | `(reader x & opts)`: パス、File、URL、URI、バイト配列、バイトストリームの上のバッファ付き文字ストリーム、またはストリームそのもの。`:encoding` で文字セットを指定し（既定は UTF-8）、`:append true` で writer のテキストを追記する |
+| `input-stream`, `output-stream` | `(input-stream x & opts)`: パス、File、URL、URI、バイト配列の上のバッファ付きバイトストリーム、またはバイトストリームそのもの。`:append true` で出力ストリームのバイトを追記する |
+| `copy` | `(copy input output & opts)`: バイトストリーム、バイト配列、リーダー、File、文字列の中身を、バイトストリーム、ライター、File に書く。文字は `:encoding` で変換する。ほかの組み合わせはオラクルの `IllegalArgumentException` |
 | `delete-file` | `(delete-file f & [silently])`: ファイルを削除して `true` を返す。削除できなければ、`silently` が truthy ならそれを返し、そうでなければ `java.io.IOException` を投げる |
 | `make-parents` | `(make-parents f & more)`: File `(file f & more)` の上の足りないディレクトリを作り、作ったかどうかを返す |
 | `resource` | `(resource name)`: ソースパスが `name` で持つファイルの URL（[リソース](#resources)）、なければ `nil` |
@@ -88,11 +88,34 @@ URL は綴りを保ち、`getProtocol`、`getHost`、`getPort`、`getPath`、`ge
 
 ファイルの上のリーダーとライターは `*in*` や `*out*` と同じ文字ストリームなので、`line-seq`、
 `read`、`.readLine`、`*in*` や `*out*` の `binding`、`with-open` が受け付けます。バイトストリームは
-`read`（次のオクテット。終端の先では `-1`）、`available`、`skip`、`transferTo`、`write`（int の
-下位オクテット）、`flush`、`close` に答えます。バイトストリームの上のリーダーはそれを復号し、
-その上のライターは flush か close のときにテキストを符号化して書き込みます。`:encoding` が
-指定できるのは UTF-8、ISO-8859-1、US-ASCII（とその別名）で、ほかの名前はオラクルの
-`java.io.UnsupportedEncodingException` です。
+`read`（次のオクテット。終端の先では `-1`）、バイト配列やその一部への `read`（読んだ数。終端の
+先では `-1`）、`readNBytes`、`readAllBytes`（バイト配列）、`available`、`skip`、`transferTo`、
+`write`（int の下位オクテット、バイト配列やその一部）、`flush`、`close` に答えます。バイト
+ストリームの上のリーダーはそれを復号し、その上のライターは flush か close のときにテキストを
+符号化して書き込みます。`:encoding` が指定できるのは UTF-8、ISO-8859-1、US-ASCII（とその別名）
+で、ほかの名前はオラクルの `java.io.UnsupportedEncodingException` です。
+
+`(java.io.ByteArrayInputStream. bytes)` はバイト配列をコピーせずに読み、
+`(java.io.ByteArrayInputStream. bytes off len)` は `off` からの一部を読みます。
+`(java.io.ByteArrayOutputStream.)` は書き込まれたオクテットを集めます。`toByteArray` はその
+写しを、`size` は個数を、`toString` は（`str` と同じく）UTF-8 か指定した文字セットのテキストを
+返し、`writeTo` は別のバイトストリームへ書き、`reset` は中身を空にします。Java と同じく、
+どちらも close しても何も変わりません。オクテットの上のストリーム（バイト配列、リソース）は
+`mark` で取った位置を `reset` のために保持し、ファイルの上のストリームは保持しません
+（`markSupported` は false）。
+
+```clojure
+(def out (java.io.ByteArrayOutputStream.))
+(.write out (.getBytes "héllo"))
+(.write out 33)
+(vec (.toByteArray out))
+; => [104 -61 -87 108 108 111 33]
+(str out)
+; => "héllo!"
+(let [in (java.io.ByteArrayInputStream. (.toByteArray out)) buf (byte-array 3)]
+  [(.read in buf) (vec buf) (vec (.readAllBytes in))])
+; => [3 [104 -61 -87] [108 108 111 33]]
+```
 
 ## リソース
 
@@ -143,8 +166,10 @@ $ rontolisp src/app/main.clj        # deps.edn holds {:paths ["src" "resources"]
   `.hashCode` はオラクルと同じです。
 - `file:` 以外のプロトコルの URL の読み取りは、名前を挙げて拒否します（`resource` が返した
   `jar:` URL は除きます）。オラクルは接続を開きます。
-- バイト配列はありません。バッファへの `read`、`readAllBytes`、バイト配列の `write` は名前を
-  挙げて拒否します。`:encoding` が知る文字セットは 3 つで、オラクルは JDK のものを知っています。
+- `:encoding` が知る文字セットは 3 つで、オラクルは JDK のものを知っています。
+- `input-stream` と `output-stream` は `ByteArrayInputStream` と `ByteArrayOutputStream` を
+  そのまま返し、オラクルはバッファ付きストリームで包みます。ファイルの上のストリームは
+  `mark` の位置を保持しません。
 - `resource` は、プログラムが計算した名前をソースパスのディレクトリの下だけで探し、jar の中は
   探しません。渡されたクラスローダーは参照しません。
 - `(java.net.URL. s)` と `(java.net.URI. s)` はホストオブジェクトを作ります（インタプリタと
