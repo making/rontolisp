@@ -639,21 +639,34 @@ class JavaBridgeTemplateParityTest {
 			List<@Nullable Object> direct = new ArrayList<>();
 			List<@Nullable Object> bridge = new ArrayList<>();
 			for (Object answer : answers) {
-				direct.add(jcmp.invoke(null, null, null, answer));
-				bridge.add(invoke("comparison", new Class<?>[] { Object.class, Object[].class, Object.class }, null,
-						new Object[] { 1L, new Object[] { 2L, null } }, answer));
+				direct.add(compared(jcmp.invoke(null, null, null, answer)));
+				bridge.add(compared(invoke("comparison", new Class<?>[] { Object.class, Object[].class, Object.class },
+						null, new Object[] { 1L, new Object[] { 2L, null } }, answer)));
 			}
 			assertThat(bridge).isEqualTo(direct);
 			// the oracle's AFunction.compare: Long/BigInt.intValue (low bits), (int) of a
-			// double, a ratio's DECIMAL64 quotient truncated
-			assertThat(direct).containsExactly(-1, 5, -3, 1, 1, -2, 0, Integer.MAX_VALUE, 1, 0, 5, -3, null, null,
-					null);
+			// double, a ratio's DECIMAL64 quotient truncated; nil its
+			// NullPointerException,
+			// anything else its ClassCastException -- a string's naming String, a
+			// symbol's
+			// its printed spelling (without the program's printer, the bridge's own text)
+			assertThat(direct).containsExactly(-1, 5, -3, 1, 1, -2, 0, Integer.MAX_VALUE, 1, 0, 5, -3,
+					"java.lang.ClassCastException: class java.lang.String cannot be cast to class java.lang.Number",
+					"java.lang.ClassCastException: class FOO cannot be cast to class java.lang.Number",
+					"java.lang.NullPointerException: " + am.ik.rontolisp.compiler.JavaImplementation.COMPARISON_OF_NIL);
 		}
 	}
 
-	// A java:handle comes back as the value it stands for whichever copy reads it: the
-	// bridge's unmarshal, through the program's generated handle class it binds, and the
-	// _junm / _junf a direct site calls -- by itself and as an array's element.
+	// What _jcmp or the bridge's comparison answered: an Integer, or the refusal's class
+	// and message.
+	private static @Nullable Object compared(@Nullable Object answer) {
+		return answer instanceof Throwable refusal ? refusal.toString() : answer;
+	}
+
+	// A java:handle or java:view comes back as the value it stands for whichever copy
+	// reads it: the bridge's unmarshal, through the runtime/RontoJavaValue it binds, and
+	// the _junm / _junf a direct site calls -- by itself and as an array's element; both
+	// count one a host object.
 	@Test
 	void theBridgeAndADirectSiteAnswerAHandlesValueAlike(@TempDir Path dir) throws Exception {
 		JvmLispCompiler compiler = new JvmLispCompiler("HandleTest");
@@ -663,6 +676,7 @@ class JavaBridgeTemplateParityTest {
 				  (list (java:call l "get" 0) (java:call l "get" 0 :java-false)))
 				(let ((l (java:new "java.util.ArrayList")))
 				  (java:call l "add" (java:handle 'apple "apple"))
+				  (java:call l "add" (java:view '(v) '(1 2) :list))
 				  (java:call l "forEach" (lambda (x) (print x)) :functional)
 				  (print (get0 l)))
 				"""));
@@ -678,25 +692,38 @@ class JavaBridgeTemplateParityTest {
 			Method junm = declared(program, JvmJavaDirectSites.UNMARSHAL, Object.class);
 			Method junf = declared(program, JvmJavaDirectSites.UNMARSHAL_FALSE, Object.class);
 			Method handle = declared(program, JvmJavaDirectSites.HANDLE, Object.class, Object.class, Object.class,
-					Object.class, int.class);
-			Object apple = handle.invoke(null, "APPLE", "\"apple\"", null, null, 2);
-			Object pair = handle.invoke(null, new Object[] { 1L, null }, "\"(1)\"", 7L, "\"b\"", 4);
+					Object.class, Object.class, int.class);
+			Method view = declared(program, JvmJavaDirectSites.VIEW, Object.class, Object.class, Object.class,
+					Object.class, Object.class, Object.class, int.class);
+			Method jhost = declared(program, JvmJavaDirectSites.HOST, Object.class);
+			Object apple = handle.invoke(null, "APPLE", "\"apple\"", null, null, null, 2);
+			Object pair = handle.invoke(null, new Object[] { 1L, null }, "\"(1)\"", 7L, "\"b\"", null, 4);
 			Object other = handle.invoke(null, "X", "\"(2)\"", BigInteger.TWO.pow(40).add(BigInteger.valueOf(9)),
-					"\"c\"", 4);
-			// the generated class is eval.JavaHandle's shape: the text its toString and
+					"\"c\"", null, 4);
+			Object list = view.invoke(null, "V", new Object[] { 1L, new Object[] { "\"s\"", null } }, ":LIST", null,
+					null, null, 3);
+			// runtime/RontoJavaHandle, the interpreter's class too: the text its toString
+			// and
 			// equality, the hash's low 32 bits its hashCode (the text's by default), the
 			// order text (the text by default) its compareTo
 			assertThat(apple).hasToString("apple");
 			assertThat(List.of(apple.hashCode(), pair.hashCode(), other.hashCode())).containsExactly("apple".hashCode(),
 					7, 9);
-			assertThat(pair).isNotEqualTo(other).isEqualTo(handle.invoke(null, "Y", "\"(1)\"", 7L, null, 3));
+			assertThat(pair).isNotEqualTo(other).isEqualTo(handle.invoke(null, "Y", "\"(1)\"", 7L, null, null, 3));
 			@SuppressWarnings("unchecked")
 			Comparable<Object> ordered = (Comparable<Object>) pair;
 			assertThat(ordered.compareTo(other)).isNegative();
 			assertThat(ordered.compareTo(apple)).isPositive();
+			// a view of a list: a read-only List of the items as Objects
+			assertThat(list).isEqualTo(List.of(1, "s")).hasToString("[1, s]");
 			invoke("bind", new Class<?>[] { Class.class }, program);
 			try {
-				for (Object value : Arrays.asList(apple, pair, new Object[] { apple, Boolean.FALSE, pair })) {
+				for (Object value : List.of(apple, pair, list)) {
+					assertThat(invoke("isJavaObject", new Class<?>[] { Object.class }, value)).as("bridge %s", value)
+						.isEqualTo(jhost.invoke(null, value))
+						.isEqualTo(true);
+				}
+				for (Object value : Arrays.asList(apple, pair, list, new Object[] { apple, Boolean.FALSE, pair })) {
 					String direct = Arrays.deepToString(new Object[] { junm.invoke(null, value) });
 					String directFalse = Arrays.deepToString(new Object[] { junf.invoke(null, value) });
 					assertThat(Arrays.deepToString(new Object[] {
@@ -709,11 +736,13 @@ class JavaBridgeTemplateParityTest {
 						.isEqualTo(directFalse);
 				}
 				assertThat(junm.invoke(null, apple)).isEqualTo("APPLE");
+				assertThat(junm.invoke(null, list)).isEqualTo("V");
 			}
 			finally {
 				// The template class is this JVM's: leave it unbound for the other tests.
 				for (String field : List.of("applyMethod", "strvMethod", "lispToStringMethod", "bf16ValueMethod",
-						"hashValuesMethod", "signalMethod", "failMethod", "handleValueField")) {
+						"hashValuesMethod", "signalMethod", "failMethod", "javaValueClass", "javaValueMethod",
+						"javaListViewClass", "javaListViewItems")) {
 					Field f = JavaBridgeTemplate.class.getDeclaredField(field);
 					f.setAccessible(true);
 					f.set(null, null);
@@ -723,8 +752,8 @@ class JavaBridgeTemplateParityTest {
 	}
 
 	// The bridge may import nothing of rontolisp's, so it spells the hash table's order
-	// key, the runtime package, Java's false, the markers and Comparator's compare
-	// itself.
+	// key, the runtime package, Java's false, the markers, Comparator's compare, the
+	// class a handle or view is and a comparison's refusals itself.
 	@Test
 	void theBridgeSpellsTheRepresentationAsTheRuntimeDoes() throws Exception {
 		assertThat(constant("HASH_TABLE_ORDER_KEY")).isEqualTo(RontoHashTable.ORDER_KEY);
@@ -734,7 +763,16 @@ class JavaBridgeTemplateParityTest {
 		assertThat(constant("JAVA_FALSE_MARKER")).isEqualTo(LispNames.JAVA_FALSE_MARKER);
 		assertThat(constant("COMPARATOR_COMPARE"))
 			.isEqualTo(am.ik.rontolisp.compiler.JavaImplementation.COMPARATOR_COMPARE);
-		assertThat(constant("HANDLE_SUFFIX")).isEqualTo(JvmJavaImplementations.HANDLE_SUFFIX);
+		assertThat(constant("JAVA_VALUE_CLASS")).isEqualTo(am.ik.rontolisp.runtime.RontoJavaValue.class.getName());
+		assertThat(constant("JAVA_LIST_VIEW_CLASS"))
+			.isEqualTo(am.ik.rontolisp.runtime.RontoJavaListView.class.getName());
+		assertThat(constant("COST_VIEW_ARRAY")).isEqualTo(JavaOverloads.COST_VIEW_ARRAY);
+		assertThat(constant("COMPARISON_OF_NIL"))
+			.isEqualTo(am.ik.rontolisp.compiler.JavaImplementation.COMPARISON_OF_NIL);
+		assertThat(constant("COMPARISON_CAST_PREFIX"))
+			.isEqualTo(am.ik.rontolisp.compiler.JavaImplementation.COMPARISON_CAST_PREFIX);
+		assertThat(constant("COMPARISON_CAST_SUFFIX"))
+			.isEqualTo(am.ik.rontolisp.compiler.JavaImplementation.COMPARISON_CAST_SUFFIX);
 	}
 
 	private static @Nullable Object constant(String name) throws Exception {

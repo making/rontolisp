@@ -61,10 +61,10 @@ final class ClojureInteropLowering {
 	 * abstract method by the method's arguments, as the oracle's fn implements a
 	 * functional interface, never as a {@code java:proxy} called with the method's name
 	 * first. A literal {@code false} argument is the quoted false object, which the site
-	 * resolves on; any other argument that may hold a Clojure value Java has no value of
-	 * -- a keyword, a symbol, a set, a record, a lazy seq, a collection holding one --
-	 * goes through {@link #HOST_VALUE} ({@link #hostArgument}), behind the io family's
-	 * view of a clojure.java.io value ({@code ClojureIoLowering.crossing}, which a
+	 * resolves on; any other argument that may be a Clojure value with no Java object of
+	 * its own -- a collection, a keyword, a symbol, a ratio, an atom, a type -- goes
+	 * through {@link #HOST_VALUE} ({@link #hostArgument}), behind the io family's view of
+	 * a clojure.java.io value ({@code ClojureIoLowering.crossing}, which a
 	 * {@code java:call}'s receiver crosses too).
 	 * @param ctx the hub
 	 * @param operator the {@code java:} operator
@@ -96,22 +96,22 @@ final class ClojureInteropLowering {
 
 	/**
 	 * The library function a value handed to a {@code java:} member goes through
-	 * ({@code clojure.lisp}): a Clojure value Java has no value of becomes one -- a
-	 * keyword or a symbol a {@code java:handle} Java hands back as itself, a set a
-	 * {@code java.util.LinkedHashSet}, a sorted map or a record a map, a lazy seq the
-	 * list it realizes, a collection holding such a value a copy -- anything else is
-	 * itself.
+	 * ({@code clojure.lisp}): a Clojure value with no Java object of its own becomes an
+	 * object Java reads as the oracle's -- a collection a read-only {@code java:view}, a
+	 * keyword, symbol or ratio a {@code java:handle} hashing and ordering as the
+	 * oracle's, any other value a handle equal only to itself -- which Java hands back as
+	 * the value itself; a fn, a condition and a value Java has already are themselves.
 	 */
 	static final String HOST_VALUE = "RONTOLISP::%CLOJURE-HOST-VALUE";
 
 	/**
 	 * An argument of a host call as the call hands it to Java: through
 	 * {@link #HOST_VALUE}, unless it is a value no Clojure value Java lacks can be -- a
-	 * literal, a fn form, a construction, a local bound to one of those -- which the site
-	 * keeps resolving on, or a Date or UUID construction, which hands the host object at
-	 * once ({@link ClojureTimeValueLowering#hostConstruction}). Where the host is not
-	 * (wasm), every {@code java:} call is a call-time error and the argument is left as
-	 * it is.
+	 * literal, a fn form, a construction, a {@code make-array}, a local bound to one of
+	 * those -- which the site keeps resolving on, or a Date or UUID construction, which
+	 * hands the host object at once ({@link ClojureTimeValueLowering#hostConstruction}).
+	 * Where the host is not (wasm), every {@code java:} call is a call-time error and the
+	 * argument is left as it is.
 	 * @param ctx the hub
 	 * @param argument the lowered argument
 	 * @return what the call hands Java
@@ -149,14 +149,17 @@ final class ClojureInteropLowering {
 	/**
 	 * Whether a lowered form's value is no Clojure value Java lacks, and has a kind a
 	 * {@code java:} site resolves on: a literal, a fn ({@code lambda} or
-	 * {@code function}), a {@code java:new} or a {@code proxy} construction.
+	 * {@code function}), a {@code java:new} or a {@code proxy} construction -- or an
+	 * array a {@code make-array} makes, which is a vector here and converts where Java
+	 * expects an array, never the read-only {@code List} a Clojure vector crosses as.
 	 */
 	static boolean isPlainForm(LispVal form) {
 		if (isLiteral(form) || constructedClass(form) != null) {
 			return true;
 		}
 		return form instanceof LispCons cell && (ClojureLowerUtil.isSymbolNamed(cell.car(), "LAMBDA")
-				|| ClojureLowerUtil.isSymbolNamed(cell.car(), "FUNCTION"));
+				|| ClojureLowerUtil.isSymbolNamed(cell.car(), "FUNCTION")
+				|| ClojureLowerUtil.isSymbolNamed(cell.car(), "MAKE-ARRAY"));
 	}
 
 	/**

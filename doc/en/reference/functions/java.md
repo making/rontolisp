@@ -22,6 +22,7 @@ limitations.
 | `java:subclass` | `(java:subclass "java.io.File" '() '("lastModified") "x" (lambda (this m) ...))` | a class instance backed by the callable |
 | `java:reify` | `(java:reify "java.lang.Runnable" "run" (lambda () ...))` | an interface instance with one function per method |
 | `java:handle` | `(java:handle 'apple "apple")` | a host object Java sees as `apple`, answered back as `APPLE` |
+| `java:view` | `(java:view v v :list)` | a read-only `java.util.List` of `v`'s elements, answered back as `v` |
 | `java:java-exception-cause` | `(java:java-exception-cause e)` | the exception a `java:java-exception` carries |
 
 A member that throws signals the condition type `java:java-exception`, a `simple-error`

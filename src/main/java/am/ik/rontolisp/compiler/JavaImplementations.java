@@ -52,6 +52,27 @@ public final class JavaImplementations {
 			+ " '(\"interface\"...) '(\"method\"...) constructor-args... callable)";
 
 	/**
+	 * The error a {@code java:handle} call raises -- with {@code ", got X"} for the first
+	 * argument it refuses: a text that is no string or nil (a nil one with a hash that is
+	 * not nil), a hash that is no integer or nil, an order that is no string, function or
+	 * nil, a class that is no string or nil.
+	 */
+	public static final String HANDLE_USAGE = "java:handle expects (java:handle value text [hash [order [\"class\"]]])";
+
+	/**
+	 * The error a {@code java:view} call raises -- with {@code ", got X"} for the first
+	 * argument it refuses: a shape that is none of the four, a printer that is no
+	 * function or nil, an order that is no function (a {@code :vector}'s) or nil, a class
+	 * that is no string or nil, items that are no sequence ({@code :map}'s no hash table
+	 * or plist).
+	 */
+	public static final String VIEW_USAGE = "java:view expects (java:view value items :list|:vector|:set|:map"
+			+ " [printer [order [\"class\"]]])";
+
+	/** The error of a {@code java:view} item that converts to no {@code Object}. */
+	public static final String VIEW_NO_VALUE = "java:view: no Java value for ";
+
+	/**
 	 * The index the markers ending a {@code java:reify}, {@code java:proxy} or
 	 * {@code java:subclass} form ({@link JavaMarkers}) may start at: after a
 	 * {@code java:reify}'s interface name, a {@code java:proxy}'s interface and callable,

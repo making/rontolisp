@@ -45,6 +45,16 @@ public final class JavaOverloads {
 	/** The flat penalty for packing a varargs tail: a fixed-arity overload wins. */
 	public static final int COST_VARARGS = 10;
 
+	/**
+	 * A {@code java:view} {@code List} converted to an array of its items (plus their
+	 * costs as the component type): after every way to pass the view itself -- even
+	 * packed into a varargs array, {@link #COST_VARARGS} plus {@link #COST_WIDEN} -- so a
+	 * collection that is one object to Java is unpacked only where nothing takes it
+	 * whole, such as a Java array a call answered (a list here) handed back to an array
+	 * parameter.
+	 */
+	public static final int COST_VIEW_ARRAY = 12;
+
 	/** This argument cannot become this type. */
 	public static final int NO_MATCH = -1;
 

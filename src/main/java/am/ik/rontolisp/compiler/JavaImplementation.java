@@ -96,9 +96,12 @@ public record JavaImplementation(boolean proxy, List<JavaType> interfaces, List<
 	 * as Clojure's {@code AFunction.compare} reads one -- {@code t} is {@code -1},
 	 * {@code |false|} {@code 1} when the function answers true for the arguments swapped
 	 * and {@code 0} otherwise -- or any real number, whose {@code intValue} it is (a
-	 * float or ratio truncated, an integer's low 32 bits). A {@code java:proxy}'s
-	 * callable and a {@code java:subclass}'s are called with the method's name: neither
-	 * reads one.
+	 * float or ratio truncated, an integer's low 32 bits); {@code nil} is the
+	 * {@code NullPointerException} ({@link #COMPARISON_OF_NIL}) and anything else the
+	 * {@code ClassCastException} ({@link #comparisonCastFailure}) its cast to
+	 * {@code Number} throws there, the comparator's own failure, which the site whose
+	 * Java call it reaches wraps like any member's. A {@code java:proxy}'s callable and a
+	 * {@code java:subclass}'s are called with the method's name: neither reads one.
 	 * @param slot one of the slots
 	 * @return whether its function's answer is read so
 	 */
@@ -114,6 +117,30 @@ public record JavaImplementation(boolean proxy, List<JavaType> interfaces, List<
 
 	/** {@code Comparator.compare}'s {@link Slot#key()}. */
 	public static final String COMPARATOR_COMPARE = "compare(java.lang.Object,java.lang.Object)";
+
+	/**
+	 * The message of the {@code NullPointerException} a comparison's {@code nil} answer
+	 * throws: the one {@code AFunction.compare}'s {@code ((Number) o).intValue()} throws
+	 * in Clojure ({@link #readsComparison}).
+	 */
+	public static final String COMPARISON_OF_NIL = "Cannot invoke \"java.lang.Number.intValue()\" because \"n\" is null";
+
+	/**
+	 * The message of the {@code ClassCastException} a comparison's answer that is no
+	 * number, boolean or {@code nil} throws ({@link #readsComparison}).
+	 * @param className the class of the answer's Java object, or its printed spelling
+	 * when it has none
+	 * @return the message, the JDK's cast failure without its module tail
+	 */
+	public static String comparisonCastFailure(String className) {
+		return COMPARISON_CAST_PREFIX + className + COMPARISON_CAST_SUFFIX;
+	}
+
+	/** What {@link #comparisonCastFailure} writes before the class. */
+	public static final String COMPARISON_CAST_PREFIX = "class ";
+
+	/** What {@link #comparisonCastFailure} writes after the class. */
+	public static final String COMPARISON_CAST_SUFFIX = " cannot be cast to class java.lang.Number";
 
 	/**
 	 * @return whether this is a {@code java:subclass} (which extends a superclass)

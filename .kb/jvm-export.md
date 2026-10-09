@@ -78,6 +78,8 @@ lists (`JvmRuntimeClassFilesTest` names them all):
 | `JvmFetchRuntimeBuilder.RUNTIME_CLASS_FILES` | `rontolisp:fetch` | `RontoFetch` -- the whole transport (`.kb/fetch-http.md`) |
 | `JvmHashRuntimeBuilder.RUNTIME_CLASS_FILES` | any hash-table use (`equalpKey` for an `equalp` table, the tombstone machinery for every table -- `.kb/hash-tables.md`) | `RontoHashTable` again |
 | `JvmIoRuntimeBuilder.RUNTIME_CLASS_FILES` | an `open` that can ask for `:direction :io` / `:if-exists :overwrite` (`LispMacroExpander.opensBidirectionally`, `.kb/read-load-streams.md`) | `RontoIoFileStream` -- the interpreter runs the same class |
+| `JvmJavaImplementations.RUNTIME_CLASS_FILES` | `java:handle` or `java:view` (`JvmLispCompiler.needsJavaValueRuntime`, `.kb/java-interop.md` "Handles and views") | `RontoJavaValue`, `RontoJavaCalls`, `RontoJavaHandle`, `RontoJavaNumberHandle` -- the interpreter makes the same classes |
+| `JvmJavaImplementations.VIEW_RUNTIME_CLASS_FILES` | `java:view` (`needsJavaViewRuntime`) | the four `RontoJava*View` classes |
 
 Path: `JvmRuntimeClassFiles.read` -> `JvmLispCompiler.runtimeClassFiles()` -> `RontoLispCli`
 (beside `-o X.class`, INSIDE `-o X.jar`) and `LispSourceSet` (plugin, `target/classes`);

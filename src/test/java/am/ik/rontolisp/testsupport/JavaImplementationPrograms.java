@@ -176,8 +176,10 @@ public final class JavaImplementationPrograms {
 	 * {@code Comparator} may answer a boolean ({@code t} first, {@code |false|} by the
 	 * arguments swapped) or any real, whose {@code intValue} it is -- at a resolved site
 	 * (a literal lambda), a dispatched one (a function parameter) and one left to run
-	 * time (the class in a variable). An answer neither reads, and a boolean without the
-	 * markers, is refused as before.
+	 * time (the class in a variable); {@code nil} is the comparator's
+	 * {@code NullPointerException} and a string its {@code ClassCastException}, as
+	 * Clojure's {@code AFunction.compare} throws them, which the site wraps as a member's
+	 * failure. A boolean without the markers is refused as before.
 	 */
 	public static final String JAVA_FALSE = """
 			(defvar *collections* "java.util.Collections")
@@ -245,8 +247,8 @@ public final class JavaImplementationPrograms {
 			(NIL "[1, 2, 3]" "[1, 2, 3]")
 			"[3, 2, 1]"
 			("[1, 3, 2]" "[3, 1, 2]" "[3, 1, 2]" "[2, 1, 3]")
-			java:reify: cannot return NIL as int from java.util.Comparator.compare
-			java:reify: cannot return "x" as int from java.util.Comparator.compare
+			error calling java.util.Collections.sort: java.lang.NullPointerException: Cannot invoke "java.lang.Number.intValue()" because "n" is null
+			error calling java.util.Collections.sort: java.lang.ClassCastException: class java.lang.String cannot be cast to class java.lang.Number
 			java:reify: cannot return T as int from java.util.Comparator.compare""";
 
 	/**

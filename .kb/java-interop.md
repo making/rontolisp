@@ -38,7 +38,7 @@ Package `java` (`LispNames.JAVA_PKG`, `PackageRegistry`; does NOT use `cl`): `ja
   bridge that erases it. `marshal`/`marshalSequence`/`marshalTable`/`accessibleMethod`. Symbols
   (but `|false|`), ratios, dotted lists and rank-2+ arrays are NOT marshalled ("Bignums and
   specialized vectors", "Java's false and hash tables" below for what is; a `java:handle` stands
-  for any value, "Markers and handles" below).
+  for any value, "Handles and views" below).
 - THE rule lives ONCE for the interpreter and the compiler: `compiler/JavaOverloads` (`select`,
   `kindCost`, the tags). The interpreter (`eval/JavaInterop`) selects through it at run time over
   `compiler/ReflectiveJavaClasses`; `JavaBridgeTemplate` keeps a hand copy (it must stand alone),
@@ -58,7 +58,7 @@ Package `java` (`LispNames.JAVA_PKG`, `PackageRegistry`; does NOT use `cl`): `ja
   is unmarshalled into a list, so none is ever a host), NOT exactly an `ArrayList` whose slot 0
   is an `Object[]` (a Lisp array), NOT exactly a `LinkedHashMap` holding an `ArrayList` under
   `RontoHashTable.ORDER_KEY` (a hash table), NOT a class in `am.ik.rontolisp.runtime`
-  (`RontoComplex`). The bridge spells the key and the package itself (no rontolisp imports);
+  (`RontoComplex`) -- but a handle or view (`RontoJavaValue`, "Handles and views") is one. The bridge spells the key and the package itself (no rontolisp imports);
   `theBridgeSpellsTheRepresentationAsTheRuntimeDoes` pins both.
 - The array and table arms are ONE test each in a compiled program: `_jlarr` (non-empty
   `ArrayList`, slot 0 an `Object[]`) and `_jltab` (`LinkedHashMap`, an `ArrayList` under the
@@ -188,7 +188,7 @@ Package `java` (`LispNames.JAVA_PKG`, `PackageRegistry`; does NOT use `cl`): `ja
   answering it for a `boolean`/`Boolean` returns false through the same marshal. Clojure's
   false object IS that symbol (`ClojureLowering.FALSE_VALUE_NAME`), so its false crosses with no
   Clojure name in `java:`. Unmarshal answers host false as nil unless the form ends in
-  `:java-false` ("Markers and handles" below). Copies: interpreter `kindOf`/`convert`/`LispJavaObject.
+  `:java-false` ("Markers" below). Copies: interpreter `kindOf`/`convert`/`LispJavaObject.
   receiverObject`, the bridge's `KIND_FALSE`/`JAVA_FALSE` (pinned to `LispNames` by
   `theBridgeSpellsTheRepresentationAsTheRuntimeDoes`), `_jkind` (a `"false".equals` after the
   `"T"` test, so only a symbol that is neither pays it) and `emitKindTest`/`emitConvert`.
@@ -213,7 +213,7 @@ Package `java` (`LispNames.JAVA_PKG`, `PackageRegistry`; does NOT use `cl`): `ja
   host `ArrayList` subclass its own `isEmpty`/`get`, so a `java:subclass` of `ArrayList` whose
   `isEmpty` answers false while empty throws `index out of bounds` on the JVM (todo e74).
 
-## Markers and handles: `:java-false`, a Comparator's answer, `java:handle` (e73, 2026-10-09)
+## Markers: `:java-false`, a Comparator's answer (e73, 2026-10-09)
 - Keywords ending a form are MARKERS (`compiler/JavaMarkers`: `:functional`, `:java-false`, any
   order; a keyword is never an argument a member takes): after the arguments of `java:new` /
   `java:call` / `java:static`, after the field name of `java:field`, after the callable (the last
@@ -235,11 +235,20 @@ Package `java` (`LispNames.JAVA_PKG`, `PackageRegistry`; does NOT use `cl`): `ja
   (`JavaImplementation.readsComparison`: a functional implementation of `Comparator` alone) is
   read as Clojure's `AFunction.compare`: `t` -1; `|false|` 1 when the function answers true
   (neither nil nor `|false|`) for the arguments swapped, else 0; a fixnum or bignum its low 32
-  bits, a float `d2i`, a ratio its `DECIMAL64` quotient truncated; anything else the return
-  conversion's refusal (`cannot return NIL as int`; the oracle an NPE or a CCE). Copies:
-  `ImplementationHandler.comparison`, the bridge's `comparison`, `_jcmp` (its false arm calls
-  the function again through `_apply`). Before, measured 2026-10-08: `cannot return T as int
-  from java.util.Comparator.compare`.
+  bits, a float `d2i`, a ratio its `DECIMAL64` quotient truncated; nil the
+  `NullPointerException` (`JavaImplementation.COMPARISON_OF_NIL`, the oracle's helpful-NPE text)
+  and anything else the `ClassCastException` its cast to `Number` throws
+  (`comparisonCastFailure`: a host object's class, the `Object` a receiver kind is -- a
+  string's `String` --, else the printed value; no module tail) (e89). A refusal is the
+  comparator's OWN failure, thrown outside the callback's record (an abstract method's
+  `UnsupportedOperationException` is the precedent), so the site wraps it as a member's
+  (`error calling ... sort: java.lang.NullPointerException: ...`, a Clojure catch takes it by
+  class). Copies: `ImplementationHandler.comparison` (a `Refusal` the handler throws after
+  `raised`), the bridge's `comparison` (an exception its `Proxy` lambda throws past `signal`),
+  `_jcmp` (`Object`: an `Integer` or the exception, which the `_jimpl$K` throws below its `_jsig`
+  handler range); its false arm calls the function again through `_apply`. Before, measured
+  2026-10-08: `cannot return T as int from java.util.Comparator.compare`; nil and a string,
+  2026-10-09, `cannot return NIL as int`.
 - A function costs `COST_PROXY` (8) against a functional interface (one abstract method,
   Object's public methods aside: `JavaInterfaceMethods.isFunctionalInterface`, cached; the
   bridge's copy) and `COST_PROXY_NOT_FUNCTIONAL` (9) against any other, so `TreeSet(Comparator)`
@@ -247,21 +256,92 @@ Package `java` (`LispNames.JAVA_PKG`, `PackageRegistry`; does NOT use `cl`): `ja
   lambda's target does. Before, measured 2026-10-08: the tie went by signature to
   `Collection`, whose conversion then called the function as a list (`Function expects 2
   arguments, got 0`). Pin: `aFunctionCostsLessForAFunctionalInterface`.
-- `(java:handle value "text" hash "order")`, the last two optional: a host object standing for
-  a Lisp value Java has none of. `toString` and `equals` by the text, `hashCode` the hash's low
-  32 bits (the text's by default), `compareTo` by the order text (the text by default; another
-  class a `ClassCastException`). Every unmarshal answers the value back: interpreter
-  `eval/JavaHandle` (`case JavaHandle`), the direct sites' `_junm` / `_junf` / `_jarr` arm when
-  `JvmJavaDirectSites.handles` (the program names `java:handle`), the bridge through
-  `handleValueField` (`<Program>$Handle.value`, bound in `bind`, null without the class). The
-  JVM's `<Program>$Handle` is generated beside the class (`JvmJavaImplementations.writeHandle`,
-  member for member `JavaHandle`) and made by `_jhandle(value, text, hash, order, given)`, no
-  reflection. A wrong count is a compile error compiled and `HANDLE_USAGE` interpreted; a text or
-  order that is no string or a hash that is no integer the same words `, got X` on both. Pins:
-  `JavaInteropPrograms.JAVA_HANDLE_PROGRAM` (both backends),
-  `theBridgeAndADirectSiteAnswerAHandlesValueAlike`, `JvmLispCompilerSplitTest#aForcedSplit
-  KeepsJavaCallsWorking`. The Clojure front end makes one per keyword or symbol argument
-  (`.kb/clojure-frontend.md`, "Java interop").
+
+## Handles and views: `java:handle`, `java:view` (e73, e89 2026-10-09)
+
+Java objects standing for Lisp values, ONE implementation for both backends: the
+`runtime/RontoJava*` classes (plain Java, importing nothing), which the interpreter makes itself
+and a compiled program makes through `_jhandle` / `_jview` and ships beside it
+(`JvmJavaImplementations.RUNTIME_CLASS_FILES` -- the two interfaces and the handles -- when the
+program names either operator, `VIEW_RUNTIME_CLASS_FILES` when it names `java:view`:
+`JvmLispCompiler.needsJavaValueRuntime` / `needsJavaViewRuntime`; the List-view arms of `_jkind`,
+`_jcost$N` and `_jconv$N` test for that class only then, `JvmJavaDirectSites.views`). Until e89 a
+handle was `eval/JavaHandle` interpreted and a generated `<Program>$Handle` compiled, "member for
+member" -- two copies of `equals`, `hashCode` and `compareTo`. Measured 2026-10-09, a CL program of
+two text-ordered handles: class 18,423 -> 19,525 B, beside it 751 B (`$Handle`) -> 6,409 B (the
+four classes); no `_apply`, no `$JavaCalls`.
+
+- `RontoJavaValue` (`value()`, `className()`): every unmarshal answers `value()` -- interpreter
+  `unmarshal`'s `case RontoJavaValue`, the direct sites' `_junm` / `_junf` (and `_jarr` through
+  them) arm when `JvmJavaDirectSites.handles` (an `invokeinterface`), the bridge through
+  `javaValueClass` / `javaValueMethod` (bound in `bind` BY NAME: the template imports nothing of
+  rontolisp's; absent beside a program without them). One is a host object although its class
+  travels in `runtime`: `_jhost` and the bridge's `isJavaObject` carve it out of the
+  runtime-package exclusion, in a program that makes one only.
+- `(java:handle value text hash order class)`, the last three optional (`RontoJavaHandle`):
+  `toString` the text, or nil -- `Object`'s spelling `class@hex(hashCode)`, which needs a nil
+  hash. Equality: same class (`Objects.equals` of the names) and the text, or with a NIL hash
+  only a handle of the very same value (`==` of the representation), whose `hashCode` is then
+  `System.identityHashCode(value)`; else the hash's low 32 bits (the text's `hashCode` when
+  absent). `compareTo` (`ORDER_TEXT` / `ORDER_FUNCTION` / `ORDER_NONE`): another handle of its
+  class by the order text (absent: the text); or `(order value other')` through
+  `RontoJavaCalls.order`, its answer's sign, nil the cast failure; nil order no order at all --
+  `ClassCastException("class C cannot be cast to class java.lang.Comparable")`; a handle or view
+  of ANOTHER class `class D cannot be cast to class C` before anything. A handle of a real number
+  is a `RontoJavaNumberHandle extends Number` around it (`doubleValue` / `longValue` /
+  `intValue` computed by the maker: a ratio's `DECIMAL64` quotient and its `(int)`, the truncated
+  quotient's low 64 bits, as Clojure's `Ratio`). Every handle is `Comparable` (one without an
+  order throws the cast failure the oracle's non-Comparable class would, message included).
+- `(java:view value items shape printer order class)`, shape `:list` / `:vector` / `:set` /
+  `:map` (`LispNames.JAVA_VIEW_*`, keyword names): items -- a sequence, a `:map`'s a hash table
+  (`_jtab`) or a plist -- converted ONCE as `Object` arguments (`marshal` / `_jcost$N` +
+  `_jconv$N` for `java.lang.Object`; one that converts to none is `VIEW_NO_VALUE`).
+  `RontoJavaListView extends AbstractList` (`get`/`size`/`toArray` over the array, writes the
+  `AbstractList` UOE); `RontoJavaVectorView` adds `RandomAccess` and `Comparable` (the order
+  function only a `:vector` takes; without one the cast failure); `RontoJavaSetView` /
+  `RontoJavaMapView` over an unmodifiable `LinkedHashSet` / `LinkedHashMap` (a repeated member
+  once; `get`, `containsKey`, `contains` by `equals`). `toString` is `RontoJavaCalls.text(printer,
+  value)`, the collection's own spelling without a printer. `equals` / `hashCode` are the
+  `java.util` contract's (`AbstractList` etc.).
+- As an ARGUMENT a set or map view is a host object of its class like any other (kind = exact
+  class, memoized). A List view is KINDLESS (`kindOf` null, bridge `kindOf` null, `_jkind`
+  `KIND_VIEW` before `_jhost`): where its class fits, itself at a host object's cost (EXACT /
+  WIDEN); where an ARRAY is expected, an array of `items()` at `COST_VIEW_ARRAY` (12) plus their
+  costs as the component -- after every way to pass it whole, its varargs packing (10 + 1)
+  included, so `Arrays.asList(view)` holds the view and `String.valueOf(view)` takes `Object`;
+  else NO_MATCH. Copies: `JavaInterop.marshalListView`, the bridge's `marshalListView` (the items
+  through `javaListViewItems`), `_jcost$N`'s `emitViewCost` / `_jconv$N`'s `KIND_VIEW` arm (this
+  very helper over `items()`, an empty array for nil). Why a fallback at all: a Java array a call
+  answers is unmarshalled into a LIST, so `(UUID/nameUUIDFromBytes (.getBytes s))` hands a list
+  back; without it, measured 2026-10-09, `ClojureInteropTest`'s `nameUUIDFromBytes` and
+  `ByteArrayInputStream` cases were `No matching method`. Why not the copy's own cost
+  (`COST_BOXED` + the elements', which keeps every old choice): it kept the copy's non-oracle
+  choices too -- `String.valueOf` of a vector of characters `"ab"` (the oracle `[\a \b]`),
+  `List.of(v)` unpacking the vector. Why not a host object's fixed cost with the array at
+  `COST_CONVERT`: `m(T...)` of one view then packs or unpacks by its LENGTH (packed 11 against
+  2 + 6n).
+- Callbacks (`RontoJavaCalls`): `text` (a string's text, any other answer its printed spelling)
+  and `order` (the sign of a real answer, null otherwise). Interpreter: `JavaInterop.Calls` over
+  the evaluator, recording what leaves through `raised`. Compiled: a generated
+  `<Program>$JavaCalls implements RontoJavaCalls` (`JvmJavaImplementations.callsClass`, `writeCalls`)
+  calling the package-private `_jvtext` / `_jvorder` (`_apply`, `_strv` + the unquote, `_junm`,
+  `_jsig` over the whole body), which join `callbackNames()` -- shaker roots, pinned to the main
+  class on a split, and the other-threads gate. Made only where `JvmJavaSites.callsBack`: the
+  program names `java:view`, or `java:handle` with an order that is no literal string or nil (a
+  CL program of text-ordered handles carries no `_apply` for them); `needsApply` reads the same.
+- Errors: `JavaImplementations.HANDLE_USAGE` / `VIEW_USAGE` + `, got X` for the first argument
+  refused, check for check on both (`JavaInterop.handle` / `view`, `buildHandle` / `buildView`);
+  a wrong count a compile error compiled.
+- NullAway: the runtime package is `@NullMarked` (the generated `package-info`) and cannot import
+  `@Nullable`; its nulls ("none") are suppressed where they cross (`newHandle`, `newView`,
+  `Calls.order`, `items()`/`get()` overrides).
+- Pins: `JavaInteropPrograms.JAVA_HANDLE_PROGRAM` and `JAVA_VIEW_PROGRAM` (both backends:
+  resolved, dispatched and run-time sites, array fallback and packing, set/map without one,
+  identity, class split, order function, `Number`, refusals),
+  `theBridgeAndADirectSiteAnswerAHandlesValueAlike` (incl. `_jview`, `_jhost` / `isJavaObject`),
+  `JvmLispCompilerSplitTest#aForcedSplitKeepsJavaCallsWorking`, `JvmRuntimeClassFilesTest`. The
+  Clojure front end hands Java every value through them (`.kb/clojure-frontend.md`, "Java
+  interop").
 
 ## Resolution: kinds, pure select, caches (both bridges, identical)
 Per call the uncached bridge paid `getMethods()` (~2.5 us), `select()` (250 ns - 1.4 us),
@@ -601,7 +681,7 @@ Per call the uncached bridge paid `getMethods()` (~2.5 us), `select()` (250 ns -
   reify/proxy do not coerce return values either; an interface return is a
   `java:reify`/`java:proxy` object.
   Function -> interface stays for ARGUMENTS (Clojure 1.12's direction).
-- `:functional` (e66, 2026-10-08; one of the markers since e73, "Markers and handles"): a
+- `:functional` (e66, 2026-10-08; one of the markers since e73, "Markers"): a
   function argument converts by `JavaImplementations.functional` instead of `proxy`: a reify
   whose one function implements every group with an abstract variant (Object's three aside,
   each variant of the group), defaults keep their bodies, `#<java-reify I>`. Costs do not
@@ -894,6 +974,7 @@ dispatched or run-time site, the receiver of a run-time `java:call` -- one is th
 
 ## Tests / docs
 `JavaSiteResolverTest`, `JavaDeclarationsTest`, `JavaImplementationsTest` (compiler),
+`JvmRuntimeClassFilesTest` (the handle and view classes travel),
 `JvmClassFileLookupTest` (incl. `everyInterfaceIsImplementedTheSame`),
 `JavaBridgeTemplateParityTest`, `am.ik.jvm.JvmClassPathTest`; direct calls:
 `JvmJavaInteropCompilerTest` (javap shape, class version, `--java-static`, conversions, texts,

@@ -2901,7 +2901,7 @@ The `java:` surface (`.kb/java-interop.md`); interpreter and JVM only -- wasm co
   (`ClojureInteropLowering.hostCall`, `fieldCall`; a `proxy`'s `java:proxy` / `java:subclass`
   too), so Java's false comes back as the false object -- an answer of any receiver, a
   `Boolean.FALSE` element, a field, a fn's or a proxy body's argument
-  (`.kb/java-interop.md`, "Markers and handles"); the shared unmarshal stays nil for a CL
+  (`.kb/java-interop.md`, "Markers"); the shared unmarshal stays nil for a CL
   program. The `T`-or-false wraps over known receiver classes (`booleanAnswer` at static and
   instance sites, `valuePredicate`, `instanceBooleanAtArity`) are gone. The library's host
   DATA reads end in it too (`toArray`, `getKey`/`getValue`, `next`, `get`, a `Future`'s
@@ -2912,39 +2912,67 @@ The `java:` surface (`.kb/java-interop.md`); interpreter and JVM only -- wasm co
 - `false` crosses to Java as Java's false (e69, 2026-10-08): the false object IS the symbol
   `java:` passes as `false` / `Boolean.FALSE` (`FALSE_VALUE_NAME = LispNames.JAVA_FALSE`,
   `.kb/java-interop.md` "Java's false and hash tables"), an argument and a fn's or proxy
-  body's answer alike; a map crosses as a fresh `LinkedHashMap` (the same section), its
-  vector/map values converted too, so the copy's `toString` spells them the Java way (user doc
-  deviation). A set, keyword or record reaches Java through `%clojure-host-value` (next
+  body's answer alike. Every other value reaches Java through `%clojure-host-value` (next
   bullet). Before, measured 2026-10-08
   (interpreter and JVM): `(.add l false)`, `(Boolean/toString false)` and `(java.util.HashMap.
   {"a" 1})` were `No matching method/constructor`, `(.removeIf l odd?)` and a proxy `test`
   answering false `cannot return |false| as boolean`.
-- Clojure values Java has none of (e73, 2026-10-09): `hostArgument` wraps a host call's
-  argument (`java:new`/`java:call`/`java:static`, a class `proxy`'s constructor arguments) in
-  `%clojure-host-value` (`HOST_VALUE`, `clojure.lisp`): a keyword or symbol becomes a
-  `java:handle` (`%clojure-host-ident`: its spelling, the oracle's `Keyword`/`Symbol` hashCode
-  -- `Util.hashCombine` of the name's and namespace's `String.hashCode`, a keyword
-  `0x9e3779b9` more -- and an order text sorting no namespace first, then namespace, then
-  name, keywords before symbols), so a host `HashMap`/`HashSet` iterates and a `TreeSet`
-  sorts in the oracle's order and Java hands back the keyword itself; a set or sorted set a
-  fresh `LinkedHashSet`; a map holding such a value, a record or a sorted map an `equal`
-  table of converted entries (`java:` makes it a `LinkedHashMap`); a lazy seq the list it
-  realizes; a vector or list holding such a value a converted copy; anything else itself (a
-  ratio or atom stays refused by `java:`). Not wrapped, so the site keeps resolving on the
-  argument's kind: a literal, a fn form, a construction (`isPlainForm`) and a `let` local
-  bound to one and not shadowed (`isPlainLocal` over `noteHostClass`); nothing on wasm
-  (`!ctx.hostTarget`: a `java:` call is a call-time error there). `get`/`contains?`/`find`
-  over a host map convert their key the same way. Measured 2026-10-08 before choosing this
-  over a generic `java:` hook (the plan's preference): wrapping every non-literal argument
-  of the 784 `java:` sites in 276 lowered programs (`ClojureInteropTest`'s, `examples/
-  clojure`, the clojure-spec corpus) moved 2 from resolved to dispatched, both a
-  construction-bound local -- the exemption above -- and no other site's status. Before,
-  measured 2026-10-08: `(java.util.HashSet. #{1 2})` `No matching constructor for
-  java.util.HashSet with 1 argument(s)` (a record, a sorted set alike), `(.put m :k 1)` `No
-  matching method java.util.HashMap.put with 2 argument(s)`. Deviations (user doc): a copy's
-  `toString` and a collection inside it spell the Java way; keywords and symbols sort together
-  where the oracle refuses to compare them. Pins: `ClojureInteropTest#aSetAKeywordAndARecord
-  CrossTheJavaBoundaryAsTheOraclesDo`, `#aKeywordOrSymbolHashesAndSortsInJavaAsTheOraclesDo`,
+- Clojure values as the oracle's own objects (e73, e89 2026-10-09): `hostArgument` wraps a host
+  call's argument (`java:new`/`java:call`/`java:static`, a class `proxy`'s constructor
+  arguments) in `%clojure-host-value` (`HOST_VALUE`, `clojure.lisp`): a fn stays itself (the call
+  makes it an interface), a condition too (`java:` hands the host exception), anything else is
+  `%clojure-host-member`, which `get`/`contains?`/`find` over a host map use for their key and
+  every collection for its members. Nil, true, false, a string, a character and a number but a
+  ratio are themselves; a keyword or symbol a `java:handle` of class `clojure.lang.Keyword` /
+  `Symbol` (`%clojure-host-ident`: its spelling, the oracle's hash -- `Util.hashCombine` of the
+  name's and namespace's `String.hashCode`, a keyword `0x9e3779b9` more -- and an order text
+  sorting no namespace first, then namespace, then name; the two classes never compare, the
+  oracle's `ClassCastException`); a ratio a handle of class `clojure.lang.Ratio` that is a
+  `Number` (`RontoJavaNumberHandle`), hashed as `Ratio.hashCode` (`%clojure-host-big-hash`: the
+  numerator's and denominator's `BigInteger.hashCode`, xored) and ordered by value against any
+  real (`%clojure-host-number-order`); a vector a `:vector` `java:view` (RandomAccess, Comparable
+  by `%clojure-compare-vectors` against another vector, `%clojure-host-vector-order`), a list,
+  seq or lazy seq a `:list` view of its members realized (`%clojure-host-seq-view` over
+  `%clojure-seq-all`), a set or sorted set a `:set` view, a map, sorted map or record a `:map`
+  view of its plist -- each printed by `%clojure-host-text` (`%clojure-str-of x "nil" nil`, the
+  `.toString` here), of the oracle's class name (`%clojure-class-name-of`), its members
+  converted alike (`%clojure-host-members`: the collection itself when every member is plain);
+  a Date/Timestamp/UUID the host object (`%clojure-time-value-host`); a host object itself;
+  anything else -- a fn, an atom, a deftype, a reify, a pattern, a var, a condition inside a
+  collection -- an identity handle (`%clojure-host-object`: nil hash, the oracle's class name,
+  text nil -- `Object`'s spelling `clojure.lang.Atom@hex` -- for a fn, an atom, a reduced and a
+  type overriding no `toString`, else `str`; `%clojure-host-object-text` keeps the
+  object-methods test `%clojure-to-string-p` a bare `cond` test, which the library strip
+  requires). Java hands every one back as the value (`identical?`). Not wrapped, so the site
+  keeps resolving on the argument's kind: a literal, a fn form, a construction, a `make-array`
+  (an array is a vector here, and must convert to the Java array, never to the List a vector
+  crosses as) and a `let` local bound to one and not shadowed (`isPlainForm`, `isPlainLocal`
+  over `noteHostClass`); nothing on wasm (`!ctx.hostTarget`). Every member converts, so the host
+  lookups no longer guard the key (`%clojure-host-key-p`, an `Objects.isNull` under
+  `handler-case` per lookup, is gone). Measured 2026-10-09 against clj 1.12.6, before (e73's
+  copies): `(str (java.util.ArrayList. [#{1} {:a [1 2]}]))` `[[1], {:a=[1, 2]}]` (the oracle
+  `[#{1}, {:a [1 2]}]`), `(Collections/sort v)` sorted a copy (UOE), `(Collections/max [1/2
+  1/3])` and an atom or deftype in a collection `No matching method`, `(java.util.TreeSet. [:a
+  'b])` `[:a b]` (CCE). The choice of a view over the copy (e89's plan: measure first): every
+  argument a view can reach was already wrapped, so no site changed resolution status; what
+  changed is the run-time choice among overloads, now the oracle's where it had one (`String/
+  valueOf` of a vector `[\a \b]`, `List/of` of a vector one element) -- `.kb/java-interop.md`
+  "Handles and views" has the List view's array fallback that keeps a Java array (a list here)
+  reaching an array parameter. Deviations (user doc): this front end's classes (`getClass`, a
+  JDK cast failure's message, ours without the module tail), the members converted once when
+  the value crosses, a `toString` that is `str` here (a lazy seq or record spells its
+  contents), `(java.util.Arrays/asList [1 2])` a list of the vector where the oracle throws, a
+  deftype or reify implementing a Java interface an object of its own (no `Runnable`). Cost,
+  measured 2026-10-09 (JVM class, before -> after): `(.add l [1 2])` + `str` 108,071 ->
+  129,594 B (the member conversion and the view and handle makers, `%clojure-compare` behind a
+  vector's order -- with CL `search` behind its name split -- `%clojure-class-name-of`, `_jview`,
+  `_jhandle`, `_jvtext`, `_jvorder`), the files beside it 67,873 -> 84,517 B (the eight
+  `runtime/RontoJava*` classes, ~15 KB, and `$JavaCalls`); a keyword `.put`/`.get` 107,409 ->
+  131,270 B; `demo.clj` (no interop) byte-identical. Reflection warnings 10 -> 11 on the first
+  (the `compareTo` of `%clojure-compare`'s Comparable arm), the pin's program 19 -> 19. Pins:
+  `ClojureInteropTest#aClojureValueReachesJavaAsTheOraclesOwnObject` (all eight e89 rows),
+  `#aSetAKeywordAndARecordCrossTheJavaBoundaryAsTheOraclesDo`,
+  `#aKeywordOrSymbolHashesAndSortsInJavaAsTheOraclesDo`,
   `ClojureLoweringTest#aHostArgumentThatMayHoldAValueJavaLacksGoesThroughTheHostValue`.
 - A fn receiver is the oracle's `AFunction` (`ClojureValueMethodLowering.functionRows`; the
   value gate `%clojure-value-receiver-p` takes `functionp`): `invoke` of 0..20 arguments and
@@ -2953,8 +2981,9 @@ The `java:` surface (`.kb/java-interop.md`); interpreter and JVM only -- wasm co
   else 0, a number its `intValue` by `%clojure-unchecked-int`, nil the NPE, else a
   ClassCastException). Runs on all four backends (the arm answers before the `java:call`);
   before, `java:call expects a java object as the first argument, got #<lambda>`. A fn passed
-  TO Java as a `Comparator` reads the same way since e73 (its call ends in `:functional` and
-  `:java-false`: `.kb/java-interop.md`, "Markers and handles"; pin
+  TO Java as a `Comparator` reads the same way since e73, nil and a non-number its NPE and CCE
+  since e89 (its call ends in `:functional` and `:java-false`: `.kb/java-interop.md`,
+  "Markers"; pin
   `ClojureInteropTest#aFnPassedAsAComparatorComparesLikeTheOraclesAFunction`). Pin: clojure-spec
   `instance-calls-on-a-fn-are-its-ifn-callable-runnable-and-comparator-methods`.
 - A fn passed where an interface is expected implements every abstract method by the
@@ -2998,10 +3027,8 @@ The `java:` surface (`.kb/java-interop.md`); interpreter and JVM only -- wasm co
   are the host entries: user doc deviation), a `CharSequence` through `toString`, another
   `Iterable` through `iterator` (a JDK non-public iterator class trips the `java:call` gap
   of todo c92). `get`/`contains?` ask the host's own `containsKey`/`contains`/`get`, the
-  oracle's `equals` lookup, of the key as `%clojure-host-value` makes it (a keyword its
-  handle), after `%clojure-host-key-p` (`Objects.isNull` under `handler-case`): a key
-  `java:call` still cannot marshal (a ratio, an atom) is in no host map, since `.put` refused
-  it too. Not the c90 walk by `=`: that pulled `%clojure-equal`'s
+  oracle's `equals` lookup, of the key as `%clojure-host-member` makes it (a keyword its
+  handle, a vector its view). Not the c90 walk by `=`: that pulled `%clojure-equal`'s
   whole closure into every `get` (+9.9 KB JVM class) and is O(n).
   Cost, measured 2026-10-04 (load average 25-140, so speeds are medians of 5-7 alternated
   runs): a program naming no `java:` operator is byte-identical (wasm P1, `--optimize=size`,
@@ -3026,7 +3053,7 @@ The `java:` surface (`.kb/java-interop.md`); interpreter and JVM only -- wasm co
   `select-keys needs a map`, `reduce-kv needs a map or a vector`, `conj needs a map entry`,
   a `MAPHASH` type error in `merge-with`. Arms, all behind the one `%clojure-host-seqable-p`:
   a clause ahead of the fall-through of `%clojure-find` (`%clojure-host-find`, the host's
-  own lookup after `%clojure-host-key-p`, like `get`), `%clojure-kv-pairs` (so `reduce-kv`,
+  own lookup, like `get`), `%clojure-kv-pairs` (so `reduce-kv`,
   `update-vals`, `update-keys`, `map-invert`, `rename-keys`' map, a sorted `merge-with`),
   `%clojure-merge-entry-plist`, `%clojure-sorted-entry-plist` and the lowered `entryPlist`
   (`conj` onto a map; `%clojure-host-entry-plist`). Entries: `%clojure-host-entries`, a

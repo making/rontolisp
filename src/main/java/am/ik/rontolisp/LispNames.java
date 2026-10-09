@@ -7895,15 +7895,45 @@ public final class LispNames {
 
 	/**
 	 * {@code java:handle} -- a Java object that stands for a Lisp value:
-	 * {@code (java:handle value "text" hash "order")}, the last two optional. Java sees
-	 * the text as its {@code toString} and equals handles by it; the hash (the text's by
-	 * default) is its {@code hashCode}, the order text (the text by default) what handles
-	 * sort by; {@code java:} answers the value wherever Java hands the handle back.
+	 * {@code (java:handle value text hash order class)}, the last three optional. Java
+	 * sees the text as its {@code toString} and equals handles of one class by it (with a
+	 * nil hash, only a handle of the very same value); the hash (the text's by default)
+	 * is its {@code hashCode}, the order -- a text (the text by default), or a function
+	 * of the value and the object compared with -- what handles of its class sort by; a
+	 * handle of a real number is a {@code Number}; {@code java:} answers the value
+	 * wherever Java hands the handle back.
 	 */
 	public static final String JAVA_HANDLE = "HANDLE";
 
 	/** {@code java:handle}, qualified. */
 	public static final String JAVA_HANDLE_QUALIFIED = JAVA_PKG + ":" + JAVA_HANDLE;
+
+	/**
+	 * {@code java:view} -- a read-only Java collection that stands for a Lisp one:
+	 * {@code (java:view value items shape printer order class)}, the last three optional.
+	 * The items -- a sequence, or for a {@code :map} a hash table or a plist -- converted
+	 * as {@code Object} arguments are its elements; its {@code toString} is the printer's
+	 * answer for the value; {@code java:} answers the value wherever Java hands it back.
+	 */
+	public static final String JAVA_VIEW = "VIEW";
+
+	/** {@code java:view}, qualified. */
+	public static final String JAVA_VIEW_QUALIFIED = JAVA_PKG + ":" + JAVA_VIEW;
+
+	/** The {@code java:view} shape of a {@code java.util.List}. */
+	public static final String JAVA_VIEW_LIST = ":LIST";
+
+	/**
+	 * The {@code java:view} shape of a {@code java.util.List} that is also
+	 * {@code RandomAccess} and {@code Comparable} (by its order).
+	 */
+	public static final String JAVA_VIEW_VECTOR = ":VECTOR";
+
+	/** The {@code java:view} shape of a {@code java.util.Set}. */
+	public static final String JAVA_VIEW_SET = ":SET";
+
+	/** The {@code java:view} shape of a {@code java.util.Map}. */
+	public static final String JAVA_VIEW_MAP = ":MAP";
 
 	/**
 	 * The {@code java:} operators, qualified. A program naming none of them holds no host
@@ -7912,7 +7942,7 @@ public final class LispNames {
 	 */
 	public static final java.util.List<String> JAVA_OPERATORS_QUALIFIED = java.util.List.of(JAVA_NEW_QUALIFIED,
 			JAVA_CALL_QUALIFIED, JAVA_STATIC_QUALIFIED, JAVA_FIELD_QUALIFIED, JAVA_PROXY_QUALIFIED,
-			JAVA_REIFY_QUALIFIED, JAVA_SUBCLASS_QUALIFIED, JAVA_HANDLE_QUALIFIED);
+			JAVA_REIFY_QUALIFIED, JAVA_SUBCLASS_QUALIFIED, JAVA_HANDLE_QUALIFIED, JAVA_VIEW_QUALIFIED);
 
 	/** {@link #JAVA_WARN_ON_REFLECTION}, qualified. */
 	public static final String JAVA_WARN_ON_REFLECTION_QUALIFIED = JAVA_PKG + ":" + JAVA_WARN_ON_REFLECTION;

@@ -167,6 +167,19 @@ public final class JvmLispCompiler implements LispCompiler {
 	private boolean needsComplexRuntime;
 
 	/**
+	 * Whether the last {@link #compile} makes a {@code java:handle} or a
+	 * {@code java:view}: the {@code runtime/RontoJava*} classes a handle is go beside the
+	 * output ({@link JvmJavaImplementations#RUNTIME_CLASS_FILES}).
+	 */
+	private boolean needsJavaValueRuntime;
+
+	/**
+	 * Whether the last {@link #compile} makes a {@code java:view}: the view classes go
+	 * beside the output too ({@link JvmJavaImplementations#VIEW_RUNTIME_CLASS_FILES}).
+	 */
+	private boolean needsJavaViewRuntime;
+
+	/**
 	 * Whether the compiled program can open a BIDIRECTIONAL ({@code :direction :io}) or
 	 * {@code :if-exists :overwrite} file stream, so the travelling
 	 * {@code RontoIoFileStream} goes beside the output.
@@ -775,7 +788,8 @@ public final class JvmLispCompiler implements LispCompiler {
 	public Map<String, byte[]> runtimeClassFiles() {
 		if (!this.needsHandleRuntime && !this.needsHttpRuntime && !this.needsFetchRuntime && !this.needsHashTableRuntime
 				&& !this.needsComplexRuntime && !this.needsIoStreamRuntime && !this.needsCharFileRuntime
-				&& !this.needsStringInputRuntime && this.partClassFiles.isEmpty() && this.bridgeClassFiles.isEmpty()) {
+				&& !this.needsStringInputRuntime && !this.needsJavaValueRuntime && this.partClassFiles.isEmpty()
+				&& this.bridgeClassFiles.isEmpty()) {
 			return Map.of();
 		}
 		// A program too large for one class brings its $PartN classes, and a bridged
@@ -800,6 +814,12 @@ public final class JvmLispCompiler implements LispCompiler {
 		}
 		if (this.needsComplexRuntime) {
 			files.putAll(JvmComplexRuntimeBuilder.runtimeClassFiles());
+		}
+		if (this.needsJavaValueRuntime) {
+			files.putAll(JvmRuntimeClassFiles.read(JvmJavaImplementations.RUNTIME_CLASS_FILES));
+		}
+		if (this.needsJavaViewRuntime) {
+			files.putAll(JvmRuntimeClassFiles.read(JvmJavaImplementations.VIEW_RUNTIME_CLASS_FILES));
 		}
 		if (this.needsFetchRuntime) {
 			files.putAll(JvmRuntimeClassFiles.read(JvmFetchRuntimeBuilder.RUNTIME_CLASS_FILES));
@@ -2293,9 +2313,17 @@ public final class JvmLispCompiler implements LispCompiler {
 				.hashTables(usesHashTables
 						? cp.methodRef(thisClass, JvmHashRuntimeBuilder.VALUES, JvmHashRuntimeBuilder.VALUES_DESC)
 						: null);
-			// ... and a java:handle Java hands back as the value it stands for, in a
-			// program that makes one.
-			javaSites.direct().handles(programUsesSymbol(program, LispNames.JAVA_HANDLE_QUALIFIED));
+			// ... and a java:handle or java:view Java hands back as the value it stands
+			// for, in a program that makes one -- whose runtime classes then travel.
+			boolean makesViews = programUsesSymbol(program, LispNames.JAVA_VIEW_QUALIFIED);
+			boolean makesJavaValues = makesViews || programUsesSymbol(program, LispNames.JAVA_HANDLE_QUALIFIED);
+			javaSites.direct().handles(makesJavaValues, makesViews, JvmJavaSites.callsBack(program));
+			this.needsJavaValueRuntime = makesJavaValues;
+			this.needsJavaViewRuntime = makesViews;
+		}
+		else {
+			this.needsJavaValueRuntime = false;
+			this.needsJavaViewRuntime = false;
 		}
 		// Numeric runtime helpers (long arithmetic with automatic BigInteger promotion)
 		// The interned layout array of an instance -- the discriminator the structural

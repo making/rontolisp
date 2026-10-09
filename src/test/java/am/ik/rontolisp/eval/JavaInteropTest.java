@@ -716,6 +716,13 @@ class JavaInteropTest {
 		assertThat(output(JavaInteropPrograms.JAVA_HANDLE_PROGRAM)).isEqualTo(JavaInteropPrograms.JAVA_HANDLE_OUTPUT);
 	}
 
+	// Mirrors
+	// JvmJavaInteropCompilerTest#aViewIsAReadOnlyCollectionAndAHandleItsOwnObject.
+	@Test
+	void aViewIsAReadOnlyCollectionAndAHandleItsOwnObject() {
+		assertThat(output(JavaInteropPrograms.JAVA_VIEW_PROGRAM)).isEqualTo(JavaInteropPrograms.JAVA_VIEW_OUTPUT);
+	}
+
 	@Test
 	void proxyOnNonInterfaceSignals() {
 		assertThatThrownBy(() -> eval("(java:proxy \"java.lang.String\" (lambda (m) nil))"))

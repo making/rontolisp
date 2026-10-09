@@ -1302,13 +1302,25 @@ class JvmJavaInteropCompilerTest {
 			.isEqualTo(JavaImplementationPrograms.JAVA_FALSE_OUTPUT);
 	}
 
-	// Mirrors JavaInteropTest#aHandleIsItsTextToJavaAndItsValueBack: the generated
-	// handle class through _jhandle, unwrapped by _junm / _jarr at a direct site and by
-	// the bridge's own unmarshal.
+	// Mirrors JavaInteropTest#aHandleIsItsTextToJavaAndItsValueBack:
+	// runtime/RontoJavaHandle
+	// through _jhandle, unwrapped by _junm / _jarr at a direct site and by the bridge's
+	// own
+	// unmarshal.
 	@Test
 	void aHandleIsItsTextToJavaAndItsValueBack() throws Exception {
 		assertThat(compileAndRun(JavaInteropPrograms.JAVA_HANDLE_PROGRAM))
 			.isEqualTo(JavaInteropPrograms.JAVA_HANDLE_OUTPUT);
+	}
+
+	// Mirrors JavaInteropTest#aViewIsAReadOnlyCollectionAndAHandleItsOwnObject: the
+	// runtime/RontoJava* classes made by _jview / _jhandle, called back through the
+	// generated $JavaCalls, a List view's array arms in _jcost$N / _jconv$N and the
+	// bridge's marshalListView.
+	@Test
+	void aViewIsAReadOnlyCollectionAndAHandleItsOwnObject() throws Exception {
+		assertThat(compileAndRun(JavaInteropPrograms.JAVA_VIEW_PROGRAM))
+			.isEqualTo(JavaInteropPrograms.JAVA_VIEW_OUTPUT);
 	}
 
 	@Test

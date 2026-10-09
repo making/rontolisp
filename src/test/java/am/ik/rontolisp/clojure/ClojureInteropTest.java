@@ -945,9 +945,9 @@ class ClojureInteropTest {
 	// 2026-10-08 on the interpreter and the JVM: "No matching method
 	// java.util.ArrayList.add with 1 argument(s)", "java:reify: cannot return |false| as
 	// boolean ...", "No matching constructor for java.util.HashMap", "java:call expects a
-	// java object as the first argument, got #<lambda>". Deviation: a map argument is a
-	// fresh LinkedHashMap whose vector and map values are converted too (the oracle's
-	// toString spells them as Clojure's).
+	// java object as the first argument, got #<lambda>". A map a Java collection holds
+	// spells as Clojure's since 2026-10-09 (a read-only view of it; until then a copy's
+	// {k=false}).
 	@Test
 	void falseAMapAndAFnCrossTheJavaBoundaryAsTheOraclesDo() throws Exception {
 		assertBothEqual("(let [l (java.util.ArrayList.)] (.add l false) (.add l true) (.add l nil) (println (str l)))",
@@ -961,7 +961,8 @@ class ClojureInteropTest {
 				"false true true\n");
 		assertBothEqual("(println (str (java.util.HashMap. {\"a\" 1})) (str (java.util.TreeMap. {\"b\" 2 \"a\" 1})))",
 				"{a=1} {a=1, b=2}\n");
-		assertBothEqual("(let [l (java.util.ArrayList.)] (.add l {\"k\" false}) (println (str l)))", "[{k=false}]\n");
+		assertBothEqual("(let [l (java.util.ArrayList.)] (.add l {\"k\" false}) (println (str l)))",
+				"[{\"k\" false}]\n");
 		assertBothEqual("(println (.call (fn [] 5)) (.run (fn [] 5)) (.compare (fn [a b] (< a b)) 2 1))", "5 nil 1\n");
 		assertBothEqual("(let [t (proxy [Thread] [(fn [] (println \"ran\"))])] (.start t) (.join t))", "ran\n");
 	}
@@ -1011,9 +1012,9 @@ class ClojureInteropTest {
 	// truncated, a long's or bigint's low 32 bits) -- whether Java calls it through
 	// List.sort, Collections.sort or a TreeMap. Before, measured 2026-10-08 on the
 	// interpreter and the JVM: "java:reify: cannot return T as int from
-	// java.util.Comparator.compare" (a double or a ratio was refused too). Deviation: a
-	// fn answering nil or a non-number is the java: refusal of its value, where the
-	// oracle throws a NullPointerException or a ClassCastException.
+	// java.util.Comparator.compare" (a double or a ratio was refused too). A fn answering
+	// nil or a non-number is the oracle's NullPointerException or ClassCastException
+	// since 2026-10-09 (aClojureValueReachesJavaAsTheOraclesOwnObject).
 	@Test
 	void aFnPassedAsAComparatorComparesLikeTheOraclesAFunction() throws Exception {
 		assertBothEqual("(let [l (java.util.ArrayList. [3 1 2])] (.sort l <) (println (vec l)))", "[1 2 3]\n");
@@ -1048,8 +1049,8 @@ class ClojureInteropTest {
 	// itself. Before, measured 2026-10-08 on the interpreter and the JVM: "No matching
 	// constructor for java.util.HashSet with 1 argument(s)" (a record, a sorted set
 	// alike), "No matching method java.util.HashMap.put with 2 argument(s)" (a keyword).
-	// Deviation: what Java is handed is a copy, so its toString and a collection inside
-	// it spell as Java's ([1, 2], not #{1 2}); a ratio or an atom is still refused.
+	// What Java is handed is the read-only view of the value since 2026-10-09
+	// (aClojureValueReachesJavaAsTheOraclesOwnObject).
 	@Test
 	void aSetAKeywordAndARecordCrossTheJavaBoundaryAsTheOraclesDo() throws Exception {
 		assertBothEqual("(println (str (java.util.HashSet. #{1 2})) (str (java.util.HashMap. {:a 1})))",
@@ -1074,6 +1075,67 @@ class ClojureInteropTest {
 				":x true true\n");
 		assertBothEqual("(let [m (java.util.HashMap.)] (.put m :k false) (prn (get m :k) (.get m :k)"
 				+ " (.containsKey m :k) (.containsValue m false)))", "false false true true\n");
+	}
+
+	// Oracle (clj 1.12.6, measured 2026-10-09): Java is handed the Clojure value as its
+	// own object. A vector, list, set or map is a read-only java.util collection whose
+	// toString is Clojure's printer, whose writes throw UnsupportedOperationException,
+	// whose equals and hashCode are the java.util contract's, and which comes back as the
+	// value itself (identical?); a vector is Comparable as compare orders vectors. A
+	// ratio
+	// is a Number and a Comparable by value; an atom, a deftype, a fn is an object of its
+	// own class, equal only to itself, spelled as Object's toString spells it (a type's
+	// own toString when it has one); a Comparator fn answering nil or a non-number throws
+	// the NullPointerException or ClassCastException AFunction.compare does; a keyword
+	// and
+	// a symbol do not compare. Before, measured 2026-10-09 on the interpreter and the
+	// JVM: "[[1], {:a=[1, 2]}]", "[1, 2]", the sort of a copy, "No matching method
+	// java.util.Collections.max", "No matching constructor for java.util.ArrayList" (an
+	// atom, a deftype), "java:reify: cannot return NIL as int", [:a b] sorted together.
+	// The ClassCastException messages lack the JDK's module tail.
+	@Test
+	void aClojureValueReachesJavaAsTheOraclesOwnObject() throws Exception {
+		assertBothEqual(
+				"""
+						(defn kind [f]
+						  (try (f) (catch UnsupportedOperationException e :uoe) (catch NullPointerException e [:npe (.getMessage e)])
+						       (catch ClassCastException e [:cce (.getMessage e)])))
+						(println (str (java.util.ArrayList. [#{1} {:a [1 2]}])) (str (java.util.Collections/unmodifiableSet #{1 2}))
+						         (str (java.util.HashMap. {:a [1 2]})) (java.util.Objects/toString [1 "a" nil])
+						         (str (java.util.ArrayList. [(sorted-map :b 1 :a 2) (sorted-set 2 1) '(1 2) [] {} #{}])))
+						(let [v [3 1 2]]
+						  (println (kind #(java.util.Collections/sort v)) v (kind #(.put (java.util.Collections/unmodifiableMap {:b 1}) :a 1))
+						           (kind #(.add (java.util.Collections/unmodifiableCollection #{1}) 2))))
+						(println (java.util.Collections/max [1/2 1/3]) (vec (java.util.TreeSet. [1 1/2 1/3])) (java.util.Objects/hashCode 1/2)
+						         (java.util.Objects/hashCode -12345678901234567890/7) (.equals (java.util.HashSet. [1/2]) #{1/2}))
+						(deftype T1 [a])
+						(deftype T2 [a] Object (toString [_] "custom"))
+						(println (.startsWith (str (java.util.ArrayList. [(atom 1)])) "[clojure.lang.Atom@")
+						         (.startsWith (str (java.util.ArrayList. [(T1. 1)])) "[user.T1@") (str (java.util.ArrayList. [(T2. 1) #"re" #'kind])))
+						(let [a (atom 1) v [1 2] m {:a 1} s #{1} t (T1. 1) r 1/2 l (java.util.ArrayList.)]
+						  (doseq [x [a v m s t r]] (.add l x))
+						  (println (map identical? [a v m s t r] (seq l)) (conj (.get l 1) 3) (.get l 5)))
+						(println (kind #(let [l (java.util.ArrayList. [2 1])] (.sort l (fn [a b] nil))))
+						         (kind #(let [l (java.util.ArrayList. [2 1])] (.sort l (fn [a b] "x")))))
+						(println (kind #(java.util.TreeSet. [:a 'b])) (kind #(java.util.TreeSet. ["b" :a])) (vec (java.util.TreeSet. [[2] [1 0] [1]])))
+						(println (String/valueOf [\\a \\b]) (vec (java.util.List/of [1 2])) (String/join "," ["a" "b"])
+						         (java.util.Objects/hashCode [1 2]) (java.util.Objects/hashCode {:a 1}) (java.util.Objects/hashCode #{1 2})
+						         (.equals (java.util.ArrayList. [1 2]) [1 2]) (.containsAll (java.util.ArrayList. [1 2 3]) #{1 2}))
+						(let [m (java.util.HashMap.)] (.put m [1 2] :v) (.put m {:a 1} :w) (println (.get m [1 2]) (get m '(1 2)) (.get m {:a 1})))
+						(println (.get (java.util.Collections/unmodifiableMap {:a 1}) :a) (str (java.util.UUID/nameUUIDFromBytes (.getBytes "x"))))
+						""",
+				"""
+						[#{1}, {:a [1 2]}] #{1 2} {:a=[1 2]} [1 "a" nil] [{:a 2, :b 1}, #{1 2}, (1 2), [], {}, #{}]
+						:uoe [3 1 2] :uoe :uoe
+						1/2 [1/3 1/2 1] 3 1436577085 true
+						true true [custom, re, #'user/kind]
+						(true true true true true true) [1 2 3] 1/2
+						[:npe Cannot invoke "java.lang.Number.intValue()" because "n" is null] [:cce class java.lang.String cannot be cast to class java.lang.Number]
+						[:cce class clojure.lang.Keyword cannot be cast to class clojure.lang.Symbol] [:cce class java.lang.String cannot be cast to class clojure.lang.Keyword] [[1] [2] [1 0]]
+						[\\a \\b] [[1 2]] a,b 994 1013910568 3 true true
+						:v :v :w
+						1 9dd4e461-268c-3034-b5c8-564e155c67a6
+						""");
 	}
 
 	// Oracle (clj 1.12.6, measured 2026-10-09): a keyword hashes as Keyword.hashCode and

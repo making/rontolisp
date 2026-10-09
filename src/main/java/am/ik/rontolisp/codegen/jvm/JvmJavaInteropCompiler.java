@@ -46,38 +46,40 @@ final class JvmJavaInteropCompiler {
 	}
 
 	/**
-	 * Returns whether the given {@code java} package member is one of the eight interop
+	 * Returns whether the given {@code java} package member is one of the nine interop
 	 * functions this compiler handles.
 	 */
 	static boolean handles(String member) {
 		return LispNames.JAVA_NEW.equals(member) || LispNames.JAVA_CALL.equals(member)
 				|| LispNames.JAVA_STATIC.equals(member) || LispNames.JAVA_FIELD.equals(member)
 				|| LispNames.JAVA_PROXY.equals(member) || LispNames.JAVA_REIFY.equals(member)
-				|| LispNames.JAVA_SUBCLASS.equals(member) || LispNames.JAVA_HANDLE.equals(member);
+				|| LispNames.JAVA_SUBCLASS.equals(member) || LispNames.JAVA_HANDLE.equals(member)
+				|| LispNames.JAVA_VIEW.equals(member);
 	}
 
 	static void compile(String member, LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
 		List<LispVal> args = cons.toList();
 		if (LispNames.JAVA_HANDLE.equals(member)) {
-			// (java:handle value "text" hash "order"): the object of the generated handle
-			// class, made with no reflection (eval/JavaInterop.handle on the
-			// interpreter);
-			// an absent hash or order is null beside the count of the arguments given.
-			requireArity(args.size() >= 3 && args.size() <= 5,
-					"java:handle expects (java:handle value \"text\" [hash [\"order\"]])");
-			JvmJavaSites sites = Objects.requireNonNull(ctx.javaSites, "the java: sites were not prepared");
-			JvmExprCompiler.compileExpr(args.get(1), ctx, className);
-			emitMaterialize(ctx);
-			for (int i = 2; i <= 4; i++) {
-				if (i < args.size()) {
-					JvmExprCompiler.compileExpr(args.get(i), ctx, className);
-				}
-				else {
-					ctx.body.aconst_null();
-				}
-			}
-			JvmEmitHelper.emitIntConst(ctx, args.size() - 1);
-			ctx.body.invokestatic(sites.direct().handleHelper());
+			// (java:handle value text hash order class): a runtime/RontoJavaHandle, made
+			// with
+			// no reflection by _jhandle (eval/JavaInterop.handle on the interpreter); an
+			// absent argument is null beside the count of the arguments given.
+			requireArity(args.size() >= 3 && args.size() <= 6, JavaImplementations.HANDLE_USAGE);
+			compileSpread(args, 5, ctx, className);
+			ctx.body.invokestatic(
+					Objects.requireNonNull(ctx.javaSites, "the java: sites were not prepared").direct().handleHelper());
+			return;
+		}
+		if (LispNames.JAVA_VIEW.equals(member)) {
+			// (java:view value items shape printer order class): a
+			// runtime/RontoJava*View,
+			// made by _jview (eval/JavaInterop.view on the interpreter); an absent
+			// argument
+			// is null beside the count of the arguments given.
+			requireArity(args.size() >= 4 && args.size() <= 7, JavaImplementations.VIEW_USAGE);
+			compileSpread(args, 6, ctx, className);
+			ctx.body.invokestatic(
+					Objects.requireNonNull(ctx.javaSites, "the java: sites were not prepared").direct().viewHelper());
 			return;
 		}
 		// The markers the form ends in (compiler/JavaMarkers) are no arguments.
@@ -327,6 +329,24 @@ final class JvmJavaInteropCompiler {
 		if (!ok) {
 			throw new UnsupportedOperationException(message);
 		}
+	}
+
+	// A java:handle's or java:view's arguments, left to right, as the COUNT values its
+	// helper takes (an absent one null; the value and a view's items materialized under
+	// --gpu, as an argument is), then how many were given.
+	private static void compileSpread(List<LispVal> args, int count, JvmLispCompiler.Ctx ctx, String className) {
+		for (int i = 1; i <= count; i++) {
+			if (i < args.size()) {
+				JvmExprCompiler.compileExpr(args.get(i), ctx, className);
+				if (i <= 2) {
+					emitMaterialize(ctx);
+				}
+			}
+			else {
+				ctx.body.aconst_null();
+			}
+		}
+		JvmEmitHelper.emitIntConst(ctx, args.size() - 1);
 	}
 
 	/**

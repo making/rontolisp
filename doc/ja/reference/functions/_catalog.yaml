@@ -788,6 +788,7 @@ categories:
       - { slug: java-subclass, name: "java:subclass" }
       - { slug: java-reify, name: "java:reify" }
       - { slug: java-handle, name: "java:handle" }
+      - { slug: java-view, name: "java:view" }
       - { slug: java-exception-cause, name: "java:java-exception-cause" }
   - title: "ffi パッケージ (C ライブラリ)"
     index_page: reference/functions/ffi.md

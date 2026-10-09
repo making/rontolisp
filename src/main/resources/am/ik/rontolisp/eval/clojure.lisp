@@ -2390,49 +2390,39 @@
    the key or value of each [key value] entry its seq answers."
   (mapcar (lambda (e) (aref e i)) (rontolisp::%clojure-host-seq x)))
 
-(defun rontolisp::%clojure-host-key-p (k)
-  "Whether K -- as %clojure-host-value makes a Clojure value -- reaches a host
-   method's Object parameter. A value java:call refuses there (a ratio, an
-   atom, a collection holding one) is no key of a host Map and no member of a
-   host Set: the same refusal kept the program from putting it in one, and no
-   host value unmarshals to it."
-  (handler-case (progn
-                  (java:static "java.util.Objects" "isNull" k)
-                  t)
-    (error () nil)))
-
 (defun rontolisp::%clojure-host-get (x k dflt)
   "get of K in the host object X (%clojure-host-seqable-p): a Map's value
-   under K by the Map's own lookup, DFLT when it holds no such key or X is no
-   Map, like the oracle's RT.get."
-  (let ((h (rontolisp::%clojure-host-value k)))
+   under K -- the Java object %clojure-host-member makes of it -- by the Map's
+   own lookup, DFLT when it holds no such key or X is no Map, like the oracle's
+   RT.get."
+  (let ((h (rontolisp::%clojure-host-member k)))
     (if (and (rontolisp::%clojure-host-instance-p x "java.util.Map")
-             (rontolisp::%clojure-host-key-p h) (java:call x "containsKey" h))
+             (java:call x "containsKey" h))
         (java:call x "get" h :java-false)
         dflt)))
 
 (defun rontolisp::%clojure-host-contains-p (x k)
   "contains? of K in the host object X (%clojure-host-seqable-p): whether a
-   Map holds the key K, or a Set the member K, by its own lookup. Any other
-   host object is refused, like the oracle's RT.contains."
-  (let ((h (rontolisp::%clojure-host-value k)))
+   Map holds the key K, or a Set the member K -- the Java object
+   %clojure-host-member makes of it -- by its own lookup. Any other host object
+   is refused, like the oracle's RT.contains."
+  (let ((h (rontolisp::%clojure-host-member k)))
     (cond ((rontolisp::%clojure-host-instance-p x "java.util.Map")
-           (and (rontolisp::%clojure-host-key-p h)
-                (java:call x "containsKey" h)))
+           (java:call x "containsKey" h))
           ((rontolisp::%clojure-host-instance-p x "java.util.Set")
-           (and (rontolisp::%clojure-host-key-p h) (java:call x "contains" h)))
+           (java:call x "contains" h))
           (t (rontolisp::%clojure-illegal-argument-exception
               (format nil "contains? not supported on type: ~A"
                       (java:call (java:call x "getClass") "getName")))))))
 
 (defun rontolisp::%clojure-host-find (x k)
   "find of K in the host object X (%clojure-host-seqable-p): the entry
-   [K value] when a Map holds the key K by its own lookup, else nil. Any other
-   host object is refused, like the oracle's RT.find."
+   [K value] when a Map holds the key K -- the Java object %clojure-host-member
+   makes of it -- by its own lookup, else nil. Any other host object is
+   refused, like the oracle's RT.find."
   (if (rontolisp::%clojure-host-instance-p x "java.util.Map")
-      (let ((h (rontolisp::%clojure-host-value k)))
-        (if (and (rontolisp::%clojure-host-key-p h)
-                 (java:call x "containsKey" h))
+      (let ((h (rontolisp::%clojure-host-member k)))
+        (if (java:call x "containsKey" h)
             (vector k (java:call x "get" h :java-false))
             nil))
       (rontolisp::%clojure-illegal-argument-exception
@@ -2526,52 +2516,194 @@
 
 ;; The value a java: member is handed for the Clojure value X, where the oracle
 ;; hands Java its own object: the lowering wraps each argument of a host call in
-;; this (clojure/ClojureInteropLowering.hostCall), the host verbs a key. What Java
-;; has no value of becomes one: a keyword or a symbol a java:handle
-;; (%clojure-host-ident) Java hands back as the keyword or symbol itself; a set a
-;; fresh java.util.LinkedHashSet of its members, a sorted set one in order; a
-;; sorted map, a record and a map an equal table of their entries in order, which
-;; java: makes a java.util.LinkedHashMap; a lazy seq the list it realizes; a Date,
-;; Timestamp or UUID the host object it stands for (%clojure-time-value-host). A
-;; vector, list or map holding such a value is a copy holding what each becomes,
-;; anything else X itself.
+;; this (clojure/ClojureInteropLowering.hostCall). A fn is itself -- the call makes
+;; it the interface a parameter expects -- and so is a condition, which java:
+;; hands over as the host exception it stands for; anything else is what
+;; %clojure-host-member makes of it.
 (defun rontolisp::%clojure-host-value (x)
-  (cond ((or (null x) (numberp x) (stringp x) (characterp x) (functionp x)) x)
+  (if (or (functionp x) (rontolisp::%clojure-lisp-instance-p x))
+      x
+      (rontolisp::%clojure-host-member x)))
+
+;; The Java object the Clojure value X is, behaving as the oracle's own object: a
+;; host call's argument (%clojure-host-value), a member of a collection crossing,
+;; a key the host verbs look up. Nil, true, false, a string, a character and a
+;; number but a ratio are themselves, which java: makes Java's; a keyword or a
+;; symbol is a java:handle hashing and ordering as Keyword and Symbol do
+;; (%clojure-host-ident); a ratio a handle that is a Number, equal to a ratio of
+;; its spelling and ordered by value against any number; a vector, a list or a
+;; (realized) lazy seq a read-only java:view List -- a vector's RandomAccess and
+;; Comparable, as the oracle's vector compares --, a set or a sorted set a Set, a
+;; map, a sorted map or a record a Map, each spelled as str spells the value and
+;; holding its members as this makes them; a Date, Timestamp or UUID the host
+;; object (%clojure-time-value-host); a host object itself; anything else -- a fn,
+;; an atom, a deftype, a reify, a pattern, a var -- a handle equal only to itself
+;; (%clojure-host-object). Java hands every handle and view back as X.
+(defun rontolisp::%clojure-host-member (x)
+  (cond ((rontolisp::%clojure-host-plain-p x) x)
         ((rontolisp::%clojure-keyword-p x)
          (rontolisp::%clojure-host-ident x (car (cdr x)) t))
+        ((rationalp x)
+         (java:handle x (princ-to-string x)
+                      (logxor (rontolisp::%clojure-host-big-hash (numerator x))
+                              (rontolisp::%clojure-host-big-hash (denominator x)))
+                      #'rontolisp::%clojure-host-number-order "clojure.lang.Ratio"))
+        ((and (vectorp x) (not (stringp x)))
+         (java:view x (rontolisp::%clojure-host-members x) :vector
+                    #'rontolisp::%clojure-host-text
+                    #'rontolisp::%clojure-host-vector-order
+                    "clojure.lang.PersistentVector"))
         ((rontolisp::%clojure-set-p x)
-         (rontolisp::%clojure-host-set
-          (rontolisp::%clojure-host-table-keys (car (cdr x)))))
+         (java:view x
+                    (rontolisp::%clojure-host-members
+                     (rontolisp::%clojure-host-table-keys (car (cdr x))))
+                    :set #'rontolisp::%clojure-host-text nil
+                    "clojure.lang.PersistentHashSet"))
         ((rontolisp::%clojure-sorted-set-p x)
-         (rontolisp::%clojure-host-set
-          (coerce (rontolisp::%clojure-sorted-items x) 'list)))
+         (java:view x
+                    (rontolisp::%clojure-host-members
+                     (rontolisp::%clojure-sorted-items x))
+                    :set #'rontolisp::%clojure-host-text nil
+                    "clojure.lang.PersistentTreeSet"))
         ((rontolisp::%clojure-sorted-map-p x)
-         (rontolisp::%clojure-host-plist-table
-          (rontolisp::%clojure-sorted-plist x)))
+         (java:view x
+                    (rontolisp::%clojure-host-members
+                     (rontolisp::%clojure-sorted-plist x))
+                    :map #'rontolisp::%clojure-host-text nil
+                    "clojure.lang.PersistentTreeMap"))
         ((rontolisp::%clojure-record-p x)
-         (rontolisp::%clojure-host-plist-table
-          (rontolisp:hash-table-plist (car (cdr (cdr (cdr x)))))))
-        ((rontolisp::%clojure-lazy-p x)
-         (rontolisp::%clojure-host-list (rontolisp::%clojure-seq-all x)))
+         (java:view x
+                    (rontolisp::%clojure-host-members
+                     (rontolisp:hash-table-plist (car (cdr (cdr (cdr x))))))
+                    :map #'rontolisp::%clojure-host-text nil
+                    (rontolisp::%clojure-class-name-of x)))
+        ((rontolisp::%clojure-lazy-p x) (rontolisp::%clojure-host-seq-view x))
         ((or (rontolisp::%clojure-date-p x) (rontolisp::%clojure-timestamp-p x)
              (rontolisp::%clojure-uuid-p x))
          (rontolisp::%clojure-time-value-host x))
-        ;; any other wrapper (an atom, a var, a pattern ...) has no Java value
-        ((and (consp x) (keywordp (car x))) x)
-        ((consp x) (rontolisp::%clojure-host-list x))
+        ;; any other wrapper: an atom, a deftype, a reify, a pattern, a var ...
+        ((and (consp x) (keywordp (car x))) (rontolisp::%clojure-host-object x))
+        ((consp x) (rontolisp::%clojure-host-seq-view x))
         ((hash-table-p x)
-         (if (rontolisp::%clojure-host-changes-p (rontolisp:hash-table-plist x))
-             (rontolisp::%clojure-host-plist-table
-              (rontolisp:hash-table-plist x))
-             x))
-        ((vectorp x)
-         (if (rontolisp::%clojure-host-changes-p (coerce x 'list))
-             (map 'vector #'rontolisp::%clojure-host-value x)
-             x))
+         (java:view x
+                    (rontolisp::%clojure-host-members
+                     (rontolisp:hash-table-plist x))
+                    :map #'rontolisp::%clojure-host-text nil
+                    (rontolisp::%clojure-class-name-of x)))
         ((rontolisp::%clojure-real-symbol-p x)
          (rontolisp::%clojure-host-ident x
           (rontolisp::%clojure-symbol-full-name x) nil))
+        ;; a fn, a condition, a stream: no Java value of its own
+        ((rontolisp::%clojure-lisp-value-p x) (rontolisp::%clojure-host-object x))
         (t x)))
+
+;; Whether java: hands the Clojure value X to Java as it is: nil, true, false, a
+;; string, a character, or a number but a ratio.
+(defun rontolisp::%clojure-host-plain-p (x)
+  (or (null x) (eq x t) (eq x rontolisp::%clojure-false) (stringp x)
+      (characterp x)
+      (and (numberp x) (or (integerp x) (not (rationalp x))))))
+
+;; Whether every member of the proper list ITEMS is plain (%clojure-host-plain-p).
+(defun rontolisp::%clojure-host-plain-list-p (items)
+  (do ((rest items (cdr rest)))
+      ((not (consp rest)) t)
+    (if (not (rontolisp::%clojure-host-plain-p (car rest)))
+        (return nil))))
+
+;; ITEMS -- a proper list or a vector of Clojure values -- as the Java objects
+;; %clojure-host-member makes them: ITEMS itself when every member is plain, else
+;; a fresh list.
+(defun rontolisp::%clojure-host-members (items)
+  (if (listp items)
+      (if (rontolisp::%clojure-host-plain-list-p items)
+          items
+          (mapcar #'rontolisp::%clojure-host-member items))
+      (let ((plain t) (acc nil))
+        (dotimes (i (length items))
+          (if (not (rontolisp::%clojure-host-plain-p (aref items i)))
+              (setq plain nil)))
+        (if plain
+            items
+            (progn
+              (dotimes (i (length items))
+                (setq acc
+                      (cons (rontolisp::%clojure-host-member (aref items i))
+                            acc)))
+              (reverse acc))))))
+
+;; A list, seq or lazy seq X as a read-only java:view List of its members, the
+;; lazy ones realized to the end.
+(defun rontolisp::%clojure-host-seq-view (x)
+  (java:view x
+             (rontolisp::%clojure-host-members (rontolisp::%clojure-seq-all x))
+             :list #'rontolisp::%clojure-host-text nil
+             (rontolisp::%clojure-class-name-of x)))
+
+;; X -- a fn, an atom, a deftype, a reify, a pattern, a var, or a value of no
+;; Java kind -- as a java:handle equal only to itself, of the oracle's class
+;; (%clojure-class-name-of), spelled as the oracle's toString spells it: Object's
+;; (the class and the hash) for a fn, an atom, a reduced and a type overriding no
+;; toString, what str answers for anything else.
+(defun rontolisp::%clojure-host-object (x)
+  (java:handle x (rontolisp::%clojure-host-object-text x) nil nil
+               (if (or (functionp x) (consp x))
+                   (rontolisp::%clojure-class-name-of x)
+                   "java.lang.Object")))
+
+;; What %clojure-host-object's handle answers Java's toString with: nil (Object's
+;; spelling) for a fn, an atom, a reduced and a type overriding no toString, the
+;; value as str spells it otherwise. The object-methods test stays a bare cond test,
+;; so a program whose types override none folds it.
+(defun rontolisp::%clojure-host-object-text (x)
+  (cond ((or (functionp x) (rontolisp::%clojure-atom-p x)
+             (and (consp x) (eq (car x) :C%REDUCED)))
+         nil)
+        ((and (consp x) (eq (car x) :C%TYPE))
+         (cond ((rontolisp::%clojure-to-string-p x)
+                (rontolisp::%clojure-str-of x "nil" nil))
+               (t nil)))
+        (t (rontolisp::%clojure-str-of x "nil" nil))))
+
+;; A java:view's toString: the value as str spells it, the oracle's toString.
+(defun rontolisp::%clojure-host-text (x)
+  (rontolisp::%clojure-str-of x "nil" nil))
+
+;; A vector's compareTo, the oracle's APersistentVector.compareTo: another vector
+;; by count, then member by member as compare orders them (members compare
+;; refuses refuse here too); nil -- Java's ClassCastException -- for anything else.
+(defun rontolisp::%clojure-host-vector-order (v other)
+  (if (and (vectorp other) (not (stringp other)))
+      (rontolisp::%clojure-compare-vectors v other)
+      nil))
+
+;; A ratio's compareTo, the oracle's Ratio.compareTo: any real number by value;
+;; nil -- Java's ClassCastException -- for anything else.
+(defun rontolisp::%clojure-host-number-order (r other)
+  (if (realp other)
+      (cond ((< r other) -1)
+            ((> r other) 1)
+            (t 0))
+      nil))
+
+;; The oracle's BigInteger.hashCode of the integer N: its magnitude's 32-bit words
+;; from the most significant, each folded in as 31 * h + word to 32 bits, times
+;; the sign (a Ratio hashes as its numerator's xor its denominator's).
+(defun rontolisp::%clojure-host-big-hash (n)
+  (let ((m (abs n)) (words nil) (h 0))
+    (do ()
+        ((= m 0))
+      (setq words (cons (logand m 4294967295) words))
+      (setq m (ash m -32)))
+    (dolist (w words)
+      (setq h (logand (+ (* 31 h) w) 4294967295)))
+    (rontolisp::%clojure-host-int32
+     (* (rontolisp::%clojure-host-int32 h) (if (< n 0) -1 1)))))
+
+;; The integer N's low 32 bits as a signed int.
+(defun rontolisp::%clojure-host-int32 (n)
+  (let ((low (logand n 4294967295)))
+    (if (>= low 2147483648) (- low 4294967296) low)))
 
 ;; The java:handle of the keyword (KEYWORDP) or symbol X spelled FULL ("ns/name"
 ;; or "name", split at the first slash like the oracle's Symbol.intern): Java sees
@@ -2579,7 +2711,8 @@
 ;; the oracle's Symbol.hashCode -- Util.hashCombine of the name's and the
 ;; namespace's String hashCode -- a keyword's 0x9e3779b9 more, as Keyword's; and
 ;; it orders as their compareTo -- no namespace first, then by namespace, then by
-;; name -- keywords before symbols, which the oracle never compares.
+;; name -- among its own class: a keyword compared with a symbol is the oracle's
+;; ClassCastException.
 (defun rontolisp::%clojure-host-ident (x full keywordp)
   (let* ((slash (if (string= full "/") nil (position #\/ full)))
          (ns (if slash (subseq full 0 slash)))
@@ -2592,41 +2725,10 @@
     (java:handle x (if keywordp (concatenate 'string ":" full) full)
                  (if keywordp (+ hash 2654435769) hash)
                  (if ns
-                     (concatenate 'string (if keywordp "k" "s")
-                                  (string (code-char 1)) ns
+                     (concatenate 'string (string (code-char 1)) ns
                                   (string (code-char 0)) name)
-                     (concatenate 'string (if keywordp "k" "s")
-                                  (string (code-char 0)) name)))))
-
-;; Whether a member of ITEMS is a value %clojure-host-value makes another of.
-(defun rontolisp::%clojure-host-changes-p (items)
-  (do ((rest items (cdr rest)))
-      ((not (consp rest)) nil)
-    (if (not (eq (rontolisp::%clojure-host-value (car rest)) (car rest)))
-        (return t))))
-
-;; The proper list ITEMS as %clojure-host-value makes each member, itself when
-;; no member changes.
-(defun rontolisp::%clojure-host-list (items)
-  (if (rontolisp::%clojure-host-changes-p items)
-      (mapcar #'rontolisp::%clojure-host-value items)
-      items))
-
-;; A fresh java.util.LinkedHashSet of the MEMBERS, each as %clojure-host-value
-;; makes it.
-(defun rontolisp::%clojure-host-set (members)
-  (let ((s (java:new "java.util.LinkedHashSet")))
-    (dolist (m members s)
-      (java:call s "add" (rontolisp::%clojure-host-value m)))))
-
-;; A fresh equal table of the PLIST's entries in order, each key and value as
-;; %clojure-host-value makes it.
-(defun rontolisp::%clojure-host-plist-table (plist)
-  (let ((out (make-hash-table :test 'equal)))
-    (do ((rest plist (cdr (cdr rest))))
-        ((not (consp rest)) out)
-      (setf (gethash (rontolisp::%clojure-host-value (car rest)) out)
-            (rontolisp::%clojure-host-value (car (cdr rest)))))))
+                     (concatenate 'string (string (code-char 0)) name))
+                 (if keywordp "clojure.lang.Keyword" "clojure.lang.Symbol"))))
 
 ;; The keys of the table TABLE in insertion order (a set's members).
 (defun rontolisp::%clojure-host-table-keys (table)
@@ -2635,7 +2737,6 @@
                (declare (ignore v))
                (setq acc (cons k acc))) table)
     (reverse acc)))
-
 (defun rontolisp::%clojure-equal-values (&rest values)
   "= as a function value: T when every neighbouring pair is equal, the false
    object otherwise (no values, or one, is true)."
