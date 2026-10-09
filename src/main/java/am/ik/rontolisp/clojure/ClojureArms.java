@@ -43,7 +43,8 @@ import org.jspecify.annotations.Nullable;
  * view's arguments past the first, are variables or {@code car}/{@code cdr} reads of one
  * (they are dropped, so they must have no effect), and a test stands only where it folds
  * -- a {@code cond} clause's test, an {@code if}'s test, an {@code or}'s disjunct. The
- * interpreter and a session keep the arms: what a later input builds is unknown there.
+ * interpreter strips a whole program the same way; a session keeps the arms: what a later
+ * input builds is unknown there.
  */
 public final class ClojureArms {
 

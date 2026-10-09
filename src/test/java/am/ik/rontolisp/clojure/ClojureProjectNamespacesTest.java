@@ -959,7 +959,7 @@ class ClojureProjectNamespacesTest {
 		ByteArrayOutputStream out = new ByteArrayOutputStream();
 		CliStack.call("clojure-namespaces", () -> {
 			LispEvaluator evaluator = new LispEvaluator(new PrintStream(out, true, StandardCharsets.UTF_8));
-			for (LispVal form : read(entry)) {
+			for (LispVal form : evaluator.clojureProgram(read(entry))) {
 				evaluator.eval(form);
 			}
 			return null;

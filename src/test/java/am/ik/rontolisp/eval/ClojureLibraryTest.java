@@ -1,5 +1,8 @@
 package am.ik.rontolisp.eval;
 
+import java.io.ByteArrayOutputStream;
+import java.io.PrintStream;
+import java.nio.charset.StandardCharsets;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -9,6 +12,7 @@ import java.util.TreeSet;
 import java.util.stream.Collectors;
 
 import am.ik.rontolisp.LispCons;
+import am.ik.rontolisp.LispLambda;
 import am.ik.rontolisp.LispString;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
@@ -19,6 +23,7 @@ import am.ik.rontolisp.reader.LispReader;
 import org.junit.jupiter.api.Test;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class ClojureLibraryTest {
 
@@ -329,6 +334,35 @@ class ClojureLibraryTest {
 		List<LispVal> file = Clojure.read("(prn (java.io.File. \"a\"))", null);
 		assertThat(defun(ClojureLibrary.process(file), "RONTOLISP::%CLOJURE-WRITE"))
 			.contains("(RONTOLISP::%CLOJURE-IO-P X)");
+	}
+
+	@Test
+	void aWholeProgramOnTheInterpreterTakesTheLibraryWithoutTheArmsItCanNeverTake() {
+		// str of a number passes no io test where the program can hold no io value; the
+		// library loaded on first use keeps every arm for what a session reads next
+		ByteArrayOutputStream out = new ByteArrayOutputStream();
+		LispEvaluator whole = new LispEvaluator(new PrintStream(out, true, StandardCharsets.UTF_8));
+		for (LispVal form : whole.clojureProgram(Clojure.read("(println (str 1 :k))", null))) {
+			whole.eval(form);
+		}
+		assertThat(out.toString(StandardCharsets.UTF_8)).isEqualTo("1:k\n");
+		assertThat(strOf(whole)).doesNotContain("%CLOJURE-IO-P").contains("%CLOJURE-RE-PATTERN-P");
+		LispEvaluator lazy = new LispEvaluator(new PrintStream(new ByteArrayOutputStream(), true));
+		for (LispVal form : Clojure.read("(str 1 :k)", null)) {
+			lazy.eval(form);
+		}
+		assertThat(strOf(lazy)).contains("(RONTOLISP::%CLOJURE-IO-P X)");
+		LispEvaluator io = new LispEvaluator(new PrintStream(new ByteArrayOutputStream(), true));
+		io.clojureProgram(Clojure.read("(str (java.io.File. \"a\"))", null));
+		assertThat(strOf(io)).contains("(RONTOLISP::%CLOJURE-IO-P X)");
+		// a later program could make what the first could not
+		assertThatThrownBy(() -> whole.clojureProgram(Clojure.read("(str (java.io.File. \"a\"))", null)))
+			.isInstanceOf(IllegalStateException.class);
+	}
+
+	private static String strOf(LispEvaluator evaluator) {
+		LispVal function = evaluator.eval(LispReader.readAllFromString("#'rontolisp::%clojure-str-of").get(0));
+		return ((LispLambda) function).body().stream().map(LispVal::print).collect(Collectors.joining(" "));
 	}
 
 	@Test

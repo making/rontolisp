@@ -242,7 +242,7 @@ class ClojureDepsProjectTest {
 		ByteArrayOutputStream out = new ByteArrayOutputStream();
 		CliStack.call("clojure-deps", () -> {
 			LispEvaluator evaluator = new LispEvaluator(new PrintStream(out, true, StandardCharsets.UTF_8));
-			for (LispVal form : read(entry, standards)) {
+			for (LispVal form : evaluator.clojureProgram(read(entry, standards))) {
 				evaluator.eval(form);
 			}
 			return null;

@@ -745,8 +745,22 @@ before the library splice.
   an argument with an effect, is an `IllegalStateException` at the strip.
   `eval/ClojureLibrary.process` strips the program family by family and splices a library
   stripped of every family it makes no value of (one cached variant per combination, beside
-  the host-arm ones); the interpreter, a session and the macro-time
-  evaluator keep `forms()` whole, since what a later input builds is unknown.
+  the host-arm ones). The interpreter running a whole program (the command line's run,
+  `rontolisp test`) takes the same strip: `LispEvaluator.clojureProgram` evaluates
+  `ClojureLibrary.splice`'s library ahead of the stripped program. A session, a `load` of a
+  `.clj` and the macro-time evaluator keep `forms()` whole (loaded on first use), since
+  what a later input builds is unknown; a stripped library refuses later Clojure source
+  (`IllegalStateException`; no Clojure program reaches it: `load`/`require` are read while
+  lowering, `eval` is refused). Strip-on-load with growth was rejected: a redefined defun
+  misses every `#'` snapshot and closure taken before, so a later value of a new family
+  would reach an armless copy. What a hot path passed before the strip (counted
+  2026-10-09): `str` of a number or keyword 8 family tests ahead of the printer, `=` of
+  two numbers 13, the printer 0 for a scalar and ~9 per collection node. Bench 2026-10-09
+  (interpreter, loaded host, interleaved runs, whole program vs the same file `load`ed
+  from a `.lisp`): 300k `(str i :k)` 16.6-21.1 s vs 24.9-33.4 s; 300k `(= [i :k] [i :k])`
+  12.4-19.7 s vs 28.4-35.5 s. Pinned by
+  `ClojureLibraryTest#aWholeProgramOnTheInterpreterTakesTheLibraryWithoutTheArmsItCanNeverTake`;
+  every interpreter leg of the four-backend tests (`ClojureSpecE2eTest` ...) runs through it.
 - Writing an arm: it allocates no `freshTemp` and lowers no datum again (a shifted temp
   number would rename locals of the stripped program); it sits behind an existing wrapper
   test where it can (`%clojure-strict-seq`, `count`, `empty?`, `%clojure-key-kind`), so the
@@ -1993,10 +2007,11 @@ the file), `default-streams-impl` a map. Until then only `reader` resolved, as a
   value compiles byte-identical (measured 2026-10-08 on `demo.clj`, print, protocol,
   multimethod and spit/slurp/line-seq programs; pinned by
   `ClojureLibraryTest#aProgramMakingNoIoValueSplicesTheLibraryWithoutItsIoArms`). The
-  interpreter keeps every arm (`ClojureLibrary.process` is the compile path's): `str` of a
-  non-io value pays one `%clojure-io-p` call, ~5% of a `str`-bound loop (bench 2026-10-08:
-  300k `(str i :k)` 19.3 -> 20.4 s mean of five on a loaded host; `=` and `pr-str` within
-  noise). `%clojure-io-p` is one call however it answers (the registry is read only once a
+  library a session loads keeps every arm: there `str` of a non-io value pays one
+  `%clojure-io-p` call, ~5% of a `str`-bound loop (bench 2026-10-08: 300k `(str i :k)`
+  19.3 -> 20.4 s mean of five on a loaded host; `=` and `pr-str` within noise); a whole
+  program on the interpreter strips it like the compile path ("Sorted collections", the
+  arms). `%clojure-io-p` is one call however it answers (the registry is read only once a
   stream is in it).
 - **Prelude trap** (measured 2026-10-08): a `clojure.lisp` parameter named `write` grew every
   Clojure program (+29 KB `demo.clj`): any symbol of the library, even in a defun nothing
