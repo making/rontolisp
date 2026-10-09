@@ -17,7 +17,7 @@
 | `uiop:subdirectories` | ディレクトリのサブディレクトリ。各々末尾に `/` を付ける |
 | `uiop:collect-sub*directories` | ディレクトリツリーを走査する。`collectp` が `collector` に渡すものを決め、`recursep` が降りるものを決める。渡されるディレクトリはルートを含めすべてディレクトリ形 |
 | `uiop:filter-logical-directory-results` | エントリをそのまま返す — 論理パス名はここには存在できない（`logical-pathname-p` はすべてのバックエンドで `nil`）ため、取り除くものがない |
-| `uiop:safe-file-write-date` | 存在しないファイルの `file-error` を飲み込む `file-write-date`。日付自体が `nil` である 2 つの WASM バックエンドでは `nil` |
+| `uiop:safe-file-write-date` | 存在しないファイルの `file-error` を飲み込む `file-write-date` |
 | `uiop:native-namestring` | `"/tmp/x"` — OS 側のパス名綴り。ここでは名前文字列そのものなので `namestring` と同じ |
 | `uiop:parse-native-namestring` | `parse-unix-namestring` に `ensure-pathname` の制約を加えたもの — `os-unix-p` は無条件に真なので、ネイティブ綴りは Unix 綴りそのもの |
 | `uiop:get-pathname-defaults` | 相対名が解決される基準のデフォルト — 絶対なデフォルト引数が与えられない限り `*default-pathname-defaults*` (初期値 `#P""`、ホストの作業ディレクトリを指すパス名) を返す |
@@ -87,4 +87,4 @@ NIL
 | `uiop:delete-empty-directory` | 空ディレクトリを削除する。同じファイル基本操作の上にある（空ディレクトリもファイルと同様に削除できる） |
 | `uiop:delete-directory-tree` | 可搬な再帰走査による `rm -rf`。ディレクトリは `:validate` 述語を通過しなければならない（述語なしも失敗も `parameter-error`）。存在しないディレクトリは、`:if-does-not-exist` が `:ignore` でない限り通知する |
 
-4 つの変更操作は、基本操作が実在するすべてのバックエンドで実際に動作します。`ensure-all-directories-exist`（`%make-directories` 上）、`rename-file-overwriting-target`（`%rename-file` 上）、`delete-file-if-exists`（`%delete-file` 上）はどこでも動作し、ci-spec の `filesystem-write-create-rename-delete-and-probe` ケースが全バックエンドで固定しています。ディレクトリの削除はWASMでは引き続き通知します — unlink呼び出しではディレクトリを削除できないため、実際のディレクトリに対する `delete-empty-directory` は誠実な `file-error` になります。
+4 つの変更操作は、基本操作が実在するすべてのバックエンドで実際に動作します。`ensure-all-directories-exist`（`%make-directories` 上）、`rename-file-overwriting-target`（`%rename-file` 上）、`delete-file-if-exists`（`%delete-file` 上）はどこでも動作し、ci-spec の `filesystem-write-create-rename-delete-and-probe` ケースが全バックエンドで固定しています。`delete-empty-directory`（とそれを使う `delete-directory-tree`）も全バックエンドで空のディレクトリを削除し、空でないディレクトリには `file-error` を通知します。

@@ -24,16 +24,26 @@ import org.jspecify.annotations.Nullable;
  * <ul>
  * <li>{@code rontolisp.internal.ring} for the built-in Ring namespaces: bytes and
  * charsets, the JDK's URL coders, the content-type charset match, the Unicode letter test
- * of {@code wrap-keyword-params}. Measured 2026-10-08, wasm-GC P1:
+ * of {@code wrap-keyword-params}, and the file responses' canonical path, {@code ..}
+ * test, HTTP date and {@code java.util.Date} (an instant, {@code date}'s worker the
+ * {@code #inst} constructor). Measured 2026-10-08, wasm-GC P1:
  * {@code (form-decode-str "a+%41")} written in Clojure inside a namespace was a 340,532 B
  * module, {@code (url-decode "a%41")} 357,787 B (generic {@code conj}, {@code apply str},
  * {@code throw} and the regex engine), where the Common Lisp {@code rontolisp:url-decode}
  * is a 26,940 B module.</li>
  * <li>{@code rontolisp.internal.pprint} for {@code clojure.pprint}: the pretty print's
- * token buffer and its layout, and the radix spelling of a number.</li>
+ * token buffer and its layout, the radix spelling of a number, and the text of
+ * {@code cl-format}'s number directives and case conversion.</li>
  * <li>{@code rontolisp.internal.datafy} for {@code clojure.datafy}: the oracle's class
  * name of a value, an exception's too, which {@code class} (a kind keyword here) does not
  * answer.</li>
+ * <li>{@code rontolisp.internal.throwable} for {@code clojure.stacktrace},
+ * {@code clojure.repl} and {@code clojure.main}: the class name of a throwable, a host
+ * one too, which {@code class} answers as a keyword or a host class; a call emits the
+ * exception runtime it reads.</li>
+ * <li>{@code rontolisp.internal.xml} for {@code clojure.xml}: the XML reader answering a
+ * document's events, the Java white space test of character data, and whether a source is
+ * a host object for the host's SAX parser.</li>
  * <li>{@code rontolisp.internal.instant} for {@code clojure.instant}: the timestamp
  * match, {@code validated}'s checks and the three readers, which the run-time reader's
  * default {@code #inst} reader shares.</li>
@@ -180,34 +190,51 @@ final class ClojureKernelLowering {
 	static final String HTTP_REQUEST = "RONTOLISP::%CLOJURE-HTTP-REQUEST";
 
 	/** The internal namespaces. */
-	private static final Map<String, Kernels> NAMESPACES = Map.of("rontolisp.internal.ring",
-			new Kernels("the built-in Ring namespaces", "RONTOLISP::%CLOJURE-RING-",
+	private static final Map<String, Kernels> NAMESPACES = Map.ofEntries(
+			Map.entry("rontolisp.internal.ring", new Kernels("the built-in Ring namespaces",
+					"RONTOLISP::%CLOJURE-RING-",
 					Map.ofEntries(Map.entry("percent-encode", 2), Map.entry("percent-decode", 2),
 							Map.entry("url-encode", 2), Map.entry("form-encode", 2), Map.entry("form-decode-str", 2),
 							Map.entry("form-decode-map", 2), Map.entry("form-decode", 2), Map.entry("parse-long", 1),
-							Map.entry("content-type-charset", 1), Map.entry("keyword-syntax?", 2))),
-			"rontolisp.internal.pprint",
-			new Kernels("clojure.pprint", "RONTOLISP::%CLOJURE-PP-",
-					Map.ofEntries(Map.entry("call", 3), Map.entry("start", 4), Map.entry("end", 1),
-							Map.entry("newline", 1), Map.entry("indent", 2), Map.entry("fresh-line", 0),
-							Map.entry("length-reached", 1), Map.entry("count-object", 0), Map.entry("reset-length", 0),
-							Map.entry("number-string", 3), Map.entry("members", 1))),
-			"rontolisp.internal.datafy",
-			new Kernels("clojure.datafy", "RONTOLISP::%CLOJURE-DATAFY-", Map.of("class-name", 1)),
-			"rontolisp.internal.instant",
-			new Kernels("clojure.instant", "RONTOLISP::%CLOJURE-INSTANT-",
-					Map.ofEntries(Map.entry("parse", 1), Map.entry("validate", 10), Map.entry("read-date", 1),
-							Map.entry("read-timestamp", 1), Map.entry("read-calendar", 1))),
-			"rontolisp.internal.uuid", new Kernels("clojure.uuid", "RONTOLISP::%CLOJURE-", Map.of("read-uuid", 1)),
-			"rontolisp.internal.reducers",
-			new Kernels("clojure.core.reducers", "RONTOLISP::%CLOJURE-REDUCERS-",
-					Map.ofEntries(Map.entry("accumulator", 0), Map.entry("accumulator?", 1), Map.entry("append", 2),
-							Map.entry("joined", 2))),
-			"rontolisp.internal.http",
-			new Kernels("rontolisp.http-client", "RONTOLISP::%CLOJURE-HTTP-",
-					Map.ofEntries(Map.entry("request", 2), Map.entry("fetch", 2)), Map.of("fetch", "RONTOLISP:FETCH"),
-					true),
-			"rontolisp.internal.math", mathKernels(), ClojureIoLowering.NAMESPACE, ClojureIoLowering.kernels());
+							Map.entry("content-type-charset", 1), Map.entry("keyword-syntax?", 2),
+							Map.entry("canonical-path", 1), Map.entry("directory-traversal?", 1),
+							Map.entry("format-date", 1), Map.entry("date", 1)),
+					Map.of("date", ClojureDefaultReaders.MAKE_INST), false)),
+			Map.entry("rontolisp.internal.pprint",
+					new Kernels("clojure.pprint", "RONTOLISP::%CLOJURE-PP-", Map.ofEntries(Map.entry("call", 3),
+							Map.entry("start", 4), Map.entry("end", 1), Map.entry("newline", 1), Map.entry("indent", 2),
+							Map.entry("fresh-line", 0), Map.entry("length-reached", 1), Map.entry("count-object", 0),
+							Map.entry("reset-length", 0), Map.entry("number-string", 3), Map.entry("members", 1),
+							Map.entry("active?", 0), Map.entry("tab", 3), Map.entry("eol", 3), Map.entry("padding", 2),
+							Map.entry("integer-text", 10), Map.entry("english", 4), Map.entry("roman", 4),
+							Map.entry("fixed", 7), Map.entry("exponential", 9), Map.entry("general", 9),
+							Map.entry("dollar", 7), Map.entry("case-state", 0), Map.entry("case-convert", 3),
+							Map.entry("case-out", 0), Map.entry("with-case-out", 2)))),
+			Map.entry("rontolisp.internal.datafy",
+					new Kernels("clojure.datafy", "RONTOLISP::%CLOJURE-DATAFY-", Map.of("class-name", 1))),
+			Map.entry("rontolisp.internal.throwable",
+					new Kernels("clojure.stacktrace, clojure.repl and clojure.main", "RONTOLISP::%CLOJURE-",
+							Map.of("class-name", 1), Map.of("class-name", "RONTOLISP::%CLOJURE-DATAFY-CLASS-NAME"),
+							true)),
+			Map.entry("rontolisp.internal.instant",
+					new Kernels("clojure.instant", "RONTOLISP::%CLOJURE-INSTANT-",
+							Map.ofEntries(Map.entry("parse", 1), Map.entry("validate", 10), Map.entry("read-date", 1),
+									Map.entry("read-timestamp", 1), Map.entry("read-calendar", 1)))),
+			Map.entry("rontolisp.internal.uuid",
+					new Kernels("clojure.uuid", "RONTOLISP::%CLOJURE-", Map.of("read-uuid", 1))),
+			Map.entry("rontolisp.internal.reducers",
+					new Kernels("clojure.core.reducers", "RONTOLISP::%CLOJURE-REDUCERS-",
+							Map.ofEntries(Map.entry("accumulator", 0), Map.entry("accumulator?", 1),
+									Map.entry("append", 2), Map.entry("joined", 2)))),
+			Map.entry("rontolisp.internal.http",
+					new Kernels("rontolisp.http-client", "RONTOLISP::%CLOJURE-HTTP-",
+							Map.ofEntries(Map.entry("request", 2), Map.entry("fetch", 2)),
+							Map.of("fetch", "RONTOLISP:FETCH"), true)),
+			Map.entry("rontolisp.internal.xml",
+					new Kernels("clojure.xml", "RONTOLISP::%CLOJURE-XML-",
+							Map.of("events", 1, "blank?", 1, "host?", 1))),
+			Map.entry("rontolisp.internal.math", mathKernels()),
+			Map.entry(ClojureIoLowering.NAMESPACE, ClojureIoLowering.kernels()));
 
 	private ClojureKernelLowering() {
 	}

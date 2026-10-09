@@ -93,22 +93,37 @@ class ClojureJavaIoTest {
 	}
 
 	/**
-	 * An empty directory: deleted on the interpreter and the JVM, like the oracle; wasm's
-	 * unlink takes no directory, so there {@code .delete} answers false and the directory
-	 * stays (the documented deviation).
+	 * An empty directory is deleted and a non-empty one is not, like the oracle; a file's
+	 * {@code .lastModified} is its modification time in whole seconds' worth of
+	 * milliseconds (between the first instants of 2023 and 2100), a missing file's 0. The
+	 * same answers on all four backends: wasm removes the directory through
+	 * {@code path_remove_directory} and dates the file through {@code path_filestat_get}.
 	 */
 	private static final String EMPTY_DIRECTORY = """
 			(def e (java.io.File. root "empty"))
 			(prn (.mkdir e) (.delete e) (.exists e))
+			(def full (java.io.File. root "full"))
+			(def inner (java.io.File. full "f.txt"))
+			(prn (.mkdir full) (.createNewFile inner) (.delete full) (.exists full))
+			(def stamp (.lastModified inner))
+			(prn (< 1672531200000 stamp 4102444800000) (zero? (mod stamp 1000)))
+			(prn (.lastModified (java.io.File. root "missing")))
+			""";
+
+	private static final String EMPTY_DIRECTORY_OUT = """
+			true true false
+			true true false true
+			true true
+			0
 			""";
 
 	@Test
-	void anEmptyDirectoryIsDeletedWhereTheHostRemovesDirectories() throws Exception {
-		assertThat(interpret(rooted(EMPTY_DIRECTORY, "ei"), null)).isEqualTo("true true false\n");
-		assertThat(runOnJvm(rooted(EMPTY_DIRECTORY, "ej"), null, "JioEmpty")).isEqualTo("true true false\n");
+	void anEmptyDirectoryIsDeletedAndAFileDatedOnEveryBackend() throws Exception {
+		assertThat(interpret(rooted(EMPTY_DIRECTORY, "ei"), null)).isEqualTo(EMPTY_DIRECTORY_OUT);
+		assertThat(runOnJvm(rooted(EMPTY_DIRECTORY, "ej"), null, "JioEmpty")).isEqualTo(EMPTY_DIRECTORY_OUT);
 		assumeTrue(HostWasmtime.isAvailable(), "no usable wasmtime on PATH");
-		assertThat(runOnWasm(rooted(EMPTY_DIRECTORY, "ew"), null, false, this.dir)).isEqualTo("true false true\n");
-		assertThat(runOnWasm(rooted(EMPTY_DIRECTORY, "ec"), null, true, this.dir)).isEqualTo("true false true\n");
+		assertThat(runOnWasm(rooted(EMPTY_DIRECTORY, "ew"), null, false, this.dir)).isEqualTo(EMPTY_DIRECTORY_OUT);
+		assertThat(runOnWasm(rooted(EMPTY_DIRECTORY, "ec"), null, true, this.dir)).isEqualTo(EMPTY_DIRECTORY_OUT);
 	}
 
 	/**
@@ -212,8 +227,8 @@ class ClojureJavaIoTest {
 		ByteArrayOutputStream out = new ByteArrayOutputStream();
 		CliStack.call("clojure-jio", () -> {
 			LispEvaluator evaluator = new LispEvaluator(new PrintStream(out, true, StandardCharsets.UTF_8));
-			for (LispVal form : SourceLanguage.CLOJURE.read(program, Features.INTERPRETER,
-					entry == null ? null : entry.toString(), SourceStandards.DEFAULT, SourceLoader.fileSystem())) {
+			for (LispVal form : evaluator.clojureProgram(SourceLanguage.CLOJURE.read(program, Features.INTERPRETER,
+					entry == null ? null : entry.toString(), SourceStandards.DEFAULT, SourceLoader.fileSystem()))) {
 				evaluator.eval(form);
 			}
 			return null;

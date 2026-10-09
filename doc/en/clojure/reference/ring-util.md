@@ -10,7 +10,7 @@ by the [Ring adapter](ring.md).
 
 | Namespace | Vars |
 |---|---|
-| `ring.util.response` | `response` `status` `header` `content-type` `charset` `redirect` `redirect-status-codes` `redirect-after-post` `created` `not-found` `bad-request` `find-header` `get-header` `update-header` `get-charset` `set-cookie` `response?` |
+| `ring.util.response` | `response` `status` `header` `content-type` `charset` `redirect` `redirect-status-codes` `redirect-after-post` `created` `not-found` `bad-request` `find-header` `get-header` `update-header` `get-charset` `set-cookie` `response?` `file-response` `url-response` `resource-response` `resource-data` |
 | `ring.util.request` | `request-url` `content-type` `content-length` `character-encoding` `urlencoded-form?` `body-string` `path-info` `in-context?` `set-context` |
 | `ring.util.codec` | `url-encode` `url-decode` `percent-encode` `percent-decode` `form-encode` `form-decode` `form-decode-str` `form-decode-map` `assoc-conj` |
 | `ring.util.mime-type` | `default-mime-types` `ext-mime-type` |
@@ -55,14 +55,34 @@ turns the `:params` keys that read as keywords into keywords.
 Hello, Jürgen!
 ```
 
+## Files and resources
+
+`file-response` answers a response whose `:body` is the `java.io.File` a path names below
+`:root`, with Ring's `Content-Length` and `Last-Modified` headers, or `nil` when there is no
+such file or the path leaves `:root`; a directory answers its `index.html`, `index.htm` or
+first `index.*` unless `:index-files?` is false. `resource-response` does the same for a
+resource of the source path (a file of a directory the
+[clojure.java.io](clojure-java-io.md) resources come from), `url-response` for a
+`clojure.java.io/resource` URL, and `resource-data` answers the map they read. A jar's
+resource is a byte stream. The [Ring adapter](ring.md) sends either body as it is. These four
+load into `ring.util.response` where a program first names one, so a program naming none
+carries none of their code.
+
+```console
+clojure> (require '[ring.util.response :as response])
+nil
+clojure> (:headers (response/file-response "a.txt" {:root "www"}))
+{"Content-Length" "11", "Last-Modified" "Tue, 02 Jan 2024 03:04:05 GMT"}
+clojure> (response/file-response "../secret.txt" {:root "www"})
+nil
+```
+
 ## Not built in
 
 These need a host the WebAssembly backends do not have, and are refused by name when a
 program names them:
 
-- `ring.util.response/file-response`, `url-response`, `resource-response` and
-  `resource-data` (a `java.io.File`, a URL, a class-loader resource);
-  `ring.util.codec/base64-encode` and `base64-decode` (byte arrays).
+- `ring.util.codec/base64-encode` and `base64-decode` (byte arrays).
 - The namespaces `ring.middleware.cookies`, `session`, `flash`, `multipart-params`,
   `nested-params`, `not-modified`, `file`, `file-info`, `resource`, `head` and
   `content-length`, `ring.util.io`, `time`, `parsing`, `test` and `async`, and
@@ -81,3 +101,13 @@ program names them:
   charset) governs the percent-decoding, as in Ring.
 - `content-length` reads ASCII digits only (Java's `Long/valueOf` also takes other
   scripts' digits).
+- A path is made canonical from its spelling: no symbolic link is resolved, so
+  `:allow-symlinks?` only lets a path without `..` through, and a link below `:root` that
+  leads outside it is not refused.
+- `resource-response` finds a resource in a directory of the source path only: a name
+  computed at run time is never found inside a jar ([clojure.java.io](clojure-java-io.md)).
+  A jar's resource is served through `url-response` of a `clojure.java.io/resource` whose
+  name is a literal.
+- `resource-data` has the `:file` and `:jar` methods; a URL of another protocol signals
+  `No method in resource-data for dispatch value: :http`, the words of every
+  [multimethod](defmulti.md) here.

@@ -190,7 +190,8 @@ anonymous `fn`, a `defn` clause, a `letfn` entry or a `lazy-seq` body of arity 0
 (each multi-arity clause its own target); a wrong count is a named refusal. Parameters and bindings
 destructure: a vector pattern binds positionally through the seq view (`&` the rest as a
 seq, itself a pattern; `:as` the whole), a map pattern through the table-aware read
-(`:keys`/`:syms`/`:strs`, explicit locals, `:as`, `:or` defaults) -- in `let`, `loop` and
+(`:keys`/`:syms`/`:strs`, `:ns/keys`, `:ns/syms`, `::keys`, `::alias/keys`, keywords in a `:keys` vector,
+explicit locals, `:as`, `:or` defaults) -- in `let`, `loop` and
 `fn`/`defn` parameters alike; nested patterns recurse. A map pattern reads a seq as the map
 its keyword arguments stand for ([seq-to-map-for-destructuring](reference/seq-to-map-for-destructuring.md)),
 so `(defn f [& {:keys [a]}] a)` takes `(f :a 1)` and `(f {:a 1})`. Malformed shapes are
@@ -207,7 +208,9 @@ and several arities like `defn`; a docstring and an attr map are skipped);
 `&form`/`&env` are refused. A body sees the core builtins, the `clojure.lisp`
 library and the program's top-level definitions above the call site -- its own file's,
 a required namespace's, an earlier REPL input's -- like the oracle's form-by-form load;
-a `def`'s value is built for an expansion only when the body reads it. The definition
+a `def`'s value is built for an expansion only when the body reads it. A body may
+[eval](reference/eval.md) a form and [resolve](reference/resolve.md) a name, so a
+`compile-if` chooses code by what this front end lowers. The definition
 also registers a runtime
 table entry of the same expander, answers `nil`, and works session-wide; a call above
 its definition is an error, a macro has no function value, and a later `def`/`defn` of
@@ -427,7 +430,8 @@ and reader conditionals read under `{:read-cond :allow}` like in a `.cljc` file.
 `java.io.PushbackReader`/`BufferedReader`/`InputStreamReader` over one or over a `java.io.StringReader`,
 which is a stream on every backend; `read` leaves it right after the datum. `str` of a
 collection quotes the strings inside it, like the oracle's, so what `spit` writes reads
-back. `eval` and `load-string` stay absent: no compiler runs at run time.
+back. `load-string` stays absent, and [eval](reference/eval.md) runs only while the program
+lowers (in a macro body): no compiler runs at run time.
 
 ## Host boundary
 

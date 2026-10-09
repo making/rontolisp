@@ -219,6 +219,67 @@ final class ClojureVarLowering {
 	}
 
 	/**
+	 * {@code (resolve sym)}: a quoted symbol resolves while the program lowers
+	 * ({@link #resolved}), in the namespace the call lowers in; any other argument calls
+	 * the run-time library's {@code resolve}, which refuses in the program and resolves
+	 * in the macro-time environment ({@link ClojureMacroLowering#evalLowering}).
+	 * @param ctx the hub
+	 * @param items the form, head included
+	 * @return the lowered call
+	 */
+	static LispVal resolveOf(ClojureLowering ctx, List<LispVal> items) {
+		ClojureLowerUtil.isTrue(items.size() == 2,
+				items.size() == 3
+						? "resolve with an environment map is not supported yet: there is no compilation environment"
+						: "Wrong number of args (" + (items.size() - 1) + ") passed to: clojure.core/resolve");
+		List<LispVal> quoted = ClojureLowerUtil.items(items.get(1));
+		if (quoted != null && quoted.size() == 2 && ClojureLowerUtil.isSymbolNamed(quoted.get(0), "quote")
+				&& ClojureLowerUtil.stripMeta(quoted.get(1)) instanceof LispSymbol target
+				&& !target.name().startsWith(":")) {
+			return resolved(ctx, target.name());
+		}
+		return ClojureLowerUtil.list(ClojureMacroLowering.RESOLVE, ctx.lower(items.get(1)));
+	}
+
+	/** {@code resolve} as a value: every argument is computed. */
+	static LispVal resolveValue() {
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), ClojureMacroLowering.RESOLVE);
+	}
+
+	/**
+	 * What {@code resolve} of a symbol answers here: the var {@code #'name} lowers to
+	 * where it lowers (a program var, a {@code clojure.core} var the subset implements or
+	 * a core macro), the class a class name spells, and nil for every other name -- a
+	 * core var the subset lacks included, so a library choosing code by the
+	 * {@code clojure.core} it runs on chooses the code this front end lowers.
+	 * @param ctx the hub
+	 * @param name the symbol's name
+	 * @return the lowered answer
+	 */
+	static LispVal resolved(ClojureLowering ctx, String name) {
+		String core;
+		try {
+			core = ClojureCoreNames.coreSpelling(name);
+		}
+		catch (LispReadException ex) {
+			return ClojureLowering.NIL_CONST; // clojure.core/name of no core var
+		}
+		String key = core != null ? null : ctx.lookupVar(name);
+		if (key != null) {
+			return varOfKey(ctx, key);
+		}
+		if (core == null && ClojureCoreNames.contains(name) && ClojureNamespaceLowering.coreAllowed(ctx, name)) {
+			core = name;
+		}
+		if (core != null) {
+			return ClojureCoreNames.isMacro(core) || ctx.coreValueOrNull(core) != null ? coreVarOf(ctx, core)
+					: ClojureLowering.NIL_CONST;
+		}
+		LispVal classValue = ClojureInteropLowering.classValue(ctx, name);
+		return classValue != null ? classValue : ClojureLowering.NIL_CONST;
+	}
+
+	/**
 	 * {@code (with-redefs [var value ...] body...)}: every value evaluated in order, then
 	 * each var's root replaced for the body and restored in an {@code unwind-protect},
 	 * like the oracle's {@code with-redefs-fn} (a later binding of one var wins; a

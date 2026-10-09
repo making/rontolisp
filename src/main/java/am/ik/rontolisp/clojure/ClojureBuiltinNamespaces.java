@@ -4,6 +4,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.TreeSet;
@@ -35,11 +36,7 @@ final class ClojureBuiltinNamespaces {
 	 * {@code rontolisp.http-client}, which has its API) it leaves out and why.
 	 */
 	private static final Map<String, Map<String, String>> SHIPPED = Map.ofEntries(
-			Map.entry("ring.util.response",
-					Map.of("file-response", "it serves a java.io.File", "url-response", "it reads a java.net.URL",
-							"resource-response", "it reads a class-loader resource", "resource-data",
-							"it reads a java.net.URL")),
-			Map.entry("ring.util.request", Map.of()),
+			Map.entry("ring.util.response", Map.of()), Map.entry("ring.util.request", Map.of()),
 			Map.entry("ring.util.codec",
 					Map.of("base64-encode", "it takes a byte array", "base64-decode", "it answers a byte array",
 							"form-encode*", "form-encode is a function, not a protocol, here", "FormEncodeable",
@@ -56,11 +53,9 @@ final class ClojureBuiltinNamespaces {
 			Map.entry("clojure.datafy", Map.of()), Map.entry("clojure.stacktrace", Map.of()),
 			Map.entry("clojure.instant", Map.of()), Map.entry("clojure.uuid", Map.of()),
 			Map.entry("clojure.math", Map.of()), Map.entry("clojure.java.io", Map.of()),
-			Map.entry("clojure.pprint",
-					Map.of("cl-format", "Common Lisp format directives over Clojure values are not built in",
-							"formatter", "Common Lisp format directives over Clojure values are not built in",
-							"formatter-out", "Common Lisp format directives over Clojure values are not built in")),
-			Map.entry("rontolisp.http-client", httpClientLeftOut()));
+			Map.entry("clojure.repl", replLeftOut()), Map.entry("clojure.main", mainLeftOut()),
+			Map.entry("clojure.java.shell", Map.of()), Map.entry("clojure.xml", xmlLeftOut()),
+			Map.entry("clojure.pprint", Map.of()), Map.entry("rontolisp.http-client", httpClientLeftOut()));
 
 	/**
 	 * The public vars of babashka.http-client 0.4.23 that {@code rontolisp.http-client}
@@ -74,12 +69,107 @@ final class ClojureBuiltinNamespaces {
 	}
 
 	/**
+	 * The public vars of {@code clojure.repl} it leaves out: what reads every namespace's
+	 * vars, a definition's text, or the host's signals and threads.
+	 */
+	private static Map<String, String> replLeftOut() {
+		String vars = "a namespace's vars are known only while the program is lowered,"
+				+ " so ns-publics and all-ns are not built in";
+		String text = "a definition's text is not kept at run time";
+		return Map.of("dir", vars, "dir-fn", vars, "apropos", vars, "find-doc", vars, "source", text, "source-fn", text,
+				"set-break-handler!", "there is no INT signal handler", "thread-stopper",
+				"it stops a thread with Thread.stop, which the JDK no longer supports");
+	}
+
+	/**
+	 * The public vars of {@code clojure.main} it leaves out: the REPL and the script
+	 * runner, which evaluate forms read at run time, and their parts.
+	 */
+	private static Map<String, String> mainLeftOut() {
+		String eval = "no compiler runs at run time, so eval and load are not built in";
+		String repl = "it is part of clojure.main/repl, which needs eval: no compiler runs at run time";
+		return Map.of("repl", eval, "main", eval, "load-script", eval, "repl-read", repl, "renumbering-read", repl,
+				"skip-whitespace", repl, "skip-if-eol", repl, "with-bindings", repl, "report-error",
+				"it writes the report clojure.main/main makes of an uncaught exception, and main is not built in");
+	}
+
+	/**
+	 * The public vars of {@code clojure.xml} it leaves out: the oracle's one
+	 * {@code ContentHandler} and the vars it keeps its state in.
+	 */
+	private static Map<String, String> xmlLeftOut() {
+		String state = "parse keeps its state in the call, not in vars";
+		return Map.of("content-handler", "parse hands a startparse function a ContentHandler made for that call",
+				"*stack*", state, "*current*", state, "*state*", state, "*sb*", state);
+	}
+
+	/**
+	 * The shipped namespaces whose vars need the host's own API, with what for: the
+	 * interpreter and the JVM have it, a WebAssembly target does not, so a
+	 * {@code require} there is refused while lowering rather than at the first call.
+	 */
+	private static final Map<String, String> HOST_ONLY = Map.of("clojure.java.shell",
+			"sh launches a host process, which the interpreter and the JVM can and a WebAssembly target cannot");
+
+	/**
+	 * A part of a shipped namespace: a file below {@code lib/} defining some of the
+	 * namespace's vars, loaded into it where a program first names one of them.
+	 *
+	 * @param resource the file, below {@code lib/}
+	 * @param vars the public vars it defines
+	 */
+	record Part(String resource, Set<String> vars) {
+	}
+
+	/**
+	 * The parts of the shipped namespaces. {@code ring.util.response}'s file, URL and
+	 * resource responses make a {@code java.io.File} and a byte stream, and every program
+	 * that could make one carries the io family's arms (+44 KB on
+	 * {@code ring-hello.clj}'s wasm module, measured 2026-10-09); as a part, only a
+	 * program naming one of them does.
+	 */
+	private static final Map<String, Part> PARTS = Map.of("ring.util.response", new Part("ring/util/response_files.clj",
+			Set.of("file-response", "url-response", "resource-response", "resource-data")));
+
+	/**
+	 * The part of a shipped namespace defining the var.
+	 * @param ns the namespace
+	 * @param var the var name
+	 * @return the part, or {@code null} when the namespace's own file defines the var or
+	 * no part does
+	 */
+	static @Nullable Part partOf(String ns, String var) {
+		Part part = PARTS.get(ns);
+		return part != null && part.vars().contains(var) ? part : null;
+	}
+
+	/**
+	 * The public vars the parts of a shipped namespace define, which {@code :refer :all}
+	 * refers like the namespace's own.
+	 * @param ns the namespace
+	 * @return the var names
+	 */
+	static Set<String> partVars(String ns) {
+		Part part = PARTS.get(ns);
+		return part == null ? Set.of() : part.vars();
+	}
+
+	/**
+	 * The source of a part.
+	 * @param part the part
+	 * @return its text
+	 */
+	static String partSource(Part part) {
+		return read("lib/" + part.resource());
+	}
+
+	/**
 	 * The shipped namespaces {@code clj -M} has loaded before the program runs: a
 	 * qualified name reaches one without a {@code require}, and a {@code require} of one
 	 * reads no project file.
 	 */
 	private static final Set<String> STARTUP = Set.of("clojure.walk", "clojure.core.protocols", "clojure.instant",
-			"clojure.uuid", "clojure.java.io");
+			"clojure.uuid", "clojure.java.io", "clojure.main");
 
 	/**
 	 * The namespaces clojure.jar 1.12.6 defines, plus those of the spec jars it depends
@@ -97,6 +187,23 @@ final class ClojureBuiltinNamespaces {
 			"clojure.test.tap", "clojure.tools.deps.interop", "clojure.uuid", "clojure.walk", "clojure.xml",
 			"clojure.zip", "clojure.spec.alpha", "clojure.spec.gen.alpha", "clojure.spec.test.alpha",
 			"clojure.core.specs.alpha");
+
+	/**
+	 * The language's namespaces the oracle's REPL requires that are not shipped, with
+	 * why: a refer of one of their vars names it.
+	 */
+	private static final Map<String, String> LANGUAGE_NOT_SHIPPED = Map.of("clojure.java.javadoc",
+			"it opens a web browser on a class's Javadoc", "clojure.repl.deps",
+			"it adds libraries to a running REPL; a session's libraries are the project's deps.edn");
+
+	/**
+	 * The refers {@code clojure.main/repl-requires} (clj 1.12.6) names, per namespace:
+	 * what the oracle's REPL refers into {@code user} before the first input.
+	 */
+	private static final Map<String, List<String>> REPL_REQUIRES = Map.of("clojure.repl",
+			List.of("source", "apropos", "dir", "pst", "doc", "find-doc"), "clojure.java.javadoc", List.of("javadoc"),
+			"clojure.pprint", List.of("pp", "pprint"), "clojure.repl.deps",
+			List.of("add-libs", "add-lib", "sync-deps"));
 
 	/** The ring-core namespaces left out, refused by name. */
 	private static final Set<String> NOT_SHIPPED = Set.of("ring.middleware.content-length", "ring.middleware.cookies",
@@ -131,6 +238,46 @@ final class ClojureBuiltinNamespaces {
 	}
 
 	/**
+	 * Why one of the language's namespaces is refused, when the oracle's REPL requires it
+	 * and it is not shipped.
+	 * @param ns the namespace
+	 * @return the refusal, or {@code null} for any other namespace
+	 */
+	static @Nullable String languageNotShipped(String ns) {
+		String why = LANGUAGE_NOT_SHIPPED.get(ns);
+		return why == null ? null : ns + " is not built in: " + why;
+	}
+
+	/**
+	 * The refers of the oracle's REPL, which a session refers into {@code user}.
+	 * @return the vars, per namespace
+	 */
+	static Map<String, List<String>> replRequires() {
+		return REPL_REQUIRES;
+	}
+
+	/**
+	 * Whether the oracle's REPL loads the namespace before the first input.
+	 * @param ns the namespace
+	 * @return whether a session reaches its vars without a {@code require}
+	 */
+	static boolean isReplRequire(String ns) {
+		return REPL_REQUIRES.containsKey(ns);
+	}
+
+	/**
+	 * Why a var the oracle's REPL refers is refused: one its namespace leaves out, or any
+	 * of a namespace not shipped.
+	 * @param ns the namespace
+	 * @param var the var name
+	 * @return the refusal, or {@code null} for a var the namespace defines
+	 */
+	static @Nullable String replRefusal(String ns, String var) {
+		String why = LANGUAGE_NOT_SHIPPED.get(ns);
+		return why == null ? leftOut(ns, var) : ns + "/" + var + " is not built in: " + why;
+	}
+
+	/**
 	 * Whether the namespace is shipped and loaded before the program, like the oracle's
 	 * {@code clojure.walk}.
 	 * @param ns the namespace
@@ -157,7 +304,10 @@ final class ClojureBuiltinNamespaces {
 		if (!isShipped(ns)) {
 			return null;
 		}
-		String resource = "lib/" + ClojureSourcePath.resourceOf(ns);
+		return read("lib/" + ClojureSourcePath.resourceOf(ns));
+	}
+
+	private static String read(String resource) {
 		try (InputStream in = ClojureBuiltinNamespaces.class.getResourceAsStream(resource)) {
 			if (in == null) {
 				throw new IllegalStateException(resource + " is missing from the classpath");
@@ -185,6 +335,16 @@ final class ClojureBuiltinNamespaces {
 			return ns + " is not built in: rontolisp.http-client has its API over rontolisp:fetch";
 		}
 		return NOT_SHIPPED.contains(ns) ? ns + " is not built in: " + shippedRingList() : null;
+	}
+
+	/**
+	 * Why a shipped namespace is refused on a target without the host.
+	 * @param ns the namespace
+	 * @return the refusal, or {@code null} for a namespace every target runs
+	 */
+	static @Nullable String hostOnly(String ns) {
+		String why = HOST_ONLY.get(ns);
+		return why == null ? null : ns + " is not built in on this target: " + why;
 	}
 
 	/**

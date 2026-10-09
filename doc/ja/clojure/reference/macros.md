@@ -14,3 +14,4 @@
 | `gensym` | `(= (gensym "g") (gensym "g"))` | `false` |
 | `macroexpand-1` | `(macroexpand-1 '(unless true 1))` | `(if true nil 1)` |
 | `macroexpand` | `(macroexpand '(unless false 1))` | `(if false nil 1)` |
+| `eval` | `(do (defmacro at-lower [f] (eval f)) (at-lower (+ 1 2)))` | `3` |

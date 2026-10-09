@@ -43,7 +43,8 @@ import org.jspecify.annotations.Nullable;
  * view's arguments past the first, are variables or {@code car}/{@code cdr} reads of one
  * (they are dropped, so they must have no effect), and a test stands only where it folds
  * -- a {@code cond} clause's test, an {@code if}'s test, an {@code or}'s disjunct. The
- * interpreter and a session keep the arms: what a later input builds is unknown there.
+ * interpreter strips a whole program the same way; a session keeps the arms: what a later
+ * input builds is unknown there.
  */
 public final class ClojureArms {
 
@@ -657,7 +658,8 @@ public final class ClojureArms {
 		 * {@code instance?}, {@code inst?}, the instance calls and a {@code java:}
 		 * member's argument read: only an {@code #inst} literal, a read
 		 * ({@code read-string}, {@code read}, {@code clojure.edn}), whose default
-		 * {@code #inst} reader makes one, the {@code clojure.instant} kernels and a
+		 * {@code #inst} reader makes one, the {@code clojure.instant} kernels,
+		 * {@code rontolisp.internal.ring/date} (the literal's constructor) and a
 		 * construction of {@code java.util.Date} or {@code java.sql.Timestamp}
 		 * ({@link ClojureTimeValueLowering}) make one.
 		 */

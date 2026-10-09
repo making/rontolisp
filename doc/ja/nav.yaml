@@ -285,14 +285,22 @@ sections:
             title: "(clojure.instant)"
           - file: clojure/reference/clojure-java-io.md
             title: "(clojure.java.io)"
+          - file: clojure/reference/clojure-java-shell.md
+            title: "(clojure.java.shell)"
+          - file: clojure/reference/clojure-main.md
+            title: "(clojure.main)"
           - file: clojure/reference/clojure-math.md
             title: "(clojure.math)"
           - file: clojure/reference/clojure-pprint.md
             title: "(clojure.pprint)"
+          - file: clojure/reference/clojure-repl.md
+            title: "(clojure.repl)"
           - file: clojure/reference/clojure-stacktrace.md
             title: "(clojure.stacktrace)"
           - file: clojure/reference/clojure-template.md
             title: "(clojure.template)"
+          - file: clojure/reference/clojure-xml.md
+            title: "(clojure.xml)"
           - file: clojure/reference/regex.md
             title: "正規表現"
           - file: clojure/reference/higher-order.md

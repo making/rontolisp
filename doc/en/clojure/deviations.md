@@ -31,8 +31,9 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   value the printer does not read. `assert` reads `*assert*` where it expands, so a
   top-level `set!` of it to a literal switches off the asserts after it; a `set!` inside
   a function, or to a computed value, does not (the oracle's takes effect once it runs).
-  `~S`/`~A` on Clojure values stay Common Lisp notation (`format` is a CL surface);
-  `print-method`/`pprint` stay absent.
+  A Common Lisp `format`'s `~S`/`~A` on Clojure values stay Common Lisp notation (it is
+  a CL surface; `clojure.pprint/cl-format` writes them as Clojure); `print-method` stays
+  absent.
 - A map, set or memo key finds an `=` key like the oracle's, vectors, lists, maps and
   sets included, but a stored collection key is the first `=` key of its kind (vector,
   list, lazy seq) the program stored, so its metadata and the spelling of a nested
@@ -205,6 +206,14 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   form (`if`, `do`, `let*`, `new`, ...), of a head the reader spells (`deref`,
   `syntax-quote`, `ns`, `in-ns`) is refused by name, where the oracle
   accepts it (and ignores it at call sites, for a special form).
+- `eval`, and `resolve` of a computed symbol, run only while the program lowers (in a
+  macro body and what it calls); at run time they throw an
+  `UnsupportedOperationException`, where the oracle evaluates and resolves. `resolve`
+  answers `nil` for a `clojure.core` var this front end lacks (the oracle's var), for a
+  record or type name (the oracle's class) and for a var of a namespace built into the
+  lowering (`clojure.string`); a quoted symbol resolves in the namespace the call lowers
+  in, where the oracle reads `*ns*` when the call runs, and to a definition below the call
+  too. A definition an `eval`'d form makes exists only while the program lowers.
 - `#(...)` reads as the oracle's `(fn* [p1__N# ...] (body))` in source, under a quote and
   in `read-string`/`read`, but N restarts at each top-level form (each datum read), where
   the oracle's counter runs across the process: the parameter names differ, and two reads
@@ -309,13 +318,15 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
 - The Ring adapter (`ring.adapter.rontolisp/run-server`) puts `:content-type` and
   `:content-length` in the request map but not `:character-encoding` or
   `:ssl-client-cert`; a request without a body has `:body` `nil` (Jetty's adapter
-  supplies an empty stream). An asynchronous handler, a `java.io.File` body and a
-  second concurrent server are refused or replaced (see [the adapter](reference/ring.md)).
+  supplies an empty stream). An asynchronous handler and a second concurrent server are
+  refused or replaced, and a `java.io.File` body naming no file signals (500) where Jetty
+  answers an empty 200 (see [the adapter](reference/ring.md)).
 - The built-in [Ring utilities](reference/ring-util.md) name a charset by a string (UTF-8,
   ISO-8859-1, US-ASCII and the JDK's aliases for them; any other is refused), have
   `ring.util.request/body-string` as a function rather than an extensible multimethod,
-  read only ASCII digits in `content-length`, and leave out what needs a `java.io.File`, a
-  URL or a byte array.
+  read only ASCII digits in `content-length`, and leave out what needs a byte array. The
+  file responses resolve no symbolic link and find no resource computed at run time inside
+  a jar.
 - A sorted map or set orders, prints and finds keys like the oracle's, but every verb
   copies it (an association costs the collection's size, like a hash map's); `class`
   answers `:map`/`:set`; a `subseq` or

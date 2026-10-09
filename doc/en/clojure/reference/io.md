@@ -27,3 +27,4 @@ strings over Clojure-notation arguments.
 | `print-str` | `(print-str 1 "a")` | `"1 a"` |
 | `prn-str` | `(prn-str 1 "a")` | `"1 \"a\"\n"` |
 | `println-str` | `(println-str 1 "a")` | `"1 a\n"` |
+| `flush` | `(flush)` | `nil` |

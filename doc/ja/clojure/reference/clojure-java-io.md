@@ -148,8 +148,8 @@ $ rontolisp src/app/main.clj        # deps.edn holds {:paths ["src" "resources"]
   探しません。渡されたクラスローダーは参照しません。
 - `(java.net.URL. s)` と `(java.net.URI. s)` はホストオブジェクトを作ります（インタプリタと
   JVM）。どのバックエンドにもある URL は `as-url` が作り、その `.toURI` が URI です。
-- WASM では空のディレクトリを削除しません（`.delete` は `false` を返します。WASI の unlink は
-  ディレクトリを受け付けません）。`lastModified` は `0` を返し、相対の File の `getAbsolutePath`
-  は拒否します（作業ディレクトリがありません）。`canRead` はファイルが存在するかを答えます。
+- `lastModified` は秒単位（1000 の倍数）で答えます。オラクルはミリ秒単位で答えることがあります。
+- WASM では相対の File の `getAbsolutePath` を拒否します（作業ディレクトリがありません）。
+  `canRead` はファイルが存在するかを答えます。
 - `line-seq` はパスと同じく File、URL、バイトストリームも受け付けます（[line-seq](line-seq.md)）。
   オラクルはリーダーだけを受け付けます。

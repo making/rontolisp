@@ -27,6 +27,7 @@ categories:
       - { slug: vary-meta, name: "vary-meta" }
       - { slug: var, name: "var" }
       - { slug: var-get, name: "var-get" }
+      - { slug: resolve, name: "resolve" }
       - { slug: core-test, name: "test" }
       - { slug: comment, name: "comment" }
       - { slug: declare, name: "declare" }
@@ -510,6 +511,7 @@ categories:
       - { slug: print-str, name: "print-str" }
       - { slug: prn-str, name: "prn-str" }
       - { slug: println-str, name: "println-str" }
+      - { slug: flush, name: "flush" }
   - title: "Ring アダプター"
     index_page: clojure/reference/ring.md
     functions:
@@ -553,3 +555,4 @@ categories:
       - { slug: gensym, name: "gensym" }
       - { slug: macroexpand-1, name: "macroexpand-1" }
       - { slug: macroexpand, name: "macroexpand" }
+      - { slug: eval, name: "eval" }

@@ -25,6 +25,7 @@
 | `with-meta` | `(with-meta [1] {:a 1})` | `[1]` |
 | `var` | `(do (def x 5) #'x)` | `#'user/x` |
 | `var-get` | `(do (def x 5) (var-get #'x))` | `5` |
+| `resolve` | `(resolve 'inc)` | `#'clojure.core/inc` |
 | `test` | `(do (defn ^{:test (fn [] nil)} t []) (test #'t))` | `:ok` |
 | `comment` | `(comment (anything at all))` | `nil` |
 | `declare` | `(declare later)` | `nil` |

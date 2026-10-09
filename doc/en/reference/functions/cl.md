@@ -416,7 +416,7 @@ page.
 | `import` | `(import 'other:sym)` | make another package's symbol accessible unqualified -- the runtime form of `:import-from` (a literal top-level call is a compile-time directive) |
 | `file-position` | `(file-position s)` | the position of a file stream (elements of a binary one, bytes of a character one) or of a string stream (characters), or the reposition when a second argument is given; `nil` for any stream whose position cannot be determined |
 | `file-length` | `(file-length s)` | the byte length of the file a file stream is open on; `nil` for any other stream |
-| `file-write-date` | `(file-write-date "x.txt")` | the file's modification time as a universal time; `nil` when it cannot be determined (always `nil` on both WASM backends) |
+| `file-write-date` | `(file-write-date "x.txt")` | the file's modification time as a universal time; `nil` when it cannot be determined |
 | `ensure-directories-exist` | `(ensure-directories-exist "logs/app.log")` | create the pathspec's directory component and return the pathspec (signals on both WASM backends) |
 | `delete-file` | `(delete-file "notes.txt")` | delete the named file and return `t`; anything that leaves it in place signals, "it was not there" included (signals on both WASM backends, like `ensure-directories-exist` and for the same reason) |
 | `rename-file` | `(rename-file "notes.txt" "notes.bak")` | rename (move) the file and return the defaulted new name as a pathname; the new name is merged with the old one, so a bare file name keeps the directory. Anything that leaves the file in place signals, "it was not there" included (signals on both WASM backends, like `delete-file`) |

@@ -92,8 +92,8 @@ public final class WasmComponentBuilder {
 	/**
 	 * The preview1-to-WASI-0.3 adapter core module: it imports the shared memory, the
 	 * lowered WASI 0.3 functions and the async canonical built-ins (under {@code "w"})
-	 * and exports the fifteen preview1-style functions rontolisp imports -- plus the
-	 * STDIO-ONLY halves of the two fd-polymorphic ones ({@code fd_write_stdio} /
+	 * and exports the {@link #PREVIEW1_FUNCS} rontolisp imports -- plus the STDIO-ONLY
+	 * halves of the two fd-polymorphic ones ({@code fd_write_stdio} /
 	 * {@code fd_read_stdin}), which {@link #fixedSurface} retains under the preview1
 	 * names for a core module that imports no {@code path_open}. Source:
 	 * {@code src/wasm-component/adapter.wat}.
@@ -125,7 +125,7 @@ public final class WasmComponentBuilder {
 	private static final String IFACE_STDERR = "wasi:cli/stderr@0.3.0";
 
 	/**
-	 * The seventeen {@code wasi_snapshot_preview1} functions the adapter implements, in
+	 * The nineteen {@code wasi_snapshot_preview1} functions the adapter implements, in
 	 * its own export order. A core module imports a subset of them (after
 	 * {@code --optimize}, only what it reaches), and that subset drives everything below.
 	 * The serve component's preview1 bridge ({@code adapter-http-server-p1.wat}) must
@@ -134,8 +134,8 @@ public final class WasmComponentBuilder {
 	 */
 	static final List<String> PREVIEW1_FUNCS = List.of("fd_write", "fd_read", "path_open", "fd_readdir", "fd_close",
 			"random_get", "clock_time_get", "environ_sizes_get", "environ_get", "fd_prestat_get", "fd_prestat_dir_name",
-			"fd_filestat_get", "path_create_directory", "path_unlink_file", "path_rename", "file_position_get",
-			"file_position_set");
+			"fd_filestat_get", "path_filestat_get", "path_create_directory", "path_unlink_file",
+			"path_remove_directory", "path_rename", "file_position_get", "file_position_set");
 
 	/**
 	 * The adapter's NARROW implementations of the two fd-polymorphic entry points,
@@ -231,6 +231,8 @@ public final class WasmComponentBuilder {
 		funcs.put("create-dir", new BlockFunc(IFACE_FS_TYPES, "[method]descriptor.create-directory-at"));
 		funcs.put("unlink-file", new BlockFunc(IFACE_FS_TYPES, "[method]descriptor.unlink-file-at"));
 		funcs.put("rename-at", new BlockFunc(IFACE_FS_TYPES, "[method]descriptor.rename-at"));
+		funcs.put("stat-at", new BlockFunc(IFACE_FS_TYPES, "[method]descriptor.stat-at"));
+		funcs.put("remove-dir", new BlockFunc(IFACE_FS_TYPES, "[method]descriptor.remove-directory-at"));
 		return funcs;
 	}
 
@@ -395,6 +397,13 @@ public final class WasmComponentBuilder {
 		// descriptor, lowered SYNCHRONOUSLY like the two above (the string count
 		// changes the flattened arity, not the canonical options).
 		w.put("rename-at", lowerRealloc("rename-at", (f, r) -> ComponentWriter.canonLowerMemoryReallocUtf8(f, 0, r)));
+		// descriptor.stat-at: async func(path-flags, path: string) -> result<
+		// descriptor-stat, error-code>, lowered SYNCHRONOUSLY like desc-stat (the
+		// path-taking twin file-write-date reads the modification time from), and
+		// descriptor.remove-directory-at, the unlink-file shape behind %delete-file of a
+		// directory.
+		w.put("stat-at", lowerRealloc("stat-at", (f, r) -> ComponentWriter.canonLowerMemoryReallocUtf8(f, 0, r)));
+		w.put("remove-dir", lowerRealloc("remove-dir", (f, r) -> ComponentWriter.canonLowerMemoryReallocUtf8(f, 0, r)));
 		return w;
 	}
 

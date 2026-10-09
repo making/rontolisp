@@ -813,6 +813,25 @@ cases:
       "x" "y"
       [1 2]
       nil true false
+  - name: flush-answers-nil-and-is-a-function
+    # (flush) flushes *out* and answers nil; as a value it takes no argument.
+    source: |
+      (print "a")
+      (prn (flush))
+      (print "b")
+      (prn ((fn [f] (f)) flush))
+      (prn (apply flush []))
+    expected: |
+      anil
+      bnil
+      nil
+  - name: newline-answers-nil
+    # (newline) writes a newline and answers nil, so pprint, which ends with one, does too.
+    source: |
+      (prn (newline))
+    expected: |
+
+      nil
   - name: numbers
     # 1M is an exact ratio (1), not a double: decimal arithmetic stays exact and
     # prints as the ratio. The oracle prints 1M and 2N with their suffixes.
@@ -1253,6 +1272,36 @@ cases:
       ({:k 2} 7)
       :illegal
       1 [1 2]
+  - name: namespaced-map-destructuring
+    # :ns/keys, :ns/syms, ::keys and ::alias/keys read each simple name from that
+    # namespace and bind the short name; a :keys vector may hold keywords. Until
+    # 2026-10-09 these were refused. Oracle-identical (clj 1.12.6).
+    source: |
+      (require '[clojure.string :as str])
+      (prn (let [{:a/keys [b c]} {:a/b 2 :a/c 3}] [b c]))
+      (prn (let [{:a/syms [b]} {'a/b 2}] b))
+      (prn (let [{:keys [:a :b/c ::d]} {:a 1 :b/c 5 ::d 6}] [a c d]))
+      (prn (let [{::keys [b]} {::b 7}] b) (let [{::str/keys [b]} {::str/b 8}] b))
+      (prn (let [{:a/keys [b c] :or {b 10 c 11}} {:a/b 2}] [b c]))
+      (prn (let [{:a/keys [b] :as m} {:a/b 2}] [b m]))
+      (prn (let [{:a/keys [b] :keys [c]} {:a/b 2 :c 3}] [b c]))
+      (prn (let [{:a/keys [b]} nil] b))
+      (defn nsf [{:a.b/keys [x] :c/syms [y]}] [x y])
+      (prn (nsf {:a.b/x 9 'c/y 1}))
+      (prn (loop [{:a/keys [b]} {:a/b 3}] b))
+      (prn (for [{:a/keys [b]} [{:a/b 1} {:a/b 2}]] b))
+    expected: |
+      [2 3]
+      2
+      [1 5 6]
+      7 8
+      [2 11]
+      [2 #:a{:b 2}]
+      [2 3]
+      nil
+      [9 1]
+      3
+      (1 2)
   - name: threading-threads-first-and-last
     source: |
       (println (-> 5 inc inc))
@@ -1433,6 +1482,38 @@ cases:
       el
       ello
       (A B)
+  - name: blank-and-the-trims-take-java-whitespace
+    # Character/isWhitespace decides, not just ASCII: the controls 28-31, the Unicode
+    # space separators and the line and paragraph separators count, the no-break spaces
+    # (U+00A0 U+2007 U+202F) do not. Pinned oracle-identical (clj 1.12.6, 2026-10-09).
+    source: |
+      (require '[clojure.string :as s])
+      (defn ws [& codes] (apply str (map char codes)))
+      (println (s/blank? (ws 32 9 10 11 12 13)))
+      (println (s/blank? (ws 28 29 30 31)))
+      (println (s/blank? (ws 5760 8192 8198 8200 8202 8232 8233 8287 12288)))
+      (println (s/blank? (ws 160)))
+      (println (s/blank? (ws 8199)))
+      (println (s/blank? (ws 8239)))
+      (println (s/blank? (str (ws 8195) "x")))
+      (println (count (s/trim (str (ws 28 12288) "ab" (ws 8233 31)))))
+      (println (count (s/triml (str (ws 28 12288) "ab" (ws 8233 31)))))
+      (println (count (s/trimr (str (ws 28 12288) "ab" (ws 8233 31)))))
+      (println (count (s/trim (str (ws 160) "ab" (ws 8239)))))
+      (println (count (s/trim-newline (str "ab" (ws 8232)))))
+    expected: |
+      true
+      true
+      true
+      false
+      false
+      false
+      false
+      2
+      4
+      4
+      4
+      3
   - name: index-of-reads-its-start-as-java-does
     # A start past the end answers nil (the length for an empty match), a negative one
     # is 0, a fractional one truncates -- where CL's search refuses a start outside
@@ -3039,6 +3120,48 @@ cases:
       3 12 (1) [2]
       [[1] [1 2]] foo 3 5
       4 -1 4 {:x :k} 7
+  - name: a-macro-body-evaluates-a-form-while-it-expands
+    # eval in a macro body, and in a helper the body calls, evaluates the form at
+    # expansion time over the definitions above the call site, in its namespace, with
+    # no local of the call site in reach; a lowering error is catchable there. resolve
+    # answers the var or nil, of a quoted symbol while the program lowers, of a computed
+    # one at expansion time. evm-compile-if is data.priority-map's and instaparse's
+    # compile-if. clj 1.12.6, oracle-identical.
+    source: |
+      (defmacro evm-compile-if [test then else] (if (eval test) then else))
+      (def evm-x 3)
+      (defn evm-f [] 4)
+      (defn evm-true? [form] (boolean (eval form)))
+      (defmacro evm-when-true [form then] (if (evm-true? form) then :no))
+      (defmacro evm-values [& forms] (vec (map eval forms)))
+      (defmacro evm-plus-one [] (let [y 5] (eval `(+ ~y 1))))
+      (defmacro evm-caught [form] (try (eval form) (catch Exception _ :caught)))
+      (defmacro evm-resolved? [sym] (some? (resolve sym)))
+      (println (evm-compile-if (resolve 'clojure.core/inc) :has :lacks)
+               (evm-compile-if (resolve 'clojure.core/evm-nowhere) :has :lacks)
+               (evm-compile-if (resolve 'evm-f) :f :no-f)
+               (evm-compile-if (resolve 'evm-nowhere) :g :no-g))
+      (println (evm-compile-if (= evm-x 3) :x3 :other) (evm-compile-if (= (evm-f) 4) :f4 :other)
+               (evm-compile-if (>= (:minor *clojure-version*) 9) :new :old)
+               (evm-when-true (resolve 'map) :yes))
+      (println (evm-values (+ 1 2) (str "a" "b") [1 (inc 1)]) (evm-plus-one)
+               (let [x 1] (evm-compile-if (= 1 1) x 0)) (evm-caught (evm-nowhere 1))
+               (evm-resolved? evm-x) (evm-resolved? evm-nowhere))
+      (println (resolve 'inc) (resolve 'evm-f) (resolve 'when) (resolve 'evm-nowhere) (resolve 'nope/x))
+    expected: |
+      :has :lacks :f :no-g
+      :x3 :f4 :new :yes
+      [3 ab [1 2]] 6 1 :caught true false
+      #'clojure.core/inc #'lit/evm-f #'clojure.core/when nil nil
+  - name: eval-and-resolve-of-a-computed-symbol-refuse-at-run-time
+    # A compiled program carries no lowering, so eval and resolve of a computed symbol
+    # refuse when the program runs. The oracle prints 3 and #'clojure.core/inc.
+    source: |
+      (println (try (eval '(+ 1 2)) (catch UnsupportedOperationException e (ex-message e))))
+      (println (let [s 'inc] (try (resolve s) (catch UnsupportedOperationException e (ex-message e)))))
+    expected: |
+      eval is not supported at run time: only a macro body's eval runs, while the program lowers
+      resolve of a computed symbol is not supported at run time: vars exist only while the program lowers
   - name: a-macro-argument-holding-a-regex-literal-expands
     # A macro argument travels quoted into the expander and its answer reads back as a
     # datum: a regex literal answers its pattern, which reads back as the literal (the
@@ -8792,6 +8915,233 @@ cases:
       "(ns a\n  (:require b ... ...))\n"
       "(defn f [x] (let # a))\n"
       "(when-not\n  done\n  (recur))"
+  - name: clojure-pprint-cl-format-spells-numbers-and-text-like-the-oracle
+    # cl-format (.kb/clojure-frontend.md "clojure.jar namespaces", cl-format): ~A ~S
+    # padding, the integer directives and their grouping, ~R in English and Roman,
+    # ~P, ~C, and ~F ~E ~G ~$ rounding the digits of the number's own spelling, NaN
+    # and the infinities included. Every line is the oracle's (clj 1.12.6), on all
+    # four backends.
+    source: |
+      (ns pp-format (:require [clojure.pprint :as pp :refer [cl-format]]))
+      (prn (cl-format nil "~a|~s|~10a|~10@a|~10,3,2,'*a|~:a|~3,,,'-@a" "hi" "hi" "hi" "hi" "hi" nil "ab"))
+      (prn (cl-format nil "~a ~s ~a ~s" [1 "a" \b :k] [1 "a" \b :k] 'sym 1.5))
+      (prn (cl-format nil "~d|~5d|~5,'0d|~:d|~@d|~,,'.,4:d|~:@d" 42 42 42 1234567 42 123456789 -12345))
+      (prn (cl-format nil "~b ~o ~x ~:x ~8,'0b ~36r ~3,8,'0r" 5 8 255 -65535 5 35 42))
+      (prn (cl-format nil "~d|~d|~x|~5,'xd" 3.0 1/2 1.5 "ab"))
+      (prn (cl-format nil "~r|~:r|~@r|~:@r|~r|~:r" 1234 1234 1994 1994 -21 1000000))
+      (prn (cl-format nil "~r|~:r|~@r|~r" 0 0 4000 (* 1000000000000000000000000000000000000000000000000000000000000000000N 11)))
+      (prn (cl-format nil "~d item~:p, ~d famil~:@p; ~d tr~:@p" 1 2 1))
+      (prn (cl-format nil "~c|~:c|~@c|~:c|~:c|~@c|~'o@c|~'u@c" \a \space \space (char 1) (char 200) \newline \a \a))
+      (prn (cl-format nil "~,2f|~5,2f|~,3f|~f|~8,3,,'*f|~3,1,,'#f|~@f|~,2f|~,2f" 3.14159 3.14159 2.5 1.5 123456.789 1234.5 2.0 2/3 -0.125))
+      (prn (cl-format nil "~f|~f|~f|~,1f|~,0f|~,0f" 1e10 1e-5 123456789.0 0.05 2.5 0.5))
+      (prn (cl-format nil "~e|~,3e|~10,2e|~@e|~,2,,0e|~11,4,2,,,,'de" 12345.678 0.001234 -5.5 1.0 1.5 6.02214076e23))
+      (prn (cl-format nil "~g|~g|~g|~10,2g|" 3.14 1e10 0.0001 99.5))
+      (prn (cl-format nil "~$|~2,5$|~@$|~:$|~,,10:@$" 3.14159 2.5 1.0 -1.0 -42.5))
+      (prn (cl-format nil "a~%b~2%c~&d~|e~~f~3~g~
+                h~:
+                i~@
+                j"))
+      (prn (cl-format nil "~f|~e|~$" ##Inf ##NaN 1.5e300))
+      (in-ns 'user)
+    expected: |
+      "hi|\"hi\"|hi        |        hi|hi********|nil|-ab"
+      "[1 a b :k] [1 \"a\" \\b :k] sym 1.5"
+      "42|   42|00042|1,234,567|+42|1.2345.6789|-12,345"
+      "101 10 ff -f,fff 00000101 z 00001120"
+      "3|1/2|1.5|xxxab"
+      "one thousand, two hundred thirty-four|one thousand, two hundred thirty-fourth|MCMXCIV|MDCCCCLXXXXIIII|minus twenty-one|one millionth"
+      "zero|zeroth|4,000|11,000,000,000,000,000,000,000,000,000,000,000,000,000,000,000,000,000,000,000,000,000,000"
+      "1 item, 2 families; 1 try"
+      "a|Space|\\space|Control-A|Meta-H|\\newline|\\o141|\\u0061"
+      "3.14| 3.14|2.500|1.5|********|###|+2.0|0.67|-0.13"
+      "10000000000.0|0.00001|123456789.0|0.1|3.|1."
+      "1.2345678E+4|1.234E-3|  -5.50E+0|+1.0E+0|0.15E+1| 6.0221d+23"
+      "3.14    |1.0E+10|1.0E-4|  100.    |"
+      "3.14|00002.50|+1.00|-1.00|-    42.50"
+      "a\nb\n\nc\nd\fe~f~~~gh          i\nj"
+      "infinity.0|n.anE+2|1500000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000.00"
+  - name: clojure-pprint-cl-format-walks-its-arguments-like-the-oracle
+    # cl-format's conditionals, iterations (the four ~{ and their ~^ and ~:^),
+    # ~* and the one nil a repositioned navigator answers past the end, ~?, ~( over
+    # each write as the oracle's case-converting writers convert it, justification
+    # with its ~:; clause, ~T, *print-base* under ~A but not ~W, a compiled format,
+    # formatter, formatter-out and the three streams. Every line is the oracle's
+    # (clj 1.12.6), on all four backends.
+    source: |
+      (ns pp-format-walk (:require [clojure.pprint :as pp :refer [cl-format]]))
+      (prn (cl-format nil "There ~[are~;is~:;are~]~:* ~d result~:p: ~{~d~^, ~}" 3 [46 38 22]))
+      (prn (cl-format nil "~[zero~;one~;two~:;many~]|~[a~;b~]|~2[a~;b~;c~]|~:[no~;yes~]|~:[no~;yes~]|~@[<~a>~]|~@[<~a>~]" 1 5 false 0 nil 7))
+      (prn (cl-format nil "~#[none~;one ~a~;two ~a ~a~:;many~]" 1 2) (cl-format nil "~{~#[none~;~a~;~a and ~a~:;~@{~a~#[~;, and ~:;, ~]~}~]~:}" [1 2 3 4]))
+      (prn (cl-format nil "~{~a~^, ~}|~:{<~a ~a>~}|~@{~a~^-~}" [1 2 3] [[1 2] [3 4]] 7 8 9))
+      (prn (cl-format nil "~:@{<~a ~a>~}" [1 2] [3 4]) (cl-format nil "~2{~a~}|~{~}" [1 2 3] "~a~a" [1 2]) (cl-format nil "~:{~a=~a~:^, ~}" (map vector [:a :b] [1 2])))
+      (prn (cl-format nil "~{~a~:^,~}|~:{~a~:^,~}|~3{~a ~}|~{x~:}|~0{x~:}" [1 2 3] [[1] [2] [3]] (iterate inc 0) [] []))
+      (prn (cl-format nil "~{~a~} ~a" "abc" (seq {:a 1})))
+      (prn (cl-format nil "~a ~* ~a ~:* ~a ~@* ~a" 1 2 3) (cl-format nil "~a ~5*~a" 1 2 3))
+      (prn (cl-format nil "~? ~a|~@? ~a" "<~a ~a>" [1 2] 3 "<~a ~a>" 1 2 3))
+      (prn (cl-format nil "~(Hello WORLD~) ~:(hello world~) ~@(  hELLO wORLD~) ~:@(hello world~)"))
+      (prn (cl-format nil "~:(~a-~a~)|~:(foo-bar~)|~:(~c~c~)|~(~c~c~)|~@(~c~c~)" "foo" "bar" \a \b \A \B \a \B))
+      (prn (cl-format nil "~:(~w~)|~:@(~w~)|~(~&x~)|~:(it's ~r~)" "hello world" 'abc 21))
+      (prn (cl-format nil "~10<foo~;bar~>|~10:<foo~;bar~>|~10@<foo~;bar~>|~10:@<~a~>|~10,,,'.:@<~a~>" "x" "x"))
+      (prn (cl-format nil "~10,5<a~;b~;c~>|~4<abcdef~>|~,,2<a~;b~>|~<~a~;~a~^~;~a~>|" 1 2))
+      (prn (cl-format nil "abcdefgh~<foo~1,10:;bar~>|abc~<foo~1,10:;bar~>|~<foo~v,v:;bar~>|" 2 9))
+      (prn (cl-format nil "~a~10t~a~20t~a|~a~3@t~a~5,4@t~a|abc  ~10T|" "a" "bb" "ccc" "a" "bb" "ccc"))
+      (prn (cl-format nil "~a~^ ~a|" 1) (cl-format nil "~1,2^x|a~1,1^b") (cl-format nil "a~1,2,3^b"))
+      (prn (binding [pp/*print-base* 16 pp/*print-radix* true] (cl-format nil "~a ~s ~w ~d" 255 255 255 255)))
+      (prn (cl-format nil (#'pp/compile-format "~a/~a") 1 2) (cl-format nil "~@?" (#'pp/compile-format "<~a>") 3)
+           (cl-format nil nil) ((pp/formatter "~a-~a") nil 1 2) (with-out-str ((pp/formatter-out "~a+~a") 1 2)))
+      (prn (with-out-str (print "abc") (cl-format true "~&x~%")) (with-out-str (print "abc") (cl-format true "~10Tx"))
+           (let [w (java.io.StringWriter.)] (cl-format w "~a+~a" 1 2) (str w)))
+      (in-ns 'user)
+    expected: |
+      "There are 3 results: 46, 38, 22"
+      "one||c|no|yes||<7>"
+      "two 1 2" "1, 2, 3, and 4"
+      "1, 2, 3|<1 2><3 4>|7-8-9"
+      "<1 2><3 4>" "12|12" ":a=1, :b=2"
+      "1,2,3,|1,2,3|0 1 2 |x|"
+      "abc ([:a 1])"
+      "1  3  3  1" "1 nil"
+      "<1 2> 3|<1 2> 3"
+      "hello world Hello World   Hello world HELLO WORLD"
+      "Foo-bar|Foo-Bar|Ab|ab|Ab"
+      "\"hello World\"|ABC|\nx|It'S Twenty-One"
+      "foo    bar|  foo  bar|foo  bar  |     x    |.....x...."
+      "a    b   c|abcdef|a  b|1|"
+      "abcdefghfoobar|abcfoobar|foobar|"
+      "a         bb        ccc|a   bb      ccc|abc   |"
+      "1" "x|a" "a"
+      "#xff #xff 255 255"
+      "1/2" "<3>" "" "1-2" "1+2"
+      "abcx\n" "abc          x" "1+2"
+  - name: clojure-pprint-cl-format-lays-out-through-the-pretty-printer
+    # cl-format's ~W, logical blocks, conditional newlines, ~I and ~T lay out as
+    # the oracle's pretty writer does, inside a pprint dispatch too (data.json's
+    # formatter-out strings), a write within the format flushing what it left
+    # buffered; (newline) answers nil, fresh-line outside a pretty print always
+    # writes a newline. Every line is the oracle's (clj 1.12.6), on all four
+    # backends.
+    source: |
+      (ns pp-format-layout (:require [clojure.pprint :as pp :refer [cl-format]]))
+      (prn (cl-format nil "~a, ~s, ~w" "x" "x" (range 30)))
+      (prn (cl-format nil "~w|~@w ~:w|~w ~w ~w" (vec (range 5)) (range 5) [1 2] nil false \c))
+      (defn layout [margin miser fmt & args]
+        (binding [pp/*print-right-margin* margin pp/*print-miser-width* miser]
+          (prn (apply cl-format nil fmt args))))
+      (layout 20 40 "~<[~;~@{~w~^ ~_~}~;]~:>" (range 12))
+      (layout 20 40 "~<[~;~@{~w~^ ~:_~}~;]~:>" (range 12))
+      (layout 20 40 "~<[~;~@{~w~^ ~@_~}~;]~:>" (range 12))
+      (layout 20 40 "~<[~;~@{~w~^ ~:@_~}~;]~:>" (range 4))
+      (layout 20 40 "~<(~;defn ~1I~@_~w ~_~w~;)~:>" ['foo '[a b c d e f g h]])
+      (layout 20 40 "~<(~;defn ~:I~w ~_~w~;)~:>" ['foo '[a b c d e f g h]])
+      (layout 72 40 "~:<~a ~a~:>|~:<a~;b~;c~:>|~<a~;~a ~a~:>|~:<[~;~a~:>|x~<~a~:>y" [1 2] [1] [1 2] [1] [1])
+      (layout 30 nil "~<~@{~a~^~8T~}~:>|~<~@{~w~^ ~_~&~}~:>" [1 22 333 4444] [1 2])
+      (layout 12 nil "~@w ~:w" [[1 2 3 4 5 6] [7 8]] [:a :b :c :d :e :f :g])
+      (binding [*print-length* 2] (prn (cl-format nil "~<[~;~@{~w~^, ~:_~}~;]~:>" [1 2 3])))
+      (binding [*print-level* 1] (prn (cl-format nil "~<[~;~a ~<(~;~a~;)~:>~;]~:>|~w" [1 [2]] [1 [2 [3]]])))
+      (defn- json-array [s] ((pp/formatter-out "~<[~;~@{~w~^, ~:_~}~;]~:>") s))
+      (defn- json-object [m] ((pp/formatter-out "~<{~;~@{~<~w:~_~w~:>~^, ~_~}~;}~:>") (for [[k v] m] [(name k) v])))
+      (defn- json-dispatch [x]
+        (cond (nil? x) (print "null")
+              (map? x) (json-object x)
+              (sequential? x) (json-array x)
+              (string? x) (pr x)
+              :else (print x)))
+      (defn json-pprint [x] (pp/with-pprint-dispatch json-dispatch (pp/pprint x)))
+      (json-pprint (sorted-map :name "alice" :roles ["admin" "dev"] :settings (sorted-map :font-size 14 :plugins ["a" "b" "c"] :theme "dark")))
+      (json-pprint (vec (range 30)))
+      (binding [pp/*print-right-margin* 30]
+        (json-pprint (sorted-map :alpha [1 2 3 4 5 6 7 8 9 10] :beta "a long string value here" :gamma (sorted-map :x 1 :y nil))))
+      (defn tagged [x]
+        (if (vector? x)
+          (do (print (cl-format nil "<~a>" (count x))) ((pp/formatter-out "~<[~;~@{~w~^ ~_~}~;]~:>") x))
+          (pr x)))
+      (binding [pp/*print-right-margin* 12] (pp/with-pprint-dispatch tagged (pp/pprint [1 [2 3] 4 [5 6 7 8 9]])))
+      (prn (with-out-str ((pp/formatter-out "~w") 7)) (with-out-str ((pp/formatter-out "~&a~&"))) (newline) (with-out-str (print "x") (pp/fresh-line) (print "y")))
+      (in-ns 'user)
+    expected: |
+      "x, \"x\", (0\n         1\n         2\n         3\n         4\n         5\n         6\n         7\n         8\n         9\n         10\n         11\n         12\n         13\n         14\n         15\n         16\n         17\n         18\n         19\n         20\n         21\n         22\n         23\n         24\n         25\n         26\n         27\n         28\n         29)"
+      "[0 1 2 3 4]|(0 1 2 3 4) [1 2]|nil false \\c"
+      "[0\n 1\n 2\n 3\n 4\n 5\n 6\n 7\n 8\n 9\n 10\n 11]"
+      "[0\n 1\n 2\n 3\n 4 5 6 7 8 9 10 11]"
+      "[0\n 1\n 2\n 3\n 4\n 5\n 6\n 7\n 8\n 9\n 10\n 11]"
+      "[0\n 1\n 2\n 3]"
+      "(defn \n  foo\n  [a b c d e f g h])"
+      "(defn foo\n      [a\n       b\n       c\n       d\n       e\n       f\n       g\n       h])"
+      "(1 2)|abc|a1 2|[1)|x1y"
+      "1       22 333 4444|1 \n2"
+      "[[1\n  2\n  3\n  4\n  5\n  6]\n [7 8]] [:a\n         :b\n         :c\n         :d\n         :e\n         :f\n         :g]"
+      "[1, 2, ...]"
+      "[1 #]|[1 #]"
+      {"name":"alice",
+       "roles":["admin", "dev"],
+       "settings":
+       {"font-size":14, "plugins":["a", "b", "c"], "theme":"dark"}}
+      [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19,
+       20, 21, 22, 23, 24, 25, 26, 27, 28, 29]
+      {"alpha":
+       [1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10],
+       "beta":
+       "a long string value here",
+       "gamma":{"x":1, "y":null}}
+      <4>[1
+          <2>[2
+              3]
+          4
+          <5>[5
+              6
+              7
+              8
+              9]]
+
+      "7" "\na\n" nil "x\ny"
+  - name: clojure-pprint-cl-format-refuses-like-the-oracle
+    # cl-format's refusals carry the oracle's classes, a malformed control string
+    # its message with the caret: a pretty printing directive where *out* is no
+    # pretty writer is the oracle's ClassCastException. Every line is the oracle's
+    # (clj 1.12.6), on all four backends.
+    source: |
+      (ns pp-format-errors (:require [clojure.pprint :as pp :refer [cl-format]]))
+      (defn refusal [f]
+        (try (f)
+             (catch NumberFormatException e [:number-format (ex-message e)])
+             (catch StringIndexOutOfBoundsException e [:string-index (ex-message e)])
+             (catch NullPointerException e :null-pointer)
+             (catch ClassCastException e :class-cast)
+             (catch IllegalArgumentException e :illegal-argument)
+             (catch ArithmeticException e [:arithmetic (ex-message e)])
+             (catch RuntimeException e [:runtime (ex-message e)])
+             (catch Exception e [:exception (ex-message e)])))
+      (defmacro refused [& forms] `[~@(map (fn [form] `(refusal (fn [] ~form))) forms)])
+      (prn (refused (cl-format nil "abc~q") (cl-format nil "~5,a" 1) (cl-format nil "~,a" 1) (cl-format nil "~5")
+                    (cl-format nil "~") (cl-format nil "~::a" 1) (cl-format nil "~:%") (cl-format nil "~:F" 1.0)
+                    (cl-format nil "~:@*" 1) (cl-format nil "~1,2p" 1) (cl-format nil "~1c" \a) (cl-format nil "~'a,'bD" 1)))
+      (prn (refused (cl-format nil "~5,5,5,5A" 1) (cl-format nil "~99999999999d" 1) (cl-format nil "~a~{~a")
+                    (cl-format nil "~[a~:;b~;c~]") (cl-format nil "~<a~;b~:;c~>") (cl-format nil "~<a~:;b~:;c~>")
+                    (cl-format nil "~(a~;b~)") (cl-format nil "~{a~:;b~}") (cl-format nil "a~]")))
+      (prn (refused (cl-format nil "~a") (cl-format nil "~{x~}" [1]) (cl-format nil "~@{x~}" 1 2) (cl-format nil "~5,0a|" "ab")
+                    (cl-format nil "~d" ##Inf) (cl-format nil "~{~a~}" 5) (cl-format nil "~<~a~:>" 1) (cl-format nil "~@?" ["a" "b"])
+                    (cl-format nil "~vd" nil 5) (cl-format nil "~vD" "x" 42) (cl-format nil "~'x@c" \a) (cl-format nil "~,,,0e" 1.5)
+                    (cl-format nil "~,,,3e" 1.5) (cl-format nil "~r" "x") (cl-format nil "~$" "x") (cl-format nil "~d" 1e23)))
+      (prn (refused (cl-format nil "a~_b") (cl-format nil "a~ib") (cl-format nil "~(~t~)") (cl-format nil "~:(~w~)" [1 2])
+                    (cl-format nil "~<~a~:;bar~>" 1) (cl-format nil "~10<~10<x~>~>") (cl-format nil "~(~<~a~>~)" 1)
+                    (with-out-str ((pp/formatter-out "~w") [1 2])) (cl-format nil "~?" "~w" [[1 2]])))
+      (prn (refused (pp/formatter "~q") (cl-format nil "~@?" "~a" 1) (cl-format nil "~:p")))
+      (in-ns 'user)
+    expected: |
+      [[:runtime "Directive \"q\" is undefined\nabc~q\n    ^\n"] [:runtime "Badly formed parameters in format directive\n~5,a\n   ^\n"] [:runtime "Badly formed parameters in format directive\n~,a\n  ^\n"] [:string-index "Index 0 out of bounds for length 0"] :null-pointer [:runtime "Flag \":\" appears more than once in a directive\n~::a\n  ^\n"] [:runtime "\":\" is an illegal flag for format directive \"%\"\n~:%\n ^\n"] [:runtime "\":\" is an illegal flag for format directive \"F\"\n~:F\n ^\n"] [:runtime "Cannot combine \"@\" and \":\" flags for format directive \"*\"\n~:@*\n ^\n"] [:runtime "Too many parameters for directive \"P\": 2 were specified but only 0 are allowed\n~1,2p\n ^\n"] [:runtime "Parameter char-format has bad type in directive \"C\": class java.lang.Integer\n~1c\n ^\n"] [:runtime "Parameter mincol has bad type in directive \"D\": class java.lang.Character\n~'a,'bD\n ^\n"]]
+      [[:runtime "Parameter padchar has bad type in directive \"A\": class java.lang.Integer\n~5,5,5,5A\n       ^\n"] [:number-format "For input string: \"99999999999\""] [:runtime "No closing bracket found.\n~a~{~a\n   ^\n"] [:runtime "A plain clause (with \"~;\") follows an else clause (\"~:;\") inside bracket construction.\n~[a~:;b~;c~]\n ^\n"] [:runtime "The else clause (\"~:;\") is only allowed in the first position for this directive.\n~<a~;b~:;c~>\n ^\n"] [:runtime "Two else clauses (\"~:;\") inside bracket construction.\n~<a~:;b~:;c~>\n ^\n"] [:runtime "A separator (\"~;\") is in a bracket type that doesn't support it.\n~(a~;b~)\n ^\n"] [:runtime "An else clause (\"~:;\") is in a bracket type that doesn't support it.\n~{a~:;b~}\n ^\n"] :null-pointer]
+      [[:exception "Not enough arguments for format definition"] [:runtime "%{ construct not consuming any arguments: Infinite loop!"] [:runtime "%@{ construct not consuming any arguments: Infinite loop!"] [:arithmetic "Divide by zero"] [:number-format "Infinite or NaN"] :illegal-argument :illegal-argument :null-pointer :null-pointer :class-cast :illegal-argument :null-pointer [:string-index "Range [0, 3) out of bounds for length 2"] :class-cast :class-cast "100000000000000000000000"]
+      [:class-cast :class-cast :class-cast :class-cast :null-pointer :class-cast :class-cast :class-cast :class-cast]
+      [[:runtime "Directive \"q\" is undefined\n~q\n ^\n"] "1" "s"]
   - name: clojure-data-diff-compares-like-the-oracle
     # The built-in clojure.data (.kb/clojure-frontend.md "clojure.jar namespaces"): diff over
     # atoms, maps (a lazy seq of three), sequential collections (vectors of three, index by
@@ -10076,3 +10426,284 @@ cases:
       [:one "s"] [:two "s" 2] [:object 1]
       [:long 5] "7"
       "ab"
+  - name: clojure-repl-doc-prints-a-definitions-metadata-like-the-oracle
+    # The built-in clojure.repl (.kb/clojure-frontend.md "clojure.jar namespaces"): doc of a
+    # defn, a defmacro, a defn without a docstring and a def with :doc metadata prints the
+    # oracle's lines from the var's recorded metadata. Oracle-identical (clj 1.12.6,
+    # 2026-10-09), on all four backends.
+    source: |
+      (ns repl-doc (:require [clojure.repl :refer [doc]]))
+      (defn inc-one "Adds one." [x] (inc x))
+      (defmacro first-arg "Answers its first argument." [a & more] a)
+      (defn no-doc ([x] x) ([x y] y))
+      (def ^{:doc "A documented value."} documented 1)
+      (doc inc-one)
+      (doc first-arg)
+      (doc no-doc)
+      (doc documented)
+      (prn (with-out-str (doc inc-one)))
+      (in-ns 'user)
+    expected: |
+      -------------------------
+      repl-doc/inc-one
+      ([x])
+        Adds one.
+      -------------------------
+      repl-doc/first-arg
+      ([a & more])
+      Macro
+        Answers its first argument.
+      -------------------------
+      repl-doc/no-doc
+      ([x] [x y])
+      -------------------------
+      repl-doc/documented
+        A documented value.
+      "-------------------------\nrepl-doc/inc-one\n([x])\n  Adds one.\n"
+  - name: clojure-repl-doc-of-a-special-form-and-a-core-var
+    # A deviation: a special form's doc names it, Special Form and its clojure.org page,
+    # without the forms and the text of the oracle's (clojure.jar's own words, not copied);
+    # catch documents try, like the oracle's. A core var carries only :name and :ns here,
+    # so doc of map prints its name alone where the oracle adds arglists and docstring.
+    source: |
+      (ns repl-special (:require [clojure.repl :refer [doc]]))
+      (doc if)
+      (doc catch)
+      (doc new)
+      (doc map)
+      (in-ns 'user)
+    expected: |
+      -------------------------
+      if
+      Special Form
+
+        Please see http://clojure.org/special_forms#if
+      -------------------------
+      try
+      Special Form
+
+        Please see http://clojure.org/special_forms#try
+      -------------------------
+      new
+      Special Form
+
+        Please see http://clojure.org/java_interop#new
+      -------------------------
+      clojure.core/map
+  - name: clojure-repl-demunges-and-finds-the-root-cause
+    # clojure.repl/demunge and root-cause, and clojure.main's, which clj -M has loaded before
+    # the program, so a qualified name reaches it without a require. Oracle-identical
+    # (clj 1.12.6, 2026-10-09), on all four backends.
+    source: |
+      (ns repl-trace (:require [clojure.repl :as r]))
+      (prn (r/demunge "clojure.core$map$fn__123") (r/demunge "my_app.core$foo_bar_QMARK_") (r/demunge "x_PLUS__GT_y")
+           (r/demunge "a$$b") (r/demunge "_PLUS_GT_") (r/demunge "user$_LT__EQ_") (r/demunge "a_SINGLEQUOTE__STAR_"))
+      (def trace-inner (ex-info "boom" {:x 1}))
+      (def trace-outer (Exception. "outer" (RuntimeException. "middle" trace-inner)))
+      (prn (= trace-inner (r/root-cause trace-outer)) (ex-message (r/root-cause (Exception. "alone"))))
+      (prn (clojure.main/demunge "a_b$c") (= trace-inner (clojure.main/root-cause trace-outer)))
+      (in-ns 'user)
+    expected: |
+      "clojure.core/map/fn--123" "my-app.core/foo-bar?" "x+>y" "a//b" "+GT-" "user/<=" "a'*"
+      true "alone"
+      "a-b/c" true
+  - name: clojure-repl-pst-prints-no-frames
+    # A deviation: pst prints a throwable's simple class name, message and ex-data, the
+    # reader-or-compiler note of a compile phase and each cause after Caused by:, but a
+    # throwable carries no stack frames here, so none of the oracle's frame lines; with no
+    # throwable and *e nil it prints nothing.
+    source: |
+      (ns repl-pst (:require [clojure.repl :as r]))
+      (binding [*err* *out*]
+        (r/pst (Exception. "outer" (RuntimeException. "middle" (ex-info "boom" {:x 1}))))
+        (r/pst (ex-info "compile" {:clojure.error/phase :compilation}) 3)
+        (r/pst))
+      (prn (with-out-str (binding [*err* *out*] (r/pst (Exception.)))))
+      (in-ns 'user)
+    expected: |
+      Exception outer
+      Caused by:
+      RuntimeException middle
+      Caused by:
+      ExceptionInfo boom {:x 1}
+      Note: The following stack trace applies to the reader or compiler, your code was not executed.
+      ExceptionInfo compile #:clojure.error{:phase :compilation}
+      "Exception \n"
+  - name: clojure-main-triages-throwable-data-like-the-oracle
+    # clojure.main/ex-triage and ex-str over Throwable->map data of the compile, execution,
+    # read and print phases (frames given in the data are read like the oracle's), the
+    # prompt, repl-requires, with-read-known and repl-exception. Oracle-identical
+    # (clj 1.12.6, 2026-10-09), on all four backends.
+    source: |
+      (ns main-triage (:require [clojure.main :as m]))
+      (def compile-data
+        {:via [{:type 'clojure.lang.Compiler$CompilerException :message "Syntax error compiling at (x.clj:3:1)."
+                :data {:clojure.error/phase :compile-syntax-check :clojure.error/line 3 :clojure.error/column 1
+                       :clojure.error/source "NO_SOURCE_PATH" :clojure.error/symbol 'foo}}
+               {:type 'java.lang.RuntimeException :message "Unable to resolve symbol: y in this context"}]
+         :trace [] :cause "Unable to resolve symbol: y in this context" :phase :compile-syntax-check})
+      (prn (into (sorted-map) (m/ex-triage compile-data)))
+      (print (m/ex-str (m/ex-triage compile-data)))
+      (def execution-data
+        {:via [{:type 'java.lang.ArithmeticException :message "Divide by zero"}]
+         :trace '[[clojure.lang.Numbers divide "Numbers.java" 190] [user$eval1$fn__2 invoke "NO_SOURCE_FILE" 7]]
+         :cause "Divide by zero"})
+      (prn (into (sorted-map) (m/ex-triage execution-data)))
+      (print (m/ex-str (m/ex-triage execution-data)))
+      (def read-data
+        {:via [{:type 'clojure.lang.ExceptionInfo :message "read"
+                :data {:clojure.error/phase :read-source :clojure.error/source "/a/b/c.clj" :clojure.error/line 2
+                       :clojure.error/column 5}}
+               {:type 'java.lang.RuntimeException :message "EOF while reading"}]
+         :trace [] :phase :read-source})
+      (prn (into (sorted-map) (m/ex-triage read-data)))
+      (print (m/ex-str (m/ex-triage read-data)))
+      (print (m/ex-str {:clojure.error/phase :print-eval-result :clojure.error/symbol 'clojure.core/pr
+                        :clojure.error/class 'java.lang.IllegalStateException :clojure.error/cause "bad"}))
+      (print (m/ex-str {:clojure.error/phase :macroexpansion :clojure.error/class 'java.lang.Exception
+                        :clojure.error/cause "m" :clojure.error/source "a.clj" :clojure.error/line 4 :clojure.error/column 2}))
+      (prn (with-out-str (m/repl-prompt)))
+      (prn m/repl-requires)
+      (prn (m/with-read-known *read-eval*) (ex-message (m/repl-exception (Exception. "o" (ex-info "i" {})))))
+      (in-ns 'user)
+    expected: |
+      #:clojure.error{:cause "Unable to resolve symbol: y in this context", :class java.lang.RuntimeException, :column 1, :line 3, :phase :compile-syntax-check, :symbol foo}
+      Syntax error compiling foo at (REPL:3:1).
+      Unable to resolve symbol: y in this context
+      #:clojure.error{:cause "Divide by zero", :class java.lang.ArithmeticException, :line 7, :phase :execution, :symbol user/eval1$fn}
+      Execution error (ArithmeticException) at user/eval1$fn (REPL:7).
+      Divide by zero
+      #:clojure.error{:cause "EOF while reading", :column 5, :line 2, :path "/a/b/c.clj", :phase :read-source, :source "c.clj"}
+      Syntax error reading source at (/a/b/c.clj:2:5).
+      EOF while reading
+      Error printing return value (IllegalStateException) at clojure.core/pr (REPL:1).
+      bad
+      Unexpected error macroexpanding at (a.clj:4:2).
+      m
+      "main-triage=> "
+      [[clojure.repl :refer (source apropos dir pst doc find-doc)] [clojure.java.javadoc :refer (javadoc)] [clojure.pprint :refer (pp pprint)] [clojure.repl.deps :refer (add-libs add-lib sync-deps)]]
+      true "i"
+  - name: clojure-main-reports-an-error-without-its-location
+    # A deviation: a throwable here has no frames, so the triage of one names no symbol,
+    # source or line, and err->msg and repl-caught report it at (REPL:1) where the oracle
+    # names the function and the line that threw.
+    source: |
+      (ns main-report (:require [clojure.main :as m]))
+      (print (m/err->msg (ex-info "boom" {:a 1})))
+      (print (m/err->msg (IllegalStateException. "state" (Exception. "x"))))
+      (binding [*err* *out*] (m/repl-caught (RuntimeException. "caught")))
+      (prn (into (sorted-map) (m/ex-triage (Throwable->map (ex-info "boom" {})))))
+      (in-ns 'user)
+    expected: |
+      Execution error (ExceptionInfo) at (REPL:1).
+      boom
+      Execution error at (REPL:1).
+      x
+      Execution error at (REPL:1).
+      caught
+      #:clojure.error{:cause "boom", :class clojure.lang.ExceptionInfo, :phase :execution}
+  - name: clojure-xml-parses-a-document-like-the-oracle
+    # The built-in clojure.xml reads the document itself on every target: the declaration
+    # and its encoding, a byte order mark, line ends, the internal subset's entities (with
+    # markup, in attributes too), CDATA, comments and processing instructions merged into
+    # the text around them, references, attribute normalization, white-space-only text
+    # dropped (Java's isWhitespace: a no-break space is kept), a File and an InputStream
+    # alike; emit writes it back. Attributes print sorted: a map's walk order is the
+    # backend's. On wasm the paths need a --dir preopen covering /tmp. Oracle-identical
+    # (clj 1.12.6, 2026-10-09), on all four backends.
+    source: |
+      (ns xml-parse (:require [clojure.xml :as xml] [clojure.java.io :as io]))
+      (def xml-file (str "/tmp/rontolisp-xml-" (rand-int 1000000000) "-" (rand-int 1000000000) ".xml"))
+      (defn parsed [text] (spit xml-file text) (xml/parse xml-file))
+      (defn shape [e]
+        (if (string? e) e [(xml/tag e) (some-> (xml/attrs e) sort) (some->> (xml/content e) (mapv shape))]))
+      (prn (shape (parsed (str "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE note [\n  <!ENTITY who \"World\">\n]>\n"
+                               "<!-- a comment -->\n<note id=\"n1\" lang='en' xmlns:x=\"urn:x\">\n  <to>Tove &amp; &who;</to>\n"
+                               "  <x:from a=\"1\" b=\"2\">Jani</x:from>\n"
+                               "  <body>\n    Don't <b>forget</b> me &lt;this&gt;! &#65;&#x42;<![CDATA[<raw> & stuff]]>tail\n  </body>\n"
+                               "  <empty/><empty2></empty2><ws>   </ws><?pi something?>\n"
+                               "  <mixed>a<!-- c -->b<?p q?>c</mixed>\n  <attrs t=\"a&#9;b&#10;c\nd\" q=\"&quot;&apos;&lt;\"/>\n</note>\n"))))
+      (prn (shape (parsed "<a>x\r\ny\rz</a>")) (shape (parsed "<a> </a>")) (shape (parsed "<a>&#32;\t</a>")))
+      (prn (shape (parsed "<?xml version='1.0' encoding='latin1'?><a>é</a>")) (shape (parsed "<a>éあ</a>"))
+           (shape (parsed "﻿<a/>")))
+      (prn (shape (parsed "<!DOCTYPE a [<!ENTITY y 'x<b>y</b>z'>]><a>[&y;]</a>"))
+           (shape (parsed "<!DOCTYPE a [<!ENTITY y \"&#60;b/>\">]><a>&y;</a>"))
+           (shape (parsed "<!DOCTYPE a [<!ENTITY y 'a&#13;b'>]><a x='&y;'>&y;</a>")))
+      (def note (parsed "<note to=\"Tove\"><body>Hi</body><empty/></note>"))
+      (prn (= note (xml/parse (io/file xml-file)) (with-open [in (io/input-stream xml-file)] (xml/parse in))))
+      (prn (xml/tag note) (xml/attrs note) (count (xml/content note)))
+      (xml/emit note)
+      (xml/emit-element "text")
+      (xml/emit-element {:tag :a :attrs {:x "1"} :content ["t" {:tag :b}]})
+      (io/delete-file xml-file)
+      (in-ns 'user)
+    expected: |
+      [:note ([:id "n1"] [:lang "en"] [:xmlns:x "urn:x"]) [[:to nil ["Tove & World"]] [:x:from ([:a "1"] [:b "2"]) ["Jani"]] [:body nil ["\n    Don't " [:b nil ["forget"]] " me <this>! AB<raw> & stufftail\n  "]] [:empty nil nil] [:empty2 nil nil] [:ws nil nil] [:mixed nil ["abc"]] [:attrs ([:q "\"'<"] [:t "a\tb\nc d"]) nil]]]
+      [:a nil ["x\ny\nz"]] [:a nil [" "]] [:a nil nil]
+      [:a nil ["Ã©"]] [:a nil ["éあ"]] [:a nil nil]
+      [:a nil ["[x" [:b nil ["y"]] "z]"]] [:a nil [[:b nil nil]]] [:a ([:x "a b"]) ["a\rb"]]
+      true
+      :note {:to "Tove"} 2
+      <?xml version='1.0' encoding='UTF-8'?>
+      <note to='Tove'>
+      <body>
+      Hi
+      </body>
+      <empty/>
+      </note>
+      text
+      <a x='1'>
+      t
+      <b/>
+      </a>
+  - name: clojure-xml-refuses-a-malformed-document-in-the-parsers-words
+    # A document that is not well-formed is the oracle's SAXParseException with its
+    # parser's message, an encoding no JDK charset names its UnsupportedEncodingException.
+    # Oracle-identical (clj 1.12.6, 2026-10-09), on all four backends.
+    source: |
+      (ns xml-errors (:require [clojure.xml :as xml] [clojure.java.io :as io]))
+      (def xml-bad (str "/tmp/rontolisp-xml-bad-" (rand-int 1000000000) "-" (rand-int 1000000000) ".xml"))
+      (defn refusal [text]
+        (spit xml-bad text)
+        (try (xml/parse xml-bad)
+             (catch org.xml.sax.SAXParseException e (ex-message e))
+             (catch java.io.UnsupportedEncodingException e [:encoding (ex-message e)])))
+      (doseq [text ["<a>" "<a></b>" "" "<a x='1' x='2'/>" "<a>&foo;</a>" "<a/><b/>" "text" "<a x=1/>" "<a><</a>"
+                    "<a b=\"1\"c=\"2\"/>" "<a b=\"<\"/>" "<a>]]></a>" "<a>&#xZZ;</a>" "<a>&amp</a>" "<a><!-- -- --></a>"
+                    "<a b/>" " <?xml version=\"1.0\"?><a/>" "</a>" "<a/>x" "<a>&#0;</a>" "<a>\u0001</a>" "<a x='\u0001'/>"
+                    "<!DOCTYPE a [<!ENTITY x '&y;'><!ENTITY y '&x;'>]><a>&x;</a>" "<a>&#65 </a>"
+                    "<?xml version='2.0'?><a/>" "<?xml encoding='UTF-8'?><a/>" "<!DOCTYPE a><!DOCTYPE a><a/>"
+                    "<a><? x?></a>" "<?xml version='1.0' encoding='bogus'?><a/>"]]
+        (prn (refusal text)))
+      (io/delete-file xml-bad)
+      (in-ns 'user)
+    expected: |
+      "XML document structures must start and end within the same entity."
+      "The element type \"a\" must be terminated by the matching end-tag \"</a>\"."
+      "Premature end of file."
+      "Attribute \"x\" was already specified for element \"a\"."
+      "The entity \"foo\" was referenced, but not declared."
+      "The markup in the document following the root element must be well-formed."
+      "Content is not allowed in prolog."
+      "Open quote is expected for attribute \"x\" associated with an  element type  \"a\"."
+      "The content of elements must consist of well-formed character data or markup."
+      "Element type \"a\" must be followed by either attribute specifications, \">\" or \"/>\"."
+      "The value of attribute \"b\" associated with an element type \"a\" must not contain the '<' character."
+      "The character sequence \"]]>\" must not appear in content unless used to mark the end of a CDATA section."
+      "A hexadecimal representation must immediately follow the \"&#x\" in a character reference."
+      "The reference to entity \"amp\" must end with the ';' delimiter."
+      "The string \"--\" is not permitted within comments."
+      "Attribute name \"b\" associated with an element type \"a\" must be followed by the ' = ' character."
+      "The processing instruction target matching \"[xX][mM][lL]\" is not allowed."
+      "The markup in the document preceding the root element must be well-formed."
+      "Content is not allowed in trailing section."
+      "Character reference \"&#0\" is an invalid XML character."
+      "An invalid XML character (Unicode: 0x1) was found in the element content of the document."
+      "An invalid XML character (Unicode: 0x1) was found in the value of attribute \"x\" and element is \"a\"."
+      "Recursive entity reference \"x\". (Reference path: x -> y -> x),"
+      "The character reference must end with the ';' delimiter."
+      "XML version \"2.0\" is not supported, only XML 1.0 is supported."
+      "The version is required in the XML declaration."
+      "Already seen doctype."
+      "The processing instruction must begin with the name of the target."
+      [:encoding "bogus"]

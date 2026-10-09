@@ -1211,14 +1211,23 @@ final class WasmIoRuntimeBuilder {
 	/**
 	 * The bytes of a preview1 {@code filestat} record: {@code dev} u64 at 0, {@code ino}
 	 * u64 at 8, {@code filetype} u8 at 16, {@code nlink} u64 at 24, {@code size} u64 at
-	 * 32, then the three timestamps. Only the two fields {@code _file_length} reads are
-	 * named below.
+	 * 32, then the three timestamps ({@code atim}, {@code mtim}, {@code ctim}: u64
+	 * nanoseconds since the Unix epoch). Only the fields {@code _file_length} and
+	 * {@code _file_write_date} read are named below.
 	 */
 	private static final int FILESTAT_BYTES = 64;
 
 	private static final int FILESTAT_FILETYPE_OFFSET = 16;
 
 	private static final int FILESTAT_SIZE_OFFSET = 32;
+
+	private static final int FILESTAT_MTIM_OFFSET = 48;
+
+	/** preview1 {@code lookupflags::symlink_follow}: stat what a link names. */
+	private static final int LOOKUPFLAGS_SYMLINK_FOLLOW = 1;
+
+	/** Seconds from the Common Lisp epoch (1900) to the Unix one (1970). */
+	private static final long UNIVERSAL_TIME_UNIX_EPOCH = 2208988800L;
 
 	/** preview1 {@code filetype::regular_file}. */
 	private static final int FILETYPE_REGULAR_FILE = 4;
@@ -1839,24 +1848,32 @@ final class WasmIoRuntimeBuilder {
 	}
 
 	/**
-	 * Builds the _delete_file(path) function body: the T symbol when the named file was
-	 * removed, {@code ref.null eq} (nil) when there was nothing to remove or the host
-	 * refused, over the {@code path_unlink_file} import. Same staging and preopen
+	 * Builds the _delete_file(path) function body: the T symbol when the named file or
+	 * empty directory was removed, {@code ref.null eq} (nil) when there was nothing to
+	 * remove or the host refused. The file goes through the {@code path_unlink_file}
+	 * import; when that refuses and the program declared {@code path_remove_directory},
+	 * the same resolved path is removed as a directory -- the answer
+	 * {@code Files.deleteIfExists} and {@code File.delete} give on the other two
+	 * backends, so a non-empty directory stays and answers nil there too. One trailing
+	 * slash is dropped for that call: a directory namestring ends in one, and wasmtime
+	 * refuses {@code "dir/"} where it removes {@code "dir"}. Same staging and preopen
 	 * resolution as {@link #buildProbeFileBody()}; the "a missing file is a file-error"
 	 * decision lives once in the Lisp {@code delete-file} above this, as on the
 	 * interpreter and the JVM.
 	 * @param st the string table (for the {@code T} symbol)
+	 * @param removeDirectoryFunc the placeholder index of the injected
+	 * {@code path_remove_directory} import, or {@code -1} when the module declares none
 	 * @return the function body bytes
 	 */
-	static byte[] buildDeleteFileBody(WasmLispCompiler.StringTable st) {
+	static byte[] buildDeleteFileBody(WasmLispCompiler.StringTable st, int removeDirectoryFunc) {
 		WasmLispCompiler.StringTable.StringEntry t = st.addBodyString("T");
 		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
-		// param: PATH=0 (ref) ; i32 locals: OFF=1, PLEN=2
+		// param: PATH=0 (ref) ; i32 locals: OFF=1, PLEN=2, DIRFD=3, RLEN=4
 		w.write(1);
-		w.write(2);
+		w.write(4);
 		w.write(Type.I32);
-		final int PATH = 0, OFF = 1, PLEN = 2;
+		final int PATH = 0, OFF = 1, PLEN = 2, DIRFD = 3, RLEN = 4;
 
 		// Stage the path bytes into linear scratch exactly as _open does.
 		loadMem32(w, WasmLispCompiler.HEAP_PTR_ADDR);
@@ -1877,19 +1894,53 @@ final class WasmIoRuntimeBuilder {
 		i32(w, -8);
 		w.write(Instruction.I32_AND);
 		w.write(Instruction.I32_STORE, 0x02, 0x00);
-		// path_unlink_file(dirfd, path_ptr, path_len): all three from _path_dirfd over
-		// the staged path.
+		// dirfd = _path_dirfd(off + 1, plen), which also leaves the resolved path in its
+		// two cells for both calls below.
 		getLocal(w, OFF);
 		i32(w, 1);
 		w.write(Instruction.I32_ADD);
 		getLocal(w, PLEN);
 		w.write(Instruction.CALL);
 		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_PATH_DIRFD);
+		setLocal(w, DIRFD);
+		// errno = path_unlink_file(dirfd, path_ptr, path_len) (PLEN is free now: reuse
+		// it for the errno)
+		getLocal(w, DIRFD);
 		emitResolvedPath(w);
 		w.write(Instruction.CALL);
 		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_PATH_UNLINK_FILE);
-		// pop the staged path (PLEN is free now: reuse it for the errno)
 		setLocal(w, PLEN);
+		if (removeDirectoryFunc >= 0) {
+			// unlink refused: try the path as an (empty) directory, minus one trailing
+			// slash (rlen = len - (len > 1 && path[len - 1] == '/'))
+			getLocal(w, PLEN);
+			w.write(Instruction.IF, 0x40);
+			loadMem32(w, WasmLispCompiler.PATH_LEN_ADDR);
+			setLocal(w, RLEN);
+			getLocal(w, RLEN);
+			getLocal(w, RLEN);
+			i32(w, 1);
+			w.write(Instruction.I32_GT_U);
+			loadMem32(w, WasmLispCompiler.PATH_PTR_ADDR);
+			getLocal(w, RLEN);
+			w.write(Instruction.I32_ADD);
+			i32(w, 1);
+			w.write(Instruction.I32_SUB);
+			w.write(Instruction.I32_LOAD8_U, 0x00, 0x00);
+			i32(w, '/');
+			w.write(Instruction.I32_EQ);
+			w.write(Instruction.I32_AND);
+			w.write(Instruction.I32_SUB);
+			setLocal(w, RLEN);
+			getLocal(w, DIRFD);
+			loadMem32(w, WasmLispCompiler.PATH_PTR_ADDR);
+			getLocal(w, RLEN);
+			w.write(Instruction.CALL);
+			w.writeUnsignedLeb128(removeDirectoryFunc);
+			setLocal(w, PLEN);
+			w.write(Instruction.END);
+		}
+		// pop the staged path
 		i32(w, WasmLispCompiler.HEAP_PTR_ADDR);
 		getLocal(w, OFF);
 		w.write(Instruction.I32_STORE, 0x02, 0x00);
@@ -1900,6 +1951,105 @@ final class WasmIoRuntimeBuilder {
 		w.write(Instruction.RETURN);
 		w.write(Instruction.END);
 		emitT(w, t);
+		w.write(Instruction.END);
+		return body.toByteArray();
+	}
+
+	/**
+	 * Builds the _file_write_date(path) function body: the universal time the named file
+	 * was last written, as an exact integer, or {@code ref.null eq} (nil) when it cannot
+	 * be told -- a missing file, a host that refuses the stat, or a host that reports no
+	 * modification time (preview1's 0), the JVM's {@code lastModified() == 0} answer. The
+	 * path is staged and resolved against the preopen table as
+	 * {@link #buildProbeFileBody()} does, then stated through the injected
+	 * {@code path_filestat_get} with symlinks followed (what {@code Files} and
+	 * {@code File} answer on the other two backends). The 64-byte {@code filestat}
+	 * follows the staged path at {@code HEAP_PTR}, 8-aligned (wasmtime refuses an
+	 * unaligned one, {@link #buildFileLengthBody()}), and both are popped together. Whole
+	 * seconds, truncated, like the interpreter's {@code toMillis() / 1000}.
+	 * @param pathFilestatGetFunc the placeholder index of the injected
+	 * {@code path_filestat_get} import
+	 * @return the function body bytes
+	 */
+	static byte[] buildFileWriteDateBody(int pathFilestatGetFunc) {
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
+		WasmWriter w = new WasmWriter(body);
+		// param: PATH=0 (ref) ; i32 locals: OFF=1, PLEN=2, BUF=3 ; i64 local: NS=4
+		w.write(2);
+		w.write(3);
+		w.write(Type.I32);
+		w.write(1);
+		w.write(Type.I64);
+		final int PATH = 0, OFF = 1, PLEN = 2, BUF = 3, NS = 4;
+
+		// Stage the path bytes into linear scratch exactly as _open does.
+		loadMem32(w, WasmLispCompiler.HEAP_PTR_ADDR);
+		setLocal(w, OFF);
+		getLocal(w, PATH);
+		getLocal(w, OFF);
+		WasmEmitHelper.emitStrToMemCall(w);
+		i32(w, 2);
+		w.write(Instruction.I32_SUB);
+		setLocal(w, PLEN);
+		// buf = align8(off + plen + 2); HEAP_PTR = buf + 64, the memory grown to cover it
+		getLocal(w, OFF);
+		getLocal(w, PLEN);
+		w.write(Instruction.I32_ADD);
+		i32(w, 2 + 7);
+		w.write(Instruction.I32_ADD);
+		i32(w, -8);
+		w.write(Instruction.I32_AND);
+		setLocal(w, BUF);
+		WasmEmitHelper.emitGrowHeapTo(w, () -> {
+			getLocal(w, BUF);
+			i32(w, FILESTAT_BYTES);
+			w.write(Instruction.I32_ADD);
+		});
+		i32(w, WasmLispCompiler.HEAP_PTR_ADDR);
+		getLocal(w, BUF);
+		i32(w, FILESTAT_BYTES);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.I32_STORE, 0x02, 0x00);
+		// errno = path_filestat_get(_path_dirfd(off + 1, plen), symlink_follow,
+		// resolved path, buf) (PLEN is free now: reuse it for the errno)
+		getLocal(w, OFF);
+		i32(w, 1);
+		w.write(Instruction.I32_ADD);
+		getLocal(w, PLEN);
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_PATH_DIRFD);
+		i32(w, LOOKUPFLAGS_SYMLINK_FOLLOW);
+		emitResolvedPath(w);
+		getLocal(w, BUF);
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(pathFilestatGetFunc);
+		setLocal(w, PLEN);
+		getLocal(w, BUF);
+		w.write(Instruction.I64_LOAD, 0x03, FILESTAT_MTIM_OFFSET);
+		setLocal(w, NS);
+		// pop the staged path and record
+		i32(w, WasmLispCompiler.HEAP_PTR_ADDR);
+		getLocal(w, OFF);
+		w.write(Instruction.I32_STORE, 0x02, 0x00);
+		// a nonzero errno, or no time reported: "cannot be determined"
+		getLocal(w, PLEN);
+		getLocal(w, NS);
+		w.write(Instruction.I64_EQZ);
+		w.write(Instruction.I32_OR);
+		w.write(Instruction.IF, 0x40);
+		emitNil(w);
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END);
+		// return _int_new(ns / 1e9 + 2208988800)
+		getLocal(w, NS);
+		w.write(Instruction.I64_CONST);
+		w.writeSignedLeb128(1_000_000_000L);
+		w.write(Instruction.I64_DIV_U);
+		w.write(Instruction.I64_CONST);
+		w.writeSignedLeb128(UNIVERSAL_TIME_UNIX_EPOCH);
+		w.write(Instruction.I64_ADD);
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_INT_NEW);
 		w.write(Instruction.END);
 		return body.toByteArray();
 	}

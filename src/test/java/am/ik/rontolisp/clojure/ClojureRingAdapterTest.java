@@ -14,6 +14,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
+import java.util.List;
 import java.util.Map;
 
 import am.ik.rontolisp.LispVal;
@@ -45,7 +46,9 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
  * {@code slurp} (which closes it; a second {@code slurp} and a {@code .read} then answer
  * the end, as under the oracle's Jetty adapter), {@code clojure.java.io/reader} +
  * {@code line-seq} and {@code java.io.InputStreamReader}, and the response map (a missing
- * status, a header vector as repeated lines, a keyword header name, a seq body).
+ * status, a header vector as repeated lines, a keyword header name, a seq body; on the
+ * socket legs a {@code java.io.File}, a byte stream and {@code file-response}'s File sent
+ * octet for octet; on every leg a File naming no file answering 500).
  */
 class ClojureRingAdapterTest {
 
@@ -56,6 +59,7 @@ class ClojureRingAdapterTest {
 	private static final String PROGRAM = """
 			(ns ring-probe
 			  (:require [ring.adapter.rontolisp :as ring]
+			            [ring.util.response :as r]
 			            [clojure.java.io :as io]))
 
 			(defn handler [req]
@@ -74,13 +78,40 @@ class ClojureRingAdapterTest {
 			      (= uri "/lines")
 			      {:body (str (vec (line-seq (io/reader (java.io.InputStreamReader. body "UTF-8")))))}
 			      (= uri "/empty") {:status 204}
+			      (= uri "/file") {:body (io/file "%DIR%" "bytes.bin")}
+			      (= uri "/stream") {:body (io/input-stream (io/file "%DIR%" "bytes.bin"))}
+			      (= uri "/served") (r/file-response "bytes.bin" {:root "%DIR%"})
+			      (= uri "/missing") {:body (io/file "%DIR%" "missing.bin")}
+			      (= uri "/asset") {:body (io/input-stream (io/resource "asset.txt"))}
 			      :else {:status 404 :body "not found"})))
 
 			(println (ring/run-server %HANDLER% {:port %PORT% :host "127.0.0.1" :join? false}))
 			""";
 
-	private static String program(String handler, int port) {
-		return PROGRAM.replace("%HANDLER%", handler).replace("%PORT%", Integer.toString(port));
+	private String program(String handler, int port) throws IOException {
+		return PROGRAM.replace("%HANDLER%", handler)
+			.replace("%PORT%", Integer.toString(port))
+			.replace("%DIR%", files().toString());
+	}
+
+	/** Every octet value, then a UTF-8 character: what a file body must send as it is. */
+	private static final byte[] BYTES = bytes();
+
+	private static byte[] bytes() {
+		byte[] out = new byte[258];
+		for (int i = 0; i < 256; i++) {
+			out[i] = (byte) i;
+		}
+		out[256] = (byte) 0xc3;
+		out[257] = (byte) 0xa9;
+		return out;
+	}
+
+	/** The directory the file routes serve from, holding {@link #BYTES}. */
+	private Path files() throws IOException {
+		Path files = Files.createDirectories(this.workDir.resolve("files")).toRealPath();
+		Files.write(files.resolve("bytes.bin"), BYTES);
+		return files;
 	}
 
 	@Test
@@ -139,6 +170,22 @@ class ClojureRingAdapterTest {
 				HttpResponse.BodyHandlers.ofString());
 		assertThat(missing.statusCode()).isEqualTo(404);
 		assertThat(missing.body()).isEqualTo("not found");
+
+		for (String path : new String[] { "/file", "/stream", "/served" }) {
+			HttpResponse<byte[]> file = client.send(HttpRequest.newBuilder(uri(port, path)).build(),
+					HttpResponse.BodyHandlers.ofByteArray());
+			assertThat(file.statusCode()).as(path).isEqualTo(200);
+			assertThat(file.body()).as(path).isEqualTo(BYTES);
+			assertThat(file.headers().firstValue("content-length")).as(path).hasValue("258");
+		}
+		HttpResponse<byte[]> served = client.send(HttpRequest.newBuilder(uri(port, "/served")).build(),
+				HttpResponse.BodyHandlers.ofByteArray());
+		assertThat(served.headers().allValues("content-length")).hasSize(1);
+		assertThat(served.headers().firstValue("last-modified")).hasValueSatisfying(date -> assertThat(date)
+			.matches("[A-Z][a-z]{2}, \\d{2} [A-Z][a-z]{2} \\d{4} \\d{2}:\\d{2}:\\d{2} GMT"));
+		HttpResponse<String> gone = client.send(HttpRequest.newBuilder(uri(port, "/missing")).build(),
+				HttpResponse.BodyHandlers.ofString());
+		assertThat(gone.statusCode()).as("a File naming no file signals").isEqualTo(500);
 	}
 
 	/**
@@ -171,6 +218,8 @@ class ClojureRingAdapterTest {
 			            body: 'l1\\nl2\\n' }));
 			show(call({ method: 'GET', target: '/empty', headers: { host: 'h' } }));
 			show(call({ method: 'GET', target: '/nope', headers: { host: 'h' } }));
+			show(call({ method: 'GET', target: '/missing', headers: { host: 'h' } }));
+			show(call({ method: 'GET', target: '/asset', headers: { host: 'h' } }));
 			""";
 
 	@Test
@@ -178,6 +227,8 @@ class ClojureRingAdapterTest {
 		assumeTrue(nodeIsAvailable(), "node is not on PATH");
 		Path source = this.workDir.resolve("probe.clj");
 		Files.writeString(source, program("handler", 3000));
+		// a resource the lowering finds beside the source travels with the module
+		Files.writeString(this.workDir.resolve("asset.txt"), "h\u00e9llo\n");
 		Path module = this.workDir.resolve("probe.wasm");
 		String output = runCli(source.toString(), "-o", module.toString(), "--no-wasi");
 		assertThat(module).as("the --no-wasi compile: %s", output).exists();
@@ -186,7 +237,14 @@ class ClojureRingAdapterTest {
 		Process node = new ProcessBuilder("node", host.toString(), module.toString()).redirectErrorStream(true).start();
 		String replies = new String(node.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
 		assertThat(node.waitFor()).as(replies).isZero();
-		assertThat(replies.lines().toList()).containsExactly(
+		List<String> lines = replies.lines().toList();
+		assertThat(lines).hasSize(7);
+		assertThat(lines.get(5)).as("a File the module cannot read answers 500")
+			.startsWith("[500,")
+			.contains("missing.bin (No such file or directory)");
+		assertThat(lines.get(6)).as("a byte stream over a resource the module carries")
+			.isEqualTo("[200,\"h\u00e9llo\\n\",[]]");
+		assertThat(lines.subList(0, 5)).containsExactly(
 				"[200,\"get G /info a=1&b=%20x ring-test :http HTTP/1.1 true\",[\"x-kw=k\",\"x-multi=a\",\"x-multi=b\"]]",
 				"[201,\"echo:hé|\\\"\\\"|-1|3|text/plain\",[]]", "[200,\"[\\\"l1\\\" \\\"l2\\\"]\",[]]",
 				"[204,\"\",[]]", "[404,\"not found\",[]]");
@@ -287,7 +345,8 @@ class ClojureRingAdapterTest {
 		ByteArrayOutputStream out = new ByteArrayOutputStream();
 		CliStack.call("clojure-ring", () -> {
 			LispEvaluator evaluator = new LispEvaluator(new PrintStream(out, true, StandardCharsets.UTF_8));
-			for (LispVal form : SourceLanguage.CLOJURE.read(program, Features.INTERPRETER, "probe.clj")) {
+			for (LispVal form : evaluator
+				.clojureProgram(SourceLanguage.CLOJURE.read(program, Features.INTERPRETER, "probe.clj"))) {
 				evaluator.eval(form);
 			}
 			return null;

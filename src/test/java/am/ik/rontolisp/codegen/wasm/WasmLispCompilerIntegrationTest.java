@@ -14159,19 +14159,22 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
-	void fileWriteDateAnswersNilAndFilesystemWritesRunForReal() throws Exception {
-		// The remaining WASM divergence (.kb/read-load-streams.md): no timestamp call is
-		// imported, and "cannot be determined" IS Common Lisp's answer for
-		// file-write-date -- so it answers nil here while the interpreter and the JVM
-		// answer for real. file-length is REAL on all four since the fd_filestat_get
-		// import landed (fileLengthAnswersTheSizeOfARealFile below), and so are the
-		// three write-side operators since the path_create_directory /
-		// path_unlink_file / path_rename imports landed: the directory is
-		// created for real below, then a file in it is written, renamed, deleted and
-		// probed gone.
+	void fileWriteDateAndFilesystemWritesRunForReal() throws Exception {
+		// file-write-date is REAL here as on the interpreter and the JVM: the injected
+		// path_filestat_get (the adapter's over stat-at under --component) answers the
+		// modification time, so a file just written is dated between the first second
+		// of 2023 and now, and a missing one answers nil. file-length is REAL since the
+		// fd_filestat_get import landed (fileLengthAnswersTheSizeOfARealFile below),
+		// and so are the three write-side operators since the path_create_directory /
+		// path_unlink_file / path_rename imports landed: the directory is created for
+		// real below, then a file in it is written, renamed, deleted and probed gone,
+		// and the emptied directory itself is deleted through the injected
+		// path_remove_directory.
 		String code = """
 				(with-open-file (out "meta.txt" :direction :output) (write-line "hello" out))
-				(print (file-write-date "meta.txt"))
+				(let ((d (file-write-date (concatenate 'string "meta" ".txt"))))
+				  (print (and (integerp d) (> d 3881520000) (<= d (get-universal-time)))))
+				(print (file-write-date (concatenate 'string "missing" ".txt")))
 				(print (ensure-directories-exist "sub/dir/x.txt"))
 				(with-open-file (out "sub/dir/x.txt" :direction :output) (write-line "hello" out))
 				(print (probe-file "sub/dir/x.txt"))
@@ -14181,8 +14184,11 @@ class WasmLispCompilerIntegrationTest {
 				(print (delete-file "sub/dir/y.txt"))
 				(print (probe-file "sub/dir/y.txt"))
 				(print (ignore-errors (delete-file "sub/dir/y.txt")))
+				(print (delete-file (concatenate 'string "sub/dir" "/")))
+				(print (probe-file "sub/dir/"))
 				""";
 		String expected = """
+				T
 				NIL
 				"sub/dir/x.txt"
 				#P"sub/dir/x.txt"
@@ -14191,6 +14197,8 @@ class WasmLispCompilerIntegrationTest {
 				#P"sub/dir/y.txt"
 				T
 				NIL
+				NIL
+				T
 				NIL""";
 		assertThat(compileAndRunWithDir(code)).isEqualTo(expected);
 		assertThat(compileAndRunComponentWithDir(code)).isEqualTo(expected);
@@ -14228,13 +14236,11 @@ class WasmLispCompilerIntegrationTest {
 		// truename* over probe-file, directory* over the fd_readdir listing -- and so
 		// does the mutating side now: ensure-all-directories-exist over
 		// %make-directories, rename-file-overwriting-target over %rename-file and
-		// delete-file-if-exists over %delete-file, while safe-file-write-date answers
-		// nil where file-write-date does. with-current-directory inherits chdir's
-		// signal. One deliberate remainder: delete-empty-directory over a DIRECTORY
-		// still signals -- preview1's path_unlink_file cannot remove directories
-		// (that needs the path_remove_directory import, which is not wired),
-		// so the file-error below is the honest "could not remove it", caught here.
-		// The component twin runs the same program with the same expectation.
+		// delete-file-if-exists over %delete-file (and delete-empty-directory over
+		// the same primitive, which removes an empty directory through the injected
+		// path_remove_directory), while safe-file-write-date answers the date
+		// file-write-date does. with-current-directory inherits chdir's signal. The
+		// component twin runs the same program with the same expectation.
 		String code = """
 				(with-open-file (out "fsp-a.txt" :direction :output) (write-line "a" out))
 				(with-open-file (out "fsp-b.txt" :direction :output) (write-line "b" out))
@@ -14250,7 +14256,7 @@ class WasmLispCompilerIntegrationTest {
 				(print (uiop:truename* "fsp-missing.txt"))
 				(print (fsp-ours (uiop:directory* "./*.txt")))
 				(print (fsp-ours (uiop:directory-files ".")))
-				(print (uiop:safe-file-write-date "fsp-a.txt"))
+				(print (integerp (uiop:safe-file-write-date "fsp-a.txt")))
 				(print (uiop:parse-native-namestring "fsp-a.txt"))
 				(print (uiop:split-native-pathnames-string "fsp-a.txt:fsp-b.txt"))
 				(progn (setf (uiop:getenv "WASM_UIOP_FS_TEST") "fsp-a.txt")
@@ -14276,7 +14282,7 @@ class WasmLispCompilerIntegrationTest {
 				NIL
 				(#P"./fsp-a.txt" #P"./fsp-b.txt")
 				(#P"./fsp-a.txt" #P"./fsp-b.txt")
-				NIL
+				T
 				#P"fsp-a.txt"
 				(#P"fsp-a.txt" #P"fsp-b.txt")
 				#P"fsp-a.txt"
@@ -14288,7 +14294,7 @@ class WasmLispCompilerIntegrationTest {
 				NIL
 				T
 				NIL
-				NIL
+				T
 				:HERE
 				:SIGNALLED""";
 		assertThat(compileAndRunWithDir(code)).isEqualTo(expected);
@@ -14530,6 +14536,18 @@ class WasmLispCompilerIntegrationTest {
 			assertThat(compileAndRunFrontEndWithDir(am.ik.rontolisp.ReadLineValuesFixture.TAIL_AND_SOCKET_PROGRAM,
 					component))
 				.isEqualTo(am.ik.rontolisp.ReadLineValuesFixture.TAIL_AND_SOCKET_EXPECTED);
+		}
+	}
+
+	@Test
+	void readLineEndsALineAtLineFeedAloneAndDropsOneCarriageReturnBeforeIt() throws Exception {
+		for (boolean component : new boolean[] { false, true }) {
+			assertThat(compileAndRunFrontEndWithDir(
+					am.ik.rontolisp.ReadLineValuesFixture.carriageReturnProgram("cr.dat"), component))
+				.isEqualTo(am.ik.rontolisp.ReadLineValuesFixture.CARRIAGE_RETURN_EXPECTED);
+			assertThat(compileAndRunFrontEndWithDir(
+					am.ik.rontolisp.ReadLineValuesFixture.carriageReturnFileKindsProgram("cr.dat"), component))
+				.isEqualTo(am.ik.rontolisp.ReadLineValuesFixture.CARRIAGE_RETURN_FILE_KINDS_EXPECTED);
 		}
 	}
 

@@ -1984,7 +1984,9 @@ final class ClojureInteropLowering {
 				args.isEmpty() ? ClojureLowerUtil.list(ClojureLowerUtil.sym("string-upcase"), recv) : null;
 			case "toLowerCase" ->
 				args.isEmpty() ? ClojureLowerUtil.list(ClojureLowerUtil.sym("string-downcase"), recv) : null;
-			case "trim", "strip" -> args.isEmpty()
+			case "trim" -> args.isEmpty() ? ClojureLowerUtil.list(ClojureLowerUtil.sym("string-trim"),
+					ClojureStringLowering.javaTrimBag(), recv) : null;
+			case "strip" -> args.isEmpty()
 					? ClojureLowerUtil.list(ClojureLowerUtil.sym("string-trim"), ClojureStringLowering.trimBag(), recv)
 					: null;
 			case "stripLeading" -> args.isEmpty() ? ClojureLowerUtil.list(ClojureLowerUtil.sym("string-left-trim"),

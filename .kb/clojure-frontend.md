@@ -99,7 +99,7 @@ answered `2 5 3` before).
 | `defonce` | `def` unless `boundp` | a reload keeps the root |
 | `defn-` | a private `defn` | "Namespaces and project files" |
 | `fn` / `#(...)` | `lambda`; several arities one `lambda` over `&rest` dispatching per arity, each arity binding through `let*` | a named `fn` is a `labels` self-binding, an anonymous one only when a `recur` reaches it. `#()` READS as the oracle's `(fn* [p1__N# ...] (body))` (`ClojureReader.readAnonFn`; `fn*` lowers as `fn`): fixed parameters up to the highest `%N`, an unused lower one generated after the body, `& rest__N#` for `%&`, `%` inside a quote replaced too, a nested `#()` refused; its body is ONE call (`#(f a b)` -> `(f a b)`; several forms need `do`). N restarts per top-level form (the oracle's counter is process-wide): a parameter only has to differ from those of forms it nests in, and a case's printed spelling stays put wherever it sits in a file |
-| destructuring (`let`/`loop`/`fn`/`defn`/`for`/`doseq`) | `let*` pairs over one temporary per pattern | vector: positional through `%clojure-nth` (nil past the end; a map or set refused, the oracle's `nth`), `&` rest through `%clojure-drop`, `:as`; map: the table-aware read with `:keys`/`:syms`/`:strs`/`:or`/`:as` (a qualified `:keys` entry binds the short name) of the init through `%clojure-destructure-map`, which reads a `seq?` (list or lazy seq, never a vector) as `seq-to-map-for-destructuring` does (one member itself, none `{}`, more pairs through `%clojure-plist-table` with an odd last member's `%clojure-merge-entry-plist`), so `& {:keys ...}` takes keyword arguments and `:as` binds that map; until 2026-10-08 the rest list was read as is and every keyword argument was nil, clojure-spec `a-map-pattern-reads-a-seq-as-keyword-arguments` (oracle-identical); nested; malformed shapes refused by name |
+| destructuring (`let`/`loop`/`fn`/`defn`/`for`/`doseq`) | `let*` pairs over one temporary per pattern | vector: positional through `%clojure-nth` (nil past the end; a map or set refused, the oracle's `nth`), `&` rest through `%clojure-drop`, `:as`; map: the table-aware read with `:keys`/`:syms`/`:strs`/`:or`/`:as` (a qualified `:keys` entry binds the short name; a `:keys` vector may hold keywords `:a`/`:b/c`/`::d`; `:ns/keys`, `:ns/syms`, `::keys`, `::alias/keys` qualify each simple symbol, `keysDirective`/`directiveNamespace`, and refuse a qualified or keyword entry and `:ns/strs` as the oracle's `ns-keys` spec does, measured clj 1.12.6 2026-10-09, clojure-spec `namespaced-map-destructuring`; `ClojureLoopLowering.collectKeyNames` mirrors `bindKeys`) of the init through `%clojure-destructure-map`, which reads a `seq?` (list or lazy seq, never a vector) as `seq-to-map-for-destructuring` does (one member itself, none `{}`, more pairs through `%clojure-plist-table` with an odd last member's `%clojure-merge-entry-plist`), so `& {:keys ...}` takes keyword arguments and `:as` binds that map; until 2026-10-08 the rest list was read as is and every keyword argument was nil, clojure-spec `a-map-pattern-reads-a-seq-as-keyword-arguments` (oracle-identical); nested; malformed shapes refused by name |
 | `let` / `letfn` | `let*` (sequential) / one `labels` over every entry | `letfn` names are pre-scanned, so siblings call each other; each entry is its own `recur` target; a later entry shadows an earlier one |
 | `loop` / `recur` | `labels` self call | "recur" |
 | `->` `->>` `as->` `doto` `cond->` `cond->>` `some->` `some->>` | datum rewrites around one temporary | `as->` is nested `let`s (shadowing like the oracle); `some->` stops at `nil`, not `false`; a step over a collection literal signals |
@@ -134,7 +134,7 @@ answered `2 5 3` before).
 | `defmacro` `macroexpand(-1)` `gensym`, `` ` `` `~` `~@` | "Macros" | |
 | `defmulti` `defmethod` hierarchies `defprotocol` `defrecord` `deftype` `reify` `extend*` `satisfies?` `instance?` `class` | "Dispatch" | a body's `clojure.lang` interfaces and `Object` overrides: "Host interfaces" |
 | `ns` `require` `use` `import` `in-ns` | alias and refer wiring; a project namespace's file loaded at the `require` | "Namespaces and project files" |
-| `clojure.string` (`join` `split` `split-lines` `upper-case` `lower-case` `capitalize` `trim` `triml` `trimr` `trim-newline` `blank?` `starts-with?` `ends-with?` `includes?` `index-of` `last-index-of` `replace` `replace-first` `escape` `re-quote-replacement` `reverse`) | core string operations | reached as `alias/var`, `clojure.string/var` or a referred var. `split`/`replace` take a pattern (through the regex runtime) or a literal string/char (a plain string never compiles to a pattern). Empty literal-`split` input is `nil` (a pattern answers one empty part); a positive `split` limit caps, a negative keeps every part, else trailing empties drop. `index-of`'s start (and `.indexOf`'s) is clamped into `[0, length]` before CL's `search`, which refuses a start outside the string, so it reads like Java's: past the end nothing is found (an empty match is the length), a negative one is 0 (`ClojureStringLowering.searchFrom`) |
+| `clojure.string` (`join` `split` `split-lines` `upper-case` `lower-case` `capitalize` `trim` `triml` `trimr` `trim-newline` `blank?` `starts-with?` `ends-with?` `includes?` `index-of` `last-index-of` `replace` `replace-first` `escape` `re-quote-replacement` `reverse`) | core string operations | reached as `alias/var`, `clojure.string/var` or a referred var. `split`/`replace` take a pattern (through the regex runtime) or a literal string/char (a plain string never compiles to a pattern). Empty literal-`split` input is `nil` (a pattern answers one empty part); a positive `split` limit caps, a negative keeps every part, else trailing empties drop. `index-of`'s start (and `.indexOf`'s) is clamped into `[0, length]` before CL's `search`, which refuses a start outside the string, so it reads like Java's: past the end nothing is found (an empty match is the length), a negative one is 0 (`ClojureStringLowering.searchFrom`); `trim` `triml` `trimr` `blank?` (and `.strip*`) trim the bag `ClojureStringLowering.trimBag` builds from `Character.isWhitespace` (9-13, 28-32, the Unicode space separators but U+00A0/U+2007/U+202F, U+2028/U+2029), the oracle's test -- verified on clj 1.12.6 over the whole BMP 2026-10-09; Java `.trim` is the `<= 32` bag (`javaTrimBag`); `trim-newline` stays `\n`/`\r` only. Pinned by clojure-spec `blank-and-the-trims-take-java-whitespace` |
 | `clojure.set` (`union` `intersection` `difference` `select` `project` `rename-keys` `rename` `index` `map-invert` `join` `subset?` `superset?`: every public var) | `ClojureSetLowering`: one call to the spliced `rontolisp::%clojure-set-NAME` worker (`?` spelled `-p`, the variadic three over one list of their sets, `join` with a key map `-join-km`) after a lower-time arity check in the oracle's wording (`... passed to: clojure.set/NAME`); as a value `#'...-v` | the oracle's own algorithms, so an answer's kind follows the same input: `union` grows its largest input (bubble order and all; a vector or list there answers one, a map signals), `intersection` shrinks its smallest, `difference`/`select` the first; nil stays nil, an unchanged input is answered itself, a set changes in a fresh copy. Membership goes through the structural-key runtime; `contains?` on a vector is by index, like the oracle's. Relation members may be records: `join`'s merge keeps the first's record, `rename-keys` keeps it unless a declared field is renamed away. Answers carry no metadata. Corpus witness: shcloj4 `examples.test.sequences` `test-sets`/`test-joins` (`ClojureProjectNamespacesTest`); the whole namespace stays red on `examples.utils` (the `?.` macro), `clojure.xml` and `file-seq` (measured 2026-10-03: the load stops at `utils.clj:37:1`) |
 | `ring.adapter.rontolisp` (`run-server`) | `(rontolisp::%http-serve (%clojure-ring-app f opts) (%clojure-ring-port opts) (%clojure-ring-host opts) (%clojure-ring-join opts))` (`ClojureRingLowering`) | "Ring adapter" |
 | `rontolisp.wasm` (`defimport` `export`, a `defn`'s `:wasm/export`) | `rontolisp:wasm-import` hoisted ahead of the datum / `rontolisp:wasm-export` after the whole program, each passing the name as written as `:as`; a converting crossing behind a wrapper `defun` (`ClojureWasmLowering`) | "Host boundary" |
@@ -147,7 +147,7 @@ answered `2 5 3` before).
 | `clojure.data` `clojure.zip` `clojure.datafy` `clojure.stacktrace` | the same, loaded at its `require` | "clojure.jar namespaces" |
 | `clojure.core.protocols` | the same, a startup namespace like `clojure.walk` | "clojure.jar namespaces" |
 | `clojure.core.reducers` | the same, loaded at its `require`; cat's accumulator is `rontolisp.internal.reducers/NAME`, one call to `rontolisp::%clojure-reducers-NAME` (`ClojureKernelLowering`) | "clojure.jar namespaces" |
-| `clojure.pprint` | the same; its layout engine is `rontolisp.internal.pprint/NAME`, one call to `rontolisp::%clojure-pp-NAME` (`ClojureKernelLowering`) | "clojure.jar namespaces" |
+| `clojure.pprint` | the same; its layout engine, and the text of `cl-format`'s number directives and case conversion, is `rontolisp.internal.pprint/NAME`, one call to `rontolisp::%clojure-pp-NAME` (`ClojureKernelLowering`) | "clojure.jar namespaces" |
 | `clojure.math` | the same, loaded at its `require`; a double function's body is `rontolisp.internal.math/NAME`, lowered in place to `(%strict-math :name (rontolisp::%clojure-double a) ...)`, `round` and the long arithmetic one call to `rontolisp::%clojure-math-NAME` (`ClojureKernelLowering`) | "clojure.jar namespaces" |
 | `subs`, `.substring` | `%clojure-subs`, the refusal family's alias of `subseq` ("Refusals") | a bound outside a string is the oracle's `StringIndexOutOfBoundsException` where a class is read; a double or ratio bound is truncated (`%clojure-string-bound`), a non-number one is refused as the oracle does ("Refusals") |
 | `format` | the Java directives translated to `format` over Clojure-rendered arguments | literal format string only; `%s` like `str` (nil spells `null`), `%b`; `%e`/`%g`, flags and the rest refused |
@@ -184,13 +184,13 @@ answered `2 5 3` before).
 | `name` `namespace` `keyword` `symbol` | spliced string workers over the demangled spelling | split at the first `/`, except the lone `/` (a name, no namespace, like the oracle) |
 | `str` / `pr-str` | `concatenate` over `%clojure-str-of` parts | `nil` -> `""` (`pr-str`: `"nil"`), keywords with their colon, collections in Clojure notation -- readable inside under `str` too (strings quoted, nil spelled: the oracle's `toString`), so `spit` writes what `read` reads back |
 | `print-str` / `prn-str` / `println-str` | `rontolisp::%clojure-print-str` over `(list parts...)` (a `&rest` lambda as a value) | prints to a private string stream, never a `*standard-output*` rebinding: the parts evaluate in the caller, so what one prints reaches the real output; nested strings follow `print`/`pr` (bare/quoted), unlike `str`/`pr-str` whose nested strings are always quoted |
-| `println` `print` `pr` `prn` | one `%clojure-write-datum` per part straight to `*standard-output*`, `write-char` spaces, `terpri` | answers nil; with several parts and any computed one, every part binds to a temporary first (the oracle evaluates all arguments before printing) |
+| `println` `print` `pr` `prn` | one `%clojure-write-datum` per part straight to `*standard-output*`, `write-char` spaces, `terpri` | answers nil; with several parts and any computed one, every part binds to a temporary first (the oracle evaluates all arguments before printing). `newline` is `(progn (princ "\n") nil)`: until 2026-10-09 it answered the `"\n"` `princ` returns, so `pprint` did too (clojure-spec `clojure-pprint-cl-format-lays-out-through-the-pretty-printer`) |
 | `rand` `rand-int` `rand-nth` `shuffle` | draws from the program-owned generator (`.kb/random.md`) | no domain check; `rand-nth` of nil is nil, of an empty vector signals; `shuffle` pins membership, never order |
 | `make-array` `aget` `aset` `alength` | general arrays (`aref`, `array-dimension`) | the element class is ignored; every backend |
 | Java interop | "Java interop" | interpreter and JVM only |
 | `quote` | `quote` with symbols mangled | vectors, maps and sets inside are rebuilt (a quoted list holding one becomes a `list` construction) |
 | `comment` | `nil` | |
-| refused by name | | `future` `delay` `force` `promise` `deliver` (no thread pool, memo cell or rendezvous); transients (`transient` ... `disj!`); `definterface` `gen-class` `gen-interface`; `use-fixtures`; `add-watch`/`remove-watch`; `load-string` `eval` (no compiler at run time) |
+| refused by name | | `future` `delay` `force` `promise` `deliver` (no thread pool, memo cell or rendezvous); transients (`transient` ... `disj!`); `definterface` `gen-class` `gen-interface`; `use-fixtures`; `add-watch`/`remove-watch`; `load-string` (no compiler at run time); `eval` and `resolve` of a computed symbol at run time ("Macros") |
 
 ## Deviations
 
@@ -207,8 +207,9 @@ Each is a real work item unless the reason says otherwise.
   wrapper lists (a type overriding `toString` the oracle's `#object` without the hash, "Host
   interfaces"); `str` of a lazy seq or record spells the contents where the oracle answers
   `Class@hash`; `*print-meta*` prints no reader `:line`/`:column` (no value carries
-  them), `*print-dup*` is a plain value, `print-method` and `pprint` are absent;
-  `~S`/`~A` on Clojure values stay CL notation (`format` is a CL surface). Cycles print with
+  them), `*print-dup*` is a plain value, `print-method` is absent;
+  a CL `format`'s `~S`/`~A` on Clojure values stay CL notation (a CL surface; `clojure.pprint/cl-format`
+  writes Clojure's, "clojure.jar namespaces"). Cycles print with
   datum labels, copied from `%scheme-print` (sharing would splice `scheme.lisp` into every
   Clojure program).
 - Type predicates follow the representation: `()` is nil (`seq?`/`list?`/`coll?`/`counted?` false); a strict seq is a list (`list?`/`counted?`/`realized?` true where the oracle's LazySeq is false); nothing is chunked; an `iterate`/`cycle` head is unrealized until forced; `M`/`N` literals are plain rationals (`decimal?` never true); `identical?` is `eql` (numbers, chars and symbols by value); `class?` of `(class 1)` is false (`class` answers a kind keyword).
@@ -415,7 +416,7 @@ for the same call**, decided where it is detected (oracle-checked clj 1.12.6, 20
   message (`%clojure-illegal-argument-exception`, `-illegal-state-`, `-class-cast-`,
   `-null-pointer-`, `-index-out-of-bounds-`, `-string-index-out-of-bounds-`,
   `-unsupported-operation-`, `-number-format-`, `-arithmetic-`, `-arity-`, `-runtime-`,
-  `-class-not-found-`, `-pattern-syntax-`, `-illegal-format-conversion-`, `-io-exception`,
+  `-class-not-found-`, `-pattern-syntax-`, `-illegal-format-conversion-`, `-io-exception`, `-sax-parse-exception` (clojure.xml),
   `%clojure-exception` for `java.lang.Exception`, `%clojure-assertion-error`), each signalling
   through `%clojure-refuse` -- the one typed signal -- a `%clojure-refusal`, a `simple-error`
   whose third slot holds the chain (read in place by `%clojure-exact-chain`) and whose report
@@ -744,8 +745,22 @@ before the library splice.
   an argument with an effect, is an `IllegalStateException` at the strip.
   `eval/ClojureLibrary.process` strips the program family by family and splices a library
   stripped of every family it makes no value of (one cached variant per combination, beside
-  the host-arm ones); the interpreter, a session and the macro-time
-  evaluator keep `forms()` whole, since what a later input builds is unknown.
+  the host-arm ones). The interpreter running a whole program (the command line's run,
+  `rontolisp test`) takes the same strip: `LispEvaluator.clojureProgram` evaluates
+  `ClojureLibrary.splice`'s library ahead of the stripped program. A session, a `load` of a
+  `.clj` and the macro-time evaluator keep `forms()` whole (loaded on first use), since
+  what a later input builds is unknown; a stripped library refuses later Clojure source
+  (`IllegalStateException`; no Clojure program reaches it: `load`/`require` are read while
+  lowering, `eval` is refused). Strip-on-load with growth was rejected: a redefined defun
+  misses every `#'` snapshot and closure taken before, so a later value of a new family
+  would reach an armless copy. What a hot path passed before the strip (counted
+  2026-10-09): `str` of a number or keyword 8 family tests ahead of the printer, `=` of
+  two numbers 13, the printer 0 for a scalar and ~9 per collection node. Bench 2026-10-09
+  (interpreter, loaded host, interleaved runs, whole program vs the same file `load`ed
+  from a `.lisp`): 300k `(str i :k)` 16.6-21.1 s vs 24.9-33.4 s; 300k `(= [i :k] [i :k])`
+  12.4-19.7 s vs 28.4-35.5 s. Pinned by
+  `ClojureLibraryTest#aWholeProgramOnTheInterpreterTakesTheLibraryWithoutTheArmsItCanNeverTake`;
+  every interpreter leg of the four-backend tests (`ClojureSpecE2eTest` ...) runs through it.
 - Writing an arm: it allocates no `freshTemp` and lowers no datum again (a shifted temp
   number would rename locals of the stripped program); it sits behind an existing wrapper
   test where it can (`%clojure-strict-seq`, `count`, `empty?`, `%clojure-key-kind`), so the
@@ -1207,8 +1222,16 @@ serve`, and a war on embedded Tomcat; plain P1 compiles and signals the directiv
 - Response map (`%clojure-ring-response`): `:status` (nil -> 200, the servlet default),
   `:headers` to a dotted alist (a keyword name is its name; a seq value is one line per
   member; values through `str`), `:body` string (wrapped in a list), seq (members `str`'d),
-  a CL stream (read to the end, closed: Ring closes an `InputStream` body), nil; anything
-  else (a `java.io.File` host object) and a non-map response signal -> 500.
+  a CL stream (read to the end, closed: Ring closes an `InputStream` body), nil, and (io
+  arms, so a program making no io value folds them) a `java.io.File` / byte stream as ONE
+  `(unsigned-byte 8)` vector (`%clojure-io-ring-body`; the transports write octets as they
+  are), a host File through `%clojure-io-from-host` (host arm); anything else and a
+  non-map response signal -> 500. A File naming no readable file signals the oracle's
+  `FileNotFoundException` -> 500, where Jetty (ring-jetty-adapter 1.15.3, measured
+  2026-10-09) commits an empty 200; the serving wasm transports have no filesystem, so
+  there only a byte stream over an embedded resource is served. Jetty sends a File body
+  with `Content-Length` only (no `Last-Modified`: that is `file-response`'s header); the
+  transport here drops the map's `Content-Length` and computes its own, so never two.
 - Options: `:port` (default 80, `ring.adapter.jetty`'s), `:host`/`:address` (nil = every
   interface), `:join?` (default true; false answers the socket leg's handle), `:async?`
   truthy refused by name. Arity 2 exactly, the oracle's wording; as a value a 2-arg lambda.
@@ -1281,9 +1304,37 @@ oracle's classpath; a `deps.edn` ring-core newer than the shipped one refuses th
   `UnsupportedCharsetException`), where the oracle would accept the JDK's other charsets.
   Checked where the oracle checks it (`form-decode-str` only when the string holds `+` or
   `%`; `form-encode` of nil or a map of no strings never).
+- **File responses are a PART** (2026-10-09): `file-response`, `url-response`,
+  `resource-response`, `resource-data` live in `lib/ring/util/response_files.clj`
+  (`ClojureBuiltinNamespaces.PARTS`), loaded into `ring.util.response` by
+  `ClojureLowering.loadPartOf` where a top-level datum first names one (qualified,
+  `:refer [..]`, or a `:refer :all` refer, which lists the part's vars without loading it)
+  -- a `load` unit (`part:<ns>:<file>`) started in the namespace, its definitions hoisted,
+  its statements (the `defmethod`s) in a guarded init run there, like a startup
+  namespace's preload. Why: the ARM SCAN is by name over every spliced form, dead defuns
+  included (Clojure defuns are user program, never pruned), so the producers in these
+  defns would keep the io family's arms in every program requiring the namespace:
+  `ring-hello.clj` +44,749 B wasm P1 / +39,354 B class (measured 2026-10-09 by adding an
+  unused `(defn f [] (java.io.File. "x"))`). `ClojureRingFileResponseTest#theFileResponsesLoadOnlyWhereAProgramNamesOne`
+  pins the plain program lowering with no `%CLOJURE-IO-`.
+  The part is ring-core 1.15.5's code over clojure.java.io's values (io kernels via
+  `response.clj`'s `rontolisp.internal.io` alias; new `resources` inline kernel =
+  `getResources` over the directory roots), plus ring kernels `canonical-path` (spelling
+  only, a relative path kept relative from `.`, so no cwd is needed on wasm),
+  `directory-traversal?`, `format-date` (RFC 1123 via `%clojure-instant-fields`) and
+  `date` (worker `%clojure-make-inst`, an INSTANT producer). Measured against clj 1.12.6
+  + ring-core 1.15.5 the same day, identical on interpreter/JVM: `:root`/`/`-prefixed
+  paths, index files (`index.html`, `index.htm`, first `index.*`), `:index-files? false`,
+  `..` refused and `dir/../a.txt` served, no-root absolute path, `Last-Modified` = mtime
+  truncated to seconds, a `jar:` URL's `Last-Modified` = the JAR FILE's mtime (not the
+  entry's) and `Content-Length` the entry size, `resource-response` of a directory nil.
+  Deviations: no symlink resolved (oracle's canonical path refuses a link out of `:root`;
+  the interpreter and the JVM serve it, both wasm backends did not follow it; `.todo/e95`);
+  a computed resource name inside a jar is nil (clojure.java.io's, `.todo/e96`); a
+  no-method miss in this front end's words. Both
+  wasm backends answer `file-write-date` (2026-10-09), so one expectation holds on all four.
 - Refusals: a var the oracle's namespace has and the built-in one leaves out
-  (`file-response`, `url-response`, `resource-response`, `resource-data`, `base64-*`,
-  `form-encode*`, `FormEncodeable`) is `ns/var is not built in: <why>` qualified and
+  (`base64-*`, `form-encode*`, `FormEncodeable`) is `ns/var is not built in: <why>` qualified and
   referred (`refuseLeftOut`, only when the namespace came from the built-in file); a
   ring-core namespace not shipped (cookies, session, flash, multipart, nested-params,
   not-modified -- HTTP dates over `java.util.Date` -- file, resource, head, content-length,
@@ -1295,7 +1346,12 @@ oracle's classpath; a `deps.edn` ring-core newer than the shipped one refuses th
   percent-decoding as in Ring); `form-encode` of a map is a function, not the protocol.
 - Native image and the web image: `resource-config.json` registers `clojure/lib/ring/...`
   (`NativeImageResourceConfigTest` lists both directories).
-- Pins: `ClojureRingUtilTest` (the four JDK differentials, the letter table, the refusals,
+- Pins: `ClojureRingFileResponseTest` (the file responses on all four backends against a
+  directory, a resources directory and a jar; the part's lazy load),
+  `ClojureRingAdapterTest` (File / byte stream / `file-response` bodies octet for octet on
+  the socket legs, a missing File 500 and an embedded-resource stream on the `--no-wasi`
+  leg), `ServeRingComponentE2eTest`, `WarE2eTest#aRingHandlerServesFromTheWarOnTomcat`,
+  `ClojureRingUtilTest` (the four JDK differentials, the letter table, the refusals,
   the shadowing project file, a real POST through `wrap-params` on the interpreter),
   clojure-spec `ring-util-*` and `ring-middleware-*` (all four backends, oracle-identical),
   `examples/clojure/ring-hello.clj` (verified by hand 2026-10-08 under curl on the
@@ -1547,7 +1603,11 @@ end** (`src/main/resources/am/ik/rontolisp/clojure/lib/clojure/**`, the
 `clojure.template`, `clojure.pprint`, `clojure.data`, `clojure.zip`, `clojure.core.protocols`,
 `clojure.datafy`, `clojure.stacktrace`, `clojure.math`, `clojure.core.reducers`,
 `clojure.instant`, `clojure.uuid` ("Instants and UUIDs"), `clojure.java.io`
-("clojure.java.io").
+("clojure.java.io"), `clojure.repl`, `clojure.main`, `clojure.java.shell` (host only),
+`clojure.xml` (2026-10-09). None of clojure.jar's own namespaces is left `unknown
+namespace` but the ones no measured library names (`inspector`, `java.browse`,
+`java.javadoc`, `java.process`, `parallel`, `reflect`, `repl.deps`, `core.server`,
+`test.junit`/`tap`, `java.basis`, `tools.deps.interop`) and spec ("clojure.spec").
 - **Licensing**: clojure.jar is EPL-1.0, this project Apache-2.0, so nothing of it is
   copied -- no code, no docstring. Each file is written from the documented behaviour and
   diffed against the oracle; a one-line var dictated by its contract
@@ -1562,8 +1622,15 @@ end** (`src/main/resources/am/ik/rontolisp/clojure/lib/clojure/**`, the
   `uuid`, `template`, `repl`, `math`, `instant`, `core.reducers`, and none for
   `clojure.data`, `main`, `java.shell`. Among the probes: malli's `core` and
   camel-snake-kebab require `walk`, data.json and reitit `pprint`, honeysql `template`.
+  What the four last ones' users call (the jars in `~/.m2`, 2026-10-09): fipp's `fipp.repl`
+  `clojure.repl/root-cause` and `stack-element-str`; clj-commons pretty's `pretty.repl`
+  redefines `#'clojure.repl/pst` and `#'clojure.main/repl-caught` and calls
+  `clojure.main/main`; core.logic's `bench` requires `clojure.repl` and calls nothing;
+  clj-http's `decode-xml-body` calls `(clojure.xml/parse stream startparse)` with its own
+  SAXParserFactory startparse (the host route below).
 - **Startup namespaces** (`ClojureBuiltinNamespaces.STARTUP`, shipped: `clojure.walk`,
-  `clojure.core.protocols`, `clojure.instant`, `clojure.uuid`, `clojure.java.io`): `clj -M` has loaded `clojure.walk` (with `core.protocols`, `core.server`, `edn`, `instant`, `java.io`,
+  `clojure.core.protocols`, `clojure.instant`, `clojure.uuid`, `clojure.java.io`,
+  `clojure.main`): `clj -M` has loaded `clojure.walk` (with `core.protocols`, `core.server`, `edn`, `instant`, `java.io`,
   `main`, `spec.alpha`, `spec.gen.alpha`, `string`, `uuid`) before the program, so a
   qualified name reaches it with no `require` and a `require` reads no project file
   (`ClojureSourcePath.find` skips the roots). Here `ClojureLowering.projectNamespaceOf`
@@ -1638,11 +1705,73 @@ end** (`src/main/resources/am/ik/rontolisp/clojure/lib/clojure/**`, the
     a reference (`(:require ())`, `[x :refer ()]`) is nil here ("Deviations"), so it
     prints `nil` where the oracle signals or prints `()` (an empty vector part signals
     the oracle's `Exception` alike).
-  - Left out, refused by name (`refuseLeftOut`): `cl-format`, `formatter`,
-    `formatter-out` (Common Lisp format directives over Clojure values). Deviation:
-    `get-pretty-writer` answers its writer, so each `pprint` lays out from column 0
-    within the margin bound when it runs; the oracle's pretty writer keeps its creation
-    margin and its column across calls.
+  - Deviation: `get-pretty-writer` answers its writer, so each `pprint` lays out from
+    column 0 within the margin bound when it runs; the oracle's pretty writer keeps its
+    creation margin and its column across calls.
+  - A print in progress is joined only when `*standard-output*` is its capture stream
+    (`%clojure-pp-active`; the oracle asks whether `*out*` is a pretty writer): what runs
+    under `with-out-str` inside a dispatch writes plain text, and `write :stream nil` there
+    lays out a pretty print of its own. A `pprint` or `write` joining one ends with a
+    `:flush` event, the oracle's `ppflush` of the writer it reused (the buffer written as it
+    stands, no newline decided): without it `(cl-format nil "~@w ~:w" x y)` broke `x`
+    where the oracle breaks `y` (2026-10-09). `fresh-line` outside a pretty print always
+    writes a newline, the oracle's writer keeping no column. `pprint` and `write` set
+    `*radix-pr*` when `*print-base*`/`*print-radix*` are not the defaults (the oracle
+    rebinds `pr` there), so the dispatch writes `255` as `ff` there and as `255` under a
+    bare `~W`, while `~A` always writes `ff`.
+  - `cl-format`, `formatter`, `formatter-out` (2026-10-09): Clojure source too. The run-time
+    library's `format` (`.kb/format.md`) prints CL notation and iterates lists, so a
+    conversion layer could not serve; a compiler (`compile-nodes`: a vector of literal
+    strings and directives `[char at colon params dynamic clauses else at-least-once
+    else-separator offset]`, the params in definition order with the defaults in, `:v`/`:#`
+    realized last-first like the oracle's array map) and an executor over a navigator
+    `[seq rest position dropped]`, answering the navigator or `(exit nav)`. The text of the
+    number directives and of `~(` is kernels (`%clojure-pp-integer-text`, `-english`,
+    `-roman`, `-fixed`, `-exponential`, `-general`, `-dollar`, `-case-convert`).
+    - Oracle mechanics kept, each measured: the integer and English spellings walk a double
+      with Clojure's `quot`/`rem` in Java's double arithmetic (a double past the long range
+      spells the oracle's digits, or its `Value out of range for char`); `~F ~E ~G ~$`
+      round the digits of the number's Java spelling as text (NaN and the infinities as
+      letters: `infinity.0`, `n.anE+2`), a ratio through `Ratio.doubleValue` (sixteen digits
+      half even first), exact past the double range (the oracle's `BigDecimal`, a
+      non-terminating one refused), `~$` taking a long as it is and any other number's
+      double (`Math/abs`'s two arms); `~(...~)` converts each write apart, a character write
+      unlike a string one (`~:(~a-~a~)` of "foo" "bar" is `Foo-bar`), its state the CL
+      special `%clojure-pp-case-writer`, so a program formatting nothing carries none; after
+      `~*`/`~:*`/`~@*` one nil comes back past the end (the oracle's `drop` answers a truthy
+      empty `LazySeq`: the `dropped` slot); `~^`'s base is each directive's own navigator at
+      the top and the enclosing directive's inside clauses (`~{~a~:^,~}` never exits).
+    - A control string holding `~&`, `~T`, `~<` or `~W` at any depth (`~?` aside) gets a
+      pretty print of its own unless `*out*` is one. `~_`, `~I`, `~T`, a logical block, a
+      justification without max-columns and `~W` of a collection (a dispatch block) where
+      `*out*` is no pretty writer are the oracle's `ClassCastException` (a `~(...~)` clause,
+      a `~<...~>` segment, `formatter-out` outside a pretty print). `~T` and `~:;` are
+      layout events carrying their own function (`:lay`), computed from the column the
+      replay has reached, the oracle's base column: blanks held back do not count.
+    - The macros build their function's symbol (`(symbol "clojure.pprint" "formatter-fn")`):
+      a template spelling it armed the dispatch gate by name (`.kb/optimize-dead-code-elimination.md`;
+      every `defmacro`'s run-time expander is live, a library's helper kept by any macro of
+      its namespace naming it: e97), which kept the whole executor in every
+      program loading clojure.pprint: wasm P1 of `(prn ...)` after requiring it, 446,930 ->
+      888,123 B; with the built symbol 451,949 B, of which ~1.1 KB the shared kernels
+      (`%clojure-pp-active`, `:flush`, `:lay`), ~1 KB the two expanders, ~2 KB the dispatch
+      ladders the backend sizes before its shake (the unused executor's lambdas), ~0.5 KB
+      `*radix-pr*`.
+    - Compiled formats are cached by control string, `cl-format`'s too (the oracle compiles
+      per call; a compile is pure), the cache emptied at 512: 2,000 calls of a nine-directive
+      string 32.5 -> 7.6 s on the interpreter, 1.66 -> 0.60 s as a JVM class.
+    - Fidelity, the same day against clj 1.12.6, identical on all four backends: 2,200
+      random `~F ~E ~G ~$` cases, 1,400 integer, radix, English, Roman, `~P`, `~A`/`~S`
+      cases, 1,700 random control strings of the structural directives (refusals compared
+      by class), 1,300 pretty layouts (blocks, the four `~_`, `~I`, `~T`, `~&`, `~W`, nested
+      writes, random margins, miser widths, levels and lengths), data.json's two
+      `formatter-out` strings in a dispatch, the compile errors with their messages.
+    - Deviations (user doc): `~A` of `1.5M` writes `3/2` (decimals are ratios); `~D` of
+      -2^63 writes it where the oracle's negation overflows; where the oracle's message is
+      the JVM's own (a `ClassCastException`, a `NullPointerException`, `seq`'s refusal) only
+      the class matches. A format handed in that is no control string runs only when it is
+      the private `compile-format`'s (wrapped `[::compiled nodes]`); any other is walked as
+      the oracle walks it, a non-empty one its `NullPointerException` when it runs.
 - `clojure.data`: `EqualityPartition` and `Diff` are protocols extended to nil,
   `java.util.Set`, `java.util.List`, `IPersistentVector`, `java.util.Map` and `Object`,
   whose arm sends a `map?` value to the map diff: a record reaches neither the `Map` nor a
@@ -1700,9 +1829,13 @@ end** (`src/main/resources/am/ik/rontolisp/clojure/lib/clojure/**`, the
   the oracle's class names `%clojure-no-method` already spelled, since `class` answers a
   kind keyword. A namespace or class datafies to itself (deviation). Pin: clojure-spec
   `clojure-datafy-of-an-exception-and-a-ref-like-the-oracle`.
-- `clojure.stacktrace`: `print-throwable` spells the class as `(name (class tr))` (`class`
-  of a throwable is its class-name keyword here) and a nil message `null` like the
-  oracle's `printf`. A throwable has no frames (`.getStackTrace` answers `[]`), so
+- `clojure.stacktrace`: `print-throwable` spells the class through
+  `rontolisp.internal.throwable/class-name` (`%clojure-datafy-class-name`: `class` of a
+  throwable is its class-name keyword here, of a caught host exception the host class, on
+  which `(name (class tr))` failed until 2026-10-09,
+  `ClojureInteropTest#printThrowableSpellsTheClassOfACaughtHostException`; the kernel
+  emits the exception runtime it reads) and a nil message `null` like the oracle's
+  `printf`. A throwable has no frames (`.getStackTrace` answers `[]`), so
   `print-stack-trace` prints ` at [empty stack trace]`: pinned as a deviation by
   clojure-spec `clojure-stacktrace-prints-no-frames`; `print-trace-element` is the oracle's
   over a host `StackTraceElement` (interpreter and JVM,
@@ -1760,20 +1893,91 @@ end** (`src/main/resources/am/ik/rontolisp/clojure/lib/clojure/**`, the
   `foldcat` result could not be counted; the cost is one copy per combine level and a
   fold of a joined result reducing it whole (deviation, user doc). Size, wasm P1 / JVM
   class: `(prn (r/fold + (r/map inc [1 2 3])))` 143,501 / 131,041 B.
-- Not shipped, with what each waits on (decided 2026-10-08): pprint's
-  `cl-format`/`formatter`/`formatter-out` (e58), `clojure.repl`/`main`/`java.shell`/`xml`
-  (e61).
+- `clojure.repl` (2026-10-09, not a startup namespace: `clj -M` has not loaded it, measured
+  with `find-ns`): `doc`, `pst`, `root-cause`, `demunge`, `stack-element-str` (the last
+  three delegating to `clojure.main`'s). `doc` is a macro expanding to
+  `(#'print-doc (meta (var name)))` (the private var reached through `#'`, like the
+  oracle's), so it prints the metadata the lowering recorded ("Vars and metadata"):
+  oracle-identical for a program definition; a core var has only `:name`/`:ns`, so its
+  name alone; a special form (and `&`/`catch`/`finally`, which the oracle maps to
+  `fn`/`try`) its name, `Special Form` and the clojure.org link, without the oracle's
+  `:forms` and text (clojure.jar's words, not copied); a name that is no var, a namespace's
+  included, the lowering's `Unable to resolve var` (no `resolve` or `find-ns` at expansion
+  time; the oracle prints a namespace's doc or nothing); a keyword refused (spec). `pst`
+  prints `getSimpleName` of `rontolisp.internal.throwable/class-name`, the message and
+  `ex-data`, the compile-phase note, no frame lines, `Caused by:` and each cause. Left out
+  by name (`ClojureBuiltinNamespaces.replLeftOut`): `dir`, `dir-fn`, `apropos`,
+  `find-doc` (`ns-publics`/`all-ns`: a namespace's vars exist only at lower time),
+  `source`, `source-fn` (the text is not kept), `set-break-handler!`, `thread-stopper`.
+- `clojure.main` (2026-10-09, a startup namespace like the oracle's): `demunge` (the
+  munged spellings longest first, `$` as `/`; 30 spellings oracle-checked), `root-cause`,
+  `stack-element-str`, `ex-triage`, `ex-str`, `err->msg`, `repl-caught`,
+  `repl-exception`, `repl-prompt`, `repl-requires`, `with-read-known`. `ex-triage` reads
+  frames given in the data like the oracle's (`:trace` tuples, `core-frame?`,
+  `source-symbol`), so triage of `Throwable->map` data is oracle-identical when the data
+  is; a throwable here has none, so its report says `(REPL:1)`. Deviations:
+  `:clojure.error/path` is the source as given (the oracle's is relative to the working
+  directory, which wasm has not); `ex-str` of spec problems is refused. Left out
+  (`mainLeftOut`): `repl`, `main`, `load-script` (no `eval`), `repl-read`,
+  `renumbering-read`, `skip-whitespace`, `skip-if-eol`, `with-bindings` (the REPL's parts),
+  `report-error` (main's uncaught report). Written with plain keys, though
+  `{:clojure.error/keys [...]}` destructuring now works; `repl-caught` ends with `(flush)`.
+- `clojure.java.shell` (2026-10-09): Clojure source over `ProcessBuilder` interop, so the
+  interpreter and the JVM run it; `ClojureBuiltinNamespaces.HOST_ONLY` refuses its load
+  while lowering for a target without the host (`ClojureNamespaceLowering.loadNamespace`,
+  `ctx.hostTarget`), not at the first call, the uiop `run-program` stance (`.todo/363`)
+  being for Common Lisp, where no program reaches the host at all. Standard input from a
+  temporary file (a string encoded in `:in-enc` through a host `PrintStream`, a File as it
+  is, a reader's text), the error output to another, stdout read by `transferTo` into a
+  host `ByteArrayOutputStream` decoded in `:out-enc`: no pipe can fill while another is
+  read, without the oracle's futures. A host `byte[]` crosses the boundary as a Lisp list
+  (empty: nil), so nothing reads one; `:out-enc :bytes` is refused (e81). Measured
+  oracle-identical on the interpreter and the JVM:
+  `ClojureInteropTest#clojureJavaShellRunsAHostProcessLikeTheOracle`.
+- `clojure.xml` (2026-10-09): `(parse s)` reads the document itself on every backend:
+  `slurp` with `:encoding "ISO-8859-1"` (one character per byte), then the kernel
+  `rontolisp.internal.xml/events` (`clojure.lisp` "clojure.xml: rontolisp.internal.xml"):
+  decoding from the BOM or the declaration (UTF-8 with the oracle's Xerces messages for a
+  malformed sequence, UTF-16, ISO-8859-1, US-ASCII, windows-1252; another name
+  `UnsupportedEncodingException` naming it, as the oracle does only for a name the JDK
+  lacks), line ends, a non-validating XML 1.0 reader with the internal subset's general
+  entities (char refs expanded at declaration, entity refs at use, markup inside, the
+  oracle's recursion path) and no external DTD/entity (the oracle's `startparse-sax-safe`
+  reads none either). It answers events (a vector `[qname n v ...]`, a string, nil), the
+  same the host route's `ContentHandler` proxy records, so one `tree` builds both:
+  consecutive text merged, a run all Java whitespace dropped (`k/blank?`, Java's
+  `isWhitespace`: a no-break space stays), each element made once by `struct` and its
+  attributes by `array-map` in reverse document order, so the interpreter and the JVM
+  print the oracle's key order (an `assoc`'d struct reordered its keys); `emit-element`
+  walks attributes through `rontolisp.internal.pprint/members` (printer order). A
+  malformed document is the new refusal carrier `%clojure-sax-parse-exception`
+  (`org.xml.sax.SAXParseException`, `ClojureRefusals.SAX_PARSE`) with Xerces' message for
+  33 measured mistakes. A host object source (`k/host?`) and `(parse s startparse)` take
+  the host route: `startparse` gets an `org.xml.sax.helpers.DefaultHandler` proxy, so
+  clj-http's own SAXParserFactory startparse works on the interpreter and the JVM
+  (`ClojureInteropTest#clojureXmlHandsAHostSourceAndAStartparseToTheHostsSaxParser`).
+  Deviations (user doc): `<!ATTLIST>` defaults not applied; the five encodings; a string
+  naming no file `FileNotFoundException` with the path as given; a rarer mistake's message
+  rontolisp's own; a wasm program using it compiles with the `java:` warnings of the host
+  functions (as `clojure.stacktrace`'s `JAVA:CALL`). Left out (`xmlLeftOut`):
+  `content-handler`, `*stack*`, `*current*`, `*state*`, `*sb*`.
 - Pins: clojure-spec `clojure-walk-*` (all four backends, oracle-identical, the first
   case loading `clojure.walk` through a qualified name only),
-  `clojure-template-substitutes-per-group-of-values`, `clojure-pprint-*`,
+  `clojure-template-substitutes-per-group-of-values`, `clojure-pprint-*` (the
+  `clojure-pprint-cl-format-*` four for `cl-format`),
   `clojure-data-diff-compares-like-the-oracle`, `clojure-zip-moves-and-edits-like-the-oracle`,
   `clojure-datafy-and-core-protocols-like-the-oracle`,
-  `clojure-stacktrace-prints-throwables-like-the-oracle`,
+  `clojure-stacktrace-prints-throwables-like-the-oracle`, `clojure-repl-*` and
+  `clojure-main-*` (`-of-a-special-form-and-a-core-var`, `-pst-prints-no-frames` and
+  `-reports-an-error-without-its-location` the deviations), `clojure-xml-*` (files under
+  `/tmp`, the wasm legs' preopen),
   `reduce-and-the-verbs-built-on-it-reach-a-coll-reduce-row`,
   `reduce-kv-and-update-vals-reach-an-ikv-reduce-row`, `clojure-core-reducers-*` (the
   last one the deviations), `ClojureLanguageNamespacesTest` (the startup load, a project
   file never shadowing a startup namespace, a contrib `clojure.*` namespace on the source
-  path, the refusal of one not built in, the reducers' refusals),
+  path, the refusal of one not built in, the reducers' refusals, the repl/main/xml
+  refusals by name, the shell's refusal for a target without the host,
+  `clFormatIsClojureSourceOverTheNumberAndCaseKernels`),
   `ClojureLibraryTest#aProgramStoringNoReducerRowSplicesTheReduceVerbsWithoutTheirProtocolArms`,
   `ClojureArmsTest#theReducibleFamilyIsMadeByATypedRowOfCollReduceOrIKVReduce`,
   `ClojureLoweringTest#aTypedRowOfCollReduceOrIKVReduceIsStoredThroughTheLibrary`.
@@ -1803,10 +2007,11 @@ the file), `default-streams-impl` a map. Until then only `reader` resolved, as a
   value compiles byte-identical (measured 2026-10-08 on `demo.clj`, print, protocol,
   multimethod and spit/slurp/line-seq programs; pinned by
   `ClojureLibraryTest#aProgramMakingNoIoValueSplicesTheLibraryWithoutItsIoArms`). The
-  interpreter keeps every arm (`ClojureLibrary.process` is the compile path's): `str` of a
-  non-io value pays one `%clojure-io-p` call, ~5% of a `str`-bound loop (bench 2026-10-08:
-  300k `(str i :k)` 19.3 -> 20.4 s mean of five on a loaded host; `=` and `pr-str` within
-  noise). `%clojure-io-p` is one call however it answers (the registry is read only once a
+  library a session loads keeps every arm: there `str` of a non-io value pays one
+  `%clojure-io-p` call, ~5% of a `str`-bound loop (bench 2026-10-08: 300k `(str i :k)`
+  19.3 -> 20.4 s mean of five on a loaded host; `=` and `pr-str` within noise); a whole
+  program on the interpreter strips it like the compile path ("Sorted collections", the
+  arms). `%clojure-io-p` is one call however it answers (the registry is read only once a
   stream is in it).
 - **Prelude trap** (measured 2026-10-08): a `clojure.lisp` parameter named `write` grew every
   Clojure program (+29 KB `demo.clj`): any symbol of the library, even in a defun nothing
@@ -1862,13 +2067,13 @@ the file), `default-streams-impl` a map. Until then only `reader` resolved, as a
 - **Deviations** (user doc `clojure-java-io.md`): no identity hash in `#object`; a URL's
   `.hashCode`/`=` by spelling; reading a non-`file:` URL refused by name; no byte arrays
   (`read` into a buffer, `readAllBytes`, `write` of one refused); three charsets; a computed
-  resource name never inside a jar; wasm: an empty directory is not deleted (WASI unlink),
-  `lastModified` 0 (no `file-write-date`), `getAbsolutePath` of a relative File refused (no
+  resource name never inside a jar; `lastModified` in whole seconds (`file-write-date`'s
+  resolution, every backend); wasm: `getAbsolutePath` of a relative File refused (no
   cwd); `canRead` is `exists`; `line-seq` takes a File/URL/byte stream like a path.
 - Pins: clojure-spec `clojure-java-io-*`, `a-java-io-file-prints-as-the-host-object-*`,
   `java-io-files-are-made-renamed-and-deleted`, `extend-takes-a-map-computed-at-run-time`
   (all four backends, oracle-identical but the hash/`class` case); `ClojureJavaIoTest`
-  (directories, the empty-directory deviation, a deps.edn project's directory and jar
+  (directories, an empty directory deleted and a file dated on all four, a deps.edn project's directory and jar
   resources on all four backends, the non-file URL refusals);
   `ClojureInteropTest#aJavaIoFileCrossesTheJavaBoundaryAsTheHostFile`;
   `ClojureArmsTest#theIoFamilyIsMadeByClojureJavaIoAndFoldsTheArmsOfAProgramMakingNone`;
@@ -1918,6 +2123,35 @@ the file), `default-streams-impl` a map. Until then only `reader` resolved, as a
   `#aRedefinitionReadsTheRootItSupersedesAtMacroTime`,
   `ClojureProjectNamespacesTest#aRequiredNamespacesMacrosCallItsFunctions` (all four),
   `ClojureSessionTest#aMacroOfALaterBufferCallsWhatAnEarlierOneDefined`.
+- **`eval` and `resolve` run while the program lowers** (e87, 2026-10-09; the
+  `compile-if` of data.priority-map 1.2.0 and instaparse 1.5.0, `(if (eval test) then else)`
+  over `(resolve 'clojure.core/hash-unordered-coll)`). `eval` lowers to
+  `%clojure-eval`, `resolve` of anything but a quoted symbol to `%clojure-resolve`; in
+  `clojure.lisp` both refuse (`UnsupportedOperationException`), and `ClojureMacroTime`
+  redefines both in the macro-time evaluator as calls back into the lowering
+  (`ClojureMacroEvaluator.Lowering`, handed over by `setMacroEvaluator` at each pass and
+  session): the value decodes (`decodeDatum`) and lowers through
+  `ClojureLowering.lowerDetached` -- the current namespace, a clean `Cursor` (no local,
+  recur target, `try`, syntax-quote, dispatch fn or proxy method of the form being
+  expanded; `loadFile` starts from the same) -- then evaluates there, a lowering error
+  becoming an ordinary error the body may catch. So a helper `defn` a body calls evals
+  too, and a run-time `eval` compiles and refuses when it runs (it was `unknown name`).
+  `resolve` of a quoted symbol lowers in place (`ClojureVarLowering.resolved`): what
+  `#'name` lowers to (program var, core macro, core var with a value here), the class a
+  class name loads, else nil -- a core var the subset lacks (`hash-unordered-coll`,
+  `mix-collection-hash`), a record name (no class value here) and a lowering-built
+  namespace's var (`clojure.string/join`) included, so `compile-if` picks the branch that
+  lowers. Measured on clj 1.12.6: `*clojure-version*` reads `{:major 1 :minor 12 ...}`
+  at expansion time and `Class/forName` runs on the macro-time JVM, so both agree with the
+  oracle. Deviations: resolution in the lowering namespace (the oracle reads `*ns*` when
+  the call runs) and to a pre-scanned definition below the call site; the `used*` flags
+  an eval'd form sets stay set for the program; a `def` an eval'd form makes is the
+  macro-time environment's only (the program reads the var unbound; the oracle's process
+  keeps it). Pins: clojure-spec `a-macro-body-evaluates-a-form-while-it-expands`
+  (oracle-identical), `eval-and-resolve-of-a-computed-symbol-refuse-at-run-time` (four
+  backends), `ClojureLoweringTest#aMacroBodysEvalChoosesTheCodeThisFrontEndLowers`,
+  `#aMacroBodysEvalSeesNoLocalOfTheCallSite`, `#evalAndResolveRefuseWhatTheyCannotTake`,
+  `ClojureSessionTest#aMacroOfALaterBufferEvaluatesOverWhatAnEarlierOneDefined`.
 - **A program macro wins over every lowering row of its name from its definition on;
   above it the core meaning holds**, like the oracle's form-by-form compile. `lowerInner`
   tries the macro before any row, except for `isReservedHead` (the oracle's special forms
@@ -2513,6 +2747,11 @@ interfaces behind an arm family its row's store makes (`ClojureArms`, `COLLECTIO
   `compile-if` taken, `hasheq` as `(count this)`) it runs whole on the interpreter, the JVM and
   wasm. instaparse 1.5.0 now stops at `auto_flatten_seq.clj:13:15: unknown name: eval` (the
   same macro shape) and needs `hash`/`mix-collection-hash` past it.
+  2026-10-09, with `eval` at expansion time ("Macros"): data.priority-map 1.2.0 loads
+  verbatim (`hasheq` takes the `.hashCode` fallback) and `peek`/`pop`/`assoc`/`dissoc`/`seq`/
+  `rseq`/`=`/`into`/`subseq` print oracle-identical on all four backends; instaparse 1.5.0
+  stops at `auto_flatten_seq.clj:58:12: get-in takes a vector of keys, not |index|` (a
+  computed key path, e98).
 - Pins: clojure-spec `a-collection-type-conjs-empties-counts-and-compares-through-its-methods`,
   `a-map-type-assocs-dissocs-reads-and-prints-as-a-map`,
   `a-set-type-disjs-contains-and-prints-as-a-set`,
@@ -3075,7 +3314,8 @@ the oracle's `MapExpr`/`SetExpr`; measured on `clj` 1.12.6, 2026-10-08):
   forms are empty sequentials), like the oracle.
 - Pinned by clojure-spec `a-literal-refuses-keys-equal-once-evaluated` (oracle-identical)
   and `ClojureLoweringTest.aLiteralOfConstantKeysEqualOnceEvaluatedIsRefusedWhenLowered`.
-`eval`/`load-string` stay unknown names: no compiler runs at run time.
+`load-string` stays an unknown name and `eval` refuses at run time ("Macros"): no compiler
+runs at run time.
 
 **Oracle-checked 2026-10-08 (clj 1.12.6), shared by `read-string`/`read` and clojure.edn:**
 - Metadata attaches (`%clojure-rd-meta`, the oracle's MetaReader): a keyword `{k true}`, a
@@ -3870,6 +4110,20 @@ oracle's compiler exception does). `class` of `*e` needs the exception reader, w
 emits like a catching file's (`needsExceptionReader`). Pinned by
 `PlaygroundReplTest#aClojureSessionKeepsItsLastResultsAndItsLastExceptionInTheHistoryVars`,
 `ClojureSessionTest#anInputRecordsItsValueAndAnNsInputNil`.
+
+The REPL refers (2026-10-09): `ClojureSession` refers `clojure.main/repl-requires`' names into
+`user` (`ClojureLowering.referReplRequires`, the table `ClojureBuiltinNamespaces.REPL_REQUIRES`)
+and loads nothing; `lookupVar` of one, not shadowed by a local, loads its namespace like a
+startup namespace (`loadReplRefer` -> `preload`), and in a session a qualified name reaches a
+shipped REPL namespace the same way (`projectNamespaceOf`). Refused by name there: the
+`replLeftOut` vars and every var of `clojure.java.javadoc`/`clojure.repl.deps`
+(`LANGUAGE_NOT_SHIPPED`, also their `require`'s refusal). First use, not eager: measured
+2026-10-09 (interpreter, one JVM per case, first input `1`): cold 1.34-1.47 s, with
+`clojure.repl` + `clojure.pprint` required first 2.21-2.31 s; warm ~120-135 ms vs ~415-490 ms.
+A definition of the name replaces the refer silently (the oracle throws `already refers to`
+for a non-core refer; the file lowering does the same). Pinned by
+`ClojureSessionTest#userRefersWhatTheOraclesReplRequires*`, `#aReplRefer*`,
+`PlaygroundReplTest#aClojureSessionRefersWhatTheOraclesReplRequiresAndAFileNone`.
 
 The echo of a top-level `def`/`defn`/`defn-`/`defmacro`/`defmulti`/`defonce`/`defstruct` is the
 var it defined (`#'user/f`, `#'foo/x`; `ClojureLowering.echoingTopLevelsOf`, appended as the

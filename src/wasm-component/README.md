@@ -7,7 +7,7 @@ embeds when wrapping a rontolisp core module into a WASI 0.3 (Preview 3) compone
 In WASI 0.3 the `wasi:io` package is gone: byte I/O flows through the built-in
 component-model `stream<u8>` / `future<T>` types and the async canonical ABI. rontolisp
 keeps its Preview 1 core module unchanged and an **adapter** core module implements the
-twelve `wasi_snapshot_preview1` functions over WASI 0.3, driving the `stream.*` / `future.*`
+`wasi_snapshot_preview1` functions it imports (`WasmComponentBuilder.PREVIEW1_FUNCS`) over WASI 0.3, driving the `stream.*` / `future.*`
 canon built-ins. The component's `wasi:cli/run@0.3.0` export (an `async func`) is lifted as
 an async-typed export, and the adapters call the ASYNC (non-blocking) stream/future
 built-ins, parking on a blocking `waitable-set.wait` when one reports BLOCKED -- all of
@@ -107,7 +107,9 @@ import wasi:clocks/system-clock@0.3.0; // now -> instant{seconds s64, nanosecond
 import wasi:clocks/monotonic-clock@0.3.0; // now -> u64; wait-for (async, rontolisp:wait-for's host timer)
                                           // (pulls in wasi:clocks/types for `duration`, dependency-hoisted)
 import wasi:filesystem/types@0.3.0;    // descriptor.open-at / read-via-stream / append-via-stream
-                                       // / read-directory / stat
+                                       // / write-via-stream / read-directory / stat / stat-at
+                                       // / create-directory-at / unlink-file-at
+                                       // / remove-directory-at / rename-at
 import wasi:filesystem/preopens@0.3.0; // get-directories
 import wasi:random/random@0.3.0;       // get-random-u64
 import wasi:cli/stderr@0.3.0;          // write-via-stream (fd 2, for warn); appended last

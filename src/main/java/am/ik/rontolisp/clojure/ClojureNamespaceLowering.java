@@ -477,7 +477,8 @@ final class ClojureNamespaceLowering {
 			if (ClojureBuiltinNamespaces.isLanguage(ns) && !ClojureBuiltinNamespaces.isShipped(ns)) {
 				// the language's own libraries are lowerings or built-in files, never
 				// project files; a contrib clojure.* library is found like any other
-				throw new LispReadException("unknown namespace: " + ns);
+				String why = ClojureBuiltinNamespaces.languageNotShipped(ns);
+				throw new LispReadException(why != null ? why : "unknown namespace: " + ns);
 			}
 			// a dependency edge for :reload-all: the file being lowered owns it
 			// (the innermost file on the loading stack), or the entry program's
@@ -512,7 +513,12 @@ final class ClojureNamespaceLowering {
 			}
 		}
 		else if (all) {
-			for (String var : library ? varsOf(ns) : publicVarsOf(ctx, ns)) {
+			List<String> vars = new ArrayList<>(library ? varsOf(ns) : publicVarsOf(ctx, ns));
+			if (!library && ctx.builtinNamespaces.contains(ns)) {
+				// a part's vars too, which load where a name first reaches one
+				vars.addAll(ClojureBuiltinNamespaces.partVars(ns));
+			}
+			for (String var : vars) {
 				if (!exclude.contains(var)) {
 					ctx.ns().refers.put(rename.getOrDefault(var, var), new ClojureLowering.VarRef(ns, var));
 				}
@@ -527,6 +533,7 @@ final class ClojureNamespaceLowering {
 	 */
 	static void checkReferable(ClojureLowering ctx, String ns, String var, boolean library) {
 		refuseLeftOut(ctx, ns, var);
+		ctx.loadPartOf(ns, var);
 		if (library) {
 			if (!isKnownVar(ns, var)) {
 				throw new LispReadException("unknown name: " + ns + "/" + var);
@@ -607,6 +614,10 @@ final class ClojureNamespaceLowering {
 					+ ctx.sourcePath.describeRoots());
 		}
 		if (found.builtin()) {
+			String hostOnly = ctx.hostTarget ? null : ClojureBuiltinNamespaces.hostOnly(ns);
+			if (hostOnly != null) {
+				throw new LispReadException(hostOnly);
+			}
 			ctx.builtinNamespaces.add(ns);
 		}
 		ctx.loadFile(ns, found);

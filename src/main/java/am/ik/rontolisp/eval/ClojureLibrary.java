@@ -34,6 +34,9 @@ import org.jspecify.annotations.Nullable;
  * <li>the interpreter evaluates {@link #forms()} into the global environment the first
  * time one of the {@code rontolisp::%clojure-} functions is resolved
  * ({@code LispEvaluator#resolveFunction});</li>
+ * <li>the interpreter running a whole program (the command line's run) evaluates
+ * {@link #splice}'s library ahead of the program instead
+ * ({@code LispEvaluator#clojureProgram});</li>
  * <li>the compile path calls {@link #process(List)} inside
  * {@code CompileFrontend.expand}: a program that references one of the functions -- only
  * a lowered Clojure program does -- gets the definitions prepended, and
@@ -45,8 +48,9 @@ import org.jspecify.annotations.Nullable;
  * forms and of the library stripped first ({@link ClojureArms}), so it is spliced and
  * compiled exactly as before sorted collections existed; likewise the unbound-root arms
  * of a program that makes no unbound var, and the stream binding-depth counters of one
- * that reads none. The interpreter keeps them: its library loads once for whatever the
- * session reads next.
+ * that reads none. The interpreter running a whole program takes the same strip
+ * ({@link #splice}); the library it loads on first use keeps every arm, for whatever a
+ * session or a {@code load} reads next.
  */
 public final class ClojureLibrary {
 
@@ -154,8 +158,30 @@ public final class ClojureLibrary {
 	 * @return the program with the library spliced in when used
 	 */
 	public static List<LispVal> process(List<LispVal> program, boolean hostTarget) {
+		Splice splice = splice(program, hostTarget);
+		if (splice.library().isEmpty()) {
+			return splice.program();
+		}
+		List<LispVal> out = new ArrayList<>(splice.library());
+		out.addAll(splice.program());
+		return out;
+	}
+
+	/**
+	 * {@link #process(List, boolean)} with its two halves apart: the library a WHOLE
+	 * program splices, stripped of every family the program makes no value of, and the
+	 * program with the same arms stripped. The interpreter runs a whole program this way
+	 * ({@code LispEvaluator#clojureProgram}), evaluating the library ahead of the
+	 * program, so a family's tests cost it nothing where no value of the family can
+	 * exist.
+	 * @param program the top-level forms of the whole program
+	 * @param hostTarget whether the target is one where the host is (the JVM, the
+	 * interpreter)
+	 * @return the library (empty when the program names none of it) and the program
+	 */
+	public static Splice splice(List<LispVal> program, boolean hostTarget) {
 		if (!referencesAny(program)) {
-			return program;
+			return new Splice(List.of(), program);
 		}
 		// an arm names the library too, so the reference is asked again once they go
 		List<LispVal> body = program;
@@ -170,11 +196,19 @@ public final class ClojureLibrary {
 			}
 		}
 		if (body != program && !referencesAny(body)) {
-			return body;
+			return new Splice(List.of(), body);
 		}
-		List<LispVal> out = new ArrayList<>(library(usesJava(body), made));
-		out.addAll(body);
-		return out;
+		return new Splice(library(usesJava(body), made), body);
+	}
+
+	/**
+	 * A whole program's library and the program itself, each with the arms of the
+	 * families the program makes no value of stripped.
+	 *
+	 * @param library the library definitions, empty when the program names none
+	 * @param program the program's own forms
+	 */
+	public record Splice(List<LispVal> library, List<LispVal> program) {
 	}
 
 	private static boolean referencesAny(List<LispVal> program) {

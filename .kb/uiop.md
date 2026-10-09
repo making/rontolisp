@@ -204,8 +204,7 @@ Lisp over the two primitives every backend already carries: `probe-file*`/`truen
 exactly like a file that is not there), `directory*` over `directory` (upstream's
 per-implementation symlink keys accepted and dropped), `filter-logical-directory-results`
 the passthrough it is where `logical-pathname-p` is nil, `safe-file-write-date` over
-`file-write-date` with the missing-file `file-error` swallowed (nil on both WASM backends,
-where the date itself is nil). `parse-native-namestring` is `parse-unix-namestring` plus
+`file-write-date` with the missing-file `file-error` swallowed. `parse-native-namestring` is `parse-unix-namestring` plus
 the `ensure-pathname` constraints (`os-unix-p` is t outright, so native IS Unix and the
 separator `#\:`); the `getenv-*` family reads `uiop/os:getenvp` through it. **The write
 side is option 2 of `.todo/358`, landed by `.todo/257`**:
@@ -215,11 +214,10 @@ already bottoms out in (`%make-directories` via `ensure-directories-exist`, `%re
 via `rename-file`, `%delete-file` via `delete-file`), real on all four backends -- the
 ci-spec `filesystem-write-create-rename-delete-and-probe` case and
 `WasmLispCompilerIntegrationTest#uiopFilesystemProbeReadsAndMutations` pin both WASM
-legs. **One deliberate remainder: removing a DIRECTORY still signals on WASM** --
-preview1's `path_unlink_file` cannot remove directories (that needs the
-`path_remove_directory` import, out of `.todo/257`'s scope), so
-`delete-empty-directory` over an actual directory, and `delete-directory-tree` past its
-file deletions, answer the honest `file-error` rather than a silent no-op.
+legs. `delete-empty-directory` (and `delete-directory-tree` through it) removes an empty
+directory on all four since 2026-10-09: `%delete-file` falls back to the injected
+`path_remove_directory` on WASM (`.kb/read-load-streams.md`); a non-empty one signals the
+`file-error`.
 `delete-directory-tree` takes the portable recursive walk only (no `run-program`
 branch -- there is no backend that spawns one); an explicit `:validate nil` fails the
 first check rather than the second, both the same `parameter-error`. **Symlinks are the
