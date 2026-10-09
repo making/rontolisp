@@ -15,3 +15,10 @@ guide](../../guides/java-interop.md).
 
 The static constant `Integer.MAX_VALUE` is read and marshalled to a rontolisp
 integer.
+
+Ending the form in `:java-false`, after the field name, answers Java's false as `|false|`
+rather than `nil` (the guide's [Java's false back](../../guides/java-interop.md#javas-false-back-java-false)):
+
+```lisp
+(java:field "java.lang.Boolean" "FALSE" :java-false)   ; => |false|
+```

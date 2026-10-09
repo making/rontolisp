@@ -421,6 +421,133 @@ public final class JavaInteropPrograms {
 			No matching method java.util.Objects.toString with 1 argument(s)""";
 
 	/**
+	 * Calls ending in {@code :java-false}: Java's {@code false} comes back as
+	 * {@code |false|} -- an {@code Object} answer holding {@code Boolean.FALSE}, a
+	 * {@code boolean} one, an {@code Object[]} and a {@code boolean[]} answer's elements,
+	 * a static field -- at a resolved site (a typed receiver, a literal class), a
+	 * dispatched one ({@code eq2}'s unknown arguments) and one left to run time (an
+	 * unknown receiver, the class in a variable: the compiled program's bridge); the
+	 * unmarked calls beside them answer {@code nil}. Such a boolean answer is {@code t}
+	 * or {@code |false|} to the site taking it, which resolves on both. Prints
+	 * {@link #JAVA_FALSE_OUTPUT}.
+	 */
+	public static final String JAVA_FALSE_PROGRAM = """
+			(defvar *objects* "java.util.Objects")
+			(defvar *boolean* "java.lang.Boolean")
+			(defvar *array* "java.lang.reflect.Array")
+			(defun row (thunk)
+			  (handler-case (prin1 (funcall thunk)) (error (e) (princ e)))
+			  (terpri))
+			(defun get0 (l) (java:call l "get" 0 :java-false))
+			(defun typed-get0 (l)
+			  (declare (type (java:object "java.util.List") l))
+			  (java:call l "get" 0 :java-false))
+			(defun empty-p (l)
+			  (declare (type (java:object "java.util.List") l))
+			  (java:call l "isEmpty" :java-false))
+			(defun eq* (a b) (java:static *objects* "equals" a b :java-false))
+			(defun eq2 (a b) (java:static "java.util.Objects" "equals" a b :java-false))
+			(let ((l (java:new "java.util.ArrayList")))
+			  (java:call l "add" '|false|)
+			  (java:call l "add" t)
+			  (java:call l "add" nil)
+			  (row (lambda () (list (java:call l "get" 0 :java-false) (typed-get0 l) (get0 l) (java:call l "get" 0))))
+			  (row (lambda () (list (java:call l "toArray" :java-false) (java:call l "toArray"))))
+			  (row (lambda () (list (empty-p l) (empty-p (java:new "java.util.ArrayList")) (java:call l "isEmpty"))))
+			  (row (lambda () (list (eq* 1 2) (eq2 1 2) (eq2 1 1) (java:static "java.util.Objects" "equals" 1 2))))
+			  (row (lambda () (java:static "java.lang.Boolean" "toString" (java:call l "isEmpty" :java-false)))))
+			(row (lambda () (list (java:static "java.lang.reflect.Array" "newInstance" (java:field "java.lang.Boolean" "TYPE") 2
+			                        :java-false)
+			                      (java:static *array* "newInstance" (java:field "java.lang.Boolean" "TYPE") 1 :java-false)
+			                      (java:static "java.lang.reflect.Array" "newInstance" (java:field "java.lang.Boolean" "TYPE") 1))))
+			(row (lambda () (list (java:field "java.lang.Boolean" "FALSE" :java-false) (java:field *boolean* "FALSE" :java-false)
+			                      (java:field "java.lang.Boolean" "FALSE") (java:field *boolean* "TRUE" :java-false))))
+			(row (lambda () (list (java:static "java.lang.Boolean" "valueOf" "no" :java-false)
+			                      (java:static *boolean* "parseBoolean" "no" :java-false)
+			                      (java:static "java.lang.Boolean" "valueOf" "no"))))
+			""";
+
+	/** What {@link #JAVA_FALSE_PROGRAM} prints. */
+	public static final String JAVA_FALSE_OUTPUT = """
+			(|false| |false| |false| NIL)
+			((|false| T NIL) (NIL T NIL))
+			(|false| T NIL)
+			(|false| |false| T NIL)
+			"false"
+			((|false| |false|) (|false|) (NIL))
+			(|false| |false| NIL T)
+			(|false| |false| NIL)""";
+
+	/**
+	 * {@code java:handle}: Java sees a handle as its text -- a {@code toString}, equal,
+	 * hashing and ordering by it in a {@code HashMap} and a {@code TreeSet} -- and hands
+	 * it back as the value it stands for at a resolved site (a typed receiver, a
+	 * {@code java:new} local), a dispatched one ({@code either}'s unknown arguments), one
+	 * left to run time (an unknown receiver, the class in a variable: the compiled
+	 * program's bridge), an array's elements and a callback's argument. A given hash is
+	 * its {@code hashCode} (a {@code HashSet}'s order; a bignum's low 32 bits), a given
+	 * order text what it sorts by; a text or order that is no string and a hash that is
+	 * no integer are refused. Prints {@link #JAVA_HANDLE_OUTPUT}.
+	 */
+	public static final String JAVA_HANDLE_PROGRAM = """
+			(defvar *objects* "java.util.Objects")
+			(defun row (thunk)
+			  (handler-case (prin1 (funcall thunk)) (error (e) (princ e)))
+			  (terpri))
+			(defun get0 (l) (java:call l "get" 0))
+			(defun typed-get0 (l)
+			  (declare (type (java:object "java.util.List") l))
+			  (java:call l "get" 0))
+			(defun either (a b) (java:static "java.util.Objects" "requireNonNullElse" a b))
+			(let ((a (java:handle 'apple "apple"))
+			      (b (java:handle '(b) "banana"))
+			      (l (java:new "java.util.ArrayList"))
+			      (m (java:new "java.util.HashMap"))
+			      (s (java:new "java.util.TreeSet")))
+			  (java:call l "add" b)
+			  (java:call l "add" a)
+			  (java:call m "put" a 1)
+			  (java:call s "add" b)
+			  (java:call s "add" a)
+			  (row (lambda () (list (java:call l "toString") (java:static "java.util.Objects" "toString" a)
+			                        (java:static *objects* "toString" b))))
+			  (row (lambda () (list (java:call m "containsKey" (java:handle 'other "apple"))
+			                        (java:call m "containsKey" (java:handle 'apple "pear"))
+			                        (java:call m "get" (java:handle nil "apple")))))
+			  (row (lambda () (list (java:call s "toString") (java:call s "first"))))
+			  (row (lambda () (list (typed-get0 l) (get0 l) (java:call l "get" 1) (java:static *objects* "requireNonNull" a)
+			                        (either nil b) (eq (java:call l "get" 1) 'apple))))
+			  (row (lambda () (java:call s "toArray")))
+			  (row (lambda () (let ((seen nil)) (java:call l "forEach" (lambda (x) (push x seen)) :functional) seen))))
+			(row (lambda () (let ((h (java:new "java.util.HashSet")))
+			                  (java:call h "add" (java:handle 'x "x" 3))
+			                  (java:call h "add" (java:handle 'y "y" (+ (expt 2 40) 1)))
+			                  (java:call h "add" (java:handle 'z "z" 2))
+			                  (list (java:call h "toString") (java:call (java:handle 'q "q" (expt 2 32)) "hashCode")))))
+			(row (lambda () (let ((s (java:new "java.util.TreeSet")))
+			                  (java:call s "add" (java:handle 'a "a" 0 "2"))
+			                  (java:call s "add" (java:handle 'b "b" 0 "1"))
+			                  (java:call s "toString"))))
+			(row (lambda () (java:handle 1 2)))
+			(row (lambda () (java:handle 1 "t" 1.5)))
+			(row (lambda () (java:handle 1 "t" 0 'x)))
+			""";
+
+	/** What {@link #JAVA_HANDLE_PROGRAM} prints. */
+	public static final String JAVA_HANDLE_OUTPUT = """
+			("[banana, apple]" "apple" "banana")
+			(T NIL 1)
+			("[apple, banana]" APPLE)
+			((B) (B) APPLE APPLE (B) T)
+			(APPLE (B))
+			(APPLE (B))
+			("[y, z, x]" 0)
+			"[b, a]"
+			java:handle expects (java:handle value "text" [hash ["order"]]), got 2
+			java:handle expects (java:handle value "text" [hash ["order"]]), got 1.5
+			java:handle expects (java:handle value "text" [hash ["order"]]), got X""";
+
+	/**
 	 * Specialized vectors and bignums as arguments, at a dispatched site ({@code ts},
 	 * {@code val}), at a site left to run time (the class name in a variable: the
 	 * compiled program's bridge) and at resolved ones: every rank-1 packed float and

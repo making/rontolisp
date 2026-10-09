@@ -461,7 +461,9 @@ Each refusal names the missing design, never `unknown name`:
 | end-less `range` | `infinite range is not supported: range needs an end` | an infinite seq cannot be spelled strictly -- spell it with `iterate` |
 | `transient`, `persistent!`, `assoc!`, `dissoc!`, `conj!`, `disj!` | `transients are not supported yet: ...` | no transient runtime behind the tables |
 | `definterface`, `gen-class`, `gen-interface` | `protocols are not supported yet: ...` | no interface generation on any backend |
-| a `reify`/`deftype`/`defrecord` body naming an interface other than the core functions' ([reify](reference/reify.md#host-interfaces)) | `... is not supported yet as an interface of ...` | the collection interfaces (`ISeq`, `IPersistentMap` ...) and the host ones have no consulting functions yet |
+| a `reify`/`deftype`/`defrecord` body naming an interface other than the core functions' ([reify](reference/reify.md#host-interfaces)) | `... is not supported yet as an interface of ...` | the other interfaces (`IChunkedSeq`, `java.util.Deque` ...) have no consulting functions yet |
+| a `defrecord` body defining a method of the record's own interfaces the record leaves to the interface (`assocEx`, a `java.util.Map` default) | `... is not supported yet as a method of defrecord` | the record's own verbs answer those interfaces, so no row holds the method |
+| an instance call of a `java.util` default method the body left out | `the default method ... is not supported yet` | the default's body is Java, which no backend runs |
 | `set!` of a core var that is no special (`inc`), of a host field | `set! of a var is not supported yet: ...`, `set! of a host field is not supported yet: ...` | no var to assign; the `java:` surface has no field write |
 | `future`, `delay`/`force`, `promise`/`deliver` | by name | no thread pool, lazy memo cells or blocking rendezvous on any backend |
 | `proxy-super` outside a proxy method | `proxy-super outside a proxy method` | a `proxy-super` calls the superclass implementation on the method's `this` |

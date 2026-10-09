@@ -201,6 +201,7 @@ final class ClojureIoLowering {
 	 * (method recv args...) call)} where the values here have the method at that count;
 	 * any other member is the host object's ({@code java:call} of the receiver's host
 	 * object, on the backends that have one).
+	 * @param ctx the hub
 	 * @param method the method name
 	 * @param designator the method as {@code java:call} names it (its parameter types
 	 * when tagged)
@@ -209,7 +210,8 @@ final class ClojureIoLowering {
 	 * @param call the call for any other receiver
 	 * @return the call with the arm
 	 */
-	static LispVal methodArm(String method, String designator, LispSymbol recv, List<LispVal> args, LispVal call) {
+	static LispVal methodArm(ClojureLowering ctx, String method, String designator, LispSymbol recv, List<LispVal> args,
+			LispVal call) {
 		Map<Integer, String> arities = METHODS.get(method);
 		String kernel = arities == null ? null : arities.get(args.size());
 		LispVal io;
@@ -226,7 +228,7 @@ final class ClojureIoLowering {
 			host.add(recv);
 			host.add(LispString.literal(designator));
 			host.addAll(args);
-			io = ClojureInteropLowering.hostCall(ClojureInteropLowering.JAVA_CALL, host, 2);
+			io = ClojureInteropLowering.hostCall(ctx, ClojureInteropLowering.JAVA_CALL, host, 2);
 		}
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), ClojureLowerUtil.list(new LispSymbol(IO_P), recv), io,
 				call);

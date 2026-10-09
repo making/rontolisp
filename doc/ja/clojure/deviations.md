@@ -258,10 +258,13 @@
   `ArityException` をシグナルします（オラクルは `AbstractMethodError`）。
 - `reify`・`deftype`・`defrecord` の本体が実装できるのは、コア関数が参照する `clojure.lang`
   のインタフェース（`IReduceInit`、`IReduce`、`IKVReduce`、`Seqable`、`Counted`、`Indexed`、
-  `ILookup`、`IFn`（`Callable` と `Runnable` を含む）、`IDeref`、`IMeta`、`IObj`）と `Object` の
-  メソッドの上書きです（[reify](reference/reify.md#host-interfaces)）。それ以外のインタフェース
-  （`ISeq`、`IPersistentMap`、`Sequential`、`java.util.List` など）は名前を挙げて拒否されます。
-  型の `equals` と `hashCode` は `=` と `.hashCode` に答えますが、マップのキーやセットの要素の
+  `ILookup`、`IFn`（`Callable` と `Runnable` を含む）、`IDeref`、`IMeta`、`IObj`）、コレクションの
+  インタフェース（`IPersistentMap`、`ISeq`、`Sequential`、`Iterable`、`java.util.List` など）、
+  `Object` のメソッドの上書きです（[reify](reference/reify.md#host-interfaces)）。それ以外の
+  インタフェース（`IChunkedSeq`、`java.util.Deque` など）は名前を挙げて拒否されます。`ISeq` 型への
+  `first`・`next`・`rest` はその `seq` を通して読み、関数がメソッドを呼ぶ回数はオラクルと異なる
+  ことがあり、コレクションの型の `str` は中身を綴ります
+  （[コレクションのインタフェース](reference/reify.md#collection-interfaces)）。型の `equals` と `hashCode` は `=` と `.hashCode` に答えますが、マップのキーやセットの要素の
   比較には使われず、そうした値は同一性で保持されます。`Seqable` だけを実装した型について、
   `sort` と `distinct` はその seq を通して答えます。オラクルはどちらも拒否します。
 - `clojure.core.reducers` は呼び出したスレッドの上で部分を順に1つずつ fold します。空でない
@@ -382,27 +385,20 @@
   です（再束縛は標準ストリームの再束縛になります）。ルートで読んだ `*out*` と `*in*` は
   プロセスの標準ストリームを指すストリーム値です。
   `defonce` はリロードでルートを保ちます（`def` はリセットします）。
-- ホストオブジェクトの boolean は、lowering 時に receiver のクラスがわかり
-  （構築リテラル、それを束縛した `let`/`if-let`/`when-let` ローカル、または
-  `..` ステップの宣言戻り値型）、その引数個数の
-  オーバーロードがすべてプリミティブ boolean を答える場合と、receiver が文字列・数値・
-  文字で、そのクラスのその引数個数のオーバーロードがすべてプリミティブ boolean を答える
-  場合（`(.matches "abc" "x")`）と、receiver がインタフェース 1 つかクラス 1 つだけの
-  `proxy` の場合だけ `false` を答えます。
-  それ以外のホスト boolean は共有の `java:` unmarshal のままとなり、`false` は
-  `nil` と表示されます。ホストコレクションから読み戻した `Boolean.FALSE` も同じです
-  （`false` を入れたリストの `(vec l)` は `[nil]` を答えます）。
 - Java のインタフェースが期待される位置に渡した fn は、どのインタフェースでもその抽象
   メソッドすべてを実装し、それぞれメソッドの引数で呼ばれます。オラクルが fn を変換する
   のは `@FunctionalInterface` 注釈付きのインタフェースだけです（`PropertyChangeListener`
-  はオラクルでは `ClassCastException` になります）。fn の値は引数と同じ規則で Java へ
-  戻ります。Java に渡した `Comparator` の fn は数値を答えます（オラクルは `true`/`false`
-  も受け付けます。fn 自身への `(.compare f a b)` はここでも受け付けます）。
-- Java に渡したマップは、そのエントリを持つ新しい `java.util.LinkedHashMap` になり、
-  各キーと値は引数と同じく変換されます（ベクタは `List`、マップは `Map`）。オラクルは
-  マップそのものを渡すため、コピーの `str` は入れ子のコレクションを Java の形で綴ります
-  （`{a=[1, 2]}`。オラクルは `{a=[1 2]}`）。セット・キーワード・record には Java の値が
-  ないため、それを取るメンバ（キーワードをキーにしたマップも）は一致しません。
+  はオラクルでは `ClassCastException` になります）。`nil` や数値でない値を答える
+  `Comparator` の fn は名前を挙げて拒否されます（オラクルは `NullPointerException` か
+  `ClassCastException` を投げます）。
+- Java に渡したマップ・セット・record・ソート済みコレクション・遅延シーケンスは、新しい
+  Java のコピーになります（セットとソート済みセットは `java.util.LinkedHashSet`、マップと
+  record とソート済みマップは `java.util.LinkedHashMap`、遅延シーケンスはベクタやリストと
+  同じく `List`）。各要素は引数と同じく変換されます。オラクルはコレクションそのものを渡す
+  ため、コピーやそれを入れた Java コレクションの `str` は Java の形で綴ります（`[1, 2]`。
+  オラクルは `#{1 2}`。`{a=[1, 2]}`。オラクルは `{a=[1 2]}`）。Java のソート済み
+  コレクションはキーワードをシンボルより前に並べます（オラクルは両者の比較を拒否します）。
+  分数とアトムには Java の値がないため、それを取るメンバは一致しません。
 - 整数の receiver は `Integer` に収まれば `Integer`、収まらなければ `Long` として
   呼ばれます（オラクルでは常に `Long` です）。`(.getClass 1)` は
   `java.lang.Integer` を答えます。

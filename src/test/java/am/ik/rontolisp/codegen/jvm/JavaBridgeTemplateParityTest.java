@@ -177,6 +177,29 @@ class JavaBridgeTemplateParityTest {
 		assertThat(checked).isGreaterThan(44);
 	}
 
+	// A function costs less for a functional interface than for another one, in both
+	// copies of the cost table: TreeSet(Comparator) over TreeSet(Collection), as a Java
+	// lambda and the oracle's fn choose.
+	@Test
+	void aFunctionCostsLessForAFunctionalInterface() throws Exception {
+		for (Class<?> target : List.of(java.util.Comparator.class, Runnable.class, java.util.function.Function.class,
+				Iterable.class, java.util.Collection.class, java.util.SortedSet.class,
+				java.awt.event.MouseListener.class, java.io.Serializable.class, Object.class)) {
+			int shared = JavaOverloads.kindCost(JavaKind.Lisp.FUNCTION, ReflectiveJavaClasses.of(target),
+					ReflectiveJavaClasses.instance());
+			assertThat(invoke("kindCost", new Class<?>[] { Object.class, Class.class }, "function", target))
+				.as(target.getName())
+				.isEqualTo(shared);
+		}
+		assertThat(JavaOverloads.kindCost(JavaKind.Lisp.FUNCTION, ReflectiveJavaClasses.of(java.util.Comparator.class),
+				ReflectiveJavaClasses.instance()))
+			.isEqualTo(JavaOverloads.COST_PROXY);
+		assertThat(JavaOverloads.kindCost(JavaKind.Lisp.FUNCTION, ReflectiveJavaClasses.of(java.util.Collection.class),
+				ReflectiveJavaClasses.instance()))
+			.isEqualTo(JavaOverloads.COST_PROXY_NOT_FUNCTIONAL);
+		assertThat(constant("COST_PROXY_NOT_FUNCTIONAL")).isEqualTo(JavaOverloads.COST_PROXY_NOT_FUNCTIONAL);
+	}
+
 	// A non-public receiver class whose method is declared on a non-public superclass
 	// (HashMap's entry iterator, hasNext on HashMap$HashIterator) is called through the
 	// receiver's own interface (Iterator.hasNext) in both copies.
@@ -544,13 +567,157 @@ class JavaBridgeTemplateParityTest {
 		return method;
 	}
 
+	// A Java value comes back the same whichever copy reads it: the bridge's unmarshal
+	// and
+	// the _junm a direct site calls, and at a call ending in :java-false the bridge's
+	// unmarshal of Java's false as |false| and _junf -- an array's elements, a nested
+	// array's, a boolean[]'s alike. A Comparator's answer is read alike by the bridge's
+	// comparison and _jcmp (the false arm, which calls the function again, is pinned by
+	// JavaImplementationPrograms.JAVA_FALSE on both paths).
+	@Test
+	void theBridgeAndADirectSiteAnswerJavasFalseAlike(@TempDir Path dir) throws Exception {
+		JvmLispCompiler compiler = new JvmLispCompiler("FalseTest");
+		byte[] bytes = compiler.compile(LispReader.readAllFromString("""
+				(defun get0 (l)
+				  (declare (type (java:object "java.util.List") l))
+				  (list (java:call l "get" 0) (java:call l "get" 0 :java-false)))
+				(let ((l (java:new "java.util.ArrayList")))
+				  (java:call l "add" 1)
+				  (java:static "java.util.Collections" "sort" l (lambda (a b) t) :functional :java-false)
+				  (print (get0 l)))
+				"""));
+		Files.write(dir.resolve("FalseTest.class"), bytes);
+		for (Map.Entry<String, byte[]> file : compiler.runtimeClassFiles().entrySet()) {
+			Path target = dir.resolve(file.getKey());
+			Files.createDirectories(target.getParent());
+			Files.write(target, file.getValue());
+		}
+		List<@Nullable Object> values = Arrays.asList(null, Boolean.TRUE, Boolean.FALSE, 5, "x", 'c',
+				new Object[] { Boolean.FALSE, Boolean.TRUE, null }, new boolean[] { false, true },
+				new Object[] { new boolean[] { false }, new Object[] { Boolean.FALSE } }, new StringBuilder("host"));
+		List<@Nullable Object> answers = Arrays.asList("T", 5L, -3L, 4294967297L, 1.5, -2.7, Double.NaN, 1e20,
+				BigInteger.TWO.pow(40).add(BigInteger.ONE), BigInteger.TWO.pow(40).negate(),
+				new BigInteger[] { new BigInteger("499999999999999999"), new BigInteger("100000000000000000") },
+				new BigInteger[] { BigInteger.valueOf(-7), BigInteger.TWO }, "\"x\"", "FOO", null);
+		try (URLClassLoader loader = new URLClassLoader(new URL[] { dir.toUri().toURL() },
+				ClassLoader.getSystemClassLoader())) {
+			Class<?> program = loader.loadClass("FalseTest");
+			Method junm = declared(program, JvmJavaDirectSites.UNMARSHAL, Object.class);
+			Method junf = declared(program, JvmJavaDirectSites.UNMARSHAL_FALSE, Object.class);
+			Method jcmp = declared(program, JvmJavaDirectSites.COMPARISON, Object.class, Object.class, Object.class);
+			for (Object value : values) {
+				String direct = Arrays.deepToString(new Object[] { junm.invoke(null, value) });
+				String directFalse = Arrays.deepToString(new Object[] { junf.invoke(null, value) });
+				assertThat(Arrays.deepToString(new Object[] {
+						invoke("unmarshal", new Class<?>[] { Object.class, boolean.class }, value, false) }))
+					.as("bridge %s", value)
+					.isEqualTo(direct);
+				assertThat(Arrays.deepToString(new Object[] {
+						invoke("unmarshal", new Class<?>[] { Object.class, boolean.class }, value, true) }))
+					.as("bridge :java-false %s", value)
+					.isEqualTo(directFalse);
+			}
+			assertThat(junf.invoke(null, Boolean.FALSE)).isEqualTo(LispNames.JAVA_FALSE);
+			assertThat(junm.invoke(null, Boolean.FALSE)).isNull();
+			List<@Nullable Object> direct = new ArrayList<>();
+			List<@Nullable Object> bridge = new ArrayList<>();
+			for (Object answer : answers) {
+				direct.add(jcmp.invoke(null, null, null, answer));
+				bridge.add(invoke("comparison", new Class<?>[] { Object.class, Object[].class, Object.class }, null,
+						new Object[] { 1L, new Object[] { 2L, null } }, answer));
+			}
+			assertThat(bridge).isEqualTo(direct);
+			// the oracle's AFunction.compare: Long/BigInt.intValue (low bits), (int) of a
+			// double, a ratio's DECIMAL64 quotient truncated
+			assertThat(direct).containsExactly(-1, 5, -3, 1, 1, -2, 0, Integer.MAX_VALUE, 1, 0, 5, -3, null, null,
+					null);
+		}
+	}
+
+	// A java:handle comes back as the value it stands for whichever copy reads it: the
+	// bridge's unmarshal, through the program's generated handle class it binds, and the
+	// _junm / _junf a direct site calls -- by itself and as an array's element.
+	@Test
+	void theBridgeAndADirectSiteAnswerAHandlesValueAlike(@TempDir Path dir) throws Exception {
+		JvmLispCompiler compiler = new JvmLispCompiler("HandleTest");
+		byte[] bytes = compiler.compile(LispReader.readAllFromString("""
+				(defun get0 (l)
+				  (declare (type (java:object "java.util.List") l))
+				  (list (java:call l "get" 0) (java:call l "get" 0 :java-false)))
+				(let ((l (java:new "java.util.ArrayList")))
+				  (java:call l "add" (java:handle 'apple "apple"))
+				  (java:call l "forEach" (lambda (x) (print x)) :functional)
+				  (print (get0 l)))
+				"""));
+		Files.write(dir.resolve("HandleTest.class"), bytes);
+		for (Map.Entry<String, byte[]> file : compiler.runtimeClassFiles().entrySet()) {
+			Path target = dir.resolve(file.getKey());
+			Files.createDirectories(target.getParent());
+			Files.write(target, file.getValue());
+		}
+		try (URLClassLoader loader = new URLClassLoader(new URL[] { dir.toUri().toURL() },
+				ClassLoader.getSystemClassLoader())) {
+			Class<?> program = loader.loadClass("HandleTest");
+			Method junm = declared(program, JvmJavaDirectSites.UNMARSHAL, Object.class);
+			Method junf = declared(program, JvmJavaDirectSites.UNMARSHAL_FALSE, Object.class);
+			Method handle = declared(program, JvmJavaDirectSites.HANDLE, Object.class, Object.class, Object.class,
+					Object.class, int.class);
+			Object apple = handle.invoke(null, "APPLE", "\"apple\"", null, null, 2);
+			Object pair = handle.invoke(null, new Object[] { 1L, null }, "\"(1)\"", 7L, "\"b\"", 4);
+			Object other = handle.invoke(null, "X", "\"(2)\"", BigInteger.TWO.pow(40).add(BigInteger.valueOf(9)),
+					"\"c\"", 4);
+			// the generated class is eval.JavaHandle's shape: the text its toString and
+			// equality, the hash's low 32 bits its hashCode (the text's by default), the
+			// order text (the text by default) its compareTo
+			assertThat(apple).hasToString("apple");
+			assertThat(List.of(apple.hashCode(), pair.hashCode(), other.hashCode())).containsExactly("apple".hashCode(),
+					7, 9);
+			assertThat(pair).isNotEqualTo(other).isEqualTo(handle.invoke(null, "Y", "\"(1)\"", 7L, null, 3));
+			@SuppressWarnings("unchecked")
+			Comparable<Object> ordered = (Comparable<Object>) pair;
+			assertThat(ordered.compareTo(other)).isNegative();
+			assertThat(ordered.compareTo(apple)).isPositive();
+			invoke("bind", new Class<?>[] { Class.class }, program);
+			try {
+				for (Object value : Arrays.asList(apple, pair, new Object[] { apple, Boolean.FALSE, pair })) {
+					String direct = Arrays.deepToString(new Object[] { junm.invoke(null, value) });
+					String directFalse = Arrays.deepToString(new Object[] { junf.invoke(null, value) });
+					assertThat(Arrays.deepToString(new Object[] {
+							invoke("unmarshal", new Class<?>[] { Object.class, boolean.class }, value, false) }))
+						.as("bridge %s", value)
+						.isEqualTo(direct);
+					assertThat(Arrays.deepToString(new Object[] {
+							invoke("unmarshal", new Class<?>[] { Object.class, boolean.class }, value, true) }))
+						.as("bridge :java-false %s", value)
+						.isEqualTo(directFalse);
+				}
+				assertThat(junm.invoke(null, apple)).isEqualTo("APPLE");
+			}
+			finally {
+				// The template class is this JVM's: leave it unbound for the other tests.
+				for (String field : List.of("applyMethod", "strvMethod", "lispToStringMethod", "bf16ValueMethod",
+						"hashValuesMethod", "signalMethod", "failMethod", "handleValueField")) {
+					Field f = JavaBridgeTemplate.class.getDeclaredField(field);
+					f.setAccessible(true);
+					f.set(null, null);
+				}
+			}
+		}
+	}
+
 	// The bridge may import nothing of rontolisp's, so it spells the hash table's order
-	// key, the runtime package and Java's false itself.
+	// key, the runtime package, Java's false, the markers and Comparator's compare
+	// itself.
 	@Test
 	void theBridgeSpellsTheRepresentationAsTheRuntimeDoes() throws Exception {
 		assertThat(constant("HASH_TABLE_ORDER_KEY")).isEqualTo(RontoHashTable.ORDER_KEY);
 		assertThat(constant("RUNTIME_PACKAGE_PREFIX")).isEqualTo(JvmJavaDirectSites.RUNTIME_PACKAGE_PREFIX);
 		assertThat(constant("JAVA_FALSE")).isEqualTo(LispNames.JAVA_FALSE);
+		assertThat(constant("FUNCTIONAL_MARKER")).isEqualTo(LispNames.JAVA_FUNCTIONAL_MARKER);
+		assertThat(constant("JAVA_FALSE_MARKER")).isEqualTo(LispNames.JAVA_FALSE_MARKER);
+		assertThat(constant("COMPARATOR_COMPARE"))
+			.isEqualTo(am.ik.rontolisp.compiler.JavaImplementation.COMPARATOR_COMPARE);
+		assertThat(constant("HANDLE_SUFFIX")).isEqualTo(JvmJavaImplementations.HANDLE_SUFFIX);
 	}
 
 	private static @Nullable Object constant(String name) throws Exception {

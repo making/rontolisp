@@ -32,8 +32,15 @@ public final class JavaOverloads {
 	/** A boxed, {@code Object}, {@code Number} or other supertype target. */
 	public static final int COST_BOXED = 6;
 
-	/** A Lisp callable adapted to an interface by a proxy. */
+	/** A Lisp callable adapted to a functional interface (one abstract method). */
 	public static final int COST_PROXY = 8;
+
+	/**
+	 * A Lisp callable adapted to an interface of several abstract methods, or none: after
+	 * every functional one, as only a functional interface takes a Java lambda
+	 * ({@link JavaImplementations#isFunctionalInterface}).
+	 */
+	public static final int COST_PROXY_NOT_FUNCTIONAL = 9;
 
 	/** The flat penalty for packing a varargs tail: a fixed-arity overload wins. */
 	public static final int COST_VARARGS = 10;
@@ -440,8 +447,9 @@ public final class JavaOverloads {
 				yield assignableFrom(target, "java.lang.Integer", lookup) ? COST_BOXED : NO_MATCH;
 			}
 			// A Lisp callable passed where an interface is expected is auto-wrapped in a
-			// proxy.
-			case FUNCTION -> target.isInterface() ? COST_PROXY : NO_MATCH;
+			// proxy -- a functional interface first, as a Java lambda.
+			case FUNCTION -> !target.isInterface() ? NO_MATCH
+					: JavaImplementations.isFunctionalInterface(target) ? COST_PROXY : COST_PROXY_NOT_FUNCTIONAL;
 		};
 	}
 

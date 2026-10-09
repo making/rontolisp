@@ -443,6 +443,13 @@
      ((rontolisp::%clojure-sorted-p x) (> (length (car (cdr (cdr (cdr x))))) n))
      ((hash-table-p x) (> (hash-table-count x) n))
      ((vectorp x) (> (length x) n))
+     ;; a typed map, set, vector or seq counts its seq: arms of the collection
+     ;; interface families ("Collection interfaces")
+     ((or (rontolisp::%clojure-imap-p x) (rontolisp::%clojure-iset-p x)
+          (rontolisp::%clojure-ivector-p x) (rontolisp::%clojure-iseq-p x)
+          (rontolisp::%clojure-jmap-p x) (rontolisp::%clojure-jset-p x)
+          (rontolisp::%clojure-jlist-p x))
+      (rontolisp::%clojure-typed-longer-p x n))
      (t (let ((s x) (i 0))
           (do ()
               ((or (not (consp s)) (> i n)))
@@ -501,6 +508,17 @@
            (setq open "[" close "]")
            (dotimes (i n) (setq parts (cons (aref x i) parts)))
            (setq parts (reverse parts)))
+          ;; a typed map, set, vector or seq cuts its seq: arms of the collection
+          ;; interface families ("Collection interfaces")
+          ((or (rontolisp::%clojure-imap-p x) (rontolisp::%clojure-iset-p x)
+               (rontolisp::%clojure-ivector-p x) (rontolisp::%clojure-iseq-p x)
+               (rontolisp::%clojure-jmap-p x) (rontolisp::%clojure-jset-p x)
+               (rontolisp::%clojure-jlist-p x))
+           (let ((kind (rontolisp::%clojure-typed-print-kind x)))
+             (setq open (rontolisp::%clojure-typed-open kind))
+             (setq close (rontolisp::%clojure-typed-close kind))
+             (if (eq kind :map) (setq sep ", " pairs t))
+             (setq parts (rontolisp::%clojure-typed-print-parts x kind n))))
           (t (let ((s x))
                (dotimes (i n)
                  (setq parts (cons (car s) parts))
@@ -788,6 +806,15 @@
         ((rontolisp::%clojure-sorted-p x)
          (rontolisp::%clojure-write-sorted x nil-replacement readable stream
                                            labels))
+        ;; a typed map, set, vector or seq writes as one over its seq, ahead of
+        ;; a toString of its own: arms of the collection interface families
+        ;; ("Collection interfaces")
+        ((or (rontolisp::%clojure-imap-p x) (rontolisp::%clojure-iset-p x)
+             (rontolisp::%clojure-ivector-p x) (rontolisp::%clojure-iseq-p x)
+             (rontolisp::%clojure-jmap-p x) (rontolisp::%clojure-jset-p x)
+             (rontolisp::%clojure-jlist-p x))
+         (rontolisp::%clojure-write-typed x nil-replacement readable stream
+                                          labels))
         ;; a deftype or reify overriding toString is the oracle's #object: an
         ;; arm of the object-methods family ("Host interfaces")
         ((rontolisp::%clojure-to-string-p x)
@@ -1235,6 +1262,14 @@
                                 "java.lang.IncompatibleClassChangeError"
                                 "java.lang.LinkageError" "java.lang.Error"
                                 "java.lang.Throwable") message))
+
+(defun rontolisp::%clojure-no-such-element-exception (message)
+  "A refusal the oracle throws as a java.util.NoSuchElementException: the next
+   of an iterator past its end."
+  (rontolisp::%clojure-refuse '("java.util.NoSuchElementException"
+                                "java.lang.RuntimeException"
+                                "java.lang.Exception" "java.lang.Throwable")
+                              message))
 
 (defun rontolisp::%clojure-class-cast-exception-of (message value)
   "A refusal the oracle throws as a ClassCastException casting VALUE: its
@@ -2169,6 +2204,16 @@
     (and (equal (car (cdr a)) (car (cdr b)))
          (rontolisp::%clojure-table-equal (car (cdr (cdr (cdr a))))
                                           (car (cdr (cdr (cdr b)))))))
+   ;; a typed collection on either side, the oracle's Util.equiv: arms of the
+   ;; collection interface families ("Collection interfaces")
+   ((or (rontolisp::%clojure-icollection-p a)
+        (rontolisp::%clojure-icollection-p b)
+        (rontolisp::%clojure-isequential-p a)
+        (rontolisp::%clojure-isequential-p b)
+        (rontolisp::%clojure-jcollection-p a)
+        (rontolisp::%clojure-jcollection-p b) (rontolisp::%clojure-jmap-p a)
+        (rontolisp::%clojure-jmap-p b))
+    (rontolisp::%clojure-equal-typed a b))
    ;; a deftype or reify overriding equals: an arm of the object-methods
    ;; family ("Host interfaces")
    ((rontolisp::%clojure-equals-p a) (rontolisp::%clojure-object-equal a b))
@@ -2225,7 +2270,7 @@
    unequal."
   (if (rontolisp::%clojure-sequential-p c)
       (and (rontolisp::%clojure-host-instance-p h "java.util.List")
-           (rontolisp::%clojure-seq-equal c (java:call h "toArray")))
+       (rontolisp::%clojure-seq-equal c (java:call h "toArray" :java-false)))
       (let ((setp
              (or (rontolisp::%clojure-set-p c)
                  (rontolisp::%clojure-sorted-set-p c))))
@@ -2238,16 +2283,17 @@
                       (hash-table-count (if setp (car (cdr c)) c))))
              (let ((miss (list nil)) (ok t))
                (dolist (e (java:call (if setp h (java:call h "entrySet"))
-                                     "toArray") ok)
+                                     "toArray" :java-false) ok)
                  (if ok
                      (let ((w
                             (rontolisp::%clojure-sorted-lookup c
-                             (if setp e (java:call e "getKey")) miss)))
+                             (if setp e (java:call e "getKey" :java-false))
+                             miss)))
                        (if (or (eq w miss)
                                (and (not setp)
                                     (not
                                      (rontolisp::%clojure-equal w
-                                      (java:call e "getValue")))))
+                                      (java:call e "getValue" :java-false)))))
                            (setq ok nil))))))))))
 
 ;; seq, count, empty?, get, contains?, keys and vals of a host object, the
@@ -2279,20 +2325,22 @@
   "The members of the host object X (%clojure-host-seqable-p) as a list: a
    Collection's through toArray, a Map's entries as [key value] vectors,
    another Iterable's through its iterator, a CharSequence's characters.
-   Unmarshalled: atoms become Lisp values, a nested host collection stays one.
-   A snapshot, read whole: the oracle's seq of an Iterable is lazy."
+   Unmarshalled: atoms become Lisp values -- Java's false the false object --,
+   a nested host collection stays one. A snapshot, read whole: the oracle's seq
+   of an Iterable is lazy."
   (cond ((rontolisp::%clojure-host-instance-p x "java.util.Collection")
-         (java:call x "toArray"))
+         (java:call x "toArray" :java-false))
         ((rontolisp::%clojure-host-instance-p x "java.util.Map")
-         (mapcar
-          (lambda (e) (vector (java:call e "getKey") (java:call e "getValue")))
-          (java:call (java:call x "entrySet") "toArray")))
+         (mapcar (lambda (e)
+                   (vector (java:call e "getKey" :java-false)
+                           (java:call e "getValue" :java-false)))
+                 (java:call (java:call x "entrySet") "toArray")))
         ((rontolisp::%clojure-host-instance-p x "java.lang.CharSequence")
          (coerce (java:call x "toString") 'list))
         (t (let ((it (java:call x "iterator")) (acc nil))
              (do ()
                  ((not (java:call it "hasNext")) (reverse acc))
-               (setq acc (cons (java:call it "next") acc)))))))
+               (setq acc (cons (java:call it "next" :java-false) acc)))))))
 
 (defun rontolisp::%clojure-host-count (x)
   "count of the host object X (%clojure-host-seqable-p): a Collection's or a
@@ -2318,10 +2366,11 @@
   (mapcar (lambda (e) (aref e i)) (rontolisp::%clojure-host-seq x)))
 
 (defun rontolisp::%clojure-host-key-p (k)
-  "Whether K reaches a host method's Object parameter. A value java:call
-   refuses there (a keyword, a symbol, a map, a set, a collection holding one)
-   is no key of a host Map and no member of a host Set: the same refusal kept
-   the program from putting it in one, and no host value unmarshals to it."
+  "Whether K -- as %clojure-host-value makes a Clojure value -- reaches a host
+   method's Object parameter. A value java:call refuses there (a ratio, an
+   atom, a collection holding one) is no key of a host Map and no member of a
+   host Set: the same refusal kept the program from putting it in one, and no
+   host value unmarshals to it."
   (handler-case (progn
                   (java:static "java.util.Objects" "isNull" k)
                   t)
@@ -2331,31 +2380,36 @@
   "get of K in the host object X (%clojure-host-seqable-p): a Map's value
    under K by the Map's own lookup, DFLT when it holds no such key or X is no
    Map, like the oracle's RT.get."
-  (if (and (rontolisp::%clojure-host-instance-p x "java.util.Map")
-           (rontolisp::%clojure-host-key-p k) (java:call x "containsKey" k))
-      (java:call x "get" k)
-      dflt))
+  (let ((h (rontolisp::%clojure-host-value k)))
+    (if (and (rontolisp::%clojure-host-instance-p x "java.util.Map")
+             (rontolisp::%clojure-host-key-p h) (java:call x "containsKey" h))
+        (java:call x "get" h :java-false)
+        dflt)))
 
 (defun rontolisp::%clojure-host-contains-p (x k)
   "contains? of K in the host object X (%clojure-host-seqable-p): whether a
    Map holds the key K, or a Set the member K, by its own lookup. Any other
    host object is refused, like the oracle's RT.contains."
-  (cond ((rontolisp::%clojure-host-instance-p x "java.util.Map")
-         (and (rontolisp::%clojure-host-key-p k) (java:call x "containsKey" k)))
-        ((rontolisp::%clojure-host-instance-p x "java.util.Set")
-         (and (rontolisp::%clojure-host-key-p k) (java:call x "contains" k)))
-        (t (rontolisp::%clojure-illegal-argument-exception
-            (format nil "contains? not supported on type: ~A"
-                    (java:call (java:call x "getClass") "getName"))))))
+  (let ((h (rontolisp::%clojure-host-value k)))
+    (cond ((rontolisp::%clojure-host-instance-p x "java.util.Map")
+           (and (rontolisp::%clojure-host-key-p h)
+                (java:call x "containsKey" h)))
+          ((rontolisp::%clojure-host-instance-p x "java.util.Set")
+           (and (rontolisp::%clojure-host-key-p h) (java:call x "contains" h)))
+          (t (rontolisp::%clojure-illegal-argument-exception
+              (format nil "contains? not supported on type: ~A"
+                      (java:call (java:call x "getClass") "getName")))))))
 
 (defun rontolisp::%clojure-host-find (x k)
   "find of K in the host object X (%clojure-host-seqable-p): the entry
    [K value] when a Map holds the key K by its own lookup, else nil. Any other
    host object is refused, like the oracle's RT.find."
   (if (rontolisp::%clojure-host-instance-p x "java.util.Map")
-      (if (and (rontolisp::%clojure-host-key-p k) (java:call x "containsKey" k))
-          (vector k (java:call x "get" k))
-          nil)
+      (let ((h (rontolisp::%clojure-host-value k)))
+        (if (and (rontolisp::%clojure-host-key-p h)
+                 (java:call x "containsKey" h))
+            (vector k (java:call x "get" h :java-false))
+            nil))
       (rontolisp::%clojure-illegal-argument-exception
        (format nil "find not supported on type: ~A"
                (java:call (java:call x "getClass") "getName")))))
@@ -2418,7 +2472,8 @@
                 (cond ((rontolisp::%clojure-entry-p m) m)
                       ((rontolisp::%clojure-host-instance-p m
                         "java.util.Map$Entry")
-                       (vector (java:call m "getKey") (java:call m "getValue")))
+                       (vector (java:call m "getKey" :java-false)
+                               (java:call m "getValue" :java-false)))
                       (name (rontolisp::%clojure-class-cast-exception-of
                              (format nil "~A needs a map or a vector" name) m))
                       (t (rontolisp::%clojure-class-cast-exception-of
@@ -2443,6 +2498,114 @@
          (rontolisp::%clojure-plist-table nil
           (rontolisp::%clojure-host-entry-plist x)))
         (t x)))
+
+;; The value a java: member is handed for the Clojure value X, where the oracle
+;; hands Java its own object: the lowering wraps each argument of a host call in
+;; this (clojure/ClojureInteropLowering.hostCall), the host verbs a key. What Java
+;; has no value of becomes one: a keyword or a symbol a java:handle
+;; (%clojure-host-ident) Java hands back as the keyword or symbol itself; a set a
+;; fresh java.util.LinkedHashSet of its members, a sorted set one in order; a
+;; sorted map, a record and a map an equal table of their entries in order, which
+;; java: makes a java.util.LinkedHashMap; a lazy seq the list it realizes. A
+;; vector, list or map holding such a value is a copy holding what each becomes,
+;; anything else X itself.
+(defun rontolisp::%clojure-host-value (x)
+  (cond ((or (null x) (numberp x) (stringp x) (characterp x) (functionp x)) x)
+        ((rontolisp::%clojure-keyword-p x)
+         (rontolisp::%clojure-host-ident x (car (cdr x)) t))
+        ((rontolisp::%clojure-set-p x)
+         (rontolisp::%clojure-host-set
+          (rontolisp::%clojure-host-table-keys (car (cdr x)))))
+        ((rontolisp::%clojure-sorted-set-p x)
+         (rontolisp::%clojure-host-set
+          (coerce (rontolisp::%clojure-sorted-items x) 'list)))
+        ((rontolisp::%clojure-sorted-map-p x)
+         (rontolisp::%clojure-host-plist-table
+          (rontolisp::%clojure-sorted-plist x)))
+        ((rontolisp::%clojure-record-p x)
+         (rontolisp::%clojure-host-plist-table
+          (rontolisp:hash-table-plist (car (cdr (cdr (cdr x)))))))
+        ((rontolisp::%clojure-lazy-p x)
+         (rontolisp::%clojure-host-list (rontolisp::%clojure-seq-all x)))
+        ;; any other wrapper (an atom, a var, a pattern ...) has no Java value
+        ((and (consp x) (keywordp (car x))) x)
+        ((consp x) (rontolisp::%clojure-host-list x))
+        ((hash-table-p x)
+         (if (rontolisp::%clojure-host-changes-p (rontolisp:hash-table-plist x))
+             (rontolisp::%clojure-host-plist-table
+              (rontolisp:hash-table-plist x))
+             x))
+        ((vectorp x)
+         (if (rontolisp::%clojure-host-changes-p (coerce x 'list))
+             (map 'vector #'rontolisp::%clojure-host-value x)
+             x))
+        ((rontolisp::%clojure-real-symbol-p x)
+         (rontolisp::%clojure-host-ident x
+          (rontolisp::%clojure-symbol-full-name x) nil))
+        (t x)))
+
+;; The java:handle of the keyword (KEYWORDP) or symbol X spelled FULL ("ns/name"
+;; or "name", split at the first slash like the oracle's Symbol.intern): Java sees
+;; the spelling, a keyword's behind its colon, which it equals by; it hashes as
+;; the oracle's Symbol.hashCode -- Util.hashCombine of the name's and the
+;; namespace's String hashCode -- a keyword's 0x9e3779b9 more, as Keyword's; and
+;; it orders as their compareTo -- no namespace first, then by namespace, then by
+;; name -- keywords before symbols, which the oracle never compares.
+(defun rontolisp::%clojure-host-ident (x full keywordp)
+  (let* ((slash (if (string= full "/") nil (position #\/ full)))
+         (ns (if slash (subseq full 0 slash)))
+         (name (if slash (subseq full (+ slash 1)) full))
+         (seed (java:static "java.util.Objects" "hashCode" name))
+         (hash
+          (logxor seed
+                  (+ (java:static "java.util.Objects" "hashCode" ns) 2654435769
+                     (ash seed 6) (ash seed -2)))))
+    (java:handle x (if keywordp (concatenate 'string ":" full) full)
+                 (if keywordp (+ hash 2654435769) hash)
+                 (if ns
+                     (concatenate 'string (if keywordp "k" "s")
+                                  (string (code-char 1)) ns
+                                  (string (code-char 0)) name)
+                     (concatenate 'string (if keywordp "k" "s")
+                                  (string (code-char 0)) name)))))
+
+;; Whether a member of ITEMS is a value %clojure-host-value makes another of.
+(defun rontolisp::%clojure-host-changes-p (items)
+  (do ((rest items (cdr rest)))
+      ((not (consp rest)) nil)
+    (if (not (eq (rontolisp::%clojure-host-value (car rest)) (car rest)))
+        (return t))))
+
+;; The proper list ITEMS as %clojure-host-value makes each member, itself when
+;; no member changes.
+(defun rontolisp::%clojure-host-list (items)
+  (if (rontolisp::%clojure-host-changes-p items)
+      (mapcar #'rontolisp::%clojure-host-value items)
+      items))
+
+;; A fresh java.util.LinkedHashSet of the MEMBERS, each as %clojure-host-value
+;; makes it.
+(defun rontolisp::%clojure-host-set (members)
+  (let ((s (java:new "java.util.LinkedHashSet")))
+    (dolist (m members s)
+      (java:call s "add" (rontolisp::%clojure-host-value m)))))
+
+;; A fresh equal table of the PLIST's entries in order, each key and value as
+;; %clojure-host-value makes it.
+(defun rontolisp::%clojure-host-plist-table (plist)
+  (let ((out (make-hash-table :test 'equal)))
+    (do ((rest plist (cdr (cdr rest))))
+        ((not (consp rest)) out)
+      (setf (gethash (rontolisp::%clojure-host-value (car rest)) out)
+            (rontolisp::%clojure-host-value (car (cdr rest)))))))
+
+;; The keys of the table TABLE in insertion order (a set's members).
+(defun rontolisp::%clojure-host-table-keys (table)
+  (let ((acc nil))
+    (maphash (lambda (k v)
+               (declare (ignore v))
+               (setq acc (cons k acc))) table)
+    (reverse acc)))
 
 (defun rontolisp::%clojure-equal-values (&rest values)
   "= as a function value: T when every neighbouring pair is equal, the false
@@ -2857,6 +3020,12 @@
         ;; family ("Host interfaces")
         ((rontolisp::%clojure-lookup-p coll)
          (rontolisp::%clojure-lookup-get coll k dflt dflt))
+        ;; past ILookup, a java.util.Map's get, then an IPersistentSet's: arms of
+        ;; their families ("Collection interfaces")
+        ((rontolisp::%clojure-jmap-p coll)
+         (rontolisp::%clojure-jmap-get coll k dflt dflt))
+        ((rontolisp::%clojure-iset-p coll)
+         (rontolisp::%clojure-iset-get coll k dflt dflt))
         (t dflt)))
 
 ;;;; Lazy seqs: memoized-thunk wrappers over the strict seq view.
@@ -2919,6 +3088,12 @@
    ;; a type implementing Seqable seqs through its seq: an arm of the seqable
    ;; family ("Host interfaces")
    ((rontolisp::%clojure-seqable-p coll) (rontolisp::%clojure-seqable-seq coll))
+   ;; one implementing Iterable through its iterator, a java.util.Map through
+   ;; its entrySet: arms of the iterable and java-map families ("Collection
+   ;; interfaces")
+   ((rontolisp::%clojure-iterable-p coll)
+    (rontolisp::%clojure-iterable-seq coll))
+   ((rontolisp::%clojure-jmap-p coll) (rontolisp::%clojure-jmap-seq coll))
    ((rontolisp::%clojure-host-seqable-p coll)
     (rontolisp::%clojure-host-seq coll))
    (t
@@ -2939,6 +3114,12 @@
         ((rontolisp::%clojure-set-p x) x)
         ((rontolisp::%clojure-record-p x) x)
         ((rontolisp::%clojure-sorted-p x) x)
+        ;; an ISeq walks, an Iterable or a java.util.Map steps, like the oracle's
+        ;; LazilyPersistentVector (arms of their families, "Collection
+        ;; interfaces")
+        ((rontolisp::%clojure-iseq-p x) x)
+        ((rontolisp::%clojure-iterable-p x) x)
+        ((rontolisp::%clojure-jmap-p x) x)
         ((rontolisp::%clojure-host-seqable-p x) x)
         (t (rontolisp::%clojure-runtime-exception
             "Unable to convert a non-collection to Object[]"))))
@@ -3037,8 +3218,26 @@
    ;; interfaces")
    ((rontolisp::%clojure-indexed-p coll)
     (funcall (rontolisp::%clojure-interface-entry coll "nth") coll i dflt))
+   ;; past it, the oracle's RT.nthFrom: a RandomAccess java.util.List's get, a
+   ;; Sequential's seq stepped (arms of their families, "Collection
+   ;; interfaces")
+   ((rontolisp::%clojure-random-access-p coll)
+    (rontolisp::%clojure-jlist-nth coll i dflt t))
+   ((rontolisp::%clojure-isequential-p coll)
+    (rontolisp::%clojure-seq-nth-from coll i dflt))
    (t (rontolisp::%clojure-unsupported-operation-exception
        "nth not supported on this type"))))
+
+(defun rontolisp::%clojure-seq-nth-from (coll i dflt)
+  "The member at the index I of the seq of the Sequential COLL, DFLT past its
+   end or below zero, like the oracle's nthFrom of a Sequential."
+  (if (< i 0)
+      dflt
+      (let ((s (rontolisp::%clojure-seq coll)) (left i))
+        (do ()
+            ((or (null s) (<= left 0)) (if (null s) dflt (car s)))
+          (setq s (rontolisp::%clojure-seq-rest s))
+          (setq left (- left 1))))))
 
 ;; The member at the index I (not negative) of COLL's seq view, or DFLT past
 ;; its end: a vector or string indexes directly, anything else steps one
@@ -3080,7 +3279,8 @@
 (defun rontolisp::%clojure-lazy-input-p (x)
   "Whether the lazy-or-strict verbs take X as a lazy input: a lazy wrapper or a
    Seqable."
-  (or (rontolisp::%clojure-lazy-p x) (rontolisp::%clojure-seqable-p x)))
+  (or (rontolisp::%clojure-lazy-p x) (rontolisp::%clojure-seqable-p x)
+      (rontolisp::%clojure-iterable-p x) (rontolisp::%clojure-jmap-p x)))
 
 (defun rontolisp::%clojure-any-lazy-p (colls)
   "Whether any member of the COLLS list is a lazy input."
@@ -4886,15 +5086,18 @@
   (or (and (vectorp x) (not (stringp x)))
       (and (consp x) (not (keywordp (car x))))))
 
+;; peek and pop of a type implementing IPersistentStack call its methods: arms of
+;; the stack-interface family ("Collection interfaces").
 (defun rontolisp::%clojure-peek (coll)
   "A vector's last member, a list's first, nil of nil or an empty vector."
   (cond ((null coll) nil)
-        ((not (rontolisp::%clojure-stack-p coll))
-         (rontolisp::%clojure-class-cast-exception-of
-          "peek needs a vector or a list" coll))
-        ((consp coll) (car coll))
-        ((= (length coll) 0) nil)
-        (t (aref coll (- (length coll) 1)))))
+   ((rontolisp::%clojure-istack-p coll) (rontolisp::%clojure-istack-peek coll))
+   ((not (rontolisp::%clojure-stack-p coll))
+    (rontolisp::%clojure-class-cast-exception-of "peek needs a vector or a list"
+                                                 coll))
+   ((consp coll) (car coll))
+   ((= (length coll) 0) nil)
+   (t (aref coll (- (length coll) 1)))))
 
 (defun rontolisp::%clojure-peek-v (&rest args)
   "peek as a value."
@@ -4904,13 +5107,14 @@
 (defun rontolisp::%clojure-pop (coll)
   "A vector without its last member, a list without its first; nil of nil."
   (cond ((null coll) nil)
-        ((not (rontolisp::%clojure-stack-p coll))
-         (rontolisp::%clojure-class-cast-exception-of
-          "pop needs a vector or a list" coll))
-        ((consp coll) (cdr coll))
-        ((= (length coll) 0)
-         (rontolisp::%clojure-illegal-state-exception "Can't pop empty vector"))
-        (t (subseq coll 0 (- (length coll) 1)))))
+   ((rontolisp::%clojure-istack-p coll) (rontolisp::%clojure-istack-pop coll))
+   ((not (rontolisp::%clojure-stack-p coll))
+    (rontolisp::%clojure-class-cast-exception-of "pop needs a vector or a list"
+                                                 coll))
+   ((consp coll) (cdr coll))
+   ((= (length coll) 0)
+    (rontolisp::%clojure-illegal-state-exception "Can't pop empty vector"))
+   (t (subseq coll 0 (- (length coll) 1)))))
 
 (defun rontolisp::%clojure-pop-v (&rest args)
   "pop as a value."
@@ -4951,6 +5155,10 @@
           (rontolisp::%clojure-meta x)))
         ((and (vectorp x) (not (stringp x)))
          (rontolisp::%clojure-put-meta (vector) (rontolisp::%clojure-meta x)))
+        ;; an IPersistentCollection's empty: an arm of the collection-interface
+        ;; family ("Collection interfaces")
+        ((rontolisp::%clojure-icollection-p x)
+         (rontolisp::%clojure-collection-empty x))
         (t nil)))
 
 (defun rontolisp::%clojure-empty-v (&rest args)
@@ -5053,26 +5261,54 @@
         (t (rontolisp::%clojure-class-cast-exception-of
             "subvec needs integer bounds" x))))
 
+;; A type implementing IPersistentVector answers the members its nth reads
+;; between the bounds, the oracle's SubVector over it: arms of the
+;; vector-interface family ("Collection interfaces").
 (defun rontolisp::%clojure-subvec (v start end)
   "(subvec V START END): a fresh vector of V's members from START up to END; a
    non-vector V (a string included) signals, and so does a bound out of range or
    START past END, like the oracle's IndexOutOfBoundsException."
-  (if (or (not (vectorp v)) (stringp v))
-      (rontolisp::%clojure-class-cast-exception-of "subvec needs a vector" v))
-  (let ((s (rontolisp::%clojure-subvec-index start))
-        (e (rontolisp::%clojure-subvec-index end)))
-    (if (or (< s 0) (< e s) (< (length v) e))
-        (rontolisp::%clojure-index-out-of-bounds-exception
-         (format nil "Index out of bounds for subvec ~D ~D of length ~D" s e
-                 (length v))))
-    (let ((out (make-array (- e s))))
-      (dotimes (j (- e s) out) (setf (aref out j) (aref v (+ s j)))))))
+  (cond ((rontolisp::%clojure-ivector-p v)
+         (rontolisp::%clojure-ivector-subvec v start end))
+        (t
+         (if (or (not (vectorp v)) (stringp v))
+             (rontolisp::%clojure-class-cast-exception-of
+              "subvec needs a vector" v))
+         (let ((s (rontolisp::%clojure-subvec-index start))
+               (e (rontolisp::%clojure-subvec-index end)))
+           (if (or (< s 0) (< e s) (< (length v) e))
+               (rontolisp::%clojure-index-out-of-bounds-exception
+                (format nil "Index out of bounds for subvec ~D ~D of length ~D"
+                        s e (length v))))
+           (let ((out (make-array (- e s))))
+             (dotimes (j (- e s) out) (setf (aref out j) (aref v (+ s j)))))))))
 
 (defun rontolisp::%clojure-subvec-from (v start)
   "(subvec V START): V from START to its end."
-  (if (or (not (vectorp v)) (stringp v))
-      (rontolisp::%clojure-class-cast-exception-of "subvec needs a vector" v))
-  (rontolisp::%clojure-subvec v start (length v)))
+  (cond ((rontolisp::%clojure-ivector-p v)
+         (rontolisp::%clojure-ivector-subvec v start
+          (funcall (rontolisp::%clojure-call-method v "count") v)))
+        (t
+         (if (or (not (vectorp v)) (stringp v))
+             (rontolisp::%clojure-class-cast-exception-of
+              "subvec needs a vector" v))
+         (rontolisp::%clojure-subvec v start (length v)))))
+
+(defun rontolisp::%clojure-ivector-subvec (v start end)
+  "(subvec V START END) of the IPersistentVector V: a fresh vector of what its
+   nth answers from START up to END, a bound out of its count's range the
+   oracle's IndexOutOfBoundsException."
+  (let ((s (rontolisp::%clojure-subvec-index start))
+        (e (rontolisp::%clojure-subvec-index end))
+        (n (funcall (rontolisp::%clojure-call-method v "count") v)))
+    (if (or (< s 0) (< e s) (< n e))
+        (rontolisp::%clojure-index-out-of-bounds-exception
+         (format nil "Index out of bounds for subvec ~D ~D of length ~D" s e
+                 n)))
+    (let ((out (make-array (- e s))))
+      (dotimes (j (- e s) out)
+        (setf (aref out j)
+              (funcall (rontolisp::%clojure-call-method v "nth") v (+ s j)))))))
 
 (defun rontolisp::%clojure-subvec-v (&rest args)
   "subvec as a value: a vector, a start and an optional end."
@@ -5088,22 +5324,27 @@
    looks KEY up itself; any other COLL (a set, a string, a list) signals like
    the oracle."
   (cond ((null coll) nil)
-        ((or (hash-table-p coll) (rontolisp::%clojure-record-p coll))
-         (let* ((table (rontolisp::%clojure-set-entries coll "find"))
-                (miss (list nil))
-                (k (rontolisp::%clojure-table-key key table))
-                (v (gethash k table miss)))
-           (if (eq v miss) nil (vector k v))))
-        ((and (vectorp coll) (not (stringp coll)))
-         (if (and (integerp key) (>= key 0) (< key (length coll)))
-             (vector key (aref coll key))
-             nil))
-        ((rontolisp::%clojure-sorted-p coll)
-         (rontolisp::%clojure-sorted-find coll key))
-        ((rontolisp::%clojure-host-seqable-p coll)
-         (rontolisp::%clojure-host-find coll key))
-        (t (rontolisp::%clojure-illegal-argument-exception
-            "find not supported on this type"))))
+   ((or (hash-table-p coll) (rontolisp::%clojure-record-p coll))
+    (let* ((table (rontolisp::%clojure-set-entries coll "find"))
+           (miss (list nil))
+           (k (rontolisp::%clojure-table-key key table))
+           (v (gethash k table miss)))
+      (if (eq v miss) nil (vector k v))))
+   ((and (vectorp coll) (not (stringp coll)))
+    (if (and (integerp key) (>= key 0) (< key (length coll)))
+        (vector key (aref coll key))
+        nil))
+   ((rontolisp::%clojure-sorted-p coll)
+    (rontolisp::%clojure-sorted-find coll key))
+   ;; an Associative's entryAt, a java.util.Map's containsKey and get, the
+   ;; oracle's RT.find: arms of their families ("Collection interfaces")
+   ((rontolisp::%clojure-iassociative-p coll)
+    (rontolisp::%clojure-associative-find coll key))
+   ((rontolisp::%clojure-jmap-p coll) (rontolisp::%clojure-jmap-find coll key))
+   ((rontolisp::%clojure-host-seqable-p coll)
+    (rontolisp::%clojure-host-find coll key))
+   (t (rontolisp::%clojure-illegal-argument-exception
+       "find not supported on this type"))))
 
 (defun rontolisp::%clojure-find-v (&rest args)
   "find as a value."
@@ -5148,14 +5389,18 @@
   (rontolisp::%clojure-check-arity args 1 1 "map-entry?")
   (rontolisp::%clojure-map-entry-p (car args)))
 
+;; A type implementing Reversible answers its rseq: an arm of the
+;; reversible-interface family ("Collection interfaces").
 (defun rontolisp::%clojure-rseq (v)
   "(rseq V): the members of the vector V, last first, as a list; nil when V is
    empty. Anything but a vector (nil, a list, a seq, a string, a map) signals,
    like the oracle."
-  (if (or (not (vectorp v)) (stringp v))
-      (rontolisp::%clojure-class-cast-exception-of "rseq needs a vector" v))
-  (let ((out nil))
-    (dotimes (i (length v) out) (setq out (cons (aref v i) out)))))
+  (cond ((rontolisp::%clojure-ireversible-p v)
+         (rontolisp::%clojure-ireversible-rseq v))
+        ((or (not (vectorp v)) (stringp v))
+         (rontolisp::%clojure-class-cast-exception-of "rseq needs a vector" v))
+        (t (let ((out nil))
+             (dotimes (i (length v) out) (setq out (cons (aref v i) out)))))))
 
 ;; A sorted collection walks backwards through its items vector, like a call.
 (defun rontolisp::%clojure-rseq-v (&rest args)
@@ -5391,6 +5636,16 @@
            (reverse acc)))
         ((rontolisp::%clojure-sorted-map-p coll)
          (rontolisp::%clojure-sorted-kv-pairs coll))
+        ;; a type implementing IPersistentMap: the entries its reduction steps,
+        ;; the oracle's IKVReduce of an IPersistentMap (an arm of the
+        ;; map-interface family, "Collection interfaces")
+        ((rontolisp::%clojure-imap-p coll)
+         (reverse
+          (rontolisp::%clojure-reduce-init (lambda (acc e)
+                                             (cons (cons
+                                                    (rontolisp::%clojure-key e)
+                                                    (rontolisp::%clojure-val e))
+                                                   acc)) nil coll)))
         ((rontolisp::%clojure-host-seqable-p coll)
          (mapcar (lambda (e) (cons (aref e 0) (aref e 1)))
                  (rontolisp::%clojure-host-entries coll name)))
@@ -5519,11 +5774,55 @@
       (rontolisp::%clojure-set-p x) (rontolisp::%clojure-sorted-set-p x)))
 
 ;; A type implementing the interface a predicate names answers true: arms of
-;; the seqable, counted, indexed and invokable families ("Host interfaces").
+;; the seqable, counted, indexed and invokable families ("Host interfaces"), and
+;; of the iterable and java-map families ("Collection interfaces").
 (defun rontolisp::%clojure-is-seqable (x)
   "seqable?: what seq takes -- nil, a string or a collection."
   (or (null x) (stringp x) (rontolisp::%clojure-is-coll x)
-      (rontolisp::%clojure-seqable-p x)))
+      (rontolisp::%clojure-seqable-p x) (rontolisp::%clojure-iterable-p x)
+      (rontolisp::%clojure-jmap-p x)))
+
+;; The predicates over a type implementing a collection interface: each answers
+;; the plain helper's test or the interface's, an arm of its family
+;; ("Collection interfaces"). A program storing no row of the family calls the
+;; plain helper in its place (the family's alias); the plain helpers stay what
+;; the library itself asks.
+(defun rontolisp::%clojure-is-coll-type (x)
+  "coll?: a core collection, or a type implementing IPersistentCollection."
+  (or (rontolisp::%clojure-is-coll x) (rontolisp::%clojure-icollection-p x)))
+
+(defun rontolisp::%clojure-is-seq-type (x)
+  "seq?: a list or a lazy seq, or a type implementing ISeq."
+  (or (rontolisp::%clojure-is-seq x) (rontolisp::%clojure-iseq-p x)))
+
+(defun rontolisp::%clojure-is-list-type (x)
+  "list?: a list, or a type implementing IPersistentList."
+  (or (rontolisp::%clojure-is-list x) (rontolisp::%clojure-ilist-p x)))
+
+(defun rontolisp::%clojure-is-sequential-type (x)
+  "sequential?: a list, a lazy seq or a vector, or a type implementing
+   Sequential."
+  (or (rontolisp::%clojure-is-sequential x)
+      (rontolisp::%clojure-isequential-p x)))
+
+(defun rontolisp::%clojure-is-map-type (x)
+  "map?: a map or a record, or a type implementing IPersistentMap."
+  (or (rontolisp::%clojure-is-map x) (rontolisp::%clojure-imap-p x)))
+
+(defun rontolisp::%clojure-is-set-type (x)
+  "set?: a set, or a type implementing IPersistentSet."
+  (or (rontolisp::%clojure-is-set x) (rontolisp::%clojure-iset-p x)))
+
+(defun rontolisp::%clojure-is-associative-type (x)
+  "associative?: a map, a record or a vector, or a type implementing
+   Associative."
+  (or (rontolisp::%clojure-is-associative x)
+      (rontolisp::%clojure-iassociative-p x)))
+
+(defun rontolisp::%clojure-is-reversible-type (x)
+  "reversible?: what rseq takes, or a type implementing Reversible."
+  (or (rontolisp::%clojure-is-reversible x)
+      (rontolisp::%clojure-ireversible-p x)))
 
 (defun rontolisp::%clojure-is-indexed (x)
   "indexed?: a vector, or a type implementing Indexed. A program storing no
@@ -5602,12 +5901,16 @@
   "volatile?: the atom cell volatile! builds, which carries a second slot."
   (and (rontolisp::%clojure-atom-p x) (= (length (car (cdr x))) 2)))
 
+;; A type implementing IPending answers its isRealized: an arm of the
+;; pending-interface family ("Collection interfaces").
 (defun rontolisp::%clojure-is-realized (x)
   "realized?: whether the lazy seq X has run its body. A list (what the seq
    verbs answer over a strict input) is realized; anything else signals, like
    the oracle's cast."
   (cond ((rontolisp::%clojure-lazy-p x) (null (car (car (cdr x)))))
         ((rontolisp::%clojure-is-list x) t)
+        ((rontolisp::%clojure-ipending-p x)
+         (rontolisp::%clojure-ipending-realized x))
         (t (rontolisp::%clojure-class-cast-exception-of
             "realized? needs a lazy seq" x))))
 
@@ -6185,10 +6488,14 @@
   "Whether X is a sorted set."
   (and (consp x) (eq (car x) :C%SORTED) (not (null (car (cdr x))))))
 
+;; A type implementing Sorted is sorted too: an arm of the sorted-interface
+;; family ("Collection interfaces").
 (defun rontolisp::%clojure-is-sorted (x)
   "sorted?: a sorted map or set."
   (declare (ignorable x))
-  (if (rontolisp::%clojure-sorted-p x) t nil))
+  (if (or (rontolisp::%clojure-sorted-p x) (rontolisp::%clojure-isorted-p x))
+      t
+      nil))
 
 (defun rontolisp::%clojure-is-set (x)
   "set?: a set or a sorted set. A program that builds no sorted collection
@@ -6265,6 +6572,10 @@
    ;; compareTo
    ((rontolisp::%clojure-instant-p a) (rontolisp::%clojure-instant-compare a b))
    ((rontolisp::%clojure-uuid-p a) (rontolisp::%clojure-uuid-compare a b))
+   ;; a type implementing Comparable answers its compareTo: an arm of the
+   ;; comparable-interface family ("Collection interfaces")
+   ((rontolisp::%clojure-icomparable-p a)
+    (rontolisp::%clojure-icomparable-compare a b))
    (t (rontolisp::%clojure-class-cast-exception
        "compare needs two values of one comparable kind"))))
 
@@ -6279,7 +6590,8 @@
    Comparable."
   (or (symbolp x) (numberp x) (stringp x) (characterp x)
       (rontolisp::%clojure-keyword-p x) (and (vectorp x) (not (stringp x)))
-      (rontolisp::%clojure-instant-p x) (rontolisp::%clojure-uuid-p x)))
+      (rontolisp::%clojure-instant-p x) (rontolisp::%clojure-uuid-p x)
+      (rontolisp::%clojure-icomparable-p x)))
 
 (defun rontolisp::%clojure-cmp-call (cmp a b)
   "The order the comparator function CMP puts A and B in, the oracle's
@@ -6827,22 +7139,29 @@
           (ascending (+ at 1))
           (t (- at 1)))))
 
+;; A type implementing Sorted walks through its seqFrom, seq, comparator and
+;; entryKey: arms of the sorted-interface family ("Collection interfaces").
 (defun rontolisp::%clojure-subseq (s test key ascending)
   "(subseq S TEST KEY) when ASCENDING, else (rsubseq S TEST KEY), the oracle's
    two paths: a test leading away from the walk's start (> or >= ascending, <
    or <= descending) starts at KEY; any other walks from the start while it
    holds. A strict list, nil when nothing passes."
-  (rontolisp::%clojure-sorted-need s (if ascending "subseq" "rsubseq"))
-  (let ((test (rontolisp::%clojure-sorted-test test)))
-    (if (if ascending
-            (or (eq test :>) (eq test :>=))
-            (or (eq test :<) (eq test :<=)))
-        (rontolisp::%clojure-sorted-walk s
-         (rontolisp::%clojure-sorted-from s test key ascending) ascending nil
-         nil)
-        (rontolisp::%clojure-sorted-walk s
-         (if ascending 0 (- (rontolisp::%clojure-sorted-count s) 1)) ascending
-         test key))))
+  (if (rontolisp::%clojure-isorted-p s)
+      (rontolisp::%clojure-isorted-subseq s
+                                          (rontolisp::%clojure-sorted-test test)
+                                          key ascending)
+      (progn
+        (rontolisp::%clojure-sorted-need s (if ascending "subseq" "rsubseq"))
+        (let ((test (rontolisp::%clojure-sorted-test test)))
+          (if (if ascending
+                  (or (eq test :>) (eq test :>=))
+                  (or (eq test :<) (eq test :<=)))
+              (rontolisp::%clojure-sorted-walk s
+               (rontolisp::%clojure-sorted-from s test key ascending) ascending
+               nil nil)
+              (rontolisp::%clojure-sorted-walk s
+               (if ascending 0 (- (rontolisp::%clojure-sorted-count s) 1))
+               ascending test key))))))
 
 (defun rontolisp::%clojure-subseq-5
     (s start-test start-key end-test end-key ascending)
@@ -6850,13 +7169,49 @@
    rsubseq of the same five: the walk from the leading bound's key (the start
    ascending, the end descending), its first item dropped when it fails that
    bound, while the other bound holds."
-  (rontolisp::%clojure-sorted-need s (if ascending "subseq" "rsubseq"))
-  (rontolisp::%clojure-sorted-walk s
-                                   (rontolisp::%clojure-sorted-from s
-                                    (if ascending start-test end-test)
-                                    (if ascending start-key end-key) ascending)
-                                   ascending (if ascending end-test start-test)
-                                   (if ascending end-key start-key)))
+  (if (rontolisp::%clojure-isorted-p s)
+      (rontolisp::%clojure-isorted-subseq-5 s
+       (rontolisp::%clojure-sorted-test (if ascending start-test end-test))
+       (if ascending start-key end-key)
+       (rontolisp::%clojure-sorted-test (if ascending end-test start-test))
+       (if ascending end-key start-key) ascending)
+      (progn
+        (rontolisp::%clojure-sorted-need s (if ascending "subseq" "rsubseq"))
+        (rontolisp::%clojure-sorted-walk s
+                                         (rontolisp::%clojure-sorted-from s
+                                          (if ascending start-test end-test)
+                                          (if ascending start-key end-key)
+                                          ascending) ascending
+                                         (if ascending end-test start-test)
+                                         (if ascending end-key start-key)))))
+
+;; A sorted collection as the oracle's clojure.lang.Sorted, which a body of the
+;; interface reads through instance calls: (.comparator s), (.entryKey s e),
+;; (.seqFrom s k ascending) and (.seq s ascending).
+(defun rontolisp::%clojure-sorted-comparator (s)
+  "The comparator of the sorted collection S as a function: the one a -by form
+   took, else compare."
+  (or (car (cdr (cdr s))) #'rontolisp::%clojure-compare-v))
+
+(defun rontolisp::%clojure-sorted-entry-key (s e)
+  "The key of the item E of the sorted collection S: a set's member itself, a
+   map entry's key."
+  (if (car (cdr s)) e (aref e 0)))
+
+(defun rontolisp::%clojure-sorted-seq-from (s key ascending)
+  "The oracle's seqFrom: the items of the sorted collection S from the first
+   whose key is not before KEY (not after it, ASCENDING false), nil when none."
+  (let* ((asc (rontolisp::%clojure-truthy ascending))
+         (i (rontolisp::%clojure-sorted-search s key))
+         (at (cond ((>= i 0) i) (asc (- -1 i)) (t (- (- -1 i) 1)))))
+    (rontolisp::%clojure-sorted-walk s at asc nil nil)))
+
+(defun rontolisp::%clojure-sorted-seq-dir (s ascending)
+  "The oracle's seq of the sorted collection S in order, or reversed when
+   ASCENDING is false; nil when it is empty."
+  (if (rontolisp::%clojure-truthy ascending)
+      (rontolisp::%clojure-sorted-seq s)
+      (reverse (rontolisp::%clojure-sorted-seq s))))
 
 (defun rontolisp::%clojure-subseq-of (args ascending)
   "subseq (ASCENDING) or rsubseq as a value: the collection and one bound or
@@ -7985,7 +8340,8 @@
 ;; deref's host arm: a host Future is read through its own get, a failure
 ;; surfacing as the host's ExecutionException or CancellationException.
 (defun rontolisp::%clojure-host-future-get (f)
-  (java:call (the (java:object "java.util.concurrent.Future") f) "get"))
+  (java:call (the (java:object "java.util.concurrent.Future") f) "get"
+             :java-false))
 
 ;; future?: T for a host Future, NO (the false object) for anything else.
 (defun rontolisp::%clojure-host-future-p (x no)
@@ -8010,8 +8366,8 @@
       (handler-case (java:call
                      (the (java:object "java.util.concurrent.Future") f) "get"
                      (values (truncate ms))
-                     (java:field "java.util.concurrent.TimeUnit"
-                                 "MILLISECONDS"))
+                     (java:field "java.util.concurrent.TimeUnit" "MILLISECONDS")
+                     :java-false)
         (java:java-exception (c)
           (if (rontolisp::%clojure-host-is-a (java:java-exception-cause c)
                "java.util.concurrent.TimeoutException")
@@ -8182,12 +8538,17 @@
 ;; a value of this one. The oracle's reduce asks IReduceInit (IReduce without an
 ;; init) ahead of CollReduce, and its kv-reduce takes a type's own IKVReduce row
 ;; ahead of the protocol's row for the interface.
+;; A type implementing Iterable reduces through its iterator, past its own
+;; CollReduce row, the oracle's Iterable extension of CollReduce: arms of the
+;; iterable family ("Collection interfaces"), whose store makes a value of this
+;; one too.
 (defun rontolisp::%clojure-coll-reducible-p (x)
   "Whether X reduces through its own CollReduce row or its IReduceInit: the
    reducible family's test."
   (if (or (rontolisp::%clojure-typed-reducer x rontolisp::%clojure-coll-reducers
                                              '(:c%keyword "coll-reduce"))
-          (rontolisp::%clojure-reduce-init-p x))
+          (rontolisp::%clojure-reduce-init-p x)
+          (rontolisp::%clojure-iterable-p x))
       t
       nil))
 
@@ -8203,20 +8564,37 @@
 (defun rontolisp::%clojure-coll-reduce-2 (coll f)
   "(coll-reduce coll f) through COLL's own CollReduce row, or (reduce f coll)
    of an IReduceInit."
-  (if (rontolisp::%clojure-reduce-init-p coll)
-      (rontolisp::%clojure-interface-reduce-2 coll f)
-      (funcall (rontolisp::%clojure-typed-reducer coll
-                rontolisp::%clojure-coll-reducers '(:c%keyword "coll-reduce"))
-               coll f)))
+  (cond ((rontolisp::%clojure-reduce-init-p coll)
+         (rontolisp::%clojure-interface-reduce-2 coll f))
+        ((rontolisp::%clojure-iterable-p coll)
+         (let ((row
+                (rontolisp::%clojure-typed-reducer coll
+                 rontolisp::%clojure-coll-reducers
+                 '(:c%keyword "coll-reduce"))))
+           (if row
+               (funcall row coll f)
+               (rontolisp::%clojure-iter-reduce-2 coll f))))
+        (t (funcall (rontolisp::%clojure-typed-reducer coll
+                     rontolisp::%clojure-coll-reducers
+                     '(:c%keyword "coll-reduce")) coll f))))
 
 (defun rontolisp::%clojure-coll-reduce-3 (coll f init)
   "(coll-reduce coll f init) through COLL's own CollReduce row, or its
    IReduceInit's reduce."
-  (if (rontolisp::%clojure-reduce-init-p coll)
-      (funcall (rontolisp::%clojure-interface-entry coll "reduce") coll f init)
-      (funcall (rontolisp::%clojure-typed-reducer coll
-                rontolisp::%clojure-coll-reducers '(:c%keyword "coll-reduce"))
-               coll f init)))
+  (cond ((rontolisp::%clojure-reduce-init-p coll)
+         (funcall (rontolisp::%clojure-interface-entry coll "reduce") coll f
+                  init))
+        ((rontolisp::%clojure-iterable-p coll)
+         (let ((row
+                (rontolisp::%clojure-typed-reducer coll
+                 rontolisp::%clojure-coll-reducers
+                 '(:c%keyword "coll-reduce"))))
+           (if row
+               (funcall row coll f init)
+               (rontolisp::%clojure-iter-reduce coll f init))))
+        (t (funcall (rontolisp::%clojure-typed-reducer coll
+                     rontolisp::%clojure-coll-reducers
+                     '(:c%keyword "coll-reduce")) coll f init))))
 
 (defun rontolisp::%clojure-kv-reduce-3 (coll f init)
   "(kv-reduce coll f init) through COLL's own IKVReduce row, or its IKVReduce
@@ -8410,6 +8788,10 @@
     (cond ((null s) nil)
           ((rontolisp::%clojure-lazy-p s) (rontolisp::%clojure-realize s))
           ((and (consp s) (not (keywordp (car s)))) s)
+          ;; the program's own ISeq walks through its first and next: an arm of
+          ;; the seq-interface family ("Collection interfaces")
+          ((rontolisp::%clojure-iseq-p s)
+           (rontolisp::%clojure-realize (rontolisp::%clojure-iseq-lazy s)))
           (t (rontolisp::%clojure-class-cast-exception
               "the answer of seq cannot be cast to class clojure.lang.ISeq")))))
 
@@ -8488,6 +8870,844 @@
         ((rontolisp::%clojure-is-coll b) nil)
         (t (rontolisp::%clojure-truthy
             (funcall (rontolisp::%clojure-interface-entry a "equals") a b)))))
+
+;;;; Collection interfaces: a reify, deftype or defrecord body implementing one
+;;;; of the clojure.lang collection interfaces, java.lang.Iterable,
+;;;; java.util.Iterator or a java.util collection (clojure/ClojureInterfaces).
+;;
+;; The rows are the ones above ("Host interfaces"): each family stores through
+;; a function of its own, the family's producer (clojure/ClojureArms), and the
+;; verbs ask the family's tests in their arms, so a program storing no row of a
+;; family has its arms folded and compiles as before. What a verb asks of each
+;; interface is the oracle's RT and core, in their order (measured on clj
+;; 1.12.6, 2026-10-08): conj an IPersistentCollection's cons; assoc an
+;; Associative's assoc; dissoc an IPersistentMap's without; disj an
+;; IPersistentSet's disjoin; contains? an Associative's containsKey, then an
+;; IPersistentSet's contains, a Map's containsKey, a Set's contains; get an
+;; ILookup's valAt, then a Map's get, an IPersistentSet's get; find an
+;; Associative's entryAt, then a Map's; count a Counted's count, then an
+;; IPersistentCollection's seq walked, a Collection's or a Map's size; seq a
+;; Seqable's seq, then an Iterable's iterator, a Map's entrySet; = an
+;; IPersistentCollection's equiv on either side, a core collection reading the
+;; other side through its interfaces; reduce an Iterable's iterator ahead of
+;; the seq. A value no interface of a verb names keeps the verb's own refusal.
+
+(defun rontolisp::%clojure-collection-row (tag names methods)
+  "Stores an IPersistentCollection row."
+  (rontolisp::%clojure-interface-store tag names methods))
+
+(defun rontolisp::%clojure-associative-row (tag names methods)
+  "Stores an Associative row."
+  (rontolisp::%clojure-interface-store tag names methods))
+
+(defun rontolisp::%clojure-persistent-map-row (tag names methods)
+  "Stores an IPersistentMap or MapEquivalence row."
+  (rontolisp::%clojure-interface-store tag names methods))
+
+(defun rontolisp::%clojure-persistent-set-row (tag names methods)
+  "Stores an IPersistentSet row."
+  (rontolisp::%clojure-interface-store tag names methods))
+
+(defun rontolisp::%clojure-stack-row (tag names methods)
+  "Stores an IPersistentStack row."
+  (rontolisp::%clojure-interface-store tag names methods))
+
+(defun rontolisp::%clojure-persistent-vector-row (tag names methods)
+  "Stores an IPersistentVector row."
+  (rontolisp::%clojure-interface-store tag names methods))
+
+(defun rontolisp::%clojure-iseq-row (tag names methods)
+  "Stores an ISeq row."
+  (rontolisp::%clojure-interface-store tag names methods))
+
+(defun rontolisp::%clojure-sequential-row (tag names methods)
+  "Stores a Sequential or IPersistentList row."
+  (rontolisp::%clojure-interface-store tag names methods))
+
+(defun rontolisp::%clojure-reversible-row (tag names methods)
+  "Stores a Reversible row."
+  (rontolisp::%clojure-interface-store tag names methods))
+
+(defun rontolisp::%clojure-pending-row (tag names methods)
+  "Stores an IPending row."
+  (rontolisp::%clojure-interface-store tag names methods))
+
+(defun rontolisp::%clojure-sorted-row (tag names methods)
+  "Stores a Sorted row."
+  (rontolisp::%clojure-interface-store tag names methods))
+
+(defun rontolisp::%clojure-comparable-row (tag names methods)
+  "Stores a Comparable row."
+  (rontolisp::%clojure-interface-store tag names methods))
+
+(defun rontolisp::%clojure-iterable-row (tag names methods)
+  "Stores a java.lang.Iterable row."
+  (rontolisp::%clojure-interface-store tag names methods))
+
+(defun rontolisp::%clojure-iterator-row (tag names methods)
+  "Stores a java.util.Iterator row."
+  (rontolisp::%clojure-interface-store tag names methods))
+
+(defun rontolisp::%clojure-java-collection-row (tag names methods)
+  "Stores a java.util Collection, SequencedCollection, List, Set or
+   RandomAccess row."
+  (rontolisp::%clojure-interface-store tag names methods))
+
+(defun rontolisp::%clojure-java-map-row (tag names methods)
+  "Stores a java.util.Map row."
+  (rontolisp::%clojure-interface-store tag names methods))
+
+(defun rontolisp::%clojure-marker-row (tag names methods)
+  "Stores a row of an interface no core verb reads (IHashEq, Serializable,
+   IEditableCollection, the transients)."
+  (rontolisp::%clojure-interface-store tag names methods))
+
+;; The tests: whether X's type implements the interface.
+
+(defun rontolisp::%clojure-icollection-p (x)
+  (rontolisp::%clojure-interface-entry x "clojure.lang.IPersistentCollection"))
+
+(defun rontolisp::%clojure-iassociative-p (x)
+  (rontolisp::%clojure-interface-entry x "clojure.lang.Associative"))
+
+(defun rontolisp::%clojure-imap-p (x)
+  (rontolisp::%clojure-interface-entry x "clojure.lang.IPersistentMap"))
+
+(defun rontolisp::%clojure-map-equivalence-p (x)
+  (rontolisp::%clojure-interface-entry x "clojure.lang.MapEquivalence"))
+
+(defun rontolisp::%clojure-iset-p (x)
+  (rontolisp::%clojure-interface-entry x "clojure.lang.IPersistentSet"))
+
+(defun rontolisp::%clojure-istack-p (x)
+  (rontolisp::%clojure-interface-entry x "clojure.lang.IPersistentStack"))
+
+(defun rontolisp::%clojure-ivector-p (x)
+  (rontolisp::%clojure-interface-entry x "clojure.lang.IPersistentVector"))
+
+(defun rontolisp::%clojure-ilist-p (x)
+  (rontolisp::%clojure-interface-entry x "clojure.lang.IPersistentList"))
+
+(defun rontolisp::%clojure-iseq-p (x)
+  (rontolisp::%clojure-interface-entry x "clojure.lang.ISeq"))
+
+(defun rontolisp::%clojure-isequential-p (x)
+  (rontolisp::%clojure-interface-entry x "clojure.lang.Sequential"))
+
+(defun rontolisp::%clojure-ireversible-p (x)
+  (rontolisp::%clojure-interface-entry x "clojure.lang.Reversible"))
+
+(defun rontolisp::%clojure-ipending-p (x)
+  (rontolisp::%clojure-interface-entry x "clojure.lang.IPending"))
+
+(defun rontolisp::%clojure-isorted-p (x)
+  (rontolisp::%clojure-interface-entry x "clojure.lang.Sorted"))
+
+(defun rontolisp::%clojure-icomparable-p (x)
+  (rontolisp::%clojure-interface-entry x "java.lang.Comparable"))
+
+(defun rontolisp::%clojure-iterable-p (x)
+  (rontolisp::%clojure-interface-entry x "java.lang.Iterable"))
+
+(defun rontolisp::%clojure-iterator-p (x)
+  (rontolisp::%clojure-interface-entry x "java.util.Iterator"))
+
+(defun rontolisp::%clojure-jcollection-p (x)
+  (rontolisp::%clojure-interface-entry x "java.util.Collection"))
+
+(defun rontolisp::%clojure-sequenced-p (x)
+  (rontolisp::%clojure-interface-entry x "java.util.SequencedCollection"))
+
+(defun rontolisp::%clojure-jlist-p (x)
+  (rontolisp::%clojure-interface-entry x "java.util.List"))
+
+(defun rontolisp::%clojure-jset-p (x)
+  (rontolisp::%clojure-interface-entry x "java.util.Set"))
+
+(defun rontolisp::%clojure-random-access-p (x)
+  (rontolisp::%clojure-interface-entry x "java.util.RandomAccess"))
+
+(defun rontolisp::%clojure-jmap-p (x)
+  (rontolisp::%clojure-interface-entry x "java.util.Map"))
+
+(defun rontolisp::%clojure-hasheq-p (x)
+  (rontolisp::%clojure-interface-entry x "clojure.lang.IHashEq"))
+
+(defun rontolisp::%clojure-editable-p (x)
+  (rontolisp::%clojure-interface-entry x "clojure.lang.IEditableCollection"))
+
+(defun rontolisp::%clojure-itransient-collection-p (x)
+  (rontolisp::%clojure-interface-entry x "clojure.lang.ITransientCollection"))
+
+(defun rontolisp::%clojure-itransient-associative-p (x)
+  (rontolisp::%clojure-interface-entry x "clojure.lang.ITransientAssociative"))
+
+(defun rontolisp::%clojure-itransient-associative2-p (x)
+  (rontolisp::%clojure-interface-entry x "clojure.lang.ITransientAssociative2"))
+
+(defun rontolisp::%clojure-itransient-map-p (x)
+  (rontolisp::%clojure-interface-entry x "clojure.lang.ITransientMap"))
+
+(defun rontolisp::%clojure-itransient-vector-p (x)
+  (rontolisp::%clojure-interface-entry x "clojure.lang.ITransientVector"))
+
+(defun rontolisp::%clojure-itransient-set-p (x)
+  (rontolisp::%clojure-interface-entry x "clojure.lang.ITransientSet"))
+
+(defun rontolisp::%clojure-serializable-p (x)
+  (rontolisp::%clojure-interface-entry x "java.io.Serializable"))
+
+(defun rontolisp::%clojure-default-method (x name)
+  "The method NAME of the row of X's type, one only defaults declare: the
+   body's, or a refusal of the call when the body left it out (the default's
+   body is Java, which no backend here runs)."
+  (or (rontolisp::%clojure-interface-entry x name)
+      (lambda (&rest args)
+        (declare (ignore args))
+        (rontolisp::%clojure-unsupported-operation-exception
+         (concatenate 'string "the default method " name
+                      " is not supported yet")))))
+
+(defun rontolisp::%clojure-call-method (x name)
+  "The lambda of the method NAME the row of X's type holds."
+  (rontolisp::%clojure-interface-entry x name))
+
+;; IPersistentCollection: conj, empty, count, =.
+
+(defun rontolisp::%clojure-collection-cons (coll x)
+  "(conj coll x) of the IPersistentCollection COLL: what its cons answers."
+  (funcall (rontolisp::%clojure-call-method coll "cons") coll x))
+
+(defun rontolisp::%clojure-collection-empty (coll)
+  "(empty coll) of the IPersistentCollection COLL: what its empty answers."
+  (funcall (rontolisp::%clojure-call-method coll "empty") coll))
+
+(defun rontolisp::%clojure-typed-merge (m maps)
+  "(merge m map ...) of the IPersistentCollection M: each later map conjoined
+   onto the answer before, the oracle's conj folded over the maps, nil adding
+   nothing."
+  (let ((out m))
+    (dolist (x maps out)
+      (if x
+          (setq out
+                (cond ((rontolisp::%clojure-icollection-p out)
+                       (rontolisp::%clojure-collection-cons out x))
+                      ((or (null out) (hash-table-p out))
+                       (rontolisp::%clojure-plist-table out
+                        (rontolisp::%clojure-merge-entry-plist x)))
+                      (t (rontolisp::%clojure-class-cast-exception-of
+                          "conj needs a collection and an item" out))))))))
+
+(defun rontolisp::%clojure-collection-count (coll)
+  "(count coll) of the IPersistentCollection COLL that is no Counted: its seq
+   walked to the end, like the oracle's countFrom."
+  (let ((n 0) (s (rontolisp::%clojure-seq coll)))
+    (do ()
+        ((null s) n)
+      (setq n (+ n 1))
+      (setq s (rontolisp::%clojure-seq-rest s)))))
+
+(defun rontolisp::%clojure-collection-equiv (coll x)
+  "Whether the IPersistentCollection COLL is = to X: what its equiv answers,
+   by truth."
+  (rontolisp::%clojure-truthy
+   (funcall (rontolisp::%clojure-call-method coll "equiv") coll x)))
+
+;; Associative: assoc, contains?, find. A multi-pair assoc steps each pair
+;; through the answer of the one before, like the oracle's, whatever kind that
+;; answer is.
+
+(defun rontolisp::%clojure-assoc-1 (m k v)
+  "RT.assoc of one pair: an Associative's assoc; nil a fresh map; a map, a
+   record, a sorted map or a vector the core association; anything else the
+   oracle's cast failure."
+  (cond ((rontolisp::%clojure-iassociative-p m)
+         (funcall (rontolisp::%clojure-call-method m "assoc") m k v))
+        ((null m) (rontolisp::%clojure-plist-table nil (list k v)))
+        ((hash-table-p m) (rontolisp::%clojure-plist-table m (list k v)))
+        ((rontolisp::%clojure-record-p m)
+         (list :C%RECORD (car (cdr m)) (car (cdr (cdr m)))
+          (rontolisp::%clojure-plist-table (car (cdr (cdr (cdr m)))) (list k v))
+          (car (cdr (cdr (cdr (cdr m)))))))
+        ((rontolisp::%clojure-sorted-p m)
+         (rontolisp::%clojure-sorted-assoc m (list k v)))
+        ((and (vectorp m) (not (stringp m)))
+         (rontolisp::%clojure-vector-assoc m (list k v)))
+        (t (rontolisp::%clojure-class-cast-exception-of
+            "assoc needs a map or a vector" m))))
+
+(defun rontolisp::%clojure-associative-assoc (m plist)
+  "(assoc m k v ...) of the Associative M: its assoc of the first pair, each
+   later pair onto the answer before."
+  (let ((out m))
+    (do ((p plist (cdr (cdr p))))
+        ((null p) out)
+      (setq out (rontolisp::%clojure-assoc-1 out (car p) (car (cdr p)))))))
+
+(defun rontolisp::%clojure-associative-contains (m k)
+  "(contains? m k) of the Associative M: what its containsKey answers, by
+   truth."
+  (rontolisp::%clojure-truthy
+   (funcall (rontolisp::%clojure-call-method m "containsKey") m k)))
+
+(defun rontolisp::%clojure-associative-find (m k)
+  "(find m k) of the Associative M: what its entryAt answers."
+  (funcall (rontolisp::%clojure-call-method m "entryAt") m k))
+
+;; IPersistentMap: dissoc. IPersistentSet: disj, contains?, get.
+
+(defun rontolisp::%clojure-dissoc-1 (m k)
+  "RT.dissoc of one key: an IPersistentMap's without; nil nil; a map a copy
+   without the key; anything else the oracle's cast failure."
+  (cond
+   ((rontolisp::%clojure-imap-p m)
+    (funcall (rontolisp::%clojure-call-method m "without") m k))
+   ((null m) nil)
+   ((hash-table-p m)
+    (let ((out (rontolisp::%clojure-plist-table m nil)))
+      (remhash (rontolisp::%clojure-table-key k out) out)
+      out))
+   (t (rontolisp::%clojure-class-cast-exception-of "dissoc needs a map" m))))
+
+(defun rontolisp::%clojure-typed-select-keys (m keys out)
+  "(select-keys m keys) of the typed map M into the fresh map OUT: the entry
+   find answers for each of KEYS, the oracle's RT.find."
+  (dolist (k keys out)
+    (let ((e (rontolisp::%clojure-find m k)))
+      (if e
+          (setf (gethash
+                 (rontolisp::%clojure-store-key (rontolisp::%clojure-key e) out)
+                 out) (rontolisp::%clojure-val e))))))
+
+(defun rontolisp::%clojure-typed-keys (m which)
+  "keys (WHICH 0) or vals (WHICH 1) of the typed map M: each entry of its seq's
+   key or value, nil when it has none, like the oracle's KeySeq and ValSeq."
+  (let ((acc nil) (s (rontolisp::%clojure-seq m)))
+    (do ()
+        ((null s) (reverse acc))
+      (setq acc
+            (cons (if (= which 0)
+                      (rontolisp::%clojure-key (car s))
+                      (rontolisp::%clojure-val (car s))) acc))
+      (setq s (rontolisp::%clojure-seq-rest s)))))
+
+(defun rontolisp::%clojure-imap-dissoc (m keys)
+  "(dissoc m k ...) of the IPersistentMap M: its without of the first key,
+   each later key off the answer before."
+  (let ((out m))
+    (dolist (k keys out) (setq out (rontolisp::%clojure-dissoc-1 out k)))))
+
+(defun rontolisp::%clojure-disj-1 (s x)
+  "disj of one member: an IPersistentSet's disjoin; nil nil; a set a copy
+   without the member; anything else the oracle's cast failure."
+  (cond ((rontolisp::%clojure-iset-p s)
+         (funcall (rontolisp::%clojure-call-method s "disjoin") s x))
+        ((null s) nil)
+        ((rontolisp::%clojure-set-p s)
+         (let ((table (make-hash-table :test 'equal)))
+           (maphash (lambda (k v)
+                      (declare (ignore v))
+                      (setf (gethash k table) k)) (car (cdr s)))
+           (remhash (rontolisp::%clojure-table-key x table) table)
+           (list :C%SET table)))
+        (t (rontolisp::%clojure-class-cast-exception-of "disj needs a set" s))))
+
+(defun rontolisp::%clojure-iset-disj (s members)
+  "(disj s x ...) of the IPersistentSet S: its disjoin of the first member,
+   each later member off the answer before."
+  (let ((out s))
+    (dolist (x members out) (setq out (rontolisp::%clojure-disj-1 out x)))))
+
+(defun rontolisp::%clojure-iset-contains (s x)
+  "Whether the IPersistentSet S contains X: what its contains answers, by
+   truth."
+  (rontolisp::%clojure-truthy
+   (funcall (rontolisp::%clojure-call-method s "contains") s x)))
+
+(defun rontolisp::%clojure-iset-get (s k dflt supplied)
+  "(get s k) of the IPersistentSet S: its get; with the default SUPPLIED, the
+   get when its contains holds, else DFLT, like the oracle's RT.getFrom."
+  (if supplied
+      (if (rontolisp::%clojure-iset-contains s k)
+          (funcall (rontolisp::%clojure-call-method s "get") s k)
+          dflt)
+      (funcall (rontolisp::%clojure-call-method s "get") s k)))
+
+;; IPersistentStack: peek, pop. Reversible: rseq. IPending: realized?.
+;; Comparable: compare.
+
+(defun rontolisp::%clojure-istack-peek (s)
+  "(peek s) of the IPersistentStack S."
+  (funcall (rontolisp::%clojure-call-method s "peek") s))
+
+(defun rontolisp::%clojure-istack-pop (s)
+  "(pop s) of the IPersistentStack S."
+  (funcall (rontolisp::%clojure-call-method s "pop") s))
+
+(defun rontolisp::%clojure-ireversible-rseq (x)
+  "(rseq x) of the Reversible X: what its rseq answers."
+  (funcall (rontolisp::%clojure-call-method x "rseq") x))
+
+(defun rontolisp::%clojure-ipending-realized (x)
+  "(realized? x) of the IPending X: what its isRealized answers, by truth."
+  (rontolisp::%clojure-truthy
+   (funcall (rontolisp::%clojure-call-method x "isRealized") x)))
+
+(defun rontolisp::%clojure-icomparable-compare (a b)
+  "(compare a b) of the Comparable A: what its compareTo answers, which must
+   be a number, like the oracle's int."
+  (let ((c (funcall (rontolisp::%clojure-call-method a "compareTo") a b)))
+    (if (integerp c)
+        c
+        (rontolisp::%clojure-class-cast-exception-of
+         "the answer of compareTo cannot be cast to class java.lang.Number"
+         c))))
+
+;; ISeq: a seq answered by a Seqable's seq, a Reversible's rseq or an ISeq's
+;; next may be the program's own ISeq, which the seq view walks through its
+;; first and next, lazily, one member per wrapper, like the oracle's walk.
+
+(defun rontolisp::%clojure-iseq-lazy (s)
+  "The lazy seq of the ISeq S: its first, then the seq of what its next
+   answers."
+  (rontolisp::%clojure-make-lazy
+   (lambda ()
+     (cons (funcall (rontolisp::%clojure-call-method s "first") s)
+           (rontolisp::%clojure-iseq-tail
+            (funcall (rontolisp::%clojure-call-method s "next") s))))))
+
+(defun rontolisp::%clojure-iseq-tail (s)
+  "The seq an ISeq's next answers, as the seq view walks it: nil, the
+   program's own ISeq through %clojure-iseq-lazy, anything else (a list, a
+   lazy seq) itself."
+  (if (rontolisp::%clojure-iseq-p s) (rontolisp::%clojure-iseq-lazy s) s))
+
+;; Sorted: subseq and rsubseq over its seqFrom, seq, comparator and entryKey,
+;; the oracle's: with > or >= the seq from the key ascending, its head dropped
+;; when it fails the test; with < or <= the ascending seq while it passes. The
+;; test compares (entryKey e) to the key through the comparator.
+
+(defun rontolisp::%clojure-isorted-include (sc test key)
+  "The oracle's mk-bound-fn: whether an entry passes TEST (:< :<= :> :>= or a
+   function called on the order and 0) against KEY under the Sorted SC's
+   comparator (compare when it answers nil)."
+  (let ((cmp (funcall (rontolisp::%clojure-call-method sc "comparator") sc)))
+    (lambda (e)
+      (let ((c
+             (rontolisp::%clojure-sorted-order cmp
+              (funcall (rontolisp::%clojure-call-method sc "entryKey") sc e)
+              key)))
+        (cond ((eq test :<) (< c 0))
+              ((eq test :<=) (<= c 0))
+              ((eq test :>) (> c 0))
+              ((eq test :>=) (>= c 0))
+              (t (rontolisp::%clojure-truthy (funcall test c 0))))))))
+
+(defun rontolisp::%clojure-isorted-subseq (sc test key ascending)
+  "(subseq sc test key) of the Sorted SC (rsubseq when ASCENDING is nil): the
+   seq from KEY when the test looks past it, else the seq while it passes."
+  (let ((include (rontolisp::%clojure-isorted-include sc test key))
+        (from
+         (if ascending
+             (or (eq test :>) (eq test :>=))
+             (or (eq test :<) (eq test :<=)))))
+    (if from
+        (let ((s
+               (rontolisp::%clojure-seq
+                (funcall (rontolisp::%clojure-call-method sc "seqFrom") sc key
+                         (if ascending t rontolisp::%clojure-false)))))
+          (cond ((null s) nil)
+                ((funcall include (car s)) s)
+                (t (rontolisp::%clojure-seq-rest s))))
+        (let ((acc nil)
+              (s
+               (rontolisp::%clojure-seq
+                (funcall (rontolisp::%clojure-call-method sc "seq") sc
+                         (if ascending t rontolisp::%clojure-false)))))
+          (do ()
+              ((or (null s) (not (funcall include (car s)))) (reverse acc))
+            (setq acc (cons (car s) acc))
+            (setq s (rontolisp::%clojure-seq-rest s)))))))
+
+(defun rontolisp::%clojure-isorted-subseq-5
+    (sc start-test start-key end-test end-key ascending)
+  "(subseq sc start-test start-key end-test end-key) of the Sorted SC
+   (rsubseq when ASCENDING is nil): the seq from the start key while the end
+   test passes, the head dropped when it fails the start test."
+  (let ((include (rontolisp::%clojure-isorted-include sc start-test start-key))
+        (end (rontolisp::%clojure-isorted-include sc end-test end-key))
+        (acc nil)
+        (s
+         (rontolisp::%clojure-seq
+          (funcall (rontolisp::%clojure-call-method sc "seqFrom") sc start-key
+                   (if ascending t rontolisp::%clojure-false)))))
+    (if (and s (not (funcall include (car s))))
+        (setq s (rontolisp::%clojure-seq-rest s)))
+    (do ()
+        ((or (null s) (not (funcall end (car s)))) (reverse acc))
+      (setq acc (cons (car s) acc))
+      (setq s (rontolisp::%clojure-seq-rest s)))))
+
+;; Iterable and Iterator. An iterator is a type implementing
+;; java.util.Iterator, a host Iterator (interpreter and JVM), or the iterator
+;; over a seq this library makes: what .iterator of a Clojure collection,
+;; clojure.lang.SeqIterator and clojure.lang.RT/iter answer, (:C%ITERATOR
+;; #(seq)), the seq it has not stepped past yet.
+
+(defun rontolisp::%clojure-seq-iterator (s)
+  "An iterator over the seq view of S."
+  (list :C%ITERATOR (vector s)))
+
+(defun rontolisp::%clojure-seq-iterator-p (x)
+  "Whether X is an iterator over a seq this library made."
+  (and (consp x) (eq (car x) :C%ITERATOR) (consp (cdr x))))
+
+(defun rontolisp::%clojure-iter-has-next (it)
+  "Whether the iterator IT has another member: hasNext, by truth."
+  (cond ((rontolisp::%clojure-seq-iterator-p it)
+         (let ((s (rontolisp::%clojure-seq (aref (car (cdr it)) 0))))
+           (setf (aref (car (cdr it)) 0) s)
+           (if s t nil)))
+        ((rontolisp::%clojure-iterator-p it)
+         (rontolisp::%clojure-truthy
+          (funcall (rontolisp::%clojure-call-method it "hasNext") it)))
+        ((rontolisp::%clojure-host-object-p it "java.util.Iterator")
+         (java:call it "hasNext"))
+        (t (rontolisp::%clojure-class-cast-exception-of
+            "an iterator needs a java.util.Iterator" it))))
+
+(defun rontolisp::%clojure-iter-next (it)
+  "The next member of the iterator IT; past its end the oracle's
+   NoSuchElementException."
+  (cond ((rontolisp::%clojure-seq-iterator-p it)
+         (let ((s (rontolisp::%clojure-seq (aref (car (cdr it)) 0))))
+           (if (null s)
+               (rontolisp::%clojure-no-such-element-exception
+                "the iterator has no next member")
+               (progn
+                 (setf (aref (car (cdr it)) 0) (cdr s))
+                 (car s)))))
+        ((rontolisp::%clojure-iterator-p it)
+         (funcall (rontolisp::%clojure-call-method it "next") it))
+        ((rontolisp::%clojure-host-object-p it "java.util.Iterator")
+         (java:call it "next" :java-false))
+        (t (rontolisp::%clojure-class-cast-exception-of
+            "an iterator needs a java.util.Iterator" it))))
+
+(defun rontolisp::%clojure-iterator-lazy (it)
+  "The lazy seq of what the iterator IT steps: iterator-seq."
+  (rontolisp::%clojure-make-lazy
+   (lambda ()
+     (if (rontolisp::%clojure-iter-has-next it)
+         (let ((x (rontolisp::%clojure-iter-next it)))
+           (cons x (rontolisp::%clojure-iterator-lazy it)))
+         nil))))
+
+(defun rontolisp::%clojure-iterator-seq (it)
+  "(iterator-seq it): the seq of what the iterator IT steps, nil when it has
+   none, realized one member at a time."
+  (rontolisp::%clojure-realize (rontolisp::%clojure-iterator-lazy it)))
+
+(defun rontolisp::%clojure-iterator-seq-v (&rest args)
+  "iterator-seq as a value."
+  (rontolisp::%clojure-check-arity args 1 1 "iterator-seq")
+  (rontolisp::%clojure-iterator-seq (car args)))
+
+(defun rontolisp::%clojure-iterable-iterator (x)
+  "The iterator of the Iterable X: what its iterator answers."
+  (funcall (rontolisp::%clojure-call-method x "iterator") x))
+
+;; clojure.lang.RT/iter of a type implementing Iterable: its own iterator, an arm
+;; of the iterable family.
+(defun rontolisp::%clojure-iter (x)
+  "clojure.lang.RT/iter: the iterator of the Iterable X, else the iterator over
+   X's seq."
+  (if (rontolisp::%clojure-iterable-p x)
+      (rontolisp::%clojure-iterable-iterator x)
+      (rontolisp::%clojure-seq-iterator x)))
+
+(defun rontolisp::%clojure-iterable-seq (x)
+  "The seq of the Iterable X: what its iterator steps, the oracle's
+   chunkIteratorSeq, realized one level."
+  (rontolisp::%clojure-iterator-seq (rontolisp::%clojure-iterable-iterator x)))
+
+(defun rontolisp::%clojure-iter-reduce (coll f init)
+  "(reduce f init coll) of the Iterable COLL through its iterator, the
+   oracle's iter-reduce: stops at a reduced answer, unwrapped."
+  (let ((it (rontolisp::%clojure-iterable-iterator coll)) (acc init) (done nil))
+    (do ()
+        ((or done (not (rontolisp::%clojure-iter-has-next it))) acc)
+      (setq acc (funcall f acc (rontolisp::%clojure-iter-next it)))
+      (if (rontolisp::%clojure-reduced-p acc)
+          (progn
+            (setq acc (car (cdr acc)))
+            (setq done t))))))
+
+(defun rontolisp::%clojure-iter-reduce-2 (coll f)
+  "(reduce f coll) of the Iterable COLL through its iterator: (f) when it has
+   no member, else F folded from the first."
+  (let ((it (rontolisp::%clojure-iterable-iterator coll)))
+    (if (rontolisp::%clojure-iter-has-next it)
+        (let ((acc (rontolisp::%clojure-iter-next it)) (done nil))
+          (do ()
+              ((or done (not (rontolisp::%clojure-iter-has-next it))) acc)
+            (setq acc (funcall f acc (rontolisp::%clojure-iter-next it)))
+            (if (rontolisp::%clojure-reduced-p acc)
+                (progn
+                  (setq acc (car (cdr acc)))
+                  (setq done t)))))
+        (funcall f))))
+
+;; java.util: a Collection's or a Map's size, a Map's get, containsKey and
+;; entrySet, a Set's contains, a RandomAccess List's get.
+
+(defun rontolisp::%clojure-java-size (x)
+  "The size of the java.util Collection or Map X, a number like the oracle's
+   int."
+  (funcall (rontolisp::%clojure-call-method x "size") x))
+
+(defun rontolisp::%clojure-jmap-get (m k dflt supplied)
+  "(get m k) of the java.util.Map M: its get; with the default SUPPLIED, its
+   get when its containsKey holds, else DFLT, like the oracle's RT.getFrom."
+  (if supplied
+      (if (rontolisp::%clojure-jmap-contains m k)
+          (funcall (rontolisp::%clojure-call-method m "get") m k)
+          dflt)
+      (funcall (rontolisp::%clojure-call-method m "get") m k)))
+
+(defun rontolisp::%clojure-jmap-contains (m k)
+  "Whether the java.util.Map M holds the key K: its containsKey, by truth."
+  (rontolisp::%clojure-truthy
+   (funcall (rontolisp::%clojure-call-method m "containsKey") m k)))
+
+(defun rontolisp::%clojure-jmap-find (m k)
+  "(find m k) of the java.util.Map M: [K value] when its containsKey holds,
+   else nil."
+  (if (rontolisp::%clojure-jmap-contains m k)
+      (vector k (funcall (rontolisp::%clojure-call-method m "get") m k))
+      nil))
+
+(defun rontolisp::%clojure-jmap-seq (m)
+  "The seq of the java.util.Map M: the seq of what its entrySet answers, like
+   the oracle's RT.seqFrom."
+  (rontolisp::%clojure-seq
+   (funcall (rontolisp::%clojure-call-method m "entrySet") m)))
+
+(defun rontolisp::%clojure-jset-contains (s x)
+  "Whether the java.util.Set S contains X: its contains, by truth."
+  (rontolisp::%clojure-truthy
+   (funcall (rontolisp::%clojure-call-method s "contains") s x)))
+
+(defun rontolisp::%clojure-jlist-nth (l i dflt supplied)
+  "(nth l i) of the RandomAccess java.util.List L: its get; with the default
+   SUPPLIED, DFLT past its size, like the oracle's RT.nthFrom."
+  (if (and supplied (or (< i 0) (>= i (rontolisp::%clojure-java-size l))))
+      dflt
+      (funcall (rontolisp::%clojure-call-method l "get") l i)))
+
+;; =: Util.equiv where a typed value stands on either side. An
+;; IPersistentCollection on the left answers through its equiv, a core
+;; collection on the left through its own equiv reading the other side, an
+;; IPersistentCollection on the right through its equiv; with no collection on
+;; either side, an Object override's equals or identity.
+
+(defun rontolisp::%clojure-core-coll-p (x)
+  "Whether X is one of the core collections, the oracle's
+   IPersistentCollection classes: a list, a lazy seq, a vector, a map, a set, a
+   sorted collection or a record."
+  (or (and (vectorp x) (not (stringp x))) (hash-table-p x)
+      (rontolisp::%clojure-lazy-p x) (rontolisp::%clojure-set-p x)
+      (rontolisp::%clojure-record-p x) (rontolisp::%clojure-sorted-p x)
+      (and (consp x) (not (keywordp (car x))))))
+
+(defun rontolisp::%clojure-equal-typed (a b)
+  "Clojure = of A and B where one of them is a typed collection value, the
+   oracle's Util.equiv and pcequiv."
+  (cond ((eq a b) t)
+   ((or (null a) (null b)) nil)
+   ((rontolisp::%clojure-icollection-p a)
+    (rontolisp::%clojure-collection-equiv a b))
+   ((rontolisp::%clojure-core-coll-p a) (rontolisp::%clojure-core-equiv a b))
+   ((rontolisp::%clojure-icollection-p b)
+    (rontolisp::%clojure-collection-equiv b a))
+   ((rontolisp::%clojure-core-coll-p b) (rontolisp::%clojure-core-equiv b a))
+   ((rontolisp::%clojure-equals-p a) (rontolisp::%clojure-object-equal a b))
+   (t nil)))
+
+(defun rontolisp::%clojure-core-equiv (c x)
+  "Whether the core collection C is = to the typed value X, as C's own equiv
+   reads X: a vector an IPersistentVector by count and nth, a java.util.List by
+   size and iterator, a Sequential by its seq; a list or lazy seq a Sequential
+   or a List by its seq; a map a java.util.Map (an IPersistentMap only with
+   MapEquivalence) by size, containsKey and get; a set a java.util.Set by size
+   and members. Anything else is unequal."
+  (cond ((and (vectorp c) (not (stringp c)))
+         (cond ((rontolisp::%clojure-ivector-p x)
+                (rontolisp::%clojure-vector-equiv-indexed c x))
+               ((rontolisp::%clojure-jlist-p x)
+                (and (eql (rontolisp::%clojure-java-size x) (length c))
+                     (rontolisp::%clojure-seq-equal c
+                      (rontolisp::%clojure-iterable-seq x))))
+               ((rontolisp::%clojure-isequential-p x)
+                (rontolisp::%clojure-seq-equal c x))
+               (t nil)))
+        ((or (rontolisp::%clojure-lazy-p c)
+             (and (consp c) (not (keywordp (car c)))))
+         (cond
+          ((rontolisp::%clojure-isequential-p x)
+           (and (rontolisp::%clojure-counts-agree c x)
+                (rontolisp::%clojure-seq-equal c x)))
+          ((rontolisp::%clojure-jlist-p x) (rontolisp::%clojure-seq-equal c x))
+          (t nil)))
+        ((or (hash-table-p c) (rontolisp::%clojure-sorted-map-p c))
+         (cond ((rontolisp::%clojure-imap-p x)
+                (if (rontolisp::%clojure-map-equivalence-p x)
+                    (rontolisp::%clojure-map-equiv-jmap c x)
+                    nil))
+               ((rontolisp::%clojure-jmap-p x)
+                (rontolisp::%clojure-map-equiv-jmap c x))
+               (t nil)))
+        ((or (rontolisp::%clojure-set-p c) (rontolisp::%clojure-sorted-set-p c))
+         (cond ((rontolisp::%clojure-jset-p x)
+                (rontolisp::%clojure-set-equiv-jset c x))
+               (t nil)))
+        (t nil)))
+
+(defun rontolisp::%clojure-vector-equiv-indexed (v x)
+  "The oracle's vector = of an IPersistentVector X: the same count, then each
+   member = to X's nth."
+  (and (eql (funcall (rontolisp::%clojure-call-method x "count") x) (length v))
+       (let ((same t) (i 0))
+         (do ()
+             ((or (not same) (>= i (length v))) same)
+           (if (not
+                (rontolisp::%clojure-equal (aref v i)
+                 (funcall (rontolisp::%clojure-call-method x "nth") x i)))
+               (setq same nil))
+           (setq i (+ i 1))))))
+
+(defun rontolisp::%clojure-counts-agree (c x)
+  "The oracle's seq = asks two Counted their counts first: false when the list
+   C and the Counted X differ, true otherwise (a lazy seq is no Counted)."
+  (if (rontolisp::%clojure-counted-p x)
+      (if (and (consp c) (not (keywordp (car c))))
+          (eql (length c) (rontolisp::%clojure-counted-count x))
+          t)
+      t))
+
+(defun rontolisp::%clojure-map-equiv-jmap (c x)
+  "The oracle's map = of the java.util.Map X: the same size, and every entry of
+   the map C held by X's containsKey under a value = to X's get."
+  (and (eql (rontolisp::%clojure-java-size x)
+            (if (hash-table-p c)
+                (hash-table-count c)
+                (rontolisp::%clojure-sorted-count c)))
+       (let ((ok t))
+         (dolist (e (rontolisp::%clojure-strict-seq c) ok)
+           (if (and ok
+                    (not
+                     (and (rontolisp::%clojure-jmap-contains x (aref e 0))
+                          (rontolisp::%clojure-equal (aref e 1)
+                           (funcall (rontolisp::%clojure-call-method x "get") x
+                                    (aref e 0))))))
+               (setq ok nil))))))
+
+(defun rontolisp::%clojure-set-equiv-jset (c x)
+  "The oracle's set = of the java.util.Set X: the same size, and every member
+   X's iterator steps held by the set C."
+  (and (eql (rontolisp::%clojure-java-size x)
+            (if (rontolisp::%clojure-set-p c)
+                (hash-table-count (car (cdr c)))
+                (rontolisp::%clojure-sorted-count c)))
+       (let ((ok t) (s (rontolisp::%clojure-iterable-seq x)))
+         (do ()
+             ((or (not ok) (null s)) ok)
+           (if (not (rontolisp::%clojure-set-holds-p c (car s))) (setq ok nil))
+           (setq s (rontolisp::%clojure-seq-rest s))))))
+
+(defun rontolisp::%clojure-set-holds-p (c x)
+  "Whether the set or sorted set C holds X."
+  (if (rontolisp::%clojure-set-p c)
+      (let ((miss (list nil)))
+        (not
+         (eq (gethash (rontolisp::%clojure-table-key x (car (cdr c)))
+                      (car (cdr c)) miss) miss)))
+      (rontolisp::%clojure-sorted-contains c x)))
+
+;; The printer: a typed map, set, vector or seq writes as one over its seq, in
+;; the seq's order (a java.util.Map over its entrySet, a List or a Set over its
+;; iterator), like the oracle's print-method of IPersistentMap, IPersistentSet,
+;; IPersistentVector, ISeq and the java.util Map, Set, List and RandomAccess,
+;; and *print-length* cuts it like any collection.
+
+(defun rontolisp::%clojure-typed-print-kind (x)
+  "How the printer writes the typed collection X: :map, :set, :vector or :seq,
+   the oracle's print-method of its most specific interface."
+  (cond ((rontolisp::%clojure-imap-p x) :map)
+        ((rontolisp::%clojure-iset-p x) :set)
+        ((rontolisp::%clojure-ivector-p x) :vector)
+        ((rontolisp::%clojure-iseq-p x) :seq)
+        ((rontolisp::%clojure-jmap-p x) :map)
+        ((rontolisp::%clojure-jset-p x) :set)
+        ((rontolisp::%clojure-jlist-p x)
+         (if (rontolisp::%clojure-random-access-p x) :vector :seq))
+        (t :seq)))
+
+(defun rontolisp::%clojure-typed-print-parts (x kind n)
+  "The parts of the typed collection X the printer writes, at most N of them
+   when N is a number: its seq's members, a map's entries as (key . value)."
+  (let ((acc nil) (i 0) (s (rontolisp::%clojure-seq x)))
+    (do ()
+        ((or (null s) (and n (>= i n))) (reverse acc))
+      (setq acc
+            (cons (if (eq kind :map)
+                      (cons (rontolisp::%clojure-key (car s))
+                            (rontolisp::%clojure-val (car s)))
+                      (car s)) acc))
+      (setq i (+ i 1))
+      (setq s (rontolisp::%clojure-seq-rest s)))))
+
+(defun rontolisp::%clojure-typed-longer-p (x n)
+  "Whether the seq of the typed collection X has more than N members."
+  (let ((i 0) (s (rontolisp::%clojure-seq x)))
+    (do ()
+        ((or (null s) (> i n)) (> i n))
+      (setq i (+ i 1))
+      (setq s (rontolisp::%clojure-seq-rest s)))))
+
+(defun rontolisp::%clojure-typed-open (kind)
+  "What a typed collection of the print KIND opens with."
+  (cond ((eq kind :map) "{")
+        ((eq kind :set) "#{")
+        ((eq kind :vector) "[")
+        (t "(")))
+
+(defun rontolisp::%clojure-typed-close (kind)
+  "What a typed collection of the print KIND closes with."
+  (cond ((or (eq kind :map) (eq kind :set)) "}")
+        ((eq kind :vector) "]")
+        (t ")")))
+
+(defun rontolisp::%clojure-write-typed
+    (x nil-replacement readable stream labels)
+  "Write the typed collection X as the kind %clojure-typed-print-kind answers:
+   its members in its seq's order, a map's entries as key value pairs."
+  (let ((kind (rontolisp::%clojure-typed-print-kind x)) (first t))
+    (write-string (rontolisp::%clojure-typed-open kind) stream)
+    (dolist (p (rontolisp::%clojure-typed-print-parts x kind nil))
+      (if first
+          (setq first nil)
+          (write-string (if (eq kind :map) ", " " ") stream))
+      (if (eq kind :map)
+          (progn
+            (rontolisp::%clojure-write-nested (car p) nil-replacement readable
+                                              stream labels)
+            (write-char #\Space stream)
+            (rontolisp::%clojure-write-nested (cdr p) nil-replacement readable
+                                              stream labels))
+          (rontolisp::%clojure-write-nested p nil-replacement readable stream
+                                            labels)))
+    (write-string (rontolisp::%clojure-typed-close kind) stream)))
 
 ;;;; Keyword arguments: a map pattern reads a seq as the map its key-value pairs
 ;;;; stand for, like the oracle's destructure (Clojure 1.11+).

@@ -1252,7 +1252,7 @@ final class WasmStringRuntimeBuilder {
 	// Encodes the Unicode code point in codeLocal as 1-4 UTF-8 bytes at linear memory
 	// starting at curLocal, and advances curLocal by the number of bytes emitted. The
 	// caller has already grown the linear heap to the worst-case capacity.
-	private static void emitUtf8Encode(WasmWriter w, int codeLocal, int curLocal) {
+	static void emitUtf8Encode(WasmWriter w, int codeLocal, int curLocal) {
 		// if (code < 0x80) { mem[cur] = code; cur += 1 }
 		get(w, codeLocal);
 		i32(w, 0x80);

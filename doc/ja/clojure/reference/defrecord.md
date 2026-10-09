@@ -42,8 +42,12 @@ lower されます。位置指定の `->Name`（数が違うとシグナル）�
 本体は、[reify](reify.md#host-interfaces) のインタフェースのうちレコード自身が実装しない
 もの（`IFn`、`IDeref`、`IReduceInit` など）を実装でき、`toString` を上書きできます。
 `toString` は `str` が読み、印字は引き続きレコードのリテラルです。マップのインタフェースは
-レコード自身のものなので、`ILookup` や `IObj` を挙げることと、`count`・`seq`・`valAt`・
-`meta`・`equals`・`hashCode` を定義することは、オラクルの `Duplicate` による拒否になります。
+レコード自身のものなので、`ILookup`・`IObj`・`IPersistentMap`・`IHashEq`・`java.util.Map`・
+`java.io.Serializable` を挙げることと、レコード自身が定義するメソッド（`count`、`seq`、`valAt`、
+`assoc`、`iterator`、`meta`、`equals`、`hashCode` など）を定義することは、オラクルの
+`Duplicate` による拒否になります。それらのインタフェースのメソッドのうち、レコードが
+インタフェース側の実装に任せるもの（`assocEx`、`java.util.Map` の default メソッド）は名前を
+挙げて拒否されます。
 
 ```clojure
 (defrecord Adder [n] clojure.lang.IFn (invoke [_ x] (+ n x)))

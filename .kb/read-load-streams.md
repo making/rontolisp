@@ -272,14 +272,14 @@ Pinned by `ReadFromStringLambdaListFixture` (`.PROGRAM`, sbcl's answers, ci-spec
   lowering, kept behind a runtime `(null ...)` test for a non-literal peek-type. **The `characterp`
   guard in the loop's end test is load-bearing**: with a nil `eof-error-p` it ends the loop on the
    eof-value instead of skipping forever. Interpreter/JVM `mark(2)`/`reset()`; WASM has no reset, so a
-   WASI fd parks the code point in a ONE-SLOT pushback keyed on the fd (`PEEK_FD_ADDR` = fd+1,
-   `PEEK_CP_ADDR`). `_read_char`, `_read_line` and the bulk `read-sequence` character path all
-   drain it first (`.todo/936`); `read` never needed a drain of its own -- the whole prelude
-   `%rd-*` scanner family consumes through `read-char`. A parked newline ends the next `read-line`
-   as an empty line, the loop's own newline-break shape; any other parked code point is
-   UTF-8-encoded into the line's staging ahead of the fd bytes. Cost (2026-09-23): a `read-line`
-   program +291 B Preview 1, a program without one byte-identical; the `_read_line` core body is
-   one build shared by both WASM backends.
+   WASI fd parks the BYTES the character was decoded from in the fd's byte pushback
+   (`PUSHBACK_KEY_ADDR` / `PUSHBACK_BYTES_ADDR`, `.kb/character-sequence-io.md` "Malformed
+   input"), which every character read takes first: `_read_char` directly, `_read_line` as a
+   `_read_char` loop, the bulk `read-sequence` path through `_read_char` while it holds bytes.
+   `read` never needed a drain of its own -- the whole prelude `%rd-*` scanner family consumes
+   through `read-char`. (Until 2026-10-09 the slot held one code point, drained by each of the
+   three separately, `.todo/936`.) The `_read_line` core body is one build shared by both WASM
+   backends.
 
 ## `open` / `with-open-file` / `%probe-file`
 - `with-open-file` is a plain macro (`expandWithOpenFile`) over `open`/`close`.
@@ -1282,9 +1282,9 @@ Lisp's "cannot be determined"); a STRING stream answers its character position
   errno. Nothing buffers ahead of it: `_read_line` / `_read_char` read ONE BYTE per
   `fd_read`, writes go straight through, and `read-sequence`'s bulk character path asks
   for at most one byte per character still wanted and completes a split sequence with
-  exactly its missing bytes (`WasmCharIoRuntimeBuilder`). Two corrections remain: the
-  query subtracts the UTF-8 length of a code point `peek-char` parked on this fd
-  (`PEEK_FD_ADDR` = fd + 1) and the set drops it; and an APPENDING open moves the
+  its missing bytes one at a time (`WasmCharIoRuntimeBuilder`). Two corrections remain: the
+  query subtracts the bytes the fd's byte pushback holds (a peek's, or the one byte read
+  past a malformed sequence) and the set drops them; and an APPENDING open moves the
   descriptor to the end at the `open` call site (`WasmOpenCompiler`:
   `_file_position_set(fd, _file_length(fd))`), because an append descriptor sits at 0
   until its first write.

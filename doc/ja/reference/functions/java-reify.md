@@ -42,6 +42,16 @@
 
 引数と同じ規則で変換されます。整数は `int` に、リストは配列か `List` に、`nil` は `false` か `null` になる、という具合です。ただし関数は戻る方向ではプロキシにしません。インターフェースが期待される戻り値には `java:reify` か `java:proxy` のオブジェクトを返してください。変換できない値はエラーです。たとえば `java:reify: cannot return "x" as int from java.util.function.IntSupplier.getAsInt` です。
 
+Java の false は `nil` として関数に渡ります。最後の関数の後ろを `:java-false` で終えると、代わりに `|false|` を渡します (ガイドの [Java の false を受け取る](../../guides/java-interop.md#javas-false-back-java-false))。
+
+```lisp
+(let ((seen nil))
+  (java:call (java:reify "java.util.function.Consumer" "accept" (lambda (x) (push x seen)) :java-false)
+             "accept" '|false|)
+  seen)
+; => (|false|)
+```
+
 ## コンパイル済みプログラムでの扱い
 
 インターフェース名とメソッド名がリテラル文字列で、そのインターフェースがコンパイル時に見える `java:reify` は、コンパイル時に生成するクラス (プログラムの隣の `Prog$Reify0.class`) になります。リフレクションを使わないので、そのプログラムは `--java-static` でコンパイルでき、GraalVM ネイティブイメージにも設定なしでビルドできます。オブジェクトの表示は、コンパイル時は `#<java Prog$Reify0>`、インタプリタでは `java.lang.reflect.Proxy` のクラス名になります。名前を計算で与える `java:reify` は、実行時にリフレクションブリッジを通して実装されます。

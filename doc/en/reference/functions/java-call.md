@@ -36,3 +36,12 @@ it runs (the guide's [Resolving calls before they
 run](../../guides/java-interop.md#resolving-calls-before-they-run)).
 
 A function argument passed where an interface is expected becomes a `java:proxy` of it, called with the method name first. Ending the call in `:functional`, after the arguments, makes it implement each abstract method by the method's arguments instead, as `java:new` and `java:static` do with the same ending (the guide's [Callbacks via java:proxy](../../guides/java-interop.md#callbacks-via-javaproxy)).
+
+Ending the call in `:java-false`, after the arguments (before or after `:functional`),
+answers Java's false as `|false|` rather than `nil` (the guide's [Java's false
+back](../../guides/java-interop.md#javas-false-back-java-false)):
+
+```lisp
+(java:call (java:new "java.util.ArrayList" (list 1)) "isEmpty" :java-false)
+; => |false|
+```

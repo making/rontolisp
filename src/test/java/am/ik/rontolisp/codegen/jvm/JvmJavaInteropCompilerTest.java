@@ -1276,6 +1276,34 @@ class JvmJavaInteropCompilerTest {
 			.isEqualTo(JavaInteropPrograms.FALSE_AND_TABLE_OUTPUT);
 	}
 
+	// Mirrors JavaInteropTest#aCallEndingInJavaFalseAnswersJavasFalseAsFalse: direct
+	// sites through _junf / _jarf and the boolean arms, the bridge through its own
+	// unmarshal.
+	@Test
+	void aCallEndingInJavaFalseAnswersJavasFalseAsFalse() throws Exception {
+		assertThat(compileAndRun(JavaInteropPrograms.JAVA_FALSE_PROGRAM))
+			.isEqualTo(JavaInteropPrograms.JAVA_FALSE_OUTPUT);
+	}
+
+	// Mirrors
+	// JavaInteropTest#anImplementationMadeAtJavaFalseIsHandedFalseAndReadsAComparison:
+	// the generated classes' callbacks through _junf and _jcmp, the bridge's Proxy
+	// through its own.
+	@Test
+	void anImplementationMadeAtJavaFalseIsHandedFalseAndReadsAComparison() throws Exception {
+		assertThat(compileAndRun(JavaImplementationPrograms.JAVA_FALSE))
+			.isEqualTo(JavaImplementationPrograms.JAVA_FALSE_OUTPUT);
+	}
+
+	// Mirrors JavaInteropTest#aHandleIsItsTextToJavaAndItsValueBack: the generated
+	// handle class through _jhandle, unwrapped by _junm / _jarr at a direct site and by
+	// the bridge's own unmarshal.
+	@Test
+	void aHandleIsItsTextToJavaAndItsValueBack() throws Exception {
+		assertThat(compileAndRun(JavaInteropPrograms.JAVA_HANDLE_PROGRAM))
+			.isEqualTo(JavaInteropPrograms.JAVA_HANDLE_OUTPUT);
+	}
+
 	@Test
 	void proxyOnNonInterfaceSignals() {
 		assertThatThrownBy(() -> compileAndRun("(java:proxy \"java.lang.String\" (lambda (m) nil))"))

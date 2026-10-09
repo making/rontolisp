@@ -306,6 +306,16 @@ class ClojureSessionTest {
 	}
 
 	@Test
+	void theExtendFormsEchoNil() {
+		// the oracle answers nil from extend-protocol, extend-type and extend, not the
+		// lambda the last row stored
+		assertThat(runSession("(defprotocol EP (ep [x]))",
+				"(prn (extend-protocol EP Long (ep [n] n)) (extend-type String EP (ep [s] s))"
+						+ " (extend Boolean EP {:ep (fn [b] b)}))"))
+			.isEqualTo("nil nil nil\n");
+	}
+
+	@Test
 	void theTestRuntimeStartsOnceAheadOfTheFirstTestBuffer() {
 		// clojure.test in a session: the runtime start travels ahead of the
 		// buffer that first uses it, the test registers under the session's

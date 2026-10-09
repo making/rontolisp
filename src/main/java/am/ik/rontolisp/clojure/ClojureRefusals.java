@@ -100,6 +100,12 @@ final class ClojureRefusals {
 	static final String ABSTRACT_METHOD = "RONTOLISP::%CLOJURE-ABSTRACT-METHOD-ERROR";
 
 	/**
+	 * {@code java.util.NoSuchElementException}: the {@code next} of an iterator past its
+	 * end ({@link ClojureInterfaces}).
+	 */
+	static final String NO_SUCH_ELEMENT = "RONTOLISP::%CLOJURE-NO-SUCH-ELEMENT-EXCEPTION";
+
+	/**
 	 * {@code java.lang.ClassCastException} casting a value, its
 	 * {@code NullPointerException} when the value is nil.
 	 */
@@ -173,7 +179,8 @@ final class ClojureRefusals {
 			Map.entry(UNSUPPORTED_ENCODING, "java.io.UnsupportedEncodingException"),
 			Map.entry(MALFORMED_URL, "java.net.MalformedURLException"),
 			Map.entry(SAX_PARSE, "org.xml.sax.SAXParseException"),
-			Map.entry(ABSTRACT_METHOD, "java.lang.AbstractMethodError"));
+			Map.entry(ABSTRACT_METHOD, "java.lang.AbstractMethodError"),
+			Map.entry(NO_SUCH_ELEMENT, "java.util.NoSuchElementException"));
 
 	/** Every carrier: a call to one is a refusal the strip folds. */
 	static final Set<String> CARRIERS = carriers();

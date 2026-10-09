@@ -1,6 +1,7 @@
 package am.ik.rontolisp.eval;
 
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -27,6 +28,24 @@ class ClojureLibraryTest {
 		assertThat(ClojureLibrary.isClojureFunction("RONTOLISP::%CLOJURE-WRITE-DATUM")).isTrue();
 		assertThat(ClojureLibrary.isClojureFunction("RONTOLISP::%CLOJURE-CALL")).isTrue();
 		assertThat(ClojureLibrary.isClojureFunction("PRINC")).isFalse();
+	}
+
+	@Test
+	void everyLibraryNameIsDefinedOnce() {
+		// a second definition of a name replaces the first for every caller, the first's
+		// own included
+		Set<String> seen = new HashSet<>();
+		Set<String> twice = new TreeSet<>();
+		for (LispVal form : ClojureLibrary.forms()) {
+			if (form instanceof LispCons cons && cons.car() instanceof LispSymbol head
+					&& (head.name().equals("DEFUN") || head.name().equals("DEFMACRO"))
+					&& cons.cdr() instanceof LispCons rest && rest.car() instanceof LispSymbol name
+					&& !seen.add(name.name())) {
+				twice.add(name.name());
+			}
+		}
+		assertThat(seen).contains("RONTOLISP::%CLOJURE-HOST-ENTRIES", "RONTOLISP::%CLOJURE-HOST-VALUE");
+		assertThat(twice).isEmpty();
 	}
 
 	@Test
@@ -123,6 +142,33 @@ class ClojureLibraryTest {
 				.contains("%CLOJURE-REDUCE-INIT-P");
 			assertThat(defun(iteration, "RONTOLISP::%CLOJURE-NTH")).as(source).doesNotContain("%CLOJURE-INDEXED-P");
 		}
+	}
+
+	@Test
+	void aProgramStoringNoCollectionInterfaceRowSplicesTheVerbsWithoutTheirArms() {
+		// only the store of a collection interface's row makes a value the verbs read
+		// through its methods: a program storing none compiles them as before
+		Map<String, String> arms = Map.of("RONTOLISP::%CLOJURE-STRICT-SEQ", "%CLOJURE-ITERABLE-P",
+				"RONTOLISP::%CLOJURE-EQUAL", "%CLOJURE-ICOLLECTION-P", "RONTOLISP::%CLOJURE-WRITE", "%CLOJURE-IMAP-P",
+				"RONTOLISP::%CLOJURE-PEEK", "%CLOJURE-ISTACK-P", "RONTOLISP::%CLOJURE-FIND", "%CLOJURE-IASSOCIATIVE-P",
+				"RONTOLISP::%CLOJURE-COMPARE", "%CLOJURE-ICOMPARABLE-P", "RONTOLISP::%CLOJURE-COLL-REDUCE-3",
+				"%CLOJURE-ITERABLE-P", "RONTOLISP::%CLOJURE-NTH", "%CLOJURE-ISEQUENTIAL-P",
+				"RONTOLISP::%CLOJURE-IS-REALIZED", "%CLOJURE-IPENDING-P", "RONTOLISP::%CLOJURE-SEQABLE-SEQ",
+				"%CLOJURE-ISEQ-P");
+		arms.forEach((verb, arm) -> assertThat(defun(ClojureLibrary.forms(), verb)).as(verb).contains(arm));
+		List<LispVal> plain = ClojureLibrary.process(Clojure.read("(deftype T [] clojure.lang.Seqable (seq [_] nil))"
+				+ " (println (seq [1]) (= [1] [1]) (peek [1]) (find {:a 1} :a) (compare 1 2) (nth [1] 0)"
+				+ " (realized? (lazy-seq nil)) (reduce + [1]) (seq (T.)))", null));
+		arms.forEach((verb, arm) -> assertThat(defun(plain, verb)).as(verb).doesNotContain(arm));
+		String program = plain.get(plain.size() - 1).print();
+		assertThat(program).doesNotContain("%CLOJURE-ICOLLECTION-P").doesNotContain("%CLOJURE-IMAP-P");
+		// a body naming one keeps its family's arms and those of its supers, no other's
+		List<LispVal> map = ClojureLibrary.process(Clojure.read(
+				"(deftype M [] clojure.lang.IPersistentMap (count [_] 0)) (println (count (M.)) (= 1 1) (peek [1]))",
+				null));
+		assertThat(defun(map, "RONTOLISP::%CLOJURE-EQUAL")).contains("%CLOJURE-ICOLLECTION-P");
+		assertThat(defun(map, "RONTOLISP::%CLOJURE-STRICT-SEQ")).contains("%CLOJURE-ITERABLE-P");
+		assertThat(defun(map, "RONTOLISP::%CLOJURE-PEEK")).doesNotContain("%CLOJURE-ISTACK-P");
 	}
 
 	@Test

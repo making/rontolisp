@@ -37,14 +37,16 @@ import org.jspecify.annotations.Nullable;
  * resolved one
  * @param overloads for a dispatched site, the overloads of the static class the call
  * chooses among when it runs, in {@link JavaOverloads#ranked} order; empty otherwise
- * @param functional whether the site ends in {@code :functional}
- * ({@link JavaSiteResolver#FUNCTIONAL}): a function argument converted to an interface
- * implements it by its arguments ({@link JavaImplementations#functional}), not as a
- * {@code java:proxy} called with the method's name first
+ * @param markers the keywords the site ends in ({@link JavaMarkers}): {@code :functional}
+ * -- a function argument converted to an interface implements it by its arguments
+ * ({@link JavaImplementations#functional}), not as a {@code java:proxy} called with the
+ * method's name first -- and {@code :java-false} -- Java's {@code false} comes back as
+ * {@code |false|}, which {@link #result} counts on
  */
 public record JavaSite(Operator operator, @Nullable String staticClass, @Nullable String designator,
 		@Nullable JavaExecutable executable, @Nullable JavaField field, boolean packed, JavaStaticType result,
-		List<Argument> arguments, @Nullable String reason, List<JavaOverloads.Overload> overloads, boolean functional) {
+		List<Argument> arguments, @Nullable String reason, List<JavaOverloads.Overload> overloads,
+		JavaMarkers markers) {
 
 	/**
 	 * Copies the arguments and the overloads.
@@ -55,7 +57,7 @@ public record JavaSite(Operator operator, @Nullable String staticClass, @Nullabl
 	}
 
 	/**
-	 * A site without {@code :functional}.
+	 * A site ending in no marker.
 	 * @param operator which {@code java:} operator
 	 * @param staticClass the class whose members were the candidates, or {@code null}
 	 * @param designator the member, or {@code null}
@@ -70,15 +72,31 @@ public record JavaSite(Operator operator, @Nullable String staticClass, @Nullabl
 	public JavaSite(Operator operator, @Nullable String staticClass, @Nullable String designator,
 			@Nullable JavaExecutable executable, @Nullable JavaField field, boolean packed, JavaStaticType result,
 			List<Argument> arguments, @Nullable String reason, List<JavaOverloads.Overload> overloads) {
-		this(operator, staticClass, designator, executable, field, packed, result, arguments, reason, overloads, false);
+		this(operator, staticClass, designator, executable, field, packed, result, arguments, reason, overloads,
+				JavaMarkers.NONE);
 	}
 
 	/**
-	 * @return this site, ending in {@code :functional}
+	 * @param ending the markers the site ends in
+	 * @return this site, ending in them
 	 */
-	public JavaSite asFunctional() {
+	public JavaSite withMarkers(JavaMarkers ending) {
 		return new JavaSite(this.operator, this.staticClass, this.designator, this.executable, this.field, this.packed,
-				this.result, this.arguments, this.reason, this.overloads, true);
+				this.result, this.arguments, this.reason, this.overloads, ending);
+	}
+
+	/**
+	 * @return whether the site ends in {@code :functional}
+	 */
+	public boolean functional() {
+		return this.markers.functional();
+	}
+
+	/**
+	 * @return whether the site ends in {@code :java-false}
+	 */
+	public boolean javaFalse() {
+		return this.markers.javaFalse();
 	}
 
 	/** The {@code java:} operators a site can be. */

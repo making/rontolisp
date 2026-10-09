@@ -334,23 +334,29 @@ final class ClojureUpdateLowering {
 		// a plain map, like the oracle; anything opaque signals, like the oracle
 		LispVal norm = ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), ClojureProtocolLowering.isRecordForm(whole),
 				ClojureProtocolLowering.typedTableOf(whole), sortedEntries(whole, "select-keys"));
+		LispVal core = ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
+				ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(src, norm))),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("or"),
+								ClojureLowerUtil.list(ClojureLowerUtil.sym("hash-table-p"), src),
+								ClojureLowerUtil.list(new LispSymbol(ClojureCollectionLowering.HOST_SEQABLE_P), src)),
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("progn"), gather, out), ClojureRefusals
+							.refusal(ClojureRefusals.ILLEGAL_ARGUMENT, LispString.literal("select-keys needs a map"))));
+		// a type implementing Associative or java.util.Map gives the entry its find
+		// answers
+		// for each key, like the oracle's RT.find (arms of their families, ClojureArms)
+		LispVal typed = ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("or"),
+						ClojureLowerUtil.list(new LispSymbol(ClojureCollectionLowering.IASSOCIATIVE_P), whole),
+						ClojureLowerUtil.list(new LispSymbol(ClojureCollectionLowering.JMAP_P), whole)),
+				ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-TYPED-SELECT-KEYS"), whole, keys, out), core);
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let*"),
 				ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(whole, map),
 						ClojureLowerUtil.list(miss,
 								ClojureLowerUtil.list(ClojureLowerUtil.sym("list"), ClojureLowering.NIL_CONST)),
 						ClojureLowerUtil.list(out, ClojureCollectionLowering.makeTable()))),
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), whole), out,
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
-								ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(src, norm))),
-								ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
-										ClojureLowerUtil.list(ClojureLowerUtil.sym("or"),
-												ClojureLowerUtil.list(ClojureLowerUtil.sym("hash-table-p"), src),
-												ClojureLowerUtil.list(
-														new LispSymbol(ClojureCollectionLowering.HOST_SEQABLE_P), src)),
-										ClojureLowerUtil.list(ClojureLowerUtil.sym("progn"), gather, out),
-										ClojureRefusals.refusal(ClojureRefusals.ILLEGAL_ARGUMENT,
-												LispString.literal("select-keys needs a map"))))));
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), whole), out, typed));
 	}
 
 	/** {@code select-keys} as a value: a two-argument lambda over the same read. */

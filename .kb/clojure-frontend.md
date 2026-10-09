@@ -2197,7 +2197,10 @@ constructor and consumer, and a regex `replace` with a function replacement.
 - `extend-protocol`/`extend-type`/`extend` add rows under the target's tag: the
   class-keyword kinds, `nil`, `Object`, known records and deftypes, the classes of the
   instants and the UUID ("Instants and UUIDs"), and any other class `instance?` resolves
-  (a name no class has is its `unknown name: X`).
+  (a name no class has is its `unknown name: X`). The three answer nil like the oracle
+  (2026-10-09, clj 1.12.6; `extensionRows` ends the rows in `nil`; they used to answer the
+  last `setf`'s lambda, echoed `#<procedure>`); pinned by clojure-spec `extend-forms-answer-nil`
+  and `ClojureSessionTest.theExtendFormsEchoNil`.
 - **Walked classes** (oracle-checked clj 1.12.6, 2026-10-08). A target no value's tag names
   exactly -- a throwable (a condition's tag is the fresh miss list), an interface or
   abstract class over core kinds (`clojure.lang.IRef`/`IDeref`/`ARef`/`IExceptionInfo`), a
@@ -2418,11 +2421,12 @@ measured on clj 1.12.6, 2026-10-08).
   data.priority-map, next.jdbc and 74 widely used jars -- counting the libraries whose bodies
   name each): `Object` 21, `IFn` 14, `ILookup` 13, `IObj` 12, `IDeref` 11, `Counted` 11,
   `Seqable` 10, `Indexed` 10, then the collection interfaces (`IPersistentCollection`,
-  `IHashEq`, `Associative` 9 each ...: e78) and `IReduceInit` 5 (next.jdbc's `plan`,
-  `clojure.core/iteration`, below). Supported: `IReduceInit`, `IReduce`, `IKVReduce`, `Seqable`,
-  `Counted`, `Indexed`, `ILookup`, `IFn` with its supers `Callable` and `Runnable`, `IDeref`,
-  `IMeta`, `IObj`, and `Object`'s `toString`/`equals`/`hashCode`. Any other interface of the
-  jar (`CLOJURE_LANG`, its public list) or loadable host interface is refused by name
+  `IHashEq`, `Associative` 9 each ...: "Collection interfaces" below) and `IReduceInit` 5
+  (next.jdbc's `plan`, `clojure.core/iteration`, below). Supported: `IReduceInit`, `IReduce`,
+  `IKVReduce`, `Seqable`, `Counted`, `Indexed`, `ILookup`, `IFn` with its supers `Callable` and
+  `Runnable`, `IDeref`, `IMeta`, `IObj`, `Object`'s `toString`/`equals`/`hashCode`, and the
+  collection interfaces. Any other interface of the jar (`CLOJURE_LANG`, its public list:
+  `IChunkedSeq`, `IRef` ...) or loadable host interface (`java.util.Deque`) is refused by name
   (`X is not supported yet as an interface of reify`), a class the oracle's `only interfaces
   are supported, had: C`, an undotted unknown name its `Unable to resolve symbol` (`clojure.lang`
   is no default import), a dotted one `Unable to resolve classname`.
@@ -2433,11 +2437,19 @@ measured on clj 1.12.6, 2026-10-08).
   matches across every interface, so a `toString` under a protocol group overrides `Object`'s
   (before: `Can't define method not in interfaces`). An interface method takes fixed
   parameters (the oracle reads `&` as a parameter's name; refused here) and each count once.
-  What the form's class implements itself stores no row and refuses a method of it in the
-  oracle's `Duplicate method name`: a record's `Counted`, `Seqable`, `ILookup`, `IMeta`,
-  `IObj` (naming `ILookup` or `IObj` is its `Duplicate interface name`) and its
-  `equals`/`hashCode`, a reify's `IMeta`/`IObj`. `extend-type` keeps protocols only
-  (`implGroups`).
+  An interface the form's class implements itself stores no row (`RECORD_PROVIDED`: a
+  record's map interfaces and their supers; `REIFY_PROVIDED`: `IMeta`/`IObj`). Naming one of
+  the class's direct ones is the oracle's `Duplicate interface name` (`RECORD_DIRECT`:
+  `ILookup`, `IObj`, `IPersistentMap`, `IHashEq`, `java.util.Map`, `java.io.Serializable`;
+  a reify's `IObj`). A method the class generates (`RECORD_GENERATED`, the oracle's
+  `getDeclaredMethods` of a plain record, 2026-10-09: `count`, `seq`, `valAt`, `assoc`,
+  `iterator`, the `java.util.Map` methods, `equals`, `hashCode` ...; a reify's `meta` and
+  `withMeta`) is its `Duplicate method name`, under any group, since the oracle matches a
+  method against the class's own interfaces too; one of those interfaces the class leaves
+  to the interface (`assocEx`, `Iterable.forEach`, a `java.util.Map` default), which the
+  oracle's class would override, is refused by name (`I/m is not supported yet as a method of
+  defrecord`: the record's own verbs answer those interfaces, so no row would hold it).
+  `extend-type` keeps protocols only (`implGroups`).
 - Rows (`ClojureInterfaces.rowForms`): one store per family under the type's tag,
   `(%clojure-<family>-row tag '("clojure.lang.X" ...) (list "method" lambda ...))`, into the
   library's `%clojure-interface-rows` (tag -> an `equal` table: interface name -> T, method name
@@ -2511,6 +2523,97 @@ measured on clj 1.12.6, 2026-10-08).
   (the stores and every refusal), `ClojureArmsTest#anInterfaceFamilyIsMadeByTheStoreOfARowOfItsInterfaces`,
   `ClojureLibraryTest#aProgramStoringNoInterfaceRowSplicesTheVerbsWithoutTheirInterfaceArms`.
 
+## Collection interfaces
+
+**A body implementing a collection interface is a collection to the core verbs, each group of
+interfaces behind an arm family its row's store makes (`ClojureArms`, `COLLECTION` through
+`MARKER`), so a program storing no such row compiles as before** (`ClojureInterfaces`'
+`collectionTable`/`javaTable`, methods and supers read off the oracle's jar; `clojure.lisp`
+";;;; Collection interfaces"; every verb measured on clj 1.12.6, 2026-10-08).
+- What a verb asks, in the oracle's order (RT, core): `conj`/`into`/`merge` an
+  `IPersistentCollection`'s `cons`; `assoc` (`update`, `assoc-in`) an `Associative`'s `assoc`;
+  `dissoc` an `IPersistentMap`'s `without`; `disj` an `IPersistentSet`'s `disjoin`;
+  `contains?` an `Associative`'s `containsKey`, then an `IPersistentSet`'s `contains`, a
+  `Map`'s `containsKey`, a `Set`'s `contains`; `get` an `ILookup`'s `valAt`, then a `Map`'s
+  `get`, an `IPersistentSet`'s `get`; `find` an `Associative`'s `entryAt`, then a `Map`'s;
+  `count` a `Counted`'s `count`, then an `IPersistentCollection`'s seq walked, a
+  `Collection`'s or `Map`'s `size`; `seq` a `Seqable`'s `seq`, then an `Iterable`'s
+  `iterator`, a `Map`'s `entrySet`; `=` an `IPersistentCollection`'s `equiv` on either side (a
+  core collection on the left reads a vector type by `count`/`nth`, a sequential by its seq, a
+  map type as a `java.util.Map` only with `MapEquivalence`, a set type as a `java.util.Set`);
+  `reduce` an `IReduceInit`, then an `Iterable`'s iterator (`iter-reduce`, stopping at
+  `reduced`), else the seq; `peek`/`pop` an `IPersistentStack`; `rseq` a `Reversible`;
+  `realized?` an `IPending`; `subseq`/`rsubseq` a `Sorted`'s `seqFrom`/`seq`/`comparator`/
+  `entryKey`; `compare`, `sort` and a sorted collection's default order a `Comparable`'s
+  `compareTo`; `empty` its `empty`; `keys`/`vals`/`reduce-kv`/`select-keys` a map type's
+  entries; the printer by kind (`%clojure-typed-print-kind`: map, set, vector, seq; a
+  `java.util` one under `pr`, like the oracle's `print-method`).
+- Families, each stored by `%clojure-<family>-row`: `COLLECTION`, `ASSOCIATIVE`,
+  `PERSISTENT_MAP` (`MapEquivalence` too), `PERSISTENT_SET`, `STACK`, `PERSISTENT_VECTOR`,
+  `ISEQ`, `SEQUENTIAL` (`IPersistentList` too), `REVERSIBLE`, `PENDING`, `SORTED_INTERFACE`,
+  `COMPARABLE`, `ITERABLE` (a producer of `REDUCIBLE` and `SEQABLE` too, whose arms it rides),
+  `ITERATOR`, `JAVA_COLLECTION` (`Collection`, `SequencedCollection`, `List`, `Set`,
+  `RandomAccess`), `JAVA_MAP` (a `SEQABLE` producer too), `MARKER` (`IHashEq`, `Serializable`,
+  `IEditableCollection`, the transients: `instance?` and instance calls only). The predicates'
+  helpers (`coll?`, `map?`, `set?`, `seq?`, `list?`, `sequential?`, `associative?`,
+  `reversible?`) are `%clojure-is-*-type` aliases of the old ones, so the families stand ahead
+  of `SORTED`, whose aliases they rename into (the strip goes in enum order). A strip fold
+  position is a `cond` clause test, an `if` test or an `or` disjunct, never inside an `and`
+  (`%clojure-counts-agree` nests `if`s for it).
+- Iterators: a Lisp seq iterator is `(:C%ITERATOR #(seq))` (`%clojure-seq-iterator`), what
+  `(.iterator coll)` of a core collection, `clojure.lang.SeqIterator.` and `RT/iter` answer;
+  `%clojure-iter-has-next`/`-next` step it, a typed `Iterator` row, or a host iterator
+  (`java:call`, a `HOST` arm). `iterator-seq` realizes one member at a time (the oracle 32).
+  `clojure.lang.MapEntry.` and `MapEntry/create` build a `[k v]` vector, the map entry here.
+- `java.util` default methods (`getOrDefault`, `forEach`, `stream` ...) are declared
+  (`HostInterface.defaults`) but stored only when the body defines them; an instance call of a
+  method only defaults declare goes through `%clojure-default-method`, refusing by name when
+  the row holds none (`the default method m is not supported yet`: its body is Java).
+- `extend-protocol`/`extend-type`/`extend` to an interface (`ClojureProtocolLowering`):
+  - spelled like the one core kind whose values implement it (`IPersistentVector` :vector,
+    `IPersistentMap` :map): the kind key stays, and the same lambda also stands under the
+    binary name (`interfaceWalkKey`, `storedTwice`), which a dispatcher that does not walk asks
+    `C%PROTOCOL-SUPER` for behind a guard: the interface's family test (folded with no row of
+    the family) and, for an interface every record implements, `%clojure-record-p` once the
+    program defines a record (`recordGuards`, settled after the last file by
+    `noteRecordGuards`); a guard the dispatchers lacked restarts the lowering (`guardMisses`).
+  - spelled like a kind whose interface other kinds' values implement too (`Sequential`,
+    `java.util.List`, `java.util.Collection`, `IPersistentCollection`, `IFn`;
+    `reachesOtherKinds` over `ClojureValueClasses.kindsOf`/`dispatchKeyword`): a walked class
+    keyed by its binary name alone, so the walk picks the protocol's most specific interface,
+    like the oracle's `pref` (`ISeq` ahead of `IPersistentCollection` for a list), where a kind
+    key would answer first. Measured 2026-10-09: before, a vector missed `Sequential`,
+    `java.util.List` and `Collection`, a keyword `IFn`, a record `IPersistentMap`,
+    `java.util.Map` and `IPersistentCollection` (all fell to `Object`), and a list took
+    `IPersistentCollection` ahead of `ISeq`.
+  - any other interface: a walked class as before (`Counted`, `IDeref`).
+- Deviations (user doc: reify, "Collection interfaces"): `first`/`next`/`rest` of an `ISeq`
+  type read its `seq` (an `ISeq` answer the seq view walks through `first`/`next`,
+  `%clojure-iseq-lazy`), so `next`/`rest` answer that seq's tail where the oracle calls `next`
+  and `more`; a verb may call a method another number of times (no chunked seqs); `str` spells
+  the contents where the oracle answers `Class@hash`; a `java.util` type prints its contents
+  under `print` too.
+- Re-probes (2026-10-08): data.priority-map 1.2.0 stops at `priority_map.clj:216:7: unknown
+  name: eval` (its `compile-if` macro evaluates a form while expanding); expanded by hand (the
+  `compile-if` taken, `hasheq` as `(count this)`) it runs whole on the interpreter, the JVM and
+  wasm. instaparse 1.5.0 now stops at `auto_flatten_seq.clj:13:15: unknown name: eval` (the
+  same macro shape) and needs `hash`/`mix-collection-hash` past it.
+- Pins: clojure-spec `a-collection-type-conjs-empties-counts-and-compares-through-its-methods`,
+  `a-map-type-assocs-dissocs-reads-and-prints-as-a-map`,
+  `a-set-type-disjs-contains-and-prints-as-a-set`,
+  `a-vector-type-indexes-stacks-reverses-and-prints-as-a-vector`,
+  `a-seq-type-walks-through-its-first-and-next`,
+  `an-iterable-type-seqs-and-reduces-through-its-iterator`,
+  `pending-comparable-and-sorted-types-answer-through-their-methods`,
+  `a-protocol-extended-to-a-collection-interface-reaches-a-type-implementing-it`,
+  `a-protocol-extended-to-an-interface-reaches-every-value-implementing-it` (all four backends,
+  the oracle's lines); `ClojureLoweringTest#aBodyImplementingACollectionInterfaceStoresTheRowsOfItsWholeClosure`
+  (the stores and the refusals), `#anExtensionToAnInterfaceKeyedByACoreKindReachesATypedValueBehindItsTest`,
+  `#anExtensionToAnInterfaceOtherKindsImplementTooIsAWalkedClass`,
+  `ClojureArmsTest#aCollectionInterfaceFamilyIsMadeByTheStoreOfARowOfItsInterfaces`,
+  `ClojureLibraryTest#aProgramStoringNoCollectionInterfaceRowSplicesTheVerbsWithoutTheirArms`,
+  `ClojureInteropTest#aHostIteratorStepsThroughIteratorSeqAndAnIterableTypesVerbs`.
+
 ## Java interop
 
 The `java:` surface (`.kb/java-interop.md`); interpreter and JVM only -- wasm compiles
@@ -2548,11 +2651,9 @@ The `java:` surface (`.kb/java-interop.md`); interpreter and JVM only -- wasm co
   other method reaches `java:call`, which calls a string / number / character as its
   `String` / narrowest box / `Character` (`.kb/java-interop.md`, "A Lisp value as a
   `java:call` receiver"; measured 2026-10-03 vs `clj` 1.12.6, `(.codePointAt "abc" 0)` 97,
-  `(.compareTo 1 2)` -1; before: `java:call expects a java object ..., got "abc"`). With the
-  receiver class unknown at lowering, a method whose overloads at that arity all answer a
-  primitive boolean on `String` (`(if (stringp r) ...)` arm) or on `Integer`+`Long` / `Double` /
-  `Character` (`valuePredicate`) answers T-or-false (`(.matches "abc" "x")` false, not nil).
-  Deviation: an int-sized integer is an `Integer` (`(.getClass 1)`; the oracle's `Long`).
+  `(.compareTo 1 2)` -1; before: `java:call expects a java object ..., got "abc"`). A host
+  false is the false object through the call's own `:java-false`, whatever the receiver
+  (`(.matches "abc" "x")` false, not nil; "Host booleans" below). Deviation: an int-sized integer is an `Integer` (`(.getClass 1)`; the oracle's `Long`).
   Pins: `ClojureInteropTest#unmappedMethodsCallAStringNumberOrCharacterAsItsHostObject`.
   `.toString` of a number, character, symbol (booleans too), cons, array, table or
   function answers `(%clojure-str-of x "nil" nil)`, the oracle's `toString`, on every
@@ -2613,38 +2714,65 @@ The `java:` surface (`.kb/java-interop.md`); interpreter and JVM only -- wasm co
   wasm 56160 -> 57298 B, JVM `.class` 94998 -> 97917 B (comment-only helpers and lowering-time
   words: docstrings and `format` arms had made it +4.0 KB on the JVM). Pins: that case,
   `ClojureInteropTest#collectionKeywordSymbolAndRatioReceiversAnswerTheirCommonMethods`.
-- Host booleans: the shared unmarshal maps host false to nil (CL's only false; changing
-  it would make host false truthy in `java:` programs and move all three paths plus the
-  bridge parity). The lowering wraps to `T`-or-false instead where every overload at that
-  arity returns a primitive boolean and the receiver class is known: a static call or
-  member value, or an instance call on a construction literal -- `java:new`, a `proxy` of
-  one interface (`java:proxy "I" fn`) or of a class alone (`java:subclass "S" '() ...`;
-  `ClojureInteropLowering.constructedClass`) --, a `let`/`if-let`/`when-let`
-  local bound to one (single-shot, so the inference is sound), or a `..` step's declared
-  return; a `true`/`false` receiver of unknown class is called as its `Boolean`
-  (`valuePredicate`: `(.booleanValue false)`). Anything else prints `nil` for false, a
-  `Boolean.FALSE` read back from a host collection too (`(vec l)` of a list holding false
-  is `[nil]`; the oracle's `[false]`): a per-site "answer false as `|false|`" unmarshal is
-  the remaining half (todo e73).
+- Host booleans (e73, 2026-10-09): every host call the lowering builds ends in `:java-false`
+  (`ClojureInteropLowering.hostCall`, `fieldCall`; a `proxy`'s `java:proxy` / `java:subclass`
+  too), so Java's false comes back as the false object -- an answer of any receiver, a
+  `Boolean.FALSE` element, a field, a fn's or a proxy body's argument
+  (`.kb/java-interop.md`, "Markers and handles"); the shared unmarshal stays nil for a CL
+  program. The `T`-or-false wraps over known receiver classes (`booleanAnswer` at static and
+  instance sites, `valuePredicate`, `instanceBooleanAtArity`) are gone. The library's host
+  DATA reads end in it too (`toArray`, `getKey`/`getValue`, `next`, `get`, a `Future`'s
+  `get`); its host PREDICATES (`containsKey`, `contains`, `hasNext`, `isDone`, ...) must not:
+  a CL `if` reads `|false|` as true. Before, measured 2026-10-08 (interpreter and JVM): `(vec
+  l)` of a list holding false `[nil]`, `(.get m "x")` of a false value nil, `(e? l)` over an
+  unknown receiver nil. Pin: `ClojureInteropTest#aHostFalseComesBackAsFalse`.
 - `false` crosses to Java as Java's false (e69, 2026-10-08): the false object IS the symbol
   `java:` passes as `false` / `Boolean.FALSE` (`FALSE_VALUE_NAME = LispNames.JAVA_FALSE`,
   `.kb/java-interop.md` "Java's false and hash tables"), an argument and a fn's or proxy
   body's answer alike; a map crosses as a fresh `LinkedHashMap` (the same section), its
   vector/map values converted too, so the copy's `toString` spells them the Java way (user doc
-  deviation). A set, keyword or record has no Java value (`(:C%SET table)` is no table to
-  `java:`, and `java:` learns no Clojure shape): the same todo. Before, measured 2026-10-08
+  deviation). A set, keyword or record reaches Java through `%clojure-host-value` (next
+  bullet). Before, measured 2026-10-08
   (interpreter and JVM): `(.add l false)`, `(Boolean/toString false)` and `(java.util.HashMap.
   {"a" 1})` were `No matching method/constructor`, `(.removeIf l odd?)` and a proxy `test`
   answering false `cannot return |false| as boolean`.
+- Clojure values Java has none of (e73, 2026-10-09): `hostArgument` wraps a host call's
+  argument (`java:new`/`java:call`/`java:static`, a class `proxy`'s constructor arguments) in
+  `%clojure-host-value` (`HOST_VALUE`, `clojure.lisp`): a keyword or symbol becomes a
+  `java:handle` (`%clojure-host-ident`: its spelling, the oracle's `Keyword`/`Symbol` hashCode
+  -- `Util.hashCombine` of the name's and namespace's `String.hashCode`, a keyword
+  `0x9e3779b9` more -- and an order text sorting no namespace first, then namespace, then
+  name, keywords before symbols), so a host `HashMap`/`HashSet` iterates and a `TreeSet`
+  sorts in the oracle's order and Java hands back the keyword itself; a set or sorted set a
+  fresh `LinkedHashSet`; a map holding such a value, a record or a sorted map an `equal`
+  table of converted entries (`java:` makes it a `LinkedHashMap`); a lazy seq the list it
+  realizes; a vector or list holding such a value a converted copy; anything else itself (a
+  ratio or atom stays refused by `java:`). Not wrapped, so the site keeps resolving on the
+  argument's kind: a literal, a fn form, a construction (`isPlainForm`) and a `let` local
+  bound to one and not shadowed (`isPlainLocal` over `noteHostClass`); nothing on wasm
+  (`!ctx.hostTarget`: a `java:` call is a call-time error there). `get`/`contains?`/`find`
+  over a host map convert their key the same way. Measured 2026-10-08 before choosing this
+  over a generic `java:` hook (the plan's preference): wrapping every non-literal argument
+  of the 784 `java:` sites in 276 lowered programs (`ClojureInteropTest`'s, `examples/
+  clojure`, the clojure-spec corpus) moved 2 from resolved to dispatched, both a
+  construction-bound local -- the exemption above -- and no other site's status. Before,
+  measured 2026-10-08: `(java.util.HashSet. #{1 2})` `No matching constructor for
+  java.util.HashSet with 1 argument(s)` (a record, a sorted set alike), `(.put m :k 1)` `No
+  matching method java.util.HashMap.put with 2 argument(s)`. Deviations (user doc): a copy's
+  `toString` and a collection inside it spell the Java way; keywords and symbols sort together
+  where the oracle refuses to compare them. Pins: `ClojureInteropTest#aSetAKeywordAndARecord
+  CrossTheJavaBoundaryAsTheOraclesDo`, `#aKeywordOrSymbolHashesAndSortsInJavaAsTheOraclesDo`,
+  `ClojureLoweringTest#aHostArgumentThatMayHoldAValueJavaLacksGoesThroughTheHostValue`.
 - A fn receiver is the oracle's `AFunction` (`ClojureValueMethodLowering.functionRows`; the
   value gate `%clojure-value-receiver-p` takes `functionp`): `invoke` of 0..20 arguments and
   `applyTo` for any `ifn?` value, `call`, `run` (nil), and `compare` on a fn through
   `%clojure-fn-compare` (`AFunction.compare`: true -1, false 1 when the reversed call is true
   else 0, a number its `intValue` by `%clojure-unchecked-int`, nil the NPE, else a
   ClassCastException). Runs on all four backends (the arm answers before the `java:call`);
-  before, `java:call expects a java object as the first argument, got #<lambda>`. A `Comparator`
-  fn passed TO Java still answers a number (deviation): `java:` cannot know a boolean answer
-  means `AFunction.compare`. Pin: clojure-spec
+  before, `java:call expects a java object as the first argument, got #<lambda>`. A fn passed
+  TO Java as a `Comparator` reads the same way since e73 (its call ends in `:functional` and
+  `:java-false`: `.kb/java-interop.md`, "Markers and handles"; pin
+  `ClojureInteropTest#aFnPassedAsAComparatorComparesLikeTheOraclesAFunction`). Pin: clojure-spec
   `instance-calls-on-a-fn-are-its-ifn-callable-runnable-and-comparator-methods`.
 - A fn passed where an interface is expected implements every abstract method by the
   method's arguments, defaults keeping their bodies (`.kb/java-interop.md`, `:functional`;
@@ -2654,7 +2782,9 @@ The `java:` surface (`.kb/java-interop.md`); interpreter and JVM only -- wasm co
   was `Function expects 0 arguments, got 1`. Oracle (clj 1.12.6, same day): a fn converts
   only to a `@FunctionalInterface` (a `PropertyChangeListener`/`DocumentListener` is a
   `ClassCastException`; here every abstract method of any interface calls it -- user doc
-  deviation), `Comparator` takes a boolean answer (`AFunction.compare`; here a number).
+  deviation), `Comparator` takes a boolean answer (`AFunction.compare`; alike here since e73).
+  A fn prefers a functional interface's overload (`TreeSet(Comparator)` over
+  `TreeSet(Collection)`; the oracle's fn IS a `Comparator`).
   `(proxy [Super] [fn] ...)` constructor arguments convert the same way: `proxyClassOf` ends
   the `java:subclass` in the marker after its callable (until e69 they converted as
   `java:proxy`, the method name first). Pins:
@@ -2685,9 +2815,10 @@ The `java:` surface (`.kb/java-interop.md`); interpreter and JVM only -- wasm co
   are the host entries: user doc deviation), a `CharSequence` through `toString`, another
   `Iterable` through `iterator` (a JDK non-public iterator class trips the `java:call` gap
   of todo c92). `get`/`contains?` ask the host's own `containsKey`/`contains`/`get`, the
-  oracle's `equals` lookup, after `%clojure-host-key-p` (`Objects.isNull` under
-  `handler-case`): a key `java:call` cannot marshal (keyword, symbol, map, set) is in no host
-  map, since `.put` refused it too. Not the c90 walk by `=`: that pulled `%clojure-equal`'s
+  oracle's `equals` lookup, of the key as `%clojure-host-value` makes it (a keyword its
+  handle), after `%clojure-host-key-p` (`Objects.isNull` under `handler-case`): a key
+  `java:call` still cannot marshal (a ratio, an atom) is in no host map, since `.put` refused
+  it too. Not the c90 walk by `=`: that pulled `%clojure-equal`'s
   whole closure into every `get` (+9.9 KB JVM class) and is O(n).
   Cost, measured 2026-10-04 (load average 25-140, so speeds are medians of 5-7 alternated
   runs): a program naming no `java:` operator is byte-identical (wasm P1, `--optimize=size`,
@@ -3815,6 +3946,8 @@ in-scope program needs `valid?`/`conform` (then `explain-data` stays refused).
   `FetchSpecE2eTest#clojureHttpClient` (the HTTP client),
   `ClojureWasmBoundaryTest`, `ClojureWitBoundaryTest` (the host boundary),
   `ClojureLanguageNamespacesTest` (where the clojure.jar namespaces come from).
-- `ClojureLibraryTest` (the splice), `SourceLanguageTest`, `RontoLispCliTest` and
+- `ClojureLibraryTest` (the splice; `everyLibraryNameIsDefinedOnce`: a second `defun` of a
+  `clojure.lisp` name replaces the first for every caller, which a wrong arity then shows only
+  as a JVM compile warning), `SourceLanguageTest`, `RontoLispCliTest` and
   `PlaygroundReplTest` (the `clojure>` transcript, `--no-gc`), `examples/clojure/demo.clj`
   through `ExamplesE2eTest`.

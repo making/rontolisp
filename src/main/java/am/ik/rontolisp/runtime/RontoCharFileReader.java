@@ -26,8 +26,10 @@ import java.util.Arrays;
  *
  * <p>
  * A malformed sequence decodes to U+FFFD, consuming its valid prefix -- the replacement a
- * {@code FileReader} makes. It lives in {@code runtime} because it TRAVELS: the JVM
- * backend constructs it and calls its methods ({@code .kb/jvm-export.md}, "What
+ * {@code FileReader} makes, a three-byte sequence encoding a surrogate included (one
+ * U+FFFD for the three bytes); {@code .kb/character-sequence-io.md}, "Malformed input",
+ * has the rule every backend shares. It lives in {@code runtime} because it TRAVELS: the
+ * JVM backend constructs it and calls its methods ({@code .kb/jvm-export.md}, "What
  * travels"), so it imports nothing but the JDK.
  */
 public final class RontoCharFileReader extends BufferedReader {
@@ -146,13 +148,11 @@ public final class RontoCharFileReader extends BufferedReader {
 			int lo = 0x80;
 			int hi = 0xBF;
 			if (i == 1) {
-				// The second-byte ranges that rule out overlong forms, surrogates and
-				// code points past U+10FFFF.
+				// The second-byte ranges that rule out overlong forms and code points
+				// past U+10FFFF. Not surrogates: Java's decoder takes ED A0..BF as a
+				// prefix and replaces the complete sequence below.
 				if (b == 0xE0) {
 					lo = 0xA0;
-				}
-				else if (b == 0xED) {
-					hi = 0x9F;
 				}
 				else if (b == 0xF0) {
 					lo = 0x90;
@@ -171,7 +171,7 @@ public final class RontoCharFileReader extends BufferedReader {
 			return 0xFFFD;
 		}
 		this.pos += need + 1;
-		return cp;
+		return (cp >= 0xD800 && cp <= 0xDFFF) ? 0xFFFD : cp;
 	}
 
 	@Override

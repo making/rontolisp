@@ -3,6 +3,7 @@ package am.ik.rontolisp.clojure;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Deque;
+import java.util.EnumSet;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.IdentityHashMap;
@@ -1181,6 +1182,38 @@ public final class ClojureLowering {
 	 */
 	final Map<String, LispVal> walkTests = new LinkedHashMap<>();
 
+	/**
+	 * The protocols extended to an interface keyed by a core kind
+	 * ({@link ClojureProtocolLowering#interfaceWalkKey}), by method-table name, each with
+	 * the tests of those interfaces, as the pass before this one learned them
+	 * ({@link #guardMisses}): a dispatcher that does not walk asks the walk behind those
+	 * tests, which a program storing no row of their families folds away, and behind the
+	 * record test where a record implements one ({@link #recordGuards}).
+	 */
+	final Map<String, Set<String>> interfaceGuards = new LinkedHashMap<>();
+
+	/**
+	 * The interface tests an extension added to a protocol whose dispatchers had lowered
+	 * without them: the lowering starts over with them ({@link #lower}).
+	 */
+	final Map<String, Set<String>> guardMisses = new LinkedHashMap<>();
+
+	/**
+	 * The protocols extended to an interface every record implements
+	 * ({@link ClojureProtocolLowering#noteInterfaceWalk}), by method-table name: once the
+	 * program defines a record, their guards ask {@link ClojureProtocolLowering#RECORD_P}
+	 * too ({@link ClojureProtocolLowering#noteRecordGuards}).
+	 */
+	final Set<String> recordGuards = new LinkedHashSet<>();
+
+	/**
+	 * The families of the interfaces the program's {@code reify}, {@code deftype} and
+	 * {@code defrecord} bodies implement ({@link ClojureInterfaces}): a guarded walk
+	 * ({@link #interfaceGuards}) whose tests no such family holds folds away, so the
+	 * protocol runtime carries no walk for it.
+	 */
+	final Set<ClojureArms.Family> implementedFamilies = EnumSet.noneOf(ClojureArms.Family.class);
+
 	/** How many walked classes a session's protocol runtime was last spliced with. */
 	int walkTestsEmitted;
 
@@ -1261,13 +1294,15 @@ public final class ClojureLowering {
 	}
 
 	/**
-	 * A {@code let} local's host class, inferred from a construction-literal init: the
-	 * FQN, the plain name (for the shadow walk) and the scope depth that owns it. Only
-	 * {@code let} records -- its bindings never rebind, unlike {@code loop} targets;
-	 * every other binder hides entries through the shadow walk in {@link #hostClassOf}
-	 * instead of recording.
+	 * A {@code let} local bound to a plain value, a construction literal's or another
+	 * value no Clojure value Java lacks can be (a literal, a fn form:
+	 * {@code ClojureInteropLowering.isPlainForm}): the construction's FQN ({@code null}
+	 * for any other), the plain name (for the shadow walk) and the scope depth that owns
+	 * it. Only {@code let} records -- its bindings never rebind, unlike {@code loop}
+	 * targets; every other binder hides entries through the shadow walk in
+	 * {@code ClojureInteropLowering.hostClassOf} instead of recording.
 	 */
-	record HostClass(String fqn, String name, int depth) {
+	record HostClass(@Nullable String fqn, String name, int depth) {
 	}
 
 	/**
@@ -1394,16 +1429,23 @@ public final class ClojureLowering {
 			ClojureBoundary boundary) {
 		Set<String> redefinable = new HashSet<>();
 		Set<String> walking = new HashSet<>();
+		Map<String, Set<String>> guards = new LinkedHashMap<>();
 		ClojureSourcePath sourcePath = null;
 		while (true) {
 			ClojureLowering lowering = new ClojureLowering();
 			lowering.redefinable.addAll(redefinable);
 			lowering.walkingProtocols.addAll(walking);
+			guards.forEach((protocol, tests) -> lowering.interfaceGuards.put(protocol, new LinkedHashSet<>(tests)));
 			List<LispVal> forms = lowering.lowerProgram(datums, reader, macroEvaluator, files, hostTarget, boundary,
 					sourcePath);
 			boolean redefs = redefinable.addAll(lowering.redefMisses);
 			boolean walks = walking.addAll(lowering.walkMisses);
-			if (!redefs && !walks) {
+			boolean guarded = false;
+			for (Map.Entry<String, Set<String>> miss : lowering.guardMisses.entrySet()) {
+				guarded |= guards.computeIfAbsent(miss.getKey(), ignored -> new LinkedHashSet<>())
+					.addAll(miss.getValue());
+			}
+			if (!redefs && !walks && !guarded) {
 				return forms;
 			}
 			sourcePath = lowering.sourcePath;
@@ -1459,6 +1501,8 @@ public final class ClojureLowering {
 			// the hierarchy runtime runs before anything else, like the false value
 			lowering.forms.addAll(1, ClojureHierarchyLowering.hierarchyRuntime(lowering));
 		}
+		// a record a later file defines reaches an interface an earlier one extended to
+		ClojureProtocolLowering.noteRecordGuards(lowering);
 		if (lowering.usedProtocols) {
 			// the protocol runtime runs before anything else, like the false value
 			lowering.forms.addAll(1, ClojureProtocolLowering.protocolRuntime(lowering));
@@ -4654,11 +4698,17 @@ public final class ClojureLowering {
 		return symOf(name);
 	}
 
-	/** Whether the bound value is a Clojure vector: a CL vector that is no string. */
+	/**
+	 * Whether the bound value is a Clojure vector: a CL vector that is no string, or a
+	 * record, deftype or reify implementing {@code IPersistentVector} (a disjunct a
+	 * program storing no such row sheds, {@link ClojureArms.Family#PERSISTENT_VECTOR}).
+	 */
 	static LispVal vectorRaw(LispVal bound) {
-		return ClojureLowerUtil.list(ClojureLowerUtil.sym("AND"),
+		LispVal vector = ClojureLowerUtil.list(ClojureLowerUtil.sym("AND"),
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("VECTORP"), bound), ClojureLowerUtil
 					.list(ClojureLowerUtil.sym("NOT"), ClojureLowerUtil.list(ClojureLowerUtil.sym("STRINGP"), bound)));
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("OR"), vector,
+				ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-IVECTOR-P"), bound));
 	}
 
 	/**
@@ -4890,10 +4940,9 @@ public final class ClojureLowering {
 
 	/**
 	 * What the host class says about a static member: a static field, the fixed arities
-	 * of its non-variadic static methods, the subset answering a boolean, and whether a
-	 * variadic one exists.
+	 * of its non-variadic static methods, and whether a variadic one exists.
 	 */
-	record StaticMember(boolean field, List<Integer> arities, Set<Integer> booleanArities, boolean variadic) {
+	record StaticMember(boolean field, List<Integer> arities, boolean variadic) {
 	}
 
 	/** The Common Lisp symbol name of a Clojure identifier: always behind the prefix. */

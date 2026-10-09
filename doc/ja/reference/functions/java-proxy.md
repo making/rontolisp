@@ -60,6 +60,18 @@ JDK 側が SAM メソッドを呼び出す場合でもプロキシは動作し�
 
 メソッドごとに別の関数で実装し、デフォルトメソッドの本体を保つには [`java:reify`](java-reify.md) を使ってください。
 
+## Java の false
+
+Java の false は `nil` として callable に渡ります。callable の後ろを `:java-false` で終えると、代わりに `|false|` を渡します (ガイドの [Java の false を受け取る](../../guides/java-interop.md#javas-false-back-java-false))。
+
+```lisp
+(let ((seen nil))
+  (java:call (java:proxy "java.util.function.Consumer" (lambda (method x) (push x seen)) :java-false)
+             "accept" '|false|)
+  seen)
+; => (|false|)
+```
+
 ## 複数のインターフェース
 
 callable より前の名前はすべて、1 つのオブジェクトが実装するインターフェースです。Java はそのオブジェクトをどのインターフェースとしても保持できます。2 つのインターフェースが宣言する同じメソッド名は、Java がどちらのインターフェース経由で呼んでも、その 1 つの名前で callable に届きます。
