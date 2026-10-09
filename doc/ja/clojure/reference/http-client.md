@@ -42,12 +42,13 @@
 | `:oauth-token` | `Authorization: Bearer` ヘッダーになる |
 | `:accept` | `:json` で `Accept: application/json` |
 | `:as` | `:string`（既定。ボディを UTF-8 としてデコードする）か `:stream`（ボディを読まずに渡す） |
+| `:decompress-body` | `false` なら圧縮されたボディを届いたまま渡す |
 | `:throw` | `false` ならどのステータスもそのまま返す |
 | `:async` | `true` ならレスポンスのフューチャーを返す |
 | `:async-then`、`:async-catch` | `:async` と併用し、レスポンスに適用する関数と、失敗を表すマップに適用する関数 |
 
-リクエストは、`:headers` が指定しない限り `Accept: */*` を送り、加えて fetch 自身の
-`User-Agent` を送ります。
+リクエストは、`:headers` が指定しない限り `Accept: */*` と
+`Accept-Encoding: gzip, deflate` を送り、加えて fetch 自身の `User-Agent` を送ります。
 
 ## レスポンス
 
@@ -78,6 +79,28 @@
 持つ `java.io.IOException` を投げます。JDK が受け付けない URL は、呼び出しの時点で
 `IllegalArgumentException` になります（`Illegal character in path at index 24: ...`、
 `URI with undefined scheme`）。
+
+## 圧縮された応答
+
+`Content-Encoding` が `gzip` か `deflate`（zlib。サーバーがこの名前で送る生の DEFLATE も
+含む）の応答は、`:as` が読む前に展開します。そのため `:body` はテキスト、`:as :stream` では
+展開したオクテットです。`:headers` には符号化の名前が残ります。`HEAD` リクエスト、
+`:decompress-body false`、それ以外の符号化では、ボディは届いたままです。符号化が示す形式に
+なっていない応答は、`java.util.zip` と同じものを投げます。`java.util.zip.ZipException`
+（`Not in GZIP format`、`Corrupt GZIP trailer`、`invalid block type` など）か、途中で
+切れていれば `java.io.EOFException`（`Unexpected end of ZLIB input stream`）です。gzip の
+ヘッダーは呼び出しの時点で、残りはボディを読むときに読みます。
+
+```clojure
+(ns example (:require [rontolisp.http-client :as http]))
+
+(let [r (http/get "https://httpbin.ik.am/gzip")]
+  (println (get-in r [:headers "content-encoding"]) (subs (:body r) 0 1)))
+```
+
+```
+gzip {
+```
 
 ## 非同期リクエスト
 
@@ -126,9 +149,9 @@ $ rontolisp proxy.clj -o src/worker.wasm --no-wasi --host-fetch --host-boundary=
 
 - レスポンスに `:version` はなく、`:uri` は文字列です（babashka.http-client では
   `java.net.URI`）。
-- 圧縮は要求せず、`gzip` か `deflate` の応答は拒否します。`:as :bytes` も拒否します（バイト
-  配列にあたる値がないため）。`:stream` のボディは `java.io.InputStream` ではないので、
-  `.read` は受け付けず、`clojure.java.io/reader` は全体を読んでから返します。
+- `:as :bytes` は拒否します（バイト配列にあたる値がないため）。`:stream` のボディは
+  `java.io.InputStream` ではないので、`.read` は受け付けず、`clojure.java.io/reader` は
+  全体を読んでから返します。
 - 名前を挙げて拒否するもの: オプションの `:client`、`:interceptors`、`:timeout`、
   `:version`、`:multipart`、`:raw`、`:expect-continue`、`java.net.http` のクライアントを作る
   var の `client`、`default-client-opts` と `->` で始まるビルダー、そして名前空間
@@ -137,4 +160,5 @@ $ rontolisp proxy.clj -o src/worker.wasm --no-wasi --host-fetch --host-boundary=
   `java.net.ConnectException` などのサブクラス）。引数の個数の誤りは、フロントエンド共通の
   `ArityException`（`wrong number of arguments passed to: get`）です。
 - `--host-fetch` ではホスト自身の `fetch` がリダイレクトを（20 回まで）たどるため、`:uri` は
-  リクエストした URL になります。
+  リクエストした URL になります。また応答の展開もホストが行うため、`:headers` にはその
+  `content-encoding` と `content-length` がありません。

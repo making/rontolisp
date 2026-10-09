@@ -7,16 +7,20 @@
 # Every expected line was diffed against the oracle, clj 1.12.6 with
 # babashka.http-client 0.4.23 required as `http` against the same origin (2026-10-08),
 # and differs from it only where a comment says so: the response map has no :version
-# (no transport here reports one) and the client asks for no compression (no
-# accept-encoding), :as :bytes is refused, and a transport failure is an IOException
-# carrying the transport's message (the oracle's ConnectException is one).
+# (no transport here reports one), :as :bytes is refused, and a transport failure is an
+# IOException carrying the transport's message (the oracle's ConnectException is one).
 #
 # The origin's endpoints beyond fetch-spec.yaml's: /headers (the request's header
 # fields as {name=[values]}, sorted, without host, connection, content-length,
 # user-agent and transfer-encoding), /query (the raw query), /form ("<content-type>|<body>"),
 # /status/500, /status/308 (to /hello), /redirect-post and /redirect-307 (302 and 307 to
 # /echo), /redirect-303 (303 to the relative "echo"), /loop (302 to /loop?<n+1>, body
-# "hop <n>"), /no-location (302 without a Location), /lines (two lines of UTF-8 text).
+# "hop <n>"), /no-location (302 without a Location), /lines (two lines of UTF-8 text), and
+# /lines' text compressed: /gzip, /gzip-upper (the coding spelled GZIP), /deflate (zlib),
+# /deflate-raw (raw DEFLATE under "deflate"), /gzip-twice (two members, "one " and "two"),
+# /gzip-404 ("missing" with a 404), /br (seven plain octets claiming br), and replies the
+# coding does not describe: /gzip-bad (plain text), /gzip-empty, /gzip-truncated (the last
+# twelve octets gone), /gzip-badcrc.
 cases:
   - name: the-origin-and-the-client
     source: |
@@ -54,16 +58,15 @@ cases:
     source: |
       (prn (:body (http/get (url "/hello") {:headers {"X-Custom" "abc"}})))
       (prn (:body (http/get (url "/hello") {:headers {:x-custom "abc"}})))
-      ;; the oracle also sends accept-encoding: gzip, deflate
       (prn (:body (http/get (url "/headers"))))
       (prn (:body (http/get (url "/headers") {:headers {"x-many" ["1" "2"]}})))
       (prn (:body (http/get (url "/headers") {:headers {:accept "text/plain" "Accept" "x/y"}})))
     expected: |
       "got-header"
       "got-header"
-      "{accept=[*/*]}"
-      "{accept=[*/*], x-many=[1, 2]}"
-      "{accept=[x/y]}"
+      "{accept=[*/*], accept-encoding=[gzip, deflate]}"
+      "{accept=[*/*], accept-encoding=[gzip, deflate], x-many=[1, 2]}"
+      "{accept=[x/y], accept-encoding=[gzip, deflate]}"
   - name: the-verbs-send-their-methods-and-bodies
     source: |
       (prn (:body (http/post (url "/echo") {:body "héllo"})))
@@ -243,10 +246,10 @@ cases:
       (prn (:body (http/get (url "/headers") {:accept :json})))
       (prn (try (http/get (url "/headers") {:accept :xml}) (catch IllegalArgumentException e (ex-message e))))
     expected: |
-      "{accept=[*/*], authorization=[Basic dXNlcjpww6Rzcw==]}"
-      "{accept=[*/*], authorization=[Basic dTpw]}"
-      "{accept=[*/*], authorization=[Bearer tok]}"
-      "{accept=[application/json]}"
+      "{accept=[*/*], accept-encoding=[gzip, deflate], authorization=[Basic dXNlcjpww6Rzcw==]}"
+      "{accept=[*/*], accept-encoding=[gzip, deflate], authorization=[Basic dTpw]}"
+      "{accept=[*/*], accept-encoding=[gzip, deflate], authorization=[Bearer tok]}"
+      "{accept=[application/json], accept-encoding=[gzip, deflate]}"
       "No matching clause: :xml"
   - name: the-verbs-are-values-and-the-request-rides-the-response
     source: |
@@ -263,6 +266,62 @@ cases:
       (:headers :method :uri)
       :get
       "abc"
+  - name: a-compressed-reply-is-read-through-its-coding
+    source: |
+      (prn (:body (http/get (url "/gzip"))))
+      (prn (get-in (http/get (url "/gzip")) [:headers "content-encoding"]))
+      (prn (:body (http/get (url "/gzip-upper"))))
+      (prn (:body (http/get (url "/deflate"))))
+      (prn (:body (http/get (url "/deflate-raw"))))
+      (prn (:body (http/get (url "/gzip-twice"))))
+      (prn (slurp (:body (http/get (url "/gzip") {:as :stream}))))
+      (prn (:body @(http/get (url "/deflate") {:async true})))
+      (prn (try (http/get (url "/gzip-404")) (catch clojure.lang.ExceptionInfo e (:body (ex-data e)))))
+      (prn (:body (http/get (url "/br"))))
+      (prn (:body (http/get (url "/headers") {:headers {"accept-encoding" "identity"}})))
+    expected: |
+      "héllo, 世界\nsecond line\n"
+      "gzip"
+      "héllo, 世界\nsecond line\n"
+      "héllo, 世界\nsecond line\n"
+      "héllo, 世界\nsecond line\n"
+      "one two"
+      "héllo, 世界\nsecond line\n"
+      "héllo, 世界\nsecond line\n"
+      "missing"
+      "brotli?"
+      "{accept=[*/*], accept-encoding=[identity]}"
+  - name: decompress-body-false-and-a-head-request-leave-the-coded-octets
+    source: |
+      (prn (int (first (:body (http/get (url "/gzip") {:decompress-body false})))))
+      (prn (:body (http/head (url "/gzip"))))
+    expected: |
+      31
+      ""
+  - name: a-reply-its-coding-does-not-describe-throws-what-java-util-zip-throws
+    source: |
+      (defn thrown [f]
+        (try (f)
+             (catch java.util.zip.ZipException e [:zip (ex-message e)])
+             (catch java.io.EOFException e [:eof (ex-message e)])))
+      (prn (thrown #(http/get (url "/gzip-bad"))))
+      (prn (thrown #(http/get (url "/gzip-empty"))))
+      (prn (thrown #(http/get (url "/gzip-truncated"))))
+      (prn (thrown #(http/get (url "/gzip-badcrc"))))
+      ;; a gzip header is read at the call, the data at the read
+      (prn (thrown #(http/get (url "/gzip-bad") {:as :stream})))
+      (prn (thrown #(slurp (:body (http/get (url "/gzip-truncated") {:as :stream})))))
+      (prn (try @(http/get (url "/gzip-bad") {:async true})
+                (catch java.util.concurrent.ExecutionException e
+                  [(instance? java.util.zip.ZipException (ex-cause e)) (instance? java.io.IOException (ex-cause e))])))
+    expected: |
+      [:zip "Not in GZIP format"]
+      [:eof nil]
+      [:eof "Unexpected end of ZLIB input stream"]
+      [:zip "Corrupt GZIP trailer"]
+      [:zip "Not in GZIP format"]
+      [:eof "Unexpected end of ZLIB input stream"]
+      [true true]
   - name: what-no-transport-here-offers-is-refused-by-name
     source: |
       (prn (try (http/get (url "/lines") {:as :bytes}) (catch UnsupportedOperationException e (ex-message e))))

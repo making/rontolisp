@@ -415,7 +415,7 @@ for the same call**, decided where it is detected (oracle-checked clj 1.12.6, 20
   message (`%clojure-illegal-argument-exception`, `-illegal-state-`, `-class-cast-`,
   `-null-pointer-`, `-index-out-of-bounds-`, `-string-index-out-of-bounds-`,
   `-unsupported-operation-`, `-number-format-`, `-arithmetic-`, `-arity-`, `-runtime-`,
-  `-class-not-found-`, `-pattern-syntax-`, `-illegal-format-conversion-`, `-io-exception`, `-sax-parse-exception` (clojure.xml),
+  `-class-not-found-`, `-pattern-syntax-`, `-illegal-format-conversion-`, `-io-exception`, `-sax-parse-exception` (clojure.xml), `-zip-exception` (a compressed reply of the HTTP client),
   `%clojure-exception` for `java.lang.Exception`, `%clojure-assertion-error`), each signalling
   through `%clojure-refuse` -- the one typed signal -- a `%clojure-refusal`, a `simple-error`
   whose third slot holds the chain (read in place by `%clojure-exact-chain`) and whose report
@@ -1370,7 +1370,8 @@ new, and the five fetch has (the JDK's on the interpreter and the JVM, `wasi:htt
   on wasm); its vars that build a Java client (`client`, `default-client-opts`, the `->X`
   builders) are refused by name (`leftOut`).
 - The request (`clojure.lisp` "rontolisp.http-client"), at the call: the oracle's request
-  interceptors in their order -- headers merged under `{:accept "*/*"}` with
+  interceptors in their order -- headers merged under `{:accept "*/*" :accept-encoding
+  ["gzip" "deflate"]}` with
   `prefer-string-keys` (a keyword name dropped beside a string one, written or
   capitalized), `:request-method`, `:url`, `:accept :json`, `:basic-auth` (base64 of the
   UTF-8 octets), `:oauth-token`, `:query-params` (`URLEncoder` through the Ring kernel
@@ -1391,9 +1392,16 @@ new, and the five fetch has (the JDK's on the interpreter and the JVM, `wasi:htt
   (301/302/303/307/308, `++hops < 5`, never https to http, 303 and a POST's 301/302 to GET,
   the body kept only for an unchanged method off a 303, `ALLOWED_REDIRECT_HEADERS` across
   origins, `URI.resolve` ported with its RFC 2396 empty-path rule; a hop's body
-  stream-closed); `respond` refuses a `gzip`/`deflate` body (nothing decompresses, so no
-  `accept-encoding` is sent) and an `:as` with no clause, drains through `read-all` unless
-  `:as :stream`, builds `{:status :headers :body :uri :request}` (headers a string-keyed
+  stream-closed); `respond` runs the oracle's response interceptors in their order:
+  `decompress-body` (a `content-encoding` of `gzip` or `deflate`, lower-cased, one value,
+  not under `:decompress-body false` or a `:head` request, is read through
+  `rontolisp::%inflate-*`, `.kb/fetch-http.md` "Decompression": `%clojure-http-decoded`
+  answers a `%stream-new` stream over the body after reading what the oracle's constructor
+  reads -- a gzip header, for deflate one octet through zlib, then starting over through
+  raw DEFLATE when zlib refused, as the oracle's `inflate` probes; a malformed stream is
+  the `%clojure-zip-exception` carrier, data cut short `java.io.EOFException` built with
+  `c%e-new` because a gzip header or trailer cut short has no message), then the `:as`
+  clause check, drains through `read-all` unless `:as :stream`, builds `{:status :headers :body :uri :request}` (headers a string-keyed
   map, a repeated field a vector in wire order) and throws `ex-info` `Exceptional status
   code: N` over it outside the oracle's unexceptional set unless `:throw false`; `exchange`
   applies `:async-then`/`:async-catch` (the latter handed `{:ex CompletionException :ex-cause
@@ -1428,10 +1436,11 @@ new, and the five fetch has (the JDK's on the interpreter and the JVM, `wasi:htt
   `deref`, and catches the 404 `ex-info`.
 - Oracle (clj 1.12.6 + babashka.http-client 0.4.23 against the corpus origin, 2026-10-08):
   identical but the response's missing `:version` and the `java.net.URI` `:uri` (a string
-  here), `accept-encoding`, the User-Agent (fetch's), a transport failure's class (an
-  `IOException`; the oracle's `ConnectException` is one), map key order, `:as :bytes`.
-  What waits on a value kind or a transport feature (`:as :bytes`, compression,
-  `:multipart`, a lazy reader over the stream body, `:timeout`, the arity words): todo `e63`.
+  here), the User-Agent (fetch's), a transport failure's class (an `IOException`; the
+  oracle's `ConnectException` is one), map key order, `:as :bytes`. Compression
+  (2026-10-09): identical on the four legs, the eleven compressed endpoints included. What
+  waits on a value kind or a transport feature (`:as :bytes`, `:multipart`, a lazy reader
+  over the stream body, `:timeout`, the arity words): todo `e63`.
 - Pins: `FetchSpecE2eTest#clojureHttpClient` (`clojure-http-spec.yaml`: interpreter, JVM,
   `--native`, component), `ClojureHttpClientTest` (the lowering, the refusals, the FETCH
   strip, the P1 and `--no-wasi` refusals, a Ring proxy relaying a binary reply on the

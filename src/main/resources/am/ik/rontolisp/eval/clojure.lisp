@@ -1203,6 +1203,13 @@
    '("java.io.IOException" "java.lang.Exception" "java.lang.Throwable")
    message))
 
+(defun rontolisp::%clojure-zip-exception (message)
+  "A refusal the oracle throws as a java.util.zip.ZipException: a compressed
+   reply that is not what its content coding says."
+  (rontolisp::%clojure-refuse '("java.util.zip.ZipException"
+                                "java.io.IOException" "java.lang.Exception"
+                                "java.lang.Throwable") message))
+
 (defun rontolisp::%clojure-file-not-found-exception (message)
   "A refusal the oracle throws as a java.io.FileNotFoundException: a file it
    cannot open."
@@ -13113,11 +13120,14 @@
     (get-output-stream-string out)))
 
 (defun rontolisp::%clojure-http-headers (headers)
-  "The request's header map: the default accept under HEADERS (a map or nil),
-   then a keyword name dropped where a string key spells the same field, as
-   written or capitalized, like the oracle's prefer-string-keys."
+  "The request's header map: the defaults -- accept, and the accept-encoding
+   of the codings the reply is decompressed from -- under HEADERS (a map or
+   nil), then a keyword name dropped where a string key spells the same field,
+   as written or capitalized, like the oracle's prefer-string-keys."
   (let ((out (make-hash-table :test 'equal)) (drop nil))
     (setf (gethash (list :c%keyword "accept") out) "*/*")
+    (setf (gethash (list :c%keyword "accept-encoding") out)
+          (vector "gzip" "deflate"))
     (let ((given (rontolisp::%clojure-http-table headers ":headers")))
       (if given (maphash (lambda (k v) (setf (gethash k out) v)) given)))
     (maphash (lambda (k v)
@@ -13675,33 +13685,147 @@
                          grown))))))
     out))
 
-(defun rontolisp::%clojure-http-check-body (res req as)
-  "Refuses what the response RES to the request REQ cannot answer per :as AS:
-   a compressed body (nothing here decompresses), an :as the oracle has no
-   clause for."
-  (let ((encoding
-         (cdr (assoc "content-encoding" (getf res :headers) :test #'string=))))
-    (if (and encoding
-         (member (string-downcase encoding) '("gzip" "deflate") :test #'string=)
-         (not
-          (eq (rontolisp::%clojure-http-option req "decompress-body")
-              rontolisp::%clojure-false))
-         (not
-          (equal (rontolisp::%clojure-http-option req "method")
-                 (list :c%keyword "head"))))
-        (rontolisp::%clojure-unsupported-operation-exception
-         (concatenate 'string "rontolisp.http-client: a " encoding
-                      " response body is not decompressed")))
-    (if (not
-         (or (null as) (equal as (list :c%keyword "string"))
-             (equal as (list :c%keyword "stream"))))
-        (rontolisp::%clojure-illegal-argument-exception
-         (concatenate 'string "No matching clause: "
-                      (rontolisp::%clojure-str-of as "nil" t))))))
+(defun rontolisp::%clojure-http-check-as (as)
+  "Refuses an :as AS the oracle's decode-body has no clause for."
+  (if (not
+       (or (null as) (equal as (list :c%keyword "string"))
+           (equal as (list :c%keyword "stream"))))
+      (rontolisp::%clojure-illegal-argument-exception
+       (concatenate 'string "No matching clause: "
+                    (rontolisp::%clojure-str-of as "nil" t)))))
+
+;; A compressed reply, the oracle's decompress-body: babashka.http-client asks for
+;; gzip and deflate and reads a reply whose content-encoding names one through
+;; GZIPInputStream or InflaterInputStream. The decoder is rontolisp::%inflate-new
+;; and its two siblings -- runtime/RontoInflate on the interpreter and the JVM,
+;; inflate.lisp on wasm (eval/InflateLibrary) -- which report what java.util.zip
+;; reports; these turn that into the oracle's exceptions.
+
+(defun rontolisp::%clojure-eof-exception (message)
+  "The java.io.EOFException the oracle throws for compressed data cut short:
+   MESSAGE, nil for a gzip header or trailer cut short."
+  (error
+   (c%e-new '("java.io.EOFException" "java.io.IOException" "java.lang.Exception"
+              "java.lang.Throwable") message nil nil)))
+
+(defun rontolisp::%clojure-http-inflate-check (answer)
+  "ANSWER, what a decoder's update answered: the octets, or the oracle's
+   ZipException over the message of a malformed stream."
+  (if (stringp answer) (rontolisp::%clojure-zip-exception answer))
+  answer)
+
+(defun rontolisp::%clojure-http-inflate-end (decoder)
+  "The end of the compressed input of DECODER: nothing when it was whole, the
+   oracle's EOFException when it was cut short."
+  (let ((short (rontolisp::%inflate-finish decoder)))
+    (if short
+        (rontolisp::%clojure-eof-exception
+         (if (eql short 2) "Unexpected end of ZLIB input stream" nil)))))
+
+(defun rontolisp::%clojure-http-coding (headers req)
+  "The decoder kind the reply with the header map HEADERS to the request REQ
+   is read through: 2 for a gzip content-encoding, 1 for deflate (the oracle
+   lower-cases the one value; a repeated field is no coding), nil for any
+   other, under :decompress-body false and for a :head request."
+  (let ((encoding (gethash "content-encoding" headers)))
+    (if (and (stringp encoding)
+             (not
+              (eq (rontolisp::%clojure-http-option req "decompress-body")
+                  rontolisp::%clojure-false))
+             (not
+              (equal (rontolisp::%clojure-http-option req "method")
+                     (list :c%keyword "head"))))
+        (let ((name (string-downcase encoding)))
+          (cond ((string= name "gzip") 2) ((string= name "deflate") 1))))))
+
+(defun rontolisp::%clojure-http-inflate-next (body state)
+  "The future of the next decoded chunk of an inflating stream over the reply
+   BODY, nil at its end. STATE is #(decoder pending ended): the chunks to feed
+   before BODY's, and whether BODY has ended."
+  (funcall
+   (rontolisp:async-lambda ()
+     (let ((decoder (svref state 0)) (found nil))
+       (loop
+         (let ((chunk
+                (cond ((svref state 1)
+                       (let ((c (car (svref state 1))))
+                         (setf (svref state 1) (cdr (svref state 1)))
+                         c))
+                      ((svref state 2) nil)
+                      (t (rontolisp:await (rontolisp:stream-read body))))))
+           (if (null chunk) (setf (svref state 2) t))
+           (let ((out
+                  (rontolisp::%clojure-http-inflate-check
+                   (rontolisp::%inflate-update decoder
+                    (or chunk (make-array 0 :element-type '(unsigned-byte 8)))
+                    nil))))
+             (cond ((> (length out) 0)
+                    (setq found out)
+                    (return nil))
+                   ((null chunk)
+                    (rontolisp::%clojure-http-inflate-end decoder)
+                    (return nil))))))
+       found))))
+
+(defun rontolisp::%clojure-http-inflating (body decoder pending)
+  "A stream of what DECODER makes of the compressed chunks PENDING and then of
+   the reply BODY's, a chunk a read; a malformed stream the oracle's
+   ZipException at the read, one cut short its EOFException. Closing it closes
+   BODY."
+  (let ((state (vector decoder pending nil)))
+    (rontolisp::%stream-new
+     (lambda () (rontolisp::%clojure-http-inflate-next body state))
+     (lambda () (rontolisp:stream-close body)))))
+
+(defun rontolisp::%clojure-http-decoded (body kind)
+  "The reply BODY read through a decoder of KIND (2 gzip, 1 deflate) -- the
+   future of an inflating stream over it -- or BODY itself for nil. What the
+   oracle reads at construction is read now, so a reply no such data throws at
+   the call: GZIPInputStream's header; for deflate one octet through zlib,
+   after which the oracle starts over, through raw DEFLATE when zlib failed."
+  (if (null kind)
+      body
+      (funcall
+       (rontolisp:async-lambda ()
+         (let ((decoder (rontolisp::%inflate-new (if (= kind 2) 2 1)))
+               (seen nil)
+               (mode nil))
+           (loop
+             (let ((chunk (rontolisp:await (rontolisp:stream-read body))))
+               (if (null chunk)
+                   (progn
+                     ;; the reply ended before the header or the first octet:
+                     ;; a zlib stream done with no octet reads as empty
+                     (if (and (= kind 1)
+                              (null (rontolisp::%inflate-finish decoder)))
+                         (setq mode 1)
+                         (rontolisp::%clojure-http-inflate-end decoder))
+                     (return nil)))
+               (if (= kind 1) (setq seen (cons chunk seen)))
+               (let ((out
+                      (rontolisp::%inflate-update decoder chunk
+                                                  (if (= kind 2) 0 1))))
+                 (cond ((= kind 2)
+                        (rontolisp::%clojure-http-inflate-check out)
+                        (if (not (eql (rontolisp::%inflate-finish decoder) 1))
+                            (return nil)))
+                       ((stringp out)
+                        (setq mode 0)
+                        (return nil))
+                       ((or (> (length out) 0)
+                            (null (rontolisp::%inflate-finish decoder)))
+                        (setq mode 1)
+                        (return nil))))))
+           (if (= kind 2)
+               (rontolisp::%clojure-http-inflating body decoder nil)
+               (rontolisp::%clojure-http-inflating body
+                (rontolisp::%inflate-new mode) (reverse seen))))))))
 
 (defun rontolisp::%clojure-http-respond (prepared transport)
   "The future of the response map of the prepared request PREPARED: the
-   exchange, the body per :as, the throw of an exceptional status."
+   exchange, the body decompressed per its content-encoding and read per :as,
+   the throw of an exceptional status -- the oracle's response steps in its
+   order."
   (funcall
    (rontolisp:async-lambda ()
      (let* ((req (car prepared))
@@ -13710,19 +13834,28 @@
               (rontolisp::%clojure-http-follow (cdr prepared) transport)))
             (res (car reply))
             (status (getf res :status))
+            (headers (rontolisp::%clojure-http-header-map (getf res :headers)))
             (as (rontolisp::%clojure-http-option req "as"))
-            (checked (rontolisp::%clojure-http-check-body res req as))
+            (body
+             (rontolisp:await
+              (rontolisp::%clojure-http-decoded (getf res :body)
+               (rontolisp::%clojure-http-coding headers req))))
+            (checked (rontolisp::%clojure-http-check-as as))
             (text
              (rontolisp:await
               (if (equal as (list :c%keyword "stream"))
                   nil
-                  (rontolisp:read-all (getf res :body)))))
+                  (rontolisp:read-all body))))
             (resp
              (rontolisp::%clojure-http-assoc nil
-              (list "status" status "headers"
-               (rontolisp::%clojure-http-header-map (getf res :headers)) "body"
-               (if (equal as (list :c%keyword "stream")) (getf res :body) text)
-               "uri" (cdr reply) "request" req))))
+                                             (list "status" status "headers"
+                                                   headers "body"
+                                                   (if (equal as
+                                                              (list :c%keyword
+                                                                    "stream"))
+                                                       body
+                                                       text) "uri" (cdr reply)
+                                                   "request" req))))
        (declare (ignore checked))
        (if (and (not
                  (eq (rontolisp::%clojure-http-option req "throw")

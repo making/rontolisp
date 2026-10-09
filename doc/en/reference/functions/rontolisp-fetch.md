@@ -116,7 +116,11 @@ request `:body` from an s-expression.
   stack until the headers): requests never overlap, and a transport failure
   before the head signals at the `fetch` call rather than at `await` — one
   during the body signals at the drain, as on every other backend. Without the
-  flag, `--no-wasi` keeps the compile error.
+  flag, `--no-wasi` keeps the compile error. A JavaScript `fetch` decodes a
+  `gzip`, `deflate` or `br` reply itself, so the generated host answers the
+  decoded octets and leaves that reply's `content-encoding` and
+  `content-length` out of `:headers`; every other backend answers a coded
+  body's octets as they arrived.
 - **Native executable** (`--native`): the executable's runner makes the
   request on a thread of its own from the moment `fetch` returns, over HTTP/1.1
   (HTTPS trusting Mozilla's root certificates, which the executable carries, or
@@ -129,7 +133,9 @@ request `:body` from an s-expression.
   requests overlap, and `await` blocks the worker until the response arrives.
   When cross-origin isolation is unavailable (`SharedArrayBuffer` disabled)
   the playground falls back to a synchronous request per fetch — programs
-  behave the same, requests simply do not overlap.
+  behave the same, requests simply do not overlap. The browser decodes a
+  compressed reply, so, as under `--host-fetch`, its `content-encoding` and
+  `content-length` are not in `:headers`.
 
 ## Limitations
 

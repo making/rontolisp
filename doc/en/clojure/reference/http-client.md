@@ -42,11 +42,13 @@ compile refuses the program, naming the flags that give it one.
 | `:oauth-token` | an `Authorization: Bearer` header |
 | `:accept` | `:json`: `Accept: application/json` |
 | `:as` | `:string` (the default: the body decoded as UTF-8) or `:stream` (the body unread) |
+| `:decompress-body` | `false` leaves a compressed body as it arrived |
 | `:throw` | `false` answers every status |
 | `:async` | `true` answers a future of the response |
 | `:async-then`, `:async-catch` | with `:async`: a function of the response, and of a map of the failure |
 
-A request sends `Accept: */*` unless `:headers` names one, plus fetch's own `User-Agent`.
+A request sends `Accept: */*` and `Accept-Encoding: gzip, deflate` unless `:headers` names
+them, plus fetch's own `User-Agent`.
 
 ## The response
 
@@ -76,6 +78,28 @@ A status outside 200-207, 300-304 and 307 throws an `ex-info`,
 A transport failure (no connection, a broken transfer) throws `java.io.IOException`
 carrying the transport's message; a URL the JDK refuses, `IllegalArgumentException` at the
 call (`Illegal character in path at index 24: ...`, `URI with undefined scheme`).
+
+## Compressed replies
+
+A reply whose `Content-Encoding` is `gzip` or `deflate` (zlib, or the raw DEFLATE some
+servers send under that name) is decompressed before `:as` reads it, so `:body` is the
+text, or under `:as :stream` the decompressed octets; `:headers` still names the coding. A
+`HEAD` request, `:decompress-body false` and any other coding leave the body as it
+arrived. A reply that is not what its coding says throws what `java.util.zip` throws:
+`java.util.zip.ZipException` (`Not in GZIP format`, `Corrupt GZIP trailer`, `invalid
+block type`, ...) or, for one cut short, `java.io.EOFException` (`Unexpected end of ZLIB
+input stream`). A gzip header is read at the call, the rest as the body is read.
+
+```clojure
+(ns example (:require [rontolisp.http-client :as http]))
+
+(let [r (http/get "https://httpbin.ik.am/gzip")]
+  (println (get-in r [:headers "content-encoding"]) (subs (:body r) 0 1)))
+```
+
+```
+gzip {
+```
 
 ## Asynchronous requests
 
@@ -123,9 +147,9 @@ $ rontolisp proxy.clj -o src/worker.wasm --no-wasi --host-fetch --host-boundary=
 
 - The response has no `:version`, and its `:uri` is a string (babashka.http-client: a
   `java.net.URI`).
-- No compression is asked for, and a `gzip` or `deflate` reply is refused; `:as :bytes` is
-  refused (no value here is a byte array). The `:stream` body is no `java.io.InputStream`:
-  `.read` does not take it, and `clojure.java.io/reader` reads it whole first.
+- `:as :bytes` is refused (no value here is a byte array). The `:stream` body is no
+  `java.io.InputStream`: `.read` does not take it, and `clojure.java.io/reader` reads it
+  whole first.
 - Refused by name: the options `:client`, `:interceptors`, `:timeout`, `:version`,
   `:multipart`, `:raw` and `:expect-continue`; the vars `client`, `default-client-opts`
   and the `->` builders, which make a `java.net.http` client; the namespace
@@ -134,4 +158,5 @@ $ rontolisp proxy.clj -o src/worker.wasm --no-wasi --host-fetch --host-boundary=
   `java.net.ConnectException`); a wrong argument count is the front end's
   `ArityException` (`wrong number of arguments passed to: get`).
 - Under `--host-fetch` the host's own `fetch` follows redirects (up to 20), so `:uri` is the
-  URL requested.
+  URL requested, and decompresses a reply itself, so `:headers` lack its
+  `content-encoding` and `content-length`.

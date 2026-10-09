@@ -598,6 +598,27 @@ final class JvmExprCompiler {
 							JvmAsyncRuntimeBuilder.OCTETS_PACKED_METHOD, JvmAsyncRuntimeBuilder.UNARY_DESC));
 					return;
 				}
+				if (JvmLispCompiler.INFLATE_METHODS.containsKey(qn.member())) {
+					// The streaming DEFLATE decoder of a compressed HTTP reply:
+					// runtime/RontoInflate, which travels with the class (the wasm
+					// targets
+					// splice the Lisp decoder instead, eval/InflateLibrary).
+					List<LispVal> items = cons.toList();
+					int arity = LispNames.INFLATE_UPDATE_INTERNAL.equals(qn.member()) ? 3 : 1;
+					if (items.size() != arity + 1) {
+						throw new UnsupportedOperationException(
+								qn.member().toLowerCase(java.util.Locale.ROOT) + " expects " + arity + " argument"
+										+ (arity == 1 ? "" : "s") + ", got " + (items.size() - 1));
+					}
+					for (int i = 1; i <= arity; i++) {
+						compileExpr(items.get(i), ctx, className);
+					}
+					ctx.body.invokestatic(ctx.cp.methodRef(ctx.cp.classEntry(JvmLispCompiler.INFLATE_CLASS),
+							JvmLispCompiler.INFLATE_METHODS.get(qn.member()),
+							(arity == 1) ? JvmAsyncRuntimeBuilder.UNARY_DESC
+									: "(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;"));
+					return;
+				}
 				if (LispNames.RANDOM_BYTE_INTERNAL.equals(qn.member())) {
 					// One cryptographically strong byte from the lazily created
 					// SecureRandom (_randomByte, emitted because the reference gated it).

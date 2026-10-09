@@ -833,8 +833,15 @@
 				}
 				const resp = await fetch(m.url, { method: m.method, headers, body: m.body === null ? undefined : m.body });
 				const text = await resp.text();
+				// The browser decodes a content coding it knows, so the text is the decoded
+				// one: the head drops the field naming the coding, and the length with it.
+				const coding = resp.headers.get("content-encoding");
+				const decoded = coding !== null
+					&& coding.split(",").every((c) => /^\s*(x-gzip|gzip|deflate|br)\s*$/i.test(c));
 				let headerLines = "";
-				resp.headers.forEach((v, k) => { headerLines += k + ": " + v + "\r\n"; });
+				resp.headers.forEach((v, k) => {
+					if (!decoded || (k !== "content-encoding" && k !== "content-length")) headerLines += k + ": " + v + "\r\n";
+				});
 				payload = new TextEncoder().encode(resp.status + "\u0001" + headerLines + "\u0001" + text);
 			} catch (err) {
 				payload = new TextEncoder().encode("ERR\u0001" + (err && err.message ? err.message : "request failed"));

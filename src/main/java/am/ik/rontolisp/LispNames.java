@@ -7715,6 +7715,40 @@ public final class LispNames {
 			+ OCTETS_TO_STRING_PACKED_INTERNAL;
 
 	/**
+	 * The internal {@code rontolisp::%inflate-new} primitive: {@code (%inflate-new kind)}
+	 * -> a streaming DEFLATE decoder of the kind (0 raw, 1 zlib, 2 gzip). The decoder of
+	 * a compressed HTTP reply ({@code rontolisp.http-client});
+	 * {@code runtime/RontoInflate} on the interpreter and the JVM, the Lisp decoder
+	 * {@code inflate.lisp} the wasm targets splice ({@code eval/InflateLibrary}).
+	 */
+	public static final String INFLATE_NEW_INTERNAL = "%INFLATE-NEW";
+
+	/**
+	 * The internal {@code rontolisp::%inflate-update} primitive:
+	 * {@code (%inflate-update decoder octets limit)} -> the octets the compressed
+	 * {@code octets}, appended to what the decoder holds, make decodable (at most
+	 * {@code limit} unless it is nil; 0 reads a zlib or gzip header and stops), or the
+	 * message of a malformed stream as a string.
+	 */
+	public static final String INFLATE_UPDATE_INTERNAL = "%INFLATE-UPDATE";
+
+	/**
+	 * The internal {@code rontolisp::%inflate-finish} primitive:
+	 * {@code (%inflate-finish decoder)} -> nil when the compressed input given is whole,
+	 * 1 when a gzip header or trailer is cut short, 2 when the compressed data is.
+	 */
+	public static final String INFLATE_FINISH_INTERNAL = "%INFLATE-FINISH";
+
+	/** The canonical spelling of {@code rontolisp::%inflate-new}. */
+	public static final String INFLATE_NEW_INTERNAL_QUALIFIED = RONTOLISP_PKG + "::" + INFLATE_NEW_INTERNAL;
+
+	/** The canonical spelling of {@code rontolisp::%inflate-update}. */
+	public static final String INFLATE_UPDATE_INTERNAL_QUALIFIED = RONTOLISP_PKG + "::" + INFLATE_UPDATE_INTERNAL;
+
+	/** The canonical spelling of {@code rontolisp::%inflate-finish}. */
+	public static final String INFLATE_FINISH_INTERNAL_QUALIFIED = RONTOLISP_PKG + "::" + INFLATE_FINISH_INTERNAL;
+
+	/**
 	 * The {@code wasm-import} directive provided by the {@code rontolisp} package. Used
 	 * as {@code (rontolisp:wasm-import 'name :from "module" :as "field" :params '(...)
 	 * :returns ...)} to declare a host function imported into the compiled WASM module

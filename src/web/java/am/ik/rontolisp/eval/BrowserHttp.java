@@ -106,7 +106,17 @@ public final class BrowserHttp {
 					    if (hs[i].length > 0) { try { xhr.setRequestHeader(hs[i], hs[i + 1]); } catch (e) {} }
 					  }
 					  xhr.send(hasBody === '1' ? body : null);
-					  return '' + xhr.status + '\\u0001' + xhr.getAllResponseHeaders() + '\\u0001' + xhr.responseText;
+					  // The browser decodes a content coding it knows: the text is the decoded
+					  // one, so the head drops the field naming the coding and the length.
+					  var coding = xhr.getResponseHeader('content-encoding');
+					  var decoded = coding !== null && coding.split(',').every(function (c) {
+					    return /^\\s*(x-gzip|gzip|deflate|br)\\s*$/i.test(c);
+					  });
+					  var fields = xhr.getAllResponseHeaders().split('\\r\\n').filter(function (line) {
+					    var name = line.split(':')[0].trim().toLowerCase();
+					    return !decoded || (name !== 'content-encoding' && name !== 'content-length');
+					  }).join('\\r\\n');
+					  return '' + xhr.status + '\\u0001' + fields + '\\u0001' + xhr.responseText;
 					} catch (e) {
 					  return 'ERR\\u0001' + ((e && e.message) ? e.message : 'request failed');
 					}

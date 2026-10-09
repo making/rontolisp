@@ -63,6 +63,7 @@ import am.ik.rontolisp.LispHashTable;
 import am.ik.rontolisp.LispInstance;
 import am.ik.rontolisp.LispIntVector;
 import am.ik.rontolisp.LispInteger;
+import am.ik.rontolisp.LispJavaObject;
 import am.ik.rontolisp.LispLambda;
 import am.ik.rontolisp.LispLayout;
 import am.ik.rontolisp.LispNames;
@@ -92,6 +93,7 @@ import am.ik.rontolisp.reader.LispLexer;
 import am.ik.rontolisp.reader.LispReadException;
 import am.ik.rontolisp.runtime.RontoCharFileReader;
 import am.ik.rontolisp.runtime.RontoCharFileWriter;
+import am.ik.rontolisp.runtime.RontoInflate;
 import am.ik.rontolisp.runtime.RontoIoFileStream;
 import am.ik.rontolisp.runtime.RontoStringInputStream;
 import am.ik.rontolisp.reader.LispReader;
@@ -8205,6 +8207,7 @@ public final class Environment implements Scope {
 			}
 			return LispString.wrapCodePoints(decodeUtf8CodePoints(v));
 		}));
+		defineInflate(env);
 		env.defineFunction(LispNames.CONSTANTP, new LispFunction(LispNames.CONSTANTP, args -> {
 			requireCallShape(LispNames.CONSTANTP, args);
 			LispVal v = args.get(0);
@@ -10785,6 +10788,46 @@ public final class Environment implements Scope {
 	 * @param seq the octets argument
 	 * @return the octets as a packed {@code (unsigned-byte 8)} vector
 	 */
+	/**
+	 * {@code rontolisp::%inflate-new}, {@code %inflate-update} and
+	 * {@code %inflate-finish}: the streaming DEFLATE decoder a compressed HTTP reply is
+	 * read through ({@code rontolisp.http-client}). Here, and on the JVM, it is
+	 * {@link RontoInflate}; the wasm targets compile the Lisp decoder
+	 * {@link InflateLibrary} splices, pinned to this one by {@code InflateLibraryTest}.
+	 * The decoder is a host object no Lisp code but those three looks into.
+	 */
+	private static void defineInflate(Environment env) {
+		String create = LispNames.INFLATE_NEW_INTERNAL_QUALIFIED;
+		env.defineFunction(create, new LispFunction(create, args -> {
+			requireArgCount(LispNames.INFLATE_NEW_INTERNAL, args, 1);
+			return new LispJavaObject(new RontoInflate(requireIndex(LispNames.INFLATE_NEW_INTERNAL, args.get(0))));
+		}));
+		String update = LispNames.INFLATE_UPDATE_INTERNAL_QUALIFIED;
+		env.defineFunction(update, new LispFunction(update, args -> {
+			requireArgCount(LispNames.INFLATE_UPDATE_INTERNAL, args, 3);
+			RontoInflate decoder = inflateDecoder(LispNames.INFLATE_UPDATE_INTERNAL, args.get(0));
+			LispIntVector octets = asOctetVector(LispNames.INFLATE_UPDATE_INTERNAL, args.get(1));
+			int limit = (args.get(2) instanceof LispNil) ? -1
+					: requireIndex(LispNames.INFLATE_UPDATE_INTERNAL, args.get(2));
+			Object answer = decoder.update(octets.octets(), 0, octets.length(), limit);
+			return (answer instanceof String message) ? new LispString(message)
+					: LispIntVector.wrapOctets((byte[]) answer);
+		}));
+		String finish = LispNames.INFLATE_FINISH_INTERNAL_QUALIFIED;
+		env.defineFunction(finish, new LispFunction(finish, args -> {
+			requireArgCount(LispNames.INFLATE_FINISH_INTERNAL, args, 1);
+			int f = inflateDecoder(LispNames.INFLATE_FINISH_INTERNAL, args.get(0)).finish();
+			return (f == 0) ? LispNil.INSTANCE : new LispInteger(f);
+		}));
+	}
+
+	private static RontoInflate inflateDecoder(String fn, LispVal state) {
+		if (state instanceof LispJavaObject host && host.ref() instanceof RontoInflate decoder) {
+			return decoder;
+		}
+		throw new LispEvalException(fn + " expects a decoder, got: " + state.print());
+	}
+
 	private static LispIntVector asOctetVector(String fn, LispVal seq) {
 		if (seq instanceof LispIntVector iv) {
 			return iv;

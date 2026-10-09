@@ -23,6 +23,7 @@ import am.ik.rontolisp.eval.HttpReactorInliner;
 import am.ik.rontolisp.eval.HttpReactorLibrary;
 import am.ik.rontolisp.eval.HttpServeLibrary;
 import am.ik.rontolisp.eval.HttpServerLibrary;
+import am.ik.rontolisp.eval.InflateLibrary;
 import am.ik.rontolisp.eval.JsonLibrary;
 import am.ik.rontolisp.eval.SafetensorsLibrary;
 import am.ik.rontolisp.eval.LibraryDefunPruner;
@@ -732,8 +733,13 @@ final class CompileFrontend {
 		// before any library is spliced.
 		// The lowered languages' run-time libraries first: a Clojure one strips the arms
 		// of a value only the host makes when the target has none (wasm).
-		List<LispVal> languages = ClojureLibrary.process(SchemeLibrary
-			.process(UserMacroExpander.expand(ObjcLibrary.withMacros(loaded)), features, input.standards()), !wasm);
+		// InflateLibrary right OUTSIDE ClojureLibrary: the decoder of a compressed reply
+		// is named only by clojure.lisp's HTTP client, and a wasm target compiles the
+		// Lisp one (the interpreter and the JVM have runtime/RontoInflate); inside the
+		// prelude, which supplies what the decoder is written over.
+		List<LispVal> languages = InflateLibrary.process(ClojureLibrary.process(SchemeLibrary
+			.process(UserMacroExpander.expand(ObjcLibrary.withMacros(loaded)), features, input.standards()), !wasm),
+				witBackend);
 		List<LispVal> macos = ObjcLibrary
 			.process(AppKitLibrary.process(JsonLibrary.process(LinalgLibrary.process(GeomLibrary
 				.process(MetalLibrary.process(SceneLibrary.process(TorchLibrary.process(CheckpointLibrary.process(

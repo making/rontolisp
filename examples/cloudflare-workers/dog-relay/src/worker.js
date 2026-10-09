@@ -335,9 +335,16 @@ export function defaultHost() {
           const id = ++replySerial;
           // The reader IS the body; the module pulls it BY THIS ID afterwards.
           if (response.body) upstreams.set(id, response.body.getReader());
+          // The platform's fetch decodes a content coding it knows, so the octets
+          // the module reads are the decoded ones -- and the head says so, as
+          // every other transport's does: the field naming the coding goes, and
+          // the length of the coded octets with it.
+          const coding = response.headers.get("content-encoding");
+          const decoded = coding !== null
+            && coding.split(",").every((c) => /^\s*(x-gzip|gzip|deflate|br)\s*$/i.test(c));
           return JSON.stringify({
             status: response.status,
-            headers: [...response.headers],
+            headers: [...response.headers].filter(([name]) => !decoded || (name !== "content-encoding" && name !== "content-length")),
             "body-id": id,
           });
         } catch (error) {

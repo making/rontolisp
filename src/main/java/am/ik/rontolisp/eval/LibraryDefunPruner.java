@@ -1300,6 +1300,7 @@ public final class LibraryDefunPruner {
 					collectDefinitionNames(UrlLibrary.forms(), names);
 					collectDefinitionNames(SchemeLibrary.everyVariantForms(), names);
 					collectDefinitionNames(ClojureLibrary.forms(), names);
+					collectDefinitionNames(InflateLibrary.forms(), names);
 					for (String name : LispPreludeLibrary.names()) {
 						collectDefinitionNames(LispPreludeLibrary.formsFor(name), names);
 					}

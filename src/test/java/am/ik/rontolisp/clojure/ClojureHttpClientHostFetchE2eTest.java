@@ -13,6 +13,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 
 import am.ik.rontolisp.cli.RontoLispCli;
+import am.ik.rontolisp.testsupport.InflateCases;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
 import org.junit.jupiter.api.AfterEach;
@@ -68,6 +69,15 @@ class ClojureHttpClientHostFetchE2eTest {
 		server.createContext("/query",
 				exchange -> answer(exchange, 200, String.valueOf(exchange.getRequestURI().getRawQuery())));
 		server.createContext("/status/404", exchange -> answer(exchange, 404, "missing"));
+		// The host's fetch decodes this itself: the head the glue answers says so.
+		server.createContext("/gzip", exchange -> {
+			byte[] body = InflateCases.gzip("héllo, gzip".getBytes(StandardCharsets.UTF_8));
+			exchange.getResponseHeaders().add("Content-Encoding", "gzip");
+			exchange.sendResponseHeaders(200, body.length);
+			try (OutputStream out = exchange.getResponseBody()) {
+				out.write(body);
+			}
+		});
 		server.createContext("/octets", exchange -> {
 			byte[] body = { (byte) 0xff, (byte) 0xfe, 0x41 };
 			exchange.sendResponseHeaders(200, body.length);
@@ -107,7 +117,9 @@ class ClojureHttpClientHostFetchE2eTest {
 			             (try (http/get (url "/status/404"))
 			                  (catch clojure.lang.ExceptionInfo e (:status (ex-data e))))
 			             (:status @(http/get (url "/hello") {:async true}))
-			             (slurp (:body (http/get (url "/hello") {:as :stream})))])))
+			             (slurp (:body (http/get (url "/hello") {:as :stream})))
+			             (:body (http/get (url "/gzip")))
+			             (get-in (http/get (url "/gzip")) [:headers "content-encoding"])])))
 			""";
 
 	@Test
@@ -121,7 +133,8 @@ class ClojureHttpClientHostFetchE2eTest {
 				console.log(await lisp.probe(process.argv[2]));
 				""");
 		assertThat(node(dir, "driver.mjs", this.originUrl))
-			.isEqualTo("[200 \"ok\" \"got-header\" \"POST:héllo\" \"a=1+2\" 404 200 \"hello-from-fetch\"]");
+			.isEqualTo("[200 \"ok\" \"got-header\" \"POST:héllo\" \"a=1+2\" 404 200 \"hello-from-fetch\""
+					+ " \"héllo, gzip\" nil]");
 	}
 
 	/**

@@ -293,6 +293,53 @@ validator is STRICT** -- `_str_char_at`'s lead ranges are NOT that validator. Ga
 `HttpHandlerJvmTest` twin,
 `WasmLispCompilerIntegrationTest.httpHandlerRelaysAFetchedBodyByteExactlyUnderWasmtimeServe`.
 
+## Decompression
+
+**`rontolisp:fetch` never decodes a content coding; the decoder is a separate internal
+primitive the Clojure client reads a coded reply through** (`.kb/clojure-frontend.md`,
+"HTTP client"). `(rontolisp::%inflate-new kind)` (0 raw DEFLATE, 1 zlib, 2 gzip),
+`(%inflate-update decoder octets limit)` -> the octets the input so far makes decodable
+(at most LIMIT; 0 reads a zlib/gzip header and stops) or the message of a malformed
+stream (a string, sticky), `(%inflate-finish decoder)` -> nil, 1 (a gzip header or
+trailer cut short) or 2 (the data cut short). The semantics are `java.util.zip`'s, which
+the oracle reads through: zlib's messages, `GZIPInputStream`'s header (`Not in GZIP
+format`, `Unsupported compression method`, `Corrupt GZIP header` for FHCRC) and trailer
+(`Corrupt GZIP trailer`), JDK 25's concatenated members (a next header that is absent or
+malformed ends the stream), a zlib preset dictionary read as the end (`InflaterInputStream`
+answers -1).
+- **Two implementations, unit for unit**: `runtime/RontoInflate` (pure Java, not
+  `Inflater`: native zlib is not in the playground's Web Image) is the interpreter's
+  native (`Environment.defineInflate`, a `LispJavaObject` decoder) and the JVM's
+  (`JvmExprCompiler` calls `create`/`update`/`finish`, the class and its two nested ones
+  TRAVEL, `JvmLispCompiler.INFLATE_RUNTIME_CLASS_FILES`); `eval/inflate.lisp`, spliced by
+  `InflateLibrary` into a wasm program naming one of the three (right outside
+  `ClojureLibrary.process`, inside the prelude), is the wasm targets'. The interpreter
+  cannot run the Lisp one at a usable speed (a bit loop ~140x slower than compiled), and
+  the JVM's compiled Lisp ran ~1 MB/s against the Java class.
+- **Streaming**: a unit (block header, symbol + extra bits, match, header, trailer) the
+  input runs out inside is THROWN back (`catch`/`throw` on `%inflate-stop`) and decoded
+  again when more arrives, so the output never depends on where chunks were cut. Inside
+  a Huffman block, zlib's `inflate_fast`: symbols run over locals while at least ten input
+  octets are left (no unit can run past them), a 9-bit table per code with a canonical
+  bit-by-bit walk for longer codes. Every value stays a fixnum on 31-bit wasm: the bit
+  buffer <= 23 bits, the CRC-32 two 16-bit halves.
+- **Pins**: `RontoInflateTest` (every case of `testsupport/InflateCases` -- each kind
+  whole at four levels and three strategies, cut short at a spread of lengths, corrupted
+  at random octets, random octets behind a valid header, every gzip header field, two
+  members and a malformed tail -- fed in chunks of 1, 3, 64 and all, and a octet at a
+  time under a limit, reads as `GZIPInputStream`/`InflaterInputStream` read it);
+  `InflateLibraryTest` (the Lisp decoder evaluated over the interpreter's natives, the
+  small cases, equal to `RontoInflate` for three feeds; the splice gating);
+  `clojure-http-spec.yaml` on the four legs.
+- **A host that decodes says so**: a JavaScript `fetch` (node, Workers, a browser) decodes
+  gzip/deflate/br itself and keeps `content-encoding` and `content-length`. The generated
+  `defaultHost()` (`HostGlueEmitter`) and the playground (`web/playground.html`'s
+  `brokerFetch`, `BrowserHttp`'s XHR) drop both fields when every listed coding is one of
+  `gzip`, `x-gzip`, `deflate`, `br`, so `:headers` describe the octets `:body` holds, as
+  on every other transport; a host written by hand has the same obligation. Pinned by
+  `ClojureHttpClientHostFetchE2eTest` (a gzip reply through node's fetch) and the
+  regenerated `examples/cloudflare-workers/*/src/worker.js` (`HostGlueEmitterTest`).
+
 ## The default User-Agent
 
 **The ONE request header added on the caller's behalf is `User-Agent: rontolisp/<version>

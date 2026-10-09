@@ -569,12 +569,22 @@ public final class HostGlueEmitter {
 			out.append("          // The reader IS the body; the module pulls it after this returns.\n");
 			out.append("          upstream = response.body ? response.body.getReader() : null;\n");
 		}
+		out.append("""
+				          // The platform's fetch decodes a content coding it knows, so the octets
+				          // the module reads are the decoded ones -- and the head says so, as
+				          // every other transport's does: the field naming the coding goes, and
+				          // the length of the coded octets with it.
+				          const coding = response.headers.get("content-encoding");
+				          const decoded = coding !== null
+				            && coding.split(",").every((c) => /^\\s*(x-gzip|gzip|deflate|br)\\s*$/i.test(c));
+				""");
 		out.append("          return JSON.stringify({\n");
 		for (FetchResponseShape.Field field : FetchResponseShape.responseFields()) {
 			String value = switch (field.name()) {
 				case "status" -> "response.status";
 				// An ARRAY of pairs, never an object: a name may repeat.
-				case "headers" -> "[...response.headers]";
+				case "headers" -> "[...response.headers].filter(([name]) => !decoded"
+						+ " || (name !== \"content-encoding\" && name !== \"content-length\"))";
 				// Out of band, the head carries no body at all -- the key's ABSENCE is
 				// what puts the module's stream over the import below.
 				case "body" -> pulled ? null : "await response.text()";

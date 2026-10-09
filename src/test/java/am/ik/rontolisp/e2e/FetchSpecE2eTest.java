@@ -11,6 +11,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -22,9 +23,11 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.FutureTask;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Stream;
+import java.util.zip.Deflater;
 
 import am.ik.rontolisp.cli.RontoLispCli;
 import am.ik.rontolisp.testsupport.HostWasmtime;
+import am.ik.rontolisp.testsupport.InflateCases;
 import am.ik.rontolisp.testsupport.YamlResources;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
@@ -261,6 +264,30 @@ class FetchSpecE2eTest {
 			exchange.getResponseHeaders().add("Content-Type", "text/plain; charset=utf-8");
 			answer(exchange, 200, "héllo, 世界\nsecond line\n");
 		});
+		// Compressed replies: /lines' text under each coding the client reads, the
+		// coding's name in another case, two gzip members, and replies their coding
+		// does not describe -- not gzip, empty, cut short, a wrong CRC -- plus a coding
+		// the client leaves alone.
+		byte[] lines = "héllo, 世界\nsecond line\n".getBytes(StandardCharsets.UTF_8);
+		byte[] gzipLines = InflateCases.gzip(lines);
+		coded(server, "/gzip", "gzip", 200, gzipLines);
+		coded(server, "/gzip-upper", "GZIP", 200, gzipLines);
+		coded(server, "/deflate", "deflate", 200,
+				InflateCases.deflate(lines, Deflater.DEFAULT_COMPRESSION, false, Deflater.DEFAULT_STRATEGY));
+		coded(server, "/deflate-raw", "deflate", 200,
+				InflateCases.deflate(lines, Deflater.DEFAULT_COMPRESSION, true, Deflater.DEFAULT_STRATEGY));
+		ByteArrayOutputStream twice = new ByteArrayOutputStream();
+		twice.writeBytes(InflateCases.gzip("one ".getBytes(StandardCharsets.UTF_8)));
+		twice.writeBytes(InflateCases.gzip("two".getBytes(StandardCharsets.UTF_8)));
+		coded(server, "/gzip-twice", "gzip", 200, twice.toByteArray());
+		coded(server, "/gzip-404", "gzip", 404, InflateCases.gzip("missing".getBytes(StandardCharsets.UTF_8)));
+		coded(server, "/gzip-bad", "gzip", 200, "not gzip at all".getBytes(StandardCharsets.UTF_8));
+		coded(server, "/gzip-empty", "gzip", 200, new byte[0]);
+		coded(server, "/gzip-truncated", "gzip", 200, Arrays.copyOf(gzipLines, gzipLines.length - 12));
+		byte[] badCrc = gzipLines.clone();
+		badCrc[badCrc.length - 6]++;
+		coded(server, "/gzip-badcrc", "gzip", 200, badCrc);
+		coded(server, "/br", "br", 200, "brotli?".getBytes(StandardCharsets.UTF_8));
 		server.setExecutor(Executors.newVirtualThreadPerTaskExecutor());
 		server.start();
 		origin = server;
@@ -277,6 +304,14 @@ class FetchSpecE2eTest {
 
 	private static void answer(HttpExchange exchange, int status, String body) throws IOException {
 		answer(exchange, status, body.getBytes(StandardCharsets.UTF_8));
+	}
+
+	// A reply whose octets are BODY under the content coding CODING.
+	private static void coded(HttpServer server, String path, String coding, int status, byte[] body) {
+		server.createContext(path, exchange -> {
+			exchange.getResponseHeaders().add("Content-Encoding", coding);
+			answer(exchange, status, body);
+		});
 	}
 
 	// A HEAD is answered with the headers a GET would carry and no body.
