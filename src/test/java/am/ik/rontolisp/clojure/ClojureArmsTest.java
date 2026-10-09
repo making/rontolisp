@@ -560,8 +560,11 @@ class ClojureArmsTest {
 				new InterfaceCase(ClojureArms.Family.JAVA_MAP,
 						"(cond ((rontolisp::%clojure-jmap-p c) (s c)) (t (e c)))", List.of("(COND (T (E C)))"),
 						"(rontolisp::%clojure-java-map-row tag nil (list))"),
+				new InterfaceCase(ClojureArms.Family.HASHEQ,
+						"(cond ((rontolisp::%clojure-hasheq-p x) (h x)) (t (o x)))", List.of("(COND (T (O X)))"),
+						"(rontolisp::%clojure-hasheq-row tag nil (list))"),
 				new InterfaceCase(ClojureArms.Family.MARKER,
-						"(if (or (rontolisp::%clojure-hasheq-p x) (rontolisp::%clojure-serializable-p x)) t nil)",
+						"(if (or (rontolisp::%clojure-editable-p x) (rontolisp::%clojure-serializable-p x)) t nil)",
 						List.of("NIL"), "(rontolisp::%clojure-marker-row tag nil (list))"));
 		for (InterfaceCase one : cases) {
 			assertThat(ClojureArms.scan(read(one.arms()), one.family()).strips()).as(one.family().name()).isTrue();

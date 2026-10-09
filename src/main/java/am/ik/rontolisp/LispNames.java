@@ -1,5 +1,7 @@
 package am.ik.rontolisp;
 
+import org.jspecify.annotations.Nullable;
+
 /**
  * Centralized constants for all special form and built-in function names. These constants
  * are compile-time constants (static final String) and can be used in switch case labels.
@@ -17,13 +19,26 @@ public final class LispNames {
 	 * symbol's spelling as a program-spelled literal, so it never arms the
 	 * funcall-dispatch gate's name probes. It is the quote for a name the COMPILER
 	 * synthesizes into an expansion (a generated {@code :reader} body quoting its slot
-	 * name for the {@code unbound-slot} signal) -- real data at run time, but not a
-	 * designator the user wrote, so it must not keep a same-named defun's registry row
-	 * and ladder case alive. The symbol rule twin of "no generated string literal may
-	 * spell a defun name exactly" ({@code .kb/optimize-dead-code-elimination.md}). Never
-	 * produced by the reader; user code cannot reach it.
+	 * name for the {@code unbound-slot} signal, a Clojure syntax-quote template's
+	 * qualified symbol) -- real data at run time, but not a designator the user wrote, so
+	 * it must not keep a same-named defun's registry row and ladder case alive. Every
+	 * walker that skips quoted data skips it too ({@link #isQuote}). The symbol rule twin
+	 * of "no generated string literal may spell a defun name exactly"
+	 * ({@code .kb/optimize-dead-code-elimination.md}). Never produced by the reader; user
+	 * code cannot reach it.
 	 */
 	public static final String UNSPELLED_QUOTE = "%UNSPELLED-QUOTE";
+
+	/**
+	 * Whether the operator is {@link #QUOTE} or {@link #UNSPELLED_QUOTE}: its argument is
+	 * data, never code. A walker that skips quoted data skips both, or it reads an
+	 * unspelled quote's datum as a variable reference.
+	 * @param name the operator's name
+	 * @return whether the form quotes its argument
+	 */
+	public static boolean isQuote(@Nullable String name) {
+		return QUOTE.equals(name) || UNSPELLED_QUOTE.equals(name);
+	}
 
 	/** The {@code if} special form. */
 	public static final String IF = "IF";
@@ -9989,6 +10004,20 @@ public final class LispNames {
 
 	/** {@code %ieee754-single-from-bits} -- the float of unsigned 32-bit IEEE bits. */
 	public static final String IEEE754_SINGLE_FROM_BITS = "%IEEE754-SINGLE-FROM-BITS";
+
+	/**
+	 * {@code %identity-hash} -- the identity hash of an aggregate (a cons, a vector or
+	 * other array, a table, a function, an instance) as a signed 32-bit integer: the same
+	 * for the same object for its whole life whatever its contents do, the hash an
+	 * {@code eq} table places it by ({@code System.identityHashCode} on the interpreter
+	 * and the JVM, the wasm object's identity-hash slot, which a program calling this
+	 * carries, .kb/hash-tables.md). Values differ between backends and runs; an atom (a
+	 * number, a character, a symbol) has no identity apart from its value, and what it
+	 * answers for one is unspecified. The Clojure front end's {@code hash} of a function,
+	 * an atom or a type without a hash of its own reads it, the oracle's
+	 * {@code Object.hashCode}.
+	 */
+	public static final String IDENTITY_HASH = "%IDENTITY-HASH";
 
 	/**
 	 * {@code rontolisp:bfloat16-bits} -- the bfloat16 bit pattern of a real, as an

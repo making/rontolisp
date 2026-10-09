@@ -51,7 +51,7 @@ parameter count against every group of the body, so a `toString` may stand under
 | `IFn` (with `Callable` and `Runnable`) | a call, a function argument (`map`, `filter` ...), `apply` (through `applyTo`), `ifn?` |
 | `IDeref` | `deref`, `@` |
 | `IMeta`, `IObj` | `meta`, `with-meta`, `vary-meta` (`deftype` only: a `reify` carries metadata itself) |
-| `Object` | `str` and printing (`toString`), `=` (`equals`), `.hashCode` |
+| `Object` | `str` and printing (`toString`), `=` (`equals`), `.hashCode` and `hash` without `IHashEq` (`hashCode`) |
 
 `instance?` of the interface and an instance call of its method (`(.count x)`) reach the type
 too, and so does a protocol extended to the interface. A method the body leaves out is the
@@ -95,7 +95,8 @@ oracle asks them, the interface's supers included (`IPersistentMap` is an `Assoc
 | `java.util.Iterator` | [iterator-seq](iterator-seq.md), the seq and reduction of an `Iterable` |
 | `java.util.Collection`, `List`, `Set`, `RandomAccess` | `count` (`size`), `nth` (a `RandomAccess` list's `get`), `contains?` (a `Set`'s `contains`), `=`, `pr` as a list, a vector or a set |
 | `java.util.Map` | `get`, `contains?`, `find`, `count`, `seq` (`entrySet`), `=`, `pr` as a map |
-| `IHashEq`, `java.io.Serializable`, `IEditableCollection`, the transients | `instance?` and instance calls (no `hash` here; transients are refused) |
+| `IHashEq` | `hash` (`hasheq`), and the collection hash verbs over a member |
+| `java.io.Serializable`, `IEditableCollection`, the transients | `instance?` and instance calls (transients are refused) |
 
 `(.iterator coll)` of a core collection, `clojure.lang.SeqIterator` and `clojure.lang.RT/iter`
 answer an iterator over its seq, and `clojure.lang.MapEntry` builds a `[k v]` vector, the

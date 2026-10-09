@@ -1430,6 +1430,7 @@ final class JvmExprCompiler {
 			case LispNames.IEEE754_DOUBLE_FROM_BITS -> JvmIeee754Compiler.compileDoubleFromBits(cons, ctx, className);
 			case LispNames.IEEE754_SINGLE_BITS -> JvmIeee754Compiler.compileSingleBits(cons, ctx, className);
 			case LispNames.IEEE754_SINGLE_FROM_BITS -> JvmIeee754Compiler.compileSingleFromBits(cons, ctx, className);
+			case LispNames.IDENTITY_HASH -> JvmIdentityHashCompiler.compile(cons, ctx, className);
 			case LispNames.STRICT_MATH_INTERNAL -> JvmStrictMathCompiler.compile(cons, ctx, className);
 			case LispNames.READ_EVAL, LispNames.READ_EVAL_TEMPLATE ->
 				// Identity: a #. marker split into code position by a backquote

@@ -196,7 +196,7 @@ public final class FreeVarAnalyzer {
 				LispVal head = cons.car();
 				if (head instanceof LispSymbol sym) {
 					switch (sym.name()) {
-						case LispNames.QUOTE -> {
+						case LispNames.QUOTE, LispNames.UNSPELLED_QUOTE -> {
 							// skip quoted expressions
 						}
 						case LispNames.LAMBDA -> {
@@ -628,7 +628,7 @@ public final class FreeVarAnalyzer {
 		LispVal head = cons.car();
 		if (head instanceof LispSymbol sym) {
 			switch (sym.name()) {
-				case LispNames.QUOTE -> {
+				case LispNames.QUOTE, LispNames.UNSPELLED_QUOTE -> {
 					// skip
 				}
 				case LispNames.LAMBDA -> {

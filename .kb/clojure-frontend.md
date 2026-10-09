@@ -167,6 +167,7 @@ answered `2 5 3` before).
 | `range` | a strict list (1/2/3-arity) | a zero step signals; an end-less `(range)` is refused (no chunking; spell it with `iterate`) |
 | `lazy-seq` `lazy-cat` `repeat` `cycle` `iterate` `repeatedly` | "Laziness" | finite `repeat`/`repeatedly` arities answer strict lists |
 | `drop-last` `split-at` `split-with` `take-last` `nthnext` `nthrest` `peek` `pop` `not-empty` `dedupe` `replace` `find` `subvec` `key` `val` `map-entry?` `rseq` `find-keyword` `partition-all` `partition-by` `min-key` `max-key` `juxt` `fnil` `every-pred` `some-fn` `update-keys` `update-vals` `reduce-kv` `test` `empty` `comparator` `hash-set` | `ClojureCoreLowering`: one call to the fixed-parameter `rontolisp::%clojure-NAME` worker after a lower-time arity check in the oracle's wording (`Wrong number of args (N) passed to: clojure.core/NAME`); as a value `#'rontolisp::%clojure-NAME-v`, checking at run time | `dedupe`/`partition-*`/`drop-last` are lazy-or-strict; `peek`/`pop` take vectors and lists (a strict seq peeks where the oracle's LazySeq throws); `some-fn` answers the oracle's exact failing value; `reduce-kv` walks maps/records/vectors and stops at `reduced`; a non-positive `partition-all` size signals (the oracle loops forever); `find` answers a map/record's stored key (`%clojure-table-key`, so a structural key answers its held representative), a vector's `[i x]` for an integer index in range, nil of nil, and signals on a set, string or list; `subvec` copies (a fresh vector, never a view), truncates a float bound, signals on a nil bound, a non-vector or a range out of bounds; `key`/`val` read a two-member non-string vector and signal otherwise, `map-entry?` is true of exactly those (a map entry IS a plain 2-vector here, so `(map-entry? [1 2])` is true where the oracle's is false; giving entries their own representation would touch `first`/`seq`/`find`/`reduce-kv`/destructuring/`=`/printing for a distinction only `clojure.walk`-style code reads), `rseq` answers a strict list of a vector (nil when empty) and signals on nil, a list, a seq, a string and a hash map; a sorted collection goes through its items vector (`%clojure-sorted-items`, "Sorted collections"), `find-keyword` is `keyword`'s one-argument arm (a two-argument call needs a nil-or-string namespace and a string name) and answers a never-used spelling's keyword where the oracle's is nil -- keywords are `(:C%KEYWORD spelling)` lists with no intern table, and one would cost every `keyword` call and every compiled output a global table; `empty` answers a fresh empty vector, map, set or sorted collection (comparator kept: `%clojure-sorted-with` over an empty items vector, a `cond` clause on `%clojure-sorted-p` the strip folds like any arm) carrying the metadata through `%clojure-put-meta`, nil for a string, nil and any non-collection, and signals `Can't create empty: <record class>` on a record; a list, lazy seq and seq answer nil (the empty-as-nil position, so no metadata; the oracle's `()`) and a map entry `[]` (the oracle nil); `comparator` is a closure over the predicate answering -1 / 1 / 0 from two `%clojure-truthy` tests (a false object counts as false); `hash-set` is `%clojure-set-of` over the argument list (`-v` takes the rest list); type errors use CL wording |
+| `hash` `hash-ordered-coll` `hash-unordered-coll` `mix-collection-hash` `hash-combine` | `ClojureCoreLowering`: one call to `rontolisp::%clojure-hasheq` / `%clojure-NAME` after the arity check in the oracle's wording; `-v` as a value | the oracle's numbers: "Hashes" |
 | `pmap` | `map` | no thread pool; the printed seq is the oracle's |
 | `update` `update-in` `assoc-in` `get-in` `merge` `merge-with` `into` | fresh tables over the old pairs | the first three associate through `ClojureCollectionLowering.assocAnswer` like `assoc` (a vector level by index); the `-in` three unroll a literal key vector at lower time and walk any other path at run time over `%clojure-seq-all` (`ClojureUpdateLowering.keyWalk`, a `labels` per call site, the value form's walk), the arguments evaluated in the oracle's order (map, keys, then function/value/default); no keys updates/associates under nil and `get-in` answers the map; `get-in`'s default answers at the first missing level against a fresh `(list nil)` sentinel, never read into (`(get-in {} [:a :b] {:b 1})` is `{:b 1}`, measured 2026-10-09, clj 1.12.6; pinned by clojure-spec `the-nested-verbs-walk-a-computed-key-path`); `assoc-in` builds missing levels; `(merge)`/`merge-with` of no maps is nil; `merge` is `conj` folded over the maps: a later item that is a table is read inline, any other (nil, a record, a sorted map, a `[k v]` vector, a set or seq of entries) goes through `%clojure-merge-entry-plist` (one shared worker over `%clojure-seq-entry-plist`, named without `sorted` so a program building no sorted collection still carries none of it), so `(merge {} [1 2])` and `(merge {} (seq {1 2}))` answer `{1 2}` and a list of non-entries signals, like the oracle (measured 2026-10-03, clj 1.12.6; a seq of plain vectors stays accepted, as for `conj`) -- size of a program merging three maps: wasm 63,978 -> 64,535 B, JVM class 83,577 -> 87,317 B (inlining `conj`'s `entryPlist` arms at each later item instead was wasm 66,719, class 98,160); `into` targets lists/vectors/maps/sets through the reduce runtime, `(into to xform from)` is `%clojure-into-xf` |
 | `assoc` `dissoc` `get` `contains?` `keys` `vals` `conj` `disj` `hash-map` `array-map` | table operations | `assoc` onto nil builds; onto a vector (`assocAnswer`'s run-time `vectorp` arm, `%clojure-vector-assoc`) a fresh whole copy, index = count appending, a non-integer key `Key must be integer`, out of range signalling, like the oracle -- measured 2026-10-03 on a map-only program: wasm 58,004 -> 60,479 B (dispatch alone +298 B, the `(setf aref)` write ~1 KB; `make-array` plus an `aref` loop instead of `copy-seq`/`coerce` saved 0.8 KB), 2M two-pair `assoc` calls 4.0 s wasm / 2.05 s JVM before and after; pinned by clojure-spec `assoc-on-a-vector-replaces-or-appends-by-index`, `update-and-the-nested-verbs-reach-into-vectors` (and `replace-maps-through-a-map-or-a-vector` for `replace`); odd pairs refused (at run time for values); `get` reads maps, records, sets (the member), vectors, strings, nil (a list or deftype answers the default); `conj` onto a map takes nil, a map, a sorted map, a `[k v]` vector, a set whose members are `[k v]` vectors, or a seq (strict or lazy) of them (`%clojure-seq-entry-plist`; a seq of plain vectors stays accepted for the same reason as a set of vectors -- `(conj {} (seq [[1 2]]))` is a `ClassCastException` in the oracle, measured 2026-10-03); a list of non-entries (`(k v)` included) and a set member that is a map, list, nil or string signal, like the oracle (measured 2026-10-03; the oracle also refuses a set of plain vectors, `(conj {} #{[1 2]})`, but a map entry is a plain 2-vector here, so that one stays accepted -- `(into {} #{[1 2]})` is the oracle's answer too); anything else onto a map signals; `(conj)` is `[]` |
@@ -854,6 +855,79 @@ first `=` key of its kind (vector / lazy seq / list / sorted / other) the progra
   `(x . y)` keys, record field reads (keywords).
 - Pinned by `clojure-spec.yaml` `structural-keys-find-equal-collections` (oracle-identical)
   and `ClojureLoweringTest.aLiteralScalarKeySkipsTheStructuralKeyRuntime`.
+- A typed value (`deftype`/`reify`) is no structural key: one with `hasheq`/`equiv` keys a
+  map or set by identity, where the oracle finds it by value (todo f01).
+
+## Hashes
+
+**`hash` is the oracle's `Util.hasheq` and answers its numbers on all four backends;
+`%clojure-java-hash` is its `Util.hash` (`hashCode`), which `hash-combine`, `.hashCode` and a
+member under a Java hash read** (`clojure.lisp` ";;;; Hashes"). Measured 2026-10-09 against clj
+1.12.6 over ~150 values and refusals: every number and refusal class agrees but an identity
+hash's.
+- Arithmetic: Murmur3 (`%clojure-murmur-k1`/`-h1`/`-fmix`/`-int`/`-long`/`-coll`/`-chars`)
+  and the Java hashes run over signed 32-bit ints, each step a `%mask-signed-field 32` over a
+  product of two signed ints (below 2^62, inside an i64), which the compilers fuse
+  (`.kb/jvm-int-fusion.md`, `.kb/wasm-int-fusion.md`). A string hashes over its UTF-16 units
+  (a code point past the BMP as its surrogates), so `"a😀b"` hashes like the
+  oracle's though `count` answers 3 here.
+- By kind (`%clojure-hasheq`/`%clojure-java-hash`, one `eq` flag through the shared walkers
+  `-cons-hash`, `-atom-hash`, `-vector-hash-of`, `-seq-hash-of`, `-table-hash-of`,
+  `-members-hash-of`, `-sorted-hash-of`, `-record-hash-of`): an integer inside the long range
+  `Murmur3.hashLong`/`Long.hashCode`, past it `BigInteger.hashCode` either way (the oracle's
+  BigInt); a double `Double.hashCode` (the canonical NaN; both zeros 0 under `hash`); a ratio
+  `Ratio.hashCode`; a string `hashInt(String.hashCode)`; a symbol `Symbol.hasheq` (the name's
+  `hashUnencodedChars` hash-combined with the namespace's `String.hashCode`) or `hashCode`, a
+  keyword 0x9e3779b9 more; a sequential ordered, a map (entries as `[k v]`) or set unordered;
+  a sorted collection as the hash map or set of its items; a record its entries' unordered
+  hash xor the hasheq of its class name's symbol (`my_app.core.My-Rec`: the namespace munged,
+  the name not, read off the wrapper's class slot); an instant `Date.hashCode` of its
+  milliseconds, a UUID `UUID.hashCode`; a reader value `TaggedLiteral`/`ReaderConditional`
+  `.hashCode` (31 x part + part), which its `str` spells as the oracle's `Class@hex` too
+  (before 2026-10-09: the hex of `%clojure-hash`); a clojure.java.io File, URL or URI
+  `%clojure-io-m-hash-code`, a stream its identity's.
+- A `deftype` or `reify`: its `IHashEq` row's `hasheq` (family `HASHEQ`, store
+  `%clojure-hasheq-row`; a `MARKER` row until 2026-10-09), then its `Object` row's `hashCode`
+  (`OBJECT_METHODS`), each answer cast as `((Number) x).intValue()` (`%clojure-int-value`: an
+  integer's low 32 bits, a double or ratio truncated inside the int range, nil the NPE, else
+  the CCE; measured on bodies like `(identity 12345678901)` -- a literal long body is the
+  oracle's checked `intCast`, a literal double its compile error), else its identity. A record
+  defines neither (`RECORD_GENERATED`).
+- Identity (`%identity-hash`, `.kb/hash-tables.md`): a function, an atom, a var, a
+  namespace, a pattern, a condition, a stream, a type with neither row -- stable for the
+  object's life, different per backend and run, as the oracle's `Object.hashCode` differs per
+  run. A host object goes through `%clojure-other-hash`, a HOST arm whose stand-in answers the
+  identity: its `hashCode`, under `hash` a `BigDecimal`'s `stripTrailingZeros().hashCode()`
+  (zero's 0). The JVM's `numberp` takes a host `BigDecimal`, so a number reaching the arm is a
+  host one; a condition is tested by `%obj-p` itself, since a wasm program naming `java:`
+  keeps the host bodies but folds `%clojure-lisp-instance-p` (HOST_EXCEPTION needs the host).
+- `hash-ordered-coll`/`-unordered-coll` take the oracle's `Iterable`s over the seq view
+  (`%clojure-hash-iterable`: a sequential, map, set, record, sorted collection, an ITERABLE
+  type, a host `Iterable`; nil the NPE, anything else the CCE). `mix-collection-hash` casts
+  each argument like a `^long` parameter -- a non-number the CCE to `Number` at the call
+  (`%clojure-hash-number`), then `%clojure-long-cast` -- and then `Math.toIntExact` (`integer
+  overflow`); `hash-combine` casts its first through the same `Number` cast and
+  `%clojure-int-cast`, so a character is refused where `(int \a)` is 97. A CCE's message
+  leaves out the oracle's module and loader text (user doc deviation).
+- `.hashCode` of no argument on a receiver of no known class is `(if (null r) NPE
+  (%clojure-java-hash r))` (`ClojureInteropLowering.valueHashCode`, every backend; before
+  2026-10-09 refused on a collection or keyword, `java:call` on a number, a call-time error on
+  wasm); a known host class keeps `java:call`. `.hasheq` is a value-method row (`coll?`,
+  `ident?`) over `hash`, a type's own through its `IHashEq` row.
+- Re-probes (2026-10-09, verbatim): data.priority-map 1.2.0's `compile-if` takes the
+  oracle's `hash-unordered-coll` branch now that `resolve` finds it ("Macros"), and `hash`,
+  `hash-unordered-coll` and `=` of a priority map answer the oracle's on all four backends; as
+  a key or set member it misses (f01). instaparse 1.5.0 next stops at a `^long` return hint on
+  a `defn` parameter vector (`auto_flatten_seq.clj:233`, f04), then, the hints removed by
+  hand, at transients (`conj!`, `:302`, f05). A record's seq walks its entries backwards, so
+  `hash-ordered-coll` of one differs (f02).
+- Pins: clojure-spec `hash-is-the-oracles-hasheq-of-every-kind`,
+  `the-collection-hash-verbs-mix-order-and-combine-like-the-oracle`,
+  `a-type-hashes-through-its-hasheq-then-its-hash-code-else-by-identity` and the `str` line of
+  `reader-conditional-and-tagged-literal-values-look-up-compare-and-print` (all four backends,
+  the oracle's lines); `ClojureInteropTest#aHostObjectHashesAsTheHostDoes`,
+  `ClojureLoweringTest#theHashVerbsCallTheirWorkersAndATypesHasheqStoresInItsOwnFamily`,
+  `ClojureArmsTest#aCollectionInterfaceFamilyIsMadeByTheStoreOfARowOfItsInterfaces` (HASHEQ).
 
 ## recur
 
@@ -1751,17 +1825,12 @@ namespace` but the ones no measured library names (`inspector`, `java.browse`,
       a `~<...~>` segment, `formatter-out` outside a pretty print). `~T` and `~:;` are
       layout events carrying their own function (`:lay`), computed from the column the
       replay has reached, the oracle's base column: blanks held back do not count.
-    - The macros build their function's symbol (`(symbol "clojure.pprint" "formatter-fn")`):
-      a template spelling it arms the dispatch gate by name (`.kb/optimize-dead-code-elimination.md`)
-      wherever the expanders are live, which keeps the whole executor. Before 2026-10-09
-      every program loading clojure.pprint kept them (wasm P1 of `(prn ...)` after
-      requiring it, 446,930 -> 888,123 B with the plain template; 451,949 B with the
-      built symbol). Since then only a program expanding at run time keeps the expanders
-      ("Macros", the run-time table), and for it the built symbol still matters,
-      measured 2026-10-09 (`(ns x (:require [clojure.pprint])) (defmacro m ...)
-      (prn (macroexpand-1 '(m 1)))`): 456,652 B built, 894,319 B with
-      `` `(#'formatter-fn ~format-in) ``. It goes once a syntax-quote template spells no
-      defun name (an unspelled quote the walkers all read as `quote`).
+    - The macros name their function in a plain template (`` `(#'formatter-fn ~format-in) ``):
+      a template symbol is an unspelled quote ("Macros"), so a program expanding at run
+      time keeps no executor for it. Before 2026-10-09 they built the symbol
+      (`(symbol "clojure.pprint" "formatter-fn")`): a template spelling it armed the
+      dispatch gate wherever the expanders were live (446,930 -> 888,123 B for `(prn ...)`
+      after requiring clojure.pprint while every program kept them).
     - Compiled formats are cached by control string, `cl-format`'s too (the oracle compiles
       per call; a compile is pure), the cache emptied at 512: 2,000 calls of a nine-directive
       string 32.5 -> 7.6 s on the interpreter, 1.66 -> 0.60 s as a JVM class.
@@ -2112,8 +2181,9 @@ the file), `default-streams-impl` a map. Until then only `reader` resolved, as a
   `clojure.walk/macroexpand-all` is a part of `clojure.walk` (`walk_macroexpand.clj`,
   `ClojureBuiltinNamespaces.PARTS`) so walking data expands nothing: the same program
   plus a `postwalk` of `clojure.walk`, 883,549 -> 393,566 B. A program that does expand
-  at run time keeps every expander and, through their templates, every function they
-  name. Pins: `ClojureMacroRuntimeTableTest`,
+  at run time keeps every expander and every function their bodies call, but no function
+  a template only names: the template's var symbols ride in `%unspelled-quote` (the
+  Syntax-quote entry below). Pins: `ClojureMacroRuntimeTableTest`,
   `ClojureLoweringTest#aWholeProgramsTableHoldsAnIndexIntoTheOneFunctionHoldingTheExpanders`,
   `ClojureSessionTest#aLaterBufferExpandsAMacroAnEarlierOneDefined`, clojure-spec
   `clojure-walk-macroexpand-all-loads-where-a-program-names-it`.
@@ -2166,8 +2236,8 @@ the file), `default-streams-impl` a map. Until then only `reader` resolved, as a
   too, and a run-time `eval` compiles and refuses when it runs (it was `unknown name`).
   `resolve` of a quoted symbol lowers in place (`ClojureVarLowering.resolved`): what
   `#'name` lowers to (program var, core macro, core var with a value here), the class a
-  class name loads, else nil -- a core var the subset lacks (`hash-unordered-coll`,
-  `mix-collection-hash`), a record name (no class value here) and a lowering-built
+  class name loads, else nil -- a core var the subset lacks (`seque`; `hash-unordered-coll`
+  and `mix-collection-hash` until 2026-10-09, "Hashes"), a record name (no class value here) and a lowering-built
   namespace's var (`clojure.string/join`) included, so `compile-if` picks the branch that
   lowers. Measured on clj 1.12.6: `*clojure-version*` reads `{:major 1 :minor 12 ...}`
   at expansion time and `Class/forName` runs on the macro-time JVM, so both agree with the
@@ -2201,6 +2271,17 @@ the file), `default-streams-impl` a map. Until then only `reader` resolved, as a
   into lists, vectors, maps and sets; `x#` is one `(gensym "x")` per syntax-quote node per
   expansion (fresher than the oracle's per-compilation suffix). `quote` and syntax-quote
   build data symbols (`dataSym`), so `'*out*` is `*out*`, not the stream alias.
+- **A template's qualified symbol is an unspelled quote** (`ClojureMacroLowering.unspelled`):
+  `(%unspelled-quote |c%ns/f|)`, which spells nothing for the dispatch gate
+  (`.kb/optimize-dead-code-elimination.md`). It spells the defun name of `ns/f`, and a
+  Clojure symbol is never a function designator by name (run-time `eval`/`resolve` are
+  refused, a symbol called as a function looks itself up), so the expanders a run-time
+  expansion keeps no longer hold every function their templates name. The special forms
+  that stay bare, `x#` gensyms and a plain `'sym` keep `quote`. Measured 2026-10-09, wasm
+  P1, `(ns x (:require [clojure.pprint])) (defmacro m [x] `(inc ~x))` + `(prn 1)` /
+  `(prn (macroexpand-1 '(m 1)))`: 373,358 / 893,999 B with pprint's plain templates
+  before, 373,358 / 415,713 B after. Pins: `ClojureMacroRuntimeTableTest`, clojure-spec
+  `a-run-time-expansion-reads-template-symbols-as-data`.
 - **An argument datum travels quoted and its answer decodes back (`decodeDatum`)**, so
   every reader form must survive the round trip. A regex literal answers its
   `(:C%PATTERN ...)`, decoded to `(%regex source)` (a fresh pattern; the oracle's
@@ -2685,7 +2766,8 @@ measured on clj 1.12.6, 2026-10-08).
   `iteration-seqs-lazily-and-reduces-through-its-step` (the oracle's, clj 1.12.6, 2026-10-08,
   all four backends), `ClojureLibraryTest#aProgramStoringNoInterfaceRowSplicesTheVerbsWithoutTheirInterfaceArms`.
 - Deviations (user doc): the `#object` has no identity hash and a reify's class no number;
-  `equals`/`hashCode` key no map or set (the tables hold such a value by identity); `sort` and
+  `equals`/`hashCode`/`hasheq` key no map or set (the tables hold such a value by identity,
+  f01); `sort` and
   `distinct` take a type implementing `Seqable` alone, where the oracle's `to-array` and
   destructuring `nth` refuse it.
 - Pins: clojure-spec `a-type-implementing-ireduceinit-ireduce-or-ikvreduce-reduces-through-it`,
@@ -2730,8 +2812,9 @@ interfaces behind an arm family its row's store makes (`ClojureArms`, `COLLECTIO
   `ISEQ`, `SEQUENTIAL` (`IPersistentList` too), `REVERSIBLE`, `PENDING`, `SORTED_INTERFACE`,
   `COMPARABLE`, `ITERABLE` (a producer of `REDUCIBLE` and `SEQABLE` too, whose arms it rides),
   `ITERATOR`, `JAVA_COLLECTION` (`Collection`, `SequencedCollection`, `List`, `Set`,
-  `RandomAccess`), `JAVA_MAP` (a `SEQABLE` producer too), `MARKER` (`IHashEq`, `Serializable`,
-  `IEditableCollection`, the transients: `instance?` and instance calls only). The predicates'
+  `RandomAccess`), `JAVA_MAP` (a `SEQABLE` producer too), `HASHEQ` (`IHashEq`, which `hash`
+  reads: "Hashes"), `MARKER` (`Serializable`, `IEditableCollection`, the transients:
+  `instance?` and instance calls only). The predicates'
   helpers (`coll?`, `map?`, `set?`, `seq?`, `list?`, `sequential?`, `associative?`,
   `reversible?`) are `%clojure-is-*-type` aliases of the old ones, so the families stand ahead
   of `SORTED`, whose aliases they rename into (the strip goes in enum order). A strip fold
@@ -2780,7 +2863,7 @@ interfaces behind an arm family its row's store makes (`ClojureArms`, `COLLECTIO
   `rseq`/`=`/`into`/`subseq` print oracle-identical on all four backends; instaparse 1.5.0
   stops at `auto_flatten_seq.clj:58:12: get-in takes a vector of keys, not |index|` (a
   computed key path). With that walked at run time (2026-10-09) it stops at
-  `auto_flatten_seq.clj:143:17: unknown name: clojure.core/hash`.
+  `auto_flatten_seq.clj:143:17: unknown name: clojure.core/hash`. Past `hash`: "Hashes".
 - Pins: clojure-spec `a-collection-type-conjs-empties-counts-and-compares-through-its-methods`,
   `a-map-type-assocs-dissocs-reads-and-prints-as-a-map`,
   `a-set-type-disjs-contains-and-prints-as-a-set`,
@@ -3505,9 +3588,10 @@ one algorithm (`ClojureReader.readConditional`, `%clojure-rd-conditional`):
   kind and parts through `%clojure-equal` (a list form `=` a vector one, like Java
   `equals`), a structural key, printed `#?(...)`/`#?@(...)`/`#tag form` (print-method's
   shape; strings bare under `print`), and `instance?` of their class or `ILookup`
-  (`ClojureValueClasses.Kind`). Deviations: `class` is the keyword, `str` is
-  `Class@<hex of %clojure-hash>` (the oracle's `hashCode`, so its set order and `Duplicate
-  key` text differ too), `#?()`'s form is nil here so a nil form prints `()`. Arms: family
+  (`ClojureValueClasses.Kind`). `str` is the oracle's `Class@` hex of its `hashCode`
+  ("Hashes"; before 2026-10-09 the hex of `%clojure-hash`). Deviations: `class` is the
+  keyword, the set order and `Duplicate key` text follow `%clojure-hash`, `#?()`'s form is nil
+  here so a nil form prints `()`. Arms: family
   `ClojureArms.Family.READER_VALUE`, tests `%clojure-reader-value-p`/`-reader-cond-p`/
   `-tagged-literal-p` (printer, `str`, `=`, hash, structural key, `%clojure-call-keyword`,
   `getBranches`, `classForm`, `instance?`) and the reader's `%clojure-rd-preserve-p`/

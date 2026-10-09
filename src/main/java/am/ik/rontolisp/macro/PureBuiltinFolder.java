@@ -351,7 +351,7 @@ public final class PureBuiltinFolder {
 		while (form instanceof LispCons cons) {
 			if (cons.car() instanceof LispSymbol op) {
 				switch (op.name()) {
-					case LispNames.QUOTE -> {
+					case LispNames.QUOTE, LispNames.UNSPELLED_QUOTE -> {
 						return true;
 					}
 					case LispNames.DEFUN, LispNames.DEFMETHOD, LispNames.DEFGENERIC, LispNames.DEFMACRO,
@@ -448,8 +448,8 @@ public final class PureBuiltinFolder {
 		List<LispVal> parts = cons.toList();
 		switch (op.name()) {
 			// -- data, walked into never -------------------------------------------
-			case LispNames.QUOTE, LispNames.DECLARE, LispNames.DECLAIM, LispNames.PROCLAIM, LispNames.DEFPACKAGE,
-					LispNames.IN_PACKAGE:
+			case LispNames.QUOTE, LispNames.UNSPELLED_QUOTE, LispNames.DECLARE, LispNames.DECLAIM, LispNames.PROCLAIM,
+					LispNames.DEFPACKAGE, LispNames.IN_PACKAGE:
 				return form;
 			// A macro definition is a template the expander instantiates and a setf
 			// expander is one too (the ShadowedBuiltins rule); a defstruct/defclass slot

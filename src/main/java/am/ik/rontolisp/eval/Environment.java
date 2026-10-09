@@ -3163,6 +3163,15 @@ public final class Environment implements Scope {
 					requireArgCount(LispNames.IEEE754_SINGLE_FROM_BITS, args, 1);
 					return new LispDouble(Float.intBitsToFloat((int) asBigInteger(args.get(0)).longValue()));
 				}));
+		// The object's identity hash, the one an eq table places an aggregate by
+		// (.kb/hash-tables.md): a host object's is the wrapped object's, the wrapper
+		// being fresh on every Java call that answers it.
+		env.defineFunction(LispNames.IDENTITY_HASH, new LispFunction(LispNames.IDENTITY_HASH, args -> {
+			requireArgCount(LispNames.IDENTITY_HASH, args, 1);
+			LispVal x = args.get(0);
+			return new LispInteger(
+					System.identityHashCode(x instanceof am.ik.rontolisp.LispJavaObject host ? host.ref() : x));
+		}));
 		// bfloat16 <-> double: the top sixteen bits of an f32, round-to-nearest-even
 		// on the way down and exact on the way back. Sixteen bits fit a fixnum, so
 		// unlike the quartet above this pair is on all four backends (BFloat16,

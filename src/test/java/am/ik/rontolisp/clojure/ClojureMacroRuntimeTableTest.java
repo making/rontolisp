@@ -27,9 +27,9 @@ class ClojureMacroRuntimeTableTest {
 	void aProgramExpandingNothingAtRunTimeKeepsNoExpander() {
 		assertThat(compiled(HELPER + MACRO + "(prn 1)")).doesNotContain("C%MACRO-EXPANDER")
 			.doesNotContain("C%MACROEXPAND")
-			.doesNotContain("'|c%mac3/helper-never-called|");
+			.doesNotContain("(%UNSPELLED-QUOTE |c%mac3/helper-never-called|)");
 		assertThat(compiled(HELPER + MACRO + "(prn (macroexpand-1 '(m 1)))")).contains("(DEFUN C%MACRO-EXPANDER ")
-			.contains("'|c%mac3/helper-never-called|");
+			.contains("(%UNSPELLED-QUOTE |c%mac3/helper-never-called|)");
 	}
 
 	@Test
@@ -41,6 +41,29 @@ class ClojureMacroRuntimeTableTest {
 		int without = wasm(HELPER + "(prn 1)").length;
 		int with = wasm(HELPER + MACRO + "(prn 1)").length;
 		assertThat(with - without).isLessThan(1_000);
+	}
+
+	@Test
+	void aRunTimeExpansionKeepsNoFunctionATemplateNames() {
+		// a template's var symbols are data, never a function designator by name, so the
+		// expanders a run-time expansion keeps arm no defun they spell (2026-10-09: both
+		// 894 KB while a template spelled them; now 416,039 -> 416,071 B)
+		String expanding = "(prn (macroexpand-1 '(m 1)))";
+		int plain = wasm(HELPER + "(defmacro m [x] `(inc ~x))\n" + expanding).length;
+		int naming = wasm(HELPER + MACRO + expanding).length;
+		assertThat(naming - plain).isLessThan(1_000);
+	}
+
+	@Test
+	void requiringPprintKeepsNoFormatExecutorForARunTimeExpansion() {
+		// formatter and formatter-out name their executors in a plain template; the
+		// expanders a run-time expansion keeps hold neither (2026-10-09: 373,358 ->
+		// 893,999 B while a template spelled them; now 373,358 -> 415,713 B, the
+		// run-time expansion and the kept expanders)
+		String macro = "(defmacro m [x] `(inc ~x)) ";
+		int without = wasm("(ns x (:require [clojure.pprint])) " + macro + "(prn 1)").length;
+		int with = wasm("(ns x (:require [clojure.pprint])) " + macro + "(prn (macroexpand-1 '(m 1)))").length;
+		assertThat(with - without).isLessThan(100_000);
 	}
 
 	@Test

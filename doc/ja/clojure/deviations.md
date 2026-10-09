@@ -50,6 +50,14 @@
  マップとセットは Java のコレクションのキーを本家のハッシュマップ・セットと同じくそれ自身の
  `equals` で探し、本家の小さな配列マップが使う `=` では探しません。
  `(get {[1 2] :v} (java.util.ArrayList. [1 2]))` はここでは `nil`、本家では `:v` です。
+- `hash`、`hash-ordered-coll`、`hash-unordered-coll`、`mix-collection-hash`、`hash-combine`、
+ `.hashCode` は本家と同じ数を返します。ただし同一性でハッシュする値（関数、atom、var、例外、
+ `hasheq` も `hashCode` も実装しない deftype や reify）の数は本家と異なり、バックエンドや実行
+ ごとにも変わります（本家でも実行ごとに変わります）。ここで `nil` である `()` と空の `rest` は
+ `0` になります（本家は空の seq としてハッシュします）。小数（`1.5M`）はここでは比として、
+ `Calendar` はそのミリ秒の `Date` としてハッシュします。`hash-ordered-coll` はマップ・セット・
+ レコードの要素をこの実装の順で辿ります（順序によらないハッシュは一致します）。拒否の
+ `ClassCastException` のメッセージには本家のモジュールとローダの説明が付きません。
 - `seq` とその上の操作、`count`、`empty?`、`get`、`contains?`、`keys`、`vals` は本家と同じく
  Java の `Iterable`、`Map`、`CharSequence` を読み、`find`、`select-keys`、`reduce-kv`、
  `update-vals`、`update-keys`、`conj`、`merge`、`merge-with` は Java の `Map` をマップとして
@@ -242,7 +250,7 @@
 - コレクション・キーワード・シンボル・比・atom・fn へのインスタンス呼び出しは core 関数を通して
   答えるため、その逸脱も引き継ぎます（`.getClass` は `class` と同じ値を返します）。対応づけて
   いないメソッドは `Method m taking N args is not supported for class C` として拒否し、
-  オラクルが答える場合（`.hashCode`）もあります。map のクラス名は件数だけで決め、8 件までは
+  オラクルが答える場合（`.toArray`）もあります。map のクラス名は件数だけで決め、8 件までは
   array map、それを超えると hash map とします。ここでは `nil` が空リストなので、コレクションの
   メソッドは `nil` にも答えます（`(.count nil)` は `0`）が、オラクルは
   `NullPointerException` を投げます。`nil` へのそれ以外のメソッドは `NullPointerException` です。
@@ -273,8 +281,8 @@
   インタフェース（`IChunkedSeq`、`java.util.Deque` など）は名前を挙げて拒否されます。`ISeq` 型への
   `first`・`next`・`rest` はその `seq` を通して読み、関数がメソッドを呼ぶ回数はオラクルと異なる
   ことがあり、コレクションの型の `str` は中身を綴ります
-  （[コレクションのインタフェース](reference/reify.md#collection-interfaces)）。型の `equals` と `hashCode` は `=` と `.hashCode` に答えますが、マップのキーやセットの要素の
-  比較には使われず、そうした値は同一性で保持されます。`Seqable` だけを実装した型について、
+  （[コレクションのインタフェース](reference/reify.md#collection-interfaces)）。型の `equals`・`hashCode`・`hasheq` は `=`・`.hashCode`・`hash` に答えますが、マップのキーや
+  セットの要素の比較には使われず、そうした値は同一性で保持されます。`Seqable` だけを実装した型について、
   `sort` と `distinct` はその seq を通して答えます。オラクルはどちらも拒否します。
 - `clojure.core.reducers` は呼び出したスレッドの上で部分を順に1つずつ fold します。空でない
   2つのコレクションの `cat` は両方を持つ1つのアキュムレーター（ベクター）を返します。オラクルは
@@ -452,8 +460,7 @@
 - リーダ条件は `:rontolisp` も選びます。フォームが `:clj` より先に挙げていればそちらが先です。
   `{:read-cond :preserve}` で読んだリーダ条件やタグ付きリテラルの `class` は、ここでのほかの
   クラスと同じくキーワード（`:clojure.lang.ReaderConditional`・`:clojure.lang.TaggedLiteral`）
-  を返します。`str` が綴るハッシュは `=` に従うこの実装のもので、オラクルの `hashCode` では
-  ありません。`(reader-conditional nil false)` は `#?()` から読んだものと同じく `#?()` と
+  を返します。`(reader-conditional nil false)` は `#?()` から読んだものと同じく `#?()` と
   印字されます。選ばれない分岐の中では、
   未知のエイリアスの `::alias/kw` も読めます（オラクルは拒否します）。実行時のリーダは
   `#?@(:clj nil)` を何も展開しないものとして読み（オラクルは拒否します）、`:features` は

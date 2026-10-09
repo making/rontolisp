@@ -157,7 +157,7 @@ public final class ClackEnv {
 	private static boolean bufferedBodyIn(LispVal form) {
 		LispVal node = form;
 		while (node instanceof LispCons cons) {
-			if (cons.car() instanceof LispSymbol sym && LispNames.QUOTE.equals(sym.name())) {
+			if (cons.car() instanceof LispSymbol sym && LispNames.isQuote(sym.name())) {
 				return false;
 			}
 			if (isServeForm(node)) {

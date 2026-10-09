@@ -24628,6 +24628,21 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void identityHashOfAnAggregateKeepsItsValueWhateverItsContentsDo() {
+		// the hash an eq table places an aggregate by: an int, the same for the object's
+		// whole life (the Clojure front end's hash of a function, an atom, a deftype)
+		assertThat(evalMulti("""
+				(let* ((c (list 1 2)) (v (vector 1)) (f (lambda () 1)) (tb (make-hash-table))
+				       (hc (%identity-hash c)) (hv (%identity-hash v)))
+				  (setf (car c) 9)
+				  (setf (aref v 0) 9)
+				  (list (= hc (%identity-hash c)) (= hv (%identity-hash v))
+				        (= (%identity-hash f) (%identity-hash f)) (= (%identity-hash tb) (%identity-hash tb))
+				        (integerp hc) (<= -2147483648 hc 2147483647)))
+				""").print()).isEqualTo("(T T T T T T)");
+	}
+
+	@Test
 	void ieee754BitsRoundTripDoublesAsUnsignedIntegers() {
 		assertThat(eval("(list (%ieee754-double-bits 1.0d0) (%ieee754-double-from-bits 4607182418800017408))").print())
 			.isEqualTo("(4607182418800017408 1.0)");

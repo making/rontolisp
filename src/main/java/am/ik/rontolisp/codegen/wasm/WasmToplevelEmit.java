@@ -172,7 +172,7 @@ final class WasmToplevelEmit {
 			if (!(form instanceof LispCons cons)) {
 				return false;
 			}
-			if (cons.car() instanceof LispSymbol head && LispNames.QUOTE.equals(head.name())) {
+			if (cons.car() instanceof LispSymbol head && LispNames.isQuote(head.name())) {
 				return false;
 			}
 			if (mentions(cons.car(), names)) {

@@ -284,6 +284,18 @@ modules).
   `equal` IS identity -- is placed by it too. A cons in an `equal` table still hashes
   structurally. A Clojure program storing a collection key gets the slot through
   `%clojure-key-reps`, an eq table (`.kb/clojure-frontend.md`, "Structural keys").
+- **`%identity-hash`** (a `cl` internal, `LispNames.IDENTITY_HASH`) answers the hash an eq
+  table places an aggregate by, as a signed 32-bit integer: `_ihash` sign-extended through
+  `_int_new` here, `System.identityHashCode` on the JVM (`JvmIdentityHashCompiler`) and the
+  interpreter (a host object's of the object it wraps, the wrapper being fresh per Java
+  call). A module calling it carries the slot like one making an eq table
+  (`LispMacroExpander.programHashesByIdentity`, which the module's gate reads; the JVM's
+  table emission keeps `programMakesIdentityHashTable`). An atom's answer is unspecified.
+  The Clojure front end's `hash` of a value hashed by identity reads it
+  (`.kb/clojure-frontend.md`, "Hashes"). Pinned by
+  `WasmLispCompilerIntegrationTest.compileAndRunIdentityHashReadsTheSlotAModuleCallingItCarries`
+  (P1 and component: stable through mutation, two fresh conses apart) and its
+  `LispEvaluatorTest`/`JvmLispCompilerTest` twins.
 - **`TYPE_CLOSURE` carries the slot too, since 2026-09-17** (`.todo/854`): a fourth
   `ref.test` arm in `WasmIdentityHashRuntimeBuilder.build`, the slot as the closure's
   THIRD field (`WasmEmitHelper.emitNewClosure`, every closure-allocation site --

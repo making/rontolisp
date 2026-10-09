@@ -344,17 +344,26 @@ public final class ClojureArms {
 				Set.of(ClojureInterfaces.JAVA_MAP_ROW), Set.of()),
 
 		/**
+		 * A deftype or reify whose body implements {@code clojure.lang.IHashEq}, which
+		 * {@code hash} (and the collection hash verbs over a member) reads through its
+		 * {@code hasheq} ahead of its {@code hashCode} override; {@code instance?}
+		 * answers true of it and an instance call reaches the method. Only the store of
+		 * such a row makes one.
+		 */
+		HASHEQ("hasheq-interface", Set.of("RONTOLISP::%CLOJURE-HASHEQ-P"), Set.of(), Map.of(),
+				Set.of(ClojureInterfaces.HASHEQ_ROW), Set.of()),
+
+		/**
 		 * A record, deftype or reify whose body implements an interface no core verb here
-		 * reads -- {@code IHashEq} (there is no {@code hash}), {@code Serializable},
-		 * {@code IEditableCollection} and the transients (refused by name) --, which
-		 * {@code instance?} answers true of; an instance call reaches its methods.
+		 * reads -- {@code Serializable}, {@code IEditableCollection} and the transients
+		 * (refused by name) --, which {@code instance?} answers true of; an instance call
+		 * reaches its methods.
 		 */
 		MARKER("marker-interface",
-				Set.of("RONTOLISP::%CLOJURE-HASHEQ-P", "RONTOLISP::%CLOJURE-EDITABLE-P",
-						"RONTOLISP::%CLOJURE-ITRANSIENT-COLLECTION-P", "RONTOLISP::%CLOJURE-ITRANSIENT-ASSOCIATIVE-P",
-						"RONTOLISP::%CLOJURE-ITRANSIENT-ASSOCIATIVE2-P", "RONTOLISP::%CLOJURE-ITRANSIENT-MAP-P",
-						"RONTOLISP::%CLOJURE-ITRANSIENT-VECTOR-P", "RONTOLISP::%CLOJURE-ITRANSIENT-SET-P",
-						"RONTOLISP::%CLOJURE-SERIALIZABLE-P"),
+				Set.of("RONTOLISP::%CLOJURE-EDITABLE-P", "RONTOLISP::%CLOJURE-ITRANSIENT-COLLECTION-P",
+						"RONTOLISP::%CLOJURE-ITRANSIENT-ASSOCIATIVE-P", "RONTOLISP::%CLOJURE-ITRANSIENT-ASSOCIATIVE2-P",
+						"RONTOLISP::%CLOJURE-ITRANSIENT-MAP-P", "RONTOLISP::%CLOJURE-ITRANSIENT-VECTOR-P",
+						"RONTOLISP::%CLOJURE-ITRANSIENT-SET-P", "RONTOLISP::%CLOJURE-SERIALIZABLE-P"),
 				Set.of(), Map.of(), Set.of(ClojureInterfaces.MARKER_ROW), Set.of()),
 
 		/**
@@ -941,7 +950,7 @@ public final class ClojureArms {
 			rest = bindings.cdr();
 		}
 		boolean quotedArgs = quoted || form instanceof LispCons head && head.car() instanceof LispSymbol quote
-				&& quote.name().equals("QUOTE");
+				&& LispNames.isQuote(quote.name());
 		while (rest instanceof LispCons cons) {
 			if (family.qualifiedIdents && isQualifiedKeyword(cons)) {
 				found[0] = true;
@@ -1027,7 +1036,7 @@ public final class ClojureArms {
 			}
 			if (cons.car() instanceof LispSymbol head) {
 				String name = head.name();
-				if (name.equals("QUOTE")) {
+				if (LispNames.isQuote(name)) {
 					return form;
 				}
 				if (this.family.tests.contains(name)) {

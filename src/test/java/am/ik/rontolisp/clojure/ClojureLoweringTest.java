@@ -1838,7 +1838,7 @@ class ClojureLoweringTest {
 			.contains("(C%MACRO-EXPANDER |cell|)")
 			.doesNotContain("FUNCTIONP");
 		assertThat(expanderOf("(defmacro mu-a [x] `(inc ~x)) (defmacro mu-b [x] `(dec ~x))", 1))
-			.contains("'|c%clojure.core/dec|")
+			.contains("(%UNSPELLED-QUOTE |c%clojure.core/dec|)")
 			.doesNotContain("inc");
 	}
 
@@ -1889,10 +1889,13 @@ class ClojureLoweringTest {
 	@Test
 	void aMacroBodysEvalChoosesTheCodeThisFrontEndLowers() {
 		// data.priority-map's compile-if: a core var the subset lacks resolves to nil, so
-		// the expansion takes the fallback (the oracle, which has it, takes the other)
+		// the expansion takes the fallback (the oracle, which has it, takes the other);
+		// one it has, hash-unordered-coll included, takes the oracle's branch
 		String compileIf = "(defmacro mu-ci [test then else] (if (eval test) then else)) ";
-		assertThat(loweredWithMacros(compileIf + "(mu-ci (resolve 'clojure.core/hash-unordered-coll) :has :lacks)"))
+		assertThat(loweredWithMacros(compileIf + "(mu-ci (resolve 'clojure.core/seque) :has :lacks)"))
 			.endsWith("\"lacks\")");
+		assertThat(loweredWithMacros(compileIf + "(mu-ci (resolve 'clojure.core/hash-unordered-coll) :has :lacks)"))
+			.endsWith("\"has\")");
 		assertThat(loweredWithMacros(compileIf + "(mu-ci (resolve 'clojure.core/inc) :has :lacks)"))
 			.endsWith("\"has\")");
 		// a class lookup runs on the macro-time JVM, the same on every backend
@@ -1991,8 +1994,8 @@ class ClojureLoweringTest {
 				(defmacro wrap2 [& body] `(with-out-str ~@body))""";
 		String wrap = expanderOf(source, 0);
 		String wrap2 = expanderOf(source, 2);
-		assertThat(wrap).contains("'|c%clojure.core/with-out-str|");
-		assertThat(wrap2).contains("'|c%user/with-out-str|").doesNotContain("clojure.core");
+		assertThat(wrap).contains("(%UNSPELLED-QUOTE |c%clojure.core/with-out-str|)");
+		assertThat(wrap2).contains("(%UNSPELLED-QUOTE |c%user/with-out-str|)").doesNotContain("clojure.core");
 	}
 
 	@Test
@@ -2050,7 +2053,7 @@ class ClojureLoweringTest {
 	@Test
 	void syntaxQuoteQualifiesSplicesAndGensyms() {
 		String out = loweredWithMacros("(defmacro mu-sq [x] `(a ~x ~@'(1 2) s#))");
-		assertThat(out).contains("(GENSYM \"s\")").contains("APPEND").contains("'|c%user/a|");
+		assertThat(out).contains("(GENSYM \"s\")").contains("APPEND").contains("(%UNSPELLED-QUOTE |c%user/a|)");
 		String out2 = loweredWithMacros("(defmacro mu-doc \"docs\" [x] x) (mu-doc 1)");
 		assertThat(out2).contains("|c%mu-doc%macro|");
 	}
@@ -2795,6 +2798,33 @@ class ClojureLoweringTest {
 	}
 
 	@Test
+	void theHashVerbsCallTheirWorkersAndATypesHasheqStoresInItsOwnFamily() {
+		assertThat(lowered("(hash [1]) (hash-combine 1 :a) (mix-collection-hash 1 2) (hash-ordered-coll [])"))
+			.contains("(RONTOLISP::%CLOJURE-HASHEQ (VECTOR 1))")
+			.contains("(RONTOLISP::%CLOJURE-HASH-COMBINE 1 (LIST :C%KEYWORD \"a\"))")
+			.contains("(RONTOLISP::%CLOJURE-MIX-COLLECTION-HASH 1 2)")
+			.contains("(RONTOLISP::%CLOJURE-HASH-ORDERED-COLL (VECTOR))");
+		assertThat(lowered("(map hash [1]) (map hash-unordered-coll [#{}])")).contains("#'RONTOLISP::%CLOJURE-HASHEQ-V")
+			.contains("#'RONTOLISP::%CLOJURE-HASH-UNORDERED-COLL-V");
+		assertThatThrownBy(() -> Clojure.read("(hash)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Wrong number of args (0) passed to: clojure.core/hash");
+		assertThatThrownBy(() -> Clojure.read("(mix-collection-hash 1)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Wrong number of args (1) passed to: clojure.core/mix-collection-hash");
+		assertThatThrownBy(() -> Clojure.read("(hash-ordered-coll [] [])", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Wrong number of args (2) passed to: clojure.core/hash-ordered-coll");
+		// hash reads an IHashEq row, so it is a family of its own, not a marker
+		assertThat(lowered("(deftype H [] clojure.lang.IHashEq (hasheq [_] 1))"))
+			.contains("(RONTOLISP::%CLOJURE-HASHEQ-ROW (LIST :C%KEYWORD \"H\") '(\"clojure.lang.IHashEq\")")
+			.doesNotContain("%CLOJURE-MARKER-ROW");
+		// .hashCode of a receiver of no known class is the hashCode of any value, on
+		// every backend; a known host class keeps the host's
+		assertThat(lowered("(fn [x] (.hashCode x))")).contains("(RONTOLISP::%CLOJURE-JAVA-HASH ")
+			.doesNotContain("JAVA:CALL");
+		assertThat(lowered("(.hashCode (java.util.ArrayList.))")).contains("\"hashCode\"")
+			.doesNotContain("%CLOJURE-JAVA-HASH");
+	}
+
+	@Test
 	void coreBacklogArityRefusalsUseTheOracleWording() {
 		assertThatThrownBy(() -> Clojure.read("(drop-last 1 2 3)", null)).isInstanceOf(LispReadException.class)
 			.hasMessageContaining("Wrong number of args (3) passed to: clojure.core/drop-last");
@@ -3135,26 +3165,27 @@ class ClojureLoweringTest {
 		// name the namespace sees as clojure.core/name, any other unresolved
 		// spelling with the defining namespace, an alias head with its namespace,
 		// a class head with its fully qualified name
-		assertThat(loweredWithMacros("(ns s.a) (defn h [] 1) (defmacro m [] `(h ~'x nope let))")).contains("'|c%s.a/h|")
-			.contains("'|c%s.a/nope|")
-			.contains("'|c%clojure.core/let|");
-		assertThat(loweredWithMacros("(defn h [] 1) (defmacro m [] `(h))")).contains("'|c%user/h|");
+		assertThat(loweredWithMacros("(ns s.a) (defn h [] 1) (defmacro m [] `(h ~'x nope let))"))
+			.contains("(%UNSPELLED-QUOTE |c%s.a/h|)")
+			.contains("(%UNSPELLED-QUOTE |c%s.a/nope|)")
+			.contains("(%UNSPELLED-QUOTE |c%clojure.core/let|)");
+		assertThat(loweredWithMacros("(defn h [] 1) (defmacro m [] `(h))")).contains("(%UNSPELLED-QUOTE |c%user/h|)");
 		assertThat(loweredWithMacros(
 				"(ns s.b (:require [clojure.string :as s])) (defmacro m [] `(s/join s/nope System/nanoTime foo/bar import*))"))
-			.contains("'|c%clojure.string/join|")
-			.contains("'|c%clojure.string/nope|")
-			.contains("'|c%java.lang.System/nanoTime|")
-			.contains("'|c%foo/bar|")
-			.contains("'|c%s.b/import*|");
+			.contains("(%UNSPELLED-QUOTE |c%clojure.string/join|)")
+			.contains("(%UNSPELLED-QUOTE |c%clojure.string/nope|)")
+			.contains("(%UNSPELLED-QUOTE |c%java.lang.System/nanoTime|)")
+			.contains("(%UNSPELLED-QUOTE |c%foo/bar|)")
+			.contains("(%UNSPELLED-QUOTE |c%s.b/import*|)");
 		assertThat(loweredWithMacros("(ns s.c (:refer-clojure :exclude [map])) (defmacro m [] `(map filter))"))
-			.contains("'|c%s.c/map|")
-			.contains("'|c%clojure.core/filter|");
+			.contains("(%UNSPELLED-QUOTE |c%s.c/map|)")
+			.contains("(%UNSPELLED-QUOTE |c%clojure.core/filter|)");
 		// a class spelling is already fully qualified (measured on the
 		// oracle: `java.io.StringWriter reads as written, `String as
 		// java.lang.String) -- never with the defining namespace
 		assertThat(loweredWithMacros("(ns s.d) (defmacro m [] `(java.io.StringWriter String))"))
-			.contains("'|c%java.io.StringWriter|")
-			.contains("'|c%java.lang.String|");
+			.contains("(%UNSPELLED-QUOTE |c%java.io.StringWriter|)")
+			.contains("(%UNSPELLED-QUOTE |c%java.lang.String|)");
 	}
 
 	@Test
