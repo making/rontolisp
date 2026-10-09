@@ -266,6 +266,30 @@ class ClojureLibraryTest {
 	}
 
 	@Test
+	void aDateOrUuidConstructionMakesTheValueUnlessHandedStraightToAMember() {
+		// a construction makes the instant or UUID the literals read, so the printer
+		// keeps their arms; handed straight to a java: member it is the host
+		// construction, which makes none, and a java: program making none crosses no
+		// value made here
+		List<LispVal> made = ClojureLibrary
+			.process(Clojure.read("(prn (java.util.Date. 0) (java.util.UUID/randomUUID))", null));
+		assertThat(defun(made, "RONTOLISP::%CLOJURE-WRITE")).contains("(RONTOLISP::%CLOJURE-INSTANT-P X)")
+			.contains("(RONTOLISP::%CLOJURE-UUID-P X)");
+		String handed = "(prn (.format (java.text.SimpleDateFormat. \"yyyy\") (java.util.Date. 0))"
+				+ " (.add (java.util.HashSet.) #uuid \"1-1-1-1-1\"))";
+		List<LispVal> host = ClojureLibrary.process(Clojure.read(handed, null));
+		assertThat(program(host, handed)).contains("(JAVA:NEW \"java.util.Date(long)\" 0)")
+			.contains("(JAVA:NEW \"java.util.UUID(long,long)\" ")
+			.doesNotContain("%CLOJURE-MAKE-INST")
+			.doesNotContain("%CLOJURE-MAKE-UUID");
+		assertThat(defun(host, "RONTOLISP::%CLOJURE-WRITE")).doesNotContain("%CLOJURE-INSTANT-P")
+			.doesNotContain("%CLOJURE-UUID-P");
+		String crossing = "(defn f [x] (.add (java.util.ArrayList.) x)) (prn (f 1))";
+		assertThat(defun(ClojureLibrary.process(Clojure.read(crossing, null)), "RONTOLISP::%CLOJURE-HOST-VALUE"))
+			.doesNotContain("TIME-VALUE");
+	}
+
+	@Test
 	void vecRefusesANonCollectionAsRuntimeExceptionOnlyWhereAClassIsRead() {
 		// the oracle's vec casts to an array before it seqs: the argument check is the
 		// refusal family's view, so a program reading no class compiles the bare coercion
