@@ -397,9 +397,7 @@
 ;;; filesystem.lisp (the existence constraints); the export is homed here, so
 ;;; the definition is too. Lite next to upstream, deliberately: a failed check
 ;;; calls (or ON-ERROR 'error) with a two-argument report instead of upstream's
-;;; ~? chain, :want-logical always fails (nothing is logical),
-;;; :resolve-symlinks and :truenamize are accepted and ignored (no backend
-;;; resolves a symlink), and :truename answers what probe-file answers.
+;;; ~? chain and :want-logical always fails (nothing is logical).
 (defun uiop/pathname:ensure-pathname (%ens-path &rest %ens-keys &key
                                       ((:on-error %ens-on-error))
                                       ((:defaults %ens-defaults))
@@ -430,8 +428,7 @@
                                         %ens-resolve-symlinks))
                                       ((:truenamize %ens-truenamize))
                                       &allow-other-keys)
-  (declare
-   (ignore %ens-keys %ens-namestring %ens-resolve-symlinks %ens-truenamize))
+  (declare (ignore %ens-keys %ens-namestring))
   (block nil
     ;; The default ON-ERROR signals DIRECTLY rather than through call-function:
     ;; a funcalled #'error wrapper is a raw trap on the WASM backends where a
@@ -496,16 +493,22 @@
         (when (and %ens-wilden (not (wild-pathname-p %ens-p)))
           (setq %ens-p (uiop/pathname:wilden %ens-p)))
         (when %ens-want-existing
-          (let ((%ens-x (probe-file %ens-p)))
+          (let ((%ens-x
+                 (if %ens-truename
+                     (uiop/filesystem:truename* %ens-p)
+                     (probe-file %ens-p))))
             (if %ens-x
                 (when %ens-truename (return %ens-x))
                 (%ens-err "Expected an existing pathname"))))
         (when %ens-ensure-directories-exist (ensure-directories-exist %ens-p))
         (when %ens-truename
-          (let ((%ens-t (probe-file %ens-p)))
+          (let ((%ens-t (uiop/filesystem:truename* %ens-p)))
             (if %ens-t
                 (return %ens-t)
                 (%ens-err "Can't get a truename for pathname"))))
+        (when %ens-resolve-symlinks
+          (setq %ens-p (uiop/filesystem:resolve-symlinks %ens-p)))
+        (when %ens-truenamize (setq %ens-p (uiop/filesystem:truenamize %ens-p)))
         %ens-p))))
 
 ;;; Wildcard pathnames. A wild component is a string holding the two wildcards

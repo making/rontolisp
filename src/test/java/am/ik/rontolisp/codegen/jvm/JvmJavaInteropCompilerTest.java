@@ -828,6 +828,13 @@ class JvmJavaInteropCompilerTest {
 			.isEqualTo(JavaImplementationPrograms.SUBCLASS_OUTPUT);
 	}
 
+	// Mirrors JavaInteropTest#aCollectionSubclassIsAHostObject.
+	@Test
+	void aCollectionSubclassIsAHostObject() throws Exception {
+		assertThat(compileAndRun(JavaImplementationPrograms.HOST_COLLECTION_SUBCLASS))
+			.isEqualTo(JavaImplementationPrograms.HOST_COLLECTION_SUBCLASS_OUTPUT);
+	}
+
 	// Mirrors JavaInteropTest#whatASubclassCannotDoIsAnError: what fails when the
 	// resolved form runs raises what the interpreter raises; a form left to run time
 	// is refused by name (the bridge generates no classes), and --java-static refuses

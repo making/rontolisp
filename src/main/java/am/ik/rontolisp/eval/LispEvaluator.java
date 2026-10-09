@@ -265,6 +265,9 @@ public final class LispEvaluator {
 
 	private boolean clojureLibraryLoaded = false;
 
+	/** Whether the Clojure library came from {@link #clojureProgram}, stripped. */
+	private boolean clojureLibraryStripped = false;
+
 	private boolean usocketLibraryLoaded = false;
 
 	private boolean witLibraryLoaded = false;
@@ -2028,6 +2031,22 @@ public final class LispEvaluator {
 					}
 					// The truename is the namestring itself (see LispNames.PROBE_FILE).
 					return this.sourceLoader.exists(path.value()) ? path : LispNil.INSTANCE;
+				}));
+		// %read-link: the same SourceLoader mediation as %probe-file,
+		// string-in/string-out:
+		// the target a symbolic link holds, nil for anything that is no link. The walk
+		// that resolves a whole path over it is the prelude %real-path.
+		this.globalEnv.defineFunction(LispNames.READ_LINK_INTERNAL,
+				new LispFunction(LispNames.READ_LINK_INTERNAL, args -> {
+					if (args.size() != 1) {
+						throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
+								LispNames.READ_LINK_INTERNAL + " expects 1 argument, got " + args.size());
+					}
+					if (!(args.get(0) instanceof LispString path)) {
+						throw new LispEvalException(LispNames.READ_LINK_INTERNAL + " expects a string pathname");
+					}
+					String target = this.sourceLoader.readLink(path.value());
+					return target == null ? LispNil.INSTANCE : new LispString(target);
 				}));
 		// file-write-date: the same SourceLoader mediation as %probe-file, for the same
 		// reason -- a host without a filesystem has no modification times and answers the
@@ -3949,6 +3968,9 @@ public final class LispEvaluator {
 			// forms in front of a malformed one run and the read error is signalled
 			// after them, catchable like any other condition.
 			SourceLanguage language = SourceLanguage.forFile(resolved, null);
+			if (language == SourceLanguage.CLOJURE) {
+				requireWholeClojureLibrary("load of " + resolved);
+			}
 			boolean markers = SourceLanguage.usesReadEvalMarkers(source);
 			LispReader.ReadPrefix read = language.readUntilError(source, features, resolved, this.sourceStandards,
 					this.sourceLoader);
@@ -5641,6 +5663,48 @@ public final class LispEvaluator {
 	 */
 	public boolean currentPackageShadows(String name) {
 		return this.packageResolver.currentPackageShadows(name);
+	}
+
+	/**
+	 * Loads the Clojure library for a WHOLE lowered Clojure program -- every form this
+	 * evaluator will run -- and answers the forms to evaluate in its place: the compile
+	 * path's strip ({@link ClojureLibrary#splice}), so neither the library nor the
+	 * program tests for a kind of value the program can never make (a {@code str} of a
+	 * number passes no io, stream, instant, ... test). The library loaded on first use
+	 * instead keeps every arm, for whatever a session or a {@code load} reads next; this
+	 * one cannot take a later Clojure program, which {@link #requireWholeClojureLibrary}
+	 * refuses. A program naming no library function, or one evaluated after the library
+	 * was loaded, is answered unchanged.
+	 * @param program the lowered forms of the whole program
+	 * @return the forms to evaluate, in order
+	 */
+	public List<LispVal> clojureProgram(List<LispVal> program) {
+		requireWholeClojureLibrary("a second Clojure program");
+		if (this.clojureLibraryLoaded) {
+			return program;
+		}
+		ClojureLibrary.Splice splice = ClojureLibrary.splice(program, true);
+		if (!splice.library().isEmpty()) {
+			this.clojureLibraryLoaded = true;
+			this.clojureLibraryStripped = true;
+			for (LispVal form : splice.library()) {
+				evalResolved(form);
+			}
+		}
+		return splice.program();
+	}
+
+	/**
+	 * Refuses Clojure source arriving after {@link #clojureProgram} loaded a library
+	 * without the arms of the families that program makes no value of: what the new
+	 * source makes may need them. No Clojure program reaches here -- its {@code load} and
+	 * {@code require} are read while it is lowered, and it has no {@code eval}.
+	 */
+	private void requireWholeClojureLibrary(String what) {
+		if (this.clojureLibraryStripped) {
+			throw new IllegalStateException(
+					what + " cannot run where a whole Clojure program loaded the library without its unused arms");
+		}
 	}
 
 	/**

@@ -108,8 +108,10 @@ final class ClojureInteropLowering {
 	 * An argument of a host call as the call hands it to Java: through
 	 * {@link #HOST_VALUE}, unless it is a value no Clojure value Java lacks can be -- a
 	 * literal, a fn form, a construction, a local bound to one of those -- which the site
-	 * keeps resolving on. Where the host is not (wasm), every {@code java:} call is a
-	 * call-time error and the argument is left as it is.
+	 * keeps resolving on, or a Date or UUID construction, which hands the host object at
+	 * once ({@link ClojureTimeValueLowering#hostConstruction}). Where the host is not
+	 * (wasm), every {@code java:} call is a call-time error and the argument is left as
+	 * it is.
 	 * @param ctx the hub
 	 * @param argument the lowered argument
 	 * @return what the call hands Java
@@ -131,6 +133,11 @@ final class ClojureInteropLowering {
 	static LispVal hostArgument(ClojureLowering ctx, LispVal argument, LispVal crossed) {
 		if (!ctx.hostTarget) {
 			return crossed;
+		}
+		LispVal hostObject = ClojureTimeValueLowering.hostConstruction(argument);
+		if (hostObject != null) {
+			// a Date or UUID made for the member alone: the host object at once
+			return hostObject;
 		}
 		if (isLiteral(argument) || isPlainForm(argument)
 				|| argument instanceof LispSymbol local && isPlainLocal(ctx, local)) {
@@ -432,9 +439,10 @@ final class ClojureInteropLowering {
 	/**
 	 * A host construction over argument datums, shared by {@code (Class. ...)},
 	 * {@code (new Class ...)} and {@code (Class/new ...)}: the reader wrappers and the
-	 * zero-argument {@code java.io.StringWriter} as streams, an untagged plain throwable
-	 * as an exception ({@link #throwableConstruction}), anything else {@code java:new},
-	 * under the param-tag designator when tagged.
+	 * zero-argument {@code java.io.StringWriter} as streams, a Date, Timestamp or UUID as
+	 * the value it is here ({@link ClojureTimeValueLowering#construction}), an untagged
+	 * plain throwable as an exception ({@link #throwableConstruction}), anything else
+	 * {@code java:new}, under the param-tag designator when tagged.
 	 */
 	static LispVal hostConstruction(ClojureLowering ctx, String cls, List<LispVal> argDatums,
 			@Nullable List<String> types) {
@@ -449,6 +457,10 @@ final class ClojureInteropLowering {
 			return stringWriter;
 		}
 		List<LispVal> lowered = ctx.lowers(argDatums, 0);
+		LispVal timeValue = ClojureTimeValueLowering.construction(cls, lowered, types);
+		if (timeValue != null) {
+			return timeValue;
+		}
 		if (types == null) {
 			LispVal exception = throwableConstruction(ctx, cls, lowered);
 			if (exception != null) {
@@ -787,6 +799,12 @@ final class ClojureInteropLowering {
 	 * designator ({@link #designator}); the boolean rule still reads the bare member.
 	 */
 	static LispVal staticCall(ClojureLowering ctx, String cls, String member, String designator, List<LispVal> args) {
+		LispVal timeValue = ClojureTimeValueLowering.staticCall(cls, member, args);
+		if (timeValue != null) {
+			// UUID/randomUUID, UUID/fromString and System/currentTimeMillis: the values
+			// of this front end's own, on every backend
+			return timeValue;
+		}
 		if (cls.equals("java.lang.System") && member.equals("exit") && args.size() == 1) {
 			// ends the process on every backend, wasm included, like uiop:quit: the
 			// status the host sees is the low byte, as the oracle's is on a POSIX host
@@ -824,6 +842,10 @@ final class ClojureInteropLowering {
 	 * is the false object, like every predicate value.
 	 */
 	static LispVal staticNoArg(ClojureLowering ctx, String cls, String member) {
+		LispVal timeValue = ClojureTimeValueLowering.staticCall(cls, member, List.of());
+		if (timeValue != null) {
+			return timeValue;
+		}
 		if (staticMember(cls, member).arities().contains(0)) {
 			return hostCall(ctx, JAVA_STATIC, List.of(LispString.literal(cls), LispString.literal(member)), 2);
 		}
@@ -957,14 +979,19 @@ final class ClojureInteropLowering {
 
 	/**
 	 * {@link #hostConstruction} over already-lowered arguments: the zero-argument
-	 * {@code java.io.StringWriter} a string output stream, an untagged plain throwable an
-	 * exception, anything else {@code java:new}.
+	 * {@code java.io.StringWriter} a string output stream, a Date, Timestamp or UUID the
+	 * value it is here, an untagged plain throwable an exception, anything else
+	 * {@code java:new}.
 	 */
 	static LispVal hostConstructionLowered(ClojureLowering ctx, String cls, List<LispVal> args,
 			@Nullable List<String> types) {
 		LispVal stringWriter = stringWriterConstruction(cls, args.size());
 		if (stringWriter != null) {
 			return stringWriter;
+		}
+		LispVal timeValue = ClojureTimeValueLowering.construction(cls, args, types);
+		if (timeValue != null) {
+			return timeValue;
 		}
 		if (types == null) {
 			LispVal exception = throwableConstruction(ctx, cls, args);
@@ -1613,6 +1640,10 @@ final class ClojureInteropLowering {
 				cls = hostClassOf(ctx, ref);
 			}
 		}
+		if (cls != null && ClojureTimeValueLowering.CLASSES.contains(cls)) {
+			// a Date, Timestamp or UUID may be a value made here: the value arms take it
+			cls = null;
+		}
 		if (args.isEmpty() && EXCEPTION_METHODS.contains(method) && (cls == null || plainThrowable(cls) != null)) {
 			// a caught runtime error, an ex-info and a throwable construction are
 			// conditions: the library answers from the exception, and calls the host
@@ -1629,15 +1660,19 @@ final class ClojureInteropLowering {
 		if (method.equals("toString") && args.isEmpty()) {
 			call = valueToString(recv);
 		}
+		boolean hashCode = method.equals("hashCode") && args.isEmpty() && cls == null;
+		if (hashCode) {
+			call = valueHashCode(recv);
+		}
 		LispVal stream = streamMethod(ctx, method, recv, args);
 		if (stream != null) {
 			call = ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
 					ClojureLowerUtil.list(ClojureLowerUtil.sym("streamp"), recv), stream, call);
 		}
-		if (cls == null && !(method.equals("toString") && args.isEmpty())) {
+		if (cls == null && !(method.equals("toString") && args.isEmpty()) && !hashCode) {
 			// a collection, keyword, symbol or ratio has no host object: its common
 			// methods answer through the core verbs, any other is refused by name
-			call = ClojureValueMethodLowering.valueArm(ctx, method, recv, args, call);
+			call = ClojureValueMethodLowering.valueArm(ctx, method, designator, recv, args, call);
 		}
 		if (method.equals("getClass") && args.isEmpty()) {
 			call = ClojureDispatchLowering.getClassForm(ctx, recv, cls, call);
@@ -1695,6 +1730,20 @@ final class ClojureInteropLowering {
 							ClojureLowerUtil.list(ClojureLowering.CLOJURE_STR_OF, recv, LispString.literal("nil"),
 									ClojureLowering.NIL_CONST)),
 				ClojureLowerUtil.list(ClojureLowering.TRUE_CONST, call));
+	}
+
+	/**
+	 * {@code hashCode} over an already-bound receiver of no known class: the oracle's
+	 * {@code hashCode} of any value ({@code %clojure-java-hash}: a type's own override, a
+	 * record's map hash, a collection's or a number's, a host object's through its host
+	 * arm) on every backend; nil signals, like the oracle's {@code NullPointerException}.
+	 */
+	static LispVal valueHashCode(LispSymbol recv) {
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), recv),
+				ClojureRefusals.refusal(ClojureRefusals.NULL_POINTER,
+						LispString.literal("Cannot invoke \"Object.getClass()\" because \"target\" is null")),
+				ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-JAVA-HASH"), recv));
 	}
 
 	/**

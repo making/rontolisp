@@ -185,7 +185,7 @@ public final class DeadTypeBranchPruner {
 				return;
 			}
 			if (cons.car() instanceof LispSymbol head && cons.cdr() instanceof LispCons rest) {
-				if (LispNames.QUOTE.equals(head.name())) {
+				if (LispNames.isQuote(head.name())) {
 					// A quoted symbol is how a designator reaches funcall/apply, so every
 					// name in the datum is a name something could call with anything.
 					collectSymbols(rest.car(), this.escaped);
@@ -345,7 +345,7 @@ public final class DeadTypeBranchPruner {
 			}
 			if (cons.car() instanceof LispSymbol head && cons.cdr() instanceof LispCons rest) {
 				String name = head.name();
-				if (LispNames.QUOTE.equals(name)) {
+				if (LispNames.isQuote(name)) {
 					return cons;
 				}
 				if (FOREIGN_SCOPE_HEADS.contains(name) || this.macros.contains(name)) {

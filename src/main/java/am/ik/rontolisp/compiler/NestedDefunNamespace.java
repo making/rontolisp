@@ -125,7 +125,7 @@ public final class NestedDefunNamespace {
 			return;
 		}
 		if (cons.car() instanceof LispSymbol head) {
-			if (LispNames.QUOTE.equals(head.name())) {
+			if (LispNames.isQuote(head.name())) {
 				collectDatum(cons.cdr(), spelled);
 				return;
 			}

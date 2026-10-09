@@ -87,7 +87,15 @@ final class JvmSimpleArrayPCompiler {
 		// Only the general ArrayList shape can still be an array.
 		ClassEntry arrayListClass = ctx.cp.classEntry("java/util/ArrayList");
 		ClassEntry objectArrayClass = ctx.cp.classEntry("[Ljava/lang/Object;");
-		ctx.body.dup().instanceOf(arrayListClass).ifeq(gotoFalse);
+		JvmJavaSites javaSites = ctx.javaSites;
+		if (javaSites != null) {
+			// In a java: program the shared _jlarr: a call can answer an ArrayList (or a
+			// subclass, whose own size / get must not be asked) of its own.
+			ctx.body.dup().invokestatic(javaSites.direct().lispArray()).ifeq(gotoFalse);
+		}
+		else {
+			ctx.body.dup().instanceOf(arrayListClass).ifeq(gotoFalse);
+		}
 		ctx.body.checkcast(arrayListClass);
 		// An EMPTY list carries no header, so it is no array shape this predicate knows.
 		ctx.body.dup();

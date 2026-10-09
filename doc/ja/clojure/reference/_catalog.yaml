@@ -27,6 +27,7 @@ categories:
       - { slug: vary-meta, name: "vary-meta" }
       - { slug: var, name: "var" }
       - { slug: var-get, name: "var-get" }
+      - { slug: resolve, name: "resolve" }
       - { slug: core-test, name: "test" }
       - { slug: comment, name: "comment" }
       - { slug: declare, name: "declare" }
@@ -186,6 +187,11 @@ categories:
       - { slug: aget, name: "aget" }
       - { slug: aset, name: "aset" }
       - { slug: alength, name: "alength" }
+      - { slug: hash, name: "hash" }
+      - { slug: hash-ordered-coll, name: "hash-ordered-coll" }
+      - { slug: hash-unordered-coll, name: "hash-unordered-coll" }
+      - { slug: mix-collection-hash, name: "mix-collection-hash" }
+      - { slug: hash-combine, name: "hash-combine" }
   - title: "数値と述語"
     index_page: clojure/reference/numbers.md
     functions:
@@ -554,3 +560,4 @@ categories:
       - { slug: gensym, name: "gensym" }
       - { slug: macroexpand-1, name: "macroexpand-1" }
       - { slug: macroexpand, name: "macroexpand" }
+      - { slug: eval, name: "eval" }

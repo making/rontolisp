@@ -9,7 +9,8 @@ import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 /**
- * The one tree the ci-spec corpus needs but no backend can build at run time, plus the
+ * The trees the ci-spec corpus needs but no backend can build at run time -- the
+ * wild-pathname walk's and the symbolic links {@code truename} resolves -- plus the
  * {@code .lnk} fixture in the same position.
  *
  * <p>
@@ -43,7 +44,22 @@ public final class CorpusFixtures {
 	/** The directory name the {@code wild-pathnames} case anchors its walk to. */
 	public static final String WILD_PATHNAME_DIR = "wpc-sub";
 
+	/** The directory the {@code truename-resolves-symbolic-links} case reads. */
+	public static final String SYMLINK_DIR = "e95-links";
+
 	private CorpusFixtures() {
+	}
+
+	/**
+	 * Stages every fixture the corpus reads -- the one entry point a driver calls, so a
+	 * fixture added for one driver cannot be missing from another. Idempotent.
+	 * @param runDir the working directory the corpus program runs with
+	 * @throws IOException if a fixture cannot be staged
+	 */
+	public static void stageAll(Path runDir) throws IOException {
+		stageWildPathnameTree(runDir);
+		stageLnkFixture(runDir);
+		stageSymlinkTree(runDir);
 	}
 
 	/**
@@ -97,6 +113,27 @@ public final class CorpusFixtures {
 	public static void stageLnkFixture(Path runDir) throws IOException {
 		Files.copy(lnkFixturePath(), runDir.resolve(LNK_FIXTURE_NAME),
 				java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+	}
+
+	/**
+	 * Stages the {@code truename-resolves-symbolic-links} tree: a file, a directory and
+	 * three symbolic links, each target RELATIVE (a WASI host follows no absolute one).
+	 * No backend creates a link, so the driver does. Idempotent: an existing tree is left
+	 * as it is.
+	 * @param runDir the working directory the corpus program runs with
+	 * @throws IOException if the tree cannot be staged
+	 */
+	public static void stageSymlinkTree(Path runDir) throws IOException {
+		Path dir = runDir.resolve(SYMLINK_DIR);
+		if (Files.isDirectory(dir)) {
+			return;
+		}
+		Files.createDirectories(dir.resolve("d"));
+		Files.writeString(dir.resolve("a.txt"), "a\n");
+		Files.writeString(dir.resolve("d/f.txt"), "f\n");
+		Files.createSymbolicLink(dir.resolve("in"), Path.of("a.txt"));
+		Files.createSymbolicLink(dir.resolve("dl"), Path.of("d"));
+		Files.createSymbolicLink(dir.resolve("up"), Path.of("../" + SYMLINK_DIR + "/d"));
 	}
 
 	/**

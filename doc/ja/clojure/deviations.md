@@ -32,8 +32,9 @@
  プリンタが読まないただの値です。`assert` は展開される時点の `*assert*` を読むため、
  トップレベルでリテラルに `set!` すると以降の `assert` が無効になります。関数の中の
  `set!` や計算した値への `set!` では無効になりません（オラクルでは実行された時点で効きます）。
- Clojure 値に対する `~S`/`~A` は Common Lisp 記法のままです（`format` は CL サーフェス）。
- `print-method`/`pprint` はありません。
+ Common Lisp の `format` で Clojure 値に `~S`/`~A` を使うと Common Lisp 記法のままです（CL
+ サーフェスのため。`clojure.pprint/cl-format` は Clojure の記法で書きます）。`print-method` は
+ ありません。
 - マップ・セット・memoize のキーは、ベクター・リスト・マップ・セットも含めて本家と同じく
  `=` で一致するキーを見つけます。ただし格納されるコレクションのキーは、プログラムが最初に
  格納した同じ種類（ベクター・リスト・遅延 seq）の `=` なキーなので、メタデータと入れ子の
@@ -49,6 +50,14 @@
  マップとセットは Java のコレクションのキーを本家のハッシュマップ・セットと同じくそれ自身の
  `equals` で探し、本家の小さな配列マップが使う `=` では探しません。
  `(get {[1 2] :v} (java.util.ArrayList. [1 2]))` はここでは `nil`、本家では `:v` です。
+- `hash`、`hash-ordered-coll`、`hash-unordered-coll`、`mix-collection-hash`、`hash-combine`、
+ `.hashCode` は本家と同じ数を返します。ただし同一性でハッシュする値（関数、atom、var、例外、
+ `hasheq` も `hashCode` も実装しない deftype や reify）の数は本家と異なり、バックエンドや実行
+ ごとにも変わります（本家でも実行ごとに変わります）。ここで `nil` である `()` と空の `rest` は
+ `0` になります（本家は空の seq としてハッシュします）。小数（`1.5M`）はここでは比として、
+ `Calendar` はそのミリ秒の `Date` としてハッシュします。`hash-ordered-coll` はマップ・セット・
+ レコードの要素をこの実装の順で辿ります（順序によらないハッシュは一致します）。拒否の
+ `ClassCastException` のメッセージには本家のモジュールとローダの説明が付きません。
 - `seq` とその上の操作、`count`、`empty?`、`get`、`contains?`、`keys`、`vals` は本家と同じく
  Java の `Iterable`、`Map`、`CharSequence` を読み、`find`、`select-keys`、`reduce-kv`、
  `update-vals`、`update-keys`、`conj`、`merge`、`merge-with` は Java の `Map` をマップとして
@@ -195,6 +204,14 @@
  form（`if`、`do`、`let*`、`new` など）、リーダーが綴る先頭（`deref`、
  `syntax-quote`、`ns`、`in-ns`）の `defmacro` は名前を挙げて拒否されます。oracle はこれを
  受け付けます（special form なら呼び出し位置では無視します）。
+- `eval` と、計算で得たシンボルの `resolve` は、プログラムの lower 中（マクロ本体と
+ そこから呼ぶもの）でだけ動きます。実行時は `UnsupportedOperationException` を投げ、
+ oracle は評価・解決します。`resolve` は、このフロントエンドにない `clojure.core` の
+ var（oracle は var）、レコードや型の名前（oracle はクラス）、lower に組み込まれた
+ 名前空間（`clojure.string`）の var に対して `nil` を返します。quote したシンボルは
+ 呼び出しが lower される名前空間で解決され（oracle は呼び出しの実行時の `*ns*` を
+ 読みます）、呼び出しより下の定義にも解決されます。`eval` したフォームが作る定義は
+ lower 中にだけ存在します。
 - `#(...)` はソース、クオートの下、`read-string`/`read` のいずれでもオラクルと同じ
   `(fn* [p1__N# ...] (body))` と読まれますが、N はトップレベルのフォーム（読む datum）
   ごとに 1 から数え直します。オラクルのカウンタはプロセス全体で進むため、引数名が異なり、
@@ -233,7 +250,7 @@
 - コレクション・キーワード・シンボル・比・atom・fn へのインスタンス呼び出しは core 関数を通して
   答えるため、その逸脱も引き継ぎます（`.getClass` は `class` と同じ値を返します）。対応づけて
   いないメソッドは `Method m taking N args is not supported for class C` として拒否し、
-  オラクルが答える場合（`.hashCode`）もあります。map のクラス名は件数だけで決め、8 件までは
+  オラクルが答える場合（`.toArray`）もあります。map のクラス名は件数だけで決め、8 件までは
   array map、それを超えると hash map とします。ここでは `nil` が空リストなので、コレクションの
   メソッドは `nil` にも答えます（`(.count nil)` は `0`）が、オラクルは
   `NullPointerException` を投げます。`nil` へのそれ以外のメソッドは `NullPointerException` です。
@@ -264,8 +281,8 @@
   インタフェース（`IChunkedSeq`、`java.util.Deque` など）は名前を挙げて拒否されます。`ISeq` 型への
   `first`・`next`・`rest` はその `seq` を通して読み、関数がメソッドを呼ぶ回数はオラクルと異なる
   ことがあり、コレクションの型の `str` は中身を綴ります
-  （[コレクションのインタフェース](reference/reify.md#collection-interfaces)）。型の `equals` と `hashCode` は `=` と `.hashCode` に答えますが、マップのキーやセットの要素の
-  比較には使われず、そうした値は同一性で保持されます。`Seqable` だけを実装した型について、
+  （[コレクションのインタフェース](reference/reify.md#collection-interfaces)）。型の `equals`・`hashCode`・`hasheq` は `=`・`.hashCode`・`hash` に答えますが、マップのキーや
+  セットの要素の比較には使われず、そうした値は同一性で保持されます。`Seqable` だけを実装した型について、
   `sort` と `distinct` はその seq を通して答えます。オラクルはどちらも拒否します。
 - `clojure.core.reducers` は呼び出したスレッドの上で部分を順に1つずつ fold します。空でない
   2つのコレクションの `cat` は両方を持つ1つのアキュムレーター（ベクター）を返します。オラクルは
@@ -302,7 +319,7 @@
   （UTF-8、ISO-8859-1、US-ASCII とそれらの JDK の別名。ほかは拒否します）。
   `ring.util.request/body-string` は拡張できるマルチメソッドではなく関数で、`content-length`
   は ASCII の数字だけを読みます。バイト配列を使うものは含みません。ファイルのレスポンスは
-  シンボリックリンクを解決せず、実行時に組み立てた名前のリソースを jar の中から探しません。
+  実行時に組み立てた名前のリソースを jar の中から探しません。
 - ソート済みのマップとセットは、順序付け・表示・キーの検索がオラクルと同じですが、どの操作も
   コピーを作ります（関連付けにはハッシュマップと同じくコレクションの大きさ分のコストが
   かかります）。`class` は `:map`/`:set` を返します。先頭から走査して何も残らない `subseq`/`rsubseq` は `nil` を返します（オラクルは
@@ -368,9 +385,11 @@
   拒否されます。`read` はストリームを取り、素の `clojure.java.io/reader` も受け付けます
   （オラクルは `PushbackReader` を要求します）。ホストのリーダは拒否します。
 - `#inst` と `#uuid` は、すべてのバックエンドでオラクルの `java.util.Date` と
-  `java.util.UUID` として読まれます。わずかな違い（インスタントの `str` は UTC で答える、
-  interop で得たホストの値は読んだ値と `=` にならない）は[インスタントと UUID](reference/instants.md)
-  にあります。
+  `java.util.UUID` として読まれます。`java.util.Date`、`java.sql.Timestamp`、`java.util.UUID`
+  のコンストラクタと静的メンバーも同じ値を作ります。わずかな違い（インスタントの `str` は UTC で
+  答える、Java のメンバーが返したホストの Date や UUID はここで作った値と `=` になるが、
+  ホストオブジェクトとして印字され、マップでは別のキーになる）は
+  [インスタントと UUID](reference/instants.md) にあります。
 - `clojure.java.io` の `java.io.File`、`java.net.URL`、`java.net.URI`、バイトストリームは、
   すべてのバックエンドでこのフロントエンド自身の値です。違い（バイト配列がない、文字セットは
   3 つ、`http:` URL の背後に接続がない、リソースはクラスパスではなくソースパスで見つける、WASM の
@@ -441,8 +460,7 @@
 - リーダ条件は `:rontolisp` も選びます。フォームが `:clj` より先に挙げていればそちらが先です。
   `{:read-cond :preserve}` で読んだリーダ条件やタグ付きリテラルの `class` は、ここでのほかの
   クラスと同じくキーワード（`:clojure.lang.ReaderConditional`・`:clojure.lang.TaggedLiteral`）
-  を返します。`str` が綴るハッシュは `=` に従うこの実装のもので、オラクルの `hashCode` では
-  ありません。`(reader-conditional nil false)` は `#?()` から読んだものと同じく `#?()` と
+  を返します。`(reader-conditional nil false)` は `#?()` から読んだものと同じく `#?()` と
   印字されます。選ばれない分岐の中では、
   未知のエイリアスの `::alias/kw` も読めます（オラクルは拒否します）。実行時のリーダは
   `#?@(:clj nil)` を何も展開しないものとして読み（オラクルは拒否します）、`:features` は

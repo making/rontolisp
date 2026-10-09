@@ -57,7 +57,7 @@ public final class MopEvalCapture {
 		while (form instanceof LispCons cons) {
 			if (cons.car() instanceof LispSymbol op) {
 				String member = memberOf(op.name());
-				if (LispNames.QUOTE.equals(member)) {
+				if (LispNames.isQuote(member)) {
 					return false;
 				}
 				if (LispNames.DEFMETHOD.equals(member)) {
@@ -98,7 +98,7 @@ public final class MopEvalCapture {
 		}
 		if (cons.car() instanceof LispSymbol op) {
 			String member = memberOf(op.name());
-			if (LispNames.QUOTE.equals(member)) {
+			if (LispNames.isQuote(member)) {
 				return form;
 			}
 			if (LispNames.DEFMETHOD.equals(member) && cons.isProperList()) {

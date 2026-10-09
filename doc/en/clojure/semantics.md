@@ -208,7 +208,9 @@ and several arities like `defn`; a docstring and an attr map are skipped);
 `&form`/`&env` are refused. A body sees the core builtins, the `clojure.lisp`
 library and the program's top-level definitions above the call site -- its own file's,
 a required namespace's, an earlier REPL input's -- like the oracle's form-by-form load;
-a `def`'s value is built for an expansion only when the body reads it. The definition
+a `def`'s value is built for an expansion only when the body reads it. A body may
+[eval](reference/eval.md) a form and [resolve](reference/resolve.md) a name, so a
+`compile-if` chooses code by what this front end lowers. The definition
 also registers a runtime
 table entry of the same expander, answers `nil`, and works session-wide; a call above
 its definition is an error, a macro has no function value, and a later `def`/`defn` of
@@ -304,8 +306,9 @@ answers.
 
 ## State and dynamic scope
 
-Reader metadata (`^:private`, `^:dynamic`, `^{...}` attr maps, type hints) on a name
-or a local parses and drops: it never affects dispatch, except that `^:dynamic`
+Reader metadata (`^:private`, `^:dynamic`, `^{...}` attr maps, type hints) on a name,
+a local or a parameter vector (`(defn f ^long [x] ...)`, each arity of a `defn`, `fn`,
+`letfn` or protocol method) parses and drops: it never affects dispatch, except that `^:dynamic`
 on a `def`/`defonce`/`defn` name marks the var rebindable -- a `^:dynamic`
 `defn` keeps its direct definition but its calls go through the var, so
 `binding` reaches them. Only `binding` rebinds through it. `defn-` is a
@@ -428,7 +431,8 @@ and reader conditionals read under `{:read-cond :allow}` like in a `.cljc` file.
 `java.io.PushbackReader`/`BufferedReader`/`InputStreamReader` over one or over a `java.io.StringReader`,
 which is a stream on every backend; `read` leaves it right after the datum. `str` of a
 collection quotes the strings inside it, like the oracle's, so what `spit` writes reads
-back. `eval` and `load-string` stay absent: no compiler runs at run time.
+back. `load-string` stays absent, and [eval](reference/eval.md) runs only while the program
+lowers (in a macro body): no compiler runs at run time.
 
 ## Host boundary
 

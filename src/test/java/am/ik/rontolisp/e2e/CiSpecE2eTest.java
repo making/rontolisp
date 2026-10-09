@@ -235,14 +235,9 @@ class CiSpecE2eTest {
 
 		Spec spec = loadSpec();
 		Path program = writeProgram(spec);
-		// The corpus's `wild-pathnames` case walks a harness-staged ./wpc-sub/ tree
-		// (see CorpusFixtures): the walk pins LISTING over a known tree, so the tree
-		// stays staged even though both WASM backends can create directories. Every leg
-		// of this driver runs with @TempDir as its working directory.
-		am.ik.rontolisp.testsupport.CorpusFixtures.stageWildPathnameTree(workDir);
-		// The `uiop-os-host-identity` case parses a .lnk shortcut, which no backend
-		// can build at run time -- the same reason the wild-pathname tree is staged.
-		am.ik.rontolisp.testsupport.CorpusFixtures.stageLnkFixture(workDir);
+		// The corpus reads harness-staged fixtures (see CorpusFixtures). Every leg of
+		// this driver runs with @TempDir as its working directory.
+		am.ik.rontolisp.testsupport.CorpusFixtures.stageAll(workDir);
 
 		// The SCALAR leg of a backend records its compiled artifact here and the SIMD
 		// leg of the SAME backend reads it back, to assert the flag changed what was

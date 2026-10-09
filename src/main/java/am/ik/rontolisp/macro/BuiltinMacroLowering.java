@@ -70,7 +70,7 @@ public final class BuiltinMacroLowering {
 		}
 		return switch (head.name()) {
 			// Quoted data: none of the pass's business, whatever calls it holds.
-			case LispNames.QUOTE -> cons;
+			case LispNames.QUOTE, LispNames.UNSPELLED_QUOTE -> cons;
 			// #'fn stays a designator; #'(lambda ...) is code and its body is walked.
 			case LispNames.FUNCTION -> walkFunction(cons, shadowed);
 			// Declarations carry type specifiers, whose (and ...) is a type union, not

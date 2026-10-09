@@ -346,7 +346,8 @@ class ClojureHttpClientTest {
 		ByteArrayOutputStream out = new ByteArrayOutputStream();
 		CliStack.call("clojure-http-proxy", () -> {
 			LispEvaluator evaluator = new LispEvaluator(new PrintStream(out, true, StandardCharsets.UTF_8));
-			for (LispVal form : SourceLanguage.CLOJURE.read(program, Features.INTERPRETER, "proxy.clj")) {
+			for (LispVal form : evaluator
+				.clojureProgram(SourceLanguage.CLOJURE.read(program, Features.INTERPRETER, "proxy.clj"))) {
 				evaluator.eval(form);
 			}
 			return null;

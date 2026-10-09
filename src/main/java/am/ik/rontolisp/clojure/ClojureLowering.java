@@ -167,6 +167,12 @@ public final class ClojureLowering {
 
 	static final LispVal TRUE_CONST = LispTrue.INSTANCE;
 
+	/**
+	 * The macro runtime's function answering a namespace's macro scope by its name: a
+	 * constant in a program, a call back into the lowering in the macro-time evaluator.
+	 */
+	public static final String MACRO_SCOPE = ClojureMacroLowering.MACRO_SCOPE;
+
 	static final LispSymbol AMPERSAND_REST = new LispSymbol("&REST");
 
 	/**
@@ -1349,14 +1355,27 @@ public final class ClojureLowering {
 	@Nullable String testLocation;
 
 	/**
-	 * Whether the program defines or expands macros: the macro runtime (the table lookup,
-	 * the demangler and {@code C%MACROEXPAND-1}/{@code C%MACROEXPAND}) is spliced in
-	 * once, behind the false binding.
+	 * Whether the program expands at run time ({@code macroexpand-1}/{@code macroexpand},
+	 * as calls or values): the macro runtime (the scopes, the table lookup and
+	 * {@code C%MACROEXPAND-1}/{@code C%MACROEXPAND}) is spliced in once, behind the false
+	 * binding. A program only defining macros expands them all while it lowers.
 	 */
-	boolean usedMacros;
+	boolean expandsAtRunTime;
+
+	/**
+	 * A whole program's macro expanders, in definition order: each {@code defmacro}'s
+	 * table global holds its index here ({@link ClojureMacroLowering#macroRuntime}).
+	 */
+	final List<LispVal> macroExpanders = new ArrayList<>();
 
 	/** Whether the macro runtime was already spliced in (files splice it inline). */
 	boolean macrosEmitted;
+
+	/**
+	 * The macro scopes a session defined last ({@code C%MACRO-SCOPE}), printed, or null
+	 * before the macro runtime: a buffer changing them defines them again.
+	 */
+	@Nullable String macroScopeEmitted;
 
 	/**
 	 * Whether the program reads ({@code read-string}, {@code read}, as calls or values):
@@ -1458,7 +1477,7 @@ public final class ClojureLowering {
 		ClojureLowering lowering = this;
 		lowering.hostTarget = hostTarget;
 		lowering.reader = reader;
-		lowering.macroEvaluator = macroEvaluator;
+		lowering.setMacroEvaluator(macroEvaluator);
 		lowering.files = files;
 		lowering.boundary = boundary;
 		if (resolved != null) {
@@ -1487,9 +1506,9 @@ public final class ClojureLowering {
 		// wrappers of the WIT members the program names run first
 		lowering.forms.addAll(ClojureWasmLowering.flush(lowering));
 		lowering.forms.addAll(1, ClojureWitLowering.referencedWrappers(lowering, lowering.forms));
-		if (lowering.usedMacros) {
+		if (lowering.expandsAtRunTime) {
 			// the macro runtime travels with the program, like the false value
-			lowering.forms.addAll(1, ClojureMacroLowering.macroRuntime(lowering));
+			lowering.forms.addAll(1, ClojureMacroLowering.macroRuntime(lowering, lowering.macroExpanders));
 		}
 		// a hierarchy meets a host class object only where the program names the host
 		lowering.noteHost(lowering.forms);
@@ -1761,11 +1780,22 @@ public final class ClojureLowering {
 			this.protocolsEmitted = true;
 			this.walkTestsEmitted = this.walkTests.size();
 		}
-		if (this.usedMacros && !this.macrosEmitted) {
+		if (this.expandsAtRunTime && !this.macrosEmitted) {
 			// The macro runtime travels ahead of the buffer that first needs
 			// it, like the false binding; later buffers reuse it.
-			out.add(0, new ClojureTopLevel(ClojureMacroLowering.macroRuntime(this), false));
+			out.add(0, new ClojureTopLevel(ClojureMacroLowering.macroRuntime(this, null), false));
 			this.macrosEmitted = true;
+			this.macroScopeEmitted = ClojureMacroLowering.macroScopeDefinition(this).print();
+		}
+		else if (this.macrosEmitted) {
+			// a buffer defining a macro, an alias or a refer changes the scopes a
+			// run-time expansion resolves its head in
+			LispVal scopes = ClojureMacroLowering.macroScopeDefinition(this);
+			String printed = scopes.print();
+			if (!printed.equals(this.macroScopeEmitted)) {
+				out.add(0, new ClojureTopLevel(List.of(scopes), false));
+				this.macroScopeEmitted = printed;
+			}
 		}
 		if (this.usedExInfo && !this.exInfoEmitted) {
 			// The ex-info runtime travels ahead of the buffer that first needs
@@ -2196,10 +2226,12 @@ public final class ClojureLowering {
 				&& !ClojureNamespaceLowering.isKnownNamespace(head)) {
 			return head;
 		}
-		if (ClojureBuiltinNamespaces.isStartup(head) && this.topLevelDepth > 0
+		if ((ClojureBuiltinNamespaces.isStartup(head) || this.session && ClojureBuiltinNamespaces.isReplRequire(head)
+				&& ClojureBuiltinNamespaces.isShipped(head)) && this.topLevelDepth > 0
 				&& !this.loadingNamespaces.contains(head)) {
-			// the oracle loaded it before the program: its first qualified name loads
-			// it here, ahead of the datum naming it
+			// the oracle loaded it before the program (or its REPL before the first
+			// input): its first qualified name loads it here, ahead of the datum naming
+			// it
 			ClojureNamespaceLowering.preload(this, head);
 			return this.createdNamespaces.contains(head) ? head : null;
 		}
@@ -2221,6 +2253,7 @@ public final class ClojureLowering {
 			}
 			VarRef referred = ns().refers.get(name);
 			if (referred != null && !ClojureNamespaceLowering.isKnownNamespace(referred.ns())) {
+				loadReplRefer(name, referred);
 				loadPartOf(referred.ns(), referred.var());
 				String key = varKey(referred.ns(), referred.var());
 				return this.globals.containsKey(key) && !pendingCoreMacro(key, name) ? key : null;
@@ -2234,6 +2267,42 @@ public final class ClojureLowering {
 		loadPartOf(target, name.substring(slash + 1));
 		String key = varKey(target, name.substring(slash + 1));
 		return this.globals.containsKey(key) ? key : null;
+	}
+
+	/**
+	 * Refers into {@code user} what the oracle's REPL refers before the first input
+	 * ({@code clojure.main/repl-requires}), loading nothing: a namespace loads where a
+	 * name first reaches one of its refers ({@link #loadReplRefer}).
+	 */
+	void referReplRequires() {
+		ClojureNsState user = this.namespaces.computeIfAbsent("user", n -> new ClojureNsState());
+		for (Map.Entry<String, List<String>> lib : ClojureBuiltinNamespaces.replRequires().entrySet()) {
+			for (String var : lib.getValue()) {
+				user.refers.putIfAbsent(var, new VarRef(lib.getKey(), var));
+			}
+		}
+	}
+
+	/**
+	 * Loads the namespace of a session's REPL refer ({@link #referReplRequires}) where a
+	 * top-level datum first names it, like a namespace the oracle loads before the
+	 * program; refuses a refer the namespace leaves out, or of a namespace not shipped,
+	 * by name. Nothing for a local of the name, or outside a session.
+	 * @param name the unqualified name
+	 * @param referred the var it refers
+	 */
+	private void loadReplRefer(String name, VarRef referred) {
+		String ns = referred.ns();
+		if (!this.session || this.topLevelDepth == 0 || !ClojureBuiltinNamespaces.isReplRequire(ns) || isLocal(name)) {
+			return;
+		}
+		String why = ClojureBuiltinNamespaces.replRefusal(ns, referred.var());
+		if (why != null) {
+			throw new LispReadException(why);
+		}
+		if (!this.loadedNamespaces.contains(ns) && !this.loadingNamespaces.contains(ns)) {
+			ClojureNamespaceLowering.preload(this, ns);
+		}
 	}
 
 	/**
@@ -2479,16 +2548,7 @@ public final class ClojureLowering {
 		List<LispVal> datums = fileReader.readAll();
 		@Nullable ClojureReader outerReader = this.reader;
 		String outerNs = this.currentNs;
-		List<Map<String, Kind>> outerScopes = new ArrayList<>(this.scopes);
-		List<Set<String>> outerDirect = new ArrayList<>(this.directScopes);
-		List<RecurTarget> outerTargets = new ArrayList<>(this.recurTargets);
-		Map<String, HostClass> outerHosts = new HashMap<>(this.hostClasses);
-		List<Map<String, LispSymbol>> outerGens = new ArrayList<>(this.syntaxGens);
-		Set<String> outerInlining = new HashSet<>(this.inliningDispatch);
-		boolean outerTail = this.tailPosition;
-		int outerTry = this.tryDepth;
 		int outerMacroDepth = this.macroDepth;
-		boolean outerDispatch = this.inDispatchFn;
 		@Nullable String outerTestLocation = this.testLocation;
 		boolean outerEcho = this.nestedDefAnswersVar;
 		String outerFile = this.loadingFile;
@@ -2497,18 +2557,8 @@ public final class ClojureLowering {
 		this.loadingFile = fileOf(ns);
 		this.loadingSourcePath = ClojureSourcePath.lastSegmentOf(this.loadingFile);
 		this.nestedDefAnswersVar = false;
-		this.scopes.clear();
-		this.scopes.add(new HashMap<>());
-		this.directScopes.clear();
-		this.directScopes.add(new HashSet<>());
-		this.recurTargets.clear();
-		this.hostClasses.clear();
-		this.syntaxGens.clear();
-		this.inliningDispatch.clear();
-		this.tailPosition = false;
-		this.tryDepth = 0;
+		Cursor outerCursor = cleanCursor();
 		this.macroDepth = 0;
-		this.inDispatchFn = false;
 		this.testLocation = null;
 		this.reader = fileReader;
 		this.loadingNamespaces.push(ns);
@@ -2563,28 +2613,90 @@ public final class ClojureLowering {
 			this.loadingNamespaces.pop();
 			this.reader = outerReader;
 			this.currentNs = outerNs;
-			this.scopes.clear();
-			this.scopes.addAll(outerScopes);
-			this.directScopes.clear();
-			this.directScopes.addAll(outerDirect);
-			this.recurTargets.clear();
-			this.recurTargets.addAll(outerTargets);
-			this.hostClasses.clear();
-			this.hostClasses.putAll(outerHosts);
-			this.syntaxGens.clear();
-			this.syntaxGens.addAll(outerGens);
-			this.inliningDispatch.clear();
-			this.inliningDispatch.addAll(outerInlining);
-			this.tailPosition = outerTail;
-			this.tryDepth = outerTry;
+			restoreCursor(outerCursor);
 			this.macroDepth = outerMacroDepth;
-			this.inDispatchFn = outerDispatch;
 			this.testLocation = outerTestLocation;
 			this.nestedDefAnswersVar = outerEcho;
 			this.loadingFile = outerFile;
 			this.loadingSourcePath = outerSourcePath;
 		}
 		this.hoisted.addAll(loaded);
+	}
+
+	/**
+	 * Where a lowering stands inside the form being lowered: its locals, recur targets,
+	 * {@code try} depth, syntax-quotes, dispatch function and proxy methods -- what a
+	 * lowering that starts afresh in the middle of another ({@link #loadFile},
+	 * {@link #lowerDetached}) must not see, and gives back when it ends.
+	 */
+	private record Cursor(List<Map<String, Kind>> scopes, List<Set<String>> directScopes,
+			List<RecurTarget> recurTargets, List<ProxyMethod> proxyMethods, Map<String, HostClass> hostClasses,
+			List<Map<String, LispSymbol>> syntaxGens, Set<String> inliningDispatch, boolean tailPosition, int tryDepth,
+			boolean inDispatchFn) {
+	}
+
+	/**
+	 * Saves the cursor and starts a clean one: one empty scope, nothing else.
+	 * @return the saved cursor, for {@link #restoreCursor}
+	 */
+	private Cursor cleanCursor() {
+		Cursor saved = new Cursor(new ArrayList<>(this.scopes), new ArrayList<>(this.directScopes),
+				new ArrayList<>(this.recurTargets), new ArrayList<>(this.proxyMethods), new HashMap<>(this.hostClasses),
+				new ArrayList<>(this.syntaxGens), new HashSet<>(this.inliningDispatch), this.tailPosition,
+				this.tryDepth, this.inDispatchFn);
+		this.scopes.clear();
+		this.scopes.add(new HashMap<>());
+		this.directScopes.clear();
+		this.directScopes.add(new HashSet<>());
+		this.recurTargets.clear();
+		this.proxyMethods.clear();
+		this.hostClasses.clear();
+		this.syntaxGens.clear();
+		this.inliningDispatch.clear();
+		this.tailPosition = false;
+		this.tryDepth = 0;
+		this.inDispatchFn = false;
+		return saved;
+	}
+
+	private void restoreCursor(Cursor saved) {
+		this.scopes.clear();
+		this.scopes.addAll(saved.scopes());
+		this.directScopes.clear();
+		this.directScopes.addAll(saved.directScopes());
+		this.recurTargets.clear();
+		this.recurTargets.addAll(saved.recurTargets());
+		this.proxyMethods.clear();
+		this.proxyMethods.addAll(saved.proxyMethods());
+		this.hostClasses.clear();
+		this.hostClasses.putAll(saved.hostClasses());
+		this.syntaxGens.clear();
+		this.syntaxGens.addAll(saved.syntaxGens());
+		this.inliningDispatch.clear();
+		this.inliningDispatch.addAll(saved.inliningDispatch());
+		this.tailPosition = saved.tailPosition();
+		this.tryDepth = saved.tryDepth();
+		this.inDispatchFn = saved.inDispatchFn();
+	}
+
+	/**
+	 * One datum lowered as the oracle's {@code eval} compiles it: in the current
+	 * namespace, from a clean cursor -- no local, recur target or {@code try} of the form
+	 * being lowered reaches it. What it lowers to runs only where it is evaluated (the
+	 * macro-time environment); a namespace it loads joins the program as any other load
+	 * does (the macro-time environment got its definitions as they lowered), so a later
+	 * use in the program finds them.
+	 * @param datum the form
+	 * @return its lowered form
+	 */
+	LispVal lowerDetached(LispVal datum) {
+		Cursor outer = cleanCursor();
+		try {
+			return lower(datum);
+		}
+		finally {
+			restoreCursor(outer);
+		}
 	}
 
 	/**
@@ -3946,8 +4058,10 @@ public final class ClojureLowering {
 			case "pr":
 				return ClojureStringLowering.prCall(this, items, false);
 			case "newline":
+				// answers nil, like the oracle's (and every print verb's here)
 				ClojureLowerUtil.isTrue(n == 0, "newline takes no argument");
-				return ClojureLowerUtil.list(ClojureLowerUtil.sym("princ"), LispString.literal("\n"));
+				return ClojureLowerUtil.list(ClojureLowerUtil.sym("progn"),
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("princ"), LispString.literal("\n")), NIL_CONST);
 			case "flush":
 				ClojureLowerUtil.isTrue(n == 0, "flush takes no argument");
 				return ClojureLowerUtil.list(ClojureLowerUtil.sym("progn"), ClojureLowerUtil
@@ -4073,6 +4187,10 @@ public final class ClojureLowering {
 				return ClojureLazyLowering.doallOf(this, items);
 			case "gensym":
 				return ClojureMacroLowering.gensymOf(this, items);
+			case "eval":
+				return ClojureMacroLowering.evalCall(this, items);
+			case "resolve":
+				return ClojureVarLowering.resolveOf(this, items);
 			case "macroexpand-1":
 				ClojureLowerUtil.isTrue(n == 1, "macroexpand-1 takes one form");
 				return ClojureMacroLowering.macroexpandCall(this, ClojureMacroLowering.MACROEXPAND_1,
@@ -4516,6 +4634,8 @@ public final class ClojureLowering {
 			case "ex-cause" -> ClojureStateLowering.exHelperValue(this, ClojureStateLowering.EX_CAUSE);
 			case "Throwable->map" -> ClojureStateLowering.exHelperValue(this, ClojureStateLowering.THROWABLE_TO_MAP);
 			case "ex-info" -> ClojureStateLowering.exInfoValue(this);
+			case "eval" -> ClojureMacroLowering.evalValue();
+			case "resolve" -> ClojureVarLowering.resolveValue();
 			case "macroexpand-1" -> ClojureMacroLowering.macroexpandValue(this, ClojureMacroLowering.MACROEXPAND_1);
 			case "macroexpand" -> ClojureMacroLowering.macroexpandValue(this, ClojureMacroLowering.MACROEXPAND);
 			default -> {
@@ -4957,6 +5077,17 @@ public final class ClojureLowering {
 	}
 
 	/**
+	 * The definitions of a whole program's macro runtime, the expander table empty: the
+	 * library pruner keys them by name, so a program no run-time expansion reaches loses
+	 * the table and every expander it holds before a backend reads the templates'
+	 * spellings ({@code ClojureMacroLowering.macroRuntime}).
+	 * @return the forms
+	 */
+	public static List<LispVal> programMacroRuntimeForms() {
+		return ClojureMacroLowering.macroRuntime(new ClojureLowering(), List.of());
+	}
+
+	/**
 	 * Every per-program runtime a lowered definition may call, for the macro-time
 	 * evaluator, in the order a program carries them: the STM, ex-info, protocol,
 	 * hierarchy and macro runtimes. A program carries only the ones it uses, so its
@@ -4973,7 +5104,7 @@ public final class ClojureLowering {
 		// a definition's dispatcher may walk: the walk finds no class at macro time
 		forms.addAll(ClojureProtocolLowering.protocolRuntime(ctx, true));
 		forms.addAll(ClojureHierarchyLowering.hierarchyRuntime(ctx));
-		forms.addAll(ClojureMacroLowering.macroRuntime(ctx));
+		forms.addAll(ClojureMacroLowering.macroRuntime(ctx, null));
 		return forms;
 	}
 
@@ -5081,6 +5212,9 @@ public final class ClojureLowering {
 	 */
 	void setMacroEvaluator(@Nullable ClojureMacroEvaluator macroEvaluator) {
 		this.macroEvaluator = macroEvaluator;
+		if (macroEvaluator != null) {
+			macroEvaluator.lowerThrough(ClojureMacroLowering.evalLowering(this));
+		}
 	}
 
 	<T> T inScope(Map<String, Kind> scope, java.util.function.Supplier<T> body) {

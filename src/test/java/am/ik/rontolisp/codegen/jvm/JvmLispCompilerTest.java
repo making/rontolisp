@@ -7037,9 +7037,48 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void truenameResolvesEverySymbolicLinkInThePath() throws Exception {
+		// The interpreter's tree and answers
+		// (LispEvaluatorTest#truenameResolvesEverySymbolicLinkInThePath), over the
+		// emitted _readLink.
+		java.nio.file.Path base = tempDir.toRealPath().resolve("tlj");
+		java.nio.file.Files.createDirectories(base.resolve("tl/d"));
+		java.nio.file.Files.writeString(base.resolve("tl/a.txt"), "a\n");
+		java.nio.file.Files.writeString(base.resolve("tl/d/f.txt"), "f\n");
+		java.nio.file.Files.createSymbolicLink(base.resolve("tl/in"), java.nio.file.Path.of("a.txt"));
+		java.nio.file.Files.createSymbolicLink(base.resolve("tl/dl"), java.nio.file.Path.of("d"));
+		java.nio.file.Files.createSymbolicLink(base.resolve("tl/up"), java.nio.file.Path.of("../tl/d"));
+		assertThat(compileAndRun(TRUENAME_THROUGH_LINKS.formatted(base + "/"))).isEqualTo(TRUENAME_THROUGH_LINKS_OUT);
+	}
+
+	private static final String TRUENAME_THROUGH_LINKS = """
+			(defvar *b* "%s")
+			(defun tl (x) (concatenate 'string *b* "tl/" x))
+			(defun rel (x) (subseq (namestring x) (length *b*)))
+			(print (rel (truename (tl "in"))))
+			(print (rel (truename (tl "dl/f.txt"))))
+			(print (rel (truename (tl "dl/../a.txt"))))
+			(print (rel (truename (concatenate 'string *b* "./tl/up/../in"))))
+			(print (rel (probe-file (tl "in"))))
+			(print (with-open-file (s (tl "in")) (read-line s)))
+			(print (handler-case (truename (tl "none")) (file-error () :missing)))
+			(print (rel (uiop:resolve-symlinks (tl "dl/new.txt"))))
+			""";
+
+	private static final String TRUENAME_THROUGH_LINKS_OUT = """
+			"tl/a.txt"
+			"tl/d/f.txt"
+			"tl/a.txt"
+			"tl/a.txt"
+			"tl/in"
+			"a"
+			:MISSING
+			"tl/d/new.txt\"""";
+
+	@Test
 	void compileAndRunUiopFilesystemProbeWalkAndMutate() throws Exception {
 		// The uiop/filesystem read side over probe-file and directory, the getenv
-		// family over the override map, symlinks as the identity, and the write side
+		// family over the override map, symlinks resolved, and the write side
 		// for real -- same shape and expectations as the interpreter test
 		// (LispEvaluatorTest#evalUiopFilesystemProbeWalkAndMutate).
 		java.nio.file.Path root = java.nio.file.Files.createDirectory(tempDir.resolve("fs"));
@@ -7088,7 +7127,7 @@ class JvmLispCompilerTest {
 				(#P"a" #P"b" NIL #P"c")
 				#P"/tmp"
 				(#P"/tmp/" #P"/var/")
-				(NIL #P"/a/b" NIL)
+				(T #P"/a/b" NIL)
 				MADE
 				NIL
 				:HERE
@@ -14922,6 +14961,21 @@ class JvmLispCompilerTest {
 				(print +re-state-beta+)
 				(print +re-state-gamma+)
 				""", am.ik.rontolisp.reader.Features.JVM)))).isEqualTo("1\n2");
+	}
+
+	@Test
+	void compileAndRunIdentityHashKeepsAnAggregatesValueWhateverItsContentsDo() throws Exception {
+		// LispEvaluatorTest's twin: System.identityHashCode of the object, an int the
+		// same for its whole life
+		assertThat(compileAndRun("""
+				(let* ((c (list 1 2)) (v (vector 1)) (f (lambda () 1)) (tb (make-hash-table))
+				       (hc (%identity-hash c)) (hv (%identity-hash v)))
+				  (setf (car c) 9)
+				  (setf (aref v 0) 9)
+				  (print (list (= hc (%identity-hash c)) (= hv (%identity-hash v))
+				               (= (%identity-hash f) (%identity-hash f)) (= (%identity-hash tb) (%identity-hash tb))
+				               (integerp hc) (<= -2147483648 hc 2147483647))))
+				""")).isEqualTo("(T T T T T T)");
 	}
 
 	@Test

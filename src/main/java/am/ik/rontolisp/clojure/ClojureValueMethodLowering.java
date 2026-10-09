@@ -2,6 +2,7 @@ package am.ik.rontolisp.clojure;
 
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -87,6 +88,9 @@ final class ClojureValueMethodLowering {
 	/** The kind of an instant that is a {@code java.util.Date}: a Date or a Timestamp. */
 	private static final String DATE = "date";
 
+	/** A Timestamp's kind. */
+	private static final String TIMESTAMP = "timestamp";
+
 	/** The UUID's kind. */
 	private static final String UUID = "uuid";
 
@@ -102,7 +106,18 @@ final class ClojureValueMethodLowering {
 	 * {@link ClojureArms.Family#UUID}).
 	 */
 	private static final Map<String, String> FAMILY_KINDS = Map.of(INSTANT, ClojurePredicateLowering.INSTANT_P, DATE,
-			ClojurePredicateLowering.INST_P, UUID, ClojurePredicateLowering.UUID_P);
+			ClojurePredicateLowering.INST_P, TIMESTAMP, ClojurePredicateLowering.TIMESTAMP_P, UUID,
+			ClojurePredicateLowering.UUID_P);
+
+	/**
+	 * The values a time kind's arm answers, by the tests {@link ClojureTimeValueLowering}
+	 * tells them apart with: an instant arm answers a Date, a Timestamp and a Calendar.
+	 */
+	private static final Map<String, Set<String>> TIME_KINDS = Map.of(INSTANT,
+			Set.of(ClojurePredicateLowering.DATE_P, ClojurePredicateLowering.TIMESTAMP_P,
+					ClojurePredicateLowering.CALENDAR_P),
+			DATE, Set.of(ClojurePredicateLowering.DATE_P, ClojurePredicateLowering.TIMESTAMP_P), TIMESTAMP,
+			Set.of(ClojurePredicateLowering.TIMESTAMP_P), UUID, Set.of(ClojurePredicateLowering.UUID_P));
 
 	/** The rows, by {@code method/arity}. */
 	private static final Map<String, List<Arm>> ROWS = new HashMap<>();
@@ -210,12 +225,17 @@ final class ClojureValueMethodLowering {
 	/**
 	 * The methods of the instants and the UUID a program reads: a Date's (or a
 	 * Timestamp's) {@code getTime}, {@code before} and {@code after} (by milliseconds,
-	 * {@code Date}'s), a UUID's halves, version and variant.
+	 * {@code Date}'s) and {@code setTime} (in place, the oracle's Date being mutable), a
+	 * Timestamp's {@code getNanos}, a UUID's halves, version and variant.
 	 */
 	private static void timeValueRows() {
 		row("getTime", 0, arm(List.of(DATE), core("inst-ms", R)));
 		row("before", 1, arm(List.of(DATE), core("<", core("inst-ms", R), core("inst-ms", A))));
 		row("after", 1, arm(List.of(DATE), core(">", core("inst-ms", R), core("inst-ms", A))));
+		row("setTime", 1, new Arm(List.of(DATE), ctx -> ClojureLowerUtil.list(
+				new LispSymbol("RONTOLISP::%CLOJURE-INST-SET-TIME"), ctx.localSym(RECV),
+				ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-LONG-CAST"), ctx.localSym(argName(0))))));
+		row("getNanos", 0, new Arm(List.of(TIMESTAMP), ctx -> part(ctx, "CADDR")));
 		row("getMostSignificantBits", 0, new Arm(List.of(UUID), ctx -> part(ctx, "CADR")));
 		row("getLeastSignificantBits", 0, new Arm(List.of(UUID), ctx -> part(ctx, "CADDR")));
 		row("version", 0, new Arm(List.of(UUID), ctx -> part(ctx, "RONTOLISP::%CLOJURE-UUID-VERSION")));
@@ -240,6 +260,8 @@ final class ClojureValueMethodLowering {
 			row(truncated, 0, arm(List.of("ratio?"), core("long", R)));
 		}
 		row("getClass", 0, arm(List.of(), core("class", R)));
+		// IHashEq: a collection's, a keyword's or a symbol's hasheq is its hash
+		row("hasheq", 0, arm(List.of("coll?", "ident?"), core("hash", R)));
 		row("deref", 0, arm(List.of(ATOM), core("deref", R)));
 		row("reset", 1, arm(List.of(ATOM), core("reset!", R, A)));
 		row("swap", 1, arm(List.of(ATOM), core("swap!", R, A)));
@@ -302,12 +324,15 @@ final class ClojureValueMethodLowering {
 	 * dispatch, like the oracle's.
 	 * @param ctx the hub
 	 * @param method the method name
+	 * @param designator the method as {@code java:call} names it (its parameter types
+	 * when tagged)
 	 * @param recv the bound receiver
 	 * @param args the lowered arguments
 	 * @param call the call for any other receiver
 	 * @return the form
 	 */
-	static LispVal valueArm(ClojureLowering ctx, String method, LispSymbol recv, List<LispVal> args, LispVal call) {
+	static LispVal valueArm(ClojureLowering ctx, String method, String designator, LispSymbol recv, List<LispVal> args,
+			LispVal call) {
 		List<Arm> arms = ROWS.get(method + "/" + args.size());
 		// a row at another arity: the method exists, so the refusal is the oracle's own
 		boolean known = arms != null || ROWS.keySet().stream().anyMatch(key -> key.startsWith(method + "/"));
@@ -316,6 +341,9 @@ final class ClojureValueMethodLowering {
 		LispVal arm;
 		if (arms == null && typed == null) {
 			arm = refusal(recv, method, known, args);
+			// an instant or a UUID made here answers its class's method through the
+			// host object it stands for (arms a program making none sheds)
+			arm = ClojureTimeValueLowering.methodArm(ctx, method, designator, recv, args, Set.of(), arm);
 			if (!implemented.isEmpty()) {
 				// a type implementing the interface answers its own method (an arm a
 				// program storing no such row sheds, leaving the refusal)
@@ -323,7 +351,8 @@ final class ClojureValueMethodLowering {
 			}
 		}
 		else {
-			arm = boundArm(ctx, method, recv, args, arms == null ? List.of() : arms, known, typed, implemented);
+			arm = boundArm(ctx, method, designator, recv, args, arms == null ? List.of() : arms, known, typed,
+					implemented);
 		}
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
 				ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-VALUE-RECEIVER-P"), recv), arm, call);
@@ -429,8 +458,8 @@ final class ClojureValueMethodLowering {
 	 * then the refusal -- in the oracle's words on a record, deftype or reify when the
 	 * site names a typed member, since its class is fully known.
 	 */
-	private static LispVal boundArm(ClojureLowering ctx, String method, LispSymbol recv, List<LispVal> args,
-			List<Arm> arms, boolean known, @Nullable TypedMembers typed, List<String> implemented) {
+	private static LispVal boundArm(ClojureLowering ctx, String method, String designator, LispSymbol recv,
+			List<LispVal> args, List<Arm> arms, boolean known, @Nullable TypedMembers typed, List<String> implemented) {
 		Map<String, ClojureLowering.Kind> scope = new HashMap<>();
 		scope.put(RECV, ClojureLowering.Kind.VARIABLE);
 		for (int i = 0; i < args.size(); i++) {
@@ -470,6 +499,10 @@ final class ClojureValueMethodLowering {
 								ClojureProtocolLowering.typedTableOf(self))));
 			}
 			LispVal fallback = refusal(self, method, known, locals);
+			// an instant or a UUID made here that no row answered: its class's method
+			// through the host object it stands for (arms a program making none sheds)
+			fallback = ClojureTimeValueLowering.methodArm(ctx, method, designator, self, locals,
+					answeredTimeKinds(arms), fallback);
 			if (typed != null && !known) {
 				fallback = ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
 						ClojureLowerUtil.list(ClojureLowerUtil.sym("or"),
@@ -481,6 +514,24 @@ final class ClojureValueMethodLowering {
 			return ClojureLowerUtil.list(ClojureLowerUtil.sym("let"), ClojureLowerUtil.list(bindings),
 					ClojureLowerUtil.list(clauses));
 		});
+	}
+
+	/**
+	 * The time values the arms answer, by the tests {@link ClojureTimeValueLowering}
+	 * tells them apart with: every one for an arm naming no kind, the kinds' own
+	 * otherwise.
+	 */
+	private static Set<String> answeredTimeKinds(List<Arm> arms) {
+		Set<String> answered = new HashSet<>();
+		for (Arm arm : arms) {
+			if (arm.kinds().isEmpty()) {
+				return ClojureTimeValueLowering.ALL;
+			}
+			for (String kind : arm.kinds()) {
+				answered.addAll(TIME_KINDS.getOrDefault(kind, Set.of()));
+			}
+		}
+		return answered;
 	}
 
 	/**

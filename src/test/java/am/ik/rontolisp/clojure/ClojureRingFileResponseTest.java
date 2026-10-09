@@ -37,10 +37,11 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
 /**
  * {@code ring.util.response}'s file, URL and resource responses over a directory, the
  * source path's resources directory and a jar, on the interpreter, the JVM and both WASM
- * backends (a {@code --dir} preopen covering the whole tree), and the part of the
- * namespace they live in, which loads only where a program names one of them. The
- * expected output is the oracle's (clj 1.12.6 + ring-core 1.15.5, 2026-10-09) but where a
- * comment says otherwise.
+ * backends (a {@code --dir} preopen covering the whole tree), symbolic links resolved the
+ * oracle's way (a link out of {@code :root} refused), and the part of the namespace they
+ * live in, which loads only where a program names one of them. The expected output is the
+ * oracle's (clj 1.12.6 + ring-core 1.15.5, 2026-10-09) but where a comment says
+ * otherwise.
  */
 class ClojureRingFileResponseTest {
 
@@ -64,6 +65,12 @@ class ClojureRingFileResponseTest {
 			(prn (r/file-response "nope.txt" {:root www}) (r/file-response "../outside.txt" {:root www})
 			     (r/file-response "../outside.txt" {:root www :allow-symlinks? true}))
 			(prn (show (r/file-response "dir/../a.txt" {:root www})) (show (r/file-response (str www "/a.txt"))))
+			(prn (show (r/file-response "in-link.txt" {:root www})) (r/file-response "out-link.txt" {:root www})
+			     (show (r/file-response "out-link.txt" {:root www :allow-symlinks? true})))
+			(prn (show (r/file-response "dlink" {:root www})) (show (r/file-response "round/index.html" {:root www})))
+			(prn (subs (.getCanonicalPath (io/file www "dlink" "..")) (count root))
+			     (subs (.getCanonicalPath (io/file www "out-link.txt")) (count root))
+			     (subs (str (.getCanonicalFile (io/file www "nope" "x"))) (count root)))
 			(prn (sort (keys (r/file-response "a.txt" {:root www}))) (sort (keys (:headers (r/file-response "a.txt" {:root www})))))
 			(prn (show (r/resource-response "public/r.txt")))
 			(prn (= (r/resource-response "public/r.txt") (r/resource-response "r.txt" {:root "public"})
@@ -94,6 +101,9 @@ class ClojureRingFileResponseTest {
 			nil nil
 			nil nil nil
 			[200 "11" %F "/www/dir/../a.txt"] [200 "11" %F "/www/a.txt"]
+			[200 "11" %F "/www/in-link.txt"] nil [200 "7" %F "/www/out-link.txt"]
+			[200 "12" %F "/www/dlink/index.html"] [200 "12" %F "/www/round/index.html"]
+			"/www" "/outside.txt" "/www/nope/x"
 			(:body :headers :status) ("Content-Length" "Last-Modified")
 			[200 "9" %F "/proj/resources/public/r.txt"]
 			true
@@ -121,8 +131,15 @@ class ClojureRingFileResponseTest {
 		write(root.resolve("www/dir2/index.css"), "x");
 		Files.createDirectories(root.resolve("www/dir3"));
 		write(root.resolve("outside.txt"), "outside");
+		// Symbolic links, each with a RELATIVE target: a WASI host refuses to follow an
+		// absolute one at all. One stays below the root, one leads out of it, two name
+		// a directory.
+		Files.createSymbolicLink(root.resolve("www/in-link.txt"), Path.of("a.txt"));
+		Files.createSymbolicLink(root.resolve("www/out-link.txt"), Path.of("../outside.txt"));
+		Files.createSymbolicLink(root.resolve("www/dlink"), Path.of("dir"));
+		Files.createSymbolicLink(root.resolve("www/round"), Path.of("../www/dir"));
 		for (String file : new String[] { "www/a.txt", "www/dir/index.html", "www/dir2/index.css",
-				"proj/resources/public/r.txt" }) {
+				"proj/resources/public/r.txt", "outside.txt" }) {
 			Files.setLastModifiedTime(root.resolve(file), FileTime.from(FILE_TIME));
 		}
 		Path jar = root.resolve("res.jar");
@@ -192,8 +209,8 @@ class ClojureRingFileResponseTest {
 		ByteArrayOutputStream out = new ByteArrayOutputStream();
 		CliStack.call("clojure-ring-files", () -> {
 			LispEvaluator evaluator = new LispEvaluator(new PrintStream(out, true, StandardCharsets.UTF_8));
-			for (LispVal form : SourceLanguage.CLOJURE.read(program, Features.INTERPRETER,
-					entry == null ? null : entry.toString(), SourceStandards.DEFAULT, SourceLoader.fileSystem())) {
+			for (LispVal form : evaluator.clojureProgram(SourceLanguage.CLOJURE.read(program, Features.INTERPRETER,
+					entry == null ? null : entry.toString(), SourceStandards.DEFAULT, SourceLoader.fileSystem()))) {
 				evaluator.eval(form);
 			}
 			return null;

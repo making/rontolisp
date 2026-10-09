@@ -2,8 +2,9 @@
 ;; 1.15.5): loaded into the namespace where a program first names one of
 ;; them, so a program serving no file carries none of this. The oracle's
 ;; java.io.File and java.net.URL are clojure.java.io's values here, its class
-;; loader the program's source path, and a canonical path is read off the
-;; spelling: no symbolic link is resolved.
+;; loader the program's source path, and a canonical path resolves symbolic
+;; links but stays relative where the File is (no wasm backend knows the
+;; working directory).
 
 (defn- canonical-path [file]
   (str (kernel/canonical-path file)

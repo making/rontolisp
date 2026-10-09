@@ -116,6 +116,14 @@ final class JvmIoRuntimeBuilder {
 	static final String RENAME_FILE_DESC = "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;";
 
 	/**
+	 * {@code %read-link}: the target a symbolic link holds; null for anything that is no
+	 * link.
+	 */
+	static final String READ_LINK_METHOD = "_readLink";
+
+	static final String READ_LINK_DESC = "(Ljava/lang/Object;)Ljava/lang/Object;";
+
+	/**
 	 * {@code file-length}: the byte length of the file behind a FILE stream, read off the
 	 * {@link #STREAM_PATHS_FIELD} table; null for every other stream kind.
 	 */
@@ -803,12 +811,13 @@ final class JvmIoRuntimeBuilder {
 	 * {@code listen} answers whether a character remains rather than
 	 * {@code BufferedReader.ready()}, uniformly whether or not the program names
 	 * {@code file-position})
+	 * @param readLink whether {@code %read-link} is called
 	 */
 	record FileMeta(boolean writeDate, boolean makeDirectories, boolean fileLength, boolean deleteFile,
 			boolean renameFile, boolean position, boolean characterPosition, boolean stringInputPositions,
-			boolean stringInputs) {
+			boolean stringInputs, boolean readLink) {
 
-		static final FileMeta NONE = new FileMeta(false, false, false, false, false, false, false, false, false);
+		static final FileMeta NONE = new FileMeta(false, false, false, false, false, false, false, false, false, false);
 
 		/**
 		 * Whether the {@code _streamPaths} side table must be present: both
@@ -1084,6 +1093,10 @@ final class JvmIoRuntimeBuilder {
 		if (this.fileMeta.renameFile()) {
 			ms.add(new IoMethod(this.cp.utf8Entry(RENAME_FILE_METHOD), this.cp.utf8Entry(RENAME_FILE_DESC),
 					buildRenameFile()));
+		}
+		if (this.fileMeta.readLink()) {
+			ms.add(new IoMethod(this.cp.utf8Entry(READ_LINK_METHOD), this.cp.utf8Entry(READ_LINK_DESC),
+					buildReadLink()));
 		}
 		if (this.fileMeta.streamPaths()) {
 			ms.add(new IoMethod(this.cp.utf8Entry(SET_STREAM_PATH_METHOD), this.cp.utf8Entry(SET_STREAM_PATH_DESC),
@@ -1803,6 +1816,43 @@ final class JvmIoRuntimeBuilder {
 		code.labelBinding(ifRenamed);
 		code.ldc(this.tStr);
 		code.areturn();
+		return code;
+	}
+
+	/**
+	 * {@code _readLink(Object path) -> target | null}. The target the symbolic link at
+	 * the path holds, as a quoted Lisp string, written as the link has it (relative or
+	 * absolute); null when the path is no link, is gone, or cannot be represented --
+	 * {@code Files.readSymbolicLink} throws for each, and every throw is "no link", the
+	 * answer the walk in the prelude {@code %real-path} reads. Its constant-pool entries
+	 * are minted here, so only a program that calls the primitive carries them.
+	 */
+	private MethodCode buildReadLink() {
+		// Slots: 0=path (Object), 1=p (String)
+		MethodCode code = new MethodCode();
+		emitStripQuotes(code, 0, 1);
+		MethodCode.Label tryStart = code.newBoundLabel();
+		// return "\"" + Files.readSymbolicLink(new File(p).toPath()).toString() + "\"";
+		code.ldc(this.quoteStr);
+		code.new_(this.fileClass);
+		code.dup();
+		code.aload(1);
+		code.invokespecial(this.fileInit);
+		code.invokevirtual(this.cp.methodRef(this.fileClass, "toPath", "()Ljava/nio/file/Path;"));
+		code.invokestatic(this.cp.methodRef(this.cp.classEntry("java/nio/file/Files"), "readSymbolicLink",
+				"(Ljava/nio/file/Path;)Ljava/nio/file/Path;"));
+		code.invokevirtual(this.cp.methodRef(this.objectClass, "toString", "()Ljava/lang/String;"));
+		code.invokevirtual(this.stringConcat);
+		code.ldc(this.quoteStr);
+		code.invokevirtual(this.stringConcat);
+		MethodCode.Label tryEnd = code.newBoundLabel();
+		code.areturn();
+		// catch (Exception e) { return null; }
+		MethodCode.Label handler = code.newBoundLabel();
+		code.pop();
+		code.aconst_null();
+		code.areturn();
+		code.exceptionCatch(tryStart, tryEnd, handler, this.cp.classEntry("java/lang/Exception"));
 		return code;
 	}
 

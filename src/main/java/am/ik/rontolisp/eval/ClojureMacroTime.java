@@ -4,11 +4,16 @@ import java.io.OutputStream;
 import java.io.PrintStream;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.function.BiFunction;
 
+import am.ik.rontolisp.LispCons;
+import am.ik.rontolisp.LispFunction;
+import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.clojure.ClojureLowering;
 import am.ik.rontolisp.clojure.ClojureMacroEvaluator;
+import am.ik.rontolisp.reader.LispReadException;
 import org.jspecify.annotations.Nullable;
 
 /**
@@ -24,6 +29,11 @@ import org.jspecify.annotations.Nullable;
  * a macro body calls a helper {@code defn} above it -- its own file's, a required
  * namespace's, an earlier session buffer's. A {@code def}'s value form runs only when an
  * expansion reads the var.
+ * <p>
+ * {@code eval} and {@code resolve} of a computed symbol, which the run-time library
+ * refuses, call back into the lowering here ({@link ClojureMacroEvaluator.Lowering}): the
+ * form lowers in the namespace of the expansion and evaluates in this environment, like
+ * the oracle's {@code eval} inside a macro body.
  */
 public final class ClojureMacroTime {
 
@@ -62,6 +72,18 @@ public final class ClojureMacroTime {
 	private record Lazy(LispSymbol var, LispVal value, boolean special, boolean once) implements Pending {
 	}
 
+	/** The run-time library's {@code eval}, refused there. */
+	private static final LispSymbol EVAL = new LispSymbol("RONTOLISP::%CLOJURE-EVAL");
+
+	/** The run-time library's {@code resolve} of a computed symbol, refused there. */
+	private static final LispSymbol RESOLVE = new LispSymbol("RONTOLISP::%CLOJURE-RESOLVE");
+
+	/**
+	 * The macro runtime's scopes by namespace name, a constant in a program: here the
+	 * lowering's as they stand when a macro body expands.
+	 */
+	private static final LispSymbol MACRO_SCOPE = new LispSymbol(ClojureLowering.MACRO_SCOPE);
+
 	private static final class LazyEvaluator implements ClojureMacroEvaluator {
 
 		private final ClassLoader javaClasses;
@@ -69,6 +91,8 @@ public final class ClojureMacroTime {
 		private @Nullable LispEvaluator evaluator;
 
 		private final List<Pending> pending = new ArrayList<>();
+
+		private ClojureMacroEvaluator.@Nullable Lowering lowering;
 
 		LazyEvaluator(ClassLoader javaClasses) {
 			this.javaClasses = javaClasses;
@@ -90,6 +114,9 @@ public final class ClojureMacroTime {
 				for (LispVal runtime : ClojureLowering.macroTimeRuntimeForms()) {
 					macroEval.eval(runtime);
 				}
+				macroEval.eval(callingBack(EVAL, ClojureMacroEvaluator.Lowering::evalForm));
+				macroEval.eval(callingBack(RESOLVE, ClojureMacroEvaluator.Lowering::resolveForm));
+				macroEval.eval(callingBack(MACRO_SCOPE, ClojureMacroEvaluator.Lowering::macroScopeForm));
 				this.evaluator = macroEval;
 			}
 			for (Pending definition : this.pending) {
@@ -109,6 +136,45 @@ public final class ClojureMacroTime {
 			}
 			this.pending.clear();
 			return macroEval.eval(form);
+		}
+
+		/**
+		 * The definition replacing a run-time library function that refuses at run time
+		 * by one evaluating the form the lowering answers for its argument. A lowering
+		 * error becomes an ordinary error, so the macro body may catch it.
+		 */
+		private LispVal callingBack(LispSymbol name,
+				BiFunction<ClojureMacroEvaluator.Lowering, LispVal, LispVal> form) {
+			LispFunction body = new LispFunction(name.name(), args -> {
+				ClojureMacroEvaluator.Lowering current = this.lowering;
+				if (current == null) {
+					throw new LispEvalException(name.name() + ": no lowering drives this macro-time evaluator");
+				}
+				LispVal lowered;
+				try {
+					lowered = form.apply(current, args.get(0));
+				}
+				catch (LispReadException ex) {
+					throw new LispEvalException(ex.getMessage() == null ? ex.toString() : ex.getMessage());
+				}
+				return evaluate(lowered);
+			});
+			LispSymbol arg = new LispSymbol("FORM");
+			return list(new LispSymbol("DEFUN"), name, list(arg),
+					list(new LispSymbol("FUNCALL"), list(new LispSymbol("QUOTE"), body), arg));
+		}
+
+		private static LispVal list(LispVal... items) {
+			LispVal out = LispNil.INSTANCE;
+			for (int i = items.length - 1; i >= 0; i--) {
+				out = new LispCons(items[i], out);
+			}
+			return out;
+		}
+
+		@Override
+		public synchronized void lowerThrough(ClojureMacroEvaluator.Lowering lowering) {
+			this.lowering = lowering;
 		}
 
 		@Override

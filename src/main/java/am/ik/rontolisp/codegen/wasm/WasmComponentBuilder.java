@@ -125,16 +125,16 @@ public final class WasmComponentBuilder {
 	private static final String IFACE_STDERR = "wasi:cli/stderr@0.3.0";
 
 	/**
-	 * The nineteen {@code wasi_snapshot_preview1} functions the adapter implements, in
-	 * its own export order. A core module imports a subset of them (after
-	 * {@code --optimize}, only what it reaches), and that subset drives everything below.
-	 * The serve component's preview1 bridge ({@code adapter-http-server-p1.wat}) must
-	 * export every one of them too, stubbed where the service world has no counterpart:
-	 * it is the instantiation argument the same core imports resolve against.
+	 * The twenty {@code wasi_snapshot_preview1} functions the adapter implements, in its
+	 * own export order. A core module imports a subset of them (after {@code --optimize},
+	 * only what it reaches), and that subset drives everything below. The serve
+	 * component's preview1 bridge ({@code adapter-http-server-p1.wat}) must export every
+	 * one of them too, stubbed where the service world has no counterpart: it is the
+	 * instantiation argument the same core imports resolve against.
 	 */
 	static final List<String> PREVIEW1_FUNCS = List.of("fd_write", "fd_read", "path_open", "fd_readdir", "fd_close",
 			"random_get", "clock_time_get", "environ_sizes_get", "environ_get", "fd_prestat_get", "fd_prestat_dir_name",
-			"fd_filestat_get", "path_filestat_get", "path_create_directory", "path_unlink_file",
+			"fd_filestat_get", "path_filestat_get", "path_readlink", "path_create_directory", "path_unlink_file",
 			"path_remove_directory", "path_rename", "file_position_get", "file_position_set");
 
 	/**
@@ -233,6 +233,7 @@ public final class WasmComponentBuilder {
 		funcs.put("rename-at", new BlockFunc(IFACE_FS_TYPES, "[method]descriptor.rename-at"));
 		funcs.put("stat-at", new BlockFunc(IFACE_FS_TYPES, "[method]descriptor.stat-at"));
 		funcs.put("remove-dir", new BlockFunc(IFACE_FS_TYPES, "[method]descriptor.remove-directory-at"));
+		funcs.put("readlink-at", new BlockFunc(IFACE_FS_TYPES, "[method]descriptor.readlink-at"));
 		return funcs;
 	}
 
@@ -404,6 +405,11 @@ public final class WasmComponentBuilder {
 		// directory.
 		w.put("stat-at", lowerRealloc("stat-at", (f, r) -> ComponentWriter.canonLowerMemoryReallocUtf8(f, 0, r)));
 		w.put("remove-dir", lowerRealloc("remove-dir", (f, r) -> ComponentWriter.canonLowerMemoryReallocUtf8(f, 0, r)));
+		// descriptor.readlink-at: async func(path: string) -> result<string, error-code>,
+		// lowered SYNCHRONOUSLY like stat-at; realloc is what lifts the target string
+		// (behind %read-link, truename's walk).
+		w.put("readlink-at",
+				lowerRealloc("readlink-at", (f, r) -> ComponentWriter.canonLowerMemoryReallocUtf8(f, 0, r)));
 		return w;
 	}
 

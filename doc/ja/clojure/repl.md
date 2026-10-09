@@ -18,6 +18,15 @@ oracle の REPL と同じく、`*1`、`*2`、`*3` は直近 3 つの入力の値
 入力の読み込みや lowering での拒否は例外ではなく、何も記録しません。`*repl*` は `true` で
 束縛されており、`*file*` は `"NO_SOURCE_PATH"`、`*source-path*` は `"NO_SOURCE_FILE"` です。
 
+oracle の REPL と同じく、`user` は `clojure.repl` の `doc` と `pst`、`clojure.pprint` の `pp` と
+`pprint` を refer しており、修飾名は `require` なしでどちらの名前空間にも届きます。名前空間は
+入力がその var を最初に名指したところでロードされるので、どれも名指さないセッションはそれなしで
+始まります。Clojure の REPL が refer するほかの名前は、入力が名指すと名前を挙げて拒否されます:
+`source`、`dir`、`apropos`、`find-doc`（[clojure.repl](reference/clojure-repl.md) を参照）、
+`javadoc`（`clojure.java.javadoc` は組み込まれていません）、`add-libs`、`add-lib`、`sync-deps`
+（`clojure.repl.deps` は組み込まれていません。セッションのライブラリはプロジェクトの `deps.edn` です）。
+同名のローカルや定義は refer より優先されます。ほかの名前空間はどれも refer しません。
+
 ```console
 $ rontolisp --source-language clojure
 clojure> (defn twice [x] (* 2 x))

@@ -15,6 +15,7 @@ import am.ik.rontolisp.reader.Features;
 import org.junit.jupiter.api.Test;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class ClojureSessionTest {
 
@@ -106,6 +107,44 @@ class ClojureSessionTest {
 	}
 
 	@Test
+	void userRefersWhatTheOraclesReplRequiresLoadingANamespaceWhereANameFirstReachesIt() {
+		// clojure.main/repl-requires: doc and pst from clojure.repl, pp and pprint from
+		// clojure.pprint, referred into user before the first input
+		assertThat(runSession("(defn f \"Adds one.\" [x] (inc x))", "(doc f)"))
+			.isEqualTo("-------------------------\nuser/f\n([x])\n  Adds one.\n");
+		assertThat(runSession("(pprint {:a 1})", "[1 2]", "(pp)")).isEqualTo("{:a 1}\n[1 2]\n");
+		assertThat(runSession("(binding [*err* *out*] (pst (ex-info \"boom\" {:a 1})))"))
+			.startsWith("ExceptionInfo boom");
+		// the oracle's REPL loaded the namespaces: a qualified name needs no require
+		assertThat(runSession("(clojure.pprint/pprint [1])", "(clojure.repl/doc clojure.repl/pst)"))
+			.startsWith("[1]\n-------------------------\nclojure.repl/pst\n");
+		// a buffer naming none loads neither
+		assertThat(forms(new ClojureSession().read("(inc 1)"))).noneMatch(form -> form.contains("print-doc"));
+	}
+
+	@Test
+	void aReplReferALocalOrADefinitionShadowsLoadsNothing() {
+		assertThat(runSession("(prn (let [doc 1 source 2] [doc source]))")).isEqualTo("[1 2]\n");
+		assertThat(runSession("(defn pprint [x] (prn :mine x))", "(pprint 1)")).isEqualTo(":mine 1\n");
+		// another namespace refers none of them, like the oracle's
+		assertThatThrownBy(() -> runSession("(ns sess.other)", "(doc map)")).hasMessageContaining("unknown name: doc");
+	}
+
+	@Test
+	void aReplReferLeftOutNamesItsRefusal() {
+		assertThatThrownBy(() -> runSession("(source map)"))
+			.hasMessageContaining("clojure.repl/source is not built in: a definition's text is not kept at run time");
+		assertThatThrownBy(() -> runSession("(dir clojure.string)"))
+			.hasMessageContaining("clojure.repl/dir is not built in:");
+		assertThatThrownBy(() -> runSession("(javadoc String)")).hasMessageContaining(
+				"clojure.java.javadoc/javadoc is not built in: it opens a web browser on a class's Javadoc");
+		assertThatThrownBy(() -> runSession("(add-libs '{hiccup/hiccup {:mvn/version \"2.0.0\"}})"))
+			.hasMessageContaining("clojure.repl.deps/add-libs is not built in:");
+		assertThatThrownBy(() -> runSession("(require 'clojure.repl.deps)"))
+			.hasMessageContaining("clojure.repl.deps is not built in:");
+	}
+
+	@Test
 	void aLaterBufferDefmultiOfAMultimethodKeepsTheEarlierOne() {
 		// the oracle's defmulti defines only when the var holds no multimethod, so a
 		// REPL re-entry changes nothing (neither the dispatch function nor the table)
@@ -190,7 +229,9 @@ class ClojureSessionTest {
 			.flatMap(top -> top.forms().stream())
 			.map(LispVal::print)
 			.toList();
-		assertThat(defined).anyMatch(form -> form.contains("|c%sx-unless%macro|"));
+		// a later input may expand at run time: the table holds the expander itself
+		assertThat(defined).anyMatch(form -> form.contains("(SETQ |c%sx-unless%macro| (LAMBDA "))
+			.noneMatch(form -> form.contains("C%MACRO-EXPANDER"));
 		List<String> call = session.read("(sx-unless false 42)")
 			.stream()
 			.flatMap(top -> top.forms().stream())
@@ -271,6 +312,23 @@ class ClojureSessionTest {
 		assertThat(runSession("(defn sx-helper [x] (list 'inc x)) (def sx-n 10)",
 				"(defmacro sx-m [x] (list '+ sx-n (sx-helper x)))", "(println (sx-m 1))"))
 			.isEqualTo("12\n");
+	}
+
+	@Test
+	void aMacroOfALaterBufferEvaluatesOverWhatAnEarlierOneDefined() {
+		// eval in a macro body lowers through the session's one lowering
+		assertThat(runSession("(defn sx-four [] 4)", "(defmacro sx-if [t a b] (if (eval t) a b))",
+				"(println (sx-if (= (sx-four) 4) :yes :no) (sx-if (resolve 'sx-nowhere) :yes :no))"))
+			.isEqualTo(":yes :no\n");
+	}
+
+	@Test
+	void aRunTimeExpansionResolvesInTheNamespaceALaterBufferSwitchedTo() {
+		// the scopes a buffer changes after the macro runtime came define themselves
+		// again; a bare head resolves in *ns*, like the oracle's REPL
+		assertThat(runSession("(defmacro sx-um [x] `(inc ~x))", "(prn (macroexpand '(sx-um 1)))", "(ns sxns)",
+				"(defmacro sx-m [x] `(dec ~x))", "(prn (macroexpand '(sx-m 1)) (macroexpand '(sx-um 1)))"))
+			.isEqualTo("(clojure.core/inc 1)\n(clojure.core/dec 1) (sx-um 1)\n");
 	}
 
 	@Test

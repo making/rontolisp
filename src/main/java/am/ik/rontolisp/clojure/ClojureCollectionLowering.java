@@ -872,7 +872,8 @@ final class ClojureCollectionLowering {
 
 	/**
 	 * {@code keys} (or {@code vals}): the table's keys (or values) accumulated into a
-	 * list. The order is the table's walk order, unspecified like the oracle's.
+	 * list. The order is the table's walk order, unspecified like the oracle's; a
+	 * record's is its declared fields, then the rest.
 	 */
 	static LispVal tableKeysOf(ClojureLowering ctx, List<LispVal> items, boolean keys) {
 		return tableKeysForm(ctx, ctx.lower(items.get(1)), keys);
@@ -892,10 +893,15 @@ final class ClojureCollectionLowering {
 								ClojureLowerUtil.list(ClojureLowerUtil.sym("ignore"), drop)),
 						ClojureLowerUtil.list(ClojureLowerUtil.sym("setq"), acc,
 								ClojureLowerUtil.list(ClojureLowerUtil.sym("cons"), take, acc))),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), ClojureProtocolLowering.isRecordForm(map),
-						ClojureProtocolLowering.typedTableOf(map), map));
-		LispVal gathered = ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
+				map);
+		LispVal walked = ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
 				ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(acc, ClojureLowering.NIL_CONST))), collect, acc);
+		// a record answers its declared fields in order, then its extension keys
+		// (%clojure-record-entries), where a table walks in its own order
+		LispVal gathered = ClojureLowerUtil.list(
+				ClojureLowerUtil.sym("if"), ClojureProtocolLowering.isRecordForm(map), ClojureLowerUtil
+					.list(new LispSymbol("RONTOLISP::%CLOJURE-RECORD-COLUMN"), map, new LispInteger(keys ? 0 : 1)),
+				walked);
 		// a host map answers its entries' keys (values): an arm a program naming no java:
 		// operator sheds
 		LispVal host = ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),

@@ -70,12 +70,13 @@ Hello, Jürgen!
 ところで `ring.util.response` に読み込むので、名前を挙げないプログラムはそのコードを
 持ちません。
 
-```clojure
-(require '[ring.util.response :as response])
-(:headers (response/file-response "a.txt" {:root "www"}))
-; => {"Content-Length" "11", "Last-Modified" "Tue, 02 Jan 2024 03:04:05 GMT"}
-(response/file-response "../secret.txt" {:root "www"})
-; => nil
+```console
+clojure> (require '[ring.util.response :as response])
+nil
+clojure> (:headers (response/file-response "a.txt" {:root "www"}))
+{"Content-Length" "11", "Last-Modified" "Tue, 02 Jan 2024 03:04:05 GMT"}
+clojure> (response/file-response "../secret.txt" {:root "www"})
+nil
 ```
 
 ## 組み込みでないもの
@@ -102,9 +103,10 @@ Hello, Jürgen!
   同じく `:encoding` オプション（またはリクエストの文字セット）を使います。
 - `content-length` は ASCII の数字だけを読みます（Java の `Long/valueOf` はほかの文字体系の
   数字も受け付けます）。
-- パスの正規化は綴りだけで行い、シンボリックリンクは解決しません。そのため
-  `:allow-symlinks?` は `..` を含まないパスを通すだけで、`:root` の下にあって外を指す
-  リンクも拒否しません。
+- パスの正規化ではオラクルと同じくシンボリックリンクをすべて解決しますが、ファイルの
+  パスが相対パスなら相対パスのまま扱います（WASM バックエンドは作業ディレクトリを
+  知りません）。2 つの WASM バックエンドでは、絶対パスを指すリンクはたどりません（WASI
+  ホストが拒否します）。そのためファイルは見つかりません。
 - `resource-response` はソースパスのディレクトリにあるリソースだけを見つけます。実行時に
   組み立てた名前は jar の中では見つかりません（[clojure.java.io](clojure-java-io.md)）。
   jar のリソースは、名前をリテラルで書いた `clojure.java.io/resource` を `url-response` に

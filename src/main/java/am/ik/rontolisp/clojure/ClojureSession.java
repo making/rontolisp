@@ -32,6 +32,7 @@ public final class ClojureSession {
 		this.lowering.sourcePath = new ClojureSourcePath(files, null);
 		this.lowering.files = files;
 		this.javaClasses = files.javaClassLoader();
+		this.lowering.referReplRequires();
 	}
 
 	/**

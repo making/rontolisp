@@ -305,7 +305,7 @@ public final class HttpLibrary {
 			if (!(node instanceof LispCons cons)) {
 				return node;
 			}
-			if (cons.car() instanceof LispSymbol sym && LispNames.QUOTE.equals(sym.name())) {
+			if (cons.car() instanceof LispSymbol sym && LispNames.isQuote(sym.name())) {
 				return node;
 			}
 			if (isHttpHandlerForm(node)) {

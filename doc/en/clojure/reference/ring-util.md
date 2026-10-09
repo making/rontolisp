@@ -68,12 +68,13 @@ resource is a byte stream. The [Ring adapter](ring.md) sends either body as it i
 load into `ring.util.response` where a program first names one, so a program naming none
 carries none of their code.
 
-```clojure
-(require '[ring.util.response :as response])
-(:headers (response/file-response "a.txt" {:root "www"}))
-; => {"Content-Length" "11", "Last-Modified" "Tue, 02 Jan 2024 03:04:05 GMT"}
-(response/file-response "../secret.txt" {:root "www"})
-; => nil
+```console
+clojure> (require '[ring.util.response :as response])
+nil
+clojure> (:headers (response/file-response "a.txt" {:root "www"}))
+{"Content-Length" "11", "Last-Modified" "Tue, 02 Jan 2024 03:04:05 GMT"}
+clojure> (response/file-response "../secret.txt" {:root "www"})
+nil
 ```
 
 ## Not built in
@@ -100,9 +101,10 @@ program names them:
   charset) governs the percent-decoding, as in Ring.
 - `content-length` reads ASCII digits only (Java's `Long/valueOf` also takes other
   scripts' digits).
-- A path is made canonical from its spelling: no symbolic link is resolved, so
-  `:allow-symlinks?` only lets a path without `..` through, and a link below `:root` that
-  leads outside it is not refused.
+- A canonical path resolves every symbolic link, as the oracle's does, but stays relative
+  where the file's path is (no WASM backend knows the working directory). On both WASM
+  backends a link whose target is absolute is not followed (the WASI host refuses it), so
+  the file is not found.
 - `resource-response` finds a resource in a directory of the source path only: a name
   computed at run time is never found inside a jar ([clojure.java.io](clojure-java-io.md)).
   A jar's resource is served through `url-response` of a `clojure.java.io/resource` whose

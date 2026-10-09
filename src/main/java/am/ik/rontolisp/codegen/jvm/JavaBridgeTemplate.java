@@ -591,7 +591,7 @@ final class JavaBridgeTemplate {
 
 	// Whether the interface has exactly one method a class must implement, Object's
 	// three aside: what a Java lambda can implement (mirrors
-	// compiler/JavaImplementations.isFunctionalInterface). Remembered per interface.
+	// compiler/JavaInterfaceMethods.isFunctionalInterface). Remembered per interface.
 	private static boolean isFunctionalInterface(Class<?> iface) {
 		Boolean known = FUNCTIONAL_INTERFACES.get(iface);
 		if (known == null) {
@@ -1545,7 +1545,9 @@ final class JavaBridgeTemplate {
 			}
 			return marshalSequence(elements, target, out, index, functions);
 		}
-		if (value instanceof ArrayList<?> list && !list.isEmpty() && list.get(0) instanceof Object[] header) {
+		Object @Nullable [] header = lispArrayHeader(value);
+		if (header != null) {
+			ArrayList<?> list = (ArrayList<?>) Objects.requireNonNull(value);
 			// The compiled Lisp array representation: slot 0 = the {dims, fillPointer,
 			// adjustable} header. The fill pointer, when present, is the effective
 			// length of the marshaled sequence.
@@ -1581,8 +1583,7 @@ final class JavaBridgeTemplate {
 	// Mirrors JvmJavaDirectSites' _jtab.
 	private static @Nullable List<@Nullable Object> tableEntries(@Nullable Object value) {
 		Method hashValues = hashValuesMethod;
-		if (hashValues == null || !(value instanceof LinkedHashMap<?, ?> map)
-				|| !(map.get(HASH_TABLE_ORDER_KEY) instanceof ArrayList)) {
+		if (hashValues == null || !isLispTable(value)) {
 			return null;
 		}
 		Object[] pairs;
@@ -1995,7 +1996,7 @@ final class JavaBridgeTemplate {
 	 */
 	private static @Nullable Object rendered(@Nullable Object v) {
 		Method strv = strvMethod;
-		if (strv != null && v instanceof ArrayList) {
+		if (strv != null && v != null && v.getClass() == ArrayList.class) {
 			try {
 				return strv.invoke(null, v);
 			}
@@ -2028,13 +2029,28 @@ final class JavaBridgeTemplate {
 				|| v.getClass().isArray()) {
 			return false;
 		}
-		if (v instanceof ArrayList<?> list && !list.isEmpty() && list.get(0) instanceof Object[]) {
-			return false;
-		}
-		if (v instanceof LinkedHashMap<?, ?> map && map.get(HASH_TABLE_ORDER_KEY) instanceof ArrayList) {
+		if (lispArrayHeader(v) != null || isLispTable(v)) {
 			return false;
 		}
 		return !v.getClass().getName().startsWith(RUNTIME_PACKAGE_PREFIX);
+	}
+
+	// A Lisp array's Object[] header (slot 0 of an ArrayList), or null for anything else.
+	// The class is exact -- a Lisp array is never a subclass of it -- so a host
+	// subclass's own isEmpty / get are never asked. Mirrors JvmJavaDirectSites' _jlarr.
+	private static Object @Nullable [] lispArrayHeader(@Nullable Object v) {
+		if (v == null || v.getClass() != ArrayList.class) {
+			return null;
+		}
+		ArrayList<?> list = (ArrayList<?>) v;
+		return !list.isEmpty() && list.get(0) instanceof Object[] header ? header : null;
+	}
+
+	// Whether a value is a Lisp hash table: exactly a LinkedHashMap, holding its
+	// insertion-order ArrayList under the order key. Mirrors JvmJavaDirectSites' _jltab.
+	private static boolean isLispTable(@Nullable Object v) {
+		return v != null && v.getClass() == LinkedHashMap.class
+				&& ((LinkedHashMap<?, ?>) v).get(HASH_TABLE_ORDER_KEY) instanceof ArrayList;
 	}
 
 	// How a message shows a value: the program's printer (prin1), as the interpreter

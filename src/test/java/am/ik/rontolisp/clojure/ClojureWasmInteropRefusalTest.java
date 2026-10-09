@@ -21,7 +21,9 @@ import static org.junit.jupiter.api.Assumptions.abort;
  * instance call, a proxy over a class, and the qualified {@code Class/new},
  * {@code Class/.method} and param-tagged forms all compile to the undefined-function
  * call-time error (pinned here by the compile warning naming it) and trap when run. The
- * behavior itself lives in {@link ClojureInteropTest} on the interpreter and the JVM.
+ * behavior itself lives in {@link ClojureInteropTest} on the interpreter and the JVM. A
+ * Date or UUID construction is no refusal: it makes the value {@code #inst} or
+ * {@code #uuid} reads, whose host-only members alone are refused, by name.
  */
 class ClojureWasmInteropRefusalTest {
 
@@ -51,12 +53,12 @@ class ClojureWasmInteropRefusalTest {
 
 	@Test
 	void zeroArgStaticCallRefusesOnPreview1() throws Exception {
-		assertRefusal("(println (System/currentTimeMillis))", "JAVA:STATIC", false);
+		assertRefusal("(println (System/nanoTime))", "JAVA:STATIC", false);
 	}
 
 	@Test
 	void zeroArgStaticCallRefusesOnTheComponent() throws Exception {
-		assertRefusal("(println (System/currentTimeMillis))", "JAVA:STATIC", true);
+		assertRefusal("(println (System/nanoTime))", "JAVA:STATIC", true);
 	}
 
 	@Test
@@ -121,17 +123,58 @@ class ClojureWasmInteropRefusalTest {
 		assertRefusal("(println (^[double] Math/abs -1))", "JAVA:STATIC", true);
 	}
 
-	private static void assertRefusal(String program, String surface, boolean component) throws Exception {
+	@Test
+	void aDateMadeHereRefusesOnlyAHostOnlyMemberOnBothBackends() throws Exception {
+		// a construction is the value #inst reads, so it runs here: a member only the
+		// host
+		// answers is refused by name, where the interpreter and the JVM call it on the
+		// host Date it stands for (ClojureInteropTest)
+		String program = "(println (try (.toInstant (java.util.Date. 5)) (catch Exception e (ex-message e)))"
+				+ " (inst-ms (java.util.Date. 5)) (uuid? (java.util.UUID/randomUUID)))";
+		for (boolean component : new boolean[] { false, true }) {
+			assertThat(run(program, component)).as(component ? "component" : "preview 1")
+				.isEqualTo("Method toInstant taking 0 args is not supported for class java.util.Date 5 true\n");
+		}
+	}
+
+	private static byte[] compile(String program, boolean component, ByteArrayOutputStream warnings) {
 		CompileFrontendAccess.Program frontend = CompileFrontendAccess.clojure(program, true, component);
-		ByteArrayOutputStream warnings = new ByteArrayOutputStream();
-		byte[] module;
 		try (var _ = ThreadStdio.err(warnings)) {
-			module = WasmLispCompiler.builder()
+			return WasmLispCompiler.builder()
 				.component(component)
 				.runtimeFeatures(frontend.features().names())
 				.build()
 				.compile(frontend.forms());
 		}
+	}
+
+	// Compiles and runs the program, requiring it to exit normally, and answers its
+	// output.
+	private static String run(String program, boolean component) throws Exception {
+		byte[] module = compile(program, component, new ByteArrayOutputStream());
+		requireWasmtime();
+		Path path = Files.createTempFile(workDir, "interoprun", component ? "-c.wasm" : ".wasm");
+		Files.write(path, module);
+		Path outFile = Files.createTempFile(workDir, "interoprun", ".out");
+		Path errFile = Files.createTempFile(workDir, "interoprun", ".err");
+		Process process = new ProcessBuilder("wasmtime", "run", "-W", "gc=y", "-W", "exceptions=y", path.toString())
+			.redirectOutput(outFile.toFile())
+			.redirectError(errFile.toFile())
+			.start();
+		try {
+			assertThat(process.waitFor(300, TimeUnit.SECONDS)).isTrue();
+			assertThat(process.exitValue()).as("wasmtime exit code: %s", Files.readString(errFile)).isZero();
+			return Files.readString(outFile);
+		}
+		finally {
+			Files.deleteIfExists(outFile);
+			Files.deleteIfExists(errFile);
+		}
+	}
+
+	private static void assertRefusal(String program, String surface, boolean component) throws Exception {
+		ByteArrayOutputStream warnings = new ByteArrayOutputStream();
+		byte[] module = compile(program, component, warnings);
 		assertThat(warnings.toString(StandardCharsets.UTF_8)).as("the compile warning names the refused surface")
 			.contains("the function " + surface + " is undefined");
 		requireWasmtime();

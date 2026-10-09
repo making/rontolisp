@@ -31,8 +31,9 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   value the printer does not read. `assert` reads `*assert*` where it expands, so a
   top-level `set!` of it to a literal switches off the asserts after it; a `set!` inside
   a function, or to a computed value, does not (the oracle's takes effect once it runs).
-  `~S`/`~A` on Clojure values stay Common Lisp notation (`format` is a CL surface);
-  `print-method`/`pprint` stay absent.
+  A Common Lisp `format`'s `~S`/`~A` on Clojure values stay Common Lisp notation (it is
+  a CL surface; `clojure.pprint/cl-format` writes them as Clojure); `print-method` stays
+  absent.
 - A map, set or memo key finds an `=` key like the oracle's, vectors, lists, maps and
   sets included, but a stored collection key is the first `=` key of its kind (vector,
   list, lazy seq) the program stored, so its metadata and the spelling of a nested
@@ -48,6 +49,15 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   A map or set finds a Java collection key by its own `equals`, like the oracle's hash maps
   and sets, never by `=`, which the oracle's small array maps use:
   `(get {[1 2] :v} (java.util.ArrayList. [1 2]))` is `nil` here, `:v` there.
+- `hash`, `hash-ordered-coll`, `hash-unordered-coll`, `mix-collection-hash`, `hash-combine`
+  and `.hashCode` answer the oracle's numbers but for a value hashed by its identity -- a
+  function, an atom, a var, an exception, a deftype or reify implementing neither `hasheq`
+  nor `hashCode` --, whose number differs (between backends and runs too, as between the
+  oracle's runs); `()` and an empty `rest`, `nil` here, which hash to `0` (the oracle's are
+  an empty seq's); a decimal (`1.5M`), a ratio here; and a `Calendar`, hashed as the `Date`
+  of its milliseconds. `hash-ordered-coll` walks a map's, set's or record's members in this
+  implementation's order (the unordered hashes agree). A refusal's `ClassCastException`
+  message leaves out the oracle's module and loader text.
 - `seq` and the verbs over it, `count`, `empty?`, `get`, `contains?`, `keys` and `vals` read a
   Java `Iterable`, `Map` or `CharSequence`, and `find`, `select-keys`, `reduce-kv`,
   `update-vals`, `update-keys`, `conj`, `merge` and `merge-with` a Java `Map`, like the
@@ -205,6 +215,14 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   form (`if`, `do`, `let*`, `new`, ...), of a head the reader spells (`deref`,
   `syntax-quote`, `ns`, `in-ns`) is refused by name, where the oracle
   accepts it (and ignores it at call sites, for a special form).
+- `eval`, and `resolve` of a computed symbol, run only while the program lowers (in a
+  macro body and what it calls); at run time they throw an
+  `UnsupportedOperationException`, where the oracle evaluates and resolves. `resolve`
+  answers `nil` for a `clojure.core` var this front end lacks (the oracle's var), for a
+  record or type name (the oracle's class) and for a var of a namespace built into the
+  lowering (`clojure.string`); a quoted symbol resolves in the namespace the call lowers
+  in, where the oracle reads `*ns*` when the call runs, and to a definition below the call
+  too. A definition an `eval`'d form makes exists only while the program lowers.
 - `#(...)` reads as the oracle's `(fn* [p1__N# ...] (body))` in source, under a quote and
   in `read-string`/`read`, but N restarts at each top-level form (each datum read), where
   the oracle's counter runs across the process: the parameter names differ, and two reads
@@ -243,7 +261,7 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
 - An instance call on a collection, keyword, symbol, ratio, atom or fn answers through the core
   functions and shares their deviations (`.getClass` answers what `class` does). A method
   left unmapped is refused as `Method m taking N args is not supported for class C`, where the
-  oracle may answer (`.hashCode`); the class named for a map is an array map up to eight
+  oracle may answer (`.toArray`); the class named for a map is an array map up to eight
   entries and a hash map past them, by size alone. `nil` is the empty list here, so a
   collection method answers on it (`(.count nil)` is `0`) where the oracle throws a
   `NullPointerException`; any other method on `nil` is one. On a record, deftype or reify,
@@ -276,10 +294,10 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   `java.util.Deque` ...) is refused by name. `first`, `next` and `rest` of an `ISeq` type read
   it through its `seq`, a verb may call a method another number of times than the oracle, and
   `str` of a collection type spells its contents
-  ([collection interfaces](reference/reify.md#collection-interfaces)). A type's `equals` and
-  `hashCode` answer `=` and `.hashCode` but never key a map or a set, which hold such a value
-  by identity. `sort` and `distinct` take a type implementing `Seqable` alone through its
-  seq, where the oracle refuses both.
+  ([collection interfaces](reference/reify.md#collection-interfaces)). A type's `equals`,
+  `hashCode` and `hasheq` answer `=`, `.hashCode` and `hash` but never key a map or a set,
+  which hold such a value by identity. `sort` and `distinct` take a type implementing
+  `Seqable` alone through its seq, where the oracle refuses both.
 - `clojure.core.reducers` folds on the calling thread, its parts one after the other, and
   `cat` of two non-empty collections answers one accumulator (a vector) holding both, where
   the oracle answers a `Cat` tree whose fold combines its halves' folds.
@@ -316,8 +334,7 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   ISO-8859-1, US-ASCII and the JDK's aliases for them; any other is refused), have
   `ring.util.request/body-string` as a function rather than an extensible multimethod,
   read only ASCII digits in `content-length`, and leave out what needs a byte array. The
-  file responses resolve no symbolic link and find no resource computed at run time inside
-  a jar.
+  file responses find no resource computed at run time inside a jar.
 - A sorted map or set orders, prints and finds keys like the oracle's, but every verb
   copies it (an association costs the collection's size, like a hash map's); `class`
   answers `:map`/`:set`; a `subseq` or
@@ -384,8 +401,10 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   plain `clojure.java.io/reader` too, where the oracle requires a `PushbackReader` -- and
   refuses a host reader.
 - `#inst` and `#uuid` read as the oracle's `java.util.Date` and `java.util.UUID` on every
-  backend; [Instants and UUIDs](reference/instants.md) lists the few differences (`str` of an
-  instant answers in UTC, a host value from interop is never `=` to a read one).
+  backend, and so do the `java.util.Date`, `java.sql.Timestamp` and `java.util.UUID`
+  constructions and statics; [Instants and UUIDs](reference/instants.md) lists the few
+  differences (`str` of an instant answers in UTC, a host Date or UUID a Java member answers
+  is `=` to one made here but prints as the host object and is another map key).
 - `clojure.java.io`'s `java.io.File`, `java.net.URL`, `java.net.URI` and byte streams are
   values of this front end's own on every backend; [clojure.java.io](reference/clojure-java-io.md)
   lists the differences (no byte arrays, three charsets, no connection behind an `http:`
@@ -457,8 +476,8 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
 - A reader conditional takes `:rontolisp` too, ahead of `:clj` where a form names it
   first. Under `{:read-cond :preserve}`, `class` of a reader conditional or tagged literal
   answers `:clojure.lang.ReaderConditional`/`:clojure.lang.TaggedLiteral` like every class
-  keyword here, `str` spells the hash `=` keeps (not the oracle's `hashCode`), and
-  `(reader-conditional nil false)` prints `#?()`, as one read from `#?()` does. In a branch not
+  keyword here, and `(reader-conditional nil false)` prints `#?()`, as one read from `#?()`
+  does. In a branch not
   taken, `::alias/kw` of an unknown alias reads (the oracle refuses it); the runtime
   reader splices `#?@(:clj nil)` as nothing (the oracle refuses it) and takes `:features`
   as a hash set only.

@@ -817,6 +817,10 @@ public final class RontoLispCli {
 		evaluator.setSourceStandards(standards);
 		List<LispVal> exprs = language.read(source, evaluator.features(), entryFile, standards,
 				evaluator.sourceLoader());
+		if (language == SourceLanguage.CLOJURE) {
+			// the whole program: its library without the arms it can never take
+			exprs = evaluator.clojureProgram(exprs);
+		}
 		boolean markers = SourceLanguage.usesReadEvalMarkers(source);
 		try {
 			for (LispVal expr : exprs) {

@@ -12372,6 +12372,33 @@ cases:
       NIL
       YES
       (#P"probe.dat" NIL)
+  - name: truename-resolves-symbolic-links
+    # truename resolves every symbolic link in the path over %read-link (both WASM
+    # backends through path_readlink, the component adapter's over readlink-at) and
+    # takes . and .. out, a .. after a link from where the link LEADS; a relative
+    # path stays relative. probe-file stays the existence probe, and a link in the
+    # last component opens through on every backend. The e95-links/ tree is staged
+    # by the driver (CorpusFixtures.stageSymlinkTree): no backend creates a link.
+    source: |
+      (print (namestring (truename "e95-links/in")))
+      (print (namestring (truename "e95-links/dl/f.txt")))
+      (print (namestring (truename "e95-links/dl/../a.txt")))
+      (print (namestring (truename "./e95-links/up/../in")))
+      (print (namestring (truename "e95-links/dl/")))
+      (print (probe-file "e95-links/in"))
+      (print (with-open-file (s "e95-links/in") (read-line s)))
+      (print (handler-case (truename "e95-links/none") (file-error () :missing)))
+      (print (namestring (uiop:resolve-symlinks "e95-links/dl/new.txt")))
+    expected: |
+      "e95-links/a.txt"
+      "e95-links/d/f.txt"
+      "e95-links/a.txt"
+      "e95-links/a.txt"
+      "e95-links/d/"
+      #P"e95-links/in"
+      "a"
+      :MISSING
+      "e95-links/d/new.txt"
   - name: runtime-absolute-path-open-probe-and-load
     source: |
       ;; An ABSOLUTE path BUILT AT RUN TIME opens, probes and loads the same on all

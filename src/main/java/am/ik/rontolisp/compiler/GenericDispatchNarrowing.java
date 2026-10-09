@@ -436,7 +436,7 @@ public final class GenericDispatchNarrowing implements DispatchNarrower {
 				return;
 			}
 			if (cons.car() instanceof LispSymbol head) {
-				if (LispNames.QUOTE.equals(head.name())) {
+				if (LispNames.isQuote(head.name())) {
 					return;
 				}
 				String target = head.name();
@@ -507,7 +507,7 @@ public final class GenericDispatchNarrowing implements DispatchNarrower {
 			}
 			if (cons.car() instanceof LispSymbol head) {
 				String name = head.name();
-				if (LispNames.QUOTE.equals(name)) {
+				if (LispNames.isQuote(name)) {
 					this.escapeQuotedData(cons.cdr());
 					return;
 				}
@@ -746,7 +746,7 @@ public final class GenericDispatchNarrowing implements DispatchNarrower {
 			}
 			if (cons.car() instanceof LispSymbol head) {
 				String name = head.name();
-				if (LispNames.QUOTE.equals(name) || LispNames.FUNCTION.equals(name) || LispNames.MACROLET.equals(name)
+				if (LispNames.isQuote(name) || LispNames.FUNCTION.equals(name) || LispNames.MACROLET.equals(name)
 						|| LispNames.SYMBOL_MACROLET.equals(name) || this.macroNames.contains(name)
 						|| this.macroNames.contains(memberOf(name))) {
 					return;

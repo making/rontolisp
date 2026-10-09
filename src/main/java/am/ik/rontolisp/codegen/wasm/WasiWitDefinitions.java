@@ -125,6 +125,8 @@ final class WasiWitDefinitions {
 						func("open-at", asyncFuncType(result(named("descriptor"), named("error-code")),
 								param("path-flags", named("path-flags")), param("path", string()),
 								param("open-flags", named("open-flags")), param("flags", named("descriptor-flags")))),
+						func("readlink-at",
+								asyncFuncType(result(string(), named("error-code")), param("path", string()))),
 						func("remove-directory-at",
 								asyncFuncType(result(null, named("error-code")), param("path", string()))),
 						func("rename-at",

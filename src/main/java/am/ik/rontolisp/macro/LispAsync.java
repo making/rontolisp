@@ -55,7 +55,7 @@ public final class LispAsync {
 		List<LispVal> parts = cons.toList();
 		if (cons.car() instanceof LispSymbol sym) {
 			switch (sym.name()) {
-				case LispNames.QUOTE, LispNames.DEFMACRO, LispNames.MACROLET -> {
+				case LispNames.QUOTE, LispNames.UNSPELLED_QUOTE, LispNames.DEFMACRO, LispNames.MACROLET -> {
 					// quoted data is not code; macro bodies are checked on their
 					// expansion output, not their definition
 					return;
@@ -180,7 +180,7 @@ public final class LispAsync {
 		}
 		if (cons.car() instanceof LispSymbol sym) {
 			switch (sym.name()) {
-				case LispNames.QUOTE -> {
+				case LispNames.QUOTE, LispNames.UNSPELLED_QUOTE -> {
 					return form;
 				}
 				// Each expansion stands for the form it replaces, so it keeps its source

@@ -477,7 +477,8 @@ final class ClojureNamespaceLowering {
 			if (ClojureBuiltinNamespaces.isLanguage(ns) && !ClojureBuiltinNamespaces.isShipped(ns)) {
 				// the language's own libraries are lowerings or built-in files, never
 				// project files; a contrib clojure.* library is found like any other
-				throw new LispReadException("unknown namespace: " + ns);
+				String why = ClojureBuiltinNamespaces.languageNotShipped(ns);
+				throw new LispReadException(why != null ? why : "unknown namespace: " + ns);
 			}
 			// a dependency edge for :reload-all: the file being lowered owns it
 			// (the innermost file on the loading stack), or the entry program's

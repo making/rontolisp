@@ -22,7 +22,6 @@ import am.ik.rontolisp.LispString;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.SourceLocation;
-import am.ik.rontolisp.reader.LispReadException;
 import org.jspecify.annotations.Nullable;
 
 /**
@@ -107,36 +106,105 @@ final class ClojureUpdateLowering {
 				updateForm(ctx, map, key, fun, rest));
 	}
 
-	/** The key vector of {@code update-in}/{@code assoc-in}/{@code get-in}. */
-	static List<LispVal> keysVector(LispVal datum, String what) {
+	/**
+	 * The key path of {@code update-in}/{@code assoc-in}/{@code get-in} when it is
+	 * written as a literal vector, unrolled at lower time; null for any other path, which
+	 * the verb walks at run time over any seqable, like the oracle.
+	 */
+	private static @Nullable List<LispVal> literalKeys(LispVal datum) {
 		List<LispVal> keyItems = ClojureLowerUtil.items(datum);
 		if (keyItems == null || keyItems.isEmpty() || keyItems.get(0) != ClojureReader.VECTOR) {
-			throw new LispReadException(what + " takes a vector of keys, not " + datum.print());
+			return null;
 		}
 		return keyItems.subList(1, keyItems.size());
 	}
 
-	/** {@code update-in}: the nested update, recursing down the key vector. */
+	/**
+	 * The literal keys lowered and bound in order behind {@code bindings}: a literal
+	 * scalar stays inline, so its read keeps the scalar-key path
+	 * ({@link ClojureCollectionLowering#isScalarKeyForm}).
+	 */
+	private static List<LispVal> boundKeys(ClojureLowering ctx, List<LispVal> keyData, List<LispVal> bindings) {
+		List<LispVal> keys = new ArrayList<>();
+		for (LispVal keyDatum : keyData) {
+			LispVal lowered = ctx.lower(keyDatum);
+			if (ClojureCollectionLowering.isScalarKeyForm(lowered)) {
+				keys.add(lowered);
+				continue;
+			}
+			LispSymbol key = ctx.freshTemp();
+			bindings.add(ClojureLowerUtil.list(key, lowered));
+			keys.add(key);
+		}
+		return keys;
+	}
+
+	/**
+	 * A run-time walk down a key path: {@code (labels ((self (left whole) body)) (self
+	 * (seq-all keys) map))}, {@code body} built over the two parameters and the walk's
+	 * own name.
+	 */
+	private static LispVal keyWalk(ClojureLowering ctx, String verb, LispVal map, LispVal keys, KeyStep body) {
+		LispSymbol self = new LispSymbol(ClojureLowering.mangle(verb + "-") + (ctx.counter++));
+		LispSymbol left = ctx.freshTemp();
+		LispSymbol whole = ctx.freshTemp();
+		LispVal binding = new LispCons(self, new LispCons(ClojureLowerUtil.list(List.of(left, whole)),
+				ClojureLowerUtil.cons(body.of(self, left, whole), List.of())));
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("labels"), ClojureLowerUtil.list(List.of(binding)),
+				ClojureLowerUtil.list(self, ClojureSeqLowering.seqAllForm(ctx, keys), map));
+	}
+
+	/** The body of a {@link #keyWalk} over its own name and its two parameters. */
+	@FunctionalInterface
+	private interface KeyStep {
+
+		LispVal of(LispSymbol self, LispSymbol left, LispSymbol whole);
+
+	}
+
+	/**
+	 * The one-argument lambda an outer level of a run-time walk re-associates through:
+	 * the walk again over the rest of the keys.
+	 */
+	private static LispVal walkOnward(ClojureLowering ctx, LispSymbol self, LispSymbol left) {
+		LispSymbol inner = ctx.freshTemp();
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(inner),
+				ClojureLowerUtil.list(self, ClojureLowerUtil.list(ClojureLowerUtil.sym("cdr"), left), inner));
+	}
+
+	/** {@code update-in}: the nested update, recursing down the key path. */
 	static LispVal updateInOf(ClojureLowering ctx, List<LispVal> items) {
 		int n = items.size() - 1;
 		ClojureLowerUtil.isTrue(n >= 3, "update-in takes a map, keys, a function and arguments");
-		List<LispVal> keyData = keysVector(items.get(2), "update-in");
-		ClojureLowerUtil.isTrue(!keyData.isEmpty(), "update-in takes a non-empty vector of keys");
+		List<LispVal> keyData = literalKeys(items.get(2));
 		LispSymbol map = ctx.freshTemp();
 		LispSymbol fun = ctx.freshTemp();
+		LispSymbol tail = ctx.freshTemp();
+		List<LispVal> bindings = new ArrayList<>();
+		// the oracle's order: the map, the keys, the function, the extra arguments
+		bindings.add(ClojureLowerUtil.list(map, ctx.lower(items.get(1))));
+		LispSymbol keySeq = keyData == null ? ctx.freshTemp() : null;
+		List<LispVal> keys = keyData == null ? List.of() : boundKeys(ctx, keyData, bindings);
+		if (keySeq != null) {
+			bindings.add(ClojureLowerUtil.list(keySeq, ctx.lower(items.get(2))));
+		}
 		LispVal fnForm = ClojureBindingLowering.fnValue(ctx, items.get(3));
 		boolean real = ClojureBindingLowering.holdsRealFun(ctx, items.get(3), fnForm);
-		List<LispVal> bindings = new ArrayList<>();
-		bindings.add(ClojureLowerUtil.list(map, ctx.lower(items.get(1))));
 		bindings.add(ClojureLowerUtil.list(fun, fnForm));
-		List<LispVal> keys = new ArrayList<>();
-		for (LispVal keyDatum : keyData) {
-			LispSymbol key = ctx.freshTemp();
-			bindings.add(ClojureLowerUtil.list(key, ctx.lower(keyDatum)));
-			keys.add(key);
+		bindings.add(
+				ClojureLowerUtil.list(tail, ClojureLowerUtil.cons(ClojureLowerUtil.sym("list"), ctx.lowers(items, 4))));
+		LispVal body;
+		if (keySeq != null) {
+			body = updateInWalk(ctx, map, keySeq, fun, real, tail);
 		}
-		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let*"), ClojureLowerUtil.list(bindings), updateInForm(ctx,
-				map, keys, fun, real, ClojureLowerUtil.cons(ClojureLowerUtil.sym("list"), ctx.lowers(items, 4))));
+		else if (keys.isEmpty()) {
+			// like the oracle: no keys updates under nil
+			body = updateForm(ctx, map, ClojureLowering.NIL_CONST, fun, real, tail);
+		}
+		else {
+			body = updateInForm(ctx, map, keys, fun, real, tail);
+		}
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let*"), ClojureLowerUtil.list(bindings), body);
 	}
 
 	/**
@@ -154,59 +222,61 @@ final class ClojureUpdateLowering {
 		return updateForm(ctx, map, keys.get(0), step, ClojureLowering.NIL_CONST);
 	}
 
+	/**
+	 * The nested update walked at run time over already-bound map, key seqable, function
+	 * and extra-arguments tail: the last key (nil of no keys, like the oracle's
+	 * destructuring) updates, every earlier one re-associates.
+	 */
+	private static LispVal updateInWalk(ClojureLowering ctx, LispVal map, LispVal keys, LispVal fun, boolean real,
+			LispVal tail) {
+		return keyWalk(ctx, "update-in", map, keys, (self, left, whole) -> {
+			LispVal key = ClojureLowerUtil.list(ClojureLowerUtil.sym("car"), left);
+			return ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
+					ClojureLowerUtil.list(ClojureLowerUtil.sym("null"),
+							ClojureLowerUtil.list(ClojureLowerUtil.sym("cdr"), left)),
+					updateForm(ctx, whole, key, fun, real, tail),
+					updateForm(ctx, whole, key, walkOnward(ctx, self, left), ClojureLowering.NIL_CONST));
+		});
+	}
+
 	/** {@code update-in} as a value: the key sequence walked at run time. */
 	static LispVal updateInValue(ClojureLowering ctx) {
-		String name = ClojureLowering.mangle("update-in-") + (ctx.counter++);
-		LispSymbol self = new LispSymbol(name);
 		LispSymbol map = new LispSymbol(ClojureLowering.mangle("update-in-map"));
 		LispSymbol keys = new LispSymbol(ClojureLowering.mangle("update-in-keys"));
 		LispSymbol fun = new LispSymbol(ClojureLowering.mangle("update-in-fn"));
 		LispSymbol rest = new LispSymbol(ClojureLowering.mangle("update-in-rest"));
-		LispSymbol left = ctx.freshTemp();
-		LispSymbol whole = ctx.freshTemp();
-		LispSymbol inner = ctx.freshTemp();
-		LispVal step = ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(inner),
-				ClojureLowerUtil.list(self, ClojureLowerUtil.list(ClojureLowerUtil.sym("cdr"), left), inner));
-		LispVal go = ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), left),
-				ClojureRefusals.refusal(ClojureRefusals.NULL_POINTER,
-						LispString.literal("update-in takes a non-empty vector of keys")),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("null"),
-								ClojureLowerUtil.list(ClojureLowerUtil.sym("cdr"), left)),
-						updateForm(ctx, whole, ClojureLowerUtil.list(ClojureLowerUtil.sym("car"), left), fun, rest),
-						updateForm(ctx, whole, ClojureLowerUtil.list(ClojureLowerUtil.sym("car"), left), step,
-								ClojureLowering.NIL_CONST)));
-		LispVal binding = new LispCons(self,
-				new LispCons(ClojureLowerUtil.list(List.of(left, whole)), ClojureLowerUtil.cons(go, List.of())));
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"),
 				ClojureLowerUtil.list(List.of(map, keys, fun, ClojureLowering.AMPERSAND_REST, rest)),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("labels"), ClojureLowerUtil.list(List.of(binding)),
-						ClojureLowerUtil.list(self, ClojureSeqLowering.seqAllForm(ctx, keys), map)));
+				updateInWalk(ctx, map, keys, fun, ClojureLowerUtil.yieldsFun(fun), rest));
 	}
 
 	/** {@code assoc-in}: the nested association, building missing levels. */
 	static LispVal assocInOf(ClojureLowering ctx, List<LispVal> items) {
 		ClojureLowerUtil.isTrue(items.size() == 4, "assoc-in takes a map, keys and a value");
-		List<LispVal> keyData = keysVector(items.get(2), "assoc-in");
+		List<LispVal> keyData = literalKeys(items.get(2));
 		LispSymbol map = ctx.freshTemp();
 		LispSymbol val = ctx.freshTemp();
 		List<LispVal> bindings = new ArrayList<>();
+		// the oracle's order: the map, the keys, the value
 		bindings.add(ClojureLowerUtil.list(map, ctx.lower(items.get(1))));
+		LispSymbol keySeq = keyData == null ? ctx.freshTemp() : null;
+		List<LispVal> keys = keyData == null ? List.of() : boundKeys(ctx, keyData, bindings);
+		if (keySeq != null) {
+			bindings.add(ClojureLowerUtil.list(keySeq, ctx.lower(items.get(2))));
+		}
 		bindings.add(ClojureLowerUtil.list(val, ctx.lower(items.get(3))));
-		if (keyData.isEmpty()) {
+		LispVal body;
+		if (keySeq != null) {
+			body = assocInWalk(ctx, map, keySeq, val);
+		}
+		else if (keys.isEmpty()) {
 			// like the oracle: no keys associates under nil
-			return ClojureLowerUtil.list(ClojureLowerUtil.sym("let*"), ClojureLowerUtil.list(bindings),
-					assocPairForm(ctx, map, ClojureLowering.NIL_CONST, val));
+			body = assocPairForm(ctx, map, ClojureLowering.NIL_CONST, val);
 		}
-		List<LispVal> keys = new ArrayList<>();
-		for (LispVal keyDatum : keyData) {
-			LispSymbol key = ctx.freshTemp();
-			bindings.add(ClojureLowerUtil.list(key, ctx.lower(keyDatum)));
-			keys.add(key);
+		else {
+			body = assocInForm(ctx, map, keys, val);
 		}
-		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let*"), ClojureLowerUtil.list(bindings),
-				assocInForm(ctx, map, keys, val));
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let*"), ClojureLowerUtil.list(bindings), body);
 	}
 
 	/**
@@ -223,73 +293,135 @@ final class ClojureUpdateLowering {
 		return updateForm(ctx, map, keys.get(0), step, ClojureLowering.NIL_CONST);
 	}
 
+	/**
+	 * The nested association walked at run time over already-bound map, key seqable and
+	 * value: the last key (nil of no keys) associates, every earlier one re-associates.
+	 */
+	private static LispVal assocInWalk(ClojureLowering ctx, LispVal map, LispVal keys, LispVal val) {
+		return keyWalk(ctx, "assoc-in", map, keys, (self, left, whole) -> {
+			LispVal key = ClojureLowerUtil.list(ClojureLowerUtil.sym("car"), left);
+			return ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
+					ClojureLowerUtil.list(ClojureLowerUtil.sym("null"),
+							ClojureLowerUtil.list(ClojureLowerUtil.sym("cdr"), left)),
+					assocPairForm(ctx, whole, key, val),
+					updateForm(ctx, whole, key, walkOnward(ctx, self, left), ClojureLowering.NIL_CONST));
+		});
+	}
+
 	/** {@code assoc-in} as a value: the key sequence walked at run time. */
 	static LispVal assocInValue(ClojureLowering ctx) {
-		String name = ClojureLowering.mangle("assoc-in-") + (ctx.counter++);
-		LispSymbol self = new LispSymbol(name);
 		LispSymbol map = new LispSymbol(ClojureLowering.mangle("assoc-in-map"));
 		LispSymbol keys = new LispSymbol(ClojureLowering.mangle("assoc-in-keys"));
 		LispSymbol val = new LispSymbol(ClojureLowering.mangle("assoc-in-val"));
-		LispSymbol left = ctx.freshTemp();
-		LispSymbol whole = ctx.freshTemp();
-		LispSymbol inner = ctx.freshTemp();
-		LispVal step = ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(inner),
-				ClojureLowerUtil.list(self, ClojureLowerUtil.list(ClojureLowerUtil.sym("cdr"), left), inner));
-		LispVal go = ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("null"),
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("cdr"), left)),
-				assocPairForm(ctx, whole, ClojureLowerUtil.list(ClojureLowerUtil.sym("car"), left), val),
-				updateForm(ctx, whole, ClojureLowerUtil.list(ClojureLowerUtil.sym("car"), left), step,
-						ClojureLowering.NIL_CONST));
-		LispVal binding = new LispCons(self,
-				new LispCons(ClojureLowerUtil.list(List.of(left, whole)), ClojureLowerUtil.cons(go, List.of())));
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(List.of(map, keys, val)),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("labels"), ClojureLowerUtil.list(List.of(binding)),
-						ClojureLowerUtil.list(self, ClojureSeqLowering.seqAllForm(ctx, keys), map)));
+				assocInWalk(ctx, map, keys, val));
 	}
 
 	/**
-	 * {@code get-in}: the read folded down the key vector, the default threaded through
-	 * every level, like the oracle.
+	 * {@code get-in}. Of two arguments the read folded down the key path, nil threaded
+	 * through every level (the oracle's {@code reduce get}); of three, the default
+	 * answered at the first missing level, never read into (the oracle's sentinel loop).
+	 * A path that is no literal vector is walked at run time.
 	 */
 	static LispVal getInOf(ClojureLowering ctx, List<LispVal> items) {
 		int n = items.size() - 1;
 		ClojureLowerUtil.isTrue(n == 2 || n == 3, "get-in takes a map, keys and an optional default");
-		List<LispVal> keyData = keysVector(items.get(2), "get-in");
-		LispVal dflt = n == 3 ? ctx.lower(items.get(3)) : ClojureLowering.NIL_CONST;
-		LispVal acc = ctx.lower(items.get(1));
-		for (LispVal keyDatum : keyData) {
-			acc = ClojureCollectionLowering.getForm(ctx, acc, ctx.lower(keyDatum), dflt,
-					ClojureCollectionLowering.supplied(n == 3));
+		List<LispVal> keyData = literalKeys(items.get(2));
+		if (keyData != null && n == 2) {
+			LispVal acc = ctx.lower(items.get(1));
+			for (LispVal keyDatum : keyData) {
+				acc = ClojureCollectionLowering.getForm(ctx, acc, ctx.lower(keyDatum), ClojureLowering.NIL_CONST,
+						ClojureCollectionLowering.supplied(false));
+			}
+			return acc;
 		}
-		return acc;
+		LispSymbol map = ctx.freshTemp();
+		LispSymbol dflt = ctx.freshTemp();
+		List<LispVal> bindings = new ArrayList<>();
+		// the oracle's order: the map, the keys, the default
+		bindings.add(ClojureLowerUtil.list(map, ctx.lower(items.get(1))));
+		LispSymbol keySeq = keyData == null ? ctx.freshTemp() : null;
+		List<LispVal> keys = keyData == null ? List.of() : boundKeys(ctx, keyData, bindings);
+		if (keySeq != null) {
+			bindings.add(ClojureLowerUtil.list(keySeq, ctx.lower(items.get(2))));
+		}
+		bindings.add(ClojureLowerUtil.list(dflt, n == 3 ? ctx.lower(items.get(3)) : ClojureLowering.NIL_CONST));
+		LispVal supplied = ClojureCollectionLowering.supplied(n == 3);
+		LispVal body = keySeq != null ? getInWalk(ctx, map, keySeq, dflt, supplied)
+				: getInSentinel(ctx, map, keys, dflt);
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let*"), ClojureLowerUtil.list(bindings), body);
+	}
+
+	/**
+	 * The miss sentinel of a {@code get-in} with a default: a fresh cons no stored value
+	 * is {@code eq} to, bound to {@code sentinel} around {@code body}.
+	 */
+	private static LispVal withSentinel(LispSymbol sentinel, LispVal body) {
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let"), ClojureLowerUtil.list(List.of(ClojureLowerUtil
+			.list(sentinel, ClojureLowerUtil.list(ClojureLowerUtil.sym("list"), ClojureLowering.NIL_CONST)))), body);
+	}
+
+	/**
+	 * One level of a {@code get-in} with a default: the read of {@code key} in
+	 * {@code coll} against the sentinel, the default when it misses, else {@code onward}
+	 * over the value read (bound to {@code got}).
+	 */
+	private static LispVal sentinelLevel(ClojureLowering ctx, LispVal coll, LispVal key, LispSymbol sentinel,
+			LispVal dflt, LispVal supplied, LispSymbol got, LispVal onward) {
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
+				ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(got,
+						ClojureCollectionLowering.getForm(ctx, coll, key, sentinel, supplied)))),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("eq"), got, sentinel), dflt, onward));
+	}
+
+	/** A literal {@code get-in} path of three arguments, one sentinel level per key. */
+	private static LispVal getInSentinel(ClojureLowering ctx, LispVal map, List<LispVal> keys, LispVal dflt) {
+		if (keys.isEmpty()) {
+			return map;
+		}
+		LispSymbol sentinel = ctx.freshTemp();
+		LispSymbol[] got = new LispSymbol[keys.size()];
+		for (int i = 0; i < got.length; i++) {
+			got[i] = ctx.freshTemp();
+		}
+		LispVal acc = got[got.length - 1];
+		for (int i = keys.size() - 1; i >= 0; i--) {
+			acc = sentinelLevel(ctx, i == 0 ? map : got[i - 1], keys.get(i), sentinel, dflt, ClojureLowering.TRUE_CONST,
+					got[i], acc);
+		}
+		return withSentinel(sentinel, acc);
+	}
+
+	/**
+	 * {@code get-in} walked at run time over already-bound map, key seqable and default:
+	 * {@code supplied} whether the call gave the default (a form, so the value form
+	 * decides at run time). Without one a miss answers nil, which reading on would also
+	 * answer.
+	 */
+	private static LispVal getInWalk(ClojureLowering ctx, LispVal map, LispVal keys, LispVal dflt, LispVal supplied) {
+		LispSymbol sentinel = ctx.freshTemp();
+		LispSymbol got = ctx.freshTemp();
+		LispVal walk = keyWalk(ctx, "get-in", map, keys, (self, left, whole) -> ClojureLowerUtil.list(
+				ClojureLowerUtil.sym("if"), ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), left), whole,
+				sentinelLevel(ctx, whole, ClojureLowerUtil.list(ClojureLowerUtil.sym("car"), left), sentinel, dflt,
+						supplied, got,
+						ClojureLowerUtil.list(self, ClojureLowerUtil.list(ClojureLowerUtil.sym("cdr"), left), got))));
+		return withSentinel(sentinel, walk);
 	}
 
 	/** {@code get-in} as a value: the key sequence walked at run time. */
 	static LispVal getInValue(ClojureLowering ctx) {
-		String name = ClojureLowering.mangle("get-in-") + (ctx.counter++);
-		LispSymbol self = new LispSymbol(name);
 		LispSymbol map = new LispSymbol(ClojureLowering.mangle("get-in-map"));
 		LispSymbol keys = new LispSymbol(ClojureLowering.mangle("get-in-keys"));
 		LispSymbol rest = new LispSymbol(ClojureLowering.mangle("get-in-rest"));
-		LispSymbol left = ctx.freshTemp();
-		LispSymbol whole = ctx.freshTemp();
 		LispSymbol dflt = ctx.freshTemp();
-		LispVal go = ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), left), whole,
-				ClojureLowerUtil.list(self, ClojureLowerUtil.list(ClojureLowerUtil.sym("cdr"), left),
-						ClojureCollectionLowering.getForm(ctx, whole,
-								ClojureLowerUtil.list(ClojureLowerUtil.sym("car"), left), dflt, rest)));
-		LispVal binding = new LispCons(self,
-				new LispCons(ClojureLowerUtil.list(List.of(left, whole)), ClojureLowerUtil.cons(go, List.of())));
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"),
 				ClojureLowerUtil.list(List.of(map, keys, ClojureLowering.AMPERSAND_REST, rest)),
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("let*"),
-						ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(dflt, ClojureLowerUtil.list(
-								ClojureLowerUtil.sym("if"), ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), rest),
-								ClojureLowering.NIL_CONST, ClojureLowerUtil.list(ClojureLowerUtil.sym("car"), rest))))),
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("labels"), ClojureLowerUtil.list(List.of(binding)),
-								ClojureLowerUtil.list(self, ClojureSeqLowering.seqAllForm(ctx, keys), map))));
+						ClojureLowerUtil.list(List
+							.of(ClojureLowerUtil.list(dflt, ClojureLowerUtil.list(ClojureLowerUtil.sym("car"), rest)))),
+						getInWalk(ctx, map, keys, dflt, rest)));
 	}
 
 	/**

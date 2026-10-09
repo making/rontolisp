@@ -100,7 +100,8 @@ class ClojureStringBoundE2eTest {
 		ByteArrayOutputStream out = new ByteArrayOutputStream();
 		CliStack.call("clojure-string-bound", () -> {
 			LispEvaluator evaluator = new LispEvaluator(new PrintStream(out, true, StandardCharsets.UTF_8));
-			for (LispVal form : SourceLanguage.CLOJURE.read(program, Features.INTERPRETER, "bound.clj")) {
+			for (LispVal form : evaluator
+				.clojureProgram(SourceLanguage.CLOJURE.read(program, Features.INTERPRETER, "bound.clj"))) {
 				evaluator.eval(form);
 			}
 			return null;
