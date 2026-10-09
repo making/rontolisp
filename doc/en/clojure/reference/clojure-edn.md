@@ -34,7 +34,8 @@ so is an auto-resolved `::keyword`. A number starts with a digit or a sign and a
 symbol, else uses the built-in `#inst` and `#uuid` (their
 [values](instants.md), read like in source), else calls the `:default` function with the tag
 and the value. A tag none of them takes is `No reader function for tag`. A reader may be any
-function value: a function, a var, a keyword or a map.
+function value: a function, a var, a keyword or a map. Like the oracle's, an EDN read asks
+neither `*data-readers*` nor `*default-data-reader-fn*`.
 
 ```clojure
 (require '[clojure.edn :as edn])

@@ -198,11 +198,12 @@ cases:
     # with nil is nil (a plain &rest self call would wrap the rest in a
     # one-list and loop forever on the second probe). The stored lambda splits
     # into a worker (the rest as an ordinary parameter, so recur assigns
-    # exactly) plus the &rest head for normal calls; inline and extended
-    # protocol methods share the stored path (the oracle refuses variadic
-    # protocol methods at definition -- No single method ... of interface --
-    # so those rows pin our lenient reading, green on all four backends by the
-    # same construction). The dispatch function takes the call's full argument
+    # exactly) plus the &rest head for normal calls; an extended protocol
+    # method shares the stored path, and an inline one recurs without its
+    # target to a loop taking the rest the same way (the oracle refuses
+    # variadic protocol methods at definition -- No single method ... of
+    # interface -- so those rows pin our lenient reading, green on all four
+    # backends by the same construction). The dispatch function takes the call's full argument
     # list (the dispatcher applies it to every argument), so it spells its own
     # &r; a keyword dispatch takes the lookup plus an optional default,
     # like (:k m dflt).
@@ -216,7 +217,7 @@ cases:
       (println (walk {:shape :pt :pt [1 2]} [3 4]))
       (println (walk {:shape :pt :pt [1 2]} nil))
       (defprotocol StepP (step [t a & r]))
-      (defrecord StepR [f] StepP (step [t a & r] (if (empty? r) [f a] (recur t (first r) (rest r)))))
+      (defrecord StepR [f] StepP (step [t a & r] (if (empty? r) [f a] (recur (first r) (rest r)))))
       (println (step (StepR. "f") :start [1]))
       (println (step (StepR. "f") :start nil))
       (extend-protocol StepP String (step [t a & r] (if (empty? r) a (recur t (first r) (rest r)))))
@@ -232,6 +233,34 @@ cases:
       [f nil]
       [1]
       nil
+  - name: recur-in-an-inline-method-passes-every-parameter-but-the-target
+    # Oracle clj 1.12.6.1673, every line: a recur in a deftype, defrecord or
+    # reify method (protocol or interface) passes every parameter but the
+    # target, which the method supplies itself and a let cannot substitute
+    # ((recur this acc) there is "Mismatched argument count to recur"); each
+    # arity of a multi-arity method is its own target. An extension body is a
+    # fn, whose recur passes the target too.
+    source: |
+      (defprotocol RcP (rc-m [x acc] [x acc k]))
+      (deftype RcC [n] RcP
+        (rc-m [this acc] (if (> acc 3) [n acc] (recur (inc acc))))
+        (rc-m [this acc k] (if (> acc k) [n acc k] (recur (inc acc) k))))
+      (println (rc-m (RcC. 7) 0) (rc-m (RcC. 7) 0 5))
+      (println (rc-m (RcC. 7) 0 100000))
+      (defrecord RcR [n] RcP (rc-m [this acc] (if (> acc 3) [n acc] (recur (inc acc)))))
+      (println (rc-m (RcR. 8) 0))
+      (println (rc-m (reify RcP (rc-m [this acc] (if (> acc 3) [:r acc] (let [this 5] (recur (inc acc)))))) 0))
+      (println (reduce + 0 (reify clojure.lang.IReduceInit
+                             (reduce [this f init] (if (> init 10) init (recur f (f init 3)))))))
+      (extend-protocol RcP String (rc-m [s acc] (if (> acc 3) [s acc] (recur s (inc acc)))))
+      (println (rc-m "s" 0))
+    expected: |
+      [7 4] [7 6 5]
+      [7 100001 100000]
+      [8 4]
+      [:r 4]
+      12
+      [s 4]
   - name: multi-arg-calls-to-collection-dispatched-multimethods
     # Oracle clj 1.12.6.1673: the dispatcher applies the dispatch function to
     # every call argument, and a keyword over two arguments is the lookup with
@@ -1194,6 +1223,36 @@ cases:
       5
       [1 2 3]
       42
+  - name: a-map-pattern-reads-a-seq-as-keyword-arguments
+    # A map pattern reads a seq (seq?) as the map its keyword arguments stand for
+    # (seq-to-map-for-destructuring): one member is the map itself, more are
+    # pairs with the last key winning and an odd last one conj'd like onto a
+    # map; a vector stays a vector. Until 2026-10-08 every keyword argument
+    # read nil. Oracle-identical (clj 1.12.6).
+    source: |
+      (defn kwa-f [x & {:keys [a b] :or {b 9}}] [x a b])
+      (prn (kwa-f 1 :a 2) (kwa-f 1 {:a 3}) (kwa-f 1 :a 2 :b 3) (kwa-f 1 :a 2 {:b 5}))
+      (prn (kwa-f 1) (kwa-f 1 :a 2 :a 4) (kwa-f 1 :a 2 [:b 6]) (apply kwa-f 1 (map identity [:a 7])))
+      (prn (try (kwa-f 1 :a 2 :b) (catch IllegalArgumentException e :illegal)))
+      (defn kwa-m [& {:as m}] m)
+      (prn (kwa-m) (kwa-m :a 1 :b 2) (kwa-m {:c 3}) (kwa-m :a 1 {:a 2}))
+      (prn (let [{:keys [a]} '(:a 1)] a) (let [{:keys [a]} [:a 1]] a) (let [{:as m} (list :a 1 :a 2)] m))
+      (prn (let [{:keys [a]} (lazy-seq (list :a 5))] a) (let [{:as m} (lazy-seq nil)] m))
+      (prn (seq-to-map-for-destructuring '(:a 1)) (seq-to-map-for-destructuring (list {:a 1})) (seq-to-map-for-destructuring ()))
+      (prn (map seq-to-map-for-destructuring [(list :k 1 :k 2) (list 7)]))
+      (prn (try (seq-to-map-for-destructuring (list :a 1 2)) (catch IllegalArgumentException e :illegal)))
+      (prn ((fn [& {:strs [s]}] s) "s" 1) (let [[x & {y :y}] [1 :y 2]] [x y]))
+    expected: |
+      [1 2 9] [1 3 9] [1 2 3] [1 2 5]
+      [1 nil 9] [1 4 9] [1 2 6] [1 7 9]
+      :illegal
+      nil {:a 1, :b 2} {:c 3} {:a 2}
+      1 nil {:a 2}
+      5 {}
+      {:a 1} {:a 1} {}
+      ({:k 2} 7)
+      :illegal
+      1 [1 2]
   - name: threading-threads-first-and-last
     source: |
       (println (-> 5 inc inc))
@@ -4379,15 +4438,12 @@ cases:
       :private
       :root-binding 1
   - name: jio-reader-resolves-on-every-backend
-    # clojure.java.io resolves beside clojure.string, for reader only: the alias,
-    # the referred bare var and the fully-qualified spelling all name the same
-    # one-argument open, which prints as a function value without touching the
-    # filesystem -- so this case runs unmodified on all four backends. Opening a
-    # path, reading a reader through line-seq and closing through with-open need
-    # files and live in ClojureInteropTest (interpreter and JVM); without a
-    # preopened directory both wasm backends refuse with the file-error
-    # (ClojureWasmFileRefusalTest); an unknown jio fn is a lowering refusal
-    # (ClojureLoweringTest).
+    # clojure.java.io is a built-in namespace (Clojure source in the jar): the alias,
+    # the referred bare var and the fully-qualified spelling all name the same var,
+    # which prints as a function value without touching the filesystem. Its files and
+    # streams are the clojure-java-io-* cases below; without a preopened directory
+    # both wasm backends refuse a file with the oracle's FileNotFoundException
+    # (ClojureWasmFileRefusalTest).
     source: |
       (ns jio (:require [clojure.java.io :as jio :refer [reader]]))
       (println jio/reader)
@@ -6070,6 +6126,25 @@ cases:
       1
       :vy :vy
       true nil
+  - name: a-literal-refuses-keys-equal-once-evaluated
+    # A map or set literal whose computed keys or members are = once evaluated is
+    # the oracle's run-time Duplicate key, after every form ran: a map names the
+    # earlier key, a set the later member. hash-map and hash-set keep one, and so
+    # does a set literal of constants. Every line matches the oracle (clj 1.12.6,
+    # 2026-10-08).
+    source: |
+      (defn dupk [f] (try (pr-str (f)) (catch IllegalArgumentException e (ex-message e))))
+      (prn (dupk #(do {(+ 1 2) 1 3 2})) (dupk #(let [a 1 b 1N] {a 1 b 2})) (dupk #(let [a nil b nil] {a 1 b 2})) (dupk #(let [k :a] {:a 1 k 2})))
+      (prn (dupk #(let [a [1] b '(1)] {a 1 b 2 :c 3})) (dupk #(let [a {:a 1}] {a 1 {:a 1} 2})) (dupk #(let [a 0.0 b -0.0] {a 1 b 2})))
+      (prn (dupk #(do #{(+ 1 2) 3})) (dupk #(let [a [1] b '(1)] #{a b})) (dupk #(let [a 0.0 b -0.0] #{a b})) (dupk #(let [x nil] #{x nil})))
+      (prn (dupk #(let [a 1] {a (print "v1 ") (do (print "k2 ") 1) (print "v2 ")})))
+      (prn (hash-map 1 :a 1 :b) (hash-set 1 1) (count #{[1] '(1)}) (count (let [x 2] {x 1 1 2})) (let [x 1] {x 1}) (let [x 1] #{x}))
+    expected: |
+      "Duplicate key: 3" "Duplicate key: 1" "Duplicate key: null" "Duplicate key: :a"
+      "Duplicate key: [1]" "Duplicate key: {:a 1}" "Duplicate key: 0.0"
+      "Duplicate key: 3" "Duplicate key: (1)" "Duplicate key: -0.0" "Duplicate key: null"
+      v1 k2 v2 "Duplicate key: 1"
+      {1 :b} #{1} 1 2 {1 1} #{1}
   - name: clojure-set-relational-algebra
     # clojure.set over the set wrapper, its every var as a call (alias, refer,
     # fully-qualified) and as a value. A result's kind follows the oracle's
@@ -8327,6 +8402,43 @@ cases:
       false true
       true false 0 1
       #inst "2019-12-31T23:00:00.123456789-00:00"
+  - name: data-readers-read-a-tag-at-run-time-like-the-oracle
+    # *data-readers* maps a tag symbol to the function read-string and read call for its
+    # tagged literals (#my.ns/tag too: only a dotted name is a record class), ahead of the
+    # default #inst and #uuid readers; *default-data-reader-fn* takes the tag and the value
+    # of a tag none of them reads; a nil answer is the oracle's No dispatch macro, a
+    # thrown exception the function's own. Without a data_readers file *data-readers* starts
+    # empty, and default-data-readers names the two defaults' vars. Every line is the
+    # oracle's (clj 1.12.6.1673, 2026-10-08), on all four backends.
+    source: |
+      (defn dr-tag [x] [:tagged x])
+      (prn (binding [*data-readers* {'my/tag dr-tag 'my.ns/tag #'dr-tag}] [(read-string "#my/tag 1") (read-string "#my.ns/tag 2")]))
+      (prn (binding [*data-readers* {'my/tag (fn [x] nil)}] (try (read-string "#my/tag 1") (catch Exception e (ex-message e)))))
+      (prn (binding [*data-readers* {'inst (fn [x] [:inst x])}] (read-string "#inst \"2020\"")))
+      (prn (binding [*default-data-reader-fn* (fn [t v] [t v])] [(read-string "#foo/bar 3") (read-string "#inst \"1970\"")]))
+      (prn (binding [*default-data-reader-fn* (fn [t v] nil)] (try (read-string "#foo/bar 1") (catch Exception e (ex-message e)))))
+      (prn (binding [*data-readers* {'k/w :k}] (read-string "#k/w {:k 4}")))
+      (prn (try (read-string "#my.ns/tag 1") (catch Exception e (ex-message e))))
+      (prn *data-readers* *default-data-reader-fn*)
+      (prn (get default-data-readers 'inst) (get default-data-readers 'uuid) (count default-data-readers))
+      (prn ((get default-data-readers 'uuid) "1-1-1-1-1") (try ((get default-data-readers 'uuid) 1) (catch Exception e (ex-message e))))
+      (prn (with-in-str "#my/tag [1 2]" (binding [*data-readers* {'my/tag dr-tag}] (read))))
+      (prn (binding [*data-readers* {'my/tag dr-tag}] (read-string "[#my/tag #my/tag 1 #_#my/tag 2]")))
+      (prn (binding [*data-readers* {'my/tag (fn [x] (throw (ex-info "no" {:x x})))}] (try (read-string "#my/tag 1") (catch clojure.lang.ExceptionInfo e [(ex-message e) (ex-data e)]))))
+    expected: |
+      [[:tagged 1] [:tagged 2]]
+      "No dispatch macro for: m"
+      [:inst "2020"]
+      [[foo/bar 3] #inst "1970-01-01T00:00:00.000-00:00"]
+      "No dispatch macro for: f"
+      4
+      "No reader function for tag my.ns/tag"
+      {} nil
+      #'clojure.instant/read-instant-date #'clojure.uuid/default-uuid-reader 2
+      #uuid "00000001-0001-0001-0001-000000000001" "#uuid data reader expected string"
+      [:tagged [1 2]]
+      [[:tagged [:tagged 1]]]
+      ["no" {:x 1}]
   - name: inst-and-uuid-values-dispatch-and-cross-macros-like-the-oracles
     # A multimethod on class and a protocol dispatch on java.util.Date and
     # java.util.UUID (a Timestamp takes the Date method through the class hierarchy), instance?
@@ -9209,6 +9321,50 @@ cases:
       [:a :b :c] "abc" false true true false false
       (1 2 3) ("a" "b" "c") :c (:c :b :a)
       :no-count :no-nth :not-a-seq
+  - name: iteration-seqs-lazily-and-reduces-through-its-step
+    # clojure.core/iteration (.kb/clojure-frontend.md "Host interfaces"): a value
+    # implementing Seqable and IReduceInit over the step function. seq calls step, somef,
+    # vf and kf for one element and steps the rest lazily; a reduction stops at reduced
+    # before kf; the options are keyword arguments or a map (an odd trailing map merged,
+    # the last key winning); the init-less reduce and count stay refused. Every line is
+    # the oracle's (clj 1.12.6), on all four backends.
+    source: |
+      (ns core-iteration)
+      (def it (iteration (fn [k] (when (< k 3) {:k k :v (* k 10)})) :initk 0 :kf (comp inc :k) :vf :v))
+      (prn (vec it) (seq it) (into [] it) (into [] (map inc) it) (reduce + 0 it) (transduce (take 2) conj it))
+      (prn (first it) (rest it) (map inc it) (seqable? it) (coll? it) (sequential? it) (sequence it) (mapv identity it))
+      (prn (try (reduce + it) (catch ClassCastException e :no-ireduce)) (try (count it) (catch UnsupportedOperationException e :no-count)))
+      (def log (atom []))
+      (def logged (iteration (fn [k] (swap! log conj [:step k]) (when (< k 5) k)) :initk 0
+                    :somef (fn [r] (swap! log conj [:somef r]) (some? r))
+                    :vf (fn [r] (swap! log conj [:vf r]) r)
+                    :kf (fn [r] (swap! log conj [:kf r]) (inc r))))
+      (prn @log)
+      (def s (seq logged))
+      (prn @log)
+      (reset! log [])
+      (prn (first (rest s)) @log)
+      (reset! log [])
+      (prn (reduce (fn [a x] (if (= x 2) (reduced (conj a x)) (conj a x))) [] logged) @log)
+      (prn (seq (iteration (constantly nil))) (vec (iteration (constantly nil))) (take 5 (iteration inc :initk 0)) (seq (iteration (fn [k] (if (nil? k) 1 (when (< k 3) (inc k)))))))
+      (prn (vec (iteration (fn [k] [k]) :initk false :kf (fn [r] (if (first r) nil true)))) (vec (iteration (fn [k] (when (< k 3) k)) {:initk 0 :kf inc})) (vec (iteration (fn [k] k) :initk 0 :somef #(< % 3) :kf inc)) (vec (iteration (fn [k] (when (< k 3) k)) :initk 0 :kf inc :vf #{1})))
+      (prn (seq (apply iteration (fn [k] (when (< k 3) k)) [:initk 0 :kf inc])) (vec (iteration (fn [k] (when (< k 3) k)) :initk 0 {:kf inc})) (vec (iteration (fn [k] (when (< k 3) k)) :initk 0 :kf dec :kf inc)) (vec (iteration (fn [k] k) :initk)))
+      (prn (try (iteration (fn [k] k) :initk 0 :kf) (catch IllegalArgumentException e :no-seq)) (try (vec (iteration (fn [k] 1) :vf false)) (catch ClassCastException e :not-a-fn)))
+      (prn (instance? clojure.lang.Seqable it) (instance? clojure.lang.IReduceInit it) (instance? clojure.lang.IReduce it) (instance? clojure.lang.Counted it))
+      (in-ns 'user)
+    expected: |
+      [0 10 20] (0 10 20) [0 10 20] [1 11 21] 30 [0 10]
+      0 (10 20) (1 11 21) true false false (0 10 20) [0 10 20]
+      :no-ireduce :no-count
+      []
+      [[:step 0] [:somef 0] [:vf 0] [:kf 0]]
+      1 [[:step 1] [:somef 1] [:vf 1] [:kf 1]]
+      [0 1 2] [[:step 0] [:somef 0] [:vf 0] [:kf 0] [:step 1] [:somef 1] [:vf 1] [:kf 1] [:step 2] [:somef 2] [:vf 2]]
+      nil [] (1 2 3 4 5) (1 2 3)
+      [[false] [true]] [0 1 2] [0 1 2] [nil 1 nil]
+      (0 1 2) [0 1 2] [0 1 2] []
+      :no-seq :not-a-fn
+      true true false false
   - name: a-counted-or-indexed-type-counts-and-indexes-through-its-methods
     # clojure.lang.Counted and Indexed (.kb/clojure-frontend.md "Host interfaces"): count,
     # counted?, empty? (counted? first, like the oracle's) and .count read count; nth of
@@ -9319,3 +9475,549 @@ cases:
       (in-ns 'user)
     expected: |
       {:a 1} {:b 2} ([:a 1] [:c 3]) true
+  - name: a-collection-type-conjs-empties-counts-and-compares-through-its-methods
+    # clojure.lang.IPersistentCollection in a deftype body (.kb/clojure-frontend.md
+    # "Collection interfaces"): conj and into reach its cons, empty its empty, = its equiv
+    # on either side (a vector on the left reads it as no sequential, nil and the value
+    # itself never ask); count of one that is no Counted walks its seq, like the oracle's
+    # countFrom. Every line is the oracle's (clj 1.12.6), on all four backends.
+    source: |
+      (ns iface-coll)
+      (def log (atom []))
+      (defn note [& xs] (swap! log conj (vec xs)))
+      (defn calls [] (let [l @log] (reset! log []) l))
+      (deftype BagT [xs]
+        clojure.lang.IPersistentCollection
+        (cons [_ x] (note :cons x) (BagT. (conj xs x)))
+        (empty [_] (note :empty) (BagT. []))
+        (equiv [_ o] (note :equiv) (= xs o))
+        (count [_] (note :count) 99)
+        (seq [_] (seq xs)))
+      (prn (.-xs (conj (BagT. [1]) 2 3)) (calls) (.-xs (into (BagT. []) [4 5])) (calls) (.-xs (empty (BagT. [1]))) (calls))
+      (prn (count (BagT. [1 2 3])) (calls) (counted? (BagT. [])) (coll? (BagT. [])) (sequential? (BagT. [])) (seq (BagT. [7 8])) (first (BagT. [7 8])) (reduce + (BagT. [1 2 3])))
+      (prn (= (BagT. [1 2]) [1 2]) (calls) (= :k (BagT. [])) (calls) (= [1 2] (BagT. [1 2])) (calls) (= nil (BagT. [])) (let [b (BagT. [])] (= b b)) (calls))
+      (prn (instance? clojure.lang.IPersistentCollection (BagT. [])) (instance? clojure.lang.Seqable (BagT. [])) (map? (BagT. [])) (vector? (BagT. [])))
+      (in-ns 'user)
+    expected: |
+      [1 2 3] [[:cons 2] [:cons 3]] [4 5] [[:cons 4] [:cons 5]] [] [[:empty]]
+      3 [] false true false (7 8) 7 6
+      true [[:equiv]] false [[:equiv]] false [] false true []
+      true true false false
+  - name: a-map-type-assocs-dissocs-reads-and-prints-as-a-map
+    # clojure.lang.IPersistentMap in a deftype body (.kb/clojure-frontend.md "Collection
+    # interfaces"): assoc, update and merge reach its assoc and cons, dissoc its without,
+    # get and a keyword's call its valAt, contains? its containsKey, find and select-keys
+    # its entryAt; map? is true and it prints as a map over its seq; reduce, into and
+    # reduce-kv step its iterator (an IPersistentMap is an Iterable), like the oracle; a
+    # map on the left of = is no java.util.Map's. A java.util.Map body answers get,
+    # count, contains?, find, seq and = through its get, size, containsKey and entrySet.
+    # Every line is the oracle's (clj 1.12.6), on all four backends.
+    source: |
+      (ns iface-map)
+      (def log (atom []))
+      (defn note [& xs] (swap! log conj (vec xs)))
+      (defn calls [] (let [l @log] (reset! log []) l))
+      (deftype MapT [m]
+        clojure.lang.IPersistentMap
+        (count [_] (count m))
+        (cons [_ x] (note :cons x) (MapT. (conj m x)))
+        (empty [_] (MapT. {}))
+        (equiv [_ o] (= m o))
+        (seq [_] (seq m))
+        (valAt [_ k] (note :valAt k) (get m k))
+        (valAt [_ k nf] (note :valAt k nf) (get m k nf))
+        (containsKey [_ k] (note :containsKey k) (contains? m k))
+        (entryAt [_ k] (note :entryAt k) (find m k))
+        (assoc [_ k v] (note :assoc k v) (MapT. (assoc m k v)))
+        (assocEx [_ k v] (MapT. (assoc m k v)))
+        (without [_ k] (note :without k) (MapT. (dissoc m k)))
+        (iterator [_] (note :iterator) (.iterator m)))
+      (def mm (MapT. {:a 1}))
+      (prn (.-m (assoc mm :b 2)) (calls) (.-m (dissoc mm :a)) (calls) (get mm :a) (get mm :z :nf) (:a mm) (calls))
+      (prn (contains? mm :a) (find mm :a) (calls) (.-m (update mm :a inc)) (calls) (select-keys mm [:a]) (calls))
+      (prn (count mm) (keys mm) (vals mm) (map? mm) (associative? mm) (counted? mm) (empty? mm) mm [mm])
+      (println mm)
+      (prn (reduce (fn [a [k v]] (+ a v)) 10 mm) (calls) (into {} mm) (calls) (reduce-kv (fn [a k v] (conj a k v)) [] mm) (calls))
+      (prn (.-m (merge mm {:c 3})) (calls) (merge {:c 3} (MapT. {})) (= mm {:a 1}) (= {:a 1} mm) (let [{:keys [a]} mm] a) (calls))
+      (deftype JMapT [m] java.util.Map (size [_] (count m)) (containsKey [_ k] (contains? m k)) (get [_ k] (get m k)) (entrySet [_] (set m)))
+      (def jm (JMapT. {:a 1}))
+      (prn (get jm :a) (get jm :z :nf) (:a jm) (count jm) (contains? jm :a) (find jm :a) (seq jm) (map? jm) (keys jm) (= {:a 1} jm) (= jm {:a 1}) jm)
+      (in-ns 'user)
+    expected: |
+      {:a 1, :b 2} [[:assoc :b 2]] {} [[:without :a]] 1 :nf 1 [[:valAt :a] [:valAt :z :nf] [:valAt :a]]
+      true [:a 1] [[:containsKey :a] [:entryAt :a]] {:a 2} [[:valAt :a] [:assoc :a 2]] {:a 1} [[:entryAt :a]]
+      1 (:a) (1) true true true false {:a 1} [{:a 1}]
+      {:a 1}
+      11 [[:iterator]] {:a 1} [[:iterator]] [:a 1] [[:iterator]]
+      {:a 1, :c 3} [[:cons {:c 3}]] {:c 3} true false 1 [[:valAt :a]]
+      1 :nf 1 1 true [:a 1] ([:a 1]) false (:a) true true {:a 1}
+  - name: a-set-type-disjs-contains-and-prints-as-a-set
+    # clojure.lang.IPersistentSet in a deftype body (.kb/clojure-frontend.md "Collection
+    # interfaces"): disj reaches its disjoin, contains? its contains, get and a keyword's
+    # call its get (with a default, past its contains); set? is true and it prints as a
+    # set; a set on the left of = is no java.util.Set's. Every line is the oracle's (clj
+    # 1.12.6), on all four backends.
+    source: |
+      (ns iface-set)
+      (def log (atom []))
+      (defn note [& xs] (swap! log conj (vec xs)))
+      (defn calls [] (let [l @log] (reset! log []) l))
+      (deftype SetT [s]
+        clojure.lang.IPersistentSet
+        (count [_] (count s))
+        (cons [_ x] (note :cons x) (SetT. (conj s x)))
+        (empty [_] (SetT. #{}))
+        (equiv [_ o] (= s o))
+        (seq [_] (seq s))
+        (disjoin [_ k] (note :disjoin k) (SetT. (disj s k)))
+        (contains [_ k] (note :contains k) (contains? s k))
+        (get [_ k] (note :get k) (get s k)))
+      (def ss (SetT. #{1}))
+      (prn (.-s (disj ss 1)) (calls) (contains? ss 1) (get ss 1) (get ss 9 :nf) (:a ss) (calls))
+      (prn (set? ss) (count ss) ss (= ss #{1}) (= #{1} ss) (.-s (conj ss 1)) (calls) (into #{} ss))
+      (in-ns 'user)
+    expected: |
+      #{} [[:disjoin 1]] true 1 :nf nil [[:contains 1] [:get 1] [:contains 9] [:get :a]]
+      true 1 #{1} true false #{1} [[:cons 1]] #{1}
+  - name: a-vector-type-indexes-stacks-reverses-and-prints-as-a-vector
+    # clojure.lang.IPersistentVector in a deftype body (.kb/clojure-frontend.md
+    # "Collection interfaces"): vector?, sequential?, reversible? and indexed? are true, it
+    # prints as a vector, a vector on the left of = reads its count and nth, a list its
+    # seq; assoc reaches its assoc, rseq its rseq, peek and pop theirs, subvec its nth.
+    # Every line is the oracle's (clj 1.12.6), on all four backends.
+    source: |
+      (ns iface-vector)
+      (def log (atom []))
+      (defn note [& xs] (swap! log conj (vec xs)))
+      (defn calls [] (let [l @log] (reset! log []) l))
+      (deftype VecT [v]
+        clojure.lang.IPersistentVector
+        (count [_] (count v))
+        (cons [_ x] (note :cons x) (VecT. (conj v x)))
+        (empty [_] (VecT. []))
+        (equiv [_ o] (= v o))
+        (seq [_] (seq v))
+        (peek [_] (note :peek) (peek v))
+        (pop [_] (note :pop) (VecT. (pop v)))
+        (valAt [_ k] (get v k))
+        (valAt [_ k nf] (get v k nf))
+        (containsKey [_ k] (contains? v k))
+        (entryAt [_ k] (find v k))
+        (assoc [_ k x] (note :assoc k x) (VecT. (assoc v k x)))
+        (assocN [_ k x] (VecT. (assoc v k x)))
+        (length [_] (count v))
+        (rseq [_] (note :rseq) (rseq v))
+        (nth [_ i] (nth v i))
+        (nth [_ i nf] (nth v i nf)))
+      (def vv (VecT. [1 2 3]))
+      (prn (vector? vv) (sequential? vv) (reversible? vv) (indexed? vv) vv [vv] (= vv [1 2 3]) (= [1 2 3] vv) (= '(1 2 3) vv))
+      (prn (.-v (assoc vv 0 9)) (nth vv 1) (get vv 1) (rseq vv) (peek vv) (.-v (pop vv)) (calls) (subvec vv 1) (let [[a b] vv] [a b]))
+      (prn (mapv inc vv) (reduce + vv) (count vv) (contains? vv 1) (find vv 1) (.-v (into vv [4])) (calls) (last vv))
+      (in-ns 'user)
+    expected: |
+      true true true true [1 2 3] [[1 2 3]] true true true
+      [9 2 3] 2 2 (3 2 1) 3 [1 2] [[:assoc 0 9] [:rseq] [:peek] [:pop]] [2 3] [1 2]
+      [2 3 4] 6 3 true [1 2] [1 2 3 4] [[:cons 4]] 3
+  - name: a-seq-type-walks-through-its-first-and-next
+    # clojure.lang.ISeq and Sequential in a deftype body (.kb/clojure-frontend.md
+    # "Collection interfaces"): a seq answering the type itself walks through its first
+    # and next -- first, second, map, into, reduce, count, last, apply, vec -- and prints
+    # as a seq; seq? is true, sequential? only with Sequential, whose seq a vector or list
+    # on the other side of = walks, like nth and vector destructuring. Every line is the
+    # oracle's (clj 1.12.6), on all four backends.
+    source: |
+      (ns iface-seq)
+      (deftype SeqT [v i]
+        clojure.lang.ISeq
+        (first [_] (nth v i))
+        (next [_] (when (< (inc i) (count v)) (SeqT. v (inc i))))
+        (more [_] (if (< (inc i) (count v)) (SeqT. v (inc i)) ()))
+        (cons [this x] (cons x this))
+        (count [_] (- (count v) i))
+        (empty [_] ())
+        (equiv [this o] (= (seq v) o))
+        (seq [this] this))
+      (def qq (SeqT. [1 2 3] 0))
+      (prn (first qq) (second qq) (seq? qq) (sequential? qq) (coll? qq) qq (count qq) (conj qq 0) (cons 0 qq) (map inc qq) (into [] qq))
+      (prn (reduce + qq) (= [1 2 3] qq) (= qq [1 2 3]) (last qq) (apply + qq) (empty? qq) (vec qq))
+      (deftype SeqViewT [v] clojure.lang.Sequential clojure.lang.Seqable (seq [_] (seq v)))
+      (prn (sequential? (SeqViewT. [1 2])) (= [1 2] (SeqViewT. [1 2])) (= '(1 2) (SeqViewT. [1 2])) (= (SeqViewT. [1 2]) [1 2]) (nth (SeqViewT. [1 2]) 1) (let [[a b] (SeqViewT. [1 2])] [a b]))
+      (in-ns 'user)
+    expected: |
+      1 2 true false true (1 2 3) 3 (0 1 2 3) (0 1 2 3) (2 3 4) [1 2 3]
+      6 false true 3 6 false [1 2 3]
+      true true true true 2 [1 2]
+  - name: an-iterable-type-seqs-and-reduces-through-its-iterator
+    # java.lang.Iterable, java.util.Iterator and the java.util collections in a deftype or
+    # reify body (.kb/clojure-frontend.md "Collection interfaces"): the seq of an Iterable
+    # steps its iterator, and so do reduce, into, vec and sort; iterator-seq steps an
+    # iterator -- a type's, a collection's .iterator, a clojure.lang.SeqIterator -- whose
+    # next past its end is the oracle's NoSuchElementException; a java.util.List counts
+    # through its size, a RandomAccess one indexes through its get and prints readably as
+    # a vector, a java.util.Set answers contains? and = through its contains and prints
+    # readably as a set. Every line is the oracle's (clj 1.12.6), on all four backends.
+    source: |
+      (ns iface-iter)
+      (deftype ThreeT []
+        java.lang.Iterable
+        (iterator [_]
+          (let [i (atom 0)]
+            (reify java.util.Iterator
+              (hasNext [_] (< @i 3))
+              (next [_] (let [x @i] (swap! i inc) x))))))
+      (prn (seq (ThreeT.)) (first (ThreeT.)) (reduce + (ThreeT.)) (reduce + 10 (ThreeT.)) (into [] (ThreeT.)) (map inc (ThreeT.)) (vec (ThreeT.)) (sort > (ThreeT.)) (seqable? (ThreeT.)) (coll? (ThreeT.)) (empty? (ThreeT.)))
+      (prn (iterator-seq (.iterator (ThreeT.))) (iterator-seq (.iterator [1 2 3])) (iterator-seq (clojure.lang.SeqIterator. (seq [4 5]))) (iterator-seq (.iterator {:a 1})))
+      (prn (let [it (.iterator [7 8])] [(.hasNext it) (.next it) (.next it) (.hasNext it)]) (try (.next (.iterator [])) (catch java.util.NoSuchElementException e :done)))
+      (deftype JListT [v] java.util.List java.util.RandomAccess (size [_] (count v)) (get [_ i] (nth v i)) (iterator [_] (.iterator v)))
+      (deftype JSetT [s] java.util.Set (size [_] (count s)) (contains [_ x] (contains? s x)) (iterator [_] (.iterator s)))
+      (prn (count (JListT. [1 2])) (nth (JListT. [1 2]) 1) (seq (JListT. [1 2])) (= [1 2] (JListT. [1 2])) (= '(1 2) (JListT. [1 2])) (pr-str (JListT. [1 2])) (reduce + (JListT. [1 2])))
+      (prn (count (JSetT. #{1})) (contains? (JSetT. #{1}) 1) (seq (JSetT. #{1})) (= #{1} (JSetT. #{1})) (pr-str (JSetT. #{1})) (set? (JSetT. #{1})))
+      (in-ns 'user)
+    expected: |
+      (0 1 2) 0 3 13 [0 1 2] (1 2 3) [0 1 2] (2 1 0) true false false
+      (0 1 2) (1 2 3) (4 5) ([:a 1])
+      [true 7 8 false] :done
+      2 2 (1 2) true true "[1 2]" 3
+      1 true (1) true "#{1}" false
+  - name: pending-comparable-and-sorted-types-answer-through-their-methods
+    # clojure.lang.IPending, java.lang.Comparable and clojure.lang.Sorted in a deftype body
+    # (.kb/clojure-frontend.md "Collection interfaces"): realized? reaches isRealized;
+    # compare, sort and a sorted set's default order compareTo; subseq and rsubseq walk a
+    # Sorted through its seqFrom, seq, comparator and entryKey, like the oracle's. A
+    # method the body leaves out is the oracle's AbstractMethodError when a verb calls it
+    # (an IPersistentMap is an Iterable, whose iterator reduce reads). Every line is the
+    # oracle's (clj 1.12.6), on all four backends.
+    source: |
+      (ns iface-misc)
+      (deftype CellT [r] clojure.lang.IPending (isRealized [_] r))
+      (prn (realized? (CellT. true)) (realized? (CellT. false)) (instance? clojure.lang.IPending (CellT. 1)))
+      (deftype CentsT [c] java.lang.Comparable (compareTo [_ o] (compare c (.-c ^CentsT o))))
+      (prn (compare (CentsT. 1) (CentsT. 2)) (compare (CentsT. 2) (CentsT. 2)) (map #(.-c %) (sort [(CentsT. 3) (CentsT. 1) (CentsT. 2)])) (map #(.-c %) (sorted-set (CentsT. 2) (CentsT. 1))) (compare nil (CentsT. 1)))
+      (deftype IndexT [m]
+        clojure.lang.Sorted
+        (comparator [_] compare)
+        (entryKey [_ e] (key e))
+        (seq [_ asc] (if asc (seq m) (rseq m)))
+        (seqFrom [_ k asc] (if asc (subseq m >= k) (rsubseq m <= k))))
+      (def ix (IndexT. (sorted-map 1 :a 2 :b 3 :c 4 :d)))
+      (prn (sorted? ix) (subseq ix > 2) (subseq ix < 3) (rsubseq ix < 3) (rsubseq ix >= 3) (subseq ix >= 2 < 4) (rsubseq ix > 1 <= 3))
+      (deftype HolderT [] clojure.lang.IPersistentMap (count [_] 0) (seq [_] nil))
+      (prn (try (reduce + 0 (HolderT.)) (catch AbstractMethodError e :no-iterator)) (try (conj (HolderT.) [:a 1]) (catch AbstractMethodError e :no-cons)))
+      (prn (instance? clojure.lang.IPersistentMap (HolderT.)) (instance? java.lang.Iterable (HolderT.)) (instance? clojure.lang.Associative (HolderT.)) (instance? java.util.Map (HolderT.)) (instance? clojure.lang.IHashEq (reify clojure.lang.IHashEq (hasheq [_] 1))))
+      (in-ns 'user)
+    expected: |
+      true false true
+      -1 0 (1 2 3) (1 2) -1
+      true ([3 :c] [4 :d]) ([1 :a] [2 :b]) ([2 :b] [1 :a]) ([4 :d] [3 :c]) ([2 :b] [3 :c]) ([3 :c] [2 :b])
+      :no-iterator :no-cons
+      true true true false true
+  - name: a-protocol-extended-to-a-collection-interface-reaches-a-type-implementing-it
+    # extend-protocol to clojure.lang.IPersistentMap, IPersistentVector, IPersistentSet and
+    # java.util.Map, which also key the core kinds' rows, and to ISeq
+    # (.kb/clojure-frontend.md "Collection interfaces"): a deftype or reify implementing one
+    # takes its row, an extension to none the Object row; satisfies? agrees. Every line is
+    # the oracle's (clj 1.12.6), on all four backends.
+    source: |
+      (ns iface-extend)
+      (defprotocol Kind (kind [x]))
+      (extend-protocol Kind
+        clojure.lang.IPersistentMap (kind [_] :map)
+        clojure.lang.IPersistentVector (kind [_] :vector)
+        clojure.lang.ISeq (kind [_] :seq)
+        clojure.lang.IPersistentSet (kind [_] :set)
+        java.util.Map (kind [_] :java-map)
+        Object (kind [_] :object))
+      (deftype KindMapT [m] clojure.lang.IPersistentMap (seq [_] (seq m)) (count [_] (count m)))
+      (deftype KindVecT [v] clojure.lang.IPersistentVector (seq [_] (seq v)) (count [_] (count v)) (nth [_ i] (nth v i)))
+      (deftype KindSeqT [v] clojure.lang.ISeq (seq [this] (seq v)) (first [_] (first v)) (next [_] (next v)))
+      (deftype KindSetT [s] clojure.lang.IPersistentSet (seq [_] (seq s)) (count [_] (count s)))
+      (deftype KindJMapT [m] java.util.Map (size [_] (count m)))
+      (prn (kind (KindMapT. {})) (kind (KindVecT. [])) (kind (KindSeqT. [])) (kind (KindSetT. #{})) (kind (KindJMapT. {})) (kind (reify clojure.lang.Counted (count [_] 0))))
+      (prn (kind #{1}) (satisfies? Kind (KindMapT. {})) (satisfies? Kind (KindVecT. [])))
+      (in-ns 'user)
+    expected: |
+      :map :vector :seq :set :java-map :object
+      :set true true
+  - name: a-protocol-extended-to-an-interface-reaches-every-value-implementing-it
+    # extend-protocol to an interface spelled like a core kind whose instances go past
+    # that kind (.kb/clojure-frontend.md "Collection interfaces"): a record reaches
+    # clojure.lang.IPersistentMap and java.util.Map, a vector and a set java.util.Collection,
+    # a keyword, a symbol and a map clojure.lang.IFn, a vector clojure.lang.Sequential; a
+    # list takes clojure.lang.ISeq ahead of IPersistentCollection, the more specific one,
+    # and a keyword its own class ahead of IFn. Every line is the oracle's (clj 1.12.6),
+    # on all four backends.
+    source: |
+      (ns iface-extend-kinds)
+      (defrecord ExtKindRec [a])
+      (defprotocol Shape (shape [x]))
+      (extend-protocol Shape
+        clojure.lang.IPersistentMap (shape [_] :pmap)
+        Object (shape [_] :other))
+      (prn (shape (->ExtKindRec 1)) (shape {}) (shape (sorted-map)) (shape []) (satisfies? Shape (->ExtKindRec 1)))
+      (defprotocol JShape (jshape [x]))
+      (extend-protocol JShape
+        java.util.Map (jshape [_] :jmap)
+        java.util.Collection (jshape [_] :coll)
+        Object (jshape [_] :other))
+      (prn (jshape (->ExtKindRec 1)) (jshape {}) (jshape [1]) (jshape #{1}) (jshape '(1)) (jshape (map inc [1])) (jshape "s"))
+      (defprotocol Order (order [x]))
+      (extend-protocol Order
+        clojure.lang.IPersistentCollection (order [_] :pcoll)
+        clojure.lang.ISeq (order [_] :iseq)
+        Object (order [_] :other))
+      (prn (order '(1)) (order [1]) (order {}) (order (->ExtKindRec 1)) (order #{}) (order "s"))
+      (defprotocol Call (call-kind [x]))
+      (extend-protocol Call
+        clojure.lang.IFn (call-kind [_] :ifn)
+        clojure.lang.Keyword (call-kind [_] :keyword)
+        Object (call-kind [_] :other))
+      (prn (call-kind :k) (call-kind 's) (call-kind {}) (call-kind []) (call-kind inc) (call-kind 1) (satisfies? Call 's))
+      (defprotocol Line (line [x]))
+      (extend-protocol Line
+        clojure.lang.Sequential (line [_] :sequential))
+      (prn (line [1]) (line '(1)) (satisfies? Line [1]) (satisfies? Line {}))
+      (in-ns 'user)
+    expected: |
+      :pmap :pmap :pmap :other true
+      :jmap :jmap :coll :coll :coll :coll :other
+      :iseq :pcoll :pcoll :pcoll :pcoll :other
+      :keyword :ifn :ifn :ifn :ifn :other true
+      :sequential :sequential true false
+  - name: clojure-java-io-file-names-a-path
+    # clojure.java.io/file and (java.io.File. ...) make a java.io.File value of this
+    # front end's own on every backend: the path as java.io.File normalizes it on Unix
+    # (no doubled or trailing slash, an empty parent the root), its name and parent read
+    # off the spelling, = and the hash by path. Oracle-identical (clj 1.12.6,
+    # 2026-10-08), the hash included (String.hashCode xor 1234321).
+    source: |
+      (require '[clojure.java.io :as io])
+      (println (str (io/file "a/b//c/")) (str (io/file "a" "b" "c")) (.getPath (io/file "" "b"))
+               (.getPath (io/file nil "b")) (.getPath (io/file (io/file "a") "b/")) (.getPath (io/file "/")))
+      (prn (.getName (io/file "a/b.txt")) (.getParent (io/file "a/b.txt")) (.getParent (io/file "a"))
+           (.getParent (io/file "/a")) (.getParent (io/file "/")) (str (.getParentFile (io/file "a/b"))))
+      (prn (.isAbsolute (io/file "/a")) (.isAbsolute (io/file "a")) (= (io/file "a") (io/file "a/"))
+           (= (io/file "a") "a") (.compareTo (io/file "a") (io/file "b")) (.hashCode (io/file "a")))
+      (prn (instance? java.io.File (io/file "a")) (instance? Comparable (io/file "a"))
+           (instance? java.io.Serializable (io/file "a")) (instance? java.io.File "a")
+           (= (java.io.File. "x" "y") (io/file "x/y")))
+      (prn (io/as-relative-path "a/b") (io/as-file nil) (str (io/file (io/as-url "file:/tmp/%C3%A9+x"))))
+      (prn (try (io/file "a" "/b") (catch IllegalArgumentException e (ex-message e)))
+           (try (io/as-relative-path "/a") (catch IllegalArgumentException e (ex-message e)))
+           (try (io/file 1) (catch IllegalArgumentException e :refused)))
+    expected: |
+      a/b/c a/b/c /b b a/b /
+      "b.txt" "a" nil "/" nil "a"
+      true false true false -1 1234416
+      true true true false true
+      "a/b" nil "/tmp/é+x"
+      "/b is not a relative path" "/a is not a relative path" :refused
+  - name: a-java-io-file-prints-as-the-host-object-its-hash-left-out
+    # A deviation: the oracle's #object carries the identity hash
+    # (#object[java.io.File 0x649725e3 a]), which no value here has, like a stream's;
+    # class answers the class's keyword, the oracle the class (java.io.File).
+    source: |
+      (println (io/file "a") [(io/file "b")])
+      (prn (io/file "c") (str [(io/file "d")]) (class (io/file "e")))
+    expected: |
+      #object[java.io.File a] [#object[java.io.File b]]
+      #object[java.io.File "c"] "[#object[java.io.File \"d\"]]" :java.io.File
+  - name: clojure-java-io-opens-the-four-kinds-of-stream-over-a-file
+    # reader and writer (:append) open a character stream over a File, input-stream and
+    # output-stream a byte stream; a writer over a byte stream encodes into it, a reader
+    # over one decodes it. Writer.write of an int writes that character, of a string and
+    # two ints a part of it; OutputStream.write writes an int's low octet. On wasm the
+    # paths need a --dir preopen covering /tmp. Oracle-identical (clj 1.12.6, 2026-10-08).
+    source: |
+      (def jio-base (str "/tmp/rontolisp-jio-" (rand-int 1000000000) "-" (rand-int 1000000000)))
+      (def jio-a (io/file (str jio-base "-a.txt")))
+      (spit jio-a "héllo\nworld\n")
+      (prn (slurp jio-a) (.exists jio-a) (.isFile jio-a) (.isDirectory jio-a) (.length jio-a))
+      (with-open [r (io/reader jio-a)] (prn (line-seq r)))
+      (with-open [w (io/writer jio-a :append true)]
+        (.write w "more") (.write w 10) (.write w "xBCx" 1 2) (.newLine w) (.append w \!))
+      (prn (slurp jio-a))
+      (with-open [in (io/input-stream jio-a)]
+        (prn [(.read in) (.read in) (.read in) (.available in) (.skip in 2) (.read in)]))
+      (with-open [o (io/output-stream jio-a)] (.write o 65) (.write o 300) (.write o 10))
+      (prn (slurp jio-a) (.length jio-a))
+      (with-open [o (io/output-stream jio-a :append true)] (.write o 66))
+      (prn (slurp jio-a))
+      (with-open [w (io/writer (io/output-stream jio-a))] (.write w "via bytes é"))
+      (prn (slurp jio-a))
+      (prn (slurp (io/input-stream jio-a)))
+      (with-open [r (io/reader (io/input-stream jio-a))] (prn (.readLine r)))
+    expected: |
+      "héllo\nworld\n" true true false 13
+      ("héllo" "world")
+      "héllo\nworld\nmore\nBC\n!"
+      [104 195 169 19 2 111]
+      "A,\n" 3
+      "A,\nB"
+      "via bytes é"
+      "via bytes é"
+      "via bytes é"
+  - name: clojure-java-io-copy-moves-what-one-holds-into-another
+    # copy takes a byte stream, a reader, a File or a string's characters to a byte
+    # stream, a writer or a File, characters in :encoding (UTF-8 by default), and
+    # refuses any other pair in the words of the oracle's do-copy multimethod.
+    # Oracle-identical (clj 1.12.6, 2026-10-08).
+    source: |
+      (def jio-b (io/file (str jio-base "-b.txt")))
+      (prn (io/copy "copied é" jio-a))
+      (io/copy jio-a jio-b)
+      (prn (slurp jio-b) (.length jio-b))
+      (let [w (java.io.StringWriter.)] (io/copy jio-a w) (prn (str w)))
+      (let [w (java.io.StringWriter.)] (with-open [in (io/input-stream jio-a)] (io/copy in w)) (prn (str w)))
+      (with-open [r (io/reader jio-a) o (io/output-stream jio-b)] (io/copy r o))
+      (prn (slurp jio-b))
+      (io/copy "é" jio-b :encoding "ISO-8859-1")
+      (prn (.length jio-b) (slurp jio-b :encoding "ISO-8859-1"))
+      (prn (try (io/copy 1 jio-b) (catch IllegalArgumentException e (ex-message e))))
+      (prn (try (io/copy "a" nil) (catch IllegalArgumentException e (ex-message e))))
+    expected: |
+      nil
+      "copied é" 9
+      "copied é"
+      "copied é"
+      "copied é"
+      1 "é"
+      "No method in multimethod 'do-copy' for dispatch value: [java.lang.Long java.io.File]"
+      "No method in multimethod 'do-copy' for dispatch value: [java.lang.String nil]"
+  - name: clojure-java-io-reads-and-writes-in-an-encoding
+    # :encoding names UTF-8, ISO-8859-1 or US-ASCII (and their aliases); any other name
+    # is the oracle's UnsupportedEncodingException, where the oracle knows the JDK's
+    # other charsets too. Oracle-identical (clj 1.12.6, 2026-10-08).
+    source: |
+      (spit jio-a "é" :encoding "ISO-8859-1")
+      (prn (.length jio-a) (slurp jio-a :encoding "latin1"))
+      (with-open [r (io/reader jio-a :encoding "ISO-8859-1")] (prn (slurp r)))
+      (prn (try (io/reader jio-a :encoding "bogus") (catch java.io.UnsupportedEncodingException e (ex-message e))))
+    expected: |
+      1 "é"
+      "é"
+      "bogus"
+  - name: clojure-java-io-refuses-what-it-cannot-open
+    # IOFactory's refusals in the oracle's words, slurp's and spit's of what no path
+    # names among them; a missing file is its FileNotFoundException, a read of a closed
+    # byte stream its IOException. Oracle-identical (clj 1.12.6, 2026-10-08).
+    source: |
+      (prn (try (io/reader 1) (catch IllegalArgumentException e (ex-message e)))
+           (try (io/reader nil) (catch IllegalArgumentException e (ex-message e)))
+           (try (io/writer 1) (catch IllegalArgumentException e (ex-message e)))
+           (try (io/input-stream :a) (catch IllegalArgumentException e (ex-message e)))
+           (try (io/output-stream 1) (catch IllegalArgumentException e (ex-message e))))
+      (prn (try (slurp (io/file (str jio-base "-missing"))) (catch java.io.FileNotFoundException e :not-found))
+           (try (.read (doto (io/input-stream jio-a) .close)) (catch java.io.IOException e (ex-message e))))
+      (prn (try (slurp 1) (catch IllegalArgumentException e (ex-message e)))
+           (try (spit 2 "x") (catch IllegalArgumentException e (ex-message e)))
+           (try (slurp nil) (catch IllegalArgumentException e (ex-message e))))
+    expected: |
+      "Cannot open <1> as an InputStream." "Cannot open <nil> as a Reader." "Cannot open <1> as an OutputStream." "Cannot open <:a> as an InputStream." "Cannot open <1> as an OutputStream."
+      :not-found "Stream closed"
+      "Cannot open <1> as an InputStream." "Cannot open <2> as an OutputStream." "Cannot open <nil> as a Reader."
+  - name: java-io-files-are-made-renamed-and-deleted
+    # createNewFile, renameTo, delete-file (silently answering its second argument),
+    # make-parents of a path with no parent, and a missing file's lastModified and
+    # length (0). Oracle-identical (clj 1.12.6, 2026-10-08).
+    source: |
+      (def jio-c (io/file (str jio-base "-c.txt")))
+      (prn (.createNewFile jio-c) (.createNewFile jio-c) (.exists jio-c))
+      (prn (.renameTo jio-c (io/file (str jio-base "-d.txt"))) (.exists jio-c))
+      (prn (io/delete-file (str jio-base "-d.txt")) (io/delete-file (str jio-base "-d.txt") :quietly))
+      (prn (try (io/delete-file jio-c) (catch java.io.IOException e :refused)))
+      (prn (io/make-parents "zz-jio-no-parent") (.lastModified jio-c) (.length jio-c))
+      (io/delete-file jio-a)
+      (io/delete-file jio-b)
+      (prn (.exists jio-a) (.exists jio-b))
+    expected: |
+      true false true
+      true false
+      true :quietly
+      :refused
+      nil 0 0
+      false false
+  - name: clojure-java-io-urls-and-uris
+    # as-url of a string, a File (its file: URL, quoted like java.net.URI quotes a
+    # path) and a URI; a URL's parts as java.net.URL reads them; as-file of a URL of
+    # any protocol but file is the oracle's refusal. Oracle-identical (clj 1.12.6,
+    # 2026-10-08).
+    source: |
+      (let [u (io/as-url "http://u@h.com:81/p/a.txt?q=1#r")]
+        (prn (str u) (.getProtocol u) (.getHost u) (.getPort u) (.getPath u) (.getFile u)
+             (.getQuery u) (.getRef u) (.getAuthority u) (.getUserInfo u) (.getDefaultPort u)))
+      (let [u (io/as-url "file:/tmp/x")]
+        (prn (.getProtocol u) (.getHost u) (.getPort u) (.getPath u) (.getFile u) (.getQuery u)))
+      (prn (str (io/as-url (io/file "/tmp/é x#y?z"))) (str (.toURI (io/file "/tmp/a b")))
+           (= (io/as-url "file:/a") (io/as-url "file:/a")) (str (io/as-url (.toURI (io/file "/a")))))
+      (prn (try (io/as-url "foo:bar") (catch java.net.MalformedURLException e (ex-message e)))
+           (try (io/as-url "/no/protocol") (catch java.net.MalformedURLException e :malformed))
+           (try (io/file (io/as-url "http://x/y")) (catch IllegalArgumentException e (ex-message e))))
+      (prn (io/resource "no/such/resource-jio.txt"))
+    expected: |
+      "http://u@h.com:81/p/a.txt?q=1#r" "http" "h.com" 81 "/p/a.txt" "/p/a.txt?q=1" "q=1" "r" "u@h.com:81" "u" 80
+      "file" "" -1 "/tmp/x" "/tmp/x" nil
+      "file:/tmp/é%20x%23y%3Fz" "file:/tmp/a%20b" true "file:/a"
+      "unknown protocol: foo" :malformed "Not a file: http://x/y"
+      nil
+  - name: clojure-java-io-protocols-a-program-extends
+    # Coercions and IOFactory are protocols: a record extending Coercions is a file to
+    # file, one extending IOFactory opens through its own rows, reader included.
+    # Oracle-identical (clj 1.12.6, 2026-10-08).
+    source: |
+      (defrecord JioNamed [path])
+      (extend-protocol io/Coercions JioNamed (as-file [n] (io/file (:path n))) (as-url [n] nil))
+      (prn (str (io/file (->JioNamed "p/q"))) (satisfies? io/Coercions "a") (satisfies? io/Coercions 1)
+           (satisfies? io/IOFactory 1) (sort (keys io/default-streams-impl)))
+      (defrecord JioText [s])
+      (extend-protocol io/IOFactory JioText
+        (make-reader [t _] (java.io.BufferedReader. (java.io.StringReader. (:s t))))
+        (make-writer [t _] (throw (IllegalArgumentException. "read only")))
+        (make-input-stream [t _] (throw (IllegalArgumentException. "no bytes")))
+        (make-output-stream [t _] (throw (IllegalArgumentException. "read only"))))
+      (with-open [r (io/reader (->JioText "one\ntwo"))] (prn (line-seq r)))
+      (prn (try (io/writer (->JioText "x")) (catch IllegalArgumentException e (ex-message e))))
+    expected: |
+      "p/q" true false true (:make-input-stream :make-output-stream :make-reader :make-writer)
+      ("one" "two")
+      "read only"
+  - name: extend-takes-a-map-computed-at-run-time
+    # extend with a map the program computes -- clojure.java.io's default-streams-impl
+    # with one row replaced, a var's map, merge's and hash-map's -- stores each entry as
+    # a row, like a map literal's, and takes several protocol and map pairs; slurp and
+    # spit open a type extended to IOFactory through it. Oracle-identical (clj 1.12.6,
+    # 2026-10-08).
+    source: |
+      (defrecord JioSrc [s])
+      (extend JioSrc io/IOFactory (assoc io/default-streams-impl :make-input-stream (fn [x _] (io/input-stream (:s x)))))
+      (def jio-e (str jio-base "-e.txt"))
+      (spit jio-e "one\ntwo")
+      (with-open [r (io/reader (->JioSrc jio-e))] (prn (line-seq r)))
+      (prn (slurp (->JioSrc jio-e)))
+      (prn (try (io/output-stream (->JioSrc "x")) (catch IllegalArgumentException e (ex-message e)))
+           (try (io/writer (->JioSrc "y")) (catch IllegalArgumentException e (ex-message e))))
+      (def jio-coercions {:as-file (fn [x] (io/file (:s x))) :as-url (fn [_] nil)})
+      (extend JioSrc io/Coercions jio-coercions)
+      (prn (str (io/file (->JioSrc "a/b"))) (io/as-url (->JioSrc "c")) (satisfies? io/Coercions (->JioSrc "d")))
+      (defprotocol JioTwo (jio-one [x]) (jio-two [x y]))
+      (defn jio-one-impl [x] [:one x])
+      (extend String JioTwo (merge {:jio-one jio-one-impl} {:jio-two (fn [x y] [:two x y])}))
+      (extend Object JioTwo (hash-map :jio-one (fn [x] [:object x])))
+      (prn (jio-one "s") (jio-two "s" 2) (jio-one 1))
+      (extend Long JioTwo {:jio-one (fn [x] [:long x])} io/Coercions {:as-file (fn [n] (io/file (str n))) :as-url (fn [_] nil)})
+      (prn (jio-one 5) (str (io/file 7)))
+      (defrecord JioDst [path])
+      (extend JioDst io/IOFactory
+        (assoc io/default-streams-impl
+               :make-output-stream (fn [x opts] (io/output-stream (:path x) :append (:append opts)))))
+      (spit (->JioDst jio-e) "a")
+      (spit (->JioDst jio-e) "b" :append true)
+      (prn (slurp jio-e))
+      (io/delete-file jio-e)
+    expected: |
+      ("one" "two")
+      "one\ntwo"
+      "Cannot open <#user.JioSrc{:s \"x\"}> as an OutputStream." "Cannot open <#user.JioSrc{:s \"y\"}> as an OutputStream."
+      "a/b" nil true
+      [:one "s"] [:two "s" 2] [:object 1]
+      [:long 5] "7"
+      "ab"

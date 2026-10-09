@@ -38,10 +38,11 @@
  `=` で一致するキーを見つけます。ただし格納されるコレクションのキーは、プログラムが最初に
  格納した同じ種類（ベクター・リスト・遅延 seq）の `=` なキーなので、メタデータと入れ子の
  要素の綴りはその先のオブジェクトに従います。これらのキーは異なる値と種類ごとに1つずつ、
- 実行の終わりまで保持されます。セットリテラルの重複要素は綴り単位で拒否されます。
+ 実行の終わりまで保持されます。
  `=` はベクター、リスト、遅延 seq を本家と同じく要素単位で比較します。`nil` が空リスト
  なので、本家が `false` を返す `(= [] nil)` と `(= (java.util.ArrayList.) nil)` は `true` に
- なります。
+ なります。キーとしては本家と同じく `[]` と `nil` を区別するので、空のリストや seq は空ベクターの
+ キーに一致しません。`(get {[] 1} ())` は `nil` です（本家は `1`）。
  `=` は本家と同じく左辺の Java オブジェクトに `equals` で尋ねますが、渡すのは数値、文字列、
  文字、`true`、`nil`、Java オブジェクトだけです。`false`、キーワード、シンボル、コレクションは、
  同じ種類の Java の `List`、`Map`、`Set` を除き、どの Java オブジェクトとも `=` になりません。
@@ -159,7 +160,7 @@
  キーワードと、単純名を通じてコアの種類のキーワードと同じクラスなので、
  `(isa? (class (java.util.ArrayList.)) java.util.List)` は `true` です。同じく `:list` と
  綴る `clojure.lang.IPersistentList` にも `isa?` で、オラクルは `false` を返します。それ以外の
-クラス（`java.io.File`）はディスパッチ値でもクラスオブジェクトで、オラクル通りです。プロトコルの
+クラス（`java.util.AbstractList`）はディスパッチ値でもクラスオブジェクトで、オラクル通りです。プロトコルの
  ディスパッチは階層（`derive`）を読まず、タグの完全一致の次はプロトコルを extend した
  クラスだけを試し、それから `Object` 既定です。`Long`・`Double` を `:number` にまとめ
  （オラクルは区別します）、1つの値が実装する2つの `clojure.lang` インタフェースは
@@ -257,10 +258,13 @@
   `ArityException` をシグナルします（オラクルは `AbstractMethodError`）。
 - `reify`・`deftype`・`defrecord` の本体が実装できるのは、コア関数が参照する `clojure.lang`
   のインタフェース（`IReduceInit`、`IReduce`、`IKVReduce`、`Seqable`、`Counted`、`Indexed`、
-  `ILookup`、`IFn`（`Callable` と `Runnable` を含む）、`IDeref`、`IMeta`、`IObj`）と `Object` の
-  メソッドの上書きです（[reify](reference/reify.md#host-interfaces)）。それ以外のインタフェース
-  （`ISeq`、`IPersistentMap`、`Sequential`、`java.util.List` など）は名前を挙げて拒否されます。
-  型の `equals` と `hashCode` は `=` と `.hashCode` に答えますが、マップのキーやセットの要素の
+  `ILookup`、`IFn`（`Callable` と `Runnable` を含む）、`IDeref`、`IMeta`、`IObj`）、コレクションの
+  インタフェース（`IPersistentMap`、`ISeq`、`Sequential`、`Iterable`、`java.util.List` など）、
+  `Object` のメソッドの上書きです（[reify](reference/reify.md#host-interfaces)）。それ以外の
+  インタフェース（`IChunkedSeq`、`java.util.Deque` など）は名前を挙げて拒否されます。`ISeq` 型への
+  `first`・`next`・`rest` はその `seq` を通して読み、関数がメソッドを呼ぶ回数はオラクルと異なる
+  ことがあり、コレクションの型の `str` は中身を綴ります
+  （[コレクションのインタフェース](reference/reify.md#collection-interfaces)）。型の `equals` と `hashCode` は `=` と `.hashCode` に答えますが、マップのキーやセットの要素の
   比較には使われず、そうした値は同一性で保持されます。`Seqable` だけを実装した型について、
   `sort` と `distinct` はその seq を通して答えます。オラクルはどちらも拒否します。
 - `clojure.core.reducers` は呼び出したスレッドの上で部分を順に1つずつ fold します。空でない
@@ -282,9 +286,10 @@
 - `format` は `%s`・`%d`・`%x`・`%X`・`%o`・`%c`・`%b`・`%f`・`%%`・`%n` を描画します
   （幅・浮動小数点精度付き）。`%e`・`%g`・フラグ・非リテラルは名前付きで拒否されます。
   `%s` の `nil` はオラクル同様 `"null"` です。
-- `line-seq` はパスか開かれたリーダー（`clojure.java.io/reader` など。閉じるのは
-  `with-open`）を取って、どちらも strict に答えます（オラクルはリーダーを取って遅延です）。
-  `spit`・`slurp`・`line-seq`・`reader` はインタプリタと JVM、wasm ではパスを含む `--dir` プリオープン付きで動きます。
+- `line-seq` は開かれたリーダー（`clojure.java.io/reader` など。閉じるのは `with-open`）か、
+  開いて読むパス、File、URL、バイトストリームを取って、どれも strict に答えます（オラクルは
+  リーダーだけを取って遅延です）。`spit`・`slurp`・`line-seq`・`reader` はすべてのバックエンドで、
+  wasm ではファイルを含む `--dir` プリオープン付きで動きます。
   リーダーの上の `java.io.InputStreamReader` はどのバックエンドでもそのリーダー自身です。Ring のリクエスト
   `:body` が、オラクルでは `InputStream` であるのに対し、ここではリーダーだからです。
 - Ring アダプター（`ring.adapter.rontolisp/run-server`）のリクエストマップには
@@ -349,7 +354,8 @@
   メタデータの `:tag` は書いたままのシンボル（`String`）で、オラクルはクラス
   （`java.lang.String`）に解決します。
 - `with-open` は `close` メソッド越しに閉じるため、バックエンドの届く closeable
-  だけが動きます（Java の closeable は JVM が要ります）。`time` は値を答えますが、
+  だけが動きます（`clojure.java.io` のバイトストリームはどのバックエンドでも、Java の
+  closeable はインタプリタと JVM で）。`time` は値を答えますが、
   ミリ秒数は固定されません。数えるのは整数ミリ秒（`42.0`）で、オラクルの値には
   ナノ秒の桁が付きます。
 - `read-string`/`read` はクオートと同じ答えを返します。`@x` は `(deref x)` と読まれ、
@@ -362,8 +368,19 @@
 - `#inst` と `#uuid` は、すべてのバックエンドでオラクルの `java.util.Date` と
   `java.util.UUID` として読まれます。わずかな違い（インスタントの `str` は UTC で答える、
   interop で得たホストの値は読んだ値と `=` にならない）は[インスタントと UUID](reference/instants.md)
-  にあります。`*data-readers*` と `data_readers.clj` は読まないため、ドットを含まないそれ以外の
-  タグには、ソースでも `read-string` でもリーダ関数がありません。
+  にあります。
+- `clojure.java.io` の `java.io.File`、`java.net.URL`、`java.net.URI`、バイトストリームは、
+  すべてのバックエンドでこのフロントエンド自身の値です。違い（バイト配列がない、文字セットは
+  3 つ、`http:` URL の背後に接続がない、リソースはクラスパスではなくソースパスで見つける、WASM の
+  ディレクトリ）は [clojure.java.io](reference/clojure-java-io.md) にあります。
+- データリーダはプログラムのコンパイル時に動くので、ソースでの答えはメタデータを失い、ここで
+  綴れる値でなければなりません。関数、deftype のインスタンス、UUID・Date 以外のホストの
+  オブジェクトは `Can't embed object in code` です（オラクルは `print-dup` で印字できるものを
+  コンパイルします）。ここでは `()` が `nil` なので、空リストの答えは `No dispatch macro` です。
+  `*data-readers*` や `*default-data-reader-fn*` の `set!` は `read-string` と `read` の読み方を
+  変えますが、プログラムのソースの読み方は変えません（オラクルのロードはファイルの後続の
+  フォームを、REPL は後続の入力をそれで読みます）。エントリファイル自身のルートの
+  `data_readers` のファイルも数えます（オラクルはクラスパスのものだけを読みます）。
 - `*out*`/`*in*`/`*err*` は `*standard-output*`/`*standard-input*`/`*error-output*`
   です（再束縛は標準ストリームの再束縛になります）。ルートで読んだ `*out*` と `*in*` は
   プロセスの標準ストリームを指すストリーム値です。
@@ -396,10 +413,9 @@
   座標を取得しません。それにしかありえない名前空間はそれを挙げて拒否し、プログラムの残りは
   動きます。組み込みのライブラリは、その依存も含めて何も取得しません。組み込みの Ring 名前空間は
   `ring/ring-core` の座標がなくてもロードでき（oracle では座標が必要です）、同梱より古い ring-core
-  の代わりにもなります。コマンドライン以外では `pom.xml` のプロジェクトも読みません。そのモデルの検証は
-  oracle の strict ではなく Maven の minimal の水準なので、strict の検査だけが拒否する POM
-  （ディレクトリのないリソースなど）も読みます。ライブラリの `data_readers.clj` は読みません。
-  そのタグはほかの未知のタグと同じく拒否します。`settings.xml` の認証情報で応じるのは
+  の代わりにもなります。コマンドライン以外では `pom.xml` のプロジェクトも読みません。取得しないライブラリはデータリーダも与えません。
+  その `data_readers.clj` だけが対応づけるタグにはリーダ関数がなく、そのライブラリを挙げて拒否します。
+  `settings.xml` の認証情報で応じるのは
   Basic 認証だけで（oracle は Digest と NTLM にも応じます）、ダウンロードは `maven-metadata.xml` も含めて
   常に `.sha1` と照合します（oracle の既定は警告だけです）。どのリポジトリにもなかったファイルは
   そのリポジトリの更新ポリシーが許すまで問い合わせ直しません。既定は `:daily` で、`:update` で

@@ -20790,6 +20790,17 @@ class LispEvaluatorTest {
 			.isEqualTo(am.ik.rontolisp.OneOperandFloatSiteFixture.COMPLEX_EXPECTED);
 	}
 
+	// A float meeting an operand of unproven type compares exactly at every operand tier.
+	// The twins are JvmLispCompilerTest#compileAndRunFloatComparisonOperand and
+	// WasmLispCompilerIntegrationTest#floatComparisonOperand.
+	@Test
+	void floatComparisonOperand() {
+		assertThat(printedLines(am.ik.rontolisp.FloatComparisonOperandFixture.SOURCE))
+			.isEqualTo(am.ik.rontolisp.FloatComparisonOperandFixture.EXPECTED);
+		assertThat(printedLines(am.ik.rontolisp.FloatComparisonOperandFixture.COMPLEX_SOURCE))
+			.isEqualTo(am.ik.rontolisp.FloatComparisonOperandFixture.COMPLEX_EXPECTED);
+	}
+
 	// A sequence operator, an array accessor and a hash-table accessor handed a value
 	// that is none of those: a type-error naming the operator, the value and SEQUENCE /
 	// ARRAY / HASH-TABLE (several answered silently or signalled a simple-error). The

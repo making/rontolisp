@@ -3,6 +3,7 @@ package am.ik.rontolisp.clojure;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Deque;
+import java.util.EnumSet;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.IdentityHashMap;
@@ -410,6 +411,13 @@ public final class ClojureLowering {
 	List<LispVal> hoisted = new ArrayList<>();
 
 	/**
+	 * The root of {@code *data-readers*} where the program has data readers and reads at
+	 * run time ({@link ClojureDataReaders#noteRuntimeReads}), else null for the empty
+	 * map.
+	 */
+	@Nullable LispVal dataReadersRoot;
+
+	/**
 	 * The statements of every project namespace file loaded so far, by namespace, in file
 	 * order: everything that must run when the namespace loads --
 	 * {@code def}/{@code defonce} setqs, prints, nested require calls, method rows,
@@ -551,13 +559,17 @@ public final class ClojureLowering {
 	 * an anonymous {@code fn} (or {@code #(...)}, or a stored method lambda) a fresh
 	 * {@code labels} name the form wraps itself in when the target is used. A plain
 	 * lambda that is none of these pushes nothing, so a {@code recur} passes through it
-	 * to the enclosing target.
+	 * to the enclosing target. An inline method's target ({@link #inlineMethod}) leaves
+	 * its first parameter, the target object, out of the count.
 	 */
 	static final class RecurTarget {
 
 		private final String callName;
 
 		private final boolean checked;
+
+		/** How many leading parameters the method supplies itself, not the recur. */
+		private final int leading;
 
 		private int arity = -1;
 
@@ -571,8 +583,27 @@ public final class ClojureLowering {
 		private int depth;
 
 		RecurTarget(String callName, boolean checked) {
+			this(callName, checked, 0);
+		}
+
+		private RecurTarget(String callName, boolean checked, int leading) {
 			this.callName = callName;
 			this.checked = checked;
+			this.leading = leading;
+		}
+
+		/**
+		 * The target of an inline {@code deftype}/{@code defrecord}/{@code reify}
+		 * method's arity: a {@code recur} passes every parameter but the first
+		 * {@code leading} -- the target object, which the method supplies itself, like
+		 * the oracle; none when a rest holds every parameter.
+		 */
+		static RecurTarget inlineMethod(String callName, int leading) {
+			return new RecurTarget(callName, true, leading);
+		}
+
+		int leading() {
+			return this.leading;
 		}
 
 		String callName() {
@@ -1151,6 +1182,38 @@ public final class ClojureLowering {
 	 */
 	final Map<String, LispVal> walkTests = new LinkedHashMap<>();
 
+	/**
+	 * The protocols extended to an interface keyed by a core kind
+	 * ({@link ClojureProtocolLowering#interfaceWalkKey}), by method-table name, each with
+	 * the tests of those interfaces, as the pass before this one learned them
+	 * ({@link #guardMisses}): a dispatcher that does not walk asks the walk behind those
+	 * tests, which a program storing no row of their families folds away, and behind the
+	 * record test where a record implements one ({@link #recordGuards}).
+	 */
+	final Map<String, Set<String>> interfaceGuards = new LinkedHashMap<>();
+
+	/**
+	 * The interface tests an extension added to a protocol whose dispatchers had lowered
+	 * without them: the lowering starts over with them ({@link #lower}).
+	 */
+	final Map<String, Set<String>> guardMisses = new LinkedHashMap<>();
+
+	/**
+	 * The protocols extended to an interface every record implements
+	 * ({@link ClojureProtocolLowering#noteInterfaceWalk}), by method-table name: once the
+	 * program defines a record, their guards ask {@link ClojureProtocolLowering#RECORD_P}
+	 * too ({@link ClojureProtocolLowering#noteRecordGuards}).
+	 */
+	final Set<String> recordGuards = new LinkedHashSet<>();
+
+	/**
+	 * The families of the interfaces the program's {@code reify}, {@code deftype} and
+	 * {@code defrecord} bodies implement ({@link ClojureInterfaces}): a guarded walk
+	 * ({@link #interfaceGuards}) whose tests no such family holds folds away, so the
+	 * protocol runtime carries no walk for it.
+	 */
+	final Set<ClojureArms.Family> implementedFamilies = EnumSet.noneOf(ClojureArms.Family.class);
+
 	/** How many walked classes a session's protocol runtime was last spliced with. */
 	int walkTestsEmitted;
 
@@ -1366,16 +1429,23 @@ public final class ClojureLowering {
 			ClojureBoundary boundary) {
 		Set<String> redefinable = new HashSet<>();
 		Set<String> walking = new HashSet<>();
+		Map<String, Set<String>> guards = new LinkedHashMap<>();
 		ClojureSourcePath sourcePath = null;
 		while (true) {
 			ClojureLowering lowering = new ClojureLowering();
 			lowering.redefinable.addAll(redefinable);
 			lowering.walkingProtocols.addAll(walking);
+			guards.forEach((protocol, tests) -> lowering.interfaceGuards.put(protocol, new LinkedHashSet<>(tests)));
 			List<LispVal> forms = lowering.lowerProgram(datums, reader, macroEvaluator, files, hostTarget, boundary,
 					sourcePath);
 			boolean redefs = redefinable.addAll(lowering.redefMisses);
 			boolean walks = walking.addAll(lowering.walkMisses);
-			if (!redefs && !walks) {
+			boolean guarded = false;
+			for (Map.Entry<String, Set<String>> miss : lowering.guardMisses.entrySet()) {
+				guarded |= guards.computeIfAbsent(miss.getKey(), ignored -> new LinkedHashSet<>())
+					.addAll(miss.getValue());
+			}
+			if (!redefs && !walks && !guarded) {
 				return forms;
 			}
 			sourcePath = lowering.sourcePath;
@@ -1406,9 +1476,12 @@ public final class ClojureLowering {
 		lowering.declare(datums);
 		lowering.forms.add(lowering.falseBinding());
 		// pass two: lower
-		for (LispVal datum : datums) {
+		Datums pass = lowering.new Datums(reader, datums);
+		for (LispVal datum = pass.next(lowering.forms); datum != null; datum = pass.next(lowering.forms)) {
 			lowering.forms.addAll(lowering.topLevels(datum));
 		}
+		// a run-time read asks the data readers first
+		lowering.forms.addAll(1, ClojureDataReaders.noteRuntimeReads(lowering));
 		// the host boundary: the exports, resolved once every definition has lowered,
 		// run last (the interpreter's world check sees every function); the conversion
 		// wrappers of the WIT members the program names run first
@@ -1428,6 +1501,8 @@ public final class ClojureLowering {
 			// the hierarchy runtime runs before anything else, like the false value
 			lowering.forms.addAll(1, ClojureHierarchyLowering.hierarchyRuntime(lowering));
 		}
+		// a record a later file defines reaches an interface an earlier one extended to
+		ClojureProtocolLowering.noteRecordGuards(lowering);
 		if (lowering.usedProtocols) {
 			// the protocol runtime runs before anything else, like the false value
 			lowering.forms.addAll(1, ClojureProtocolLowering.protocolRuntime(lowering));
@@ -1488,9 +1563,116 @@ public final class ClojureLowering {
 	void resolveProject(List<LispVal> datums) {
 		try {
 			this.sourcePath.roots();
+			// the oracle merges its data readers as it starts
+			this.sourcePath.dataReaders();
 		}
 		catch (LispReadException ex) {
 			throw datums.isEmpty() ? ex : positioned(ex, datums.get(0));
+		}
+	}
+
+	/**
+	 * The datums of one text as pass two lowers them: the first read's, or -- where it
+	 * left a tagged literal pending for the data readers
+	 * ({@link ClojureReader#PENDING_TAG}), or took {@code #inst} or {@code #uuid} through
+	 * the default reader where a data reader of the tag reads it first -- a second
+	 * read's, a datum at a time as the lowering goes, like the oracle's {@code load}: its
+	 * tagged literals call their reader functions ({@link ClojureDataReaders#read}) while
+	 * the lowering stands between the datum above and the one being read, and its
+	 * positions are the ones errors name from then on.
+	 */
+	final class Datums {
+
+		private final List<LispVal> first;
+
+		private final @Nullable ClojureReader second;
+
+		private int index;
+
+		/**
+		 * The datums of a text.
+		 * @param reader the first read, or null for datums with no reader
+		 * @param first its datums, which the pre-scan saw
+		 */
+		Datums(@Nullable ClojureReader reader, List<LispVal> first) {
+			this.first = first;
+			if (reader != null && (reader.pendingTags() > 0
+					|| reader.defaultTags() > 0 && ClojureLowering.this.sourcePath.dataReaders().takesADefaultTag())) {
+				ClojureReader again = reader
+					.again((tag, form) -> ClojureDataReaders.read(ClojureLowering.this, tag, form));
+				ClojureLowering.this.reader = again;
+				this.second = again;
+			}
+			else {
+				this.second = null;
+			}
+		}
+
+		/**
+		 * The next datum. Read again, the forms of a namespace a reader function's
+		 * namespace loading hoisted (a shipped one the oracle loads at startup) go where
+		 * the forms the datum lowers behind go, and a datum whose first read left what it
+		 * defines to the data readers is pre-scanned again.
+		 * @param loaded where the hoisted forms go
+		 * @return the datum, or null at the end of the text
+		 */
+		@Nullable LispVal next(List<LispVal> loaded) {
+			int at = this.index++;
+			if (this.second == null) {
+				return at < this.first.size() ? this.first.get(at) : null;
+			}
+			List<LispVal> outer = ClojureLowering.this.hoisted;
+			ClojureLowering.this.hoisted = new ArrayList<>();
+			LispVal datum;
+			try {
+				datum = this.second.readTopLevel();
+			}
+			finally {
+				loaded.addAll(ClojureLowering.this.hoisted);
+				ClojureLowering.this.hoisted = outer;
+			}
+			if (datum != null && at < this.first.size() && pendsADefinition(this.first.get(at))) {
+				// what the lowering already said about a name stays, as a session
+				// buffer's pre-scan keeps it
+				Map<String, Kind> carried = new HashMap<>(ClojureLowering.this.globals);
+				declare(List.of(datum));
+				ClojureLowering.this.globals.putAll(carried);
+			}
+			return datum;
+		}
+
+	}
+
+	/**
+	 * Whether a first read's datum leaves what it defines to the data readers: the datum
+	 * itself is a pending tag, or the name it defines is ({@link #declareOne} skips one).
+	 */
+	private static boolean pendsADefinition(LispVal first) {
+		if (isPendingTag(first)) {
+			return true;
+		}
+		List<LispVal> items = ClojureLowerUtil.items(first);
+		return items != null && items.size() >= 2 && isPendingTag(items.get(1));
+	}
+
+	/**
+	 * Whether a datum is a first read's pending tagged literal, through reader metadata.
+	 */
+	static boolean isPendingTag(LispVal datum) {
+		List<LispVal> items = ClojureLowerUtil.items(ClojureLowerUtil.stripMeta(datum));
+		return items != null && !items.isEmpty() && items.get(0) == ClojureReader.PENDING_TAG;
+	}
+
+	/**
+	 * Refuses a pending tagged literal the lowering meets, which only datums lowered
+	 * without their reader carry (nothing could read them again): its tag has no reader
+	 * function, like a tag the data readers do not read.
+	 * @param items a list datum's items
+	 */
+	static void refusePendingTag(List<LispVal> items) {
+		if (!items.isEmpty() && items.get(0) == ClojureReader.PENDING_TAG && items.size() == 3
+				&& items.get(1) instanceof LispSymbol tag) {
+			throw new LispReadException("No reader function for tag " + tag.name());
 		}
 	}
 
@@ -1509,8 +1691,14 @@ public final class ClojureLowering {
 			this.globals.put(kept.getKey(), kept.getValue());
 		}
 		List<ClojureTopLevel> out = new ArrayList<>();
-		for (LispVal datum : datums) {
-			List<LispVal> forms = topLevels(datum, true);
+		Datums pass = new Datums(buffer, datums);
+		while (true) {
+			List<LispVal> forms = new ArrayList<>();
+			LispVal datum = pass.next(forms);
+			if (datum == null) {
+				break;
+			}
+			forms.addAll(topLevels(datum, true));
 			// an ns form shows nothing, also when its requires loaded namespaces
 			// (their forms ride with it)
 			boolean ns = ClojureLowerUtil.isNsForm(datum);
@@ -1611,6 +1799,11 @@ public final class ClojureLowering {
 			// it, like the false binding; later buffers reuse it.
 			out.add(0, new ClojureTopLevel(ClojureStateLowering.stmRuntime(this), false));
 			this.stmEmitted = true;
+		}
+		// a run-time read asks the data readers first
+		List<LispVal> rootLoaded = ClojureDataReaders.noteRuntimeReads(this);
+		if (!rootLoaded.isEmpty()) {
+			out.add(0, new ClojureTopLevel(rootLoaded, false));
 		}
 		Set<String> freshSpecials = new LinkedHashSet<>(this.usedSpecials);
 		freshSpecials.removeAll(this.emittedSpecials);
@@ -1756,7 +1949,8 @@ public final class ClojureLowering {
 
 	void declareOne(LispVal datum) {
 		List<LispVal> items = ClojureLowerUtil.items(datum);
-		if (items == null || items.size() < 2) {
+		if (items == null || items.size() < 2 || isPendingTag(items.get(1))) {
+			// a name a data reader answers is pre-scanned once read again
 			return;
 		}
 		if (items.get(0) instanceof LispSymbol head && scannedMacro(head.name())) {
@@ -2280,7 +2474,8 @@ public final class ClojureLowering {
 		List<LispVal> statements = this.namespaceInits.computeIfAbsent(ns, k -> new ArrayList<>());
 		try {
 			declare(datums);
-			for (LispVal datum : datums) {
+			Datums pass = new Datums(fileReader, datums);
+			for (LispVal datum = pass.next(loaded); datum != null; datum = pass.next(loaded)) {
 				if (isInitDef(datum)) {
 					// a def/defonce of the namespace runs when the namespace loads
 					// (a reload resets a def and keeps a defonce, like the oracle);
@@ -2485,14 +2680,18 @@ public final class ClojureLowering {
 
 	/**
 	 * The namespaces {@code the-ns} and {@code find-ns} find where they lower: the ones
-	 * the program created so far, the libraries it required and the ones the oracle loads
-	 * first, as a quoted list of names.
+	 * the program created so far, the libraries it required, the ones the oracle loads
+	 * first and the ones its startup creates for the data readers' vars (unloaded), as a
+	 * quoted list of names.
 	 * @return the lowered list
 	 */
 	LispVal knownNamespaces() {
 		Set<String> known = new java.util.TreeSet<>(this.createdNamespaces);
 		known.addAll(this.requiredLibraries);
 		known.addAll(STARTUP_NAMESPACES);
+		for (String var : this.sourcePath.dataReaders().vars().values()) {
+			known.add(var.substring(0, var.indexOf('/')));
+		}
 		List<LispVal> names = new ArrayList<>();
 		for (String name : known) {
 			names.add(LispString.literal(name));
@@ -2903,6 +3102,7 @@ public final class ClojureLowering {
 		if (items.isEmpty()) {
 			return NIL_CONST;
 		}
+		refusePendingTag(items);
 		if (items.get(0) instanceof LispSymbol op) {
 			String core = ClojureCoreNames.coreSpelling(op.name());
 			if (core == null) {
@@ -3290,10 +3490,10 @@ public final class ClojureLowering {
 			return ClojureLowerUtil.cons(ClojureLowerUtil.sym("vector"), lowers(items, 1));
 		}
 		if (ClojureLowerUtil.isSymbolNamed(head, "%hash-map")) {
-			return ClojureCollectionLowering.mapBuild(lowers(items, 1));
+			return ClojureCollectionLowering.mapLiteral(this, items);
 		}
 		if (ClojureLowerUtil.isSymbolNamed(head, "%hash-set")) {
-			return ClojureCollectionLowering.setBuild(this, lowers(items, 1));
+			return ClojureCollectionLowering.setLiteral(this, items);
 		}
 		if (head == ClojureReader.REGEX || ClojureLowerUtil.isSymbolNamed(head, "%regex")) {
 			return ClojureCollectionLowering.regexForm(items);
@@ -3602,6 +3802,11 @@ public final class ClojureLowering {
 			if (inlined != null) {
 				return inlined;
 			}
+		}
+		// clojure.java.io/resource of a literal name is found while the program lowers
+		LispVal resource = ClojureIoLowering.literalResource(this, name, items);
+		if (resource != null) {
+			return resource;
 		}
 		List<LispVal> args = new ArrayList<>();
 		for (int i = 1; i < items.size(); i++) {
@@ -3970,9 +4175,15 @@ public final class ClojureLowering {
 				ClojureLowerUtil.isTrue(n == 1, "class takes one value");
 				return ClojureDispatchLowering.classForm(this, lower(items.get(1)));
 			case "spit":
+				if (n > 2 && ClojureIoLowering.namesEncoding(items, 3)) {
+					return ClojureIoLowering.spitWithOptions(this, items);
+				}
 				return ClojureStringLowering.spitOf(this, items);
 			case "slurp":
-				ClojureLowerUtil.isTrue(n == 1, "slurp takes one path");
+				ClojureLowerUtil.isTrue(n >= 1, "slurp takes a path and options");
+				if (n > 1) {
+					return ClojureIoLowering.slurpWithOptions(this, items);
+				}
 				return ClojureStringLowering.slurpForm(this, lower(items.get(1)));
 			case "line-seq":
 				ClojureLowerUtil.isTrue(n == 1, "line-seq takes one path or reader");
@@ -3980,7 +4191,7 @@ public final class ClojureLowering {
 			case "format":
 				return ClojureStringLowering.formatOf(this, items);
 			case "file-seq":
-				throw new LispReadException("file-seq is not supported yet: directory walks need a design");
+				return ClojureIoLowering.fileSeqOf(this, items);
 			case "keys":
 				return ClojureCollectionLowering.keysOf(this, items);
 			case "vals":
@@ -4111,6 +4322,7 @@ public final class ClojureLowering {
 	@Nullable LispVal valueOf(String name) {
 		return switch (name) {
 			case "inc", "dec" -> ClojureFnLowering.incValue(this, name);
+			case "default-data-readers" -> ClojureDataReaders.defaults(this);
 			case "=" -> ClojureLowerUtil.list(ClojureLowerUtil.sym("function"),
 					new LispSymbol("RONTOLISP::%CLOJURE-EQUAL-VALUES"));
 			case "not=" -> notEqualValue();
@@ -4224,6 +4436,7 @@ public final class ClojureLowering {
 			case "spit" -> ClojureStringLowering.spitValue(this);
 			case "slurp" -> ClojureStringLowering.slurpValue(this);
 			case "line-seq" -> ClojureStringLowering.lineSeqValue(this);
+			case "file-seq" -> ClojureIoLowering.fileSeqValue();
 			case "atom" -> ClojureStateLowering.atomValue(this);
 			case "volatile!" -> ClojureStateLowering.volatileValue();
 			case "deref" -> ClojureStateLowering.derefValue(this);
@@ -4485,11 +4698,17 @@ public final class ClojureLowering {
 		return symOf(name);
 	}
 
-	/** Whether the bound value is a Clojure vector: a CL vector that is no string. */
+	/**
+	 * Whether the bound value is a Clojure vector: a CL vector that is no string, or a
+	 * record, deftype or reify implementing {@code IPersistentVector} (a disjunct a
+	 * program storing no such row sheds, {@link ClojureArms.Family#PERSISTENT_VECTOR}).
+	 */
 	static LispVal vectorRaw(LispVal bound) {
-		return ClojureLowerUtil.list(ClojureLowerUtil.sym("AND"),
+		LispVal vector = ClojureLowerUtil.list(ClojureLowerUtil.sym("AND"),
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("VECTORP"), bound), ClojureLowerUtil
 					.list(ClojureLowerUtil.sym("NOT"), ClojureLowerUtil.list(ClojureLowerUtil.sym("STRINGP"), bound)));
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("OR"), vector,
+				ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-IVECTOR-P"), bound));
 	}
 
 	/**
@@ -4565,6 +4784,7 @@ public final class ClojureLowering {
 		}
 		if (datum instanceof LispCons) {
 			List<LispVal> items = ClojureLowerUtil.items(datum, List.of());
+			refusePendingTag(items);
 			if (!items.isEmpty() && items.get(0) == ClojureReader.VECTOR) {
 				List<LispVal> out = new ArrayList<>();
 				out.add(ClojureLowerUtil.sym("vector"));

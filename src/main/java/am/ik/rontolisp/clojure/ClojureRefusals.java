@@ -78,11 +78,26 @@ final class ClojureRefusals {
 	/** {@code java.io.IOException}: a read of a closed stream. */
 	static final String IO = "RONTOLISP::%CLOJURE-IO-EXCEPTION";
 
+	/** {@code java.io.FileNotFoundException}: a file a stream cannot open. */
+	static final String FILE_NOT_FOUND = "RONTOLISP::%CLOJURE-FILE-NOT-FOUND-EXCEPTION";
+
+	/** {@code java.io.UnsupportedEncodingException}: a charset no stream knows. */
+	static final String UNSUPPORTED_ENCODING = "RONTOLISP::%CLOJURE-UNSUPPORTED-ENCODING-EXCEPTION";
+
+	/** {@code java.net.MalformedURLException}: a string spelling no URL. */
+	static final String MALFORMED_URL = "RONTOLISP::%CLOJURE-MALFORMED-URL-EXCEPTION";
+
 	/**
 	 * {@code java.lang.AbstractMethodError}: a call of an interface method the type's
 	 * body leaves out ({@link ClojureInterfaces}).
 	 */
 	static final String ABSTRACT_METHOD = "RONTOLISP::%CLOJURE-ABSTRACT-METHOD-ERROR";
+
+	/**
+	 * {@code java.util.NoSuchElementException}: the {@code next} of an iterator past its
+	 * end ({@link ClojureInterfaces}).
+	 */
+	static final String NO_SUCH_ELEMENT = "RONTOLISP::%CLOJURE-NO-SUCH-ELEMENT-EXCEPTION";
 
 	/**
 	 * {@code java.lang.ClassCastException} casting a value, its
@@ -154,7 +169,11 @@ final class ClojureRefusals {
 			Map.entry(PATTERN_SYNTAX, "java.util.regex.PatternSyntaxException"),
 			Map.entry(ILLEGAL_FORMAT_CONVERSION, "java.util.IllegalFormatConversionException"),
 			Map.entry(ASSERTION_ERROR, "java.lang.AssertionError"), Map.entry(IO, "java.io.IOException"),
-			Map.entry(ABSTRACT_METHOD, "java.lang.AbstractMethodError"));
+			Map.entry(FILE_NOT_FOUND, "java.io.FileNotFoundException"),
+			Map.entry(UNSUPPORTED_ENCODING, "java.io.UnsupportedEncodingException"),
+			Map.entry(MALFORMED_URL, "java.net.MalformedURLException"),
+			Map.entry(ABSTRACT_METHOD, "java.lang.AbstractMethodError"),
+			Map.entry(NO_SUCH_ELEMENT, "java.util.NoSuchElementException"));
 
 	/** Every carrier: a call to one is a refusal the strip folds. */
 	static final Set<String> CARRIERS = carriers();

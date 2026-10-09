@@ -4,7 +4,9 @@ RFC 3339 のタイムスタンプをインスタントに読む名前空間で�
 ロードされるので、`clojure.instant/read-instant-date` は `require` なしで使えます。Clojure の
 同名の名前空間について文書化された振る舞いをもとに rontolisp 向けに書いた Clojure ソースで、
 すべてのバックエンドで同じように動きます。`#inst` は `read-instant-date` を通して読まれます
-（[構文](../syntax.md#tagged-literals)）。
+（[構文](../syntax.md#tagged-literals)）。ただし `inst` のデータリーダ（`data_readers.clj` が
+対応づける、あるいは `read-string` の周りで `*data-readers*` に束縛した、ほかのリーダ）が
+あれば、そちらが先に読みます。
 
 | var | 振る舞い |
 |---|---|
@@ -39,5 +41,3 @@ Timestamp と `=` ですが、Timestamp が Date と `=` になることはあ�
 
 - Calendar の `str` は印字される `#inst` を返します。オラクルの `str` はカレンダーの
   フィールドを書き出します。
-- `*data-readers*` は読まないため、これをこれらのリーダに束縛しても `read-string` での
-  `#inst` の読み方は変わりません。`clojure.edn` の `:readers` は受け付けます。

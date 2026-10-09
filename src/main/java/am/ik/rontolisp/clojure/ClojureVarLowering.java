@@ -402,33 +402,7 @@ final class ClojureVarLowering {
 	}
 
 	private static LispVal varOfKey(ClojureLowering ctx, String key) {
-		LispVal root;
-		ClojureLowering.Kind kind = ctx.globals.get(key);
-		if (kind == ClojureLowering.Kind.MACRO) {
-			root = ClojureLowerUtil.list(ClojureLowerUtil.sym("error"),
-					LispString.literal("Can't take value of a macro: #'" + key));
-		}
-		else if (kind == ClojureLowering.Kind.FUNCTION) {
-			LispSymbol fn = ctx.defnCounts.getOrDefault(key, 0) > 1 ? ctx.currentDefnSym(key)
-					: ClojureLowering.varSym(key);
-			root = ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), fn);
-		}
-		else if (key.startsWith("user/") && ctx.isLocal(key.substring("user/".length()))) {
-			// a user var's symbol is also the local's: read the root through a
-			// top-level reader the local cannot shadow
-			LispSymbol reader = new LispSymbol(ClojureLowering.varSym(key).name() + "%root");
-			if (ctx.varRootReaders.add(key)) {
-				ctx.hoisted.add(ClojureLowerUtil.list(ClojureLowerUtil.sym("defun"), reader, ClojureLowerUtil.list(),
-						ClojureLowering.varSym(key)));
-			}
-			root = ClojureLowerUtil.list(reader);
-		}
-		else if (kind == ClojureLowering.Kind.DECLARED && ctx.session) {
-			root = sessionDeclaredRoot(ClojureLowering.varSym(key));
-		}
-		else {
-			root = ClojureLowering.varSym(key);
-		}
+		LispVal root = rootOfKey(ctx, key);
 		VarMeta meta = ctx.varMetas.get(key);
 		LispVal metaForm;
 		if (meta == null) {
@@ -450,6 +424,42 @@ final class ClojureVarLowering {
 							ClojureLowering.boundDepthSym(key)));
 		}
 		return ClojureLowerUtil.list(runtime("VAR"), LispString.literal(key), getter, metaForm);
+	}
+
+	/**
+	 * What a program var's root reads as, where the site stands: a function's current
+	 * definition, a value cell (through a top-level reader where a local of a
+	 * {@code user} var's name shadows the cell), a session's declared name through both,
+	 * a macro's the oracle's refusal to take its value.
+	 * @param ctx the hub
+	 * @param key the var key, one of {@link ClojureLowering#globals}
+	 * @return the lowered root
+	 */
+	static LispVal rootOfKey(ClojureLowering ctx, String key) {
+		ClojureLowering.Kind kind = ctx.globals.get(key);
+		if (kind == ClojureLowering.Kind.MACRO) {
+			return ClojureLowerUtil.list(ClojureLowerUtil.sym("error"),
+					LispString.literal("Can't take value of a macro: #'" + key));
+		}
+		if (kind == ClojureLowering.Kind.FUNCTION) {
+			LispSymbol fn = ctx.defnCounts.getOrDefault(key, 0) > 1 ? ctx.currentDefnSym(key)
+					: ClojureLowering.varSym(key);
+			return ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), fn);
+		}
+		if (key.startsWith("user/") && ctx.isLocal(key.substring("user/".length()))) {
+			// a user var's symbol is also the local's: read the root through a
+			// top-level reader the local cannot shadow
+			LispSymbol reader = new LispSymbol(ClojureLowering.varSym(key).name() + "%root");
+			if (ctx.varRootReaders.add(key)) {
+				ctx.hoisted.add(ClojureLowerUtil.list(ClojureLowerUtil.sym("defun"), reader, ClojureLowerUtil.list(),
+						ClojureLowering.varSym(key)));
+			}
+			return ClojureLowerUtil.list(reader);
+		}
+		if (kind == ClojureLowering.Kind.DECLARED && ctx.session) {
+			return sessionDeclaredRoot(ClojureLowering.varSym(key));
+		}
+		return ClojureLowering.varSym(key);
 	}
 
 	/**

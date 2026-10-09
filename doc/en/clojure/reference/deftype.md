@@ -21,10 +21,11 @@ fields ([`.name`](dot-name.md)). The name joins the whole-file pre-scan.
 (println (instance? T t))  ; true
 ```
 
-The body may implement the `clojure.lang` interfaces the core functions consult and
-override `Object`'s methods, like [reify](reify.md#host-interfaces)'s, its methods seeing
-the fields: a deftype of `Counted` counts, one of `IDeref` derefs, one of `IObj` carries the
-metadata its own methods keep.
+The body may implement the `clojure.lang` interfaces the core functions consult, the
+[collection interfaces](reify.md#collection-interfaces) included, and override `Object`'s
+methods, like [reify](reify.md#host-interfaces)'s, its methods seeing the fields: a deftype of
+`Counted` counts, one of `IDeref` derefs, one of `IObj` carries the metadata its own methods
+keep, and one of `IPersistentMap` is a map to `assoc`, `get`, `map?` and the printer.
 
 ```clojure
 (deftype Box [v] clojure.lang.IDeref (deref [_] v))

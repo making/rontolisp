@@ -36,8 +36,10 @@ import org.jspecify.annotations.Nullable;
  * {@code *print-readably*} ({@link ClojureArms.Family#PRINT_FLAGS}), {@code *print-meta*}
  * ({@link ClojureArms.Family#PRINT_META}) and {@code *print-namespace-maps*}
  * ({@link ClojureArms.Family#NAMESPACE_MAP}); {@code assert} reads {@code *assert*} where
- * it lowers, after a top-level {@code set!} of it to a literal. Every other flag is a
- * plain value.
+ * it lowers, after a top-level {@code set!} of it to a literal; the run-time reader reads
+ * {@code *data-readers*}, whose root is the program's data readers' map
+ * ({@link ClojureDataReaders}), and {@code *default-data-reader-fn*}
+ * ({@link ClojureArms.Family#DATA_READERS}). Every other flag is a plain value.
  *
  * <p>
  * What {@code clojure.main} binds around a load: {@code *ns*} holds the namespace
@@ -193,9 +195,15 @@ final class ClojureCoreSpecials {
 	/**
 	 * The root of a special as a lowered form, or null when the variable is defined
 	 * elsewhere: the table's, or for the load's own the lowering's -- {@code user}, the
-	 * entry file and its name, and whether a session reads.
+	 * entry file and its name, whether a session reads, and the program's data readers'
+	 * map ({@link ClojureLowering#dataReadersRoot}) where it has one.
 	 */
 	private static @Nullable LispVal rootOf(ClojureLowering ctx, Special special) {
+		LispVal dataReaders = ctx.dataReadersRoot;
+		if (special.name().equals("*data-readers*") && dataReaders != null) {
+			// the program's data_readers.clj map (ClojureDataReaders)
+			return dataReaders;
+		}
 		return switch (special.name()) {
 			case "*ns*" -> namespaceObject("user");
 			case "*file*" -> LispString.literal(ctx.rootFile);
@@ -277,7 +285,11 @@ final class ClojureCoreSpecials {
 			}
 			LispVal root = rootOf(ctx, special);
 			if (root != null) {
-				forms.add(ClojureLowerUtil.list(ClojureLowerUtil.sym("defvar"), special.symbol(), root));
+				// the library defines the run-time reader's specials ahead of a compiled
+				// program, so the program's own data readers replace its empty root
+				boolean replaced = special.name().equals("*data-readers*") && ctx.dataReadersRoot != null;
+				forms.add(ClojureLowerUtil.list(ClojureLowerUtil.sym(replaced ? "defparameter" : "defvar"),
+						special.symbol(), root));
 			}
 			if (special.counter() != null) {
 				// a session binds *repl* around every input, like the oracle's REPL

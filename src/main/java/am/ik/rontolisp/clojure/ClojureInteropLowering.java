@@ -63,7 +63,9 @@ final class ClojureInteropLowering {
 	 * first. A literal {@code false} argument is the quoted false object, which the site
 	 * resolves on; any other argument that may hold a Clojure value Java has no value of
 	 * -- a keyword, a symbol, a set, a record, a lazy seq, a collection holding one --
-	 * goes through {@link #HOST_VALUE} ({@link #hostArgument}).
+	 * goes through {@link #HOST_VALUE} ({@link #hostArgument}), behind the io family's
+	 * view of a clojure.java.io value ({@code ClojureIoLowering.crossing}, which a
+	 * {@code java:call}'s receiver crosses too).
 	 * @param ctx the hub
 	 * @param operator the {@code java:} operator
 	 * @param parts the names and the arguments
@@ -71,17 +73,19 @@ final class ClojureInteropLowering {
 	 * @return the call
 	 */
 	static LispVal hostCall(ClojureLowering ctx, LispSymbol operator, List<LispVal> parts, int names) {
+		List<LispVal> crossed = ClojureIoLowering.crossing(operator, parts, names);
 		List<LispVal> ended = new ArrayList<>(parts.size() + 2);
-		ended.addAll(parts.subList(0, names));
+		ended.addAll(crossed.subList(0, names));
 		boolean literal = true;
-		for (LispVal argument : parts.subList(names, parts.size())) {
+		for (int i = names; i < parts.size(); i++) {
+			LispVal argument = parts.get(i);
 			if (isFalseValue(argument)) {
 				ended.add(ClojureLowerUtil.list(ClojureLowerUtil.sym("QUOTE"),
 						new LispSymbol(ClojureLowering.FALSE_VALUE_NAME)));
 				continue;
 			}
 			literal &= isLiteral(argument);
-			ended.add(hostArgument(ctx, argument));
+			ended.add(hostArgument(ctx, argument, crossed.get(i)));
 		}
 		if (!literal) {
 			ended.add(new LispSymbol(LispNames.JAVA_FUNCTIONAL_MARKER));
@@ -106,13 +110,33 @@ final class ClojureInteropLowering {
 	 * literal, a fn form, a construction, a local bound to one of those -- which the site
 	 * keeps resolving on. Where the host is not (wasm), every {@code java:} call is a
 	 * call-time error and the argument is left as it is.
+	 * @param ctx the hub
+	 * @param argument the lowered argument
+	 * @return what the call hands Java
 	 */
 	static LispVal hostArgument(ClojureLowering ctx, LispVal argument) {
-		if (!ctx.hostTarget || isLiteral(argument) || isPlainForm(argument)
+		return hostArgument(ctx, argument, argument);
+	}
+
+	/**
+	 * {@link #hostArgument(ClojureLowering, LispVal)} over the argument as it crosses
+	 * ({@code ClojureIoLowering.crossing}: behind the io family's view of a
+	 * clojure.java.io value), which a plain argument -- no io value either -- does not
+	 * need.
+	 * @param ctx the hub
+	 * @param argument the lowered argument
+	 * @param crossed the argument behind the io view, or the argument itself
+	 * @return what the call hands Java
+	 */
+	static LispVal hostArgument(ClojureLowering ctx, LispVal argument, LispVal crossed) {
+		if (!ctx.hostTarget) {
+			return crossed;
+		}
+		if (isLiteral(argument) || isPlainForm(argument)
 				|| argument instanceof LispSymbol local && isPlainLocal(ctx, local)) {
 			return argument;
 		}
-		return ClojureLowerUtil.list(new LispSymbol(HOST_VALUE), argument);
+		return ClojureLowerUtil.list(new LispSymbol(HOST_VALUE), crossed);
 	}
 
 	/**
@@ -204,6 +228,9 @@ final class ClojureInteropLowering {
 
 	/** A read of {@code *in*} as a value. */
 	static final String STANDARD_INPUT_READ = "RONTOLISP::%CLOJURE-IN";
+
+	/** A call of {@code clojure.java.io/reader}, the built-in namespace's var. */
+	static final String JIO_READER = ClojureLowering.varSym(ClojureLowering.varKey("clojure.java.io", "reader")).name();
 
 	/**
 	 * The zero-argument {@code Throwable} methods an exception condition answers
@@ -427,11 +454,39 @@ final class ClojureInteropLowering {
 			if (exception != null) {
 				return exception;
 			}
+			LispVal own = clojureLangConstruction(cls, lowered);
+			if (own != null) {
+				return own;
+			}
+			LispVal io = ClojureIoLowering.construction(cls, lowered);
+			if (io != null) {
+				return io;
+			}
 		}
 		List<LispVal> args = new ArrayList<>();
 		args.add(LispString.literal(designator(cls, types)));
 		args.addAll(lowered);
 		return hostCall(ctx, JAVA_NEW, args, 1);
+	}
+
+	/**
+	 * A construction of a {@code clojure.lang} class a collection type's body builds,
+	 * which no backend here has as a host class, over already-lowered arguments: a
+	 * {@code MapEntry} of a key and a value is the two-member vector a map entry is here,
+	 * a {@code SeqIterator} over a seq the library's iterator over it
+	 * ({@link ClojureInterfaces#SEQ_ITERATOR}). Null for any other class or count.
+	 */
+	static @Nullable LispVal clojureLangConstruction(String cls, List<LispVal> args) {
+		if (cls.equals("clojure.lang.MapEntry") && args.size() == 2) {
+			return ClojureLowerUtil.list(ClojureLowerUtil.sym("vector"), args.get(0), args.get(1));
+		}
+		if (cls.equals("clojure.lang.SeqIterator") && args.size() == 1) {
+			return ClojureLowerUtil.list(new LispSymbol(ClojureInterfaces.SEQ_ITERATOR), args.get(0));
+		}
+		if (cls.equals("clojure.lang.Cons") && args.size() == 2) {
+			return ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-CONS"), args.get(0), args.get(1));
+		}
+		return null;
 	}
 
 	/**
@@ -745,6 +800,14 @@ final class ClojureInteropLowering {
 			return ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-CALL"), args.get(0),
 					ClojureSeqLowering.seqAllForm(ctx, args.get(1)));
 		}
+		if (cls.equals("clojure.lang.MapEntry") && member.equals("create") && args.size() == 2) {
+			// a map entry is the two-member vector here
+			return ClojureLowerUtil.list(ClojureLowerUtil.sym("vector"), args.get(0), args.get(1));
+		}
+		if (cls.equals("clojure.lang.RT") && member.equals("iter") && args.size() == 1) {
+			// an Iterable's own iterator, else the iterator over the seq
+			return ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-ITER"), args.get(0));
+		}
 		List<LispVal> call = new ArrayList<>();
 		call.add(LispString.literal(cls));
 		call.add(LispString.literal(designator));
@@ -908,6 +971,14 @@ final class ClojureInteropLowering {
 			if (exception != null) {
 				return exception;
 			}
+			LispVal own = clojureLangConstruction(cls, args);
+			if (own != null) {
+				return own;
+			}
+			LispVal io = ClojureIoLowering.construction(cls, args);
+			if (io != null) {
+				return io;
+			}
 		}
 		List<LispVal> call = new ArrayList<>();
 		call.add(LispString.literal(designator(cls, types)));
@@ -1047,6 +1118,15 @@ final class ClojureInteropLowering {
 				: ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
 						ClojureLowerUtil.list(ClojureLowerUtil.sym("streamp"), source), source,
 						ClojureLowerUtil.cons(JAVA_NEW, host));
+		if (cls.equals("java.io.InputStreamReader") && !isStreamForm(reader)) {
+			// a byte stream clojure.java.io made, decoded in the charset given: an arm a
+			// program making none sheds
+			body = ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
+					ClojureLowerUtil.list(new LispSymbol(ClojureIoLowering.IO_P), source),
+					ClojureLowerUtil.list(new LispSymbol(ClojureIoLowering.DECODING_READER), source,
+							host.size() == 3 ? host.get(2) : ClojureLowering.NIL_CONST),
+					body);
+		}
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let*"), ClojureLowerUtil.list(bindings), body);
 	}
 
@@ -1063,7 +1143,8 @@ final class ClojureInteropLowering {
 		}
 		if (ClojureLowerUtil.isSymbolNamed(items.get(0), ClojureNamespaceLowering.READER)
 				|| ClojureLowerUtil.isSymbolNamed(items.get(0), STRING_READER)
-				|| ClojureLowerUtil.isSymbolNamed(items.get(0), STANDARD_INPUT_READ)) {
+				|| ClojureLowerUtil.isSymbolNamed(items.get(0), STANDARD_INPUT_READ)
+				|| ClojureLowerUtil.isSymbolNamed(items.get(0), JIO_READER)) {
 			return true;
 		}
 		return items.size() == 3 && ClojureLowerUtil.isSymbolNamed(items.get(0), "LET*") && isStreamForm(items.get(2));
@@ -1568,6 +1649,11 @@ final class ClojureInteropLowering {
 		if (method.equals("getClass") && args.isEmpty()) {
 			call = ClojureDispatchLowering.getClassForm(ctx, recv, cls, call);
 		}
+		if (cls == null || ClojureIoLowering.CLASSES.containsKey(cls)) {
+			// a File, a URL, a URI, a byte stream or a stream clojure.java.io made
+			// answers its own methods: an arm a program making none sheds
+			call = ClojureIoLowering.methodArm(ctx, method, designator, recv, args, call);
+		}
 		LispVal mapped = stringMethod(ctx, method, recv, args, cls != null || receiver instanceof LispString);
 		LispVal out = mapped == null ? call : ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("stringp"), recv), mapped, call);
@@ -1786,15 +1872,50 @@ final class ClojureInteropLowering {
 	 */
 	static @Nullable LispVal streamMethod(ClojureLowering ctx, String method, LispSymbol recv, List<LispVal> args) {
 		if (method.equals("write") && args.size() == 1) {
-			// nil signals, like the oracle's NullPointerException out of Writer.write
+			// nil signals, like the oracle's NullPointerException out of Writer.write; an
+			// int is the character of that code, Writer.write(int)
 			LispSymbol value = ctx.freshTemp();
 			return ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
 					ClojureLowerUtil.list(ClojureLowerUtil.list(value, args.get(0))),
-					ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
-							ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), value),
-							ClojureRefusals.refusal(ClojureRefusals.NULL_POINTER,
-									LispString.literal("NullPointerException: write takes a value, not nil")),
-							ClojureLowerUtil.list(ClojureLowerUtil.sym("princ"), value, recv)));
+					ClojureLowerUtil.list(ClojureLowerUtil.sym("cond"),
+							ClojureLowerUtil.list(ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), value),
+									ClojureRefusals.refusal(ClojureRefusals.NULL_POINTER,
+											LispString.literal("NullPointerException: write takes a value, not nil"))),
+							ClojureLowerUtil.list(ClojureLowerUtil.list(ClojureLowerUtil.sym("integerp"), value),
+									ClojureLowerUtil.list(ClojureLowerUtil.sym("write-char"),
+											ClojureLowerUtil.list(ClojureLowerUtil.sym("code-char"),
+													ClojureLowerUtil.list(ClojureLowerUtil.sym("logand"), value,
+															new LispInteger(65535))),
+											recv),
+									ClojureLowering.NIL_CONST),
+							ClojureLowerUtil.list(ClojureLowering.TRUE_CONST,
+									ClojureLowerUtil.list(ClojureLowerUtil.sym("princ"), value, recv),
+									ClojureLowering.NIL_CONST)));
+		}
+		if (method.equals("write") && args.size() == 3) {
+			// Writer.write(String, off, len): the part of the string
+			return ClojureLowerUtil.list(ClojureLowerUtil.sym("progn"),
+					ClojureLowerUtil.list(ClojureLowerUtil.sym("write-string"),
+							ClojureLowerUtil.list(ClojureLowerUtil.sym("subseq"), args.get(0), args.get(1),
+									ClojureLowerUtil.list(ClojureLowerUtil.sym("+"), args.get(1), args.get(2))),
+							recv),
+					ClojureLowering.NIL_CONST);
+		}
+		if (method.equals("newLine") && args.isEmpty()) {
+			return ClojureLowerUtil.list(ClojureLowerUtil.sym("progn"),
+					ClojureLowerUtil.list(ClojureLowerUtil.sym("terpri"), recv), ClojureLowering.NIL_CONST);
+		}
+		if (method.equals("append") && args.size() == 1) {
+			// Writer.append: the characters written, the writer answered (nil is "null")
+			LispSymbol value = ctx.freshTemp();
+			return ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
+					ClojureLowerUtil.list(ClojureLowerUtil.list(value, args.get(0))),
+					ClojureLowerUtil.list(ClojureLowerUtil.sym("princ"),
+							ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
+									ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), value),
+									LispString.literal("null"), value),
+							recv),
+					recv);
 		}
 		if (method.equals("flush") && args.isEmpty()) {
 			return ClojureLowerUtil.list(ClojureLowerUtil.sym("finish-output"), recv);

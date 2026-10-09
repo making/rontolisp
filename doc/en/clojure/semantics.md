@@ -86,7 +86,8 @@ no known type and a dependency the oracle cannot resolve are errors in its words
   ends at the library already selected.
 - The source path is the entry file's own root, the project's `:paths`, each selected
   library's roots in the oracle's classpath order (the top of the tree first), then the
-  built-in namespaces.
+  built-in namespaces. A root's `data_readers.clj` and `data_readers.cljc` give the
+  program's data readers ([Tagged literals](syntax.md#tagged-literals)).
 - `org.clojure/clojure`, `org.clojure/spec.alpha` and `org.clojure/core.specs.alpha` are
   this front end at any version. `ring/ring-core` and `ring/ring-codec` at a Maven version
   up to the one shipped (ring-core 1.15.5, ring-codec 1.3.0) are the built-in Ring
@@ -116,7 +117,8 @@ no known type and a dependency the oracle cannot resolve are errors in its words
   source roots its build's source directory (by default `src/main/java`),
   `src/main/clojure`, its resource directories (by default `src/main/resources`) and the
   `add-source` / `add-resource` directories of `build-helper-maven-plugin`, read off the
-  first plugin as the oracle reads them.
+  first plugin as the oracle reads them. Both POMs are checked at Maven's strict validation
+  level, as the oracle checks them: a POM it refuses is refused, naming Maven's problems.
 - A dependency's jar holding classes joins the program's Java class path: the interpreter
   and the JVM call its classes, and `-o app.jar` copies it beside the jar. WebAssembly keeps
   refusing Java when called.
@@ -189,8 +191,10 @@ anonymous `fn`, a `defn` clause, a `letfn` entry or a `lazy-seq` body of arity 0
 destructure: a vector pattern binds positionally through the seq view (`&` the rest as a
 seq, itself a pattern; `:as` the whole), a map pattern through the table-aware read
 (`:keys`/`:syms`/`:strs`, explicit locals, `:as`, `:or` defaults) -- in `let`, `loop` and
-`fn`/`defn` parameters alike; nested patterns recurse. Malformed shapes are named
-refusals.
+`fn`/`defn` parameters alike; nested patterns recurse. A map pattern reads a seq as the map
+its keyword arguments stand for ([seq-to-map-for-destructuring](reference/seq-to-map-for-destructuring.md)),
+so `(defn f [& {:keys [a]}] a)` takes `(f :a 1)` and `(f {:a 1})`. Malformed shapes are
+named refusals.
 
 ## Macros
 
@@ -340,7 +344,8 @@ handle).
 `binding` rebinds `^:dynamic` vars and the `clojure.core` specials with dynamic
 extent; anything else is refused. `*out*`/`*in*`/`*err*` are `*standard-output*`/
 `*standard-input*`/`*error-output*`; the flags hold the oracle's values under
-`clojure -M` (`*print-length*` `nil`, `*assert*` `true`, `*data-readers*` `{}`,
+`clojure -M` (`*print-length*` `nil`, `*assert*` `true`, `*data-readers*` the program's
+data readers, `{}` without one,
 `*command-line-args*` the program's arguments, `*clojure-version*` 1.12.6, ...), and
 the printer honours `*print-length*`, `*print-level*`, `*print-readably*`,
 `*print-meta*` and `*print-namespace-maps*` (a map whose keys share a namespace prints
@@ -415,7 +420,9 @@ global it signals `Can't change/establish root binding of: ... with set` at run 
 run time on every backend, answering what a quote of the same text answers: the same
 numbers, strings, characters, keywords (`::kw` in the calling namespace) and collections,
 metadata dropped, `#_` discarding. A record literal builds the record of a class the
-program defines; `#=` read-time evaluation and tagged literals are refused like in source,
+program defines; `#=` read-time evaluation is refused like in source, a tagged literal
+reads through `*data-readers*`, the default `#inst` and `#uuid` readers and
+`*default-data-reader-fn*` in that order, like the oracle's,
 and reader conditionals read under `{:read-cond :allow}` like in a `.cljc` file. A reader is a `clojure.java.io/reader`, `*in*`, or a
 `java.io.PushbackReader`/`BufferedReader`/`InputStreamReader` over one or over a `java.io.StringReader`,
 which is a stream on every backend; `read` leaves it right after the datum. `str` of a
@@ -454,7 +461,9 @@ Each refusal names the missing design, never `unknown name`:
 | end-less `range` | `infinite range is not supported: range needs an end` | an infinite seq cannot be spelled strictly -- spell it with `iterate` |
 | `transient`, `persistent!`, `assoc!`, `dissoc!`, `conj!`, `disj!` | `transients are not supported yet: ...` | no transient runtime behind the tables |
 | `definterface`, `gen-class`, `gen-interface` | `protocols are not supported yet: ...` | no interface generation on any backend |
-| a `reify`/`deftype`/`defrecord` body naming an interface other than the core functions' ([reify](reference/reify.md#host-interfaces)) | `... is not supported yet as an interface of ...` | the collection interfaces (`ISeq`, `IPersistentMap` ...) and the host ones have no consulting functions yet |
+| a `reify`/`deftype`/`defrecord` body naming an interface other than the core functions' ([reify](reference/reify.md#host-interfaces)) | `... is not supported yet as an interface of ...` | the other interfaces (`IChunkedSeq`, `java.util.Deque` ...) have no consulting functions yet |
+| a `defrecord` body defining a method of the record's own interfaces the record leaves to the interface (`assocEx`, a `java.util.Map` default) | `... is not supported yet as a method of defrecord` | the record's own verbs answer those interfaces, so no row holds the method |
+| an instance call of a `java.util` default method the body left out | `the default method ... is not supported yet` | the default's body is Java, which no backend runs |
 | `set!` of a core var that is no special (`inc`), of a host field | `set! of a var is not supported yet: ...`, `set! of a host field is not supported yet: ...` | no var to assign; the `java:` surface has no field write |
 | `future`, `delay`/`force`, `promise`/`deliver` | by name | no thread pool, lazy memo cells or blocking rendezvous on any backend |
 | `proxy-super` outside a proxy method | `proxy-super outside a proxy method` | a `proxy-super` calls the superclass implementation on the method's `this` |
@@ -464,7 +473,8 @@ Each refusal names the missing design, never `unknown name`:
 | `&form`/`&env` in `defmacro` parameters | by name | macros receive no compilation environment |
 | `::alias/kw` with an unknown alias | `Invalid token: ...` | only required aliases, the file's own ns and known namespaces resolve |
 | `--no-gc` builds | by name | that backend has no pairs, symbols or closures |
-| `file-seq`, `clojure.java.io` (except `reader`) | `file-seq` / `unknown name: clojure.java.io/...` | no directory walks; only `reader` resolves, opening a file-stream reader |
+| `read` into a byte array, `readAllBytes`, `write` of a byte array | `... of a byte array is not supported: byte arrays are not built in` | no byte array kind on any backend (`bytes?` is `false`) |
+| reading an `http:` (or any other non-`file:`) URL | `reading the http: URL ... is not built in` | no connection runtime behind `clojure.java.io`; [rontolisp.http-client](reference/http-client.md) fetches |
 | `with-redefs` of a `clojure.core` var, a macro, a multimethod or protocol method; in the REPL, of a `defn` an earlier input defined without `^:redef` | `with-redefs of ... is not supported...`, `... define it ^:redef to redefine it` | core verbs lower inline; only a `def`/`defn`/`declare` var has a root to replace, and a REPL input already ran with direct calls |
 | an asynchronous Ring handler (`run-server` with `:async? true`) | `asynchronous handlers (:async? true) are not supported` | no respond/raise protocol under the transports |
 | `:async` on a `rontolisp.wasm` declaration, an `async func` WIT member or export | `:async is not supported yet ...`, `... is an async func ...` | the future a suspending crossing answers is no Clojure future |

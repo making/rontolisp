@@ -34,6 +34,7 @@ collection realizes a lazy input first; one that stops early (`second`, `nth`, `
 | `repeat` | `(take 2 (repeat :x))` | `(:x :x)` |
 | `cycle` | `(take 3 (cycle [1 2]))` | `(1 2 1)` |
 | `iterate` | `(take 2 (iterate inc 0))` | `(0 1)` |
+| `iterator-seq` | `(iterator-seq (.iterator [1 2]))` | `(1 2)` |
 | `repeatedly` | `(take 2 (repeatedly (fn [] 7)))` | `(7 7)` |
 | `range` | `(range 0 6 2)` | `(0 2 4)` |
 | `nth` | `(nth [1 2 3] 5 :none)` | `:none` |

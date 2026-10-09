@@ -38,6 +38,16 @@ class ClojureInteropTest {
 	}
 
 	@Test
+	void aHostIteratorStepsThroughIteratorSeqAndAnIterableTypesVerbs() throws Exception {
+		// answers measured against clj 1.12.6: iterator-seq steps a host Iterator, and an
+		// Iterable type's iterator may hand one on to seq, reduce and into
+		assertBothEqual("(println (iterator-seq (.iterator (java.util.ArrayList. [1 2 3]))))", "(1 2 3)\n");
+		assertBothEqual("(deftype H [l] java.lang.Iterable (iterator [_] (.iterator l)))"
+				+ " (println (seq (H. (java.util.ArrayList. [4 5]))) (reduce + (H. (java.util.ArrayList. [4 5])))"
+				+ " (into [] (H. (java.util.ArrayList. [6]))))", "(4 5) 9 [6]\n");
+	}
+
+	@Test
 	void unmappedMethodsCallAStringNumberOrCharacterAsItsHostObject() throws Exception {
 		// answers measured against clj 1.12.6
 		assertBothEqual("(println (.codePointAt \"abc\" 0))", "97\n");
@@ -269,12 +279,13 @@ class ClojureInteropTest {
 	void aHostClassObjectWalksJavaInheritanceInAHierarchy() throws Exception {
 		// measured against clj 1.12.6: class of a host object is its class object, which
 		// isa? the classes it extends and implements, Object among them; java.util.List
-		// lowers to :list in a hierarchy position, which the host class still reaches
-		assertBothEqual("(println (isa? (class (java.io.File. \"x\")) Object)"
+		// lowers to :list in a hierarchy position, which the host class still reaches (a
+		// java.net.URI: a java.io.File is clojure.java.io's own value on every backend)
+		assertBothEqual("(println (isa? (class (java.net.URI. \"x\")) Object)"
 				+ " (isa? (class (java.util.ArrayList.)) java.util.List)"
 				+ " (isa? (class (java.util.ArrayList.)) java.util.Map)"
 				+ " (isa? (class (java.util.ArrayList.)) Exception)"
-				+ " (isa? (class (java.io.File. \"x\")) java.io.Serializable)"
+				+ " (isa? (class (java.net.URI. \"x\")) java.io.Serializable)"
 				+ " (isa? (class (StringBuilder.)) CharSequence))", "true true false false true true\n");
 		// a class object parent: the class's own spelling, or one of a value's class
 		assertBothEqual("(let [p java.util.List] (println (isa? (class (java.util.ArrayList.)) p)"
@@ -284,7 +295,7 @@ class ClojureInteropTest {
 		// parents and ancestors answer class objects, a program spelling no class too
 		assertBothEqual(
 				"(println (sort (map str (parents (class (java.util.ArrayList.))))))"
-						+ " (println (sort (map str (ancestors (class (java.io.File. \"x\"))))))"
+						+ " (println (sort (map str (ancestors (class (java.net.URI. \"x\"))))))"
 						+ " (println (parents (class (Object.))) (ancestors (class (Object.))))",
 				"(class java.util.AbstractList interface java.io.Serializable interface java.lang.Cloneable"
 						+ " interface java.util.List interface java.util.RandomAccess)\n"
@@ -407,31 +418,50 @@ class ClojureInteropTest {
 		assertBothEqual("(pr [String \"a\"]) (println {String 1} (str [String]))",
 				"[java.lang.String \"a\"]{java.lang.String 1} [java.lang.String]\n");
 		assertBothEqual("(println Long/TYPE (str Long/TYPE))", "long long\n");
-		assertBothEqual("(println (class (java.io.File. \"foo\")))", "java.io.File\n");
+		assertBothEqual("(println (class (java.net.URI. \"foo\")))", "java.net.URI\n");
 	}
 
 	@Test
 	void strOfAHostObjectIsItsToStringWhilePrintingStaysUnreadable() throws Exception {
-		assertBothEqual("(println (str (StringBuilder. \"ab\") \"|\" (java.io.File. \"foo\")))", "ab|foo\n");
+		assertBothEqual("(println (str (StringBuilder. \"ab\") \"|\" (java.net.URI. \"foo\")))", "ab|foo\n");
 		assertBothEqual("(println (str (java.util.ArrayList. [1 2])))", "[1, 2]\n");
 		assertBothEqual("(println (str 1 :k [1 \"a\"] nil 's))", "1:k[1 \"a\"]s\n");
-		assertBothEqual("(println (java.io.File. \"foo\"))", "#<java java.io.File>\n");
+		assertBothEqual("(println (java.net.URI. \"foo\"))", "#<java java.net.URI>\n");
 	}
 
 	@Test
 	void classOfAHostObjectIsItsHostClassSoDispatchReachesTheDefault() throws Exception {
-		assertBothEqual("(println (= java.io.File (class (java.io.File. \"foo\"))))", "true\n");
-		assertBothEqual("(println (.getName (class (java.io.File. \"foo\"))))", "java.io.File\n");
-		assertBothEqual("(println (.getName ((comp class identity) (java.io.File. \"foo\"))))", "java.io.File\n");
+		assertBothEqual("(println (= java.net.URI (class (java.net.URI. \"foo\"))))", "true\n");
+		assertBothEqual("(println (.getName (class (java.net.URI. \"foo\"))))", "java.net.URI\n");
+		assertBothEqual("(println (.getName ((comp class identity) (java.net.URI. \"foo\"))))", "java.net.URI\n");
 		// the book's my-print: a host object misses every class row and lands on
 		// :default, whose .toString reaches the host method (oracle #<foo>)
 		assertBothEqual("(defmulti mp class) (defmethod mp String [s] s)"
 				+ " (defmethod mp Number [n] (str \"n\" (.toString n)))"
 				+ " (defmethod mp :default [x] (str \"#<\" (.toString x) \">\"))"
-				+ " (println (mp 42) (mp (java.io.File. \"foo\")))", "n42 #<foo>\n");
+				+ " (println (mp 42) (mp (java.net.URI. \"foo\")))", "n42 #<foo>\n");
 		assertBothEqual(
-				"(defmulti mo class) (defmethod mo Object [x] :object)" + " (println (mo (java.io.File. \"foo\")))",
+				"(defmulti mo class) (defmethod mo Object [x] :object)" + " (println (mo (java.net.URI. \"foo\")))",
 				":object\n");
+	}
+
+	@Test
+	void aJavaIoFileCrossesTheJavaBoundaryAsTheHostFile() throws Exception {
+		// oracle-identical (clj 1.12.6, 2026-10-08): a File clojure.java.io makes is a
+		// java.io.File to a Java member -- an argument (Objects/toString, compareTo), the
+		// receiver of a member the namespace leaves to the host (toPath) -- and a host
+		// File a member answers is a File to slurp, spit, the namespace's functions and
+		// a protocol extended to java.io.File
+		assertBothEqual("(def f (clojure.java.io/file \"a/b.txt\"))"
+				+ " (prn (str (.toPath f)) (str (.getFileName (.toPath f))) (java.util.Objects/toString f))"
+				+ " (prn (.compareTo (.getParentFile (java.io.File/createTempFile \"jio\" \".tmp\"))"
+				+ " (clojure.java.io/file (System/getProperty \"java.io.tmpdir\"))))"
+				+ " (def t (java.io.File/createTempFile \"jio\" \".txt\")) (spit t \"one\\ntwo\")"
+				+ " (prn (slurp t) (with-open [r (clojure.java.io/reader t)] (doall (line-seq r))))"
+				+ " (prn (= (clojure.java.io/file (str t)) (clojure.java.io/as-file t)) (instance? java.io.File t))"
+				+ " (defprotocol Jp (jp [x])) (extend-protocol Jp java.io.File (jp [x] :file))"
+				+ " (prn (jp t) (jp f) (clojure.java.io/delete-file t) (.exists (clojure.java.io/file (str t))))",
+				"\"a/b.txt\" \"b.txt\" \"a/b.txt\"\n0\n\"one\\ntwo\" (\"one\" \"two\")\ntrue true\n:file :file true false\n");
 	}
 
 	@Test

@@ -29,7 +29,8 @@ import org.jspecify.annotations.Nullable;
  * dependencies resolve before it lowers, as the oracle's classpath is built before its
  * program starts -- and then each selected jar that holds classes joins the program's
  * Java class path ({@link ClojureFiles#addJavaClassPath}), so the lowering and the
- * program see them.
+ * program see them. The {@code data_readers} files the roots hold are read when the
+ * project resolves too ({@link #dataReaders}).
  */
 final class ClojureSourcePath {
 
@@ -63,6 +64,9 @@ final class ClojureSourcePath {
 
 	/** The namespaces found so far: one read per file per lowering. */
 	private final Map<String, Found> found = new HashMap<>();
+
+	/** The data readers the roots hold, read with them. */
+	private @Nullable ClojureDataReaders dataReaders;
 
 	ClojureSourcePath(ClojureFiles files, @Nullable String entryFile) {
 		this.files = files;
@@ -214,6 +218,85 @@ final class ClojureSourcePath {
 		return null;
 	}
 
+	/**
+	 * A resource {@code clojure.java.io/resource} found below a root.
+	 *
+	 * @param spec its URL, as the oracle's class loader spells it: {@code file:} and the
+	 * absolute path below a directory root, {@code jar:file:} and the jar's absolute path
+	 * then {@code !/} and the entry below a jar root
+	 * @param text its contents
+	 */
+	record Resource(String spec, String text) {
+	}
+
+	/**
+	 * The resource a name finds below the first root holding it, like the oracle's class
+	 * loader over its class path: a directory root's file, a jar root's entry. The
+	 * built-in namespaces' files are no resource (the oracle's are clojure.jar's own). A
+	 * name starting with {@code /} finds nothing, as a class loader's does.
+	 * @param name the resource's path below a root
+	 * @return the resource, or {@code null} when no root holds it
+	 */
+	@Nullable Resource findResource(String name) {
+		if (name.isEmpty() || name.startsWith("/")) {
+			return null;
+		}
+		for (Root root : roots()) {
+			if (root.archive()) {
+				if (entriesOf(root).contains(name)) {
+					String text = this.files.readArchiveEntry(root.path(), name);
+					if (text != null) {
+						return new Resource(
+								"jar:file:" + uriPath(this.files.absolute(root.path())) + "!/" + uriPath(name), text);
+					}
+				}
+				continue;
+			}
+			String path = this.files.resolve(root.path(), name);
+			String text = this.files.read(path);
+			if (text != null) {
+				return new Resource("file:" + uriPath(this.files.absolute(path)), text);
+			}
+		}
+		return null;
+	}
+
+	/**
+	 * The directory roots, absolute, in search order: where a resource whose name is
+	 * known only when the program runs is looked for.
+	 * @return the roots
+	 */
+	List<String> directoryRoots() {
+		List<String> out = new ArrayList<>();
+		for (Root root : roots()) {
+			if (!root.archive()) {
+				String absolute = this.files.absolute(root.path());
+				if (!out.contains(absolute)) {
+					out.add(absolute);
+				}
+			}
+		}
+		return out;
+	}
+
+	/**
+	 * A path quoted as {@code java.net.URI} quotes the path it builds: an ASCII character
+	 * outside the path set as its {@code %XX}, every other kept.
+	 */
+	static String uriPath(String path) {
+		StringBuilder out = new StringBuilder();
+		for (int i = 0; i < path.length(); i++) {
+			char c = path.charAt(i);
+			if (c >= 128 || Character.isLetterOrDigit(c) && c < 128 || "/-_.!~*'();:@&=+$,".indexOf(c) >= 0) {
+				out.append(c);
+			}
+			else {
+				out.append('%').append("0123456789ABCDEF".charAt(c >> 4)).append("0123456789ABCDEF".charAt(c & 15));
+			}
+		}
+		return out.toString();
+	}
+
 	private Set<String> entriesOf(Root root) {
 		Set<String> known = this.archives.get(root.path());
 		if (known == null) {
@@ -273,6 +356,45 @@ final class ClojureSourcePath {
 			this.roots = known;
 		}
 		return known;
+	}
+
+	/**
+	 * The program's data readers ({@link ClojureDataReaders}): every
+	 * {@code data_readers.clj} at a root, in the roots' order, then every
+	 * {@code data_readers.cljc}, like the oracle's {@code getResources} over its
+	 * classpath. Read once, when the program's project resolves.
+	 * @return the data readers
+	 */
+	ClojureDataReaders dataReaders() {
+		ClojureDataReaders known = this.dataReaders;
+		if (known == null) {
+			List<ClojureDataReaders.Source> sources = new ArrayList<>();
+			for (String name : ClojureDataReaders.FILES) {
+				for (Root root : roots()) {
+					ClojureDataReaders.Source source = rootFile(root, name);
+					if (source != null) {
+						sources.add(source);
+					}
+				}
+			}
+			known = ClojureDataReaders.of(sources);
+			this.dataReaders = known;
+		}
+		return known;
+	}
+
+	/** A file directly below a root, or null when the root holds none of the name. */
+	private ClojureDataReaders.@Nullable Source rootFile(Root root, String name) {
+		if (root.archive()) {
+			if (!entriesOf(root).contains(name)) {
+				return null;
+			}
+			String text = this.files.readArchiveEntry(root.path(), name);
+			return text == null ? null : new ClojureDataReaders.Source(root.path() + "!/" + name, text);
+		}
+		String path = this.files.resolve(root.path(), name);
+		String text = this.files.read(path);
+		return text == null ? null : new ClojureDataReaders.Source(path, text);
 	}
 
 	private List<Root> computeRoots() {

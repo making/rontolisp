@@ -20,9 +20,12 @@ import org.jspecify.annotations.Nullable;
  * @param children the child elements
  * @param empty whether it was written as an empty-element tag ({@code <a/>})
  * @param line the line the start tag is on, 1-based
+ * @param textAt how many child elements precede the first character of its data that is
+ * not XML whitespace, {@code -1} when all of it is whitespace: where a pull parser asking
+ * for the next tag meets text
  */
 record XmlElement(String name, String text, Map<String, String> attributes, List<XmlElement> children, boolean empty,
-		int line) {
+		int line, int textAt) {
 
 	/**
 	 * Copies the attributes and the children.
@@ -32,6 +35,7 @@ record XmlElement(String name, String text, Map<String, String> attributes, List
 	 * @param children the child elements
 	 * @param empty whether it was an empty-element tag
 	 * @param line the start tag's line
+	 * @param textAt the child count before the first non-whitespace data, or {@code -1}
 	 */
 	XmlElement {
 		attributes = Collections.unmodifiableMap(new LinkedHashMap<>(attributes));
