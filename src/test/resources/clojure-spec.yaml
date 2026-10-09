@@ -10769,6 +10769,28 @@ cases:
       425092884 1955592065 -343263960 1583802735
       -2018137581 -328473137
       true true true (1392991556 -2123407586 1455541201)
+  - name: a-records-seq-walks-its-declared-fields-in-order-then-the-rest
+    # A record's seq, keys, vals, reduce, reduce-kv and hash-ordered-coll walk
+    # the declared fields in order, then the extension map (one extension key
+    # here: the order of several is the table's, like any map's). Every line is
+    # the oracle's (clj 1.12.6.1673, 2026-10-09).
+    source: |
+      (defrecord SeqRec [a b])
+      (def sr (->SeqRec 1 2))
+      (def sre (assoc sr :z 3))
+      (prn (seq sr) (keys sr) (vals sr) (into [] sr))
+      (prn (seq sre) (keys sre) (vals sre) (vec sre))
+      (prn (reduce (fn [acc [k v]] (conj acc k)) [] sre) (reduce-kv (fn [acc k v] (conj acc v)) [] sre))
+      (prn (first sre) (rest sre) (last sre) (map key sre) (for [[k v] sre] v) (apply list sre))
+      (prn (hash-ordered-coll sr) (hash-ordered-coll sre))
+      (prn (seq (dissoc sre :z)))
+    expected: |
+      ([:a 1] [:b 2]) (:a :b) (1 2) [[:a 1] [:b 2]]
+      ([:a 1] [:b 2] [:z 3]) (:a :b :z) (1 2 3) [[:a 1] [:b 2] [:z 3]]
+      [:a :b :z] [1 2 3]
+      [:a 1] ([:b 2] [:z 3]) [:z 3] (:a :b :z) (1 2 3) ([:a 1] [:b 2] [:z 3])
+      -1407726839 -1888696251
+      ([:a 1] [:b 2])
   - name: the-collection-hash-verbs-mix-order-and-combine-like-the-oracle
     # mix-collection-hash casts both arguments like a ^long parameter and then to
     # an int (Math.toIntExact); hash-ordered-coll and hash-unordered-coll take an

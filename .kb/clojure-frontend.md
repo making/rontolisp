@@ -548,6 +548,14 @@ refused with the oracle's class** (oracle-checked clj 1.12.6, 2026-10-05). Befor
 keyword, var, reduced value or namespace read as its list (`(first :a)` was `:C%KEYWORD`,
 `(count :a)` 2) and `empty?`/`contains?` of a non-collection answered.
 
+- A record's walks (`seq`, `keys`, `vals`, `reduce`, `reduce-kv`, `into`, `hash-ordered-coll`
+  ...) take `%clojure-record-entries`' order, the printer's: the declared fields in order,
+  then the extension keys in the table's walk order (`%clojure-record-column` for
+  `keys`/`vals`). Measured 2026-10-09 against clj 1.12.6: the oracle's extension map is an
+  array map, so its keys come in insertion order; here several extension keys come in the
+  table's order, flipped by every copy (`assoc`, `map->R`), like any map's ("Deviations":
+  walk order). A record with at most one extension key is the oracle's on all four backends.
+  Pin: clojure-spec `a-records-seq-walks-its-declared-fields-in-order-then-the-rest`.
 - `%clojure-strict-seq`: a plain list passes after `consp` + `keywordp`; a set, record or
   sorted collection seqs; anything else (a wrapper, `false`, a number, a symbol, a
   function) is `seq`'s IAE. `false` was empty until then (the oracle refuses).
@@ -919,8 +927,7 @@ hash's.
   `hash-unordered-coll` and `=` of a priority map answer the oracle's on all four backends; as
   a key or set member it misses (f01). instaparse 1.5.0 next stops at a `^long` return hint on
   a `defn` parameter vector (`auto_flatten_seq.clj:233`, f04), then, the hints removed by
-  hand, at transients (`conj!`, `:302`, f05). A record's seq walks its entries backwards, so
-  `hash-ordered-coll` of one differs (f02).
+  hand, at transients (`conj!`, `:302`, f05).
 - Pins: clojure-spec `hash-is-the-oracles-hasheq-of-every-kind`,
   `the-collection-hash-verbs-mix-order-and-combine-like-the-oracle`,
   `a-type-hashes-through-its-hasheq-then-its-hash-code-else-by-identity` and the `str` line of
