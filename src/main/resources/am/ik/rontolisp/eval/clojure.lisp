@@ -978,6 +978,12 @@
   "pr as a value."
   (rontolisp::%clojure-print-args args t nil))
 
+(defun rontolisp::%clojure-flush-v (&rest args)
+  "flush as a value: *standard-output* flushed, nil."
+  (rontolisp::%clojure-check-arity args 0 0 "flush")
+  (finish-output *standard-output*)
+  nil)
+
 (defun rontolisp::%clojure-read-line-v (&rest args)
   "read-line as a value: the next line of *in*, nil past the end."
   (rontolisp::%clojure-check-arity args 0 0 "read-line")

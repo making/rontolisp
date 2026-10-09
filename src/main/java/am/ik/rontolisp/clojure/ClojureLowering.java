@@ -3906,6 +3906,10 @@ public final class ClojureLowering {
 			case "newline":
 				ClojureLowerUtil.isTrue(n == 0, "newline takes no argument");
 				return ClojureLowerUtil.list(ClojureLowerUtil.sym("princ"), LispString.literal("\n"));
+			case "flush":
+				ClojureLowerUtil.isTrue(n == 0, "flush takes no argument");
+				return ClojureLowerUtil.list(ClojureLowerUtil.sym("progn"), ClojureLowerUtil
+					.list(ClojureLowerUtil.sym("finish-output"), ClojureLowerUtil.sym("*STANDARD-OUTPUT*")), NIL_CONST);
 			case "methods":
 				return ClojureDispatchLowering.methodsOf(this, items);
 			case "count":

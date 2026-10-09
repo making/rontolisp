@@ -510,6 +510,7 @@ categories:
       - { slug: print-str, name: "print-str" }
       - { slug: prn-str, name: "prn-str" }
       - { slug: println-str, name: "println-str" }
+      - { slug: flush, name: "flush" }
   - title: "Ring adapter"
     index_page: clojure/reference/ring.md
     functions:

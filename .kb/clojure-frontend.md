@@ -1803,7 +1803,7 @@ namespace` but the ones no measured library names (`inspector`, `java.browse`,
   (`mainLeftOut`): `repl`, `main`, `load-script` (no `eval`), `repl-read`,
   `renumbering-read`, `skip-whitespace`, `skip-if-eol`, `with-bindings` (the REPL's parts),
   `report-error` (main's uncaught report). Written without `{:clojure.error/keys [...]}`
-  destructuring and `flush`, neither of which the front end has (e92, e91).
+  destructuring, which the front end does not have (e92); `repl-caught` ends with `(flush)`.
 - `clojure.java.shell` (2026-10-09): Clojure source over `ProcessBuilder` interop, so the
   interpreter and the JVM run it; `ClojureBuiltinNamespaces.HOST_ONLY` refuses its load
   while lowering for a target without the host (`ClojureNamespaceLowering.loadNamespace`,

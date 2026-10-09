@@ -213,4 +213,4 @@
   [e]
   (binding [*out* *err*]
     (print (err->msg e))
-    (.flush *out*)))
+    (flush)))
