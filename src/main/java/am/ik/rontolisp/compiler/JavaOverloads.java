@@ -38,7 +38,7 @@ public final class JavaOverloads {
 	/**
 	 * A Lisp callable adapted to an interface of several abstract methods, or none: after
 	 * every functional one, as only a functional interface takes a Java lambda
-	 * ({@link JavaImplementations#isFunctionalInterface}).
+	 * ({@link JavaInterfaceMethods#isFunctionalInterface}).
 	 */
 	public static final int COST_PROXY_NOT_FUNCTIONAL = 9;
 
@@ -449,7 +449,7 @@ public final class JavaOverloads {
 			// A Lisp callable passed where an interface is expected is auto-wrapped in a
 			// proxy -- a functional interface first, as a Java lambda.
 			case FUNCTION -> !target.isInterface() ? NO_MATCH
-					: JavaImplementations.isFunctionalInterface(target) ? COST_PROXY : COST_PROXY_NOT_FUNCTIONAL;
+					: JavaInterfaceMethods.isFunctionalInterface(target) ? COST_PROXY : COST_PROXY_NOT_FUNCTIONAL;
 		};
 	}
 

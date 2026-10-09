@@ -14,6 +14,8 @@ import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispString;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.compiler.JavaInterfaceMethods.Group;
+import am.ik.rontolisp.compiler.JavaInterfaceMethods.Variant;
 import org.jspecify.annotations.Nullable;
 
 /**
@@ -98,8 +100,6 @@ public final class JavaImplementations {
 	 * are kept, so one that Java swallowed is dropped in time.
 	 */
 	public static final int PENDING_SIGNALS = 16;
-
-	private static final List<String> OBJECT_METHODS = List.of("equals(java.lang.Object)", "hashCode()", "toString()");
 
 	private JavaImplementations() {
 	}
@@ -311,8 +311,8 @@ public final class JavaImplementations {
 	 * designator that names no method or several, a method named twice
 	 */
 	public static JavaImplementation reify(JavaType iface, List<String> designators, JavaClassLookup lookup) {
-		Map<String, Group> groups = groups(iface);
-		Map<String, Group> objectGroups = objectGroups(lookup);
+		Map<String, Group> groups = JavaInterfaceMethods.groups(iface);
+		Map<String, Group> objectGroups = JavaInterfaceMethods.objectGroups(lookup);
 		Map<String, Integer> assigned = new LinkedHashMap<>();
 		for (int i = 0; i < designators.size(); i++) {
 			String designator = designators.get(i);
@@ -354,7 +354,7 @@ public final class JavaImplementations {
 				if (implementation != null) {
 					slots.add(slot(group, variant, implementation));
 				}
-				else if (variant.mustImplement() && !OBJECT_METHODS.contains(group.key())) {
+				else if (variant.mustImplement() && !JavaInterfaceMethods.OBJECT_METHODS.contains(group.key())) {
 					// Object's own equals/hashCode/toString implement a redeclared one.
 					slots.add(slot(group, variant, JavaImplementation.NONE));
 				}
@@ -399,8 +399,8 @@ public final class JavaImplementations {
 	 */
 	public static JavaImplementation functional(JavaType iface, JavaClassLookup lookup, JavaMarkers markers) {
 		List<JavaImplementation.Slot> slots = new ArrayList<>();
-		for (Group group : groups(iface).values()) {
-			if (OBJECT_METHODS.contains(group.key())) {
+		for (Group group : JavaInterfaceMethods.groups(iface).values()) {
+			if (JavaInterfaceMethods.OBJECT_METHODS.contains(group.key())) {
 				continue;
 			}
 			boolean abstractMethod = false;
@@ -416,46 +416,6 @@ public final class JavaImplementations {
 		return new JavaImplementation(false, List.of(iface), slots, null, null,
 				new JavaMarkers(true, markers.javaFalse()));
 	}
-
-	/**
-	 * Whether the interface is a functional one in Java's sense: exactly one method a
-	 * class must implement, {@code Object}'s three aside -- what a lambda can implement.
-	 * A function converted to an interface costs less for one
-	 * ({@link JavaOverloads#kindCost}), so {@code TreeSet(Comparator)} wins over
-	 * {@code TreeSet(Collection)} for a function, as Java's lambda and the oracle's fn (a
-	 * {@code Comparator} itself, never a {@code Collection}) choose. Remembered per type.
-	 * @param iface an interface
-	 * @return whether it has exactly one abstract method
-	 */
-	public static boolean isFunctionalInterface(JavaType iface) {
-		Boolean known;
-		synchronized (FUNCTIONAL_INTERFACES) {
-			known = FUNCTIONAL_INTERFACES.get(iface);
-		}
-		if (known != null) {
-			return known;
-		}
-		int abstractMethods = 0;
-		for (Group group : groups(iface).values()) {
-			if (OBJECT_METHODS.contains(group.key())) {
-				continue;
-			}
-			for (Variant variant : group.variants()) {
-				if (variant.mustImplement()) {
-					abstractMethods++;
-					break;
-				}
-			}
-		}
-		boolean functional = abstractMethods == 1;
-		synchronized (FUNCTIONAL_INTERFACES) {
-			FUNCTIONAL_INTERFACES.put(iface, functional);
-		}
-		return functional;
-	}
-
-	// isFunctionalInterface's answers, by type: weak, as a compile's types die with it.
-	private static final Map<JavaType, Boolean> FUNCTIONAL_INTERFACES = new java.util.WeakHashMap<>();
 
 	/**
 	 * How {@code (java:proxy "I" callable)} implements the interface: every method but
@@ -480,8 +440,8 @@ public final class JavaImplementations {
 	 */
 	public static JavaImplementation proxy(List<JavaType> interfaces, JavaClassLookup lookup) {
 		List<JavaImplementation.Slot> slots = new ArrayList<>();
-		for (Group group : groups(interfaces).values()) {
-			if (OBJECT_METHODS.contains(group.key())) {
+		for (Group group : JavaInterfaceMethods.groups(interfaces).values()) {
+			if (JavaInterfaceMethods.OBJECT_METHODS.contains(group.key())) {
 				continue;
 			}
 			for (Variant variant : group.variants()) {
@@ -895,96 +855,6 @@ public final class JavaImplementations {
 			}
 		}
 		return true;
-	}
-
-	/**
-	 * A method of the interface: one name and parameter list, and its return-type
-	 * variants.
-	 */
-	private record Group(String name, List<JavaType> parameterTypes, List<Variant> variants) {
-
-		String key() {
-			return JavaImplementation.key(this.name, this.parameterTypes);
-		}
-
-	}
-
-	/**
-	 * One return type of a method; it must be implemented when a declaration of it is
-	 * abstract, or when two interfaces supply a default for it (which a class must
-	 * resolve by overriding).
-	 */
-	private record Variant(JavaType returnType, boolean mustImplement) {
-	}
-
-	private static Map<String, Group> groups(JavaType iface) {
-		return groups(List.of(iface));
-	}
-
-	// The interfaces' instance methods by key, in key order; each key's variants by
-	// return type name.
-	private static Map<String, Group> groups(List<JavaType> interfaces) {
-		Map<String, List<JavaExecutable>> byKey = new TreeMap<>();
-		for (JavaType iface : interfaces) {
-			for (JavaExecutable method : iface.publicMethods()) {
-				if (!method.isStatic()) {
-					byKey
-						.computeIfAbsent(JavaImplementation.key(method.name(), method.parameterTypes()),
-								k -> new ArrayList<>())
-						.add(method);
-				}
-			}
-		}
-		Map<String, Group> groups = new LinkedHashMap<>();
-		for (Map.Entry<String, List<JavaExecutable>> entry : byKey.entrySet()) {
-			groups.put(entry.getKey(), group(entry.getValue()));
-		}
-		return groups;
-	}
-
-	private static Group group(List<JavaExecutable> declarations) {
-		Map<String, List<JavaExecutable>> byReturn = new TreeMap<>();
-		for (JavaExecutable declaration : declarations) {
-			byReturn.computeIfAbsent(declaration.returnType().name(), k -> new ArrayList<>()).add(declaration);
-		}
-		List<Variant> variants = new ArrayList<>();
-		for (List<JavaExecutable> sameReturn : byReturn.values()) {
-			int defaults = 0;
-			boolean anyAbstract = false;
-			for (JavaExecutable declaration : sameReturn) {
-				if (declaration.isAbstract()) {
-					anyAbstract = true;
-				}
-				else {
-					defaults++;
-				}
-			}
-			variants.add(new Variant(sameReturn.get(0).returnType(), anyAbstract || defaults > 1));
-		}
-		JavaExecutable first = declarations.get(0);
-		return new Group(first.name(), List.copyOf(first.parameterTypes()), List.copyOf(variants));
-	}
-
-	// Object's public methods a java:reify may implement: equals, hashCode, toString.
-	private static Map<String, Group> objectGroups(JavaClassLookup lookup) {
-		Map<String, Group> groups = new LinkedHashMap<>();
-		JavaType object = lookup.find("java.lang.Object");
-		if (object == null) {
-			return groups;
-		}
-		Map<String, List<JavaExecutable>> byKey = new TreeMap<>();
-		for (JavaExecutable method : object.publicMethods()) {
-			String key = JavaImplementation.key(method.name(), method.parameterTypes());
-			if (OBJECT_METHODS.contains(key)) {
-				byKey.computeIfAbsent(key, k -> new ArrayList<>()).add(method);
-			}
-		}
-		for (Map.Entry<String, List<JavaExecutable>> entry : byKey.entrySet()) {
-			List<Variant> variants = List.of(new Variant(entry.getValue().get(0).returnType(), false));
-			JavaExecutable first = entry.getValue().get(0);
-			groups.put(entry.getKey(), new Group(first.name(), List.copyOf(first.parameterTypes()), variants));
-		}
-		return groups;
 	}
 
 }
