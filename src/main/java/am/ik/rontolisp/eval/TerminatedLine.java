@@ -7,11 +7,9 @@ import org.jspecify.annotations.Nullable;
 
 /**
  * One line {@code read-line} read and whether end of file -- not a terminator -- ended
- * it: CL's missing-newline-p. The terminators are {@code BufferedReader.readLine}'s
- * ({@code \n}, {@code \r}, {@code \r\n}), none of which is part of the line, the contract
- * every stream kind here answers; a {@code \r} the file ends on ends the line as end of
- * file does, the way the WASM backends -- which split on {@code \n} and strip one
- * trailing {@code \r} -- answer it.
+ * it: CL's missing-newline-p. Only {@code \n} ends a line (a lone {@code \r} does not,
+ * unlike {@code BufferedReader.readLine}), and one {@code \r} just before the {@code \n}
+ * or before end of file is dropped: the rule every stream kind and every backend answers.
  *
  * @param text the line, without its terminator
  * @param missingNewline whether end of file ended the line
@@ -20,7 +18,7 @@ record TerminatedLine(String text, boolean missingNewline) {
 
 	/**
 	 * Reads one line from a reader.
-	 * @param reader the reader, which supports {@code mark}
+	 * @param reader the reader
 	 * @return the line, or null at end of file
 	 * @throws IOException when the read fails
 	 */
@@ -30,22 +28,26 @@ record TerminatedLine(String text, boolean missingNewline) {
 			return null;
 		}
 		StringBuilder line = new StringBuilder();
-		while (c >= 0 && c != '\n' && c != '\r') {
+		while (c >= 0 && c != '\n') {
 			line.append((char) c);
 			c = reader.read();
 		}
-		boolean missing = c < 0;
-		if (c == '\r') {
-			reader.mark(1);
-			int next = reader.read();
-			if (next < 0) {
-				missing = true;
-			}
-			else if (next != '\n') {
-				reader.reset();
-			}
+		int n = line.length();
+		if (n > 0 && line.charAt(n - 1) == '\r') {
+			line.setLength(n - 1);
 		}
-		return new TerminatedLine(line.toString(), missing);
+		return new TerminatedLine(line.toString(), c < 0);
+	}
+
+	/**
+	 * Reads one line from a reader, like {@link #read} without the end-of-file flag.
+	 * @param reader the reader
+	 * @return the line, or null at end of file
+	 * @throws IOException when the read fails
+	 */
+	static @Nullable String readText(BufferedReader reader) throws IOException {
+		TerminatedLine line = read(reader);
+		return line == null ? null : line.text();
 	}
 
 }

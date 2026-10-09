@@ -1265,6 +1265,36 @@ cases:
       ({:k 2} 7)
       :illegal
       1 [1 2]
+  - name: namespaced-map-destructuring
+    # :ns/keys, :ns/syms, ::keys and ::alias/keys read each simple name from that
+    # namespace and bind the short name; a :keys vector may hold keywords. Until
+    # 2026-10-09 these were refused. Oracle-identical (clj 1.12.6).
+    source: |
+      (require '[clojure.string :as str])
+      (prn (let [{:a/keys [b c]} {:a/b 2 :a/c 3}] [b c]))
+      (prn (let [{:a/syms [b]} {'a/b 2}] b))
+      (prn (let [{:keys [:a :b/c ::d]} {:a 1 :b/c 5 ::d 6}] [a c d]))
+      (prn (let [{::keys [b]} {::b 7}] b) (let [{::str/keys [b]} {::str/b 8}] b))
+      (prn (let [{:a/keys [b c] :or {b 10 c 11}} {:a/b 2}] [b c]))
+      (prn (let [{:a/keys [b] :as m} {:a/b 2}] [b m]))
+      (prn (let [{:a/keys [b] :keys [c]} {:a/b 2 :c 3}] [b c]))
+      (prn (let [{:a/keys [b]} nil] b))
+      (defn nsf [{:a.b/keys [x] :c/syms [y]}] [x y])
+      (prn (nsf {:a.b/x 9 'c/y 1}))
+      (prn (loop [{:a/keys [b]} {:a/b 3}] b))
+      (prn (for [{:a/keys [b]} [{:a/b 1} {:a/b 2}]] b))
+    expected: |
+      [2 3]
+      2
+      [1 5 6]
+      7 8
+      [2 11]
+      [2 #:a{:b 2}]
+      [2 3]
+      nil
+      [9 1]
+      3
+      (1 2)
   - name: threading-threads-first-and-last
     source: |
       (println (-> 5 inc inc))

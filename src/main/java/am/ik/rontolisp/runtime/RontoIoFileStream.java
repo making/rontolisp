@@ -139,9 +139,8 @@ public final class RontoIoFileStream extends Writer {
 	}
 
 	/**
-	 * Reads one line. The terminators are {@code \n}, {@code \r} and {@code \r\n}, none
-	 * of which is part of the answer -- the {@code BufferedReader.readLine} contract
-	 * every other stream kind here answers.
+	 * Reads one line. Only {@code \n} ends a line, and one {@code \r} just before it (or
+	 * before end of file) is dropped -- the rule every other stream kind here answers.
 	 *
 	 * <p>
 	 * End of file is the CALLER's test, through {@link #ready()}: a class in this package
@@ -157,22 +156,15 @@ public final class RontoIoFileStream extends Writer {
 			return "";
 		}
 		StringBuilder line = new StringBuilder();
-		while (cp >= 0 && cp != '\n' && cp != '\r') {
+		while (cp >= 0 && cp != '\n') {
 			line.appendCodePoint(cp);
 			cp = readCodePoint();
 		}
-		boolean missing = cp < 0;
-		if (cp == '\r') {
-			long here = this.file.getFilePointer();
-			int next = this.file.read();
-			if (next < 0) {
-				missing = true;
-			}
-			else if (next != '\n') {
-				this.file.seek(here);
-			}
+		int n = line.length();
+		if (n > 0 && line.charAt(n - 1) == '\r') {
+			line.setLength(n - 1);
 		}
-		this.lineMissingNewline = missing;
+		this.lineMissingNewline = cp < 0;
 		return line.toString();
 	}
 

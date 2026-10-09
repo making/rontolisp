@@ -185,7 +185,8 @@ $ rontolisp test                      # test/**/*_test.clj を clojure.test で�
 名前付き拒否です。パラメータと束縛は分配を受けます:ベクター
 パターンは seq ビュー経由で位置的に束縛し（`&` は残りを seq として、そのパターンも分配可。
 `:as` は全体）、マップパターンはテーブル対応の読み出し経由で束縛します（`:keys`/`:syms`/
-`:strs`、明示ローカル、`:as`、`:or` デフォルト）-- 対象は `let`、`loop`、`fn`/`defn`
+`:strs`、`:ns/keys`、`:ns/syms`、`::keys`、`::alias/keys`、`:keys` ベクター内のキーワード、
+明示ローカル、`:as`、`:or` デフォルト）-- 対象は `let`、`loop`、`fn`/`defn`
 パラメータのいずれでも同じで、ネストしたパターンは再帰します。マップパターンは seq を、その
 キーワード引数が表すマップとして読みます（[seq-to-map-for-destructuring](reference/seq-to-map-for-destructuring.md)）。
 したがって `(defn f [& {:keys [a]}] a)` は `(f :a 1)` も `(f {:a 1})` も受けます。不正な形は
