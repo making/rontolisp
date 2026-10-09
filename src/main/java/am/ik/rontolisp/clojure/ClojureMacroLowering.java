@@ -47,6 +47,12 @@ final class ClojureMacroLowering {
 	static final String MACROEXPAND = "C%MACROEXPAND";
 
 	/**
+	 * A whole program's expander table: the expander of a table global's index
+	 * ({@link #macroRuntime}).
+	 */
+	static final String MACRO_EXPANDER = "C%MACRO-EXPANDER";
+
+	/**
 	 * The oracle's special forms ({@code Compiler.specials}): a call site never reaches a
 	 * macro of one of these names, so a {@code defmacro} of one is refused by name (the
 	 * oracle accepts it and ignores it).
@@ -98,9 +104,14 @@ final class ClojureMacroLowering {
 	 * are refused: there is no compilation environment to bind. The definition emits
 	 * {@code (progn (setq c%name%macro expander) nil)} -- a lone {@code %} no mangled
 	 * identifier spells, so the table stays apart from user definitions, like the
-	 * multi-arity helpers -- and registers the expander for the call sites below it; a
-	 * call above the definition names the missing expander instead of an unknown name,
-	 * unless the name is a {@code clojure.core} one, whose core meaning holds there.
+	 * multi-arity helpers -- and registers the expander for the call sites below it. A
+	 * whole program stores the expander's index instead and keeps the expander in
+	 * {@code C%MACRO-EXPANDER} ({@link #macroRuntime}), which only the run-time expansion
+	 * calls: a program expanding nothing at run time sheds every expander and whatever
+	 * its body and template name, the template's qualified symbols included (the dispatch
+	 * gate reads a spelled defun name as a call it may resolve). A call above the
+	 * definition names the missing expander instead of an unknown name, unless the name
+	 * is a {@code clojure.core} one, whose core meaning holds there.
 	 */
 	static List<LispVal> defmacroForms(ClojureLowering ctx, LispVal form, List<LispVal> items) {
 		ClojureLowerUtil.isTrue(items.size() >= 2, "defmacro needs a name, a parameter vector and a body");
@@ -161,7 +172,16 @@ final class ClojureMacroLowering {
 			}
 		}
 		List<LispVal> forms = new ArrayList<>();
-		forms.add(setq);
+		if (ctx.session) {
+			forms.add(setq);
+		}
+		else {
+			// a whole program's table holds the expander's index, the expander itself
+			// living in the one function only the run-time expansion calls
+			forms.add(ClojureLowerUtil.list(ClojureLowerUtil.sym("setq"), table,
+					new LispInteger(ctx.macroExpanders.size())));
+			ctx.macroExpanders.add(expander);
+		}
 		forms.addAll(metaStore);
 		forms.add(ClojureLowering.NIL_CONST);
 		return List.of(ClojureLowerUtil.cons(ClojureLowerUtil.sym("progn"), forms));
@@ -1194,9 +1214,28 @@ final class ClojureMacroLowering {
 	 * against a quoted form holds and the Clojure printer (which demangles {@code c%}
 	 * symbols) spells the oracle's lowercase. Pure lowering over the shared primitives,
 	 * so every backend runs it unchanged.
+	 * @param ctx the lowering
+	 * @param expanders a whole program's expanders, whose index each table global holds,
+	 * or null where the globals hold the expanders themselves (a session, the macro-time
+	 * evaluator)
+	 * @return the runtime's definitions
 	 */
-	static List<LispVal> macroRuntime(ClojureLowering ctx) {
+	static List<LispVal> macroRuntime(ClojureLowering ctx, @Nullable List<LispVal> expanders) {
 		List<LispVal> runtime = new ArrayList<>();
+		if (expanders != null) {
+			// (defun C%MACRO-EXPANDER (id) (case id (0 expander) ...)): the only
+			// reference to a whole program's expanders, so the shake drops them all
+			// with the run-time expansion
+			LispSymbol id = new LispSymbol("id");
+			List<LispVal> arms = new ArrayList<>();
+			arms.add(ClojureLowerUtil.sym("case"));
+			arms.add(id);
+			for (int i = 0; i < expanders.size(); i++) {
+				arms.add(ClojureLowerUtil.list(new LispInteger(i), expanders.get(i)));
+			}
+			arms.add(ClojureLowerUtil.list(ClojureLowering.TRUE_CONST, ClojureLowering.NIL_CONST));
+			runtime.add(ClojureHierarchyLowering.hdefun(MACRO_EXPANDER, List.of(id), ClojureLowerUtil.list(arms)));
+		}
 		LispSymbol op = new LispSymbol("op");
 		LispSymbol name = new LispSymbol("name");
 		LispSymbol found = new LispSymbol("found");
@@ -1238,8 +1277,10 @@ final class ClojureMacroLowering {
 					ClojureHierarchyLowering.hfn("AND", found, ClojureHierarchyLowering.hfn("BOUNDP", found)),
 					ClojureHierarchyLowering.hlet(
 							List.of(ClojureLowerUtil.list(cell, ClojureHierarchyLowering.hfn("SYMBOL-VALUE", found))),
-							ClojureHierarchyLowering.hfn("IF", ClojureHierarchyLowering.hfn("FUNCTIONP", cell), cell,
-									ClojureLowering.NIL_CONST)),
+							expanders != null ? ClojureHierarchyLowering.hfn(MACRO_EXPANDER, cell)
+									: ClojureHierarchyLowering.hfn("IF",
+											ClojureHierarchyLowering.hfn("FUNCTIONP", cell), cell,
+											ClojureLowering.NIL_CONST)),
 					ClojureLowering.NIL_CONST));
 		runtime.add(ClojureHierarchyLowering.hdefun("C%MACRO-FN", List.of(op, scope),
 				ClojureHierarchyLowering.hfn("IF", ClojureHierarchyLowering.hfn("SYMBOLP", op),

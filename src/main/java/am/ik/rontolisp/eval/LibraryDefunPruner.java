@@ -21,6 +21,7 @@ import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.PackageRegistry;
 import am.ik.rontolisp.PackageResolver;
+import am.ik.rontolisp.clojure.ClojureLowering;
 import org.jspecify.annotations.Nullable;
 
 /**
@@ -1300,6 +1301,7 @@ public final class LibraryDefunPruner {
 					collectDefinitionNames(UrlLibrary.forms(), names);
 					collectDefinitionNames(SchemeLibrary.everyVariantForms(), names);
 					collectDefinitionNames(ClojureLibrary.forms(), names);
+					collectDefinitionNames(ClojureLowering.programMacroRuntimeForms(), names);
 					for (String name : LispPreludeLibrary.names()) {
 						collectDefinitionNames(LispPreludeLibrary.formsFor(name), names);
 					}

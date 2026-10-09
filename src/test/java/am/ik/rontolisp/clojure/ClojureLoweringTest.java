@@ -4,6 +4,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
 
+import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.eval.ClojureMacroTime;
 import am.ik.rontolisp.reader.LispReadException;
@@ -1808,6 +1809,39 @@ class ClojureLoweringTest {
 		return forms.stream().map(LispVal::print).collect(Collectors.joining("\n"));
 	}
 
+	/**
+	 * The expander a whole program's {@code C%MACRO-EXPANDER} answers for the index of a
+	 * {@code defmacro}, printed.
+	 */
+	private static String expanderOf(String source, int index) {
+		LispVal table = Clojure.read(source, null, ClojureMacroTime.create())
+			.stream()
+			.filter(form -> form.print().startsWith("(DEFUN C%MACRO-EXPANDER "))
+			.findFirst()
+			.orElseThrow();
+		// (defun C%MACRO-EXPANDER (id) (case id (0 expander) ... (t nil)))
+		List<LispVal> arms = ((LispCons) ((LispCons) table).toList().get(3)).toList();
+		List<LispVal> arm = ((LispCons) arms.get(2 + index)).toList();
+		assertThat(arm.get(0).print()).isEqualTo(String.valueOf(index));
+		return arm.get(1).print();
+	}
+
+	@Test
+	void aWholeProgramsTableHoldsAnIndexIntoTheOneFunctionHoldingTheExpanders() {
+		// only the run-time expansion calls C%MACRO-EXPANDER, so the compile path's
+		// pruner drops every expander of a program expanding nothing at run time
+		String out = loweredWithMacros("""
+				(defmacro mu-a [x] `(inc ~x))
+				(defmacro mu-b [x] `(dec ~x))""");
+		assertThat(out).contains("(PROGN (SETQ |c%mu-a%macro| 0) ")
+			.contains("(PROGN (SETQ |c%mu-b%macro| 1) ")
+			.contains("(C%MACRO-EXPANDER |cell|)")
+			.doesNotContain("FUNCTIONP");
+		assertThat(expanderOf("(defmacro mu-a [x] `(inc ~x)) (defmacro mu-b [x] `(dec ~x))", 1))
+			.contains("'|c%clojure.core/dec|")
+			.doesNotContain("inc");
+	}
+
 	@Test
 	void defmacroEmitsATableEntryAndRegistersTheExpander() {
 		String out = loweredWithMacros("(defmacro mu-unless [c t] (list 'if c nil t))");
@@ -1951,12 +1985,12 @@ class ClojureLoweringTest {
 	void aCoreNamedMacroBelowAMacroKeepsTheCoreMeaningInItsSyntaxQuote() {
 		// the oracle resolves a syntax-quoted symbol at read time: with-out-str is
 		// clojure.core's until the program's macro is defined
-		String out = loweredWithMacros("""
+		String source = """
 				(defmacro wrap [& body] `(with-out-str ~@body))
 				(defmacro with-out-str [& body] `(do ~@body))
-				(defmacro wrap2 [& body] `(with-out-str ~@body))""");
-		String wrap = out.substring(0, out.indexOf("(PROGN (SETQ |c%with-out-str%macro|"));
-		String wrap2 = out.substring(out.indexOf("(PROGN (SETQ |c%wrap2%macro|"));
+				(defmacro wrap2 [& body] `(with-out-str ~@body))""";
+		String wrap = expanderOf(source, 0);
+		String wrap2 = expanderOf(source, 2);
 		assertThat(wrap).contains("'|c%clojure.core/with-out-str|");
 		assertThat(wrap2).contains("'|c%user/with-out-str|").doesNotContain("clojure.core");
 	}
