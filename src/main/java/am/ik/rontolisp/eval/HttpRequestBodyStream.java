@@ -81,9 +81,8 @@ public final class HttpRequestBodyStream extends InputStream {
 	}
 
 	/**
-	 * Reads one line, decoding UTF-8 at the cursor. Line terminators are {@code \n},
-	 * {@code \r} and {@code \r\n}, none of which is part of the answer -- the
-	 * {@code BufferedReader.readLine} contract the pre-cutover string body had.
+	 * Reads one line, decoding UTF-8 at the cursor. Only {@code \n} ends a line, and one
+	 * {@code \r} just before it (or before end of stream) is dropped.
 	 * @return the line (possibly empty), or {@code null} at end of stream
 	 */
 	public @Nullable String readLine() {
@@ -102,14 +101,15 @@ public final class HttpRequestBodyStream extends InputStream {
 		}
 		StringBuilder line = new StringBuilder();
 		int cp = readCodePoint();
-		while (cp >= 0 && cp != '\n' && cp != '\r') {
+		while (cp >= 0 && cp != '\n') {
 			line.appendCodePoint(cp);
 			cp = readCodePoint();
 		}
-		if (cp == '\r' && this.index < this.octets.length && this.octets[this.index] == '\n') {
-			this.index++;
+		int n = line.length();
+		if (n > 0 && line.charAt(n - 1) == '\r') {
+			line.setLength(n - 1);
 		}
-		return new TerminatedLine(line.toString(), cp < 0 || (cp == '\r' && this.index >= this.octets.length));
+		return new TerminatedLine(line.toString(), cp < 0);
 	}
 
 	/**

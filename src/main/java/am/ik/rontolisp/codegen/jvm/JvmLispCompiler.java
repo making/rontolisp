@@ -1172,7 +1172,8 @@ public final class JvmLispCompiler implements LispCompiler {
 		ClassEntry bufferedReaderClass = cp.classEntry("java/io/BufferedReader");
 		ClassEntry inputStreamReaderClass = cp.classEntry("java/io/InputStreamReader");
 		MethodRefEntry brInit = cp.methodRef(bufferedReaderClass, "<init>", "(Ljava/io/Reader;)V");
-		MethodRefEntry brReadLine = cp.methodRef(bufferedReaderClass, "readLine", "()Ljava/lang/String;");
+		MethodRefEntry lfLine = cp.methodRef(thisClass, JvmRuntimeBuilder.LF_LINE_METHOD,
+				JvmRuntimeBuilder.LF_LINE_DESC);
 		MethodRefEntry isrInit = cp.methodRef(inputStreamReaderClass, "<init>", "(Ljava/io/InputStream;)V");
 		FieldRefEntry systemIn = cp.fieldRef(systemClass, "in", "Ljava/io/InputStream;");
 		MethodRefEntry stringConcat = cp.methodRef(stringClass, "concat", "(Ljava/lang/String;)Ljava/lang/String;");
@@ -3682,7 +3683,7 @@ public final class JvmLispCompiler implements LispCompiler {
 		MethodCode appendCode = JvmRuntimeBuilder.buildAppendBody(cp, thisClass, objectArrayClass, objectClass);
 		StringEntry quoteStr = cp.stringEntry("\"");
 		MethodCode readLineCode = JvmRuntimeBuilder.buildReadLineBody(bufferedReaderClass, inputStreamReaderClass,
-				brInit, brReadLine, isrInit, systemIn, stdinReaderField, quoteStr, stringConcat);
+				brInit, lfLine, isrInit, systemIn, stdinReaderField, quoteStr, stringConcat);
 
 		// File-stream runtime (open/close/write-line/read-line with a stream)
 		MethodRefEntry stringLengthForIo = cp.methodRef(stringClass, "length", "()I");
@@ -4655,6 +4656,9 @@ public final class JvmLispCompiler implements LispCompiler {
 		definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, appendName, appendDescUtf, appendCode);
 		definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, readLineHelperName, readLineHelperDesc,
 				readLineCode);
+		definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC,
+				cp.utf8Entry(JvmRuntimeBuilder.LF_LINE_METHOD), cp.utf8Entry(JvmRuntimeBuilder.LF_LINE_DESC),
+				JvmRuntimeBuilder.buildLfLineBody(cp));
 		for (JvmIoRuntimeBuilder.IoMethod im : ioMethods) {
 			definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC | im.extraFlags(), im.name(), im.desc(),
 					im.code());

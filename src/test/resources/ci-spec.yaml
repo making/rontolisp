@@ -12319,6 +12319,27 @@ cases:
     expected: |
       "hi"
       T
+  - name: read-line-ends-a-line-at-line-feed-alone
+    source: |
+      ;; A lone CR is part of the line; one CR before the LF (or the end) is dropped.
+      (defun ci-rl-codes (l) (mapcar #'char-code (coerce l 'list)))
+      (with-open-file (out "cr.dat" :direction :output :if-exists :supersede
+                           :element-type '(unsigned-byte 8))
+        (dolist (b '(97 13 98 10 99 13 13 10 100 13)) (write-byte b out)))
+      (with-open-file (in "cr.dat")
+        (print (loop for l = (read-line in nil) while l collect (ci-rl-codes l))))
+      (with-open-file (in "cr.dat")
+        (loop (multiple-value-bind (l m) (read-line in nil nil)
+                (unless l (return))
+                (print (list (ci-rl-codes l) m)))))
+      (with-input-from-string (s (coerce (list #\a (code-char 13) #\b #\Newline #\c) 'string))
+        (print (loop for l = (read-line s nil) while l collect (ci-rl-codes l))))
+    expected: |
+      ((97 13 98) (99 13) (100))
+      ((97 13 98) NIL)
+      ((99 13) NIL)
+      ((100) T)
+      ((97 13 98) (99))
   - name: read-sequence-and-write-sequence-round-trip
     source: |
       (let ((buf (make-array 4)))

@@ -235,7 +235,7 @@ Package `java` (`LispNames.JAVA_PKG`, `PackageRegistry`; does NOT use `cl`): `ja
   the function again through `_apply`). Before, measured 2026-10-08: `cannot return T as int
   from java.util.Comparator.compare`.
 - A function costs `COST_PROXY` (8) against a functional interface (one abstract method,
-  Object's public methods aside: `JavaImplementations.isFunctionalInterface`, cached; the
+  Object's public methods aside: `JavaInterfaceMethods.isFunctionalInterface`, cached; the
   bridge's copy) and `COST_PROXY_NOT_FUNCTIONAL` (9) against any other, so `TreeSet(Comparator)`
   beats `TreeSet(Collection)` (`PriorityQueue`, `ConcurrentSkipListSet` alike), as a Java
   lambda's target does. Before, measured 2026-10-08: the tie went by signature to

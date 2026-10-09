@@ -207,9 +207,10 @@ public final class RontoCharFileReader extends BufferedReader {
 	}
 
 	/**
-	 * Reads one line. The terminators are {@code \n}, {@code \r} and {@code \r\n}, none
-	 * of which is part of the answer -- {@link BufferedReader#readLine}'s contract -- and
-	 * a {@code \r\n} is consumed WHOLE, so the offset after the line is after its LF.
+	 * Reads one line. Only {@code \n} ends a line, and one {@code \r} just before it (or
+	 * before end of file) is dropped -- the rule every backend shares, which
+	 * {@link BufferedReader#readLine} (a lone {@code \r} ends a line too) is not. The
+	 * offset after the line is after its LF.
 	 * @return the line, or null at end of file
 	 * @throws IOException when the read fails
 	 */
@@ -223,12 +224,13 @@ public final class RontoCharFileReader extends BufferedReader {
 			return null;
 		}
 		StringBuilder line = new StringBuilder();
-		while (c >= 0 && c != '\n' && c != '\r') {
+		while (c >= 0 && c != '\n') {
 			line.append((char) c);
 			c = read();
 		}
-		if (c == '\r' && ensure(1) && this.bytes[this.pos] == '\n') {
-			this.pos++;
+		int n = line.length();
+		if (n > 0 && line.charAt(n - 1) == '\r') {
+			line.setLength(n - 1);
 		}
 		return line.toString();
 	}
