@@ -937,10 +937,15 @@ arming rows for slot names, the printer prologue's `"-"`/`"/"` and the JVM layou
   is the probe order, `anySpelled` the decision, `matched` the report (`DesignatorSpellingsTest`).
 - **A literal the compiler SYNTHESIZES as pure result data is exempted through `%unspelled-quote`**
   (`LispNames.UNSPELLED_QUOTE`): compiles exactly like `quote` on every backend but records
-  nothing. Two emitters use it: the generated `:reader`/`:accessor` body's slot name
-  (`LispMacroExpander.checkedSlotRead`; a user-written `slot-value`'s name keeps the plain quote)
-  and `expandClassDesignator`'s type-name results inside `%no-applicable-method`. This is the
-  symbol half of **no generated literal may spell a defun name exactly**. Consequence:
+  nothing. Three emitters use it: the generated `:reader`/`:accessor` body's slot name
+  (`LispMacroExpander.checkedSlotRead`; a user-written `slot-value`'s name keeps the plain quote),
+  `expandClassDesignator`'s type-name results inside `%no-applicable-method`, and a Clojure
+  syntax-quote template's qualified symbols (`.kb/clojure-frontend.md`, "Macros"). This is the
+  symbol half of **no generated literal may spell a defun name exactly**. Every walker that
+  skips quoted data skips it too (`LispNames.isQuote`, or `case QUOTE, UNSPELLED_QUOTE`):
+  read as a call, its datum is a variable reference, and inside a lambda `FreeVarAnalyzer`
+  failed the compile with `Cannot find variable for closure` (2026-10-09, the first emitter
+  inside a lambda). Consequence:
   `(funcall (cell-error-name e) ...)` / `(funcall (type-of x) ...)` stop resolving like any forged
   name, loudly; `--dynamic` restores them.
 - **A package walk's spellings count as spelled** (`RuntimeNameProducers.packageWalkSpellings`):

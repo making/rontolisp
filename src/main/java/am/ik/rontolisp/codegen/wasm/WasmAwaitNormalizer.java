@@ -155,7 +155,7 @@ final class WasmAwaitNormalizer {
 			case LispNil ignored -> true;
 			case LispTrue ignored -> true;
 			case LispSymbol sym -> sym.isKeyword();
-			case LispCons cons -> cons.car() instanceof LispSymbol head && LispNames.QUOTE.equals(head.name());
+			case LispCons cons -> cons.car() instanceof LispSymbol head && LispNames.isQuote(head.name());
 			default -> false;
 		};
 	}

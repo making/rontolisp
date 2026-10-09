@@ -804,7 +804,7 @@ public final class LibraryDefunPruner {
 		if (!(cons.car() instanceof LispSymbol op) || !cons.isProperList()) {
 			return false;
 		}
-		if (LispNames.QUOTE.equals(op.name()) || LispNames.FUNCTION.equals(op.name())) {
+		if (LispNames.isQuote(op.name()) || LispNames.FUNCTION.equals(op.name())) {
 			return true;
 		}
 		if (!PURE_INITFORM_OPERATORS.contains(member(op.name()))) {

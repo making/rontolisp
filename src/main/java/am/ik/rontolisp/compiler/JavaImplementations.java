@@ -136,7 +136,7 @@ public final class JavaImplementations {
 		boolean head = true;
 		while (current instanceof LispCons cons && seen.put(cons, Boolean.TRUE) == null) {
 			if (head) {
-				if (cons.car() instanceof LispSymbol sym && LispNames.QUOTE.equals(sym.name())) {
+				if (cons.car() instanceof LispSymbol sym && LispNames.isQuote(sym.name())) {
 					return;
 				}
 				if (isImplementationForm(cons)) {

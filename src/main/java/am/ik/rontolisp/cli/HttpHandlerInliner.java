@@ -47,7 +47,7 @@ public final class HttpHandlerInliner {
 		LispVal node = form;
 		while (node instanceof LispCons cons) {
 			if (cons.car() instanceof LispSymbol sym) {
-				if (LispNames.QUOTE.equals(sym.name())) {
+				if (LispNames.isQuote(sym.name())) {
 					// Quoted data is not a call site.
 					return false;
 				}

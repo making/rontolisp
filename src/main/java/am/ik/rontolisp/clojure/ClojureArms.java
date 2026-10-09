@@ -941,7 +941,7 @@ public final class ClojureArms {
 			rest = bindings.cdr();
 		}
 		boolean quotedArgs = quoted || form instanceof LispCons head && head.car() instanceof LispSymbol quote
-				&& quote.name().equals("QUOTE");
+				&& LispNames.isQuote(quote.name());
 		while (rest instanceof LispCons cons) {
 			if (family.qualifiedIdents && isQualifiedKeyword(cons)) {
 				found[0] = true;
@@ -1027,7 +1027,7 @@ public final class ClojureArms {
 			}
 			if (cons.car() instanceof LispSymbol head) {
 				String name = head.name();
-				if (name.equals("QUOTE")) {
+				if (LispNames.isQuote(name)) {
 					return form;
 				}
 				if (this.family.tests.contains(name)) {

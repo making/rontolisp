@@ -6055,6 +6055,32 @@ cases:
     expected: |
       (if :yes str :no)
       (if :yes "str" :no)
+  - name: a-run-time-expansion-reads-template-symbols-as-data
+    # A template's var symbols are data in the expansion macroexpand-1 answers at run
+    # time, never a name a call resolves by: an uncalled private helper, a core name, a
+    # var, a class, a pprint var and an unresolved spelling print qualified like the
+    # oracle's, and the same templates expand while lowering into running code
+    # (formatter names its private function in a plain template).
+    source: |
+      (ns tpl-ns (:require [clojure.pprint :as tpl-pp]))
+      (defn- tpl-helper [x] (* x 2))
+      (defmacro tpl-show [x] `(vector (tpl-helper ~x) (inc ~x) (var tpl-helper) [String tpl-pp/cl-format] {:k ~x} #{tpl-undefined}))
+      (defmacro tpl-run [x] `(vector (tpl-helper ~x) (inc ~x) (#'tpl-helper ~x) ((tpl-pp/formatter "~a/~a") nil ~x (str '~x))))
+      (prn (macroexpand-1 '(tpl-show 1)))
+      (prn (macroexpand-1 '(tpl-run 1)))
+      (let [e (macroexpand-1 '(tpl-show 1))]
+        (prn (first e) (symbol? (first e)) (namespace (first e)) (name (first e)) (= (first e) 'clojure.core/vector))
+        (prn (map first (filter seq? (rest e)))))
+      (prn (tpl-run 3))
+      (prn ((tpl-pp/formatter "~a+~a") nil 1 2))
+      (in-ns 'user)
+    expected: |
+      (clojure.core/vector (tpl-ns/tpl-helper 1) (clojure.core/inc 1) (var tpl-ns/tpl-helper) [java.lang.String clojure.pprint/cl-format] {:k 1} #{tpl-ns/tpl-undefined})
+      (clojure.core/vector (tpl-ns/tpl-helper 1) (clojure.core/inc 1) ((var tpl-ns/tpl-helper) 1) ((clojure.pprint/formatter "~a/~a") nil 1 (clojure.core/str (quote 1))))
+      clojure.core/vector true "clojure.core" "vector" true
+      (tpl-ns/tpl-helper clojure.core/inc var)
+      [6 4 6 "3/3"]
+      "1+2"
   - name: a-core-named-macro-shadows-the-lowering-below-its-definition
     # A defmacro of a name the lowering owns (with-out-str, when-not, inc, declare)
     # wins from its definition on; a call site above it, and a syntax-quote in a macro

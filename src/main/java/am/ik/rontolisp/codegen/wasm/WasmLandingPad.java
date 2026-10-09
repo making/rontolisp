@@ -259,7 +259,7 @@ final class WasmLandingPad {
 				case LispNames.DEFUN -> 3;
 				default -> Integer.MAX_VALUE;
 			};
-			quoted = LispNames.QUOTE.equals(name);
+			quoted = LispNames.isQuote(name);
 			if (!quoted && inRegion && WasmCountedLoopCompiler.MODIFY_OPERATORS.contains(name) && cons.isProperList()) {
 				merged = new LinkedHashSet<>();
 				for (LispVal place : symbolPlaces(name, cons.toList())) {

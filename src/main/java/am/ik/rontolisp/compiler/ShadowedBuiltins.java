@@ -409,7 +409,7 @@ public final class ShadowedBuiltins {
 				// Quoted data is data; a macro-definition body is a template the
 				// expander instantiates, not evaluated code (the WasmSocketsRewrite
 				// rule).
-				case LispNames.QUOTE, LispNames.DEFMACRO, LispNames.MACROLET:
+				case LispNames.QUOTE, LispNames.UNSPELLED_QUOTE, LispNames.DEFMACRO, LispNames.MACROLET:
 					return form;
 				case LispNames.FUNCTION: {
 					if (cons.cdr() instanceof LispCons arg && arg.car() instanceof LispSymbol named) {

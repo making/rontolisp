@@ -1611,21 +1611,15 @@
       (execute fmt (init-nav args) nil)
       nil)))
 
-;; The two macros name the function they expand to by building its symbol: a
-;; template spelling the name would keep the function -- and the whole format
-;; executor -- in every program that loads clojure.pprint and expands at run
-;; time (macroexpand keeps every expander, and the dispatch tables of the
-;; compiled backends count a template's symbols as names a call may resolve).
-
 (defmacro formatter
   "A function of a stream and arguments that formats them by format-in,
   compiled once, as cl-format would: answering the text for a nil stream."
   [format-in]
-  (list (list 'var (symbol "clojure.pprint" "formatter-fn")) format-in))
+  `(#'formatter-fn ~format-in))
 
 (defmacro formatter-out
   "A function of arguments that formats them by format-in, compiled once, to
   *out* as it is: meant for a pretty print dispatch function, whose *out* is
   the pretty writer."
   [format-in]
-  (list (list 'var (symbol "clojure.pprint" "formatter-out-fn")) format-in))
+  `(#'formatter-out-fn ~format-in))

@@ -128,7 +128,7 @@ public final class IgnoredArgument {
 			case LispRatio ignored -> true;
 			case LispChar ignored -> true;
 			case LispSymbol sym -> sym.isKeyword() || "NIL".equals(sym.name()) || "T".equals(sym.name());
-			case LispCons cons -> cons.car() instanceof LispSymbol head && LispNames.QUOTE.equals(head.name());
+			case LispCons cons -> cons.car() instanceof LispSymbol head && LispNames.isQuote(head.name());
 			default -> false;
 		};
 	}

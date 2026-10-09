@@ -514,7 +514,7 @@ public final class NoWasiLoadPathRefusals {
 			// a #'f) is a VALUE -- whoever receives it decides when it is called (an
 			// async-lambda equally); and a nested definition's body waits for its own
 			// caller.
-			if (LispNames.QUOTE.equals(name) || LispNames.DECLARE.equals(name) || DEFERRED_HEADS.contains(name)) {
+			if (LispNames.isQuote(name) || LispNames.DECLARE.equals(name) || DEFERRED_HEADS.contains(name)) {
 				return;
 			}
 			if (LispNames.FUNCTION.equals(name)) {

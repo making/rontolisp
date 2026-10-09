@@ -327,7 +327,7 @@ public final class GlobalVarCollector {
 		while (node instanceof LispCons cons) {
 			if (cons.car() instanceof LispSymbol head) {
 				switch (head.name()) {
-					case LispNames.QUOTE -> {
+					case LispNames.QUOTE, LispNames.UNSPELLED_QUOTE -> {
 						return;
 					}
 					case LispNames.SETQ, LispNames.SETF, LispNames.PSETQ, LispNames.PSETF,
@@ -354,7 +354,7 @@ public final class GlobalVarCollector {
 			return form;
 		}
 		if (cons.car() instanceof LispSymbol head) {
-			if (LispNames.QUOTE.equals(head.name())) {
+			if (LispNames.isQuote(head.name())) {
 				return form;
 			}
 			if (LispNames.DEFUN.equals(head.name()) && cons.cdr() instanceof LispCons nameCell
@@ -420,7 +420,7 @@ public final class GlobalVarCollector {
 		LispVal node = form;
 		while (node instanceof LispCons cons) {
 			if (cons.car() instanceof LispSymbol head) {
-				if (LispNames.QUOTE.equals(head.name())) {
+				if (LispNames.isQuote(head.name())) {
 					return;
 				}
 				if (LispNames.DEFUN.equals(head.name()) && cons.cdr() instanceof LispCons nameCell
@@ -448,7 +448,7 @@ public final class GlobalVarCollector {
 		LispVal node = form;
 		while (node instanceof LispCons cons) {
 			if (cons.car() instanceof LispSymbol head) {
-				if (LispNames.QUOTE.equals(head.name())) {
+				if (LispNames.isQuote(head.name())) {
 					return;
 				}
 				switch (head.name()) {

@@ -910,7 +910,7 @@ final class ConstantCaseArmPruner {
 			List<LispVal> parts = cons.toList();
 			String member = LispSymbol.memberName(op.name());
 			switch (member) {
-				case LispNames.QUOTE -> {
+				case LispNames.QUOTE, LispNames.UNSPELLED_QUOTE -> {
 					return quotedValue(parts.size() > 1 ? parts.get(1) : LispNil.INSTANCE);
 				}
 				case LispNames.FUNCTION, LispNames.LAMBDA -> {
@@ -1606,7 +1606,7 @@ final class ConstantCaseArmPruner {
 					String member = LispSymbol.memberName(op.name());
 					List<LispVal> parts = cons.toList();
 					switch (member) {
-						case LispNames.QUOTE -> {
+						case LispNames.QUOTE, LispNames.UNSPELLED_QUOTE -> {
 							return;
 						}
 						// A CONS place can still assign a variable inside it: setf-of-ldb

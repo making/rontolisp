@@ -204,7 +204,7 @@ public final class UnreadCharLibrary {
 			String opName = member(op.name());
 			// Quoted data is data, and the library's own defuns must keep calling the
 			// built-ins their bodies name.
-			if (LispNames.QUOTE.equals(opName) || isLibraryDefun(cons, opName)) {
+			if (LispNames.isQuote(opName) || isLibraryDefun(cons, opName)) {
 				return form;
 			}
 			// An indexed with-input-from-string asks its stream's file-position in an

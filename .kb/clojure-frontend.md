@@ -1748,17 +1748,12 @@ namespace` but the ones no measured library names (`inspector`, `java.browse`,
       a `~<...~>` segment, `formatter-out` outside a pretty print). `~T` and `~:;` are
       layout events carrying their own function (`:lay`), computed from the column the
       replay has reached, the oracle's base column: blanks held back do not count.
-    - The macros build their function's symbol (`(symbol "clojure.pprint" "formatter-fn")`):
-      a template spelling it arms the dispatch gate by name (`.kb/optimize-dead-code-elimination.md`)
-      wherever the expanders are live, which keeps the whole executor. Before 2026-10-09
-      every program loading clojure.pprint kept them (wasm P1 of `(prn ...)` after
-      requiring it, 446,930 -> 888,123 B with the plain template; 451,949 B with the
-      built symbol). Since then only a program expanding at run time keeps the expanders
-      ("Macros", the run-time table), and for it the built symbol still matters,
-      measured 2026-10-09 (`(ns x (:require [clojure.pprint])) (defmacro m ...)
-      (prn (macroexpand-1 '(m 1)))`): 456,652 B built, 894,319 B with
-      `` `(#'formatter-fn ~format-in) ``. It goes once a syntax-quote template spells no
-      defun name (an unspelled quote the walkers all read as `quote`).
+    - The macros name their function in a plain template (`` `(#'formatter-fn ~format-in) ``):
+      a template symbol is an unspelled quote ("Macros"), so a program expanding at run
+      time keeps no executor for it. Before 2026-10-09 they built the symbol
+      (`(symbol "clojure.pprint" "formatter-fn")`): a template spelling it armed the
+      dispatch gate wherever the expanders were live (446,930 -> 888,123 B for `(prn ...)`
+      after requiring clojure.pprint while every program kept them).
     - Compiled formats are cached by control string, `cl-format`'s too (the oracle compiles
       per call; a compile is pure), the cache emptied at 512: 2,000 calls of a nine-directive
       string 32.5 -> 7.6 s on the interpreter, 1.66 -> 0.60 s as a JVM class.
@@ -2109,8 +2104,9 @@ the file), `default-streams-impl` a map. Until then only `reader` resolved, as a
   `clojure.walk/macroexpand-all` is a part of `clojure.walk` (`walk_macroexpand.clj`,
   `ClojureBuiltinNamespaces.PARTS`) so walking data expands nothing: the same program
   plus a `postwalk` of `clojure.walk`, 883,549 -> 393,566 B. A program that does expand
-  at run time keeps every expander and, through their templates, every function they
-  name. Pins: `ClojureMacroRuntimeTableTest`,
+  at run time keeps every expander and every function their bodies call, but no function
+  a template only names: the template's var symbols ride in `%unspelled-quote` (the
+  Syntax-quote entry below). Pins: `ClojureMacroRuntimeTableTest`,
   `ClojureLoweringTest#aWholeProgramsTableHoldsAnIndexIntoTheOneFunctionHoldingTheExpanders`,
   `ClojureSessionTest#aLaterBufferExpandsAMacroAnEarlierOneDefined`, clojure-spec
   `clojure-walk-macroexpand-all-loads-where-a-program-names-it`.
@@ -2198,6 +2194,17 @@ the file), `default-streams-impl` a map. Until then only `reader` resolved, as a
   into lists, vectors, maps and sets; `x#` is one `(gensym "x")` per syntax-quote node per
   expansion (fresher than the oracle's per-compilation suffix). `quote` and syntax-quote
   build data symbols (`dataSym`), so `'*out*` is `*out*`, not the stream alias.
+- **A template's qualified symbol is an unspelled quote** (`ClojureMacroLowering.unspelled`):
+  `(%unspelled-quote |c%ns/f|)`, which spells nothing for the dispatch gate
+  (`.kb/optimize-dead-code-elimination.md`). It spells the defun name of `ns/f`, and a
+  Clojure symbol is never a function designator by name (run-time `eval`/`resolve` are
+  refused, a symbol called as a function looks itself up), so the expanders a run-time
+  expansion keeps no longer hold every function their templates name. The special forms
+  that stay bare, `x#` gensyms and a plain `'sym` keep `quote`. Measured 2026-10-09, wasm
+  P1, `(ns x (:require [clojure.pprint])) (defmacro m [x] `(inc ~x))` + `(prn 1)` /
+  `(prn (macroexpand-1 '(m 1)))`: 373,358 / 893,999 B with pprint's plain templates
+  before, 373,358 / 415,713 B after. Pins: `ClojureMacroRuntimeTableTest`, clojure-spec
+  `a-run-time-expansion-reads-template-symbols-as-data`.
 - **An argument datum travels quoted and its answer decodes back (`decodeDatum`)**, so
   every reader form must survive the round trip. A regex literal answers its
   `(:C%PATTERN ...)`, decoded to `(%regex source)` (a fresh pattern; the oracle's
