@@ -83,6 +83,20 @@ available — call the single abstract method (`apply`/`test`/`accept`/`get`/
 To implement each method with a function of its own -- a default method then keeping
 its body -- use [`java:reify`](java-reify.md).
 
+## Java's false
+
+Java's false reaches the callable as `nil`. Ending the form in `:java-false`, after the
+callable, hands it `|false|` instead (the guide's [Java's false
+back](../../guides/java-interop.md#javas-false-back-java-false)):
+
+```lisp
+(let ((seen nil))
+  (java:call (java:proxy "java.util.function.Consumer" (lambda (method x) (push x seen)) :java-false)
+             "accept" '|false|)
+  seen)
+; => (|false|)
+```
+
 ## Several interfaces
 
 Every name before the callable is an interface the one object implements, so Java can

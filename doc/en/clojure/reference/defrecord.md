@@ -41,8 +41,11 @@ Deviation: `str` of a record spells its literal, where the oracle answers
 The body may implement the interfaces of [reify](reify.md#host-interfaces) a record does not
 implement itself -- `IFn`, `IDeref`, `IReduceInit` ... -- and override `toString`, which `str`
 reads while the record still prints its literal. Its map interfaces are its own: naming
-`ILookup` or `IObj`, or defining `count`, `seq`, `valAt`, `meta`, `equals` or `hashCode`, is the
-oracle's `Duplicate` refusal.
+`ILookup`, `IObj`, `IPersistentMap`, `IHashEq`, `java.util.Map` or `java.io.Serializable`, or
+defining a method the record defines itself (`count`, `seq`, `valAt`, `assoc`, `iterator`,
+`meta`, `equals`, `hashCode` ...), is the oracle's `Duplicate` refusal, and a method of those
+interfaces the record leaves to the interface (`assocEx`, a `java.util.Map` default) is refused
+by name.
 
 ```clojure
 (defrecord Adder [n] clojure.lang.IFn (invoke [_ x] (+ n x)))

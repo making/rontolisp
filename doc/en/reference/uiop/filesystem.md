@@ -22,7 +22,7 @@ Every name is reachable through either spelling: `uiop:probe-file*` and
 | `uiop:subdirectories` | the subdirectories of a directory, each with its trailing `/` |
 | `uiop:collect-sub*directories` | walk a directory tree: `collectp` decides what reaches `collector`, `recursep` what is descended into. Every directory handed over is in directory form, root included |
 | `uiop:filter-logical-directory-results` | its entries unchanged — logical pathnames cannot exist here (`logical-pathname-p` is `nil` on every backend), so there is nothing to filter |
-| `uiop:safe-file-write-date` | `file-write-date` with the missing-file `file-error` swallowed. `nil` on both WASM backends, where the date itself is `nil` |
+| `uiop:safe-file-write-date` | `file-write-date` with the missing-file `file-error` swallowed |
 | `uiop:native-namestring` | `"/tmp/x"` — the host-OS spelling of a pathname, which here IS the namestring, so this is `namestring` |
 | `uiop:parse-native-namestring` | `parse-unix-namestring` plus the `ensure-pathname` constraints — `os-unix-p` is `t` outright, so the native spelling IS the Unix one |
 | `uiop:get-pathname-defaults` | the defaults relative names resolve against — `*default-pathname-defaults*` (initially `#P""`, the pathname designating the host working directory) unless an absolute defaults argument is given |
@@ -100,5 +100,5 @@ The four mutating operations are real on all four backends, where their primitiv
 are: `ensure-all-directories-exist` over `%make-directories`, `rename-file-overwriting-target`
 over `%rename-file` and `delete-file-if-exists` over `%delete-file` run everywhere, pinned
 by the ci-spec `filesystem-write-create-rename-delete-and-probe` case on every backend.
-Removing a directory still signals on WASM — the unlink call cannot remove directories —
-so `delete-empty-directory` over an actual directory answers the honest `file-error` there.
+`delete-empty-directory` (and with it `delete-directory-tree`) removes an empty directory on
+every backend too; a non-empty one signals the `file-error`.

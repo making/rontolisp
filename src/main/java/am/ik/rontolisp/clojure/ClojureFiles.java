@@ -98,6 +98,18 @@ public interface ClojureFiles {
 	}
 
 	/**
+	 * The absolute spelling of a path, its {@code .} and {@code ..} taken out and no link
+	 * resolved: what a class loader's {@code file:} URL names (the oracle's
+	 * {@code clojure.java.io/resource}).
+	 * @param path an absolute or working-directory-relative path
+	 * @return the absolute path; the path itself by default, where no working directory
+	 * is
+	 */
+	default String absolute(String path) {
+		return path;
+	}
+
+	/**
 	 * The entry names of a jar, read in place.
 	 * @param path the jar's path
 	 * @return the names, or {@code null} when the path names no readable jar (the

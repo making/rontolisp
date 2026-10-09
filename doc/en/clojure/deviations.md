@@ -38,10 +38,11 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   sets included, but a stored collection key is the first `=` key of its kind (vector,
   list, lazy seq) the program stored, so its metadata and the spelling of a nested
   member follow that earlier object; those keys stay alive for the whole run, one
-  per distinct value and kind. A repeated set-literal element is refused by spelling.
+  per distinct value and kind.
   `=` compares vectors, lists and lazy seqs element-wise like the oracle, and since `nil`
   is the empty list, `(= [] nil)` and `(= (java.util.ArrayList.) nil)` are `true` where the
-  oracle answers `false`.
+  oracle answers `false`. As keys `[]` and `nil` stay apart like the oracle's, so an empty
+  list or seq misses an empty vector key: `(get {[] 1} ())` is `nil` (the oracle: `1`).
   `=` asks a Java object on the left its `equals` like the oracle, but hands it only a
   number, string, character, `true`, `nil` or Java object: `false`, a keyword, a symbol
   or a collection is `=` to no Java object but a Java `List`, `Map` or `Set` of its kind.
@@ -167,7 +168,7 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   its name's keyword and, by its simple name, a core kind's, so
   `(isa? (class (java.util.ArrayList.)) java.util.List)` is `true` -- and so is its `isa?`
   of `clojure.lang.IPersistentList`, which also spells `:list`, where the oracle answers
-  `false`. Any other class (`java.io.File`) is its class object, in a dispatch value too,
+  `false`. Any other class (`java.util.AbstractList`) is its class object, in a dispatch value too,
   like the oracle.
   Protocol dispatch reads no hierarchy (`derive`): past the exact tag it tries only the
   classes the protocol was extended to, then the `Object` default. It merges
@@ -269,12 +270,17 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   `AbstractMethodError`).
 - A `reify`, `deftype` or `defrecord` body implements the `clojure.lang` interfaces the core
   functions consult -- `IReduceInit`, `IReduce`, `IKVReduce`, `Seqable`, `Counted`,
-  `Indexed`, `ILookup`, `IFn` (with `Callable` and `Runnable`), `IDeref`, `IMeta`, `IObj` --
-  and overrides `Object`'s methods ([reify](reference/reify.md#host-interfaces)); any other
-  interface (`ISeq`, `IPersistentMap`, `Sequential`, `java.util.List` ...) is refused by
-  name. A type's `equals` and `hashCode` answer `=` and `.hashCode` but never key a map or
-  a set, which hold such a value by identity. `sort` and `distinct` take a type
-  implementing `Seqable` alone through its seq, where the oracle refuses both.
+  `Indexed`, `ILookup`, `IFn` (with `Callable` and `Runnable`), `IDeref`, `IMeta`, `IObj` --,
+  the collection interfaces (`IPersistentMap`, `ISeq`, `Sequential`, `Iterable`,
+  `java.util.List` ...) and overrides `Object`'s methods
+  ([reify](reference/reify.md#host-interfaces)); any other interface (`IChunkedSeq`,
+  `java.util.Deque` ...) is refused by name. `first`, `next` and `rest` of an `ISeq` type read
+  it through its `seq`, a verb may call a method another number of times than the oracle, and
+  `str` of a collection type spells its contents
+  ([collection interfaces](reference/reify.md#collection-interfaces)). A type's `equals` and
+  `hashCode` answer `=` and `.hashCode` but never key a map or a set, which hold such a value
+  by identity. `sort` and `distinct` take a type implementing `Seqable` alone through its
+  seq, where the oracle refuses both.
 - `clojure.core.reducers` folds on the calling thread, its parts one after the other, and
   `cat` of two non-empty collections answers one accumulator (a vector) holding both, where
   the oracle answers a `Cat` tree whose fold combines its halves' folds.
@@ -294,22 +300,25 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
 - `format` renders `%s`/`%d`/`%x`/`%X`/`%o`/`%c`/`%b`/`%f`/`%%`/`%n` (with widths, float
   precision); `%e`/`%g`, flags and non-literal patterns are named refusals. `%s` spells
   `nil` `"null"`, like the oracle.
-- `line-seq` takes a path or an open reader (such as a `clojure.java.io/reader`,
-  which `with-open` closes) and answers strictly either way (the oracle takes a
-  reader and answers lazily); `spit`/`slurp`/`line-seq`/`reader` run on the
-  interpreter and the JVM, and on wasm with a `--dir` preopen covering the path.
+- `line-seq` takes an open reader (such as a `clojure.java.io/reader`, which
+  `with-open` closes), or a path, a File, a URL or a byte stream it opens, and answers
+  strictly either way (the oracle takes a reader only and answers lazily);
+  `spit`/`slurp`/`line-seq`/`reader` run on every backend, on wasm with a `--dir` preopen
+  covering the file.
   A `java.io.InputStreamReader` over a reader is that reader, on every backend: here a
   Ring request `:body` is a reader, where the oracle's is an `InputStream`.
 - The Ring adapter (`ring.adapter.rontolisp/run-server`) puts `:content-type` and
   `:content-length` in the request map but not `:character-encoding` or
   `:ssl-client-cert`; a request without a body has `:body` `nil` (Jetty's adapter
-  supplies an empty stream). An asynchronous handler, a `java.io.File` body and a
-  second concurrent server are refused or replaced (see [the adapter](reference/ring.md)).
+  supplies an empty stream). An asynchronous handler and a second concurrent server are
+  refused or replaced, and a `java.io.File` body naming no file signals (500) where Jetty
+  answers an empty 200 (see [the adapter](reference/ring.md)).
 - The built-in [Ring utilities](reference/ring-util.md) name a charset by a string (UTF-8,
   ISO-8859-1, US-ASCII and the JDK's aliases for them; any other is refused), have
   `ring.util.request/body-string` as a function rather than an extensible multimethod,
-  read only ASCII digits in `content-length`, and leave out what needs a `java.io.File`, a
-  URL or a byte array.
+  read only ASCII digits in `content-length`, and leave out what needs a byte array. The
+  file responses resolve no symbolic link and find no resource computed at run time inside
+  a jar.
 - A sorted map or set orders, prints and finds keys like the oracle's, but every verb
   copies it (an association costs the collection's size, like a hash map's); `class`
   answers `:map`/`:set`; a `subseq` or
@@ -364,7 +373,8 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   literal stays the symbol as written (`String`), where the oracle resolves the class
   (`java.lang.String`).
 - `with-open` closes through the `close` method, so only closeables the backend
-  reaches work (Java closeables need the JVM); `time` answers its value but its
+  reaches work (a `clojure.java.io` byte stream on every backend, a Java closeable on the
+  interpreter and the JVM); `time` answers its value but its
   millisecond count never pins, and it counts whole milliseconds (`42.0`) where the
   oracle's carries nanosecond digits.
 - `read-string`/`read` answer what a quote answers: `@x` reads `(deref x)` and a
@@ -377,6 +387,10 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
 - `#inst` and `#uuid` read as the oracle's `java.util.Date` and `java.util.UUID` on every
   backend; [Instants and UUIDs](reference/instants.md) lists the few differences (`str` of an
   instant answers in UTC, a host value from interop is never `=` to a read one).
+- `clojure.java.io`'s `java.io.File`, `java.net.URL`, `java.net.URI` and byte streams are
+  values of this front end's own on every backend; [clojure.java.io](reference/clojure-java-io.md)
+  lists the differences (no byte arrays, three charsets, no connection behind an `http:`
+  URL, a resource found on the source path rather than the class path, WASM's directories).
 - A data reader runs as the program compiles, so its answer in source loses its metadata
   and needs a spelling here: a function, a deftype instance and a host object other than a
   UUID or Date are `Can't embed object in code`, where the oracle compiles one its
@@ -389,26 +403,20 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   (rebinding rebinds the standard streams); read at the root, `*out*` and `*in*` are
   stream values over the process standard streams;
   `defonce` keeps the root on reload where `def` resets it.
-- A host-object boolean answers `false` only when the receiver's class is known
-  at lowering (a construction literal, a `let`/`if-let`/`when-let` local bound
-  to one, or a `..` step's declared return) and every
-  overload at that arity answers a primitive boolean, or when the receiver is a
-  string, number or character and every overload at that arity of its class answers
-  one (`(.matches "abc" "x")`), or a `proxy` of one interface or of a class alone; any
-  other host boolean keeps the shared `java:` unmarshal and prints `nil` for `false`, and
-  so does a `Boolean.FALSE` read back from a host collection (`(vec l)` answers `[nil]`
-  for a list holding `false`).
 - A fn passed where a Java interface is expected implements every abstract method of
   any interface, each called with the method's arguments; the oracle converts a fn only
   to an interface annotated `@FunctionalInterface` (a `PropertyChangeListener` is a
-  `ClassCastException` there). The fn's value crosses back as an argument would: a
-  `Comparator` fn passed to Java answers a number (the oracle also takes `true`/`false`,
-  as `(.compare f a b)` on the fn itself does here).
-- A map passed to Java is a fresh `java.util.LinkedHashMap` of its entries, each key and
-  value converted as an argument is (a vector a `List`, a map a `Map`), where the oracle
-  passes the map itself: `str` of the copy spells a nested collection the Java way
-  (`{a=[1, 2]}`, the oracle `{a=[1 2]}`). A set, a keyword and a record have no Java
-  value, so a member taking one (a map keyed by keywords too) finds no match.
+  `ClassCastException` there). A `Comparator` fn answering `nil` or a non-number is
+  refused by name, where the oracle throws a `NullPointerException` or a
+  `ClassCastException`.
+- A map, set, record, sorted collection or lazy seq passed to Java is a fresh Java copy
+  (a set or sorted set a `java.util.LinkedHashSet`; a map, record or sorted map a
+  `java.util.LinkedHashMap`; a lazy seq, like a vector or list, a `List`), each member
+  converted as an argument is, where the oracle passes the collection itself: `str` of the
+  copy, or of a Java collection holding it, spells it the Java way (`[1, 2]`, the oracle
+  `#{1 2}`; `{a=[1, 2]}`, the oracle `{a=[1 2]}`). A Java sorted collection orders keywords
+  before symbols, where the oracle refuses to compare the two. A ratio and an atom have no
+  Java value, so a member taking one finds no match.
 - An integer receiver is called as an `Integer` when it fits one, else as a `Long`
   (the oracle's is always a `Long`): `(.getClass 1)` answers `java.lang.Integer`.
 - A `_` param tag leaves that parameter to the cost rule of the `java:` surface, so

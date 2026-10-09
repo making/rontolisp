@@ -160,6 +160,67 @@ class ClojureLanguageNamespacesTest {
 	}
 
 	@Test
+	void clojureMainLoadsOnItsFirstQualifiedNameAndClojureReplAtItsRequire() {
+		// clj -M has loaded clojure.main before the program, not clojure.repl
+		assertThat(lowered("(clojure.main/demunge \"a_b\")", Map.of())).contains("(DEFUN |c%clojure.main/demunge|");
+		assertThat(lowered("(ns a (:require [clojure.repl :as r])) (r/demunge \"a_b\")", Map.of()))
+			.contains("(DEFUN |c%clojure.repl/demunge|")
+			.contains("(DEFUN |c%clojure.main/demunge|");
+		assertThatThrownBy(() -> Clojure.read("(ns a (:require [rontolisp.internal.throwable :as t]))", null))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining(
+					"rontolisp.internal.throwable is internal to clojure.stacktrace, clojure.repl and clojure.main");
+	}
+
+	@Test
+	void theReplAndMainVarsThatNeedRunTimeNamespacesOrACompilerAreRefusedByName() {
+		Map<String, String> refusals = Map.of("(ns a (:require [clojure.repl :as r])) (r/dir clojure.string)",
+				"clojure.repl/dir is not built in: a namespace's vars are known only while the program is lowered",
+				"(ns a (:require [clojure.repl :as r])) (r/source-fn 'map)",
+				"clojure.repl/source-fn is not built in: a definition's text is not kept at run time",
+				"(ns a (:require [clojure.repl :as r])) (r/set-break-handler!)",
+				"clojure.repl/set-break-handler! is not built in: there is no INT signal handler",
+				"(clojure.main/repl)",
+				"clojure.main/repl is not built in: no compiler runs at run time, so eval and load are not built in",
+				"(clojure.main/skip-whitespace *in*)",
+				"clojure.main/skip-whitespace is not built in: it is part of clojure.main/repl",
+				"(ns a (:require [clojure.xml :as x])) x/content-handler",
+				"clojure.xml/content-handler is not built in: parse hands a startparse function a ContentHandler");
+		refusals.forEach((source, message) -> assertThatThrownBy(() -> Clojure.read(source, null)).as(source)
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining(message));
+	}
+
+	@Test
+	void clojureJavaShellIsRefusedWhileLoweringForATargetWithoutTheHost() {
+		String source = "(ns a (:require [clojure.java.shell :as sh])) (sh/sh \"true\")";
+		assertThat(Clojure.read(source, null, null, new MemoryClojureFiles(Map.of()), true)
+			.stream()
+			.map(LispVal::print)
+			.collect(Collectors.joining("\n"))).contains("(DEFUN |c%clojure.java.shell/sh|");
+		assertThatThrownBy(() -> Clojure.read(source, null, null, new MemoryClojureFiles(Map.of()), false))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("clojure.java.shell is not built in on this target: sh launches a host process");
+		// a project file of the name is the project's, on any target
+		Map<String, String> files = Map.of("src/clojure/java/shell.clj",
+				"(ns clojure.java.shell) (defn sh [& args] 42424)");
+		assertThat(Clojure.read(source, null, null, new MemoryClojureFiles(files), false)
+			.stream()
+			.map(LispVal::print)
+			.collect(Collectors.joining("\n"))).contains("42424");
+	}
+
+	@Test
+	void clojureXmlReadsADocumentThroughItsKernelNamespace() {
+		assertThat(lowered("(ns a (:require [clojure.xml :as x])) (x/parse \"a.xml\")", Map.of()))
+			.contains("(DEFUN |c%clojure.xml/parse|")
+			.contains("(RONTOLISP::%CLOJURE-XML-EVENTS ");
+		assertThatThrownBy(() -> Clojure.read("(ns a (:require [rontolisp.internal.xml :as k]))", null))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("rontolisp.internal.xml is internal to clojure.xml");
+	}
+
+	@Test
 	void aLanguageNamespaceNotBuiltInIsRefused() {
 		assertThatThrownBy(() -> Clojure.read("(ns a (:require [clojure.inspector :as i]))", null))
 			.isInstanceOf(LispReadException.class)

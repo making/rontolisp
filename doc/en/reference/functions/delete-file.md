@@ -7,7 +7,7 @@ an error -- including "it was not there to begin with", which Common Lisp also
 makes a `file-error`. Probe first with [`probe-file`](probe-file.md) when a
 missing file should be tolerated, or wrap the call in `ignore-errors`.
 
-Works on all four backends. Both WASM backends unlink through the `path_unlink_file` WASI import (Preview 1 directly, `--component` through `wasi:filesystem`'s `unlink-file-at`); a missing file answers the same `file-error` everywhere. Removing a directory still signals on WASM: the unlink call cannot remove directories.
+Works on all four backends. Both WASM backends unlink through the `path_unlink_file` WASI import (Preview 1 directly, `--component` through `wasi:filesystem`'s `unlink-file-at`); a missing file answers the same `file-error` everywhere. An empty directory is deleted too, on every backend (on WASM through `path_remove_directory`, `--component` through `remove-directory-at`); a non-empty one stays and signals the `file-error`.
 
 ```console
 (with-open-file (out "notes.txt" :direction :output)

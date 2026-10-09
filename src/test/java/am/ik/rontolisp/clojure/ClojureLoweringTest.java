@@ -419,6 +419,23 @@ class ClojureLoweringTest {
 	}
 
 	@Test
+	void aLiteralOfConstantKeysEqualOnceEvaluatedIsRefusedWhenLowered() {
+		// the oracle's compile-time refusal: every key a constant, two of them =
+		assertThatThrownBy(() -> lowered("{[1] :a '(1) :b}")).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Duplicate constant keys in map");
+		assertThatThrownBy(() -> lowered("{1 :a '1 :b :c (str 1)}")).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Duplicate constant keys in map");
+		// constants stay unchecked at run time; a computed key checks there
+		assertThat(lowered("{[1] :a '(2) :b :c 1}")).doesNotContain("%CLOJURE-MAP-LITERAL");
+		assertThat(lowered("#{[1] '(1)}")).doesNotContain("%CLOJURE-SET-LITERAL");
+		assertThat(lowered("(defn f [x] {x 1 :a 2})")).contains("(RONTOLISP::%CLOJURE-MAP-LITERAL");
+		assertThat(lowered("(defn f [x] #{x 1})")).contains("(RONTOLISP::%CLOJURE-SET-LITERAL");
+		// one entry cannot repeat; a call keeps the last value
+		assertThat(lowered("(defn f [x] [{x 1} #{x} (hash-map x 1 x 2)])")).doesNotContain("%CLOJURE-MAP-LITERAL")
+			.doesNotContain("%CLOJURE-SET-LITERAL");
+	}
+
+	@Test
 	void seqsCoerceCollectionsThroughOneSharedView() {
 		assertThat(lowered("(seq [1 2])")).contains("%CLOJURE-SEQ");
 		assertThat(lowered("(first [1 2])")).contains("(CAR").contains("%CLOJURE-SEQ");
@@ -771,6 +788,19 @@ class ClojureLoweringTest {
 			.hasMessageContaining("a vector pattern & needs a single rest pattern after it");
 		assertThatThrownBy(() -> Clojure.read("(let [{:keys a} {:a 1}] a)", null)).isInstanceOf(LispReadException.class)
 			.hasMessageContaining("a map pattern :keys takes a vector of plain names");
+		assertThat(lowered("(let [{:a/keys [b]} {:a/b 1}] b)")).contains("GETHASH");
+		assertThat(lowered("(loop [{::keys [b]} {}] b)")).contains("LABELS");
+		// the oracle's spec refuses a qualified or keyword entry and :ns/strs
+		assertThatThrownBy(() -> Clojure.read("(let [{:a/keys [b/c]} {}] c)", null))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("a map pattern :a/keys takes a vector of plain names");
+		assertThatThrownBy(() -> Clojure.read("(let [{:a/keys [:c]} {}] c)", null))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("a map pattern :a/keys takes a vector of plain names");
+		assertThatThrownBy(() -> Clojure.read("(let [{:syms [:c]} {}] c)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("a map pattern :syms takes a vector of plain names");
+		assertThatThrownBy(() -> Clojure.read("(let [{:a/strs [c]} {}] c)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("a map pattern :a/strs");
 	}
 
 	@Test
@@ -1177,11 +1207,11 @@ class ClojureLoweringTest {
 			.contains("%CLOJURE-INVOKABLE-ROW");
 		for (String[] refused : new String[][] {
 				{ "(reify IFn (invoke [_] 1))", "Unable to resolve symbol: IFn in this context" },
-				{ "(reify clojure.lang.ISeq (first [_] 1))",
-						"clojure.lang.ISeq is not supported yet as an interface of reify" },
+				{ "(reify clojure.lang.IChunkedSeq (first [_] 1))",
+						"clojure.lang.IChunkedSeq is not supported yet as an interface of reify" },
 				{ "(reify clojure.lang.Foo)", "Unable to resolve classname: clojure.lang.Foo" },
 				{ "(reify java.lang.String)", "only interfaces are supported, had: java.lang.String" },
-				{ "(reify java.util.Iterator)", "java.util.Iterator is not supported yet as an interface of reify" },
+				{ "(reify java.util.Deque)", "java.util.Deque is not supported yet as an interface of reify" },
 				{ "(reify clojure.lang.Counted (cnt [_] 1))", "Can't define method not in interfaces: cnt" },
 				{ "(reify clojure.lang.Counted (count [_ x] 1))", "Can't define method not in interfaces: count" },
 				{ "(reify clojure.lang.Counted (count [_] 1) (count [_] 2))",
@@ -1199,6 +1229,119 @@ class ClojureLoweringTest {
 				.isInstanceOf(LispReadException.class)
 				.hasMessageContaining(refused[1]);
 		}
+	}
+
+	@Test
+	void aBodyImplementingACollectionInterfaceStoresTheRowsOfItsWholeClosure() {
+		// IPersistentMap extends Iterable, Associative (IPersistentCollection, Seqable,
+		// ILookup) and Counted: one store per family of the closure
+		String map = lowered("(deftype M [m] clojure.lang.IPersistentMap (count [_] 0) (without [_ k] nil))");
+		assertThat(map).contains(
+				"(RONTOLISP::%CLOJURE-PERSISTENT-MAP-ROW (LIST :C%KEYWORD \"M\") '(\"clojure.lang.IPersistentMap\")")
+			.contains("(RONTOLISP::%CLOJURE-ITERABLE-ROW (LIST :C%KEYWORD \"M\") '(\"java.lang.Iterable\")")
+			.contains("(RONTOLISP::%CLOJURE-ASSOCIATIVE-ROW (LIST :C%KEYWORD \"M\")")
+			.contains("(RONTOLISP::%CLOJURE-COLLECTION-ROW (LIST :C%KEYWORD \"M\")")
+			.contains("(RONTOLISP::%CLOJURE-SEQABLE-ROW (LIST :C%KEYWORD \"M\")")
+			.contains("(RONTOLISP::%CLOJURE-LOOKUP-ROW (LIST :C%KEYWORD \"M\")")
+			.contains("(RONTOLISP::%CLOJURE-COUNTED-ROW (LIST :C%KEYWORD \"M\")")
+			// an abstract method the body leaves out is the oracle's AbstractMethodError
+			// ...
+			.contains("the resolved method iterator of interface java.lang.Iterable\")")
+			// ... a default one keeps the interface's, which no verb reads
+			.doesNotContain("\"forEach\"")
+			.doesNotContain("\"spliterator\"");
+		// a java.util interface's equals and hashCode are Object's
+		assertThat(lowered("(deftype S [] java.util.Set (equals [_ o] true))"))
+			.contains("(RONTOLISP::%CLOJURE-OBJECT-ROW (LIST :C%KEYWORD \"S\") NIL (LIST \"equals\" (LAMBDA (")
+			.doesNotContain("the resolved method equals");
+		// a type hint on a method's name is metadata, like the oracle's
+		assertThat(lowered("(deftype V [] clojure.lang.Counted (^long count [_] 1))"))
+			.contains("(RONTOLISP::%CLOJURE-COUNTED-ROW (LIST :C%KEYWORD \"V\") '(\"clojure.lang.Counted\")"
+					+ " (LIST \"count\" (LAMBDA (");
+		assertThat(lowered("(defprotocol G (^String g [x])) (deftype W [] G (^String g [_] \"w\")) (g (W.))"))
+			.contains("(|c%g| (|c%->W|))");
+		// an instance call of a method several interfaces declare asks each one's test
+		assertThat(lowered("(fn [x] (.containsKey x 1))"))
+			.contains("(OR (RONTOLISP::%CLOJURE-IASSOCIATIVE-P |c%recv%%|)"
+					+ " (RONTOLISP::%CLOJURE-ITRANSIENT-ASSOCIATIVE2-P |c%recv%%|) (RONTOLISP::%CLOJURE-JMAP-P |c%recv%%|))");
+		// a MapEntry and a SeqIterator are built in place, no host class
+		assertThat(lowered("(clojure.lang.MapEntry. :k 1)")).contains("(VECTOR (LIST :C%KEYWORD \"k\") 1)")
+			.doesNotContain("JAVA:NEW");
+		assertThat(lowered("(iterator-seq (clojure.lang.SeqIterator. (seq [1])))"))
+			.contains("(RONTOLISP::%CLOJURE-ITERATOR-SEQ (RONTOLISP::%CLOJURE-SEQ-ITERATOR ");
+		for (String[] refused : new String[][] {
+				{ "(defrecord R [a] clojure.lang.IPersistentMap)",
+						"Duplicate interface name \"clojure/lang/IPersistentMap\" in defrecord" },
+				{ "(defrecord R [a] java.util.Map)", "Duplicate interface name \"java/util/Map\" in defrecord" },
+				{ "(defrecord R [a] java.io.Serializable)",
+						"Duplicate interface name \"java/io/Serializable\" in defrecord" },
+				{ "(defrecord R [a] clojure.lang.IPersistentCollection (cons [_ x] nil))",
+						"Duplicate method name \"cons\" in defrecord" },
+				{ "(defrecord R [a] java.lang.Iterable (iterator [_] nil))",
+						"Duplicate method name \"iterator\" in defrecord" },
+				// a method of the class's own interfaces is found unnamed, like the
+				// oracle's
+				{ "(defrecord R [a] clojure.lang.IFn (assoc [_ k v] nil))",
+						"Duplicate method name \"assoc\" in defrecord" },
+				{ "(reify clojure.lang.Counted (count [_] 1) (withMeta [_ m] nil))",
+						"Duplicate method name \"withMeta\" in reify" },
+				// one the oracle's record leaves to the interface would override it there
+				{ "(defrecord R [a] clojure.lang.IFn (assocEx [_ k v] nil))",
+						"clojure.lang.IPersistentMap/assocEx is not supported yet as a method of defrecord" },
+				{ "(defrecord R [a] java.lang.Iterable (forEach [_ f] nil))",
+						"java.lang.Iterable/forEach is not supported yet as a method of defrecord" },
+				{ "(defrecord R [a] clojure.lang.IFn (count [_ x] 1))",
+						"Can't define method not in interfaces: count" },
+				{ "(reify clojure.lang.ISeq (frist [_] 1))", "Can't define method not in interfaces: frist" },
+				{ "(reify java.util.Map (size [_ x] 1))", "Can't define method not in interfaces: size" } }) {
+			assertThatThrownBy(() -> Clojure.read(refused[0], null)).as(refused[0])
+				.isInstanceOf(LispReadException.class)
+				.hasMessageContaining(refused[1]);
+		}
+	}
+
+	@Test
+	void anExtensionToAnInterfaceKeyedByACoreKindReachesATypedValueBehindItsTest() {
+		// IPersistentMap keys the core maps' row by :map; the same lambda also stands
+		// under the interface's name, which the dispatcher walks to behind the
+		// interface's own test
+		String out = lowered("(defprotocol P (k [x])) (extend-protocol P clojure.lang.IPersistentMap (k [_] :map))");
+		assertThat(out).contains("(LIST :C%KEYWORD \"map\")")
+			.contains("(LIST :C%KEYWORD \"clojure.lang.IPersistentMap\")")
+			.contains("(IF (OR (RONTOLISP::%CLOJURE-IMAP-P (CAR ")
+			.contains("(C%PROTOCOL-SUPER (CAR ");
+		// a program storing no IPersistentMap row folds the guard: no walk, no runtime
+		String plain = prunedForms(
+				"(defprotocol P (k [x])) (extend-protocol P clojure.lang.IPersistentMap (k [_] :map)) (println (k {}))");
+		assertThat(plain).doesNotContain("C%PROTOCOL-SUPER").doesNotContain("%CLOJURE-IMAP-P");
+		// one that does keeps both
+		String typed = prunedForms(
+				"(defprotocol P (k [x])) (extend-protocol P clojure.lang.IPersistentMap (k [_] :map))"
+						+ " (deftype M [] clojure.lang.IPersistentMap (count [_] 0)) (println (k (M.)))");
+		assertThat(typed).contains("(DEFUN C%PROTOCOL-SUPER ").contains("(RONTOLISP::%CLOJURE-IMAP-P ");
+		// every record is an IPersistentMap: a program defining one guards the walk with
+		// the record test too
+		String records = prunedForms(
+				"(defprotocol P (k [x])) (extend-protocol P clojure.lang.IPersistentMap (k [_] :map))"
+						+ " (defrecord R [a]) (println (k (->R 1)))");
+		assertThat(records).contains("(DEFUN C%PROTOCOL-SUPER ").contains("(RONTOLISP::%CLOJURE-RECORD-P (CAR ");
+	}
+
+	@Test
+	void anExtensionToAnInterfaceOtherKindsImplementTooIsAWalkedClass() {
+		// Sequential is spelled like :list, but a vector is one too: its row stands under
+		// its own name alone, which every value reaches through the walk, so a more
+		// specific interface the protocol is extended to (ISeq) answers ahead of it
+		String out = prunedForms("(defprotocol P (k [x])) (extend-protocol P clojure.lang.Sequential (k [_] :s))"
+				+ " (println (k [1]))");
+		assertThat(out).contains("(LIST :C%KEYWORD \"clojure.lang.Sequential\")")
+			.doesNotContain("(GETHASH (LIST :C%KEYWORD \"list\") ")
+			.contains("(DEFUN C%PROTOCOL-SUPER ");
+		// an interface spelled like the one kind whose values implement it keeps the key
+		assertThat(prunedForms("(defprotocol P (k [x])) (extend-protocol P clojure.lang.IPersistentList (k [_] :l))"
+				+ " (println (k (list 1)))"))
+			.contains("(GETHASH (LIST :C%KEYWORD \"list\") ")
+			.doesNotContain("C%PROTOCOL-SUPER");
 	}
 
 	@Test
@@ -1543,9 +1686,12 @@ class ClojureLoweringTest {
 		assertThat(lowered("(Integer/MAX_VALUE)")).contains("JAVA:FIELD").doesNotContain("JAVA:STATIC");
 		assertThat(lowered("(. Math PI)")).contains("JAVA:FIELD").doesNotContain("JAVA:STATIC");
 		assertThat(lowered("(Math/PI)")).contains("JAVA:FIELD").doesNotContain("JAVA:STATIC");
-		// calls with arguments keep the static call, answering T-or-false for booleans
+		// calls with arguments keep the static call, a host false the false object
+		// (:java-false), with no wrap of its own
 		assertThat(lowered("(Integer/parseInt \"42\")")).contains("JAVA:STATIC");
-		assertThat(lowered("(Character/isWhitespace \\a)")).contains("JAVA:STATIC").contains("IF");
+		assertThat(lowered("(Character/isWhitespace \\a)"))
+			.endsWith("(JAVA:STATIC \"java.lang.Character\" \"isWhitespace\" #\\a :JAVA-FALSE)");
+		assertThat(lowered("(Boolean/FALSE)")).endsWith("(JAVA:FIELD \"java.lang.Boolean\" \"FALSE\" :JAVA-FALSE)");
 	}
 
 	@Test
@@ -1568,30 +1714,62 @@ class ClojureLoweringTest {
 	}
 
 	@Test
-	void hostBooleansAnswerTorFalseForKnownReceivers() {
-		// a construction literal of a class whose overloads at that arity all
-		// answer a primitive boolean wraps the java:call in T-or-false: the IF
-		// sits directly over the call (the STRINGP dispatch owns the outer one)
-		assertThat(lowered("(println (.isEmpty (java.util.ArrayList.)))")).contains("(IF (JAVA:CALL");
-		assertThat(lowered("(println (.contains (java.util.ArrayList. [1]) 2))")).contains("(IF (JAVA:CALL");
-		// a let/if-let/when-let local bound to a construction carries the class;
-		// a non-boolean answer and an unknown receiver keep the bare call
-		assertThat(lowered("(let [al (java.util.ArrayList.)] (println (.isEmpty al)))")).contains("(IF (JAVA:CALL");
-		assertThat(lowered("(println (if-let [al (java.util.ArrayList.)] (.isEmpty al) :e))"))
-			.contains("(IF (JAVA:CALL");
-		assertThat(lowered("(println (when-let [al (java.util.ArrayList.)] (.isEmpty al)))"))
-			.contains("(IF (JAVA:CALL");
-		assertThat(lowered("(println (.. (java.util.ArrayList. [1]) (subList 0 1) (isEmpty)))"))
-			.contains("(IF (JAVA:CALL");
-		assertThat(lowered("(println (.. (java.util.ArrayList. [1]) (subList 0 1) (size)))")).contains("JAVA:CALL")
+	void hostCallsEndInJavaFalseWithNoBooleanWrap() {
+		// every host call ends in :java-false, so a host false is the false object the
+		// call answers itself, whatever the receiver: no T-or-false IF wraps it
+		assertThat(lowered("(println (.isEmpty (java.util.ArrayList.)))"))
+			.contains("(JAVA:CALL (RONTOLISP::%CLOJURE-IO-HOST |__clojure_0|) \"isEmpty\" :JAVA-FALSE)")
 			.doesNotContain("(IF (JAVA:CALL");
-		assertThat(lowered("(let [al (java.util.ArrayList.)] (println (.size al)))")).contains("JAVA:CALL")
+		assertThat(lowered("(let [al (java.util.ArrayList.)] (println (.isEmpty al)))"))
+			.contains("\"isEmpty\" :JAVA-FALSE)")
 			.doesNotContain("(IF (JAVA:CALL");
-		assertThat(lowered("(defn check-empty [x] (.isEmpty x))")).contains("JAVA:CALL")
+		assertThat(lowered("(defn check-empty [x] (.isEmpty x))")).contains("\"isEmpty\" :JAVA-FALSE)")
 			.doesNotContain("(IF (JAVA:CALL");
-		// a shadowing binding hides the class again
-		assertThat(lowered("(let [al (java.util.ArrayList.)] ((fn [al] (.isEmpty al)) 1))"))
+		assertThat(lowered("(println (.matches \"abc\" \"x\"))")).contains("\"matches\" \"x\" :JAVA-FALSE)")
 			.doesNotContain("(IF (JAVA:CALL");
+		// :functional before it when an argument may be a fn; a literal false argument
+		// is the quoted false object, which a site resolves on
+		assertThat(lowered("(defn each [l f] (.forEach l f))")).contains(
+				"\"forEach\" (RONTOLISP::%CLOJURE-HOST-VALUE (RONTOLISP::%CLOJURE-IO-HOST |c%f|)) :FUNCTIONAL :JAVA-FALSE)");
+		assertThat(lowered("(.add (java.util.ArrayList.) false)")).contains("\"add\" '|false| :JAVA-FALSE)");
+		assertThat(lowered("(java.util.ArrayList. 3)")).endsWith("(JAVA:NEW \"java.util.ArrayList\" 3 :JAVA-FALSE)");
+		// a proxy's body is handed Java's false as the false object
+		assertThat(lowered("(proxy [Runnable] [] (run [] 1))")).endsWith(":JAVA-FALSE)");
+		assertThat(lowered("(proxy [Thread] [] (run [] 1))")).endsWith(":JAVA-FALSE)");
+	}
+
+	@Test
+	void aHostArgumentThatMayHoldAValueJavaLacksGoesThroughTheHostValue() {
+		// a parameter, a keyword or a call may hold a keyword, a symbol, a set or a
+		// record: the library function hands Java a value of it, behind the io family's
+		// view of a clojure.java.io value
+		assertThat(lowered("(defn put [m k] (.put m k 1))")).contains(
+				"\"put\" (RONTOLISP::%CLOJURE-HOST-VALUE (RONTOLISP::%CLOJURE-IO-HOST |c%k|)) 1 :FUNCTIONAL :JAVA-FALSE)");
+		assertThat(lowered("(java.util.HashSet. #{1})"))
+			.contains("(JAVA:NEW \"java.util.HashSet\" (RONTOLISP::%CLOJURE-HOST-VALUE ");
+		assertThat(lowered("(.add (java.util.ArrayList.) :a)")).contains("\"add\" (RONTOLISP::%CLOJURE-HOST-VALUE ");
+		// a literal, a fn, a construction and a local bound to one keep the site
+		// resolving on their kind, none of them an io value either
+		assertThat(lowered("(.add (java.util.ArrayList.) \"a\")")).contains("\"add\" \"a\" :JAVA-FALSE)");
+		assertThat(lowered("(.forEach (java.util.ArrayList.) (fn [x] x))")).contains("\"forEach\" (LAMBDA")
+			.doesNotContain("%CLOJURE-HOST-VALUE");
+		assertThat(lowered("(.add (java.util.ArrayList.) (java.util.ArrayList.))"))
+			.contains("\"add\" (JAVA:NEW \"java.util.ArrayList\" :JAVA-FALSE)")
+			.doesNotContain("%CLOJURE-HOST-VALUE");
+		assertThat(lowered("(let [l (java.util.ArrayList.)] (.add (java.util.ArrayList.) l))"))
+			.contains("\"add\" |c%l| :FUNCTIONAL :JAVA-FALSE)")
+			.doesNotContain("%CLOJURE-HOST-VALUE");
+		// a local the binding shadows is no longer the construction
+		assertThat(lowered("(let [l (java.util.ArrayList.)] (fn [l] (.add (java.util.ArrayList.) l)))"))
+			.contains("(RONTOLISP::%CLOJURE-HOST-VALUE (RONTOLISP::%CLOJURE-IO-HOST |c%l|))");
+		// where the host is not (wasm) a java: call is a call-time error: no wrap of
+		// its own
+		assertThat(Clojure.read("(defn put [m k] (.put m k 1))", null, null, ClojureFiles.NONE, false)
+			.stream()
+			.map(LispVal::print)
+			.collect(Collectors.joining("\n")))
+			.contains("\"put\" (RONTOLISP::%CLOJURE-IO-HOST |c%k|) 1 :FUNCTIONAL :JAVA-FALSE)")
+			.doesNotContain("%CLOJURE-HOST-VALUE");
 	}
 
 	@Test
@@ -2249,21 +2427,20 @@ class ClojureLoweringTest {
 		assertThat(lowered("(slurp \"f\")")).contains("(RONTOLISP::%CLOJURE-SLURP \"f\")");
 		assertThat(lowered("(line-seq \"f\")")).contains("READ-LINE").contains("STREAMP");
 		assertThat(lowered("(ns t (:require [clojure.java.io :as jio])) (jio/reader \"f\")"))
-			.contains("(RONTOLISP::%CLOJURE-READER \"f\")");
+			.contains("(|c%clojure.java.io/reader| \"f\")");
 		assertThat(lowered("(ns t (:require [clojure.java.io :as jio])) (line-seq (jio/reader \"f\"))"))
 			.contains("READ-LINE")
 			.contains("STREAMP");
 		assertThat(lowered("(format \"%s=%d\" :a 1)")).contains("FORMAT").contains("~A");
-		assertThatThrownBy(() -> Clojure.read("(file-seq \".\")", null)).isInstanceOf(LispReadException.class)
-			.hasMessageContaining("file-seq is not supported yet");
+		// file-seq walks a java.io.File (the clojure.java.io runtime), slurp and spit
+		// take an encoding through the namespace's reader and writer
+		assertThat(lowered("(def x 1) (file-seq x)")).contains("(RONTOLISP::%CLOJURE-IO-FILE-SEQ |c%x|)");
+		assertThat(lowered("(slurp \"f\" :encoding \"UTF-8\")"))
+			.contains("(RONTOLISP::%CLOJURE-IO-SLURP \"f\" \"UTF-8\")");
+		assertThat(lowered("(spit \"f\" 1 :encoding \"UTF-8\")"))
+			.contains("(RONTOLISP::%CLOJURE-IO-SPIT \"f\" 1 NIL \"UTF-8\")");
 		assertThatThrownBy(() -> Clojure.read("(reader \"f\")", null)).isInstanceOf(LispReadException.class)
 			.hasMessageContaining("unknown name: reader");
-		assertThatThrownBy(() -> Clojure.read("(ns t (:require [clojure.java.io :as jio])) (jio/writer \"f\")", null))
-			.isInstanceOf(LispReadException.class)
-			.hasMessageContaining("unknown name: clojure.java.io/writer");
-		assertThatThrownBy(() -> Clojure.read("(ns t (:require [clojure.java.io :as jio])) (jio/file \".\")", null))
-			.isInstanceOf(LispReadException.class)
-			.hasMessageContaining("unknown name: clojure.java.io/file");
 		assertThatThrownBy(() -> Clojure.read("(format \"%e\" 1.5)", null)).isInstanceOf(LispReadException.class)
 			.hasMessageContaining("format directive %e is not supported yet");
 		assertThatThrownBy(() -> Clojure.read("(format x 1)", null)).isInstanceOf(LispReadException.class)
@@ -2271,29 +2448,24 @@ class ClojureLoweringTest {
 	}
 
 	@Test
-	void javaIoReaderWiresLikeClojureString() {
+	void javaIoIsABuiltInNamespaceLoadedAtItsFirstQualifiedName() {
+		// clojure.java.io is Clojure source in the jar, loaded like clojure.walk on its
+		// first qualified name too (the oracle has it loaded before the program): its
+		// vars are the namespace's, called directly
 		assertThat(lowered("(ns t (:require [clojure.java.io :as jio])) (jio/reader \"f\")"))
-			.contains("(RONTOLISP::%CLOJURE-READER \"f\")");
-		assertThat(lowered("(ns t (:require [clojure.java.io :as jio])) (clojure.java.io/reader \"f\")"))
-			.contains("(RONTOLISP::%CLOJURE-READER \"f\")");
+			.contains("(|c%clojure.java.io/reader| \"f\")");
+		assertThat(lowered("(clojure.java.io/reader \"f\")")).contains("(|c%clojure.java.io/reader| \"f\")");
 		assertThat(lowered("(ns t (:require [clojure.java.io :as jio :refer [reader]])) (reader \"f\")"))
-			.contains("(RONTOLISP::%CLOJURE-READER \"f\")");
-		assertThat(lowered("(ns t (:require [clojure.java.io :refer :all])) (reader \"f\")"))
-			.contains("(RONTOLISP::%CLOJURE-READER \"f\")");
+			.contains("(|c%clojure.java.io/reader| \"f\")");
+		assertThat(lowered("(ns t (:require [clojure.java.io :refer :all])) (file \"f\")"))
+			.contains("(|c%clojure.java.io/file| \"f\")");
 		assertThat(lowered("(ns t (:require [clojure.java.io :as jio])) jio/reader"))
-			.contains("#'RONTOLISP::%CLOJURE-READER");
-		assertThat(lowered("(ns t (:require [clojure.java.io :refer [reader]])) reader"))
-			.contains("#'RONTOLISP::%CLOJURE-READER");
-		assertThatThrownBy(() -> Clojure.read("(ns t (:require [clojure.java.io :refer [writer]]))", null))
+			.contains("#'|c%clojure.java.io/reader|");
+		// its kernels are the rontolisp.internal.io workers, which only it may require
+		assertThat(lowered("(clojure.java.io/as-file \"f\")")).contains("(RONTOLISP::%CLOJURE-IO-FILE ");
+		assertThatThrownBy(() -> Clojure.read("(ns t (:require [rontolisp.internal.io :as k]))", null))
 			.isInstanceOf(LispReadException.class)
-			.hasMessageContaining("unknown name: clojure.java.io/writer");
-		assertThatThrownBy(() -> Clojure.read("(ns t (:require [clojure.java.io :as jio])) (jio/reader)", null))
-			.isInstanceOf(LispReadException.class)
-			.hasMessageContaining("reader takes one path");
-		assertThatThrownBy(
-				() -> Clojure.read("(ns t (:require [clojure.java.io :as jio])) (jio/reader \"a\" \"b\")", null))
-			.isInstanceOf(LispReadException.class)
-			.hasMessageContaining("reader takes one path");
+			.hasMessageContaining("rontolisp.internal.io is internal to clojure.java.io");
 	}
 
 	@Test
@@ -2350,9 +2522,9 @@ class ClojureLoweringTest {
 		assertThatThrownBy(() -> Clojure.read("(ns t (:require [clojure.spec.alpha :as s]))", null))
 			.isInstanceOf(LispReadException.class)
 			.hasMessageContaining("unknown namespace: clojure.spec.alpha");
-		assertThatThrownBy(() -> Clojure.read("(ns t (:require [clojure.xml :as x]))", null))
+		assertThatThrownBy(() -> Clojure.read("(ns t (:require [clojure.reflect :as r]))", null))
 			.isInstanceOf(LispReadException.class)
-			.hasMessageContaining("unknown namespace: clojure.xml");
+			.hasMessageContaining("unknown namespace: clojure.reflect");
 	}
 
 	@Test
@@ -2536,12 +2708,13 @@ class ClojureLoweringTest {
 			.endsWith("(RONTOLISP::%CLOJURE-STRING-READER \"x\")");
 		assertThat(lowered(
 				"(ns rdj (:require [clojure.java.io :refer [reader]])) (java.io.PushbackReader. (reader \"f\"))"))
-			.endsWith("(RONTOLISP::%CLOJURE-READER \"f\")");
+			.endsWith("(|c%clojure.java.io/reader| \"f\")");
 		assertThat(lowered("(java.io.PushbackReader. *in*)")).endsWith("(RONTOLISP::%CLOJURE-IN)");
 		assertThat(lowered("(defn f [r] (java.io.PushbackReader. r))")).contains("(STREAMP ")
 			.contains("(JAVA:NEW \"java.io.PushbackReader\" ");
 		// a StringReader by itself stays the host class: a Java API takes it
-		assertThat(lowered("(java.io.StringReader. \"x\")")).contains("(JAVA:NEW \"java.io.StringReader\" \"x\")");
+		assertThat(lowered("(java.io.StringReader. \"x\")"))
+			.contains("(JAVA:NEW \"java.io.StringReader\" \"x\" :JAVA-FALSE)");
 	}
 
 	@Test
@@ -2556,6 +2729,8 @@ class ClojureLoweringTest {
 			.hasMessageContaining("Wrong number of args (5) passed to: clojure.core/fnil");
 		assertThatThrownBy(() -> Clojure.read("(juxt)", null)).isInstanceOf(LispReadException.class)
 			.hasMessageContaining("Wrong number of args (0) passed to: clojure.core/juxt");
+		assertThatThrownBy(() -> Clojure.read("(iteration)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Wrong number of args (0) passed to: clojure.core/iteration");
 		assertThatThrownBy(() -> Clojure.read("(reduce-kv + 0)", null)).isInstanceOf(LispReadException.class)
 			.hasMessageContaining("Wrong number of args (2) passed to: clojure.core/reduce-kv");
 		assertThatThrownBy(() -> Clojure.read("(pmap inc)", null)).isInstanceOf(LispReadException.class)
@@ -2589,7 +2764,9 @@ class ClojureLoweringTest {
 
 	@Test
 	void typePredicatesLowerToOneTestAnsweringTrueOrFalse() {
-		assertThat(lowered("(fn [x] (seq? x))")).contains("(RONTOLISP::%CLOJURE-IS-SEQ ")
+		// a collection predicate asks the interface's family too: the plain helper's
+		// alias, which a program storing no row of that family calls in its place
+		assertThat(lowered("(fn [x] (seq? x))")).contains("(RONTOLISP::%CLOJURE-IS-SEQ-TYPE ")
 			.contains("RONTOLISP::%CLOJURE-FALSE");
 		assertThat(lowered("(fn [x] (number? x))")).contains("(NUMBERP ");
 		assertThat(lowered("(fn [x] (qualified-keyword? x))")).contains("(RONTOLISP::%CLOJURE-IS-QUALIFIED ");
@@ -2597,14 +2774,15 @@ class ClojureLoweringTest {
 		// program making no UUID calls in its place
 		assertThat(lowered("(fn [x] (uuid? x))")).contains("(RONTOLISP::%CLOJURE-IS-UUID ")
 			.contains("\"java.util.UUID\"");
-		assertThat(lowered("(map map? [1])")).contains("LAMBDA").contains("(RONTOLISP::%CLOJURE-IS-MAP ");
+		assertThat(lowered("(map map? [1])")).contains("LAMBDA").contains("(RONTOLISP::%CLOJURE-IS-MAP-TYPE ");
 		// a kind no value here has: false, the argument still evaluated
 		assertThat(lowered("(delay? [1])")).contains("PROGN").contains("RONTOLISP::%CLOJURE-FALSE");
 		// the sorted-aware tests: sorted? its own, set? and reversible? the helpers a
-		// program building no sorted collection calls as the plain ones
+		// program storing no row of the interface's family and building no sorted
+		// collection calls as the plain ones (ClojureLibrary's strip, in family order)
 		assertThat(lowered("(fn [x] (sorted? x))")).contains("(RONTOLISP::%CLOJURE-IS-SORTED ");
-		assertThat(lowered("(fn [x] (set? x))")).contains("(RONTOLISP::%CLOJURE-IS-SET ");
-		assertThat(lowered("(fn [x] (reversible? x))")).contains("(RONTOLISP::%CLOJURE-IS-REVERSIBLE ");
+		assertThat(lowered("(fn [x] (set? x))")).contains("(RONTOLISP::%CLOJURE-IS-SET-TYPE ");
+		assertThat(lowered("(fn [x] (reversible? x))")).contains("(RONTOLISP::%CLOJURE-IS-REVERSIBLE-TYPE ");
 		assertThat(lowered("(volatile! 1)")).contains(":C%VOLATILE");
 		assertThat(lowered("(atom 1)")).doesNotContain(":C%VOLATILE");
 	}

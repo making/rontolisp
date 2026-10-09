@@ -39,10 +39,11 @@
  `=` で一致するキーを見つけます。ただし格納されるコレクションのキーは、プログラムが最初に
  格納した同じ種類（ベクター・リスト・遅延 seq）の `=` なキーなので、メタデータと入れ子の
  要素の綴りはその先のオブジェクトに従います。これらのキーは異なる値と種類ごとに1つずつ、
- 実行の終わりまで保持されます。セットリテラルの重複要素は綴り単位で拒否されます。
+ 実行の終わりまで保持されます。
  `=` はベクター、リスト、遅延 seq を本家と同じく要素単位で比較します。`nil` が空リスト
  なので、本家が `false` を返す `(= [] nil)` と `(= (java.util.ArrayList.) nil)` は `true` に
- なります。
+ なります。キーとしては本家と同じく `[]` と `nil` を区別するので、空のリストや seq は空ベクターの
+ キーに一致しません。`(get {[] 1} ())` は `nil` です（本家は `1`）。
  `=` は本家と同じく左辺の Java オブジェクトに `equals` で尋ねますが、渡すのは数値、文字列、
  文字、`true`、`nil`、Java オブジェクトだけです。`false`、キーワード、シンボル、コレクションは、
  同じ種類の Java の `List`、`Map`、`Set` を除き、どの Java オブジェクトとも `=` になりません。
@@ -160,7 +161,7 @@
  キーワードと、単純名を通じてコアの種類のキーワードと同じクラスなので、
  `(isa? (class (java.util.ArrayList.)) java.util.List)` は `true` です。同じく `:list` と
  綴る `clojure.lang.IPersistentList` にも `isa?` で、オラクルは `false` を返します。それ以外の
-クラス（`java.io.File`）はディスパッチ値でもクラスオブジェクトで、オラクル通りです。プロトコルの
+クラス（`java.util.AbstractList`）はディスパッチ値でもクラスオブジェクトで、オラクル通りです。プロトコルの
  ディスパッチは階層（`derive`）を読まず、タグの完全一致の次はプロトコルを extend した
  クラスだけを試し、それから `Object` 既定です。`Long`・`Double` を `:number` にまとめ
  （オラクルは区別します）、1つの値が実装する2つの `clojure.lang` インタフェースは
@@ -258,10 +259,13 @@
   `ArityException` をシグナルします（オラクルは `AbstractMethodError`）。
 - `reify`・`deftype`・`defrecord` の本体が実装できるのは、コア関数が参照する `clojure.lang`
   のインタフェース（`IReduceInit`、`IReduce`、`IKVReduce`、`Seqable`、`Counted`、`Indexed`、
-  `ILookup`、`IFn`（`Callable` と `Runnable` を含む）、`IDeref`、`IMeta`、`IObj`）と `Object` の
-  メソッドの上書きです（[reify](reference/reify.md#host-interfaces)）。それ以外のインタフェース
-  （`ISeq`、`IPersistentMap`、`Sequential`、`java.util.List` など）は名前を挙げて拒否されます。
-  型の `equals` と `hashCode` は `=` と `.hashCode` に答えますが、マップのキーやセットの要素の
+  `ILookup`、`IFn`（`Callable` と `Runnable` を含む）、`IDeref`、`IMeta`、`IObj`）、コレクションの
+  インタフェース（`IPersistentMap`、`ISeq`、`Sequential`、`Iterable`、`java.util.List` など）、
+  `Object` のメソッドの上書きです（[reify](reference/reify.md#host-interfaces)）。それ以外の
+  インタフェース（`IChunkedSeq`、`java.util.Deque` など）は名前を挙げて拒否されます。`ISeq` 型への
+  `first`・`next`・`rest` はその `seq` を通して読み、関数がメソッドを呼ぶ回数はオラクルと異なる
+  ことがあり、コレクションの型の `str` は中身を綴ります
+  （[コレクションのインタフェース](reference/reify.md#collection-interfaces)）。型の `equals` と `hashCode` は `=` と `.hashCode` に答えますが、マップのキーやセットの要素の
   比較には使われず、そうした値は同一性で保持されます。`Seqable` だけを実装した型について、
   `sort` と `distinct` はその seq を通して答えます。オラクルはどちらも拒否します。
 - `clojure.core.reducers` は呼び出したスレッドの上で部分を順に1つずつ fold します。空でない
@@ -283,20 +287,23 @@
 - `format` は `%s`・`%d`・`%x`・`%X`・`%o`・`%c`・`%b`・`%f`・`%%`・`%n` を描画します
   （幅・浮動小数点精度付き）。`%e`・`%g`・フラグ・非リテラルは名前付きで拒否されます。
   `%s` の `nil` はオラクル同様 `"null"` です。
-- `line-seq` はパスか開かれたリーダー（`clojure.java.io/reader` など。閉じるのは
-  `with-open`）を取って、どちらも strict に答えます（オラクルはリーダーを取って遅延です）。
-  `spit`・`slurp`・`line-seq`・`reader` はインタプリタと JVM、wasm ではパスを含む `--dir` プリオープン付きで動きます。
+- `line-seq` は開かれたリーダー（`clojure.java.io/reader` など。閉じるのは `with-open`）か、
+  開いて読むパス、File、URL、バイトストリームを取って、どれも strict に答えます（オラクルは
+  リーダーだけを取って遅延です）。`spit`・`slurp`・`line-seq`・`reader` はすべてのバックエンドで、
+  wasm ではファイルを含む `--dir` プリオープン付きで動きます。
   リーダーの上の `java.io.InputStreamReader` はどのバックエンドでもそのリーダー自身です。Ring のリクエスト
   `:body` が、オラクルでは `InputStream` であるのに対し、ここではリーダーだからです。
 - Ring アダプター（`ring.adapter.rontolisp/run-server`）のリクエストマップには
   `:content-type` と `:content-length` が入りますが、`:character-encoding` と
   `:ssl-client-cert` は入りません。ボディのないリクエストの `:body` は `nil` です（Jetty の
-  アダプターは空のストリームを渡します）。非同期ハンドラと `java.io.File` のボディは拒否し、
-  2 つ目の同時サーバーは最初のものを置き換えます（[アダプター](reference/ring.md)を参照）。
+  アダプターは空のストリームを渡します）。非同期ハンドラは拒否し、2 つ目の同時サーバーは
+  最初のものを置き換えます。ファイルを指さない `java.io.File` のボディはエラーを通知し
+  （500）、Jetty は空の 200 を返します（[アダプター](reference/ring.md)を参照）。
 - 組み込みの [Ring ユーティリティ](reference/ring-util.md)は、文字セットを文字列で指定します
   （UTF-8、ISO-8859-1、US-ASCII とそれらの JDK の別名。ほかは拒否します）。
   `ring.util.request/body-string` は拡張できるマルチメソッドではなく関数で、`content-length`
-  は ASCII の数字だけを読みます。`java.io.File`、URL、バイト配列を使うものは含みません。
+  は ASCII の数字だけを読みます。バイト配列を使うものは含みません。ファイルのレスポンスは
+  シンボリックリンクを解決せず、実行時に組み立てた名前のリソースを jar の中から探しません。
 - ソート済みのマップとセットは、順序付け・表示・キーの検索がオラクルと同じですが、どの操作も
   コピーを作ります（関連付けにはハッシュマップと同じくコレクションの大きさ分のコストが
   かかります）。`class` は `:map`/`:set` を返します。先頭から走査して何も残らない `subseq`/`rsubseq` は `nil` を返します（オラクルは
@@ -350,7 +357,8 @@
   メタデータの `:tag` は書いたままのシンボル（`String`）で、オラクルはクラス
   （`java.lang.String`）に解決します。
 - `with-open` は `close` メソッド越しに閉じるため、バックエンドの届く closeable
-  だけが動きます（Java の closeable は JVM が要ります）。`time` は値を答えますが、
+  だけが動きます（`clojure.java.io` のバイトストリームはどのバックエンドでも、Java の
+  closeable はインタプリタと JVM で）。`time` は値を答えますが、
   ミリ秒数は固定されません。数えるのは整数ミリ秒（`42.0`）で、オラクルの値には
   ナノ秒の桁が付きます。
 - `read-string`/`read` はクオートと同じ答えを返します。`@x` は `(deref x)` と読まれ、
@@ -364,6 +372,10 @@
   `java.util.UUID` として読まれます。わずかな違い（インスタントの `str` は UTC で答える、
   interop で得たホストの値は読んだ値と `=` にならない）は[インスタントと UUID](reference/instants.md)
   にあります。
+- `clojure.java.io` の `java.io.File`、`java.net.URL`、`java.net.URI`、バイトストリームは、
+  すべてのバックエンドでこのフロントエンド自身の値です。違い（バイト配列がない、文字セットは
+  3 つ、`http:` URL の背後に接続がない、リソースはクラスパスではなくソースパスで見つける、WASM の
+  ディレクトリ）は [clojure.java.io](reference/clojure-java-io.md) にあります。
 - データリーダはプログラムのコンパイル時に動くので、ソースでの答えはメタデータを失い、ここで
   綴れる値でなければなりません。関数、deftype のインスタンス、UUID・Date 以外のホストの
   オブジェクトは `Can't embed object in code` です（オラクルは `print-dup` で印字できるものを
@@ -376,27 +388,20 @@
   です（再束縛は標準ストリームの再束縛になります）。ルートで読んだ `*out*` と `*in*` は
   プロセスの標準ストリームを指すストリーム値です。
   `defonce` はリロードでルートを保ちます（`def` はリセットします）。
-- ホストオブジェクトの boolean は、lowering 時に receiver のクラスがわかり
-  （構築リテラル、それを束縛した `let`/`if-let`/`when-let` ローカル、または
-  `..` ステップの宣言戻り値型）、その引数個数の
-  オーバーロードがすべてプリミティブ boolean を答える場合と、receiver が文字列・数値・
-  文字で、そのクラスのその引数個数のオーバーロードがすべてプリミティブ boolean を答える
-  場合（`(.matches "abc" "x")`）と、receiver がインタフェース 1 つかクラス 1 つだけの
-  `proxy` の場合だけ `false` を答えます。
-  それ以外のホスト boolean は共有の `java:` unmarshal のままとなり、`false` は
-  `nil` と表示されます。ホストコレクションから読み戻した `Boolean.FALSE` も同じです
-  （`false` を入れたリストの `(vec l)` は `[nil]` を答えます）。
 - Java のインタフェースが期待される位置に渡した fn は、どのインタフェースでもその抽象
   メソッドすべてを実装し、それぞれメソッドの引数で呼ばれます。オラクルが fn を変換する
   のは `@FunctionalInterface` 注釈付きのインタフェースだけです（`PropertyChangeListener`
-  はオラクルでは `ClassCastException` になります）。fn の値は引数と同じ規則で Java へ
-  戻ります。Java に渡した `Comparator` の fn は数値を答えます（オラクルは `true`/`false`
-  も受け付けます。fn 自身への `(.compare f a b)` はここでも受け付けます）。
-- Java に渡したマップは、そのエントリを持つ新しい `java.util.LinkedHashMap` になり、
-  各キーと値は引数と同じく変換されます（ベクタは `List`、マップは `Map`）。オラクルは
-  マップそのものを渡すため、コピーの `str` は入れ子のコレクションを Java の形で綴ります
-  （`{a=[1, 2]}`。オラクルは `{a=[1 2]}`）。セット・キーワード・record には Java の値が
-  ないため、それを取るメンバ（キーワードをキーにしたマップも）は一致しません。
+  はオラクルでは `ClassCastException` になります）。`nil` や数値でない値を答える
+  `Comparator` の fn は名前を挙げて拒否されます（オラクルは `NullPointerException` か
+  `ClassCastException` を投げます）。
+- Java に渡したマップ・セット・record・ソート済みコレクション・遅延シーケンスは、新しい
+  Java のコピーになります（セットとソート済みセットは `java.util.LinkedHashSet`、マップと
+  record とソート済みマップは `java.util.LinkedHashMap`、遅延シーケンスはベクタやリストと
+  同じく `List`）。各要素は引数と同じく変換されます。オラクルはコレクションそのものを渡す
+  ため、コピーやそれを入れた Java コレクションの `str` は Java の形で綴ります（`[1, 2]`。
+  オラクルは `#{1 2}`。`{a=[1, 2]}`。オラクルは `{a=[1 2]}`）。Java のソート済み
+  コレクションはキーワードをシンボルより前に並べます（オラクルは両者の比較を拒否します）。
+  分数とアトムには Java の値がないため、それを取るメンバは一致しません。
 - 整数の receiver は `Integer` に収まれば `Integer`、収まらなければ `Long` として
   呼ばれます（オラクルでは常に `Long` です）。`(.getClass 1)` は
   `java.lang.Integer` を答えます。

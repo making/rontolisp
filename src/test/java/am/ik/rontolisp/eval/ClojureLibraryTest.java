@@ -1,6 +1,7 @@
 package am.ik.rontolisp.eval;
 
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -27,6 +28,24 @@ class ClojureLibraryTest {
 		assertThat(ClojureLibrary.isClojureFunction("RONTOLISP::%CLOJURE-WRITE-DATUM")).isTrue();
 		assertThat(ClojureLibrary.isClojureFunction("RONTOLISP::%CLOJURE-CALL")).isTrue();
 		assertThat(ClojureLibrary.isClojureFunction("PRINC")).isFalse();
+	}
+
+	@Test
+	void everyLibraryNameIsDefinedOnce() {
+		// a second definition of a name replaces the first for every caller, the first's
+		// own included
+		Set<String> seen = new HashSet<>();
+		Set<String> twice = new TreeSet<>();
+		for (LispVal form : ClojureLibrary.forms()) {
+			if (form instanceof LispCons cons && cons.car() instanceof LispSymbol head
+					&& (head.name().equals("DEFUN") || head.name().equals("DEFMACRO"))
+					&& cons.cdr() instanceof LispCons rest && rest.car() instanceof LispSymbol name
+					&& !seen.add(name.name())) {
+				twice.add(name.name());
+			}
+		}
+		assertThat(seen).contains("RONTOLISP::%CLOJURE-HOST-ENTRIES", "RONTOLISP::%CLOJURE-HOST-VALUE");
+		assertThat(twice).isEmpty();
 	}
 
 	@Test
@@ -114,6 +133,42 @@ class ClojureLibraryTest {
 		assertThat(defun(seqable, "RONTOLISP::%CLOJURE-STRICT-SEQ")).contains("%CLOJURE-SEQABLE-P");
 		assertThat(defun(seqable, "RONTOLISP::%CLOJURE-STR-OF")).doesNotContain("%CLOJURE-TO-STRING-P");
 		assertThat(defun(seqable, "RONTOLISP::%CLOJURE-NTH")).doesNotContain("%CLOJURE-INDEXED-P");
+		// iteration stores a Seqable and an IReduceInit row itself, called or as a value
+		for (String source : List.of("(println (vec (iteration (fn [k] k))))",
+				"(println (map vec [(apply iteration (fn [k] k) [])]))")) {
+			List<LispVal> iteration = ClojureLibrary.process(Clojure.read(source, null));
+			assertThat(defun(iteration, "RONTOLISP::%CLOJURE-STRICT-SEQ")).as(source).contains("%CLOJURE-SEQABLE-P");
+			assertThat(defun(iteration, "RONTOLISP::%CLOJURE-COLL-REDUCE-3")).as(source)
+				.contains("%CLOJURE-REDUCE-INIT-P");
+			assertThat(defun(iteration, "RONTOLISP::%CLOJURE-NTH")).as(source).doesNotContain("%CLOJURE-INDEXED-P");
+		}
+	}
+
+	@Test
+	void aProgramStoringNoCollectionInterfaceRowSplicesTheVerbsWithoutTheirArms() {
+		// only the store of a collection interface's row makes a value the verbs read
+		// through its methods: a program storing none compiles them as before
+		Map<String, String> arms = Map.of("RONTOLISP::%CLOJURE-STRICT-SEQ", "%CLOJURE-ITERABLE-P",
+				"RONTOLISP::%CLOJURE-EQUAL", "%CLOJURE-ICOLLECTION-P", "RONTOLISP::%CLOJURE-WRITE", "%CLOJURE-IMAP-P",
+				"RONTOLISP::%CLOJURE-PEEK", "%CLOJURE-ISTACK-P", "RONTOLISP::%CLOJURE-FIND", "%CLOJURE-IASSOCIATIVE-P",
+				"RONTOLISP::%CLOJURE-COMPARE", "%CLOJURE-ICOMPARABLE-P", "RONTOLISP::%CLOJURE-COLL-REDUCE-3",
+				"%CLOJURE-ITERABLE-P", "RONTOLISP::%CLOJURE-NTH", "%CLOJURE-ISEQUENTIAL-P",
+				"RONTOLISP::%CLOJURE-IS-REALIZED", "%CLOJURE-IPENDING-P", "RONTOLISP::%CLOJURE-SEQABLE-SEQ",
+				"%CLOJURE-ISEQ-P");
+		arms.forEach((verb, arm) -> assertThat(defun(ClojureLibrary.forms(), verb)).as(verb).contains(arm));
+		List<LispVal> plain = ClojureLibrary.process(Clojure.read("(deftype T [] clojure.lang.Seqable (seq [_] nil))"
+				+ " (println (seq [1]) (= [1] [1]) (peek [1]) (find {:a 1} :a) (compare 1 2) (nth [1] 0)"
+				+ " (realized? (lazy-seq nil)) (reduce + [1]) (seq (T.)))", null));
+		arms.forEach((verb, arm) -> assertThat(defun(plain, verb)).as(verb).doesNotContain(arm));
+		String program = plain.get(plain.size() - 1).print();
+		assertThat(program).doesNotContain("%CLOJURE-ICOLLECTION-P").doesNotContain("%CLOJURE-IMAP-P");
+		// a body naming one keeps its family's arms and those of its supers, no other's
+		List<LispVal> map = ClojureLibrary.process(Clojure.read(
+				"(deftype M [] clojure.lang.IPersistentMap (count [_] 0)) (println (count (M.)) (= 1 1) (peek [1]))",
+				null));
+		assertThat(defun(map, "RONTOLISP::%CLOJURE-EQUAL")).contains("%CLOJURE-ICOLLECTION-P");
+		assertThat(defun(map, "RONTOLISP::%CLOJURE-STRICT-SEQ")).contains("%CLOJURE-ITERABLE-P");
+		assertThat(defun(map, "RONTOLISP::%CLOJURE-PEEK")).doesNotContain("%CLOJURE-ISTACK-P");
 	}
 
 	@Test
@@ -254,6 +309,29 @@ class ClojureLibraryTest {
 	}
 
 	@Test
+	void aProgramMakingNoIoValueSplicesTheLibraryWithoutItsIoArms() {
+		// the printer's, str's, ='s, the hash's and slurp's arms for a File, a URL and a
+		// byte stream go like the stream ones: only a program that can hold one (the
+		// clojure.java.io kernels, a java.io.File construction) keeps them
+		assertThat(defun(ClojureLibrary.forms(), "RONTOLISP::%CLOJURE-WRITE")).contains("(RONTOLISP::%CLOJURE-IO-P X)");
+		List<LispVal> plain = Clojure.read("(spit \"f\" (str 1)) (prn (slurp \"f\") (line-seq \"f\"))", null);
+		List<LispVal> processed = ClojureLibrary.process(plain);
+		// the library keeps its own definitions (the tree-shaker prunes them later); the
+		// arms are in the program's forms and the shared verbs
+		assertThat(processed.stream()
+			.map(LispVal::print)
+			.filter(text -> !text.startsWith("(DEFUN ") && !text.startsWith("(DEFVAR ")))
+			.noneMatch(text -> text.contains("%CLOJURE-IO-") || text.contains("%CLOJURE-HOST-FILE-PATH"));
+		for (String name : List.of("RONTOLISP::%CLOJURE-WRITE", "RONTOLISP::%CLOJURE-STR-OF",
+				"RONTOLISP::%CLOJURE-SLURP")) {
+			assertThat(defun(processed, name)).as(name).doesNotContain("%CLOJURE-IO-P");
+		}
+		List<LispVal> file = Clojure.read("(prn (java.io.File. \"a\"))", null);
+		assertThat(defun(ClojureLibrary.process(file), "RONTOLISP::%CLOJURE-WRITE"))
+			.contains("(RONTOLISP::%CLOJURE-IO-P X)");
+	}
+
+	@Test
 	void classOfAStreamIsAnArmAProgramMakingNoStreamSheds() {
 		// the library keeps its own defuns (the tree-shaker prunes them later); the arm
 		// is
@@ -367,13 +445,14 @@ class ClojureLibraryTest {
 		// as a symbol, which has none either; the Ring adapter its options' and request
 		// map's fixed key names and a method or scheme, HTTP tokens that admit no slash;
 		// the HTTP client its options' and response map's fixed key names; Throwable->map
-		// a class name as a symbol
+		// a class name as a symbol; clojure.java.io a value's class name
 		Set<String> slashless = Set.of("RONTOLISP::%CLOJURE-EXCEPTION-CLASS", "RONTOLISP::%CLOJURE-CLASS-KEYWORDS",
 				"RONTOLISP::%CLOJURE-READER-VALUE-CLASS", "RONTOLISP::%CLOJURE-INSTANT-CLASS",
 				"RONTOLISP::%CLOJURE-HOST-CLASS-KEYS", "RONTOLISP::%CLOJURE-NS-NAME",
 				"RONTOLISP::%CLOJURE-RING-KEYWORD", "RONTOLISP::%CLOJURE-RING-MAP", "RONTOLISP::%CLOJURE-RING-OPTION",
 				"RONTOLISP::%CLOJURE-HTTP-ASSOC", "RONTOLISP::%CLOJURE-HTTP-OPTION",
-				"RONTOLISP::%CLOJURE-THROWABLE-VIA", "RONTOLISP::%CLOJURE-THROWABLE-TO-MAP");
+				"RONTOLISP::%CLOJURE-THROWABLE-VIA", "RONTOLISP::%CLOJURE-THROWABLE-TO-MAP",
+				"RONTOLISP::%CLOJURE-IO-CLASS-KEY");
 		builders.removeAll(slashless);
 		boolean grew = true;
 		while (grew) {

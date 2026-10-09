@@ -2292,6 +2292,9 @@ public final class JvmLispCompiler implements LispCompiler {
 				.hashTables(usesHashTables
 						? cp.methodRef(thisClass, JvmHashRuntimeBuilder.VALUES, JvmHashRuntimeBuilder.VALUES_DESC)
 						: null);
+			// ... and a java:handle Java hands back as the value it stands for, in a
+			// program that makes one.
+			javaSites.direct().handles(programUsesSymbol(program, LispNames.JAVA_HANDLE_QUALIFIED));
 		}
 		// Numeric runtime helpers (long arithmetic with automatic BigInteger promotion)
 		// The interned layout array of an instance -- the discriminator the structural
@@ -5519,9 +5522,9 @@ public final class JvmLispCompiler implements LispCompiler {
 		return classes;
 	}
 
-	// True when the program references any of the six java: interop functions, so its
-	// sites are resolved against the class files (and the bridge emitted when one needs
-	// it).
+	// True when the program references any of the java: interop functions
+	// (LispNames.JAVA_OPERATORS_QUALIFIED), so its sites are resolved against the class
+	// files (and the bridge emitted when one needs it).
 	private static boolean programUsesAnyJavaOp(List<LispVal> program) {
 		for (String operator : LispNames.JAVA_OPERATORS_QUALIFIED) {
 			if (programUsesSymbol(program, operator)) {

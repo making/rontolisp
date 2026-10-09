@@ -3,6 +3,7 @@ package am.ik.rontolisp.clojure;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Deque;
+import java.util.EnumSet;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.IdentityHashMap;
@@ -1181,6 +1182,38 @@ public final class ClojureLowering {
 	 */
 	final Map<String, LispVal> walkTests = new LinkedHashMap<>();
 
+	/**
+	 * The protocols extended to an interface keyed by a core kind
+	 * ({@link ClojureProtocolLowering#interfaceWalkKey}), by method-table name, each with
+	 * the tests of those interfaces, as the pass before this one learned them
+	 * ({@link #guardMisses}): a dispatcher that does not walk asks the walk behind those
+	 * tests, which a program storing no row of their families folds away, and behind the
+	 * record test where a record implements one ({@link #recordGuards}).
+	 */
+	final Map<String, Set<String>> interfaceGuards = new LinkedHashMap<>();
+
+	/**
+	 * The interface tests an extension added to a protocol whose dispatchers had lowered
+	 * without them: the lowering starts over with them ({@link #lower}).
+	 */
+	final Map<String, Set<String>> guardMisses = new LinkedHashMap<>();
+
+	/**
+	 * The protocols extended to an interface every record implements
+	 * ({@link ClojureProtocolLowering#noteInterfaceWalk}), by method-table name: once the
+	 * program defines a record, their guards ask {@link ClojureProtocolLowering#RECORD_P}
+	 * too ({@link ClojureProtocolLowering#noteRecordGuards}).
+	 */
+	final Set<String> recordGuards = new LinkedHashSet<>();
+
+	/**
+	 * The families of the interfaces the program's {@code reify}, {@code deftype} and
+	 * {@code defrecord} bodies implement ({@link ClojureInterfaces}): a guarded walk
+	 * ({@link #interfaceGuards}) whose tests no such family holds folds away, so the
+	 * protocol runtime carries no walk for it.
+	 */
+	final Set<ClojureArms.Family> implementedFamilies = EnumSet.noneOf(ClojureArms.Family.class);
+
 	/** How many walked classes a session's protocol runtime was last spliced with. */
 	int walkTestsEmitted;
 
@@ -1261,13 +1294,15 @@ public final class ClojureLowering {
 	}
 
 	/**
-	 * A {@code let} local's host class, inferred from a construction-literal init: the
-	 * FQN, the plain name (for the shadow walk) and the scope depth that owns it. Only
-	 * {@code let} records -- its bindings never rebind, unlike {@code loop} targets;
-	 * every other binder hides entries through the shadow walk in {@link #hostClassOf}
-	 * instead of recording.
+	 * A {@code let} local bound to a plain value, a construction literal's or another
+	 * value no Clojure value Java lacks can be (a literal, a fn form:
+	 * {@code ClojureInteropLowering.isPlainForm}): the construction's FQN ({@code null}
+	 * for any other), the plain name (for the shadow walk) and the scope depth that owns
+	 * it. Only {@code let} records -- its bindings never rebind, unlike {@code loop}
+	 * targets; every other binder hides entries through the shadow walk in
+	 * {@code ClojureInteropLowering.hostClassOf} instead of recording.
 	 */
-	record HostClass(String fqn, String name, int depth) {
+	record HostClass(@Nullable String fqn, String name, int depth) {
 	}
 
 	/**
@@ -1394,16 +1429,23 @@ public final class ClojureLowering {
 			ClojureBoundary boundary) {
 		Set<String> redefinable = new HashSet<>();
 		Set<String> walking = new HashSet<>();
+		Map<String, Set<String>> guards = new LinkedHashMap<>();
 		ClojureSourcePath sourcePath = null;
 		while (true) {
 			ClojureLowering lowering = new ClojureLowering();
 			lowering.redefinable.addAll(redefinable);
 			lowering.walkingProtocols.addAll(walking);
+			guards.forEach((protocol, tests) -> lowering.interfaceGuards.put(protocol, new LinkedHashSet<>(tests)));
 			List<LispVal> forms = lowering.lowerProgram(datums, reader, macroEvaluator, files, hostTarget, boundary,
 					sourcePath);
 			boolean redefs = redefinable.addAll(lowering.redefMisses);
 			boolean walks = walking.addAll(lowering.walkMisses);
-			if (!redefs && !walks) {
+			boolean guarded = false;
+			for (Map.Entry<String, Set<String>> miss : lowering.guardMisses.entrySet()) {
+				guarded |= guards.computeIfAbsent(miss.getKey(), ignored -> new LinkedHashSet<>())
+					.addAll(miss.getValue());
+			}
+			if (!redefs && !walks && !guarded) {
 				return forms;
 			}
 			sourcePath = lowering.sourcePath;
@@ -1459,6 +1501,8 @@ public final class ClojureLowering {
 			// the hierarchy runtime runs before anything else, like the false value
 			lowering.forms.addAll(1, ClojureHierarchyLowering.hierarchyRuntime(lowering));
 		}
+		// a record a later file defines reaches an interface an earlier one extended to
+		ClojureProtocolLowering.noteRecordGuards(lowering);
 		if (lowering.usedProtocols) {
 			// the protocol runtime runs before anything else, like the false value
 			lowering.forms.addAll(1, ClojureProtocolLowering.protocolRuntime(lowering));
@@ -2177,6 +2221,7 @@ public final class ClojureLowering {
 			}
 			VarRef referred = ns().refers.get(name);
 			if (referred != null && !ClojureNamespaceLowering.isKnownNamespace(referred.ns())) {
+				loadPartOf(referred.ns(), referred.var());
 				String key = varKey(referred.ns(), referred.var());
 				return this.globals.containsKey(key) && !pendingCoreMacro(key, name) ? key : null;
 			}
@@ -2186,8 +2231,49 @@ public final class ClojureLowering {
 		if (target == null) {
 			return null;
 		}
+		loadPartOf(target, name.substring(slash + 1));
 		String key = varKey(target, name.substring(slash + 1));
 		return this.globals.containsKey(key) ? key : null;
+	}
+
+	/**
+	 * Loads the part of a built-in namespace defining the var
+	 * ({@link ClojureBuiltinNamespaces#partOf}) where a top-level datum first names it:
+	 * its definitions ahead of the datum, its statements (if any) run there once, like a
+	 * namespace the oracle loads before the program ({@link #projectNamespaceOf}). The
+	 * part lowers inside the namespace, its aliases and its private vars in reach, as
+	 * {@code load} would read it. Nothing when the var is defined already, or the
+	 * namespace came from a project file.
+	 * @param ns the namespace
+	 * @param var the var name
+	 */
+	void loadPartOf(String ns, String var) {
+		if (this.topLevelDepth == 0 || !this.builtinNamespaces.contains(ns)
+				|| this.globals.containsKey(varKey(ns, var))) {
+			return;
+		}
+		ClojureBuiltinNamespaces.Part part = ClojureBuiltinNamespaces.partOf(ns, var);
+		if (part == null) {
+			return;
+		}
+		String unit = "part:" + ns + ":" + part.resource();
+		if (this.loadedNamespaces.contains(unit) || this.loadingNamespaces.contains(unit)) {
+			return;
+		}
+		String outerNs = this.currentNs;
+		this.currentNs = ns;
+		try {
+			loadFile(unit, new ClojureSourcePath.Found(part.resource(), part.resource(),
+					ClojureBuiltinNamespaces.partSource(part), true));
+		}
+		finally {
+			this.currentNs = outerNs;
+		}
+		emitNamespaceInit(unit);
+		LispVal init = requireCall(unit, LoadMode.GUARDED);
+		if (init != null) {
+			this.hoisted.add(init);
+		}
 	}
 
 	/**
@@ -3446,10 +3532,10 @@ public final class ClojureLowering {
 			return ClojureLowerUtil.cons(ClojureLowerUtil.sym("vector"), lowers(items, 1));
 		}
 		if (ClojureLowerUtil.isSymbolNamed(head, "%hash-map")) {
-			return ClojureCollectionLowering.mapBuild(lowers(items, 1));
+			return ClojureCollectionLowering.mapLiteral(this, items);
 		}
 		if (ClojureLowerUtil.isSymbolNamed(head, "%hash-set")) {
-			return ClojureCollectionLowering.setBuild(this, lowers(items, 1));
+			return ClojureCollectionLowering.setLiteral(this, items);
 		}
 		if (head == ClojureReader.REGEX || ClojureLowerUtil.isSymbolNamed(head, "%regex")) {
 			return ClojureCollectionLowering.regexForm(items);
@@ -3759,6 +3845,11 @@ public final class ClojureLowering {
 				return inlined;
 			}
 		}
+		// clojure.java.io/resource of a literal name is found while the program lowers
+		LispVal resource = ClojureIoLowering.literalResource(this, name, items);
+		if (resource != null) {
+			return resource;
+		}
 		List<LispVal> args = new ArrayList<>();
 		for (int i = 1; i < items.size(); i++) {
 			args.add(lower(items.get(i)));
@@ -3859,6 +3950,10 @@ public final class ClojureLowering {
 				ClojureLowerUtil.isTrue(n == 0, "newline takes no argument");
 				return ClojureLowerUtil.list(ClojureLowerUtil.sym("progn"),
 						ClojureLowerUtil.list(ClojureLowerUtil.sym("princ"), LispString.literal("\n")), NIL_CONST);
+			case "flush":
+				ClojureLowerUtil.isTrue(n == 0, "flush takes no argument");
+				return ClojureLowerUtil.list(ClojureLowerUtil.sym("progn"), ClojureLowerUtil
+					.list(ClojureLowerUtil.sym("finish-output"), ClojureLowerUtil.sym("*STANDARD-OUTPUT*")), NIL_CONST);
 			case "methods":
 				return ClojureDispatchLowering.methodsOf(this, items);
 			case "count":
@@ -4128,9 +4223,15 @@ public final class ClojureLowering {
 				ClojureLowerUtil.isTrue(n == 1, "class takes one value");
 				return ClojureDispatchLowering.classForm(this, lower(items.get(1)));
 			case "spit":
+				if (n > 2 && ClojureIoLowering.namesEncoding(items, 3)) {
+					return ClojureIoLowering.spitWithOptions(this, items);
+				}
 				return ClojureStringLowering.spitOf(this, items);
 			case "slurp":
-				ClojureLowerUtil.isTrue(n == 1, "slurp takes one path");
+				ClojureLowerUtil.isTrue(n >= 1, "slurp takes a path and options");
+				if (n > 1) {
+					return ClojureIoLowering.slurpWithOptions(this, items);
+				}
 				return ClojureStringLowering.slurpForm(this, lower(items.get(1)));
 			case "line-seq":
 				ClojureLowerUtil.isTrue(n == 1, "line-seq takes one path or reader");
@@ -4138,7 +4239,7 @@ public final class ClojureLowering {
 			case "format":
 				return ClojureStringLowering.formatOf(this, items);
 			case "file-seq":
-				throw new LispReadException("file-seq is not supported yet: directory walks need a design");
+				return ClojureIoLowering.fileSeqOf(this, items);
 			case "keys":
 				return ClojureCollectionLowering.keysOf(this, items);
 			case "vals":
@@ -4383,6 +4484,7 @@ public final class ClojureLowering {
 			case "spit" -> ClojureStringLowering.spitValue(this);
 			case "slurp" -> ClojureStringLowering.slurpValue(this);
 			case "line-seq" -> ClojureStringLowering.lineSeqValue(this);
+			case "file-seq" -> ClojureIoLowering.fileSeqValue();
 			case "atom" -> ClojureStateLowering.atomValue(this);
 			case "volatile!" -> ClojureStateLowering.volatileValue();
 			case "deref" -> ClojureStateLowering.derefValue(this);
@@ -4644,11 +4746,17 @@ public final class ClojureLowering {
 		return symOf(name);
 	}
 
-	/** Whether the bound value is a Clojure vector: a CL vector that is no string. */
+	/**
+	 * Whether the bound value is a Clojure vector: a CL vector that is no string, or a
+	 * record, deftype or reify implementing {@code IPersistentVector} (a disjunct a
+	 * program storing no such row sheds, {@link ClojureArms.Family#PERSISTENT_VECTOR}).
+	 */
 	static LispVal vectorRaw(LispVal bound) {
-		return ClojureLowerUtil.list(ClojureLowerUtil.sym("AND"),
+		LispVal vector = ClojureLowerUtil.list(ClojureLowerUtil.sym("AND"),
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("VECTORP"), bound), ClojureLowerUtil
 					.list(ClojureLowerUtil.sym("NOT"), ClojureLowerUtil.list(ClojureLowerUtil.sym("STRINGP"), bound)));
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("OR"), vector,
+				ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-IVECTOR-P"), bound));
 	}
 
 	/**
@@ -4880,10 +4988,9 @@ public final class ClojureLowering {
 
 	/**
 	 * What the host class says about a static member: a static field, the fixed arities
-	 * of its non-variadic static methods, the subset answering a boolean, and whether a
-	 * variadic one exists.
+	 * of its non-variadic static methods, and whether a variadic one exists.
 	 */
-	record StaticMember(boolean field, List<Integer> arities, Set<Integer> booleanArities, boolean variadic) {
+	record StaticMember(boolean field, List<Integer> arities, boolean variadic) {
 	}
 
 	/** The Common Lisp symbol name of a Clojure identifier: always behind the prefix. */

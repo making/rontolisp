@@ -52,37 +52,158 @@ final class ClojureInteropLowering {
 
 	/**
 	 * A {@code java:new} / {@code java:call} / {@code java:static} call over its parts
-	 * (the names, then the arguments), ended in {@code :functional} when an argument may
-	 * be a function: a Clojure fn passed where an interface is expected implements every
+	 * (the names, then the arguments), ended in the markers of the oracle's conventions
+	 * ({@code compiler.JavaMarkers}): {@code :java-false} always -- Java's {@code false}
+	 * comes back as the false object, as the oracle's is Java's {@code Boolean.FALSE},
+	 * and a fn implementing {@code Comparator} answers as the oracle's
+	 * {@code AFunction.compare} -- and {@code :functional} when an argument may be a
+	 * function: a Clojure fn passed where an interface is expected implements every
 	 * abstract method by the method's arguments, as the oracle's fn implements a
 	 * functional interface, never as a {@code java:proxy} called with the method's name
-	 * first ({@code compiler.JavaSiteResolver#FUNCTIONAL}). A site whose arguments are
-	 * all literals lowers as before.
+	 * first. A literal {@code false} argument is the quoted false object, which the site
+	 * resolves on; any other argument that may hold a Clojure value Java has no value of
+	 * -- a keyword, a symbol, a set, a record, a lazy seq, a collection holding one --
+	 * goes through {@link #HOST_VALUE} ({@link #hostArgument}), behind the io family's
+	 * view of a clojure.java.io value ({@code ClojureIoLowering.crossing}, which a
+	 * {@code java:call}'s receiver crosses too).
+	 * @param ctx the hub
 	 * @param operator the {@code java:} operator
 	 * @param parts the names and the arguments
 	 * @param names how many leading parts are names, not arguments
 	 * @return the call
 	 */
-	static LispVal hostCall(LispSymbol operator, List<LispVal> parts, int names) {
-		if (!allLiteral(parts.subList(names, parts.size()))) {
-			List<LispVal> ended = new ArrayList<>(parts);
-			ended.add(new LispSymbol(LispNames.JAVA_FUNCTIONAL_MARKER));
-			return ClojureLowerUtil.cons(operator, ended);
+	static LispVal hostCall(ClojureLowering ctx, LispSymbol operator, List<LispVal> parts, int names) {
+		List<LispVal> crossed = ClojureIoLowering.crossing(operator, parts, names);
+		List<LispVal> ended = new ArrayList<>(parts.size() + 2);
+		ended.addAll(crossed.subList(0, names));
+		boolean literal = true;
+		for (int i = names; i < parts.size(); i++) {
+			LispVal argument = parts.get(i);
+			if (isFalseValue(argument)) {
+				ended.add(ClojureLowerUtil.list(ClojureLowerUtil.sym("QUOTE"),
+						new LispSymbol(ClojureLowering.FALSE_VALUE_NAME)));
+				continue;
+			}
+			literal &= isLiteral(argument);
+			ended.add(hostArgument(ctx, argument, crossed.get(i)));
 		}
-		return ClojureLowerUtil.cons(operator, parts);
+		if (!literal) {
+			ended.add(new LispSymbol(LispNames.JAVA_FUNCTIONAL_MARKER));
+		}
+		ended.add(JAVA_FALSE_MARKER);
+		return ClojureLowerUtil.cons(operator, ended);
 	}
 
-	// Whether every lowered argument is a literal no fn can be: a string, number,
-	// character, nil, true or keyword.
-	private static boolean allLiteral(List<LispVal> arguments) {
-		for (LispVal argument : arguments) {
-			if (!(argument instanceof LispString || argument instanceof LispInteger || argument instanceof LispDouble
-					|| argument instanceof LispChar || argument instanceof LispNil || argument instanceof LispTrue
-					|| argument instanceof LispSymbol symbol && symbol.isKeyword())) {
+	/**
+	 * The library function a value handed to a {@code java:} member goes through
+	 * ({@code clojure.lisp}): a Clojure value Java has no value of becomes one -- a
+	 * keyword or a symbol a {@code java:handle} Java hands back as itself, a set a
+	 * {@code java.util.LinkedHashSet}, a sorted map or a record a map, a lazy seq the
+	 * list it realizes, a collection holding such a value a copy -- anything else is
+	 * itself.
+	 */
+	static final String HOST_VALUE = "RONTOLISP::%CLOJURE-HOST-VALUE";
+
+	/**
+	 * An argument of a host call as the call hands it to Java: through
+	 * {@link #HOST_VALUE}, unless it is a value no Clojure value Java lacks can be -- a
+	 * literal, a fn form, a construction, a local bound to one of those -- which the site
+	 * keeps resolving on. Where the host is not (wasm), every {@code java:} call is a
+	 * call-time error and the argument is left as it is.
+	 * @param ctx the hub
+	 * @param argument the lowered argument
+	 * @return what the call hands Java
+	 */
+	static LispVal hostArgument(ClojureLowering ctx, LispVal argument) {
+		return hostArgument(ctx, argument, argument);
+	}
+
+	/**
+	 * {@link #hostArgument(ClojureLowering, LispVal)} over the argument as it crosses
+	 * ({@code ClojureIoLowering.crossing}: behind the io family's view of a
+	 * clojure.java.io value), which a plain argument -- no io value either -- does not
+	 * need.
+	 * @param ctx the hub
+	 * @param argument the lowered argument
+	 * @param crossed the argument behind the io view, or the argument itself
+	 * @return what the call hands Java
+	 */
+	static LispVal hostArgument(ClojureLowering ctx, LispVal argument, LispVal crossed) {
+		if (!ctx.hostTarget) {
+			return crossed;
+		}
+		if (isLiteral(argument) || isPlainForm(argument)
+				|| argument instanceof LispSymbol local && isPlainLocal(ctx, local)) {
+			return argument;
+		}
+		return ClojureLowerUtil.list(new LispSymbol(HOST_VALUE), crossed);
+	}
+
+	/**
+	 * Whether a lowered form's value is no Clojure value Java lacks, and has a kind a
+	 * {@code java:} site resolves on: a literal, a fn ({@code lambda} or
+	 * {@code function}), a {@code java:new} or a {@code proxy} construction.
+	 */
+	static boolean isPlainForm(LispVal form) {
+		if (isLiteral(form) || constructedClass(form) != null) {
+			return true;
+		}
+		return form instanceof LispCons cell && (ClojureLowerUtil.isSymbolNamed(cell.car(), "LAMBDA")
+				|| ClojureLowerUtil.isSymbolNamed(cell.car(), "FUNCTION"));
+	}
+
+	/**
+	 * Whether a {@code let}-bound local holds a value {@link #isPlainForm} -- recorded
+	 * where it was bound ({@code ClojureBindingLowering.noteHostClass}) and visible here.
+	 */
+	static boolean isPlainLocal(ClojureLowering ctx, LispSymbol ref) {
+		ClojureLowering.HostClass held = ctx.hostClasses.get(ref.name());
+		if (held == null) {
+			return false;
+		}
+		for (int i = held.depth(); i < ctx.scopes.size(); i++) {
+			if (ctx.scopes.get(i).containsKey(held.name())) {
 				return false;
 			}
 		}
 		return true;
+	}
+
+	/** The marker every host call and implementation the lowering builds ends in. */
+	static final LispSymbol JAVA_FALSE_MARKER = new LispSymbol(LispNames.JAVA_FALSE_MARKER);
+
+	// Whether a lowered form is the false object's variable: what a false literal lowers
+	// to.
+	private static boolean isFalseValue(LispVal form) {
+		return form instanceof LispSymbol symbol && ClojureLowering.FALSE_VARIABLE.equals(symbol.name());
+	}
+
+	// Whether every lowered argument is a literal no fn can be: a string, number,
+	// character, nil, true, false or a keyword.
+	private static boolean allLiteral(List<LispVal> arguments) {
+		for (LispVal argument : arguments) {
+			if (!isLiteral(argument) && !isFalseValue(argument)) {
+				return false;
+			}
+		}
+		return true;
+	}
+
+	private static boolean isLiteral(LispVal argument) {
+		return argument instanceof LispString || argument instanceof LispInteger || argument instanceof LispDouble
+				|| argument instanceof LispChar || argument instanceof LispNil || argument instanceof LispTrue
+				|| argument instanceof LispSymbol symbol && symbol.isKeyword();
+	}
+
+	/**
+	 * A {@code java:field} read over its two parts, ended in {@code :java-false}: a false
+	 * field is the false object ({@code Boolean/FALSE} is the oracle's {@code false}).
+	 * @param target the class name literal or the object form
+	 * @param field the field name
+	 * @return the read
+	 */
+	static LispVal fieldCall(LispVal target, String field) {
+		return ClojureLowerUtil.cons(JAVA_FIELD, List.of(target, LispString.literal(field), JAVA_FALSE_MARKER));
 	}
 
 	/**
@@ -107,6 +228,9 @@ final class ClojureInteropLowering {
 
 	/** A read of {@code *in*} as a value. */
 	static final String STANDARD_INPUT_READ = "RONTOLISP::%CLOJURE-IN";
+
+	/** A call of {@code clojure.java.io/reader}, the built-in namespace's var. */
+	static final String JIO_READER = ClojureLowering.varSym(ClojureLowering.varKey("clojure.java.io", "reader")).name();
 
 	/**
 	 * The zero-argument {@code Throwable} methods an exception condition answers
@@ -330,11 +454,39 @@ final class ClojureInteropLowering {
 			if (exception != null) {
 				return exception;
 			}
+			LispVal own = clojureLangConstruction(cls, lowered);
+			if (own != null) {
+				return own;
+			}
+			LispVal io = ClojureIoLowering.construction(cls, lowered);
+			if (io != null) {
+				return io;
+			}
 		}
 		List<LispVal> args = new ArrayList<>();
 		args.add(LispString.literal(designator(cls, types)));
 		args.addAll(lowered);
-		return hostCall(JAVA_NEW, args, 1);
+		return hostCall(ctx, JAVA_NEW, args, 1);
+	}
+
+	/**
+	 * A construction of a {@code clojure.lang} class a collection type's body builds,
+	 * which no backend here has as a host class, over already-lowered arguments: a
+	 * {@code MapEntry} of a key and a value is the two-member vector a map entry is here,
+	 * a {@code SeqIterator} over a seq the library's iterator over it
+	 * ({@link ClojureInterfaces#SEQ_ITERATOR}). Null for any other class or count.
+	 */
+	static @Nullable LispVal clojureLangConstruction(String cls, List<LispVal> args) {
+		if (cls.equals("clojure.lang.MapEntry") && args.size() == 2) {
+			return ClojureLowerUtil.list(ClojureLowerUtil.sym("vector"), args.get(0), args.get(1));
+		}
+		if (cls.equals("clojure.lang.SeqIterator") && args.size() == 1) {
+			return ClojureLowerUtil.list(new LispSymbol(ClojureInterfaces.SEQ_ITERATOR), args.get(0));
+		}
+		if (cls.equals("clojure.lang.Cons") && args.size() == 2) {
+			return ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-CONS"), args.get(0), args.get(1));
+		}
+		return null;
 	}
 
 	/**
@@ -585,10 +737,9 @@ final class ClojureInteropLowering {
 
 	/**
 	 * Reads the host class once: whether {@code member} is a public static field, the
-	 * sorted distinct fixed arities of its public static non-variadic methods, the subset
-	 * whose overloads all answer a boolean, and whether a variadic one exists. An
-	 * unloadable class answers all absent, so the call sites keep their old shape and the
-	 * run-time error names the class.
+	 * sorted distinct fixed arities of its public static non-variadic methods, and
+	 * whether a variadic one exists. An unloadable class answers all absent, so the call
+	 * sites keep their old shape and the run-time error names the class.
 	 */
 	static ClojureLowering.StaticMember staticMember(String className, String member) {
 		try {
@@ -601,7 +752,6 @@ final class ClojureInteropLowering {
 				// no field of that name: the methods decide below
 			}
 			Set<Integer> arities = new HashSet<>();
-			Map<Integer, Boolean> booleanByArity = new HashMap<>();
 			boolean variadic = false;
 			for (java.lang.reflect.Method method : found.getMethods()) {
 				if (!method.getName().equals(member) || !java.lang.reflect.Modifier.isStatic(method.getModifiers())
@@ -612,29 +762,21 @@ final class ClojureInteropLowering {
 					variadic = true;
 				}
 				else {
-					int fixed = method.getParameterCount();
-					arities.add(fixed);
-					booleanByArity.merge(fixed, method.getReturnType() == Boolean.TYPE, (a, b) -> a && b);
+					arities.add(method.getParameterCount());
 				}
 			}
 			List<Integer> sorted = new ArrayList<>(arities);
 			sorted.sort(Integer::compareTo);
-			Set<Integer> booleanArities = new HashSet<>();
-			for (Map.Entry<Integer, Boolean> entry : booleanByArity.entrySet()) {
-				if (entry.getValue()) {
-					booleanArities.add(entry.getKey());
-				}
-			}
-			return new ClojureLowering.StaticMember(field, sorted, booleanArities, variadic);
+			return new ClojureLowering.StaticMember(field, sorted, variadic);
 		}
 		catch (ReflectiveOperationException | LinkageError | SecurityException _) {
-			return new ClojureLowering.StaticMember(false, List.of(), Set.of(), false);
+			return new ClojureLowering.StaticMember(false, List.of(), false);
 		}
 	}
 
 	/**
-	 * A static call through {@code java:static}: a boolean answer is {@code T}-or-false
-	 * when every overload at that arity answers a boolean, like every predicate value.
+	 * A static call through {@code java:static}: a host {@code false} is the false object
+	 * ({@link #hostCall}), like every predicate value.
 	 */
 	static LispVal staticCall(ClojureLowering ctx, String cls, String member, List<LispVal> args) {
 		return staticCall(ctx, cls, member, member, args);
@@ -658,15 +800,19 @@ final class ClojureInteropLowering {
 			return ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-CALL"), args.get(0),
 					ClojureSeqLowering.seqAllForm(ctx, args.get(1)));
 		}
+		if (cls.equals("clojure.lang.MapEntry") && member.equals("create") && args.size() == 2) {
+			// a map entry is the two-member vector here
+			return ClojureLowerUtil.list(ClojureLowerUtil.sym("vector"), args.get(0), args.get(1));
+		}
+		if (cls.equals("clojure.lang.RT") && member.equals("iter") && args.size() == 1) {
+			// an Iterable's own iterator, else the iterator over the seq
+			return ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-ITER"), args.get(0));
+		}
 		List<LispVal> call = new ArrayList<>();
 		call.add(LispString.literal(cls));
 		call.add(LispString.literal(designator));
 		call.addAll(args);
-		LispVal run = hostCall(JAVA_STATIC, call, 2);
-		if (staticMember(cls, member).booleanArities().contains(args.size())) {
-			return ctx.booleanAnswer(run);
-		}
-		return run;
+		return hostCall(ctx, JAVA_STATIC, call, 2);
 	}
 
 	/**
@@ -674,19 +820,14 @@ final class ClojureInteropLowering {
 	 * zero-argument static method when the host class has one (a static call through
 	 * {@code java:static}), else the static field read through {@code java:field} (whose
 	 * run-time error names an unknown member or class, like before). The method wins a
-	 * field of the same name, like the oracle's unified resolution; a boolean answer is
-	 * {@code T}-or-false, like every predicate value.
+	 * field of the same name, like the oracle's unified resolution; a host {@code false}
+	 * is the false object, like every predicate value.
 	 */
 	static LispVal staticNoArg(ClojureLowering ctx, String cls, String member) {
-		List<LispVal> args = new ArrayList<>();
-		args.add(LispString.literal(cls));
-		args.add(LispString.literal(member));
-		ClojureLowering.StaticMember seen = staticMember(cls, member);
-		if (seen.arities().contains(0)) {
-			LispVal call = ClojureLowerUtil.cons(JAVA_STATIC, args);
-			return seen.booleanArities().contains(0) ? ctx.booleanAnswer(call) : call;
+		if (staticMember(cls, member).arities().contains(0)) {
+			return hostCall(ctx, JAVA_STATIC, List.of(LispString.literal(cls), LispString.literal(member)), 2);
 		}
-		return ClojureLowerUtil.cons(JAVA_FIELD, args);
+		return fieldCall(LispString.literal(cls), member);
 	}
 
 	/**
@@ -740,7 +881,7 @@ final class ClojureInteropLowering {
 		}
 		ClojureLowering.StaticMember seen = staticMember(cls, member);
 		if (seen.field()) {
-			return ClojureLowerUtil.cons(JAVA_FIELD, List.of(LispString.literal(cls), LispString.literal(member)));
+			return fieldCall(LispString.literal(cls), member);
 		}
 		if (!seen.arities().isEmpty()) {
 			return arityLambda(ctx, seen.arities(), name, args -> staticCall(ctx, cls, member, args));
@@ -748,7 +889,7 @@ final class ClojureInteropLowering {
 		if (seen.variadic()) {
 			throw new LispReadException(name + " is variadic and has no value form");
 		}
-		return ClojureLowerUtil.cons(JAVA_FIELD, List.of(LispString.literal(cls), LispString.literal(member)));
+		return fieldCall(LispString.literal(cls), member);
 	}
 
 	/**
@@ -830,11 +971,19 @@ final class ClojureInteropLowering {
 			if (exception != null) {
 				return exception;
 			}
+			LispVal own = clojureLangConstruction(cls, args);
+			if (own != null) {
+				return own;
+			}
+			LispVal io = ClojureIoLowering.construction(cls, args);
+			if (io != null) {
+				return io;
+			}
 		}
 		List<LispVal> call = new ArrayList<>();
 		call.add(LispString.literal(designator(cls, types)));
 		call.addAll(args);
-		return hostCall(JAVA_NEW, call, 1);
+		return hostCall(ctx, JAVA_NEW, call, 1);
 	}
 
 	/**
@@ -969,6 +1118,15 @@ final class ClojureInteropLowering {
 				: ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
 						ClojureLowerUtil.list(ClojureLowerUtil.sym("streamp"), source), source,
 						ClojureLowerUtil.cons(JAVA_NEW, host));
+		if (cls.equals("java.io.InputStreamReader") && !isStreamForm(reader)) {
+			// a byte stream clojure.java.io made, decoded in the charset given: an arm a
+			// program making none sheds
+			body = ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
+					ClojureLowerUtil.list(new LispSymbol(ClojureIoLowering.IO_P), source),
+					ClojureLowerUtil.list(new LispSymbol(ClojureIoLowering.DECODING_READER), source,
+							host.size() == 3 ? host.get(2) : ClojureLowering.NIL_CONST),
+					body);
+		}
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let*"), ClojureLowerUtil.list(bindings), body);
 	}
 
@@ -985,7 +1143,8 @@ final class ClojureInteropLowering {
 		}
 		if (ClojureLowerUtil.isSymbolNamed(items.get(0), ClojureNamespaceLowering.READER)
 				|| ClojureLowerUtil.isSymbolNamed(items.get(0), STRING_READER)
-				|| ClojureLowerUtil.isSymbolNamed(items.get(0), STANDARD_INPUT_READ)) {
+				|| ClojureLowerUtil.isSymbolNamed(items.get(0), STANDARD_INPUT_READ)
+				|| ClojureLowerUtil.isSymbolNamed(items.get(0), JIO_READER)) {
 			return true;
 		}
 		return items.size() == 3 && ClojureLowerUtil.isSymbolNamed(items.get(0), "LET*") && isStreamForm(items.get(2));
@@ -1100,7 +1259,7 @@ final class ClojureInteropLowering {
 						ClojureLowerUtil.list(miss,
 								ClojureLowerUtil.list(ClojureLowerUtil.sym("list"), ClojureLowering.NIL_CONST)))),
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), ClojureProtocolLowering.isTypedForm(one), read,
-						ClojureLowerUtil.cons(JAVA_FIELD, List.of(one, LispString.literal(field)))));
+						fieldCall(one, field)));
 	}
 
 	/**
@@ -1214,6 +1373,8 @@ final class ClojureInteropLowering {
 							ClojureLowerUtil.list(rest, ClojureLowerUtil.list(ClojureLowerUtil.sym("cdr"), all)))),
 							dispatch));
 		javaProxy.add(callable);
+		// the body is handed Java's false as the false object
+		javaProxy.add(JAVA_FALSE_MARKER);
 		return ClojureLowerUtil.cons(JAVA_PROXY, javaProxy);
 	}
 
@@ -1288,7 +1449,7 @@ final class ClojureInteropLowering {
 		}
 		List<LispVal> ctorArgs = new ArrayList<>();
 		for (LispVal arg : argv.subList(1, argv.size())) {
-			ctorArgs.add(ctx.lower(arg));
+			ctorArgs.add(hostArgument(ctx, ctx.lower(arg)));
 		}
 		List<String> methodNames = new ArrayList<>();
 		for (int i = 3; i < items.size(); i++) {
@@ -1359,6 +1520,8 @@ final class ClojureInteropLowering {
 			// a fn constructor argument implements its interface by its arguments
 			javaSubclass.add(new LispSymbol(LispNames.JAVA_FUNCTIONAL_MARKER));
 		}
+		// the body is handed Java's false as the false object
+		javaSubclass.add(JAVA_FALSE_MARKER);
 		return ClojureLowerUtil.cons(JAVA_SUBCLASS, javaSubclass);
 	}
 
@@ -1389,7 +1552,7 @@ final class ClojureInteropLowering {
 		for (LispVal arg : items.subList(2, items.size())) {
 			args.add(ctx.lower(arg));
 		}
-		return hostCall(JAVA_CALL, args, 2);
+		return hostCall(ctx, JAVA_CALL, args, 2);
 	}
 
 	/**
@@ -1410,12 +1573,10 @@ final class ClojureInteropLowering {
 	/**
 	 * An instance call over already-lowered forms: the receiver runs once, behind a
 	 * temporary; a string receiver answers the mapped core operation, anything else goes
-	 * to {@code java:call} directly. When the receiver's class is known -- a construction
-	 * literal, a {@code let}/{@code if-let}/{@code when-let} local bound to one, or a
-	 * {@code ..} step's declared return -- and every overload at that arity answers a
-	 * primitive boolean, the call answers {@code T}-or-false, like every predicate value
-	 * (the shared {@code java:} unmarshal still maps a host false to nil underneath); any
-	 * other receiver keeps the unmarshal.
+	 * to {@code java:call} directly, whose host {@code false} is the false object
+	 * ({@link #hostCall}). The receiver's class, when known -- a construction literal, a
+	 * {@code let}/{@code if-let}/{@code when-let} local bound to one, or a {@code ..}
+	 * step's declared return -- decides the string and stream rules.
 	 */
 	static LispVal instanceCallLowered(ClojureLowering ctx, LispVal receiver, String method, List<LispVal> args) {
 		return instanceCallLoweredWithClass(ctx, receiver, null, method, args);
@@ -1443,7 +1604,7 @@ final class ClojureInteropLowering {
 		direct.add(recv);
 		direct.add(LispString.literal(designator));
 		direct.addAll(args);
-		LispVal hostCall = hostCall(JAVA_CALL, direct, 2);
+		LispVal hostCall = hostCall(ctx, JAVA_CALL, direct, 2);
 		LispVal call = hostCall;
 		String cls = knownClass;
 		if (cls == null) {
@@ -1465,9 +1626,6 @@ final class ClojureInteropLowering {
 			// the host method
 			return ClojureLowerUtil.list(new LispSymbol(STACK_TRACE_METHODS.get(method)), receiver);
 		}
-		if (cls != null && instanceBooleanAtArity(cls, method, args.size())) {
-			call = ctx.booleanAnswer(call);
-		}
 		if (method.equals("toString") && args.isEmpty()) {
 			call = valueToString(recv);
 		}
@@ -1483,62 +1641,24 @@ final class ClojureInteropLowering {
 					ClojureLowerUtil.list(new LispSymbol(ClojureStateLowering.ASYNC_STREAM_P), recv),
 					ClojureLowerUtil.list(new LispSymbol("RONTOLISP:STREAM-CLOSE"), recv), call);
 		}
-		if (cls == null) {
-			call = valuePredicate(ctx, recv, method, args.size(), hostCall, call);
-			if (!(method.equals("toString") && args.isEmpty())) {
-				// a collection, keyword, symbol or ratio has no host object: its common
-				// methods answer through the core verbs, any other is refused by name
-				call = ClojureValueMethodLowering.valueArm(ctx, method, recv, args, call);
-			}
+		if (cls == null && !(method.equals("toString") && args.isEmpty())) {
+			// a collection, keyword, symbol or ratio has no host object: its common
+			// methods answer through the core verbs, any other is refused by name
+			call = ClojureValueMethodLowering.valueArm(ctx, method, recv, args, call);
 		}
 		if (method.equals("getClass") && args.isEmpty()) {
 			call = ClojureDispatchLowering.getClassForm(ctx, recv, cls, call);
 		}
-		LispVal mapped = stringMethod(ctx, method, recv, args, cls != null || receiver instanceof LispString);
-		if (mapped == null && cls == null && instanceBooleanAtArity("java.lang.String", method, args.size())) {
-			// An unmapped String predicate (matches, regionMatches, ...) on a string
-			// answers T-or-false, as on a receiver known to be a String.
-			mapped = ctx.booleanAnswer(hostCall);
+		if (cls == null || ClojureIoLowering.CLASSES.containsKey(cls)) {
+			// a File, a URL, a URI, a byte stream or a stream clojure.java.io made
+			// answers its own methods: an arm a program making none sheds
+			call = ClojureIoLowering.methodArm(ctx, method, designator, recv, args, call);
 		}
+		LispVal mapped = stringMethod(ctx, method, recv, args, cls != null || receiver instanceof LispString);
 		LispVal out = mapped == null ? call : ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("stringp"), recv), mapped, call);
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
 				ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(recv, receiver))), out);
-	}
-
-	/**
-	 * A receiver of no known class that is a number, a character or a boolean is called
-	 * as its box, {@code Character} or {@code Boolean} (an integer as an {@code Integer}
-	 * or a {@code Long}, by size): where every overload of the method at this arity on
-	 * each of those classes answers a primitive boolean, such a receiver answers
-	 * {@code T}-or-false, like a known receiver ({@code (.isNaN 1.5)},
-	 * {@code (.equals 1 2)}); anything else keeps the call. A string takes its own arm
-	 * ({@link #stringMethod}).
-	 */
-	static LispVal valuePredicate(ClojureLowering ctx, LispSymbol recv, String method, int arity, LispVal hostCall,
-			LispVal call) {
-		List<LispVal> tests = new ArrayList<>();
-		if (instanceBooleanAtArity("java.lang.Integer", method, arity)
-				&& instanceBooleanAtArity("java.lang.Long", method, arity)) {
-			tests.add(ClojureLowerUtil.list(ClojureLowerUtil.sym("integerp"), recv));
-		}
-		if (instanceBooleanAtArity("java.lang.Double", method, arity)) {
-			tests.add(ClojureLowerUtil.list(ClojureLowerUtil.sym("floatp"), recv));
-		}
-		if (instanceBooleanAtArity("java.lang.Character", method, arity)) {
-			tests.add(ClojureLowerUtil.list(ClojureLowerUtil.sym("characterp"), recv));
-		}
-		if (instanceBooleanAtArity("java.lang.Boolean", method, arity)) {
-			// true and false are called as their Boolean: (.booleanValue false)
-			tests.add(ClojureLowerUtil.list(ClojureLowerUtil.sym("or"),
-					ClojureLowerUtil.list(ClojureLowerUtil.sym("eq"), recv, ClojureLowering.TRUE_CONST),
-					ClojureLowerUtil.list(ClojureLowerUtil.sym("eq"), recv, ctx.falseVariable)));
-		}
-		if (tests.isEmpty()) {
-			return call;
-		}
-		LispVal test = tests.size() == 1 ? tests.get(0) : ClojureLowerUtil.cons(ClojureLowerUtil.sym("or"), tests);
-		return ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), test, ctx.booleanAnswer(hostCall), call);
 	}
 
 	/**
@@ -1630,36 +1750,6 @@ final class ClojureInteropLowering {
 			}
 		}
 		return held.fqn();
-	}
-
-	/**
-	 * Whether every fixed-arity overload of {@code member} at {@code arity} on the host
-	 * class answers a primitive boolean: the instance-call half of the static
-	 * {@code T}-or-false rule ({@link #staticMember}). A {@code java:call} may reach a
-	 * static through an instance, so statics count too; a boxed answer never qualifies
-	 * (it may be null, which the oracle reads as nil, not false). An unloadable class
-	 * answers false, so the call keeps its old shape and the run-time error names the
-	 * class.
-	 */
-	static boolean instanceBooleanAtArity(String className, String member, int arity) {
-		try {
-			Class<?> found = ClojureHostClasses.load(className);
-			boolean seen = false;
-			for (java.lang.reflect.Method method : found.getMethods()) {
-				if (!method.getName().equals(member) || method.isSynthetic() || method.isVarArgs()
-						|| method.getParameterCount() != arity) {
-					continue;
-				}
-				if (method.getReturnType() != Boolean.TYPE) {
-					return false;
-				}
-				seen = true;
-			}
-			return seen;
-		}
-		catch (ReflectiveOperationException | LinkageError | SecurityException _) {
-			return false;
-		}
 	}
 
 	/**
@@ -1782,15 +1872,50 @@ final class ClojureInteropLowering {
 	 */
 	static @Nullable LispVal streamMethod(ClojureLowering ctx, String method, LispSymbol recv, List<LispVal> args) {
 		if (method.equals("write") && args.size() == 1) {
-			// nil signals, like the oracle's NullPointerException out of Writer.write
+			// nil signals, like the oracle's NullPointerException out of Writer.write; an
+			// int is the character of that code, Writer.write(int)
 			LispSymbol value = ctx.freshTemp();
 			return ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
 					ClojureLowerUtil.list(ClojureLowerUtil.list(value, args.get(0))),
-					ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
-							ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), value),
-							ClojureRefusals.refusal(ClojureRefusals.NULL_POINTER,
-									LispString.literal("NullPointerException: write takes a value, not nil")),
-							ClojureLowerUtil.list(ClojureLowerUtil.sym("princ"), value, recv)));
+					ClojureLowerUtil.list(ClojureLowerUtil.sym("cond"),
+							ClojureLowerUtil.list(ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), value),
+									ClojureRefusals.refusal(ClojureRefusals.NULL_POINTER,
+											LispString.literal("NullPointerException: write takes a value, not nil"))),
+							ClojureLowerUtil.list(ClojureLowerUtil.list(ClojureLowerUtil.sym("integerp"), value),
+									ClojureLowerUtil.list(ClojureLowerUtil.sym("write-char"),
+											ClojureLowerUtil.list(ClojureLowerUtil.sym("code-char"),
+													ClojureLowerUtil.list(ClojureLowerUtil.sym("logand"), value,
+															new LispInteger(65535))),
+											recv),
+									ClojureLowering.NIL_CONST),
+							ClojureLowerUtil.list(ClojureLowering.TRUE_CONST,
+									ClojureLowerUtil.list(ClojureLowerUtil.sym("princ"), value, recv),
+									ClojureLowering.NIL_CONST)));
+		}
+		if (method.equals("write") && args.size() == 3) {
+			// Writer.write(String, off, len): the part of the string
+			return ClojureLowerUtil.list(ClojureLowerUtil.sym("progn"),
+					ClojureLowerUtil.list(ClojureLowerUtil.sym("write-string"),
+							ClojureLowerUtil.list(ClojureLowerUtil.sym("subseq"), args.get(0), args.get(1),
+									ClojureLowerUtil.list(ClojureLowerUtil.sym("+"), args.get(1), args.get(2))),
+							recv),
+					ClojureLowering.NIL_CONST);
+		}
+		if (method.equals("newLine") && args.isEmpty()) {
+			return ClojureLowerUtil.list(ClojureLowerUtil.sym("progn"),
+					ClojureLowerUtil.list(ClojureLowerUtil.sym("terpri"), recv), ClojureLowering.NIL_CONST);
+		}
+		if (method.equals("append") && args.size() == 1) {
+			// Writer.append: the characters written, the writer answered (nil is "null")
+			LispSymbol value = ctx.freshTemp();
+			return ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
+					ClojureLowerUtil.list(ClojureLowerUtil.list(value, args.get(0))),
+					ClojureLowerUtil.list(ClojureLowerUtil.sym("princ"),
+							ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
+									ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), value),
+									LispString.literal("null"), value),
+							recv),
+					recv);
 		}
 		if (method.equals("flush") && args.isEmpty()) {
 			return ClojureLowerUtil.list(ClojureLowerUtil.sym("finish-output"), recv);
@@ -1828,7 +1953,9 @@ final class ClojureInteropLowering {
 				args.isEmpty() ? ClojureLowerUtil.list(ClojureLowerUtil.sym("string-upcase"), recv) : null;
 			case "toLowerCase" ->
 				args.isEmpty() ? ClojureLowerUtil.list(ClojureLowerUtil.sym("string-downcase"), recv) : null;
-			case "trim", "strip" -> args.isEmpty()
+			case "trim" -> args.isEmpty() ? ClojureLowerUtil.list(ClojureLowerUtil.sym("string-trim"),
+					ClojureStringLowering.javaTrimBag(), recv) : null;
+			case "strip" -> args.isEmpty()
 					? ClojureLowerUtil.list(ClojureLowerUtil.sym("string-trim"), ClojureStringLowering.trimBag(), recv)
 					: null;
 			case "stripLeading" -> args.isEmpty() ? ClojureLowerUtil.list(ClojureLowerUtil.sym("string-left-trim"),

@@ -267,6 +267,31 @@ final class ClojureValueClasses {
 	}
 
 	/**
+	 * The keyword a value of the kind dispatches a protocol on, the {@code class} kind
+	 * its rows stand under; null for a kind with no such keyword: a record, deftype or
+	 * reify (its own tag), an instant (its class's keyword), a var, a pattern ...
+	 * @param kind the kind
+	 * @return the keyword's name, or null
+	 */
+	static @Nullable String dispatchKeyword(Kind kind) {
+		return switch (kind) {
+			case STRING -> "string";
+			case CHAR -> "char";
+			case BOOLEAN -> "boolean";
+			case LONG, DOUBLE, RATIO -> "number";
+			case KEYWORD -> "keyword";
+			case SYMBOL -> "symbol";
+			case VECTOR, MAP_ENTRY -> "vector";
+			case LIST, LAZY_SEQ -> "list";
+			case MAP, SORTED_MAP -> "map";
+			case SET, SORTED_SET -> "set";
+			case FUNCTION -> "function";
+			case ATOM -> "atom";
+			default -> null;
+		};
+	}
+
+	/**
 	 * The {@code clojure.lang} class a bare simple name spells when no import or
 	 * {@code java.lang} default claims it ({@code Keyword}, {@code IPersistentMap}), the
 	 * leniency the dispatch keywords have too; null when no kind names one.
@@ -412,6 +437,13 @@ final class ClojureValueClasses {
 			}
 		}
 		catch (ClassNotFoundException | LinkageError _) {
+			ClojureInterfaces.HostInterface subInterface = ClojureInterfaces.named(sub);
+			ClojureInterfaces.HostInterface supInterface = ClojureInterfaces.named(sup);
+			if (subInterface != null && supInterface != null) {
+				// two interfaces a body may implement: their super-interfaces, read off
+				// the oracle's jar
+				return ClojureInterfaces.closure(List.of(subInterface)).contains(supInterface);
+			}
 			List<Kind> subKinds = kindsOf(sub);
 			List<Kind> supKinds = kindsOf(sup);
 			return !subKinds.isEmpty() && supKinds.containsAll(subKinds) && !subKinds.containsAll(supKinds);

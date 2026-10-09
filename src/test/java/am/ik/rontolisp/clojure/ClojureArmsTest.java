@@ -266,6 +266,29 @@ class ClojureArmsTest {
 	}
 
 	@Test
+	void theIoFamilyIsMadeByClojureJavaIoAndFoldsTheArmsOfAProgramMakingNone() {
+		// only the namespace's kernels and the java.io constructions make a File, a URL
+		// or a byte stream: an instance call's arm, a java: argument's view, class's and
+		// instance?'s arms, and slurp's opening through the namespace go from a program
+		// making none
+		List<LispVal> forms = read("(let ((r x)) (if (rontolisp::%clojure-io-p r) (rontolisp::%clojure-io-m-close r)"
+				+ " (close r)))" + " (java:call o \"m\" (rontolisp::%clojure-io-host v))"
+				+ " (or (rontolisp::%clojure-io-instance-p v \"java.io.File\") (stringp v))"
+				+ " (cond ((rontolisp::%clojure-io-p c) (rontolisp::%clojure-io-class-key c)) (t :other))"
+				+ " (if (rontolisp::%clojure-io-openable-p s) (rontolisp::%clojure-io-slurp s nil) (open-path s))");
+		ClojureArms.Scan scan = ClojureArms.scan(forms, ClojureArms.Family.IO);
+		assertThat(scan.builds()).isFalse();
+		assertThat(scan.strips()).isTrue();
+		assertThat(ClojureArms.strip(forms, ClojureArms.Family.IO).stream().map(LispVal::print)).containsExactly(
+				"(LET ((R X)) (CLOSE R))", "(JAVA:CALL O \"m\" V)", "(STRINGP V)", "(COND (T :OTHER))",
+				"(OPEN-PATH S)");
+		for (String producer : List.of("(rontolisp::%clojure-io-file \"a\")", "(rontolisp::%clojure-io-file-2 p c)",
+				"(rontolisp::%clojure-io-open-input x)", "(rontolisp::%clojure-io-url-found \"file:/a\" \"t\")")) {
+			assertThat(ClojureArms.scan(read(producer), ClojureArms.Family.IO).builds()).as(producer).isTrue();
+		}
+	}
+
+	@Test
 	void theReaderValueFamilyFoldsThePredicatesAndTheReaderArmsOfAProgramReadingWithoutOptions() {
 		// only a read that may take {:read-cond :preserve} and the two constructors make
 		// a reader conditional or a tagged literal: the predicates are (progn x false)
@@ -473,6 +496,89 @@ class ClojureArmsTest {
 		// a reduce-interface row makes a reducible value too, whose verbs hold its arms
 		assertThat(ClojureArms
 			.scan(read("(rontolisp::%clojure-reduce-interface-row tag nil nil)"), ClojureArms.Family.REDUCIBLE)
+			.builds()).isTrue();
+	}
+
+	@Test
+	void aCollectionInterfaceFamilyIsMadeByTheStoreOfARowOfItsInterfaces() {
+		// each collection interface group folds its arms -- a cond clause, an if's test,
+		// an
+		// or's disjunct, a predicate's alias -- unless the program stores a row of it
+		List<InterfaceCase> cases = List.of(
+				new InterfaceCase(ClojureArms.Family.COLLECTION,
+						"(cond ((rontolisp::%clojure-icollection-p c) (k c)) (t (e c)))"
+								+ " (rontolisp::%clojure-is-coll-type x)",
+						List.of("(COND (T (E C)))", "(RONTOLISP::%CLOJURE-IS-COLL X)"),
+						"(rontolisp::%clojure-collection-row tag '(\"clojure.lang.IPersistentCollection\") (list))"),
+				new InterfaceCase(ClojureArms.Family.ASSOCIATIVE,
+						"(if (rontolisp::%clojure-iassociative-p m) (a m) (v m))", List.of("(V M)"),
+						"(rontolisp::%clojure-associative-row tag nil (list))"),
+				new InterfaceCase(ClojureArms.Family.PERSISTENT_MAP,
+						"(if (or (rontolisp::%clojure-imap-p m) (j m)) (k m) (s m)) (rontolisp::%clojure-is-map-type m)",
+						List.of("(IF (J M) (K M) (S M))", "(RONTOLISP::%CLOJURE-IS-MAP M)"),
+						"(rontolisp::%clojure-persistent-map-row tag nil (list))"),
+				new InterfaceCase(ClojureArms.Family.PERSISTENT_SET,
+						"(cond ((rontolisp::%clojure-iset-p s) (d s)) (t (e s))) (rontolisp::%clojure-is-set-type s)",
+						List.of("(COND (T (E S)))", "(RONTOLISP::%CLOJURE-IS-SET S)"),
+						"(rontolisp::%clojure-persistent-set-row tag nil (list))"),
+				new InterfaceCase(ClojureArms.Family.STACK, "(cond ((rontolisp::%clojure-istack-p s) (p s)) (t (e s)))",
+						List.of("(COND (T (E S)))"), "(rontolisp::%clojure-stack-row tag nil (list))"),
+				new InterfaceCase(ClojureArms.Family.PERSISTENT_VECTOR,
+						"(or (and (vectorp v) (not (stringp v))) (rontolisp::%clojure-ivector-p v))",
+						List.of("(AND (VECTORP V) (NOT (STRINGP V)))"),
+						"(rontolisp::%clojure-persistent-vector-row tag nil (list))"),
+				new InterfaceCase(ClojureArms.Family.ISEQ,
+						"(cond ((rontolisp::%clojure-iseq-p s) (w s)) (t (e s))) (rontolisp::%clojure-is-seq-type s)",
+						List.of("(COND (T (E S)))", "(RONTOLISP::%CLOJURE-IS-SEQ S)"),
+						"(rontolisp::%clojure-iseq-row tag nil (list))"),
+				new InterfaceCase(ClojureArms.Family.SEQUENTIAL,
+						"(rontolisp::%clojure-is-list-type s) (rontolisp::%clojure-is-sequential-type s)",
+						List.of("(RONTOLISP::%CLOJURE-IS-LIST S)", "(RONTOLISP::%CLOJURE-IS-SEQUENTIAL S)"),
+						"(rontolisp::%clojure-sequential-row tag nil (list))"),
+				new InterfaceCase(ClojureArms.Family.REVERSIBLE, "(rontolisp::%clojure-is-reversible-type v)",
+						List.of("(RONTOLISP::%CLOJURE-IS-REVERSIBLE V)"),
+						"(rontolisp::%clojure-reversible-row tag nil (list))"),
+				new InterfaceCase(ClojureArms.Family.PENDING,
+						"(cond ((rontolisp::%clojure-ipending-p x) (r x)) (t (e x)))", List.of("(COND (T (E X)))"),
+						"(rontolisp::%clojure-pending-row tag nil (list))"),
+				new InterfaceCase(ClojureArms.Family.SORTED_INTERFACE,
+						"(if (rontolisp::%clojure-isorted-p s) (w s) (v s))", List.of("(V S)"),
+						"(rontolisp::%clojure-sorted-row tag nil (list))"),
+				new InterfaceCase(ClojureArms.Family.COMPARABLE,
+						"(cond ((rontolisp::%clojure-icomparable-p a) (c a)) (t (e a)))", List.of("(COND (T (E A)))"),
+						"(rontolisp::%clojure-comparable-row tag nil (list))"),
+				new InterfaceCase(ClojureArms.Family.ITERABLE,
+						"(cond ((rontolisp::%clojure-iterable-p c) (i c)) (t (e c)))", List.of("(COND (T (E C)))"),
+						"(rontolisp::%clojure-iterable-row tag nil (list))"),
+				new InterfaceCase(ClojureArms.Family.ITERATOR,
+						"(cond ((rontolisp::%clojure-iterator-p it) (h it)) (t (e it)))", List.of("(COND (T (E IT)))"),
+						"(rontolisp::%clojure-iterator-row tag nil (list))"),
+				new InterfaceCase(ClojureArms.Family.JAVA_COLLECTION,
+						"(cond ((rontolisp::%clojure-jcollection-p c) (s c)) ((rontolisp::%clojure-jset-p c) (m c))"
+								+ " (t (e c)))",
+						List.of("(COND (T (E C)))"), "(rontolisp::%clojure-java-collection-row tag nil (list))"),
+				new InterfaceCase(ClojureArms.Family.JAVA_MAP,
+						"(cond ((rontolisp::%clojure-jmap-p c) (s c)) (t (e c)))", List.of("(COND (T (E C)))"),
+						"(rontolisp::%clojure-java-map-row tag nil (list))"),
+				new InterfaceCase(ClojureArms.Family.MARKER,
+						"(if (or (rontolisp::%clojure-hasheq-p x) (rontolisp::%clojure-serializable-p x)) t nil)",
+						List.of("NIL"), "(rontolisp::%clojure-marker-row tag nil (list))"));
+		for (InterfaceCase one : cases) {
+			assertThat(ClojureArms.scan(read(one.arms()), one.family()).strips()).as(one.family().name()).isTrue();
+			assertThat(ClojureArms.strip(read(one.arms()), one.family()).stream().map(LispVal::print))
+				.as(one.family().name())
+				.containsExactlyElementsOf(one.folded());
+			assertThat(ClojureArms.scan(read(one.arms() + one.store()), one.family()).builds()).as(one.family().name())
+				.isTrue();
+		}
+		// an Iterable seqs and reduces through its iterator, so its row makes the seqable
+		// and reducible families too, and a java.util.Map's the seqable one
+		for (ClojureArms.Family family : List.of(ClojureArms.Family.SEQABLE, ClojureArms.Family.REDUCIBLE)) {
+			assertThat(ClojureArms.scan(read("(rontolisp::%clojure-iterable-row tag nil nil)"), family).builds())
+				.as(family.name())
+				.isTrue();
+		}
+		assertThat(ClojureArms.scan(read("(rontolisp::%clojure-java-map-row tag nil nil)"), ClojureArms.Family.SEQABLE)
 			.builds()).isTrue();
 	}
 

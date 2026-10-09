@@ -31,6 +31,7 @@ import am.ik.rontolisp.ParseIntegerSyntaxFixture;
 import am.ik.rontolisp.RadixRangeFixture;
 import am.ik.rontolisp.ReadFeatureGuardFixture;
 import am.ik.rontolisp.ReadFromStringLambdaListFixture;
+import am.ik.rontolisp.runtime.MalformedUtf8FileDecodingTest;
 import am.ik.rontolisp.ReadFromStringMalformedFixture;
 import am.ik.rontolisp.ScaleFloatOperandsFixture;
 import am.ik.rontolisp.StreamOperandErrorsFixture;
@@ -14158,19 +14159,22 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
-	void fileWriteDateAnswersNilAndFilesystemWritesRunForReal() throws Exception {
-		// The remaining WASM divergence (.kb/read-load-streams.md): no timestamp call is
-		// imported, and "cannot be determined" IS Common Lisp's answer for
-		// file-write-date -- so it answers nil here while the interpreter and the JVM
-		// answer for real. file-length is REAL on all four since the fd_filestat_get
-		// import landed (fileLengthAnswersTheSizeOfARealFile below), and so are the
-		// three write-side operators since the path_create_directory /
-		// path_unlink_file / path_rename imports landed: the directory is
-		// created for real below, then a file in it is written, renamed, deleted and
-		// probed gone.
+	void fileWriteDateAndFilesystemWritesRunForReal() throws Exception {
+		// file-write-date is REAL here as on the interpreter and the JVM: the injected
+		// path_filestat_get (the adapter's over stat-at under --component) answers the
+		// modification time, so a file just written is dated between the first second
+		// of 2023 and now, and a missing one answers nil. file-length is REAL since the
+		// fd_filestat_get import landed (fileLengthAnswersTheSizeOfARealFile below),
+		// and so are the three write-side operators since the path_create_directory /
+		// path_unlink_file / path_rename imports landed: the directory is created for
+		// real below, then a file in it is written, renamed, deleted and probed gone,
+		// and the emptied directory itself is deleted through the injected
+		// path_remove_directory.
 		String code = """
 				(with-open-file (out "meta.txt" :direction :output) (write-line "hello" out))
-				(print (file-write-date "meta.txt"))
+				(let ((d (file-write-date (concatenate 'string "meta" ".txt"))))
+				  (print (and (integerp d) (> d 3881520000) (<= d (get-universal-time)))))
+				(print (file-write-date (concatenate 'string "missing" ".txt")))
 				(print (ensure-directories-exist "sub/dir/x.txt"))
 				(with-open-file (out "sub/dir/x.txt" :direction :output) (write-line "hello" out))
 				(print (probe-file "sub/dir/x.txt"))
@@ -14180,8 +14184,11 @@ class WasmLispCompilerIntegrationTest {
 				(print (delete-file "sub/dir/y.txt"))
 				(print (probe-file "sub/dir/y.txt"))
 				(print (ignore-errors (delete-file "sub/dir/y.txt")))
+				(print (delete-file (concatenate 'string "sub/dir" "/")))
+				(print (probe-file "sub/dir/"))
 				""";
 		String expected = """
+				T
 				NIL
 				"sub/dir/x.txt"
 				#P"sub/dir/x.txt"
@@ -14190,6 +14197,8 @@ class WasmLispCompilerIntegrationTest {
 				#P"sub/dir/y.txt"
 				T
 				NIL
+				NIL
+				T
 				NIL""";
 		assertThat(compileAndRunWithDir(code)).isEqualTo(expected);
 		assertThat(compileAndRunComponentWithDir(code)).isEqualTo(expected);
@@ -14227,13 +14236,11 @@ class WasmLispCompilerIntegrationTest {
 		// truename* over probe-file, directory* over the fd_readdir listing -- and so
 		// does the mutating side now: ensure-all-directories-exist over
 		// %make-directories, rename-file-overwriting-target over %rename-file and
-		// delete-file-if-exists over %delete-file, while safe-file-write-date answers
-		// nil where file-write-date does. with-current-directory inherits chdir's
-		// signal. One deliberate remainder: delete-empty-directory over a DIRECTORY
-		// still signals -- preview1's path_unlink_file cannot remove directories
-		// (that needs the path_remove_directory import, which is not wired),
-		// so the file-error below is the honest "could not remove it", caught here.
-		// The component twin runs the same program with the same expectation.
+		// delete-file-if-exists over %delete-file (and delete-empty-directory over
+		// the same primitive, which removes an empty directory through the injected
+		// path_remove_directory), while safe-file-write-date answers the date
+		// file-write-date does. with-current-directory inherits chdir's signal. The
+		// component twin runs the same program with the same expectation.
 		String code = """
 				(with-open-file (out "fsp-a.txt" :direction :output) (write-line "a" out))
 				(with-open-file (out "fsp-b.txt" :direction :output) (write-line "b" out))
@@ -14249,7 +14256,7 @@ class WasmLispCompilerIntegrationTest {
 				(print (uiop:truename* "fsp-missing.txt"))
 				(print (fsp-ours (uiop:directory* "./*.txt")))
 				(print (fsp-ours (uiop:directory-files ".")))
-				(print (uiop:safe-file-write-date "fsp-a.txt"))
+				(print (integerp (uiop:safe-file-write-date "fsp-a.txt")))
 				(print (uiop:parse-native-namestring "fsp-a.txt"))
 				(print (uiop:split-native-pathnames-string "fsp-a.txt:fsp-b.txt"))
 				(progn (setf (uiop:getenv "WASM_UIOP_FS_TEST") "fsp-a.txt")
@@ -14275,7 +14282,7 @@ class WasmLispCompilerIntegrationTest {
 				NIL
 				(#P"./fsp-a.txt" #P"./fsp-b.txt")
 				(#P"./fsp-a.txt" #P"./fsp-b.txt")
-				NIL
+				T
 				#P"fsp-a.txt"
 				(#P"fsp-a.txt" #P"fsp-b.txt")
 				#P"fsp-a.txt"
@@ -14287,7 +14294,7 @@ class WasmLispCompilerIntegrationTest {
 				NIL
 				T
 				NIL
-				NIL
+				T
 				:HERE
 				:SIGNALLED""";
 		assertThat(compileAndRunWithDir(code)).isEqualTo(expected);
@@ -16762,6 +16769,142 @@ class WasmLispCompilerIntegrationTest {
 		String expected = "8195\n(120 128512 #\\a 12354 #\\b #\\.)\n3\n4\n(\"xxx\" \".xxx.\")";
 		assertThat(compileAndRunWithDir(code)).isEqualTo(expected);
 		assertThat(compileAndRunWithDir(code, true, false)).isEqualTo(expected);
+		assertThat(compileAndRunWithDir(code, false, true)).isEqualTo(expected);
+	}
+
+	@Test
+	void fileCharacterStreamsDecodeMalformedUtf8AsTheJvmDoes() throws Exception {
+		// Every character read off a WASI fd goes through WasmUtf8StreamDecoder, whose
+		// rule
+		// is Java's decoder -- what the interpreter and the JVM read the same file as:
+		// each
+		// maximal ill-formed prefix is one U+FFFD, and the byte that interrupted it
+		// starts
+		// the next character (pushed back into the fd's byte pushback, which
+		// file-position counts as unread). Before, a lead byte swallowed whatever
+		// followed it: (65 233 66 255) read as (65 37055).
+		String code = """
+				(with-open-file (out "utf8bad.dat" :direction :output :if-exists :supersede
+				                     :element-type '(unsigned-byte 8))
+				  (dolist (b '(65 233 66 227 129 65 195 169 237 160 128 240 159 152 128
+				               240 159 152 10 192 175 245 224 128 244 144 128 128 226 130))
+				    (write-byte b out)))
+				(with-open-file (in "utf8bad.dat")
+				  (print (map 'list #'char-code (read-line in)))
+				  (print (map 'list #'char-code (read-line in))))
+				(with-open-file (in "utf8bad.dat")
+				  (print (loop for c = (read-char in nil) while c collect (char-code c))))
+				(with-open-file (in "utf8bad.dat")
+				  (let ((buf (make-string 9 :initial-element #\\.)))
+				    (print (read-sequence buf in))
+				    (print (map 'list #'char-code buf))
+				    (print (read-char in))
+				    (print (length (read-line in)))))
+				(with-open-file (in "utf8bad.dat")
+				  (let ((buf (make-string 40 :initial-element #\\.)))
+				    (print (read-sequence buf in))
+				    (print (char-code (char buf 19)))))
+				(with-open-file (in "utf8bad.dat")
+				  (read-char in)
+				  (let* ((p (peek-char nil in)) (a (read-char in)) (b (read-char in)))
+				    (print (list (char-code p) (char-code a) b))))
+				(with-open-file (in "utf8bad.dat")
+				  (read-char in)
+				  (peek-char nil in)
+				  (print (map 'list #'char-code (read-line in))))
+				(with-open-file (in "utf8bad.dat")
+				  (read-char in)
+				  (read-char in)
+				  (print (file-position in))
+				  (print (char-code (peek-char nil in)))
+				  (print (file-position in)))
+				(with-open-file (s "utf8bad.dat" :direction :io :if-exists :overwrite)
+				  (print (map 'list #'char-code (read-line s)))
+				  (print (char-code (peek-char nil s)))
+				  (print (loop for c = (read-char s nil) while c collect (char-code c))))
+				""";
+		String bad10 = "65533 65533 65533 65533 65533 65533 65533 65533 65533 65533";
+		String expected = String.join("\n", "(65 65533 66 65533 65 233 65533 128512 65533)", "(" + bad10 + ")",
+				"(65 65533 66 65533 65 233 65533 128512 65533 10 " + bad10 + ")", "9",
+				"(65 65533 66 65533 65 233 65533 128512 65533)", "#\\Newline", "10", "20", "65533",
+				"(65533 65533 #\\B)", "(65533 66 65533 65 233 65533 128512 65533)", "2", "66", "2",
+				"(65 65533 66 65533 65 233 65533 128512 65533)", "65533", "(" + bad10 + ")");
+		assertThat(compileAndRunWithDir(code)).isEqualTo(expected);
+		assertThat(compileAndRunWithDir(code, true, false)).isEqualTo(expected);
+		assertThat(compileAndRunWithDir(code, false, true)).isEqualTo(expected);
+	}
+
+	@Test
+	void everyBoundaryByteTripleDecodesAsJavasDecoderOnEveryCharacterRead() throws Exception {
+		// The differential pin of WasmUtf8StreamDecoder: every triple of the boundary
+		// bytes
+		// of each UTF-8 range, run together (65,856 bytes, so read-sequence crosses its
+		// 64 KiB block), read through read-char, read-line, read-sequence into a 7- and a
+		// 4096-character buffer (a sequence completed past the block end, an interrupting
+		// byte left in the pushback) and peek-char before every read-char -- each must
+		// answer the code points Java's decoder reads the same bytes as.
+		StringBuilder alphabet = new StringBuilder();
+		for (int b : MalformedUtf8FileDecodingTest.BOUNDARY_BYTES) {
+			alphabet.append(' ').append(b);
+		}
+		String code = """
+				(defparameter *alpha* (coerce '(%s) 'vector))
+				(with-open-file (out "utf8corpus.dat" :direction :output :if-exists :supersede
+				                     :element-type '(unsigned-byte 8))
+				  (let ((n (length *alpha*)))
+				    (dotimes (i n)
+				      (dotimes (j n)
+				        (dotimes (k n)
+				          (write-byte (aref *alpha* i) out)
+				          (write-byte (aref *alpha* j) out)
+				          (write-byte (aref *alpha* k) out))))))
+				(defun mix (h cp) (mod (+ (* h 31) cp) 1000000007))
+				(with-open-file (in "utf8corpus.dat")
+				  (let ((h 0) (n 0))
+				    (loop for c = (read-char in nil) while c
+				          do (setf h (mix h (char-code c))) (incf n))
+				    (print (list n h))))
+				(with-open-file (in "utf8corpus.dat")
+				  (let ((h 0) (n 0))
+				    (loop for line = (read-line in nil) while line
+				          do (loop for c across line do (setf h (mix h (char-code c))) (incf n))
+				             (setf h (mix h 10)))
+				    (print (list n h))))
+				(dolist (size '(7 4096))
+				  (with-open-file (in "utf8corpus.dat")
+				    (let ((buf (make-string size)) (h 0) (n 0))
+				      (loop for got = (read-sequence buf in) while (> got 0)
+				            do (dotimes (i got) (setf h (mix h (char-code (char buf i)))))
+				               (incf n got))
+				      (print (list n h)))))
+				(with-open-file (in "utf8corpus.dat")
+				  (let ((h 0) (n 0) (same t))
+				    (loop for p = (peek-char nil in nil) while p
+				          do (let ((c (read-char in)))
+				               (unless (char= p c) (setf same nil))
+				               (setf h (mix h (char-code c))) (incf n)))
+				    (print (list n h same))))
+				""".formatted(alphabet.toString().trim());
+		List<Integer> decoded = MalformedUtf8FileDecodingTest.javaDecode(MalformedUtf8FileDecodingTest.tripleCorpus());
+		long all = 0;
+		long lines = 0;
+		int chars = 0;
+		for (int cp : decoded) {
+			all = (all * 31 + cp) % 1000000007L;
+			if (cp == '\n') {
+				lines = (lines * 31 + 10) % 1000000007L;
+			}
+			else {
+				lines = (lines * 31 + cp) % 1000000007L;
+				chars++;
+			}
+		}
+		// the file does not end on a newline, so its last line is hashed with one too
+		lines = (lines * 31 + 10) % 1000000007L;
+		String whole = "(" + decoded.size() + " " + all + ")";
+		String expected = String.join("\n", whole, "(" + chars + " " + lines + ")", whole, whole,
+				"(" + decoded.size() + " " + all + " T)");
+		assertThat(compileAndRunWithDir(code)).isEqualTo(expected);
 		assertThat(compileAndRunWithDir(code, false, true)).isEqualTo(expected);
 	}
 

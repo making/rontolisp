@@ -39,6 +39,7 @@ The package is not part of Common Lisp, so its functions are referenced with the
 | `java:proxy` | Adapt a callable to one or more interfaces: `(java:proxy "iface"... callable)` |
 | `java:subclass` | Extend a class with a callable: `(java:subclass "super" '("iface"...) '("method"...) args... callable)` |
 | `java:reify` | Implement an interface one method at a time: `(java:reify "iface" "method" function ...)` |
+| `java:handle` | Stand for a Lisp value Java has no value of: `(java:handle value "text")` |
 
 A constructed or returned object prints opaquely as `#<java <class-name>>` and
 can be passed back into `java:call`/`java:field`:
@@ -78,12 +79,13 @@ Arguments and results are converted between rontolisp and Java automatically:
 | float | `double`/`float` (and boxes) | `double`/`float` → float |
 | string | `String`, or `char` if length 1 | `String` → string |
 | character | `char`/`Character` | `Character` → character |
-| `t` / `nil` | `boolean` (`nil` also → any `null` reference) | `boolean` → `t`/`nil` |
-| the symbol named `false` | `boolean` false, `Boolean.FALSE` for any reference | — |
+| `t` / `nil` | `boolean` (`nil` also → any `null` reference) | `boolean` → `t`/`nil` (after `:java-false`, `t`/`\|false\|`) |
+| the symbol named `false` | `boolean` false, `Boolean.FALSE` for any reference | after `:java-false`, Java's false |
 | a `java` object | the wrapped host object | any other object → a `java` object |
 | a function/lambda | a `java:proxy` over the matching interface, or after `:functional` an implementation of its abstract methods (an argument only) | — |
 | a proper list / a vector (specialized too) | `T[]` (element-wise, incl. primitives), or `List`/`Collection`/`Iterable` | any Java array → a list |
 | a hash table | a fresh `java.util.LinkedHashMap` (`Map`, `HashMap`, `Object`, ...) | — |
+| a `java:handle` | an object Java sees as its text | the value it stands for |
 
 A Java `null` (and a `void` method) comes back as `nil`. A proper list — or a
 rank-1 array made with `make-array`, a specialized one included (`double-float`,
@@ -143,7 +145,55 @@ first stored):
 ```
 
 Any other symbol, ratios, dotted (improper) lists and multidimensional (rank-2+) arrays
-are **not** bridged.
+are **not** bridged; a [`java:handle`](#handles-javahandle) stands for one.
+
+### Java's false back: `:java-false`
+
+Java's false comes back as `nil`, Common Lisp's only false. A `java:new`, `java:call`,
+`java:static` or `java:field` ending in `:java-false` answers it as `|false|` instead -- a
+`boolean` result, a `Boolean.FALSE`, an array's elements. The marker goes after the
+arguments, before or after `:functional`:
+
+```lisp
+(let ((l (java:new "java.util.ArrayList")))
+  (java:call l "add" '|false|)
+  (list (java:call l "get" 0) (java:call l "get" 0 :java-false)))   ; => (NIL |false|)
+```
+
+A `java:proxy`, `java:reify` or `java:subclass` ending in it hands its functions Java's
+false as `|false|`, as does a function passed where an interface is expected at a call
+ending in it. A function passed where a `java.util.Comparator` is expected, at a call ending
+in both markers, answers `compare` as Clojure's `AFunction.compare` reads a function: `t` is
+-1, `|false|` is 1 when the function answers true for the two arguments swapped and 0
+otherwise, a float or ratio is truncated, an integer is its low 32 bits:
+
+```lisp
+(let ((l (java:new "java.util.ArrayList")))
+  (dolist (x (list 3 1 2)) (java:call l "add" x))
+  (java:call l "sort" (lambda (a b) (if (< a b) t '|false|)) :functional :java-false)
+  (java:call l "toString"))   ; => "[1, 2, 3]"
+```
+
+### Handles: java:handle
+
+`(java:handle value "text")` makes a Java object that stands for a Lisp value Java has no
+value of. Java sees the text as its `toString`, and two handles of one text are `equals`. A
+handle hashes as its text and orders by it, or, as `(java:handle value "text" hash
+"order")`, hashes as the integer's low 32 bits and orders by the order text: a handle keys a
+`HashMap` and sorts in a `TreeSet` as the value would in its own language. Wherever Java
+hands a handle back -- a result, an array's element, a callback's argument -- `java:` answers
+the value:
+
+```lisp
+(let ((m (java:new "java.util.HashMap")))
+  (java:call m "put" (java:handle 'apple "apple") 1)
+  (list (java:call m "toString")
+        (java:call m "get" (java:handle nil "apple"))
+        (java:call (java:call m "keySet") "toArray")))   ; => ("{apple=1}" 1 (APPLE))
+```
+
+The Clojure front end hands Java a keyword or a symbol this way, hashed and ordered as
+Clojure's `Keyword` and `Symbol` are.
 
 A `java` object is `eq` and `eql` only to itself: the same object answered by two
 calls is `eq`, while two objects that are `equals` are not. `equal` and `equalp`
@@ -182,6 +232,17 @@ When no integer overload exists the integer is converted to the available type:
 
 ```lisp
 (java:static "java.lang.Math" "sqrt" 16)   ; => 4.0
+```
+
+A function costs less for a functional interface (one abstract method) than for another
+interface, so `TreeSet(Comparator)` wins over `TreeSet(Collection)`, as a Java lambda's
+target does:
+
+```lisp
+(let ((s (java:new "java.util.TreeSet" (lambda (a b) (- b a)) :functional)))
+  (java:call s "add" 1)
+  (java:call s "add" 2)
+  (java:call s "toString"))   ; => "[2, 1]"
 ```
 
 ## Resolving calls before they run
@@ -682,7 +743,7 @@ shape the program uses, or declare the types so the calls resolve.
   the GraalVM native binary, whose image carries no reflection metadata for the
   interop classes (the native binary can still *compile* a `java:` program to a
   `.class`).
-- In a compiled class the six functions work in call position only: they have
+- In a compiled class the `java:` functions work in call position only: they have
   no first-class value, so `#'java:call` or `(funcall 'java:new ...)` is a
   compile error (wrap them in your own `defun` instead), and the embedded
   `eval` runtime does not know them either. A compiled program that uses
@@ -691,7 +752,7 @@ shape the program uses, or declare the types so the calls resolve.
   built with.
 - Symbols other than `|false|`, dotted (improper) lists and multidimensional
   (rank-2+) arrays are not marshalled — pass them as Java collections you build
-  with `java:new`/`java:call` instead.
+  with `java:new`/`java:call`, or as a `java:handle`, instead.
 - A returned `java.util.List` (unlike a Java array) stays an opaque `java`
   object: it keeps its identity and mutability, so read it with
   `java:call` (`"get"`, `"size"`, ...) rather than list functions.

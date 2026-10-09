@@ -30,6 +30,7 @@ has them.
 | [clojure.core.reducers](reference/clojure-core-reducers.md) | Reducers and folders: `map`/`filter`/`mapcat`/`take`... as reducible views, `fold` in parts, `foldcat`/`cat`/`append!`, `monoid` |
 | [clojure.edn](reference/clojure-edn.md) | Reading EDN data: `read-string`/`read` with `:eof`, `:readers` and `:default` |
 | [clojure.instant](reference/clojure-instant.md) | Reading RFC 3339 timestamps: `parse-timestamp`, `validated`, `read-instant-date`/`-timestamp`/`-calendar` |
+| [clojure.java.io](reference/clojure-java-io.md) | Files, URLs and the streams over them: `file`, `reader`/`writer`, `input-stream`/`output-stream`, `copy`, `resource`, and the `Coercions`/`IOFactory` protocols |
 | [clojure.math](reference/clojure-math.md) | Functions over doubles that answer the same bits on every backend, rounding and the neighbors of a double, and long arithmetic that refuses to overflow |
 | [clojure.pprint](reference/clojure-pprint.md) | Pretty printing: `pprint`/`write` within a right margin, `print-table`, `code-dispatch` for code, and the dispatch a program extends or replaces |
 | [clojure.stacktrace](reference/clojure-stacktrace.md) | Printing throwables and their causes: `root-cause`, `print-throwable`, `print-stack-trace`, `print-cause-trace` |
@@ -44,6 +45,6 @@ has them.
 | [WIT contracts (rontolisp.wit)](reference/wit.md) | `import`/`export`/`provide`: a WIT interface called, a WIT world implemented |
 | [Java interop](reference/interop.md) | `.`, `..`, construction, `memfn`, `proxy` |
 | [Transducers](reference/transducers.md) | `transduce`/`eduction`/`sequence`/`completing`, `reduced` and its companions, `cat`, and the one-argument arities of the seq verbs |
-| [IO](reference/io.md) | `spit`/`slurp`/`line-seq`, `clojure.java.io/reader` and `format` |
+| [IO](reference/io.md) | `spit`/`slurp`/`line-seq`/`file-seq`, `clojure.java.io/reader` and `format` |
 | [Tests (clojure.test)](reference/test.md) | `deftest`/`is`/`are`/`testing` and the `run-tests` summary runner |
 | [Macros](reference/macros.md) | `defmacro`, syntax-quote, `gensym`, `macroexpand-1`, `macroexpand` |

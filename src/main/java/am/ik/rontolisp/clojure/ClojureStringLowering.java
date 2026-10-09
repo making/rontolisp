@@ -446,10 +446,29 @@ final class ClojureStringLowering {
 									ClojureLowerUtil.list(ClojureLowerUtil.sym("subseq"), str, new LispInteger(1))))));
 	}
 
-	/** The whitespace bag {@code trim} trims: the ASCII whitespace characters. */
+	/**
+	 * The whitespace bag {@code trim} trims: the characters
+	 * {@code Character.isWhitespace} accepts, which is what the oracle's
+	 * {@code clojure.string} asks (9-13, 28-32, the Unicode space separators but the
+	 * no-break spaces, the line and paragraph separators).
+	 */
 	static LispVal trimBag() {
-		return ClojureLowerUtil.list(ClojureLowerUtil.sym("quote"), ClojureLowerUtil.list(List.of(new LispChar(' '),
-				new LispChar('\t'), new LispChar('\n'), new LispChar('\r'), new LispChar('\f'))));
+		List<LispVal> bag = new ArrayList<>();
+		for (char c = 0; c < Character.MAX_VALUE; c++) {
+			if (Character.isWhitespace(c)) {
+				bag.add(new LispChar(c));
+			}
+		}
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("quote"), ClojureLowerUtil.list(bag));
+	}
+
+	/** The bag Java's {@code String.trim} trims: every character up to the space. */
+	static LispVal javaTrimBag() {
+		List<LispVal> bag = new ArrayList<>();
+		for (char c = 0; c <= ' '; c++) {
+			bag.add(new LispChar(c));
+		}
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("quote"), ClojureLowerUtil.list(bag));
 	}
 
 	/** {@code trim-newline}: one trailing newline (or carriage-return newline) off. */
@@ -1101,13 +1120,20 @@ final class ClojureStringLowering {
 		LispSymbol text = ctx.freshTemp();
 		LispVal spelled = strOf(ctx, content, LispString.literal(""), ClojureLowering.NIL_CONST);
 		LispSymbol stream = ctx.freshTemp();
+		// an appended file is created when missing, like the oracle's FileOutputStream
+		// (a Common Lisp :append open is not)
+		LispVal plain = ClojureLowerUtil.list(ClojureLowerUtil.sym("with-open-file"),
+				ClojureLowerUtil.list(List.of(stream, file, ClojureLowerUtil.sym(":direction"),
+						ClojureLowerUtil.sym(":output"), ClojureLowerUtil.sym(":if-exists"), exists,
+						ClojureLowerUtil.sym(":if-does-not-exist"), ClojureLowerUtil.sym(":create"))),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("write-string"), text, stream), ClojureLowering.NIL_CONST);
+		// a File or a URL is written through clojure.java.io's writer: an arm a program
+		// making no clojure.java.io value sheds
+		LispVal appending = ClojureLowerUtil.list(ClojureLowerUtil.sym("eq"), exists, ClojureLowerUtil.sym(":append"));
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let*"),
-				ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(file, path), ClojureLowerUtil.list(text, spelled))),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("with-open-file"),
-						ClojureLowerUtil.list(List.of(stream, file, ClojureLowerUtil.sym(":direction"),
-								ClojureLowerUtil.sym(":output"), ClojureLowerUtil.sym(":if-exists"), exists)),
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("write-string"), text, stream),
-						ClojureLowering.NIL_CONST));
+				ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(file, ClojureIoLowering.hostFilePath(path)),
+						ClojureLowerUtil.list(text, spelled))),
+				ClojureIoLowering.spitArm(file, text, appending, plain));
 	}
 
 	/** {@code spit} as a value: path, content and an optional append flag. */
@@ -1164,12 +1190,15 @@ final class ClojureStringLowering {
 	 */
 	static LispVal lineSeqForm(ClojureLowering ctx, LispVal target) {
 		LispSymbol src = ctx.freshTemp();
+		LispVal plain = ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("streamp"), src),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("progn"), openReader(src), lineSeqReaderLoop(ctx, src)),
+				lineSeqPathForm(ctx, src));
+		// a File, a URL or a reader clojure.java.io made reads through the namespace's
+		// reader: an arm a program making no clojure.java.io value sheds
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
 				ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(src, target))),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("streamp"), src), ClojureLowerUtil
-							.list(ClojureLowerUtil.sym("progn"), openReader(src), lineSeqReaderLoop(ctx, src)),
-						lineSeqPathForm(ctx, src)));
+				ClojureIoLowering.lineSeqArm(src, plain));
 	}
 
 	/**
@@ -1215,7 +1244,7 @@ final class ClojureStringLowering {
 		LispVal binding = new LispCons(self,
 				new LispCons(ClojureLowerUtil.list(List.of(acc)), ClojureLowerUtil.cons(step, List.of())));
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let*"),
-				ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(file, path))),
+				ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(file, ClojureIoLowering.hostFilePath(path)))),
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("with-open-file"),
 						ClojureLowerUtil.list(List.of(stream, file)),
 						ClojureLowerUtil.list(ClojureLowerUtil.sym("labels"), ClojureLowerUtil.list(List.of(binding)),

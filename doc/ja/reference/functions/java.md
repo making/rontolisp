@@ -11,6 +11,7 @@
 | `java:proxy` | `(java:proxy "java.lang.Runnable" (lambda (m) ...))` | callable を背後に持つインターフェースのインスタンス |
 | `java:subclass` | `(java:subclass "java.io.File" '() '("lastModified") "x" (lambda (this m) ...))` | callable を背後に持つクラスのインスタンス |
 | `java:reify` | `(java:reify "java.lang.Runnable" "run" (lambda () ...))` | メソッドごとに関数を持つインターフェースのインスタンス |
+| `java:handle` | `(java:handle 'apple "apple")` | Java からは `apple` に見え、`APPLE` として返るホストオブジェクト |
 | `java:java-exception-cause` | `(java:java-exception-cause e)` | `java:java-exception` が保持する例外 |
 
 例外を投げたメンバは、例外を保持する `simple-error` であるコンディション型 `java:java-exception` を通知します (ガイドの[エラーと非局所脱出](../../guides/java-interop.md#errors-and-non-local-exits))。呼び出しの実行前解決のために、さらに 2 つのシンボルがあります。`the` と `declare` で使う型指定子 `(java:object "fqcn")` と、実行時解決に回る呼び出しを報告する変数 `java:*warn-on-reflection*` です (ガイドの[実行前の呼び出し解決](../../guides/java-interop.md#resolving-calls-before-they-run))。

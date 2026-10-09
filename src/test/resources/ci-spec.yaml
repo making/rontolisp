@@ -4567,8 +4567,8 @@ cases:
       NIL
   # The clack-enablement batch that CAN be cross-backend: substitute-if (lack/util's
   # runtime middleware-name build), sleep (clack.handler's stop) and the load-context
-  # specials clack's %load-file rebinds. file-write-date is deliberately NOT here: it
-  # answers nil on both WASM backends by design (.kb/read-load-streams.md).
+  # specials clack's %load-file rebinds. file-write-date has its own case
+  # (file-write-date-and-deleting-an-empty-directory).
   - name: clack-enablement-builtins
     source: |
       (print (substitute-if #\- (lambda (c) (member c '(#\. #\/) :test 'char=)) "lack/mw.backtrace"))
@@ -11856,6 +11856,35 @@ cases:
       T
       NIL
       NIL
+  - name: file-write-date-and-deleting-an-empty-directory
+    # file-write-date answers the universal time a file was last written on all four
+    # backends (both WASM backends through path_filestat_get, the component adapter's
+    # over wasi:filesystem's stat-at) and nil for a missing file; delete-file removes
+    # an EMPTY directory everywhere (path_remove_directory / remove-directory-at) and
+    # refuses a non-empty one with the file-error.
+    source: |
+      (with-open-file (out "e82-dated.txt" :direction :output :if-exists :supersede) (write-line "x" out))
+      (let ((d (file-write-date (concatenate 'string "e82-dated" ".txt"))))
+        (print (and (integerp d) (> d 3881520000) (<= d (get-universal-time)))))
+      (print (file-write-date (concatenate 'string "e82-missing" ".txt")))
+      (print (ensure-directories-exist "e82-dir/sub/"))
+      (with-open-file (out "e82-dir/f.txt" :direction :output :if-exists :supersede) (write-line "x" out))
+      (print (handler-case (delete-file "e82-dir/") (file-error () :refused)))
+      (print (delete-file "e82-dir/sub/"))
+      (print (probe-file "e82-dir/sub/"))
+      (print (delete-file "e82-dir/f.txt"))
+      (print (delete-file "e82-dir/"))
+      (print (probe-file "e82-dir/"))
+    expected: |
+      T
+      NIL
+      "e82-dir/sub/"
+      :REFUSED
+      T
+      NIL
+      T
+      T
+      NIL
   - name: a-failed-file-operation-signals-file-error
     # ANSI: open / delete-file / rename-file / truename of a missing file signal
     # file-error, and file-error-pathname answers the designator given (SBCL agrees
@@ -17965,6 +17994,76 @@ cases:
       4
       ("xxx" ".xxx.")
       8195
+
+  - name: file-character-streams-decode-malformed-utf-8-as-the-jvm-does
+    source: |
+      ;; A character stream over a file decodes malformed UTF-8 the way Java's
+      ;; decoder does, on every backend: each maximal ill-formed prefix is one
+      ;; U+FFFD and the byte that interrupted it starts the next character -- a lead
+      ;; byte over ASCII, a sequence cut short by a newline or by end of file, an
+      ;; overlong, a surrogate, a byte that leads nothing, past U+10FFFF. read-line,
+      ;; read-char, peek-char and read-sequence, whose 9-character read completes
+      ;; its last sequence past the end of its block and leaves the newline that
+      ;; interrupts it for the next read (.kb/character-sequence-io.md, "Malformed
+      ;; input").
+      (with-open-file (out "utf8bad.dat" :direction :output :if-exists :supersede
+                           :element-type '(unsigned-byte 8))
+        (dolist (b '(65 233 66 227 129 65 195 169 237 160 128 240 159 152 128
+                     240 159 152 10 192 175 245 224 128 244 144 128 128 226 130))
+          (write-byte b out)))
+      (with-open-file (in "utf8bad.dat")
+        (print (map 'list #'char-code (read-line in)))
+        (print (map 'list #'char-code (read-line in))))
+      (with-open-file (in "utf8bad.dat")
+        (print (loop for c = (read-char in nil) while c collect (char-code c))))
+      (with-open-file (in "utf8bad.dat")
+        (let ((buf (make-string 9 :initial-element #\.)))
+          (print (read-sequence buf in))
+          (print (map 'list #'char-code buf))
+          (print (read-char in))
+          (print (length (read-line in)))))
+      (with-open-file (in "utf8bad.dat")
+        (let ((buf (make-string 40 :initial-element #\.)))
+          (print (read-sequence buf in))
+          (print (char-code (char buf 19)))))
+      (with-open-file (in "utf8bad.dat")
+        (read-char in)
+        (let* ((p (peek-char nil in)) (a (read-char in)) (b (read-char in)))
+          (print (list (char-code p) (char-code a) b))))
+      (with-open-file (in "utf8bad.dat")
+        (read-char in)
+        (peek-char nil in)
+        (print (map 'list #'char-code (read-line in))))
+      ;; file-position counts the byte read past a malformed sequence as unread, and
+      ;; an :io stream decodes as an input stream does
+      (with-open-file (in "utf8bad.dat")
+        (read-char in)
+        (read-char in)
+        (print (file-position in))
+        (print (char-code (peek-char nil in)))
+        (print (file-position in)))
+      (with-open-file (s "utf8bad.dat" :direction :io :if-exists :overwrite)
+        (print (map 'list #'char-code (read-line s)))
+        (print (char-code (peek-char nil s)))
+        (print (loop for c = (read-char s nil) while c collect (char-code c))))
+    expected: |
+      (65 65533 66 65533 65 233 65533 128512 65533)
+      (65533 65533 65533 65533 65533 65533 65533 65533 65533 65533)
+      (65 65533 66 65533 65 233 65533 128512 65533 10 65533 65533 65533 65533 65533 65533 65533 65533 65533 65533)
+      9
+      (65 65533 66 65533 65 233 65533 128512 65533)
+      #\Newline
+      10
+      20
+      65533
+      (65533 65533 #\B)
+      (65533 66 65533 65 233 65533 128512 65533)
+      2
+      66
+      2
+      (65 65533 66 65533 65 233 65533 128512 65533)
+      65533
+      (65533 65533 65533 65533 65533 65533 65533 65533 65533 65533)
 
   - name: apply-using-wrapper-reached-by-funcall
     source: |

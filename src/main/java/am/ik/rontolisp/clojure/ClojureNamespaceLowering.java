@@ -28,9 +28,9 @@ import org.jspecify.annotations.Nullable;
 /**
  * Namespace forms of the Clojure lowering: ns/require/use/import, the loading of project
  * namespaces from the source path ({@link ClojureSourcePath}) and the libraries that are
- * lowerings ({@code clojure.string}, {@code clojure.set}, {@code clojure.java.io},
- * {@code clojure.test}). Which var a name names is the hub's
- * ({@link ClojureLowering#resolveVar}); this slice wires the aliases and refers it reads.
+ * lowerings ({@code clojure.string}, {@code clojure.set}, {@code clojure.test}). Which
+ * var a name names is the hub's ({@link ClojureLowering#resolveVar}); this slice wires
+ * the aliases and refers it reads.
  *
  * <p>
  * One slice of {@link ClojureLowering}: every method takes the hub as its first argument
@@ -44,8 +44,7 @@ final class ClojureNamespaceLowering {
 	/**
 	 * A known-namespace call: the vars {@code ns} resolution already vetted, over the
 	 * call's own items (whose head is ignored). {@code clojure.string} lowers to the core
-	 * string operations, {@code clojure.set} to the set runtime, {@code clojure.java.io}
-	 * to the file-stream runtime.
+	 * string operations, {@code clojure.set} to the set runtime.
 	 */
 	static LispVal namespaceCall(ClojureLowering ctx, ClojureLowering.VarRef ref, List<LispVal> items,
 			@Nullable LispVal form) {
@@ -57,9 +56,6 @@ final class ClojureNamespaceLowering {
 		}
 		if (ref.ns().equals(ClojureEdnLowering.NAMESPACE)) {
 			return ClojureEdnLowering.ednCall(ctx, ref.var(), items);
-		}
-		if (ref.ns().equals("clojure.java.io")) {
-			return jioCall(ctx, ref.var(), items);
 		}
 		if (ref.ns().equals(ClojureRingLowering.NAMESPACE)) {
 			return ClojureRingLowering.ringCall(ctx, ref.var(), items);
@@ -78,8 +74,7 @@ final class ClojureNamespaceLowering {
 
 	/**
 	 * A known-namespace var as a function value: {@code clojure.string} lowers through
-	 * the call lowering per arity, {@code clojure.set} names its runtime entry,
-	 * {@code clojure.java.io/reader} is a one-argument lambda over the same open.
+	 * the call lowering per arity, {@code clojure.set} names its runtime entry.
 	 */
 	static LispVal namespaceValue(ClojureLowering ctx, ClojureLowering.VarRef ref) {
 		if (ref.ns().equals(ClojureTestLowering.NAMESPACE)) {
@@ -90,9 +85,6 @@ final class ClojureNamespaceLowering {
 		}
 		if (ref.ns().equals(ClojureEdnLowering.NAMESPACE)) {
 			return ClojureEdnLowering.ednValue(ref.var());
-		}
-		if (ref.ns().equals("clojure.java.io")) {
-			return jioValue(ref.var());
 		}
 		if (ref.ns().equals(ClojureRingLowering.NAMESPACE)) {
 			return ClojureRingLowering.ringValue(ref.var());
@@ -109,47 +101,25 @@ final class ClojureNamespaceLowering {
 		return ClojureStringLowering.stringValue(ctx, ref.var());
 	}
 
-	/** {@code clojure.java.io/reader}: an {@code open} of the path, a stream producer. */
+	/**
+	 * The {@code clojure.java.io/reader} of a path before the namespace shipped as
+	 * Clojure source: an {@code open} of the path, a stream producer the reader wrappers
+	 * still recognize.
+	 */
 	static final String READER = "RONTOLISP::%CLOJURE-READER";
 
 	/**
-	 * A {@code clojure.java.io} call: exactly {@code reader}, a buffered reader over the
-	 * path through the same file-stream runtime {@code slurp} reads through -- an
-	 * {@code open} input stream ({@link #READER}), so {@code line-seq} reads it and
-	 * {@code with-open} closes it.
-	 */
-	static LispVal jioCall(ClojureLowering ctx, String var, List<LispVal> items) {
-		int n = items.size() - 1;
-		if (var.equals("reader")) {
-			ClojureLowerUtil.isTrue(n == 1, "reader takes one path");
-			return ClojureLowerUtil.list(new LispSymbol(READER), ctx.lower(items.get(1)));
-		}
-		throw new LispReadException("unknown name: clojure.java.io/" + var);
-	}
-
-	/**
-	 * {@code clojure.java.io/reader} as a function value: the reader function itself.
-	 */
-	static LispVal jioValue(String var) {
-		if (var.equals("reader")) {
-			return ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), new LispSymbol(READER));
-		}
-		throw new LispReadException("unknown name: clojure.java.io/" + var);
-	}
-
-	/**
 	 * The namespaces whose vars lower to core forms: {@code clojure.string},
-	 * {@code clojure.set}, {@code clojure.edn}, {@code clojure.java.io},
-	 * {@code clojure.test}, the Ring adapter {@code ring.adapter.rontolisp}, the kernels
-	 * of the built-in namespaces ({@link ClojureKernelLowering}), and the host boundary's
-	 * {@code rontolisp.wasm} and {@code rontolisp.wit}.
+	 * {@code clojure.set}, {@code clojure.edn}, {@code clojure.test}, the Ring adapter
+	 * {@code ring.adapter.rontolisp}, the kernels of the built-in namespaces
+	 * ({@link ClojureKernelLowering}), and the host boundary's {@code rontolisp.wasm} and
+	 * {@code rontolisp.wit}.
 	 */
 	static boolean isKnownNamespace(String ns) {
 		return ns.equals("clojure.string") || ns.equals(ClojureSetLowering.NAMESPACE)
-				|| ns.equals(ClojureEdnLowering.NAMESPACE) || ns.equals("clojure.java.io")
-				|| ns.equals(ClojureTestLowering.NAMESPACE) || ns.equals(ClojureRingLowering.NAMESPACE)
-				|| ClojureKernelLowering.isKernelNamespace(ns) || ns.equals(ClojureWasmLowering.NAMESPACE)
-				|| ns.equals(ClojureWitLowering.NAMESPACE);
+				|| ns.equals(ClojureEdnLowering.NAMESPACE) || ns.equals(ClojureTestLowering.NAMESPACE)
+				|| ns.equals(ClojureRingLowering.NAMESPACE) || ClojureKernelLowering.isKernelNamespace(ns)
+				|| ns.equals(ClojureWasmLowering.NAMESPACE) || ns.equals(ClojureWitLowering.NAMESPACE);
 	}
 
 	/** Whether the namespace exports the var as a lowering. */
@@ -157,7 +127,6 @@ final class ClojureNamespaceLowering {
 		return ns.equals("clojure.string") && STRING_VARS.contains(var)
 				|| ns.equals(ClojureSetLowering.NAMESPACE) && ClojureSetLowering.VARS.contains(var)
 				|| ns.equals(ClojureEdnLowering.NAMESPACE) && ClojureEdnLowering.VARS.contains(var)
-				|| ns.equals("clojure.java.io") && JIO_VARS.contains(var)
 				|| ns.equals(ClojureTestLowering.NAMESPACE) && ClojureTestLowering.VARS.contains(var)
 				|| ns.equals(ClojureRingLowering.NAMESPACE) && ClojureRingLowering.VARS.contains(var)
 				|| ClojureKernelLowering.isKernelVar(ns, var)
@@ -170,9 +139,6 @@ final class ClojureNamespaceLowering {
 	 * exact.
 	 */
 	static Set<String> varsOf(String ns) {
-		if (ns.equals("clojure.java.io")) {
-			return JIO_VARS;
-		}
 		if (ns.equals(ClojureTestLowering.NAMESPACE)) {
 			return ClojureTestLowering.VARS;
 		}
@@ -197,11 +163,6 @@ final class ClojureNamespaceLowering {
 		}
 		return STRING_VARS;
 	}
-
-	/**
-	 * The {@code clojure.java.io} vars this front end implements: exactly {@code reader}.
-	 */
-	static final Set<String> JIO_VARS = Set.of("reader");
 
 	/** The {@code clojure.string} vars this front end implements. */
 	static final Set<String> STRING_VARS = Set.of("join", "split", "split-lines", "upper-case", "lower-case",
@@ -551,7 +512,12 @@ final class ClojureNamespaceLowering {
 			}
 		}
 		else if (all) {
-			for (String var : library ? varsOf(ns) : publicVarsOf(ctx, ns)) {
+			List<String> vars = new ArrayList<>(library ? varsOf(ns) : publicVarsOf(ctx, ns));
+			if (!library && ctx.builtinNamespaces.contains(ns)) {
+				// a part's vars too, which load where a name first reaches one
+				vars.addAll(ClojureBuiltinNamespaces.partVars(ns));
+			}
+			for (String var : vars) {
 				if (!exclude.contains(var)) {
 					ctx.ns().refers.put(rename.getOrDefault(var, var), new ClojureLowering.VarRef(ns, var));
 				}
@@ -566,6 +532,7 @@ final class ClojureNamespaceLowering {
 	 */
 	static void checkReferable(ClojureLowering ctx, String ns, String var, boolean library) {
 		refuseLeftOut(ctx, ns, var);
+		ctx.loadPartOf(ns, var);
 		if (library) {
 			if (!isKnownVar(ns, var)) {
 				throw new LispReadException("unknown name: " + ns + "/" + var);
@@ -646,6 +613,10 @@ final class ClojureNamespaceLowering {
 					+ ctx.sourcePath.describeRoots());
 		}
 		if (found.builtin()) {
+			String hostOnly = ctx.hostTarget ? null : ClojureBuiltinNamespaces.hostOnly(ns);
+			if (hostOnly != null) {
+				throw new LispReadException(hostOnly);
+			}
 			ctx.builtinNamespaces.add(ns);
 		}
 		ctx.loadFile(ns, found);

@@ -168,6 +168,88 @@ public final class JavaImplementationPrograms {
 			7""";
 
 	/**
+	 * Implementations made at a call ending in {@code :java-false}, or by a form ending
+	 * in it: Java's {@code false} reaches the function as {@code |false|} -- a function
+	 * converted by its arguments, one converted as a proxy, a {@code java:reify}, a
+	 * {@code java:proxy} and a {@code java:subclass} -- where the unmarked call hands it
+	 * {@code nil}; and with {@code :functional} too, a function implementing
+	 * {@code Comparator} may answer a boolean ({@code t} first, {@code |false|} by the
+	 * arguments swapped) or any real, whose {@code intValue} it is -- at a resolved site
+	 * (a literal lambda), a dispatched one (a function parameter) and one left to run
+	 * time (the class in a variable). An answer neither reads, and a boolean without the
+	 * markers, is refused as before.
+	 */
+	public static final String JAVA_FALSE = """
+			(defvar *collections* "java.util.Collections")
+			(defun row (thunk)
+			  (handler-case (prin1 (funcall thunk)) (error (e) (princ e)))
+			  (terpri))
+			(defun sorted (cmp)
+			  (let ((l (java:new "java.util.ArrayList")))
+			    (dolist (x (list 3 1 2)) (java:call l "add" x))
+			    (java:static "java.util.Collections" "sort" l cmp :functional :java-false)
+			    (java:call l "toString")))
+			(defun sorted* (cmp)
+			  (let ((l (java:new "java.util.ArrayList")))
+			    (dolist (x (list 3 1 2)) (java:call l "add" x))
+			    (java:static *collections* "sort" l cmp :functional :java-false)
+			    (java:call l "toString")))
+			(let ((l (java:new "java.util.ArrayList")) (seen nil))
+			  (java:call l "add" '|false|)
+			  (java:call l "add" t)
+			  (java:call l "forEach" (lambda (x) (push x seen)) :functional :java-false)
+			  (java:call l "forEach" (lambda (x) (push x seen)) :functional)
+			  (java:call l "forEach" (lambda (m x) (push (list m x) seen)) :java-false)
+			  (row (lambda () (reverse seen))))
+			(row (lambda () (java:call (java:reify "java.util.function.Predicate" "test" (lambda (x) (eq x '|false|))
+			                             :java-false)
+			                           "test" '|false|)))
+			(row (lambda () (java:call (java:reify "java.util.function.Predicate" "test" (lambda (x) (eq x '|false|)))
+			                           "test" '|false|)))
+			(row (lambda () (let ((got nil))
+			                  (java:call (java:proxy "java.util.function.Consumer" (lambda (m x) (setq got (list m x)))
+			                               :java-false)
+			                             "accept" '|false|)
+			                  got)))
+			(row (lambda () (let* ((got nil)
+			                       (l (java:subclass "java.util.ArrayList" '() '("add")
+			                            (lambda (this m &rest args) (setq got args) t) :java-false)))
+			                  (java:call l "add" '|false|)
+			                  got)))
+			(row (lambda () (list (java:static "java.util.Collections" "sort" (java:new "java.util.ArrayList") (lambda (a b) t)
+			                        :functional :java-false)
+			                      (sorted (lambda (a b) (if (< a b) t '|false|)))
+			                      (sorted* (lambda (a b) (if (> b a) t '|false|))))))
+			(row (lambda () (let ((l (java:new "java.util.ArrayList")))
+			                  (dolist (x (list 3 1 2)) (java:call l "add" x))
+			                  (java:static "java.util.Collections" "sort" l (lambda (a b) (if (> a b) t '|false|))
+			                    :functional :java-false)
+			                  (java:call l "toString"))))
+			(row (lambda () (list (sorted (lambda (a b) (* 0.5 (- a b)))) (sorted* (lambda (a b) (/ (- b a) 2)))
+			                      (sorted (lambda (a b) (* (- a b) 4294967296))) (sorted* (lambda (a b) (- (* (- a b) (expt 2 70)) 1))))))
+			(row (lambda () (sorted (lambda (a b) nil))))
+			(row (lambda () (sorted* (lambda (a b) "x"))))
+			(row (lambda () (let ((l (java:new "java.util.ArrayList")))
+			                  (dolist (x (list 3 1 2)) (java:call l "add" x))
+			                  (java:static "java.util.Collections" "sort" l (lambda (a b) (< a b)) :functional)
+			                  (java:call l "toString"))))
+			""";
+
+	/** What {@link #JAVA_FALSE} prints. */
+	public static final String JAVA_FALSE_OUTPUT = """
+			(|false| T NIL T ("accept" |false|) ("accept" T))
+			T
+			NIL
+			("accept" |false|)
+			(|false|)
+			(NIL "[1, 2, 3]" "[1, 2, 3]")
+			"[3, 2, 1]"
+			("[1, 3, 2]" "[3, 1, 2]" "[3, 1, 2]" "[2, 1, 3]")
+			java:reify: cannot return NIL as int from java.util.Comparator.compare
+			java:reify: cannot return "x" as int from java.util.Comparator.compare
+			java:reify: cannot return T as int from java.util.Comparator.compare""";
+
+	/**
 	 * A declaration that a value is what a {@code java:proxy} of one interface makes,
 	 * holding a {@code java:proxy} of that interface and another: the kind is the
 	 * interface list, so the declaration lies.

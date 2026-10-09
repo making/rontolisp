@@ -9,3 +9,9 @@
 ```
 
 静的定数 `Integer.MAX_VALUE` を読み取り、rontolisp の整数へマーシャリングします。
+
+フィールド名の後ろを `:java-false` で終えると、Java の false を `nil` ではなく `|false|` として返します (ガイドの [Java の false を受け取る](../../guides/java-interop.md#javas-false-back-java-false))。
+
+```lisp
+(java:field "java.lang.Boolean" "FALSE" :java-false)   ; => |false|
+```

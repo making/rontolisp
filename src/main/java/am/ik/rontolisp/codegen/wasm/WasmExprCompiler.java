@@ -1609,14 +1609,13 @@ final class WasmExprCompiler {
 			// through the injected file_position_get / file_position_set imports
 			// (WasmFilePositionCompiler), so a binary file stream's position
 			// round-trips. A --no-wasi module has no filesystem, so there only a
-			// string stream answers, and file-write-date answers nil everywhere --
-			// "cannot be
+			// string stream answers, and file-write-date answers nil -- "cannot be
 			// determined" being what Common Lisp prescribes for exactly that. The
-			// three write-side
-			// operators are REAL here -- %make-directories creates every missing
-			// level through path_create_directory (signalling on failure, since
-			// its contract has no "cannot be determined" answer),
-			// %delete-file unlinks through path_unlink_file and %rename-file moves
+			// three write-side operators are REAL here -- %make-directories creates
+			// every missing level through path_create_directory (signalling on
+			// failure, since its contract has no "cannot be determined" answer),
+			// %delete-file unlinks through path_unlink_file (an empty directory
+			// through the injected path_remove_directory) and %rename-file moves
 			// through path_rename (both answering nil when there is nothing to do,
 			// with the file-error raised once in the Lisp above them).
 			case LispNames.FILE_POSITION -> {
@@ -1646,8 +1645,19 @@ final class WasmExprCompiler {
 					WasmExprCompiler.compileExpr(LispMacroExpander.expandConstantResult(cons, LispNil.INSTANCE), ctx);
 				}
 			}
-			case LispNames.FILE_WRITE_DATE ->
-				compileExpansion(LispMacroExpander.expandConstantResult(cons, LispNil.INSTANCE), ctx, tail);
+			case LispNames.FILE_WRITE_DATE -> {
+				// The path stat: _file_write_date over the injected path_filestat_get,
+				// a nil stub on a --no-wasi module (no files, so the date "cannot be
+				// determined").
+				LispCons coerced = coercePathArgWhenGated(cons, 0, ctx);
+				if (coerced.toList().size() != 2) {
+					throw new UnsupportedOperationException(
+							LispNames.FILE_WRITE_DATE + " expects 1 argument, got " + (coerced.toList().size() - 1));
+				}
+				WasmExprCompiler.compileExpr(coerced.toList().get(1), ctx);
+				ctx.writer.write(Instruction.CALL);
+				ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_FILE_WRITE_DATE);
+			}
 			case LispNames.PATHNAMEP -> compileExpansion(LispMacroExpander.expandPathnamep(cons), ctx, tail);
 			case LispNames.MAKE_DIRECTORIES -> WasmMakeDirectoriesCompiler.compile(cons, ctx);
 			case LispNames.DELETE_FILE_INTERNAL -> WasmDeleteFileCompiler.compile(cons, ctx);

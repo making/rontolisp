@@ -55,7 +55,7 @@ final class ClojureCoreLowering {
 			case "split-with":
 				arity(name, n, 2, 2);
 				return worker(name, ClojureBindingLowering.realFnValue(ctx, items.get(1)), ctx.lower(items.get(2)));
-			case "peek", "pop", "not-empty":
+			case "peek", "pop", "not-empty", "seq-to-map-for-destructuring":
 				arity(name, n, 1, 1);
 				return worker(name, ctx.lower(items.get(1)));
 			case "empty", "double", "float", "byte", "short", "num", "bigint", "biginteger", "bigdec", "rationalize",
@@ -91,6 +91,12 @@ final class ClojureCoreLowering {
 				// program building no sorted collection sheds, ClojureArms)
 				arity(name, n, 1, 1);
 				return worker(name, worker("sorted-items", ctx.lower(items.get(1))));
+			case "iterator-seq":
+				// the seq of what an iterator steps: a type implementing
+				// java.util.Iterator, the iterator over a seq .iterator answers, a host
+				// Iterator (ClojureInterfaces)
+				arity(name, n, 1, 1);
+				return worker(name, ctx.lower(items.get(1)));
 			case "find-keyword":
 				arity(name, n, 1, 2);
 				return n == 1 ? worker(name, ctx.lower(items.get(1)))
@@ -136,6 +142,12 @@ final class ClojureCoreLowering {
 				arity(name, n, 3, 3);
 				return worker(name, ClojureBindingLowering.realFnValue(ctx, items.get(1)), ctx.lower(items.get(2)),
 						ctx.lower(items.get(3)));
+			case "iteration":
+				// the options stay a run-time list: one map, or keyword arguments the
+				// worker reads like the oracle's destructuring of them
+				arity(name, n, 1, -1);
+				return worker(name, ClojureBindingLowering.realFnValue(ctx, items.get(1)),
+						ClojureLowerUtil.cons(ClojureLowerUtil.sym("list"), ctx.lowers(items, 2)));
 			case "run!":
 				arity(name, n, 2, 2);
 				return worker(name, ClojureBindingLowering.realFnValue(ctx, items.get(1)), ctx.lower(items.get(2)));
@@ -208,8 +220,9 @@ final class ClojureCoreLowering {
 					"unchecked-dec", "unchecked-negate", "unchecked-inc-int", "unchecked-dec-int",
 					"unchecked-negate-int", "unchecked-add", "unchecked-subtract", "unchecked-multiply",
 					"unchecked-add-int", "unchecked-subtract-int", "unchecked-multiply-int", "unchecked-divide-int",
-					"unchecked-remainder-int", "run!", "println", "print", "prn", "pr", "read-line",
-					"reader-conditional", "tagged-literal", "inst-ms", "parse-uuid", "random-uuid" ->
+					"unchecked-remainder-int", "run!", "iteration", "seq-to-map-for-destructuring", "println", "print",
+					"prn", "pr", "flush", "read-line", "reader-conditional", "tagged-literal", "inst-ms", "parse-uuid",
+					"random-uuid", "iterator-seq" ->
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), runtime(name + "-v"));
 			case "inst-ms*" -> ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), runtime("inst-ms-v"));
 			case "map-entry?" -> ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), runtime("map-entry-p-v"));

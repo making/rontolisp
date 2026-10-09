@@ -786,9 +786,9 @@ raises a read error (`read-error?`, "Exceptions" below).
 - **One Lisp-level pushback cell** (a list, so `#|` un-reads two characters), keyed on
   the current `*standard-input*` value (one stream at a time, like CL's unread-char
   cell; a rebind clears it) -- in a program that uses no port procedure. With ports the
-  cell is the port's ("Ports" below). Peek is read + pushback, never CL's `peek-char`, so no
-  WASM peek slot is ever parked (`PEEK_FD_ADDR` is drained by `read-char` only, and
-  mixing peek with `read-line` there loses it) and `read`/`read-line` mix freely.
+  cell is the port's ("Ports" below). Peek is read + pushback, never CL's `peek-char`, so
+  nothing parks in the WASM fd byte pushback but what a malformed UTF-8 sequence leaves,
+  which every character read drains, and `read`/`read-line` mix freely.
 - **`char-ready?` answers `#t` everywhere**: WASM has no non-blocking probe (`listen`
   is a call-time error there), so a probe would split the four backends; true with
   data and at EOF (the pinned cases), true as well on a terminal with nothing typed

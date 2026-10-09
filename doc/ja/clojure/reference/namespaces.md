@@ -17,7 +17,7 @@
 
 Clojure で書かれた組み込みの名前空間は、プロジェクトのファイルと同じ手順で、すべてのソースルートの
 あとに読み込まれます。そのため、ソースパス上に同じ名前のファイルがあればそちらが優先されます。
-例外は `clojure.walk`、`clojure.core.protocols`、`clojure.instant`、`clojure.uuid` で、Clojure と同じくプログラムより先に読み込まれており、
+例外は `clojure.walk`、`clojure.core.protocols`、`clojure.instant`、`clojure.uuid`、`clojure.java.io`、`clojure.main` で、Clojure と同じくプログラムより先に読み込まれており、
 `clojure.walk/postwalk` のような修飾名は、`clojure.edn` や `clojure.string` の修飾名と同じく `require`
 なしで届きます。Clojure 本体に含まれない `clojure.*` 名前空間
 （`clojure.data.json` などの contrib ライブラリ）は、ほかのライブラリと同じくソースパスから
@@ -39,7 +39,11 @@ Clojure で書かれた組み込みの名前空間は、プロジェクトのフ
 | `clojure.math` | [clojure.math](clojure-math.md) |
 | `clojure.pprint` | [clojure.pprint](clojure-pprint.md) |
 | `clojure.template` | [clojure.template](clojure-template.md) |
-| `clojure.java.io`（`reader` のみ） | [入出力](io.md) |
+| `clojure.java.io` | [clojure.java.io](clojure-java-io.md) |
+| `clojure.java.shell`（インタープリターと JVM） | [clojure.java.shell](clojure-java-shell.md) |
+| `clojure.xml` | [clojure.xml](clojure-xml.md) |
+| `clojure.repl` | [clojure.repl](clojure-repl.md) |
+| `clojure.main` | [clojure.main](clojure-main.md) |
 | `clojure.test` | [テスト (clojure.test)](test.md) |
 | `ring.adapter.rontolisp` | [Ring アダプター](ring.md) |
 | `ring.util.*`、`ring.middleware.*` | [Ring ユーティリティ](ring-util.md) |

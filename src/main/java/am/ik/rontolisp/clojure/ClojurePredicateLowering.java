@@ -103,7 +103,28 @@ final class ClojurePredicateLowering {
 			Map.entry("realized?", helper("IS-REALIZED")), Map.entry("special-symbol?", helper("IS-SPECIAL-SYMBOL")),
 			Map.entry("inst?", helper("IS-INST")),
 			Map.entry("uuid?", new Test(IS_UUID, List.of(LispString.literal("java.util.UUID")))),
-			Map.entry("uri?", host("java.net.URI")), Map.entry("class?", host("java.lang.Class")));
+			Map.entry("uri?", helper("IS-URI")), Map.entry("class?", host("java.lang.Class")));
+
+	/**
+	 * The predicates a record, deftype or reify answers true for when its body implements
+	 * the collection interface the predicate names ({@link ClojureInterfaces}), each to
+	 * the library helper asking the plain test or the interface's: what a call and a
+	 * predicate value test. A program storing no row of the interface's family calls the
+	 * plain helper in its place (the family's alias, {@link ClojureArms}). An instance
+	 * call's kinds stay {@link #TESTS}': a core kind's methods are no typed value's.
+	 */
+	private static final Map<String, Test> TYPE_TESTS = Map.of("coll?", helper("IS-COLL-TYPE"), "seq?",
+			helper("IS-SEQ-TYPE"), "list?", helper("IS-LIST-TYPE"), "sequential?", helper("IS-SEQUENTIAL-TYPE"), "map?",
+			helper("IS-MAP-TYPE"), "set?", helper("IS-SET-TYPE"), "associative?", helper("IS-ASSOCIATIVE-TYPE"),
+			"reversible?", helper("IS-REVERSIBLE-TYPE"));
+
+	/**
+	 * A predicate's test in a call or a value: {@link #TYPE_TESTS}' over {@link #TESTS}'.
+	 */
+	private static @Nullable Test predicateTest(String name) {
+		Test typed = TYPE_TESTS.get(name);
+		return typed != null ? typed : TESTS.get(name);
+	}
 
 	/**
 	 * The predicates of a kind no value here can have: no chunked seq, decimal, byte
@@ -163,7 +184,7 @@ final class ClojurePredicateLowering {
 	 */
 	static @Nullable LispVal callOf(ClojureLowering ctx, String name, List<LispVal> items) {
 		int n = items.size() - 1;
-		Test test = TESTS.get(name);
+		Test test = predicateTest(name);
 		if (test != null) {
 			ClojureCoreLowering.arity(name, n, 1, 1);
 			return ctx.booleanAnswer(test.over(ctx.lower(items.get(1))));
@@ -225,7 +246,7 @@ final class ClojurePredicateLowering {
 	 * @return the value form, or null
 	 */
 	static @Nullable LispVal valueOf(ClojureLowering ctx, String name) {
-		Test test = TESTS.get(name);
+		Test test = predicateTest(name);
 		if (test != null) {
 			return ClojureFnLowering.predValue(ctx, test::over);
 		}

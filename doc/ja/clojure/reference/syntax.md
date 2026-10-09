@@ -10,6 +10,7 @@
 | `defonce` | `(do (defonce x 5) x)` | `5` |
 | `fn` | `((fn [a b] (+ a b)) 1 2)` | `3` |
 | `let` | `(let [x 1 y x] y)` | `1` |
+| `seq-to-map-for-destructuring` | `(seq-to-map-for-destructuring (list :a 1 :b 2))` | `{:a 1, :b 2}` |
 | `letfn` | `(letfn [(f [x] x)] (f 1))` | `1` |
 | `loop` | `(loop [i 0] (if (= i 3) i (recur (inc i))))` | `3` |
 | `recur` | `(loop [a 0] (if (= a 2) a (recur (inc a))))` | `2` |

@@ -119,6 +119,20 @@ public final class ClojureArms {
 	}
 
 	/**
+	 * What hands a stream value to a program: a read of {@code *out*}, {@code *in*} or
+	 * {@code *err*}, a {@code java.io.StringWriter}, a reader over a
+	 * {@code java.io.StringReader}, and the {@code clojure.java.io} kernels and
+	 * {@code java.io} constructions opening a file or wrapping a byte stream.
+	 */
+	private static Set<String> streamProducers() {
+		Set<String> out = new HashSet<>(Set.of("RONTOLISP::%CLOJURE-OUT", "RONTOLISP::%CLOJURE-IN",
+				"RONTOLISP::%CLOJURE-ERR", "RONTOLISP::%CLOJURE-STRING-WRITER", "RONTOLISP::%CLOJURE-STRING-READER",
+				"RONTOLISP::%CLOJURE-READER"));
+		out.addAll(ClojureIoLowering.STREAM_PRODUCERS);
+		return Set.copyOf(out);
+	}
+
+	/**
 	 * The run-time reads a program names -- {@code read-string}, {@code read} and
 	 * {@code clojure.edn}'s, each of which may make an instant or a UUID through its
 	 * default {@code #inst} and {@code #uuid} readers -- held apart from {@link Family}
@@ -165,8 +179,189 @@ public final class ClojureArms {
 		SOURCE_PATH_SWITCH("source-path-switch", Set.of(ClojureCoreSpecials.SOURCE_PATH.name())),
 
 		/**
+		 * A record, deftype or reify whose body implements
+		 * {@code clojure.lang.IPersistentCollection}, which {@code conj} (and
+		 * {@code into} and {@code merge} through it) reaches through its {@code cons},
+		 * {@code empty} through its {@code empty}, {@code =} through its {@code equiv} on
+		 * either side, and {@code count} -- when it is no {@code Counted} -- by walking
+		 * its seq, like the oracle's; {@code coll?} answers true. Only the store of such
+		 * a row makes one.
+		 */
+		COLLECTION("collection-interface", Set.of("RONTOLISP::%CLOJURE-ICOLLECTION-P"), Set.of(),
+				Map.of("RONTOLISP::%CLOJURE-IS-COLL-TYPE", "RONTOLISP::%CLOJURE-IS-COLL"),
+				Set.of(ClojureInterfaces.COLLECTION_ROW), Set.of()),
+
+		/**
+		 * A record, deftype or reify whose body implements
+		 * {@code clojure.lang.Associative}, which {@code assoc} (and {@code update},
+		 * {@code assoc-in} through it), {@code contains?} and {@code find} reach through
+		 * its {@code assoc}, {@code containsKey} and {@code entryAt};
+		 * {@code associative?} answers true.
+		 */
+		ASSOCIATIVE("associative-interface", Set.of("RONTOLISP::%CLOJURE-IASSOCIATIVE-P"), Set.of(),
+				Map.of("RONTOLISP::%CLOJURE-IS-ASSOCIATIVE-TYPE", "RONTOLISP::%CLOJURE-IS-ASSOCIATIVE"),
+				Set.of(ClojureInterfaces.ASSOCIATIVE_ROW), Set.of()),
+
+		/**
+		 * A record, deftype or reify whose body implements
+		 * {@code clojure.lang.IPersistentMap} (or names {@code MapEquivalence}), which
+		 * {@code dissoc} reaches through its {@code without}, {@code map?} answers true
+		 * of, the printer writes as a map over its seq of entries, {@code keys} and
+		 * {@code vals} read through that seq, and a map's {@code =} on the other side
+		 * reads as a {@code java.util.Map} only with {@code MapEquivalence}.
+		 */
+		PERSISTENT_MAP("map-interface", Set.of("RONTOLISP::%CLOJURE-IMAP-P", "RONTOLISP::%CLOJURE-MAP-EQUIVALENCE-P"),
+				Set.of(), Map.of("RONTOLISP::%CLOJURE-IS-MAP-TYPE", "RONTOLISP::%CLOJURE-IS-MAP"),
+				Set.of(ClojureInterfaces.PERSISTENT_MAP_ROW), Set.of()),
+
+		/**
+		 * A record, deftype or reify whose body implements
+		 * {@code clojure.lang.IPersistentSet}, which {@code disj}, {@code contains?} and
+		 * {@code get} (a keyword's call too) reach through its {@code disjoin},
+		 * {@code contains} and {@code get}, {@code set?} answers true of and the printer
+		 * writes as a set over its seq.
+		 */
+		PERSISTENT_SET("set-interface", Set.of("RONTOLISP::%CLOJURE-ISET-P"), Set.of(),
+				Map.of("RONTOLISP::%CLOJURE-IS-SET-TYPE", "RONTOLISP::%CLOJURE-IS-SET"),
+				Set.of(ClojureInterfaces.PERSISTENT_SET_ROW), Set.of()),
+
+		/**
+		 * A record, deftype or reify whose body implements
+		 * {@code clojure.lang.IPersistentStack}, which {@code peek} and {@code pop} reach
+		 * through its methods of the name.
+		 */
+		STACK("stack-interface", Set.of("RONTOLISP::%CLOJURE-ISTACK-P"), Set.of(), Map.of(),
+				Set.of(ClojureInterfaces.STACK_ROW), Set.of()),
+
+		/**
+		 * A record, deftype or reify whose body implements
+		 * {@code clojure.lang.IPersistentVector}, which {@code vector?} answers true of,
+		 * the printer writes as a vector over its seq, and a vector's {@code =} on the
+		 * other side reads through its {@code count} and {@code nth}.
+		 */
+		PERSISTENT_VECTOR("vector-interface", Set.of("RONTOLISP::%CLOJURE-IVECTOR-P"), Set.of(), Map.of(),
+				Set.of(ClojureInterfaces.PERSISTENT_VECTOR_ROW), Set.of()),
+
+		/**
+		 * A record, deftype or reify whose body implements {@code clojure.lang.ISeq},
+		 * which {@code first}, {@code next} and {@code rest} reach through its
+		 * {@code first}, {@code next} and {@code more}, {@code seq?} answers true of, the
+		 * printer writes as a seq, and the seq view walks where a {@code seq} answers
+		 * one.
+		 */
+		ISEQ("seq-interface", Set.of("RONTOLISP::%CLOJURE-ISEQ-P"), Set.of(),
+				Map.of("RONTOLISP::%CLOJURE-IS-SEQ-TYPE", "RONTOLISP::%CLOJURE-IS-SEQ"),
+				Set.of(ClojureInterfaces.ISEQ_ROW), Set.of()),
+
+		/**
+		 * A record, deftype or reify whose body names {@code clojure.lang.Sequential} or
+		 * {@code IPersistentList} (an {@code IPersistentVector} too), which
+		 * {@code sequential?} and {@code list?} answer true of, a sequential's {@code =}
+		 * on the other side walks as a seq, and {@code nth} steps through its seq.
+		 */
+		SEQUENTIAL("sequential-interface", Set.of("RONTOLISP::%CLOJURE-ISEQUENTIAL-P", "RONTOLISP::%CLOJURE-ILIST-P"),
+				Set.of(),
+				Map.of("RONTOLISP::%CLOJURE-IS-LIST-TYPE", "RONTOLISP::%CLOJURE-IS-LIST",
+						"RONTOLISP::%CLOJURE-IS-SEQUENTIAL-TYPE", "RONTOLISP::%CLOJURE-IS-SEQUENTIAL"),
+				Set.of(ClojureInterfaces.SEQUENTIAL_ROW), Set.of()),
+
+		/**
+		 * A record, deftype or reify whose body implements
+		 * {@code clojure.lang.Reversible}, which {@code rseq} reaches through its
+		 * {@code rseq}; {@code reversible?} answers true.
+		 */
+		REVERSIBLE("reversible-interface", Set.of("RONTOLISP::%CLOJURE-IREVERSIBLE-P"), Set.of(),
+				Map.of("RONTOLISP::%CLOJURE-IS-REVERSIBLE-TYPE", "RONTOLISP::%CLOJURE-IS-REVERSIBLE"),
+				Set.of(ClojureInterfaces.REVERSIBLE_ROW), Set.of()),
+
+		/**
+		 * A record, deftype or reify whose body implements {@code clojure.lang.IPending},
+		 * which {@code realized?} reaches through its {@code isRealized}.
+		 */
+		PENDING("pending-interface", Set.of("RONTOLISP::%CLOJURE-IPENDING-P"), Set.of(), Map.of(),
+				Set.of(ClojureInterfaces.PENDING_ROW), Set.of()),
+
+		/**
+		 * A record, deftype or reify whose body implements {@code clojure.lang.Sorted},
+		 * which {@code subseq} and {@code rsubseq} reach through its {@code seqFrom},
+		 * {@code seq}, {@code comparator} and {@code entryKey}; {@code sorted?} answers
+		 * true.
+		 */
+		SORTED_INTERFACE("sorted-interface", Set.of("RONTOLISP::%CLOJURE-ISORTED-P"), Set.of(), Map.of(),
+				Set.of(ClojureInterfaces.SORTED_ROW), Set.of()),
+
+		/**
+		 * A record, deftype or reify whose body implements {@code java.lang.Comparable},
+		 * which {@code compare} (and the default comparator of {@code sort} and the
+		 * sorted collections) reaches through its {@code compareTo}.
+		 */
+		COMPARABLE("comparable-interface", Set.of("RONTOLISP::%CLOJURE-ICOMPARABLE-P"), Set.of(), Map.of(),
+				Set.of(ClojureInterfaces.COMPARABLE_ROW), Set.of()),
+
+		/**
+		 * A record, deftype or reify whose body implements {@code java.lang.Iterable}
+		 * ({@code IPersistentMap} and the {@code java.util} collections extend it), which
+		 * the seq view steps through its {@code iterator} when it is no {@code Seqable},
+		 * {@code reduce} (and the verbs the oracle builds on it) steps through it ahead
+		 * of the seq, and {@code seqable?} answers true of.
+		 */
+		ITERABLE("iterable-interface", Set.of("RONTOLISP::%CLOJURE-ITERABLE-P"), Set.of(), Map.of(),
+				Set.of(ClojureInterfaces.ITERABLE_ROW), Set.of()),
+
+		/**
+		 * A record, deftype or reify whose body implements {@code java.util.Iterator},
+		 * which {@code iterator-seq} and the seq view of an {@code Iterable} step through
+		 * its {@code hasNext} and {@code next}.
+		 */
+		ITERATOR("iterator-interface", Set.of("RONTOLISP::%CLOJURE-ITERATOR-P"), Set.of(), Map.of(),
+				Set.of(ClojureInterfaces.ITERATOR_ROW), Set.of()),
+
+		/**
+		 * A record, deftype or reify whose body implements {@code java.util.Collection},
+		 * {@code SequencedCollection}, {@code List}, {@code Set} or {@code RandomAccess},
+		 * which {@code count} reaches through its {@code size} when it is no
+		 * {@code Counted} and no {@code IPersistentCollection}, {@code nth} through a
+		 * {@code RandomAccess} list's {@code get}, {@code contains?} through a set's
+		 * {@code contains}, a collection's {@code =} on the other side through its
+		 * {@code size} and iterator, and the printer as a list, a vector or a set.
+		 */
+		JAVA_COLLECTION("java-collection",
+				Set.of("RONTOLISP::%CLOJURE-JCOLLECTION-P", "RONTOLISP::%CLOJURE-SEQUENCED-P",
+						"RONTOLISP::%CLOJURE-JLIST-P", "RONTOLISP::%CLOJURE-JSET-P",
+						"RONTOLISP::%CLOJURE-RANDOM-ACCESS-P"),
+				Set.of(), Map.of(), Set.of(ClojureInterfaces.JAVA_COLLECTION_ROW), Set.of()),
+
+		/**
+		 * A record, deftype or reify whose body implements {@code java.util.Map}, which
+		 * {@code get}, {@code contains?}, {@code find} and {@code count} reach through
+		 * its {@code get}, {@code containsKey} and {@code size} where it is no
+		 * {@code clojure.lang} map, the seq view through its {@code entrySet}, a map's
+		 * {@code =} on the other side through its {@code size}, {@code containsKey} and
+		 * {@code get}, and the printer as a map.
+		 */
+		JAVA_MAP("java-map", Set.of("RONTOLISP::%CLOJURE-JMAP-P"), Set.of(), Map.of(),
+				Set.of(ClojureInterfaces.JAVA_MAP_ROW), Set.of()),
+
+		/**
+		 * A record, deftype or reify whose body implements an interface no core verb here
+		 * reads -- {@code IHashEq} (there is no {@code hash}), {@code Serializable},
+		 * {@code IEditableCollection} and the transients (refused by name) --, which
+		 * {@code instance?} answers true of; an instance call reaches its methods.
+		 */
+		MARKER("marker-interface",
+				Set.of("RONTOLISP::%CLOJURE-HASHEQ-P", "RONTOLISP::%CLOJURE-EDITABLE-P",
+						"RONTOLISP::%CLOJURE-ITRANSIENT-COLLECTION-P", "RONTOLISP::%CLOJURE-ITRANSIENT-ASSOCIATIVE-P",
+						"RONTOLISP::%CLOJURE-ITRANSIENT-ASSOCIATIVE2-P", "RONTOLISP::%CLOJURE-ITRANSIENT-MAP-P",
+						"RONTOLISP::%CLOJURE-ITRANSIENT-VECTOR-P", "RONTOLISP::%CLOJURE-ITRANSIENT-SET-P",
+						"RONTOLISP::%CLOJURE-SERIALIZABLE-P"),
+				Set.of(), Map.of(), Set.of(ClojureInterfaces.MARKER_ROW), Set.of()),
+
+		/**
 		 * Sorted maps and sets: no literal makes one, only the constructor and the
-		 * constructors' values.
+		 * constructors' values. The family stands behind the collection interfaces' (from
+		 * {@link #COLLECTION} on), whose aliases rename a helper to one of its own
+		 * ({@code %clojure-is-set-type} to {@code %clojure-is-set}): the strip goes
+		 * family by family in this order, so a program making neither renames both steps.
 		 */
 		SORTED("sorted-collection",
 				Set.of("RONTOLISP::%CLOJURE-SORTED-P", "RONTOLISP::%CLOJURE-SORTED-MAP-P",
@@ -192,16 +387,13 @@ public final class ClojureArms {
 		 * A stream value, which the printer and {@code str} spell as the oracle's
 		 * {@code #object} of the host class its kind is: only a read of {@code *out*},
 		 * {@code *in*} or {@code *err*} as a value, a {@code java.io.StringWriter}, a
-		 * reader over a {@code java.io.StringReader} and a {@code clojure.java.io/reader}
-		 * hand one to the program. The Common Lisp constructors the library and the
-		 * binding forms call are no producer: naming one would splice the library into a
-		 * Common Lisp program.
+		 * reader over a {@code java.io.StringReader} and the {@code clojure.java.io}
+		 * kernels and {@code java.io} constructions opening a file
+		 * ({@link ClojureIoLowering#STREAM_PRODUCERS}) hand one to the program. The
+		 * Common Lisp constructors the library and the binding forms call are no
+		 * producer: naming one would splice the library into a Common Lisp program.
 		 */
-		STREAM("stream", Set.of("RONTOLISP::%CLOJURE-STREAM-P"), Set.of(), Map.of(),
-				Set.of("RONTOLISP::%CLOJURE-OUT", "RONTOLISP::%CLOJURE-IN", "RONTOLISP::%CLOJURE-ERR",
-						"RONTOLISP::%CLOJURE-STRING-WRITER", "RONTOLISP::%CLOJURE-STRING-READER",
-						"RONTOLISP::%CLOJURE-READER"),
-				Set.of()),
+		STREAM("stream", Set.of("RONTOLISP::%CLOJURE-STREAM-P"), Set.of(), Map.of(), streamProducers(), Set.of()),
 
 		/**
 		 * The binding depth of the {@code clojure.core} specials {@code clojure.main}
@@ -302,13 +494,17 @@ public final class ClojureArms {
 		 * {@code clojure.core.protocols}' {@code CollReduce} or {@code IKVReduce}, which
 		 * {@code reduce}, {@code reduce-kv} and the verbs the oracle builds on them hand
 		 * to that row: only the store of such a row makes one
-		 * ({@link ClojureLowering.ProtocolDef#reducerRow}). The view is the members such
-		 * a reduction steps, which {@code group-by} and {@code frequencies} walk.
+		 * ({@link ClojureLowering.ProtocolDef#reducerRow}), or of an interface row of
+		 * {@link #REDUCE_INTERFACE}, {@code iteration}'s too, or of a
+		 * {@code java.lang.Iterable} row, whose iterator {@code reduce} steps through the
+		 * same arms ({@link #ITERABLE}). The view is the members such a reduction steps,
+		 * which {@code group-by} and {@code frequencies} walk.
 		 */
 		REDUCIBLE("reducible", Set.of("RONTOLISP::%CLOJURE-COLL-REDUCIBLE-P", "RONTOLISP::%CLOJURE-KV-REDUCIBLE-P"),
 				Set.of(ClojureSeqLowering.REDUCIBLE_ITEMS), Map.of(),
 				Set.of("RONTOLISP::%CLOJURE-COLL-REDUCER-ROW", "RONTOLISP::%CLOJURE-KV-REDUCER-ROW",
-						ClojureInterfaces.REDUCE_ROW),
+						ClojureInterfaces.REDUCE_ROW, ClojureInterfaces.ITERATION, ClojureInterfaces.ITERATION_V,
+						ClojureInterfaces.ITERABLE_ROW),
 				Set.of()),
 
 		/**
@@ -316,25 +512,32 @@ public final class ClojureArms {
 		 * {@code clojure.lang.IReduceInit}, {@code IReduce} or {@code IKVReduce}, which
 		 * {@code reduce} and {@code reduce-kv} call ahead of the reducing protocols, like
 		 * the oracle, and {@code vec} and {@code set} reduce: only the store of such a
-		 * row makes one ({@link ClojureInterfaces}), which makes a value of
-		 * {@link #REDUCIBLE} too, whose functions hold these arms. The view is the
-		 * members such a reduction steps, which {@code vec} and {@code set} walk.
+		 * row makes one ({@link ClojureInterfaces}), {@code iteration}'s included, which
+		 * makes a value of {@link #REDUCIBLE} too, whose functions hold these arms. The
+		 * view is the members such a reduction steps, which {@code vec} and {@code set}
+		 * walk.
 		 */
 		REDUCE_INTERFACE("reduce-interface",
 				Set.of("RONTOLISP::%CLOJURE-REDUCE-INIT-P", "RONTOLISP::%CLOJURE-IREDUCE-P",
 						"RONTOLISP::%CLOJURE-KVREDUCE-P", "RONTOLISP::%CLOJURE-KV-INTERFACE-P"),
-				Set.of(ClojureInterfaces.REDUCE_INIT_ITEMS), Map.of(), Set.of(ClojureInterfaces.REDUCE_ROW), Set.of()),
+				Set.of(ClojureInterfaces.REDUCE_INIT_ITEMS), Map.of(),
+				Set.of(ClojureInterfaces.REDUCE_ROW, ClojureInterfaces.ITERATION, ClojureInterfaces.ITERATION_V),
+				Set.of()),
 
 		/**
 		 * A record, deftype or reify whose body implements {@code clojure.lang.Seqable},
 		 * which the seq view ({@code seq}, {@code first}, {@code map}, {@code into} ...)
 		 * and {@code seqable?} read through its {@code seq}: only the store of such a row
-		 * makes one. The alias is the lazy-or-strict verbs' test of a lazy input, which
-		 * takes such a value as one.
+		 * makes one, {@code iteration}'s included, or of a {@code java.lang.Iterable} or
+		 * {@code java.util.Map} row, whose seq the same clause steps ({@link #ITERABLE},
+		 * {@link #JAVA_MAP}). The alias is the lazy-or-strict verbs' test of a lazy
+		 * input, which takes such a value as one.
 		 */
 		SEQABLE("seqable", Set.of("RONTOLISP::%CLOJURE-SEQABLE-P"), Set.of(),
 				Map.of("RONTOLISP::%CLOJURE-LAZY-INPUT-P", "RONTOLISP::%CLOJURE-LAZY-P"),
-				Set.of(ClojureInterfaces.SEQABLE_ROW), Set.of()),
+				Set.of(ClojureInterfaces.SEQABLE_ROW, ClojureInterfaces.ITERATION, ClojureInterfaces.ITERATION_V,
+						ClojureInterfaces.ITERABLE_ROW, ClojureInterfaces.JAVA_MAP_ROW),
+				Set.of()),
 
 		/**
 		 * A record, deftype or reify whose body implements {@code clojure.lang.Counted}
@@ -453,8 +656,9 @@ public final class ClojureArms {
 		 * comparator), the structural keys' hash, {@code class} and its class name,
 		 * {@code instance?}, {@code inst?} and the instance calls read: only an
 		 * {@code #inst} literal, a read ({@code read-string}, {@code read},
-		 * {@code clojure.edn}), whose default {@code #inst} reader makes one, and the
-		 * {@code clojure.instant} kernels make one.
+		 * {@code clojure.edn}), whose default {@code #inst} reader makes one, the
+		 * {@code clojure.instant} kernels and {@code rontolisp.internal.ring/date} (the
+		 * literal's constructor) make one.
 		 */
 		INSTANT("instant",
 				Set.of(ClojurePredicateLowering.INSTANT_P, ClojurePredicateLowering.INST_P,
@@ -493,6 +697,18 @@ public final class ClojureArms {
 				Set.of()),
 
 		/**
+		 * A {@code clojure.java.io} value -- a {@code java.io.File}, a URL, a URI, a byte
+		 * stream, a character stream the namespace made over one -- which the printer,
+		 * {@code str}, {@code =}, the hash, {@code class}, {@code instance?}, a
+		 * protocol's dispatch, {@code slurp}, {@code spit}, {@code line-seq} and an
+		 * instance call read, and any value {@code slurp} and {@code spit} open through
+		 * the loaded namespace: only the namespace's kernels and the lowering's
+		 * {@code java.io} constructions make one ({@link ClojureIoLowering#PRODUCERS}).
+		 */
+		IO("io-value", Set.of(ClojureIoLowering.IO_P, ClojureIoLowering.IO_INSTANCE_P, ClojureIoLowering.OPENABLE_P),
+				Set.of(ClojureIoLowering.HOST_VIEW), Map.of(), ClojureIoLowering.PRODUCERS, Set.of()),
+
+		/**
 		 * A rontolisp future or stream -- what {@code rontolisp.http-client} answers
 		 * under {@code :async true}, and the reply body it answers under
 		 * {@code :as :stream} -- which {@code deref} and {@code future?} read through the
@@ -521,7 +737,8 @@ public final class ClojureArms {
 		HOST("host-object",
 				Set.of(ClojureDispatchLowering.HOST_OBJECT_P, "RONTOLISP::%CLOJURE-HOST-EQUAL-P",
 						ClojureCollectionLowering.HOST_SEQABLE_P),
-				Set.of(ClojureUpdateLowering.HOST_SELECT_KEYS, ClojureUpdateLowering.HOST_TABLE),
+				Set.of(ClojureUpdateLowering.HOST_SELECT_KEYS, ClojureUpdateLowering.HOST_TABLE,
+						ClojureIoLowering.HOST_FILE_PATH),
 				Map.of("RONTOLISP::%CLOJURE-HOST-NUMBER-P", "NUMBERP", "RONTOLISP::%CLOJURE-HOST-CHAR-SEQUENCE-P",
 						"STRINGP", ClojurePredicateLowering.HOST_FUTURE_P, "PROGN"),
 				Set.copyOf(LispNames.JAVA_OPERATORS_QUALIFIED), Set.of()),

@@ -1,9 +1,11 @@
 (ns ring.util.response
-  "Functions for generating and augmenting response maps: the built-in subset
-  of ring-core's ring.util.response. The file, URL and resource responses are
-  not part of it."
+  "Functions for generating and augmenting response maps: ring-core's
+  ring.util.response. The file, URL and resource responses are
+  response_files.clj, loaded into the namespace where a program first names
+  one of them."
   (:require [clojure.string :as str]
-            [rontolisp.internal.ring :as kernel]))
+            [rontolisp.internal.ring :as kernel]
+            [rontolisp.internal.io :as io-kernel]))
 
 (def redirect-status-codes
   "Map a keyword to a redirect status code."

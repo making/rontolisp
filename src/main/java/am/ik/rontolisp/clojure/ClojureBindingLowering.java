@@ -793,12 +793,14 @@ final class ClojureBindingLowering {
 
 	/**
 	 * A {@code let} binding's host class, when its lowered init is a construction literal
-	 * of a loadable class: the FQN the instance-call wrap consults. Anything else forgets
-	 * the name, so rebinding the name hides the old class.
+	 * of a loadable class: the FQN the instance-call wrap consults; and whether it holds
+	 * a plain value at all -- a construction, a literal, a fn form
+	 * ({@code ClojureInteropLowering.isPlainForm}) -- which a host call hands Java as it
+	 * is. Anything else forgets the name, so rebinding the name hides the old record.
 	 */
 	static void noteHostClass(ClojureLowering ctx, String name, LispVal init) {
 		String fqn = ClojureInteropLowering.constructedClass(init);
-		if (fqn == null) {
+		if (fqn == null && !ClojureInteropLowering.isPlainForm(init)) {
 			ctx.hostClasses.remove(ctx.localSym(name).name());
 		}
 		else {
@@ -1185,12 +1187,15 @@ final class ClojureBindingLowering {
 	 * A map pattern against an already-lowered init: every entry but the
 	 * {@code :keys}/{@code :syms}/{@code :strs}/{@code :as}/{@code :or} directives binds
 	 * its local through the table-aware read of its key expression, with the {@code :or}
-	 * default when present.
+	 * default when present. A seq init reads as the map its keyword arguments stand for
+	 * ({@code %clojure-destructure-map}), so {@code & {:keys [a]}} takes {@code :a 1}
+	 * like the oracle's; {@code :as} binds that map.
 	 */
 	static void destructureMap(ClojureLowering ctx, List<LispVal> entries, LispVal init, List<LispVal> pairs,
 			Map<String, ClojureLowering.Kind> scope, String what) {
 		LispSymbol whole = ctx.freshTemp();
-		pairs.add(ClojureLowerUtil.list(whole, init));
+		pairs.add(ClojureLowerUtil.list(whole,
+				ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-DESTRUCTURE-MAP"), init)));
 		Map<String, LispVal> defaults = new HashMap<>();
 		for (int i = 0; i + 1 < entries.size(); i += 2) {
 			if (!ClojureLowerUtil.isSymbolNamed(entries.get(i), ":or")) {
@@ -1221,9 +1226,10 @@ final class ClojureBindingLowering {
 				pairs.add(ClojureLowerUtil.list(ctx.localSym(name), whole));
 				continue;
 			}
-			if (head instanceof LispSymbol kind
-					&& (kind.name().equals(":keys") || kind.name().equals(":syms") || kind.name().equals(":strs"))) {
-				bindKeys(ctx, kind.name(), arg, whole, pairs, scope, defaults);
+			String directive = keysDirective(head);
+			if (directive != null) {
+				bindKeys(ctx, ((LispSymbol) head).name(), directive, directiveNamespace(ctx, (LispSymbol) head), arg,
+						whole, pairs, scope, defaults);
 				continue;
 			}
 			if (head instanceof LispSymbol) {
@@ -1241,32 +1247,77 @@ final class ClojureBindingLowering {
 	}
 
 	/**
-	 * One {@code :keys}/{@code :syms}/{@code :strs} directive: each entry binds its local
-	 * from the keyword, symbol or string key of that spelling (a {@code :keys} entry may
-	 * qualify, binding the short name).
+	 * The directive a map pattern key spells: {@code ":keys"}, {@code ":syms"} or
+	 * {@code ":strs"}, also as {@code :ns/keys}, {@code ::keys} and {@code ::alias/keys};
+	 * null for any other key.
 	 */
-	static void bindKeys(ClojureLowering ctx, String kind, LispVal names, LispVal whole, List<LispVal> pairs,
-			Map<String, ClojureLowering.Kind> scope, Map<String, LispVal> defaults) {
+	static @Nullable String keysDirective(LispVal head) {
+		if (!(head instanceof LispSymbol symbol) || !symbol.name().startsWith(":")) {
+			return null;
+		}
+		String name = symbol.name();
+		int slash = name.lastIndexOf('/');
+		String last = slash >= 0 ? name.substring(slash + 1) : name.substring(name.startsWith("::") ? 2 : 1);
+		return switch (last) {
+			case "keys", "syms", "strs" -> ":" + last;
+			default -> null;
+		};
+	}
+
+	/**
+	 * The namespace a qualified directive ({@code :ns/keys}, {@code ::keys},
+	 * {@code ::alias/keys}) qualifies its entries with; null for a plain one.
+	 */
+	private static @Nullable String directiveNamespace(ClojureLowering ctx, LispSymbol head) {
+		String name = head.name();
+		if (name.indexOf('/') < 0 && !name.startsWith("::")) {
+			return null;
+		}
+		String spelling = ClojureCollectionLowering.resolveKeywordSpelling(ctx, name);
+		String ns = spelling.substring(0, Math.max(0, spelling.lastIndexOf('/')));
+		ClojureLowerUtil.isTrue(!ns.isEmpty(), "a map pattern " + name + " needs a namespace");
+		return ns;
+	}
+
+	/**
+	 * One {@code :keys}/{@code :syms}/{@code :strs} directive: each entry binds its local
+	 * from the keyword, symbol or string key of that spelling. A {@code :keys} or
+	 * {@code :syms} entry may qualify, binding the short name, and a {@code :keys} entry
+	 * may be a keyword ({@code :a}, {@code :b/c}, {@code ::d}). A qualified directive
+	 * ({@code :ns/keys}, {@code ::keys}, {@code ::alias/keys}) reads each simple symbol
+	 * from {@code ns}; a qualified entry, a keyword entry and {@code :ns/strs} are
+	 * refused as the oracle's spec refuses them.
+	 */
+	static void bindKeys(ClojureLowering ctx, String spelled, String kind, @Nullable String ns, LispVal names,
+			LispVal whole, List<LispVal> pairs, Map<String, ClojureLowering.Kind> scope,
+			Map<String, LispVal> defaults) {
+		ClojureLowerUtil.isTrue(ns == null || !kind.equals(":strs"),
+				"a map pattern " + spelled + " is not a destructuring directive");
 		List<LispVal> elements = ClojureLowerUtil.items(names);
 		if (elements == null || elements.isEmpty() || elements.get(0) != ClojureReader.VECTOR) {
 			throw new LispReadException(
-					"a map pattern " + kind + " takes a vector of plain names, not " + names.print());
+					"a map pattern " + spelled + " takes a vector of plain names, not " + names.print());
 		}
 		for (LispVal element : elements.subList(1, elements.size())) {
-			ClojureLowerUtil.isTrue(
-					element instanceof LispSymbol spelled && !spelled.name().startsWith(":")
-							&& !spelled.name().equals("&"),
-					"a map pattern " + kind + " takes a vector of plain names, not " + element.print());
-			String lookup = ((LispSymbol) element).name();
+			String refusal = "a map pattern " + spelled + " takes a vector of plain names, not " + element.print();
+			ClojureLowerUtil.isTrue(element instanceof LispSymbol && !((LispSymbol) element).name().equals("&"),
+					refusal);
+			String written = ((LispSymbol) element).name();
+			boolean keyword = written.startsWith(":");
+			ClojureLowerUtil.isTrue(!keyword || kind.equals(":keys") && ns == null, refusal);
+			String lookup = keyword ? ClojureCollectionLowering.resolveKeywordSpelling(ctx, written) : written;
 			String local = lookup;
-			if ((kind.equals(":keys") || kind.equals(":syms")) && lookup.lastIndexOf('/') >= 0) {
+			if (!kind.equals(":strs") && lookup.lastIndexOf('/') >= 0) {
 				local = lookup.substring(lookup.lastIndexOf('/') + 1);
-				ClojureLowerUtil.isTrue(!local.isEmpty(),
-						"a map pattern " + kind + " takes a vector of plain names, not " + element.print());
+				ClojureLowerUtil.isTrue(!local.isEmpty(), refusal);
+			}
+			if (ns != null) {
+				ClojureLowerUtil.isTrue(lookup.indexOf('/') < 0, refusal);
+				lookup = ns + "/" + local;
 			}
 			LispVal keyForm = switch (kind) {
 				case ":keys" -> ctx.lower(new LispSymbol(":" + lookup));
-				case ":syms" -> ctx.quote(element);
+				case ":syms" -> ctx.quote(ns != null ? new LispSymbol(lookup) : element);
 				default -> LispString.literal(local);
 			};
 			scope.put(local, ClojureLowering.Kind.VARIABLE);
