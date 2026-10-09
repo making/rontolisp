@@ -136,7 +136,11 @@ request, so a global hash table reads back empty every time, while a
 
 The serve component targets the async `wasi:http@0.3.0` (`service` world); its
 handler is a callback async lift over the base component-model async ABI,
-default-on in wasmtime 46+, so `wasmtime serve` needs no gated feature flags.
+default-on in wasmtime 46+, so `wasmtime serve` needs no gated feature flags —
+except `wasi:sockets`: a handler reaching the TCP socket layer
+(`rontolisp:tcp-*`, `usocket`, or a quickloaded library that does) serves with
+`wasmtime serve -S cli=y -S tcp=y -S inherit-network=y …` instead
+([TCP sockets](../../guides/tcp-sockets.md)).
 wasmCloud hosts it too: the released `wash` (2.5.2) runs it with `wash dev`,
 given `dev.wasm_proposals: [gc, exception-handling, component-model-async]`.
 So does **Spin**, from the

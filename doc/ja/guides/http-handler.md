@@ -220,6 +220,15 @@ ABI の一部であり、ゲートされた機能フラグは不要です。レ�
 `canon task.return` を通じてタスクの途中で届けられ、その後にボディが
 ストリームされます。
 
+上の例にホスト側フラグは不要です。唯一ゲートされる表面は `wasi:sockets`
+です。TCP ソケット層に届くプログラム — `rontolisp:tcp-*`、`usocket`、
+およびそれらを参照する quickload されたライブラリ（Clack アプリケーションが
+該当）— は `wasi:sockets/types@0.3.0` もインポートするため、serve 時は
+`wasmtime serve -S cli=y -S tcp=y -S inherit-network=y app.wasm` とします。
+フラグが無いとインスタンス化が
+`instance export 'tcp-socket' has the wrong type` で失敗します。詳細は
+[TCP ソケット](tcp-sockets.md)を参照してください。
+
 ## その他の WASI HTTP ランタイム
 
 このコンポーネントがホストに要求するのは `wasi:http` **0.3**（非同期）と
