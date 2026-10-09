@@ -126,6 +126,11 @@ class DocExamplesTest {
 						return;
 					}
 					byte[] body = "{\"ok\":true}".getBytes(StandardCharsets.UTF_8);
+					// httpbin's /gzip answers its document gzip-compressed
+					if ("/gzip".equals(exchange.getRequestURI().getPath())) {
+						body = am.ik.rontolisp.testsupport.InflateCases.gzip(body);
+						exchange.getResponseHeaders().add("Content-Encoding", "gzip");
+					}
 					exchange.getResponseHeaders().add("Content-Type", "application/json");
 					exchange.sendResponseHeaders(200, body.length);
 					try (OutputStream os = exchange.getResponseBody()) {

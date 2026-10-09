@@ -19,7 +19,9 @@ import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.compiler.JavaClassLookup;
 import am.ik.rontolisp.compiler.JavaExecutable;
 import am.ik.rontolisp.compiler.JavaField;
+import am.ik.rontolisp.compiler.JavaImplementation;
 import am.ik.rontolisp.compiler.JavaImplementationType;
+import am.ik.rontolisp.compiler.JavaImplementations;
 import am.ik.rontolisp.compiler.JavaKind;
 import am.ik.rontolisp.compiler.JavaMarkers;
 import am.ik.rontolisp.compiler.JavaOverloads;
@@ -29,6 +31,14 @@ import am.ik.rontolisp.compiler.JavaType;
 import am.ik.rontolisp.compiler.OperandTypes;
 import am.ik.rontolisp.runtime.RontoComplex;
 import am.ik.rontolisp.runtime.RontoHashTable;
+import am.ik.rontolisp.runtime.RontoJavaCalls;
+import am.ik.rontolisp.runtime.RontoJavaHandle;
+import am.ik.rontolisp.runtime.RontoJavaListView;
+import am.ik.rontolisp.runtime.RontoJavaMapView;
+import am.ik.rontolisp.runtime.RontoJavaNumberHandle;
+import am.ik.rontolisp.runtime.RontoJavaSetView;
+import am.ik.rontolisp.runtime.RontoJavaValue;
+import am.ik.rontolisp.runtime.RontoJavaVectorView;
 import org.jspecify.annotations.Nullable;
 
 /**
@@ -130,20 +140,61 @@ final class JvmJavaDirectSites {
 	static final String ARRAY_TO_LIST_FALSE = "_jarf";
 
 	/**
-	 * {@code _jhandle(Object value, Object text, Object hash, Object order, int given)Object}:
-	 * {@code (java:handle value "text" hash "order")} of {@code given} arguments, the
-	 * absent ones {@code null}: the object of the generated handle class
-	 * ({@link JvmJavaImplementations#handleClass()}).
+	 * {@code _jhandle(Object value, Object text, Object hash, Object order, Object class,
+	 * int given)Object}: {@code (java:handle value text hash order class)} of
+	 * {@code given} arguments, the absent ones {@code null}: a
+	 * {@code runtime/RontoJavaHandle} (a {@code RontoJavaNumberHandle} of a real number).
 	 */
 	static final String HANDLE = "_jhandle";
 
 	/** {@link #HANDLE}'s descriptor. */
-	static final String HANDLE_DESC = "(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;I)Ljava/lang/Object;";
+	static final String HANDLE_DESC = "(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;"
+			+ "Ljava/lang/Object;I)Ljava/lang/Object;";
 
 	/**
-	 * {@code _jcmp(Object fn, Object args, Object answer)Integer}: what a function
+	 * {@code _jview(Object value, Object items, Object shape, Object printer, Object order,
+	 * Object class, int given)Object}: {@code (java:view value items shape printer order
+	 * class)} of {@code given} arguments, the absent ones {@code null}: a
+	 * {@code runtime/RontoJava*View} of the shape.
+	 */
+	static final String VIEW = "_jview";
+
+	/** {@link #VIEW}'s descriptor. */
+	static final String VIEW_DESC = "(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;"
+			+ "Ljava/lang/Object;Ljava/lang/Object;I)Ljava/lang/Object;";
+
+	// The runtime classes a handle or a view is (runtime/RontoJava*), internal names.
+	private static final String JAVA_VALUE = internal(RontoJavaValue.class);
+
+	private static final String JAVA_CALLS = internal(RontoJavaCalls.class);
+
+	private static final String JAVA_HANDLE = internal(RontoJavaHandle.class);
+
+	private static final String JAVA_NUMBER_HANDLE = internal(RontoJavaNumberHandle.class);
+
+	private static final String JAVA_LIST_VIEW = internal(RontoJavaListView.class);
+
+	private static final String JAVA_VECTOR_VIEW = internal(RontoJavaVectorView.class);
+
+	private static final String JAVA_SET_VIEW = internal(RontoJavaSetView.class);
+
+	private static final String JAVA_MAP_VIEW = internal(RontoJavaMapView.class);
+
+	private static final String JAVA_HANDLE_USAGE = JavaImplementations.HANDLE_USAGE;
+
+	private static final String JAVA_VIEW_USAGE = JavaImplementations.VIEW_USAGE;
+
+	private static final String JAVA_VIEW_NO_VALUE = JavaImplementations.VIEW_NO_VALUE;
+
+	private static String internal(Class<?> type) {
+		return type.getName().replace('.', '/');
+	}
+
+	/**
+	 * {@code _jcmp(Object fn, Object args, Object answer)Object}: what a function
 	 * implementing {@code Comparator.compare} answered, read as Clojure's
-	 * {@code AFunction.compare} reads it, or {@code null} for an answer it does not read
+	 * {@code AFunction.compare} reads it -- an {@code Integer} -- or the
+	 * {@code RuntimeException} it throws for the answer
 	 * ({@link am.ik.rontolisp.compiler.JavaImplementation#readsComparison}).
 	 */
 	static final String COMPARISON = "_jcmp";
@@ -207,6 +258,10 @@ final class JvmJavaDirectSites {
 	// A Lisp hash table, in a program that can hold one (hashTables).
 	private static final int KIND_TABLE = KIND_CONS + 4;
 
+	// A java:view List (runtime/RontoJavaListView), in a program that makes handles or
+	// views: no host kind, since where an array is expected it is an array of its items.
+	private static final int KIND_VIEW = KIND_CONS + 5;
+
 	private static final String OBJECT_DESC = "(Ljava/lang/Object;)Ljava/lang/Object;";
 
 	private static final String GUARD_DESC = "(Ljava/lang/Object;Ljava/lang/String;)Ljava/lang/Object;";
@@ -267,9 +322,19 @@ final class JvmJavaDirectSites {
 
 	private @Nullable MethodRefEntry handle;
 
-	// Whether the program makes a java:handle, which _junm / _junf then answer the value
-	// of.
+	private @Nullable MethodRefEntry view;
+
+	// Whether the program makes a java:handle or a java:view (a runtime/RontoJavaValue),
+	// which _junm / _junf then answer the value of and _jhost counts a host object.
 	private boolean handles;
+
+	// Whether the program makes a java:view, which a List view's arms in _jkind,
+	// _jcost$N and _jconv$N then test for (its class travels only then).
+	private boolean views;
+
+	// Whether a handle or view the program makes may call a Lisp function back (a
+	// function order, a printer): _jhandle / _jview then make the program's $JavaCalls.
+	private boolean callsBack;
 
 	private @Nullable MethodRefEntry kind;
 
@@ -374,19 +439,26 @@ final class JvmJavaDirectSites {
 	}
 
 	/**
-	 * Says whether the program makes a {@code java:handle}: the unmarshal helpers then
-	 * answer the value a handle Java hands back stands for. Decided before any helper is
-	 * built; a program without one keeps its unmarshal.
-	 * @param handles whether the program names {@code java:handle}
+	 * Says whether the program makes a {@code java:handle} or a {@code java:view}: the
+	 * unmarshal helpers then answer the value one Java hands back stands for, and
+	 * {@code _jhost} counts one a host object though its class travels with the program.
+	 * Decided before any helper is built; a program without one keeps both as they were.
+	 * @param handles whether the program names {@code java:handle} or {@code java:view}
+	 * @param views whether it names {@code java:view}: a List view is then tested for
+	 * where a value is costed and converted
+	 * @param callsBack whether one it makes may call a Lisp function back: a
+	 * {@code java:view}, or a {@code java:handle} given an order
 	 */
-	void handles(boolean handles) {
+	void handles(boolean handles, boolean views, boolean callsBack) {
 		this.handles = handles;
+		this.views = views;
+		this.callsBack = callsBack;
 	}
 
 	/**
-	 * {@code _jhandle}: {@code (java:handle value "text" hash "order")}, made when first
-	 * asked for.
-	 * @return {@code _jhandle(Object,Object,Object,Object,int)Object}
+	 * {@code _jhandle}: {@code (java:handle value text hash order class)}, made when
+	 * first asked for.
+	 * @return {@code _jhandle(Object,Object,Object,Object,Object,int)Object}
 	 */
 	MethodRefEntry handleHelper() {
 		MethodRefEntry ref = this.handle;
@@ -396,6 +468,23 @@ final class JvmJavaDirectSites {
 			ref = this.cp.methodRef(this.thisClass, name, desc);
 			this.handle = ref;
 			this.methods.add(buildHandle(name, desc));
+		}
+		return ref;
+	}
+
+	/**
+	 * {@code _jview}: {@code (java:view value items shape printer order class)}, made
+	 * when first asked for.
+	 * @return {@code _jview(Object,Object,Object,Object,Object,Object,int)Object}
+	 */
+	MethodRefEntry viewHelper() {
+		MethodRefEntry ref = this.view;
+		if (ref == null) {
+			Utf8Entry name = this.cp.utf8Entry(VIEW);
+			Utf8Entry desc = this.cp.utf8Entry(VIEW_DESC);
+			ref = this.cp.methodRef(this.thisClass, name, desc);
+			this.view = ref;
+			this.methods.add(buildView(name, desc));
 		}
 		return ref;
 	}
@@ -435,16 +524,17 @@ final class JvmJavaDirectSites {
 
 	/**
 	 * {@code _jcmp}: what a function implementing {@code Comparator.compare} answered as
-	 * an {@code Integer}, or {@code null}, made when first asked for. Its false arm calls
-	 * the function again through {@code _apply}.
-	 * @return {@code _jcmp(Object,Object,Object)Integer}
+	 * an {@code Integer}, or the {@code RuntimeException} the comparator throws for it,
+	 * made when first asked for. Its false arm calls the function again through
+	 * {@code _apply}.
+	 * @return {@code _jcmp(Object,Object,Object)Object}
 	 */
 	MethodRefEntry comparisonHelper() {
 		MethodRefEntry ref = this.comparison;
 		if (ref == null) {
 			Utf8Entry name = this.cp.utf8Entry(COMPARISON);
 			Utf8Entry desc = this.cp
-				.utf8Entry("(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Integer;");
+				.utf8Entry("(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;");
 			ref = this.cp.methodRef(this.thisClass, name, desc);
 			this.comparison = ref;
 			this.methods.add(buildComparison(name, desc));
@@ -2332,7 +2422,7 @@ final class JvmJavaDirectSites {
 	}
 
 	// v = _strv(v): a mutable character vector as the string it spells.
-	private void render(MethodCode a, int slot) {
+	void render(MethodCode a, int slot) {
 		MethodRefEntry render = this.strv;
 		if (render != null) {
 			a.aload(slot);
@@ -2546,6 +2636,15 @@ final class JvmJavaDirectSites {
 			a.ifeq(next);
 			returnCode(a, KIND_ARRAY);
 			a.labelBinding(next);
+		}
+		// A java:view List, which _jhost counts a host object, where views can exist.
+		if (this.views) {
+			MethodCode.Label notView = a.newLabel();
+			a.aload(0);
+			a.instanceOf(cls(JAVA_LIST_VIEW));
+			a.ifeq(notView);
+			returnCode(a, KIND_VIEW);
+			a.labelBinding(notView);
 		}
 		// A host object (_jhost); then, so a host pays nothing for it, a Lisp hash table
 		// when the program can hold one; else a value of no kind (a ratio).
@@ -2976,6 +3075,9 @@ final class JvmJavaDirectSites {
 			emitSummedCost(a, tableEntries(), JavaOverloads.COST_BOXED, cost(entry, functions));
 			a.labelBinding(notTable);
 		}
+		if (this.views && !target.isPrimitive()) {
+			emitViewCost(a, code, target, functions);
+		}
 		if (!target.isPrimitive()) {
 			// A host object: its exact class, or a subclass, of the type.
 			MethodCode.Label notHost = a.newLabel();
@@ -3001,6 +3103,60 @@ final class JvmJavaDirectSites {
 		a.loadConstant(JavaOverloads.NO_MATCH);
 		a.ireturn();
 		return new Method(name, desc, a);
+	}
+
+	// The cost of a java:view List (code KIND_VIEW) in slot 0 for the reference TARGET:
+	// a host object's where its class fits (exact or a subclass), else -- an array
+	// expected -- COST_VIEW_ARRAY plus its items' costs as the component (this very
+	// _jcost$N over the items, which costs them from COST_CONVERT; none for nil), else
+	// NO_MATCH. Mirrors eval/JavaInterop's marshalListView.
+	private void emitViewCost(MethodCode a, int code, JavaType target, boolean functions) {
+		MethodCode.Label notView = a.newLabel();
+		MethodCode.Label noMatch = a.newLabel();
+		a.iload(code);
+		a.loadConstant(KIND_VIEW);
+		a.if_icmpne(notView);
+		if (target.componentType() == null) {
+			ClassEntry type = cls(target);
+			MethodCode.Label widen = a.newLabel();
+			a.aload(0);
+			a.instanceOf(type);
+			a.ifeq(noMatch);
+			a.aload(0);
+			a.invokevirtual(method("java/lang/Object", "getClass", "()Ljava/lang/Class;"));
+			a.ldc(type);
+			a.if_acmpne(widen);
+			a.loadConstant(JavaOverloads.COST_EXACT);
+			a.ireturn();
+			a.labelBinding(widen);
+			a.loadConstant(JavaOverloads.COST_WIDEN);
+			a.ireturn();
+		}
+		else {
+			MethodCode.Label hasItems = a.newLabel();
+			int cost = code + 1;
+			a.aload(0);
+			a.checkcast(cls(JAVA_LIST_VIEW));
+			a.invokevirtual(method(JAVA_LIST_VIEW, "items", "()Ljava/lang/Object;"));
+			a.dup();
+			a.ifnonnull(hasItems);
+			a.pop();
+			a.loadConstant(JavaOverloads.COST_VIEW_ARRAY);
+			a.ireturn();
+			a.labelBinding(hasItems);
+			a.invokestatic(cost(target, functions));
+			a.istore(cost);
+			a.iload(cost);
+			a.iflt(noMatch);
+			a.iload(cost);
+			a.loadConstant(JavaOverloads.COST_VIEW_ARRAY - JavaOverloads.COST_CONVERT);
+			a.iadd();
+			a.ireturn();
+		}
+		a.labelBinding(noMatch);
+		a.loadConstant(JavaOverloads.NO_MATCH);
+		a.ireturn();
+		a.labelBinding(notView);
 	}
 
 	// Returns the cost of the value in slot 0 whose elements ELEMENTS answers: BASE plus
@@ -3243,6 +3399,39 @@ final class JvmJavaDirectSites {
 			a.areturn();
 			a.labelBinding(notTable);
 		}
+		if (this.views && reference) {
+			// A java:view List: itself where its class fits (its cost said so), else an
+			// array of its items (none for nil).
+			MethodCode.Label notView = a.newLabel();
+			a.iload(code);
+			a.loadConstant(KIND_VIEW);
+			a.if_icmpne(notView);
+			JavaType component = target.componentType();
+			if (component == null || !sequences) {
+				a.aload(0);
+				if (needsCast) {
+					a.checkcast(type);
+				}
+				a.areturn();
+			}
+			else {
+				MethodCode.Label hasItems = a.newLabel();
+				a.aload(0);
+				a.checkcast(cls(JAVA_LIST_VIEW));
+				a.invokevirtual(method(JAVA_LIST_VIEW, "items", "()Ljava/lang/Object;"));
+				a.dup();
+				a.ifnonnull(hasItems);
+				a.pop();
+				a.loadConstant(0);
+				body.newArray(component);
+				a.checkcast(type);
+				a.areturn();
+				a.labelBinding(hasItems);
+				a.invokestatic(convert(target, functions, sequences, markers));
+				a.areturn();
+			}
+			a.labelBinding(notView);
+		}
 		if (reference) {
 			a.iload(code);
 			a.loadConstant(KIND_HOST);
@@ -3295,6 +3484,17 @@ final class JvmJavaDirectSites {
 		a.aload(0);
 		a.invokestatic(lispTable());
 		a.ifne(no);
+		if (this.handles) {
+			// A handle or a view (runtime/RontoJavaValue) is a host object, though its
+			// class travels with the program.
+			MethodCode.Label notValue = a.newLabel();
+			a.aload(0);
+			a.instanceOf(cls(JAVA_VALUE));
+			a.ifeq(notValue);
+			a.loadConstant(1);
+			a.ireturn();
+			a.labelBinding(notValue);
+		}
 		// A value of a class that travels with the program (a complex number).
 		a.aload(0);
 		a.invokevirtual(getClass);
@@ -3513,17 +3713,17 @@ final class JvmJavaDirectSites {
 		a.areturn();
 		a.labelBinding(notString);
 		if (this.handles) {
-			// A handle -> the value it stands for (java:handle).
-			ClassEntry handleClass = cls(implementations().handleClass());
-			MethodCode.Label notHandle = a.newLabel();
+			// A handle or a view (runtime/RontoJavaValue) -> the value it stands for.
+			ClassEntry valueClass = cls(JAVA_VALUE);
+			MethodCode.Label notValue = a.newLabel();
 			a.aload(0);
-			a.instanceOf(handleClass);
-			a.ifeq(notHandle);
+			a.instanceOf(valueClass);
+			a.ifeq(notValue);
 			a.aload(0);
-			a.checkcast(handleClass);
-			a.getfield(this.cp.fieldRef(handleClass, "value", "Ljava/lang/Object;"));
+			a.checkcast(valueClass);
+			a.invokeinterface(interfaceMethod(JAVA_VALUE, "value", "()Ljava/lang/Object;"));
 			a.areturn();
-			a.labelBinding(notHandle);
+			a.labelBinding(notValue);
 		}
 		// An array -> a list; any other object stays itself.
 		a.aload(0);
@@ -3532,37 +3732,77 @@ final class JvmJavaDirectSites {
 		return new Method(name, desc, a);
 	}
 
-	// _jhandle(Object value, Object text, Object hash, Object order, int given)Object,
-	// GIVEN
-	// the number of the form's arguments: new <Program>$Handle(value, the unquoted text,
-	// the hash's low 32 bits -- the text's hashCode when GIVEN is 2 --, the unquoted
-	// order
-	// -- the text when GIVEN is under 4 --), the text and the order rendered first (a
-	// mutable character vector as the string it spells). A text or an order that is no
-	// string, or a hash that is no integer, is eval/JavaInterop.handle's refusal.
+	// _jhandle(Object value, Object text, Object hash, Object order, Object cls, int
+	// given)Object, GIVEN the number of the form's arguments (the absent ones null):
+	// eval/JavaInterop.handle, check for check and message for message -- a
+	// runtime/RontoJavaHandle of the value, the unquoted text (nil: Object's spelling,
+	// equal only to a handle of the value, which needs a nil hash), the hash's low 32
+	// bits
+	// (the text's hashCode when absent; nil: the value's identity hash), the order (an
+	// unquoted text, the text when absent; nil: none; a function: asked through the
+	// program's $JavaCalls) and the unquoted class; a RontoJavaNumberHandle around it
+	// when the value is a real number. Every string is rendered first (a mutable
+	// character vector as the string it spells).
 	private Method buildHandle(Utf8Entry name, Utf8Entry desc) {
 		MethodCode a = new MethodCode();
-		ClassEntry handleClass = cls(implementations().handleClass());
+		ClassEntry handleClass = cls(JAVA_HANDLE);
+		ClassEntry numberClass = cls(JAVA_NUMBER_HANDLE);
 		ClassEntry longClass = cls("java/lang/Long");
+		ClassEntry doubleClass = cls("java/lang/Double");
 		ClassEntry bigInteger = cls("java/math/BigInteger");
-		String usage = "java:handle expects (java:handle value \"text\" [hash [\"order\"]]), got ";
-		int text = 5;
-		int hash = 6;
-		int order = 7;
+		ClassEntry ratio = cls("[Ljava/math/BigInteger;");
+		ClassEntry bigDecimal = cls("java/math/BigDecimal");
+		String usage = JAVA_HANDLE_USAGE + ", got ";
+		int text = 6;
+		int identity = 7;
+		int hash = 8;
+		int orderMode = 9;
+		int order = 10;
+		int className = 11;
+		int handle = 12;
+		int quotient = 13;
 		MethodCode.Label badText = a.newLabel();
 		MethodCode.Label badHash = a.newLabel();
 		MethodCode.Label badOrder = a.newLabel();
-		MethodCode.Label ownHash = a.newLabel();
-		MethodCode.Label notLong = a.newLabel();
-		MethodCode.Label hashed = a.newLabel();
-		MethodCode.Label ownOrder = a.newLabel();
-		MethodCode.Label ordered = a.newLabel();
+		MethodCode.Label badClass = a.newLabel();
+		// the text: nil, or a string
+		MethodCode.Label textRead = a.newLabel();
+		MethodCode.Label textGiven = a.newLabel();
 		render(a, 1);
+		a.aload(1);
+		a.ifnonnull(textGiven);
+		a.aconst_null();
+		a.astore(text);
+		a.goto_(textRead);
+		a.labelBinding(textGiven);
 		emitUnquoted(a, 1, badText);
 		a.astore(text);
-		a.iload(4);
+		a.labelBinding(textRead);
+		// the hash: the text's when absent, nil for the identity, an integer's low bits
+		MethodCode.Label hashGiven = a.newLabel();
+		MethodCode.Label hashRead = a.newLabel();
+		MethodCode.Label notNil = a.newLabel();
+		MethodCode.Label notLong = a.newLabel();
+		a.loadConstant(0);
+		a.istore(identity);
+		a.iload(5);
 		a.loadConstant(3);
-		a.if_icmplt(ownHash);
+		a.if_icmpge(hashGiven);
+		a.aload(text);
+		a.ifnull(badText);
+		a.aload(text);
+		a.invokevirtual(method("java/lang/String", "hashCode", "()I"));
+		a.istore(hash);
+		a.goto_(hashRead);
+		a.labelBinding(hashGiven);
+		a.aload(2);
+		a.ifnonnull(notNil);
+		a.loadConstant(1);
+		a.istore(identity);
+		a.loadConstant(0);
+		a.istore(hash);
+		a.goto_(hashRead);
+		a.labelBinding(notNil);
 		a.aload(2);
 		a.instanceOf(longClass);
 		a.ifeq(notLong);
@@ -3570,7 +3810,7 @@ final class JvmJavaDirectSites {
 		a.checkcast(longClass);
 		a.invokevirtual(method("java/lang/Long", "intValue", "()I"));
 		a.istore(hash);
-		a.goto_(hashed);
+		a.goto_(hashRead);
 		a.labelBinding(notLong);
 		a.aload(2);
 		a.instanceOf(bigInteger);
@@ -3579,31 +3819,208 @@ final class JvmJavaDirectSites {
 		a.checkcast(bigInteger);
 		a.invokevirtual(method("java/math/BigInteger", "intValue", "()I"));
 		a.istore(hash);
-		a.goto_(hashed);
-		a.labelBinding(ownHash);
+		a.labelBinding(hashRead);
+		// a handle with no text is equal only to a handle of its value
+		MethodCode.Label textOrIdentity = a.newLabel();
 		a.aload(text);
-		a.invokevirtual(method("java/lang/String", "hashCode", "()I"));
-		a.istore(hash);
-		a.labelBinding(hashed);
-		a.iload(4);
+		a.ifnonnull(textOrIdentity);
+		a.iload(identity);
+		a.ifeq(badText);
+		a.labelBinding(textOrIdentity);
+		// the order: the text when absent, nil none, a string, or a function
+		MethodCode.Label orderGiven = a.newLabel();
+		MethodCode.Label orderRead = a.newLabel();
+		MethodCode.Label orderNotNil = a.newLabel();
+		MethodCode.Label orderNotString = a.newLabel();
+		MethodCode.Label noText = a.newLabel();
+		a.iload(5);
 		a.loadConstant(4);
-		a.if_icmplt(ownOrder);
-		render(a, 3);
-		emitUnquoted(a, 3, badOrder);
-		a.astore(order);
-		a.goto_(ordered);
-		a.labelBinding(ownOrder);
+		a.if_icmpge(orderGiven);
 		a.aload(text);
 		a.astore(order);
-		a.labelBinding(ordered);
+		a.aload(text);
+		a.ifnull(noText);
+		a.loadConstant(RontoJavaHandle.ORDER_TEXT);
+		a.istore(orderMode);
+		a.goto_(orderRead);
+		a.labelBinding(noText);
+		a.loadConstant(RontoJavaHandle.ORDER_NONE);
+		a.istore(orderMode);
+		a.goto_(orderRead);
+		a.labelBinding(orderGiven);
+		a.aload(3);
+		a.ifnonnull(orderNotNil);
+		a.aconst_null();
+		a.astore(order);
+		a.loadConstant(RontoJavaHandle.ORDER_NONE);
+		a.istore(orderMode);
+		a.goto_(orderRead);
+		a.labelBinding(orderNotNil);
+		render(a, 3);
+		emitUnquoted(a, 3, orderNotString);
+		a.astore(order);
+		a.loadConstant(RontoJavaHandle.ORDER_TEXT);
+		a.istore(orderMode);
+		a.goto_(orderRead);
+		a.labelBinding(orderNotString);
+		emitFunctionTest(a, 3, badOrder);
+		a.aload(3);
+		a.astore(order);
+		a.loadConstant(RontoJavaHandle.ORDER_FUNCTION);
+		a.istore(orderMode);
+		a.labelBinding(orderRead);
+		// the class: nil or absent none, else a string
+		MethodCode.Label noClass = a.newLabel();
+		MethodCode.Label classRead = a.newLabel();
+		a.iload(5);
+		a.loadConstant(5);
+		a.if_icmplt(noClass);
+		a.aload(4);
+		a.ifnull(noClass);
+		render(a, 4);
+		emitUnquoted(a, 4, badClass);
+		a.astore(className);
+		a.goto_(classRead);
+		a.labelBinding(noClass);
+		a.aconst_null();
+		a.astore(className);
+		a.labelBinding(classRead);
+		// new RontoJavaHandle(value, text, identity, hash, mode, order, class, calls)
 		a.new_(handleClass);
 		a.dup();
 		a.aload(0);
 		a.aload(text);
+		a.iload(identity);
 		a.iload(hash);
+		a.iload(orderMode);
 		a.aload(order);
-		a.invokespecial(
-				this.cp.methodRef(handleClass, "<init>", "(Ljava/lang/Object;Ljava/lang/String;ILjava/lang/String;)V"));
+		a.aload(className);
+		if (this.callsBack) {
+			MethodCode.Label noCalls = a.newLabel();
+			MethodCode.Label called = a.newLabel();
+			ClassEntry calls = cls(implementations().callsClass());
+			a.iload(orderMode);
+			a.loadConstant(RontoJavaHandle.ORDER_FUNCTION);
+			a.if_icmpne(noCalls);
+			a.new_(calls);
+			a.dup();
+			a.invokespecial(this.cp.methodRef(calls, "<init>", "()V"));
+			a.goto_(called);
+			a.labelBinding(noCalls);
+			a.aconst_null();
+			a.labelBinding(called);
+		}
+		else {
+			a.aconst_null();
+		}
+		a.invokespecial(this.cp.methodRef(handleClass, "<init>",
+				"(Ljava/lang/Object;Ljava/lang/String;ZIILjava/lang/Object;Ljava/lang/String;L" + JAVA_CALLS + ";)V"));
+		a.astore(handle);
+		// a real number's handle is a RontoJavaNumberHandle of it
+		String numberInit = "(L" + JAVA_HANDLE + ";DJI)V";
+		MethodCode.Label notLongValue = a.newLabel();
+		MethodCode.Label notDoubleValue = a.newLabel();
+		MethodCode.Label notBignumValue = a.newLabel();
+		MethodCode.Label notRatioValue = a.newLabel();
+		a.aload(0);
+		a.instanceOf(longClass);
+		a.ifeq(notLongValue);
+		a.new_(numberClass);
+		a.dup();
+		a.aload(handle);
+		a.aload(0);
+		a.checkcast(longClass);
+		a.invokevirtual(method("java/lang/Long", "doubleValue", "()D"));
+		a.aload(0);
+		a.checkcast(longClass);
+		a.invokevirtual(method("java/lang/Long", "longValue", "()J"));
+		a.aload(0);
+		a.checkcast(longClass);
+		a.invokevirtual(method("java/lang/Long", "intValue", "()I"));
+		a.invokespecial(this.cp.methodRef(numberClass, "<init>", numberInit));
+		a.areturn();
+		a.labelBinding(notLongValue);
+		a.aload(0);
+		a.instanceOf(doubleClass);
+		a.ifeq(notDoubleValue);
+		a.new_(numberClass);
+		a.dup();
+		a.aload(handle);
+		a.aload(0);
+		a.checkcast(doubleClass);
+		a.invokevirtual(method("java/lang/Double", "doubleValue", "()D"));
+		a.aload(0);
+		a.checkcast(doubleClass);
+		a.invokevirtual(method("java/lang/Double", "longValue", "()J"));
+		a.aload(0);
+		a.checkcast(doubleClass);
+		a.invokevirtual(method("java/lang/Double", "intValue", "()I"));
+		a.invokespecial(this.cp.methodRef(numberClass, "<init>", numberInit));
+		a.areturn();
+		a.labelBinding(notDoubleValue);
+		a.aload(0);
+		a.instanceOf(bigInteger);
+		a.ifeq(notBignumValue);
+		a.new_(numberClass);
+		a.dup();
+		a.aload(handle);
+		a.aload(0);
+		a.checkcast(bigInteger);
+		a.invokevirtual(method("java/math/BigInteger", "doubleValue", "()D"));
+		a.aload(0);
+		a.checkcast(bigInteger);
+		a.invokevirtual(method("java/math/BigInteger", "longValue", "()J"));
+		a.aload(0);
+		a.checkcast(bigInteger);
+		a.invokevirtual(method("java/math/BigInteger", "intValue", "()I"));
+		a.invokespecial(this.cp.methodRef(numberClass, "<init>", numberInit));
+		a.areturn();
+		a.labelBinding(notBignumValue);
+		a.aload(0);
+		a.instanceOf(ratio);
+		a.ifeq(notRatioValue);
+		// Clojure's Ratio: new BigDecimal(num).divide(new BigDecimal(den), DECIMAL64)'s
+		// double, its int the intValue; num.divide(den)'s low 64 bits the longValue
+		MethodRefEntry decimalOf = method("java/math/BigDecimal", "<init>", "(Ljava/math/BigInteger;)V");
+		a.new_(bigDecimal);
+		a.dup();
+		a.aload(0);
+		a.checkcast(ratio);
+		a.loadConstant(0);
+		a.aaload();
+		a.invokespecial(decimalOf);
+		a.new_(bigDecimal);
+		a.dup();
+		a.aload(0);
+		a.checkcast(ratio);
+		a.loadConstant(1);
+		a.aaload();
+		a.invokespecial(decimalOf);
+		a.getstatic(field("java/math/MathContext", "DECIMAL64", "Ljava/math/MathContext;"));
+		a.invokevirtual(method("java/math/BigDecimal", "divide",
+				"(Ljava/math/BigDecimal;Ljava/math/MathContext;)Ljava/math/BigDecimal;"));
+		a.invokevirtual(method("java/math/BigDecimal", "doubleValue", "()D"));
+		a.dstore(quotient);
+		a.new_(numberClass);
+		a.dup();
+		a.aload(handle);
+		a.dload(quotient);
+		a.aload(0);
+		a.checkcast(ratio);
+		a.loadConstant(0);
+		a.aaload();
+		a.aload(0);
+		a.checkcast(ratio);
+		a.loadConstant(1);
+		a.aaload();
+		a.invokevirtual(method("java/math/BigInteger", "divide", "(Ljava/math/BigInteger;)Ljava/math/BigInteger;"));
+		a.invokevirtual(method("java/math/BigInteger", "longValue", "()J"));
+		a.dload(quotient);
+		a.d2i();
+		a.invokespecial(this.cp.methodRef(numberClass, "<init>", numberInit));
+		a.areturn();
+		a.labelBinding(notRatioValue);
+		a.aload(handle);
 		a.areturn();
 		a.labelBinding(badText);
 		throwDescribing(a, usage, 1);
@@ -3611,12 +4028,305 @@ final class JvmJavaDirectSites {
 		throwDescribing(a, usage, 2);
 		a.labelBinding(badOrder);
 		throwDescribing(a, usage, 3);
+		a.labelBinding(badClass);
+		throwDescribing(a, usage, 4);
+		return new Method(name, desc, a);
+	}
+
+	// Jumps to REFUSED unless the value in SLOT is a function value: an exact Object[]
+	// whose first element is an Integer.
+	private void emitFunctionTest(MethodCode a, int slot, MethodCode.Label refused) {
+		ClassEntry objects = cls("[Ljava/lang/Object;");
+		a.aload(slot);
+		a.ifnull(refused);
+		a.aload(slot);
+		a.invokevirtual(method("java/lang/Object", "getClass", "()Ljava/lang/Class;"));
+		a.ldc(objects);
+		a.if_acmpne(refused);
+		a.aload(slot);
+		a.checkcast(objects);
+		a.arraylength();
+		a.ifeq(refused);
+		a.aload(slot);
+		a.checkcast(objects);
+		a.loadConstant(0);
+		a.aaload();
+		a.instanceOf(cls("java/lang/Integer"));
+		a.ifeq(refused);
+	}
+
+	// _jview(Object value, Object items, Object shape, Object printer, Object order,
+	// Object cls, int given)Object, GIVEN the number of the form's arguments (the absent
+	// ones null): eval/JavaInterop.view, check for check and message for message -- the
+	// shape a keyword's name (:LIST, :VECTOR, :SET, :MAP), the printer a function or nil,
+	// the order a function (a :vector's) or nil, the class a string or nil, the items a
+	// sequence (a :map's a hash table or a plist), each converted as an Object argument
+	// (_jcost$N / _jconv$N); then the runtime/RontoJava*View of the shape, calling the
+	// printer and the order through the program's $JavaCalls.
+	private Method buildView(Utf8Entry name, Utf8Entry desc) {
+		MethodCode a = new MethodCode();
+		ClassEntry objects = cls("[Ljava/lang/Object;");
+		ClassEntry string = cls("java/lang/String");
+		MethodRefEntry equals = method("java/lang/String", "equals", "(Ljava/lang/Object;)Z");
+		String usage = JAVA_VIEW_USAGE + ", got ";
+		JavaType object = Objects.requireNonNull(this.lookup.find("java.lang.Object"), "java.lang.Object");
+		int shape = 7;
+		int printer = 8;
+		int order = 9;
+		int className = 10;
+		int members = 11;
+		int elements = 12;
+		int index = 13;
+		int calls = 14;
+		MethodCode.Label badShape = a.newLabel();
+		MethodCode.Label badPrinter = a.newLabel();
+		MethodCode.Label badOrder = a.newLabel();
+		MethodCode.Label badClass = a.newLabel();
+		MethodCode.Label badItems = a.newLabel();
+		MethodCode.Label noValue = a.newLabel();
+		// the shape: one of the four keywords, compiled to their names
+		String[] shapes = { LispNames.JAVA_VIEW_LIST, LispNames.JAVA_VIEW_VECTOR, LispNames.JAVA_VIEW_SET,
+				LispNames.JAVA_VIEW_MAP };
+		MethodCode.Label shapeRead = a.newLabel();
+		a.aload(2);
+		a.instanceOf(string);
+		a.ifeq(badShape);
+		for (int s = 0; s < shapes.length; s++) {
+			MethodCode.Label next = a.newLabel();
+			a.ldc(str(shapes[s]));
+			a.aload(2);
+			a.invokevirtual(equals);
+			a.ifeq(next);
+			a.loadConstant(s);
+			a.istore(shape);
+			a.goto_(shapeRead);
+			a.labelBinding(next);
+		}
+		a.goto_(badShape);
+		a.labelBinding(shapeRead);
+		// the printer: absent or nil none, else a function
+		MethodCode.Label printerRead = a.newLabel();
+		a.aconst_null();
+		a.astore(printer);
+		a.iload(6);
+		a.loadConstant(4);
+		a.if_icmplt(printerRead);
+		a.aload(3);
+		a.ifnull(printerRead);
+		emitFunctionTest(a, 3, badPrinter);
+		a.aload(3);
+		a.astore(printer);
+		a.labelBinding(printerRead);
+		// the order: absent or nil none, else a :vector's function
+		MethodCode.Label orderRead = a.newLabel();
+		a.aconst_null();
+		a.astore(order);
+		a.iload(6);
+		a.loadConstant(5);
+		a.if_icmplt(orderRead);
+		a.aload(4);
+		a.ifnull(orderRead);
+		a.iload(shape);
+		a.loadConstant(1);
+		a.if_icmpne(badOrder);
+		emitFunctionTest(a, 4, badOrder);
+		a.aload(4);
+		a.astore(order);
+		a.labelBinding(orderRead);
+		// the class: absent or nil none, else a string
+		MethodCode.Label classRead = a.newLabel();
+		a.aconst_null();
+		a.astore(className);
+		a.iload(6);
+		a.loadConstant(6);
+		a.if_icmplt(classRead);
+		a.aload(5);
+		a.ifnull(classRead);
+		render(a, 5);
+		emitUnquoted(a, 5, badClass);
+		a.astore(className);
+		a.labelBinding(classRead);
+		// the members: none for nil; a :map's hash table's entries; else a sequence's
+		// elements (a :map's a plist: a list of even length)
+		MethodCode.Label membersRead = a.newLabel();
+		MethodCode.Label aSequence = a.newLabel();
+		MethodCode.Label notMap = a.newLabel();
+		a.aload(1);
+		a.ifnonnull(aSequence);
+		a.loadConstant(0);
+		a.anewarray(cls("java/lang/Object"));
+		a.astore(members);
+		a.goto_(membersRead);
+		a.labelBinding(aSequence);
+		a.iload(shape);
+		a.loadConstant(3);
+		a.if_icmpne(notMap);
+		if (this.hashValues != null) {
+			MethodCode.Label notTable = a.newLabel();
+			a.aload(1);
+			a.invokestatic(lispTable());
+			a.ifeq(notTable);
+			a.aload(1);
+			a.invokestatic(tableEntries());
+			a.astore(members);
+			a.goto_(membersRead);
+			a.labelBinding(notTable);
+		}
+		// a plist: a cons whose cells hold an even count
+		a.aload(1);
+		a.invokestatic(kind());
+		a.loadConstant(KIND_CONS);
+		a.if_icmpne(badItems);
+		a.aload(1);
+		a.invokestatic(sequence());
+		a.astore(members);
+		a.aload(members);
+		a.ifnull(badItems);
+		a.aload(members);
+		a.checkcast(objects);
+		a.arraylength();
+		a.loadConstant(2);
+		a.irem();
+		a.ifne(badItems);
+		a.goto_(membersRead);
+		a.labelBinding(notMap);
+		MethodCode.Label sequenceKind = a.newLabel();
+		a.aload(1);
+		a.invokestatic(kind());
+		a.dup();
+		a.loadConstant(KIND_CONS);
+		a.if_icmpeq(sequenceKind);
+		a.loadConstant(KIND_ARRAY);
+		a.if_icmpne(badItems);
+		a.aload(1);
+		a.invokestatic(sequence());
+		a.astore(members);
+		a.aload(members);
+		a.ifnull(badItems);
+		a.goto_(membersRead);
+		a.labelBinding(sequenceKind);
+		a.pop();
+		a.aload(1);
+		a.invokestatic(sequence());
+		a.astore(members);
+		a.aload(members);
+		a.ifnull(badItems);
+		a.labelBinding(membersRead);
+		// each member as an Object argument
+		MethodCode.Label loop = a.newLabel();
+		MethodCode.Label done = a.newLabel();
+		a.aload(members);
+		a.checkcast(objects);
+		a.arraylength();
+		a.anewarray(cls("java/lang/Object"));
+		a.astore(elements);
+		a.loadConstant(0);
+		a.istore(index);
+		a.labelBinding(loop);
+		a.iload(index);
+		a.aload(members);
+		a.checkcast(objects);
+		a.arraylength();
+		a.if_icmpge(done);
+		a.aload(members);
+		a.checkcast(objects);
+		a.iload(index);
+		a.aaload();
+		a.invokestatic(argumentCost(object));
+		a.iflt(noValue);
+		a.aload(elements);
+		a.checkcast(objects);
+		a.iload(index);
+		a.aload(members);
+		a.checkcast(objects);
+		a.iload(index);
+		a.aaload();
+		a.invokestatic(argumentConvert(object));
+		a.aastore();
+		a.iinc(index, 1);
+		a.goto_(loop);
+		a.labelBinding(done);
+		// the calls: the program's $JavaCalls when a printer or an order is given
+		MethodCode.Label noCalls = a.newLabel();
+		a.aconst_null();
+		a.astore(calls);
+		if (this.callsBack) {
+			ClassEntry callsClass = cls(implementations().callsClass());
+			MethodCode.Label make = a.newLabel();
+			a.aload(printer);
+			a.ifnonnull(make);
+			a.aload(order);
+			a.ifnull(noCalls);
+			a.labelBinding(make);
+			a.new_(callsClass);
+			a.dup();
+			a.invokespecial(this.cp.methodRef(callsClass, "<init>", "()V"));
+			a.astore(calls);
+		}
+		a.labelBinding(noCalls);
+		// the view of the shape
+		String callsDesc = "L" + JAVA_CALLS + ";";
+		String[] views = { JAVA_LIST_VIEW, JAVA_VECTOR_VIEW, JAVA_SET_VIEW, JAVA_MAP_VIEW };
+		for (int s = 0; s < views.length; s++) {
+			MethodCode.Label next = a.newLabel();
+			ClassEntry view = cls(views[s]);
+			if (s < views.length - 1) {
+				a.iload(shape);
+				a.loadConstant(s);
+				a.if_icmpne(next);
+			}
+			a.new_(view);
+			a.dup();
+			a.aload(0);
+			if (s < 2) {
+				// a List keeps its items: where an array is expected it is one of them
+				a.aload(1);
+			}
+			a.aload(elements);
+			a.checkcast(objects);
+			a.aload(printer);
+			if (s == 1) {
+				a.aload(order);
+			}
+			a.aload(className);
+			a.aload(calls);
+			String items = s < 2 ? "Ljava/lang/Object;" : "";
+			String ordered = s == 1 ? "Ljava/lang/Object;" : "";
+			a.invokespecial(this.cp.methodRef(view, "<init>", "(Ljava/lang/Object;" + items
+					+ "[Ljava/lang/Object;Ljava/lang/Object;" + ordered + "Ljava/lang/String;" + callsDesc + ")V"));
+			a.areturn();
+			if (s < views.length - 1) {
+				a.labelBinding(next);
+			}
+		}
+		a.labelBinding(noValue);
+		a.new_(cls("java/lang/RuntimeException"));
+		a.dup();
+		a.ldc(str(JAVA_VIEW_NO_VALUE));
+		a.aload(members);
+		a.checkcast(objects);
+		a.iload(index);
+		a.aaload();
+		a.invokestatic(this.lispToString);
+		a.invokevirtual(method("java/lang/String", "concat", "(Ljava/lang/String;)Ljava/lang/String;"));
+		a.invokespecial(method("java/lang/RuntimeException", "<init>", "(Ljava/lang/String;)V"));
+		a.athrow();
+		a.labelBinding(badShape);
+		throwDescribing(a, usage, 2);
+		a.labelBinding(badPrinter);
+		throwDescribing(a, usage, 3);
+		a.labelBinding(badOrder);
+		throwDescribing(a, usage, 4);
+		a.labelBinding(badClass);
+		throwDescribing(a, usage, 5);
+		a.labelBinding(badItems);
+		throwDescribing(a, usage, 1);
 		return new Method(name, desc, a);
 	}
 
 	// Pushes the Lisp string in SLOT unquoted (its quote-framed spelling without the
 	// quotes), or jumps to REFUSED when the slot holds no Lisp string.
-	private void emitUnquoted(MethodCode a, int slot, MethodCode.Label refused) {
+	void emitUnquoted(MethodCode a, int slot, MethodCode.Label refused) {
 		ClassEntry string = cls("java/lang/String");
 		MethodRefEntry length = method("java/lang/String", "length", "()I");
 		a.aload(slot);
@@ -3759,12 +4469,14 @@ final class JvmJavaDirectSites {
 		return new Method(name, desc, a);
 	}
 
-	// _jcmp(Object fn, Object args, Object answer)Integer: a Comparator's function's
+	// _jcmp(Object fn, Object args, Object answer)Object: a Comparator's function's
 	// answer as Clojure's AFunction.compare reads it (eval/JavaInterop's handler, the
 	// bridge's callback): t -1; |false| 1 when fn answers true -- neither nil nor
 	// |false| -- for the two arguments of ARGS swapped, else 0; a fixnum or bignum its
 	// low 32 bits, a float truncated (d2i saturates, NaN is 0), a ratio its DECIMAL64
-	// quotient truncated; anything else null, which the return conversion refuses.
+	// quotient truncated -- each an Integer; nil the NullPointerException and anything
+	// else the ClassCastException AFunction.compare's cast to Number throws, which the
+	// callback throws as the comparator's own failure.
 	private Method buildComparison(Utf8Entry name, Utf8Entry desc) {
 		MethodCode a = new MethodCode();
 		ClassEntry objects = cls("[Ljava/lang/Object;");
@@ -3896,7 +4608,57 @@ final class JvmJavaDirectSites {
 		a.invokestatic(integerOf);
 		a.areturn();
 		a.labelBinding(notRatio);
-		a.aconst_null();
+		// nil: AFunction.compare's ((Number) nil).intValue()
+		MethodCode.Label notNil = a.newLabel();
+		a.aload(2);
+		a.ifnonnull(notNil);
+		a.new_(cls("java/lang/NullPointerException"));
+		a.dup();
+		a.ldc(str(JavaImplementation.COMPARISON_OF_NIL));
+		a.invokespecial(method("java/lang/NullPointerException", "<init>", "(Ljava/lang/String;)V"));
+		a.areturn();
+		a.labelBinding(notNil);
+		// anything else: its cast to Number, naming a host object's class, the class of
+		// the object a receiver kind is in Java (a string's), else the printed value
+		MethodCode.Label notHost = a.newLabel();
+		MethodCode.Label printed = a.newLabel();
+		MethodCode.Label named = a.newLabel();
+		MethodRefEntry getClass = method("java/lang/Object", "getClass", "()Ljava/lang/Class;");
+		MethodRefEntry getName = method("java/lang/Class", "getName", "()Ljava/lang/String;");
+		MethodRefEntry concat = method("java/lang/String", "concat", "(Ljava/lang/String;)Ljava/lang/String;");
+		a.aload(2);
+		a.invokestatic(host());
+		a.ifeq(notHost);
+		a.aload(2);
+		a.invokevirtual(getClass);
+		a.invokevirtual(getName);
+		a.astore(3);
+		a.goto_(named);
+		a.labelBinding(notHost);
+		a.aload(2);
+		a.invokestatic(receiver());
+		a.astore(4);
+		a.aload(4);
+		a.ifnull(printed);
+		a.aload(4);
+		a.invokevirtual(getClass);
+		a.invokevirtual(getName);
+		a.astore(3);
+		a.goto_(named);
+		a.labelBinding(printed);
+		a.aload(2);
+		a.invokestatic(this.lispToString);
+		a.astore(3);
+		a.labelBinding(named);
+		a.new_(cls("java/lang/ClassCastException"));
+		a.dup();
+		a.ldc(str(JavaImplementation.COMPARISON_CAST_PREFIX));
+		a.aload(3);
+		a.checkcast(cls("java/lang/String"));
+		a.invokevirtual(concat);
+		a.ldc(str(JavaImplementation.COMPARISON_CAST_SUFFIX));
+		a.invokevirtual(concat);
+		a.invokespecial(method("java/lang/ClassCastException", "<init>", "(Ljava/lang/String;)V"));
 		a.areturn();
 		return new Method(name, desc, a);
 	}

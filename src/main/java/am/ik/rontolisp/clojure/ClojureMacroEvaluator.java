@@ -55,8 +55,9 @@ public interface ClojureMacroEvaluator {
 	}
 
 	/**
-	 * The lowering's half of the macro-time {@code eval} and {@code resolve}: each takes
-	 * a value as the run-time library holds it and answers the core form to evaluate.
+	 * The lowering's half of the macro-time {@code eval}, {@code resolve} and macro
+	 * scopes: each takes a value as the run-time library holds it and answers the core
+	 * form to evaluate.
 	 */
 	interface Lowering {
 
@@ -75,6 +76,16 @@ public interface ClojureMacroEvaluator {
 		 * @return the lowered form
 		 */
 		LispVal resolveForm(LispVal value);
+
+		/**
+		 * The form the macro scope of a namespace evaluates to
+		 * ({@code ClojureMacroLowering.macroScope}): the scope as the lowering knows it
+		 * now, so a macro body's {@code macroexpand} resolves its head in {@code *ns*}
+		 * over the macros, aliases and refers made so far.
+		 * @param namespace the namespace's name, a string
+		 * @return the quoted scope
+		 */
+		LispVal macroScopeForm(LispVal namespace);
 
 	}
 

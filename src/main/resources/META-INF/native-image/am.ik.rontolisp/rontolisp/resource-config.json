@@ -375,6 +375,12 @@
       },
       {
         "condition": {
+          "typeReachable": "am.ik.rontolisp.eval.InflateLibrary"
+        },
+        "pattern": "am/ik/rontolisp/eval/inflate\\.lisp"
+      },
+      {
+        "condition": {
           "typeReachable": "am.ik.rontolisp.eval.EnvironmentLibrary"
         },
         "pattern": "am/ik/rontolisp/eval/environment\\.lisp"

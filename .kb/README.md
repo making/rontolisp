@@ -160,7 +160,7 @@ deliberate boundaries the audit must not undo: user-facing operator catalogues l
 - [jvm-aot-cache.md](jvm-aot-cache.md) -- the JDK 25 Leyden AOT cache, measured and deliberately not shipped
 - [stack-map-frames.md](stack-map-frames.md) -- class version 61, frames computed as `JvmClassSplitter` writes the class (`java.lang.classfile`'s generator over `StackMapFrames.resolver`); failures, measured cost; `ClassFileInfo` on the same API; the `wide` prefix
 - [template-class-embedding.md](template-class-embedding.md) -- when to use a Java template class, shipping it beside the program named after it, and class closures
-- [java-interop.md](java-interop.md) -- `java:` interop: one resolution model, resolved sites as direct calls (`--java-static`, native-image without metadata), `java:reify`/`java:proxy`/function arguments as generated classes, the reflection bridge for the rest, what a callback raises passing through the Java call, what a member throws (`java:java-exception`, and back to Java as its throwable)
+- [java-interop.md](java-interop.md) -- `java:` interop: one resolution model, resolved sites as direct calls (`--java-static`, native-image without metadata), `java:reify`/`java:proxy`/function arguments as generated classes, the reflection bridge for the rest, what a callback raises passing through the Java call, what a member throws (`java:java-exception`, and back to Java as its throwable), handles and views (`java:handle`, `java:view`: Java objects standing for Lisp values, one runtime class for both backends, a List view's array fallback), a Comparator's refusals
 
 ## WASM backends
 

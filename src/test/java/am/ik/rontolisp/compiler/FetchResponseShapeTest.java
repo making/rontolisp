@@ -57,9 +57,9 @@ class FetchResponseShapeTest {
 		// change here changes what every env.fetch host receives, so it must fail
 		// loudly (the host halves are pinned against it in HostFetchLibraryTest).
 		assertThat(FetchResponseShape.requestFields()).extracting(FetchResponseShape.Field::name)
-			.containsExactly("url", "method", "headers", "body");
+			.containsExactly("url", "method", "headers", "body", "octets");
 		assertThat(FetchResponseShape.requestFields()).extracting(FetchResponseShape.Field::keyword)
-			.containsExactly(":URL", ":METHOD", ":HEADERS", ":BODY");
+			.containsExactly(":URL", ":METHOD", ":HEADERS", ":BODY", ":OCTETS");
 		assertThat(FetchResponseShape.HOST_ENVELOPE_ERROR_KEY).isEqualTo("error");
 	}
 

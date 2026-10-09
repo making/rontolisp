@@ -112,9 +112,9 @@ final class JvmJavaImplementations {
 	private boolean baseTested;
 
 	/**
-	 * Whether the program makes or reads a {@code java:handle} ({@link #handleClass()}).
+	 * Whether a handle or view the program makes calls it back ({@link #callsClass()}).
 	 */
-	private boolean handles;
+	private boolean calls;
 
 	/**
 	 * One generated class: its name, what it implements, and each slot's callback.
@@ -156,101 +156,212 @@ final class JvmJavaImplementations {
 		return this.programInternalName + "$Implementation";
 	}
 
-	/** The suffix of the generated class a {@code java:handle} makes an object of. */
-	static final String HANDLE_SUFFIX = "$Handle";
+	/** The suffix of the class a program's handles and views call it back through. */
+	static final String CALLS_SUFFIX = "$JavaCalls";
+
+	/** {@code _jvtext(Object printer, Object value)String}: a view's {@code toString}. */
+	static final String TEXT_CALLBACK = "_jvtext";
 
 	/**
-	 * The class a {@code (java:handle value "text" hash "order")} makes an object of,
-	 * {@code <Program>$Handle}: the value, the text, the hash and the order text in four
-	 * fields, the text its {@code toString}, its {@code equals}, {@code hashCode} and
-	 * {@code compareTo} (the eval package's {@code JavaHandle}, member for member).
-	 * Asking for it ships it beside the program.
+	 * {@code _jvorder(Object order, Object value, Object other)Integer}: a handle's or a
+	 * vector view's {@code compareTo}.
+	 */
+	static final String ORDER_CALLBACK = "_jvorder";
+
+	/**
+	 * The classes a {@code java:handle} makes and the interfaces every handle and view
+	 * shares ({@code runtime/RontoJava*}): the interpreter makes them too, and they
+	 * travel beside a compiled program that names {@code java:handle} or
+	 * {@code java:view} (a view's order failure is a handle's).
+	 */
+	static final List<String> RUNTIME_CLASS_FILES = List.of("am/ik/rontolisp/runtime/RontoJavaValue.class",
+			"am/ik/rontolisp/runtime/RontoJavaCalls.class", "am/ik/rontolisp/runtime/RontoJavaHandle.class",
+			"am/ik/rontolisp/runtime/RontoJavaNumberHandle.class");
+
+	/**
+	 * The classes a {@code java:view} makes ({@code runtime/RontoJava*View}), which
+	 * travel beside a compiled program that names it, with {@link #RUNTIME_CLASS_FILES}.
+	 */
+	static final List<String> VIEW_RUNTIME_CLASS_FILES = List.of("am/ik/rontolisp/runtime/RontoJavaListView.class",
+			"am/ik/rontolisp/runtime/RontoJavaVectorView.class", "am/ik/rontolisp/runtime/RontoJavaSetView.class",
+			"am/ik/rontolisp/runtime/RontoJavaMapView.class");
+
+	/** The internal name of {@code runtime/RontoJavaCalls}. */
+	static final String CALLS_INTERFACE = "am/ik/rontolisp/runtime/RontoJavaCalls";
+
+	private static final String TEXT_DESC = "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/String;";
+
+	private static final String ORDER_DESC = "(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Integer;";
+
+	/**
+	 * The class a handle or view the program makes calls a Lisp function through --
+	 * {@code <Program>$JavaCalls implements RontoJavaCalls}, whose {@code text} and
+	 * {@code order} call the program's {@code _jvtext} and {@code _jvorder}. Asking for
+	 * it ships it beside the program and adds the two callbacks.
 	 * @return its internal name
 	 */
-	String handleClass() {
-		this.handles = true;
-		return this.programInternalName + HANDLE_SUFFIX;
+	String callsClass() {
+		if (!this.calls) {
+			this.calls = true;
+			this.methods.add(buildText());
+			this.methods.add(buildOrder());
+		}
+		return this.programInternalName + CALLS_SUFFIX;
 	}
 
-	// final class <Program>$Handle implements Comparable: Object value, String text, int
-	// hash, String order; toString the text; equals over the text, hashCode the hash,
-	// compareTo over the order (a non-handle compared is a ClassCastException, as a
-	// Comparable of another class throws).
-	private static ClassDefinition writeHandle(String internalName) {
+	// final class <Program>$JavaCalls implements RontoJavaCalls: text and order call the
+	// program's package-private _jvtext / _jvorder.
+	private ClassDefinition writeCalls(String internalName) {
 		ConstantPool pool = new ConstantPool();
 		ClassEntry selfClass = pool.classEntry(internalName);
 		ClassEntry objectClass = pool.classEntry("java/lang/Object");
-		ClassEntry stringClass = pool.classEntry("java/lang/String");
+		ClassEntry programClass = pool.classEntry(this.programInternalName);
 		ClassDefinition.Builder definition = ClassDefinition.builder(pool,
 				AccessFlag.ACC_FINAL | AccessFlag.ACC_SUPER | AccessFlag.ACC_SYNTHETIC, selfClass, objectClass,
 				pool.utf8Entry("Code"));
-		definition.addInterface(pool.classEntry("java/lang/Comparable"));
-		definition.addField(AccessFlag.ACC_FINAL, pool.utf8Entry("value"), pool.utf8Entry("Ljava/lang/Object;"));
-		definition.addField(AccessFlag.ACC_FINAL, pool.utf8Entry("text"), pool.utf8Entry("Ljava/lang/String;"));
-		definition.addField(AccessFlag.ACC_FINAL, pool.utf8Entry("hash"), pool.utf8Entry("I"));
-		definition.addField(AccessFlag.ACC_FINAL, pool.utf8Entry("order"), pool.utf8Entry("Ljava/lang/String;"));
-		FieldRefEntry value = pool.fieldRef(selfClass, "value", "Ljava/lang/Object;");
-		FieldRefEntry text = pool.fieldRef(selfClass, "text", "Ljava/lang/String;");
-		FieldRefEntry hash = pool.fieldRef(selfClass, "hash", "I");
-		FieldRefEntry order = pool.fieldRef(selfClass, "order", "Ljava/lang/String;");
-		// <init>(Object value, String text, int hash, String order)
+		definition.addInterface(pool.classEntry(CALLS_INTERFACE));
 		MethodCode init = new MethodCode();
 		init.aload(0);
 		init.invokespecial(pool.methodRef(objectClass, "<init>", "()V"));
-		init.aload(0);
-		init.aload(1);
-		init.putfield(value);
-		init.aload(0);
-		init.aload(2);
-		init.putfield(text);
-		init.aload(0);
-		init.iload(3);
-		init.putfield(hash);
-		init.aload(0);
-		init.aload(4);
-		init.putfield(order);
 		init.return_();
-		definition.addMethod(0, pool.utf8Entry("<init>"),
-				pool.utf8Entry("(Ljava/lang/Object;Ljava/lang/String;ILjava/lang/String;)V"), init);
-		MethodCode toString = new MethodCode();
-		toString.aload(0);
-		toString.getfield(text);
-		toString.areturn();
-		definition.addMethod(AccessFlag.ACC_PUBLIC, pool.utf8Entry("toString"), pool.utf8Entry("()Ljava/lang/String;"),
-				toString);
-		MethodCode equals = new MethodCode();
-		MethodCode.Label other = equals.newLabel();
-		equals.aload(1);
-		equals.instanceOf(selfClass);
-		equals.ifeq(other);
-		equals.aload(0);
-		equals.getfield(text);
-		equals.aload(1);
-		equals.checkcast(selfClass);
-		equals.getfield(text);
-		equals.invokevirtual(pool.methodRef(stringClass, "equals", "(Ljava/lang/Object;)Z"));
-		equals.ireturn();
-		equals.labelBinding(other);
-		equals.loadConstant(0);
-		equals.ireturn();
-		definition.addMethod(AccessFlag.ACC_PUBLIC, pool.utf8Entry("equals"), pool.utf8Entry("(Ljava/lang/Object;)Z"),
-				equals);
-		MethodCode hashCode = new MethodCode();
-		hashCode.aload(0);
-		hashCode.getfield(hash);
-		hashCode.ireturn();
-		definition.addMethod(AccessFlag.ACC_PUBLIC, pool.utf8Entry("hashCode"), pool.utf8Entry("()I"), hashCode);
-		MethodCode compareTo = new MethodCode();
-		compareTo.aload(0);
-		compareTo.getfield(order);
-		compareTo.aload(1);
-		compareTo.checkcast(selfClass);
-		compareTo.getfield(order);
-		compareTo.invokevirtual(pool.methodRef(stringClass, "compareTo", "(Ljava/lang/String;)I"));
-		compareTo.ireturn();
-		definition.addMethod(AccessFlag.ACC_PUBLIC, pool.utf8Entry("compareTo"),
-				pool.utf8Entry("(Ljava/lang/Object;)I"), compareTo);
+		definition.addMethod(0, pool.utf8Entry("<init>"), pool.utf8Entry("()V"), init);
+		MethodCode text = new MethodCode();
+		text.aload(1);
+		text.aload(2);
+		text.invokestatic(pool.methodRef(programClass, TEXT_CALLBACK, TEXT_DESC));
+		text.areturn();
+		definition.addMethod(AccessFlag.ACC_PUBLIC, pool.utf8Entry("text"),
+				pool.utf8Entry("(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/String;"), text);
+		MethodCode order = new MethodCode();
+		order.aload(1);
+		order.aload(2);
+		order.aload(3);
+		order.invokestatic(pool.methodRef(programClass, ORDER_CALLBACK, ORDER_DESC));
+		order.areturn();
+		definition.addMethod(AccessFlag.ACC_PUBLIC, pool.utf8Entry("order"),
+				pool.utf8Entry("(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Integer;"), order);
 		return definition.build();
+	}
+
+	// static String _jvtext(Object printer, Object value): (printer value), a string's
+	// text, any other answer as the program prints it (eval/JavaInterop's Calls.text).
+	// What leaves it thrown is recorded on its way out to the Java caller (_jsig), for
+	// the site whose Java call it reaches.
+	private JvmJavaDirectSites.Method buildText() {
+		MethodCode a = new MethodCode();
+		MethodCode.Label start = a.newBoundLabel();
+		ClassEntry objectClass = cls("java/lang/Object");
+		MethodRefEntry signal = this.direct.signalHelper();
+		MethodCode.Label notString = a.newLabel();
+		a.aload(0);
+		a.loadConstant(2);
+		a.anewarray(objectClass);
+		a.dup();
+		a.loadConstant(0);
+		a.aload(1);
+		a.aastore();
+		a.invokestatic(this.cp.methodRef(this.thisClass, "_apply",
+				"(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;"));
+		a.astore(2);
+		this.direct.render(a, 2);
+		this.direct.emitUnquoted(a, 2, notString);
+		a.areturn();
+		a.labelBinding(notString);
+		a.aload(2);
+		a.invokestatic(this.lispToString);
+		a.areturn();
+		MethodCode.Label end = a.newBoundLabel();
+		a.invokestatic(signal);
+		a.athrow();
+		a.exceptionCatch(start, end, end, cls("java/lang/Throwable"));
+		return new JvmJavaDirectSites.Method(this.cp.utf8Entry(TEXT_CALLBACK), this.cp.utf8Entry(TEXT_DESC), a);
+	}
+
+	// static Integer _jvorder(Object order, Object value, Object other): (order value
+	// (_junm other)), its answer's sign, or null for an answer that is no real number
+	// (eval/JavaInterop's Calls.order). What leaves it thrown is recorded on its way out
+	// to the Java caller (_jsig).
+	private JvmJavaDirectSites.Method buildOrder() {
+		MethodCode a = new MethodCode();
+		MethodCode.Label start = a.newBoundLabel();
+		ClassEntry objectClass = cls("java/lang/Object");
+		ClassEntry bigInteger = cls("java/math/BigInteger");
+		ClassEntry ratio = cls("[Ljava/math/BigInteger;");
+		MethodRefEntry signal = this.direct.signalHelper();
+		MethodRefEntry integerOf = method("java/lang/Integer", "valueOf", "(I)Ljava/lang/Integer;");
+		// (order value other'): the list { value, { other', null } }
+		a.aload(0);
+		a.loadConstant(2);
+		a.anewarray(objectClass);
+		a.dup();
+		a.loadConstant(0);
+		a.aload(1);
+		a.aastore();
+		a.dup();
+		a.loadConstant(1);
+		a.loadConstant(2);
+		a.anewarray(objectClass);
+		a.dup();
+		a.loadConstant(0);
+		a.aload(2);
+		a.invokestatic(this.direct.unmarshalHelper());
+		a.aastore();
+		a.aastore();
+		a.invokestatic(this.cp.methodRef(this.thisClass, "_apply",
+				"(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;"));
+		a.astore(3);
+		MethodCode.Label notLong = a.newLabel();
+		MethodCode.Label notDouble = a.newLabel();
+		MethodCode.Label notBignum = a.newLabel();
+		MethodCode.Label notRatio = a.newLabel();
+		a.aload(3);
+		a.instanceOf(cls("java/lang/Long"));
+		a.ifeq(notLong);
+		a.aload(3);
+		a.checkcast(cls("java/lang/Long"));
+		a.invokevirtual(method("java/lang/Long", "longValue", "()J"));
+		a.invokestatic(method("java/lang/Long", "signum", "(J)I"));
+		a.invokestatic(integerOf);
+		a.areturn();
+		a.labelBinding(notLong);
+		a.aload(3);
+		a.instanceOf(cls("java/lang/Double"));
+		a.ifeq(notDouble);
+		a.aload(3);
+		a.checkcast(cls("java/lang/Double"));
+		a.invokevirtual(method("java/lang/Double", "doubleValue", "()D"));
+		a.invokestatic(method("java/lang/Math", "signum", "(D)D"));
+		a.d2i();
+		a.invokestatic(integerOf);
+		a.areturn();
+		a.labelBinding(notDouble);
+		a.aload(3);
+		a.instanceOf(bigInteger);
+		a.ifeq(notBignum);
+		a.aload(3);
+		a.checkcast(bigInteger);
+		a.invokevirtual(method("java/math/BigInteger", "signum", "()I"));
+		a.invokestatic(integerOf);
+		a.areturn();
+		a.labelBinding(notBignum);
+		a.aload(3);
+		a.instanceOf(ratio);
+		a.ifeq(notRatio);
+		a.aload(3);
+		a.checkcast(ratio);
+		a.loadConstant(0);
+		a.aaload();
+		a.invokevirtual(method("java/math/BigInteger", "signum", "()I"));
+		a.invokestatic(integerOf);
+		a.areturn();
+		a.labelBinding(notRatio);
+		a.aconst_null();
+		a.areturn();
+		MethodCode.Label end = a.newBoundLabel();
+		a.invokestatic(signal);
+		a.athrow();
+		a.exceptionCatch(start, end, end, cls("java/lang/Throwable"));
+		return new JvmJavaDirectSites.Method(this.cp.utf8Entry(ORDER_CALLBACK), this.cp.utf8Entry(ORDER_DESC), a);
 	}
 
 	/**
@@ -348,6 +459,10 @@ final class JvmJavaImplementations {
 	 */
 	Set<String> callbackNames() {
 		Set<String> names = new LinkedHashSet<>();
+		if (this.calls) {
+			names.add(TEXT_CALLBACK);
+			names.add(ORDER_CALLBACK);
+		}
 		for (Shell shell : this.shells.values()) {
 			for (String callback : shell.callbacks()) {
 				if (callback != null) {
@@ -374,9 +489,9 @@ final class JvmJavaImplementations {
 	 */
 	Map<String, byte[]> classFiles(JvmClassSplitter.Target target) {
 		Map<String, byte[]> files = new LinkedHashMap<>();
-		if (this.handles) {
-			String handle = this.programInternalName + HANDLE_SUFFIX;
-			files.put(handle + ".class", written(writeHandle(handle), target));
+		if (this.calls) {
+			String calls = this.programInternalName + CALLS_SUFFIX;
+			files.put(calls + ".class", written(writeCalls(calls), target));
 		}
 		if (this.baseTested || !this.shells.isEmpty()) {
 			String base = this.programInternalName + "$Implementation";
@@ -542,9 +657,11 @@ final class JvmJavaImplementations {
 
 	// static R _jimpl$K(Object fn, Object[] args): (fn [name] (_junm args[0]) ...) --
 	// _junf after :java-false -- then the value converted to R -- or the interpreter's
-	// error for one that does not; a comparison's answer read first by _jcmp. What
-	// leaves it thrown -- the function's exit or condition, that error -- is recorded on
-	// its way out to the Java caller (_jsig), for the site whose Java call it reaches.
+	// error for one that does not; a comparison's answer read by _jcmp instead, whose
+	// refusal (AFunction.compare's NullPointerException or ClassCastException) is the
+	// comparator's own failure, thrown outside the handler. What else leaves it thrown --
+	// the function's exit or condition, that error -- is recorded on its way out to the
+	// Java caller (_jsig), for the site whose Java call it reaches.
 	private JvmJavaDirectSites.Method buildCallback(boolean proxy, String iface, JavaImplementation.Slot slot,
 			boolean javaFalse, boolean compares, Utf8Entry name, Utf8Entry desc) {
 		MethodCode a = new MethodCode();
@@ -599,27 +716,31 @@ final class JvmJavaImplementations {
 		a.invokestatic(this.cp.methodRef(this.thisClass, "_apply",
 				"(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;"));
 		JavaType returnType = slot.returnType();
+		MethodCode.Label refused = a.newLabel();
 		if ("void".equals(returnType.name())) {
 			a.pop();
 			a.return_();
 		}
+		else if (compares) {
+			// Object c = _jcmp(fn, args, value): an Integer answers; anything else is the
+			// comparator's own failure (AFunction.compare's cast), thrown below the
+			// handler so that it is not recorded: the site wraps it as a member's.
+			a.astore(4);
+			a.aload(0);
+			a.aload(2);
+			a.aload(4);
+			a.invokestatic(this.direct.comparisonHelper());
+			a.astore(5);
+			a.aload(5);
+			a.instanceOf(cls("java/lang/Integer"));
+			a.ifeq(refused);
+			a.aload(5);
+			a.checkcast(cls("java/lang/Integer"));
+			a.invokevirtual(method("java/lang/Integer", "intValue", "()I"));
+			a.return_(returnKind(returnType));
+		}
 		else {
 			a.astore(4);
-			if (compares) {
-				// Integer c = _jcmp(fn, args, value); if (c != null) return c.intValue();
-				MethodCode.Label notCompared = a.newLabel();
-				a.aload(0);
-				a.aload(2);
-				a.aload(4);
-				a.invokestatic(this.direct.comparisonHelper());
-				a.astore(5);
-				a.aload(5);
-				a.ifnull(notCompared);
-				a.aload(5);
-				a.invokevirtual(method("java/lang/Integer", "intValue", "()I"));
-				a.return_(returnKind(returnType));
-				a.labelBinding(notCompared);
-			}
 			MethodCode.Label fits = a.newLabel();
 			a.aload(4);
 			a.invokestatic(this.direct.returnedCost(returnType));
@@ -644,6 +765,12 @@ final class JvmJavaImplementations {
 		a.invokestatic(signal);
 		a.athrow();
 		a.exceptionCatch(start, end, end, cls("java/lang/Throwable"));
+		if (compares) {
+			a.labelBinding(refused);
+			a.aload(5);
+			a.checkcast(cls("java/lang/Throwable"));
+			a.athrow();
+		}
 		return new JvmJavaDirectSites.Method(name, desc, a);
 	}
 

@@ -88,6 +88,22 @@ cases:
       "PUT:héllo"
       "PATCH:héllo"
       "DELETE:"
+  - name: an-octet-vector-body-is-sent-as-it-is
+    source: |
+      (dolist (body (list (make-array 6 :element-type '(unsigned-byte 8)
+                                        :initial-contents '(255 254 65 0 128 127))
+                          (make-array 0 :element-type '(unsigned-byte 8))
+                          "é"))
+        (print (rontolisp:await
+                (body-text
+                 (rontolisp:await
+                  (rontolisp:fetch (url "/octets-echo")
+                                   (list :method "POST" :body body
+                                         :headers '(("Content-Type" . "application/octet-stream")))))))))
+    expected: |
+      "application/octet-stream|fffe4100807f"
+      "application/octet-stream|"
+      "application/octet-stream|c3a9"
   - name: two-requests-in-flight-settle-independently
     source: |
       (let ((p1 (rontolisp:fetch (url "/echo") (list :method "POST" :body "one")))

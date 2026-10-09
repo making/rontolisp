@@ -5287,7 +5287,9 @@ public final class LispEvaluator {
 		this.globalEnv.defineFunction(jsubclass,
 				new LispFunction(jsubclass, args -> JavaInterop.subclass(args, caller)));
 		String jhandle = PackageRegistry.qualify(LispNames.JAVA_PKG, LispNames.JAVA_HANDLE);
-		this.globalEnv.defineFunction(jhandle, new LispFunction(jhandle, JavaInterop::handle));
+		this.globalEnv.defineFunction(jhandle, new LispFunction(jhandle, args -> JavaInterop.handle(args, caller)));
+		String jview = PackageRegistry.qualify(LispNames.JAVA_PKG, LispNames.JAVA_VIEW);
+		this.globalEnv.defineFunction(jview, new LispFunction(jview, args -> JavaInterop.view(args, caller)));
 	}
 
 	/**

@@ -89,6 +89,12 @@ final class ClojureRefusals {
 	/** {@code java.io.FileNotFoundException}: a file a stream cannot open. */
 	static final String FILE_NOT_FOUND = "RONTOLISP::%CLOJURE-FILE-NOT-FOUND-EXCEPTION";
 
+	/**
+	 * {@code java.util.zip.ZipException}: a compressed reply that is not what its content
+	 * coding says ({@code rontolisp.http-client}).
+	 */
+	static final String ZIP = "RONTOLISP::%CLOJURE-ZIP-EXCEPTION";
+
 	/** {@code java.io.UnsupportedEncodingException}: a charset no stream knows. */
 	static final String UNSUPPORTED_ENCODING = "RONTOLISP::%CLOJURE-UNSUPPORTED-ENCODING-EXCEPTION";
 
@@ -185,7 +191,7 @@ final class ClojureRefusals {
 			Map.entry(PATTERN_SYNTAX, "java.util.regex.PatternSyntaxException"),
 			Map.entry(ILLEGAL_FORMAT_CONVERSION, "java.util.IllegalFormatConversionException"),
 			Map.entry(ASSERTION_ERROR, "java.lang.AssertionError"), Map.entry(IO, "java.io.IOException"),
-			Map.entry(FILE_NOT_FOUND, "java.io.FileNotFoundException"),
+			Map.entry(FILE_NOT_FOUND, "java.io.FileNotFoundException"), Map.entry(ZIP, "java.util.zip.ZipException"),
 			Map.entry(UNSUPPORTED_ENCODING, "java.io.UnsupportedEncodingException"),
 			Map.entry(MALFORMED_URL, "java.net.MalformedURLException"),
 			Map.entry(SAX_PARSE, "org.xml.sax.SAXParseException"),

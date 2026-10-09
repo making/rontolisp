@@ -40,13 +40,6 @@ final class ClojureBytesLowering {
 	 */
 	static final String ARRAY_STREAM_P = PREFIX + "IO-ARRAY-STREAM-P";
 
-	/**
-	 * The family's view of a value handed to a {@code java:} member: a byte array as the
-	 * vector of its signed bytes, which {@code java:} hands a {@code byte[]} parameter as
-	 * one; anything else itself.
-	 */
-	static final String HOST_VIEW = PREFIX + "BYTES-HOST";
-
 	/** {@code (aget array i)} of one index: the alias of {@code aref}. */
 	static final String AGET = PREFIX + "AGET";
 
@@ -67,6 +60,13 @@ final class ClojureBytesLowering {
 	 */
 	static final String STRING_NEW = PREFIX + "STRING-NEW";
 
+	/**
+	 * An argument of a {@code java.lang.String} construction: a byte array as it is,
+	 * which the construction decodes, anything else as a {@code java:} member takes it.
+	 * The alias of {@link ClojureInteropLowering#HOST_VALUE}.
+	 */
+	static final String HOST_VALUE = PREFIX + "BYTES-HOST-VALUE";
+
 	/** {@code .getBytes} of a string: its byte array in a charset. */
 	static final String STRING_BYTES = PREFIX + "STRING-BYTES";
 
@@ -83,7 +83,7 @@ final class ClojureBytesLowering {
 	 * existed.
 	 */
 	static final Map<String, String> ALIASES = Map.of(AGET, LispNames.AREF, ALENGTH, "ARRAY-DIMENSION", IS_BYTES,
-			"PROGN", STRING_NEW, ClojureInteropLowering.JAVA_NEW.name());
+			"PROGN", STRING_NEW, ClojureInteropLowering.JAVA_NEW.name(), HOST_VALUE, ClojureInteropLowering.HOST_VALUE);
 
 	/** The kind-aware setters, each to the place it stored into before. */
 	static final Map<String, String> SETTERS = Map.of(ASET, LispNames.AREF);
@@ -194,20 +194,12 @@ final class ClojureBytesLowering {
 	}
 
 	/**
-	 * A value handed to a {@code java:} member through the family's view.
-	 * @param argument the operand as it crosses so far
-	 * @return the operand behind the view
-	 */
-	static LispVal hostView(LispVal argument) {
-		return ClojureLowerUtil.list(new LispSymbol(HOST_VIEW), argument);
-	}
-
-	/**
 	 * A {@code java.lang.String} construction of one to four arguments over its
-	 * {@code java:new} call: the same operands under the family's alias, so a byte array
-	 * first argument decodes on every backend and anything else reaches the host's
-	 * constructor. Null for another class or count, or a call the lowering built
-	 * otherwise.
+	 * {@code java:new} call: the same operands under the family's alias, each argument
+	 * the host value of a {@code java:} member under the family's alias of it, so a byte
+	 * array first argument reaches the construction as it is and decodes on every
+	 * backend, and anything else reaches the host's constructor as it would. Null for
+	 * another class or count, or a call the lowering built otherwise.
 	 * @param cls the resolved class name
 	 * @param argCount the argument count
 	 * @param hostCall the {@code java:new} call
@@ -218,7 +210,13 @@ final class ClojureBytesLowering {
 				|| !ClojureLowerUtil.isSymbolNamed(call.car(), ClojureInteropLowering.JAVA_NEW.name())) {
 			return null;
 		}
-		return LispCons.rebuilt(call, new LispSymbol(STRING_NEW), call.cdr());
+		List<LispVal> operands = new ArrayList<>();
+		for (LispVal operand = call.cdr(); operand instanceof LispCons cell; operand = cell.cdr()) {
+			operands.add(cell.car() instanceof LispCons value
+					&& ClojureLowerUtil.isSymbolNamed(value.car(), ClojureInteropLowering.HOST_VALUE)
+							? LispCons.rebuilt(value, new LispSymbol(HOST_VALUE), value.cdr()) : cell.car());
+		}
+		return LispCons.rebuilt(call, new LispSymbol(STRING_NEW), ClojureLowerUtil.list(operands));
 	}
 
 	/**

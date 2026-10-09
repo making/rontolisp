@@ -70,16 +70,20 @@ final class HttpSupport {
 	 * @param url the request URL
 	 * @param requestHeaders the request headers to set; when they name no user-agent,
 	 * {@link FetchResponseShape#defaultUserAgent()} is added
-	 * @param body the request body, or {@code null} for no body
+	 * @param body the request body -- a {@code String}, sent as its UTF-8 octets, or a
+	 * {@code byte[]}, sent as it is -- or {@code null} for no body
 	 * @return a future settling to the response status, headers and body stream
 	 */
 	static CompletableFuture<Start> requestAsync(String method, String url, List<Header> requestHeaders,
-			@Nullable String body) {
+			@Nullable Object body) {
 		HttpClient client;
 		HttpRequest request;
 		try {
-			HttpRequest.BodyPublisher publisher = (body == null) ? HttpRequest.BodyPublishers.noBody()
-					: HttpRequest.BodyPublishers.ofString(body);
+			HttpRequest.BodyPublisher publisher = switch (body) {
+				case String text -> HttpRequest.BodyPublishers.ofString(text);
+				case byte[] octets -> HttpRequest.BodyPublishers.ofByteArray(octets);
+				case null, default -> HttpRequest.BodyPublishers.noBody();
+			};
 			HttpRequest.Builder builder = HttpRequest.newBuilder(URI.create(url)).method(method, publisher);
 			boolean userAgentSet = false;
 			for (Header header : requestHeaders) {

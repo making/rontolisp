@@ -599,9 +599,14 @@ public final class HostFetchLibrary {
 				// option<string>: an absent :body crosses as an ABSENT key -- a GET
 				// with any body key (even "") is a TypeError in the host's fetch.
 				case "body" -> optional.append("\n              (let ((body (getf options :body)))\n")
-					.append("                (if body (list ")
+					.append("                (if (stringp body) (list ")
 					.append(field.keyword())
 					.append(" body) nil))");
+				// An (unsigned-byte 8) :body crosses beside it, one character an octet.
+				case "octets" -> optional.append("\n              (let ((body (getf options :body)))\n")
+					.append("                (if (and body (not (stringp body))) (list ")
+					.append(field.keyword())
+					.append(" (map 'string #'code-char body)) nil))");
 				default -> throw new IllegalStateException(
 						"The http-plist request record grew a field this lowering does not carry: " + field.name());
 			}

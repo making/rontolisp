@@ -10,6 +10,7 @@ import am.ik.jvm.ConstantPool;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispNil;
+import am.ik.rontolisp.LispString;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.SourceProvenance;
@@ -190,6 +191,9 @@ final class JvmJavaSites {
 	 * @return whether the apply runtime is needed
 	 */
 	boolean needsApply(List<LispVal> program) {
+		if (callsBack(program)) {
+			return true;
+		}
 		for (LispVal form : program) {
 			for (LispCons site : proxySitesAnd(form)) {
 				if (JavaImplementations.isImplementationForm(site)) {
@@ -202,6 +206,51 @@ final class JvmJavaSites {
 					return true;
 				}
 			}
+		}
+		return false;
+	}
+
+	/**
+	 * Whether a handle or view the program makes may call a Lisp function back through
+	 * the program's {@code _apply} ({@code JvmJavaImplementations.callsClass}): it names
+	 * {@code java:view} (a printer, a vector's order), or {@code java:handle} anywhere
+	 * but at the head of a call whose order is absent, a literal string or nil -- one
+	 * given any other order, or a function value of it, may be handed a function. Read
+	 * off the forms before they are compiled.
+	 * @param program the package-resolved top-level forms
+	 * @return whether such a callback can happen
+	 */
+	static boolean callsBack(List<LispVal> program) {
+		for (LispVal form : program) {
+			if (callsBack(form, true, new IdentityHashMap<>())) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	private static boolean callsBack(LispVal form, boolean head, IdentityHashMap<LispCons, Boolean> seen) {
+		if (form instanceof LispSymbol symbol) {
+			return LispNames.JAVA_VIEW_QUALIFIED.equals(symbol.name())
+					|| !head && LispNames.JAVA_HANDLE_QUALIFIED.equals(symbol.name());
+		}
+		if (!(form instanceof LispCons cons) || seen.put(cons, Boolean.TRUE) != null) {
+			return false;
+		}
+		if (cons.car() instanceof LispSymbol operator && LispNames.JAVA_HANDLE_QUALIFIED.equals(operator.name())) {
+			List<LispVal> parts = cons.toList();
+			if (parts.size() > 4 && !(parts.get(4) instanceof LispString) && !(parts.get(4) instanceof LispNil)) {
+				return true;
+			}
+		}
+		LispVal current = cons;
+		boolean first = true;
+		while (current instanceof LispCons cell) {
+			if (callsBack(cell.car(), first, seen)) {
+				return true;
+			}
+			first = false;
+			current = cell.cdr();
 		}
 		return false;
 	}

@@ -38,8 +38,10 @@ public final class BrowserHttp {
 	 * @param method the HTTP method
 	 * @param url the request URL
 	 * @param reqHeaders request headers as alternating {@code name\nvalue\n...} lines
-	 * @param body the request body (used only when {@code hasBody} is {@code "1"})
-	 * @param hasBody {@code "1"} when a request body is present, {@code "0"} otherwise
+	 * @param body the request body (used only when {@code hasBody} is {@code "1"} or
+	 * {@code "2"})
+	 * @param hasBody {@code "1"} for a text body, {@code "2"} for an octet body (one
+	 * character each below 256), {@code "0"} for none
 	 * @return the request id to pass to {@link #awaitResponse}, or {@code "sync"} when
 	 * the async path is unavailable (not in a worker, or no cross-origin isolation) and
 	 * the caller must fall back to {@link #request}
@@ -55,8 +57,10 @@ public final class BrowserHttp {
 					  globalThis.__rontoFetchSeq = (globalThis.__rontoFetchSeq || 0) + 1;
 					  var id = '' + globalThis.__rontoFetchSeq;
 					  (globalThis.__rontoFetches = globalThis.__rontoFetches || {})[id] = sab;
-					  postMessage({ type: 'ronto-fetch', sab: sab, method: method, url: url,
-					                reqHeaders: reqHeaders, body: hasBody === '1' ? body : null });
+					  postMessage({ type: 'ronto-fetch', sab: sab, method: method, url: url, reqHeaders: reqHeaders,
+					                body: hasBody === '1' ? body
+					                  : hasBody === '2' ? Uint8Array.from(body, function (c) { return c.charCodeAt(0); })
+					                  : null });
 					  return id;
 					} catch (e) {
 					  return 'sync';
@@ -92,8 +96,10 @@ public final class BrowserHttp {
 	 * @param method the HTTP method
 	 * @param url the request URL
 	 * @param reqHeaders request headers as alternating {@code name\nvalue\n...} lines
-	 * @param body the request body (used only when {@code hasBody} is {@code "1"})
-	 * @param hasBody {@code "1"} when a request body is present, {@code "0"} otherwise
+	 * @param body the request body (used only when {@code hasBody} is {@code "1"} or
+	 * {@code "2"})
+	 * @param hasBody {@code "1"} for a text body, {@code "2"} for an octet body (one
+	 * character each below 256), {@code "0"} for none
 	 * @return {@code statusheadersbody}, or {@code ERRmessage} on failure
 	 */
 	@JS(args = { "method", "url", "reqHeaders", "body", "hasBody" },
@@ -105,8 +111,20 @@ public final class BrowserHttp {
 					  for (var i = 0; i + 1 < hs.length; i += 2) {
 					    if (hs[i].length > 0) { try { xhr.setRequestHeader(hs[i], hs[i + 1]); } catch (e) {} }
 					  }
-					  xhr.send(hasBody === '1' ? body : null);
-					  return '' + xhr.status + '\\u0001' + xhr.getAllResponseHeaders() + '\\u0001' + xhr.responseText;
+					  xhr.send(hasBody === '1' ? body
+					    : hasBody === '2' ? Uint8Array.from(body, function (c) { return c.charCodeAt(0); })
+					    : null);
+					  // The browser decodes a content coding it knows: the text is the decoded
+					  // one, so the head drops the field naming the coding and the length.
+					  var coding = xhr.getResponseHeader('content-encoding');
+					  var decoded = coding !== null && coding.split(',').every(function (c) {
+					    return /^\\s*(x-gzip|gzip|deflate|br)\\s*$/i.test(c);
+					  });
+					  var fields = xhr.getAllResponseHeaders().split('\\r\\n').filter(function (line) {
+					    var name = line.split(':')[0].trim().toLowerCase();
+					    return !decoded || (name !== 'content-encoding' && name !== 'content-length');
+					  }).join('\\r\\n');
+					  return '' + xhr.status + '\\u0001' + fields + '\\u0001' + xhr.responseText;
 					} catch (e) {
 					  return 'ERR\\u0001' + ((e && e.message) ? e.message : 'request failed');
 					}

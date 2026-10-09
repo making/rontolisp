@@ -18,6 +18,7 @@
 | `java:subclass` | callable でクラスを継承: `(java:subclass "super" '("iface"...) '("method"...) args... callable)` |
 | `java:reify` | インターフェースをメソッドごとに実装: `(java:reify "iface" "method" function ...)` |
 | `java:handle` | Java に値のない Lisp の値の代理: `(java:handle value "text")` |
+| `java:view` | Lisp のコレクションを読み取り専用の Java のコレクションとして代理: `(java:view value items :list)` |
 
 生成・返却されたオブジェクトは `#<java <class-name>>` という不透明な形で表示され、`java:call`/`java:field` に再び渡せます。
 
@@ -58,6 +59,7 @@ Lisp の値も `java:call` の receiver になり、`Object` 引数に渡した�
 | 真リスト / ベクタ (特殊化されたものも含む) | `T[]` (要素ごとに変換、プリミティブ配列も可)、または `List`/`Collection`/`Iterable` | 任意の Java 配列 → リスト |
 | ハッシュテーブル | 新しい `java.util.LinkedHashMap` (`Map`、`HashMap`、`Object` など) | — |
 | `java:handle` | Java からはテキストに見えるオブジェクト | 代理する値 |
+| `java:view` | 要素を持つ読み取り専用の `List`・`Set`・`Map` (`List` のビューは、そのまま受け取る引数がないときに限り要素の配列) | 代理する値 |
 
 Java の `null` (および `void` メソッド) は `nil` として返ります。Java の配列が期待される箇所に真リスト (または `make-array` で作ったランク 1 の配列。`double-float`、`single-float`、`bfloat16`、`(unsigned-byte 8|16|32)` に特殊化された配列も含む) を渡すと、要素ごとに要素型へ変換されます (`int[]` などのプリミティブ配列も含む)。`List`/`Collection`/`Iterable` が期待される箇所では `java.util.List` になり、ネストしたリストは再帰的に変換されます。逆方向では、Java の **配列** の結果は Lisp のリストになりますが、返された `java.util.List` は不透明な `java` オブジェクトのままで、そのメソッドを呼び出して操作します。
 
@@ -111,7 +113,7 @@ Java の false は Common Lisp 唯一の偽である `nil` として返ります
   (list (java:call l "get" 0) (java:call l "get" 0 :java-false)))   ; => (NIL |false|)
 ```
 
-これで終わる `java:proxy`・`java:reify`・`java:subclass` は、関数に Java の false を `|false|` として渡します。これで終わる呼び出しでインターフェースが期待される箇所に渡した関数も同様です。両方のマーカーで終わる呼び出しで `java.util.Comparator` が期待される箇所に渡した関数は、Clojure の `AFunction.compare` が関数を読むとおりに `compare` を返します。`t` は -1、`|false|` は引数 2 つを入れ替えた呼び出しが真なら 1 でなければ 0、浮動小数点数と分数は切り捨て、整数は下位 32 ビットです。
+これで終わる `java:proxy`・`java:reify`・`java:subclass` は、関数に Java の false を `|false|` として渡します。これで終わる呼び出しでインターフェースが期待される箇所に渡した関数も同様です。両方のマーカーで終わる呼び出しで `java.util.Comparator` が期待される箇所に渡した関数は、Clojure の `AFunction.compare` が関数を読むとおりに `compare` を返します。`t` は -1、`|false|` は引数 2 つを入れ替えた呼び出しが真なら 1 でなければ 0、浮動小数点数と分数は切り捨て、整数は下位 32 ビットです。`nil` は `AFunction.compare` と同じ `NullPointerException` を、それ以外の値は `ClassCastException` を投げ、呼び出しはこれをメソッドの失敗として報告します。
 
 ```lisp
 (let ((l (java:new "java.util.ArrayList")))
@@ -132,7 +134,21 @@ Java の false は Common Lisp 唯一の偽である `nil` として返ります
         (java:call (java:call m "keySet") "toArray")))   ; => ("{apple=1}" 1 (APPLE))
 ```
 
-Clojure フロントエンドはキーワードとシンボルをこの形で Java に渡し、Clojure の `Keyword` と `Symbol` と同じくハッシュし順序付けます。
+完全な形は `(java:handle value text hash order class)` です。`hash` が nil のハンドルはまったく同じ値のハンドルとだけ等しくなり、このとき `text` を nil にすると `Object` と同じくクラス名とハッシュで綴られます。関数の `order` は、値と、Java がハンドルと比べるオブジェクトとを比べ、その答えの符号で順序を決めます。`order` が nil のハンドルは何とも順序付けられません。`class` は等価と順序を分けます。クラスの異なるハンドル同士は等しくならず、比べると両方のクラス名を挙げた `ClassCastException` になります。実数のハンドルは、その数の `java.lang.Number` です ([java:handle](../reference/functions/java-handle.md))。
+
+### ビュー: java:view
+
+`(java:view value items shape)` は、Lisp のコレクションを代理する読み取り専用の Java コレクションを作ります。要素は items を `Object` 引数と同じ規則で一度だけ変換したものです。`shape` は `:list`、`:vector` (`RandomAccess` かつ `Comparable` でもある `List`)、`:set`、`:map` (ハッシュテーブルか plist から作る) のいずれかです。Java はこれを `java.util` のインターフェースを通して読みます。`equals` と `hashCode` はそれぞれの規約どおりで、書き込みはすべて `UnsupportedOperationException` になります。`toString` は値に対する printer の答えで、Java がビューを返すところでは代理する値が返ります。
+
+```lisp
+(let* ((items (list 1 "two"))
+       (v (java:view items items :list (lambda (x) (format nil "<~{~A~^ ~}>" x))))
+       (l (java:new "java.util.ArrayList")))
+  (java:call l "add" v)
+  (list (java:call l "toString") (eq (java:call l "get" 0) items)))   ; => ("[<1 two>]" T)
+```
+
+ビューは、クラスが合う箇所にはそのまま渡ります。Java の配列が期待される箇所では `List` のビューは要素の配列になりますが、それはビューをそのまま渡す方法 (可変長引数の配列に一つの要素として詰める方法を含む) がすべて合わないときに限られます。この変換があるのは、呼び出しが返した Java の配列がここではリストになるためで、そのビューは後の呼び出しが期待する配列に戻ります。Clojure フロントエンドは、すべての値をこの形で Java に渡します。ベクタ・リスト・セット・マップは Clojure の印字どおりに綴られるビューとして、キーワード・シンボル・分数は Clojure の `Keyword`・`Symbol`・`Ratio` と同じくハッシュし順序付けるハンドルとして、それ以外の値は自分自身とだけ等しいハンドルとして渡します ([java:view](../reference/functions/java-view.md))。
 
 `java` オブジェクトが `eq`・`eql` になるのは自分自身とだけです。2 回の呼び出しが返した同じオブジェクトは `eq` ですが、`equals` が真になる別々のオブジェクトは `eq` ではありません。`equal` と `equalp` はオブジェクトの `equals` で比較します。そのため `eq`・`eql` のハッシュテーブルは `java` オブジェクトを同一性でキーにし (格納後に変更したキーも見つかります)、`equal`・`equalp` のテーブルは `equals` と `hashCode` でキーにします。
 
@@ -502,7 +518,7 @@ native-image -jar prog.jar -H:ConfigurationFileDirectories=config
 
 - **JVM 専用**。インタプリタ (`java -jar rontolisp.jar`) と JVM コンパイル済みクラス (`java Prog`) で動作します。WASM バックエンドでは動作せず、連携クラスのリフレクションメタデータを持たない GraalVM ネイティブバイナリでのインタプリタ実行もできません (ネイティブバイナリで `java:` プログラムを `.class` に*コンパイルする*ことは可能です)。
 - コンパイル済みクラスでは `java:` の関数は呼び出し位置でのみ使えます。第一級の関数値を持たないため、`#'java:call` や `(funcall 'java:new ...)` はコンパイルエラーになります (代わりに自前の `defun` でラップしてください)。埋め込み `eval` ランタイムもこれらを認識しません。また `java:` を使うコンパイル済みプログラムの実行には、呼び出しを解決したリリースの JRE が必要で、実行時解決に回る呼び出しを含むものには、rontolisp をビルドした JRE と同等以上に新しい JRE が必要です。
-- `|false|` 以外のシンボル、ドット対 (非真リスト)、多次元 (ランク 2 以上) の配列はマーシャリングされません。代わりに `java:new`/`java:call` で構築した Java コレクションか、`java:handle` として渡してください。
+- `|false|` 以外のシンボル、ドット対 (非真リスト)、多次元 (ランク 2 以上) の配列はマーシャリングされません。代わりに `java:new`/`java:call` で構築した Java コレクションか、`java:handle` または `java:view` として渡してください。
 - 返された `java.util.List` は (Java 配列と異なり) 不透明な `java` オブジェクトのままです。同一性と可変性が保たれるため、リスト関数ではなく `java:call` (`"get"`、`"size"` など) で読み取ってください。
 - オーバーロード解決は引数コストによるもので、Java の完全な型推論規則ではありません。曖昧な呼び出しは曖昧性エラーを出さず、最小コスト (次に最小シグネチャ) の候補に解決されます。パラメータタグでオーバーロードを明示できます。
 - これは完全なホストリフレクションブリッジであり任意の Java コードを実行できます。`java:` を使うプログラムは他の JVM プログラムと同じ信頼度で扱ってください。

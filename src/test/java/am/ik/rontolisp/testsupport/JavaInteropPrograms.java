@@ -543,9 +543,124 @@ public final class JavaInteropPrograms {
 			(APPLE (B))
 			("[y, z, x]" 0)
 			"[b, a]"
-			java:handle expects (java:handle value "text" [hash ["order"]]), got 2
-			java:handle expects (java:handle value "text" [hash ["order"]]), got 1.5
-			java:handle expects (java:handle value "text" [hash ["order"]]), got X""";
+			java:handle expects (java:handle value text [hash [order ["class"]]]), got 2
+			java:handle expects (java:handle value text [hash [order ["class"]]]), got 1.5
+			java:handle expects (java:handle value text [hash [order ["class"]]]), got X""";
+
+	/**
+	 * {@code java:view} and {@code java:handle}'s identity, class and order: a view is a
+	 * read-only Java collection of its items -- a List's {@code toString} its printer's
+	 * answer, the {@code List} contract's {@code equals} and {@code hashCode}, every
+	 * write an {@code UnsupportedOperationException} -- handed back as its value at a
+	 * resolved, a dispatched and a run-time site; where an array is expected a List view
+	 * is one of its items, after every way to pass it whole (packed into a varargs array,
+	 * the {@code Object} overload); a set or map view converts nowhere its class does not
+	 * fit; a vector view orders by its function, one without an order is no Comparable. A
+	 * handle with no text and hash is equal only to a handle of its very value and
+	 * spelled class@hash, a class splits equality and order (a {@code ClassCastException}
+	 * naming the classes), an order function compares by value against any object, and a
+	 * handle of a real number is a {@code Number}. Malformed calls are refused by name.
+	 * Prints {@link #JAVA_VIEW_OUTPUT}.
+	 */
+	public static final String JAVA_VIEW_PROGRAM = """
+			(defvar *objects* "java.util.Objects")
+			(defvar *arrays* "java.util.Arrays")
+			(defun row (thunk)
+			  (handler-case (prin1 (funcall thunk)) (error (e) (princ e)))
+			  (terpri))
+			(defun get0 (l) (java:call l "get" 0))
+			(defun either (a b) (java:static "java.util.Objects" "requireNonNullElse" a b))
+			(defun by-length (a b) (if (vectorp b) (- (length a) (length b)) nil))
+			(let* ((items (list 1 "two" 3.5))
+			       (v (java:view items items :list (lambda (x) (format nil "<~{~A~^ ~}>" x))))
+			       (w (java:view #(1 2) #(1 2) :vector nil #'by-length "my.Vec"))
+			       (s (java:view 'set '("a" "b" "a") :set))
+			       (m (java:view 'map '("k" 1 "j" 2) :map (lambda (x) (string-downcase (symbol-name x))))))
+			  ;; a List: its elements, its printer's toString, the List contract, read-only
+			  (row (lambda () (list (java:call v "size") (java:call v "get" 1) (java:call v "toString")
+			                        (java:static *objects* "toString" v) (java:call v "hashCode")
+			                        (java:call v "equals" (java:static "java.util.List" "of" 1 "two" 3.5)))))
+			  (row (lambda () (java:call v "add" 4)))
+			  ;; handed back as the value it stands for, from a resolved, a dispatched and a run-time site
+			  (row (lambda () (let ((l (java:new "java.util.ArrayList")))
+			                    (java:call l "add" v)
+			                    (list (eq (get0 l) items) (eq (either nil v) items) (eq (java:static *objects* "requireNonNull" v) items)))))
+			  ;; where an array is expected, a List view is one of its items -- after every way to pass it whole
+			  (row (lambda () (list (java:static "java.util.Arrays" "toString" v) (java:static *arrays* "toString" v)
+			                        (java:call (java:static "java.util.Arrays" "asList" v) "size")
+			                        (java:static "java.lang.String" "valueOf" (java:view '(#\\a #\\b) '(#\\a #\\b) :list)))))
+			  ;; a set and a map: the items' members and pairs, read-only, their own spelling without a printer
+			  (row (lambda () (list (java:call s "size") (java:call s "contains" "a") (java:call s "toString")
+			                        (java:call m "get" "j") (java:call m "containsKey" "q") (java:call m "toString")
+			                        (java:call (java:new "java.util.HashMap" m) "get" "k"))))
+			  (row (lambda () (java:call m "put" "z" 3)))
+			  (row (lambda () (java:static "java.util.Arrays" "toString" s)))
+			  ;; a vector view compares by its order; a list view is no Comparable
+			  (row (lambda () (let ((ts (java:new "java.util.TreeSet")))
+			                    (java:call ts "add" w)
+			                    (java:call ts "add" (java:view #(7) #(7) :vector nil #'by-length "my.Vec"))
+			                    (java:call ts "add" (java:view #(1 2 3) #(1 2 3) :vector nil #'by-length "my.Vec"))
+			                    (mapcar #'length (java:call ts "toArray")))))
+			  (row (lambda () (java:call w "compareTo" "x")))
+			  (row (lambda () (java:call (java:view #(1) #(1) :vector) "compareTo" w))))
+			;; a handle with no text is equal only to a handle of its very value, spelled class@hash
+			(let* ((cell (list 1))
+			       (a (java:handle cell nil nil nil "my.Cell"))
+			       (b (java:handle cell nil nil nil "my.Cell"))
+			       (c (java:handle (list 1) nil nil nil "my.Cell")))
+			  (row (lambda () (list (java:call a "equals" b) (java:call a "equals" c)
+			                        (= (java:call a "hashCode") (java:call b "hashCode"))
+			                        (string= "my.Cell@" (subseq (java:call a "toString") 0 8)))))
+			  (row (lambda () (java:call a "compareTo" b))))
+			;; a class splits equality and order; an order function compares by value; a real's handle is a Number
+			(row (lambda () (list (java:call (java:handle 'k ":a" 1 "a" "K") "equals" (java:handle 's ":a" 1 "a" "S"))
+			                      (java:call (java:handle 'k ":a" 1 "a" "K") "equals" (java:handle 'k2 ":a" 1 "b" "K"))
+			                      (java:call (java:handle 'k ":a" 1 "a" "K") "compareTo" (java:handle 'k2 ":b" 1 "b" "K")))))
+			(row (lambda () (java:call (java:handle 'k ":a" 1 "a" "K") "compareTo" (java:handle 's ":a" 1 "a" "S"))))
+			(row (lambda () (java:call (java:handle 'k ":a" 1 "a" "K") "compareTo" "plain")))
+			(defun by-value (r other) (if (realp other) (cond ((< r other) -1) ((> r other) 1) (t 0)) nil))
+			(let ((half (java:handle 1/2 "1/2" 3 #'by-value "my.Ratio"))
+			      (third (java:handle 1/3 "1/3" 2 #'by-value "my.Ratio")))
+			  (row (lambda () (list (java:call half "compareTo" third) (java:call half "compareTo" 1)
+			                        (java:call half "compareTo" 0.25) (java:static "java.util.Collections" "max" (list half third))
+			                        (java:call half "doubleValue") (java:call half "intValue")
+			                        (java:static "java.lang.String" "format" "%s" (java:handle 7 "seven")))))
+			  (row (lambda () (java:call half "compareTo" (java:handle 'x "x")))))
+			(row (lambda () (java:view 1 2 :tree)))
+			(row (lambda () (java:view 1 2 :list)))
+			(row (lambda () (java:view 1 '(1 2 3) :map)))
+			(row (lambda () (java:view 1 '(1) :list nil (lambda (a b) 0))))
+			(row (lambda () (java:view 1 (list (lambda () 1)) :list)))
+			(row (lambda () (java:handle 1 nil)))
+			(row (lambda () (java:handle 1 "t" 0 "o" 5)))
+			""";
+
+	/** What {@link #JAVA_VIEW_PROGRAM} prints. */
+	public static final String JAVA_VIEW_OUTPUT = """
+			(3 "two" "<1 two 3.5>" "<1 two 3.5>" 1078132564 T)
+			error calling am.ik.rontolisp.runtime.RontoJavaListView.add: java.lang.UnsupportedOperationException
+			(T T T)
+			("[1, two, 3.5]" "[1, two, 3.5]" 1 "[a, b]")
+			(2 T "[a, b]" 2 NIL "map" 1)
+			error calling am.ik.rontolisp.runtime.RontoJavaMapView.put: java.lang.UnsupportedOperationException
+			No matching method java.util.Arrays.toString with 1 argument(s)
+			(1 2 3)
+			1
+			error calling am.ik.rontolisp.runtime.RontoJavaVectorView.compareTo: java.lang.ClassCastException: class am.ik.rontolisp.runtime.RontoJavaVectorView cannot be cast to class java.lang.Comparable
+			(T NIL T T)
+			error calling am.ik.rontolisp.runtime.RontoJavaHandle.compareTo: java.lang.ClassCastException: class my.Cell cannot be cast to class java.lang.Comparable
+			(NIL T -1)
+			error calling am.ik.rontolisp.runtime.RontoJavaHandle.compareTo: java.lang.ClassCastException: class S cannot be cast to class K
+			error calling am.ik.rontolisp.runtime.RontoJavaHandle.compareTo: java.lang.ClassCastException: class java.lang.String cannot be cast to class K
+			(1 -1 1 1/2 0.5 0 "seven")
+			error calling am.ik.rontolisp.runtime.RontoJavaNumberHandle.compareTo: java.lang.ClassCastException: class am.ik.rontolisp.runtime.RontoJavaHandle cannot be cast to class my.Ratio
+			java:view expects (java:view value items :list|:vector|:set|:map [printer [order ["class"]]]), got :TREE
+			java:view expects (java:view value items :list|:vector|:set|:map [printer [order ["class"]]]), got 2
+			java:view expects (java:view value items :list|:vector|:set|:map [printer [order ["class"]]]), got (1 2 3)
+			java:view expects (java:view value items :list|:vector|:set|:map [printer [order ["class"]]]), got #<lambda>
+			java:view: no Java value for #<lambda>
+			java:handle expects (java:handle value text [hash [order ["class"]]]), got NIL
+			java:handle expects (java:handle value text [hash [order ["class"]]]), got 5""";
 
 	/**
 	 * Specialized vectors and bignums as arguments, at a dispatched site ({@code ts},

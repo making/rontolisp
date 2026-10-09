@@ -18,10 +18,11 @@ import static org.assertj.core.api.Assertions.assertThat;
  * handle's ({@code JvmExportRuntimeBuilder}), the served-request runtime's and the war's
  * servlet transport ({@code JvmHttpHandlerRuntimeBuilder}), the {@code equalp} key fold's
  * ({@code JvmHashRuntimeBuilder}, whose one class the served list already carries -- a
- * class may travel for more than one reason), and the complex holder's
- * ({@code JvmComplexRuntimeBuilder}). This pins their union against the package's actual
- * class files, so a class added there is a failure HERE rather than a
- * {@code NoClassDefFoundError} in someone's deployment. Which list it belongs to is the
+ * class may travel for more than one reason), the complex holder's
+ * ({@code JvmComplexRuntimeBuilder}) and the handles' and views' a {@code java:handle} or
+ * {@code java:view} makes ({@code JvmJavaImplementations}). This pins their union against
+ * the package's actual class files, so a class added there is a failure HERE rather than
+ * a {@code NoClassDefFoundError} in someone's deployment. Which list it belongs to is the
  * feature's own test's business ({@code JvmHttpHandlerTravellingRuntimeTest} recomputes
  * the served closure).
  *
@@ -44,8 +45,10 @@ class JvmRuntimeClassFilesTest {
 				.of(JvmExportRuntimeBuilder.RUNTIME_CLASS_FILES, JvmHttpHandlerRuntimeBuilder.RUNTIME_CLASS_FILES,
 						JvmHttpHandlerRuntimeBuilder.WAR_RUNTIME_CLASS_FILES, JvmHashRuntimeBuilder.RUNTIME_CLASS_FILES,
 						JvmComplexRuntimeBuilder.RUNTIME_CLASS_FILES, JvmFetchRuntimeBuilder.RUNTIME_CLASS_FILES,
-						JvmIoRuntimeBuilder.RUNTIME_CLASS_FILES, JvmIoRuntimeBuilder.CHAR_FILE_RUNTIME_CLASS_FILES,
-						JvmIoRuntimeBuilder.STRING_INPUT_RUNTIME_CLASS_FILES)
+						JvmLispCompiler.INFLATE_RUNTIME_CLASS_FILES, JvmIoRuntimeBuilder.RUNTIME_CLASS_FILES,
+						JvmIoRuntimeBuilder.CHAR_FILE_RUNTIME_CLASS_FILES,
+						JvmIoRuntimeBuilder.STRING_INPUT_RUNTIME_CLASS_FILES,
+						JvmJavaImplementations.RUNTIME_CLASS_FILES, JvmJavaImplementations.VIEW_RUNTIME_CLASS_FILES)
 				.flatMap(List::stream)
 				.map(path -> path.substring(path.lastIndexOf('/') + 1))
 				.distinct()

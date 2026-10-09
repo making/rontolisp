@@ -229,12 +229,27 @@ final class JavaBridgeTemplate {
 	private static @Nullable Method hashValuesMethod;
 
 	/**
-	 * The program's generated {@code java:handle} class's {@code value} field
-	 * ({@code <Program>$Handle}), or null when the program makes no handle: a handle Java
-	 * hands back is the value it stands for (mirrors {@code JvmJavaDirectSites}'
-	 * unmarshal arm). Bound beside {@code _apply}.
+	 * {@code runtime/RontoJavaValue} -- what a {@code java:handle} or a {@code java:view}
+	 * makes -- as the program's loader finds it, or null when it finds none (then no
+	 * handle or view can exist): one Java hands back is the value it stands for, and one
+	 * is a host object though its class travels with the program (mirrors
+	 * {@code JvmJavaDirectSites}' unmarshal arm and {@code _jhost}). Bound beside
+	 * {@code _apply}, by name: this class may import nothing of rontolisp's.
 	 */
-	private static @Nullable Field handleValueField;
+	private static @Nullable Class<?> javaValueClass;
+
+	/** {@code RontoJavaValue.value()}, bound with {@link #javaValueClass}. */
+	private static @Nullable Method javaValueMethod;
+
+	/**
+	 * {@code runtime/RontoJavaListView} -- a {@code java:view} {@code List} -- bound with
+	 * {@link #javaValueClass}: it has no kind, since where an array is expected it is an
+	 * array of its items (mirrors {@code JvmJavaDirectSites}' view arms).
+	 */
+	private static @Nullable Class<?> javaListViewClass;
+
+	/** {@code RontoJavaListView.items()}, bound with {@link #javaListViewClass}. */
+	private static @Nullable Method javaListViewItems;
 
 	/**
 	 * The generated program's {@code _jsig(Throwable)}: what this bridge's {@code Proxy}
@@ -316,20 +331,44 @@ final class JavaBridgeTemplate {
 			hashValuesMethod = null;
 		}
 		try {
-			Field value = Class.forName(mainClass.getName() + HANDLE_SUFFIX, false, mainClass.getClassLoader())
-				.getDeclaredField("value");
-			value.setAccessible(true);
-			handleValueField = value;
+			Class<?> valueClass = Class.forName(JAVA_VALUE_CLASS, false, mainClass.getClassLoader());
+			javaValueMethod = valueClass.getMethod("value");
+			javaValueClass = valueClass;
 		}
-		catch (ClassNotFoundException | NoSuchFieldException ex) {
-			// No java:handle in this program: no handle can exist.
-			handleValueField = null;
+		catch (ClassNotFoundException | NoSuchMethodException ex) {
+			// No runtime/RontoJavaValue beside this program: no handle or view can exist.
+			javaValueClass = null;
+			javaValueMethod = null;
+		}
+		try {
+			Class<?> listViewClass = Class.forName(JAVA_LIST_VIEW_CLASS, false, mainClass.getClassLoader());
+			javaListViewItems = listViewClass.getMethod("items");
+			javaListViewClass = listViewClass;
+		}
+		catch (ClassNotFoundException | NoSuchMethodException ex) {
+			// No runtime/RontoJavaListView beside this program: no view can exist.
+			javaListViewClass = null;
+			javaListViewItems = null;
 		}
 	}
 
-	// The suffix of a program's generated java:handle class (mirrors
-	// JvmJavaImplementations.HANDLE_SUFFIX).
-	private static final String HANDLE_SUFFIX = "$Handle";
+	// What a java:handle or a java:view makes, and a java:view List (mirror
+	// runtime/RontoJavaValue and runtime/RontoJavaListView).
+	private static final String JAVA_VALUE_CLASS = "am.ik.rontolisp.runtime.RontoJavaValue";
+
+	private static final String JAVA_LIST_VIEW_CLASS = "am.ik.rontolisp.runtime.RontoJavaListView";
+
+	// A java:view List converted to an array of its items: after every way to pass it
+	// whole (mirrors compiler/JavaOverloads.COST_VIEW_ARRAY).
+	private static final int COST_VIEW_ARRAY = 12;
+
+	// The messages of a comparison's refusals (mirror compiler/JavaImplementation's
+	// COMPARISON_OF_NIL and comparisonCastFailure).
+	private static final String COMPARISON_OF_NIL = "Cannot invoke \"java.lang.Number.intValue()\" because \"n\" is null";
+
+	private static final String COMPARISON_CAST_PREFIX = "class ";
+
+	private static final String COMPARISON_CAST_SUFFIX = " cannot be cast to class java.lang.Number";
 
 	// A method every program the bridge travels with declares.
 	private static Method required(Class<?> mainClass, String name, Class<?>... parameterTypes) {
@@ -706,13 +745,20 @@ final class JavaBridgeTemplate {
 			if (index < 0) {
 				throw new UnsupportedOperationException("java:reify: no implementation of " + name + "." + key);
 			}
+			boolean compares = comparison && COMPARATOR_COMPARE.equals(key) && method.getReturnType() == int.class;
+			Object answer;
 			try {
-				return callback(name, proxy, method, methodArgs, functions[index], javaFalse,
-						comparison && COMPARATOR_COMPARE.equals(key) && method.getReturnType() == int.class);
+				answer = callback(name, proxy, method, methodArgs, functions[index], javaFalse, compares);
 			}
 			catch (Throwable raised) {
 				throw signal(raised);
 			}
+			if (compares && answer instanceof RuntimeException refusal) {
+				// A comparison's own failure -- AFunction.compare's cast to Number --
+				// like an abstract method's: not recorded, so the site wraps it.
+				throw refusal;
+			}
+			return answer;
 		});
 	}
 
@@ -737,10 +783,7 @@ final class JavaBridgeTemplate {
 			return null;
 		}
 		if (comparison) {
-			Integer compared = comparison(function, (Object[]) Objects.requireNonNull(argList), result);
-			if (compared != null) {
-				return compared;
-			}
+			return comparison(function, (Object[]) Objects.requireNonNull(argList), result);
 		}
 		@Nullable Object[] slot = new @Nullable Object[1];
 		if (marshal(result, ret, slot, 0, FUNCTIONS_NONE) == NO_MATCH) {
@@ -754,9 +797,10 @@ final class JavaBridgeTemplate {
 	// AFunction.compare reads it (mirrors JvmJavaDirectSites' _jcmp): t is -1; |false|
 	// 1 when the function answers true -- neither nil nor |false| -- for the two
 	// arguments of ARGS swapped, else 0; a fixnum or bignum its low 32 bits, a float
-	// truncated, a ratio its DECIMAL64 quotient truncated; anything else null, which the
-	// return conversion then refuses.
-	private static @Nullable Integer comparison(@Nullable Object function, Object[] args, @Nullable Object answer) {
+	// truncated, a ratio its DECIMAL64 quotient truncated; nil the NullPointerException
+	// and anything else the ClassCastException AFunction.compare's cast to Number throws,
+	// answered for the handler to throw as the comparator's own failure.
+	private static Object comparison(@Nullable Object function, Object[] args, @Nullable Object answer) {
 		if ("T".equals(answer)) {
 			return -1;
 		}
@@ -778,7 +822,12 @@ final class JavaBridgeTemplate {
 		if (answer instanceof BigInteger[] ratio) {
 			return (int) new BigDecimal(ratio[0]).divide(new BigDecimal(ratio[1]), MathContext.DECIMAL64).doubleValue();
 		}
-		return null;
+		if (answer == null) {
+			return new NullPointerException(COMPARISON_OF_NIL);
+		}
+		Object object = isJavaObject(answer) ? answer : receiverObject(answer);
+		String className = object != null ? object.getClass().getName() : describe(answer);
+		return new ClassCastException(COMPARISON_CAST_PREFIX + className + COMPARISON_CAST_SUFFIX);
 	}
 
 	// Records a throwable leaving a callback through the program's _jsig; answers it.
@@ -1267,8 +1316,13 @@ final class JavaBridgeTemplate {
 			Object[] arr = (Object[]) value;
 			return arr.length > 0 && arr[0] instanceof Integer ? KIND_FUNCTION : null;
 		}
-		// A host object's kind is its exact class; any other value (a ratio, a Lisp array
-		// or hash table, ...) has none.
+		// A host object's kind is its exact class -- but a java:view List's, an array of
+		// its items where one is expected; any other value (a ratio, a Lisp array or hash
+		// table, ...) has none.
+		Class<?> listView = javaListViewClass;
+		if (listView != null && listView.isInstance(value)) {
+			return null;
+		}
 		return isJavaObject(value) ? value.getClass() : null;
 	}
 
@@ -1538,6 +1592,10 @@ final class JavaBridgeTemplate {
 			}
 			return cost;
 		}
+		Class<?> listView = javaListViewClass;
+		if (listView != null && listView.isInstance(value)) {
+			return marshalListView(Objects.requireNonNull(value), target, out, index, functions);
+		}
 		if (value != null && value.getClass() == Object[].class) {
 			List<@Nullable Object> elements = properListElements((Object[]) value);
 			if (elements == null) {
@@ -1576,6 +1634,33 @@ final class JavaBridgeTemplate {
 		}
 		return NO_MATCH; // other symbols, ratios, rank-2+ arrays are not bridged (as
 							// interpreted)
+	}
+
+	// A java:view List converts, for a target it is an instance of, to itself -- a host
+	// object of its class -- and, where an array is expected, to an array of its items,
+	// at COST_VIEW_ARRAY plus their costs as the component (mirrors eval/JavaInterop's
+	// marshalListView).
+	private static int marshalListView(Object view, Class<?> target, @Nullable Object[] out, int index, int functions) {
+		if (!target.isPrimitive() && target.isInstance(view)) {
+			out[index] = view;
+			return target == view.getClass() ? COST_EXACT : COST_WIDEN;
+		}
+		if (!target.isArray()) {
+			return NO_MATCH;
+		}
+		Object items;
+		try {
+			items = Objects.requireNonNull(javaListViewItems).invoke(view);
+		}
+		catch (ReflectiveOperationException ex) {
+			throw new IllegalStateException("java interop: cannot read a view", ex);
+		}
+		if (items == null) {
+			out[index] = Array.newInstance(target.getComponentType(), 0);
+			return COST_VIEW_ARRAY;
+		}
+		int cost = marshal(items, target, out, index, functions);
+		return cost == NO_MATCH ? NO_MATCH : cost - COST_CONVERT + COST_VIEW_ARRAY;
 	}
 
 	// A Lisp hash table's entries in insertion order, keys and values alternating (an
@@ -1956,12 +2041,14 @@ final class JavaBridgeTemplate {
 		if (o.getClass().isArray()) {
 			return arrayToList(o, javaFalse);
 		}
-		Field handleValue = handleValueField;
-		if (handleValue != null && handleValue.getDeclaringClass() == o.getClass()) {
+		Class<?> valueClass = javaValueClass;
+		Method value = javaValueMethod;
+		if (valueClass != null && value != null && valueClass.isInstance(o)) {
 			try {
-				return handleValue.get(o); // a java:handle: the value it stands for
+				return value.invoke(o); // a java:handle or java:view: the value it stands
+										// for
 			}
-			catch (IllegalAccessException ex) {
+			catch (ReflectiveOperationException ex) {
 				throw new IllegalStateException("java interop: cannot read a handle", ex);
 			}
 		}
@@ -2031,6 +2118,11 @@ final class JavaBridgeTemplate {
 		}
 		if (lispArrayHeader(v) != null || isLispTable(v)) {
 			return false;
+		}
+		// A handle or a view is a host object, though its class travels with the program.
+		Class<?> valueClass = javaValueClass;
+		if (valueClass != null && valueClass.isInstance(v)) {
+			return true;
 		}
 		return !v.getClass().getName().startsWith(RUNTIME_PACKAGE_PREFIX);
 	}

@@ -3220,7 +3220,7 @@ cases:
     # mapping, so every backend agrees. A syntax-quoted macro name qualifies with its
     # namespace (this case runs in lit), like the oracle's
     # (lit/sp-chain4 (. a b) (c)); the macroexpand at run time still resolves a
-    # bare head through the call site's namespace (sp-chain2's plain quote).
+    # bare head in *ns*, lit (sp-chain2's plain quote).
     source: |
       (defmacro sp-chain1 [x form] (list '. x form))
       (defmacro sp-chain2 ([x form] (list '. x form)) ([x form & more] (concat (list 'sp-chain2 (list '. x form)) more)))
@@ -8363,6 +8363,31 @@ cases:
     expected: |
       (+ 1 (clojure.core/* 2 (clojure.core/* 2 3)))
       [(clojure.core/* 2 1) {:k (clojure.core/* 2 2)}]
+  - name: a-run-time-expansion-resolves-a-bare-head-in-the-current-namespace
+    # macroexpand resolves its head in *ns* when it runs: macroexpand-all, a
+    # clojure.walk function, expands mac5's bare macro while *ns* is mac5; the user
+    # macro walk-twice is no name there; once *ns* is user again, a mac5 function
+    # resolves a bare head in user. Every line is the oracle's (clj 1.12.6, loading
+    # the file).
+    source: |
+      (ns mac5 (:require [clojure.walk :as w]))
+      (defmacro twice [x] `(* 2 ~x))
+      (defmacro expanded [form] (list 'quote (macroexpand form)))
+      (prn (w/macroexpand-all '(+ 1 (twice (twice 3)))))
+      (prn (expanded (twice 4)))
+      (prn (macroexpand '(walk-twice 1)))
+      (defn mac5-expand [f] (macroexpand f))
+      (in-ns 'user)
+      (prn (mac5/mac5-expand '(twice 1)))
+      (prn (mac5/mac5-expand '(mac5/twice 1)))
+      (prn (mac5/mac5-expand '(walk-twice 1)))
+    expected: |
+      (+ 1 (clojure.core/* 2 (clojure.core/* 2 3)))
+      (clojure.core/* 2 4)
+      (walk-twice 1)
+      (twice 1)
+      (clojure.core/* 2 1)
+      (clojure.core/* 2 1)
   - name: clojure-edn-reads-data-only
     # clojure.edn reads data only, like the oracle's EdnReader (.kb/clojure-frontend.md
     # "Reading"): the quote is a symbol constituent, the reader macros of code and
@@ -10874,6 +10899,32 @@ cases:
       "java.lang.NullPointerException" -539222987 -3
       1013910569 -1640525200 97 994 1013910568 1013910569 3 994 2027821078
       156247261 -2123407586 1772842048 -1172211204 425092884 "java.lang.NullPointerException"
+  - name: a-return-type-hint-on-a-parameter-vector-is-metadata
+    # ^long [x] is reader metadata on the vector (the arity's return tag); it reads as the
+    # vector in defn, defn-, fn, letfn, each arity of a multi-arity form, a protocol
+    # method and a defmethod, and changes no answer (clj 1.12.6, 2026-10-09).
+    source: |
+      (defn rth-f ^long [x] (inc x))
+      (defn rth-g (^long [x] (inc x)) (^String [x y] (str x y)))
+      (defn- rth-h ^long [x] (inc x))
+      (defn rth-v ^Object [x & more] (apply + x more))
+      (defn rth-rec ^long [n acc] (if (zero? n) acc (recur (dec n) (+ acc n))))
+      (def rth-k (fn ^long [x] (inc x)))
+      (def rth-k2 (fn rth-nm (^long [x] (inc x)) (^long [x y] (+ x y))))
+      (defprotocol RthP (rth-m ^Object [this] [this x]))
+      (defrecord RthR [] RthP (rth-m ^Object [this] 1) (rth-m ^Object [this x] x))
+      (extend-type String RthP (rth-m (^Object [this] 3) (^Object [this x] x)))
+      (defmulti rth-mm (fn [x] x))
+      (defmethod rth-mm 1 ^Object [x] :one)
+      (prn (rth-f 1) (rth-g 1) (rth-g 1 2) (rth-h 1) (rth-v 1 2 3) (rth-rec 10 0))
+      (prn (rth-k 1) (rth-k2 1) (rth-k2 1 2))
+      (prn (letfn [(a ^long [x] (inc x)) (b (^long [x] (* 2 x)) ([x y] (+ x y)))] [(a 1) (b 2) (b 1 2)]))
+      (prn (rth-m (->RthR)) (rth-m (->RthR) 5) (rth-m "s") (rth-m "s" 8) (rth-mm 1))
+    expected: |
+      2 2 "12" 2 6 55
+      2 2 3
+      [2 4 3]
+      1 5 3 8 :one
   - name: byte-array-makes-a-mutable-array-of-signed-bytes
     # byte-array of a size, a seq (each member stored as Number.byteValue stores it:
     # a long's low eight bits, a double saturated to the int range, a ratio

@@ -136,7 +136,11 @@ fn request(text: &str) -> Result<Request, String> {
         method: field("method").unwrap_or_else(|| "GET".into()),
         url: field("url").ok_or("the request names no url")?,
         headers,
-        body: field("body").map(String::into_bytes),
+        // A text body is its UTF-8; an (unsigned-byte 8) one crosses as "octets", one
+        // character an octet, each below 256.
+        body: field("body")
+            .map(String::into_bytes)
+            .or_else(|| field("octets").map(|s| s.chars().map(|c| c as u32 as u8).collect())),
     })
 }
 
@@ -414,6 +418,8 @@ mod tests {
             vec![("X-A".into(), "1".into()), ("User-Agent".into(), "ua".into())]
         );
         assert_eq!(req.body.as_deref(), Some("hé".as_bytes()));
+        let octets = request(r#"{"url":"http://h/","headers":[],"octets":"ÿ\u0000A\u0080"}"#).unwrap();
+        assert_eq!(octets.body.as_deref(), Some(&[0xff, 0x00, 0x41, 0x80][..]));
         let bare = request(r#"{"url":"http://h/","headers":[]}"#).unwrap();
         assert_eq!((bare.method.as_str(), bare.body), ("GET", None));
         assert!(request(r#"{"method":"GET"}"#).is_err());

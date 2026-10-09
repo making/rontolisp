@@ -424,17 +424,23 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
 - A fn passed where a Java interface is expected implements every abstract method of
   any interface, each called with the method's arguments; the oracle converts a fn only
   to an interface annotated `@FunctionalInterface` (a `PropertyChangeListener` is a
-  `ClassCastException` there). A `Comparator` fn answering `nil` or a non-number is
-  refused by name, where the oracle throws a `NullPointerException` or a
-  `ClassCastException`.
-- A map, set, record, sorted collection or lazy seq passed to Java is a fresh Java copy
-  (a set or sorted set a `java.util.LinkedHashSet`; a map, record or sorted map a
-  `java.util.LinkedHashMap`; a lazy seq, like a vector or list, a `List`), each member
-  converted as an argument is, where the oracle passes the collection itself: `str` of the
-  copy, or of a Java collection holding it, spells it the Java way (`[1, 2]`, the oracle
-  `#{1 2}`; `{a=[1, 2]}`, the oracle `{a=[1 2]}`). A Java sorted collection orders keywords
-  before symbols, where the oracle refuses to compare the two. A ratio and an atom have no
-  Java value, so a member taking one finds no match.
+  `ClassCastException` there).
+- A value passed to Java is an object of this front end's classes that Java reads as the
+  oracle's own: a vector, list, lazy seq, set, map, record or sorted collection a read-only
+  `java.util` `List`, `Set` or `Map` (a vector also `RandomAccess` and `Comparable`) printing
+  as Clojure prints it, a keyword, symbol or ratio an object hashing, comparing and printing
+  as the oracle's (a ratio a `Number`), an atom, deftype, fn or other value an object equal
+  only to itself, spelled as the oracle's `Object.toString` (`clojure.lang.Atom@1b6d3586`), or
+  by the type's own `toString`. Java hands each back as the value itself. What differs: the
+  class Java sees (`getClass`, and the JDK's `ClassCastException` messages naming it; the
+  front end's own cast failures name the oracle's class but lack the module tail); the
+  members are converted once, when the value crosses, a lazy seq realized to its end; the
+  `toString` is what `str` answers here (a lazy seq and a record spell their contents); Java
+  sees a deftype or reify implement none of its Java interfaces and calls neither its
+  `equals` nor its `hashCode`. A Java array a member answers is a list here, which converts
+  back to an array where one is expected and nothing takes the list whole -- so
+  `(java.util.Arrays/asList [1 2])` is a list holding the vector, where the oracle throws --
+  and so does an array `make-array` makes, a vector here.
 - An integer receiver is called as an `Integer` when it fits one, else as a `Long`
   (the oracle's is always a `Long`): `(.getClass 1)` answers `java.lang.Integer`.
 - A `_` param tag leaves that parameter to the cost rule of the `java:` surface, so

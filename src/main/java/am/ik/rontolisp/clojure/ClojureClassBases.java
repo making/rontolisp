@@ -51,7 +51,11 @@ final class ClojureClassBases {
 			Map.entry("java.io.BufferedOutputStream", "java.io.FilterOutputStream"),
 			Map.entry("java.io.FilterOutputStream", "java.io.OutputStream"), Map.entry("java.io.OutputStream", OBJECT),
 			Map.entry("java.io.ByteArrayInputStream", "java.io.InputStream"),
-			Map.entry("java.io.ByteArrayOutputStream", "java.io.OutputStream"));
+			Map.entry("java.io.ByteArrayOutputStream", "java.io.OutputStream"),
+			// the classes of rontolisp.http-client's :as :stream body
+			Map.entry("java.util.zip.GZIPInputStream", "java.util.zip.InflaterInputStream"),
+			Map.entry("java.util.zip.InflaterInputStream", "java.io.FilterInputStream"),
+			Map.entry("jdk.internal.net.http.ResponseSubscribers$HttpResponseInputStream", "java.io.InputStream"));
 
 	/**
 	 * The superclass of each class an instant {@code class} answers that has one below

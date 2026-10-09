@@ -310,24 +310,38 @@ final class ClojureIoLowering {
 
 	/**
 	 * The classes the values here are, with their supers: what {@code class} answers for
-	 * one, what {@code instance?}, a class chain and a protocol extension read.
+	 * one, what {@code instance?}, a class chain and a protocol extension read. The last
+	 * three are the classes of {@code rontolisp.http-client}'s {@code :as :stream} body:
+	 * the JDK client's response stream, and the two it is decompressed through.
 	 */
-	static final Map<String, List<String>> CLASSES = Map.of("java.io.File",
-			List.of("java.io.Serializable", "java.lang.Comparable"), "java.net.URL", List.of("java.io.Serializable"),
-			"java.net.URI", List.of("java.lang.Comparable", "java.io.Serializable"), "java.io.BufferedInputStream",
-			List.of("java.io.FilterInputStream", "java.io.InputStream", "java.io.Closeable", "java.lang.AutoCloseable"),
-			"java.io.BufferedOutputStream",
-			List.of("java.io.FilterOutputStream", "java.io.OutputStream", "java.io.Closeable", "java.io.Flushable",
-					"java.lang.AutoCloseable"),
-			"java.io.BufferedReader",
-			List.of("java.io.Reader", "java.lang.Readable", "java.io.Closeable", "java.lang.AutoCloseable"),
-			"java.io.BufferedWriter",
-			List.of("java.io.Writer", "java.lang.Appendable", "java.io.Closeable", "java.io.Flushable",
-					"java.lang.AutoCloseable"),
-			"java.io.ByteArrayInputStream",
-			List.of("java.io.InputStream", "java.io.Closeable", "java.lang.AutoCloseable"),
-			"java.io.ByteArrayOutputStream",
-			List.of("java.io.OutputStream", "java.io.Closeable", "java.io.Flushable", "java.lang.AutoCloseable"));
+	static final Map<String, List<String>> CLASSES = Map.ofEntries(
+			Map.entry("java.io.File", List.of("java.io.Serializable", "java.lang.Comparable")),
+			Map.entry("java.net.URL", List.of("java.io.Serializable")),
+			Map.entry("java.net.URI", List.of("java.lang.Comparable", "java.io.Serializable")),
+			Map.entry("java.io.BufferedInputStream",
+					List.of("java.io.FilterInputStream", "java.io.InputStream", "java.io.Closeable",
+							"java.lang.AutoCloseable")),
+			Map.entry("java.io.BufferedOutputStream",
+					List.of("java.io.FilterOutputStream", "java.io.OutputStream", "java.io.Closeable",
+							"java.io.Flushable", "java.lang.AutoCloseable")),
+			Map.entry("java.io.BufferedReader",
+					List.of("java.io.Reader", "java.lang.Readable", "java.io.Closeable", "java.lang.AutoCloseable")),
+			Map.entry("java.io.BufferedWriter",
+					List.of("java.io.Writer", "java.lang.Appendable", "java.io.Closeable", "java.io.Flushable",
+							"java.lang.AutoCloseable")),
+			Map.entry("java.io.ByteArrayInputStream",
+					List.of("java.io.InputStream", "java.io.Closeable", "java.lang.AutoCloseable")),
+			Map.entry("java.io.ByteArrayOutputStream",
+					List.of("java.io.OutputStream", "java.io.Closeable", "java.io.Flushable",
+							"java.lang.AutoCloseable")),
+			Map.entry("jdk.internal.net.http.ResponseSubscribers$HttpResponseInputStream",
+					List.of("java.io.InputStream", "java.io.Closeable", "java.lang.AutoCloseable",
+							"java.util.concurrent.Flow$Subscriber", "java.net.http.HttpResponse$BodySubscriber")),
+			Map.entry("java.util.zip.GZIPInputStream",
+					List.of("java.util.zip.InflaterInputStream", "java.io.FilterInputStream", "java.io.InputStream",
+							"java.io.Closeable", "java.lang.AutoCloseable")),
+			Map.entry("java.util.zip.InflaterInputStream", List.of("java.io.FilterInputStream", "java.io.InputStream",
+					"java.io.Closeable", "java.lang.AutoCloseable")));
 
 	/**
 	 * Whether a value here may be an instance of the class: one of {@link #CLASSES} or a

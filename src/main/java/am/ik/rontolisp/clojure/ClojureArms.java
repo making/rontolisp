@@ -127,6 +127,17 @@ public final class ClojureArms {
 	 * {@code java.io.StringReader}, and the {@code clojure.java.io} kernels and
 	 * {@code java.io} constructions opening a file or wrapping a byte stream.
 	 */
+	/**
+	 * What hands a {@code clojure.java.io} value to a program: the namespace's kernels
+	 * and the lowering's {@code java.io} constructions, and the HTTP client's kernel,
+	 * whose {@code :as :stream} body is a byte stream.
+	 */
+	private static Set<String> ioProducers() {
+		Set<String> out = new HashSet<>(ClojureIoLowering.PRODUCERS);
+		out.add(ClojureKernelLowering.HTTP_REQUEST);
+		return Set.copyOf(out);
+	}
+
 	private static Set<String> streamProducers() {
 		Set<String> out = new HashSet<>(Set.of("RONTOLISP::%CLOJURE-OUT", "RONTOLISP::%CLOJURE-IN",
 				"RONTOLISP::%CLOJURE-ERR", "RONTOLISP::%CLOJURE-STRING-WRITER", "RONTOLISP::%CLOJURE-STRING-READER",
@@ -725,9 +736,9 @@ public final class ClojureArms {
 		 * {@code aset}'s. Ahead of {@link #HOST}: the construction's alias is
 		 * {@code java:new}, which that family reads as a producer.
 		 */
-		BYTES("byte-array", Set.of(ClojureBytesLowering.BYTES_P, ClojureBytesLowering.ARRAY_STREAM_P),
-				Set.of(ClojureBytesLowering.HOST_VIEW), ClojureBytesLowering.ALIASES, ClojureBytesLowering.PRODUCERS,
-				Set.of(), false, Set.of(), Set.of(), Set.of(), ClojureBytesLowering.SETTERS),
+		BYTES("byte-array", Set.of(ClojureBytesLowering.BYTES_P, ClojureBytesLowering.ARRAY_STREAM_P), Set.of(),
+				ClojureBytesLowering.ALIASES, ClojureBytesLowering.PRODUCERS, Set.of(), false, Set.of(), Set.of(),
+				Set.of(), ClojureBytesLowering.SETTERS),
 
 		/**
 		 * A {@code clojure.java.io} value -- a {@code java.io.File}, a URL, a URI, a byte
@@ -736,10 +747,12 @@ public final class ClojureArms {
 		 * protocol's dispatch, {@code slurp}, {@code spit}, {@code line-seq} and an
 		 * instance call read, and any value {@code slurp} and {@code spit} open through
 		 * the loaded namespace: only the namespace's kernels and the lowering's
-		 * {@code java.io} constructions make one ({@link ClojureIoLowering#PRODUCERS}).
+		 * {@code java.io} constructions make one ({@link ClojureIoLowering#PRODUCERS}),
+		 * and {@code rontolisp.http-client}'s kernel, whose {@code :as :stream} body is a
+		 * byte stream over the reply.
 		 */
 		IO("io-value", Set.of(ClojureIoLowering.IO_P, ClojureIoLowering.IO_INSTANCE_P, ClojureIoLowering.OPENABLE_P),
-				Set.of(ClojureIoLowering.HOST_VIEW), Map.of(), ClojureIoLowering.PRODUCERS, Set.of()),
+				Set.of(ClojureIoLowering.HOST_VIEW), Map.of(), ioProducers(), Set.of()),
 
 		/**
 		 * A rontolisp future or stream -- what {@code rontolisp.http-client} answers

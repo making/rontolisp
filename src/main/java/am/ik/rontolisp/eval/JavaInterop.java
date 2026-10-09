@@ -50,6 +50,14 @@ import am.ik.rontolisp.compiler.JavaOverloads;
 import am.ik.rontolisp.compiler.JavaSite;
 import am.ik.rontolisp.compiler.JavaType;
 import am.ik.rontolisp.compiler.ReflectiveJavaClasses;
+import am.ik.rontolisp.runtime.RontoJavaCalls;
+import am.ik.rontolisp.runtime.RontoJavaHandle;
+import am.ik.rontolisp.runtime.RontoJavaListView;
+import am.ik.rontolisp.runtime.RontoJavaMapView;
+import am.ik.rontolisp.runtime.RontoJavaNumberHandle;
+import am.ik.rontolisp.runtime.RontoJavaSetView;
+import am.ik.rontolisp.runtime.RontoJavaValue;
+import am.ik.rontolisp.runtime.RontoJavaVectorView;
 
 /**
  * Reflection bridge that exposes arbitrary Java APIs (Swing, AWT, ...) to the rontolisp
@@ -383,10 +391,11 @@ final class JavaInterop {
 
 	// The token of which marshal(value, target) is a pure function for every target, or
 	// null when there is none: a list, vector or hash table (the cost sums its elements),
-	// and the values marshal() never bridges (they never match, so nothing is
-	// remembered).
+	// a java:view List (an array of its items costs theirs), and the values marshal()
+	// never bridges (they never match, so nothing is remembered).
 	private static @Nullable JavaKind kindOf(LispVal value) {
 		return switch (value) {
+			case LispJavaObject obj when obj.ref() instanceof RontoJavaListView ignored -> null;
 			case LispNil ignored -> JavaKind.Lisp.NIL;
 			case LispTrue ignored -> JavaKind.Lisp.T;
 			case LispSymbol symbol when LispNames.JAVA_FALSE.equals(symbol.name()) -> JavaKind.Lisp.FALSE;
@@ -1095,12 +1104,20 @@ final class JavaInterop {
 				default -> {
 				}
 			}
+			Object answer;
 			try {
-				return call(index, method, methodArgs);
+				answer = call(index, method, methodArgs);
 			}
 			catch (Throwable signal) {
 				throw raised(signal);
 			}
+			if (answer instanceof Refusal refusal) {
+				// A comparison's own failure -- AFunction.compare's cast to Number --
+				// like
+				// an abstract method's: not recorded, so the site wraps it as a member's.
+				throw refusal.failure();
+			}
+			return answer;
 		}
 
 		private @Nullable Object call(int index, Method method, @Nullable Object @Nullable [] methodArgs) {
@@ -1122,10 +1139,7 @@ final class JavaInterop {
 			}
 			if (this.comparison && ret == int.class && "compare".equals(method.getName())
 					&& method.getParameterCount() == 2) {
-				Integer compared = comparison(function, callArgs, result);
-				if (compared != null) {
-					return compared;
-				}
+				return comparison(function, callArgs, result);
 			}
 			@Nullable Object[] slot = new @Nullable Object[1];
 			ReflectiveJavaClasses.Type returnType = ReflectiveJavaClasses.of(ret);
@@ -1141,9 +1155,10 @@ final class JavaInterop {
 		// AFunction.compare reads it (compiler/JavaImplementation.readsComparison): t is
 		// -1; |false| is 1 when the function answers true -- neither nil nor |false| --
 		// for the arguments swapped, else 0; a real number its intValue (an integer's low
-		// 32 bits, a float or ratio truncated). Null for anything else, which the return
-		// conversion then refuses.
-		private @Nullable Integer comparison(LispVal function, List<LispVal> args, LispVal answer) {
+		// 32 bits, a float or ratio truncated). Nil is the Refusal of AFunction.compare's
+		// NullPointerException, anything else of its ClassCastException (compiled: _jcmp,
+		// the bridge's comparison).
+		private Object comparison(LispVal function, List<LispVal> args, LispVal answer) {
 			return switch (answer) {
 				case LispTrue ignored -> -1;
 				case LispSymbol symbol when LispNames.JAVA_FALSE.equals(symbol.name()) -> {
@@ -1156,10 +1171,25 @@ final class JavaInterop {
 				case LispBigInteger b -> b.value().intValue();
 				case LispDouble d -> (int) d.value();
 				case am.ik.rontolisp.LispRatio r -> (int) r.doubleValue();
-				default -> null;
+				case LispNil ignored -> new Refusal(new NullPointerException(JavaImplementation.COMPARISON_OF_NIL));
+				default -> new Refusal(
+						new ClassCastException(JavaImplementation.comparisonCastFailure(javaClassName(answer))));
 			};
 		}
 
+	}
+
+	// A comparison's refusal (ImplementationHandler.comparison): the failure its
+	// comparator throws as its own, unrecorded.
+	private record Refusal(RuntimeException failure) {
+	}
+
+	// The class a comparison's refusal names for an answer: a host object's own, or that
+	// of the object a value of a receiver kind is in Java (a string's String), else its
+	// printed spelling (compiled: _jcmp, the bridge's comparison).
+	private static String javaClassName(LispVal answer) {
+		Object object = LispJavaObject.receiverObject(answer);
+		return object == null ? answer.print() : object.getClass().getName();
 	}
 
 	// The kind of a host object: a java:reify / java:proxy object's is its interface's
@@ -1207,6 +1237,9 @@ final class JavaInterop {
 			return cost;
 		}
 		switch (value) {
+			case LispJavaObject obj when obj.ref() instanceof RontoJavaListView view -> {
+				return marshalListView(view, target, caller, out, index, proxies);
+			}
 			case LispCons cons -> {
 				List<LispVal> elements = properListElements(cons);
 				if (elements == null) {
@@ -1355,6 +1388,27 @@ final class JavaInterop {
 		return NO_MATCH;
 	}
 
+	// A java:view List converts, for a target it is an instance of, to itself -- a host
+	// object of its class -- and, where an array is expected, to an array of its items,
+	// at
+	// COST_VIEW_ARRAY plus their costs as the component: after every way to pass it
+	// whole,
+	// its varargs packing included (compiled: JvmJavaDirectSites' view arms, the bridge's
+	// marshalListView).
+	private static int marshalListView(RontoJavaListView view, JavaType target, Caller caller, @Nullable Object[] out,
+			int index, boolean proxies) {
+		if (!target.isPrimitive() && classOf(target).isInstance(view)) {
+			out[index] = view;
+			return classOf(target) == view.getClass() ? JavaOverloads.COST_EXACT : JavaOverloads.COST_WIDEN;
+		}
+		List<LispVal> items = target.componentType() == null ? null : sequenceElements((LispVal) view.items());
+		if (items == null) {
+			return NO_MATCH;
+		}
+		int cost = marshalSequence(items, target, caller, out, index, proxies);
+		return cost == NO_MATCH ? NO_MATCH : cost - JavaOverloads.COST_CONVERT + JavaOverloads.COST_VIEW_ARRAY;
+	}
+
 	// A hash table converts, for any target a java.util.LinkedHashMap is assignable to,
 	// to a fresh one of its entries in insertion order, each key and value marshalled as
 	// an Object -- as a sequence converts to a java.util.List. ENTRIES alternates keys
@@ -1405,50 +1459,321 @@ final class JavaInterop {
 	}
 
 	/**
-	 * {@code (java:handle value "text" hash "order")}: a Java object standing for the
-	 * value, which Java sees as the text and equals by it, whose {@code hashCode} is the
-	 * hash's low 32 bits (the text's own without one) and which orders by the order text
-	 * (the text without one) ({@link JavaHandle}); wherever Java hands it back,
-	 * {@code java:} answers the value.
-	 * @param args the value, the text, and optionally the hash and the order text
+	 * {@code (java:handle value text hash order class)}: a Java object standing for the
+	 * value ({@link RontoJavaHandle}). Java sees the text as its {@code toString} (nil:
+	 * {@code Object}'s spelling, the class and the hex hash); handles of one class are
+	 * equal by their texts, their {@code hashCode} the hash's low 32 bits (the text's own
+	 * without one) -- or, with a nil hash, equal only to a handle of the very same value,
+	 * whose identity hash is the hash. A handle orders one of its class by the order text
+	 * (the text without one), or answers a function of its value and the object compared
+	 * with -- its answer's sign, or the {@code ClassCastException} of a cast to the class
+	 * when it answers no real -- and with a nil order no handle at all. A handle standing
+	 * for a real number is a {@code Number} of it ({@link RontoJavaNumberHandle}).
+	 * Wherever Java hands one back, {@code java:} answers the value.
+	 * @param args the value, the text, and optionally the hash, the order and the class
+	 * @param caller what calls an order function
 	 * @return the handle, a host object
 	 */
-	static LispVal handle(List<LispVal> args) {
-		if (args.size() < 2 || args.size() > 4) {
+	static LispVal handle(List<LispVal> args, Caller caller) {
+		if (args.size() < 2 || args.size() > 5) {
 			throw new LispEvalException(HANDLE_USAGE);
 		}
-		if (!(args.get(1) instanceof LispString text)) {
-			throw new LispEvalException(HANDLE_USAGE + ", got " + args.get(1).print());
+		LispVal value = args.get(0);
+		String text = args.get(1) instanceof LispString given ? given.value() : null;
+		if (text == null && !(args.get(1) instanceof LispNil)) {
+			throw handleUsage(args.get(1));
 		}
-		int hash = text.value().hashCode();
-		if (args.size() > 2) {
-			hash = switch (args.get(2)) {
-				case LispInteger i -> (int) i.value();
-				case LispBigInteger b -> b.value().intValue();
-				default -> throw new LispEvalException(HANDLE_USAGE + ", got " + args.get(2).print());
-			};
+		boolean identity = args.size() > 2 && args.get(2) instanceof LispNil;
+		int hash = switch (args.size() > 2 ? args.get(2) : LispNil.INSTANCE) {
+			case LispInteger i -> (int) i.value();
+			case LispBigInteger b -> b.value().intValue();
+			case LispNil ignored when identity -> 0;
+			case LispNil ignored when text != null -> text.hashCode();
+			default -> throw handleUsage(args.size() > 2 ? args.get(2) : args.get(1));
+		};
+		if (text == null && !identity) {
+			// a handle with no text is equal only to a handle of its value
+			throw handleUsage(args.get(1));
 		}
-		String order = text.value();
+		int orderMode = text == null ? RontoJavaHandle.ORDER_NONE : RontoJavaHandle.ORDER_TEXT;
+		Object order = text;
 		if (args.size() > 3) {
-			if (!(args.get(3) instanceof LispString given)) {
-				throw new LispEvalException(HANDLE_USAGE + ", got " + args.get(3).print());
+			switch (args.get(3)) {
+				case LispString given -> {
+					orderMode = RontoJavaHandle.ORDER_TEXT;
+					order = given.value();
+				}
+				case LispNil ignored -> {
+					orderMode = RontoJavaHandle.ORDER_NONE;
+					order = null;
+				}
+				case LispVal function when isFunction(function) -> {
+					orderMode = RontoJavaHandle.ORDER_FUNCTION;
+					order = function;
+				}
+				default -> throw handleUsage(args.get(3));
 			}
-			order = given.value();
 		}
-		return new LispJavaObject(new JavaHandle(args.get(0), text.value(), hash, order));
+		String className = args.size() > 4 ? className(args.get(4), JavaInterop::handleUsage) : null;
+		RontoJavaHandle handle = newHandle(value, text, identity, hash, orderMode, order, className,
+				orderMode == RontoJavaHandle.ORDER_FUNCTION ? new Calls(caller) : null);
+		return new LispJavaObject(switch (value) {
+			case LispInteger i -> new RontoJavaNumberHandle(handle, i.value(), i.value(), (int) i.value());
+			case LispBigInteger b ->
+				new RontoJavaNumberHandle(handle, b.value().doubleValue(), b.value().longValue(), b.value().intValue());
+			case LispDouble d -> new RontoJavaNumberHandle(handle, d.value(), (long) d.value(), (int) d.value());
+			case am.ik.rontolisp.LispRatio r -> {
+				// Clojure's Ratio: the DECIMAL64 quotient's double, and its int the
+				// intValue; the truncated quotient's low 64 bits the longValue.
+				double quotient = new java.math.BigDecimal(r.numerator())
+					.divide(new java.math.BigDecimal(r.denominator()), java.math.MathContext.DECIMAL64)
+					.doubleValue();
+				yield new RontoJavaNumberHandle(handle, quotient, r.numerator().divide(r.denominator()).longValue(),
+						(int) quotient);
+			}
+			default -> handle;
+		});
 	}
 
-	// The error of a java:handle call that is no value, string, integer and string
-	// (mirrors codegen.jvm.JvmJavaDirectSites' _jhandle).
-	static final String HANDLE_USAGE = "java:handle expects (java:handle value \"text\" [hash [\"order\"]])";
+	// The runtime class cannot spell @Nullable (it imports nothing but the JDK): null is
+	// its "none" for the text, the order, the class and the calls.
+	@SuppressWarnings("NullAway")
+	private static RontoJavaHandle newHandle(LispVal value, @Nullable String text, boolean identity, int hash,
+			int orderMode, @Nullable Object order, @Nullable String className, @Nullable RontoJavaCalls calls) {
+		return new RontoJavaHandle(value, text, identity, hash, orderMode, order, className, calls);
+	}
+
+	// The error of a malformed java:handle call (compiler/JavaImplementations; the
+	// compiled program's _jhandle checks alike).
+	static final String HANDLE_USAGE = JavaImplementations.HANDLE_USAGE;
+
+	private static LispEvalException handleUsage(LispVal got) {
+		return new LispEvalException(HANDLE_USAGE + ", got " + got.print());
+	}
+
+	// A class name argument: a string's text, or null for nil; anything else refused.
+	private static @Nullable String className(LispVal value,
+			java.util.function.Function<LispVal, LispEvalException> refusal) {
+		if (value instanceof LispString name) {
+			return name.value();
+		}
+		if (value instanceof LispNil) {
+			return null;
+		}
+		throw refusal.apply(value);
+	}
+
+	private static boolean isFunction(LispVal value) {
+		return value instanceof LispLambda || value instanceof LispFunction;
+	}
+
+	/**
+	 * {@code (java:view value items shape printer order class)}: a read-only Java
+	 * collection standing for the value, its elements the items converted as
+	 * {@code Object} arguments, once, here. {@code :list} and {@code :vector} make a
+	 * {@code java.util.List} of a sequence's elements (a vector's {@code RandomAccess}
+	 * and {@code Comparable} by the order), {@code :set} a {@code java.util.Set} of them,
+	 * {@code :map} a {@code java.util.Map} of a hash table's entries or a plist's pairs.
+	 * Its {@code toString} is the printer's answer for the value (the Java spelling
+	 * without one); every write is an {@code UnsupportedOperationException}; wherever
+	 * Java hands it back, {@code java:} answers the value. As an argument it is a host
+	 * object of its class, and a {@code List} also an array of its items where nothing
+	 * takes it whole ({@link #marshalListView}).
+	 * @param args the value, the items, the shape, and optionally the printer, the order
+	 * and the class
+	 * @param caller what calls the printer and the order
+	 * @return the view, a host object
+	 */
+	static LispVal view(List<LispVal> args, Caller caller) {
+		if (args.size() < 3 || args.size() > 6) {
+			throw new LispEvalException(VIEW_USAGE);
+		}
+		LispVal value = args.get(0);
+		LispVal items = args.get(1);
+		String shape = args.get(2) instanceof LispSymbol keyword ? keyword.name() : "";
+		boolean map = LispNames.JAVA_VIEW_MAP.equals(shape);
+		boolean vector = LispNames.JAVA_VIEW_VECTOR.equals(shape);
+		boolean set = LispNames.JAVA_VIEW_SET.equals(shape);
+		if (!map && !vector && !set && !LispNames.JAVA_VIEW_LIST.equals(shape)) {
+			throw viewUsage(args.get(2));
+		}
+		LispVal printer = args.size() > 3 ? args.get(3) : LispNil.INSTANCE;
+		if (!(printer instanceof LispNil) && !isFunction(printer)) {
+			throw viewUsage(printer);
+		}
+		LispVal order = args.size() > 4 ? args.get(4) : LispNil.INSTANCE;
+		if (!(order instanceof LispNil) && !(vector && isFunction(order))) {
+			throw viewUsage(order);
+		}
+		String className = args.size() > 5 ? className(args.get(5), JavaInterop::viewUsage) : null;
+		List<LispVal> members = map ? viewEntries(items) : sequenceElements(items);
+		if (members == null) {
+			throw viewUsage(items);
+		}
+		@Nullable Object[] elements = new @Nullable Object[members.size()];
+		@Nullable Object[] slot = new @Nullable Object[1];
+		JavaType object = ReflectiveJavaClasses.of(Object.class);
+		for (int i = 0; i < elements.length; i++) {
+			if (marshal(members.get(i), object, caller, slot, 0) == NO_MATCH) {
+				throw new LispEvalException(VIEW_NO_VALUE + members.get(i).print());
+			}
+			elements[i] = slot[0];
+		}
+		Object shown = printer instanceof LispNil ? null : printer;
+		Object ordered = order instanceof LispNil ? null : order;
+		RontoJavaCalls calls = shown != null || ordered != null ? new Calls(caller) : null;
+		return new LispJavaObject(newView(shape, value, items, elements, shown, ordered, className, calls));
+	}
+
+	// The view of the shape (java:view validated it). The runtime classes cannot spell
+	// @Nullable (they import nothing but the JDK): null is their "none" for the printer,
+	// the order, the class and the calls, and an element may be Java's null.
+	@SuppressWarnings("NullAway")
+	private static Object newView(String shape, LispVal value, LispVal items, @Nullable Object[] elements,
+			@Nullable Object printer, @Nullable Object order, @Nullable String className,
+			@Nullable RontoJavaCalls calls) {
+		return switch (shape) {
+			case LispNames.JAVA_VIEW_MAP -> new RontoJavaMapView(value, elements, printer, className, calls);
+			case LispNames.JAVA_VIEW_SET -> new RontoJavaSetView(value, elements, printer, className, calls);
+			case LispNames.JAVA_VIEW_VECTOR ->
+				new RontoJavaVectorView(value, items, elements, printer, order, className, calls);
+			default -> new RontoJavaListView(value, items, elements, printer, className, calls);
+		};
+	}
+
+	// The errors of a malformed java:view call and of an item that converts to no Object
+	// (compiler/JavaImplementations; the compiled program's _jview checks alike).
+	static final String VIEW_USAGE = JavaImplementations.VIEW_USAGE;
+
+	static final String VIEW_NO_VALUE = JavaImplementations.VIEW_NO_VALUE;
+
+	private static LispEvalException viewUsage(LispVal got) {
+		return new LispEvalException(VIEW_USAGE + ", got " + got.print());
+	}
+
+	// The elements of a sequence as marshal reads one -- nil, a proper list, a rank-1
+	// vector (its fill pointer bounding it), a specialized one -- or null for anything
+	// else.
+	private static @Nullable List<LispVal> sequenceElements(LispVal value) {
+		switch (value) {
+			case LispNil ignored -> {
+				return List.of();
+			}
+			case LispCons cons -> {
+				return properListElements(cons);
+			}
+			case LispArray array -> {
+				if (array.dimensions().length != 1) {
+					return null;
+				}
+				int count = array.effectiveLength();
+				List<LispVal> elements = new ArrayList<>(count);
+				for (int i = 0; i < count; i++) {
+					LispVal element = array.readFlat(i);
+					elements.add(element == null ? LispNil.INSTANCE : element);
+				}
+				return elements;
+			}
+			case LispFloatArray array -> {
+				if (array.dims().length != 1) {
+					return null;
+				}
+				List<LispVal> elements = new ArrayList<>(array.dims()[0]);
+				for (int i = 0; i < array.dims()[0]; i++) {
+					elements.add(new LispDouble(array.elementAt(i)));
+				}
+				return elements;
+			}
+			case LispIntVector vector -> {
+				List<LispVal> elements = new ArrayList<>(vector.length());
+				for (int i = 0; i < vector.length(); i++) {
+					elements.add(new LispInteger(vector.elementAt(i)));
+				}
+				return elements;
+			}
+			default -> {
+				return null;
+			}
+		}
+	}
+
+	// A map view's keys and values, alternating: a hash table's live entries in order,
+	// or a plist's pairs; null for anything else.
+	private static @Nullable List<LispVal> viewEntries(LispVal value) {
+		if (value instanceof LispHashTable table) {
+			List<LispVal> entries = new ArrayList<>(2 * table.count());
+			for (LispHashTable.Entry entry : table.entries()) {
+				entries.add(entry.key());
+				entries.add(entry.value());
+			}
+			return entries;
+		}
+		if (!(value instanceof LispNil) && !(value instanceof LispCons)) {
+			return null;
+		}
+		List<LispVal> plist = sequenceElements(value);
+		return plist != null && plist.size() % 2 == 0 ? plist : null;
+	}
+
+	/**
+	 * How a handle or a view the interpreter made calls back into the program: through
+	 * the evaluator. What the function raises leaves recorded ({@link #raised}), as a
+	 * {@code java:reify} callback's does.
+	 */
+	private record Calls(Caller caller) implements RontoJavaCalls {
+
+		@Override
+		public String text(Object printer, Object value) {
+			try {
+				LispVal answer = this.caller.call((LispVal) printer, List.of((LispVal) value));
+				return answer instanceof LispString text ? text.value() : answer.print();
+			}
+			catch (Throwable signal) {
+				throw unchecked(raised(signal));
+			}
+		}
+
+		// Null is the refusal RontoJavaCalls.order answers, which the runtime interface
+		// cannot spell @Nullable.
+		@Override
+		@SuppressWarnings("NullAway")
+		public @Nullable Integer order(Object order, Object value, Object other) {
+			try {
+				LispVal answer = this.caller.call((LispVal) order, List.of((LispVal) value, unmarshal(other)));
+				return switch (answer) {
+					case LispInteger i -> Long.signum(i.value());
+					case LispBigInteger b -> b.value().signum();
+					case LispDouble d -> (int) Math.signum(d.value());
+					case am.ik.rontolisp.LispRatio r -> r.numerator().signum();
+					default -> null;
+				};
+			}
+			catch (Throwable signal) {
+				throw unchecked(raised(signal));
+			}
+		}
+
+	}
+
+	// A throwable thrown on through a method that declares none.
+	private static RuntimeException unchecked(Throwable throwable) {
+		if (throwable instanceof RuntimeException exception) {
+			return exception;
+		}
+		if (throwable instanceof Error error) {
+			throw error;
+		}
+		return new RuntimeException(throwable);
+	}
 
 	// The Lisp value of a Java value: Java's false is nil, or |false| (javaFalse, a call
-	// ending in :java-false) -- an array's elements alike; a handle is the value it
-	// stands for (compiled: _junm / _junf).
+	// ending in :java-false) -- an array's elements alike; a handle or a view is the
+	// value
+	// it stands for (compiled: _junm / _junf).
 	static LispVal unmarshal(@Nullable Object o, boolean javaFalse) {
 		return switch (o) {
 			case null -> LispNil.INSTANCE;
-			case JavaHandle handle -> handle.value();
+			case RontoJavaValue handle -> (LispVal) handle.value();
 			case Boolean b -> b ? LispTrue.INSTANCE : javaFalse ? JAVA_FALSE : LispNil.INSTANCE;
 			case Integer i -> new LispInteger(i);
 			case Long l -> new LispInteger(l);

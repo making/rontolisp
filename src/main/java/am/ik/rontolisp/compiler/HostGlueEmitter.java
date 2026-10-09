@@ -551,7 +551,18 @@ public final class HostGlueEmitter {
 		out.append("        try {\n");
 		out.append("          const response = await fetch(request.").append(requestField("url")).append(", {\n");
 		for (FetchResponseShape.Field field : FetchResponseShape.requestFields()) {
-			if (!"url".equals(field.name())) {
+			if ("octets".equals(field.name())) {
+				// An octet body arrives one character an octet: the platform sends a
+				// Uint8Array as it is.
+				out.append("            body: request.")
+					.append(requestField("body"))
+					.append(" ?? (request.")
+					.append(requestField("octets"))
+					.append(" === undefined ? undefined : Uint8Array.from(request.")
+					.append(requestField("octets"))
+					.append(", (c) => c.charCodeAt(0))),\n");
+			}
+			else if (!"url".equals(field.name()) && !"body".equals(field.name())) {
 				out.append("            ")
 					.append(field.name())
 					.append(": request.")
@@ -569,12 +580,22 @@ public final class HostGlueEmitter {
 			out.append("          // The reader IS the body; the module pulls it after this returns.\n");
 			out.append("          upstream = response.body ? response.body.getReader() : null;\n");
 		}
+		out.append("""
+				          // The platform's fetch decodes a content coding it knows, so the octets
+				          // the module reads are the decoded ones -- and the head says so, as
+				          // every other transport's does: the field naming the coding goes, and
+				          // the length of the coded octets with it.
+				          const coding = response.headers.get("content-encoding");
+				          const decoded = coding !== null
+				            && coding.split(",").every((c) => /^\\s*(x-gzip|gzip|deflate|br)\\s*$/i.test(c));
+				""");
 		out.append("          return JSON.stringify({\n");
 		for (FetchResponseShape.Field field : FetchResponseShape.responseFields()) {
 			String value = switch (field.name()) {
 				case "status" -> "response.status";
 				// An ARRAY of pairs, never an object: a name may repeat.
-				case "headers" -> "[...response.headers]";
+				case "headers" -> "[...response.headers].filter(([name]) => !decoded"
+						+ " || (name !== \"content-encoding\" && name !== \"content-length\"))";
 				// Out of band, the head carries no body at all -- the key's ABSENCE is
 				// what puts the module's stream over the import below.
 				case "body" -> pulled ? null : "await response.text()";
@@ -645,7 +666,7 @@ public final class HostGlueEmitter {
 	// rather than crossing as undefined.
 	private static String requestField(String name) {
 		return switch (name) {
-			case "url", "method", "headers", "body" -> name;
+			case "url", "method", "headers", "body", "octets" -> name;
 			default -> throw new UnsupportedOperationException(
 					"--emit-js-glue: the http-plist request record grew a field this host half does not send: " + name);
 		};

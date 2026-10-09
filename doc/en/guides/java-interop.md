@@ -40,6 +40,7 @@ The package is not part of Common Lisp, so its functions are referenced with the
 | `java:subclass` | Extend a class with a callable: `(java:subclass "super" '("iface"...) '("method"...) args... callable)` |
 | `java:reify` | Implement an interface one method at a time: `(java:reify "iface" "method" function ...)` |
 | `java:handle` | Stand for a Lisp value Java has no value of: `(java:handle value "text")` |
+| `java:view` | Stand for a Lisp collection as a read-only Java one: `(java:view value items :list)` |
 
 A constructed or returned object prints opaquely as `#<java <class-name>>` and
 can be passed back into `java:call`/`java:field`:
@@ -86,6 +87,7 @@ Arguments and results are converted between rontolisp and Java automatically:
 | a proper list / a vector (specialized too) | `T[]` (element-wise, incl. primitives), or `List`/`Collection`/`Iterable` | any Java array → a list |
 | a hash table | a fresh `java.util.LinkedHashMap` (`Map`, `HashMap`, `Object`, ...) | — |
 | a `java:handle` | an object Java sees as its text | the value it stands for |
+| a `java:view` | a read-only `List`, `Set` or `Map` of its items (a `List` view: an array of them where nothing takes it whole) | the value it stands for |
 
 A Java `null` (and a `void` method) comes back as `nil`. A proper list — or a
 rank-1 array made with `make-array`, a specialized one included (`double-float`,
@@ -165,7 +167,9 @@ false as `|false|`, as does a function passed where an interface is expected at 
 ending in it. A function passed where a `java.util.Comparator` is expected, at a call ending
 in both markers, answers `compare` as Clojure's `AFunction.compare` reads a function: `t` is
 -1, `|false|` is 1 when the function answers true for the two arguments swapped and 0
-otherwise, a float or ratio is truncated, an integer is its low 32 bits:
+otherwise, a float or ratio is truncated, an integer is its low 32 bits; `nil` throws the
+`NullPointerException` and any other answer the `ClassCastException` that `AFunction.compare`
+throws, which the call reports as the method's failure:
 
 ```lisp
 (let ((l (java:new "java.util.ArrayList")))
@@ -192,8 +196,39 @@ the value:
         (java:call (java:call m "keySet") "toArray")))   ; => ("{apple=1}" 1 (APPLE))
 ```
 
-The Clojure front end hands Java a keyword or a symbol this way, hashed and ordered as
-Clojure's `Keyword` and `Symbol` are.
+The full form is `(java:handle value text hash order class)`. A nil `hash` makes a handle
+equal only to a handle of the very same value, and a nil `text` then spells it as `Object`
+does, the class and the hash. An `order` that is a function compares the value with the
+object Java compares the handle with, by the sign of its answer, and a nil `order` makes the
+handle order nothing. `class` splits equality and order: handles of two classes are never
+equal and never compare, a `ClassCastException` naming both. A handle of a real number is a
+`java.lang.Number` of it ([java:handle](../reference/functions/java-handle.md)).
+
+### Views: java:view
+
+`(java:view value items shape)` makes a read-only Java collection that stands for a Lisp one:
+its elements are the items converted as `Object` arguments are, once; `shape` is `:list`,
+`:vector` (a `List` that is also `RandomAccess` and `Comparable`), `:set` or `:map` (of a hash
+table or a plist). Java reads it through the `java.util` interfaces -- `equals` and `hashCode`
+are theirs, every write an `UnsupportedOperationException` -- its `toString` is a printer's
+answer for the value, and Java hands it back as the value:
+
+```lisp
+(let* ((items (list 1 "two"))
+       (v (java:view items items :list (lambda (x) (format nil "<~{~A~^ ~}>" x))))
+       (l (java:new "java.util.ArrayList")))
+  (java:call l "add" v)
+  (list (java:call l "toString") (eq (java:call l "get" 0) items)))   ; => ("[<1 two>]" T)
+```
+
+A view is passed itself wherever its class fits. A `List` view where a Java array is expected
+is an array of its items, but only after every way to pass it whole, a varargs array holding
+it as one element included: a Java array a call answers is a list here, and its view
+converts back to the array a later call expects. The Clojure front end hands Java every value
+this way: a vector, list, set or map as a view printed as Clojure prints it, a keyword,
+symbol or ratio as a handle hashed and ordered as Clojure's `Keyword`, `Symbol` and `Ratio`
+are, and any other value as a handle equal only to itself
+([java:view](../reference/functions/java-view.md)).
 
 A `java` object is `eq` and `eql` only to itself: the same object answered by two
 calls is `eq`, while two objects that are `equals` are not. `equal` and `equalp`
@@ -752,7 +787,7 @@ shape the program uses, or declare the types so the calls resolve.
   built with.
 - Symbols other than `|false|`, dotted (improper) lists and multidimensional
   (rank-2+) arrays are not marshalled — pass them as Java collections you build
-  with `java:new`/`java:call`, or as a `java:handle`, instead.
+  with `java:new`/`java:call`, or as a `java:handle` or `java:view`, instead.
 - A returned `java.util.List` (unlike a Java array) stays an opaque `java`
   object: it keeps its identity and mutability, so read it with
   `java:call` (`"get"`, `"size"`, ...) rather than list functions.
