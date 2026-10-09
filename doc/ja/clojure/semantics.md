@@ -82,6 +82,8 @@ oracle と同じく無視します。oracle の spec が拒否する値、どの
   循環は選択済みのライブラリで止まります。
 - ソースパスは、エントリファイル自身のルート、プロジェクトの `:paths`、選ばれた各ライブラリの
   ルート（oracle のクラスパスと同じく、ツリーの上から）、最後に組み込みの名前空間の順です。
+  ルートにある `data_readers.clj` と `data_readers.cljc` がプログラムのデータリーダを与えます
+  （[タグ付きリテラル](syntax.md#tagged-literals)）。
 - `org.clojure/clojure`、`org.clojure/spec.alpha`、`org.clojure/core.specs.alpha` は、バージョンに
   かかわらずこのフロントエンド自身です。`ring/ring-core` と `ring/ring-codec` は、同梱のバージョン
   （ring-core 1.15.5、ring-codec 1.3.0）以下の Maven バージョンなら組み込みの Ring 名前空間です。
@@ -110,6 +112,8 @@ oracle と同じく無視します。oracle の spec が拒否する値、どの
   ディレクトリ（既定は `src/main/java`）、`src/main/clojure`、リソースディレクトリ（既定は
   `src/main/resources`）、`build-helper-maven-plugin` の `add-source` / `add-resource` の
   ディレクトリを加えます。最後のものは oracle と同じく先頭のプラグインから読みます。
+  どちらの POM も oracle と同じく Maven の strict の水準で検証し、oracle が拒否する POM は
+  Maven の挙げる問題を示して拒否します。
 - クラスを含む依存の jar は、プログラムの Java クラスパスにも加わります。インタプリタと JVM は
   そのクラスを呼べ、`-o app.jar` はその jar を出力の横にコピーします。WebAssembly は呼び出し時に
   Java を拒否するままです。
@@ -182,7 +186,10 @@ $ rontolisp test                      # test/**/*_test.clj を clojure.test で�
 パターンは seq ビュー経由で位置的に束縛し（`&` は残りを seq として、そのパターンも分配可。
 `:as` は全体）、マップパターンはテーブル対応の読み出し経由で束縛します（`:keys`/`:syms`/
 `:strs`、明示ローカル、`:as`、`:or` デフォルト）-- 対象は `let`、`loop`、`fn`/`defn`
-パラメータのいずれでも同じで、ネストしたパターンは再帰します。不正な形は名前付き拒否です。
+パラメータのいずれでも同じで、ネストしたパターンは再帰します。マップパターンは seq を、その
+キーワード引数が表すマップとして読みます（[seq-to-map-for-destructuring](reference/seq-to-map-for-destructuring.md)）。
+したがって `(defn f [& {:keys [a]}] a)` は `(f :a 1)` も `(f {:a 1})` も受けます。不正な形は
+名前付き拒否です。
 
 ## マクロ
 
@@ -323,7 +330,8 @@ docstring の `:doc`、名前のメタデータと attr マップ（定義の位
 `binding` は `^:dynamic` な var と `clojure.core` の特殊変数を動的エクステントで
 再束縛します。それ以外は拒否されます。`*out*`/`*in*`/`*err*` は `*standard-output*`/
 `*standard-input*`/`*error-output*` です。フラグは `clojure -M` でのオラクルの値を持ち
-（`*print-length*` は `nil`、`*assert*` は `true`、`*data-readers*` は `{}`、
+（`*print-length*` は `nil`、`*assert*` は `true`、`*data-readers*` はプログラムの
+データリーダ（なければ `{}`）、
 `*command-line-args*` はプログラムの引数、`*clojure-version*` は 1.12.6 など）、
 プリンタは `*print-length*`、`*print-level*`、`*print-readably*`、`*print-meta*`、
 `*print-namespace-maps*` に従い（キーが一つの名前空間を共有するマップは `#:a{:b 1}` と
@@ -405,8 +413,9 @@ ClojureScript の `^:mutable` は指定になりません。ローカル・パ�
 すべてのバックエンドで読みます。答えは同じテキストをクオートしたときの値と同じです。
 数・文字列・文字・キーワード（`::kw` は呼び出し元の名前空間で解決）・コレクションを
 同じように読み、メタデータは捨て、`#_` は読み飛ばします。レコードリテラルは
-プログラムが定義するクラスのレコードを組みます。`#=` の読み取り時評価とタグ付きリテラルは
-ソースと同様に拒否され、リーダ条件は `{:read-cond :allow}` のとき `.cljc` ファイルと同様に読まれます。リーダとして渡せるのは
+プログラムが定義するクラスのレコードを組みます。`#=` の読み取り時評価はソースと同様に
+拒否され、タグ付きリテラルはオラクルと同じく `*data-readers*`、`#inst` と `#uuid` の既定の
+リーダ、`*default-data-reader-fn*` の順に読まれ、リーダ条件は `{:read-cond :allow}` のとき `.cljc` ファイルと同様に読まれます。リーダとして渡せるのは
 `clojure.java.io/reader`、`*in*`、それらや `java.io.StringReader` の上の
 `java.io.PushbackReader`/`BufferedReader`/`InputStreamReader` で、いずれもどのバックエンドでも
 ストリームです。`read` はリーダをデータの直後に残します。`str` はオラクル同様、
@@ -458,7 +467,8 @@ var はエクスポートより下で定義してかまいません。
 | `defmacro` パラメータの `&form`/`&env` | 名前で | マクロはコンパイル環境を受け取らない |
 | 未知のエイリアスの `::alias/kw` | `Invalid token: ...` | 解決するのは require のエイリアス、ファイル自身の ns、既知の名前空間のみ |
 | `--no-gc` ビルド | 名前で | そのバックエッドにはペアもシンボルもクロージャもない |
-| `file-seq`、`clojure.java.io`（`reader` 以外） | `file-seq` / `unknown name: clojure.java.io/...` | ディレクトリ走査なし。解決するのは `reader` のみで、ファイルストリームのリーダーを開く |
+| バイト配列への `read`、`readAllBytes`、バイト配列の `write` | `... of a byte array is not supported: byte arrays are not built in` | どのバックエンドにもバイト配列の種類がない（`bytes?` は `false`） |
+| `http:`（ほか `file:` 以外）の URL の読み取り | `reading the http: URL ... is not built in` | `clojure.java.io` の下に接続の実行系がない。取得は [rontolisp.http-client](reference/http-client.md) が行う |
 | `clojure.core` の var、マクロ、マルチメソッド、プロトコルメソッドの `with-redefs`。REPL では、以前の入力が `^:redef` なしで定義した `defn` の `with-redefs` | `with-redefs of ... is not supported...`、`... define it ^:redef to redefine it` | コアの関数は呼び出しごとにインライン展開される。置き換えるルートを持つのは `def`/`defn`/`declare` の var だけで、REPL の入力は直接呼び出しのまま実行済み |
 | 非同期の Ring ハンドラ（`:async? true` 付きの `run-server`） | `asynchronous handlers (:async? true) are not supported` | トランスポートに respond/raise の仕組みがない |
 | `rontolisp.wasm` の宣言の `:async`、`async func` の WIT メンバーやエクスポート | `:async is not supported yet ...`、`... is an async func ...` | 中断する呼び出しが答える future は Clojure の future ではない |

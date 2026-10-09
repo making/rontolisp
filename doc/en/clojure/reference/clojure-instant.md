@@ -4,7 +4,9 @@ Reading RFC 3339 timestamps into instants. `clojure.instant` is loaded before th
 in Clojure, so `clojure.instant/read-instant-date` works without a `require`; it is Clojure
 source written for rontolisp from the documented behavior of Clojure's namespace, and runs
 the same on every backend. `#inst` reads through `read-instant-date`
-([Syntax](../syntax.md#tagged-literals)).
+([Syntax](../syntax.md#tagged-literals)), unless a data reader of `inst` -- one of the
+others in a `data_readers.clj`, or bound to `*data-readers*` around `read-string` -- reads
+it first.
 
 | Var | Behavior |
 |---|---|
@@ -39,5 +41,3 @@ them by instant.
 
 - `str` of a Calendar answers its printed `#inst`, where the oracle's dumps the calendar's
   fields.
-- `*data-readers*` is not read, so binding it to one of these readers does not change what
-  `#inst` reads in `read-string`; `clojure.edn`'s `:readers` takes them.

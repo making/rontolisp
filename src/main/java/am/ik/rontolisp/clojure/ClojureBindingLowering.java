@@ -1185,12 +1185,15 @@ final class ClojureBindingLowering {
 	 * A map pattern against an already-lowered init: every entry but the
 	 * {@code :keys}/{@code :syms}/{@code :strs}/{@code :as}/{@code :or} directives binds
 	 * its local through the table-aware read of its key expression, with the {@code :or}
-	 * default when present.
+	 * default when present. A seq init reads as the map its keyword arguments stand for
+	 * ({@code %clojure-destructure-map}), so {@code & {:keys [a]}} takes {@code :a 1}
+	 * like the oracle's; {@code :as} binds that map.
 	 */
 	static void destructureMap(ClojureLowering ctx, List<LispVal> entries, LispVal init, List<LispVal> pairs,
 			Map<String, ClojureLowering.Kind> scope, String what) {
 		LispSymbol whole = ctx.freshTemp();
-		pairs.add(ClojureLowerUtil.list(whole, init));
+		pairs.add(ClojureLowerUtil.list(whole,
+				ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-DESTRUCTURE-MAP"), init)));
 		Map<String, LispVal> defaults = new HashMap<>();
 		for (int i = 0; i + 1 < entries.size(); i += 2) {
 			if (!ClojureLowerUtil.isSymbolNamed(entries.get(i), ":or")) {

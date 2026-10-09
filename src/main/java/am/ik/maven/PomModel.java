@@ -30,12 +30,14 @@ import org.jspecify.annotations.Nullable;
  * @param relocation the {@code distributionManagement} relocation
  * @param modules the module names
  * @param build the {@code build} section, or {@code null} without one
+ * @param ancillary the repositories, distribution and reporting, read only to be
+ * validated
  */
 record PomModel(@Nullable String modelVersion, @Nullable Parent parent, @Nullable String groupId,
 		@Nullable String artifactId, @Nullable String version, @Nullable String packaging, @Nullable String name,
 		@Nullable String description, Map<String, String> properties, List<Dep> dependencies,
 		@Nullable List<Dep> managedDependencies, List<Profile> profiles, @Nullable Relocation relocation,
-		List<String> modules, @Nullable Build build) {
+		List<String> modules, @Nullable Build build, Ancillary ancillary) {
 
 	/**
 	 * Copies the collections, keeping their order.
@@ -69,26 +71,26 @@ record PomModel(@Nullable String modelVersion, @Nullable Parent parent, @Nullabl
 	PomModel withCoordinates(@Nullable String newGroupId, @Nullable String newVersion) {
 		return new PomModel(this.modelVersion, this.parent, newGroupId, this.artifactId, newVersion, this.packaging,
 				this.name, this.description, this.properties, this.dependencies, this.managedDependencies,
-				this.profiles, this.relocation, this.modules, this.build);
+				this.profiles, this.relocation, this.modules, this.build, this.ancillary);
 	}
 
 	PomModel withContent(@Nullable String newDescription, Map<String, String> newProperties, List<Dep> newDependencies,
-			@Nullable List<Dep> newManaged, List<String> newModules, @Nullable Build newBuild) {
+			@Nullable List<Dep> newManaged, List<String> newModules, @Nullable Build newBuild, Ancillary newAncillary) {
 		return new PomModel(this.modelVersion, this.parent, this.groupId, this.artifactId, this.version, this.packaging,
 				this.name, newDescription, newProperties, newDependencies, newManaged, this.profiles, this.relocation,
-				newModules, newBuild);
+				newModules, newBuild, newAncillary);
 	}
 
 	PomModel withDependencies(List<Dep> newDependencies, @Nullable List<Dep> newManaged) {
 		return new PomModel(this.modelVersion, this.parent, this.groupId, this.artifactId, this.version, this.packaging,
 				this.name, this.description, this.properties, newDependencies, newManaged, this.profiles,
-				this.relocation, this.modules, this.build);
+				this.relocation, this.modules, this.build, this.ancillary);
 	}
 
 	PomModel withBuild(@Nullable Build newBuild) {
 		return new PomModel(this.modelVersion, this.parent, this.groupId, this.artifactId, this.version, this.packaging,
 				this.name, this.description, this.properties, this.dependencies, this.managedDependencies,
-				this.profiles, this.relocation, this.modules, newBuild);
+				this.profiles, this.relocation, this.modules, newBuild, this.ancillary);
 	}
 
 	/**
@@ -181,10 +183,11 @@ record PomModel(@Nullable String modelVersion, @Nullable Parent parent, @Nullabl
 	 * @param modules the profile's modules
 	 * @param build the profile's {@code build} (a {@code BuildBase}: its source and
 	 * output directories {@code null}), or {@code null} without one
+	 * @param ancillary the profile's repositories, distribution and reporting
 	 */
 	record Profile(@Nullable String id, @Nullable Activation activation, Map<String, String> properties,
 			List<Dep> dependencies, @Nullable List<Dep> managedDependencies, List<String> modules,
-			@Nullable Build build) {
+			@Nullable Build build, Ancillary ancillary) {
 
 		Profile {
 			properties = java.util.Collections.unmodifiableMap(new LinkedHashMap<>(properties));
@@ -195,7 +198,7 @@ record PomModel(@Nullable String modelVersion, @Nullable Parent parent, @Nullabl
 
 		Profile withActivation(@Nullable Activation newActivation) {
 			return new Profile(this.id, newActivation, this.properties, this.dependencies, this.managedDependencies,
-					this.modules, this.build);
+					this.modules, this.build, this.ancillary);
 		}
 
 	}
@@ -300,11 +303,12 @@ record PomModel(@Nullable String modelVersion, @Nullable Parent parent, @Nullabl
 	}
 
 	/**
-	 * A resource; only its directory is read.
+	 * A resource; only its directory and filtering flag are read.
 	 *
 	 * @param directory the directory, {@code null} when left out
+	 * @param filtering the {@code filtering} flag as written
 	 */
-	record Resource(@Nullable String directory) {
+	record Resource(@Nullable String directory, @Nullable String filtering) {
 	}
 
 	/**
@@ -317,17 +321,21 @@ record PomModel(@Nullable String modelVersion, @Nullable Parent parent, @Nullabl
 	 * @param inherited the {@code inherited} flag as written
 	 * @param configuration the plugin-level configuration
 	 * @param executions the executions
+	 * @param extensions the {@code extensions} flag as written
+	 * @param dependencies the plugin's own dependencies
 	 */
 	record Plugin(@Nullable String groupId, @Nullable String artifactId, @Nullable String version,
-			@Nullable String inherited, @Nullable ConfigurationNode configuration, List<Execution> executions) {
+			@Nullable String inherited, @Nullable ConfigurationNode configuration, List<Execution> executions,
+			@Nullable String extensions, List<Dep> dependencies) {
 
 		/**
 		 * A plugin with nothing in it, its group id too: what inheritance merges into.
 		 */
-		static final Plugin BLANK = new Plugin(null, null, null, null, null, List.of());
+		static final Plugin BLANK = new Plugin(null, null, null, null, null, List.of(), null, List.of());
 
 		Plugin {
 			executions = List.copyOf(executions);
+			dependencies = List.copyOf(dependencies);
 		}
 
 		/**
@@ -362,6 +370,71 @@ record PomModel(@Nullable String modelVersion, @Nullable Parent parent, @Nullabl
 
 		Execution {
 			goals = List.copyOf(goals);
+		}
+
+	}
+
+	/**
+	 * The parts of a model (or a profile) no dependency graph or build reads, kept so the
+	 * model can be validated as Maven validates it.
+	 *
+	 * @param repositories the {@code repositories}
+	 * @param pluginRepositories the {@code pluginRepositories}
+	 * @param distribution the {@code distributionManagement} (its relocation aside, which
+	 * {@link PomModel#relocation} holds), or {@code null} without one
+	 * @param reporting the {@code reporting} section's plugins, or {@code null} without
+	 * the section
+	 */
+	record Ancillary(List<Repo> repositories, List<Repo> pluginRepositories, @Nullable Distribution distribution,
+			@Nullable List<ReportPlugin> reporting) {
+
+		/** Nothing declared. */
+		static final Ancillary NONE = new Ancillary(List.of(), List.of(), null, null);
+
+		Ancillary {
+			repositories = List.copyOf(repositories);
+			pluginRepositories = List.copyOf(pluginRepositories);
+			reporting = reporting == null ? null : List.copyOf(reporting);
+		}
+
+	}
+
+	/**
+	 * A repository ({@code repositories}, {@code pluginRepositories}, or a deployment
+	 * repository).
+	 *
+	 * @param id the id
+	 * @param url the URL
+	 * @param layout the layout
+	 */
+	record Repo(@Nullable String id, @Nullable String url, @Nullable String layout) {
+	}
+
+	/**
+	 * A {@code distributionManagement} as validation reads it.
+	 *
+	 * @param status the {@code status}, which a POM must not write
+	 * @param repository the deployment repository
+	 * @param snapshotRepository the snapshot deployment repository
+	 */
+	record Distribution(@Nullable String status, @Nullable Repo repository, @Nullable Repo snapshotRepository) {
+	}
+
+	/**
+	 * A reporting plugin.
+	 *
+	 * @param groupId the group id ({@code org.apache.maven.plugins} when left out)
+	 * @param artifactId the artifact id
+	 * @param inherited the {@code inherited} flag as written
+	 */
+	record ReportPlugin(@Nullable String groupId, @Nullable String artifactId, @Nullable String inherited) {
+
+		String key() {
+			return this.groupId + ":" + this.artifactId;
+		}
+
+		boolean isInherited() {
+			return this.inherited == null || Boolean.parseBoolean(this.inherited);
 		}
 
 	}

@@ -34,7 +34,8 @@ EDN はデータだけを表します。クォートはシンボルの一部で�
 なければ組み込みの `#inst` と `#uuid`（ソースと同じく読まれる[値](instants.md)）を使い、
 それもなければ `:default` 関数をタグと値で呼びます。どれも受け付けないタグは
 `No reader function for tag` エラーです。リーダーには関数値なら何でも使えます。関数、var、
-キーワード、マップのいずれでも構いません。
+キーワード、マップのいずれでも構いません。オラクルと同じく、EDN の読み取りは `*data-readers*` も
+`*default-data-reader-fn*` も参照しません。
 
 ```clojure
 (require '[clojure.edn :as edn])

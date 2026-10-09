@@ -283,6 +283,8 @@ sections:
             title: "(clojure.edn)"
           - file: clojure/reference/clojure-instant.md
             title: "(clojure.instant)"
+          - file: clojure/reference/clojure-java-io.md
+            title: "(clojure.java.io)"
           - file: clojure/reference/clojure-math.md
             title: "(clojure.math)"
           - file: clojure/reference/clojure-pprint.md

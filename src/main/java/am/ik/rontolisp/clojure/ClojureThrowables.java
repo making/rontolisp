@@ -33,7 +33,8 @@ final class ClojureThrowables {
 	 * {@code clojure.lang} throwables, read off clj 1.12.6 on JDK 25 (2026-10-03), and of
 	 * the three the HTTP client throws ({@code rontolisp.http-client}: a transport's
 	 * {@code IOException}, a failed future's {@code ExecutionException} under
-	 * {@code deref}, the {@code CompletionException} {@code :async-catch} is handed). A
+	 * {@code deref}, the {@code CompletionException} {@code :async-catch} is handed) and
+	 * of the three {@code clojure.java.io} refuses a file, a charset and a URL with. A
 	 * table, not reflection, so a host that reflects only what its image holds (a native
 	 * image, the browser) resolves these alike; {@code ClojureThrowablesTest} pins the
 	 * {@code java} rows to reflection. The {@code clojure.lang} rows are what no host
@@ -90,6 +91,9 @@ final class ClojureThrowables {
 			Map.entry("java.lang.VerifyError", "java.lang.LinkageError"),
 			Map.entry("java.lang.VirtualMachineError", "java.lang.Error"),
 			Map.entry("java.io.IOException", "java.lang.Exception"),
+			Map.entry("java.io.FileNotFoundException", "java.io.IOException"),
+			Map.entry("java.io.UnsupportedEncodingException", "java.io.IOException"),
+			Map.entry("java.net.MalformedURLException", "java.io.IOException"),
 			Map.entry("java.util.NoSuchElementException", "java.lang.RuntimeException"),
 			Map.entry("java.util.concurrent.ExecutionException", "java.lang.Exception"),
 			Map.entry("java.util.concurrent.CompletionException", "java.lang.RuntimeException"),

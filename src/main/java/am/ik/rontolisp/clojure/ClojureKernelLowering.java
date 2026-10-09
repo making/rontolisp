@@ -37,6 +37,9 @@ import org.jspecify.annotations.Nullable;
  * <li>{@code rontolisp.internal.instant} for {@code clojure.instant}: the timestamp
  * match, {@code validated}'s checks and the three readers, which the run-time reader's
  * default {@code #inst} reader shares.</li>
+ * <li>{@code rontolisp.internal.uuid} for {@code clojure.uuid}: the run-time reader's
+ * default {@code #uuid} reader, which {@code default-data-readers} names as
+ * {@code clojure.uuid/default-uuid-reader}.</li>
  * <li>{@code rontolisp.internal.reducers} for {@code clojure.core.reducers}: the
  * accumulator {@code cat} answers (the oracle's {@code java.util.ArrayList}, a growable
  * vector here, which no Clojure verb makes), the push of {@code append!} onto it and the
@@ -52,6 +55,10 @@ import org.jspecify.annotations.Nullable;
  * oracle's own wrapper is one {@code Math} call; {@code round} and the long arithmetic
  * ({@code floor-div}, the {@code -exact} six) are workers over the oracle's
  * {@code longCast}.</li>
+ * <li>{@code rontolisp.internal.io} for {@code clojure.java.io}: the File, URL and byte
+ * stream values and the opening of every stream kind over them
+ * ({@link ClojureIoLowering}); {@code resource} is lowered in place over the program's
+ * directory roots.</li>
  * </ul>
  *
  * <p>
@@ -91,10 +98,11 @@ final class ClojureKernelLowering {
 
 		/**
 		 * The kernel's form.
+		 * @param ctx the hub, whose program the kernel may read (its source path)
 		 * @param args the lowered arguments, as many as its arity
 		 * @return the form
 		 */
-		LispVal lower(List<LispVal> args);
+		LispVal lower(ClojureLowering ctx, List<LispVal> args);
 
 	}
 
@@ -138,7 +146,7 @@ final class ClojureKernelLowering {
 		Map<String, Integer> arity = new HashMap<>(STRICT_MATH);
 		Map<String, Inline> inline = new HashMap<>();
 		for (String name : STRICT_MATH.keySet()) {
-			inline.put(name, args -> strictMathCall(name, args));
+			inline.put(name, (ctx, args) -> strictMathCall(name, args));
 		}
 		for (String name : List.of("round", "increment-exact", "decrement-exact", "negate-exact")) {
 			arity.put(name, 1);
@@ -190,6 +198,7 @@ final class ClojureKernelLowering {
 			new Kernels("clojure.instant", "RONTOLISP::%CLOJURE-INSTANT-",
 					Map.ofEntries(Map.entry("parse", 1), Map.entry("validate", 10), Map.entry("read-date", 1),
 							Map.entry("read-timestamp", 1), Map.entry("read-calendar", 1))),
+			"rontolisp.internal.uuid", new Kernels("clojure.uuid", "RONTOLISP::%CLOJURE-", Map.of("read-uuid", 1)),
 			"rontolisp.internal.reducers",
 			new Kernels("clojure.core.reducers", "RONTOLISP::%CLOJURE-REDUCERS-",
 					Map.ofEntries(Map.entry("accumulator", 0), Map.entry("accumulator?", 1), Map.entry("append", 2),
@@ -198,7 +207,7 @@ final class ClojureKernelLowering {
 			new Kernels("rontolisp.http-client", "RONTOLISP::%CLOJURE-HTTP-",
 					Map.ofEntries(Map.entry("request", 2), Map.entry("fetch", 2)), Map.of("fetch", "RONTOLISP:FETCH"),
 					true),
-			"rontolisp.internal.math", mathKernels());
+			"rontolisp.internal.math", mathKernels(), ClojureIoLowering.NAMESPACE, ClojureIoLowering.kernels());
 
 	private ClojureKernelLowering() {
 	}
@@ -264,7 +273,7 @@ final class ClojureKernelLowering {
 		ctx.usedExInfo |= kernels.exceptions();
 		Inline inline = kernels.inline().get(var);
 		if (inline != null) {
-			return inline.lower(ctx.lowers(items, 1));
+			return inline.lower(ctx, ctx.lowers(items, 1));
 		}
 		return ClojureLowerUtil.cons(worker(kernels, var), ctx.lowers(items, 1));
 	}
@@ -290,7 +299,7 @@ final class ClojureKernelLowering {
 				params.add(new LispSymbol("ARG" + i + "%"));
 			}
 			return ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), ClojureLowerUtil
-				.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(params), inline.lower(params)));
+				.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(params), inline.lower(ctx, params)));
 		}
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), worker(kernels, var));
 	}

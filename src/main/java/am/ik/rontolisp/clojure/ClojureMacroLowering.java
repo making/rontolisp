@@ -420,8 +420,9 @@ final class ClojureMacroLowering {
 	 * A macro answer back to a datum: the inverse of {@link #quote}, so the expansion
 	 * lowers the way the quoted call-site data would. Mangled symbols shed the prefix,
 	 * keyword and set wrappers answer their datum, a pattern its regex literal, vectors
-	 * and tables their literals, and a gensym ({@code #:}-spelled, uninterned) travels as
-	 * itself so the {@code #:} bypass lowers it back to the same symbol.
+	 * and tables their literals, a host UUID or instant its literal's marker
+	 * ({@link #decodeHostValue}), and a gensym ({@code #:}-spelled, uninterned) travels
+	 * as itself so the {@code #:} bypass lowers it back to the same symbol.
 	 */
 	static LispVal decodeDatum(ClojureLowering ctx, LispVal value) {
 		if (value instanceof LispNil) {
@@ -505,7 +506,34 @@ final class ClojureMacroLowering {
 				|| value instanceof am.ik.rontolisp.LispDouble) {
 			return value;
 		}
+		if (value instanceof am.ik.rontolisp.LispJavaObject host) {
+			LispVal own = decodeHostValue(host.ref());
+			if (own != null) {
+				return own;
+			}
+		}
 		throw new LispReadException("an unreadable value: " + value.print());
+	}
+
+	/**
+	 * A host {@code java.util.UUID} or instant back to the marker of its literal: the
+	 * oracle's compiler embeds one by printing its {@code #uuid} or {@code #inst} and
+	 * reading it back, which here reads this front end's own value (a {@code Timestamp}
+	 * and a {@code Calendar}, like the oracle's, come back a Date). Null for any other
+	 * host object, which has no spelling to compile.
+	 */
+	private static @Nullable LispVal decodeHostValue(Object ref) {
+		if (ref instanceof java.util.UUID uuid) {
+			return ClojureLowerUtil.list(ClojureDefaultReaders.UUID, new LispInteger(uuid.getMostSignificantBits()),
+					new LispInteger(uuid.getLeastSignificantBits()));
+		}
+		if (ref instanceof java.util.Date date) {
+			return ClojureLowerUtil.list(ClojureDefaultReaders.INST, new LispInteger(date.getTime()));
+		}
+		if (ref instanceof java.util.Calendar calendar) {
+			return ClojureLowerUtil.list(ClojureDefaultReaders.INST, new LispInteger(calendar.getTimeInMillis()));
+		}
+		return null;
 	}
 
 	static LispVal decodeKeyword(ClojureLowering ctx, LispCons wrapper) {

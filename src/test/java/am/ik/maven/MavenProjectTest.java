@@ -7,10 +7,14 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.stream.Stream;
 
 import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -251,13 +255,14 @@ class MavenProjectTest {
 				<project><modelVersion>4.0.0</modelVersion><groupId>g</groupId><artifactId>p</artifactId>
 				<version>1</version><packaging>pom</packaging></project>
 				""";
-		// the model version is never inherited
+		// the model version is never inherited: missing in the raw model and in the
+		// effective one
 		pom("c1", parent);
 		Path noModelVersion = pom("c1/m", """
 				<project><parent><groupId>g</groupId><artifactId>p</artifactId><version>1</version></parent>
 				<artifactId>m</artifactId></project>
 				""");
-		assertRefused(noModelVersion, "the POM is invalid: 'modelVersion' is missing.");
+		assertRefused(noModelVersion, "the POM is invalid: 'modelVersion' is missing.; 'modelVersion' is missing.");
 		// a relativePath at another artifact, or at another version, sends the lookup to
 		// the repositories
 		pom("c2", parent.replace("<artifactId>p</artifactId>", "<artifactId>other</artifactId>"));
@@ -274,6 +279,161 @@ class MavenProjectTest {
 		pom("c6", parent);
 		assertRefused(pom("c6/m", child("p", "m", "").replace("<version>1</version>", "<version>[1,2)</version>")),
 				"the POM is invalid: Version must be a constant");
+	}
+
+	/**
+	 * A POM checked at the strict level (tools.deps' request): the refusal lists Maven's
+	 * problems in Maven's order, a warning marked; {@code null} where the oracle built
+	 * the model.
+	 */
+	@ParameterizedTest(name = "{0}")
+	@MethodSource("strictCases")
+	void theStrictLevelRefusesWhatTheOracleRefuses(String name, String pom, @Nullable String refusal)
+			throws IOException {
+		Path file = pom(name, pom);
+		if (refusal == null) {
+			assertThat(resolver().project(file, TOOLS_DEPS).sourceDirectory()).isEqualTo("./src/main/java");
+		}
+		else {
+			assertRefused(file, "the POM is invalid: " + refusal);
+		}
+	}
+
+	static Stream<Arguments> strictCases() {
+		String plugin = "<artifactId>maven-x-plugin</artifactId>";
+		String key = "org.apache.maven.plugins:maven-x-plugin";
+		return Stream.of(
+				Arguments.of("resource",
+						project("proj",
+								"<build><resources><resource/></resources><plugins><plugin>"
+										+ "<artifactId>maven-compiler-plugin</artifactId></plugin></plugins></build>"),
+						"[WARNING] 'build.plugins.plugin.version' for org.apache.maven.plugins:maven-compiler-plugin"
+								+ " is missing.; 'build.resources.resource.directory' is missing."),
+				Arguments.of("status",
+						project("proj", "<distributionManagement><status>deployed</status></distributionManagement>"),
+						"'distributionManagement.status' must not be specified."),
+				Arguments.of("report",
+						project("proj", "<reporting><plugins><plugin><artifactId/></plugin></plugins></reporting>"),
+						"'reporting.plugins.plugin.artifactId' is missing."),
+				Arguments.of("repos",
+						project("proj",
+								"<repositories><repository><id>local</id></repository><repository>"
+										+ "<id>local</id><url>file:///nowhere</url></repository></repositories>"),
+						"'repositories.repository.[local].url' is missing.; 'repositories.repository.id' must be"
+								+ " unique: local -> null vs file:///nowhere; [WARNING] 'repositories.repository.id'"
+								+ " must not be 'local', this identifier is reserved for the local repository, using it"
+								+ " for other repositories will corrupt your repository metadata."),
+				Arguments.of("profiles",
+						project("proj",
+								"<profiles><profile><id>p</id><activation><property><name>${project.x}</name>"
+										+ "</property></activation></profile><profile><id>p</id></profile></profiles>"),
+						"[WARNING] 'profiles.profile[p].activation.property.name' Failed to interpolate profile"
+								+ " activation property ${project.x}: ${project.x} expressions are not supported during"
+								+ " profile activation.; 'profiles.profile.id' must be unique but found duplicate"
+								+ " profile with id p"),
+				Arguments.of("executions",
+						project("proj", "<build><plugins><plugin>" + plugin + "<version>1</version><executions>"
+								+ "<execution><goals><goal>a</goal></goals></execution><execution/></executions>"
+								+ "</plugin><plugin>" + plugin + "</plugin></plugins></build>"),
+						"'build.plugins.plugin.[" + key + "].executions.execution.id' must be unique but found"
+								+ " duplicate execution with id default; [WARNING] 'build.plugins.plugin."
+								+ "(groupId:artifactId)' must be unique but found duplicate declaration of plugin "
+								+ key),
+				Arguments.of("plugin-version",
+						project("proj",
+								"<build><plugins><plugin>" + plugin
+										+ "<version>LATEST</version></plugin></plugins></build>"),
+						"'build.plugins.plugin.version' for " + key + " must be a valid version but is 'LATEST'."),
+				Arguments.of("booleans",
+						project("proj", "<build><plugins><plugin>" + plugin + "<version>1</version>"
+								+ "<extensions>no</extensions></plugin></plugins><resources><resource>"
+								+ "<directory>r</directory><filtering>yes</filtering></resource></resources></build>"),
+						"'build.plugins.plugin.extensions' for " + key + " must be 'true' or 'false' but is 'no'.;"
+								+ " 'build.resources.resource.filtering' for r must be 'true' or 'false' but is"
+								+ " 'yes'."),
+				Arguments.of("dependency",
+						project("proj",
+								"<dependencies><dependency><groupId>x</groupId><artifactId>y</artifactId>"
+										+ "<version>${undefined}</version><optional>yes</optional></dependency>"
+										+ "</dependencies>"),
+						"'dependencies.dependency.optional' for x:y:jar must be 'true' or 'false' but is 'yes'.;"
+								+ " 'dependencies.dependency.version' for x:y:jar must be a valid version but is"
+								+ " '${undefined}'."),
+				Arguments.of("plugin-dependency",
+						project("proj", "<build><plugins><plugin>" + plugin + "<version>1</version><dependencies>"
+								+ "<dependency><groupId>x</groupId><artifactId>y</artifactId><version>1</version>"
+								+ "<scope>test</scope></dependency></dependencies></plugin></plugins></build>"),
+						"'build.plugins.plugin[" + key + "].dependencies.dependency.scope' for x:y:jar must be one"
+								+ " of [compile, runtime, system] but is 'test'."),
+				Arguments.of("self",
+						project("proj",
+								"<dependencies><dependency><groupId>g</groupId><artifactId>proj</artifactId>"
+										+ "<version>1</version></dependency></dependencies>"),
+						"'dependencies.dependency[g:proj:1]' for g:proj:1 is referencing itself."),
+				Arguments.of("version-expression",
+						"<project><modelVersion>4.0.0</modelVersion><groupId>g</groupId><artifactId>proj</artifactId>"
+								+ "<version>${revision}</version></project>",
+						"'version' must be a constant version but is '${revision}'."),
+				Arguments.of("model-version", project("proj", "").replace("4.0.0", "4.0"),
+						"'modelVersion' must be one of [4.0.0] but is '4.0'."),
+				Arguments.of("model-version-newer", project("proj", "").replace("4.0.0", "5.0.0"),
+						"'modelVersion' of '5.0.0' is newer than the versions supported by this version of Maven:"
+								+ " [4.0.0]. Building this project requires a newer version of Maven."),
+				// the oracle's validator throws out of the model builder
+				Arguments.of("model-version-text", project("proj", "").replace("4.0.0", "4.x"),
+						"java.lang.NumberFormatException: For input string: \"x\""),
+				Arguments.of("module", project("proj", "<packaging>pom</packaging><modules><module/></modules>"),
+						"'modules.module[0]' has been specified without a path to the project directory."),
+				// what only the lenient reader reads: a warning for the file built
+				Arguments.of("unknown", project("proj", "<foo><bar/></foo>"), null),
+				Arguments.of("text", project("proj", " junk <name>n</name>"), null),
+				Arguments.of("root",
+						project("proj", "").replace("<project>", "<proj>").replace("</project>", "</proj>"), null),
+				Arguments.of("attribute", project("proj", "").replace("<project>", "<project bar=\"1\">"), null),
+				// a duplicate plugin is a warning below level 3.1
+				Arguments.of(
+						"duplicates", project("proj", "<build><plugins><plugin>" + plugin
+								+ "<version>1</version></plugin><plugin>" + plugin + "</plugin></plugins></build>"),
+						null));
+	}
+
+	@Test
+	void aParentBesideTheFileIsReadStrictlyOneFromARepositoryAtLevelTwo(@TempDir Path remote) throws IOException {
+		String duplicateProfiles = """
+				<project><modelVersion>4.0.0</modelVersion><groupId>g</groupId><artifactId>pp</artifactId>
+				<version>1</version><packaging>pom</packaging>
+				<profiles><profile><id>p</id></profile><profile><id>p</id></profile></profiles></project>
+				""";
+		String child = """
+				<project><modelVersion>4.0.0</modelVersion><parent><groupId>g</groupId><artifactId>pp</artifactId>
+				<version>1</version>%s</parent><artifactId>proj</artifactId></project>
+				""";
+		pom("local", duplicateProfiles);
+		assertRefused(pom("local/proj", child.formatted("")),
+				"the POM is invalid: 'profiles.profile.id' must be unique but found duplicate profile with id p");
+		// what only the lenient reader reads of a parent beside the file is an error
+		pom("malformed", duplicateProfiles.replaceAll("<profiles>.*</profiles>", "<foo/>"));
+		Path malformed = pom("malformed/proj", child.formatted(""));
+		assertThatThrownBy(() -> resolver().project(malformed, TOOLS_DEPS))
+			.hasMessageStartingWith("the POM is invalid: Malformed POM " + this.dir.resolve("malformed/pom.xml")
+					+ ": Unrecognised tag: 'foo'");
+		Path pp = remote.resolve("g/pp/1/pp-1.pom");
+		Files.createDirectories(pp.getParent());
+		byte[] bytes = duplicateProfiles.getBytes(StandardCharsets.UTF_8);
+		Files.write(pp, bytes);
+		Files.writeString(pp.resolveSibling("pp-1.pom.sha1"), MavenTestRepository.sha1(bytes));
+		Path fromRepository = pom("repository/proj", child.formatted("<relativePath/>"));
+		assertThat(resolver(remote).project(fromRepository, TOOLS_DEPS).sourceDirectory()).isEqualTo("./src/main/java");
+	}
+
+	@Test
+	void aJarsOwnPomIsBuiltStrictlyWhatOnlyTheLenientReaderReadsAWarning() throws MavenResolutionException {
+		assertThat(resolver().projectDependencies(project("proj", "<foo/>").getBytes(StandardCharsets.UTF_8)))
+			.isEmpty();
+		byte[] resource = project("proj", "<build><resources><resource/></resources></build>")
+			.getBytes(StandardCharsets.UTF_8);
+		assertThatThrownBy(() -> resolver().projectDependencies(resource))
+			.hasMessage("the POM is invalid: 'build.resources.resource.directory' is missing.");
 	}
 
 	private void assertRefused(Path pom, String message) {

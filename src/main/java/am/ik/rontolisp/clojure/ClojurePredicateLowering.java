@@ -103,7 +103,7 @@ final class ClojurePredicateLowering {
 			Map.entry("realized?", helper("IS-REALIZED")), Map.entry("special-symbol?", helper("IS-SPECIAL-SYMBOL")),
 			Map.entry("inst?", helper("IS-INST")),
 			Map.entry("uuid?", new Test(IS_UUID, List.of(LispString.literal("java.util.UUID")))),
-			Map.entry("uri?", host("java.net.URI")), Map.entry("class?", host("java.lang.Class")));
+			Map.entry("uri?", helper("IS-URI")), Map.entry("class?", host("java.lang.Class")));
 
 	/**
 	 * The predicates a record, deftype or reify answers true for when its body implements

@@ -8,6 +8,7 @@ import java.util.HashSet;
 import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.TreeMap;
 
@@ -47,6 +48,16 @@ import org.jspecify.annotations.Nullable;
  * literals suppressed and drops. A splice pushes its members onto the pending forms of
  * the enclosing list, which every read takes first, so a splice under a quote or a
  * discard leaves its rest to that list, as the oracle's {@code pendingForms} do.
+ *
+ * <p>
+ * A tagged literal of an undotted tag reads its form, then asks the program's data
+ * readers ({@link Tags}), which call a library function while the form is read, like the
+ * oracle's {@code *data-readers*}: only a reader made {@link #again} with them, one
+ * top-level datum at a time ({@link #readTopLevel}) as the lowering goes, can ask -- the
+ * function's namespace is loaded by a datum above. A first read has none: it reads
+ * {@code #inst} and {@code #uuid} through the default readers and leaves any other tag
+ * (and a form the defaults refuse) pending ({@link #PENDING_TAG}), which is all a
+ * pre-scan of the definitions needs.
  */
 final class ClojureReader {
 
@@ -91,6 +102,37 @@ final class ClojureReader {
 	 */
 	static final LispSymbol TAGGED = new LispSymbol("%tagged");
 
+	/**
+	 * Heads what a first read leaves for a tagged literal of an undotted tag other than
+	 * {@code #inst} and {@code #uuid} (or one of those two whose form the default reader
+	 * refuses), {@code (%pending-tag tag form)}: what reads in its place is the data
+	 * readers' to say, on the second read ({@link #again}). Never equal to another in a
+	 * map or set, whose duplicate check the second read makes over the values.
+	 */
+	static final LispSymbol PENDING_TAG = new LispSymbol("%pending-tag");
+
+	/**
+	 * What reads in place of a tagged literal of an undotted tag, the oracle's
+	 * {@code *data-readers*} of a program: a data reader's answer for the form.
+	 */
+	@FunctionalInterface
+	interface Tags {
+
+		/** No data reader: only {@code #inst} and {@code #uuid} read. */
+		Tags NONE = (tag, form) -> null;
+
+		/**
+		 * The datum the tag's data reader makes of the form, or null when the tag has
+		 * none. A refusal throws, and the reader positions it after the form, like the
+		 * oracle's.
+		 * @param tag the tag as written
+		 * @param form the form read after it
+		 * @return the datum, or null
+		 */
+		@Nullable LispVal read(String tag, LispVal form);
+
+	}
+
 	private final String source;
 
 	private final @Nullable String file;
@@ -122,7 +164,7 @@ final class ClojureReader {
 	 */
 	private int anonId;
 
-	/** Numbers the regex literals {@link #equivKey} has told apart. */
+	/** Numbers the regex literals and pending tags {@link #equivKey} has told apart. */
 	private int unique;
 
 	/** Whether a reader conditional reads here, rather than being refused. */
@@ -149,6 +191,21 @@ final class ClojureReader {
 	private boolean suppress;
 
 	/**
+	 * The data readers a tagged literal of an undotted tag asks, or null on a first read,
+	 * which leaves it pending.
+	 */
+	private final @Nullable Tags tags;
+
+	/** How many tagged literals this read left pending. */
+	private int pendingTags;
+
+	/**
+	 * How many {@code #inst} and {@code #uuid} this read took through the default
+	 * readers.
+	 */
+	private int defaultTags;
+
+	/**
 	 * A reader of a file's text, taking reader conditionals where the oracle's
 	 * {@code Compiler.load} does: in a {@code .cljc} file.
 	 * @param source the text
@@ -166,14 +223,16 @@ final class ClojureReader {
 	 * session) rather than being refused
 	 */
 	ClojureReader(String source, @Nullable String file, boolean conditionals) {
-		this(source, file, conditionals, false);
+		this(source, file, conditionals, false, null);
 	}
 
-	private ClojureReader(String source, @Nullable String file, boolean conditionals, boolean edn) {
+	private ClojureReader(String source, @Nullable String file, boolean conditionals, boolean edn,
+			@Nullable Tags tags) {
 		this.source = source;
 		this.file = file;
 		this.conditionals = conditionals;
 		this.edn = edn;
+		this.tags = tags;
 	}
 
 	/**
@@ -184,7 +243,36 @@ final class ClojureReader {
 	 * @return the reader
 	 */
 	static ClojureReader forEdn(String source, String file) {
-		return new ClojureReader(source, file, false, true);
+		return new ClojureReader(source, file, false, true, null);
+	}
+
+	/**
+	 * A fresh reader of the same text from its start that asks the data readers for every
+	 * tagged literal of an undotted tag, its own positions: the second read, which
+	 * {@link #readTopLevel} takes a datum at a time as the lowering goes.
+	 * @param tags the data readers
+	 * @return the reader
+	 */
+	ClojureReader again(Tags tags) {
+		return new ClojureReader(this.source, this.file, this.conditionals, this.edn, tags);
+	}
+
+	/**
+	 * How many tagged literals this read left pending ({@link #PENDING_TAG}) for the data
+	 * readers to read again.
+	 * @return the count
+	 */
+	int pendingTags() {
+		return this.pendingTags;
+	}
+
+	/**
+	 * How many {@code #inst} and {@code #uuid} literals this read took through the
+	 * default readers, which a data reader of the tag would have taken first.
+	 * @return the count
+	 */
+	int defaultTags() {
+		return this.defaultTags;
 	}
 
 	/**
@@ -208,20 +296,44 @@ final class ClojureReader {
 		return SourceLocation.at(this.file, offset, this.source);
 	}
 
+	/**
+	 * Where the read stands now, in a file of the caller's naming: the position of a
+	 * refusal of a read made without a file.
+	 * @param file the file to name
+	 * @return the position
+	 */
+	SourceLocation here(String file) {
+		return new SourceLocation(file, this.line, this.column);
+	}
+
 	List<LispVal> readAll() {
 		List<LispVal> forms = new ArrayList<>();
-		skipSpace();
 		this.endsInDiscard = false;
+		for (LispVal datum = readTopLevel(); datum != null; datum = readTopLevel()) {
+			forms.add(datum);
+		}
+		return forms;
+	}
+
+	/**
+	 * The next top-level datum past whitespace and {@code #_} discards, or null at the
+	 * end of the text: one datum at a time, so a second read ({@link #again}) reads each
+	 * only after the lowering has lowered the one before it, like the oracle's
+	 * {@code load}.
+	 * @return the datum, or null
+	 */
+	@Nullable LispVal readTopLevel() {
+		skipSpace();
 		while (this.pos < this.source.length()) {
 			this.anonId = 0;
 			LispVal datum = readDatum();
 			this.endsInDiscard = datum == DISCARD;
-			if (datum != DISCARD) {
-				forms.add(datum);
-			}
 			skipSpace();
+			if (datum != DISCARD) {
+				return datum;
+			}
 		}
-		return forms;
+		return null;
 	}
 
 	/**
@@ -494,6 +606,10 @@ final class ClojureReader {
 				|| ClojureDefaultReaders.isMarker(head)) {
 			return null;
 		}
+		if (head == PENDING_TAG) {
+			// what the data reader answers is the second read's to splice
+			return List.of(list(items));
+		}
 		return items;
 	}
 
@@ -716,11 +832,10 @@ final class ClojureReader {
 	/**
 	 * One record literal {@code #ns.Name{:k v ...}} / {@code #ns.Name[v ...]}, positioned
 	 * after the hash: {@code (%record ns.Name body)}, the body read as data (the oracle
-	 * never evaluates it). Like the oracle, only a dotted class name is a record literal;
-	 * an undotted tag is a tagged literal, of which {@code #inst} and {@code #uuid} read
-	 * through the oracle's default data readers ({@link ClojureDefaultReaders}) and any
-	 * other has no reader function. A body that is neither a map nor a vector is
-	 * unreadable, and a map body takes distinct keyword keys only.
+	 * never evaluates it). Like the oracle, only a tag whose name -- the part after a
+	 * namespace -- is dotted is a record literal; any other is a tagged literal
+	 * ({@link #readTagged}), {@code #my.ns/tag} too. A body that is neither a map nor a
+	 * vector is unreadable, and a map body takes distinct keyword keys only.
 	 */
 	private LispVal readRecordLiteral() {
 		int start = this.pos;
@@ -731,18 +846,9 @@ final class ClojureReader {
 		if (this.suppress || this.edn) { // a branch not taken needs no reader for its tag
 			return list(List.of(TAGGED, new LispSymbol(tag), readRequired()));
 		}
-		if (tag.indexOf('.') < 0) {
-			if (tag.equals("inst") || tag.equals("uuid")) {
-				// the oracle's default data readers, which run as the form is read
-				LispVal form = readRequired();
-				try {
-					return tag.equals("inst") ? ClojureDefaultReaders.instant(form) : ClojureDefaultReaders.uuid(form);
-				}
-				catch (IllegalArgumentException ex) {
-					throw error(String.valueOf(ex.getMessage()));
-				}
-			}
-			throw error("No reader function for tag " + tag);
+		if (!isRecordTag(tag)) {
+			// like the oracle, the form reads before its reader is looked for
+			return readTagged(tag, readRequired());
 		}
 		skipSpace();
 		LispVal body;
@@ -771,6 +877,74 @@ final class ClojureReader {
 			throw error("Unreadable constructor form starting with \"#" + tag + "\"");
 		}
 		return list(List.of(RECORD, new LispSymbol(tag), body));
+	}
+
+	/**
+	 * Whether a tag is a record literal's class: its name is dotted, the oracle's
+	 * {@code sym.getName().contains(".")} -- the name of {@code ns/name} is what follows
+	 * the first slash, so {@code #my.ns/tag} is a tagged literal.
+	 * @param tag the tag as written
+	 * @return {@code true} for a record class
+	 */
+	static boolean isRecordTag(String tag) {
+		int slash = tag.indexOf('/');
+		String name = slash < 0 || tag.equals("/") ? tag : tag.substring(slash + 1);
+		return name.indexOf('.') >= 0;
+	}
+
+	/**
+	 * A tagged literal of an undotted tag, its form read: the oracle's
+	 * {@code readTagged}. The data readers answer first ({@link Tags}), then
+	 * {@code #inst} and {@code #uuid} read through the oracle's default data readers
+	 * ({@link ClojureDefaultReaders}), and any other tag has no reader function -- each
+	 * positioned after the form, like the oracle's. A first read, which has no data
+	 * readers, takes the two defaults where they read the form and leaves any other tag
+	 * pending ({@link #PENDING_TAG}).
+	 */
+	private LispVal readTagged(String tag, LispVal form) {
+		boolean builtin = tag.equals("inst") || tag.equals("uuid");
+		if (this.tags == null) {
+			// a first read: the defaults where they read the form -- a data reader of
+			// the tag may take what they refuse -- and any other tag pending
+			LispVal read = builtin ? readDefault(tag, form, false) : null;
+			if (read != null) {
+				this.defaultTags++;
+				return read;
+			}
+			this.pendingTags++;
+			return list(List.of(PENDING_TAG, new LispSymbol(tag), form));
+		}
+		LispVal read;
+		try {
+			read = this.tags.read(tag, form);
+		}
+		catch (LispReadException ex) {
+			throw ex.location() != null || this.file == null ? ex : error(ex.reason());
+		}
+		if (read != null) {
+			return read;
+		}
+		if (builtin) {
+			return Objects.requireNonNull(readDefault(tag, form, true));
+		}
+		throw error("No reader function for tag " + tag);
+	}
+
+	/**
+	 * {@code #inst} or {@code #uuid} through the oracle's default data readers, which run
+	 * as the form is read: the value's marker, or for a form they refuse the oracle's
+	 * refusal after it ({@code refuse}) or null.
+	 */
+	private @Nullable LispVal readDefault(String tag, LispVal form, boolean refuse) {
+		try {
+			return tag.equals("inst") ? ClojureDefaultReaders.instant(form) : ClojureDefaultReaders.uuid(form);
+		}
+		catch (IllegalArgumentException ex) {
+			if (refuse) {
+				throw error(String.valueOf(ex.getMessage()));
+			}
+			return null;
+		}
 	}
 
 	/**
@@ -949,7 +1123,7 @@ final class ClojureReader {
 	 * for them: reader metadata ignored, a vector equal to a list of the same members, a
 	 * map or set by its members in any order, {@code -0.0} equal to {@code 0.0} and
 	 * {@code ##NaN} to itself (the oracle's reader compares keys that way), a regex never
-	 * equal to another.
+	 * equal to another, nor a pending tag (whose value the second read compares).
 	 */
 	private String equivKey(LispVal form) {
 		if (form instanceof LispDouble number) {
@@ -963,8 +1137,9 @@ final class ClojureReader {
 			return equivKey(items.get(1));
 		}
 		LispVal head = items.isEmpty() ? null : items.get(0);
-		if (head == REGEX) {
-			return "regex#" + this.unique++;
+		if (head == REGEX || head == PENDING_TAG) {
+			// a pending tag's value is the second read's to compare
+			return "unique#" + this.unique++;
 		}
 		if (head == HASH_MAP || head == HASH_SET) {
 			List<String> members = new ArrayList<>();

@@ -10,6 +10,7 @@ categories:
       - { slug: defn-dash, name: "defn-" }
       - { slug: fn, name: "fn" }
       - { slug: let, name: "let" }
+      - { slug: seq-to-map-for-destructuring, name: "seq-to-map-for-destructuring" }
       - { slug: letfn, name: "letfn" }
       - { slug: loop, name: "loop" }
       - { slug: recur, name: "recur" }
@@ -129,6 +130,7 @@ categories:
       - { slug: dorun, name: "dorun" }
       - { slug: doall, name: "doall" }
       - { slug: run-bang, name: "run!" }
+      - { slug: core-iteration, name: "iteration" }
   - title: "Maps, sets and vectors"
     index_page: clojure/reference/collections.md
     functions:
@@ -493,11 +495,13 @@ categories:
       - { slug: spit, name: "spit" }
       - { slug: slurp, name: "slurp" }
       - { slug: line-seq, name: "line-seq" }
+      - { slug: file-seq, name: "file-seq" }
       - { slug: reader, name: "clojure.java.io/reader" }
       - { slug: read-string, name: "read-string" }
       - { slug: read, name: "read" }
       - { slug: reader-conditional, name: "reader-conditional" }
       - { slug: tagged-literal, name: "tagged-literal" }
+      - { slug: default-data-readers, name: "default-data-readers" }
       - { slug: format, name: "format" }
       - { slug: with-open, name: "with-open" }
       - { slug: with-out-str, name: "with-out-str" }

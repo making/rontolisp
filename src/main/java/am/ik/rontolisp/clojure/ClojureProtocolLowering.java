@@ -12,6 +12,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.TreeSet;
 import java.util.function.BiFunction;
 import java.util.function.Function;
 import am.ik.rontolisp.LispChar;
@@ -218,12 +219,19 @@ final class ClojureProtocolLowering {
 				ClojureCollectionLowering.keywordForm("map")));
 		branches.add(ClojureLowerUtil.list(ClojureSortedLowering.sortedSetTest(one),
 				ClojureCollectionLowering.keywordForm("set")));
+		// a clojure.java.io value (its wrapper is a cons) dispatches as its class: an arm
+		// a program making none sheds
+		branches.add(ClojureLowerUtil.list(ClojureLowerUtil.list(new LispSymbol(ClojureIoLowering.IO_P), one),
+				ClojureLowerUtil.list(new LispSymbol(ClojureIoLowering.CLASS_KEY), one)));
 		branches.add(ClojureLowerUtil.list(ClojureLowerUtil.list(ClojureLowerUtil.sym("consp"), one),
 				ClojureCollectionLowering.keywordForm("list")));
 		branches.add(ClojureLowerUtil.list(ClojureLowerUtil.list(ClojureLowerUtil.sym("functionp"), one),
 				ClojureCollectionLowering.keywordForm("function")));
 		branches.add(ClojureLowerUtil.list(ClojureStateLowering.isAtomForm(one),
 				ClojureCollectionLowering.keywordForm("atom")));
+		// a host java.io.File, URL or URI (interpreter, JVM) dispatches as one
+		// clojure.java.io makes: host arms a program naming no java: operator sheds
+		branches.addAll(ClojureIoLowering.hostTagArms(one));
 		branches.add(ClojureLowerUtil.list(ClojureLowering.TRUE_CONST,
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("list"), ClojureLowering.NIL_CONST)));
 		List<LispVal> forms = new ArrayList<>();
@@ -681,6 +689,15 @@ final class ClojureProtocolLowering {
 	 */
 	static LispVal methodStoreForm(ClojureLowering ctx, LispSymbol methodsVar, LispVal key, String method,
 			LispVal lambda) {
+		return methodStoreForm(ctx, methodsVar, key, ClojureCollectionLowering.keywordForm(method), lambda);
+	}
+
+	/**
+	 * {@link #methodStoreForm(ClojureLowering, LispSymbol, LispVal, String, LispVal)}
+	 * under the method keyword a form answers.
+	 */
+	private static LispVal methodStoreForm(ClojureLowering ctx, LispSymbol methodsVar, LispVal key, LispVal methodKey,
+			LispVal lambda) {
 		LispSymbol inner = ctx.freshTemp();
 		LispSymbol miss = ctx.freshTemp();
 		LispVal ensure = ClojureLowerUtil
@@ -695,10 +712,8 @@ final class ClojureProtocolLowering {
 								ClojureLowerUtil.list(ClojureLowerUtil.sym("list"), ClojureLowering.NIL_CONST)),
 						ClojureLowerUtil.list(inner,
 								ClojureLowerUtil.list(ClojureLowerUtil.sym("gethash"), key, methodsVar, miss)))),
-				ensure,
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("setf"), ClojureLowerUtil
-					.list(ClojureLowerUtil.sym("gethash"), ClojureCollectionLowering.keywordForm(method), inner),
-						lambda));
+				ensure, ClojureLowerUtil.list(ClojureLowerUtil.sym("setf"),
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("gethash"), methodKey, inner), lambda));
 	}
 
 	/**
@@ -1543,7 +1558,8 @@ final class ClojureProtocolLowering {
 	 * kinds answer the {@code class} keyword spelling (a {@code java.lang.}/
 	 * {@code clojure.lang.} qualified or imported spelling too, like a {@code defmethod}
 	 * dispatch value), so dispatch agrees with {@code class}, and so do the classes of
-	 * the instants and the UUID ({@link ClojureClassBases#TIME_VALUE_DISPATCH}). Any
+	 * the instants and the UUID ({@link ClojureClassBases#TIME_VALUE_DISPATCH}) and of
+	 * the {@code clojure.java.io} values ({@link ClojureIoLowering#EXTENDABLE}). Any
 	 * other class a value may be an instance of -- a throwable, an interface such as
 	 * {@code clojure.lang.IRef}, a host class, an interface spelled like a core kind that
 	 * other kinds' values implement too ({@link #reachesOtherKinds}) -- is a walked class
@@ -1564,6 +1580,10 @@ final class ClojureProtocolLowering {
 		// a package-qualified or imported spelling resolves like a defmethod dispatch
 		// value
 		String fqn = ClojureNamespaceLowering.resolveClass(ctx, typeName);
+		if (ClojureIoLowering.EXTENDABLE.contains(fqn)) {
+			// a clojure.java.io value dispatches as its class's keyword
+			return ClojureCollectionLowering.keywordForm(fqn);
+		}
 		String kind = ClojureDispatchLowering.DISPATCH_CLASS_KEYWORDS.get(fqn.substring(fqn.lastIndexOf('.') + 1));
 		if (kind == null) {
 			kind = ClojureClassBases.TIME_VALUE_DISPATCH.get(fqn);
@@ -1628,7 +1648,7 @@ final class ClojureProtocolLowering {
 	 * the most specific of the protocol's interfaces for such a value, as the oracle's
 	 * lookup does, where an exact key would answer ahead of a more specific one
 	 * ({@code ISeq} for a list). Null for a target whose row its values' tag names
-	 * exactly ({@link #extendKeyForm}).
+	 * exactly ({@link #extendKeyForm}), a {@code java.io.File}, URL or URI among them.
 	 * @param ctx the lowering
 	 * @param typeName the target's spelling
 	 * @return the walked class's binary name, or null
@@ -1641,6 +1661,9 @@ final class ClojureProtocolLowering {
 		String fqn = ClojureNamespaceLowering.resolveClass(ctx, typeName);
 		if (ClojureDispatchLowering.DISPATCH_CLASS_KEYWORDS.containsKey(fqn.substring(fqn.lastIndexOf('.') + 1))) {
 			return reachesOtherKinds(ctx, typeName) ? walkedName(ctx, typeName) : null;
+		}
+		if (ClojureIoLowering.EXTENDABLE.contains(fqn)) {
+			return null;
 		}
 		if (ClojureClassBases.TIME_VALUE_DISPATCH.containsKey(fqn)) {
 			return ClojureClassBases.timeValueSubclassesOf(fqn).isEmpty() ? null : fqn;
@@ -1943,15 +1966,21 @@ final class ClojureProtocolLowering {
 	 * {@code Object} extension satisfies nothing it was not extended to).
 	 */
 	static LispVal objectStoreForm(ClojureLowering.ProtocolDef def, String method, LispVal lambda) {
+		return objectStoreForm(def, ClojureCollectionLowering.keywordForm(method), lambda);
+	}
+
+	/**
+	 * {@link #objectStoreForm(ClojureLowering.ProtocolDef, String, LispVal)} under the
+	 * method keyword a form answers.
+	 */
+	private static LispVal objectStoreForm(ClojureLowering.ProtocolDef def, LispVal methodKey, LispVal lambda) {
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("progn"),
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
 						ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), def.defaultVar()),
 						ClojureLowerUtil.list(ClojureLowerUtil.sym("setq"), def.defaultVar(),
 								ClojureCollectionLowering.makeTable())),
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("setf"),
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("gethash"),
-								ClojureCollectionLowering.keywordForm(method), def.defaultVar()),
-						lambda));
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("gethash"), methodKey, def.defaultVar()), lambda));
 	}
 
 	/**
@@ -2036,58 +2065,113 @@ final class ClojureProtocolLowering {
 	}
 
 	/**
-	 * {@code (extend T Protocol {method fn ...})}: the same rows from a map literal of
-	 * method functions. Anything but a literal map is refused (there is nothing to walk
-	 * at lower time).
+	 * {@code (extend T Protocol {method fn ...} ...)}: the same rows from each protocol's
+	 * map of method functions -- a map literal's entries lowered in place, a map the
+	 * program computes ({@code clojure.java.io/default-streams-impl} with a row replaced)
+	 * stored entry by entry when it runs ({@link #computedRows}).
 	 */
 	static LispVal extendForm(ClojureLowering ctx, List<LispVal> items) {
-		ClojureLowerUtil.isTrue(items.size() == 4, "extend takes a type, a protocol and a map of methods");
+		ClojureLowerUtil.isTrue(items.size() >= 4 && items.size() % 2 == 0,
+				"extend takes a type, then a protocol and a map of methods, any number of times");
 		ClojureLowerUtil.isTrue(items.get(1) instanceof LispSymbol, "extend takes a type name");
-		ClojureLowerUtil.isTrue(items.get(2) instanceof LispSymbol, "extend takes a protocol name");
 		String target = ((LispSymbol) items.get(1)).name();
-		String protocol = ((LispSymbol) items.get(2)).name();
-		ClojureLowering.ProtocolDef def = protocolOf(ctx, protocol);
-		if (def == null) {
-			throw new LispReadException("No such protocol: " + protocol);
-		}
-		List<LispVal> entries = ClojureLowerUtil.items(items.get(3));
-		if (entries == null || entries.isEmpty() || !ClojureLowerUtil.isSymbolNamed(entries.get(0), "%hash-map")
-				|| entries.size() % 2 == 0) {
-			throw new LispReadException("extend takes a map literal of methods, not " + items.get(3).print());
+		List<ClojureLowering.ProtocolDef> defs = new ArrayList<>();
+		for (int p = 2; p < items.size(); p += 2) {
+			ClojureLowerUtil.isTrue(items.get(p) instanceof LispSymbol, "extend takes a protocol name");
+			String protocol = ((LispSymbol) items.get(p)).name();
+			ClojureLowering.ProtocolDef def = protocolOf(ctx, protocol);
+			if (def == null) {
+				throw new LispReadException("No such protocol: " + protocol);
+			}
+			defs.add(def);
 		}
 		LispVal key = extendKeyForm(ctx, target, "extend");
 		LispVal walkKey = interfaceWalkKey(ctx, target);
 		boolean typed = isTypedTarget(ctx, target);
-		if (entries.size() > 1) {
-			noteWalk(ctx, def, target);
-			if (walkKey != null) {
-				noteInterfaceWalk(ctx, def, target);
-			}
-		}
 		List<LispVal> rows = new ArrayList<>();
-		for (int i = 1; i < entries.size(); i += 2) {
-			ClojureLowerUtil.isTrue(entries.get(i) instanceof LispSymbol k && k.name().startsWith(":"),
-					"extend takes keyword method names, not " + entries.get(i).print());
-			String method = ((LispSymbol) entries.get(i)).name().substring(1);
-			ClojureLowerUtil.isTrue(def.methods().contains(method), "Can't define method not in interfaces: " + method);
-			LispVal fun = ClojureBindingLowering.fnValue(ctx, entries.get(i + 1));
-			LispVal row;
-			if (key == null) {
-				row = objectStoreForm(def, method, fun);
+		for (int p = 2; p < items.size(); p += 2) {
+			ClojureLowering.ProtocolDef def = defs.get(p / 2 - 1);
+			List<LispVal> entries = ClojureLowerUtil.items(items.get(p + 1));
+			if (entries == null || entries.isEmpty() || !ClojureLowerUtil.isSymbolNamed(entries.get(0), "%hash-map")) {
+				noteWalk(ctx, def, target);
+				if (walkKey != null) {
+					noteInterfaceWalk(ctx, def, target);
+				}
+				rows.add(computedRows(ctx, def, key, walkKey, typed, ctx.lower(items.get(p + 1))));
+				continue;
 			}
-			else if (walkKey == null) {
-				row = rowStoreForm(ctx, def, def.methodsVar(), key, method, fun, typed);
+			if (entries.size() > 1) {
+				noteWalk(ctx, def, target);
+				if (walkKey != null) {
+					noteInterfaceWalk(ctx, def, target);
+				}
 			}
-			else {
-				row = storedTwice(ctx, def, key, walkKey, method, fun);
+			for (int i = 1; i < entries.size(); i += 2) {
+				ClojureLowerUtil.isTrue(entries.get(i) instanceof LispSymbol k && k.name().startsWith(":"),
+						"extend takes keyword method names, not " + entries.get(i).print());
+				String method = ((LispSymbol) entries.get(i)).name().substring(1);
+				ClojureLowerUtil.isTrue(def.methods().contains(method),
+						"Can't define method not in interfaces: " + method);
+				LispVal fun = ClojureBindingLowering.fnValue(ctx, entries.get(i + 1));
+				LispVal row;
+				if (key == null) {
+					row = objectStoreForm(def, method, fun);
+				}
+				else if (walkKey == null) {
+					row = rowStoreForm(ctx, def, def.methodsVar(), key, method, fun, typed);
+				}
+				else {
+					row = storedTwice(ctx, def, key, walkKey, method, fun);
+				}
+				rows.add(row);
 			}
-			rows.add(row);
 		}
 		ctx.usedProtocols = true;
 		if (rows.isEmpty()) {
 			return ClojureLowering.NIL_CONST;
 		}
 		return ClojureLowerUtil.cons(ClojureLowerUtil.sym("progn"), rows);
+	}
+
+	/** The run-time store of a computed map's rows ({@link #computedRows}). */
+	static final String EXTEND_ROWS = "RONTOLISP::%CLOJURE-EXTEND-ROWS";
+
+	/**
+	 * The rows of a map of method functions the program computes, stored when it runs:
+	 * {@code (%clojure-extend-rows (lambda (method fn) store) map methods)} calls the
+	 * store -- the row a literal map's entry takes, under the entry's keyword (and under
+	 * {@code walkKey} too when it is not null, {@link #interfaceWalkKey}) -- for each
+	 * entry naming one of the protocol's methods; any other entry is never looked up, as
+	 * in the oracle, so none is stored.
+	 */
+	private static LispVal computedRows(ClojureLowering ctx, ClojureLowering.ProtocolDef def, @Nullable LispVal key,
+			@Nullable LispVal walkKey, boolean typed, LispVal map) {
+		LispSymbol method = ctx.freshTemp();
+		LispSymbol fun = ctx.freshTemp();
+		LispVal store;
+		if (key == null) {
+			store = objectStoreForm(def, method, fun);
+		}
+		else if (typed && def.reducerRow() != null) {
+			store = ClojureLowerUtil.list(new LispSymbol(def.reducerRow()), def.methodsVar(), key, fun);
+		}
+		else if (walkKey == null) {
+			store = methodStoreForm(ctx, def.methodsVar(), key, method, fun);
+		}
+		else {
+			store = ClojureLowerUtil.list(ClojureLowerUtil.sym("progn"),
+					methodStoreForm(ctx, def.methodsVar(), key, method, fun),
+					methodStoreForm(ctx, def.methodsVar(), walkKey, method, fun));
+		}
+		List<LispVal> names = new ArrayList<>();
+		// sorted: the emitted program is the same on every lowering
+		for (String name : new TreeSet<>(def.methods())) {
+			names.add(LispString.literal(name));
+		}
+		return ClojureLowerUtil.list(
+				new LispSymbol(EXTEND_ROWS), ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"),
+						ClojureLowerUtil.list(List.of(method, fun)), store),
+				map, ctx.quote(ClojureLowerUtil.list(names)));
 	}
 
 	/**

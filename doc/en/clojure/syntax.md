@@ -15,9 +15,9 @@ a pattern value (see [Regular expressions](reference/regex.md)); `#'x` reads as
 `#^`) reads too: on a name or a local it parses and drops, on a vector, map or set
 literal it attaches like `with-meta` (see
 [Semantics](semantics.md#state-and-dynamic-scope)). A record literal
-(`#ns.Name{...}` / `#ns.Name[...]`) reads to the record over its unevaluated body (see
-[defrecord](reference/defrecord.md)); `#inst` and `#uuid` read as the values of
-[Tagged literals](#tagged-literals), and any other undotted tag has no reader function. A
+(`#ns.Name{...}` / `#ns.Name[...]`, a tag whose name is dotted) reads to the record over
+its unevaluated body (see [defrecord](reference/defrecord.md)); any other tag (`#inst`,
+`#uuid`, `#my.lib/tag`) is a [tagged literal](#tagged-literals). A
 namespace map gives its keys a namespace:
 `#:user{:id 1 :_/raw 2 name 3}` reads as `{:user/id 1 :raw 2 user/name 3}` (each keyword or
 symbol key without a namespace takes it, one qualified by `_` loses it), and `#::{...}` /
@@ -98,4 +98,34 @@ what the two values print, compare and answer.
 ```
 #inst "2020-06-15T08:20:30.456-00:00" #uuid "00000001-0001-0001-0001-000000000001"
 Wed Jan 01 00:00:00 UTC 2020 1000
+```
+
+Any other tag is a library's: a `data_readers.clj` or `data_readers.cljc` at a source root
+(a directory or jar on the [source path](semantics.md#projects-depsedn)) maps tag symbols to
+the vars whose functions read them, and every one is merged as the oracle merges them at
+startup (each `.clj` file before each `.cljc` one; only its first form counts, and a tag two
+files give different vars is refused). A tagged literal calls its function on the form read
+after it, while the source is read, and the answer stands in the literal's place: data (a
+vector, map, set, record, string, number, keyword, `#inst`, `#uuid`, pattern) is that value,
+a list or symbol is code. The function runs as the program compiles, on the JVM, so it may
+call Java even for a wasm target. Like the oracle's startup, which names the var without
+loading it, its namespace must be loaded by a form above the literal (an `ns` `:require`),
+else the literal is `Attempting to call unbound fn`. An answer `nil` is the oracle's
+`No dispatch macro`, one with no source spelling (an atom, a function, a host object other
+than a UUID or Date) its `Can't embed object in code`. A data reader of `inst` or `uuid`
+reads it ahead of the default; a tag no data reader reads has no reader function. At run
+time `read-string` and `read` ask `*data-readers*` (the same map) first (see
+[read-string](reference/read-string.md)).
+
+```console
+$ cat src/data_readers.clj
+{geo/point my.geo/point}
+$ cat src/my/geo.clj
+(ns my.geo)
+(defn point [[x y]] {:x x :y y})
+$ cat src/app/main.clj
+(ns app.main (:require [my.geo]))
+(println #geo/point [1 2])
+$ rontolisp src/app/main.clj
+{:x 1, :y 2}
 ```

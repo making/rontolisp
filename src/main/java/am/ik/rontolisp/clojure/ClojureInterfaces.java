@@ -53,6 +53,16 @@ final class ClojureInterfaces {
 	 */
 	static final String REDUCE_ROW = "RONTOLISP::%CLOJURE-REDUCE-INTERFACE-ROW";
 
+	/**
+	 * {@code clojure.core/iteration}'s worker and its value: a reify implementing
+	 * {@code Seqable} and {@code IReduceInit}, whose rows it stores itself, so naming
+	 * either makes a value of both families ({@code clojure.lisp}).
+	 */
+	static final String ITERATION = "RONTOLISP::%CLOJURE-ITERATION";
+
+	/** {@link #ITERATION} as a value. */
+	static final String ITERATION_V = "RONTOLISP::%CLOJURE-ITERATION-V";
+
 	/** The store of a {@code Seqable} row. */
 	static final String SEQABLE_ROW = "RONTOLISP::%CLOJURE-SEQABLE-ROW";
 

@@ -1,13 +1,15 @@
 # spit
 
-`(spit path content)` / `(spit path content :append flag)`
+`(spit f content)` / `(spit f content :append flag :encoding name)`
 
-Writes `(str content)` to the file, answering `nil`: a string is written as
+Writes `(str content)` to `f`, answering `nil`: a string is written as
 before, any other value through the `str` spelling (`(spit f '(1 2))` writes
 `(1 2)`; a collection's strings are quoted, so [read](read.md) reads it back),
-`nil` writing nothing. Without `:append` the file is
-superseded; a truthy flag appends. Runs on the interpreter and the JVM; on wasm
-it needs a `--dir` preopen covering the path. As a value a path, content and optional flag.
+`nil` writing nothing. `f` is a path, or anything a [clojure.java.io](clojure-java-io.md)
+writer opens: a File, a byte stream, a type extended to `IOFactory`. Without `:append` the
+file is superseded; a truthy flag appends. `:encoding` names the charset, UTF-8 by default.
+Runs on every backend; on wasm a file needs a `--dir` preopen covering it. As a value a
+path, content and optional flag.
 
 ```console
 clojure> (spit "/tmp/note.txt" "a\n")
