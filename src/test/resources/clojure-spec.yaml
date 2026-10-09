@@ -825,6 +825,13 @@ cases:
       anil
       bnil
       nil
+  - name: newline-answers-nil
+    # (newline) writes a newline and answers nil, so pprint, which ends with one, does too.
+    source: |
+      (prn (newline))
+    expected: |
+
+      nil
   - name: numbers
     # 1M is an exact ratio (1), not a double: decimal arithmetic stays exact and
     # prints as the ratio. The oracle prints 1M and 2N with their suffixes.

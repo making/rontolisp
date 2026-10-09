@@ -15,6 +15,7 @@ import am.ik.rontolisp.reader.Features;
 import org.junit.jupiter.api.Test;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class ClojureSessionTest {
 
@@ -103,6 +104,44 @@ class ClojureSessionTest {
 		assertThat(runSession("(prn *print-meta* *print-dup*)")).isEqualTo("false false\n");
 		assertThat(forms(new ClojureSession().read("(prn *print-meta*)")).get(0))
 			.isEqualTo("(SETQ RONTOLISP::%CLOJURE-FALSE '|false|)");
+	}
+
+	@Test
+	void userRefersWhatTheOraclesReplRequiresLoadingANamespaceWhereANameFirstReachesIt() {
+		// clojure.main/repl-requires: doc and pst from clojure.repl, pp and pprint from
+		// clojure.pprint, referred into user before the first input
+		assertThat(runSession("(defn f \"Adds one.\" [x] (inc x))", "(doc f)"))
+			.isEqualTo("-------------------------\nuser/f\n([x])\n  Adds one.\n");
+		assertThat(runSession("(pprint {:a 1})", "[1 2]", "(pp)")).isEqualTo("{:a 1}\n[1 2]\n");
+		assertThat(runSession("(binding [*err* *out*] (pst (ex-info \"boom\" {:a 1})))"))
+			.startsWith("ExceptionInfo boom");
+		// the oracle's REPL loaded the namespaces: a qualified name needs no require
+		assertThat(runSession("(clojure.pprint/pprint [1])", "(clojure.repl/doc clojure.repl/pst)"))
+			.startsWith("[1]\n-------------------------\nclojure.repl/pst\n");
+		// a buffer naming none loads neither
+		assertThat(forms(new ClojureSession().read("(inc 1)"))).noneMatch(form -> form.contains("print-doc"));
+	}
+
+	@Test
+	void aReplReferALocalOrADefinitionShadowsLoadsNothing() {
+		assertThat(runSession("(prn (let [doc 1 source 2] [doc source]))")).isEqualTo("[1 2]\n");
+		assertThat(runSession("(defn pprint [x] (prn :mine x))", "(pprint 1)")).isEqualTo(":mine 1\n");
+		// another namespace refers none of them, like the oracle's
+		assertThatThrownBy(() -> runSession("(ns sess.other)", "(doc map)")).hasMessageContaining("unknown name: doc");
+	}
+
+	@Test
+	void aReplReferLeftOutNamesItsRefusal() {
+		assertThatThrownBy(() -> runSession("(source map)"))
+			.hasMessageContaining("clojure.repl/source is not built in: a definition's text is not kept at run time");
+		assertThatThrownBy(() -> runSession("(dir clojure.string)"))
+			.hasMessageContaining("clojure.repl/dir is not built in:");
+		assertThatThrownBy(() -> runSession("(javadoc String)")).hasMessageContaining(
+				"clojure.java.javadoc/javadoc is not built in: it opens a web browser on a class's Javadoc");
+		assertThatThrownBy(() -> runSession("(add-libs '{hiccup/hiccup {:mvn/version \"2.0.0\"}})"))
+			.hasMessageContaining("clojure.repl.deps/add-libs is not built in:");
+		assertThatThrownBy(() -> runSession("(require 'clojure.repl.deps)"))
+			.hasMessageContaining("clojure.repl.deps is not built in:");
 	}
 
 	@Test

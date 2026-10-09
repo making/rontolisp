@@ -3936,6 +3936,20 @@ emits like a catching file's (`needsExceptionReader`). Pinned by
 `PlaygroundReplTest#aClojureSessionKeepsItsLastResultsAndItsLastExceptionInTheHistoryVars`,
 `ClojureSessionTest#anInputRecordsItsValueAndAnNsInputNil`.
 
+The REPL refers (2026-10-09): `ClojureSession` refers `clojure.main/repl-requires`' names into
+`user` (`ClojureLowering.referReplRequires`, the table `ClojureBuiltinNamespaces.REPL_REQUIRES`)
+and loads nothing; `lookupVar` of one, not shadowed by a local, loads its namespace like a
+startup namespace (`loadReplRefer` -> `preload`), and in a session a qualified name reaches a
+shipped REPL namespace the same way (`projectNamespaceOf`). Refused by name there: the
+`replLeftOut` vars and every var of `clojure.java.javadoc`/`clojure.repl.deps`
+(`LANGUAGE_NOT_SHIPPED`, also their `require`'s refusal). First use, not eager: measured
+2026-10-09 (interpreter, one JVM per case, first input `1`): cold 1.34-1.47 s, with
+`clojure.repl` + `clojure.pprint` required first 2.21-2.31 s; warm ~120-135 ms vs ~415-490 ms.
+A definition of the name replaces the refer silently (the oracle throws `already refers to`
+for a non-core refer; the file lowering does the same). Pinned by
+`ClojureSessionTest#userRefersWhatTheOraclesReplRequires*`, `#aReplRefer*`,
+`PlaygroundReplTest#aClojureSessionRefersWhatTheOraclesReplRequiresAndAFileNone`.
+
 The echo of a top-level `def`/`defn`/`defn-`/`defmacro`/`defmulti`/`defonce`/`defstruct` is the
 var it defined (`#'user/f`, `#'foo/x`; `ClojureLowering.echoingTopLevelsOf`, appended as the
 datum's last form; a file's definition shows nothing), the oracle's. `defonce` over a bound var

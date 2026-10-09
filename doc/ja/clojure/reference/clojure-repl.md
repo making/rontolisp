@@ -1,7 +1,8 @@
 # clojure.repl
 
 var のドキュメントとスロー可能オブジェクト（throwable）のスタックトレースを出力する名前空間です。
-`clojure.repl` を require すると使えます。Clojure の同名の名前空間について文書化された振る舞いを
+`clojure.repl` を require すると使えます（`clojure>` REPL は `doc` と `pst` を最初から refer しています。
+[REPL](../repl.md) を参照）。Clojure の同名の名前空間について文書化された振る舞いを
 もとに rontolisp 向けに書いた Clojure ソースで、すべてのバックエンドで同じように動きます。
 
 | var | 振る舞い |

@@ -102,6 +102,16 @@ class PlaygroundReplTest {
 	}
 
 	@Test
+	void aClojureSessionRefersWhatTheOraclesReplRequiresAndAFileNone() {
+		PlaygroundRepl repl = new PlaygroundRepl(NO_FILES).pick(SourceLanguage.CLOJURE);
+		repl.eval("(defn sq \"Squares.\" [x] (* x x))");
+		assertThat(repl.eval("(doc sq)")).isEqualTo("-------------------------\nuser/sq\n([x])\n  Squares.\nnil");
+		assertThat(repl.eval("(pprint {:a 1})")).isEqualTo("{:a 1}\nnil");
+		assertThatThrownBy(() -> repl.eval("(source sq)")).hasMessageContaining("clojure.repl/source is not built in");
+		assertThatThrownBy(() -> repl.run("(doc sq)")).hasMessageContaining("unknown name: doc");
+	}
+
+	@Test
 	void theClojureRunPrintsAndItsTranscriptEchoesEveryForm() {
 		PlaygroundRepl repl = new PlaygroundRepl(NO_FILES).pick(SourceLanguage.CLOJURE);
 		assertThat(repl.run("""
