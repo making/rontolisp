@@ -54,11 +54,7 @@ final class ClojureBuiltinNamespaces {
 			Map.entry("clojure.math", Map.of()), Map.entry("clojure.java.io", Map.of()),
 			Map.entry("clojure.repl", replLeftOut()), Map.entry("clojure.main", mainLeftOut()),
 			Map.entry("clojure.java.shell", Map.of()), Map.entry("clojure.xml", xmlLeftOut()),
-			Map.entry("clojure.pprint",
-					Map.of("cl-format", "Common Lisp format directives over Clojure values are not built in",
-							"formatter", "Common Lisp format directives over Clojure values are not built in",
-							"formatter-out", "Common Lisp format directives over Clojure values are not built in")),
-			Map.entry("rontolisp.http-client", httpClientLeftOut()));
+			Map.entry("clojure.pprint", Map.of()), Map.entry("rontolisp.http-client", httpClientLeftOut()));
 
 	/**
 	 * The public vars of babashka.http-client 0.4.23 that {@code rontolisp.http-client}

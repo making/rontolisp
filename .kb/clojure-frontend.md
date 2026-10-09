@@ -147,7 +147,7 @@ answered `2 5 3` before).
 | `clojure.data` `clojure.zip` `clojure.datafy` `clojure.stacktrace` | the same, loaded at its `require` | "clojure.jar namespaces" |
 | `clojure.core.protocols` | the same, a startup namespace like `clojure.walk` | "clojure.jar namespaces" |
 | `clojure.core.reducers` | the same, loaded at its `require`; cat's accumulator is `rontolisp.internal.reducers/NAME`, one call to `rontolisp::%clojure-reducers-NAME` (`ClojureKernelLowering`) | "clojure.jar namespaces" |
-| `clojure.pprint` | the same; its layout engine is `rontolisp.internal.pprint/NAME`, one call to `rontolisp::%clojure-pp-NAME` (`ClojureKernelLowering`) | "clojure.jar namespaces" |
+| `clojure.pprint` | the same; its layout engine, and the text of `cl-format`'s number directives and case conversion, is `rontolisp.internal.pprint/NAME`, one call to `rontolisp::%clojure-pp-NAME` (`ClojureKernelLowering`) | "clojure.jar namespaces" |
 | `clojure.math` | the same, loaded at its `require`; a double function's body is `rontolisp.internal.math/NAME`, lowered in place to `(%strict-math :name (rontolisp::%clojure-double a) ...)`, `round` and the long arithmetic one call to `rontolisp::%clojure-math-NAME` (`ClojureKernelLowering`) | "clojure.jar namespaces" |
 | `subs`, `.substring` | `%clojure-subs`, the refusal family's alias of `subseq` ("Refusals") | a bound outside a string is the oracle's `StringIndexOutOfBoundsException` where a class is read; a double or ratio bound is truncated (`%clojure-string-bound`), a non-number one is refused as the oracle does ("Refusals") |
 | `format` | the Java directives translated to `format` over Clojure-rendered arguments | literal format string only; `%s` like `str` (nil spells `null`), `%b`; `%e`/`%g`, flags and the rest refused |
@@ -184,7 +184,7 @@ answered `2 5 3` before).
 | `name` `namespace` `keyword` `symbol` | spliced string workers over the demangled spelling | split at the first `/`, except the lone `/` (a name, no namespace, like the oracle) |
 | `str` / `pr-str` | `concatenate` over `%clojure-str-of` parts | `nil` -> `""` (`pr-str`: `"nil"`), keywords with their colon, collections in Clojure notation -- readable inside under `str` too (strings quoted, nil spelled: the oracle's `toString`), so `spit` writes what `read` reads back |
 | `print-str` / `prn-str` / `println-str` | `rontolisp::%clojure-print-str` over `(list parts...)` (a `&rest` lambda as a value) | prints to a private string stream, never a `*standard-output*` rebinding: the parts evaluate in the caller, so what one prints reaches the real output; nested strings follow `print`/`pr` (bare/quoted), unlike `str`/`pr-str` whose nested strings are always quoted |
-| `println` `print` `pr` `prn` | one `%clojure-write-datum` per part straight to `*standard-output*`, `write-char` spaces, `terpri` | answers nil; with several parts and any computed one, every part binds to a temporary first (the oracle evaluates all arguments before printing) |
+| `println` `print` `pr` `prn` | one `%clojure-write-datum` per part straight to `*standard-output*`, `write-char` spaces, `terpri` | answers nil; with several parts and any computed one, every part binds to a temporary first (the oracle evaluates all arguments before printing). `newline` is `(progn (princ "\n") nil)`: until 2026-10-09 it answered the `"\n"` `princ` returns, so `pprint` did too (clojure-spec `clojure-pprint-cl-format-lays-out-through-the-pretty-printer`) |
 | `rand` `rand-int` `rand-nth` `shuffle` | draws from the program-owned generator (`.kb/random.md`) | no domain check; `rand-nth` of nil is nil, of an empty vector signals; `shuffle` pins membership, never order |
 | `make-array` `aget` `aset` `alength` | general arrays (`aref`, `array-dimension`) | the element class is ignored; every backend |
 | Java interop | "Java interop" | interpreter and JVM only |
@@ -207,8 +207,9 @@ Each is a real work item unless the reason says otherwise.
   wrapper lists (a type overriding `toString` the oracle's `#object` without the hash, "Host
   interfaces"); `str` of a lazy seq or record spells the contents where the oracle answers
   `Class@hash`; `*print-meta*` prints no reader `:line`/`:column` (no value carries
-  them), `*print-dup*` is a plain value, `print-method` and `pprint` are absent;
-  `~S`/`~A` on Clojure values stay CL notation (`format` is a CL surface). Cycles print with
+  them), `*print-dup*` is a plain value, `print-method` is absent;
+  a CL `format`'s `~S`/`~A` on Clojure values stay CL notation (a CL surface; `clojure.pprint/cl-format`
+  writes Clojure's, "clojure.jar namespaces"). Cycles print with
   datum labels, copied from `%scheme-print` (sharing would splice `scheme.lisp` into every
   Clojure program).
 - Type predicates follow the representation: `()` is nil (`seq?`/`list?`/`coll?`/`counted?` false); a strict seq is a list (`list?`/`counted?`/`realized?` true where the oracle's LazySeq is false); nothing is chunked; an `iterate`/`cycle` head is unrealized until forced; `M`/`N` literals are plain rationals (`decimal?` never true); `identical?` is `eql` (numbers, chars and symbols by value); `class?` of `(class 1)` is false (`class` answers a kind keyword).
@@ -1690,11 +1691,73 @@ namespace` but the ones no measured library names (`inspector`, `java.browse`,
     a reference (`(:require ())`, `[x :refer ()]`) is nil here ("Deviations"), so it
     prints `nil` where the oracle signals or prints `()` (an empty vector part signals
     the oracle's `Exception` alike).
-  - Left out, refused by name (`refuseLeftOut`): `cl-format`, `formatter`,
-    `formatter-out` (Common Lisp format directives over Clojure values). Deviation:
-    `get-pretty-writer` answers its writer, so each `pprint` lays out from column 0
-    within the margin bound when it runs; the oracle's pretty writer keeps its creation
-    margin and its column across calls.
+  - Deviation: `get-pretty-writer` answers its writer, so each `pprint` lays out from
+    column 0 within the margin bound when it runs; the oracle's pretty writer keeps its
+    creation margin and its column across calls.
+  - A print in progress is joined only when `*standard-output*` is its capture stream
+    (`%clojure-pp-active`; the oracle asks whether `*out*` is a pretty writer): what runs
+    under `with-out-str` inside a dispatch writes plain text, and `write :stream nil` there
+    lays out a pretty print of its own. A `pprint` or `write` joining one ends with a
+    `:flush` event, the oracle's `ppflush` of the writer it reused (the buffer written as it
+    stands, no newline decided): without it `(cl-format nil "~@w ~:w" x y)` broke `x`
+    where the oracle breaks `y` (2026-10-09). `fresh-line` outside a pretty print always
+    writes a newline, the oracle's writer keeping no column. `pprint` and `write` set
+    `*radix-pr*` when `*print-base*`/`*print-radix*` are not the defaults (the oracle
+    rebinds `pr` there), so the dispatch writes `255` as `ff` there and as `255` under a
+    bare `~W`, while `~A` always writes `ff`.
+  - `cl-format`, `formatter`, `formatter-out` (2026-10-09): Clojure source too. The run-time
+    library's `format` (`.kb/format.md`) prints CL notation and iterates lists, so a
+    conversion layer could not serve; a compiler (`compile-nodes`: a vector of literal
+    strings and directives `[char at colon params dynamic clauses else at-least-once
+    else-separator offset]`, the params in definition order with the defaults in, `:v`/`:#`
+    realized last-first like the oracle's array map) and an executor over a navigator
+    `[seq rest position dropped]`, answering the navigator or `(exit nav)`. The text of the
+    number directives and of `~(` is kernels (`%clojure-pp-integer-text`, `-english`,
+    `-roman`, `-fixed`, `-exponential`, `-general`, `-dollar`, `-case-convert`).
+    - Oracle mechanics kept, each measured: the integer and English spellings walk a double
+      with Clojure's `quot`/`rem` in Java's double arithmetic (a double past the long range
+      spells the oracle's digits, or its `Value out of range for char`); `~F ~E ~G ~$`
+      round the digits of the number's Java spelling as text (NaN and the infinities as
+      letters: `infinity.0`, `n.anE+2`), a ratio through `Ratio.doubleValue` (sixteen digits
+      half even first), exact past the double range (the oracle's `BigDecimal`, a
+      non-terminating one refused), `~$` taking a long as it is and any other number's
+      double (`Math/abs`'s two arms); `~(...~)` converts each write apart, a character write
+      unlike a string one (`~:(~a-~a~)` of "foo" "bar" is `Foo-bar`), its state the CL
+      special `%clojure-pp-case-writer`, so a program formatting nothing carries none; after
+      `~*`/`~:*`/`~@*` one nil comes back past the end (the oracle's `drop` answers a truthy
+      empty `LazySeq`: the `dropped` slot); `~^`'s base is each directive's own navigator at
+      the top and the enclosing directive's inside clauses (`~{~a~:^,~}` never exits).
+    - A control string holding `~&`, `~T`, `~<` or `~W` at any depth (`~?` aside) gets a
+      pretty print of its own unless `*out*` is one. `~_`, `~I`, `~T`, a logical block, a
+      justification without max-columns and `~W` of a collection (a dispatch block) where
+      `*out*` is no pretty writer are the oracle's `ClassCastException` (a `~(...~)` clause,
+      a `~<...~>` segment, `formatter-out` outside a pretty print). `~T` and `~:;` are
+      layout events carrying their own function (`:lay`), computed from the column the
+      replay has reached, the oracle's base column: blanks held back do not count.
+    - The macros build their function's symbol (`(symbol "clojure.pprint" "formatter-fn")`):
+      a template spelling it armed the dispatch gate by name (`.kb/optimize-dead-code-elimination.md`;
+      every `defmacro`'s run-time expander is live, a library's helper kept by any macro of
+      its namespace naming it: e97), which kept the whole executor in every
+      program loading clojure.pprint: wasm P1 of `(prn ...)` after requiring it, 446,930 ->
+      888,123 B; with the built symbol 451,949 B, of which ~1.1 KB the shared kernels
+      (`%clojure-pp-active`, `:flush`, `:lay`), ~1 KB the two expanders, ~2 KB the dispatch
+      ladders the backend sizes before its shake (the unused executor's lambdas), ~0.5 KB
+      `*radix-pr*`.
+    - Compiled formats are cached by control string, `cl-format`'s too (the oracle compiles
+      per call; a compile is pure), the cache emptied at 512: 2,000 calls of a nine-directive
+      string 32.5 -> 7.6 s on the interpreter, 1.66 -> 0.60 s as a JVM class.
+    - Fidelity, the same day against clj 1.12.6, identical on all four backends: 2,200
+      random `~F ~E ~G ~$` cases, 1,400 integer, radix, English, Roman, `~P`, `~A`/`~S`
+      cases, 1,700 random control strings of the structural directives (refusals compared
+      by class), 1,300 pretty layouts (blocks, the four `~_`, `~I`, `~T`, `~&`, `~W`, nested
+      writes, random margins, miser widths, levels and lengths), data.json's two
+      `formatter-out` strings in a dispatch, the compile errors with their messages.
+    - Deviations (user doc): `~A` of `1.5M` writes `3/2` (decimals are ratios); `~D` of
+      -2^63 writes it where the oracle's negation overflows; where the oracle's message is
+      the JVM's own (a `ClassCastException`, a `NullPointerException`, `seq`'s refusal) only
+      the class matches. A format handed in that is no control string runs only when it is
+      the private `compile-format`'s (wrapped `[::compiled nodes]`); any other is walked as
+      the oracle walks it, a non-empty one its `NullPointerException` when it runs.
 - `clojure.data`: `EqualityPartition` and `Diff` are protocols extended to nil,
   `java.util.Set`, `java.util.List`, `IPersistentVector`, `java.util.Map` and `Object`,
   whose arm sends a `map?` value to the map diff: a record reaches neither the `Map` nor a
@@ -1884,10 +1947,10 @@ namespace` but the ones no measured library names (`inspector`, `java.browse`,
   rontolisp's own; a wasm program using it compiles with the `java:` warnings of the host
   functions (as `clojure.stacktrace`'s `JAVA:CALL`). Left out (`xmlLeftOut`):
   `content-handler`, `*stack*`, `*current*`, `*state*`, `*sb*`.
-- Not shipped (decided 2026-10-08): pprint's `cl-format`/`formatter`/`formatter-out` (e58).
 - Pins: clojure-spec `clojure-walk-*` (all four backends, oracle-identical, the first
   case loading `clojure.walk` through a qualified name only),
-  `clojure-template-substitutes-per-group-of-values`, `clojure-pprint-*`,
+  `clojure-template-substitutes-per-group-of-values`, `clojure-pprint-*` (the
+  `clojure-pprint-cl-format-*` four for `cl-format`),
   `clojure-data-diff-compares-like-the-oracle`, `clojure-zip-moves-and-edits-like-the-oracle`,
   `clojure-datafy-and-core-protocols-like-the-oracle`,
   `clojure-stacktrace-prints-throwables-like-the-oracle`, `clojure-repl-*` and
@@ -1899,7 +1962,8 @@ namespace` but the ones no measured library names (`inspector`, `java.browse`,
   last one the deviations), `ClojureLanguageNamespacesTest` (the startup load, a project
   file never shadowing a startup namespace, a contrib `clojure.*` namespace on the source
   path, the refusal of one not built in, the reducers' refusals, the repl/main/xml
-  refusals by name, the shell's refusal for a target without the host),
+  refusals by name, the shell's refusal for a target without the host,
+  `clFormatIsClojureSourceOverTheNumberAndCaseKernels`),
   `ClojureLibraryTest#aProgramStoringNoReducerRowSplicesTheReduceVerbsWithoutTheirProtocolArms`,
   `ClojureArmsTest#theReducibleFamilyIsMadeByATypedRowOfCollReduceOrIKVReduce`,
   `ClojureLoweringTest#aTypedRowOfCollReduceOrIKVReduceIsStoredThroughTheLibrary`.
