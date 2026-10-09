@@ -5,7 +5,7 @@
 ;; (WasmComponentBuilder.PREVIEW1_FUNCS). In WASI 0.3 the wasi:io package is gone and all
 ;; byte I/O flows through the built-in stream<u8> / future<T> types, so fd_write/fd_read/
 ;; path_open/fd_close/fd_readdir/fd_prestat_*/fd_filestat_get/path_filestat_get/
-;; path_create_directory/path_unlink_file/path_remove_directory/path_rename
+;; path_readlink/path_create_directory/path_unlink_file/path_remove_directory/path_rename
 ;; are implemented with stream.new/read/write/drop + future.read over wasi:cli + wasi:filesystem
 ;; 0.3; random_get/clock_time_get/environ_* bridge wasi:random / wasi:clocks
 ;; (system-clock, renamed from 0.2's wall-clock) / wasi:cli/environment. The environ_*
@@ -51,7 +51,8 @@
 ;;           error-code>, 112 bytes -- disc byte @0, descriptor-stat @8 (type @8,
 ;;           link-count @24, size @32, then three option<instant> of 24 bytes each:
 ;;           data-access @40, data-modification @64, status-change @88, each a disc
-;;           byte, seconds s64 @+8 and nanoseconds u32 @+16)
+;;           byte, seconds s64 @+8 and nanoseconds u32 @+16). readlink-at's
+;;           result<string, error-code> reuses it: disc byte @0, string ptr @4, len @8.
 ;;   0x51b00 file-append table: 64 slots x 1 byte -- 1 when the fd was opened with
 ;;           fdflags APPEND, which is the ONE disposition that must keep writing at the
 ;;           file's end rather than at the tracked offset.
@@ -97,6 +98,7 @@
   (import "w" "read-dir" (func $read_dir (param i32 i32)))
   (import "w" "desc-stat" (func $desc_stat (param i32 i32)))
   (import "w" "stat-at" (func $stat_at (param i32 i32 i32 i32 i32)))
+  (import "w" "readlink-at" (func $readlink_at (param i32 i32 i32 i32)))
   (import "w" "get-random-u64" (func $rand_u64 (result i64)))
   (import "w" "drop-desc" (func $drop_desc (param i32)))
   ;; async canonical built-ins (the non-blocking variants; BLOCKED completes through
@@ -527,7 +529,10 @@
       (if (result i32) (i32.wrap_i64 (i64.and (local.get $rb) (i64.const 64)))
         (then (i32.const 2)) (else (i32.const 0)))))
     (if (i32.eqz (local.get $df)) (then (local.set $df (i32.const 1))))
-    (call $open_at (local.get $pre) (i32.const 0) (local.get $pptr) (local.get $plen)
+    ;; preview1's lookupflags and WASI 0.3's path-flags both keep symlink-follow in bit
+    ;; 0: the core asks to open through a link in the last component.
+    (call $open_at (local.get $pre) (i32.and (local.get $dirflags) (i32.const 1))
+      (local.get $pptr) (local.get $plen)
       (local.get $oflags) (local.get $df) (i32.const 0x50050))
     (if (i32.load8_u (i32.const 0x50050)) (then (return (i32.const 76))))
     (block $found
@@ -658,6 +663,26 @@
       (local.get $path) (local.get $plen) (i32.const 0x51600))
     (if (i32.load8_u (i32.const 0x51600)) (then (return (i32.const 76))))
     (call $write_filestat (local.get $buf))
+    (i32.const 0))
+
+  ;; path_readlink(fd, path, path_len, buf, buf_len, bufused) -> errno, over
+  ;; descriptor.readlink-at: the SYNC lowering of async func(path: string) -> result<
+  ;; string, error-code>, so the call is (self, path_ptr, path_len, retptr) and the
+  ;; target string is lifted through cabi_realloc at the core's HEAP_PTR (which the
+  ;; core advanced past its own buffer first). At most buf_len bytes are copied, as
+  ;; preview1 truncates. A dirfd naming no preopen is errno 76, like $path_open's; so is
+  ;; any refusal -- not a link, not there -- which the core reads as "no link".
+  (func $path_readlink (param $fd i32) (param $path i32) (param $plen i32)
+    (param $buf i32) (param $blen i32) (param $used i32) (result i32)
+    (local $pre i32) (local $n i32)
+    (local.set $pre (call $preopen_desc (i32.sub (local.get $fd) (i32.const 3))))
+    (if (i32.eq (local.get $pre) (i32.const -1)) (then (return (i32.const 76))))
+    (call $readlink_at (local.get $pre) (local.get $path) (local.get $plen) (i32.const 0x51600))
+    (if (i32.load8_u (i32.const 0x51600)) (then (return (i32.const 76))))
+    (local.set $n (i32.load offset=8 (i32.const 0x51600)))
+    (if (i32.gt_u (local.get $n) (local.get $blen)) (then (local.set $n (local.get $blen))))
+    (memory.copy (local.get $buf) (i32.load offset=4 (i32.const 0x51600)) (local.get $n))
+    (i32.store (local.get $used) (local.get $n))
     (i32.const 0))
 
   ;; Re-encodes the descriptor-stat at 0x51608 as a preview1 `filestat` at $buf:
@@ -854,6 +879,7 @@
   (export "fd_prestat_dir_name" (func $fd_prestat_dir_name))
   (export "fd_filestat_get" (func $fd_filestat_get))
   (export "path_filestat_get" (func $path_filestat_get))
+  (export "path_readlink" (func $path_readlink))
   (export "file_position_get" (func $file_position_get))
   (export "file_position_set" (func $file_position_set))
   (export "path_create_directory" (func $path_create_directory))

@@ -3748,7 +3748,8 @@ public final class JvmLispCompiler implements LispCompiler {
 						|| programUsesSymbol(program, LispNames.MAKE_STRING_INPUT_STREAM_INTERNAL)),
 				programUsesSymbol(program, LispNames.WITH_INPUT_FROM_STRING)
 						|| programUsesSymbol(program, LispNames.MAKE_STRING_INPUT_STREAM)
-						|| programUsesSymbol(program, LispNames.MAKE_STRING_INPUT_STREAM_INTERNAL));
+						|| programUsesSymbol(program, LispNames.MAKE_STRING_INPUT_STREAM_INTERNAL),
+				programUsesSymbol(program, LispNames.READ_LINK_INTERNAL));
 		this.needsCharFileRuntime = fileMeta.characterPosition();
 		// The BIDIRECTIONAL stream arm of _open, and with it the travelling
 		// RontoIoFileStream class file, ride the surface fact that the program can ask

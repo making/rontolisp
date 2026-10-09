@@ -15048,31 +15048,14 @@
 
 (defun rontolisp::%clojure-ring-canonical-path (f)
   "The canonical path file-response compares a file's against its root's: the
-   File F's path with every . and .. component taken out, read off the
-   spelling (no symbolic link is resolved). A relative path stays relative,
-   spelled from . -- a path and its root share the working directory, which
-   neither wasm backend has -- and keeps a .. that climbs above it."
-  (let* ((p (rontolisp::%clojure-io-path f))
-         (absolute (and (> (length p) 0) (char= (char p 0) #\/)))
-         (parts nil)
-         (start 0))
-    (do ((i 0 (+ i 1)))
-        ((> i (length p)))
-      (if (or (= i (length p)) (char= (char p i) #\/))
-          (let ((part (subseq p start i)))
-            (cond ((or (string= part "") (string= part ".")))
-                  ((string= part "..")
-                   (cond ((and parts (not (string= (car parts) "..")))
-                          (setq parts (cdr parts)))
-                         ((not absolute) (setq parts (cons part parts)))))
-                  (t (setq parts (cons part parts))))
-            (setq start (+ i 1)))))
-    (let ((out (make-string-output-stream)))
-      (if (not absolute) (write-char #\. out))
-      (dolist (part (reverse parts))
-        (write-char #\/ out)
-        (write-string part out))
-      (let ((s (get-output-stream-string out))) (if (= (length s) 0) "/" s)))))
+   File F's path with every symbolic link resolved and every . and .. component
+   taken out (%real-path). A relative path stays relative, spelled from . -- a
+   path and its root share the working directory, which neither wasm backend
+   has -- and keeps a .. that climbs above it."
+  (let ((r (%real-path (rontolisp::%clojure-io-path f))))
+    (if (or (char= (char r 0) #\/) (string= r "."))
+        r
+        (concatenate 'string "./" r))))
 
 (defun rontolisp::%clojure-ring-directory-traversal-p (path)
   "Whether the string PATH has a .. component between its / and \\
@@ -17176,24 +17159,11 @@
              (rontolisp::%clojure-io-path f))))))
 
 (defun rontolisp::%clojure-io-canonical-path (f)
-  "The File F's absolute path with every . and .. component taken out, read
-   off the spelling (no symbolic link is resolved)."
-  (let ((parts nil) (start 1) (p (rontolisp::%clojure-io-absolute-path f)))
-    (do ((i 1 (+ i 1)))
-        ((> i (length p)))
-      (if (or (= i (length p)) (char= (char p i) #\/))
-          (let ((part (subseq p start i)))
-            (cond ((or (string= part "") (string= part ".")))
-                  ((string= part "..") (setq parts (cdr parts)))
-                  (t (setq parts (cons part parts))))
-            (setq start (+ i 1)))))
-    (if (null parts)
-        "/"
-        (let ((out (make-string-output-stream)))
-          (dolist (part (reverse parts))
-            (write-char #\/ out)
-            (write-string part out))
-          (get-output-stream-string out)))))
+  "The File F's absolute path with every symbolic link resolved and every .
+   and .. component taken out (%real-path, over the absolute path, so a link
+   in the working directory resolves too); a part that does not exist is kept
+   as spelled, as the oracle keeps it."
+  (%real-path (rontolisp::%clojure-io-absolute-path f)))
 
 (defun rontolisp::%clojure-io-file-seq (dir)
   "file-seq: the File DIR and, when it is a directory, every File below it,

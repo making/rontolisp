@@ -160,7 +160,7 @@ test (`WasmLispCompilerIntegrationTest#uiopOsHostIdentityAndGetenvOverrideCompil
 `#P"*.*"`, `#P"**/"`, `#P"**/*.*"`), the two wildcards `%wild-match` reads. **`ensure-pathname`
 signals DIRECTLY on the default error path** (`%ens-err`) — a funcalled `#'error` wrapper is a raw
 TRAP on WASM where a direct call is catchable; lite otherwise (`:want-logical` always fails,
-`:resolve-symlinks`/`:truenamize` ignored, `:truename` = `probe-file`).
+`:truename` = `truename*`, `:resolve-symlinks`/`:truenamize` real since 2026-10-09).
 `ensure-absolute-pathname` keeps its documented divergence. `with-pathname-defaults` and
 `with-enough-pathname` live in `LispMacroExpander`; their `MACRO_EXPANSION_CALLEES` rows show the
 table also carries a VARIABLE (`uiop:*nil-pathname*`). `split-name-type` and
@@ -220,11 +220,12 @@ directory on all four since 2026-10-09: `%delete-file` falls back to the injecte
 `file-error`.
 `delete-directory-tree` takes the portable recursive walk only (no `run-program`
 branch -- there is no backend that spawns one); an explicit `:validate nil` fails the
-first check rather than the second, both the same `parameter-error`. **Symlinks are the
-identity, and that is coverage, not a stub**: no backend resolves them (`truename`
-carries the argument namestring), so `*resolve-symlinks*` defaults to nil (upstream's t
-would promise what is not there) and `resolve-symlinks`/`resolve-symlinks*`/`truenamize`
-coerce-and-return. `lisp-implementation-directory` is nil (no install directory exists
+first check rather than the second, both the same `parameter-error`. **Symlinks resolve
+on all four** (2026-10-09): `truenamize` (and `resolve-symlinks` over it) is
+`%real-path`, the walk behind `truename` (`.kb/pathnames.md`), whose "missing parts kept
+as spelled" is the answer upstream's walk up the parents reaches, so `*resolve-symlinks*`
+defaults to t as upstream's does. `probe-file* :truename t` answers `truename`.
+`lisp-implementation-directory` is nil (no install directory exists
 to name) and `lisp-implementation-pathname-p` follows it. **`with-current-directory`
 inherits `chdir`'s decision and invents no second one**: `call-with-current-directory`
 binds `*default-pathname-defaults*` and `chdir`s (running `chdir` BEFORE `getcwd` so the

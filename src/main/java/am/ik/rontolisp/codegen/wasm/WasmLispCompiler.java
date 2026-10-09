@@ -2226,6 +2226,13 @@ public final class WasmLispCompiler implements LispCompiler {
 	// declares.
 	static final int FUNC_FILE_WRITE_DATE = FUNC_RAND_BIG + 1;
 
+	// _read_link ((ref null eq) path) -> (ref null eq): the target the symbolic link at
+	// the path holds, nil for anything that is no link
+	// (WasmIoRuntimeBuilder.buildReadLinkBody, over the injected path_readlink import).
+	// Same signature and position rule as _file_write_date, and a nil stub unless a WASI
+	// program names %read-link.
+	static final int FUNC_READ_LINK = FUNC_FILE_WRITE_DATE + 1;
+
 	/**
 	 * The fixed function index of an fdlibm function.
 	 * @param fn the function
@@ -2256,7 +2263,7 @@ public final class WasmLispCompiler implements LispCompiler {
 	// above keeps its value; the user defuns below shift by
 	// WasmVecSimdRuntimeBuilder.FUNC_COUNT when the block is present. Read the base
 	// through userFuncBase(), never FUNC_USER_BASE.
-	static final int FUNC_VEC_BASE = FUNC_FILE_WRITE_DATE + 1;
+	static final int FUNC_VEC_BASE = FUNC_READ_LINK + 1;
 
 	// User defuns start after the dispatch functions, the plist helper, the two
 	// hash-table runtime helpers, the two mod/rem helpers, the gensym helper, the
@@ -2277,9 +2284,10 @@ public final class WasmLispCompiler implements LispCompiler {
 	// conversion (_rat_to_f64), the division-by-zero landing (_div_zero), the subseq
 	// bounds landing (_subseq_bad), the bounds check (_ck_bounds), the four exact
 	// prefix steps (_rat_add_f64 .. _rat_div_f64), the limb-tier random draw
-	// (_rand_big) and the path stat (_file_write_date) -- plus, under --simd, the vec:
-	// SIMD block. Use userFuncBase(), which adds that offset.
-	static final int FUNC_USER_BASE = FUNC_FILE_WRITE_DATE + 1;
+	// (_rand_big), the path stat (_file_write_date) and the link read (_read_link) --
+	// plus, under --simd, the vec: SIMD block. Use userFuncBase(), which adds that
+	// offset.
+	static final int FUNC_USER_BASE = FUNC_READ_LINK + 1;
 
 	// Type indices
 	static final int TYPE_FD_WRITE = 0;
@@ -3736,6 +3744,10 @@ public final class WasmLispCompiler implements LispCompiler {
 		// there: the date answers nil and a directory is not removed.
 		boolean hostWriteDate = !this.noWasi && programUsesSymbol(program, LispNames.FILE_WRITE_DATE);
 		boolean hostRemoveDirectory = !this.noWasi && programUsesSymbol(program, LispNames.DELETE_FILE_INTERNAL);
+		// %read-link (behind truename's walk, %real-path) rides one more, gated the same
+		// way: path_readlink, the adapter's over wasi:filesystem's readlink-at under
+		// --component. A --no-wasi module has no links, so %read-link answers nil there.
+		boolean hostReadLink = !this.noWasi && programUsesSymbol(program, LispNames.READ_LINK_INTERNAL);
 		// The BIDIRECTIONAL open (:direction :io) and its :if-exists :overwrite sibling
 		// need path_open to ask for BOTH rights and to skip O_TRUNC, which is a different
 		// _open body -- gated on the surface fact so every other module keeps its bytes.
@@ -5984,6 +5996,13 @@ public final class WasmLispCompiler implements LispCompiler {
 			hostImports.add(new am.ik.wasm.WasmImportInjector.HostImport(WASI_PREVIEW1_MODULE, "path_remove_directory",
 					TYPE_RD_MEMEQ));
 		}
+		// path_readlink(fd, path, path_len, buf, buf_len, bufused) -> errno is six i32
+		// in, one out: path_rename's shape (TYPE_PATH_RENAME), so it appends no type.
+		final int readLinkOrdinal = hostReadLink ? hostImports.size() : -1;
+		if (hostReadLink) {
+			hostImports.add(new am.ik.wasm.WasmImportInjector.HostImport(WASI_PREVIEW1_MODULE, "path_readlink",
+					TYPE_PATH_RENAME));
+		}
 
 		// Which funcIds the arity ladders (and the name registry below) must carry a case
 		// for. Every emitted body has been compiled by now, so ctx.valueFuncIds holds
@@ -7881,6 +7900,8 @@ public final class WasmLispCompiler implements LispCompiler {
 				fnDef.addFunction(TYPE_CALLABLE_BASE + 0); // _file_write_date (path) ->
 															// value
 															// (FUNC_FILE_WRITE_DATE)
+				fnDef.addFunction(TYPE_CALLABLE_BASE + 0); // _read_link (path) -> value
+															// (FUNC_READ_LINK)
 				// vec: SIMD block (--simd only): the three element helpers + twelve
 				// kernels
 				if (this.simd) {
@@ -8930,6 +8951,10 @@ public final class WasmLispCompiler implements LispCompiler {
 				// file-write-date in the program, or a --no-wasi module with no files).
 				code.addFunction(writeDateOrdinal < 0 ? WasmEmitHelper.buildNilBody() : WasmIoRuntimeBuilder
 					.buildFileWriteDateBody(WasmImportCompiler.PLACEHOLDER_FUNC_BASE + writeDateOrdinal));
+				// the link read (FUNC_READ_LINK): over the injected path_readlink, or a
+				// nil stub where nothing declared it.
+				code.addFunction(readLinkOrdinal < 0 ? WasmEmitHelper.buildNilBody() : WasmIoRuntimeBuilder
+					.buildReadLinkBody(WasmImportCompiler.PLACEHOLDER_FUNC_BASE + readLinkOrdinal));
 				// vec: SIMD block bodies (--simd only), in FUNC_VEC_BASE index order.
 				if (this.simd) {
 					// Each helper is handed the function index of the scalar vec.lisp

@@ -101,9 +101,10 @@ program names them:
   charset) governs the percent-decoding, as in Ring.
 - `content-length` reads ASCII digits only (Java's `Long/valueOf` also takes other
   scripts' digits).
-- A path is made canonical from its spelling: no symbolic link is resolved, so
-  `:allow-symlinks?` only lets a path without `..` through, and a link below `:root` that
-  leads outside it is not refused.
+- A canonical path resolves every symbolic link, as the oracle's does, but stays relative
+  where the file's path is (no WASM backend knows the working directory). On both WASM
+  backends a link whose target is absolute is not followed (the WASI host refuses it), so
+  the file is not found.
 - `resource-response` finds a resource in a directory of the source path only: a name
   computed at run time is never found inside a jar ([clojure.java.io](clojure-java-io.md)).
   A jar's resource is served through `url-response` of a `clojure.java.io/resource` whose

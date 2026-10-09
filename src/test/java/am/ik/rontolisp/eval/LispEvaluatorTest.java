@@ -26308,6 +26308,37 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void truenameResolvesEverySymbolicLinkInThePath(@TempDir Path tempDir) throws Exception {
+		// The same tree and answers as the JVM and both WASM backends
+		// (JvmLispCompilerTest / WasmLispCompilerIntegrationTest
+		// #truenameResolvesEverySymbolicLinkInThePath): a link to a file, a link to a
+		// directory, a .. after a link (taken from where the link LEADS), a link reached
+		// from a .. walk; probe-file stays the existence probe, a link opens through,
+		// and uiop:resolve-symlinks keeps a missing last part as spelled.
+		Path base = tempDir.toRealPath();
+		Files.createDirectories(base.resolve("tl/d"));
+		Files.writeString(base.resolve("tl/a.txt"), "a\n");
+		Files.writeString(base.resolve("tl/d/f.txt"), "f\n");
+		Files.createSymbolicLink(base.resolve("tl/in"), Path.of("a.txt"));
+		Files.createSymbolicLink(base.resolve("tl/dl"), Path.of("d"));
+		Files.createSymbolicLink(base.resolve("tl/up"), Path.of("../tl/d"));
+		assertThat(evalMulti("""
+				(defvar *b* "%s/")
+				(defun tl (x) (concatenate 'string *b* "tl/" x))
+				(defun rel (x) (subseq (namestring x) (length *b*)))
+				(list (rel (truename (tl "in")))
+				      (rel (truename (tl "dl/f.txt")))
+				      (rel (truename (tl "dl/../a.txt")))
+				      (rel (truename (concatenate 'string *b* "./tl/up/../in")))
+				      (rel (probe-file (tl "in")))
+				      (with-open-file (s (tl "in")) (read-line s))
+				      (handler-case (truename (tl "none")) (file-error () :missing))
+				      (rel (uiop:resolve-symlinks (tl "dl/new.txt"))))
+				""".formatted(base)).print()).isEqualTo(
+				"(\"tl/a.txt\" \"tl/d/f.txt\" \"tl/a.txt\" \"tl/a.txt\" \"tl/in\" \"a\" :MISSING \"tl/d/new.txt\")");
+	}
+
+	@Test
 	void evalUiopFilesystemProbeWalkAndMutate(@TempDir Path tempDir) throws Exception {
 		// The uiop/filesystem read side over probe-file and directory (.kb/uiop.md):
 		// probe-file* answers the parsed pathname or its truename, truename* is the
@@ -26350,17 +26381,18 @@ class LispEvaluatorTest {
 				             (uiop:getenv-pathname "RONTOLISP_UIOP_FS_UNSET")))
 				""").print())
 			.isEqualTo("(#P\"/tmp\" (#P\"/tmp\" #P\"/var\") #P\"/tmp/\" (#P\"/tmp/\" #P\"/var/\") NIL)");
-		// No backend resolves symlinks: the flag defaults to nil and the functions
-		// are the identity; there is no install directory to name either.
+		// Symlinks resolve (truename's walk), so the flag defaults to t as upstream's
+		// does; a path naming no link comes back as spelled, the flag off answers the
+		// argument itself, and there is no install directory to name.
 		assertThat(evalMulti("""
 				(list uiop:*resolve-symlinks*
 				      (uiop:resolve-symlinks "/a/b")
+				      (let ((uiop:*resolve-symlinks* nil)) (uiop:resolve-symlinks* "x"))
 				      (uiop:resolve-symlinks* "x")
-				      (let ((uiop:*resolve-symlinks* t)) (uiop:resolve-symlinks* "x"))
 				      (uiop:truenamize nil)
 				      (uiop:lisp-implementation-directory)
 				      (uiop:lisp-implementation-pathname-p "/x"))
-				""").print()).isEqualTo("(NIL #P\"/a/b\" \"x\" #P\"x\" NIL NIL NIL)");
+				""").print()).isEqualTo("(T #P\"/a/b\" \"x\" #P\"x\" NIL NIL NIL)");
 		// The write side, real on this backend: make, rename over, delete the tree.
 		assertThat(evalMulti("""
 				(let ((base "%s/fs-"))

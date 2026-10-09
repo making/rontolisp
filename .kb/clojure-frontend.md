@@ -1393,8 +1393,9 @@ oracle's classpath; a `deps.edn` ring-core newer than the shipped one refuses th
   pins the plain program lowering with no `%CLOJURE-IO-`.
   The part is ring-core 1.15.5's code over clojure.java.io's values (io kernels via
   `response.clj`'s `rontolisp.internal.io` alias; new `resources` inline kernel =
-  `getResources` over the directory roots), plus ring kernels `canonical-path` (spelling
-  only, a relative path kept relative from `.`, so no cwd is needed on wasm),
+  `getResources` over the directory roots), plus ring kernels `canonical-path`
+  (`%real-path`: every link resolved, a relative path kept relative from `.`, so no cwd is
+  needed on wasm),
   `directory-traversal?`, `format-date` (RFC 1123 via `%clojure-instant-fields`) and
   `date` (worker `%clojure-make-inst`, an INSTANT producer). Measured against clj 1.12.6
   + ring-core 1.15.5 the same day, identical on interpreter/JVM: `:root`/`/`-prefixed
@@ -1402,9 +1403,11 @@ oracle's classpath; a `deps.edn` ring-core newer than the shipped one refuses th
   `..` refused and `dir/../a.txt` served, no-root absolute path, `Last-Modified` = mtime
   truncated to seconds, a `jar:` URL's `Last-Modified` = the JAR FILE's mtime (not the
   entry's) and `Content-Length` the entry size, `resource-response` of a directory nil.
-  Deviations: no symlink resolved (oracle's canonical path refuses a link out of `:root`;
-  the interpreter and the JVM serve it, both wasm backends did not follow it; `.todo/e95`);
-  a computed resource name inside a jar is nil (clojure.java.io's, `.todo/e96`); a
+  Links (2026-10-09, same oracle): a link below `:root` served, one leading out of it nil
+  (served with `:allow-symlinks? true`), a link to a directory serves its index, on all
+  four; `.getCanonicalPath`/`.getCanonicalFile` are `%real-path` over the absolute path.
+  Deviations: on both wasm backends a link with an ABSOLUTE target is not followed
+  (wasmtime refuses it), so it is nil there; a computed resource name inside a jar is nil (clojure.java.io's, `.todo/e96`); a
   no-method miss in this front end's words. Both
   wasm backends answer `file-write-date` (2026-10-09), so one expectation holds on all four.
 - Refusals: a var the oracle's namespace has and the built-in one leaves out

@@ -334,8 +334,7 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   ISO-8859-1, US-ASCII and the JDK's aliases for them; any other is refused), have
   `ring.util.request/body-string` as a function rather than an extensible multimethod,
   read only ASCII digits in `content-length`, and leave out what needs a byte array. The
-  file responses resolve no symbolic link and find no resource computed at run time inside
-  a jar.
+  file responses find no resource computed at run time inside a jar.
 - A sorted map or set orders, prints and finds keys like the oracle's, but every verb
   copies it (an association costs the collection's size, like a hash map's); `class`
   answers `:map`/`:set`; a `subseq` or

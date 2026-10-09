@@ -339,12 +339,28 @@ Pinned by `ReadFromStringLambdaListFixture` (`.PROGRAM`, sbcl's answers, ci-spec
 - **`%probe-file` stays a string-in/string-out PRIMITIVE**, not `open` in a `handler-case`: nil is
   cheaper than catching a condition, works outside EH mode, and `--no-gc` rejects catching. Public
   `probe-file` is prelude Lisp over it (`uiop:file-exists-p` lowers onto it). Contract: the
-  namestring when the file exists (nothing resolves symlinks or absolutizes), nil otherwise; a
-  directory counts as existing. Interpreter goes through the installed **`SourceLoader.exists`**,
+  namestring when the file exists (no link resolved, nothing absolutized -- `truename` resolves,
+  next bullet), nil otherwise; a directory counts as existing, and so does a link whose target
+  does. Interpreter goes through the installed **`SourceLoader.exists`**,
   never `Files` directly, so the playground's in-memory loader answers (`fileSystem()` OVERRIDES with
   `Files.exists` — a read is wrong for a file that exists but is not decodable text). JVM
   `_probeFile` + `JvmProbeFileCompiler`; WASM `_probe_file` (`FUNC_PROBE_FILE` after `FUNC_T_SYM` as
   the new `FX_FUNC_LAST`) closes the fd via `fd_close` (`probeFileLeaksNoDescriptor`).
+- **`truename` resolves symbolic links on all four** (2026-10-09): prelude `%real-path`, a
+  realpath(3) walk over ONE primitive per backend, `%read-link` (the target a link holds, nil
+  for anything else): interpreter `SourceLoader.readLink`, JVM `_readLink` (gated
+  `FileMeta.readLink`), both WASM `_read_link` (`FUNC_READ_LINK` after `FUNC_FILE_WRITE_DATE`)
+  over the injected `path_readlink` (`TYPE_PATH_RENAME`'s shape; the adapter's over
+  `readlink-at`, the serve bridge errno 76). The `bufused` cell must be 4-aligned (wasmtime:
+  `Pointer not aligned to 4`). A `..` pops only an already-resolved part; a relative path stays
+  relative (no cwd on wasm); a missing part reads as no link and is kept. `truename` probes the
+  RESOLVED spelling. Measured on wasmtime 49 (2026-10-09): `path_readlink` answers a relative
+  target even when it climbs out of the preopen, refuses an ABSOLUTE target with errno 63, so
+  such a link stays as spelled and is not there on both wasm backends (the one cross-backend
+  difference). **Every WASM `path_open` passes `symlink_follow`** (`emitDirFdAndPath`, the
+  `_make_directories` verify, the adapter's `$path_open` passing bit 0 to `open-at`): with
+  lookupflags 0 the host refused a link in the LAST component, so `probe-file`/`open` of a link
+  answered nil/failed on both wasm backends alone.
 - **`:if-exists :append`** is the ONE non-default value of the three otherwise-ignorable options that
   is implemented rather than rejected: it normalizes into the `:append` PSEUDO-DIRECTION (not a CL
   direction; produced only by `OpenModes.normalizeKeywordForm` and `expandWithOpenFile`, shared
@@ -353,8 +369,10 @@ Pinned by `ReadFromStringLambdaListFixture` (`.PROGRAM`, sbcl's answers, ci-spec
   `fdflags = FDFLAGS_APPEND`. `:if-exists :append` with `:direction :input` is ignored, as in CL.
 
 Pinned by `LispEvaluatorTest#evalOpenAppendKeepsTheExistingContent`,
-`JvmLispCompilerTest#compileAndRunOpenAppend`, `LispEvaluatorTest#probeFile*` + twins, ci-spec
-`probe-file-existing-and-missing`, `open-if-exists-append-keeps-the-existing-content`.
+`JvmLispCompilerTest#compileAndRunOpenAppend`, `LispEvaluatorTest#probeFile*` + twins,
+`#truenameResolvesEverySymbolicLinkInThePath` (+ JVM / WASM twins), ci-spec
+`probe-file-existing-and-missing`, `truename-resolves-symbolic-links` (tree staged by
+`CorpusFixtures.stageSymlinkTree`), `open-if-exists-append-keeps-the-existing-content`.
 
 ## The `:if-exists` / `:if-does-not-exist` table is ONE lowering over `probe-file`
 
