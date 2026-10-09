@@ -168,7 +168,7 @@ answered `2 5 3` before).
 | `lazy-seq` `lazy-cat` `repeat` `cycle` `iterate` `repeatedly` | "Laziness" | finite `repeat`/`repeatedly` arities answer strict lists |
 | `drop-last` `split-at` `split-with` `take-last` `nthnext` `nthrest` `peek` `pop` `not-empty` `dedupe` `replace` `find` `subvec` `key` `val` `map-entry?` `rseq` `find-keyword` `partition-all` `partition-by` `min-key` `max-key` `juxt` `fnil` `every-pred` `some-fn` `update-keys` `update-vals` `reduce-kv` `test` `empty` `comparator` `hash-set` | `ClojureCoreLowering`: one call to the fixed-parameter `rontolisp::%clojure-NAME` worker after a lower-time arity check in the oracle's wording (`Wrong number of args (N) passed to: clojure.core/NAME`); as a value `#'rontolisp::%clojure-NAME-v`, checking at run time | `dedupe`/`partition-*`/`drop-last` are lazy-or-strict; `peek`/`pop` take vectors and lists (a strict seq peeks where the oracle's LazySeq throws); `some-fn` answers the oracle's exact failing value; `reduce-kv` walks maps/records/vectors and stops at `reduced`; a non-positive `partition-all` size signals (the oracle loops forever); `find` answers a map/record's stored key (`%clojure-table-key`, so a structural key answers its held representative), a vector's `[i x]` for an integer index in range, nil of nil, and signals on a set, string or list; `subvec` copies (a fresh vector, never a view), truncates a float bound, signals on a nil bound, a non-vector or a range out of bounds; `key`/`val` read a two-member non-string vector and signal otherwise, `map-entry?` is true of exactly those (a map entry IS a plain 2-vector here, so `(map-entry? [1 2])` is true where the oracle's is false; giving entries their own representation would touch `first`/`seq`/`find`/`reduce-kv`/destructuring/`=`/printing for a distinction only `clojure.walk`-style code reads), `rseq` answers a strict list of a vector (nil when empty) and signals on nil, a list, a seq, a string and a hash map; a sorted collection goes through its items vector (`%clojure-sorted-items`, "Sorted collections"), `find-keyword` is `keyword`'s one-argument arm (a two-argument call needs a nil-or-string namespace and a string name) and answers a never-used spelling's keyword where the oracle's is nil -- keywords are `(:C%KEYWORD spelling)` lists with no intern table, and one would cost every `keyword` call and every compiled output a global table; `empty` answers a fresh empty vector, map, set or sorted collection (comparator kept: `%clojure-sorted-with` over an empty items vector, a `cond` clause on `%clojure-sorted-p` the strip folds like any arm) carrying the metadata through `%clojure-put-meta`, nil for a string, nil and any non-collection, and signals `Can't create empty: <record class>` on a record; a list, lazy seq and seq answer nil (the empty-as-nil position, so no metadata; the oracle's `()`) and a map entry `[]` (the oracle nil); `comparator` is a closure over the predicate answering -1 / 1 / 0 from two `%clojure-truthy` tests (a false object counts as false); `hash-set` is `%clojure-set-of` over the argument list (`-v` takes the rest list); type errors use CL wording |
 | `pmap` | `map` | no thread pool; the printed seq is the oracle's |
-| `update` `update-in` `assoc-in` `get-in` `merge` `merge-with` `into` | fresh tables over the old pairs | the first three associate through `ClojureCollectionLowering.assocAnswer` like `assoc` (a vector level by index); `update-in` with no keys refused; `assoc-in` builds missing levels; `(merge)`/`merge-with` of no maps is nil; `merge` is `conj` folded over the maps: a later item that is a table is read inline, any other (nil, a record, a sorted map, a `[k v]` vector, a set or seq of entries) goes through `%clojure-merge-entry-plist` (one shared worker over `%clojure-seq-entry-plist`, named without `sorted` so a program building no sorted collection still carries none of it), so `(merge {} [1 2])` and `(merge {} (seq {1 2}))` answer `{1 2}` and a list of non-entries signals, like the oracle (measured 2026-10-03, clj 1.12.6; a seq of plain vectors stays accepted, as for `conj`) -- size of a program merging three maps: wasm 63,978 -> 64,535 B, JVM class 83,577 -> 87,317 B (inlining `conj`'s `entryPlist` arms at each later item instead was wasm 66,719, class 98,160); `into` targets lists/vectors/maps/sets through the reduce runtime, `(into to xform from)` is `%clojure-into-xf` |
+| `update` `update-in` `assoc-in` `get-in` `merge` `merge-with` `into` | fresh tables over the old pairs | the first three associate through `ClojureCollectionLowering.assocAnswer` like `assoc` (a vector level by index); the `-in` three unroll a literal key vector at lower time and walk any other path at run time over `%clojure-seq-all` (`ClojureUpdateLowering.keyWalk`, a `labels` per call site, the value form's walk), the arguments evaluated in the oracle's order (map, keys, then function/value/default); no keys updates/associates under nil and `get-in` answers the map; `get-in`'s default answers at the first missing level against a fresh `(list nil)` sentinel, never read into (`(get-in {} [:a :b] {:b 1})` is `{:b 1}`, measured 2026-10-09, clj 1.12.6; pinned by clojure-spec `the-nested-verbs-walk-a-computed-key-path`); `assoc-in` builds missing levels; `(merge)`/`merge-with` of no maps is nil; `merge` is `conj` folded over the maps: a later item that is a table is read inline, any other (nil, a record, a sorted map, a `[k v]` vector, a set or seq of entries) goes through `%clojure-merge-entry-plist` (one shared worker over `%clojure-seq-entry-plist`, named without `sorted` so a program building no sorted collection still carries none of it), so `(merge {} [1 2])` and `(merge {} (seq {1 2}))` answer `{1 2}` and a list of non-entries signals, like the oracle (measured 2026-10-03, clj 1.12.6; a seq of plain vectors stays accepted, as for `conj`) -- size of a program merging three maps: wasm 63,978 -> 64,535 B, JVM class 83,577 -> 87,317 B (inlining `conj`'s `entryPlist` arms at each later item instead was wasm 66,719, class 98,160); `into` targets lists/vectors/maps/sets through the reduce runtime, `(into to xform from)` is `%clojure-into-xf` |
 | `assoc` `dissoc` `get` `contains?` `keys` `vals` `conj` `disj` `hash-map` `array-map` | table operations | `assoc` onto nil builds; onto a vector (`assocAnswer`'s run-time `vectorp` arm, `%clojure-vector-assoc`) a fresh whole copy, index = count appending, a non-integer key `Key must be integer`, out of range signalling, like the oracle -- measured 2026-10-03 on a map-only program: wasm 58,004 -> 60,479 B (dispatch alone +298 B, the `(setf aref)` write ~1 KB; `make-array` plus an `aref` loop instead of `copy-seq`/`coerce` saved 0.8 KB), 2M two-pair `assoc` calls 4.0 s wasm / 2.05 s JVM before and after; pinned by clojure-spec `assoc-on-a-vector-replaces-or-appends-by-index`, `update-and-the-nested-verbs-reach-into-vectors` (and `replace-maps-through-a-map-or-a-vector` for `replace`); odd pairs refused (at run time for values); `get` reads maps, records, sets (the member), vectors, strings, nil (a list or deftype answers the default); `conj` onto a map takes nil, a map, a sorted map, a `[k v]` vector, a set whose members are `[k v]` vectors, or a seq (strict or lazy) of them (`%clojure-seq-entry-plist`; a seq of plain vectors stays accepted for the same reason as a set of vectors -- `(conj {} (seq [[1 2]]))` is a `ClassCastException` in the oracle, measured 2026-10-03); a list of non-entries (`(k v)` included) and a set member that is a map, list, nil or string signal, like the oracle (measured 2026-10-03; the oracle also refuses a set of plain vectors, `(conj {} #{[1 2]})`, but a map entry is a plain 2-vector here, so that one stays accepted -- `(into {} #{[1 2]})` is the oracle's answer too); anything else onto a map signals; `(conj)` is `[]` |
 | `sorted-map` `sorted-map-by` `sorted-set` `sorted-set-by` `subseq` `rsubseq` `compare` `vector-of` | `ClojureSortedLowering`: one call to `rontolisp::%clojure-sorted-make` / `-subseq` / `-subseq-5` / `-compare` / `-vector-of` after a lower-time arity check in the oracle's wording; as a value `#'rontolisp::%clojure-NAME-v` | a literal core test of `subseq`/`rsubseq` lowers to its keyword (`:>` ...); "Sorted collections" |
 | a keyword, set, map or vector in call position or as a function value | the table-aware read / member / `nth` with an optional default | `({:a 1} :b :d)` is `:d`; a keyword or symbol reaching `%clojure-call`, a keyword function value (`ClojureFnLowering.keywordFn`, also a `defmulti` dispatch fn) or a quoted-symbol `defmulti` dispatch fn (`realFun` wraps it in `%clojure-as-fn`) takes one or two arguments and signals the oracle's `Wrong number of args (N) passed to: :kw` / `clojure.lang.Symbol` otherwise (a literal keyword head refuses at lower time) |
@@ -745,8 +745,22 @@ before the library splice.
   an argument with an effect, is an `IllegalStateException` at the strip.
   `eval/ClojureLibrary.process` strips the program family by family and splices a library
   stripped of every family it makes no value of (one cached variant per combination, beside
-  the host-arm ones); the interpreter, a session and the macro-time
-  evaluator keep `forms()` whole, since what a later input builds is unknown.
+  the host-arm ones). The interpreter running a whole program (the command line's run,
+  `rontolisp test`) takes the same strip: `LispEvaluator.clojureProgram` evaluates
+  `ClojureLibrary.splice`'s library ahead of the stripped program. A session, a `load` of a
+  `.clj` and the macro-time evaluator keep `forms()` whole (loaded on first use), since
+  what a later input builds is unknown; a stripped library refuses later Clojure source
+  (`IllegalStateException`; no Clojure program reaches it: `load`/`require` are read while
+  lowering, `eval` is refused). Strip-on-load with growth was rejected: a redefined defun
+  misses every `#'` snapshot and closure taken before, so a later value of a new family
+  would reach an armless copy. What a hot path passed before the strip (counted
+  2026-10-09): `str` of a number or keyword 8 family tests ahead of the printer, `=` of
+  two numbers 13, the printer 0 for a scalar and ~9 per collection node. Bench 2026-10-09
+  (interpreter, loaded host, interleaved runs, whole program vs the same file `load`ed
+  from a `.lisp`): 300k `(str i :k)` 16.6-21.1 s vs 24.9-33.4 s; 300k `(= [i :k] [i :k])`
+  12.4-19.7 s vs 28.4-35.5 s. Pinned by
+  `ClojureLibraryTest#aWholeProgramOnTheInterpreterTakesTheLibraryWithoutTheArmsItCanNeverTake`;
+  every interpreter leg of the four-backend tests (`ClojureSpecE2eTest` ...) runs through it.
 - Writing an arm: it allocates no `freshTemp` and lowers no datum again (a shifted temp
   number would rename locals of the stripped program); it sits behind an existing wrapper
   test where it can (`%clojure-strict-seq`, `count`, `empty?`, `%clojure-key-kind`), so the
@@ -1995,10 +2009,11 @@ the file), `default-streams-impl` a map. Until then only `reader` resolved, as a
   value compiles byte-identical (measured 2026-10-08 on `demo.clj`, print, protocol,
   multimethod and spit/slurp/line-seq programs; pinned by
   `ClojureLibraryTest#aProgramMakingNoIoValueSplicesTheLibraryWithoutItsIoArms`). The
-  interpreter keeps every arm (`ClojureLibrary.process` is the compile path's): `str` of a
-  non-io value pays one `%clojure-io-p` call, ~5% of a `str`-bound loop (bench 2026-10-08:
-  300k `(str i :k)` 19.3 -> 20.4 s mean of five on a loaded host; `=` and `pr-str` within
-  noise). `%clojure-io-p` is one call however it answers (the registry is read only once a
+  library a session loads keeps every arm: there `str` of a non-io value pays one
+  `%clojure-io-p` call, ~5% of a `str`-bound loop (bench 2026-10-08: 300k `(str i :k)`
+  19.3 -> 20.4 s mean of five on a loaded host; `=` and `pr-str` within noise); a whole
+  program on the interpreter strips it like the compile path ("Sorted collections", the
+  arms). `%clojure-io-p` is one call however it answers (the registry is read only once a
   stream is in it).
 - **Prelude trap** (measured 2026-10-08): a `clojure.lisp` parameter named `write` grew every
   Clojure program (+29 KB `demo.clj`): any symbol of the library, even in a defun nothing
@@ -2761,7 +2776,8 @@ interfaces behind an arm family its row's store makes (`ClojureArms`, `COLLECTIO
   verbatim (`hasheq` takes the `.hashCode` fallback) and `peek`/`pop`/`assoc`/`dissoc`/`seq`/
   `rseq`/`=`/`into`/`subseq` print oracle-identical on all four backends; instaparse 1.5.0
   stops at `auto_flatten_seq.clj:58:12: get-in takes a vector of keys, not |index|` (a
-  computed key path, e98).
+  computed key path). With that walked at run time (2026-10-09) it stops at
+  `auto_flatten_seq.clj:143:17: unknown name: clojure.core/hash`.
 - Pins: clojure-spec `a-collection-type-conjs-empties-counts-and-compares-through-its-methods`,
   `a-map-type-assocs-dissocs-reads-and-prints-as-a-map`,
   `a-set-type-disjs-contains-and-prints-as-a-set`,
@@ -2789,7 +2805,10 @@ The `java:` surface (`.kb/java-interop.md`); interpreter and JVM only -- wasm co
   fixed default-import list read off `(ns-imports 'user)` on clj 1.12.6, 2026-10-03: the common
   throwables included, `AutoCloseable`/`Record`/`Module` not -- the oracle does not resolve them
   either). A construction of a plain throwable (`Exception.` included) is an exception
-  condition on every backend ("Exceptions"); any other is `java:new`, refused on wasm. A zero-argument `(Class/m)` is the static method
+  condition on every backend ("Exceptions"), one of `java.util.Date`, `java.sql.Timestamp` or
+  `java.util.UUID` (and `UUID/randomUUID`, `UUID/fromString`, `System/currentTimeMillis`) the
+  value `#inst`/`#uuid` reads ("Instants and UUIDs"); any other is `java:new`, refused on
+  wasm. A zero-argument `(Class/m)` is the static method
   when the class has one, else the field. A bare `Class/member` value reads the static
   field, else answers a lambda dispatching per fixed arity (a variadic-only member is
   refused).
@@ -3555,10 +3574,12 @@ milliseconds; the reverse false, the oracle's one-sided `equals`).
   `%clojure-class-name-of`, `inst?` (`%clojure-is-inst`'s disjunct), the `class` and
   protocol-tag branches (`ClojureDispatchLowering.timeValueClassBranches`), `instance?`'s
   kinds (`ClojureValueClasses` DATE/TIMESTAMP/CALENDAR/UUID) and the instance-call rows
-  (`getTime`, `before`/`after` by milliseconds, `compareTo`, the UUID halves, `version`,
-  `variant`). `uuid?` lowers to `(%clojure-is-uuid x "java.util.UUID")`, an alias of the
-  host test. Producers: the two constructors, every read entry (`Reads.ENTRIES`), the
-  `clojure.instant` kernels, `random-uuid`/`parse-uuid`. Inside the runtime a type test is
+  (`getTime`, `before`/`after` by milliseconds, `setTime` in place, a Timestamp's
+  `getNanos`, `compareTo`, the UUID halves, `version`, `variant`). `uuid?` lowers to
+  `(%clojure-is-uuid x "java.util.UUID")`, an alias of the host test. Producers: the two
+  constructors, every read entry (`Reads.ENTRIES`), the `clojure.instant` kernels,
+  `random-uuid`/`parse-uuid`, and the host members below (`%clojure-new-date`,
+  `%clojure-new-timestamp`, `%clojure-uuid-from-string`). Inside the runtime a type test is
   inline (`(eq (car b) :C%UUID)`), never a family test in a position the strip cannot fold.
   Measured 2026-10-08 against the parent build, wasm P1 / `--optimize=size` / component / JVM
   class: 15 programs naming none (printing, `compare`, `sort`, `class`, `instance? Comparable`
@@ -3584,9 +3605,60 @@ milliseconds; the reverse false, the oracle's one-sided `equals`).
   classes; a deviation until 2026-10-08).
 - `inst-ms`/`inst-ms*` read a Date or Timestamp, a host `Date`/`Instant` through the host
   arms, else the oracle's `No implementation of method: :inst-ms* of protocol:
-  #'clojure.core/Inst found for class: C`. A host Date or UUID stays a host object: never `=`
-  to a read one (deviation), and `(java.util.Date.)`, `UUID/randomUUID` and their kin stay
-  `java:` calls, refused on wasm (`e76`).
+  #'clojure.core/Inst found for class: C`.
+- **The host members are the values made here** (e76, 2026-10-09; `ClojureTimeValueLowering`).
+  `(java.util.Date.)` is `(%clojure-make-inst (get-internal-real-time))` (the wall clock in
+  ms on all four backends), `(Date. n)` a literal integer's `make-inst`, a computed one's
+  `%clojure-new-date` (an integer in the long range, else the oracle's `No matching ctor`; a
+  string or nil refused: the deprecated `Date(String)` parse is not here, a literal string
+  keeps `java:new`); `(java.sql.Timestamp. x)` `%clojure-new-timestamp` (`longCast`);
+  `(UUID. a b)` `make-uuid` of two `%clojure-long-cast`s (the oracle's compiler resolves the
+  one constructor and emits `RT.longCast`: `1.5` is 1, `:k` a CCE, nil an NPE, `2^64` out of
+  range); `UUID/randomUUID`, `UUID/fromString` (`%clojure-uuid-from-string`, the strict
+  `uuid-of`, a non-string a CCE) and `System/currentTimeMillis` (`get-internal-real-time`).
+  Every spelling: `.`, `new`, `Class/new` (`hostConstruction(Lowered)`), `staticCall`/
+  `staticNoArg` (so the member values and `..` too) and param tags naming the own constructor.
+  A receiver known to be one of the three classes is treated as unknown, so the value arms
+  take it. The boundary, interpreter and JVM only (`ctx.hostTarget`): an argument goes through
+  `%clojure-host-value`, whose Date/Timestamp/UUID clause is `%clojure-time-value-host` (each
+  of its clauses a family test, so a UUID-only program builds no host Date); an argument that
+  IS such a construction (a literal `#inst`/`#uuid` included) is rewritten to the host
+  construction (`hostConstruction(LispVal)`: `java:new "java.util.Date(long)"`,
+  `java:static "java.util.UUID" "randomUUID"`, ...), so `(.format sdf (Date.))` makes no
+  value here and the site resolves on the class. An instance call no row answers
+  (`methodArm`, inside `valueArm`/`boundArm`'s refusal): per kind, by reflection on the host
+  class, a method the class has calls `java:call` on `(%clojure-time-value-host recv)` (a
+  `Date`-typed answer, `clone`, back through `%clojure-time-value-from-host`), a mutator (all
+  overloads void) or any method on wasm is refused by name (`not supported`), a method the
+  class lacks in the oracle's words (`No matching field found: foo for class
+  java.util.Date`). A Calendar never crosses (no host object; its methods refused by name).
+  Host to own is not converted: a host Date/Timestamp/UUID a member answers stays host, `=`
+  to the own one by the first's `equals` (`%clojure-host-equal-p`'s clauses, the instant
+  clause of `%clojure-equal` falling through to it), ordered by `compareTo`
+  (`%clojure-instant-compare`/`-uuid-compare`'s host arm, and a general host `Comparable` arm
+  in `%clojure-compare` and `%clojure-comparable-p`, so `sort` and a sorted set take one), but
+  printed `#<java java.util.Date>` and another map key (user doc deviations). Measured
+  2026-10-09, the need, over the local Clojars/contrib jars: constructions and statics in
+  medley, encore, truss, buddy, selmer, ring-core (session store, `last-modified-date`),
+  babashka.http-client, test.check, nippy, datascript, spec.alpha, schema, clj-time,
+  core.logic and 20 `System/currentTimeMillis` sites; an own Date handed to Java:
+  `SimpleDateFormat.format` (ring.util.time, cheshire, encore, timbre), `Calendar.setTime`
+  (timbre), JDBC through `.toInstant` (next.jdbc); `.toInstant` of one in encore, timbre,
+  fipp, next.jdbc; host Dates back: `Date/from` (malli, encore, tick), `.parse` (ring),
+  JDBC rows. The cost against the parent build (JVM class / wasm P1): a program naming no
+  `java:` operator, or making no instant or UUID, byte-identical (`demo.clj`, a
+  `.toUpperCase` program, an `#inst` + `random-uuid` program); a `java:` program making none
+  but calling `compare`/`=`/`prn` +222 B / -2 B (the host `Comparable` arm); an `#inst` +
+  `.toUpperCase` + `sort` + `=` program +3.2 KB / +561 B, the UUID one +1.0 KB / +135 B;
+  `(.getTime x)` in an `#inst` program +214 B / +194 B; `(.format sdf (java.util.Date. 0))`
+  byte-identical class (the rewrite); a `let`-bound Date handed to a member +3.2 KB, +13.2
+  KB once `prn` links the instant printer the value now needs. Rejected: printing a host Date
+  or UUID as `#inst`/`#uuid` through the host's `SimpleDateFormat` (+7.0 KB class in every
+  printing `java:` program: `.toUpperCase` + `println` 97,611 -> 104,569); a Calendar crossing
+  as a `GregorianCalendar` (+2.4 KB of the conversion alone, for a value only
+  `read-instant-calendar` makes and no measured library hands to Java); converting a host
+  value back at every call result (`java:` may not learn a Clojure shape, and a Lisp-level
+  wrap is a call on every `java:` result).
 - `clojure.instant` (parse-timestamp, validated, read-instant-date/-timestamp/-calendar)
   and `clojure.uuid` ship as startup namespaces ("clojure.jar namespaces") over the
   kernels `rontolisp.internal.instant` (`parse`, `validate`, `read-date`, `read-timestamp`,
@@ -3602,7 +3674,12 @@ milliseconds; the reverse false, the oracle's one-sided `equals`).
   half 20,000 each and the Lisp half 1,500 each on the interpreter);
   `ClojureReaderTest#instAndUuid*`, `ClojureArmsTest#theInstantAndUuidFamilies*`,
   `ClojureLibraryTest#aProgramMakingNoInstantOrUuid*`,
-  `ClojureInteropTest#instMsReadsAHostDateOrInstant*`.
+  `ClojureInteropTest#instMsReadsAHostDateOrInstant*`. The host members: clojure-spec
+  `date-and-uuid-constructions-and-statics-make-the-values-read-here` (all four,
+  oracle-identical), `ClojureInteropTest#aDateOrUuidMadeHereCrossesTheJavaBoundaryAsTheHostObject`,
+  `#aHostDateOrUuidIsEqualToAndComparesBesideOneMadeHere`,
+  `ClojureWasmInteropRefusalTest#aDateMadeHereRefusesOnlyAHostOnlyMemberOnBothBackends`,
+  `ClojureLibraryTest#aDateOrUuidConstructionMakesTheValueUnlessHandedStraightToAMember`.
 
 ## Data readers
 

@@ -1,5 +1,8 @@
 package am.ik.rontolisp.eval;
 
+import java.io.ByteArrayOutputStream;
+import java.io.PrintStream;
+import java.nio.charset.StandardCharsets;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -9,6 +12,7 @@ import java.util.TreeSet;
 import java.util.stream.Collectors;
 
 import am.ik.rontolisp.LispCons;
+import am.ik.rontolisp.LispLambda;
 import am.ik.rontolisp.LispString;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
@@ -19,6 +23,7 @@ import am.ik.rontolisp.reader.LispReader;
 import org.junit.jupiter.api.Test;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class ClojureLibraryTest {
 
@@ -266,6 +271,30 @@ class ClojureLibraryTest {
 	}
 
 	@Test
+	void aDateOrUuidConstructionMakesTheValueUnlessHandedStraightToAMember() {
+		// a construction makes the instant or UUID the literals read, so the printer
+		// keeps their arms; handed straight to a java: member it is the host
+		// construction, which makes none, and a java: program making none crosses no
+		// value made here
+		List<LispVal> made = ClojureLibrary
+			.process(Clojure.read("(prn (java.util.Date. 0) (java.util.UUID/randomUUID))", null));
+		assertThat(defun(made, "RONTOLISP::%CLOJURE-WRITE")).contains("(RONTOLISP::%CLOJURE-INSTANT-P X)")
+			.contains("(RONTOLISP::%CLOJURE-UUID-P X)");
+		String handed = "(prn (.format (java.text.SimpleDateFormat. \"yyyy\") (java.util.Date. 0))"
+				+ " (.add (java.util.HashSet.) #uuid \"1-1-1-1-1\"))";
+		List<LispVal> host = ClojureLibrary.process(Clojure.read(handed, null));
+		assertThat(program(host, handed)).contains("(JAVA:NEW \"java.util.Date(long)\" 0)")
+			.contains("(JAVA:NEW \"java.util.UUID(long,long)\" ")
+			.doesNotContain("%CLOJURE-MAKE-INST")
+			.doesNotContain("%CLOJURE-MAKE-UUID");
+		assertThat(defun(host, "RONTOLISP::%CLOJURE-WRITE")).doesNotContain("%CLOJURE-INSTANT-P")
+			.doesNotContain("%CLOJURE-UUID-P");
+		String crossing = "(defn f [x] (.add (java.util.ArrayList.) x)) (prn (f 1))";
+		assertThat(defun(ClojureLibrary.process(Clojure.read(crossing, null)), "RONTOLISP::%CLOJURE-HOST-VALUE"))
+			.doesNotContain("TIME-VALUE");
+	}
+
+	@Test
 	void vecRefusesANonCollectionAsRuntimeExceptionOnlyWhereAClassIsRead() {
 		// the oracle's vec casts to an array before it seqs: the argument check is the
 		// refusal family's view, so a program reading no class compiles the bare coercion
@@ -329,6 +358,35 @@ class ClojureLibraryTest {
 		List<LispVal> file = Clojure.read("(prn (java.io.File. \"a\"))", null);
 		assertThat(defun(ClojureLibrary.process(file), "RONTOLISP::%CLOJURE-WRITE"))
 			.contains("(RONTOLISP::%CLOJURE-IO-P X)");
+	}
+
+	@Test
+	void aWholeProgramOnTheInterpreterTakesTheLibraryWithoutTheArmsItCanNeverTake() {
+		// str of a number passes no io test where the program can hold no io value; the
+		// library loaded on first use keeps every arm for what a session reads next
+		ByteArrayOutputStream out = new ByteArrayOutputStream();
+		LispEvaluator whole = new LispEvaluator(new PrintStream(out, true, StandardCharsets.UTF_8));
+		for (LispVal form : whole.clojureProgram(Clojure.read("(println (str 1 :k))", null))) {
+			whole.eval(form);
+		}
+		assertThat(out.toString(StandardCharsets.UTF_8)).isEqualTo("1:k\n");
+		assertThat(strOf(whole)).doesNotContain("%CLOJURE-IO-P").contains("%CLOJURE-RE-PATTERN-P");
+		LispEvaluator lazy = new LispEvaluator(new PrintStream(new ByteArrayOutputStream(), true));
+		for (LispVal form : Clojure.read("(str 1 :k)", null)) {
+			lazy.eval(form);
+		}
+		assertThat(strOf(lazy)).contains("(RONTOLISP::%CLOJURE-IO-P X)");
+		LispEvaluator io = new LispEvaluator(new PrintStream(new ByteArrayOutputStream(), true));
+		io.clojureProgram(Clojure.read("(str (java.io.File. \"a\"))", null));
+		assertThat(strOf(io)).contains("(RONTOLISP::%CLOJURE-IO-P X)");
+		// a later program could make what the first could not
+		assertThatThrownBy(() -> whole.clojureProgram(Clojure.read("(str (java.io.File. \"a\"))", null)))
+			.isInstanceOf(IllegalStateException.class);
+	}
+
+	private static String strOf(LispEvaluator evaluator) {
+		LispVal function = evaluator.eval(LispReader.readAllFromString("#'rontolisp::%clojure-str-of").get(0));
+		return ((LispLambda) function).body().stream().map(LispVal::print).collect(Collectors.joining(" "));
 	}
 
 	@Test

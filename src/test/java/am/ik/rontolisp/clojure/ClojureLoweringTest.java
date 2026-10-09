@@ -1682,8 +1682,8 @@ class ClojureLoweringTest {
 	void staticMembersResolveByHostArity() {
 		// a zero-argument static method is a static call, even in the (. Class m)
 		// spelling; a field stays a field read, in call and dot-form alike
-		assertThat(lowered("(System/currentTimeMillis)")).contains("JAVA:STATIC").doesNotContain("JAVA:FIELD");
-		assertThat(lowered("(. System currentTimeMillis)")).contains("JAVA:STATIC").doesNotContain("JAVA:FIELD");
+		assertThat(lowered("(System/nanoTime)")).contains("JAVA:STATIC").doesNotContain("JAVA:FIELD");
+		assertThat(lowered("(. System nanoTime)")).contains("JAVA:STATIC").doesNotContain("JAVA:FIELD");
 		assertThat(lowered("(Integer/MAX_VALUE)")).contains("JAVA:FIELD").doesNotContain("JAVA:STATIC");
 		assertThat(lowered("(. Math PI)")).contains("JAVA:FIELD").doesNotContain("JAVA:STATIC");
 		assertThat(lowered("(Math/PI)")).contains("JAVA:FIELD").doesNotContain("JAVA:STATIC");
@@ -2439,8 +2439,13 @@ class ClojureLoweringTest {
 		assertThat(lowered("(merge-with + {:a 1} {:a 2})")).contains("MAPHASH");
 		assertThat(lowered("(into [] [1])")).contains("REDUCE");
 		assertThat(lowered("(frequencies [1])")).contains("GETHASH");
-		assertThatThrownBy(() -> Clojure.read("(update-in {:a 1} :a inc)", null)).isInstanceOf(LispReadException.class)
-			.hasMessageContaining("update-in takes a vector of keys");
+		// a key path that is no literal vector is walked at run time, a literal one
+		// unrolled
+		assertThat(lowered("(defn f [ks] (update-in {:a 1} ks inc))")).contains("RONTOLISP::%CLOJURE-SEQ-ALL");
+		assertThat(lowered("(defn f [ks] (assoc-in {} ks 1))")).contains("RONTOLISP::%CLOJURE-SEQ-ALL");
+		assertThat(lowered("(defn f [ks] (get-in {} ks :d))")).contains("RONTOLISP::%CLOJURE-SEQ-ALL");
+		assertThat(lowered("(get-in {:a {:b 1}} [:a :b] :d)")).doesNotContain("RONTOLISP::%CLOJURE-SEQ-ALL");
+		assertThat(lowered("(update-in {:a 1} [] assoc :b 2)")).doesNotContain("RONTOLISP::%CLOJURE-SEQ-ALL");
 		assertThat(lowered("(into [] (map inc) [1])")).contains("(RONTOLISP::%CLOJURE-INTO-XF (VECTOR)");
 		assertThatThrownBy(() -> Clojure.read("(into [])", null)).isInstanceOf(LispReadException.class)
 			.hasMessageContaining("into takes a target, an optional transducer and a source");

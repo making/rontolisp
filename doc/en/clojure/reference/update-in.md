@@ -2,10 +2,10 @@
 
 `(update-in m keys f args...)`
 
-Answers the nested update down the key vector, building nothing: a missing
-level applies `f` to `nil` (which signals for arithmetic, like the oracle). An
-empty key vector is refused by name. A vector level steps by index, like
-[assoc](assoc.md). As a value the key sequence walked at run time.
+Answers the nested update down the key path, building nothing: a missing
+level applies `f` to `nil` (which signals for arithmetic, like the oracle). The
+path is any seqable; with no keys, updates under `nil`, like the oracle. A vector
+level steps by index, like [assoc](assoc.md).
 
 ```clojure
 (println (update-in {:a {:b 1}} [:a :b] inc)) ; {:a {:b 2}}

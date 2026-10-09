@@ -4,7 +4,7 @@
 
 Calls a member on `receiver`: with a method symbol, the instance call `(. obj m args)`;
 with a class as receiver, the static `(. Class m args)`. With no arguments --
-`(. System currentTimeMillis)` -- it is the zero-argument static method when the
+`(. System nanoTime)` -- it is the zero-argument static method when the
 host class has one, else the field read, like `(Class/m)`. `(. obj -field)` and
 `(. Class FIELD)` read fields. Java's `false` comes back as `false`, a boolean answer and a
 `Boolean.FALSE` read from a host collection alike, and a keyword, symbol, set or map passed

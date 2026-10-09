@@ -2239,8 +2239,11 @@
     (rontolisp::%clojure-sorted-equal a b))
    ((rontolisp::%clojure-reader-value-p a)
     (rontolisp::%clojure-reader-value-equal a b))
-   ;; a Date is = to a Timestamp of its milliseconds, not the other way
-   ((rontolisp::%clojure-instant-p a) (rontolisp::%clojure-inst-equal a b))
+   ;; a Date is = to a Timestamp of its milliseconds, not the other way; a host
+   ;; instant reaches the host-object family's arm
+   ((rontolisp::%clojure-instant-p a)
+    (or (rontolisp::%clojure-inst-equal a b)
+        (rontolisp::%clojure-host-equal-p a b)))
    ;; equal hands a host object no collection, so a host collection and a
    ;; Clojure one reach the host-object family's arm
    (t (or (equal a b) (rontolisp::%clojure-host-equal-p a b)))))
@@ -2252,14 +2255,30 @@
 ;; last, and a program naming no java: operator, where no host object exists,
 ;; folds it away.
 (defun rontolisp::%clojure-host-equal-p (a b)
-  "Whether one of A and B is a host object and the other a Lisp value = to it
-   as a collection of its kind (%clojure-host-collection-equal), either one
-   first."
-  (cond ((and (or (consp a) (numberp a) (arrayp a) (symbolp a))
-              (or (consp b) (numberp b) (arrayp b) (symbolp b)))
+  "Whether one of A and B is a host object and the other a Lisp value = to it:
+   a collection of its kind (%clojure-host-collection-equal), either one first,
+   or a Date, Timestamp or UUID made here, which the equals of the first
+   decides."
+  (cond ((and (or (consp a) (numberp a) (arrayp a) (symbolp a) (characterp a))
+              (or (consp b) (numberp b) (arrayp b) (symbolp b) (characterp b)))
          ;; the common unequal pairs, answered without a call: the interpreter
          ;; asks this after every unequal = that reaches equal
          nil)
+        ;; a Date, Timestamp or UUID made here and a host object: the oracle's
+        ;; equals of the first, the one made here as the host object it stands
+        ;; for, so a host Date is = to a Timestamp of its milliseconds and not the
+        ;; reverse
+        ((or (rontolisp::%clojure-date-p a) (rontolisp::%clojure-timestamp-p a)
+             (rontolisp::%clojure-uuid-p a))
+         (and (not (rontolisp::%clojure-lisp-value-p b))
+              (java:call (the (java:object "java.lang.Object")
+                              (rontolisp::%clojure-time-value-host a)) "equals"
+                         b)))
+        ((or (rontolisp::%clojure-date-p b) (rontolisp::%clojure-timestamp-p b)
+             (rontolisp::%clojure-uuid-p b))
+         (and (not (rontolisp::%clojure-lisp-value-p a))
+              (java:call (the (java:object "java.lang.Object") a) "equals"
+                         (rontolisp::%clojure-time-value-host b))))
         ((rontolisp::%clojure-lisp-value-p a)
          (and (not (rontolisp::%clojure-lisp-value-p b))
               (rontolisp::%clojure-host-collection-equal b a)))
@@ -2512,7 +2531,8 @@
 ;; (%clojure-host-ident) Java hands back as the keyword or symbol itself; a set a
 ;; fresh java.util.LinkedHashSet of its members, a sorted set one in order; a
 ;; sorted map, a record and a map an equal table of their entries in order, which
-;; java: makes a java.util.LinkedHashMap; a lazy seq the list it realizes. A
+;; java: makes a java.util.LinkedHashMap; a lazy seq the list it realizes; a Date,
+;; Timestamp or UUID the host object it stands for (%clojure-time-value-host). A
 ;; vector, list or map holding such a value is a copy holding what each becomes,
 ;; anything else X itself.
 (defun rontolisp::%clojure-host-value (x)
@@ -2533,6 +2553,9 @@
           (rontolisp:hash-table-plist (car (cdr (cdr (cdr x)))))))
         ((rontolisp::%clojure-lazy-p x)
          (rontolisp::%clojure-host-list (rontolisp::%clojure-seq-all x)))
+        ((or (rontolisp::%clojure-date-p x) (rontolisp::%clojure-timestamp-p x)
+             (rontolisp::%clojure-uuid-p x))
+         (rontolisp::%clojure-time-value-host x))
         ;; any other wrapper (an atom, a var, a pattern ...) has no Java value
         ((and (consp x) (keywordp (car x))) x)
         ((consp x) (rontolisp::%clojure-host-list x))
@@ -6582,6 +6605,15 @@
    ;; comparable-interface family ("Collection interfaces")
    ((rontolisp::%clojure-icomparable-p a)
     (rontolisp::%clojure-icomparable-compare a b))
+   ;; a host Comparable answers its compareTo, a Date, Timestamp or UUID made
+   ;; here as the host object it stands for: an arm of the host-object family
+   ((rontolisp::%clojure-host-object-p a "java.lang.Comparable")
+    (java:call (the (java:object "java.lang.Comparable") a) "compareTo"
+               (if (or (rontolisp::%clojure-date-p b)
+                       (rontolisp::%clojure-timestamp-p b)
+                       (rontolisp::%clojure-uuid-p b))
+                   (rontolisp::%clojure-time-value-host b)
+                   b)))
    (t (rontolisp::%clojure-class-cast-exception
        "compare needs two values of one comparable kind"))))
 
@@ -6597,7 +6629,8 @@
   (or (symbolp x) (numberp x) (stringp x) (characterp x)
       (rontolisp::%clojure-keyword-p x) (and (vectorp x) (not (stringp x)))
       (rontolisp::%clojure-instant-p x) (rontolisp::%clojure-uuid-p x)
-      (rontolisp::%clojure-icomparable-p x)))
+      (rontolisp::%clojure-icomparable-p x)
+      (rontolisp::%clojure-host-object-p x "java.lang.Comparable")))
 
 (defun rontolisp::%clojure-cmp-call (cmp a b)
   "The order the comparator function CMP puts A and B in, the oracle's
@@ -12078,8 +12111,9 @@
 ;; year of the era, so #inst "0000" prints as 0001 like the oracle's. Every
 ;; instant prints in UTC, a Calendar at its own offset. Every test of one is an
 ;; arm of the instant or the UUID family (clojure/ClojureArms): only the #inst
-;; and #uuid literals, the readers, the clojure.instant kernels, random-uuid and
-;; parse-uuid make one, so a program naming none of them sheds them.
+;; and #uuid literals, the readers, the clojure.instant kernels, random-uuid,
+;; parse-uuid and the host members below make one, so a program naming none of
+;; them sheds them.
 
 (defun rontolisp::%clojure-instant-p (x)
   "Whether X is an instant: a Date, a Timestamp or a Calendar."
@@ -12458,8 +12492,18 @@
                         (car (cdr (cdr b)))
                         (* (mod y 1000) 1000000)))))
         (cond ((< x y) -1) ((> x y) 1) (t 0)))
-      (rontolisp::%clojure-class-cast-exception
-       "compare needs two values of one comparable kind")))
+      ;; a host Comparable: the compareTo of the host object a Date or a
+      ;; Timestamp stands for (a Calendar has none), an arm of the host-object
+      ;; family
+      (if (rontolisp::%clojure-host-object-p b "java.lang.Comparable")
+          (if (eq (car a) :C%CALENDAR)
+              (rontolisp::%clojure-class-cast-exception
+               "compare needs two values of one comparable kind")
+              (java:call (the (java:object "java.lang.Comparable")
+                              (rontolisp::%clojure-time-value-host a))
+                         "compareTo" b))
+          (rontolisp::%clojure-class-cast-exception
+           "compare needs two values of one comparable kind"))))
 
 (defun rontolisp::%clojure-inst-ms (x)
   "inst-ms: the milliseconds of a Date or a Timestamp (its getTime), or of a
@@ -12665,8 +12709,14 @@
               (setq x (car (cdr (cdr a))))
               (setq y (car (cdr (cdr b))))))
         (cond ((< x y) -1) ((> x y) 1) (t 0)))
-      (rontolisp::%clojure-class-cast-exception
-       "compare needs two values of one comparable kind")))
+      ;; a host Comparable: the compareTo of the host UUID A stands for, an arm
+      ;; of the host-object family
+      (if (rontolisp::%clojure-host-object-p b "java.lang.Comparable")
+          (java:call (the (java:object "java.lang.Comparable")
+                          (rontolisp::%clojure-time-value-host a)) "compareTo"
+                     b)
+          (rontolisp::%clojure-class-cast-exception
+           "compare needs two values of one comparable kind"))))
 
 (defun rontolisp::%clojure-uuid-version (x)
   ".version of the UUID X: the four bits after its third group's start."
@@ -12677,6 +12727,81 @@
    is clear, 2 for 10, else its top three bits."
   (let ((top (logand (ash (car (cdr (cdr x))) -61) 7)))
     (cond ((< top 4) 0) ((< top 6) 2) (t top))))
+
+;; The host members spelling these values (clojure/ClojureTimeValueLowering): a
+;; construction of java.util.Date, java.sql.Timestamp or java.util.UUID and the
+;; statics UUID/randomUUID and UUID/fromString make the values above on every
+;; backend. Where the host is (the interpreter, the JVM) such a value crosses
+;; into a java: member as the host object it stands for, and a host one the
+;; member answers is = to it and compares beside it. These carry comments, not
+;; docstrings: an instance call splices the host pair.
+
+;; (java.util.Date. x) of an X that is no literal: the Date of the milliseconds
+;; X, an integer in the long range. A string or nil is the deprecated
+;; Date(String) parse, which is not here; anything else matches no constructor,
+;; the oracle's refusal.
+(defun rontolisp::%clojure-new-date (x)
+  (cond ((and (integerp x) (<= -9223372036854775808 x)
+              (<= x 9223372036854775807))
+         (list :C%INST x))
+        ((or (null x) (stringp x))
+         (rontolisp::%clojure-illegal-argument-exception
+          "java.util.Date(String) is not supported"))
+        (t (rontolisp::%clojure-illegal-argument-exception
+            "No matching ctor found for class java.util.Date"))))
+
+;; (java.sql.Timestamp. x): the Timestamp of the milliseconds X as the oracle's
+;; longCast takes them, its nanoseconds those of its second.
+(defun rontolisp::%clojure-new-timestamp (x)
+  (let ((ms (rontolisp::%clojure-long-cast x)))
+    (list :C%TIMESTAMP ms (* (mod ms 1000) 1000000))))
+
+;; java.util.UUID/fromString: the UUID the string S spells, the oracle's
+;; exception for one that is no UUID; a value that is no string is its
+;; ClassCastException, nil its NullPointerException.
+(defun rontolisp::%clojure-uuid-from-string (s)
+  (if (stringp s)
+      (rontolisp::%clojure-uuid-of s t)
+      (rontolisp::%clojure-class-cast-exception-of
+       "UUID/fromString needs a string" s)))
+
+;; .setTime of the Date or Timestamp X to the milliseconds MS, in place like the
+;; oracle's mutable Date: a Timestamp's nanoseconds become those of MS's second.
+;; Answers nil, the oracle's void.
+(defun rontolisp::%clojure-inst-set-time (x ms)
+  (setf (car (cdr x)) ms)
+  (if (eq (car x) :C%TIMESTAMP)
+      (setf (car (cdr (cdr x))) (* (mod ms 1000) 1000000)))
+  nil)
+
+;; The host object the Date, Timestamp or UUID X made here stands for: a
+;; java.util.Date, a java.sql.Timestamp of its nanoseconds, a java.util.UUID of its
+;; halves. A java: member is handed it (%clojure-host-value), and it answers a
+;; method no row maps. Each clause is an arm of its kind's family, so a program
+;; making no UUID builds no host UUID and the reverse; a Calendar has none.
+(defun rontolisp::%clojure-time-value-host (x)
+  (cond ((rontolisp::%clojure-date-p x)
+         (java:new "java.util.Date(long)" (car (cdr x))))
+        ((rontolisp::%clojure-timestamp-p x)
+         (let ((ts (java:new "java.sql.Timestamp(long)" (car (cdr x)))))
+           (java:call ts "setNanos(int)" (car (cdr (cdr x))))
+           ts))
+        ((rontolisp::%clojure-uuid-p x)
+         (java:new "java.util.UUID(long,long)" (car (cdr x))
+                   (car (cdr (cdr x)))))))
+
+;; The Date or Timestamp made here the host object H a method of one answered
+;; (its clone) stands for, else H itself.
+(defun rontolisp::%clojure-time-value-from-host (h)
+  (cond ((rontolisp::%clojure-host-instance-p h "java.sql.Timestamp")
+         (list
+          :C%TIMESTAMP (java:call (the (java:object "java.sql.Timestamp") h)
+                                  "getTime")
+          (java:call (the (java:object "java.sql.Timestamp") h) "getNanos")))
+        ((rontolisp::%clojure-host-instance-p h "java.util.Date")
+         (list
+          :C%INST (java:call (the (java:object "java.util.Date") h) "getTime")))
+        (t h)))
 
 ;;;; clojure.edn: read-string and read over the reader above in EDN mode.
 ;;

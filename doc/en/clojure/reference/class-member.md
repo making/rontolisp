@@ -3,8 +3,8 @@
 `(Class/member args...)` `(Class/FIELD)` `(Class/.method target args...)` `(Class/new args...)`
 and a bare `Class/member` value
 
-Calls the static method. With no arguments -- `(System/currentTimeMillis)` or
-`(. System currentTimeMillis)` -- it is the zero-argument static method when the
+Calls the static method. With no arguments -- `(System/nanoTime)` or
+`(. System nanoTime)` -- it is the zero-argument static method when the
 host class has one, else the static field read (so `(Integer/MAX_VALUE)` and
 `(. Math PI)` read fields). A bare `Class/member` value reads the static field
 when the host class has one, else answers a member-as-value function dispatching
