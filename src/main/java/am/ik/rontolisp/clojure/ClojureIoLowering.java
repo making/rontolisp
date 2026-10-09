@@ -73,6 +73,12 @@ final class ClojureIoLowering {
 	/** A resource looked up when the program runs, below the directory roots. */
 	static final String RESOURCE = PREFIX + "RESOURCE";
 
+	/**
+	 * Every directory root's URL of a name when the program runs: a class loader's
+	 * {@code getResources}, which {@code ring.util.response}'s resource response reads.
+	 */
+	static final String RESOURCE_URLS = PREFIX + "RESOURCE-URLS";
+
 	/** {@code file-seq}. */
 	static final String FILE_SEQ = PREFIX + "FILE-SEQ";
 
@@ -119,11 +125,12 @@ final class ClojureIoLowering {
 				Map.entry("open-input", 1), Map.entry("open-output", 2), Map.entry("copy", 3),
 				Map.entry("relative-path", 1), Map.entry("delete", 1), Map.entry("refuse-delete", 1),
 				Map.entry("parent-file", 1), Map.entry("mkdirs", 1), Map.entry("resource", 1),
-				Map.entry("from-host", 1), Map.entry("install", 2));
+				Map.entry("resources", 1), Map.entry("from-host", 1), Map.entry("install", 2));
 		Map<String, String> workers = Map.of("url", URL_OF, "delete", PREFIX + "M-DELETE", "mkdirs",
 				PREFIX + "M-MKDIRS");
 		Map<String, ClojureKernelLowering.Inline> inline = Map.of("resource",
-				(ctx, args) -> runtimeResource(ctx, args.get(0)));
+				(ctx, args) -> runtimeResource(ctx, RESOURCE, args.get(0)), "resources",
+				(ctx, args) -> runtimeResource(ctx, RESOURCE_URLS, args.get(0)));
 		return new ClojureKernelLowering.Kernels("clojure.java.io", PREFIX, arity, workers, false, inline);
 	}
 
@@ -131,10 +138,10 @@ final class ClojureIoLowering {
 	 * What makes a clojure.java.io value: the kernels the namespace calls and the
 	 * lowering's own constructions -- the io family's producers.
 	 */
-	static final Set<String> PRODUCERS = Set.of(FILE, FILE_2, URL_OF, URI_OF, URL_FOUND, RESOURCE, FILE_SEQ,
-			PREFIX + "FILE-URL", PREFIX + "URL-FILE", PREFIX + "URI-FILE", PREFIX + "URI-URL", PREFIX + "OPEN-INPUT",
-			PREFIX + "OPEN-OUTPUT", OPEN_READER, PREFIX + "OPEN-WRITER", PREFIX + "PARENT-FILE", PREFIX + "FROM-HOST",
-			FILE_INPUT, FILE_OUTPUT, STREAM_WRITER);
+	static final Set<String> PRODUCERS = Set.of(FILE, FILE_2, URL_OF, URI_OF, URL_FOUND, RESOURCE, RESOURCE_URLS,
+			FILE_SEQ, PREFIX + "FILE-URL", PREFIX + "URL-FILE", PREFIX + "URI-FILE", PREFIX + "URI-URL",
+			PREFIX + "OPEN-INPUT", PREFIX + "OPEN-OUTPUT", OPEN_READER, PREFIX + "OPEN-WRITER", PREFIX + "PARENT-FILE",
+			PREFIX + "FROM-HOST", FILE_INPUT, FILE_OUTPUT, STREAM_WRITER);
 
 	/**
 	 * The ones of them that answer a Common Lisp character stream, which the printer and
@@ -496,15 +503,16 @@ final class ClojureIoLowering {
 	}
 
 	/**
-	 * {@code rontolisp.internal.io/resource}: the run-time lookup of a name below the
-	 * program's directory roots, absolute, baked in as the lowering knows them.
+	 * {@code rontolisp.internal.io/resource} and {@code resources}: the run-time lookup
+	 * of a name below the program's directory roots, absolute, baked in as the lowering
+	 * knows them.
 	 */
-	private static LispVal runtimeResource(ClojureLowering ctx, LispVal name) {
+	private static LispVal runtimeResource(ClojureLowering ctx, String worker, LispVal name) {
 		List<LispVal> roots = new ArrayList<>();
 		for (String root : ctx.sourcePath.directoryRoots()) {
 			roots.add(LispString.literal(root));
 		}
-		return ClojureLowerUtil.list(new LispSymbol(RESOURCE), name,
+		return ClojureLowerUtil.list(new LispSymbol(worker), name,
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("quote"), ClojureLowerUtil.list(roots)));
 	}
 

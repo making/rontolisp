@@ -1207,8 +1207,16 @@ serve`, and a war on embedded Tomcat; plain P1 compiles and signals the directiv
 - Response map (`%clojure-ring-response`): `:status` (nil -> 200, the servlet default),
   `:headers` to a dotted alist (a keyword name is its name; a seq value is one line per
   member; values through `str`), `:body` string (wrapped in a list), seq (members `str`'d),
-  a CL stream (read to the end, closed: Ring closes an `InputStream` body), nil; anything
-  else (a `java.io.File` host object) and a non-map response signal -> 500.
+  a CL stream (read to the end, closed: Ring closes an `InputStream` body), nil, and (io
+  arms, so a program making no io value folds them) a `java.io.File` / byte stream as ONE
+  `(unsigned-byte 8)` vector (`%clojure-io-ring-body`; the transports write octets as they
+  are), a host File through `%clojure-io-from-host` (host arm); anything else and a
+  non-map response signal -> 500. A File naming no readable file signals the oracle's
+  `FileNotFoundException` -> 500, where Jetty (ring-jetty-adapter 1.15.3, measured
+  2026-10-09) commits an empty 200; the serving wasm transports have no filesystem, so
+  there only a byte stream over an embedded resource is served. Jetty sends a File body
+  with `Content-Length` only (no `Last-Modified`: that is `file-response`'s header); the
+  transport here drops the map's `Content-Length` and computes its own, so never two.
 - Options: `:port` (default 80, `ring.adapter.jetty`'s), `:host`/`:address` (nil = every
   interface), `:join?` (default true; false answers the socket leg's handle), `:async?`
   truthy refused by name. Arity 2 exactly, the oracle's wording; as a value a 2-arg lambda.
@@ -1281,9 +1289,36 @@ oracle's classpath; a `deps.edn` ring-core newer than the shipped one refuses th
   `UnsupportedCharsetException`), where the oracle would accept the JDK's other charsets.
   Checked where the oracle checks it (`form-decode-str` only when the string holds `+` or
   `%`; `form-encode` of nil or a map of no strings never).
+- **File responses are a PART** (2026-10-09): `file-response`, `url-response`,
+  `resource-response`, `resource-data` live in `lib/ring/util/response_files.clj`
+  (`ClojureBuiltinNamespaces.PARTS`), loaded into `ring.util.response` by
+  `ClojureLowering.loadPartOf` where a top-level datum first names one (qualified,
+  `:refer [..]`, or a `:refer :all` refer, which lists the part's vars without loading it)
+  -- a `load` unit (`part:<ns>:<file>`) started in the namespace, its definitions hoisted,
+  its statements (the `defmethod`s) in a guarded init run there, like a startup
+  namespace's preload. Why: the ARM SCAN is by name over every spliced form, dead defuns
+  included (Clojure defuns are user program, never pruned), so the producers in these
+  defns would keep the io family's arms in every program requiring the namespace:
+  `ring-hello.clj` +44,749 B wasm P1 / +39,354 B class (measured 2026-10-09 by adding an
+  unused `(defn f [] (java.io.File. "x"))`). `ClojureRingFileResponseTest#theFileResponsesLoadOnlyWhereAProgramNamesOne`
+  pins the plain program lowering with no `%CLOJURE-IO-`.
+  The part is ring-core 1.15.5's code over clojure.java.io's values (io kernels via
+  `response.clj`'s `rontolisp.internal.io` alias; new `resources` inline kernel =
+  `getResources` over the directory roots), plus ring kernels `canonical-path` (spelling
+  only, a relative path kept relative from `.`, so no cwd is needed on wasm),
+  `directory-traversal?`, `format-date` (RFC 1123 via `%clojure-instant-fields`) and
+  `date` (worker `%clojure-make-inst`, an INSTANT producer). Measured against clj 1.12.6
+  + ring-core 1.15.5 the same day, identical on interpreter/JVM: `:root`/`/`-prefixed
+  paths, index files (`index.html`, `index.htm`, first `index.*`), `:index-files? false`,
+  `..` refused and `dir/../a.txt` served, no-root absolute path, `Last-Modified` = mtime
+  truncated to seconds, a `jar:` URL's `Last-Modified` = the JAR FILE's mtime (not the
+  entry's) and `Content-Length` the entry size, `resource-response` of a directory nil.
+  Deviations: no symlink resolved (oracle's canonical path refuses a link out of `:root`;
+  wasm's WASI does not follow one out of the preopen either); a computed resource name
+  inside a jar is nil (clojure.java.io's); a no-method miss in this front end's words. Both
+  wasm backends answer `file-write-date` (2026-10-09), so one expectation holds on all four.
 - Refusals: a var the oracle's namespace has and the built-in one leaves out
-  (`file-response`, `url-response`, `resource-response`, `resource-data`, `base64-*`,
-  `form-encode*`, `FormEncodeable`) is `ns/var is not built in: <why>` qualified and
+  (`base64-*`, `form-encode*`, `FormEncodeable`) is `ns/var is not built in: <why>` qualified and
   referred (`refuseLeftOut`, only when the namespace came from the built-in file); a
   ring-core namespace not shipped (cookies, session, flash, multipart, nested-params,
   not-modified -- HTTP dates over `java.util.Date` -- file, resource, head, content-length,
@@ -1295,7 +1330,12 @@ oracle's classpath; a `deps.edn` ring-core newer than the shipped one refuses th
   percent-decoding as in Ring); `form-encode` of a map is a function, not the protocol.
 - Native image and the web image: `resource-config.json` registers `clojure/lib/ring/...`
   (`NativeImageResourceConfigTest` lists both directories).
-- Pins: `ClojureRingUtilTest` (the four JDK differentials, the letter table, the refusals,
+- Pins: `ClojureRingFileResponseTest` (the file responses on all four backends against a
+  directory, a resources directory and a jar; the part's lazy load),
+  `ClojureRingAdapterTest` (File / byte stream / `file-response` bodies octet for octet on
+  the socket legs, a missing File 500 and an embedded-resource stream on the `--no-wasi`
+  leg), `ServeRingComponentE2eTest`, `WarE2eTest#aRingHandlerServesFromTheWarOnTomcat`,
+  `ClojureRingUtilTest` (the four JDK differentials, the letter table, the refusals,
   the shadowing project file, a real POST through `wrap-params` on the interpreter),
   clojure-spec `ring-util-*` and `ring-middleware-*` (all four backends, oracle-identical),
   `examples/clojure/ring-hello.clj` (verified by hand 2026-10-08 under curl on the
