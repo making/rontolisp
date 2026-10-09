@@ -3034,6 +3034,509 @@
          (rontolisp::%clojure-iset-get coll k dflt dflt))
         (t dflt)))
 
+;;;; Hashes: clojure.core/hash, the collection hash verbs and hashCode.
+;;
+;; hash is the oracle's Util.hasheq, and every value hashes to the int the
+;; oracle's does: Murmur3 over a number's long, a string's String.hashCode, a
+;; keyword's or a symbol's name and namespace, and over a collection's members --
+;; in order for a vector, a list or a seq, in any order for a map's entries or a
+;; set's members -- mixed with their count (Murmur3/mixCollHash). A double, a
+;; ratio, a character, a boolean, an instant and a UUID hash as their Java
+;; hashCode, which %clojure-java-hash spells for every value (Util.hash, what
+;; hash-combine and .hashCode read). A record hashes as the oracle's generated
+;; hasheq: its entries' unordered hash xor the hash of its class name's symbol. A
+;; type's own hasheq (its IHashEq row) answers for it, then its hashCode
+;; override (its Object row), each an arm of its family (clojure/ClojureArms); a
+;; value no kind answers for -- a function, an atom, a deftype or reify with
+;; neither -- hashes by its identity (%identity-hash), the oracle's
+;; Object.hashCode, and a host object as the host hashes it. The arithmetic is
+;; the oracle's 32-bit int arithmetic: each step is wrapped by
+;; %mask-signed-field, which the compilers fuse into one int operation, over
+;; products that stay inside 64 bits.
+
+(defun rontolisp::%clojure-murmur-k1 (k)
+  "Murmur3's mixK1 of the int K: times 0xcc9e2d51, rotated left 15, times
+   0x1b873593."
+  (let* ((x (%mask-signed-field 32 (* k -862048943)))
+         (r
+          (%mask-signed-field 32
+           (logior (ash x 15) (ash (logand x 4294967295) -17)))))
+    (%mask-signed-field 32 (* r 461845907))))
+
+(defun rontolisp::%clojure-murmur-h1 (h k)
+  "Murmur3's mixH1 of the int H with the mixed int K: xored, rotated left 13,
+   times 5 plus 0xe6546b64."
+  (let* ((x (logxor h k))
+         (r
+          (%mask-signed-field 32
+           (logior (ash x 13) (ash (logand x 4294967295) -19)))))
+    (%mask-signed-field 32 (+ (* r 5) -430675100))))
+
+(defun rontolisp::%clojure-murmur-fmix (h n)
+  "Murmur3's fmix of the int H over the int length N."
+  (let ((x (logxor h n)))
+    (setq x (logxor x (ash (logand x 4294967295) -16)))
+    (setq x (%mask-signed-field 32 (* x -2048144789)))
+    (setq x (logxor x (ash (logand x 4294967295) -13)))
+    (setq x (%mask-signed-field 32 (* x -1028477387)))
+    (logxor x (ash (logand x 4294967295) -16))))
+
+(defun rontolisp::%clojure-murmur-int (input)
+  "Murmur3/hashInt of the int INPUT."
+  (if (= input 0)
+      0
+      (rontolisp::%clojure-murmur-fmix
+       (rontolisp::%clojure-murmur-h1 0 (rontolisp::%clojure-murmur-k1 input))
+       4)))
+
+(defun rontolisp::%clojure-murmur-long (input)
+  "Murmur3/hashLong of the long INPUT: its low int, then its high one."
+  (if (= input 0)
+      0
+      (let ((low (rontolisp::%clojure-murmur-k1 (%mask-signed-field 32 input)))
+            (high
+             (rontolisp::%clojure-murmur-k1
+              (%mask-signed-field 32 (ash input -32)))))
+        (rontolisp::%clojure-murmur-fmix (rontolisp::%clojure-murmur-h1
+                                          (rontolisp::%clojure-murmur-h1 0 low)
+                                          high) 8))))
+
+(defun rontolisp::%clojure-murmur-coll (h n)
+  "Murmur3/mixCollHash of the int basis H over the int count N."
+  (rontolisp::%clojure-murmur-fmix
+   (rontolisp::%clojure-murmur-h1 0 (rontolisp::%clojure-murmur-k1 h)) n))
+
+(defun rontolisp::%clojure-murmur-chars (s)
+  "Murmur3/hashUnencodedChars of the string S over its UTF-16 code units (a
+   code point past the BMP is its two surrogates): two units to an int, an odd
+   last one mixed alone, twice the count of units the finalizer's length."
+  (let ((h 0) (pending -1) (n 0))
+    (dotimes (i (length s))
+      (let* ((c (char-code (char s i))) (wide (>= c 65536)))
+        (dotimes (j (if wide 2 1))
+          (let ((u
+                 (cond ((not wide) c)
+                       ((= j 0) (+ 55296 (ash (- c 65536) -10)))
+                       (t (+ 56320 (logand (- c 65536) 1023))))))
+            (setq n (+ n 1))
+            (if (< pending 0)
+                (setq pending u)
+                (progn
+                  (setq h
+                        (rontolisp::%clojure-murmur-h1 h
+                         (rontolisp::%clojure-murmur-k1
+                          (%mask-signed-field 32 (logior pending (ash u 16))))))
+                  (setq pending -1)))))))
+    (if (>= pending 0)
+        (setq h (logxor h (rontolisp::%clojure-murmur-k1 pending))))
+    (rontolisp::%clojure-murmur-fmix h (%mask-signed-field 32 (* 2 n)))))
+
+(defun rontolisp::%clojure-string-hash-code (s)
+  "String.hashCode of the string S: h = 31h + u from 0 over its UTF-16 code
+   units (a code point past the BMP its two surrogates), a signed int."
+  (let ((h 0))
+    (dotimes (i (length s) h)
+      (let ((c (char-code (char s i))))
+        (if (< c 65536)
+            (setq h (%mask-signed-field 32 (+ (* h 31) c)))
+            (let ((v (- c 65536)))
+              (setq h
+                    (%mask-signed-field 32 (+ (* h 31) (+ 55296 (ash v -10)))))
+              (setq h
+                    (%mask-signed-field 32
+                     (+ (* h 31) (+ 56320 (logand v 1023)))))))))))
+
+(defun rontolisp::%clojure-hash-combine-ints (seed h)
+  "Util.hashCombine of the ints SEED and H, boost's: SEED xor the sum of H,
+   0x9e3779b9, SEED shifted left 6 and SEED shifted right 2."
+  (%mask-signed-field 32
+   (logxor seed (+ h -1640531527 (ash seed 6) (ash seed -2)))))
+
+(defun rontolisp::%clojure-ident-hash (full eq)
+  "The hash of the symbol spelled FULL (ns/name, or name; split at the first
+   slash like the oracle's Symbol.intern, the lone slash a name): its name's
+   Murmur3/hashUnencodedChars when EQ (Symbol.hasheq), else its name's
+   String.hashCode (Symbol.hashCode), combined with its namespace's
+   String.hashCode, 0 for none."
+  (let* ((slash (if (string= full "/") nil (position #\/ full)))
+         (name (if slash (subseq full (+ slash 1)) full)))
+    (rontolisp::%clojure-hash-combine-ints
+     (if eq
+         (rontolisp::%clojure-murmur-chars name)
+         (rontolisp::%clojure-string-hash-code name))
+     (if slash
+         (rontolisp::%clojure-string-hash-code (subseq full 0 slash))
+         0))))
+
+(defun rontolisp::%clojure-long-hash-code (n)
+  "Long.hashCode of the long N, Date.hashCode of N milliseconds: its low int
+   xor its high one."
+  (%mask-signed-field 32 (logxor n (ash n -32))))
+
+(defun rontolisp::%clojure-big-hash-code (n)
+  "BigInteger.hashCode of the integer N: h = 31h + w over the 32-bit words of
+   its magnitude from the most significant, times its sign."
+  (let ((m (abs n)) (h 0))
+    (do ((shift (* 32 (ash (- (integer-length m) 1) -5)) (- shift 32)))
+        ((< shift 0))
+      (setq h
+            (%mask-signed-field 32
+             (+ (* h 31) (logand (ash m (- shift)) 4294967295)))))
+    (%mask-signed-field 32 (if (< n 0) (- h) h))))
+
+(defun rontolisp::%clojure-integer-hash (n eq)
+  "The hash of the integer N: inside the long range Murmur3/hashLong when EQ,
+   else Long.hashCode; past it, either way, BigInteger.hashCode (the oracle's
+   BigInt of a value no long holds)."
+  (if (and (>= n -9223372036854775808) (<= n 9223372036854775807))
+      (if eq
+          (rontolisp::%clojure-murmur-long n)
+          (rontolisp::%clojure-long-hash-code n))
+      (rontolisp::%clojure-big-hash-code n)))
+
+(defun rontolisp::%clojure-double-hash-code (x)
+  "Double.hashCode of the double X: its bits' halves xored, every NaN the
+   canonical NaN's."
+  (if (/= x x)
+      2146959360
+      (rontolisp::%clojure-long-hash-code (%ieee754-double-bits x))))
+
+(defun rontolisp::%clojure-member-hash (x eq)
+  "The hash of X inside a collection: hasheq when EQ, else hashCode."
+  (if eq (rontolisp::%clojure-hasheq x) (rontolisp::%clojure-java-hash x)))
+
+(defun rontolisp::%clojure-vector-hash-of (v eq)
+  "The hash of the vector V: Murmur3/hashOrdered of its members when EQ, h =
+   31h + each member's hash from 1, mixed with their count; else
+   List.hashCode, the same fold over their hashCode, unmixed."
+  (let ((h 1))
+    (dotimes (i (length v))
+      (setq h
+            (%mask-signed-field 32
+             (+ (* h 31) (rontolisp::%clojure-member-hash (aref v i) eq)))))
+    (if eq (rontolisp::%clojure-murmur-coll h (length v)) h)))
+
+(defun rontolisp::%clojure-seq-hash-of (x eq)
+  "The ordered hash of the members of X's seq view (a list, a lazy seq, any
+   Iterable), as %clojure-vector-hash-of folds them."
+  (let ((h 1) (n 0) (s (rontolisp::%clojure-seq x)))
+    (do ()
+        ((null s))
+      (setq h
+            (%mask-signed-field 32
+             (+ (* h 31) (rontolisp::%clojure-member-hash (car s) eq))))
+      (setq n (+ n 1))
+      (setq s (rontolisp::%clojure-seq (cdr s))))
+    (if eq (rontolisp::%clojure-murmur-coll h n) h)))
+
+(defun rontolisp::%clojure-entry-hash (k v eq)
+  "The hash of the map entry [K V]: the vector's when EQ, else
+   Map.Entry.hashCode, its key's hashCode xor its value's."
+  (if eq
+      (let ((hk (rontolisp::%clojure-hasheq k))
+            (hv (rontolisp::%clojure-hasheq v)))
+        (rontolisp::%clojure-murmur-coll
+         (%mask-signed-field 32 (+ (* 31 (+ 31 hk)) hv)) 2))
+      (logxor (rontolisp::%clojure-java-hash k)
+              (rontolisp::%clojure-java-hash v))))
+
+(defun rontolisp::%clojure-table-hash-of (table eq)
+  "The hash of the map TABLE: Murmur3/hashUnordered of its entries when EQ,
+   their hashes summed and mixed with their count; else Map.hashCode, the sum
+   of their hashCode, unmixed."
+  (let ((h 0))
+    (maphash (lambda (k v)
+               (setq h
+                     (%mask-signed-field 32
+                      (+ h (rontolisp::%clojure-entry-hash k v eq))))) table)
+    (if eq (rontolisp::%clojure-murmur-coll h (hash-table-count table)) h)))
+
+(defun rontolisp::%clojure-members-hash-of (table eq)
+  "The hash of the set whose members are TABLE's keys: Murmur3/hashUnordered
+   of them when EQ, else Set.hashCode, the sum of their hashCode."
+  (let ((h 0))
+    (maphash (lambda (k v)
+               (declare (ignore v))
+               (setq h
+                     (%mask-signed-field 32
+                      (+ h (rontolisp::%clojure-member-hash k eq))))) table)
+    (if eq (rontolisp::%clojure-murmur-coll h (hash-table-count table)) h)))
+
+(defun rontolisp::%clojure-sorted-hash-of (s eq)
+  "The hash of the sorted map or set S: a hash map's or set's of the same
+   entries or members, its items read in place."
+  (let ((items (car (cdr (cdr (cdr s))))) (setp (car (cdr s))) (h 0))
+    (dotimes (i (length items))
+      (let* ((item (aref items i))
+             (one
+              (if setp
+                  (rontolisp::%clojure-member-hash item eq)
+                  (rontolisp::%clojure-entry-hash (aref item 0) (aref item 1)
+                                                  eq))))
+        (setq h (%mask-signed-field 32 (+ h one)))))
+    (if eq (rontolisp::%clojure-murmur-coll h (length items)) h)))
+
+(defun rontolisp::%clojure-record-hash-of (r eq)
+  "The hash of the record R, the oracle's generated hasheq when EQ -- its
+   entries' Murmur3/hashUnordered xor the hasheq of its class name's symbol --
+   else its hashCode, its entries' Map.hashCode."
+  (let ((h (rontolisp::%clojure-table-hash-of (car (cdr (cdr (cdr r)))) eq)))
+    (if eq
+        (logxor h
+         (rontolisp::%clojure-ident-hash (car (cdr (cdr (cdr (cdr r))))) t))
+        h)))
+
+(defun rontolisp::%clojure-reader-value-hash-code (x)
+  "The hashCode of the reader conditional or tagged literal X, its hasheq
+   too: 31 times its form's hashCode plus its splicing flag's, or 31 times its
+   tag's plus its form's."
+  (let ((form (rontolisp::%clojure-java-hash (car (cdr x))))
+        (other (rontolisp::%clojure-java-hash (car (cdr (cdr x))))))
+    (if (eq (car x) :C%READER-COND)
+        (%mask-signed-field 32 (+ (* 31 form) other))
+        (%mask-signed-field 32 (+ (* 31 other) form)))))
+
+(defun rontolisp::%clojure-int-value (x)
+  "X as the int the oracle's hasheq or hashCode method returns it,
+   ((Number) x).intValue(): an integer's low 32 bits, a double or a ratio
+   truncated toward zero inside the int range (NaN 0); nil is the oracle's
+   NullPointerException, anything else its ClassCastException."
+  (cond ((integerp x) (%mask-signed-field 32 x))
+   ((realp x)
+    (let ((d (rontolisp::%clojure-double x)))
+      (cond ((/= d d) 0)
+            ((>= d 2147483647.0) 2147483647)
+            ((<= d -2147483648.0) -2147483648)
+            (t (truncate d)))))
+   ((null x)
+    (rontolisp::%clojure-null-pointer-exception
+     "Cannot invoke \"java.lang.Number.intValue()\" because \"null\" is null"))
+   (t (rontolisp::%clojure-class-cast-exception
+       (concatenate 'string "class " (rontolisp::%clojure-class-name-of x)
+                    " cannot be cast to class java.lang.Number")))))
+
+(defun rontolisp::%clojure-typed-hash (x method)
+  "What the method METHOD (hasheq or hashCode) of the record, deftype or reify
+   X's type answers, as the int the oracle's method returns."
+  (rontolisp::%clojure-int-value
+   (funcall (rontolisp::%clojure-interface-entry x method) x)))
+
+;; The hashCode of a deftype or reify whose type implements IHashEq: its hashCode
+;; override, else its identity's. An arm of the object-methods family.
+(defun rontolisp::%clojure-typed-hash-code (x)
+  (if (rontolisp::%clojure-hash-code-p x)
+      (rontolisp::%clojure-typed-hash x "hashCode")
+      (%identity-hash x)))
+
+(defun rontolisp::%clojure-other-hash (x eq)
+  "The hash of X, a value of no Clojure kind: a Lisp value's identity hash,
+   the oracle's Object.hashCode, and a host object's own -- its hasheq when EQ
+   (a BigDecimal's of its value without trailing zeros, zero's 0), else its
+   hashCode. A host arm: a program naming no java: operator gets a body
+   answering the identity hash, since no host object exists there. A number
+   reaching here is a host one (the JVM's numberp takes a BigDecimal); an
+   instance (a condition) is asked apart from %clojure-lisp-value-p, whose test
+   of one a wasm program folds: no host exception exists there, yet a condition
+   does."
+  (if (and (not (numberp x))
+           (or (rontolisp::%clojure-lisp-value-p x) (%obj-p x)))
+      (%identity-hash x)
+      (if (and eq
+               (equal (java:call (java:call x "getClass") "getName")
+                      "java.math.BigDecimal"))
+          (if (eql (java:call x "signum") 0)
+              0
+              (java:call (java:call x "stripTrailingZeros") "hashCode"))
+          (java:call x "hashCode"))))
+
+(defun rontolisp::%clojure-cons-hash (x eq)
+  "The hash of the cons X: hasheq when EQ, else hashCode. A keyword's, a
+   type's own hasheq (when EQ) and then its hashCode, a record's, a set's, a
+   list's or lazy seq's, a sorted collection's, an instant's (Date.hashCode of
+   its milliseconds; a Calendar's too, where the oracle mixes in its zone, its
+   locale's week and its cutover), a UUID's, a reader value's, a
+   clojure.java.io value's; any other wrapper's identity hash."
+  (cond
+   ((rontolisp::%clojure-keyword-p x)
+    (%mask-signed-field 32
+     (+ (rontolisp::%clojure-ident-hash (car (cdr x)) eq) -1640531527)))
+   ;; a type's own: arms of the hasheq-interface and object-methods families
+   ((rontolisp::%clojure-hasheq-p x)
+    (if eq
+        (rontolisp::%clojure-typed-hash x "hasheq")
+        (rontolisp::%clojure-typed-hash-code x)))
+   ((rontolisp::%clojure-hash-code-p x)
+    (rontolisp::%clojure-typed-hash x "hashCode"))
+   ((rontolisp::%clojure-record-p x) (rontolisp::%clojure-record-hash-of x eq))
+   ((rontolisp::%clojure-set-p x)
+    (rontolisp::%clojure-members-hash-of (car (cdr x)) eq))
+   ((rontolisp::%clojure-sequential-p x) (rontolisp::%clojure-seq-hash-of x eq))
+   ((rontolisp::%clojure-sorted-p x) (rontolisp::%clojure-sorted-hash-of x eq))
+   ((rontolisp::%clojure-instant-p x)
+    (rontolisp::%clojure-long-hash-code (car (cdr x))))
+   ((rontolisp::%clojure-uuid-p x)
+    (rontolisp::%clojure-long-hash-code
+     (logxor (car (cdr x)) (car (cdr (cdr x))))))
+   ((rontolisp::%clojure-reader-value-p x)
+    (rontolisp::%clojure-reader-value-hash-code x))
+   ((rontolisp::%clojure-io-p x) (rontolisp::%clojure-io-m-hash-code x))
+   (t (%identity-hash x))))
+
+(defun rontolisp::%clojure-atom-hash (x eq)
+  "The hash of X, which is no integer, string, cons, vector, table or double:
+   a character's code, the booleans' 1231 and 1237, a symbol's
+   (%clojure-ident-hash), a ratio's (Ratio.hashCode, its numerator's and
+   denominator's BigInteger.hashCode xored), anything else's
+   %clojure-other-hash."
+  (cond ((characterp x) (char-code x))
+        ((eq x t) 1231)
+        ((eq x rontolisp::%clojure-false) 1237)
+        ((rontolisp::%clojure-real-symbol-p x)
+         (rontolisp::%clojure-ident-hash
+          (rontolisp::%clojure-symbol-full-name x) eq))
+        ((rationalp x)
+         (logxor (rontolisp::%clojure-big-hash-code (numerator x))
+                 (rontolisp::%clojure-big-hash-code (denominator x))))
+        (t (rontolisp::%clojure-other-hash x eq))))
+
+(defun rontolisp::%clojure-hasheq (x)
+  "clojure.core/hash: the oracle's Util.hasheq of X, the hash consistent with =
+   (\"Hashes\"). A string's is Murmur3/hashInt of its String.hashCode, a
+   double's its Double.hashCode but both zeros' 0."
+  (cond ((null x) 0)
+        ((consp x) (rontolisp::%clojure-cons-hash x t))
+        ((integerp x) (rontolisp::%clojure-integer-hash x t))
+        ((stringp x)
+         (rontolisp::%clojure-murmur-int
+          (rontolisp::%clojure-string-hash-code x)))
+        ((vectorp x) (rontolisp::%clojure-vector-hash-of x t))
+        ((hash-table-p x) (rontolisp::%clojure-table-hash-of x t))
+        ((floatp x) (if (= x 0.0) 0 (rontolisp::%clojure-double-hash-code x)))
+        (t (rontolisp::%clojure-atom-hash x t))))
+
+(defun rontolisp::%clojure-java-hash (x)
+  "The oracle's Util.hash of X, its hashCode (0 for nil): what hash-combine and
+   .hashCode read (\"Hashes\")."
+  (cond ((null x) 0)
+        ((consp x) (rontolisp::%clojure-cons-hash x nil))
+        ((integerp x) (rontolisp::%clojure-integer-hash x nil))
+        ((stringp x) (rontolisp::%clojure-string-hash-code x))
+        ((vectorp x) (rontolisp::%clojure-vector-hash-of x nil))
+        ((hash-table-p x) (rontolisp::%clojure-table-hash-of x nil))
+        ((floatp x) (rontolisp::%clojure-double-hash-code x))
+        (t (rontolisp::%clojure-atom-hash x nil))))
+
+(defun rontolisp::%clojure-hasheq-v (&rest args)
+  "hash as a value."
+  (rontolisp::%clojure-check-arity args 1 1 "hash")
+  (rontolisp::%clojure-hasheq (car args)))
+
+(defun rontolisp::%clojure-hash-iterable (coll)
+  "COLL when the oracle's Murmur3 takes it as a java.lang.Iterable -- a vector,
+   a list or a lazy seq, a map, a set, a record, a sorted collection, a type
+   implementing Iterable, a host Iterable --, else the oracle's refusal of the
+   cast: nil its NullPointerException, anything else its ClassCastException."
+  (cond
+   ((null coll)
+    (rontolisp::%clojure-null-pointer-exception
+     "Cannot invoke \"java.lang.Iterable.iterator()\" because \"xs\" is null"))
+   ((or (rontolisp::%clojure-sequential-p coll) (hash-table-p coll)
+        (rontolisp::%clojure-set-p coll) (rontolisp::%clojure-record-p coll)
+        (rontolisp::%clojure-sorted-p coll)
+        (rontolisp::%clojure-iterable-p coll)
+        (rontolisp::%clojure-host-object-p coll "java.lang.Iterable"))
+    coll)
+   (t (rontolisp::%clojure-class-cast-exception
+       (concatenate 'string "class " (rontolisp::%clojure-class-name-of coll)
+                    " cannot be cast to class java.lang.Iterable")))))
+
+(defun rontolisp::%clojure-hash-ordered-coll (coll)
+  "hash-ordered-coll: Murmur3/hashOrdered of the Iterable COLL, its members'
+   hash in order (a map's members are its entries), mixed with their count."
+  (rontolisp::%clojure-hash-iterable coll)
+  (if (and (vectorp coll) (not (stringp coll)))
+      (rontolisp::%clojure-vector-hash-of coll t)
+      (rontolisp::%clojure-seq-hash-of coll t)))
+
+(defun rontolisp::%clojure-hash-ordered-coll-v (&rest args)
+  "hash-ordered-coll as a value."
+  (rontolisp::%clojure-check-arity args 1 1 "hash-ordered-coll")
+  (rontolisp::%clojure-hash-ordered-coll (car args)))
+
+(defun rontolisp::%clojure-hash-unordered-coll (coll)
+  "hash-unordered-coll: Murmur3/hashUnordered of the Iterable COLL, its
+   members' hash summed (a map's members are its entries), mixed with their
+   count."
+  (rontolisp::%clojure-hash-iterable coll)
+  (cond ((hash-table-p coll) (rontolisp::%clojure-table-hash-of coll t))
+        ((rontolisp::%clojure-set-p coll)
+         (rontolisp::%clojure-members-hash-of (car (cdr coll)) t))
+        (t (let ((h 0) (n 0) (s (rontolisp::%clojure-seq coll)))
+             (do ()
+                 ((null s))
+               (setq h
+                     (%mask-signed-field 32
+                      (+ h (rontolisp::%clojure-hasheq (car s)))))
+               (setq n (+ n 1))
+               (setq s (rontolisp::%clojure-seq (cdr s))))
+             (rontolisp::%clojure-murmur-coll h n)))))
+
+(defun rontolisp::%clojure-hash-unordered-coll-v (&rest args)
+  "hash-unordered-coll as a value."
+  (rontolisp::%clojure-check-arity args 1 1 "hash-unordered-coll")
+  (rontolisp::%clojure-hash-unordered-coll (car args)))
+
+(defun rontolisp::%clojure-hash-number (x null-message)
+  "X when it is a number, as the oracle casts an argument to java.lang.Number
+   at a call taking a primitive: nil is its NullPointerException with
+   NULL-MESSAGE, anything else (a character too) its ClassCastException."
+  (cond ((numberp x) x)
+        ((null x) (rontolisp::%clojure-null-pointer-exception null-message))
+        (t (rontolisp::%clojure-class-cast-exception
+            (concatenate 'string "class " (rontolisp::%clojure-class-name-of x)
+                         " cannot be cast to class java.lang.Number")))))
+
+(defun rontolisp::%clojure-int-exact (n)
+  "The long N as Math.toIntExact takes it: refused past the int range as the
+   oracle's integer overflow."
+  (if (or (< n -2147483648) (> n 2147483647))
+      (rontolisp::%clojure-arithmetic-exception "integer overflow")
+      n))
+
+(defun rontolisp::%clojure-mix-collection-hash (basis count)
+  "mix-collection-hash: Murmur3/mixCollHash of BASIS and COUNT, each cast like
+   the oracle's ^long parameter -- a number through its longCast -- and then
+   to the int mixCollHash takes."
+  (let* ((message
+          "Cannot invoke \"java.lang.Number.doubleValue()\" because \"x\" is null")
+         (h
+          (rontolisp::%clojure-long-cast
+           (rontolisp::%clojure-hash-number basis message)))
+         (n
+          (rontolisp::%clojure-long-cast
+           (rontolisp::%clojure-hash-number count message))))
+    (rontolisp::%clojure-murmur-coll (rontolisp::%clojure-int-exact h)
+                                     (rontolisp::%clojure-int-exact n))))
+
+(defun rontolisp::%clojure-mix-collection-hash-v (&rest args)
+  "mix-collection-hash as a value."
+  (rontolisp::%clojure-check-arity args 2 2 "mix-collection-hash")
+  (rontolisp::%clojure-mix-collection-hash (car args) (car (cdr args))))
+
+(defun rontolisp::%clojure-hash-combine (x y)
+  "hash-combine: Util.hashCombine of X, cast like the oracle's int parameter (a
+   number through its intCast), with Y's hashCode (Util.hash)."
+  (rontolisp::%clojure-hash-combine-ints
+   (rontolisp::%clojure-int-cast
+    (rontolisp::%clojure-hash-number x
+     "Cannot invoke \"java.lang.Character.charValue()\" because \"x\" is null"))
+   (rontolisp::%clojure-java-hash y)))
+
+(defun rontolisp::%clojure-hash-combine-v (&rest args)
+  "hash-combine as a value."
+  (rontolisp::%clojure-check-arity args 2 2 "hash-combine")
+  (rontolisp::%clojure-hash-combine (car args) (car (cdr args))))
+
 ;;;; Lazy seqs: memoized-thunk wrappers over the strict seq view.
 ;;
 ;; A lazy seq is (LIST :C%LAZY cell) where CELL is (CONS thunk-or-nil
@@ -8963,8 +9466,12 @@
   "Stores a java.util.Map row."
   (rontolisp::%clojure-interface-store tag names methods))
 
+(defun rontolisp::%clojure-hasheq-row (tag names methods)
+  "Stores an IHashEq row, whose hasheq hash reads."
+  (rontolisp::%clojure-interface-store tag names methods))
+
 (defun rontolisp::%clojure-marker-row (tag names methods)
-  "Stores a row of an interface no core verb reads (IHashEq, Serializable,
+  "Stores a row of an interface no core verb reads (Serializable,
    IEditableCollection, the transients)."
   (rontolisp::%clojure-interface-store tag names methods))
 
@@ -11567,8 +12074,9 @@
 
 (defun rontolisp::%clojure-reader-value-string (x)
   "str of the reader conditional or tagged literal X: the oracle's Object
-   toString, Class@hash, over this hash."
-  (let ((h (rontolisp::%clojure-reader-value-hash x)) (digits nil))
+   toString, Class@hash, its hashCode in unsigned hex."
+  (let ((h (logand (rontolisp::%clojure-reader-value-hash-code x) 4294967295))
+        (digits nil))
     (do ()
         ((and digits (= h 0)))
       (setq digits (cons (char "0123456789abcdef" (logand h 15)) digits))
@@ -17478,13 +17986,6 @@
       x
       (rontolisp::%clojure-io-no-method x method arity)))
 
-(defun rontolisp::%clojure-io-java-hash (s)
-  "String.hashCode of S, a signed 32-bit int."
-  (let ((h 0))
-    (dotimes (i (length s))
-      (setq h (logand (+ (* h 31) (char-code (char s i))) 4294967295)))
-    (if (>= h 2147483648) (- h 4294967296) h)))
-
 ;; File
 
 (defun rontolisp::%clojure-io-m-get-name (x)
@@ -17634,13 +18135,14 @@
 
 (defun rontolisp::%clojure-io-m-hash-code (x)
   "hashCode: a File's String.hashCode of its path xor 1234321, a URL's or
-   URI's of its spelling, a stream's a constant."
+   URI's of its spelling, a stream's its identity's, like the oracle's."
   (let ((kind (rontolisp::%clojure-io-kind x)))
     (cond ((eq kind :C%FILE)
-           (logxor (rontolisp::%clojure-io-java-hash (car (cdr x))) 1234321))
+           (logxor (rontolisp::%clojure-string-hash-code (car (cdr x)))
+                   1234321))
           ((or (eq kind :C%URL) (eq kind :C%URI))
-           (rontolisp::%clojure-io-java-hash (car (cdr x))))
-          (t 0))))
+           (rontolisp::%clojure-string-hash-code (car (cdr x))))
+          (t (%identity-hash x)))))
 
 ;; URL
 

@@ -186,6 +186,11 @@ categories:
       - { slug: aget, name: "aget" }
       - { slug: aset, name: "aset" }
       - { slug: alength, name: "alength" }
+      - { slug: hash, name: "hash" }
+      - { slug: hash-ordered-coll, name: "hash-ordered-coll" }
+      - { slug: hash-unordered-coll, name: "hash-unordered-coll" }
+      - { slug: mix-collection-hash, name: "mix-collection-hash" }
+      - { slug: hash-combine, name: "hash-combine" }
   - title: "Numbers and predicates"
     index_page: clojure/reference/numbers.md
     functions:

@@ -3616,8 +3616,9 @@ public final class WasmLispCompiler implements LispCompiler {
 		this.usesEqualpHashTables = LispMacroExpander.programMakesEqualpHashTable(program);
 		// The identity tables, decided on the same snapshot for the same reason: a
 		// table whose aggregates key by identity carries its test in the header
-		// count, so every count read in the module has to agree about the tag.
-		this.usesIdentityHashTables = LispMacroExpander.programMakesIdentityHashTable(program);
+		// count, so every count read in the module has to agree about the tag. A
+		// %identity-hash call reads the same slot, so it turns the gate on too.
+		this.usesIdentityHashTables = LispMacroExpander.programHashesByIdentity(program);
 		// The stream-value gate is decided on the SAME program snapshot, because
 		// mayCreateInstances above already answers for it: read them apart and a later
 		// desugaring could turn one on without the other, which is a %obj-new with no

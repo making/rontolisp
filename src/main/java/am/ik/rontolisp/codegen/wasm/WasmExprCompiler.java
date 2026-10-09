@@ -1711,6 +1711,16 @@ final class WasmExprCompiler {
 				ctx.writer.write(Instruction.F64_PROMOTE_F32);
 				WasmEmitHelper.boxF64(ctx);
 			}
+			// The identity-hash slot an eq table places an aggregate by: a module
+			// calling this carries the slot (LispMacroExpander.programHashesByIdentity).
+			case LispNames.IDENTITY_HASH -> {
+				WasmExprCompiler.compileExpr(cons.toList().get(1), ctx);
+				ctx.writer.write(Instruction.CALL);
+				ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_IHASH);
+				ctx.writer.write(Instruction.I64_EXTEND_S_I32);
+				ctx.writer.write(Instruction.CALL);
+				ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_INT_NEW);
+			}
 			case LispNames.IEEE754_DOUBLE_BITS_SIGNED -> {
 				WasmExprCompiler.compileExpr(cons.toList().get(1), ctx);
 				WasmEmitHelper.castFloatGetF64(ctx);

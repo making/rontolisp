@@ -78,9 +78,9 @@ class ClojureInteropTest {
 				"k sym x.txt java.lang.String\n");
 		assertBothEqual("(println (.count [1 2 3]) (.get {:a 1} :a) (.contains #{1} 1) (.getName :abc)"
 				+ " (.getNamespace :a/b) (.numerator 1/3))", "3 1 true abc a 1\n");
-		// a method left unmapped is refused by name (the oracle answers 994)
-		assertBothEqual("(println (try (.hashCode [1 2]) (catch Exception e (.getMessage e))))",
-				"Method hashCode taking 0 args is not supported for class clojure.lang.PersistentVector\n");
+		// a method left unmapped is refused by name
+		assertBothEqual("(println (try (.hashCode2 [1 2]) (catch Exception e (.getMessage e))))",
+				"Method hashCode2 taking 0 args is not supported for class clojure.lang.PersistentVector\n");
 		assertBothEqual("(println (try (.size {:a 1} 2) (catch Exception e (.getMessage e))))",
 				"No matching method size found taking 1 args for class clojure.lang.PersistentArrayMap\n");
 	}
@@ -1037,6 +1037,22 @@ class ClojureInteropTest {
 		assertBothEqual("(prn (str (java.util.HashSet. [:a/x :b/y 'c/z 'd :e])))", "\"[d, :a/x, :b/y, c/z, :e]\"\n");
 		assertBothEqual("(prn (vec (java.util.TreeSet. [:z :a/b :m :a/a])) (vec (java.util.TreeSet. ['b/x 'y 'a/z])))",
 				"[:m :z :a/a :a/b] [y a/z b/x]\n");
+	}
+
+	// Oracle (clj 1.12.6, measured 2026-10-09): hash of a host object is Util.hasheq --
+	// a BigDecimal's of its value stripped of trailing zeros (zero's 0, though the
+	// JVM's numberp takes one), anything else's own hashCode --, and hash-combine and
+	// .hashCode read its hashCode; a Clojure collection's .hashCode is its Java one.
+	@Test
+	void aHostObjectHashesAsTheHostDoes() throws Exception {
+		assertBothEqual("(println (hash (java.util.ArrayList. [1 2])) (hash (java.math.BigDecimal. \"1.50\"))"
+				+ " (hash (java.math.BigDecimal. \"0.00\")) (.hashCode (java.math.BigDecimal. \"1.50\"))"
+				+ " (hash-combine 0 (java.math.BigDecimal. \"1.50\")) (hash-combine 0 (java.util.ArrayList. [1 2]))"
+				+ " (hash (java.util.HashMap. {\"a\" 1})) (hash [(java.util.ArrayList. [3])])"
+				+ " (.hashCode (java.util.ArrayList. [1 2])) (.hashCode [1 2]))",
+				"994 466 0 4652 -1640526875 -1640530533 96 1271738775 994 994\n");
+		assertBothEqual("(let [o (java.lang.Object.)] (println (= (hash o) (hash o) (.hashCode o) (.hashCode o))))",
+				"true\n");
 	}
 
 	@Test

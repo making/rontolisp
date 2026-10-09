@@ -138,10 +138,13 @@ final class ClojureInterfaces {
 	/** The store of a {@code java.util.Map} row. */
 	static final String JAVA_MAP_ROW = "RONTOLISP::%CLOJURE-JAVA-MAP-ROW";
 
+	/** The store of an {@code IHashEq} row, whose {@code hasheq} {@code hash} reads. */
+	static final String HASHEQ_ROW = "RONTOLISP::%CLOJURE-HASHEQ-ROW";
+
 	/**
-	 * The store of a row of an interface no core verb here reads: {@code IHashEq} (no
-	 * {@code hash}), {@code Serializable}, {@code IEditableCollection} and the transients
-	 * (refused by name), whose methods only an instance call reaches.
+	 * The store of a row of an interface no core verb here reads: {@code Serializable},
+	 * {@code IEditableCollection} and the transients (refused by name), whose methods
+	 * only an instance call reaches.
 	 */
 	static final String MARKER_ROW = "RONTOLISP::%CLOJURE-MARKER-ROW";
 
@@ -202,7 +205,8 @@ final class ClojureInterfaces {
 			Map.entry(ClojureArms.Family.COMPARABLE, COMPARABLE_ROW),
 			Map.entry(ClojureArms.Family.ITERABLE, ITERABLE_ROW), Map.entry(ClojureArms.Family.ITERATOR, ITERATOR_ROW),
 			Map.entry(ClojureArms.Family.JAVA_COLLECTION, JAVA_COLLECTION_ROW),
-			Map.entry(ClojureArms.Family.JAVA_MAP, JAVA_MAP_ROW), Map.entry(ClojureArms.Family.MARKER, MARKER_ROW));
+			Map.entry(ClojureArms.Family.JAVA_MAP, JAVA_MAP_ROW), Map.entry(ClojureArms.Family.HASHEQ, HASHEQ_ROW),
+			Map.entry(ClojureArms.Family.MARKER, MARKER_ROW));
 
 	/**
 	 * One interface: its binary name, the abstract methods it declares (name to the
@@ -391,7 +395,10 @@ final class ClojureInterfaces {
 		return table;
 	}
 
-	/** The {@code clojure.lang} collection interfaces and the ones no verb reads. */
+	/**
+	 * The {@code clojure.lang} collection interfaces, {@code IHashEq} and the ones no
+	 * verb reads.
+	 */
 	private static void collectionTable(Map<String, HostInterface> table) {
 		add(table, "clojure.lang.IPersistentCollection", methods("count", 1, "cons", 2, "empty", 1, "equiv", 2),
 				List.of("clojure.lang.Seqable"), ClojureArms.Family.COLLECTION, "RONTOLISP::%CLOJURE-ICOLLECTION-P");
@@ -426,7 +433,7 @@ final class ClojureInterfaces {
 				"RONTOLISP::%CLOJURE-IPENDING-P");
 		add(table, "clojure.lang.Sorted", methods("comparator", 1, "entryKey", 2, "seq", 2, "seqFrom", 3), List.of(),
 				ClojureArms.Family.SORTED_INTERFACE, "RONTOLISP::%CLOJURE-ISORTED-P");
-		add(table, "clojure.lang.IHashEq", methods("hasheq", 1), List.of(), ClojureArms.Family.MARKER,
+		add(table, "clojure.lang.IHashEq", methods("hasheq", 1), List.of(), ClojureArms.Family.HASHEQ,
 				"RONTOLISP::%CLOJURE-HASHEQ-P");
 		add(table, "clojure.lang.IEditableCollection", methods("asTransient", 1), List.of(), ClojureArms.Family.MARKER,
 				"RONTOLISP::%CLOJURE-EDITABLE-P");
@@ -654,8 +661,9 @@ final class ClojureInterfaces {
 	 * reify whose type implements the method at that count: the test of every supported
 	 * interface declaring it, or for an {@code Object} override the test of that method;
 	 * empty when no supported interface declares it. {@code toString} answers through
-	 * {@code str}. A type implementing any of them answers its row's method, so the
-	 * caller asks them as one disjunction, each a test of its own family.
+	 * {@code str} and {@code hashCode} through the hash runtime's {@code hashCode} of any
+	 * value. A type implementing any of them answers its row's method, so the caller asks
+	 * them as one disjunction, each a test of its own family.
 	 * @param method the method name
 	 * @param count the parameter count, the target included
 	 * @return the tests, in table order
@@ -670,11 +678,7 @@ final class ClojureInterfaces {
 		if (!tests.isEmpty()) {
 			return List.copyOf(tests);
 		}
-		return switch (method + "/" + count) {
-			case "equals/2" -> List.of("RONTOLISP::%CLOJURE-EQUALS-P");
-			case "hashCode/1" -> List.of("RONTOLISP::%CLOJURE-HASH-CODE-P");
-			default -> List.of();
-		};
+		return method.equals("equals") && count == 2 ? List.of("RONTOLISP::%CLOJURE-EQUALS-P") : List.of();
 	}
 
 	/**

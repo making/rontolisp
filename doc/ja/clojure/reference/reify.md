@@ -53,7 +53,7 @@ import します（オラクル同様、`clojure.lang` は既定の import に�
 | `IFn`（`Callable` と `Runnable` を含む） | 呼び出し、関数引数（`map`、`filter` など）、`apply`（`applyTo` を通す）、`ifn?` |
 | `IDeref` | `deref`、`@` |
 | `IMeta`, `IObj` | `meta`、`with-meta`、`vary-meta`（`deftype` のみ。`reify` は自身でメタデータを持ちます） |
-| `Object` | `str` と印字（`toString`）、`=`（`equals`）、`.hashCode` |
+| `Object` | `str` と印字（`toString`）、`=`（`equals`）、`.hashCode` と `IHashEq` がない場合の `hash`（`hashCode`） |
 
 インタフェースへの `instance?` と、そのメソッドのインスタンス呼び出し（`(.count x)`）も型に
 届きます。そのインタフェースへ拡張したプロトコルも同様です。本体が書かなかったメソッドを呼ぶと
@@ -97,7 +97,8 @@ import します（オラクル同様、`clojure.lang` は既定の import に�
 | `java.util.Iterator` | [iterator-seq](iterator-seq.md)、`Iterable` の seq と畳み込み |
 | `java.util.Collection`, `List`, `Set`, `RandomAccess` | `count`（`size`）、`nth`（`RandomAccess` なリストの `get`）、`contains?`（`Set` の `contains`）、`=`、`pr` でのリスト・ベクタ・集合としての印字 |
 | `java.util.Map` | `get`、`contains?`、`find`、`count`、`seq`（`entrySet`）、`=`、`pr` でのマップとしての印字 |
-| `IHashEq`, `java.io.Serializable`, `IEditableCollection`、トランジェント | `instance?` とインスタンス呼び出しのみ（`hash` はまだなく、トランジェントは拒否されます） |
+| `IHashEq` | `hash`（`hasheq`）、要素にしたときのコレクションのハッシュ関数 |
+| `java.io.Serializable`, `IEditableCollection`、トランジェント | `instance?` とインスタンス呼び出しのみ（トランジェントは拒否されます） |
 
 コアのコレクションへの `(.iterator coll)`、`clojure.lang.SeqIterator`、`clojure.lang.RT/iter` は
 seq を辿るイテレータを返し、`clojure.lang.MapEntry` はここでのマップエントリである `[k v]`

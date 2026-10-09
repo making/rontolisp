@@ -6394,8 +6394,8 @@ cases:
     # or :tag, = by its parts (a list form = a vector one), a structural key,
     # printed back as read (print leaves the strings bare), no collection, and the
     # constructors' casts. Every line is the oracle's (clj 1.12.6.1673,
-    # 2026-10-08) but the last two: the oracle's class prints without the colon,
-    # and its str spells the hash its hashCode answers.
+    # 2026-10-08) but the class line: the oracle's class prints without the colon.
+    # str spells the oracle's hashCode (2026-10-09).
     source: |
       (def rcv (read-string {:read-cond :preserve} "#?(:clj 1 :cljs 2)"))
       (def tlv (second (:form (read-string {:read-cond :preserve} "#?(:clj #js {})"))))
@@ -6413,7 +6413,7 @@ cases:
       (defn rcv-class [f] (try (f) (catch Exception e (.getName (class e)))))
       (prn (rcv-class #(reader-conditional '(1) nil)) (rcv-class #(reader-conditional '(1) 1)) (rcv-class #(tagged-literal "a" 1)) (rcv-class #(count rcv)) (rcv-class #(rcv :form)))
       (prn (class rcv) (class tlv))
-      (prn (some? (re-find #"^clojure.lang.ReaderConditional@[0-9a-f]+$" (str rcv))) (some? (re-find #"^clojure.lang.TaggedLiteral@[0-9a-f]+$" (str tlv))))
+      (prn (str rcv) (str tlv) (str (reader-conditional '(:clj [1 "s"]) true)))
     expected: |
       (:clj 1 :cljs 2) false (:clj 1 :cljs 2) 9 9 :nf js {} :nf
       true false false true (true false false) (#js {})
@@ -6428,7 +6428,7 @@ cases:
       true true false true
       "java.lang.NullPointerException" "java.lang.ClassCastException" "java.lang.ClassCastException" "java.lang.UnsupportedOperationException" "java.lang.ClassCastException"
       :clojure.lang.ReaderConditional :clojure.lang.TaggedLiteral
-      true true
+      "clojure.lang.ReaderConditional@443008ca" "clojure.lang.TaggedLiteral@291d7e3e" "clojure.lang.ReaderConditional@4cff3a14"
   - name: read-string-refuses-in-the-oracles-words
     # The end of input (empty or inside a datum), a repeated set member, an
     # unknown character name, a bad number and an unmatched closing bracket
@@ -10626,3 +10626,86 @@ cases:
       "Already seen doctype."
       "The processing instruction must begin with the name of the target."
       [:encoding "bogus"]
+  - name: hash-is-the-oracles-hasheq-of-every-kind
+    # clojure.core/hash is Util.hasheq: Murmur3 over a long, a string's
+    # String.hashCode (its UTF-16 units), a keyword's or symbol's name and
+    # namespace and a collection's members, in order or not, mixed with their
+    # count; a double, ratio, character, boolean, UUID and instant hash as their
+    # Java hashCode (both zeros 0); a record as the oracle's generated hasheq.
+    # Every line is the oracle's (clj 1.12.6.1673, 2026-10-09).
+    source: |
+      (defrecord HshRec [a b])
+      (prn (map hash [nil true false 0 1 -1 1.0 0.0 -0.0 1.5 ##NaN ##Inf ##-Inf 1N 1/2 -1/2]))
+      (prn (map hash [123456789012345678901234567890N 9223372036854775807 -9223372036854775808 4294967296 2147483648 9223372036854775808N 18446744073709551616N 12345678901234567890/7]))
+      (prn (map hash ["a" "" "abc" "日本" "a😀b" :a :a/b :foo.bar/baz-qux 'a 'a/b '/ \a \日]))
+      (prn (map hash [[] [1] [1 2] '(1 2) (seq [1 2]) (map inc [0 1]) (range 3) [nil] [[1]] (first {1 2})]))
+      (prn (map hash [{} {:a 1} {nil nil} #{} #{1} #{1 2} (sorted-map 1 2) (sorted-set 1 2) (sorted-map-by > 1 2 3 4)]))
+      (prn (hash (->HshRec 1 2)) (hash (assoc (->HshRec 1 2) :c 3)) (hash #uuid "f81d4fae-7dec-11d0-a765-00a0c91e6bf6") (hash #inst "2020-01-01T00:00:00.000-00:00"))
+      (prn (hash [1 [2 {:a #{3}}] '(4) "x" :k 'sym \c 1.5 nil true]) (hash (vec (range 100))))
+      (prn (= (hash [1 '(2)]) (hash (list 1 [2]))) (= (hash {:a [1]}) (hash (sorted-map :a '(1)))) (= (hash -0.0) (hash 0.0)) (map hash [1 :a "a"]))
+    expected: |
+      (0 1231 1237 0 1392991556 1651860712 1072693248 0 0 1073217536 2146959360 2146435072 -1048576 1392991556 3 -3)
+      (1915528825 -2106506049 1366273829 987256456 386683422 -2147483648 961 -1436577087)
+      (1455541201 0 74834163 1762503263 1898100721 -2123407586 1482224565 1551939322 -482876059 -1172211204 -1371932971 97 26085)
+      (-2017569654 -1381383523 156247261 156247261 156247261 156247261 -1475093015 965192274 -86352737 156247261)
+      (-15128758 1772842048 -1730596701 -15128758 1038464948 460223544 1952097988 460223544 -812819982)
+      425092884 1955592065 -343263960 1583802735
+      -2018137581 -328473137
+      true true true (1392991556 -2123407586 1455541201)
+  - name: the-collection-hash-verbs-mix-order-and-combine-like-the-oracle
+    # mix-collection-hash casts both arguments like a ^long parameter and then to
+    # an int (Math.toIntExact); hash-ordered-coll and hash-unordered-coll take an
+    # Iterable (a map's members are its entries); hash-combine casts its first
+    # argument like an int parameter and combines it with the second's hashCode
+    # (Util.hash, a list's and a map's Java hashCode). The last line is the
+    # algorithm the oracle documents. Every line is the oracle's (clj 1.12.6.1673,
+    # 2026-10-09).
+    source: |
+      (defn hsh-refusal [f] (try (f) (catch Exception e (.getName (class e)))))
+      (prn (mix-collection-hash 1 0) (mix-collection-hash -1 5) (mix-collection-hash -2147483648 2) (mix-collection-hash 1.5 2) (mix-collection-hash 7/2 1) (mix-collection-hash ##NaN 1))
+      (prn (hash-ordered-coll [1 2]) (hash-ordered-coll '(1 2)) (hash-ordered-coll []) (hash-ordered-coll {1 2}) (hash-ordered-coll (sorted-set 2 1)))
+      (prn (hash-unordered-coll #{1 2}) (hash-unordered-coll [1 2]) (hash-unordered-coll {1 2}) (hash-unordered-coll (->HshRec 1 2)))
+      (prn (hash-combine 1 2) (hash-combine 0 :a) (hash-combine 0 'a/b) (hash-combine 0 "a") (hash-combine 0 [1 2]) (hash-combine -1 nil) (hash-combine 12 1.5) (hash-combine 7/2 1) (hash-combine 2N 1))
+      (prn (hash-combine 0 {:a [1]}) (hash-combine 0 #{1 "a" :c}) (hash-combine 0 '(1 2)) (hash-combine 0 1/3) (hash-combine 0 \a) (hash-combine 0 false) (hash-combine 0 -0.0) (hash-combine 0 -1) (hash-combine 0 (->HshRec 1 2)))
+      (prn (map hsh-refusal [#(mix-collection-hash nil 1) #(mix-collection-hash "a" 1) #(mix-collection-hash 12345678901 1) #(mix-collection-hash 1e30 1)]))
+      (prn (map hsh-refusal [#(hash-ordered-coll nil) #(hash-ordered-coll "ab") #(hash-unordered-coll :a) #(hash-combine nil 1) #(hash-combine \a 1) #(hash-combine 1e10 1)]))
+      (prn (map hash-ordered-coll [[1] [2]]) (map mix-collection-hash [1 2] [0 1]) (map hash-combine [1 2] [:a :b]) (apply hash-unordered-coll [#{1}]))
+      (prn (= (hash [1 2 3]) (mix-collection-hash (reduce #(unchecked-add-int (unchecked-multiply-int 31 %1) (hash %2)) 1 [1 2 3]) 3))
+           (= (hash #{1 2 3}) (mix-collection-hash (reduce #(unchecked-add-int %1 (hash %2)) 0 #{1 2 3}) 3)))
+    expected: |
+      -2017569654 77504886 -832700999 1734656966 872273775 -1684229222
+      156247261 156247261 -2017569654 627319935 156247261
+      460223544 460223544 1952097988 161871944
+      -1640531462 -626620958 1013910665 -1640531430 -1640530533 1640531591 -567313232 -1640531335 -1640531400
+      -626620990 -626620730 -1640530533 -1640531525 -1640531430 -1640530290 506952121 -1640531527 387289551
+      ("java.lang.NullPointerException" "java.lang.ClassCastException" "java.lang.ArithmeticException" "java.lang.IllegalArgumentException")
+      ("java.lang.NullPointerException" "java.lang.ClassCastException" "java.lang.ClassCastException" "java.lang.NullPointerException" "java.lang.ClassCastException" "java.lang.ArithmeticException")
+      (-1381383523 829981563) (-2017569654 -2073014043) (-626620893 -626620889) 1038464948
+      true true
+  - name: a-type-hashes-through-its-hasheq-then-its-hash-code-else-by-identity
+    # hash of a deftype or reify is its IHashEq row's hasheq, then its hashCode
+    # override, each answer cast like the oracle's int method (Number.intValue:
+    # a long wraps, a ratio truncates, nil refuses), else its identity, stable
+    # for the object's life. .hashCode answers the oracle's hashCode of any value
+    # and .hasheq a collection's, keyword's or symbol's hash. Every line is the
+    # oracle's (clj 1.12.6.1673, 2026-10-09).
+    source: |
+      (deftype HshEq [x] clojure.lang.IHashEq (hasheq [_] (* 2 x)))
+      (deftype HshCode [x] Object (hashCode [_] (+ x 100)))
+      (deftype HshBoth [x] Object (hashCode [_] 7) clojure.lang.IHashEq (hasheq [_] 43))
+      (deftype HshNone [x])
+      (def hsh-none (HshNone. 1))
+      (def hsh-atom (atom 1))
+      (prn (hash (HshEq. 21)) (hash (HshCode. 1)) (hash (HshBoth. 1)) (.hashCode (HshBoth. 1)) (.hasheq (HshBoth. 1)) (hash-combine 0 (HshCode. 1)))
+      (prn (hash [(HshEq. 1) (HshCode. 1)]) (hash {:k (HshEq. 1)}) (hash-unordered-coll [(HshEq. 1) (HshBoth. 1)]))
+      (prn (= (hash hsh-none) (hash hsh-none) (.hashCode hsh-none)) (= (hash hsh-atom) (hash hsh-atom)) (int? (hash hsh-none)) (let [f inc] (= (hash f) (hash f))))
+      (prn (hsh-refusal #(hash (reify clojure.lang.IHashEq (hasheq [_] nil)))) (hash (reify clojure.lang.IHashEq (hasheq [_] (identity 12345678901)))) (hash (reify clojure.lang.IHashEq (hasheq [_] (identity -7/2)))))
+      (prn (.hashCode :a) (.hashCode 'a) (.hashCode "a") (.hashCode [1 2]) (.hashCode {:a 1}) (.hashCode #{:a}) (.hashCode 1/2) (.hashCode '(1 2)) (.hashCode (->HshRec 1 2)))
+      (prn (.hasheq [1 2]) (.hasheq :a) (.hasheq {:a 1}) (.hasheq 'a/b) (.hasheq (->HshRec 1 2)) (hsh-refusal #(.hashCode nil)))
+    expected: |
+      42 101 43 7 43 -1640531426
+      36257146 -1658521802 -664413809
+      true true true true
+      "java.lang.NullPointerException" -539222987 -3
+      1013910569 -1640525200 97 994 1013910568 1013910569 3 994 2027821078
+      156247261 -2123407586 1772842048 -1172211204 425092884 "java.lang.NullPointerException"

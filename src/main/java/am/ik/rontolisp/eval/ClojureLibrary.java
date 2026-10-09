@@ -86,6 +86,9 @@ public final class ClojureLibrary {
 			  (declare (ignore x))
 			  (rontolisp::%clojure-illegal-argument-exception
 			   (concatenate 'string "No matching field found: " method)))
+			(defun rontolisp::%clojure-other-hash (x eq)
+			  (declare (ignore eq))
+			  (%identity-hash x))
 			""";
 
 	@Nullable private static volatile Set<String> functionNames;

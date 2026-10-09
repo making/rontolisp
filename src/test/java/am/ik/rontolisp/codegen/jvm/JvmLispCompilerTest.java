@@ -14925,6 +14925,21 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunIdentityHashKeepsAnAggregatesValueWhateverItsContentsDo() throws Exception {
+		// LispEvaluatorTest's twin: System.identityHashCode of the object, an int the
+		// same for its whole life
+		assertThat(compileAndRun("""
+				(let* ((c (list 1 2)) (v (vector 1)) (f (lambda () 1)) (tb (make-hash-table))
+				       (hc (%identity-hash c)) (hv (%identity-hash v)))
+				  (setf (car c) 9)
+				  (setf (aref v 0) 9)
+				  (print (list (= hc (%identity-hash c)) (= hv (%identity-hash v))
+				               (= (%identity-hash f) (%identity-hash f)) (= (%identity-hash tb) (%identity-hash tb))
+				               (integerp hc) (<= -2147483648 hc 2147483647))))
+				""")).isEqualTo("(T T T T T T)");
+	}
+
+	@Test
 	void compileAndRunIeee754Bits() throws Exception {
 		assertThat(compileAndRun("(print (%ieee754-double-bits 1.0)) (print (%ieee754-double-bits -2.5))"
 				+ " (print (%ieee754-double-from-bits 4607182418800017408))"

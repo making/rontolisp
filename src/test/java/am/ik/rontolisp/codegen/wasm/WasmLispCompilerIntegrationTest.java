@@ -24195,6 +24195,26 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void compileAndRunIdentityHashReadsTheSlotAModuleCallingItCarries() throws Exception {
+		// The twins' program, plus what the slot sequence makes certain here: two fresh
+		// objects never share a hash. The module makes no eq table, so the call alone
+		// gives every cons, cell, closure and instance the identity-hash slot
+		// (LispMacroExpander.programHashesByIdentity); a P1 module and a component alike.
+		String program = """
+				(let* ((c (list 1 2)) (v (vector 1)) (f (lambda () 1)) (tb (make-hash-table))
+				       (hc (%identity-hash c)) (hv (%identity-hash v)))
+				  (setf (car c) 9)
+				  (setf (aref v 0) 9)
+				  (print (list (= hc (%identity-hash c)) (= hv (%identity-hash v))
+				               (= (%identity-hash f) (%identity-hash f)) (= (%identity-hash tb) (%identity-hash tb))
+				               (integerp hc) (<= -2147483648 hc 2147483647)
+				               (/= (%identity-hash (list 1)) (%identity-hash (list 1))))))
+				""";
+		assertThat(compileAndRun(program)).isEqualTo("(T T T T T T T)");
+		assertThat(compileAndRunComponent(program)).isEqualTo("(T T T T T T T)");
+	}
+
+	@Test
 	void compileAndRunIeee754Bits() throws Exception {
 		// JvmLispCompilerTest's twin, same expectation: a double's bits are UNSIGNED, so
 		// a negative double's are a bignum (the i64 reinterpretation lifted by 2^64), and

@@ -240,6 +240,8 @@ final class ClojureValueMethodLowering {
 			row(truncated, 0, arm(List.of("ratio?"), core("long", R)));
 		}
 		row("getClass", 0, arm(List.of(), core("class", R)));
+		// IHashEq: a collection's, a keyword's or a symbol's hasheq is its hash
+		row("hasheq", 0, arm(List.of("coll?", "ident?"), core("hash", R)));
 		row("deref", 0, arm(List.of(ATOM), core("deref", R)));
 		row("reset", 1, arm(List.of(ATOM), core("reset!", R, A)));
 		row("swap", 1, arm(List.of(ATOM), core("swap!", R, A)));
