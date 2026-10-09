@@ -31,9 +31,10 @@ import java.io.Writer;
  * <p>
  * Characters are UTF-8, decoded and encoded here rather than through a
  * {@code CharsetDecoder}, because a decoder buffers and the byte cursor
- * {@code file-position} answers must never be ahead of what has been consumed. Decoding
- * is lenient in the {@code HttpRequestBodyStream} way: a byte that starts no valid
- * sequence is its own character.
+ * {@code file-position} answers must never be ahead of what has been consumed. A
+ * malformed sequence decodes as {@link RontoCharFileReader} decodes it -- Java's decoder:
+ * one U+FFFD for its valid prefix, and the byte that interrupted it is left for the next
+ * read ({@code .kb/character-sequence-io.md}, "Malformed input").
  */
 public final class RontoIoFileStream extends Writer {
 
@@ -98,26 +99,31 @@ public final class RontoIoFileStream extends Writer {
 	 */
 	public int readCodePoint() throws IOException {
 		int b = this.file.read();
-		if (b < 0) {
-			return -1;
-		}
-		int following = (b >= 0xC0 && b < 0xE0) ? 1 : (b >= 0xE0 && b < 0xF0) ? 2 : (b >= 0xF0) ? 3 : 0;
-		if (following == 0) {
+		if (b < 0x80) {
 			return b;
 		}
-		long start = this.file.getFilePointer();
-		int cp = b & (following == 1 ? 0x1F : following == 2 ? 0x0F : 0x07);
-		for (int i = 0; i < following; i++) {
+		int need = (b >= 0xC2 && b <= 0xDF) ? 1 : (b >= 0xE0 && b <= 0xEF) ? 2 : (b >= 0xF0 && b <= 0xF4) ? 3 : 0;
+		if (need == 0) {
+			return 0xFFFD;
+		}
+		int cp = b & ((need == 1) ? 0x1F : (need == 2) ? 0x0F : 0x07);
+		for (int i = 1; i <= need; i++) {
+			long here = this.file.getFilePointer();
 			int next = this.file.read();
 			if (next < 0) {
-				// An incomplete sequence at end of file: the lead byte is its own
-				// character and the cursor stays where the sequence began.
-				this.file.seek(start);
-				return b;
+				// End of file inside the sequence: what came of it is one U+FFFD.
+				return 0xFFFD;
+			}
+			int lo = (i == 1 && b == 0xE0) ? 0xA0 : (i == 1 && b == 0xF0) ? 0x90 : 0x80;
+			int hi = (i == 1 && b == 0xF4) ? 0x8F : 0xBF;
+			if (next < lo || next > hi) {
+				// The byte that interrupted it starts the next character.
+				this.file.seek(here);
+				return 0xFFFD;
 			}
 			cp = (cp << 6) | (next & 0x3F);
 		}
-		return cp;
+		return (cp >= 0xD800 && cp <= 0xDFFF) ? 0xFFFD : cp;
 	}
 
 	/**

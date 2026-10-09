@@ -235,6 +235,8 @@ the one supplementary character they pair into on the JVM, whose strings are UTF
 `string-to-octets` round-trips only for a WELL-FORMED,
 non-overlong, non-truncated input -- a malformed byte's lenient answer does not generally re-encode
 to the same bytes. **Encode is total** over every code point with no malformed case at all.
+A character STREAM decodes malformed input by a different rule, Java's U+FFFD replacement, on
+every backend (`.kb/character-sequence-io.md`, "Malformed input").
 
 **The interpreter's native `%octets-to-string` used to reject any argument that was not
 literally a `LispIntVector`, while the compiled backends' fallback fell through the
