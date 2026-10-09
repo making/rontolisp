@@ -312,8 +312,9 @@ class JavaBridgeTemplateParityTest {
 	// What a compiled program counts as a host object is one rule with two copies: the
 	// bridge's isJavaObject and the _jhost a resolved site calls. Over the compiled
 	// representation of every kind of Lisp value and a spread of host objects -- the
-	// ArrayList / LinkedHashMap a Lisp array / hash table also is among them -- the two
-	// answer alike, and as intended.
+	// ArrayList / LinkedHashMap a Lisp array / hash table also is among them, and
+	// subclasses of them whatever their overrides answer -- the two answer alike, and as
+	// intended.
 	@Test
 	void theBridgeAndADirectSiteCountTheSameHostObjects(@TempDir Path dir) throws Exception {
 		JvmLispCompiler compiler = new JvmLispCompiler("HostTest");
@@ -340,8 +341,24 @@ class JavaBridgeTemplateParityTest {
 				new int[] { 97 }, new BigInteger[] { BigInteger.ONE, BigInteger.TWO }, new Object[] { 1L, null },
 				new Object[] { 3, "car" }, new double[] { 2, 1, 0 }, new byte[] { 8, 1 }, lispArray, lispTable,
 				new RontoComplex(1L, 2L));
+		// A subclass whose overrides lie about its contents: the class decides, its
+		// methods are never asked.
+		ArrayList<Object> notEmpty = new ArrayList<>() {
+			@Override
+			public boolean isEmpty() {
+				return false;
+			}
+		};
+		ArrayList<Object> headerLike = new ArrayList<>(lispArray) {
+		};
+		LinkedHashMap<Object, Object> ordered = new LinkedHashMap<>() {
+			@Override
+			public Object get(Object key) {
+				return new ArrayList<>();
+			}
+		};
 		List<Object> host = List.of(new StringBuilder(), new ArrayList<>(), hostList, new LinkedHashMap<>(), hostMap,
-				new HashMap<>(), Optional.empty(), BigDecimal.ONE);
+				new HashMap<>(), Optional.empty(), BigDecimal.ONE, notEmpty, headerLike, ordered);
 		try (URLClassLoader loader = new URLClassLoader(new URL[] { dir.toUri().toURL() },
 				ClassLoader.getSystemClassLoader())) {
 			Method jhost = loader.loadClass("HostTest").getDeclaredMethod(JvmJavaDirectSites.HOST, Object.class);

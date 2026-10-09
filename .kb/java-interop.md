@@ -55,19 +55,25 @@ Package `java` (`LispNames.JAVA_PKG`, `PackageRegistry`; does NOT use `cl`): `ja
   (`JavaBridgeTemplateParityTest#theBridgeAndADirectSiteCountTheSameHostObjects`): NOT a
   `Long`/`Double`/`BigInteger`/`String`, NOT any Java array (characters, ratios, conses,
   function values, instances, streams, `#d`/`#f`/octet vectors -- a Java array a call answers
-  is unmarshalled into a list, so none is ever a host), NOT an `ArrayList` whose slot 0 is an
-  `Object[]` (a Lisp array), NOT a `LinkedHashMap` holding an `ArrayList` under
+  is unmarshalled into a list, so none is ever a host), NOT exactly an `ArrayList` whose slot 0
+  is an `Object[]` (a Lisp array), NOT exactly a `LinkedHashMap` holding an `ArrayList` under
   `RontoHashTable.ORDER_KEY` (a hash table), NOT a class in `am.ik.rontolisp.runtime`
   (`RontoComplex`). The bridge spells the key and the package itself (no rontolisp imports);
   `theBridgeSpellsTheRepresentationAsTheRuntimeDoes` pins both.
 - The array and table arms are ONE test each in a compiled program: `_jlarr` (non-empty
   `ArrayList`, slot 0 an `Object[]`) and `_jltab` (`LinkedHashMap`, an `ArrayList` under the
-  order key), `JvmJavaDirectSites.lispArray()` / `lispTable()`, built on first use. `_jhost`
-  calls them, and so -- in a `java:` program only (`Ctx.javaSites`, `JavaPrint`), a program
-  without `java:` keeps its `instanceof` bytecode -- do the printer's array and hash-table
-  arms (`JavaPrint.lispArray/lispTable`), `_hashP` (`hash-table-p`, the class dispatch, typep
-  `hash-table`) and `%arrayp` (`arrayp`, `vectorp`, typep `vector`/`array`/`sequence`,
-  `type-of`). `stringp` / `%simple-array-p` read the header themselves. Before, measured
+  order key), `JvmJavaDirectSites.lispArray()` / `lispTable()`, built on first use. Both test
+  the EXACT class (`getClass() ==`) before reading: a host subclass's own `isEmpty` / `get` /
+  `size` can lie (a `java:subclass` of `ArrayList` whose `isEmpty` says false on an empty list
+  reached `get(0)`: `IndexOutOfBoundsException`, measured 2026-10-08; the interpreter answered
+  NIL). The bridge's `lispArrayHeader` / `isLispTable` / `rendered` and `_strv` (every
+  program) test the exact class too. `_jhost` and `_jkind` call them, and so -- in a `java:`
+  program only (`Ctx.javaSites`, `JavaPrint`), a program without `java:` keeps its
+  `instanceof` bytecode -- do the printer's array and hash-table arms
+  (`JavaPrint.lispArray/lispTable`), `_hashP` (`hash-table-p`, the class dispatch, typep
+  `hash-table`), `%arrayp` (`arrayp`, `vectorp`, typep `vector`/`array`/`sequence`,
+  `type-of`), `stringp` and `%simple-array-p` (`JavaImplementationPrograms.
+  HOST_COLLECTION_SUBCLASS`, both backends). Before, measured
   2026-09-26: `hash-table-p` of a host map `T`, printing it (in a program with hash tables)
   `NullPointerException`; `arrayp` of a host list `T`, `vectorp` / typep / `type-of`
   `IndexOutOfBoundsException` or `ClassCastException`
