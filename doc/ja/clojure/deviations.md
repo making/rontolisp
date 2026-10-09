@@ -377,9 +377,11 @@
   拒否されます。`read` はストリームを取り、素の `clojure.java.io/reader` も受け付けます
   （オラクルは `PushbackReader` を要求します）。ホストのリーダは拒否します。
 - `#inst` と `#uuid` は、すべてのバックエンドでオラクルの `java.util.Date` と
-  `java.util.UUID` として読まれます。わずかな違い（インスタントの `str` は UTC で答える、
-  interop で得たホストの値は読んだ値と `=` にならない）は[インスタントと UUID](reference/instants.md)
-  にあります。
+  `java.util.UUID` として読まれます。`java.util.Date`、`java.sql.Timestamp`、`java.util.UUID`
+  のコンストラクタと静的メンバーも同じ値を作ります。わずかな違い（インスタントの `str` は UTC で
+  答える、Java のメンバーが返したホストの Date や UUID はここで作った値と `=` になるが、
+  ホストオブジェクトとして印字され、マップでは別のキーになる）は
+  [インスタントと UUID](reference/instants.md) にあります。
 - `clojure.java.io` の `java.io.File`、`java.net.URL`、`java.net.URI`、バイトストリームは、
   すべてのバックエンドでこのフロントエンド自身の値です。違い（バイト配列がない、文字セットは
   3 つ、`http:` URL の背後に接続がない、リソースはクラスパスではなくソースパスで見つける、WASM の

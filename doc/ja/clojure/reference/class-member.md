@@ -3,8 +3,8 @@
 `(Class/member args...)` `(Class/FIELD)` `(Class/.method target args...)` `(Class/new args...)`
 と裸の `Class/member` 値
 
-静的メソッドを呼びます。引数なし -- `(System/currentTimeMillis)` または
-`(. System currentTimeMillis)` -- では、ホストクラスにあれば引数なし静的メソッド、
+静的メソッドを呼びます。引数なし -- `(System/nanoTime)` または
+`(. System nanoTime)` -- では、ホストクラスにあれば引数なし静的メソッド、
 なければ静的フィールドを読みます（`(Integer/MAX_VALUE)` や `(. Math PI)` は
 フィールドを読みます）。裸の `Class/member` 値は、ホストクラスにあれば静的
 フィールドを読み、なければ静的呼び出しへアリティ毎に振り分ける関数を答えるため、

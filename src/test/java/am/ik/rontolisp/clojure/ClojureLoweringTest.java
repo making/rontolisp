@@ -1681,8 +1681,8 @@ class ClojureLoweringTest {
 	void staticMembersResolveByHostArity() {
 		// a zero-argument static method is a static call, even in the (. Class m)
 		// spelling; a field stays a field read, in call and dot-form alike
-		assertThat(lowered("(System/currentTimeMillis)")).contains("JAVA:STATIC").doesNotContain("JAVA:FIELD");
-		assertThat(lowered("(. System currentTimeMillis)")).contains("JAVA:STATIC").doesNotContain("JAVA:FIELD");
+		assertThat(lowered("(System/nanoTime)")).contains("JAVA:STATIC").doesNotContain("JAVA:FIELD");
+		assertThat(lowered("(. System nanoTime)")).contains("JAVA:STATIC").doesNotContain("JAVA:FIELD");
 		assertThat(lowered("(Integer/MAX_VALUE)")).contains("JAVA:FIELD").doesNotContain("JAVA:STATIC");
 		assertThat(lowered("(. Math PI)")).contains("JAVA:FIELD").doesNotContain("JAVA:STATIC");
 		assertThat(lowered("(Math/PI)")).contains("JAVA:FIELD").doesNotContain("JAVA:STATIC");

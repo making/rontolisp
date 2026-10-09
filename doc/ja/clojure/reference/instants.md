@@ -13,11 +13,25 @@
 [clojure.instant](clojure-instant.md) はタイムスタンプを `java.sql.Timestamp` や
 `java.util.Calendar` にも読みます。
 
+interop の書き方も、すべてのバックエンドで同じ値を作ります。`(java.util.Date.)` は現在の
+インスタント、`(java.util.Date. ms)` と `(java.sql.Timestamp. ms)` はそのミリ秒のインスタント、
+`(java.util.UUID. msb lsb)` は 2 つの半分からなる UUID です。`UUID/randomUUID` と
+`UUID/fromString` は [random-uuid](random-uuid.md) と `#uuid` と同じ値を返し、
+`System/currentTimeMillis` はエポックからのミリ秒を返します。Date の `getTime`、`setTime`
+（その場で書き換えます）、`before`、`after`、`compareTo`、Timestamp の `getNanos`、UUID の
+2 つの半分と `version`、`variant` はどこでも答えます。インタプリタと JVM では、こうした値は
+Java のメンバーにホストオブジェクトとして渡り（`(.format sdf (java.util.Date.))`）、
+そのクラスのほかのメソッドはホストオブジェクトが答えます（`(.toInstant d)`）。メンバーが
+返したホストの Date や UUID は、こうした値と `=` になり、並べて比較できます。
+
 | 名前 | 例 | 結果 |
 |---|---|---|
 | `inst-ms` | `(inst-ms #inst "1970-01-01T00:00:01Z")` | `1000` |
 | `random-uuid` | `(uuid? (random-uuid))` | `true` |
 | `parse-uuid` | `(parse-uuid "1-1-1-1-1")` | `#uuid "00000001-0001-0001-0001-000000000001"` |
+| `java.util.Date.` | `(java.util.Date. 1000)` | `#inst "1970-01-01T00:00:01.000-00:00"` |
+| `java.util.UUID/fromString` | `(= (java.util.UUID/fromString "1-1-1-1-1") #uuid "1-1-1-1-1")` | `true` |
+| `System/currentTimeMillis` | `(integer? (System/currentTimeMillis))` | `true` |
 
 ```clojure
 (def at #inst "2020-06-15T10:20:30.456+02:00")
@@ -38,11 +52,17 @@ true (#inst "1999-01-01T00:00:00.000-00:00" #inst "2020-06-15T08:20:30.456-00:00
 - `class` は、ほかの値と同じくキーワードを返します（[仕様との差異](../deviations.md)）。
 - インスタントの `str` は、タイムゾーンを UTC としたオラクルの `toString` です。オラクルは
   JVM の既定のタイムゾーンで答えますが、wasm バックエンドにはタイムゾーンがありません。
-- Timestamp は `=`、`compare`、マルチメソッドのディスパッチをオラクルと同じように行いますが、
-  `java.util.Date` に拡張したプロトコルは Timestamp に届きません。`java.sql.Timestamp` も
-  拡張してください。
 - UUID の 16 進数字は ASCII の数字と英字に限ります。オラクルの `UUID.fromString` は Unicode の
   10 進数字と全角ラテン文字も受け付けます。
-- interop で得たホストの `java.util.Date`、`java.time.Instant`、`java.util.UUID`
-  （インタプリタと JVM）はホストオブジェクトのままです。`inst?`、`uuid?`、`inst-ms` は受け付けますが、
-  プログラムが読んだインスタントや UUID と `=` になることはありません。
+- Java のメンバーが返したホストの `java.util.Date`、`java.sql.Timestamp`、`java.util.UUID`
+  （インタプリタと JVM）はホストオブジェクトのままです。ここで作った値とは、先に置いたほうの
+  `equals` が決めるとおりに `=` になり、`compareTo` で並べて比較でき、`inst?`、`uuid?`、
+  `inst-ms` も受け付けます（`java.time.Instant` も同様です）。ただし `#<java java.util.Date>` と
+  印字され、マップのキーやセットの要素としては、ここで作った値とは別のものになります。
+- 実行時に計算した文字列を渡す `(java.util.Date. s)` は拒否します。オラクルが行う非推奨の
+  `Date(String)` による解析はありません（リテラルの文字列なら、インタプリタと JVM では従来どおり
+  ホストのコンストラクタに届きます）。Date の `setTime` 以外の変更メソッド（`setYear` など）は
+  名前を挙げて拒否します。オラクルの Date はこれらで書き換わります。
+- [clojure.instant](clojure-instant.md) の Calendar にはホストオブジェクトがありません。Java の
+  メンバーには渡らず、そのクラスのメソッドは名前を挙げて拒否します。wasm では、Date や UUID の
+  メソッドのうちホストだけが答えるもの（`toInstant`、`hashCode`）も同じく拒否します。

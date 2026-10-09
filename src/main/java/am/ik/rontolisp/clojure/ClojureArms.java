@@ -655,11 +655,13 @@ public final class ClojureArms {
 		 * An instant -- a Date, a Timestamp or a Calendar -- which the printer,
 		 * {@code str}, {@code =}, {@code compare} (and the sorted collections' default
 		 * comparator), the structural keys' hash, {@code class} and its class name,
-		 * {@code instance?}, {@code inst?} and the instance calls read: only an
-		 * {@code #inst} literal, a read ({@code read-string}, {@code read},
-		 * {@code clojure.edn}), whose default {@code #inst} reader makes one, the
-		 * {@code clojure.instant} kernels and {@code rontolisp.internal.ring/date} (the
-		 * literal's constructor) make one.
+		 * {@code instance?}, {@code inst?}, the instance calls and a {@code java:}
+		 * member's argument read: only an {@code #inst} literal, a read
+		 * ({@code read-string}, {@code read}, {@code clojure.edn}), whose default
+		 * {@code #inst} reader makes one, the {@code clojure.instant} kernels,
+		 * {@code rontolisp.internal.ring/date} (the literal's constructor) and a
+		 * construction of {@code java.util.Date} or {@code java.sql.Timestamp}
+		 * ({@link ClojureTimeValueLowering}) make one.
 		 */
 		INSTANT("instant",
 				Set.of(ClojurePredicateLowering.INSTANT_P, ClojurePredicateLowering.INST_P,
@@ -668,24 +670,27 @@ public final class ClojureArms {
 				Set.of(), Map.of(),
 				Reads.with(ClojureDefaultReaders.MAKE_INST, "RONTOLISP::%CLOJURE-INSTANT-READ-DATE",
 						"RONTOLISP::%CLOJURE-INSTANT-READ-TIMESTAMP", "RONTOLISP::%CLOJURE-INSTANT-READ-CALENDAR",
-						"RONTOLISP::%CLOJURE-INSTANT-READ", "RONTOLISP::%CLOJURE-INSTANT-OF"),
+						"RONTOLISP::%CLOJURE-INSTANT-READ", "RONTOLISP::%CLOJURE-INSTANT-OF",
+						ClojureTimeValueLowering.NEW_DATE, ClojureTimeValueLowering.NEW_TIMESTAMP),
 				Set.of()),
 
 		/**
 		 * A UUID, which the printer, {@code str}, {@code compare} (and the sorted
 		 * collections' default comparator), the structural keys' hash, {@code class} and
-		 * its class name, {@code instance?}, {@code uuid?} and the instance calls read:
-		 * only a {@code #uuid} literal, a read, whose default {@code #uuid} reader makes
-		 * one, {@code random-uuid} and {@code parse-uuid} make one. The alias is
-		 * {@code uuid?}'s call {@code (is-uuid value "java.util.UUID")}, which stands for
-		 * the host test it made before.
+		 * its class name, {@code instance?}, {@code uuid?}, the instance calls and a
+		 * {@code java:} member's argument read: only a {@code #uuid} literal, a read,
+		 * whose default {@code #uuid} reader makes one, {@code random-uuid},
+		 * {@code parse-uuid} and a {@code java.util.UUID} construction or static make
+		 * one. The alias is {@code uuid?}'s call
+		 * {@code (is-uuid value "java.util.UUID")}, which stands for the host test it
+		 * made before.
 		 */
 		UUID("uuid", Set.of(ClojurePredicateLowering.UUID_P), Set.of(),
 				Map.of(ClojurePredicateLowering.IS_UUID, "RONTOLISP::%CLOJURE-HOST-INSTANCE-P"),
 				Reads.with(ClojureDefaultReaders.MAKE_UUID, "RONTOLISP::%CLOJURE-RANDOM-UUID",
 						"RONTOLISP::%CLOJURE-RANDOM-UUID-V", "RONTOLISP::%CLOJURE-PARSE-UUID",
 						"RONTOLISP::%CLOJURE-PARSE-UUID-V", "RONTOLISP::%CLOJURE-READ-UUID",
-						"RONTOLISP::%CLOJURE-UUID-OF"),
+						"RONTOLISP::%CLOJURE-UUID-OF", ClojureTimeValueLowering.UUID_FROM_STRING),
 				Set.of()),
 
 		/**
@@ -728,11 +733,12 @@ public final class ClojureArms {
 		 * compares as a collection with a Clojure one, {@code seq}, {@code count},
 		 * {@code empty?}, {@code get} and {@code contains?} read as one, the map verbs
 		 * read as a map (the views are {@code select-keys}' key list and the map
-		 * {@code merge-with} walks) and the printer writes readably as its Clojure kind:
-		 * only a {@code java:} operator hands one to the program. The aliases are
-		 * {@code instance?} of a class a core kind's value is and a host object may be
-		 * ({@code Number}, {@code CharSequence}), each to the kind's own test, and
-		 * {@code future?}'s call {@code (host-future-p value false)}, which stands for
+		 * {@code merge-with} walks), {@code compare} orders by its {@code compareTo} and
+		 * the printer writes readably as its Clojure kind: only a {@code java:} operator
+		 * hands one to the program. The aliases are {@code instance?} of a class a core
+		 * kind's value is and a host object may be ({@code Number},
+		 * {@code CharSequence}), each to the kind's own test, and {@code future?}'s call
+		 * {@code (host-future-p value false)}, which stands for
 		 * {@code (progn value false)}.
 		 */
 		HOST("host-object",

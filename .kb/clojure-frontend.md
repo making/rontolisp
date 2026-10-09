@@ -2780,7 +2780,10 @@ The `java:` surface (`.kb/java-interop.md`); interpreter and JVM only -- wasm co
   fixed default-import list read off `(ns-imports 'user)` on clj 1.12.6, 2026-10-03: the common
   throwables included, `AutoCloseable`/`Record`/`Module` not -- the oracle does not resolve them
   either). A construction of a plain throwable (`Exception.` included) is an exception
-  condition on every backend ("Exceptions"); any other is `java:new`, refused on wasm. A zero-argument `(Class/m)` is the static method
+  condition on every backend ("Exceptions"), one of `java.util.Date`, `java.sql.Timestamp` or
+  `java.util.UUID` (and `UUID/randomUUID`, `UUID/fromString`, `System/currentTimeMillis`) the
+  value `#inst`/`#uuid` reads ("Instants and UUIDs"); any other is `java:new`, refused on
+  wasm. A zero-argument `(Class/m)` is the static method
   when the class has one, else the field. A bare `Class/member` value reads the static
   field, else answers a lambda dispatching per fixed arity (a variadic-only member is
   refused).
@@ -3546,10 +3549,12 @@ milliseconds; the reverse false, the oracle's one-sided `equals`).
   `%clojure-class-name-of`, `inst?` (`%clojure-is-inst`'s disjunct), the `class` and
   protocol-tag branches (`ClojureDispatchLowering.timeValueClassBranches`), `instance?`'s
   kinds (`ClojureValueClasses` DATE/TIMESTAMP/CALENDAR/UUID) and the instance-call rows
-  (`getTime`, `before`/`after` by milliseconds, `compareTo`, the UUID halves, `version`,
-  `variant`). `uuid?` lowers to `(%clojure-is-uuid x "java.util.UUID")`, an alias of the
-  host test. Producers: the two constructors, every read entry (`Reads.ENTRIES`), the
-  `clojure.instant` kernels, `random-uuid`/`parse-uuid`. Inside the runtime a type test is
+  (`getTime`, `before`/`after` by milliseconds, `setTime` in place, a Timestamp's
+  `getNanos`, `compareTo`, the UUID halves, `version`, `variant`). `uuid?` lowers to
+  `(%clojure-is-uuid x "java.util.UUID")`, an alias of the host test. Producers: the two
+  constructors, every read entry (`Reads.ENTRIES`), the `clojure.instant` kernels,
+  `random-uuid`/`parse-uuid`, and the host members below (`%clojure-new-date`,
+  `%clojure-new-timestamp`, `%clojure-uuid-from-string`). Inside the runtime a type test is
   inline (`(eq (car b) :C%UUID)`), never a family test in a position the strip cannot fold.
   Measured 2026-10-08 against the parent build, wasm P1 / `--optimize=size` / component / JVM
   class: 15 programs naming none (printing, `compare`, `sort`, `class`, `instance? Comparable`
@@ -3575,9 +3580,60 @@ milliseconds; the reverse false, the oracle's one-sided `equals`).
   classes; a deviation until 2026-10-08).
 - `inst-ms`/`inst-ms*` read a Date or Timestamp, a host `Date`/`Instant` through the host
   arms, else the oracle's `No implementation of method: :inst-ms* of protocol:
-  #'clojure.core/Inst found for class: C`. A host Date or UUID stays a host object: never `=`
-  to a read one (deviation), and `(java.util.Date.)`, `UUID/randomUUID` and their kin stay
-  `java:` calls, refused on wasm (`e76`).
+  #'clojure.core/Inst found for class: C`.
+- **The host members are the values made here** (e76, 2026-10-09; `ClojureTimeValueLowering`).
+  `(java.util.Date.)` is `(%clojure-make-inst (get-internal-real-time))` (the wall clock in
+  ms on all four backends), `(Date. n)` a literal integer's `make-inst`, a computed one's
+  `%clojure-new-date` (an integer in the long range, else the oracle's `No matching ctor`; a
+  string or nil refused: the deprecated `Date(String)` parse is not here, a literal string
+  keeps `java:new`); `(java.sql.Timestamp. x)` `%clojure-new-timestamp` (`longCast`);
+  `(UUID. a b)` `make-uuid` of two `%clojure-long-cast`s (the oracle's compiler resolves the
+  one constructor and emits `RT.longCast`: `1.5` is 1, `:k` a CCE, nil an NPE, `2^64` out of
+  range); `UUID/randomUUID`, `UUID/fromString` (`%clojure-uuid-from-string`, the strict
+  `uuid-of`, a non-string a CCE) and `System/currentTimeMillis` (`get-internal-real-time`).
+  Every spelling: `.`, `new`, `Class/new` (`hostConstruction(Lowered)`), `staticCall`/
+  `staticNoArg` (so the member values and `..` too) and param tags naming the own constructor.
+  A receiver known to be one of the three classes is treated as unknown, so the value arms
+  take it. The boundary, interpreter and JVM only (`ctx.hostTarget`): an argument goes through
+  `%clojure-host-value`, whose Date/Timestamp/UUID clause is `%clojure-time-value-host` (each
+  of its clauses a family test, so a UUID-only program builds no host Date); an argument that
+  IS such a construction (a literal `#inst`/`#uuid` included) is rewritten to the host
+  construction (`hostConstruction(LispVal)`: `java:new "java.util.Date(long)"`,
+  `java:static "java.util.UUID" "randomUUID"`, ...), so `(.format sdf (Date.))` makes no
+  value here and the site resolves on the class. An instance call no row answers
+  (`methodArm`, inside `valueArm`/`boundArm`'s refusal): per kind, by reflection on the host
+  class, a method the class has calls `java:call` on `(%clojure-time-value-host recv)` (a
+  `Date`-typed answer, `clone`, back through `%clojure-time-value-from-host`), a mutator (all
+  overloads void) or any method on wasm is refused by name (`not supported`), a method the
+  class lacks in the oracle's words (`No matching field found: foo for class
+  java.util.Date`). A Calendar never crosses (no host object; its methods refused by name).
+  Host to own is not converted: a host Date/Timestamp/UUID a member answers stays host, `=`
+  to the own one by the first's `equals` (`%clojure-host-equal-p`'s clauses, the instant
+  clause of `%clojure-equal` falling through to it), ordered by `compareTo`
+  (`%clojure-instant-compare`/`-uuid-compare`'s host arm, and a general host `Comparable` arm
+  in `%clojure-compare` and `%clojure-comparable-p`, so `sort` and a sorted set take one), but
+  printed `#<java java.util.Date>` and another map key (user doc deviations). Measured
+  2026-10-09, the need, over the local Clojars/contrib jars: constructions and statics in
+  medley, encore, truss, buddy, selmer, ring-core (session store, `last-modified-date`),
+  babashka.http-client, test.check, nippy, datascript, spec.alpha, schema, clj-time,
+  core.logic and 20 `System/currentTimeMillis` sites; an own Date handed to Java:
+  `SimpleDateFormat.format` (ring.util.time, cheshire, encore, timbre), `Calendar.setTime`
+  (timbre), JDBC through `.toInstant` (next.jdbc); `.toInstant` of one in encore, timbre,
+  fipp, next.jdbc; host Dates back: `Date/from` (malli, encore, tick), `.parse` (ring),
+  JDBC rows. The cost against the parent build (JVM class / wasm P1): a program naming no
+  `java:` operator, or making no instant or UUID, byte-identical (`demo.clj`, a
+  `.toUpperCase` program, an `#inst` + `random-uuid` program); a `java:` program making none
+  but calling `compare`/`=`/`prn` +222 B / -2 B (the host `Comparable` arm); an `#inst` +
+  `.toUpperCase` + `sort` + `=` program +3.2 KB / +561 B, the UUID one +1.0 KB / +135 B;
+  `(.getTime x)` in an `#inst` program +214 B / +194 B; `(.format sdf (java.util.Date. 0))`
+  byte-identical class (the rewrite); a `let`-bound Date handed to a member +3.2 KB, +13.2
+  KB once `prn` links the instant printer the value now needs. Rejected: printing a host Date
+  or UUID as `#inst`/`#uuid` through the host's `SimpleDateFormat` (+7.0 KB class in every
+  printing `java:` program: `.toUpperCase` + `println` 97,611 -> 104,569); a Calendar crossing
+  as a `GregorianCalendar` (+2.4 KB of the conversion alone, for a value only
+  `read-instant-calendar` makes and no measured library hands to Java); converting a host
+  value back at every call result (`java:` may not learn a Clojure shape, and a Lisp-level
+  wrap is a call on every `java:` result).
 - `clojure.instant` (parse-timestamp, validated, read-instant-date/-timestamp/-calendar)
   and `clojure.uuid` ship as startup namespaces ("clojure.jar namespaces") over the
   kernels `rontolisp.internal.instant` (`parse`, `validate`, `read-date`, `read-timestamp`,
@@ -3593,7 +3649,12 @@ milliseconds; the reverse false, the oracle's one-sided `equals`).
   half 20,000 each and the Lisp half 1,500 each on the interpreter);
   `ClojureReaderTest#instAndUuid*`, `ClojureArmsTest#theInstantAndUuidFamilies*`,
   `ClojureLibraryTest#aProgramMakingNoInstantOrUuid*`,
-  `ClojureInteropTest#instMsReadsAHostDateOrInstant*`.
+  `ClojureInteropTest#instMsReadsAHostDateOrInstant*`. The host members: clojure-spec
+  `date-and-uuid-constructions-and-statics-make-the-values-read-here` (all four,
+  oracle-identical), `ClojureInteropTest#aDateOrUuidMadeHereCrossesTheJavaBoundaryAsTheHostObject`,
+  `#aHostDateOrUuidIsEqualToAndComparesBesideOneMadeHere`,
+  `ClojureWasmInteropRefusalTest#aDateMadeHereRefusesOnlyAHostOnlyMemberOnBothBackends`,
+  `ClojureLibraryTest#aDateOrUuidConstructionMakesTheValueUnlessHandedStraightToAMember`.
 
 ## Data readers
 

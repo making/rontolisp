@@ -548,9 +548,10 @@ class ClojureInteropTest {
 	void hostKindPredicatesTestTheHostClass() throws Exception {
 		// oracle-identical (clj 1.12.6); a Lisp value is no host object, so a string
 		// is no uri? or inst? (the all-four-backend false answers are clojure-spec's)
-		assertBothEqual("(prn (class? String) (class? \"a\") (class? 1) (inst? (java.util.Date.))"
-				+ " (inst? (java.time.Instant/now)) (inst? \"2020\") (uuid? (java.util.UUID/randomUUID)) (uuid? \"x\")"
-				+ " (uri? (java.net.URI. \"http://a\")) (uri? \"http://a\") (map uuid? [(java.util.UUID/randomUUID) 1]))",
+		assertBothEqual("(def hu (java.util.UUID/nameUUIDFromBytes (.getBytes \"x\")))"
+				+ " (prn (class? String) (class? \"a\") (class? 1) (inst? (java.util.Date/from (java.time.Instant/now)))"
+				+ " (inst? (java.time.Instant/now)) (inst? \"2020\") (uuid? hu) (uuid? \"x\")"
+				+ " (uri? (java.net.URI. \"http://a\")) (uri? \"http://a\") (map uuid? [hu 1]))",
 				"true false false true true false true false true false (true false)\n");
 	}
 
@@ -558,11 +559,68 @@ class ClojureInteropTest {
 	void instMsReadsAHostDateOrInstantBesideTheProgramsOwnInstants() throws Exception {
 		// oracle-identical (clj 1.12.6): the Inst protocol's host rows beside a Date the
 		// program read, whose class instance? names as the host's
-		assertBothEqual("(def hd (java.util.Date. 5))"
+		assertBothEqual("(def hd (java.util.Date/from (java.time.Instant/ofEpochMilli 5)))"
 				+ " (prn (inst? hd) (inst-ms hd) (inst-ms (java.time.Instant/ofEpochMilli 7)) (inst-ms* hd)"
 				+ " (map inst-ms [hd #inst \"1970-01-01T00:00:00.009Z\"]) (instance? java.util.Date hd)"
 				+ " (instance? java.util.Date #inst \"2020\") (uuid? (java.util.UUID/randomUUID)) (uuid? #uuid \"1-1-1-1-1\"))",
 				"true 5 7 5 (5 9) true true true true\n");
+	}
+
+	@Test
+	void aDateOrUuidMadeHereCrossesTheJavaBoundaryAsTheHostObject() throws Exception {
+		// oracle-identical (clj 1.12.6): a construction makes the value #inst or #uuid
+		// reads, which a java: member is handed as the host Date, Timestamp or UUID,
+		// and whose class's other methods the host object answers -- a Date it answers
+		// coming back as one made here
+		assertBothEqual(
+				"(defn utc [p] (doto (java.text.SimpleDateFormat. p)"
+						+ " (.setTimeZone (java.util.TimeZone/getTimeZone \"UTC\"))))"
+						+ " (prn (.format (utc \"yyyy-MM-dd HH:mm:ss.SSS\") (java.util.Date. 1577934245678))"
+						+ " (.format (utc \"yyyy\") #inst \"2020\") (map #(.format (utc \"yyyy-MM-dd\") %)"
+						+ " [(java.sql.Timestamp. 0) #inst \"1999-12-31\"]))",
+				"\"2020-01-02 03:04:05.678\" \"2020\" (\"1970-01-01\" \"1999-12-31\")\n");
+		assertBothEqual(
+				"(prn (str (.toInstant (java.util.Date. 1500))) (str (.toInstant (java.sql.Timestamp. 1500)))"
+						+ " (.hashCode (java.util.Date. 1577836800000)) (.hashCode (java.util.UUID. -1 -2))"
+						+ " (.getYear (java.util.Date. 1592222400000)) (.clone (java.util.Date. 5))"
+						+ " (= (.clone (java.util.Date. 5)) (java.util.Date. 5)))",
+				"\"1970-01-01T00:00:01.500Z\" \"1970-01-01T00:00:01.500Z\" 1583802735 1 120"
+						+ " #inst \"1970-01-01T00:00:00.005-00:00\" true\n");
+		assertBothEqual("(let [s (java.util.HashSet.) l (java.util.ArrayList.) m (java.util.HashMap.)"
+				+ " c (java.util.Calendar/getInstance (java.util.TimeZone/getTimeZone \"UTC\"))]"
+				+ " (.add s #uuid \"1-1-1-1-1\") (.add l (java.util.Date. 3)) (.put m (java.util.UUID. 1 2) \"v\")"
+				+ " (.setTime c (java.util.Date. 86400000))"
+				+ " (prn (.contains s (java.util.UUID/fromString \"1-1-1-1-1\")) (map inst-ms l) (= (.get l 0) (java.util.Date. 3))"
+				+ " (.get m #uuid \"00000000-0000-0001-0000-000000000002\") (.get c java.util.Calendar/DAY_OF_MONTH)))",
+				"true (3) true \"v\" 2\n");
+		// a mutator but setTime would change a copy: refused by name (the oracle mutates)
+		assertBothEqual("(prn (try (.setYear (java.util.Date. 0) 100) (catch Exception e (.getMessage e))))",
+				"\"Method setYear taking 1 args is not supported for class java.util.Date\"\n");
+	}
+
+	@Test
+	void aHostDateOrUuidIsEqualToAndComparesBesideOneMadeHere() throws Exception {
+		// oracle-identical (clj 1.12.6) but the printed form: a Date or UUID a member
+		// answers stays the host object, = to the value made here by the first one's
+		// equals and ordered beside it by compareTo -- a host Comparable's compareTo
+		// orders it -- and printed as the host object, where the oracle's print-method
+		// writes #inst and #uuid
+		String host = "(def hd (java.util.Date/from (java.time.Instant/ofEpochMilli 5)))"
+				+ " (def hu (java.util.UUID/nameUUIDFromBytes (.getBytes \"abc\")))";
+		assertBothEqual(
+				host + " (prn (inst-ms hd) (str hu) (= hd (java.util.Date. 5)) (= (java.util.Date. 5) hd)"
+						+ " (= #uuid \"90015098-3cd2-3fb0-9696-3f7d28e17f72\" hu) (= hd (java.sql.Timestamp. 5))"
+						+ " (= (java.sql.Timestamp. 5) hd) (not= hd (java.util.Date. 6)))",
+				"5 \"90015098-3cd2-3fb0-9696-3f7d28e17f72\" true true true true false true\n");
+		assertBothEqual(
+				host + " (prn (compare hd (java.util.Date. 6)) (compare (java.util.Date. 6) hd) (compare hd hd)"
+						+ " (compare hu (java.util.UUID. 0 0)) (compare (java.util.UUID. 0 0) hu)"
+						+ " (map inst-ms (sort [(java.util.Date. 9) hd (java.util.Date. 1)]))"
+						+ " (map inst-ms (sorted-set (java.util.Date. 9) hd))"
+						+ " (compare (java.time.Instant/ofEpochMilli 1) (java.time.Instant/ofEpochMilli 2))"
+						+ " (map str (sort [(java.time.Instant/ofEpochMilli 3) (java.time.Instant/ofEpochMilli 1)])))",
+				"-1 1 0 -1 1 (1 5 9) (5 9) -1000000 (\"1970-01-01T00:00:00.001Z\" \"1970-01-01T00:00:00.003Z\")\n");
+		assertBothEqual(host + " (prn hd (pr-str [hu]))", "#<java java.util.Date> \"[#<java java.util.UUID>]\"\n");
 	}
 
 	@Test
