@@ -7413,6 +7413,22 @@ cases:
     expected: |
       :str :map :other :kw :bool
       true true true true false true
+  - name: extend-forms-answer-nil
+    # Oracle-identical (clj 1.12.6): extend-protocol, extend-type and extend answer nil,
+    # not the last method row stored.
+    source: |
+      (defprotocol EanP (ean-m [x]))
+      (defprotocol EanQ (ean-q [x]))
+      (defprotocol EanR (ean-r [x]))
+      (prn (extend-protocol EanP Long (ean-m [n] n)))
+      (prn (extend-type String EanQ (ean-q [s] s)))
+      (prn (extend Boolean EanR {:ean-r (fn [b] b)}))
+      (prn (let [v (extend-protocol EanP String (ean-m [s] s))] [v (ean-m "a") (ean-q "b") (ean-r true)]))
+    expected: |
+      nil
+      nil
+      nil
+      [nil "a" "b" true]
   - name: the-seq-predicates-follow-the-list-representation
     # A deviation: nil is the empty list, so the seq and collection predicates answer
     # false for () (the oracle: true); a strict seq is a list, so list? and counted? are
