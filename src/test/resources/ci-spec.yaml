@@ -4567,8 +4567,8 @@ cases:
       NIL
   # The clack-enablement batch that CAN be cross-backend: substitute-if (lack/util's
   # runtime middleware-name build), sleep (clack.handler's stop) and the load-context
-  # specials clack's %load-file rebinds. file-write-date is deliberately NOT here: it
-  # answers nil on both WASM backends by design (.kb/read-load-streams.md).
+  # specials clack's %load-file rebinds. file-write-date has its own case
+  # (file-write-date-and-deleting-an-empty-directory).
   - name: clack-enablement-builtins
     source: |
       (print (substitute-if #\- (lambda (c) (member c '(#\. #\/) :test 'char=)) "lack/mw.backtrace"))
@@ -11855,6 +11855,35 @@ cases:
       #P"w257/sub/dir/y.txt"
       T
       NIL
+      NIL
+  - name: file-write-date-and-deleting-an-empty-directory
+    # file-write-date answers the universal time a file was last written on all four
+    # backends (both WASM backends through path_filestat_get, the component adapter's
+    # over wasi:filesystem's stat-at) and nil for a missing file; delete-file removes
+    # an EMPTY directory everywhere (path_remove_directory / remove-directory-at) and
+    # refuses a non-empty one with the file-error.
+    source: |
+      (with-open-file (out "e82-dated.txt" :direction :output :if-exists :supersede) (write-line "x" out))
+      (let ((d (file-write-date (concatenate 'string "e82-dated" ".txt"))))
+        (print (and (integerp d) (> d 3881520000) (<= d (get-universal-time)))))
+      (print (file-write-date (concatenate 'string "e82-missing" ".txt")))
+      (print (ensure-directories-exist "e82-dir/sub/"))
+      (with-open-file (out "e82-dir/f.txt" :direction :output :if-exists :supersede) (write-line "x" out))
+      (print (handler-case (delete-file "e82-dir/") (file-error () :refused)))
+      (print (delete-file "e82-dir/sub/"))
+      (print (probe-file "e82-dir/sub/"))
+      (print (delete-file "e82-dir/f.txt"))
+      (print (delete-file "e82-dir/"))
+      (print (probe-file "e82-dir/"))
+    expected: |
+      T
+      NIL
+      "e82-dir/sub/"
+      :REFUSED
+      T
+      NIL
+      T
+      T
       NIL
   - name: a-failed-file-operation-signals-file-error
     # ANSI: open / delete-file / rename-file / truename of a missing file signal

@@ -29,6 +29,11 @@
   ;; result<_, error-code> discriminant out of the retptr.
   (import "wasi:filesystem/types@0.3.0" "[method]descriptor.create-directory-at" (func (param i32 i32 i32 i32)))
   (import "wasi:filesystem/types@0.3.0" "[method]descriptor.unlink-file-at" (func (param i32 i32 i32 i32)))
+  (import "wasi:filesystem/types@0.3.0" "[method]descriptor.remove-directory-at" (func (param i32 i32 i32 i32)))
+  ;; stat-at is an async func taking path-flags and a string; the SYNC lowering flattens
+  ;; to (self, path_flags, path_ptr, path_len, retptr), the result<descriptor-stat,
+  ;; error-code> landing in the retptr like descriptor.stat's.
+  (import "wasi:filesystem/types@0.3.0" "[method]descriptor.stat-at" (func (param i32 i32 i32 i32 i32)))
   ;; rename-at is an async func taking two strings and a borrowed descriptor; the SYNC
   ;; lowering flattens to (self, old_ptr, old_len, new_desc, new_ptr, new_len, retptr).
   (import "wasi:filesystem/types@0.3.0" "[method]descriptor.rename-at" (func (param i32 i32 i32 i32 i32 i32 i32)))

@@ -148,8 +148,9 @@ replaced.
   inside a jar, and never consults a class loader given.
 - `(java.net.URL. s)` and `(java.net.URI. s)` construct host objects (the interpreter and the
   JVM); `as-url` makes the URL every backend has, and `.toURI` of it the URI.
-- On WASM an empty directory is not deleted (`.delete` answers `false`; WASI's unlink takes no
-  directory), `lastModified` answers `0`, and `getAbsolutePath` of a relative File is refused
-  (no working directory). `canRead` answers whether the file exists.
+- `lastModified` answers whole seconds (a multiple of 1000), where the oracle may answer
+  milliseconds.
+- On WASM `getAbsolutePath` of a relative File is refused (no working directory). `canRead`
+  answers whether the file exists.
 - `line-seq` also takes a File, a URL and a byte stream, as it takes a path
   ([line-seq](line-seq.md)), where the oracle takes only a reader.

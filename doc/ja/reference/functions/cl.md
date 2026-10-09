@@ -416,7 +416,7 @@
 | `import` | `(import 'other:sym)` | 他パッケージのシンボルを修飾なしでアクセスできるようにします -- `:import-from` の実行時版（リテラルなトップレベル呼び出しはコンパイル時ディレクティブ） |
 | `file-position` | `(file-position s)` | ファイルストリームの位置（バイナリなら要素単位、文字ならバイト単位）、文字列ストリームの位置（文字単位）。第2引数を与えると位置を移動します。位置を判定できないストリームでは `nil` |
 | `file-length` | `(file-length s)` | ファイルストリームが開いているファイルのバイト長。他のストリームでは `nil` |
-| `file-write-date` | `(file-write-date "x.txt")` | ファイルの更新時刻をユニバーサルタイムで返します。判定できない場合は `nil`(2つのWASMバックエンドでは常に `nil`) |
+| `file-write-date` | `(file-write-date "x.txt")` | ファイルの更新時刻をユニバーサルタイムで返します。判定できない場合は `nil` |
 | `ensure-directories-exist` | `(ensure-directories-exist "logs/app.log")` | pathspec のディレクトリ部分を作成して pathspec を返します(2つのWASMバックエンドではシグナルを発生させます) |
 | `delete-file` | `(delete-file "notes.txt")` | 指定したファイルを削除して `t` を返します。ファイルが残る場合は「そもそも無かった」場合も含めてシグナルを発生させます(2つのWASMバックエンドでは `ensure-directories-exist` と同じ理由でシグナルを発生させます) |
 | `rename-file` | `(rename-file "notes.txt" "notes.bak")` | ファイルをリネーム (移動) し、補完後の新しい名前をパス名として返します。新しい名前は元の名前とマージされるため、ファイル名だけを渡すとディレクトリはそのままです。ファイルが元の場所に残る結果になった場合は「そもそも無かった」場合も含めてエラーになります (`delete-file` と同じく 2 つの WASM バックエンドではエラー) |

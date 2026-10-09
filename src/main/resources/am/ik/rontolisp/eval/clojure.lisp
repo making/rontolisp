@@ -15346,8 +15346,8 @@
       0))
 
 (defun rontolisp::%clojure-io-last-modified (f)
-  "When the file F names was last written, in milliseconds since 1970; 0 when
-   it is missing, or the host answers no date (both wasm backends)."
+  "When the file F names was last written, in milliseconds since 1970 (whole
+   seconds); 0 when it is missing, or the host answers no date."
   (let ((date
          (if (rontolisp::%clojure-io-exists-p f)
              (file-write-date (rontolisp::%clojure-io-path f)))))
@@ -15370,8 +15370,7 @@
         (rontolisp::%clojure-io-mkdirs f))))
 
 (defun rontolisp::%clojure-io-delete (f)
-  "Deletes the file F names: whether it was deleted (an empty directory too on
-   the interpreter and the JVM; wasm's unlink takes no directory)."
+  "Deletes the file F names: whether it was deleted (an empty directory too)."
   (let ((p (rontolisp::%clojure-io-path f)))
     (and (> (length p) 0) (%delete-file p) t)))
 

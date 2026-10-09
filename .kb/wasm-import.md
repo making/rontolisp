@@ -24,8 +24,10 @@ never validate or emit it directly.**
 
 A RUNTIME BUILDER may bind one through the same placeholder encoding: `--host-random`'s entropy
 import, the `_argv` helper's `args_sizes_get`/`args_get` pair (`WasmArgvRuntimeBuilder`,
-[[uiop]]) and `file-position`'s host call (`--component`'s `file_position_get`/`_set` pair, or
-Preview 1's `fd_seek`, [[read-load-streams]]) are appended to `hostImports` LAST, after the
+[[uiop]]), `file-position`'s host call (`--component`'s `file_position_get`/`_set` pair, or
+Preview 1's `fd_seek`, [[read-load-streams]]) and `path_filestat_get` / `path_remove_directory`
+behind `file-write-date` / `%delete-file` (same name and shape on both WASI backends, the
+adapter's over `stat-at` / `remove-directory-at`) are appended to `hostImports` LAST, after the
 directive-declared slots, so a program that also writes `rontolisp:wasm-import` keeps its
 ordinals and bytes.
 

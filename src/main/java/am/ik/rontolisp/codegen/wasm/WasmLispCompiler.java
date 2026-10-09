@@ -2012,8 +2012,9 @@ public final class WasmLispCompiler implements LispCompiler {
 	static final int FUNC_MAKE_DIRECTORIES = FUNC_C_SIGNUM + 1;
 
 	// _delete_file ((ref null eq) path) -> (ref null eq): the T symbol when the file
-	// was removed, nil when there was nothing to remove or the host refused
-	// (WasmIoRuntimeBuilder.buildDeleteFileBody, over the path_unlink_file import).
+	// or empty directory was removed, nil when there was nothing to remove or the host
+	// refused (WasmIoRuntimeBuilder.buildDeleteFileBody, over the path_unlink_file
+	// import and the injected path_remove_directory).
 	// The "a missing file is a file-error" decision lives in the Lisp delete-file
 	// above it, as on the other backends. Same signature and position rule as
 	// _make_directories.
@@ -2216,6 +2217,15 @@ public final class WasmLispCompiler implements LispCompiler {
 	// shifts, and shaken when no random site can meet a limb-tier limit.
 	static final int FUNC_RAND_BIG = FUNC_RAT_DIV_F64 + 1;
 
+	// _file_write_date ((ref null eq) path) -> (ref null eq): the universal time the
+	// named file was last written, nil when it cannot be told
+	// (WasmIoRuntimeBuilder.buildFileWriteDateBody, over the injected path_filestat_get
+	// import). Reuses the unary callable signature; appended after the last fixed
+	// helper so no index above shifts. A nil stub unless a WASI program names
+	// file-write-date, since the real body calls an import only such a program
+	// declares.
+	static final int FUNC_FILE_WRITE_DATE = FUNC_RAND_BIG + 1;
+
 	/**
 	 * The fixed function index of an fdlibm function.
 	 * @param fn the function
@@ -2246,7 +2256,7 @@ public final class WasmLispCompiler implements LispCompiler {
 	// above keeps its value; the user defuns below shift by
 	// WasmVecSimdRuntimeBuilder.FUNC_COUNT when the block is present. Read the base
 	// through userFuncBase(), never FUNC_USER_BASE.
-	static final int FUNC_VEC_BASE = FUNC_RAND_BIG + 1;
+	static final int FUNC_VEC_BASE = FUNC_FILE_WRITE_DATE + 1;
 
 	// User defuns start after the dispatch functions, the plist helper, the two
 	// hash-table runtime helpers, the two mod/rem helpers, the gensym helper, the
@@ -2266,10 +2276,10 @@ public final class WasmLispCompiler implements LispCompiler {
 	// landing (_type_err_of), the fill-pointer check (_fp_hdr), the ratio-to-double
 	// conversion (_rat_to_f64), the division-by-zero landing (_div_zero), the subseq
 	// bounds landing (_subseq_bad), the bounds check (_ck_bounds), the four exact
-	// prefix steps (_rat_add_f64 .. _rat_div_f64) and the limb-tier random draw
-	// (_rand_big) -- plus, under --simd, the vec: SIMD block. Use userFuncBase(), which
-	// adds that offset.
-	static final int FUNC_USER_BASE = FUNC_RAND_BIG + 1;
+	// prefix steps (_rat_add_f64 .. _rat_div_f64), the limb-tier random draw
+	// (_rand_big) and the path stat (_file_write_date) -- plus, under --simd, the vec:
+	// SIMD block. Use userFuncBase(), which adds that offset.
+	static final int FUNC_USER_BASE = FUNC_FILE_WRITE_DATE + 1;
 
 	// Type indices
 	static final int TYPE_FD_WRITE = 0;
@@ -3715,6 +3725,16 @@ public final class WasmLispCompiler implements LispCompiler {
 		// Preview 1 answers through fd_seek; --component answers through the adapter,
 		// which owns the tracked offset.
 		boolean preview1FilePosition = hostFilePosition && !this.component;
+		// file-write-date and the removal of a directory each ride one injected import
+		// on either WASI backend, gated on the program naming the operator so every
+		// other module keeps its bytes: path_filestat_get behind file-write-date,
+		// path_remove_directory behind %delete-file (which every directory-removing
+		// operator bottoms out in). Preview 1 binds the real wasi_snapshot_preview1
+		// functions, --component the adapter's over wasi:filesystem's stat-at /
+		// remove-directory-at. A --no-wasi module has no files, so neither is injected
+		// there: the date answers nil and a directory is not removed.
+		boolean hostWriteDate = !this.noWasi && programUsesSymbol(program, LispNames.FILE_WRITE_DATE);
+		boolean hostRemoveDirectory = !this.noWasi && programUsesSymbol(program, LispNames.DELETE_FILE_INTERNAL);
 		// The BIDIRECTIONAL open (:direction :io) and its :if-exists :overwrite sibling
 		// need path_open to ask for BOTH rights and to skip O_TRUNC, which is a different
 		// _open body -- gated on the surface fact so every other module keeps its bytes.
@@ -5866,7 +5886,13 @@ public final class WasmLispCompiler implements LispCompiler {
 		// shape (i32, i64, i32, i32) -> i32 no fixed type already has, so it is also the
 		// one that has to be counted here.
 		int fdSeekTypeIndex = preview1FilePosition ? fixedTypeCount() + exportPlans.size() + importSlots.size() : -1;
-		int abiTypeBase = fixedTypeCount() + exportPlans.size() + importSlots.size() + (preview1FilePosition ? 1 : 0);
+		// path_filestat_get(fd, flags, path, path_len, buf) -> errno is the other
+		// appended shape: (i32 x 5) -> i32, which no fixed type carries either. It
+		// follows fd_seek's entry, and only a program naming file-write-date has it.
+		int pathStatTypeIndex = hostWriteDate
+				? fixedTypeCount() + exportPlans.size() + importSlots.size() + (preview1FilePosition ? 1 : 0) : -1;
+		int abiTypeBase = fixedTypeCount() + exportPlans.size() + importSlots.size() + (preview1FilePosition ? 1 : 0)
+				+ (hostWriteDate ? 1 : 0);
 		int abiFuncBase = exportHelperBase + helperFuncCount + exportPlans.size();
 		int cabiReallocFuncIndex = abiFuncBase;
 		int cabiPostFuncBase = cabiReallocFuncIndex + 1;
@@ -5940,6 +5966,22 @@ public final class WasmLispCompiler implements LispCompiler {
 				hostImports.add(new am.ik.wasm.WasmImportInjector.HostImport(WASI_PREVIEW1_MODULE, "file_position_set",
 						TYPE_INTERN));
 			}
+		}
+		// The path stat and the directory removal ride the same ordinal space LAST, for
+		// the same reason file-position does (see hostWriteDate above). Both keep the
+		// preview1 name and shape on either WASI backend: under --component the adapter
+		// exports them under those names over wasi:filesystem's stat-at /
+		// remove-directory-at. path_remove_directory is (i32, i32, i32) -> i32, the
+		// path_unlink_file shape (TYPE_RD_MEMEQ), so it appends no type.
+		final int writeDateOrdinal = hostWriteDate ? hostImports.size() : -1;
+		if (hostWriteDate) {
+			hostImports.add(new am.ik.wasm.WasmImportInjector.HostImport(WASI_PREVIEW1_MODULE, "path_filestat_get",
+					pathStatTypeIndex));
+		}
+		final int removeDirectoryOrdinal = hostRemoveDirectory ? hostImports.size() : -1;
+		if (hostRemoveDirectory) {
+			hostImports.add(new am.ik.wasm.WasmImportInjector.HostImport(WASI_PREVIEW1_MODULE, "path_remove_directory",
+					TYPE_RD_MEMEQ));
 		}
 
 		// Which funcIds the arity ladders (and the name registry below) must carry a case
@@ -7328,6 +7370,12 @@ public final class WasmLispCompiler implements LispCompiler {
 				if (preview1FilePosition) {
 					types.addFunc(new Type[] { Type.I32, Type.I64, Type.I32, Type.I32 }, new Type[] { Type.I32 });
 				}
+				// path_filestat_get(fd, flags, path, path_len, buf) -> errno, at
+				// pathStatTypeIndex: only a WASI program naming file-write-date.
+				if (hostWriteDate) {
+					types.addFunc(new Type[] { Type.I32, Type.I32, Type.I32, Type.I32, Type.I32 },
+							new Type[] { Type.I32 });
+				}
 				// Component string-ABI signatures, from abiTypeBase:
 				// cabi_realloc, one cabi_post_* per flat-result signature, then one
 				// retptr shim per :string/:s-expr-returning export (the wrapper's
@@ -7829,6 +7877,9 @@ public final class WasmLispCompiler implements LispCompiler {
 				}
 				fnDef.addFunction(TYPE_CALLABLE_BASE + 0); // _rand_big (limit) -> value
 															// (FUNC_RAND_BIG)
+				fnDef.addFunction(TYPE_CALLABLE_BASE + 0); // _file_write_date (path) ->
+															// value
+															// (FUNC_FILE_WRITE_DATE)
 				// vec: SIMD block (--simd only): the three element helpers + twelve
 				// kernels
 				if (this.simd) {
@@ -8778,7 +8829,8 @@ public final class WasmLispCompiler implements LispCompiler {
 				// directory-creation body (FUNC_MAKE_DIRECTORIES)
 				code.addFunction(WasmIoRuntimeBuilder.buildMakeDirectoriesBody(stringTable));
 				// file-removal body (FUNC_DELETE_FILE)
-				code.addFunction(WasmIoRuntimeBuilder.buildDeleteFileBody(stringTable));
+				code.addFunction(WasmIoRuntimeBuilder.buildDeleteFileBody(stringTable, removeDirectoryOrdinal < 0 ? -1
+						: WasmImportCompiler.PLACEHOLDER_FUNC_BASE + removeDirectoryOrdinal));
 				// file-rename body (FUNC_RENAME_FILE)
 				code.addFunction(WasmIoRuntimeBuilder.buildRenameFileBody(stringTable));
 				// bulk character read body (FUNC_READ_SEQ_CHARS); a declining stub
@@ -8872,6 +8924,11 @@ public final class WasmLispCompiler implements LispCompiler {
 				code.addFunction(WasmRatioRuntimeBuilder.buildRatStepF64Body(FUNC_RAT_DIV, Instruction.F64_DIV));
 				// the limb-tier random draw (FUNC_RAND_BIG): shaken with its sites.
 				code.addFunction(WasmRandomCompiler.buildRandBigBody(ehMode));
+				// the path stat (FUNC_FILE_WRITE_DATE): over the injected
+				// path_filestat_get, or a nil stub where nothing declared it (no
+				// file-write-date in the program, or a --no-wasi module with no files).
+				code.addFunction(writeDateOrdinal < 0 ? WasmEmitHelper.buildNilBody() : WasmIoRuntimeBuilder
+					.buildFileWriteDateBody(WasmImportCompiler.PLACEHOLDER_FUNC_BASE + writeDateOrdinal));
 				// vec: SIMD block bodies (--simd only), in FUNC_VEC_BASE index order.
 				if (this.simd) {
 					// Each helper is handed the function index of the scalar vec.lisp

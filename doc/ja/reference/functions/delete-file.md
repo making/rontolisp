@@ -10,8 +10,9 @@
 4つのバックエンドすべてで動作します。2つのWASMバックエンドは `path_unlink_file` という
 WASIインポートを通じてunlinkし（Preview 1は直接、`--component` は `wasi:filesystem` の
 `unlink-file-at` 経由）、存在しないファイルはどこでも同じ `file-error` になります。
-ディレクトリの削除はWASMでは引き続き通知します。unlink呼び出しではディレクトリを
-削除できないためです。
+空のディレクトリもすべてのバックエンドで削除します（WASMでは `path_remove_directory`、
+`--component` は `remove-directory-at` 経由）。空でないディレクトリは残り、`file-error` を
+通知します。
 
 ```console
 (with-open-file (out "notes.txt" :direction :output)

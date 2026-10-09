@@ -509,9 +509,8 @@ through it — `_open`, `_probe_file`, `_list_directory`, `_load`, `_make_direct
   COPY on purpose: `get-directories` and its name strings lift through `cabi_realloc` at the CORE's
   `HEAP_PTR`, which the core pops back after every resolution. A preopen name over 256 bytes is
   recorded with length 0, not truncated.
-- **Not reached**: `file-write-date` nil on both WASM backends. Removing a DIRECTORY
-  still signals there -- preview1's `path_unlink_file` cannot remove directories
-  (that needs the `path_remove_directory` import, out of `.todo/257`'s scope).
+- `file-write-date` and `%delete-file`'s directory arm resolve the same way (the injected
+  `path_filestat_get` / `path_remove_directory`, "`file-length`, `file-write-date`" below).
 
 Pinned by `WasmLispCompilerIntegrationTest#absoluteRuntimePathResolvesAgainstThePreopenThatCoversIt`
 + its `component` twin, ci-spec `runtime-absolute-path-open-probe-and-load`.
@@ -1162,11 +1161,21 @@ instead of writing it. The pointer is advanced over for the call and popped afte
 discipline, load-bearing under `--component` because the adapter allocates through `cabi_realloc` at
 that cell). `adapter.wat`'s `$fd_filestat_get` re-encodes the preview1 `filestat` from a SYNC-lowered
 `descriptor.stat` (`result<descriptor-stat, error-code>` at `0x51600`: disc @0, `type` @8,
-`link-count` @24, `size` @32); dev/ino and timestamps are zero-filled.
+`link-count` @24, `size` @32, the three `option<instant>` @40/@64/@88); dev/ino are zero-filled,
+each timestamp is `seconds * 1e9 + nanoseconds` (0 for `none`, `$p1_timestamp`).
 
-**`file-write-date` still answers nil on both WASM backends** — it names a PATH, not an open stream,
-and the adapter zero-fills the timestamps. **Trigger**: lifting `data-modification-timestamp` out of
-`descriptor-stat` plus a path-stat runtime beside `_probe_file` is the whole remaining change.
+**`file-write-date` is REAL on all four backends** (2026-10-09). It names a PATH, so both WASM
+backends stat it through an INJECTED import (the `fd_seek` precedent, `.kb/wasm-import.md`), gated
+on the program naming `file-write-date`: `path_filestat_get(dirfd, symlink_follow, path, len, buf)`,
+the real preview1 call or `adapter.wat`'s over `descriptor.stat-at` (sync-lowered, the
+`descriptor.stat` result layout at the same `0x51600` cell, re-encoded by the shared
+`$write_filestat`). Its `(i32 x 5) -> i32` shape is the one appended type
+(`pathStatTypeIndex`, after `fd_seek`'s). `_file_write_date` (`FUNC_FILE_WRITE_DATE` after
+`FUNC_RAND_BIG`, a nil stub when the import is not declared -- `--no-wasi`, or no
+`file-write-date` in the program) stages the path like `_probe_file`, the 64-byte filestat
+8-aligned right after it, and answers `mtim / 1e9 + 2208988800` truncated (the interpreter's
+`toMillis() / 1000`), nil on a nonzero errno or an `mtim` of 0 (the JVM's `lastModified() == 0`).
+The serve bridge answers errno 76, so a served program's date is nil.
 
 The JVM side is GATED per operator (`JvmIoRuntimeBuilder.FileMeta`); `#'file-length` /
 `#'file-write-date` are in `REFERENCE_GATED_FUNCTIONS` because their wrapper bodies call those
@@ -1197,7 +1206,14 @@ paths (`.todo/212`).
   `.todo/900`, `ensure-directories-exist`'s. Both WASM backends unlink for real now
   (`_delete_file` over the FOURTEENTH preview1 import, `path_unlink_file`, called by
   `WasmDeleteFileCompiler`). mito's `generate-migrations` deletes superseded migration
-  files on all four. Removing a DIRECTORY still signals: unlink cannot rmdir (above).
+  files on all four. **An EMPTY directory is removed on all four** (2026-10-09), as
+  `Files.deleteIfExists` / `File.delete` remove one: when unlink refuses, `_delete_file`
+  calls the injected `path_remove_directory` (gated on the program naming `%delete-file`;
+  the adapter's over `descriptor.remove-directory-at`) with the same dirfd and resolved
+  path, minus ONE trailing slash -- wasmtime refuses `rmdir("dir/")` and removes
+  `rmdir("dir")`, and a directory namestring ends in a slash. A non-empty directory answers
+  nil, so `delete-file` signals; `uiop:delete-empty-directory` / `delete-directory-tree` and
+  Clojure's `.delete` of a directory ride the same primitive.
 - `rename-file` over `%rename-file` (same nil-not-signal rule); the new name is MERGED with the old
   one, so a bare file name keeps the directory. Both WASM backends move for real
   (`_rename_file` over the FIFTEENTH preview1 import, `path_rename` -- the one new
@@ -1222,11 +1238,12 @@ loop hits it. **Trigger**: the adapter answering 0 bytes/EOF idempotently.
 
 Pinned by `LispEvaluatorTest#evalFileWriteDateAndFileLength`/`#fileLengthOverEveryStreamKind`,
 `#renameFileMovesTheFileAndSignalsWhenItIsNotThere`, their JVM twins,
-`WasmLispCompilerIntegrationTest#fileWriteDateAnswersNilAndFilesystemWritesRunForReal`/
+`WasmLispCompilerIntegrationTest#fileWriteDateAndFilesystemWritesRunForReal`/
 `#fileLengthAnswersTheSizeOfARealFile`/`#componentFileLength`/
 `#uiopFilesystemProbeReadsAndMutations`, ci-spec
-`file-length-of-a-file-of-a-known-size` and
-`filesystem-write-create-rename-delete-and-probe`.
+`file-length-of-a-file-of-a-known-size`,
+`filesystem-write-create-rename-delete-and-probe` and
+`file-write-date-and-deleting-an-empty-directory`.
 
 ## `file-position` is REAL on ALL FOUR backends for every FILE stream
 

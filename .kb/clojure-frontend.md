@@ -1862,13 +1862,13 @@ the file), `default-streams-impl` a map. Until then only `reader` resolved, as a
 - **Deviations** (user doc `clojure-java-io.md`): no identity hash in `#object`; a URL's
   `.hashCode`/`=` by spelling; reading a non-`file:` URL refused by name; no byte arrays
   (`read` into a buffer, `readAllBytes`, `write` of one refused); three charsets; a computed
-  resource name never inside a jar; wasm: an empty directory is not deleted (WASI unlink),
-  `lastModified` 0 (no `file-write-date`), `getAbsolutePath` of a relative File refused (no
+  resource name never inside a jar; `lastModified` in whole seconds (`file-write-date`'s
+  resolution, every backend); wasm: `getAbsolutePath` of a relative File refused (no
   cwd); `canRead` is `exists`; `line-seq` takes a File/URL/byte stream like a path.
 - Pins: clojure-spec `clojure-java-io-*`, `a-java-io-file-prints-as-the-host-object-*`,
   `java-io-files-are-made-renamed-and-deleted`, `extend-takes-a-map-computed-at-run-time`
   (all four backends, oracle-identical but the hash/`class` case); `ClojureJavaIoTest`
-  (directories, the empty-directory deviation, a deps.edn project's directory and jar
+  (directories, an empty directory deleted and a file dated on all four, a deps.edn project's directory and jar
   resources on all four backends, the non-file URL refusals);
   `ClojureInteropTest#aJavaIoFileCrossesTheJavaBoundaryAsTheHostFile`;
   `ClojureArmsTest#theIoFamilyIsMadeByClojureJavaIoAndFoldsTheArmsOfAProgramMakingNone`;

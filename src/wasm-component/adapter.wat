@@ -1,10 +1,11 @@
 ;; preview1-to-WASI-0.3 adapter core module.
 ;;
 ;; Imports the shared memory and the lowered WASI 0.3 functions plus the async canonical
-;; built-ins (under "w"); exports the fifteen wasi_snapshot_preview1 functions rontolisp
-;; imports. In WASI 0.3 the wasi:io package is gone and all byte I/O flows through the
-;; built-in stream<u8> / future<T> types, so fd_write/fd_read/path_open/fd_close/fd_readdir/
-;; fd_prestat_*/fd_filestat_get/path_create_directory/path_unlink_file/path_rename
+;; built-ins (under "w"); exports the wasi_snapshot_preview1 functions rontolisp imports
+;; (WasmComponentBuilder.PREVIEW1_FUNCS). In WASI 0.3 the wasi:io package is gone and all
+;; byte I/O flows through the built-in stream<u8> / future<T> types, so fd_write/fd_read/
+;; path_open/fd_close/fd_readdir/fd_prestat_*/fd_filestat_get/path_filestat_get/
+;; path_create_directory/path_unlink_file/path_remove_directory/path_rename
 ;; are implemented with stream.new/read/write/drop + future.read over wasi:cli + wasi:filesystem
 ;; 0.3; random_get/clock_time_get/environ_* bridge wasi:random / wasi:clocks
 ;; (system-clock, renamed from 0.2's wall-clock) / wasi:cli/environment. The environ_*
@@ -46,8 +47,11 @@
 ;;           reads are offset-based and have no moveable cursor). Kept OUT of the fd table
 ;;           so those 16-byte slots keep their stride.
 ;;   0x50500 preopen table: 16 slots x 264 bytes {descriptor@0, name-len@4, name@8..}
-;;   0x51600 descriptor.stat result scratch: result<descriptor-stat, error-code>, 112
-;;           bytes -- disc byte @0, descriptor-stat @8 (type @8, link-count @24, size @32)
+;;   0x51600 descriptor.stat / stat-at result scratch: result<descriptor-stat,
+;;           error-code>, 112 bytes -- disc byte @0, descriptor-stat @8 (type @8,
+;;           link-count @24, size @32, then three option<instant> of 24 bytes each:
+;;           data-access @40, data-modification @64, status-change @88, each a disc
+;;           byte, seconds s64 @+8 and nanoseconds u32 @+16)
 ;;   0x51b00 file-append table: 64 slots x 1 byte -- 1 when the fd was opened with
 ;;           fdflags APPEND, which is the ONE disposition that must keep writing at the
 ;;           file's end rather than at the tracked offset.
@@ -87,10 +91,12 @@
   (import "w" "open-at" (func $open_at (param i32 i32 i32 i32 i32 i32 i32)))
   (import "w" "create-dir" (func $create_dir (param i32 i32 i32 i32)))
   (import "w" "unlink-file" (func $unlink_file (param i32 i32 i32 i32)))
+  (import "w" "remove-dir" (func $remove_dir (param i32 i32 i32 i32)))
   (import "w" "rename-at" (func $rename_at (param i32 i32 i32 i32 i32 i32 i32)))
   (import "w" "get-directories" (func $get_directories (param i32)))
   (import "w" "read-dir" (func $read_dir (param i32 i32)))
   (import "w" "desc-stat" (func $desc_stat (param i32 i32)))
+  (import "w" "stat-at" (func $stat_at (param i32 i32 i32 i32 i32)))
   (import "w" "get-random-u64" (func $rand_u64 (result i64)))
   (import "w" "drop-desc" (func $drop_desc (param i32)))
   ;; async canonical built-ins (the non-blocking variants; BLOCKED completes through
@@ -620,19 +626,8 @@
 
   ;; fd_filestat_get(fd, buf) -> errno. The preview1 shape over WASI 0.3's
   ;; descriptor.stat: the SYNC (blocking) lowering of an async func with no parameters,
-  ;; so the call is (self, retptr) and the whole result lands in memory.
-  ;;
-  ;; result<descriptor-stat, error-code> at 0x51600 is 112 bytes, align 8: the result
-  ;; discriminant byte at 0 (0 = ok), the payload at 8, and inside descriptor-stat the
-  ;; `type` variant at +0 (its case index in the first byte), `link-count` u64 at +16
-  ;; and `size` u64 at +24. So type is at 0x51608, link-count at 0x51618 and size at
-  ;; 0x51620.
-  ;;
-  ;; The written preview1 `filestat` fills dev/ino with 0 and the three timestamps with
-  ;; 0: the core reads only filetype and size (file-length), and inventing a device or a
-  ;; time that is not the time is exactly what a stub may not do. A consumer of the
-  ;; timestamps -- file-write-date, the day it stops answering nil here -- lifts them
-  ;; from the two option<instant> fields that follow `size`.
+  ;; so the call is (self, retptr) and the whole result lands in memory at 0x51600,
+  ;; re-encoded by $write_filestat.
   ;;
   ;; Only a real file fd (100 + slot) names a descriptor; anything else -- a standard
   ;; stream, a socket handle, an fd past the table -- is EBADF, which the core reads as
@@ -645,18 +640,50 @@
     (if (i32.eqz (i32.load offset=12 (local.get $sl))) (then (return (i32.const 8))))
     (call $desc_stat (i32.load (local.get $sl)) (i32.const 0x51600))
     (if (i32.load8_u (i32.const 0x51600)) (then (return (i32.const 76))))
+    (call $write_filestat (local.get $buf))
+    (i32.const 0))
+
+  ;; path_filestat_get(fd, flags, path, path_len, buf) -> errno, over
+  ;; descriptor.stat-at: the SYNC lowering of async func(path-flags, path: string), so
+  ;; the call is (self, path-flags, path_ptr, path_len, retptr). preview1's
+  ;; lookupflags and WASI 0.3's path-flags both keep symlink-follow in bit 0, so the
+  ;; flags pass through. A dirfd naming no preopen is errno 76, like $path_open's; so is
+  ;; any refusal, which the core reads as "the date cannot be determined".
+  (func $path_filestat_get (param $fd i32) (param $flags i32) (param $path i32) (param $plen i32)
+    (param $buf i32) (result i32)
+    (local $pre i32)
+    (local.set $pre (call $preopen_desc (i32.sub (local.get $fd) (i32.const 3))))
+    (if (i32.eq (local.get $pre) (i32.const -1)) (then (return (i32.const 76))))
+    (call $stat_at (local.get $pre) (i32.and (local.get $flags) (i32.const 1))
+      (local.get $path) (local.get $plen) (i32.const 0x51600))
+    (if (i32.load8_u (i32.const 0x51600)) (then (return (i32.const 76))))
+    (call $write_filestat (local.get $buf))
+    (i32.const 0))
+
+  ;; Re-encodes the descriptor-stat at 0x51608 as a preview1 `filestat` at $buf:
+  ;; dev/ino 0 (WASI 0.3 reports neither), filetype through $p1_filetype, nlink and
+  ;; size as they are, and each timestamp as $p1_timestamp reads it.
+  (func $write_filestat (param $buf i32)
     (i64.store (local.get $buf) (i64.const 0))                                  ;; dev
     (i64.store offset=8 (local.get $buf) (i64.const 0))                         ;; ino
     (i32.store8 offset=16 (local.get $buf)
       (call $p1_filetype (i32.load8_u (i32.const 0x51608))))                    ;; filetype
     (i64.store offset=24 (local.get $buf) (i64.load (i32.const 0x51618)))       ;; nlink
     (i64.store offset=32 (local.get $buf) (i64.load (i32.const 0x51620)))       ;; size
-    (i64.store offset=40 (local.get $buf) (i64.const 0))                        ;; atim
-    (i64.store offset=48 (local.get $buf) (i64.const 0))                        ;; mtim
-    (i64.store offset=56 (local.get $buf) (i64.const 0))                        ;; ctim
-    (i32.const 0))
+    (i64.store offset=40 (local.get $buf) (call $p1_timestamp (i32.const 0x51628))) ;; atim
+    (i64.store offset=48 (local.get $buf) (call $p1_timestamp (i32.const 0x51640))) ;; mtim
+    (i64.store offset=56 (local.get $buf) (call $p1_timestamp (i32.const 0x51658)))) ;; ctim
 
-  ;; path_create_directory(fd, path, path_len) -> errno. The preview1 shape over
+  ;; option<instant> at $at -> preview1 timestamp (u64 nanoseconds since the Unix
+  ;; epoch). `none` is 0, preview1's "no time": a stub may not name a time that is not
+  ;; the time, and the core reads 0 as "cannot be determined".
+  (func $p1_timestamp (param $at i32) (result i64)
+    (if (i32.eqz (i32.load8_u (local.get $at))) (then (return (i64.const 0))))
+    (i64.add
+      (i64.mul (i64.load offset=8 (local.get $at)) (i64.const 1000000000))
+      (i64.load32_u offset=16 (local.get $at))))
+
+    ;; path_create_directory(fd, path, path_len) -> errno. The preview1 shape over
   ;; WASI 0.3's descriptor.create-directory-at: the SYNC (blocking) lowering of an
   ;; async func taking a string, so the call is (self, path_ptr, path_len, retptr)
   ;; and the result<_, error-code> lands in memory -- discriminant byte 0 means ok
@@ -679,6 +706,18 @@
     (local.set $pre (call $preopen_desc (i32.sub (local.get $fd) (i32.const 3))))
     (if (i32.eq (local.get $pre) (i32.const -1)) (then (return (i32.const 76))))
     (call $unlink_file (local.get $pre) (local.get $path) (local.get $plen) (i32.const 0x50050))
+    (if (i32.load8_u (i32.const 0x50050)) (then (return (i32.const 76))))
+    (i32.const 0))
+
+  ;; path_remove_directory(fd, path, path_len) -> errno, over
+  ;; descriptor.remove-directory-at -- the same shape as $path_unlink_file above. The
+  ;; core calls it when unlink refused, and reads a nonzero errno as "nothing was
+  ;; removed" (a non-empty directory, a plain file, nothing there).
+  (func $path_remove_directory (param $fd i32) (param $path i32) (param $plen i32) (result i32)
+    (local $pre i32)
+    (local.set $pre (call $preopen_desc (i32.sub (local.get $fd) (i32.const 3))))
+    (if (i32.eq (local.get $pre) (i32.const -1)) (then (return (i32.const 76))))
+    (call $remove_dir (local.get $pre) (local.get $path) (local.get $plen) (i32.const 0x50050))
     (if (i32.load8_u (i32.const 0x50050)) (then (return (i32.const 76))))
     (i32.const 0))
 
@@ -814,8 +853,10 @@
   (export "fd_prestat_get" (func $fd_prestat_get))
   (export "fd_prestat_dir_name" (func $fd_prestat_dir_name))
   (export "fd_filestat_get" (func $fd_filestat_get))
+  (export "path_filestat_get" (func $path_filestat_get))
   (export "file_position_get" (func $file_position_get))
   (export "file_position_set" (func $file_position_set))
   (export "path_create_directory" (func $path_create_directory))
   (export "path_unlink_file" (func $path_unlink_file))
+  (export "path_remove_directory" (func $path_remove_directory))
   (export "path_rename" (func $path_rename)))
