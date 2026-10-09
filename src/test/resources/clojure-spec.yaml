@@ -813,6 +813,18 @@ cases:
       "x" "y"
       [1 2]
       nil true false
+  - name: flush-answers-nil-and-is-a-function
+    # (flush) flushes *out* and answers nil; as a value it takes no argument.
+    source: |
+      (print "a")
+      (prn (flush))
+      (print "b")
+      (prn ((fn [f] (f)) flush))
+      (prn (apply flush []))
+    expected: |
+      anil
+      bnil
+      nil
   - name: numbers
     # 1M is an exact ratio (1), not a double: decimal arithmetic stays exact and
     # prints as the ratio. The oracle prints 1M and 2N with their suffixes.
