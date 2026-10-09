@@ -2361,9 +2361,9 @@ class ClojureLoweringTest {
 		assertThatThrownBy(() -> Clojure.read("(ns t (:require [clojure.spec.alpha :as s]))", null))
 			.isInstanceOf(LispReadException.class)
 			.hasMessageContaining("unknown namespace: clojure.spec.alpha");
-		assertThatThrownBy(() -> Clojure.read("(ns t (:require [clojure.xml :as x]))", null))
+		assertThatThrownBy(() -> Clojure.read("(ns t (:require [clojure.reflect :as r]))", null))
 			.isInstanceOf(LispReadException.class)
-			.hasMessageContaining("unknown namespace: clojure.xml");
+			.hasMessageContaining("unknown namespace: clojure.reflect");
 	}
 
 	@Test

@@ -466,6 +466,75 @@ class ClojureInteropTest {
 	}
 
 	@Test
+	void printThrowableSpellsTheClassOfACaughtHostException() throws Exception {
+		// oracle-identical (clj 1.12.6, 2026-10-09): a caught host exception is the
+		// host's
+		// throwable, whose class is a host class object, not a class-name keyword
+		assertBothEqual(
+				"(require '[clojure.stacktrace :as st])"
+						+ " (st/print-throwable (try (Integer/parseInt \"x\") (catch Exception e e))) (newline)",
+				"java.lang.NumberFormatException: For input string: \"x\"\n");
+	}
+
+	@Test
+	void clojureJavaShellRunsAHostProcessLikeTheOracle() throws Exception {
+		// oracle-identical (clj 1.12.6, 2026-10-09): the exit code, the output decoded
+		// from
+		// :out-enc, the error output, :in as a string, a File and a reader, :dir, :env
+		// and
+		// the two binding macros; the error output of 100,000 bytes goes to a file, so a
+		// full pipe never stalls the process
+		assertBothEqual("(require '[clojure.java.shell :refer [sh with-sh-dir with-sh-env]] '[clojure.java.io :as io])"
+				+ " (defn show [m] (prn (:exit m) (:out m) (:err m)))" + " (show (sh \"echo\" \"hello\"))"
+				+ " (show (sh \"sh\" \"-c\" \"echo out; echo err 1>&2; exit 3\"))"
+				+ " (show (sh \"cat\" :in \"x\\u25bax\\n\"))" + " (show (sh \"pwd\" :dir \"/tmp\"))"
+				+ " (show (with-sh-dir \"/\" (sh \"pwd\")))"
+				+ " (show (sh \"sh\" \"-c\" \"echo $FOO-$HOME\" :env {\"FOO\" \"bar\"}))"
+				+ " (show (with-sh-env {:FOO \"baz\"} (sh \"sh\" \"-c\" \"echo $FOO\")))"
+				+ " (show (sh \"echo\" \"x\\u25bax\" :out-enc \"ISO-8859-1\"))"
+				+ " (let [m (sh \"sh\" \"-c\" \"head -c 100000 /dev/zero | tr '\\\\0' e 1>&2; echo done\")]"
+				+ " (prn (:exit m) (:out m) (count (:err m))))"
+				+ " (def in-file (str \"/tmp/rontolisp-sh-\" (rand-int 1000000000) \".txt\"))"
+				+ " (spit in-file \"from a file\\n\")" + " (show (sh \"cat\" :in (io/file in-file)))"
+				+ " (io/delete-file in-file)"
+				+ " (show (sh \"cat\" :in (java.io.BufferedReader. (java.io.StringReader. \"from a reader\\n\"))))"
+				+ " (show (sh \"cat\" :in \"\\u00e9\" :in-enc \"ISO-8859-1\" :out-enc \"ISO-8859-1\"))"
+				+ " (prn (try (sh \"no-such-command-rontolisp\") (catch java.io.IOException e :io-exception)))", """
+						0 "hello\\n" ""
+						3 "out\\n" "err\\n"
+						0 "x\u25bax\\n" ""
+						0 "/tmp\\n" ""
+						0 "/\\n" ""
+						0 "bar-\\n" ""
+						0 "baz\\n" ""
+						0 "x\u00e2\u0096\u00bax\\n" ""
+						0 "done\\n" 100000
+						0 "from a file\\n" ""
+						0 "from a reader\\n" ""
+						0 "\u00e9" ""
+						:io-exception
+						""");
+	}
+
+	@Test
+	void clojureXmlHandsAHostSourceAndAStartparseToTheHostsSaxParser() throws Exception {
+		// oracle-identical (clj 1.12.6, 2026-10-09): a host InputStream is read by
+		// startparse-sax-safe, and a startparse function is handed the source and a host
+		// ContentHandler, like the oracle's
+		assertBothEqual("(require '[clojure.xml :as xml])"
+				+ " (prn (xml/parse (java.io.ByteArrayInputStream. (.getBytes \"<a x='1'>t<b/></a>\" \"UTF-8\"))))"
+				+ " (def f (str \"/tmp/rontolisp-xml-\" (rand-int 1000000000) \".xml\"))"
+				+ " (spit f \"<r a='1'>  <c>text</c>  </r>\")"
+				+ " (prn (xml/parse (java.io.File. f) xml/startparse-sax))"
+				+ " (prn (xml/parse f (fn [s ch] (.parse (.newSAXParser (javax.xml.parsers.SAXParserFactory/newInstance)) s ch))))"
+				+ " (clojure.java.io/delete-file f)", """
+						{:tag :a, :attrs {:x "1"}, :content ["t" {:tag :b, :attrs nil, :content nil}]}
+						{:tag :r, :attrs {:a "1"}, :content [{:tag :c, :attrs nil, :content ["text"]}]}
+						{:tag :r, :attrs {:a "1"}, :content [{:tag :c, :attrs nil, :content ["text"]}]}
+						""");
+	}
+
+	@Test
 	void hostKindPredicatesTestTheHostClass() throws Exception {
 		// oracle-identical (clj 1.12.6); a Lisp value is no host object, so a string
 		// is no uri? or inst? (the all-four-backend false answers are clojure-spec's)

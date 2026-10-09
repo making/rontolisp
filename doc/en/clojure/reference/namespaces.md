@@ -17,7 +17,7 @@ Every namespace has its own vars: a definition belongs to the current namespace,
 
 A built-in namespace written in Clojure loads like a project file, after every source root,
 so a file of its name on the source path takes precedence -- except `clojure.walk`,
-`clojure.core.protocols`, `clojure.instant`, `clojure.uuid` and `clojure.java.io`, which are
+`clojure.core.protocols`, `clojure.instant`, `clojure.uuid`, `clojure.java.io` and `clojure.main`, which are
 loaded before the program, as in Clojure: a qualified name such as `clojure.walk/postwalk` reaches one without
 a `require`, as it does `clojure.edn`'s and `clojure.string`'s. A `clojure.*` namespace that is not
 part of Clojure itself (a contrib library such as `clojure.data.json`) loads from the
@@ -40,6 +40,10 @@ source path like any other; any other namespace of Clojure's own is an error.
 | `clojure.pprint` | [clojure.pprint](clojure-pprint.md) |
 | `clojure.template` | [clojure.template](clojure-template.md) |
 | `clojure.java.io` | [clojure.java.io](clojure-java-io.md) |
+| `clojure.java.shell` (interpreter and JVM) | [clojure.java.shell](clojure-java-shell.md) |
+| `clojure.xml` | [clojure.xml](clojure-xml.md) |
+| `clojure.repl` | [clojure.repl](clojure-repl.md) |
+| `clojure.main` | [clojure.main](clojure-main.md) |
 | `clojure.test` | [Tests (clojure.test)](test.md) |
 | `ring.adapter.rontolisp` | [Ring adapter](ring.md) |
 | `ring.util.*`, `ring.middleware.*` | [Ring utilities](ring-util.md) |

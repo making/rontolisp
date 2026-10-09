@@ -1,7 +1,8 @@
 (ns clojure.stacktrace
   "Printing of throwables and their causes, built into rontolisp. Written for
   this front end from the documented behaviour of Clojure's namespace of the
-  same name.")
+  same name."
+  (:require [rontolisp.internal.throwable :as t]))
 
 (defn root-cause
   "The innermost cause of the throwable tr, following its causes; tr itself
@@ -27,7 +28,7 @@
   "Prints the class and message of the throwable tr, and its ex-data on a line
   of its own."
   [tr]
-  (print (str (name (class tr)) ": " (let [message (ex-message tr)] (if (nil? message) "null" message))))
+  (print (str (t/class-name tr) ": " (let [message (ex-message tr)] (if (nil? message) "null" message))))
   (when-let [info (ex-data tr)]
     (newline)
     (pr info)))
