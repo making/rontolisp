@@ -3434,6 +3434,31 @@ cases:
       2 :d 1
       [[0 0] [1 0]] [[0 0] [:x 0]] [2 2]
       [[:q 2] true] {:v [1 :q]} {:v [:q 2]}
+  - name: the-nested-verbs-walk-a-computed-key-path
+    # Oracle-identical (clj 1.12.6): a key path that is no literal vector is walked at
+    # run time (any seqable, nil and empty included); get-in's default answers at the
+    # first missing level instead of being read into; an empty path updates under nil.
+    source: |
+      (def gp-m {:a {:b {:c 1}} :v [10 {:x 2}]})
+      (defn gp-get [ks] (get-in gp-m ks))
+      (defn gp-get-nf [ks] (get-in gp-m ks :nf))
+      (prn (gp-get [:a :b :c]) (gp-get '(:a :b :c)) (gp-get (list :v 1 :x)) (gp-get (map identity [:a :b])) (gp-get [:a :b :c :d]) (gp-get "ab"))
+      (prn (= gp-m (gp-get nil) (gp-get []) (gp-get-nf nil) (gp-get-nf (range 0))) (gp-get-nf [:a :zz]) (gp-get-nf [:a :zz :q]) (gp-get-nf [:a :b :c :d]) (gp-get-nf (list :v 5)))
+      (prn (get-in {} [:a :b] {:b 1}) (let [ks [:a :b]] (get-in {} ks {:b 1})) (let [f get-in] (f {} [:a :b] {:b 1})) (get-in {:a nil} [:a :b] :nf))
+      (prn (get-in {} [:a (do (print "k ") :b)] (do (print "d ") :nf)))
+      (let [ks (list :a :q)] (prn (= {:a {:b 1 :q 9}} (assoc-in {:a {:b 1}} ks 9)) (= {:a 1 nil 9} (assoc-in {:a 1} nil 9)) (assoc-in nil (list :x :y) 9) (assoc-in [10 20] (list 0) 9)))
+      (let [ks '(:a :b)] (prn (update-in {:a {:b 1}} ks inc) (update-in {:a {:b 1}} ks + 10 20) (= {:a 1 nil {:z 1}} (update-in {:a 1} nil assoc :z 1)) (update-in nil (list :x :y) (fnil inc 0))))
+      (prn (update-in {} [] assoc :z 1) (let [f update-in] (f {} [] assoc :z 1)) (update-in {} [] (fn [x] x)))
+      (prn (try (get-in gp-m (identity 5)) (catch Exception e :not-seqable)))
+    expected: |
+      1 1 2 {:c 1} nil nil
+      true :nf :nf :nf :nf
+      {:b 1} {:b 1} {:b 1} :nf
+      k d :nf
+      true true {:x {:y 9}} [9 20]
+      {:a {:b 2}} {:a {:b 31}} true {:x {:y 1}}
+      {nil {:z 1}} {nil {:z 1}} {nil nil}
+      :not-seqable
   - name: replace-maps-through-a-map-or-a-vector
     # Oracle-identical: a vector collection answers a vector, anything else a seq;
     # (replace smap) is the transducer; a set smap signals like the oracle's find.
