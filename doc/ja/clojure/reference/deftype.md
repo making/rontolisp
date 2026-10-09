@@ -24,9 +24,11 @@ deftype を定義します。マップ動詞には不透明な、レコード形
 ```
 
 本体は [reify](reify.md#host-interfaces) と同じく、コア関数が参照する `clojure.lang` の
-インタフェースを実装でき、`Object` のメソッドを上書きでき、そのメソッドにはフィールドが
-見えます。`Counted` の deftype は数えられ、`IDeref` の deftype は deref でき、`IObj` の
-deftype は自身のメソッドが保つメタデータを持ちます。
+インタフェース（[コレクションのインタフェース](reify.md#collection-interfaces)を含む）を実装でき、
+`Object` のメソッドを上書きでき、そのメソッドにはフィールドが見えます。`Counted` の deftype は
+数えられ、`IDeref` の deftype は deref でき、`IObj` の deftype は自身のメソッドが保つ
+メタデータを持ち、`IPersistentMap` の deftype は `assoc`・`get`・`map?` からマップとして扱われ、
+マップとして印字されます。
 
 ```clojure
 (deftype Box [v] clojure.lang.IDeref (deref [_] v))

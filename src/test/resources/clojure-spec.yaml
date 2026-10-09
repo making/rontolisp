@@ -9348,3 +9348,311 @@ cases:
       (in-ns 'user)
     expected: |
       {:a 1} {:b 2} ([:a 1] [:c 3]) true
+  - name: a-collection-type-conjs-empties-counts-and-compares-through-its-methods
+    # clojure.lang.IPersistentCollection in a deftype body (.kb/clojure-frontend.md
+    # "Collection interfaces"): conj and into reach its cons, empty its empty, = its equiv
+    # on either side (a vector on the left reads it as no sequential, nil and the value
+    # itself never ask); count of one that is no Counted walks its seq, like the oracle's
+    # countFrom. Every line is the oracle's (clj 1.12.6), on all four backends.
+    source: |
+      (ns iface-coll)
+      (def log (atom []))
+      (defn note [& xs] (swap! log conj (vec xs)))
+      (defn calls [] (let [l @log] (reset! log []) l))
+      (deftype BagT [xs]
+        clojure.lang.IPersistentCollection
+        (cons [_ x] (note :cons x) (BagT. (conj xs x)))
+        (empty [_] (note :empty) (BagT. []))
+        (equiv [_ o] (note :equiv) (= xs o))
+        (count [_] (note :count) 99)
+        (seq [_] (seq xs)))
+      (prn (.-xs (conj (BagT. [1]) 2 3)) (calls) (.-xs (into (BagT. []) [4 5])) (calls) (.-xs (empty (BagT. [1]))) (calls))
+      (prn (count (BagT. [1 2 3])) (calls) (counted? (BagT. [])) (coll? (BagT. [])) (sequential? (BagT. [])) (seq (BagT. [7 8])) (first (BagT. [7 8])) (reduce + (BagT. [1 2 3])))
+      (prn (= (BagT. [1 2]) [1 2]) (calls) (= :k (BagT. [])) (calls) (= [1 2] (BagT. [1 2])) (calls) (= nil (BagT. [])) (let [b (BagT. [])] (= b b)) (calls))
+      (prn (instance? clojure.lang.IPersistentCollection (BagT. [])) (instance? clojure.lang.Seqable (BagT. [])) (map? (BagT. [])) (vector? (BagT. [])))
+      (in-ns 'user)
+    expected: |
+      [1 2 3] [[:cons 2] [:cons 3]] [4 5] [[:cons 4] [:cons 5]] [] [[:empty]]
+      3 [] false true false (7 8) 7 6
+      true [[:equiv]] false [[:equiv]] false [] false true []
+      true true false false
+  - name: a-map-type-assocs-dissocs-reads-and-prints-as-a-map
+    # clojure.lang.IPersistentMap in a deftype body (.kb/clojure-frontend.md "Collection
+    # interfaces"): assoc, update and merge reach its assoc and cons, dissoc its without,
+    # get and a keyword's call its valAt, contains? its containsKey, find and select-keys
+    # its entryAt; map? is true and it prints as a map over its seq; reduce, into and
+    # reduce-kv step its iterator (an IPersistentMap is an Iterable), like the oracle; a
+    # map on the left of = is no java.util.Map's. A java.util.Map body answers get,
+    # count, contains?, find, seq and = through its get, size, containsKey and entrySet.
+    # Every line is the oracle's (clj 1.12.6), on all four backends.
+    source: |
+      (ns iface-map)
+      (def log (atom []))
+      (defn note [& xs] (swap! log conj (vec xs)))
+      (defn calls [] (let [l @log] (reset! log []) l))
+      (deftype MapT [m]
+        clojure.lang.IPersistentMap
+        (count [_] (count m))
+        (cons [_ x] (note :cons x) (MapT. (conj m x)))
+        (empty [_] (MapT. {}))
+        (equiv [_ o] (= m o))
+        (seq [_] (seq m))
+        (valAt [_ k] (note :valAt k) (get m k))
+        (valAt [_ k nf] (note :valAt k nf) (get m k nf))
+        (containsKey [_ k] (note :containsKey k) (contains? m k))
+        (entryAt [_ k] (note :entryAt k) (find m k))
+        (assoc [_ k v] (note :assoc k v) (MapT. (assoc m k v)))
+        (assocEx [_ k v] (MapT. (assoc m k v)))
+        (without [_ k] (note :without k) (MapT. (dissoc m k)))
+        (iterator [_] (note :iterator) (.iterator m)))
+      (def mm (MapT. {:a 1}))
+      (prn (.-m (assoc mm :b 2)) (calls) (.-m (dissoc mm :a)) (calls) (get mm :a) (get mm :z :nf) (:a mm) (calls))
+      (prn (contains? mm :a) (find mm :a) (calls) (.-m (update mm :a inc)) (calls) (select-keys mm [:a]) (calls))
+      (prn (count mm) (keys mm) (vals mm) (map? mm) (associative? mm) (counted? mm) (empty? mm) mm [mm])
+      (println mm)
+      (prn (reduce (fn [a [k v]] (+ a v)) 10 mm) (calls) (into {} mm) (calls) (reduce-kv (fn [a k v] (conj a k v)) [] mm) (calls))
+      (prn (.-m (merge mm {:c 3})) (calls) (merge {:c 3} (MapT. {})) (= mm {:a 1}) (= {:a 1} mm) (let [{:keys [a]} mm] a) (calls))
+      (deftype JMapT [m] java.util.Map (size [_] (count m)) (containsKey [_ k] (contains? m k)) (get [_ k] (get m k)) (entrySet [_] (set m)))
+      (def jm (JMapT. {:a 1}))
+      (prn (get jm :a) (get jm :z :nf) (:a jm) (count jm) (contains? jm :a) (find jm :a) (seq jm) (map? jm) (keys jm) (= {:a 1} jm) (= jm {:a 1}) jm)
+      (in-ns 'user)
+    expected: |
+      {:a 1, :b 2} [[:assoc :b 2]] {} [[:without :a]] 1 :nf 1 [[:valAt :a] [:valAt :z :nf] [:valAt :a]]
+      true [:a 1] [[:containsKey :a] [:entryAt :a]] {:a 2} [[:valAt :a] [:assoc :a 2]] {:a 1} [[:entryAt :a]]
+      1 (:a) (1) true true true false {:a 1} [{:a 1}]
+      {:a 1}
+      11 [[:iterator]] {:a 1} [[:iterator]] [:a 1] [[:iterator]]
+      {:a 1, :c 3} [[:cons {:c 3}]] {:c 3} true false 1 [[:valAt :a]]
+      1 :nf 1 1 true [:a 1] ([:a 1]) false (:a) true true {:a 1}
+  - name: a-set-type-disjs-contains-and-prints-as-a-set
+    # clojure.lang.IPersistentSet in a deftype body (.kb/clojure-frontend.md "Collection
+    # interfaces"): disj reaches its disjoin, contains? its contains, get and a keyword's
+    # call its get (with a default, past its contains); set? is true and it prints as a
+    # set; a set on the left of = is no java.util.Set's. Every line is the oracle's (clj
+    # 1.12.6), on all four backends.
+    source: |
+      (ns iface-set)
+      (def log (atom []))
+      (defn note [& xs] (swap! log conj (vec xs)))
+      (defn calls [] (let [l @log] (reset! log []) l))
+      (deftype SetT [s]
+        clojure.lang.IPersistentSet
+        (count [_] (count s))
+        (cons [_ x] (note :cons x) (SetT. (conj s x)))
+        (empty [_] (SetT. #{}))
+        (equiv [_ o] (= s o))
+        (seq [_] (seq s))
+        (disjoin [_ k] (note :disjoin k) (SetT. (disj s k)))
+        (contains [_ k] (note :contains k) (contains? s k))
+        (get [_ k] (note :get k) (get s k)))
+      (def ss (SetT. #{1}))
+      (prn (.-s (disj ss 1)) (calls) (contains? ss 1) (get ss 1) (get ss 9 :nf) (:a ss) (calls))
+      (prn (set? ss) (count ss) ss (= ss #{1}) (= #{1} ss) (.-s (conj ss 1)) (calls) (into #{} ss))
+      (in-ns 'user)
+    expected: |
+      #{} [[:disjoin 1]] true 1 :nf nil [[:contains 1] [:get 1] [:contains 9] [:get :a]]
+      true 1 #{1} true false #{1} [[:cons 1]] #{1}
+  - name: a-vector-type-indexes-stacks-reverses-and-prints-as-a-vector
+    # clojure.lang.IPersistentVector in a deftype body (.kb/clojure-frontend.md
+    # "Collection interfaces"): vector?, sequential?, reversible? and indexed? are true, it
+    # prints as a vector, a vector on the left of = reads its count and nth, a list its
+    # seq; assoc reaches its assoc, rseq its rseq, peek and pop theirs, subvec its nth.
+    # Every line is the oracle's (clj 1.12.6), on all four backends.
+    source: |
+      (ns iface-vector)
+      (def log (atom []))
+      (defn note [& xs] (swap! log conj (vec xs)))
+      (defn calls [] (let [l @log] (reset! log []) l))
+      (deftype VecT [v]
+        clojure.lang.IPersistentVector
+        (count [_] (count v))
+        (cons [_ x] (note :cons x) (VecT. (conj v x)))
+        (empty [_] (VecT. []))
+        (equiv [_ o] (= v o))
+        (seq [_] (seq v))
+        (peek [_] (note :peek) (peek v))
+        (pop [_] (note :pop) (VecT. (pop v)))
+        (valAt [_ k] (get v k))
+        (valAt [_ k nf] (get v k nf))
+        (containsKey [_ k] (contains? v k))
+        (entryAt [_ k] (find v k))
+        (assoc [_ k x] (note :assoc k x) (VecT. (assoc v k x)))
+        (assocN [_ k x] (VecT. (assoc v k x)))
+        (length [_] (count v))
+        (rseq [_] (note :rseq) (rseq v))
+        (nth [_ i] (nth v i))
+        (nth [_ i nf] (nth v i nf)))
+      (def vv (VecT. [1 2 3]))
+      (prn (vector? vv) (sequential? vv) (reversible? vv) (indexed? vv) vv [vv] (= vv [1 2 3]) (= [1 2 3] vv) (= '(1 2 3) vv))
+      (prn (.-v (assoc vv 0 9)) (nth vv 1) (get vv 1) (rseq vv) (peek vv) (.-v (pop vv)) (calls) (subvec vv 1) (let [[a b] vv] [a b]))
+      (prn (mapv inc vv) (reduce + vv) (count vv) (contains? vv 1) (find vv 1) (.-v (into vv [4])) (calls) (last vv))
+      (in-ns 'user)
+    expected: |
+      true true true true [1 2 3] [[1 2 3]] true true true
+      [9 2 3] 2 2 (3 2 1) 3 [1 2] [[:assoc 0 9] [:rseq] [:peek] [:pop]] [2 3] [1 2]
+      [2 3 4] 6 3 true [1 2] [1 2 3 4] [[:cons 4]] 3
+  - name: a-seq-type-walks-through-its-first-and-next
+    # clojure.lang.ISeq and Sequential in a deftype body (.kb/clojure-frontend.md
+    # "Collection interfaces"): a seq answering the type itself walks through its first
+    # and next -- first, second, map, into, reduce, count, last, apply, vec -- and prints
+    # as a seq; seq? is true, sequential? only with Sequential, whose seq a vector or list
+    # on the other side of = walks, like nth and vector destructuring. Every line is the
+    # oracle's (clj 1.12.6), on all four backends.
+    source: |
+      (ns iface-seq)
+      (deftype SeqT [v i]
+        clojure.lang.ISeq
+        (first [_] (nth v i))
+        (next [_] (when (< (inc i) (count v)) (SeqT. v (inc i))))
+        (more [_] (if (< (inc i) (count v)) (SeqT. v (inc i)) ()))
+        (cons [this x] (cons x this))
+        (count [_] (- (count v) i))
+        (empty [_] ())
+        (equiv [this o] (= (seq v) o))
+        (seq [this] this))
+      (def qq (SeqT. [1 2 3] 0))
+      (prn (first qq) (second qq) (seq? qq) (sequential? qq) (coll? qq) qq (count qq) (conj qq 0) (cons 0 qq) (map inc qq) (into [] qq))
+      (prn (reduce + qq) (= [1 2 3] qq) (= qq [1 2 3]) (last qq) (apply + qq) (empty? qq) (vec qq))
+      (deftype SeqViewT [v] clojure.lang.Sequential clojure.lang.Seqable (seq [_] (seq v)))
+      (prn (sequential? (SeqViewT. [1 2])) (= [1 2] (SeqViewT. [1 2])) (= '(1 2) (SeqViewT. [1 2])) (= (SeqViewT. [1 2]) [1 2]) (nth (SeqViewT. [1 2]) 1) (let [[a b] (SeqViewT. [1 2])] [a b]))
+      (in-ns 'user)
+    expected: |
+      1 2 true false true (1 2 3) 3 (0 1 2 3) (0 1 2 3) (2 3 4) [1 2 3]
+      6 false true 3 6 false [1 2 3]
+      true true true true 2 [1 2]
+  - name: an-iterable-type-seqs-and-reduces-through-its-iterator
+    # java.lang.Iterable, java.util.Iterator and the java.util collections in a deftype or
+    # reify body (.kb/clojure-frontend.md "Collection interfaces"): the seq of an Iterable
+    # steps its iterator, and so do reduce, into, vec and sort; iterator-seq steps an
+    # iterator -- a type's, a collection's .iterator, a clojure.lang.SeqIterator -- whose
+    # next past its end is the oracle's NoSuchElementException; a java.util.List counts
+    # through its size, a RandomAccess one indexes through its get and prints readably as
+    # a vector, a java.util.Set answers contains? and = through its contains and prints
+    # readably as a set. Every line is the oracle's (clj 1.12.6), on all four backends.
+    source: |
+      (ns iface-iter)
+      (deftype ThreeT []
+        java.lang.Iterable
+        (iterator [_]
+          (let [i (atom 0)]
+            (reify java.util.Iterator
+              (hasNext [_] (< @i 3))
+              (next [_] (let [x @i] (swap! i inc) x))))))
+      (prn (seq (ThreeT.)) (first (ThreeT.)) (reduce + (ThreeT.)) (reduce + 10 (ThreeT.)) (into [] (ThreeT.)) (map inc (ThreeT.)) (vec (ThreeT.)) (sort > (ThreeT.)) (seqable? (ThreeT.)) (coll? (ThreeT.)) (empty? (ThreeT.)))
+      (prn (iterator-seq (.iterator (ThreeT.))) (iterator-seq (.iterator [1 2 3])) (iterator-seq (clojure.lang.SeqIterator. (seq [4 5]))) (iterator-seq (.iterator {:a 1})))
+      (prn (let [it (.iterator [7 8])] [(.hasNext it) (.next it) (.next it) (.hasNext it)]) (try (.next (.iterator [])) (catch java.util.NoSuchElementException e :done)))
+      (deftype JListT [v] java.util.List java.util.RandomAccess (size [_] (count v)) (get [_ i] (nth v i)) (iterator [_] (.iterator v)))
+      (deftype JSetT [s] java.util.Set (size [_] (count s)) (contains [_ x] (contains? s x)) (iterator [_] (.iterator s)))
+      (prn (count (JListT. [1 2])) (nth (JListT. [1 2]) 1) (seq (JListT. [1 2])) (= [1 2] (JListT. [1 2])) (= '(1 2) (JListT. [1 2])) (pr-str (JListT. [1 2])) (reduce + (JListT. [1 2])))
+      (prn (count (JSetT. #{1})) (contains? (JSetT. #{1}) 1) (seq (JSetT. #{1})) (= #{1} (JSetT. #{1})) (pr-str (JSetT. #{1})) (set? (JSetT. #{1})))
+      (in-ns 'user)
+    expected: |
+      (0 1 2) 0 3 13 [0 1 2] (1 2 3) [0 1 2] (2 1 0) true false false
+      (0 1 2) (1 2 3) (4 5) ([:a 1])
+      [true 7 8 false] :done
+      2 2 (1 2) true true "[1 2]" 3
+      1 true (1) true "#{1}" false
+  - name: pending-comparable-and-sorted-types-answer-through-their-methods
+    # clojure.lang.IPending, java.lang.Comparable and clojure.lang.Sorted in a deftype body
+    # (.kb/clojure-frontend.md "Collection interfaces"): realized? reaches isRealized;
+    # compare, sort and a sorted set's default order compareTo; subseq and rsubseq walk a
+    # Sorted through its seqFrom, seq, comparator and entryKey, like the oracle's. A
+    # method the body leaves out is the oracle's AbstractMethodError when a verb calls it
+    # (an IPersistentMap is an Iterable, whose iterator reduce reads). Every line is the
+    # oracle's (clj 1.12.6), on all four backends.
+    source: |
+      (ns iface-misc)
+      (deftype CellT [r] clojure.lang.IPending (isRealized [_] r))
+      (prn (realized? (CellT. true)) (realized? (CellT. false)) (instance? clojure.lang.IPending (CellT. 1)))
+      (deftype CentsT [c] java.lang.Comparable (compareTo [_ o] (compare c (.-c ^CentsT o))))
+      (prn (compare (CentsT. 1) (CentsT. 2)) (compare (CentsT. 2) (CentsT. 2)) (map #(.-c %) (sort [(CentsT. 3) (CentsT. 1) (CentsT. 2)])) (map #(.-c %) (sorted-set (CentsT. 2) (CentsT. 1))) (compare nil (CentsT. 1)))
+      (deftype IndexT [m]
+        clojure.lang.Sorted
+        (comparator [_] compare)
+        (entryKey [_ e] (key e))
+        (seq [_ asc] (if asc (seq m) (rseq m)))
+        (seqFrom [_ k asc] (if asc (subseq m >= k) (rsubseq m <= k))))
+      (def ix (IndexT. (sorted-map 1 :a 2 :b 3 :c 4 :d)))
+      (prn (sorted? ix) (subseq ix > 2) (subseq ix < 3) (rsubseq ix < 3) (rsubseq ix >= 3) (subseq ix >= 2 < 4) (rsubseq ix > 1 <= 3))
+      (deftype HolderT [] clojure.lang.IPersistentMap (count [_] 0) (seq [_] nil))
+      (prn (try (reduce + 0 (HolderT.)) (catch AbstractMethodError e :no-iterator)) (try (conj (HolderT.) [:a 1]) (catch AbstractMethodError e :no-cons)))
+      (prn (instance? clojure.lang.IPersistentMap (HolderT.)) (instance? java.lang.Iterable (HolderT.)) (instance? clojure.lang.Associative (HolderT.)) (instance? java.util.Map (HolderT.)) (instance? clojure.lang.IHashEq (reify clojure.lang.IHashEq (hasheq [_] 1))))
+      (in-ns 'user)
+    expected: |
+      true false true
+      -1 0 (1 2 3) (1 2) -1
+      true ([3 :c] [4 :d]) ([1 :a] [2 :b]) ([2 :b] [1 :a]) ([4 :d] [3 :c]) ([2 :b] [3 :c]) ([3 :c] [2 :b])
+      :no-iterator :no-cons
+      true true true false true
+  - name: a-protocol-extended-to-a-collection-interface-reaches-a-type-implementing-it
+    # extend-protocol to clojure.lang.IPersistentMap, IPersistentVector, IPersistentSet and
+    # java.util.Map, which also key the core kinds' rows, and to ISeq
+    # (.kb/clojure-frontend.md "Collection interfaces"): a deftype or reify implementing one
+    # takes its row, an extension to none the Object row; satisfies? agrees. Every line is
+    # the oracle's (clj 1.12.6), on all four backends.
+    source: |
+      (ns iface-extend)
+      (defprotocol Kind (kind [x]))
+      (extend-protocol Kind
+        clojure.lang.IPersistentMap (kind [_] :map)
+        clojure.lang.IPersistentVector (kind [_] :vector)
+        clojure.lang.ISeq (kind [_] :seq)
+        clojure.lang.IPersistentSet (kind [_] :set)
+        java.util.Map (kind [_] :java-map)
+        Object (kind [_] :object))
+      (deftype KindMapT [m] clojure.lang.IPersistentMap (seq [_] (seq m)) (count [_] (count m)))
+      (deftype KindVecT [v] clojure.lang.IPersistentVector (seq [_] (seq v)) (count [_] (count v)) (nth [_ i] (nth v i)))
+      (deftype KindSeqT [v] clojure.lang.ISeq (seq [this] (seq v)) (first [_] (first v)) (next [_] (next v)))
+      (deftype KindSetT [s] clojure.lang.IPersistentSet (seq [_] (seq s)) (count [_] (count s)))
+      (deftype KindJMapT [m] java.util.Map (size [_] (count m)))
+      (prn (kind (KindMapT. {})) (kind (KindVecT. [])) (kind (KindSeqT. [])) (kind (KindSetT. #{})) (kind (KindJMapT. {})) (kind (reify clojure.lang.Counted (count [_] 0))))
+      (prn (kind #{1}) (satisfies? Kind (KindMapT. {})) (satisfies? Kind (KindVecT. [])))
+      (in-ns 'user)
+    expected: |
+      :map :vector :seq :set :java-map :object
+      :set true true
+  - name: a-protocol-extended-to-an-interface-reaches-every-value-implementing-it
+    # extend-protocol to an interface spelled like a core kind whose instances go past
+    # that kind (.kb/clojure-frontend.md "Collection interfaces"): a record reaches
+    # clojure.lang.IPersistentMap and java.util.Map, a vector and a set java.util.Collection,
+    # a keyword, a symbol and a map clojure.lang.IFn, a vector clojure.lang.Sequential; a
+    # list takes clojure.lang.ISeq ahead of IPersistentCollection, the more specific one,
+    # and a keyword its own class ahead of IFn. Every line is the oracle's (clj 1.12.6),
+    # on all four backends.
+    source: |
+      (ns iface-extend-kinds)
+      (defrecord ExtKindRec [a])
+      (defprotocol Shape (shape [x]))
+      (extend-protocol Shape
+        clojure.lang.IPersistentMap (shape [_] :pmap)
+        Object (shape [_] :other))
+      (prn (shape (->ExtKindRec 1)) (shape {}) (shape (sorted-map)) (shape []) (satisfies? Shape (->ExtKindRec 1)))
+      (defprotocol JShape (jshape [x]))
+      (extend-protocol JShape
+        java.util.Map (jshape [_] :jmap)
+        java.util.Collection (jshape [_] :coll)
+        Object (jshape [_] :other))
+      (prn (jshape (->ExtKindRec 1)) (jshape {}) (jshape [1]) (jshape #{1}) (jshape '(1)) (jshape (map inc [1])) (jshape "s"))
+      (defprotocol Order (order [x]))
+      (extend-protocol Order
+        clojure.lang.IPersistentCollection (order [_] :pcoll)
+        clojure.lang.ISeq (order [_] :iseq)
+        Object (order [_] :other))
+      (prn (order '(1)) (order [1]) (order {}) (order (->ExtKindRec 1)) (order #{}) (order "s"))
+      (defprotocol Call (call-kind [x]))
+      (extend-protocol Call
+        clojure.lang.IFn (call-kind [_] :ifn)
+        clojure.lang.Keyword (call-kind [_] :keyword)
+        Object (call-kind [_] :other))
+      (prn (call-kind :k) (call-kind 's) (call-kind {}) (call-kind []) (call-kind inc) (call-kind 1) (satisfies? Call 's))
+      (defprotocol Line (line [x]))
+      (extend-protocol Line
+        clojure.lang.Sequential (line [_] :sequential))
+      (prn (line [1]) (line '(1)) (satisfies? Line [1]) (satisfies? Line {}))
+      (in-ns 'user)
+    expected: |
+      :pmap :pmap :pmap :other true
+      :jmap :jmap :coll :coll :coll :coll :other
+      :iseq :pcoll :pcoll :pcoll :pcoll :other
+      :keyword :ifn :ifn :ifn :ifn :other true
+      :sequential :sequential true false

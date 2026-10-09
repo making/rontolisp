@@ -1177,11 +1177,11 @@ class ClojureLoweringTest {
 			.contains("%CLOJURE-INVOKABLE-ROW");
 		for (String[] refused : new String[][] {
 				{ "(reify IFn (invoke [_] 1))", "Unable to resolve symbol: IFn in this context" },
-				{ "(reify clojure.lang.ISeq (first [_] 1))",
-						"clojure.lang.ISeq is not supported yet as an interface of reify" },
+				{ "(reify clojure.lang.IChunkedSeq (first [_] 1))",
+						"clojure.lang.IChunkedSeq is not supported yet as an interface of reify" },
 				{ "(reify clojure.lang.Foo)", "Unable to resolve classname: clojure.lang.Foo" },
 				{ "(reify java.lang.String)", "only interfaces are supported, had: java.lang.String" },
-				{ "(reify java.util.Iterator)", "java.util.Iterator is not supported yet as an interface of reify" },
+				{ "(reify java.util.Deque)", "java.util.Deque is not supported yet as an interface of reify" },
 				{ "(reify clojure.lang.Counted (cnt [_] 1))", "Can't define method not in interfaces: cnt" },
 				{ "(reify clojure.lang.Counted (count [_ x] 1))", "Can't define method not in interfaces: count" },
 				{ "(reify clojure.lang.Counted (count [_] 1) (count [_] 2))",
@@ -1199,6 +1199,119 @@ class ClojureLoweringTest {
 				.isInstanceOf(LispReadException.class)
 				.hasMessageContaining(refused[1]);
 		}
+	}
+
+	@Test
+	void aBodyImplementingACollectionInterfaceStoresTheRowsOfItsWholeClosure() {
+		// IPersistentMap extends Iterable, Associative (IPersistentCollection, Seqable,
+		// ILookup) and Counted: one store per family of the closure
+		String map = lowered("(deftype M [m] clojure.lang.IPersistentMap (count [_] 0) (without [_ k] nil))");
+		assertThat(map).contains(
+				"(RONTOLISP::%CLOJURE-PERSISTENT-MAP-ROW (LIST :C%KEYWORD \"M\") '(\"clojure.lang.IPersistentMap\")")
+			.contains("(RONTOLISP::%CLOJURE-ITERABLE-ROW (LIST :C%KEYWORD \"M\") '(\"java.lang.Iterable\")")
+			.contains("(RONTOLISP::%CLOJURE-ASSOCIATIVE-ROW (LIST :C%KEYWORD \"M\")")
+			.contains("(RONTOLISP::%CLOJURE-COLLECTION-ROW (LIST :C%KEYWORD \"M\")")
+			.contains("(RONTOLISP::%CLOJURE-SEQABLE-ROW (LIST :C%KEYWORD \"M\")")
+			.contains("(RONTOLISP::%CLOJURE-LOOKUP-ROW (LIST :C%KEYWORD \"M\")")
+			.contains("(RONTOLISP::%CLOJURE-COUNTED-ROW (LIST :C%KEYWORD \"M\")")
+			// an abstract method the body leaves out is the oracle's AbstractMethodError
+			// ...
+			.contains("the resolved method iterator of interface java.lang.Iterable\")")
+			// ... a default one keeps the interface's, which no verb reads
+			.doesNotContain("\"forEach\"")
+			.doesNotContain("\"spliterator\"");
+		// a java.util interface's equals and hashCode are Object's
+		assertThat(lowered("(deftype S [] java.util.Set (equals [_ o] true))"))
+			.contains("(RONTOLISP::%CLOJURE-OBJECT-ROW (LIST :C%KEYWORD \"S\") NIL (LIST \"equals\" (LAMBDA (")
+			.doesNotContain("the resolved method equals");
+		// a type hint on a method's name is metadata, like the oracle's
+		assertThat(lowered("(deftype V [] clojure.lang.Counted (^long count [_] 1))"))
+			.contains("(RONTOLISP::%CLOJURE-COUNTED-ROW (LIST :C%KEYWORD \"V\") '(\"clojure.lang.Counted\")"
+					+ " (LIST \"count\" (LAMBDA (");
+		assertThat(lowered("(defprotocol G (^String g [x])) (deftype W [] G (^String g [_] \"w\")) (g (W.))"))
+			.contains("(|c%g| (|c%->W|))");
+		// an instance call of a method several interfaces declare asks each one's test
+		assertThat(lowered("(fn [x] (.containsKey x 1))"))
+			.contains("(OR (RONTOLISP::%CLOJURE-IASSOCIATIVE-P |c%recv%%|)"
+					+ " (RONTOLISP::%CLOJURE-ITRANSIENT-ASSOCIATIVE2-P |c%recv%%|) (RONTOLISP::%CLOJURE-JMAP-P |c%recv%%|))");
+		// a MapEntry and a SeqIterator are built in place, no host class
+		assertThat(lowered("(clojure.lang.MapEntry. :k 1)")).contains("(VECTOR (LIST :C%KEYWORD \"k\") 1)")
+			.doesNotContain("JAVA:NEW");
+		assertThat(lowered("(iterator-seq (clojure.lang.SeqIterator. (seq [1])))"))
+			.contains("(RONTOLISP::%CLOJURE-ITERATOR-SEQ (RONTOLISP::%CLOJURE-SEQ-ITERATOR ");
+		for (String[] refused : new String[][] {
+				{ "(defrecord R [a] clojure.lang.IPersistentMap)",
+						"Duplicate interface name \"clojure/lang/IPersistentMap\" in defrecord" },
+				{ "(defrecord R [a] java.util.Map)", "Duplicate interface name \"java/util/Map\" in defrecord" },
+				{ "(defrecord R [a] java.io.Serializable)",
+						"Duplicate interface name \"java/io/Serializable\" in defrecord" },
+				{ "(defrecord R [a] clojure.lang.IPersistentCollection (cons [_ x] nil))",
+						"Duplicate method name \"cons\" in defrecord" },
+				{ "(defrecord R [a] java.lang.Iterable (iterator [_] nil))",
+						"Duplicate method name \"iterator\" in defrecord" },
+				// a method of the class's own interfaces is found unnamed, like the
+				// oracle's
+				{ "(defrecord R [a] clojure.lang.IFn (assoc [_ k v] nil))",
+						"Duplicate method name \"assoc\" in defrecord" },
+				{ "(reify clojure.lang.Counted (count [_] 1) (withMeta [_ m] nil))",
+						"Duplicate method name \"withMeta\" in reify" },
+				// one the oracle's record leaves to the interface would override it there
+				{ "(defrecord R [a] clojure.lang.IFn (assocEx [_ k v] nil))",
+						"clojure.lang.IPersistentMap/assocEx is not supported yet as a method of defrecord" },
+				{ "(defrecord R [a] java.lang.Iterable (forEach [_ f] nil))",
+						"java.lang.Iterable/forEach is not supported yet as a method of defrecord" },
+				{ "(defrecord R [a] clojure.lang.IFn (count [_ x] 1))",
+						"Can't define method not in interfaces: count" },
+				{ "(reify clojure.lang.ISeq (frist [_] 1))", "Can't define method not in interfaces: frist" },
+				{ "(reify java.util.Map (size [_ x] 1))", "Can't define method not in interfaces: size" } }) {
+			assertThatThrownBy(() -> Clojure.read(refused[0], null)).as(refused[0])
+				.isInstanceOf(LispReadException.class)
+				.hasMessageContaining(refused[1]);
+		}
+	}
+
+	@Test
+	void anExtensionToAnInterfaceKeyedByACoreKindReachesATypedValueBehindItsTest() {
+		// IPersistentMap keys the core maps' row by :map; the same lambda also stands
+		// under the interface's name, which the dispatcher walks to behind the
+		// interface's own test
+		String out = lowered("(defprotocol P (k [x])) (extend-protocol P clojure.lang.IPersistentMap (k [_] :map))");
+		assertThat(out).contains("(LIST :C%KEYWORD \"map\")")
+			.contains("(LIST :C%KEYWORD \"clojure.lang.IPersistentMap\")")
+			.contains("(IF (OR (RONTOLISP::%CLOJURE-IMAP-P (CAR ")
+			.contains("(C%PROTOCOL-SUPER (CAR ");
+		// a program storing no IPersistentMap row folds the guard: no walk, no runtime
+		String plain = prunedForms(
+				"(defprotocol P (k [x])) (extend-protocol P clojure.lang.IPersistentMap (k [_] :map)) (println (k {}))");
+		assertThat(plain).doesNotContain("C%PROTOCOL-SUPER").doesNotContain("%CLOJURE-IMAP-P");
+		// one that does keeps both
+		String typed = prunedForms(
+				"(defprotocol P (k [x])) (extend-protocol P clojure.lang.IPersistentMap (k [_] :map))"
+						+ " (deftype M [] clojure.lang.IPersistentMap (count [_] 0)) (println (k (M.)))");
+		assertThat(typed).contains("(DEFUN C%PROTOCOL-SUPER ").contains("(RONTOLISP::%CLOJURE-IMAP-P ");
+		// every record is an IPersistentMap: a program defining one guards the walk with
+		// the record test too
+		String records = prunedForms(
+				"(defprotocol P (k [x])) (extend-protocol P clojure.lang.IPersistentMap (k [_] :map))"
+						+ " (defrecord R [a]) (println (k (->R 1)))");
+		assertThat(records).contains("(DEFUN C%PROTOCOL-SUPER ").contains("(RONTOLISP::%CLOJURE-RECORD-P (CAR ");
+	}
+
+	@Test
+	void anExtensionToAnInterfaceOtherKindsImplementTooIsAWalkedClass() {
+		// Sequential is spelled like :list, but a vector is one too: its row stands under
+		// its own name alone, which every value reaches through the walk, so a more
+		// specific interface the protocol is extended to (ISeq) answers ahead of it
+		String out = prunedForms("(defprotocol P (k [x])) (extend-protocol P clojure.lang.Sequential (k [_] :s))"
+				+ " (println (k [1]))");
+		assertThat(out).contains("(LIST :C%KEYWORD \"clojure.lang.Sequential\")")
+			.doesNotContain("(GETHASH (LIST :C%KEYWORD \"list\") ")
+			.contains("(DEFUN C%PROTOCOL-SUPER ");
+		// an interface spelled like the one kind whose values implement it keeps the key
+		assertThat(prunedForms("(defprotocol P (k [x])) (extend-protocol P clojure.lang.IPersistentList (k [_] :l))"
+				+ " (println (k (list 1)))"))
+			.contains("(GETHASH (LIST :C%KEYWORD \"list\") ")
+			.doesNotContain("C%PROTOCOL-SUPER");
 	}
 
 	@Test
@@ -2589,7 +2702,9 @@ class ClojureLoweringTest {
 
 	@Test
 	void typePredicatesLowerToOneTestAnsweringTrueOrFalse() {
-		assertThat(lowered("(fn [x] (seq? x))")).contains("(RONTOLISP::%CLOJURE-IS-SEQ ")
+		// a collection predicate asks the interface's family too: the plain helper's
+		// alias, which a program storing no row of that family calls in its place
+		assertThat(lowered("(fn [x] (seq? x))")).contains("(RONTOLISP::%CLOJURE-IS-SEQ-TYPE ")
 			.contains("RONTOLISP::%CLOJURE-FALSE");
 		assertThat(lowered("(fn [x] (number? x))")).contains("(NUMBERP ");
 		assertThat(lowered("(fn [x] (qualified-keyword? x))")).contains("(RONTOLISP::%CLOJURE-IS-QUALIFIED ");
@@ -2597,14 +2712,15 @@ class ClojureLoweringTest {
 		// program making no UUID calls in its place
 		assertThat(lowered("(fn [x] (uuid? x))")).contains("(RONTOLISP::%CLOJURE-IS-UUID ")
 			.contains("\"java.util.UUID\"");
-		assertThat(lowered("(map map? [1])")).contains("LAMBDA").contains("(RONTOLISP::%CLOJURE-IS-MAP ");
+		assertThat(lowered("(map map? [1])")).contains("LAMBDA").contains("(RONTOLISP::%CLOJURE-IS-MAP-TYPE ");
 		// a kind no value here has: false, the argument still evaluated
 		assertThat(lowered("(delay? [1])")).contains("PROGN").contains("RONTOLISP::%CLOJURE-FALSE");
 		// the sorted-aware tests: sorted? its own, set? and reversible? the helpers a
-		// program building no sorted collection calls as the plain ones
+		// program storing no row of the interface's family and building no sorted
+		// collection calls as the plain ones (ClojureLibrary's strip, in family order)
 		assertThat(lowered("(fn [x] (sorted? x))")).contains("(RONTOLISP::%CLOJURE-IS-SORTED ");
-		assertThat(lowered("(fn [x] (set? x))")).contains("(RONTOLISP::%CLOJURE-IS-SET ");
-		assertThat(lowered("(fn [x] (reversible? x))")).contains("(RONTOLISP::%CLOJURE-IS-REVERSIBLE ");
+		assertThat(lowered("(fn [x] (set? x))")).contains("(RONTOLISP::%CLOJURE-IS-SET-TYPE ");
+		assertThat(lowered("(fn [x] (reversible? x))")).contains("(RONTOLISP::%CLOJURE-IS-REVERSIBLE-TYPE ");
 		assertThat(lowered("(volatile! 1)")).contains(":C%VOLATILE");
 		assertThat(lowered("(atom 1)")).doesNotContain(":C%VOLATILE");
 	}

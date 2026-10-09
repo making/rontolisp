@@ -240,7 +240,29 @@ final class ClojureProtocolLowering {
 	 * protocol extended to a walked class, or a session).
 	 */
 	static List<LispVal> protocolRuntime(ClojureLowering ctx) {
-		return protocolRuntime(ctx, ctx.session || !ctx.walkingProtocols.isEmpty());
+		return protocolRuntime(ctx, ctx.session || !ctx.walkingProtocols.isEmpty() || guardsReachable(ctx));
+	}
+
+	/**
+	 * Whether a dispatcher's guarded walk ({@link #interfaceGuard}) can stay: one of its
+	 * tests is of a family a body of the program stores a row of, or the record test,
+	 * which only a program defining a record asks ({@link #noteRecordGuards}). Otherwise
+	 * every guard folds away and the runtime needs no walk.
+	 */
+	private static boolean guardsReachable(ClojureLowering ctx) {
+		for (Set<String> tests : ctx.interfaceGuards.values()) {
+			if (tests.contains(RECORD_P)) {
+				return true;
+			}
+			for (String test : tests) {
+				for (ClojureArms.Family family : ctx.implementedFamilies) {
+					if (family.tests.contains(test)) {
+						return true;
+					}
+				}
+			}
+		}
+		return false;
 	}
 
 	/**
@@ -300,7 +322,7 @@ final class ClojureProtocolLowering {
 					protocolKey = protocolKeyOf(ctx, datum);
 				}
 				else if (ClojureLowerUtil.items(datum) instanceof List<LispVal> impl && !impl.isEmpty()
-						&& impl.get(0) instanceof LispSymbol method) {
+						&& ClojureLowerUtil.stripMeta(impl.get(0)) instanceof LispSymbol method) {
 					String owner = declaresMethod(ctx, protocolKey, method.name()) ? protocolKey : null;
 					for (String key : protocols) {
 						if (owner == null && declaresMethod(ctx, key, method.name())) {
@@ -462,10 +484,10 @@ final class ClojureProtocolLowering {
 		Map<String, Set<Integer>> arities = new HashMap<>();
 		for (; at < items.size(); at++) {
 			List<LispVal> sig = ClojureLowerUtil.items(items.get(at));
-			if (sig == null || sig.isEmpty() || !(sig.get(0) instanceof LispSymbol)) {
+			if (sig == null || sig.isEmpty() || !(ClojureLowerUtil.stripMeta(sig.get(0)) instanceof LispSymbol)) {
 				throw new LispReadException("defprotocol takes method signatures, not " + items.get(at).print());
 			}
-			String method = ((LispSymbol) sig.get(0)).name();
+			String method = ((LispSymbol) ClojureLowerUtil.stripMeta(sig.get(0))).name();
 			ClojureLowerUtil.isTrue(!method.startsWith(":"),
 					"defprotocol takes method signatures, not " + items.get(at).print());
 			ClojureLowerUtil.isTrue(methods.add(method), "Function " + method + " in protocol " + name
@@ -570,6 +592,24 @@ final class ClojureProtocolLowering {
 									ClojureCollectionLowering.keywordForm(method), miss)))),
 					ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
 							ClojureLowerUtil.list(ClojureLowerUtil.sym("eq"), up, miss), objectRow, up));
+		}
+		else {
+			LispVal guard = interfaceGuard(ctx, def, ClojureLowerUtil.list(ClojureLowerUtil.sym("car"), args));
+			if (guard != null) {
+				// a typed value or a record implementing an interface extended under a
+				// core kind takes the interface's row, behind the interfaces' own tests:
+				// arms a program storing no row of their families sheds, leaving the
+				// plain lookup (a fixed name, so no temporary shifts)
+				LispSymbol up = new LispSymbol(WALKED_ROW);
+				LispVal walked = ClojureLowerUtil.list(ClojureLowerUtil.sym("let*"),
+						ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(up,
+								ClojureLowerUtil.list(new LispSymbol(PROTOCOL_SUPER),
+										ClojureLowerUtil.list(ClojureLowerUtil.sym("car"), args), def.methodsVar(),
+										ClojureCollectionLowering.keywordForm(method), miss)))),
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
+								ClojureLowerUtil.list(ClojureLowerUtil.sym("eq"), up, miss), objectRow, up));
+				objectRow = ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), guard, walked, objectRow);
+			}
 		}
 		LispVal extended = ClojureLowerUtil.list(ClojureLowerUtil.sym("let*"),
 				ClojureLowerUtil.list(List.of(
@@ -859,11 +899,11 @@ final class ClojureProtocolLowering {
 				throw new LispReadException(what + " methods group under a protocol name, not " + datum.print());
 			}
 			List<LispVal> impl = ClojureLowerUtil.items(datum);
-			if (impl == null || impl.size() < 2 || !(impl.get(0) instanceof LispSymbol)) {
+			if (impl == null || impl.size() < 2 || !(ClojureLowerUtil.stripMeta(impl.get(0)) instanceof LispSymbol)) {
 				throw new LispReadException(
 						"a method implementation takes a name, parameters and a body, not " + datum.print());
 			}
-			String method = ((LispSymbol) impl.get(0)).name();
+			String method = ((LispSymbol) ClojureLowerUtil.stripMeta(impl.get(0))).name();
 			ClojureLowerUtil.isTrue(def.methods().contains(method), "Can't define method not in interfaces: " + method);
 			methods.add(extensionMethod(method, impl));
 		}
@@ -919,6 +959,9 @@ final class ClojureProtocolLowering {
 			}
 		}
 		List<ClojureInterfaces.HostInterface> closure = ClojureInterfaces.closure(named);
+		for (ClojureInterfaces.HostInterface one : closure) {
+			ctx.implementedFamilies.add(one.family());
+		}
 		Map<String, List<ClojureLowering.MethodArity>> interfaceMethods = new LinkedHashMap<>();
 		String protocol = null;
 		boolean grouped = false;
@@ -933,11 +976,11 @@ final class ClojureProtocolLowering {
 						what + " methods group under a protocol or interface name, not " + datum.print());
 			}
 			List<LispVal> impl = ClojureLowerUtil.items(datum);
-			if (impl == null || impl.size() < 2 || !(impl.get(0) instanceof LispSymbol)) {
+			if (impl == null || impl.size() < 2 || !(ClojureLowerUtil.stripMeta(impl.get(0)) instanceof LispSymbol)) {
 				throw new LispReadException(
 						"a method implementation takes a name, parameters and a body, not " + datum.print());
 			}
-			String method = ((LispSymbol) impl.get(0)).name();
+			String method = ((LispSymbol) ClojureLowerUtil.stripMeta(impl.get(0))).name();
 			ClojureLowerUtil.isTrue(ClojureBindingLowering.isVectorDatum(ClojureLowerUtil.stripMeta(impl.get(1))),
 					"an inline method takes one parameter vector, naming the method again for another arity: "
 							+ method);
@@ -952,7 +995,7 @@ final class ClojureProtocolLowering {
 			}
 			ClojureInterfaces.HostInterface owner = ClojureInterfaces.declaring(closure, method, count);
 			if (owner != null) {
-				ClojureInterfaces.checkMethod(what, owner, method);
+				ClojureInterfaces.checkMethod(what, owner, method, count);
 				addInterfaceArity(interfaceMethods, method, impl);
 				continue;
 			}
@@ -963,7 +1006,7 @@ final class ClojureProtocolLowering {
 				}
 			}
 			if (other == null) {
-				throw new LispReadException("Can't define method not in interfaces: " + method);
+				throw ClojureInterfaces.unmatched(what, method, count);
 			}
 			addInlineArity(other.getValue(), byProtocol.computeIfAbsent(other.getKey(), ignored -> new ArrayList<>()),
 					method, impl);
@@ -1502,7 +1545,8 @@ final class ClojureProtocolLowering {
 	 * dispatch value), so dispatch agrees with {@code class}, and so do the classes of
 	 * the instants and the UUID ({@link ClojureClassBases#TIME_VALUE_DISPATCH}). Any
 	 * other class a value may be an instance of -- a throwable, an interface such as
-	 * {@code clojure.lang.IRef}, a host class -- is a walked class
+	 * {@code clojure.lang.IRef}, a host class, an interface spelled like a core kind that
+	 * other kinds' values implement too ({@link #reachesOtherKinds}) -- is a walked class
 	 * ({@link #walkTargetOf}), keyed by its binary name; a name no class has is the
 	 * oracle's unresolved symbol, like {@code instance?}'s.
 	 */
@@ -1523,6 +1567,9 @@ final class ClojureProtocolLowering {
 		String kind = ClojureDispatchLowering.DISPATCH_CLASS_KEYWORDS.get(fqn.substring(fqn.lastIndexOf('.') + 1));
 		if (kind == null) {
 			kind = ClojureClassBases.TIME_VALUE_DISPATCH.get(fqn);
+		}
+		if (kind != null && reachesOtherKinds(ctx, typeName)) {
+			return ClojureCollectionLowering.keywordForm(walkedName(ctx, typeName));
 		}
 		if (kind != null) {
 			return ClojureCollectionLowering.keywordForm(kind);
@@ -1548,6 +1595,19 @@ final class ClojureProtocolLowering {
 	static final String PROTOCOL_ROW = "C%PROTOCOL-ROW";
 
 	/**
+	 * The variable a dispatcher guarding its walk ({@link #interfaceGuard}) binds the
+	 * walked row to: a fixed name no Clojure identifier spells (they mangle behind
+	 * {@code c%}).
+	 */
+	static final String WALKED_ROW = "C%WALKED-ROW";
+
+	/**
+	 * The variable a {@code satisfies?} of a protocol guarding its walk binds the value
+	 * to, the same way ({@link #WALKED_ROW}).
+	 */
+	static final String GUARDED_VALUE = "C%GUARDED-VALUE";
+
+	/**
 	 * The binary name of a class spelling as {@code instance?} resolves it: an import, a
 	 * {@code java.lang} default, else a bare {@code clojure.lang} simple name.
 	 */
@@ -1562,8 +1622,13 @@ final class ClojureProtocolLowering {
 	 * walking its classes past its own -- the oracle's superclass chain, then its
 	 * interfaces: a throwable (a condition's tag names no class), an interface or
 	 * abstract class over core kinds ({@code clojure.lang.IRef}, {@code IDeref}), a host
-	 * class, and {@code java.util.Date}, which a {@code java.sql.Timestamp} extends. Null
-	 * for a target whose row its values' tag names exactly ({@link #extendKeyForm}).
+	 * class, {@code java.util.Date}, which a {@code java.sql.Timestamp} extends, and an
+	 * interface spelled like a core kind that other kinds' values implement too
+	 * ({@code clojure.lang.Sequential}, {@link #reachesOtherKinds}): the walk then picks
+	 * the most specific of the protocol's interfaces for such a value, as the oracle's
+	 * lookup does, where an exact key would answer ahead of a more specific one
+	 * ({@code ISeq} for a list). Null for a target whose row its values' tag names
+	 * exactly ({@link #extendKeyForm}).
 	 * @param ctx the lowering
 	 * @param typeName the target's spelling
 	 * @return the walked class's binary name, or null
@@ -1575,7 +1640,7 @@ final class ClojureProtocolLowering {
 		}
 		String fqn = ClojureNamespaceLowering.resolveClass(ctx, typeName);
 		if (ClojureDispatchLowering.DISPATCH_CLASS_KEYWORDS.containsKey(fqn.substring(fqn.lastIndexOf('.') + 1))) {
-			return null;
+			return reachesOtherKinds(ctx, typeName) ? walkedName(ctx, typeName) : null;
 		}
 		if (ClojureClassBases.TIME_VALUE_DISPATCH.containsKey(fqn)) {
 			return ClojureClassBases.timeValueSubclassesOf(fqn).isEmpty() ? null : fqn;
@@ -1607,6 +1672,138 @@ final class ClojureProtocolLowering {
 	/** Whether the protocol's dispatchers walk the classes of their target. */
 	static boolean walks(ClojureLowering ctx, ClojureLowering.ProtocolDef def) {
 		return ctx.session || ctx.walkingProtocols.contains(def.methodsVar().name());
+	}
+
+	/**
+	 * The second key an extension row is stored under when {@link #extendKeyForm} keys
+	 * its target by the one core kind whose values are instances of it but values of no
+	 * such kind may be too: an interface a record's, deftype's or reify's body may
+	 * implement ({@link ClojureInterfaces}), or one every record implements
+	 * ({@code clojure.lang.IPersistentMap} and {@code java.util.Map}, keyed by
+	 * {@code :map}). It is the target's binary name, which the protocol walk reaches
+	 * through the target's {@code instance?} test, so such a value takes the row the core
+	 * kind does, like the oracle. Null for any other target, whose single key already
+	 * serves every instance (a walked class's test covers typed values too).
+	 * @param ctx the lowering
+	 * @param typeName the target's spelling
+	 * @return the walked key, or null
+	 */
+	static @Nullable LispVal interfaceWalkKey(ClojureLowering ctx, String typeName) {
+		if (ClojureDispatchLowering.isObjectClassName(ctx, typeName) || typeName.equals("nil")
+				|| ctx.typeDefOf(typeName) != null || walkTargetOf(ctx, typeName) != null) {
+			return null;
+		}
+		String name = walkedName(ctx, typeName);
+		if (ClojureInterfaces.named(name) == null && !reachesRecords(name)) {
+			return null;
+		}
+		return ClojureCollectionLowering.keywordForm(name);
+	}
+
+	/** Whether every record is an instance of the class (its map interfaces). */
+	private static boolean reachesRecords(String name) {
+		return ClojureValueClasses.kindsOf(name).contains(ClojureValueClasses.Kind.RECORD);
+	}
+
+	/**
+	 * Whether a target spelled like a core kind ({@code DISPATCH_CLASS_KEYWORDS}) is an
+	 * interface values of another kind implement too: a vector is a
+	 * {@code clojure.lang.Sequential} and a {@code java.util.List} ({@code :list}), a
+	 * keyword a {@code clojure.lang.IFn} ({@code :function}), a map a
+	 * {@code clojure.lang.IPersistentCollection} ({@code :list}).
+	 */
+	private static boolean reachesOtherKinds(ClojureLowering ctx, String typeName) {
+		String fqn = ClojureNamespaceLowering.resolveClass(ctx, typeName);
+		String kind = ClojureDispatchLowering.DISPATCH_CLASS_KEYWORDS.get(fqn.substring(fqn.lastIndexOf('.') + 1));
+		if (kind == null) {
+			return false;
+		}
+		for (ClojureValueClasses.Kind one : ClojureValueClasses.kindsOf(walkedName(ctx, typeName))) {
+			boolean typed = one == ClojureValueClasses.Kind.RECORD || one == ClojureValueClasses.Kind.DEFTYPE
+					|| one == ClojureValueClasses.Kind.REIFY;
+			if (!typed && !kind.equals(ClojureValueClasses.dispatchKeyword(one))) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * The guard test every record answers ({@link #noteInterfaceWalk}).
+	 */
+	static final String RECORD_P = "RONTOLISP::%CLOJURE-RECORD-P";
+
+	/**
+	 * Records an extension to a target with a second, walked key
+	 * ({@link #interfaceWalkKey}): the target's {@code instance?} test joins the protocol
+	 * runtime's walk under its binary name and guards the protocol's walk
+	 * ({@link ClojureLowering#interfaceGuards}) with the test of its family, and with
+	 * {@link #RECORD_P} when every record is an instance of it and the program defines
+	 * one ({@link #noteRecordGuards}). A protocol whose dispatchers lowered without that
+	 * guard is a miss the lowering starts over for.
+	 */
+	static void noteInterfaceWalk(ClojureLowering ctx, ClojureLowering.ProtocolDef def, String typeName) {
+		String name = walkedName(ctx, typeName);
+		ctx.walkTests.putIfAbsent(name, ClojureDispatchLowering.instanceTest(ctx, typeName, WALK_VALUE));
+		String protocol = def.methodsVar().name();
+		if (walks(ctx, def)) {
+			return;
+		}
+		ClojureInterfaces.HostInterface implemented = ClojureInterfaces.named(name);
+		if (implemented != null) {
+			guard(ctx, protocol, implemented.test());
+		}
+		if (reachesRecords(name)) {
+			ctx.recordGuards.add(protocol);
+			if (definesRecord(ctx)) {
+				guard(ctx, protocol, RECORD_P);
+			}
+		}
+	}
+
+	/** A guard test the protocol's dispatchers must ask, a miss unless they do. */
+	private static void guard(ClojureLowering ctx, String protocol, String test) {
+		if (!ctx.interfaceGuards.getOrDefault(protocol, Set.of()).contains(test)) {
+			ctx.guardMisses.computeIfAbsent(protocol, ignored -> new LinkedHashSet<>()).add(test);
+		}
+	}
+
+	private static boolean definesRecord(ClojureLowering ctx) {
+		return ctx.types.values().stream().anyMatch(ClojureLowering.TypeDef::record);
+	}
+
+	/**
+	 * The record guards a program's last file settles: a protocol extended to an
+	 * interface every record implements ({@link #noteInterfaceWalk}) before a later file
+	 * defined the first record guards its walk with {@link #RECORD_P} too.
+	 * @param ctx the lowering, every file lowered
+	 */
+	static void noteRecordGuards(ClojureLowering ctx) {
+		if (definesRecord(ctx)) {
+			for (String protocol : ctx.recordGuards) {
+				if (!ctx.session && !ctx.walkingProtocols.contains(protocol)) {
+					guard(ctx, protocol, RECORD_P);
+				}
+			}
+		}
+	}
+
+	/**
+	 * The guard of a protocol whose dispatchers do not walk but which the program extends
+	 * to interfaces keyed by a core kind ({@link #noteInterfaceWalk}): the disjunction of
+	 * those interfaces' tests over the target, each an arm of its family, and the record
+	 * test ({@link #RECORD_P}) where a record implements one; null when there is none.
+	 */
+	static @Nullable LispVal interfaceGuard(ClojureLowering ctx, ClojureLowering.ProtocolDef def, LispVal target) {
+		Set<String> tests = ctx.interfaceGuards.get(def.methodsVar().name());
+		if (tests == null || tests.isEmpty() || walks(ctx, def)) {
+			return null;
+		}
+		List<LispVal> disjuncts = new ArrayList<>();
+		for (String test : tests) {
+			disjuncts.add(ClojureLowerUtil.list(new LispSymbol(test), target));
+		}
+		return ClojureLowerUtil.cons(ClojureLowerUtil.sym("or"), disjuncts);
 	}
 
 	/**
@@ -1701,6 +1898,16 @@ final class ClojureProtocolLowering {
 	 */
 	static LispVal extendRow(ClojureLowering ctx, String protocol, @Nullable LispVal key,
 			ClojureLowering.TypeMethod impl, boolean typed) {
+		return extendRow(ctx, protocol, key, null, impl, typed);
+	}
+
+	/**
+	 * {@link #extendRow(ClojureLowering, String, LispVal, ClojureLowering.TypeMethod, boolean)}
+	 * also storing the lambda under {@code walkKey} when it is not null
+	 * ({@link #interfaceWalkKey}): one lambda under both keys.
+	 */
+	static LispVal extendRow(ClojureLowering ctx, String protocol, @Nullable LispVal key, @Nullable LispVal walkKey,
+			ClojureLowering.TypeMethod impl, boolean typed) {
 		ClojureLowering.ProtocolDef def = protocolOf(ctx, protocol);
 		if (def == null) {
 			throw new LispReadException("No such protocol: " + protocol);
@@ -1711,7 +1918,23 @@ final class ClojureProtocolLowering {
 		if (key == null) {
 			return objectStoreForm(def, impl.method(), lambda);
 		}
-		return rowStoreForm(ctx, def, def.methodsVar(), key, impl.method(), lambda, typed);
+		if (walkKey == null) {
+			return rowStoreForm(ctx, def, def.methodsVar(), key, impl.method(), lambda, typed);
+		}
+		return storedTwice(ctx, def, key, walkKey, impl.method(), lambda);
+	}
+
+	/**
+	 * One method lambda stored under the core kind's key and the interface's walked key
+	 * ({@link #interfaceWalkKey}).
+	 */
+	private static LispVal storedTwice(ClojureLowering ctx, ClojureLowering.ProtocolDef def, LispVal key,
+			LispVal walkKey, String method, LispVal lambda) {
+		LispSymbol shared = ctx.freshTemp();
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
+				ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(shared, lambda))),
+				rowStoreForm(ctx, def, def.methodsVar(), key, method, shared, false),
+				rowStoreForm(ctx, def, def.methodsVar(), walkKey, method, shared, false));
 	}
 
 	/**
@@ -1751,19 +1974,24 @@ final class ClojureProtocolLowering {
 			ClojureLowerUtil.isTrue(items.get(at) instanceof LispSymbol, "extend-protocol takes a type name");
 			String target = ((LispSymbol) items.get(at)).name();
 			LispVal key = extendKeyForm(ctx, target, "extend-protocol");
+			LispVal walkKey = interfaceWalkKey(ctx, target);
 			boolean typed = isTypedTarget(ctx, target);
 			at++;
 			if (at < items.size() && !(items.get(at) instanceof LispSymbol)) {
 				noteWalk(ctx, def, target);
+				if (walkKey != null) {
+					noteInterfaceWalk(ctx, def, target);
+				}
 			}
 			while (at < items.size() && !(items.get(at) instanceof LispSymbol)) {
 				List<LispVal> impl = ClojureLowerUtil.items(items.get(at));
-				if (impl == null || impl.size() < 2 || !(impl.get(0) instanceof LispSymbol)) {
+				if (impl == null || impl.size() < 2
+						|| !(ClojureLowerUtil.stripMeta(impl.get(0)) instanceof LispSymbol)) {
 					throw new LispReadException("a method implementation takes a name, parameters and a body, not "
 							+ items.get(at).print());
 				}
-				String method = ((LispSymbol) impl.get(0)).name();
-				rows.add(extendRow(ctx, protocol, key, extensionMethod(method, impl), typed));
+				String method = ((LispSymbol) ClojureLowerUtil.stripMeta(impl.get(0))).name();
+				rows.add(extendRow(ctx, protocol, key, walkKey, extensionMethod(method, impl), typed));
 				at++;
 			}
 		}
@@ -1784,16 +2012,20 @@ final class ClojureProtocolLowering {
 		ClojureLowerUtil.isTrue(items.get(1) instanceof LispSymbol, "extend-type takes a type name");
 		String target = ((LispSymbol) items.get(1)).name();
 		LispVal key = extendKeyForm(ctx, target, "extend-type");
+		LispVal walkKey = interfaceWalkKey(ctx, target);
 		boolean typed = isTypedTarget(ctx, target);
 		List<ClojureLowering.ImplGroup> groups = implGroups(ctx, items.subList(2, items.size()), "extend-type");
 		List<LispVal> rows = new ArrayList<>();
 		for (ClojureLowering.ImplGroup group : groups) {
 			for (ClojureLowering.TypeMethod impl : group.methods()) {
-				rows.add(extendRow(ctx, group.protocol(), key, impl, typed));
+				rows.add(extendRow(ctx, group.protocol(), key, walkKey, impl, typed));
 			}
 			ClojureLowering.ProtocolDef def = protocolOf(ctx, group.protocol());
 			if (def != null && !group.methods().isEmpty()) {
 				noteWalk(ctx, def, target);
+				if (walkKey != null) {
+					noteInterfaceWalk(ctx, def, target);
+				}
 			}
 		}
 		ctx.usedProtocols = true;
@@ -1824,9 +2056,13 @@ final class ClojureProtocolLowering {
 			throw new LispReadException("extend takes a map literal of methods, not " + items.get(3).print());
 		}
 		LispVal key = extendKeyForm(ctx, target, "extend");
+		LispVal walkKey = interfaceWalkKey(ctx, target);
 		boolean typed = isTypedTarget(ctx, target);
 		if (entries.size() > 1) {
 			noteWalk(ctx, def, target);
+			if (walkKey != null) {
+				noteInterfaceWalk(ctx, def, target);
+			}
 		}
 		List<LispVal> rows = new ArrayList<>();
 		for (int i = 1; i < entries.size(); i += 2) {
@@ -1835,8 +2071,16 @@ final class ClojureProtocolLowering {
 			String method = ((LispSymbol) entries.get(i)).name().substring(1);
 			ClojureLowerUtil.isTrue(def.methods().contains(method), "Can't define method not in interfaces: " + method);
 			LispVal fun = ClojureBindingLowering.fnValue(ctx, entries.get(i + 1));
-			LispVal row = key == null ? objectStoreForm(def, method, fun)
-					: rowStoreForm(ctx, def, def.methodsVar(), key, method, fun, typed);
+			LispVal row;
+			if (key == null) {
+				row = objectStoreForm(def, method, fun);
+			}
+			else if (walkKey == null) {
+				row = rowStoreForm(ctx, def, def.methodsVar(), key, method, fun, typed);
+			}
+			else {
+				row = storedTwice(ctx, def, key, walkKey, method, fun);
+			}
 			rows.add(row);
 		}
 		ctx.usedProtocols = true;
@@ -1881,13 +2125,38 @@ final class ClojureProtocolLowering {
 							ClojureLowerUtil.list(ClojureLowerUtil.sym("eq"), direct, miss), row, direct));
 		}
 		LispVal lowered = ctx.lower(items.get(2));
-		if (!walks(ctx, def)) {
+		LispSymbol guarded = new LispSymbol(GUARDED_VALUE);
+		LispVal guard = interfaceGuard(ctx, def, guarded);
+		if (!walks(ctx, def) && guard == null) {
 			return ClojureLowerUtil.list(ClojureLowerUtil.sym("let*"),
 					ClojureLowerUtil.list(List.of(
 							ClojureLowerUtil.list(tag, ClojureLowerUtil.list(new LispSymbol(PROTOCOL_TAG), lowered)),
 							ClojureLowerUtil.list(miss,
 									ClojureLowerUtil.list(ClojureLowerUtil.sym("list"), ClojureLowering.NIL_CONST)),
 							ClojureLowerUtil.list(inner, row))),
+					answer);
+		}
+		if (guard != null) {
+			// a typed value implementing an interface extended under a core kind
+			// satisfies it through the walk behind the interfaces' own tests (arms a
+			// program storing no row of their families sheds)
+			LispSymbol exact = ctx.freshTemp();
+			LispVal walked = ClojureLowerUtil.list(ClojureLowerUtil.sym("let*"),
+					ClojureLowerUtil.list(List.of(
+							ClojureLowerUtil.list(exact, row))),
+					ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
+							ClojureLowerUtil.list(ClojureLowerUtil.sym("eq"), exact, miss),
+							ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), guard,
+									ClojureLowerUtil.list(new LispSymbol(PROTOCOL_SUPER), guarded, def.methodsVar(),
+											ClojureLowering.NIL_CONST, miss),
+									miss),
+							exact));
+			return ClojureLowerUtil.list(ClojureLowerUtil.sym("let*"),
+					ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(guarded, lowered),
+							ClojureLowerUtil.list(tag, ClojureLowerUtil.list(new LispSymbol(PROTOCOL_TAG), guarded)),
+							ClojureLowerUtil.list(miss,
+									ClojureLowerUtil.list(ClojureLowerUtil.sym("list"), ClojureLowering.NIL_CONST)),
+							ClojureLowerUtil.list(inner, walked))),
 					answer);
 		}
 		// a walked class's row satisfies too, like the oracle's

@@ -90,6 +90,7 @@ final class ClojureThrowables {
 			Map.entry("java.lang.VerifyError", "java.lang.LinkageError"),
 			Map.entry("java.lang.VirtualMachineError", "java.lang.Error"),
 			Map.entry("java.io.IOException", "java.lang.Exception"),
+			Map.entry("java.util.NoSuchElementException", "java.lang.RuntimeException"),
 			Map.entry("java.util.concurrent.ExecutionException", "java.lang.Exception"),
 			Map.entry("java.util.concurrent.CompletionException", "java.lang.RuntimeException"),
 			Map.entry("clojure.lang.ExceptionInfo", "java.lang.RuntimeException"),

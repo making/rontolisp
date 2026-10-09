@@ -257,10 +257,13 @@
   `ArityException` をシグナルします（オラクルは `AbstractMethodError`）。
 - `reify`・`deftype`・`defrecord` の本体が実装できるのは、コア関数が参照する `clojure.lang`
   のインタフェース（`IReduceInit`、`IReduce`、`IKVReduce`、`Seqable`、`Counted`、`Indexed`、
-  `ILookup`、`IFn`（`Callable` と `Runnable` を含む）、`IDeref`、`IMeta`、`IObj`）と `Object` の
-  メソッドの上書きです（[reify](reference/reify.md#host-interfaces)）。それ以外のインタフェース
-  （`ISeq`、`IPersistentMap`、`Sequential`、`java.util.List` など）は名前を挙げて拒否されます。
-  型の `equals` と `hashCode` は `=` と `.hashCode` に答えますが、マップのキーやセットの要素の
+  `ILookup`、`IFn`（`Callable` と `Runnable` を含む）、`IDeref`、`IMeta`、`IObj`）、コレクションの
+  インタフェース（`IPersistentMap`、`ISeq`、`Sequential`、`Iterable`、`java.util.List` など）、
+  `Object` のメソッドの上書きです（[reify](reference/reify.md#host-interfaces)）。それ以外の
+  インタフェース（`IChunkedSeq`、`java.util.Deque` など）は名前を挙げて拒否されます。`ISeq` 型への
+  `first`・`next`・`rest` はその `seq` を通して読み、関数がメソッドを呼ぶ回数はオラクルと異なる
+  ことがあり、コレクションの型の `str` は中身を綴ります
+  （[コレクションのインタフェース](reference/reify.md#collection-interfaces)）。型の `equals` と `hashCode` は `=` と `.hashCode` に答えますが、マップのキーやセットの要素の
   比較には使われず、そうした値は同一性で保持されます。`Seqable` だけを実装した型について、
   `sort` と `distinct` はその seq を通して答えます。オラクルはどちらも拒否します。
 - `clojure.core.reducers` は呼び出したスレッドの上で部分を順に1つずつ fold します。空でない

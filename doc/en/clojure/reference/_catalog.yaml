@@ -80,6 +80,7 @@ categories:
       - { slug: repeat, name: "repeat" }
       - { slug: cycle, name: "cycle" }
       - { slug: iterate, name: "iterate" }
+      - { slug: iterator-seq, name: "iterator-seq" }
       - { slug: repeatedly, name: "repeatedly" }
       - { slug: range, name: "range" }
       - { slug: nth, name: "nth" }
