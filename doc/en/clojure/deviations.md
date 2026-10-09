@@ -435,12 +435,12 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   class Java sees (`getClass`, and the JDK's `ClassCastException` messages naming it; the
   front end's own cast failures name the oracle's class but lack the module tail); the
   members are converted once, when the value crosses, a lazy seq realized to its end; the
-  `toString` is what `str` answers here (a lazy seq and a record spell their contents); a
-  deftype or reify implementing a Java interface is an object of its own, not an
-  implementation of it. A Java array a member answers is a list here, which converts back to
-  an array where one is expected and nothing takes the list whole -- so `(java.util.Arrays/asList
-  [1 2])` is a list holding the vector, where the oracle throws -- and so does an array
-  `make-array` makes, a vector here.
+  `toString` is what `str` answers here (a lazy seq and a record spell their contents); Java
+  sees a deftype or reify implement none of its Java interfaces and calls neither its
+  `equals` nor its `hashCode`. A Java array a member answers is a list here, which converts
+  back to an array where one is expected and nothing takes the list whole -- so
+  `(java.util.Arrays/asList [1 2])` is a list holding the vector, where the oracle throws --
+  and so does an array `make-array` makes, a vector here.
 - An integer receiver is called as an `Integer` when it fits one, else as a `Long`
   (the oracle's is always a `Long`): `(.getClass 1)` answers `java.lang.Integer`.
 - A `_` param tag leaves that parameter to the cost rule of the `java:` surface, so

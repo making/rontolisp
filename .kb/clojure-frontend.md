@@ -884,12 +884,14 @@ hash's.
   `-members-hash-of`, `-sorted-hash-of`, `-record-hash-of`): an integer inside the long range
   `Murmur3.hashLong`/`Long.hashCode`, past it `BigInteger.hashCode` either way (the oracle's
   BigInt); a double `Double.hashCode` (the canonical NaN; both zeros 0 under `hash`); a ratio
-  `Ratio.hashCode`; a string `hashInt(String.hashCode)`; a symbol `Symbol.hasheq` (the name's
-  `hashUnencodedChars` hash-combined with the namespace's `String.hashCode`) or `hashCode`, a
-  keyword 0x9e3779b9 more; a sequential ordered, a map (entries as `[k v]`) or set unordered;
-  a sorted collection as the hash map or set of its items; a record its entries' unordered
-  hash xor the hasheq of its class name's symbol (`my_app.core.My-Rec`: the namespace munged,
-  the name not, read off the wrapper's class slot); an instant `Date.hashCode` of its
+  `Ratio.hashCode` (`%clojure-ratio-hash`); a string `hashInt(String.hashCode)`; a symbol
+  `Symbol.hasheq` (`%clojure-ident-hash`: the name's `hashUnencodedChars` hash-combined with the
+  namespace's `String.hashCode`) or `hashCode`, a keyword 0x9e3779b9 more
+  (`%clojure-keyword-hash`; the three are also the `hashCode` of the handle a keyword, symbol or
+  ratio crosses into Java as, "Java interop"); a sequential ordered, a map (entries as `[k v]`)
+  or set unordered; a sorted collection as the hash map or set of its items; a record its
+  entries' unordered hash xor the hasheq of its class name's symbol (`my_app.core.My-Rec`: the
+  namespace munged, the name not, read off the wrapper's class slot); an instant `Date.hashCode` of its
   milliseconds, a UUID `UUID.hashCode`; a reader value `TaggedLiteral`/`ReaderConditional`
   `.hashCode` (31 x part + part), which its `str` spells as the oracle's `Class@hex` too
   (before 2026-10-09: the hex of `%clojure-hash`); a clojure.java.io File, URL or URI
@@ -3090,19 +3092,20 @@ The `java:` surface (`.kb/java-interop.md`); interpreter and JVM only -- wasm co
   `%clojure-host-member`, which `get`/`contains?`/`find` over a host map use for their key and
   every collection for its members. Nil, true, false, a string, a character and a number but a
   ratio are themselves; a keyword or symbol a `java:handle` of class `clojure.lang.Keyword` /
-  `Symbol` (`%clojure-host-ident`: its spelling, the oracle's hash -- `Util.hashCombine` of the
-  name's and namespace's `String.hashCode`, a keyword `0x9e3779b9` more -- and an order text
-  sorting no namespace first, then namespace, then name; the two classes never compare, the
-  oracle's `ClassCastException`); a ratio a handle of class `clojure.lang.Ratio` that is a
-  `Number` (`RontoJavaNumberHandle`), hashed as `Ratio.hashCode` (`%clojure-host-big-hash`: the
-  numerator's and denominator's `BigInteger.hashCode`, xored) and ordered by value against any
-  real (`%clojure-host-number-order`); a vector a `:vector` `java:view` (RandomAccess, Comparable
-  by `%clojure-compare-vectors` against another vector, `%clojure-host-vector-order`), a list,
-  seq or lazy seq a `:list` view of its members realized (`%clojure-host-seq-view` over
-  `%clojure-seq-all`), a set or sorted set a `:set` view, a map, sorted map or record a `:map`
-  view of its plist -- each printed by `%clojure-host-text` (`%clojure-str-of x "nil" nil`, the
-  `.toString` here), of the oracle's class name (`%clojure-class-name-of`), its members
-  converted alike (`%clojure-host-members`: the collection itself when every member is plain);
+  `Symbol` (`%clojure-host-ident`: its spelling, the oracle's `hashCode` -- `hash`'s
+  `%clojure-keyword-hash` / `%clojure-ident-hash` -- and an order text sorting no namespace
+  first, then namespace, then name; the two classes never compare, the oracle's
+  `ClassCastException`); a ratio a handle of class `clojure.lang.Ratio` that is a `Number`
+  (`RontoJavaNumberHandle`), hashed as `Ratio.hashCode` (`%clojure-ratio-hash`) and ordered by
+  value against any real (`%clojure-host-number-order`); a vector a `:vector` `java:view`
+  (RandomAccess, Comparable by `%clojure-compare-vectors` against another vector,
+  `%clojure-host-vector-order`), a list, seq or lazy seq a `:list` view of its members realized
+  (`%clojure-host-seq-view` over `%clojure-seq-all`), a set or sorted set a `:set` view, a map,
+  sorted map or record a `:map` view of its plist (a record's in `%clojure-record-entries`'
+  order, `%clojure-host-record-plist`) -- each printed by `%clojure-host-text`
+  (`%clojure-str-of x "nil" nil`, the `.toString` here), of the oracle's class name
+  (`%clojure-class-name-of`), its members converted alike (`%clojure-host-members`: the
+  collection itself when every member is plain);
   a Date/Timestamp/UUID the host object (`%clojure-time-value-host`); a host object itself;
   anything else -- a fn, an atom, a deftype, a reify, a pattern, a var, a condition inside a
   collection -- an identity handle (`%clojure-host-object`: nil hash, the oracle's class name,
@@ -3128,8 +3131,10 @@ The `java:` surface (`.kb/java-interop.md`); interpreter and JVM only -- wasm co
   JDK cast failure's message, ours without the module tail), the members converted once when
   the value crosses, a `toString` that is `str` here (a lazy seq or record spells its
   contents), `(java.util.Arrays/asList [1 2])` a list of the vector where the oracle throws, a
-  deftype or reify implementing a Java interface an object of its own (no `Runnable`). Cost,
-  measured 2026-10-09 (JVM class, before -> after): `(.add l [1 2])` + `str` 108,071 ->
+  deftype or reify an object of its own (no `Runnable`, its `equals`/`hashCode` uncalled:
+  `.todo/f10`). Cost,
+  measured 2026-10-09 (JVM class, before -> after; before a handle's hash moved onto `hash`'s
+  helpers, which replaced two `java.util.Objects.hashCode` calls per keyword): `(.add l [1 2])` + `str` 108,071 ->
   129,594 B (the member conversion and the view and handle makers, `%clojure-compare` behind a
   vector's order -- with CL `search` behind its name split -- `%clojure-class-name-of`, `_jview`,
   `_jhandle`, `_jvtext`, `_jvorder`), the files beside it 67,873 -> 84,517 B (the eight
