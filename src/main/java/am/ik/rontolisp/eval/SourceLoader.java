@@ -86,6 +86,19 @@ public interface SourceLoader {
 	}
 
 	/**
+	 * The target a symbolic link holds, as written in the link -- what {@code %read-link}
+	 * answers, over which {@code truename} resolves a path's links. Like {@link #exists}
+	 * it must never throw; {@code null} means the path is no link (or nothing at all),
+	 * which is also the default here, since a loader that is not a filesystem (the
+	 * browser playground's in-memory map) has no links.
+	 * @param path the path to read
+	 * @return the link's target, or {@code null} when the path is no readable link
+	 */
+	@Nullable default String readLink(String path) {
+		return null;
+	}
+
+	/**
 	 * The class loader the program's Java classes come from: what a {@code java:} call
 	 * and a Clojure host form resolve a class name through. A program given a Java class
 	 * path ({@code --java-classpath}, {@code --java-dep}) sees it over the classes
@@ -235,6 +248,17 @@ public interface SourceLoader {
 				}
 				catch (IOException | RuntimeException ex) {
 					// Missing, unreadable or unrepresentable: "cannot be determined".
+					return null;
+				}
+			}
+
+			@Override
+			@Nullable public String readLink(String path) {
+				try {
+					return Files.readSymbolicLink(Path.of(path)).toString();
+				}
+				catch (IOException | RuntimeException ex) {
+					// No link, gone, or unrepresentable: "not a link".
 					return null;
 				}
 			}

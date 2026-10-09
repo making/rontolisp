@@ -27837,6 +27837,39 @@ public final class LispMacroExpander {
 	}
 
 	/**
+	 * Whether the program hashes an object by its identity: it can build an {@code eq} or
+	 * {@code eql} table ({@link #programMakesIdentityHashTable}) or calls
+	 * {@code %identity-hash}. The wasm gate of the identity-hash slot every cons, cell,
+	 * closure and instance of such a module carries ({@code .kb/hash-tables.md}).
+	 * @param forms the program to scan
+	 * @return whether an object of this program may be hashed by its identity
+	 */
+	public static boolean programHashesByIdentity(List<LispVal> forms) {
+		if (programMakesIdentityHashTable(forms)) {
+			return true;
+		}
+		for (LispVal form : forms) {
+			if (callsIdentityHash(form)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	private static boolean callsIdentityHash(LispVal form) {
+		while (form instanceof LispCons cons) {
+			if (cons.car() instanceof LispSymbol head && LispNames.IDENTITY_HASH.equals(head.name())) {
+				return true;
+			}
+			if (callsIdentityHash(cons.car())) {
+				return true;
+			}
+			form = cons.cdr();
+		}
+		return false;
+	}
+
+	/**
 	 * Answers the test code ({@link LispHashTable#TEST_EQUAL} and friends) one
 	 * {@code (make-hash-table ...)} form asks for, read from the SOURCE: the
 	 * {@code :test} argument must be written literally ({@code 'eq} or {@code #'eq} and

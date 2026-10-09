@@ -167,9 +167,9 @@ rontolisp の[パス名](../data-types.md)は 1 つのフラットな名前文�
 ```
 
 意図的な lite 版です: チェックの失敗は `Invalid pathname ~S: ~A` を報告し
-(本家の `~?` 連鎖ではありません)、`:want-logical` は常に失敗し、
-`:resolve-symlinks` / `:truenamize` は受け付けて無視されます (シンボリックリンクを
-解決するバックエンドはありません)。`:truename` は `probe-file` の答えを返します。
+(本家の `~?` 連鎖ではありません)、`:want-logical` は常に失敗します。`:truename` は
+`truename` を返し、`:resolve-symlinks` / `:truenamize` は本家と同じくパスのシンボリック
+リンクを解決します。
 
 ## ワイルドカードと変換
 

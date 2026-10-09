@@ -56,3 +56,8 @@
 | `aget` | `(let [a (make-array String 1)] (aset a 0 "x") (aget a 0))` | `"x"` |
 | `aset` | `(let [a (make-array String 1)] (aset a 0 "x"))` | `"x"` |
 | `alength` | `(alength (make-array String 2))` | `2` |
+| `hash` | `(hash [1 2])` | `156247261` |
+| `hash-ordered-coll` | `(hash-ordered-coll '(1 2))` | `156247261` |
+| `hash-unordered-coll` | `(hash-unordered-coll [1 2])` | `460223544` |
+| `mix-collection-hash` | `(mix-collection-hash 1 0)` | `-2017569654` |
+| `hash-combine` | `(hash-combine 0 :a)` | `-626620958` |

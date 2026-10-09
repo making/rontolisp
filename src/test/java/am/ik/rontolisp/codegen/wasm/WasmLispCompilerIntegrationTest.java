@@ -14159,6 +14159,45 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void truenameResolvesEverySymbolicLinkInThePath() throws Exception {
+		// The interpreter's tree and answers
+		// (LispEvaluatorTest#truenameResolvesEverySymbolicLinkInThePath) on both
+		// backends, over the injected path_readlink (the adapter's over readlink-at
+		// under --component). Every target is RELATIVE: a WASI host follows no absolute
+		// one. probe-file and the open through tl/in also pin that a link in the LAST
+		// component is followed (path_open's symlink_follow), which both backends
+		// refused until then -- a path naming a link read as missing.
+		ExecResult staged = wasmtime.execInContainer("bash", "-c",
+				"cd " + workDir() + " && rm -rf tl && mkdir -p tl/d && echo a > tl/a.txt && echo f > tl/d/f.txt"
+						+ " && ln -s a.txt tl/in && ln -s d tl/dl && ln -s ../tl/d tl/up");
+		assertThat(staged.getExitCode()).as(staged.getStderr()).isZero();
+		String code = """
+				(defvar *b* "")
+				(defun tl (x) (concatenate 'string *b* "tl/" x))
+				(defun rel (x) (subseq (namestring x) (length *b*)))
+				(print (rel (truename (tl "in"))))
+				(print (rel (truename (tl "dl/f.txt"))))
+				(print (rel (truename (tl "dl/../a.txt"))))
+				(print (rel (truename (concatenate 'string *b* "./tl/up/../in"))))
+				(print (rel (probe-file (tl "in"))))
+				(print (with-open-file (s (tl "in")) (read-line s)))
+				(print (handler-case (truename (tl "none")) (file-error () :missing)))
+				(print (rel (uiop:resolve-symlinks (tl "dl/new.txt"))))
+				""";
+		String expected = """
+				"tl/a.txt"
+				"tl/d/f.txt"
+				"tl/a.txt"
+				"tl/a.txt"
+				"tl/in"
+				"a"
+				:MISSING
+				"tl/d/new.txt\"""";
+		assertThat(compileAndRunWithDir(code)).isEqualTo(expected);
+		assertThat(compileAndRunComponentWithDir(code)).isEqualTo(expected);
+	}
+
+	@Test
 	void fileWriteDateAndFilesystemWritesRunForReal() throws Exception {
 		// file-write-date is REAL here as on the interpreter and the JVM: the injected
 		// path_filestat_get (the adapter's over stat-at under --component) answers the
@@ -14286,7 +14325,7 @@ class WasmLispCompilerIntegrationTest {
 				#P"fsp-a.txt"
 				(#P"fsp-a.txt" #P"fsp-b.txt")
 				#P"fsp-a.txt"
-				(NIL #P"fsp-a.txt")
+				(T #P"fsp-a.txt")
 				NIL
 				NIL
 				MADE
@@ -14305,7 +14344,7 @@ class WasmLispCompilerIntegrationTest {
 				(progn (setf (uiop:getenv "WASM_UIOP_FS_TEST") "fsp-a.txt")
 				       (print (uiop:getenv-pathname "WASM_UIOP_FS_TEST")))
 				""", "");
-		String componentExpected = expected.replace("#P\"fsp-a.txt\"\n(NIL #P\"fsp-a.txt\")", "(NIL #P\"fsp-a.txt\")");
+		String componentExpected = expected.replace("#P\"fsp-a.txt\"\n(T #P\"fsp-a.txt\")", "(T #P\"fsp-a.txt\")");
 		assertThat(compileAndRunComponentWithDirs(componentCode)).isEqualTo(componentExpected);
 		assertThat(compileAndRunComponentWithEnv("""
 				(print (uiop:getenv-pathname "WASM_UIOP_FS_ENV"))
@@ -24192,6 +24231,26 @@ class WasmLispCompilerIntegrationTest {
 							(6 12 10)
 							120
 							("Function expects at most 3 arguments, got 4" "Function expects at most 3 arguments, got 4" "Function expects at most 3 arguments, got 4" "Function expects at most 10 arguments, got 11")""");
+	}
+
+	@Test
+	void compileAndRunIdentityHashReadsTheSlotAModuleCallingItCarries() throws Exception {
+		// The twins' program, plus what the slot sequence makes certain here: two fresh
+		// objects never share a hash. The module makes no eq table, so the call alone
+		// gives every cons, cell, closure and instance the identity-hash slot
+		// (LispMacroExpander.programHashesByIdentity); a P1 module and a component alike.
+		String program = """
+				(let* ((c (list 1 2)) (v (vector 1)) (f (lambda () 1)) (tb (make-hash-table))
+				       (hc (%identity-hash c)) (hv (%identity-hash v)))
+				  (setf (car c) 9)
+				  (setf (aref v 0) 9)
+				  (print (list (= hc (%identity-hash c)) (= hv (%identity-hash v))
+				               (= (%identity-hash f) (%identity-hash f)) (= (%identity-hash tb) (%identity-hash tb))
+				               (integerp hc) (<= -2147483648 hc 2147483647)
+				               (/= (%identity-hash (list 1)) (%identity-hash (list 1))))))
+				""";
+		assertThat(compileAndRun(program)).isEqualTo("(T T T T T T T)");
+		assertThat(compileAndRunComponent(program)).isEqualTo("(T T T T T T T)");
 	}
 
 	@Test

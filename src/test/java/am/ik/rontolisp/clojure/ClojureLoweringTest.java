@@ -1889,10 +1889,13 @@ class ClojureLoweringTest {
 	@Test
 	void aMacroBodysEvalChoosesTheCodeThisFrontEndLowers() {
 		// data.priority-map's compile-if: a core var the subset lacks resolves to nil, so
-		// the expansion takes the fallback (the oracle, which has it, takes the other)
+		// the expansion takes the fallback (the oracle, which has it, takes the other);
+		// one it has, hash-unordered-coll included, takes the oracle's branch
 		String compileIf = "(defmacro mu-ci [test then else] (if (eval test) then else)) ";
-		assertThat(loweredWithMacros(compileIf + "(mu-ci (resolve 'clojure.core/hash-unordered-coll) :has :lacks)"))
+		assertThat(loweredWithMacros(compileIf + "(mu-ci (resolve 'clojure.core/seque) :has :lacks)"))
 			.endsWith("\"lacks\")");
+		assertThat(loweredWithMacros(compileIf + "(mu-ci (resolve 'clojure.core/hash-unordered-coll) :has :lacks)"))
+			.endsWith("\"has\")");
 		assertThat(loweredWithMacros(compileIf + "(mu-ci (resolve 'clojure.core/inc) :has :lacks)"))
 			.endsWith("\"has\")");
 		// a class lookup runs on the macro-time JVM, the same on every backend
@@ -2792,6 +2795,33 @@ class ClojureLoweringTest {
 		// a StringReader by itself stays the host class: a Java API takes it
 		assertThat(lowered("(java.io.StringReader. \"x\")"))
 			.contains("(JAVA:NEW \"java.io.StringReader\" \"x\" :JAVA-FALSE)");
+	}
+
+	@Test
+	void theHashVerbsCallTheirWorkersAndATypesHasheqStoresInItsOwnFamily() {
+		assertThat(lowered("(hash [1]) (hash-combine 1 :a) (mix-collection-hash 1 2) (hash-ordered-coll [])"))
+			.contains("(RONTOLISP::%CLOJURE-HASHEQ (VECTOR 1))")
+			.contains("(RONTOLISP::%CLOJURE-HASH-COMBINE 1 (LIST :C%KEYWORD \"a\"))")
+			.contains("(RONTOLISP::%CLOJURE-MIX-COLLECTION-HASH 1 2)")
+			.contains("(RONTOLISP::%CLOJURE-HASH-ORDERED-COLL (VECTOR))");
+		assertThat(lowered("(map hash [1]) (map hash-unordered-coll [#{}])")).contains("#'RONTOLISP::%CLOJURE-HASHEQ-V")
+			.contains("#'RONTOLISP::%CLOJURE-HASH-UNORDERED-COLL-V");
+		assertThatThrownBy(() -> Clojure.read("(hash)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Wrong number of args (0) passed to: clojure.core/hash");
+		assertThatThrownBy(() -> Clojure.read("(mix-collection-hash 1)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Wrong number of args (1) passed to: clojure.core/mix-collection-hash");
+		assertThatThrownBy(() -> Clojure.read("(hash-ordered-coll [] [])", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Wrong number of args (2) passed to: clojure.core/hash-ordered-coll");
+		// hash reads an IHashEq row, so it is a family of its own, not a marker
+		assertThat(lowered("(deftype H [] clojure.lang.IHashEq (hasheq [_] 1))"))
+			.contains("(RONTOLISP::%CLOJURE-HASHEQ-ROW (LIST :C%KEYWORD \"H\") '(\"clojure.lang.IHashEq\")")
+			.doesNotContain("%CLOJURE-MARKER-ROW");
+		// .hashCode of a receiver of no known class is the hashCode of any value, on
+		// every backend; a known host class keeps the host's
+		assertThat(lowered("(fn [x] (.hashCode x))")).contains("(RONTOLISP::%CLOJURE-JAVA-HASH ")
+			.doesNotContain("JAVA:CALL");
+		assertThat(lowered("(.hashCode (java.util.ArrayList.))")).contains("\"hashCode\"")
+			.doesNotContain("%CLOJURE-JAVA-HASH");
 	}
 
 	@Test

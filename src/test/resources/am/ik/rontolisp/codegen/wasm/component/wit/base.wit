@@ -86,6 +86,7 @@ package wasi:filesystem@0.3.0 {
       stat: async func() -> result<descriptor-stat, error-code>;
       stat-at: async func(path-flags: path-flags, path: string) -> result<descriptor-stat, error-code>;
       open-at: async func(path-flags: path-flags, path: string, open-flags: open-flags, %flags: descriptor-flags) -> result<descriptor, error-code>;
+      readlink-at: async func(path: string) -> result<string, error-code>;
       remove-directory-at: async func(path: string) -> result<_, error-code>;
       rename-at: async func(old-path: string, new-descriptor: borrow<descriptor>, new-path: string) -> result<_, error-code>;
       unlink-file-at: async func(path: string) -> result<_, error-code>;

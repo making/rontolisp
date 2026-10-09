@@ -19,9 +19,9 @@ signals an error naming the pathname and the constraint, or calls a custom
 ```
 
 Lite next to upstream, deliberately: the report is `Invalid pathname ~S: ~A`,
-`:want-logical` always fails (no logical pathname exists),
-`:resolve-symlinks` / `:truenamize` are accepted and ignored, and `:truename`
-answers what [`probe-file`](probe-file.md) answers.
+and `:want-logical` always fails (no logical pathname exists). `:truename`
+answers the [`truename`](truename.md), and `:resolve-symlinks` / `:truenamize`
+resolve the symbolic links in the path as upstream does.
 
 ## Backend support
 
