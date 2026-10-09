@@ -15,6 +15,7 @@ import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Base64;
 import java.util.List;
 import java.util.Map;
 import java.util.Random;
@@ -257,10 +258,56 @@ class ClojureRingUtilTest {
 	}
 
 	@Test
+	void theBase64PairAnswersWhatTheJdksBase64Answers() throws Exception {
+		Random random = new Random(37);
+		StringBuilder program = new StringBuilder("(ns probe (:require [ring.util.codec :as c]))\n");
+		List<String> expected = new ArrayList<>();
+		for (int i = 0; i < 200; i++) {
+			byte[] bytes = new byte[random.nextInt(12)];
+			random.nextBytes(bytes);
+			program.append("(prn (c/base64-encode (byte-array [");
+			for (byte b : bytes) {
+				program.append(b).append(' ');
+			}
+			program.append("])))\n");
+			expected.add("\"" + Base64.getEncoder().encodeToString(bytes) + "\"");
+		}
+		String alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+		String junk = "=!-_\n éあ";
+		for (int i = 0; i < 400; i++) {
+			StringBuilder s = new StringBuilder();
+			int n = random.nextInt(11);
+			for (int j = 0; j < n; j++) {
+				s.append(random.nextInt(6) == 0 ? junk.charAt(random.nextInt(junk.length()))
+						: alphabet.charAt(random.nextInt(alphabet.length())));
+			}
+			if (random.nextBoolean() && s.length() > 1) {
+				s.setCharAt(s.length() - 1, '=');
+			}
+			program.append("(prn (try (vec (c/base64-decode ")
+				.append(literal(s.toString()))
+				.append(")) (catch IllegalArgumentException e (ex-message e))))\n");
+			try {
+				byte[] decoded = Base64.getDecoder().decode(s.toString());
+				StringBuilder vec = new StringBuilder("[");
+				for (int k = 0; k < decoded.length; k++) {
+					vec.append(k == 0 ? "" : " ").append(decoded[k]);
+				}
+				expected.add(vec.append(']').toString());
+			}
+			catch (IllegalArgumentException ex) {
+				expected.add("\"" + ex.getMessage() + "\"");
+			}
+		}
+		assertThat(lines(interpret(program.toString()))).containsExactlyElementsOf(expected);
+	}
+
+	@Test
 	void aVarTheOraclesNamespaceHasAndTheBuiltInOneLeavesOutIsRefusedByName() {
-		assertThatThrownBy(() -> Clojure.read("(ns a (:require [ring.util.codec :refer [base64-encode]]))", null))
+		assertThatThrownBy(() -> Clojure.read("(ns a (:require [ring.util.codec :refer [form-encode*]]))", null))
 			.isInstanceOf(LispReadException.class)
-			.hasMessageContaining("ring.util.codec/base64-encode is not built in: it takes a byte array");
+			.hasMessageContaining(
+					"ring.util.codec/form-encode* is not built in: form-encode is a function, not a protocol, here");
 		assertThatThrownBy(() -> Clojure.read("(ns a (:require [ring.util.response :as r])) (r/nope 1)", null))
 			.isInstanceOf(LispReadException.class)
 			.hasMessageContaining("No such var: r/nope");

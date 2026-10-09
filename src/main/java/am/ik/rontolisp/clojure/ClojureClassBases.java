@@ -44,11 +44,14 @@ final class ClojureClassBases {
 	 * theirs below {@code Object}: a dispatch value or a hierarchy argument spelling one
 	 * lowers to the keyword {@code class} answers.
 	 */
-	static final Map<String, String> IO_SUPERS = Map.of("java.io.File", OBJECT, "java.net.URL", OBJECT, "java.net.URI",
-			OBJECT, "java.io.BufferedInputStream", "java.io.FilterInputStream", "java.io.FilterInputStream",
-			"java.io.InputStream", "java.io.InputStream", OBJECT, "java.io.BufferedOutputStream",
-			"java.io.FilterOutputStream", "java.io.FilterOutputStream", "java.io.OutputStream", "java.io.OutputStream",
-			OBJECT);
+	static final Map<String, String> IO_SUPERS = Map.ofEntries(Map.entry("java.io.File", OBJECT),
+			Map.entry("java.net.URL", OBJECT), Map.entry("java.net.URI", OBJECT),
+			Map.entry("java.io.BufferedInputStream", "java.io.FilterInputStream"),
+			Map.entry("java.io.FilterInputStream", "java.io.InputStream"), Map.entry("java.io.InputStream", OBJECT),
+			Map.entry("java.io.BufferedOutputStream", "java.io.FilterOutputStream"),
+			Map.entry("java.io.FilterOutputStream", "java.io.OutputStream"), Map.entry("java.io.OutputStream", OBJECT),
+			Map.entry("java.io.ByteArrayInputStream", "java.io.InputStream"),
+			Map.entry("java.io.ByteArrayOutputStream", "java.io.OutputStream"));
 
 	/**
 	 * The superclass of each class an instant {@code class} answers that has one below

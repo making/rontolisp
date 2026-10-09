@@ -299,7 +299,7 @@
         "condition": {
           "typeReachable": "am.ik.rontolisp.clojure.ClojureBuiltinNamespaces"
         },
-        "pattern": "am/ik/rontolisp/clojure/lib/ring/(util|middleware)/[a-z_]+\\.clj"
+        "pattern": "am/ik/rontolisp/clojure/lib/ring/(util|middleware)/[a-z0-9_]+\\.clj"
       },
       {
         "condition": {

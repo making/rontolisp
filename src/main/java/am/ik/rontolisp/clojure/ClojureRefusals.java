@@ -42,6 +42,14 @@ final class ClojureRefusals {
 	/** {@code java.lang.StringIndexOutOfBoundsException}. */
 	static final String STRING_INDEX_OUT_OF_BOUNDS = "RONTOLISP::%CLOJURE-STRING-INDEX-OUT-OF-BOUNDS-EXCEPTION";
 
+	/**
+	 * {@code java.lang.ArrayIndexOutOfBoundsException}: an index outside a byte array.
+	 */
+	static final String ARRAY_INDEX_OUT_OF_BOUNDS = "RONTOLISP::%CLOJURE-ARRAY-INDEX-OUT-OF-BOUNDS-EXCEPTION";
+
+	/** {@code java.lang.NegativeArraySizeException}: a byte array of a negative size. */
+	static final String NEGATIVE_ARRAY_SIZE = "RONTOLISP::%CLOJURE-NEGATIVE-ARRAY-SIZE-EXCEPTION";
+
 	/** {@code java.lang.UnsupportedOperationException}. */
 	static final String UNSUPPORTED_OPERATION = "RONTOLISP::%CLOJURE-UNSUPPORTED-OPERATION-EXCEPTION";
 
@@ -167,6 +175,8 @@ final class ClojureRefusals {
 			Map.entry(NULL_POINTER, "java.lang.NullPointerException"),
 			Map.entry(INDEX_OUT_OF_BOUNDS, "java.lang.IndexOutOfBoundsException"),
 			Map.entry(STRING_INDEX_OUT_OF_BOUNDS, "java.lang.StringIndexOutOfBoundsException"),
+			Map.entry(ARRAY_INDEX_OUT_OF_BOUNDS, "java.lang.ArrayIndexOutOfBoundsException"),
+			Map.entry(NEGATIVE_ARRAY_SIZE, "java.lang.NegativeArraySizeException"),
 			Map.entry(UNSUPPORTED_OPERATION, "java.lang.UnsupportedOperationException"),
 			Map.entry(NUMBER_FORMAT, "java.lang.NumberFormatException"),
 			Map.entry(ARITHMETIC, "java.lang.ArithmeticException"), Map.entry(ARITY, "clojure.lang.ArityException"),

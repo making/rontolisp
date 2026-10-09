@@ -1529,9 +1529,13 @@ class ClojureLoweringTest {
 		for (String exit : List.of("(System/exit 3)", "(. System exit 3)", "(java.lang.System/exit 3)")) {
 			assertThat(lowered(exit)).as(exit).contains("(%HOST-EXIT (LOGAND 3 255))").doesNotContain("JAVA:");
 		}
-		assertThat(lowered("(String. \"hi\")")).contains("JAVA:NEW").contains("java.lang.String");
+		// a String construction is the byte-array family's alias of java:new, which
+		// decodes a byte array; a param-tagged one is java:new itself
+		assertThat(lowered("(String. \"hi\")")).contains("(RONTOLISP::%CLOJURE-STRING-NEW \"java.lang.String\" \"hi\"");
 		assertThat(lowered("(Integer/MAX_VALUE)")).contains("JAVA:FIELD");
-		assertThat(lowered("(new String \"hi\")")).contains("JAVA:NEW");
+		assertThat(lowered("(new String \"hi\")")).contains("(RONTOLISP::%CLOJURE-STRING-NEW \"java.lang.String\"");
+		assertThat(lowered("(^[String] String/new \"hi\")")).contains("JAVA:NEW").doesNotContain("STRING-NEW");
+		assertThat(lowered("(java.util.ArrayList. 3)")).contains("JAVA:NEW");
 		assertThat(lowered("((memfn toUpperCase) \"hi\")")).contains("LAMBDA").contains("toUpperCase");
 		assertThatThrownBy(() -> Clojure.read("(memfn toUpperCase 1)", null)).isInstanceOf(LispReadException.class)
 			.hasMessageContaining("memfn needs a plain name, not 1");
@@ -1730,8 +1734,8 @@ class ClojureLoweringTest {
 			.doesNotContain("(IF (JAVA:CALL");
 		// :functional before it when an argument may be a fn; a literal false argument
 		// is the quoted false object, which a site resolves on
-		assertThat(lowered("(defn each [l f] (.forEach l f))")).contains(
-				"\"forEach\" (RONTOLISP::%CLOJURE-HOST-VALUE (RONTOLISP::%CLOJURE-IO-HOST |c%f|)) :FUNCTIONAL :JAVA-FALSE)");
+		assertThat(lowered("(defn each [l f] (.forEach l f))")).contains("\"forEach\" (RONTOLISP::%CLOJURE-HOST-VALUE"
+				+ " (RONTOLISP::%CLOJURE-BYTES-HOST (RONTOLISP::%CLOJURE-IO-HOST |c%f|))) :FUNCTIONAL :JAVA-FALSE)");
 		assertThat(lowered("(.add (java.util.ArrayList.) false)")).contains("\"add\" '|false| :JAVA-FALSE)");
 		assertThat(lowered("(java.util.ArrayList. 3)")).endsWith("(JAVA:NEW \"java.util.ArrayList\" 3 :JAVA-FALSE)");
 		// a proxy's body is handed Java's false as the false object
@@ -1743,9 +1747,9 @@ class ClojureLoweringTest {
 	void aHostArgumentThatMayHoldAValueJavaLacksGoesThroughTheHostValue() {
 		// a parameter, a keyword or a call may hold a keyword, a symbol, a set or a
 		// record: the library function hands Java a value of it, behind the io family's
-		// view of a clojure.java.io value
-		assertThat(lowered("(defn put [m k] (.put m k 1))")).contains(
-				"\"put\" (RONTOLISP::%CLOJURE-HOST-VALUE (RONTOLISP::%CLOJURE-IO-HOST |c%k|)) 1 :FUNCTIONAL :JAVA-FALSE)");
+		// view of a clojure.java.io value and the byte-array family's of a byte array
+		assertThat(lowered("(defn put [m k] (.put m k 1))")).contains("\"put\" (RONTOLISP::%CLOJURE-HOST-VALUE"
+				+ " (RONTOLISP::%CLOJURE-BYTES-HOST (RONTOLISP::%CLOJURE-IO-HOST |c%k|))) 1 :FUNCTIONAL :JAVA-FALSE)");
 		assertThat(lowered("(java.util.HashSet. #{1})"))
 			.contains("(JAVA:NEW \"java.util.HashSet\" (RONTOLISP::%CLOJURE-HOST-VALUE ");
 		assertThat(lowered("(.add (java.util.ArrayList.) :a)")).contains("\"add\" (RONTOLISP::%CLOJURE-HOST-VALUE ");
@@ -1761,8 +1765,8 @@ class ClojureLoweringTest {
 			.contains("\"add\" |c%l| :FUNCTIONAL :JAVA-FALSE)")
 			.doesNotContain("%CLOJURE-HOST-VALUE");
 		// a local the binding shadows is no longer the construction
-		assertThat(lowered("(let [l (java.util.ArrayList.)] (fn [l] (.add (java.util.ArrayList.) l)))"))
-			.contains("(RONTOLISP::%CLOJURE-HOST-VALUE (RONTOLISP::%CLOJURE-IO-HOST |c%l|))");
+		assertThat(lowered("(let [l (java.util.ArrayList.)] (fn [l] (.add (java.util.ArrayList.) l)))")).contains(
+				"(RONTOLISP::%CLOJURE-HOST-VALUE (RONTOLISP::%CLOJURE-BYTES-HOST (RONTOLISP::%CLOJURE-IO-HOST |c%l|)))");
 		// where the host is not (wasm) a java: call is a call-time error: no wrap of
 		// its own
 		assertThat(Clojure.read("(defn put [m k] (.put m k 1))", null, null, ClojureFiles.NONE, false)
@@ -1779,9 +1783,18 @@ class ClojureLoweringTest {
 		assertThat(lowered("(make-array String 2 2)")).contains("MAKE-ARRAY").contains("LIST");
 		assertThatThrownBy(() -> Clojure.read("(make-array 1 2)", null)).isInstanceOf(LispReadException.class)
 			.hasMessageContaining("make-array takes a class name");
-		assertThat(lowered("(let [a20-v 1] (aget a20-v 0))")).contains("AREF");
-		assertThat(lowered("(let [a20-v 1] (aset a20-v 0 1))")).contains("SETF").contains("AREF");
-		assertThat(lowered("(let [a20-v 1] (alength a20-v))")).contains("ARRAY-DIMENSION");
+		// one index: the byte-array family's aget, aset and alength, which a program
+		// making no byte array folds to aref, (setf aref) and array-dimension
+		// (ClojureArmsTest); more indexes: the core forms
+		assertThat(lowered("(let [a20-v 1] (aget a20-v 0))")).contains("(RONTOLISP::%CLOJURE-AGET |c%a20-v| 0)");
+		assertThat(lowered("(let [a20-v 1] (aset a20-v 0 1))")).contains("(RONTOLISP::%CLOJURE-ASET |c%a20-v| 0 1)");
+		assertThat(lowered("(let [a20-v 1] (alength a20-v))")).contains("(RONTOLISP::%CLOJURE-ALENGTH |c%a20-v| 0)");
+		assertThat(lowered("(let [a20-v 1] (aget a20-v 0 1))")).contains("AREF").doesNotContain("%CLOJURE-AGET");
+		assertThat(lowered("(let [a20-v 1] (aset a20-v 0 1 2))")).contains("SETF")
+			.contains("AREF")
+			.doesNotContain("%CLOJURE-ASET");
+		// an array of Byte/TYPE is a byte array
+		assertThat(lowered("(make-array Byte/TYPE 3)")).contains("(RONTOLISP::%CLOJURE-BYTE-ARRAY 3)");
 	}
 
 	@Test

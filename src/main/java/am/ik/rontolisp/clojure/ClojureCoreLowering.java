@@ -66,6 +66,18 @@ final class ClojureCoreLowering {
 			case "int", "long":
 				arity(name, n, 1, 1);
 				return castOf(ctx, name, items.get(1));
+			case "byte-array":
+				// a byte array (ClojureBytesLowering): of a size or a seq, or of a size
+				// and a byte or a seq
+				arity(name, n, 1, 2);
+				return n == 1 ? worker(name, ctx.lower(items.get(1)))
+						: worker("byte-array-2", ctx.lower(items.get(1)), ctx.lower(items.get(2)));
+			case "bytes", "aclone":
+				arity(name, n, 1, 1);
+				return worker(name, ctx.lower(items.get(1)));
+			case "aset-byte":
+				arity(name, n, 3, 3);
+				return worker(name, ctx.lower(items.get(1)), ctx.lower(items.get(2)), ctx.lower(items.get(3)));
 			case "unchecked-inc", "unchecked-dec", "unchecked-negate", "unchecked-inc-int", "unchecked-dec-int",
 					"unchecked-negate-int":
 				arity(name, n, 1, 1);
@@ -233,7 +245,7 @@ final class ClojureCoreLowering {
 					"unchecked-remainder-int", "run!", "iteration", "seq-to-map-for-destructuring", "println", "print",
 					"prn", "pr", "flush", "read-line", "reader-conditional", "tagged-literal", "inst-ms", "parse-uuid",
 					"random-uuid", "iterator-seq", "hash-ordered-coll", "hash-unordered-coll", "mix-collection-hash",
-					"hash-combine" ->
+					"hash-combine", "byte-array", "bytes", "aclone", "aset-byte" ->
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), runtime(name + "-v"));
 			case "hash" -> ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), runtime("hasheq-v"));
 			case "inst-ms*" -> ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), runtime("inst-ms-v"));

@@ -24,13 +24,13 @@ import org.jspecify.annotations.Nullable;
  * <ul>
  * <li>{@code rontolisp.internal.ring} for the built-in Ring namespaces: bytes and
  * charsets, the JDK's URL coders, the content-type charset match, the Unicode letter test
- * of {@code wrap-keyword-params}, and the file responses' canonical path, {@code ..}
- * test, HTTP date and {@code java.util.Date} (an instant, {@code date}'s worker the
- * {@code #inst} constructor). Measured 2026-10-08, wasm-GC P1:
- * {@code (form-decode-str "a+%41")} written in Clojure inside a namespace was a 340,532 B
- * module, {@code (url-decode "a%41")} 357,787 B (generic {@code conj}, {@code apply str},
- * {@code throw} and the regex engine), where the Common Lisp {@code rontolisp:url-decode}
- * is a 26,940 B module.</li>
+ * of {@code wrap-keyword-params}, the file responses' canonical path, {@code ..} test,
+ * HTTP date and {@code java.util.Date} (an instant, {@code date}'s worker the
+ * {@code #inst} constructor), and {@code java.util.Base64}'s encoder and decoder over a
+ * byte array. Measured 2026-10-08, wasm-GC P1: {@code (form-decode-str "a+%41")} written
+ * in Clojure inside a namespace was a 340,532 B module, {@code (url-decode "a%41")}
+ * 357,787 B (generic {@code conj}, {@code apply str}, {@code throw} and the regex
+ * engine), where the Common Lisp {@code rontolisp:url-decode} is a 26,940 B module.</li>
  * <li>{@code rontolisp.internal.pprint} for {@code clojure.pprint}: the pretty print's
  * token buffer and its layout, the radix spelling of a number, and the text of
  * {@code cl-format}'s number directives and case conversion.</li>
@@ -198,7 +198,8 @@ final class ClojureKernelLowering {
 							Map.entry("form-decode-map", 2), Map.entry("form-decode", 2), Map.entry("parse-long", 1),
 							Map.entry("content-type-charset", 1), Map.entry("keyword-syntax?", 2),
 							Map.entry("canonical-path", 1), Map.entry("directory-traversal?", 1),
-							Map.entry("format-date", 1), Map.entry("date", 1)),
+							Map.entry("format-date", 1), Map.entry("date", 1), Map.entry("base64-encode", 1),
+							Map.entry("base64-decode", 1)),
 					Map.of("date", ClojureDefaultReaders.MAKE_INST), false)),
 			Map.entry("rontolisp.internal.pprint",
 					new Kernels("clojure.pprint", "RONTOLISP::%CLOJURE-PP-", Map.ofEntries(Map.entry("call", 3),

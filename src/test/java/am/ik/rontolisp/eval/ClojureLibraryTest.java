@@ -361,6 +361,34 @@ class ClojureLibraryTest {
 	}
 
 	@Test
+	void aProgramMakingNoByteArraySplicesTheLibraryWithoutItsByteArrayArms() {
+		// aget, aset, alength, bytes? and a String construction lower to the forms they
+		// lowered to before byte arrays, and the printer's, the seq view's and the byte
+		// streams' arms go: only a program that can hold a byte array keeps them
+		assertThat(defun(ClojureLibrary.forms(), "RONTOLISP::%CLOJURE-WRITE"))
+			.contains("(RONTOLISP::%CLOJURE-BYTES-P X)");
+		List<LispVal> plain = Clojure.read("(def a (make-array String 2)) (aset a 0 \"x\")"
+				+ " (prn (aget a 0) (alength a) (bytes? a) (seq [1]) (String. \"s\"))"
+				+ " (with-open [o (clojure.java.io/output-stream \"f\")] (.write o 1))", null);
+		List<LispVal> processed = ClojureLibrary.process(plain);
+		assertThat(processed.stream()
+			.map(LispVal::print)
+			.filter(text -> !text.startsWith("(DEFUN ") && !text.startsWith("(DEFVAR ")))
+			.noneMatch(text -> text.contains("%CLOJURE-BYTES") || text.contains("%CLOJURE-AGET")
+					|| text.contains("%CLOJURE-ASET") || text.contains("%CLOJURE-ALENGTH")
+					|| text.contains("%CLOJURE-IS-BYTES") || text.contains("%CLOJURE-STRING-NEW"));
+		for (String name : List.of("RONTOLISP::%CLOJURE-WRITE", "RONTOLISP::%CLOJURE-STRICT-SEQ",
+				"RONTOLISP::%CLOJURE-IO-WRITE-BYTE", "RONTOLISP::%CLOJURE-IO-CLOSE-OUTPUT")) {
+			assertThat(defun(processed, name)).as(name)
+				.doesNotContain("%CLOJURE-BYTES-P")
+				.doesNotContain("%CLOJURE-IO-ARRAY-STREAM-P");
+		}
+		List<LispVal> bytes = Clojure.read("(prn (byte-array 2))", null);
+		assertThat(defun(ClojureLibrary.process(bytes), "RONTOLISP::%CLOJURE-WRITE"))
+			.contains("(RONTOLISP::%CLOJURE-BYTES-P X)");
+	}
+
+	@Test
 	void aWholeProgramOnTheInterpreterTakesTheLibraryWithoutTheArmsItCanNeverTake() {
 		// str of a number passes no io test where the program can hold no io value; the
 		// library loaded on first use keeps every arm for what a session reads next

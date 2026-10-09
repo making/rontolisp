@@ -10874,3 +10874,154 @@ cases:
       "java.lang.NullPointerException" -539222987 -3
       1013910569 -1640525200 97 994 1013910568 1013910569 3 994 2027821078
       156247261 -2123407586 1772842048 -1172211204 425092884 "java.lang.NullPointerException"
+  - name: byte-array-makes-a-mutable-array-of-signed-bytes
+    # byte-array of a size, a seq (each member stored as Number.byteValue stores it:
+    # a long's low eight bits, a double saturated to the int range, a ratio
+    # truncated) or a size and a byte or a seq; make-array of Byte/TYPE; aget, nth,
+    # get read an element as Java's byte, aset stores a byte, aset-byte casts its
+    # value first and answers it, aclone copies. Oracle-identical (clj 1.12.6,
+    # 2026-10-09).
+    source: |
+      (def ba-a (byte-array [1 2 -1 127 -128 300 -129 1.9 7/2]))
+      (prn (vec ba-a) (alength ba-a) (count ba-a) (bytes? ba-a) (bytes? [1]) (map bytes? [ba-a nil]))
+      (prn (vec (byte-array 3)) (vec (byte-array 5 [1 2])) (vec (byte-array 2 [1 2 3])) (vec (byte-array 3 (byte 7)))
+           (vec (byte-array nil)) (vec (byte-array 2.5)) (vec (make-array Byte/TYPE 2)) (vec (byte-array [1e10 ##NaN])))
+      (prn (aget ba-a 2) (nth ba-a 3) (nth ba-a 99 :none) (get ba-a 4) (get ba-a 99) (get ba-a 99 :d) (first ba-a) (last ba-a)
+           (seq (byte-array 0)))
+      (prn (aset ba-a 0 (byte -5)) (aset-byte ba-a 1 100) (aset-byte ba-a 2 1.9) (vec (take 3 ba-a)) (identical? ba-a (bytes ba-a))
+           (bytes nil))
+      (let [c (aclone ba-a)] (aset c 0 (byte 9)) (prn (aget c 0) (aget ba-a 0) (= c ba-a) (= c c) (alength c)))
+    expected: |
+      [1 2 -1 127 -128 44 127 1 3] 9 9 true false (true false)
+      [0 0 0] [1 2 0 0 0] [1 2] [7 7 7] [] [0 0] [0 0] [-1 0]
+      -1 127 :none -128 nil :d 1 3 nil
+      -5 100 1.9 [-5 100 1] true nil
+      9 -5 false true 9
+  - name: a-byte-array-is-no-collection-yet-seqs-its-bytes
+    # Like the oracle's byte[]: no collection, sequential or counted, = by identity
+    # (a map key too), seqable as its bytes; a refusal is the oracle's class and
+    # words. Oracle-identical (clj 1.12.6, 2026-10-09).
+    source: |
+      (def ba-b (byte-array [104 105 -1]))
+      (prn (coll? ba-b) (seqable? ba-b) (sequential? ba-b) (vector? ba-b) (counted? ba-b) (empty? ba-b) (empty? (byte-array 0)))
+      (prn (= ba-b ba-b) (= ba-b (byte-array [104 105 -1])) (= (byte-array [1]) [1]) (contains? ba-b 2) (contains? ba-b 3)
+           (get (hash-map ba-b :v) ba-b))
+      (prn (reduce + ba-b) (map inc ba-b) (into [] ba-b) (apply str (map char (take 2 ba-b))) (get (frequencies (byte-array [1 1 2])) 1))
+      (let [[x y] ba-b] (prn x y (vec (rest ba-b)) (count (seq ba-b))))
+      (prn (try (aget ba-b 3) (catch ArrayIndexOutOfBoundsException e (ex-message e)))
+           (try (byte-array -1) (catch NegativeArraySizeException e (ex-message e)))
+           (try (aset ba-b 0 200) (catch IllegalArgumentException e (ex-message e)))
+           (try (aset-byte ba-b 0 200) (catch IllegalArgumentException e (ex-message e))))
+      (prn (try (bytes [1]) (catch ClassCastException e :refused))
+           (try (byte-array 2 200) (catch IllegalArgumentException e (ex-message e)))
+           (try (byte-array [\a]) (catch ClassCastException e :refused))
+           (try (contains? ba-b :a) (catch IllegalArgumentException e (ex-message e))))
+    expected: |
+      false true false false false false true
+      true false false true false :v
+      208 (105 106 0) [104 105 -1] "hi" 2
+      104 105 [105 -1] 3
+      "Index 3 out of bounds for length 3" "-1" "No matching method aset found taking 3 args" "Value out of range for byte: 200"
+      :refused "Don't know how to create ISeq from: java.lang.Long" :refused "contains? not supported on type: [B"
+  - name: strings-and-byte-arrays-convert-in-a-charset
+    # .getBytes and the String constructions over a byte array, slurp of one and a
+    # reader over one, in UTF-8 (the default) or a charset named: an unmappable
+    # character and a lone surrogate encode as ?, a malformed sequence decodes as
+    # U+FFFD exactly as the JDK replaces it. Oracle-identical (clj 1.12.6,
+    # 2026-10-09).
+    source: |
+      (def ba-s (.getBytes "héllo"))
+      (prn (vec ba-s) (vec (.getBytes "héllo€" "ISO-8859-1")) (vec (.getBytes "a€b" "US-ASCII")) (vec (.getBytes "a😀b" "UTF-8")))
+      (prn (String. ba-s) (String. ba-s "ISO-8859-1") (String. ba-s 1 2) (String. ba-s 1 2 "UTF-8") (String. (byte-array 0)))
+      (prn (String. (byte-array [-1 65 -61]) "UTF-8") (String. (byte-array [65 -128]) "US-ASCII"))
+      (prn (slurp ba-s) (slurp ba-s :encoding "ISO-8859-1") (with-open [r (clojure.java.io/reader ba-s)] (.readLine r)))
+      (prn (try (String. ba-s 1 10) (catch StringIndexOutOfBoundsException e (ex-message e)))
+           (try (.getBytes "x" "bogus") (catch java.io.UnsupportedEncodingException e (ex-message e))))
+    expected: |
+      [104 -61 -87 108 108 111] [104 -23 108 108 111 63] [97 63 98] [97 -16 -97 -104 -128 98]
+      "héllo" "hÃ©llo" "é" "é" ""
+      "�A�" "A�"
+      "héllo" "hÃ©llo" "héllo"
+      "Range [1, 1 + 10) out of bounds for length 6" "bogus"
+  - name: byte-arrays-flow-through-clojure-java-io-streams
+    # A ByteArrayInputStream reads a byte array in place (a part of it, marked at
+    # its start, never closed); read fills a byte array, readNBytes and
+    # readAllBytes answer one; a ByteArrayOutputStream gathers what is written --
+    # an int's low octet, a byte array or a part of one -- and answers it as bytes
+    # or text, never closed either; copy, input-stream, reader and a file stream
+    # take a byte array. On wasm the file needs a --dir preopen covering /tmp.
+    # Oracle-identical (clj 1.12.6, 2026-10-09).
+    source: |
+      (def bio (.getBytes "héllo"))
+      (let [in (java.io.ByteArrayInputStream. bio) buf (byte-array 3)]
+        (prn (.read in buf) (vec buf) (.read in buf 1 2) (vec buf) (.read in buf) (.available in) (.read in buf 0 0)))
+      (let [in (java.io.ByteArrayInputStream. bio 1 2)] (prn (.read in) (.read in) (.read in) (.available in)))
+      (let [in (clojure.java.io/input-stream bio)]
+        (prn (vec (.readNBytes in 2)) (vec (.readAllBytes in)) (.read in) (.read in (byte-array 2)) (.read in (byte-array 0))))
+      (let [in (java.io.ByteArrayInputStream. bio)]
+        (.read in) (.mark in 0) (.read in) (.reset in) (prn (.read in) (.markSupported in) (.skip in 2) (.read in)))
+      (let [in (java.io.ByteArrayInputStream. bio)] (.close in) (prn (.read in)))
+      (let [o (java.io.ByteArrayOutputStream.)]
+        (.write o 65) (.write o 300) (.write o bio) (.write o bio 1 2)
+        (prn (.size o) (vec (.toByteArray o)) (str o) (.toString o "ISO-8859-1")))
+      (let [o (java.io.ByteArrayOutputStream. 1)] (clojure.java.io/copy bio o) (.close o) (.write o 33) (prn (str o) (.size o)))
+      (let [o (java.io.ByteArrayOutputStream.)]
+        (with-open [w (clojure.java.io/writer o)] (.write w "é!"))
+        (spit o "x")
+        (prn (vec (.toByteArray o))))
+      (let [o (java.io.ByteArrayOutputStream.) p (java.io.ByteArrayOutputStream.)]
+        (.transferTo (java.io.ByteArrayInputStream. bio) o) (.writeTo o p) (.reset o) (prn (.size o) (str p)))
+      (let [w (java.io.StringWriter.)] (clojure.java.io/copy bio w :encoding "ISO-8859-1") (prn (str w)))
+      (prn (try (.read (java.io.ByteArrayInputStream. bio) (byte-array 2) 1 2) (catch IndexOutOfBoundsException e (ex-message e)))
+           (try (clojure.java.io/copy bio nil) (catch IllegalArgumentException e (ex-message e)))
+           (try (java.io.ByteArrayInputStream. "abc") (catch ClassCastException e :refused))
+           (try (.write (java.io.ByteArrayOutputStream.) nil) (catch NullPointerException e :npe)))
+      (def bio-f (str "/tmp/rontolisp-bytes-" (rand-int 1000000000) ".bin"))
+      (clojure.java.io/copy bio (clojure.java.io/file bio-f))
+      (with-open [in (java.io.FileInputStream. bio-f) out (clojure.java.io/output-stream bio-f :append true)]
+        (let [buf (byte-array 4)] (prn (.read in buf) (vec buf) (.read in buf) (.read in buf))) (.write out bio 0 1))
+      (prn (vec (with-open [in (clojure.java.io/input-stream bio-f)] (.readAllBytes in))) (.length (clojure.java.io/file bio-f)))
+      (clojure.java.io/delete-file bio-f)
+    expected: |
+      3 [104 -61 -87] 2 [104 108 108] 1 0 -1
+      195 169 -1 0
+      [104 -61] [-87 108 108 111] -1 -1 0
+      195 true 2 108
+      104
+      10 [65 44 104 -61 -87 108 108 111 -61 -87] "A,hélloé" "A,hÃ©lloÃ©"
+      "héllo!" 7
+      [-61 -87 33 120]
+      0 "héllo"
+      "hÃ©llo"
+      "Range [1, 1 + 2) out of bounds for length 2" "No method in multimethod 'do-copy' for dispatch value: [byte/1 nil]" :refused :npe
+      4 [104 -61 -87 108] 2 -1
+      [104 -61 -87 108 108 111 104] 7
+  - name: ring-util-codec-base64-encodes-and-decodes-a-byte-array
+    # java.util.Base64's basic encoding, padded, and its decoder's refusals in its
+    # words. Oracle-identical (clj 1.12.6 + ring-codec 1.3.0, 2026-10-09).
+    source: |
+      (require '[ring.util.codec :as rcb])
+      (prn (rcb/base64-encode (.getBytes "héllo")) (rcb/base64-encode (byte-array 0)) (rcb/base64-encode (byte-array [-1 -2 -3 0 1])))
+      (prn (String. (rcb/base64-decode "aMOpbGxv") "UTF-8") (vec (rcb/base64-decode "aGk")) (vec (rcb/base64-decode "+/8="))
+           (bytes? (rcb/base64-decode "")))
+      (prn (try (rcb/base64-decode "a") (catch IllegalArgumentException e (ex-message e)))
+           (try (rcb/base64-decode "a!b=") (catch IllegalArgumentException e (ex-message e)))
+           (try (rcb/base64-decode "aGk==") (catch IllegalArgumentException e (ex-message e)))
+           (try (rcb/base64-decode "aGkxx") (catch IllegalArgumentException e (ex-message e))))
+    expected: |
+      "aMOpbGxv" "" "//79AAE="
+      "héllo" [104 105] [-5 -1] true
+      "Input byte[] should at least have 2 bytes for base64 bytes" "Illegal base64 character 21" "Input byte array has incorrect ending byte at 4" "Last unit does not have enough valid bits"
+  - name: a-byte-array-prints-as-the-host-object-its-hash-left-out
+    # A deviation: the oracle's #object carries the identity hash, and so does
+    # its toString ("[B@1b2c3d4e"), which no value here has, like a stream's;
+    # class answers the class's keyword, the oracle the class (it prints byte/1).
+    # A ByteArrayOutputStream's toString is what it holds, like the oracle's.
+    source: |
+      (prn (byte-array 1) (str (byte-array 1)) (class (byte-array 1)) (.getName (class (byte-array 1))))
+      (println (byte-array 1) [(byte-array 1)])
+      (prn (class (java.io.ByteArrayInputStream. (byte-array 1))) (doto (java.io.ByteArrayOutputStream.) (.write 65)))
+    expected: |
+      #object["[B" "[B"] "[B" :[B "[B"
+      #object[[B [B] [#object[[B [B]]
+      :java.io.ByteArrayInputStream #object[java.io.ByteArrayOutputStream "A"]

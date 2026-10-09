@@ -358,6 +358,10 @@ final class ClojureDispatchLowering {
 		// none sheds (ClojureArms.Family.IO)
 		branches.add(ClojureLowerUtil.list(ClojureLowerUtil.list(new LispSymbol(ClojureIoLowering.IO_P), one),
 				ClojureLowerUtil.list(new LispSymbol(ClojureIoLowering.CLASS_KEY), one)));
+		// a byte array answers its class's keyword, :[B (its wrapper is a cons): an arm a
+		// program making none sheds (ClojureArms.Family.BYTES)
+		branches.add(ClojureLowerUtil.list(ClojureLowerUtil.list(new LispSymbol(ClojureBytesLowering.BYTES_P), one),
+				ClojureCollectionLowering.keywordForm(ClojureBytesLowering.CLASS_NAME)));
 		// a stream answers the host class its printer names, as a keyword like every
 		// kind: an arm a program making no stream sheds (ClojureArms.Family.STREAM)
 		branches.add(ClojureLowerUtil.list(ClojureLowerUtil.list(new LispSymbol(ClojureInteropLowering.STREAM_P), one),

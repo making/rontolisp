@@ -127,11 +127,13 @@ final class ClojurePredicateLowering {
 	}
 
 	/**
-	 * The predicates of a kind no value here can have: no chunked seq, decimal, byte
-	 * array or delay exists on any backend, so each answers false for every value, which
-	 * is the oracle's answer for every value a program here can build.
+	 * The predicates of a kind no value here can have: no chunked seq, decimal or delay
+	 * exists on any backend, so each answers false for every value, which is the oracle's
+	 * answer for every value a program here can build. {@code bytes?} is
+	 * {@link ClojureBytesLowering#bytesPredicate}: the same {@code (progn value false)}
+	 * where the program makes no byte array.
 	 */
-	private static final List<String> NEVER = List.of("chunked-seq?", "decimal?", "bytes?", "delay?");
+	private static final List<String> NEVER = List.of("chunked-seq?", "decimal?", "delay?");
 
 	/**
 	 * The predicates of a reader conditional and a tagged literal, each to its library
@@ -198,6 +200,10 @@ final class ClojurePredicateLowering {
 			ClojureCoreLowering.arity(name, n, 1, 1);
 			return ClojureLowerUtil.list(new LispSymbol(readerValue), ctx.lower(items.get(1)), ctx.falseVariable);
 		}
+		if (name.equals("bytes?")) {
+			ClojureCoreLowering.arity(name, n, 1, 1);
+			return ClojureBytesLowering.bytesPredicate(ctx, ctx.lower(items.get(1)));
+		}
 		String verb = FUTURE_VERBS.get(name);
 		if (verb != null) {
 			ClojureCoreLowering.arity(name, n, 1, 1);
@@ -260,6 +266,11 @@ final class ClojurePredicateLowering {
 			LispSymbol one = ctx.freshTemp();
 			return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(one),
 					ClojureLowerUtil.list(new LispSymbol(readerValue), one, ctx.falseVariable));
+		}
+		if (name.equals("bytes?")) {
+			LispSymbol one = ctx.freshTemp();
+			return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(one),
+					ClojureBytesLowering.bytesPredicate(ctx, one));
 		}
 		String verb = FUTURE_VERBS.get(name);
 		if (verb != null) {

@@ -47,8 +47,8 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
  * the end, as under the oracle's Jetty adapter), {@code clojure.java.io/reader} +
  * {@code line-seq} and {@code java.io.InputStreamReader}, and the response map (a missing
  * status, a header vector as repeated lines, a keyword header name, a seq body; on the
- * socket legs a {@code java.io.File}, a byte stream and {@code file-response}'s File sent
- * octet for octet; on every leg a File naming no file answering 500).
+ * socket legs a {@code java.io.File}, a byte stream, {@code file-response}'s File and a
+ * byte array sent octet for octet; on every leg a File naming no file answering 500).
  */
 class ClojureRingAdapterTest {
 
@@ -80,6 +80,7 @@ class ClojureRingAdapterTest {
 			      (= uri "/empty") {:status 204}
 			      (= uri "/file") {:body (io/file "%DIR%" "bytes.bin")}
 			      (= uri "/stream") {:body (io/input-stream (io/file "%DIR%" "bytes.bin"))}
+			      (= uri "/bytes") {:body (.readAllBytes (io/input-stream (io/file "%DIR%" "bytes.bin")))}
 			      (= uri "/served") (r/file-response "bytes.bin" {:root "%DIR%"})
 			      (= uri "/missing") {:body (io/file "%DIR%" "missing.bin")}
 			      (= uri "/asset") {:body (io/input-stream (io/resource "asset.txt"))}
@@ -171,7 +172,7 @@ class ClojureRingAdapterTest {
 		assertThat(missing.statusCode()).isEqualTo(404);
 		assertThat(missing.body()).isEqualTo("not found");
 
-		for (String path : new String[] { "/file", "/stream", "/served" }) {
+		for (String path : new String[] { "/file", "/stream", "/served", "/bytes" }) {
 			HttpResponse<byte[]> file = client.send(HttpRequest.newBuilder(uri(port, path)).build(),
 					HttpResponse.BodyHandlers.ofByteArray());
 			assertThat(file.statusCode()).as(path).isEqualTo(200);

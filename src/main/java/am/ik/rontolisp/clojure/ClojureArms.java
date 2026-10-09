@@ -36,7 +36,9 @@ import org.jspecify.annotations.Nullable;
  * ({@link Family#switches}) is the fifth: its switching statements, rebinding pairs and
  * definition go the same way. A refusal carrier ({@link Family#refusals}) is the sixth:
  * its call folds to the plain {@code error} with its message, and the condition class
- * only the carriers signal ({@link Family#conditions}) goes with them.
+ * only the carriers signal ({@link Family#conditions}) goes with them. A setter
+ * ({@link Family#setters}) is the seventh: its call folds to the {@code setf} of the
+ * place it stores into.
  *
  * <p>
  * The shape every arm keeps, which {@link #strip} checks: a test's arguments, and a
@@ -712,6 +714,22 @@ public final class ClojureArms {
 				Set.of()),
 
 		/**
+		 * A byte array, which the printer, {@code str}, {@code class}, the seq view,
+		 * {@code count}, {@code empty?}, {@code nth}, {@code get}, {@code contains?},
+		 * {@code aget}, {@code aset}, {@code alength}, a {@code java:} member's argument,
+		 * {@code String.} and the byte consumers of clojure.java.io, the Ring adapter and
+		 * the HTTP client read: only {@code byte-array}, {@code .getBytes} and the
+		 * readers answering one ({@link ClojureBytesLowering#PRODUCERS}) make one. The
+		 * aliases are {@code aget}, {@code alength}, {@code bytes?} and a {@code String}
+		 * construction, each to the form it lowered to before byte arrays, and the setter
+		 * {@code aset}'s. Ahead of {@link #HOST}: the construction's alias is
+		 * {@code java:new}, which that family reads as a producer.
+		 */
+		BYTES("byte-array", Set.of(ClojureBytesLowering.BYTES_P, ClojureBytesLowering.ARRAY_STREAM_P),
+				Set.of(ClojureBytesLowering.HOST_VIEW), ClojureBytesLowering.ALIASES, ClojureBytesLowering.PRODUCERS,
+				Set.of(), false, Set.of(), Set.of(), Set.of(), ClojureBytesLowering.SETTERS),
+
+		/**
 		 * A {@code clojure.java.io} value -- a {@code java.io.File}, a URL, a URI, a byte
 		 * stream, a character stream the namespace made over one -- which the printer,
 		 * {@code str}, {@code =}, the hash, {@code class}, {@code instance?}, a
@@ -829,6 +847,13 @@ public final class ClojureArms {
 		 */
 		final Set<String> conditions;
 
+		/**
+		 * The kind-aware setters, each to the place it stores into without the kind: a
+		 * call {@code (setter args... value)} folds to
+		 * {@code (setf (place args...) value)}, the store the verb lowered to before.
+		 */
+		final Map<String, String> setters;
+
 		Family(String label, Set<String> switches) {
 			this(label, Set.of(), Set.of(), Map.of(), Set.of(), Set.of(), false, switches);
 		}
@@ -851,6 +876,13 @@ public final class ClojureArms {
 		Family(String label, Set<String> tests, Set<String> views, Map<String, String> aliases, Set<String> producers,
 				Set<String> depths, boolean qualifiedIdents, Set<String> switches, Set<String> refusals,
 				Set<String> conditions) {
+			this(label, tests, views, aliases, producers, depths, qualifiedIdents, switches, refusals, conditions,
+					Map.of());
+		}
+
+		Family(String label, Set<String> tests, Set<String> views, Map<String, String> aliases, Set<String> producers,
+				Set<String> depths, boolean qualifiedIdents, Set<String> switches, Set<String> refusals,
+				Set<String> conditions, Map<String, String> setters) {
 			this.label = label;
 			this.tests = tests;
 			this.views = views;
@@ -861,6 +893,7 @@ public final class ClojureArms {
 			this.switches = switches;
 			this.refusals = refusals;
 			this.conditions = conditions;
+			this.setters = setters;
 		}
 
 		/**
@@ -964,7 +997,7 @@ public final class ClojureArms {
 				found[0] = true;
 			}
 			else if (family.tests.contains(name) || family.views.contains(name) || family.aliases.containsKey(name)
-					|| family.refusals.contains(name)) {
+					|| family.refusals.contains(name) || family.setters.containsKey(name)) {
 				found[1] = true;
 			}
 			else if (quoted && family.qualifiedIdents && name.startsWith("c%") && hasNamespace(name.substring(2))) {
@@ -1057,6 +1090,10 @@ public final class ClojureArms {
 				String alias = this.family.aliases.get(name);
 				if (alias != null) {
 					return LispCons.rebuilt(cons, new LispSymbol(alias), walkElements(cons.cdr()));
+				}
+				String place = this.family.setters.get(name);
+				if (place != null) {
+					return setterAsSetf(cons, place);
 				}
 				if (name.equals("FUNCTION") && cons.cdr() instanceof LispCons fn
 						&& fn.car() instanceof LispSymbol target && this.family.aliases.containsKey(target.name())) {
@@ -1291,6 +1328,28 @@ public final class ClojureArms {
 		}
 
 		/**
+		 * {@code (setter args... value)}: the store into {@code (place args...)} the
+		 * setter stands for, {@code (setf (place args...) value)}, every argument walked
+		 * as code and kept in its order.
+		 */
+		private LispVal setterAsSetf(LispCons call, String place) {
+			List<LispVal> args = new ArrayList<>();
+			for (LispVal run = call.cdr(); run instanceof LispCons cell; run = cell.cdr()) {
+				args.add(walkCode(cell.car()));
+			}
+			if (args.size() < 2) {
+				throw new IllegalStateException("a setter takes a place's arguments and a value: " + call.print());
+			}
+			LispVal placeForm = LispNil.INSTANCE;
+			for (int i = args.size() - 2; i >= 0; i--) {
+				placeForm = new LispCons(args.get(i), placeForm);
+			}
+			placeForm = new LispCons(new LispSymbol(place), placeForm);
+			return LispCons.rebuilt(call, new LispSymbol("SETF"),
+					new LispCons(placeForm, new LispCons(args.get(args.size() - 1), LispNil.INSTANCE)));
+		}
+
+		/**
 		 * Refuses an argument a fold would drop with an effect: anything but a variable,
 		 * a constant or a {@code car}/{@code cdr} read of one.
 		 */
@@ -1349,7 +1408,7 @@ public final class ClojureArms {
 			if (family.tests.contains(symbolName) || family.views.contains(symbolName)
 					|| family.aliases.containsKey(symbolName) || family.producers.contains(symbolName)
 					|| family.depths.contains(symbolName) || family.switches.contains(symbolName)
-					|| family.refusals.contains(symbolName)) {
+					|| family.refusals.contains(symbolName) || family.setters.containsKey(symbolName)) {
 				return true;
 			}
 		}

@@ -474,7 +474,8 @@
 (defun rontolisp::%clojure-record-column (x index)
   "The keys (INDEX 0) or values (INDEX 1) of the record X as a list, in
    %clojure-record-entries' order."
-  (mapcar (if (eql index 0) #'car #'cdr) (rontolisp::%clojure-record-entries x)))
+  (mapcar (if (eql index 0) #'car #'cdr)
+          (rontolisp::%clojure-record-entries x)))
 
 (defun rontolisp::%clojure-write-cut (x nil-replacement readable stream labels)
   "Write the collection X with its first *print-length* members and then ...,
@@ -624,17 +625,22 @@
       ;; the namespace has loaded anything but a path: an arm a program making
       ;; none folds
       (rontolisp::%clojure-io-slurp source nil)
-      (if (rontolisp::%clojure-async-stream-p source)
-          (rontolisp::%clojure-async-stream-text source)
-          (if (streamp source)
-              (let ((text
-                     (rontolisp::%clojure-read-to-end
-                      (rontolisp::%clojure-open-reader source))))
-                (close source)
-                text)
-              (with-open-file (stream
-                               (rontolisp::%clojure-host-file-path source))
-                (rontolisp::%clojure-read-to-end stream))))))
+      ;; a byte array's octets decoded in UTF-8, as a reader over it reads them:
+      ;; an arm a program making none folds
+      (if (rontolisp::%clojure-bytes-p source)
+          (rontolisp::%clojure-octets-text (car (cdr source)) 0
+                                           (length (car (cdr source))) :utf-8)
+          (if (rontolisp::%clojure-async-stream-p source)
+              (rontolisp::%clojure-async-stream-text source)
+              (if (streamp source)
+                  (let ((text
+                         (rontolisp::%clojure-read-to-end
+                          (rontolisp::%clojure-open-reader source))))
+                    (close source)
+                    text)
+                  (with-open-file (stream
+                                   (rontolisp::%clojure-host-file-path source))
+                    (rontolisp::%clojure-read-to-end stream)))))))
 
 (defun rontolisp::%clojure-stream-p (x)
   "Whether X is a stream value."
@@ -754,6 +760,9 @@
          (rontolisp::%clojure-write-ns-object x readable stream))
         ((rontolisp::%clojure-io-p x)
          (rontolisp::%clojure-io-write x readable stream))
+        ;; a byte array, the oracle's #object: an arm a program making none folds
+        ((rontolisp::%clojure-bytes-p x)
+         (rontolisp::%clojure-bytes-write readable stream))
         ((and labels (rontolisp::%clojure-node-p x)
               (rontolisp::%clojure-write-label x labels stream)))
         ((rontolisp::%clojure-print-ns-map-p x)
@@ -912,6 +921,10 @@
                ((stringp x) x)
                ((characterp x) (string x))
                ((rontolisp::%clojure-io-p x) (rontolisp::%clojure-io-string x))
+               ;; a byte array's toString, its class name (the oracle's
+               ;; Class@hash without the hash): an arm a program making none
+               ;; folds
+               ((rontolisp::%clojure-bytes-p x) "[B")
                ((rontolisp::%clojure-stream-p x)
                 (rontolisp::%clojure-stream-string x))
                ((rontolisp::%clojure-re-pattern-p x)
@@ -1154,6 +1167,21 @@
 (defun rontolisp::%clojure-index-out-of-bounds-exception (message)
   "A refusal the oracle throws as an IndexOutOfBoundsException."
   (rontolisp::%clojure-refuse '("java.lang.IndexOutOfBoundsException"
+                                "java.lang.RuntimeException"
+                                "java.lang.Exception" "java.lang.Throwable")
+                              message))
+
+(defun rontolisp::%clojure-array-index-out-of-bounds-exception (message)
+  "A refusal the oracle throws as an ArrayIndexOutOfBoundsException."
+  (rontolisp::%clojure-refuse '("java.lang.ArrayIndexOutOfBoundsException"
+                                "java.lang.IndexOutOfBoundsException"
+                                "java.lang.RuntimeException"
+                                "java.lang.Exception" "java.lang.Throwable")
+                              message))
+
+(defun rontolisp::%clojure-negative-array-size-exception (message)
+  "A refusal the oracle throws as a NegativeArraySizeException."
+  (rontolisp::%clojure-refuse '("java.lang.NegativeArraySizeException"
                                 "java.lang.RuntimeException"
                                 "java.lang.Exception" "java.lang.Throwable")
                               message))
@@ -1737,6 +1765,7 @@
         ((rontolisp::%clojure-instant-p x)
          (rontolisp::%clojure-instant-class-name x))
         ((rontolisp::%clojure-uuid-p x) "java.util.UUID")
+        ((rontolisp::%clojure-bytes-p x) "[B")
         ((and (consp x) (keywordp (car x))) "java.lang.Object")
         ((consp x) "clojure.lang.PersistentList")
         ((hash-table-p x)
@@ -3621,6 +3650,9 @@
     (mapcar (lambda (e) (vector (car e) (cdr e)))
             (rontolisp::%clojure-record-entries coll)))
    ((rontolisp::%clojure-sorted-p coll) (rontolisp::%clojure-sorted-seq coll))
+   ;; a byte array seqs its elements as Java bytes: an arm of the byte-array
+   ;; family ("Byte arrays")
+   ((rontolisp::%clojure-bytes-p coll) (rontolisp::%clojure-bytes-seq coll))
    ;; a type implementing Seqable seqs through its seq: an arm of the seqable
    ;; family ("Host interfaces")
    ((rontolisp::%clojure-seqable-p coll) (rontolisp::%clojure-seqable-seq coll))
@@ -3650,6 +3682,8 @@
         ((rontolisp::%clojure-set-p x) x)
         ((rontolisp::%clojure-record-p x) x)
         ((rontolisp::%clojure-sorted-p x) x)
+        ;; a byte array is an array already (an arm of the byte-array family)
+        ((rontolisp::%clojure-bytes-p x) x)
         ;; an ISeq walks, an Iterable or a java.util.Map steps, like the oracle's
         ;; LazilyPersistentVector (arms of their families, "Collection
         ;; interfaces")
@@ -3749,6 +3783,10 @@
             (setq left (- left 1))))))
    ((rontolisp::%clojure-matcher-value-p coll)
     (rontolisp::%clojure-matcher-nth coll i dflt))
+   ;; a byte array answers its element as Java's byte: an arm of the byte-array
+   ;; family ("Byte arrays")
+   ((rontolisp::%clojure-bytes-p coll)
+    (rontolisp::%clojure-bytes-nth coll i dflt))
    ;; a type implementing Indexed answers its nth over the default (nth of two
    ;; arguments is %clojure-nth-2's): an arm of the indexed family ("Host
    ;; interfaces")
@@ -6317,7 +6355,7 @@
   "seqable?: what seq takes -- nil, a string or a collection."
   (or (null x) (stringp x) (rontolisp::%clojure-is-coll x)
       (rontolisp::%clojure-seqable-p x) (rontolisp::%clojure-iterable-p x)
-      (rontolisp::%clojure-jmap-p x)))
+      (rontolisp::%clojure-jmap-p x) (rontolisp::%clojure-bytes-p x)))
 
 ;; The predicates over a type implementing a collection interface: each answers
 ;; the plain helper's test or the interface's, an arm of its family
@@ -13678,6 +13716,9 @@
       (close body)
       (list text)))
    ((rontolisp::%clojure-io-p body) (rontolisp::%clojure-io-ring-body body))
+   ;; a byte array, its octets as they are, like ring-core's
+   ;; StreamableResponseBody of byte[]: an arm a program making none folds
+   ((rontolisp::%clojure-bytes-p body) (car (cdr body)))
    ((rontolisp::%clojure-host-object-p body "java.io.File")
     (rontolisp::%clojure-io-ring-body (rontolisp::%clojure-io-from-host body)))
    ((rontolisp::%clojure-ring-sequential-p body)
@@ -14076,11 +14117,7 @@
          (rontolisp::%clojure-http-option req (car refused)))
         (rontolisp::%clojure-unsupported-operation-exception
          (concatenate 'string "rontolisp.http-client: :" (car refused)
-                      " is not supported: " (cdr refused)))))
-  (if (equal (rontolisp::%clojure-http-option req "as")
-             (list :c%keyword "bytes"))
-      (rontolisp::%clojure-unsupported-operation-exception
-       "rontolisp.http-client: :as :bytes is not supported: no value here is a byte array; take :as :stream")))
+                      " is not supported: " (cdr refused))))))
 
 (defun rontolisp::%clojure-http-prepare (opts)
   "The request of the options map OPTS as (request url method fields body):
@@ -14351,10 +14388,30 @@
                       " response body is not decompressed")))
     (if (not
          (or (null as) (equal as (list :c%keyword "string"))
-             (equal as (list :c%keyword "stream"))))
+             (equal as (list :c%keyword "stream"))
+             (equal as (list :c%keyword "bytes"))))
         (rontolisp::%clojure-illegal-argument-exception
          (concatenate 'string "No matching clause: "
                       (rontolisp::%clojure-str-of as "nil" t))))))
+
+(defun rontolisp::%clojure-http-octets (body)
+  "The future of every octet of the reply body stream BODY, one
+   (unsigned-byte 8) vector -- what :as :bytes answers a byte array over;
+   string chunks, and a body already a string, as their UTF-8 octets."
+  (funcall
+   (rontolisp:async-lambda ()
+     (if (stringp body)
+         (rontolisp::%clojure-octets-of-text body :utf-8)
+         (let ((chunks nil) (total 0))
+           (loop
+             (let ((chunk (rontolisp:await (rontolisp:stream-read body))))
+               (if (null chunk)
+                   (return (rontolisp::%octets-join (reverse chunks) total)))
+               (if (stringp chunk)
+                   (setq chunk
+                         (rontolisp::%clojure-octets-of-text chunk :utf-8)))
+               (setq total (+ total (length chunk)))
+               (setq chunks (cons chunk chunks)))))))))
 
 (defun rontolisp::%clojure-http-respond (prepared transport)
   "The future of the response map of the prepared request PREPARED: the
@@ -14371,15 +14428,20 @@
             (checked (rontolisp::%clojure-http-check-body res req as))
             (text
              (rontolisp:await
-              (if (equal as (list :c%keyword "stream"))
-                  nil
-                  (rontolisp:read-all (getf res :body)))))
+              (cond ((equal as (list :c%keyword "stream")) nil)
+                    ((equal as (list :c%keyword "bytes"))
+                     (rontolisp::%clojure-http-octets (getf res :body)))
+                    (t (rontolisp:read-all (getf res :body))))))
             (resp
              (rontolisp::%clojure-http-assoc nil
               (list "status" status "headers"
-               (rontolisp::%clojure-http-header-map (getf res :headers)) "body"
-               (if (equal as (list :c%keyword "stream")) (getf res :body) text)
-               "uri" (cdr reply) "request" req))))
+                    (rontolisp::%clojure-http-header-map (getf res :headers))
+                    "body"
+                    (cond
+                     ((equal as (list :c%keyword "stream")) (getf res :body))
+                     ((equal as (list :c%keyword "bytes"))
+                      (rontolisp::%clojure-bytes-of text))
+                     (t text)) "uri" (cdr reply) "request" req))))
        (declare (ignore checked))
        (if (and (not
                  (eq (rontolisp::%clojure-http-option req "throw")
@@ -15094,6 +15156,128 @@
     (rontolisp::%clojure-write-instant-time f out)
     (write-string " GMT" out)
     (get-output-stream-string out)))
+
+(defun rontolisp::%clojure-ring-base64-encode (x)
+  "ring.util.codec/base64-encode: the byte array X in java.util.Base64's basic
+   encoding, padded; nil the oracle's NullPointerException, anything else its
+   ClassCastException."
+  ;; the byte array: an arm a program making none folds
+  (if (rontolisp::%clojure-bytes-p x)
+      (let* ((octets (car (cdr x)))
+             (n (length octets))
+             (alphabet
+              "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/")
+             (out (make-string-output-stream))
+             (i 0))
+        (do ()
+            ((>= i n) (get-output-stream-string out))
+          (let* ((two (< (+ i 1) n))
+                 (three (< (+ i 2) n))
+                 (bits
+                  (+ (* (aref octets i) 65536)
+                     (if two (* (aref octets (+ i 1)) 256) 0)
+                     (if three (aref octets (+ i 2)) 0))))
+            (write-char (char alphabet (ash bits -18)) out)
+            (write-char (char alphabet (logand (ash bits -12) 63)) out)
+            (write-char (if two (char alphabet (logand (ash bits -6) 63)) #\=)
+                        out)
+            (write-char (if three (char alphabet (logand bits 63)) #\=) out)
+            (setq i (+ i 3)))))
+      (rontolisp::%clojure-bytes-refuse-cast x
+       "Cannot read the array length because \"src\" is null")))
+
+(defun rontolisp::%clojure-ring-base64-value (b)
+  "The value of the base64 character B (an octet): 0 to 63, -2 for the pad,
+   -1 for any other."
+  (cond ((and (>= b 65) (<= b 90)) (- b 65))
+        ((and (>= b 97) (<= b 122)) (- b 71))
+        ((and (>= b 48) (<= b 57)) (+ b 4))
+        ((= b 43) 62)
+        ((= b 47) 63)
+        ((= b 61) -2)
+        (t -1)))
+
+(defun rontolisp::%clojure-ring-base64-decode (s)
+  "ring.util.codec/base64-decode: the byte array java.util.Base64's basic
+   decoder answers for the string S (its ISO-8859-1 bytes), refusing what it
+   refuses in its words -- one character alone, a character of no base64
+   value, a misplaced pad, a dangling unit, anything past the pad; nil the
+   oracle's NullPointerException, anything else its ClassCastException."
+  (if (not (stringp s))
+      (if (null s)
+          (rontolisp::%clojure-null-pointer-exception
+           "Cannot invoke \"String.getBytes(java.nio.charset.Charset)\" because \"src\" is null")
+          (rontolisp::%clojure-class-cast-exception
+           (concatenate 'string "class " (rontolisp::%clojure-class-name-of s)
+                        " cannot be cast to class java.lang.String"))))
+  (let* ((sl (length s))
+         (pads
+          (if (and (> sl 1) (char= (char s (- sl 1)) #\=))
+              (if (char= (char s (- sl 2)) #\=) 2 1)
+              (if (= (logand sl 3) 0) 0 (- 4 (logand sl 3)))))
+         (out
+          (make-array (max 0 (- (* 3 (floor (+ sl 3) 4)) pads))
+                      :element-type '(unsigned-byte 8)))
+         (sp 0)
+         (dp 0)
+         (bits 0)
+         (shiftto 18)
+         (done nil))
+    (if (= sl 1)
+        (rontolisp::%clojure-illegal-argument-exception
+         "Input byte[] should at least have 2 bytes for base64 bytes"))
+    (do ()
+        ((or done (>= sp sl)))
+      (let* ((code (char-code (char s sp)))
+             (b (if (> code 255) 63 code))
+             (v (rontolisp::%clojure-ring-base64-value b)))
+        (setq sp (+ sp 1))
+        (cond ((= v -2)
+               (if (or (= shiftto 18)
+                       (and (= shiftto 6)
+                            (or (= sp sl)
+                                (progn
+                                  (setq sp (+ sp 1))
+                                  (not (char= (char s (- sp 1)) #\=))))))
+                   (rontolisp::%clojure-illegal-argument-exception
+                    "Input byte array has wrong 4-byte ending unit"))
+               (setq done t))
+              ((< v 0)
+               ;; Integer.toString of the signed byte in hex, the JDK's words
+               (let ((m (if (> b 127) (- 256 b) b)))
+                 (rontolisp::%clojure-illegal-argument-exception
+                  (concatenate 'string "Illegal base64 character "
+                   (if (> b 127) "-" "")
+                   (if (> m 15)
+                       (string (char "0123456789abcdef" (ash m -4)))
+                       "") (string (char "0123456789abcdef" (logand m 15)))))))
+              (t
+               (setq bits (logior bits (ash v shiftto)))
+               (setq shiftto (- shiftto 6))
+               (if (< shiftto 0)
+                   (progn
+                     (setf (aref out dp) (logand (ash bits -16) 255))
+                     (setf (aref out (+ dp 1)) (logand (ash bits -8) 255))
+                     (setf (aref out (+ dp 2)) (logand bits 255))
+                     (setq dp (+ dp 3))
+                     (setq shiftto 18)
+                     (setq bits 0)))))))
+    (cond ((= shiftto 6)
+           (setf (aref out dp) (logand (ash bits -16) 255))
+           (setq dp (+ dp 1)))
+          ((= shiftto 0)
+           (setf (aref out dp) (logand (ash bits -16) 255))
+           (setf (aref out (+ dp 1)) (logand (ash bits -8) 255))
+           (setq dp (+ dp 2)))
+          ((= shiftto 12)
+           (rontolisp::%clojure-illegal-argument-exception
+            "Last unit does not have enough valid bits")))
+    (if (< sp sl)
+        (rontolisp::%clojure-illegal-argument-exception
+         (concatenate 'string "Input byte array has incorrect ending byte at "
+                      (princ-to-string sp))))
+    (rontolisp::%clojure-bytes-of
+     (if (< dp (length out)) (subseq out 0 dp) out))))
 
 ;;;; The clojure.core.reducers kernels: rontolisp.internal.reducers, the
 ;;;; namespace only the built-in clojure.core.reducers requires, lowers each var
@@ -16756,6 +16940,348 @@
   (let ((m (rontolisp::%clojure-ex-message c)))
     (if (stringp m) m "WIT call failed")))
 
+;;;; Byte arrays: the oracle's byte[] as (:C%BYTES octets), over a packed
+;;;; (unsigned-byte 8) vector OCTETS -- what the byte streams read into and every
+;;;; transport's body is, so a body or a file's contents becomes one uncopied. An
+;;;; element is stored as its octet (the byte's two's complement) and read
+;;;; signed, as Java's byte. A byte array is no collection: coll?, vector? and
+;;;; sequential? are false of one, = is identity, the seq verbs read its
+;;;; elements, and it prints as the oracle's #object without the identity hash.
+;;;; Every shared verb reaches one through the one arm test %clojure-bytes-p
+;;;; (clojure/ClojureArms, the byte-array family), so a program making none
+;;;; compiles as before byte arrays existed.
+
+;; Whether X is a byte array: the arm test of the byte-array family.
+(defun rontolisp::%clojure-bytes-p (x) (if (consp x) (eq (car x) :C%BYTES)))
+
+;; The byte array over the packed octet vector OCTETS, which it holds uncopied.
+(defun rontolisp::%clojure-bytes-of (octets) (list :C%BYTES octets))
+
+;; The octet O, 0 to 255, as Java's byte, -128 to 127.
+(defun rontolisp::%clojure-byte-of-octet (o) (if (> o 127) (- o 256) o))
+
+(defun rontolisp::%clojure-octet-of (x)
+  "The octet Number.byteValue stores for X: an integer's low eight bits, a
+   double's after saturating to the int range (NaN 0), a ratio's as its
+   double's; nil is the oracle's NullPointerException, anything else its
+   ClassCastException to Number."
+  (cond ((integerp x) (logand x 255))
+        ((floatp x)
+         (logand (cond ((/= x x) 0)
+                       ((>= x 2147483647.0) 2147483647)
+                       ((<= x -2147483648.0) -2147483648)
+                       (t (truncate x))) 255))
+        ((rationalp x) (rontolisp::%clojure-octet-of (float x)))
+        ((null x)
+         (rontolisp::%clojure-null-pointer-exception
+          "Cannot invoke \"java.lang.Number.byteValue()\" because the return value of \"clojure.lang.ISeq.first()\" is null"))
+        (t (rontolisp::%clojure-class-cast-exception
+            (concatenate 'string "class " (rontolisp::%clojure-class-name-of x)
+                         " cannot be cast to class java.lang.Number")))))
+
+(defun rontolisp::%clojure-array-size (n)
+  "The size N of a new array, the oracle's NegativeArraySizeException when it
+   is negative."
+  (if (< n 0)
+      (rontolisp::%clojure-negative-array-size-exception (princ-to-string n))
+      n))
+
+(defun rontolisp::%clojure-bytes-members (x)
+  "The seq of X, which byte-array takes the members of: the oracle's refusal
+   in its words when X is no collection."
+  (if (or (rontolisp::%clojure-is-seqable x)
+          (rontolisp::%clojure-host-seqable-p x))
+      (rontolisp::%clojure-seq x)
+      (rontolisp::%clojure-illegal-argument-exception
+       (concatenate 'string "Don't know how to create ISeq from: "
+                    (rontolisp::%clojure-class-name-of x)))))
+
+(defun rontolisp::%clojure-byte-array (x)
+  "(byte-array size-or-seq), the oracle's Numbers.byte_array: a number is the
+   size, its intValue; anything else a seq whose every member is stored as
+   Number.byteValue stores it."
+  (if (numberp x)
+      (rontolisp::%clojure-bytes-of
+       (make-array (rontolisp::%clojure-array-size
+                    (rontolisp::%clojure-unchecked-cast x 32 nil nil "int"))
+                   :element-type '(unsigned-byte 8)))
+      (let* ((s
+              (rontolisp::%clojure-seq-all
+               (rontolisp::%clojure-bytes-members x)))
+             (out (make-array (length s) :element-type '(unsigned-byte 8)))
+             (i 0))
+        (dolist (e s)
+          (setf (aref out i) (rontolisp::%clojure-octet-of e))
+          (setq i (+ i 1)))
+        (rontolisp::%clojure-bytes-of out))))
+
+(defun rontolisp::%clojure-byte-array-2 (size init)
+  "(byte-array size init), the oracle's Numbers.byte_array of a size and an
+   init: SIZE elements (its intCast), each the byte INIT -- an integer in the
+   byte range, which (byte x) is here, so one outside it is the oracle's
+   refusal of a Long -- or the next member of the seq INIT, zeros past its
+   end."
+  (let ((out
+         (make-array
+          (rontolisp::%clojure-array-size (rontolisp::%clojure-int-cast size))
+          :element-type '(unsigned-byte 8))))
+    (if (and (integerp init) (>= init -128) (<= init 127))
+        (fill out (logand init 255))
+        (let ((s (rontolisp::%clojure-bytes-members init)) (i 0))
+          (do ()
+              ((or (null s) (>= i (length out))))
+            (setf (aref out i) (rontolisp::%clojure-octet-of (car s)))
+            (setq i (+ i 1))
+            (setq s (rontolisp::%clojure-seq-rest s)))))
+    (rontolisp::%clojure-bytes-of out)))
+
+(defun rontolisp::%clojure-byte-array-v (&rest args)
+  "byte-array as a value."
+  (if (= (rontolisp::%clojure-check-arity args 1 2 "byte-array") 1)
+      (rontolisp::%clojure-byte-array (car args))
+      (rontolisp::%clojure-byte-array-2 (car args) (car (cdr args)))))
+
+(defun rontolisp::%clojure-bytes (x)
+  "(bytes x), the oracle's cast to byte[]: a byte array, or nil, itself;
+   anything else its ClassCastException."
+  (if (or (null x) (rontolisp::%clojure-bytes-p x))
+      x
+      (rontolisp::%clojure-bytes-refuse-cast x nil)))
+
+(defun rontolisp::%clojure-bytes-v (&rest args)
+  "bytes as a value."
+  (rontolisp::%clojure-check-arity args 1 1 "bytes")
+  (rontolisp::%clojure-bytes (car args)))
+
+(defun rontolisp::%clojure-bytes-refuse-cast (x npe)
+  "The oracle's refusal of X where it takes a byte[]: its ClassCastException,
+   or for nil the NullPointerException of the message NPE (nil itself is no
+   refusal when NPE is nil)."
+  (if (null x)
+      (if npe (rontolisp::%clojure-null-pointer-exception npe))
+      (rontolisp::%clojure-class-cast-exception
+       (concatenate 'string "class " (rontolisp::%clojure-class-name-of x)
+                    " cannot be cast to class [B"))))
+
+;; bytes?: T for a byte array, NO (the false object) for anything else. A program
+;; making no byte array calls progn in its place (the family's alias), so the
+;; predicate is (progn x false) there.
+(defun rontolisp::%clojure-is-bytes (x no)
+  (if (rontolisp::%clojure-bytes-p x) t no))
+
+(defun rontolisp::%clojure-bytes-out-of-bounds (i n message)
+  "The oracle's ArrayIndexOutOfBoundsException of the index I into an array of
+   N elements, its message the JDK's unless MESSAGE spells another."
+  (rontolisp::%clojure-array-index-out-of-bounds-exception
+   (or message
+       (concatenate 'string "Index " (princ-to-string i)
+                    " out of bounds for length " (princ-to-string n)))))
+
+(defun rontolisp::%clojure-bytes-index (i method arity)
+  "The index I as the oracle's reflection takes one into a byte array: an
+   integer, or a number's intValue; anything else no METHOD at ARITY."
+  (cond ((integerp i) i)
+        ((realp i) (rontolisp::%clojure-int-value i))
+        (t (rontolisp::%clojure-illegal-argument-exception
+            (concatenate 'string "No matching method " method " found taking "
+                         (princ-to-string arity) " args")))))
+
+(defun rontolisp::%clojure-bytes-ref (x i)
+  "The element at the index I of the byte array X, as Java's byte; outside it
+   the oracle's ArrayIndexOutOfBoundsException."
+  (let ((octets (car (cdr x))))
+    (if (and (>= i 0) (< i (length octets)))
+        (rontolisp::%clojure-byte-of-octet (aref octets i))
+        (rontolisp::%clojure-bytes-out-of-bounds i (length octets) nil))))
+
+;; (aget array i) of one index: a byte array's element as Java's byte, any other
+;; array's through aref. A program making no byte array calls aref in its place
+;; (the family's alias).
+(defun rontolisp::%clojure-aget (a i)
+  (if (rontolisp::%clojure-bytes-p a)
+      (rontolisp::%clojure-bytes-ref a
+       (rontolisp::%clojure-bytes-index i "aget" 2))
+      (aref a i)))
+
+;; (aset array i value) of one index: VALUE stored at I of a byte array -- the
+;; oracle's Byte, an integer in the byte range here, so an integer outside it or
+;; no integer is the oracle's refusal -- or of any other array through (setf
+;; aref); VALUE answered. A program making no byte array stores through (setf
+;; aref) in its place (the family's setter).
+(defun rontolisp::%clojure-aset (a i v)
+  (if (rontolisp::%clojure-bytes-p a)
+      (let ((octets (car (cdr a)))
+            (at (rontolisp::%clojure-bytes-index i "aset" 3)))
+        (if (not (and (integerp v) (>= v -128) (<= v 127)))
+            (rontolisp::%clojure-illegal-argument-exception
+             "No matching method aset found taking 3 args"))
+        (if (not (and (>= at 0) (< at (length octets))))
+            (rontolisp::%clojure-bytes-out-of-bounds at (length octets) nil))
+        (setf (aref octets at) (logand v 255))
+        v)
+      (setf (aref a i) v)))
+
+;; (alength array): a byte array's count of elements, any other array's first
+;; dimension. A program making no byte array calls array-dimension in its place
+;; (the family's alias).
+(defun rontolisp::%clojure-alength (a axis)
+  (if (rontolisp::%clojure-bytes-p a)
+      (length (car (cdr a)))
+      (array-dimension a axis)))
+
+(defun rontolisp::%clojure-aset-byte (a i v)
+  "(aset-byte array i value): VALUE cast as the oracle's byte -- refused
+   outside the byte range -- stored at I of the byte array ARRAY; VALUE
+   answered. Any other array is the oracle's refusal."
+  (let ((b (rontolisp::%clojure-byte v)))
+    ;; the byte array: an arm a program making none folds
+    (if (rontolisp::%clojure-bytes-p a)
+        (let ((octets (car (cdr a)))
+              (at (rontolisp::%clojure-bytes-index i "aset-byte" 3)))
+          (if (not (and (>= at 0) (< at (length octets))))
+              (rontolisp::%clojure-bytes-out-of-bounds at (length octets) ""))
+          (setf (aref octets at) (logand b 255)))
+        (rontolisp::%clojure-illegal-argument-exception
+         (if (arrayp a)
+             "Argument is not an array of primitive type"
+             "Argument is not an array")))
+    v))
+
+(defun rontolisp::%clojure-aset-byte-v (&rest args)
+  "aset-byte as a value."
+  (rontolisp::%clojure-check-arity args 3 3 "aset-byte")
+  (rontolisp::%clojure-aset-byte (car args) (car (cdr args))
+                                 (car (cdr (cdr args)))))
+
+(defun rontolisp::%clojure-aclone (a)
+  "(aclone array): a fresh array of the elements of ARRAY, a byte array's
+   octets copied."
+  ;; the byte array: an arm a program making none folds
+  (if (rontolisp::%clojure-bytes-p a)
+      (rontolisp::%clojure-bytes-of (copy-seq (car (cdr a))))
+      (if (= (array-rank a) 1)
+          (copy-seq a)
+          (let ((out (make-array (array-dimensions a))))
+            (dotimes (i (array-total-size a) out)
+              (setf (row-major-aref out i) (row-major-aref a i)))))))
+
+(defun rontolisp::%clojure-aclone-v (&rest args)
+  "aclone as a value."
+  (rontolisp::%clojure-check-arity args 1 1 "aclone")
+  (rontolisp::%clojure-aclone (car args)))
+
+(defun rontolisp::%clojure-bytes-seq (x)
+  "The elements of the byte array X as a fresh list of Java bytes, nil when it
+   has none."
+  (let ((octets (car (cdr x))) (acc nil))
+    (do ((i (- (length octets) 1) (- i 1)))
+        ((< i 0) acc)
+      (setq acc
+            (cons (rontolisp::%clojure-byte-of-octet (aref octets i)) acc)))))
+
+(defun rontolisp::%clojure-bytes-nth (x i dflt)
+  "nth of the byte array X: the element at the index I as Java's byte, DFLT
+   outside it."
+  (let ((octets (car (cdr x))))
+    (if (and (>= i 0) (< i (length octets)))
+        (rontolisp::%clojure-byte-of-octet (aref octets i))
+        dflt)))
+
+(defun rontolisp::%clojure-bytes-get (x k dflt)
+  "get of the byte array X, the oracle's RT.getFrom of an array: the element
+   at a number key's intValue inside it, DFLT for any other key."
+  (if (realp k)
+      (rontolisp::%clojure-bytes-nth x (rontolisp::%clojure-int-value k) dflt)
+      dflt))
+
+(defun rontolisp::%clojure-bytes-contains (x k)
+  "contains? of the byte array X, the oracle's RT.contains of an array:
+   whether a number key's intValue is an index of it; any other key refused."
+  (if (realp k)
+      (let ((i (rontolisp::%clojure-int-value k)))
+        (and (>= i 0) (< i (length (car (cdr x))))))
+      (rontolisp::%clojure-illegal-argument-exception
+       "contains? not supported on type: [B")))
+
+(defun rontolisp::%clojure-bytes-check-range (off len n)
+  "Objects.checkFromIndexSize of the LEN elements from OFF of an array of N:
+   the oracle's IndexOutOfBoundsException when they are not all inside it."
+  (if (or (not (integerp off)) (not (integerp len)) (< off 0) (< len 0)
+          (> (+ off len) n))
+      (rontolisp::%clojure-index-out-of-bounds-exception
+       (concatenate 'string "Range [" (princ-to-string off) ", "
+                    (princ-to-string off) " + " (princ-to-string len)
+                    ") out of bounds for length " (princ-to-string n)))))
+
+;; Write the byte array X as the oracle's #object, the identity hash left out
+;; like a stream's: its class name [B, which pr quotes (an array class's name is
+;; no symbol), and its toString, the class name too.
+(defun rontolisp::%clojure-bytes-write (readable stream)
+  (write-string (if readable "#object[\"[B\" \"[B\"]" "#object[[B [B]") stream))
+
+;; A byte array handed to a java: member: the vector of its elements as Java's
+;; bytes, which java: hands a byte[] parameter as one; anything else as it is.
+;; The view of the byte-array family: a program making no byte array hands the
+;; member the value itself.
+(defun rontolisp::%clojure-bytes-host (x)
+  (if (rontolisp::%clojure-bytes-p x)
+      (let* ((octets (car (cdr x))) (n (length octets)) (out (make-array n)))
+        (dotimes (i n out)
+          (setf (aref out i)
+                (rontolisp::%clojure-byte-of-octet (aref octets i)))))
+      x))
+
+(defun rontolisp::%clojure-string-bytes (s charset)
+  "(.getBytes s [charset]): the byte array of the string S encoded in CHARSET
+   -- UTF-8 for nil, a charset's name, a host Charset -- a character it cannot
+   encode, and a lone surrogate, the byte of ?, like the JDK's encoders."
+  (rontolisp::%clojure-bytes-of
+   (rontolisp::%clojure-octets-of-text s
+    (rontolisp::%clojure-bytes-charset charset))))
+
+(defun rontolisp::%clojure-string-of-bytes (x more)
+  "The string the byte array X decodes to, the arguments MORE of the oracle's
+   constructor after it: () or (charset) the whole of it, (offset length) or
+   (offset length charset) a part -- a part outside it the oracle's
+   StringIndexOutOfBoundsException -- in UTF-8 or the charset named, the JDK's
+   replacement of a malformed sequence included."
+  (let* ((octets (car (cdr x)))
+         (n (length octets))
+         (part (and more (cdr more)))
+         (off (if part (car more) 0))
+         (len (if part (car (cdr more)) n))
+         (charset
+          (rontolisp::%clojure-bytes-charset
+           (if part (car (cdr (cdr more))) (car more)))))
+    (if (or (not (integerp off)) (not (integerp len)) (< off 0) (< len 0)
+            (> (+ off len) n))
+        (rontolisp::%clojure-string-index-out-of-bounds-exception
+         (concatenate 'string "Range [" (princ-to-string off) ", "
+                      (princ-to-string off) " + " (princ-to-string len)
+                      ") out of bounds for length " (princ-to-string n))))
+    (rontolisp::%clojure-octets-text octets off (+ off len) charset)))
+
+;; (String. x ...): over a byte array X its text (%clojure-string-of-bytes),
+;; anything else the host's constructor (interpreter, JVM; wasm refuses every
+;; java: call). CLASS is java.lang.String; ARGS the arguments after X with the
+;; markers of the call, which no String constructor reads. A program making no
+;; byte array calls java:new in its place (the family's alias).
+(defun rontolisp::%clojure-string-new (class x &rest args)
+  (declare (ignore class))
+  (let ((more nil))
+    (dolist (a args) (if (not (keywordp a)) (setq more (cons a more))))
+    (setq more (reverse more))
+    (if (rontolisp::%clojure-bytes-p x)
+        (rontolisp::%clojure-string-of-bytes x more)
+        (let ((n (length more)))
+          (cond ((= n 0) (java:new "java.lang.String" x :java-false))
+                ((= n 1) (java:new "java.lang.String" x (car more) :java-false))
+                ((= n 2)
+                 (java:new "java.lang.String" x (car more) (car (cdr more))
+                           :java-false))
+                (t (java:new "java.lang.String" x (car more) (car (cdr more))
+                             (car (cdr (cdr more))) :java-false)))))))
+
 ;;;; clojure.java.io: rontolisp.internal.io, the namespace only the built-in
 ;;;; clojure.java.io requires, lowers each var to one of these, and the
 ;;;; lowering's java.io constructions and instance calls on the values below
@@ -16847,12 +17373,15 @@
   "The class the oracle's value of X's kind has."
   (let ((kind (rontolisp::%clojure-io-kind x)))
     (cond ((eq kind :C%FILE) "java.io.File")
-          ((eq kind :C%URL) "java.net.URL")
-          ((eq kind :C%URI) "java.net.URI")
-          ((eq kind :C%INPUT-STREAM) "java.io.BufferedInputStream")
-          ((eq kind :C%OUTPUT-STREAM) "java.io.BufferedOutputStream")
-          ((eq kind :READER) "java.io.BufferedReader")
-          (t "java.io.BufferedWriter"))))
+     ((eq kind :C%URL) "java.net.URL")
+     ((eq kind :C%URI) "java.net.URI")
+     ;; a ByteArrayInputStream's or ByteArrayOutputStream's own: an arm a
+     ;; program making no byte array folds
+     ((rontolisp::%clojure-io-array-stream-p x) (svref (car (cdr (cdr x))) 0))
+     ((eq kind :C%INPUT-STREAM) "java.io.BufferedInputStream")
+     ((eq kind :C%OUTPUT-STREAM) "java.io.BufferedOutputStream")
+     ((eq kind :READER) "java.io.BufferedReader")
+     (t "java.io.BufferedWriter"))))
 
 (defun rontolisp::%clojure-io-class-key (x)
   "class of X: its class name as a keyword, the keyword shape of every kind."
@@ -16861,10 +17390,23 @@
 (defun rontolisp::%clojure-io-string (x)
   "X's toString: a File's path, a URL's or URI's spelling, and a stream's class
    name (the oracle's Class@hash without the hash)."
-  (let ((kind (rontolisp::%clojure-io-kind x)))
-    (if (or (eq kind :C%FILE) (eq kind :C%URL) (eq kind :C%URI))
-        (car (cdr x))
-        (rontolisp::%clojure-io-class-name x))))
+  ;; a ByteArrayOutputStream's is what it holds decoded in UTF-8: an arm a
+  ;; program making no byte array folds
+  (if (rontolisp::%clojure-io-array-stream-p x)
+      (rontolisp::%clojure-io-array-string x)
+      (let ((kind (rontolisp::%clojure-io-kind x)))
+        (if (or (eq kind :C%FILE) (eq kind :C%URL) (eq kind :C%URI))
+            (car (cdr x))
+            (rontolisp::%clojure-io-class-name x)))))
+
+(defun rontolisp::%clojure-io-array-string (x)
+  "The toString of the ByteArrayInputStream or ByteArrayOutputStream X: what
+   the second holds decoded in UTF-8, the first's class name."
+  (if (eq (car x) :C%OUTPUT-STREAM)
+      (let ((extra (car (cdr (cdr x)))))
+        (rontolisp::%clojure-octets-text (svref extra 1) 0 (svref extra 2)
+                                         :utf-8))
+      (rontolisp::%clojure-io-class-name x)))
 
 (defun rontolisp::%clojure-io-write (x readable stream)
   "Write X as the oracle's #object[Class \"toString\"], the identity hash left
@@ -17398,6 +17940,14 @@
     found))
 
 ;;;; Byte streams
+;;;;
+;;;; A java.io.ByteArrayInputStream is (:C%INPUT-STREAM #(nil octets i closed)
+;;;; #(class end mark)), reading the byte array's octet vector in place from I
+;;;; below END; a java.io.ByteArrayOutputStream (:C%OUTPUT-STREAM #(nil closed)
+;;;; #(class buffer count)), gathering COUNT octets in BUFFER. Neither closes,
+;;;; like the JDK's. Every byte stream function reaches the third part through
+;;;; one arm test, %clojure-io-array-stream-p (clojure/ClojureArms, the
+;;;; byte-array family), so a program making no byte array compiles as before.
 
 (defun rontolisp::%clojure-io-input (stream)
   "A java.io.BufferedInputStream over the binary input STREAM."
@@ -17411,6 +17961,11 @@
   "A java.io.BufferedOutputStream over the binary output STREAM."
   (list :C%OUTPUT-STREAM (vector stream nil)))
 
+;; Whether the byte stream X is a ByteArrayInputStream or a ByteArrayOutputStream:
+;; the byte-array family's arm test of the byte stream functions.
+(defun rontolisp::%clojure-io-array-stream-p (x)
+  (if (consp x) (if (consp (cdr x)) (consp (cdr (cdr x))))))
+
 (defun rontolisp::%clojure-io-open-state (x)
   "The state of the open byte stream X; a closed one is the oracle's
    IOException."
@@ -17421,22 +17976,30 @@
 
 (defun rontolisp::%clojure-io-read-byte (x)
   "InputStream.read: the next octet of the byte stream X, -1 past the end."
-  (let ((state (rontolisp::%clojure-io-open-state x)))
-    (if (svref state 0)
-        (read-byte (svref state 0) nil -1)
-        (let ((i (svref state 2)) (octets (svref state 1)))
-          (if (< i (length octets))
-              (progn
-                (setf (svref state 2) (+ i 1))
-                (aref octets i))
-              -1)))))
+  ;; a ByteArrayInputStream reads below its end: an arm a program making no
+  ;; byte array folds
+  (if (rontolisp::%clojure-io-array-stream-p x)
+      (rontolisp::%clojure-io-array-read-byte x)
+      (let ((state (rontolisp::%clojure-io-open-state x)))
+        (if (svref state 0)
+            (read-byte (svref state 0) nil -1)
+            (let ((i (svref state 2)) (octets (svref state 1)))
+              (if (< i (length octets))
+                  (progn
+                    (setf (svref state 2) (+ i 1))
+                    (aref octets i))
+                  -1))))))
 
 (defun rontolisp::%clojure-io-available (x)
   "InputStream.available: the octets left on the byte stream X."
-  (let ((state (rontolisp::%clojure-io-open-state x)))
-    (if (svref state 0)
-        (let ((s (svref state 0))) (- (file-length s) (file-position s)))
-        (- (length (svref state 1)) (svref state 2)))))
+  ;; a ByteArrayInputStream's below its end: an arm a program making no byte
+  ;; array folds
+  (if (rontolisp::%clojure-io-array-stream-p x)
+      (rontolisp::%clojure-io-array-available x)
+      (let ((state (rontolisp::%clojure-io-open-state x)))
+        (if (svref state 0)
+            (let ((s (svref state 0))) (- (file-length s) (file-position s)))
+            (- (length (svref state 1)) (svref state 2))))))
 
 (defun rontolisp::%clojure-io-skip (x n)
   "InputStream.skip: up to N octets of the byte stream X passed over, the count
@@ -17457,45 +18020,216 @@
 
 (defun rontolisp::%clojure-io-close-input (x)
   "Closes the byte stream X; a second close does nothing."
-  (let ((state (car (cdr x))))
-    (if (not (svref state 3))
-        (progn
-          (setf (svref state 3) t)
-          (if (svref state 0) (close (svref state 0)))))
-    nil))
+  ;; a ByteArrayInputStream does not close, as the JDK's: an arm a program
+  ;; making no byte array folds
+  (if (rontolisp::%clojure-io-array-stream-p x)
+      nil
+      (let ((state (car (cdr x))))
+        (if (not (svref state 3))
+            (progn
+              (setf (svref state 3) t)
+              (if (svref state 0) (close (svref state 0)))))
+        nil)))
 
 (defun rontolisp::%clojure-io-write-byte (x b)
   "OutputStream.write of an int: its low octet onto the byte stream X."
-  (let ((state (rontolisp::%clojure-io-open-state x)))
-    (if (integerp b)
-        (write-byte (logand b 255) (svref state 0))
-        (rontolisp::%clojure-io-no-bytes "write"))
-    nil))
+  ;; a byte array writes its octets, a ByteArrayOutputStream gathers: arms a
+  ;; program making no byte array folds
+  (if (rontolisp::%clojure-bytes-p b)
+      (rontolisp::%clojure-io-write-array x (car (cdr b)) 0
+                                          (length (car (cdr b))))
+      (if (rontolisp::%clojure-io-array-stream-p x)
+          (rontolisp::%clojure-io-gather-byte x b)
+          (let ((state (rontolisp::%clojure-io-open-state x)))
+            (if (integerp b)
+                (write-byte (logand b 255) (svref state 0))
+                (rontolisp::%clojure-io-refuse-write x b))
+            nil))))
+
+(defun rontolisp::%clojure-io-refuse-write (x b)
+  "The oracle's refusal of OutputStream.write of B, which is no int and no
+   byte array: nil its NullPointerException, anything else no write of one
+   argument."
+  (if (null b)
+      (rontolisp::%clojure-null-pointer-exception
+       "Cannot read the array length because \"b\" is null")
+      (rontolisp::%clojure-io-no-method x "write" 1)))
 
 (defun rontolisp::%clojure-io-write-octets (x octets)
   "The list OCTETS written to the byte stream X."
-  (let ((s (svref (rontolisp::%clojure-io-open-state x) 0)))
-    (dolist (b octets) (write-byte b s))))
+  ;; a ByteArrayOutputStream gathers them: an arm a program making no byte array
+  ;; folds
+  (if (rontolisp::%clojure-io-array-stream-p x)
+      (dolist (b octets) (rontolisp::%clojure-io-gather-byte x b))
+      (let ((s (svref (rontolisp::%clojure-io-open-state x) 0)))
+        (dolist (b octets) (write-byte b s)))))
 
 (defun rontolisp::%clojure-io-flush-output (x)
   "OutputStream.flush of the byte stream X."
-  (finish-output (svref (rontolisp::%clojure-io-open-state x) 0))
+  ;; a ByteArrayOutputStream has nothing to flush: an arm a program making no
+  ;; byte array folds
+  (if (rontolisp::%clojure-io-array-stream-p x)
+      nil
+      (finish-output (svref (rontolisp::%clojure-io-open-state x) 0)))
   nil)
 
 (defun rontolisp::%clojure-io-close-output (x)
   "Closes the byte stream X; a second close does nothing."
-  (let ((state (car (cdr x))))
-    (if (not (svref state 1))
-        (progn
-          (setf (svref state 1) t)
-          (close (svref state 0))))
-    nil))
+  ;; a ByteArrayOutputStream does not close, as the JDK's: an arm a program
+  ;; making no byte array folds
+  (if (rontolisp::%clojure-io-array-stream-p x)
+      nil
+      (let ((state (car (cdr x))))
+        (if (not (svref state 1))
+            (progn
+              (setf (svref state 1) t)
+              (close (svref state 0))))
+        nil)))
 
-(defun rontolisp::%clojure-io-no-bytes (method)
-  "The refusal of a byte-array argument or answer: no byte array exists here."
-  (rontolisp::%clojure-unsupported-operation-exception
-   (concatenate 'string method
-    " of a byte array is not supported: byte arrays are not built in")))
+;;;; Byte streams over and into a byte array
+
+(defun rontolisp::%clojure-io-bytes-input (x)
+  "(ByteArrayInputStream. x): a byte stream over the byte array X, which it
+   reads in place."
+  (rontolisp::%clojure-io-bytes-input-3 x 0
+   (if (rontolisp::%clojure-bytes-p x) (length (car (cdr x))) 0)))
+
+(defun rontolisp::%clojure-io-bytes-input-3 (x off len)
+  "(ByteArrayInputStream. x off len): a byte stream over the LEN octets of the
+   byte array X from OFF, cut at its end, marked at OFF. Anything else is the
+   oracle's refusal of a value it takes for a byte[]."
+  (if (rontolisp::%clojure-bytes-p x)
+      (let ((octets (car (cdr x))))
+        (list :C%INPUT-STREAM (vector nil octets off nil)
+              (vector "java.io.ByteArrayInputStream"
+                      (min (+ off len) (length octets)) off)))
+      (rontolisp::%clojure-bytes-refuse-cast x
+       "Cannot read the array length because \"buf\" is null")))
+
+(defun rontolisp::%clojure-io-bytes-output (size)
+  "(ByteArrayOutputStream. size): a byte stream gathering what is written to
+   it, SIZE octets of room to start; a negative size the oracle's refusal."
+  (if (< size 0)
+      (rontolisp::%clojure-illegal-argument-exception
+       (concatenate 'string "Negative initial size: " (princ-to-string size))))
+  (list :C%OUTPUT-STREAM (vector nil nil)
+        (vector "java.io.ByteArrayOutputStream"
+                (make-array size :element-type '(unsigned-byte 8)) 0)))
+
+(defun rontolisp::%clojure-io-array-read-byte (x)
+  "InputStream.read of the ByteArrayInputStream X: its next octet, -1 at its
+   end."
+  (let ((state (car (cdr x))) (i (svref (car (cdr x)) 2)))
+    (if (< i (svref (car (cdr (cdr x))) 1))
+        (progn
+          (setf (svref state 2) (+ i 1))
+          (aref (svref state 1) i))
+        -1)))
+
+(defun rontolisp::%clojure-io-array-available (x)
+  "InputStream.available of the ByteArrayInputStream X: the octets below its
+   end."
+  (max 0 (- (svref (car (cdr (cdr x))) 1) (svref (car (cdr x)) 2))))
+
+(defun rontolisp::%clojure-io-octets-from (x)
+  "Every octet left on the byte stream X, as one fresh (unsigned-byte 8)
+   vector, the stream at its end."
+  (if (rontolisp::%clojure-io-array-stream-p x)
+      (let* ((state (car (cdr x)))
+             (end (svref (car (cdr (cdr x))) 1))
+             (from (min (svref state 2) end)))
+        (setf (svref state 2) end)
+        (subseq (svref state 1) from end))
+      (rontolisp::%clojure-io-octets-left
+       (rontolisp::%clojure-io-open-state x))))
+
+(defun rontolisp::%clojure-io-read-into (x octets off len)
+  "InputStream.read of a part: up to LEN octets of the byte stream X read into
+   the octet vector OCTETS from OFF -- what a file stream has ready, all of it
+   here -- the count answered, -1 when none is left. A LEN of 0 reads none
+   and answers 0, but a ByteArrayInputStream at its end -1, as the JDK's."
+  (let ((state (rontolisp::%clojure-io-open-state x)))
+    (cond ((rontolisp::%clojure-io-array-stream-p x)
+           (let ((pos (svref state 2)) (end (svref (car (cdr (cdr x))) 1)))
+             (if (>= pos end)
+                 -1
+                 (let ((n (min len (- end pos))))
+                   (if (> n 0)
+                       (progn
+                         (replace octets (svref state 1)
+                                  :start1 off
+                                  :end1 (+ off n)
+                                  :start2 pos)
+                         (setf (svref state 2) (+ pos n))))
+                   (max n 0)))))
+          ((= len 0) 0)
+          ((svref state 0)
+           ;; up to the size the file reports, never past its end: a second read
+           ;; past it traps on the component
+           (let* ((s (svref state 0))
+                  (n (min len (- (file-length s) (file-position s)))))
+             (if (<= n 0)
+                 -1
+                 (progn
+                   (dotimes (k n) (setf (aref octets (+ off k)) (read-byte s)))
+                   n))))
+          (t (let ((n (min len (- (length (svref state 1)) (svref state 2)))))
+               (if (<= n 0)
+                   -1
+                   (progn
+                     (replace octets (svref state 1)
+                              :start1 off
+                              :end1 (+ off n)
+                              :start2 (svref state 2))
+                     (setf (svref state 2) (+ (svref state 2) n))
+                     n)))))))
+
+(defun rontolisp::%clojure-io-gather-byte (x b)
+  "OutputStream.write of an int to the ByteArrayOutputStream X: its low octet
+   gathered, the buffer doubled when full; a byte array, nil and anything else
+   as a byte stream writes them."
+  (cond ((integerp b)
+         (let ((extra (car (cdr (cdr x)))))
+           (if (>= (svref extra 2) (length (svref extra 1)))
+               (rontolisp::%clojure-io-grow-buffer extra 1))
+           (setf (aref (svref extra 1) (svref extra 2)) (logand b 255))
+           (setf (svref extra 2) (+ (svref extra 2) 1))))
+        (t (rontolisp::%clojure-io-refuse-write x b)))
+  nil)
+
+(defun rontolisp::%clojure-io-grow-buffer (extra n)
+  "The buffer of the ByteArrayOutputStream part EXTRA grown to hold N more
+   octets: twice its size, or what they need."
+  (let* ((buffer (svref extra 1))
+         (grown
+          (make-array (max (+ (svref extra 2) n) (* 2 (length buffer)))
+                      :element-type '(unsigned-byte 8))))
+    (replace grown buffer :end2 (svref extra 2))
+    (setf (svref extra 1) grown)))
+
+(defun rontolisp::%clojure-io-write-array (x octets start end)
+  "The octets of the vector OCTETS from START below END written to the byte
+   stream X: gathered by a ByteArrayOutputStream, written in one transfer to a
+   file."
+  (if (rontolisp::%clojure-io-array-stream-p x)
+      (let ((extra (car (cdr (cdr x)))))
+        (if (> (+ (svref extra 2) (- end start)) (length (svref extra 1)))
+            (rontolisp::%clojure-io-grow-buffer extra (- end start)))
+        (replace (svref extra 1) octets
+                 :start1 (svref extra 2)
+                 :start2 start
+                 :end2 end)
+        (setf (svref extra 2) (+ (svref extra 2) (- end start))))
+      (let ((s (svref (rontolisp::%clojure-io-open-state x) 0)))
+        (do ((i start (+ i 1)))
+            ((>= i end))
+          (write-byte (aref octets i) s))))
+  nil)
+
+(defun rontolisp::%clojure-io-gathered (x)
+  "The octets the ByteArrayOutputStream X holds, as a fresh vector."
+  (let ((extra (car (cdr (cdr x)))))
+    (subseq (svref extra 1) 0 (svref extra 2))))
 
 ;;;; Charsets
 
@@ -17562,6 +18296,40 @@
   (let ((out (make-string-output-stream)))
     (rontolisp::%clojure-ring-write-bytes octets charset out)
     (get-output-stream-string out)))
+
+(defun rontolisp::%clojure-octets-text (octets start end charset)
+  "The text the octets of the vector OCTETS from START below END decode to in
+   CHARSET, the JDK's replacement of a malformed sequence included."
+  (let ((out (make-string-output-stream)))
+    (if (eq charset :utf-8)
+        (rontolisp::%clojure-ring-write-utf-8
+         (coerce (subseq octets start end) 'simple-vector) out)
+        (do ((i start (+ i 1)))
+            ((>= i end))
+          (let ((b (aref octets i)))
+            (write-char (if (or (eq charset :latin-1) (< b 128))
+                            (code-char b)
+                            (code-char 65533)) out))))
+    (get-output-stream-string out)))
+
+(defun rontolisp::%clojure-octets-of-text (text charset)
+  "The octets of TEXT in CHARSET as one fresh (unsigned-byte 8) vector, the
+   ones %clojure-io-encode lists."
+  (let* ((octets (rontolisp::%clojure-io-encode text charset))
+         (out (make-array (length octets) :element-type '(unsigned-byte 8)))
+         (i 0))
+    (dolist (b octets out)
+      (setf (aref out i) b)
+      (setq i (+ i 1)))))
+
+;; The charset a String construction or .getBytes names: a charset name as
+;; %clojure-io-charset reads it, or a host java.nio.charset.Charset by its own
+;; name (StandardCharsets/UTF_8), a host arm a program naming no java: operator
+;; folds.
+(defun rontolisp::%clojure-bytes-charset (encoding)
+  (if (rontolisp::%clojure-host-object-p encoding "java.nio.charset.Charset")
+      (rontolisp::%clojure-io-charset (java:call encoding "name"))
+      (rontolisp::%clojure-io-charset encoding)))
 
 ;;;; Opening
 
@@ -17631,8 +18399,12 @@
 (defun rontolisp::%clojure-io-open-input (x)
   "make-input-stream of X: a byte stream over the file X names, over the text
    a resource carries, or X itself when it is one; nil for anything else."
+  ;; a byte array is read in place, as a ByteArrayInputStream reads it: an arm a
+  ;; program making none folds
   (let ((text (rontolisp::%clojure-io-url-text x)))
     (cond ((and (consp x) (eq (car x) :C%INPUT-STREAM)) x)
+          ((rontolisp::%clojure-bytes-p x)
+           (rontolisp::%clojure-io-octets-input (car (cdr x))))
           (text (rontolisp::%clojure-io-octets-input
                  (coerce (rontolisp::%clojure-io-encode text :utf-8) 'vector)))
           (t (let ((path (rontolisp::%clojure-io-target x nil)))
@@ -17674,9 +18446,13 @@
            (rontolisp::%clojure-io-ring-body
             (rontolisp::%clojure-io-open-input x)))
           ((eq kind :C%INPUT-STREAM)
+           ;; a ByteArrayInputStream's octets below its end: an arm a program
+           ;; making no byte array folds
            (let ((octets
-                  (rontolisp::%clojure-io-octets-left
-                   (rontolisp::%clojure-io-open-state x))))
+                  (if (rontolisp::%clojure-io-array-stream-p x)
+                      (rontolisp::%clojure-io-octets-from x)
+                      (rontolisp::%clojure-io-octets-left
+                       (rontolisp::%clojure-io-open-state x)))))
              (rontolisp::%clojure-io-close-input x)
              octets))
           (t (rontolisp::%clojure-ring-refuse-body x)))))
@@ -17751,6 +18527,11 @@
           ((rontolisp::%clojure-io-character-stream-p x t) x)
           ((and (consp x) (eq (car x) :C%INPUT-STREAM))
            (rontolisp::%clojure-io-decoded-reader x charset))
+          ;; a byte array, decoded as a reader over a stream over it decodes it:
+          ;; an arm a program making none folds
+          ((rontolisp::%clojure-bytes-p x)
+           (rontolisp::%clojure-io-decoded-reader
+            (rontolisp::%clojure-io-octets-input (car (cdr x))) charset))
           (text (make-string-input-stream text))
           (t
            (let ((path (rontolisp::%clojure-io-target x nil)))
@@ -17819,9 +18600,12 @@
 
 ;;;; copy
 
+;; A byte array's class prints as the oracle prints byte[]'s, byte/1: an arm a
+;; program making none folds.
 (defun rontolisp::%clojure-io-copy-class (x)
   "The class name do-copy dispatches X by, for its refusal."
   (cond ((null x) "nil")
+        ((rontolisp::%clojure-bytes-p x) "byte/1")
         ((rontolisp::%clojure-io-kind x) (rontolisp::%clojure-io-class-name x))
         ((rontolisp::%clojure-io-character-stream-p x nil) "java.io.Writer")
         ((rontolisp::%clojure-io-character-stream-p x t) "java.io.Reader")
@@ -17843,44 +18627,62 @@
    or the characters of a string -- written to OUT -- a byte stream, a writer
    or a File -- characters encoded or decoded in ENCODING. A stream given is
    neither opened nor closed; a File is opened and closed around the copy."
-  (let ((charset (rontolisp::%clojure-io-charset encoding))
-        (in-kind
-         (cond ((stringp in) :string)
-               ((and (consp in) (eq (car in) :C%INPUT-STREAM)) :bytes)
-               ((and (consp in) (eq (car in) :C%FILE)) :file)
-               ((rontolisp::%clojure-io-character-stream-p in t) :reader)))
-        (out-kind
-         (cond ((and (consp out) (eq (car out) :C%OUTPUT-STREAM)) :bytes)
-               ((and (consp out) (eq (car out) :C%FILE)) :file)
-               ((rontolisp::%clojure-io-character-stream-p out nil) :writer))))
-    (if (or (null in-kind) (null out-kind))
-        (rontolisp::%clojure-io-copy-refusal in out))
-    (cond ((eq in-kind :file)
-           (let ((source (rontolisp::%clojure-io-open-input in)))
-             (unwind-protect (rontolisp::%clojure-io-copy source out encoding)
-               (rontolisp::%clojure-io-close-input source))))
-          ((eq out-kind :file)
-           (let ((sink (rontolisp::%clojure-io-open-output out nil)))
-             (unwind-protect (rontolisp::%clojure-io-copy in sink encoding)
-               (rontolisp::%clojure-io-close-output sink))))
-          ((eq out-kind :bytes)
-           (rontolisp::%clojure-io-write-octets out
-            (cond ((eq in-kind :bytes) (rontolisp::%clojure-io-read-octets in))
-                  ((eq in-kind :reader)
-                   (rontolisp::%clojure-io-encode
-                    (rontolisp::%clojure-io-reader-text in) charset))
-                  (t (rontolisp::%clojure-io-encode in charset))))
-           (rontolisp::%clojure-io-flush-output out))
-          (t
-           (write-string (cond ((eq in-kind :bytes)
-                                (rontolisp::%clojure-io-decode
-                                 (rontolisp::%clojure-io-read-octets in)
-                                 charset))
-                               ((eq in-kind :reader)
-                                (rontolisp::%clojure-io-reader-text in))
-                               (t in)) out)
-           (finish-output out)))
-    nil))
+  ;; a byte array copies as a byte stream over it: an arm a program making none
+  ;; folds
+  (if (rontolisp::%clojure-bytes-p in)
+      (rontolisp::%clojure-io-copy-octets in out encoding)
+      (let ((charset (rontolisp::%clojure-io-charset encoding))
+            (in-kind
+             (cond ((stringp in) :string)
+                   ((and (consp in) (eq (car in) :C%INPUT-STREAM)) :bytes)
+                   ((and (consp in) (eq (car in) :C%FILE)) :file)
+                   ((rontolisp::%clojure-io-character-stream-p in t) :reader)))
+            (out-kind
+             (cond ((and (consp out) (eq (car out) :C%OUTPUT-STREAM)) :bytes)
+              ((and (consp out) (eq (car out) :C%FILE)) :file)
+              ((rontolisp::%clojure-io-character-stream-p out nil) :writer))))
+        (if (or (null in-kind) (null out-kind))
+            (rontolisp::%clojure-io-copy-refusal in out))
+        (cond ((eq in-kind :file)
+               (let ((source (rontolisp::%clojure-io-open-input in)))
+                 (unwind-protect (rontolisp::%clojure-io-copy source out
+                                                              encoding)
+                   (rontolisp::%clojure-io-close-input source))))
+              ((eq out-kind :file)
+               (let ((sink (rontolisp::%clojure-io-open-output out nil)))
+                 (unwind-protect (rontolisp::%clojure-io-copy in sink encoding)
+                   (rontolisp::%clojure-io-close-output sink))))
+              ((eq out-kind :bytes)
+               (rontolisp::%clojure-io-write-octets out
+                (cond
+                 ((eq in-kind :bytes) (rontolisp::%clojure-io-read-octets in))
+                 ((eq in-kind :reader)
+                  (rontolisp::%clojure-io-encode
+                   (rontolisp::%clojure-io-reader-text in) charset))
+                 (t (rontolisp::%clojure-io-encode in charset))))
+               (rontolisp::%clojure-io-flush-output out))
+              (t
+               (write-string (cond ((eq in-kind :bytes)
+                                    (rontolisp::%clojure-io-decode
+                                     (rontolisp::%clojure-io-read-octets in)
+                                     charset))
+                                   ((eq in-kind :reader)
+                                    (rontolisp::%clojure-io-reader-text in))
+                                   (t in)) out)
+               (finish-output out)))
+        nil)))
+
+(defun rontolisp::%clojure-io-copy-octets (in out encoding)
+  "clojure.java.io/copy of the byte array IN: its octets written to OUT -- a
+   byte stream, a writer (decoded in ENCODING), a File (opened and closed
+   around the copy) -- as a byte stream over it copies them; anything else the
+   oracle's refusal of the pair."
+  (if (or (and (consp out)
+               (or (eq (car out) :C%OUTPUT-STREAM) (eq (car out) :C%FILE)))
+          (rontolisp::%clojure-io-character-stream-p out nil))
+      (rontolisp::%clojure-io-copy
+       (rontolisp::%clojure-io-octets-input (car (cdr in))) out encoding)
+      (rontolisp::%clojure-io-copy-refusal in out)))
 
 ;;;; slurp, spit and line-seq of a clojure.java.io value
 
@@ -17971,6 +18773,15 @@
           ((eq kind :C%URL) '("java.net.URL" "java.io.Serializable"))
           ((eq kind :C%URI)
            '("java.net.URI" "java.lang.Comparable" "java.io.Serializable"))
+          ;; a ByteArrayInputStream or ByteArrayOutputStream: an arm a program
+          ;; making no byte array folds
+          ((rontolisp::%clojure-io-array-stream-p x)
+           (if (eq kind :C%INPUT-STREAM)
+               '("java.io.ByteArrayInputStream" "java.io.InputStream"
+                 "java.io.Closeable" "java.lang.AutoCloseable")
+               '("java.io.ByteArrayOutputStream" "java.io.OutputStream"
+                 "java.io.Closeable" "java.io.Flushable"
+                 "java.lang.AutoCloseable")))
           ((eq kind :C%INPUT-STREAM)
            '("java.io.BufferedInputStream" "java.io.FilterInputStream"
              "java.io.InputStream" "java.io.Closeable"
@@ -18338,22 +19149,56 @@
              (if c (char-code c) -1)))
           (t (rontolisp::%clojure-io-no-method x "read" 0)))))
 
+;; read or readNBytes of a part: up to LEN octets (the rest of the array past OFF
+;; when LEN is nil) of the byte stream X read into the byte array BUFFER from
+;; OFF, the count answered, -1 past the end. A nil BUFFER is the oracle's
+;; NullPointerException, a part outside it its IndexOutOfBoundsException,
+;; anything else no METHOD at ARITY. The byte array is an arm a program making
+;; none folds.
+(defun rontolisp::%clojure-io-read-part (x buffer off len method arity)
+  (let ((in (rontolisp::%clojure-io-recv x :C%INPUT-STREAM method arity)))
+    (cond ((null buffer)
+           (rontolisp::%clojure-null-pointer-exception
+            "Cannot read the array length because \"b\" is null"))
+          ((rontolisp::%clojure-bytes-p buffer)
+           (let* ((octets (car (cdr buffer)))
+                  (n (or len (- (length octets) off))))
+             (rontolisp::%clojure-bytes-check-range off n (length octets))
+             (rontolisp::%clojure-io-read-into in octets off n)))
+          (t (rontolisp::%clojure-io-no-method x method arity)))))
+
 (defun rontolisp::%clojure-io-m-read-buffer (x buffer)
-  "read into a buffer: a byte array, which is not built in."
-  (declare (ignore buffer))
-  (if (eq (rontolisp::%clojure-io-kind x) :C%INPUT-STREAM)
-      (rontolisp::%clojure-io-no-bytes "read")
-      (rontolisp::%clojure-io-no-method x "read" 1)))
+  "read into a buffer: as many octets of the byte stream X as the byte array
+   BUFFER holds, read into it, the count answered, -1 past the end."
+  (rontolisp::%clojure-io-read-part x buffer 0 nil "read" 1))
 
 (defun rontolisp::%clojure-io-m-read-buffer-3 (x buffer off len)
-  (declare (ignore buffer off len))
-  (if (eq (rontolisp::%clojure-io-kind x) :C%INPUT-STREAM)
-      (rontolisp::%clojure-io-no-bytes "read")
-      (rontolisp::%clojure-io-no-method x "read" 3)))
+  "read of a part: up to LEN octets of the byte stream X read into the byte
+   array BUFFER from OFF, the count answered, -1 past the end."
+  (rontolisp::%clojure-io-read-part x buffer off len "read" 3))
 
 (defun rontolisp::%clojure-io-m-read-all-bytes (x)
-  (rontolisp::%clojure-io-recv x :C%INPUT-STREAM "readAllBytes" 0)
-  (rontolisp::%clojure-io-no-bytes "readAllBytes"))
+  "readAllBytes: the byte array of every octet left on the byte stream X."
+  (rontolisp::%clojure-bytes-of
+   (rontolisp::%clojure-io-octets-from
+    (rontolisp::%clojure-io-recv x :C%INPUT-STREAM "readAllBytes" 0))))
+
+(defun rontolisp::%clojure-io-m-read-n-bytes (x n)
+  "readNBytes of a count: the byte array of up to N octets of the byte stream
+   X, fewer at its end; a negative N the oracle's refusal."
+  (let ((in (rontolisp::%clojure-io-recv x :C%INPUT-STREAM "readNBytes" 1)))
+    (if (< n 0) (rontolisp::%clojure-illegal-argument-exception "len < 0"))
+    (let* ((out
+            (make-array (min n (rontolisp::%clojure-io-available in))
+                        :element-type '(unsigned-byte 8)))
+           (k (rontolisp::%clojure-io-read-into in out 0 (length out))))
+      (rontolisp::%clojure-bytes-of
+       (if (< k (length out)) (subseq out 0 (max k 0)) out)))))
+
+(defun rontolisp::%clojure-io-m-read-n-bytes-3 (x buffer off len)
+  "readNBytes of a part: up to LEN octets of the byte stream X read into the
+   byte array BUFFER from OFF, the count answered, 0 past the end."
+  (max 0 (rontolisp::%clojure-io-read-part x buffer off len "readNBytes" 3)))
 
 (defun rontolisp::%clojure-io-m-read-line (x)
   (read-line (rontolisp::%clojure-open-reader
@@ -18394,13 +19239,116 @@
 
 (defun rontolisp::%clojure-io-m-write-3 (x value off len)
   "write of a part: LEN characters of the string VALUE from OFF onto a
-   writer; a byte array, which is not built in, onto a byte stream."
+   writer; LEN octets of the byte array VALUE from OFF onto a byte stream."
   (let ((kind (rontolisp::%clojure-io-kind x)))
-    (cond ((eq kind :C%OUTPUT-STREAM) (rontolisp::%clojure-io-no-bytes "write"))
+    (cond
+     ((eq kind :C%OUTPUT-STREAM)
+      (rontolisp::%clojure-io-write-part x value off len))
      ((eq kind :WRITER)
       (write-string (subseq value off (+ off len)) x)
       nil)
      (t (rontolisp::%clojure-io-no-method x "write" 3)))))
+
+;; OutputStream.write of a part: LEN octets of the byte array VALUE from OFF onto
+;; the byte stream X. A nil VALUE is the oracle's NullPointerException, a part
+;; outside it its IndexOutOfBoundsException, anything else no write of three
+;; arguments. The byte array is an arm a program making none folds.
+(defun rontolisp::%clojure-io-write-part (x value off len)
+  (cond ((null value)
+         (rontolisp::%clojure-null-pointer-exception
+          "Cannot read the array length because \"b\" is null"))
+        ((rontolisp::%clojure-bytes-p value)
+         (let ((octets (car (cdr value))))
+           (rontolisp::%clojure-bytes-check-range off len (length octets))
+           (rontolisp::%clojure-io-write-array x octets off (+ off len))))
+        (t (rontolisp::%clojure-io-no-method x "write" 3)))
+  nil)
+
+(defun rontolisp::%clojure-io-gathering (x method arity)
+  "The part #(class buffer count) of X when it is a ByteArrayOutputStream,
+   else the oracle's refusal of METHOD at ARITY on it."
+  (if (rontolisp::%clojure-io-array-stream-p x)
+      (if (eq (car x) :C%OUTPUT-STREAM)
+          (car (cdr (cdr x)))
+          (rontolisp::%clojure-io-no-method x method arity))
+      (rontolisp::%clojure-io-no-method x method arity)))
+
+(defun rontolisp::%clojure-io-m-to-byte-array (x)
+  "ByteArrayOutputStream.toByteArray: a fresh byte array of what X holds."
+  (rontolisp::%clojure-io-gathering x "toByteArray" 0)
+  (rontolisp::%clojure-bytes-of (rontolisp::%clojure-io-gathered x)))
+
+(defun rontolisp::%clojure-io-m-size (x)
+  "ByteArrayOutputStream.size: the count of octets X holds."
+  (svref (rontolisp::%clojure-io-gathering x "size" 0) 2))
+
+;; The marks of the byte input streams over octets but a ByteArrayInputStream
+;; (which keeps its own): an eq table of stream to index, NIL until the first
+;; mark.
+(defvar rontolisp::%clojure-io-marks nil)
+
+(defun rontolisp::%clojure-io-m-reset (x)
+  "reset: a byte input stream over octets back where it was marked (a
+   ByteArrayInputStream at its start until then, any other the oracle's
+   IOException), one over a file the IOException of a stream without marks;
+   a ByteArrayOutputStream emptied, its room kept."
+  (if (eq (rontolisp::%clojure-io-kind x) :C%INPUT-STREAM)
+      (let ((state (rontolisp::%clojure-io-open-state x)))
+        (cond ((rontolisp::%clojure-io-array-stream-p x)
+               (setf (svref state 2) (svref (car (cdr (cdr x))) 2)))
+              ((svref state 0)
+               (rontolisp::%clojure-io-exception "mark/reset not supported"))
+              (t (let ((mark
+                        (if rontolisp::%clojure-io-marks
+                            (gethash x rontolisp::%clojure-io-marks))))
+                   (if (null mark)
+                       (rontolisp::%clojure-io-exception
+                        "Resetting to invalid mark"))
+                   (setf (svref state 2) mark)))))
+      (setf (svref (rontolisp::%clojure-io-gathering x "reset" 0) 2) 0))
+  nil)
+
+(defun rontolisp::%clojure-io-m-mark (x limit)
+  "InputStream.mark: a byte stream over octets marks where it is, for reset
+   to come back to, the read limit not kept; one over a file keeps no mark."
+  (declare (ignore limit))
+  (let ((state
+         (rontolisp::%clojure-io-open-state
+          (rontolisp::%clojure-io-recv x :C%INPUT-STREAM "mark" 1))))
+    (cond ((rontolisp::%clojure-io-array-stream-p x)
+           (setf (svref (car (cdr (cdr x))) 2) (svref state 2)))
+          ((null (svref state 0))
+           (if (null rontolisp::%clojure-io-marks)
+               (setq rontolisp::%clojure-io-marks (make-hash-table :test 'eq)))
+           (setf (gethash x rontolisp::%clojure-io-marks) (svref state 2))))
+    nil))
+
+(defun rontolisp::%clojure-io-m-mark-supported (x)
+  "InputStream.markSupported: whether the byte stream X is over octets, which
+   mark and reset hold a position in; one over a file is not."
+  (if (svref (car
+              (cdr
+               (rontolisp::%clojure-io-recv x
+                                            :C%INPUT-STREAM "markSupported" 0)))
+             0)
+      rontolisp::%clojure-false
+      t))
+
+(defun rontolisp::%clojure-io-m-write-to (x out)
+  "ByteArrayOutputStream.writeTo: what X holds written to the byte stream
+   OUT."
+  (let ((extra (rontolisp::%clojure-io-gathering x "writeTo" 1)))
+    (if (not (and (consp out) (eq (car out) :C%OUTPUT-STREAM)))
+        (rontolisp::%clojure-io-no-method x "writeTo" 1))
+    (rontolisp::%clojure-io-write-array out (svref extra 1) 0 (svref extra 2))
+    nil))
+
+(defun rontolisp::%clojure-io-m-to-string (x charset)
+  "ByteArrayOutputStream.toString of a charset name: what X holds decoded in
+   it."
+  (let ((extra (rontolisp::%clojure-io-gathering x "toString" 1)))
+    (rontolisp::%clojure-octets-text (svref extra 1) 0 (svref extra 2)
+     (rontolisp::%clojure-bytes-charset charset))))
 
 (defun rontolisp::%clojure-io-m-new-line (x)
   (terpri (rontolisp::%clojure-io-recv x :WRITER "newLine" 0))

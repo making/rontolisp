@@ -8,8 +8,8 @@
 # babashka.http-client 0.4.23 required as `http` against the same origin (2026-10-08),
 # and differs from it only where a comment says so: the response map has no :version
 # (no transport here reports one) and the client asks for no compression (no
-# accept-encoding), :as :bytes is refused, and a transport failure is an IOException
-# carrying the transport's message (the oracle's ConnectException is one).
+# accept-encoding), and a transport failure is an IOException carrying the transport's
+# message (the oracle's ConnectException is one).
 #
 # The origin's endpoints beyond fetch-spec.yaml's: /headers (the request's header
 # fields as {name=[values]}, sorted, without host, connection, content-length,
@@ -164,6 +164,16 @@ cases:
       "héllo, 世界\nsecond line\n"
       ["héllo, 世界" "second line"]
       22
+  - name: the-body-is-a-byte-array-under-as-bytes
+    # :as :bytes answers the body's octets as they came, a byte array.
+    source: |
+      (let [b (:body (http/get (url "/octets") {:as :bytes}))] (prn (bytes? b) (vec b)))
+      (prn (String. (:body (http/get (url "/lines") {:as :bytes})) "UTF-8"))
+      (prn (alength (:body (http/get (url "/big") {:as :bytes}))))
+    expected: |
+      true [-1 -2 65 0 -128 127]
+      "héllo, 世界\nsecond line\n"
+      300000
   - name: an-async-request-answers-a-future-deref-reads
     source: |
       (let [f (http/get (url "/hello") {:async true})]
@@ -265,10 +275,8 @@ cases:
       "abc"
   - name: what-no-transport-here-offers-is-refused-by-name
     source: |
-      (prn (try (http/get (url "/lines") {:as :bytes}) (catch UnsupportedOperationException e (ex-message e))))
       (prn (try (http/get (url "/hello") {:timeout 1000}) (catch UnsupportedOperationException e (ex-message e))))
       (prn (try (http/get (url "/lines") {:as :json}) (catch IllegalArgumentException e (ex-message e))))
     expected: |
-      "rontolisp.http-client: :as :bytes is not supported: no value here is a byte array; take :as :stream"
       "rontolisp.http-client: :timeout is not supported: rontolisp:fetch has no timeout yet"
       "No matching clause: :json"

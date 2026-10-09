@@ -757,6 +757,10 @@ final class ClojureCollectionLowering {
 				ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-JMAP-GET"), coll, key, dflt, supplied)));
 		branches.add(ClojureLowerUtil.list(ClojureLowerUtil.list(new LispSymbol(ISET_P), coll),
 				ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-ISET-GET"), coll, key, dflt, supplied)));
+		// a byte array reads its element at a number key, like the oracle's RT.getFrom
+		// of an array (an arm a program making none sheds)
+		branches.add(ClojureLowerUtil.list(ClojureLowerUtil.list(new LispSymbol(ClojureBytesLowering.BYTES_P), coll),
+				ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-BYTES-GET"), coll, key, dflt)));
 		branches.add(hostArm(coll, hostCall("GET", coll, key, dflt)));
 		branches.add(ClojureLowerUtil.list(ClojureLowering.TRUE_CONST, dflt));
 		return branches;
@@ -845,6 +849,11 @@ final class ClojureCollectionLowering {
 			.booleanAnswer(ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-JMAP-CONTAINS"), bound, at))));
 		branches.add(ClojureLowerUtil.list(ClojureLowerUtil.list(new LispSymbol(JSET_P), bound), ctx
 			.booleanAnswer(ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-JSET-CONTAINS"), bound, at))));
+		// a byte array holds a number key inside it, like the oracle's RT.contains of an
+		// array (an arm a program making none sheds)
+		branches.add(ClojureLowerUtil.list(ClojureLowerUtil.list(new LispSymbol(ClojureBytesLowering.BYTES_P), bound),
+				ctx.booleanAnswer(
+						ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-BYTES-CONTAINS"), bound, at))));
 		branches.add(hostArm(bound, ctx.booleanAnswer(hostCall("CONTAINS-P", bound, at))));
 		branches.add(ClojureLowerUtil.list(ClojureLowering.TRUE_CONST,
 				ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-CONTAINS-PAST"), bound, at)));
@@ -1522,6 +1531,11 @@ final class ClojureCollectionLowering {
 						ClojureLowerUtil.list(new LispSymbol(JAVA_SIZE), coll)),
 				ClojureLowerUtil.list(ClojureLowerUtil.list(new LispSymbol(JMAP_P), coll),
 						ClojureLowerUtil.list(new LispSymbol(JAVA_SIZE), coll)),
+				// a byte array counts its octets (an arm a program making none sheds)
+				ClojureLowerUtil.list(ClojureLowerUtil.list(new LispSymbol(ClojureBytesLowering.BYTES_P), coll),
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("length"),
+								ClojureLowerUtil.list(ClojureLowerUtil.sym("car"),
+										ClojureLowerUtil.list(ClojureLowerUtil.sym("cdr"), coll)))),
 				ClojureLowerUtil.list(ClojureLowering.TRUE_CONST, ClojureRefusals
 					.refusal(ClojureRefusals.UNSUPPORTED_OPERATION, LispString.literal("count needs a collection"))));
 		List<LispVal> branches = new ArrayList<>();
@@ -1571,6 +1585,12 @@ final class ClojureCollectionLowering {
 				ClojureLowerUtil.list(ClojureLowerUtil.list(new LispSymbol(COUNTED_P), coll),
 						ClojureLowerUtil.list(ClojureLowerUtil.sym("zerop"),
 								ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-COUNTED-COUNT"), coll))),
+				// a byte array is empty at no octet (an arm a program making none sheds)
+				ClojureLowerUtil.list(ClojureLowerUtil.list(new LispSymbol(ClojureBytesLowering.BYTES_P), coll),
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("zerop"),
+								ClojureLowerUtil.list(ClojureLowerUtil.sym("length"),
+										ClojureLowerUtil.list(ClojureLowerUtil.sym("car"),
+												ClojureLowerUtil.list(ClojureLowerUtil.sym("cdr"), coll))))),
 				ClojureLowerUtil.list(ClojureLowering.TRUE_CONST,
 						ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), ClojureSeqLowering.seqForm(ctx, coll))));
 		List<LispVal> branches = new ArrayList<>();

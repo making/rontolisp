@@ -113,6 +113,14 @@ final class ClojureIoLowering {
 
 	private static final String STREAM_WRITER = PREFIX + "STREAM-WRITER";
 
+	/** {@code (ByteArrayInputStream. bytes)} and of a part of it. */
+	private static final String BYTES_INPUT = PREFIX + "BYTES-INPUT";
+
+	private static final String BYTES_INPUT_3 = PREFIX + "BYTES-INPUT-3";
+
+	/** {@code (ByteArrayOutputStream.)}, of an initial size or none. */
+	private static final String BYTES_OUTPUT = PREFIX + "BYTES-OUTPUT";
+
 	/**
 	 * The kernels: each var one call to its {@code %clojure-io-} worker, with a fixed
 	 * arity, and {@code resource}, lowered in place over the program's directory roots.
@@ -141,7 +149,7 @@ final class ClojureIoLowering {
 	static final Set<String> PRODUCERS = Set.of(FILE, FILE_2, URL_OF, URI_OF, URL_FOUND, RESOURCE, RESOURCE_URLS,
 			FILE_SEQ, PREFIX + "FILE-URL", PREFIX + "URL-FILE", PREFIX + "URI-FILE", PREFIX + "URI-URL",
 			PREFIX + "OPEN-INPUT", PREFIX + "OPEN-OUTPUT", OPEN_READER, PREFIX + "OPEN-WRITER", PREFIX + "PARENT-FILE",
-			PREFIX + "FROM-HOST", FILE_INPUT, FILE_OUTPUT, STREAM_WRITER);
+			PREFIX + "FROM-HOST", FILE_INPUT, FILE_OUTPUT, STREAM_WRITER, BYTES_INPUT, BYTES_INPUT_3, BYTES_OUTPUT);
 
 	/**
 	 * The ones of them that answer a Common Lisp character stream, which the printer and
@@ -171,17 +179,22 @@ final class ClojureIoLowering {
 				"length", "lastModified", "mkdir", "mkdirs", "delete", "createNewFile", "list", "listFiles", "getPath",
 				"isAbsolute", "toURI", "toURL", "hashCode", "getProtocol", "getHost", "getPort", "getDefaultPort",
 				"getFile", "getQuery", "getRef", "getAuthority", "getUserInfo", "toExternalForm", "openStream",
-				"getScheme", "read", "readAllBytes", "readLine", "available", "newLine", "flush", "close")) {
+				"getScheme", "read", "readAllBytes", "readLine", "available", "newLine", "flush", "close",
+				"toByteArray", "size", "reset", "markSupported")) {
 			out.computeIfAbsent(method, m -> new HashMap<>()).put(0, PREFIX + "M-" + kebab(method));
 		}
-		for (String method : List.of("renameTo", "compareTo", "equals", "skip", "transferTo", "write", "append")) {
+		for (String method : List.of("renameTo", "compareTo", "equals", "skip", "transferTo", "write", "append",
+				"writeTo", "mark")) {
 			out.computeIfAbsent(method, m -> new HashMap<>()).put(1, PREFIX + "M-" + kebab(method));
 		}
 		out.computeIfAbsent("read", m -> new HashMap<>()).put(1, PREFIX + "M-READ-BUFFER");
 		out.computeIfAbsent("read", m -> new HashMap<>()).put(3, PREFIX + "M-READ-BUFFER-3");
+		out.computeIfAbsent("readNBytes", m -> new HashMap<>()).put(1, PREFIX + "M-READ-N-BYTES");
+		out.computeIfAbsent("readNBytes", m -> new HashMap<>()).put(3, PREFIX + "M-READ-N-BYTES-3");
 		out.computeIfAbsent("write", m -> new HashMap<>()).put(3, PREFIX + "M-WRITE-3");
 		out.computeIfAbsent("getClass", m -> new HashMap<>()).put(0, CLASS_KEY);
 		out.computeIfAbsent("toString", m -> new HashMap<>()).put(0, PREFIX + "STRING");
+		out.computeIfAbsent("toString", m -> new HashMap<>()).put(1, PREFIX + "M-TO-STRING");
 		Map<String, Map<Integer, String>> frozen = new HashMap<>();
 		out.forEach((method, arities) -> frozen.put(method, Map.copyOf(arities)));
 		return Map.copyOf(frozen);
@@ -308,8 +321,13 @@ final class ClojureIoLowering {
 					"java.lang.AutoCloseable"),
 			"java.io.BufferedReader",
 			List.of("java.io.Reader", "java.lang.Readable", "java.io.Closeable", "java.lang.AutoCloseable"),
-			"java.io.BufferedWriter", List.of("java.io.Writer", "java.lang.Appendable", "java.io.Closeable",
-					"java.io.Flushable", "java.lang.AutoCloseable"));
+			"java.io.BufferedWriter",
+			List.of("java.io.Writer", "java.lang.Appendable", "java.io.Closeable", "java.io.Flushable",
+					"java.lang.AutoCloseable"),
+			"java.io.ByteArrayInputStream",
+			List.of("java.io.InputStream", "java.io.Closeable", "java.lang.AutoCloseable"),
+			"java.io.ByteArrayOutputStream",
+			List.of("java.io.OutputStream", "java.io.Closeable", "java.io.Flushable", "java.lang.AutoCloseable"));
 
 	/**
 	 * Whether a value here may be an instance of the class: one of {@link #CLASSES} or a
@@ -341,8 +359,9 @@ final class ClojureIoLowering {
 	 * value here on every backend, or null to keep the host construction: a
 	 * {@code java.io.File} of a path or of a parent and a child, a {@code java.net.URL}
 	 * or {@code java.net.URI} of a string, the file streams of a path or File, a reader
-	 * decoding and a writer encoding a byte stream, and the buffering wrappers, which
-	 * answer the stream they wrap.
+	 * decoding and a writer encoding a byte stream, the buffering wrappers, which answer
+	 * the stream they wrap, and the byte streams over a byte array and into one
+	 * ({@code ByteArrayInputStream}, {@code ByteArrayOutputStream}).
 	 * @param cls the resolved class name
 	 * @param args the lowered arguments
 	 * @return the construction, or null
@@ -358,6 +377,8 @@ final class ClojureIoLowering {
 			case "java.io.BufferedInputStream", "java.io.BufferedOutputStream", "java.io.BufferedWriter" ->
 				n == 1 ? WRAPPED_STREAM : null;
 			case "java.io.OutputStreamWriter" -> n == 1 || n == 2 ? STREAM_WRITER : null;
+			case "java.io.ByteArrayInputStream" -> n == 1 ? BYTES_INPUT : n == 3 ? BYTES_INPUT_3 : null;
+			case "java.io.ByteArrayOutputStream" -> n == 0 || n == 1 ? BYTES_OUTPUT : null;
 			default -> null;
 		};
 		if (worker == null) {
@@ -370,6 +391,10 @@ final class ClojureIoLowering {
 			if (n == 1) {
 				call.add(ClojureLowering.NIL_CONST);
 			}
+		}
+		if (worker.equals(BYTES_OUTPUT) && n == 0) {
+			// the oracle's default initial size
+			call.add(new LispInteger(32));
 		}
 		return ClojureLowerUtil.list(call);
 	}

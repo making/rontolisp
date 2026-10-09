@@ -73,6 +73,23 @@ final class ClojureInteropLowering {
 	 * @return the call
 	 */
 	static LispVal hostCall(ClojureLowering ctx, LispSymbol operator, List<LispVal> parts, int names) {
+		return hostCall(ctx, operator, parts, names, true);
+	}
+
+	/**
+	 * {@link #hostCall(ClojureLowering, LispSymbol, List, int)}, with each argument
+	 * behind the byte-array family's view ({@link ClojureBytesLowering#hostView}) only
+	 * when {@code bytesView}: a {@code String} construction hands its arguments to a
+	 * library function that decodes a byte array itself.
+	 * @param ctx the hub
+	 * @param operator the {@code java:} operator
+	 * @param parts the names and the arguments
+	 * @param names how many leading parts are names, not arguments
+	 * @param bytesView whether an argument crosses behind the byte-array view
+	 * @return the call
+	 */
+	static LispVal hostCall(ClojureLowering ctx, LispSymbol operator, List<LispVal> parts, int names,
+			boolean bytesView) {
 		List<LispVal> crossed = ClojureIoLowering.crossing(operator, parts, names);
 		List<LispVal> ended = new ArrayList<>(parts.size() + 2);
 		ended.addAll(crossed.subList(0, names));
@@ -85,7 +102,7 @@ final class ClojureInteropLowering {
 				continue;
 			}
 			literal &= isLiteral(argument);
-			ended.add(hostArgument(ctx, argument, crossed.get(i)));
+			ended.add(hostArgument(ctx, argument, crossed.get(i), bytesView));
 		}
 		if (!literal) {
 			ended.add(new LispSymbol(LispNames.JAVA_FUNCTIONAL_MARKER));
@@ -131,6 +148,20 @@ final class ClojureInteropLowering {
 	 * @return what the call hands Java
 	 */
 	static LispVal hostArgument(ClojureLowering ctx, LispVal argument, LispVal crossed) {
+		return hostArgument(ctx, argument, crossed, true);
+	}
+
+	/**
+	 * {@link #hostArgument(ClojureLowering, LispVal, LispVal)}, behind the byte-array
+	 * family's view only when {@code bytesView}: a byte array crosses as the vector of
+	 * its signed bytes, which {@code java:} hands a {@code byte[]} parameter.
+	 * @param ctx the hub
+	 * @param argument the lowered argument
+	 * @param crossed the argument behind the io view, or the argument itself
+	 * @param bytesView whether the argument crosses behind the byte-array view
+	 * @return what the call hands Java
+	 */
+	static LispVal hostArgument(ClojureLowering ctx, LispVal argument, LispVal crossed, boolean bytesView) {
 		if (!ctx.hostTarget) {
 			return crossed;
 		}
@@ -143,7 +174,8 @@ final class ClojureInteropLowering {
 				|| argument instanceof LispSymbol local && isPlainLocal(ctx, local)) {
 			return argument;
 		}
-		return ClojureLowerUtil.list(new LispSymbol(HOST_VALUE), crossed);
+		return ClojureLowerUtil.list(new LispSymbol(HOST_VALUE),
+				bytesView ? ClojureBytesLowering.hostView(crossed) : crossed);
 	}
 
 	/**
@@ -478,7 +510,25 @@ final class ClojureInteropLowering {
 		List<LispVal> args = new ArrayList<>();
 		args.add(LispString.literal(designator(cls, types)));
 		args.addAll(lowered);
-		return hostCall(ctx, JAVA_NEW, args, 1);
+		return newCall(ctx, cls, types, args);
+	}
+
+	/**
+	 * The {@code java:new} of a construction over its parts (the designator, then the
+	 * arguments): a {@code java.lang.String} of one to four arguments under the
+	 * byte-array family's alias, which decodes a byte array on every backend
+	 * ({@link ClojureBytesLowering#stringConstruction}), its arguments then behind no
+	 * byte-array view.
+	 */
+	private static LispVal newCall(ClojureLowering ctx, String cls, @Nullable List<String> types, List<LispVal> parts) {
+		if (types == null && cls.equals("java.lang.String")) {
+			LispVal string = ClojureBytesLowering.stringConstruction(cls, parts.size() - 1,
+					hostCall(ctx, JAVA_NEW, parts, 1, false));
+			if (string != null) {
+				return string;
+			}
+		}
+		return hostCall(ctx, JAVA_NEW, parts, 1);
 	}
 
 	/**
@@ -1010,7 +1060,7 @@ final class ClojureInteropLowering {
 		List<LispVal> call = new ArrayList<>();
 		call.add(LispString.literal(designator(cls, types)));
 		call.addAll(args);
-		return hostCall(ctx, JAVA_NEW, call, 1);
+		return newCall(ctx, cls, types, call);
 	}
 
 	/**
@@ -1221,46 +1271,23 @@ final class ClojureInteropLowering {
 	/**
 	 * {@code (make-array Class dim...)}: a general array over the dimensions -- the class
 	 * spells the element type and is ignored, every array here is general (the book's
-	 * {@code interop.clj} {@code painstakingly-create-array} shape). One dimension is the
-	 * scalar, several the dimension list, like the oracle's separate-argument shape; only
-	 * the Clojure spellings are new, the array itself compiles on all four backends.
+	 * {@code interop.clj} {@code painstakingly-create-array} shape) but one dimension of
+	 * {@code Byte/TYPE}, a byte array ({@link ClojureBytesLowering}). One dimension is
+	 * the scalar, several the dimension list, like the oracle's separate-argument shape;
+	 * only the Clojure spellings are new, the array itself compiles on all four backends.
+	 * {@code aget}, {@code aset} and {@code alength} are {@link ClojureBytesLowering}'s.
 	 */
 	static LispVal makeArrayOf(ClojureLowering ctx, List<LispVal> items) {
 		ClojureLowerUtil.isTrue(items.size() >= 3, "make-array takes a class and dimensions");
-		if (!(items.get(1) instanceof LispSymbol)) {
+		if (!(items.get(1) instanceof LispSymbol cls)) {
 			throw new LispReadException("make-array takes a class name, not " + items.get(1).print());
 		}
 		List<LispVal> dims = ctx.lowers(items, 2);
+		if (dims.size() == 1 && ClojureBytesLowering.namesByteType(ctx, cls.name())) {
+			return ClojureBytesLowering.byteArrayOfSize(dims.get(0));
+		}
 		LispVal shape = dims.size() == 1 ? dims.get(0) : ClojureLowerUtil.cons(ClojureLowerUtil.sym("list"), dims);
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("make-array"), shape);
-	}
-
-	/** {@code (aget array index...)}: the element, through {@code aref}. */
-	static LispVal agetOf(ClojureLowering ctx, List<LispVal> items) {
-		ClojureLowerUtil.isTrue(items.size() >= 3, "aget takes an array and subscripts");
-		List<LispVal> ref = new ArrayList<>();
-		ref.add(ClojureLowerUtil.sym("aref"));
-		ref.addAll(ctx.lowers(items, 1));
-		return ClojureLowerUtil.list(ref);
-	}
-
-	/** {@code (aset array index... value)}: the write, through {@code (setf aref)}. */
-	static LispVal asetOf(ClojureLowering ctx, List<LispVal> items) {
-		ClojureLowerUtil.isTrue(items.size() >= 4, "aset takes an array, subscripts and a value");
-		List<LispVal> ref = new ArrayList<>();
-		ref.add(ClojureLowerUtil.sym("aref"));
-		for (int i = 1; i < items.size() - 1; i++) {
-			ref.add(ctx.lower(items.get(i)));
-		}
-		return ClojureLowerUtil.list(ClojureLowerUtil.sym("setf"), ClojureLowerUtil.list(ref),
-				ctx.lower(items.get(items.size() - 1)));
-	}
-
-	/** {@code (alength array)}: the zeroth dimension, through {@code array-dimension}. */
-	static LispVal alengthOf(ClojureLowering ctx, List<LispVal> items) {
-		ClojureLowerUtil.isTrue(items.size() == 2, "alength takes an array");
-		return ClojureLowerUtil.list(ClojureLowerUtil.sym("array-dimension"), ctx.lower(items.get(1)),
-				new LispInteger(0));
 	}
 
 	/**
@@ -1766,7 +1793,8 @@ final class ClojureInteropLowering {
 				|| !(rest.car() instanceof LispString cls)) {
 			return null;
 		}
-		if (ClojureLowerUtil.isSymbolNamed(cell.car(), "JAVA:NEW")) {
+		if (ClojureLowerUtil.isSymbolNamed(cell.car(), "JAVA:NEW")
+				|| ClojureLowerUtil.isSymbolNamed(cell.car(), ClojureBytesLowering.STRING_NEW)) {
 			// a param-tagged construction names the class before its parameter types
 			int tagged = cls.value().indexOf('(');
 			return tagged < 0 ? cls.value() : cls.value().substring(0, tagged);
@@ -2056,6 +2084,7 @@ final class ClojureInteropLowering {
 			};
 			case "concat" -> args.size() == 1 ? ClojureLowerUtil.list(ClojureLowerUtil.sym("concatenate"),
 					ClojureLowerUtil.quoted("string"), recv, args.get(0)) : null;
+			case "getBytes" -> ClojureBytesLowering.getBytes(recv, args);
 			case "repeat" -> args.size() == 1 ? ClojureLowerUtil.list(ClojureLowerUtil.sym("apply"),
 					ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), ClojureLowerUtil.sym("concatenate")),
 					ClojureLowerUtil.quoted("string"), ClojureLowerUtil.list(ClojureLowerUtil.sym("make-list"),

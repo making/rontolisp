@@ -4100,11 +4100,11 @@ public final class ClojureLowering {
 			case "make-array":
 				return ClojureInteropLowering.makeArrayOf(this, items);
 			case "aget":
-				return ClojureInteropLowering.agetOf(this, items);
+				return ClojureBytesLowering.agetOf(this, items);
 			case "aset":
-				return ClojureInteropLowering.asetOf(this, items);
+				return ClojureBytesLowering.asetOf(this, items);
 			case "alength":
-				return ClojureInteropLowering.alengthOf(this, items);
+				return ClojureBytesLowering.alengthOf(this, items);
 			case "vector?":
 				// a string is a CL vector but no Clojure vector, like the oracle
 				ClojureLowerUtil.isTrue(n == 1, "vector? takes one argument");

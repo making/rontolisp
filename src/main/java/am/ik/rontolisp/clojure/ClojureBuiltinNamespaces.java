@@ -38,8 +38,7 @@ final class ClojureBuiltinNamespaces {
 	private static final Map<String, Map<String, String>> SHIPPED = Map.ofEntries(
 			Map.entry("ring.util.response", Map.of()), Map.entry("ring.util.request", Map.of()),
 			Map.entry("ring.util.codec",
-					Map.of("base64-encode", "it takes a byte array", "base64-decode", "it answers a byte array",
-							"form-encode*", "form-encode is a function, not a protocol, here", "FormEncodeable",
+					Map.of("form-encode*", "form-encode is a function, not a protocol, here", "FormEncodeable",
 							"form-encode is a function, not a protocol, here")),
 			Map.entry("ring.util.mime-type", Map.of()), Map.entry("ring.middleware.params", Map.of()),
 			Map.entry("ring.middleware.keyword-params", Map.of()), Map.entry("ring.middleware.content-type", Map.of()),
@@ -129,12 +128,15 @@ final class ClojureBuiltinNamespaces {
 	 * program naming one of them does. {@code clojure.walk}'s {@code macroexpand-all}
 	 * expands at run time, which keeps every macro expander of the program
 	 * ({@code ClojureMacroLowering.macroRuntime}); as a part, a program walking data
-	 * keeps none.
+	 * keeps none. {@code ring.util.codec}'s base64 pair takes and answers a byte array,
+	 * so every program that could make one carries the byte-array family's arms
+	 * ({@link ClojureBytesLowering}); as a part, only a program naming one of them does.
 	 */
 	private static final Map<String, Part> PARTS = Map.of("ring.util.response",
 			new Part("ring/util/response_files.clj",
 					Set.of("file-response", "url-response", "resource-response", "resource-data")),
-			"clojure.walk", new Part("clojure/walk_macroexpand.clj", Set.of("macroexpand-all")));
+			"clojure.walk", new Part("clojure/walk_macroexpand.clj", Set.of("macroexpand-all")), "ring.util.codec",
+			new Part("ring/util/codec_base64.clj", Set.of("base64-encode", "base64-decode")));
 
 	/**
 	 * The part of a shipped namespace defining the var.

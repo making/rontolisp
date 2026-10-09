@@ -465,6 +465,20 @@ class ClojureInteropTest {
 	}
 
 	@Test
+	void aByteArrayCrossesTheJavaBoundaryAsItsBytes() throws Exception {
+		// oracle-identical (clj 1.12.6, 2026-10-09): a byte array is a byte[] to a Java
+		// member -- Arrays/toString, Base64's encoder, a MessageDigest -- and a host
+		// Charset names the charset of .getBytes and of a String construction
+		assertBothEqual(
+				"(def b (.getBytes \"héllo\" java.nio.charset.StandardCharsets/UTF_8))"
+						+ " (prn (java.util.Arrays/toString b) (.encodeToString (java.util.Base64/getEncoder) b)"
+						+ " (String. b java.nio.charset.StandardCharsets/ISO_8859_1)"
+						+ " (java.util.Arrays/equals b (.getBytes \"héllo\")))"
+						+ " (prn (count (.digest (java.security.MessageDigest/getInstance \"SHA-256\") b)))",
+				"\"[104, -61, -87, 108, 108, 111]\" \"aMOpbGxv\" \"hÃ©llo\" true\n32\n");
+	}
+
+	@Test
 	void printTraceElementSpellsAHostStackTraceElementLikeTheOracle() throws Exception {
 		// oracle-identical (clj 1.12.6, 2026-10-08); a throwable built here has no frames
 		// (clojure-spec clojure-stacktrace-prints-no-frames), so only a host element
@@ -489,11 +503,10 @@ class ClojureInteropTest {
 	@Test
 	void clojureJavaShellRunsAHostProcessLikeTheOracle() throws Exception {
 		// oracle-identical (clj 1.12.6, 2026-10-09): the exit code, the output decoded
-		// from
-		// :out-enc, the error output, :in as a string, a File and a reader, :dir, :env
-		// and
-		// the two binding macros; the error output of 100,000 bytes goes to a file, so a
-		// full pipe never stalls the process
+		// from :out-enc or as a byte array, the error output, :in as a string, a File, a
+		// reader, a byte array and a byte stream, :dir, :env and the two binding macros;
+		// the error output of 100,000 bytes goes to a file, so a full pipe never stalls
+		// the process
 		assertBothEqual("(require '[clojure.java.shell :refer [sh with-sh-dir with-sh-env]] '[clojure.java.io :as io])"
 				+ " (defn show [m] (prn (:exit m) (:out m) (:err m)))" + " (show (sh \"echo\" \"hello\"))"
 				+ " (show (sh \"sh\" \"-c\" \"echo out; echo err 1>&2; exit 3\"))"
@@ -509,6 +522,11 @@ class ClojureInteropTest {
 				+ " (io/delete-file in-file)"
 				+ " (show (sh \"cat\" :in (java.io.BufferedReader. (java.io.StringReader. \"from a reader\\n\"))))"
 				+ " (show (sh \"cat\" :in \"\\u00e9\" :in-enc \"ISO-8859-1\" :out-enc \"ISO-8859-1\"))"
+				+ " (let [m (sh \"printf\" \"\\\\377\\\\000A\" :out-enc :bytes)]"
+				+ " (prn (:exit m) (bytes? (:out m)) (vec (:out m)) (:err m)))"
+				+ " (prn (vec (:out (sh \"true\" :out-enc :bytes))))"
+				+ " (show (sh \"od\" \"-An\" \"-tx1\" :in (byte-array [-1 0 65 -61 -87]) :in-enc \"ISO-8859-1\"))"
+				+ " (show (sh \"od\" \"-An\" \"-tx1\" :in (java.io.ByteArrayInputStream. (byte-array [-1 0 65]))))"
 				+ " (prn (try (sh \"no-such-command-rontolisp\") (catch java.io.IOException e :io-exception)))", """
 						0 "hello\\n" ""
 						3 "out\\n" "err\\n"
@@ -522,22 +540,29 @@ class ClojureInteropTest {
 						0 "from a file\\n" ""
 						0 "from a reader\\n" ""
 						0 "\u00e9" ""
+						0 true [-1 0 65] ""
+						[]
+						0 " ff 00 41 c3 a9\\n" ""
+						0 " ff 00 41\\n" ""
 						:io-exception
 						""");
 	}
 
 	@Test
 	void clojureXmlHandsAHostSourceAndAStartparseToTheHostsSaxParser() throws Exception {
-		// oracle-identical (clj 1.12.6, 2026-10-09): a host InputStream is read by
-		// startparse-sax-safe, and a startparse function is handed the source and a host
+		// oracle-identical (clj 1.12.6, 2026-10-09): a host InputStream (a param-tagged
+		// construction) is read by startparse-sax-safe, a byte stream here by rontolisp's
+		// reader, and a startparse function is handed the source and a host
 		// ContentHandler, like the oracle's
 		assertBothEqual("(require '[clojure.xml :as xml])"
+				+ " (prn (xml/parse (^[bytes] java.io.ByteArrayInputStream/new (.getBytes \"<a x='1'>t<b/></a>\" \"UTF-8\"))))"
 				+ " (prn (xml/parse (java.io.ByteArrayInputStream. (.getBytes \"<a x='1'>t<b/></a>\" \"UTF-8\"))))"
 				+ " (def f (str \"/tmp/rontolisp-xml-\" (rand-int 1000000000) \".xml\"))"
 				+ " (spit f \"<r a='1'>  <c>text</c>  </r>\")"
 				+ " (prn (xml/parse (java.io.File. f) xml/startparse-sax))"
 				+ " (prn (xml/parse f (fn [s ch] (.parse (.newSAXParser (javax.xml.parsers.SAXParserFactory/newInstance)) s ch))))"
 				+ " (clojure.java.io/delete-file f)", """
+						{:tag :a, :attrs {:x "1"}, :content ["t" {:tag :b, :attrs nil, :content nil}]}
 						{:tag :a, :attrs {:x "1"}, :content ["t" {:tag :b, :attrs nil, :content nil}]}
 						{:tag :r, :attrs {:a "1"}, :content [{:tag :c, :attrs nil, :content ["text"]}]}
 						{:tag :r, :attrs {:a "1"}, :content [{:tag :c, :attrs nil, :content ["text"]}]}

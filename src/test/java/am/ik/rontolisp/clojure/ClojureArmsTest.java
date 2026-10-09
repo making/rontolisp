@@ -289,6 +289,36 @@ class ClojureArmsTest {
 	}
 
 	@Test
+	void theByteArrayFamilyFoldsItsArmsAliasesAndSetterToTheFormsBeforeByteArrays() {
+		// aget, alength, bytes? and a String construction are aliases of what they
+		// lowered to before, aset a setter of the place it stored into; the tests and the
+		// java: argument's view go like any family's
+		List<LispVal> forms = read("(rontolisp::%clojure-aget a i) (rontolisp::%clojure-aset (f a) i (g v))"
+				+ " (rontolisp::%clojure-alength a 0) (rontolisp::%clojure-is-bytes (f) false)"
+				+ " (rontolisp::%clojure-string-new \"java.lang.String\" (rontolisp::%clojure-host-value x) :java-false)"
+				+ " (java:call o \"m\" (rontolisp::%clojure-host-value (rontolisp::%clojure-bytes-host v)))"
+				+ " (cond ((rontolisp::%clojure-bytes-p c) (length (car (cdr c)))) (t 0))"
+				+ " (if (rontolisp::%clojure-io-array-stream-p s) nil (close s))");
+		ClojureArms.Scan scan = ClojureArms.scan(forms, ClojureArms.Family.BYTES);
+		assertThat(scan.builds()).isFalse();
+		assertThat(scan.strips()).isTrue();
+		assertThat(ClojureArms.strip(forms, ClojureArms.Family.BYTES).stream().map(LispVal::print)).containsExactly(
+				"(AREF A I)", "(SETF (AREF (F A) I) (G V))", "(ARRAY-DIMENSION A 0)", "(PROGN (F) FALSE)",
+				"(JAVA:NEW \"java.lang.String\" (RONTOLISP::%CLOJURE-HOST-VALUE X) :JAVA-FALSE)",
+				"(JAVA:CALL O \"m\" (RONTOLISP::%CLOJURE-HOST-VALUE V))", "(COND (T 0))", "(CLOSE S)");
+		for (String producer : List.of("(rontolisp::%clojure-byte-array 3)", "(rontolisp::%clojure-byte-array-2 3 x)",
+				"(function rontolisp::%clojure-byte-array-v)", "(rontolisp::%clojure-string-bytes s nil)",
+				"(rontolisp::%clojure-io-m-read-all-bytes in)", "(rontolisp::%clojure-io-bytes-output 32)",
+				"(rontolisp::%clojure-io-bytes-input b)", "(rontolisp::%clojure-ring-base64-decode s)",
+				"(rontolisp::%clojure-http-request opts f)")) {
+			assertThat(ClojureArms.scan(read(producer), ClojureArms.Family.BYTES).builds()).as(producer).isTrue();
+		}
+		assertThatThrownBy(() -> ClojureArms.strip(read("(rontolisp::%clojure-aset a)"), ClojureArms.Family.BYTES))
+			.isInstanceOf(IllegalStateException.class)
+			.hasMessageContaining("a setter takes");
+	}
+
+	@Test
 	void theReaderValueFamilyFoldsThePredicatesAndTheReaderArmsOfAProgramReadingWithoutOptions() {
 		// only a read that may take {:read-cond :preserve} and the two constructors make
 		// a reader conditional or a tagged literal: the predicates are (progn x false)

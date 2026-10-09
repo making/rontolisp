@@ -2,7 +2,7 @@
   "Functions for encoding and decoding data: the built-in subset of
   ring-codec's ring.util.codec. A charset is named by a string -- UTF-8,
   ISO-8859-1 or US-ASCII and their aliases -- and defaults to UTF-8. The
-  base64 functions, over byte arrays, are not part of it."
+  base64 functions, over byte arrays, are loaded where a program names one."
   (:require [clojure.string :as str]
             [rontolisp.internal.ring :as kernel]))
 

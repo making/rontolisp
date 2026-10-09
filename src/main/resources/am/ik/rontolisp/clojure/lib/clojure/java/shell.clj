@@ -34,11 +34,16 @@
 
 (defn- input-file
   "A file holding the input in for a process: a File as it is, else a
-  temporary file of its text (a string, or what slurp reads from it) encoded
-  in encoding."
+  temporary file of a byte array's or a byte stream's bytes as they are, or
+  of a text (a string, or what slurp reads from it) encoded in encoding."
   [in encoding]
-  (if (instance? java.io.File in)
-    [in false]
+  (cond
+    (instance? java.io.File in) [in false]
+    (or (bytes? in) (instance? java.io.InputStream in))
+    (let [f (temp-file ".in")]
+      (io/copy in (io/file (.getPath f)))
+      [f true])
+    :else
     (let [f (temp-file ".in")
           text (if (string? in) in (slurp in))
           out (java.io.PrintStream. f encoding)]
@@ -49,10 +54,11 @@
 (defn sh
   "Runs the command the leading strings of args name, then answers a map of
   its :exit code, its standard output :out (decoded from :out-enc, UTF-8 by
-  default) and its standard error :err (decoded from the platform's
-  charset). The options after the strings: :in, a string (encoded in
-  :in-enc, UTF-8 by default), a File or a reader for its standard input; :dir,
-  the directory to run it in; :env, a map that replaces its environment."
+  default; a byte array under :out-enc :bytes) and its standard error :err
+  (decoded from the platform's charset). The options after the strings: :in,
+  a string (encoded in :in-enc, UTF-8 by default), a byte array, an
+  InputStream, a File or a reader for its standard input; :dir, the directory
+  to run it in; :env, a map that replaces its environment."
   [& args]
   (let [[cmd opts] (split-with string? args)
         {:keys [in in-enc out-enc dir env]} (merge {:in-enc "UTF-8" :out-enc "UTF-8" :dir *sh-dir* :env *sh-env*}
@@ -60,9 +66,6 @@
         builder (ProcessBuilder. (vec cmd))
         err-file (temp-file ".err")
         [in-file temporary-in] (when in (input-file in in-enc))]
-    (when (= out-enc :bytes)
-      (throw (UnsupportedOperationException.
-              "clojure.java.shell/sh :out-enc :bytes answers a byte array, which is not built in")))
     (when dir
       (.directory builder (io/file dir)))
     (when env
@@ -77,13 +80,16 @@
       (let [process (.start builder)]
         (when-not in-file
           (.close (.getOutputStream process)))
-        (let [out (java.io.ByteArrayOutputStream.)
-              err (java.io.ByteArrayOutputStream.)]
+        ;; host streams, so the host's charsets decode them
+        (let [out (^[] java.io.ByteArrayOutputStream/new)
+              err (^[] java.io.ByteArrayOutputStream/new)]
           (.transferTo (.getInputStream process) out)
           (let [exit (.waitFor process)]
             (java.nio.file.Files/copy (.toPath err-file) err)
             {:exit exit
-             :out (.toString out out-enc)
+             :out (if (= out-enc :bytes)
+                    (byte-array (.toByteArray out))
+                    (.toString out out-enc))
              :err (.toString err (.name (java.nio.charset.Charset/defaultCharset)))})))
       (finally
         (.delete err-file)
