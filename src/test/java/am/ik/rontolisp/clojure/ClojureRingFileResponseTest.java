@@ -192,8 +192,8 @@ class ClojureRingFileResponseTest {
 		ByteArrayOutputStream out = new ByteArrayOutputStream();
 		CliStack.call("clojure-ring-files", () -> {
 			LispEvaluator evaluator = new LispEvaluator(new PrintStream(out, true, StandardCharsets.UTF_8));
-			for (LispVal form : SourceLanguage.CLOJURE.read(program, Features.INTERPRETER,
-					entry == null ? null : entry.toString(), SourceStandards.DEFAULT, SourceLoader.fileSystem())) {
+			for (LispVal form : evaluator.clojureProgram(SourceLanguage.CLOJURE.read(program, Features.INTERPRETER,
+					entry == null ? null : entry.toString(), SourceStandards.DEFAULT, SourceLoader.fileSystem()))) {
 				evaluator.eval(form);
 			}
 			return null;

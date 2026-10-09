@@ -203,7 +203,9 @@ destructuring、複数アリティは `defn` と同様。docstring と attr map 
 `&form`/`&env` は拒否されます。本体が見えるのは核の built-in、`clojure.lisp`
 ライブラリ、そして呼び出し位置より上にあるプログラムのトップレベル定義（自身のファイル、
 require した名前空間、REPL の前の入力のもの）であり、oracle のフォームごとのロードと
-同じです。`def` の値は、本体がそれを読むときにだけ展開用に作られます。
+同じです。`def` の値は、本体がそれを読むときにだけ展開用に作られます。本体は
+フォームを [eval](reference/eval.md) し、名前を [resolve](reference/resolve.md) できるので、
+`compile-if` はこのフロントエンドが lower できるものでコードを選びます。
 定義は同じ expander を実行時
 テーブルにも登録し、`nil` を返し、セッションをまたいで有効です。定義より上での
 呼び出しはエラーとなり、マクロに関数値はなく、後からの同名 `def`/`defn` が呼び出し
@@ -421,7 +423,8 @@ ClojureScript の `^:mutable` は指定になりません。ローカル・パ�
 `java.io.PushbackReader`/`BufferedReader`/`InputStreamReader` で、いずれもどのバックエンドでも
 ストリームです。`read` はリーダをデータの直後に残します。`str` はオラクル同様、
 コレクション内の文字列をクォートするので、`spit` が書いたものは読み戻せます。
-`eval` と `load-string` は提供しません。実行時にコンパイラが動かないためです。
+`load-string` は提供せず、[eval](reference/eval.md) はプログラムの lower 中（マクロ本体の中）
+だけで動きます。実行時にコンパイラが動かないためです。
 
 ## ホスト境界
 

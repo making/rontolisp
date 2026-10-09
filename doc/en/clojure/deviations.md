@@ -215,6 +215,14 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   form (`if`, `do`, `let*`, `new`, ...), of a head the reader spells (`deref`,
   `syntax-quote`, `ns`, `in-ns`) is refused by name, where the oracle
   accepts it (and ignores it at call sites, for a special form).
+- `eval`, and `resolve` of a computed symbol, run only while the program lowers (in a
+  macro body and what it calls); at run time they throw an
+  `UnsupportedOperationException`, where the oracle evaluates and resolves. `resolve`
+  answers `nil` for a `clojure.core` var this front end lacks (the oracle's var), for a
+  record or type name (the oracle's class) and for a var of a namespace built into the
+  lowering (`clojure.string`); a quoted symbol resolves in the namespace the call lowers
+  in, where the oracle reads `*ns*` when the call runs, and to a definition below the call
+  too. A definition an `eval`'d form makes exists only while the program lowers.
 - `#(...)` reads as the oracle's `(fn* [p1__N# ...] (body))` in source, under a quote and
   in `read-string`/`read`, but N restarts at each top-level form (each datum read), where
   the oracle's counter runs across the process: the parameter names differ, and two reads
@@ -394,8 +402,10 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   plain `clojure.java.io/reader` too, where the oracle requires a `PushbackReader` -- and
   refuses a host reader.
 - `#inst` and `#uuid` read as the oracle's `java.util.Date` and `java.util.UUID` on every
-  backend; [Instants and UUIDs](reference/instants.md) lists the few differences (`str` of an
-  instant answers in UTC, a host value from interop is never `=` to a read one).
+  backend, and so do the `java.util.Date`, `java.sql.Timestamp` and `java.util.UUID`
+  constructions and statics; [Instants and UUIDs](reference/instants.md) lists the few
+  differences (`str` of an instant answers in UTC, a host Date or UUID a Java member answers
+  is `=` to one made here but prints as the host object and is another map key).
 - `clojure.java.io`'s `java.io.File`, `java.net.URL`, `java.net.URI` and byte streams are
   values of this front end's own on every backend; [clojure.java.io](reference/clojure-java-io.md)
   lists the differences (no byte arrays, three charsets, no connection behind an `http:`

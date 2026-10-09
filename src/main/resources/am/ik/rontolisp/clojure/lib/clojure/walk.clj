@@ -82,8 +82,3 @@
   checked after its members were visited."
   [smap form]
   (postwalk (fn [x] (if (contains? smap x) (smap x) x)) form))
-
-(defn macroexpand-all
-  "form with every seq in it macroexpanded, outermost first."
-  [form]
-  (prewalk (fn [x] (if (seq? x) (macroexpand x) x)) form))

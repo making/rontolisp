@@ -229,7 +229,9 @@ class ClojureSessionTest {
 			.flatMap(top -> top.forms().stream())
 			.map(LispVal::print)
 			.toList();
-		assertThat(defined).anyMatch(form -> form.contains("|c%sx-unless%macro|"));
+		// a later input may expand at run time: the table holds the expander itself
+		assertThat(defined).anyMatch(form -> form.contains("(SETQ |c%sx-unless%macro| (LAMBDA "))
+			.noneMatch(form -> form.contains("C%MACRO-EXPANDER"));
 		List<String> call = session.read("(sx-unless false 42)")
 			.stream()
 			.flatMap(top -> top.forms().stream())
@@ -310,6 +312,14 @@ class ClojureSessionTest {
 		assertThat(runSession("(defn sx-helper [x] (list 'inc x)) (def sx-n 10)",
 				"(defmacro sx-m [x] (list '+ sx-n (sx-helper x)))", "(println (sx-m 1))"))
 			.isEqualTo("12\n");
+	}
+
+	@Test
+	void aMacroOfALaterBufferEvaluatesOverWhatAnEarlierOneDefined() {
+		// eval in a macro body lowers through the session's one lowering
+		assertThat(runSession("(defn sx-four [] 4)", "(defmacro sx-if [t a b] (if (eval t) a b))",
+				"(println (sx-if (= (sx-four) 4) :yes :no) (sx-if (resolve 'sx-nowhere) :yes :no))"))
+			.isEqualTo(":yes :no\n");
 	}
 
 	@Test

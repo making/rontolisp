@@ -4,6 +4,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
 
+import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.eval.ClojureMacroTime;
 import am.ik.rontolisp.reader.LispReadException;
@@ -1681,8 +1682,8 @@ class ClojureLoweringTest {
 	void staticMembersResolveByHostArity() {
 		// a zero-argument static method is a static call, even in the (. Class m)
 		// spelling; a field stays a field read, in call and dot-form alike
-		assertThat(lowered("(System/currentTimeMillis)")).contains("JAVA:STATIC").doesNotContain("JAVA:FIELD");
-		assertThat(lowered("(. System currentTimeMillis)")).contains("JAVA:STATIC").doesNotContain("JAVA:FIELD");
+		assertThat(lowered("(System/nanoTime)")).contains("JAVA:STATIC").doesNotContain("JAVA:FIELD");
+		assertThat(lowered("(. System nanoTime)")).contains("JAVA:STATIC").doesNotContain("JAVA:FIELD");
 		assertThat(lowered("(Integer/MAX_VALUE)")).contains("JAVA:FIELD").doesNotContain("JAVA:STATIC");
 		assertThat(lowered("(. Math PI)")).contains("JAVA:FIELD").doesNotContain("JAVA:STATIC");
 		assertThat(lowered("(Math/PI)")).contains("JAVA:FIELD").doesNotContain("JAVA:STATIC");
@@ -1808,6 +1809,39 @@ class ClojureLoweringTest {
 		return forms.stream().map(LispVal::print).collect(Collectors.joining("\n"));
 	}
 
+	/**
+	 * The expander a whole program's {@code C%MACRO-EXPANDER} answers for the index of a
+	 * {@code defmacro}, printed.
+	 */
+	private static String expanderOf(String source, int index) {
+		LispVal table = Clojure.read(source, null, ClojureMacroTime.create())
+			.stream()
+			.filter(form -> form.print().startsWith("(DEFUN C%MACRO-EXPANDER "))
+			.findFirst()
+			.orElseThrow();
+		// (defun C%MACRO-EXPANDER (id) (case id (0 expander) ... (t nil)))
+		List<LispVal> arms = ((LispCons) ((LispCons) table).toList().get(3)).toList();
+		List<LispVal> arm = ((LispCons) arms.get(2 + index)).toList();
+		assertThat(arm.get(0).print()).isEqualTo(String.valueOf(index));
+		return arm.get(1).print();
+	}
+
+	@Test
+	void aWholeProgramsTableHoldsAnIndexIntoTheOneFunctionHoldingTheExpanders() {
+		// only the run-time expansion calls C%MACRO-EXPANDER, so the compile path's
+		// pruner drops every expander of a program expanding nothing at run time
+		String out = loweredWithMacros("""
+				(defmacro mu-a [x] `(inc ~x))
+				(defmacro mu-b [x] `(dec ~x))""");
+		assertThat(out).contains("(PROGN (SETQ |c%mu-a%macro| 0) ")
+			.contains("(PROGN (SETQ |c%mu-b%macro| 1) ")
+			.contains("(C%MACRO-EXPANDER |cell|)")
+			.doesNotContain("FUNCTIONP");
+		assertThat(expanderOf("(defmacro mu-a [x] `(inc ~x)) (defmacro mu-b [x] `(dec ~x))", 1))
+			.contains("'|c%clojure.core/dec|")
+			.doesNotContain("inc");
+	}
+
 	@Test
 	void defmacroEmitsATableEntryAndRegistersTheExpander() {
 		String out = loweredWithMacros("(defmacro mu-unless [c t] (list 'if c nil t))");
@@ -1850,6 +1884,47 @@ class ClojureLoweringTest {
 		assertThat(loweredWithMacros(
 				"(def mu-r 1) (def mu-r (+ mu-r 10)) (defonce mu-r 99) (defmacro mu-read [] mu-r) (mu-read)"))
 			.endsWith("11");
+	}
+
+	@Test
+	void aMacroBodysEvalChoosesTheCodeThisFrontEndLowers() {
+		// data.priority-map's compile-if: a core var the subset lacks resolves to nil, so
+		// the expansion takes the fallback (the oracle, which has it, takes the other);
+		// one it has, hash-unordered-coll included, takes the oracle's branch
+		String compileIf = "(defmacro mu-ci [test then else] (if (eval test) then else)) ";
+		assertThat(loweredWithMacros(compileIf + "(mu-ci (resolve 'clojure.core/seque) :has :lacks)"))
+			.endsWith("\"lacks\")");
+		assertThat(loweredWithMacros(compileIf + "(mu-ci (resolve 'clojure.core/hash-unordered-coll) :has :lacks)"))
+			.endsWith("\"has\")");
+		assertThat(loweredWithMacros(compileIf + "(mu-ci (resolve 'clojure.core/inc) :has :lacks)"))
+			.endsWith("\"has\")");
+		// a class lookup runs on the macro-time JVM, the same on every backend
+		assertThat(loweredWithMacros(
+				compileIf + "(mu-ci (try (Class/forName \"java.util.ArrayList\") (catch Exception _ nil)) :cls :none)"))
+			.endsWith("\"cls\")");
+		assertThat(loweredWithMacros(compileIf + "(mu-ci (resolve 'java.util.List) :cls :none)")).endsWith("\"cls\")");
+		assertThat(loweredWithMacros(compileIf + "(mu-ci (resolve 'no.such.Klass) :cls :none)")).endsWith("\"none\")");
+	}
+
+	@Test
+	void aMacroBodysEvalSeesNoLocalOfTheCallSite() {
+		// the oracle's eval compiles in the namespace, never in the caller's scope
+		assertThatThrownBy(() -> loweredWithMacros(
+				"(defmacro mu-ev [form] (eval form)) (let [mu-local 1] (mu-ev (inc mu-local)))"))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("in macro `mu-ev`")
+			.hasMessageContaining("unknown name: mu-local");
+	}
+
+	@Test
+	void evalAndResolveRefuseWhatTheyCannotTake() {
+		assertThatThrownBy(() -> loweredWithMacros("(resolve {} 'inc)")).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("resolve with an environment map is not supported yet");
+		assertThatThrownBy(() -> loweredWithMacros("(eval 1 2)")).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Wrong number of args (2) passed to: clojure.core/eval");
+		assertThatThrownBy(() -> loweredWithMacros("(defmacro mu-rs [x] (resolve x)) (mu-rs :k)"))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("resolve takes a symbol");
 	}
 
 	@Test
@@ -1913,12 +1988,12 @@ class ClojureLoweringTest {
 	void aCoreNamedMacroBelowAMacroKeepsTheCoreMeaningInItsSyntaxQuote() {
 		// the oracle resolves a syntax-quoted symbol at read time: with-out-str is
 		// clojure.core's until the program's macro is defined
-		String out = loweredWithMacros("""
+		String source = """
 				(defmacro wrap [& body] `(with-out-str ~@body))
 				(defmacro with-out-str [& body] `(do ~@body))
-				(defmacro wrap2 [& body] `(with-out-str ~@body))""");
-		String wrap = out.substring(0, out.indexOf("(PROGN (SETQ |c%with-out-str%macro|"));
-		String wrap2 = out.substring(out.indexOf("(PROGN (SETQ |c%wrap2%macro|"));
+				(defmacro wrap2 [& body] `(with-out-str ~@body))""";
+		String wrap = expanderOf(source, 0);
+		String wrap2 = expanderOf(source, 2);
 		assertThat(wrap).contains("'|c%clojure.core/with-out-str|");
 		assertThat(wrap2).contains("'|c%user/with-out-str|").doesNotContain("clojure.core");
 	}
@@ -2367,8 +2442,13 @@ class ClojureLoweringTest {
 		assertThat(lowered("(merge-with + {:a 1} {:a 2})")).contains("MAPHASH");
 		assertThat(lowered("(into [] [1])")).contains("REDUCE");
 		assertThat(lowered("(frequencies [1])")).contains("GETHASH");
-		assertThatThrownBy(() -> Clojure.read("(update-in {:a 1} :a inc)", null)).isInstanceOf(LispReadException.class)
-			.hasMessageContaining("update-in takes a vector of keys");
+		// a key path that is no literal vector is walked at run time, a literal one
+		// unrolled
+		assertThat(lowered("(defn f [ks] (update-in {:a 1} ks inc))")).contains("RONTOLISP::%CLOJURE-SEQ-ALL");
+		assertThat(lowered("(defn f [ks] (assoc-in {} ks 1))")).contains("RONTOLISP::%CLOJURE-SEQ-ALL");
+		assertThat(lowered("(defn f [ks] (get-in {} ks :d))")).contains("RONTOLISP::%CLOJURE-SEQ-ALL");
+		assertThat(lowered("(get-in {:a {:b 1}} [:a :b] :d)")).doesNotContain("RONTOLISP::%CLOJURE-SEQ-ALL");
+		assertThat(lowered("(update-in {:a 1} [] assoc :b 2)")).doesNotContain("RONTOLISP::%CLOJURE-SEQ-ALL");
 		assertThat(lowered("(into [] (map inc) [1])")).contains("(RONTOLISP::%CLOJURE-INTO-XF (VECTOR)");
 		assertThatThrownBy(() -> Clojure.read("(into [])", null)).isInstanceOf(LispReadException.class)
 			.hasMessageContaining("into takes a target, an optional transducer and a source");

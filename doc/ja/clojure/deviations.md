@@ -204,6 +204,14 @@
  form（`if`、`do`、`let*`、`new` など）、リーダーが綴る先頭（`deref`、
  `syntax-quote`、`ns`、`in-ns`）の `defmacro` は名前を挙げて拒否されます。oracle はこれを
  受け付けます（special form なら呼び出し位置では無視します）。
+- `eval` と、計算で得たシンボルの `resolve` は、プログラムの lower 中（マクロ本体と
+ そこから呼ぶもの）でだけ動きます。実行時は `UnsupportedOperationException` を投げ、
+ oracle は評価・解決します。`resolve` は、このフロントエンドにない `clojure.core` の
+ var（oracle は var）、レコードや型の名前（oracle はクラス）、lower に組み込まれた
+ 名前空間（`clojure.string`）の var に対して `nil` を返します。quote したシンボルは
+ 呼び出しが lower される名前空間で解決され（oracle は呼び出しの実行時の `*ns*` を
+ 読みます）、呼び出しより下の定義にも解決されます。`eval` したフォームが作る定義は
+ lower 中にだけ存在します。
 - `#(...)` はソース、クオートの下、`read-string`/`read` のいずれでもオラクルと同じ
   `(fn* [p1__N# ...] (body))` と読まれますが、N はトップレベルのフォーム（読む datum）
   ごとに 1 から数え直します。オラクルのカウンタはプロセス全体で進むため、引数名が異なり、
@@ -377,9 +385,11 @@
   拒否されます。`read` はストリームを取り、素の `clojure.java.io/reader` も受け付けます
   （オラクルは `PushbackReader` を要求します）。ホストのリーダは拒否します。
 - `#inst` と `#uuid` は、すべてのバックエンドでオラクルの `java.util.Date` と
-  `java.util.UUID` として読まれます。わずかな違い（インスタントの `str` は UTC で答える、
-  interop で得たホストの値は読んだ値と `=` にならない）は[インスタントと UUID](reference/instants.md)
-  にあります。
+  `java.util.UUID` として読まれます。`java.util.Date`、`java.sql.Timestamp`、`java.util.UUID`
+  のコンストラクタと静的メンバーも同じ値を作ります。わずかな違い（インスタントの `str` は UTC で
+  答える、Java のメンバーが返したホストの Date や UUID はここで作った値と `=` になるが、
+  ホストオブジェクトとして印字され、マップでは別のキーになる）は
+  [インスタントと UUID](reference/instants.md) にあります。
 - `clojure.java.io` の `java.io.File`、`java.net.URL`、`java.net.URI`、バイトストリームは、
   すべてのバックエンドでこのフロントエンド自身の値です。違い（バイト配列がない、文字セットは
   3 つ、`http:` URL の背後に接続がない、リソースはクラスパスではなくソースパスで見つける、WASM の

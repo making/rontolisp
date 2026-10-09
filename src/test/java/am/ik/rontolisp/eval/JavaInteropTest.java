@@ -884,6 +884,15 @@ class JavaInteropTest {
 		assertThat(output(JavaImplementationPrograms.SUBCLASS)).isEqualTo(JavaImplementationPrograms.SUBCLASS_OUTPUT);
 	}
 
+	// A java:subclass of ArrayList / LinkedHashMap is a host object whatever its
+	// overrides answer. Mirrors
+	// JvmJavaInteropCompilerTest#aCollectionSubclassIsAHostObject.
+	@Test
+	void aCollectionSubclassIsAHostObject() {
+		assertThat(output(JavaImplementationPrograms.HOST_COLLECTION_SUBCLASS))
+			.isEqualTo(JavaImplementationPrograms.HOST_COLLECTION_SUBCLASS_OUTPUT);
+	}
+
 	// What a java:subclass cannot do is an error: a superclass that is no class, a
 	// final one, an interface where an extra interface goes, a repeated interface, a
 	// method that names nothing, constructor arguments no constructor takes, and a

@@ -3120,6 +3120,48 @@ cases:
       3 12 (1) [2]
       [[1] [1 2]] foo 3 5
       4 -1 4 {:x :k} 7
+  - name: a-macro-body-evaluates-a-form-while-it-expands
+    # eval in a macro body, and in a helper the body calls, evaluates the form at
+    # expansion time over the definitions above the call site, in its namespace, with
+    # no local of the call site in reach; a lowering error is catchable there. resolve
+    # answers the var or nil, of a quoted symbol while the program lowers, of a computed
+    # one at expansion time. evm-compile-if is data.priority-map's and instaparse's
+    # compile-if. clj 1.12.6, oracle-identical.
+    source: |
+      (defmacro evm-compile-if [test then else] (if (eval test) then else))
+      (def evm-x 3)
+      (defn evm-f [] 4)
+      (defn evm-true? [form] (boolean (eval form)))
+      (defmacro evm-when-true [form then] (if (evm-true? form) then :no))
+      (defmacro evm-values [& forms] (vec (map eval forms)))
+      (defmacro evm-plus-one [] (let [y 5] (eval `(+ ~y 1))))
+      (defmacro evm-caught [form] (try (eval form) (catch Exception _ :caught)))
+      (defmacro evm-resolved? [sym] (some? (resolve sym)))
+      (println (evm-compile-if (resolve 'clojure.core/inc) :has :lacks)
+               (evm-compile-if (resolve 'clojure.core/evm-nowhere) :has :lacks)
+               (evm-compile-if (resolve 'evm-f) :f :no-f)
+               (evm-compile-if (resolve 'evm-nowhere) :g :no-g))
+      (println (evm-compile-if (= evm-x 3) :x3 :other) (evm-compile-if (= (evm-f) 4) :f4 :other)
+               (evm-compile-if (>= (:minor *clojure-version*) 9) :new :old)
+               (evm-when-true (resolve 'map) :yes))
+      (println (evm-values (+ 1 2) (str "a" "b") [1 (inc 1)]) (evm-plus-one)
+               (let [x 1] (evm-compile-if (= 1 1) x 0)) (evm-caught (evm-nowhere 1))
+               (evm-resolved? evm-x) (evm-resolved? evm-nowhere))
+      (println (resolve 'inc) (resolve 'evm-f) (resolve 'when) (resolve 'evm-nowhere) (resolve 'nope/x))
+    expected: |
+      :has :lacks :f :no-g
+      :x3 :f4 :new :yes
+      [3 ab [1 2]] 6 1 :caught true false
+      #'clojure.core/inc #'lit/evm-f #'clojure.core/when nil nil
+  - name: eval-and-resolve-of-a-computed-symbol-refuse-at-run-time
+    # A compiled program carries no lowering, so eval and resolve of a computed symbol
+    # refuse when the program runs. The oracle prints 3 and #'clojure.core/inc.
+    source: |
+      (println (try (eval '(+ 1 2)) (catch UnsupportedOperationException e (ex-message e))))
+      (println (let [s 'inc] (try (resolve s) (catch UnsupportedOperationException e (ex-message e)))))
+    expected: |
+      eval is not supported at run time: only a macro body's eval runs, while the program lowers
+      resolve of a computed symbol is not supported at run time: vars exist only while the program lowers
   - name: a-macro-argument-holding-a-regex-literal-expands
     # A macro argument travels quoted into the expander and its answer reads back as a
     # datum: a regex literal answers its pattern, which reads back as the literal (the
@@ -3392,6 +3434,31 @@ cases:
       2 :d 1
       [[0 0] [1 0]] [[0 0] [:x 0]] [2 2]
       [[:q 2] true] {:v [1 :q]} {:v [:q 2]}
+  - name: the-nested-verbs-walk-a-computed-key-path
+    # Oracle-identical (clj 1.12.6): a key path that is no literal vector is walked at
+    # run time (any seqable, nil and empty included); get-in's default answers at the
+    # first missing level instead of being read into; an empty path updates under nil.
+    source: |
+      (def gp-m {:a {:b {:c 1}} :v [10 {:x 2}]})
+      (defn gp-get [ks] (get-in gp-m ks))
+      (defn gp-get-nf [ks] (get-in gp-m ks :nf))
+      (prn (gp-get [:a :b :c]) (gp-get '(:a :b :c)) (gp-get (list :v 1 :x)) (gp-get (map identity [:a :b])) (gp-get [:a :b :c :d]) (gp-get "ab"))
+      (prn (= gp-m (gp-get nil) (gp-get []) (gp-get-nf nil) (gp-get-nf (range 0))) (gp-get-nf [:a :zz]) (gp-get-nf [:a :zz :q]) (gp-get-nf [:a :b :c :d]) (gp-get-nf (list :v 5)))
+      (prn (get-in {} [:a :b] {:b 1}) (let [ks [:a :b]] (get-in {} ks {:b 1})) (let [f get-in] (f {} [:a :b] {:b 1})) (get-in {:a nil} [:a :b] :nf))
+      (prn (get-in {} [:a (do (print "k ") :b)] (do (print "d ") :nf)))
+      (let [ks (list :a :q)] (prn (= {:a {:b 1 :q 9}} (assoc-in {:a {:b 1}} ks 9)) (= {:a 1 nil 9} (assoc-in {:a 1} nil 9)) (assoc-in nil (list :x :y) 9) (assoc-in [10 20] (list 0) 9)))
+      (let [ks '(:a :b)] (prn (update-in {:a {:b 1}} ks inc) (update-in {:a {:b 1}} ks + 10 20) (= {:a 1 nil {:z 1}} (update-in {:a 1} nil assoc :z 1)) (update-in nil (list :x :y) (fnil inc 0))))
+      (prn (update-in {} [] assoc :z 1) (let [f update-in] (f {} [] assoc :z 1)) (update-in {} [] (fn [x] x)))
+      (prn (try (get-in gp-m (identity 5)) (catch Exception e :not-seqable)))
+    expected: |
+      1 1 2 {:c 1} nil nil
+      true :nf :nf :nf :nf
+      {:b 1} {:b 1} {:b 1} :nf
+      k d :nf
+      true true {:x {:y 9}} [9 20]
+      {:a {:b 2}} {:a {:b 31}} true {:x {:y 1}}
+      {nil {:z 1}} {nil {:z 1}} {nil nil}
+      :not-seqable
   - name: replace-maps-through-a-map-or-a-vector
     # Oracle-identical: a vector collection answers a vector, anything else a seq;
     # (replace smap) is the transducer; a set smap signals like the oracle's find.
@@ -8259,6 +8326,17 @@ cases:
       Walked: [1]
       Walked: 1
       {:a [1]}
+  - name: clojure-walk-macroexpand-all-loads-where-a-program-names-it
+    # macroexpand-all is a part of clojure.walk, loaded at its first name: a program
+    # walking data expands nothing at run time and keeps no macro expander. Outermost
+    # first, as the oracle (clj 1.12.6).
+    source: |
+      (defmacro walk-twice [x] `(* 2 ~x))
+      (prn (clojure.walk/macroexpand-all '(+ 1 (walk-twice (walk-twice 3)))))
+      (prn (clojure.walk/macroexpand-all '[(walk-twice 1) {:k (walk-twice 2)}]))
+    expected: |
+      (+ 1 (clojure.core/* 2 (clojure.core/* 2 3)))
+      [(clojure.core/* 2 1) {:k (clojure.core/* 2 2)}]
   - name: clojure-edn-reads-data-only
     # clojure.edn reads data only, like the oracle's EdnReader (.kb/clojure-frontend.md
     # "Reading"): the quote is a symbol constituent, the reader macros of code and
@@ -8566,6 +8644,45 @@ cases:
       [#inst "2020-06-15T10:20:30.456-00:00"
        #uuid "550e8400-e29b-41d4-a716-446655440000"
        {:at #inst "2020-01-01T00:00:00.000-00:00"}]
+  - name: date-and-uuid-constructions-and-statics-make-the-values-read-here
+    # (java.util.Date.), (java.util.Date. ms), (java.sql.Timestamp. ms), (java.util.UUID.
+    # msb lsb), UUID/randomUUID, UUID/fromString and System/currentTimeMillis make the
+    # values #inst and #uuid read -- = to a literal, sorted beside one, the same key -- in
+    # every spelling (new, Class/new, a tagged one, a member value, the dot forms),
+    # refusing an argument no constructor takes as the oracle does; a Date's getTime,
+    # setTime (in place), before, after, compareTo and a Timestamp's getNanos answer, a
+    # member the class lacks is the oracle's refusal. Every line is the oracle's (clj
+    # 1.12.6), on all four backends.
+    source: |
+      (defn tvc-err [f] (try (f) (catch Exception e [(.getName (class e)) (ex-message e)])))
+      (def tvc-d (java.util.Date. 1577836800000))
+      (prn tvc-d (= tvc-d #inst "2020") (compare tvc-d #inst "2021") (inst? tvc-d) (instance? java.util.Date tvc-d) (inst-ms tvc-d))
+      (prn (java.util.Date. 5) (new java.util.Date 7) (java.util.Date/new 9) (map java.util.Date/new [1 2]) (^[long] java.util.Date/new 3))
+      (let [now (java.util.Date.) ms (System/currentTimeMillis)] (prn (inst? now) (integer? ms) (<= (- ms 60000) (inst-ms now) (+ ms 60000)) (pos? (. System currentTimeMillis))))
+      (prn (java.sql.Timestamp. 1500) (java.sql.Timestamp. -1500) (.getNanos (java.sql.Timestamp. 1500)) (str (java.sql.Timestamp. 1500)) (= (java.util.Date. 1500) (java.sql.Timestamp. 1500)) (= (java.sql.Timestamp. 1500) (java.util.Date. 1500)))
+      (prn (java.util.UUID. 1 2) (java.util.UUID. 1.5 2) (java.util.UUID/new -1 -2) (= (java.util.UUID. 1 2) #uuid "00000000-0000-0001-0000-000000000002"))
+      (prn (java.util.UUID/fromString "1-1-1-1-1") (. java.util.UUID fromString "550e8400-e29b-41d4-a716-446655440000") (map java.util.UUID/fromString ["2-2-2-2-2"]))
+      (let [r (java.util.UUID/randomUUID) r2 (. java.util.UUID randomUUID)] (prn (uuid? r) (.version r) (.variant r) (= r (parse-uuid (str r))) (not= r r2) (count (repeatedly 3 java.util.UUID/randomUUID)) (.. java.util.UUID randomUUID toString length)))
+      (prn (tvc-err #(java.util.UUID/fromString "x")) (tvc-err #(java.util.Date. (identity 1.5))) (tvc-err #(java.util.UUID. (identity 18446744073709551615N) 2)))
+      (prn (map first [(tvc-err #(java.util.UUID/fromString (identity 1))) (tvc-err #(java.util.UUID/fromString nil)) (tvc-err #(java.util.UUID. (identity :k) 2)) (tvc-err #(java.sql.Timestamp. nil))]))
+      (let [d (java.util.Date. 5) t (java.sql.Timestamp. 5)] (prn (.setTime d 10) d (.getTime d) (.setTime t 1234) t (.getNanos t)))
+      (prn (.before (java.util.Date. 1) (java.util.Date. 2)) (.after (java.util.Date. 1) (java.util.Date. 2)) (.compareTo (java.util.Date. 1) (java.util.Date. 2)) (.equals (java.util.Date. 1) #inst "1970-01-01T00:00:00.001Z") (.getMostSignificantBits (java.util.UUID. 1 2)) (.compareTo (java.util.UUID. 1 2) (java.util.UUID. 1 3)))
+      (prn (tvc-err #(.foo (java.util.Date. 1))) (tvc-err #(.foo (java.util.UUID. 1 2) 3)) (tvc-err #(.getTime (java.util.UUID. 1 2))))
+      (prn (sort [(java.util.Date. 3) #inst "1970-01-01T00:00:00.002Z" (java.util.Date. 1)]) (sorted-set (java.util.UUID. 2 2) (java.util.UUID. 1 1)) (get {#inst "1970-01-01T00:00:00.007Z" :hit} (java.util.Date. 7)) (contains? #{(java.util.UUID. 1 2)} #uuid "00000000-0000-0001-0000-000000000002") (hash-set (java.util.Date. 1) (java.util.Date. 1)))
+    expected: |
+      #inst "2020-01-01T00:00:00.000-00:00" true -1 true true 1577836800000
+      #inst "1970-01-01T00:00:00.005-00:00" #inst "1970-01-01T00:00:00.007-00:00" #inst "1970-01-01T00:00:00.009-00:00" (#inst "1970-01-01T00:00:00.001-00:00" #inst "1970-01-01T00:00:00.002-00:00") #inst "1970-01-01T00:00:00.003-00:00"
+      true true true true
+      #inst "1970-01-01T00:00:01.500000000-00:00" #inst "1969-12-31T23:59:58.500000000-00:00" 500000000 "1970-01-01 00:00:01.5" true false
+      #uuid "00000000-0000-0001-0000-000000000002" #uuid "00000000-0000-0001-0000-000000000002" #uuid "ffffffff-ffff-ffff-ffff-fffffffffffe" true
+      #uuid "00000001-0001-0001-0001-000000000001" #uuid "550e8400-e29b-41d4-a716-446655440000" (#uuid "00000002-0002-0002-0002-000000000002")
+      true 4 2 true true 3 36
+      ["java.lang.IllegalArgumentException" "Invalid UUID string: x"] ["java.lang.IllegalArgumentException" "No matching ctor found for class java.util.Date"] ["java.lang.IllegalArgumentException" "Value out of range for long: 18446744073709551615"]
+      ("java.lang.ClassCastException" "java.lang.NullPointerException" "java.lang.ClassCastException" "java.lang.NullPointerException")
+      nil #inst "1970-01-01T00:00:00.010-00:00" 10 nil #inst "1970-01-01T00:00:01.234000000-00:00" 234000000
+      true false -1 true 1 -1
+      ["java.lang.IllegalArgumentException" "No matching field found: foo for class java.util.Date"] ["java.lang.IllegalArgumentException" "No matching method foo found taking 1 args for class java.util.UUID"] ["java.lang.IllegalArgumentException" "No matching field found: getTime for class java.util.UUID"]
+      (#inst "1970-01-01T00:00:00.001-00:00" #inst "1970-01-01T00:00:00.002-00:00" #inst "1970-01-01T00:00:00.003-00:00") #{#uuid "00000000-0000-0001-0000-000000000001" #uuid "00000000-0000-0002-0000-000000000002"} :hit true #{#inst "1970-01-01T00:00:00.001-00:00"}
   - name: clojure-template-substitutes-per-group-of-values
     # The built-in clojure.template (.kb/clojure-frontend.md "clojure.jar namespaces"):
     # apply-template substitutes at any depth, do-template expands to one copy per

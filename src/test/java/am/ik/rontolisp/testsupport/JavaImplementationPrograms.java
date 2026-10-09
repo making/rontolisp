@@ -316,6 +316,53 @@ public final class JavaImplementationPrograms {
 			"x\"""";
 
 	/**
+	 * A java:subclass of the classes a Lisp array and hash table are built on is a host
+	 * object: its own overrides are never asked whether it is one -- an {@code isEmpty}
+	 * that says "not empty" on an empty list, a {@code get} that answers a list for any
+	 * key -- whether it is the receiver of a resolved call or of one left to run time, an
+	 * argument, or tested by a predicate.
+	 */
+	public static final String HOST_COLLECTION_SUBCLASS = """
+			(defun empty-p (x) (java:call x "isEmpty"))
+			(defun add-all (x y) (java:call x "addAll" y))
+			(let ((l (java:subclass "java.util.ArrayList" '() '("isEmpty") (lambda (this name &rest args) nil)))
+			      (s (java:subclass "java.util.ArrayList" '() '("size") (lambda (this name &rest args) 1)))
+			      (m (java:subclass "java.util.LinkedHashMap" '() '("get")
+			            (lambda (this name &rest args) (java:new "java.util.ArrayList")))))
+			  (print (java:call l "isEmpty"))
+			  (print (empty-p l))
+			  (print (java:call l "size"))
+			  (print (arrayp l))
+			  (print (vectorp l))
+			  (print (java:call (java:new "java.util.ArrayList") "addAll" l))
+			  (print (java:call (java:new "java.util.ArrayList") "addAll" s))
+			  (print (add-all (java:new "java.util.ArrayList") s))
+			  (print (stringp s))
+			  (print (typep s 'simple-array))
+			  (print (java:call m "size"))
+			  (print (empty-p m))
+			  (print (hash-table-p m))
+			  (print (java:call (java:new "java.util.HashMap") "equals" m)))
+			""";
+
+	/** What {@link #HOST_COLLECTION_SUBCLASS} prints. */
+	public static final String HOST_COLLECTION_SUBCLASS_OUTPUT = """
+			NIL
+			NIL
+			0
+			NIL
+			NIL
+			NIL
+			NIL
+			NIL
+			NIL
+			NIL
+			0
+			T
+			NIL
+			T""";
+
+	/**
 	 * A listener held in a {@code let} keeps its kind, so the calls passing it resolve:
 	 * added, fired, removed, fired again.
 	 */
