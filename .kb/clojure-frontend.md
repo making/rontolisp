@@ -1314,8 +1314,9 @@ oracle's classpath; a `deps.edn` ring-core newer than the shipped one refuses th
   truncated to seconds, a `jar:` URL's `Last-Modified` = the JAR FILE's mtime (not the
   entry's) and `Content-Length` the entry size, `resource-response` of a directory nil.
   Deviations: no symlink resolved (oracle's canonical path refuses a link out of `:root`;
-  wasm's WASI does not follow one out of the preopen either); a computed resource name
-  inside a jar is nil (clojure.java.io's); a no-method miss in this front end's words. Both
+  the interpreter and the JVM serve it, both wasm backends did not follow it; `.todo/e95`);
+  a computed resource name inside a jar is nil (clojure.java.io's, `.todo/e96`); a
+  no-method miss in this front end's words. Both
   wasm backends answer `file-write-date` (2026-10-09), so one expectation holds on all four.
 - Refusals: a var the oracle's namespace has and the built-in one leaves out
   (`base64-*`, `form-encode*`, `FormEncodeable`) is `ns/var is not built in: <why>` qualified and
