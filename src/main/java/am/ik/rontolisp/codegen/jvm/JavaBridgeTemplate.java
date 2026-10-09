@@ -591,7 +591,7 @@ final class JavaBridgeTemplate {
 
 	// Whether the interface has exactly one method a class must implement, Object's
 	// three aside: what a Java lambda can implement (mirrors
-	// compiler/JavaImplementations.isFunctionalInterface). Remembered per interface.
+	// compiler/JavaInterfaceMethods.isFunctionalInterface). Remembered per interface.
 	private static boolean isFunctionalInterface(Class<?> iface) {
 		Boolean known = FUNCTIONAL_INTERFACES.get(iface);
 		if (known == null) {

@@ -2269,12 +2269,111 @@ final class JvmRuntimeBuilder {
 	}
 
 	/**
+	 * The name of {@code _lfLine}, the one line reader every plain {@code BufferedReader}
+	 * shares.
+	 */
+	static final String LF_LINE_METHOD = "_lfLine";
+
+	/** The descriptor of {@code _lfLine}. */
+	static final String LF_LINE_DESC = "(Ljava/io/BufferedReader;)Ljava/lang/String;";
+
+	/**
+	 * Builds bytecode for {@code _lfLine(BufferedReader) -> String}: one line, ended by
+	 * {@code \n} alone, with one trailing {@code \r} dropped -- the WASM backends' rule,
+	 * which {@code BufferedReader.readLine} (a lone {@code \r} also ends a line) is not.
+	 * Returns null at end of input.
+	 */
+	static MethodCode buildLfLineBody(ConstantPool cp) {
+		// Slots: 0=r, 1=c (int), 2=sb, 3=n (int)
+		ClassEntry readerClass = cp.classEntry("java/io/BufferedReader");
+		ClassEntry builderClass = cp.classEntry("java/lang/StringBuilder");
+		MethodRefEntry read = cp.methodRef(readerClass, "read", "()I");
+		MethodRefEntry builderInit = cp.methodRef(builderClass, "<init>", "()V");
+		MethodRefEntry append = cp.methodRef(builderClass, "append", "(C)Ljava/lang/StringBuilder;");
+		MethodRefEntry toString = cp.methodRef(builderClass, "toString", "()Ljava/lang/String;");
+		MethodCode code = new MethodCode();
+		// c = r.read(); if (c < 0) return null;
+		code.aload(0);
+		code.invokevirtual(read);
+		code.istore(1);
+		code.iload(1);
+		MethodCode.Label haveChar = code.newLabel();
+		code.ifge(haveChar);
+		code.aconst_null();
+		code.areturn();
+		code.labelBinding(haveChar);
+		// sb = new StringBuilder();
+		code.new_(builderClass);
+		code.dup();
+		code.invokespecial(builderInit);
+		code.astore(2);
+		// while (c >= 0 && c != '\n') { sb.append((char) c); c = r.read(); }
+		MethodCode.Label loop = code.newBoundLabel();
+		MethodCode.Label ended = code.newLabel();
+		code.iload(1);
+		code.iflt(ended);
+		code.iload(1);
+		code.loadConstant('\n');
+		code.if_icmpeq(ended);
+		code.aload(2);
+		code.iload(1);
+		code.i2c();
+		code.invokevirtual(append);
+		code.pop();
+		code.aload(0);
+		code.invokevirtual(read);
+		code.istore(1);
+		code.goto_(loop);
+		code.labelBinding(ended);
+		emitStripTrailingCr(code, cp, 2, 3);
+		// return sb.toString();
+		code.aload(2);
+		code.invokevirtual(toString);
+		code.areturn();
+		return code;
+	}
+
+	/**
+	 * Emits {@code if (sb.length() > 0 && sb.charAt(sb.length() - 1) == '\r')
+	 * sb.setLength(sb.length() - 1);} over the {@code StringBuilder} in a local.
+	 * @param code the method being built
+	 * @param cp its constant pool
+	 * @param builderSlot the local holding the builder
+	 * @param scratchSlot a free int local
+	 */
+	static void emitStripTrailingCr(MethodCode code, ConstantPool cp, int builderSlot, int scratchSlot) {
+		ClassEntry builderClass = cp.classEntry("java/lang/StringBuilder");
+		MethodCode.Label done = code.newLabel();
+		// n = sb.length(); if (n <= 0) skip;
+		code.aload(builderSlot);
+		code.invokevirtual(cp.methodRef(builderClass, "length", "()I"));
+		code.istore(scratchSlot);
+		code.iload(scratchSlot);
+		code.ifle(done);
+		// if (sb.charAt(n - 1) != '\r') skip;
+		code.aload(builderSlot);
+		code.iload(scratchSlot);
+		code.iconst_1();
+		code.isub();
+		code.invokevirtual(cp.methodRef(builderClass, "charAt", "(I)C"));
+		code.loadConstant('\r');
+		code.if_icmpne(done);
+		// sb.setLength(n - 1);
+		code.aload(builderSlot);
+		code.iload(scratchSlot);
+		code.iconst_1();
+		code.isub();
+		code.invokevirtual(cp.methodRef(builderClass, "setLength", "(I)V"));
+		code.labelBinding(done);
+	}
+
+	/**
 	 * Builds bytecode for _readLine helper. Lazily initializes static _stdinReader field,
 	 * reads a line, and wraps it with '"' prefix/suffix for the internal string format.
 	 * Returns null for EOF.
 	 */
 	static MethodCode buildReadLineBody(ClassEntry bufferedReaderClass, ClassEntry inputStreamReaderClass,
-			MethodRefEntry brInit, MethodRefEntry brReadLine, MethodRefEntry isrInit, FieldRefEntry systemIn,
+			MethodRefEntry brInit, MethodRefEntry lfLine, MethodRefEntry isrInit, FieldRefEntry systemIn,
 			FieldRefEntry stdinReaderField, StringEntry quoteStr, MethodRefEntry stringConcat) {
 		MethodCode code = new MethodCode();
 		// if (_stdinReader == null)
@@ -2292,9 +2391,9 @@ final class JvmRuntimeBuilder {
 		code.putstatic(stdinReaderField);
 		// end if
 		code.labelBinding(ifNonnull);
-		// String line = _stdinReader.readLine();
+		// String line = _lfLine(_stdinReader);
 		code.getstatic(stdinReaderField);
-		code.invokevirtual(brReadLine);
+		code.invokestatic(lfLine);
 		code.astore(0);
 		// if (line == null) return null;
 		code.aload(0);

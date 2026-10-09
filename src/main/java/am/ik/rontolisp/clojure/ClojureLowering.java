@@ -2196,10 +2196,12 @@ public final class ClojureLowering {
 				&& !ClojureNamespaceLowering.isKnownNamespace(head)) {
 			return head;
 		}
-		if (ClojureBuiltinNamespaces.isStartup(head) && this.topLevelDepth > 0
+		if ((ClojureBuiltinNamespaces.isStartup(head) || this.session && ClojureBuiltinNamespaces.isReplRequire(head)
+				&& ClojureBuiltinNamespaces.isShipped(head)) && this.topLevelDepth > 0
 				&& !this.loadingNamespaces.contains(head)) {
-			// the oracle loaded it before the program: its first qualified name loads
-			// it here, ahead of the datum naming it
+			// the oracle loaded it before the program (or its REPL before the first
+			// input): its first qualified name loads it here, ahead of the datum naming
+			// it
 			ClojureNamespaceLowering.preload(this, head);
 			return this.createdNamespaces.contains(head) ? head : null;
 		}
@@ -2221,6 +2223,7 @@ public final class ClojureLowering {
 			}
 			VarRef referred = ns().refers.get(name);
 			if (referred != null && !ClojureNamespaceLowering.isKnownNamespace(referred.ns())) {
+				loadReplRefer(name, referred);
 				loadPartOf(referred.ns(), referred.var());
 				String key = varKey(referred.ns(), referred.var());
 				return this.globals.containsKey(key) && !pendingCoreMacro(key, name) ? key : null;
@@ -2234,6 +2237,42 @@ public final class ClojureLowering {
 		loadPartOf(target, name.substring(slash + 1));
 		String key = varKey(target, name.substring(slash + 1));
 		return this.globals.containsKey(key) ? key : null;
+	}
+
+	/**
+	 * Refers into {@code user} what the oracle's REPL refers before the first input
+	 * ({@code clojure.main/repl-requires}), loading nothing: a namespace loads where a
+	 * name first reaches one of its refers ({@link #loadReplRefer}).
+	 */
+	void referReplRequires() {
+		ClojureNsState user = this.namespaces.computeIfAbsent("user", n -> new ClojureNsState());
+		for (Map.Entry<String, List<String>> lib : ClojureBuiltinNamespaces.replRequires().entrySet()) {
+			for (String var : lib.getValue()) {
+				user.refers.putIfAbsent(var, new VarRef(lib.getKey(), var));
+			}
+		}
+	}
+
+	/**
+	 * Loads the namespace of a session's REPL refer ({@link #referReplRequires}) where a
+	 * top-level datum first names it, like a namespace the oracle loads before the
+	 * program; refuses a refer the namespace leaves out, or of a namespace not shipped,
+	 * by name. Nothing for a local of the name, or outside a session.
+	 * @param name the unqualified name
+	 * @param referred the var it refers
+	 */
+	private void loadReplRefer(String name, VarRef referred) {
+		String ns = referred.ns();
+		if (!this.session || this.topLevelDepth == 0 || !ClojureBuiltinNamespaces.isReplRequire(ns) || isLocal(name)) {
+			return;
+		}
+		String why = ClojureBuiltinNamespaces.replRefusal(ns, referred.var());
+		if (why != null) {
+			throw new LispReadException(why);
+		}
+		if (!this.loadedNamespaces.contains(ns) && !this.loadingNamespaces.contains(ns)) {
+			ClojureNamespaceLowering.preload(this, ns);
+		}
 	}
 
 	/**
@@ -3989,8 +4028,10 @@ public final class ClojureLowering {
 			case "pr":
 				return ClojureStringLowering.prCall(this, items, false);
 			case "newline":
+				// answers nil, like the oracle's (and every print verb's here)
 				ClojureLowerUtil.isTrue(n == 0, "newline takes no argument");
-				return ClojureLowerUtil.list(ClojureLowerUtil.sym("princ"), LispString.literal("\n"));
+				return ClojureLowerUtil.list(ClojureLowerUtil.sym("progn"),
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("princ"), LispString.literal("\n")), NIL_CONST);
 			case "flush":
 				ClojureLowerUtil.isTrue(n == 0, "flush takes no argument");
 				return ClojureLowerUtil.list(ClojureLowerUtil.sym("progn"), ClojureLowerUtil

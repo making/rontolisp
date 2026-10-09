@@ -4,6 +4,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.TreeSet;
@@ -54,11 +55,7 @@ final class ClojureBuiltinNamespaces {
 			Map.entry("clojure.math", Map.of()), Map.entry("clojure.java.io", Map.of()),
 			Map.entry("clojure.repl", replLeftOut()), Map.entry("clojure.main", mainLeftOut()),
 			Map.entry("clojure.java.shell", Map.of()), Map.entry("clojure.xml", xmlLeftOut()),
-			Map.entry("clojure.pprint",
-					Map.of("cl-format", "Common Lisp format directives over Clojure values are not built in",
-							"formatter", "Common Lisp format directives over Clojure values are not built in",
-							"formatter-out", "Common Lisp format directives over Clojure values are not built in")),
-			Map.entry("rontolisp.http-client", httpClientLeftOut()));
+			Map.entry("clojure.pprint", Map.of()), Map.entry("rontolisp.http-client", httpClientLeftOut()));
 
 	/**
 	 * The public vars of babashka.http-client 0.4.23 that {@code rontolisp.http-client}
@@ -191,6 +188,23 @@ final class ClojureBuiltinNamespaces {
 			"clojure.zip", "clojure.spec.alpha", "clojure.spec.gen.alpha", "clojure.spec.test.alpha",
 			"clojure.core.specs.alpha");
 
+	/**
+	 * The language's namespaces the oracle's REPL requires that are not shipped, with
+	 * why: a refer of one of their vars names it.
+	 */
+	private static final Map<String, String> LANGUAGE_NOT_SHIPPED = Map.of("clojure.java.javadoc",
+			"it opens a web browser on a class's Javadoc", "clojure.repl.deps",
+			"it adds libraries to a running REPL; a session's libraries are the project's deps.edn");
+
+	/**
+	 * The refers {@code clojure.main/repl-requires} (clj 1.12.6) names, per namespace:
+	 * what the oracle's REPL refers into {@code user} before the first input.
+	 */
+	private static final Map<String, List<String>> REPL_REQUIRES = Map.of("clojure.repl",
+			List.of("source", "apropos", "dir", "pst", "doc", "find-doc"), "clojure.java.javadoc", List.of("javadoc"),
+			"clojure.pprint", List.of("pp", "pprint"), "clojure.repl.deps",
+			List.of("add-libs", "add-lib", "sync-deps"));
+
 	/** The ring-core namespaces left out, refused by name. */
 	private static final Set<String> NOT_SHIPPED = Set.of("ring.middleware.content-length", "ring.middleware.cookies",
 			"ring.middleware.file", "ring.middleware.file-info", "ring.middleware.flash", "ring.middleware.head",
@@ -221,6 +235,46 @@ final class ClojureBuiltinNamespaces {
 	 */
 	static boolean isLanguage(String ns) {
 		return LANGUAGE.contains(ns);
+	}
+
+	/**
+	 * Why one of the language's namespaces is refused, when the oracle's REPL requires it
+	 * and it is not shipped.
+	 * @param ns the namespace
+	 * @return the refusal, or {@code null} for any other namespace
+	 */
+	static @Nullable String languageNotShipped(String ns) {
+		String why = LANGUAGE_NOT_SHIPPED.get(ns);
+		return why == null ? null : ns + " is not built in: " + why;
+	}
+
+	/**
+	 * The refers of the oracle's REPL, which a session refers into {@code user}.
+	 * @return the vars, per namespace
+	 */
+	static Map<String, List<String>> replRequires() {
+		return REPL_REQUIRES;
+	}
+
+	/**
+	 * Whether the oracle's REPL loads the namespace before the first input.
+	 * @param ns the namespace
+	 * @return whether a session reaches its vars without a {@code require}
+	 */
+	static boolean isReplRequire(String ns) {
+		return REPL_REQUIRES.containsKey(ns);
+	}
+
+	/**
+	 * Why a var the oracle's REPL refers is refused: one its namespace leaves out, or any
+	 * of a namespace not shipped.
+	 * @param ns the namespace
+	 * @param var the var name
+	 * @return the refusal, or {@code null} for a var the namespace defines
+	 */
+	static @Nullable String replRefusal(String ns, String var) {
+		String why = LANGUAGE_NOT_SHIPPED.get(ns);
+		return why == null ? leftOut(ns, var) : ns + "/" + var + " is not built in: " + why;
 	}
 
 	/**

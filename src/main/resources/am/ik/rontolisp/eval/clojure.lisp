@@ -14534,6 +14534,9 @@
 ;;;; ones of a block that has broken, taken. The blanks ending a write are held
 ;;;; back, dropped before a taken newline. A newline in the text forces the
 ;;;; buffer out and starts a line at column 0, as the oracle's writer does.
+;;;; Two more events: a flush, where a nested pprint or write ends (the
+;;;; buffer written as it stands), and an event carrying its own layout
+;;;; function (cl-format's ~T and ~:;, which read the column reached).
 ;;;;
 ;;;; A block is #(parent prefix per-line-prefix suffix start-col indent done-nl
 ;;;; intra-nl saved-length); the capture state #(stream events block level
@@ -14543,6 +14546,18 @@
 (defvar rontolisp::%clojure-pp-state
   nil
   "The pretty print in progress, or NIL outside one.")
+
+(defun rontolisp::%clojure-pp-active ()
+  "The pretty print in progress when *standard-output* is its capture stream,
+   the oracle's *out* being its pretty writer; NIL otherwise, so what runs
+   with *out* bound elsewhere (with-out-str inside a dispatch, a writer of
+   the program's) writes plain text, as it does outside a pretty print."
+  (let ((state rontolisp::%clojure-pp-state))
+    (if (and state (eq *standard-output* (aref state 0))) state nil)))
+
+(defun rontolisp::%clojure-pp-active-p ()
+  "Whether *out* is the pretty writer of a pretty print in progress."
+  (if (rontolisp::%clojure-pp-active) t nil))
 
 (defun rontolisp::%clojure-pp-push (state event)
   "EVENT added to STATE's events, newest first."
@@ -14557,9 +14572,19 @@
 (defun rontolisp::%clojure-pp-call (thunk margin miser)
   "THUNK run as a pretty print: its output laid out within the right MARGIN
    (nil for none) and MISER width, then written to *standard-output*; answers
-   THUNK's value. Inside a pretty print already, THUNK just adds to it."
-  (if rontolisp::%clojure-pp-state
-      (funcall thunk)
+   THUNK's value. When *standard-output* is the pretty writer of a print in
+   progress, THUNK adds to it, and what it left buffered is then written out
+   with no newline decided, as the oracle's pprint and write flush the pretty
+   writer they reuse; any other output (a string a dispatch collects, a writer
+   of its own) gets a pretty print of its own, as the oracle wraps a writer
+   that is no pretty writer."
+  (if (rontolisp::%clojure-pp-active)
+      (let ((value (funcall thunk)) (state (rontolisp::%clojure-pp-active)))
+        (if state
+            (progn
+              (rontolisp::%clojure-pp-flush state)
+              (rontolisp::%clojure-pp-push state (list :flush))))
+        value)
       (let* ((root (vector nil nil nil nil 0 0 nil nil nil))
              (state (vector (make-string-output-stream) nil root 0 nil))
              (value
@@ -14576,7 +14601,7 @@
    the pretty print is LEVEL-LIMIT (*print-level*) blocks deep. A per-line
    prefix is written after each newline the block takes. Outside a pretty
    print the prefix is plain text."
-  (let ((state rontolisp::%clojure-pp-state))
+  (let ((state (rontolisp::%clojure-pp-active)))
     (cond ((null state)
            (if prefix (write-string prefix))
            t)
@@ -14597,7 +14622,7 @@
 (defun rontolisp::%clojure-pp-end (suffix)
   "End the current logical block (its suffix written at the layout; SUFFIX
    is written as plain text outside a pretty print)."
-  (let ((state rontolisp::%clojure-pp-state))
+  (let ((state (rontolisp::%clojure-pp-active)))
     (if state
         (let ((block (aref state 2)))
           (rontolisp::%clojure-pp-flush state)
@@ -14633,7 +14658,7 @@
                                                (cons "fill" :fill)
                                                (cons "mandatory" :mandatory))
                                          "#{:mandatory :miser :fill :linear}"))
-        (state rontolisp::%clojure-pp-state))
+        (state (rontolisp::%clojure-pp-active)))
     (if state
         (progn
           (rontolisp::%clojure-pp-flush state)
@@ -14647,7 +14672,7 @@
          (rontolisp::%clojure-pp-keyword relative-to
           (list (cons "block" :block) (cons "current" :current))
           "#{:block :current}"))
-        (state rontolisp::%clojure-pp-state))
+        (state (rontolisp::%clojure-pp-active)))
     (if state
         (progn
           (rontolisp::%clojure-pp-flush state)
@@ -14656,14 +14681,77 @@
     nil))
 
 (defun rontolisp::%clojure-pp-fresh-line ()
-  "A newline unless the output is at the start of a line."
-  (let ((state rontolisp::%clojure-pp-state))
+  "A newline unless the pretty print in progress is at the start of a line;
+   outside one always a newline, as the oracle's writer that keeps no column
+   writes one."
+  (let ((state (rontolisp::%clojure-pp-active)))
     (if state
         (progn
           (rontolisp::%clojure-pp-flush state)
           (rontolisp::%clojure-pp-push state (list :fresh)))
-        (fresh-line))
+        (terpri))
     nil))
+
+(defun rontolisp::%clojure-pp-tab (colnum colinc relative)
+  "cl-format's ~T in the pretty print in progress: spaces to column COLNUM
+   (or COLNUM past the column, RELATIVE), then on to a multiple of COLINC,
+   counted at the layout from the column its writer has reached, as the
+   oracle's base column is; answers false outside a pretty print."
+  (let ((state (rontolisp::%clojure-pp-active)))
+    (if state
+        (progn
+          (rontolisp::%clojure-pp-flush state)
+          (rontolisp::%clojure-pp-push state
+                                       (list
+                                        :lay
+                                        (function
+                                         rontolisp::%clojure-pp-lay-tab) colnum
+                                        colinc
+                                        (rontolisp::%clojure-truthy relative)))
+          t)
+        nil)))
+
+(defun rontolisp::%clojure-pp-lay-tab (w args)
+  "The blanks of a ~T event (ARGS: colnum colinc relative) written by the
+   writer W at the column it has reached."
+  (rontolisp::%clojure-pp-text w
+                               (rontolisp::%clojure-pp-tab-text (aref w 1)
+                                (car args) (car (cdr args))
+                                (car (cdr (cdr args))))))
+
+(defun rontolisp::%clojure-pp-tab-text (column colnum colinc relative)
+  "The blanks ~T writes at COLUMN: to COLNUM, or on to the next multiple of
+   COLINC past it; RELATIVE, COLNUM blanks and on to a multiple of COLINC."
+  (let ((n
+         (if relative
+             (let ((offset (if (> colinc 0) (rem (+ colnum column) colinc) 0)))
+               (+ colnum (if (= offset 0) 0 (- colinc offset))))
+             (cond ((< column colnum) (- colnum column))
+                   ((= colinc 0) 0)
+                   (t (- colinc (rem (- column colnum) colinc)))))))
+    (make-string (if (> n 0) n 0) :initial-element #\Space)))
+
+(defun rontolisp::%clojure-pp-eol (text needed limit)
+  "The ~:; clause TEXT of a cl-format justification, written at the layout
+   when the column then reached plus NEEDED passes LIMIT; answers false
+   outside a pretty print."
+  (let ((state (rontolisp::%clojure-pp-active)))
+    (if state
+        (progn
+          (rontolisp::%clojure-pp-flush state)
+          (rontolisp::%clojure-pp-push state
+                                       (list :lay
+                                             (function
+                                              rontolisp::%clojure-pp-lay-eol)
+                                             text needed limit))
+          t)
+        nil)))
+
+(defun rontolisp::%clojure-pp-lay-eol (w args)
+  "The text of a ~:; event (ARGS: text needed limit), written by the writer W
+   when its column plus NEEDED passes LIMIT."
+  (if (> (+ (aref w 1) (car (cdr args))) (car (cdr (cdr args))))
+      (rontolisp::%clojure-pp-text w (car args))))
 
 (defun rontolisp::%clojure-pp-length-reached (limit)
   "Whether the current block has written LIMIT (*print-length*) objects."
@@ -14976,6 +15064,19 @@
                      (rontolisp::%clojure-pp-blanks w)
                      (rontolisp::%clojure-pp-write-token w event))
                    (rontolisp::%clojure-pp-buffer w event)))
+              ((eq kind :lay)
+               ;; an event carrying its own layout (cl-format's ~T and ~:;),
+               ;; so a pretty print without one carries none of it
+               (funcall (car (cdr event)) w (cdr (cdr event))))
+              ((eq kind :flush)
+               ;; the oracle's ppflush: the buffer written as it stands, the
+               ;; writer left buffering
+               (if (eq (aref w 4) :buffering)
+                   (progn
+                     (rontolisp::%clojure-pp-write-tokens w (aref w 3) t)
+                     (setf (aref w 3) nil)
+                     (setf (aref w 8) nil))
+                   (rontolisp::%clojure-pp-blanks w)))
               (t (if (/= (aref w 1) 0)
                      (rontolisp::%clojure-pp-text w (string #\Newline)))))))
     (if (eq (aref w 4) :buffering)
@@ -15033,6 +15134,782 @@
             (rontolisp::%clojure-pp-base-string (numerator x) base nil) "/"
             (rontolisp::%clojure-pp-base-string (denominator x) base nil)))
           (t nil))))
+
+;;;; cl-format's kernels, rontolisp.internal.pprint too: the text the
+;;;; number directives and the case conversion of clojure.pprint's format
+;;;; executor (Clojure source) write. The oracle spells a number by walking
+;;;; it with Clojure's quot and rem -- a double through Java's double
+;;;; arithmetic -- and rounds ~F ~E ~G ~$ as text, over the digits of the
+;;;; number's own Java spelling; these do the same, so a double far past the
+;;;; long range, a ratio, NaN and the infinities come out as the oracle's do.
+
+(defun rontolisp::%clojure-pp-str (x)
+  "X's str spelling, nil empty: a parameter written as text."
+  (if (characterp x) (string x) (rontolisp::%clojure-str-of x "" nil)))
+
+(defun rontolisp::%clojure-pp-padding (n x)
+  "N copies of X's str spelling, none for N below one, as (apply str (repeat
+   n x)) answers."
+  (let ((count (if (and (realp n) (> n 0)) (ceiling n) 0)))
+    (if (characterp x)
+        (make-string count :initial-element x)
+        (let ((piece (rontolisp::%clojure-pp-str x))
+              (out (make-string-output-stream)))
+          (dotimes (i count) (write-string piece out))
+          (get-output-stream-string out)))))
+
+(defun rontolisp::%clojure-pp-pad-left (text width pad)
+  "TEXT after copies of PAD's spelling up to WIDTH columns; a WIDTH that is
+   no number (a v parameter's argument) is the oracle's refusal to compare it."
+  (cond ((not (realp width)) (rontolisp::%clojure-pp-not-a-number width))
+        ((< (length text) width)
+         (concatenate 'string
+          (rontolisp::%clojure-pp-padding (- width (length text)) pad) text))
+        (t text)))
+
+(defun rontolisp::%clojure-pp-not-a-number (x)
+  "The oracle's refusal of a number directive's argument X that is no
+   number: its cast to java.lang.Number, nil its NullPointerException."
+  (if (null x)
+      (rontolisp::%clojure-null-pointer-exception
+       "Cannot invoke \"Object.getClass()\" because \"x\" is null")
+      (rontolisp::%clojure-class-cast-exception
+       (concatenate 'string "class " (rontolisp::%clojure-class-name-of x)
+                    " cannot be cast to class java.lang.Number"))))
+
+(defun rontolisp::%clojure-pp-java-double-string (x)
+  "The double X as the oracle's Double.toString spells it."
+  (cond ((/= x x) "NaN")
+        ((> x most-positive-double-float) "Infinity")
+        ((< x most-negative-double-float) "-Infinity")
+        (t (string-upcase (princ-to-string x)))))
+
+(defun rontolisp::%clojure-pp-finite (q)
+  "Q, a double quotient Clojure's quot and rem go on with; NaN and the
+   infinities are the oracle's BigDecimal refusal."
+  (if (rontolisp::%clojure-symbolic-float-p q)
+      (rontolisp::%clojure-number-format-exception "Infinite or NaN")
+      q))
+
+(defun rontolisp::%clojure-pp-quot (n d)
+  "Clojure's quot of N by D: exact over integers and ratios; over a double the
+   truncated double quotient, which Java converts back to a double."
+  (cond ((and (rationalp d) (= d 0))
+         (rontolisp::%clojure-arithmetic-exception "Divide by zero"))
+        ((or (floatp n) (floatp d))
+         (float (truncate
+                 (rontolisp::%clojure-pp-finite
+                  (/ (float n 1d0) (float d 1d0)))) 1d0))
+        (t (truncate n d))))
+
+(defun rontolisp::%clojure-pp-rem (n d)
+  "Clojure's rem of N by D: exact over integers and ratios; over a double N
+   less the truncated quotient, as a double, times D."
+  (cond ((and (rationalp d) (= d 0))
+         (rontolisp::%clojure-arithmetic-exception "Divide by zero"))
+        ((or (floatp n) (floatp d))
+         (let ((x (float n 1d0)) (y (float d 1d0)))
+           (- x
+              (* (float (truncate (rontolisp::%clojure-pp-finite (/ x y))) 1d0)
+                 y))))
+        (t (rem n d))))
+
+(defun rontolisp::%clojure-pp-remainders (n base)
+  "The digits of the positive N in BASE, most significant first, as the
+   oracle's walk takes them: N's rem, then on with its quot, while it is
+   positive."
+  (let ((digits nil))
+    (do ((m n (rontolisp::%clojure-pp-quot m base)))
+        ((not (> m 0)) digits)
+      (setq digits (cons (rontolisp::%clojure-pp-rem m base) digits)))))
+
+(defun rontolisp::%clojure-pp-digit-char (d)
+  "The digit D the way the oracle's walk spells it, (char (+ 48 d)) below
+   ten and (char (+ 97 (- d 10))) past it, D possibly a double the walk of a
+   double left: out of the character range its IllegalArgumentException."
+  (let* ((code (if (< d 10) (+ 48 d) (+ 97 (- d 10))))
+         (n
+          (if (floatp code)
+              (if (/= code code) 0 (truncate (max -1d19 (min 1d19 code))))
+              code)))
+    (if (or (< n 0) (> n 65535))
+        (rontolisp::%clojure-illegal-argument-exception
+         (concatenate 'string "Value out of range for char: "
+                      (if (floatp code)
+                          (rontolisp::%clojure-pp-java-double-string code)
+                          (princ-to-string code))))
+        (code-char n))))
+
+(defun rontolisp::%clojure-pp-digits-of (n base)
+  "The non-negative N (an integer or a whole double) spelled in BASE by the
+   oracle's walk, lowercase; 0 for zero."
+  (if (= n 0)
+      "0"
+      (let ((out (make-string-output-stream)))
+        (dolist (d (rontolisp::%clojure-pp-remainders n base))
+          (write-char (rontolisp::%clojure-pp-digit-char d) out))
+        (get-output-stream-string out))))
+
+(defun rontolisp::%clojure-pp-integral-p (x)
+  "Whether cl-format's integer directives spell X as an integer: an integer,
+   or a double equal to its floor (an infinity too, which the walk refuses)."
+  (cond ((integerp x) t)
+        ((floatp x)
+         (cond ((/= x x) nil)
+               ((rontolisp::%clojure-symbolic-float-p x) t)
+               (t (= x (truncate x)))))
+        (t nil)))
+
+(defun rontolisp::%clojure-pp-grouped (digits mark interval)
+  "DIGITS in groups of INTERVAL counted from the right, MARK's spelling
+   between them; nothing for an interval below one."
+  (let ((size (if (and (realp interval) (> interval 0)) (ceiling interval) 0)))
+    (if (= size 0)
+        ""
+        (let ((groups nil) (end (length digits)))
+          (do ()
+              ((<= end 0))
+            (setq groups (cons (subseq digits (max 0 (- end size)) end) groups))
+            (setq end (- end size)))
+          (let ((out (make-string-output-stream))
+                (first t)
+                (between (rontolisp::%clojure-pp-str mark)))
+            (dolist (g groups)
+              (if first (setq first nil) (write-string between out))
+              (write-string g out))
+            (get-output-stream-string out))))))
+
+(defun rontolisp::%clojure-pp-ascii (x print-base print-radix)
+  "X as cl-format's ~A spells it: an integer or ratio in *print-base* and
+   *print-radix*, anything else as print does."
+  (or (rontolisp::%clojure-pp-number-string x print-base print-radix)
+      (rontolisp::%clojure-print-str (list x) nil nil)))
+
+(defun rontolisp::%clojure-pp-integer-text
+    (x base colon at mincol padchar commachar interval print-base print-radix)
+  "cl-format's ~D (~B ~O ~X, ~R with a radix) of X in BASE: the digits,
+   grouped under COLON, signed (+ under AT), after PADCHAR up to MINCOL
+   columns. Anything not integral is written as ~A writes it, padded alike."
+  (if (rontolisp::%clojure-pp-integral-p x)
+      (let* ((neg (< x 0))
+             (digits (rontolisp::%clojure-pp-digits-of (if neg (- x) x) base))
+             (grouped
+              (if (rontolisp::%clojure-truthy colon)
+                  (rontolisp::%clojure-pp-grouped digits commachar interval)
+                  digits)))
+        (rontolisp::%clojure-pp-pad-left (cond (neg (concatenate 'string "-"
+                                                                 grouped))
+                                               ((rontolisp::%clojure-truthy at)
+                                                (concatenate 'string "+"
+                                                             grouped))
+                                               (t grouped)) mincol padchar))
+      (rontolisp::%clojure-pp-pad-left
+       (rontolisp::%clojure-pp-ascii x print-base print-radix) mincol padchar)))
+
+(defun rontolisp::%clojure-pp-word (words i)
+  "The word of WORDS at I, truncated as the oracle's nth casts its index."
+  (let ((k (truncate i)))
+    (if (or (< k 0) (>= k (length words)))
+        (rontolisp::%clojure-index-out-of-bounds-exception (princ-to-string k))
+        (aref words k))))
+
+(defun rontolisp::%clojure-pp-units (ordinal)
+  "The English words for 0 to 19, ordinal or cardinal."
+  (if ordinal
+      (vector "zeroth" "first" "second" "third" "fourth" "fifth" "sixth"
+              "seventh" "eighth" "ninth" "tenth" "eleventh" "twelfth"
+              "thirteenth" "fourteenth" "fifteenth" "sixteenth" "seventeenth"
+              "eighteenth" "nineteenth")
+      (vector "zero" "one" "two" "three" "four" "five" "six" "seven" "eight"
+              "nine" "ten" "eleven" "twelve" "thirteen" "fourteen" "fifteen"
+              "sixteen" "seventeen" "eighteen" "nineteen")))
+
+(defun rontolisp::%clojure-pp-tens (ordinal)
+  "The English words for the tens from twenty, ordinal or cardinal."
+  (if ordinal
+      (vector "" "" "twentieth" "thirtieth" "fortieth" "fiftieth" "sixtieth"
+              "seventieth" "eightieth" "ninetieth")
+      (vector "" "" "twenty" "thirty" "forty" "fifty" "sixty" "seventy" "eighty"
+              "ninety")))
+
+(defun rontolisp::%clojure-pp-scales ()
+  "The short-scale names of the powers of a thousand, to 10^63."
+  (vector "" "thousand" "million" "billion" "trillion" "quadrillion"
+          "quintillion" "sextillion" "septillion" "octillion" "nonillion"
+          "decillion" "undecillion" "duodecillion" "tredecillion"
+          "quattuordecillion" "quindecillion" "sexdecillion" "septendecillion"
+          "octodecillion" "novemdecillion" "vigintillion"))
+
+(defun rontolisp::%clojure-pp-below-thousand (n ordinal)
+  "The English spelling of N below a thousand (any of its kinds, walked by
+   quot and rem): cardinal, or ORDINAL in its last word; empty for zero."
+  (let* ((hundreds (rontolisp::%clojure-pp-quot n 100))
+         (rest (rontolisp::%clojure-pp-rem n 100))
+         (units (rontolisp::%clojure-pp-units nil))
+         (head
+          (if (> hundreds 0)
+              (concatenate 'string (rontolisp::%clojure-pp-word units hundreds)
+                           " hundred")
+              ""))
+         (tail
+          (cond ((not (> rest 0)) (if (and ordinal (> hundreds 0)) "th" ""))
+                ((< rest 20)
+                 (rontolisp::%clojure-pp-word
+                  (rontolisp::%clojure-pp-units ordinal) rest))
+                (t
+                 (let ((ten (rontolisp::%clojure-pp-quot rest 10))
+                       (one (rontolisp::%clojure-pp-rem rest 10)))
+                   (if (and ordinal (> ten 0) (not (> one 0)))
+                       (rontolisp::%clojure-pp-word
+                        (rontolisp::%clojure-pp-tens t) ten)
+                       (concatenate 'string
+                                    (if (> ten 0)
+                                        (rontolisp::%clojure-pp-word
+                                         (rontolisp::%clojure-pp-tens nil) ten)
+                                        "")
+                                    (if (and (> ten 0) (> one 0)) "-" "")
+                                    (if (> one 0)
+                                        (rontolisp::%clojure-pp-word
+                                         (rontolisp::%clojure-pp-units ordinal)
+                                         one)
+                                        ""))))))))
+    (concatenate 'string head (if (and (> hundreds 0) (> rest 0)) " " "")
+                 tail)))
+
+(defun rontolisp::%clojure-pp-scaled-words (parts offset)
+  "The spellings PARTS of the base-thousand digits, most significant first,
+   each but an empty one followed by its scale word (the last one's only past
+   the units, OFFSET thousands up), joined by commas."
+  (let ((scales (rontolisp::%clojure-pp-scales))
+        (out (make-string-output-stream))
+        (first t)
+        (place (- (length parts) 1)))
+    (do ((rest parts (cdr rest)))
+        ((null rest) (get-output-stream-string out))
+      (let ((text (car rest)))
+        (if (> (length text) 0)
+            (progn
+              (if first (setq first nil) (write-string ", " out))
+              (write-string text out)
+              (if (or (cdr rest) (> (+ place offset) 0))
+                  (progn
+                    (write-string " " out)
+                    (write-string
+                     (rontolisp::%clojure-pp-word scales (+ place offset))
+                     out)))))
+        (setq place (- place 1))))))
+
+(defun rontolisp::%clojure-pp-ordinal-suffix (x)
+  "The suffix the oracle puts after the digits of an ordinal past 10^66."
+  (let* ((low (rontolisp::%clojure-pp-rem x 100))
+         (digit (rontolisp::%clojure-pp-rem low 10))
+         (spelled (or (< 11 low) (> 19 low))))
+    (cond ((and spelled (= digit 1)) "st")
+          ((and spelled (= digit 2)) "nd")
+          ((and spelled (= digit 3)) "rd")
+          (t "th"))))
+
+(defun rontolisp::%clojure-pp-english (x ordinal print-base print-radix)
+  "cl-format's ~R (ORDINAL: ~:R) of X in English words, short scale, with
+   minus for a negative; past 10^66 its digits grouped by commas (and the
+   ordinal's suffix)."
+  (setq ordinal (rontolisp::%clojure-truthy ordinal))
+  (cond ((not (numberp x)) (rontolisp::%clojure-pp-not-a-number x))
+        ((and (integerp x) (= x 0)) (if ordinal "zeroth" "zero"))
+        (t
+         (let* ((neg (< x 0))
+                (parts
+                 (rontolisp::%clojure-pp-remainders (if neg (- x) x) 1000)))
+           (cond ((> (length parts) 22)
+                  (concatenate 'string
+                   (rontolisp::%clojure-pp-integer-text x 10 t nil 0 #\Space #\,
+                                                        3 print-base
+                                                        print-radix)
+                   (if ordinal (rontolisp::%clojure-pp-ordinal-suffix x) "")))
+                 ((not ordinal)
+                  (concatenate 'string (if neg "minus " "")
+                               (rontolisp::%clojure-pp-scaled-words
+                                (mapcar (lambda (p)
+                                          (rontolisp::%clojure-pp-below-thousand
+                                           p nil)) parts) 0)))
+                 ((null parts)
+                  (rontolisp::%clojure-null-pointer-exception
+                   "Cannot invoke \"Object.getClass()\" because \"x\" is null"))
+                 (t (let* ((head
+                            (rontolisp::%clojure-pp-scaled-words
+                             (mapcar (lambda (p)
+                                       (rontolisp::%clojure-pp-below-thousand p
+                                        nil)) (butlast parts)) 1))
+                           (tail
+                            (rontolisp::%clojure-pp-below-thousand
+                             (car (last parts)) t)))
+                      (concatenate 'string (if neg "minus " "")
+                                   (cond ((and (> (length head) 0)
+                                               (> (length tail) 0))
+                                          (concatenate 'string head ", " tail))
+                                         ((> (length head) 0)
+                                          (concatenate 'string head "th"))
+                                         (t tail))))))))))
+
+(defun rontolisp::%clojure-pp-roman (x old print-base print-radix)
+  "cl-format's ~@R (OLD: ~:@R, with IIII for four) of X from 1 to 3999 in
+   Roman numerals; anything else as ~:D writes it."
+  (if (and (numberp x) (> x 0) (< x 4000))
+      (let* ((table
+              (if (rontolisp::%clojure-truthy old)
+                  (vector
+                   (vector "I" "II" "III" "IIII" "V" "VI" "VII" "VIII" "VIIII")
+                   (vector "X" "XX" "XXX" "XXXX" "L" "LX" "LXX" "LXXX" "LXXXX")
+                   (vector "C" "CC" "CCC" "CCCC" "D" "DC" "DCC" "DCCC" "DCCCC")
+                   (vector "M" "MM" "MMM"))
+                  (vector
+                   (vector "I" "II" "III" "IV" "V" "VI" "VII" "VIII" "IX")
+                   (vector "X" "XX" "XXX" "XL" "L" "LX" "LXX" "LXXX" "XC")
+                   (vector "C" "CC" "CCC" "CD" "D" "DC" "DCC" "DCCC" "CM")
+                   (vector "M" "MM" "MMM"))))
+             (digits (rontolisp::%clojure-pp-remainders x 10))
+             (place (- (length digits) 1))
+             (out (make-string-output-stream)))
+        (dolist (d digits (get-output-stream-string out))
+          ;; a digit the oracle compares with = to 0: an integer zero is
+          ;; skipped, a double one indexes before the table
+          (if (not (and (integerp d) (= d 0)))
+              (write-string
+               (rontolisp::%clojure-pp-word (aref table place) (- d 1)) out))
+          (setq place (- place 1))))
+      (rontolisp::%clojure-pp-integer-text x 10 t nil 0 #\Space #\, 3 print-base
+                                           print-radix)))
+
+;; ~F ~E ~G ~$: the digits of the number's spelling, rounded as text.
+
+(defun rontolisp::%clojure-pp-zeros (n)
+  "N zeros, none for N below one."
+  (make-string (if (> n 0) n 0) :initial-element #\0))
+
+(defun rontolisp::%clojure-pp-decimal-exponent (a)
+  "The exponent e of the positive rational A with 10^e <= A < 10^(e+1)."
+  (let ((e
+         (- (length (princ-to-string (numerator a)))
+            (length (princ-to-string (denominator a))))))
+    (do ()
+        ((<= (expt 10 e) a))
+      (setq e (- e 1)))
+    (do ()
+        ((< a (expt 10 (+ e 1))) e)
+      (setq e (+ e 1)))))
+
+(defun rontolisp::%clojure-pp-ratio-double (r)
+  "The ratio R as the oracle's Ratio.doubleValue answers it: rounded half
+   even to sixteen significant digits, then to the nearest double."
+  (let* ((a (abs r))
+         (e (rontolisp::%clojure-pp-decimal-exponent a))
+         (n (round (* a (expt 10 (- 15 e)))))
+         (d
+          (cond ((> e 308) (/ 1d0 0d0))
+                ((< e -325) 0d0)
+                (t (float (* n (expt 10 (- e 15))) 1d0)))))
+    (if (< r 0) (- d) d)))
+
+(defun rontolisp::%clojure-pp-convert-ratio (x)
+  "X as the float directives read it: a ratio as a double, unless the double
+   is zero or infinite, when the ratio stays exact (the oracle's BigDecimal);
+   anything else itself."
+  (if (and (rationalp x) (not (integerp x)))
+      (let ((d (rontolisp::%clojure-pp-ratio-double x)))
+        (if (or (= d 0) (rontolisp::%clojure-symbolic-float-p d)) x d))
+      x))
+
+(defun rontolisp::%clojure-pp-exact-parts (r)
+  "The significant digits of the exact positive ratio R and the decimal
+   exponent of the first, as the oracle reads them off its BigDecimal; a
+   ratio no decimal holds is that BigDecimal's ArithmeticException."
+  (let ((den (denominator r)) (twos 0) (fives 0))
+    (do ()
+        ((/= (rem den 2) 0))
+      (setq den (/ den 2))
+      (setq twos (+ twos 1)))
+    (do ()
+        ((/= (rem den 5) 0))
+      (setq den (/ den 5))
+      (setq fives (+ fives 1)))
+    (if (/= den 1)
+        (rontolisp::%clojure-arithmetic-exception
+         "Non-terminating decimal expansion; no exact representable decimal result.")
+        (let* ((scale (max twos fives))
+               (digits (princ-to-string (* r (expt 10 scale))))
+               (end (length digits)))
+          (do ()
+              ((char/= (char digits (- end 1)) #\0))
+            (setq end (- end 1)))
+          (cons (subseq digits 0 end) (- (length digits) 1 scale))))))
+
+(defun rontolisp::%clojure-pp-float-parts (x)
+  "The significant digits of X and the decimal exponent of the first, as the
+   oracle reads them off X's Java spelling, lowercased: an integer's digits,
+   a double's shortest decimal (nan and infinity spelled as letters, their
+   'digits'), an exact ratio's decimal; (\"0\" . 0) for zero."
+  (if (and (rationalp x) (not (integerp x)))
+      (rontolisp::%clojure-pp-exact-parts x)
+      (let* ((s
+              (if (integerp x)
+                  (princ-to-string x)
+                  (string-downcase
+                   (rontolisp::%clojure-pp-java-double-string x))))
+             (e (position #\e s))
+             (dot (position #\. s))
+             (mantissa
+              (cond ((and (null e) (null dot)) s)
+                    ((null e)
+                     (concatenate 'string (subseq s 0 dot)
+                                  (subseq s (+ dot 1))))
+                    ((null dot) (subseq s 0 e))
+                    (t (concatenate 'string (subseq s 0 1) (subseq s 2 e)))))
+             (exponent
+              (cond (e (parse-integer s :start (+ e 1)))
+                    (dot (- dot 1))
+                    (t (- (length s) 1))))
+             (end (length mantissa))
+             (start 0))
+        (do ()
+            ((or (= end 0) (char/= (char mantissa (- end 1)) #\0)))
+          (setq end (- end 1)))
+        (do ()
+            ((or (= start end) (char/= (char mantissa start) #\0)))
+          (setq start (+ start 1)))
+        (if (= start end)
+            (cons "0" 0)
+            (cons (subseq mantissa start end) (- exponent start))))))
+
+(defun rontolisp::%clojure-pp-incremented (s)
+  "The digit string S plus one in its last place: a digit longer, a one and
+   zeros, when every digit carries."
+  (let ((i (- (length s) 1)))
+    (do ()
+        ((or (< i 0) (char/= (char s i) #\9)))
+      (setq i (- i 1)))
+    (if (< i 0)
+        (concatenate 'string "1" (rontolisp::%clojure-pp-zeros (length s)))
+        (concatenate 'string (subseq s 0 i)
+                     (string (code-char (+ (char-code (char s i)) 1)))
+                     (rontolisp::%clojure-pp-zeros (- (length s) 1 i))))))
+
+(defun rontolisp::%clojure-pp-rounded (m e d w)
+  "The digits M, the first at exponent E, rounded half up as text: to D
+   places past the point, else to what fits W columns (never left of the
+   point); answers (digits exponent carried), carried when the rounding
+   added a digit, which it then drops."
+  (if (or d w)
+      (let* ((w (if w (max 2 w) nil))
+             (at
+              (cond (d (+ e d 1)) ((>= e 0) (max (+ e 1) (- w 1))) (t (+ w e))))
+             (shift (= at 0))
+             (m1 (if shift (concatenate 'string "0" m) m))
+             (e1 (if shift (+ e 1) e))
+             (at (if shift 1 at)))
+        (cond ((< at 0) (list "0" 0 nil))
+              ((> (length m1) at)
+               (let ((kept (subseq m1 0 at)))
+                 (if (>= (char-code (char m1 at)) (char-code #\5))
+                     (let ((up (rontolisp::%clojure-pp-incremented kept)))
+                       (if (> (length up) (length kept))
+                           (list (subseq up 0 (- (length up) 1)) e1 t)
+                           (list up e1 nil)))
+                     (list kept e1 nil))))
+              (t (list m e nil))))
+      (list m e nil)))
+
+(defun rontolisp::%clojure-pp-pointed (m e d)
+  "The digits M, the first at exponent E, with their decimal point: zeros
+   between the point and a first digit right of it, and zeros after the
+   digits up to D places past the point (up to the point without D)."
+  (let* ((m1
+          (if (< e 0)
+              (concatenate 'string (rontolisp::%clojure-pp-zeros (- (- e) 1)) m)
+              m))
+         (e1 (if (< e 0) -1 e))
+         (target (if d (+ e1 d 1) (+ e1 1)))
+         (m2
+          (if (< (length m1) target)
+              (concatenate 'string m1
+               (rontolisp::%clojure-pp-zeros (- target (length m1))))
+              m1)))
+    (if (< e 0)
+        (concatenate 'string "." m2)
+        (concatenate 'string (subseq m2 0 (+ e 1)) "." (subseq m2 (+ e 1))))))
+
+(defun rontolisp::%clojure-pp-fixed (x w d k overflow pad at)
+  "cl-format's ~w,d,k,overflowchar,padcharF of X: D places past the point
+   (as many as the digits take without D), scaled by 10^K, signed when
+   negative or AT, right-justified in W columns, or W OVERFLOW characters
+   when it does not fit."
+  (if (not (numberp x)) (rontolisp::%clojure-pp-not-a-number x))
+  (let* ((neg (< x 0))
+         (parts
+          (rontolisp::%clojure-pp-float-parts
+           (rontolisp::%clojure-pp-convert-ratio (if neg (- x) x))))
+         (mantissa (car parts))
+         (scaled (+ (cdr parts) k))
+         (signed (or (rontolisp::%clojure-truthy at) neg))
+         (sign (if signed (if neg "-" "+") ""))
+         (sign-width (if signed 1 0))
+         (append-zero (and (null d) (<= (- (length mantissa) 1) scaled)))
+         (rounded
+          (rontolisp::%clojure-pp-rounded mantissa scaled d
+                                          (if w (- w sign-width) nil)))
+         (text
+          (rontolisp::%clojure-pp-pointed (car rounded)
+                                          (if (car (cdr (cdr rounded)))
+                                              (+ (car (cdr rounded)) 1)
+                                              (car (cdr rounded))) d))
+         (text
+          (if (and w d (>= d 1) (char= (char text 0) #\0)
+                   (char= (char text 1) #\.) (> (length text) (- w sign-width)))
+              (subseq text 1)
+              text))
+         (prepend-zero (char= (char text 0) #\.)))
+    (if w
+        (let* ((signed-len (+ (length text) sign-width))
+               (prepend-zero (and prepend-zero (< signed-len w)))
+               (append-zero (and append-zero (< signed-len w)))
+               (full-len
+                (if (or prepend-zero append-zero) (+ signed-len 1) signed-len)))
+          (if (and (> full-len w) overflow)
+              (rontolisp::%clojure-pp-padding w overflow)
+              (concatenate 'string
+                           (rontolisp::%clojure-pp-padding (- w full-len) pad)
+                           sign (if prepend-zero "0" "") text
+                           (if append-zero "0" ""))))
+        (concatenate 'string sign (if prepend-zero "0" "") text
+                     (if append-zero "0" "")))))
+
+(defun rontolisp::%clojure-pp-point-at (m k)
+  "The digits M with a point after the first K of them (ahead of them for a
+   negative K); K past their end is the oracle's substring refusal."
+  (cond ((< k 0) (concatenate 'string "." m))
+        ((> k (length m))
+         (rontolisp::%clojure-string-index-out-of-bounds-exception
+          (concatenate 'string "Range [0, " (princ-to-string k)
+                       ") out of bounds for length "
+                       (princ-to-string (length m)))))
+        (t (concatenate 'string (subseq m 0 k) "." (subseq m k)))))
+
+(defun rontolisp::%clojure-pp-exponential (x w d e k overflow pad mark at)
+  "cl-format's ~w,d,e,k,overflowchar,padchar,exponentcharE of X: K digits
+   before the point and D after it, then the exponent MARK (E), its sign and
+   at least E digits; signed when negative or AT, right-justified in W
+   columns, or W OVERFLOW characters when it does not fit."
+  (if (not (numberp x)) (rontolisp::%clojure-pp-not-a-number x))
+  (let* ((x (rontolisp::%clojure-pp-convert-ratio x))
+         (neg (< x 0))
+         (parts (rontolisp::%clojure-pp-float-parts (if neg (- x) x)))
+         (signed (or (rontolisp::%clojure-truthy at) neg))
+         (sign (if signed (if neg "-" "+") ""))
+         (sign-width (if signed 1 0))
+         (result nil))
+    (do ()
+        (result result)
+      (let* ((mantissa (car parts))
+             (scaled-exp (- (cdr parts) (- k 1)))
+             (exp-digits (princ-to-string (abs scaled-exp)))
+             (exp-text
+              (concatenate 'string (rontolisp::%clojure-pp-str (or mark #\E))
+                           (if (< scaled-exp 0) "-" "+")
+                           (if e
+                               (rontolisp::%clojure-pp-zeros
+                                (- e (length exp-digits)))
+                               "") exp-digits))
+             (exp-width (length exp-text))
+             (digits
+              (concatenate 'string (rontolisp::%clojure-pp-zeros (- k)) mantissa
+                           (if d
+                               (rontolisp::%clojure-pp-zeros
+                                (- d (- (length mantissa) 1)
+                                   (if (< k 0) (- k) 0)))
+                               "")))
+             (places
+              (cond ((> k 0) d)
+               (d (- d 1))
+               (t
+                (rontolisp::%clojure-null-pointer-exception
+                 "Cannot invoke \"Object.getClass()\" because \"x\" is null"))))
+             (rounded
+              (rontolisp::%clojure-pp-rounded digits 0 places
+               (if w (- w exp-width sign-width) nil)))
+             (kept (car rounded)))
+        (if (car (cdr (cdr rounded)))
+            (setq parts (cons kept (+ (cdr parts) 1)))
+            (let* ((full (rontolisp::%clojure-pp-point-at kept k))
+                   (append-zero (and (= k (length kept)) (null d))))
+              (setq result
+                    (if w
+                        (let* ((signed-len
+                                (+ (length full) exp-width sign-width))
+                               (prepend-zero (and (<= k 0) (/= signed-len w)))
+                               (full-len
+                                (if prepend-zero (+ signed-len 1) signed-len))
+                               (append-zero (and append-zero (< full-len w))))
+                          (if (and
+                               (or (> full-len w) (and e (> (- exp-width 2) e)))
+                               overflow)
+                              (rontolisp::%clojure-pp-padding w overflow)
+                              (concatenate 'string
+                                           (rontolisp::%clojure-pp-padding
+                                            (- w full-len (if append-zero 1 0))
+                                            pad) sign (if prepend-zero "0" "")
+                                           full (if append-zero "0" "")
+                                           exp-text)))
+                        (concatenate 'string sign (if (<= k 0) "0" "") full
+                                     (if append-zero "0" "") exp-text)))))))))
+
+(defun rontolisp::%clojure-pp-general (x w d e k overflow pad mark at)
+  "cl-format's ~G of X: ~F, then four (or E + 2) blanks, when the number's
+   magnitude leaves its D significant digits room on both sides of the
+   point; else ~E."
+  (if (not (numberp x)) (rontolisp::%clojure-pp-not-a-number x))
+  (let* ((c (rontolisp::%clojure-pp-convert-ratio x))
+         (parts (rontolisp::%clojure-pp-float-parts (if (< c 0) (- c) c)))
+         (n (if (and (floatp c) (= c 0)) 0 (+ (cdr parts) 1)))
+         (ee (if e (+ e 2) 4))
+         (digits (or d (max (length (car parts)) (min n 7))))
+         (places (- digits n)))
+    (if (and (<= 0 places) (<= places digits))
+        (concatenate 'string
+                     (rontolisp::%clojure-pp-fixed x (if w (- w ee) nil) places
+                                                   0 overflow pad at)
+                     (rontolisp::%clojure-pp-padding ee #\Space))
+        (rontolisp::%clojure-pp-exponential x w d e k overflow pad mark at))))
+
+(defun rontolisp::%clojure-pp-dollar (x d n w pad colon at)
+  "cl-format's ~d,n,w,padchar$ of X: D places past the point, at least N
+   digits before it, signed when negative or AT (ahead of the padding under
+   COLON), right-justified in W columns. A long is taken as it is, any other
+   number as its double (Math/abs's two arms)."
+  (cond
+   ((null x)
+    (rontolisp::%clojure-null-pointer-exception
+     "Cannot invoke \"java.lang.Number.doubleValue()\" because \"x\" is null"))
+   ((not (numberp x)) (rontolisp::%clojure-pp-not-a-number x))
+   ((and (integerp x) (typep x '(signed-byte 64))))
+   ((integerp x) (setq x (float x 1d0)))
+   ((rationalp x) (setq x (rontolisp::%clojure-pp-ratio-double x))))
+  (let* ((neg (< x 0))
+         (parts (rontolisp::%clojure-pp-float-parts (abs x)))
+         (signed (or (rontolisp::%clojure-truthy at) neg))
+         (sign (if signed (if neg "-" "+") ""))
+         (rounded
+          (rontolisp::%clojure-pp-rounded (car parts) (cdr parts) d nil))
+         (text
+          (rontolisp::%clojure-pp-pointed (car rounded)
+                                          (if (car (cdr (cdr rounded)))
+                                              (+ (car (cdr rounded)) 1)
+                                              (car (cdr rounded))) d))
+         (full
+          (concatenate 'string
+                       (rontolisp::%clojure-pp-zeros (- n (position #\. text)))
+                       text))
+         (colon (rontolisp::%clojure-truthy colon)))
+    (concatenate 'string (if colon sign "")
+     (rontolisp::%clojure-pp-padding (- w (length full) (if signed 1 0)) pad)
+     (if colon "" sign) full)))
+
+;; ~(...~): one conversion per write, as the oracle's writers convert each
+;; string and each character written through them.
+
+(defvar rontolisp::%clojure-pp-case-writer
+  nil
+  "While a cl-format ~(...~) clause runs, the function each piece written goes
+   through; NIL outside one. A special here rather than a var of clojure.pprint,
+   so a program that formats nothing carries none of it.")
+
+(defun rontolisp::%clojure-pp-case-out ()
+  "The case conversion in effect, or NIL."
+  rontolisp::%clojure-pp-case-writer)
+
+(defun rontolisp::%clojure-pp-with-case-out (writer thunk)
+  "THUNK's value, run with WRITER as the case conversion in effect."
+  (let ((rontolisp::%clojure-pp-case-writer writer)) (funcall thunk)))
+
+(defun rontolisp::%clojure-pp-case-state ()
+  "The state of one ~(...~) clause: whether the last character written was
+   whitespace (~:( capitalizes after it), and whether ~@( has capped a
+   letter."
+  (vector t nil))
+
+(defun rontolisp::%clojure-pp-java-whitespace-p (c)
+  "Java's Character.isWhitespace."
+  (let ((code (char-code c)))
+    (or (and (>= code 9) (<= code 13)) (and (>= code 28) (<= code 32))
+        (= code 5760) (and (>= code 8192) (<= code 8198))
+        (and (>= code 8200) (<= code 8202)) (= code 8232) (= code 8233)
+        (= code 8287) (= code 12288))))
+
+(defun rontolisp::%clojure-pp-word-char-p (c)
+  "Whether C is a word character of Java's regular expressions, \\w."
+  (let ((code (char-code c)))
+    (or (and (>= code 97) (<= code 122)) (and (>= code 65) (<= code 90))
+        (and (>= code 48) (<= code 57)) (= code 95))))
+
+(defun rontolisp::%clojure-pp-capitalized (s first)
+  "S, lowercased, with each word capitalized as one ~:( write is: its first
+   character when FIRST and a letter, and every word character after a
+   character that is none."
+  (let ((out (make-string-output-stream)) (n (length s)))
+    (dotimes (i n)
+      (let ((c (char s i)))
+        (write-char (if (if (= i 0)
+                            (and first (alpha-char-p c))
+                            (and (not
+                                  (rontolisp::%clojure-pp-word-char-p
+                                   (char s (- i 1))))
+                                 (rontolisp::%clojure-pp-word-char-p c)))
+                        (char-upcase c)
+                        c) out)))
+    (get-output-stream-string out)))
+
+(defun rontolisp::%clojure-pp-case-convert (mode state x)
+  "The write X (a string or a character) of a ~(...~) clause converted, for
+   MODE 0 ~( lowercase, 1 ~:( words capitalized, 2 ~@( the first letter
+   capitalized, 3 ~:@( uppercase; STATE carries what the writes before it
+   left."
+  (if (characterp x)
+      (cond ((= mode 0) (char-downcase x))
+            ((= mode 3) (char-upcase x))
+            ((= mode 1)
+             (let ((up (aref state 0)))
+               (setf (aref state 0)
+                     (rontolisp::%clojure-pp-java-whitespace-p x))
+               (if up (char-upcase x) x)))
+            ((and (not (aref state 1)) (alpha-char-p x))
+             (setf (aref state 1) t)
+             (char-upcase x))
+            (t (char-downcase x)))
+      (let ((s (string-downcase x)))
+        (cond ((= mode 0) s)
+              ((= mode 3) (string-upcase x))
+              ((= mode 1)
+               (let ((out
+                      (rontolisp::%clojure-pp-capitalized s (aref state 0))))
+                 (if (> (length x) 0)
+                     (setf (aref state 0)
+                           (rontolisp::%clojure-pp-java-whitespace-p
+                            (char x (- (length x) 1)))))
+                 out))
+              ((aref state 1) s)
+              (t (let ((i 0) (n (length s)))
+                   ;; the first character Java's \S matches
+                   (do ()
+                       ((or (= i n)
+                            (not
+                             (member (char-code (char s i))
+                                     '(9 10 11 12 13 32)))))
+                     (setq i (+ i 1)))
+                   (if (= i n)
+                       s
+                       (progn
+                         (setf (aref state 1) t)
+                         (concatenate 'string (subseq s 0 i)
+                                      (string (char-upcase (char s i)))
+                                      (subseq s (+ i 1)))))))))))
 
 ;;;; rontolisp.wit: a WIT value's Clojure spelling. An import's wrapper and a
 ;;;; provider's adapter (clojure/ClojureWitLowering) convert each value the two

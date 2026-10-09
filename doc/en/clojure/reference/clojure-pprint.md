@@ -20,11 +20,13 @@ every backend.
 | `write-out` | `(write-out x)`: `x` written through the dispatch inside a block |
 | `pprint-newline` | `(pprint-newline kind)`: a conditional newline, `:linear` (taken when the block does not fit), `:fill` (when the next part does not fit on the line), `:miser` (in miser style only) or `:mandatory` |
 | `pprint-indent` | `(pprint-indent relative-to n)`: the block's continuation lines indented `n` past its start (`:block`) or past the current column (`:current`) |
-| `fresh-line` | A newline unless the output is at the start of a line |
+| `fresh-line` | A newline unless the pretty print in progress is at the start of a line; outside a pretty print, always a newline |
 | `*print-right-margin*`, `*print-miser-width*` | The margin, 72 (`nil` for none), and how close to it a block may start before it prints in miser style, 40 (`nil` for never) |
 | `*print-pretty*`, `*print-suppress-namespaces*`, `*print-base*`, `*print-radix*` | `write`'s defaults: pretty, namespaces kept, base 10, no radix mark |
 | `pprint-tab` | Throws `UnsupportedOperationException`, as in Clojure |
 | `get-pretty-writer` | Answers its writer |
+| `cl-format` | `(cl-format writer control & args)`: `args` formatted by Common Lisp's format directives in `control`, to a string answered for a `nil` writer, to `*out*` for `true`, else to `writer`; see [cl-format](#cl-format) |
+| `formatter`, `formatter-out` | `(formatter control)`: a function of a writer and arguments formatting them as `cl-format` does, its control string compiled once; `(formatter-out control)`: a function of arguments writing to `*out*` as it is, for a dispatch function |
 
 A collection that fits on the rest of the line prints on it. One that does not puts each
 member on a line of its own, and a map entry's value moves below its key when the entry
@@ -129,10 +131,85 @@ form as its `#(...)` literal:
 #(+ %1 (* %2 %2))
 ```
 
+## cl-format
+
+`cl-format` is Common Lisp's `format` over Clojure values: `~A` and `~S` print as `print` and
+`pr` do, `~{` walks any collection or seq, and `~:[` tests Clojure truth, so `false` takes the
+first clause like `nil`.
+
+| Directive | Writes |
+|---|---|
+| `~A`, `~S` | The argument as `print` / `pr` would, an integer or ratio in `*print-base*` and `*print-radix*`; `~mincol,colinc,minpad,padcharA` pads it, on the left with `@` |
+| `~D`, `~B`, `~O`, `~X`, `~radixR` | An integer in base 10, 2, 8, 16 or `radix`; `~mincol,padchar,commachar,intervalD`, `:` groups the digits, `@` signs a positive one |
+| `~R`, `~:R`, `~@R`, `~:@R` | A number in English words, as an ordinal, in Roman numerals, in old Roman numerals |
+| `~P`, `~@P` | `s` (`ies`) unless the argument is 1; `:` backs up to the argument before |
+| `~C`, `~:C`, `~@C` | A character, its name, as `pr` writes it |
+| `~F`, `~E`, `~G`, `~$` | A number in fixed, exponential, general and monetary notation, with Common Lisp's parameters |
+| `~%`, `~&`, `~\|`, `~~`, `~T` | A newline, a fresh line, a page, a tilde, blanks to a column |
+| `~*`, `~:*`, `~@*` | Skips arguments, backs up, goes to an argument |
+| `~[...~;...~]`, `~:[`, `~@[` | The clause the argument selects: by index, by truth, when it is true |
+| `~{...~}`, `~:{`, `~@{`, `~:@{` | The body over the elements of a collection, over its sublists, over the remaining arguments, over those as sublists |
+| `~^`, `~:^` | Ends the enclosing run when no argument (no sublist) is left |
+| `~(...~)`, `~:(`, `~@(`, `~:@(` | The body lowercased, its words capitalized, its first word capitalized, uppercased |
+| `~?`, `~@?` | Another control string over a list argument, over the remaining arguments |
+| `~<...~>` | The clauses justified within a field |
+| `~W`, `~<...~:>`, `~_`, `~I` | The argument through the pretty print dispatch, a logical block, a conditional newline (`:` fill, `@` miser, `:@` mandatory), an indentation |
+
+```clojure
+(require '[clojure.pprint :as pp])
+(pp/cl-format true "There ~[are~;is~:;are~]~:* ~d result~:p: ~{~d~^, ~}~%" 3 [46 38 22])
+(println (pp/cl-format nil "~:d ~r ~:r ~@r" 1234567 42 3 1994))
+(println (pp/cl-format nil "~,2f|~10,3e|~$|~8,'0x" 3.14159 12345.678 1.5 255))
+(println (pp/cl-format nil "~:(~a~) ~@(~a~) ~:@(~a~)" "hello world" "hELLO" "loud"))
+(println (pp/cl-format nil "~{~a~^, ~}|~:{<~a ~a>~}|~20<left~;right~>|" [1 2 3] [[1 2] [3 4]]))
+(println (pp/cl-format nil "~a~12t~a~24t~a" "name" "lang" "year"))
+```
+
+```
+There are 3 results: 46, 38, 22
+1,234,567 forty-two third MCMXCIV
+3.14|  1.235E+4|1.50|000000ff
+Hello World Hello LOUD
+1, 2, 3|<1 2><3 4>|left           right|
+name        lang        year
+```
+
+The pretty printing directives add to the pretty print in progress, so a dispatch function
+can lay its value out with `formatter-out`. Outside one, a control string that needs a
+pretty writer (`~W`, `~<`, `~T`, `~&`) gets one of its own, starting at column 0.
+
+```clojure
+(require '[clojure.pprint :as pp])
+(defn json-dispatch [x]
+  (cond (map? x) ((pp/formatter-out "~<{~;~@{~<~w:~_~w~:>~^, ~_~}~;}~:>")
+                  (for [[k v] x] [(name k) v]))
+        (sequential? x) ((pp/formatter-out "~<[~;~@{~w~^, ~:_~}~;]~:>") x)
+        (string? x) (pr x)
+        (nil? x) (print "null")
+        :else (print x)))
+(binding [pp/*print-right-margin* 50 pp/*print-miser-width* nil]
+  (pp/with-pprint-dispatch json-dispatch
+    (pp/pprint (sorted-map :name "rontolisp" :tags ["lisp" "clojure" "wasm"] :scores (vec (range 0 60 4))))))
+```
+
+```
+{"name":"rontolisp",
+ "scores":
+ [0, 4, 8, 12, 16, 20, 24, 28, 32, 36, 40, 44,
+  48, 52, 56],
+ "tags":["lisp", "clojure", "wasm"]}
+```
+
+A malformed control string is a `RuntimeException` whose message shows the string with a
+caret under the fault.
+
 ## Differences
 
-- `cl-format`, `formatter` and `formatter-out` are not built in; naming one is an error that
-  says so.
+- A decimal literal is a ratio here, so `~A` of `1.5M` writes `3/2`, and an integer is never
+  a long that overflows: `~D` of `-9223372036854775808` writes it where Clojure throws.
+- Where Clojure's refusal message is the JVM's own (the `ClassCastException` of a pretty
+  printing directive whose `*out*` is no pretty writer, a `NullPointerException`), the class
+  is the same and the message differs.
 - `get-pretty-writer` answers its writer unchanged: each `pprint` or `write` lays its
   output out by itself, from column 0, within the margin bound when it runs. Clojure's
   pretty writer keeps the margin it was made with and continues from the column of what

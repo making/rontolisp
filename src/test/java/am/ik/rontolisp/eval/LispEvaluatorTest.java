@@ -893,6 +893,15 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void readLineEndsALineAtLineFeedAloneAndDropsOneCarriageReturnBeforeIt(@TempDir Path tempDir) {
+		String file = tempDir.resolve("cr.dat").toString().replace("\\", "\\\\");
+		assertThat(printedOutput(ReadLineValuesFixture.carriageReturnProgram(file)))
+			.isEqualTo(ReadLineValuesFixture.CARRIAGE_RETURN_EXPECTED);
+		assertThat(printedOutput(ReadLineValuesFixture.carriageReturnFileKindsProgram(file)))
+			.isEqualTo(ReadLineValuesFixture.CARRIAGE_RETURN_FILE_KINDS_EXPECTED);
+	}
+
+	@Test
 	void readLineAnswersMissingNewlinePAfterAnUnreadCharacter() {
 		assertThat(printedOutput(ReadLineValuesFixture.UNREAD_PROGRAM))
 			.isEqualTo(ReadLineValuesFixture.UNREAD_EXPECTED);

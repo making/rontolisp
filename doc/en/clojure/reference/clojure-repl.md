@@ -1,6 +1,7 @@
 # clojure.repl
 
-A var's documentation and a throwable's stack trace. Require `clojure.repl` to use it; it is
+A var's documentation and a throwable's stack trace. Require `clojure.repl` to use it (the
+`clojure>` REPL refers `doc` and `pst` already, see [REPL](../repl.md)); it is
 Clojure source written for rontolisp from the documented behavior of Clojure's namespace, and
 runs the same on every backend.
 

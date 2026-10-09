@@ -14540,6 +14540,18 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void readLineEndsALineAtLineFeedAloneAndDropsOneCarriageReturnBeforeIt() throws Exception {
+		for (boolean component : new boolean[] { false, true }) {
+			assertThat(compileAndRunFrontEndWithDir(
+					am.ik.rontolisp.ReadLineValuesFixture.carriageReturnProgram("cr.dat"), component))
+				.isEqualTo(am.ik.rontolisp.ReadLineValuesFixture.CARRIAGE_RETURN_EXPECTED);
+			assertThat(compileAndRunFrontEndWithDir(
+					am.ik.rontolisp.ReadLineValuesFixture.carriageReturnFileKindsProgram("cr.dat"), component))
+				.isEqualTo(am.ik.rontolisp.ReadLineValuesFixture.CARRIAGE_RETURN_FILE_KINDS_EXPECTED);
+		}
+	}
+
+	@Test
 	void readLineAnswersMissingNewlinePAfterAnUnreadCharacter() throws Exception {
 		for (boolean component : new boolean[] { false, true }) {
 			assertThat(compileAndRunFrontEndWithDir(am.ik.rontolisp.ReadLineValuesFixture.UNREAD_PROGRAM, component))
