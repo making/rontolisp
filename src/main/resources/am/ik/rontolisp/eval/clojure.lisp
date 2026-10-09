@@ -8187,6 +8187,25 @@
   (rontolisp::%clojure-check-arity args 1 1 "test")
   (rontolisp::%clojure-var-test (car args)))
 
+;;;; eval, and resolve of a computed symbol: the lowering's own work, so they run
+;;;; only while the program lowers. The macro-time evaluator (eval/ClojureMacroTime)
+;;;; replaces both with calls back into the lowering, so a macro body (and every
+;;;; helper it calls) evaluates a form and resolves a name at expansion time; a
+;;;; compiled program carries no lowering, so here both refuse. resolve of a
+;;;; quoted symbol never comes here: it resolves while the program lowers.
+
+(defun rontolisp::%clojure-eval (form)
+  "eval at run time: refused."
+  (declare (ignore form))
+  (rontolisp::%clojure-unsupported-operation-exception
+   "eval is not supported at run time: only a macro body's eval runs, while the program lowers"))
+
+(defun rontolisp::%clojure-resolve (symbol)
+  "resolve of a computed symbol at run time: refused."
+  (declare (ignore symbol))
+  (rontolisp::%clojure-unsupported-operation-exception
+   "resolve of a computed symbol is not supported at run time: vars exist only while the program lowers"))
+
 ;;;; Namespaces: *ns* as a value, and the REPL's history.
 ;;
 ;; A namespace is (:C%NS-OBJECT "name"), interned per name in

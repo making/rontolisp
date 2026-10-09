@@ -205,6 +205,14 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   form (`if`, `do`, `let*`, `new`, ...), of a head the reader spells (`deref`,
   `syntax-quote`, `ns`, `in-ns`) is refused by name, where the oracle
   accepts it (and ignores it at call sites, for a special form).
+- `eval`, and `resolve` of a computed symbol, run only while the program lowers (in a
+  macro body and what it calls); at run time they throw an
+  `UnsupportedOperationException`, where the oracle evaluates and resolves. `resolve`
+  answers `nil` for a `clojure.core` var this front end lacks (the oracle's var), for a
+  record or type name (the oracle's class) and for a var of a namespace built into the
+  lowering (`clojure.string`); a quoted symbol resolves in the namespace the call lowers
+  in, where the oracle reads `*ns*` when the call runs, and to a definition below the call
+  too. A definition an `eval`'d form makes exists only while the program lowers.
 - `#(...)` reads as the oracle's `(fn* [p1__N# ...] (body))` in source, under a quote and
   in `read-string`/`read`, but N restarts at each top-level form (each datum read), where
   the oracle's counter runs across the process: the parameter names differ, and two reads

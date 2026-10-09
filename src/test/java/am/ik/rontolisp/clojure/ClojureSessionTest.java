@@ -274,6 +274,14 @@ class ClojureSessionTest {
 	}
 
 	@Test
+	void aMacroOfALaterBufferEvaluatesOverWhatAnEarlierOneDefined() {
+		// eval in a macro body lowers through the session's one lowering
+		assertThat(runSession("(defn sx-four [] 4)", "(defmacro sx-if [t a b] (if (eval t) a b))",
+				"(println (sx-if (= (sx-four) 4) :yes :no) (sx-if (resolve 'sx-nowhere) :yes :no))"))
+			.isEqualTo(":yes :no\n");
+	}
+
+	@Test
 	void aSessionReadsAClassKeywordsSupersInALaterBuffer() {
 		// the hierarchy runtime of a first buffer without a class takes the class rows'
 		// readers when a later one spells a class, and a later record joins the rows

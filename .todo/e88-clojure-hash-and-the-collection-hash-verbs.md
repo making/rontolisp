@@ -7,7 +7,10 @@ are unknown names, and a body's `IHashEq` (`hasheq`) is stored but read by no ve
 (`.kb/clojure-frontend.md` "Collection interfaces", the `MARKER` family). instaparse 1.5.0
 hashes its `AutoFlattenSeq` and compares by hash (`(== hashcode (hash other))`), and
 data.priority-map 1.2.0 answers `hasheq` through `hash-unordered-coll` (measured 2026-10-08,
-past e87's `compile-if`).
+past e87's `compile-if`). Since e87 (2026-10-09) `resolve` answers nil for a core var the
+front end lacks, so both libraries' `compile-if` takes the fallback (`(.hashCode this)`, the
+unmixed hash); implementing `hash-unordered-coll` and `mix-collection-hash` switches them to
+the oracle's branch.
 
 ## What decides the design
 

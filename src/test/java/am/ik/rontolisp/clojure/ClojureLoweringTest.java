@@ -1840,6 +1840,44 @@ class ClojureLoweringTest {
 	}
 
 	@Test
+	void aMacroBodysEvalChoosesTheCodeThisFrontEndLowers() {
+		// data.priority-map's compile-if: a core var the subset lacks resolves to nil, so
+		// the expansion takes the fallback (the oracle, which has it, takes the other)
+		String compileIf = "(defmacro mu-ci [test then else] (if (eval test) then else)) ";
+		assertThat(loweredWithMacros(compileIf + "(mu-ci (resolve 'clojure.core/hash-unordered-coll) :has :lacks)"))
+			.endsWith("\"lacks\")");
+		assertThat(loweredWithMacros(compileIf + "(mu-ci (resolve 'clojure.core/inc) :has :lacks)"))
+			.endsWith("\"has\")");
+		// a class lookup runs on the macro-time JVM, the same on every backend
+		assertThat(loweredWithMacros(
+				compileIf + "(mu-ci (try (Class/forName \"java.util.ArrayList\") (catch Exception _ nil)) :cls :none)"))
+			.endsWith("\"cls\")");
+		assertThat(loweredWithMacros(compileIf + "(mu-ci (resolve 'java.util.List) :cls :none)")).endsWith("\"cls\")");
+		assertThat(loweredWithMacros(compileIf + "(mu-ci (resolve 'no.such.Klass) :cls :none)")).endsWith("\"none\")");
+	}
+
+	@Test
+	void aMacroBodysEvalSeesNoLocalOfTheCallSite() {
+		// the oracle's eval compiles in the namespace, never in the caller's scope
+		assertThatThrownBy(() -> loweredWithMacros(
+				"(defmacro mu-ev [form] (eval form)) (let [mu-local 1] (mu-ev (inc mu-local)))"))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("in macro `mu-ev`")
+			.hasMessageContaining("unknown name: mu-local");
+	}
+
+	@Test
+	void evalAndResolveRefuseWhatTheyCannotTake() {
+		assertThatThrownBy(() -> loweredWithMacros("(resolve {} 'inc)")).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("resolve with an environment map is not supported yet");
+		assertThatThrownBy(() -> loweredWithMacros("(eval 1 2)")).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Wrong number of args (2) passed to: clojure.core/eval");
+		assertThatThrownBy(() -> loweredWithMacros("(defmacro mu-rs [x] (resolve x)) (mu-rs :k)"))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("resolve takes a symbol");
+	}
+
+	@Test
 	void macroCallsAboveTheirDefinitionNameTheMissingExpander() {
 		assertThatThrownBy(
 				() -> Clojure.read("(mu-early 1) (defmacro mu-early [x] x)", null, ClojureMacroTime.create()))
