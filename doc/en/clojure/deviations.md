@@ -37,10 +37,11 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   sets included, but a stored collection key is the first `=` key of its kind (vector,
   list, lazy seq) the program stored, so its metadata and the spelling of a nested
   member follow that earlier object; those keys stay alive for the whole run, one
-  per distinct value and kind. A repeated set-literal element is refused by spelling.
+  per distinct value and kind.
   `=` compares vectors, lists and lazy seqs element-wise like the oracle, and since `nil`
   is the empty list, `(= [] nil)` and `(= (java.util.ArrayList.) nil)` are `true` where the
-  oracle answers `false`.
+  oracle answers `false`. As keys `[]` and `nil` stay apart like the oracle's, so an empty
+  list or seq misses an empty vector key: `(get {[] 1} ())` is `nil` (the oracle: `1`).
   `=` asks a Java object on the left its `equals` like the oracle, but hands it only a
   number, string, character, `true`, `nil` or Java object: `false`, a keyword, a symbol
   or a collection is `=` to no Java object but a Java `List`, `Map` or `Set` of its kind.
@@ -268,12 +269,17 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   `AbstractMethodError`).
 - A `reify`, `deftype` or `defrecord` body implements the `clojure.lang` interfaces the core
   functions consult -- `IReduceInit`, `IReduce`, `IKVReduce`, `Seqable`, `Counted`,
-  `Indexed`, `ILookup`, `IFn` (with `Callable` and `Runnable`), `IDeref`, `IMeta`, `IObj` --
-  and overrides `Object`'s methods ([reify](reference/reify.md#host-interfaces)); any other
-  interface (`ISeq`, `IPersistentMap`, `Sequential`, `java.util.List` ...) is refused by
-  name. A type's `equals` and `hashCode` answer `=` and `.hashCode` but never key a map or
-  a set, which hold such a value by identity. `sort` and `distinct` take a type
-  implementing `Seqable` alone through its seq, where the oracle refuses both.
+  `Indexed`, `ILookup`, `IFn` (with `Callable` and `Runnable`), `IDeref`, `IMeta`, `IObj` --,
+  the collection interfaces (`IPersistentMap`, `ISeq`, `Sequential`, `Iterable`,
+  `java.util.List` ...) and overrides `Object`'s methods
+  ([reify](reference/reify.md#host-interfaces)); any other interface (`IChunkedSeq`,
+  `java.util.Deque` ...) is refused by name. `first`, `next` and `rest` of an `ISeq` type read
+  it through its `seq`, a verb may call a method another number of times than the oracle, and
+  `str` of a collection type spells its contents
+  ([collection interfaces](reference/reify.md#collection-interfaces)). A type's `equals` and
+  `hashCode` answer `=` and `.hashCode` but never key a map or a set, which hold such a value
+  by identity. `sort` and `distinct` take a type implementing `Seqable` alone through its
+  seq, where the oracle refuses both.
 - `clojure.core.reducers` folds on the calling thread, its parts one after the other, and
   `cat` of two non-empty collections answers one accumulator (a vector) holding both, where
   the oracle answers a `Cat` tree whose fold combines its halves' folds.

@@ -38,6 +38,16 @@ class ClojureInteropTest {
 	}
 
 	@Test
+	void aHostIteratorStepsThroughIteratorSeqAndAnIterableTypesVerbs() throws Exception {
+		// answers measured against clj 1.12.6: iterator-seq steps a host Iterator, and an
+		// Iterable type's iterator may hand one on to seq, reduce and into
+		assertBothEqual("(println (iterator-seq (.iterator (java.util.ArrayList. [1 2 3]))))", "(1 2 3)\n");
+		assertBothEqual("(deftype H [l] java.lang.Iterable (iterator [_] (.iterator l)))"
+				+ " (println (seq (H. (java.util.ArrayList. [4 5]))) (reduce + (H. (java.util.ArrayList. [4 5])))"
+				+ " (into [] (H. (java.util.ArrayList. [6]))))", "(4 5) 9 [6]\n");
+	}
+
+	@Test
 	void unmappedMethodsCallAStringNumberOrCharacterAsItsHostObject() throws Exception {
 		// answers measured against clj 1.12.6
 		assertBothEqual("(println (.codePointAt \"abc\" 0))", "97\n");

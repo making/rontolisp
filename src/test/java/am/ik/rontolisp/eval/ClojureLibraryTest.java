@@ -126,6 +126,33 @@ class ClojureLibraryTest {
 	}
 
 	@Test
+	void aProgramStoringNoCollectionInterfaceRowSplicesTheVerbsWithoutTheirArms() {
+		// only the store of a collection interface's row makes a value the verbs read
+		// through its methods: a program storing none compiles them as before
+		Map<String, String> arms = Map.of("RONTOLISP::%CLOJURE-STRICT-SEQ", "%CLOJURE-ITERABLE-P",
+				"RONTOLISP::%CLOJURE-EQUAL", "%CLOJURE-ICOLLECTION-P", "RONTOLISP::%CLOJURE-WRITE", "%CLOJURE-IMAP-P",
+				"RONTOLISP::%CLOJURE-PEEK", "%CLOJURE-ISTACK-P", "RONTOLISP::%CLOJURE-FIND", "%CLOJURE-IASSOCIATIVE-P",
+				"RONTOLISP::%CLOJURE-COMPARE", "%CLOJURE-ICOMPARABLE-P", "RONTOLISP::%CLOJURE-COLL-REDUCE-3",
+				"%CLOJURE-ITERABLE-P", "RONTOLISP::%CLOJURE-NTH", "%CLOJURE-ISEQUENTIAL-P",
+				"RONTOLISP::%CLOJURE-IS-REALIZED", "%CLOJURE-IPENDING-P", "RONTOLISP::%CLOJURE-SEQABLE-SEQ",
+				"%CLOJURE-ISEQ-P");
+		arms.forEach((verb, arm) -> assertThat(defun(ClojureLibrary.forms(), verb)).as(verb).contains(arm));
+		List<LispVal> plain = ClojureLibrary.process(Clojure.read("(deftype T [] clojure.lang.Seqable (seq [_] nil))"
+				+ " (println (seq [1]) (= [1] [1]) (peek [1]) (find {:a 1} :a) (compare 1 2) (nth [1] 0)"
+				+ " (realized? (lazy-seq nil)) (reduce + [1]) (seq (T.)))", null));
+		arms.forEach((verb, arm) -> assertThat(defun(plain, verb)).as(verb).doesNotContain(arm));
+		String program = plain.get(plain.size() - 1).print();
+		assertThat(program).doesNotContain("%CLOJURE-ICOLLECTION-P").doesNotContain("%CLOJURE-IMAP-P");
+		// a body naming one keeps its family's arms and those of its supers, no other's
+		List<LispVal> map = ClojureLibrary.process(Clojure.read(
+				"(deftype M [] clojure.lang.IPersistentMap (count [_] 0)) (println (count (M.)) (= 1 1) (peek [1]))",
+				null));
+		assertThat(defun(map, "RONTOLISP::%CLOJURE-EQUAL")).contains("%CLOJURE-ICOLLECTION-P");
+		assertThat(defun(map, "RONTOLISP::%CLOJURE-STRICT-SEQ")).contains("%CLOJURE-ITERABLE-P");
+		assertThat(defun(map, "RONTOLISP::%CLOJURE-PEEK")).doesNotContain("%CLOJURE-ISTACK-P");
+	}
+
+	@Test
 	void aProgramMakingNoMatcherSplicesNthWithoutItsMatcherArm() {
 		// only re-matcher makes a matcher: a program naming it keeps nth's group arm,
 		// any other compiles nth as before matchers were read

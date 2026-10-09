@@ -38,10 +38,11 @@
  `=` で一致するキーを見つけます。ただし格納されるコレクションのキーは、プログラムが最初に
  格納した同じ種類（ベクター・リスト・遅延 seq）の `=` なキーなので、メタデータと入れ子の
  要素の綴りはその先のオブジェクトに従います。これらのキーは異なる値と種類ごとに1つずつ、
- 実行の終わりまで保持されます。セットリテラルの重複要素は綴り単位で拒否されます。
+ 実行の終わりまで保持されます。
  `=` はベクター、リスト、遅延 seq を本家と同じく要素単位で比較します。`nil` が空リスト
  なので、本家が `false` を返す `(= [] nil)` と `(= (java.util.ArrayList.) nil)` は `true` に
- なります。
+ なります。キーとしては本家と同じく `[]` と `nil` を区別するので、空のリストや seq は空ベクターの
+ キーに一致しません。`(get {[] 1} ())` は `nil` です（本家は `1`）。
  `=` は本家と同じく左辺の Java オブジェクトに `equals` で尋ねますが、渡すのは数値、文字列、
  文字、`true`、`nil`、Java オブジェクトだけです。`false`、キーワード、シンボル、コレクションは、
  同じ種類の Java の `List`、`Map`、`Set` を除き、どの Java オブジェクトとも `=` になりません。
@@ -257,10 +258,13 @@
   `ArityException` をシグナルします（オラクルは `AbstractMethodError`）。
 - `reify`・`deftype`・`defrecord` の本体が実装できるのは、コア関数が参照する `clojure.lang`
   のインタフェース（`IReduceInit`、`IReduce`、`IKVReduce`、`Seqable`、`Counted`、`Indexed`、
-  `ILookup`、`IFn`（`Callable` と `Runnable` を含む）、`IDeref`、`IMeta`、`IObj`）と `Object` の
-  メソッドの上書きです（[reify](reference/reify.md#host-interfaces)）。それ以外のインタフェース
-  （`ISeq`、`IPersistentMap`、`Sequential`、`java.util.List` など）は名前を挙げて拒否されます。
-  型の `equals` と `hashCode` は `=` と `.hashCode` に答えますが、マップのキーやセットの要素の
+  `ILookup`、`IFn`（`Callable` と `Runnable` を含む）、`IDeref`、`IMeta`、`IObj`）、コレクションの
+  インタフェース（`IPersistentMap`、`ISeq`、`Sequential`、`Iterable`、`java.util.List` など）、
+  `Object` のメソッドの上書きです（[reify](reference/reify.md#host-interfaces)）。それ以外の
+  インタフェース（`IChunkedSeq`、`java.util.Deque` など）は名前を挙げて拒否されます。`ISeq` 型への
+  `first`・`next`・`rest` はその `seq` を通して読み、関数がメソッドを呼ぶ回数はオラクルと異なる
+  ことがあり、コレクションの型の `str` は中身を綴ります
+  （[コレクションのインタフェース](reference/reify.md#collection-interfaces)）。型の `equals` と `hashCode` は `=` と `.hashCode` に答えますが、マップのキーやセットの要素の
   比較には使われず、そうした値は同一性で保持されます。`Seqable` だけを実装した型について、
   `sort` と `distinct` はその seq を通して答えます。オラクルはどちらも拒否します。
 - `clojure.core.reducers` は呼び出したスレッドの上で部分を順に1つずつ fold します。空でない

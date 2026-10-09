@@ -51,7 +51,7 @@ The oracle is `clj` 1.12.6.1673: a behavior is decided by running it there, and 
 | `false` | the value of `rontolisp::%clojure-false`, a distinct non-`NIL` symbol spelled `false` | the `#f` treatment of `scheme.lisp`; every lowered test is an explicit null-or-false check on a temporary; the symbol `java:` passes as Java's false ("Java interop") |
 | `:foo`, `:a/b` | `(:C%KEYWORD "foo")`, spelling verbatim | compared by `equal`; `::kw` / `::alias/kw` resolve at lower time against the current namespace (an unknown alias is the oracle's `Invalid token`) |
 | `{k v}` | an `equal` hash table (`rontolisp:plist-hash-table`), never mutated: every verb builds a fresh one | the shared runtime (`.kb/hash-tables.md`), so persistence holds on all four backends with no per-backend code; a persistent-map library would add a representation every backend prints, hashes and compares. Collection keys go through "Structural keys" |
-| `#{..}` | `(:C%SET table)`, each member under itself | a repeated literal element is refused when the read forms are `=` (`ClojureReader.equivKey`: `1`/`1N`, `[1]`/`(1)`, maps and sets in any order; `Duplicate key`) |
+| `#{..}` | `(:C%SET table)`, each member under itself | a repeated literal element is refused when the read forms are `=` (`ClojureReader.equivKey`: `1`/`1N`, `[1]`/`(1)`, maps and sets in any order; `Duplicate key`); members `=` only once evaluated: "Literal keys equal once evaluated" |
 | `sorted-map` / `sorted-set` (and `-by`) | `(:C%SORTED setp cmp items)`: a vector of `[k v]` entries or members in comparator order | "Sorted collections" |
 | `[..]` | a CL vector (a `vector` call) | a string is a CL vector too, so `vector?`/`coll?` exclude strings |
 | list, seq | a CL list | lazy seq: `(:C%LAZY cell)`, memoized through `rplaca`/`rplacd` ("Laziness") |
@@ -99,7 +99,7 @@ answered `2 5 3` before).
 | `defonce` | `def` unless `boundp` | a reload keeps the root |
 | `defn-` | a private `defn` | "Namespaces and project files" |
 | `fn` / `#(...)` | `lambda`; several arities one `lambda` over `&rest` dispatching per arity, each arity binding through `let*` | a named `fn` is a `labels` self-binding, an anonymous one only when a `recur` reaches it. `#()` READS as the oracle's `(fn* [p1__N# ...] (body))` (`ClojureReader.readAnonFn`; `fn*` lowers as `fn`): fixed parameters up to the highest `%N`, an unused lower one generated after the body, `& rest__N#` for `%&`, `%` inside a quote replaced too, a nested `#()` refused; its body is ONE call (`#(f a b)` -> `(f a b)`; several forms need `do`). N restarts per top-level form (the oracle's counter is process-wide): a parameter only has to differ from those of forms it nests in, and a case's printed spelling stays put wherever it sits in a file |
-| destructuring (`let`/`loop`/`fn`/`defn`/`for`/`doseq`) | `let*` pairs over one temporary per pattern | vector: positional through `%clojure-nth` (nil past the end; a map or set refused, the oracle's `nth`), `&` rest through `%clojure-drop`, `:as`; map: the table-aware read with `:keys`/`:syms`/`:strs`/`:or`/`:as` (a qualified `:keys` entry binds the short name); nested; malformed shapes refused by name |
+| destructuring (`let`/`loop`/`fn`/`defn`/`for`/`doseq`) | `let*` pairs over one temporary per pattern | vector: positional through `%clojure-nth` (nil past the end; a map or set refused, the oracle's `nth`), `&` rest through `%clojure-drop`, `:as`; map: the table-aware read with `:keys`/`:syms`/`:strs`/`:or`/`:as` (a qualified `:keys` entry binds the short name) of the init through `%clojure-destructure-map`, which reads a `seq?` (list or lazy seq, never a vector) as `seq-to-map-for-destructuring` does (one member itself, none `{}`, more pairs through `%clojure-plist-table` with an odd last member's `%clojure-merge-entry-plist`), so `& {:keys ...}` takes keyword arguments and `:as` binds that map; until 2026-10-08 the rest list was read as is and every keyword argument was nil, clojure-spec `a-map-pattern-reads-a-seq-as-keyword-arguments` (oracle-identical); nested; malformed shapes refused by name |
 | `let` / `letfn` | `let*` (sequential) / one `labels` over every entry | `letfn` names are pre-scanned, so siblings call each other; each entry is its own `recur` target; a later entry shadows an earlier one |
 | `loop` / `recur` | `labels` self call | "recur" |
 | `->` `->>` `as->` `doto` `cond->` `cond->>` `some->` `some->>` | datum rewrites around one temporary | `as->` is nested `let`s (shadowing like the oracle); `some->` stops at `nil`, not `false`; a step over a collection literal signals |
@@ -2112,7 +2112,10 @@ constructor and consumer, and a regex `replace` with a function replacement.
 - `extend-protocol`/`extend-type`/`extend` add rows under the target's tag: the
   class-keyword kinds, `nil`, `Object`, known records and deftypes, the classes of the
   instants and the UUID ("Instants and UUIDs"), and any other class `instance?` resolves
-  (a name no class has is its `unknown name: X`).
+  (a name no class has is its `unknown name: X`). The three answer nil like the oracle
+  (2026-10-09, clj 1.12.6; `extensionRows` ends the rows in `nil`; they used to answer the
+  last `setf`'s lambda, echoed `#<procedure>`); pinned by clojure-spec `extend-forms-answer-nil`
+  and `ClojureSessionTest.theExtendFormsEchoNil`.
 - **Walked classes** (oracle-checked clj 1.12.6, 2026-10-08). A target no value's tag names
   exactly -- a throwable (a condition's tag is the fresh miss list), an interface or
   abstract class over core kinds (`clojure.lang.IRef`/`IDeref`/`ARef`/`IExceptionInfo`), a
@@ -2333,11 +2336,12 @@ measured on clj 1.12.6, 2026-10-08).
   data.priority-map, next.jdbc and 74 widely used jars -- counting the libraries whose bodies
   name each): `Object` 21, `IFn` 14, `ILookup` 13, `IObj` 12, `IDeref` 11, `Counted` 11,
   `Seqable` 10, `Indexed` 10, then the collection interfaces (`IPersistentCollection`,
-  `IHashEq`, `Associative` 9 each ...: e78) and `IReduceInit` 5 (next.jdbc's `plan`,
-  `clojure.core/iteration`, below). Supported: `IReduceInit`, `IReduce`, `IKVReduce`, `Seqable`,
-  `Counted`, `Indexed`, `ILookup`, `IFn` with its supers `Callable` and `Runnable`, `IDeref`,
-  `IMeta`, `IObj`, and `Object`'s `toString`/`equals`/`hashCode`. Any other interface of the
-  jar (`CLOJURE_LANG`, its public list) or loadable host interface is refused by name
+  `IHashEq`, `Associative` 9 each ...: "Collection interfaces" below) and `IReduceInit` 5
+  (next.jdbc's `plan`, `clojure.core/iteration`, below). Supported: `IReduceInit`, `IReduce`,
+  `IKVReduce`, `Seqable`, `Counted`, `Indexed`, `ILookup`, `IFn` with its supers `Callable` and
+  `Runnable`, `IDeref`, `IMeta`, `IObj`, `Object`'s `toString`/`equals`/`hashCode`, and the
+  collection interfaces. Any other interface of the jar (`CLOJURE_LANG`, its public list:
+  `IChunkedSeq`, `IRef` ...) or loadable host interface (`java.util.Deque`) is refused by name
   (`X is not supported yet as an interface of reify`), a class the oracle's `only interfaces
   are supported, had: C`, an undotted unknown name its `Unable to resolve symbol` (`clojure.lang`
   is no default import), a dotted one `Unable to resolve classname`.
@@ -2348,11 +2352,19 @@ measured on clj 1.12.6, 2026-10-08).
   matches across every interface, so a `toString` under a protocol group overrides `Object`'s
   (before: `Can't define method not in interfaces`). An interface method takes fixed
   parameters (the oracle reads `&` as a parameter's name; refused here) and each count once.
-  What the form's class implements itself stores no row and refuses a method of it in the
-  oracle's `Duplicate method name`: a record's `Counted`, `Seqable`, `ILookup`, `IMeta`,
-  `IObj` (naming `ILookup` or `IObj` is its `Duplicate interface name`) and its
-  `equals`/`hashCode`, a reify's `IMeta`/`IObj`. `extend-type` keeps protocols only
-  (`implGroups`).
+  An interface the form's class implements itself stores no row (`RECORD_PROVIDED`: a
+  record's map interfaces and their supers; `REIFY_PROVIDED`: `IMeta`/`IObj`). Naming one of
+  the class's direct ones is the oracle's `Duplicate interface name` (`RECORD_DIRECT`:
+  `ILookup`, `IObj`, `IPersistentMap`, `IHashEq`, `java.util.Map`, `java.io.Serializable`;
+  a reify's `IObj`). A method the class generates (`RECORD_GENERATED`, the oracle's
+  `getDeclaredMethods` of a plain record, 2026-10-09: `count`, `seq`, `valAt`, `assoc`,
+  `iterator`, the `java.util.Map` methods, `equals`, `hashCode` ...; a reify's `meta` and
+  `withMeta`) is its `Duplicate method name`, under any group, since the oracle matches a
+  method against the class's own interfaces too; one of those interfaces the class leaves
+  to the interface (`assocEx`, `Iterable.forEach`, a `java.util.Map` default), which the
+  oracle's class would override, is refused by name (`I/m is not supported yet as a method of
+  defrecord`: the record's own verbs answer those interfaces, so no row would hold it).
+  `extend-type` keeps protocols only (`implGroups`).
 - Rows (`ClojureInterfaces.rowForms`): one store per family under the type's tag,
   `(%clojure-<family>-row tag '("clojure.lang.X" ...) (list "method" lambda ...))`, into the
   library's `%clojure-interface-rows` (tag -> an `equal` table: interface name -> T, method name
@@ -2402,9 +2414,9 @@ measured on clj 1.12.6, 2026-10-08).
   function and the options as a run-time list; `-v` as a value): the oracle's reify in
   `clojure.lisp`, a fresh `:C%REIFY` tag whose `Seqable` and `IReduceInit` rows the worker
   stores through the families' stores, so `%clojure-iteration`/`-v` are producers of SEQABLE,
-  REDUCE_INTERFACE and REDUCIBLE (`ClojureInterfaces.ITERATION`). The options are read like
-  the oracle's `& {:keys ...}` (one argument is the map, else pairs with the last key winning
-  and an odd trailing one conj'd like onto a map, `%clojure-iteration-option`); a given
+  REDUCE_INTERFACE and REDUCIBLE (`ClojureInterfaces.ITERATION`). The options are the map
+  pattern's read of the rest (`%clojure-destructure-map`, "The lowering table",
+  destructuring), read with `%clojure-call-keyword`; a given
   option, nil too, is called through `%clojure-as-fn`. `seq` steps from `initk` on every call;
   each element's `somef`/`vf`/`kf` run when it is built, the next `step` when the lazy rest is
   realized; `reduce` stops at `reduced` before `kf`. Pin: clojure-spec
@@ -2425,6 +2437,97 @@ measured on clj 1.12.6, 2026-10-08).
   the `#object` line); `ClojureLoweringTest#aBodyImplementingAnInterfaceStoresItsRowThroughTheFamilyOfEach`
   (the stores and every refusal), `ClojureArmsTest#anInterfaceFamilyIsMadeByTheStoreOfARowOfItsInterfaces`,
   `ClojureLibraryTest#aProgramStoringNoInterfaceRowSplicesTheVerbsWithoutTheirInterfaceArms`.
+
+## Collection interfaces
+
+**A body implementing a collection interface is a collection to the core verbs, each group of
+interfaces behind an arm family its row's store makes (`ClojureArms`, `COLLECTION` through
+`MARKER`), so a program storing no such row compiles as before** (`ClojureInterfaces`'
+`collectionTable`/`javaTable`, methods and supers read off the oracle's jar; `clojure.lisp`
+";;;; Collection interfaces"; every verb measured on clj 1.12.6, 2026-10-08).
+- What a verb asks, in the oracle's order (RT, core): `conj`/`into`/`merge` an
+  `IPersistentCollection`'s `cons`; `assoc` (`update`, `assoc-in`) an `Associative`'s `assoc`;
+  `dissoc` an `IPersistentMap`'s `without`; `disj` an `IPersistentSet`'s `disjoin`;
+  `contains?` an `Associative`'s `containsKey`, then an `IPersistentSet`'s `contains`, a
+  `Map`'s `containsKey`, a `Set`'s `contains`; `get` an `ILookup`'s `valAt`, then a `Map`'s
+  `get`, an `IPersistentSet`'s `get`; `find` an `Associative`'s `entryAt`, then a `Map`'s;
+  `count` a `Counted`'s `count`, then an `IPersistentCollection`'s seq walked, a
+  `Collection`'s or `Map`'s `size`; `seq` a `Seqable`'s `seq`, then an `Iterable`'s
+  `iterator`, a `Map`'s `entrySet`; `=` an `IPersistentCollection`'s `equiv` on either side (a
+  core collection on the left reads a vector type by `count`/`nth`, a sequential by its seq, a
+  map type as a `java.util.Map` only with `MapEquivalence`, a set type as a `java.util.Set`);
+  `reduce` an `IReduceInit`, then an `Iterable`'s iterator (`iter-reduce`, stopping at
+  `reduced`), else the seq; `peek`/`pop` an `IPersistentStack`; `rseq` a `Reversible`;
+  `realized?` an `IPending`; `subseq`/`rsubseq` a `Sorted`'s `seqFrom`/`seq`/`comparator`/
+  `entryKey`; `compare`, `sort` and a sorted collection's default order a `Comparable`'s
+  `compareTo`; `empty` its `empty`; `keys`/`vals`/`reduce-kv`/`select-keys` a map type's
+  entries; the printer by kind (`%clojure-typed-print-kind`: map, set, vector, seq; a
+  `java.util` one under `pr`, like the oracle's `print-method`).
+- Families, each stored by `%clojure-<family>-row`: `COLLECTION`, `ASSOCIATIVE`,
+  `PERSISTENT_MAP` (`MapEquivalence` too), `PERSISTENT_SET`, `STACK`, `PERSISTENT_VECTOR`,
+  `ISEQ`, `SEQUENTIAL` (`IPersistentList` too), `REVERSIBLE`, `PENDING`, `SORTED_INTERFACE`,
+  `COMPARABLE`, `ITERABLE` (a producer of `REDUCIBLE` and `SEQABLE` too, whose arms it rides),
+  `ITERATOR`, `JAVA_COLLECTION` (`Collection`, `SequencedCollection`, `List`, `Set`,
+  `RandomAccess`), `JAVA_MAP` (a `SEQABLE` producer too), `MARKER` (`IHashEq`, `Serializable`,
+  `IEditableCollection`, the transients: `instance?` and instance calls only). The predicates'
+  helpers (`coll?`, `map?`, `set?`, `seq?`, `list?`, `sequential?`, `associative?`,
+  `reversible?`) are `%clojure-is-*-type` aliases of the old ones, so the families stand ahead
+  of `SORTED`, whose aliases they rename into (the strip goes in enum order). A strip fold
+  position is a `cond` clause test, an `if` test or an `or` disjunct, never inside an `and`
+  (`%clojure-counts-agree` nests `if`s for it).
+- Iterators: a Lisp seq iterator is `(:C%ITERATOR #(seq))` (`%clojure-seq-iterator`), what
+  `(.iterator coll)` of a core collection, `clojure.lang.SeqIterator.` and `RT/iter` answer;
+  `%clojure-iter-has-next`/`-next` step it, a typed `Iterator` row, or a host iterator
+  (`java:call`, a `HOST` arm). `iterator-seq` realizes one member at a time (the oracle 32).
+  `clojure.lang.MapEntry.` and `MapEntry/create` build a `[k v]` vector, the map entry here.
+- `java.util` default methods (`getOrDefault`, `forEach`, `stream` ...) are declared
+  (`HostInterface.defaults`) but stored only when the body defines them; an instance call of a
+  method only defaults declare goes through `%clojure-default-method`, refusing by name when
+  the row holds none (`the default method m is not supported yet`: its body is Java).
+- `extend-protocol`/`extend-type`/`extend` to an interface (`ClojureProtocolLowering`):
+  - spelled like the one core kind whose values implement it (`IPersistentVector` :vector,
+    `IPersistentMap` :map): the kind key stays, and the same lambda also stands under the
+    binary name (`interfaceWalkKey`, `storedTwice`), which a dispatcher that does not walk asks
+    `C%PROTOCOL-SUPER` for behind a guard: the interface's family test (folded with no row of
+    the family) and, for an interface every record implements, `%clojure-record-p` once the
+    program defines a record (`recordGuards`, settled after the last file by
+    `noteRecordGuards`); a guard the dispatchers lacked restarts the lowering (`guardMisses`).
+  - spelled like a kind whose interface other kinds' values implement too (`Sequential`,
+    `java.util.List`, `java.util.Collection`, `IPersistentCollection`, `IFn`;
+    `reachesOtherKinds` over `ClojureValueClasses.kindsOf`/`dispatchKeyword`): a walked class
+    keyed by its binary name alone, so the walk picks the protocol's most specific interface,
+    like the oracle's `pref` (`ISeq` ahead of `IPersistentCollection` for a list), where a kind
+    key would answer first. Measured 2026-10-09: before, a vector missed `Sequential`,
+    `java.util.List` and `Collection`, a keyword `IFn`, a record `IPersistentMap`,
+    `java.util.Map` and `IPersistentCollection` (all fell to `Object`), and a list took
+    `IPersistentCollection` ahead of `ISeq`.
+  - any other interface: a walked class as before (`Counted`, `IDeref`).
+- Deviations (user doc: reify, "Collection interfaces"): `first`/`next`/`rest` of an `ISeq`
+  type read its `seq` (an `ISeq` answer the seq view walks through `first`/`next`,
+  `%clojure-iseq-lazy`), so `next`/`rest` answer that seq's tail where the oracle calls `next`
+  and `more`; a verb may call a method another number of times (no chunked seqs); `str` spells
+  the contents where the oracle answers `Class@hash`; a `java.util` type prints its contents
+  under `print` too.
+- Re-probes (2026-10-08): data.priority-map 1.2.0 stops at `priority_map.clj:216:7: unknown
+  name: eval` (its `compile-if` macro evaluates a form while expanding); expanded by hand (the
+  `compile-if` taken, `hasheq` as `(count this)`) it runs whole on the interpreter, the JVM and
+  wasm. instaparse 1.5.0 now stops at `auto_flatten_seq.clj:13:15: unknown name: eval` (the
+  same macro shape) and needs `hash`/`mix-collection-hash` past it.
+- Pins: clojure-spec `a-collection-type-conjs-empties-counts-and-compares-through-its-methods`,
+  `a-map-type-assocs-dissocs-reads-and-prints-as-a-map`,
+  `a-set-type-disjs-contains-and-prints-as-a-set`,
+  `a-vector-type-indexes-stacks-reverses-and-prints-as-a-vector`,
+  `a-seq-type-walks-through-its-first-and-next`,
+  `an-iterable-type-seqs-and-reduces-through-its-iterator`,
+  `pending-comparable-and-sorted-types-answer-through-their-methods`,
+  `a-protocol-extended-to-a-collection-interface-reaches-a-type-implementing-it`,
+  `a-protocol-extended-to-an-interface-reaches-every-value-implementing-it` (all four backends,
+  the oracle's lines); `ClojureLoweringTest#aBodyImplementingACollectionInterfaceStoresTheRowsOfItsWholeClosure`
+  (the stores and the refusals), `#anExtensionToAnInterfaceKeyedByACoreKindReachesATypedValueBehindItsTest`,
+  `#anExtensionToAnInterfaceOtherKindsImplementTooIsAWalkedClass`,
+  `ClojureArmsTest#aCollectionInterfaceFamilyIsMadeByTheStoreOfARowOfItsInterfaces`,
+  `ClojureLibraryTest#aProgramStoringNoCollectionInterfaceRowSplicesTheVerbsWithoutTheirArms`,
+  `ClojureInteropTest#aHostIteratorStepsThroughIteratorSeqAndAnIterableTypesVerbs`.
 
 ## Java interop
 
@@ -2905,14 +3008,42 @@ brace (`readBraced`/`readSet`, measured on `clj` 1.12.6, 2026-10-08): the oracle
 `PersistentArrayMap.createWithCheck` compares the READ forms, so `{1 :a 1N :b}`,
 `{[1] :a (1) :b}`, `{{:a 1 :b 2} 1 {:b 2 :a 1} 2}` and `{-0.0 1 0.0 2}` are refused and
 `{1 :a 1.0 :b}`, `{1 :a 1M :b}`, `{#"a" 1 #"a" 2}` and `{:a 1 ::a 2}` are not; keys equal
-only once evaluated (`{(+ 1 2) 1 3 2}`, `{[1] :a (list 1) :b}`) are the oracle's RUNTIME
-`Duplicate key`, and `{[1] :a '(1) :b}` its compile-time `Duplicate constant keys in map`;
-none of those three is checked (map literals with non-constant keys build last-wins).
+only once evaluated are checked in the lowering ("Literal keys equal once evaluated").
 `1M` reads as the rational `1` (`doc/en/clojure/deviations.md`), so `{1 :a 1M :b}` is
 refused where the oracle reads it. A `deps.edn` read (`forEdn`) leaves maps to
 `ClojureDepsEdn.duplicateKey`, whose wording (`Error reading edn. Duplicate key: k (path)`)
-the reader's positioned message cannot give. The runtime reader still tells `()` and `[]`
-apart as keys (`(= () [])` holds, `(get {[] 1} ())` answers `nil`).
+the reader's positioned message cannot give.
+
+**Literal keys equal once evaluated** (`ClojureCollectionLowering.mapLiteral`/`setLiteral`,
+the oracle's `MapExpr`/`SetExpr`; measured on `clj` 1.12.6, 2026-10-08):
+- Every key a constant (`constantKey`: the oracle's `LiteralExpr` -- number, string, char,
+  keyword, `nil`/`true`/`false`, a quoted datum, a regex, a NON-empty vector/map/set
+  literal of constants without metadata; `[]`, `()` are its `EmptyExpr`, no constant):
+  two `=` ones are the compile-time `Duplicate constant keys in map`, a lower-time
+  `LispReadException` (`{[1] :a '(1) :b}`, `{1 :a '1 :b}`); the map then builds unchecked.
+  A set of constants is not refused: it dedupes (`#{[1] '(1)}` has one member).
+- Otherwise a literal of two or more entries builds through `%clojure-map-literal` /
+  `%clojure-set-literal` (the oracle's `RT.map`/`RT.set` `createWithCheck`), after every
+  key and value ran: a table count short of the pair/member count reruns the reader's
+  builders `%clojure-rd-map-of` / `%clojure-rd-set-of` over the evaluated forms, which
+  raise `IllegalArgumentException` `Duplicate key: k` -- a map names the EARLIER key, a set
+  the LATER member, nil as `null` (`{(+ 1 2) 1 3 2}`, `(let [a 0.0 b -0.0] {a 1 b 2})` ->
+  `0.0`, the set -> `-0.0`). One entry is never checked (the oracle's `mapUniqueKeys`).
+- Not reproduced: past 8 entries the oracle's `PersistentHashMap.createWithCheck` names
+  the later key, in the hash order its reader gave the forms (evaluation order too); here
+  always the earlier, in source order. Two computed NaN keys are one key here (a double has
+  no identity), so they are a `Duplicate key` where the oracle keeps both.
+- `hash-map`/`hash-set`/`array-map`/`sorted-map` calls and quoted literals keep last-wins /
+  dedupe (`mapBuild`/`setBuild`), as the oracle's do.
+- `()` and `[]` as keys: `()` IS `nil` here ("Values"), so `(get {[] 1} ())` is
+  `(get {[] 1} nil)`, `nil` like the oracle's answer to the latter (the oracle answers `1`
+  to the former). Making the empty vector and `nil` one key would merge `{nil 1 [] 2}`
+  (two entries in the oracle) and make `(let [a nil b []] {a 1 b 2})` a `Duplicate key`,
+  so they stay two keys (measured 2026-10-08: `structural-keys-find-equal-collections` pins
+  `(get {[] :e} nil)` -> `nil`). The source reader still refuses `{() 1 [] 2}` (both read
+  forms are empty sequentials), like the oracle.
+- Pinned by clojure-spec `a-literal-refuses-keys-equal-once-evaluated` (oracle-identical)
+  and `ClojureLoweringTest.aLiteralOfConstantKeysEqualOnceEvaluatedIsRefusedWhenLowered`.
 `eval`/`load-string` stay unknown names: no compiler runs at run time.
 
 **Oracle-checked 2026-10-08 (clj 1.12.6), shared by `read-string`/`read` and clojure.edn:**

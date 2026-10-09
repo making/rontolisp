@@ -310,6 +310,151 @@ final class ClojureCollectionLowering {
 	}
 
 	/**
+	 * A map literal ({@code (%hash-map k v ...)} as read), refusing keys {@code =} once
+	 * evaluated like the oracle's compiler (clj 1.12.6, 2026-10-08): when every key is a
+	 * constant ({@link #constantKey}), two {@code =} ones are its compile-time
+	 * {@code Duplicate constant keys in map}, refused here, and the map builds unchecked;
+	 * otherwise two or more pairs build through {@code rontolisp::%clojure-map-literal},
+	 * whose run-time {@code Duplicate key} names the earlier key. The read forms already
+	 * differ ({@code ClojureReader.equivKey}).
+	 */
+	static LispVal mapLiteral(ClojureLowering ctx, List<LispVal> items) {
+		List<LispVal> pairs = ctx.lowers(items, 1);
+		List<LispVal> keys = new ArrayList<>();
+		for (int i = 1; i < items.size(); i += 2) {
+			keys.add(items.get(i));
+		}
+		Set<String> constants = constantKeys(ctx, keys);
+		if (constants != null) {
+			ClojureLowerUtil.isTrue(constants.size() == keys.size(), "Duplicate constant keys in map");
+			return mapBuild(pairs);
+		}
+		if (keys.size() < 2) {
+			return mapBuild(pairs);
+		}
+		return ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-MAP-LITERAL"),
+				ClojureLowerUtil.cons(ClojureLowerUtil.sym("list"), pairs));
+	}
+
+	/**
+	 * A set literal ({@code (%hash-set x ...)} as read): every member a constant
+	 * ({@link #constantKey}) builds unchecked, {@code =} constants deduplicated like the
+	 * oracle's constant set; otherwise two or more members build through
+	 * {@code rontolisp::%clojure-set-literal}, whose run-time {@code Duplicate key} names
+	 * the later member.
+	 */
+	static LispVal setLiteral(ClojureLowering ctx, List<LispVal> items) {
+		List<LispVal> members = items.subList(1, items.size());
+		List<LispVal> elements = ctx.lowers(items, 1);
+		if (members.size() < 2 || constantKeys(ctx, members) != null) {
+			return setBuild(ctx, elements);
+		}
+		return ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-SET-LITERAL"),
+				ClojureLowerUtil.cons(ClojureLowerUtil.sym("list"), elements));
+	}
+
+	/**
+	 * The {@code =} classes of the constant values {@code forms} answer
+	 * ({@link #constantKey}), or {@code null} when one of them is no constant.
+	 */
+	private static @Nullable Set<String> constantKeys(ClojureLowering ctx, List<LispVal> forms) {
+		Set<String> keys = new HashSet<>();
+		int[] unique = { 0 };
+		for (LispVal form : forms) {
+			String key = constantKey(ctx, form, false, unique);
+			if (key == null) {
+				return null;
+			}
+			keys.add(key);
+		}
+		return keys;
+	}
+
+	/**
+	 * A string equal for two read forms exactly when the constant values they answer are
+	 * {@code =}, or {@code null} when {@code form} is no constant to the oracle's
+	 * compiler (its {@code LiteralExpr}): a number, string, character, keyword,
+	 * {@code nil}, {@code true}, {@code false}, a quoted datum, a regex, or a non-empty
+	 * vector, map or set literal of constants without metadata. Inside a quoted datum
+	 * ({@code quoted}) every form is data: a symbol stands for itself and metadata is
+	 * ignored. A vector equals a list of the same members, a map or set compares its
+	 * members in any order, the float zeros are one value, a regex or {@code ##NaN}
+	 * equals nothing else.
+	 */
+	static @Nullable String constantKey(ClojureLowering ctx, LispVal form, boolean quoted, int[] unique) {
+		if (form instanceof LispDouble number) {
+			if (Double.isNaN(number.value())) {
+				return "#" + unique[0]++;
+			}
+			return "d" + (number.value() == 0 ? 0.0 : number.value());
+		}
+		if (form instanceof LispSymbol symbol) {
+			String name = symbol.name();
+			if (name.startsWith(":")) {
+				return ":" + resolveKeywordSpelling(ctx, name);
+			}
+			if (name.equals("nil") || name.equals("true") || name.equals("false")) {
+				return name;
+			}
+			return quoted ? "'" + name : null;
+		}
+		if (form instanceof LispNil) {
+			// () is the oracle's EmptyExpr, no constant; quoted it is the empty list
+			return quoted ? "()" : null;
+		}
+		List<LispVal> items = ClojureLowerUtil.items(form);
+		if (items == null) {
+			return form.print();
+		}
+		LispVal head = items.get(0);
+		if (items.size() == 3 && ClojureLowerUtil.isSymbolNamed(head, ClojureLowerUtil.READER_META)) {
+			return quoted ? constantKey(ctx, items.get(1), true, unique) : null;
+		}
+		if (head == ClojureReader.REGEX || ClojureLowerUtil.isSymbolNamed(head, "%regex")) {
+			return "#" + unique[0]++;
+		}
+		boolean map = ClojureLowerUtil.isSymbolNamed(head, "%hash-map");
+		boolean set = ClojureLowerUtil.isSymbolNamed(head, "%hash-set");
+		if (head == ClojureReader.VECTOR || map || set) {
+			if (!quoted && items.size() == 1) {
+				// an empty collection literal is the oracle's EmptyExpr
+				return null;
+			}
+			List<String> members = new ArrayList<>();
+			for (int i = 1; i < items.size(); i += map ? 2 : 1) {
+				String member = constantKey(ctx, items.get(i), quoted, unique);
+				String value = map ? constantKey(ctx, items.get(i + 1), quoted, unique) : "";
+				if (member == null || value == null) {
+					return null;
+				}
+				members.add(map ? member + " " + value : member);
+			}
+			if (map || set) {
+				members.sort(null);
+				return (map ? "{" : "#{") + String.join(",", members) + "}";
+			}
+			return "(" + String.join(" ", members) + ")";
+		}
+		if (head instanceof LispSymbol symbol && symbol.name().startsWith("%")) {
+			// a record, tagged or reader-value literal: left to the run-time check
+			return null;
+		}
+		if (!quoted) {
+			return items.size() == 2 && ClojureLowerUtil.isSymbolNamed(head, "quote")
+					? constantKey(ctx, items.get(1), true, unique) : null;
+		}
+		List<String> members = new ArrayList<>();
+		for (LispVal item : items) {
+			String member = constantKey(ctx, item, true, unique);
+			if (member == null) {
+				return null;
+			}
+			members.add(member);
+		}
+		return "(" + String.join(" ", members) + ")";
+	}
+
+	/**
 	 * A regex literal: the source string compiled to a pattern value at run time (parsed
 	 * eagerly, like the oracle). The source datum is a reader-produced literal, so it
 	 * travels as is -- shared by quoted and syntax-quoted literals.
@@ -366,12 +511,17 @@ final class ClojureCollectionLowering {
 				ClojureProtocolLowering.typedTableOf(map), map);
 		LispVal grown = grownTable(
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), map, src, ClojureLowering.NIL_CONST), pairs);
+		LispVal core = ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("vectorp"), map),
+				ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-VECTOR-ASSOC"), map, pairs),
+				rewrapAnswer(ctx, map, grown));
+		// a type implementing Associative takes each pair through its assoc, like the
+		// oracle's RT.assoc (an arm a program storing no such row sheds, ClojureArms)
+		LispVal typed = ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
+				ClojureLowerUtil.list(new LispSymbol(IASSOCIATIVE_P), map),
+				ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-ASSOCIATIVE-ASSOC"), map, pairs), core);
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
-				ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(pairs, plist))),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("vectorp"), map),
-						ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-VECTOR-ASSOC"), map, pairs),
-						rewrapAnswer(ctx, map, grown)));
+				ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(pairs, plist))), typed);
 	}
 
 	/**
@@ -411,18 +561,29 @@ final class ClojureCollectionLowering {
 		LispSymbol map = ctx.freshTemp();
 		LispSymbol copy = ctx.freshTemp();
 		List<LispVal> body = new ArrayList<>();
+		List<LispVal> keys = new ArrayList<>();
 		for (int i = 2; i < items.size(); i++) {
 			LispVal key = ctx.lower(items.get(i));
+			keys.add(key);
 			body.add(ClojureLowerUtil.list(ClojureLowerUtil.sym("remhash"),
 					lookupKey(storedKey(key, map), copy, isScalarKeyForm(key)), copy));
 		}
 		body.add(dissocAnswer(ctx, map, copy));
+		LispVal lowered = ctx.lower(items.get(1));
 		LispVal src = dissocSource(map);
 		LispVal rebuilt = ClojureLowerUtil
 			.letForm(List.of(ClojureLowerUtil.list(copy, tableFromPlist(tablePlist(src)))), body);
+		// a type implementing IPersistentMap drops each key through its without, like the
+		// oracle's RT.dissoc (an arm a program storing no such row sheds, ClojureArms); a
+		// branch runs the keys, so each runs once
+		LispVal typed = ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
+				ClojureLowerUtil.list(new LispSymbol(IMAP_P), map),
+				ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-IMAP-DISSOC"), map,
+						ClojureLowerUtil.cons(ClojureLowerUtil.sym("list"), keys)),
+				rebuilt);
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
-				ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(map, ctx.lower(items.get(1))))),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), map, rebuilt, ClojureLowering.NIL_CONST));
+				ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(map, lowered))),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), map, typed, ClojureLowering.NIL_CONST));
 	}
 
 	/**
@@ -493,11 +654,16 @@ final class ClojureCollectionLowering {
 		LispVal rebuilt = ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
 				ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(copy, tableFromPlist(tablePlist(src))))), drops,
 				dissocAnswer(ctx, bound, copy));
+		// a type implementing IPersistentMap drops each key through its without (an arm a
+		// program storing no such row sheds, ClojureArms)
+		LispVal typed = ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
+				ClojureLowerUtil.list(new LispSymbol(IMAP_P), bound),
+				ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-IMAP-DISSOC"), bound, keys), rebuilt);
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"),
 				ClojureLowerUtil.list(List.of(map, ClojureLowering.AMPERSAND_REST, keys)),
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
 						ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(bound, map))),
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), bound, rebuilt, ClojureLowering.NIL_CONST)));
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), bound, typed, ClojureLowering.NIL_CONST)));
 	}
 
 	/**
@@ -585,6 +751,12 @@ final class ClojureCollectionLowering {
 		// program storing no such row sheds, ClojureArms)
 		branches.add(ClojureLowerUtil.list(ClojureLowerUtil.list(new LispSymbol(LOOKUP_P), coll),
 				ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-LOOKUP-GET"), coll, key, dflt, supplied)));
+		// past ILookup, the oracle's RT.getFrom: a java.util.Map's get, then an
+		// IPersistentSet's (arms of their families, ClojureArms)
+		branches.add(ClojureLowerUtil.list(ClojureLowerUtil.list(new LispSymbol(JMAP_P), coll),
+				ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-JMAP-GET"), coll, key, dflt, supplied)));
+		branches.add(ClojureLowerUtil.list(ClojureLowerUtil.list(new LispSymbol(ISET_P), coll),
+				ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-ISET-GET"), coll, key, dflt, supplied)));
 		branches.add(hostArm(coll, hostCall("GET", coll, key, dflt)));
 		branches.add(ClojureLowerUtil.list(ClojureLowering.TRUE_CONST, dflt));
 		return branches;
@@ -661,6 +833,18 @@ final class ClojureCollectionLowering {
 		branches.add(ClojureLowerUtil.list(indexForm(bound, at, false), ClojureLowering.TRUE_CONST));
 		branches.add(ClojureLowerUtil.list(ClojureSortedLowering.sortedTest(bound),
 				ctx.booleanAnswer(ClojureSortedLowering.runtime("sorted-contains", bound, at))));
+		// the oracle's RT.contains: an Associative's containsKey, an IPersistentSet's
+		// contains, a java.util.Map's containsKey, a java.util.Set's contains (arms of
+		// their families, ClojureArms)
+		branches
+			.add(ClojureLowerUtil.list(ClojureLowerUtil.list(new LispSymbol(IASSOCIATIVE_P), bound), ctx.booleanAnswer(
+					ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-ASSOCIATIVE-CONTAINS"), bound, at))));
+		branches.add(ClojureLowerUtil.list(ClojureLowerUtil.list(new LispSymbol(ISET_P), bound), ctx
+			.booleanAnswer(ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-ISET-CONTAINS"), bound, at))));
+		branches.add(ClojureLowerUtil.list(ClojureLowerUtil.list(new LispSymbol(JMAP_P), bound), ctx
+			.booleanAnswer(ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-JMAP-CONTAINS"), bound, at))));
+		branches.add(ClojureLowerUtil.list(ClojureLowerUtil.list(new LispSymbol(JSET_P), bound), ctx
+			.booleanAnswer(ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-JSET-CONTAINS"), bound, at))));
 		branches.add(hostArm(bound, ctx.booleanAnswer(hostCall("CONTAINS-P", bound, at))));
 		branches.add(ClojureLowerUtil.list(ClojureLowering.TRUE_CONST,
 				ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-CONTAINS-PAST"), bound, at)));
@@ -720,9 +904,17 @@ final class ClojureCollectionLowering {
 		// a sorted map answers its keys (vals) in order
 		LispVal sorted = ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), ClojureSortedLowering.sortedTest(map),
 				ClojureSortedLowering.runtime("sorted-keys", map, new LispInteger(keys ? 0 : 1)), host);
+		// a type implementing IPersistentMap or java.util.Map answers its seq's entries'
+		// keys (vals), like the oracle's KeySeq (arms of their families, ClojureArms)
+		LispVal typed = ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("or"), ClojureLowerUtil.list(new LispSymbol(IMAP_P), map),
+						ClojureLowerUtil.list(new LispSymbol(JMAP_P), map)),
+				ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-TYPED-KEYS"), map,
+						new LispInteger(keys ? 0 : 1)),
+				sorted);
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
 				ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(map, lowered))),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), map, sorted, ClojureLowering.NIL_CONST));
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), map, typed, ClojureLowering.NIL_CONST));
 	}
 
 	/** {@code keys} as a value: a one-argument lambda over the same accumulation. */
@@ -767,12 +959,19 @@ final class ClojureCollectionLowering {
 			plists.add(ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), one, mergedEntriesPlist(one),
 					ClojureLowering.NIL_CONST));
 		}
+		LispVal merged = rewrapAnswer(ctx, present.get(0),
+				grownTable(base, ClojureLowerUtil.cons(ClojureLowerUtil.sym("append"), plists)));
+		// a first map implementing IPersistentCollection takes each later one through its
+		// cons, the oracle's conj folded over the maps (an arm a program storing no such
+		// row sheds, ClojureArms)
+		LispVal typed = ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
+				ClojureLowerUtil.list(new LispSymbol(ICOLLECTION_P), present.get(0)),
+				ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-TYPED-MERGE"), present.get(0),
+						ClojureLowerUtil.cons(ClojureLowerUtil.sym("list"), present.subList(1, present.size()))),
+				merged);
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let"), ClojureLowerUtil.list(bindings),
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
-						ClojureLowerUtil.cons(ClojureLowerUtil.sym("or"), present),
-						rewrapAnswer(ctx, present.get(0),
-								grownTable(base, ClojureLowerUtil.cons(ClojureLowerUtil.sym("append"), plists))),
-						ClojureLowering.NIL_CONST));
+						ClojureLowerUtil.cons(ClojureLowerUtil.sym("or"), present), typed, ClojureLowering.NIL_CONST));
 	}
 
 	/**
@@ -805,13 +1004,20 @@ final class ClojureCollectionLowering {
 		LispVal first = ClojureLowerUtil.list(ClojureLowerUtil.sym("car"), maps);
 		LispVal base = ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), ClojureSortedLowering.sortedMapTest(first),
 				first, ClojureLowering.NIL_CONST);
+		LispVal merged = ClojureLowerUtil.list(ClojureLowerUtil.sym("let*"),
+				ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(found, ClojureLowering.NIL_CONST),
+						ClojureLowerUtil.list(grown, spread))),
+				find, ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), found,
+						rewrapAnswer(ctx, first, grownTable(base, grown)), ClojureLowering.NIL_CONST));
+		// a first map implementing IPersistentCollection takes each later one through its
+		// cons (an arm a program storing no such row sheds, ClojureArms)
+		LispVal typed = ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
+				ClojureLowerUtil.list(new LispSymbol(ICOLLECTION_P), first),
+				ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-TYPED-MERGE"), first,
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("cdr"), maps)),
+				merged);
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"),
-				ClojureLowerUtil.list(ClojureLowering.AMPERSAND_REST, maps),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("let*"),
-						ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(found, ClojureLowering.NIL_CONST),
-								ClojureLowerUtil.list(grown, spread))),
-						find, ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), found,
-								rewrapAnswer(ctx, first, grownTable(base, grown)), ClojureLowering.NIL_CONST)));
+				ClojureLowerUtil.list(ClojureLowering.AMPERSAND_REST, maps), typed);
 	}
 
 	/**
@@ -899,6 +1105,10 @@ final class ClojureCollectionLowering {
 						// (the regex-guard precedent)
 						ClojureLowerUtil.list(ClojureLowerUtil.sym("not"), ClojureStateLowering.isAtomForm(collSym))),
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("cons"), item, collSym)));
+		// a type implementing IPersistentCollection takes the item through its cons, like
+		// the oracle's RT.conj (an arm a program storing no such row sheds, ClojureArms)
+		branches.add(ClojureLowerUtil.list(ClojureLowerUtil.list(new LispSymbol(ICOLLECTION_P), collSym),
+				ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-COLLECTION-CONS"), collSym, item)));
 		branches.add(ClojureLowerUtil.list(ClojureLowering.TRUE_CONST, ClojureRefusals
 			.refusal(ClojureRefusals.CLASS_CAST, LispString.literal("conj needs a collection and an item"))));
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let"), ClojureLowerUtil.list(bindings),
@@ -1044,14 +1254,24 @@ final class ClojureCollectionLowering {
 				setInner(hashedSet(set)));
 		List<LispVal> body = new ArrayList<>();
 		body.add(ClojureLowerUtil.list(table, makeTable()));
+		List<LispVal> members = new ArrayList<>();
+		for (int i = 2; i < items.size(); i++) {
+			members.add(ctx.lower(items.get(i)));
+		}
 		LispVal kept = ClojureLowerUtil.list(ClojureLowerUtil.sym("let"), ClojureLowerUtil.list(body), copy,
-				remhashes(ctx, items, table, set), shrunkSet(table, set));
+				remhashes(members, table, set), shrunkSet(table, set));
 		LispVal needSet = ClojureRefusals.refusal(ClojureRefusals.CLASS_CAST, LispString.literal("disj needs a set"));
+		// a type implementing IPersistentSet drops each member through its disjoin, like
+		// the oracle's disj (an arm a program storing no such row sheds, ClojureArms); a
+		// branch runs the members, so each runs once
+		LispVal typed = ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
+				ClojureLowerUtil.list(new LispSymbol(ISET_P), set),
+				ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-ISET-DISJ"), set,
+						ClojureLowerUtil.cons(ClojureLowerUtil.sym("list"), members)),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), isAnySetForm(set), kept, needSet));
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
 				ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(set, ctx.lower(items.get(1))))),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), set,
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), isAnySetForm(set), kept, needSet),
-						ClojureLowering.NIL_CONST));
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), set, typed, ClojureLowering.NIL_CONST));
 	}
 
 	/**
@@ -1081,15 +1301,15 @@ final class ClojureCollectionLowering {
 	}
 
 	/**
-	 * The {@code remhash} of each of {@code items}' keys from {@code table}, in order.
+	 * The {@code remhash} of each of the lowered {@code members} from {@code table}, in
+	 * order.
 	 */
-	static LispVal remhashes(ClojureLowering ctx, List<LispVal> items, LispSymbol table, LispSymbol set) {
-		if (items.size() == 2) {
+	static LispVal remhashes(List<LispVal> members, LispSymbol table, LispSymbol set) {
+		if (members.isEmpty()) {
 			return table;
 		}
 		List<LispVal> drops = new ArrayList<>();
-		for (int i = 2; i < items.size(); i++) {
-			LispVal member = ctx.lower(items.get(i));
+		for (LispVal member : members) {
 			drops.add(ClojureLowerUtil.list(ClojureLowerUtil.sym("remhash"),
 					lookupKey(storedKey(member, set), table, isScalarKeyForm(member)), table));
 		}
@@ -1124,13 +1344,18 @@ final class ClojureCollectionLowering {
 				ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(table, makeTable()))), copy, drops,
 				shrunkSet(table, bound));
 		LispVal needSet = ClojureRefusals.refusal(ClojureRefusals.CLASS_CAST, LispString.literal("disj needs a set"));
+		// a type implementing IPersistentSet drops each member through its disjoin (an
+		// arm a
+		// program storing no such row sheds, ClojureArms)
+		LispVal typed = ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
+				ClojureLowerUtil.list(new LispSymbol(ISET_P), bound),
+				ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-ISET-DISJ"), bound, members),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), isAnySetForm(bound), kept, needSet));
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"),
 				ClojureLowerUtil.list(List.of(set, ClojureLowering.AMPERSAND_REST, members)),
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
 						ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(bound, set))),
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), bound,
-								ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), isAnySetForm(bound), kept, needSet),
-								ClojureLowering.NIL_CONST)));
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), bound, typed, ClojureLowering.NIL_CONST)));
 	}
 
 	static LispVal setOf(ClojureLowering ctx, List<LispVal> items) {
@@ -1282,6 +1507,15 @@ final class ClojureCollectionLowering {
 				// storing no such row sheds, ClojureArms)
 				ClojureLowerUtil.list(ClojureLowerUtil.list(new LispSymbol(COUNTED_P), coll),
 						ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-COUNTED-COUNT"), coll)),
+				// past it, the oracle's countFrom: an IPersistentCollection walks its
+				// seq,
+				// a java.util Collection or Map answers its size (arms of their families)
+				ClojureLowerUtil.list(ClojureLowerUtil.list(new LispSymbol(ICOLLECTION_P), coll),
+						ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-COLLECTION-COUNT"), coll)),
+				ClojureLowerUtil.list(ClojureLowerUtil.list(new LispSymbol(JCOLLECTION_P), coll),
+						ClojureLowerUtil.list(new LispSymbol(JAVA_SIZE), coll)),
+				ClojureLowerUtil.list(ClojureLowerUtil.list(new LispSymbol(JMAP_P), coll),
+						ClojureLowerUtil.list(new LispSymbol(JAVA_SIZE), coll)),
 				ClojureLowerUtil.list(ClojureLowering.TRUE_CONST, ClojureRefusals
 					.refusal(ClojureRefusals.UNSUPPORTED_OPERATION, LispString.literal("count needs a collection"))));
 		List<LispVal> branches = new ArrayList<>();
@@ -1357,6 +1591,38 @@ final class ClojureCollectionLowering {
 
 	/** The counted family's test of a type implementing {@code Counted}. */
 	static final String COUNTED_P = "RONTOLISP::%CLOJURE-COUNTED-P";
+
+	/**
+	 * The collection-interface family's test of a type implementing
+	 * {@code IPersistentCollection}.
+	 */
+	static final String ICOLLECTION_P = "RONTOLISP::%CLOJURE-ICOLLECTION-P";
+
+	/**
+	 * The associative-interface family's test of a type implementing {@code Associative}.
+	 */
+	static final String IASSOCIATIVE_P = "RONTOLISP::%CLOJURE-IASSOCIATIVE-P";
+
+	/** The map-interface family's test of a type implementing {@code IPersistentMap}. */
+	static final String IMAP_P = "RONTOLISP::%CLOJURE-IMAP-P";
+
+	/** The set-interface family's test of a type implementing {@code IPersistentSet}. */
+	static final String ISET_P = "RONTOLISP::%CLOJURE-ISET-P";
+
+	/**
+	 * The java-collection family's test of a type implementing
+	 * {@code java.util.Collection}.
+	 */
+	static final String JCOLLECTION_P = "RONTOLISP::%CLOJURE-JCOLLECTION-P";
+
+	/** The java-collection family's test of a type implementing {@code java.util.Set}. */
+	static final String JSET_P = "RONTOLISP::%CLOJURE-JSET-P";
+
+	/** The java-map family's test of a type implementing {@code java.util.Map}. */
+	static final String JMAP_P = "RONTOLISP::%CLOJURE-JMAP-P";
+
+	/** The size of a type implementing a {@code java.util} Collection or Map. */
+	static final String JAVA_SIZE = "RONTOLISP::%CLOJURE-JAVA-SIZE";
 
 	/** The tag a wrapper is headed by: {@code (CAR form)}. */
 	private static LispVal tagOf(LispVal form) {

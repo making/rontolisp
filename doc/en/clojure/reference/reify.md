@@ -54,10 +54,11 @@ parameter count against every group of the body, so a `toString` may stand under
 | `Object` | `str` and printing (`toString`), `=` (`equals`), `.hashCode` |
 
 `instance?` of the interface and an instance call of its method (`(.count x)`) reach the type
-too. A method the body leaves out is the oracle's `AbstractMethodError` when called, and any
-other interface (`ISeq`, `IPersistentMap`, `java.util.List` ...) is refused by name.
-Deviation: a value overriding `toString` prints as `#object[user$reify "text"]`, without the
-oracle's class number and identity hash.
+too, and so does a protocol extended to the interface. A method the body leaves out is the
+oracle's `AbstractMethodError` when called (a `java.util` default method keeps the
+interface's, refused by name when called), and any other interface (`IChunkedSeq`,
+`java.util.Deque` ...) is refused by name. Deviation: a value overriding `toString` prints as
+`#object[user$reify "text"]`, without the oracle's class number and identity hash.
 
 ```clojure
 (def three (reify clojure.lang.Counted (count [_] 3)
@@ -68,4 +69,55 @@ oracle's class number and identity hash.
 (:a three) ; => 1
 (get three :b :none) ; => :none
 (str (reify Object (toString [_] "custom"))) ; => "custom"
+```
+
+## Collection interfaces
+
+A body implements a collection the core functions read through its methods, in the order the
+oracle asks them, the interface's supers included (`IPersistentMap` is an `Associative`, an
+`Iterable` and a `Counted`):
+
+| Interface | Read by |
+|---|---|
+| `IPersistentCollection` | `conj`, `into`, `merge` (`cons`), `empty`, `=` on either side (`equiv`), `count` of one that is no `Counted` (its seq walked), `coll?` |
+| `Associative` | `assoc`, `update`, `assoc-in` (`assoc`), `contains?` (`containsKey`), `find`, `select-keys` (`entryAt`), `associative?` |
+| `IPersistentMap`, `MapEquivalence` | `dissoc` (`without`), `keys`, `vals`, `reduce-kv`, `map?`, printing as a map; a map's `=` reads it as a `java.util.Map` only with `MapEquivalence` |
+| `IPersistentSet` | `disj` (`disjoin`), `contains?`, `get` and a keyword's call (`contains`, `get`), `set?`, printing as a set |
+| `IPersistentStack` | `peek`, `pop` |
+| `IPersistentVector` | `vector?`, printing as a vector, a vector's `=` (`count`, `nth`), `subvec` |
+| `ISeq` | a `seq` answering one walks its `first` and `next`; `seq?`, printing as a seq |
+| `Sequential`, `IPersistentList` | `sequential?`, `list?`; a sequential's `=` and `nth` walk its seq |
+| `Reversible` | `rseq`, `reversible?` |
+| `IPending` | `realized?` |
+| `Sorted` | `subseq`, `rsubseq` (`seqFrom`, `seq`, `comparator`, `entryKey`), `sorted?` |
+| `java.lang.Comparable` | `compare`, `sort`, a sorted collection's default order |
+| `java.lang.Iterable` | the seq of one that is no `Seqable`, `reduce`, `into`, `vec` (`iterator`), `seqable?` |
+| `java.util.Iterator` | [iterator-seq](iterator-seq.md), the seq and reduction of an `Iterable` |
+| `java.util.Collection`, `List`, `Set`, `RandomAccess` | `count` (`size`), `nth` (a `RandomAccess` list's `get`), `contains?` (a `Set`'s `contains`), `=`, `pr` as a list, a vector or a set |
+| `java.util.Map` | `get`, `contains?`, `find`, `count`, `seq` (`entrySet`), `=`, `pr` as a map |
+| `IHashEq`, `java.io.Serializable`, `IEditableCollection`, the transients | `instance?` and instance calls (no `hash` here; transients are refused) |
+
+`(.iterator coll)` of a core collection, `clojure.lang.SeqIterator` and `clojure.lang.RT/iter`
+answer an iterator over its seq, and `clojure.lang.MapEntry` builds a `[k v]` vector, the
+map entry here. Deviations: `first`, `next` and `rest` of an `ISeq` type read it through its
+`seq` (the oracle calls its `first`, `next` and `more`), so `next` and `rest` answer that
+seq's tail; a verb may call a method another number of times than the oracle (no chunked
+seqs); `str` of such a value spells its contents where the oracle answers `Class@hash`, and a
+`java.util` one prints its contents under `print` too.
+
+```clojure
+(deftype Pairs [m]
+  clojure.lang.IPersistentMap
+  (count [_] (count m))
+  (seq [_] (seq m))
+  (valAt [_ k] (get m k))
+  (valAt [_ k nf] (get m k nf))
+  (assoc [_ k v] (Pairs. (assoc m k v)))
+  (without [_ k] (Pairs. (dissoc m k)))
+  (iterator [_] (.iterator m)))
+(def p (Pairs. {:a 1}))
+(get (assoc p :b 2) :b) ; => 2
+(map? p) ; => true
+(reduce (fn [acc [k v]] (+ acc v)) 0 p) ; => 1
+(pr-str (dissoc (assoc p :b 2) :a)) ; => "{:b 2}"
 ```

@@ -334,6 +334,10 @@ final class ClojureInteropLowering {
 			if (exception != null) {
 				return exception;
 			}
+			LispVal own = clojureLangConstruction(cls, lowered);
+			if (own != null) {
+				return own;
+			}
 			LispVal io = ClojureIoLowering.construction(cls, lowered);
 			if (io != null) {
 				return io;
@@ -343,6 +347,26 @@ final class ClojureInteropLowering {
 		args.add(LispString.literal(designator(cls, types)));
 		args.addAll(lowered);
 		return hostCall(JAVA_NEW, args, 1);
+	}
+
+	/**
+	 * A construction of a {@code clojure.lang} class a collection type's body builds,
+	 * which no backend here has as a host class, over already-lowered arguments: a
+	 * {@code MapEntry} of a key and a value is the two-member vector a map entry is here,
+	 * a {@code SeqIterator} over a seq the library's iterator over it
+	 * ({@link ClojureInterfaces#SEQ_ITERATOR}). Null for any other class or count.
+	 */
+	static @Nullable LispVal clojureLangConstruction(String cls, List<LispVal> args) {
+		if (cls.equals("clojure.lang.MapEntry") && args.size() == 2) {
+			return ClojureLowerUtil.list(ClojureLowerUtil.sym("vector"), args.get(0), args.get(1));
+		}
+		if (cls.equals("clojure.lang.SeqIterator") && args.size() == 1) {
+			return ClojureLowerUtil.list(new LispSymbol(ClojureInterfaces.SEQ_ITERATOR), args.get(0));
+		}
+		if (cls.equals("clojure.lang.Cons") && args.size() == 2) {
+			return ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-CONS"), args.get(0), args.get(1));
+		}
+		return null;
 	}
 
 	/**
@@ -666,6 +690,14 @@ final class ClojureInteropLowering {
 			return ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-CALL"), args.get(0),
 					ClojureSeqLowering.seqAllForm(ctx, args.get(1)));
 		}
+		if (cls.equals("clojure.lang.MapEntry") && member.equals("create") && args.size() == 2) {
+			// a map entry is the two-member vector here
+			return ClojureLowerUtil.list(ClojureLowerUtil.sym("vector"), args.get(0), args.get(1));
+		}
+		if (cls.equals("clojure.lang.RT") && member.equals("iter") && args.size() == 1) {
+			// an Iterable's own iterator, else the iterator over the seq
+			return ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-ITER"), args.get(0));
+		}
 		List<LispVal> call = new ArrayList<>();
 		call.add(LispString.literal(cls));
 		call.add(LispString.literal(designator));
@@ -837,6 +869,10 @@ final class ClojureInteropLowering {
 			LispVal exception = throwableConstruction(ctx, cls, args);
 			if (exception != null) {
 				return exception;
+			}
+			LispVal own = clojureLangConstruction(cls, args);
+			if (own != null) {
+				return own;
 			}
 			LispVal io = ClojureIoLowering.construction(cls, args);
 			if (io != null) {

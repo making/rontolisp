@@ -91,6 +91,12 @@ final class ClojureValueMethodLowering {
 	private static final String UUID = "uuid";
 
 	/**
+	 * The kind of the iterator over a seq the library makes ({@code .iterator} of a
+	 * collection, {@code clojure.lang.SeqIterator}), which no predicate names.
+	 */
+	private static final String SEQ_ITERATOR = "seq-iterator";
+
+	/**
 	 * The kinds no one-argument predicate names exactly, each to its family's test, which
 	 * a program making no such value folds ({@link ClojureArms.Family#INSTANT},
 	 * {@link ClojureArms.Family#UUID}).
@@ -118,7 +124,6 @@ final class ClojureValueMethodLowering {
 		row("length", 0, arm(List.of("indexed?"), core("count", R)));
 		row("seq", 0, arm(List.of("coll?"), core("seq", R)));
 		row("first", 0, arm(List.of("seq?"), core("first", R)));
-		row("next", 0, arm(List.of("seq?"), core("next", R)));
 		row("more", 0, arm(List.of("seq?"), core("rest", R)));
 		row("peek", 0, arm(List.of("indexed?", "list?"), core("peek", R)));
 		row("pop", 0, arm(List.of("indexed?", "list?"), core("pop", R)));
@@ -127,6 +132,29 @@ final class ClojureValueMethodLowering {
 		row("keySet", 0, arm(List.of("map?"), core("set", core("keys", R))));
 		row("subList", 2, arm(List.of("indexed?"), core("subvec", R, A, B)),
 				arm(List.of("seq?"), core("subvec", core("vec", R), A, B)));
+		// a collection's iterator steps its seq, like the oracle's SeqIterator; the
+		// iterator answers hasNext and next
+		row("iterator", 0, new Arm(List.of("coll?"),
+				ctx -> ClojureLowerUtil.list(new LispSymbol(ClojureInterfaces.SEQ_ITERATOR), ctx.localSym(RECV))));
+		row("hasNext", 0, new Arm(List.of(SEQ_ITERATOR), ctx -> ctx.booleanAnswer(
+				ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-ITER-HAS-NEXT"), ctx.localSym(RECV)))));
+		row("next", 0, arm(List.of("seq?"), core("next", R)), new Arm(List.of(SEQ_ITERATOR),
+				ctx -> ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-ITER-NEXT"), ctx.localSym(RECV))));
+		row("assocN", 2, arm(List.of("indexed?"), core("assoc", R, A, B)));
+		// a sorted map or set is the oracle's Sorted: its comparator, an entry's key, the
+		// seq from a key and the seq either way, which a Sorted body's subseq reads
+		row("comparator", 0, new Arm(List.of("sorted?"), ctx -> ClojureLowerUtil
+			.list(new LispSymbol("RONTOLISP::%CLOJURE-SORTED-COMPARATOR"), ctx.localSym(RECV))));
+		row("entryKey", 1,
+				new Arm(List.of("sorted?"),
+						ctx -> ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-SORTED-ENTRY-KEY"),
+								ctx.localSym(RECV), ctx.localSym(argName(0)))));
+		row("seqFrom", 2,
+				new Arm(List.of("sorted?"),
+						ctx -> ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-SORTED-SEQ-FROM"),
+								ctx.localSym(RECV), ctx.localSym(argName(0)), ctx.localSym(argName(1)))));
+		row("seq", 1, new Arm(List.of("sorted?"), ctx -> ClojureLowerUtil
+			.list(new LispSymbol("RONTOLISP::%CLOJURE-SORTED-SEQ-DIR"), ctx.localSym(RECV), ctx.localSym(argName(0)))));
 	}
 
 	private static void lookupRows() {
@@ -284,16 +312,14 @@ final class ClojureValueMethodLowering {
 		// a row at another arity: the method exists, so the refusal is the oracle's own
 		boolean known = arms != null || ROWS.keySet().stream().anyMatch(key -> key.startsWith(method + "/"));
 		TypedMembers typed = typedMembers(ctx, method, args.size());
-		String implemented = ClojureInterfaces.instanceTest(method, args.size() + 1);
+		List<String> implemented = ClojureInterfaces.instanceTests(method, args.size() + 1);
 		LispVal arm;
 		if (arms == null && typed == null) {
 			arm = refusal(recv, method, known, args);
-			if (implemented != null) {
+			if (!implemented.isEmpty()) {
 				// a type implementing the interface answers its own method (an arm a
 				// program storing no such row sheds, leaving the refusal)
-				arm = ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
-						ClojureLowerUtil.list(new LispSymbol(implemented), recv), interfaceCall(method, recv, args),
-						arm);
+				arm = interfaceArm(method, recv, args, implemented, arm);
 			}
 		}
 		else {
@@ -304,13 +330,43 @@ final class ClojureValueMethodLowering {
 	}
 
 	/**
+	 * The test of a receiver whose type implements a method through one of the interfaces
+	 * declaring it: each interface's test, a disjunct of its own family.
+	 */
+	private static LispVal implementedTest(List<String> implemented, LispVal recv) {
+		if (implemented.size() == 1) {
+			return ClojureLowerUtil.list(new LispSymbol(implemented.get(0)), recv);
+		}
+		List<LispVal> tests = new ArrayList<>();
+		for (String test : implemented) {
+			tests.add(ClojureLowerUtil.list(new LispSymbol(test), recv));
+		}
+		return ClojureLowerUtil.cons(ClojureLowerUtil.sym("or"), tests);
+	}
+
+	/**
+	 * {@code (if implemented call otherwise)}: the call of a record's, deftype's or
+	 * reify's own method ahead of {@code otherwise}.
+	 */
+	private static LispVal interfaceArm(String method, LispVal recv, List<LispVal> args, List<String> implemented,
+			LispVal otherwise) {
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), implementedTest(implemented, recv),
+				interfaceCall(method, recv, args), otherwise);
+	}
+
+	/**
 	 * The call of the method a record's, deftype's or reify's type implements for an
-	 * interface (its row's entry), over the receiver and the arguments.
+	 * interface (its row's entry), over the receiver and the arguments. A method only
+	 * defaults declare may be absent from the row: its call goes through
+	 * {@code %clojure-default-method}, which refuses an absent one by name (the
+	 * interface's default body is Java, which no backend here runs).
 	 */
 	private static LispVal interfaceCall(String method, LispVal recv, List<LispVal> args) {
 		List<LispVal> call = new ArrayList<>();
 		call.add(ClojureLowerUtil.sym("funcall"));
-		call.add(ClojureLowerUtil.list(new LispSymbol(ClojureInterfaces.ENTRY), recv, LispString.literal(method)));
+		String reader = ClojureInterfaces.defaultOnly(method, args.size() + 1) ? ClojureInterfaces.DEFAULT_METHOD
+				: ClojureInterfaces.ENTRY;
+		call.add(ClojureLowerUtil.list(new LispSymbol(reader), recv, LispString.literal(method)));
 		call.add(recv);
 		call.addAll(args);
 		return ClojureLowerUtil.list(call);
@@ -374,7 +430,7 @@ final class ClojureValueMethodLowering {
 	 * site names a typed member, since its class is fully known.
 	 */
 	private static LispVal boundArm(ClojureLowering ctx, String method, LispSymbol recv, List<LispVal> args,
-			List<Arm> arms, boolean known, @Nullable TypedMembers typed, @Nullable String implemented) {
+			List<Arm> arms, boolean known, @Nullable TypedMembers typed, List<String> implemented) {
 		Map<String, ClojureLowering.Kind> scope = new HashMap<>();
 		scope.put(RECV, ClojureLowering.Kind.VARIABLE);
 		for (int i = 0; i < args.size(); i++) {
@@ -397,11 +453,11 @@ final class ClojureValueMethodLowering {
 					clauses.add(inlineClause(call, method, self, locals));
 				}
 			}
-			if (implemented != null) {
+			if (!implemented.isEmpty()) {
 				// a type implementing the interface answers its own method (an arm a
 				// program storing no such row sheds, ClojureArms)
-				clauses.add(ClojureLowerUtil.list(ClojureLowerUtil.list(new LispSymbol(implemented), self),
-						interfaceCall(method, self, locals)));
+				clauses.add(
+						ClojureLowerUtil.list(implementedTest(implemented, self), interfaceCall(method, self, locals)));
 			}
 			for (Arm arm : arms) {
 				clauses.add(ClojureLowerUtil.list(armTest(arm, self), arm.body().apply(ctx)));
@@ -467,6 +523,7 @@ final class ClojureValueMethodLowering {
 			tests.add(switch (kind) {
 				case ATOM -> ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-ATOM-P"), self);
 				case FUNCTION -> ClojureLowerUtil.list(ClojureLowerUtil.sym("functionp"), self);
+				case SEQ_ITERATOR -> ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-SEQ-ITERATOR-P"), self);
 				// a vector's methods: a type implementing Indexed answers its own through
 				// the typed clauses ahead of the rows
 				case "indexed?" -> ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-IS-VECTOR"), self);
