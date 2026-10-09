@@ -99,7 +99,7 @@ answered `2 5 3` before).
 | `defonce` | `def` unless `boundp` | a reload keeps the root |
 | `defn-` | a private `defn` | "Namespaces and project files" |
 | `fn` / `#(...)` | `lambda`; several arities one `lambda` over `&rest` dispatching per arity, each arity binding through `let*` | a named `fn` is a `labels` self-binding, an anonymous one only when a `recur` reaches it. `#()` READS as the oracle's `(fn* [p1__N# ...] (body))` (`ClojureReader.readAnonFn`; `fn*` lowers as `fn`): fixed parameters up to the highest `%N`, an unused lower one generated after the body, `& rest__N#` for `%&`, `%` inside a quote replaced too, a nested `#()` refused; its body is ONE call (`#(f a b)` -> `(f a b)`; several forms need `do`). N restarts per top-level form (the oracle's counter is process-wide): a parameter only has to differ from those of forms it nests in, and a case's printed spelling stays put wherever it sits in a file |
-| destructuring (`let`/`loop`/`fn`/`defn`/`for`/`doseq`) | `let*` pairs over one temporary per pattern | vector: positional through `%clojure-nth` (nil past the end; a map or set refused, the oracle's `nth`), `&` rest through `%clojure-drop`, `:as`; map: the table-aware read with `:keys`/`:syms`/`:strs`/`:or`/`:as` (a qualified `:keys` entry binds the short name) of the init through `%clojure-destructure-map`, which reads a `seq?` (list or lazy seq, never a vector) as `seq-to-map-for-destructuring` does (one member itself, none `{}`, more pairs through `%clojure-plist-table` with an odd last member's `%clojure-merge-entry-plist`), so `& {:keys ...}` takes keyword arguments and `:as` binds that map; until 2026-10-08 the rest list was read as is and every keyword argument was nil, clojure-spec `a-map-pattern-reads-a-seq-as-keyword-arguments` (oracle-identical); nested; malformed shapes refused by name |
+| destructuring (`let`/`loop`/`fn`/`defn`/`for`/`doseq`) | `let*` pairs over one temporary per pattern | vector: positional through `%clojure-nth` (nil past the end; a map or set refused, the oracle's `nth`), `&` rest through `%clojure-drop`, `:as`; map: the table-aware read with `:keys`/`:syms`/`:strs`/`:or`/`:as` (a qualified `:keys` entry binds the short name; a `:keys` vector may hold keywords `:a`/`:b/c`/`::d`; `:ns/keys`, `:ns/syms`, `::keys`, `::alias/keys` qualify each simple symbol, `keysDirective`/`directiveNamespace`, and refuse a qualified or keyword entry and `:ns/strs` as the oracle's `ns-keys` spec does, measured clj 1.12.6 2026-10-09, clojure-spec `namespaced-map-destructuring`; `ClojureLoopLowering.collectKeyNames` mirrors `bindKeys`) of the init through `%clojure-destructure-map`, which reads a `seq?` (list or lazy seq, never a vector) as `seq-to-map-for-destructuring` does (one member itself, none `{}`, more pairs through `%clojure-plist-table` with an odd last member's `%clojure-merge-entry-plist`), so `& {:keys ...}` takes keyword arguments and `:as` binds that map; until 2026-10-08 the rest list was read as is and every keyword argument was nil, clojure-spec `a-map-pattern-reads-a-seq-as-keyword-arguments` (oracle-identical); nested; malformed shapes refused by name |
 | `let` / `letfn` | `let*` (sequential) / one `labels` over every entry | `letfn` names are pre-scanned, so siblings call each other; each entry is its own `recur` target; a later entry shadows an earlier one |
 | `loop` / `recur` | `labels` self call | "recur" |
 | `->` `->>` `as->` `doto` `cond->` `cond->>` `some->` `some->>` | datum rewrites around one temporary | `as->` is nested `let`s (shadowing like the oracle); `some->` stops at `nil`, not `false`; a step over a collection literal signals |
@@ -1207,8 +1207,16 @@ serve`, and a war on embedded Tomcat; plain P1 compiles and signals the directiv
 - Response map (`%clojure-ring-response`): `:status` (nil -> 200, the servlet default),
   `:headers` to a dotted alist (a keyword name is its name; a seq value is one line per
   member; values through `str`), `:body` string (wrapped in a list), seq (members `str`'d),
-  a CL stream (read to the end, closed: Ring closes an `InputStream` body), nil; anything
-  else (a `java.io.File` host object) and a non-map response signal -> 500.
+  a CL stream (read to the end, closed: Ring closes an `InputStream` body), nil, and (io
+  arms, so a program making no io value folds them) a `java.io.File` / byte stream as ONE
+  `(unsigned-byte 8)` vector (`%clojure-io-ring-body`; the transports write octets as they
+  are), a host File through `%clojure-io-from-host` (host arm); anything else and a
+  non-map response signal -> 500. A File naming no readable file signals the oracle's
+  `FileNotFoundException` -> 500, where Jetty (ring-jetty-adapter 1.15.3, measured
+  2026-10-09) commits an empty 200; the serving wasm transports have no filesystem, so
+  there only a byte stream over an embedded resource is served. Jetty sends a File body
+  with `Content-Length` only (no `Last-Modified`: that is `file-response`'s header); the
+  transport here drops the map's `Content-Length` and computes its own, so never two.
 - Options: `:port` (default 80, `ring.adapter.jetty`'s), `:host`/`:address` (nil = every
   interface), `:join?` (default true; false answers the socket leg's handle), `:async?`
   truthy refused by name. Arity 2 exactly, the oracle's wording; as a value a 2-arg lambda.
@@ -1281,9 +1289,37 @@ oracle's classpath; a `deps.edn` ring-core newer than the shipped one refuses th
   `UnsupportedCharsetException`), where the oracle would accept the JDK's other charsets.
   Checked where the oracle checks it (`form-decode-str` only when the string holds `+` or
   `%`; `form-encode` of nil or a map of no strings never).
+- **File responses are a PART** (2026-10-09): `file-response`, `url-response`,
+  `resource-response`, `resource-data` live in `lib/ring/util/response_files.clj`
+  (`ClojureBuiltinNamespaces.PARTS`), loaded into `ring.util.response` by
+  `ClojureLowering.loadPartOf` where a top-level datum first names one (qualified,
+  `:refer [..]`, or a `:refer :all` refer, which lists the part's vars without loading it)
+  -- a `load` unit (`part:<ns>:<file>`) started in the namespace, its definitions hoisted,
+  its statements (the `defmethod`s) in a guarded init run there, like a startup
+  namespace's preload. Why: the ARM SCAN is by name over every spliced form, dead defuns
+  included (Clojure defuns are user program, never pruned), so the producers in these
+  defns would keep the io family's arms in every program requiring the namespace:
+  `ring-hello.clj` +44,749 B wasm P1 / +39,354 B class (measured 2026-10-09 by adding an
+  unused `(defn f [] (java.io.File. "x"))`). `ClojureRingFileResponseTest#theFileResponsesLoadOnlyWhereAProgramNamesOne`
+  pins the plain program lowering with no `%CLOJURE-IO-`.
+  The part is ring-core 1.15.5's code over clojure.java.io's values (io kernels via
+  `response.clj`'s `rontolisp.internal.io` alias; new `resources` inline kernel =
+  `getResources` over the directory roots), plus ring kernels `canonical-path` (spelling
+  only, a relative path kept relative from `.`, so no cwd is needed on wasm),
+  `directory-traversal?`, `format-date` (RFC 1123 via `%clojure-instant-fields`) and
+  `date` (worker `%clojure-make-inst`, an INSTANT producer). Measured against clj 1.12.6
+  + ring-core 1.15.5 the same day, identical on interpreter/JVM: `:root`/`/`-prefixed
+  paths, index files (`index.html`, `index.htm`, first `index.*`), `:index-files? false`,
+  `..` refused and `dir/../a.txt` served, no-root absolute path, `Last-Modified` = mtime
+  truncated to seconds, a `jar:` URL's `Last-Modified` = the JAR FILE's mtime (not the
+  entry's) and `Content-Length` the entry size, `resource-response` of a directory nil.
+  Deviations: no symlink resolved (oracle's canonical path refuses a link out of `:root`;
+  the interpreter and the JVM serve it, both wasm backends did not follow it; `.todo/e95`);
+  a computed resource name inside a jar is nil (clojure.java.io's, `.todo/e96`); a
+  no-method miss in this front end's words. Both
+  wasm backends answer `file-write-date` (2026-10-09), so one expectation holds on all four.
 - Refusals: a var the oracle's namespace has and the built-in one leaves out
-  (`file-response`, `url-response`, `resource-response`, `resource-data`, `base64-*`,
-  `form-encode*`, `FormEncodeable`) is `ns/var is not built in: <why>` qualified and
+  (`base64-*`, `form-encode*`, `FormEncodeable`) is `ns/var is not built in: <why>` qualified and
   referred (`refuseLeftOut`, only when the namespace came from the built-in file); a
   ring-core namespace not shipped (cookies, session, flash, multipart, nested-params,
   not-modified -- HTTP dates over `java.util.Date` -- file, resource, head, content-length,
@@ -1295,7 +1331,12 @@ oracle's classpath; a `deps.edn` ring-core newer than the shipped one refuses th
   percent-decoding as in Ring); `form-encode` of a map is a function, not the protocol.
 - Native image and the web image: `resource-config.json` registers `clojure/lib/ring/...`
   (`NativeImageResourceConfigTest` lists both directories).
-- Pins: `ClojureRingUtilTest` (the four JDK differentials, the letter table, the refusals,
+- Pins: `ClojureRingFileResponseTest` (the file responses on all four backends against a
+  directory, a resources directory and a jar; the part's lazy load),
+  `ClojureRingAdapterTest` (File / byte stream / `file-response` bodies octet for octet on
+  the socket legs, a missing File 500 and an embedded-resource stream on the `--no-wasi`
+  leg), `ServeRingComponentE2eTest`, `WarE2eTest#aRingHandlerServesFromTheWarOnTomcat`,
+  `ClojureRingUtilTest` (the four JDK differentials, the letter table, the refusals,
   the shadowing project file, a real POST through `wrap-params` on the interpreter),
   clojure-spec `ring-util-*` and `ring-middleware-*` (all four backends, oracle-identical),
   `examples/clojure/ring-hello.clj` (verified by hand 2026-10-08 under curl on the
@@ -1802,8 +1843,8 @@ namespace` but the ones no measured library names (`inspector`, `java.browse`,
   directory, which wasm has not); `ex-str` of spec problems is refused. Left out
   (`mainLeftOut`): `repl`, `main`, `load-script` (no `eval`), `repl-read`,
   `renumbering-read`, `skip-whitespace`, `skip-if-eol`, `with-bindings` (the REPL's parts),
-  `report-error` (main's uncaught report). Written without `{:clojure.error/keys [...]}`
-  destructuring, which the front end does not have (e92); `repl-caught` ends with `(flush)`.
+  `report-error` (main's uncaught report). Written with plain keys, though
+  `{:clojure.error/keys [...]}` destructuring now works; `repl-caught` ends with `(flush)`.
 - `clojure.java.shell` (2026-10-09): Clojure source over `ProcessBuilder` interop, so the
   interpreter and the JVM run it; `ClojureBuiltinNamespaces.HOST_ONLY` refuses its load
   while lowering for a target without the host (`ClojureNamespaceLowering.loadNamespace`,

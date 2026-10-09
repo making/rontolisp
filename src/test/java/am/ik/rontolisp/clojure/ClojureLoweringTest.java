@@ -788,6 +788,19 @@ class ClojureLoweringTest {
 			.hasMessageContaining("a vector pattern & needs a single rest pattern after it");
 		assertThatThrownBy(() -> Clojure.read("(let [{:keys a} {:a 1}] a)", null)).isInstanceOf(LispReadException.class)
 			.hasMessageContaining("a map pattern :keys takes a vector of plain names");
+		assertThat(lowered("(let [{:a/keys [b]} {:a/b 1}] b)")).contains("GETHASH");
+		assertThat(lowered("(loop [{::keys [b]} {}] b)")).contains("LABELS");
+		// the oracle's spec refuses a qualified or keyword entry and :ns/strs
+		assertThatThrownBy(() -> Clojure.read("(let [{:a/keys [b/c]} {}] c)", null))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("a map pattern :a/keys takes a vector of plain names");
+		assertThatThrownBy(() -> Clojure.read("(let [{:a/keys [:c]} {}] c)", null))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("a map pattern :a/keys takes a vector of plain names");
+		assertThatThrownBy(() -> Clojure.read("(let [{:syms [:c]} {}] c)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("a map pattern :syms takes a vector of plain names");
+		assertThatThrownBy(() -> Clojure.read("(let [{:a/strs [c]} {}] c)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("a map pattern :a/strs");
 	}
 
 	@Test

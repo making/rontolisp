@@ -56,6 +56,8 @@ class ServeRingComponentE2eTest {
 			      (= uri "/lines")
 			      {:body (str (vec (line-seq (io/reader (java.io.InputStreamReader. body "UTF-8")))))}
 			      (= uri "/empty") {:status 204}
+			      (= uri "/missing") {:body (io/file "/no/such/dir/missing.bin")}
+			      (= uri "/asset") {:body (io/input-stream (io/resource "asset.txt"))}
 			      :else {:status 404 :body "not found"})))
 
 			(ring/run-server #'handler {:port 3000})
@@ -73,6 +75,8 @@ class ServeRingComponentE2eTest {
 		try {
 			Path source = work.resolve("ring-probe.clj");
 			Files.writeString(source, PROGRAM);
+			// a resource the lowering finds beside the source travels with the component
+			Files.writeString(work.resolve("asset.txt"), "h\u00e9llo\n");
 			Path component = work.resolve("ring-probe.wasm");
 			compileComponent(driver, source, component, work);
 
@@ -109,6 +113,15 @@ class ServeRingComponentE2eTest {
 					HttpResponse.BodyHandlers.ofString());
 			assertThat(missing.statusCode()).isEqualTo(404);
 			assertThat(missing.body()).isEqualTo("not found");
+
+			assertThat(client
+				.send(HttpRequest.newBuilder(uri(port, "/missing")).build(), HttpResponse.BodyHandlers.ofString())
+				.statusCode()).as("a File naming no file the serve world can read").isEqualTo(500);
+			HttpResponse<String> asset = client.send(HttpRequest.newBuilder(uri(port, "/asset")).build(),
+					HttpResponse.BodyHandlers.ofString());
+			assertThat(asset.statusCode()).isEqualTo(200);
+			assertThat(asset.body()).as("a byte stream over a resource the component carries")
+				.isEqualTo("h\u00e9llo\n");
 		}
 		finally {
 			if (server != null) {

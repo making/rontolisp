@@ -236,18 +236,26 @@ class WarE2eTest {
 	 * reading its {@code :body} and answering a header vector as repeated lines.
 	 */
 	private static final String RING_HANDLER = """
-			(ns ring-war (:require [ring.adapter.rontolisp :refer [run-server]]))
+			(ns ring-war (:require [ring.adapter.rontolisp :refer [run-server]] [ring.util.response :as r]))
 			(defn handler [{:keys [request-method uri query-string body]}]
-			  {:status 200
-			   :headers {"Content-Type" "text/plain" "X-Demo" ["one" "two"]}
-			   :body [(name request-method) " " uri " " query-string " " (if body (slurp body) "-")]})
+			  (if (= uri "/file")
+			    (r/file-response "bytes.bin" {:root "%DIR%"})
+			    {:status 200
+			     :headers {"Content-Type" "text/plain" "X-Demo" ["one" "two"]}
+			     :body [(name request-method) " " uri " " query-string " " (if body (slurp body) "-")]}))
 			(run-server handler {:port 3000})
 			""";
 
 	@Test
 	void aRingHandlerServesFromTheWarOnTomcat() throws Exception {
 		optIn();
-		Path war = compileWar(RING_HANDLER, "app.clj");
+		byte[] octets = new byte[256];
+		for (int i = 0; i < octets.length; i++) {
+			octets[i] = (byte) i;
+		}
+		Path files = Files.createDirectories(this.tempDir.resolve("files")).toRealPath();
+		Files.write(files.resolve("bytes.bin"), octets);
+		Path war = compileWar(RING_HANDLER.replace("%DIR%", files.toString()), "app.clj");
 		Tomcat tomcat = tomcat(war, 0);
 		try {
 			int port = tomcat.getConnector().getLocalPort();
@@ -260,6 +268,11 @@ class WarE2eTest {
 			HttpResponse<String> get = client().send(HttpRequest.newBuilder(uri(port, "/")).build(),
 					HttpResponse.BodyHandlers.ofString());
 			assertThat(get.body()).isEqualTo("get /  -");
+			HttpResponse<byte[]> file = client().send(HttpRequest.newBuilder(uri(port, "/file")).build(),
+					HttpResponse.BodyHandlers.ofByteArray());
+			assertThat(file.statusCode()).isEqualTo(200);
+			assertThat(file.body()).as("a file-response's File, octet for octet").isEqualTo(octets);
+			assertThat(file.headers().allValues("content-length")).containsExactly("256");
 		}
 		finally {
 			tomcat.stop();

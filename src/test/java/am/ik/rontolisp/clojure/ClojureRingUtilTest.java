@@ -258,10 +258,6 @@ class ClojureRingUtilTest {
 
 	@Test
 	void aVarTheOraclesNamespaceHasAndTheBuiltInOneLeavesOutIsRefusedByName() {
-		assertThatThrownBy(
-				() -> Clojure.read("(ns a (:require [ring.util.response :as r])) (r/file-response \"x\")", null))
-			.isInstanceOf(LispReadException.class)
-			.hasMessageContaining("ring.util.response/file-response is not built in: it serves a java.io.File");
 		assertThatThrownBy(() -> Clojure.read("(ns a (:require [ring.util.codec :refer [base64-encode]]))", null))
 			.isInstanceOf(LispReadException.class)
 			.hasMessageContaining("ring.util.codec/base64-encode is not built in: it takes a byte array");

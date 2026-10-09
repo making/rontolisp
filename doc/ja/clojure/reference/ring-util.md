@@ -10,7 +10,7 @@ var と同じように振る舞います（`:refer :all`、`#'`、関数値）�
 
 | 名前空間 | var |
 |---|---|
-| `ring.util.response` | `response` `status` `header` `content-type` `charset` `redirect` `redirect-status-codes` `redirect-after-post` `created` `not-found` `bad-request` `find-header` `get-header` `update-header` `get-charset` `set-cookie` `response?` |
+| `ring.util.response` | `response` `status` `header` `content-type` `charset` `redirect` `redirect-status-codes` `redirect-after-post` `created` `not-found` `bad-request` `find-header` `get-header` `update-header` `get-charset` `set-cookie` `response?` `file-response` `url-response` `resource-response` `resource-data` |
 | `ring.util.request` | `request-url` `content-type` `content-length` `character-encoding` `urlencoded-form?` `body-string` `path-info` `in-context?` `set-context` |
 | `ring.util.codec` | `url-encode` `url-decode` `percent-encode` `percent-decode` `form-encode` `form-decode` `form-decode-str` `form-decode-map` `assoc-conj` |
 | `ring.util.mime-type` | `default-mime-types` `ext-mime-type` |
@@ -56,14 +56,34 @@ var と同じように振る舞います（`:refer :all`、`#'`、関数値）�
 Hello, Jürgen!
 ```
 
+## ファイルとリソース
+
+`file-response` は、`:root` の下でパスが指す `java.io.File` を `:body` とし、Ring と同じ
+`Content-Length` と `Last-Modified` ヘッダーを付けたレスポンスを返します。そのファイルが
+ない場合と、パスが `:root` の外に出る場合は `nil` を返します。ディレクトリは、
+`:index-files?` が偽でなければ、その `index.html`、`index.htm`、または最初の `index.*` を
+返します。`resource-response` はソースパスのリソース（[clojure.java.io](clojure-java-io.md)
+のリソースを探すディレクトリにあるファイル）について、`url-response` は
+`clojure.java.io/resource` の URL について同じことをし、`resource-data` はそれらが読む
+マップを返します。jar のリソースはバイトストリームです。[Ring アダプター](ring.md)は
+どちらのボディもそのまま送ります。この 4 つは、プログラムが最初にどれかの名前を挙げた
+ところで `ring.util.response` に読み込むので、名前を挙げないプログラムはそのコードを
+持ちません。
+
+```clojure
+(require '[ring.util.response :as response])
+(:headers (response/file-response "a.txt" {:root "www"}))
+; => {"Content-Length" "11", "Last-Modified" "Tue, 02 Jan 2024 03:04:05 GMT"}
+(response/file-response "../secret.txt" {:root "www"})
+; => nil
+```
+
 ## 組み込みでないもの
 
 次のものは WebAssembly バックエンドにないホストを必要とするので、プログラムが名前を
 挙げると、その名前を示して拒否します。
 
-- `ring.util.response/file-response`、`url-response`、`resource-response`、
-  `resource-data`（`java.io.File`、URL、クラスローダーのリソースを使う）。
-  `ring.util.codec/base64-encode` と `base64-decode`（バイト配列を使う）。
+- `ring.util.codec/base64-encode` と `base64-decode`（バイト配列を使う）。
 - 名前空間 `ring.middleware.cookies`、`session`、`flash`、`multipart-params`、
   `nested-params`、`not-modified`、`file`、`file-info`、`resource`、`head`、
   `content-length`、`ring.util.io`、`time`、`parsing`、`test`、`async`、
@@ -82,3 +102,13 @@ Hello, Jürgen!
   同じく `:encoding` オプション（またはリクエストの文字セット）を使います。
 - `content-length` は ASCII の数字だけを読みます（Java の `Long/valueOf` はほかの文字体系の
   数字も受け付けます）。
+- パスの正規化は綴りだけで行い、シンボリックリンクは解決しません。そのため
+  `:allow-symlinks?` は `..` を含まないパスを通すだけで、`:root` の下にあって外を指す
+  リンクも拒否しません。
+- `resource-response` はソースパスのディレクトリにあるリソースだけを見つけます。実行時に
+  組み立てた名前は jar の中では見つかりません（[clojure.java.io](clojure-java-io.md)）。
+  jar のリソースは、名前をリテラルで書いた `clojure.java.io/resource` を `url-response` に
+  渡せば配信できます。
+- `resource-data` のメソッドは `:file` と `:jar` です。ほかのプロトコルの URL は、ここでの
+  すべての[マルチメソッド](defmulti.md)と同じ文言で
+  `No method in resource-data for dispatch value: :http` を通知します。
