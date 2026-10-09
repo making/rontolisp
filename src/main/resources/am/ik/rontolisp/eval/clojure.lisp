@@ -579,16 +579,11 @@
   "A reader over (java.io.StringReader. TEXT): a string input stream."
   (make-string-input-stream text))
 
-;; A fetched reply's body stream (rontolisp.http-client's :as :stream) is read
-;; whole, its octets decoded as UTF-8, into a string input stream; the arm goes
-;; from a program that fetches nothing.
 (defun rontolisp::%clojure-reader (source)
   "clojure.java.io/reader: a character input stream over the file SOURCE, or
    SOURCE itself when it is already an input stream (a reader over a reader,
    a Ring request :body)."
-  (if (rontolisp::%clojure-async-stream-p source)
-      (make-string-input-stream (rontolisp::%clojure-async-stream-text source))
-      (if (streamp source) source (open source))))
+  (if (streamp source) source (open source)))
 
 (defun rontolisp::%clojure-read-to-end (stream)
   "Every character left on STREAM, as one string."
@@ -604,9 +599,6 @@
       stream
       (rontolisp::%clojure-io-exception "Stream closed")))
 
-;; A fetched reply's body stream (rontolisp.http-client's :as :stream) is read
-;; to its end, its octets decoded as UTF-8; the arm goes from a program that
-;; fetches nothing.
 (defun rontolisp::%clojure-slurp (source)
   "slurp: the whole of SOURCE as a string -- a path, opened and closed around
    the read, or an already-open input stream (a clojure.java.io/reader, a Ring
@@ -618,17 +610,14 @@
       ;; the namespace has loaded anything but a path: an arm a program making
       ;; none folds
       (rontolisp::%clojure-io-slurp source nil)
-      (if (rontolisp::%clojure-async-stream-p source)
-          (rontolisp::%clojure-async-stream-text source)
-          (if (streamp source)
-              (let ((text
-                     (rontolisp::%clojure-read-to-end
-                      (rontolisp::%clojure-open-reader source))))
-                (close source)
-                text)
-              (with-open-file (stream
-                               (rontolisp::%clojure-host-file-path source))
-                (rontolisp::%clojure-read-to-end stream))))))
+      (if (streamp source)
+          (let ((text
+                 (rontolisp::%clojure-read-to-end
+                  (rontolisp::%clojure-open-reader source))))
+            (close source)
+            text)
+          (with-open-file (stream (rontolisp::%clojure-host-file-path source))
+            (rontolisp::%clojure-read-to-end stream)))))
 
 (defun rontolisp::%clojure-stream-p (x)
   "Whether X is a stream value."
@@ -8418,14 +8407,10 @@
       (rontolisp::%clojure-host-future-p x no)))
 
 (defun rontolisp::%clojure-async-stream-p (x)
-  "Whether X is a rontolisp stream, a fetched reply's body under :as :stream:
-   the fetch family's arm test."
+  "Whether X is a rontolisp stream: what a byte stream over a fetched reply's
+   body (rontolisp.http-client's :as :stream) reads. The fetch family's arm
+   test."
   (rontolisp:streamp x))
-
-(defun rontolisp::%clojure-async-stream-text (s)
-  "Everything left on the rontolisp stream S, its octets decoded as UTF-8:
-   what slurp and clojure.java.io/reader read of a fetched reply's body."
-  (rontolisp::%future-force (rontolisp:read-all s)))
 
 (defun rontolisp::%clojure-future-get-within (f ms default)
   "deref of the rontolisp future F within MS milliseconds, truncated like the
@@ -13002,10 +12987,6 @@
              (rontolisp::%clojure-str-of headers "nil" t))))
     (nreverse out)))
 
-;; A fetched reply's body stream (rontolisp.http-client's :as :stream) is a
-;; Clack body as it is: the transport drains it, its octets unchanged, so a
-;; handler relaying an upstream reply relays it byte for byte (the arm goes from
-;; a program that fetches nothing).
 (defun rontolisp::%clojure-ring-refuse-body (body)
   "The refusal of a response :body of no kind the adapter writes."
   (error "ring.adapter.rontolisp: a response :body must be a String, a seq of strings, a java.io.File or an input stream, got ~A"
@@ -13022,7 +13003,6 @@
    then closed. Anything else is refused by its printed value."
   (cond ((null body) nil)
    ((stringp body) (list body))
-   ((rontolisp::%clojure-async-stream-p body) body)
    ((streamp body)
     (let ((text (rontolisp::%clojure-read-to-end body)))
       (close body)
@@ -13821,6 +13801,18 @@
                (rontolisp::%clojure-http-inflating body
                 (rontolisp::%inflate-new mode) (reverse seen))))))))
 
+(defun rontolisp::%clojure-http-input-stream (body coding)
+  "The :as :stream body: a java.io.InputStream (a clojure.java.io byte
+   stream) over the reply BODY, of the class the oracle's is -- the
+   GZIPInputStream or InflaterInputStream it decompresses through (CODING 2 or
+   1), else the JDK client's response stream."
+  (list
+   :C%INPUT-STREAM (vector body nil 0 nil
+                           (cond
+                            ((eql coding 2) "java.util.zip.GZIPInputStream")
+                            ((eql coding 1) "java.util.zip.InflaterInputStream")
+                            (t "jdk.internal.net.http.ResponseSubscribers$HttpResponseInputStream")))))
+
 (defun rontolisp::%clojure-http-respond (prepared transport)
   "The future of the response map of the prepared request PREPARED: the
    exchange, the body decompressed per its content-encoding and read per :as,
@@ -13836,10 +13828,10 @@
             (status (getf res :status))
             (headers (rontolisp::%clojure-http-header-map (getf res :headers)))
             (as (rontolisp::%clojure-http-option req "as"))
+            (coding (rontolisp::%clojure-http-coding headers req))
             (body
              (rontolisp:await
-              (rontolisp::%clojure-http-decoded (getf res :body)
-               (rontolisp::%clojure-http-coding headers req))))
+              (rontolisp::%clojure-http-decoded (getf res :body) coding)))
             (checked (rontolisp::%clojure-http-check-as as))
             (text
              (rontolisp:await
@@ -13848,14 +13840,10 @@
                   (rontolisp:read-all body))))
             (resp
              (rontolisp::%clojure-http-assoc nil
-                                             (list "status" status "headers"
-                                                   headers "body"
-                                                   (if (equal as
-                                                              (list :c%keyword
-                                                                    "stream"))
-                                                       body
-                                                       text) "uri" (cdr reply)
-                                                   "request" req))))
+              (list "status" status "headers" headers "body"
+                    (if (equal as (list :c%keyword "stream"))
+                        (rontolisp::%clojure-http-input-stream body coding)
+                        text) "uri" (cdr reply) "request" req))))
        (declare (ignore checked))
        (if (and (not
                  (eq (rontolisp::%clojure-http-option req "throw")
@@ -15384,10 +15372,14 @@
 ;;;;                               found while lowering carries
 ;;;;                               (%clojure-io-resources, by spelling)
 ;;;;   (:C%URI spec)               java.net.URI
-;;;;   (:C%INPUT-STREAM #(s octets i closed))
+;;;;   (:C%INPUT-STREAM #(s octets i closed [class]))
 ;;;;                               java.io.BufferedInputStream over the binary
 ;;;;                               file stream S, or over the octet vector OCTETS
-;;;;                               from index I
+;;;;                               from index I; or, with the CLASS named, the
+;;;;                               InputStream over a fetched reply's body that
+;;;;                               rontolisp.http-client answers under
+;;;;                               :as :stream, S the rontolisp stream of its
+;;;;                               octet chunks and OCTETS the chunk in hand
 ;;;;   (:C%OUTPUT-STREAM #(s closed))
 ;;;;                               java.io.BufferedOutputStream over the binary
 ;;;;                               file stream S
@@ -15465,10 +15457,16 @@
     (cond ((eq kind :C%FILE) "java.io.File")
           ((eq kind :C%URL) "java.net.URL")
           ((eq kind :C%URI) "java.net.URI")
-          ((eq kind :C%INPUT-STREAM) "java.io.BufferedInputStream")
+          ((eq kind :C%INPUT-STREAM)
+           (rontolisp::%clojure-io-input-class (car (cdr x))))
           ((eq kind :C%OUTPUT-STREAM) "java.io.BufferedOutputStream")
           ((eq kind :READER) "java.io.BufferedReader")
           (t "java.io.BufferedWriter"))))
+
+(defun rontolisp::%clojure-io-input-class (state)
+  "The class of the byte stream whose state is STATE: the one it names (a
+   fetched reply's body's), else java.io.BufferedInputStream."
+  (if (> (length state) 4) (svref state 4) "java.io.BufferedInputStream"))
 
 (defun rontolisp::%clojure-io-class-key (x)
   "class of X: its class name as a keyword, the keyword shape of every kind."
@@ -16040,32 +16038,81 @@
   "A java.io.BufferedOutputStream over the binary output STREAM."
   (list :C%OUTPUT-STREAM (vector stream nil)))
 
+(defun rontolisp::%clojure-io-response-p (state)
+  "Whether the byte stream state STATE is the JDK client's response stream: a
+   fetched reply's body no content coding was read off."
+  (and (> (length state) 4)
+       (equal (svref state 4)
+        "jdk.internal.net.http.ResponseSubscribers$HttpResponseInputStream")))
+
 (defun rontolisp::%clojure-io-open-state (x)
   "The state of the open byte stream X; a closed one is the oracle's
-   IOException."
+   IOException, in the words of its class."
   (let ((state (car (cdr x))))
     (if (svref state (if (eq (car x) :C%INPUT-STREAM) 3 1))
-        (rontolisp::%clojure-io-exception "Stream closed")
+        (rontolisp::%clojure-io-exception
+         (if (rontolisp::%clojure-io-response-p state)
+             "closed"
+             "Stream closed"))
         state)))
+
+(defun rontolisp::%clojure-io-next-chunk (s)
+  "The next chunk of the rontolisp stream S, nil at its end, read from
+   synchronous code: on a --component a read whose chunk is in flight settles
+   to the future of it, which is forced in turn."
+  (let ((v (rontolisp::%future-force (rontolisp:stream-read s))))
+    (loop
+      (if (rontolisp:futurep v)
+          (setq v (rontolisp::%future-force v))
+          (return v)))))
+
+(defun rontolisp::%clojure-io-pull-byte (state)
+  "The next octet of the reply body the open byte stream state STATE reads,
+   its next chunk pulled once the one in hand is spent; -1 past the end."
+  (let ((octets (svref state 1)) (i (svref state 2)) (b nil))
+    (loop
+      (if (and octets (< i (length octets)))
+          (progn
+            (setf (svref state 2) (+ i 1))
+            (setq b (aref octets i))
+            (return nil)))
+      (setq octets (rontolisp::%clojure-io-next-chunk (svref state 0)))
+      (setq i 0)
+      (setf (svref state 1) octets)
+      (setf (svref state 2) 0)
+      (if (null octets)
+          (progn
+            (setq b -1)
+            (return nil))))
+    b))
 
 (defun rontolisp::%clojure-io-read-byte (x)
   "InputStream.read: the next octet of the byte stream X, -1 past the end."
-  (let ((state (rontolisp::%clojure-io-open-state x)))
-    (if (svref state 0)
-        (read-byte (svref state 0) nil -1)
-        (let ((i (svref state 2)) (octets (svref state 1)))
-          (if (< i (length octets))
-              (progn
-                (setf (svref state 2) (+ i 1))
-                (aref octets i))
-              -1)))))
+  (let* ((state (rontolisp::%clojure-io-open-state x)) (s (svref state 0)))
+    (cond ((rontolisp::%clojure-async-stream-p s)
+           ;; a fetched reply's body: an arm a program that fetches nothing folds
+           (rontolisp::%clojure-io-pull-byte state))
+          (s (read-byte s nil -1))
+          (t (let ((i (svref state 2)) (octets (svref state 1)))
+               (if (< i (length octets))
+                   (progn
+                     (setf (svref state 2) (+ i 1))
+                     (aref octets i))
+                   -1))))))
 
 (defun rontolisp::%clojure-io-available (x)
-  "InputStream.available: the octets left on the byte stream X."
-  (let ((state (rontolisp::%clojure-io-open-state x)))
-    (if (svref state 0)
-        (let ((s (svref state 0))) (- (file-length s) (file-position s)))
-        (- (length (svref state 1)) (svref state 2)))))
+  "InputStream.available: the octets left on the byte stream X -- of a fetched
+   reply's body, those of the chunk in hand, and 0 once the JDK client's
+   response stream is closed."
+  (if (and (svref (car (cdr x)) 3)
+           (rontolisp::%clojure-io-response-p (car (cdr x))))
+      0
+      (let* ((state (rontolisp::%clojure-io-open-state x)) (s (svref state 0)))
+        (cond ((rontolisp::%clojure-async-stream-p s)
+               (let ((octets (svref state 1)))
+                 (if octets (- (length octets) (svref state 2)) 0)))
+              (s (- (file-length s) (file-position s)))
+              (t (- (length (svref state 1)) (svref state 2)))))))
 
 (defun rontolisp::%clojure-io-skip (x n)
   "InputStream.skip: up to N octets of the byte stream X passed over, the count
@@ -16086,12 +16133,37 @@
 
 (defun rontolisp::%clojure-io-close-input (x)
   "Closes the byte stream X; a second close does nothing."
-  (let ((state (car (cdr x))))
+  (let* ((state (car (cdr x))) (s (svref state 0)))
     (if (not (svref state 3))
         (progn
           (setf (svref state 3) t)
-          (if (svref state 0) (close (svref state 0)))))
+          (cond
+           ((rontolisp::%clojure-async-stream-p s) (rontolisp:stream-close s))
+           (s (close s)))))
     nil))
+
+(defun rontolisp::%clojure-io-transfer (in out)
+  "Every octet left on the byte stream IN written to the byte stream OUT --
+   a fetched reply's body a chunk at a time, as it arrives -- the count
+   answered."
+  (let* ((state (rontolisp::%clojure-io-open-state in)) (s (svref state 0)))
+    (cond ((rontolisp::%clojure-async-stream-p s)
+           (let ((n 0) (octets (svref state 1)) (i (svref state 2)))
+             (if (and octets (< i (length octets)))
+                 (let ((rest (subseq octets i)))
+                   (rontolisp::%clojure-io-write-octets out rest)
+                   (setq n (length rest))))
+             (setf (svref state 1) nil)
+             (setf (svref state 2) 0)
+             (loop
+               (let ((chunk (rontolisp::%clojure-io-next-chunk s)))
+                 (if (null chunk) (return nil))
+                 (rontolisp::%clojure-io-write-octets out chunk)
+                 (setq n (+ n (length chunk)))))
+             n))
+          (t (let ((octets (rontolisp::%clojure-io-read-octets in)))
+               (rontolisp::%clojure-io-write-octets out octets)
+               (length octets))))))
 
 (defun rontolisp::%clojure-io-write-byte (x b)
   "OutputStream.write of an int: its low octet onto the byte stream X."
@@ -16102,9 +16174,11 @@
     nil))
 
 (defun rontolisp::%clojure-io-write-octets (x octets)
-  "The list OCTETS written to the byte stream X."
+  "The octets OCTETS, a list or a vector, written to the byte stream X."
   (let ((s (svref (rontolisp::%clojure-io-open-state x) 0)))
-    (dolist (b octets) (write-byte b s))))
+    (if (listp octets)
+        (dolist (b octets) (write-byte b s))
+        (write-sequence octets s))))
 
 (defun rontolisp::%clojure-io-flush-output (x)
   "OutputStream.flush of the byte stream X."
@@ -16303,12 +16377,57 @@
            (rontolisp::%clojure-io-ring-body
             (rontolisp::%clojure-io-open-input x)))
           ((eq kind :C%INPUT-STREAM)
-           (let ((octets
-                  (rontolisp::%clojure-io-octets-left
-                   (rontolisp::%clojure-io-open-state x))))
-             (rontolisp::%clojure-io-close-input x)
-             octets))
+           (let ((s (svref (car (cdr x)) 0)))
+             (cond ((rontolisp::%clojure-async-stream-p s)
+                    ;; a fetched reply's body, relayed as it arrives: an arm a
+                    ;; program that fetches nothing folds
+                    (rontolisp::%clojure-io-relayed x))
+                   (t (let ((octets
+                             (rontolisp::%clojure-io-octets-left
+                              (rontolisp::%clojure-io-open-state x))))
+                        (rontolisp::%clojure-io-close-input x)
+                        octets)))))
           (t (rontolisp::%clojure-ring-refuse-body x)))))
+
+(defun rontolisp::%clojure-io-relayed (x)
+  "The fetched reply's body the byte stream X reads, as a Clack body the
+   transport drains a chunk at a time, so a relay is byte for byte and starts
+   before the reply has ended: the body itself when nothing of it was read,
+   else a stream of the rest of the chunk in hand and then the body's. The
+   transport closes it; X counts as closed."
+  (let* ((state (rontolisp::%clojure-io-open-state x))
+         (s (svref state 0))
+         (octets (svref state 1))
+         (i (svref state 2)))
+    (setf (svref state 3) t)
+    (if (or (null octets) (>= i (length octets)))
+        s
+        (let ((rest (subseq octets i)))
+          (rontolisp::%stream-new (lambda ()
+                                    (if rest
+                                        (let ((chunk rest))
+                                          (setq rest nil)
+                                          chunk)
+                                        (rontolisp:stream-read s)))
+                                  (lambda () (rontolisp:stream-close s)))))))
+
+(defun rontolisp::%clojure-io-pull-rest (state)
+  "Every octet left on the fetched reply's body the open byte stream state
+   STATE reads, as one (unsigned-byte 8) vector: the rest of the chunk in hand
+   and every chunk after it."
+  (let ((chunks nil) (total 0) (octets (svref state 1)) (i (svref state 2)))
+    (if (and octets (< i (length octets)))
+        (let ((rest (subseq octets i)))
+          (setq chunks (list rest))
+          (setq total (length rest))))
+    (setf (svref state 1) nil)
+    (setf (svref state 2) 0)
+    (loop
+      (let ((chunk (rontolisp::%clojure-io-next-chunk (svref state 0))))
+        (if (null chunk) (return nil))
+        (setq chunks (cons chunk chunks))
+        (setq total (+ total (length chunk)))))
+    (rontolisp::%octets-join (nreverse chunks) total)))
 
 (defun rontolisp::%clojure-io-resource-urls (name roots)
   "ClassLoader.getResources of NAME below the directory ROOTS: the file: URL
@@ -16356,12 +16475,24 @@
         (vector kind sink charset))
   stream)
 
+(defun rontolisp::%clojure-io-text-of (in charset)
+  "The rest of the byte stream IN decoded in CHARSET; of a fetched reply's body
+   in UTF-8, read as rontolisp:read-all reads it (a chunk at a time, decoded
+   at once, leniently)."
+  (let* ((state (rontolisp::%clojure-io-open-state in)) (s (svref state 0)))
+    (cond ((rontolisp::%clojure-async-stream-p s)
+           (if (eq charset :utf-8)
+               (rontolisp::%octets-to-string
+                (rontolisp::%clojure-io-pull-rest state))
+               (rontolisp::%clojure-io-decode
+                (rontolisp::%clojure-io-read-octets in) charset)))
+          (t (rontolisp::%clojure-io-decode
+              (rontolisp::%clojure-io-read-octets in) charset)))))
+
 (defun rontolisp::%clojure-io-decoded-reader (in charset)
   "A reader over the byte stream IN decoded in CHARSET: the rest of IN read
    and decoded at once, IN closed, the text a registered string stream."
-  (let ((text
-         (rontolisp::%clojure-io-decode (rontolisp::%clojure-io-read-octets in)
-                                        charset)))
+  (let ((text (rontolisp::%clojure-io-text-of in charset)))
     (rontolisp::%clojure-io-close-input in)
     (rontolisp::%clojure-io-register (make-string-input-stream text)
                                      :reader nil charset)))
@@ -16373,11 +16504,7 @@
    nil for anything else."
   (let ((charset (rontolisp::%clojure-io-charset encoding))
         (text (rontolisp::%clojure-io-url-text x)))
-    (cond ((rontolisp::%clojure-async-stream-p x)
-           ;; a fetched reply's body (rontolisp.http-client's :as :stream),
-           ;; read whole: an arm a program that fetches nothing folds
-           (make-string-input-stream (rontolisp::%clojure-async-stream-text x)))
-          ((rontolisp::%clojure-io-character-stream-p x t) x)
+    (cond ((rontolisp::%clojure-io-character-stream-p x t) x)
           ((and (consp x) (eq (car x) :C%INPUT-STREAM))
            (rontolisp::%clojure-io-decoded-reader x charset))
           (text (make-string-input-stream text))
@@ -16493,18 +16620,17 @@
              (unwind-protect (rontolisp::%clojure-io-copy in sink encoding)
                (rontolisp::%clojure-io-close-output sink))))
           ((eq out-kind :bytes)
-           (rontolisp::%clojure-io-write-octets out
-            (cond ((eq in-kind :bytes) (rontolisp::%clojure-io-read-octets in))
-                  ((eq in-kind :reader)
-                   (rontolisp::%clojure-io-encode
-                    (rontolisp::%clojure-io-reader-text in) charset))
-                  (t (rontolisp::%clojure-io-encode in charset))))
+           (if (eq in-kind :bytes)
+               (rontolisp::%clojure-io-transfer in out)
+               (rontolisp::%clojure-io-write-octets out
+                (if (eq in-kind :reader)
+                    (rontolisp::%clojure-io-encode
+                     (rontolisp::%clojure-io-reader-text in) charset)
+                    (rontolisp::%clojure-io-encode in charset))))
            (rontolisp::%clojure-io-flush-output out))
           (t
            (write-string (cond ((eq in-kind :bytes)
-                                (rontolisp::%clojure-io-decode
-                                 (rontolisp::%clojure-io-read-octets in)
-                                 charset))
+                                (rontolisp::%clojure-io-text-of in charset))
                                ((eq in-kind :reader)
                                 (rontolisp::%clojure-io-reader-text in))
                                (t in)) out)
@@ -16595,25 +16721,41 @@
   "The class of the clojure.java.io value X and its supers, the ones
    instance? names."
   (let ((kind (rontolisp::%clojure-io-kind x)))
-    (cond ((eq kind :C%FILE)
-           '("java.io.File" "java.io.Serializable" "java.lang.Comparable"))
-          ((eq kind :C%URL) '("java.net.URL" "java.io.Serializable"))
-          ((eq kind :C%URI)
-           '("java.net.URI" "java.lang.Comparable" "java.io.Serializable"))
-          ((eq kind :C%INPUT-STREAM)
-           '("java.io.BufferedInputStream" "java.io.FilterInputStream"
-             "java.io.InputStream" "java.io.Closeable"
-             "java.lang.AutoCloseable"))
-          ((eq kind :C%OUTPUT-STREAM)
-           '("java.io.BufferedOutputStream" "java.io.FilterOutputStream"
-             "java.io.OutputStream" "java.io.Closeable" "java.io.Flushable"
-             "java.lang.AutoCloseable"))
-          ((eq kind :READER)
-           '("java.io.BufferedReader" "java.io.Reader" "java.lang.Readable"
-             "java.io.Closeable" "java.lang.AutoCloseable"))
-          (t '("java.io.BufferedWriter" "java.io.Writer" "java.lang.Appendable"
-               "java.io.Closeable" "java.io.Flushable"
-               "java.lang.AutoCloseable")))))
+    (cond
+     ((eq kind :C%FILE)
+      '("java.io.File" "java.io.Serializable" "java.lang.Comparable"))
+     ((eq kind :C%URL) '("java.net.URL" "java.io.Serializable"))
+     ((eq kind :C%URI)
+      '("java.net.URI" "java.lang.Comparable" "java.io.Serializable"))
+     ((eq kind :C%INPUT-STREAM)
+      (let ((class (rontolisp::%clojure-io-input-class (car (cdr x)))))
+        (cond
+         ((equal class "java.util.zip.GZIPInputStream")
+          '("java.util.zip.GZIPInputStream" "java.util.zip.InflaterInputStream"
+            "java.io.FilterInputStream" "java.io.InputStream"
+            "java.io.Closeable" "java.lang.AutoCloseable"))
+         ((equal class "java.util.zip.InflaterInputStream")
+          '("java.util.zip.InflaterInputStream" "java.io.FilterInputStream"
+            "java.io.InputStream" "java.io.Closeable"
+            "java.lang.AutoCloseable"))
+         ((equal class "java.io.BufferedInputStream")
+          '("java.io.BufferedInputStream" "java.io.FilterInputStream"
+            "java.io.InputStream" "java.io.Closeable"
+            "java.lang.AutoCloseable"))
+         (t
+          '("jdk.internal.net.http.ResponseSubscribers$HttpResponseInputStream"
+            "java.io.InputStream" "java.io.Closeable" "java.lang.AutoCloseable"
+            "java.util.concurrent.Flow$Subscriber"
+            "java.net.http.HttpResponse$BodySubscriber")))))
+     ((eq kind :C%OUTPUT-STREAM)
+      '("java.io.BufferedOutputStream" "java.io.FilterOutputStream"
+        "java.io.OutputStream" "java.io.Closeable" "java.io.Flushable"
+        "java.lang.AutoCloseable"))
+     ((eq kind :READER)
+      '("java.io.BufferedReader" "java.io.Reader" "java.lang.Readable"
+        "java.io.Closeable" "java.lang.AutoCloseable"))
+     (t '("java.io.BufferedWriter" "java.io.Writer" "java.lang.Appendable"
+          "java.io.Closeable" "java.io.Flushable" "java.lang.AutoCloseable")))))
 
 ;; instance? of CLASS-NAME, a class a clojure.java.io value may be: whether X is
 ;; one whose class or a super of it is that class. An arm test of the io family
@@ -17005,12 +17147,9 @@
 (defun rontolisp::%clojure-io-m-transfer-to (x out)
   "InputStream.transferTo: every octet left on X written to the byte stream
    OUT, the count answered."
-  (let ((octets
-         (rontolisp::%clojure-io-read-octets
-          (rontolisp::%clojure-io-recv x :C%INPUT-STREAM "transferTo" 1))))
-    (rontolisp::%clojure-io-write-octets
-     (rontolisp::%clojure-io-recv out :C%OUTPUT-STREAM "write" 1) octets)
-    (length octets)))
+  (let ((in (rontolisp::%clojure-io-recv x :C%INPUT-STREAM "transferTo" 1)))
+    (rontolisp::%clojure-io-transfer in
+     (rontolisp::%clojure-io-recv out :C%OUTPUT-STREAM "write" 1))))
 
 (defun rontolisp::%clojure-io-m-write (x value)
   "write of one argument: an int's low octet onto a byte stream; a string, a

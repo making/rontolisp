@@ -125,9 +125,30 @@ returns, so a timed `deref` answers the response.
 
 ## A reply as a stream
 
-With `:as :stream` the `:body` is the reply's octets unread. `slurp` and
-`clojure.java.io/reader` read it as UTF-8 text, `with-open` and `.close` close it, and a Ring
-handler may answer it as its response `:body`, which relays the octets unchanged:
+With `:as :stream` the `:body` is a `java.io.InputStream` over the reply's octets, unread:
+the JDK client's response stream, or the `java.util.zip.GZIPInputStream` or
+`InflaterInputStream` a compressed reply is read through. `.read` answers the next octet
+(`-1` at the end) as the reply arrives, `.skip`, `.available`, `.transferTo` and
+`clojure.java.io/copy` (to a `File` or an output stream, octet for octet) take it, `slurp`
+and `clojure.java.io/reader` read it as text (UTF-8 unless `:encoding` names another
+charset), `with-open` and `.close` close it, and a Ring handler may answer it as its
+response `:body`, which relays the octets unchanged as they arrive:
+
+```clojure
+(ns example
+  (:require [rontolisp.http-client :as http]
+            [clojure.java.io :as io]))
+
+(let [body (:body (http/get "https://httpbin.ik.am/get" {:as :stream}))]
+  (println (instance? java.io.InputStream body) (char (.read body)))
+  (.close body))
+```
+
+```
+true {
+```
+
+A Ring proxy:
 
 ```console
 $ cat proxy.clj
@@ -147,9 +168,11 @@ $ rontolisp proxy.clj -o src/worker.wasm --no-wasi --host-fetch --host-boundary=
 
 - The response has no `:version`, and its `:uri` is a string (babashka.http-client: a
   `java.net.URI`).
-- `:as :bytes` is refused (no value here is a byte array). The `:stream` body is no
-  `java.io.InputStream`: `.read` does not take it, and `clojure.java.io/reader` reads it
-  whole first.
+- `:as :bytes` is refused (no value here is a byte array), and so are the byte-array
+  members of the `:stream` body (`.read` into a buffer, `.readAllBytes`).
+  `clojure.java.io/reader` over the `:stream` body reads it whole before its first line
+  (a `.read` loop over the body itself takes each octet as it arrives); on the JVM the
+  transport takes the whole reply before the response is answered.
 - Refused by name: the options `:client`, `:interceptors`, `:timeout`, `:version`,
   `:multipart`, `:raw` and `:expect-continue`; the vars `client`, `default-client-opts`
   and the `->` builders, which make a `java.net.http` client; the namespace

@@ -96,18 +96,19 @@ class ClojureHttpClientTest {
 
 	@Test
 	void aProgramThatFetchesNothingSplicesTheLibraryWithoutItsFetchArms() {
-		// only the client's kernel makes a rontolisp future or reply stream: a program
-		// that never fetches compiles deref, future?, slurp, clojure.java.io/reader,
-		// .close and a Ring body as before the client existed
+		// only the client's kernel makes a rontolisp future or a byte stream over a
+		// reply: a program that never fetches compiles deref, future? and the byte
+		// stream verbs as before the client existed
 		assertThat(defun(ClojureLibrary.forms(), "RONTOLISP::%CLOJURE-DEREF-OTHER"))
 			.contains("(RONTOLISP::%CLOJURE-FUTURE-P X)");
-		assertThat(defun(ClojureLibrary.forms(), "RONTOLISP::%CLOJURE-SLURP"))
-			.contains("(RONTOLISP::%CLOJURE-ASYNC-STREAM-P SOURCE)");
+		assertThat(defun(ClojureLibrary.forms(), "RONTOLISP::%CLOJURE-IO-READ-BYTE"))
+			.contains("(RONTOLISP::%CLOJURE-ASYNC-STREAM-P S)");
 		String source = "(println @(atom 1) (future? 1) (deref (atom 2) 10 :t) (future-done? 3) (slurp \"x\")"
-				+ " (.close (clojure.java.io/reader \"x\")))";
+				+ " (.read (clojure.java.io/input-stream \"x\")) (.close (clojure.java.io/reader \"x\")))";
 		List<LispVal> plain = ClojureLibrary.process(Clojure.read(source, null));
 		for (String verb : List.of("RONTOLISP::%CLOJURE-DEREF-OTHER", "RONTOLISP::%CLOJURE-SLURP",
-				"RONTOLISP::%CLOJURE-READER", "RONTOLISP::%CLOJURE-RING-BODY")) {
+				"RONTOLISP::%CLOJURE-IO-READ-BYTE", "RONTOLISP::%CLOJURE-IO-CLOSE-INPUT",
+				"RONTOLISP::%CLOJURE-IO-RING-BODY")) {
 			assertThat(defun(plain, verb)).as(verb)
 				.doesNotContain("%CLOJURE-FUTURE-P")
 				.doesNotContain("%CLOJURE-ASYNC-STREAM-P");
@@ -122,12 +123,24 @@ class ClojureHttpClientTest {
 		List<LispVal> fetching = ClojureLibrary
 			.process(Clojure.read(REQUIRE + " " + source + " (println @(http/get \"http://x/\" {:async true}))", null));
 		assertThat(defun(fetching, "RONTOLISP::%CLOJURE-DEREF-OTHER")).contains("(RONTOLISP::%CLOJURE-FUTURE-P X)");
-		assertThat(defun(fetching, "RONTOLISP::%CLOJURE-SLURP"))
-			.contains("(RONTOLISP::%CLOJURE-ASYNC-STREAM-P SOURCE)");
+		assertThat(defun(fetching, "RONTOLISP::%CLOJURE-IO-READ-BYTE"))
+			.contains("(RONTOLISP::%CLOJURE-ASYNC-STREAM-P S)");
 		assertThat(fetching.stream().map(LispVal::print).collect(Collectors.joining("\n")))
 			.contains("(RONTOLISP::%CLOJURE-FUTURE-OR-HOST-P 1 RONTOLISP::%CLOJURE-FALSE)")
 			.contains("(RONTOLISP::%CLOJURE-FUTURE-GET-WITHIN ")
 			.contains("(RONTOLISP::%FUTURE-SETTLED-P ");
+	}
+
+	@Test
+	void aProgramThatFetchesKeepsTheByteStreamArmsItsStreamBodyIsReadThrough() {
+		// the :as :stream body is a clojure.java.io byte stream, so a program that
+		// fetches and names no clojure.java.io var still reads it through the io arms
+		List<LispVal> fetching = ClojureLibrary
+			.process(Clojure.read(REQUIRE + " (println (.read (:body (http/get \"http://x/\" {:as :stream}))))", null));
+		assertThat(defun(fetching, "RONTOLISP::%CLOJURE-IO-READ-BYTE"))
+			.contains("(RONTOLISP::%CLOJURE-ASYNC-STREAM-P S)");
+		assertThat(fetching.stream().map(LispVal::print).collect(Collectors.joining("\n")))
+			.contains("RONTOLISP::%CLOJURE-IO-M-READ");
 	}
 
 	private static String defun(List<LispVal> forms, String name) {

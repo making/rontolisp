@@ -1420,10 +1420,26 @@ new, and the five fetch has (the JDK's on the interpreter and the JVM, `wasi:htt
   `WaitForLibrary` splices it where `ClojureArms.sleepsOnAFuture` (a producer and the
   timed arm). `future?` T; `future-done?` is `%future-settled-p`; `future-cancelled?` and
   `future-cancel` false (cancel's "not possible"); `realized?` stays the
-  `ClassCastException` the oracle throws for a `CompletableFuture`. `:as :stream` is
-  fetch's body stream itself: `slurp` and `clojure.java.io/reader` drain it through
-  `read-all` (the reader into a string stream), `.close` is `stream-close`, and a Ring
-  response body passes it to the transport as it is, so a relay is byte-exact.
+  `ClassCastException` the oracle throws for a `CompletableFuture`.
+- **`:as :stream` is a `clojure.java.io` byte stream** (2026-10-09; before, fetch's body
+  stream itself, which `.read` refused): `(:C%INPUT-STREAM #(body chunk i closed class))`,
+  `%clojure-http-input-stream` over the (inflating) rontolisp stream, CLASS the oracle's
+  (`ResponseSubscribers$HttpResponseInputStream`, `GZIPInputStream`, `InflaterInputStream`:
+  `class`, the supers `instance?` reads, `ClojureIoLowering.CLASSES`, `ClojureClassBases.IO_SUPERS`,
+  and the closed-read words, `closed` against `Stream closed`; the response stream's
+  `.available` answers 0 once closed). The io kernels take the rontolisp source behind the
+  FETCH test `%clojure-async-stream-p` (`%clojure-io-read-byte` pulls the next chunk,
+  `%clojure-io-transfer` copies a chunk at a time for `io/copy` and `.transferTo`,
+  `%clojure-io-text-of` decodes UTF-8 through `%octets-to-string` as `read-all` does, any
+  other charset through the JDK-replacement decoder, `%clojure-io-relayed` hands a Ring
+  transport the body itself, or the rest of the chunk in hand and then the body), so the
+  kernel is an IO-family producer too (`ClojureArms.ioProducers`). A synchronous read goes
+  through `%clojure-io-next-chunk`, which forces again what a `--component` read of an
+  in-flight chunk settles to (a future: the corpus's 300,000-octet `.transferTo` failed
+  with `LIST-LENGTH: The value #<FUTURE>` before it). The old FETCH arms in `slurp`,
+  `reader`, `.close` and a Ring body are gone. A reader over it still reads the whole body
+  before its first line (`%clojure-io-decoded-reader`), and on the JVM `RontoFetch` takes
+  the whole reply before the future settles.
 - Per transport: on P1 (`--native`, `--host-fetch`) an async body runs to its end at the
   call, so an `:async` request has completed when `get` returns and a timed deref never
   times out; the `--host-fetch` host's JS `fetch` follows redirects itself (20 hops, `:uri`
@@ -1924,7 +1940,8 @@ the file), `default-streams-impl` a map. Until then only `reader` resolved, as a
   wasm, and `reader`/`slurp`/`spit` already ran there over WASI preopens. Wrappers: `(:C%FILE
   path)` (normalized as `java.io.File` does on Unix), `(:C%URL spec)`, `(:C%URI spec)`,
   `(:C%INPUT-STREAM #(s octets i closed))`, `(:C%OUTPUT-STREAM #(s closed))` over binary file
-  streams; a reader decoding / writer encoding a byte stream is a CL string stream registered
+  streams (an input stream with a fifth slot, its class, is over a fetched reply's
+  rontolisp stream: "HTTP client"); a reader decoding / writer encoding a byte stream is a CL string stream registered
   in `%clojure-io-streams` (`eq` table, `#(kind sink charset)`); a file's own reader and
   writer are plain file streams (the STREAM family's `BufferedReader`/`BufferedWriter`). A
   wrapper is a list, so `equal` (and with it `=`, map keys) compares by spelling: no `=` arm

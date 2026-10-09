@@ -86,6 +86,12 @@ class FetchSpecE2eTest {
 
 	private static final String ORIGIN_MARK = "@ORIGIN@";
 
+	/**
+	 * Stands for the leg's own directory, where a case may write a file: the component
+	 * leg preopens it, the native runner preopens its working directory, which it is.
+	 */
+	private static final String SCRATCH_MARK = "@SCRATCH@";
+
 	/** The native binary that compiles, or {@code null} for this JVM. */
 	private static final @Nullable String BINARY = System.getProperty("rontolisp.binary");
 
@@ -411,7 +417,8 @@ class FetchSpecE2eTest {
 		String stem = fileName.substring(0, fileName.lastIndexOf('.'));
 		Path dir = Files.createDirectories(workDir.resolve(stem + "-" + leg.key()));
 		Path source = dir.resolve(fileName);
-		Files.writeString(source, program, StandardCharsets.UTF_8);
+		Files.writeString(source, program.replace(SCRATCH_MARK, dir.toAbsolutePath().toString()),
+				StandardCharsets.UTF_8);
 		return switch (leg) {
 			case INTERPRETER -> interpret(source);
 			case JVM -> {
@@ -439,8 +446,8 @@ class FetchSpecE2eTest {
 				}
 				Path component = dir.resolve(stem + ".wasm");
 				compile(source, component, "--component");
-				yield exec(dir, List.of("wasmtime", "run", "-W", "gc=y", "-W", "exceptions=y", "-S", "http=y",
-						component.toString()));
+				yield exec(dir, List.of("wasmtime", "run", "-W", "gc=y", "-W", "exceptions=y", "-S", "http=y", "--dir",
+						dir.toAbsolutePath().toString(), component.toString()));
 			}
 		};
 	}

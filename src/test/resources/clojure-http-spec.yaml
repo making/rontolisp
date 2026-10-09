@@ -167,6 +167,54 @@ cases:
       "héllo, 世界\nsecond line\n"
       ["héllo, 世界" "second line"]
       22
+  - name: the-stream-body-is-an-input-stream
+    source: |
+      (let [b (:body (http/get (url "/octets") {:as :stream}))]
+        (prn [(instance? java.io.InputStream b) (instance? java.io.Reader b)])
+        (prn (loop [acc []] (let [x (.read b)] (if (neg? x) acc (recur (conj acc x)))))))
+      (let [b (:body (http/get (url "/lines") {:as :stream}))]
+        (prn [(.read b) (.skip b 2) (.read b)]))
+      (let [b (:body (http/get (url "/gzip") {:as :stream}))]
+        (prn [(.read b) (.read b) (instance? java.util.zip.GZIPInputStream b)]))
+      (prn (count (slurp (:body (http/get (url "/lines") {:as :stream})) :encoding "ISO-8859-1")))
+      (let [r (io/reader (:body (http/get (url "/lines") {:as :stream})))]
+        (prn [(.readLine r) (.readLine r) (.readLine r)]))
+    expected: |
+      [true false]
+      [255 254 65 0 128 127]
+      [104 2 108]
+      [104 195 true]
+      27
+      ["héllo, 世界" "second line" nil]
+  - name: a-closed-stream-body-refuses-a-read-in-its-classs-words
+    source: |
+      (doseq [p ["/lines" "/gzip"]]
+        (let [b (:body (http/get (url p) {:as :stream}))]
+          (.close b)
+          (prn (try (.read b) (catch java.io.IOException e (ex-message e))))
+          (prn (try (.available b) (catch java.io.IOException e (ex-message e))))
+          (prn (.close b))))
+    expected: |
+      "closed"
+      0
+      nil
+      "Stream closed"
+      "Stream closed"
+      nil
+  - name: the-stream-body-copies-octet-for-octet
+    source: |
+      (let [f (io/file "@SCRATCH@" "copy.bin")]
+        (io/copy (:body (http/get (url "/octets") {:as :stream})) f)
+        (prn (with-open [i (io/input-stream f)]
+               (loop [acc []] (let [x (.read i)] (if (neg? x) acc (recur (conj acc x))))))))
+      (let [f (io/file "@SCRATCH@" "big.bin")]
+        (with-open [o (io/output-stream f)]
+          (prn (.transferTo (:body (http/get (url "/big") {:as :stream})) o)))
+        (prn (.length f)))
+    expected: |
+      [255 254 65 0 128 127]
+      300000
+      300000
   - name: an-async-request-answers-a-future-deref-reads
     source: |
       (let [f (http/get (url "/hello") {:async true})]

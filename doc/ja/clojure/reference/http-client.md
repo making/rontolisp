@@ -126,10 +126,30 @@ Preview 1 モジュール（`--native`、`--host-fetch`）では、呼び出し�
 
 ## ストリームとしての応答
 
-`:as :stream` を指定すると、`:body` は読まれていない応答のオクテットです。`slurp` と
-`clojure.java.io/reader` はこれを UTF-8 のテキストとして読み、`with-open` と `.close` は
-閉じます。Ring ハンドラがこれをレスポンスの `:body` として返すと、オクテットはそのまま
-中継されます。
+`:as :stream` を指定すると、`:body` は応答のオクテットを読まずに保持する
+`java.io.InputStream` です。JDK のクライアントの応答ストリーム、または圧縮された応答を
+読むための `java.util.zip.GZIPInputStream` か `InflaterInputStream` です。`.read` は届いた
+順に次のオクテットを返し（終端では `-1`）、`.skip`、`.available`、`.transferTo`、
+`clojure.java.io/copy`（`File` か出力ストリームへ、オクテットのまま）もこれを受け付けます。
+`slurp` と `clojure.java.io/reader` はテキストとして読み（`:encoding` で別の文字セットを
+指定しない限り UTF-8）、`with-open` と `.close` は閉じます。Ring ハンドラがこれを
+レスポンスの `:body` として返すと、オクテットは届いた順にそのまま中継されます。
+
+```clojure
+(ns example
+  (:require [rontolisp.http-client :as http]
+            [clojure.java.io :as io]))
+
+(let [body (:body (http/get "https://httpbin.ik.am/get" {:as :stream}))]
+  (println (instance? java.io.InputStream body) (char (.read body)))
+  (.close body))
+```
+
+```
+true {
+```
+
+Ring のプロキシ:
 
 ```console
 $ cat proxy.clj
@@ -149,9 +169,11 @@ $ rontolisp proxy.clj -o src/worker.wasm --no-wasi --host-fetch --host-boundary=
 
 - レスポンスに `:version` はなく、`:uri` は文字列です（babashka.http-client では
   `java.net.URI`）。
-- `:as :bytes` は拒否します（バイト配列にあたる値がないため）。`:stream` のボディは
-  `java.io.InputStream` ではないので、`.read` は受け付けず、`clojure.java.io/reader` は
-  全体を読んでから返します。
+- `:as :bytes` は拒否します（バイト配列にあたる値がないため）。`:stream` のボディの
+  バイト配列を扱うメンバー（バッファへの `.read`、`.readAllBytes`）も同様です。
+  `:stream` のボディに対する `clojure.java.io/reader` は、最初の行を返す前に全体を
+  読みます（ボディ自体に対する `.read` のループは、届いたオクテットから順に読みます）。
+  JVM では、トランスポートが応答全体を受け取ってからレスポンスを返します。
 - 名前を挙げて拒否するもの: オプションの `:client`、`:interceptors`、`:timeout`、
   `:version`、`:multipart`、`:raw`、`:expect-continue`、`java.net.http` のクライアントを作る
   var の `client`、`default-client-opts` と `->` で始まるビルダー、そして名前空間
