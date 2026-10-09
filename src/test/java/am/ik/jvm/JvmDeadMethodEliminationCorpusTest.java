@@ -211,8 +211,8 @@ class JvmDeadMethodEliminationCorpusTest {
 	/**
 	 * Runs the class in a JVM of its own, in a fresh working directory, and returns what
 	 * it wrote to standard output. The fresh directory is what makes the two runs
-	 * comparable: both see the same staged {@code wpc-sub/} tree and neither sees the
-	 * scratch files the other left.
+	 * comparable: both see the same staged fixtures and neither sees the scratch files
+	 * the other left.
 	 * @param classBytes the compiled program
 	 * @param workDir the test's own temporary directory (a method parameter, not a field:
 	 * under the per-class lifecycle a {@code @TempDir} field is re-injected and cleaned
@@ -224,10 +224,10 @@ class JvmDeadMethodEliminationCorpusTest {
 			int n = this.runs.incrementAndGet();
 			Path runDir = Files.createDirectory(workDir.resolve("run" + n));
 			Files.write(runDir.resolve("Test.class"), classBytes);
-			// The `wild-pathnames` case walks a bounded wpc-sub/ tree the driver must
-			// stage (see CorpusFixtures); here it is staged inside the run directory,
-			// which goes away with the @TempDir.
-			am.ik.rontolisp.testsupport.CorpusFixtures.stageWildPathnameTree(runDir);
+			// The corpus reads fixtures the driver must stage (see CorpusFixtures); here
+			// they are staged inside the run directory, which goes away with the
+			// @TempDir.
+			am.ik.rontolisp.testsupport.CorpusFixtures.stageAll(runDir);
 			// The test's own classpath supplies what the in-process loader's parent used
 			// to: the emitted class embeds its runtime, but not the classes the compiler
 			// shares with it.

@@ -51,6 +51,18 @@ public final class CorpusFixtures {
 	}
 
 	/**
+	 * Stages every fixture the corpus reads -- the one entry point a driver calls, so a
+	 * fixture added for one driver cannot be missing from another. Idempotent.
+	 * @param runDir the working directory the corpus program runs with
+	 * @throws IOException if a fixture cannot be staged
+	 */
+	public static void stageAll(Path runDir) throws IOException {
+		stageWildPathnameTree(runDir);
+		stageLnkFixture(runDir);
+		stageSymlinkTree(runDir);
+	}
+
+	/**
 	 * Stages the {@code wild-pathnames} tree under the directory the corpus program will
 	 * run in. Idempotent: safe to call for every leg of a driver.
 	 * @param runDir the working directory the corpus program runs with
