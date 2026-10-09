@@ -306,8 +306,9 @@ answers.
 
 ## State and dynamic scope
 
-Reader metadata (`^:private`, `^:dynamic`, `^{...}` attr maps, type hints) on a name
-or a local parses and drops: it never affects dispatch, except that `^:dynamic`
+Reader metadata (`^:private`, `^:dynamic`, `^{...}` attr maps, type hints) on a name,
+a local or a parameter vector (`(defn f ^long [x] ...)`, each arity of a `defn`, `fn`,
+`letfn` or protocol method) parses and drops: it never affects dispatch, except that `^:dynamic`
 on a `def`/`defonce`/`defn` name marks the var rebindable -- a `^:dynamic`
 `defn` keeps its direct definition but its calls go through the var, so
 `binding` reaches them. Only `binding` rebinds through it. `defn-` is a

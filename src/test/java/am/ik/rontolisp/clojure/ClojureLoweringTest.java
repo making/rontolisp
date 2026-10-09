@@ -845,6 +845,17 @@ class ClojureLoweringTest {
 	}
 
 	@Test
+	void aReturnTypeHintOnAParameterVectorIsDropped() {
+		assertThat(lowered("(defn f ^long [x] (inc x))")).isEqualTo(lowered("(defn f [x] (inc x))"));
+		assertThat(lowered("(defn- f ^long [x] (inc x))")).isEqualTo(lowered("(defn- f [x] (inc x))"));
+		assertThat(lowered("(fn ^long [x] x)")).isEqualTo(lowered("(fn [x] x)"));
+		assertThat(lowered("(defn f (^long [x] x) (^String [x y] y))"))
+			.isEqualTo(lowered("(defn f ([x] x) ([x y] y))"));
+		assertThatThrownBy(() -> Clojure.read("(fn 1)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("a parameter vector takes its bindings in a vector: 1");
+	}
+
+	@Test
 	void declareRegistersForwardNames() {
 		assertThat(lowered("(declare dcl-f) (defn dcl-g [] (dcl-f 1))")).contains("NIL").contains("|c%dcl-f|");
 	}

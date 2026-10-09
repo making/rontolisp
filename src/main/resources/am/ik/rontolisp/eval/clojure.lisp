@@ -458,8 +458,9 @@
           (> i n))))))
 
 (defun rontolisp::%clojure-record-entries (x)
-  "The (key . value) entries of the record X in its printed order: the declared
-   fields, then the extension keys in the table's walk order."
+  "The (key . value) entries of the record X in the order every walk of it
+   takes (seq, keys, vals, reduce-kv and the printer): the declared fields in
+   order, then the extension keys in the table's walk order."
   (let ((fields (car (cdr (cdr x))))
         (table (car (cdr (cdr (cdr x)))))
         (acc nil))
@@ -469,6 +470,11 @@
                  (dolist (f fields) (if (equal f k) (setq declared t)))
                  (if (not declared) (setq acc (cons (cons k v) acc))))) table)
     (reverse acc)))
+
+(defun rontolisp::%clojure-record-column (x index)
+  "The keys (INDEX 0) or values (INDEX 1) of the record X as a list, in
+   %clojure-record-entries' order."
+  (mapcar (if (eql index 0) #'car #'cdr) (rontolisp::%clojure-record-entries x)))
 
 (defun rontolisp::%clojure-write-cut (x nil-replacement readable stream labels)
   "Write the collection X with its first *print-length* members and then ...,
@@ -3612,10 +3618,8 @@
                  (setq acc (cons k acc))) (car (cdr coll)))
       acc))
    ((rontolisp::%clojure-record-p coll)
-    (let ((acc nil))
-      (maphash (lambda (k v) (setq acc (cons (vector k v) acc)))
-               (car (cdr (cdr (cdr coll)))))
-      acc))
+    (mapcar (lambda (e) (vector (car e) (cdr e)))
+            (rontolisp::%clojure-record-entries coll)))
    ((rontolisp::%clojure-sorted-p coll) (rontolisp::%clojure-sorted-seq coll))
    ;; a type implementing Seqable seqs through its seq: an arm of the seqable
    ;; family ("Host interfaces")
@@ -6156,10 +6160,11 @@
    table's walk order, a vector's (index . member) pairs, none of nil, a host
    Map's entries (or a host seq's, each an entry); anything else signals."
   (cond ((null coll) nil)
-        ((or (hash-table-p coll) (rontolisp::%clojure-record-p coll))
+        ((rontolisp::%clojure-record-p coll)
+         (rontolisp::%clojure-record-entries coll))
+        ((hash-table-p coll)
          (let ((acc nil))
-           (maphash (lambda (k v) (setq acc (cons (cons k v) acc)))
-                    (if (hash-table-p coll) coll (car (cdr (cdr (cdr coll))))))
+           (maphash (lambda (k v) (setq acc (cons (cons k v) acc))) coll)
            (reverse acc)))
         ((and (vectorp coll) (not (stringp coll)))
          (let ((acc nil))

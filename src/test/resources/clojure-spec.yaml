@@ -10820,6 +10820,28 @@ cases:
       425092884 1955592065 -343263960 1583802735
       -2018137581 -328473137
       true true true (1392991556 -2123407586 1455541201)
+  - name: a-records-seq-walks-its-declared-fields-in-order-then-the-rest
+    # A record's seq, keys, vals, reduce, reduce-kv and hash-ordered-coll walk
+    # the declared fields in order, then the extension map (one extension key
+    # here: the order of several is the table's, like any map's). Every line is
+    # the oracle's (clj 1.12.6.1673, 2026-10-09).
+    source: |
+      (defrecord SeqRec [a b])
+      (def sr (->SeqRec 1 2))
+      (def sre (assoc sr :z 3))
+      (prn (seq sr) (keys sr) (vals sr) (into [] sr))
+      (prn (seq sre) (keys sre) (vals sre) (vec sre))
+      (prn (reduce (fn [acc [k v]] (conj acc k)) [] sre) (reduce-kv (fn [acc k v] (conj acc v)) [] sre))
+      (prn (first sre) (rest sre) (last sre) (map key sre) (for [[k v] sre] v) (apply list sre))
+      (prn (hash-ordered-coll sr) (hash-ordered-coll sre))
+      (prn (seq (dissoc sre :z)))
+    expected: |
+      ([:a 1] [:b 2]) (:a :b) (1 2) [[:a 1] [:b 2]]
+      ([:a 1] [:b 2] [:z 3]) (:a :b :z) (1 2 3) [[:a 1] [:b 2] [:z 3]]
+      [:a :b :z] [1 2 3]
+      [:a 1] ([:b 2] [:z 3]) [:z 3] (:a :b :z) (1 2 3) ([:a 1] [:b 2] [:z 3])
+      -1407726839 -1888696251
+      ([:a 1] [:b 2])
   - name: the-collection-hash-verbs-mix-order-and-combine-like-the-oracle
     # mix-collection-hash casts both arguments like a ^long parameter and then to
     # an int (Math.toIntExact); hash-ordered-coll and hash-unordered-coll take an
@@ -10877,3 +10899,29 @@ cases:
       "java.lang.NullPointerException" -539222987 -3
       1013910569 -1640525200 97 994 1013910568 1013910569 3 994 2027821078
       156247261 -2123407586 1772842048 -1172211204 425092884 "java.lang.NullPointerException"
+  - name: a-return-type-hint-on-a-parameter-vector-is-metadata
+    # ^long [x] is reader metadata on the vector (the arity's return tag); it reads as the
+    # vector in defn, defn-, fn, letfn, each arity of a multi-arity form, a protocol
+    # method and a defmethod, and changes no answer (clj 1.12.6, 2026-10-09).
+    source: |
+      (defn rth-f ^long [x] (inc x))
+      (defn rth-g (^long [x] (inc x)) (^String [x y] (str x y)))
+      (defn- rth-h ^long [x] (inc x))
+      (defn rth-v ^Object [x & more] (apply + x more))
+      (defn rth-rec ^long [n acc] (if (zero? n) acc (recur (dec n) (+ acc n))))
+      (def rth-k (fn ^long [x] (inc x)))
+      (def rth-k2 (fn rth-nm (^long [x] (inc x)) (^long [x y] (+ x y))))
+      (defprotocol RthP (rth-m ^Object [this] [this x]))
+      (defrecord RthR [] RthP (rth-m ^Object [this] 1) (rth-m ^Object [this x] x))
+      (extend-type String RthP (rth-m (^Object [this] 3) (^Object [this x] x)))
+      (defmulti rth-mm (fn [x] x))
+      (defmethod rth-mm 1 ^Object [x] :one)
+      (prn (rth-f 1) (rth-g 1) (rth-g 1 2) (rth-h 1) (rth-v 1 2 3) (rth-rec 10 0))
+      (prn (rth-k 1) (rth-k2 1) (rth-k2 1 2))
+      (prn (letfn [(a ^long [x] (inc x)) (b (^long [x] (* 2 x)) ([x y] (+ x y)))] [(a 1) (b 2) (b 1 2)]))
+      (prn (rth-m (->RthR)) (rth-m (->RthR) 5) (rth-m "s") (rth-m "s" 8) (rth-mm 1))
+    expected: |
+      2 2 "12" 2 6 55
+      2 2 3
+      [2 4 3]
+      1 5 3 8 :one

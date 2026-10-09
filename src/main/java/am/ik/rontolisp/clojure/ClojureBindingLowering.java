@@ -199,7 +199,7 @@ final class ClojureBindingLowering {
 	static ClojureLowering.ParamShape paramShape(LispVal paramVector) {
 		List<LispVal> names;
 		try {
-			names = ClojureLowerUtil.bindingItems(ClojureLowerUtil.stripMeta(paramVector), "the parameter vector of");
+			names = ClojureLowerUtil.bindingItems(ClojureLowerUtil.stripMeta(paramVector), "a parameter vector");
 		}
 		catch (LispReadException ex) {
 			// malformed: the real pass reports the shape, so say nothing here
@@ -436,9 +436,13 @@ final class ClojureBindingLowering {
 		return vectors;
 	}
 
-	/** Whether the datum is a `[...]` vector (its marker head), not an arity clause. */
+	/**
+	 * Whether the datum is a `[...]` vector (its marker head, under any reader metadata),
+	 * not an arity clause.
+	 */
 	static boolean isVectorDatum(LispVal form) {
-		List<LispVal> parts = ClojureLowerUtil.items(form);
+		// reader metadata (a return hint, `^long [x]`) wraps the vector, never the clause
+		List<LispVal> parts = ClojureLowerUtil.items(ClojureLowerUtil.stripMeta(form));
 		return parts != null && !parts.isEmpty() && parts.get(0) == ClojureReader.VECTOR;
 	}
 
@@ -572,7 +576,7 @@ final class ClojureBindingLowering {
 		// metadata on the vector (type hints like ^String) is dropped, like the
 		// rest: it never affects dispatch
 		List<LispVal> names = ClojureLowerUtil.bindingItems(ClojureLowerUtil.stripMeta(paramVector),
-				"the parameter vector of");
+				"a parameter vector");
 		Map<String, ClojureLowering.Kind> scope = new HashMap<>();
 		List<LispVal> params = new ArrayList<>();
 		List<LispVal> prologue = new ArrayList<>();
@@ -584,26 +588,26 @@ final class ClojureBindingLowering {
 				params.add(ClojureLowering.AMPERSAND_REST);
 				LispVal rest = ClojureLowerUtil.stripMeta(names.get(++i));
 				if (rest instanceof LispSymbol) {
-					String name = ClojureLowerUtil.plainName(rest, "the parameter vector of");
+					String name = ClojureLowerUtil.plainName(rest, "a parameter vector");
 					scope.put(name, ClojureLowering.Kind.VARIABLE);
 					params.add(ctx.localSym(name));
 				}
 				else {
 					LispSymbol temp = ctx.freshTemp();
 					params.add(temp);
-					destructureInto(ctx, rest, temp, prologue, scope, "the parameter vector of");
+					destructureInto(ctx, rest, temp, prologue, scope, "a parameter vector");
 				}
 				continue;
 			}
 			if (datum instanceof LispSymbol) {
-				String param = ClojureLowerUtil.plainName(datum, "the parameter vector of");
+				String param = ClojureLowerUtil.plainName(datum, "a parameter vector");
 				scope.put(param, ClojureLowering.Kind.VARIABLE);
 				params.add(ctx.localSym(param));
 				continue;
 			}
 			LispSymbol temp = ctx.freshTemp();
 			params.add(temp);
-			destructureInto(ctx, datum, temp, prologue, scope, "the parameter vector of");
+			destructureInto(ctx, datum, temp, prologue, scope, "a parameter vector");
 		}
 		LispVal body;
 		boolean variadic = params.contains(ClojureLowering.AMPERSAND_REST);
