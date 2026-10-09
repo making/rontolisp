@@ -75,11 +75,11 @@
 ;;;; Probing: truename*, probe-file*, directory* and safe-file-write-date.
 ;;;; Upstream's per-implementation stat dance collapses here: probe-file is the
 ;;;; one existence probe on every backend (a directory counts as existing,
-;;;; nothing resolves symlinks or absolutizes), truename is probe-file plus a
-;;;; signal, and directory is the one listing over %list-directory
-;;;; (.kb/directory-listing.md). So probe-file* parses, probes, and answers
-;;;; either the parsed pathname or its truename; truename* is the nil-tolerant
-;;;; truename that also tries the directory form (a missing trailing separator
+;;;; nothing resolves symlinks or absolutizes), truename is the path with its
+;;;; symlinks resolved plus a signal, and directory is the one listing over
+;;;; %list-directory (.kb/directory-listing.md). So probe-file* parses, probes,
+;;;; and answers either the parsed pathname or its truename; truename* is the
+;;;; nil-tolerant truename that also tries the directory form (a missing trailing separator
 ;;;; defeats some implementations' truename, and the fallback keeps this total
 ;;;; where upstream needs it); directory* is directory with the
 ;;;; symlink-resolution keys upstream passes dropped (nothing here resolves
@@ -113,7 +113,7 @@
             :on-error nil)))
       (when %pfp-x
         (if %pfp-truename
-            (probe-file %pfp-x)
+            (truename %pfp-x)
             (and (probe-file %pfp-x) %pfp-x))))))
 
 ;; Upstream forwards its keys to directory (per-implementation symlink knobs);
@@ -229,19 +229,17 @@
                            (uiop/pathname:subpathp %lipp-true %lipp-trueimp)))))
               t))))
 
-;;;; Symlinks. No backend resolves them -- truename carries the argument
-;;;; namestring on all four (.kb/pathnames.md) -- so *resolve-symlinks*
-;;;; defaults to nil (upstream's t would promise what is not there) and the
-;;;; functions are the identity over a pathname coercion, exactly what upstream
-;;;; answers on an implementation without the API. That is coverage, not a
-;;;; stub (.kb/uiop.md).
-(defvar uiop/filesystem:*resolve-symlinks* nil)
+;;;; Symlinks. Every backend resolves them through %real-path, the walk behind
+;;;; truename, so *resolve-symlinks* defaults to t as upstream's does.
+(defvar uiop/filesystem:*resolve-symlinks* t)
 
-;; Upstream absolutizes against get-pathname-defaults first; rontolisp
-;; absolutizes nowhere (see get-pathname-defaults above), so the coercion is
-;; the whole function.
+;; "Resolve as much of a pathname as possible": %real-path resolves every
+;; link among the components that exist and keeps the rest as spelled, which
+;; is the answer upstream's walk up the parent directories reaches. Upstream
+;; absolutizes against get-pathname-defaults first; rontolisp absolutizes
+;; nowhere (see get-pathname-defaults above), so a relative path stays one.
 (defun uiop/filesystem:truenamize (%tnz-pathname)
-  (when %tnz-pathname (pathname (%path-ns %tnz-pathname))))
+  (when %tnz-pathname (pathname (%real-path (%path-ns %tnz-pathname)))))
 
 (defun uiop/filesystem:resolve-symlinks (%rs-path)
   (uiop/filesystem:truenamize %rs-path))

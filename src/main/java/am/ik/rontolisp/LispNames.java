@@ -4700,9 +4700,10 @@ public final class LispNames {
 	 * The {@code probe-file} built-in function: a PATHNAME value when the file exists,
 	 * {@code nil} otherwise. Prelude Lisp over {@link #PROBE_FILE_INTERNAL} -- the
 	 * primitive answers the namestring, the prelude wraps it in the pathname value
-	 * ({@code LispLayout.PATHNAME}) -- and it takes both designator spellings. No backend
-	 * resolves symlinks or makes the path absolute, so the "truename" carries the
-	 * argument namestring itself.
+	 * ({@code LispLayout.PATHNAME}) -- and it takes both designator spellings. It is the
+	 * existence probe (the {@code open} / {@code load} guards' one question), so it
+	 * resolves no symbolic link and makes nothing absolute: its answer carries the
+	 * argument namestring itself, where {@link #TRUENAME} resolves the links.
 	 */
 	public static final String PROBE_FILE = "PROBE-FILE";
 
@@ -4715,6 +4716,25 @@ public final class LispNames {
 	 * backend; the pathname wrapping lives in the prelude {@code probe-file}.
 	 */
 	public static final String PROBE_FILE_INTERNAL = "%PROBE-FILE";
+
+	/**
+	 * The {@code %read-link} internal primitive: takes a namestring and answers the
+	 * target a symbolic link of that name holds, as written in the link, or {@code nil}
+	 * when the name is no link (a plain file, a directory, nothing at all) or the host
+	 * refuses to read it. String-in/string-out on every backend, never signalling --
+	 * {@link #REAL_PATH_INTERNAL} walks a path's components over it.
+	 */
+	public static final String READ_LINK_INTERNAL = "%READ-LINK";
+
+	/**
+	 * The {@code %real-path} internal prelude function: a namestring with every symbolic
+	 * link among its components resolved (over {@link #READ_LINK_INTERNAL}) and every
+	 * {@code .} and {@code ..} taken out. A relative path stays relative to the working
+	 * directory (no backend needs to know it), an absolute one absolute; a component that
+	 * does not exist is kept as spelled. One Lisp definition on all four backends, behind
+	 * {@link #TRUENAME} and the Clojure front end's canonical paths.
+	 */
+	public static final String REAL_PATH_INTERNAL = "%REAL-PATH";
 
 	/**
 	 * The {@code pathname} built-in function: the identity on a pathname value, a fresh
@@ -8652,9 +8672,10 @@ public final class LispNames {
 
 	/**
 	 * {@code truename} (CL) -- the canonical namestring of an EXISTING file, signalling a
-	 * {@code file-error} when it does not exist. Rontolisp resolves no symlinks and makes
-	 * nothing absolute (see {@link #PROBE_FILE}), so the value is the argument
-	 * namestring; the load-bearing half is the signal, which is how the
+	 * {@code file-error} when it does not exist: every symbolic link resolved and every
+	 * {@code .} / {@code ..} taken out ({@link #REAL_PATH_INTERNAL}). Nothing is made
+	 * absolute -- a relative argument answers a path relative to the working directory,
+	 * which no WASM backend can name -- and the signal is how the
 	 * {@code (ignore-errors (truename ...))} existence-probe idiom works.
 	 */
 	public static final String TRUENAME = "TRUENAME";

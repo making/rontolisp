@@ -1,6 +1,6 @@
 ;; Preview-1 bridge core module for serve components (rontolisp:http-handler +
 ;; --component), on WASI 0.3. Instantiated between the shared memory and the rontolisp
-;; core, it exports the nineteen preview1 functions the core imports, implemented over the
+;; core, it exports the twenty preview1 functions the core imports, implemented over the
 ;; interfaces the wasi:http@0.3 service world provides:
 ;;
 ;;   random_get       -> wasi:random/random@0.3.0 get-random-u64 (8 bytes at a time)
@@ -26,6 +26,8 @@
 ;;                       -> errno 76 (no filesystem either: %delete-file /
 ;;                       %rename-file read it as nil, and %make-directories signals
 ;;                       through its call-site error like _open does)
+;;   path_readlink    -> errno 76: %read-link reads it as "no link", so truename
+;;                       resolves nothing (a served program opens no file anyway)
 ;;   path_filestat_get -> errno 76: file-write-date reads it as "cannot be
 ;;                       determined" and answers nil
 ;;   file_position_get / file_position_set -> errno 8 (EBADF), for the same reason:
@@ -213,6 +215,12 @@
     (param $buf i32) (result i32)
     (i32.const 76))
 
+  ;; path_readlink(fd, path, len, buf, buf_len, bufused) -> errno 76: no filesystem in
+  ;; the service world, so %read-link answers nil.
+  (func $path_readlink (param $fd i32) (param $path i32) (param $plen i32)
+    (param $buf i32) (param $blen i32) (param $used i32) (result i32)
+    (i32.const 76))
+
   ;; path_rename(old_fd, old_path, old_len, new_fd, new_path, new_len) -> errno 76:
   ;; no filesystem in the service world. Same nil contract as path_unlink_file.
   (func $path_rename (param $ofd i32) (param $opath i32) (param $olen i32)
@@ -267,6 +275,7 @@
   (export "fd_prestat_dir_name" (func $fd_prestat_dir_name))
   (export "fd_filestat_get" (func $fd_filestat_get))
   (export "path_filestat_get" (func $path_filestat_get))
+  (export "path_readlink" (func $path_readlink))
   (export "path_create_directory" (func $path_create_directory))
   (export "path_unlink_file" (func $path_unlink_file))
   (export "path_remove_directory" (func $path_remove_directory))

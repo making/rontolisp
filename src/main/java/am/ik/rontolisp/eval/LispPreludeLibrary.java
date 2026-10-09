@@ -2193,10 +2193,65 @@ public final class LispPreludeLibrary {
 				        ((%obj-is %ns-path '%PATHNAME) (%obj-ref %ns-path 0))
 				        (t (error "NAMESTRING: not a pathname designator: ~S" %ns-path))))
 				""");
+		// truename: the path with its symbolic links resolved (%real-path), then asked
+		// whether it exists -- the resolved spelling, since a WASI host opens a path's
+		// last component without following a link in it.
 		SOURCES.put(LispNames.TRUENAME, """
 				(defun truename (%tn-path)
-				  (or (probe-file %tn-path)
-				      (%file-error %tn-path (format nil "TRUENAME: no such file ~A" %tn-path))))
+				  (let ((%tn-real (%real-path (namestring %tn-path))))
+				    (if (%probe-file %tn-real)
+				        (pathname %tn-real)
+				        (%file-error %tn-path (format nil "TRUENAME: no such file ~A" %tn-path)))))
+				""");
+		// %real-path: the realpath(3) walk over the one per-backend primitive,
+		// %read-link,
+		// so the four backends resolve a path alike. Components are taken left to right;
+		// a link's target is spliced in front of what is left (relative to the link's
+		// directory, or from the root when it is absolute), and a .. drops the component
+		// before it only once that component is itself resolved, which is what makes
+		// a/../b through a link to c/d mean c/b. A relative path stays relative: the
+		// working directory is the one thing a WASI module cannot name. A component that
+		// does not exist reads as no link and is kept as spelled (getCanonicalPath's
+		// answer for a missing file); after 40 links the rest is kept as spelled too,
+		// the loop limit a host's own open reports. A trailing slash is kept.
+		SOURCES.put(LispNames.REAL_PATH_INTERNAL, """
+				(defun %real-path (%rp-path)
+				  (flet ((%rp-join (%rp-a %rp-rev)
+				           (let ((%rp-s nil))
+				             (dolist (%rp-p %rp-rev)
+				               (setq %rp-s (if %rp-s (concatenate 'string %rp-p "/" %rp-s) %rp-p)))
+				             (cond (%rp-a (concatenate 'string "/" (or %rp-s "")))
+				                   (%rp-s %rp-s)
+				                   (t ".")))))
+				    (let* ((%rp-n (length %rp-path))
+				           (%rp-abs (and (> %rp-n 0) (char= (char %rp-path 0) #\\/)))
+				           (%rp-dir (and (> %rp-n 0) (char= (char %rp-path (- %rp-n 1)) #\\/)))
+				           (%rp-todo (%path-dir-parts (concatenate 'string %rp-path "/")))
+				           (%rp-done nil)
+				           (%rp-links 0))
+				      (do () ((null %rp-todo))
+				        (let ((%rp-c (car %rp-todo)))
+				          (setq %rp-todo (cdr %rp-todo))
+				          (cond ((string= %rp-c "."))
+				                ((string= %rp-c "..")
+				                 (cond ((and %rp-done (not (string= (car %rp-done) "..")))
+				                        (setq %rp-done (cdr %rp-done)))
+				                       ((not %rp-abs) (setq %rp-done (cons %rp-c %rp-done)))))
+				                (t
+				                 (let ((%rp-to (and (< %rp-links 40)
+				                                    (%read-link (%rp-join %rp-abs (cons %rp-c %rp-done))))))
+				                   (cond ((null %rp-to) (setq %rp-done (cons %rp-c %rp-done)))
+				                         (t (setq %rp-links (+ %rp-links 1))
+				                            (when (and (> (length %rp-to) 0) (char= (char %rp-to 0) #\\/))
+				                              (setq %rp-abs t %rp-done nil))
+				                            (setq %rp-todo
+				                                  (append (%path-dir-parts (concatenate 'string %rp-to "/"))
+				                                          %rp-todo)))))))))
+				      (let ((%rp-s (%rp-join %rp-abs %rp-done)))
+				        (cond ((not %rp-dir) %rp-s)
+				              (%rp-done (concatenate 'string %rp-s "/"))
+				              (%rp-abs %rp-s)
+				              (t "./"))))))
 				""");
 		// probe-file: the pathname VALUE over the namestring the %probe-file primitive
 		// answers (the primitive stays string-in/string-out per backend), nil when the

@@ -1662,6 +1662,17 @@ final class WasmExprCompiler {
 			case LispNames.MAKE_DIRECTORIES -> WasmMakeDirectoriesCompiler.compile(cons, ctx);
 			case LispNames.DELETE_FILE_INTERNAL -> WasmDeleteFileCompiler.compile(cons, ctx);
 			case LispNames.RENAME_FILE_INTERNAL -> WasmRenameFileCompiler.compile(cons, ctx);
+			case LispNames.READ_LINK_INTERNAL -> {
+				// _read_link over the injected path_readlink, a nil stub on a --no-wasi
+				// module (no files, so no links).
+				if (cons.toList().size() != 2) {
+					throw new UnsupportedOperationException(
+							LispNames.READ_LINK_INTERNAL + " expects 1 argument, got " + (cons.toList().size() - 1));
+				}
+				WasmExprCompiler.compileExpr(cons.toList().get(1), ctx);
+				ctx.writer.write(Instruction.CALL);
+				ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_READ_LINK);
+			}
 			case LispNames.STREAM_ELEMENT_TYPE -> compileExpansion(LispMacroExpander.expandStreamElementType(cons,
 					ctx.functions.containsKey(LispNames.FILE_STREAM_ELEMENT_TYPE_INTERNAL)), ctx, tail);
 			case LispNames.MAKE_BROADCAST_STREAM ->

@@ -170,9 +170,9 @@ custom `:on-error` function.
 ```
 
 Lite next to upstream, deliberately: a failed check reports
-`Invalid pathname ~S: ~A` (not upstream's `~?` chain), `:want-logical` always
-fails, and `:resolve-symlinks` / `:truenamize` are accepted and ignored (no
-backend resolves a symlink); `:truename` answers what `probe-file` answers.
+`Invalid pathname ~S: ~A` (not upstream's `~?` chain) and `:want-logical` always
+fails. `:truename` answers the `truename`, and `:resolve-symlinks` /
+`:truenamize` resolve the symbolic links in the path as upstream does.
 
 ## Wildcards and translation
 

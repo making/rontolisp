@@ -37,7 +37,7 @@ with `(pathname ...)`.
 - String-typed internals: `%pathname-split`, `%dir-namestring`, `%wild-match`,
   `%wild-captures`, `%wild-component-p`, `%wild-inferiors-at`,
   `%pathname-directory-component`, `%path-dir-parts`, `%wild-dirs`, `%directory-subdirs`,
-  `%directory-in`, `%temp-file-name`, `%probe-file`, `%list-directory`, `%delete-file`,
+  `%directory-in`, `%temp-file-name`, `%probe-file`, `%read-link`, `%real-path`, `%list-directory`, `%delete-file`,
   `%make-directories`, `%rename-file`.
 - Consumers unwrap: interpreter built-ins via `PathnameOps.designatorNamestring`; the
   compile paths wrap `open`/`load`/`file-write-date`'s path argument in

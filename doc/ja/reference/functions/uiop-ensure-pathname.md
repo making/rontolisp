@@ -17,8 +17,8 @@ uiop の他の部分が経由する制約マシンです: 指定子を型強制�
 ```
 
 意図的な lite 版です: レポートは `Invalid pathname ~S: ~A` で、`:want-logical` は
-常に失敗し (論理パス名は存在しません)、`:resolve-symlinks` / `:truenamize` は
-受け付けて無視され、`:truename` は [`probe-file`](probe-file.md) の答えを返します。
+常に失敗します (論理パス名は存在しません)。`:truename` は [`truename`](truename.md) を
+返し、`:resolve-symlinks` / `:truenamize` は本家と同じくパスのシンボリックリンクを解決します。
 
 ## バックエンドサポート
 

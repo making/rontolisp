@@ -34,6 +34,10 @@
   ;; to (self, path_flags, path_ptr, path_len, retptr), the result<descriptor-stat,
   ;; error-code> landing in the retptr like descriptor.stat's.
   (import "wasi:filesystem/types@0.3.0" "[method]descriptor.stat-at" (func (param i32 i32 i32 i32 i32)))
+  ;; readlink-at is an async func taking one string and answering one; the SYNC
+  ;; lowering flattens to (self, path_ptr, path_len, retptr), the result<string,
+  ;; error-code> landing in the retptr with the string lifted through cabi_realloc.
+  (import "wasi:filesystem/types@0.3.0" "[method]descriptor.readlink-at" (func (param i32 i32 i32 i32)))
   ;; rename-at is an async func taking two strings and a borrowed descriptor; the SYNC
   ;; lowering flattens to (self, old_ptr, old_len, new_desc, new_ptr, new_len, retptr).
   (import "wasi:filesystem/types@0.3.0" "[method]descriptor.rename-at" (func (param i32 i32 i32 i32 i32 i32 i32)))

@@ -2032,6 +2032,22 @@ public final class LispEvaluator {
 					// The truename is the namestring itself (see LispNames.PROBE_FILE).
 					return this.sourceLoader.exists(path.value()) ? path : LispNil.INSTANCE;
 				}));
+		// %read-link: the same SourceLoader mediation as %probe-file,
+		// string-in/string-out:
+		// the target a symbolic link holds, nil for anything that is no link. The walk
+		// that resolves a whole path over it is the prelude %real-path.
+		this.globalEnv.defineFunction(LispNames.READ_LINK_INTERNAL,
+				new LispFunction(LispNames.READ_LINK_INTERNAL, args -> {
+					if (args.size() != 1) {
+						throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
+								LispNames.READ_LINK_INTERNAL + " expects 1 argument, got " + args.size());
+					}
+					if (!(args.get(0) instanceof LispString path)) {
+						throw new LispEvalException(LispNames.READ_LINK_INTERNAL + " expects a string pathname");
+					}
+					String target = this.sourceLoader.readLink(path.value());
+					return target == null ? LispNil.INSTANCE : new LispString(target);
+				}));
 		// file-write-date: the same SourceLoader mediation as %probe-file, for the same
 		// reason -- a host without a filesystem has no modification times and answers the
 		// nil Common Lisp already prescribes for "cannot be determined".

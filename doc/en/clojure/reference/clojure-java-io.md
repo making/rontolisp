@@ -51,8 +51,9 @@ true
 A File is its path, normalized as `java.io.File` normalizes one on Unix (no doubled or
 trailing slash). It prints as `#object[java.io.File "path"]`, `str` answers the path, and two
 Files are `=` when their paths are. Its methods answer from the path -- `getName`, `getParent`,
-`getParentFile`, `getPath`, `isAbsolute`, `getAbsolutePath`, `getCanonicalPath`, `toURI`,
-`toURL`, `compareTo` -- or from the file system: `exists`, `isFile`, `isDirectory`, `length`,
+`getParentFile`, `getPath`, `isAbsolute`, `getAbsolutePath`, `toURI`,
+`toURL`, `compareTo` -- or from the file system: `getCanonicalPath` (every symbolic link
+resolved, a part that does not exist kept as spelled), `exists`, `isFile`, `isDirectory`, `length`,
 `lastModified`, `canRead`, `isHidden`, `list`, `listFiles`, `mkdir`, `mkdirs`,
 `createNewFile`, `renameTo`, `delete`. `(java.io.File. path)` and
 `(java.io.File. parent child)` make the same value, and the file stream constructions

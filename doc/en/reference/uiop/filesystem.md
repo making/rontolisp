@@ -17,7 +17,7 @@ Every name is reachable through either spelling: `uiop:probe-file*` and
 | `uiop:directory-exists-p` | the pathname (with a trailing `/`) when the DIRECTORY exists, `nil` otherwise — the directory twin of `file-exists-p`, and what tells an empty directory from a missing one |
 | `uiop:probe-file*` | parse the designator and probe: the parsed pathname when something is there (`:truename t` answers its truename instead), `nil` otherwise — including for a designator `ensure-pathname` rejects, such as a wildcard |
 | `uiop:truename*` | the nil-tolerant `truename`: the truename when the file exists (trying the directory form too, where a missing trailing separator defeats some implementations' `truename`), `nil` otherwise — and `nil` for `nil` |
-| `uiop:directory*` | `directory` — upstream's per-implementation symlink keys are accepted and dropped, because nothing here resolves symlinks |
+| `uiop:directory*` | `directory` — upstream's per-implementation symlink keys are accepted and dropped: `directory` answers each entry as named, never resolved, which is what upstream asks for with them |
 | `uiop:directory-files` | the non-directory entries of a directory — `(directory "db/*.*")` with the subdirectories dropped. UIOP's optional second argument, the namestring of a name-and-type wildcard, filters them exactly as `directory` matches; omitting it lists everything, and a pattern carrying a directory component is an error |
 | `uiop:subdirectories` | the subdirectories of a directory, each with its trailing `/` |
 | `uiop:collect-sub*directories` | walk a directory tree: `collectp` decides what reaches `collector`, `recursep` what is descended into. Every directory handed over is in directory form, root included |
@@ -65,17 +65,14 @@ NIL
 
 ## Symlinks and the implementation directory
 
-No backend resolves symlinks — `truename` carries the argument namestring on
-all four — so `uiop:*resolve-symlinks*` defaults to `nil` (upstream's `t`
-would promise what is not there) and the three functions are the identity over
-a pathname coercion, exactly what upstream answers on an implementation without
-the API:
+Every backend resolves symbolic links the way [`truename`](../functions/truename.md)
+does, so `uiop:*resolve-symlinks*` defaults to `t` as upstream's does:
 
 | Function | What it answers |
 |----------|-----------------|
-| `uiop:*resolve-symlinks*` | `nil` |
-| `uiop:resolve-symlinks` / `uiop:truenamize` | the pathname itself |
-| `uiop:resolve-symlinks*` | the pathname itself when the flag is true, the argument untouched when it is not |
+| `uiop:*resolve-symlinks*` | `t` |
+| `uiop:resolve-symlinks` / `uiop:truenamize` | the pathname with every symbolic link among the parts that exist resolved, the rest kept as spelled (a relative path stays relative) |
+| `uiop:resolve-symlinks*` | `resolve-symlinks` when the flag is true, the argument untouched when it is not |
 | `uiop:lisp-implementation-directory` | `nil` — there is no install directory to name: no `compile-file`, no fasl cache |
 | `uiop:lisp-implementation-pathname-p` | `nil` — nothing is under a directory that does not exist |
 
