@@ -88,6 +88,12 @@ final class ClojureRefusals {
 	static final String MALFORMED_URL = "RONTOLISP::%CLOJURE-MALFORMED-URL-EXCEPTION";
 
 	/**
+	 * {@code org.xml.sax.SAXParseException}: a document {@code clojure.xml/parse} reads
+	 * that is not well-formed.
+	 */
+	static final String SAX_PARSE = "RONTOLISP::%CLOJURE-SAX-PARSE-EXCEPTION";
+
+	/**
 	 * {@code java.lang.AbstractMethodError}: a call of an interface method the type's
 	 * body leaves out ({@link ClojureInterfaces}).
 	 */
@@ -172,6 +178,7 @@ final class ClojureRefusals {
 			Map.entry(FILE_NOT_FOUND, "java.io.FileNotFoundException"),
 			Map.entry(UNSUPPORTED_ENCODING, "java.io.UnsupportedEncodingException"),
 			Map.entry(MALFORMED_URL, "java.net.MalformedURLException"),
+			Map.entry(SAX_PARSE, "org.xml.sax.SAXParseException"),
 			Map.entry(ABSTRACT_METHOD, "java.lang.AbstractMethodError"),
 			Map.entry(NO_SUCH_ELEMENT, "java.util.NoSuchElementException"));
 

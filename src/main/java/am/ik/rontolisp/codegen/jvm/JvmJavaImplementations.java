@@ -21,6 +21,7 @@ import am.ik.rontolisp.compiler.JavaClassLookup;
 import am.ik.rontolisp.compiler.JavaExecutable;
 import am.ik.rontolisp.compiler.JavaImplementation;
 import am.ik.rontolisp.compiler.JavaImplementations;
+import am.ik.rontolisp.compiler.JavaMarkers;
 import am.ik.rontolisp.compiler.JavaOverloads;
 import am.ik.rontolisp.compiler.JavaType;
 import org.jspecify.annotations.Nullable;
@@ -111,6 +112,11 @@ final class JvmJavaImplementations {
 	private boolean baseTested;
 
 	/**
+	 * Whether the program makes or reads a {@code java:handle} ({@link #handleClass()}).
+	 */
+	private boolean handles;
+
+	/**
 	 * One generated class: its name, what it implements, and each slot's callback.
 	 *
 	 * @param internalName the class's internal name
@@ -150,6 +156,103 @@ final class JvmJavaImplementations {
 		return this.programInternalName + "$Implementation";
 	}
 
+	/** The suffix of the generated class a {@code java:handle} makes an object of. */
+	static final String HANDLE_SUFFIX = "$Handle";
+
+	/**
+	 * The class a {@code (java:handle value "text" hash "order")} makes an object of,
+	 * {@code <Program>$Handle}: the value, the text, the hash and the order text in four
+	 * fields, the text its {@code toString}, its {@code equals}, {@code hashCode} and
+	 * {@code compareTo} (the eval package's {@code JavaHandle}, member for member).
+	 * Asking for it ships it beside the program.
+	 * @return its internal name
+	 */
+	String handleClass() {
+		this.handles = true;
+		return this.programInternalName + HANDLE_SUFFIX;
+	}
+
+	// final class <Program>$Handle implements Comparable: Object value, String text, int
+	// hash, String order; toString the text; equals over the text, hashCode the hash,
+	// compareTo over the order (a non-handle compared is a ClassCastException, as a
+	// Comparable of another class throws).
+	private static ClassDefinition writeHandle(String internalName) {
+		ConstantPool pool = new ConstantPool();
+		ClassEntry selfClass = pool.classEntry(internalName);
+		ClassEntry objectClass = pool.classEntry("java/lang/Object");
+		ClassEntry stringClass = pool.classEntry("java/lang/String");
+		ClassDefinition.Builder definition = ClassDefinition.builder(pool,
+				AccessFlag.ACC_FINAL | AccessFlag.ACC_SUPER | AccessFlag.ACC_SYNTHETIC, selfClass, objectClass,
+				pool.utf8Entry("Code"));
+		definition.addInterface(pool.classEntry("java/lang/Comparable"));
+		definition.addField(AccessFlag.ACC_FINAL, pool.utf8Entry("value"), pool.utf8Entry("Ljava/lang/Object;"));
+		definition.addField(AccessFlag.ACC_FINAL, pool.utf8Entry("text"), pool.utf8Entry("Ljava/lang/String;"));
+		definition.addField(AccessFlag.ACC_FINAL, pool.utf8Entry("hash"), pool.utf8Entry("I"));
+		definition.addField(AccessFlag.ACC_FINAL, pool.utf8Entry("order"), pool.utf8Entry("Ljava/lang/String;"));
+		FieldRefEntry value = pool.fieldRef(selfClass, "value", "Ljava/lang/Object;");
+		FieldRefEntry text = pool.fieldRef(selfClass, "text", "Ljava/lang/String;");
+		FieldRefEntry hash = pool.fieldRef(selfClass, "hash", "I");
+		FieldRefEntry order = pool.fieldRef(selfClass, "order", "Ljava/lang/String;");
+		// <init>(Object value, String text, int hash, String order)
+		MethodCode init = new MethodCode();
+		init.aload(0);
+		init.invokespecial(pool.methodRef(objectClass, "<init>", "()V"));
+		init.aload(0);
+		init.aload(1);
+		init.putfield(value);
+		init.aload(0);
+		init.aload(2);
+		init.putfield(text);
+		init.aload(0);
+		init.iload(3);
+		init.putfield(hash);
+		init.aload(0);
+		init.aload(4);
+		init.putfield(order);
+		init.return_();
+		definition.addMethod(0, pool.utf8Entry("<init>"),
+				pool.utf8Entry("(Ljava/lang/Object;Ljava/lang/String;ILjava/lang/String;)V"), init);
+		MethodCode toString = new MethodCode();
+		toString.aload(0);
+		toString.getfield(text);
+		toString.areturn();
+		definition.addMethod(AccessFlag.ACC_PUBLIC, pool.utf8Entry("toString"), pool.utf8Entry("()Ljava/lang/String;"),
+				toString);
+		MethodCode equals = new MethodCode();
+		MethodCode.Label other = equals.newLabel();
+		equals.aload(1);
+		equals.instanceOf(selfClass);
+		equals.ifeq(other);
+		equals.aload(0);
+		equals.getfield(text);
+		equals.aload(1);
+		equals.checkcast(selfClass);
+		equals.getfield(text);
+		equals.invokevirtual(pool.methodRef(stringClass, "equals", "(Ljava/lang/Object;)Z"));
+		equals.ireturn();
+		equals.labelBinding(other);
+		equals.loadConstant(0);
+		equals.ireturn();
+		definition.addMethod(AccessFlag.ACC_PUBLIC, pool.utf8Entry("equals"), pool.utf8Entry("(Ljava/lang/Object;)Z"),
+				equals);
+		MethodCode hashCode = new MethodCode();
+		hashCode.aload(0);
+		hashCode.getfield(hash);
+		hashCode.ireturn();
+		definition.addMethod(AccessFlag.ACC_PUBLIC, pool.utf8Entry("hashCode"), pool.utf8Entry("()I"), hashCode);
+		MethodCode compareTo = new MethodCode();
+		compareTo.aload(0);
+		compareTo.getfield(order);
+		compareTo.aload(1);
+		compareTo.checkcast(selfClass);
+		compareTo.getfield(order);
+		compareTo.invokevirtual(pool.methodRef(stringClass, "compareTo", "(Ljava/lang/String;)I"));
+		compareTo.ireturn();
+		definition.addMethod(AccessFlag.ACC_PUBLIC, pool.utf8Entry("compareTo"),
+				pool.utf8Entry("(Ljava/lang/Object;)I"), compareTo);
+		return definition.build();
+	}
+
 	/**
 	 * The factory of the class a resolved {@code java:reify} / {@code java:proxy}
 	 * implements its interface with: {@code of(Object[] functions)}, the functions in
@@ -169,18 +272,31 @@ final class JvmJavaImplementations {
 	 * @return the factory, taking a one-element array holding the function
 	 */
 	MethodRefEntry proxyFactory(JavaType iface) {
-		return factory(JavaImplementations.proxy(iface, this.lookup));
+		return proxyFactory(iface, JavaMarkers.NONE);
+	}
+
+	/**
+	 * {@link #proxyFactory(JavaType)} at a site ending in these markers: after
+	 * {@code :java-false} the callable is handed Java's {@code false} as {@code |false|}.
+	 * @param iface a linkable interface
+	 * @param markers the site's markers
+	 * @return the factory, taking a one-element array holding the function
+	 */
+	MethodRefEntry proxyFactory(JavaType iface, JavaMarkers markers) {
+		return factory(JavaImplementations.proxy(iface, this.lookup).withMarkers(markers));
 	}
 
 	/**
 	 * The factory of the class a function value passed where the interface is expected at
 	 * a site ending in {@code :functional} becomes: every abstract method calls the
-	 * function with its arguments ({@link JavaImplementations#functional}).
+	 * function with its arguments ({@link JavaImplementations#functional}), handed Java's
+	 * {@code false} as {@code |false|} after {@code :java-false}.
 	 * @param iface a linkable interface
+	 * @param markers the site's markers
 	 * @return the factory, taking a one-element array holding the function
 	 */
-	MethodRefEntry functionalFactory(JavaType iface) {
-		return factory(JavaImplementations.functional(iface, this.lookup));
+	MethodRefEntry functionalFactory(JavaType iface, JavaMarkers markers) {
+		return factory(JavaImplementations.functional(iface, this.lookup, markers));
 	}
 
 	/**
@@ -189,16 +305,16 @@ final class JvmJavaImplementations {
 	 * constructorArguments)}, answering the new object. The dispatcher chooses the
 	 * superclass constructor when it runs -- the arguments' kinds are known only then --
 	 * among the overloads the resolution allows, the first cheapest
-	 * ({@link JavaOverloads#selectRanked}).
+	 * ({@link JavaOverloads#selectRanked}). A function constructor argument implements
+	 * its interface by the method's arguments when the form ends in {@code :functional},
+	 * not as a {@code java:proxy}; after {@code :java-false} every function is handed
+	 * Java's {@code false} as {@code |false|} ({@link JavaImplementation#markers}).
 	 * @param implementation a resolved subclass implementation
 	 * @param argc the constructor argument count
-	 * @param functional whether a function argument implements its interface by the
-	 * method's arguments (a form ending in {@code :functional}), not as a
-	 * {@code java:proxy}
 	 * @return the dispatcher, a method of the program class
 	 */
-	MethodRefEntry subclassFactory(JavaImplementation implementation, int argc, boolean functional) {
-		Subshell shell = subshell(implementation, argc, functional);
+	MethodRefEntry subclassFactory(JavaImplementation implementation, int argc) {
+		Subshell shell = subshell(implementation, argc);
 		return this.cp.methodRef(this.thisClass, shell.construct(),
 				"(Ljava/lang/Object;[Ljava/lang/Object;)Ljava/lang/Object;");
 	}
@@ -258,6 +374,10 @@ final class JvmJavaImplementations {
 	 */
 	Map<String, byte[]> classFiles(JvmClassSplitter.Target target) {
 		Map<String, byte[]> files = new LinkedHashMap<>();
+		if (this.handles) {
+			String handle = this.programInternalName + HANDLE_SUFFIX;
+			files.put(handle + ".class", written(writeHandle(handle), target));
+		}
 		if (this.baseTested || !this.shells.isEmpty()) {
 			String base = this.programInternalName + "$Implementation";
 			files.put(base + ".class", written(writeBase(base), target));
@@ -286,6 +406,14 @@ final class JvmJavaImplementations {
 		StringBuilder key = new StringBuilder(implementation.proxy() ? "proxy|" : "reify|").append(iface);
 		for (JavaImplementation.Slot slot : implementation.slots()) {
 			key.append('|').append(slot.dispatchKey()).append('=').append(slot.implementation());
+			if (implementation.readsComparison(slot)) {
+				// its function's answer read as a comparison (_jcmp)
+				key.append(" compares");
+			}
+		}
+		if (implementation.javaFalse()) {
+			// its callbacks hand Java's false over as |false| (_junf)
+			key.append("|java-false");
 		}
 		Shell cached = this.shells.get(key.toString());
 		if (cached != null) {
@@ -295,8 +423,7 @@ final class JvmJavaImplementations {
 				+ (implementation.proxy() ? "$Proxy" + this.proxies++ : "$Reify" + this.reifies++);
 		List<@Nullable String> callbacks = new ArrayList<>();
 		for (JavaImplementation.Slot slot : implementation.slots()) {
-			callbacks.add(slot.implementation() == JavaImplementation.NONE ? null
-					: callback(implementation.proxy(), iface, slot));
+			callbacks.add(slot.implementation() == JavaImplementation.NONE ? null : callback(implementation, slot));
 		}
 		Shell shell = new Shell(name, implementation, callbacks);
 		this.shells.put(key.toString(), shell);
@@ -304,16 +431,22 @@ final class JvmJavaImplementations {
 	}
 
 	// The program-side method a slot calls, made the first time one of its shape asks:
-	// one per (proxy or not, interfaces, method, return type).
-	private String callback(boolean proxy, String iface, JavaImplementation.Slot slot) {
-		String key = (proxy ? "proxy|" : "reify|") + iface + "|" + slot.dispatchKey();
+	// one per (proxy or not, interfaces, method, return type, how Java's false reaches
+	// the function, whether its answer is read as a comparison).
+	private String callback(JavaImplementation implementation, JavaImplementation.Slot slot) {
+		boolean proxy = implementation.proxy();
+		String iface = implementation.interfaceNames();
+		boolean javaFalse = implementation.javaFalse();
+		boolean compares = implementation.readsComparison(slot);
+		String key = (proxy ? "proxy|" : "reify|") + iface + "|" + slot.dispatchKey() + (javaFalse ? "|java-false" : "")
+				+ (compares ? "|compares" : "");
 		String cached = this.callbacks.get(key);
 		if (cached != null) {
 			return cached;
 		}
 		String name = CALLBACK_PREFIX + this.callbacks.size();
 		this.callbacks.put(key, name);
-		this.methods.add(buildCallback(proxy, iface, slot, this.cp.utf8Entry(name),
+		this.methods.add(buildCallback(proxy, iface, slot, javaFalse, compares, this.cp.utf8Entry(name),
 				this.cp.utf8Entry(callbackDescriptor(slot))));
 		return name;
 	}
@@ -322,7 +455,7 @@ final class JvmJavaImplementations {
 		return "(Ljava/lang/Object;[Ljava/lang/Object;)" + JvmJavaDirectSites.descriptor(slot.returnType());
 	}
 
-	private Subshell subshell(JavaImplementation implementation, int argc, boolean functional) {
+	private Subshell subshell(JavaImplementation implementation, int argc) {
 		if (!implementation.resolved() || !implementation.isSubclass()) {
 			throw new IllegalArgumentException("not a resolved java:subclass");
 		}
@@ -333,7 +466,10 @@ final class JvmJavaImplementations {
 		for (JavaImplementation.Slot slot : implementation.slots()) {
 			key.append('|').append(slot.dispatchKey()).append('=').append(slot.implementation());
 		}
-		key.append('#').append(argc).append(functional ? " functional" : "");
+		key.append('#').append(argc).append(implementation.markers().functional() ? " functional" : "");
+		if (implementation.javaFalse()) {
+			key.append(" java-false");
+		}
 		Subshell cached = this.subshells.get(key.toString());
 		if (cached != null) {
 			return cached;
@@ -346,9 +482,8 @@ final class JvmJavaImplementations {
 				.add(slot.implementation() == JavaImplementation.NONE ? null : subclassCallback(implementation, slot));
 		}
 		String construct = "_jsubclass$" + this.methods.size();
-		this.methods
-			.add(buildSubclassConstruct(implementation, overloads, argc, functional, name, this.cp.utf8Entry(construct),
-					this.cp.utf8Entry("(Ljava/lang/Object;[Ljava/lang/Object;)Ljava/lang/Object;")));
+		this.methods.add(buildSubclassConstruct(implementation, overloads, argc, name, this.cp.utf8Entry(construct),
+				this.cp.utf8Entry("(Ljava/lang/Object;[Ljava/lang/Object;)Ljava/lang/Object;")));
 		Subshell shell = new Subshell(name, implementation, argc, overloads, callbacks, construct);
 		this.subshells.put(key.toString(), shell);
 		return shell;
@@ -375,10 +510,12 @@ final class JvmJavaImplementations {
 	}
 
 	// The program-side method a subclass slot calls, made the first time one of its
-	// shape asks: one per (superclass, interfaces, method, return type).
+	// shape asks: one per (superclass, interfaces, method, return type, how Java's false
+	// reaches the callable).
 	private String subclassCallback(JavaImplementation implementation, JavaImplementation.Slot slot) {
 		JavaType superclass = java.util.Objects.requireNonNull(implementation.superclass());
-		String key = "subclass|" + superclass.name() + "|" + implementation.interfaceNames() + "|" + slot.dispatchKey();
+		String key = "subclass|" + superclass.name() + "|" + implementation.interfaceNames() + "|" + slot.dispatchKey()
+				+ (implementation.javaFalse() ? "|java-false" : "");
 		String cached = this.callbacks.get(key);
 		if (cached != null) {
 			return cached;
@@ -403,16 +540,17 @@ final class JvmJavaImplementations {
 		return this.cp.methodRef(cls(owner), name, desc);
 	}
 
-	// static R _jimpl$K(Object fn, Object[] args): (fn [name] (_junm args[0]) ...), then
-	// the value converted to R -- or the interpreter's error for one that does not. What
+	// static R _jimpl$K(Object fn, Object[] args): (fn [name] (_junm args[0]) ...) --
+	// _junf after :java-false -- then the value converted to R -- or the interpreter's
+	// error for one that does not; a comparison's answer read first by _jcmp. What
 	// leaves it thrown -- the function's exit or condition, that error -- is recorded on
 	// its way out to the Java caller (_jsig), for the site whose Java call it reaches.
 	private JvmJavaDirectSites.Method buildCallback(boolean proxy, String iface, JavaImplementation.Slot slot,
-			Utf8Entry name, Utf8Entry desc) {
+			boolean javaFalse, boolean compares, Utf8Entry name, Utf8Entry desc) {
 		MethodCode a = new MethodCode();
 		MethodCode.Label start = a.newBoundLabel();
 		ClassEntry objectClass = cls("java/lang/Object");
-		MethodRefEntry unmarshal = this.direct.unmarshalHelper();
+		MethodRefEntry unmarshal = this.direct.unmarshalHelper(javaFalse);
 		MethodRefEntry signal = this.direct.signalHelper();
 		// 2 = the argument list, 3 = i, 4 = the value
 		MethodCode.Label loop = a.newLabel();
@@ -467,6 +605,21 @@ final class JvmJavaImplementations {
 		}
 		else {
 			a.astore(4);
+			if (compares) {
+				// Integer c = _jcmp(fn, args, value); if (c != null) return c.intValue();
+				MethodCode.Label notCompared = a.newLabel();
+				a.aload(0);
+				a.aload(2);
+				a.aload(4);
+				a.invokestatic(this.direct.comparisonHelper());
+				a.astore(5);
+				a.aload(5);
+				a.ifnull(notCompared);
+				a.aload(5);
+				a.invokevirtual(method("java/lang/Integer", "intValue", "()I"));
+				a.return_(returnKind(returnType));
+				a.labelBinding(notCompared);
+			}
 			MethodCode.Label fits = a.newLabel();
 			a.aload(4);
 			a.invokestatic(this.direct.returnedCost(returnType));
@@ -514,7 +667,7 @@ final class JvmJavaImplementations {
 		MethodCode a = new MethodCode();
 		MethodCode.Label start = a.newBoundLabel();
 		ClassEntry objectClass = cls("java/lang/Object");
-		MethodRefEntry unmarshal = this.direct.unmarshalHelper();
+		MethodRefEntry unmarshal = this.direct.unmarshalHelper(implementation.javaFalse());
 		MethodRefEntry signal = this.direct.signalHelper();
 		// 3 = the argument list, 4 = i, 5 = the value
 		MethodCode.Label loop = a.newLabel();
@@ -613,8 +766,8 @@ final class JvmJavaImplementations {
 	// like a dispatched site -- called with the converted arguments on a new object
 	// of the generated subclass carrying the callable.
 	private JvmJavaDirectSites.Method buildSubclassConstruct(JavaImplementation implementation,
-			List<JavaOverloads.Overload> overloads, int argc, boolean functional, String internalName, Utf8Entry name,
-			Utf8Entry desc) {
+			List<JavaOverloads.Overload> overloads, int argc, String internalName, Utf8Entry name, Utf8Entry desc) {
+		JavaMarkers markers = implementation.markers();
 		JavaType superclass = java.util.Objects.requireNonNull(implementation.superclass());
 		MethodCode a = new MethodCode();
 		ClassEntry objectClass = cls("java/lang/Object");
@@ -710,7 +863,7 @@ final class JvmJavaImplementations {
 				a.aload(1);
 				a.loadConstant(j);
 				a.aaload();
-				a.invokestatic(this.direct.argumentConvert(param, functional));
+				a.invokestatic(this.direct.argumentConvert(param, markers));
 			}
 			if (overload.packed()) {
 				JavaType component = java.util.Objects.requireNonNull(params.get(fixed).componentType());
@@ -729,7 +882,7 @@ final class JvmJavaImplementations {
 					a.aload(1);
 					a.loadConstant(j);
 					a.aaload();
-					a.invokestatic(this.direct.argumentConvert(component, functional));
+					a.invokestatic(this.direct.argumentConvert(component, markers));
 					a.arrayStore(primitiveKind(component));
 				}
 				a.aload(array);

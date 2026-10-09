@@ -102,13 +102,31 @@ public sealed interface JavaStaticType {
 	 * @return the static type of the unmarshalled value
 	 */
 	static JavaStaticType ofDeclared(JavaType type, JavaClassLookup lookup) {
+		return ofDeclared(type, lookup, false);
+	}
+
+	/**
+	 * {@link #ofDeclared(JavaType, JavaClassLookup)} at a site whose Java {@code false}
+	 * comes back as {@code |false|} when {@code javaFalse} ({@link JavaMarkers}): a
+	 * {@code boolean} is {@code t} or {@code |false|}, a {@code Boolean} either or
+	 * {@code nil}.
+	 * @param type the declared type
+	 * @param lookup where the boxes and {@code String} are found
+	 * @param javaFalse whether the site ends in {@code :java-false}
+	 * @return the static type of the unmarshalled value
+	 */
+	static JavaStaticType ofDeclared(JavaType type, JavaClassLookup lookup, boolean javaFalse) {
 		JavaKind.Lisp nil = JavaKind.Lisp.NIL;
 		switch (type.name()) {
 			case "void" -> {
 				return new Kinds(Set.of(nil));
 			}
-			case "boolean", "java.lang.Boolean" -> {
-				return new Kinds(Set.of(JavaKind.Lisp.T, nil));
+			case "boolean" -> {
+				return new Kinds(Set.of(JavaKind.Lisp.T, javaFalse ? JavaKind.Lisp.FALSE : nil));
+			}
+			case "java.lang.Boolean" -> {
+				return new Kinds(
+						javaFalse ? Set.of(JavaKind.Lisp.T, JavaKind.Lisp.FALSE, nil) : Set.of(JavaKind.Lisp.T, nil));
 			}
 			case "byte", "short", "int", "long" -> {
 				return new Kinds(Set.of(JavaKind.Lisp.INTEGER));
@@ -152,8 +170,22 @@ public sealed interface JavaStaticType {
 	 * @return the static type of the unmarshalled instance
 	 */
 	static JavaStaticType ofConstructed(JavaType type, JavaClassLookup lookup) {
+		return ofConstructed(type, lookup, false);
+	}
+
+	/**
+	 * {@link #ofConstructed(JavaType, JavaClassLookup)} at a site ending in
+	 * {@code :java-false} when {@code javaFalse}: a {@code Boolean} is {@code t} or
+	 * {@code |false|}.
+	 * @param type the constructed class
+	 * @param lookup where the boxes and {@code String} are found
+	 * @param javaFalse whether the site ends in {@code :java-false}
+	 * @return the static type of the unmarshalled instance
+	 */
+	static JavaStaticType ofConstructed(JavaType type, JavaClassLookup lookup, boolean javaFalse) {
 		return switch (type.name()) {
-			case "java.lang.Boolean" -> new Kinds(Set.of(JavaKind.Lisp.T, JavaKind.Lisp.NIL));
+			case "java.lang.Boolean" ->
+				new Kinds(Set.of(JavaKind.Lisp.T, javaFalse ? JavaKind.Lisp.FALSE : JavaKind.Lisp.NIL));
 			case "java.lang.Byte", "java.lang.Short", "java.lang.Integer", "java.lang.Long" ->
 				new Kinds(Set.of(JavaKind.Lisp.INTEGER));
 			case "java.lang.Float", "java.lang.Double" -> new Kinds(Set.of(JavaKind.Lisp.FLOAT));

@@ -56,6 +56,8 @@ final class ClojureBuiltinNamespaces {
 			Map.entry("clojure.datafy", Map.of()), Map.entry("clojure.stacktrace", Map.of()),
 			Map.entry("clojure.instant", Map.of()), Map.entry("clojure.uuid", Map.of()),
 			Map.entry("clojure.math", Map.of()), Map.entry("clojure.java.io", Map.of()),
+			Map.entry("clojure.repl", replLeftOut()), Map.entry("clojure.main", mainLeftOut()),
+			Map.entry("clojure.java.shell", Map.of()), Map.entry("clojure.xml", xmlLeftOut()),
 			Map.entry("clojure.pprint",
 					Map.of("cl-format", "Common Lisp format directives over Clojure values are not built in",
 							"formatter", "Common Lisp format directives over Clojure values are not built in",
@@ -74,12 +76,55 @@ final class ClojureBuiltinNamespaces {
 	}
 
 	/**
+	 * The public vars of {@code clojure.repl} it leaves out: what reads every namespace's
+	 * vars, a definition's text, or the host's signals and threads.
+	 */
+	private static Map<String, String> replLeftOut() {
+		String vars = "a namespace's vars are known only while the program is lowered,"
+				+ " so ns-publics and all-ns are not built in";
+		String text = "a definition's text is not kept at run time";
+		return Map.of("dir", vars, "dir-fn", vars, "apropos", vars, "find-doc", vars, "source", text, "source-fn", text,
+				"set-break-handler!", "there is no INT signal handler", "thread-stopper",
+				"it stops a thread with Thread.stop, which the JDK no longer supports");
+	}
+
+	/**
+	 * The public vars of {@code clojure.main} it leaves out: the REPL and the script
+	 * runner, which evaluate forms read at run time, and their parts.
+	 */
+	private static Map<String, String> mainLeftOut() {
+		String eval = "no compiler runs at run time, so eval and load are not built in";
+		String repl = "it is part of clojure.main/repl, which needs eval: no compiler runs at run time";
+		return Map.of("repl", eval, "main", eval, "load-script", eval, "repl-read", repl, "renumbering-read", repl,
+				"skip-whitespace", repl, "skip-if-eol", repl, "with-bindings", repl, "report-error",
+				"it writes the report clojure.main/main makes of an uncaught exception, and main is not built in");
+	}
+
+	/**
+	 * The public vars of {@code clojure.xml} it leaves out: the oracle's one
+	 * {@code ContentHandler} and the vars it keeps its state in.
+	 */
+	private static Map<String, String> xmlLeftOut() {
+		String state = "parse keeps its state in the call, not in vars";
+		return Map.of("content-handler", "parse hands a startparse function a ContentHandler made for that call",
+				"*stack*", state, "*current*", state, "*state*", state, "*sb*", state);
+	}
+
+	/**
+	 * The shipped namespaces whose vars need the host's own API, with what for: the
+	 * interpreter and the JVM have it, a WebAssembly target does not, so a
+	 * {@code require} there is refused while lowering rather than at the first call.
+	 */
+	private static final Map<String, String> HOST_ONLY = Map.of("clojure.java.shell",
+			"sh launches a host process, which the interpreter and the JVM can and a WebAssembly target cannot");
+
+	/**
 	 * The shipped namespaces {@code clj -M} has loaded before the program runs: a
 	 * qualified name reaches one without a {@code require}, and a {@code require} of one
 	 * reads no project file.
 	 */
 	private static final Set<String> STARTUP = Set.of("clojure.walk", "clojure.core.protocols", "clojure.instant",
-			"clojure.uuid", "clojure.java.io");
+			"clojure.uuid", "clojure.java.io", "clojure.main");
 
 	/**
 	 * The namespaces clojure.jar 1.12.6 defines, plus those of the spec jars it depends
@@ -185,6 +230,16 @@ final class ClojureBuiltinNamespaces {
 			return ns + " is not built in: rontolisp.http-client has its API over rontolisp:fetch";
 		}
 		return NOT_SHIPPED.contains(ns) ? ns + " is not built in: " + shippedRingList() : null;
+	}
+
+	/**
+	 * Why a shipped namespace is refused on a target without the host.
+	 * @param ns the namespace
+	 * @return the refusal, or {@code null} for a namespace every target runs
+	 */
+	static @Nullable String hostOnly(String ns) {
+		String why = HOST_ONLY.get(ns);
+		return why == null ? null : ns + " is not built in on this target: " + why;
 	}
 
 	/**

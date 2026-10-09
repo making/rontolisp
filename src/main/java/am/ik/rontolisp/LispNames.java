@@ -7847,6 +7847,13 @@ public final class LispNames {
 	public static final String JAVA_FUNCTIONAL_MARKER = ":FUNCTIONAL";
 
 	/**
+	 * The keyword a {@code java:} call may end in, after its arguments (beside
+	 * {@link #JAVA_FUNCTIONAL_MARKER}): Java's {@code false} comes back as the symbol
+	 * {@link #JAVA_FALSE} rather than {@code nil} ({@code compiler.JavaMarkers}).
+	 */
+	public static final String JAVA_FALSE_MARKER = ":JAVA-FALSE";
+
+	/**
 	 * The name of the symbol {@code java:} passes as Java's {@code false} -- the
 	 * {@code boolean} false, and {@code Boolean.FALSE} where a reference is expected,
 	 * where {@code nil} is {@code null} -- and which a function called back from Java may
@@ -7887,13 +7894,25 @@ public final class LispNames {
 	public static final String JAVA_SUBCLASS_QUALIFIED = JAVA_PKG + ":" + JAVA_SUBCLASS;
 
 	/**
+	 * {@code java:handle} -- a Java object that stands for a Lisp value:
+	 * {@code (java:handle value "text" hash "order")}, the last two optional. Java sees
+	 * the text as its {@code toString} and equals handles by it; the hash (the text's by
+	 * default) is its {@code hashCode}, the order text (the text by default) what handles
+	 * sort by; {@code java:} answers the value wherever Java hands the handle back.
+	 */
+	public static final String JAVA_HANDLE = "HANDLE";
+
+	/** {@code java:handle}, qualified. */
+	public static final String JAVA_HANDLE_QUALIFIED = JAVA_PKG + ":" + JAVA_HANDLE;
+
+	/**
 	 * The {@code java:} operators, qualified. A program naming none of them holds no host
 	 * object: the JVM backend emits no {@code java:} runtime for it, and the Clojure
 	 * library splices its host arms out of it.
 	 */
 	public static final java.util.List<String> JAVA_OPERATORS_QUALIFIED = java.util.List.of(JAVA_NEW_QUALIFIED,
 			JAVA_CALL_QUALIFIED, JAVA_STATIC_QUALIFIED, JAVA_FIELD_QUALIFIED, JAVA_PROXY_QUALIFIED,
-			JAVA_REIFY_QUALIFIED, JAVA_SUBCLASS_QUALIFIED);
+			JAVA_REIFY_QUALIFIED, JAVA_SUBCLASS_QUALIFIED, JAVA_HANDLE_QUALIFIED);
 
 	/** {@link #JAVA_WARN_ON_REFLECTION}, qualified. */
 	public static final String JAVA_WARN_ON_REFLECTION_QUALIFIED = JAVA_PKG + ":" + JAVA_WARN_ON_REFLECTION;

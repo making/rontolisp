@@ -5229,14 +5229,23 @@ public final class LispEvaluator {
 			return JavaInterop.callStatic(cls.value(), method.value(), args.subList(2, args.size()), caller);
 		}));
 		String jfield = PackageRegistry.qualify(LispNames.JAVA_PKG, LispNames.JAVA_FIELD);
-		this.globalEnv.defineFunction(jfield, javaBuiltin(jfield, args -> {
+		this.globalEnv.defineFunction(jfield, javaBuiltin(jfield, all -> {
+			// The markers ending the call (compiler/JavaMarkers): :java-false answers a
+			// false field as |false|.
+			int markers = am.ik.rontolisp.compiler.JavaMarkers.count(all, 2);
+			List<LispVal> args = all.subList(0, all.size() - markers);
 			if (args.size() != 2 || !(args.get(1) instanceof LispString field)) {
 				throw new LispEvalException(jfield + " expects (java:field class-or-object \"field\")");
 			}
-			return JavaInterop.field(args.get(0), field.value(), caller);
+			return JavaInterop.field(args.get(0), field.value(),
+					JavaInterop.withMarkers(caller, am.ik.rontolisp.compiler.JavaMarkers.of(all, 2)));
 		}));
 		String jproxy = PackageRegistry.qualify(LispNames.JAVA_PKG, LispNames.JAVA_PROXY);
-		this.globalEnv.defineFunction(jproxy, new LispFunction(jproxy, args -> {
+		this.globalEnv.defineFunction(jproxy, new LispFunction(jproxy, all -> {
+			// The markers ending the call, after the callable: :java-false hands the
+			// callable Java's false as |false|.
+			int markers = am.ik.rontolisp.compiler.JavaMarkers.count(all, 2);
+			List<LispVal> args = all.subList(0, all.size() - markers);
 			if (args.size() < 2) {
 				throw new LispEvalException(am.ik.rontolisp.compiler.JavaImplementations.PROXY_USAGE);
 			}
@@ -5247,13 +5256,16 @@ public final class LispEvaluator {
 				}
 				interfaces.add(iface.value());
 			}
-			return JavaInterop.proxy(interfaces, args.get(args.size() - 1), caller);
+			return JavaInterop.proxy(interfaces, args.get(args.size() - 1),
+					JavaInterop.withMarkers(caller, am.ik.rontolisp.compiler.JavaMarkers.of(all, 2)));
 		}));
 		String jreify = PackageRegistry.qualify(LispNames.JAVA_PKG, LispNames.JAVA_REIFY);
 		this.globalEnv.defineFunction(jreify, new LispFunction(jreify, args -> JavaInterop.reify(args, caller)));
 		String jsubclass = PackageRegistry.qualify(LispNames.JAVA_PKG, LispNames.JAVA_SUBCLASS);
 		this.globalEnv.defineFunction(jsubclass,
 				new LispFunction(jsubclass, args -> JavaInterop.subclass(args, caller)));
+		String jhandle = PackageRegistry.qualify(LispNames.JAVA_PKG, LispNames.JAVA_HANDLE);
+		this.globalEnv.defineFunction(jhandle, new LispFunction(jhandle, JavaInterop::handle));
 	}
 
 	/**
@@ -5297,10 +5309,11 @@ public final class LispEvaluator {
 			return apply(builtin, args, env);
 		}
 		JavaInterop.Caller caller = this.javaCaller;
-		if (site.functional()) {
-			// The arguments end in the :functional marker the resolution set aside.
-			args = args.subList(0, args.size() - 1);
-			caller = JavaInterop.functional(caller);
+		if (site.markers().any()) {
+			// The arguments end in the markers the resolution set aside.
+			int first = am.ik.rontolisp.compiler.JavaSiteResolver.firstArgument(site.operator()) - 1;
+			args = args.subList(0, args.size() - am.ik.rontolisp.compiler.JavaMarkers.count(args, first));
+			caller = JavaInterop.withMarkers(caller, site.markers());
 		}
 		LispVal result = switch (site.operator()) {
 			case NEW -> JavaInterop.invokeResolved(site, null, args.subList(1, args.size()), caller);

@@ -607,6 +607,10 @@ final class ClojureNamespaceLowering {
 					+ ctx.sourcePath.describeRoots());
 		}
 		if (found.builtin()) {
+			String hostOnly = ctx.hostTarget ? null : ClojureBuiltinNamespaces.hostOnly(ns);
+			if (hostOnly != null) {
+				throw new LispReadException(hostOnly);
+			}
 			ctx.builtinNamespaces.add(ns);
 		}
 		ctx.loadFile(ns, found);

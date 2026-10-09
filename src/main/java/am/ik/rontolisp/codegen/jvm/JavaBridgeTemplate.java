@@ -9,7 +9,9 @@ import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
 import java.lang.reflect.Proxy;
+import java.math.BigDecimal;
 import java.math.BigInteger;
+import java.math.MathContext;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
@@ -70,6 +72,10 @@ final class JavaBridgeTemplate {
 
 	private static final int COST_PROXY = 8;
 
+	// A function where an interface of no single abstract method is expected: after every
+	// functional one (mirrors compiler/JavaOverloads.COST_PROXY_NOT_FUNCTIONAL).
+	private static final int COST_PROXY_NOT_FUNCTIONAL = 9;
+
 	private static final int COST_VARARGS = 10;
 
 	private static final int NO_MATCH = -1;
@@ -77,17 +83,30 @@ final class JavaBridgeTemplate {
 	// How marshal() converts a function value (mirrors eval/JavaInterop): to nothing --
 	// a value a java:reify / java:proxy function answers --, to the interface's
 	// java:proxy -- an argument --, or, at a call ending in :functional, to the
-	// implementation calling the function with each abstract method's arguments.
+	// implementation calling the function with each abstract method's arguments. The
+	// mode is the low bits (FUNCTIONS_MODE); FUNCTIONS_JAVA_FALSE beside it makes the
+	// implementation hand its function Java's false as |false| (:java-false).
 	private static final int FUNCTIONS_NONE = 0;
 
 	private static final int FUNCTIONS_PROXY = 1;
 
 	private static final int FUNCTIONS_BY_ARGUMENTS = 2;
 
-	// The keyword a java:new / java:call / java:static call may end in after its
-	// arguments (mirrors compiler/JavaSiteResolver.FUNCTIONAL); a keyword compiles to its
-	// name.
+	private static final int FUNCTIONS_MODE = 3;
+
+	private static final int FUNCTIONS_JAVA_FALSE = 4;
+
+	// The keywords a java: call may end in after its arguments (a java:proxy / java:reify
+	// after its callable or last function), mirroring compiler/JavaMarkers; a keyword
+	// compiles to its name.
 	private static final String FUNCTIONAL_MARKER = ":FUNCTIONAL";
+
+	private static final String JAVA_FALSE_MARKER = ":JAVA-FALSE";
+
+	// What Comparator.compare's slot key is (mirrors compiler/JavaImplementation's
+	// COMPARATOR_COMPARE): a function implementing it by its arguments at a call ending
+	// in :functional and :java-false may answer a boolean (comparison).
+	private static final String COMPARATOR_COMPARE = "compare(java.lang.Object,java.lang.Object)";
 
 	// Resolution caches, mirroring eval/JavaInterop: the class by name, the candidate
 	// constructors / methods / field of a class, and the overload chosen for (class,
@@ -210,6 +229,14 @@ final class JavaBridgeTemplate {
 	private static @Nullable Method hashValuesMethod;
 
 	/**
+	 * The program's generated {@code java:handle} class's {@code value} field
+	 * ({@code <Program>$Handle}), or null when the program makes no handle: a handle Java
+	 * hands back is the value it stands for (mirrors {@code JvmJavaDirectSites}'
+	 * unmarshal arm). Bound beside {@code _apply}.
+	 */
+	private static @Nullable Field handleValueField;
+
+	/**
 	 * The generated program's {@code _jsig(Throwable)}: what this bridge's {@code Proxy}
 	 * records a throwable leaving its callback with, as a generated implementation's
 	 * callback does, so the site whose Java call it reaches -- this bridge's or a direct
@@ -288,7 +315,21 @@ final class JavaBridgeTemplate {
 			// No hash-table runtime in this program: no table can exist.
 			hashValuesMethod = null;
 		}
+		try {
+			Field value = Class.forName(mainClass.getName() + HANDLE_SUFFIX, false, mainClass.getClassLoader())
+				.getDeclaredField("value");
+			value.setAccessible(true);
+			handleValueField = value;
+		}
+		catch (ClassNotFoundException | NoSuchFieldException ex) {
+			// No java:handle in this program: no handle can exist.
+			handleValueField = null;
+		}
 	}
+
+	// The suffix of a program's generated java:handle class (mirrors
+	// JvmJavaImplementations.HANDLE_SUFFIX).
+	private static final String HANDLE_SUFFIX = "$Handle";
 
 	// A method every program the bridge travels with declares.
 	private static Method required(Class<?> mainClass, String name, Class<?>... parameterTypes) {
@@ -307,10 +348,10 @@ final class JavaBridgeTemplate {
 	 * ({@code "java.lang.StringBuilder(int)"}).
 	 */
 	static @Nullable Object javaNew(@Nullable Object className, @Nullable Object[] args) {
-		int functions = functionsOf(args);
-		if (functions == FUNCTIONS_BY_ARGUMENTS) {
-			args = Arrays.copyOf(args, args.length - 1);
-		}
+		int marked = markerCount(args, 0);
+		int functions = functionsOf(args, marked);
+		args = Arrays.copyOf(args, args.length - marked);
+		boolean javaFalse = (functions & FUNCTIONS_JAVA_FALSE) != 0;
 		String designator = lispString(className);
 		if (designator == null) {
 			throw new RuntimeException("java:new expects a class-name string, got " + describe(className));
@@ -328,7 +369,8 @@ final class JavaBridgeTemplate {
 					"No matching constructor for " + designator + " with " + args.length + " argument(s)");
 		}
 		try {
-			return unmarshal(((Constructor<?>) overload[0]).newInstance(marshalArguments(overload, values, functions)));
+			return unmarshal(((Constructor<?>) overload[0]).newInstance(marshalArguments(overload, values, functions)),
+					javaFalse);
 		}
 		catch (ReflectiveOperationException ex) {
 			throw fail("constructing " + name, ex);
@@ -349,11 +391,30 @@ final class JavaBridgeTemplate {
 		return invoke(receiver.getClass(), receiver, method, args);
 	}
 
-	// FUNCTIONS_BY_ARGUMENTS when the evaluated arguments end in the :functional marker
-	// (which the caller then drops), else FUNCTIONS_PROXY.
-	private static int functionsOf(@Nullable Object[] args) {
-		return args.length > 0 && FUNCTIONAL_MARKER.equals(args[args.length - 1]) ? FUNCTIONS_BY_ARGUMENTS
-				: FUNCTIONS_PROXY;
+	// How many of the evaluated arguments, at or after FIRST, are markers ending them
+	// (mirrors compiler/JavaMarkers.count): the caller then drops them.
+	private static int markerCount(@Nullable Object[] args, int first) {
+		int end = args.length;
+		while (end > first && (FUNCTIONAL_MARKER.equals(args[end - 1]) || JAVA_FALSE_MARKER.equals(args[end - 1]))) {
+			end--;
+		}
+		return args.length - end;
+	}
+
+	// How the call's function arguments convert, after the MARKED markers ending ARGS:
+	// FUNCTIONS_BY_ARGUMENTS after :functional, else FUNCTIONS_PROXY, with
+	// FUNCTIONS_JAVA_FALSE after :java-false.
+	private static int functionsOf(@Nullable Object[] args, int marked) {
+		int functions = FUNCTIONS_PROXY;
+		for (int i = args.length - marked; i < args.length; i++) {
+			if (FUNCTIONAL_MARKER.equals(args[i])) {
+				functions = (functions & ~FUNCTIONS_MODE) | FUNCTIONS_BY_ARGUMENTS;
+			}
+			else {
+				functions |= FUNCTIONS_JAVA_FALSE;
+			}
+		}
+		return functions;
 	}
 
 	// The object a java:call is made on: a host object itself, or the one a Lisp value of
@@ -387,7 +448,10 @@ final class JavaBridgeTemplate {
 	 * Implements {@code (java:field "class.Name" "CONSTANT")} (static) and
 	 * {@code (java:field obj "name")} (instance).
 	 */
-	static @Nullable Object javaField(@Nullable Object classOrObject, @Nullable Object fieldName) {
+	static @Nullable Object javaField(@Nullable Object classOrObject, @Nullable Object fieldName,
+			@Nullable Object[] markers) {
+		// The markers the form ends in: :java-false answers a false field as |false|.
+		boolean javaFalse = (functionsOf(markers, markerCount(markers, 0)) & FUNCTIONS_JAVA_FALSE) != 0;
 		String name = lispString(fieldName);
 		if (name == null) {
 			throw new RuntimeException("java:field expects (java:field class-or-object \"field\")");
@@ -401,11 +465,11 @@ final class JavaBridgeTemplate {
 					// Mirrors compiler/JavaSiteResolver.notStatic.
 					throw new RuntimeException("java:field: field " + cls.getName() + "." + name + " is not static");
 				}
-				return unmarshal(field.get(null));
+				return unmarshal(field.get(null), javaFalse);
 			}
 			if (classOrObject != null && isJavaObject(classOrObject)) {
 				Field field = publicField(classOrObject.getClass(), name);
-				return unmarshal(field.get(classOrObject));
+				return unmarshal(field.get(classOrObject), javaFalse);
 			}
 			throw new RuntimeException(
 					"java:field expects a class-name string or a java object, got " + describe(classOrObject));
@@ -420,6 +484,10 @@ final class JavaBridgeTemplate {
 	 * time: the rest is the other interface names, then the callable.
 	 */
 	static @Nullable Object javaProxy(@Nullable Object interfaceName, @Nullable Object[] rest) {
+		// The markers after the callable: :java-false hands it Java's false as |false|.
+		int marked = markerCount(rest, 1);
+		boolean javaFalse = (functionsOf(rest, marked) & FUNCTIONS_JAVA_FALSE) != 0;
+		rest = Arrays.copyOf(rest, rest.length - marked);
 		if (rest.length == 0) {
 			throw new RuntimeException(PROXY_USAGE);
 		}
@@ -440,7 +508,7 @@ final class JavaBridgeTemplate {
 			}
 			interfaces[i] = iface;
 		}
-		return proxy(interfaces, rest[rest.length - 1]);
+		return proxy(interfaces, rest[rest.length - 1], javaFalse);
 	}
 
 	/**
@@ -459,6 +527,12 @@ final class JavaBridgeTemplate {
 	 * {@code compiler/JavaImplementations.reify}).
 	 */
 	static @Nullable Object javaReify(@Nullable Object interfaceName, @Nullable Object[] rest) {
+		// The markers after the last function: :java-false hands the functions Java's
+		// false as |false|.
+		int marked = markerCount(rest, 0);
+		int markers = functionsOf(rest, marked);
+		boolean javaFalse = (markers & FUNCTIONS_JAVA_FALSE) != 0;
+		rest = Arrays.copyOf(rest, rest.length - marked);
 		String name = lispString(interfaceName);
 		if (name == null || rest.length % 2 != 0) {
 			throw new RuntimeException(REIFY_USAGE);
@@ -483,12 +557,16 @@ final class JavaBridgeTemplate {
 			slots = reifySlots(iface, designators);
 			remember(IMPLEMENTATIONS, key, slots);
 		}
-		return implementation(new Class<?>[] { iface }, false, slots, functions);
+		// Ending in :functional and :java-false, a Comparator's compare function may
+		// answer a boolean (mirrors compiler/JavaImplementation.readsComparison).
+		boolean comparison = javaFalse && (markers & FUNCTIONS_MODE) == FUNCTIONS_BY_ARGUMENTS
+				&& "java.util.Comparator".equals(iface.getName());
+		return implementation(new Class<?>[] { iface }, false, slots, functions, javaFalse, comparison);
 	}
 
 	// A function value where an interface is expected: the interface's java:proxy.
-	private static Object proxy(Class<?> iface, @Nullable Object callable) {
-		return proxy(new Class<?>[] { iface }, callable);
+	private static Object proxy(Class<?> iface, @Nullable Object callable, boolean javaFalse) {
+		return proxy(new Class<?>[] { iface }, callable, javaFalse);
 	}
 
 	// The designators stand-in of a :functional implementation's key.
@@ -497,15 +575,45 @@ final class JavaBridgeTemplate {
 	// A function value where an interface is expected at a call ending in :functional:
 	// every abstract method calls the function with its arguments (mirrors
 	// compiler/JavaImplementations.functional).
-	private static Object functional(Class<?> iface, @Nullable Object function) {
+	private static Object functional(Class<?> iface, @Nullable Object function, boolean javaFalse) {
 		List<Object> key = List.of(iface, FUNCTIONAL_KEY);
 		Map<String, Integer> slots = IMPLEMENTATIONS.get(key);
 		if (slots == null) {
 			slots = functionalSlots(iface);
 			remember(IMPLEMENTATIONS, key, slots);
 		}
-		return implementation(new Class<?>[] { iface }, false, slots, new @Nullable Object[] { function });
+		// After :java-false too, a Comparator's function may answer a boolean (mirrors
+		// compiler/JavaImplementation.readsComparison).
+		boolean comparison = javaFalse && "java.util.Comparator".equals(iface.getName());
+		return implementation(new Class<?>[] { iface }, false, slots, new @Nullable Object[] { function }, javaFalse,
+				comparison);
 	}
+
+	// Whether the interface has exactly one method a class must implement, Object's
+	// three aside: what a Java lambda can implement (mirrors
+	// compiler/JavaImplementations.isFunctionalInterface). Remembered per interface.
+	private static boolean isFunctionalInterface(Class<?> iface) {
+		Boolean known = FUNCTIONAL_INTERFACES.get(iface);
+		if (known == null) {
+			int abstractMethods = 0;
+			for (Map.Entry<String, List<Method>> group : groups(new Class<?>[] { iface }).entrySet()) {
+				if (OBJECT_METHODS.contains(group.getKey())) {
+					continue;
+				}
+				for (List<Method> variant : variants(group.getValue()).values()) {
+					if (mustImplement(variant)) {
+						abstractMethods++;
+						break;
+					}
+				}
+			}
+			known = abstractMethods == 1;
+			remember(FUNCTIONAL_INTERFACES, iface, known);
+		}
+		return known;
+	}
+
+	private static final ConcurrentHashMap<Class<?>, Boolean> FUNCTIONAL_INTERFACES = new ConcurrentHashMap<>();
 
 	// Every method a class implementing the interface must implement, by
 	// name(parameters)return -- an abstract one, Object's three aside -- each variant of
@@ -532,14 +640,14 @@ final class JavaBridgeTemplate {
 
 	// java:proxy: every method of every interface but Object's three calls the callable
 	// with the method's name first.
-	private static Object proxy(Class<?>[] interfaces, @Nullable Object callable) {
+	private static Object proxy(Class<?>[] interfaces, @Nullable Object callable, boolean javaFalse) {
 		List<Object> key = List.of(List.of(interfaces), PROXY_KEY);
 		Map<String, Integer> slots = IMPLEMENTATIONS.get(key);
 		if (slots == null) {
 			slots = proxySlots(interfaces);
 			remember(IMPLEMENTATIONS, key, slots);
 		}
-		return implementation(interfaces, true, slots, new @Nullable Object[] { callable });
+		return implementation(interfaces, true, slots, new @Nullable Object[] { callable }, javaFalse, false);
 	}
 
 	// Every method a java:proxy of the interfaces declares, by name(parameters)return:
@@ -564,8 +672,10 @@ final class JavaBridgeTemplate {
 	// no slot names runs its body; Object's three keep their identity behavior. What the
 	// function raises -- or the refusal of its value -- is recorded on its way out to the
 	// Java caller (the program's _jsig), as a generated class's callback records it.
+	// JAVA_FALSE hands the functions Java's false as |false|; COMPARISON reads compare's
+	// answer as Clojure's AFunction.compare.
 	private static Object implementation(Class<?>[] interfaces, boolean proxy, Map<String, Integer> slots,
-			@Nullable Object[] functions) {
+			@Nullable Object[] functions, boolean javaFalse, boolean comparison) {
 		StringBuilder names = new StringBuilder();
 		for (Class<?> iface : interfaces) {
 			names.append(names.length() == 0 ? "" : " ").append(iface.getName());
@@ -597,7 +707,8 @@ final class JavaBridgeTemplate {
 				throw new UnsupportedOperationException("java:reify: no implementation of " + name + "." + key);
 			}
 			try {
-				return callback(name, proxy, method, methodArgs, functions[index]);
+				return callback(name, proxy, method, methodArgs, functions[index], javaFalse,
+						comparison && COMPARATOR_COMPARE.equals(key) && method.getReturnType() == int.class);
 			}
 			catch (Throwable raised) {
 				throw signal(raised);
@@ -608,12 +719,13 @@ final class JavaBridgeTemplate {
 	// A slot's function applied to the ([method-name] arg...) list, its value marshalled
 	// to the method's return type.
 	private static @Nullable Object callback(String name, boolean proxy, Method method,
-			@Nullable Object @Nullable [] methodArgs, @Nullable Object function) {
+			@Nullable Object @Nullable [] methodArgs, @Nullable Object function, boolean javaFalse,
+			boolean comparison) {
 		// Build the ([method-name] arg...) cons list, tail-first.
 		Object argList = null;
 		if (methodArgs != null) {
 			for (int i = methodArgs.length - 1; i >= 0; i--) {
-				argList = new Object[] { unmarshal(methodArgs[i]), argList };
+				argList = new Object[] { unmarshal(methodArgs[i], javaFalse), argList };
 			}
 		}
 		if (proxy) {
@@ -624,12 +736,49 @@ final class JavaBridgeTemplate {
 		if (ret == void.class) {
 			return null;
 		}
+		if (comparison) {
+			Integer compared = comparison(function, (Object[]) Objects.requireNonNull(argList), result);
+			if (compared != null) {
+				return compared;
+			}
+		}
 		@Nullable Object[] slot = new @Nullable Object[1];
 		if (marshal(result, ret, slot, 0, FUNCTIONS_NONE) == NO_MATCH) {
 			throw new RuntimeException((proxy ? "java:proxy" : "java:reify") + ": cannot return " + describe(result)
 					+ " as " + ret + " from " + name + (proxy ? "" : "." + method.getName()));
 		}
 		return slot[0];
+	}
+
+	// What a function implementing Comparator.compare answered, read as Clojure's
+	// AFunction.compare reads it (mirrors JvmJavaDirectSites' _jcmp): t is -1; |false|
+	// 1 when the function answers true -- neither nil nor |false| -- for the two
+	// arguments of ARGS swapped, else 0; a fixnum or bignum its low 32 bits, a float
+	// truncated, a ratio its DECIMAL64 quotient truncated; anything else null, which the
+	// return conversion then refuses.
+	private static @Nullable Integer comparison(@Nullable Object function, Object[] args, @Nullable Object answer) {
+		if ("T".equals(answer)) {
+			return -1;
+		}
+		if (JAVA_FALSE.equals(answer)) {
+			Object a = args[0];
+			Object b = ((Object[]) Objects.requireNonNull(args[1]))[0];
+			Object back = applyCallable(function, new Object[] { b, new Object[] { a, null } });
+			return back != null && !JAVA_FALSE.equals(back) ? 1 : 0;
+		}
+		if (answer instanceof Long l) {
+			return l.intValue();
+		}
+		if (answer instanceof Double d) {
+			return (int) d.doubleValue();
+		}
+		if (answer instanceof BigInteger b) {
+			return b.intValue();
+		}
+		if (answer instanceof BigInteger[] ratio) {
+			return (int) new BigDecimal(ratio[0]).divide(new BigDecimal(ratio[1]), MathContext.DECIMAL64).doubleValue();
+		}
+		return null;
 	}
 
 	// Records a throwable leaving a callback through the program's _jsig; answers it.
@@ -835,10 +984,10 @@ final class JavaBridgeTemplate {
 
 	private static @Nullable Object invoke(Class<?> cls, @Nullable Object receiver, String methodName,
 			@Nullable Object[] args) {
-		int functions = functionsOf(args);
-		if (functions == FUNCTIONS_BY_ARGUMENTS) {
-			args = Arrays.copyOf(args, args.length - 1);
-		}
+		int marked = markerCount(args, 0);
+		int functions = functionsOf(args, marked);
+		args = Arrays.copyOf(args, args.length - marked);
+		boolean javaFalse = (functions & FUNCTIONS_JAVA_FALSE) != 0;
 		@Nullable Object[] values = renderedAll(args);
 		// A static call (no receiver) chooses among the static methods only. The
 		// designator is parsed only when the candidates are needed: a remembered choice
@@ -857,7 +1006,8 @@ final class JavaBridgeTemplate {
 					"No matching method " + cls.getName() + "." + methodName + " with " + args.length + " argument(s)");
 		}
 		try {
-			return unmarshal(((Method) overload[0]).invoke(receiver, marshalArguments(overload, values, functions)));
+			return unmarshal(((Method) overload[0]).invoke(receiver, marshalArguments(overload, values, functions)),
+					javaFalse);
 		}
 		catch (ReflectiveOperationException ex) {
 			throw fail("calling " + cls.getName() + "." + ((Method) overload[0]).getName(), ex);
@@ -1379,7 +1529,7 @@ final class JavaBridgeTemplate {
 		value = rendered(value);
 		Object kind = kindOf(value);
 		if (kind != null) {
-			if (functions == FUNCTIONS_NONE && KIND_FUNCTION.equals(kind)) {
+			if ((functions & FUNCTIONS_MODE) == FUNCTIONS_NONE && KIND_FUNCTION.equals(kind)) {
 				return NO_MATCH;
 			}
 			int cost = kindCost(kind, target);
@@ -1594,7 +1744,8 @@ final class JavaBridgeTemplate {
 				}
 				yield target.isAssignableFrom(Integer.class) ? COST_BOXED : NO_MATCH;
 			}
-			case KIND_FUNCTION -> target.isInterface() ? COST_PROXY : NO_MATCH;
+			case KIND_FUNCTION -> !target.isInterface() ? NO_MATCH
+					: isFunctionalInterface(target) ? COST_PROXY : COST_PROXY_NOT_FUNCTIONAL;
 			default -> throw new IllegalArgumentException("unknown argument kind " + kind);
 		};
 	}
@@ -1671,7 +1822,9 @@ final class JavaBridgeTemplate {
 			return target.isAssignableFrom(String.class) ? str : (Object) str.charAt(0);
 		}
 		if (value.getClass() == Object[].class) { // a function value
-			return functions == FUNCTIONS_BY_ARGUMENTS ? functional(target, value) : proxy(target, value);
+			boolean javaFalse = (functions & FUNCTIONS_JAVA_FALSE) != 0;
+			return (functions & FUNCTIONS_MODE) == FUNCTIONS_BY_ARGUMENTS ? functional(target, value, javaFalse)
+					: proxy(target, value, javaFalse);
 		}
 		return value; // a wrapped host object
 	}
@@ -1755,11 +1908,18 @@ final class JavaBridgeTemplate {
 	}
 
 	static @Nullable Object unmarshal(@Nullable Object o) {
+		return unmarshal(o, false);
+	}
+
+	// The Lisp value of a Java value: Java's false is nil, or |false| (javaFalse, a call
+	// ending in :java-false) -- an array's elements alike (mirrors JvmJavaDirectSites'
+	// _junm / _junf).
+	static @Nullable Object unmarshal(@Nullable Object o, boolean javaFalse) {
 		if (o == null) {
 			return null;
 		}
 		if (o instanceof Boolean b) {
-			return b ? "T" : null;
+			return b ? "T" : javaFalse ? JAVA_FALSE : null;
 		}
 		if (o instanceof Integer i) {
 			return (long) i;
@@ -1793,16 +1953,25 @@ final class JavaBridgeTemplate {
 			return quote(s);
 		}
 		if (o.getClass().isArray()) {
-			return arrayToList(o);
+			return arrayToList(o, javaFalse);
+		}
+		Field handleValue = handleValueField;
+		if (handleValue != null && handleValue.getDeclaringClass() == o.getClass()) {
+			try {
+				return handleValue.get(o); // a java:handle: the value it stands for
+			}
+			catch (IllegalAccessException ex) {
+				throw new IllegalStateException("java interop: cannot read a handle", ex);
+			}
 		}
 		return o; // any other object stays a wrapped host object
 	}
 
 	// A Java array result surfaces as a Lisp list, elements unmarshalled recursively.
-	private static @Nullable Object arrayToList(Object array) {
+	private static @Nullable Object arrayToList(Object array, boolean javaFalse) {
 		Object result = null;
 		for (int i = Array.getLength(array) - 1; i >= 0; i--) {
-			result = new Object[] { unmarshal(Array.get(array, i)), result };
+			result = new Object[] { unmarshal(Array.get(array, i), javaFalse), result };
 		}
 		return result;
 	}

@@ -304,42 +304,22 @@ public final class JavaSiteResolver {
 	}
 
 	/**
-	 * The marker a {@code java:new}, {@code java:call} or {@code java:static} form may
-	 * end in, after its arguments: a function argument converted to an interface
-	 * implements every abstract method by the method's arguments alone
-	 * ({@link JavaImplementations#functional}) instead of as a {@code java:proxy}. The
-	 * Clojure lowering ends every host call with a non-literal argument in it (a Clojure
-	 * fn takes no method name); a keyword is never an argument a member accepts, so it
-	 * cannot be mistaken for one, and the run-time paths read it off the evaluated
-	 * arguments the same way.
-	 */
-	public static final String FUNCTIONAL = LispNames.JAVA_FUNCTIONAL_MARKER;
-
-	/**
-	 * Whether a site's parts end in {@link #FUNCTIONAL} after its names.
+	 * The index of a site's first argument -- where the markers it may end in
+	 * ({@link JavaMarkers}) can start: after the class name of a {@code java:new}, the
+	 * names of a {@code java:static}, the receiver and method of a {@code java:call}, the
+	 * object and field of a {@code java:field}.
 	 * @param operator the site's operator
-	 * @param parts the form's elements, the operator first
-	 * @return whether the last part is the marker
+	 * @return the index in the form's elements, the operator first
 	 */
-	public static boolean isFunctional(JavaSite.Operator operator, List<LispVal> parts) {
-		int first = switch (operator) {
-			case NEW -> 2;
-			case CALL, STATIC -> 3;
-			case FIELD -> Integer.MAX_VALUE;
-		};
-		return parts.size() > first && isFunctionalMarker(parts.get(parts.size() - 1));
+	public static int firstArgument(JavaSite.Operator operator) {
+		return operator == JavaSite.Operator.NEW ? 2 : 3;
 	}
 
 	/**
-	 * @param value a form or an evaluated argument
-	 * @return whether it is the keyword {@link #FUNCTIONAL}
-	 */
-	public static boolean isFunctionalMarker(LispVal value) {
-		return value instanceof LispSymbol symbol && FUNCTIONAL.equals(symbol.name());
-	}
-
-	/**
-	 * Resolves a site.
+	 * Resolves a site. The markers it ends in ({@link JavaMarkers}) are set aside: they
+	 * are no arguments, and {@code :java-false} makes a boolean result {@code t} or
+	 * {@code |false|}
+	 * ({@link JavaStaticType#ofDeclared(JavaType, JavaClassLookup, boolean)}).
 	 * @param site a {@code java:new}, {@code java:call}, {@code java:static} or
 	 * {@code java:field} form
 	 * @return how it resolves
@@ -354,18 +334,18 @@ public final class JavaSiteResolver {
 			return JavaSite.unresolved(operator, JavaStaticType.UNKNOWN, "the form is malformed");
 		}
 		List<LispVal> parts = site.toList();
-		boolean functional = isFunctional(operator, parts);
-		if (functional) {
-			parts = parts.subList(0, parts.size() - 1);
-		}
+		int first = firstArgument(operator);
+		JavaMarkers markers = JavaMarkers.of(parts, first);
+		parts = parts.subList(0, parts.size() - JavaMarkers.count(parts, first));
+		boolean javaFalse = markers.javaFalse();
 		try {
 			JavaSite resolved = switch (operator) {
-				case NEW -> resolveNew(parts);
-				case STATIC -> resolveStatic(parts);
-				case CALL -> resolveCall(parts);
-				case FIELD -> resolveField(parts);
+				case NEW -> resolveNew(parts, javaFalse);
+				case STATIC -> resolveStatic(parts, javaFalse);
+				case CALL -> resolveCall(parts, javaFalse);
+				case FIELD -> resolveField(parts, javaFalse);
 			};
-			return functional ? resolved.asFunctional() : resolved;
+			return markers.any() ? resolved.withMarkers(markers) : resolved;
 		}
 		catch (IllegalArgumentException ex) {
 			// A malformed parameter tag: the run-time path raises it.
@@ -379,7 +359,7 @@ public final class JavaSiteResolver {
 		}
 	}
 
-	private JavaSite resolveNew(List<LispVal> parts) {
+	private JavaSite resolveNew(List<LispVal> parts, boolean javaFalse) {
 		JavaSite.Operator op = JavaSite.Operator.NEW;
 		if (parts.size() < 2 || !(parts.get(1) instanceof LispString designator)) {
 			return JavaSite.unresolved(op, JavaStaticType.UNKNOWN, "the class name is not a literal string");
@@ -389,7 +369,7 @@ public final class JavaSiteResolver {
 		if (type == null) {
 			return JavaSite.unresolved(op, JavaStaticType.UNKNOWN, "class " + member.name() + " is not found");
 		}
-		JavaStaticType result = JavaStaticType.ofConstructed(type, this.lookup);
+		JavaStaticType result = JavaStaticType.ofConstructed(type, this.lookup, javaFalse);
 		String unlinkable = unlinkable("class ", type);
 		if (unlinkable != null) {
 			return JavaSite.unresolved(op, result, unlinkable);
@@ -401,10 +381,11 @@ public final class JavaSiteResolver {
 					"class " + type.name() + " is " + (type.isInterface() ? "an interface" : "abstract"));
 		}
 		List<? extends JavaExecutable> candidates = JavaOverloads.filterByTag(type.constructors(), member.tag());
-		return select(op, type, member, designator.value(), candidates, parts.subList(2, parts.size()), result);
+		return select(op, type, member, designator.value(), candidates, parts.subList(2, parts.size()), result,
+				javaFalse);
 	}
 
-	private JavaSite resolveStatic(List<LispVal> parts) {
+	private JavaSite resolveStatic(List<LispVal> parts, boolean javaFalse) {
 		JavaSite.Operator op = JavaSite.Operator.STATIC;
 		if (parts.size() < 3 || !(parts.get(1) instanceof LispString className)) {
 			return JavaSite.unresolved(op, JavaStaticType.UNKNOWN, "the class name is not a literal string");
@@ -425,10 +406,11 @@ public final class JavaSiteResolver {
 		// candidate (the run-time rule, JavaOverloads.staticMethods).
 		List<? extends JavaExecutable> candidates = JavaOverloads
 			.filterByTag(JavaOverloads.staticMethods(type.methods(member.name())), member.tag());
-		return select(op, type, member, methodName.value(), candidates, parts.subList(3, parts.size()), null);
+		return select(op, type, member, methodName.value(), candidates, parts.subList(3, parts.size()), null,
+				javaFalse);
 	}
 
-	private JavaSite resolveCall(List<LispVal> parts) {
+	private JavaSite resolveCall(List<LispVal> parts, boolean javaFalse) {
 		JavaSite.Operator op = JavaSite.Operator.CALL;
 		if (parts.size() < 3 || !(parts.get(2) instanceof LispString methodName)) {
 			return JavaSite.unresolved(op, JavaStaticType.UNKNOWN, "the method name is not a literal string");
@@ -444,7 +426,8 @@ public final class JavaSiteResolver {
 		JavaOverloads.Member member = JavaOverloads.parseMember(methodName.value());
 		List<? extends JavaExecutable> candidates = JavaOverloads.filterByTag(callableMethods(type, member.name()),
 				member.tag());
-		return select(op, type, member, methodName.value(), candidates, parts.subList(3, parts.size()), null);
+		return select(op, type, member, methodName.value(), candidates, parts.subList(3, parts.size()), null,
+				javaFalse);
 	}
 
 	/**
@@ -517,7 +500,7 @@ public final class JavaSiteResolver {
 		return false;
 	}
 
-	private JavaSite resolveField(List<LispVal> parts) {
+	private JavaSite resolveField(List<LispVal> parts, boolean javaFalse) {
 		JavaSite.Operator op = JavaSite.Operator.FIELD;
 		if (parts.size() != 3 || !(parts.get(2) instanceof LispString fieldName)) {
 			return JavaSite.unresolved(op, JavaStaticType.UNKNOWN, "the field name is not a literal string");
@@ -549,7 +532,7 @@ public final class JavaSiteResolver {
 			return JavaSite.unresolved(op, JavaStaticType.UNKNOWN, notStatic(type.name(), fieldName.value()));
 		}
 		return new JavaSite(op, type.name(), fieldName.value(), null, field, false,
-				JavaStaticType.ofDeclared(field.type(), this.lookup), List.of(), null, List.of());
+				JavaStaticType.ofDeclared(field.type(), this.lookup, javaFalse), List.of(), null, List.of());
 	}
 
 	/**
@@ -585,9 +568,12 @@ public final class JavaSiteResolver {
 	 * overload accepts is reported with
 	 * @param constructed the result type of a constructor site, or {@code null} for a
 	 * method site (whose result is its return type)
+	 * @param javaFalse whether the site ends in {@code :java-false}: a boolean return
+	 * type is {@code t} or {@code |false|}
 	 */
 	private JavaSite select(JavaSite.Operator op, JavaType type, JavaOverloads.Member member, String written,
-			List<? extends JavaExecutable> candidates, List<LispVal> args, @Nullable JavaStaticType constructed) {
+			List<? extends JavaExecutable> candidates, List<LispVal> args, @Nullable JavaStaticType constructed,
+			boolean javaFalse) {
 		JavaStaticType unresolvedResult = constructed != null ? constructed : JavaStaticType.UNKNOWN;
 		if (candidates.isEmpty()) {
 			String what = op == JavaSite.Operator.NEW ? "constructor"
@@ -601,7 +587,7 @@ public final class JavaSiteResolver {
 		}
 		JavaOverloads.Overload single = singleMember(candidates, types);
 		if (single != null) {
-			JavaSite resolved = resolveTo(op, type, member, single, args, types, constructed);
+			JavaSite resolved = resolveTo(op, type, member, single, args, types, constructed, javaFalse);
 			if (resolved != null) {
 				return resolved;
 			}
@@ -632,7 +618,7 @@ public final class JavaSiteResolver {
 				}
 			}
 		}
-		JavaStaticType result = constructed != null ? constructed : commonResult(overloads);
+		JavaStaticType result = constructed != null ? constructed : commonResult(overloads, javaFalse);
 		return new JavaSite(op, type.name(), written, null, null, false, result, arguments, null, overloads);
 	}
 
@@ -734,7 +720,7 @@ public final class JavaSiteResolver {
 	 */
 	private @Nullable JavaSite resolveTo(JavaSite.Operator op, JavaType type, JavaOverloads.Member member,
 			JavaOverloads.Overload chosen, List<LispVal> args, List<JavaStaticType> types,
-			@Nullable JavaStaticType constructed) {
+			@Nullable JavaStaticType constructed, boolean javaFalse) {
 		JavaExecutable executable = chosen.executable();
 		for (JavaType parameter : executable.parameterTypes()) {
 			if (unlinkable("the parameter type ", parameter) != null) {
@@ -743,7 +729,7 @@ public final class JavaSiteResolver {
 		}
 		String name = op == JavaSite.Operator.NEW ? type.name() : member.name();
 		JavaStaticType result = constructed != null ? constructed
-				: JavaStaticType.ofDeclared(executable.returnType(), this.lookup);
+				: JavaStaticType.ofDeclared(executable.returnType(), this.lookup, javaFalse);
 		List<JavaSite.Argument> arguments = new ArrayList<>();
 		for (int i = 0; i < args.size(); i++) {
 			arguments
@@ -793,14 +779,14 @@ public final class JavaSiteResolver {
 
 	// The type of a dispatched call's value: what its overloads' one return type
 	// declares, or nothing when they declare several.
-	private JavaStaticType commonResult(List<JavaOverloads.Overload> overloads) {
+	private JavaStaticType commonResult(List<JavaOverloads.Overload> overloads, boolean javaFalse) {
 		JavaType returnType = overloads.get(0).executable().returnType();
 		for (JavaOverloads.Overload overload : overloads) {
 			if (!overload.executable().returnType().name().equals(returnType.name())) {
 				return JavaStaticType.UNKNOWN;
 			}
 		}
-		return JavaStaticType.ofDeclared(returnType, this.lookup);
+		return JavaStaticType.ofDeclared(returnType, this.lookup, javaFalse);
 	}
 
 	private static String kindKey(JavaKind kind) {

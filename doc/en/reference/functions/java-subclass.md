@@ -41,7 +41,9 @@ when it is called and nothing implements it:
 
 Ending the form in `:functional`, after the callable, makes a function constructor
 argument passed where an interface is expected implement it by the method's arguments
-instead of as a `java:proxy` (`java:new`'s `:functional`).
+instead of as a `java:proxy` (`java:new`'s `:functional`). Ending it in `:java-false` hands
+the callable Java's false as `|false|` rather than `nil` (the guide's [Java's false
+back](../../guides/java-interop.md#javas-false-back-java-false)).
 
 ## In a compiled program
 

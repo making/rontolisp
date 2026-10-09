@@ -1,6 +1,7 @@
 package am.ik.rontolisp.eval;
 
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -27,6 +28,24 @@ class ClojureLibraryTest {
 		assertThat(ClojureLibrary.isClojureFunction("RONTOLISP::%CLOJURE-WRITE-DATUM")).isTrue();
 		assertThat(ClojureLibrary.isClojureFunction("RONTOLISP::%CLOJURE-CALL")).isTrue();
 		assertThat(ClojureLibrary.isClojureFunction("PRINC")).isFalse();
+	}
+
+	@Test
+	void everyLibraryNameIsDefinedOnce() {
+		// a second definition of a name replaces the first for every caller, the first's
+		// own included
+		Set<String> seen = new HashSet<>();
+		Set<String> twice = new TreeSet<>();
+		for (LispVal form : ClojureLibrary.forms()) {
+			if (form instanceof LispCons cons && cons.car() instanceof LispSymbol head
+					&& (head.name().equals("DEFUN") || head.name().equals("DEFMACRO"))
+					&& cons.cdr() instanceof LispCons rest && rest.car() instanceof LispSymbol name
+					&& !seen.add(name.name())) {
+				twice.add(name.name());
+			}
+		}
+		assertThat(seen).contains("RONTOLISP::%CLOJURE-HOST-ENTRIES", "RONTOLISP::%CLOJURE-HOST-VALUE");
+		assertThat(twice).isEmpty();
 	}
 
 	@Test

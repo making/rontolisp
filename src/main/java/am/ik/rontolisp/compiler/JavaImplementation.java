@@ -28,9 +28,14 @@ import org.jspecify.annotations.Nullable;
  * @param reason why an unresolved form is resolved when it runs, or {@code null}
  * @param superclass the superclass a {@code java:subclass} extends, or {@code null} for a
  * {@code java:reify} / {@code java:proxy}
+ * @param markers the keywords the form -- or the call converting a function -- ends in
+ * ({@link JavaMarkers}): with {@code :java-false} an argument Java hands a slot's
+ * function answers Java's {@code false} as {@code |false|}; with {@code :functional} too,
+ * a function implementing {@code java.util.Comparator} may answer a boolean
+ * ({@link #readsComparison})
  */
 public record JavaImplementation(boolean proxy, List<JavaType> interfaces, List<Slot> slots, @Nullable String reason,
-		@Nullable JavaType superclass) {
+		@Nullable JavaType superclass, JavaMarkers markers) {
 
 	/** The {@link Slot#implementation} of an abstract method no function implements. */
 	public static final int NONE = -1;
@@ -44,15 +49,71 @@ public record JavaImplementation(boolean proxy, List<JavaType> interfaces, List<
 	}
 
 	/**
-	 * A {@code java:reify} / {@code java:proxy} implementation (no superclass).
+	 * A {@code java:reify} / {@code java:proxy} implementation (no superclass) ending in
+	 * no marker.
 	 * @param proxy whether it is a {@code java:proxy}
 	 * @param interfaces the interfaces, in the form's order
 	 * @param slots the methods the implementing class declares
 	 * @param reason why an unresolved form is resolved when it runs, or {@code null}
 	 */
 	public JavaImplementation(boolean proxy, List<JavaType> interfaces, List<Slot> slots, @Nullable String reason) {
-		this(proxy, interfaces, slots, reason, null);
+		this(proxy, interfaces, slots, reason, null, JavaMarkers.NONE);
 	}
+
+	/**
+	 * An implementation ending in no marker.
+	 * @param proxy whether it is a {@code java:proxy}
+	 * @param interfaces the interfaces, in the form's order
+	 * @param slots the methods the implementing class declares
+	 * @param reason why an unresolved form is resolved when it runs, or {@code null}
+	 * @param superclass the superclass a {@code java:subclass} extends, or {@code null}
+	 */
+	public JavaImplementation(boolean proxy, List<JavaType> interfaces, List<Slot> slots, @Nullable String reason,
+			@Nullable JavaType superclass) {
+		this(proxy, interfaces, slots, reason, superclass, JavaMarkers.NONE);
+	}
+
+	/**
+	 * @param ending the markers the form ends in
+	 * @return this implementation, ending in them
+	 */
+	public JavaImplementation withMarkers(JavaMarkers ending) {
+		return new JavaImplementation(this.proxy, this.interfaces, this.slots, this.reason, this.superclass, ending);
+	}
+
+	/**
+	 * @return whether an argument Java hands a slot's function answers Java's
+	 * {@code false} as {@code |false|} ({@code :java-false})
+	 */
+	public boolean javaFalse() {
+		return this.markers.javaFalse();
+	}
+
+	/**
+	 * Whether a slot's function answers as a comparison: the function a call ending in
+	 * {@code :functional} and {@code :java-false} converts to
+	 * {@code java.util.Comparator} implements {@code compare}, and may answer a boolean
+	 * as Clojure's {@code AFunction.compare} reads one -- {@code t} is {@code -1},
+	 * {@code |false|} {@code 1} when the function answers true for the arguments swapped
+	 * and {@code 0} otherwise -- or any real number, whose {@code intValue} it is (a
+	 * float or ratio truncated, an integer's low 32 bits). A {@code java:proxy}'s
+	 * callable and a {@code java:subclass}'s are called with the method's name: neither
+	 * reads one.
+	 * @param slot one of the slots
+	 * @return whether its function's answer is read so
+	 */
+	public boolean readsComparison(Slot slot) {
+		return !this.proxy && this.superclass == null && this.markers.functional() && this.markers.javaFalse()
+				&& slot.implementation() != NONE && "int".equals(slot.returnType().name())
+				&& COMPARATOR_COMPARE.equals(slot.key()) && this.interfaces.size() == 1
+				&& COMPARATOR.equals(this.interfaces.get(0).name());
+	}
+
+	/** The interface whose {@code compare} a function may answer a boolean for. */
+	public static final String COMPARATOR = "java.util.Comparator";
+
+	/** {@code Comparator.compare}'s {@link Slot#key()}. */
+	public static final String COMPARATOR_COMPARE = "compare(java.lang.Object,java.lang.Object)";
 
 	/**
 	 * @return whether this is a {@code java:subclass} (which extends a superclass)

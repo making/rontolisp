@@ -17,6 +17,7 @@
 | `java:proxy` | callable を 1 つ以上のインターフェースへ適合: `(java:proxy "iface"... callable)` |
 | `java:subclass` | callable でクラスを継承: `(java:subclass "super" '("iface"...) '("method"...) args... callable)` |
 | `java:reify` | インターフェースをメソッドごとに実装: `(java:reify "iface" "method" function ...)` |
+| `java:handle` | Java に値のない Lisp の値の代理: `(java:handle value "text")` |
 
 生成・返却されたオブジェクトは `#<java <class-name>>` という不透明な形で表示され、`java:call`/`java:field` に再び渡せます。
 
@@ -50,12 +51,13 @@ Lisp の値も `java:call` の receiver になり、`Object` 引数に渡した�
 | float | `double`/`float` (およびボックス型) | `double`/`float` → float |
 | string | `String`、長さ 1 なら `char` | `String` → string |
 | character | `char`/`Character` | `Character` → character |
-| `t` / `nil` | `boolean` (`nil` は任意の `null` 参照にもなる) | `boolean` → `t`/`nil` |
-| 名前が `false` のシンボル | `boolean` の false、任意の参照には `Boolean.FALSE` | — |
+| `t` / `nil` | `boolean` (`nil` は任意の `null` 参照にもなる) | `boolean` → `t`/`nil` (`:java-false` の後では `t`/`\|false\|`) |
+| 名前が `false` のシンボル | `boolean` の false、任意の参照には `Boolean.FALSE` | `:java-false` の後では Java の false |
 | `java` オブジェクト | ラップされたホストオブジェクト | その他のオブジェクト → `java` オブジェクト |
 | 関数/ラムダ | 一致するインターフェースに対する `java:proxy`、`:functional` の後ではその抽象メソッドの実装 (引数に限る) | — |
 | 真リスト / ベクタ (特殊化されたものも含む) | `T[]` (要素ごとに変換、プリミティブ配列も可)、または `List`/`Collection`/`Iterable` | 任意の Java 配列 → リスト |
 | ハッシュテーブル | 新しい `java.util.LinkedHashMap` (`Map`、`HashMap`、`Object` など) | — |
+| `java:handle` | Java からはテキストに見えるオブジェクト | 代理する値 |
 
 Java の `null` (および `void` メソッド) は `nil` として返ります。Java の配列が期待される箇所に真リスト (または `make-array` で作ったランク 1 の配列。`double-float`、`single-float`、`bfloat16`、`(unsigned-byte 8|16|32)` に特殊化された配列も含む) を渡すと、要素ごとに要素型へ変換されます (`int[]` などのプリミティブ配列も含む)。`List`/`Collection`/`Iterable` が期待される箇所では `java.util.List` になり、ネストしたリストは再帰的に変換されます。逆方向では、Java の **配列** の結果は Lisp のリストになりますが、返された `java.util.List` は不透明な `java` オブジェクトのままで、そのメソッドを呼び出して操作します。
 
@@ -97,7 +99,40 @@ bignum は、`java.math.BigInteger` (または `Number`、`Object` などその�
   (java:call (java:new "java.util.TreeMap" h) "toString"))   ; => "{a=[1, 2], b=2}"
 ```
 
-その他のシンボル、分数、ドット対 (非真リスト)、多次元 (ランク 2 以上) の配列はマーシャリング **されません**。
+その他のシンボル、分数、ドット対 (非真リスト)、多次元 (ランク 2 以上) の配列はマーシャリング **されません**。[`java:handle`](#handles-javahandle) で代理させることはできます。
+
+### Java の false を受け取る: `:java-false`
+
+Java の false は Common Lisp 唯一の偽である `nil` として返ります。`:java-false` で終わる `java:new`・`java:call`・`java:static`・`java:field` は、これを `|false|` として返します。`boolean` の結果、`Boolean.FALSE`、配列の要素のいずれもです。マーカーは引数の後ろに置き、`:functional` との前後は問いません。
+
+```lisp
+(let ((l (java:new "java.util.ArrayList")))
+  (java:call l "add" '|false|)
+  (list (java:call l "get" 0) (java:call l "get" 0 :java-false)))   ; => (NIL |false|)
+```
+
+これで終わる `java:proxy`・`java:reify`・`java:subclass` は、関数に Java の false を `|false|` として渡します。これで終わる呼び出しでインターフェースが期待される箇所に渡した関数も同様です。両方のマーカーで終わる呼び出しで `java.util.Comparator` が期待される箇所に渡した関数は、Clojure の `AFunction.compare` が関数を読むとおりに `compare` を返します。`t` は -1、`|false|` は引数 2 つを入れ替えた呼び出しが真なら 1 でなければ 0、浮動小数点数と分数は切り捨て、整数は下位 32 ビットです。
+
+```lisp
+(let ((l (java:new "java.util.ArrayList")))
+  (dolist (x (list 3 1 2)) (java:call l "add" x))
+  (java:call l "sort" (lambda (a b) (if (< a b) t '|false|)) :functional :java-false)
+  (java:call l "toString"))   ; => "[1, 2, 3]"
+```
+
+### ハンドル: java:handle
+
+`(java:handle value "text")` は、Java に値のない Lisp の値を代理する Java オブジェクトを作ります。Java からはテキストがその `toString` に見え、同じテキストのハンドル同士は `equals` で等しくなります。ハンドルはテキストでハッシュされテキストで順序付けられますが、`(java:handle value "text" hash "order")` の形では整数の下位 32 ビットをハッシュとし、order のテキストで順序付けられます。そのためハンドルは、その値が自分の言語でそうなるのと同じく `HashMap` のキーになり、`TreeSet` の中で整列します。Java がハンドルを返すところ (結果、配列の要素、コールバックの引数) ではどこでも、`java:` は代理する値を返します。
+
+```lisp
+(let ((m (java:new "java.util.HashMap")))
+  (java:call m "put" (java:handle 'apple "apple") 1)
+  (list (java:call m "toString")
+        (java:call m "get" (java:handle nil "apple"))
+        (java:call (java:call m "keySet") "toArray")))   ; => ("{apple=1}" 1 (APPLE))
+```
+
+Clojure フロントエンドはキーワードとシンボルをこの形で Java に渡し、Clojure の `Keyword` と `Symbol` と同じくハッシュし順序付けます。
 
 `java` オブジェクトが `eq`・`eql` になるのは自分自身とだけです。2 回の呼び出しが返した同じオブジェクトは `eq` ですが、`equals` が真になる別々のオブジェクトは `eq` ではありません。`equal` と `equalp` はオブジェクトの `equals` で比較します。そのため `eq`・`eql` のハッシュテーブルは `java` オブジェクトを同一性でキーにし (格納後に変更したキーも見つかります)、`equal`・`equalp` のテーブルは `equals` と `hashCode` でキーにします。
 
@@ -123,6 +158,15 @@ bignum は、`java.math.BigInteger` (または `Number`、`Object` などその�
 
 ```lisp
 (java:static "java.lang.Math" "sqrt" 16)   ; => 4.0
+```
+
+関数は、関数型インターフェース (抽象メソッドが 1 つ) に対してそれ以外のインターフェースより低いコストになります。そのため Java のラムダの変換先と同じく、`TreeSet(Collection)` より `TreeSet(Comparator)` が選ばれます。
+
+```lisp
+(let ((s (java:new "java.util.TreeSet" (lambda (a b) (- b a)) :functional)))
+  (java:call s "add" 1)
+  (java:call s "add" 2)
+  (java:call s "toString"))   ; => "[2, 1]"
 ```
 
 ## 実行前の呼び出し解決
@@ -457,8 +501,8 @@ native-image -jar prog.jar -H:ConfigurationFileDirectories=config
 ## 制限
 
 - **JVM 専用**。インタプリタ (`java -jar rontolisp.jar`) と JVM コンパイル済みクラス (`java Prog`) で動作します。WASM バックエンドでは動作せず、連携クラスのリフレクションメタデータを持たない GraalVM ネイティブバイナリでのインタプリタ実行もできません (ネイティブバイナリで `java:` プログラムを `.class` に*コンパイルする*ことは可能です)。
-- コンパイル済みクラスでは 6 つの関数は呼び出し位置でのみ使えます。第一級の関数値を持たないため、`#'java:call` や `(funcall 'java:new ...)` はコンパイルエラーになります (代わりに自前の `defun` でラップしてください)。埋め込み `eval` ランタイムもこれらを認識しません。また `java:` を使うコンパイル済みプログラムの実行には、呼び出しを解決したリリースの JRE が必要で、実行時解決に回る呼び出しを含むものには、rontolisp をビルドした JRE と同等以上に新しい JRE が必要です。
-- `|false|` 以外のシンボル、ドット対 (非真リスト)、多次元 (ランク 2 以上) の配列はマーシャリングされません。代わりに `java:new`/`java:call` で構築した Java コレクションとして渡してください。
+- コンパイル済みクラスでは `java:` の関数は呼び出し位置でのみ使えます。第一級の関数値を持たないため、`#'java:call` や `(funcall 'java:new ...)` はコンパイルエラーになります (代わりに自前の `defun` でラップしてください)。埋め込み `eval` ランタイムもこれらを認識しません。また `java:` を使うコンパイル済みプログラムの実行には、呼び出しを解決したリリースの JRE が必要で、実行時解決に回る呼び出しを含むものには、rontolisp をビルドした JRE と同等以上に新しい JRE が必要です。
+- `|false|` 以外のシンボル、ドット対 (非真リスト)、多次元 (ランク 2 以上) の配列はマーシャリングされません。代わりに `java:new`/`java:call` で構築した Java コレクションか、`java:handle` として渡してください。
 - 返された `java.util.List` は (Java 配列と異なり) 不透明な `java` オブジェクトのままです。同一性と可変性が保たれるため、リスト関数ではなく `java:call` (`"get"`、`"size"` など) で読み取ってください。
 - オーバーロード解決は引数コストによるもので、Java の完全な型推論規則ではありません。曖昧な呼び出しは曖昧性エラーを出さず、最小コスト (次に最小シグネチャ) の候補に解決されます。パラメータタグでオーバーロードを明示できます。
 - これは完全なホストリフレクションブリッジであり任意の Java コードを実行できます。`java:` を使うプログラムは他の JVM プログラムと同じ信頼度で扱ってください。

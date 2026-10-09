@@ -77,8 +77,52 @@ class JavaSiteResolverTest {
 		JavaSite call = resolve("(java:call x \"run\" :functional)");
 		assertThat(call.functional()).isTrue();
 		assertThat(call.reason()).isEqualTo("the receiver's class is not known");
-		// a field read has no arguments: the keyword stays where it is
-		assertThat(resolve("(java:field \"java.lang.Integer\" \"MAX_VALUE\" :functional)").functional()).isFalse();
+		// a field read ends in the markers too, after its name
+		JavaSite field = resolve("(java:field \"java.lang.Integer\" \"MAX_VALUE\" :functional)");
+		assertThat(field.functional()).isTrue();
+		assertThat(field.reason()).isNull();
+	}
+
+	// A function argument takes a functional interface before any other: TreeSet's
+	// Comparator constructor, not its Collection or SortedSet one -- what a Java lambda
+	// picks -- while an interface of several methods still takes one where it is all
+	// there is.
+	@Test
+	void aFunctionTakesAFunctionalInterfaceFirst() {
+		assertThat(member("(java:new \"java.util.TreeSet\" (lambda (a b) t))"))
+			.isEqualTo("java.util.TreeSet java.util.TreeSet(java.util.Comparator)");
+		assertThat(member("(java:new \"java.util.PriorityQueue\" (lambda (a b) t))"))
+			.isEqualTo("java.util.PriorityQueue java.util.PriorityQueue(java.util.Comparator)");
+		assertThat(member("(java:new \"java.util.ArrayList\" (lambda () nil))"))
+			.isEqualTo("java.util.ArrayList java.util.ArrayList(java.util.Collection)");
+	}
+
+	// :java-false is no argument either, before or after :functional: it makes a boolean
+	// answer t or |false| (a Boolean one nil too), so a site taking such an answer
+	// resolves as on t and |false|. Unmarked, the answer is t or nil, as before.
+	@Test
+	void aTrailingJavaFalseMarkerTypesABooleanAnswerAsTOrFalse() {
+		JavaStaticType trueOrFalse = new JavaStaticType.Kinds(java.util.Set.of(JavaKind.Lisp.T, JavaKind.Lisp.FALSE));
+		JavaStaticType boxed = new JavaStaticType.Kinds(
+				java.util.Set.of(JavaKind.Lisp.T, JavaKind.Lisp.FALSE, JavaKind.Lisp.NIL));
+		JavaSite empty = resolve("(java:call (java:new \"java.util.ArrayList\") \"isEmpty\" :java-false)");
+		assertThat(empty.javaFalse()).isTrue();
+		assertThat(empty.functional()).isFalse();
+		assertThat(empty.result()).isEqualTo(trueOrFalse);
+		assertThat(resolve("(java:call (java:new \"java.util.ArrayList\") \"isEmpty\")").result())
+			.isEqualTo(new JavaStaticType.Kinds(java.util.Set.of(JavaKind.Lisp.T, JavaKind.Lisp.NIL)));
+		assertThat(resolve("(java:static \"java.lang.Boolean\" \"valueOf\" \"x\" :java-false)").result())
+			.isEqualTo(boxed);
+		assertThat(resolve("(java:field \"java.lang.Boolean\" \"FALSE\" :java-false)").result()).isEqualTo(boxed);
+		assertThat(resolve("(java:new \"java.lang.Boolean\" \"x\" :java-false)").result()).isEqualTo(trueOrFalse);
+		for (String ending : List.of(":java-false :functional", ":functional :java-false")) {
+			JavaSite both = resolve("(java:static \"java.util.Objects\" \"equals\" 1 2 " + ending + ")");
+			assertThat(both.markers()).as(ending).isEqualTo(new JavaMarkers(true, true));
+			assertThat(both.designator()).as(ending).isEqualTo("equals(java.lang.Object,java.lang.Object)");
+		}
+		assertThat(member("(java:static \"java.lang.Boolean\" \"toString\""
+				+ " (java:call (java:new \"java.util.ArrayList\") \"isEmpty\" :java-false))"))
+			.isEqualTo("java.lang.Boolean toString(boolean)");
 	}
 
 	// The quoted symbol |false| is Java's false: the boolean overload for a primitive, a

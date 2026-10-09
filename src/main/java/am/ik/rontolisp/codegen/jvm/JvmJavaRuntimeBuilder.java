@@ -93,7 +93,6 @@ final class JvmJavaRuntimeBuilder {
 
 		ClassEntry bridgeClass = cp.classEntry(bridgeName);
 		MethodRefEntry bind = cp.methodRef(bridgeClass, "bind", "(Ljava/lang/Class;)V");
-		String twoArgDesc = "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;";
 		String newDesc = "(Ljava/lang/Object;[Ljava/lang/Object;)Ljava/lang/Object;";
 		String callDesc = "(Ljava/lang/Object;Ljava/lang/Object;[Ljava/lang/Object;)Ljava/lang/Object;";
 		Map<String, MethodRefEntry> ops = new LinkedHashMap<>();
@@ -103,7 +102,7 @@ final class JvmJavaRuntimeBuilder {
 		ops.put("new", cp.methodRef(bridgeClass, "javaNew", newDesc));
 		ops.put("call", cp.methodRef(bridgeClass, "javaCall", callDesc));
 		ops.put("static", cp.methodRef(bridgeClass, "javaStatic", callDesc));
-		ops.put("field", cp.methodRef(bridgeClass, "javaField", twoArgDesc));
+		ops.put("field", cp.methodRef(bridgeClass, "javaField", callDesc));
 		ops.put("proxy", cp.methodRef(bridgeClass, "javaProxy", newDesc));
 		ops.put("reify", cp.methodRef(bridgeClass, "javaReify", newDesc));
 		ops.put("subclass", cp.methodRef(bridgeClass, "javaSubclass", newDesc));

@@ -1017,8 +1017,8 @@ public final class PackageRegistry {
 		define(new LispPackage(LispNames.JAVA_PKG, List.of(),
 				new HashSet<>(Set.of(LispNames.JAVA_NEW, LispNames.JAVA_CALL, LispNames.JAVA_STATIC,
 						LispNames.JAVA_FIELD, LispNames.JAVA_PROXY, LispNames.JAVA_REIFY, LispNames.JAVA_SUBCLASS,
-						LispNames.JAVA_OBJECT, LispNames.JAVA_WARN_ON_REFLECTION, LispNames.JAVA_EXCEPTION,
-						LispNames.JAVA_EXCEPTION_CAUSE))));
+						LispNames.JAVA_HANDLE, LispNames.JAVA_OBJECT, LispNames.JAVA_WARN_ON_REFLECTION,
+						LispNames.JAVA_EXCEPTION, LispNames.JAVA_EXCEPTION_CAUSE))));
 		// Objective-C through the foreign function API (no reflection, so it runs in the
 		// native binary too): LispWorks' OBJC vocabulary (objc.lisp) and the primitive
 		// on-main. Does not use cl.

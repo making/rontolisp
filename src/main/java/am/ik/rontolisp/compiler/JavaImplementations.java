@@ -50,16 +50,45 @@ public final class JavaImplementations {
 			+ " '(\"interface\"...) '(\"method\"...) constructor-args... callable)";
 
 	/**
-	 * Whether a {@code java:subclass} form ends in {@code :functional} after its callable
-	 * ({@link LispNames#JAVA_FUNCTIONAL_MARKER}): a function constructor argument
-	 * converted to an interface implements it by the method's arguments, as at a
-	 * {@code java:new} ending in the marker.
-	 * @param parts the form's elements, the operator first
-	 * @return whether the last one is the marker
+	 * The index the markers ending a {@code java:reify}, {@code java:proxy} or
+	 * {@code java:subclass} form ({@link JavaMarkers}) may start at: after a
+	 * {@code java:reify}'s interface name, a {@code java:proxy}'s interface and callable,
+	 * a {@code java:subclass}'s three names and its callable. A {@code java:subclass}'s
+	 * {@code :functional} converts a function constructor argument by the method's
+	 * arguments, as at a {@code java:new} ending in it; {@code :java-false} answers
+	 * Java's {@code false} to the form's functions as {@code |false|}.
+	 * @param operator the form's operator, qualified
+	 * ({@link LispNames#JAVA_REIFY_QUALIFIED} ...)
+	 * @return the index in the form's elements, the operator first
 	 */
-	public static boolean subclassFunctional(List<LispVal> parts) {
-		return parts.size() > 5 && parts.get(parts.size() - 1) instanceof LispSymbol marker
-				&& LispNames.JAVA_FUNCTIONAL_MARKER.equals(marker.name());
+	public static int firstMarker(String operator) {
+		return switch (operator) {
+			case LispNames.JAVA_REIFY_QUALIFIED -> 2;
+			case LispNames.JAVA_PROXY_QUALIFIED -> 3;
+			default -> 5;
+		};
+	}
+
+	/**
+	 * The markers ending an implementation form.
+	 * @param parts the form's elements, the operator first
+	 * @return the markers
+	 */
+	public static JavaMarkers markers(List<LispVal> parts) {
+		return JavaMarkers.of(parts, firstMarker(operatorName(parts)));
+	}
+
+	/**
+	 * How many elements ending an implementation form are markers.
+	 * @param parts the form's elements, the operator first
+	 * @return the count
+	 */
+	public static int markerCount(List<LispVal> parts) {
+		return JavaMarkers.count(parts, firstMarker(operatorName(parts)));
+	}
+
+	private static String operatorName(List<LispVal> parts) {
+		return !parts.isEmpty() && parts.get(0) instanceof LispSymbol head ? head.name() : "";
 	}
 
 	/**
@@ -203,7 +232,9 @@ public final class JavaImplementations {
 		if (!form.isProperList()) {
 			return unresolved(proxy, "the form is malformed");
 		}
-		List<LispVal> parts = form.toList();
+		List<LispVal> all = form.toList();
+		JavaMarkers markers = markers(all);
+		List<LispVal> parts = all.subList(0, all.size() - markerCount(all));
 		if (proxy ? parts.size() < 3 : parts.size() < 2 || parts.size() % 2 != 0) {
 			return unresolved(proxy, "the form is malformed");
 		}
@@ -243,8 +274,9 @@ public final class JavaImplementations {
 				}
 				interfaces.add(type);
 			}
-			JavaImplementation implementation = proxy ? proxy(interfaces, lookup)
-					: reify(interfaces.get(0), designators, lookup);
+			JavaImplementation implementation = (proxy ? proxy(interfaces, lookup)
+					: reify(interfaces.get(0), designators, lookup))
+				.withMarkers(markers);
 			for (JavaImplementation.Slot slot : implementation.slots()) {
 				// The generated class returns the method's type: it must be able to name
 				// it.
@@ -351,6 +383,21 @@ public final class JavaImplementations {
 	 * @return the implementation
 	 */
 	public static JavaImplementation functional(JavaType iface, JavaClassLookup lookup) {
+		return functional(iface, lookup, JavaMarkers.FUNCTIONAL);
+	}
+
+	/**
+	 * {@link #functional(JavaType, JavaClassLookup)} at a call ending in these markers
+	 * ({@code :functional} among them): with {@code :java-false} an argument Java hands
+	 * the function answers Java's {@code false} as {@code |false|}, and a function
+	 * implementing {@code java.util.Comparator} may answer a boolean
+	 * ({@link JavaImplementation#readsComparison}).
+	 * @param iface the interface
+	 * @param lookup unused; for symmetry with {@link #reify}
+	 * @param markers the call's markers
+	 * @return the implementation
+	 */
+	public static JavaImplementation functional(JavaType iface, JavaClassLookup lookup, JavaMarkers markers) {
 		List<JavaImplementation.Slot> slots = new ArrayList<>();
 		for (Group group : groups(iface).values()) {
 			if (OBJECT_METHODS.contains(group.key())) {
@@ -366,8 +413,49 @@ public final class JavaImplementations {
 				}
 			}
 		}
-		return new JavaImplementation(false, List.of(iface), slots, null);
+		return new JavaImplementation(false, List.of(iface), slots, null, null,
+				new JavaMarkers(true, markers.javaFalse()));
 	}
+
+	/**
+	 * Whether the interface is a functional one in Java's sense: exactly one method a
+	 * class must implement, {@code Object}'s three aside -- what a lambda can implement.
+	 * A function converted to an interface costs less for one
+	 * ({@link JavaOverloads#kindCost}), so {@code TreeSet(Comparator)} wins over
+	 * {@code TreeSet(Collection)} for a function, as Java's lambda and the oracle's fn (a
+	 * {@code Comparator} itself, never a {@code Collection}) choose. Remembered per type.
+	 * @param iface an interface
+	 * @return whether it has exactly one abstract method
+	 */
+	public static boolean isFunctionalInterface(JavaType iface) {
+		Boolean known;
+		synchronized (FUNCTIONAL_INTERFACES) {
+			known = FUNCTIONAL_INTERFACES.get(iface);
+		}
+		if (known != null) {
+			return known;
+		}
+		int abstractMethods = 0;
+		for (Group group : groups(iface).values()) {
+			if (OBJECT_METHODS.contains(group.key())) {
+				continue;
+			}
+			for (Variant variant : group.variants()) {
+				if (variant.mustImplement()) {
+					abstractMethods++;
+					break;
+				}
+			}
+		}
+		boolean functional = abstractMethods == 1;
+		synchronized (FUNCTIONAL_INTERFACES) {
+			FUNCTIONAL_INTERFACES.put(iface, functional);
+		}
+		return functional;
+	}
+
+	// isFunctionalInterface's answers, by type: weak, as a compile's types die with it.
+	private static final Map<JavaType, Boolean> FUNCTIONAL_INTERFACES = new java.util.WeakHashMap<>();
 
 	/**
 	 * How {@code (java:proxy "I" callable)} implements the interface: every method but
@@ -455,7 +543,9 @@ public final class JavaImplementations {
 		if (!form.isProperList()) {
 			return subclassUnresolved("the form is malformed");
 		}
-		List<LispVal> parts = form.toList();
+		List<LispVal> all = form.toList();
+		JavaMarkers markers = markers(all);
+		List<LispVal> parts = all.subList(0, all.size() - markerCount(all));
 		if (parts.size() < 5) {
 			return subclassUnresolved("the form is malformed");
 		}
@@ -503,8 +593,8 @@ public final class JavaImplementations {
 				}
 				interfaces.add(type);
 			}
-			JavaImplementation implementation = subclass(superclass, interfaces, methodNames);
-			int argc = parts.size() - 5 - (subclassFunctional(parts) ? 1 : 0);
+			JavaImplementation implementation = subclass(superclass, interfaces, methodNames).withMarkers(markers);
+			int argc = parts.size() - 5;
 			boolean viable = false;
 			for (JavaOverloads.Overload overload : JavaOverloads.ranked(superclass.subclassConstructors(), argc)) {
 				boolean linkable = true;
