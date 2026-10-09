@@ -1381,8 +1381,28 @@ new, and the five fetch has (the JDK's on the interpreter and the JVM, `wasi:htt
   (illegal character per component, malformed escape, `URI with undefined scheme`,
   `invalid URI scheme`, `unsupported URI`), the client's restricted header names and
   non-string values, and by name what no transport here honours (`:client`,
-  `:interceptors`, `:timeout` until todo 148, `:version`, `:multipart`, `:raw`,
-  `:expect-continue`, `:as :bytes`). A method fetch does not send is refused by name.
+  `:interceptors`, `:timeout` until todo 148, `:version`, `:raw`, `:expect-continue`,
+  `:as :bytes`). A method fetch does not send is refused by name.
+- The request body (2026-10-09), the oracle's `->body-publisher` (`%clojure-http-body`): nil
+  none, a string as it is, a `java.io.File` and an InputStream (a `clojure.java.io` byte stream,
+  a reply's `:as :stream` body) their octets (`%clojure-http-octets-of`, an `(unsigned-byte 8)`
+  vector fetch sends as it is, `.kb/fetch-http.md` "The request body"), a reader read to its
+  end (the oracle refuses a Reader; kept while a Ring request `:body` is one, todo `f09`);
+  anything else the oracle's `ex-info` `Don't know how to convert class Xto body` (sic). A
+  File not there is `FileNotFoundException` `<path> not found` (`ofFile`'s words, not io's `(No
+  such file or directory)`). A byte-array `:body` waits on the byte-array kind (todo `e81`).
+- `:multipart` (2026-10-09): the oracle's multipart interceptor (hato's format) octet for octet,
+  `%clojure-http-multipart`: per part `--b`, `Content-Disposition` (`name` from `:part-name` or
+  `:name` through `str`, `filename` from `:file-name` or a File's name), `Content-Type` (`:content-type`,
+  else a string's `text/plain; charset=UTF-8`, a File's `Files.probeContentType` as Debian
+  answers it -- the extension table `%clojure-http-file-type` -- else `application/octet-stream`),
+  `Content-Transfer-Encoding` (`8bit` for a string, else `binary`), the content and CRLF; then
+  `--b--` CRLF. Content opened through `%clojure-http-octets-of` (`Cannot open <x> as an
+  InputStream.`, a missing File io's `(No such file or directory)`). The boundary is
+  `babashka_http_client_Boundary` + a v4 UUID from `random-bytes`; a `--no-wasi` reactor
+  without `--host-random` signals there, so the UUID draws from `random` (the glue seeds it).
+  Every `content-type` spelling in the headers is replaced, `:body` and `:form-params` give
+  way, and the `:request` map has `:body` (the octets) and no `:multipart`.
 - The exchange: plain defuns each answering an `async-lambda`'s future, never
   `async-defun`s -- `LibraryDefunPruner` drops an unreached DEFUN and keeps every other
   top-level form, so an async-defun in `clojure.lisp` rode every Clojure program (caught by
@@ -1453,17 +1473,18 @@ new, and the five fetch has (the JDK's on the interpreter and the JVM, `wasi:htt
 - Oracle (clj 1.12.6 + babashka.http-client 0.4.23 against the corpus origin, 2026-10-08):
   identical but the response's missing `:version` and the `java.net.URI` `:uri` (a string
   here), the User-Agent (fetch's), a transport failure's class (an `IOException`; the
-  oracle's `ConnectException` is one), map key order, `:as :bytes`. Compression
-  (2026-10-09): identical on the four legs, the eleven compressed endpoints included. What
-  waits on a value kind or a transport feature (`:as :bytes`, `:multipart`, a lazy reader
-  over the stream body, `:timeout`, the arity words): todo `e63`.
+  oracle's `ConnectException` is one), map key order, `:as :bytes`. Compression, the
+  InputStream `:as :stream` body, File/InputStream/stream request bodies and `:multipart`
+  (the boundary normalized) (2026-10-09): identical on the four legs. Waiting: `:as :bytes`
+  and a byte-array `:body` (todo `e81`), `:timeout` (todo `148`), a reader over the stream body
+  reading as the reply arrives (todo `f07`), the arity words (todo `f06`).
 - Pins: `FetchSpecE2eTest#clojureHttpClient` (`clojure-http-spec.yaml`: interpreter, JVM,
   `--native`, component), `ClojureHttpClientTest` (the lowering, the refusals, the FETCH
   strip, the P1 and `--no-wasi` refusals, a Ring proxy relaying a binary reply on the
   interpreter and the JVM, a redirect to a second origin dropping the credential headers --
   the corpus has one origin), `ClojureHttpClientHostFetchE2eTest` (node `--experimental-wasm-jspi`
-  over the generated glue's `defaultHost()`: the client, and a Ring proxy through
-  `worker(module)`), `ServeRingComponentE2eTest#wasmtimeServeRelaysAFetchedReplyByteForByte`
+  over the generated glue's `defaultHost()`: the client, an octet body sent on, and a Ring
+  proxy through `worker(module)`), `ServeRingComponentE2eTest#wasmtimeServeRelaysAFetchedReplyByteForByte`
   (opt-in), the `http-client.md` doc examples (`DocExamplesTest` points their URLs at its
   local origin).
 

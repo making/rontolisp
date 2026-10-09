@@ -37,7 +37,8 @@
 | `:headers` | 名前（文字列かキーワード）から文字列、または文字列の seq へのマップ。seq の要素はそれぞれ一つのフィールドとして送る |
 | `:query-params` | URL のクエリに URL エンコードして連結するマップ。値がコレクションならキーを繰り返す |
 | `:form-params` | `application/x-www-form-urlencoded` のボディとして送るマップ |
-| `:body` | 文字列、または終端まで読む入力ストリーム |
+| `:body` | 文字列。`java.io.File` か入力ストリーム（`clojure.java.io` のストリーム、応答の `:as :stream` のボディ）はそのオクテットを送る。リーダーは終端まで読んで送る |
+| `:multipart` | パートの seq。`:body` と `:form-params` に代わって `multipart/form-data` のボディとして送る |
 | `:basic-auth` | `[user pass]` か `{:user ... :pass ...}`。`Authorization: Basic` ヘッダーになる |
 | `:oauth-token` | `Authorization: Bearer` ヘッダーになる |
 | `:accept` | `:json` で `Accept: application/json` |
@@ -49,6 +50,36 @@
 
 リクエストは、`:headers` が指定しない限り `Accept: */*` と
 `Accept-Encoding: gzip, deflate` を送り、加えて fetch 自身の `User-Agent` を送ります。
+それ以外の `:body` は `ex-info` を投げます。
+
+## マルチパートのボディ
+
+`:multipart` のパートは、`:name`（または `:part-name`）、`:content`（文字列、`java.io.File`、
+入力ストリーム）と、省略可能な `:file-name`、`:content-type` からなるマップです。ボディは
+babashka.http-client のものとオクテット単位で同じです。各パートは `Content-Disposition`
+（`File` か `:file-name` があれば `filename` つき）、`Content-Type`（文字列は
+`text/plain; charset=UTF-8`、`File` は拡張子から決め、それ以外は
+`application/octet-stream`）、`Content-Transfer-Encoding` を持ちます。境界は
+`babashka_http_client_Boundary` とランダムな UUID で、リクエストの `content-type` がそれを
+示します（`:headers` で指定したものは置き換えます）。`--host-random` なしの `--no-wasi`
+リアクターでは、UUID は `random` が使う生成器から引きます。出力したグルーがこれをシードします。
+
+```clojure
+(ns example (:require [rontolisp.http-client :as http]))
+
+(let [r (http/post "https://httpbin.ik.am/post"
+                   {:multipart [{:name "title" :content "hello"}
+                                {:name "note" :file-name "note.txt" :content "a note"}]})]
+  (println (:status r) (subs (get-in r [:request :headers "content-type"]) 0 30)))
+```
+
+```
+200 multipart/form-data; boundary=
+```
+
+入力ストリームとして開けない `:content` は `IllegalArgumentException`
+（`Cannot open <42> as an InputStream.`）を、存在しない `File` は
+`java.io.FileNotFoundException` を投げます。
 
 ## レスポンス
 
@@ -175,9 +206,12 @@ $ rontolisp proxy.clj -o src/worker.wasm --no-wasi --host-fetch --host-boundary=
   読みます（ボディ自体に対する `.read` のループは、届いたオクテットから順に読みます）。
   JVM では、トランスポートが応答全体を受け取ってからレスポンスを返します。
 - 名前を挙げて拒否するもの: オプションの `:client`、`:interceptors`、`:timeout`、
-  `:version`、`:multipart`、`:raw`、`:expect-continue`、`java.net.http` のクライアントを作る
-  var の `client`、`default-client-opts` と `->` で始まるビルダー、そして名前空間
+  `:version`、`:raw`、`:expect-continue`、`java.net.http` のクライアントを作る var の
+  `client`、`default-client-opts` と `->` で始まるビルダー、そして名前空間
   `babashka.http-client` そのもの（このページを案内します）。
+- リーダーはそのテキストを送ります（babashka.http-client はリーダーを受け付けません）。
+  Ring のリクエストの `:body` はここではリーダー（Jetty では入力ストリーム）なので、
+  バイナリのアップロードをそのまま送り出すと、オクテット単位では一致しません。
 - トランスポートの失敗は `java.io.IOException` です（babashka.http-client では
   `java.net.ConnectException` などのサブクラス）。引数の個数の誤りは、フロントエンド共通の
   `ArityException`（`wrong number of arguments passed to: get`）です。

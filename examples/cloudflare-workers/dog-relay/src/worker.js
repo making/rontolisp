@@ -330,7 +330,7 @@ export function defaultHost() {
           const response = await fetch(request.url, {
             method: request.method,
             headers: request.headers,
-            body: request.body,
+            body: request.body ?? (request.octets === undefined ? undefined : Uint8Array.from(request.octets, (c) => c.charCodeAt(0))),
           });
           const id = ++replySerial;
           // The reader IS the body; the module pulls it BY THIS ID afterwards.

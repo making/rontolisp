@@ -367,7 +367,7 @@ export function defaultHost(lisp) {
           const response = await fetch(request.url, {
             method: request.method,
             headers: request.headers,
-            body: request.body,
+            body: request.body ?? (request.octets === undefined ? undefined : Uint8Array.from(request.octets, (c) => c.charCodeAt(0))),
           });
           // The reader IS the body; the module pulls it after this returns.
           upstream = response.body ? response.body.getReader() : null;

@@ -37,7 +37,8 @@ compile refuses the program, naming the flags that give it one.
 | `:headers` | a map of names (strings or keywords) to a string, or to a seq of strings sent as one field each |
 | `:query-params` | a map joined to the URL's query, URL-encoded; a collection value repeats its key |
 | `:form-params` | a map sent as an `application/x-www-form-urlencoded` body |
-| `:body` | a string, or an input stream read to its end |
+| `:body` | a string; a `java.io.File` or an input stream (a `clojure.java.io` stream, a reply's `:as :stream` body), sent as its octets; a reader, read to its end |
+| `:multipart` | a seq of parts, sent as a `multipart/form-data` body in place of `:body` and `:form-params` |
 | `:basic-auth` | `[user pass]` or `{:user ... :pass ...}`: an `Authorization: Basic` header |
 | `:oauth-token` | an `Authorization: Bearer` header |
 | `:accept` | `:json`: `Accept: application/json` |
@@ -48,7 +49,36 @@ compile refuses the program, naming the flags that give it one.
 | `:async-then`, `:async-catch` | with `:async`: a function of the response, and of a map of the failure |
 
 A request sends `Accept: */*` and `Accept-Encoding: gzip, deflate` unless `:headers` names
-them, plus fetch's own `User-Agent`.
+them, plus fetch's own `User-Agent`. Any other `:body` throws an `ex-info`.
+
+## Multipart bodies
+
+A `:multipart` part is a map of `:name` (or `:part-name`), `:content` (a string, a
+`java.io.File` or an input stream) and, optionally, `:file-name` and `:content-type`. The
+body is babashka.http-client's, octet for octet: each part carries `Content-Disposition`
+(with a `filename` for a `File` or a `:file-name`), `Content-Type` (a string's is
+`text/plain; charset=UTF-8`, a `File`'s comes from its extension, anything else's is
+`application/octet-stream`) and `Content-Transfer-Encoding`. The boundary is
+`babashka_http_client_Boundary` and a random UUID, and the request's `content-type` names
+it, replacing any `:headers` gave. On a `--no-wasi` reactor without `--host-random` the UUID
+comes from the generator `random` draws from, which the emitted glue seeds.
+
+```clojure
+(ns example (:require [rontolisp.http-client :as http]))
+
+(let [r (http/post "https://httpbin.ik.am/post"
+                   {:multipart [{:name "title" :content "hello"}
+                                {:name "note" :file-name "note.txt" :content "a note"}]})]
+  (println (:status r) (subs (get-in r [:request :headers "content-type"]) 0 30)))
+```
+
+```
+200 multipart/form-data; boundary=
+```
+
+A `:content` that opens as no input stream throws `IllegalArgumentException`
+(`Cannot open <42> as an InputStream.`), and a `File` that is not there
+`java.io.FileNotFoundException`.
 
 ## The response
 
@@ -173,10 +203,13 @@ $ rontolisp proxy.clj -o src/worker.wasm --no-wasi --host-fetch --host-boundary=
   `clojure.java.io/reader` over the `:stream` body reads it whole before its first line
   (a `.read` loop over the body itself takes each octet as it arrives); on the JVM the
   transport takes the whole reply before the response is answered.
-- Refused by name: the options `:client`, `:interceptors`, `:timeout`, `:version`,
-  `:multipart`, `:raw` and `:expect-continue`; the vars `client`, `default-client-opts`
-  and the `->` builders, which make a `java.net.http` client; the namespace
-  `babashka.http-client` itself, which points here.
+- Refused by name: the options `:client`, `:interceptors`, `:timeout`, `:version`, `:raw`
+  and `:expect-continue`; the vars `client`, `default-client-opts` and the `->` builders,
+  which make a `java.net.http` client; the namespace `babashka.http-client` itself, which
+  points here.
+- A reader is sent as its text, where babashka.http-client refuses one. A Ring request's
+  `:body` is a reader here (an input stream under Jetty), so a binary upload sent on is not
+  sent octet for octet.
 - A transport failure is a `java.io.IOException` (babashka.http-client: its subclass, such as
   `java.net.ConnectException`); a wrong argument count is the front end's
   `ArityException` (`wrong number of arguments passed to: get`).

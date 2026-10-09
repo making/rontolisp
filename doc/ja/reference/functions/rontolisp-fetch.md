@@ -32,7 +32,8 @@ future を [`rontolisp:await`](../special-forms/rontolisp-await.md) に渡すと
   されるメソッドは `GET`、`HEAD`、`POST`、`PUT`、`DELETE`、`OPTIONS`、`PATCH` で、
   大文字小文字を区別せずに照合されます。それ以外のメソッドはエラーです。
 - `:headers` — リクエストヘッダ。`(name . value)` の文字列ペアの連想リストです。
-- `:body` — リクエストボディを文字列で指定します (ボディがなければ省略します)。
+- `:body` — リクエストボディです。文字列なら UTF-8 で、`(unsigned-byte 8)` のベクターなら
+  そのオクテットのまま送ります (ボディがなければ省略します)。
 
 `:headers` がそのフィールドを指定していない限り、すべてのリクエストは
 `User-Agent: rontolisp/<version> (<git-commit>)` を伴います — バージョンと短縮コミットは

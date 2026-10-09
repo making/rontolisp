@@ -266,7 +266,7 @@ export function defaultHost() {
           const response = await fetch(request.url, {
             method: request.method,
             headers: request.headers,
-            body: request.body,
+            body: request.body ?? (request.octets === undefined ? undefined : Uint8Array.from(request.octets, (c) => c.charCodeAt(0))),
           });
           // The platform's fetch decodes a content coding it knows, so the octets
           // the module reads are the decoded ones -- and the head says so, as

@@ -95,7 +95,12 @@ public final class FetchResponseShape {
 			    url: string,
 			    method: string,
 			    headers: list<tuple<string, string>>,
+			    /// A text body, which the host sends as its UTF-8 octets.
 			    body: option<string>,
+			    /// An (unsigned-byte 8) body, which the host sends as it is: one
+			    /// character an octet, each below 256, so the octets cross a JSON
+			    /// string unchanged. At most one of body and octets is present.
+			    octets: option<string>,
 			  }
 			}
 			""";

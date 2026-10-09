@@ -22,6 +22,8 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executors;
 import java.util.concurrent.FutureTask;
 import java.util.concurrent.TimeUnit;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.util.stream.Stream;
 import java.util.zip.Deflater;
 
@@ -294,6 +296,34 @@ class FetchSpecE2eTest {
 		badCrc[badCrc.length - 6]++;
 		coded(server, "/gzip-badcrc", "gzip", 200, badCrc);
 		coded(server, "/br", "br", 200, "brotli?".getBytes(StandardCharsets.UTF_8));
+		// What a request body was, octet for octet: its content type, then each octet
+		// as two hex digits.
+		server.createContext("/octets-echo", exchange -> {
+			StringBuilder hex = new StringBuilder();
+			for (byte b : exchange.getRequestBody().readAllBytes()) {
+				hex.append(String.format("%02x", b & 0xff));
+			}
+			answer(exchange, 200, exchange.getRequestHeaders().getFirst("Content-Type") + "|" + hex);
+		});
+		// A multipart body, one line of it a line of text: the client's boundary (when
+		// it is the oracle's babashka_http_client_Boundary and a version 4 UUID) as
+		// BOUNDARY, each octet that is no printable ASCII as <xx>.
+		server.createContext("/multipart", exchange -> {
+			String type = String.valueOf(exchange.getRequestHeaders().getFirst("Content-Type"));
+			Matcher boundary = Pattern.compile(
+					"babashka_http_client_Boundary[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}")
+				.matcher(type);
+			String found = boundary.find() ? boundary.group() : "\u0000";
+			String body = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.ISO_8859_1);
+			StringBuilder out = new StringBuilder(type.replace(found, "BOUNDARY")).append('\n');
+			for (String line : body.replace(found, "BOUNDARY").split("\r\n", -1)) {
+				for (char c : line.toCharArray()) {
+					out.append((c < 0x20 || c > 0x7e) ? String.format("<%02x>", (int) c) : String.valueOf(c));
+				}
+				out.append('\n');
+			}
+			answer(exchange, 200, out.toString());
+		});
 		server.setExecutor(Executors.newVirtualThreadPerTaskExecutor());
 		server.start();
 		origin = server;

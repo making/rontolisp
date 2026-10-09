@@ -48,8 +48,8 @@ env.readResponseBody(ptr, cap) -> i32       ; :bytes, :async t; 0 = EOF, <0 = fa
 ```
 
 plus envelope defuns whose JSON keys are DERIVED from `FetchResponseShape`'s records (a `request`
-record -- url/method/headers/body, `body` an `option<string>` so an absent `:body` crosses as an
-absent key; the error arm is `FetchResponseShape.HOST_ENVELOPE_ERROR_KEY` and SIGNALS at the fetch).
+record -- url/method/headers/body/octets, `body` an `option<string>` so an absent `:body` crosses as an
+absent key, `octets` the same for an octet `:body` ("The request body"); the error arm is `FetchResponseShape.HOST_ENVELOPE_ERROR_KEY` and SIGNALS at the fetch).
 `fetch` is a plain defun over an async-defun runner, so it answers the settled `TYPE_P1_FUTURE`
 (started == settled: the host call blocks the wasm stack, so `(await (fetch ...))` never suspends,
 and a transport failure BEFORE the head signals at the CALL).
@@ -339,6 +339,22 @@ answers -1).
   on every other transport; a host written by hand has the same obligation. Pinned by
   `ClojureHttpClientHostFetchE2eTest` (a gzip reply through node's fetch) and the
   regenerated `examples/cloudflare-workers/*/src/worker.js` (`HostGlueEmitterTest`).
+
+## The request body
+
+**`:body` is a string (sent as its UTF-8) or an `(unsigned-byte 8)` vector (sent as its octets) on
+every transport** (2026-10-09, for `rontolisp.http-client`'s File, InputStream and multipart
+bodies; before, a string alone). Interpreter: `Environment.fetchBody` copies the vector into a
+`byte[]` for `HttpSupport` (`ofByteArray`), anything else signals naming both kinds. JVM:
+`JvmFetchRuntimeBuilder` hands the packed `byte[]{8, ...}` through as it is and `RontoFetch`
+publishes from offset 1. Component: `%http-write-body` already wrote either kind. `--host-fetch`
+and `--native`: the request record's `octets` key, one character an octet (each below 256, so the
+record stays JSON text); the glue rebuilds a `Uint8Array` from the char codes, the runner takes
+`c as u8`. Web playground: `BrowserHttp` passes the octets as ISO-8859-1 text tagged `hasBody` "2".
+Pins: `fetch-spec.yaml` `an-octet-vector-body-is-sent-as-it-is` (four legs),
+`ClojureHttpClientHostFetchE2eTest#anOctetBodyLeavesThroughTheHostsFetchAsItsOctets` (streaming
+boundary: the envelope carries a reply body as text, so a binary reply cannot round-trip there),
+the runner's `reads_the_request_record_the_module_writes`.
 
 ## The default User-Agent
 

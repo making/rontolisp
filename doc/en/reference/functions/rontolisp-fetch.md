@@ -33,7 +33,8 @@ The optional second argument is an options property list. Recognized keys:
   are `GET`, `HEAD`, `POST`, `PUT`, `DELETE`, `OPTIONS` and `PATCH`, matched
   case-insensitively; any other method is an error.
 - `:headers` — request headers, an alist of `(name . value)` string pairs.
-- `:body` — the request body as a string (omit for no body).
+- `:body` — the request body: a string, sent as its UTF-8, or an `(unsigned-byte 8)`
+  vector, sent as its octets (omit for no body).
 
 Every request carries `User-Agent: rontolisp/<version> (<git-commit>)` — the version
 and abbreviated commit [`rontolisp:version`](rontolisp-version.md) reports, the

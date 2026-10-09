@@ -37,14 +37,20 @@ final class Target_HttpSupport {
 
 	@Substitute
 	static CompletableFuture<HttpSupport.Start> requestAsync(String method, String url,
-			List<HttpSupport.Header> requestHeaders, String requestBody) {
+			List<HttpSupport.Header> requestHeaders, Object requestBody) {
 		StringBuilder encoded = new StringBuilder();
 		for (HttpSupport.Header header : requestHeaders) {
 			encoded.append(header.name()).append('\n').append(header.value()).append('\n');
 		}
 		String headerLines = encoded.toString();
-		String bodyOrEmpty = (requestBody == null) ? "" : requestBody;
-		String hasBody = (requestBody == null) ? "0" : "1";
+		// An octet body crosses as the string of its octets, one character each below
+		// 256 ("2"), which the JavaScript side turns back into a Uint8Array.
+		String bodyOrEmpty = switch (requestBody) {
+			case String text -> text;
+			case byte[] octets -> new String(octets, java.nio.charset.StandardCharsets.ISO_8859_1);
+			case null, default -> "";
+		};
+		String hasBody = (requestBody instanceof String) ? "1" : (requestBody instanceof byte[]) ? "2" : "0";
 		String id = BrowserHttp
 			.start(JSString.of(method), JSString.of(url), JSString.of(headerLines), JSString.of(bodyOrEmpty),
 					JSString.of(hasBody))

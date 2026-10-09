@@ -551,7 +551,18 @@ public final class HostGlueEmitter {
 		out.append("        try {\n");
 		out.append("          const response = await fetch(request.").append(requestField("url")).append(", {\n");
 		for (FetchResponseShape.Field field : FetchResponseShape.requestFields()) {
-			if (!"url".equals(field.name())) {
+			if ("octets".equals(field.name())) {
+				// An octet body arrives one character an octet: the platform sends a
+				// Uint8Array as it is.
+				out.append("            body: request.")
+					.append(requestField("body"))
+					.append(" ?? (request.")
+					.append(requestField("octets"))
+					.append(" === undefined ? undefined : Uint8Array.from(request.")
+					.append(requestField("octets"))
+					.append(", (c) => c.charCodeAt(0))),\n");
+			}
+			else if (!"url".equals(field.name()) && !"body".equals(field.name())) {
 				out.append("            ")
 					.append(field.name())
 					.append(": request.")
@@ -655,7 +666,7 @@ public final class HostGlueEmitter {
 	// rather than crossing as undefined.
 	private static String requestField(String name) {
 		return switch (name) {
-			case "url", "method", "headers", "body" -> name;
+			case "url", "method", "headers", "body", "octets" -> name;
 			default -> throw new UnsupportedOperationException(
 					"--emit-js-glue: the http-plist request record grew a field this host half does not send: " + name);
 		};

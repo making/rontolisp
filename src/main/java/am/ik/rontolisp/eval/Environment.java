@@ -2601,8 +2601,9 @@ public final class Environment implements Scope {
 		// The optional second argument is an options property list (:method, :headers,
 		// :body); the options are validated eagerly (like JavaScript fetch, which throws
 		// synchronously on invalid arguments). The supported methods are GET, HEAD, POST,
-		// PUT, DELETE, OPTIONS and PATCH; :body is the request body string (e.g. for
-		// POST/PUT).
+		// PUT, DELETE, OPTIONS and PATCH; :body is the request body (e.g. for POST/PUT):
+		// a string, sent as its UTF-8 octets, or an (unsigned-byte 8) vector, sent as it
+		// is.
 		String fetchName = PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.FETCH);
 		env.defineFunction(fetchName, new LispFunction(fetchName, args -> {
 			if (args.isEmpty() || args.size() > 2) {
@@ -2615,7 +2616,7 @@ public final class Environment implements Scope {
 			LispVal options = args.size() == 2 ? args.get(1) : LispNil.INSTANCE;
 			String method = fetchMethod(options);
 			List<HttpSupport.Header> requestHeaders = parseHeaderAlist(plistGet(options, ":HEADERS"));
-			String body = fetchBody(options);
+			Object body = fetchBody(options);
 			return LispFuture.of(HttpSupport.requestAsync(method, url.value(), requestHeaders, body)
 				.thenApply(Environment::fetchResponsePlist));
 		}));
@@ -2772,7 +2773,9 @@ public final class Environment implements Scope {
 	}
 
 	// Resolves the :body option (default none). Must be a string when present.
-	private static @Nullable String fetchBody(LispVal options) {
+	// The request body: a string's text, a packed octet vector's octets (copied: the
+	// request outlives the call, the vector may not stay as it is), or null for none.
+	private static @Nullable Object fetchBody(LispVal options) {
 		LispVal bodyVal = plistGet(options, ":BODY");
 		if (bodyVal instanceof LispNil) {
 			return null;
@@ -2780,7 +2783,11 @@ public final class Environment implements Scope {
 		if (bodyVal instanceof LispString str) {
 			return str.value();
 		}
-		throw new LispEvalException(LispNames.FETCH + " :body must be a string, got: " + bodyVal.print());
+		if (bodyVal instanceof LispIntVector octets && octets.width() == 8) {
+			return octets.octets().clone();
+		}
+		throw new LispEvalException(
+				LispNames.FETCH + " :body must be a string or an (unsigned-byte 8) vector, got: " + bodyVal.print());
 	}
 
 	private static List<HttpSupport.Header> parseHeaderAlist(LispVal headers) {

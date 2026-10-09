@@ -20,7 +20,10 @@
 # /deflate-raw (raw DEFLATE under "deflate"), /gzip-twice (two members, "one " and "two"),
 # /gzip-404 ("missing" with a 404), /br (seven plain octets claiming br), and replies the
 # coding does not describe: /gzip-bad (plain text), /gzip-empty, /gzip-truncated (the last
-# twelve octets gone), /gzip-badcrc.
+# twelve octets gone), /gzip-badcrc; /octets-echo (the request's content type, "|", and its
+# body in hex) and /multipart (a multipart body, one line a line: the oracle's boundary as
+# BOUNDARY, an octet that is no printable ASCII as <xx>). @SCRATCH@ is the leg's own
+# directory, where a case writes the files it sends.
 cases:
   - name: the-origin-and-the-client
     source: |
@@ -370,6 +373,143 @@ cases:
       [:zip "Not in GZIP format"]
       [:eof "Unexpected end of ZLIB input stream"]
       [true true]
+  - name: a-file-an-input-stream-and-a-stream-body-are-sent-octet-for-octet
+    source: |
+      (let [f (io/file "@SCRATCH@" "body.bin")]
+        (with-open [o (io/output-stream f)] (doseq [b [255 254 65 0 128 127]] (.write o b)))
+        (println (:body (http/post (url "/octets-echo") {:body f})))
+        (println (:body (http/post (url "/octets-echo") {:body (io/input-stream f)}))))
+      (println (:body (http/post (url "/octets-echo") {:body (:body (http/get (url "/octets") {:as :stream}))})))
+      (println (:body (http/post (url "/octets-echo") {:body (:body (http/get (url "/gzip") {:as :stream}))})))
+      (println (:body (http/post (url "/octets-echo") {:body "é"})))
+      (prn (try (http/post (url "/octets-echo") {:body 42}) (catch clojure.lang.ExceptionInfo e (ex-message e))))
+      (prn (try (http/post (url "/octets-echo") {:body (io/file "@SCRATCH@" "missing")})
+                (catch java.io.FileNotFoundException e (clojure.string/replace (ex-message e) "@SCRATCH@" "DIR"))))
+    expected: |
+      null|fffe4100807f
+      null|fffe4100807f
+      null|fffe4100807f
+      null|68c3a96c6c6f2c20e4b896e7958c0a7365636f6e64206c696e650a
+      null|c3a9
+      "Don't know how to convert class java.lang.Longto body"
+      "DIR/missing not found"
+  - name: a-multipart-body-is-the-oracles-octet-for-octet
+    source: |
+      (let [dir "@SCRATCH@"
+            text-file (io/file dir "part.txt")
+            bin-file (io/file dir "part.bin")
+            json-file (io/file dir "part.json")
+            noext (io/file dir "noext")]
+        (spit text-file "file content\n")
+        (with-open [o (io/output-stream bin-file)] (doseq [b [255 254 65 0 128 127]] (.write o b)))
+        (spit json-file "{\"a\":1}")
+        (spit noext "x")
+        (println (:body (http/post (url "/multipart")
+                                   {:multipart [{:name "title" :content "héllo"}
+                                                {:name "file" :content text-file}
+                                                {:name "bin" :content bin-file}
+                                                {:name "json" :content json-file}
+                                                {:name "noext" :content noext}
+                                                {:name "stream" :content (io/input-stream bin-file)}
+                                                {:name "named" :part-name "eggplant" :file-name "foo.txt"
+                                                 :content "Eggplants" :content-type "text/x-egg"}
+                                                {:name :kw-name :content "v"}
+                                                {:content "nameless"}]}))))
+      (println (:body (http/post (url "/multipart") {:multipart []})))
+      (println (:body (http/put (url "/multipart") {:multipart [{:name "a" :content "x"}]
+                                                    :headers {"content-type" "text/plain" :content-type "x/y"}
+                                                    :form-params {"f" "1"} :body "ignored"})))
+      (let [r (http/post (url "/multipart") {:multipart [{:name "a" :content "x"}]})
+            ct (get-in r [:request :headers "content-type"])]
+        (prn (sort (keys (:request r))))
+        (prn [(subs ct 0 30) (boolean (re-matches #"multipart/form-data; boundary=babashka_http_client_Boundary[0-9a-f-]{36}" ct))]))
+      (prn (try (http/post (url "/multipart") {:multipart [{:name "n" :content nil}]})
+                (catch IllegalArgumentException e (ex-message e))))
+      (prn (try (http/post (url "/multipart") {:multipart [{:name "n" :content 42}]})
+                (catch IllegalArgumentException e (ex-message e))))
+      (prn (try (http/post (url "/multipart") {:multipart {:name "map" :content "v"}})
+                (catch IllegalArgumentException e (ex-message e))))
+      (prn (try (http/post (url "/multipart") {:multipart [{:name "f" :content (io/file "@SCRATCH@" "missing")}]})
+                (catch java.io.FileNotFoundException e (clojure.string/replace (ex-message e) "@SCRATCH@" "DIR"))))
+    expected: |
+      multipart/form-data; boundary=BOUNDARY
+      --BOUNDARY
+      Content-Disposition: form-data; name="title"
+      Content-Type: text/plain; charset=UTF-8
+      Content-Transfer-Encoding: 8bit
+
+      h<c3><a9>llo
+      --BOUNDARY
+      Content-Disposition: form-data; name="file"; filename="part.txt"
+      Content-Type: text/plain
+      Content-Transfer-Encoding: binary
+
+      file content<0a>
+      --BOUNDARY
+      Content-Disposition: form-data; name="bin"; filename="part.bin"
+      Content-Type: application/octet-stream
+      Content-Transfer-Encoding: binary
+
+      <ff><fe>A<00><80><7f>
+      --BOUNDARY
+      Content-Disposition: form-data; name="json"; filename="part.json"
+      Content-Type: application/json
+      Content-Transfer-Encoding: binary
+
+      {"a":1}
+      --BOUNDARY
+      Content-Disposition: form-data; name="noext"; filename="noext"
+      Content-Type: application/octet-stream
+      Content-Transfer-Encoding: binary
+
+      x
+      --BOUNDARY
+      Content-Disposition: form-data; name="stream"
+      Content-Type: application/octet-stream
+      Content-Transfer-Encoding: binary
+
+      <ff><fe>A<00><80><7f>
+      --BOUNDARY
+      Content-Disposition: form-data; name="eggplant"; filename="foo.txt"
+      Content-Type: text/x-egg
+      Content-Transfer-Encoding: 8bit
+
+      Eggplants
+      --BOUNDARY
+      Content-Disposition: form-data; name=":kw-name"
+      Content-Type: text/plain; charset=UTF-8
+      Content-Transfer-Encoding: 8bit
+
+      v
+      --BOUNDARY
+      Content-Disposition: form-data; name="null"
+      Content-Type: text/plain; charset=UTF-8
+      Content-Transfer-Encoding: 8bit
+
+      nameless
+      --BOUNDARY--
+
+
+      multipart/form-data; boundary=BOUNDARY
+      --BOUNDARY--
+
+
+      multipart/form-data; boundary=BOUNDARY
+      --BOUNDARY
+      Content-Disposition: form-data; name="a"
+      Content-Type: text/plain; charset=UTF-8
+      Content-Transfer-Encoding: 8bit
+
+      x
+      --BOUNDARY--
+
+
+      (:body :headers :method :uri)
+      ["multipart/form-data; boundary=" true]
+      "Cannot open <nil> as an InputStream."
+      "Cannot open <42> as an InputStream."
+      "Cannot open <nil> as an InputStream."
+      "DIR/missing (No such file or directory)"
   - name: what-no-transport-here-offers-is-refused-by-name
     source: |
       (prn (try (http/get (url "/lines") {:as :bytes}) (catch UnsupportedOperationException e (ex-message e))))

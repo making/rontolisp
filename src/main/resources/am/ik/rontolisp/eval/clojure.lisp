@@ -13375,23 +13375,190 @@
                                ":" (rontolisp::%clojure-str-of pass "" nil))))))
 
 (defun rontolisp::%clojure-http-body (body)
-  "The request body fetch sends for the :body option BODY: a string as it is,
-   nil none, an input stream (a clojure.java.io/reader, a request :body) or a
-   fetched reply's body stream read to its end; anything else the oracle's
-   ex-info."
+  "The request body fetch sends for the :body option BODY, the oracle's
+   ->body-publisher: a string as it is, nil none, a java.io.File and an
+   InputStream (a clojure.java.io byte stream, a reply's :as :stream body)
+   their octets, a character stream (a clojure.java.io/reader, a Ring request
+   :body) read to its end; anything else the oracle's ex-info."
   (cond ((null body) nil)
         ((stringp body) body)
-        ((rontolisp:streamp body)
-         (rontolisp::%future-force (rontolisp:read-all body)))
+        ((rontolisp::%clojure-io-p body)
+         (let ((kind (rontolisp::%clojure-io-kind body)))
+           (cond ((eq kind :C%FILE)
+                  ;; BodyPublishers.ofFile's words for a file not there
+                  (let ((path (rontolisp::%clojure-io-target body nil)))
+                    (if (not (%probe-file path))
+                        (rontolisp::%clojure-file-not-found-exception
+                         (concatenate 'string path " not found")))
+                    (rontolisp::%clojure-http-octets-of body)))
+                 ((eq kind :C%INPUT-STREAM)
+                  (rontolisp::%clojure-http-octets-of body))
+                 ((eq kind :READER) (rontolisp::%clojure-io-reader-text body))
+                 (t (rontolisp::%clojure-http-no-body body)))))
         ((streamp body)
          (let ((text (rontolisp::%clojure-read-to-end body)))
            (close body)
            text))
-        (t (error
-            (rontolisp::%clojure-ex-info
-             (concatenate 'string "Don't know how to convert "
-                          (rontolisp::%clojure-str-of body "nil" t) " to body")
-             (rontolisp::%clojure-http-assoc nil (list "body" body)) nil)))))
+        (t (rontolisp::%clojure-http-no-body body))))
+
+(defun rontolisp::%clojure-http-no-body (body)
+  "The oracle's ex-info for a :body of no kind a request carries, spelled as
+   its ->body-publisher spells it."
+  (error
+   (rontolisp::%clojure-ex-info
+    (concatenate 'string "Don't know how to convert class "
+                 (rontolisp::%clojure-class-name-of body) "to body")
+    (rontolisp::%clojure-http-assoc nil (list "body" body)) nil)))
+
+(defun rontolisp::%clojure-http-octets-of (x)
+  "The octets of what X reads as an InputStream -- a java.io.File's, those left
+   on a byte stream (a reply's :as :stream body included) -- one
+   (unsigned-byte 8) vector, the stream closed; X no such thing is the
+   oracle's refusal to open it as an InputStream."
+  (let ((in (rontolisp::%clojure-io-open-input x)))
+    (if (null in) (rontolisp::%clojure-io-refuse-open x "an InputStream"))
+    (let* ((state (rontolisp::%clojure-io-open-state in))
+           (s (svref state 0))
+           (octets
+            (cond ((rontolisp::%clojure-async-stream-p s)
+                   (rontolisp::%clojure-io-pull-rest state))
+                  (t (rontolisp::%clojure-io-octets-left state)))))
+      (rontolisp::%clojure-io-close-input in)
+      octets)))
+
+;; A multipart body, the oracle's multipart interceptor (babashka.http-client,
+;; after hato): each part's head and content between boundaries of
+;; babashka_http_client_Boundary and a random UUID.
+
+(defun rontolisp::%clojure-http-boundary ()
+  "A multipart boundary as the oracle makes one: babashka_http_client_Boundary
+   and a random version 4 UUID, its bits the host's entropy -- or, on a
+   --no-wasi reactor given none (--host-random), the program's generator."
+  (let ((bytes
+         (handler-case (rontolisp:random-bytes 16)
+           (error ()
+             (let ((drawn (make-array 16 :element-type '(unsigned-byte 8))))
+               (dotimes (i 16) (setf (aref drawn i) (random 256)))
+               drawn))))
+        (out (make-string-output-stream))
+        (digits "0123456789abcdef"))
+    (setf (aref bytes 6) (logior (logand (aref bytes 6) 15) 64))
+    (setf (aref bytes 8) (logior (logand (aref bytes 8) 63) 128))
+    (write-string "babashka_http_client_Boundary" out)
+    (dotimes (i 16)
+      (if (or (= i 4) (= i 6) (= i 8) (= i 10)) (write-char #\- out))
+      (write-char (char digits (ash (aref bytes i) -4)) out)
+      (write-char (char digits (logand (aref bytes i) 15)) out))
+    (get-output-stream-string out)))
+
+(defun rontolisp::%clojure-http-file-type (name)
+  "The content type of a file named NAME by its extension, as
+   Files.probeContentType answers on a Debian system, nil for an extension it
+   does not know (or none)."
+  (let ((dot (position #\. name :from-end t)))
+    (if (and dot (> dot 0))
+        (cdr
+         (assoc (string-downcase (subseq name (+ dot 1)))
+                '(("txt" . "text/plain") ("html" . "text/html")
+                  ("htm" . "text/html") ("css" . "text/css")
+                  ("js" . "text/javascript") ("mjs" . "text/javascript")
+                  ("json" . "application/json") ("xml" . "application/xml")
+                  ("csv" . "text/csv") ("md" . "text/markdown")
+                  ("png" . "image/png") ("jpg" . "image/jpeg")
+                  ("jpeg" . "image/jpeg") ("gif" . "image/gif")
+                  ("svg" . "image/svg+xml") ("webp" . "image/webp")
+                  ("ico" . "image/vnd.microsoft.icon") ("bmp" . "image/bmp")
+                  ("tif" . "image/tiff") ("tiff" . "image/tiff")
+                  ("avif" . "image/avif") ("pdf" . "application/pdf")
+                  ("zip" . "application/zip") ("gz" . "application/gzip")
+                  ("tar" . "application/x-tar")
+                  ("7z" . "application/x-7z-compressed")
+                  ("xz" . "application/x-xz")
+                  ("jar" . "application/java-archive")
+                  ("wasm" . "application/wasm")
+                  ("bin" . "application/octet-stream") ("mp3" . "audio/mpeg")
+                  ("wav" . "audio/x-wav") ("ogg" . "audio/ogg")
+                  ("aac" . "audio/aac") ("flac" . "audio/flac")
+                  ("m4a" . "audio/mp4") ("mp4" . "video/mp4")
+                  ("webm" . "video/webm") ("avi" . "video/x-msvideo")
+                  ("mov" . "video/quicktime") ("mpeg" . "video/mpeg")
+                  ("mpg" . "video/mpeg") ("woff" . "font/woff")
+                  ("woff2" . "font/woff2") ("ttf" . "font/ttf")
+                  ("otf" . "font/otf") ("yaml" . "application/yaml")
+                  ("yml" . "application/yaml") ("rtf" . "application/rtf")
+                  ("ics" . "text/calendar") ("jsonld" . "application/ld+json")
+                  ("xhtml" . "application/xhtml+xml")
+                  ("epub" . "application/epub+zip")
+                  ("doc" . "application/msword")
+                  ("docx" .
+                   "application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+                  ("xls" . "application/vnd.ms-excel")
+                  ("xlsx" .
+                   "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+                  ("ppt" . "application/vnd.ms-powerpoint")
+                  ("pptx" .
+                   "application/vnd.openxmlformats-officedocument.presentationml.presentation"))
+                :test #'string=)))))
+
+(defun rontolisp::%clojure-http-multipart (parts boundary)
+  "The multipart/form-data body of the :multipart PARTS under BOUNDARY, one
+   (unsigned-byte 8) vector: per part (a map of :name or :part-name, :content
+   -- a string, a java.io.File, an InputStream -- and optional :file-name and
+   :content-type) its boundary, Content-Disposition, Content-Type and
+   Content-Transfer-Encoding lines and its content, then the closing
+   boundary. A content nothing opens as an InputStream is the oracle's
+   refusal; a missing File its FileNotFoundException."
+  (let ((chunks nil) (total 0))
+    (dolist (m (rontolisp::%clojure-seq-all parts))
+      (let* ((content (rontolisp::%clojure-http-option m "content"))
+             (file
+              (if (and (consp content) (eq (car content) :C%FILE))
+                  (rontolisp::%clojure-io-name content)))
+             (name
+              (or (rontolisp::%clojure-http-option m "part-name")
+                  (rontolisp::%clojure-http-option m "name")))
+             (file-name
+              (or (rontolisp::%clojure-http-option m "file-name") file))
+             (type (rontolisp::%clojure-http-option m "content-type"))
+             (head
+              (concatenate 'string "--" boundary (string #\Return)
+                           (string #\Newline)
+                           "Content-Disposition: form-data; name=\""
+                           (rontolisp::%clojure-str-of name "null" nil) "\""
+                           (if file-name
+                               (concatenate 'string "; filename=\""
+                                            (rontolisp::%clojure-str-of
+                                             file-name "null" nil) "\"")
+                               "") (string #\Return) (string #\Newline)
+                           "Content-Type: "
+                           (cond
+                            (type (rontolisp::%clojure-str-of type "null" nil))
+                            ((stringp content) "text/plain; charset=UTF-8")
+                            (file (or (rontolisp::%clojure-http-file-type file)
+                                      "application/octet-stream"))
+                            (t "application/octet-stream")) (string #\Return)
+                           (string #\Newline) "Content-Transfer-Encoding: "
+                           (if (stringp content) "8bit" "binary")
+                           (string #\Return) (string #\Newline)
+                           (string #\Return) (string #\Newline)))
+             (octets
+              (if (stringp content)
+                  (rontolisp:string-to-octets content)
+                  (rontolisp::%clojure-http-octets-of content))))
+        (dolist (part
+                 (list (rontolisp:string-to-octets head) octets
+                       (rontolisp:string-to-octets
+                        (concatenate 'string (string #\Return)
+                                     (string #\Newline)))))
+          (setq chunks (cons part chunks))
+          (setq total (+ total (length part))))))
+    (let ((end
+           (rontolisp:string-to-octets
+            (concatenate 'string "--" boundary "--" (string #\Return)
+                         (string #\Newline)))))
+      (setq chunks (cons end chunks))
+      (setq total (+ total (length end))))
+    (rontolisp::%octets-join (nreverse chunks) total)))
 
 (defun rontolisp::%clojure-http-refuse-options (req)
   "Refuses by name an option of REQ no transport here honours."
@@ -13401,7 +13568,6 @@
              ("interceptors" . "the request and response steps are built in")
              ("timeout" . "rontolisp:fetch has no timeout yet")
              ("version" . "the transport chooses the HTTP version")
-             ("multipart" . "a multipart body is not built in")
              ("raw" . "the response is always the response map")
              ("expect-continue" .
               "the transport decides whether to expect 100-continue")))
@@ -13419,7 +13585,8 @@
   "The request of the options map OPTS as (request url method fields body):
    the oracle's request steps over it -- the headers merged, :accept,
    :basic-auth, :oauth-token, :query-params onto the URL, :form-params into
-   the body -- and REQUEST the map they leave, which the response carries."
+   the body, :multipart into the body in their place -- and REQUEST the map
+   they leave, which the response carries."
   (let* ((given (rontolisp::%clojure-http-table opts "the request"))
          (headers
           (rontolisp::%clojure-http-headers
@@ -13436,6 +13603,7 @@
          (token (rontolisp::%clojure-http-option given "oauth-token"))
          (query (rontolisp::%clojure-http-option given "query-params"))
          (form (rontolisp::%clojure-http-option given "form-params"))
+         (multipart (rontolisp::%clojure-http-option given "multipart"))
          (body (rontolisp::%clojure-http-option given "body")))
     (rontolisp::%clojure-http-refuse-options given)
     (if (rontolisp::%clojure-truthy accept)
@@ -13464,14 +13632,28 @@
                 (gethash (list :c%keyword "content-type") headers)))
               (setf (gethash (list :c%keyword "content-type") headers)
                     "application/x-www-form-urlencoded"))))
+    (if (rontolisp::%clojure-truthy multipart)
+        (let ((boundary (rontolisp::%clojure-http-boundary)))
+          (setq body (rontolisp::%clojure-http-multipart multipart boundary))
+          (remhash "content-type" headers)
+          (remhash "Content-Type" headers)
+          (remhash (list :c%keyword "content-type") headers)
+          (setf (gethash "content-type" headers)
+           (concatenate 'string "multipart/form-data; boundary=" boundary))))
     (let* ((sent
             (append (list "headers" headers "uri" url)
                     (if method (list "method" method))
-                    (if (rontolisp::%clojure-truthy form) (list "body" body))))
+                    (if (or (rontolisp::%clojure-truthy form)
+                            (rontolisp::%clojure-truthy multipart))
+                        (list "body" body))))
            (req (rontolisp::%clojure-http-assoc given sent)))
+      (if (rontolisp::%clojure-truthy multipart)
+          (remhash (list :c%keyword "multipart") req))
       (list req url (rontolisp::%clojure-http-method method)
             (rontolisp::%clojure-http-fields headers)
-            (rontolisp::%clojure-http-body body)))))
+            (if (rontolisp::%clojure-truthy multipart)
+                body
+                (rontolisp::%clojure-http-body body))))))
 
 (defun rontolisp::%clojure-http-split (url)
   "The parts (scheme authority path query fragment) of the URI reference URL,
