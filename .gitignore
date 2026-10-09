@@ -69,6 +69,7 @@ examples/browser/hiragana/data/
 /ci-model.glb
 /ci-model.gguf
 /ci-acc.txt
+/utf8bad.dat
 /scene-model-file-vase.obj
 /scene-model-file-bracket.stl
 

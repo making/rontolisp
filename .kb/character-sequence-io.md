@@ -25,15 +25,15 @@ program and its text: the ACCUMULATE was fixed first (`.kb/string-accumulate-cos
   (UTF-16 units on the JVM and the interpreter, BYTES on wasm) as there are code points still
   wanted. A code point is one unit or two (one byte to four), so N units hold at most N of
   them, and the buffer fills before the units run out only when every one of them was a code
-  point of its own. Nothing is read that the caller did not ask for, so no pushback, no
-  `fd_seek` and no shared buffer is needed -- which is what makes the same design fit all
-  three backends and both WASM targets.
+  point of its own. No `fd_seek` and no shared buffer is needed -- which is what makes the
+  same design fit all three backends and both WASM targets. The one byte wasm can read past
+  what it consumes is the byte that shows the last sequence malformed ("Malformed input"
+  below); it goes into the fd's byte pushback.
 - **A sequence split by the end of a block** is completed rather than dropped: one more read
   behind a `mark(1)` on the JVM and the interpreter (a high half followed by anything else is
-  its own character and the unit after it is put back, exactly as `read-char` does); a
-  follow-up `fd_read` of the missing bytes into the block's four spare bytes on wasm. A
-  sequence truncated by END OF FILE yields its lead byte as a bare character on wasm, which is
-  the answer `_read_char` gives for the same input.
+  its own character and the unit after it is put back, exactly as `read-char` does); on wasm
+  a follow-up `fd_read` of ONE byte at a time into the block's four spare bytes, until the
+  sequence is complete, malformed, or cut short by end of file (one U+FFFD).
 - **Interpreter** (`Environment`, beside `%read-sequence-packed`): `Environment.readCodePoints`
   over the `BufferedReader` table entry (a file OR a string input stream) or the
   standard-stream designator, storing through `LispString.setCharAt`. A Gray instance, a
@@ -52,12 +52,48 @@ program and its text: the ACCUMULATE was fixed first (`.kb/string-accumulate-cos
   The buffer test is one `_charvec_p` call -- the marker invariant keeps its single owner --
   plus "the data slot is the element array" (a string view and a displaced view decline) and
   "rank 1". Bytes stage through a 64 KiB block plus four spare bytes reserved at `HEAP_PTR`
-  and popped after (the `_open` discipline), and a parked peek code point
-  (`PEEK_FD_ADDR`/`PEEK_CP_ADDR`) is drained first, as `_read_char` drains it. A negative i31
+  and popped after (the `_open` discipline). Bytes the fd's pushback holds (a peek's, or a
+  byte read past a malformed sequence) are read first, a character at a time through
+  `_read_char`, which takes them before the fd. A negative i31
   (a string input stream) declines, so `with-input-from-string` keeps the element loop there.
   A program with no `read-sequence` gets a declining STUB body.
 - **A range outside the buffer DECLINES rather than trapping** on every backend, so the loop
   signals exactly the error it always did.
+
+## Malformed input
+**Every character stream over a file, a socket or standard input decodes malformed UTF-8 by
+Java's rule on all four backends**: a byte that leads no sequence (`80..C1`, `F5..FF`) is
+one U+FFFD; a sequence a byte outside its continuation range interrupts is one U+FFFD for
+the bytes before that byte, which then starts the next character; a sequence end of file cuts
+short is one U+FFFD; the second byte is `A0..BF` after `E0`, `90..BF` after `F0`, `80..8F`
+after `F4`; and a complete three-byte surrogate encoding (`ED A0..BF xx`) is ONE U+FFFD. The
+last rule is Java's, not the Unicode recommended practice (which narrows `ED`'s second byte to
+`80..9F`, making `ED A0 80` three U+FFFDs) -- chosen because the JVM backend's plain
+`FileReader` and the Clojure oracle's `slurp`/`reader` answer it. `octets-to-string` keeps its
+own lenient rule (`.kb/characters-code-points.md`).
+
+Measured 2026-10-08/09, the bytes `41 E9 42 FF`: interpreter and JVM `(65 65533 66 65533)`,
+both WASM legs `(65 37055)` (the lead byte took whatever followed it, unchecked). The item's
+premise that the interpreter already answered Java's rule was half true:
+`runtime/RontoCharFileReader` (the interpreter's `open`, and the JVM's in a program naming
+`file-position`) narrowed `ED` like the Unicode practice, so `ED A0 80` was three U+FFFDs
+there and one on the JVM's `FileReader`; and `runtime/RontoIoFileStream` (`:io`, interpreter
+and JVM) took continuation bytes unchecked like wasm. Both now decode by the rule above.
+
+- **wasm: one decoder, `WasmUtf8StreamDecoder.emitDecode`**, a byte at a time over a fetch
+  callback: `_read_char` and `_peek_char` fetch through `emitNextByte` (the fd's pushback,
+  else one `fd_read`), `_read_seq_chars` from its block. `_read_line` is a `_read_char` loop
+  that re-encodes each character, so a line is a well-formed string. String input streams keep
+  the lenient decoder: their bytes are a string's own encoding.
+- **The fd byte pushback replaced peek-char's code-point slot**: `PUSHBACK_KEY_ADDR` holds
+  `(fd + 1) << 3 | count` (0 = empty), `PUSHBACK_BYTES_ADDR` 1..4 bytes, the front in the low
+  byte. Writers: a decode pushes back the byte that interrupted a sequence; a peek pushes back
+  EVERY byte it took (at most four: a three-byte prefix and the interrupting byte), so the next
+  read decodes the same bytes to the same character. `file-position` subtracts the count
+  (exact now, where the slot subtracted the parked code point's UTF-8 length -- wrong after a
+  U+FFFD); a seek and a `close` drop it. ONE descriptor at a time: a push for another fd
+  replaces the bytes, the trade the code-point slot already made (interleaved reads of two
+  malformed streams can lose one byte there).
 
 ## The numbers
 Measured 2026-09-12 (JDK 25, wasmtime 47, Linux x64) on a 2,668,890-character UTF-8 file
@@ -90,6 +126,13 @@ alternative is not a win".
 ## Tests
 ci-spec `read-sequence-over-a-file-decodes-a-block-of-characters-at-a-time` (all four
 backends: the non-BMP character sits ON the block boundary of every one of them);
+ci-spec `file-character-streams-decode-malformed-utf-8-as-the-jvm-does` (all four: read-line,
+read-char, peek-char, read-sequence completing past its block, file-position, `:io`);
+`MalformedUtf8FileDecodingTest` (both runtime decoders against `InputStreamReader`, every
+sequence of up to three boundary bytes); `WasmLispCompilerIntegrationTest`
+`#fileCharacterStreamsDecodeMalformedUtf8AsTheJvmDoes` and
+`#everyBoundaryByteTripleDecodesAsJavasDecoderOnEveryCharacterRead` (every triple run
+together, 65,856 bytes, through the five read paths on both wasm targets);
 `readSequenceOverACharacterBufferDecodesABlockAtATime` in `LispEvaluatorTest` /
 `JvmLispCompilerTest` / `WasmLispCompilerIntegrationTest`; and the per-backend COST pins
 `evalReadSequenceIntoAStringCostsAboutWhatTheSameFileCostsAsBytes` /

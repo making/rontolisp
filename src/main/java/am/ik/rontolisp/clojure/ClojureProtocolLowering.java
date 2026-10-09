@@ -1984,6 +1984,19 @@ final class ClojureProtocolLowering {
 	}
 
 	/**
+	 * The rows of an {@code extend-protocol}, {@code extend-type} or {@code extend},
+	 * answering nil like the oracle rather than the last row's stored lambda.
+	 */
+	private static LispVal extensionRows(List<LispVal> rows) {
+		if (rows.isEmpty()) {
+			return ClojureLowering.NIL_CONST;
+		}
+		List<LispVal> body = new ArrayList<>(rows);
+		body.add(ClojureLowering.NIL_CONST);
+		return ClojureLowerUtil.cons(ClojureLowerUtil.sym("progn"), body);
+	}
+
+	/**
 	 * {@code (extend-protocol P Type (method [target & args] body...)+ ...)}: one row per
 	 * method per type, like {@code defmethod} rows. The type may repeat (later rows win,
 	 * like the oracle); a method of several arities spells them as {@code fn} clauses
@@ -2025,10 +2038,7 @@ final class ClojureProtocolLowering {
 			}
 		}
 		ctx.usedProtocols = true;
-		if (rows.isEmpty()) {
-			return ClojureLowering.NIL_CONST;
-		}
-		return ClojureLowerUtil.cons(ClojureLowerUtil.sym("progn"), rows);
+		return extensionRows(rows);
 	}
 
 	/**
@@ -2058,10 +2068,7 @@ final class ClojureProtocolLowering {
 			}
 		}
 		ctx.usedProtocols = true;
-		if (rows.isEmpty()) {
-			return ClojureLowering.NIL_CONST;
-		}
-		return ClojureLowerUtil.cons(ClojureLowerUtil.sym("progn"), rows);
+		return extensionRows(rows);
 	}
 
 	/**
@@ -2127,10 +2134,7 @@ final class ClojureProtocolLowering {
 			}
 		}
 		ctx.usedProtocols = true;
-		if (rows.isEmpty()) {
-			return ClojureLowering.NIL_CONST;
-		}
-		return ClojureLowerUtil.cons(ClojureLowerUtil.sym("progn"), rows);
+		return extensionRows(rows);
 	}
 
 	/** The run-time store of a computed map's rows ({@link #computedRows}). */

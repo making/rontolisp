@@ -2112,7 +2112,10 @@ constructor and consumer, and a regex `replace` with a function replacement.
 - `extend-protocol`/`extend-type`/`extend` add rows under the target's tag: the
   class-keyword kinds, `nil`, `Object`, known records and deftypes, the classes of the
   instants and the UUID ("Instants and UUIDs"), and any other class `instance?` resolves
-  (a name no class has is its `unknown name: X`).
+  (a name no class has is its `unknown name: X`). The three answer nil like the oracle
+  (2026-10-09, clj 1.12.6; `extensionRows` ends the rows in `nil`; they used to answer the
+  last `setf`'s lambda, echoed `#<procedure>`); pinned by clojure-spec `extend-forms-answer-nil`
+  and `ClojureSessionTest.theExtendFormsEchoNil`.
 - **Walked classes** (oracle-checked clj 1.12.6, 2026-10-08). A target no value's tag names
   exactly -- a throwable (a condition's tag is the fresh miss list), an interface or
   abstract class over core kinds (`clojure.lang.IRef`/`IDeref`/`ARef`/`IExceptionInfo`), a
