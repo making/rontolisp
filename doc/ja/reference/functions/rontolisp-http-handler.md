@@ -147,7 +147,12 @@ serve コンポーネントのハンドラ内でも `random`、時刻系の組�
 serve コンポーネントは非同期の `wasi:http@0.3.0`（`service` world）を
 ターゲットとします。ハンドラは wasmtime 46+ でデフォルト有効な基本の
 コンポーネントモデル非同期 ABI 上のコールバック非同期リフトであり、
-`wasmtime serve` にゲートされた機能フラグは不要です。wasmCloud もホスト
+`wasmtime serve` にゲートされた機能フラグは不要です。唯一の例外が
+`wasi:sockets` です。TCP ソケット層に届くハンドラ（`rontolisp:tcp-*`、
+`usocket`、およびそれらを参照する quickload されたライブラリ）は
+`wasmtime serve -S cli=y -S tcp=y -S inherit-network=y …` で serve します
+([TCP ソケット](../../guides/tcp-sockets.md))。
+wasmCloud もホスト
 します: リリース版の `wash`（2.5.2）が、
 `dev.wasm_proposals: [gc, exception-handling, component-model-async]` を
 指定した `wash dev` で実行します。**Spin** も

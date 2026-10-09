@@ -217,6 +217,14 @@ component-model async ABI, which is default-on in wasmtime 46+, so no gated
 feature flags are needed. The response is still delivered mid-task through
 `canon task.return`, and the body streams after it.
 
+The example above needs no host flags. The one gated surface is `wasi:sockets`:
+a program that reaches the TCP socket layer — `rontolisp:tcp-*`, `usocket`, or
+any quickloaded library that does (Clack applications do) — also imports
+`wasi:sockets/types@0.3.0`, and its serve line becomes
+`wasmtime serve -S cli=y -S tcp=y -S inherit-network=y app.wasm`; without the
+flags instantiation fails with `instance export 'tcp-socket' has the wrong
+type`. See [TCP sockets](tcp-sockets.md).
+
 ## Other WASI HTTP runtimes
 
 The component asks its host for `wasi:http` **0.3** (async) plus wasm-GC.
