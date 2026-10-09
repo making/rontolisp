@@ -6691,7 +6691,7 @@ public final class Environment implements Scope {
 					// Drain buffered output so any prompt is visible before we block on
 					// stdin.
 					out.flush();
-					line = stdinReader.readLine();
+					line = TerminatedLine.readText(stdinReader);
 				}
 				else if (!(src instanceof LispInteger handle)) {
 					throw new LispEvalException(LispNames.READ_LINE + " expects an input stream");
@@ -6702,7 +6702,7 @@ public final class Environment implements Scope {
 						line = SocketSupport.readLine(socket);
 					}
 					else if (entry instanceof BufferedReader reader) {
-						line = reader.readLine();
+						line = TerminatedLine.readText(reader);
 					}
 					else if (entry instanceof HttpRequestBodyStream body) {
 						line = body.readLine();

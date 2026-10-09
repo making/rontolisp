@@ -326,7 +326,10 @@ final class JvmIoRuntimeBuilder {
 
 	private final MethodRefEntry bufferedWriterInit;
 
-	private final MethodRefEntry bufferedReaderReadLine;
+	/**
+	 * {@code _lfLine}: a line off a {@code BufferedReader}, ended by {@code \n} alone.
+	 */
+	private final MethodRefEntry lfLine;
 
 	private final MethodRefEntry bufferedReaderClose;
 
@@ -644,7 +647,7 @@ final class JvmIoRuntimeBuilder {
 		this.fileWriterAppendInit = cp.methodRef(this.fileWriterClass, "<init>", "(Ljava/lang/String;Z)V");
 		this.bufferedReaderInit = cp.methodRef(this.bufferedReaderClass, "<init>", "(Ljava/io/Reader;)V");
 		this.bufferedWriterInit = cp.methodRef(this.bufferedWriterClass, "<init>", "(Ljava/io/Writer;)V");
-		this.bufferedReaderReadLine = cp.methodRef(this.bufferedReaderClass, "readLine", "()Ljava/lang/String;");
+		this.lfLine = cp.methodRef(thisClass, JvmRuntimeBuilder.LF_LINE_METHOD, JvmRuntimeBuilder.LF_LINE_DESC);
 		this.bufferedReaderClose = cp.methodRef(this.bufferedReaderClass, "close", "()V");
 		this.writerWrite = cp.methodRef(this.writerClass, "write", "(Ljava/lang/String;)V");
 		this.writerClose = cp.methodRef(this.writerClass, "close", "()V");
@@ -2810,7 +2813,7 @@ final class JvmIoRuntimeBuilder {
 			code.aload(2);
 		}
 		code.checkcast(this.bufferedReaderClass);
-		code.invokevirtual(this.bufferedReaderReadLine);
+		code.invokestatic(this.lfLine);
 		code.astore(1);
 		if (afterIoLine != null) {
 			code.labelBinding(afterIoLine);
@@ -2838,9 +2841,9 @@ final class JvmIoRuntimeBuilder {
 	 * file ended the line -- or {@code null} (nil) at end of file. What
 	 * {@code %read-line-pair}, the read under a {@code read-line} producer's
 	 * multiple-value lowering, compiles to. A {@code BufferedReader} is read a character
-	 * at a time so the terminator is seen ({@code readLine} drops it); the terminators
-	 * are {@code readLine}'s, a {@code \r} the file ends on ending its line as end of
-	 * file does (the WASM backends' answer). A bidirectional stream reports its own
+	 * at a time so the terminator is seen ({@code readLine} drops it); only {@code \n}
+	 * ends a line and one {@code \r} before it or the end is dropped, as in
+	 * {@code _lfLine} (the WASM backends' rule). A bidirectional stream reports its own
 	 * terminator, a socket reads through {@code _sockReadLinePair}.
 	 */
 	private MethodCode buildReadLinePair(LinePairs lp) {
@@ -2916,16 +2919,13 @@ final class JvmIoRuntimeBuilder {
 		code.dup();
 		code.invokespecial(lp.stringBuilderInit());
 		code.astore(1);
-		// while (c >= 0 && c != '\n' && c != '\r') { sb.append((char) c); c = r.read(); }
+		// while (c >= 0 && c != '\n') { sb.append((char) c); c = r.read(); }
 		MethodCode.Label loop = code.newBoundLabel();
 		MethodCode.Label ended = code.newLabel();
 		code.iload(4);
 		code.iflt(ended);
 		code.iload(4);
 		code.loadConstant('\n');
-		code.if_icmpeq(ended);
-		code.iload(4);
-		code.loadConstant('\r');
 		code.if_icmpeq(ended);
 		code.aload(1);
 		code.iload(4);
@@ -2937,41 +2937,19 @@ final class JvmIoRuntimeBuilder {
 		code.istore(4);
 		code.goto_(loop);
 		code.labelBinding(ended);
-		// missing = c < 0;
+		// missing = c < 0; the line drops one trailing '\r' (a '\n' alone ends a line)
 		code.iload(4);
 		MethodCode.Label terminated = code.newLabel();
 		code.ifge(terminated);
 		code.iconst_1();
 		code.istore(2);
-		MethodCode.Label build = code.newLabel();
-		code.goto_(build);
+		MethodCode.Label flagged = code.newLabel();
+		code.goto_(flagged);
 		code.labelBinding(terminated);
 		code.iconst_0();
 		code.istore(2);
-		// if (c == '\r') { r.mark(1); next = r.read(); if (next < 0) missing = true;
-		// else if (next != '\n') r.reset(); }
-		code.iload(4);
-		code.loadConstant('\r');
-		code.if_icmpne(build);
-		code.aload(3);
-		code.iconst_1();
-		code.invokevirtual(this.bufferedReaderMark);
-		code.aload(3);
-		code.invokevirtual(this.bufferedReaderRead);
-		code.istore(5);
-		code.iload(5);
-		MethodCode.Label notEnd = code.newLabel();
-		code.ifge(notEnd);
-		code.iconst_1();
-		code.istore(2);
-		code.goto_(build);
-		code.labelBinding(notEnd);
-		code.iload(5);
-		code.loadConstant('\n');
-		code.if_icmpeq(build);
-		code.aload(3);
-		code.invokevirtual(this.bufferedReaderReset);
-		code.labelBinding(build);
+		code.labelBinding(flagged);
+		JvmRuntimeBuilder.emitStripTrailingCr(code, this.cp, 1, 5);
 		emitLinePair(code, () -> {
 			code.aload(1);
 			code.invokevirtual(lp.builderToString());

@@ -5616,6 +5616,19 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunReadLineEndsALineAtLineFeedAloneAndDropsOneCarriageReturnBeforeIt() throws Exception {
+		// The JVM twin of
+		// LispEvaluatorTest#readLineEndsALineAtLineFeedAloneAndDropsOneCarriageReturnBeforeIt.
+		String file = this.tempDir.resolve("cr.dat").toString().replace("\\", "\\\\");
+		assertThat(compileAndRun(am.ik.rontolisp.cli.CompileFrontendAccess
+			.withSystemPath(ReadLineValuesFixture.carriageReturnProgram(file), List.of(), false, false)
+			.forms())).isEqualTo(ReadLineValuesFixture.CARRIAGE_RETURN_EXPECTED);
+		assertThat(compileAndRun(am.ik.rontolisp.cli.CompileFrontendAccess
+			.withSystemPath(ReadLineValuesFixture.carriageReturnFileKindsProgram(file), List.of(), false, false)
+			.forms())).isEqualTo(ReadLineValuesFixture.CARRIAGE_RETURN_FILE_KINDS_EXPECTED);
+	}
+
+	@Test
 	void compileAndRunReadLineAnswersMissingNewlinePAfterAnUnreadCharacter() throws Exception {
 		assertThat(compileAndRun(am.ik.rontolisp.cli.CompileFrontendAccess.corpus(ReadLineValuesFixture.UNREAD_PROGRAM,
 				am.ik.rontolisp.reader.Features.JVM, false, false)))
