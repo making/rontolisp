@@ -825,6 +825,13 @@ cases:
       anil
       bnil
       nil
+  - name: newline-answers-nil
+    # (newline) writes a newline and answers nil, so pprint, which ends with one, does too.
+    source: |
+      (prn (newline))
+    expected: |
+
+      nil
   - name: numbers
     # 1M is an exact ratio (1), not a double: decimal arithmetic stays exact and
     # prints as the ratio. The oracle prints 1M and 2N with their suffixes.
@@ -3113,6 +3120,48 @@ cases:
       3 12 (1) [2]
       [[1] [1 2]] foo 3 5
       4 -1 4 {:x :k} 7
+  - name: a-macro-body-evaluates-a-form-while-it-expands
+    # eval in a macro body, and in a helper the body calls, evaluates the form at
+    # expansion time over the definitions above the call site, in its namespace, with
+    # no local of the call site in reach; a lowering error is catchable there. resolve
+    # answers the var or nil, of a quoted symbol while the program lowers, of a computed
+    # one at expansion time. evm-compile-if is data.priority-map's and instaparse's
+    # compile-if. clj 1.12.6, oracle-identical.
+    source: |
+      (defmacro evm-compile-if [test then else] (if (eval test) then else))
+      (def evm-x 3)
+      (defn evm-f [] 4)
+      (defn evm-true? [form] (boolean (eval form)))
+      (defmacro evm-when-true [form then] (if (evm-true? form) then :no))
+      (defmacro evm-values [& forms] (vec (map eval forms)))
+      (defmacro evm-plus-one [] (let [y 5] (eval `(+ ~y 1))))
+      (defmacro evm-caught [form] (try (eval form) (catch Exception _ :caught)))
+      (defmacro evm-resolved? [sym] (some? (resolve sym)))
+      (println (evm-compile-if (resolve 'clojure.core/inc) :has :lacks)
+               (evm-compile-if (resolve 'clojure.core/evm-nowhere) :has :lacks)
+               (evm-compile-if (resolve 'evm-f) :f :no-f)
+               (evm-compile-if (resolve 'evm-nowhere) :g :no-g))
+      (println (evm-compile-if (= evm-x 3) :x3 :other) (evm-compile-if (= (evm-f) 4) :f4 :other)
+               (evm-compile-if (>= (:minor *clojure-version*) 9) :new :old)
+               (evm-when-true (resolve 'map) :yes))
+      (println (evm-values (+ 1 2) (str "a" "b") [1 (inc 1)]) (evm-plus-one)
+               (let [x 1] (evm-compile-if (= 1 1) x 0)) (evm-caught (evm-nowhere 1))
+               (evm-resolved? evm-x) (evm-resolved? evm-nowhere))
+      (println (resolve 'inc) (resolve 'evm-f) (resolve 'when) (resolve 'evm-nowhere) (resolve 'nope/x))
+    expected: |
+      :has :lacks :f :no-g
+      :x3 :f4 :new :yes
+      [3 ab [1 2]] 6 1 :caught true false
+      #'clojure.core/inc #'lit/evm-f #'clojure.core/when nil nil
+  - name: eval-and-resolve-of-a-computed-symbol-refuse-at-run-time
+    # A compiled program carries no lowering, so eval and resolve of a computed symbol
+    # refuse when the program runs. The oracle prints 3 and #'clojure.core/inc.
+    source: |
+      (println (try (eval '(+ 1 2)) (catch UnsupportedOperationException e (ex-message e))))
+      (println (let [s 'inc] (try (resolve s) (catch UnsupportedOperationException e (ex-message e)))))
+    expected: |
+      eval is not supported at run time: only a macro body's eval runs, while the program lowers
+      resolve of a computed symbol is not supported at run time: vars exist only while the program lowers
   - name: a-macro-argument-holding-a-regex-literal-expands
     # A macro argument travels quoted into the expander and its answer reads back as a
     # datum: a regex literal answers its pattern, which reads back as the literal (the

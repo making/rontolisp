@@ -196,6 +196,14 @@
  form（`if`、`do`、`let*`、`new` など）、リーダーが綴る先頭（`deref`、
  `syntax-quote`、`ns`、`in-ns`）の `defmacro` は名前を挙げて拒否されます。oracle はこれを
  受け付けます（special form なら呼び出し位置では無視します）。
+- `eval` と、計算で得たシンボルの `resolve` は、プログラムの lower 中（マクロ本体と
+ そこから呼ぶもの）でだけ動きます。実行時は `UnsupportedOperationException` を投げ、
+ oracle は評価・解決します。`resolve` は、このフロントエンドにない `clojure.core` の
+ var（oracle は var）、レコードや型の名前（oracle はクラス）、lower に組み込まれた
+ 名前空間（`clojure.string`）の var に対して `nil` を返します。quote したシンボルは
+ 呼び出しが lower される名前空間で解決され（oracle は呼び出しの実行時の `*ns*` を
+ 読みます）、呼び出しより下の定義にも解決されます。`eval` したフォームが作る定義は
+ lower 中にだけ存在します。
 - `#(...)` はソース、クオートの下、`read-string`/`read` のいずれでもオラクルと同じ
   `(fn* [p1__N# ...] (body))` と読まれますが、N はトップレベルのフォーム（読む datum）
   ごとに 1 から数え直します。オラクルのカウンタはプロセス全体で進むため、引数名が異なり、

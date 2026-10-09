@@ -1063,6 +1063,62 @@ final class ClojureMacroLowering {
 	}
 
 	/**
+	 * The run-time library's {@code eval}: refused there, the lowering's at macro time.
+	 */
+	static final LispSymbol EVAL = new LispSymbol("RONTOLISP::%CLOJURE-EVAL");
+
+	/**
+	 * The run-time library's {@code resolve} of a computed symbol: refused there, the
+	 * lowering's at macro time.
+	 */
+	static final LispSymbol RESOLVE = new LispSymbol("RONTOLISP::%CLOJURE-RESOLVE");
+
+	/**
+	 * {@code (eval form)}: a call of the run-time library's {@code eval}, which refuses
+	 * in the program and lowers its argument in the macro-time environment
+	 * ({@link #evalLowering}), so a macro body, and every helper it calls, evaluates a
+	 * form while it expands.
+	 */
+	static LispVal evalCall(ClojureLowering ctx, List<LispVal> items) {
+		ClojureLowerUtil.isTrue(items.size() == 2,
+				"Wrong number of args (" + (items.size() - 1) + ") passed to: clojure.core/eval");
+		return ClojureLowerUtil.list(EVAL, ctx.lower(items.get(1)));
+	}
+
+	/** {@code eval} as a value. */
+	static LispVal evalValue() {
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), EVAL);
+	}
+
+	/**
+	 * The lowering's half of the macro-time {@code eval} and {@code resolve}, handed to
+	 * the macro evaluator when a lowering starts: the value decodes back to its datum
+	 * ({@link #decodeDatum}) and lowers in the namespace of the expansion, from a clean
+	 * cursor.
+	 * @param ctx the lowering
+	 * @return its half
+	 */
+	static ClojureMacroEvaluator.Lowering evalLowering(ClojureLowering ctx) {
+		return new ClojureMacroEvaluator.Lowering() {
+
+			@Override
+			public LispVal evalForm(LispVal value) {
+				return ctx.lowerDetached(decodeDatum(ctx, value));
+			}
+
+			@Override
+			public LispVal resolveForm(LispVal value) {
+				LispVal datum = decodeDatum(ctx, value);
+				if (!(datum instanceof LispSymbol symbol) || symbol.name().startsWith(":")) {
+					throw new LispReadException("resolve takes a symbol: " + datum.print());
+				}
+				return ClojureVarLowering.resolved(ctx, symbol.name());
+			}
+
+		};
+	}
+
+	/**
 	 * {@code macroexpand-1} / {@code macroexpand} as a value: a one-argument lambda over
 	 * the call site's macro scope.
 	 */

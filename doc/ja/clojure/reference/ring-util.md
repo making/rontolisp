@@ -70,12 +70,13 @@ Hello, Jürgen!
 ところで `ring.util.response` に読み込むので、名前を挙げないプログラムはそのコードを
 持ちません。
 
-```clojure
-(require '[ring.util.response :as response])
-(:headers (response/file-response "a.txt" {:root "www"}))
-; => {"Content-Length" "11", "Last-Modified" "Tue, 02 Jan 2024 03:04:05 GMT"}
-(response/file-response "../secret.txt" {:root "www"})
-; => nil
+```console
+clojure> (require '[ring.util.response :as response])
+nil
+clojure> (:headers (response/file-response "a.txt" {:root "www"}))
+{"Content-Length" "11", "Last-Modified" "Tue, 02 Jan 2024 03:04:05 GMT"}
+clojure> (response/file-response "../secret.txt" {:root "www"})
+nil
 ```
 
 ## 組み込みでないもの

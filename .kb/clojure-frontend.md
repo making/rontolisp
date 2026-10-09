@@ -190,7 +190,7 @@ answered `2 5 3` before).
 | Java interop | "Java interop" | interpreter and JVM only |
 | `quote` | `quote` with symbols mangled | vectors, maps and sets inside are rebuilt (a quoted list holding one becomes a `list` construction) |
 | `comment` | `nil` | |
-| refused by name | | `future` `delay` `force` `promise` `deliver` (no thread pool, memo cell or rendezvous); transients (`transient` ... `disj!`); `definterface` `gen-class` `gen-interface`; `use-fixtures`; `add-watch`/`remove-watch`; `load-string` `eval` (no compiler at run time) |
+| refused by name | | `future` `delay` `force` `promise` `deliver` (no thread pool, memo cell or rendezvous); transients (`transient` ... `disj!`); `definterface` `gen-class` `gen-interface`; `use-fixtures`; `add-watch`/`remove-watch`; `load-string` (no compiler at run time); `eval` and `resolve` of a computed symbol at run time ("Macros") |
 
 ## Deviations
 
@@ -2123,6 +2123,35 @@ the file), `default-streams-impl` a map. Until then only `reader` resolved, as a
   `#aRedefinitionReadsTheRootItSupersedesAtMacroTime`,
   `ClojureProjectNamespacesTest#aRequiredNamespacesMacrosCallItsFunctions` (all four),
   `ClojureSessionTest#aMacroOfALaterBufferCallsWhatAnEarlierOneDefined`.
+- **`eval` and `resolve` run while the program lowers** (e87, 2026-10-09; the
+  `compile-if` of data.priority-map 1.2.0 and instaparse 1.5.0, `(if (eval test) then else)`
+  over `(resolve 'clojure.core/hash-unordered-coll)`). `eval` lowers to
+  `%clojure-eval`, `resolve` of anything but a quoted symbol to `%clojure-resolve`; in
+  `clojure.lisp` both refuse (`UnsupportedOperationException`), and `ClojureMacroTime`
+  redefines both in the macro-time evaluator as calls back into the lowering
+  (`ClojureMacroEvaluator.Lowering`, handed over by `setMacroEvaluator` at each pass and
+  session): the value decodes (`decodeDatum`) and lowers through
+  `ClojureLowering.lowerDetached` -- the current namespace, a clean `Cursor` (no local,
+  recur target, `try`, syntax-quote, dispatch fn or proxy method of the form being
+  expanded; `loadFile` starts from the same) -- then evaluates there, a lowering error
+  becoming an ordinary error the body may catch. So a helper `defn` a body calls evals
+  too, and a run-time `eval` compiles and refuses when it runs (it was `unknown name`).
+  `resolve` of a quoted symbol lowers in place (`ClojureVarLowering.resolved`): what
+  `#'name` lowers to (program var, core macro, core var with a value here), the class a
+  class name loads, else nil -- a core var the subset lacks (`hash-unordered-coll`,
+  `mix-collection-hash`), a record name (no class value here) and a lowering-built
+  namespace's var (`clojure.string/join`) included, so `compile-if` picks the branch that
+  lowers. Measured on clj 1.12.6: `*clojure-version*` reads `{:major 1 :minor 12 ...}`
+  at expansion time and `Class/forName` runs on the macro-time JVM, so both agree with the
+  oracle. Deviations: resolution in the lowering namespace (the oracle reads `*ns*` when
+  the call runs) and to a pre-scanned definition below the call site; the `used*` flags
+  an eval'd form sets stay set for the program; a `def` an eval'd form makes is the
+  macro-time environment's only (the program reads the var unbound; the oracle's process
+  keeps it). Pins: clojure-spec `a-macro-body-evaluates-a-form-while-it-expands`
+  (oracle-identical), `eval-and-resolve-of-a-computed-symbol-refuse-at-run-time` (four
+  backends), `ClojureLoweringTest#aMacroBodysEvalChoosesTheCodeThisFrontEndLowers`,
+  `#aMacroBodysEvalSeesNoLocalOfTheCallSite`, `#evalAndResolveRefuseWhatTheyCannotTake`,
+  `ClojureSessionTest#aMacroOfALaterBufferEvaluatesOverWhatAnEarlierOneDefined`.
 - **A program macro wins over every lowering row of its name from its definition on;
   above it the core meaning holds**, like the oracle's form-by-form compile. `lowerInner`
   tries the macro before any row, except for `isReservedHead` (the oracle's special forms
@@ -2718,6 +2747,11 @@ interfaces behind an arm family its row's store makes (`ClojureArms`, `COLLECTIO
   `compile-if` taken, `hasheq` as `(count this)`) it runs whole on the interpreter, the JVM and
   wasm. instaparse 1.5.0 now stops at `auto_flatten_seq.clj:13:15: unknown name: eval` (the
   same macro shape) and needs `hash`/`mix-collection-hash` past it.
+  2026-10-09, with `eval` at expansion time ("Macros"): data.priority-map 1.2.0 loads
+  verbatim (`hasheq` takes the `.hashCode` fallback) and `peek`/`pop`/`assoc`/`dissoc`/`seq`/
+  `rseq`/`=`/`into`/`subseq` print oracle-identical on all four backends; instaparse 1.5.0
+  stops at `auto_flatten_seq.clj:58:12: get-in takes a vector of keys, not |index|` (a
+  computed key path, e98).
 - Pins: clojure-spec `a-collection-type-conjs-empties-counts-and-compares-through-its-methods`,
   `a-map-type-assocs-dissocs-reads-and-prints-as-a-map`,
   `a-set-type-disjs-contains-and-prints-as-a-set`,
@@ -3277,7 +3311,8 @@ the oracle's `MapExpr`/`SetExpr`; measured on `clj` 1.12.6, 2026-10-08):
   forms are empty sequentials), like the oracle.
 - Pinned by clojure-spec `a-literal-refuses-keys-equal-once-evaluated` (oracle-identical)
   and `ClojureLoweringTest.aLiteralOfConstantKeysEqualOnceEvaluatedIsRefusedWhenLowered`.
-`eval`/`load-string` stay unknown names: no compiler runs at run time.
+`load-string` stays an unknown name and `eval` refuses at run time ("Macros"): no compiler
+runs at run time.
 
 **Oracle-checked 2026-10-08 (clj 1.12.6), shared by `read-string`/`read` and clojure.edn:**
 - Metadata attaches (`%clojure-rd-meta`, the oracle's MetaReader): a keyword `{k true}`, a
@@ -4014,6 +4049,20 @@ oracle's compiler exception does). `class` of `*e` needs the exception reader, w
 emits like a catching file's (`needsExceptionReader`). Pinned by
 `PlaygroundReplTest#aClojureSessionKeepsItsLastResultsAndItsLastExceptionInTheHistoryVars`,
 `ClojureSessionTest#anInputRecordsItsValueAndAnNsInputNil`.
+
+The REPL refers (2026-10-09): `ClojureSession` refers `clojure.main/repl-requires`' names into
+`user` (`ClojureLowering.referReplRequires`, the table `ClojureBuiltinNamespaces.REPL_REQUIRES`)
+and loads nothing; `lookupVar` of one, not shadowed by a local, loads its namespace like a
+startup namespace (`loadReplRefer` -> `preload`), and in a session a qualified name reaches a
+shipped REPL namespace the same way (`projectNamespaceOf`). Refused by name there: the
+`replLeftOut` vars and every var of `clojure.java.javadoc`/`clojure.repl.deps`
+(`LANGUAGE_NOT_SHIPPED`, also their `require`'s refusal). First use, not eager: measured
+2026-10-09 (interpreter, one JVM per case, first input `1`): cold 1.34-1.47 s, with
+`clojure.repl` + `clojure.pprint` required first 2.21-2.31 s; warm ~120-135 ms vs ~415-490 ms.
+A definition of the name replaces the refer silently (the oracle throws `already refers to`
+for a non-core refer; the file lowering does the same). Pinned by
+`ClojureSessionTest#userRefersWhatTheOraclesReplRequires*`, `#aReplRefer*`,
+`PlaygroundReplTest#aClojureSessionRefersWhatTheOraclesReplRequiresAndAFileNone`.
 
 The echo of a top-level `def`/`defn`/`defn-`/`defmacro`/`defmulti`/`defonce`/`defstruct` is the
 var it defined (`#'user/f`, `#'foo/x`; `ClojureLowering.echoingTopLevelsOf`, appended as the

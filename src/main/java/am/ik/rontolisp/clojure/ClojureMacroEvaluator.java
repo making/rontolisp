@@ -44,4 +44,38 @@ public interface ClojureMacroEvaluator {
 	default void defineLazy(LispSymbol var, LispVal value, boolean special, boolean once) {
 	}
 
+	/**
+	 * Hands over who lowers what {@code eval} and {@code resolve} of a computed symbol
+	 * run in this environment: the lowering driving the evaluator, which hands itself
+	 * over when it starts (each pass of a program, a session once). The run-time library
+	 * refuses both; this environment answers them through the lowering instead.
+	 * @param lowering the lowering
+	 */
+	default void lowerThrough(Lowering lowering) {
+	}
+
+	/**
+	 * The lowering's half of the macro-time {@code eval} and {@code resolve}: each takes
+	 * a value as the run-time library holds it and answers the core form to evaluate.
+	 */
+	interface Lowering {
+
+		/**
+		 * The form {@code (eval value)} evaluates: the value as a datum, lowered in the
+		 * current namespace with no local of the form being lowered in reach.
+		 * @param value the form, as a quoted datum answers it
+		 * @return the lowered form
+		 */
+		LispVal evalForm(LispVal value);
+
+		/**
+		 * The form {@code (resolve value)} evaluates: what {@code resolve} of the symbol
+		 * quoted lowers to.
+		 * @param value the symbol, as a quoted datum answers it
+		 * @return the lowered form
+		 */
+		LispVal resolveForm(LispVal value);
+
+	}
+
 }

@@ -19,6 +19,16 @@ alone; a refusal while the input is read or lowered is no exception and records 
 `*repl*` is `true` and bound, `*file*` is `"NO_SOURCE_PATH"` and `*source-path*`
 `"NO_SOURCE_FILE"`.
 
+Like the oracle's REPL, `user` refers `doc` and `pst` from `clojure.repl` and `pp` and `pprint`
+from `clojure.pprint`, and a qualified name reaches either namespace without a `require`. A
+namespace loads where an input first names one of its vars, so a session that names none
+starts without it. The other names Clojure's REPL refers are refused by name when an input
+names them: `source`, `dir`, `apropos` and `find-doc` (see
+[clojure.repl](reference/clojure-repl.md)), `javadoc` (`clojure.java.javadoc` is not built in)
+and `add-libs`, `add-lib` and `sync-deps` (`clojure.repl.deps` is not built in; a session's
+libraries are the project's `deps.edn`). A local or a definition of the name shadows the refer;
+another namespace refers none of them.
+
 ```console
 $ rontolisp --source-language clojure
 clojure> (defn twice [x] (* 2 x))
