@@ -57,6 +57,18 @@ return a `java:reify` or `java:proxy` object where an interface is expected. A v
 does not convert is an error, for example `java:reify: cannot return "x" as int from
 java.util.function.IntSupplier.getAsInt`.
 
+Java's false reaches a function as `nil`. Ending the form in `:java-false`, after the last
+function, hands it `|false|` instead (the guide's [Java's false
+back](../../guides/java-interop.md#javas-false-back-java-false)):
+
+```lisp
+(let ((seen nil))
+  (java:call (java:reify "java.util.function.Consumer" "accept" (lambda (x) (push x seen)) :java-false)
+             "accept" '|false|)
+  seen)
+; => (|false|)
+```
+
 ## In a compiled program
 
 A `java:reify` whose interface and method names are literal strings, and whose interface

@@ -693,6 +693,29 @@ class JavaInteropTest {
 			.isEqualTo(JavaInteropPrograms.FALSE_AND_TABLE_OUTPUT);
 	}
 
+	// Mirrors JvmJavaInteropCompilerTest#aCallEndingInJavaFalseAnswersJavasFalseAsFalse.
+	// Before, measured 2026-10-08: every value Java answers false was nil.
+	@Test
+	void aCallEndingInJavaFalseAnswersJavasFalseAsFalse() {
+		assertThat(output(JavaInteropPrograms.JAVA_FALSE_PROGRAM)).isEqualTo(JavaInteropPrograms.JAVA_FALSE_OUTPUT);
+	}
+
+	// Mirrors
+	// JvmJavaInteropCompilerTest#anImplementationMadeAtJavaFalseIsHandedFalseAndReadsAComparison.
+	// Before, measured 2026-10-08: each function was handed nil, and a Comparator's
+	// boolean, float or ratio answer was "cannot return ... as int".
+	@Test
+	void anImplementationMadeAtJavaFalseIsHandedFalseAndReadsAComparison() {
+		assertThat(output(JavaImplementationPrograms.JAVA_FALSE))
+			.isEqualTo(JavaImplementationPrograms.JAVA_FALSE_OUTPUT);
+	}
+
+	// Mirrors JvmJavaInteropCompilerTest#aHandleIsItsTextToJavaAndItsValueBack.
+	@Test
+	void aHandleIsItsTextToJavaAndItsValueBack() {
+		assertThat(output(JavaInteropPrograms.JAVA_HANDLE_PROGRAM)).isEqualTo(JavaInteropPrograms.JAVA_HANDLE_OUTPUT);
+	}
+
 	@Test
 	void proxyOnNonInterfaceSignals() {
 		assertThatThrownBy(() -> eval("(java:proxy \"java.lang.String\" (lambda (m) nil))"))

@@ -17,7 +17,9 @@ import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.compiler.JavaImplementation;
 import am.ik.rontolisp.compiler.JavaImplementations;
+import am.ik.rontolisp.compiler.JavaMarkers;
 import am.ik.rontolisp.compiler.JavaSite;
+import am.ik.rontolisp.compiler.JavaSiteResolver;
 import org.jspecify.annotations.Nullable;
 
 /**
@@ -44,30 +46,59 @@ final class JvmJavaInteropCompiler {
 	}
 
 	/**
-	 * Returns whether the given {@code java} package member is one of the seven interop
+	 * Returns whether the given {@code java} package member is one of the eight interop
 	 * functions this compiler handles.
 	 */
 	static boolean handles(String member) {
 		return LispNames.JAVA_NEW.equals(member) || LispNames.JAVA_CALL.equals(member)
 				|| LispNames.JAVA_STATIC.equals(member) || LispNames.JAVA_FIELD.equals(member)
 				|| LispNames.JAVA_PROXY.equals(member) || LispNames.JAVA_REIFY.equals(member)
-				|| LispNames.JAVA_SUBCLASS.equals(member);
+				|| LispNames.JAVA_SUBCLASS.equals(member) || LispNames.JAVA_HANDLE.equals(member);
 	}
 
 	static void compile(String member, LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
 		List<LispVal> args = cons.toList();
+		if (LispNames.JAVA_HANDLE.equals(member)) {
+			// (java:handle value "text" hash "order"): the object of the generated handle
+			// class, made with no reflection (eval/JavaInterop.handle on the
+			// interpreter);
+			// an absent hash or order is null beside the count of the arguments given.
+			requireArity(args.size() >= 3 && args.size() <= 5,
+					"java:handle expects (java:handle value \"text\" [hash [\"order\"]])");
+			JvmJavaSites sites = Objects.requireNonNull(ctx.javaSites, "the java: sites were not prepared");
+			JvmExprCompiler.compileExpr(args.get(1), ctx, className);
+			emitMaterialize(ctx);
+			for (int i = 2; i <= 4; i++) {
+				if (i < args.size()) {
+					JvmExprCompiler.compileExpr(args.get(i), ctx, className);
+				}
+				else {
+					ctx.body.aconst_null();
+				}
+			}
+			JvmEmitHelper.emitIntConst(ctx, args.size() - 1);
+			ctx.body.invokestatic(sites.direct().handleHelper());
+			return;
+		}
+		// The markers the form ends in (compiler/JavaMarkers) are no arguments.
+		int marked = switch (member) {
+			case LispNames.JAVA_PROXY, LispNames.JAVA_REIFY, LispNames.JAVA_SUBCLASS ->
+				JavaImplementations.markerCount(args);
+			case LispNames.JAVA_NEW -> JavaMarkers.count(args, 2);
+			default -> JavaMarkers.count(args, 3);
+		};
+		int size = args.size() - marked;
 		switch (member) {
-			case LispNames.JAVA_NEW -> requireArity(args.size() >= 2, "java:new expects (java:new \"class\" args...)");
+			case LispNames.JAVA_NEW -> requireArity(size >= 2, "java:new expects (java:new \"class\" args...)");
 			case LispNames.JAVA_CALL ->
-				requireArity(args.size() >= 3, "java:call expects (java:call object \"method\" args...)");
+				requireArity(size >= 3, "java:call expects (java:call object \"method\" args...)");
 			case LispNames.JAVA_STATIC ->
-				requireArity(args.size() >= 3, "java:static expects (java:static \"class\" \"method\" args...)");
+				requireArity(size >= 3, "java:static expects (java:static \"class\" \"method\" args...)");
 			case LispNames.JAVA_FIELD ->
-				requireArity(args.size() == 3, "java:field expects (java:field class-or-object \"field\")");
-			case LispNames.JAVA_PROXY -> requireArity(args.size() >= 3, JavaImplementations.PROXY_USAGE);
-			case LispNames.JAVA_REIFY ->
-				requireArity(args.size() >= 2 && args.size() % 2 == 0, JavaImplementations.REIFY_USAGE);
-			case LispNames.JAVA_SUBCLASS -> requireArity(args.size() >= 5, JavaImplementations.SUBCLASS_USAGE);
+				requireArity(size == 3, "java:field expects (java:field class-or-object \"field\")");
+			case LispNames.JAVA_PROXY -> requireArity(size >= 3, JavaImplementations.PROXY_USAGE);
+			case LispNames.JAVA_REIFY -> requireArity(size >= 2 && size % 2 == 0, JavaImplementations.REIFY_USAGE);
+			case LispNames.JAVA_SUBCLASS -> requireArity(size >= 5, JavaImplementations.SUBCLASS_USAGE);
 			default -> throw new UnsupportedOperationException("Cannot compile: java:" + member);
 		}
 		JvmJavaSites sites = Objects.requireNonNull(ctx.javaSites, "the java: sites were not prepared");
@@ -87,10 +118,10 @@ final class JvmJavaInteropCompiler {
 			JavaImplementation implementation = sites.implementation(cons);
 			if (implementation.resolved()) {
 				if (implementation.isSubclass()) {
-					compileSubclass(implementation, args, ctx, className);
+					compileSubclass(implementation, args.subList(0, size), ctx, className);
 				}
 				else {
-					compileImplementation(implementation, args, ctx, className);
+					compileImplementation(implementation, args.subList(0, size), ctx, className);
 				}
 				return;
 			}
@@ -142,8 +173,11 @@ final class JvmJavaInteropCompiler {
 				emitBridgeCall(ctx, ops, "static");
 			}
 			case LispNames.JAVA_FIELD -> {
+				// The object or class and the field name, then the markers the form ends
+				// in (the bridge reads :java-false off them).
 				JvmExprCompiler.compileExpr(args.get(1), ctx, className);
 				JvmExprCompiler.compileExpr(args.get(2), ctx, className);
+				compileRestArray(args, 3, ctx, className);
 				emitBridgeCall(ctx, ops, "field");
 			}
 			case LispNames.JAVA_REIFY -> {
@@ -207,10 +241,10 @@ final class JvmJavaInteropCompiler {
 	private static void compileSubclass(JavaImplementation implementation, List<LispVal> args, JvmLispCompiler.Ctx ctx,
 			String className) {
 		JvmJavaSites sites = Objects.requireNonNull(ctx.javaSites);
-		// A :functional marker ends the form after the callable: it is no value.
-		boolean functional = JavaImplementations.subclassFunctional(args);
-		int callable = args.size() - (functional ? 2 : 1);
-		MethodRefEntry construct = sites.implementations().subclassFactory(implementation, callable - 4, functional);
+		// ARGS end in the callable (the markers after it set aside: the implementation
+		// carries them).
+		int callable = args.size() - 1;
+		MethodRefEntry construct = sites.implementations().subclassFactory(implementation, callable - 4);
 		JvmExprCompiler.compileExpr(args.get(callable), ctx, className);
 		emitMaterialize(ctx);
 		JvmEmitHelper.emitIntConst(ctx, callable - 4);
@@ -238,8 +272,8 @@ final class JvmJavaInteropCompiler {
 		// the method sees it, as the bridge renders every argument).
 		List<LispVal> values;
 		int firstArgument;
-		// A :functional marker ends the form after the arguments: it is no value.
-		int end = site.functional() ? args.size() - 1 : args.size();
+		// The markers the form ends in are no values.
+		int end = args.size() - JavaMarkers.count(args, JavaSiteResolver.firstArgument(site.operator()));
 		switch (site.operator()) {
 			case CALL -> {
 				values = new java.util.ArrayList<>();

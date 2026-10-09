@@ -771,12 +771,14 @@ final class ClojureBindingLowering {
 
 	/**
 	 * A {@code let} binding's host class, when its lowered init is a construction literal
-	 * of a loadable class: the FQN the instance-call wrap consults. Anything else forgets
-	 * the name, so rebinding the name hides the old class.
+	 * of a loadable class: the FQN the instance-call wrap consults; and whether it holds
+	 * a plain value at all -- a construction, a literal, a fn form
+	 * ({@code ClojureInteropLowering.isPlainForm}) -- which a host call hands Java as it
+	 * is. Anything else forgets the name, so rebinding the name hides the old record.
 	 */
 	static void noteHostClass(ClojureLowering ctx, String name, LispVal init) {
 		String fqn = ClojureInteropLowering.constructedClass(init);
-		if (fqn == null) {
+		if (fqn == null && !ClojureInteropLowering.isPlainForm(init)) {
 			ctx.hostClasses.remove(ctx.localSym(name).name());
 		}
 		else {

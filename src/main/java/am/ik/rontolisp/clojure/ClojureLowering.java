@@ -1231,13 +1231,15 @@ public final class ClojureLowering {
 	}
 
 	/**
-	 * A {@code let} local's host class, inferred from a construction-literal init: the
-	 * FQN, the plain name (for the shadow walk) and the scope depth that owns it. Only
-	 * {@code let} records -- its bindings never rebind, unlike {@code loop} targets;
-	 * every other binder hides entries through the shadow walk in {@link #hostClassOf}
-	 * instead of recording.
+	 * A {@code let} local bound to a plain value, a construction literal's or another
+	 * value no Clojure value Java lacks can be (a literal, a fn form:
+	 * {@code ClojureInteropLowering.isPlainForm}): the construction's FQN ({@code null}
+	 * for any other), the plain name (for the shadow walk) and the scope depth that owns
+	 * it. Only {@code let} records -- its bindings never rebind, unlike {@code loop}
+	 * targets; every other binder hides entries through the shadow walk in
+	 * {@code ClojureInteropLowering.hostClassOf} instead of recording.
 	 */
-	record HostClass(String fqn, String name, int depth) {
+	record HostClass(@Nullable String fqn, String name, int depth) {
 	}
 
 	/**
@@ -4718,10 +4720,9 @@ public final class ClojureLowering {
 
 	/**
 	 * What the host class says about a static member: a static field, the fixed arities
-	 * of its non-variadic static methods, the subset answering a boolean, and whether a
-	 * variadic one exists.
+	 * of its non-variadic static methods, and whether a variadic one exists.
 	 */
-	record StaticMember(boolean field, List<Integer> arities, Set<Integer> booleanArities, boolean variadic) {
+	record StaticMember(boolean field, List<Integer> arities, boolean variadic) {
 	}
 
 	/** The Common Lisp symbol name of a Clojure identifier: always behind the prefix. */

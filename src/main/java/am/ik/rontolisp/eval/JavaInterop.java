@@ -45,9 +45,9 @@ import am.ik.rontolisp.compiler.JavaImplementation;
 import am.ik.rontolisp.compiler.JavaImplementationType;
 import am.ik.rontolisp.compiler.JavaImplementations;
 import am.ik.rontolisp.compiler.JavaKind;
+import am.ik.rontolisp.compiler.JavaMarkers;
 import am.ik.rontolisp.compiler.JavaOverloads;
 import am.ik.rontolisp.compiler.JavaSite;
-import am.ik.rontolisp.compiler.JavaSiteResolver;
 import am.ik.rontolisp.compiler.JavaType;
 import am.ik.rontolisp.compiler.ReflectiveJavaClasses;
 
@@ -94,20 +94,21 @@ final class JavaInterop {
 		ReflectiveJavaClasses classes();
 
 		/**
-		 * Whether the call ends in {@code :functional}: a function argument converted to
-		 * an interface implements it by its arguments
-		 * ({@link JavaImplementations#functional}), not as a {@code java:proxy}.
-		 * @return whether functions convert so
+		 * The markers the call ends in ({@link JavaMarkers}): with {@code :functional} a
+		 * function argument converted to an interface implements it by its arguments
+		 * ({@link JavaImplementations#functional}), not as a {@code java:proxy}; with
+		 * {@code :java-false} Java's {@code false} comes back as {@code |false|}.
+		 * @return the markers
 		 */
-		default boolean functional() {
-			return false;
+		default JavaMarkers markers() {
+			return JavaMarkers.NONE;
 		}
 
 	}
 
-	// The caller of a call ending in :functional.
-	static Caller functional(Caller caller) {
-		if (caller.functional()) {
+	// The caller of a call ending in these markers.
+	static Caller withMarkers(Caller caller, JavaMarkers markers) {
+		if (caller.markers().equals(markers)) {
 			return caller;
 		}
 		return new Caller() {
@@ -123,17 +124,17 @@ final class JavaInterop {
 			}
 
 			@Override
-			public boolean functional() {
-				return true;
+			public JavaMarkers markers() {
+				return markers;
 			}
 
 		};
 	}
 
-	// Whether evaluated arguments end in the :functional marker
-	// (compiler/JavaSiteResolver.FUNCTIONAL).
-	private static boolean endsFunctional(List<LispVal> args) {
-		return !args.isEmpty() && JavaSiteResolver.isFunctionalMarker(args.get(args.size() - 1));
+	// How many evaluated arguments ending the list are markers
+	// (compiler/JavaMarkers): the arguments a member takes are the ones before.
+	private static int markerCount(List<LispVal> args) {
+		return JavaMarkers.count(args, 0);
 	}
 
 	private static final ReflectiveJavaClasses CLASSES = ReflectiveJavaClasses.instance();
@@ -207,8 +208,10 @@ final class JavaInterop {
 	}
 
 	static LispVal newInstance(String classDesignator, List<LispVal> rawArgs, Caller caller) {
-		if (endsFunctional(rawArgs)) {
-			return newInstance(classDesignator, rawArgs.subList(0, rawArgs.size() - 1), functional(caller));
+		int markers = markerCount(rawArgs);
+		if (markers > 0) {
+			return newInstance(classDesignator, rawArgs.subList(0, rawArgs.size() - markers),
+					withMarkers(caller, JavaMarkers.of(rawArgs, 0)));
 		}
 		List<LispVal> args = hostArguments(rawArgs, caller);
 		boolean tagged = isTagged(classDesignator);
@@ -225,7 +228,7 @@ final class JavaInterop {
 		}
 		try {
 			Constructor<?> constructor = (Constructor<?>) executable(overload);
-			return unmarshal(constructor.newInstance(marshalArguments(overload, args, caller)));
+			return unmarshal(constructor.newInstance(marshalArguments(overload, args, caller)), caller);
 		}
 		catch (ReflectiveOperationException ex) {
 			throw fail("constructing " + name, ex);
@@ -250,8 +253,10 @@ final class JavaInterop {
 	// so its choices are remembered apart from an instance call's of the same name.
 	private static LispVal invoke(ReflectiveJavaClasses.Type type, @Nullable Object receiver, String methodName,
 			List<LispVal> rawArgs, Caller caller) {
-		if (endsFunctional(rawArgs)) {
-			return invoke(type, receiver, methodName, rawArgs.subList(0, rawArgs.size() - 1), functional(caller));
+		int markers = markerCount(rawArgs);
+		if (markers > 0) {
+			return invoke(type, receiver, methodName, rawArgs.subList(0, rawArgs.size() - markers),
+					withMarkers(caller, JavaMarkers.of(rawArgs, 0)));
 		}
 		List<LispVal> args = hostArguments(rawArgs, caller);
 		boolean statics = receiver == null;
@@ -276,7 +281,7 @@ final class JavaInterop {
 		}
 		try {
 			Method method = (Method) executable(overload);
-			return unmarshal(method.invoke(receiver, marshalArguments(overload, args, caller)));
+			return unmarshal(method.invoke(receiver, marshalArguments(overload, args, caller)), caller);
 		}
 		catch (ReflectiveOperationException ex) {
 			throw fail("calling " + type.name() + "." + overload.executable().name(), ex);
@@ -452,11 +457,11 @@ final class JavaInterop {
 							+ am.ik.rontolisp.compiler.JavaSiteResolver.notStatic(type.name(), fieldName));
 				}
 				Field field = publicField(type, fieldName);
-				return unmarshal(field.get(null));
+				return unmarshal(field.get(null), caller);
 			}
 			if (classOrObject instanceof LispJavaObject obj) {
 				Field field = publicField(ReflectiveJavaClasses.of(obj.ref().getClass()), fieldName);
-				return unmarshal(field.get(obj.ref()));
+				return unmarshal(field.get(obj.ref()), caller);
 			}
 			throw new LispEvalException(
 					"java:field expects a class-name string or a java object, got " + classOrObject.print());
@@ -506,7 +511,7 @@ final class JavaInterop {
 		JavaField resolvedField = site.field();
 		if (resolvedField != null) {
 			try {
-				return unmarshal(((ReflectiveJavaClasses.FieldMember) resolvedField).field().get(target));
+				return unmarshal(((ReflectiveJavaClasses.FieldMember) resolvedField).field().get(target), caller);
 			}
 			catch (ReflectiveOperationException ex) {
 				throw fail("reading field " + resolvedField.name(), ex);
@@ -541,9 +546,9 @@ final class JavaInterop {
 		try {
 			java.lang.reflect.Executable reflected = ((ReflectiveJavaClasses.Member) executable).executable();
 			if (reflected instanceof Constructor<?> constructor) {
-				return unmarshal(constructor.newInstance(javaArgs));
+				return unmarshal(constructor.newInstance(javaArgs), caller);
 			}
-			return unmarshal(((Method) reflected).invoke(target, javaArgs));
+			return unmarshal(((Method) reflected).invoke(target, javaArgs), caller);
 		}
 		catch (ReflectiveOperationException ex) {
 			throw fail(executable.isConstructor() ? "constructing " + className
@@ -651,9 +656,11 @@ final class JavaInterop {
 	// (compiler/JavaImplementations.subclass, which a compiled program's generated
 	// class declares).
 	static LispVal subclass(List<LispVal> args, Caller caller) {
-		if (args.size() > 4 && endsFunctional(args)) {
-			// A function constructor argument implements its interface by its arguments.
-			return subclass(args.subList(0, args.size() - 1), functional(caller));
+		int markers = JavaMarkers.count(args, 4);
+		if (markers > 0) {
+			// A function constructor argument implements its interface by its arguments
+			// (:functional); Java's false reaches the callable as |false| (:java-false).
+			return subclass(args.subList(0, args.size() - markers), withMarkers(caller, JavaMarkers.of(args, 4)));
 		}
 		if (args.size() < 4 || !(args.get(0) instanceof LispString superName)) {
 			throw new LispEvalException(JavaImplementations.SUBCLASS_USAGE);
@@ -714,7 +721,7 @@ final class JavaInterop {
 			Object[] withHandler = new Object[javaArgs.length + 1];
 			withHandler[0] = new SubclassHandler(dispatch, callable, caller);
 			System.arraycopy(javaArgs, 0, withHandler, 1, javaArgs.length);
-			return unmarshal(proxyConstructor.newInstance(withHandler));
+			return unmarshal(proxyConstructor.newInstance(withHandler), caller);
 		}
 		catch (ReflectiveOperationException ex) {
 			throw fail("constructing " + superName.value(), ex);
@@ -815,7 +822,7 @@ final class JavaInterop {
 				callArgs.add(new LispJavaObject(self));
 				callArgs.add(new LispString(implemented.name()));
 				for (Object argument : methodArgs) {
-					callArgs.add(unmarshal(argument));
+					callArgs.add(unmarshal(argument, this.caller));
 				}
 				LispVal result = this.caller.call(this.callable, callArgs);
 				Class<?> ret = returnClass(implemented);
@@ -859,6 +866,11 @@ final class JavaInterop {
 	// implements the one method its designator names (compiler/JavaImplementations.reify
 	// -- the rule a compiled program's generated class follows).
 	static LispVal reify(List<LispVal> args, Caller caller) {
+		int markers = JavaMarkers.count(args, 1);
+		if (markers > 0) {
+			// Java's false reaches the functions as |false| (:java-false).
+			return reify(args.subList(0, args.size() - markers), withMarkers(caller, JavaMarkers.of(args, 1)));
+		}
 		if (args.isEmpty() || args.size() % 2 == 0 || !(args.get(0) instanceof LispString interfaceName)) {
 			throw new LispEvalException(JavaImplementations.REIFY_USAGE);
 		}
@@ -893,7 +905,7 @@ final class JavaInterop {
 	// at a call ending in :functional, the implementation calling the function with each
 	// abstract method's arguments (compiler/JavaImplementations.functional).
 	private static LispVal implementation(Class<?> iface, LispVal function, Caller caller) {
-		if (!caller.functional()) {
+		if (!caller.markers().functional()) {
 			return proxy(iface.getName(), function, caller);
 		}
 		List<Object> key = List.of(iface, FUNCTIONAL_KEY);
@@ -1040,10 +1052,25 @@ final class JavaInterop {
 
 		private final Caller caller;
 
+		// Whether the call that made the object ends in :java-false: Java's false
+		// reaches the functions as |false|.
+		private final boolean javaFalse;
+
+		// Whether compare is a Comparator's whose function may answer a boolean
+		// (compiler/JavaImplementation.readsComparison).
+		private final boolean comparison;
+
 		ImplementationHandler(Dispatch dispatch, List<LispVal> functions, Caller caller) {
 			this.dispatch = dispatch;
 			this.functions = List.copyOf(functions);
 			this.caller = caller;
+			this.javaFalse = caller.markers().javaFalse();
+			JavaImplementation marked = dispatch.implementation.withMarkers(caller.markers());
+			boolean reads = false;
+			for (JavaImplementation.Slot slot : marked.slots()) {
+				reads |= marked.readsComparison(slot);
+			}
+			this.comparison = reads;
 		}
 
 		@Override
@@ -1084,13 +1111,21 @@ final class JavaInterop {
 			}
 			if (methodArgs != null) {
 				for (Object a : methodArgs) {
-					callArgs.add(unmarshal(a));
+					callArgs.add(unmarshal(a, this.javaFalse));
 				}
 			}
-			LispVal result = this.caller.call(this.functions.get(index), callArgs);
+			LispVal function = this.functions.get(index);
+			LispVal result = this.caller.call(function, callArgs);
 			Class<?> ret = method.getReturnType();
 			if (ret == void.class) {
 				return null;
+			}
+			if (this.comparison && ret == int.class && "compare".equals(method.getName())
+					&& method.getParameterCount() == 2) {
+				Integer compared = comparison(function, callArgs, result);
+				if (compared != null) {
+					return compared;
+				}
 			}
 			@Nullable Object[] slot = new @Nullable Object[1];
 			ReflectiveJavaClasses.Type returnType = ReflectiveJavaClasses.of(ret);
@@ -1100,6 +1135,29 @@ final class JavaInterop {
 							.returnMismatchSuffix(proxy, this.dispatch.ifaceName, method.getName(), returnType));
 			}
 			return slot[0];
+		}
+
+		// What a function implementing Comparator.compare answers, read as Clojure's
+		// AFunction.compare reads it (compiler/JavaImplementation.readsComparison): t is
+		// -1; |false| is 1 when the function answers true -- neither nil nor |false| --
+		// for the arguments swapped, else 0; a real number its intValue (an integer's low
+		// 32 bits, a float or ratio truncated). Null for anything else, which the return
+		// conversion then refuses.
+		private @Nullable Integer comparison(LispVal function, List<LispVal> args, LispVal answer) {
+			return switch (answer) {
+				case LispTrue ignored -> -1;
+				case LispSymbol symbol when LispNames.JAVA_FALSE.equals(symbol.name()) -> {
+					LispVal reversed = this.caller.call(function, List.of(args.get(1), args.get(0)));
+					boolean truthy = !(reversed instanceof LispNil)
+							&& !(reversed instanceof LispSymbol s && LispNames.JAVA_FALSE.equals(s.name()));
+					yield truthy ? 1 : 0;
+				}
+				case LispInteger i -> (int) i.value();
+				case LispBigInteger b -> b.value().intValue();
+				case LispDouble d -> (int) d.value();
+				case am.ik.rontolisp.LispRatio r -> (int) r.doubleValue();
+				default -> null;
+			};
 		}
 
 	}
@@ -1337,9 +1395,61 @@ final class JavaInterop {
 	}
 
 	static LispVal unmarshal(@Nullable Object o) {
+		return unmarshal(o, false);
+	}
+
+	// What a call ending in the caller's markers answers for a Java value: Java's false
+	// as |false| after :java-false, nil otherwise.
+	private static LispVal unmarshal(@Nullable Object o, Caller caller) {
+		return unmarshal(o, caller.markers().javaFalse());
+	}
+
+	/**
+	 * {@code (java:handle value "text" hash "order")}: a Java object standing for the
+	 * value, which Java sees as the text and equals by it, whose {@code hashCode} is the
+	 * hash's low 32 bits (the text's own without one) and which orders by the order text
+	 * (the text without one) ({@link JavaHandle}); wherever Java hands it back,
+	 * {@code java:} answers the value.
+	 * @param args the value, the text, and optionally the hash and the order text
+	 * @return the handle, a host object
+	 */
+	static LispVal handle(List<LispVal> args) {
+		if (args.size() < 2 || args.size() > 4) {
+			throw new LispEvalException(HANDLE_USAGE);
+		}
+		if (!(args.get(1) instanceof LispString text)) {
+			throw new LispEvalException(HANDLE_USAGE + ", got " + args.get(1).print());
+		}
+		int hash = text.value().hashCode();
+		if (args.size() > 2) {
+			hash = switch (args.get(2)) {
+				case LispInteger i -> (int) i.value();
+				case LispBigInteger b -> b.value().intValue();
+				default -> throw new LispEvalException(HANDLE_USAGE + ", got " + args.get(2).print());
+			};
+		}
+		String order = text.value();
+		if (args.size() > 3) {
+			if (!(args.get(3) instanceof LispString given)) {
+				throw new LispEvalException(HANDLE_USAGE + ", got " + args.get(3).print());
+			}
+			order = given.value();
+		}
+		return new LispJavaObject(new JavaHandle(args.get(0), text.value(), hash, order));
+	}
+
+	// The error of a java:handle call that is no value, string, integer and string
+	// (mirrors codegen.jvm.JvmJavaDirectSites' _jhandle).
+	static final String HANDLE_USAGE = "java:handle expects (java:handle value \"text\" [hash [\"order\"]])";
+
+	// The Lisp value of a Java value: Java's false is nil, or |false| (javaFalse, a call
+	// ending in :java-false) -- an array's elements alike; a handle is the value it
+	// stands for (compiled: _junm / _junf).
+	static LispVal unmarshal(@Nullable Object o, boolean javaFalse) {
 		return switch (o) {
 			case null -> LispNil.INSTANCE;
-			case Boolean b -> b ? LispTrue.INSTANCE : LispNil.INSTANCE;
+			case JavaHandle handle -> handle.value();
+			case Boolean b -> b ? LispTrue.INSTANCE : javaFalse ? JAVA_FALSE : LispNil.INSTANCE;
 			case Integer i -> new LispInteger(i);
 			case Long l -> new LispInteger(l);
 			case Short s -> new LispInteger(s);
@@ -1352,16 +1462,19 @@ final class JavaInterop {
 			case BigInteger b -> b.bitLength() < 64 ? new LispInteger(b.longValue()) : new LispBigInteger(b);
 			case Character c -> new LispChar(c);
 			case String s -> new LispString(s);
-			default -> o.getClass().isArray() ? arrayToList(o) : new LispJavaObject(o);
+			default -> o.getClass().isArray() ? arrayToList(o, javaFalse) : new LispJavaObject(o);
 		};
 	}
 
+	// The symbol a call ending in :java-false answers Java's false as.
+	private static final LispSymbol JAVA_FALSE = new LispSymbol(LispNames.JAVA_FALSE);
+
 	// A Java array result (e.g. String.split) surfaces as a Lisp list, elements
 	// unmarshalled recursively; it round-trips back through marshalSequence.
-	private static LispVal arrayToList(Object array) {
+	private static LispVal arrayToList(Object array, boolean javaFalse) {
 		LispVal result = LispNil.INSTANCE;
 		for (int i = Array.getLength(array) - 1; i >= 0; i--) {
-			result = new LispCons(unmarshal(Array.get(array, i)), result);
+			result = new LispCons(unmarshal(Array.get(array, i), javaFalse), result);
 		}
 		return result;
 	}

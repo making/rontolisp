@@ -642,10 +642,8 @@ class ClojureInteropTest {
 
 	@Test
 	void hostBooleansPrintFalse() throws Exception {
-		// a host-object boolean answers T-or-false when the receiver's class is
-		// known (a construction literal, a let/if-let/when-let local bound to
-		// one, or a .. step's declared return), like the oracle; any other
-		// receiver keeps the shared java: unmarshal
+		// a host-object boolean answers T-or-false whatever the receiver (every host
+		// call ends in :java-false), like the oracle
 		assertBothEqual("(println (.contains (java.util.ArrayList. [1]) 2))", "false\n");
 		assertBothEqual("(println (.isEmpty (java.util.ArrayList. [1])))", "false\n");
 		assertBothEqual("(println (.isEmpty (java.util.ArrayList.)))", "true\n");
@@ -790,9 +788,9 @@ class ClojureInteropTest {
 	// 2026-10-08 on the interpreter and the JVM: "No matching method
 	// java.util.ArrayList.add with 1 argument(s)", "java:reify: cannot return |false| as
 	// boolean ...", "No matching constructor for java.util.HashMap", "java:call expects a
-	// java object as the first argument, got #<lambda>". Deviations: a map argument is a
+	// java object as the first argument, got #<lambda>". Deviation: a map argument is a
 	// fresh LinkedHashMap whose vector and map values are converted too (the oracle's
-	// toString spells them as Clojure's), and a host false read back is still nil.
+	// toString spells them as Clojure's).
 	@Test
 	void falseAMapAndAFnCrossTheJavaBoundaryAsTheOraclesDo() throws Exception {
 		assertBothEqual("(let [l (java.util.ArrayList.)] (.add l false) (.add l true) (.add l nil) (println (str l)))",
@@ -809,6 +807,137 @@ class ClojureInteropTest {
 		assertBothEqual("(let [l (java.util.ArrayList.)] (.add l {\"k\" false}) (println (str l)))", "[{k=false}]\n");
 		assertBothEqual("(println (.call (fn [] 5)) (.run (fn [] 5)) (.compare (fn [a b] (< a b)) 2 1))", "5 nil 1\n");
 		assertBothEqual("(let [t (proxy [Thread] [(fn [] (println \"ran\"))])] (.start t) (.join t))", "ran\n");
+	}
+
+	// Oracle (clj 1.12.6, measured 2026-10-08): Java's false is Clojure's false wherever
+	// it comes back -- a host collection's element read by vec/seq/first/into/nth, a
+	// Map's value by .get and get, an Object or boolean answer of a receiver of no known
+	// class, a static field and a static method's Boolean, an array's elements, an
+	// argument a fn or a proxy body receives from Java. Before, measured 2026-10-08 on
+	// the interpreter and the JVM, every one was nil ((vec l) of a list holding false
+	// [nil]).
+	@Test
+	void aHostFalseComesBackAsFalse() throws Exception {
+		assertBothEqual(
+				"(let [l (java.util.ArrayList.)] (.add l false) (println (vec l) (seq l) (first l) (into [] l)))",
+				"[false] (false) false [false]\n");
+		assertBothEqual("(println (.get (doto (java.util.HashMap.) (.put \"x\" false)) \"x\"))", "false\n");
+		assertBothEqual(
+				"(defn e? [l] (.isEmpty l)) (println (e? (java.util.ArrayList. [1])) (e? (java.util.ArrayList.)))",
+				"false true\n");
+		assertBothEqual(
+				"(println (Boolean/FALSE) Boolean/FALSE (Boolean/valueOf \"false\") (Boolean/parseBoolean \"x\"))",
+				"false false false false\n");
+		assertBothEqual(
+				"(let [l (java.util.ArrayList. [true false nil])] (println (seq l) (into [] l) (second l) (nth l 2)))",
+				"(true false nil) [true false nil] false nil\n");
+		assertBothEqual("(println (seq (.toArray (java.util.ArrayList. [false true]))))", "(false true)\n");
+		assertBothEqual("(.forEach (java.util.ArrayList. [false]) (fn [x] (println :each x)))", ":each false\n");
+		assertBothEqual("(let [m (java.util.HashMap. {\"a\" false})]"
+				+ " (println (get m \"a\") (if (get m \"a\") :yes :no) (= false (get m \"a\")) (find m \"a\")))",
+				"false :no true [a false]\n");
+		assertBothEqual(
+				"(println (.test (proxy [java.util.function.Predicate] [] (test [x] (println :proxy-arg x) true)) false))",
+				":proxy-arg false\ntrue\n");
+		assertBothEqual("(println (.getOrDefault (java.util.HashMap.) \"q\" false)"
+				+ " (str (.get (doto (java.util.HashMap.) (.put \"x\" false)) \"x\")))", "false false\n");
+		assertBothEqual(
+				"(println (= [false] (java.util.List/of false)) (= {\"a\" false} (java.util.Map/of \"a\" false)))",
+				"true true\n");
+		assertBothEqual("(prn (java.util.ArrayList. [false]) (java.util.HashMap. {\"a\" false}))",
+				"[false] {\"a\" false}\n");
+	}
+
+	// Oracle (clj 1.12.6, measured 2026-10-08): a fn is a Comparator whose compare is
+	// AFunction.compare -- a true answer -1, a false one 1 when the fn answers true for
+	// the arguments swapped and else 0, a number its intValue (a double or ratio
+	// truncated, a long's or bigint's low 32 bits) -- whether Java calls it through
+	// List.sort, Collections.sort or a TreeMap. Before, measured 2026-10-08 on the
+	// interpreter and the JVM: "java:reify: cannot return T as int from
+	// java.util.Comparator.compare" (a double or a ratio was refused too). Deviation: a
+	// fn answering nil or a non-number is the java: refusal of its value, where the
+	// oracle throws a NullPointerException or a ClassCastException.
+	@Test
+	void aFnPassedAsAComparatorComparesLikeTheOraclesAFunction() throws Exception {
+		assertBothEqual("(let [l (java.util.ArrayList. [3 1 2])] (.sort l <) (println (vec l)))", "[1 2 3]\n");
+		assertBothEqual("(let [l (java.util.ArrayList. [3 1 2])] (java.util.Collections/sort l >) (println (vec l)))",
+				"[3 2 1]\n");
+		assertBothEqual("(defn by-desc [a b] (> a b)) (let [l (java.util.ArrayList. [3 1 2])] (.sort l by-desc)"
+				+ " (println (vec l)))", "[3 2 1]\n");
+		assertBothEqual("(defn sorted [cmp] (let [l (java.util.ArrayList. [3 1 2])] (java.util.Collections/sort l cmp)"
+				+ " (vec l))) (println (sorted compare) (sorted (fn [a b] (* 0.5 (- a b)))) (sorted (fn [a b] (/ (- b a) 2)))"
+				+ " (sorted (fn [a b] (* (- a b) 4294967296))))", "[1 2 3] [1 3 2] [3 1 2] [3 1 2]\n");
+		assertBothEqual("(let [t (java.util.TreeMap. >)] (.put t 1 \"a\") (.put t 2 \"b\") (println (keys t)))",
+				"(2 1)\n");
+		// a constructor taking a Comparator or a Collection takes the fn as the
+		// Comparator, a functional interface (before, measured 2026-10-08: as the
+		// Collection, "Function expects 2 arguments, got 0")
+		assertBothEqual("(let [s (java.util.TreeSet. (fn [a b] (< a b)))] (.add s 2) (.add s 1) (.add s 3)"
+				+ " (println (seq s)))", "(1 2 3)\n");
+		assertBothEqual("(let [q (java.util.PriorityQueue. compare)] (.add q 2) (.add q 1) (println (.peek q)))",
+				"1\n");
+		assertBothEqual("(let [s (java.util.concurrent.ConcurrentSkipListSet. >)] (.add s 2) (.add s 3)"
+				+ " (println (seq s)))", "(3 2)\n");
+		assertBothEqual("(let [l (java.util.ArrayList. [\"b\" \"a\" \"c\"])] (.sort l (fn [a b] (neg? (compare a b))))"
+				+ " (println (vec l)))", "[a b c]\n");
+		assertBothEqual("(let [l (java.util.ArrayList. [3 1 2])] (println (try (.sort l (fn [a b] nil)) :sorted"
+				+ " (catch Exception e :refused))))", ":refused\n");
+	}
+
+	// Oracle (clj 1.12.6, measured 2026-10-08): Java is handed the Clojure value itself
+	// -- a set is a java.util.Set; a map, a record or a sorted map a java.util.Map; a
+	// sorted set or a lazy seq a collection; a keyword or a symbol an object Java keys,
+	// finds and orders by its spelling -- and a keyword or symbol Java hands back is
+	// itself. Before, measured 2026-10-08 on the interpreter and the JVM: "No matching
+	// constructor for java.util.HashSet with 1 argument(s)" (a record, a sorted set
+	// alike), "No matching method java.util.HashMap.put with 2 argument(s)" (a keyword).
+	// Deviation: what Java is handed is a copy, so its toString and a collection inside
+	// it spell as Java's ([1, 2], not #{1 2}); a ratio or an atom is still refused.
+	@Test
+	void aSetAKeywordAndARecordCrossTheJavaBoundaryAsTheOraclesDo() throws Exception {
+		assertBothEqual("(println (str (java.util.HashSet. #{1 2})) (str (java.util.HashMap. {:a 1})))",
+				"[1, 2] {:a=1}\n");
+		assertBothEqual(
+				"(let [m (java.util.HashMap.)] (.put m :k 1) (prn (.get m :k) (get m :k) (keys m)"
+						+ " (= :k (first (keys m))) (contains? m :k) (find m :k) (:k m)))",
+				"1 1 (:k) true true [:k 1] 1\n");
+		assertBothEqual("(let [s (java.util.HashSet.)] (.add s :a) (prn (str s) (contains? s :a) (.contains s :a)"
+				+ " (seq s)))", "\"[:a]\" true true (:a)\n");
+		assertBothEqual("(let [l (java.util.ArrayList.)] (.add l 'sym) (.add l 'ns/q) (prn (str l) (first l)"
+				+ " (symbol? (first l)) (= 'ns/q (second l))))", "\"[sym, ns/q]\" sym true true\n");
+		assertBothEqual("(defrecord R [a]) (println (str (java.util.HashMap. (->R 1))))", "{:a=1}\n");
+		assertBothEqual("(println (str (java.util.ArrayList. (sorted-set 3 1 2)))"
+				+ " (str (java.util.TreeMap. (sorted-map :b 1 :a 2))) (str (java.util.ArrayList. (map inc [1 2]))))",
+				"[1, 2, 3] {:a=2, :b=1} [2, 3]\n");
+		assertBothEqual("(let [l (java.util.ArrayList. [:b :a :c/d])] (java.util.Collections/sort l) (prn (vec l)))",
+				"[:a :b :c/d]\n");
+		assertBothEqual("(println (.equals (java.util.HashSet. [1 2]) #{1 2}) (java.util.Objects/toString :a)"
+				+ " (java.util.Objects/toString 'x))", "true :a x\n");
+		assertBothEqual("(let [s (java.util.HashSet. #{:x})] (prn (first s) (keyword? (first s)) (= #{:x} (set s))))",
+				":x true true\n");
+		assertBothEqual("(let [m (java.util.HashMap.)] (.put m :k false) (prn (get m :k) (.get m :k)"
+				+ " (.containsKey m :k) (.containsValue m false)))", "false false true true\n");
+	}
+
+	// Oracle (clj 1.12.6, measured 2026-10-09): a keyword hashes as Keyword.hashCode and
+	// a
+	// symbol as Symbol.hashCode (Util.hashCombine of the name's and the namespace's
+	// String hashCode, a keyword 0x9e3779b9 more), so a host HashMap or HashSet of them
+	// iterates in the oracle's order, and they sort as their compareTo: no namespace
+	// first, then by namespace, then by name. Before, measured 2026-10-09 on the
+	// interpreter and the JVM (a handle hashing and ordering by its spelling): "{:j=10,
+	// :a=1, :b=2, ...}", "[:beta, :alpha, ...]", [:a/b :m :z].
+	@Test
+	void aKeywordOrSymbolHashesAndSortsInJavaAsTheOraclesDo() throws Exception {
+		assertBothEqual("(prn (str (java.util.HashMap. {:a 1 :b 2 :c 3 :d 4 :e 5 :f 6 :g 7 :h 8 :i 9 :j 10})))",
+				"\"{:d=4, :g=7, :f=6, :b=2, :c=3, :a=1, :h=8, :i=9, :j=10, :e=5}\"\n");
+		assertBothEqual(
+				"(prn (str (java.util.HashSet. [:alpha :beta :gamma :delta :epsilon :zeta]))"
+						+ " (str (java.util.HashSet. ['alpha 'beta 'gamma 'delta 'epsilon 'zeta])))",
+				"\"[:alpha, :delta, :beta, :gamma, :zeta, :epsilon]\" \"[alpha, beta, gamma, epsilon, zeta, delta]\"\n");
+		assertBothEqual("(prn (str (java.util.HashSet. [:a/x :b/y 'c/z 'd :e])))", "\"[d, :a/x, :b/y, c/z, :e]\"\n");
+		assertBothEqual("(prn (vec (java.util.TreeSet. [:z :a/b :m :a/a])) (vec (java.util.TreeSet. ['b/x 'y 'a/z])))",
+				"[:m :z :a/a :a/b] [y a/z b/x]\n");
 	}
 
 	@Test

@@ -143,6 +143,40 @@ class JavaImplementationsTest {
 		assertThat(runnable.defaultToString()).isEqualTo("#<java-reify java.lang.Runnable>");
 	}
 
+	// The markers a form ends in are no part of it -- after a java:reify's interface, a
+	// java:proxy's callable, a java:subclass's callable -- and the implementation carries
+	// them: :java-false hands its functions Java's false as |false|. A Comparator's
+	// compare reads a boolean answer only for a function implementing it by its
+	// arguments at :java-false (Clojure's AFunction.compare), never a proxy's callable.
+	@Test
+	void theMarkersAFormEndsInAreCarriedByItsImplementation() {
+		JavaImplementation proxy = resolve("(java:proxy \"java.util.function.Consumer\" f :java-false)");
+		assertThat(proxy.resolved()).isTrue();
+		assertThat(proxy.javaFalse()).isTrue();
+		assertThat(resolve("(java:proxy \"java.util.function.Consumer\" f)").javaFalse()).isFalse();
+		JavaImplementation reify = resolve(
+				"(java:reify \"java.util.Comparator\" \"compare\" f :functional :java-false)");
+		assertThat(slots(reify)).containsExactly("compare(java.lang.Object,java.lang.Object)int=0");
+		assertThat(reify.readsComparison(reify.slots().get(0))).isTrue();
+		JavaImplementation unmarked = resolve("(java:reify \"java.util.Comparator\" \"compare\" f :java-false)");
+		assertThat(unmarked.readsComparison(unmarked.slots().get(0))).isFalse();
+		JavaImplementation subclass = resolve(
+				"(java:subclass \"java.lang.Thread\" '() '(\"run\") (lambda (this m) nil) :java-false :functional)");
+		assertThat(subclass.resolved()).isTrue();
+		assertThat(subclass.markers()).isEqualTo(new JavaMarkers(true, true));
+		JavaImplementation compare = JavaImplementations.functional(type("java.util.Comparator"), CLASSES,
+				new JavaMarkers(true, true));
+		assertThat(compare.readsComparison(compare.slots().get(0))).isTrue();
+		JavaImplementation plain = JavaImplementations.functional(type("java.util.Comparator"), CLASSES);
+		assertThat(plain.readsComparison(plain.slots().get(0))).isFalse();
+		JavaImplementation function = JavaImplementations.functional(type("java.util.function.ToIntBiFunction"),
+				CLASSES, new JavaMarkers(true, true));
+		assertThat(function.readsComparison(function.slots().get(0))).isFalse();
+		JavaImplementation proxied = JavaImplementations.proxy(type("java.util.Comparator"), CLASSES)
+			.withMarkers(new JavaMarkers(true, true));
+		assertThat(proxied.slots()).allMatch(slot -> !proxied.readsComparison(slot));
+	}
+
 	// A form resolves before it runs only when a compiled program can implement it:
 	// literal names, a public interface found, every return type public.
 	@Test

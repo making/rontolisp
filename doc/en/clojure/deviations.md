@@ -382,26 +382,20 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   (rebinding rebinds the standard streams); read at the root, `*out*` and `*in*` are
   stream values over the process standard streams;
   `defonce` keeps the root on reload where `def` resets it.
-- A host-object boolean answers `false` only when the receiver's class is known
-  at lowering (a construction literal, a `let`/`if-let`/`when-let` local bound
-  to one, or a `..` step's declared return) and every
-  overload at that arity answers a primitive boolean, or when the receiver is a
-  string, number or character and every overload at that arity of its class answers
-  one (`(.matches "abc" "x")`), or a `proxy` of one interface or of a class alone; any
-  other host boolean keeps the shared `java:` unmarshal and prints `nil` for `false`, and
-  so does a `Boolean.FALSE` read back from a host collection (`(vec l)` answers `[nil]`
-  for a list holding `false`).
 - A fn passed where a Java interface is expected implements every abstract method of
   any interface, each called with the method's arguments; the oracle converts a fn only
   to an interface annotated `@FunctionalInterface` (a `PropertyChangeListener` is a
-  `ClassCastException` there). The fn's value crosses back as an argument would: a
-  `Comparator` fn passed to Java answers a number (the oracle also takes `true`/`false`,
-  as `(.compare f a b)` on the fn itself does here).
-- A map passed to Java is a fresh `java.util.LinkedHashMap` of its entries, each key and
-  value converted as an argument is (a vector a `List`, a map a `Map`), where the oracle
-  passes the map itself: `str` of the copy spells a nested collection the Java way
-  (`{a=[1, 2]}`, the oracle `{a=[1 2]}`). A set, a keyword and a record have no Java
-  value, so a member taking one (a map keyed by keywords too) finds no match.
+  `ClassCastException` there). A `Comparator` fn answering `nil` or a non-number is
+  refused by name, where the oracle throws a `NullPointerException` or a
+  `ClassCastException`.
+- A map, set, record, sorted collection or lazy seq passed to Java is a fresh Java copy
+  (a set or sorted set a `java.util.LinkedHashSet`; a map, record or sorted map a
+  `java.util.LinkedHashMap`; a lazy seq, like a vector or list, a `List`), each member
+  converted as an argument is, where the oracle passes the collection itself: `str` of the
+  copy, or of a Java collection holding it, spells it the Java way (`[1, 2]`, the oracle
+  `#{1 2}`; `{a=[1, 2]}`, the oracle `{a=[1 2]}`). A Java sorted collection orders keywords
+  before symbols, where the oracle refuses to compare the two. A ratio and an atom have no
+  Java value, so a member taking one finds no match.
 - An integer receiver is called as an `Integer` when it fits one, else as a `Long`
   (the oracle's is always a `Long`): `(.getClass 1)` answers `java.lang.Integer`.
 - A `_` param tag leaves that parameter to the cost rule of the `java:` surface, so

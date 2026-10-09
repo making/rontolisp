@@ -2340,11 +2340,9 @@ The `java:` surface (`.kb/java-interop.md`); interpreter and JVM only -- wasm co
   other method reaches `java:call`, which calls a string / number / character as its
   `String` / narrowest box / `Character` (`.kb/java-interop.md`, "A Lisp value as a
   `java:call` receiver"; measured 2026-10-03 vs `clj` 1.12.6, `(.codePointAt "abc" 0)` 97,
-  `(.compareTo 1 2)` -1; before: `java:call expects a java object ..., got "abc"`). With the
-  receiver class unknown at lowering, a method whose overloads at that arity all answer a
-  primitive boolean on `String` (`(if (stringp r) ...)` arm) or on `Integer`+`Long` / `Double` /
-  `Character` (`valuePredicate`) answers T-or-false (`(.matches "abc" "x")` false, not nil).
-  Deviation: an int-sized integer is an `Integer` (`(.getClass 1)`; the oracle's `Long`).
+  `(.compareTo 1 2)` -1; before: `java:call expects a java object ..., got "abc"`). A host
+  false is the false object through the call's own `:java-false`, whatever the receiver
+  (`(.matches "abc" "x")` false, not nil; "Host booleans" below). Deviation: an int-sized integer is an `Integer` (`(.getClass 1)`; the oracle's `Long`).
   Pins: `ClojureInteropTest#unmappedMethodsCallAStringNumberOrCharacterAsItsHostObject`.
   `.toString` of a number, character, symbol (booleans too), cons, array, table or
   function answers `(%clojure-str-of x "nil" nil)`, the oracle's `toString`, on every
@@ -2405,38 +2403,65 @@ The `java:` surface (`.kb/java-interop.md`); interpreter and JVM only -- wasm co
   wasm 56160 -> 57298 B, JVM `.class` 94998 -> 97917 B (comment-only helpers and lowering-time
   words: docstrings and `format` arms had made it +4.0 KB on the JVM). Pins: that case,
   `ClojureInteropTest#collectionKeywordSymbolAndRatioReceiversAnswerTheirCommonMethods`.
-- Host booleans: the shared unmarshal maps host false to nil (CL's only false; changing
-  it would make host false truthy in `java:` programs and move all three paths plus the
-  bridge parity). The lowering wraps to `T`-or-false instead where every overload at that
-  arity returns a primitive boolean and the receiver class is known: a static call or
-  member value, or an instance call on a construction literal -- `java:new`, a `proxy` of
-  one interface (`java:proxy "I" fn`) or of a class alone (`java:subclass "S" '() ...`;
-  `ClojureInteropLowering.constructedClass`) --, a `let`/`if-let`/`when-let`
-  local bound to one (single-shot, so the inference is sound), or a `..` step's declared
-  return; a `true`/`false` receiver of unknown class is called as its `Boolean`
-  (`valuePredicate`: `(.booleanValue false)`). Anything else prints `nil` for false, a
-  `Boolean.FALSE` read back from a host collection too (`(vec l)` of a list holding false
-  is `[nil]`; the oracle's `[false]`): a per-site "answer false as `|false|`" unmarshal is
-  the remaining half (todo e73).
+- Host booleans (e73, 2026-10-09): every host call the lowering builds ends in `:java-false`
+  (`ClojureInteropLowering.hostCall`, `fieldCall`; a `proxy`'s `java:proxy` / `java:subclass`
+  too), so Java's false comes back as the false object -- an answer of any receiver, a
+  `Boolean.FALSE` element, a field, a fn's or a proxy body's argument
+  (`.kb/java-interop.md`, "Markers and handles"); the shared unmarshal stays nil for a CL
+  program. The `T`-or-false wraps over known receiver classes (`booleanAnswer` at static and
+  instance sites, `valuePredicate`, `instanceBooleanAtArity`) are gone. The library's host
+  DATA reads end in it too (`toArray`, `getKey`/`getValue`, `next`, `get`, a `Future`'s
+  `get`); its host PREDICATES (`containsKey`, `contains`, `hasNext`, `isDone`, ...) must not:
+  a CL `if` reads `|false|` as true. Before, measured 2026-10-08 (interpreter and JVM): `(vec
+  l)` of a list holding false `[nil]`, `(.get m "x")` of a false value nil, `(e? l)` over an
+  unknown receiver nil. Pin: `ClojureInteropTest#aHostFalseComesBackAsFalse`.
 - `false` crosses to Java as Java's false (e69, 2026-10-08): the false object IS the symbol
   `java:` passes as `false` / `Boolean.FALSE` (`FALSE_VALUE_NAME = LispNames.JAVA_FALSE`,
   `.kb/java-interop.md` "Java's false and hash tables"), an argument and a fn's or proxy
   body's answer alike; a map crosses as a fresh `LinkedHashMap` (the same section), its
   vector/map values converted too, so the copy's `toString` spells them the Java way (user doc
-  deviation). A set, keyword or record has no Java value (`(:C%SET table)` is no table to
-  `java:`, and `java:` learns no Clojure shape): the same todo. Before, measured 2026-10-08
+  deviation). A set, keyword or record reaches Java through `%clojure-host-value` (next
+  bullet). Before, measured 2026-10-08
   (interpreter and JVM): `(.add l false)`, `(Boolean/toString false)` and `(java.util.HashMap.
   {"a" 1})` were `No matching method/constructor`, `(.removeIf l odd?)` and a proxy `test`
   answering false `cannot return |false| as boolean`.
+- Clojure values Java has none of (e73, 2026-10-09): `hostArgument` wraps a host call's
+  argument (`java:new`/`java:call`/`java:static`, a class `proxy`'s constructor arguments) in
+  `%clojure-host-value` (`HOST_VALUE`, `clojure.lisp`): a keyword or symbol becomes a
+  `java:handle` (`%clojure-host-ident`: its spelling, the oracle's `Keyword`/`Symbol` hashCode
+  -- `Util.hashCombine` of the name's and namespace's `String.hashCode`, a keyword
+  `0x9e3779b9` more -- and an order text sorting no namespace first, then namespace, then
+  name, keywords before symbols), so a host `HashMap`/`HashSet` iterates and a `TreeSet`
+  sorts in the oracle's order and Java hands back the keyword itself; a set or sorted set a
+  fresh `LinkedHashSet`; a map holding such a value, a record or a sorted map an `equal`
+  table of converted entries (`java:` makes it a `LinkedHashMap`); a lazy seq the list it
+  realizes; a vector or list holding such a value a converted copy; anything else itself (a
+  ratio or atom stays refused by `java:`). Not wrapped, so the site keeps resolving on the
+  argument's kind: a literal, a fn form, a construction (`isPlainForm`) and a `let` local
+  bound to one and not shadowed (`isPlainLocal` over `noteHostClass`); nothing on wasm
+  (`!ctx.hostTarget`: a `java:` call is a call-time error there). `get`/`contains?`/`find`
+  over a host map convert their key the same way. Measured 2026-10-08 before choosing this
+  over a generic `java:` hook (the plan's preference): wrapping every non-literal argument
+  of the 784 `java:` sites in 276 lowered programs (`ClojureInteropTest`'s, `examples/
+  clojure`, the clojure-spec corpus) moved 2 from resolved to dispatched, both a
+  construction-bound local -- the exemption above -- and no other site's status. Before,
+  measured 2026-10-08: `(java.util.HashSet. #{1 2})` `No matching constructor for
+  java.util.HashSet with 1 argument(s)` (a record, a sorted set alike), `(.put m :k 1)` `No
+  matching method java.util.HashMap.put with 2 argument(s)`. Deviations (user doc): a copy's
+  `toString` and a collection inside it spell the Java way; keywords and symbols sort together
+  where the oracle refuses to compare them. Pins: `ClojureInteropTest#aSetAKeywordAndARecord
+  CrossTheJavaBoundaryAsTheOraclesDo`, `#aKeywordOrSymbolHashesAndSortsInJavaAsTheOraclesDo`,
+  `ClojureLoweringTest#aHostArgumentThatMayHoldAValueJavaLacksGoesThroughTheHostValue`.
 - A fn receiver is the oracle's `AFunction` (`ClojureValueMethodLowering.functionRows`; the
   value gate `%clojure-value-receiver-p` takes `functionp`): `invoke` of 0..20 arguments and
   `applyTo` for any `ifn?` value, `call`, `run` (nil), and `compare` on a fn through
   `%clojure-fn-compare` (`AFunction.compare`: true -1, false 1 when the reversed call is true
   else 0, a number its `intValue` by `%clojure-unchecked-int`, nil the NPE, else a
   ClassCastException). Runs on all four backends (the arm answers before the `java:call`);
-  before, `java:call expects a java object as the first argument, got #<lambda>`. A `Comparator`
-  fn passed TO Java still answers a number (deviation): `java:` cannot know a boolean answer
-  means `AFunction.compare`. Pin: clojure-spec
+  before, `java:call expects a java object as the first argument, got #<lambda>`. A fn passed
+  TO Java as a `Comparator` reads the same way since e73 (its call ends in `:functional` and
+  `:java-false`: `.kb/java-interop.md`, "Markers and handles"; pin
+  `ClojureInteropTest#aFnPassedAsAComparatorComparesLikeTheOraclesAFunction`). Pin: clojure-spec
   `instance-calls-on-a-fn-are-its-ifn-callable-runnable-and-comparator-methods`.
 - A fn passed where an interface is expected implements every abstract method by the
   method's arguments, defaults keeping their bodies (`.kb/java-interop.md`, `:functional`;
@@ -2446,7 +2471,9 @@ The `java:` surface (`.kb/java-interop.md`); interpreter and JVM only -- wasm co
   was `Function expects 0 arguments, got 1`. Oracle (clj 1.12.6, same day): a fn converts
   only to a `@FunctionalInterface` (a `PropertyChangeListener`/`DocumentListener` is a
   `ClassCastException`; here every abstract method of any interface calls it -- user doc
-  deviation), `Comparator` takes a boolean answer (`AFunction.compare`; here a number).
+  deviation), `Comparator` takes a boolean answer (`AFunction.compare`; alike here since e73).
+  A fn prefers a functional interface's overload (`TreeSet(Comparator)` over
+  `TreeSet(Collection)`; the oracle's fn IS a `Comparator`).
   `(proxy [Super] [fn] ...)` constructor arguments convert the same way: `proxyClassOf` ends
   the `java:subclass` in the marker after its callable (until e69 they converted as
   `java:proxy`, the method name first). Pins:
@@ -2477,9 +2504,10 @@ The `java:` surface (`.kb/java-interop.md`); interpreter and JVM only -- wasm co
   are the host entries: user doc deviation), a `CharSequence` through `toString`, another
   `Iterable` through `iterator` (a JDK non-public iterator class trips the `java:call` gap
   of todo c92). `get`/`contains?` ask the host's own `containsKey`/`contains`/`get`, the
-  oracle's `equals` lookup, after `%clojure-host-key-p` (`Objects.isNull` under
-  `handler-case`): a key `java:call` cannot marshal (keyword, symbol, map, set) is in no host
-  map, since `.put` refused it too. Not the c90 walk by `=`: that pulled `%clojure-equal`'s
+  oracle's `equals` lookup, of the key as `%clojure-host-value` makes it (a keyword its
+  handle), after `%clojure-host-key-p` (`Objects.isNull` under `handler-case`): a key
+  `java:call` still cannot marshal (a ratio, an atom) is in no host map, since `.put` refused
+  it too. Not the c90 walk by `=`: that pulled `%clojure-equal`'s
   whole closure into every `get` (+9.9 KB JVM class) and is O(n).
   Cost, measured 2026-10-04 (load average 25-140, so speeds are medians of 5-7 alternated
   runs): a program naming no `java:` operator is byte-identical (wasm P1, `--optimize=size`,
@@ -3478,6 +3506,8 @@ in-scope program needs `valid?`/`conform` (then `explain-data` stays refused).
   `FetchSpecE2eTest#clojureHttpClient` (the HTTP client),
   `ClojureWasmBoundaryTest`, `ClojureWitBoundaryTest` (the host boundary),
   `ClojureLanguageNamespacesTest` (where the clojure.jar namespaces come from).
-- `ClojureLibraryTest` (the splice), `SourceLanguageTest`, `RontoLispCliTest` and
+- `ClojureLibraryTest` (the splice; `everyLibraryNameIsDefinedOnce`: a second `defun` of a
+  `clojure.lisp` name replaces the first for every caller, which a wrong arity then shows only
+  as a JVM compile warning), `SourceLanguageTest`, `RontoLispCliTest` and
   `PlaygroundReplTest` (the `clojure>` transcript, `--no-gc`), `examples/clojure/demo.clj`
   through `ExamplesE2eTest`.

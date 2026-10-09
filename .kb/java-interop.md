@@ -1,7 +1,8 @@
 # `java:` interop (interpreter, JVM direct calls, generated interface classes, the reflection bridge)
 
 Package `java` (`LispNames.JAVA_PKG`, `PackageRegistry`; does NOT use `cl`): `java:new`,
-`java:call`, `java:static`, `java:field`, `java:proxy`, `java:subclass`, `java:reify`; the type specifier
+`java:call`, `java:static`, `java:field`, `java:proxy`, `java:subclass`, `java:reify`, `java:handle`
+(`LispNames.JAVA_OPERATORS_QUALIFIED`); the type specifier
 `java:object` and the variable `java:*warn-on-reflection*` (static resolution, below).
 
 - Interpreter: `eval/JavaInterop`, `LispEvaluator.registerJava()`; value = `LispJavaObject`,
@@ -31,11 +32,13 @@ Package `java` (`LispNames.JAVA_PKG`, `PackageRegistry`; does NOT use `cl`): `ja
   forces `usesEval`, a generated interface class only the apply tier (`JvmJavaSites.needsApply`);
   `usesJava` threads `JvmRuntimeBuilder.JavaPrint` into the print builders.
 - `select()` = lowest total cost `COST_EXACT` < `COST_WIDEN` < `COST_CONVERT` < `COST_NARROW` <
-  `COST_BOXED` < `COST_PROXY` (`COST_VARARGS` via `varargsCost`), ties by stable signature string,
+  `COST_BOXED` < `COST_PROXY` < `COST_PROXY_NOT_FUNCTIONAL` (`COST_VARARGS` via `varargsCost`), ties
+  by stable signature string,
   then (one parameter list, covariant variants) the most specific return type -- never the
   bridge that erases it. `marshal`/`marshalSequence`/`marshalTable`/`accessibleMethod`. Symbols
   (but `|false|`), ratios, dotted lists and rank-2+ arrays are NOT marshalled ("Bignums and
-  specialized vectors", "Java's false and hash tables" below for what is).
+  specialized vectors", "Java's false and hash tables" below for what is; a `java:handle` stands
+  for any value, "Markers and handles" below).
 - THE rule lives ONCE for the interpreter and the compiler: `compiler/JavaOverloads` (`select`,
   `kindCost`, the tags). The interpreter (`eval/JavaInterop`) selects through it at run time over
   `compiler/ReflectiveJavaClasses`; `JavaBridgeTemplate` keeps a hand copy (it must stand alone),
@@ -178,8 +181,8 @@ Package `java` (`LispNames.JAVA_PKG`, `PackageRegistry`; does NOT use `cl`): `ja
   (`Boolean.FALSE`); a quoted `'|false|` types a site (`JavaSiteResolver.typeOf`). A callback
   answering it for a `boolean`/`Boolean` returns false through the same marshal. Clojure's
   false object IS that symbol (`ClojureLowering.FALSE_VALUE_NAME`), so its false crosses with no
-  Clojure name in `java:`. Unmarshal is unchanged: host false is nil (the Clojure lowering's
-  `booleanAnswer` sites aside). Copies: interpreter `kindOf`/`convert`/`LispJavaObject.
+  Clojure name in `java:`. Unmarshal answers host false as nil unless the form ends in
+  `:java-false` ("Markers and handles" below). Copies: interpreter `kindOf`/`convert`/`LispJavaObject.
   receiverObject`, the bridge's `KIND_FALSE`/`JAVA_FALSE` (pinned to `LispNames` by
   `theBridgeSpellsTheRepresentationAsTheRuntimeDoes`), `_jkind` (a `"false".equals` after the
   `"T"` test, so only a symbol that is neither pays it) and `emitKindTest`/`emitConvert`.
@@ -203,6 +206,56 @@ Package `java` (`LispNames.JAVA_PKG`, `PackageRegistry`; does NOT use `cl`): `ja
 - Known gap, not this rule's: a direct site's `_jlarr` (and the bridge's `isJavaObject`) asks a
   host `ArrayList` subclass its own `isEmpty`/`get`, so a `java:subclass` of `ArrayList` whose
   `isEmpty` answers false while empty throws `index out of bounds` on the JVM (todo e74).
+
+## Markers and handles: `:java-false`, a Comparator's answer, `java:handle` (e73, 2026-10-09)
+- Keywords ending a form are MARKERS (`compiler/JavaMarkers`: `:functional`, `:java-false`, any
+  order; a keyword is never an argument a member takes): after the arguments of `java:new` /
+  `java:call` / `java:static`, after the field name of `java:field`, after the callable (the last
+  function) of `java:proxy` / `java:subclass` / `java:reify`. `JavaSiteResolver.resolve` and
+  `JavaImplementations.resolve*` set them aside (`JavaSite.markers()`,
+  `JavaImplementation.markers()`); the interpreter drops the evaluated ones (`markerCount`,
+  `Caller.markers()` through `withMarkers`); the bridge reads them off its arrays (`markerCount`,
+  `functionsOf`'s `FUNCTIONS_*` bits; `field` gets the markers as an array). The marker
+  spellings are pinned to `LispNames` by `theBridgeSpellsTheRepresentationAsTheRuntimeDoes`.
+- `:java-false`: Java's false answers `|false|`, not nil -- a result, an array's elements, a
+  field, and each argument a function of an implementation made at that form is handed (a
+  function converted at a call ending in it too). Copies: interpreter `unmarshal(o, javaFalse)`,
+  the bridge's `unmarshal(o, javaFalse)`, the direct sites' `_junf` / `_jarf` and
+  `emitUnmarshal`'s boolean arms; the static result type (`JavaStaticType.ofDeclared` /
+  `ofConstructed(..., javaFalse)`: a `boolean` answer is {T, FALSE}) keeps the next site
+  resolving. Pins: `JavaInteropPrograms.JAVA_FALSE_PROGRAM`, `JavaImplementationPrograms.
+  JAVA_FALSE` (both backends), `theBridgeAndADirectSiteAnswerJavasFalseAlike`.
+- A function implementing `java.util.Comparator.compare` at a form ending in BOTH markers
+  (`JavaImplementation.readsComparison`: a functional implementation of `Comparator` alone) is
+  read as Clojure's `AFunction.compare`: `t` -1; `|false|` 1 when the function answers true
+  (neither nil nor `|false|`) for the arguments swapped, else 0; a fixnum or bignum its low 32
+  bits, a float `d2i`, a ratio its `DECIMAL64` quotient truncated; anything else the return
+  conversion's refusal (`cannot return NIL as int`; the oracle an NPE or a CCE). Copies:
+  `ImplementationHandler.comparison`, the bridge's `comparison`, `_jcmp` (its false arm calls
+  the function again through `_apply`). Before, measured 2026-10-08: `cannot return T as int
+  from java.util.Comparator.compare`.
+- A function costs `COST_PROXY` (8) against a functional interface (one abstract method,
+  Object's public methods aside: `JavaImplementations.isFunctionalInterface`, cached; the
+  bridge's copy) and `COST_PROXY_NOT_FUNCTIONAL` (9) against any other, so `TreeSet(Comparator)`
+  beats `TreeSet(Collection)` (`PriorityQueue`, `ConcurrentSkipListSet` alike), as a Java
+  lambda's target does. Before, measured 2026-10-08: the tie went by signature to
+  `Collection`, whose conversion then called the function as a list (`Function expects 2
+  arguments, got 0`). Pin: `aFunctionCostsLessForAFunctionalInterface`.
+- `(java:handle value "text" hash "order")`, the last two optional: a host object standing for
+  a Lisp value Java has none of. `toString` and `equals` by the text, `hashCode` the hash's low
+  32 bits (the text's by default), `compareTo` by the order text (the text by default; another
+  class a `ClassCastException`). Every unmarshal answers the value back: interpreter
+  `eval/JavaHandle` (`case JavaHandle`), the direct sites' `_junm` / `_junf` / `_jarr` arm when
+  `JvmJavaDirectSites.handles` (the program names `java:handle`), the bridge through
+  `handleValueField` (`<Program>$Handle.value`, bound in `bind`, null without the class). The
+  JVM's `<Program>$Handle` is generated beside the class (`JvmJavaImplementations.writeHandle`,
+  member for member `JavaHandle`) and made by `_jhandle(value, text, hash, order, given)`, no
+  reflection. A wrong count is a compile error compiled and `HANDLE_USAGE` interpreted; a text or
+  order that is no string or a hash that is no integer the same words `, got X` on both. Pins:
+  `JavaInteropPrograms.JAVA_HANDLE_PROGRAM` (both backends),
+  `theBridgeAndADirectSiteAnswerAHandlesValueAlike`, `JvmLispCompilerSplitTest#aForcedSplit
+  KeepsJavaCallsWorking`. The Clojure front end makes one per keyword or symbol argument
+  (`.kb/clojure-frontend.md`, "Java interop").
 
 ## Resolution: kinds, pure select, caches (both bridges, identical)
 Per call the uncached bridge paid `getMethods()` (~2.5 us), `select()` (250 ns - 1.4 us),
@@ -542,30 +595,22 @@ Per call the uncached bridge paid `getMethods()` (~2.5 us), `select()` (250 ns -
   reify/proxy do not coerce return values either; an interface return is a
   `java:reify`/`java:proxy` object.
   Function -> interface stays for ARGUMENTS (Clojure 1.12's direction).
-- `:functional` (e66, 2026-10-08): a `java:new` / `java:call` / `java:static` whose LAST
-  element is the keyword (`LispNames.JAVA_FUNCTIONAL_MARKER`, after the arguments; a
-  keyword is never an argument a member takes) converts a function argument by
-  `JavaImplementations.functional` instead of `proxy`: a reify whose one function
-  implements every group with an abstract variant (Object's three aside, each variant of
-  the group), defaults keep their bodies, `#<java-reify I>`. COSTS are unchanged (a
-  function still costs `COST_PROXY` against any interface), so overload choice and the
-  memos are the same in both modes; only the conversion differs. Resolved sites:
-  `JavaSiteResolver.resolve` strips the marker and answers `JavaSite.functional()`;
-  the interpreter's `evalJavaSite` drops the evaluated marker and passes
-  `JavaInterop.functional(caller)` (`Caller.functional()`, read by `convert`'s function
-  arm); the direct sites' `Body.functional` picks `functionalFactory` in the FUNCTION
-  arm and a `_jconv$N` keyed `" functional"`, and `shapeKey` carries it (two sites
-  differing only in the marker are two `_jsite$N`: the program's last two calls pin it).
-  Run-time paths read it off the evaluated
-  arguments (`JavaInterop.endsFunctional`, the bridge's `functionsOf`: a keyword compiles
-  to its name, `":FUNCTIONAL"`), so `apply #'java:call` takes it too; the bridge threads
-  `FUNCTIONS_NONE/PROXY/BY_ARGUMENTS` where it threaded `proxies`. `java:field` takes none;
-  `java:subclass` reads it after its callable, for its constructor arguments
-  (`JavaImplementations.subclassFunctional`; the interpreter's `subclass` drops it and
-  passes `functional(caller)`, the JVM's `subclassFactory(..., functional)` keys a second
-  `$Subclass<N>` whose `_jsubclass$N` converts through `argumentConvert(param, functional)`).
-  The Clojure lowering ends every
-  host call with a non-literal argument in it (`ClojureInteropLowering.hostCall`). Pinned:
+- `:functional` (e66, 2026-10-08; one of the markers since e73, "Markers and handles"): a
+  function argument converts by `JavaImplementations.functional` instead of `proxy`: a reify
+  whose one function implements every group with an abstract variant (Object's three aside,
+  each variant of the group), defaults keep their bodies, `#<java-reify I>`. Costs do not
+  depend on the marker, so overload choice and the memos are the same in both modes; only the
+  conversion differs. Resolved sites answer `JavaSite.functional()`; the interpreter passes
+  the markers in its `Caller` (read by `convert`'s function arm); the direct sites'
+  `Body.markers` picks `functionalFactory` in the FUNCTION arm and a `_jconv$N` keyed by the
+  markers, and `shapeKey` carries them (two sites differing only in a marker are two
+  `_jsite$N`). Run-time paths read the evaluated markers (a keyword compiles to its name,
+  `":FUNCTIONAL"`), so `apply #'java:call` takes them too; the bridge threads
+  `FUNCTIONS_NONE/PROXY/BY_ARGUMENTS`. `java:subclass` reads it after its callable, for its
+  constructor arguments: the implementation carries the markers, `subshell` keys a
+  `$Subclass<N>` per marker set, and its `_jsubclass$N` converts through
+  `argumentConvert(param, markers)`. The Clojure lowering ends every host call with a
+  non-literal argument in it (`ClojureInteropLowering.hostCall`). Pinned:
   `JavaImplementationPrograms.FUNCTIONAL` (both backends; resolved, dispatched, bridge,
   constructor, static, a default method), `JavaImplementationsTest#aFunctionalImplementation...`,
   `JavaBridgeTemplateParityTest#theTemplateImplementsAFunctionalArgument...`,
@@ -853,5 +898,5 @@ dispatch: `aDispatchedSite*`, programs shared with `JavaInteropTest` through
 `JvmDeadMethodEliminationTest#keepsTheCallbacksOfAGeneratedInterfaceImplementation`,
 `ShippedBridgeNativeImageE2eTest`. `JavaInteropTest` + `JvmJavaInteropCompilerTest` mirror the
 same cases — keep in step, headless only. `examples/jvm/{java-interop,swing,life-gui}.lisp`;
-`doc/{en,ja}/guides/java-interop.md` + six `reference/functions/java-*.md` (a GUI form hangs
+`doc/{en,ja}/guides/java-interop.md` + the `reference/functions/java-*.md` pages (a GUI form hangs
 `DocExamplesTest`).

@@ -24,3 +24,11 @@ once, before it runs: to one method when its argument kinds are known from the t
 otherwise to the overloads it chooses among by the kinds its arguments have when it runs
 (the guide's [Resolving calls before they
 run](../../guides/java-interop.md#resolving-calls-before-they-run)).
+
+Ending the call in `:java-false`, after the arguments (before or after `:functional`),
+answers Java's false as `|false|` rather than `nil` (the guide's [Java's false
+back](../../guides/java-interop.md#javas-false-back-java-false)):
+
+```lisp
+(java:static "java.lang.Boolean" "parseBoolean" "no" :java-false)   ; => |false|
+```

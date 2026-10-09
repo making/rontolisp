@@ -1528,9 +1528,12 @@ class ClojureLoweringTest {
 		assertThat(lowered("(Integer/MAX_VALUE)")).contains("JAVA:FIELD").doesNotContain("JAVA:STATIC");
 		assertThat(lowered("(. Math PI)")).contains("JAVA:FIELD").doesNotContain("JAVA:STATIC");
 		assertThat(lowered("(Math/PI)")).contains("JAVA:FIELD").doesNotContain("JAVA:STATIC");
-		// calls with arguments keep the static call, answering T-or-false for booleans
+		// calls with arguments keep the static call, a host false the false object
+		// (:java-false), with no wrap of its own
 		assertThat(lowered("(Integer/parseInt \"42\")")).contains("JAVA:STATIC");
-		assertThat(lowered("(Character/isWhitespace \\a)")).contains("JAVA:STATIC").contains("IF");
+		assertThat(lowered("(Character/isWhitespace \\a)"))
+			.endsWith("(JAVA:STATIC \"java.lang.Character\" \"isWhitespace\" #\\a :JAVA-FALSE)");
+		assertThat(lowered("(Boolean/FALSE)")).endsWith("(JAVA:FIELD \"java.lang.Boolean\" \"FALSE\" :JAVA-FALSE)");
 	}
 
 	@Test
@@ -1553,30 +1556,56 @@ class ClojureLoweringTest {
 	}
 
 	@Test
-	void hostBooleansAnswerTorFalseForKnownReceivers() {
-		// a construction literal of a class whose overloads at that arity all
-		// answer a primitive boolean wraps the java:call in T-or-false: the IF
-		// sits directly over the call (the STRINGP dispatch owns the outer one)
-		assertThat(lowered("(println (.isEmpty (java.util.ArrayList.)))")).contains("(IF (JAVA:CALL");
-		assertThat(lowered("(println (.contains (java.util.ArrayList. [1]) 2))")).contains("(IF (JAVA:CALL");
-		// a let/if-let/when-let local bound to a construction carries the class;
-		// a non-boolean answer and an unknown receiver keep the bare call
-		assertThat(lowered("(let [al (java.util.ArrayList.)] (println (.isEmpty al)))")).contains("(IF (JAVA:CALL");
-		assertThat(lowered("(println (if-let [al (java.util.ArrayList.)] (.isEmpty al) :e))"))
-			.contains("(IF (JAVA:CALL");
-		assertThat(lowered("(println (when-let [al (java.util.ArrayList.)] (.isEmpty al)))"))
-			.contains("(IF (JAVA:CALL");
-		assertThat(lowered("(println (.. (java.util.ArrayList. [1]) (subList 0 1) (isEmpty)))"))
-			.contains("(IF (JAVA:CALL");
-		assertThat(lowered("(println (.. (java.util.ArrayList. [1]) (subList 0 1) (size)))")).contains("JAVA:CALL")
+	void hostCallsEndInJavaFalseWithNoBooleanWrap() {
+		// every host call ends in :java-false, so a host false is the false object the
+		// call answers itself, whatever the receiver: no T-or-false IF wraps it
+		assertThat(lowered("(println (.isEmpty (java.util.ArrayList.)))"))
+			.contains("(JAVA:CALL |__clojure_0| \"isEmpty\" :JAVA-FALSE)")
 			.doesNotContain("(IF (JAVA:CALL");
-		assertThat(lowered("(let [al (java.util.ArrayList.)] (println (.size al)))")).contains("JAVA:CALL")
+		assertThat(lowered("(let [al (java.util.ArrayList.)] (println (.isEmpty al)))"))
+			.contains("\"isEmpty\" :JAVA-FALSE)")
 			.doesNotContain("(IF (JAVA:CALL");
-		assertThat(lowered("(defn check-empty [x] (.isEmpty x))")).contains("JAVA:CALL")
+		assertThat(lowered("(defn check-empty [x] (.isEmpty x))")).contains("\"isEmpty\" :JAVA-FALSE)")
 			.doesNotContain("(IF (JAVA:CALL");
-		// a shadowing binding hides the class again
-		assertThat(lowered("(let [al (java.util.ArrayList.)] ((fn [al] (.isEmpty al)) 1))"))
+		assertThat(lowered("(println (.matches \"abc\" \"x\"))")).contains("\"matches\" \"x\" :JAVA-FALSE)")
 			.doesNotContain("(IF (JAVA:CALL");
+		// :functional before it when an argument may be a fn; a literal false argument
+		// is the quoted false object, which a site resolves on
+		assertThat(lowered("(defn each [l f] (.forEach l f))"))
+			.contains("\"forEach\" (RONTOLISP::%CLOJURE-HOST-VALUE |c%f|) :FUNCTIONAL :JAVA-FALSE)");
+		assertThat(lowered("(.add (java.util.ArrayList.) false)")).contains("\"add\" '|false| :JAVA-FALSE)");
+		assertThat(lowered("(java.util.ArrayList. 3)")).endsWith("(JAVA:NEW \"java.util.ArrayList\" 3 :JAVA-FALSE)");
+		// a proxy's body is handed Java's false as the false object
+		assertThat(lowered("(proxy [Runnable] [] (run [] 1))")).endsWith(":JAVA-FALSE)");
+		assertThat(lowered("(proxy [Thread] [] (run [] 1))")).endsWith(":JAVA-FALSE)");
+	}
+
+	@Test
+	void aHostArgumentThatMayHoldAValueJavaLacksGoesThroughTheHostValue() {
+		// a parameter, a keyword or a call may hold a keyword, a symbol, a set or a
+		// record: the library function hands Java a value of it
+		assertThat(lowered("(defn put [m k] (.put m k 1))"))
+			.contains("\"put\" (RONTOLISP::%CLOJURE-HOST-VALUE |c%k|) 1 :FUNCTIONAL :JAVA-FALSE)");
+		assertThat(lowered("(java.util.HashSet. #{1})"))
+			.contains("(JAVA:NEW \"java.util.HashSet\" (RONTOLISP::%CLOJURE-HOST-VALUE ");
+		assertThat(lowered("(.add (java.util.ArrayList.) :a)")).contains("\"add\" (RONTOLISP::%CLOJURE-HOST-VALUE ");
+		// a literal, a fn, a construction and a local bound to one keep the site
+		// resolving on their kind
+		assertThat(lowered("(.add (java.util.ArrayList.) \"a\")")).contains("\"add\" \"a\" :JAVA-FALSE)");
+		assertThat(lowered("(.forEach (java.util.ArrayList.) (fn [x] x))")).doesNotContain("%CLOJURE-HOST-VALUE");
+		assertThat(lowered("(.add (java.util.ArrayList.) (java.util.ArrayList.))"))
+			.doesNotContain("%CLOJURE-HOST-VALUE");
+		assertThat(lowered("(let [l (java.util.ArrayList.)] (.add (java.util.ArrayList.) l))"))
+			.doesNotContain("%CLOJURE-HOST-VALUE");
+		// a local the binding shadows is no longer the construction
+		assertThat(lowered("(let [l (java.util.ArrayList.)] (fn [l] (.add (java.util.ArrayList.) l)))"))
+			.contains("(RONTOLISP::%CLOJURE-HOST-VALUE |c%l|)");
+		// where the host is not (wasm) a java: call is a call-time error: no wrap
+		assertThat(Clojure.read("(defn put [m k] (.put m k 1))", null, null, ClojureFiles.NONE, false)
+			.stream()
+			.map(LispVal::print)
+			.collect(Collectors.joining("\n"))).contains("\"put\" |c%k| 1 :FUNCTIONAL :JAVA-FALSE)")
+			.doesNotContain("%CLOJURE-HOST-VALUE");
 	}
 
 	@Test
@@ -2526,7 +2555,8 @@ class ClojureLoweringTest {
 		assertThat(lowered("(defn f [r] (java.io.PushbackReader. r))")).contains("(STREAMP ")
 			.contains("(JAVA:NEW \"java.io.PushbackReader\" ");
 		// a StringReader by itself stays the host class: a Java API takes it
-		assertThat(lowered("(java.io.StringReader. \"x\")")).contains("(JAVA:NEW \"java.io.StringReader\" \"x\")");
+		assertThat(lowered("(java.io.StringReader. \"x\")"))
+			.contains("(JAVA:NEW \"java.io.StringReader\" \"x\" :JAVA-FALSE)");
 	}
 
 	@Test

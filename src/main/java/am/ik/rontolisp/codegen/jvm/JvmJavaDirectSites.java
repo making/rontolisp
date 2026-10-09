@@ -21,6 +21,7 @@ import am.ik.rontolisp.compiler.JavaExecutable;
 import am.ik.rontolisp.compiler.JavaField;
 import am.ik.rontolisp.compiler.JavaImplementationType;
 import am.ik.rontolisp.compiler.JavaKind;
+import am.ik.rontolisp.compiler.JavaMarkers;
 import am.ik.rontolisp.compiler.JavaOverloads;
 import am.ik.rontolisp.compiler.JavaSite;
 import am.ik.rontolisp.compiler.JavaStaticType;
@@ -116,6 +117,36 @@ final class JvmJavaDirectSites {
 
 	/** {@code _jarr(Object)Object}: a Java array as a Lisp list, anything else itself. */
 	static final String ARRAY_TO_LIST = "_jarr";
+
+	/**
+	 * {@code _junf(Object)Object}: {@link #UNMARSHAL} at a call ending in
+	 * {@code :java-false}, which answers Java's {@code false} as {@code |false|}.
+	 */
+	static final String UNMARSHAL_FALSE = "_junf";
+
+	/**
+	 * {@code _jarf(Object)Object}: {@link #ARRAY_TO_LIST} over {@link #UNMARSHAL_FALSE}.
+	 */
+	static final String ARRAY_TO_LIST_FALSE = "_jarf";
+
+	/**
+	 * {@code _jhandle(Object value, Object text, Object hash, Object order, int given)Object}:
+	 * {@code (java:handle value "text" hash "order")} of {@code given} arguments, the
+	 * absent ones {@code null}: the object of the generated handle class
+	 * ({@link JvmJavaImplementations#handleClass()}).
+	 */
+	static final String HANDLE = "_jhandle";
+
+	/** {@link #HANDLE}'s descriptor. */
+	static final String HANDLE_DESC = "(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;I)Ljava/lang/Object;";
+
+	/**
+	 * {@code _jcmp(Object fn, Object args, Object answer)Integer}: what a function
+	 * implementing {@code Comparator.compare} answered, read as Clojure's
+	 * {@code AFunction.compare} reads it, or {@code null} for an answer it does not read
+	 * ({@link am.ik.rontolisp.compiler.JavaImplementation#readsComparison}).
+	 */
+	static final String COMPARISON = "_jcmp";
 
 	/**
 	 * {@code _jkind(Object)I}: a value's classification, one of the {@code KIND_} codes.
@@ -228,6 +259,18 @@ final class JvmJavaDirectSites {
 
 	private @Nullable MethodRefEntry arrayToList;
 
+	private @Nullable MethodRefEntry unmarshalFalse;
+
+	private @Nullable MethodRefEntry arrayToListFalse;
+
+	private @Nullable MethodRefEntry comparison;
+
+	private @Nullable MethodRefEntry handle;
+
+	// Whether the program makes a java:handle, which _junm / _junf then answer the value
+	// of.
+	private boolean handles;
+
 	private @Nullable MethodRefEntry kind;
 
 	private @Nullable MethodRefEntry receiver;
@@ -331,6 +374,33 @@ final class JvmJavaDirectSites {
 	}
 
 	/**
+	 * Says whether the program makes a {@code java:handle}: the unmarshal helpers then
+	 * answer the value a handle Java hands back stands for. Decided before any helper is
+	 * built; a program without one keeps its unmarshal.
+	 * @param handles whether the program names {@code java:handle}
+	 */
+	void handles(boolean handles) {
+		this.handles = handles;
+	}
+
+	/**
+	 * {@code _jhandle}: {@code (java:handle value "text" hash "order")}, made when first
+	 * asked for.
+	 * @return {@code _jhandle(Object,Object,Object,Object,int)Object}
+	 */
+	MethodRefEntry handleHelper() {
+		MethodRefEntry ref = this.handle;
+		if (ref == null) {
+			Utf8Entry name = this.cp.utf8Entry(HANDLE);
+			Utf8Entry desc = this.cp.utf8Entry(HANDLE_DESC);
+			ref = this.cp.methodRef(this.thisClass, name, desc);
+			this.handle = ref;
+			this.methods.add(buildHandle(name, desc));
+		}
+		return ref;
+	}
+
+	/**
 	 * @return the methods to add to the class, in the order they were made
 	 */
 	List<Method> methods() {
@@ -351,6 +421,35 @@ final class JvmJavaDirectSites {
 	 */
 	MethodRefEntry unmarshalHelper() {
 		return unmarshal();
+	}
+
+	/**
+	 * {@code _junm}, or at a call ending in {@code :java-false} {@code _junf}, which
+	 * answers Java's {@code false} as {@code |false|}: made when first asked for.
+	 * @param javaFalse whether Java's false is {@code |false|}
+	 * @return the helper
+	 */
+	MethodRefEntry unmarshalHelper(boolean javaFalse) {
+		return javaFalse ? unmarshalFalse() : unmarshal();
+	}
+
+	/**
+	 * {@code _jcmp}: what a function implementing {@code Comparator.compare} answered as
+	 * an {@code Integer}, or {@code null}, made when first asked for. Its false arm calls
+	 * the function again through {@code _apply}.
+	 * @return {@code _jcmp(Object,Object,Object)Integer}
+	 */
+	MethodRefEntry comparisonHelper() {
+		MethodRefEntry ref = this.comparison;
+		if (ref == null) {
+			Utf8Entry name = this.cp.utf8Entry(COMPARISON);
+			Utf8Entry desc = this.cp
+				.utf8Entry("(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Integer;");
+			ref = this.cp.methodRef(this.thisClass, name, desc);
+			this.comparison = ref;
+			this.methods.add(buildComparison(name, desc));
+		}
+		return ref;
 	}
 
 	/**
@@ -683,8 +782,12 @@ final class JvmJavaDirectSites {
 		key.append(site.operator()).append('|').append(site.staticClass()).append('|').append(site.designator());
 		key.append('|').append(site.packed()).append('|').append(staticField).append('|').append(packedValues);
 		if (site.functional()) {
-			// a function argument converts by its arguments (Body.functional)
+			// a function argument converts by its arguments (Body.markers)
 			key.append("|functional");
+		}
+		if (site.javaFalse()) {
+			// Java's false answers as |false| (emitUnmarshal, Body.markers)
+			key.append("|java-false");
 		}
 		for (JavaSite.Argument argument : site.arguments()) {
 			key.append('|');
@@ -863,7 +966,7 @@ final class JvmJavaDirectSites {
 			ref = this.cp.methodRef(this.thisClass, name, desc);
 			this.unmarshal = ref;
 			MethodRefEntry toList = arrayToList();
-			this.methods.add(buildUnmarshal(name, desc, toList));
+			this.methods.add(buildUnmarshal(name, desc, toList, false));
 		}
 		return ref;
 	}
@@ -877,7 +980,33 @@ final class JvmJavaDirectSites {
 			this.arrayToList = ref;
 			// _jarr and _junm call each other (an Object[] element is unmarshalled): the
 			// reference is published before the body naming _junm is built.
-			this.methods.add(buildArrayToList(name, desc, unmarshal()));
+			this.methods.add(buildArrayToList(name, desc, unmarshal(), false));
+		}
+		return ref;
+	}
+
+	// _junf / _jarf: _junm / _jarr answering Java's false as |false| (:java-false).
+	private MethodRefEntry unmarshalFalse() {
+		MethodRefEntry ref = this.unmarshalFalse;
+		if (ref == null) {
+			Utf8Entry name = this.cp.utf8Entry(UNMARSHAL_FALSE);
+			Utf8Entry desc = this.cp.utf8Entry(OBJECT_DESC);
+			ref = this.cp.methodRef(this.thisClass, name, desc);
+			this.unmarshalFalse = ref;
+			MethodRefEntry toList = arrayToListFalse();
+			this.methods.add(buildUnmarshal(name, desc, toList, true));
+		}
+		return ref;
+	}
+
+	private MethodRefEntry arrayToListFalse() {
+		MethodRefEntry ref = this.arrayToListFalse;
+		if (ref == null) {
+			Utf8Entry name = this.cp.utf8Entry(ARRAY_TO_LIST_FALSE);
+			Utf8Entry desc = this.cp.utf8Entry(OBJECT_DESC);
+			ref = this.cp.methodRef(this.thisClass, name, desc);
+			this.arrayToListFalse = ref;
+			this.methods.add(buildArrayToList(name, desc, unmarshalFalse(), true));
 		}
 		return ref;
 	}
@@ -942,7 +1071,7 @@ final class JvmJavaDirectSites {
 					JvmJavaDirectSites.this.lookup.find(Objects.requireNonNull(site.staticClass())), "resolved class");
 			this.owner = cls(this.type);
 			this.operator = "java:" + site.operator().name().toLowerCase(java.util.Locale.ROOT);
-			this.functional = site.functional();
+			this.markers = site.markers();
 			this.valueSlots = new int[valueCount];
 			for (int i = 0; i < valueCount; i++) {
 				if (packedValues) {
@@ -1393,7 +1522,7 @@ final class JvmJavaDirectSites {
 				JavaType param = params.get(j);
 				a.aload(this.valueSlots[firstValue + j]);
 				boolean open = arguments.get(j).mayBeFunction();
-				a.invokestatic(convert(param, open, open, open && this.functional));
+				a.invokestatic(convert(param, open, open, open ? this.markers : JavaMarkers.NONE));
 				converted[j] = this.nextSlot;
 				this.nextSlot += width(param);
 				store(param, converted[j]);
@@ -1409,7 +1538,7 @@ final class JvmJavaDirectSites {
 					a.loadConstant(j - fixed);
 					a.aload(this.valueSlots[firstValue + j]);
 					boolean open = arguments.get(j).mayBeFunction();
-					a.invokestatic(convert(component, open, open, open && this.functional));
+					a.invokestatic(convert(component, open, open, open ? this.markers : JavaMarkers.NONE));
 					a.arrayStore(typeKind(component));
 				}
 				converted[fixed] = array;
@@ -1441,9 +1570,11 @@ final class JvmJavaDirectSites {
 
 		final int longTemp;
 
-		// Whether a function converts to an interface by its arguments (a site ending
-		// in :functional, JavaImplementations.functional) rather than as its proxy.
-		boolean functional;
+		// The markers the site ends in: whether a function converts to an interface by
+		// its arguments (:functional, JavaImplementations.functional) rather than as its
+		// proxy, and whether Java's false answers as |false| (:java-false) -- the value
+		// the site answers, an argument Java hands a function converted there.
+		JavaMarkers markers = JavaMarkers.NONE;
 
 		/**
 		 * @param firstFree the first local the parameters leave free
@@ -1740,8 +1871,8 @@ final class JvmJavaDirectSites {
 					a.loadConstant(0);
 					a.aload(slot);
 					a.aastore();
-					a.invokestatic(this.functional ? implementations().functionalFactory(target)
-							: implementations().proxyFactory(target));
+					a.invokestatic(this.markers.functional() ? implementations().functionalFactory(target, this.markers)
+							: implementations().proxyFactory(target, this.markers));
 				}
 			}
 		}
@@ -1891,6 +2022,7 @@ final class JvmJavaDirectSites {
 		 */
 		void emitUnmarshal(JavaType declared) {
 			MethodCode a = this.a;
+			boolean javaFalse = this.markers.javaFalse();
 			switch (declared.name()) {
 				case "void" -> a.aconst_null();
 				case "boolean" -> {
@@ -1900,7 +2032,7 @@ final class JvmJavaDirectSites {
 					a.ldc(str("T"));
 					a.goto_(end);
 					a.labelBinding(nil);
-					a.aconst_null();
+					falseValue(javaFalse);
 					a.labelBinding(end);
 				}
 				case "byte", "short", "int" -> {
@@ -1936,6 +2068,7 @@ final class JvmJavaDirectSites {
 				});
 				case "java.lang.Boolean" -> {
 					MethodCode.Label nil = a.newLabel();
+					MethodCode.Label isFalse = a.newLabel();
 					MethodCode.Label end = a.newLabel();
 					a.astore(this.objectTemp);
 					a.aload(this.objectTemp);
@@ -1943,8 +2076,11 @@ final class JvmJavaDirectSites {
 					a.aload(this.objectTemp);
 					a.checkcast(cls("java/lang/Boolean"));
 					a.invokevirtual(method("java/lang/Boolean", "booleanValue", "()Z"));
-					a.ifeq(nil);
+					a.ifeq(isFalse);
 					a.ldc(str("T"));
+					a.goto_(end);
+					a.labelBinding(isFalse);
+					falseValue(javaFalse);
 					a.goto_(end);
 					a.labelBinding(nil);
 					a.aconst_null();
@@ -1975,10 +2111,21 @@ final class JvmJavaDirectSites {
 				});
 				default -> {
 					if (declared.isArray() || mayHideALispValue(declared)) {
-						a.invokestatic(unmarshal());
+						a.invokestatic(unmarshalHelper(javaFalse));
 					}
 					// Any other class holds a host object, which stays itself.
 				}
+			}
+		}
+
+		// Pushes what Java's false answers as: |false| at a site ending in :java-false,
+		// else nil.
+		void falseValue(boolean javaFalse) {
+			if (javaFalse) {
+				this.a.ldc(str(LispNames.JAVA_FALSE));
+			}
+			else {
+				this.a.aconst_null();
 			}
 		}
 
@@ -2085,14 +2232,15 @@ final class JvmJavaDirectSites {
 	}
 
 	/**
-	 * {@link #argumentConvert(JavaType)}, a function converted by the method's arguments
-	 * when {@code functional} (a form ending in {@code :functional}).
+	 * {@link #argumentConvert(JavaType)} at a form ending in these markers: a function
+	 * converted by the method's arguments after {@code :functional}, handed Java's
+	 * {@code false} as {@code |false|} after {@code :java-false}.
 	 * @param target the parameter type
-	 * @param functional whether a function implements its interface by its arguments
+	 * @param markers the form's markers
 	 * @return {@code _jconv$N(Object)T}
 	 */
-	MethodRefEntry argumentConvert(JavaType target, boolean functional) {
-		return convert(target, true, true, functional);
+	MethodRefEntry argumentConvert(JavaType target, JavaMarkers markers) {
+		return convert(target, true, true, markers);
 	}
 
 	/**
@@ -2130,23 +2278,26 @@ final class JvmJavaDirectSites {
 	 * sequences without functions.
 	 */
 	private MethodRefEntry convert(JavaType target, boolean functions, boolean sequences) {
-		return convert(target, functions, sequences, false);
+		return convert(target, functions, sequences, JavaMarkers.NONE);
 	}
 
 	/**
-	 * {@code _jconv$N} as above, a function converted by its arguments when
-	 * {@code functional} (a site ending in {@code :functional}).
+	 * {@code _jconv$N} as above at a site ending in these markers: a function converted
+	 * by its arguments after {@code :functional}, and the implementation it becomes
+	 * handed Java's {@code false} as {@code |false|} after {@code :java-false}. The
+	 * markers only matter where a function converts, so the key carries them only then.
 	 */
-	private MethodRefEntry convert(JavaType target, boolean functions, boolean sequences, boolean functional) {
+	private MethodRefEntry convert(JavaType target, boolean functions, boolean sequences, JavaMarkers markers) {
+		JavaMarkers used = functions ? markers : JavaMarkers.NONE;
 		String key = target.name() + (functions ? " functions" : "") + (sequences ? " sequences" : "")
-				+ (functional ? " functional" : "");
+				+ (used.functional() ? " functional" : "") + (used.javaFalse() ? " java-false" : "");
 		MethodRefEntry ref = this.converts.get(key);
 		if (ref == null) {
 			Utf8Entry name = this.cp.utf8Entry(CONVERT_PREFIX + this.converts.size());
 			Utf8Entry desc = this.cp.utf8Entry("(Ljava/lang/Object;)" + descriptor(target));
 			ref = this.cp.methodRef(this.thisClass, name, desc);
 			this.converts.put(key, ref);
-			this.methods.add(buildConvert(name, desc, target, functions, sequences, functional));
+			this.methods.add(buildConvert(name, desc, target, functions, sequences, used));
 		}
 		return ref;
 	}
@@ -2947,9 +3098,9 @@ final class JvmJavaDirectSites {
 	// array or list. A value no arm takes was costed NO_MATCH, so the site never passes
 	// one.
 	private Method buildConvert(Utf8Entry name, Utf8Entry desc, JavaType target, boolean functions, boolean sequences,
-			boolean functional) {
+			JavaMarkers markers) {
 		Body body = new Body(2);
-		body.functional = functional;
+		body.markers = markers;
 		MethodCode a = body.a;
 		int code = 1;
 		MethodCode.Label reject = a.newLabel();
@@ -2998,7 +3149,7 @@ final class JvmJavaDirectSites {
 			a.astore(elements);
 			a.aload(elements);
 			a.ifnull(reject);
-			MethodRefEntry each = convert(element, functions, sequences, functional);
+			MethodRefEntry each = convert(element, functions, sequences, markers);
 			if (target.isArray()) {
 				a.aload(elements);
 				a.arraylength();
@@ -3060,7 +3211,7 @@ final class JvmJavaDirectSites {
 			int result = body.nextSlot++;
 			int index = body.nextSlot++;
 			ClassEntry linkedHashMap = cls("java/util/LinkedHashMap");
-			MethodRefEntry each = convert(entry, functions, sequences, functional);
+			MethodRefEntry each = convert(entry, functions, sequences, markers);
 			a.iload(code);
 			a.loadConstant(KIND_TABLE);
 			a.if_icmpne(notTable);
@@ -3251,8 +3402,9 @@ final class JvmJavaDirectSites {
 		return new Method(name, desc, a);
 	}
 
-	// _junm(Object)Object: the bridge's unmarshal.
-	private Method buildUnmarshal(Utf8Entry name, Utf8Entry desc, MethodRefEntry toList) {
+	// _junm(Object)Object: the bridge's unmarshal; _junf with javaFalse, Java's false
+	// answered as |false| (the bridge's unmarshal at a call ending in :java-false).
+	private Method buildUnmarshal(Utf8Entry name, Utf8Entry desc, MethodRefEntry toList, boolean javaFalse) {
 		MethodCode a = new MethodCode();
 		MethodRefEntry longValueOf = method("java/lang/Long", "valueOf", "(J)Ljava/lang/Long;");
 		MethodRefEntry doubleValueOf = method("java/lang/Double", "valueOf", "(D)Ljava/lang/Double;");
@@ -3264,7 +3416,7 @@ final class JvmJavaDirectSites {
 		a.aconst_null();
 		a.areturn();
 		a.labelBinding(notNull);
-		// Boolean -> t / nil
+		// Boolean -> t / nil (|false| when javaFalse)
 		MethodCode.Label notBoolean = a.newLabel();
 		MethodCode.Label falseValue = a.newLabel();
 		a.aload(0);
@@ -3277,7 +3429,12 @@ final class JvmJavaDirectSites {
 		a.ldc(str("T"));
 		a.areturn();
 		a.labelBinding(falseValue);
-		a.aconst_null();
+		if (javaFalse) {
+			a.ldc(str(LispNames.JAVA_FALSE));
+		}
+		else {
+			a.aconst_null();
+		}
 		a.areturn();
 		a.labelBinding(notBoolean);
 		// Integer / Short / Byte -> the long; Long / Double -> themselves
@@ -3357,6 +3514,19 @@ final class JvmJavaDirectSites {
 		a.invokevirtual(concat);
 		a.areturn();
 		a.labelBinding(notString);
+		if (this.handles) {
+			// A handle -> the value it stands for (java:handle).
+			ClassEntry handleClass = cls(implementations().handleClass());
+			MethodCode.Label notHandle = a.newLabel();
+			a.aload(0);
+			a.instanceOf(handleClass);
+			a.ifeq(notHandle);
+			a.aload(0);
+			a.checkcast(handleClass);
+			a.getfield(this.cp.fieldRef(handleClass, "value", "Ljava/lang/Object;"));
+			a.areturn();
+			a.labelBinding(notHandle);
+		}
 		// An array -> a list; any other object stays itself.
 		a.aload(0);
 		a.invokestatic(toList);
@@ -3364,9 +3534,122 @@ final class JvmJavaDirectSites {
 		return new Method(name, desc, a);
 	}
 
+	// _jhandle(Object value, Object text, Object hash, Object order, int given)Object,
+	// GIVEN
+	// the number of the form's arguments: new <Program>$Handle(value, the unquoted text,
+	// the hash's low 32 bits -- the text's hashCode when GIVEN is 2 --, the unquoted
+	// order
+	// -- the text when GIVEN is under 4 --), the text and the order rendered first (a
+	// mutable character vector as the string it spells). A text or an order that is no
+	// string, or a hash that is no integer, is eval/JavaInterop.handle's refusal.
+	private Method buildHandle(Utf8Entry name, Utf8Entry desc) {
+		MethodCode a = new MethodCode();
+		ClassEntry handleClass = cls(implementations().handleClass());
+		ClassEntry longClass = cls("java/lang/Long");
+		ClassEntry bigInteger = cls("java/math/BigInteger");
+		String usage = "java:handle expects (java:handle value \"text\" [hash [\"order\"]]), got ";
+		int text = 5;
+		int hash = 6;
+		int order = 7;
+		MethodCode.Label badText = a.newLabel();
+		MethodCode.Label badHash = a.newLabel();
+		MethodCode.Label badOrder = a.newLabel();
+		MethodCode.Label ownHash = a.newLabel();
+		MethodCode.Label notLong = a.newLabel();
+		MethodCode.Label hashed = a.newLabel();
+		MethodCode.Label ownOrder = a.newLabel();
+		MethodCode.Label ordered = a.newLabel();
+		render(a, 1);
+		emitUnquoted(a, 1, badText);
+		a.astore(text);
+		a.iload(4);
+		a.loadConstant(3);
+		a.if_icmplt(ownHash);
+		a.aload(2);
+		a.instanceOf(longClass);
+		a.ifeq(notLong);
+		a.aload(2);
+		a.checkcast(longClass);
+		a.invokevirtual(method("java/lang/Long", "intValue", "()I"));
+		a.istore(hash);
+		a.goto_(hashed);
+		a.labelBinding(notLong);
+		a.aload(2);
+		a.instanceOf(bigInteger);
+		a.ifeq(badHash);
+		a.aload(2);
+		a.checkcast(bigInteger);
+		a.invokevirtual(method("java/math/BigInteger", "intValue", "()I"));
+		a.istore(hash);
+		a.goto_(hashed);
+		a.labelBinding(ownHash);
+		a.aload(text);
+		a.invokevirtual(method("java/lang/String", "hashCode", "()I"));
+		a.istore(hash);
+		a.labelBinding(hashed);
+		a.iload(4);
+		a.loadConstant(4);
+		a.if_icmplt(ownOrder);
+		render(a, 3);
+		emitUnquoted(a, 3, badOrder);
+		a.astore(order);
+		a.goto_(ordered);
+		a.labelBinding(ownOrder);
+		a.aload(text);
+		a.astore(order);
+		a.labelBinding(ordered);
+		a.new_(handleClass);
+		a.dup();
+		a.aload(0);
+		a.aload(text);
+		a.iload(hash);
+		a.aload(order);
+		a.invokespecial(
+				this.cp.methodRef(handleClass, "<init>", "(Ljava/lang/Object;Ljava/lang/String;ILjava/lang/String;)V"));
+		a.areturn();
+		a.labelBinding(badText);
+		throwDescribing(a, usage, 1);
+		a.labelBinding(badHash);
+		throwDescribing(a, usage, 2);
+		a.labelBinding(badOrder);
+		throwDescribing(a, usage, 3);
+		return new Method(name, desc, a);
+	}
+
+	// Pushes the Lisp string in SLOT unquoted (its quote-framed spelling without the
+	// quotes), or jumps to REFUSED when the slot holds no Lisp string.
+	private void emitUnquoted(MethodCode a, int slot, MethodCode.Label refused) {
+		ClassEntry string = cls("java/lang/String");
+		MethodRefEntry length = method("java/lang/String", "length", "()I");
+		a.aload(slot);
+		a.instanceOf(string);
+		a.ifeq(refused);
+		a.aload(slot);
+		a.checkcast(string);
+		a.invokevirtual(length);
+		a.loadConstant(2);
+		a.if_icmplt(refused);
+		a.aload(slot);
+		a.checkcast(string);
+		a.loadConstant(0);
+		a.invokevirtual(method("java/lang/String", "charAt", "(I)C"));
+		a.loadConstant('"');
+		a.if_icmpne(refused);
+		a.aload(slot);
+		a.checkcast(string);
+		a.loadConstant(1);
+		a.aload(slot);
+		a.checkcast(string);
+		a.invokevirtual(length);
+		a.loadConstant(1);
+		a.isub();
+		a.invokevirtual(method("java/lang/String", "substring", "(II)Ljava/lang/String;"));
+	}
+
 	// _jarr(Object)Object: the bridge's arrayToList over every array type (elements
-	// unmarshalled as Array.get would box them), or the value itself when it is no array.
-	private Method buildArrayToList(Utf8Entry name, Utf8Entry desc, MethodRefEntry unmarshal) {
+	// unmarshalled as Array.get would box them), or the value itself when it is no array;
+	// _jarf with javaFalse, a false boolean element |false|.
+	private Method buildArrayToList(Utf8Entry name, Utf8Entry desc, MethodRefEntry unmarshal, boolean javaFalse) {
 		MethodCode a = new MethodCode();
 		MethodRefEntry longValueOf = method("java/lang/Long", "valueOf", "(J)Ljava/lang/Long;");
 		MethodRefEntry doubleValueOf = method("java/lang/Double", "valueOf", "(D)Ljava/lang/Double;");
@@ -3444,7 +3727,7 @@ final class JvmJavaDirectSites {
 					a.iastore();
 				}
 				default -> {
-					// boolean[]: t or nil.
+					// boolean[]: t or nil (|false| when javaFalse).
 					MethodCode.Label falseValue = a.newLabel();
 					MethodCode.Label stored = a.newLabel();
 					a.baload();
@@ -3452,7 +3735,12 @@ final class JvmJavaDirectSites {
 					a.ldc(str("T"));
 					a.goto_(stored);
 					a.labelBinding(falseValue);
-					a.aconst_null();
+					if (javaFalse) {
+						a.ldc(str(LispNames.JAVA_FALSE));
+					}
+					else {
+						a.aconst_null();
+					}
 					a.labelBinding(stored);
 				}
 			}
@@ -3469,6 +3757,148 @@ final class JvmJavaDirectSites {
 			a.labelBinding(next);
 		}
 		a.aload(0);
+		a.areturn();
+		return new Method(name, desc, a);
+	}
+
+	// _jcmp(Object fn, Object args, Object answer)Integer: a Comparator's function's
+	// answer as Clojure's AFunction.compare reads it (eval/JavaInterop's handler, the
+	// bridge's callback): t -1; |false| 1 when fn answers true -- neither nil nor
+	// |false| -- for the two arguments of ARGS swapped, else 0; a fixnum or bignum its
+	// low 32 bits, a float truncated (d2i saturates, NaN is 0), a ratio its DECIMAL64
+	// quotient truncated; anything else null, which the return conversion refuses.
+	private Method buildComparison(Utf8Entry name, Utf8Entry desc) {
+		MethodCode a = new MethodCode();
+		ClassEntry objects = cls("[Ljava/lang/Object;");
+		ClassEntry objectClass = cls("java/lang/Object");
+		ClassEntry bigInteger = cls("java/math/BigInteger");
+		ClassEntry ratio = cls("[Ljava/math/BigInteger;");
+		ClassEntry bigDecimal = cls("java/math/BigDecimal");
+		MethodRefEntry equals = method("java/lang/String", "equals", "(Ljava/lang/Object;)Z");
+		MethodRefEntry integerOf = method("java/lang/Integer", "valueOf", "(I)Ljava/lang/Integer;");
+		MethodCode.Label notTrue = a.newLabel();
+		MethodCode.Label notFalse = a.newLabel();
+		MethodCode.Label zero = a.newLabel();
+		MethodCode.Label notLong = a.newLabel();
+		MethodCode.Label notDouble = a.newLabel();
+		MethodCode.Label notBignum = a.newLabel();
+		MethodCode.Label notRatio = a.newLabel();
+		// T: -1
+		a.ldc(str("T"));
+		a.aload(2);
+		a.invokevirtual(equals);
+		a.ifeq(notTrue);
+		a.loadConstant(-1);
+		a.invokestatic(integerOf);
+		a.areturn();
+		a.labelBinding(notTrue);
+		// |false|: fn of (b a), true when neither nil nor |false|
+		a.ldc(str(LispNames.JAVA_FALSE));
+		a.aload(2);
+		a.invokevirtual(equals);
+		a.ifeq(notFalse);
+		a.aload(0);
+		// new Object[] { b, new Object[] { a, null } }, ARGS being { a, { b, null } }
+		a.loadConstant(2);
+		a.anewarray(objectClass);
+		a.dup();
+		a.loadConstant(0);
+		a.aload(1);
+		a.checkcast(objects);
+		a.loadConstant(1);
+		a.aaload();
+		a.checkcast(objects);
+		a.loadConstant(0);
+		a.aaload();
+		a.aastore();
+		a.dup();
+		a.loadConstant(1);
+		a.loadConstant(2);
+		a.anewarray(objectClass);
+		a.dup();
+		a.loadConstant(0);
+		a.aload(1);
+		a.checkcast(objects);
+		a.loadConstant(0);
+		a.aaload();
+		a.aastore();
+		a.aastore();
+		a.invokestatic(this.cp.methodRef(this.thisClass, "_apply",
+				"(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;"));
+		a.astore(3);
+		a.aload(3);
+		a.ifnull(zero);
+		a.ldc(str(LispNames.JAVA_FALSE));
+		a.aload(3);
+		a.invokevirtual(equals);
+		a.ifne(zero);
+		a.loadConstant(1);
+		a.invokestatic(integerOf);
+		a.areturn();
+		a.labelBinding(zero);
+		a.loadConstant(0);
+		a.invokestatic(integerOf);
+		a.areturn();
+		a.labelBinding(notFalse);
+		// a fixnum: its low 32 bits
+		a.aload(2);
+		a.instanceOf(cls("java/lang/Long"));
+		a.ifeq(notLong);
+		a.aload(2);
+		a.checkcast(cls("java/lang/Long"));
+		a.invokevirtual(method("java/lang/Long", "intValue", "()I"));
+		a.invokestatic(integerOf);
+		a.areturn();
+		a.labelBinding(notLong);
+		// a float: truncated
+		a.aload(2);
+		a.instanceOf(cls("java/lang/Double"));
+		a.ifeq(notDouble);
+		a.aload(2);
+		a.checkcast(cls("java/lang/Double"));
+		a.invokevirtual(method("java/lang/Double", "doubleValue", "()D"));
+		a.d2i();
+		a.invokestatic(integerOf);
+		a.areturn();
+		a.labelBinding(notDouble);
+		// a bignum: its low 32 bits
+		a.aload(2);
+		a.instanceOf(bigInteger);
+		a.ifeq(notBignum);
+		a.aload(2);
+		a.checkcast(bigInteger);
+		a.invokevirtual(method("java/math/BigInteger", "intValue", "()I"));
+		a.invokestatic(integerOf);
+		a.areturn();
+		a.labelBinding(notBignum);
+		// a ratio {num, den}: new BigDecimal(num).divide(new BigDecimal(den), DECIMAL64)
+		a.aload(2);
+		a.instanceOf(ratio);
+		a.ifeq(notRatio);
+		MethodRefEntry decimalOf = method("java/math/BigDecimal", "<init>", "(Ljava/math/BigInteger;)V");
+		a.new_(bigDecimal);
+		a.dup();
+		a.aload(2);
+		a.checkcast(ratio);
+		a.loadConstant(0);
+		a.aaload();
+		a.invokespecial(decimalOf);
+		a.new_(bigDecimal);
+		a.dup();
+		a.aload(2);
+		a.checkcast(ratio);
+		a.loadConstant(1);
+		a.aaload();
+		a.invokespecial(decimalOf);
+		a.getstatic(field("java/math/MathContext", "DECIMAL64", "Ljava/math/MathContext;"));
+		a.invokevirtual(method("java/math/BigDecimal", "divide",
+				"(Ljava/math/BigDecimal;Ljava/math/MathContext;)Ljava/math/BigDecimal;"));
+		a.invokevirtual(method("java/math/BigDecimal", "doubleValue", "()D"));
+		a.d2i();
+		a.invokestatic(integerOf);
+		a.areturn();
+		a.labelBinding(notRatio);
+		a.aconst_null();
 		a.areturn();
 		return new Method(name, desc, a);
 	}

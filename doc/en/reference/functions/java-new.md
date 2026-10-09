@@ -22,3 +22,8 @@ The class name may carry the constructor's parameter types, which picks it direc
 one constructor when its argument kinds are known from the text, otherwise to the
 constructors it chooses among by the kinds its arguments have when it runs (the guide's
 [Resolving calls before they run](../../guides/java-interop.md#resolving-calls-before-they-run)).
+
+The arguments may be followed by `:functional`, which converts a function argument the way
+Java converts a lambda (the guide's [Callbacks via
+java:proxy](../../guides/java-interop.md#callbacks-via-javaproxy)), and by `:java-false`, which hands such a function
+Java's false as `|false|` (the guide's [Java's false back](../../guides/java-interop.md#javas-false-back-java-false)).
