@@ -124,18 +124,13 @@ public final class RontoStringInputStream extends BufferedReader {
 		}
 		int start = this.cursor;
 		int end = start;
-		while (end < this.text.length() && this.text.charAt(end) != '\n' && this.text.charAt(end) != '\r') {
+		while (end < this.text.length() && this.text.charAt(end) != '\n') {
 			end++;
 		}
-		this.cursor = end;
-		if (end < this.text.length()) {
-			this.cursor++;
-			if (this.text.charAt(end) == '\r' && this.cursor < this.text.length()
-					&& this.text.charAt(this.cursor) == '\n') {
-				this.cursor++;
-			}
-		}
-		return this.text.substring(start, end);
+		// Only \n ends a line; one \r just before it (or before the end) is dropped.
+		this.cursor = (end < this.text.length()) ? end + 1 : end;
+		int last = (end > start && this.text.charAt(end - 1) == '\r') ? end - 1 : end;
+		return this.text.substring(start, last);
 	}
 
 	@Override

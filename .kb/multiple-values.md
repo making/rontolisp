@@ -136,8 +136,9 @@ Measured before, the same day: SBCL `("ab" NIL)` `("cd" T)` `(:EOF T)`, all four
   `RontoIoFileStream.lastLineMissingNewline`); JVM `_readLinePair` (+ `_sockReadLinePair`); WASM the
   shared `_read_line` core storing its flag in `READ_LINE_END_ADDR` -- an alias of
   `TIME_SCRATCH_ADDR`, sound because the expansion (`WasmReadLineCompiler.pairExpansion`) reads it
-  straight after the call in a single-threaded module; the low 256 bytes hold no free word. A CR
-  the input ends on ends its line as end of file does (the WASM core's answer).
+  straight after the call in a single-threaded module; the low 256 bytes hold no free word. Only LF
+  ends a line and one CR before it or the end is dropped, so a CR the input ends on is dropped and the
+  line is end-of-file terminated ([[read-load-streams]], "`read-line`, `read-char`, `peek-char`").
 - Gates: JVM `_readLinePair` and the recording core exist only where `%READ-LINE-PAIR` is spelled
   OR (the spill global exists AND the program names `read-line` / the alias). The first clause is
   load-bearing: a settled defun tail has already REPLACED its `read-line` by the pair when the gate

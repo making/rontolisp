@@ -87,6 +87,67 @@ public final class ReadLineValuesFixture {
 			"(3 (\"f2\" T))");
 
 	/**
+	 * The bytes {@code a CR b LF c CR CR LF d CR} written to {@code file}, shared by
+	 * {@link #carriageReturnProgram} and {@link #carriageReturnFileKindsProgram}.
+	 */
+	private static final String CR_FILE_SETUP = """
+			(defun rlv-codes (l) (mapcar #'char-code (coerce l 'list)))
+			(with-open-file (o "%1$s" :direction :output :if-exists :supersede :element-type '(unsigned-byte 8))
+			  (dolist (b '(97 13 98 10 99 13 13 10 100 13)) (write-byte b o)))
+			""";
+
+	/**
+	 * A line ends at {@code \n} alone: a {@code \r} no {@code \n} follows is part of the
+	 * line, and one {@code \r} just before the {@code \n} or the end of input is dropped
+	 * -- the rule all four backends share (SBCL keeps that last {@code \r}). A plain file
+	 * and a string stream, through the plain call and the multiple-value one.
+	 * @param file the file's namestring, already escaped for a Lisp string literal
+	 * @return the source
+	 */
+	public static String carriageReturnProgram(String file) {
+		return (CR_FILE_SETUP
+				+ """
+						(with-open-file (i "%1$s")
+						  (print (loop for l = (read-line i nil) while l collect (rlv-codes l))))
+						(with-open-file (i "%1$s")
+						  (loop (multiple-value-bind (l m) (read-line i nil nil)
+						          (unless l (return))
+						          (print (list (rlv-codes l) m)))))
+						(with-input-from-string (s (coerce (list #\\a (code-char 13) #\\b #\\Newline #\\c) 'string))
+						  (print (loop for l = (read-line s nil) while l collect (rlv-codes l))))
+						(with-input-from-string (s (coerce (list #\\a (code-char 13) #\\b #\\Newline #\\c (code-char 13)) 'string))
+						  (loop (multiple-value-bind (l m) (read-line s nil nil)
+						          (unless l (return))
+						          (print (list (rlv-codes l) m)))))
+						""")
+			.formatted(file);
+	}
+
+	/** What {@link #carriageReturnProgram} prints. */
+	public static final String CARRIAGE_RETURN_EXPECTED = String.join("\n", "((97 13 98) (99 13) (100))",
+			"((97 13 98) NIL)", "((99 13) NIL)", "((100) T)", "((97 13 98) (99))", "((97 13 98) NIL)", "((99) T)");
+
+	/**
+	 * {@link #carriageReturnProgram}'s file read through the bidirectional stream and the
+	 * positioned character stream, the line's end and {@code file-position} agreeing.
+	 * @param file the file's namestring, already escaped for a Lisp string literal
+	 * @return the source
+	 */
+	public static String carriageReturnFileKindsProgram(String file) {
+		return (CR_FILE_SETUP + """
+				(with-open-file (s "%1$s" :direction :io :if-exists :overwrite)
+				  (print (loop for l = (read-line s nil) while l collect (rlv-codes l))))
+				(with-open-file (s "%1$s")
+				  (print (rlv-codes (read-line s)))
+				  (print (file-position s)))
+				""").formatted(file);
+	}
+
+	/** What {@link #carriageReturnFileKindsProgram} prints. */
+	public static final String CARRIAGE_RETURN_FILE_KINDS_EXPECTED = String.join("\n", "((97 13 98) (99 13) (100))",
+			"(97 13 98)", "4");
+
+	/**
 	 * A program whose only {@code read-line} producer is a function tail (lowered before
 	 * any consumer is), and one that can reach a socket -- its stream runtime carries the
 	 * socket read too.
