@@ -37,10 +37,11 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   sets included, but a stored collection key is the first `=` key of its kind (vector,
   list, lazy seq) the program stored, so its metadata and the spelling of a nested
   member follow that earlier object; those keys stay alive for the whole run, one
-  per distinct value and kind. A repeated set-literal element is refused by spelling.
+  per distinct value and kind.
   `=` compares vectors, lists and lazy seqs element-wise like the oracle, and since `nil`
   is the empty list, `(= [] nil)` and `(= (java.util.ArrayList.) nil)` are `true` where the
-  oracle answers `false`.
+  oracle answers `false`. As keys `[]` and `nil` stay apart like the oracle's, so an empty
+  list or seq misses an empty vector key: `(get {[] 1} ())` is `nil` (the oracle: `1`).
   `=` asks a Java object on the left its `equals` like the oracle, but hands it only a
   number, string, character, `true`, `nil` or Java object: `false`, a keyword, a symbol
   or a collection is `=` to no Java object but a Java `List`, `Map` or `Set` of its kind.

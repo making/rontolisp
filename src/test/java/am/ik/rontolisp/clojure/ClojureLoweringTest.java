@@ -419,6 +419,23 @@ class ClojureLoweringTest {
 	}
 
 	@Test
+	void aLiteralOfConstantKeysEqualOnceEvaluatedIsRefusedWhenLowered() {
+		// the oracle's compile-time refusal: every key a constant, two of them =
+		assertThatThrownBy(() -> lowered("{[1] :a '(1) :b}")).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Duplicate constant keys in map");
+		assertThatThrownBy(() -> lowered("{1 :a '1 :b :c (str 1)}")).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Duplicate constant keys in map");
+		// constants stay unchecked at run time; a computed key checks there
+		assertThat(lowered("{[1] :a '(2) :b :c 1}")).doesNotContain("%CLOJURE-MAP-LITERAL");
+		assertThat(lowered("#{[1] '(1)}")).doesNotContain("%CLOJURE-SET-LITERAL");
+		assertThat(lowered("(defn f [x] {x 1 :a 2})")).contains("(RONTOLISP::%CLOJURE-MAP-LITERAL");
+		assertThat(lowered("(defn f [x] #{x 1})")).contains("(RONTOLISP::%CLOJURE-SET-LITERAL");
+		// one entry cannot repeat; a call keeps the last value
+		assertThat(lowered("(defn f [x] [{x 1} #{x} (hash-map x 1 x 2)])")).doesNotContain("%CLOJURE-MAP-LITERAL")
+			.doesNotContain("%CLOJURE-SET-LITERAL");
+	}
+
+	@Test
 	void seqsCoerceCollectionsThroughOneSharedView() {
 		assertThat(lowered("(seq [1 2])")).contains("%CLOJURE-SEQ");
 		assertThat(lowered("(first [1 2])")).contains("(CAR").contains("%CLOJURE-SEQ");

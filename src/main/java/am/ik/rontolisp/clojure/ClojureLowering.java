@@ -3488,10 +3488,10 @@ public final class ClojureLowering {
 			return ClojureLowerUtil.cons(ClojureLowerUtil.sym("vector"), lowers(items, 1));
 		}
 		if (ClojureLowerUtil.isSymbolNamed(head, "%hash-map")) {
-			return ClojureCollectionLowering.mapBuild(lowers(items, 1));
+			return ClojureCollectionLowering.mapLiteral(this, items);
 		}
 		if (ClojureLowerUtil.isSymbolNamed(head, "%hash-set")) {
-			return ClojureCollectionLowering.setBuild(this, lowers(items, 1));
+			return ClojureCollectionLowering.setLiteral(this, items);
 		}
 		if (head == ClojureReader.REGEX || ClojureLowerUtil.isSymbolNamed(head, "%regex")) {
 			return ClojureCollectionLowering.regexForm(items);

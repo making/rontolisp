@@ -2738,6 +2738,27 @@
           (setf (gethash (rontolisp::%clojure-store-key (car p) out) out)
                 (car (cdr p)))))))
 
+;; A literal whose keys or members are computed: the oracle's RT.map / RT.set check
+;; at run time. The count tells a repeat apart; only then the reader's builders run
+;; again over the evaluated forms to name it.
+(defun rontolisp::%clojure-map-literal (plist)
+  "A map literal's map over PLIST, its evaluated alternating keys and values: a
+   key = to an earlier one is the oracle's Duplicate key, naming the earlier
+   (%clojure-rd-map-of)."
+  (let ((table (rontolisp::%clojure-plist-table nil plist)))
+    (if (= (* 2 (hash-table-count table)) (length plist))
+        table
+        (rontolisp::%clojure-rd-map-of plist))))
+
+(defun rontolisp::%clojure-set-literal (members)
+  "A set literal's set over its evaluated MEMBERS: a member = to an earlier one
+   is the oracle's Duplicate key, naming the later (%clojure-rd-set-of)."
+  (let ((table (make-hash-table :test 'equal)))
+    (dolist (x members) (rontolisp::%clojure-set-put table x))
+    (if (= (hash-table-count table) (length members))
+        (list :C%SET table)
+        (rontolisp::%clojure-rd-set-of members))))
+
 (defun rontolisp::%clojure-methods (table)
   "The map (methods f) answers for the method table TABLE: a copy, its nil
    marker row keyed by nil like a map's nil key."
@@ -10713,10 +10734,15 @@
             (car (cdr p))))))
 
 (defun rontolisp::%clojure-rd-set (rd)
-  "A set literal's members up to }, as the set wrapper; a repeated member
-   signals, naming it as the oracle's toString does."
+  "A set literal's members up to }, as the set wrapper (%clojure-rd-set-of)."
+  (rontolisp::%clojure-rd-set-of (rontolisp::%clojure-rd-seq rd #\})))
+
+(defun rontolisp::%clojure-rd-set-of (members)
+  "The set wrapper over MEMBERS, each stored through the structural-key store
+   like a literal's; a member = to an earlier one signals, naming it as the
+   oracle's toString does."
   (let ((table (make-hash-table :test 'equal)) (miss (list nil)))
-    (dolist (x (rontolisp::%clojure-rd-seq rd #\}))
+    (dolist (x members)
       (if (not
            (eq (gethash (rontolisp::%clojure-table-key x table) table miss)
                miss))

@@ -51,7 +51,7 @@ The oracle is `clj` 1.12.6.1673: a behavior is decided by running it there, and 
 | `false` | the value of `rontolisp::%clojure-false`, a distinct non-`NIL` symbol spelled `false` | the `#f` treatment of `scheme.lisp`; every lowered test is an explicit null-or-false check on a temporary; the symbol `java:` passes as Java's false ("Java interop") |
 | `:foo`, `:a/b` | `(:C%KEYWORD "foo")`, spelling verbatim | compared by `equal`; `::kw` / `::alias/kw` resolve at lower time against the current namespace (an unknown alias is the oracle's `Invalid token`) |
 | `{k v}` | an `equal` hash table (`rontolisp:plist-hash-table`), never mutated: every verb builds a fresh one | the shared runtime (`.kb/hash-tables.md`), so persistence holds on all four backends with no per-backend code; a persistent-map library would add a representation every backend prints, hashes and compares. Collection keys go through "Structural keys" |
-| `#{..}` | `(:C%SET table)`, each member under itself | a repeated literal element is refused when the read forms are `=` (`ClojureReader.equivKey`: `1`/`1N`, `[1]`/`(1)`, maps and sets in any order; `Duplicate key`) |
+| `#{..}` | `(:C%SET table)`, each member under itself | a repeated literal element is refused when the read forms are `=` (`ClojureReader.equivKey`: `1`/`1N`, `[1]`/`(1)`, maps and sets in any order; `Duplicate key`); members `=` only once evaluated: "Literal keys equal once evaluated" |
 | `sorted-map` / `sorted-set` (and `-by`) | `(:C%SORTED setp cmp items)`: a vector of `[k v]` entries or members in comparator order | "Sorted collections" |
 | `[..]` | a CL vector (a `vector` call) | a string is a CL vector too, so `vector?`/`coll?` exclude strings |
 | list, seq | a CL list | lazy seq: `(:C%LAZY cell)`, memoized through `rplaca`/`rplacd` ("Laziness") |
@@ -3005,14 +3005,42 @@ brace (`readBraced`/`readSet`, measured on `clj` 1.12.6, 2026-10-08): the oracle
 `PersistentArrayMap.createWithCheck` compares the READ forms, so `{1 :a 1N :b}`,
 `{[1] :a (1) :b}`, `{{:a 1 :b 2} 1 {:b 2 :a 1} 2}` and `{-0.0 1 0.0 2}` are refused and
 `{1 :a 1.0 :b}`, `{1 :a 1M :b}`, `{#"a" 1 #"a" 2}` and `{:a 1 ::a 2}` are not; keys equal
-only once evaluated (`{(+ 1 2) 1 3 2}`, `{[1] :a (list 1) :b}`) are the oracle's RUNTIME
-`Duplicate key`, and `{[1] :a '(1) :b}` its compile-time `Duplicate constant keys in map`;
-none of those three is checked (map literals with non-constant keys build last-wins).
+only once evaluated are checked in the lowering ("Literal keys equal once evaluated").
 `1M` reads as the rational `1` (`doc/en/clojure/deviations.md`), so `{1 :a 1M :b}` is
 refused where the oracle reads it. A `deps.edn` read (`forEdn`) leaves maps to
 `ClojureDepsEdn.duplicateKey`, whose wording (`Error reading edn. Duplicate key: k (path)`)
-the reader's positioned message cannot give. The runtime reader still tells `()` and `[]`
-apart as keys (`(= () [])` holds, `(get {[] 1} ())` answers `nil`).
+the reader's positioned message cannot give.
+
+**Literal keys equal once evaluated** (`ClojureCollectionLowering.mapLiteral`/`setLiteral`,
+the oracle's `MapExpr`/`SetExpr`; measured on `clj` 1.12.6, 2026-10-08):
+- Every key a constant (`constantKey`: the oracle's `LiteralExpr` -- number, string, char,
+  keyword, `nil`/`true`/`false`, a quoted datum, a regex, a NON-empty vector/map/set
+  literal of constants without metadata; `[]`, `()` are its `EmptyExpr`, no constant):
+  two `=` ones are the compile-time `Duplicate constant keys in map`, a lower-time
+  `LispReadException` (`{[1] :a '(1) :b}`, `{1 :a '1 :b}`); the map then builds unchecked.
+  A set of constants is not refused: it dedupes (`#{[1] '(1)}` has one member).
+- Otherwise a literal of two or more entries builds through `%clojure-map-literal` /
+  `%clojure-set-literal` (the oracle's `RT.map`/`RT.set` `createWithCheck`), after every
+  key and value ran: a table count short of the pair/member count reruns the reader's
+  builders `%clojure-rd-map-of` / `%clojure-rd-set-of` over the evaluated forms, which
+  raise `IllegalArgumentException` `Duplicate key: k` -- a map names the EARLIER key, a set
+  the LATER member, nil as `null` (`{(+ 1 2) 1 3 2}`, `(let [a 0.0 b -0.0] {a 1 b 2})` ->
+  `0.0`, the set -> `-0.0`). One entry is never checked (the oracle's `mapUniqueKeys`).
+- Not reproduced: past 8 entries the oracle's `PersistentHashMap.createWithCheck` names
+  the later key, in the hash order its reader gave the forms (evaluation order too); here
+  always the earlier, in source order. Two computed NaN keys are one key here (a double has
+  no identity), so they are a `Duplicate key` where the oracle keeps both.
+- `hash-map`/`hash-set`/`array-map`/`sorted-map` calls and quoted literals keep last-wins /
+  dedupe (`mapBuild`/`setBuild`), as the oracle's do.
+- `()` and `[]` as keys: `()` IS `nil` here ("Values"), so `(get {[] 1} ())` is
+  `(get {[] 1} nil)`, `nil` like the oracle's answer to the latter (the oracle answers `1`
+  to the former). Making the empty vector and `nil` one key would merge `{nil 1 [] 2}`
+  (two entries in the oracle) and make `(let [a nil b []] {a 1 b 2})` a `Duplicate key`,
+  so they stay two keys (measured 2026-10-08: `structural-keys-find-equal-collections` pins
+  `(get {[] :e} nil)` -> `nil`). The source reader still refuses `{() 1 [] 2}` (both read
+  forms are empty sequentials), like the oracle.
+- Pinned by clojure-spec `a-literal-refuses-keys-equal-once-evaluated` (oracle-identical)
+  and `ClojureLoweringTest.aLiteralOfConstantKeysEqualOnceEvaluatedIsRefusedWhenLowered`.
 `eval`/`load-string` stay unknown names: no compiler runs at run time.
 
 **Oracle-checked 2026-10-08 (clj 1.12.6), shared by `read-string`/`read` and clojure.edn:**
