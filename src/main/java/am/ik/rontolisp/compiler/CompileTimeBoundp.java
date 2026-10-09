@@ -192,7 +192,7 @@ public final class CompileTimeBoundp {
 		boolean nodeTopLevel = topLevel;
 		while (node instanceof LispCons cons) {
 			String op = cons.car() instanceof LispSymbol head ? member(head.name()) : null;
-			if (LispNames.QUOTE.equals(op)) {
+			if (LispNames.isQuote(op)) {
 				return;
 			}
 			if (op != null) {
@@ -340,7 +340,7 @@ public final class CompileTimeBoundp {
 				break;
 			}
 			String op = cons.car() instanceof LispSymbol head ? member(head.name()) : null;
-			if (LispNames.QUOTE.equals(op)) {
+			if (LispNames.isQuote(op)) {
 				tail = node;
 				break;
 			}

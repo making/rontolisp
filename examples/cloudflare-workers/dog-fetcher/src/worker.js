@@ -367,13 +367,20 @@ export function defaultHost(lisp) {
           const response = await fetch(request.url, {
             method: request.method,
             headers: request.headers,
-            body: request.body,
+            body: request.body ?? (request.octets === undefined ? undefined : Uint8Array.from(request.octets, (c) => c.charCodeAt(0))),
           });
           // The reader IS the body; the module pulls it after this returns.
           upstream = response.body ? response.body.getReader() : null;
+          // The platform's fetch decodes a content coding it knows, so the octets
+          // the module reads are the decoded ones -- and the head says so, as
+          // every other transport's does: the field naming the coding goes, and
+          // the length of the coded octets with it.
+          const coding = response.headers.get("content-encoding");
+          const decoded = coding !== null
+            && coding.split(",").every((c) => /^\s*(x-gzip|gzip|deflate|br)\s*$/i.test(c));
           return JSON.stringify({
             status: response.status,
-            headers: [...response.headers],
+            headers: [...response.headers].filter(([name]) => !decoded || (name !== "content-encoding" && name !== "content-length")),
           });
         } catch (error) {
           // The error arm becomes a Lisp condition at the fetch CALL; throwing

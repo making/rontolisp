@@ -103,7 +103,7 @@ public final class ToplevelStatements {
 			// A keyword evaluates to itself; any other symbol may be unbound, and
 			// signalling that is an effect.
 			case LispSymbol sym -> sym.isKeyword();
-			case LispCons cons -> cons.car() instanceof LispSymbol op && LispNames.QUOTE.equals(member(op.name()));
+			case LispCons cons -> cons.car() instanceof LispSymbol op && LispNames.isQuote(member(op.name()));
 			default -> false;
 		};
 	}

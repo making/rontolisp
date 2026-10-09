@@ -1663,19 +1663,16 @@ final class ClojureInteropLowering {
 		if (method.equals("toString") && args.isEmpty()) {
 			call = valueToString(recv);
 		}
+		boolean hashCode = method.equals("hashCode") && args.isEmpty() && cls == null;
+		if (hashCode) {
+			call = valueHashCode(recv);
+		}
 		LispVal stream = streamMethod(ctx, method, recv, args);
 		if (stream != null) {
 			call = ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
 					ClojureLowerUtil.list(ClojureLowerUtil.sym("streamp"), recv), stream, call);
 		}
-		if (method.equals("close") && args.isEmpty()) {
-			// a fetched reply's body stream (rontolisp.http-client's :as :stream) closes
-			// as a rontolisp stream: an arm a program that fetches nothing folds
-			call = ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
-					ClojureLowerUtil.list(new LispSymbol(ClojureStateLowering.ASYNC_STREAM_P), recv),
-					ClojureLowerUtil.list(new LispSymbol("RONTOLISP:STREAM-CLOSE"), recv), call);
-		}
-		if (cls == null && !(method.equals("toString") && args.isEmpty())) {
+		if (cls == null && !(method.equals("toString") && args.isEmpty()) && !hashCode) {
 			// a collection, keyword, symbol or ratio has no host object: its common
 			// methods answer through the core verbs, any other is refused by name
 			call = ClojureValueMethodLowering.valueArm(ctx, method, designator, recv, args, call);
@@ -1736,6 +1733,20 @@ final class ClojureInteropLowering {
 							ClojureLowerUtil.list(ClojureLowering.CLOJURE_STR_OF, recv, LispString.literal("nil"),
 									ClojureLowering.NIL_CONST)),
 				ClojureLowerUtil.list(ClojureLowering.TRUE_CONST, call));
+	}
+
+	/**
+	 * {@code hashCode} over an already-bound receiver of no known class: the oracle's
+	 * {@code hashCode} of any value ({@code %clojure-java-hash}: a type's own override, a
+	 * record's map hash, a collection's or a number's, a host object's through its host
+	 * arm) on every backend; nil signals, like the oracle's {@code NullPointerException}.
+	 */
+	static LispVal valueHashCode(LispSymbol recv) {
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), recv),
+				ClojureRefusals.refusal(ClojureRefusals.NULL_POINTER,
+						LispString.literal("Cannot invoke \"Object.getClass()\" because \"target\" is null")),
+				ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-JAVA-HASH"), recv));
 	}
 
 	/**

@@ -176,7 +176,7 @@ public final class HttpReactorInliner {
 			if (!(node instanceof LispCons cons)) {
 				return node;
 			}
-			if (cons.car() instanceof LispSymbol head && LispNames.QUOTE.equals(head.name())) {
+			if (cons.car() instanceof LispSymbol head && LispNames.isQuote(head.name())) {
 				return node;
 			}
 			if (isHttpHandlerDirective(cons)) {
@@ -387,7 +387,7 @@ public final class HttpReactorInliner {
 			if (!(node instanceof LispCons cons)) {
 				return node;
 			}
-			if (cons.car() instanceof LispSymbol sym && LispNames.QUOTE.equals(sym.name())) {
+			if (cons.car() instanceof LispSymbol sym && LispNames.isQuote(sym.name())) {
 				return node;
 			}
 			if (isMarker(cons)) {

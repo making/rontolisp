@@ -98,7 +98,7 @@ public final class NoWasiFilesystemStubs {
 			return val;
 		}
 		if (cons.car() instanceof LispSymbol head) {
-			if (LispNames.QUOTE.equals(head.name())) {
+			if (LispNames.isQuote(head.name())) {
 				return cons;
 			}
 			if (LispNames.WITH_OPEN_FILE.equals(head.name()) && cons.cdr() instanceof LispCons rest

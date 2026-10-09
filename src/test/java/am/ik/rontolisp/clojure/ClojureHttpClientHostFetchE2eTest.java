@@ -13,6 +13,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 
 import am.ik.rontolisp.cli.RontoLispCli;
+import am.ik.rontolisp.testsupport.InflateCases;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
 import org.junit.jupiter.api.AfterEach;
@@ -68,6 +69,25 @@ class ClojureHttpClientHostFetchE2eTest {
 		server.createContext("/query",
 				exchange -> answer(exchange, 200, String.valueOf(exchange.getRequestURI().getRawQuery())));
 		server.createContext("/status/404", exchange -> answer(exchange, 404, "missing"));
+		// The request's content type and its body in hex: an octet body crosses as
+		// octets.
+		server.createContext("/octets-echo", exchange -> {
+			StringBuilder hex = new StringBuilder();
+			for (byte b : exchange.getRequestBody().readAllBytes()) {
+				hex.append(String.format("%02x", b & 0xff));
+			}
+			String type = String.valueOf(exchange.getRequestHeaders().getFirst("Content-Type"));
+			answer(exchange, 200, type.replaceAll("babashka_http_client_Boundary[0-9a-f-]{36}", "B") + "|" + hex);
+		});
+		// The host's fetch decodes this itself: the head the glue answers says so.
+		server.createContext("/gzip", exchange -> {
+			byte[] body = InflateCases.gzip("héllo, gzip".getBytes(StandardCharsets.UTF_8));
+			exchange.getResponseHeaders().add("Content-Encoding", "gzip");
+			exchange.sendResponseHeaders(200, body.length);
+			try (OutputStream out = exchange.getResponseBody()) {
+				out.write(body);
+			}
+		});
 		server.createContext("/octets", exchange -> {
 			byte[] body = { (byte) 0xff, (byte) 0xfe, 0x41 };
 			exchange.sendResponseHeaders(200, body.length);
@@ -107,7 +127,10 @@ class ClojureHttpClientHostFetchE2eTest {
 			             (try (http/get (url "/status/404"))
 			                  (catch clojure.lang.ExceptionInfo e (:status (ex-data e))))
 			             (:status @(http/get (url "/hello") {:async true}))
-			             (slurp (:body (http/get (url "/hello") {:as :stream})))])))
+			             (slurp (:body (http/get (url "/hello") {:as :stream})))
+			             (:body (http/get (url "/gzip")))
+			             (get-in (http/get (url "/gzip")) [:headers "content-encoding"])
+			             (subs (:body (http/post (url "/octets-echo") {:multipart [{:name "a" :content "x"}]})) 0 36)])))
 			""";
 
 	@Test
@@ -121,7 +144,35 @@ class ClojureHttpClientHostFetchE2eTest {
 				console.log(await lisp.probe(process.argv[2]));
 				""");
 		assertThat(node(dir, "driver.mjs", this.originUrl))
-			.isEqualTo("[200 \"ok\" \"got-header\" \"POST:héllo\" \"a=1+2\" 404 200 \"hello-from-fetch\"]");
+			.isEqualTo("[200 \"ok\" \"got-header\" \"POST:héllo\" \"a=1+2\" 404 200 \"hello-from-fetch\""
+					+ " \"héllo, gzip\" nil \"multipart/form-data; boundary=B|2d2d\"]");
+	}
+
+	/**
+	 * An octet body through the host's fetch: on the streaming boundary a binary reply
+	 * arrives as its octets, and sent on as a request body it leaves as them too (the
+	 * envelope boundary carries a reply's body as text).
+	 */
+	private static final String OCTETS = """
+			(ns octets (:require [rontolisp.http-client :as http]))
+
+			(defn probe {:wasm/export {:as "probe" :params [:string] :returns :string}} [origin]
+			  (let [url (fn [p] (str origin p))]
+			    (:body (http/post (url "/octets-echo") {:body (:body (http/get (url "/octets") {:as :stream}))}))))
+			""";
+
+	@Test
+	void anOctetBodyLeavesThroughTheHostsFetchAsItsOctets() throws Exception {
+		Path dir = compile("octets", OCTETS, "--host-boundary=streaming");
+		Files.writeString(dir.resolve("driver.mjs"), """
+				import fs from "node:fs";
+				import { instantiate, defaultHost } from "./octets.mjs";
+				const module = new WebAssembly.Module(fs.readFileSync(new URL("./octets.wasm", import.meta.url)));
+				let lisp = null;
+				lisp = instantiate(module, defaultHost(() => lisp));
+				console.log(await lisp.probe(process.argv[2]));
+				""");
+		assertThat(node(dir, "driver.mjs", this.originUrl)).isEqualTo("null|fffe41");
 	}
 
 	/**

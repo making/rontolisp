@@ -63,8 +63,8 @@ arguments the program was started with on all four, and the fatal-condition,
 backtrace and image-hook families live there too. The fifth is
 [`uiop/filesystem`](uiop/filesystem.md), complete as well: `probe-file*`,
 `truename*` and `directory*` probe and walk on all four backends, the
-`getenv-*` family reads pathnames out of the environment, symlinks are the
-honest identity, and the four mutating operations run where their primitives do
+`getenv-*` family reads pathnames out of the environment, symlinks resolve
+as `truename` resolves them, and the four mutating operations run where their primitives do
 (signalling the primitive's own call-time error on both WASM backends). The sixth is
 `uiop/lisp-build`: rontolisp compiles a whole program, so the compiled-file TYPE is
 `nil` and `compile-file*` with the deferred-warnings machinery signal

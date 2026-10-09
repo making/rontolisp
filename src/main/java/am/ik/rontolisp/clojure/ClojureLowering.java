@@ -167,6 +167,12 @@ public final class ClojureLowering {
 
 	static final LispVal TRUE_CONST = LispTrue.INSTANCE;
 
+	/**
+	 * The macro runtime's function answering a namespace's macro scope by its name: a
+	 * constant in a program, a call back into the lowering in the macro-time evaluator.
+	 */
+	public static final String MACRO_SCOPE = ClojureMacroLowering.MACRO_SCOPE;
+
 	static final LispSymbol AMPERSAND_REST = new LispSymbol("&REST");
 
 	/**
@@ -1349,11 +1355,12 @@ public final class ClojureLowering {
 	@Nullable String testLocation;
 
 	/**
-	 * Whether the program defines or expands macros: the macro runtime (the table lookup,
-	 * the demangler and {@code C%MACROEXPAND-1}/{@code C%MACROEXPAND}) is spliced in
-	 * once, behind the false binding.
+	 * Whether the program expands at run time ({@code macroexpand-1}/{@code macroexpand},
+	 * as calls or values): the macro runtime (the scopes, the table lookup and
+	 * {@code C%MACROEXPAND-1}/{@code C%MACROEXPAND}) is spliced in once, behind the false
+	 * binding. A program only defining macros expands them all while it lowers.
 	 */
-	boolean usedMacros;
+	boolean expandsAtRunTime;
 
 	/**
 	 * A whole program's macro expanders, in definition order: each {@code defmacro}'s
@@ -1363,6 +1370,12 @@ public final class ClojureLowering {
 
 	/** Whether the macro runtime was already spliced in (files splice it inline). */
 	boolean macrosEmitted;
+
+	/**
+	 * The macro scopes a session defined last ({@code C%MACRO-SCOPE}), printed, or null
+	 * before the macro runtime: a buffer changing them defines them again.
+	 */
+	@Nullable String macroScopeEmitted;
 
 	/**
 	 * Whether the program reads ({@code read-string}, {@code read}, as calls or values):
@@ -1493,7 +1506,7 @@ public final class ClojureLowering {
 		// wrappers of the WIT members the program names run first
 		lowering.forms.addAll(ClojureWasmLowering.flush(lowering));
 		lowering.forms.addAll(1, ClojureWitLowering.referencedWrappers(lowering, lowering.forms));
-		if (lowering.usedMacros) {
+		if (lowering.expandsAtRunTime) {
 			// the macro runtime travels with the program, like the false value
 			lowering.forms.addAll(1, ClojureMacroLowering.macroRuntime(lowering, lowering.macroExpanders));
 		}
@@ -1767,11 +1780,22 @@ public final class ClojureLowering {
 			this.protocolsEmitted = true;
 			this.walkTestsEmitted = this.walkTests.size();
 		}
-		if (this.usedMacros && !this.macrosEmitted) {
+		if (this.expandsAtRunTime && !this.macrosEmitted) {
 			// The macro runtime travels ahead of the buffer that first needs
 			// it, like the false binding; later buffers reuse it.
 			out.add(0, new ClojureTopLevel(ClojureMacroLowering.macroRuntime(this, null), false));
 			this.macrosEmitted = true;
+			this.macroScopeEmitted = ClojureMacroLowering.macroScopeDefinition(this).print();
+		}
+		else if (this.macrosEmitted) {
+			// a buffer defining a macro, an alias or a refer changes the scopes a
+			// run-time expansion resolves its head in
+			LispVal scopes = ClojureMacroLowering.macroScopeDefinition(this);
+			String printed = scopes.print();
+			if (!printed.equals(this.macroScopeEmitted)) {
+				out.add(0, new ClojureTopLevel(List.of(scopes), false));
+				this.macroScopeEmitted = printed;
+			}
 		}
 		if (this.usedExInfo && !this.exInfoEmitted) {
 			// The ex-info runtime travels ahead of the buffer that first needs

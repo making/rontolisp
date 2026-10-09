@@ -37,17 +37,49 @@
 | `:headers` | 名前（文字列かキーワード）から文字列、または文字列の seq へのマップ。seq の要素はそれぞれ一つのフィールドとして送る |
 | `:query-params` | URL のクエリに URL エンコードして連結するマップ。値がコレクションならキーを繰り返す |
 | `:form-params` | `application/x-www-form-urlencoded` のボディとして送るマップ |
-| `:body` | 文字列、または終端まで読む入力ストリーム |
+| `:body` | 文字列。`java.io.File` か入力ストリーム（`clojure.java.io` のストリーム、応答の `:as :stream` のボディ）はそのオクテットを送る。リーダーは終端まで読んで送る |
+| `:multipart` | パートの seq。`:body` と `:form-params` に代わって `multipart/form-data` のボディとして送る |
 | `:basic-auth` | `[user pass]` か `{:user ... :pass ...}`。`Authorization: Basic` ヘッダーになる |
 | `:oauth-token` | `Authorization: Bearer` ヘッダーになる |
 | `:accept` | `:json` で `Accept: application/json` |
 | `:as` | `:string`（既定。ボディを UTF-8 としてデコードする）か `:stream`（ボディを読まずに渡す） |
+| `:decompress-body` | `false` なら圧縮されたボディを届いたまま渡す |
 | `:throw` | `false` ならどのステータスもそのまま返す |
 | `:async` | `true` ならレスポンスのフューチャーを返す |
 | `:async-then`、`:async-catch` | `:async` と併用し、レスポンスに適用する関数と、失敗を表すマップに適用する関数 |
 
-リクエストは、`:headers` が指定しない限り `Accept: */*` を送り、加えて fetch 自身の
-`User-Agent` を送ります。
+リクエストは、`:headers` が指定しない限り `Accept: */*` と
+`Accept-Encoding: gzip, deflate` を送り、加えて fetch 自身の `User-Agent` を送ります。
+それ以外の `:body` は `ex-info` を投げます。
+
+## マルチパートのボディ
+
+`:multipart` のパートは、`:name`（または `:part-name`）、`:content`（文字列、`java.io.File`、
+入力ストリーム）と、省略可能な `:file-name`、`:content-type` からなるマップです。ボディは
+babashka.http-client のものとオクテット単位で同じです。各パートは `Content-Disposition`
+（`File` か `:file-name` があれば `filename` つき）、`Content-Type`（文字列は
+`text/plain; charset=UTF-8`、`File` は拡張子から決め、それ以外は
+`application/octet-stream`）、`Content-Transfer-Encoding` を持ちます。境界は
+`babashka_http_client_Boundary` とランダムな UUID で、リクエストの `content-type` がそれを
+示します（`:headers` で指定したものは置き換えます）。`--host-random` なしの `--no-wasi`
+リアクターでは、UUID は `random` が使う生成器から引きます。出力したグルーがこれをシードします。
+
+```clojure
+(ns example (:require [rontolisp.http-client :as http]))
+
+(let [r (http/post "https://httpbin.ik.am/post"
+                   {:multipart [{:name "title" :content "hello"}
+                                {:name "note" :file-name "note.txt" :content "a note"}]})]
+  (println (:status r) (subs (get-in r [:request :headers "content-type"]) 0 30)))
+```
+
+```
+200 multipart/form-data; boundary=
+```
+
+入力ストリームとして開けない `:content` は `IllegalArgumentException`
+（`Cannot open <42> as an InputStream.`）を、存在しない `File` は
+`java.io.FileNotFoundException` を投げます。
 
 ## レスポンス
 
@@ -79,6 +111,28 @@
 `IllegalArgumentException` になります（`Illegal character in path at index 24: ...`、
 `URI with undefined scheme`）。
 
+## 圧縮された応答
+
+`Content-Encoding` が `gzip` か `deflate`（zlib。サーバーがこの名前で送る生の DEFLATE も
+含む）の応答は、`:as` が読む前に展開します。そのため `:body` はテキスト、`:as :stream` では
+展開したオクテットです。`:headers` には符号化の名前が残ります。`HEAD` リクエスト、
+`:decompress-body false`、それ以外の符号化では、ボディは届いたままです。符号化が示す形式に
+なっていない応答は、`java.util.zip` と同じものを投げます。`java.util.zip.ZipException`
+（`Not in GZIP format`、`Corrupt GZIP trailer`、`invalid block type` など）か、途中で
+切れていれば `java.io.EOFException`（`Unexpected end of ZLIB input stream`）です。gzip の
+ヘッダーは呼び出しの時点で、残りはボディを読むときに読みます。
+
+```clojure
+(ns example (:require [rontolisp.http-client :as http]))
+
+(let [r (http/get "https://httpbin.ik.am/gzip")]
+  (println (get-in r [:headers "content-encoding"]) (subs (:body r) 0 1)))
+```
+
+```
+gzip {
+```
+
 ## 非同期リクエスト
 
 `:async true` はすぐにフューチャーを返します。`deref`（と `@`）はレスポンスを待ち、
@@ -103,10 +157,30 @@ Preview 1 モジュール（`--native`、`--host-fetch`）では、呼び出し�
 
 ## ストリームとしての応答
 
-`:as :stream` を指定すると、`:body` は読まれていない応答のオクテットです。`slurp` と
-`clojure.java.io/reader` はこれを UTF-8 のテキストとして読み、`with-open` と `.close` は
-閉じます。Ring ハンドラがこれをレスポンスの `:body` として返すと、オクテットはそのまま
-中継されます。
+`:as :stream` を指定すると、`:body` は応答のオクテットを読まずに保持する
+`java.io.InputStream` です。JDK のクライアントの応答ストリーム、または圧縮された応答を
+読むための `java.util.zip.GZIPInputStream` か `InflaterInputStream` です。`.read` は届いた
+順に次のオクテットを返し（終端では `-1`）、`.skip`、`.available`、`.transferTo`、
+`clojure.java.io/copy`（`File` か出力ストリームへ、オクテットのまま）もこれを受け付けます。
+`slurp` と `clojure.java.io/reader` はテキストとして読み（`:encoding` で別の文字セットを
+指定しない限り UTF-8）、`with-open` と `.close` は閉じます。Ring ハンドラがこれを
+レスポンスの `:body` として返すと、オクテットは届いた順にそのまま中継されます。
+
+```clojure
+(ns example
+  (:require [rontolisp.http-client :as http]
+            [clojure.java.io :as io]))
+
+(let [body (:body (http/get "https://httpbin.ik.am/get" {:as :stream}))]
+  (println (instance? java.io.InputStream body) (char (.read body)))
+  (.close body))
+```
+
+```
+true {
+```
+
+Ring のプロキシ:
 
 ```console
 $ cat proxy.clj
@@ -126,15 +200,21 @@ $ rontolisp proxy.clj -o src/worker.wasm --no-wasi --host-fetch --host-boundary=
 
 - レスポンスに `:version` はなく、`:uri` は文字列です（babashka.http-client では
   `java.net.URI`）。
-- 圧縮は要求せず、`gzip` か `deflate` の応答は拒否します。`:as :bytes` も拒否します（バイト
-  配列にあたる値がないため）。`:stream` のボディは `java.io.InputStream` ではないので、
-  `.read` は受け付けず、`clojure.java.io/reader` は全体を読んでから返します。
+- `:as :bytes` は拒否します（バイト配列にあたる値がないため）。`:stream` のボディの
+  バイト配列を扱うメンバー（バッファへの `.read`、`.readAllBytes`）も同様です。
+  `:stream` のボディに対する `clojure.java.io/reader` は、最初の行を返す前に全体を
+  読みます（ボディ自体に対する `.read` のループは、届いたオクテットから順に読みます）。
+  JVM では、トランスポートが応答全体を受け取ってからレスポンスを返します。
 - 名前を挙げて拒否するもの: オプションの `:client`、`:interceptors`、`:timeout`、
-  `:version`、`:multipart`、`:raw`、`:expect-continue`、`java.net.http` のクライアントを作る
-  var の `client`、`default-client-opts` と `->` で始まるビルダー、そして名前空間
+  `:version`、`:raw`、`:expect-continue`、`java.net.http` のクライアントを作る var の
+  `client`、`default-client-opts` と `->` で始まるビルダー、そして名前空間
   `babashka.http-client` そのもの（このページを案内します）。
+- リーダーはそのテキストを送ります（babashka.http-client はリーダーを受け付けません）。
+  Ring のリクエストの `:body` はここではリーダー（Jetty では入力ストリーム）なので、
+  バイナリのアップロードをそのまま送り出すと、オクテット単位では一致しません。
 - トランスポートの失敗は `java.io.IOException` です（babashka.http-client では
   `java.net.ConnectException` などのサブクラス）。引数の個数の誤りは、フロントエンド共通の
   `ArityException`（`wrong number of arguments passed to: get`）です。
 - `--host-fetch` ではホスト自身の `fetch` がリダイレクトを（20 回まで）たどるため、`:uri` は
-  リクエストした URL になります。
+  リクエストした URL になります。また応答の展開もホストが行うため、`:headers` にはその
+  `content-encoding` と `content-length` がありません。

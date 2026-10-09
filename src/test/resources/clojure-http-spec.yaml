@@ -7,16 +7,23 @@
 # Every expected line was diffed against the oracle, clj 1.12.6 with
 # babashka.http-client 0.4.23 required as `http` against the same origin (2026-10-08),
 # and differs from it only where a comment says so: the response map has no :version
-# (no transport here reports one) and the client asks for no compression (no
-# accept-encoding), :as :bytes is refused, and a transport failure is an IOException
-# carrying the transport's message (the oracle's ConnectException is one).
+# (no transport here reports one), :as :bytes is refused, and a transport failure is an
+# IOException carrying the transport's message (the oracle's ConnectException is one).
 #
 # The origin's endpoints beyond fetch-spec.yaml's: /headers (the request's header
 # fields as {name=[values]}, sorted, without host, connection, content-length,
 # user-agent and transfer-encoding), /query (the raw query), /form ("<content-type>|<body>"),
 # /status/500, /status/308 (to /hello), /redirect-post and /redirect-307 (302 and 307 to
 # /echo), /redirect-303 (303 to the relative "echo"), /loop (302 to /loop?<n+1>, body
-# "hop <n>"), /no-location (302 without a Location), /lines (two lines of UTF-8 text).
+# "hop <n>"), /no-location (302 without a Location), /lines (two lines of UTF-8 text), and
+# /lines' text compressed: /gzip, /gzip-upper (the coding spelled GZIP), /deflate (zlib),
+# /deflate-raw (raw DEFLATE under "deflate"), /gzip-twice (two members, "one " and "two"),
+# /gzip-404 ("missing" with a 404), /br (seven plain octets claiming br), and replies the
+# coding does not describe: /gzip-bad (plain text), /gzip-empty, /gzip-truncated (the last
+# twelve octets gone), /gzip-badcrc; /octets-echo (the request's content type, "|", and its
+# body in hex) and /multipart (a multipart body, one line a line: the oracle's boundary as
+# BOUNDARY, an octet that is no printable ASCII as <xx>). @SCRATCH@ is the leg's own
+# directory, where a case writes the files it sends.
 cases:
   - name: the-origin-and-the-client
     source: |
@@ -54,16 +61,15 @@ cases:
     source: |
       (prn (:body (http/get (url "/hello") {:headers {"X-Custom" "abc"}})))
       (prn (:body (http/get (url "/hello") {:headers {:x-custom "abc"}})))
-      ;; the oracle also sends accept-encoding: gzip, deflate
       (prn (:body (http/get (url "/headers"))))
       (prn (:body (http/get (url "/headers") {:headers {"x-many" ["1" "2"]}})))
       (prn (:body (http/get (url "/headers") {:headers {:accept "text/plain" "Accept" "x/y"}})))
     expected: |
       "got-header"
       "got-header"
-      "{accept=[*/*]}"
-      "{accept=[*/*], x-many=[1, 2]}"
-      "{accept=[x/y]}"
+      "{accept=[*/*], accept-encoding=[gzip, deflate]}"
+      "{accept=[*/*], accept-encoding=[gzip, deflate], x-many=[1, 2]}"
+      "{accept=[x/y], accept-encoding=[gzip, deflate]}"
   - name: the-verbs-send-their-methods-and-bodies
     source: |
       (prn (:body (http/post (url "/echo") {:body "héllo"})))
@@ -164,6 +170,54 @@ cases:
       "héllo, 世界\nsecond line\n"
       ["héllo, 世界" "second line"]
       22
+  - name: the-stream-body-is-an-input-stream
+    source: |
+      (let [b (:body (http/get (url "/octets") {:as :stream}))]
+        (prn [(instance? java.io.InputStream b) (instance? java.io.Reader b)])
+        (prn (loop [acc []] (let [x (.read b)] (if (neg? x) acc (recur (conj acc x)))))))
+      (let [b (:body (http/get (url "/lines") {:as :stream}))]
+        (prn [(.read b) (.skip b 2) (.read b)]))
+      (let [b (:body (http/get (url "/gzip") {:as :stream}))]
+        (prn [(.read b) (.read b) (instance? java.util.zip.GZIPInputStream b)]))
+      (prn (count (slurp (:body (http/get (url "/lines") {:as :stream})) :encoding "ISO-8859-1")))
+      (let [r (io/reader (:body (http/get (url "/lines") {:as :stream})))]
+        (prn [(.readLine r) (.readLine r) (.readLine r)]))
+    expected: |
+      [true false]
+      [255 254 65 0 128 127]
+      [104 2 108]
+      [104 195 true]
+      27
+      ["héllo, 世界" "second line" nil]
+  - name: a-closed-stream-body-refuses-a-read-in-its-classs-words
+    source: |
+      (doseq [p ["/lines" "/gzip"]]
+        (let [b (:body (http/get (url p) {:as :stream}))]
+          (.close b)
+          (prn (try (.read b) (catch java.io.IOException e (ex-message e))))
+          (prn (try (.available b) (catch java.io.IOException e (ex-message e))))
+          (prn (.close b))))
+    expected: |
+      "closed"
+      0
+      nil
+      "Stream closed"
+      "Stream closed"
+      nil
+  - name: the-stream-body-copies-octet-for-octet
+    source: |
+      (let [f (io/file "@SCRATCH@" "copy.bin")]
+        (io/copy (:body (http/get (url "/octets") {:as :stream})) f)
+        (prn (with-open [i (io/input-stream f)]
+               (loop [acc []] (let [x (.read i)] (if (neg? x) acc (recur (conj acc x))))))))
+      (let [f (io/file "@SCRATCH@" "big.bin")]
+        (with-open [o (io/output-stream f)]
+          (prn (.transferTo (:body (http/get (url "/big") {:as :stream})) o)))
+        (prn (.length f)))
+    expected: |
+      [255 254 65 0 128 127]
+      300000
+      300000
   - name: an-async-request-answers-a-future-deref-reads
     source: |
       (let [f (http/get (url "/hello") {:async true})]
@@ -243,10 +297,10 @@ cases:
       (prn (:body (http/get (url "/headers") {:accept :json})))
       (prn (try (http/get (url "/headers") {:accept :xml}) (catch IllegalArgumentException e (ex-message e))))
     expected: |
-      "{accept=[*/*], authorization=[Basic dXNlcjpww6Rzcw==]}"
-      "{accept=[*/*], authorization=[Basic dTpw]}"
-      "{accept=[*/*], authorization=[Bearer tok]}"
-      "{accept=[application/json]}"
+      "{accept=[*/*], accept-encoding=[gzip, deflate], authorization=[Basic dXNlcjpww6Rzcw==]}"
+      "{accept=[*/*], accept-encoding=[gzip, deflate], authorization=[Basic dTpw]}"
+      "{accept=[*/*], accept-encoding=[gzip, deflate], authorization=[Bearer tok]}"
+      "{accept=[application/json], accept-encoding=[gzip, deflate]}"
       "No matching clause: :xml"
   - name: the-verbs-are-values-and-the-request-rides-the-response
     source: |
@@ -263,6 +317,199 @@ cases:
       (:headers :method :uri)
       :get
       "abc"
+  - name: a-compressed-reply-is-read-through-its-coding
+    source: |
+      (prn (:body (http/get (url "/gzip"))))
+      (prn (get-in (http/get (url "/gzip")) [:headers "content-encoding"]))
+      (prn (:body (http/get (url "/gzip-upper"))))
+      (prn (:body (http/get (url "/deflate"))))
+      (prn (:body (http/get (url "/deflate-raw"))))
+      (prn (:body (http/get (url "/gzip-twice"))))
+      (prn (slurp (:body (http/get (url "/gzip") {:as :stream}))))
+      (prn (:body @(http/get (url "/deflate") {:async true})))
+      (prn (try (http/get (url "/gzip-404")) (catch clojure.lang.ExceptionInfo e (:body (ex-data e)))))
+      (prn (:body (http/get (url "/br"))))
+      (prn (:body (http/get (url "/headers") {:headers {"accept-encoding" "identity"}})))
+    expected: |
+      "héllo, 世界\nsecond line\n"
+      "gzip"
+      "héllo, 世界\nsecond line\n"
+      "héllo, 世界\nsecond line\n"
+      "héllo, 世界\nsecond line\n"
+      "one two"
+      "héllo, 世界\nsecond line\n"
+      "héllo, 世界\nsecond line\n"
+      "missing"
+      "brotli?"
+      "{accept=[*/*], accept-encoding=[identity]}"
+  - name: decompress-body-false-and-a-head-request-leave-the-coded-octets
+    source: |
+      (prn (int (first (:body (http/get (url "/gzip") {:decompress-body false})))))
+      (prn (:body (http/head (url "/gzip"))))
+    expected: |
+      31
+      ""
+  - name: a-reply-its-coding-does-not-describe-throws-what-java-util-zip-throws
+    source: |
+      (defn thrown [f]
+        (try (f)
+             (catch java.util.zip.ZipException e [:zip (ex-message e)])
+             (catch java.io.EOFException e [:eof (ex-message e)])))
+      (prn (thrown #(http/get (url "/gzip-bad"))))
+      (prn (thrown #(http/get (url "/gzip-empty"))))
+      (prn (thrown #(http/get (url "/gzip-truncated"))))
+      (prn (thrown #(http/get (url "/gzip-badcrc"))))
+      ;; a gzip header is read at the call, the data at the read
+      (prn (thrown #(http/get (url "/gzip-bad") {:as :stream})))
+      (prn (thrown #(slurp (:body (http/get (url "/gzip-truncated") {:as :stream})))))
+      (prn (try @(http/get (url "/gzip-bad") {:async true})
+                (catch java.util.concurrent.ExecutionException e
+                  [(instance? java.util.zip.ZipException (ex-cause e)) (instance? java.io.IOException (ex-cause e))])))
+    expected: |
+      [:zip "Not in GZIP format"]
+      [:eof nil]
+      [:eof "Unexpected end of ZLIB input stream"]
+      [:zip "Corrupt GZIP trailer"]
+      [:zip "Not in GZIP format"]
+      [:eof "Unexpected end of ZLIB input stream"]
+      [true true]
+  - name: a-file-an-input-stream-and-a-stream-body-are-sent-octet-for-octet
+    source: |
+      (let [f (io/file "@SCRATCH@" "body.bin")]
+        (with-open [o (io/output-stream f)] (doseq [b [255 254 65 0 128 127]] (.write o b)))
+        (println (:body (http/post (url "/octets-echo") {:body f})))
+        (println (:body (http/post (url "/octets-echo") {:body (io/input-stream f)}))))
+      (println (:body (http/post (url "/octets-echo") {:body (:body (http/get (url "/octets") {:as :stream}))})))
+      (println (:body (http/post (url "/octets-echo") {:body (:body (http/get (url "/gzip") {:as :stream}))})))
+      (println (:body (http/post (url "/octets-echo") {:body "é"})))
+      (prn (try (http/post (url "/octets-echo") {:body 42}) (catch clojure.lang.ExceptionInfo e (ex-message e))))
+      (prn (try (http/post (url "/octets-echo") {:body (io/file "@SCRATCH@" "missing")})
+                (catch java.io.FileNotFoundException e (clojure.string/replace (ex-message e) "@SCRATCH@" "DIR"))))
+    expected: |
+      null|fffe4100807f
+      null|fffe4100807f
+      null|fffe4100807f
+      null|68c3a96c6c6f2c20e4b896e7958c0a7365636f6e64206c696e650a
+      null|c3a9
+      "Don't know how to convert class java.lang.Longto body"
+      "DIR/missing not found"
+  - name: a-multipart-body-is-the-oracles-octet-for-octet
+    source: |
+      (let [dir "@SCRATCH@"
+            text-file (io/file dir "part.txt")
+            bin-file (io/file dir "part.bin")
+            json-file (io/file dir "part.json")
+            noext (io/file dir "noext")]
+        (spit text-file "file content\n")
+        (with-open [o (io/output-stream bin-file)] (doseq [b [255 254 65 0 128 127]] (.write o b)))
+        (spit json-file "{\"a\":1}")
+        (spit noext "x")
+        (println (:body (http/post (url "/multipart")
+                                   {:multipart [{:name "title" :content "héllo"}
+                                                {:name "file" :content text-file}
+                                                {:name "bin" :content bin-file}
+                                                {:name "json" :content json-file}
+                                                {:name "noext" :content noext}
+                                                {:name "stream" :content (io/input-stream bin-file)}
+                                                {:name "named" :part-name "eggplant" :file-name "foo.txt"
+                                                 :content "Eggplants" :content-type "text/x-egg"}
+                                                {:name :kw-name :content "v"}
+                                                {:content "nameless"}]}))))
+      (println (:body (http/post (url "/multipart") {:multipart []})))
+      (println (:body (http/put (url "/multipart") {:multipart [{:name "a" :content "x"}]
+                                                    :headers {"content-type" "text/plain" :content-type "x/y"}
+                                                    :form-params {"f" "1"} :body "ignored"})))
+      (let [r (http/post (url "/multipart") {:multipart [{:name "a" :content "x"}]})
+            ct (get-in r [:request :headers "content-type"])]
+        (prn (sort (keys (:request r))))
+        (prn [(subs ct 0 30) (boolean (re-matches #"multipart/form-data; boundary=babashka_http_client_Boundary[0-9a-f-]{36}" ct))]))
+      (prn (try (http/post (url "/multipart") {:multipart [{:name "n" :content nil}]})
+                (catch IllegalArgumentException e (ex-message e))))
+      (prn (try (http/post (url "/multipart") {:multipart [{:name "n" :content 42}]})
+                (catch IllegalArgumentException e (ex-message e))))
+      (prn (try (http/post (url "/multipart") {:multipart {:name "map" :content "v"}})
+                (catch IllegalArgumentException e (ex-message e))))
+      (prn (try (http/post (url "/multipart") {:multipart [{:name "f" :content (io/file "@SCRATCH@" "missing")}]})
+                (catch java.io.FileNotFoundException e (clojure.string/replace (ex-message e) "@SCRATCH@" "DIR"))))
+    expected: |
+      multipart/form-data; boundary=BOUNDARY
+      --BOUNDARY
+      Content-Disposition: form-data; name="title"
+      Content-Type: text/plain; charset=UTF-8
+      Content-Transfer-Encoding: 8bit
+
+      h<c3><a9>llo
+      --BOUNDARY
+      Content-Disposition: form-data; name="file"; filename="part.txt"
+      Content-Type: text/plain
+      Content-Transfer-Encoding: binary
+
+      file content<0a>
+      --BOUNDARY
+      Content-Disposition: form-data; name="bin"; filename="part.bin"
+      Content-Type: application/octet-stream
+      Content-Transfer-Encoding: binary
+
+      <ff><fe>A<00><80><7f>
+      --BOUNDARY
+      Content-Disposition: form-data; name="json"; filename="part.json"
+      Content-Type: application/json
+      Content-Transfer-Encoding: binary
+
+      {"a":1}
+      --BOUNDARY
+      Content-Disposition: form-data; name="noext"; filename="noext"
+      Content-Type: application/octet-stream
+      Content-Transfer-Encoding: binary
+
+      x
+      --BOUNDARY
+      Content-Disposition: form-data; name="stream"
+      Content-Type: application/octet-stream
+      Content-Transfer-Encoding: binary
+
+      <ff><fe>A<00><80><7f>
+      --BOUNDARY
+      Content-Disposition: form-data; name="eggplant"; filename="foo.txt"
+      Content-Type: text/x-egg
+      Content-Transfer-Encoding: 8bit
+
+      Eggplants
+      --BOUNDARY
+      Content-Disposition: form-data; name=":kw-name"
+      Content-Type: text/plain; charset=UTF-8
+      Content-Transfer-Encoding: 8bit
+
+      v
+      --BOUNDARY
+      Content-Disposition: form-data; name="null"
+      Content-Type: text/plain; charset=UTF-8
+      Content-Transfer-Encoding: 8bit
+
+      nameless
+      --BOUNDARY--
+
+
+      multipart/form-data; boundary=BOUNDARY
+      --BOUNDARY--
+
+
+      multipart/form-data; boundary=BOUNDARY
+      --BOUNDARY
+      Content-Disposition: form-data; name="a"
+      Content-Type: text/plain; charset=UTF-8
+      Content-Transfer-Encoding: 8bit
+
+      x
+      --BOUNDARY--
+
+
+      (:body :headers :method :uri)
+      ["multipart/form-data; boundary=" true]
+      "Cannot open <nil> as an InputStream."
+      "Cannot open <42> as an InputStream."
+      "Cannot open <nil> as an InputStream."
+      "DIR/missing (No such file or directory)"
   - name: what-no-transport-here-offers-is-refused-by-name
     source: |
       (prn (try (http/get (url "/lines") {:as :bytes}) (catch UnsupportedOperationException e (ex-message e))))

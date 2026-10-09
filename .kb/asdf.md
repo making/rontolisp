@@ -600,8 +600,8 @@ library living only in the quicklisp cache is verified MANUALLY on all four.
     mentions, or the rebinding fails with `Cannot compile symbol reference: *READTABLE*`.
   - `merge-pathnames` and `truename` are `LispPreludeLibrary` entries (one Lisp definition over
     primitives), unlike `make-pathname`/`uiop:merge-pathnames*`, which stay Java + compile-time
-    folding. `truename` is `(or (probe-file p) (error ...))`, whose load-bearing half is the
-    SIGNAL. **The one residue was local-time's DEFAULT repository path being `nil` on the compile
+    folding. `truename` is `%real-path` (links resolved, `.kb/read-load-streams.md`) probed, else
+    the `file-error`, whose load-bearing half is the SIGNAL. **The one residue was local-time's DEFAULT repository path being `nil` on the compile
     paths** -- it is computed at load time with `(eval (read-from-string "(let ((system
     (asdf:find-system :local-time nil))) (when system (asdf:component-pathname system)))"))`, a
     shape whose runtime `eval` of a reader-built form resolves no ASDF function on the compiled

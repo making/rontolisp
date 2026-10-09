@@ -97,6 +97,7 @@ final class JvmFetchRuntimeBuilder {
 
 		MethodRefEntry stringEqualsIgnoreCase = cp.methodRef(stringClass, "equalsIgnoreCase", "(Ljava/lang/String;)Z");
 
+		ClassEntry byteArrayClass = cp.classEntry("[B");
 		ClassEntry runtimeExceptionClass = cp.classEntry("java/lang/RuntimeException");
 		MethodRefEntry runtimeExceptionInit = cp.methodRef(runtimeExceptionClass, "<init>", "(Ljava/lang/String;)V");
 
@@ -116,7 +117,8 @@ final class JvmFetchRuntimeBuilder {
 
 		// Local slots: 0 url, 1 options, 3 cursor, 9 request headers, 10 method value,
 		// 11 plist cursor, 15 request-body value, 16 canonical method (String),
-		// 17 method scratch (unquoted String), 18 body text (null = none),
+		// 17 method scratch (unquoted String), 18 body (its text, a packed octet vector
+		// as it is, null = none),
 		// 19 flattened request fields (ArrayList), 20 the current field pair.
 		MethodCode a = new MethodCode();
 
@@ -160,13 +162,21 @@ final class JvmFetchRuntimeBuilder {
 		a.athrow();
 		a.labelBinding(methodDone);
 
-		// --- the request body into slot 18: nil stays null (no body), otherwise its
-		// text.
+		// --- the request body into slot 18: nil stays null (no body), a packed octet
+		// vector (byte[]{8, ...}) is passed as it is, anything else is its text.
 		MethodCode.Label bodyDone = a.newLabel();
+		MethodCode.Label bodyText = a.newLabel();
 		a.aconst_null();
 		a.astore(18);
 		a.aload(15);
 		a.ifnull(bodyDone);
+		a.aload(15);
+		a.instanceOf(byteArrayClass);
+		a.ifeq(bodyText);
+		a.aload(15);
+		a.astore(18);
+		a.goto_(bodyDone);
+		a.labelBinding(bodyText);
 		a.aload(15);
 		stripQuotesValue(a, stringClass, stringLength, stringSubstring, strvRef); // [bodyStr]
 		a.astore(18);

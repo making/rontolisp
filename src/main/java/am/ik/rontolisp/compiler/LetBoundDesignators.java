@@ -184,8 +184,8 @@ public final class LetBoundDesignators {
 		return switch (head.name()) {
 			// Data lives under these: a (funcall f ...) shaped list inside one is a
 			// datum, not a call site, so nothing under them may be certified.
-			case LispNames.QUOTE, LispNames.DECLARE, LispNames.DEFMACRO, LispNames.DEFSTRUCT, LispNames.DEFCLASS,
-					LispNames.DEFGENERIC, LispNames.DEFMETHOD, LispNames.DEFPACKAGE ->
+			case LispNames.QUOTE, LispNames.UNSPELLED_QUOTE, LispNames.DECLARE, LispNames.DEFMACRO, LispNames.DEFSTRUCT,
+					LispNames.DEFCLASS, LispNames.DEFGENERIC, LispNames.DEFMETHOD, LispNames.DEFPACKAGE ->
 				0;
 			// The parameter list is not read, and a parameter of this name SHADOWS the
 			// binding -- which the occurrence count then refuses.

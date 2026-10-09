@@ -272,7 +272,7 @@ public final class JavaDeclarations {
 			}
 			List<LispVal> parts = cons.toList();
 			switch (name) {
-				case LispNames.QUOTE, LispNames.DECLARE, LispNames.GO -> {
+				case LispNames.QUOTE, LispNames.UNSPELLED_QUOTE, LispNames.DECLARE, LispNames.GO -> {
 				}
 				case LispNames.DECLAIM -> {
 					for (int i = 1; i < parts.size(); i++) {
@@ -611,7 +611,7 @@ public final class JavaDeclarations {
 			String name = head.name();
 			List<LispVal> parts = cons.toList();
 			switch (name) {
-				case LispNames.QUOTE, LispNames.DECLARE, LispNames.GO -> {
+				case LispNames.QUOTE, LispNames.UNSPELLED_QUOTE, LispNames.DECLARE, LispNames.GO -> {
 				}
 				case LispNames.SETQ, LispNames.PSETQ -> {
 					for (int i = 1; i < parts.size(); i += 2) {

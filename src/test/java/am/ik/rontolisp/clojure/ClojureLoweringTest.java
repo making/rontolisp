@@ -845,6 +845,17 @@ class ClojureLoweringTest {
 	}
 
 	@Test
+	void aReturnTypeHintOnAParameterVectorIsDropped() {
+		assertThat(lowered("(defn f ^long [x] (inc x))")).isEqualTo(lowered("(defn f [x] (inc x))"));
+		assertThat(lowered("(defn- f ^long [x] (inc x))")).isEqualTo(lowered("(defn- f [x] (inc x))"));
+		assertThat(lowered("(fn ^long [x] x)")).isEqualTo(lowered("(fn [x] x)"));
+		assertThat(lowered("(defn f (^long [x] x) (^String [x y] y))"))
+			.isEqualTo(lowered("(defn f ([x] x) ([x y] y))"));
+		assertThatThrownBy(() -> Clojure.read("(fn 1)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("a parameter vector takes its bindings in a vector: 1");
+	}
+
+	@Test
 	void declareRegistersForwardNames() {
 		assertThat(lowered("(declare dcl-f) (defn dcl-g [] (dcl-f 1))")).contains("NIL").contains("|c%dcl-f|");
 	}
@@ -1810,11 +1821,19 @@ class ClojureLoweringTest {
 	}
 
 	/**
+	 * A program lowered with its expanders, printed: a run-time expansion keeps them.
+	 */
+	private static String loweredWithExpanders(String source) {
+		return loweredWithMacros(source + "\n(macroexpand nil)");
+	}
+
+	/**
 	 * The expander a whole program's {@code C%MACRO-EXPANDER} answers for the index of a
 	 * {@code defmacro}, printed.
 	 */
 	private static String expanderOf(String source, int index) {
-		LispVal table = Clojure.read(source, null, ClojureMacroTime.create())
+		// a run-time expansion carries the expanders
+		LispVal table = Clojure.read(source + "\n(macroexpand nil)", null, ClojureMacroTime.create())
 			.stream()
 			.filter(form -> form.print().startsWith("(DEFUN C%MACRO-EXPANDER "))
 			.findFirst()
@@ -1829,22 +1848,27 @@ class ClojureLoweringTest {
 	@Test
 	void aWholeProgramsTableHoldsAnIndexIntoTheOneFunctionHoldingTheExpanders() {
 		// only the run-time expansion calls C%MACRO-EXPANDER, so the compile path's
-		// pruner drops every expander of a program expanding nothing at run time
-		String out = loweredWithMacros("""
+		// pruner drops every expander of a program whose run-time expansion is dead,
+		// and a program expanding nothing at run time carries none
+		String macros = """
 				(defmacro mu-a [x] `(inc ~x))
-				(defmacro mu-b [x] `(dec ~x))""");
+				(defmacro mu-b [x] `(dec ~x))""";
+		assertThat(loweredWithMacros(macros)).contains("(PROGN (SETQ |c%mu-a%macro| 0) ")
+			.doesNotContain("C%MACRO-EXPANDER")
+			.doesNotContain("C%MACRO-FN");
+		String out = loweredWithMacros(macros + "\n(macroexpand '(mu-a 1))");
 		assertThat(out).contains("(PROGN (SETQ |c%mu-a%macro| 0) ")
 			.contains("(PROGN (SETQ |c%mu-b%macro| 1) ")
 			.contains("(C%MACRO-EXPANDER |cell|)")
 			.doesNotContain("FUNCTIONP");
 		assertThat(expanderOf("(defmacro mu-a [x] `(inc ~x)) (defmacro mu-b [x] `(dec ~x))", 1))
-			.contains("'|c%clojure.core/dec|")
+			.contains("(%UNSPELLED-QUOTE |c%clojure.core/dec|)")
 			.doesNotContain("inc");
 	}
 
 	@Test
 	void defmacroEmitsATableEntryAndRegistersTheExpander() {
-		String out = loweredWithMacros("(defmacro mu-unless [c t] (list 'if c nil t))");
+		String out = loweredWithExpanders("(defmacro mu-unless [c t] (list 'if c nil t))");
 		assertThat(out).contains("PROGN")
 			.contains("|c%mu-unless%macro|")
 			.contains("LAMBDA")
@@ -1889,10 +1913,13 @@ class ClojureLoweringTest {
 	@Test
 	void aMacroBodysEvalChoosesTheCodeThisFrontEndLowers() {
 		// data.priority-map's compile-if: a core var the subset lacks resolves to nil, so
-		// the expansion takes the fallback (the oracle, which has it, takes the other)
+		// the expansion takes the fallback (the oracle, which has it, takes the other);
+		// one it has, hash-unordered-coll included, takes the oracle's branch
 		String compileIf = "(defmacro mu-ci [test then else] (if (eval test) then else)) ";
-		assertThat(loweredWithMacros(compileIf + "(mu-ci (resolve 'clojure.core/hash-unordered-coll) :has :lacks)"))
+		assertThat(loweredWithMacros(compileIf + "(mu-ci (resolve 'clojure.core/seque) :has :lacks)"))
 			.endsWith("\"lacks\")");
+		assertThat(loweredWithMacros(compileIf + "(mu-ci (resolve 'clojure.core/hash-unordered-coll) :has :lacks)"))
+			.endsWith("\"has\")");
 		assertThat(loweredWithMacros(compileIf + "(mu-ci (resolve 'clojure.core/inc) :has :lacks)"))
 			.endsWith("\"has\")");
 		// a class lookup runs on the macro-time JVM, the same on every backend
@@ -1991,8 +2018,8 @@ class ClojureLoweringTest {
 				(defmacro wrap2 [& body] `(with-out-str ~@body))""";
 		String wrap = expanderOf(source, 0);
 		String wrap2 = expanderOf(source, 2);
-		assertThat(wrap).contains("'|c%clojure.core/with-out-str|");
-		assertThat(wrap2).contains("'|c%user/with-out-str|").doesNotContain("clojure.core");
+		assertThat(wrap).contains("(%UNSPELLED-QUOTE |c%clojure.core/with-out-str|)");
+		assertThat(wrap2).contains("(%UNSPELLED-QUOTE |c%user/with-out-str|)").doesNotContain("clojure.core");
 	}
 
 	@Test
@@ -2049,8 +2076,8 @@ class ClojureLoweringTest {
 
 	@Test
 	void syntaxQuoteQualifiesSplicesAndGensyms() {
-		String out = loweredWithMacros("(defmacro mu-sq [x] `(a ~x ~@'(1 2) s#))");
-		assertThat(out).contains("(GENSYM \"s\")").contains("APPEND").contains("'|c%user/a|");
+		String out = loweredWithExpanders("(defmacro mu-sq [x] `(a ~x ~@'(1 2) s#))");
+		assertThat(out).contains("(GENSYM \"s\")").contains("APPEND").contains("(%UNSPELLED-QUOTE |c%user/a|)");
 		String out2 = loweredWithMacros("(defmacro mu-doc \"docs\" [x] x) (mu-doc 1)");
 		assertThat(out2).contains("|c%mu-doc%macro|");
 	}
@@ -2071,8 +2098,8 @@ class ClojureLoweringTest {
 	void macroexpandLowersToTheRuntimeExpander() {
 		assertThat(lowered("(macroexpand-1 '(mu-x 1))")).contains("C%MACROEXPAND-1").contains("'");
 		assertThat(lowered("(macroexpand '(mu-x 1))")).contains("(C%MACROEXPAND '");
-		assertThat(lowered("macroexpand-1")).contains("LAMBDA").contains("C%MACROEXPAND-1");
-		assertThat(lowered("macroexpand")).contains("LAMBDA").contains("C%MACROEXPAND");
+		assertThat(lowered("macroexpand-1")).endsWith("#'C%MACROEXPAND-1");
+		assertThat(lowered("macroexpand")).endsWith("#'C%MACROEXPAND");
 		assertThatThrownBy(() -> Clojure.read("(macroexpand-1)", null)).isInstanceOf(LispReadException.class)
 			.hasMessageContaining("macroexpand-1 takes one form");
 		assertThatThrownBy(() -> Clojure.read("(macroexpand 1 2)", null)).isInstanceOf(LispReadException.class)
@@ -2081,7 +2108,7 @@ class ClojureLoweringTest {
 
 	@Test
 	void multiArityMacrosDispatchByCount() {
-		String out = loweredWithMacros(
+		String out = loweredWithExpanders(
 				"(defmacro mu-ch ([x f] (list '. x f)) ([x f & m] (concat (list 'mu-ch (list '. x f)) m))) (mu-ch \"hi\" toUpperCase length)");
 		assertThat(out).contains("wrong number of arguments passed to macro: mu-ch");
 		assertThat(out).contains("STRING-UPCASE");
@@ -2795,6 +2822,33 @@ class ClojureLoweringTest {
 	}
 
 	@Test
+	void theHashVerbsCallTheirWorkersAndATypesHasheqStoresInItsOwnFamily() {
+		assertThat(lowered("(hash [1]) (hash-combine 1 :a) (mix-collection-hash 1 2) (hash-ordered-coll [])"))
+			.contains("(RONTOLISP::%CLOJURE-HASHEQ (VECTOR 1))")
+			.contains("(RONTOLISP::%CLOJURE-HASH-COMBINE 1 (LIST :C%KEYWORD \"a\"))")
+			.contains("(RONTOLISP::%CLOJURE-MIX-COLLECTION-HASH 1 2)")
+			.contains("(RONTOLISP::%CLOJURE-HASH-ORDERED-COLL (VECTOR))");
+		assertThat(lowered("(map hash [1]) (map hash-unordered-coll [#{}])")).contains("#'RONTOLISP::%CLOJURE-HASHEQ-V")
+			.contains("#'RONTOLISP::%CLOJURE-HASH-UNORDERED-COLL-V");
+		assertThatThrownBy(() -> Clojure.read("(hash)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Wrong number of args (0) passed to: clojure.core/hash");
+		assertThatThrownBy(() -> Clojure.read("(mix-collection-hash 1)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Wrong number of args (1) passed to: clojure.core/mix-collection-hash");
+		assertThatThrownBy(() -> Clojure.read("(hash-ordered-coll [] [])", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Wrong number of args (2) passed to: clojure.core/hash-ordered-coll");
+		// hash reads an IHashEq row, so it is a family of its own, not a marker
+		assertThat(lowered("(deftype H [] clojure.lang.IHashEq (hasheq [_] 1))"))
+			.contains("(RONTOLISP::%CLOJURE-HASHEQ-ROW (LIST :C%KEYWORD \"H\") '(\"clojure.lang.IHashEq\")")
+			.doesNotContain("%CLOJURE-MARKER-ROW");
+		// .hashCode of a receiver of no known class is the hashCode of any value, on
+		// every backend; a known host class keeps the host's
+		assertThat(lowered("(fn [x] (.hashCode x))")).contains("(RONTOLISP::%CLOJURE-JAVA-HASH ")
+			.doesNotContain("JAVA:CALL");
+		assertThat(lowered("(.hashCode (java.util.ArrayList.))")).contains("\"hashCode\"")
+			.doesNotContain("%CLOJURE-JAVA-HASH");
+	}
+
+	@Test
 	void coreBacklogArityRefusalsUseTheOracleWording() {
 		assertThatThrownBy(() -> Clojure.read("(drop-last 1 2 3)", null)).isInstanceOf(LispReadException.class)
 			.hasMessageContaining("Wrong number of args (3) passed to: clojure.core/drop-last");
@@ -3135,38 +3189,42 @@ class ClojureLoweringTest {
 		// name the namespace sees as clojure.core/name, any other unresolved
 		// spelling with the defining namespace, an alias head with its namespace,
 		// a class head with its fully qualified name
-		assertThat(loweredWithMacros("(ns s.a) (defn h [] 1) (defmacro m [] `(h ~'x nope let))")).contains("'|c%s.a/h|")
-			.contains("'|c%s.a/nope|")
-			.contains("'|c%clojure.core/let|");
-		assertThat(loweredWithMacros("(defn h [] 1) (defmacro m [] `(h))")).contains("'|c%user/h|");
-		assertThat(loweredWithMacros(
+		assertThat(loweredWithExpanders("(ns s.a) (defn h [] 1) (defmacro m [] `(h ~'x nope let))"))
+			.contains("(%UNSPELLED-QUOTE |c%s.a/h|)")
+			.contains("(%UNSPELLED-QUOTE |c%s.a/nope|)")
+			.contains("(%UNSPELLED-QUOTE |c%clojure.core/let|)");
+		assertThat(loweredWithExpanders("(defn h [] 1) (defmacro m [] `(h))"))
+			.contains("(%UNSPELLED-QUOTE |c%user/h|)");
+		assertThat(loweredWithExpanders(
 				"(ns s.b (:require [clojure.string :as s])) (defmacro m [] `(s/join s/nope System/nanoTime foo/bar import*))"))
-			.contains("'|c%clojure.string/join|")
-			.contains("'|c%clojure.string/nope|")
-			.contains("'|c%java.lang.System/nanoTime|")
-			.contains("'|c%foo/bar|")
-			.contains("'|c%s.b/import*|");
-		assertThat(loweredWithMacros("(ns s.c (:refer-clojure :exclude [map])) (defmacro m [] `(map filter))"))
-			.contains("'|c%s.c/map|")
-			.contains("'|c%clojure.core/filter|");
+			.contains("(%UNSPELLED-QUOTE |c%clojure.string/join|)")
+			.contains("(%UNSPELLED-QUOTE |c%clojure.string/nope|)")
+			.contains("(%UNSPELLED-QUOTE |c%java.lang.System/nanoTime|)")
+			.contains("(%UNSPELLED-QUOTE |c%foo/bar|)")
+			.contains("(%UNSPELLED-QUOTE |c%s.b/import*|)");
+		assertThat(loweredWithExpanders("(ns s.c (:refer-clojure :exclude [map])) (defmacro m [] `(map filter))"))
+			.contains("(%UNSPELLED-QUOTE |c%s.c/map|)")
+			.contains("(%UNSPELLED-QUOTE |c%clojure.core/filter|)");
 		// a class spelling is already fully qualified (measured on the
 		// oracle: `java.io.StringWriter reads as written, `String as
 		// java.lang.String) -- never with the defining namespace
-		assertThat(loweredWithMacros("(ns s.d) (defmacro m [] `(java.io.StringWriter String))"))
-			.contains("'|c%java.io.StringWriter|")
-			.contains("'|c%java.lang.String|");
+		assertThat(loweredWithExpanders("(ns s.d) (defmacro m [] `(java.io.StringWriter String))"))
+			.contains("(%UNSPELLED-QUOTE |c%java.io.StringWriter|)")
+			.contains("(%UNSPELLED-QUOTE |c%java.lang.String|)");
 	}
 
 	@Test
-	void macroexpandCarriesTheCallSitesMacroScope() {
-		// a bare head of a namespace other than user, and an alias-qualified one,
-		// reach the table through the call site's scope; nothing else needs one
-		assertThat(loweredWithMacros("(ns s.a) (defmacro m [] 1) (macroexpand-1 '(m))"))
-			.contains("(C%MACROEXPAND-1 '(|c%m|) '((|c%m| . |c%s.a/m%macro|)))");
-		assertThat(loweredWithMacros("(ns s.a) (defmacro m [] 1) (ns s.b (:require [s.a :as x])) (macroexpand '(x/m))"))
-			.contains("(C%MACROEXPAND '(|c%x/m|) '((|c%x/m| . |c%s.a/m%macro|)))");
-		assertThat(loweredWithMacros("(defmacro m [] 1) (macroexpand-1 '(m))"))
-			.contains("(C%MACROEXPAND-1 '(|c%m|) NIL)");
+	void aRunTimeExpansionResolvesItsHeadThroughTheScopeOfTheNamespaceItRunsIn() {
+		// the call carries no scope: C%MACRO-FN asks C%MACRO-SCOPE for *ns*'s, which
+		// spells a namespace's bare and alias-qualified macro names the table cannot
+		String out = loweredWithMacros(
+				"(ns s.a) (defmacro m [] 1) (ns s.b (:require [s.a :as x :refer [m]])) (macroexpand '(x/m))");
+		assertThat(out).contains("(C%MACROEXPAND '(|c%x/m|))")
+			.contains("((STRING= |ns| \"s.a\") '((|c%m| . |c%s.a/m%macro|)))")
+			.contains("((STRING= |ns| \"s.b\") '((|c%m| . |c%s.a/m%macro|) (|c%x/m| . |c%s.a/m%macro|)))");
+		// user's table spells a user macro's bare name
+		assertThat(loweredWithMacros("(defmacro m [] 1) (macroexpand-1 '(m))")).contains("(C%MACROEXPAND-1 '(|c%m|))")
+			.contains("(DEFUN C%MACRO-SCOPE (|ns|) (COND (T NIL)))");
 	}
 
 	@Test

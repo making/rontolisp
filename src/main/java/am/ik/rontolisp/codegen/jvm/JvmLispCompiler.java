@@ -152,6 +152,30 @@ public final class JvmLispCompiler implements LispCompiler {
 	private boolean needsFetchRuntime;
 
 	/**
+	 * The decoder of a compressed HTTP reply ({@code rontolisp::%inflate-new},
+	 * {@code %inflate-update}, {@code %inflate-finish}), in internal form: the class
+	 * {@code JvmExprCompiler} calls them on, which travels with the output.
+	 */
+	static final String INFLATE_CLASS = "am/ik/rontolisp/runtime/RontoInflate";
+
+	/** Each {@code %inflate-} primitive's method of {@link #INFLATE_CLASS}. */
+	static final Map<String, String> INFLATE_METHODS = Map.of(LispNames.INFLATE_NEW_INTERNAL, "create",
+			LispNames.INFLATE_UPDATE_INTERNAL, "update", LispNames.INFLATE_FINISH_INTERNAL, "finish");
+
+	/**
+	 * The runtime class files a program that decompresses carries beside it: the decoder
+	 * and its two nested classes.
+	 */
+	static final List<String> INFLATE_RUNTIME_CLASS_FILES = List.of(INFLATE_CLASS + ".class",
+			INFLATE_CLASS + "$Code.class", INFLATE_CLASS + "$Stop.class");
+
+	/**
+	 * Whether the last {@link #compile} decompresses, i.e. whether the emitted class
+	 * needs the decoder ({@code RontoInflate}) beside it.
+	 */
+	private boolean needsInflateRuntime;
+
+	/**
 	 * Whether the last {@link #compile} uses hash tables, i.e. whether the emitted class
 	 * needs {@code RontoHashTable} beside it: the key fold for an {@code equalp} table,
 	 * and the tombstone machinery (tombstone/liveCount/liveValues/maybeCompact) every
@@ -786,10 +810,10 @@ public final class JvmLispCompiler implements LispCompiler {
 	 * @return each file's path within an output tree (or jar), mapped to its bytes
 	 */
 	public Map<String, byte[]> runtimeClassFiles() {
-		if (!this.needsHandleRuntime && !this.needsHttpRuntime && !this.needsFetchRuntime && !this.needsHashTableRuntime
-				&& !this.needsComplexRuntime && !this.needsIoStreamRuntime && !this.needsCharFileRuntime
-				&& !this.needsStringInputRuntime && !this.needsJavaValueRuntime && this.partClassFiles.isEmpty()
-				&& this.bridgeClassFiles.isEmpty()) {
+		if (!this.needsHandleRuntime && !this.needsHttpRuntime && !this.needsFetchRuntime && !this.needsInflateRuntime
+				&& !this.needsHashTableRuntime && !this.needsComplexRuntime && !this.needsIoStreamRuntime
+				&& !this.needsCharFileRuntime && !this.needsStringInputRuntime && !this.needsJavaValueRuntime
+				&& this.partClassFiles.isEmpty() && this.bridgeClassFiles.isEmpty()) {
 			return Map.of();
 		}
 		// A program too large for one class brings its $PartN classes, and a bridged
@@ -823,6 +847,9 @@ public final class JvmLispCompiler implements LispCompiler {
 		}
 		if (this.needsFetchRuntime) {
 			files.putAll(JvmRuntimeClassFiles.read(JvmFetchRuntimeBuilder.RUNTIME_CLASS_FILES));
+		}
+		if (this.needsInflateRuntime) {
+			files.putAll(JvmRuntimeClassFiles.read(INFLATE_RUNTIME_CLASS_FILES));
 		}
 		if (this.needsHttpRuntime) {
 			files.putAll(JvmHttpHandlerRuntimeBuilder.runtimeClassFiles());
@@ -1229,6 +1256,8 @@ public final class JvmLispCompiler implements LispCompiler {
 					+ " nothing for the container to call. Compile to a .class or .jar instead");
 		}
 		boolean usesFetch = programUsesSymbol(program, fetchQualified);
+		// The decoder answers packed octet vectors, which the _iv* dispatch reads.
+		boolean usesInflate = programUsesSymbol(program, LispNames.INFLATE_NEW_INTERNAL_QUALIFIED);
 		boolean usesAsyncSpawn = programUsesSymbol(program, LispNames.ASYNC_RUN_QUALIFIED) || usesHttpHandler;
 		boolean usesStreamOps = programUsesSymbol(program,
 				PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.MAKE_STREAM))
@@ -2213,8 +2242,10 @@ public final class JvmLispCompiler implements LispCompiler {
 		// A served program calls the embedded server and the Clack glue, so those class
 		// files travel with the output and it runs on a bare `java -cp .`.
 		this.needsHttpRuntime = usesHttpHandler;
-		// A fetching program calls the transport class, which travels the same way.
+		// A fetching program calls the transport class, which travels the same way, and a
+		// decompressing one the decoder.
 		this.needsFetchRuntime = usesFetch;
+		this.needsInflateRuntime = usesInflate;
 		// An equalp table folds its keys through RontoHashTable.equalpKey, and every
 		// table's put/remove/count/values helpers call its tombstone machinery, so that
 		// class travels with any hash-using output -- and with nothing else, since no
@@ -2257,7 +2288,7 @@ public final class JvmLispCompiler implements LispCompiler {
 		// make-array), so a program that fetches or serves may hold one and needs the
 		// _iv* dispatch on.
 		boolean usesIntArray = programUsesIntArray(program, closRegistry) || usesSeqIntVector || usesFetch
-				|| usesHttpHandler || usesFloat16Bits;
+				|| usesInflate || usesHttpHandler || usesFloat16Bits;
 		// The bulk binary transfer behind read-sequence / write-sequence over a packed
 		// buffer (.kb/binary-sequence-io.md): emitted for a program that has both a
 		// packed buffer to move and a sequence-I/O call to move it with -- the primitive
@@ -3776,7 +3807,8 @@ public final class JvmLispCompiler implements LispCompiler {
 						|| programUsesSymbol(program, LispNames.MAKE_STRING_INPUT_STREAM_INTERNAL)),
 				programUsesSymbol(program, LispNames.WITH_INPUT_FROM_STRING)
 						|| programUsesSymbol(program, LispNames.MAKE_STRING_INPUT_STREAM)
-						|| programUsesSymbol(program, LispNames.MAKE_STRING_INPUT_STREAM_INTERNAL));
+						|| programUsesSymbol(program, LispNames.MAKE_STRING_INPUT_STREAM_INTERNAL),
+				programUsesSymbol(program, LispNames.READ_LINK_INTERNAL));
 		this.needsCharFileRuntime = fileMeta.characterPosition();
 		// The BIDIRECTIONAL stream arm of _open, and with it the travelling
 		// RontoIoFileStream class file, ride the surface fact that the program can ask

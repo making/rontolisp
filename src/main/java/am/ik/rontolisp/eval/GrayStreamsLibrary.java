@@ -660,7 +660,7 @@ public final class GrayStreamsLibrary {
 			String opName = member(op.name());
 			// Quoted data is data; the dispatch defuns' own fallback calls must not
 			// rewrite into themselves.
-			if (LispNames.QUOTE.equals(opName)) {
+			if (LispNames.isQuote(opName)) {
 				return form;
 			}
 			if (LispNames.DEFUN.equals(opName) && cons.cdr() instanceof am.ik.rontolisp.LispCons rest

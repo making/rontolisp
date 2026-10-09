@@ -323,6 +323,15 @@ class ClojureSessionTest {
 	}
 
 	@Test
+	void aRunTimeExpansionResolvesInTheNamespaceALaterBufferSwitchedTo() {
+		// the scopes a buffer changes after the macro runtime came define themselves
+		// again; a bare head resolves in *ns*, like the oracle's REPL
+		assertThat(runSession("(defmacro sx-um [x] `(inc ~x))", "(prn (macroexpand '(sx-um 1)))", "(ns sxns)",
+				"(defmacro sx-m [x] `(dec ~x))", "(prn (macroexpand '(sx-m 1)) (macroexpand '(sx-um 1)))"))
+			.isEqualTo("(clojure.core/inc 1)\n(clojure.core/dec 1) (sx-um 1)\n");
+	}
+
+	@Test
 	void aSessionReadsAClassKeywordsSupersInALaterBuffer() {
 		// the hierarchy runtime of a first buffer without a class takes the class rows'
 		// readers when a later one spells a class, and a later record joins the rows

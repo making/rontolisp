@@ -34,12 +34,14 @@ final class ClojureThrowables {
 	 * the three the HTTP client throws ({@code rontolisp.http-client}: a transport's
 	 * {@code IOException}, a failed future's {@code ExecutionException} under
 	 * {@code deref}, the {@code CompletionException} {@code :async-catch} is handed) and
-	 * of the three {@code clojure.java.io} refuses a file, a charset and a URL with. A
-	 * table, not reflection, so a host that reflects only what its image holds (a native
-	 * image, the browser) resolves these alike; {@code ClojureThrowablesTest} pins the
-	 * {@code java} rows to reflection. The {@code clojure.lang} rows are what no host
-	 * here can reflect: {@code ExceptionInfo} is what {@code ex-info} builds,
-	 * {@code ArityException} what a wrong argument count throws.
+	 * of the three {@code clojure.java.io} refuses a file, a charset and a URL with, and
+	 * of the two a compressed reply the client cannot read throws ({@code ZipException},
+	 * {@code EOFException}). A table, not reflection, so a host that reflects only what
+	 * its image holds (a native image, the browser) resolves these alike;
+	 * {@code ClojureThrowablesTest} pins the {@code java} rows to reflection. The
+	 * {@code clojure.lang} rows are what no host here can reflect: {@code ExceptionInfo}
+	 * is what {@code ex-info} builds, {@code ArityException} what a wrong argument count
+	 * throws.
 	 */
 	static final Map<String, String> PARENTS = Map.ofEntries(
 			Map.entry("java.lang.AbstractMethodError", "java.lang.IncompatibleClassChangeError"),
@@ -92,6 +94,8 @@ final class ClojureThrowables {
 			Map.entry("java.lang.VirtualMachineError", "java.lang.Error"),
 			Map.entry("java.io.IOException", "java.lang.Exception"),
 			Map.entry("java.io.FileNotFoundException", "java.io.IOException"),
+			Map.entry("java.io.EOFException", "java.io.IOException"),
+			Map.entry("java.util.zip.ZipException", "java.io.IOException"),
 			Map.entry("java.io.UnsupportedEncodingException", "java.io.IOException"),
 			Map.entry("java.net.MalformedURLException", "java.io.IOException"),
 			Map.entry("java.util.NoSuchElementException", "java.lang.RuntimeException"),

@@ -91,7 +91,7 @@ public final class RuntimeFunctionNames {
 			return !sym.name().startsWith(":") && !"T".equals(sym.name()) && !"NIL".equals(sym.name());
 		}
 		if (arg instanceof LispCons cons) {
-			return !(cons.car() instanceof LispSymbol head && (LispNames.QUOTE.equals(head.name())
+			return !(cons.car() instanceof LispSymbol head && (LispNames.isQuote(head.name())
 					|| LispNames.FUNCTION.equals(head.name()) || LispNames.FUNCTION_NAME_INTERNAL.equals(head.name())
 					|| SYMBOL_VALUED.contains(head.name())));
 		}
@@ -246,7 +246,7 @@ public final class RuntimeFunctionNames {
 			// reaching the run time as data.
 			return 0;
 		}
-		boolean inner = quoted || cons.car() instanceof LispSymbol head && LispNames.QUOTE.equals(head.name());
+		boolean inner = quoted || cons.car() instanceof LispSymbol head && LispNames.isQuote(head.name());
 		int found = 0;
 		LispVal rest = cons;
 		while (rest instanceof LispCons cell) {

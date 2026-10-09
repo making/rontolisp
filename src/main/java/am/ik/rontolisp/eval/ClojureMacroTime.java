@@ -78,6 +78,12 @@ public final class ClojureMacroTime {
 	/** The run-time library's {@code resolve} of a computed symbol, refused there. */
 	private static final LispSymbol RESOLVE = new LispSymbol("RONTOLISP::%CLOJURE-RESOLVE");
 
+	/**
+	 * The macro runtime's scopes by namespace name, a constant in a program: here the
+	 * lowering's as they stand when a macro body expands.
+	 */
+	private static final LispSymbol MACRO_SCOPE = new LispSymbol(ClojureLowering.MACRO_SCOPE);
+
 	private static final class LazyEvaluator implements ClojureMacroEvaluator {
 
 		private final ClassLoader javaClasses;
@@ -110,6 +116,7 @@ public final class ClojureMacroTime {
 				}
 				macroEval.eval(callingBack(EVAL, ClojureMacroEvaluator.Lowering::evalForm));
 				macroEval.eval(callingBack(RESOLVE, ClojureMacroEvaluator.Lowering::resolveForm));
+				macroEval.eval(callingBack(MACRO_SCOPE, ClojureMacroEvaluator.Lowering::macroScopeForm));
 				this.evaluator = macroEval;
 			}
 			for (Pending definition : this.pending) {

@@ -216,7 +216,7 @@ public final class CrossLambdaExitLowering {
 		private @Nullable LispVal transformSpecial(LispCons cons, int lambdaDepth) {
 			if (cons.car() instanceof LispSymbol op) {
 				switch (op.name()) {
-					case LispNames.QUOTE -> {
+					case LispNames.QUOTE, LispNames.UNSPELLED_QUOTE -> {
 						return cons;
 					}
 					case LispNames.LAMBDA -> {

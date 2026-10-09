@@ -610,8 +610,10 @@ final class WasmIoRuntimeBuilder {
 		getLocal(w, plen);
 		w.write(Instruction.CALL);
 		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_PATH_DIRFD);
-		// dirflags = 0 (no symlink following, as before)
-		i32(w, 0);
+		// dirflags = symlink_follow: a link in the LAST component is opened through, as
+		// the host's own open does (and Files / File on the other two backends). Without
+		// it a preview1 host refuses the open, so a path naming a link read as missing.
+		i32(w, LOOKUPFLAGS_SYMLINK_FOLLOW);
 		emitResolvedPath(w);
 	}
 
@@ -660,7 +662,7 @@ final class WasmIoRuntimeBuilder {
 		i32(w, -8);
 		w.write(Instruction.I32_AND);
 		w.write(Instruction.I32_STORE, 0x02, 0x00);
-		// path_open(dirfd, dirflags=0, path_ptr, path_len -- all four from
+		// path_open(dirfd, dirflags=symlink_follow, path_ptr, path_len -- all four from
 		// emitDirFdAndPath, which resolves the staged path against the preopen table,
 		// oflags=(read: 0, write: CREAT|TRUNC=9, append: CREAT=1),
 		// fs_rights_base=(read: FD_READ=2, write: FD_WRITE|FD_SEEK|FD_TELL=100),
@@ -1223,7 +1225,10 @@ final class WasmIoRuntimeBuilder {
 
 	private static final int FILESTAT_MTIM_OFFSET = 48;
 
-	/** preview1 {@code lookupflags::symlink_follow}: stat what a link names. */
+	/**
+	 * preview1 {@code lookupflags::symlink_follow}: open or stat what a link in the last
+	 * component names.
+	 */
 	private static final int LOOKUPFLAGS_SYMLINK_FOLLOW = 1;
 
 	/** Seconds from the Common Lisp epoch (1900) to the Unix one (1970). */
@@ -1813,9 +1818,10 @@ final class WasmIoRuntimeBuilder {
 		w.write(Instruction.RETURN);
 		w.write(Instruction.END);
 		// Otherwise verify: open the path as a DIRECTORY (the _list_directory open),
-		// which turns "already there" into T whatever errno the host used.
+		// which turns "already there" into T whatever errno the host used -- through a
+		// link, as File.isDirectory answers.
 		getLocal(w, DIRFD);
-		i32(w, 0);
+		i32(w, LOOKUPFLAGS_SYMLINK_FOLLOW);
 		getLocal(w, BASE);
 		getLocal(w, N);
 		i32(w, 2);
@@ -2050,6 +2056,128 @@ final class WasmIoRuntimeBuilder {
 		w.write(Instruction.I64_ADD);
 		w.write(Instruction.CALL);
 		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_INT_NEW);
+		w.write(Instruction.END);
+		return body.toByteArray();
+	}
+
+	/**
+	 * The most bytes {@code _read_link} reads a link's target into: Linux's
+	 * {@code PATH_MAX}. A target this long or longer answers nil rather than a truncated
+	 * path (preview1's {@code path_readlink} truncates silently).
+	 */
+	private static final int READ_LINK_MAX = 4096;
+
+	/**
+	 * Builds the _read_link(path) function body: the target the symbolic link at the path
+	 * holds, as a fresh string written as the link has it, or {@code ref.null eq} (nil)
+	 * when the path is no link (preview1's {@code inval}), is not there, lies outside
+	 * every preopen, or the host refuses -- wasmtime refuses a link whose target is
+	 * absolute ({@code perm}), which reads as "no link" and leaves the component as
+	 * spelled. The path is staged and resolved against the preopen table as
+	 * {@link #buildProbeFileBody()} does; after it, 8-aligned, sit the 4-byte
+	 * {@code bufused} cell (wasmtime refuses an unaligned one) and the target framed in
+	 * the quote bytes {@code _str_fresh} reads, and all of it is popped together after
+	 * the string is built.
+	 * @param pathReadlinkFunc the placeholder index of the injected {@code path_readlink}
+	 * import
+	 * @return the function body bytes
+	 */
+	static byte[] buildReadLinkBody(int pathReadlinkFunc) {
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
+		WasmWriter w = new WasmWriter(body);
+		// param: PATH=0 (ref) ; i32 locals: OFF=1, PLEN=2, BUF=3, USED=4 ; ref local:
+		// STR=5
+		w.write(2);
+		w.write(4);
+		w.write(Type.I32);
+		w.write(1);
+		w.writeRefType(true, Type.EQ.code());
+		final int PATH = 0, OFF = 1, PLEN = 2, BUF = 3, USED = 4, STR = 5;
+
+		// Stage the path bytes into linear scratch exactly as _open does.
+		loadMem32(w, WasmLispCompiler.HEAP_PTR_ADDR);
+		setLocal(w, OFF);
+		getLocal(w, PATH);
+		getLocal(w, OFF);
+		WasmEmitHelper.emitStrToMemCall(w);
+		i32(w, 2);
+		w.write(Instruction.I32_SUB);
+		setLocal(w, PLEN);
+		// buf = align8(off + plen + 2): bufused @0, '"' @4, target @5, '"' after it;
+		// HEAP_PTR = buf + 8 + READ_LINK_MAX, the memory grown to cover it
+		getLocal(w, OFF);
+		getLocal(w, PLEN);
+		w.write(Instruction.I32_ADD);
+		i32(w, 2 + 7);
+		w.write(Instruction.I32_ADD);
+		i32(w, -8);
+		w.write(Instruction.I32_AND);
+		setLocal(w, BUF);
+		WasmEmitHelper.emitGrowHeapTo(w, () -> {
+			getLocal(w, BUF);
+			i32(w, 8 + READ_LINK_MAX);
+			w.write(Instruction.I32_ADD);
+		});
+		i32(w, WasmLispCompiler.HEAP_PTR_ADDR);
+		getLocal(w, BUF);
+		i32(w, 8 + READ_LINK_MAX);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.I32_STORE, 0x02, 0x00);
+		// errno = path_readlink(_path_dirfd(off + 1, plen), resolved path, buf + 5,
+		// READ_LINK_MAX, buf) (PLEN is free now: reuse it for the errno)
+		getLocal(w, OFF);
+		i32(w, 1);
+		w.write(Instruction.I32_ADD);
+		getLocal(w, PLEN);
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_PATH_DIRFD);
+		emitResolvedPath(w);
+		getLocal(w, BUF);
+		i32(w, 5);
+		w.write(Instruction.I32_ADD);
+		i32(w, READ_LINK_MAX);
+		getLocal(w, BUF);
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(pathReadlinkFunc);
+		setLocal(w, PLEN);
+		getLocal(w, BUF);
+		w.write(Instruction.I32_LOAD, 0x02, 0x00);
+		setLocal(w, USED);
+		// a nonzero errno, or a target that may have been cut short: no link
+		getLocal(w, PLEN);
+		getLocal(w, USED);
+		i32(w, READ_LINK_MAX);
+		w.write(Instruction.I32_GE_U);
+		w.write(Instruction.I32_OR);
+		w.write(Instruction.IF, 0x40);
+		i32(w, WasmLispCompiler.HEAP_PTR_ADDR);
+		getLocal(w, OFF);
+		w.write(Instruction.I32_STORE, 0x02, 0x00);
+		emitNil(w);
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END);
+		// frame the target in quotes and build the string while the scratch is held
+		getLocal(w, BUF);
+		i32(w, 0x22);
+		w.write(Instruction.I32_STORE8, 0x00, 0x04);
+		getLocal(w, BUF);
+		getLocal(w, USED);
+		w.write(Instruction.I32_ADD);
+		i32(w, 0x22);
+		w.write(Instruction.I32_STORE8, 0x00, 0x05);
+		getLocal(w, BUF);
+		i32(w, 4);
+		w.write(Instruction.I32_ADD);
+		getLocal(w, USED);
+		i32(w, 2);
+		w.write(Instruction.I32_ADD);
+		WasmEmitHelper.emitStrFreshCall(w);
+		setLocal(w, STR);
+		// pop the staged path, the cell and the target
+		i32(w, WasmLispCompiler.HEAP_PTR_ADDR);
+		getLocal(w, OFF);
+		w.write(Instruction.I32_STORE, 0x02, 0x00);
+		getLocal(w, STR);
 		w.write(Instruction.END);
 		return body.toByteArray();
 	}

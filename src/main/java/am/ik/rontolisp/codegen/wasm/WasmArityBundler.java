@@ -112,7 +112,7 @@ final class WasmArityBundler {
 
 	private static int widestDispatchArityIn(LispVal form) {
 		if (!(form instanceof LispCons cons) || !cons.isProperList()
-				|| cons.car() instanceof LispSymbol q && LispNames.QUOTE.equals(q.name())) {
+				|| cons.car() instanceof LispSymbol q && LispNames.isQuote(q.name())) {
 			return 0;
 		}
 		List<LispVal> parts = cons.toList();
@@ -175,7 +175,7 @@ final class WasmArityBundler {
 		if (!(form instanceof LispCons cons) || !cons.isProperList()) {
 			return form;
 		}
-		boolean quoted = cons.car() instanceof LispSymbol q && LispNames.QUOTE.equals(q.name());
+		boolean quoted = cons.car() instanceof LispSymbol q && LispNames.isQuote(q.name());
 		if (quoted) {
 			return form;
 		}

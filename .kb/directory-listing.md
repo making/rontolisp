@@ -80,7 +80,8 @@ definition; `cli/CompileTimePathnameFolder` is the compile-time literal-shape ha
 `wild-pathnames`. Trees are built with `mkdir` in the CONTAINER -- kept harness-staged
 even though both WASM backends can create directories since `.todo/257` (the walk pins
 LISTING over a known tree, not creation). `wild-pathnames`' walk is the zero-level branch over a HARNESS-STAGED `./wpc-sub/`
-(`testsupport/CorpusFixtures`, driven by `CiSpecE2eTest` and `JvmDeadMethodEliminationCorpusTest`): a corpus
+(`testsupport/CorpusFixtures`, driven by `CiSpecE2eTest` and `JvmDeadMethodEliminationCorpusTest`, both through
+`CorpusFixtures.stageAll` -- on 2026-10-09 a fixture staged by one driver only turned the other red): a corpus
 walk is BOUNDED BY CONSTRUCTION, because a `**/` anchored at the run directory reads EVERYTHING
 below the process CWD, and a filter fixes the assertion, not the work. The flat `./*.*` /
 `uiop:directory-files "."` reads of the sibling case are ONE listing of the run directory and

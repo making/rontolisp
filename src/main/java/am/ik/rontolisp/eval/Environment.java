@@ -63,6 +63,7 @@ import am.ik.rontolisp.LispHashTable;
 import am.ik.rontolisp.LispInstance;
 import am.ik.rontolisp.LispIntVector;
 import am.ik.rontolisp.LispInteger;
+import am.ik.rontolisp.LispJavaObject;
 import am.ik.rontolisp.LispLambda;
 import am.ik.rontolisp.LispLayout;
 import am.ik.rontolisp.LispNames;
@@ -92,6 +93,7 @@ import am.ik.rontolisp.reader.LispLexer;
 import am.ik.rontolisp.reader.LispReadException;
 import am.ik.rontolisp.runtime.RontoCharFileReader;
 import am.ik.rontolisp.runtime.RontoCharFileWriter;
+import am.ik.rontolisp.runtime.RontoInflate;
 import am.ik.rontolisp.runtime.RontoIoFileStream;
 import am.ik.rontolisp.runtime.RontoStringInputStream;
 import am.ik.rontolisp.reader.LispReader;
@@ -2599,8 +2601,9 @@ public final class Environment implements Scope {
 		// The optional second argument is an options property list (:method, :headers,
 		// :body); the options are validated eagerly (like JavaScript fetch, which throws
 		// synchronously on invalid arguments). The supported methods are GET, HEAD, POST,
-		// PUT, DELETE, OPTIONS and PATCH; :body is the request body string (e.g. for
-		// POST/PUT).
+		// PUT, DELETE, OPTIONS and PATCH; :body is the request body (e.g. for POST/PUT):
+		// a string, sent as its UTF-8 octets, or an (unsigned-byte 8) vector, sent as it
+		// is.
 		String fetchName = PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.FETCH);
 		env.defineFunction(fetchName, new LispFunction(fetchName, args -> {
 			if (args.isEmpty() || args.size() > 2) {
@@ -2613,7 +2616,7 @@ public final class Environment implements Scope {
 			LispVal options = args.size() == 2 ? args.get(1) : LispNil.INSTANCE;
 			String method = fetchMethod(options);
 			List<HttpSupport.Header> requestHeaders = parseHeaderAlist(plistGet(options, ":HEADERS"));
-			String body = fetchBody(options);
+			Object body = fetchBody(options);
 			return LispFuture.of(HttpSupport.requestAsync(method, url.value(), requestHeaders, body)
 				.thenApply(Environment::fetchResponsePlist));
 		}));
@@ -2770,7 +2773,9 @@ public final class Environment implements Scope {
 	}
 
 	// Resolves the :body option (default none). Must be a string when present.
-	private static @Nullable String fetchBody(LispVal options) {
+	// The request body: a string's text, a packed octet vector's octets (copied: the
+	// request outlives the call, the vector may not stay as it is), or null for none.
+	private static @Nullable Object fetchBody(LispVal options) {
 		LispVal bodyVal = plistGet(options, ":BODY");
 		if (bodyVal instanceof LispNil) {
 			return null;
@@ -2778,7 +2783,11 @@ public final class Environment implements Scope {
 		if (bodyVal instanceof LispString str) {
 			return str.value();
 		}
-		throw new LispEvalException(LispNames.FETCH + " :body must be a string, got: " + bodyVal.print());
+		if (bodyVal instanceof LispIntVector octets && octets.width() == 8) {
+			return octets.octets().clone();
+		}
+		throw new LispEvalException(
+				LispNames.FETCH + " :body must be a string or an (unsigned-byte 8) vector, got: " + bodyVal.print());
 	}
 
 	private static List<HttpSupport.Header> parseHeaderAlist(LispVal headers) {
@@ -3163,6 +3172,15 @@ public final class Environment implements Scope {
 					requireArgCount(LispNames.IEEE754_SINGLE_FROM_BITS, args, 1);
 					return new LispDouble(Float.intBitsToFloat((int) asBigInteger(args.get(0)).longValue()));
 				}));
+		// The object's identity hash, the one an eq table places an aggregate by
+		// (.kb/hash-tables.md): a host object's is the wrapped object's, the wrapper
+		// being fresh on every Java call that answers it.
+		env.defineFunction(LispNames.IDENTITY_HASH, new LispFunction(LispNames.IDENTITY_HASH, args -> {
+			requireArgCount(LispNames.IDENTITY_HASH, args, 1);
+			LispVal x = args.get(0);
+			return new LispInteger(
+					System.identityHashCode(x instanceof am.ik.rontolisp.LispJavaObject host ? host.ref() : x));
+		}));
 		// bfloat16 <-> double: the top sixteen bits of an f32, round-to-nearest-even
 		// on the way down and exact on the way back. Sixteen bits fit a fixnum, so
 		// unlike the quartet above this pair is on all four backends (BFloat16,
@@ -8205,6 +8223,7 @@ public final class Environment implements Scope {
 			}
 			return LispString.wrapCodePoints(decodeUtf8CodePoints(v));
 		}));
+		defineInflate(env);
 		env.defineFunction(LispNames.CONSTANTP, new LispFunction(LispNames.CONSTANTP, args -> {
 			requireCallShape(LispNames.CONSTANTP, args);
 			LispVal v = args.get(0);
@@ -10785,6 +10804,46 @@ public final class Environment implements Scope {
 	 * @param seq the octets argument
 	 * @return the octets as a packed {@code (unsigned-byte 8)} vector
 	 */
+	/**
+	 * {@code rontolisp::%inflate-new}, {@code %inflate-update} and
+	 * {@code %inflate-finish}: the streaming DEFLATE decoder a compressed HTTP reply is
+	 * read through ({@code rontolisp.http-client}). Here, and on the JVM, it is
+	 * {@link RontoInflate}; the wasm targets compile the Lisp decoder
+	 * {@link InflateLibrary} splices, pinned to this one by {@code InflateLibraryTest}.
+	 * The decoder is a host object no Lisp code but those three looks into.
+	 */
+	private static void defineInflate(Environment env) {
+		String create = LispNames.INFLATE_NEW_INTERNAL_QUALIFIED;
+		env.defineFunction(create, new LispFunction(create, args -> {
+			requireArgCount(LispNames.INFLATE_NEW_INTERNAL, args, 1);
+			return new LispJavaObject(new RontoInflate(requireIndex(LispNames.INFLATE_NEW_INTERNAL, args.get(0))));
+		}));
+		String update = LispNames.INFLATE_UPDATE_INTERNAL_QUALIFIED;
+		env.defineFunction(update, new LispFunction(update, args -> {
+			requireArgCount(LispNames.INFLATE_UPDATE_INTERNAL, args, 3);
+			RontoInflate decoder = inflateDecoder(LispNames.INFLATE_UPDATE_INTERNAL, args.get(0));
+			LispIntVector octets = asOctetVector(LispNames.INFLATE_UPDATE_INTERNAL, args.get(1));
+			int limit = (args.get(2) instanceof LispNil) ? -1
+					: requireIndex(LispNames.INFLATE_UPDATE_INTERNAL, args.get(2));
+			Object answer = decoder.update(octets.octets(), 0, octets.length(), limit);
+			return (answer instanceof String message) ? new LispString(message)
+					: LispIntVector.wrapOctets((byte[]) answer);
+		}));
+		String finish = LispNames.INFLATE_FINISH_INTERNAL_QUALIFIED;
+		env.defineFunction(finish, new LispFunction(finish, args -> {
+			requireArgCount(LispNames.INFLATE_FINISH_INTERNAL, args, 1);
+			int f = inflateDecoder(LispNames.INFLATE_FINISH_INTERNAL, args.get(0)).finish();
+			return (f == 0) ? LispNil.INSTANCE : new LispInteger(f);
+		}));
+	}
+
+	private static RontoInflate inflateDecoder(String fn, LispVal state) {
+		if (state instanceof LispJavaObject host && host.ref() instanceof RontoInflate decoder) {
+			return decoder;
+		}
+		throw new LispEvalException(fn + " expects a decoder, got: " + state.print());
+	}
+
 	private static LispIntVector asOctetVector(String fn, LispVal seq) {
 		if (seq instanceof LispIntVector iv) {
 			return iv;

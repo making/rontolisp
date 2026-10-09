@@ -51,8 +51,9 @@ true
 File はそのパスで、Unix の `java.io.File` と同じく正規化されます（スラッシュの重複も末尾の
 スラッシュもありません）。`#object[java.io.File "path"]` と印字され、`str` はパスを返し、パスが
 同じ 2 つの File は `=` です。メソッドはパスから答えるもの（`getName`、`getParent`、
-`getParentFile`、`getPath`、`isAbsolute`、`getAbsolutePath`、`getCanonicalPath`、`toURI`、
-`toURL`、`compareTo`）と、ファイルシステムから答えるもの（`exists`、`isFile`、`isDirectory`、
+`getParentFile`、`getPath`、`isAbsolute`、`getAbsolutePath`、`toURI`、
+`toURL`、`compareTo`）と、ファイルシステムから答えるもの（`getCanonicalPath`（シンボリック
+リンクをすべて解決し、存在しない部分は綴りのまま残す）、`exists`、`isFile`、`isDirectory`、
 `length`、`lastModified`、`canRead`、`isHidden`、`list`、`listFiles`、`mkdir`、`mkdirs`、
 `createNewFile`、`renameTo`、`delete`）があります。`(java.io.File. path)` と
 `(java.io.File. parent child)` は同じ値を作り、ファイルストリームの構築（パスか File の上の

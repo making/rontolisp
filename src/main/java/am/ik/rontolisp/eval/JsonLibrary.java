@@ -185,7 +185,7 @@ public final class JsonLibrary {
 		}
 
 		private @Nullable LispVal rewriteCons(LispCons cons) {
-			if (cons.car() instanceof LispSymbol op && LispNames.QUOTE.equals(member(op.name()))) {
+			if (cons.car() instanceof LispSymbol op && LispNames.isQuote(member(op.name()))) {
 				// Quoted data is never rewritten, but a mention still triggers the
 				// splice (e.g. (symbol-function 'rontolisp:json-parse)).
 				detect(cons.cdr());

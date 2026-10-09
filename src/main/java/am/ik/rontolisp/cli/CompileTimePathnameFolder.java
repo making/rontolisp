@@ -132,7 +132,7 @@ final class CompileTimePathnameFolder {
 		}
 		List<LispVal> items = cons.toList();
 		if (!items.isEmpty() && items.get(0) instanceof LispSymbol op) {
-			if (LispNames.QUOTE.equals(op.name())) {
+			if (LispNames.isQuote(op.name())) {
 				return;
 			}
 			switch (operatorMember(op)) {
@@ -207,7 +207,7 @@ final class CompileTimePathnameFolder {
 		}
 		List<LispVal> items = cons.toList();
 		if (!items.isEmpty() && items.get(0) instanceof LispSymbol op) {
-			if (LispNames.QUOTE.equals(op.name())) {
+			if (LispNames.isQuote(op.name())) {
 				return;
 			}
 			if (LispNames.WITH_OPEN_FILE.equals(op.name()) && items.size() >= 2 && items.get(1) instanceof LispCons spec
@@ -264,7 +264,7 @@ final class CompileTimePathnameFolder {
 		String opName = op.name();
 		// Quoted data is opaque: never recurse into a datum, otherwise we would
 		// rewrite quoted list literals as if they were code.
-		if (LispNames.QUOTE.equals(opName)) {
+		if (LispNames.isQuote(opName)) {
 			return form;
 		}
 		if (LispNames.DEFPARAMETER.equals(opName) || LispNames.DEFVAR.equals(opName)) {

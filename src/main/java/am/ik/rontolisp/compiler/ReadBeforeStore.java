@@ -807,7 +807,7 @@ public final class ReadBeforeStore {
 			return;
 		}
 		if (cons.car() instanceof LispSymbol head) {
-			if (LispNames.QUOTE.equals(head.name())) {
+			if (LispNames.isQuote(head.name())) {
 				return;
 			}
 			if (readsOnly && GlobalVarCollector.isAssignmentHead(head.name())) {

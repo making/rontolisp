@@ -51,6 +51,17 @@ component side would get it for free from the host.
   (`fetch-spec.yaml`), whose origin can sleep.
 - **WASM P1 `.wasm` / `--no-gc`**: fetch is unsupported there today; unchanged.
 
+## Consumer: `rontolisp.http-client` (added 2026-10-09)
+
+babashka.http-client's request option `:timeout` (milliseconds, or a `java.time.Duration`) is
+`HttpRequest.Builder.timeout`, the first-byte deadline. Measured on clj 1.12.6 against an origin
+holding its head 2 s: `:timeout 300` throws `java.net.http.HttpTimeoutException` `request timed
+out` (under `:async`, an `ExecutionException` over it at the deref); `:timeout 5000` answers.
+`:connect-timeout` is a client option there (`client`, refused here). The client refuses
+`:timeout` by name (`%clojure-http-refuse-options` in `clojure.lisp`); with
+`:first-byte-timeout` it passes the option through and throws the oracle's class and words, a
+case in `clojure-http-spec.yaml` on the four legs.
+
 ## Verification
 
 - Deterministic timeout tests: a local server (interpreter/JVM: JDK

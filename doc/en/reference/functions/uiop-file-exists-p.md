@@ -8,8 +8,8 @@ same contract, same behavior -- and it lowers onto that primitive on every
 backend, so libraries spelling the question the UIOP way (postmodern's
 `execute-file`, for instance) need no shim.
 
-The "truename" answered on success is a pathname carrying the argument
-namestring: no backend resolves symbolic links or makes the path absolute. A
+The pathname answered on success carries the argument namestring, as
+`probe-file`'s does: no symbolic link is resolved and nothing is made absolute. A
 directory counts as existing.
 
 ```lisp

@@ -10,11 +10,11 @@ import am.ik.rontolisp.LispVal;
 
 /**
  * Compiles the file-metadata primitives -- {@code file-write-date},
- * {@code %make-directories}, {@code %delete-file}, {@code file-length} and the
- * two-argument {@code %rename-file} -- as a call of the matching
- * {@code JvmIoRuntimeBuilder} helper. Same shape as {@link JvmProbeFileCompiler}: the
- * arguments are compiled to runtime values and the helper answers rather than signals for
- * anything it cannot determine.
+ * {@code %make-directories}, {@code %delete-file}, {@code file-length},
+ * {@code %read-link} and the two-argument {@code %rename-file} -- as a call of the
+ * matching {@code JvmIoRuntimeBuilder} helper. Same shape as
+ * {@link JvmProbeFileCompiler}: the arguments are compiled to runtime values and the
+ * helper answers rather than signals for anything it cannot determine.
  */
 final class JvmFileMetaCompiler {
 
@@ -42,10 +42,11 @@ final class JvmFileMetaCompiler {
 			case LispNames.DELETE_FILE_INTERNAL -> JvmIoRuntimeBuilder.DELETE_FILE_METHOD;
 			case LispNames.FILE_LENGTH -> JvmIoRuntimeBuilder.FILE_LENGTH_METHOD;
 			case LispNames.RENAME_FILE_INTERNAL -> JvmIoRuntimeBuilder.RENAME_FILE_METHOD;
+			case LispNames.READ_LINK_INTERNAL -> JvmIoRuntimeBuilder.READ_LINK_METHOD;
 			default -> throw new UnsupportedOperationException("Not a file-metadata primitive: " + name);
 		};
 		Utf8Entry nameUtf8 = ctx.cp.utf8Entry(method);
-		// The one-argument four share the (Object) -> Object shape of the probe-file
+		// The one-argument five share the (Object) -> Object shape of the probe-file
 		// helper; %rename-file is the same shape one argument wider.
 		Utf8Entry descUtf8 = ctx.cp.utf8Entry(LispNames.RENAME_FILE_INTERNAL.equals(name)
 				? JvmIoRuntimeBuilder.RENAME_FILE_DESC : JvmIoRuntimeBuilder.PROBE_FILE_DESC);

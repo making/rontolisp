@@ -494,7 +494,7 @@ public final class ArgumentShapes {
 		if (cons.car() instanceof LispSymbol head && cons.isProperList()) {
 			List<LispVal> parts = cons.toList();
 			switch (head.name()) {
-				case LispNames.QUOTE:
+				case LispNames.QUOTE, LispNames.UNSPELLED_QUOTE:
 					return;
 				case LispNames.SETQ, LispNames.SETF, LispNames.PSETQ, LispNames.PSETF: {
 					for (int i = 1; i < parts.size(); i += 2) {
@@ -612,7 +612,7 @@ public final class ArgumentShapes {
 		}
 		if (cons.car() instanceof LispSymbol head) {
 			String name = head.name();
-			if (LispNames.QUOTE.equals(name) || DEFINITION_HEADS.contains(name)) {
+			if (LispNames.isQuote(name) || DEFINITION_HEADS.contains(name)) {
 				// Data, and a nested definition's parameters, are a different scope.
 				return;
 			}
@@ -675,7 +675,7 @@ public final class ArgumentShapes {
 		}
 		if (cons.car() instanceof LispSymbol head && cons.cdr() instanceof LispCons rest) {
 			String name = head.name();
-			if (LispNames.QUOTE.equals(name)) {
+			if (LispNames.isQuote(name)) {
 				return;
 			}
 			if (PAIR_BINDING_HEADS.contains(name)) {

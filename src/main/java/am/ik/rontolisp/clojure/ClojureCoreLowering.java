@@ -80,6 +80,16 @@ final class ClojureCoreLowering {
 				return worker(name, ClojureBindingLowering.realFnValue(ctx, items.get(1)));
 			case "hash-set":
 				return worker("set-of", ClojureLowerUtil.cons(ClojureLowerUtil.sym("list"), ctx.lowers(items, 1)));
+			case "hash":
+				// Util.hasheq, the hash consistent with =
+				arity(name, n, 1, 1);
+				return worker("hasheq", ctx.lower(items.get(1)));
+			case "hash-ordered-coll", "hash-unordered-coll":
+				arity(name, n, 1, 1);
+				return worker(name, ctx.lower(items.get(1)));
+			case "mix-collection-hash", "hash-combine":
+				arity(name, n, 2, 2);
+				return worker(name, ctx.lower(items.get(1)), ctx.lower(items.get(2)));
 			case "find":
 				arity(name, n, 2, 2);
 				return worker(name, ctx.lower(items.get(1)), ctx.lower(items.get(2)));
@@ -222,8 +232,10 @@ final class ClojureCoreLowering {
 					"unchecked-add-int", "unchecked-subtract-int", "unchecked-multiply-int", "unchecked-divide-int",
 					"unchecked-remainder-int", "run!", "iteration", "seq-to-map-for-destructuring", "println", "print",
 					"prn", "pr", "flush", "read-line", "reader-conditional", "tagged-literal", "inst-ms", "parse-uuid",
-					"random-uuid", "iterator-seq" ->
+					"random-uuid", "iterator-seq", "hash-ordered-coll", "hash-unordered-coll", "mix-collection-hash",
+					"hash-combine" ->
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), runtime(name + "-v"));
+			case "hash" -> ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), runtime("hasheq-v"));
 			case "inst-ms*" -> ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), runtime("inst-ms-v"));
 			case "map-entry?" -> ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), runtime("map-entry-p-v"));
 			case "pmap" -> ClojureSeqLowering.mapValue(ctx);

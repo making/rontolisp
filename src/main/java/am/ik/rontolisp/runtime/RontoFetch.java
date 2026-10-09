@@ -66,15 +66,20 @@ public final class RontoFetch {
 	 * @param url the request URL
 	 * @param method the canonical (upper-case) method, already validated
 	 * @param headers the caller's request fields as a flat name, value, ... list
-	 * @param body the request body text, or {@code null} for none
+	 * @param body the request body -- its text, sent as UTF-8, or a packed octet vector
+	 * ({@code byte[]{8, e0, ...}}), sent as its octets -- or {@code null} for none
 	 * @param defaultUserAgent the user-agent a request whose fields name none carries
 	 * @return a {@link CompletableFuture} settling to the response plist
 	 */
 	public static Object start(String url, String method, List<String> headers, Object body, String defaultUserAgent) {
 		HttpRequest request;
 		try {
-			HttpRequest.BodyPublisher publisher = (body instanceof String text)
-					? HttpRequest.BodyPublishers.ofString(text) : HttpRequest.BodyPublishers.noBody();
+			HttpRequest.BodyPublisher publisher = switch (body) {
+				case String text -> HttpRequest.BodyPublishers.ofString(text);
+				case byte[] packed when packed.length > 0 && packed[0] == 8 ->
+					HttpRequest.BodyPublishers.ofByteArray(packed, 1, packed.length - 1);
+				case null, default -> HttpRequest.BodyPublishers.noBody();
+			};
 			HttpRequest.Builder builder = HttpRequest.newBuilder(URI.create(url)).method(method, publisher);
 			boolean userAgentSet = false;
 			for (int i = 0; i + 1 < headers.size(); i += 2) {
