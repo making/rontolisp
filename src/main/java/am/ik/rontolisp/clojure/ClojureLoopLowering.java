@@ -531,9 +531,9 @@ final class ClojureLoopLowering {
 					}
 					continue;
 				}
-				if (head instanceof LispSymbol kind && (kind.name().equals(":keys") || kind.name().equals(":syms")
-						|| kind.name().equals(":strs"))) {
-					collectKeyNames(kind.name(), arg, scope);
+				String directive = ClojureBindingLowering.keysDirective(head);
+				if (directive != null) {
+					collectKeyNames(directive, arg, scope);
 					continue;
 				}
 				if (head instanceof LispSymbol named && !named.name().startsWith(":")) {
@@ -556,14 +556,16 @@ final class ClojureLoopLowering {
 			return;
 		}
 		for (LispVal element : elements.subList(1, elements.size())) {
-			if (element instanceof LispSymbol spelled && !spelled.name().startsWith(":")
-					&& !spelled.name().equals("&")) {
+			if (element instanceof LispSymbol spelled && !spelled.name().equals("&")) {
 				String local = spelled.name();
-				if ((kind.equals(":keys") || kind.equals(":syms")) && local.lastIndexOf('/') >= 0) {
+				if (!kind.equals(":strs")) {
 					local = local.substring(local.lastIndexOf('/') + 1);
 					if (local.isEmpty()) {
 						continue;
 					}
+				}
+				if (local.startsWith(":")) {
+					local = local.substring(local.startsWith("::") ? 2 : 1);
 				}
 				scope.put(local, ClojureLowering.Kind.VARIABLE);
 			}
