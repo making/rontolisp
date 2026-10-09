@@ -446,10 +446,29 @@ final class ClojureStringLowering {
 									ClojureLowerUtil.list(ClojureLowerUtil.sym("subseq"), str, new LispInteger(1))))));
 	}
 
-	/** The whitespace bag {@code trim} trims: the ASCII whitespace characters. */
+	/**
+	 * The whitespace bag {@code trim} trims: the characters
+	 * {@code Character.isWhitespace} accepts, which is what the oracle's
+	 * {@code clojure.string} asks (9-13, 28-32, the Unicode space separators but the
+	 * no-break spaces, the line and paragraph separators).
+	 */
 	static LispVal trimBag() {
-		return ClojureLowerUtil.list(ClojureLowerUtil.sym("quote"), ClojureLowerUtil.list(List.of(new LispChar(' '),
-				new LispChar('\t'), new LispChar('\n'), new LispChar('\r'), new LispChar('\f'))));
+		List<LispVal> bag = new ArrayList<>();
+		for (char c = 0; c < Character.MAX_VALUE; c++) {
+			if (Character.isWhitespace(c)) {
+				bag.add(new LispChar(c));
+			}
+		}
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("quote"), ClojureLowerUtil.list(bag));
+	}
+
+	/** The bag Java's {@code String.trim} trims: every character up to the space. */
+	static LispVal javaTrimBag() {
+		List<LispVal> bag = new ArrayList<>();
+		for (char c = 0; c <= ' '; c++) {
+			bag.add(new LispChar(c));
+		}
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("quote"), ClojureLowerUtil.list(bag));
 	}
 
 	/** {@code trim-newline}: one trailing newline (or carriage-return newline) off. */
