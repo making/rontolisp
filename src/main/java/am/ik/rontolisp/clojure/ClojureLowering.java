@@ -2221,6 +2221,7 @@ public final class ClojureLowering {
 			}
 			VarRef referred = ns().refers.get(name);
 			if (referred != null && !ClojureNamespaceLowering.isKnownNamespace(referred.ns())) {
+				loadPartOf(referred.ns(), referred.var());
 				String key = varKey(referred.ns(), referred.var());
 				return this.globals.containsKey(key) && !pendingCoreMacro(key, name) ? key : null;
 			}
@@ -2230,8 +2231,49 @@ public final class ClojureLowering {
 		if (target == null) {
 			return null;
 		}
+		loadPartOf(target, name.substring(slash + 1));
 		String key = varKey(target, name.substring(slash + 1));
 		return this.globals.containsKey(key) ? key : null;
+	}
+
+	/**
+	 * Loads the part of a built-in namespace defining the var
+	 * ({@link ClojureBuiltinNamespaces#partOf}) where a top-level datum first names it:
+	 * its definitions ahead of the datum, its statements (if any) run there once, like a
+	 * namespace the oracle loads before the program ({@link #projectNamespaceOf}). The
+	 * part lowers inside the namespace, its aliases and its private vars in reach, as
+	 * {@code load} would read it. Nothing when the var is defined already, or the
+	 * namespace came from a project file.
+	 * @param ns the namespace
+	 * @param var the var name
+	 */
+	void loadPartOf(String ns, String var) {
+		if (this.topLevelDepth == 0 || !this.builtinNamespaces.contains(ns)
+				|| this.globals.containsKey(varKey(ns, var))) {
+			return;
+		}
+		ClojureBuiltinNamespaces.Part part = ClojureBuiltinNamespaces.partOf(ns, var);
+		if (part == null) {
+			return;
+		}
+		String unit = "part:" + ns + ":" + part.resource();
+		if (this.loadedNamespaces.contains(unit) || this.loadingNamespaces.contains(unit)) {
+			return;
+		}
+		String outerNs = this.currentNs;
+		this.currentNs = ns;
+		try {
+			loadFile(unit, new ClojureSourcePath.Found(part.resource(), part.resource(),
+					ClojureBuiltinNamespaces.partSource(part), true));
+		}
+		finally {
+			this.currentNs = outerNs;
+		}
+		emitNamespaceInit(unit);
+		LispVal init = requireCall(unit, LoadMode.GUARDED);
+		if (init != null) {
+			this.hoisted.add(init);
+		}
 	}
 
 	/**
@@ -3906,6 +3948,10 @@ public final class ClojureLowering {
 			case "newline":
 				ClojureLowerUtil.isTrue(n == 0, "newline takes no argument");
 				return ClojureLowerUtil.list(ClojureLowerUtil.sym("princ"), LispString.literal("\n"));
+			case "flush":
+				ClojureLowerUtil.isTrue(n == 0, "flush takes no argument");
+				return ClojureLowerUtil.list(ClojureLowerUtil.sym("progn"), ClojureLowerUtil
+					.list(ClojureLowerUtil.sym("finish-output"), ClojureLowerUtil.sym("*STANDARD-OUTPUT*")), NIL_CONST);
 			case "methods":
 				return ClojureDispatchLowering.methodsOf(this, items);
 			case "count":

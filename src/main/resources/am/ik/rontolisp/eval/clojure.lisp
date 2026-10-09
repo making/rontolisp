@@ -978,6 +978,12 @@
   "pr as a value."
   (rontolisp::%clojure-print-args args t nil))
 
+(defun rontolisp::%clojure-flush-v (&rest args)
+  "flush as a value: *standard-output* flushed, nil."
+  (rontolisp::%clojure-check-arity args 0 0 "flush")
+  (finish-output *standard-output*)
+  nil)
+
 (defun rontolisp::%clojure-read-line-v (&rest args)
   "read-line as a value: the next line of *in*, nil past the end."
   (rontolisp::%clojure-check-arity args 0 0 "read-line")
@@ -12993,23 +12999,34 @@
 ;; Clack body as it is: the transport drains it, its octets unchanged, so a
 ;; handler relaying an upstream reply relays it byte for byte (the arm goes from
 ;; a program that fetches nothing).
+(defun rontolisp::%clojure-ring-refuse-body (body)
+  "The refusal of a response :body of no kind the adapter writes."
+  (error "ring.adapter.rontolisp: a response :body must be a String, a seq of strings, a java.io.File or an input stream, got ~A"
+         (rontolisp::%clojure-str-of body "nil" t)))
+
+;; A java.io.File and a clojure.java.io byte stream are io arms (clojure/ClojureArms):
+;; a program making no clojure.java.io value folds them, and a host java.io.File
+;; a java: member answered is a host arm.
 (defun rontolisp::%clojure-ring-body (body)
   "A Ring response :body as a Clack body: nil; a String; a seq whose members
-   are written through str; an input stream (a clojure.java.io/reader, a
-   request :body), read to its end and closed. Anything else -- a
-   java.io.File among them -- is refused by its printed value."
+   are written through str; a character input stream (a clojure.java.io/reader,
+   a request :body), read to its end and closed; a java.io.File, its octets as
+   they are; a byte stream (clojure.java.io/input-stream), its octets left,
+   then closed. Anything else is refused by its printed value."
   (cond ((null body) nil)
-        ((stringp body) (list body))
-        ((rontolisp::%clojure-async-stream-p body) body)
-        ((streamp body)
-         (let ((text (rontolisp::%clojure-read-to-end body)))
-           (close body)
-           (list text)))
-        ((rontolisp::%clojure-ring-sequential-p body)
-         (mapcar (lambda (x) (rontolisp::%clojure-str-of x "" nil))
-                 (rontolisp::%clojure-seq-all body)))
-        (t (error "ring.adapter.rontolisp: a response :body must be a String, a seq of strings or an input stream, got ~A"
-                  (rontolisp::%clojure-str-of body "nil" t)))))
+   ((stringp body) (list body))
+   ((rontolisp::%clojure-async-stream-p body) body)
+   ((streamp body)
+    (let ((text (rontolisp::%clojure-read-to-end body)))
+      (close body)
+      (list text)))
+   ((rontolisp::%clojure-io-p body) (rontolisp::%clojure-io-ring-body body))
+   ((rontolisp::%clojure-host-object-p body "java.io.File")
+    (rontolisp::%clojure-io-ring-body (rontolisp::%clojure-io-from-host body)))
+   ((rontolisp::%clojure-ring-sequential-p body)
+    (mapcar (lambda (x) (rontolisp::%clojure-str-of x "" nil))
+            (rontolisp::%clojure-seq-all body)))
+   (t (rontolisp::%clojure-ring-refuse-body body))))
 
 (defun rontolisp::%clojure-ring-response (response)
   "The Clack response of the Ring RESPONSE map: :status (200 when absent, as a
@@ -14374,6 +14391,69 @@
                (and slash (rontolisp::%clojure-ring-keyword-part-p s 0 slash t)
                     (rontolisp::%clojure-ring-keyword-part-p s (+ slash 1) n
                                                              nil)))))))
+
+;; ring.util.response's file responses (clojure/lib/ring/util/response_files.clj).
+
+(defun rontolisp::%clojure-ring-canonical-path (f)
+  "The canonical path file-response compares a file's against its root's: the
+   File F's path with every . and .. component taken out, read off the
+   spelling (no symbolic link is resolved). A relative path stays relative,
+   spelled from . -- a path and its root share the working directory, which
+   neither wasm backend has -- and keeps a .. that climbs above it."
+  (let* ((p (rontolisp::%clojure-io-path f))
+         (absolute (and (> (length p) 0) (char= (char p 0) #\/)))
+         (parts nil)
+         (start 0))
+    (do ((i 0 (+ i 1)))
+        ((> i (length p)))
+      (if (or (= i (length p)) (char= (char p i) #\/))
+          (let ((part (subseq p start i)))
+            (cond ((or (string= part "") (string= part ".")))
+                  ((string= part "..")
+                   (cond ((and parts (not (string= (car parts) "..")))
+                          (setq parts (cdr parts)))
+                         ((not absolute) (setq parts (cons part parts)))))
+                  (t (setq parts (cons part parts))))
+            (setq start (+ i 1)))))
+    (let ((out (make-string-output-stream)))
+      (if (not absolute) (write-char #\. out))
+      (dolist (part (reverse parts))
+        (write-char #\/ out)
+        (write-string part out))
+      (let ((s (get-output-stream-string out))) (if (= (length s) 0) "/" s)))))
+
+(defun rontolisp::%clojure-ring-directory-traversal-p (path)
+  "Whether the string PATH has a .. component between its / and \\
+   separators: ring.util.response's directory-transversal?."
+  (let ((start 0) (found nil) (n (length path)))
+    (do ((i 0 (+ i 1)))
+        ((or found (> i n)) found)
+      (if (or (= i n) (char= (char path i) #\/) (char= (char path i) #\\))
+          (progn
+            (if (and (= (- i start) 2) (char= (char path start) #\.)
+                     (char= (char path (+ start 1)) #\.))
+                (setq found t))
+            (setq start (+ i 1)))))))
+
+(defun rontolisp::%clojure-ring-format-date (d)
+  "ring.util.time/format-date: the Date D as the oracle's SimpleDateFormat
+   \"EEE, dd MMM yyyy HH:mm:ss zzz\" spells it at GMT in Locale/US (RFC 1123)."
+  (let ((f
+         (rontolisp::%clojure-instant-fields (rontolisp::%clojure-inst-ms d) 0))
+        (out (make-string-output-stream)))
+    (write-string
+     (subseq "SunMonTueWedThuFriSat" (* 3 (nth 7 f)) (+ 3 (* 3 (nth 7 f)))) out)
+    (write-string ", " out)
+    (rontolisp::%clojure-write-padded (nth 2 f) 2 out)
+    (write-char #\Space out)
+    (write-string (subseq "JanFebMarAprMayJunJulAugSepOctNovDec"
+                          (* 3 (- (nth 1 f) 1)) (* 3 (nth 1 f))) out)
+    (write-char #\Space out)
+    (rontolisp::%clojure-write-padded (car f) 4 out)
+    (write-char #\Space out)
+    (rontolisp::%clojure-write-instant-time f out)
+    (write-string " GMT" out)
+    (get-output-stream-string out)))
 
 ;;;; The clojure.core.reducers kernels: rontolisp.internal.reducers, the
 ;;;; namespace only the built-in clojure.core.reducers requires, lowers each var
@@ -16056,6 +16136,61 @@
                    (rontolisp::%clojure-io-input
                     (open (rontolisp::%clojure-io-check-readable path)
                           :element-type '(unsigned-byte 8)))))))))
+
+(defun rontolisp::%clojure-io-octets-left (state)
+  "The octets left on the open byte stream of STATE, as one (unsigned-byte 8)
+   vector, the stream at its end. A file stream is read up to the size it
+   reports, the end read at most once: a second read past it traps on the
+   component."
+  (let* ((s (svref state 0))
+         (octets (svref state 1))
+         (from (if s (file-position s) (svref state 2)))
+         (n (- (if s (file-length s) (length octets)) from))
+         (out (make-array n :element-type '(unsigned-byte 8)))
+         (k 0)
+         (b 0))
+    (do ()
+        ((or (>= k n) (< b 0)))
+      (setq b (if s (read-byte s nil -1) (aref octets (+ from k))))
+      (if (>= b 0)
+          (progn
+            (setf (aref out k) b)
+            (setq k (+ k 1)))))
+    (if (not s) (setf (svref state 2) (+ from k)))
+    (if (< k n) (subseq out 0 k) out)))
+
+(defun rontolisp::%clojure-io-ring-body (x)
+  "A java.io.File or a byte stream as the Ring adapter writes it, one
+   (unsigned-byte 8) vector: the octets of the file the File names (the
+   oracle's FileNotFoundException when none is there to read), or those left
+   on the stream, which is closed, as Ring closes an InputStream body. Any
+   other clojure.java.io value is refused."
+  (let ((kind (rontolisp::%clojure-io-kind x)))
+    (cond ((eq kind :C%FILE)
+           (rontolisp::%clojure-io-ring-body
+            (rontolisp::%clojure-io-open-input x)))
+          ((eq kind :C%INPUT-STREAM)
+           (let ((octets
+                  (rontolisp::%clojure-io-octets-left
+                   (rontolisp::%clojure-io-open-state x))))
+             (rontolisp::%clojure-io-close-input x)
+             octets))
+          (t (rontolisp::%clojure-ring-refuse-body x)))))
+
+(defun rontolisp::%clojure-io-resource-urls (name roots)
+  "ClassLoader.getResources of NAME below the directory ROOTS: the file: URL
+   of each root holding it, a file or a directory, in root order (a
+   directory's with its trailing slash)."
+  (let ((acc nil))
+    (if (and (stringp name)
+             (not (and (> (length name) 0) (char= (char name 0) #\/))))
+        (dolist (root roots)
+          (let ((f
+                 (rontolisp::%clojure-io-file
+                  (rontolisp::%clojure-io-resolve root name))))
+            (if (rontolisp::%clojure-io-exists-p f)
+                (setq acc (cons (rontolisp::%clojure-io-file-url f) acc))))))
+    (reverse acc)))
 
 (defun rontolisp::%clojure-io-open-output (x append)
   "make-output-stream of X: a byte stream over the file X names, appending

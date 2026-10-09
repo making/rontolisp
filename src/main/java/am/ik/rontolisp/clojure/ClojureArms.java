@@ -656,8 +656,9 @@ public final class ClojureArms {
 		 * comparator), the structural keys' hash, {@code class} and its class name,
 		 * {@code instance?}, {@code inst?} and the instance calls read: only an
 		 * {@code #inst} literal, a read ({@code read-string}, {@code read},
-		 * {@code clojure.edn}), whose default {@code #inst} reader makes one, and the
-		 * {@code clojure.instant} kernels make one.
+		 * {@code clojure.edn}), whose default {@code #inst} reader makes one, the
+		 * {@code clojure.instant} kernels and {@code rontolisp.internal.ring/date} (the
+		 * literal's constructor) make one.
 		 */
 		INSTANT("instant",
 				Set.of(ClojurePredicateLowering.INSTANT_P, ClojurePredicateLowering.INST_P,

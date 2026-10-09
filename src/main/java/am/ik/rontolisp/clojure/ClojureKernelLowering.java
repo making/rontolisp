@@ -24,7 +24,9 @@ import org.jspecify.annotations.Nullable;
  * <ul>
  * <li>{@code rontolisp.internal.ring} for the built-in Ring namespaces: bytes and
  * charsets, the JDK's URL coders, the content-type charset match, the Unicode letter test
- * of {@code wrap-keyword-params}. Measured 2026-10-08, wasm-GC P1:
+ * of {@code wrap-keyword-params}, and the file responses' canonical path, {@code ..}
+ * test, HTTP date and {@code java.util.Date} (an instant, {@code date}'s worker the
+ * {@code #inst} constructor). Measured 2026-10-08, wasm-GC P1:
  * {@code (form-decode-str "a+%41")} written in Clojure inside a namespace was a 340,532 B
  * module, {@code (url-decode "a%41")} 357,787 B (generic {@code conj}, {@code apply str},
  * {@code throw} and the regex engine), where the Common Lisp {@code rontolisp:url-decode}
@@ -193,7 +195,10 @@ final class ClojureKernelLowering {
 					Map.ofEntries(Map.entry("percent-encode", 2), Map.entry("percent-decode", 2),
 							Map.entry("url-encode", 2), Map.entry("form-encode", 2), Map.entry("form-decode-str", 2),
 							Map.entry("form-decode-map", 2), Map.entry("form-decode", 2), Map.entry("parse-long", 1),
-							Map.entry("content-type-charset", 1), Map.entry("keyword-syntax?", 2)))),
+							Map.entry("content-type-charset", 1), Map.entry("keyword-syntax?", 2),
+							Map.entry("canonical-path", 1), Map.entry("directory-traversal?", 1),
+							Map.entry("format-date", 1), Map.entry("date", 1)),
+					Map.of("date", ClojureDefaultReaders.MAKE_INST), false)),
 			Map.entry("rontolisp.internal.pprint",
 					new Kernels("clojure.pprint", "RONTOLISP::%CLOJURE-PP-", Map.ofEntries(Map.entry("call", 3),
 							Map.entry("start", 4), Map.entry("end", 1), Map.entry("newline", 1), Map.entry("indent", 2),

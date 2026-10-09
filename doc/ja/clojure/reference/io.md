@@ -27,3 +27,4 @@ Clojure 記法の引数で Java 形式の文字列を描画します。
 | `print-str` | `(print-str 1 "a")` | `"1 a"` |
 | `prn-str` | `(prn-str 1 "a")` | `"1 \"a\"\n"` |
 | `println-str` | `(println-str 1 "a")` | `"1 a\n"` |
+| `flush` | `(flush)` | `nil` |
