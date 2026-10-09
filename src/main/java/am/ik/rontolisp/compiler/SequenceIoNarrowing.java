@@ -212,7 +212,7 @@ public final class SequenceIoNarrowing {
 				return LispCons.rebuilt(cons, this.form(cons.car(), env), this.forms(cons.cdr(), env));
 			}
 			String name = head.name();
-			if (LispNames.QUOTE.equals(name)) {
+			if (LispNames.isQuote(name)) {
 				return cons;
 			}
 			if (SEQUENCE_IO_HEADS.contains(name)) {
@@ -353,7 +353,7 @@ public final class SequenceIoNarrowing {
 				return this.anyInvalidated(parts, name, inCapture);
 			}
 			String op = head.name();
-			if (LispNames.QUOTE.equals(op)) {
+			if (LispNames.isQuote(op)) {
 				// Data the program could hand anywhere, including a writer.
 				return this.occurs(parts.get(1), name);
 			}

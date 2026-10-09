@@ -492,7 +492,7 @@ public final class UserMacroExpander {
 			case LispSymbol sym -> PackageRegistry.splitQualified(sym.name()) == null
 					&& PackageRegistry.isClSymbol(sym.name()) && macroEval.currentPackageShadows(sym.name())
 							? new LispSymbol(PackageRegistry.qualify(LispNames.CL_PKG, sym.name())) : sym;
-			case LispCons cons when cons.car() instanceof LispSymbol op && LispNames.QUOTE.equals(op.name()) -> cons;
+			case LispCons cons when cons.car() instanceof LispSymbol op && LispNames.isQuote(op.name()) -> cons;
 			case LispCons cons -> null;
 			default -> node;
 		}, car -> requalifyShadowedClNames(car, macroEval),
@@ -534,7 +534,7 @@ public final class UserMacroExpander {
 		if (!(form instanceof LispCons cons)) {
 			return form;
 		}
-		if (cons.car() instanceof LispSymbol head && LispNames.QUOTE.equals(head.name())) {
+		if (cons.car() instanceof LispSymbol head && LispNames.isQuote(head.name())) {
 			return form;
 		}
 		if (cons.car() instanceof LispSymbol op && LispNames.FBOUNDP.equals(memberName(op.name()))
@@ -895,7 +895,8 @@ public final class UserMacroExpander {
 		}
 		List<LispVal> parts = cons.toList();
 		return switch (member(op.name())) {
-			case LispNames.QUOTE -> true; // quoted literal data
+			case LispNames.QUOTE, LispNames.UNSPELLED_QUOTE -> true; // quoted literal
+																		// data
 			case LispNames.BLOCK -> {
 				// (block name body...): the name is data, the body is expressions --
 				// every defun body is now block-wrapped (named return-from), so the
@@ -1265,7 +1266,7 @@ public final class UserMacroExpander {
 			if (LispNames.DEFINE_SYMBOL_MACRO.equals(name)) {
 				return true;
 			}
-			if (LispNames.QUOTE.equals(name) || LispNames.DEFMACRO.equals(name) || LispNames.MACROLET.equals(name)) {
+			if (LispNames.isQuote(name) || LispNames.DEFMACRO.equals(name) || LispNames.MACROLET.equals(name)) {
 				return false;
 			}
 		}
@@ -1417,7 +1418,7 @@ public final class UserMacroExpander {
 			return form;
 		}
 		if (cons.car() instanceof LispSymbol sym) {
-			if (LispNames.QUOTE.equals(sym.name()) || LispNames.DEFMACRO.equals(sym.name())) {
+			if (LispNames.isQuote(sym.name()) || LispNames.DEFMACRO.equals(sym.name())) {
 				return form;
 			}
 			if (!cons.isProperList()) {

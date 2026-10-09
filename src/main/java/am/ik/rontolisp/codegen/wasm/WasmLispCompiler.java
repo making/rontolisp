@@ -10304,13 +10304,13 @@ public final class WasmLispCompiler implements LispCompiler {
 	 * wrongly ON it is a silent wrong answer, which is why nothing joins it without the
 	 * lowering being read.
 	 */
-	private static final Set<String> CHARVEC_FREE_OPERATORS = Set.of(LispNames.QUOTE, LispNames.FUNCTION,
-			LispNames.DEFUN, LispNames.LAMBDA, LispNames.IF, LispNames.PROGN, LispNames.LET, LispNames.LET_STAR,
-			LispNames.SETQ, LispNames.BLOCK, LispNames.RETURN_FROM, LispNames.TAGBODY, LispNames.GO, LispNames.THE,
-			LispNames.DECLARE, LispNames.WHEN, LispNames.UNLESS, LispNames.COND, LispNames.AND, LispNames.OR,
-			LispNames.NOT, LispNames.NULL, LispNames.ADD, LispNames.SUB, LispNames.MUL, LispNames.DIV, LispNames.MOD,
-			LispNames.REM, LispNames.ABS, LispNames.MIN, LispNames.MAX, LispNames.FLOOR, LispNames.CEILING,
-			LispNames.TRUNCATE, LispNames.ROUND, LispNames.EXPT, LispNames.SQRT, LispNames.ONE_PLUS,
+	private static final Set<String> CHARVEC_FREE_OPERATORS = Set.of(LispNames.QUOTE, LispNames.UNSPELLED_QUOTE,
+			LispNames.FUNCTION, LispNames.DEFUN, LispNames.LAMBDA, LispNames.IF, LispNames.PROGN, LispNames.LET,
+			LispNames.LET_STAR, LispNames.SETQ, LispNames.BLOCK, LispNames.RETURN_FROM, LispNames.TAGBODY, LispNames.GO,
+			LispNames.THE, LispNames.DECLARE, LispNames.WHEN, LispNames.UNLESS, LispNames.COND, LispNames.AND,
+			LispNames.OR, LispNames.NOT, LispNames.NULL, LispNames.ADD, LispNames.SUB, LispNames.MUL, LispNames.DIV,
+			LispNames.MOD, LispNames.REM, LispNames.ABS, LispNames.MIN, LispNames.MAX, LispNames.FLOOR,
+			LispNames.CEILING, LispNames.TRUNCATE, LispNames.ROUND, LispNames.EXPT, LispNames.SQRT, LispNames.ONE_PLUS,
 			LispNames.ONE_MINUS, LispNames.ZEROP, LispNames.PLUSP, LispNames.MINUSP, LispNames.EVENP, LispNames.ODDP,
 			LispNames.EQ, LispNames.LT, LispNames.GT, LispNames.LE, LispNames.GE, LispNames.NE, LispNames.EQ_GENERAL,
 			LispNames.EQL, LispNames.ATOM, LispNames.CONSP, LispNames.LISTP, LispNames.NUMBERP, LispNames.INTEGERP,
@@ -10391,7 +10391,7 @@ public final class WasmLispCompiler implements LispCompiler {
 		}
 		List<LispVal> parts = cons.toList();
 		String member = LispSymbol.memberName(name);
-		if (member.equals(LispNames.QUOTE) || member.equals(LispNames.FUNCTION)) {
+		if (LispNames.isQuote(member) || member.equals(LispNames.FUNCTION)) {
 			// A quoted or #'-taken symbol is a DESIGNATOR: the program can funcall it,
 			// so it is read exactly like an operator.
 			return charvecFreeData(cons.cdr(), defined);

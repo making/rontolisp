@@ -112,7 +112,7 @@ public final class ParallelLetStaging {
 	// itself is the named hazard below.
 	private static boolean runsCode(LispVal init) {
 		return init instanceof LispCons cons
-				&& !(cons.car() instanceof LispSymbol head && (head.name().equals(LispNames.QUOTE)
+				&& !(cons.car() instanceof LispSymbol head && (LispNames.isQuote(head.name())
 						|| head.name().equals(LispNames.FUNCTION) || head.name().equals(LispNames.LAMBDA)));
 	}
 

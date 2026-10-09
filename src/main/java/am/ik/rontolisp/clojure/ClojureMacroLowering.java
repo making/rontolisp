@@ -16,6 +16,7 @@ import am.ik.rontolisp.LispHashTable;
 import am.ik.rontolisp.LispArray;
 import am.ik.rontolisp.LispDouble;
 import am.ik.rontolisp.LispInteger;
+import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispTrue;
 import am.ik.rontolisp.LispString;
@@ -682,16 +683,16 @@ final class ClojureMacroLowering {
 
 	/**
 	 * {@code `form}: syntax-quote, lowered to {@code quote} with unquote splicing over
-	 * the mangled namespace. A symbol naming a var the defining namespace sees qualifies
-	 * with its namespace (like the oracle's read-time resolution, so the expansion
-	 * reaches it from any namespace); a special form stays bare, while every other symbol
-	 * qualifies even when it resolves to nothing: a core name the namespace sees spells
-	 * {@code clojure.core/name}, any other unresolved spelling the defining namespace, an
-	 * alias head its namespace, a class head its fully qualified name. {@code ~} lowers
-	 * its form as code, {@code ~@} splices a sequence into the enclosing list, vector,
-	 * map or set, and each {@code x#} binds one {@code (gensym "x")} per syntax-quote
-	 * node, so the name is one symbol per expansion and the same symbol at every
-	 * occurrence within it.
+	 * the mangled namespace, a qualified symbol through {@link #unspelled}. A symbol
+	 * naming a var the defining namespace sees qualifies with its namespace (like the
+	 * oracle's read-time resolution, so the expansion reaches it from any namespace); a
+	 * special form stays bare, while every other symbol qualifies even when it resolves
+	 * to nothing: a core name the namespace sees spells {@code clojure.core/name}, any
+	 * other unresolved spelling the defining namespace, an alias head its namespace, a
+	 * class head its fully qualified name. {@code ~} lowers its form as code, {@code ~@}
+	 * splices a sequence into the enclosing list, vector, map or set, and each {@code x#}
+	 * binds one {@code (gensym "x")} per syntax-quote node, so the name is one symbol per
+	 * expansion and the same symbol at every occurrence within it.
 	 */
 	static LispVal syntaxQuote(ClojureLowering ctx, LispVal datum) {
 		return syntaxQuoteNode(ctx, datum);
@@ -815,15 +816,24 @@ final class ClojureMacroLowering {
 			return ClojureLowerUtil.list(ClojureLowerUtil.sym("quote"), ClojureLowerUtil.dataSym(name));
 		}
 		if (ctx.shadowedCoreName(name)) {
-			return ClojureLowerUtil.list(ClojureLowerUtil.sym("quote"),
-					ClojureLowerUtil.dataSym(ClojureCoreNames.PREFIX + name));
+			return unspelled(ClojureCoreNames.PREFIX + name);
 		}
 		String key = ctx.lookupVar(name);
 		if (key != null) {
-			return ClojureLowerUtil.list(ClojureLowerUtil.sym("quote"), ClojureLowerUtil.dataSym(key));
+			return unspelled(key);
 		}
-		return ClojureLowerUtil.list(ClojureLowerUtil.sym("quote"),
-				ClojureLowerUtil.dataSym(unresolvedQualification(ctx, name)));
+		return unspelled(unresolvedQualification(ctx, name));
+	}
+
+	/**
+	 * A template's qualified symbol, quoted through {@link LispNames#UNSPELLED_QUOTE}: it
+	 * spells the defun name of the var it names, and a Clojure symbol is never a function
+	 * designator by name (run-time {@code eval}/{@code resolve} are refused, a symbol
+	 * called as a function looks itself up), so the expanders a run-time expansion keeps
+	 * must not arm the dispatch gate for every function their templates name.
+	 */
+	static LispVal unspelled(String qualified) {
+		return ClojureLowerUtil.list(new LispSymbol(LispNames.UNSPELLED_QUOTE), ClojureLowerUtil.dataSym(qualified));
 	}
 
 	/**

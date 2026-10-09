@@ -449,7 +449,7 @@ final class JvmLetCompiler {
 			return false;
 		}
 		if (cons.car() instanceof LispSymbol head) {
-			if (am.ik.rontolisp.LispNames.QUOTE.equals(head.name())) {
+			if (am.ik.rontolisp.LispNames.isQuote(head.name())) {
 				return false;
 			}
 			if (am.ik.rontolisp.LispNames.DEFUN.equals(head.name())

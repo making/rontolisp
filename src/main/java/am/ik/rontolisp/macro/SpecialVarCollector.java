@@ -422,7 +422,7 @@ public final class SpecialVarCollector {
 		while (form instanceof LispCons cons) {
 			if (cons.car() instanceof LispSymbol head) {
 				String h = head.name();
-				if (LispNames.QUOTE.equals(h)) {
+				if (LispNames.isQuote(h)) {
 					return;
 				}
 				if ((LispNames.DEFVAR.equals(h) || LispNames.DEFPARAMETER.equals(h) || LispNames.DEFCONSTANT.equals(h))
@@ -441,7 +441,7 @@ public final class SpecialVarCollector {
 		while (form instanceof LispCons cons) {
 			if (cons.car() instanceof LispSymbol head) {
 				String h = head.name();
-				if (LispNames.QUOTE.equals(h)) {
+				if (LispNames.isQuote(h)) {
 					return false;
 				}
 				if (LispNames.PROGV.equals(h)) {
@@ -461,7 +461,7 @@ public final class SpecialVarCollector {
 		while (form instanceof LispCons cons) {
 			if (cons.car() instanceof LispSymbol head) {
 				String h = head.name();
-				if (LispNames.QUOTE.equals(h)) {
+				if (LispNames.isQuote(h)) {
 					return;
 				}
 				if (LispNames.LET.equals(h) || LispNames.LET_STAR.equals(h)) {
@@ -590,7 +590,7 @@ public final class SpecialVarCollector {
 	private static void collectLocalDeclares(LispVal form, Set<String> out) {
 		while (form instanceof LispCons cons) {
 			if (cons.car() instanceof LispSymbol head) {
-				if (LispNames.QUOTE.equals(head.name())) {
+				if (LispNames.isQuote(head.name())) {
 					return;
 				}
 				if (LispNames.DECLARE.equals(member(head.name()))) {

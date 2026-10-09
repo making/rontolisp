@@ -50,7 +50,7 @@ final class WasmAwaitAnalysis {
 		List<LispVal> parts = cons.toList();
 		if (cons.car() instanceof LispSymbol sym) {
 			switch (sym.name()) {
-				case LispNames.QUOTE, LispNames.DEFMACRO, LispNames.MACROLET -> {
+				case LispNames.QUOTE, LispNames.UNSPELLED_QUOTE, LispNames.DEFMACRO, LispNames.MACROLET -> {
 					memo.put(form, 0);
 					return 0;
 				}

@@ -640,7 +640,7 @@ public final class LispMacroExpander {
 		}
 		if (cons.car() instanceof LispSymbol sym) {
 			switch (sym.name()) {
-				case LispNames.QUOTE, LispNames.DEFMACRO, LispNames.MACROLET -> {
+				case LispNames.QUOTE, LispNames.UNSPELLED_QUOTE, LispNames.DEFMACRO, LispNames.MACROLET -> {
 					return form;
 				}
 				default -> {
@@ -1227,15 +1227,15 @@ public final class LispMacroExpander {
 		 * valid directly inside this loop's block).
 		 */
 		private static final java.util.Set<String> EXIT_SKIP_HEADS = java.util.Set.of(LispNames.QUOTE,
-				LispNames.FUNCTION, LispNames.LAMBDA, LispNames.DEFUN, LispNames.LOOP, LispNames.DO, LispNames.DO_STAR,
-				LispNames.DOLIST, LispNames.DOTIMES, LispNames.BLOCK_INTERNAL);
+				LispNames.UNSPELLED_QUOTE, LispNames.FUNCTION, LispNames.LAMBDA, LispNames.DEFUN, LispNames.LOOP,
+				LispNames.DO, LispNames.DO_STAR, LispNames.DOLIST, LispNames.DOTIMES, LispNames.BLOCK_INTERNAL);
 
 		/**
 		 * Form heads the anaphoric-{@code it} substitution must not descend into: quoted
 		 * data and nested loops (whose own conditionals define their own {@code it}).
 		 */
-		private static final java.util.Set<String> IT_SKIP_HEADS = java.util.Set.of(LispNames.QUOTE, LispNames.FUNCTION,
-				LispNames.LOOP);
+		private static final java.util.Set<String> IT_SKIP_HEADS = java.util.Set.of(LispNames.QUOTE,
+				LispNames.UNSPELLED_QUOTE, LispNames.FUNCTION, LispNames.LOOP);
 
 		LoopExpander(List<LispVal> toks) {
 			this.toks = toks;
@@ -2590,7 +2590,7 @@ public final class LispMacroExpander {
 		/** Whether the form references (outside quote) any symbol in the name set. */
 		private static boolean formReferences(LispVal form, java.util.Set<String> names) {
 			while (form instanceof LispCons cons) {
-				if (cons.car() instanceof LispSymbol head && LispNames.QUOTE.equals(head.name())) {
+				if (cons.car() instanceof LispSymbol head && LispNames.isQuote(head.name())) {
 					return false;
 				}
 				if (formReferences(cons.car(), names)) {
@@ -2612,7 +2612,7 @@ public final class LispMacroExpander {
 					return replacement != null ? replacement : node;
 				}
 				if (node instanceof LispCons cons) {
-					return cons.car() instanceof LispSymbol head && LispNames.QUOTE.equals(head.name()) ? node : null;
+					return cons.car() instanceof LispSymbol head && LispNames.isQuote(head.name()) ? node : null;
 				}
 				return node;
 			}, car -> substituteSymbols(car, replacements), (cell, car, cdr) -> new LispCons(car, cdr));
@@ -4359,7 +4359,7 @@ public final class LispMacroExpander {
 	 */
 	private static boolean isOrderFreeConstant(LispVal form) {
 		if (form instanceof LispCons cons) {
-			return cons.car() instanceof LispSymbol op && LispNames.QUOTE.equals(op.name());
+			return cons.car() instanceof LispSymbol op && LispNames.isQuote(op.name());
 		}
 		if (form instanceof LispSymbol sym) {
 			return sym.isKeyword() || "NIL".equals(sym.name()) || "T".equals(sym.name());
@@ -5211,7 +5211,7 @@ public final class LispMacroExpander {
 		}
 		if (cons.car() instanceof LispSymbol head) {
 			String h = head.name();
-			if (LispNames.QUOTE.equals(h)) {
+			if (LispNames.isQuote(h)) {
 				return false;
 			}
 			if (LispNames.SET.equals(h) && cons.cdr() instanceof LispCons first
@@ -5279,7 +5279,7 @@ public final class LispMacroExpander {
 			return false;
 		}
 		if (cons.car() instanceof LispSymbol head) {
-			if (LispNames.QUOTE.equals(head.name())) {
+			if (LispNames.isQuote(head.name())) {
 				return false;
 			}
 			if (operator.equals(head.name())) {
@@ -5487,7 +5487,7 @@ public final class LispMacroExpander {
 		// The cdr is walked in the loop, so a long list costs no stack.
 		while (form instanceof LispCons cons) {
 			if (cons.car() instanceof LispSymbol head) {
-				if (LispNames.QUOTE.equals(head.name())) {
+				if (LispNames.isQuote(head.name())) {
 					return computed;
 				}
 				if (LispNames.BOUNDP.equals(head.name()) && cons.cdr() instanceof LispCons args) {
@@ -6079,7 +6079,7 @@ public final class LispMacroExpander {
 		// normalization reads. A bare symbol is NOT inert -- it can be a symbol macro.
 		private static boolean isInertValue(LispVal form) {
 			if (form instanceof LispCons cons) {
-				return cons.car() instanceof LispSymbol head && (LispNames.QUOTE.equals(head.name())
+				return cons.car() instanceof LispSymbol head && (LispNames.isQuote(head.name())
 						|| LispNames.FUNCTION.equals(head.name()) || LispNames.LAMBDA.equals(head.name()));
 			}
 			if (form instanceof LispSymbol symbol) {
@@ -7750,7 +7750,7 @@ public final class LispMacroExpander {
 			return false;
 		}
 		if (cons.car() instanceof LispSymbol head) {
-			if (LispNames.QUOTE.equals(head.name())) {
+			if (LispNames.isQuote(head.name())) {
 				return false;
 			}
 			if (heads.contains(LispSymbol.memberName(head.name()))) {
@@ -11673,7 +11673,7 @@ public final class LispMacroExpander {
 					return true;
 				}
 			}
-			if (cons.car() instanceof LispSymbol quote && LispNames.QUOTE.equals(quote.name())) {
+			if (cons.car() instanceof LispSymbol quote && LispNames.isQuote(quote.name())) {
 				return false;
 			}
 			if (reachesComputedSynonymStream(cons.car())) {
@@ -12243,7 +12243,7 @@ public final class LispMacroExpander {
 		}
 		List<LispVal> parts = cons.toList();
 		if (parts.get(0) instanceof LispSymbol op) {
-			if (LispNames.QUOTE.equals(op.name())) {
+			if (LispNames.isQuote(op.name())) {
 				return false;
 			}
 			String member = unqualifiedClMember(op.name());
@@ -12307,7 +12307,7 @@ public final class LispMacroExpander {
 		}
 		List<LispVal> parts = cons.toList();
 		if (parts.get(0) instanceof LispSymbol op) {
-			if (LispNames.QUOTE.equals(op.name())) {
+			if (LispNames.isQuote(op.name())) {
 				return false;
 			}
 			String member = unqualifiedClMember(op.name());
@@ -21970,7 +21970,7 @@ public final class LispMacroExpander {
 		while (form instanceof LispCons cons) {
 			if (cons.car() instanceof LispSymbol op) {
 				String member = memberOf(op.name());
-				if (LispNames.QUOTE.equals(member)) {
+				if (LispNames.isQuote(member)) {
 					return false;
 				}
 				if (opName.equals(member) && cons.isProperList()) {
@@ -22016,7 +22016,7 @@ public final class LispMacroExpander {
 		while (form instanceof LispCons cons) {
 			if (cons.car() instanceof LispSymbol op) {
 				String member = memberOf(op.name());
-				if (LispNames.QUOTE.equals(member)) {
+				if (LispNames.isQuote(member)) {
 					return false;
 				}
 				if (LispNames.SETF.equals(member) && cons.cdr() instanceof LispCons rest
@@ -22060,7 +22060,7 @@ public final class LispMacroExpander {
 		while (form instanceof LispCons cons) {
 			if (cons.car() instanceof LispSymbol op) {
 				String member = memberOf(op.name());
-				if (LispNames.QUOTE.equals(member)) {
+				if (LispNames.isQuote(member)) {
 					return false;
 				}
 				if ((LispNames.SLOT_VALUE.equals(member) || LispNames.SLOT_BOUNDP.equals(member))
@@ -22293,7 +22293,7 @@ public final class LispMacroExpander {
 		while (form instanceof LispCons cons) {
 			if (cons.car() instanceof LispSymbol op) {
 				String member = memberOf(op.name());
-				if (LispNames.QUOTE.equals(member)) {
+				if (LispNames.isQuote(member)) {
 					return false;
 				}
 				if (LispNames.CLASS_SLOT_DEFS_INTERNAL.equals(member)) {
@@ -23764,7 +23764,7 @@ public final class LispMacroExpander {
 		if (!(form instanceof LispCons cons)) {
 			return form;
 		}
-		if (cons.car() instanceof LispSymbol head && LispNames.QUOTE.equals(head.name())) {
+		if (cons.car() instanceof LispSymbol head && LispNames.isQuote(head.name())) {
 			return form;
 		}
 		// A (setq slot-var value ...) whose target substitutes into a slot-value PLACE
@@ -23968,10 +23968,10 @@ public final class LispMacroExpander {
 		}
 		List<LispVal> parts = cons.toList();
 		switch (head.name()) {
-			case LispNames.QUOTE, LispNames.DECLARE, LispNames.DECLAIM, LispNames.PROCLAIM, LispNames.GO,
-					LispNames.DEFMACRO, LispNames.DEFINE_SYMBOL_MACRO, LispNames.DEFPACKAGE, LispNames.IN_PACKAGE,
-					LispNames.DEFSTRUCT, LispNames.DEFCLASS, LispNames.DEFGENERIC, LispNames.DEFTYPE,
-					LispNames.DEFINE_CONDITION, LispNames.DEFSETF, LispNames.DEFINE_SETF_EXPANDER,
+			case LispNames.QUOTE, LispNames.UNSPELLED_QUOTE, LispNames.DECLARE, LispNames.DECLAIM, LispNames.PROCLAIM,
+					LispNames.GO, LispNames.DEFMACRO, LispNames.DEFINE_SYMBOL_MACRO, LispNames.DEFPACKAGE,
+					LispNames.IN_PACKAGE, LispNames.DEFSTRUCT, LispNames.DEFCLASS, LispNames.DEFGENERIC,
+					LispNames.DEFTYPE, LispNames.DEFINE_CONDITION, LispNames.DEFSETF, LispNames.DEFINE_SETF_EXPANDER,
 					LispNames.DEFINE_COMPILER_MACRO, LispNames.DEFINE_MODIFY_MACRO: {
 				// Data-only shapes, and definition bodies that do not see the lexical
 				// environment: kept verbatim.
@@ -25407,7 +25407,7 @@ public final class LispMacroExpander {
 		if (!(form instanceof LispCons cons) || !cons.isProperList()) {
 			return form;
 		}
-		if (cons.car() instanceof LispSymbol head && LispNames.QUOTE.equals(head.name())) {
+		if (cons.car() instanceof LispSymbol head && LispNames.isQuote(head.name())) {
 			return form;
 		}
 		if (cons.car() instanceof LispSymbol head) {
@@ -26908,7 +26908,7 @@ public final class LispMacroExpander {
 		while (form instanceof LispCons cons) {
 			if (cons.car() instanceof LispSymbol op) {
 				String member = memberOf(op.name());
-				if (LispNames.QUOTE.equals(member)) {
+				if (LispNames.isQuote(member)) {
 					return false;
 				}
 				if (LispNames.FUNCTION.equals(member) && cons.cdr() instanceof LispCons rest
@@ -26940,7 +26940,7 @@ public final class LispMacroExpander {
 		while (form instanceof LispCons cons) {
 			if (cons.car() instanceof LispSymbol op) {
 				String member = memberOf(op.name());
-				if (LispNames.QUOTE.equals(member)) {
+				if (LispNames.isQuote(member)) {
 					return false;
 				}
 				if (functionName.equals(member)) {
@@ -28280,7 +28280,7 @@ public final class LispMacroExpander {
 			}
 			if (cons.car() instanceof LispSymbol op) {
 				String member = memberOf(op.name());
-				if (LispNames.QUOTE.equals(member)) {
+				if (LispNames.isQuote(member)) {
 					return node;
 				}
 				if (LispNames.DEFMETHOD.equals(member) && cons.isProperList()) {
@@ -28397,7 +28397,7 @@ public final class LispMacroExpander {
 		while (form instanceof LispCons cons) {
 			if (cons.car() instanceof LispSymbol op) {
 				String member = memberOf(op.name());
-				if (LispNames.QUOTE.equals(member)) {
+				if (LispNames.isQuote(member)) {
 					return false;
 				}
 				if (LispNames.SETF.equals(member) && cons.isProperList()) {
@@ -28436,7 +28436,7 @@ public final class LispMacroExpander {
 		while (form instanceof LispCons cons) {
 			if (cons.car() instanceof LispSymbol op) {
 				String member = memberOf(op.name());
-				if (LispNames.QUOTE.equals(member)) {
+				if (LispNames.isQuote(member)) {
 					return false;
 				}
 				if (LispNames.SETF.equals(member) && cons.isProperList()) {
@@ -28518,7 +28518,7 @@ public final class LispMacroExpander {
 		while (form instanceof LispCons cons) {
 			if (cons.car() instanceof LispSymbol op) {
 				String member = memberOf(op.name());
-				if (LispNames.QUOTE.equals(member)) {
+				if (LispNames.isQuote(member)) {
 					return false;
 				}
 				if (cons.isProperList() && writesSymbolValuePlace(member, cons.toList(), modifyMacros)) {
@@ -28601,7 +28601,7 @@ public final class LispMacroExpander {
 		while (form instanceof LispCons cons) {
 			if (cons.car() instanceof LispSymbol op) {
 				String member = memberOf(op.name());
-				if (LispNames.QUOTE.equals(member)) {
+				if (LispNames.isQuote(member)) {
 					return;
 				}
 				if (LispNames.SETF.equals(member) && cons.isProperList()) {
@@ -30720,7 +30720,7 @@ public final class LispMacroExpander {
 			return form;
 		}
 		if (cons.car() instanceof LispSymbol head) {
-			if (LispNames.QUOTE.equals(head.name())) {
+			if (LispNames.isQuote(head.name())) {
 				return form;
 			}
 			if (LispNames.WARN_INTERNAL.equals(head.name()) && cons.cdr() instanceof LispCons args
@@ -38373,7 +38373,7 @@ public final class LispMacroExpander {
 		}
 		if (cons.car() instanceof LispSymbol head) {
 			String name = head.name();
-			if (LispNames.QUOTE.equals(name)) {
+			if (LispNames.isQuote(name)) {
 				return false;
 			}
 			String plain = memberOf(name);
@@ -38402,7 +38402,7 @@ public final class LispMacroExpander {
 		}
 		if (cons.car() instanceof LispSymbol head) {
 			String name = head.name();
-			if (LispNames.QUOTE.equals(name)) {
+			if (LispNames.isQuote(name)) {
 				// Quoted data cannot invoke a restart; a computed designator forged from
 				// it fails loudly (undefined function), the documented carve-out.
 				return false;
@@ -40637,7 +40637,7 @@ public final class LispMacroExpander {
 			return rewriteTail(cons, cons.toList(), 0, fns);
 		}
 		String name = sym.name();
-		if (LispNames.QUOTE.equals(name) || LispNames.DEFMACRO.equals(name) || LispNames.DEFPACKAGE.equals(name)) {
+		if (LispNames.isQuote(name) || LispNames.DEFMACRO.equals(name) || LispNames.DEFPACKAGE.equals(name)) {
 			// quote is data; defmacro bodies run at macro-expansion time where local
 			// functions do not exist; defpackage clauses are data.
 			return form;
@@ -42095,7 +42095,7 @@ public final class LispMacroExpander {
 			return false;
 		}
 		if (cons.car() instanceof LispSymbol op) {
-			if (LispNames.QUOTE.equals(op.name())) {
+			if (LispNames.isQuote(op.name())) {
 				return false;
 			}
 			if (LispNames.RETURN.equals(op.name()) || LispNames.RETURN_FROM.equals(op.name())
@@ -43333,7 +43333,7 @@ public final class LispMacroExpander {
 		}
 		if (cons.car() instanceof LispSymbol op) {
 			String name = operatorMember(op.name());
-			if (LispNames.QUOTE.equals(name)) {
+			if (LispNames.isQuote(name)) {
 				// Quoted data is not code: a (load-time-value ...) inside it is a datum.
 				return form;
 			}
@@ -43365,8 +43365,7 @@ public final class LispMacroExpander {
 			return false;
 		}
 		String name = operatorMember(op.name());
-		return !LispNames.QUOTE.equals(name) && !LispNames.FUNCTION.equals(name)
-				&& !LispNames.FIND_PACKAGE.equals(name);
+		return !LispNames.isQuote(name) && !LispNames.FUNCTION.equals(name) && !LispNames.FIND_PACKAGE.equals(name);
 	}
 
 	/** The member name of a possibly package-qualified operator symbol. */
@@ -45025,7 +45024,7 @@ public final class LispMacroExpander {
 		while (form instanceof LispCons cons) {
 			if (cons.car() instanceof LispSymbol op) {
 				String opName = op.name();
-				if (LispNames.QUOTE.equals(opName)) {
+				if (LispNames.isQuote(opName)) {
 					return false;
 				}
 				PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(opName);
@@ -45141,7 +45140,7 @@ public final class LispMacroExpander {
 	private static boolean containsRuntimeFunctionBox(LispVal form) {
 		while (form instanceof LispCons cons) {
 			if (cons.car() instanceof LispSymbol op) {
-				if (LispNames.QUOTE.equals(op.name())) {
+				if (LispNames.isQuote(op.name())) {
 					return false;
 				}
 				String member = memberOf(op.name());
@@ -45207,7 +45206,7 @@ public final class LispMacroExpander {
 		// (quote name) is normalized to (function name) before compilation, so both
 		// spellings are static here.
 		return LispNames.FUNCTION.equals(head.name()) || LispNames.LAMBDA.equals(head.name())
-				|| LispNames.QUOTE.equals(head.name());
+				|| LispNames.isQuote(head.name());
 	}
 
 	/**
@@ -48054,7 +48053,7 @@ public final class LispMacroExpander {
 		if (!(form instanceof LispCons cons) || !cons.isProperList()) {
 			return form;
 		}
-		if (cons.car() instanceof LispSymbol op && LispNames.QUOTE.equals(op.name())) {
+		if (cons.car() instanceof LispSymbol op && LispNames.isQuote(op.name())) {
 			return form;
 		}
 		List<LispVal> parts = cons.toList();

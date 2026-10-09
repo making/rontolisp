@@ -1838,7 +1838,7 @@ class ClojureLoweringTest {
 			.contains("(C%MACRO-EXPANDER |cell|)")
 			.doesNotContain("FUNCTIONP");
 		assertThat(expanderOf("(defmacro mu-a [x] `(inc ~x)) (defmacro mu-b [x] `(dec ~x))", 1))
-			.contains("'|c%clojure.core/dec|")
+			.contains("(%UNSPELLED-QUOTE |c%clojure.core/dec|)")
 			.doesNotContain("inc");
 	}
 
@@ -1994,8 +1994,8 @@ class ClojureLoweringTest {
 				(defmacro wrap2 [& body] `(with-out-str ~@body))""";
 		String wrap = expanderOf(source, 0);
 		String wrap2 = expanderOf(source, 2);
-		assertThat(wrap).contains("'|c%clojure.core/with-out-str|");
-		assertThat(wrap2).contains("'|c%user/with-out-str|").doesNotContain("clojure.core");
+		assertThat(wrap).contains("(%UNSPELLED-QUOTE |c%clojure.core/with-out-str|)");
+		assertThat(wrap2).contains("(%UNSPELLED-QUOTE |c%user/with-out-str|)").doesNotContain("clojure.core");
 	}
 
 	@Test
@@ -2053,7 +2053,7 @@ class ClojureLoweringTest {
 	@Test
 	void syntaxQuoteQualifiesSplicesAndGensyms() {
 		String out = loweredWithMacros("(defmacro mu-sq [x] `(a ~x ~@'(1 2) s#))");
-		assertThat(out).contains("(GENSYM \"s\")").contains("APPEND").contains("'|c%user/a|");
+		assertThat(out).contains("(GENSYM \"s\")").contains("APPEND").contains("(%UNSPELLED-QUOTE |c%user/a|)");
 		String out2 = loweredWithMacros("(defmacro mu-doc \"docs\" [x] x) (mu-doc 1)");
 		assertThat(out2).contains("|c%mu-doc%macro|");
 	}
@@ -3165,26 +3165,27 @@ class ClojureLoweringTest {
 		// name the namespace sees as clojure.core/name, any other unresolved
 		// spelling with the defining namespace, an alias head with its namespace,
 		// a class head with its fully qualified name
-		assertThat(loweredWithMacros("(ns s.a) (defn h [] 1) (defmacro m [] `(h ~'x nope let))")).contains("'|c%s.a/h|")
-			.contains("'|c%s.a/nope|")
-			.contains("'|c%clojure.core/let|");
-		assertThat(loweredWithMacros("(defn h [] 1) (defmacro m [] `(h))")).contains("'|c%user/h|");
+		assertThat(loweredWithMacros("(ns s.a) (defn h [] 1) (defmacro m [] `(h ~'x nope let))"))
+			.contains("(%UNSPELLED-QUOTE |c%s.a/h|)")
+			.contains("(%UNSPELLED-QUOTE |c%s.a/nope|)")
+			.contains("(%UNSPELLED-QUOTE |c%clojure.core/let|)");
+		assertThat(loweredWithMacros("(defn h [] 1) (defmacro m [] `(h))")).contains("(%UNSPELLED-QUOTE |c%user/h|)");
 		assertThat(loweredWithMacros(
 				"(ns s.b (:require [clojure.string :as s])) (defmacro m [] `(s/join s/nope System/nanoTime foo/bar import*))"))
-			.contains("'|c%clojure.string/join|")
-			.contains("'|c%clojure.string/nope|")
-			.contains("'|c%java.lang.System/nanoTime|")
-			.contains("'|c%foo/bar|")
-			.contains("'|c%s.b/import*|");
+			.contains("(%UNSPELLED-QUOTE |c%clojure.string/join|)")
+			.contains("(%UNSPELLED-QUOTE |c%clojure.string/nope|)")
+			.contains("(%UNSPELLED-QUOTE |c%java.lang.System/nanoTime|)")
+			.contains("(%UNSPELLED-QUOTE |c%foo/bar|)")
+			.contains("(%UNSPELLED-QUOTE |c%s.b/import*|)");
 		assertThat(loweredWithMacros("(ns s.c (:refer-clojure :exclude [map])) (defmacro m [] `(map filter))"))
-			.contains("'|c%s.c/map|")
-			.contains("'|c%clojure.core/filter|");
+			.contains("(%UNSPELLED-QUOTE |c%s.c/map|)")
+			.contains("(%UNSPELLED-QUOTE |c%clojure.core/filter|)");
 		// a class spelling is already fully qualified (measured on the
 		// oracle: `java.io.StringWriter reads as written, `String as
 		// java.lang.String) -- never with the defining namespace
 		assertThat(loweredWithMacros("(ns s.d) (defmacro m [] `(java.io.StringWriter String))"))
-			.contains("'|c%java.io.StringWriter|")
-			.contains("'|c%java.lang.String|");
+			.contains("(%UNSPELLED-QUOTE |c%java.io.StringWriter|)")
+			.contains("(%UNSPELLED-QUOTE |c%java.lang.String|)");
 	}
 
 	@Test

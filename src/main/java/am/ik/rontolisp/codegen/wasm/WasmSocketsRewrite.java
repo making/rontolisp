@@ -210,7 +210,7 @@ final class WasmSocketsRewrite {
 		List<LispVal> parts = cons.toList();
 		if (cons.car() instanceof LispSymbol sym) {
 			switch (sym.name()) {
-				case LispNames.QUOTE, LispNames.DEFMACRO, LispNames.MACROLET -> {
+				case LispNames.QUOTE, LispNames.UNSPELLED_QUOTE, LispNames.DEFMACRO, LispNames.MACROLET -> {
 					return form;
 				}
 				case LispNames.ASYNC_DEFUN_QUALIFIED -> {

@@ -49,7 +49,7 @@ public final class ArgumentOrder {
 		if (form instanceof LispCons cons) {
 			// (quote DATUM) is a constant; every other cons is a call or a special form
 			// and is assumed effectful.
-			return cons.car() instanceof LispSymbol op && LispNames.QUOTE.equals(op.name());
+			return cons.car() instanceof LispSymbol op && LispNames.isQuote(op.name());
 		}
 		if (form instanceof LispSymbol sym) {
 			// Self-evaluating symbols only: keywords, nil and t. Any other symbol is a
