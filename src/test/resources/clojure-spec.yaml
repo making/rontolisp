@@ -10874,3 +10874,29 @@ cases:
       "java.lang.NullPointerException" -539222987 -3
       1013910569 -1640525200 97 994 1013910568 1013910569 3 994 2027821078
       156247261 -2123407586 1772842048 -1172211204 425092884 "java.lang.NullPointerException"
+  - name: a-return-type-hint-on-a-parameter-vector-is-metadata
+    # ^long [x] is reader metadata on the vector (the arity's return tag); it reads as the
+    # vector in defn, defn-, fn, letfn, each arity of a multi-arity form, a protocol
+    # method and a defmethod, and changes no answer (clj 1.12.6, 2026-10-09).
+    source: |
+      (defn rth-f ^long [x] (inc x))
+      (defn rth-g (^long [x] (inc x)) (^String [x y] (str x y)))
+      (defn- rth-h ^long [x] (inc x))
+      (defn rth-v ^Object [x & more] (apply + x more))
+      (defn rth-rec ^long [n acc] (if (zero? n) acc (recur (dec n) (+ acc n))))
+      (def rth-k (fn ^long [x] (inc x)))
+      (def rth-k2 (fn rth-nm (^long [x] (inc x)) (^long [x y] (+ x y))))
+      (defprotocol RthP (rth-m ^Object [this] [this x]))
+      (defrecord RthR [] RthP (rth-m ^Object [this] 1) (rth-m ^Object [this x] x))
+      (extend-type String RthP (rth-m (^Object [this] 3) (^Object [this x] x)))
+      (defmulti rth-mm (fn [x] x))
+      (defmethod rth-mm 1 ^Object [x] :one)
+      (prn (rth-f 1) (rth-g 1) (rth-g 1 2) (rth-h 1) (rth-v 1 2 3) (rth-rec 10 0))
+      (prn (rth-k 1) (rth-k2 1) (rth-k2 1 2))
+      (prn (letfn [(a ^long [x] (inc x)) (b (^long [x] (* 2 x)) ([x y] (+ x y)))] [(a 1) (b 2) (b 1 2)]))
+      (prn (rth-m (->RthR)) (rth-m (->RthR) 5) (rth-m "s") (rth-m "s" 8) (rth-mm 1))
+    expected: |
+      2 2 "12" 2 6 55
+      2 2 3
+      [2 4 3]
+      1 5 3 8 :one

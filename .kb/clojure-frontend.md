@@ -925,9 +925,18 @@ hash's.
 - Re-probes (2026-10-09, verbatim): data.priority-map 1.2.0's `compile-if` takes the
   oracle's `hash-unordered-coll` branch now that `resolve` finds it ("Macros"), and `hash`,
   `hash-unordered-coll` and `=` of a priority map answer the oracle's on all four backends; as
-  a key or set member it misses (f01). instaparse 1.5.0 next stops at a `^long` return hint on
-  a `defn` parameter vector (`auto_flatten_seq.clj:233`, f04), then, the hints removed by
-  hand, at transients (`conj!`, `:302`, f05).
+  a key or set member it misses (f01). instaparse 1.5.0 next stopped at a `^long` return hint on
+  a `defn` parameter vector (`auto_flatten_seq.clj:233`; fixed 2026-10-09, below), then, the
+  hints removed by hand, at transients (`conj!`, `:302`, f05).
+- A return hint on a parameter vector (`(defn f ^long [x] ...)`, `defn-`, each arity of a
+  `defn`/`fn`/`letfn`, a protocol method, `defmethod`) reads as `(%with-meta [..] long)`;
+  `ClojureBindingLowering.isVectorDatum` strips the layer, so the clause is not mistaken for a
+  multi-arity arity list (it was, and the refusal then printed `|%with-meta|`). Measured clj
+  1.12.6 2026-10-09: the hint changes no observable answer (`^long` on a variadic arity is the
+  oracle's compile error; ronto accepts it). Pinned by clojure-spec
+  `a-return-type-hint-on-a-parameter-vector-is-metadata`,
+  `ClojureLoweringTest#aReturnTypeHintOnAParameterVectorIsDropped`. The refusal names "a
+  parameter vector" (it said "the parameter vector of", missing the name).
 - Pins: clojure-spec `hash-is-the-oracles-hasheq-of-every-kind`,
   `the-collection-hash-verbs-mix-order-and-combine-like-the-oracle`,
   `a-type-hashes-through-its-hasheq-then-its-hash-code-else-by-identity` and the `str` line of
