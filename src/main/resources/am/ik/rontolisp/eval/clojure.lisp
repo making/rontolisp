@@ -18442,6 +18442,12 @@
 
 (defvar rontolisp::%clojure-io-streams nil)
 
+;; The guard of the registries a stream is entered in when it is made
+;; (%clojure-io-streams, %clojure-io-marks): a Ring handler runs one thread per
+;; request on the interpreter and the JVM, and a hash table is no concurrent one,
+;; so a read too takes it.
+(defvar rontolisp::%clojure-io-registry-guard (rontolisp:make-mutex))
+
 ;; clojure.java.io's reader and writer, (reader . writer), once the namespace
 ;; has loaded: what slurp and spit open a value no path names through, as the
 ;; oracle's slurp and spit call them.
@@ -18453,7 +18459,9 @@
 ;; jar's directory entry "" and :directory -- and OCTETS made from TEXT at the
 ;; first read that takes them. A jar's entry travels with the program here,
 ;; which a wasm backend reads only through a preopen. NIL until the first one is
-;; made.
+;; kept. Filled before anything else runs (%clojure-io-keep-resource, a statement
+;; of the program's start, a session input's for what it found), never where a
+;; call runs: request threads only read it.
 (defvar rontolisp::%clojure-io-resources nil)
 
 (defun rontolisp::%clojure-io-tag-p (tag)
@@ -18468,7 +18476,8 @@
   ;; program making no such reader folds
   (if (and rontolisp::%clojure-io-streams
            (or (%obj-is x '%stream) (rontolisp::%clojure-reply-reader-p x)))
-      (gethash x rontolisp::%clojure-io-streams)))
+      (rontolisp:with-mutex (rontolisp::%clojure-io-registry-guard)
+        (gethash x rontolisp::%clojure-io-streams))))
 
 ;; Whether X is a clojure.java.io value: a File, a URL, a URI, a byte stream, or
 ;; a character stream the namespace registered. The arm test of the io family
@@ -18484,7 +18493,8 @@
           ;; a reader over a fetched reply is a Gray stream, no stream value: an arm
           ;; a program making no such reader folds
           (if (or (%obj-is x '%stream) (rontolisp::%clojure-reply-reader-p x))
-              (if (gethash x rontolisp::%clojure-io-streams) t nil)))))
+              (rontolisp:with-mutex (rontolisp::%clojure-io-registry-guard)
+                (if (gethash x rontolisp::%clojure-io-streams) t nil))))))
 
 ;; Whether slurp or spit opens X through clojure.java.io rather than as a path:
 ;; a value of the namespace, or -- once it has loaded (%clojure-io-install) --
@@ -20464,10 +20474,11 @@
 (defun rontolisp::%clojure-io-register (stream kind sink charset)
   "STREAM, registered as a character stream of KIND (:READER or :WRITER) the
    namespace made over SINK (a byte stream) in CHARSET."
-  (if (null rontolisp::%clojure-io-streams)
-      (setq rontolisp::%clojure-io-streams (make-hash-table :test 'eq)))
-  (setf (gethash stream rontolisp::%clojure-io-streams)
-        (vector kind sink charset))
+  (rontolisp:with-mutex (rontolisp::%clojure-io-registry-guard)
+    (if (null rontolisp::%clojure-io-streams)
+        (setq rontolisp::%clojure-io-streams (make-hash-table :test 'eq)))
+    (setf (gethash stream rontolisp::%clojure-io-streams)
+          (vector kind sink charset)))
   stream)
 
 (defun rontolisp::%clojure-io-text-of (in charset)
@@ -20589,7 +20600,8 @@
               (progn
                 (rontolisp::%clojure-io-flush-writer s)
                 (rontolisp::%clojure-io-close-output (svref e 1))))
-          (remhash s rontolisp::%clojure-io-streams)))
+          (rontolisp:with-mutex (rontolisp::%clojure-io-registry-guard)
+            (remhash s rontolisp::%clojure-io-streams))))
     ;; a reader over a fetched reply, a Gray stream close does not reach, closes
     ;; the reply's body: an arm a program making no such reader folds
     (if (rontolisp::%clojure-reply-reader-p s)
@@ -21008,21 +21020,22 @@
       (eq (rontolisp::%clojure-io-kind x) :C%URI)
       (rontolisp::%clojure-host-instance-p x "java.net.URI")))
 
-(defun rontolisp::%clojure-io-url-found (spec text charset)
-  "The URL of a resource the lowering found, its spelling SPEC, with its
-   contents kept for a read to take: TEXT, the characters its octets decode to
-   in CHARSET (:utf-8, :latin-1, or :directory for a jar's directory entry); a
-   TEXT of nil keeps nothing, a directory a read takes from the file system."
-  (if text
-      (progn
-        (if (null rontolisp::%clojure-io-resources)
-            (setq rontolisp::%clojure-io-resources
-                  (make-hash-table :test 'equal)))
-        (let ((kept (gethash spec rontolisp::%clojure-io-resources)))
-          (if (not (and kept (eq (svref kept 0) text)))
-              (setf (gethash spec rontolisp::%clojure-io-resources)
-                    (vector text charset nil))))))
+(defun rontolisp::%clojure-io-url-found (spec)
+  "The URL of a resource the lowering found, its spelling SPEC: the contents a
+   read takes were kept before anything ran (%clojure-io-keep-resource), a
+   directory root's directory's none, which a read takes from the file system."
   (list :C%URL spec))
+
+(defun rontolisp::%clojure-io-keep-resource (spec text charset)
+  "Keeps the contents of the resource the lowering found at the URL spelled
+   SPEC for a read to take: TEXT, the characters its octets decode to in
+   CHARSET (:utf-8, :latin-1, or :directory for a jar's directory entry). A
+   statement of the program's start, ahead of every thread a request runs on."
+  (if (null rontolisp::%clojure-io-resources)
+      (setq rontolisp::%clojure-io-resources (make-hash-table :test 'equal)))
+  (setf (gethash spec rontolisp::%clojure-io-resources)
+        (vector text charset nil))
+  nil)
 
 (defun rontolisp::%clojure-io-literal-path (x)
   "The path a java.io file stream construction opens: a string taken as it is,
@@ -21512,16 +21525,18 @@
 
 (defun rontolisp::%clojure-io-note-mark (x position)
   "Records POSITION as where the byte input stream X was marked."
-  (if (null rontolisp::%clojure-io-marks)
-      (setq rontolisp::%clojure-io-marks (make-hash-table :test 'eq)))
-  (setf (gethash x rontolisp::%clojure-io-marks) position))
+  (rontolisp:with-mutex (rontolisp::%clojure-io-registry-guard)
+    (if (null rontolisp::%clojure-io-marks)
+        (setq rontolisp::%clojure-io-marks (make-hash-table :test 'eq)))
+    (setf (gethash x rontolisp::%clojure-io-marks) position)))
 
 (defun rontolisp::%clojure-io-marked (x)
   "Where the byte input stream X was marked, the oracle's IOException when it
    was not."
   (let ((mark
          (if rontolisp::%clojure-io-marks
-             (gethash x rontolisp::%clojure-io-marks))))
+             (rontolisp:with-mutex (rontolisp::%clojure-io-registry-guard)
+               (gethash x rontolisp::%clojure-io-marks)))))
     (if (null mark)
         (rontolisp::%clojure-io-exception "Resetting to invalid mark"))
     mark))

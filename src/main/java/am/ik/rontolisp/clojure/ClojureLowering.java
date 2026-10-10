@@ -1361,6 +1361,13 @@ public final class ClojureLowering {
 	boolean readsHttpUrls;
 
 	/**
+	 * The statements keeping the contents of the resources literal names found, by the
+	 * URL's spelling ({@link ClojureIoLowering#keptResources}): they run before anything
+	 * else, so no thread a request runs on writes the table.
+	 */
+	final Map<String, LispVal> keptResources = new LinkedHashMap<>();
+
+	/**
 	 * Whether a session's buffer already installed the fetch the URLs are read through.
 	 */
 	boolean httpUrlsEmitted;
@@ -1583,6 +1590,9 @@ public final class ClojureLowering {
 			// anything reads one, like the false value
 			lowering.forms.add(1, ClojureIoLowering.installFetch());
 		}
+		// the contents of the resources literal names found are kept before anything
+		// reads one, like the false value
+		lowering.forms.addAll(1, ClojureIoLowering.keptResources(lowering));
 		if (!lowering.usedSpecials.isEmpty()) {
 			// the specials are special before anything binds them
 			lowering.forms.addAll(1, ClojureCoreSpecials.definitions(lowering, lowering.usedSpecials));
@@ -1767,6 +1777,12 @@ public final class ClojureLowering {
 			if (!forms.isEmpty() || !ns) {
 				out.add(new ClojureTopLevel(evaluated(forms, !ns), !ns));
 			}
+		}
+		// the contents of the resources its literal names found are kept before the
+		// buffer runs
+		List<LispVal> kept = ClojureIoLowering.keptResources(this);
+		if (!kept.isEmpty()) {
+			out.add(0, new ClojureTopLevel(kept, false));
 		}
 		// the buffer's exports run after it, resolved against everything it defined; the
 		// conversion wrappers of the WIT members it names, ahead of it

@@ -323,6 +323,33 @@ class ClojureJavaIoTest {
 	}
 
 	/**
+	 * A resource a literal name finds is kept before anything runs, not where its call
+	 * first runs: a read of its URL spelled by hand ahead of the call reads the contents
+	 * the program carries, as the oracle reads the jar. A program computing no name
+	 * carries no jar reader, so a contents not yet kept would be refused.
+	 */
+	private static final String KEPT_AT_START = """
+			(ns app.main (:require [clojure.java.io :as io]))
+			(def jar (str "%JAR%" ""))
+			(defn msg [] (io/resource "jarres/msg.txt"))
+			(prn (slurp (str "jar:file:" jar "!/jarres/msg.txt")))
+			(prn (slurp (msg)) (slurp (io/resource "jarres/msg.txt")))
+			""";
+
+	private static final String KEPT_AT_START_OUT = "\"from the jar\\n\"\n\"from the jar\\n\" \"from the jar\\n\"\n";
+
+	@Test
+	void aLiteralResourceIsKeptBeforeItsCallRunsOnEveryBackend() throws Exception {
+		Path main = resourceProject(KEPT_AT_START);
+		assertThat(interpret(Files.readString(main), main)).isEqualTo(KEPT_AT_START_OUT);
+		assertThat(runOnJvm(Files.readString(main), main, "JioKeptAtStart")).isEqualTo(KEPT_AT_START_OUT);
+		assumeTrue(HostWasmtime.isAvailable(), "no usable wasmtime on PATH");
+		Path root = this.dir.toRealPath();
+		assertThat(runOnWasm(Files.readString(main), main, false, root)).isEqualTo(KEPT_AT_START_OUT);
+		assertThat(runOnWasm(Files.readString(main), main, true, root)).isEqualTo(KEPT_AT_START_OUT);
+	}
+
+	/**
 	 * {@code resource} is a part of the namespace: a program naming it only with string
 	 * literals, which the lowering finds itself, carries no lookup; one computing a name
 	 * carries the lookup below the directory roots, or below every root where the source

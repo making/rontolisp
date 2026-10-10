@@ -12,6 +12,10 @@ bugs, and each looks like someone else's fault.
   simd/gpu/geom inits) are emitted `ACC_SYNCHRONIZED` by `JvmLispCompiler` (found when they still
   `defineClass`d: the second of two racing first calls answered `LinkageError: attempted duplicate
   class definition`).
+- Clojure `clojure.java.io` (`.kb/clojure-frontend.md`, "`clojure.java.io`"): a literal
+  resource's contents are kept by statements at the program's start, not where the call runs;
+  the stream and mark registries are read and written under one mutex; the jar reader's cache
+  under its own.
 - Lazy loads (interpreter): `LispEvaluator.libraryLoadLock` guards EVERY load and every read of a
   guarding flag -- `resolveFunction`'s slow path plus the `ensure*Loaded` gates and
   `applyJsonHelper`. Fast path stays lock-free. Inside the lock the flag is set BEFORE evaluating
@@ -24,4 +28,6 @@ bugs, and each looks like someone else's fault.
 - `LispEvaluatorTest#concurrentFirstCallsOfALazyLoadedLibraryAllResolve` (5 rounds x 16 threads,
   FRESH evaluator per round -- round 1 alone never reproduces it).
 - `HttpHandlerTest#concurrentRequestsGetTheirOwnSocketHandle` + `HttpHandlerJvmTest`; `WarE2eTest`.
+- `ClojureIoConcurrentRequestsTest` (48 first requests at once, interpreter 3 rounds, JVM 2,
+  fresh program each; every request opens 24 writers: before the guard 17-23 of 24 kept their text).
 - Not in the suite: bursts of 12 concurrent POSTs against `examples/db/postgres-web.lisp`.

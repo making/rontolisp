@@ -12,6 +12,7 @@ import am.ik.rontolisp.eval.LispEvaluator;
 import am.ik.rontolisp.eval.SourceLanguage;
 import am.ik.rontolisp.eval.SourceSession;
 import am.ik.rontolisp.reader.Features;
+import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.Test;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -482,6 +483,37 @@ class ClojureSessionTest {
 		assertThat(ClojureSession.isComplete("#_ 1")).isFalse();
 		assertThat(ClojureSession.isComplete("#_ 1 2")).isTrue();
 		assertThat(ClojureSession.isComplete("[1 #_ 2]")).isTrue();
+	}
+
+	@Test
+	void anInputKeepsTheResourcesItsLiteralNamesFoundBeforeItRuns() {
+		// kept ahead of the input's forms, never where the call runs: a Ring handler the
+		// input starts runs one thread per request
+		ClojureFiles files = new ClojureFiles() {
+			@Override
+			public @Nullable String read(String path) {
+				return path.endsWith("src/greeting.txt") ? "hi" : null;
+			}
+
+			@Override
+			public @Nullable String parent(String path) {
+				return null;
+			}
+
+			@Override
+			public String resolve(@Nullable String dir, String relative) {
+				return dir == null ? relative : dir + "/" + relative;
+			}
+		};
+		ClojureSession session = new ClojureSession(files);
+		session.read("(require '[clojure.java.io :as io])");
+		List<ClojureTopLevel> tops = session.read("(defn g [] (io/resource \"greeting.txt\")) (slurp (g))");
+		assertThat(tops).hasSize(3);
+		assertThat(tops.get(0).forms().stream().map(LispVal::print).toList()).singleElement()
+			.asString()
+			.matches("\\(RONTOLISP::%CLOJURE-IO-KEEP-RESOURCE \"file:.*src/greeting.txt\" \"hi\" :UTF-8\\)");
+		assertThat(forms(tops.subList(1, 3))).noneMatch(form -> form.contains("KEEP-RESOURCE"))
+			.anyMatch(form -> form.matches(".*\\(RONTOLISP::%CLOJURE-IO-URL-FOUND \"file:[^\"]*\"\\).*"));
 	}
 
 	@Test

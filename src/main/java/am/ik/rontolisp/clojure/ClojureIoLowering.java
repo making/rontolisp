@@ -74,10 +74,16 @@ final class ClojureIoLowering {
 	static final String URI_OF = PREFIX + "URI-OF";
 
 	/**
-	 * A resource found while the program lowered: its URL, and the content a read of it
-	 * takes.
+	 * A resource found while the program lowered: its URL, whose contents were kept
+	 * before anything ran ({@link #KEEP_RESOURCE}).
 	 */
 	static final String URL_FOUND = PREFIX + "URL-FOUND";
+
+	/**
+	 * The contents of a resource found while the program lowered, kept for a read of its
+	 * URL to take: a statement of the program's start ({@link #keptResources}).
+	 */
+	static final String KEEP_RESOURCE = PREFIX + "KEEP-RESOURCE";
 
 	/**
 	 * A resource looked up when the program runs, below the directory roots of a source
@@ -741,7 +747,7 @@ final class ClojureIoLowering {
 			return null;
 		}
 		ClojureSourcePath.Resource found = ctx.sourcePath.findResource(literal.value());
-		LispVal url = found == null ? ClojureLowering.NIL_CONST : foundUrl(found);
+		LispVal url = found == null ? ClojureLowering.NIL_CONST : foundUrl(ctx, found);
 		if (items.size() == 3) {
 			return ClojureLowerUtil.list(ClojureLowerUtil.sym("progn"), ctx.lower(items.get(2)), url);
 		}
@@ -749,29 +755,53 @@ final class ClojureIoLowering {
 	}
 
 	/**
-	 * A resource found while the program lowers, as
-	 * {@code (url-found spec text charset)}: its contents the text their octets decode to
-	 * in UTF-8 where they are UTF-8, {@code :utf-8}, else one character an octet,
-	 * {@code :latin-1}, so a binary entry reads back octet for octet; a jar's directory
-	 * entry {@code ""} and {@code :directory}, which reads empty; a directory root's
-	 * directory nothing, which a read takes from the file system, as the oracle's does.
+	 * A resource found while the program lowers, as {@code (url-found spec)}, its
+	 * contents kept by {@code (keep-resource spec text charset)} before anything runs
+	 * ({@link #keptResources}): the text their octets decode to in UTF-8 where they are
+	 * UTF-8, {@code :utf-8}, else one character an octet, {@code :latin-1}, so a binary
+	 * entry reads back octet for octet; a jar's directory entry {@code ""} and
+	 * {@code :directory}, which reads empty; a directory root's directory nothing, which
+	 * a read takes from the file system, as the oracle's does. Kept where the call runs,
+	 * a Ring handler's threads -- one per request on the interpreter and the JVM -- would
+	 * fill the table at once. The macro-time environment keeps it as the lowering finds
+	 * it, so an expansion reads it too.
 	 */
-	private static LispVal foundUrl(ClojureSourcePath.Resource found) {
-		LispSymbol worker = new LispSymbol(URL_FOUND);
+	private static LispVal foundUrl(ClojureLowering ctx, ClojureSourcePath.Resource found) {
 		LispString spec = LispString.literal(found.spec());
 		byte[] octets = found.octets();
-		if (octets == null) {
-			return ClojureLowerUtil.list(worker, spec, ClojureLowering.NIL_CONST, ClojureLowering.NIL_CONST);
+		if (octets != null) {
+			LispVal keep;
+			if (found.directory()) {
+				keep = keep(spec, LispString.literal(""), ":directory");
+			}
+			else {
+				String text = strictUtf8(octets);
+				keep = text != null ? keep(spec, LispString.literal(text), ":utf-8")
+						: keep(spec, LispString.literal(new String(octets, StandardCharsets.ISO_8859_1)), ":latin-1");
+			}
+			ctx.keptResources.put(found.spec(), keep);
+			ClojureMacroEvaluator macroTime = ctx.macroEvaluator;
+			if (macroTime != null) {
+				macroTime.define(keep);
+			}
 		}
-		if (found.directory()) {
-			return ClojureLowerUtil.list(worker, spec, LispString.literal(""), ClojureLowerUtil.sym(":directory"));
-		}
-		String text = strictUtf8(octets);
-		return text != null
-				? ClojureLowerUtil.list(worker, spec, LispString.literal(text), ClojureLowerUtil.sym(":utf-8"))
-				: ClojureLowerUtil.list(worker, spec,
-						LispString.literal(new String(octets, StandardCharsets.ISO_8859_1)),
-						ClojureLowerUtil.sym(":latin-1"));
+		return ClojureLowerUtil.list(new LispSymbol(URL_FOUND), spec);
+	}
+
+	private static LispVal keep(LispString spec, LispString text, String charset) {
+		return ClojureLowerUtil.list(new LispSymbol(KEEP_RESOURCE), spec, text, ClojureLowerUtil.sym(charset));
+	}
+
+	/**
+	 * The statements keeping the contents of every resource found since the last call,
+	 * which run before anything else: the program's start, a session buffer's.
+	 * @param ctx the lowering
+	 * @return the statements, in the order the resources were first found
+	 */
+	static List<LispVal> keptResources(ClojureLowering ctx) {
+		List<LispVal> keeps = List.copyOf(ctx.keptResources.values());
+		ctx.keptResources.clear();
+		return keeps;
 	}
 
 	/** The text the octets spell as well-formed UTF-8, or null when they do not. */

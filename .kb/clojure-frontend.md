@@ -2513,7 +2513,10 @@ the file), `default-streams-impl` a map. Until then only `reader` resolved, as a
   `(:C%INPUT-STREAM #(s octets i closed))`, `(:C%OUTPUT-STREAM #(s closed))` over binary file
   streams (an input stream with a fifth slot, its class, is over a fetched reply's
   rontolisp stream: "HTTP client"); a reader decoding / writer encoding a byte stream is a CL string stream registered
-  in `%clojure-io-streams` (`eq` table, `#(kind sink charset)`); a file's own reader and
+  in `%clojure-io-streams` (`eq` table, `#(kind sink charset)`; every read and write, like
+  `%clojure-io-marks`', under `%clojure-io-registry-guard`: a Ring handler runs a thread per
+  request, and a burst lost writers' registrations, so their text, on the interpreter and the
+  JVM, `ClojureIoConcurrentRequestsTest`); a file's own reader and
   writer are plain file streams (the STREAM family's `BufferedReader`/`BufferedWriter`). A
   wrapper is a list, so `equal` (and with it `=`, map keys) compares by spelling: no `=` arm
   (one made the interpreter's `=` measurably slower and was dropped). A URL keeps only its
@@ -2575,7 +2578,14 @@ the file), `default-streams-impl` a map. Until then only `reader` resolved, as a
   loader is an NPE).
   - Literal: found while lowering (`ClojureSourcePath.findResource`), contents embedded as
     octets (`ClojureFiles.readBytes`/`readArchiveEntryBytes`):
-    `(%clojure-io-url-found spec text charset)`, TEXT the octets' strict UTF-8 decode
+    `(%clojure-io-url-found spec)` at the site, the contents kept by
+    `(%clojure-io-keep-resource spec text charset)` statements ahead of the program
+    (`ClojureLowering.keptResources`, by spec; a session buffer's ahead of the buffer; the
+    macro-time environment gets each through `define` as it is found), never where the call
+    runs: no request thread writes the table, and a read of the URL spelled by hand before
+    the call reads the contents (`ClojureJavaIoTest#aLiteralResourceIsKeptBeforeItsCallRunsOnEveryBackend`;
+    before, a `jar:` one was refused where the program carries no jar reader). A name a
+    macro-time `eval` alone finds is kept in the program too. TEXT the octets' strict UTF-8 decode
     (`:utf-8`) or one character an octet (`:latin-1`), so a binary entry reads back octet
     for octet (before, a jar's image came back decoded as UTF-8); a jar's directory entry
     `"" :directory` (reads empty); a directory root's directory `nil nil`, kept nowhere (a

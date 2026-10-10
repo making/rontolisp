@@ -283,8 +283,7 @@ class ClojureArmsTest {
 				"(LET ((R X)) (CLOSE R))", "(JAVA:CALL O \"m\" V)", "(STRINGP V)", "(COND (T :OTHER))",
 				"(OPEN-PATH S)");
 		for (String producer : List.of("(rontolisp::%clojure-io-file \"a\")", "(rontolisp::%clojure-io-file-2 p c)",
-				"(rontolisp::%clojure-io-open-input x)",
-				"(rontolisp::%clojure-io-url-found \"file:/a\" \"t\" :utf-8)")) {
+				"(rontolisp::%clojure-io-open-input x)", "(rontolisp::%clojure-io-url-found \"file:/a\")")) {
 			assertThat(ClojureArms.scan(read(producer), ClojureArms.Family.IO).builds()).as(producer).isTrue();
 		}
 	}

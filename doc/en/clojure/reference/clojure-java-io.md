@@ -177,11 +177,12 @@ oracle looks on the class path, which the same project fills with the same roots
 file or subdirectory answers its `file:` URL, a jar's entry its `jar:file:...!/name` URL (a
 directory entry `name/` answers `name` too). A name written as a string literal is found while
 the program compiles, and the contents found travel with the program octet for octet, so they
-read the same wherever the program runs, a WASM module included. A name the program computes
-is looked up when it runs, in each root of the source path in order, a jar's entries included;
-reading the `jar:` URL it answers opens the entry from the jar. On WASM those directories and
-jars need a `--dir` preopen. A program naming `resource` only with string literals carries no
-lookup.
+read the same wherever the program runs, a WASM module included. They are in place before the
+program starts, so every read of that URL takes them, one of a URL spelled by hand included. A
+name the program computes is looked up when it runs, in each root of the source path in order, a
+jar's entries included; reading the `jar:` URL it answers opens the entry from the jar. On WASM
+those directories and jars need a `--dir` preopen. A program naming `resource` only with string
+literals carries no lookup.
 
 ```console
 $ cat resources/config.edn
