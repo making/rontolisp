@@ -29,11 +29,9 @@ import am.ik.rontolisp.codegen.jvm.JvmArrayRuntimeBuilder.ArrayMethod;
  * A {@code long[]} is disjoint from every other runtime shape ({@code int[]} is the
  * character box, {@code double[]}/{@code float[]}/{@code short[]} the packed float
  * arrays, {@code Object[]} cons/function/ratio, {@code ArrayList} general arrays), so
- * {@code instanceof long[]} is a free discriminator. A {@code byte[]} is too, except in a
- * program that can also build a quantized matrix ({@code .kb/quantized-matrix.md}), whose
- * {@code byte[]} starts with its format code instead: there the octet vector is the
- * {@code byte[]} whose slot 0 is the tag, and the quantized matrix's helpers test the
- * converse ({@link Octets}).
+ * {@code instanceof long[]} is a free discriminator, and so is {@code instanceof byte[]}
+ * ({@link Octets}): a quantized matrix holds its bytes in a holder of its own
+ * ({@code .kb/quantized-matrix.md}).
  *
  * <p>
  * Element semantics (identical on every backend, {@code .kb/packed-integer-vectors.md}):
@@ -107,14 +105,12 @@ final class JvmIntArrayRuntimeBuilder {
 	 * @param usesFloatArray whether the packed float-array helpers are emitted too; when
 	 * true the non-packed delegation goes through the {@code _fv*} dispatch tier (iv
 	 * -&gt; fv -&gt; general), else straight to the general helpers
-	 * @param usesQuantized whether a quantized matrix -- also a {@code byte[]} -- can
-	 * exist, so the octet vector's test reads the tag
 	 * @return the helper methods
 	 */
 	static List<ArrayMethod> build(ConstantPool cp, ClassEntry objectClass, ClassEntry objectArrayClass,
-			ClassEntry selfClass, boolean usesFloatArray, boolean usesQuantized) {
+			ClassEntry selfClass, boolean usesFloatArray) {
 		ClassEntry longArrayClass = cp.classEntry("[J");
-		Octets octets = new Octets(cp.classEntry("[B"), usesQuantized);
+		Octets octets = new Octets(cp.classEntry("[B"));
 		ClassEntry arrayListClass = cp.classEntry("java/util/ArrayList");
 		ClassEntry longClass = cp.classEntry("java/lang/Long");
 		ClassEntry bigIntegerClass = cp.classEntry("java/math/BigInteger");
@@ -181,27 +177,18 @@ final class JvmIntArrayRuntimeBuilder {
 	 * @param notOctets where any other value jumps
 	 */
 	static void emitOctetTestOnStack(JvmLispCompiler.Ctx ctx, MethodCode.Label notOctets) {
-		ClassEntry byteArrayClass = ctx.cp.classEntry("[B");
-		ctx.body.dup().instanceOf(byteArrayClass).ifeq(notOctets);
-		if (ctx.usesQuantized) {
-			ctx.body.dup().checkcast(byteArrayClass).iconst_0().baload().loadConstant(OCTET_TAG);
-			ctx.body.if_icmpne(notOctets);
-		}
+		ctx.body.dup().instanceOf(ctx.cp.classEntry("[B")).ifeq(notOctets);
 	}
 
 	/**
-	 * The {@code (unsigned-byte 8)} representation's discriminator: a {@code byte[]}, and
-	 * -- where a quantized matrix, another {@code byte[]}, can exist -- one whose slot 0
-	 * is {@link #OCTET_TAG}.
+	 * The {@code (unsigned-byte 8)} representation's discriminator: a {@code byte[]}.
 	 *
 	 * @param byteArrayClass the {@code [B} class constant
-	 * @param quantized whether a quantized matrix can exist in the program
 	 */
-	record Octets(ClassEntry byteArrayClass, boolean quantized) {
+	record Octets(ClassEntry byteArrayClass) {
 
 		/**
 		 * Branches to {@code notOctets} unless local {@code slot} holds an octet vector.
-		 * Peak operand stack: 2.
 		 * @param a the method being built
 		 * @param slot the local holding the value
 		 * @param notOctets the label taken for any other value
@@ -210,14 +197,6 @@ final class JvmIntArrayRuntimeBuilder {
 			a.aload(slot);
 			a.instanceOf(this.byteArrayClass);
 			a.ifeq(notOctets);
-			if (this.quantized) {
-				a.aload(slot);
-				a.checkcast(this.byteArrayClass);
-				a.loadConstant(0);
-				a.baload();
-				a.loadConstant(OCTET_TAG);
-				a.if_icmpne(notOctets);
-			}
 		}
 
 	}

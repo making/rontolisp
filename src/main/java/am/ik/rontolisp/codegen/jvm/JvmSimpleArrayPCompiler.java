@@ -60,8 +60,7 @@ final class JvmSimpleArrayPCompiler {
 		ctx.body.if_icmpne(gotoFalse);
 		ctx.body.goto_(gotoTrue);
 		ctx.body.labelBinding(ifNotString);
-		// The packed vectors: simple by construction -- the octet vector first, whose
-		// test tells it from a quantized matrix (no array) where one can exist.
+		// The packed vectors: simple by construction -- the octet vector first.
 		if (ctx.usesIntArray) {
 			MethodCode.Label notOctets = ctx.body.newLabel();
 			JvmIntArrayRuntimeBuilder.emitOctetTestOnStack(ctx, notOctets);

@@ -323,11 +323,9 @@ final class JvmGpuTemplate {
 	 * result (the pairing {@code .kb/bfloat16.md} names). The bf16 array's header is TWO
 	 * slots a dimension ({@code [rank, hi_0, lo_0, ...]}, data at {@code 1 + 2 * rank})
 	 * -- read here by {@link #bf16Dim}, the one place in this template that spells the
-	 * layout, beside {@code JvmSimdVectorTemplate}'s own pair. And a Q8_0 quantized
-	 * {@code byte[]} matrix against a {@code float[]} vector, whose int header
-	 * {@link #qmDim} / {@link #qmOff} read -- the third place that spells it, after
-	 * {@code JvmQuantizedMatrixRuntimeBuilder} and {@code JvmSimdVectorTemplate}
-	 * ({@code .kb/quantized-matrix.md}).
+	 * layout, beside {@code JvmSimdVectorTemplate}'s own pair. A Q8_0 quantized matrix is
+	 * {@link #gpuMatvecQ8}'s: a {@code byte[]} here is an {@code (unsigned-byte 8)}
+	 * vector, which declines.
 	 * @param w the matrix
 	 * @param x the vector
 	 * @return the packed result, or {@code null} when the device declined it
@@ -335,12 +333,6 @@ final class JvmGpuTemplate {
 	static @Nullable Object gpuMatvec(@Nullable Object w, @Nullable Object x) {
 		if (w instanceof short[] bw) {
 			return gpuMatvecBf16(bw, x);
-		}
-		// A quantized matrix, not the other byte[] -- an (unsigned-byte 8) vector, whose
-		// slot 0 is its tag, 8 (JvmIntArrayRuntimeBuilder.OCTET_TAG; this class travels
-		// alone, so the number is spelled here).
-		if (w instanceof byte[] qw && qw[0] != 8) {
-			return gpuMatvecQ8(qw, x);
 		}
 		if (!(w instanceof double[]) && !(w instanceof float[])) {
 			return null;
@@ -395,12 +387,20 @@ final class JvmGpuTemplate {
 	}
 
 	/**
-	 * The Q8_0 arm of {@link #gpuMatvec}: a rank-2 quantized {@code byte[]} matrix
-	 * against a {@code float[]} vector, into a {@code float[]} result that is the lane
-	 * kernel's bits. The header's format code must be Q8_0's ({@code 1}); a
-	 * {@code double[]} vector declines to the lane kernel, which computes it.
+	 * {@code (vec:matvec w x)} over a rank-2 Q8_0 quantized matrix and a {@code float[]}
+	 * vector, into a {@code float[]} result that is the lane kernel's bits. The call site
+	 * tested the matrix's holder ({@code runtime.RontoQuantizedMatrix}) and hands its
+	 * array -- the header, then the blocks -- so this class never names the holder and
+	 * need not travel with it; its int header {@link #qmDim} / {@link #qmOff} read, the
+	 * third place that spells it, after {@code JvmQuantizedMatrixRuntimeBuilder} and
+	 * {@code JvmSimdVectorTemplate} ({@code .kb/quantized-matrix.md}). The header's
+	 * format code must be Q8_0's ({@code 1}); a {@code double[]} vector declines to the
+	 * lane kernel, which computes it.
+	 * @param w the matrix's array
+	 * @param x the vector
+	 * @return the packed result, or {@code null} when the device declined it
 	 */
-	private static @Nullable Object gpuMatvecQ8(byte[] w, @Nullable Object x) {
+	static @Nullable Object gpuMatvecQ8(byte[] w, @Nullable Object x) {
 		if (!(x instanceof float[] fx) || w.length < 16 || qmInt(w, 0) != QM_FORMAT_Q8_0 || qmInt(w, 4) != 2
 				|| rank(fx) != 1) {
 			return null;

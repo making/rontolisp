@@ -16,19 +16,26 @@ JVM; both WASM backends refuse it by name. `.todo/672`; the device kernel `.todo
 - **Storage is the ggml block layout on BOTH backends**: per block one binary16 `d` (little-
   endian) then 32 int8 quants, 34 bytes, row-major. `read-sequence` / `write-sequence`
   therefore move a GGUF tensor as ONE transfer (`PackedBuffer` width 1, JVM `_readSeqPacked`'s
-  `byte[]` arm) and a written matrix is what `llama.cpp` reads; `:start`/`:end` count bytes.
+  quantized arm) and a written matrix is what `llama.cpp` reads; `:start`/`:end` count bytes.
 - **The `byte[]` is load-bearing.** The packed integer vector stored one byte in eight when this
   type arrived (`.todo/672`), which would have made it twice the f32 matrix it exists to shrink.
-  On the JVM the `byte[]` is SHARED with the `(unsigned-byte 8)` vector since 2026-09-26
-  (`byte[]{8, e0, ...}`, `.kb/packed-integer-vectors.md`): where both can exist, slot 0 tells them
-  apart -- this header's format code (1) against the octet vector's width tag (8) -- so **no format
-  code may be 8**, and every `instanceof byte[]` door here reads it (`emitMatrixTest`,
-  `emitQuantizedArm`, the `--simd` lane guard, `JvmGpuTemplate.gpuMatvec`).
-- JVM representation: `[format:int LE][rank:int][dim_k:int...]` then the blocks, data offset
-  `8 + 4 * rank`. Three places spell it: `JvmQuantizedMatrixRuntimeBuilder` (the `_qm*`
+- **On the JVM the matrix is a holder, `runtime/RontoQuantizedMatrix`, whose one field `data` is
+  the `byte[]`** (since 2026-10-10, f25). The `(unsigned-byte 8)` vector is the other `byte[]`,
+  and Java's own array (`.kb/packed-integer-vectors.md`), so no slot of a `byte[]` can say which it
+  is. Every door tests the holder: `emitMatrixTest` (the `_qm*` helpers), `emitQuantizedArm`
+  (the `_fv*` tier), `_ckArr` (the array inquiries take a matrix), the print branch,
+  `_readSeqPacked` / `_writeSeqPacked`'s own arm, the `--simd` lane guard and the `--gpu` rung.
+  The holder travels beside a program that can build one
+  (`JvmQuantizedMatrixRuntimeBuilder.RUNTIME_CLASS_FILES`, `.kb/jvm-export.md`), and only then is
+  it named. From 2026-09-26 until then the matrix was the bare `byte[]` and slot 0 told it from the
+  octet vector (`byte[]{8, e0, ...}`): its format code against the width 8, so no format code could
+  be 8, and a door that forgot read a header as octets without a word.
+- JVM representation: `data` is `[format:int LE][rank:int][dim_k:int...]` then the blocks, data
+  offset `8 + 4 * rank`. Three places spell it: `JvmQuantizedMatrixRuntimeBuilder` (the `_qm*`
   helpers), `JvmSimdVectorTemplate.qmOff/qmDim` and `JvmGpuTemplate.qmOff/qmDim` (the
-  `--gpu` bridge's arm). Ints, so no 32767 cap (`JvmQuantizedMatrixTest`, the 40000-row and
-  40000-column shapes).
+  `--gpu` bridge's arm). The two templates are handed `data`, never the holder -- they ship with
+  every `--simd` / `--gpu` program and must not name a class that travels only with this one.
+  Ints, so no 32767 cap (`JvmQuantizedMatrixTest`, the 40000-row and 40000-column shapes).
 - Surface: `aref`/`row-major-aref` answer `q * d` as a double (exact: 8 bits x 11 bits);
   `(setf aref)` signals "immutable"; `array-dimensions`/`-rank`/`-total-size`/`-dimension`
   work; `array-element-type` answers the format symbol `Q8-0` (what `vec.lisp` and
@@ -136,11 +143,12 @@ and 0 in the kernel -- finite inputs only, as for every `vec:` member.
   `PackedBuffer.load` reports a `read-sequence` into the blocks to the write hook, as every
   bulk write does, so a re-read matrix is a first sight again on the device.
 - JVM chain: `JvmSimdCompiler.emitLaneWidthGuard`'s FIRST arm, `QUANTIZED_OPERAND` (matvec
-  0, matvec-into 1): weight `byte[]` and the other array operands all `float[]` or all
-  `double[]`, else fallback to the defun; then the bf16 arm, then the two-width test. The
-  bridge stays total. `compileMatvecChain`'s device rung takes the allocating form's
-  `byte[]` against a `float[]` ahead of that arm (`JvmGpuTemplate.gpuMatvecQ8`); the library
-  rung declines a `byte[]`. Under `--gpu` the compiled `rontolisp:quantize` reads its source
+  0, matvec-into 1), emitted where `usesQuantized`: weight a holder and the other array operands
+  all `float[]` or all `double[]`, else fallback to the defun; admitted, the weight's temp becomes
+  `data` for the kernel; then the bf16 arm, then the two-width test. The bridge stays total.
+  `compileMatvecChain`'s device rung tests the holder of the allocating form's weight and hands
+  `JvmGpuTemplate.gpuMatvecQ8` its `data` against a `float[]` (`JvmGpuRuntimeBuilder.MATVEC_Q8`),
+  else `gpuMatvec`, which declines a `byte[]` (an octet vector); the library rung declines both. Under `--gpu` the compiled `rontolisp:quantize` reads its source
   through `_gpuMaterialize` first -- a device result's host array is a stub
   (`JvmQuantizedMatrixCompiler`; found by the reader corpus of
   `JvmLinalgGpuAccelCompilerTest`, which now has a `quantize` line).
@@ -150,9 +158,9 @@ and 0 in the kernel -- finite inputs only, as for every `vec:` member.
 `JvmLispCompiler`: `usesQuantized` = the program names `rontolisp:quantize` or
 `rontolisp:make-quantized-matrix` -- the two names that build a matrix out of nothing;
 `quantized-rows` needs one to exist already and so does NOT open the gate (the pruner keeps `gguf::%read-tensor` only for a
-`gguf:read` program). On: `_qm*` helpers, the `byte[]` arms of every `_fv*` helper
-(`JvmFloatArrayRuntimeBuilder.emitQuantizedArm`), the `_readSeqPacked` arm, the print branch,
-and `usesFloatArray` forced on. Off: `dequantize`, `quantized-rows` and the two `%quantized-*` accessors
+`gguf:read` program). On: `_qm*` helpers, the holder arms of every `_fv*` helper
+(`JvmFloatArrayRuntimeBuilder.emitQuantizedArm`), `_ckArr`'s, the `_readSeqPacked` arm, the print
+branch, the `vec:matvec` call site's arms, the holder travelling, and `usesFloatArray` forced on. Off: `dequantize`, `quantized-rows` and the two `%quantized-*` accessors
 compile to a call-time signal, `quantized-matrix-p` to `(progn x nil)`, and the class is
 byte-identical to one that never knew the type -- which is what lets `vec.lisp`'s dead arm
 and the prelude's `type-of` clause compile everywhere. `BuiltinFunctionWrappers` gates the

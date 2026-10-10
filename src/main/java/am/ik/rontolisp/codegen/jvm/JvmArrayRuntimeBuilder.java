@@ -376,9 +376,23 @@ final class JvmArrayRuntimeBuilder {
 	private JvmArrayRuntimeBuilder() {
 	}
 
+	/**
+	 * Builds the general array helpers.
+	 * @param cp the constant pool
+	 * @param objectClass the {@code java/lang/Object} class constant
+	 * @param objectArrayClass the {@code [Ljava/lang/Object;} class constant
+	 * @param selfClass the generated program class
+	 * @param usesFloatArray whether the packed float-array tier is emitted
+	 * @param usesQuantized whether a quantized matrix can exist: no array, but the array
+	 * inquiries take it ({@code .kb/quantized-matrix.md}), so the array check passes its
+	 * holder
+	 * @param subseqRuntime the shared subseq runtime
+	 * @param consShape the cons shape test
+	 * @return the helper methods
+	 */
 	static List<ArrayMethod> build(ConstantPool cp, ClassEntry objectClass, ClassEntry objectArrayClass,
-			ClassEntry selfClass, boolean usesFloatArray, JvmOperandTypeRuntime.SubseqRuntime subseqRuntime,
-			JvmOperandTypeRuntime.ConsShape consShape) {
+			ClassEntry selfClass, boolean usesFloatArray, boolean usesQuantized,
+			JvmOperandTypeRuntime.SubseqRuntime subseqRuntime, JvmOperandTypeRuntime.ConsShape consShape) {
 		ClassEntry arrayListClass = cp.classEntry("java/util/ArrayList");
 		ClassEntry longClass = cp.classEntry("java/lang/Long");
 		MethodRefEntry alInit = cp.methodRef(arrayListClass, "<init>", "()V");
@@ -811,9 +825,10 @@ final class JvmArrayRuntimeBuilder {
 		sn.areturn();
 		methods.add(new ArrayMethod(cp.utf8Entry(ASETN), cp.utf8Entry(ASETN_DESC), sn));
 
-		// _ckArr(x): x when it is an array of any representation, else the unnamed ARRAY
-		// report (CK_ARRAY). The string test is stringp's: a String whose first char is
-		// the quote framing it. Locals: 0 = x.
+		// _ckArr(x): x when it is an array of any representation -- or a quantized
+		// matrix, which the array inquiries take -- else the unnamed ARRAY report
+		// (CK_ARRAY). The string test is stringp's: a String whose first char is the
+		// quote framing it. Locals: 0 = x.
 		MethodCode ck = new MethodCode();
 		MethodCode.Label ckPass = ck.newLabel();
 		MethodCode.Label ckNotString = ck.newLabel();
@@ -827,8 +842,12 @@ final class JvmArrayRuntimeBuilder {
 		emitStringTest(ck, strClass, strCharAt, 0, ckFail);
 		ck.goto_(ckPass);
 		ck.labelBinding(ckNotString);
-		for (ClassEntry packed : List.of(longArrayClass, doubleArrayClass, floatArrayClass, shortArrayClass,
-				byteArrayClass)) {
+		List<ClassEntry> packedShapes = new ArrayList<>(
+				List.of(longArrayClass, doubleArrayClass, floatArrayClass, shortArrayClass, byteArrayClass));
+		if (usesQuantized) {
+			packedShapes.add(JvmQuantizedMatrixRuntimeBuilder.carrierClass(cp));
+		}
+		for (ClassEntry packed : packedShapes) {
 			ck.aload(0);
 			ck.instanceOf(packed);
 			ck.ifne(ckPass);

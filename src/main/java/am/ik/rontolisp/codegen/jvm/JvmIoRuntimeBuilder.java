@@ -513,9 +513,10 @@ final class JvmIoRuntimeBuilder {
 	private final @Nullable CharFileStreams charFileStreams;
 
 	/**
-	 * Whether a quantized matrix -- a {@code byte[]} of ggml blocks behind an int header
-	 * ({@link JvmQuantizedMatrixRuntimeBuilder}) -- can exist in the program, so the bulk
-	 * transfer takes it as a buffer of bytes ({@code .kb/quantized-matrix.md}).
+	 * Whether a quantized matrix -- a holder of a {@code byte[]} of ggml blocks behind an
+	 * int header ({@link JvmQuantizedMatrixRuntimeBuilder}) -- can exist in the program,
+	 * so the bulk transfer takes it as a buffer of bytes
+	 * ({@code .kb/quantized-matrix.md}).
 	 */
 	private final boolean quantizedBuffer;
 
@@ -4008,22 +4009,11 @@ final class JvmIoRuntimeBuilder {
 		code.goto_(shaped);
 		code.labelBinding(ifNotLong);
 		// else if (seq instanceof byte[]) -- an (unsigned-byte 8) vector
-		// byte[]{8, e0, ...}: { base = 1; width = 1; size = len - 1 }, or, where one can
-		// exist, a quantized matrix (told apart by the tag in slot 0).
+		// byte[]{8, e0, ...}: { base = 1; width = 1; size = len - 1 }
 		code.aload(0);
 		code.instanceOf(io.byteArrayClass());
 		MethodCode.Label ifNotByte = code.newLabel();
 		code.ifeq(ifNotByte);
-		MethodCode.@Nullable Label ifQuantized = null;
-		if (this.quantizedBuffer) {
-			code.aload(0);
-			code.checkcast(io.byteArrayClass());
-			code.iconst_0();
-			code.baload();
-			code.loadConstant(JvmIntArrayRuntimeBuilder.OCTET_TAG);
-			ifQuantized = code.newLabel();
-			code.if_icmpne(ifQuantized);
-		}
 		code.iconst_1();
 		code.istore(BASE);
 		code.iconst_1();
@@ -4035,13 +4025,18 @@ final class JvmIoRuntimeBuilder {
 		code.isub();
 		code.istore(SIZE);
 		code.goto_(shaped);
+		code.labelBinding(ifNotByte);
 		if (this.quantizedBuffer) {
-			// the quantized matrix: { base = 8 + 4 * _qmInt(seq, 4); width = 1; size =
-			// len - base } -- its ggml blocks, one byte an element, so a GGUF tensor is
-			// one transfer (.kb/quantized-matrix.md).
-			code.labelBinding(Objects.requireNonNull(ifQuantized));
+			// else if (seq instanceof RontoQuantizedMatrix) -- { base = 8 + 4 *
+			// _qmInt(data, 4); width = 1; size = data.length - base }: its ggml blocks,
+			// one byte an element, so a GGUF tensor is one transfer
+			// (.kb/quantized-matrix.md).
+			ClassEntry carrierClass = JvmQuantizedMatrixRuntimeBuilder.carrierClass(this.cp);
+			MethodCode.Label ifNotQuantized = code.newLabel();
 			code.aload(0);
-			code.checkcast(io.byteArrayClass());
+			code.instanceOf(carrierClass);
+			code.ifeq(ifNotQuantized);
+			emitQuantizedData(code);
 			code.iconst_4();
 			code.invokestatic(io.qmInt());
 			code.iconst_4();
@@ -4051,15 +4046,14 @@ final class JvmIoRuntimeBuilder {
 			code.istore(BASE);
 			code.iconst_1();
 			code.istore(WIDTH);
-			code.aload(0);
-			code.checkcast(io.byteArrayClass());
+			emitQuantizedData(code);
 			code.arraylength();
 			code.iload(BASE);
 			code.isub();
 			code.istore(SIZE);
 			code.goto_(shaped);
+			code.labelBinding(ifNotQuantized);
 		}
-		code.labelBinding(ifNotByte);
 		// else return null (not a packed buffer -- declined)
 		code.aconst_null();
 		code.areturn();
@@ -4194,8 +4188,7 @@ final class JvmIoRuntimeBuilder {
 		code.goto_(moved);
 		code.labelBinding(ifNotDouble2);
 		// else if (seq instanceof byte[]) bb.get/put((byte[]) seq, base + s, n) -- an
-		// octet vector or a quantized matrix, whose base the shape arm above already
-		// told apart.
+		// octet vector
 		code.aload(0);
 		code.instanceOf(io.byteArrayClass());
 		MethodCode.Label ifNotByte2 = code.newLabel();
@@ -4209,6 +4202,21 @@ final class JvmIoRuntimeBuilder {
 		code.pop();
 		code.goto_(moved);
 		code.labelBinding(ifNotByte2);
+		if (this.quantizedBuffer) {
+			// else if (seq instanceof RontoQuantizedMatrix) bb.get/put(data, base + s, n)
+			MethodCode.Label ifNotQuantized2 = code.newLabel();
+			code.aload(0);
+			code.instanceOf(JvmQuantizedMatrixRuntimeBuilder.carrierClass(this.cp));
+			code.ifeq(ifNotQuantized2);
+			code.aload(BB);
+			emitQuantizedData(code);
+			emitBasePlusS(code, BASE, S);
+			code.iload(N);
+			code.invokevirtual((read ? io.bbGetBytes() : io.bbPutBytes()));
+			code.pop();
+			code.goto_(moved);
+			code.labelBinding(ifNotQuantized2);
+		}
 		// else if (seq instanceof short[]) bb.asShortBuffer().get/put((short[]) seq,
 		// base + s, n) -- the bfloat16 width moves as its stored patterns, in one bulk
 		// transfer like the two f32/f64 arms above and unlike the long[] element loop.
@@ -4348,6 +4356,16 @@ final class JvmIoRuntimeBuilder {
 	}
 
 	// slot[target] = (arg == null ? <dflt> : (int) ((Long) arg).longValue())
+	/**
+	 * Stack: {@code (...) -> (..., byte[])}: the array of the quantized matrix in local
+	 * 0.
+	 */
+	private void emitQuantizedData(MethodCode code) {
+		code.aload(0);
+		code.checkcast(JvmQuantizedMatrixRuntimeBuilder.carrierClass(this.cp));
+		code.getfield(JvmQuantizedMatrixRuntimeBuilder.carrierData(this.cp));
+	}
+
 	private void emitBoundOrDefault(MethodCode code, int argSlot, Runnable dflt, int target) {
 		code.aload(argSlot);
 		MethodCode.Label ifGiven = code.newLabel();

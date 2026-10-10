@@ -2,6 +2,7 @@ package am.ik.rontolisp.codegen.jvm;
 
 import java.lang.classfile.TypeKind;
 import java.lang.classfile.constantpool.ClassEntry;
+import java.lang.classfile.constantpool.FieldRefEntry;
 import java.lang.classfile.constantpool.MethodRefEntry;
 import java.util.ArrayList;
 import java.util.List;
@@ -15,11 +16,12 @@ import am.ik.rontolisp.codegen.jvm.JvmArrayRuntimeBuilder.ArrayMethod;
 /**
  * The JVM-compiled arm of the {@code rontolisp:quantized-matrix} type
  * ({@code .kb/quantized-matrix.md}): the {@code _qm*} helpers a program that can build
- * one carries. A compiled quantized matrix is a bare {@code byte[]} -- disjoint from
- * every shape the {@code instanceof} dispatch already tells apart, and one byte an
- * element, which is the whole reason the type exists ({@code .kb/quantized-matrix.md}:
- * the packed integer vector's {@code long[]} would store one byte in eight). Its layout
- * is
+ * one carries. A compiled quantized matrix is a {@code runtime.RontoQuantizedMatrix}
+ * ({@link #CARRIER}) holding one {@code byte[]} -- one byte an element, which is the
+ * whole reason the type exists ({@code .kb/quantized-matrix.md}: the packed integer
+ * vector's {@code long[]} would store one byte in eight). The holder is what tells it
+ * from the {@code (unsigned-byte 8)} vector, a bare {@code byte[]} whose every slot is an
+ * octet. The array's layout is
  *
  * <pre>
  * [0..3]  format code, little-endian int (1 = Q8_0)
@@ -29,10 +31,12 @@ import am.ik.rontolisp.codegen.jvm.JvmArrayRuntimeBuilder.ArrayMethod;
  * </pre>
  *
  * so the blocks start at {@code 8 + 4 * rank}, and a {@code read-sequence} into the array
- * is one transfer of a GGUF tensor's bytes ({@link JvmIoRuntimeBuilder}). This class and
- * {@link JvmSimdVectorTemplate}'s {@code qmOff} / {@code qmDim} are the two places that
- * spell the header; the interpreter's {@code am.ik.rontolisp.LispQuantizedMatrix} keeps
- * the dimensions beside a header-free block array.
+ * is one transfer of a GGUF tensor's bytes ({@link JvmIoRuntimeBuilder}). This class,
+ * {@link JvmSimdVectorTemplate}'s and {@link JvmGpuTemplate}'s {@code qmOff} /
+ * {@code qmDim} are the three places that spell the header -- the two templates are
+ * handed the array, never the holder, so they need not travel with its class; the
+ * interpreter's {@code am.ik.rontolisp.LispQuantizedMatrix} keeps the dimensions beside a
+ * header-free block array.
  *
  * <p>
  * {@code _qmQuantizeBlocks} is ggml's {@code quantize_row_q8_0_ref} instruction for
@@ -47,6 +51,12 @@ import am.ik.rontolisp.codegen.jvm.JvmArrayRuntimeBuilder.ArrayMethod;
 final class JvmQuantizedMatrixRuntimeBuilder {
 
 	private static final String OBJ = "Ljava/lang/Object;";
+
+	/** The holder a compiled quantized matrix is: its one field the array. */
+	static final String CARRIER = "am/ik/rontolisp/runtime/RontoQuantizedMatrix";
+
+	/** What travels with a program that can build one ({@code .kb/jvm-export.md}). */
+	static final List<String> RUNTIME_CLASS_FILES = List.of(CARRIER + ".class");
 
 	/** The header's format code for {@code Q8_0}. */
 	static final int FORMAT_Q8_0 = 1;
@@ -127,29 +137,45 @@ final class JvmQuantizedMatrixRuntimeBuilder {
 	}
 
 	/** The constant-pool references the bodies share. */
-	private record Refs(ConstantPool cp, ClassEntry byteArrayClass, ClassEntry longClass, ClassEntry objectArrayClass,
-			ClassEntry stringClass, ClassEntry rtExClass, MethodRefEntry rtExInit, MethodRefEntry longIntValue,
-			MethodRefEntry longValueOf, MethodRefEntry doubleValueOf, MethodRefEntry float16ToFloat,
-			MethodRefEntry floatToFloat16, MethodRefEntry mathAbsF, MethodRefEntry mathRoundF, MethodRefEntry qmInt,
-			MethodRefEntry qmPutInt, MethodRefEntry qmTotal, MethodRefEntry qmValue, MethodRefEntry qmAlloc,
-			MethodRefEntry qmLocalName, MethodRefEntry qmCheckFormat, MethodRefEntry qmQuantizeBlocks,
-			ClassEntry sbClass, MethodRefEntry sbInit, MethodRefEntry sbAppendStr, MethodRefEntry sbAppendInt,
-			MethodRefEntry sbToString, MethodRefEntry stringLastIndexOf, MethodRefEntry stringSubstring,
-			MethodRefEntry stringEquals, MethodRefEntry bf16Value, MethodRefEntry bf16Bits,
-			MethodRefEntry systemArraycopy, MethodRefEntry ckBound, MethodRefEntry rankErr) {
+	private record Refs(ConstantPool cp, ClassEntry carrierClass, FieldRefEntry carrierData, MethodRefEntry carrierInit,
+			ClassEntry longClass, ClassEntry objectArrayClass, ClassEntry stringClass, ClassEntry rtExClass,
+			MethodRefEntry rtExInit, MethodRefEntry longIntValue, MethodRefEntry longValueOf,
+			MethodRefEntry doubleValueOf, MethodRefEntry float16ToFloat, MethodRefEntry floatToFloat16,
+			MethodRefEntry mathAbsF, MethodRefEntry mathRoundF, MethodRefEntry qmInt, MethodRefEntry qmPutInt,
+			MethodRefEntry qmTotal, MethodRefEntry qmValue, MethodRefEntry qmAlloc, MethodRefEntry qmLocalName,
+			MethodRefEntry qmCheckFormat, MethodRefEntry qmQuantizeBlocks, ClassEntry sbClass, MethodRefEntry sbInit,
+			MethodRefEntry sbAppendStr, MethodRefEntry sbAppendInt, MethodRefEntry sbToString,
+			MethodRefEntry stringLastIndexOf, MethodRefEntry stringSubstring, MethodRefEntry stringEquals,
+			MethodRefEntry bf16Value, MethodRefEntry bf16Bits, MethodRefEntry systemArraycopy, MethodRefEntry ckBound,
+			MethodRefEntry rankErr) {
 
+	}
+
+	/**
+	 * The holder's class constant.
+	 * @param cp the constant pool
+	 * @return the {@link #CARRIER} class constant
+	 */
+	static ClassEntry carrierClass(ConstantPool cp) {
+		return cp.classEntry(CARRIER);
+	}
+
+	/**
+	 * The holder's one field, the array.
+	 * @param cp the constant pool
+	 * @return the {@code data} field reference
+	 */
+	static FieldRefEntry carrierData(ConstantPool cp) {
+		return cp.fieldRef(carrierClass(cp), "data", "[B");
 	}
 
 	/**
 	 * Builds the helpers.
 	 * @param cp the constant pool
 	 * @param selfClass the generated program class
-	 * @param octets whether an {@code (unsigned-byte 8)} vector -- the other
-	 * {@code byte[]}, whose slot 0 is {@link JvmIntArrayRuntimeBuilder#OCTET_TAG} -- can
-	 * exist, so the tests that take any value tell the two apart
 	 * @return the helper methods
 	 */
-	static List<ArrayMethod> build(ConstantPool cp, ClassEntry selfClass, boolean octets) {
+	static List<ArrayMethod> build(ConstantPool cp, ClassEntry selfClass) {
 		ClassEntry longClass = cp.classEntry("java/lang/Long");
 		ClassEntry doubleClass = cp.classEntry("java/lang/Double");
 		ClassEntry floatClass = cp.classEntry("java/lang/Float");
@@ -157,9 +183,11 @@ final class JvmQuantizedMatrixRuntimeBuilder {
 		ClassEntry stringClass = cp.classEntry("java/lang/String");
 		ClassEntry sbClass = cp.classEntry("java/lang/StringBuilder");
 		ClassEntry rtExClass = cp.classEntry("java/lang/RuntimeException");
-		Refs r = new Refs(cp, cp.classEntry("[B"), longClass, cp.classEntry("[Ljava/lang/Object;"), stringClass,
-				rtExClass, cp.methodRef(rtExClass, "<init>", "(Ljava/lang/String;)V"),
-				cp.methodRef(longClass, "intValue", "()I"), cp.methodRef(longClass, "valueOf", "(J)Ljava/lang/Long;"),
+		ClassEntry carrierClass = carrierClass(cp);
+		Refs r = new Refs(cp, carrierClass, carrierData(cp), cp.methodRef(carrierClass, "<init>", "([B)V"), longClass,
+				cp.classEntry("[Ljava/lang/Object;"), stringClass, rtExClass,
+				cp.methodRef(rtExClass, "<init>", "(Ljava/lang/String;)V"), cp.methodRef(longClass, "intValue", "()I"),
+				cp.methodRef(longClass, "valueOf", "(J)Ljava/lang/Long;"),
 				cp.methodRef(doubleClass, "valueOf", "(D)Ljava/lang/Double;"),
 				cp.methodRef(floatClass, "float16ToFloat", "(S)F"), cp.methodRef(floatClass, "floatToFloat16", "(F)S"),
 				cp.methodRef(mathClass, "abs", "(F)F"), cp.methodRef(mathClass, "round", "(F)I"),
@@ -193,7 +221,7 @@ final class JvmQuantizedMatrixRuntimeBuilder {
 		methods.add(buildDims(r));
 		methods.add(buildLength(r));
 		methods.add(buildToString(r));
-		methods.add(buildPredicate(r, octets));
+		methods.add(buildPredicate(r));
 		methods.add(buildQuant(r));
 		methods.add(buildScale(r));
 		methods.add(buildAlloc(r));
@@ -202,9 +230,28 @@ final class JvmQuantizedMatrixRuntimeBuilder {
 		methods.add(buildQuantizeBlocks(r));
 		methods.add(buildMake(r));
 		methods.add(buildQuantize(r));
-		methods.add(buildDequantize(r, octets));
-		methods.add(buildRows(r, octets));
+		methods.add(buildDequantize(r));
+		methods.add(buildRows(r));
 		return methods;
+	}
+
+	/**
+	 * Stack: {@code (..., matrix) -> (..., byte[])}: the array a quantized matrix holds.
+	 */
+	private static void emitData(MethodCode a, Refs r) {
+		a.checkcast(r.carrierClass());
+		a.getfield(r.carrierData());
+	}
+
+	/**
+	 * Stack: {@code (...) -> (..., matrix)}: a new holder over the array in local
+	 * {@code arrSlot}.
+	 */
+	private static void emitWrap(MethodCode a, Refs r, int arrSlot) {
+		a.new_(r.carrierClass());
+		a.dup();
+		a.aload(arrSlot);
+		a.invokespecial(r.carrierInit());
 	}
 
 	private static MethodRefEntry self(ConstantPool cp, ClassEntry selfClass, String name, String desc) {
@@ -366,7 +413,7 @@ final class JvmQuantizedMatrixRuntimeBuilder {
 	private static ArrayMethod buildAref1(Refs r) {
 		MethodCode a = new MethodCode();
 		a.aload(0);
-		a.checkcast(r.byteArrayClass());
+		emitData(a, r);
 		a.astore(2);
 		a.aload(2);
 		a.aload(1);
@@ -384,7 +431,7 @@ final class JvmQuantizedMatrixRuntimeBuilder {
 	private static ArrayMethod buildAref2(Refs r) {
 		MethodCode a = new MethodCode();
 		a.aload(0);
-		a.checkcast(r.byteArrayClass());
+		emitData(a, r);
 		a.astore(3);
 		MethodCode.Label rank2 = a.newLabel();
 		headerInt(a, r, 3, 4);
@@ -423,7 +470,7 @@ final class JvmQuantizedMatrixRuntimeBuilder {
 	private static ArrayMethod buildArefN(Refs r) {
 		MethodCode a = new MethodCode();
 		a.aload(0);
-		a.checkcast(r.byteArrayClass());
+		emitData(a, r);
 		a.astore(2);
 		a.aload(1);
 		a.checkcast(r.objectArrayClass());
@@ -488,7 +535,7 @@ final class JvmQuantizedMatrixRuntimeBuilder {
 	private static ArrayMethod buildDims(Refs r) {
 		MethodCode a = new MethodCode();
 		a.aload(0);
-		a.checkcast(r.byteArrayClass());
+		emitData(a, r);
 		a.astore(1);
 		a.aconst_null();
 		a.astore(2);
@@ -532,7 +579,7 @@ final class JvmQuantizedMatrixRuntimeBuilder {
 	private static ArrayMethod buildLength(Refs r) {
 		MethodCode a = new MethodCode();
 		a.aload(0);
-		a.checkcast(r.byteArrayClass());
+		emitData(a, r);
 		a.astore(1);
 		MethodCode.Label rank1 = a.newLabel();
 		headerInt(a, r, 1, 4);
@@ -551,7 +598,7 @@ final class JvmQuantizedMatrixRuntimeBuilder {
 	private static ArrayMethod buildToString(Refs r) {
 		MethodCode a = new MethodCode();
 		a.aload(0);
-		a.checkcast(r.byteArrayClass());
+		emitData(a, r);
 		a.astore(1);
 		a.new_(r.sbClass());
 		a.dup();
@@ -580,27 +627,18 @@ final class JvmQuantizedMatrixRuntimeBuilder {
 		return method(r, TO_STRING, TO_STRING_DESC, 5, 3, a);
 	}
 
-	// Branches to notMatrix unless local slot holds a quantized matrix: a byte[] -- whose
-	// slot 0 is not the octet vector's tag, where one of those can exist.
-	private static void emitMatrixTest(MethodCode a, Refs r, int slot, MethodCode.Label notMatrix, boolean octets) {
+	// Branches to notMatrix unless local slot holds a quantized matrix: its holder.
+	private static void emitMatrixTest(MethodCode a, Refs r, int slot, MethodCode.Label notMatrix) {
 		a.aload(slot);
-		a.instanceOf(r.byteArrayClass());
+		a.instanceOf(r.carrierClass());
 		a.ifeq(notMatrix);
-		if (octets) {
-			a.aload(slot);
-			a.checkcast(r.byteArrayClass());
-			a.loadConstant(0);
-			a.baload();
-			a.loadConstant(JvmIntArrayRuntimeBuilder.OCTET_TAG);
-			a.if_icmpeq(notMatrix);
-		}
 	}
 
 	// _qmP(o): T for a quantized matrix, nil otherwise.
-	private static ArrayMethod buildPredicate(Refs r, boolean octets) {
+	private static ArrayMethod buildPredicate(Refs r) {
 		MethodCode a = new MethodCode();
 		MethodCode.Label no = a.newLabel();
-		emitMatrixTest(a, r, 0, no, octets);
+		emitMatrixTest(a, r, 0, no);
 		a.ldc(r.cp().stringEntry("T"));
 		a.areturn();
 		a.labelBinding(no);
@@ -658,7 +696,7 @@ final class JvmQuantizedMatrixRuntimeBuilder {
 	private static ArrayMethod buildQuant(Refs r) {
 		MethodCode a = new MethodCode();
 		a.aload(0);
-		a.checkcast(r.byteArrayClass());
+		emitData(a, r);
 		a.astore(3);
 		emitRowsCols(a, r, 3, 4, 5);
 		String message = PackageRegistry.qualifyInternal(LispNames.RONTOLISP_PKG, LispNames.QUANTIZED_QUANT_INTERNAL)
@@ -703,7 +741,7 @@ final class JvmQuantizedMatrixRuntimeBuilder {
 	private static ArrayMethod buildScale(Refs r) {
 		MethodCode a = new MethodCode();
 		a.aload(0);
-		a.checkcast(r.byteArrayClass());
+		emitData(a, r);
 		a.astore(3);
 		emitRowsCols(a, r, 3, 4, 5);
 		a.iload(5);
@@ -1120,8 +1158,10 @@ final class JvmQuantizedMatrixRuntimeBuilder {
 		a.iload(3);
 		a.iload(4);
 		a.invokestatic(r.qmAlloc());
+		a.astore(6);
+		emitWrap(a, r, 6);
 		a.areturn();
-		return method(r, MAKE, BINARY_DESC, 5, 6, a);
+		return method(r, MAKE, BINARY_DESC, 5, 7, a);
 	}
 
 	// _qmQuantize(src, format): a packed float array of any width, its values narrowed
@@ -1231,7 +1271,7 @@ final class JvmQuantizedMatrixRuntimeBuilder {
 		a.imul();
 		a.iadd();
 		a.invokestatic(r.qmQuantizeBlocks());
-		a.aload(9);
+		emitWrap(a, r, 9);
 		a.areturn();
 		return method(r, QUANTIZE, BINARY_DESC, 8, 11, a);
 	}
@@ -1239,18 +1279,18 @@ final class JvmQuantizedMatrixRuntimeBuilder {
 	// _qmDequantize(m, element-type): a fresh packed array of the width named, every
 	// element q * scale. Locals: 0=m, 1=etype, 2=a, 3=rank, 4=total, 5=arr, 6=off, 7=i,
 	// 8=k, 9=dim, 10=name.
-	private static ArrayMethod buildDequantize(Refs r, boolean octets) {
+	private static ArrayMethod buildDequantize(Refs r) {
 		String op = PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.DEQUANTIZE);
 		MethodCode a = new MethodCode();
 		MethodCode.Label isMatrix = a.newLabel();
 		MethodCode.Label notMatrix = a.newLabel();
-		emitMatrixTest(a, r, 0, notMatrix, octets);
+		emitMatrixTest(a, r, 0, notMatrix);
 		a.goto_(isMatrix);
 		a.labelBinding(notMatrix);
 		throwMessage(a, r, op + ": expects a quantized matrix");
 		a.labelBinding(isMatrix);
 		a.aload(0);
-		a.checkcast(r.byteArrayClass());
+		emitData(a, r);
 		a.astore(2);
 		headerInt(a, r, 2, 4);
 		a.istore(3);
@@ -1333,18 +1373,18 @@ final class JvmQuantizedMatrixRuntimeBuilder {
 	// _qmRows(m, rows): a fresh rank-2 matrix gathering the rows named by the cons list
 	// of Longs, one array copy a row -- the source's own blocks. Locals: 0=m, 1=rows,
 	// 2=a, 3=srcRows, 4=cols, 5=rowBytes, 6=srcOff, 7=count, 8=cur, 9=out, 10=i, 11=idx.
-	private static ArrayMethod buildRows(Refs r, boolean octets) {
+	private static ArrayMethod buildRows(Refs r) {
 		String op = PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.QUANTIZED_ROWS);
 		MethodCode a = new MethodCode();
 		MethodCode.Label isMatrix = a.newLabel();
 		MethodCode.Label notMatrix = a.newLabel();
-		emitMatrixTest(a, r, 0, notMatrix, octets);
+		emitMatrixTest(a, r, 0, notMatrix);
 		a.goto_(isMatrix);
 		a.labelBinding(notMatrix);
 		throwMessage(a, r, op + ": expects a quantized matrix");
 		a.labelBinding(isMatrix);
 		a.aload(0);
-		a.checkcast(r.byteArrayClass());
+		emitData(a, r);
 		a.astore(2);
 		emitRowsCols(a, r, 2, 3, 4);
 		// rowBytes = cols / 32 * 34; srcOff = 8 + 4 * rank (the destination's own header
@@ -1445,7 +1485,7 @@ final class JvmQuantizedMatrixRuntimeBuilder {
 		a.astore(8);
 		a.goto_(gatherLoop);
 		a.labelBinding(gatherDone);
-		a.aload(9);
+		emitWrap(a, r, 9);
 		a.areturn();
 		return method(r, ROWS, BINARY_DESC, 8, 12, a);
 	}

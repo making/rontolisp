@@ -2543,16 +2543,10 @@ final class JvmIntFusionCompiler {
 		ctx.allocTemp();
 		MethodCode.Label done = ctx.body.newLabel();
 		if (ctx.usesIntArray) {
-			// An (unsigned-byte 8) vector, byte[]{8, e0, ...}: element e & 0xFF. Where a
-			// quantized matrix (also a byte[]) can exist, the tag in slot 0 tells them
-			// apart, and the matrix bails to _aref1 like any other shape.
+			// An (unsigned-byte 8) vector, byte[]{8, e0, ...}: element e & 0xFF.
 			ClassEntry byteArrayClass = ctx.cp.classEntry("[B");
 			MethodCode.Label notOctets = ctx.body.newLabel();
 			ctx.body.aload(leaf.arrParam).instanceOf(byteArrayClass).ifeq(notOctets);
-			if (ctx.usesQuantized) {
-				ctx.body.aload(leaf.arrParam).checkcast(byteArrayClass).iconst_0().baload();
-				ctx.body.loadConstant(JvmIntArrayRuntimeBuilder.OCTET_TAG).if_icmpne(notOctets);
-			}
 			ctx.body.iload(idxSlot).iflt(bails);
 			ctx.body.iload(idxSlot).aload(leaf.arrParam).checkcast(byteArrayClass);
 			ctx.body.arraylength().iconst_1().isub().if_icmpge(bails);

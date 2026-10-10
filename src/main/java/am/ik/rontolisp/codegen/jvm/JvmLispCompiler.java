@@ -191,6 +191,12 @@ public final class JvmLispCompiler implements LispCompiler {
 	private boolean needsComplexRuntime;
 
 	/**
+	 * Whether the last {@link #compile} can build a quantized matrix, i.e. whether the
+	 * emitted class needs its holder ({@code RontoQuantizedMatrix}) beside it.
+	 */
+	private boolean needsQuantizedRuntime;
+
+	/**
 	 * Whether the last {@link #compile} makes a {@code java:handle} or a
 	 * {@code java:view}: the {@code runtime/RontoJava*} classes a handle is go beside the
 	 * output ({@link JvmJavaImplementations#RUNTIME_CLASS_FILES}).
@@ -811,9 +817,9 @@ public final class JvmLispCompiler implements LispCompiler {
 	 */
 	public Map<String, byte[]> runtimeClassFiles() {
 		if (!this.needsHandleRuntime && !this.needsHttpRuntime && !this.needsFetchRuntime && !this.needsInflateRuntime
-				&& !this.needsHashTableRuntime && !this.needsComplexRuntime && !this.needsIoStreamRuntime
-				&& !this.needsCharFileRuntime && !this.needsStringInputRuntime && !this.needsJavaValueRuntime
-				&& this.partClassFiles.isEmpty() && this.bridgeClassFiles.isEmpty()) {
+				&& !this.needsHashTableRuntime && !this.needsComplexRuntime && !this.needsQuantizedRuntime
+				&& !this.needsIoStreamRuntime && !this.needsCharFileRuntime && !this.needsStringInputRuntime
+				&& !this.needsJavaValueRuntime && this.partClassFiles.isEmpty() && this.bridgeClassFiles.isEmpty()) {
 			return Map.of();
 		}
 		// A program too large for one class brings its $PartN classes, and a bridged
@@ -838,6 +844,9 @@ public final class JvmLispCompiler implements LispCompiler {
 		}
 		if (this.needsComplexRuntime) {
 			files.putAll(JvmComplexRuntimeBuilder.runtimeClassFiles());
+		}
+		if (this.needsQuantizedRuntime) {
+			files.putAll(JvmRuntimeClassFiles.read(JvmQuantizedMatrixRuntimeBuilder.RUNTIME_CLASS_FILES));
 		}
 		if (this.needsJavaValueRuntime) {
 			files.putAll(JvmRuntimeClassFiles.read(JvmJavaImplementations.RUNTIME_CLASS_FILES));
@@ -2279,6 +2288,8 @@ public final class JvmLispCompiler implements LispCompiler {
 				PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.QUANTIZE))
 				|| programUsesSymbol(program,
 						PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.MAKE_QUANTIZED_MATRIX));
+		// A matrix is a runtime.RontoQuantizedMatrix, which travels with the output.
+		this.needsQuantizedRuntime = usesQuantized;
 		boolean usesFloatArray = programUsesFloatArray(program, closRegistry) || usesRead || this.needsHandleRuntime
 				|| usesFloat16Bits || usesQuantized || usesSeqFloatVector;
 
@@ -3482,7 +3493,7 @@ public final class JvmLispCompiler implements LispCompiler {
 		final List<JvmArrayRuntimeBuilder.ArrayMethod> arrayMethods;
 		if (usesArrays) {
 			List<JvmArrayRuntimeBuilder.ArrayMethod> built = new ArrayList<>(JvmArrayRuntimeBuilder.build(cp,
-					objectClass, objectArrayClass, thisClass, usesFloatArray, subseqRuntime, consShape));
+					objectClass, objectArrayClass, thisClass, usesFloatArray, usesQuantized, subseqRuntime, consShape));
 			built.addAll(JvmArrayRuntimeBuilder.buildToStringMethods(cp, lispToStringMethod, lispToDisplayStringMethod,
 					thisClass, renderGuard));
 			// The packed float-array helpers (_fv*) dispatch on instanceof double[] and
@@ -3501,11 +3512,11 @@ public final class JvmLispCompiler implements LispCompiler {
 								? Objects.requireNonNull(gpuRuntime.ops().get(JvmGpuRuntimeBuilder.MATERIALIZE))
 
 								: null,
-						usesQuantized, usesIntArray));
+						usesQuantized));
 				if (usesQuantized) {
-					// The quantized matrix's own helpers; the _fv* byte[] arms above
+					// The quantized matrix's own helpers; the _fv* holder arms above
 					// delegate to them.
-					built.addAll(JvmQuantizedMatrixRuntimeBuilder.build(cp, thisClass, usesIntArray));
+					built.addAll(JvmQuantizedMatrixRuntimeBuilder.build(cp, thisClass));
 				}
 			}
 			// The packed integer-vector helpers (_iv*) dispatch on the representation
@@ -3513,8 +3524,8 @@ public final class JvmLispCompiler implements LispCompiler {
 			// down the chain (to the _fv* tier when it is emitted, else straight to the
 			// general helpers).
 			if (usesIntArray) {
-				built.addAll(JvmIntArrayRuntimeBuilder.build(cp, objectClass, objectArrayClass, thisClass,
-						usesFloatArray, usesQuantized));
+				built.addAll(
+						JvmIntArrayRuntimeBuilder.build(cp, objectClass, objectArrayClass, thisClass, usesFloatArray));
 			}
 			// widen-float-bits/narrow-float-bits: bulk f16/bf16 bit <->
 			// packed-float conversion, over the same bare double[]/float[]/short[]/long[]
@@ -3543,7 +3554,7 @@ public final class JvmLispCompiler implements LispCompiler {
 					cp.methodRef(stringClass, "replaceFirst",
 							"(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;"),
 					cp.stringEntry("^#\\d*A?\\("), cp.stringEntry("#d("), cp.stringEntry("#f("),
-					cp.stringEntry("#bf16("), usesQuantized ? cp.classEntry("[B") : null,
+					cp.stringEntry("#bf16("), usesQuantized ? JvmQuantizedMatrixRuntimeBuilder.carrierClass(cp) : null,
 					usesQuantized ? cp.methodRef(thisClass, JvmQuantizedMatrixRuntimeBuilder.TO_STRING,
 							JvmQuantizedMatrixRuntimeBuilder.TO_STRING_DESC) : null);
 		}
@@ -3553,9 +3564,8 @@ public final class JvmLispCompiler implements LispCompiler {
 		// rewrite, unlike the #d/#f float syntax.
 		JvmRuntimeBuilder.@Nullable PackedIntPrint packedIntPrint = null;
 		if (usesIntArray) {
-			packedIntPrint = new JvmRuntimeBuilder.PackedIntPrint(cp.classEntry("[J"), cp.classEntry("[B"),
-					usesQuantized, cp.methodRef(thisClass, JvmIntArrayRuntimeBuilder.TO_GENERAL,
-							JvmIntArrayRuntimeBuilder.TO_GENERAL_DESC));
+			packedIntPrint = new JvmRuntimeBuilder.PackedIntPrint(cp.classEntry("[J"), cp.classEntry("[B"), cp
+				.methodRef(thisClass, JvmIntArrayRuntimeBuilder.TO_GENERAL, JvmIntArrayRuntimeBuilder.TO_GENERAL_DESC));
 		}
 		ClassEntry arrayListClassForPrint = usesArrays ? cp.classEntry("java/util/ArrayList") : null;
 		MethodRefEntry arrayToStringMethod = usesArrays

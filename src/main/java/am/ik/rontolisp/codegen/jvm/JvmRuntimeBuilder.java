@@ -2644,7 +2644,7 @@ final class JvmRuntimeBuilder {
 	record PackedPrint(ClassEntry doubleArrayClass, ClassEntry floatArrayClass, ClassEntry shortArrayClass,
 			MethodRefEntry fvToGeneralMethod, MethodRefEntry stringReplaceFirst, StringEntry prefixRegex,
 			StringEntry prefixRepl, StringEntry prefixReplSingle, StringEntry prefixReplBFloat16,
-			@org.jspecify.annotations.Nullable ClassEntry byteArrayClass,
+			@org.jspecify.annotations.Nullable ClassEntry quantizedClass,
 			@org.jspecify.annotations.Nullable MethodRefEntry qmToString) {
 	}
 
@@ -2659,12 +2659,9 @@ final class JvmRuntimeBuilder {
 	 *
 	 * @param longArrayClass the {@code [J} class constant
 	 * @param byteArrayClass the {@code [B} class constant
-	 * @param quantized whether a quantized matrix -- another {@code byte[]} -- can exist,
-	 * so the octet test reads the tag ({@code JvmIntArrayRuntimeBuilder.OCTET_TAG})
 	 * @param ivToGeneralMethod {@code _ivToGeneral}
 	 */
-	record PackedIntPrint(ClassEntry longArrayClass, ClassEntry byteArrayClass, boolean quantized,
-			MethodRefEntry ivToGeneralMethod) {
+	record PackedIntPrint(ClassEntry longArrayClass, ClassEntry byteArrayClass, MethodRefEntry ivToGeneralMethod) {
 	}
 
 	/**
@@ -3433,20 +3430,11 @@ final class JvmRuntimeBuilder {
 		if (packedIntPrint != null) {
 			// if (val is a packed integer vector) return
 			// arrayToString(_ivToGeneral(val));
-			// -- a plain #(...) vector, no prefix rewrite. Ahead of the quantized
-			// matrix's byte[] test, which it tells an octet vector from by the tag.
+			// -- a plain #(...) vector, no prefix rewrite.
 			code.aload(0);
 			code.instanceOf(packedIntPrint.byteArrayClass());
 			MethodCode.Label notOctets = code.newLabel();
 			code.ifeq(notOctets);
-			if (packedIntPrint.quantized()) {
-				code.aload(0);
-				code.checkcast(packedIntPrint.byteArrayClass());
-				code.iconst_0();
-				code.baload();
-				code.loadConstant(JvmIntArrayRuntimeBuilder.OCTET_TAG);
-				code.if_icmpne(notOctets);
-			}
 			MethodCode.Label isPackedInt = code.newLabel();
 			code.goto_(isPackedInt);
 			code.labelBinding(notOctets);
@@ -3471,12 +3459,13 @@ final class JvmRuntimeBuilder {
 			// if (val instanceof short[]) -> #bf16(...)
 			emitPackedPrintBranch(code, packedPrint.shortArrayClass(), arrayToStringMethod, packedPrint,
 					packedPrint.prefixReplBFloat16());
-			if (packedPrint.byteArrayClass() != null && packedPrint.qmToString() != null) {
-				// if (val instanceof byte[]) return _qmToString(val); -- the quantized
-				// matrix's #<quantized-matrix q8-0 (rows cols)>, the same for prin1 and
-				// princ (.kb/quantized-matrix.md).
+			if (packedPrint.quantizedClass() != null && packedPrint.qmToString() != null) {
+				// if (val instanceof RontoQuantizedMatrix) return _qmToString(val); --
+				// the
+				// quantized matrix's #<quantized-matrix q8-0 (rows cols)>, the same for
+				// prin1 and princ (.kb/quantized-matrix.md).
 				code.aload(0);
-				code.instanceOf(packedPrint.byteArrayClass());
+				code.instanceOf(packedPrint.quantizedClass());
 				MethodCode.Label ifNotQuantized = code.newLabel();
 				code.ifeq(ifNotQuantized);
 				code.aload(0);

@@ -18,8 +18,8 @@ import am.ik.rontolisp.LispVal;
  * {@code byte[]} / {@code long[]} (packed integer vector,
  * {@link JvmIntArrayRuntimeBuilder}) and a {@code double[]}/{@code float[]} (packed float
  * array, {@link JvmFloatArrayRuntimeBuilder}) each get a preceding {@code instanceof}
- * branch; without the gates the default build is byte-identical. A quantized matrix, the
- * other {@code byte[]}, is no array: the octet test reads the tag where one can exist.
+ * branch; without the gates the default build is byte-identical. A quantized matrix is no
+ * array, and its holder none of these shapes.
  */
 final class JvmArraypCompiler {
 

@@ -298,9 +298,24 @@ final class JvmSimdCompiler {
 			slots[i] = ctx.allocTemp();
 			ctx.body.astore(slots[i]);
 		}
-		// r = <Program>$GpuBridge.gpuMatvec(w, x); if (r != null) goto end;
+		// r = <Program>$GpuBridge.gpuMatvec(w, x); if (r != null) goto end; -- or, for a
+		// quantized matrix, gpuMatvecQ8 over the array its holder holds.
 		MethodCode.Label deviceAnswered = ctx.body.newLabel();
-		if (gpu != null) {
+		if (gpu != null && ctx.usesQuantized) {
+			ClassEntry carrierClass = JvmQuantizedMatrixRuntimeBuilder.carrierClass(ctx.cp);
+			MethodCode.Label notQuantized = ctx.body.newLabel();
+			MethodCode.Label deviceDeclined = ctx.body.newLabel();
+			ctx.body.aload(slots[0]).instanceOf(carrierClass).ifeq(notQuantized);
+			ctx.body.aload(slots[0]).checkcast(carrierClass);
+			ctx.body.getfield(JvmQuantizedMatrixRuntimeBuilder.carrierData(ctx.cp)).aload(slots[1]);
+			ctx.body.invokestatic(Objects.requireNonNull(gpu.get(JvmGpuRuntimeBuilder.MATVEC_Q8))).dup();
+			ctx.body.ifnonnull(deviceAnswered);
+			ctx.body.pop().goto_(deviceDeclined);
+			ctx.body.labelBinding(notQuantized);
+			emitAttempt(ctx, gpu, JvmGpuRuntimeBuilder.MATVEC, slots, deviceAnswered);
+			ctx.body.labelBinding(deviceDeclined);
+		}
+		else if (gpu != null) {
 			emitAttempt(ctx, gpu, JvmGpuRuntimeBuilder.MATVEC, slots, deviceAnswered);
 		}
 		// Every rung below reads its arguments on the host, so each is materialized first
@@ -404,11 +419,12 @@ final class JvmSimdCompiler {
 	 *
 	 * <p>
 	 * The two GEMV members of {@link #QUANTIZED_OPERAND} have a third arm ahead of those
-	 * two, for a Q8_0 quantized matrix (a {@code byte[]},
-	 * {@code .kb/quantized-matrix.md}) at the weight position: the remaining array
-	 * operands must then all be {@code float[]} or all {@code double[]}, the two
-	 * activation widths the integer-dot kernel takes. The three arms are exclusive, and
-	 * each ends at the kernel call.
+	 * two, in a program that can build a Q8_0 quantized matrix
+	 * ({@code .kb/quantized-matrix.md}), for one at the weight position: the remaining
+	 * array operands must then all be {@code float[]} or all {@code double[]}, the two
+	 * activation widths the integer-dot kernel takes, and the kernel is handed the
+	 * {@code byte[]} the matrix's holder holds. The three arms are exclusive, and each
+	 * ends at the kernel call.
 	 */
 	private static void emitLaneWidthGuard(JvmLispCompiler.Ctx ctx, String member, int[] slots,
 			MethodCode.Label fallback) {
@@ -418,19 +434,16 @@ final class JvmSimdCompiler {
 		Integer bf16Operand = BF16_OPERAND.get(member);
 		Integer quantizedOperand = QUANTIZED_OPERAND.get(member);
 		MethodCode.Label skipGenerals = ctx.body.newLabel();
-		if (quantizedOperand != null) {
-			// if (!(slot_q instanceof byte[])) goto next arm; then the other array
-			// operands are all float[] or all double[] (decided by the first of them),
-			// else fallback.
-			ClassEntry byteArrayClass = ctx.cp.classEntry("[B");
+		if (quantizedOperand != null && ctx.usesQuantized) {
+			// if (!(slot_q instanceof RontoQuantizedMatrix)) goto next arm; then the
+			// other array operands are all float[] or all double[] (decided by the first
+			// of them), else fallback; admitted, slot_q becomes the matrix's array, which
+			// is what the kernel takes -- the template never names the holder, so it
+			// need not travel with it.
+			ClassEntry carrierClass = JvmQuantizedMatrixRuntimeBuilder.carrierClass(ctx.cp);
 			MethodCode.Label notQuantized = ctx.body.newLabel();
-			ctx.body.aload(slots[quantizedOperand]).instanceOf(byteArrayClass).ifeq(notQuantized);
-			if (ctx.usesIntArray) {
-				// An (unsigned-byte 8) vector is the other byte[]: its slot 0 is the tag.
-				ctx.body.aload(slots[quantizedOperand]).checkcast(byteArrayClass);
-				ctx.body.iconst_0().baload().loadConstant(JvmIntArrayRuntimeBuilder.OCTET_TAG);
-				ctx.body.if_icmpeq(notQuantized);
-			}
+			MethodCode.Label admitted = ctx.body.newLabel();
+			ctx.body.aload(slots[quantizedOperand]).instanceOf(carrierClass).ifeq(notQuantized);
 			int first = quantizedOperand == 0 ? 1 : 0;
 			// if (slot_first instanceof float[]) { others float[] } else { first
 			// double[]; others double[] }
@@ -443,7 +456,7 @@ final class JvmSimdCompiler {
 				}
 				ctx.body.aload(slots[i]).instanceOf(floatArrayClass).ifeq(fallback);
 			}
-			ctx.body.goto_(skipGenerals);
+			ctx.body.goto_(admitted);
 			ctx.body.labelBinding(notFloat);
 			for (int i = 0; i < arrays; i++) {
 				if (i == quantizedOperand) {
@@ -451,6 +464,9 @@ final class JvmSimdCompiler {
 				}
 				ctx.body.aload(slots[i]).instanceOf(doubleArrayClass).ifeq(fallback);
 			}
+			ctx.body.labelBinding(admitted);
+			ctx.body.aload(slots[quantizedOperand]).checkcast(carrierClass);
+			ctx.body.getfield(JvmQuantizedMatrixRuntimeBuilder.carrierData(ctx.cp)).astore(slots[quantizedOperand]);
 			ctx.body.goto_(skipGenerals);
 			ctx.body.labelBinding(notQuantized);
 		}

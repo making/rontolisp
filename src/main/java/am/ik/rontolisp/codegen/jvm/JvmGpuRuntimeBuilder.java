@@ -180,6 +180,12 @@ final class JvmGpuRuntimeBuilder {
 	static final String MATVEC = "matvec";
 
 	/**
+	 * The {@code ops} key of {@link #MATVEC} over a quantized matrix, whose call site
+	 * hands the bridge the matrix's array once it has tested the holder.
+	 */
+	static final String MATVEC_Q8 = "matvecQ8";
+
+	/**
 	 * The {@code ops} keys of the ELEMENT-WISE kernels, one per bridge method. The key is
 	 * the method name, which is what {@link JvmLinalgGpu#kernelKey} composes from the
 	 * member, so the two need no table between them.
@@ -370,6 +376,7 @@ final class JvmGpuRuntimeBuilder {
 				"(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;"));
 		ops.put(MATVEC,
 				cp.methodRef(bridgeClass, "gpuMatvec", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;"));
+		ops.put(MATVEC_Q8, cp.methodRef(bridgeClass, "gpuMatvecQ8", "([BLjava/lang/Object;)Ljava/lang/Object;"));
 		for (String kernel : MAP_KERNELS) {
 			ops.put(kernel, cp.methodRef(bridgeClass, kernel, "(Ljava/lang/Object;)Ljava/lang/Object;"));
 		}

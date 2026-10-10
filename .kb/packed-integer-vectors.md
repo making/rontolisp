@@ -28,17 +28,14 @@ Scheme's bytevectors are the 8-bit pack ([scheme-frontend.md](scheme-frontend.md
   (`.kb/java-interop.md`, "Markers").
   The `%array-alike` allocator is NOT in this tier: it is the general group's `_arrayAlike`
   ([subseq-runtime.md](subseq-runtime.md)).
-- **Trap: `byte[]` is ALSO the quantized matrix** ([quantized-matrix.md](quantized-matrix.md)),
-  whose slot 0 is its format code (1 = Q8_0). Where both can exist (`usesQuantized` and
-  `usesIntArray`) every door taking either reads slot 0: the octet side through
-  `JvmIntArrayRuntimeBuilder.Octets` / `emitOctetTestOnStack`, the matrix side in
-  `JvmFloatArrayRuntimeBuilder.emitQuantizedArm`, `JvmQuantizedMatrixRuntimeBuilder.emitMatrixTest`,
-  `JvmSimdCompiler`'s lane guard, `JvmGpuTemplate.gpuMatvec` and the `java:` sequence readers
-  (`JvmJavaDirectSites._jseq`, the bridge's `packedElements`); the packed-int print branch runs
-  ahead of the matrix's. No format code may be 8. A door that forgets reads a header as data
-  without a word -- pinned by `JvmQuantizedMatrixTest.anOctetVectorAndAQuantizedMatrixAreToldApartWhereBothCanExist`.
-  The travelling Java (`RontoFetch`, `RontoHttpClack`, `JvmObjcPrimitivesTemplate`, `JvmGpuTemplate`)
-  spells the 8 itself.
+- A `byte[]` is ALWAYS an octet vector: the quantized matrix, a `byte[]` too until 2026-10-10,
+  is a holder of its own (`runtime/RontoQuantizedMatrix`, [quantized-matrix.md](quantized-matrix.md)),
+  so `JvmIntArrayRuntimeBuilder.Octets` / `emitOctetTestOnStack` are an `instanceof` and no door
+  reads slot 0 to tell the two apart (until then every door taking either did, and one that forgot
+  read a header as data without a word). Pinned by
+  `JvmQuantizedMatrixTest.anOctetVectorAndAQuantizedMatrixAreToldApartWhereBothCanExist`.
+  The travelling Java (`RontoFetch`, `RontoHttpClack`, `JvmObjcPrimitivesTemplate`) spells the 8
+  itself.
 - wasm-GC: the BARE `TYPE_I8ARR`/`TYPE_I16ARR`/`TYPE_I32ARR`, `(array (mut i8|i16|i32))`,
   types 57-59 in ONE rec group (keeping i32 structurally distinct from `TYPE_LIMBS` under GC
   canonicalization); no wrapper, no dims, `ref.test` discriminates width. `TYPE_IV_SET` (60)

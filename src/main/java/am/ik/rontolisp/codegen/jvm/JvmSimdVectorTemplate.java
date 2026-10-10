@@ -567,9 +567,10 @@ final class JvmSimdVectorTemplate {
 
 	private static @Nullable Object matvec(@Nullable Object w, @Nullable Object x, boolean parallel) {
 		if (w instanceof byte[] qw) {
-			// A Q8_0 quantized matrix (.kb/quantized-matrix.md): the integer-dot GEMV,
-			// the defun bit for bit, into a result of x's width. The call site's guard
-			// admits exactly an f32 or an f64 x here.
+			// A Q8_0 quantized matrix's array (.kb/quantized-matrix.md), which the call
+			// site's guard hands here once it has tested the matrix's holder: the
+			// integer-dot GEMV, the defun bit for bit, into a result of x's width. The
+			// guard admits exactly an f32 or an f64 x here.
 			if (x instanceof float[] fx) {
 				return matvecQ8F(qw, fx, parallel);
 			}
@@ -941,7 +942,8 @@ final class JvmSimdVectorTemplate {
 					"vec:matvec-into: out must not be the same array as w or x (each out element folds over all of x)");
 		}
 		if (w instanceof byte[] qw) {
-			// The guard admits an f32 destination with an f32 x, or f64 with f64.
+			// A quantized matrix's array, as above. The guard admits an f32 destination
+			// with an f32 x, or f64 with f64.
 			if (out instanceof float[] fr) {
 				matvecIntoQ8F(fr, 1 + (int) fr[0], qw, asFloat(x), parallel);
 				return out;

@@ -28,10 +28,10 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 /**
  * The block-quantized weight matrix on the JVM backend ({@code .kb/quantized-matrix.md}):
- * a bare {@code byte[]} of ggml blocks behind an int header, reached through the
- * {@code _qm*} helpers ({@link JvmQuantizedMatrixRuntimeBuilder}) and the {@code byte[]}
- * arms of the {@code _fv*} tier. Every case runs on BOTH backends and compares their
- * output -- a header-offset mistake in hand-written bytecode is a plausible value, not an
+ * a holder of one {@code byte[]} of ggml blocks behind an int header, reached through the
+ * {@code _qm*} helpers ({@link JvmQuantizedMatrixRuntimeBuilder}) and the holder's arms
+ * of the {@code _fv*} tier. Every case runs on BOTH backends and compares their output --
+ * a header-offset mistake in hand-written bytecode is a plausible value, not an
  * exception, and only the interpreter (which has no header) catches it -- then some
  * assert the agreed text against a hand-written expectation.
  *
@@ -158,10 +158,9 @@ class JvmQuantizedMatrixTest {
 
 	@Test
 	void anOctetVectorAndAQuantizedMatrixAreToldApartWhereBothCanExist() throws Exception {
-		// Both are a byte[] on the JVM: the octet vector byte[]{8, e0, ...}, the matrix
-		// its
-		// format code first. Every door that takes either must read the tag -- a missed
-		// one reads an octet vector as a matrix header (or the reverse) without a word.
+		// On the JVM the octet vector is a byte[] and the matrix a holder of one: every
+		// door that takes either tests the holder, so an octet vector whose first octets
+		// spell a matrix header (or the reverse) is never read as the other.
 		String program = """
 				(defparameter *m* (rontolisp:make-quantized-matrix 'q8-0 32))
 				(defparameter *o* (make-array 3 :element-type '(unsigned-byte 8) :initial-contents '(1 200 8)))
