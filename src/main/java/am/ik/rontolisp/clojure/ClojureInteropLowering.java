@@ -9,6 +9,7 @@ import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import am.ik.rontolisp.LispChar;
 import am.ik.rontolisp.LispCons;
@@ -117,29 +118,34 @@ final class ClojureInteropLowering {
 			ended.add(new LispSymbol(LispNames.JAVA_FUNCTIONAL_MARKER));
 		}
 		ended.add(JAVA_FALSE_MARKER);
-		return answered(ctx, operator, ended, bytes);
+		return answered(ctx, operator, ended, bytes, !literal);
 	}
 
 	/**
 	 * The library function a host call's answer goes through where it may carry a
 	 * {@code byte[]} ({@code clojure.lisp}): an {@code (unsigned-byte 8)} vector -- what
 	 * a {@code byte[]} is at a call ending in {@code :octets} -- becomes a byte array,
-	 * and so does one an array the call answers holds; anything else is itself.
+	 * and so does one an array the call answers holds; anything else is itself. The fn
+	 * Java calls in a fn's place reads its arguments through it too
+	 * ({@link #HOST_APPLY}), and so does a proxy's body.
 	 */
 	static final String HOST_ANSWER = "RONTOLISP::%CLOJURE-HOST-ANSWER";
 
 	/** The marker a call answering through {@link #HOST_ANSWER} ends in too. */
 	static final LispSymbol OCTETS_MARKER = new LispSymbol(LispNames.JAVA_OCTETS_MARKER);
 
-	// The java: call over its ended parts, answering through HOST_ANSWER with :octets
-	// where the host is and its answer may carry a byte[].
-	private static LispVal answered(ClojureLowering ctx, LispSymbol operator, List<LispVal> ended, boolean bytes) {
-		if (!bytes || !ctx.hostTarget) {
+	// The java: call over its ended parts where the host is, ending in :octets too when
+	// its answer may carry a byte[] -- answering through HOST_ANSWER -- or a fn it
+	// converts may be handed one, which the fn Java calls reads (hostFunction).
+	private static LispVal answered(ClojureLowering ctx, LispSymbol operator, List<LispVal> ended, boolean bytes,
+			boolean converts) {
+		if (!ctx.hostTarget || !bytes && !converts) {
 			return ClojureLowerUtil.cons(operator, ended);
 		}
 		List<LispVal> marked = new ArrayList<>(ended);
 		marked.add(OCTETS_MARKER);
-		return ClojureLowerUtil.list(new LispSymbol(HOST_ANSWER), ClojureLowerUtil.cons(operator, marked));
+		LispVal call = ClojureLowerUtil.cons(operator, marked);
+		return bytes ? ClojureLowerUtil.list(new LispSymbol(HOST_ANSWER), call) : call;
 	}
 
 	/**
@@ -263,11 +269,111 @@ final class ClojureInteropLowering {
 			// a charset named for the member alone: the host Charset at once
 			return hostObject;
 		}
+		if (ClojureLowerUtil.isDirectFun(argument) || argument instanceof LispSymbol local && isPlainLocal(ctx, local)
+				&& Objects.requireNonNull(ctx.hostClasses.get(local.name())).function()) {
+			return hostFunction(ctx, argument);
+		}
 		if (isLiteral(argument) || isPlainForm(argument)
 				|| argument instanceof LispSymbol local && isPlainLocal(ctx, local)) {
 			return argument;
 		}
 		return ClojureLowerUtil.list(new LispSymbol(HOST_VALUE), crossed);
+	}
+
+	/**
+	 * The library function the fn Java calls in a fn's place applies it through
+	 * ({@code clojure.lisp}): the fn over the arguments as {@link #HOST_ANSWER} reads
+	 * them, its answer through {@link #HOST_FN_ANSWER}.
+	 */
+	static final String HOST_APPLY = "RONTOLISP::%CLOJURE-HOST-APPLY";
+
+	/**
+	 * The library function a fn's answer to Java goes through: a byte array the byte[] of
+	 * its octets, anything else as it is.
+	 */
+	static final String HOST_FN_ANSWER = "RONTOLISP::%CLOJURE-HOST-FN-ANSWER";
+
+	/**
+	 * The fn Java calls in the place of a fn form, a {@code defn} or a local bound to a
+	 * fn a host call hands it, as the oracle's functional interface calls its fn: the fn
+	 * over its arguments as Clojure values -- a {@code byte[]} a byte array, the call
+	 * ending in {@code :octets} ({@link #answered}) -- answering a byte array as its
+	 * {@code byte[]}. Still a fn form, so the site resolves on its kind as before: a fn
+	 * form whose parameters are plain names reads them in place, any other fn is applied
+	 * through {@link #HOST_APPLY}. A fn in a variable is wrapped when it runs
+	 * ({@code %clojure-host-fn}, {@link #HOST_VALUE}).
+	 * @param ctx the hub
+	 * @param fn the lowered fn form, or the local holding one
+	 * @return the fn Java calls
+	 */
+	static LispVal hostFunction(ClojureLowering ctx, LispVal fn) {
+		LispVal inPlace = readingInPlace(fn);
+		if (inPlace != null) {
+			return inPlace;
+		}
+		LispSymbol args = ctx.freshTemp();
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"),
+				ClojureLowerUtil.list(ClojureLowering.AMPERSAND_REST, args),
+				ClojureLowerUtil.list(new LispSymbol(HOST_APPLY), fn, args));
+	}
+
+	/**
+	 * {@code (lambda (p ...) (declare ...) body...)} reading each parameter through
+	 * {@link #HOST_ANSWER} and answering through {@link #HOST_FN_ANSWER}: the same
+	 * closure, no call more. Null for any form but a {@code lambda} whose parameters are
+	 * names and {@code &rest}; a parameter its declarations ignore is left alone.
+	 */
+	private static @Nullable LispVal readingInPlace(LispVal fn) {
+		if (!(fn instanceof LispCons cell) || !ClojureLowerUtil.isSymbolNamed(cell.car(), "LAMBDA")
+				|| !cell.isProperList()) {
+			return null;
+		}
+		List<LispVal> parts = cell.toList();
+		if (parts.size() < 2) {
+			return null;
+		}
+		List<LispVal> params = parts.get(1) instanceof LispNil ? List.of() : ClojureLowerUtil.items(parts.get(1));
+		if (params == null) {
+			return null;
+		}
+		int body = 2;
+		Set<String> ignored = new HashSet<>();
+		while (body < parts.size() && parts.get(body) instanceof LispCons declaration
+				&& ClojureLowerUtil.isSymbolNamed(declaration.car(), "DECLARE")) {
+			for (LispVal spec : declaration.toList().subList(1, declaration.toList().size())) {
+				List<LispVal> named = ClojureLowerUtil.items(spec);
+				if (named != null && !named.isEmpty() && (ClojureLowerUtil.isSymbolNamed(named.get(0), "IGNORE")
+						|| ClojureLowerUtil.isSymbolNamed(named.get(0), "IGNORABLE"))) {
+					for (LispVal name : named.subList(1, named.size())) {
+						if (name instanceof LispSymbol symbol) {
+							ignored.add(symbol.name());
+						}
+					}
+				}
+			}
+			body++;
+		}
+		List<LispVal> bindings = new ArrayList<>();
+		for (LispVal param : params) {
+			if (!(param instanceof LispSymbol symbol) || symbol.isKeyword()) {
+				return null;
+			}
+			if (ClojureLowering.AMPERSAND_REST.name().equals(symbol.name())) {
+				continue;
+			}
+			if (symbol.name().startsWith("&")) {
+				return null;
+			}
+			if (!ignored.contains(symbol.name())) {
+				bindings.add(ClojureLowerUtil.list(symbol, ClojureLowerUtil.list(new LispSymbol(HOST_ANSWER), symbol)));
+			}
+		}
+		List<LispVal> forms = parts.subList(body, parts.size());
+		LispVal run = bindings.isEmpty() ? ClojureLowerUtil.cons(ClojureLowerUtil.sym("progn"), forms)
+				: ClojureLowerUtil.letForm(bindings, forms);
+		List<LispVal> rebuilt = new ArrayList<>(parts.subList(0, body));
+		rebuilt.add(ClojureLowerUtil.list(new LispSymbol(HOST_FN_ANSWER), run));
+		return ClojureLowerUtil.list(rebuilt);
 	}
 
 	/**
@@ -351,7 +457,7 @@ final class ClojureInteropLowering {
 	 * @return the read
 	 */
 	static LispVal fieldCall(ClojureLowering ctx, LispVal target, String field, boolean bytes) {
-		return answered(ctx, JAVA_FIELD, List.of(target, LispString.literal(field), JAVA_FALSE_MARKER), bytes);
+		return answered(ctx, JAVA_FIELD, List.of(target, LispString.literal(field), JAVA_FALSE_MARKER), bytes, false);
 	}
 
 	/**
@@ -1548,6 +1654,10 @@ final class ClojureInteropLowering {
 		LispVal miss = ClojureRefusals.refusal(ClojureRefusals.ILLEGAL_ARGUMENT,
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("concatenate"), ClojureLowerUtil.quoted("string"),
 						LispString.literal("no proxy method: "), got));
+		List<String> implemented = new ArrayList<>();
+		for (LispVal name : javaProxy) {
+			implemented.add(((LispString) name).value());
+		}
 		LispVal dispatch = miss;
 		for (int i = items.size() - 1; i >= 3; i--) {
 			List<LispVal> meth = ClojureLowerUtil.items(items.get(i));
@@ -1581,18 +1691,85 @@ final class ClojureInteropLowering {
 										ClojureLowerUtil.list(fnParams), ctx.bodyOf(meth.subList(2, meth.size()))),
 								rest));
 			LispVal test = ClojureLowerUtil.list(ClojureLowerUtil.sym("equal"), got, LispString.literal(methodName));
-			dispatch = ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), test, run, dispatch);
+			dispatch = ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), test,
+					proxyAnswer(ctx, run, implemented, methodName, fnParams.size()), dispatch);
 		}
 		LispVal callable = ClojureLowerUtil
 			.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(List.of(ClojureLowering.AMPERSAND_REST, all)),
 					ClojureLowerUtil.list(ClojureLowerUtil.sym("let"), ClojureLowerUtil.list(List.of(
 							ClojureLowerUtil.list(got, ClojureLowerUtil.list(ClojureLowerUtil.sym("car"), all)),
-							ClojureLowerUtil.list(rest, ClojureLowerUtil.list(ClojureLowerUtil.sym("cdr"), all)))),
+							ClojureLowerUtil.list(rest,
+									proxyArguments(ctx, ClojureLowerUtil.list(ClojureLowerUtil.sym("cdr"), all))))),
 							dispatch));
 		javaProxy.add(callable);
-		// the body is handed Java's false as the false object
+		// the body is handed Java's false as the false object, and a byte[] as a byte
+		// array
 		javaProxy.add(JAVA_FALSE_MARKER);
+		if (ctx.hostTarget) {
+			javaProxy.add(OCTETS_MARKER);
+		}
 		return ClojureLowerUtil.cons(JAVA_PROXY, javaProxy);
+	}
+
+	/**
+	 * The Java arguments of a proxy method as its body is handed them, where the host is:
+	 * through {@link #HOST_ANSWER}, so a {@code byte[]} -- the proxy ends in
+	 * {@code :octets} -- is a byte array over it.
+	 */
+	private static LispVal proxyArguments(ClojureLowering ctx, LispVal arguments) {
+		return ctx.hostTarget ? ClojureLowerUtil.list(new LispSymbol(HOST_ANSWER), arguments) : arguments;
+	}
+
+	/** What a value goes to Java as when it is the oracle's own object. */
+	static final String HOST_MEMBER = "RONTOLISP::%CLOJURE-HOST-MEMBER";
+
+	/**
+	 * A proxy method's answer as Java takes it, where the host is: through
+	 * {@link #HOST_MEMBER} -- a byte array the {@code byte[]}, a vector the oracle's
+	 * {@code List}, a map its {@code Map}, a keyword an object Java hands back as the
+	 * keyword -- when a method of the name and count answers a reference; a void or
+	 * primitive one takes the answer as it is (converting one a void method drops would
+	 * realize a lazy seq for nothing).
+	 */
+	private static LispVal proxyAnswer(ClojureLowering ctx, LispVal run, List<String> types, String name, int arity) {
+		return ctx.hostTarget && answersReference(types, name, arity)
+				? ClojureLowerUtil.list(new LispSymbol(HOST_MEMBER), run) : run;
+	}
+
+	/**
+	 * Whether one of the classes or interfaces has a public or protected instance method
+	 * of the name and parameter count answering a reference type. A type that does not
+	 * load counts none.
+	 */
+	private static boolean answersReference(List<String> types, String name, int arity) {
+		for (String type : types) {
+			Class<?> found;
+			try {
+				found = ClojureHostClasses.load(type);
+			}
+			catch (ClassNotFoundException | LinkageError ex) {
+				continue;
+			}
+			for (java.lang.reflect.Method method : found.getMethods()) {
+				if (answersReference(method, name, arity)) {
+					return true;
+				}
+			}
+			for (Class<?> c = found; c != null; c = c.getSuperclass()) {
+				for (java.lang.reflect.Method method : c.getDeclaredMethods()) {
+					if (java.lang.reflect.Modifier.isProtected(method.getModifiers())
+							&& answersReference(method, name, arity)) {
+						return true;
+					}
+				}
+			}
+		}
+		return false;
+	}
+
+	private static boolean answersReference(java.lang.reflect.Method method, String name, int arity) {
+		return method.getName().equals(name) && method.getParameterCount() == arity
+				&& !java.lang.reflect.Modifier.isStatic(method.getModifiers()) && !method.getReturnType().isPrimitive();
 	}
 
 	// Object's equals(Object), hashCode() and toString(), which java:proxy never routes
@@ -1686,6 +1863,11 @@ final class ClojureInteropLowering {
 		LispVal miss = ClojureRefusals.refusal(ClojureRefusals.ILLEGAL_ARGUMENT,
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("concatenate"), ClojureLowerUtil.quoted("string"),
 						LispString.literal("no proxy method: "), got));
+		List<String> implemented = new ArrayList<>();
+		implemented.add(superclass);
+		for (LispVal name : ifaceNames) {
+			implemented.add(((LispString) name).value());
+		}
 		LispVal dispatch = miss;
 		for (int i = items.size() - 1; i >= 3; i--) {
 			List<LispVal> meth = ClojureLowerUtil.items(items.get(i));
@@ -1722,7 +1904,8 @@ final class ClojureInteropLowering {
 				ctx.proxyMethods.pop();
 			}
 			LispVal test = ClojureLowerUtil.list(ClojureLowerUtil.sym("equal"), got, LispString.literal(methodName));
-			dispatch = ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), test, run, dispatch);
+			dispatch = ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), test,
+					proxyAnswer(ctx, run, implemented, methodName, fnParams.size() - 1), dispatch);
 		}
 		List<LispVal> methodLiterals = new ArrayList<>();
 		for (String name : methodNames) {
@@ -1730,6 +1913,11 @@ final class ClojureInteropLowering {
 		}
 		javaSubclass.add(quotedList(methodLiterals));
 		javaSubclass.addAll(ctorArgs);
+		if (ctx.hostTarget) {
+			// the body reads the Java arguments as Clojure values (proxyArguments)
+			dispatch = ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
+					ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(rest, proxyArguments(ctx, rest)))), dispatch);
+		}
 		LispVal callable = ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"),
 				ClojureLowerUtil.list(List.of(thisSym, got, ClojureLowering.AMPERSAND_REST, rest)), dispatch);
 		javaSubclass.add(callable);
@@ -1737,8 +1925,12 @@ final class ClojureInteropLowering {
 			// a fn constructor argument implements its interface by its arguments
 			javaSubclass.add(new LispSymbol(LispNames.JAVA_FUNCTIONAL_MARKER));
 		}
-		// the body is handed Java's false as the false object
+		// the body is handed Java's false as the false object, and a byte[] as a byte
+		// array (so is a fn constructor argument)
 		javaSubclass.add(JAVA_FALSE_MARKER);
+		if (ctx.hostTarget) {
+			javaSubclass.add(OCTETS_MARKER);
+		}
 		return ClojureLowerUtil.cons(JAVA_SUBCLASS, javaSubclass);
 	}
 

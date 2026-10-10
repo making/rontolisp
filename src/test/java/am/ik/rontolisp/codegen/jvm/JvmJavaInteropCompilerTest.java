@@ -1322,6 +1322,16 @@ class JvmJavaInteropCompilerTest {
 			.isEqualTo(JavaImplementationPrograms.JAVA_FALSE_OUTPUT);
 	}
 
+	// Mirrors
+	// JavaInteropTest#anImplementationMadeAtOctetsIsHandedAByteArrayAsAnOctetVector:
+	// the generated classes' callbacks hand a copy through _jcbo and write it back
+	// through _jwbo, the bridge's Proxy through its own.
+	@Test
+	void anImplementationMadeAtOctetsIsHandedAByteArrayAsAnOctetVector() throws Exception {
+		assertThat(compileAndRun(JavaImplementationPrograms.OCTETS))
+			.isEqualTo(JavaImplementationPrograms.OCTETS_OUTPUT);
+	}
+
 	// Mirrors JavaInteropTest#aHandleIsItsTextToJavaAndItsValueBack:
 	// runtime/RontoJavaHandle
 	// through _jhandle, unwrapped by _junm / _jarr at a direct site and by the bridge's

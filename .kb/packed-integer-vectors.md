@@ -21,9 +21,11 @@ Scheme's bytevectors are the 8-bit pack ([scheme-frontend.md](scheme-frontend.md
   otherwise; `JvmIntArrayRuntimeBuilder` `_ivAref1`/`_ivAset1`/`_ivDims`/`_ivLength`/
   `_ivToGeneral`/`_ivElementType`/`_ivMake`/`_ivRequireGeneral` carry both arms, gated on
   `Ctx.usesIntArray` (gate off = byte-identical build); dispatch chains iv -> fv -> general.
-  A `java:` form ending in `:octets` turns the gate on (`JvmLispCompiler.programAsksJavaForOctets`):
-  the octet vector its `byte[]` answer becomes is made by the `java:` runtime, not by a scanned
-  `make-array`, and printed `#<java [B>` without the `_iv*` arms (`.kb/java-interop.md`, "Markers").
+  A `java:` form ending in `:octets` -- a call or field read, or a `java:reify` / `java:proxy` /
+  `java:subclass` -- turns the gate on (`JvmLispCompiler.programAsksJavaForOctets`): the octet
+  vector its `byte[]` answer, or one Java hands its functions, becomes is made by the `java:`
+  runtime, not by a scanned `make-array`, and printed `#<java [B>` without the `_iv*` arms
+  (`.kb/java-interop.md`, "Markers").
   The `%array-alike` allocator is NOT in this tier: it is the general group's `_arrayAlike`
   ([subseq-runtime.md](subseq-runtime.md)).
 - **Trap: `byte[]` is ALSO the quantized matrix** ([quantized-matrix.md](quantized-matrix.md)),

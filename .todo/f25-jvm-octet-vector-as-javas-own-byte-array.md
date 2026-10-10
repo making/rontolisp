@@ -24,11 +24,16 @@ Pinned as the deviation by
   its own, or a header the octets lack). `JvmIntArrayRuntimeBuilder.OCTET_TAG` is read in 20
   files (31 references on 2026-10-10: the `_iv*` runtime, SIMD, GPU, the travelling fetch,
   inflate and HTTP runtimes, `_jseq`, the bridge), each indexing the octets from 1.
-- The table above is the whole behavioral gain; weigh it against that reach before starting.
+- The table above is the whole behavioral gain, with two cases of the callbacks' copy (a
+  function a `byte[]` is handed at `:octets`): a `byte[]` inside an array argument is not written
+  back, and a write Java makes to its array while the function runs is lost. Weigh it against
+  that reach before starting.
 
 ## Plan
 
 1. The quantized matrix's own carrier, then every `OCTET_TAG` reader indexing from 0.
 2. Drop the copy, the sharing and the write-back on the JVM (`RontoJavaBytesView` offset 0,
-   `_jview`'s `:bytes` arm, the `:octets` unmarshal's copy in `_juno` and the bridge).
+   `_jview`'s `:bytes` arm, the `:octets` unmarshal's copy in `_juno` and the bridge, and the
+   callbacks' `_jcbo` / `_jcbf` / `_jwbo` with the bridge's `callbackArguments` /
+   `writeBackOctets`, `.kb/java-interop.md` "Markers").
 3. Flip the pin above to the oracle's answer on both backends.

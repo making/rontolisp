@@ -1323,12 +1323,14 @@ public final class ClojureLowering {
 	 * A {@code let} local bound to a plain value, a construction literal's or another
 	 * value no Clojure value Java lacks can be (a literal, a fn form:
 	 * {@code ClojureInteropLowering.isPlainForm}): the construction's FQN ({@code null}
-	 * for any other), the plain name (for the shadow walk) and the scope depth that owns
-	 * it. Only {@code let} records -- its bindings never rebind, unlike {@code loop}
-	 * targets; every other binder hides entries through the shadow walk in
-	 * {@code ClojureInteropLowering.hostClassOf} instead of recording.
+	 * for any other), the plain name (for the shadow walk), the scope depth that owns it
+	 * and whether the value is a fn, which a host call hands Java the fn it calls in its
+	 * place for ({@code ClojureInteropLowering.hostFunction}). Only {@code let} records
+	 * -- its bindings never rebind, unlike {@code loop} targets; every other binder hides
+	 * entries through the shadow walk in {@code ClojureInteropLowering.hostClassOf}
+	 * instead of recording.
 	 */
-	record HostClass(@Nullable String fqn, String name, int depth) {
+	record HostClass(@Nullable String fqn, String name, int depth, boolean function) {
 	}
 
 	/**

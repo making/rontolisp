@@ -33,9 +33,10 @@ back](../../guides/java-interop.md#javas-false-back-java-false)):
 (java:static "java.lang.Boolean" "parseBoolean" "no" :java-false)   ; => |false|
 ```
 
-Ending it in `:octets` answers a `byte[]` as an `(unsigned-byte 8)` vector of its octets (the
-guide's [Octets back](../../guides/java-interop.md#octets-back-octets)); a
-[`:bytes` view](java-view.md) hands one to Java:
+Ending it in `:octets` answers a `byte[]` as an `(unsigned-byte 8)` vector of its octets, and
+hands a function the call converts one the same way (the guide's [Octets
+back](../../guides/java-interop.md#octets-back-octets)); a [`:bytes` view](java-view.md) hands
+one to Java:
 
 ```lisp
 (java:static "java.util.Arrays" "copyOf"

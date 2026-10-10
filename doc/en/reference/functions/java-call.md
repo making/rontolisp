@@ -48,7 +48,8 @@ back](../../guides/java-interop.md#javas-false-back-java-false)):
 
 Ending the call in `:octets`, beside the other markers, answers a `byte[]` -- the result, or
 an element of an array it answers -- as an `(unsigned-byte 8)` vector of its octets rather
-than a list of signed bytes (the guide's [Octets back](../../guides/java-interop.md#octets-back-octets)):
+than a list of signed bytes, and hands one to a function the call converts the same way, what
+the function stores going back into Java's array (the guide's [Octets back](../../guides/java-interop.md#octets-back-octets)):
 
 ```lisp
 (let ((o (java:new "java.io.ByteArrayOutputStream")))

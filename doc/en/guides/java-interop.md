@@ -183,15 +183,28 @@ throws, which the call reports as the method's failure:
 A Java array comes back as a list, so a `byte[]` is a list of signed bytes. A `java:new`,
 `java:call`, `java:static` or `java:field` ending in `:octets` answers a `byte[]` -- the
 result, a field's value, an element of an array it answers -- as an `(unsigned-byte 8)` vector
-of its octets instead, beside the other markers in any order. A function the call converts,
-and a `java:proxy`, `java:reify` or `java:subclass`'s, is still handed a list. On the
-interpreter the vector is Java's array itself; a compiled program's is a copy. A
-[`:bytes` view](#views-javaview) hands one to Java:
+of its octets instead, beside the other markers in any order. On the interpreter the vector is
+Java's array itself; a compiled program's is a copy. A [`:bytes` view](#views-javaview) hands
+one to Java:
 
 ```lisp
 (let ((md (java:static "java.security.MessageDigest" "getInstance" "MD5")))
   (subseq (java:call md "digest" (java:view 'v (make-array 0 :element-type '(unsigned-byte 8)) :bytes) :octets)
           0 4))   ; => #(212 29 140 217)
+```
+
+A function the call converts, and every function of a `java:proxy`, `java:reify` or
+`java:subclass` ending in `:octets`, is handed a `byte[]` -- an argument, or an element of
+one -- as such a vector too. What the function stores into it Java reads: on the interpreter
+at once, in a compiled program when the function returns or throws, each argument's octets
+going back into its array (an element's do not). An array Java hands twice is one vector:
+
+```lisp
+(let ((in (java:subclass "java.io.InputStream" '() '("read")
+            (lambda (this name &optional buf off len)
+              (if (and buf (= off 0)) (progn (setf (aref buf 0) 7) 1) -1))
+            :octets)))
+  (java:call in "readNBytes" 3 :octets))   ; => #(7)
 ```
 
 ### Handles: java:handle

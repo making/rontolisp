@@ -8,6 +8,8 @@
 
 スーパークラスがある場合、各本体はプロキシオブジェクトを `this` に束縛し、`(proxy-super method args...)` はスーパークラスの実装を呼びます。名前を挙げたメソッドは本体を実行します（`toString`/`equals`/`hashCode` を含みます）。名前を挙げなかったメソッドは、クラスが実装していれば継承し、実装がなければ呼ばれたときにメソッド名とともに拒否されます。ベクタ内の 2 つめ以降のクラス、重複したメソッド、`final` のスーパークラス、ベクタでない引数ベクタは名前を上げて拒否され、フィールドへの書き込み（`set!`）も拒否されます。インタープリターと JVM でのみ動作し、wasm バックエンドは `java:` を拒否します。
 
+Java がメソッドに渡す `byte[]` はそれを格納領域とする[バイト配列](byte-array.md)で、本体がそこへ書き込んだ値はメソッドが戻った時点で Java から読めます。参照を返すメソッドは、値自身のオブジェクトを Java に渡します。バイト配列はその `byte[]`、ベクタは `List`、マップは `Map`、キーワードは Java がキーワードとして返すオブジェクトです。
+
 ```clojure
 (println (.get (proxy [java.util.function.Supplier] [] (get [] "p")))) ; p
 ```
@@ -28,4 +30,11 @@
 (def f (proxy [java.io.File] ["x"]
          (toString [] (str "super-was:" (proxy-super toString)))))
 (println (.toString f)) ; super-was:x
+```
+
+```clojure
+(def in (proxy [java.io.InputStream] []
+          (read [buf off len] (aset buf off (byte 7)) 1)))
+(def b (byte-array 2))
+(println (.read in b 0 2) (vec b)) ; 1 [7 0]
 ```

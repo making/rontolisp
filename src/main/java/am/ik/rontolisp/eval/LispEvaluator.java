@@ -5265,7 +5265,7 @@ public final class LispEvaluator {
 		String jproxy = PackageRegistry.qualify(LispNames.JAVA_PKG, LispNames.JAVA_PROXY);
 		this.globalEnv.defineFunction(jproxy, new LispFunction(jproxy, all -> {
 			// The markers ending the call, after the callable: :java-false hands the
-			// callable Java's false as |false|.
+			// callable Java's false as |false|, :octets a byte[] as an octet vector.
 			int markers = am.ik.rontolisp.compiler.JavaMarkers.count(all, 2);
 			List<LispVal> args = all.subList(0, all.size() - markers);
 			if (args.size() < 2) {

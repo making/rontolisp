@@ -22,7 +22,7 @@
 ; => ("over!" "x" "x")
 ```
 
-callable の後ろを `:functional` で終えると、インターフェースが期待されるコンストラクタ引数の関数は、`java:proxy` としてではなくメソッドの引数だけで呼ばれる実装になります（`java:new` の `:functional` と同じです）。`:java-false` で終えると、callable に Java の false を `nil` ではなく `|false|` として渡します (ガイドの [Java の false を受け取る](../../guides/java-interop.md#javas-false-back-java-false))。
+callable の後ろを `:functional` で終えると、インターフェースが期待されるコンストラクタ引数の関数は、`java:proxy` としてではなくメソッドの引数だけで呼ばれる実装になります（`java:new` の `:functional` と同じです）。`:java-false` で終えると、callable に Java の false を `nil` ではなく `|false|` として渡し、`:octets` で終えると `byte[]` をそのオクテットを持つ `(unsigned-byte 8)` のベクタとして渡します。callable が格納した値は Java の配列へ書き戻されます (ガイドの [Java の false を受け取る](../../guides/java-interop.md#javas-false-back-java-false)、[バイト列を受け取る](../../guides/java-interop.md#octets-back-octets))。
 
 ## コンパイル済みプログラムでは
 

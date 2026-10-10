@@ -18,7 +18,7 @@
 (java:static "java.lang.Boolean" "parseBoolean" "no" :java-false)   ; => |false|
 ```
 
-`:octets` で終えると、`byte[]` をそのオクテットを持つ `(unsigned-byte 8)` のベクタとして返します (ガイドの[バイト列を受け取る](../../guides/java-interop.md#octets-back-octets))。Java へ `byte[]` を渡すには [`:bytes` のビュー](java-view.md)を使います。
+`:octets` で終えると、`byte[]` をそのオクテットを持つ `(unsigned-byte 8)` のベクタとして返し、呼び出しが変換する関数にも同じ形で渡します (ガイドの[バイト列を受け取る](../../guides/java-interop.md#octets-back-octets))。Java へ `byte[]` を渡すには [`:bytes` のビュー](java-view.md)を使います。
 
 ```lisp
 (java:static "java.util.Arrays" "copyOf"

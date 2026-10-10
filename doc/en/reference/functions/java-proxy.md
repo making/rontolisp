@@ -97,6 +97,10 @@ back](../../guides/java-interop.md#javas-false-back-java-false)):
 ; => (|false|)
 ```
 
+Ending it in `:octets` hands the callable a `byte[]` -- an argument, or an element of one --
+as an `(unsigned-byte 8)` vector of its octets, what the callable stores going back into
+Java's array (the guide's [Octets back](../../guides/java-interop.md#octets-back-octets)).
+
 ## Several interfaces
 
 Every name before the callable is an interface the one object implements, so Java can

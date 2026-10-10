@@ -124,12 +124,22 @@ Java の false は Common Lisp 唯一の偽である `nil` として返ります
 
 ### バイト列を受け取る: `:octets`
 
-Java の配列はリストとして返るので、`byte[]` は符号付きバイトのリストになります。`:octets` で終わる `java:new`・`java:call`・`java:static`・`java:field` は、`byte[]` (結果、フィールドの値、返した配列の要素) を、そのオクテットを持つ `(unsigned-byte 8)` のベクタとして返します。ほかのマーカーとの順序は問いません。呼び出しが変換する関数や、`java:proxy`・`java:reify`・`java:subclass` の関数に渡る `byte[]` は、これまでどおりリストです。インタプリタのベクタは Java の配列そのものを格納領域とし、コンパイル済みプログラムのベクタはその複製です。Java へ `byte[]` を渡すには [`:bytes` のビュー](#views-javaview)を使います。
+Java の配列はリストとして返るので、`byte[]` は符号付きバイトのリストになります。`:octets` で終わる `java:new`・`java:call`・`java:static`・`java:field` は、`byte[]` (結果、フィールドの値、返した配列の要素) を、そのオクテットを持つ `(unsigned-byte 8)` のベクタとして返します。ほかのマーカーとの順序は問いません。インタプリタのベクタは Java の配列そのものを格納領域とし、コンパイル済みプログラムのベクタはその複製です。Java へ `byte[]` を渡すには [`:bytes` のビュー](#views-javaview)を使います。
 
 ```lisp
 (let ((md (java:static "java.security.MessageDigest" "getInstance" "MD5")))
   (subseq (java:call md "digest" (java:view 'v (make-array 0 :element-type '(unsigned-byte 8)) :bytes) :octets)
           0 4))   ; => #(212 29 140 217)
+```
+
+呼び出しが変換する関数と、`:octets` で終わる `java:proxy`・`java:reify`・`java:subclass` のすべての関数にも、`byte[]` (引数、またはその要素) は同じベクタとして渡ります。関数がそこへ格納した値は Java から読めます。インタプリタではその場で、コンパイル済みプログラムでは関数が戻るか投げた時点で、各引数のオクテットがその配列へ書き戻されます (要素のオクテットは書き戻されません)。Java が同じ配列を 2 度渡すと、1 つのベクタになります。
+
+```lisp
+(let ((in (java:subclass "java.io.InputStream" '() '("read")
+            (lambda (this name &optional buf off len)
+              (if (and buf (= off 0)) (progn (setf (aref buf 0) 7) 1) -1))
+            :octets)))
+  (java:call in "readNBytes" 3 :octets))   ; => #(7)
 ```
 
 ### ハンドル: java:handle

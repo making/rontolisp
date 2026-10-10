@@ -43,7 +43,9 @@ Ending the form in `:functional`, after the callable, makes a function construct
 argument passed where an interface is expected implement it by the method's arguments
 instead of as a `java:proxy` (`java:new`'s `:functional`). Ending it in `:java-false` hands
 the callable Java's false as `|false|` rather than `nil` (the guide's [Java's false
-back](../../guides/java-interop.md#javas-false-back-java-false)).
+back](../../guides/java-interop.md#javas-false-back-java-false)), and in `:octets` a `byte[]`
+as an `(unsigned-byte 8)` vector of its octets, what the callable stores going back into
+Java's array (the guide's [Octets back](../../guides/java-interop.md#octets-back-octets)).
 
 ## In a compiled program
 

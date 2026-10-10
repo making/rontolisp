@@ -2397,8 +2397,9 @@ namespace` but the ones no measured library names (`inspector`, `java.browse`,
   is the byte array only on the interpreter
   (`ClojureInteropTest#anArrayJavaKeepsIsTheByteArrayItselfOnlyOnTheInterpreter` pins both;
   todo `f25`); a `byte[]` coming back is a new byte array, never
-  `identical?` to one that went out; a `byte[]` a `proxy` / `reify` method or a fn is handed is
-  still a list (`:octets` reads only answers; todo `f24`).
+  `identical?` to one that went out -- also one Java hands a fn, a `proxy` or a face's method
+  ("Java interop", f24), whose JVM copy is written back when the method returns or throws, a
+  `byte[]` inside an array argument not.
 - **Pins**: clojure-spec `byte-array-makes-a-mutable-array-of-signed-bytes`,
   `a-byte-array-is-no-collection-yet-seqs-its-bytes`,
   `strings-and-byte-arrays-convert-in-a-charset`,
@@ -2412,6 +2413,8 @@ namespace` but the ones no measured library names (`inspector`, `java.browse`,
   `ClojureLibraryTest#aProgramMakingNoByteArraySplicesTheLibraryWithoutItsByteArrayArms`,
   `ClojureInteropTest#aByteArrayCrossesTheJavaBoundaryAsItsBytes`,
   `#aByteArrayAJavaMemberAnswersIsAByteArray`, `#aByteArrayReachesJavaAsTheByteArrayJavaStoresInto`,
+  `#aByteArrayJavaHandsAProxyIsOneItStoresInto`, `#aByteArrayJavaHandsAFnIsOneItStoresInto`,
+  `#aProxyOrTypeIsHandedAByteArrayAndAnswersJavaTheOraclesObject`,
   `#clojureJavaShellRunsAHostProcessLikeTheOracle`, `ClojureRingAdapterTest` (`/bytes`),
   `ClojureLibraryTest#aProgramMakingNoByteArraySplicesTheLibraryWithoutItsByteArrayArms` (a
   `java:call` keeps the arms on a host target, not on wasm).
@@ -3601,7 +3604,10 @@ as itself.
   stays out of keeps its temporaries): `(lambda (x) (java:reify '("I" ...
   "java.lang.Comparable") :value x :class "C" "m(P)" (lambda (a) ...) ... :java-false))` over
   the literal names, so the JVM resolves it to a generated class and nothing reflects
-  (`.kb/java-interop.md`, `:value`). `C` is the deftype's class or a reify's `<ns>$reify`. Each
+  (`.kb/java-interop.md`, `:value`; the form ends in `:octets` too since f24, and each parameter
+  of a type `ClojureInteropLowering.carriesBytes` is read through `%clojure-host-answer`, a view
+  call's before `%clojure-host-member`, so a `byte[]` Java hands a method is a byte array). `C`
+  is the deftype's class or a reify's `<ns>$reify`. Each
   method of the interfaces' union (reflection over `ClojureHostClasses.load`, `mostSpecific`
   like `java:reify`) the body defines AT ITS PARAMETER COUNT (`defines`, the target counted) --
   or that is abstract and has a row entry, the `AbstractMethodError` refusal
@@ -3902,6 +3908,51 @@ The `java:` surface (`.kb/java-interop.md`); interpreter and JVM only -- wasm co
   `System/arraycopy` refused the `List`, `Objects/toString` answered `[B` (the view's printer);
   after, oracle-identical on the interpreter and the JVM (`aByteArrayAJavaMemberAnswersIsAByteArray`,
   `aByteArrayReachesJavaAsTheByteArrayJavaStoresInto`).
+- A `byte[]` Java hands a fn, a `proxy` or a face's method is a byte array, and one they answer
+  Java's `byte[]` (f24, 2026-10-10). The `java:` half is `:octets` reaching callbacks
+  (`.kb/java-interop.md`, "Markers": the interpreter hands Java's own array, a compiled program a
+  copy written back when the function returns or throws). The Clojure half reads each argument
+  through `%clojure-host-answer`, which is the identity on every Clojure value (none is a raw
+  octet vector; a keyword-headed list is a wrapper), so a conversion costs only the walk:
+  - a fn: Java calls a fn of its own over it, as the oracle's functional interface calls its
+    fn. `ClojureInteropLowering.hostCall` ends every call with a non-literal argument (the
+    `:functional` ones) in `:octets` too where the host is -- without `%clojure-host-answer`
+    around the answer when it carries no `byte[]` (`answered(..., bytes, converts)`), so the
+    site keeps its declared type. `hostArgument` hands a fn form, a `defn` (`#'f`) or a `let`
+    local bound to one (`HostClass.function`, set by `noteHostClass` from `isDirectFun`) through
+    `hostFunction`: still a fn form, so the site resolves on FUNCTION as before -- a `lambda`
+    whose parameters are names and `&rest` rebinds each (an ignored one left alone) through
+    `%clojure-host-answer` and answers through `%clojure-host-fn-answer`, in place, no call
+    more; any other is `(lambda (&rest a) (%clojure-host-apply f a))`. A fn in a variable
+    reaches `%clojure-host-value`, whose fn branch is now `%clojure-host-fn`, the same adapter
+    made when it runs. The answer is converted for a byte array only (its `:bytes` view):
+    the adapter cannot know the method's return type, and converting an answer a void method
+    drops would realize a lazy seq or walk a collection per call (`(.forEach l (fn [x] (swap!
+    acc conj x)))` would be quadratic), so a vector still crosses as an `ArrayList` copy and a
+    map, set, keyword or ratio is refused (`cannot return`), and Java never hands the fn back
+    as itself (the oracle's fn IS a `Runnable`/`Callable`/`Comparator`) -- documented
+    deviation, todo `f33`. Identity was already the generated implementation's before f24, so
+    the adapter loses nothing; the Comparator reading (`_jcmp`, its second call) goes through
+    it unchanged.
+  - a `proxy`: `java:proxy` / `java:subclass` end in `:octets`; the callable rebinds its
+    argument list through `%clojure-host-answer` (`proxyArguments`), and a method name with a
+    public or protected instance method of the body's count answering a reference
+    (`answersReference`, over the interfaces and the superclass chain by reflection) answers
+    through `%clojure-host-member` (`proxyAnswer`) -- a void or primitive one as it is, so a
+    void `run` drops a lazy seq unrealized as the oracle does. A byte array is then its
+    `byte[]`, a vector the oracle's `List` (its view), a map a `Map`, a keyword a handle Java
+    hands back as the keyword (before: "cannot return", or an `ArrayList` copy).
+  - a face: `:octets` and `%clojure-host-answer` per parameter that `carriesBytes` ("Java
+    faces"); its answers already went through `%clojure-host-member`.
+  Before, measured 2026-10-10 against clj 1.12.6 (interpreter and JVM alike): a proxy's
+  `write(byte[],int,int)` saw `(bytes? bs)` false, `InputStream.read`'s `aset` was `(SETF AREF):
+  The value (0 0) is not of type ARRAY`, a `Supplier` answering a byte array `cannot return
+  (:C%BYTES #(1 2))`, a fn `forEach` over `List/of` a byte array saw `bytes?` false; after,
+  oracle-identical. Wasm lowers as before (every half gated on `hostTarget`). Pins:
+  `ClojureInteropTest#aByteArrayJavaHandsAProxyIsOneItStoresInto`,
+  `#aByteArrayJavaHandsAFnIsOneItStoresInto`,
+  `#aProxyOrTypeIsHandedAByteArrayAndAnswersJavaTheOraclesObject`,
+  `ClojureLoweringTest#aFnOrProxyJavaCallsReadsItsArgumentsAsClojureValues`.
 - A fn receiver is the oracle's `AFunction` (`ClojureValueMethodLowering.functionRows`; the
   value gate `%clojure-value-receiver-p` takes `functionp`): `invoke` of 0..20 arguments and
   `applyTo` for any `ifn?` value, `call`, `run` (nil), and `compare` on a fn through

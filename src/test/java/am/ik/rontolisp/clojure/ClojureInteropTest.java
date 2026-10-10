@@ -547,6 +547,72 @@ class ClojureInteropTest {
 	}
 
 	@Test
+	void aByteArrayJavaHandsAProxyIsOneItStoresInto() throws Exception {
+		// oracle-identical (clj 1.12.6, 2026-10-10): a byte[] Java hands an interface or
+		// a
+		// class proxy is a byte array, what the body stores Java reads when it returns --
+		// a host InputStream's readNBytes, a HashMap handing one array as key and value
+		// --
+		// and the body hands it on to proxy-super as the byte[] (before: a list of its
+		// bytes, and aset refused it as no array)
+		assertBothEqual(
+				"(.write (proxy [java.io.OutputStream] [] (write [bs off len] (prn (bytes? bs) (vec bs) off len)))"
+						+ " (byte-array [1 2 3]) 0 3)" + " (def b (byte-array 2))"
+						+ " (prn (.read (proxy [java.io.InputStream] [] (read [buf off len] (aset buf off (byte 7)) 1))"
+						+ " b 0 2) (vec b))"
+						+ " (let [n (atom 0) in (proxy [java.io.InputStream] [] (read [buf off len]"
+						+ " (if (pos? @n) -1 (do (swap! n inc) (aset buf off (byte 7)) (aset buf (inc off) (byte 8)) 2))))]"
+						+ " (prn (vec (.readNBytes in 4))))" + " (let [m (java.util.HashMap.) k (byte-array [1])]"
+						+ " (.put m k k) (.forEach m (proxy [java.util.function.BiConsumer] []"
+						+ " (accept [a v] (aset a 0 (byte 4)) (prn (aget v 0))))) (prn (vec (first (keys m)))))"
+						+ " (let [p (proxy [java.io.ByteArrayOutputStream] []"
+						+ " (write [bs off len] (proxy-super write bs off len)))]"
+						+ " (.write p (byte-array [1 2 3]) 0 3) (prn (vec (.toByteArray p))))",
+				"true [1 2 3] 0 3\n1 [7 0]\n[7 8]\n4\n[4]\n[1 2 3]\n");
+	}
+
+	@Test
+	void aByteArrayJavaHandsAFnIsOneItStoresInto() throws Exception {
+		// oracle-identical (clj 1.12.6, 2026-10-10): a byte[] Java hands a fn converted
+		// to
+		// its interface is a byte array -- a fn form, a defn, a local, a var of several
+		// arities -- what the fn stores Java reads after it returns or throws, and a byte
+		// array the fn answers Java takes as the byte[] (before: bytes? false, and the
+		// answer refused as no Object)
+		assertBothEqual("(.forEach (java.util.List/of (byte-array [5])) (fn [b] (prn (bytes? b))))"
+				+ " (defn show [b] (prn :show (bytes? b) (vec b))) (.forEach (java.util.List/of (byte-array [6])) show)"
+				+ " (let [g (fn [b] (prn :local (bytes? b)))] (.forEach (java.util.List/of (byte-array [7])) g))"
+				+ " (def h (fn ([b] (prn :var (bytes? b))) ([a b] (prn :two))))"
+				+ " (.forEach (java.util.List/of (byte-array [8])) h)"
+				+ " (let [r (.computeIfAbsent (java.util.HashMap.) \"a\" (fn [k] (byte-array [1 2])))]"
+				+ " (prn (bytes? r) (vec r)))"
+				+ " (let [l (java.util.ArrayList.)] (.add l (byte-array 2)) (.forEach l (fn [x] (aset x 0 (byte 9))))"
+				+ " (prn (vec (.get l 0))))" + " (let [l (java.util.ArrayList.)] (.add l (byte-array [1]))"
+				+ " (prn (try (.forEach l (fn [x] (aset x 0 (byte 2)) (throw (ex-info \"boom\" {}))))"
+				+ " (catch Exception e (ex-message e))) (vec (.get l 0))))",
+				"true\n:show true [6]\n:local true\n:var true\ntrue [1 2]\n[9 0]\n\"boom\" [2]\n");
+	}
+
+	@Test
+	void aProxyOrTypeIsHandedAByteArrayAndAnswersJavaTheOraclesObject() throws Exception {
+		// oracle-identical (clj 1.12.6, 2026-10-10): a proxy's answer reaches Java as the
+		// value's own object -- a byte array the byte[], a vector a List, a map a Map, a
+		// keyword one Java hands back -- and a deftype's Comparable face is handed a
+		// byte[]
+		// as a byte array (before: a proxy's byte array or map "cannot return", a vector
+		// an ArrayList copy)
+		assertBothEqual("(let [r (.get (proxy [java.util.function.Supplier] [] (get [] (byte-array [1 2]))))]"
+				+ " (prn (bytes? r) (vec r)))" + " (prn (.get (proxy [java.util.function.Supplier] [] (get [] [1 2])))"
+				+ " (vector? (.get (proxy [java.util.function.Supplier] [] (get [] [1 2])))))"
+				+ " (prn (.get (proxy [java.util.function.Supplier] [] (get [] {:a 1}))))"
+				+ " (prn (.apply (proxy [java.util.function.Function] [] (apply [x] x)) :k))"
+				+ " (prn (bytes? (.apply (proxy [java.util.function.Function] [] (apply [x] x)) (byte-array [3]))))"
+				+ " (deftype C [] java.lang.Comparable (compareTo [_ o] (if (bytes? o) -1 1)))"
+				+ " (prn (java.util.Collections/binarySearch [(C.)] (byte-array 1)))",
+				"true [1 2]\n[1 2] true\n{:a 1}\n:k\ntrue\n-2\n");
+	}
+
+	@Test
 	void anArrayJavaKeepsIsTheByteArrayItselfOnlyOnTheInterpreter() throws Exception {
 		// a ByteBuffer wraps the array it is handed and writes it after the call: the
 		// interpreter hands Java the byte array's own octets, as the oracle hands its

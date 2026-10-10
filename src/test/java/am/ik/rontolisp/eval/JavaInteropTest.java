@@ -710,6 +710,15 @@ class JavaInteropTest {
 			.isEqualTo(JavaImplementationPrograms.JAVA_FALSE_OUTPUT);
 	}
 
+	// Mirrors
+	// JvmJavaInteropCompilerTest#anImplementationMadeAtOctetsIsHandedAByteArrayAsAnOctetVector.
+	// Here the vector is Java's array itself. Before, measured 2026-10-10: every function
+	// was handed a list of signed bytes, which (setf aref) refused.
+	@Test
+	void anImplementationMadeAtOctetsIsHandedAByteArrayAsAnOctetVector() {
+		assertThat(output(JavaImplementationPrograms.OCTETS)).isEqualTo(JavaImplementationPrograms.OCTETS_OUTPUT);
+	}
+
 	// Mirrors JvmJavaInteropCompilerTest#aHandleIsItsTextToJavaAndItsValueBack.
 	@Test
 	void aHandleIsItsTextToJavaAndItsValueBack() {

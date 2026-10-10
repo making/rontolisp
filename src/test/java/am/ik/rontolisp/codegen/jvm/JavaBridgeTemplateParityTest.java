@@ -741,6 +741,67 @@ class JavaBridgeTemplateParityTest {
 		}
 	}
 
+	// What Java hands a function made at :octets comes out the same whichever copy makes
+	// it: the bridge's callbackArguments and the _jcbo / _jcbf a generated callback calls
+	// -- a byte[] an octet vector, one handed twice one vector, an Object[]'s byte[] its
+	// element's -- and what the function stores goes back alike (writeBackOctets, _jwbo)
+	// into the array, once for one handed twice; a function that never ran writes
+	// nothing.
+	@Test
+	void theBridgeAndAGeneratedCallbackHandAFunctionOctetsAlike(@TempDir Path dir) throws Exception {
+		JvmLispCompiler compiler = new JvmLispCompiler("CallbackOctetsTest");
+		byte[] bytes = compiler.compile(LispReader.readAllFromString("""
+				(let ((l (java:new "java.util.ArrayList")))
+				  (java:call l "forEach" (java:reify "java.util.function.Consumer" "accept" (lambda (x) x) :octets))
+				  (java:call l "forEach" (java:reify "java.util.function.Consumer" "accept" (lambda (x) x)
+				                           :java-false :octets)))
+				"""));
+		Files.write(dir.resolve("CallbackOctetsTest.class"), bytes);
+		for (Map.Entry<String, byte[]> file : compiler.runtimeClassFiles().entrySet()) {
+			Path target = dir.resolve(file.getKey());
+			Files.createDirectories(target.getParent());
+			Files.write(target, file.getValue());
+		}
+		byte[] shared = { 1, -1 };
+		Object[] handed = { shared, "x", shared, new Object[] { new byte[] { 3 } }, Boolean.FALSE, null, new byte[0] };
+		Class<?>[] arguments = { Object[].class, boolean.class };
+		Class<?>[] writeBack = { Object[].class, Object[].class };
+		try (URLClassLoader loader = new URLClassLoader(new URL[] { dir.toUri().toURL() },
+				ClassLoader.getSystemClassLoader())) {
+			Class<?> program = loader.loadClass("CallbackOctetsTest");
+			Method jcbo = declared(program, JvmJavaDirectSites.CALLBACK_OCTETS, Object[].class);
+			Method jcbf = declared(program, JvmJavaDirectSites.CALLBACK_FALSE_OCTETS, Object[].class);
+			Method jwbo = declared(program, JvmJavaDirectSites.WRITE_BACK_OCTETS, Object[].class, Object[].class);
+			for (boolean javaFalse : new boolean[] { false, true }) {
+				Object[] direct = (Object[]) (javaFalse ? jcbf : jcbo).invoke(null, (Object) handed);
+				Object[] bridge = (Object[]) Objects
+					.requireNonNull(invoke("callbackArguments", arguments, handed, javaFalse));
+				assertThat(Arrays.deepToString(bridge)).as("java-false %s", javaFalse)
+					.isEqualTo(Arrays.deepToString(direct));
+				assertThat(direct[2]).isSameAs(direct[0]);
+				assertThat(bridge[2]).isSameAs(bridge[0]);
+			}
+			assertThat((byte[]) ((Object[]) jcbo.invoke(null, (Object) handed))[0]).containsExactly(8, 1, -1);
+			for (boolean direct : new boolean[] { true, false }) {
+				byte[] stored = { 1, 2 };
+				byte[] kept = { 5 };
+				Object[] java = { stored, kept, stored };
+				Object[] values = direct ? (Object[]) jcbo.invoke(null, (Object) java)
+						: (Object[]) Objects.requireNonNull(invoke("callbackArguments", arguments, java, false));
+				((byte[]) values[2])[2] = 9;
+				if (direct) {
+					jwbo.invoke(null, java, values);
+					jwbo.invoke(null, java, null);
+				}
+				else {
+					invoke("writeBackOctets", writeBack, java, values);
+				}
+				assertThat(stored).as("direct %s", direct).containsExactly(1, 9);
+				assertThat(kept).as("direct %s", direct).containsExactly(5);
+			}
+		}
+	}
+
 	// What _jcmp or the bridge's comparison answered: an Integer, or the refusal's class
 	// and message.
 	private static @Nullable Object compared(@Nullable Object answer) {

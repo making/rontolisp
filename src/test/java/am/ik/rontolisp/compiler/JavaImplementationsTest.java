@@ -175,6 +175,25 @@ class JavaImplementationsTest {
 		JavaImplementation proxied = JavaImplementations.proxy(type("java.util.Comparator"), CLASSES)
 			.withMarkers(new JavaMarkers(true, true, false));
 		assertThat(proxied.slots()).allMatch(slot -> !proxied.readsComparison(slot));
+		// :octets hands every function of the form a byte[] as an octet vector, and so
+		// does a call converting a function
+		assertThat(resolve("(java:reify \"java.util.function.Consumer\" \"accept\" f :octets)").octets()).isTrue();
+		assertThat(resolve("(java:proxy \"java.util.function.Consumer\" f :java-false :octets)").markers())
+			.isEqualTo(new JavaMarkers(false, true, true));
+		assertThat(resolve("(java:subclass \"java.io.InputStream\" '() '(\"read\") f :octets)").octets()).isTrue();
+		assertThat(resolve("(java:proxy \"java.util.function.Consumer\" f)").octets()).isFalse();
+		assertThat(JavaImplementations
+			.functional(type("java.util.function.Consumer"), CLASSES, new JavaMarkers(true, false, true))
+			.markers()).isEqualTo(new JavaMarkers(true, false, true));
+		// only a parameter a byte[] fits, or an array of one, may be handed an octet
+		// vector
+		for (Class<?> carries : List.of(byte[].class, Object.class, Cloneable.class, java.io.Serializable.class,
+				Object[].class, byte[][].class)) {
+			assertThat(JavaOverloads.carriesBytes(ReflectiveJavaClasses.of(carries))).as("%s", carries).isTrue();
+		}
+		for (Class<?> none : List.of(int.class, int[].class, String.class, Comparable.class, String[].class)) {
+			assertThat(JavaOverloads.carriesBytes(ReflectiveJavaClasses.of(none))).as("%s", none).isFalse();
+		}
 	}
 
 	// A form resolves before it runs only when a compiled program can implement it:

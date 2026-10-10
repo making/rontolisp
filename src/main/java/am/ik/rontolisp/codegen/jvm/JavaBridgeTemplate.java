@@ -87,7 +87,8 @@ final class JavaBridgeTemplate {
 	// mode is the low bits (FUNCTIONS_MODE); FUNCTIONS_JAVA_FALSE beside it makes the
 	// implementation hand its function Java's false as |false| (:java-false), and
 	// FUNCTIONS_OCTETS makes the call answer a byte[] as an (unsigned-byte 8) vector
-	// (:octets), which no function is handed.
+	// (:octets), and the implementation hand its function one, written back into Java's
+	// array once the function returns or throws.
 	private static final int FUNCTIONS_NONE = 0;
 
 	private static final int FUNCTIONS_PROXY = 1;
@@ -607,9 +608,12 @@ final class JavaBridgeTemplate {
 	 * time: the rest is the other interface names, then the callable.
 	 */
 	static @Nullable Object javaProxy(@Nullable Object interfaceName, @Nullable Object[] rest) {
-		// The markers after the callable: :java-false hands it Java's false as |false|.
+		// The markers after the callable: :java-false hands it Java's false as |false|,
+		// :octets a byte[] as an (unsigned-byte 8) vector.
 		int marked = markerCount(rest, 1);
-		boolean javaFalse = (functionsOf(rest, marked) & FUNCTIONS_JAVA_FALSE) != 0;
+		int markers = functionsOf(rest, marked);
+		boolean javaFalse = (markers & FUNCTIONS_JAVA_FALSE) != 0;
+		boolean octets = (markers & FUNCTIONS_OCTETS) != 0;
 		rest = Arrays.copyOf(rest, rest.length - marked);
 		if (rest.length == 0) {
 			throw new RuntimeException(PROXY_USAGE);
@@ -631,7 +635,7 @@ final class JavaBridgeTemplate {
 			}
 			interfaces[i] = iface;
 		}
-		return proxy(interfaces, rest[rest.length - 1], javaFalse);
+		return proxy(interfaces, rest[rest.length - 1], javaFalse, octets);
 	}
 
 	/**
@@ -675,10 +679,11 @@ final class JavaBridgeTemplate {
 			throw new RuntimeException(REIFY_USAGE);
 		}
 		// The markers after the last function: :java-false hands the functions Java's
-		// false as |false|.
+		// false as |false|, :octets a byte[] as an (unsigned-byte 8) vector.
 		int marked = markerCount(rest, first);
 		int markers = functionsOf(rest, marked);
 		boolean javaFalse = (markers & FUNCTIONS_JAVA_FALSE) != 0;
+		boolean octets = (markers & FUNCTIONS_OCTETS) != 0;
 		rest = Arrays.copyOfRange(rest, first, rest.length - marked);
 		List<String> names = interfaceNames(interfaceSpec);
 		String standInClass = className == null ? null : lispString(className);
@@ -718,9 +723,9 @@ final class JavaBridgeTemplate {
 		boolean comparison = javaFalse && (markers & FUNCTIONS_MODE) == FUNCTIONS_BY_ARGUMENTS && interfaces.length == 1
 				&& "java.util.Comparator".equals(interfaces[0].getName());
 		if (standsFor) {
-			return standIn(interfaces, slots, functions, javaFalse, value, standInClass);
+			return standIn(interfaces, slots, functions, javaFalse, octets, value, standInClass);
 		}
-		return implementation(interfaces, false, slots, functions, javaFalse, comparison);
+		return implementation(interfaces, false, slots, functions, javaFalse, octets, comparison);
 	}
 
 	// A java:reify's interfaces: one name, or a non-empty proper list of names; null for
@@ -766,8 +771,8 @@ final class JavaBridgeTemplate {
 	}
 
 	// A function value where an interface is expected: the interface's java:proxy.
-	private static Object proxy(Class<?> iface, @Nullable Object callable, boolean javaFalse) {
-		return proxy(new Class<?>[] { iface }, callable, javaFalse);
+	private static Object proxy(Class<?> iface, @Nullable Object callable, boolean javaFalse, boolean octets) {
+		return proxy(new Class<?>[] { iface }, callable, javaFalse, octets);
 	}
 
 	// The designators stand-in of a :functional implementation's key.
@@ -776,7 +781,7 @@ final class JavaBridgeTemplate {
 	// A function value where an interface is expected at a call ending in :functional:
 	// every abstract method calls the function with its arguments (mirrors
 	// compiler/JavaImplementations.functional).
-	private static Object functional(Class<?> iface, @Nullable Object function, boolean javaFalse) {
+	private static Object functional(Class<?> iface, @Nullable Object function, boolean javaFalse, boolean octets) {
 		List<Object> key = List.of(iface, FUNCTIONAL_KEY);
 		Map<String, Integer> slots = IMPLEMENTATIONS.get(key);
 		if (slots == null) {
@@ -787,7 +792,7 @@ final class JavaBridgeTemplate {
 		// compiler/JavaImplementation.readsComparison).
 		boolean comparison = javaFalse && "java.util.Comparator".equals(iface.getName());
 		return implementation(new Class<?>[] { iface }, false, slots, new @Nullable Object[] { function }, javaFalse,
-				comparison);
+				octets, comparison);
 	}
 
 	// Whether the interface has exactly one method a class must implement, Object's
@@ -841,14 +846,14 @@ final class JavaBridgeTemplate {
 
 	// java:proxy: every method of every interface but Object's three calls the callable
 	// with the method's name first.
-	private static Object proxy(Class<?>[] interfaces, @Nullable Object callable, boolean javaFalse) {
+	private static Object proxy(Class<?>[] interfaces, @Nullable Object callable, boolean javaFalse, boolean octets) {
 		List<Object> key = List.of(List.of(interfaces), PROXY_KEY);
 		Map<String, Integer> slots = IMPLEMENTATIONS.get(key);
 		if (slots == null) {
 			slots = proxySlots(interfaces);
 			remember(IMPLEMENTATIONS, key, slots);
 		}
-		return implementation(interfaces, true, slots, new @Nullable Object[] { callable }, javaFalse, false);
+		return implementation(interfaces, true, slots, new @Nullable Object[] { callable }, javaFalse, octets, false);
 	}
 
 	// Every method a java:proxy of the interfaces declares, by name(parameters)return:
@@ -873,11 +878,12 @@ final class JavaBridgeTemplate {
 	// no slot names runs its body; Object's three keep their identity behavior. What the
 	// function raises -- or the refusal of its value -- is recorded on its way out to the
 	// Java caller (the program's _jsig), as a generated class's callback records it.
-	// JAVA_FALSE hands the functions Java's false as |false|; COMPARISON reads compare's
-	// answer as Clojure's AFunction.compare.
+	// JAVA_FALSE hands the functions Java's false as |false|, OCTETS a byte[] as an
+	// (unsigned-byte 8) vector; COMPARISON reads compare's answer as Clojure's
+	// AFunction.compare.
 	private static Object implementation(Class<?>[] interfaces, boolean proxy, Map<String, Integer> slots,
-			@Nullable Object[] functions, boolean javaFalse, boolean comparison) {
-		return implementation(interfaces, proxy, slots, functions, javaFalse, comparison, false, null, null);
+			@Nullable Object[] functions, boolean javaFalse, boolean octets, boolean comparison) {
+		return implementation(interfaces, proxy, slots, functions, javaFalse, octets, comparison, false, null, null);
 	}
 
 	// A java:reify given :value: the object implements runtime/RontoJavaValue too -- its
@@ -885,18 +891,18 @@ final class JavaBridgeTemplate {
 	// equals, hashCode and toString no slot implements are the interface's shared rules
 	// (mirrors eval/JavaInterop's handler and a generated class's writeStandIn).
 	private static Object standIn(Class<?>[] interfaces, Map<String, Integer> slots, @Nullable Object[] functions,
-			boolean javaFalse, @Nullable Object value, @Nullable String className) {
+			boolean javaFalse, boolean octets, @Nullable Object value, @Nullable String className) {
 		Class<?> valueClass = javaValueClass;
 		if (valueClass == null) {
 			throw new RuntimeException("java:reify: :value needs " + JAVA_VALUE_CLASS + " beside the program");
 		}
 		Class<?>[] all = Arrays.copyOf(interfaces, interfaces.length + 1);
 		all[interfaces.length] = valueClass;
-		return implementation(all, false, slots, functions, javaFalse, false, true, value, className);
+		return implementation(all, false, slots, functions, javaFalse, octets, false, true, value, className);
 	}
 
 	private static Object implementation(Class<?>[] interfaces, boolean proxy, Map<String, Integer> slots,
-			@Nullable Object[] functions, boolean javaFalse, boolean comparison, boolean standsFor,
+			@Nullable Object[] functions, boolean javaFalse, boolean octets, boolean comparison, boolean standsFor,
 			@Nullable Object value, @Nullable String className) {
 		// a stand-in's last interface is runtime/RontoJavaValue, which the messages
 		// leave out
@@ -943,7 +949,7 @@ final class JavaBridgeTemplate {
 			Object answer;
 			try {
 				answer = callback(proxy ? name : declaringName(named, key), proxy, method, methodArgs, functions[index],
-						javaFalse, compares);
+						javaFalse, octets, compares);
 			}
 			catch (Throwable raised) {
 				throw signal(raised);
@@ -982,34 +988,79 @@ final class JavaBridgeTemplate {
 	}
 
 	// A slot's function applied to the ([method-name] arg...) list, its value marshalled
-	// to the method's return type.
+	// to the method's return type. After :octets (OCTETS) a byte[] argument is an
+	// (unsigned-byte 8) vector, a copy written back into Java's array once the function
+	// returns or throws.
 	private static @Nullable Object callback(String name, boolean proxy, Method method,
-			@Nullable Object @Nullable [] methodArgs, @Nullable Object function, boolean javaFalse,
+			@Nullable Object @Nullable [] methodArgs, @Nullable Object function, boolean javaFalse, boolean octets,
 			boolean comparison) {
-		// Build the ([method-name] arg...) cons list, tail-first.
-		Object argList = null;
-		if (methodArgs != null) {
-			for (int i = methodArgs.length - 1; i >= 0; i--) {
-				argList = new Object[] { unmarshal(methodArgs[i], javaFalse), argList };
+		@Nullable Object[] values = octets && methodArgs != null ? callbackArguments(methodArgs, javaFalse) : null;
+		try {
+			// Build the ([method-name] arg...) cons list, tail-first.
+			Object argList = null;
+			if (methodArgs != null) {
+				for (int i = methodArgs.length - 1; i >= 0; i--) {
+					argList = new Object[] { values != null ? values[i] : unmarshal(methodArgs[i], javaFalse),
+							argList };
+				}
+			}
+			if (proxy) {
+				argList = new Object[] { quote(method.getName()), argList };
+			}
+			Object result = applyCallable(function, argList);
+			Class<?> ret = method.getReturnType();
+			if (ret == void.class) {
+				return null;
+			}
+			if (comparison) {
+				return comparison(function, (Object[]) Objects.requireNonNull(argList), result);
+			}
+			@Nullable Object[] slot = new @Nullable Object[1];
+			if (marshal(result, ret, slot, 0, FUNCTIONS_NONE) == NO_MATCH) {
+				throw new RuntimeException((proxy ? "java:proxy" : "java:reify") + ": cannot return " + describe(result)
+						+ " as " + ret + " from " + name + (proxy ? "" : "." + method.getName()));
+			}
+			return slot[0];
+		}
+		finally {
+			if (values != null && methodArgs != null) {
+				writeBackOctets(methodArgs, values);
 			}
 		}
-		if (proxy) {
-			argList = new Object[] { quote(method.getName()), argList };
+	}
+
+	// The arguments Java hands a function made at :octets as the Lisp values it is
+	// handed (mirrors JvmJavaDirectSites' _jcbo / _jcbf): a byte[] an (unsigned-byte 8)
+	// vector of its own, and one an earlier argument is too that argument's vector, as
+	// Java's one array is.
+	private static @Nullable Object[] callbackArguments(@Nullable Object[] handed, boolean javaFalse) {
+		@Nullable Object[] values = new @Nullable Object[handed.length];
+		for (int i = 0; i < handed.length; i++) {
+			Object argument = handed[i];
+			int earlier = -1;
+			if (argument instanceof byte[]) {
+				for (int k = 0; k < i && earlier < 0; k++) {
+					if (handed[k] == argument) {
+						earlier = k;
+					}
+				}
+			}
+			values[i] = earlier >= 0 ? values[earlier] : unmarshal(argument, javaFalse, true);
 		}
-		Object result = applyCallable(function, argList);
-		Class<?> ret = method.getReturnType();
-		if (ret == void.class) {
-			return null;
+		return values;
+	}
+
+	// Once a function made at :octets returns or throws, what it stored into the vector a
+	// byte[] argument became -- the width in slot 0, then the octets -- goes back into
+	// Java's array, where the two differ (mirrors JvmJavaDirectSites' _jwbo).
+	private static void writeBackOctets(@Nullable Object[] handed, @Nullable Object[] values) {
+		for (int i = 0; i < handed.length; i++) {
+			if (handed[i] instanceof byte[] array && values[i] instanceof byte[] vector && vector != array
+					&& vector.length == array.length + 1
+					&& !Arrays.equals(vector, 1, vector.length, array, 0, array.length)) {
+				System.arraycopy(vector, 1, array, 0, array.length);
+			}
 		}
-		if (comparison) {
-			return comparison(function, (Object[]) Objects.requireNonNull(argList), result);
-		}
-		@Nullable Object[] slot = new @Nullable Object[1];
-		if (marshal(result, ret, slot, 0, FUNCTIONS_NONE) == NO_MATCH) {
-			throw new RuntimeException((proxy ? "java:proxy" : "java:reify") + ": cannot return " + describe(result)
-					+ " as " + ret + " from " + name + (proxy ? "" : "." + method.getName()));
-		}
-		return slot[0];
 	}
 
 	// What a function implementing Comparator.compare answered, read as Clojure's
@@ -2200,8 +2251,9 @@ final class JavaBridgeTemplate {
 		}
 		if (value.getClass() == Object[].class) { // a function value
 			boolean javaFalse = (functions & FUNCTIONS_JAVA_FALSE) != 0;
-			return (functions & FUNCTIONS_MODE) == FUNCTIONS_BY_ARGUMENTS ? functional(target, value, javaFalse)
-					: proxy(target, value, javaFalse);
+			boolean octets = (functions & FUNCTIONS_OCTETS) != 0;
+			return (functions & FUNCTIONS_MODE) == FUNCTIONS_BY_ARGUMENTS ? functional(target, value, javaFalse, octets)
+					: proxy(target, value, javaFalse, octets);
 		}
 		return value; // a wrapped host object
 	}

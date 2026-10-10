@@ -896,7 +896,8 @@ final class ClojureBindingLowering {
 			ctx.hostClasses.remove(ctx.localSym(name).name());
 		}
 		else {
-			ctx.hostClasses.put(ctx.localSym(name).name(), new ClojureLowering.HostClass(fqn, name, ctx.scopes.size()));
+			ctx.hostClasses.put(ctx.localSym(name).name(),
+					new ClojureLowering.HostClass(fqn, name, ctx.scopes.size(), ClojureLowerUtil.isDirectFun(init)));
 		}
 	}
 

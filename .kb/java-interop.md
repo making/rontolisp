@@ -213,7 +213,7 @@ Package `java` (`LispNames.JAVA_PKG`, `PackageRegistry`; does NOT use `cl`): `ja
   host `ArrayList` subclass its own `isEmpty`/`get`, so a `java:subclass` of `ArrayList` whose
   `isEmpty` answers false while empty throws `index out of bounds` on the JVM (todo e74).
 
-## Markers: `:java-false`, `:octets`, a Comparator's answer (e73, 2026-10-09; f13, 2026-10-10)
+## Markers: `:java-false`, `:octets`, a Comparator's answer (e73, 2026-10-09; f13, f24, 2026-10-10)
 - Keywords ending a form are MARKERS (`compiler/JavaMarkers`: `:functional`, `:java-false`,
   `:octets`, any order; a keyword is never an argument a member takes): after the arguments of `java:new` /
   `java:call` / `java:static`, after the field name of `java:field`, after the callable (the last
@@ -232,18 +232,42 @@ Package `java` (`LispNames.JAVA_PKG`, `PackageRegistry`; does NOT use `cl`): `ja
   resolving. Pins: `JavaInteropPrograms.JAVA_FALSE_PROGRAM`, `JavaImplementationPrograms.
   JAVA_FALSE` (both backends), `theBridgeAndADirectSiteAnswerJavasFalseAlike`.
 - `:octets` (f13): a `byte[]` the FORM answers -- a call's value, a field's, an array's element at
-  any depth -- is an `(unsigned-byte 8)` vector, not a list of signed bytes. Never what Java hands
-  a function: `JavaMarkers.callbacks()` strips it, so a function converted at the call and an
-  implementation (`JavaImplementation`'s compact constructor normalizes; todo `f24`) keep lists, the
-  `_jconv$N` key and the generated classes unchanged. Copies: interpreter `unmarshal(o,
-  javaFalse, octets)` -> `LispIntVector.wrapOctets` (the vector IS Java's array: no copy); the
-  direct sites' `_juno` / `_jufo` over `_jaro` / `_jafo` (`unmarshalIndex`, a `[B` arm ahead of
-  the array loop making `byte[]{8, e...}`); the bridge's `unmarshal(o, jf, octets)` and
+  any depth -- is an `(unsigned-byte 8)` vector, not a list of signed bytes. Copies: interpreter
+  `unmarshal(o, javaFalse, octets)` -> `LispIntVector.wrapOctets` (the vector IS Java's array: no
+  copy); the direct sites' `_juno` / `_jufo` over `_jaro` / `_jafo` (`unmarshalIndex`, a `[B` arm
+  ahead of the array loop making `byte[]{8, e...}`); the bridge's `unmarshal(o, jf, octets)` and
   `FUNCTIONS_OCTETS` (`OCTETS_MARKER`, pinned). A program with a `java:` form ending in it turns
-  `usesIntArray` on (`JvmLispCompiler.programAsksJavaForOctets`): without the `_iv*` runtime
-  the answer printed `#<java [B>`. The static type is unchanged (an array is UNKNOWN). Pins:
-  `JavaInteropPrograms.OCTETS_PROGRAM` (resolved, dispatched, bridged, elements, empty, both
-  markers), `JavaBridgeTemplateParityTest#theBridgeAndADirectSiteAnswerOctetsAlike`.
+  `usesIntArray` on (`JvmLispCompiler.programAsksJavaForOctets`, implementation forms counted):
+  without the `_iv*` runtime the answer printed `#<java [B>`. The static type is unchanged (an
+  array is UNKNOWN). Pins: `JavaInteropPrograms.OCTETS_PROGRAM` (resolved, dispatched, bridged,
+  elements, empty, both markers), `JavaBridgeTemplateParityTest#theBridgeAndADirectSiteAnswerOctetsAlike`.
+- `:octets` in callbacks (f24): a `byte[]` Java hands a FUNCTION of the form -- converted at the
+  call, or of the `java:reify` / `java:proxy` / `java:subclass` it ends -- is one too, an argument
+  or an element of one, as `:java-false` reaches them (until f24 `JavaMarkers.callbacks()` stripped
+  it: lists). Interpreter: `ImplementationHandler` / `SubclassHandler` unmarshal with the
+  markers' octets, so the function stores into Java's own array. Compiled: a copy, written back
+  when the function returns OR throws (stores in place land before a throw too). `_jimpl$K` /
+  `_jsub$K` of a slot one of whose parameters may carry a `byte[]` (`JavaOverloads.carriesBytes`:
+  what `bytesViewCost` fits, or an array of it; any other slot keeps `_junm` and writes nothing
+  back), keyed `|octets` (the shell when a slot is, the subshell by the marker, which its
+  `_jsubclass$N`'s conversions read; a converting `_jconv$N` ` octets`), build their values with
+  `_jcbo` / `_jcbf(Object[])Object[]`
+  -- `_juno` / `_jufo` of each argument, a `byte[]` an earlier argument is too taking its vector,
+  so an array Java hands twice is one vector as in place -- and call `_jwbo(handed, values)` after
+  `_apply` (after `_jcmp` for a comparison, which calls the function again) and in the handler
+  before `_jsig`: each top-level `byte[]` whose vector is one octet longer and differs takes the
+  octets back (`Arrays.equals` ranges, then `arraycopy`); values null (never ran) writes nothing.
+  The bridge's `callback`: `callbackArguments` / `writeBackOctets` in a `finally`, the same rule.
+  Not written back: a `byte[]` inside an array argument (compiled only); and a write Java makes
+  to its array while the function runs is lost, the vector being compared with the array as it
+  is then, not as it was handed (f25 drops the copy). Pins:
+  `JavaImplementationPrograms.OCTETS` (`JavaInteropTest` / `JvmJavaInteropCompilerTest`: a reify
+  and a proxy generated and bridged, a subclass Java's `readNBytes` reads, functions converted
+  at resolved, dispatched and run-time sites, stores after return and throw, one array twice),
+  `JavaBridgeTemplateParityTest#theBridgeAndAGeneratedCallbackHandAFunctionOctetsAlike`,
+  `JavaImplementationsTest#theMarkersAFormEndsInAreCarriedByItsImplementation`,
+  `JvmLispCompilerSplitTest#aForcedSplitKeepsJavaCallsWorking` (a store written back across a
+  split).
 - A function implementing `java.util.Comparator.compare` at a form ending in BOTH markers
   (`JavaImplementation.readsComparison`: a functional implementation of `Comparator` alone) is
   read as Clojure's `AFunction.compare`: `t` -1; `|false|` 1 when the function answers true
@@ -800,7 +824,8 @@ Per call the uncached bridge paid `getMethods()` (~2.5 us), `select()` (250 ns -
   (`instanceof $Implementation && instanceof I`, as strict as the interpreter's kind check). A slot
   boxes its arguments as a Proxy does and calls a PACKAGE-PRIVATE program method
   `_jimpl$K(Object fn, Object[] args)R` (one per (proxy?, interface, dispatch key)): `_junm` each
-  argument into a list (a proxy's with the name first), `_apply`, then the direct sites' RETURNED
+  argument into a list (a proxy's with the name first; after `:octets` `_jcbo`'s values, written
+  back by `_jwbo`, "Markers"), `_apply`, then the direct sites' RETURNED
   `_jcost$N` / `_jconv$N` for R (`returnedCost` / `returnedConvert`: the per-type helpers of
   dispatched sites, without the function arm) or the interpreter's "cannot return" text. The
   `_jimpl$` names are shaker roots and pinned to the main class on a split

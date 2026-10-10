@@ -462,7 +462,12 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
 - A fn passed where a Java interface is expected implements every abstract method of
   any interface, each called with the method's arguments; the oracle converts a fn only
   to an interface annotated `@FunctionalInterface` (a `PropertyChangeListener` is a
-  `ClassCastException` there).
+  `ClassCastException` there). Java holds an object calling the fn, so it never hands the
+  fn back as itself, where the oracle's fn is itself a `Runnable`, `Callable` and
+  `Comparator` (`(.comparator (java.util.TreeSet. f))` is `f` there). The fn's answer
+  reaches Java as the `java:` surface converts it -- a byte array as its `byte[]`, a vector
+  as an `ArrayList` copy, while a map, set, keyword or ratio is refused (`cannot return`) --
+  where a `proxy` method answering a reference hands Java the value's own object.
 - A value passed to Java is an object of this front end's classes that Java reads as the
   oracle's own: a vector, list, lazy seq, set, map, record or sorted collection a read-only
   `java.util` `List`, `Set` or `Map` (a vector also `RandomAccess` and `Comparable`) printing
@@ -487,8 +492,10 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   of its bytes: on the interpreter its own, on the JVM a copy written back into it when the
   member returns, so an array a Java object keeps (`ByteBuffer/wrap`'s, a `ByteBuffer`'s
   `.array`) is the byte array itself only on the interpreter. A `byte[]` coming back is a new
-  byte array, never `identical?` to one that went out, and a `byte[]` a `proxy` or `reify`
-  method or a fn is handed is a list of its elements.
+  byte array, never `identical?` to one that went out; so is one Java hands a `proxy`, a
+  deftype or reify method or a fn, which on the JVM holds a copy, written back into Java's
+  array when the method returns or throws (a `byte[]` inside an array argument is not
+  written back).
 - An integer receiver is called as an `Integer` when it fits one, else as a `Long`
   (the oracle's is always a `Long`): `(.getClass 1)` answers `java.lang.Integer`.
 - A `_` param tag leaves that parameter to the cost rule of the `java:` surface, so

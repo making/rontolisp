@@ -75,6 +75,18 @@ public final class JavaOverloads {
 		};
 	}
 
+	/**
+	 * Whether a value of a parameter type may be or hold a {@code byte[]}: a type a
+	 * {@code byte[]} fits ({@link #bytesViewCost}), or an array of one. Only such a
+	 * parameter is handed an octet vector at {@code :octets}.
+	 * @param type the parameter type
+	 * @return whether the value may carry a {@code byte[]}
+	 */
+	public static boolean carriesBytes(JavaType type) {
+		JavaType component = type.componentType();
+		return bytesViewCost(type) != NO_MATCH || component != null && carriesBytes(component);
+	}
+
 	/** The class a bignum is, and a fixnum may become. */
 	private static final String BIG_INTEGER = "java.math.BigInteger";
 

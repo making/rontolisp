@@ -72,6 +72,8 @@ Java の false は `nil` として callable に渡ります。callable の後ろ
 ; => (|false|)
 ```
 
+`:octets` で終えると、callable に `byte[]` (引数、またはその要素) をそのオクテットを持つ `(unsigned-byte 8)` のベクタとして渡し、callable が格納した値は Java の配列へ書き戻されます (ガイドの[バイト列を受け取る](../../guides/java-interop.md#octets-back-octets))。
+
 ## 複数のインターフェース
 
 callable より前の名前はすべて、1 つのオブジェクトが実装するインターフェースです。Java はそのオブジェクトをどのインターフェースとしても保持できます。2 つのインターフェースが宣言する同じメソッド名は、Java がどちらのインターフェース経由で呼んでも、その 1 つの名前で callable に届きます。

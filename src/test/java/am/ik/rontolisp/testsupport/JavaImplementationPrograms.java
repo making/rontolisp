@@ -342,6 +342,91 @@ public final class JavaImplementationPrograms {
 			java:reify: cannot return T as int from java.util.Comparator.compare""";
 
 	/**
+	 * Implementations made by a form ending in {@code :octets}, or at a call ending in
+	 * it: a {@code byte[]} Java hands the function is an {@code (unsigned-byte 8)} vector
+	 * of its octets -- a {@code java:reify} and a {@code java:proxy} (generated, and the
+	 * bridge's with the interface in a variable), a {@code java:subclass}, a function
+	 * converted at a resolved, a dispatched and a run-time site -- where the unmarked
+	 * form hands a list of signed bytes. What the function stores Java reads when it
+	 * returns, or throws ({@code readNBytes} reads the array it handed), and one array
+	 * Java hands twice is one vector.
+	 */
+	public static final String OCTETS = """
+			(defvar *consumer* "java.util.function.Consumer")
+			(defun row (thunk)
+			  (handler-case (prin1 (funcall thunk)) (error (e) (princ e)))
+			  (terpri))
+			(defun octets (&rest xs)
+			  (let ((v (make-array (length xs) :element-type '(unsigned-byte 8))))
+			    (dotimes (i (length xs) v) (setf (aref v i) (nth i xs)))))
+			(defun holding (&rest vectors)
+			  (let ((l (java:new "java.util.ArrayList")))
+			    (dolist (v vectors l) (java:call l "add" (java:view v v :bytes)))))
+			(defun each (l f) (java:call l "forEach" f :functional :octets))
+			(defun each-listed (l f)
+			  (declare (type (java:object "java.util.List") l))
+			  (java:call l "forEach" f :functional :octets))
+			(row (lambda ()
+			       (let ((seen nil) (l (holding (octets 1 255))))
+			         (java:call l "forEach" (java:reify "java.util.function.Consumer" "accept" (lambda (x) (push x seen))
+			                                  :octets))
+			         (java:call l "forEach" (java:reify *consumer* "accept" (lambda (x) (push x seen)) :octets))
+			         (java:call l "forEach" (java:reify "java.util.function.Consumer" "accept" (lambda (x) (push x seen))))
+			         (reverse seen))))
+			(row (lambda ()
+			       (let ((seen nil) (l (holding (octets 2))))
+			         (java:call l "forEach" (java:proxy "java.util.function.Consumer" (lambda (m x) (push (list m x) seen))
+			                                  :octets :java-false))
+			         (java:call l "forEach" (java:proxy *consumer* (lambda (m x) (push (list m x) seen)) :java-false :octets))
+			         seen)))
+			(row (lambda ()
+			       (let* ((n 0)
+			              (in (java:subclass "java.io.InputStream" '() '("read")
+			                    (lambda (this name &rest args)
+			                      (if (or (null args) (> n 0))
+			                          -1
+			                          (let ((buf (first args)) (off (second args)))
+			                            (setq n 1)
+			                            (setf (aref buf off) 7)
+			                            (setf (aref buf (+ off 1)) 8)
+			                            2)))
+			                    :octets)))
+			         (java:call in "readNBytes" 4 :octets))))
+			(row (lambda ()
+			       (let ((seen nil) (l (holding (octets 3) (octets 4))))
+			         (java:call (the (java:object "java.util.List") l) "forEach" (lambda (x) (push x seen))
+			                    :functional :octets)
+			         (each-listed l (lambda (x) (push x seen)))
+			         (each l (lambda (x) (push x seen)))
+			         (java:call (the (java:object "java.util.List") l) "forEach" (lambda (x) (push x seen)) :functional)
+			         (reverse seen))))
+			(row (lambda ()
+			       (let ((l (holding (octets 0 0 0))))
+			         (each l (lambda (x) (setf (aref x 0) 9)))
+			         (each-listed l (lambda (x) (setf (aref x 1) 8)))
+			         (handler-case (java:call (the (java:object "java.util.List") l) "forEach"
+			                                  (lambda (x) (setf (aref x 2) 7) (error "boom")) :functional :octets)
+			           (error (e) (princ e) (terpri)))
+			         (java:call l "get" 0 :octets))))
+			(row (lambda ()
+			       (let* ((m (java:new "java.util.HashMap")) (v (octets 1)) (k (java:view v v :bytes)) (got nil))
+			         (java:call m "put" k k)
+			         (java:call m "forEach" (java:reify "java.util.function.BiConsumer" "accept"
+			                                  (lambda (a b) (setf (aref a 0) 5) (setq got (aref b 0))) :octets))
+			         (list got (java:call (java:call m "keySet") "toArray" :octets)))))
+			""";
+
+	/** What {@link #OCTETS} prints. */
+	public static final String OCTETS_OUTPUT = """
+			(#(1 255) #(1 255) (1 -1))
+			(("accept" #(2)) ("accept" #(2)))
+			#(7 8)
+			(#(3) #(4) #(3) #(4) #(3) #(4) (3) (4))
+			boom
+			#(9 8 7)
+			(5 (#(5)))""";
+
+	/**
 	 * A declaration that a value is what a {@code java:proxy} of one interface makes,
 	 * holding a {@code java:proxy} of that interface and another: the kind is the
 	 * interface list, so the declaration lies.

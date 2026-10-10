@@ -25,5 +25,7 @@ constructors it chooses among by the kinds its arguments have when it runs (the 
 
 The arguments may be followed by `:functional`, which converts a function argument the way
 Java converts a lambda (the guide's [Callbacks via
-java:proxy](../../guides/java-interop.md#callbacks-via-javaproxy)), and by `:java-false`, which hands such a function
-Java's false as `|false|` (the guide's [Java's false back](../../guides/java-interop.md#javas-false-back-java-false)).
+java:proxy](../../guides/java-interop.md#callbacks-via-javaproxy)), by `:java-false`, which hands such a function
+Java's false as `|false|` (the guide's [Java's false back](../../guides/java-interop.md#javas-false-back-java-false)),
+and by `:octets`, which hands it a `byte[]` as an `(unsigned-byte 8)` vector of its octets (the
+guide's [Octets back](../../guides/java-interop.md#octets-back-octets)).

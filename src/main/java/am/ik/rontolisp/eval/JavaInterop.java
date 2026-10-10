@@ -840,10 +840,12 @@ final class JavaInterop {
 				List<LispVal> callArgs = new ArrayList<>(methodArgs.length + 2);
 				callArgs.add(new LispJavaObject(self));
 				callArgs.add(new LispString(implemented.name()));
+				JavaMarkers markers = this.caller.markers();
 				for (Object argument : methodArgs) {
-					// what Java hands a function: Java's false after :java-false, never
-					// octets (JavaMarkers.callbacks)
-					callArgs.add(unmarshal(argument, this.caller.markers().javaFalse(), false));
+					// what Java hands a function: Java's false after
+					// :java-false, a byte[] after :octets an octet vector over
+					// Java's own array
+					callArgs.add(unmarshal(argument, markers.javaFalse(), markers.octets()));
 				}
 				LispVal result = this.caller.call(this.callable, callArgs);
 				Class<?> ret = returnClass(implemented);
@@ -1136,6 +1138,10 @@ final class JavaInterop {
 		// reaches the functions as |false|.
 		private final boolean javaFalse;
 
+		// Whether it ends in :octets: a byte[] reaches the functions as an octet vector
+		// over Java's own array, so what they store Java reads.
+		private final boolean octets;
+
 		// Whether compare is a Comparator's whose function may answer a boolean
 		// (compiler/JavaImplementation.readsComparison).
 		private final boolean comparison;
@@ -1153,6 +1159,7 @@ final class JavaInterop {
 			this.caller = caller;
 			this.standIn = standIn;
 			this.javaFalse = caller.markers().javaFalse();
+			this.octets = caller.markers().octets();
 			JavaImplementation marked = dispatch.implementation.withMarkers(caller.markers());
 			boolean reads = false;
 			for (JavaImplementation.Slot slot : marked.slots()) {
@@ -1217,7 +1224,7 @@ final class JavaInterop {
 			}
 			if (methodArgs != null) {
 				for (Object a : methodArgs) {
-					callArgs.add(unmarshal(a, this.javaFalse));
+					callArgs.add(unmarshal(a, this.javaFalse, this.octets));
 				}
 			}
 			LispVal function = this.functions.get(index);

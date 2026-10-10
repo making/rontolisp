@@ -152,11 +152,16 @@ class JvmLispCompilerSplitTest {
 				  (java:call l "sort" (lambda (a b) (if (< a b) t '|false|)) :functional :java-false)
 				  (java:call l "add" (java:handle 'apple "apple" 7 "z"))
 				  (print (list (java:call l "toString") (java:call l "get" 2) (java:call l "contains" 5 :java-false))))
+				(let ((l (java:new "java.util.ArrayList")))
+				  (java:call l "add" (java:view 'v (make-array 2 :element-type '(unsigned-byte 8)) :bytes))
+				  (java:call l "forEach" (lambda (x) (setf (aref x 0) 9)) :functional :octets)
+				  (print (java:call l "get" 0 :octets)))
 				""";
 		JvmLispCompiler whole = JvmLispCompiler.builder().className("Features").build();
 		String expected = run("Features", whole.compile(program(source)), whole.runtimeClassFiles());
 		assertThat(expected).contains("\"[1, 2]\"")
-			.endsWith("(3 4.0)\n7\n\"ba\"\n(97 98)\n1\n2\n3\n10\n\"boom 1\"\n(\"[1, 2, apple]\" APPLE |false|)");
+			.endsWith(
+					"(3 4.0)\n7\n\"ba\"\n(97 98)\n1\n2\n3\n10\n\"boom 1\"\n(\"[1, 2, apple]\" APPLE |false|)\n#(9 0)");
 		JvmLispCompiler split = JvmLispCompiler.builder().className("Features").classPoolLimit(3000).build();
 		byte[] splitMain = split.compile(program(source));
 		assertThat(split.runtimeClassFiles()).containsKey("Features$Part1.class");

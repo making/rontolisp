@@ -609,7 +609,8 @@ public final class JavaImplementations {
 	 * ({@code :functional} among them): with {@code :java-false} an argument Java hands
 	 * the function answers Java's {@code false} as {@code |false|}, and a function
 	 * implementing {@code java.util.Comparator} may answer a boolean
-	 * ({@link JavaImplementation#readsComparison}).
+	 * ({@link JavaImplementation#readsComparison}); with {@code :octets} a {@code byte[]}
+	 * Java hands it is an {@code (unsigned-byte 8)} vector.
 	 * @param iface the interface
 	 * @param lookup unused; for symmetry with {@link #reify}
 	 * @param markers the call's markers
@@ -632,7 +633,7 @@ public final class JavaImplementations {
 			}
 		}
 		return new JavaImplementation(false, List.of(iface), slots, null, null,
-				new JavaMarkers(true, markers.javaFalse(), false));
+				new JavaMarkers(true, markers.javaFalse(), markers.octets()));
 	}
 
 	/**

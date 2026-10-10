@@ -20,6 +20,11 @@ duplicate method, a final superclass and a non-vector argument vector are refuse
 by name, and field writes (`set!`) are refused too. Runs on the interpreter and
 the JVM only -- the wasm backends reject `java:`.
 
+A `byte[]` Java hands a method is a [byte array](byte-array.md) over it, and what the body
+stores into it Java reads when the method returns. A method answering a reference hands Java
+the value's own object: a byte array its `byte[]`, a vector a `List`, a map a `Map`, a keyword
+an object Java hands back as the keyword.
+
 ```clojure
 (println (.get (proxy [java.util.function.Supplier] [] (get [] "p")))) ; p
 ```
@@ -40,4 +45,11 @@ the JVM only -- the wasm backends reject `java:`.
 (def f (proxy [java.io.File] ["x"]
          (toString [] (str "super-was:" (proxy-super toString)))))
 (println (.toString f)) ; super-was:x
+```
+
+```clojure
+(def in (proxy [java.io.InputStream] []
+          (read [buf off len] (aset buf off (byte 7)) 1)))
+(def b (byte-array 2))
+(println (.read in b 0 2) (vec b)) ; 1 [7 0]
 ```

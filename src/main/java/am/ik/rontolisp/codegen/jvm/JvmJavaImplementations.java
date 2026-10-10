@@ -540,6 +540,10 @@ final class JvmJavaImplementations {
 			// its callbacks hand Java's false over as |false| (_junf)
 			key.append("|java-false");
 		}
+		if (handsOctets(implementation)) {
+			// its callbacks hand a byte[] over as an octet vector (_jcbo), written back
+			key.append("|octets");
+		}
 		JavaImplementation.StandIn standIn = implementation.standIn();
 		if (standIn != null) {
 			// it stands for a value, its class named so (runtime/RontoJavaValue)
@@ -561,15 +565,16 @@ final class JvmJavaImplementations {
 	}
 
 	// The program-side method a slot calls, made the first time one of its shape asks:
-	// one per (proxy or not, interfaces, method, return type, how Java's false reaches
-	// the function, whether its answer is read as a comparison).
+	// one per (proxy or not, interfaces, method, return type, how Java's false and a
+	// byte[] reach the function, whether its answer is read as a comparison).
 	private String callback(JavaImplementation implementation, JavaImplementation.Slot slot) {
 		boolean proxy = implementation.proxy();
 		String iface = implementation.interfaceNames();
 		boolean javaFalse = implementation.javaFalse();
+		boolean octets = handsOctets(implementation, slot);
 		boolean compares = implementation.readsComparison(slot);
 		String key = (proxy ? "proxy|" : "reify|") + iface + "|" + slot.dispatchKey() + (javaFalse ? "|java-false" : "")
-				+ (compares ? "|compares" : "");
+				+ (octets ? "|octets" : "") + (compares ? "|compares" : "");
 		String cached = this.callbacks.get(key);
 		if (cached != null) {
 			return cached;
@@ -579,9 +584,35 @@ final class JvmJavaImplementations {
 		// a java:reify's refusal names the method's interface, a java:proxy's all of its
 		// own (eval/JavaInterop alike)
 		String named = proxy ? iface : implementation.declaringName(slot.key());
-		this.methods.add(buildCallback(proxy, named, slot, javaFalse, compares, this.cp.utf8Entry(name),
+		this.methods.add(buildCallback(proxy, named, slot, javaFalse, octets, compares, this.cp.utf8Entry(name),
 				this.cp.utf8Entry(callbackDescriptor(slot))));
 		return name;
+	}
+
+	// Whether a slot of an implementation made at :octets hands its function octet
+	// vectors: one of its parameters may carry a byte[] (JavaOverloads.carriesBytes). A
+	// slot whose parameters cannot hands its function what _junm makes, with nothing to
+	// write back.
+	private static boolean handsOctets(JavaImplementation implementation, JavaImplementation.Slot slot) {
+		if (!implementation.octets()) {
+			return false;
+		}
+		for (JavaType parameter : slot.parameterTypes()) {
+			if (JavaOverloads.carriesBytes(parameter)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	// Whether any slot of the implementation hands its function octet vectors.
+	private static boolean handsOctets(JavaImplementation implementation) {
+		for (JavaImplementation.Slot slot : implementation.slots()) {
+			if (handsOctets(implementation, slot)) {
+				return true;
+			}
+		}
+		return false;
 	}
 
 	private static String callbackDescriptor(JavaImplementation.Slot slot) {
@@ -602,6 +633,11 @@ final class JvmJavaImplementations {
 		key.append('#').append(argc).append(implementation.markers().functional() ? " functional" : "");
 		if (implementation.javaFalse()) {
 			key.append(" java-false");
+		}
+		if (implementation.octets()) {
+			// a function constructor argument is handed octet vectors (_jsubclass$N's
+			// conversions), whatever the slots take
+			key.append(" octets");
 		}
 		Subshell cached = this.subshells.get(key.toString());
 		if (cached != null) {
@@ -644,11 +680,12 @@ final class JvmJavaImplementations {
 
 	// The program-side method a subclass slot calls, made the first time one of its
 	// shape asks: one per (superclass, interfaces, method, return type, how Java's false
-	// reaches the callable).
+	// and a byte[] reach the callable).
 	private String subclassCallback(JavaImplementation implementation, JavaImplementation.Slot slot) {
 		JavaType superclass = java.util.Objects.requireNonNull(implementation.superclass());
 		String key = "subclass|" + superclass.name() + "|" + implementation.interfaceNames() + "|" + slot.dispatchKey()
-				+ (implementation.javaFalse() ? "|java-false" : "");
+				+ (implementation.javaFalse() ? "|java-false" : "")
+				+ (handsOctets(implementation, slot) ? "|octets" : "");
 		String cached = this.callbacks.get(key);
 		if (cached != null) {
 			return cached;
@@ -674,20 +711,34 @@ final class JvmJavaImplementations {
 	}
 
 	// static R _jimpl$K(Object fn, Object[] args): (fn [name] (_junm args[0]) ...) --
-	// _junf after :java-false -- then the value converted to R -- or the interpreter's
-	// error for one that does not; a comparison's answer read by _jcmp instead, whose
-	// refusal (AFunction.compare's NullPointerException or ClassCastException) is the
-	// comparator's own failure, thrown outside the handler. What else leaves it thrown --
-	// the function's exit or condition, that error -- is recorded on its way out to the
-	// Java caller (_jsig), for the site whose Java call it reaches.
+	// _junf after :java-false; after :octets the values _jcbo / _jcbf make, whose
+	// vectors _jwbo writes back into Java's arrays once the function returns or throws --
+	// then the value converted to R -- or the interpreter's error for one that does not;
+	// a comparison's answer read by _jcmp instead, whose refusal (AFunction.compare's
+	// NullPointerException or ClassCastException) is the comparator's own failure, thrown
+	// outside the handler. What else leaves it thrown -- the function's exit or
+	// condition, that error -- is recorded on its way out to the Java caller (_jsig), for
+	// the site whose Java call it reaches.
 	private JvmJavaDirectSites.Method buildCallback(boolean proxy, String iface, JavaImplementation.Slot slot,
-			boolean javaFalse, boolean compares, Utf8Entry name, Utf8Entry desc) {
+			boolean javaFalse, boolean octets, boolean compares, Utf8Entry name, Utf8Entry desc) {
 		MethodCode a = new MethodCode();
+		// 2 = the argument list, 3 = i, 4 = the value, 5 = a comparison's answer, 6 = the
+		// values the arguments became (:octets), 7 = a throwable leaving it
+		int values = 6;
+		if (octets) {
+			// read by the handler, so assigned ahead of its range
+			a.aconst_null();
+			a.astore(values);
+		}
 		MethodCode.Label start = a.newBoundLabel();
 		ClassEntry objectClass = cls("java/lang/Object");
 		MethodRefEntry unmarshal = this.direct.unmarshalHelper(javaFalse);
 		MethodRefEntry signal = this.direct.signalHelper();
-		// 2 = the argument list, 3 = i, 4 = the value
+		if (octets) {
+			a.aload(1);
+			a.invokestatic(this.direct.callbackArgumentsHelper(javaFalse));
+			a.astore(values);
+		}
 		MethodCode.Label loop = a.newLabel();
 		MethodCode.Label done = a.newLabel();
 		a.aconst_null();
@@ -703,10 +754,17 @@ final class JvmJavaImplementations {
 		a.anewarray(objectClass);
 		a.dup();
 		a.loadConstant(0);
-		a.aload(1);
-		a.iload(3);
-		a.aaload();
-		a.invokestatic(unmarshal);
+		if (octets) {
+			a.aload(values);
+			a.iload(3);
+			a.aaload();
+		}
+		else {
+			a.aload(1);
+			a.iload(3);
+			a.aaload();
+			a.invokestatic(unmarshal);
+		}
 		a.aastore();
 		a.dup();
 		a.loadConstant(1);
@@ -737,6 +795,7 @@ final class JvmJavaImplementations {
 		MethodCode.Label refused = a.newLabel();
 		if ("void".equals(returnType.name())) {
 			a.pop();
+			writeBack(a, octets, 1, values);
 			a.return_();
 		}
 		else if (compares) {
@@ -749,6 +808,7 @@ final class JvmJavaImplementations {
 			a.aload(4);
 			a.invokestatic(this.direct.comparisonHelper());
 			a.astore(5);
+			writeBack(a, octets, 1, values);
 			a.aload(5);
 			a.instanceOf(cls("java/lang/Integer"));
 			a.ifeq(refused);
@@ -759,6 +819,7 @@ final class JvmJavaImplementations {
 		}
 		else {
 			a.astore(4);
+			writeBack(a, octets, 1, values);
 			MethodCode.Label fits = a.newLabel();
 			a.aload(4);
 			a.invokestatic(this.direct.returnedCost(returnType));
@@ -780,6 +841,7 @@ final class JvmJavaImplementations {
 			a.return_(returnKind(returnType));
 		}
 		MethodCode.Label end = a.newBoundLabel();
+		thrownWriteBack(a, octets, 1, values, 7);
 		a.invokestatic(signal);
 		a.athrow();
 		a.exceptionCatch(start, end, end, cls("java/lang/Throwable"));
@@ -790,6 +852,26 @@ final class JvmJavaImplementations {
 			a.athrow();
 		}
 		return new JvmJavaDirectSites.Method(name, desc, a);
+	}
+
+	// After :octets, what the function stored into the vectors its byte[] arguments
+	// became goes back into Java's arrays: _jwbo(args, values).
+	private void writeBack(MethodCode a, boolean octets, int args, int values) {
+		if (octets) {
+			a.aload(args);
+			a.aload(values);
+			a.invokestatic(this.direct.writeBackHelper());
+		}
+	}
+
+	// The same in the handler, the throwable on the stack kept in the local THROWN: what
+	// the function stored before it threw reaches Java as it would have in place.
+	private void thrownWriteBack(MethodCode a, boolean octets, int args, int values, int thrown) {
+		if (octets) {
+			a.astore(thrown);
+			writeBack(a, true, args, values);
+			a.aload(thrown);
+		}
 	}
 
 	private static TypeKind returnKind(JavaType type) {
@@ -804,17 +886,31 @@ final class JvmJavaImplementations {
 	}
 
 	// static R _jsub$K(Object fn, Object self, Object[] args): (fn self name (_junm
-	// args[0]) ...), then the value converted to R -- or the interpreter's error for
-	// one that does not. What leaves it thrown is recorded on its way out to the Java
-	// caller (_jsig), for the site whose Java call it reaches.
+	// args[0]) ...) -- the arguments as _jimpl$K hands them, _jwbo writing back after
+	// :octets -- then the value converted to R -- or the interpreter's error for one that
+	// does not. What leaves it thrown is recorded on its way out to the Java caller
+	// (_jsig), for the site whose Java call it reaches.
 	private JvmJavaDirectSites.Method buildSubclassCallback(JavaImplementation implementation,
 			JavaImplementation.Slot slot, Utf8Entry name, Utf8Entry desc) {
 		MethodCode a = new MethodCode();
+		boolean octets = handsOctets(implementation, slot);
+		// 3 = the argument list, 4 = i, 5 = the value, 6 = the values the arguments
+		// became (:octets), 7 = a throwable leaving it
+		int values = 6;
+		if (octets) {
+			// read by the handler, so assigned ahead of its range
+			a.aconst_null();
+			a.astore(values);
+		}
 		MethodCode.Label start = a.newBoundLabel();
 		ClassEntry objectClass = cls("java/lang/Object");
 		MethodRefEntry unmarshal = this.direct.unmarshalHelper(implementation.javaFalse());
 		MethodRefEntry signal = this.direct.signalHelper();
-		// 3 = the argument list, 4 = i, 5 = the value
+		if (octets) {
+			a.aload(2);
+			a.invokestatic(this.direct.callbackArgumentsHelper(implementation.javaFalse()));
+			a.astore(values);
+		}
 		MethodCode.Label loop = a.newLabel();
 		MethodCode.Label done = a.newLabel();
 		a.aconst_null();
@@ -830,10 +926,17 @@ final class JvmJavaImplementations {
 		a.anewarray(objectClass);
 		a.dup();
 		a.loadConstant(0);
-		a.aload(2);
-		a.iload(4);
-		a.aaload();
-		a.invokestatic(unmarshal);
+		if (octets) {
+			a.aload(values);
+			a.iload(4);
+			a.aaload();
+		}
+		else {
+			a.aload(2);
+			a.iload(4);
+			a.aaload();
+			a.invokestatic(unmarshal);
+		}
 		a.aastore();
 		a.dup();
 		a.loadConstant(1);
@@ -874,10 +977,12 @@ final class JvmJavaImplementations {
 		JavaType superclass = java.util.Objects.requireNonNull(implementation.superclass());
 		if ("void".equals(returnType.name())) {
 			a.pop();
+			writeBack(a, octets, 2, values);
 			a.return_();
 		}
 		else {
 			a.astore(5);
+			writeBack(a, octets, 2, values);
 			MethodCode.Label fits = a.newLabel();
 			a.aload(5);
 			a.invokestatic(this.direct.returnedCost(returnType));
@@ -900,6 +1005,7 @@ final class JvmJavaImplementations {
 			a.return_(returnKind(returnType));
 		}
 		MethodCode.Label end = a.newBoundLabel();
+		thrownWriteBack(a, octets, 2, values, 7);
 		a.invokestatic(signal);
 		a.athrow();
 		a.exceptionCatch(start, end, end, cls("java/lang/Throwable"));

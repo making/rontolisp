@@ -32,8 +32,8 @@ import org.jspecify.annotations.Nullable;
  * ({@link JavaMarkers}): with {@code :java-false} an argument Java hands a slot's
  * function answers Java's {@code false} as {@code |false|}; with {@code :functional} too,
  * a function implementing {@code java.util.Comparator} may answer a boolean
- * ({@link #readsComparison}); {@code :octets} reads what a call answers, never what Java
- * hands a function, so an implementation keeps none ({@link JavaMarkers#callbacks})
+ * ({@link #readsComparison}); with {@code :octets} a {@code byte[]} Java hands it -- an
+ * argument, or an element of one -- is an {@code (unsigned-byte 8)} vector of its octets
  * @param standIn how a {@code java:reify} given {@code :value} stands for its value, or
  * {@code null} for an object that stands for none
  */
@@ -44,12 +44,11 @@ public record JavaImplementation(boolean proxy, List<JavaType> interfaces, List<
 	public static final int NONE = -1;
 
 	/**
-	 * Copies the interfaces and the slots, and keeps the markers a function reads.
+	 * Copies the interfaces and the slots.
 	 */
 	public JavaImplementation {
 		interfaces = List.copyOf(interfaces);
 		slots = List.copyOf(slots);
-		markers = markers.callbacks();
 	}
 
 	/**
@@ -160,6 +159,15 @@ public record JavaImplementation(boolean proxy, List<JavaType> interfaces, List<
 	 */
 	public boolean javaFalse() {
 		return this.markers.javaFalse();
+	}
+
+	/**
+	 * @return whether a {@code byte[]} Java hands a slot's function -- an argument, or an
+	 * element of one -- is an {@code (unsigned-byte 8)} vector of its octets rather than
+	 * a list of signed bytes ({@code :octets})
+	 */
+	public boolean octets() {
+		return this.markers.octets();
 	}
 
 	/**

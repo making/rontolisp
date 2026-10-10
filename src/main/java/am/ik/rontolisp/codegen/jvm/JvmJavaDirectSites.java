@@ -173,6 +173,28 @@ final class JvmJavaDirectSites {
 			ARRAY_TO_LIST_FALSE_OCTETS };
 
 	/**
+	 * {@code _jcbo(Object[])Object[]}: the arguments Java hands a function of an
+	 * implementation made at {@code :octets}, each as {@link #UNMARSHAL_OCTETS} makes it
+	 * -- a {@code byte[]} a fresh octet vector -- and an array Java hands twice one
+	 * vector, as Java's one array is.
+	 */
+	static final String CALLBACK_OCTETS = "_jcbo";
+
+	/**
+	 * {@code _jcbf(Object[])Object[]}: {@link #CALLBACK_OCTETS} over
+	 * {@link #UNMARSHAL_FALSE_OCTETS}, after {@code :java-false} too.
+	 */
+	static final String CALLBACK_FALSE_OCTETS = "_jcbf";
+
+	/**
+	 * {@code _jwbo(Object[] handed, Object[] values)V}: after such a function returns or
+	 * throws, what it stored into the octet vector a {@code byte[]} argument became goes
+	 * back into Java's array -- the octets after the width, written only where they
+	 * differ, so an array the function left alone is never written.
+	 */
+	static final String WRITE_BACK_OCTETS = "_jwbo";
+
+	/**
 	 * {@code _jhandle(Object value, Object text, Object hash, Object order, Object class,
 	 * int given)Object}: {@code (java:handle value text hash order class)} of
 	 * {@code given} arguments, the absent ones {@code null}: a
@@ -353,6 +375,11 @@ final class JvmJavaDirectSites {
 	private final @Nullable MethodRefEntry[] unmarshals = new MethodRefEntry[UNMARSHALS.length];
 
 	private final @Nullable MethodRefEntry[] arraysToList = new MethodRefEntry[ARRAYS_TO_LIST.length];
+
+	// _jcbo and _jcbf, by whether Java's false is |false|: built when first asked for.
+	private final @Nullable MethodRefEntry[] callbackArguments = new MethodRefEntry[2];
+
+	private @Nullable MethodRefEntry writeBack;
 
 	private @Nullable MethodRefEntry comparison;
 
@@ -551,12 +578,50 @@ final class JvmJavaDirectSites {
 	/**
 	 * {@code _junm}, or at a call ending in {@code :java-false} {@code _junf}, which
 	 * answers Java's {@code false} as {@code |false|}: made when first asked for. What
-	 * Java hands a function goes through this one: never octets.
+	 * Java hands a function made without {@code :octets} goes through this one.
 	 * @param javaFalse whether Java's false is {@code |false|}
 	 * @return the helper
 	 */
 	MethodRefEntry unmarshalHelper(boolean javaFalse) {
 		return unmarshal(javaFalse, false);
+	}
+
+	/**
+	 * {@code _jcbo}, or after {@code :java-false} too {@code _jcbf}: the arguments Java
+	 * hands a function made at {@code :octets} as the Lisp values it is handed, made when
+	 * first asked for.
+	 * @param javaFalse whether Java's false is {@code |false|}
+	 * @return {@code (Object[])Object[]}
+	 */
+	MethodRefEntry callbackArgumentsHelper(boolean javaFalse) {
+		int index = javaFalse ? 1 : 0;
+		MethodRefEntry ref = this.callbackArguments[index];
+		if (ref == null) {
+			Utf8Entry name = this.cp.utf8Entry(javaFalse ? CALLBACK_FALSE_OCTETS : CALLBACK_OCTETS);
+			Utf8Entry desc = this.cp.utf8Entry("([Ljava/lang/Object;)[Ljava/lang/Object;");
+			ref = this.cp.methodRef(this.thisClass, name, desc);
+			this.callbackArguments[index] = ref;
+			this.methods.add(buildCallbackArguments(name, desc, unmarshal(javaFalse, true)));
+		}
+		return ref;
+	}
+
+	/**
+	 * {@code _jwbo}: after a function made at {@code :octets} returns or throws, what it
+	 * stored into the octet vectors {@link #callbackArgumentsHelper} made goes back into
+	 * Java's arrays. Made when first asked for.
+	 * @return {@code (Object[],Object[])V}
+	 */
+	MethodRefEntry writeBackHelper() {
+		MethodRefEntry ref = this.writeBack;
+		if (ref == null) {
+			Utf8Entry name = this.cp.utf8Entry(WRITE_BACK_OCTETS);
+			Utf8Entry desc = this.cp.utf8Entry("([Ljava/lang/Object;[Ljava/lang/Object;)V");
+			ref = this.cp.methodRef(this.thisClass, name, desc);
+			this.writeBack = ref;
+			this.methods.add(buildWriteBack(name, desc));
+		}
+		return ref;
 	}
 
 	/**
@@ -1126,6 +1191,151 @@ final class JvmJavaDirectSites {
 			this.methods.add(buildArrayToList(name, desc, unmarshal(javaFalse, octets), javaFalse, octets));
 		}
 		return ref;
+	}
+
+	// _jcbo / _jcbf(Object[] handed)Object[]: each argument through UNMARSHAL (_juno /
+	// _jufo), but a byte[] an earlier argument is too takes that one's vector, so the
+	// function stores into one copy of Java's one array.
+	private Method buildCallbackArguments(Utf8Entry name, Utf8Entry desc, MethodRefEntry unmarshal) {
+		MethodCode a = new MethodCode();
+		ClassEntry bytes = cls("[B");
+		// 0 = the handed arguments, 1 = the values, 2 = i, 3 = k, 4 = handed[i]
+		a.aload(0);
+		a.arraylength();
+		a.anewarray(cls("java/lang/Object"));
+		a.astore(1);
+		a.loadConstant(0);
+		a.istore(2);
+		MethodCode.Label loop = a.newLabel();
+		MethodCode.Label done = a.newLabel();
+		MethodCode.Label next = a.newLabel();
+		MethodCode.Label fresh = a.newLabel();
+		a.labelBinding(loop);
+		a.iload(2);
+		a.aload(0);
+		a.arraylength();
+		a.if_icmpge(done);
+		a.aload(0);
+		a.iload(2);
+		a.aaload();
+		a.astore(4);
+		a.aload(4);
+		a.instanceOf(bytes);
+		a.ifeq(fresh);
+		// an earlier argument holding the very array: its vector
+		a.loadConstant(0);
+		a.istore(3);
+		MethodCode.Label earlier = a.newLabel();
+		MethodCode.Label other = a.newLabel();
+		a.labelBinding(earlier);
+		a.iload(3);
+		a.iload(2);
+		a.if_icmpge(fresh);
+		a.aload(0);
+		a.iload(3);
+		a.aaload();
+		a.aload(4);
+		a.if_acmpne(other);
+		a.aload(1);
+		a.iload(2);
+		a.aload(1);
+		a.iload(3);
+		a.aaload();
+		a.aastore();
+		a.goto_(next);
+		a.labelBinding(other);
+		a.iinc(3, 1);
+		a.goto_(earlier);
+		a.labelBinding(fresh);
+		a.aload(1);
+		a.iload(2);
+		a.aload(4);
+		a.invokestatic(unmarshal);
+		a.aastore();
+		a.labelBinding(next);
+		a.iinc(2, 1);
+		a.goto_(loop);
+		a.labelBinding(done);
+		a.aload(1);
+		a.areturn();
+		return new Method(name, desc, a);
+	}
+
+	// _jwbo(Object[] handed, Object[] values)V: each byte[] argument whose octet vector
+	// (the width in slot 0, then the octets) differs from it takes the octets back; the
+	// values null when the function never ran.
+	private Method buildWriteBack(Utf8Entry name, Utf8Entry desc) {
+		MethodCode a = new MethodCode();
+		ClassEntry bytes = cls("[B");
+		// 0 = the handed arguments, 1 = the values, 2 = i, 3 = Java's array,
+		// 4 = the vector
+		MethodCode.Label end = a.newLabel();
+		MethodCode.Label loop = a.newLabel();
+		MethodCode.Label next = a.newLabel();
+		a.aload(1);
+		a.ifnull(end);
+		a.loadConstant(0);
+		a.istore(2);
+		a.labelBinding(loop);
+		a.iload(2);
+		a.aload(0);
+		a.arraylength();
+		a.if_icmpge(end);
+		a.aload(0);
+		a.iload(2);
+		a.aaload();
+		a.instanceOf(bytes);
+		a.ifeq(next);
+		a.aload(1);
+		a.iload(2);
+		a.aaload();
+		a.instanceOf(bytes);
+		a.ifeq(next);
+		a.aload(0);
+		a.iload(2);
+		a.aaload();
+		a.checkcast(bytes);
+		a.astore(3);
+		a.aload(1);
+		a.iload(2);
+		a.aaload();
+		a.checkcast(bytes);
+		a.astore(4);
+		// the vector is a copy one octet longer than the array: anything else is no copy
+		a.aload(4);
+		a.aload(3);
+		a.if_acmpeq(next);
+		a.aload(4);
+		a.arraylength();
+		a.aload(3);
+		a.arraylength();
+		a.loadConstant(1);
+		a.iadd();
+		a.if_icmpne(next);
+		// unchanged: Java's array keeps what it holds
+		a.aload(4);
+		a.loadConstant(1);
+		a.aload(4);
+		a.arraylength();
+		a.aload(3);
+		a.loadConstant(0);
+		a.aload(3);
+		a.arraylength();
+		a.invokestatic(method("java/util/Arrays", "equals", "([BII[BII)Z"));
+		a.ifne(next);
+		a.aload(4);
+		a.loadConstant(1);
+		a.aload(3);
+		a.loadConstant(0);
+		a.aload(3);
+		a.arraylength();
+		a.invokestatic(method("java/lang/System", "arraycopy", "(Ljava/lang/Object;ILjava/lang/Object;II)V"));
+		a.labelBinding(next);
+		a.iinc(2, 1);
+		a.goto_(loop);
+		a.labelBinding(end);
+		a.return_();
+		return new Method(name, desc, a);
 	}
 
 	// --- shared throws ---
@@ -2494,14 +2704,15 @@ final class JvmJavaDirectSites {
 	/**
 	 * {@code _jconv$N} as above at a site ending in these markers: a function converted
 	 * by its arguments after {@code :functional}, and the implementation it becomes
-	 * handed Java's {@code false} as {@code |false|} after {@code :java-false}. The
-	 * markers only matter where a function converts, so the key carries them only then
-	 * ({@code :octets} never: it reads only what the call answers).
+	 * handed Java's {@code false} as {@code |false|} after {@code :java-false} and a
+	 * {@code byte[]} as an octet vector after {@code :octets}. The markers only matter
+	 * where a function converts, so the key carries them only then.
 	 */
 	private MethodRefEntry convert(JavaType target, boolean functions, boolean sequences, JavaMarkers markers) {
-		JavaMarkers used = functions ? markers.callbacks() : JavaMarkers.NONE;
+		JavaMarkers used = functions ? markers : JavaMarkers.NONE;
 		String key = target.name() + (functions ? " functions" : "") + (sequences ? " sequences" : "")
-				+ (used.functional() ? " functional" : "") + (used.javaFalse() ? " java-false" : "");
+				+ (used.functional() ? " functional" : "") + (used.javaFalse() ? " java-false" : "")
+				+ (used.octets() ? " octets" : "");
 		MethodRefEntry ref = this.converts.get(key);
 		if (ref == null) {
 			Utf8Entry name = this.cp.utf8Entry(CONVERT_PREFIX + this.converts.size());

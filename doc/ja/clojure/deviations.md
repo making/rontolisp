@@ -448,7 +448,13 @@
 - Java のインタフェースが期待される位置に渡した fn は、どのインタフェースでもその抽象
   メソッドすべてを実装し、それぞれメソッドの引数で呼ばれます。オラクルが fn を変換する
   のは `@FunctionalInterface` 注釈付きのインタフェースだけです（`PropertyChangeListener`
-  はオラクルでは `ClassCastException` になります）。
+  はオラクルでは `ClassCastException` になります）。Java が保持するのは fn を呼ぶオブジェクト
+  なので、Java が fn そのものを返すことはありません。オラクルの fn はそれ自体が `Runnable`・
+  `Callable`・`Comparator` です（オラクルでは `(.comparator (java.util.TreeSet. f))` が `f`
+  です）。fn の答えは `java:` サーフェスの変換で Java へ渡ります。バイト配列はその `byte[]`、
+  ベクタは `ArrayList` の複製になり、マップ・セット・キーワード・分数は拒否されます
+  （`cannot return`）。参照を返す `proxy` のメソッドなら、Java は値自身のオブジェクトを
+  受け取ります。
 - Java に渡した値は、このフロントエンドのクラスのオブジェクトで、Java からはオラクル自身の
   オブジェクトと同じように読めます。ベクタ・リスト・遅延シーケンス・セット・マップ・record・
   ソート済みコレクションは、Clojure の印字どおりに綴られる読み取り専用の `java.util` の
@@ -475,8 +481,9 @@
   自身の配列、JVM では複製で、複製はメンバが戻るときにバイト配列へ書き戻されます。そのため
   Java のオブジェクトが保持した配列（`ByteBuffer/wrap` の配列、`ByteBuffer` の `.array`）が
   バイト配列そのものになるのはインタプリタだけです。戻ってきた `byte[]` は新しいバイト配列で、
-  渡したものと `identical?` にはなりません。`proxy` や `reify` のメソッド、fn に渡される
-  `byte[]` は要素のリストです。
+  渡したものと `identical?` にはなりません。Java が `proxy`、deftype や reify のメソッド、fn に
+  渡す `byte[]` も同じで、JVM ではそれが複製を持ち、メソッドが戻るか投げた時点で Java の配列へ
+  書き戻されます（配列の引数の中にある `byte[]` は書き戻されません）。
 - 整数の receiver は `Integer` に収まれば `Integer`、収まらなければ `Long` として
   呼ばれます（オラクルでは常に `Long` です）。`(.getClass 1)` は
   `java.lang.Integer` を答えます。

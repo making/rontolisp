@@ -2293,8 +2293,8 @@ public final class JvmLispCompiler implements LispCompiler {
 		// A fetched reply's :body and a served request's :raw-body are OCTET streams
 		// (their chunks long[] packed vectors built by the runtime, not by any scanned
 		// make-array), so a program that fetches or serves may hold one and needs the
-		// _iv* dispatch on. So does a java: call ending in :octets, whose byte[] answer
-		// is an octet vector.
+		// _iv* dispatch on. So does a java: form ending in :octets: a byte[] it answers,
+		// or Java hands the functions of the implementation it makes, is an octet vector.
 		boolean usesIntArray = programUsesIntArray(program, closRegistry) || usesSeqIntVector || usesFetch
 				|| usesInflate || usesHttpHandler || usesFloat16Bits || programAsksJavaForOctets(program);
 		// The bulk binary transfer behind read-sequence / write-sequence over a packed
@@ -5790,9 +5790,9 @@ public final class JvmLispCompiler implements LispCompiler {
 		return false;
 	}
 
-	// Whether a java: call or field form of the program ends in :octets
-	// (compiler/JavaMarkers): its byte[] answer is an octet vector the java: runtime
-	// makes, not any scanned make-array.
+	// Whether a java: call, field or implementation form of the program ends in :octets
+	// (compiler/JavaMarkers): a byte[] it answers, or Java hands a function of it, is an
+	// octet vector the java: runtime makes, not any scanned make-array.
 	private static boolean programAsksJavaForOctets(List<LispVal> program) {
 		for (LispVal expr : program) {
 			if (asksJavaForOctets(expr)) {
@@ -5806,6 +5806,10 @@ public final class JvmLispCompiler implements LispCompiler {
 		while (val instanceof LispCons cons) {
 			if (cons.car() instanceof LispSymbol head && isJavaCallOperator(head.name()) && cons.isProperList()
 					&& am.ik.rontolisp.compiler.JavaMarkers.of(cons.toList(), 1).octets()) {
+				return true;
+			}
+			if (am.ik.rontolisp.compiler.JavaImplementations.isImplementationForm(cons) && cons.isProperList()
+					&& am.ik.rontolisp.compiler.JavaImplementations.markers(cons.toList()).octets()) {
 				return true;
 			}
 			if (asksJavaForOctets(cons.car())) {

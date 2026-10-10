@@ -29,13 +29,14 @@ import org.jspecify.annotations.Nullable;
  * The lowering knows the interfaces where it defines the type, so it makes the face with
  * a maker over literal interface names: {@code (lambda (x) (java:reify '("I" ...) :value
  * x :class "C" "m(P)" (lambda (a) (... (funcall (%clojure-interface-entry x "m") x a)))
- * ... :java-false))}, each named method calling the type's own row method -- the body's,
- * or the refusal of an abstract one it leaves out -- so the JVM resolves it to a
+ * ... :java-false :octets))}, each named method calling the type's own row method -- the
+ * body's, or the refusal of an abstract one it leaves out -- so the JVM resolves it to a
  * generated class and nothing reflects, and the interpreter builds the same object
  * through its {@code Proxy}. A default method the body leaves out keeps Java's body.
  * Every face is a {@code Comparable}, as every identity handle is: a type implementing no
  * {@code Comparable} refuses {@code compareTo} with the oracle's
- * {@code ClassCastException} words. A face's result reaches Java as the oracle's object
+ * {@code ClassCastException} words. A {@code byte[]} Java hands a method is a byte array
+ * ({@code %clojure-host-answer}), and a face's result reaches Java as the oracle's object
  * ({@code %clojure-host-member}; a boolean by truth, an {@code Iterator} as a Java one, a
  * {@code Map}'s {@code entrySet} as Java's entries).
  *
@@ -262,6 +263,9 @@ final class ClojureJavaFaces {
 			}
 		}
 		parts.add(new LispSymbol(LispNames.JAVA_FALSE_MARKER));
+		// a byte[] Java hands a method is an octet vector, which argument() reads as a
+		// byte array
+		parts.add(new LispSymbol(LispNames.JAVA_OCTETS_MARKER));
 		LispVal face = ClojureLowerUtil.list(parts);
 		if (view != null) {
 			face = ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
@@ -294,10 +298,10 @@ final class ClojureJavaFaces {
 		call.add(ClojureLowerUtil.list(ClojureLowerUtil.sym("the"),
 				ClojureLowerUtil.list(new LispSymbol(LispNames.JAVA_OBJECT_QUALIFIED), LispString.literal(MAP)), view));
 		call.add(LispString.literal(method.getName()));
-		for (int i = 0; i < method.getParameterCount(); i++) {
+		for (Class<?> type : method.getParameterTypes()) {
 			LispSymbol param = ctx.freshTemp();
 			params.add(param);
-			call.add(ClojureLowerUtil.list(new LispSymbol(HOST_MEMBER), param));
+			call.add(ClojureLowerUtil.list(new LispSymbol(HOST_MEMBER), argument(param, type)));
 		}
 		boolean reference = !method.getReturnType().isPrimitive();
 		if (reference) {
@@ -340,10 +344,10 @@ final class ClojureJavaFaces {
 		call.add(ClojureLowerUtil.list(new LispSymbol(ClojureInterfaces.ENTRY), self,
 				LispString.literal(method.getName())));
 		call.add(self);
-		for (int i = 0; i < method.getParameterCount(); i++) {
+		for (Class<?> type : method.getParameterTypes()) {
 			LispSymbol param = ctx.freshTemp();
 			params.add(param);
-			call.add(param);
+			call.add(argument(param, type));
 		}
 		LispVal answer = ClojureLowerUtil.list(call);
 		Class<?> returned = method.getReturnType();
@@ -363,6 +367,20 @@ final class ClojureJavaFaces {
 			answer = ClojureLowerUtil.list(new LispSymbol(HOST_MEMBER), answer);
 		}
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(params), answer);
+	}
+
+	/** The library function a value Java hands a face's method is read through. */
+	private static final String HOST_ANSWER = "RONTOLISP::%CLOJURE-HOST-ANSWER";
+
+	/**
+	 * A face method's argument as the body is handed it: a {@code byte[]} -- the face
+	 * ends in {@code :octets} -- a byte array over it, through
+	 * {@code %clojure-host-answer} where the parameter's type may carry one; any other
+	 * parameter as Java hands it.
+	 */
+	private static LispVal argument(LispSymbol param, Class<?> type) {
+		return ClojureInteropLowering.carriesBytes(type) ? ClojureLowerUtil.list(new LispSymbol(HOST_ANSWER), param)
+				: param;
 	}
 
 	/**

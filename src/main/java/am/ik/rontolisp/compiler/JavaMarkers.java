@@ -26,9 +26,10 @@ import am.ik.rontolisp.LispVal;
  * {@code java.util.Comparator} by its arguments may answer a boolean
  * ({@link JavaImplementation#readsComparison})
  * @param octets {@code :octets}: a {@code byte[]} the form answers -- a call's value, a
- * field's, an element of an array either answers -- comes back as an
- * {@code (unsigned-byte 8)} vector of its octets rather than a list of signed bytes; what
- * Java hands a function (converted at the call, or of an implementation) stays a list
+ * field's, an element of an array either answers -- and one Java hands a function
+ * converted at the call or of the implementation the form makes -- an argument, or an
+ * element of one -- comes back as an {@code (unsigned-byte 8)} vector of its octets
+ * rather than a list of signed bytes
  */
 public record JavaMarkers(boolean functional, boolean javaFalse, boolean octets) {
 
@@ -43,16 +44,6 @@ public record JavaMarkers(boolean functional, boolean javaFalse, boolean octets)
 	 */
 	public boolean any() {
 		return this.functional || this.javaFalse || this.octets;
-	}
-
-	/**
-	 * These markers but {@code :octets}, which reads only what the form answers: the
-	 * markers a function converted at the call, or an implementation the form makes,
-	 * reads.
-	 * @return the markers without {@code :octets}
-	 */
-	public JavaMarkers callbacks() {
-		return this.octets ? new JavaMarkers(this.functional, this.javaFalse, false) : this;
 	}
 
 	/**

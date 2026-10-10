@@ -2716,14 +2716,33 @@
 
 ;; The value a java: member is handed for the Clojure value X, where the oracle
 ;; hands Java its own object: the lowering wraps each argument of a host call in
-;; this (clojure/ClojureInteropLowering.hostCall). A fn is itself -- the call makes
-;; it the interface a parameter expects -- and so is a condition, which java:
-;; hands over as the host exception it stands for; anything else is what
-;; %clojure-host-member makes of it.
+;; this (clojure/ClojureInteropLowering.hostCall). A fn is the fn Java calls in its
+;; place (%clojure-host-fn) -- the call makes it the interface a parameter expects
+;; -- a condition itself, which java: hands over as the host exception it stands
+;; for; anything else is what %clojure-host-member makes of it.
 (defun rontolisp::%clojure-host-value (x)
-  (if (or (functionp x) (rontolisp::%clojure-lisp-instance-p x))
-      x
-      (rontolisp::%clojure-host-member x)))
+  (cond ((functionp x) (rontolisp::%clojure-host-fn x))
+        ((rontolisp::%clojure-lisp-instance-p x) x)
+        (t (rontolisp::%clojure-host-member x))))
+
+;; The fn Java calls for the fn F, as the oracle's functional interface calls its
+;; fn: F over the arguments as Clojure values -- a byte[] a byte array, since the
+;; host call ends in :octets -- answering a byte array as its byte[]. A fn form or
+;; a defn handed to a member is wrapped the same way where the lowering sees it
+;; (clojure/ClojureInteropLowering.hostFunction).
+(defun rontolisp::%clojure-host-fn (f)
+  (lambda (&rest args) (rontolisp::%clojure-host-apply f args)))
+
+;; F applied to the arguments ARGS Java hands the fn it calls (%clojure-host-fn).
+(defun rontolisp::%clojure-host-apply (f args)
+  (rontolisp::%clojure-host-fn-answer
+   (apply f (rontolisp::%clojure-host-answer args))))
+
+;; What a fn Java calls answers it for X: a byte array the byte[] of its octets,
+;; anything else as it is -- the method may answer nothing, and a byte array is the
+;; only value whose conversion costs no walk (a collection's view realizes it).
+(defun rontolisp::%clojure-host-fn-answer (x)
+  (if (rontolisp::%clojure-bytes-p x) (java:view x (car (cdr x)) :bytes) x))
 
 ;; The Java object the Clojure value X is, behaving as the oracle's own object: a
 ;; host call's argument (%clojure-host-value), a member of a collection crossing,
