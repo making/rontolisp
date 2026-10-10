@@ -58,8 +58,12 @@ returns `nil`); the error arm **signals a condition** carrying the mapped `E`, c
 Rejected: `(values ok err)` — a bare call silently swallows the error arm, it bypasses the
 condition system, `--no-gc` has no spill channel, and migrating later breaks user code.
 
-**`list<u8>` = a string carrying the bytes one-per-char**, NOT a list of ints; distinct from WIT
-`string` (canonical-ABI UTF-8).
+**`list<u8>` = a string**, NOT a list of ints. The premise "one character per byte" does not
+hold on the wasm backends (measured 2026-10-10): a `--component` result lifts through
+`_string_from_mem`, the same non-validating UTF-8 decode as a WIT `string` (`emitLiftString`), so
+`ff 00 41` comes back as one code point, and Preview 1 declares the member `:string`. A
+`list<u8>` result is exact only for octets that are valid UTF-8 (todo `f23`). The Clojure tier
+crosses it as a byte array (`.kb/clojure-frontend.md`, "Host boundary").
 
 - **Trap**: a rontolisp string is stored UTF-8 (`.kb/wasm-gc-strings.md`), so staging one for a
   `list<u8>` parameter ENCODES and every byte >= 0x80 doubles. A `list<u8>` / `stream<u8>`

@@ -878,8 +878,9 @@ examples:
       which sees and answers Clojure values; wasm-component compiles the
       canonical-ABI import, which `wasmtime run -S keyvalue=y` runs against
       wasmtime's own store with the same output (ClojureWitBoundaryTest runs all
-      three). list-keys answers the key-response record as a map, and open's error
-      arm is caught as an ExceptionInfo holding the error variant's case keyword
+      three). A value, a list<u8>, is a byte array; list-keys answers the
+      key-response record as a map, and open's error arm is caught as an
+      ExceptionInfo holding the error variant's case keyword
     expect:
       file: .expected/wit-keyvalue-page-hits-clj.txt
 

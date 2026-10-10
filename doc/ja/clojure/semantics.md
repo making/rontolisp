@@ -480,7 +480,6 @@ var はエクスポートより下で定義してかまいません。
 | 非同期の Ring ハンドラ（`:async? true` 付きの `run-server`） | `asynchronous handlers (:async? true) are not supported` | トランスポートに respond/raise の仕組みがない |
 | `rontolisp.wasm` の宣言の `:async`、`async func` の WIT メンバーやエクスポート | `:async is not supported yet ...`、`... is an async func ...` | 中断する呼び出しが答える future は Clojure の future ではない |
 | stream か future を受け取るか答える WIT メンバー | `... which the Clojure tier does not carry yet (file.wit:N)` | 非同期 canonical ABI のハンドルが答える Clojure の future がまだない |
-| `rontolisp.wasm` の宣言の `:bytes` | `:bytes does not cross from Clojure yet ...` | バイト配列を、渡す `(unsigned-byte 8)` のベクタへ変換する仕組みがまだない |
 
 ## エラーと位置
 

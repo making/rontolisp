@@ -9,9 +9,10 @@
 ;; The import binds the interface's functions as the vars of the namespace `kv`
 ;; reaches: kv/open, and each resource method with the handle first --
 ;; kv/bucket-get, kv/bucket-set, kv/bucket-delete, kv/bucket-exists,
-;; kv/bucket-list-keys. Each WIT value crosses in its Clojure spelling: list-keys
-;; answers the record key-response as a map, and a result's error arm (the
-;; variant error) is thrown as an ExceptionInfo holding the case keyword.
+;; kv/bucket-list-keys. Each WIT value crosses in its Clojure spelling: a value,
+;; a list<u8>, is a byte array, list-keys answers the record key-response as a
+;; map, and a result's error arm (the variant error) is thrown as an ExceptionInfo
+;; holding the case keyword.
 (ns page-hits
   (:require [rontolisp.wit :as wit]))
 
@@ -40,10 +41,14 @@
 (def requests ["/index" "/pricing" "/index" "/docs" "/index" "/pricing"])
 
 ;; Read the counter for a page, add one, write it back. bucket.get answers an
-;; option<list<u8>>: the value as a string, or nil when the key is absent.
+;; option<list<u8>>: the value's bytes, or nil when the key is absent; the
+;; counter is stored as its decimal text.
+(defn hits [bucket page]
+  (some-> (kv/bucket-get bucket page) String.))
+
 (defn record-hit [bucket page]
-  (let [seen (kv/bucket-get bucket page)]
-    (kv/bucket-set bucket page (str (inc (if seen (read-string seen) 0))))))
+  (let [seen (hits bucket page)]
+    (kv/bucket-set bucket page (.getBytes (str (inc (if seen (read-string seen) 0)))))))
 
 ;; bucket.list-keys answers a record, key-response: a map whose :keys is a vector
 ;; of the keys and whose :cursor is nil once they are all there.
@@ -58,13 +63,13 @@
     (record-hit bucket page))
   (println "hits per page:")
   (doseq [page (sorted-keys bucket)]
-    (println (str "  " page " = " (kv/bucket-get bucket page))))
+    (println (str "  " page " = " (hits bucket page))))
   (println "/docs exists?    " (kv/bucket-exists bucket "/docs"))
   (kv/bucket-delete bucket "/docs")
   (println "/docs exists now?" (kv/bucket-exists bucket "/docs"))
   (println "keys:            " (pr-str (sorted-keys bucket)))
   ;; a binding is a function value too
-  (println "values:          " (mapv #(kv/bucket-get bucket %) ["/index" "/pricing" "/nope"])))
+  (println "values:          " (mapv #(some-> % String.) (map kv/bucket-get (repeat bucket) ["/index" "/pricing" "/nope"]))))
 
 (println "bad store:       "
          (try (kv/open "not-a-store-anyone-has")

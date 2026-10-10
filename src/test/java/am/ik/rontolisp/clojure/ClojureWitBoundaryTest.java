@@ -67,9 +67,9 @@ class ClojureWitBoundaryTest {
 
 			(let [bucket (kv/open "")
 			      seen (kv/bucket-get bucket "hits")]
-			  (println "seen" (pr-str seen))
-			  (kv/bucket-set bucket "hits" "42")
-			  (println "now" (pr-str (kv/bucket-get bucket "hits"))))
+			  (println "seen" (bytes? seen) (String. seen))
+			  (kv/bucket-set bucket "hits" (.getBytes "42\u00e9"))
+			  (println "now" (vec (kv/bucket-get bucket "hits")) (kv/bucket-get bucket "nope")))
 			""";
 
 	private Path write(String name, String text) throws Exception {
@@ -97,14 +97,16 @@ class ClojureWitBoundaryTest {
 		// the entry's directory; every member that crosses into Clojure is named, the
 		// drop too (bound only where the program names it, like a Common Lisp drop). A
 		// member answering a result binds behind its var's wrapper, which on WASM reads
-		// the envelope through the raw binding and throws the error arm itself
+		// the envelope through the raw binding and throws the error arm itself; a byte
+		// array crosses a Preview 1 module as the text its octets decode to
 		List<String> forms = wasmForms(program);
 		assertThat(forms)
 			.contains("(RONTOLISP:WIT-IMPORT \"kv.wit\" :INTERFACE "
 					+ "\"wasi:keyvalue/store@0.2.0-draft\" :NAMES ((\"open\" \"" + ns + "open%wit\") (\"bucket-get\" \""
 					+ ns + "bucket-get%wit\") (\"bucket-set\" \"" + ns + "bucket-set%wit\") (\"bucket-drop\" \"" + ns
 					+ "bucket-drop\")))")
-			.anyMatch(form -> form.contains("(|" + ns + "bucket-set| |c%bucket| \"hits\" \"42\")"))
+			.anyMatch(form -> form.startsWith("(DEFUN |" + ns + "bucket-set| (")
+					&& form.contains("(RONTOLISP::%CLOJURE-BYTES-TO-TEXT "))
 			.anyMatch(form -> form.startsWith("(DEFUN |" + ns + "open| (")
 					&& form.contains("(RONTOLISP::%CLOJURE-WIT-ANSWER (|" + ns + "open%wit%raw| ")
 					&& form.endsWith(" \"wasi:keyvalue/store@0.2.0-draft\" \"open\"))"));
@@ -112,8 +114,9 @@ class ClojureWitBoundaryTest {
 
 	/**
 	 * Under {@code --component} the import is wasmtime's real {@code wasi:keyvalue}: the
-	 * value the host seeded comes back through the canonical ABI, and the one written is
-	 * read again -- which no process-local table could fake.
+	 * value the host seeded comes back through the canonical ABI as a byte array, and the
+	 * one written is read again, a two-byte character's octets included -- which no
+	 * process-local table could fake.
 	 */
 	@Test
 	void aComponentImportsWasmtimesKeyvalueStore() throws Exception {
@@ -125,7 +128,7 @@ class ClojureWitBoundaryTest {
 		HostWasmtime.ExecResult run = HostWasmtime.INSTANCE.execInContainer("wasmtime", "run", "-S", "keyvalue=y", "-S",
 				"keyvalue-in-memory-data=hits=41", module.toString());
 		assertThat(run.exitCode()).as("wasmtime: %s", run.stderr()).isZero();
-		assertThat(run.stdout()).isEqualTo("seen \"41\"\nnow \"42\"\n");
+		assertThat(run.stdout()).isEqualTo("seen true 41\nnow [52 50 -61 -87] nil\n");
 	}
 
 	/**
@@ -144,7 +147,7 @@ class ClojureWitBoundaryTest {
 
 				(wit/import "kv.wit" {:interface "wasi:keyvalue/store" :as kv :refer [open]})
 
-				(def store (atom {"hits" "41"}))
+				(def store (atom {"hits" (.getBytes "41")}))
 
 				(println (wit/provide "wasi:keyvalue/store"
 				                      (fn [member & args]
@@ -155,10 +158,10 @@ class ClojureWitBoundaryTest {
 				                                                      nil)))))
 
 				(let [bucket (open "")]
-				  (println "bucket" bucket "seen" (pr-str (kv/bucket-get bucket "hits")))
-				  (kv/bucket-set bucket "hits" "42")
-				  (println "now" (pr-str (kv/bucket-get bucket "hits"))))
-				(println (map kv/bucket-get [7 7] ["hits" "nope"]))
+				  (println "bucket" bucket "seen" (pr-str (String. (kv/bucket-get bucket "hits"))))
+				  (kv/bucket-set bucket "hits" (.getBytes "42"))
+				  (println "now" (pr-str (String. (kv/bucket-get bucket "hits")))))
+				(println (map #(some-> % String.) (map kv/bucket-get [7 7] ["hits" "nope"])))
 				(println #'kv/open)
 				""");
 		String expected = """
@@ -171,6 +174,144 @@ class ClojureWitBoundaryTest {
 		assertThat(HostBoundaryRuns.cli(program.toString())).isEqualTo(expected);
 		assertThat(HostBoundaryRuns.jvm(program, Files.createDirectories(this.dir.resolve("classes")), "KvProvided"))
 			.isEqualTo(expected);
+	}
+
+	/** {@code list<u8>} alone, nested in an option and in a list. */
+	private static final String BLOB_WIT = """
+			package example:blob@0.1.0;
+
+			interface blob {
+			  checksum: func(data: list<u8>) -> u32;
+			  fetch: func(n: u8) -> list<u8>;
+			  maybe: func(present: bool) -> option<list<u8>>;
+			  joined: func(parts: list<list<u8>>) -> list<u8>;
+			}
+			""";
+
+	private static final String BLOB_IMPORT = """
+			(ns blob-calls
+			  (:require [rontolisp.wit :as wit]))
+
+			(wit/import "blob.wit" {:interface "example:blob/blob" :as blob})
+			""";
+
+	private static final String BLOB_CALLS = """
+			(println (blob/checksum (byte-array [1 2 -1])))
+			(let [b (blob/fetch 7)] (println (bytes? b) (vec b)))
+			(println (vec (blob/maybe true)) (blob/maybe false))
+			(println (vec (blob/joined [(byte-array [1 2]) (.getBytes "AB")])))
+			(println (try (blob/checksum "abc") (catch ClassCastException e (ex-message e))))
+			""";
+
+	/**
+	 * A {@code list<u8>} is a byte array both ways on the interpreter and the JVM, alone
+	 * and inside an option or a list: the Clojure provider sees byte arrays and answers
+	 * them, and anything else going out is the oracle's refusal of a cast to
+	 * {@code byte[]}. Across the language boundary the Common Lisp tier holds the octets
+	 * (a packed vector), and a Common Lisp provider's string arrives as its UTF-8
+	 * encoding -- the text a WASM build lifts a {@code list<u8>} to.
+	 */
+	@Test
+	void aListOfOctetsIsAByteArrayBothWaysOnTheInterpreterAndTheJvm() throws Exception {
+		write("blob.wit", BLOB_WIT);
+		Path program = write("blob.clj", BLOB_IMPORT + """
+
+				(wit/provide "example:blob/blob"
+				  (fn [member & args]
+				    (case member
+				      "checksum" (if (bytes? (first args)) (reduce + (map #(if (neg? %) (+ % 256) %) (first args))) -1)
+				      "fetch" (byte-array [(first args) -1 65])
+				      "maybe" (when (first args) (.getBytes "h\u00e9"))
+				      "joined" (byte-array (mapcat seq (first args))))))
+
+				""" + BLOB_CALLS);
+		String expected = """
+				258
+				true [7 -1 65]
+				[104 -61 -87] nil
+				[1 2 65 66]
+				class java.lang.String cannot be cast to class [B
+				""";
+		assertThat(HostBoundaryRuns.cli(program.toString())).isEqualTo(expected);
+		assertThat(HostBoundaryRuns.jvm(program, Files.createDirectories(this.dir.resolve("a")), "Blob"))
+			.isEqualTo(expected);
+		write("blob-calls.clj", BLOB_IMPORT + BLOB_CALLS);
+		Path lispProvider = write("lisp-provider.lisp", """
+				(rontolisp:wit-provide "example:blob/blob@0.1.0"
+				  (lambda (member &rest args)
+				    (cond ((equal member "checksum") (reduce #'+ (first args)))
+				          ((equal member "fetch") (coerce (list (code-char (first args)) (code-char 233)) 'string))
+				          ((equal member "maybe") (if (first args) "hi" nil))
+				          ((equal member "joined")
+				           (map 'string #'code-char (apply #'concatenate 'list (first args)))))))
+				(load "blob-calls.clj")
+				""");
+		String clojureCalls = """
+				258
+				true [7 -61 -87]
+				[104 105] nil
+				[1 2 65 66]
+				class java.lang.String cannot be cast to class [B
+				""";
+		assertThat(HostBoundaryRuns.cli(lispProvider.toString())).isEqualTo(clojureCalls);
+		assertThat(HostBoundaryRuns.jvm(lispProvider, Files.createDirectories(this.dir.resolve("b")), "LispBlob"))
+			.isEqualTo(clojureCalls);
+		write("blob-provider.clj", BLOB_IMPORT + """
+				(wit/provide "example:blob/blob"
+				  (fn [member & args]
+				    (case member
+				      "checksum" (alength (first args))
+				      "fetch" (byte-array [(first args) -1]))))
+				""");
+		Path lispCaller = write("lisp-caller.lisp", """
+				(load "blob-provider.clj")
+				(rontolisp:wit-import "blob.wit" :interface "example:blob/blob" :package blob)
+				(print (coerce (blob:fetch 7) 'list))
+				(print (blob:checksum (coerce '(1 2 3) '(vector (unsigned-byte 8)))))
+				""");
+		String lispCalls = "(7 255)\n3\n";
+		assertThat(HostBoundaryRuns.cli(lispCaller.toString())).isEqualTo(lispCalls);
+		assertThat(HostBoundaryRuns.jvm(lispCaller, Files.createDirectories(this.dir.resolve("c")), "LispCaller"))
+			.isEqualTo(lispCalls);
+	}
+
+	/**
+	 * A Preview 1 core module carries a {@code list<u8>} as {@code :string} text, so a
+	 * byte array goes to the host as the text its octets decode to as UTF-8 and the
+	 * host's text comes back as its UTF-8 encoding: the octets of a two-byte character
+	 * arrive whole both ways, under node.
+	 */
+	@Test
+	void aListOfOctetsCrossesAPreview1ModuleAsItsUtf8TextUnderNode() throws Exception {
+		assumeTrue(HostBoundaryRuns.nodeAvailable(), "node is not on PATH");
+		write("blob.wit", BLOB_WIT);
+		Path program = write("text.clj", """
+				(ns text
+				  (:require [rontolisp.wit :as wit]))
+
+				(wit/import "blob.wit" {:interface "example:blob/blob" :as blob})
+
+				(defn report {:wasm/export {:params [:int] :returns :string}} [n]
+				  (let [b (blob/fetch n)]
+				    (str (blob/checksum (.getBytes "h\u00e9")) " " (bytes? b) " " (vec b))))
+				""");
+		HostBoundaryRuns.cli(program.toString(), "-o", this.dir.resolve("text.wasm").toString(), "--no-wasi",
+				"--emit-js-glue");
+		Path host = write("run.mjs", """
+				import fs from 'fs';
+				import { instantiate } from './text.js';
+
+				const module = new WebAssembly.Module(fs.readFileSync(new URL('./text.wasm', import.meta.url)));
+				const lisp = instantiate(module, {
+				  blob: {
+				    checksum: (text) => { console.log('host got', JSON.stringify(text)); return text.length; },
+				    fetch: (n) => '\u00e9' + n,
+				  },
+				});
+				console.log(lisp.report(7));
+				""");
+		assertThat(HostBoundaryRuns.node(this.dir, host.toString()))
+			.isEqualTo("host got \"h\u00e9\"\n2 true [-61 -87 55]\n");
 	}
 
 	private static final String MATH_WIT = """
@@ -415,9 +556,9 @@ class ClojureWitBoundaryTest {
 				(wit/import "kv.wit" {:interface "wasi:keyvalue/store@0.2.0-draft" :as kv})
 
 				(wit/provide "wasi:keyvalue/store@0.2.0-draft"
-				             (fn [member & args] (if (= member "open") 1 (str member " " (second args)))))
+				             (fn [member & args] (if (= member "open") 1 (.getBytes (str member " " (second args))))))
 
-				(defn hits [] (kv/bucket-get (kv/open "") "hits"))
+				(defn hits [] (String. (kv/bucket-get (kv/open "") "hits")))
 				""");
 		Path main = write("src/app/main.clj", """
 				(ns app.main
@@ -440,15 +581,15 @@ class ClojureWitBoundaryTest {
 		for (String buffer : List.of("(require '[rontolisp.wit :as wit])",
 				"(wit/import \"" + wit.toString().replace("\\", "\\\\")
 						+ "\" {:interface \"wasi:keyvalue/store@0.2.0-draft\" :as kv})",
-				"(wit/provide \"wasi:keyvalue/store@0.2.0-draft\" (fn [m & args] (if (= m \"open\") 1 (count args))))",
-				"(println (kv/bucket-get (kv/open \"\") \"hits\"))")) {
+				"(wit/provide \"wasi:keyvalue/store@0.2.0-draft\" (fn [m & args] (if (= m \"open\") 1 (byte-array [(count args)]))))",
+				"(println (vec (kv/bucket-get (kv/open \"\") \"hits\")))")) {
 			for (SourceSession.Step step : session.read(buffer, Features.INTERPRETER)) {
 				for (LispVal form : step.forms()) {
 					evaluator.eval(form);
 				}
 			}
 		}
-		assertThat(out.toString(StandardCharsets.UTF_8)).isEqualTo("2\n");
+		assertThat(out.toString(StandardCharsets.UTF_8)).isEqualTo("[2]\n");
 	}
 
 	private static final String GEO_WIT = """

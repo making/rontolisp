@@ -487,7 +487,6 @@ Each refusal names the missing design, never `unknown name`:
 | an asynchronous Ring handler (`run-server` with `:async? true`) | `asynchronous handlers (:async? true) are not supported` | no respond/raise protocol under the transports |
 | `:async` on a `rontolisp.wasm` declaration, an `async func` WIT member or export | `:async is not supported yet ...`, `... is an async func ...` | the future a suspending crossing answers is no Clojure future |
 | a WIT member taking or answering a stream or a future | `... which the Clojure tier does not carry yet (file.wit:N)` | the async canonical ABI's handles answer no Clojure future yet |
-| `:bytes` in a `rontolisp.wasm` declaration | `:bytes does not cross from Clojure yet ...` | no crossing converts a byte array to the `(unsigned-byte 8)` vector it transfers yet |
 
 ## Errors and positions
 

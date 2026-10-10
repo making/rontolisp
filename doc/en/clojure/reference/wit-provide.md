@@ -29,8 +29,8 @@ $ cat hits.clj
                  (= member "bucket-set") (do (swap! store assoc k v) nil))))
 
 (let [bucket (kv/open "")]
-  (kv/bucket-set bucket "hits" "42")
-  (println (kv/bucket-get bucket "hits")))
+  (kv/bucket-set bucket "hits" (.getBytes "42"))
+  (println (String. (kv/bucket-get bucket "hits"))))
 $ rontolisp hits.clj
 42
 ```

@@ -17334,6 +17334,7 @@
   "The Clojure value X as the WIT boundary's value of the type TYPE describes."
   (cond ((null type) x)
    ((eq type :bool) (if (or (null x) (eq x rontolisp::%clojure-false)) nil t))
+   ((eq type :byte-array) (rontolisp::%clojure-bytes-to-host x))
    ((eq (car type) :option)
     (if (null x) nil (rontolisp::%clojure-wit-out (cdr type) x)))
    ((eq (car type) :list)
@@ -17414,6 +17415,7 @@
   "The WIT boundary's value X of the type TYPE describes as the Clojure value."
   (cond ((null type) x)
         ((eq type :bool) (if x t rontolisp::%clojure-false))
+        ((eq type :byte-array) (rontolisp::%clojure-bytes-from-host x))
         ((eq (car type) :option)
          (if (null x) nil (rontolisp::%clojure-wit-in (cdr type) x)))
         ((eq (car type) :list)
@@ -18077,6 +18079,34 @@
       (rontolisp::%clojure-class-cast-exception
        (concatenate 'string "class " (rontolisp::%clojure-class-name-of x)
                     " cannot be cast to class [B"))))
+
+;;; A byte array across a host boundary (rontolisp.wasm's :bytes, a WIT
+;;; list<u8>): its octets going out, and coming back the octets the boundary
+;;; answers. clojure/ClojureWasmLowering's crossings call these, and the WIT
+;;; walker for its :byte-array descriptor.
+
+(defun rontolisp::%clojure-bytes-to-host (x)
+  "The octets of the byte array X, which a host boundary transfers uncopied;
+   anything else the oracle's refusal of a cast to byte[], nil its
+   NullPointerException."
+  (if (rontolisp::%clojure-bytes-p x)
+      (car (cdr x))
+      (rontolisp::%clojure-bytes-refuse-cast x
+       "Cannot pass nil across the host boundary as a byte array")))
+
+(defun rontolisp::%clojure-bytes-from-host (v)
+  "The octets V a host boundary answers as a byte array: a packed octet vector
+   held uncopied, or the text a WASM build lifts a WIT list<u8> to (a Common
+   Lisp provider's string too) as its UTF-8 encoding."
+  (rontolisp::%clojure-bytes-of
+   (if (stringp v) (rontolisp:string-to-octets v) v)))
+
+(defun rontolisp::%clojure-bytes-to-text (x)
+  "The byte array X as the text a Preview 1 core module carries a list<u8> as:
+   its octets decoded as UTF-8, a malformed sequence replaced as the JDK's
+   decoder replaces one."
+  (let ((octets (rontolisp::%clojure-bytes-to-host x)))
+    (rontolisp::%octets-to-string-replacing octets 0 (length octets))))
 
 ;; bytes?: T for a byte array, NO (the false object) for anything else. A program
 ;; making no byte array calls progn in its place (the family's alias), so the

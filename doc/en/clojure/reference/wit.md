@@ -21,8 +21,8 @@ $ cat hits.clj
 (wit/import "kv.wit" {:interface "wasi:keyvalue/store@0.2.0-draft" :as kv})
 
 (let [bucket (kv/open "")]
-  (kv/bucket-set bucket "hits" "42")
-  (println (kv/bucket-get bucket "hits")))
+  (kv/bucket-set bucket "hits" (.getBytes "42"))
+  (println (String. (kv/bucket-get bucket "hits"))))
 $ rontolisp hits.clj -o hits.wasm --component
 $ wasmtime run -S keyvalue=y hits.wasm
 42
@@ -50,7 +50,7 @@ case `DNS-error` is the keyword `:DNS-error`.
 | `bool` | `true` or `false` |
 | `char` | a character |
 | `string` | a string |
-| `list<u8>` | a string, one character per byte |
+| `list<u8>` | a [byte array](byte-array.md) |
 | a resource handle (`own`, `borrow`) | an opaque integer |
 | `option<T>` | the value, or `nil` |
 | `record` | a map holding each field under its keyword: `{:port 0 :address [127 0 0 1]}` |
@@ -63,8 +63,9 @@ case `DNS-error` is the keyword `:DNS-error`.
 
 Going to the host, a list, a tuple and flags take any collection (a vector, a list, a seq, a
 set), and a record any map; a field the map lacks is `nil`, an option's none. A value of no
-shape of its type throws an `IllegalArgumentException` naming the type. The error arm's
-exception names the member, and with the `rontolisp.wit` alias its value is
+shape of its type throws an `IllegalArgumentException` naming the type; a `list<u8>` takes
+only a byte array, anything else throwing the `ClassCastException` of a cast to `byte[]`. The
+error arm's exception names the member, and with the `rontolisp.wit` alias its value is
 `(::wit/error (ex-data e))`:
 
 ```console
@@ -86,6 +87,14 @@ $ wasmtime run -S inherit-network=y bind.wasm
 tcp-socket-bind of wasi:sockets/types@0.3.0 answered its error arm
 :invalid-state
 ```
+
+A `list<u8>` reaches a component, and a provider, as its octets. A WASM core module carries
+one as `string`, so there a byte array goes to the host as the text its octets decode to as
+UTF-8, and the host's text comes back as its UTF-8 encoding. A component lifts the `list<u8>`
+a host answers as that text too, so a value coming back from a WASM host arrives exact only
+when its octets are valid UTF-8. A Common Lisp provider's string arrives as its UTF-8
+encoding, and a Common Lisp caller of a Clojure provider gets the octets as an
+`(unsigned-byte 8)` vector.
 
 A member whose types reach a stream or a future is not bound, and an `async func` is not
 either. A reference to one is refused when the program compiles, naming the WIT line:

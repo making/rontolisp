@@ -21,8 +21,8 @@ $ cat hits.clj
 (wit/import "kv.wit" {:interface "wasi:keyvalue/store@0.2.0-draft" :as kv})
 
 (let [bucket (kv/open "")]
-  (kv/bucket-set bucket "hits" "42")
-  (println (kv/bucket-get bucket "hits")))
+  (kv/bucket-set bucket "hits" (.getBytes "42"))
+  (println (String. (kv/bucket-get bucket "hits"))))
 $ rontolisp hits.clj -o hits.wasm --component
 $ wasmtime run -S keyvalue=y hits.wasm
 42
@@ -50,7 +50,7 @@ WIT の値は、下の表の Clojure の値として渡ります。変換は渡�
 | `bool` | `true` か `false` |
 | `char` | 文字 |
 | `string` | 文字列 |
-| `list<u8>` | 1 バイトを 1 文字とする文字列 |
+| `list<u8>` | [バイト配列](byte-array.md) |
 | リソースのハンドル（`own`、`borrow`） | 不透明な整数 |
 | `option<T>` | 値か `nil` |
 | `record` | 各フィールドをそのキーワードの下に持つマップ: `{:port 0 :address [127 0 0 1]}` |
@@ -64,8 +64,9 @@ WIT の値は、下の表の Clojure の値として渡ります。変換は渡�
 ホストへ渡すとき、リスト、タプル、フラグはどのコレクション（ベクタ、リスト、seq、集合）でも
 受け取り、レコードはどのマップでも受け取ります。マップにないフィールドは `nil`、つまり
 option の none です。型のどの形にも当てはまらない値は、型を名指す
-`IllegalArgumentException` を投げます。エラー側の例外はメンバーを名指し、`rontolisp.wit`
-のエイリアスがあればその値は `(::wit/error (ex-data e))` です。
+`IllegalArgumentException` を投げます。`list<u8>` はバイト配列だけを受け取り、それ以外の
+値は `byte[]` へのキャストの `ClassCastException` を投げます。エラー側の例外はメンバーを
+名指し、`rontolisp.wit` のエイリアスがあればその値は `(::wit/error (ex-data e))` です。
 
 ```console
 $ cat bind.clj
@@ -86,6 +87,14 @@ $ wasmtime run -S inherit-network=y bind.wasm
 tcp-socket-bind of wasi:sockets/types@0.3.0 answered its error arm
 :invalid-state
 ```
+
+`list<u8>` はコンポーネントにもプロバイダにもオクテットのまま届きます。WASM コアモジュールは
+これを `string` として渡すので、そこではバイト配列はオクテットを UTF-8 として復号したテキストで
+ホストへ渡り、ホストのテキストはその UTF-8 符号化として戻ります。コンポーネントもホストが答える
+`list<u8>` をそのテキストとして取り込むので、WASM のホストから戻る値が正確なのは、オクテットが
+正しい UTF-8 のときだけです。Common Lisp のプロバイダの文字列はその UTF-8 符号化として届き、
+Clojure のプロバイダを呼ぶ Common Lisp の側はオクテットを `(unsigned-byte 8)` ベクタとして
+受け取ります。
 
 型がストリームかフューチャーに届くメンバーは束縛しません。`async func` も同様です。
 それを参照すると、コンパイル時に WIT の行を名指して拒否します。

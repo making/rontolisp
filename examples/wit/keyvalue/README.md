@@ -244,9 +244,12 @@ where the program provides it itself:
 ```clojure
 (wit/import "wit/keyvalue.wit" {:interface "wasi:keyvalue/store@0.2.0-draft" :as kv})
 
+(defn hits [bucket page]
+  (some-> (kv/bucket-get bucket page) String.))
+
 (defn record-hit [bucket page]
-  (let [seen (kv/bucket-get bucket page)]
-    (kv/bucket-set bucket page (str (inc (if seen (read-string seen) 0))))))
+  (let [seen (hits bucket page)]
+    (kv/bucket-set bucket page (.getBytes (str (inc (if seen (read-string seen) 0)))))))
 ```
 
 ```console
@@ -257,7 +260,8 @@ $ rontolisp page-hits.clj -o page-hits-clj.wasm --component && wasmtime run -S k
 
 All three print the same lines. On the component the `wit/provide` binds nothing:
 wasmtime is the store. Every value crosses in its Clojure spelling, the provider's
-included: `bucket.list-keys` answers the `key-response` record as a map
+included: a value, a `list<u8>`, is a byte array, so the counter is stored as the
+bytes of its text; `bucket.list-keys` answers the `key-response` record as a map
 (`(:keys (kv/bucket-list-keys bucket nil))`), and `open`'s error arm is an
 `ExceptionInfo` whose `ex-data` holds the `error` variant's case under
 `::wit/error` -- `:no-such-store`, from wasmtime's store and the Clojure one alike.

@@ -35,15 +35,15 @@ import org.jspecify.annotations.Nullable;
  * below an {@code import} lowers against vars that exist. A value the two languages spell
  * differently crosses through a wrapper defun emitted only when the program names the
  * member, so a {@code --component} build still imports exactly the members the program
- * calls: a {@code bool} inline ({@link ClojureWasmLowering.Crossing}), anything richer --
- * a record as a map, an enum or a variant's case as a keyword, a payload as
- * {@code [:case payload]}, flags as a set, a tuple or a list as a vector, a
- * {@code result} argument as {@code [:ok v]} / {@code [:error e]} -- through the
- * {@code clojure.lisp} walker over a descriptor of the type, and a {@code result}'s error
- * arm as an {@code ExceptionInfo} holding the error value under {@link #ERROR_KEY}. A
- * {@code provide} converts the other way round, so a Clojure provider sees Clojure
- * values. A member with no Clojure value (a stream, a future, an {@code async func}) is
- * refused by name where a program reaches it.
+ * calls: a {@code bool} and a {@code list<u8>} (a byte array) inline
+ * ({@link ClojureWasmLowering.Crossing}), anything richer -- a record as a map, an enum
+ * or a variant's case as a keyword, a payload as {@code [:case payload]}, flags as a set,
+ * a tuple or a list as a vector, a {@code result} argument as {@code [:ok v]} /
+ * {@code [:error e]} -- through the {@code clojure.lisp} walker over a descriptor of the
+ * type, and a {@code result}'s error arm as an {@code ExceptionInfo} holding the error
+ * value under {@link #ERROR_KEY}. A {@code provide} converts the other way round, so a
+ * Clojure provider sees Clojure values. A member with no Clojure value (a stream, a
+ * future, an {@code async func}) is refused by name where a program reaches it.
  *
  * <p>
  * One slice of {@link ClojureLowering}: every method takes the hub as its first argument
@@ -94,6 +94,12 @@ final class ClojureWitLowering {
 
 	/** The descriptor of a {@code bool}. */
 	private static final LispSymbol BOOL = new LispSymbol(":BOOL");
+
+	/**
+	 * The descriptor of a {@code list<u8>}, a byte array: a producer of the byte-array
+	 * family, since a wrapper reading it may answer one.
+	 */
+	static final LispSymbol BYTE_ARRAY = new LispSymbol(":BYTE-ARRAY");
 
 	private ClojureWitLowering() {
 	}
@@ -326,10 +332,10 @@ final class ClojureWitLowering {
 			else if (crossings.converts()) {
 				List<ClojureWasmLowering.Crossing> params = new ArrayList<>();
 				for (LispVal param : crossings.params()) {
-					params.add(outCrossing(param));
+					params.add(outCrossing(ctx, param));
 				}
 				ctx.wit.wrappers.put(var.name(), new Wrapper(ClojureWasmLowering.importWrapper(ctx, var,
-						new LispSymbol(bound), params, inCrossing(crossings.result())), List.of(), false));
+						new LispSymbol(bound), params, inCrossing(ctx, crossings.result())), List.of(), false));
 			}
 			if (crossings.serves()) {
 				served.add(servedEntry(member.name(), crossings));
@@ -536,11 +542,11 @@ final class ClojureWitLowering {
 		 * is already one, {@code nil} its absent value).
 		 */
 		boolean converts() {
-			if (walks() || this.result == BOOL) {
+			if (walks() || this.result == BOOL || this.result == BYTE_ARRAY) {
 				return true;
 			}
 			for (LispVal param : this.params) {
-				if (param == BOOL || isOptionOf(param, BOOL)) {
+				if (param == BOOL || param == BYTE_ARRAY || isOptionOf(param, BOOL)) {
 					return true;
 				}
 			}
@@ -553,11 +559,11 @@ final class ClojureWitLowering {
 		 * {@code option<bool>} the boundary's {@code nil}.
 		 */
 		boolean serves() {
-			if (walks() || this.result == BOOL || isOptionOf(this.result, BOOL)) {
+			if (walks() || this.result == BOOL || this.result == BYTE_ARRAY || isOptionOf(this.result, BOOL)) {
 				return true;
 			}
 			for (LispVal param : this.params) {
-				if (param == BOOL) {
+				if (param == BOOL || param == BYTE_ARRAY) {
 					return true;
 				}
 			}
@@ -587,19 +593,22 @@ final class ClojureWitLowering {
 	 * The descriptor of a type, which the {@code clojure.lisp} walker
 	 * ({@code rontolisp::%clojure-wit-out} / {@code -in}) converts a value by:
 	 * {@code NIL} for a value both languages spell alike (a number, a character, a
-	 * string, a byte string, a handle), {@code :BOOL}, {@code (:OPTION . d)},
-	 * {@code (:LIST . d)}, {@code (:TUPLE "wit" d ...)},
-	 * {@code (:RECORD "wit" (kw :KW d) ...)}, {@code (:VARIANT "wit" (kw :KW [d]) ...)}
-	 * for a variant or an enum (a case without payload holds no descriptor),
-	 * {@code (:RESULT "wit" (kw :OK [d]) (kw :ERROR [d]))} and
-	 * {@code (:FLAGS "wit" (kw :KW) ...)} -- each {@code kw} the Clojure keyword of a
+	 * string, a handle), {@code :BOOL}, {@code :BYTE-ARRAY} for a {@code list<u8>} (a
+	 * byte array, the boundary's octets), {@code (:OPTION . d)}, {@code (:LIST . d)},
+	 * {@code (:TUPLE "wit" d ...)}, {@code (:RECORD "wit" (kw :KW d) ...)},
+	 * {@code (:VARIANT "wit" (kw :KW [d]) ...)} for a variant or an enum (a case without
+	 * payload holds no descriptor), {@code (:RESULT "wit" (kw :OK [d]) (kw :ERROR [d]))}
+	 * and {@code (:FLAGS "wit" (kw :KW) ...)} -- each {@code kw} the Clojure keyword of a
 	 * label, each {@code :KW} the boundary's. Null when the type has no Clojure value.
 	 */
 	private static @Nullable LispVal descriptor(ClojureBoundary.Type type) {
 		LispString wit = LispString.literal(type.wit());
 		switch (type.rep()) {
-			case INT, BIGNUM_INT, FLOAT, STRING, CHARACTER, BYTE_STRING, HANDLE -> {
+			case INT, BIGNUM_INT, FLOAT, STRING, CHARACTER, HANDLE -> {
 				return ClojureLowering.NIL_CONST;
+			}
+			case BYTE_STRING -> {
+				return BYTE_ARRAY;
 			}
 			case BOOLEAN -> {
 				return BOOL;
@@ -666,10 +675,10 @@ final class ClojureWitLowering {
 
 	/**
 	 * Whether a descriptor's value crosses without the walker: as itself, or as a
-	 * {@code bool} (inline, {@link ClojureWasmLowering.Crossing}).
+	 * {@code bool} or a byte array (inline, {@link ClojureWasmLowering.Crossing}).
 	 */
 	private static boolean inline(LispVal descriptor) {
-		return descriptor == ClojureLowering.NIL_CONST || descriptor == BOOL
+		return descriptor == ClojureLowering.NIL_CONST || descriptor == BOOL || descriptor == BYTE_ARRAY
 				|| isOptionOf(descriptor, ClojureLowering.NIL_CONST) || isOptionOf(descriptor, BOOL);
 	}
 
@@ -679,9 +688,12 @@ final class ClojureWitLowering {
 	}
 
 	/** The inline crossing of an argument whose descriptor is {@link #inline}. */
-	private static ClojureWasmLowering.Crossing outCrossing(LispVal descriptor) {
+	private static ClojureWasmLowering.Crossing outCrossing(ClojureLowering ctx, LispVal descriptor) {
 		if (descriptor == BOOL) {
 			return ClojureWasmLowering.Crossing.BOOL;
+		}
+		if (descriptor == BYTE_ARRAY) {
+			return bytesCrossing(ctx);
 		}
 		return isOptionOf(descriptor, BOOL) ? ClojureWasmLowering.Crossing.NILLABLE_BOOL
 				: ClojureWasmLowering.Crossing.PLAIN;
@@ -691,14 +703,26 @@ final class ClojureWitLowering {
 	 * The inline crossing of a result whose descriptor is {@link #inline}: an
 	 * {@code option<bool>} keeps {@code nil} as its absent value.
 	 */
-	private static ClojureWasmLowering.Crossing inCrossing(LispVal descriptor) {
+	private static ClojureWasmLowering.Crossing inCrossing(ClojureLowering ctx, LispVal descriptor) {
+		if (descriptor == BYTE_ARRAY) {
+			return bytesCrossing(ctx);
+		}
 		return descriptor == BOOL ? ClojureWasmLowering.Crossing.BOOL : ClojureWasmLowering.Crossing.PLAIN;
+	}
+
+	/**
+	 * How a {@code list<u8>} crosses inline: as its octets, or as text where the boundary
+	 * carries one as a {@code :string} (a Preview 1 core module).
+	 */
+	private static ClojureWasmLowering.Crossing bytesCrossing(ClojureLowering ctx) {
+		return ctx.boundary.bytesCrossAsText() ? ClojureWasmLowering.Crossing.TEXT_BYTES
+				: ClojureWasmLowering.Crossing.BYTES;
 	}
 
 	/** A Clojure argument as the boundary's value, the walker reading its descriptor. */
 	private static LispVal toHost(ClojureLowering ctx, LispVal descriptor, LispVal value, List<String> types) {
 		if (inline(descriptor)) {
-			return ClojureWasmLowering.toHost(ctx, outCrossing(descriptor), value);
+			return ClojureWasmLowering.toHost(ctx, outCrossing(ctx, descriptor), value);
 		}
 		return ClojureLowerUtil.list(new LispSymbol(OUT), typeArg(ctx, descriptor, types), value);
 	}
@@ -706,7 +730,7 @@ final class ClojureWitLowering {
 	/** The boundary's answer as the Clojure value, the walker reading its descriptor. */
 	private static LispVal fromHost(ClojureLowering ctx, LispVal descriptor, LispVal value, List<String> types) {
 		if (inline(descriptor)) {
-			return ClojureWasmLowering.fromHost(ctx, inCrossing(descriptor), value);
+			return ClojureWasmLowering.fromHost(ctx, inCrossing(ctx, descriptor), value);
 		}
 		return ClojureLowerUtil.list(new LispSymbol(IN), typeArg(ctx, descriptor, types), value);
 	}

@@ -95,12 +95,15 @@ final class ClojureBytesLowering {
 	 * {@code ring.util.codec/base64-decode}'s kernel and the HTTP client's request, whose
 	 * {@code :as :bytes} answers one -- and the constructions of a
 	 * {@code ByteArrayInputStream} and a {@code ByteArrayOutputStream}, the byte streams
-	 * whose arms the family's {@link #ARRAY_STREAM_P} guards.
+	 * whose arms the family's {@link #ARRAY_STREAM_P} guards; and a host boundary's
+	 * {@code :bytes} or WIT {@code list<u8>} coming back, by its conversion or the
+	 * descriptor the WIT walker reads.
 	 */
 	static final Set<String> PRODUCERS = Set.of(BYTE_ARRAY, BYTE_ARRAY + "-2", BYTE_ARRAY + "-V", STRING_BYTES,
 			PREFIX + "IO-M-READ-ALL-BYTES", PREFIX + "IO-M-READ-N-BYTES", PREFIX + "IO-M-TO-BYTE-ARRAY",
 			PREFIX + "RING-BASE64-DECODE", ClojureKernelLowering.HTTP_REQUEST, PREFIX + "IO-BYTES-INPUT",
-			PREFIX + "IO-BYTES-INPUT-3", PREFIX + "IO-BYTES-OUTPUT");
+			PREFIX + "IO-BYTES-INPUT-3", PREFIX + "IO-BYTES-OUTPUT", ClojureWasmLowering.BYTES_FROM_HOST,
+			ClojureWitLowering.BYTE_ARRAY.name());
 
 	private ClojureBytesLowering() {
 	}

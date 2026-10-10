@@ -38,11 +38,13 @@ import org.jspecify.annotations.Nullable;
  * {@code false} coming in; an {@code :s-expr} crosses as the Clojure printer's text, read
  * back by the Clojure reader, so a vector, map, keyword or {@code false} round-trips (the
  * directive then declares {@code :string}, the same {@code (ptr, len)} text on every
- * host). A declaration with no such crossing lowers to exactly the hand-written
- * directive, and an export of a single-arity top-level {@code defn} names the
- * {@code defun} itself; anything else (several arities, a rest parameter, a {@code def}'d
- * function, a multimethod) is exported through a fixed-arity wrapper calling the
- * var.</li>
+ * host); a {@code :bytes} crossing hands the host a byte array's octets and wraps the
+ * octets it answers as one (an import answering {@code :bytes} fills the byte array
+ * passed after its declared parameters). A declaration with no such crossing lowers to
+ * exactly the hand-written directive, and an export of a single-arity top-level
+ * {@code defn} names the {@code defun} itself; anything else (several arities, a rest
+ * parameter, a {@code def}'d function, a multimethod) is exported through a fixed-arity
+ * wrapper calling the var.</li>
  * <li>An export is resolved and emitted after the whole program (a session: the buffer)
  * has lowered, so it may name a var defined below it, a redefined {@code defn} exports
  * its newest definition, and the interpreter's {@code wit-export} contract check sees
@@ -97,9 +99,36 @@ final class ClojureWasmLowering {
 		 * An s-expression: the Clojure printer's readable text on the way to the host,
 		 * the Clojure reader's value coming back.
 		 */
-		S_EXPR
+		S_EXPR,
+
+		/**
+		 * A byte array: its octets on the way to the host (anything else refused as the
+		 * oracle's cast to {@code byte[]}), and the octets coming back as a byte array --
+		 * a packed vector as it is, a string (the text a WASM build lifts a WIT
+		 * {@code list<u8>} to, a Common Lisp provider's) as its UTF-8 encoding.
+		 */
+		BYTES,
+
+		/**
+		 * A byte array crossing as text (a WIT {@code list<u8>} on a Preview 1 core
+		 * module, {@link ClojureBoundary#bytesCrossAsText}): its octets decoded as UTF-8
+		 * on the way to the host, and coming back as {@link #BYTES} does.
+		 */
+		TEXT_BYTES
 
 	}
+
+	/** {@link Crossing#BYTES} on the way to the host. */
+	static final String BYTES_TO_HOST = "RONTOLISP::%CLOJURE-BYTES-TO-HOST";
+
+	/**
+	 * {@link Crossing#BYTES} and {@link Crossing#TEXT_BYTES} coming back: a producer of
+	 * the byte-array family.
+	 */
+	static final String BYTES_FROM_HOST = "RONTOLISP::%CLOJURE-BYTES-FROM-HOST";
+
+	/** {@link Crossing#TEXT_BYTES} on the way to the host. */
+	static final String BYTES_TO_TEXT = "RONTOLISP::%CLOJURE-BYTES-TO-TEXT";
 
 	/**
 	 * One declared boundary type.
@@ -221,7 +250,13 @@ final class ClojureWasmLowering {
 		ctx.unboundCapable.remove(key);
 		ctx.hoisted.addAll(ClojureVarLowering.record(ctx, key, null, items.get(1), null, null, null, false, false));
 		LispSymbol var = ClojureLowering.varSym(key);
-		List<Designated> declared = params == null ? List.of() : params;
+		List<Designated> declared = new ArrayList<>(params == null ? List.of() : params);
+		if (result != null && result.crossing() == Crossing.BYTES) {
+			// the read(2) shape: the caller passes the byte array the host fills, and the
+			// call answers the value's full length
+			declared.add(result);
+			result = new Designated(result.designator(), Crossing.PLAIN);
+		}
 		if (ctx.hostTarget) {
 			// the interpreter and the JVM have no WASM host to call: the var is a stub of
 			// the declared arity refusing in Clojure's words, where the directive's
@@ -573,6 +608,8 @@ final class ClojureWasmLowering {
 			}
 			case S_EXPR ->
 				ClojureStringLowering.strOf(ctx, value, LispString.literal("nil"), ClojureLowering.TRUE_CONST);
+			case BYTES -> ClojureLowerUtil.list(new LispSymbol(BYTES_TO_HOST), value);
+			case TEXT_BYTES -> ClojureLowerUtil.list(new LispSymbol(BYTES_TO_TEXT), value);
 		};
 	}
 
@@ -588,6 +625,7 @@ final class ClojureWasmLowering {
 			case PLAIN, NILLABLE_BOOL -> value;
 			case BOOL -> ctx.ifFalsey(value, ClojureLowering.TRUE_CONST, ctx.falseVariable);
 			case S_EXPR -> ClojureReadLowering.readStringOf(ctx, value);
+			case BYTES, TEXT_BYTES -> ClojureLowerUtil.list(new LispSymbol(BYTES_FROM_HOST), value);
 		};
 	}
 
@@ -685,8 +723,7 @@ final class ClojureWasmLowering {
 
 	/**
 	 * One type keyword: the boundary's vocabulary ({@link ClojureBoundary#designators}),
-	 * {@code :void} for a result; {@code :bytes} is refused -- no crossing converts a
-	 * byte array to the {@code (unsigned-byte 8)} vector it transfers yet.
+	 * {@code :void} for a result.
 	 */
 	private static Designated designated(ClojureLowering ctx, LispVal datum, String what, boolean result) {
 		if (!(datum instanceof LispSymbol keyword) || !keyword.name().startsWith(":")) {
@@ -695,10 +732,6 @@ final class ClojureWasmLowering {
 		String upper = keyword.name().toUpperCase(Locale.ROOT);
 		if (result && upper.equals(":VOID")) {
 			return new Designated(upper, Crossing.PLAIN);
-		}
-		if (upper.equals(":BYTES")) {
-			throw new LispReadException(what + ": :bytes does not cross from Clojure yet -- no crossing converts "
-					+ "a byte array to the (unsigned-byte 8) vector it transfers; a string crosses as :string");
 		}
 		Set<String> designators = ctx.boundary.designators();
 		if (!designators.contains(upper)) {
@@ -712,6 +745,7 @@ final class ClojureWasmLowering {
 		return switch (upper) {
 			case ":BOOL" -> new Designated(upper, Crossing.BOOL);
 			case ":S-EXPR" -> new Designated(":STRING", Crossing.S_EXPR);
+			case ":BYTES" -> new Designated(upper, Crossing.BYTES);
 			default -> new Designated(upper, Crossing.PLAIN);
 		};
 	}

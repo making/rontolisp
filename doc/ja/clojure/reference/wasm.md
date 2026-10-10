@@ -51,21 +51,46 @@ add is a host function (rontolisp.wasm/defimport): only a compiled WASM module c
 ## 型
 
 型キーワードは境界のものです。`:int`、`:long`、`:s8` ... `:u64`、`:float`、`:bool`、
-`:string`、`:s-expr`、`:extern`（インポートのみ）、それに結果用の `:void`（`:returns` を
-書かない宣言はこれを意味します）。Clojure と境界とで綴りが異なる値は、渡るときに
-変換します。
+`:string`、`:s-expr`、`:bytes`、`:extern`（インポートのみ）、それに結果用の `:void`
+（`:returns` を書かない宣言はこれを意味します）。Clojure と境界とで綴りが異なる値は、
+渡るときに変換します。
 
 | 型 | ホストへ | ホストから |
 |---|---|---|
 | `:bool` | `false` と `nil` は偽として渡る | 偽は `nil` ではなく `false` として届く |
 | `:s-expr` | `pr-str` が出力するテキスト | `read-string` が読む値 |
+| `:bytes` | [バイト配列](byte-array.md)のオクテット。それ以外の値は `ClassCastException` を投げる | バイト配列 |
 
 したがって `:s-expr` を通ると、ベクタ、マップ、キーワード、`false` はそのまま往復します。
-`:s-expr` はどのホストでも `:string` と同じ UTF-8 テキストとして渡ります。どちらの型も
-含まない宣言は、Common Lisp のソースが書くディレクティブとまったく同じものに
-ローワリングされます。`:bytes` は拒否します。これは `(unsigned-byte 8)` ベクタを転送する型で、
-そういう Clojure の値は存在しないためです。`:async` も拒否します。サスペンドする境界越えが
-返す future は、まだ Clojure の future に対応していないためです。
+`:s-expr` はどのホストでも `:string` と同じ UTF-8 テキストとして渡ります。これらの型を
+どれも含まない宣言は、Common Lisp のソースが書くディレクティブとまったく同じものに
+ローワリングされます。`:async` は拒否します。サスペンドする境界越えが返す future は、
+まだ Clojure の future に対応していないためです。
+
+`:bytes` は生のオクテットを転送するので、`:string` なら UTF-8 として復号されるところを
+`ff` は `ff` のまま渡ります。結果としての `:bytes` は呼び出す側のバッファです。`:bytes` を
+答えるインポートは、宣言した引数のあとにホストが書き込むバイト配列を受け取り、値の全長を
+答えます。配列の大きさを超える長さは、配列が小さすぎたことを意味します。`:bytes` を答える
+エクスポートはバイト配列を答え、ホストはそれを自分が渡すバッファへ読み込みます。
+
+```console
+$ cat bin.clj
+(ns bin (:require [rontolisp.wasm :as wasm]))
+
+(wasm/defimport read-chunk {:from "host" :as "readChunk" :params [:int] :returns :bytes})
+
+(defn checksum {:wasm/export {:params [:bytes] :returns :int}} [data]
+  (reduce + (map #(if (neg? %) (+ % 256) %) data)))
+
+(defn first-chunk {:wasm/export {:as "firstChunk" :params [:int] :returns :string}} [id]
+  (let [buf (byte-array 4096)
+        n (read-chunk id buf)]
+    (String. buf 0 (min n 4096) "UTF-8")))
+$ rontolisp bin.clj -o bin.wasm --no-wasi --emit-js-glue
+```
+
+Common Lisp の `:bytes` 型と同じく、渡れるのは GC バックエンドの WASM コアモジュールだけです。
+インタプリタと JVM では、`:bytes` を答えるインポートもバイト配列を受け取るスタブです。
 
 ## 動くターゲット
 

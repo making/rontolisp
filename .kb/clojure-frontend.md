@@ -1766,9 +1766,19 @@ function and a directive must be a top-level form.
   directive to `<var>%import` behind a `defun` of the var (`importWrapper`); an export that
   converts, or names no single-arity top-level `defn` taking exactly its parameters (several
   arities, a rest parameter, a `def`'d fn, a multimethod), goes through `<var>%export[N]`
-  (`exportWrapper`) calling the var. Refused by name: `:bytes` (no crossing converts a byte
-  array to the `(unsigned-byte 8)` vector it transfers yet, todo `f12`), `:async` (its future
-  is no Clojure future).
+  (`exportWrapper`) calling the var. Refused by name: `:async` (its future is no Clojure
+  future).
+- **`:bytes`** (2026-10-10, `Crossing.BYTES`): a byte array's octets going out
+  (`%clojure-bytes-to-host`, uncopied; anything else `%clojure-bytes-refuse-cast`, the
+  oracle's `ClassCastException` to `[B`, nil an NPE), and coming back
+  `%clojure-bytes-from-host` (a packed vector wrapped uncopied, a string as its UTF-8
+  encoding). An import answering `:bytes` is the CL read(2) shape: `defimport` appends the
+  result to the wrapper's parameters as one more BYTES crossing (the byte array the host
+  fills, in place) and the call answers the length PLAIN; the host stub's arity counts it.
+  Pinned under node through the glue, all four directions (`ff` included) and the refusal
+  (`ClojureWasmBoundaryTest.aByteArrayCrossesAsItsOctetsUnderNode`), the interpreter and JVM
+  stubs (`theInterpreterAndTheJvmCallABytesExportAndStubABytesImport`). `--component` and
+  `--no-gc` refuse `:bytes` as for Common Lisp.
 - **Order**: `defimport` registers its name in pass one by spelling (like `deftest`), so a
   call above it is a direct call; on the interpreter and the JVM it binds a stub of the
   declared arity throwing `UnsupportedOperationException` in Clojure's words (the
@@ -1810,16 +1820,36 @@ function and a directive must be a top-level form.
   payload); a label keeps its WIT spelling (`:DNS-error`; the boundary's is upcased,
   `:DNS-ERROR`). No oracle: the reference page is the contract; `[:tag value]` is
   `clojure.spec`'s conform shape of an `s/or`. The lowering turns each member's types into
-  descriptors (`ClojureWitLowering.descriptor`: `NIL` alike, `:BOOL`, `(:OPTION . d)`,
+  descriptors (`ClojureWitLowering.descriptor`: `NIL` alike, `:BOOL`, `:BYTE-ARRAY` for a
+  `list<u8>`, `(:OPTION . d)`,
   `(:LIST . d)`, `(:TUPLE "wit" d ...)`, `(:RECORD "wit" (kw :KW d) ...)`,
   `(:VARIANT "wit" (kw :KW [d]) ...)` for a variant or an enum, `(:RESULT ...)` a variant
   whose payload-less arm the boundary still conses, `(:FLAGS "wit" (kw :KW) ...)`) which one
   `clojure.lisp` walker reads both ways (`%clojure-wit-out` / `-in`), so a deep type costs a
   constant, not code. A wrapper reads each descriptor from a global holding it
   (`typeArg`: `c%wit%type%N`, one per distinct type -- wasi's error variants recur across
-  members -- a top-level `setq` emitted ahead of the first wrapper reading it). `bool` and
-  `option<bool>` keep the inline crossing, so a member with none of the rich types lowers
-  byte-identically to before. To the host a list/tuple/flags takes any collection
+  members -- a top-level `setq` emitted ahead of the first wrapper reading it). `bool`,
+  `option<bool>` and a bare `list<u8>` keep the inline crossing, so a member with none of the
+  rich types lowers byte-identically to before.
+- **`list<u8>` is a byte array** (2026-10-10; a string one character per byte before): out
+  `%clojure-bytes-to-host` (the octets; a component stages a packed vector raw), in
+  `%clojure-bytes-from-host`. A Preview 1 core module declares the member `:string`, so there
+  the inline crossing is `TEXT_BYTES`: out `%clojure-bytes-to-text` (the octets decoded as
+  UTF-8, JDK replacement). Which one is the boundary's answer, not the target's:
+  `ClojureBoundary.bytesCrossAsText`, true for `ClojureHostBoundary.CORE_MODULE`, which
+  `SourceLanguage` picks from the features (`rontolisp-wasm` without `rontolisp-component`).
+  Coming back is one rule everywhere because every WASM lift of a `list<u8>` is text: a
+  component's result goes through `_string_from_mem` (a UTF-8 decode, NOT one character per
+  byte, measured 2026-10-10: `ff 00 41` stored through wasmtime's keyvalue came back as code
+  point 1835106), so only octets that are valid UTF-8 come back exact (todo `f23`). A Common
+  Lisp provider's string arrives as its UTF-8 encoding; a Common Lisp caller of a Clojure
+  provider gets the packed vector, which the component's argument staging also takes.
+  `:BYTE-ARRAY` and `%clojure-bytes-from-host` are byte-array producers (the descriptor
+  global is in the program, so the scan sees the keyword). Pinned:
+  `ClojureWitBoundaryTest.aListOfOctetsIsAByteArrayBothWaysOnTheInterpreterAndTheJvm` (alone,
+  in an option, in a list; both languages' providers and a CL caller),
+  `aListOfOctetsCrossesAPreview1ModuleAsItsUtf8TextUnderNode`,
+  `aComponentImportsWasmtimesKeyvalueStore` (a two-byte character's octets through wasmtime). To the host a list/tuple/flags takes any collection
   (`%clojure-seq-all`) and a record any map (`%clojure-call-keyword`, records and sorted maps
   too); a value of no shape of its type is an `IllegalArgumentException` naming the type.
 - **The error arm** is an `ExceptionInfo` ("member of iface answered its error arm") whose
@@ -2302,7 +2332,8 @@ namespace` but the ones no measured library names (`inspector`, `java.browse`,
   Producers (`ClojureBytesLowering.PRODUCERS`): `byte-array` as a call (`-2`) and a value
   (`-v`), `.getBytes`, the byte streams' `readAllBytes`, `readNBytes`, `toByteArray`, the
   `ByteArrayInputStream`/`ByteArrayOutputStream` constructions, ring's base64 decode kernel and
-  the HTTP client's request kernel (`:as` may name `:bytes` at run time). Measured 2026-10-09
+  the HTTP client's request kernel (`:as` may name `:bytes` at run time); a host boundary's
+  answer (`%clojure-bytes-from-host`, the WIT descriptor `:BYTE-ARRAY`). Measured 2026-10-09
   against origin/develop 8e24b7237 (wasm P1 / component / JVM class): `demo.clj`,
   `ring-hello.clj`, `greeter.clj`, an array program and a string program byte-identical; a
   clojure.java.io program making no byte array 254,262 -> 254,184 / 262,347 -> 262,262 /
@@ -2326,12 +2357,12 @@ namespace` but the ones no measured library names (`inspector`, `java.browse`,
 - **Consumers elsewhere**: `slurp` of a byte array (UTF-8), `io/input-stream`, `io/reader` and
   `io/copy` of one; the Ring adapter's body; the HTTP client ("HTTP client"); ring-codec's
   base64 ("Ring util namespaces"); `clojure.java.shell`'s `:in` and `:out-enc :bytes`
-  ("clojure.jar namespaces"); a `java:` member's argument ("Java interop": a `:list` view).
+  ("clojure.jar namespaces"); a `java:` member's argument ("Java interop": a `:list` view);
+  `rontolisp.wasm`'s `:bytes` and a WIT `list<u8>` ("Host boundary").
 - **Deviations** (user docs `byte-array.md`, `deviations.md`): the hash-less `#object` and
   `str`; `class` a keyword; `aset` of any in-range integer; a seq a snapshot of the elements
   (the oracle's `ArraySeq` reads the array as it walks: `(1 9 3)` there, `(1 2 3)` here after
-  an `aset` between `seq` and the print); a `byte[]` Java answers a list (todo `f13`); no
-  `:bytes` wasm crossing (todo `f12`).
+  an `aset` between `seq` and the print); a `byte[]` Java answers a list (todo `f13`).
 - **Pins**: clojure-spec `byte-array-makes-a-mutable-array-of-signed-bytes`,
   `a-byte-array-is-no-collection-yet-seqs-its-bytes`,
   `strings-and-byte-arrays-convert-in-a-charset`,

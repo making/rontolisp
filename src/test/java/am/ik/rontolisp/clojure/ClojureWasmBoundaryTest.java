@@ -178,6 +178,96 @@ class ClojureWasmBoundaryTest {
 				""");
 	}
 
+	/** A byte array across {@code :bytes}, in every direction. */
+	private static final String BYTES = """
+			(ns bin
+			  (:require [rontolisp.wasm :as wasm]))
+
+			(wasm/defimport checksum {:from "host" :params [:bytes] :returns :int})
+			(wasm/defimport pull {:from "host" :params [:int] :returns :bytes})
+
+			(defn total {:wasm/export {:params [:bytes] :returns :string}} [b]
+			  (str (bytes? b) " " (reduce + (map #(if (neg? %) (+ % 256) %) b))))
+			(defn magic {:wasm/export {:params [] :returns :bytes}} [] (byte-array [-1 -2 65]))
+			(defn reversed {:wasm/export {:params [:bytes] :returns :bytes}} [b] (byte-array (reverse b)))
+			(defn ask {:wasm/export {:params [] :returns :string}} []
+			  (let [buf (byte-array 4)
+			        n (pull 7 buf)]
+			    (str (checksum (byte-array [1 2 -1])) " " n " " (vec buf) " " (bytes? buf))))
+			(defn refused {:wasm/export {:params [] :returns :string}} []
+			  (try (checksum "abc") (catch ClassCastException e (ex-message e))))
+			""";
+
+	/**
+	 * Under node, through the glue {@code --emit-js-glue} writes: a byte array crosses
+	 * {@code :bytes} as its octets both ways -- an export's argument arrives as a byte
+	 * array and its byte array answer as the host's bytes, {@code ff} included; an
+	 * import's byte array argument reaches the host as its octets, and a {@code :bytes}
+	 * result is the read(2) shape, the byte array passed last filled in place and the
+	 * call answering the length. Anything but a byte array is the oracle's refusal of a
+	 * cast to {@code byte[]}.
+	 */
+	@Test
+	void aByteArrayCrossesAsItsOctetsUnderNode() throws Exception {
+		assumeTrue(HostBoundaryRuns.nodeAvailable(), "node is not on PATH");
+		Path program = this.dir.resolve("bin.clj");
+		Files.writeString(program, BYTES);
+		HostBoundaryRuns.cli(program.toString(), "-o", this.dir.resolve("bin.wasm").toString(), "--no-wasi",
+				"--emit-js-glue");
+		Path host = this.dir.resolve("run.mjs");
+		Files.writeString(host, """
+				import fs from 'fs';
+				import { instantiate } from './bin.js';
+
+				const module = new WebAssembly.Module(fs.readFileSync(new URL('./bin.wasm', import.meta.url)));
+				let pulled = false;
+				const lisp = instantiate(module, {
+				  host: {
+				    checksum: (chunk) => {
+				      console.log('host got', Array.from(chunk).join(' '));
+				      return chunk.reduce((a, b) => a + b, 0);
+				    },
+				    pull: (n) => (pulled ? null : ((pulled = true), new Uint8Array([n, 0xff, 0xfe, 0x41]))),
+				  },
+				});
+				console.log(lisp.total(new Uint8Array([1, 2, 0xff])));
+				console.log(Array.from(lisp.magic()).join(' '), '/',
+				  Array.from(lisp.reversed(new Uint8Array([0xff, 0x80, 0x41]))).join(' '));
+				console.log(lisp.ask());
+				console.log(lisp.refused());
+				""");
+		assertThat(HostBoundaryRuns.node(this.dir, host.toString())).isEqualTo("""
+				true 258
+				255 254 65 / 65 128 255
+				host got 1 2 255
+				258 4 [7 -1 -2 65] true
+				class java.lang.String cannot be cast to class [B
+				""");
+		assertThat(wasmForms(BYTES)).contains(
+				"(RONTOLISP:WASM-IMPORT '|c%bin/pull%import| :FROM \"host\" :AS \"pull\" :PARAMS '(:INT) "
+						+ ":RETURNS :BYTES)",
+				"(RONTOLISP:WASM-EXPORT '|c%bin/total%export| :AS \"total\" :PARAMS '(:BYTES) :RETURNS :STRING)");
+	}
+
+	/**
+	 * On the interpreter and the JVM an export taking {@code :bytes} is an ordinary
+	 * function of a byte array, and an import answering {@code :bytes} a stub taking the
+	 * byte array to fill after the declared parameters.
+	 */
+	@Test
+	void theInterpreterAndTheJvmCallABytesExportAndStubABytesImport() throws Exception {
+		Path program = this.dir.resolve("bin.clj");
+		Files.writeString(program, BYTES + """
+				(println (total (byte-array [1 2 -1])) (vec (reversed (magic))))
+				(println (try (pull 7 (byte-array 4)) (catch UnsupportedOperationException e (ex-message e))))
+				""");
+		String expected = "true 258 [65 -2 -1]\npull is a host function (rontolisp.wasm/defimport): only a "
+				+ "compiled WASM module can call it\n";
+		assertThat(HostBoundaryRuns.cli(program.toString())).isEqualTo(expected);
+		assertThat(HostBoundaryRuns.jvm(program, Files.createDirectories(this.dir.resolve("classes")), "BytesApp"))
+			.isEqualTo(expected);
+	}
+
 	/**
 	 * A plain crossing gets no wrapper: the export names the {@code defun}, the import
 	 * binds the var's own symbol. A converting one goes through a wrapper of the var, so
@@ -287,7 +377,6 @@ class ClojureWasmBoundaryTest {
 	@Test
 	void aDeclarationRefusesWhatItCannotCarryByName() {
 		String head = "(ns app (:require [rontolisp.wasm :as wasm]))\n";
-		assertRefused(head + "(wasm/defimport fetch {:params [:bytes]})", ":bytes does not cross from Clojure");
 		assertRefused(head + "(wasm/defimport fetch {:params [:string] :async true})", ":async is not supported yet");
 		assertRefused(head + "(wasm/defimport fetch {:params [:strng]})", "unknown type :strng (the boundary carries");
 		assertRefused(head + "(wasm/defimport fetch {:params [:int] :retruns :int})", "unknown option :retruns");
