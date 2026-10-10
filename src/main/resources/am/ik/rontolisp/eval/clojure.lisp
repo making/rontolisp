@@ -19462,6 +19462,15 @@
   "A java.io.BufferedInputStream over the octet vector OCTETS."
   (list :C%INPUT-STREAM (vector nil octets 0 nil)))
 
+(defun rontolisp::%clojure-io-buffered-input (x)
+  "A java.io.BufferedInputStream over the ByteArrayInputStream X: a stream of
+   its own over the octets X has left, X's position kept where it was."
+  (let ((octets (svref (car (cdr x)) 1)) (end (svref (car (cdr (cdr x))) 1)))
+    (list :C%INPUT-STREAM (vector nil
+                                  (if (< end (length octets))
+                                      (subseq octets 0 end)
+                                      octets) (svref (car (cdr x)) 2) nil))))
+
 (defun rontolisp::%clojure-io-output (stream)
   "A java.io.BufferedOutputStream over the binary output STREAM."
   (list :C%OUTPUT-STREAM (vector stream nil)))
@@ -19639,13 +19648,20 @@
   (if (rontolisp::%clojure-bytes-p b)
       (rontolisp::%clojure-io-write-array x (car (cdr b)) 0
                                           (length (car (cdr b))))
-      (if (rontolisp::%clojure-io-array-stream-p x)
-          (rontolisp::%clojure-io-gather-byte x b)
-          (let ((state (rontolisp::%clojure-io-open-state x)))
-            (if (integerp b)
-                (write-byte (logand b 255) (svref state 0))
-                (rontolisp::%clojure-io-refuse-write x b))
-            nil))))
+      (cond ((rontolisp::%clojure-io-array-stream-p x)
+             (rontolisp::%clojure-io-gather-byte x b))
+            ;; a BufferedOutputStream over a ByteArrayOutputStream holds the
+            ;; octet: an arm a program making no byte array folds
+            ((rontolisp::%clojure-io-buffered-output-p x)
+             (if (integerp b)
+                 (rontolisp::%clojure-io-buffer-byte (car (cdr x)) b)
+                 (rontolisp::%clojure-io-refuse-write x b))
+             nil)
+            (t (let ((state (rontolisp::%clojure-io-open-state x)))
+                 (if (integerp b)
+                     (write-byte (logand b 255) (svref state 0))
+                     (rontolisp::%clojure-io-refuse-write x b))
+                 nil)))))
 
 (defun rontolisp::%clojure-io-refuse-write (x b)
   "The oracle's refusal of OutputStream.write of B, which is no int and no
@@ -19660,36 +19676,50 @@
   "The octets OCTETS, a list or a vector, written to the byte stream X."
   ;; a ByteArrayOutputStream gathers them: an arm a program making no byte array
   ;; folds
-  (if (rontolisp::%clojure-io-array-stream-p x)
-      (if (listp octets)
-          (dolist (b octets) (rontolisp::%clojure-io-gather-byte x b))
-          (rontolisp::%clojure-io-write-array x octets 0 (length octets)))
-      (let ((s (svref (rontolisp::%clojure-io-open-state x) 0)))
-        (if (listp octets)
-            (dolist (b octets) (write-byte b s))
-            (write-sequence octets s)))))
+  (cond ((rontolisp::%clojure-io-array-stream-p x)
+         (if (listp octets)
+             (dolist (b octets) (rontolisp::%clojure-io-gather-byte x b))
+             (rontolisp::%clojure-io-write-array x octets 0 (length octets))))
+        ;; a BufferedOutputStream over a ByteArrayOutputStream: an arm a
+        ;; program making no byte array folds
+        ((rontolisp::%clojure-io-buffered-output-p x)
+         (if (listp octets)
+             (dolist (b octets)
+               (rontolisp::%clojure-io-buffer-byte (car (cdr x)) b))
+             (rontolisp::%clojure-io-write-array x octets 0 (length octets))))
+        (t (let ((s (svref (rontolisp::%clojure-io-open-state x) 0)))
+             (if (listp octets)
+                 (dolist (b octets) (write-byte b s))
+                 (write-sequence octets s))))))
 
 (defun rontolisp::%clojure-io-flush-output (x)
   "OutputStream.flush of the byte stream X."
   ;; a ByteArrayOutputStream has nothing to flush: an arm a program making no
   ;; byte array folds
-  (if (rontolisp::%clojure-io-array-stream-p x)
-      nil
-      (finish-output (svref (rontolisp::%clojure-io-open-state x) 0)))
+  (cond ((rontolisp::%clojure-io-array-stream-p x) nil)
+        ;; a BufferedOutputStream over one hands its octets down: an arm a
+        ;; program making no byte array folds
+        ((rontolisp::%clojure-io-buffered-output-p x)
+         (rontolisp::%clojure-io-buffer-flush (car (cdr x))))
+        (t (finish-output (svref (rontolisp::%clojure-io-open-state x) 0))))
   nil)
 
 (defun rontolisp::%clojure-io-close-output (x)
   "Closes the byte stream X; a second close does nothing."
   ;; a ByteArrayOutputStream does not close, as the JDK's: an arm a program
   ;; making no byte array folds
-  (if (rontolisp::%clojure-io-array-stream-p x)
-      nil
-      (let ((state (car (cdr x))))
-        (if (not (svref state 1))
-            (progn
-              (setf (svref state 1) t)
-              (close (svref state 0))))
-        nil)))
+  (cond ((rontolisp::%clojure-io-array-stream-p x) nil)
+        ;; a BufferedOutputStream over one hands its octets down and, the
+        ;; stream under it closing nothing, stays open: an arm a program
+        ;; making no byte array folds
+        ((rontolisp::%clojure-io-buffered-output-p x)
+         (rontolisp::%clojure-io-buffer-flush (car (cdr x))))
+        (t (let ((state (car (cdr x))))
+             (if (not (svref state 1))
+                 (progn
+                   (setf (svref state 1) t)
+                   (close (svref state 0))))
+             nil))))
 
 ;;;; Byte streams over and into a byte array
 
@@ -19871,19 +19901,80 @@
   "The octets of the vector OCTETS from START below END written to the byte
    stream X: gathered by a ByteArrayOutputStream, written in one transfer to a
    file."
-  (if (rontolisp::%clojure-io-array-stream-p x)
-      (let ((extra (car (cdr (cdr x)))))
-        (if (> (+ (svref extra 2) (- end start)) (length (svref extra 1)))
-            (rontolisp::%clojure-io-grow-buffer extra (- end start)))
-        (replace (svref extra 1) octets
-                 :start1 (svref extra 2)
-                 :start2 start
-                 :end2 end)
-        (setf (svref extra 2) (+ (svref extra 2) (- end start))))
-      (let ((s (svref (rontolisp::%clojure-io-open-state x) 0)))
-        (do ((i start (+ i 1)))
-            ((>= i end))
-          (write-byte (aref octets i) s))))
+  (cond ((rontolisp::%clojure-io-array-stream-p x)
+         (let ((extra (car (cdr (cdr x)))))
+           (if (> (+ (svref extra 2) (- end start)) (length (svref extra 1)))
+               (rontolisp::%clojure-io-grow-buffer extra (- end start)))
+           (replace (svref extra 1) octets
+                    :start1 (svref extra 2)
+                    :start2 start
+                    :end2 end)
+           (setf (svref extra 2) (+ (svref extra 2) (- end start)))))
+        ;; a BufferedOutputStream over one: an arm a program making no byte
+        ;; array folds
+        ((rontolisp::%clojure-io-buffered-output-p x)
+         (rontolisp::%clojure-io-buffer-array (car (cdr x)) octets start end))
+        (t (let ((s (svref (rontolisp::%clojure-io-open-state x) 0)))
+             (do ((i start (+ i 1)))
+                 ((>= i end))
+               (write-byte (aref octets i) s)))))
+  nil)
+
+;;;; A java.io.BufferedOutputStream over a ByteArrayOutputStream is
+;;;; (:C%OUTPUT-STREAM #(under nil buffer count)): the octets written wait in
+;;;; BUFFER (8192 of them, COUNT held) until it is flushed or closed, or until
+;;;; one that does not fit comes, as the JDK's does. The stream under it closes
+;;;; nothing, so neither does this one. Every output function reaches it through
+;;;; one arm test, %clojure-io-buffered-output-p (clojure/ClojureArms, the
+;;;; byte-array family).
+
+(defun rontolisp::%clojure-io-buffered-output-p (x)
+  (if (consp x)
+      (if (eq (car x) :C%OUTPUT-STREAM)
+          (if (consp (cdr x)) (consp (svref (car (cdr x)) 0))))))
+
+(defun rontolisp::%clojure-io-buffered-output (under)
+  "A java.io.BufferedOutputStream over the ByteArrayOutputStream UNDER."
+  (list :C%OUTPUT-STREAM (vector under nil
+                          (make-array 8192 :element-type '(unsigned-byte 8))
+                          0)))
+
+(defun rontolisp::%clojure-io-buffer-flush (state)
+  "The octets the buffered output stream state STATE holds written to the
+   stream under it."
+  (let ((n (svref state 3)))
+    (if (> n 0)
+        (progn
+          (setf (svref state 3) 0)
+          (rontolisp::%clojure-io-write-array (svref state 0) (svref state 2) 0
+                                              n))))
+  nil)
+
+(defun rontolisp::%clojure-io-buffer-byte (state b)
+  "OutputStream.write of an int to the buffered output stream state STATE: its
+   low octet held, the buffer written down first when full."
+  (if (>= (svref state 3) 8192) (rontolisp::%clojure-io-buffer-flush state))
+  (setf (aref (svref state 2) (svref state 3)) (logand b 255))
+  (setf (svref state 3) (+ (svref state 3) 1))
+  nil)
+
+(defun rontolisp::%clojure-io-buffer-array (state octets start end)
+  "The octets of the vector OCTETS from START below END written to the
+   buffered output stream state STATE: a run as long as the buffer straight
+   through, one that does not fit after the buffer is written down, else held."
+  (let ((n (- end start)))
+    (cond ((>= n 8192)
+           (rontolisp::%clojure-io-buffer-flush state)
+           (rontolisp::%clojure-io-write-array (svref state 0) octets start
+                                               end))
+          (t
+           (if (> n (- 8192 (svref state 3)))
+               (rontolisp::%clojure-io-buffer-flush state))
+           (replace (svref state 2) octets
+                    :start1 (svref state 3)
+                    :start2 start
+                    :end2 end)
+           (setf (svref state 3) (+ (svref state 3) n)))))
   nil)
 
 (defun rontolisp::%clojure-io-gathered (x)
@@ -20222,7 +20313,13 @@
   ;; a byte array is read in place, as a ByteArrayInputStream reads it: an arm a
   ;; program making none folds
   (let ((kept (rontolisp::%clojure-io-kept x)))
-    (cond ((and (consp x) (eq (car x) :C%INPUT-STREAM)) x)
+    (cond
+     ((and (consp x) (eq (car x) :C%INPUT-STREAM))
+      ;; a ByteArrayInputStream is wrapped, as the oracle wraps any
+      ;; InputStream: an arm a program making no byte array folds
+      (if (rontolisp::%clojure-io-array-stream-p x)
+          (rontolisp::%clojure-io-buffered-input x)
+          x))
      ((rontolisp::%clojure-bytes-p x)
       (rontolisp::%clojure-io-octets-input (car (cdr x))))
      (kept (rontolisp::%clojure-io-octets-input
@@ -20342,7 +20439,11 @@
   "make-output-stream of X: a byte stream over the file X names, appending
    when APPEND is truthy, or X itself when it is one; nil for anything else."
   (if (and (consp x) (eq (car x) :C%OUTPUT-STREAM))
-      x
+      ;; a ByteArrayOutputStream is wrapped, as the oracle wraps any
+      ;; OutputStream: an arm a program making no byte array folds
+      (if (rontolisp::%clojure-io-array-stream-p x)
+          (rontolisp::%clojure-io-buffered-output x)
+          x)
       (let ((path (rontolisp::%clojure-io-target x t)))
         (if path
             (progn
@@ -20558,7 +20659,10 @@
                         (rontolisp::%clojure-io-encode
                          (rontolisp::%clojure-io-reader-text in) charset)
                         (rontolisp::%clojure-io-encode in charset))))
-               (rontolisp::%clojure-io-flush-output out))
+               ;; a byte stream copied into one is left unflushed, as the
+               ;; oracle's copy leaves it
+               (if (not (eq in-kind :bytes))
+                   (rontolisp::%clojure-io-flush-output out)))
               (t
                (write-string (cond ((eq in-kind :bytes)
                                     (rontolisp::%clojure-io-text-of in charset))
@@ -20926,9 +21030,17 @@
   (if (stringp x) x (rontolisp::%clojure-io-path x)))
 
 (defun rontolisp::%clojure-io-file-input (x)
-  "(FileInputStream. x): a byte stream over the file the path or File X names."
-  (rontolisp::%clojure-io-open-input
-   (rontolisp::%clojure-io-file (rontolisp::%clojure-io-literal-path x))))
+  "(FileInputStream. x): a byte stream over the file the path or File X names,
+   which keeps no mark (the sixth slot of its state), as the JDK's does not."
+  (let ((state
+         (car
+          (cdr
+           (rontolisp::%clojure-io-open-input
+            (rontolisp::%clojure-io-file
+             (rontolisp::%clojure-io-literal-path x)))))))
+    (list :C%INPUT-STREAM (vector (svref state 0) (svref state 1)
+                                  (svref state 2) (svref state 3)
+                                  "java.io.BufferedInputStream" t))))
 
 (defun rontolisp::%clojure-io-file-output (x append)
   "(FileOutputStream. x append): a byte stream over the file the path or File X
@@ -21393,57 +21505,104 @@
   "ByteArrayOutputStream.size: the count of octets X holds."
   (svref (rontolisp::%clojure-io-gathering x "size" 0) 2))
 
-;; The marks of the byte input streams over octets but a ByteArrayInputStream
-;; (which keeps its own): an eq table of stream to index, NIL until the first
-;; mark.
+;; The marks of the byte input streams but a ByteArrayInputStream (which keeps
+;; its own): an eq table of stream to position -- the index into its octets, the
+;; position of a file -- NIL until the first mark.
 (defvar rontolisp::%clojure-io-marks nil)
 
+(defun rontolisp::%clojure-io-note-mark (x position)
+  "Records POSITION as where the byte input stream X was marked."
+  (if (null rontolisp::%clojure-io-marks)
+      (setq rontolisp::%clojure-io-marks (make-hash-table :test 'eq)))
+  (setf (gethash x rontolisp::%clojure-io-marks) position))
+
+(defun rontolisp::%clojure-io-marked (x)
+  "Where the byte input stream X was marked, the oracle's IOException when it
+   was not."
+  (let ((mark
+         (if rontolisp::%clojure-io-marks
+             (gethash x rontolisp::%clojure-io-marks))))
+    (if (null mark)
+        (rontolisp::%clojure-io-exception "Resetting to invalid mark"))
+    mark))
+
+;; A byte stream over a file keeps its mark as the position the file had, and
+;; reset seeks back to it: the seek family's own definitions
+;; (clojure/ClojureArms, the seek family). A two-argument file-position is read
+;; by name by the Gray streams' rewrite before the pruner runs, so they go with
+;; the arms: a program calling no reset compiles as before.
+
+(defun rontolisp::%clojure-io-seek-p (state)
+  "Whether the byte stream state STATE is over a file, which a mark can seek
+   back to: a Lisp stream but a fetched reply's body and a FileInputStream's."
+  (let ((s (svref state 0)))
+    (if s
+        (if (rontolisp::%clojure-async-stream-p s)
+            nil
+            (rontolisp::%clojure-io-marks-p state)))))
+
+(defun rontolisp::%clojure-io-marks-p (state)
+  "Whether the byte stream state STATE may hold a mark: a FileInputStream's
+   does not."
+  (not (and (> (length state) 5) (svref state 5))))
+
+(defun rontolisp::%clojure-io-seek-mark (x state)
+  "InputStream.mark of the byte stream X over a file: the position it has."
+  (rontolisp::%clojure-io-note-mark x (file-position (svref state 0))))
+
+(defun rontolisp::%clojure-io-seek-reset (x state)
+  "InputStream.reset of the byte stream X over a file: back to its mark."
+  (file-position (svref state 0) (rontolisp::%clojure-io-marked x)))
+
 (defun rontolisp::%clojure-io-m-reset (x)
-  "reset: a byte input stream over octets back where it was marked (a
-   ByteArrayInputStream at its start until then, any other the oracle's
-   IOException), one over a file the IOException of a stream without marks;
-   a ByteArrayOutputStream emptied, its room kept."
+  "reset: a byte input stream back where it was marked (a ByteArrayInputStream
+   at its start until then, any other the oracle's IOException when it was
+   not; one over a fetched reply's body keeps no mark); a ByteArrayOutputStream
+   emptied, its room kept."
   (if (eq (rontolisp::%clojure-io-kind x) :C%INPUT-STREAM)
       (let ((state (rontolisp::%clojure-io-open-state x)))
         (cond ((rontolisp::%clojure-io-array-stream-p x)
                (setf (svref state 2) (svref (car (cdr (cdr x))) 2)))
+              ;; a file seeks back: an arm a program calling no reset folds
+              ((rontolisp::%clojure-io-seek-p state)
+               (rontolisp::%clojure-io-seek-reset x state))
               ((svref state 0)
                (rontolisp::%clojure-io-exception "mark/reset not supported"))
-              (t (let ((mark
-                        (if rontolisp::%clojure-io-marks
-                            (gethash x rontolisp::%clojure-io-marks))))
-                   (if (null mark)
-                       (rontolisp::%clojure-io-exception
-                        "Resetting to invalid mark"))
-                   (setf (svref state 2) mark)))))
+              (t (setf (svref state 2) (rontolisp::%clojure-io-marked x)))))
       (setf (svref (rontolisp::%clojure-io-gathering x "reset" 0) 2) 0))
   nil)
 
 (defun rontolisp::%clojure-io-m-mark (x limit)
-  "InputStream.mark: a byte stream over octets marks where it is, for reset
-   to come back to, the read limit not kept; one over a file keeps no mark."
+  "InputStream.mark: a byte stream marks where it is, for reset to come back
+   to, the read limit not kept; one over a fetched reply's body keeps no mark."
   (declare (ignore limit))
   (let ((state
          (rontolisp::%clojure-io-open-state
           (rontolisp::%clojure-io-recv x :C%INPUT-STREAM "mark" 1))))
     (cond ((rontolisp::%clojure-io-array-stream-p x)
            (setf (svref (car (cdr (cdr x))) 2) (svref state 2)))
+          ;; a file notes its position: an arm a program calling no reset folds
+          ((rontolisp::%clojure-io-seek-p state)
+           (rontolisp::%clojure-io-seek-mark x state))
           ((null (svref state 0))
-           (if (null rontolisp::%clojure-io-marks)
-               (setq rontolisp::%clojure-io-marks (make-hash-table :test 'eq)))
-           (setf (gethash x rontolisp::%clojure-io-marks) (svref state 2))))
+           (rontolisp::%clojure-io-note-mark x (svref state 2))))
     nil))
 
 (defun rontolisp::%clojure-io-m-mark-supported (x)
-  "InputStream.markSupported: whether the byte stream X is over octets, which
-   mark and reset hold a position in; one over a file is not."
-  (if (svref (car
-              (cdr
-               (rontolisp::%clojure-io-recv x
-                                            :C%INPUT-STREAM "markSupported" 0)))
-             0)
-      rontolisp::%clojure-false
-      t))
+  "InputStream.markSupported: whether the byte stream X holds a mark -- one
+   over octets or a file does, one over a fetched reply's body does not."
+  (let ((s
+         (svref (car
+                 (cdr
+                  (rontolisp::%clojure-io-recv x
+                                               :C%INPUT-STREAM "markSupported"
+                                               0))) 0)))
+    (if s
+        (if (rontolisp::%clojure-async-stream-p s)
+            rontolisp::%clojure-false
+            (rontolisp::%clojure-io-bool
+             (rontolisp::%clojure-io-marks-p (car (cdr x)))))
+        t)))
 
 (defun rontolisp::%clojure-io-m-write-to (x out)
   "ByteArrayOutputStream.writeTo: what X holds written to the byte stream

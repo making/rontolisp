@@ -40,6 +40,13 @@ final class ClojureBytesLowering {
 	 */
 	static final String ARRAY_STREAM_P = PREFIX + "IO-ARRAY-STREAM-P";
 
+	/**
+	 * The family's arm test of the output functions: whether a byte stream is the
+	 * {@code BufferedOutputStream} {@code clojure.java.io/output-stream} answers over a
+	 * {@code ByteArrayOutputStream}.
+	 */
+	static final String BUFFERED_OUTPUT_P = PREFIX + "IO-BUFFERED-OUTPUT-P";
+
 	/** {@code (aget array i)} of one index: the alias of {@code aref}. */
 	static final String AGET = PREFIX + "AGET";
 

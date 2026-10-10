@@ -419,6 +419,23 @@ class ClojureLibraryTest {
 	}
 
 	@Test
+	void aProgramCallingNoResetSplicesTheLibraryWithoutTheFileSeek() {
+		// a file mark seeks back through a two-argument file-position, which the Gray
+		// streams' rewrite reads by name before the pruner runs: only a program calling
+		// reset carries the seek, so any other compiles as before it existed
+		assertThat(defun(ClojureLibrary.forms(), "RONTOLISP::%CLOJURE-IO-SEEK-RESET")).contains("(FILE-POSITION ");
+		String io = "(ns a (:require [clojure.java.io :as io])) ";
+		List<LispVal> plain = Clojure.read(io + "(with-open [in (io/input-stream \"a\")] (.mark in 1) (.read in))",
+				null);
+		assertThat(ClojureLibrary.process(plain).stream().map(LispVal::print))
+			.noneMatch(text -> text.contains("%CLOJURE-IO-SEEK-"));
+		List<LispVal> reset = Clojure.read(io + "(with-open [in (io/input-stream \"a\")] (.mark in 1) (.reset in))",
+				null);
+		assertThat(defun(ClojureLibrary.process(reset), "RONTOLISP::%CLOJURE-IO-SEEK-RESET"))
+			.contains("(FILE-POSITION ");
+	}
+
+	@Test
 	void aReaderDecodesAReplyAsItArrivesOnlyInAProgramThatFetchesAndOpensOne() {
 		// the reply reader's definitions name the prelude's Gray class, whose splice
 		// brings the Gray streams' protocol and call-site rewrite in: a program that

@@ -103,9 +103,14 @@ too ([byte-array](byte-array.md)).
 `(java.io.ByteArrayOutputStream.)` gathers the octets written to it: `toByteArray` answers a
 copy of them, `size` their count, `toString` (like `str`) their text in UTF-8 or the charset
 named, `writeTo` writes them to another byte stream and `reset` empties it. As in Java,
-closing either changes nothing. A stream over octets (a byte array, a resource) keeps the
-position `mark` takes for `reset`; a stream over a file keeps none (`markSupported` is
-false).
+closing either changes nothing. A stream over octets (a byte array, a resource) or over a
+file keeps the position `mark` takes, and `reset` returns to it however much was read since;
+`reset` before any `mark` is the oracle's `java.io.IOException`. A `FileInputStream.` and a
+stream over an `http:` URL keep none (`markSupported` is false). `input-stream` of a
+`ByteArrayInputStream` is a `BufferedInputStream` of its own, and `output-stream` of a
+`ByteArrayOutputStream` a `BufferedOutputStream` that holds what is written (8192 octets)
+until `flush` or `close`, a run as long as that straight through; it closes nothing under it.
+`copy` of a byte stream into it leaves it unflushed, a writer or a string flushes it.
 
 ```clojure
 (def out (java.io.ByteArrayOutputStream.))
@@ -226,9 +231,12 @@ replaced.
   request carries fetch's `User-Agent`; and `.available` answers what has arrived, 0 before the
   first read.
 - `:encoding` knows three charsets, where the oracle knows the JDK's.
-- `input-stream` and `output-stream` answer a `ByteArrayInputStream` or a
-  `ByteArrayOutputStream` itself, where the oracle wraps it in a buffered stream, and a
-  stream over a file or an `http:` URL keeps no `mark`.
+- `input-stream` of a `ByteArrayInputStream` reads the octets the stream had left on its
+  own, so the stream under it keeps its position, where the oracle's buffer reads ahead and
+  leaves it at the end of what it buffered. `input-stream` and `output-stream` answer any
+  other byte stream (a file's, an `http:` URL's) as it is, where the oracle wraps it. `mark`
+  does not keep its read limit: a `reset` past it succeeds, where the oracle's buffer has
+  dropped the mark, and a stream over an `http:` URL keeps no `mark`.
 - `resource` never consults a class loader given.
 - `(java.net.URL. s)` and `(java.net.URI. s)` construct host objects (the interpreter and the
   JVM); `as-url` makes the URL every backend has, and `.toURI` of it the URI.

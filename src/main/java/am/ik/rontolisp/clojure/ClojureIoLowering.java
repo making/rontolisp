@@ -105,6 +105,24 @@ final class ClojureIoLowering {
 	static final String JAR_P = JAR_PREFIX + "P";
 
 	/**
+	 * The prefix of the file seek's definitions in {@code clojure.lisp}: the seek
+	 * family's own ({@link ClojureArms.Family#SEEK}), which go with its arms.
+	 */
+	static final String SEEK_PREFIX = PREFIX + "SEEK-";
+
+	/**
+	 * The seek family's arm test: whether a byte stream state is over a file, which a
+	 * mark can seek back to.
+	 */
+	static final String SEEK_P = SEEK_PREFIX + "P";
+
+	/**
+	 * {@code reset} of a byte stream, the one producer of the seek family: the call a
+	 * program makes for a mark to be taken and returned to.
+	 */
+	static final String M_RESET = PREFIX + "M-RESET";
+
+	/**
 	 * Every directory root's URL of a name when the program runs: a class loader's
 	 * {@code getResources}, which {@code ring.util.response}'s resource response reads
 	 * for the {@code file:} URLs among them.

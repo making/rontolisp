@@ -794,9 +794,12 @@ public final class ClojureArms {
 		 * {@code aset}'s. Ahead of {@link #HOST}: the construction's alias is
 		 * {@code java:new}, which that family reads as a producer.
 		 */
-		BYTES("byte-array", Set.of(ClojureBytesLowering.BYTES_P, ClojureBytesLowering.ARRAY_STREAM_P), Set.of(),
-				ClojureBytesLowering.ALIASES, ClojureBytesLowering.PRODUCERS, Set.of(), false, Set.of(), Set.of(),
-				Set.of(), ClojureBytesLowering.SETTERS, null, null, Set.copyOf(LispNames.JAVA_OPERATORS_QUALIFIED)),
+		BYTES("byte-array",
+				Set.of(ClojureBytesLowering.BYTES_P, ClojureBytesLowering.ARRAY_STREAM_P,
+						ClojureBytesLowering.BUFFERED_OUTPUT_P),
+				Set.of(), ClojureBytesLowering.ALIASES, ClojureBytesLowering.PRODUCERS, Set.of(), false, Set.of(),
+				Set.of(), Set.of(), ClojureBytesLowering.SETTERS, null, null,
+				Set.copyOf(LispNames.JAVA_OPERATORS_QUALIFIED)),
 
 		/**
 		 * A {@code clojure.java.io} value -- a {@code java.io.File}, a URL, a URI, a byte
@@ -868,6 +871,18 @@ public final class ClojureArms {
 		 */
 		JAR("jar-entry", Set.of(ClojureIoLowering.JAR_P), Set.of(ClojureIoLowering.JAR_RESOURCE),
 				ClojureIoLowering.JAR_PREFIX),
+
+		/**
+		 * A byte stream over a file whose {@code mark} is the position the file had and
+		 * whose {@code reset} seeks back to it ({@link ClojureIoLowering#SEEK_P}): only a
+		 * program calling {@code reset} ({@link ClojureIoLowering#M_RESET}) uses one. The
+		 * seek is the family's own ({@link ClojureIoLowering#SEEK_PREFIX}): a
+		 * two-argument {@code file-position}, which the Gray streams' rewrite reads by
+		 * name before the pruner runs, so it goes with the arms and a program calling no
+		 * {@code reset} compiles as before it existed.
+		 */
+		SEEK("file-seek", Set.of(ClojureIoLowering.SEEK_P), Set.of(ClojureIoLowering.M_RESET),
+				ClojureIoLowering.SEEK_PREFIX),
 
 		/**
 		 * A host object, which {@code instance?} asks the host the class of, {@code =}

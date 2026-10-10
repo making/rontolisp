@@ -11192,6 +11192,131 @@ cases:
       "Range [1, 1 + 2) out of bounds for length 2" "No method in multimethod 'do-copy' for dispatch value: [byte/1 nil]" :refused :npe
       4 [104 -61 -87 108] 2 -1
       [104 -61 -87 108 108 111 104] 7
+  - name: input-stream-and-output-stream-wrap-a-byte-array-stream-in-a-buffered-one
+    # clojure.java.io/input-stream of a ByteArrayInputStream is a BufferedInputStream
+    # of its own (it marks, closes, reads what the stream had left); output-stream of
+    # a ByteArrayOutputStream is a BufferedOutputStream that holds what is written
+    # (8192 octets) until it is flushed or closed, a run as long as its buffer going
+    # straight through, and closes nothing under it. copy of a byte stream leaves it
+    # unflushed, a writer flushes it. Oracle-identical (clj 1.12.6, 2026-10-10).
+    source: |
+      (require '[clojure.java.io :as io])
+      (let [b (java.io.ByteArrayInputStream. (byte-array [1 2 3 4])) w (io/input-stream b)]
+        (prn (.getName (class w)) (.markSupported w) (.read w) (.read w))
+        (.mark w 0) (.read w) (.reset w) (prn (.read w) (.available w) (.skip w 1) (vec (.readAllBytes w)))
+        (.close w)
+        (prn (try (.read w) (catch java.io.IOException e (ex-message e)))
+             (try (.reset w) (catch java.io.IOException e (ex-message e)))))
+      (let [w (io/input-stream (java.io.ByteArrayInputStream. (byte-array [1 2 3 4]) 1 2))]
+        (prn (.read w) (.read w) (.read w)))
+      (let [w (io/input-stream (java.io.ByteArrayInputStream. (byte-array [1 2 3])))]
+        (prn (try (.reset w) (catch java.io.IOException e (ex-message e)))))
+      (prn (.getName (class (io/input-stream (io/input-stream (byte-array 1))))))
+      (let [bo (java.io.ByteArrayOutputStream.) o (io/output-stream bo)]
+        (prn (.getName (class o)) (instance? java.io.OutputStream o))
+        (.write o 65) (prn (.size bo)) (.flush o) (prn (.size bo))
+        (.write o (byte-array [66 67]) 0 1) (.write o (byte-array [68]))
+        (prn (.size bo))
+        (.close o) (prn (.size bo) (str bo))
+        (.write o 69) (.flush o) (prn (str bo)))
+      (let [bo (java.io.ByteArrayOutputStream.) o (io/output-stream bo)]
+        (.write o (byte-array 9000)) (prn (.size bo))
+        (.write o (byte-array 100)) (prn (.size bo))
+        (.write o (byte-array 100)) (prn (.size bo))
+        (.close o) (prn (.size bo)))
+      (let [bo (java.io.ByteArrayOutputStream.) o (io/output-stream bo)]
+        (dotimes [i 8192] (.write o 1)) (prn (.size bo)) (.write o 1) (prn (.size bo)))
+      (let [bo (java.io.ByteArrayOutputStream.) o (io/output-stream bo)]
+        (.write o (byte-array 8000)) (.write o (byte-array 300)) (prn (.size bo))
+        (.write o (byte-array 8192)) (prn (.size bo)))
+      (let [bo (java.io.ByteArrayOutputStream.)]
+        (with-open [o (io/output-stream bo)] (.write o 65))
+        (prn (.size bo)))
+      (let [bo (java.io.ByteArrayOutputStream.) o (io/output-stream bo)]
+        (io/copy (java.io.ByteArrayInputStream. (.getBytes "hello")) o)
+        (prn (.size bo))
+        (io/copy "xyz" o) (prn (.size bo)))
+      (let [bo (java.io.ByteArrayOutputStream.) w (io/writer bo)]
+        (.write w "abc") (prn (.size bo)) (.flush w) (prn (.size bo)))
+      (let [bo (java.io.ByteArrayOutputStream.) o (io/output-stream bo) w (io/writer o)]
+        (.write w "abc") (prn (.size bo)) (.flush w) (prn (.size bo)))
+      (prn (try (.write (io/output-stream (java.io.ByteArrayOutputStream.)) nil) (catch NullPointerException e :npe)))
+      (prn (try (.size (io/output-stream (java.io.ByteArrayOutputStream.))) (catch IllegalArgumentException e :no-method) (catch Exception e (class e))))
+    expected: |
+      "java.io.BufferedInputStream" true 1 2
+      3 1 1 []
+      "Stream closed" "Stream closed"
+      2 3 -1
+      "Resetting to invalid mark"
+      "java.io.BufferedInputStream"
+      "java.io.BufferedOutputStream" true
+      0
+      1
+      1
+      3 "ABD"
+      "ABDE"
+      9000
+      9000
+      9000
+      9200
+      0
+      8192
+      8000
+      16492
+      1
+      0
+      8
+      0
+      3
+      0
+      3
+      :npe
+      :no-method
+  - name: a-stream-over-a-file-marks-the-position-it-had-and-reset-returns-to-it
+    # input-stream of a path is a BufferedInputStream, which marks (markSupported)
+    # and whose reset seeks back to the position mark took, however much was read
+    # since; reset before any mark is the IOException "Resetting to invalid mark".
+    # A FileInputStream keeps none ("mark/reset not supported"). The read limit
+    # is not kept: a reset past it succeeds (deviations). On wasm the file needs a
+    # --dir preopen covering /tmp. Oracle-identical (clj 1.12.6, 2026-10-10).
+    source: |
+      (require '[clojure.java.io :as io])
+      (def mk-f (str "/tmp/rontolisp-marks-" (rand-int 1000000000) ".bin"))
+      (spit mk-f "abc")
+      (with-open [in (io/input-stream mk-f)]
+        (prn (.markSupported in) (.read in))
+        (.mark in 10)
+        (prn (.read in))
+        (.reset in)
+        (prn (.read in) (.read in) (.read in))
+        (.reset in)
+        (prn (.read in)))
+      (with-open [in (io/input-stream mk-f)]
+        (prn (try (.reset in) (catch java.io.IOException e (ex-message e)))))
+      (with-open [in (java.io.FileInputStream. mk-f)]
+        (prn (.markSupported in) (try (.reset in) (catch java.io.IOException e (ex-message e)))))
+      (with-open [in (io/input-stream mk-f)]
+        (.mark in 10)
+        (let [buf (byte-array 3)]
+          (prn (.read in buf) (vec buf))
+          (.reset in)
+          (prn (vec (.readAllBytes in)))
+          (.reset in)
+          (prn (.skip in 2) (.read in))))
+      (with-open [in (io/input-stream mk-f)]
+        (.read in) (.mark in 10) (.read in) (.mark in 10) (.read in) (.reset in) (prn (.read in)))
+      (io/delete-file mk-f)
+    expected: |
+      true 97
+      98
+      98 99 -1
+      98
+      "Resetting to invalid mark"
+      false "mark/reset not supported"
+      3 [97 98 99]
+      [97 98 99]
+      2 99
+      99
   - name: ring-util-codec-base64-encodes-and-decodes-a-byte-array
     # java.util.Base64's basic encoding, padded, and its decoder's refusals in its
     # words. Oracle-identical (clj 1.12.6 + ring-codec 1.3.0, 2026-10-09).

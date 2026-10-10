@@ -103,9 +103,15 @@ URL は綴りを保ち、`getProtocol`、`getHost`、`getPort`、`getPath`、`ge
 `(java.io.ByteArrayOutputStream.)` は書き込まれたオクテットを集めます。`toByteArray` はその
 写しを、`size` は個数を、`toString` は（`str` と同じく）UTF-8 か指定した文字セットのテキストを
 返し、`writeTo` は別のバイトストリームへ書き、`reset` は中身を空にします。Java と同じく、
-どちらも close しても何も変わりません。オクテットの上のストリーム（バイト配列、リソース）は
-`mark` で取った位置を `reset` のために保持し、ファイルの上のストリームは保持しません
-（`markSupported` は false）。
+どちらも close しても何も変わりません。オクテットの上のストリーム（バイト配列、リソース）と
+ファイルの上のストリームは `mark` で取った位置を保持し、`reset` はその後どれだけ読んでいても
+そこへ戻ります。`mark` より前の `reset` はオラクルの `java.io.IOException` です。
+`FileInputStream.` と `http:` URL の上のストリームは位置を保持しません（`markSupported` は
+false）。`ByteArrayInputStream` の `input-stream` はそれ自身の `BufferedInputStream`、
+`ByteArrayOutputStream` の `output-stream` は書き込まれたオクテットを `flush` か `close` まで
+（8192 オクテットまで）保持する `BufferedOutputStream` で、その下のストリームは閉じません。
+`copy` でバイトストリームをこれに書いても flush されず、ライターや文字列からの `copy` は
+flush します。
 
 ```clojure
 (def out (java.io.ByteArrayOutputStream.))
@@ -226,9 +232,13 @@ $ rontolisp src/app/main.clj        # deps.edn holds {:paths ["src" "resources"]
   プロキシを通して送り直します）。リクエストには fetch の `User-Agent` が付きます。
   `.available` は届いた分を答え、最初の読み取りの前は 0 です。
 - `:encoding` が知る文字セットは 3 つで、オラクルは JDK のものを知っています。
-- `input-stream` と `output-stream` は `ByteArrayInputStream` と `ByteArrayOutputStream` を
-  そのまま返し、オラクルはバッファ付きストリームで包みます。ファイルや `http:` URL の上の
-  ストリームは `mark` の位置を保持しません。
+- `ByteArrayInputStream` の `input-stream` は、そのストリームが残していたオクテットを自分で
+  読むので、下のストリームの位置は動きません。オラクルのバッファは先読みし、下のストリームは
+  バッファした分の末尾まで進みます。`input-stream` と `output-stream` はそれ以外のバイト
+  ストリーム（ファイルや `http:` URL の上のもの）をそのまま返し、オラクルは包みます。
+  `mark` は読み取り上限を保持しません。上限を越えた `reset` はオラクルではバッファが
+  マークを捨てて失敗しますが、ここでは成功します。`http:` URL の上のストリームは `mark` の
+  位置を保持しません。
 - `resource` は渡されたクラスローダーを参照しません。
 - `(java.net.URL. s)` と `(java.net.URI. s)` はホストオブジェクトを作ります（インタプリタと
   JVM）。どのバックエンドにもある URL は `as-url` が作り、その `.toURI` が URI です。

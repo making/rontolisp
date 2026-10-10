@@ -2354,7 +2354,23 @@ namespace` but the ones no measured library names (`inspector`, `java.browse`,
   the component), a fetched reply's body hands the chunk in hand (`%clojure-io-read-pulled`);
   `readNBytes` reads until it has what it asks for (`%clojure-io-read-fully`,
   `%clojure-io-pull-n`), `readAllBytes` the rest (`%clojure-io-octets-from`); `mark`/`reset`
-  over octets (`%clojure-io-marks`, the array stream's own slot), none over a file or a reply.
+  over octets (`%clojure-io-marks`, the array stream's own slot) and over a file (the seek
+  family below), none over a reply or a `FileInputStream.` (the sixth slot of its state, `t`;
+  its class stays the buffered stream's). `io/input-stream` of a `ByteArrayInputStream`
+  (`%clojure-io-buffered-input`, inside `%clojure-io-open-input`) is a plain octets state of
+  its own -- the octets below the array stream's end, from its position -- and
+  `io/output-stream` of a `ByteArrayOutputStream` (`%clojure-io-buffered-output`) is
+  `(:C%OUTPUT-STREAM #(under nil buffer count))`, the JDK's 8192-octet buffer (a run of 8192
+  or more straight through, one that does not fit after a flush, `write(int)` flushing a full
+  buffer), `close` flushing and never closing, tested by `%clojure-io-buffered-output-p` (a
+  byte-array family test). Any other byte stream is answered as it is: the class is already
+  the buffered one's and a wrapper would only add identity. Oracle (clj 1.12.6, 2026-10-10):
+  `(.available bais)` after one wrapper read is 0 (the buffer reads ahead; here the array
+  stream keeps its position), `io/copy` of a byte stream into a wrapper leaves it unflushed
+  (a string, a reader and a writer's copy flush), a write after `close` reaches the stream
+  under at the next flush. A mark past its read limit is invalid in the oracle (a 9000-octet
+  read after `mark(10)` over a BAIS wrapper: "Resetting to invalid mark"); the limit is not
+  kept here.
   The array paths loop `read-byte`/`write-byte` over a file: naming `read-sequence`,
   `write-sequence` or a two-argument `file-position` in a function a Ring program splices
   changed `ring-hello.clj`'s output (the prelude's Gray dispatchers came with them; observed
@@ -2596,6 +2612,15 @@ the file), `default-streams-impl` a map. Until then only `reader` resolved, as a
     request path is any name, and the inflater the reader needs was already on every
     backend; and the lookup in `io.clj`'s `resource` (every io program with a jar on its
     source path would carry the reader).
+  - **The seek family** (`ClojureArms.Family.SEEK`): test `%clojure-io-seek-p`, producer
+    `%clojure-io-m-reset`, library definitions named `%clojure-io-seek-` OWNED. `mark` of a
+    byte stream over a file notes `(file-position s)` in `%clojure-io-marks`, `reset` seeks
+    back with the two-argument `file-position`, which `GrayStreamsLibrary` reads by name
+    ahead of the pruner exactly as the jar reader's does, so a program calling no `.reset`
+    carries neither (`ClojureLibraryTest#aProgramCallingNoResetSplicesTheLibraryWithoutTheFileSeek`).
+    Pinned by clojure-spec `a-stream-over-a-file-marks-the-position-it-had-and-reset-returns-to-it`
+    and `input-stream-and-output-stream-wrap-a-byte-array-stream-in-a-buffered-one` on the four
+    backends.
 - **Charsets**: UTF-8, ISO-8859-1, US-ASCII and aliases; any other name the oracle's
   `UnsupportedEncodingException`; `:encoding` takes the name as a string only, a `Charset` being
   the oracle's `ClassCastException` ("Charset values"). A non-UTF-8 reader decodes the rest of its byte stream at
