@@ -271,6 +271,8 @@ member" -- two copies of `equals`, `hashCode` and `compareTo`. Measured 2026-10-
 two text-ordered handles: class 18,423 -> 19,525 B, beside it 751 B (`$Handle`) -> 6,409 B (the
 four classes); no `_apply`, no `$JavaCalls`.
 
+- A `java:reify` given `:value` is a `RontoJavaValue` too ("Implementing interfaces"): every rule
+  below that reads the interface reads it.
 - `RontoJavaValue` (`value()`, `className()`): every unmarshal answers `value()` -- interpreter
   `unmarshal`'s `case RontoJavaValue`, the direct sites' `_junm` / `_junf` (and `_jarr` through
   them) arm when `JvmJavaDirectSites.handles` (an `invokeinterface`), the bridge through
@@ -670,6 +672,46 @@ Per call the uncached bridge paid `getMethods()` (~2.5 us), `select()` (250 ns -
   test's `proxySlots(Class[])` corpus. A superclass is not an interface: a proxy over a class
   needs a generated subclass on the interpreter too (no `Proxy` can) -- `java:subclass`,
   next section.
+- `(java:reify '("I" "J") [:value v] [:class "c"] "m" f ...)` (f10, 2026-10-10): the interface
+  argument may be a quoted list (a literal one resolves; computed, a proper list of strings when
+  it runs), implemented as ONE object of `JavaImplementations.mostSpecific` of them -- a listed
+  interface another listed one extends is dropped, since the subinterface's `getMethods()`
+  already holds the most specific default (`[Iterable List Collection]` is `List`), and the
+  object implements it anyway. A designator names a group of the union (`JavaInterfaceMethods.
+  groups(list)`, which now counts a declaration two interfaces inherit once -- `Collection.
+  stream()` through `List` and `Set` -- so it is no "two defaults" conflict, while `List.
+  spliterator()` and `Set.spliterator()` still are). Messages name the interface DECLARING the
+  method (`JavaImplementation.declaringName`: of several, the first in form order declaring it;
+  one interface reads as before): `interfaces I J have no method m`, `J.get() is implemented
+  twice`, `no implementation of J.get()`, the return mismatch's `from J.m`; `java:reify names
+  interface I twice`. The options (`JavaImplementations.reifyParts`, at form index 2 /
+  evaluated-argument index 1, each once, `:class` only beside `:value`) come BEFORE the pairs,
+  so the markers are counted from after them and a value that is a marker keyword
+  (`:value :java-false`) is the value. `:value` makes a STAND-IN (`JavaImplementation.
+  StandIn`): the object also implements `runtime/RontoJavaValue` -- `value()` the value,
+  `className()` the `:class` literal or its own class -- so every unmarshal answers the value
+  ("Handles and views"); its `equals`/`hashCode`/`toString` no slot implements are the
+  interface's static rules `RontoJavaValue.sameValue` (equal to a stand-in of the very same
+  value under the same class name), `identityHash` (the value's identity hash) and
+  `identityText` (`className@hex(hashCode())`, the designated hashCode included), ONE rule the
+  interpreter's handler calls directly, a generated class through `invokestatic` of the
+  interface methods, the bridge through `javaValueSame`/`Hash`/`Text` bound in `bind`. An
+  interface declaring `value()` or `className()` refuses `:value` (`standInConflict`). Kind: a
+  stand-in implements one interface the program's lookup does not see, so `typeOf` of the form
+  is UNKNOWN (its sites dispatch by the object's class); a plain several-interface reify is
+  `implementationOf(list)` like a `java:proxy` of them. JVM: the shape key adds
+  `|value=<class>`; the class adds `implements RontoJavaValue`, a `value` field, `of(Object
+  value, Object[] fns)` (the value form evaluated first, as written), `value()`, `className()`
+  and the three defaults; `JvmJavaSites.makesStandIns` (a reify form with `:value`, or
+  `java:reify` as a value) turns on `handles` and ships the value runtime like `java:handle`.
+  Bridge: `javaReify` parses the same shape, `mostSpecific`, `reifySlots(Class[], ...)`
+  (parity-pinned by `theTemplateImplementsAnInterfaceAsTheSharedRuleDoes`' several-interface
+  rows), a stand-in Proxy over the interfaces plus the bound value class. Pins:
+  `JavaImplementationPrograms.REIFY_SEVERAL_STANDING` (`JavaInteropTest` /
+  `JvmJavaInteropCompilerTest#aReifyOfSeveralInterfacesMayStandForAValue`: a generated class, a
+  bridge-made stand-in equal to it, the errors), `JavaImplementationsTest#aReifyOfSeveral...`,
+  `#aReifyGivenAValueStandsForIt`. The Clojure front end's faces are its user
+  (`.kb/clojure-frontend.md`, "Java faces").
 - Dispatch key is `name(params)return` (`Slot.dispatchKey`): a covariant default variant is never
   shadowed by an abstract sibling.
 - A value a function RETURNS is marshalled to the method's return type as an argument is, EXCEPT

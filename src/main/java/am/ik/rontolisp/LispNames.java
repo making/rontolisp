@@ -7927,10 +7927,24 @@ public final class LispNames {
 	public static final String JAVA_PROXY = "PROXY";
 
 	/**
-	 * {@code java:reify} -- implements a host interface with one function per method:
-	 * {@code (java:reify "fqcn" "method" function ...)}.
+	 * {@code java:reify} -- implements host interfaces with one function per method:
+	 * {@code (java:reify "fqcn" "method" function ...)}, or {@code '("fqcn" ...)} for
+	 * several, optionally standing for a value ({@link #JAVA_VALUE_OPTION}).
 	 */
 	public static final String JAVA_REIFY = "REIFY";
+
+	/**
+	 * The keyword that, right after a {@code java:reify}'s interfaces, gives the Lisp
+	 * value the object stands for: {@code java:} answers it wherever Java hands the
+	 * object back, as for a {@code java:handle}.
+	 */
+	public static final String JAVA_VALUE_OPTION = ":VALUE";
+
+	/**
+	 * The keyword that, beside {@link #JAVA_VALUE_OPTION}, gives the class Java's
+	 * messages name a {@code java:reify} object standing for a value by.
+	 */
+	public static final String JAVA_CLASS_OPTION = ":CLASS";
 
 	/**
 	 * {@code java:object} -- the type specifier {@code (java:object "fqcn")}: a value a

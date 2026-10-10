@@ -589,7 +589,14 @@ class ClojureArmsTest {
 						"(rontolisp::%clojure-meta-row (cadr self) '(\"clojure.lang.IMeta\") (list \"meta\" f))"),
 				new InterfaceCase(ClojureArms.Family.OBJECT_METHODS,
 						"(cond ((rontolisp::%clojure-to-string-p x) (s x)) (t (p x)))", List.of("(COND (T (P X)))"),
-						"(rontolisp::%clojure-object-row (cadr self) nil (list \"toString\" f))"));
+						"(rontolisp::%clojure-object-row (cadr self) nil (list \"toString\" f))"),
+				// a face: %clojure-host-member's clause, made by the registration of a
+				// type's maker around the tag of its row store
+				new InterfaceCase(ClojureArms.Family.JAVA_FACE,
+						"(cond ((rontolisp::%clojure-java-face-p x) (rontolisp::%clojure-java-face x)) (t (h x)))",
+						List.of("(COND (T (H X)))"),
+						"(rontolisp::%clojure-invokable-row (rontolisp::%clojure-java-face-tag (cadr self) maker)"
+								+ " '(\"java.lang.Runnable\") (list \"run\" f))"));
 		for (InterfaceCase one : cases) {
 			assertThat(ClojureArms.scan(read(one.arms()), one.family()).strips()).as(one.family().name()).isTrue();
 			assertThat(ClojureArms.strip(read(one.arms()), one.family()).stream().map(LispVal::print))

@@ -643,6 +643,17 @@ final class ClojureInterfaces {
 	}
 
 	/**
+	 * Whether a body's row holds a method it leaves out: the refusal of one the closure
+	 * declares abstract ({@link #rowForms}), the oracle's {@code AbstractMethodError}.
+	 * @param closure the body's interfaces
+	 * @param method the method name
+	 * @return {@code true} when an interface of the closure declares it abstract
+	 */
+	static boolean storesRefusal(List<HostInterface> closure, String method) {
+		return !onlyDefault(closure, method);
+	}
+
+	/**
 	 * Whether every count the closure declares a method at is a default one: a body
 	 * leaving such a method out keeps the interface's default, which no verb here reads,
 	 * so its row holds no entry for it rather than an abstract method's refusal.

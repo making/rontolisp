@@ -254,8 +254,46 @@ class JavaBridgeTemplateParityTest {
 			}
 			String template;
 			try {
-				template = String.valueOf(new java.util.TreeMap<>((java.util.Map<?, ?>) invoke("reifySlots",
-						new Class<?>[] { Class.class, String[].class }, iface, designators.toArray(String[]::new))));
+				template = String.valueOf(new java.util.TreeMap<>(
+						(java.util.Map<?, ?>) invoke("reifySlots", new Class<?>[] { Class[].class, String[].class },
+								new Class<?>[] { iface }, designators.toArray(String[]::new))));
+			}
+			catch (java.lang.reflect.InvocationTargetException ex) {
+				template = "error: " + Objects.requireNonNull(ex.getCause()).getMessage();
+			}
+			assertThat(template).as("%s", row).isEqualTo(shared);
+		}
+		// A java:reify of several interfaces too: the most specific of them, a designator
+		// naming a method of any, the messages naming the interface declaring it.
+		for (List<List<String>> row : List.of(
+				List.of(List.of("java.lang.Runnable", "java.util.function.Supplier"), List.of("run", "get")),
+				List.of(List.of("java.lang.Runnable", "java.util.function.Supplier"), List.of("nope")),
+				List.of(List.of("java.lang.Runnable", "java.util.function.Supplier"), List.of("get", "get()")),
+				List.of(List.of("java.lang.Iterable", "java.util.List", "java.util.Collection"), List.of("size")),
+				List.of(List.of("java.util.List", "java.util.Set"), List.of("size", "toString")),
+				List.of(List.of("java.util.function.Consumer", "java.util.function.IntConsumer"),
+						List.of("accept(int)", "accept(Object)")))) {
+			List<Class<?>> listed = new java.util.ArrayList<>();
+			List<am.ik.rontolisp.compiler.JavaType> types = new java.util.ArrayList<>();
+			for (String name : row.get(0)) {
+				listed.add(Class.forName(name));
+				types.add(ReflectiveJavaClasses.of(Class.forName(name)));
+			}
+			String shared;
+			try {
+				shared = slots(am.ik.rontolisp.compiler.JavaImplementations.reify(types, row.get(1),
+						ReflectiveJavaClasses.instance()));
+			}
+			catch (IllegalArgumentException ex) {
+				shared = "error: " + ex.getMessage();
+			}
+			Class<?>[] specific = (Class<?>[]) Objects
+				.requireNonNull(invoke("mostSpecific", new Class<?>[] { List.class }, listed));
+			String template;
+			try {
+				template = String.valueOf(new java.util.TreeMap<>(
+						(java.util.Map<?, ?>) invoke("reifySlots", new Class<?>[] { Class[].class, String[].class },
+								specific, row.get(1).toArray(String[]::new))));
 			}
 			catch (java.lang.reflect.InvocationTargetException ex) {
 				template = "error: " + Objects.requireNonNull(ex.getCause()).getMessage();
@@ -761,6 +799,9 @@ class JavaBridgeTemplateParityTest {
 		assertThat(constant("JAVA_FALSE")).isEqualTo(LispNames.JAVA_FALSE);
 		assertThat(constant("FUNCTIONAL_MARKER")).isEqualTo(LispNames.JAVA_FUNCTIONAL_MARKER);
 		assertThat(constant("JAVA_FALSE_MARKER")).isEqualTo(LispNames.JAVA_FALSE_MARKER);
+		assertThat(constant("VALUE_OPTION")).isEqualTo(LispNames.JAVA_VALUE_OPTION);
+		assertThat(constant("CLASS_OPTION")).isEqualTo(LispNames.JAVA_CLASS_OPTION);
+		assertThat(constant("REIFY_USAGE")).isEqualTo(am.ik.rontolisp.compiler.JavaImplementations.REIFY_USAGE);
 		assertThat(constant("COMPARATOR_COMPARE"))
 			.isEqualTo(am.ik.rontolisp.compiler.JavaImplementation.COMPARATOR_COMPARE);
 		assertThat(constant("JAVA_VALUE_CLASS")).isEqualTo(am.ik.rontolisp.runtime.RontoJavaValue.class.getName());

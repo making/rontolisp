@@ -99,6 +99,17 @@ class ClojureSessionTest {
 	}
 
 	@Test
+	void aTypeDefinedInOneBufferShowsJavaItsFaceInTheNext() {
+		// a session registers a type's face as it defines the type: a later buffer may
+		// hand the value to Java, where a file registers it only when it names the host
+		assertThat(runSession("(deftype Task [] Runnable (run [_] (println \"ran\")))",
+				"(doto (Thread. (Task.)) .start .join)"))
+			.isEqualTo("ran\n");
+		assertThat(forms(new ClojureSession().read("(deftype Task [] Runnable (run [_] nil))")))
+			.anyMatch(form -> form.contains("(RONTOLISP::%CLOJURE-JAVA-FACE-TAG (LIST :C%KEYWORD \"Task\")"));
+	}
+
+	@Test
 	void theFalseBindingGoesAheadOfTheRuntimesOfTheFirstBuffer() {
 		// the specials travel ahead of the buffer that first uses one, and a flag's
 		// root is the false object, so the false binding goes ahead of them too

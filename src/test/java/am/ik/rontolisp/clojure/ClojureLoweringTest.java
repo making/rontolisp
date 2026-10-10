@@ -1279,6 +1279,50 @@ class ClojureLoweringTest {
 	}
 
 	@Test
+	void aTypeShowsJavaItsFaceOnlyWhereTheProgramNamesTheHost() {
+		// a deftype implementing a Java interface: its maker -- a java:reify over the
+		// literal interface names, Comparable among them, standing for the value -- is
+		// registered around the tag of its first row store; each method calls the
+		// type's row method, an abstract one it leaves out its row's refusal, and
+		// compareTo of a type implementing no Comparable the oracle's cast failure
+		String task = "(deftype Task [] Runnable (run [_] (println \"ran\")))";
+		String faced = lowered(task + " (Thread. (Task.))");
+		assertThat(faced)
+			.contains("(RONTOLISP::%CLOJURE-INVOKABLE-ROW (RONTOLISP::%CLOJURE-JAVA-FACE-TAG (LIST :C%KEYWORD \"Task\")"
+					+ " (LAMBDA (")
+			.contains("(JAVA:REIFY '(\"java.lang.Runnable\" \"java.lang.Comparable\") :VALUE ")
+			.contains(" :CLASS \"user.Task\" \"compareTo(java.lang.Object)\" (LAMBDA (")
+			.contains("(RONTOLISP::%CLOJURE-CLASS-CAST-EXCEPTION"
+					+ " \"class user.Task cannot be cast to class java.lang.Comparable\")) \"run()\" (LAMBDA NIL"
+					+ " (FUNCALL (RONTOLISP::%CLOJURE-INTERFACE-ENTRY ")
+			.contains(" \"run\") ")
+			.contains(":JAVA-FALSE))) '(\"java.lang.Runnable\")");
+		// only a program naming a java: operator hands a value to Java; only the host has
+		// a Java; a record crosses as a Map, a type with no Java interface and no Object
+		// override as an object equal only to itself
+		assertThat(lowered(task + " (def t (Task.))")).doesNotContain("JAVA-FACE");
+		assertThat(Clojure.read(task + " (Thread. (Task.))", null, null, ClojureFiles.NONE, false)
+			.stream()
+			.map(LispVal::print)
+			.collect(Collectors.joining("\n"))).doesNotContain("JAVA-FACE");
+		assertThat(lowered("(defrecord R [] Runnable (run [_] nil)) (Thread. (->R))")).doesNotContain("JAVA-FACE");
+		assertThat(lowered("(deftype U [] clojure.lang.Counted (count [_] 1)) (Thread. (U.))"))
+			.doesNotContain("JAVA-FACE");
+		// an Object override alone shows a face; a reify's registers per evaluation,
+		// under its class; a boolean answer by its truth, an Iterator as Java's
+		String reify = lowered("(str (java.util.ArrayList. [(reify Object (toString [_] \"r\") (equals [_ o] 1))]))");
+		assertThat(reify).contains("(RONTOLISP::%CLOJURE-OBJECT-ROW (RONTOLISP::%CLOJURE-JAVA-FACE-TAG (CADR ")
+			.contains("(JAVA:REIFY '(\"java.lang.Comparable\") :VALUE ")
+			.contains(" :CLASS \"user$reify\" ")
+			.contains("\"equals(java.lang.Object)\" (LAMBDA (")
+			.contains("(RONTOLISP::%CLOJURE-TRUTHY (FUNCALL (RONTOLISP::%CLOJURE-INTERFACE-ENTRY ")
+			.contains("\"toString()\" (LAMBDA NIL (RONTOLISP::%CLOJURE-HOST-MEMBER (FUNCALL ");
+		assertThat(lowered(
+				"(deftype Bag [items] Iterable (iterator [_] (.iterator items))) (String/join \",\" (Bag. []))"))
+			.contains("\"iterator()\" (LAMBDA NIL (RONTOLISP::%CLOJURE-HOST-ITERATOR (FUNCALL ");
+	}
+
+	@Test
 	void aBodyImplementingACollectionInterfaceStoresTheRowsOfItsWholeClosure() {
 		// IPersistentMap extends Iterable, Associative (IPersistentCollection, Seqable,
 		// ILookup) and Counted: one store per family of the closure

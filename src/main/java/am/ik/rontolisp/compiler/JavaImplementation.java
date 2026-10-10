@@ -33,9 +33,11 @@ import org.jspecify.annotations.Nullable;
  * function answers Java's {@code false} as {@code |false|}; with {@code :functional} too,
  * a function implementing {@code java.util.Comparator} may answer a boolean
  * ({@link #readsComparison})
+ * @param standIn how a {@code java:reify} given {@code :value} stands for its value, or
+ * {@code null} for an object that stands for none
  */
 public record JavaImplementation(boolean proxy, List<JavaType> interfaces, List<Slot> slots, @Nullable String reason,
-		@Nullable JavaType superclass, JavaMarkers markers) {
+		@Nullable JavaType superclass, JavaMarkers markers, @Nullable StandIn standIn) {
 
 	/** The {@link Slot#implementation} of an abstract method no function implements. */
 	public static final int NONE = -1;
@@ -57,7 +59,7 @@ public record JavaImplementation(boolean proxy, List<JavaType> interfaces, List<
 	 * @param reason why an unresolved form is resolved when it runs, or {@code null}
 	 */
 	public JavaImplementation(boolean proxy, List<JavaType> interfaces, List<Slot> slots, @Nullable String reason) {
-		this(proxy, interfaces, slots, reason, null, JavaMarkers.NONE);
+		this(proxy, interfaces, slots, reason, null, JavaMarkers.NONE, null);
 	}
 
 	/**
@@ -70,7 +72,21 @@ public record JavaImplementation(boolean proxy, List<JavaType> interfaces, List<
 	 */
 	public JavaImplementation(boolean proxy, List<JavaType> interfaces, List<Slot> slots, @Nullable String reason,
 			@Nullable JavaType superclass) {
-		this(proxy, interfaces, slots, reason, superclass, JavaMarkers.NONE);
+		this(proxy, interfaces, slots, reason, superclass, JavaMarkers.NONE, null);
+	}
+
+	/**
+	 * An implementation standing for no value.
+	 * @param proxy whether it is a {@code java:proxy}
+	 * @param interfaces the interfaces, in the form's order
+	 * @param slots the methods the implementing class declares
+	 * @param reason why an unresolved form is resolved when it runs, or {@code null}
+	 * @param superclass the superclass a {@code java:subclass} extends, or {@code null}
+	 * @param markers the markers the form ends in
+	 */
+	public JavaImplementation(boolean proxy, List<JavaType> interfaces, List<Slot> slots, @Nullable String reason,
+			@Nullable JavaType superclass, JavaMarkers markers) {
+		this(proxy, interfaces, slots, reason, superclass, markers, null);
 	}
 
 	/**
@@ -78,7 +94,62 @@ public record JavaImplementation(boolean proxy, List<JavaType> interfaces, List<
 	 * @return this implementation, ending in them
 	 */
 	public JavaImplementation withMarkers(JavaMarkers ending) {
-		return new JavaImplementation(this.proxy, this.interfaces, this.slots, this.reason, this.superclass, ending);
+		return new JavaImplementation(this.proxy, this.interfaces, this.slots, this.reason, this.superclass, ending,
+				this.standIn);
+	}
+
+	/**
+	 * @param given how the object stands for the value its form gives
+	 * @return this implementation, standing for it
+	 */
+	public JavaImplementation withStandIn(StandIn given) {
+		return new JavaImplementation(this.proxy, this.interfaces, this.slots, this.reason, this.superclass,
+				this.markers, given);
+	}
+
+	/**
+	 * How a {@code java:reify} given {@code :value} stands for the value: the object also
+	 * implements {@code runtime/RontoJavaValue}, whose {@code value()} is the value --
+	 * what every unmarshal answers for it, as for a {@code java:handle} -- and whose
+	 * {@code className()} is the class Java's messages name it by. The object's
+	 * {@code equals}, {@code hashCode} and {@code toString} no function implements are a
+	 * nil-hash handle's: equal only to an object standing for the very same value of the
+	 * same class, the value's identity hash, {@code Object}'s spelling of that class
+	 * ({@code RontoJavaValue.sameValue}, {@code identityHash}, {@code identityText}).
+	 *
+	 * @param className the class its form names ({@code :class}), or {@code null} for the
+	 * object's own
+	 */
+	public record StandIn(@Nullable String className) {
+	}
+
+	/**
+	 * @return whether the object stands for a value ({@link StandIn})
+	 */
+	public boolean standsFor() {
+		return this.standIn != null;
+	}
+
+	/**
+	 * The interface a message names a method by: of several, the first in the form's
+	 * order that declares it, else the first.
+	 * @param key a method's {@link Slot#key()}
+	 * @return the interface's name
+	 */
+	public String declaringName(String key) {
+		if (this.interfaces.isEmpty()) {
+			return "";
+		}
+		if (this.interfaces.size() > 1) {
+			for (JavaType iface : this.interfaces) {
+				for (JavaExecutable method : iface.publicMethods()) {
+					if (!method.isStatic() && key.equals(key(method.name(), method.parameterTypes()))) {
+						return iface.name();
+					}
+				}
+			}
+		}
+		return this.interfaces.get(0).name();
 	}
 
 	/**

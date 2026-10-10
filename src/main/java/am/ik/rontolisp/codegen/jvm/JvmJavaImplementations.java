@@ -367,14 +367,24 @@ final class JvmJavaImplementations {
 	/**
 	 * The factory of the class a resolved {@code java:reify} / {@code java:proxy}
 	 * implements its interface with: {@code of(Object[] functions)}, the functions in
-	 * implementation order, answering the new object.
+	 * implementation order, answering the new object -- for a {@code java:reify} standing
+	 * for a value, {@code of(Object value, Object[] functions)}.
 	 * @param implementation a resolved implementation
 	 * @return the factory, a method of the generated class
 	 */
 	MethodRefEntry factory(JavaImplementation implementation) {
 		Shell shell = shell(implementation);
-		return this.cp.methodRef(this.cp.classEntry(shell.internalName()), FACTORY, FACTORY_DESC);
+		return this.cp.methodRef(this.cp.classEntry(shell.internalName()), FACTORY,
+				implementation.standsFor() ? STAND_IN_FACTORY_DESC : FACTORY_DESC);
 	}
+
+	/**
+	 * The descriptor of a generated class's factory when the object stands for a value.
+	 */
+	private static final String STAND_IN_FACTORY_DESC = "(Ljava/lang/Object;[Ljava/lang/Object;)Ljava/lang/Object;";
+
+	/** The internal name of {@code runtime/RontoJavaValue}. */
+	private static final String JAVA_VALUE = "am/ik/rontolisp/runtime/RontoJavaValue";
 
 	/**
 	 * The factory of the proxy class of an interface: what a function value passed where
@@ -530,6 +540,11 @@ final class JvmJavaImplementations {
 			// its callbacks hand Java's false over as |false| (_junf)
 			key.append("|java-false");
 		}
+		JavaImplementation.StandIn standIn = implementation.standIn();
+		if (standIn != null) {
+			// it stands for a value, its class named so (runtime/RontoJavaValue)
+			key.append("|value=").append(standIn.className() != null ? standIn.className() : "");
+		}
 		Shell cached = this.shells.get(key.toString());
 		if (cached != null) {
 			return cached;
@@ -561,7 +576,10 @@ final class JvmJavaImplementations {
 		}
 		String name = CALLBACK_PREFIX + this.callbacks.size();
 		this.callbacks.put(key, name);
-		this.methods.add(buildCallback(proxy, iface, slot, javaFalse, compares, this.cp.utf8Entry(name),
+		// a java:reify's refusal names the method's interface, a java:proxy's all of its
+		// own (eval/JavaInterop alike)
+		String named = proxy ? iface : implementation.declaringName(slot.key());
+		this.methods.add(buildCallback(proxy, named, slot, javaFalse, compares, this.cp.utf8Entry(name),
 				this.cp.utf8Entry(callbackDescriptor(slot))));
 		return name;
 	}
@@ -1093,7 +1111,7 @@ final class JvmJavaImplementations {
 
 	private ClassDefinition write(Shell shell) {
 		JavaImplementation implementation = shell.implementation();
-		String iface = implementation.interfaceNames();
+		JavaImplementation.StandIn standIn = implementation.standIn();
 		ConstantPool pool = new ConstantPool();
 		ClassEntry selfClass = pool.classEntry(shell.internalName());
 		ClassEntry baseClass = pool.classEntry(this.programInternalName + "$Implementation");
@@ -1103,32 +1121,54 @@ final class JvmJavaImplementations {
 		for (JavaType each : implementation.interfaces()) {
 			definition.addInterface(pool.classEntry(JvmJavaDirectSites.internalName(each)));
 		}
+		if (standIn != null) {
+			definition.addInterface(pool.classEntry(JAVA_VALUE));
+		}
 		ClassEntry self = selfClass;
 		ClassEntry base = baseClass;
 		FieldRefEntry fns = pool.fieldRef(base, "fns", "[Ljava/lang/Object;");
-		// private <init>(Object[] fns) { super(fns); }
+		// private <init>(Object[] fns) { super(fns); }, or for a stand-in
+		// private <init>(Object value, Object[] fns) { super(fns); this.value = value; }
+		String initDesc = standIn != null ? "(Ljava/lang/Object;[Ljava/lang/Object;)V" : "([Ljava/lang/Object;)V";
 		Utf8Entry initName = pool.utf8Entry("<init>");
-		Utf8Entry initDesc = pool.utf8Entry("([Ljava/lang/Object;)V");
+		Utf8Entry initType = pool.utf8Entry(initDesc);
 		MethodCode init = new MethodCode();
 		init.aload(0);
-		init.aload(1);
+		init.aload(standIn != null ? 2 : 1);
 		init.invokespecial(pool.methodRef(base, "<init>", "([Ljava/lang/Object;)V"));
+		FieldRefEntry value = null;
+		if (standIn != null) {
+			value = pool.fieldRef(self, "value", "Ljava/lang/Object;");
+			definition.addField(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_FINAL, pool.utf8Entry("value"),
+					pool.utf8Entry("Ljava/lang/Object;"));
+			init.aload(0);
+			init.aload(1);
+			init.putfield(value);
+		}
 		init.return_();
-		definition.addMethod(AccessFlag.ACC_PRIVATE, initName, initDesc, init);
-		// static Object of(Object[] fns) { return new Self(fns); }
+		definition.addMethod(AccessFlag.ACC_PRIVATE, initName, initType, init);
+		// static Object of(Object[] fns) { return new Self(fns); }, or for a stand-in
+		// static Object of(Object value, Object[] fns) { return new Self(value, fns); }
 		MethodCode factory = new MethodCode();
 		factory.new_(self);
 		factory.dup();
 		factory.aload(0);
-		factory.invokespecial(pool.methodRef(self, "<init>", "([Ljava/lang/Object;)V"));
+		if (standIn != null) {
+			factory.aload(1);
+		}
+		factory.invokespecial(pool.methodRef(self, "<init>", initDesc));
 		factory.areturn();
-		definition.addMethod(AccessFlag.ACC_STATIC, pool.utf8Entry(FACTORY), pool.utf8Entry(FACTORY_DESC), factory);
+		definition.addMethod(AccessFlag.ACC_STATIC, pool.utf8Entry(FACTORY),
+				pool.utf8Entry(standIn != null ? STAND_IN_FACTORY_DESC : FACTORY_DESC), factory);
 		ClassEntry program = pool.classEntry(this.programInternalName);
 		List<JavaImplementation.Slot> slots = implementation.slots();
 		for (int i = 0; i < slots.size(); i++) {
-			writeSlot(definition, pool, fns, program, iface, slots.get(i), shell.callbacks().get(i));
+			writeSlot(definition, pool, fns, program, implementation, slots.get(i), shell.callbacks().get(i));
 		}
-		if (!implementation.declaresToString()) {
+		if (standIn != null && value != null) {
+			writeStandIn(definition, pool, value, implementation, standIn);
+		}
+		else if (!implementation.declaresToString()) {
 			MethodCode text = new MethodCode();
 			text.ldc(pool.stringEntry(implementation.defaultToString()));
 			text.areturn();
@@ -1138,10 +1178,72 @@ final class JvmJavaImplementations {
 		return definition.build();
 	}
 
+	// An object standing for a value (runtime/RontoJavaValue): value() answers the field,
+	// className() the class its form names (else its own), and equals, hashCode and
+	// toString no slot implements answer the interface's shared rules -- equal only to an
+	// object standing for the very same value, its identity hash, Object's spelling of
+	// the class -- as the interpreter's Proxy does.
+	private static void writeStandIn(ClassDefinition.Builder definition, ConstantPool pool, FieldRefEntry value,
+			JavaImplementation implementation, JavaImplementation.StandIn standIn) {
+		MethodCode read = new MethodCode();
+		read.aload(0);
+		read.getfield(value);
+		read.areturn();
+		definition.addMethod(AccessFlag.ACC_PUBLIC, pool.utf8Entry("value"), pool.utf8Entry("()Ljava/lang/Object;"),
+				read);
+		MethodCode named = new MethodCode();
+		String className = standIn.className();
+		if (className != null) {
+			named.ldc(pool.stringEntry(className));
+		}
+		else {
+			named.aload(0);
+			named.invokevirtual(pool.methodRef(pool.classEntry("java/lang/Object"), "getClass", "()Ljava/lang/Class;"));
+			named.invokevirtual(pool.methodRef(pool.classEntry("java/lang/Class"), "getName", "()Ljava/lang/String;"));
+		}
+		named.areturn();
+		definition.addMethod(AccessFlag.ACC_PUBLIC, pool.utf8Entry("className"), pool.utf8Entry("()Ljava/lang/String;"),
+				named);
+		boolean equals = false;
+		boolean hashCode = false;
+		for (JavaImplementation.Slot slot : implementation.slots()) {
+			equals |= "equals".equals(slot.name()) && slot.parameterTypes().size() == 1
+					&& "java.lang.Object".equals(slot.parameterTypes().get(0).name());
+			hashCode |= "hashCode".equals(slot.name()) && slot.parameterTypes().isEmpty();
+		}
+		if (!equals) {
+			MethodCode a = new MethodCode();
+			a.aload(0);
+			a.aload(1);
+			a.invokestatic(
+					pool.interfaceMethodRef(JAVA_VALUE, "sameValue", "(L" + JAVA_VALUE + ";Ljava/lang/Object;)Z"));
+			a.ireturn();
+			definition.addMethod(AccessFlag.ACC_PUBLIC, pool.utf8Entry("equals"),
+					pool.utf8Entry("(Ljava/lang/Object;)Z"), a);
+		}
+		if (!hashCode) {
+			MethodCode a = new MethodCode();
+			a.aload(0);
+			a.invokestatic(pool.interfaceMethodRef(JAVA_VALUE, "identityHash", "(L" + JAVA_VALUE + ";)I"));
+			a.ireturn();
+			definition.addMethod(AccessFlag.ACC_PUBLIC, pool.utf8Entry("hashCode"), pool.utf8Entry("()I"), a);
+		}
+		if (!implementation.declaresToString()) {
+			MethodCode a = new MethodCode();
+			a.aload(0);
+			a.invokestatic(
+					pool.interfaceMethodRef(JAVA_VALUE, "identityText", "(L" + JAVA_VALUE + ";)Ljava/lang/String;"));
+			a.areturn();
+			definition.addMethod(AccessFlag.ACC_PUBLIC, pool.utf8Entry("toString"),
+					pool.utf8Entry("()Ljava/lang/String;"), a);
+		}
+	}
+
 	// public R m(P...): the callback over (this.fns[i], the boxed arguments), or the
 	// throw of an abstract method no function implements.
 	private static void writeSlot(ClassDefinition.Builder definition, ConstantPool pool, FieldRefEntry fns,
-			ClassEntry program, String iface, JavaImplementation.Slot slot, @Nullable String callback) {
+			ClassEntry program, JavaImplementation implementation, JavaImplementation.Slot slot,
+			@Nullable String callback) {
 		StringBuilder desc = new StringBuilder("(");
 		for (JavaType param : slot.parameterTypes()) {
 			desc.append(JvmJavaDirectSites.descriptor(param));
@@ -1152,7 +1254,8 @@ final class JvmJavaImplementations {
 			ClassEntry unsupported = pool.classEntry("java/lang/UnsupportedOperationException");
 			a.new_(unsupported);
 			a.dup();
-			a.ldc(pool.stringEntry(JavaImplementation.noImplementation(iface, slot.key())));
+			a.ldc(pool.stringEntry(
+					JavaImplementation.noImplementation(implementation.declaringName(slot.key()), slot.key())));
 			a.invokespecial(pool.methodRef(unsupported, "<init>", "(Ljava/lang/String;)V"));
 			a.athrow();
 			definition.addMethod(AccessFlag.ACC_PUBLIC, pool.utf8Entry(slot.name()), pool.utf8Entry(desc.toString()),

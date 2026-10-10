@@ -769,12 +769,22 @@ class JavaInteropTest {
 			.hasMessage("java:reify expects an interface, got java.lang.String");
 		assertThatThrownBy(() -> eval("(java:reify \"java.lang.Runnable\" \"run\")"))
 			.isInstanceOf(LispEvalException.class)
-			.hasMessage("java:reify expects (java:reify \"interface\" \"method\" function ...)");
+			.hasMessage("java:reify expects (java:reify \"interface\"-or-list [:value v] [:class \"class\"]"
+					+ " \"method\" function ...)");
 		// The interface and the names may be computed: they are resolved when it runs.
 		assertThat(eval("""
 				(let ((iface "java.util.function.Supplier") (name "get"))
 				  (java:call (java:reify iface name (lambda () 7)) "get"))
 				""")).isEqualTo(new LispInteger(7));
+	}
+
+	// java:reify of a list of interfaces is one object implementing each; given :value
+	// it stands for the value, which Java hands back. Mirrors
+	// JvmJavaInteropCompilerTest#aReifyOfSeveralInterfacesMayStandForAValue.
+	@Test
+	void aReifyOfSeveralInterfacesMayStandForAValue() {
+		assertThat(output(JavaImplementationPrograms.REIFY_SEVERAL_STANDING))
+			.isEqualTo(JavaImplementationPrograms.REIFY_SEVERAL_STANDING_OUTPUT);
 	}
 
 	// What a function called back from Java raises passes through the Java frames to

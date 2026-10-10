@@ -2665,6 +2665,10 @@
    ((rontolisp::%clojure-bytes-p x)
     (java:view x (rontolisp::%clojure-bytes-seq x)
                :list #'rontolisp::%clojure-host-text nil "[B"))
+   ;; a deftype or reify with a face: the implementation of the Java interfaces
+   ;; its body implements, standing for it (clojure/ClojureJavaFaces); an arm a
+   ;; program registering no face folds
+   ((rontolisp::%clojure-java-face-p x) (rontolisp::%clojure-java-face x))
    ;; any other wrapper: an atom, a deftype, a reify, a pattern, a var ...
    ((and (consp x) (keywordp (car x))) (rontolisp::%clojure-host-object x))
    ((consp x) (rontolisp::%clojure-host-seq-view x))
@@ -2730,6 +2734,64 @@
                (if (or (functionp x) (consp x))
                    (rontolisp::%clojure-class-name-of x)
                    "java.lang.Object")))
+
+;; Java faces: what Java sees of a deftype or reify whose body implements a Java
+;; interface or overrides an Object method (clojure/ClojureJavaFaces). The lowering
+;; makes the face with a maker over the type's literal interface names -- a
+;; java:reify standing for the value, each method calling the type's row method --
+;; and stores it in the type's row, under "%java", where %clojure-host-member finds
+;; it; Java hands the face back as the value.
+
+;; Stores MAKER -- a one-argument function answering the face of a value of the
+;; type TAG -- in the type's row; answers TAG, whose form the registration wraps in
+;; the type's first row store. The java-face family's producer.
+(defun rontolisp::%clojure-java-face-tag (tag maker)
+  (rontolisp::%clojure-interface-store tag nil (list "%java" maker))
+  tag)
+
+;; Whether X is a deftype or reify whose type has a face: the java-face family's
+;; test.
+(defun rontolisp::%clojure-java-face-p (x)
+  (if (rontolisp::%clojure-interface-entry x "%java") t nil))
+
+;; The face of the deftype or reify X: what its type's maker makes of it.
+(defun rontolisp::%clojure-java-face (x)
+  (funcall (rontolisp::%clojure-interface-entry x "%java") x))
+
+;; What a face's method answering a java.util.Iterator hands Java for X: a seq
+;; iterator's own face -- the oracle's SeqIterator, stepping it, its members as
+;; %clojure-host-member makes them --, anything else what %clojure-host-member
+;; makes of it.
+(defun rontolisp::%clojure-host-iterator (x)
+  (if (rontolisp::%clojure-seq-iterator-p x)
+      (java:reify "java.util.Iterator"
+                  :value x
+                  :class "clojure.lang.SeqIterator" "hasNext"
+                  (lambda () (rontolisp::%clojure-iter-has-next x)) "next"
+                  (lambda ()
+                    (rontolisp::%clojure-host-member
+                     (rontolisp::%clojure-iter-next x))) :java-false)
+      (rontolisp::%clojure-host-member x)))
+
+;; What a face's java.util.Map entrySet hands Java for X, the entries its body
+;; answered: a host Set as it is; else a Set view of X's members, each [k v] vector
+;; -- a map entry here -- Java's Map.Entry, as the oracle's MapEntry is, any other
+;; member as %clojure-host-member makes it.
+(defun rontolisp::%clojure-host-entry-set (x)
+  (if (rontolisp::%clojure-host-object-p x "java.util.Set")
+      x
+      (java:view x
+                 (mapcar (lambda (e)
+                           (if (and (vectorp e) (not (stringp e))
+                                    (= (length e) 2))
+                               (java:new
+                                "java.util.AbstractMap$SimpleImmutableEntry"
+                                (rontolisp::%clojure-host-member (aref e 0))
+                                (rontolisp::%clojure-host-member (aref e 1)))
+                               (rontolisp::%clojure-host-member e)))
+                         (rontolisp::%clojure-seq-all x))
+                 :set #'rontolisp::%clojure-host-text nil
+                 (rontolisp::%clojure-class-name-of x))))
 
 ;; What %clojure-host-object's handle answers Java's toString with: nil (Object's
 ;; spelling) for a fn, an atom, a reduced and a type overriding no toString, the

@@ -677,6 +677,16 @@ public final class ClojureArms {
 				Set.of(ClojureInterfaces.HASHEQ_ROW, ClojureInterfaces.OBJECT_ROW), Set.of()),
 
 		/**
+		 * A deftype or reify with a face -- an implementation of the Java interfaces its
+		 * body implements, overriding the {@code Object} methods it overrides, standing
+		 * for the value -- which {@code %clojure-host-member} hands Java for it
+		 * ({@link ClojureJavaFaces}): only the registration of a type's maker makes one,
+		 * which the lowering emits only in a program naming a {@code java:} operator.
+		 */
+		JAVA_FACE("java-face", Set.of(ClojureJavaFaces.FACE_P), Set.of(), Map.of(), Set.of(ClojureJavaFaces.FACE_TAG),
+				Set.of()),
+
+		/**
 		 * A read in clojure.edn's grammar, which the run-time reader's EDN clauses take:
 		 * only the {@code clojure.edn} entries ({@link ClojureEdnLowering}) start one.
 		 */

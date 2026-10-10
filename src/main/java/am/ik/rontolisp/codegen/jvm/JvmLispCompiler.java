@@ -2351,10 +2351,12 @@ public final class JvmLispCompiler implements LispCompiler {
 				.hashTables(usesHashTables
 						? cp.methodRef(thisClass, JvmHashRuntimeBuilder.VALUES, JvmHashRuntimeBuilder.VALUES_DESC)
 						: null);
-			// ... and a java:handle or java:view Java hands back as the value it stands
-			// for, in a program that makes one -- whose runtime classes then travel.
+			// ... and a java:handle, a java:view or a java:reify given :value Java hands
+			// back as the value it stands for, in a program that makes one -- whose
+			// runtime classes then travel.
 			boolean makesViews = programUsesSymbol(program, LispNames.JAVA_VIEW_QUALIFIED);
-			boolean makesJavaValues = makesViews || programUsesSymbol(program, LispNames.JAVA_HANDLE_QUALIFIED);
+			boolean makesJavaValues = makesViews || programUsesSymbol(program, LispNames.JAVA_HANDLE_QUALIFIED)
+					|| JvmJavaSites.makesStandIns(program);
 			javaSites.direct().handles(makesJavaValues, makesViews, JvmJavaSites.callsBack(program));
 			this.needsJavaValueRuntime = makesJavaValues;
 			this.needsJavaViewRuntime = makesViews;

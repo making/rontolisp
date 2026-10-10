@@ -208,7 +208,9 @@ final class JvmJavaInteropCompiler {
 	 * A resolved {@code java:reify} / {@code java:proxy}: its functions are evaluated
 	 * left to right into an {@code Object[]} -- the names written beside them are
 	 * literals and evaluate to nothing -- which the generated class's factory makes the
-	 * object of.
+	 * object of; a {@code java:reify}'s {@code :value} form, written ahead of them, is
+	 * evaluated first and handed to the factory ahead of them (its {@code :class} is a
+	 * literal the class answers).
 	 */
 	private static void compileImplementation(JavaImplementation implementation, List<LispVal> args,
 			JvmLispCompiler.Ctx ctx, String className) {
@@ -218,7 +220,13 @@ final class JvmJavaInteropCompiler {
 			functions.add(args.get(args.size() - 1));
 		}
 		else {
-			for (int i = 3; i < args.size(); i += 2) {
+			JavaImplementations.ReifyParts shape = Objects.requireNonNull(JavaImplementations.reifyParts(args, 1),
+					"a resolved java:reify is well formed");
+			if (implementation.standsFor()) {
+				JvmExprCompiler.compileExpr(args.get(shape.value()), ctx, className);
+				emitMaterialize(ctx);
+			}
+			for (int i = shape.firstDesignator() + 1; i < args.size(); i += 2) {
 				functions.add(args.get(i));
 			}
 		}

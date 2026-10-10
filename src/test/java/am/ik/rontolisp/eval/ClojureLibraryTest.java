@@ -150,6 +150,20 @@ class ClojureLibraryTest {
 	}
 
 	@Test
+	void aProgramRegisteringNoFaceHandsJavaItsValuesWithoutTheFaceArm() {
+		// %clojure-host-member asks a deftype or reify for its face only in a program
+		// that registers one: one whose types show Java nothing keeps the clause it had
+		assertThat(defun(ClojureLibrary.forms(), "RONTOLISP::%CLOJURE-HOST-MEMBER")).contains("%CLOJURE-JAVA-FACE-P");
+		List<LispVal> plain = ClojureLibrary
+			.process(Clojure.read("(deftype T [a]) (println (str (java.util.ArrayList. [(T. 1)])))", null));
+		assertThat(defun(plain, "RONTOLISP::%CLOJURE-HOST-MEMBER")).doesNotContain("%CLOJURE-JAVA-FACE-P");
+		List<LispVal> faced = ClojureLibrary.process(Clojure
+			.read("(deftype T [a] Runnable (run [_] nil)) (println (str (java.util.ArrayList. [(T. 1)])))", null));
+		assertThat(defun(faced, "RONTOLISP::%CLOJURE-HOST-MEMBER")).contains("%CLOJURE-JAVA-FACE-P");
+		assertThat(defun(faced, "RONTOLISP::%CLOJURE-JAVA-FACE-TAG")).contains("\"%java\"");
+	}
+
+	@Test
 	void aProgramStoringNoCollectionInterfaceRowSplicesTheVerbsWithoutTheirArms() {
 		// only the store of a collection interface's row makes a value the verbs read
 		// through its methods: a program storing none compiles them as before

@@ -1408,8 +1408,11 @@ final class ClojureProtocolLowering {
 				forms.add(methodRow(ctx, group.protocol(), typeTagForm(name), impl, def.fields(), def.mutableFields()));
 			}
 		}
-		forms.addAll(interfaceRows(ctx, what, body.interfaces(), typeTagForm(name), null, def.fields(),
-				def.mutableFields()));
+		List<LispVal> rows = interfaceRows(ctx, what, body.interfaces(), typeTagForm(name), null, def.fields(),
+				def.mutableFields());
+		// what Java sees of a deftype: an implementation of its Java interfaces
+		ClojureJavaFaces.give(ctx, what, body.interfaces(), def.className(), rows);
+		forms.addAll(rows);
 		ctx.usedProtocols = true;
 		return forms;
 	}
@@ -2300,9 +2303,12 @@ final class ClojureProtocolLowering {
 			}
 		}
 		// a reify prints as the oracle's class of the namespace it is lowered in
-		body.addAll(interfaceRows(ctx, "reify", parsed.interfaces(),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("cadr"), self), ctx.currentNs.replace('-', '_') + "$reify",
-				null, List.of()));
+		String reifyClass = ctx.currentNs.replace('-', '_') + "$reify";
+		List<LispVal> rows = interfaceRows(ctx, "reify", parsed.interfaces(),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("cadr"), self), reifyClass, null, List.of());
+		// what Java sees of it: an implementation of its Java interfaces
+		ClojureJavaFaces.give(ctx, "reify", parsed.interfaces(), reifyClass, rows);
+		body.addAll(rows);
 		body.add(self);
 		ctx.usedProtocols = true;
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let*"), ClojureLowerUtil.list(prologue),

@@ -3414,6 +3414,68 @@ interfaces behind an arm family its row's store makes (`ClojureArms`, `COLLECTIO
   `ClojureLibraryTest#aProgramStoringNoCollectionInterfaceRowSplicesTheVerbsWithoutTheirArms`,
   `ClojureInteropTest#aHostIteratorStepsThroughIteratorSeqAndAnIterableTypesVerbs`.
 
+## Java faces
+
+**A deftype or reify whose body implements a Java interface of the table ("Host interfaces":
+`Runnable`, `Callable`, `Comparable`, `Iterable`, `Iterator`, the `java.util` collections,
+`Serializable` -- never a `clojure.lang` one, which no Java code here is written against) or
+overrides an `Object` method crosses into Java as its FACE: an object implementing those
+interfaces that stands for the value** (`clojure/ClojureJavaFaces`, f10, 2026-10-10). The
+oracle's type IS such a class, so a Thread runs it, a TreeSet and `Collections/sort` order it by
+its `compareTo`, a HashSet and a HashMap key it by its `equals`/`hashCode`, and Java hands it back
+as itself.
+- The maker, over what the lowering knows where it defines the type (`give`, from
+  `recordTypeForms` for a deftype and `reifyForm`; built when it is registered, so a program it
+  stays out of keeps its temporaries): `(lambda (x) (java:reify '("I" ...
+  "java.lang.Comparable") :value x :class "C" "m(P)" (lambda (a) ...) ... :java-false))` over
+  the literal names, so the JVM resolves it to a generated class and nothing reflects
+  (`.kb/java-interop.md`, `:value`). `C` is the deftype's class or a reify's `<ns>$reify`. Each
+  method of the interfaces' union (reflection over `ClojureHostClasses.load`, `mostSpecific`
+  like `java:reify`) the body defines AT ITS PARAMETER COUNT (`defines`, the target counted) --
+  or that is abstract and has a row entry, the `AbstractMethodError` refusal
+  (`ClojureInterfaces.storesRefusal`) -- is named with its full tag and calls `(funcall
+  (%clojure-interface-entry x "m") x a ...)`; a default the body leaves out keeps Java's body,
+  also beside an overload of its name the body defines (a `Map` type's `remove(k)` leaves the
+  default `remove(k, v)` Java's); `Object`'s three are named when the body overrides them. The
+  answer reaches Java as the oracle answers it: a `boolean` by `%clojure-truthy` (its
+  `booleanCast`), an `Iterator` by
+  `%clojure-host-iterator` (a seq iterator's own `java.util.Iterator` face, class
+  `clojure.lang.SeqIterator`), a `java.util.Map`'s `entrySet` by `%clojure-host-entry-set` (a
+  `[k v]` vector -- the map entry here -- as an `AbstractMap$SimpleImmutableEntry`, which `new
+  HashMap(face)` reads), any other reference by `%clojure-host-member`.
+- Every face is a `Comparable`: a type implementing none refuses `compareTo` with the
+  `ClassCastException` carrier's `class C cannot be cast to class java.lang.Comparable`, as an
+  identity handle does, so a TreeSet of such a type says the oracle's words on both java:
+  backends rather than a JDK message naming a `Proxy` or `$Reify` class (`instance? Comparable`
+  in Java is true where the oracle's is false: the handles' choice, user doc deviation).
+- Registration: `(%clojure-java-face-tag TAG maker)` replaces the tag form of the type's FIRST
+  row store (a type with a face always has one: its Java interface's family or its `Object`
+  row), storing the maker in the row under `"%java"`; `%clojure-host-member`'s clause
+  `(%clojure-java-face-p x)` calls it. The tag registration is `Family.JAVA_FACE`'s producer and
+  that clause its arm, so a program registering none splices `%clojure-host-member` as before.
+  Only a `java:` site of the program hands a value to Java, so a file's registrations are
+  recorded (`ctx.javaFaces`) and wrapped in at the end of `lowerProgram` (`settle`, after
+  `noteHost`, the `bindCaught` shape: a recorded cell's `setCar`) only when `hostTarget &&
+  namedHost`: a program naming no `java:` operator, and every wasm one, lowers as before. A
+  session registers at once (a later buffer may hand the value over), and a reify registers per
+  evaluation, like its rows. Gap: a CL program loading two `.clj` files lowered apart gives a
+  type of the file naming no `java:` operator no face in the other.
+- Not records: a record still crosses as its `:map` view, its body's Java interfaces invisible
+  to Java (`.todo/f22`). A Clojure seq iterator passed straight to a member (not answered from a
+  face's `iterator`) is still an identity handle.
+- Measured 2026-10-10 against clj 1.12.6, interpreter and JVM: before, `(Thread. (Task.))` was
+  `No matching constructor`, a TreeSet of a Comparable deftype `ClassCastException`, a HashSet of
+  two equal Ps size 2; after, every row of the pins oracle-identical but the documented
+  deviations (dropped type hints: an IFn type, both `Runnable` and `Callable`, passed to
+  `ExecutorService.submit` takes the overload the signature order picks, where the oracle
+  follows a hint or refuses the ambiguity).
+- Pins: `ClojureInteropTest#aDeftypeOrReifyReachesJavaAsAnImplementationOfItsInterfaces`,
+  `#aTypeImplementingNoComparableRefusesATreeSetInTheOraclesWords`,
+  `ClojureLoweringTest#aTypeShowsJavaItsFaceOnlyWhereTheProgramNamesTheHost`,
+  `ClojureSessionTest#aTypeDefinedInOneBufferShowsJavaItsFaceInTheNext`,
+  `ClojureArmsTest#anInterfaceFamilyIsMadeByTheStoreOfARowOfItsInterfaces` (the JAVA_FACE case),
+  `ClojureLibraryTest#aProgramRegisteringNoFaceHandsJavaItsValuesWithoutTheFaceArm`.
+
 ## Java interop
 
 The `java:` surface (`.kb/java-interop.md`); interpreter and JVM only -- wasm compiles
@@ -3587,9 +3649,9 @@ The `java:` surface (`.kb/java-interop.md`); interpreter and JVM only -- wasm co
   reaching an array parameter. Deviations (user doc): this front end's classes (`getClass`, a
   JDK cast failure's message, ours without the module tail), the members converted once when
   the value crosses, a `toString` that is `str` here (a lazy seq or record spells its
-  contents), `(java.util.Arrays/asList [1 2])` a list of the vector where the oracle throws, a
-  deftype or reify an object of its own (no `Runnable`, its `equals`/`hashCode` uncalled:
-  `.todo/f10`). Cost,
+  contents), `(java.util.Arrays/asList [1 2])` a list of the vector where the oracle throws.
+  A deftype or reify whose body names a Java interface or overrides an `Object` method crosses
+  as its face ("Java faces", f10); a record's body interfaces stay invisible to Java. Cost,
   measured 2026-10-09 (JVM class, before -> after; before a handle's hash moved onto `hash`'s
   helpers, which replaced two `java.util.Objects.hashCode` calls per keyword): `(.add l [1 2])` + `str` 108,071 ->
   129,594 B (the member conversion and the view and handle makers, `%clojure-compare` behind a

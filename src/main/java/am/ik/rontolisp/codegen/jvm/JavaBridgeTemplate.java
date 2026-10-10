@@ -153,7 +153,14 @@ final class JavaBridgeTemplate {
 	private static final List<String> OBJECT_METHODS = List.of("equals(java.lang.Object)", "hashCode()", "toString()");
 
 	// Mirrors compiler/JavaImplementations.REIFY_USAGE.
-	private static final String REIFY_USAGE = "java:reify expects (java:reify \"interface\" \"method\" function ...)";
+	private static final String REIFY_USAGE = "java:reify expects (java:reify \"interface\"-or-list"
+			+ " [:value v] [:class \"class\"] \"method\" function ...)";
+
+	// The options after a java:reify's interfaces, a keyword compiled to its name
+	// (mirrors am.ik.rontolisp.LispNames.JAVA_VALUE_OPTION and JAVA_CLASS_OPTION).
+	private static final String VALUE_OPTION = ":VALUE";
+
+	private static final String CLASS_OPTION = ":CLASS";
 
 	// Mirrors compiler/JavaImplementations.PROXY_USAGE.
 	private static final String PROXY_USAGE = "java:proxy expects (java:proxy \"interface\"... callable)";
@@ -240,6 +247,17 @@ final class JavaBridgeTemplate {
 
 	/** {@code RontoJavaValue.value()}, bound with {@link #javaValueClass}. */
 	private static @Nullable Method javaValueMethod;
+
+	/**
+	 * {@code RontoJavaValue.sameValue}, {@code identityHash} and {@code identityText}:
+	 * the {@code equals}, {@code hashCode} and {@code toString} of a {@code java:reify}
+	 * standing for a value that names none of them, bound with {@link #javaValueClass}.
+	 */
+	private static @Nullable Method javaValueSame;
+
+	private static @Nullable Method javaValueHash;
+
+	private static @Nullable Method javaValueText;
 
 	/**
 	 * {@code runtime/RontoJavaListView} -- a {@code java:view} {@code List} -- bound with
@@ -333,12 +351,19 @@ final class JavaBridgeTemplate {
 		try {
 			Class<?> valueClass = Class.forName(JAVA_VALUE_CLASS, false, mainClass.getClassLoader());
 			javaValueMethod = valueClass.getMethod("value");
+			javaValueSame = valueClass.getMethod("sameValue", valueClass, Object.class);
+			javaValueHash = valueClass.getMethod("identityHash", valueClass);
+			javaValueText = valueClass.getMethod("identityText", valueClass);
 			javaValueClass = valueClass;
 		}
 		catch (ClassNotFoundException | NoSuchMethodException ex) {
-			// No runtime/RontoJavaValue beside this program: no handle or view can exist.
+			// No runtime/RontoJavaValue beside this program: no handle, view or reify
+			// standing for a value can exist.
 			javaValueClass = null;
 			javaValueMethod = null;
+			javaValueSame = null;
+			javaValueHash = null;
+			javaValueText = null;
 		}
 		try {
 			Class<?> listViewClass = Class.forName(JAVA_LIST_VIEW_CLASS, false, mainClass.getClassLoader());
@@ -561,19 +586,44 @@ final class JavaBridgeTemplate {
 	}
 
 	/**
-	 * Implements {@code (java:reify "fully.qualified.Interface" "method" function ...)}
-	 * left to run time: the rest is designator, function, ... (mirrors
+	 * Implements {@code (java:reify interfaces [:value v] [:class "c"] "method" function
+	 * ...)} left to run time: the interfaces one name or a list of them, the rest the
+	 * options, then designator, function, ... (mirrors
 	 * {@code compiler/JavaImplementations.reify}).
 	 */
-	static @Nullable Object javaReify(@Nullable Object interfaceName, @Nullable Object[] rest) {
+	static @Nullable Object javaReify(@Nullable Object interfaceSpec, @Nullable Object[] rest) {
+		// The options standing the object for a value (mirrors
+		// compiler/JavaImplementations.reifyParts): each a keyword and its value.
+		int first = 0;
+		boolean standsFor = false;
+		@Nullable Object value = null;
+		@Nullable Object className = null;
+		boolean named = false;
+		while (first + 1 < rest.length
+				&& (VALUE_OPTION.equals(rest[first]) && !standsFor || CLASS_OPTION.equals(rest[first]) && !named)) {
+			if (VALUE_OPTION.equals(rest[first])) {
+				standsFor = true;
+				value = rest[first + 1];
+			}
+			else {
+				named = true;
+				className = rest[first + 1];
+			}
+			first += 2;
+		}
+		if (first + 1 < rest.length && (VALUE_OPTION.equals(rest[first]) || CLASS_OPTION.equals(rest[first]))
+				|| named && !standsFor) {
+			throw new RuntimeException(REIFY_USAGE);
+		}
 		// The markers after the last function: :java-false hands the functions Java's
 		// false as |false|.
-		int marked = markerCount(rest, 0);
+		int marked = markerCount(rest, first);
 		int markers = functionsOf(rest, marked);
 		boolean javaFalse = (markers & FUNCTIONS_JAVA_FALSE) != 0;
-		rest = Arrays.copyOf(rest, rest.length - marked);
-		String name = lispString(interfaceName);
-		if (name == null || rest.length % 2 != 0) {
+		rest = Arrays.copyOfRange(rest, first, rest.length - marked);
+		List<String> names = interfaceNames(interfaceSpec);
+		String standInClass = className == null ? null : lispString(className);
+		if (names == null || rest.length % 2 != 0 || className != null && standInClass == null) {
 			throw new RuntimeException(REIFY_USAGE);
 		}
 		String[] designators = new String[rest.length / 2];
@@ -586,21 +636,74 @@ final class JavaBridgeTemplate {
 			designators[i] = designator;
 			functions[i] = rest[2 * i + 1];
 		}
-		Class<?> iface = loadClass(name);
-		if (!iface.isInterface()) {
-			throw new RuntimeException("java:reify expects an interface, got " + name);
+		List<Class<?>> listed = new ArrayList<>();
+		for (String name : names) {
+			Class<?> iface = loadClass(name);
+			if (!iface.isInterface()) {
+				throw new RuntimeException("java:reify expects an interface, got " + name);
+			}
+			if (listed.contains(iface)) {
+				throw new RuntimeException("java:reify names interface " + name + " twice");
+			}
+			listed.add(iface);
 		}
-		List<Object> key = List.of(iface, List.of(designators));
+		Class<?>[] interfaces = mostSpecific(listed);
+		List<Object> key = List.of(List.of(interfaces), List.of(designators));
 		Map<String, Integer> slots = IMPLEMENTATIONS.get(key);
 		if (slots == null) {
-			slots = reifySlots(iface, designators);
+			slots = reifySlots(interfaces, designators);
 			remember(IMPLEMENTATIONS, key, slots);
 		}
 		// Ending in :functional and :java-false, a Comparator's compare function may
 		// answer a boolean (mirrors compiler/JavaImplementation.readsComparison).
-		boolean comparison = javaFalse && (markers & FUNCTIONS_MODE) == FUNCTIONS_BY_ARGUMENTS
-				&& "java.util.Comparator".equals(iface.getName());
-		return implementation(new Class<?>[] { iface }, false, slots, functions, javaFalse, comparison);
+		boolean comparison = javaFalse && (markers & FUNCTIONS_MODE) == FUNCTIONS_BY_ARGUMENTS && interfaces.length == 1
+				&& "java.util.Comparator".equals(interfaces[0].getName());
+		if (standsFor) {
+			return standIn(interfaces, slots, functions, javaFalse, value, standInClass);
+		}
+		return implementation(interfaces, false, slots, functions, javaFalse, comparison);
+	}
+
+	// A java:reify's interfaces: one name, or a non-empty proper list of names; null for
+	// anything else.
+	private static @Nullable List<String> interfaceNames(@Nullable Object spec) {
+		String one = lispString(spec);
+		if (one != null) {
+			return List.of(one);
+		}
+		List<@Nullable Object> elements = spec != null && spec.getClass() == Object[].class
+				? properListElements((Object[]) spec) : null;
+		if (elements == null || elements.isEmpty()) {
+			return null;
+		}
+		List<String> names = new ArrayList<>();
+		for (Object element : elements) {
+			String name = lispString(element);
+			if (name == null) {
+				return null;
+			}
+			names.add(name);
+		}
+		return names;
+	}
+
+	// The interfaces an implementation of all of them declares: those no other one of
+	// them extends, in their order (mirrors compiler/JavaImplementations.mostSpecific).
+	private static Class<?>[] mostSpecific(List<Class<?>> interfaces) {
+		List<Class<?>> out = new ArrayList<>();
+		for (Class<?> iface : interfaces) {
+			boolean implied = false;
+			for (Class<?> other : interfaces) {
+				if (other != iface && iface.isAssignableFrom(other)) {
+					implied = true;
+					break;
+				}
+			}
+			if (!implied) {
+				out.add(iface);
+			}
+		}
+		return out.toArray(new Class<?>[0]);
 	}
 
 	// A function value where an interface is expected: the interface's java:proxy.
@@ -715,24 +818,55 @@ final class JavaBridgeTemplate {
 	// answer as Clojure's AFunction.compare.
 	private static Object implementation(Class<?>[] interfaces, boolean proxy, Map<String, Integer> slots,
 			@Nullable Object[] functions, boolean javaFalse, boolean comparison) {
+		return implementation(interfaces, proxy, slots, functions, javaFalse, comparison, false, null, null);
+	}
+
+	// A java:reify given :value: the object implements runtime/RontoJavaValue too -- its
+	// value() the value, its className() the class (its own when null) -- and the
+	// equals, hashCode and toString no slot implements are the interface's shared rules
+	// (mirrors eval/JavaInterop's handler and a generated class's writeStandIn).
+	private static Object standIn(Class<?>[] interfaces, Map<String, Integer> slots, @Nullable Object[] functions,
+			boolean javaFalse, @Nullable Object value, @Nullable String className) {
+		Class<?> valueClass = javaValueClass;
+		if (valueClass == null) {
+			throw new RuntimeException("java:reify: :value needs " + JAVA_VALUE_CLASS + " beside the program");
+		}
+		Class<?>[] all = Arrays.copyOf(interfaces, interfaces.length + 1);
+		all[interfaces.length] = valueClass;
+		return implementation(all, false, slots, functions, javaFalse, false, true, value, className);
+	}
+
+	private static Object implementation(Class<?>[] interfaces, boolean proxy, Map<String, Integer> slots,
+			@Nullable Object[] functions, boolean javaFalse, boolean comparison, boolean standsFor,
+			@Nullable Object value, @Nullable String className) {
+		// a stand-in's last interface is runtime/RontoJavaValue, which the messages
+		// leave out
+		Class<?>[] named = standsFor ? Arrays.copyOf(interfaces, interfaces.length - 1) : interfaces;
 		StringBuilder names = new StringBuilder();
-		for (Class<?> iface : interfaces) {
+		for (Class<?> iface : named) {
 			names.append(names.length() == 0 ? "" : " ").append(iface.getName());
 		}
 		String name = names.toString();
+		Class<?> valueClass = javaValueClass;
 		return Proxy.newProxyInstance(proxyLoader(interfaces), interfaces, (p, method, methodArgs) -> {
+			if (standsFor && method.getDeclaringClass() == valueClass) {
+				return "value".equals(method.getName()) ? value
+						: className != null ? className : p.getClass().getName();
+			}
 			String key = keyOf(method);
 			Integer index = slots.get(key + method.getReturnType().getName());
 			if (index == null) {
 				switch (key) {
 					case "hashCode()" -> {
-						return System.identityHashCode(p);
+						return standsFor ? standInRule(javaValueHash, p) : System.identityHashCode(p);
 					}
 					case "equals(java.lang.Object)" -> {
-						return p == (methodArgs == null ? null : methodArgs[0]);
+						Object other = methodArgs == null ? null : methodArgs[0];
+						return standsFor ? standInRule(javaValueSame, p, other) : p == other;
 					}
 					case "toString()" -> {
-						return "#<java-" + (proxy ? "proxy " : "reify ") + name + ">";
+						return standsFor ? standInRule(javaValueText, p)
+								: "#<java-" + (proxy ? "proxy " : "reify ") + name + ">";
 					}
 					default -> {
 					}
@@ -743,12 +877,14 @@ final class JavaBridgeTemplate {
 				index = -1;
 			}
 			if (index < 0) {
-				throw new UnsupportedOperationException("java:reify: no implementation of " + name + "." + key);
+				throw new UnsupportedOperationException(
+						"java:reify: no implementation of " + declaringName(named, key) + "." + key);
 			}
 			boolean compares = comparison && COMPARATOR_COMPARE.equals(key) && method.getReturnType() == int.class;
 			Object answer;
 			try {
-				answer = callback(name, proxy, method, methodArgs, functions[index], javaFalse, compares);
+				answer = callback(proxy ? name : declaringName(named, key), proxy, method, methodArgs, functions[index],
+						javaFalse, compares);
 			}
 			catch (Throwable raised) {
 				throw signal(raised);
@@ -760,6 +896,30 @@ final class JavaBridgeTemplate {
 			}
 			return answer;
 		});
+	}
+
+	// One of runtime/RontoJavaValue's shared rules (sameValue, identityHash,
+	// identityText) applied to the object standing for a value and the arguments.
+	private static Object standInRule(@Nullable Method rule, @Nullable Object... args) {
+		if (rule == null) {
+			throw new RuntimeException("java:reify: :value needs " + JAVA_VALUE_CLASS + " beside the program");
+		}
+		try {
+			return Objects.requireNonNull(rule.invoke(null, args));
+		}
+		catch (InvocationTargetException ex) {
+			// what the object's own hashCode, called by the text, threw
+			if (ex.getCause() instanceof RuntimeException failure) {
+				throw failure;
+			}
+			if (ex.getCause() instanceof Error error) {
+				throw error;
+			}
+			throw new RuntimeException(ex.getCause());
+		}
+		catch (ReflectiveOperationException ex) {
+			throw new RuntimeException(ex);
+		}
 	}
 
 	// A slot's function applied to the ([method-name] arg...) list, its value marshalled
@@ -844,11 +1004,17 @@ final class JavaBridgeTemplate {
 		return throwable;
 	}
 
-	// The methods (java:reify "I" designator ...) declares, by name(parameters)return:
-	// the index of the designator that names it, or -1 for an abstract one none names.
-	// Mirrors compiler/JavaImplementations.reify, errors and all.
-	private static Map<String, Integer> reifySlots(Class<?> iface, String[] designators) {
-		TreeMap<String, List<Method>> groups = groups(iface);
+	// The methods (java:reify interfaces designator ...) declares, by
+	// name(parameters)return: the index of the designator that names it, or -1 for an
+	// abstract one none names. Mirrors compiler/JavaImplementations.reify, errors and
+	// all.
+	private static Map<String, Integer> reifySlots(Class<?>[] interfaces, String[] designators) {
+		TreeMap<String, List<Method>> groups = groups(interfaces);
+		StringBuilder joined = new StringBuilder();
+		for (Class<?> iface : interfaces) {
+			joined.append(joined.length() == 0 ? "" : " ").append(iface.getName());
+		}
+		String names = joined.toString();
 		TreeMap<String, List<Method>> objectGroups = new TreeMap<>();
 		for (Method method : Object.class.getMethods()) {
 			String key = keyOf(method);
@@ -871,16 +1037,17 @@ final class JavaBridgeTemplate {
 				}
 			}
 			if (candidates.isEmpty()) {
-				throw new RuntimeException(
-						"java:reify: interface " + iface.getName() + " has no method " + designators[i]);
+				throw new RuntimeException("java:reify: "
+						+ (interfaces.length == 1 ? "interface " + names + " has" : "interfaces " + names + " have")
+						+ " no method " + designators[i]);
 			}
 			if (candidates.size() > 1) {
-				throw new RuntimeException("java:reify: " + designators[i] + " names more than one method of "
-						+ iface.getName() + ": " + String.join(", ", candidates));
+				throw new RuntimeException("java:reify: " + designators[i] + " names more than one method of " + names
+						+ ": " + String.join(", ", candidates));
 			}
 			if (assigned.putIfAbsent(candidates.get(0), i) != null) {
-				throw new RuntimeException(
-						"java:reify: " + iface.getName() + "." + candidates.get(0) + " is implemented twice");
+				throw new RuntimeException("java:reify: " + declaringName(interfaces, candidates.get(0)) + "."
+						+ candidates.get(0) + " is implemented twice");
 			}
 		}
 		Map<String, Integer> slots = new HashMap<>();
@@ -937,17 +1104,36 @@ final class JavaBridgeTemplate {
 		return groups(new Class<?>[] { iface });
 	}
 
-	// The interfaces' instance methods by name(parameters), in key order.
+	// The interfaces' instance methods by name(parameters), in key order; a declaration
+	// two of them inherit counts once (mirrors compiler/JavaInterfaceMethods.groups).
 	private static TreeMap<String, List<Method>> groups(Class<?>[] interfaces) {
 		TreeMap<String, List<Method>> groups = new TreeMap<>();
 		for (Class<?> iface : interfaces) {
 			for (Method method : iface.getMethods()) {
 				if (!Modifier.isStatic(method.getModifiers())) {
-					groups.computeIfAbsent(keyOf(method), k -> new ArrayList<>()).add(method);
+					List<Method> group = groups.computeIfAbsent(keyOf(method), k -> new ArrayList<>());
+					if (!group.contains(method)) {
+						group.add(method);
+					}
 				}
 			}
 		}
 		return groups;
+	}
+
+	// The interface a message names a method by: of several, the first that declares it,
+	// else the first (mirrors compiler/JavaImplementation.declaringName).
+	private static String declaringName(Class<?>[] interfaces, String key) {
+		if (interfaces.length > 1) {
+			for (Class<?> iface : interfaces) {
+				for (Method method : iface.getMethods()) {
+					if (!Modifier.isStatic(method.getModifiers()) && keyOf(method).equals(key)) {
+						return iface.getName();
+					}
+				}
+			}
+		}
+		return interfaces[0].getName();
 	}
 
 	// One method's declarations by return type name.

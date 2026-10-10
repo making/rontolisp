@@ -449,16 +449,21 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   oracle's own: a vector, list, lazy seq, set, map, record or sorted collection a read-only
   `java.util` `List`, `Set` or `Map` (a vector also `RandomAccess` and `Comparable`) printing
   as Clojure prints it, a keyword, symbol or ratio an object hashing, comparing and printing
-  as the oracle's (a ratio a `Number`), an atom, deftype, fn or other value an object equal
-  only to itself, spelled as the oracle's `Object.toString` (`clojure.lang.Atom@1b6d3586`), or
-  by the type's own `toString`. Java hands each back as the value itself. What differs: the
+  as the oracle's (a ratio a `Number`), a deftype or reify whose body implements a Java
+  interface or overrides an `Object` method an object implementing those interfaces and
+  calling the type's methods, and an atom, fn, other deftype or reify or other value an
+  object equal only to itself, spelled as the oracle's `Object.toString`
+  (`clojure.lang.Atom@1b6d3586`). Java hands each back as the value itself. What differs: the
   class Java sees (`getClass`, and the JDK's `ClassCastException` messages naming it; the
-  front end's own cast failures name the oracle's class but lack the module tail); the
-  members are converted once, when the value crosses, a lazy seq realized to its end; the
-  `toString` is what `str` answers here (a lazy seq and a record spell their contents); Java
-  sees a deftype or reify implement none of its Java interfaces and calls neither its
-  `equals` nor its `hashCode`. A Java array a member answers is a list here, which converts
-  back to an array where one is expected and nothing takes the list whole -- so
+  front end's own cast failures name the oracle's class but lack the module tail; a reify's
+  class is its namespace's `ns$reify`, where the oracle numbers each); the members are
+  converted once, when the value crosses, a lazy seq realized to its end; the `toString` is
+  what `str` answers here (a lazy seq and a record spell their contents); a value whose
+  oracle class is no `Comparable` is one here whose `compareTo` throws the oracle's
+  `ClassCastException`; Java sees no field of a deftype, and none of the interfaces a
+  record's body implements, only the record's `Map`. A Java array a member answers is a list
+  here, which converts back to an array where one is expected and nothing takes the list
+  whole -- so
   `(java.util.Arrays/asList [1 2])` is a list holding the vector, where the oracle throws --
   and so does an array `make-array` makes, a vector here. A byte array crosses as a read-only
   `List` of its elements as Java's bytes (class `[B` in Java's messages), which converts where

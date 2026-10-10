@@ -956,6 +956,13 @@ public final class ClojureLowering {
 	static final String CAUGHT = "RONTOLISP::%CLOJURE-CAUGHT";
 
 	/**
+	 * The faces of the program's types waiting for the end of the lowering
+	 * ({@link ClojureJavaFaces#settle}): registered only where the program names a
+	 * {@code java:} operator.
+	 */
+	final List<ClojureJavaFaces.Pending> javaFaces = new ArrayList<>();
+
+	/**
 	 * Turns on {@link #hostClassWalk} once the program uses a hierarchy and the forms
 	 * lowered so far name the host.
 	 * @param lowered forms just lowered
@@ -1543,6 +1550,8 @@ public final class ClojureLowering {
 		lowering.noteHost(lowering.forms);
 		// and a catch binds a host exception only there
 		lowering.bindCaught();
+		// and a deftype or reify shows Java its face only there
+		ClojureJavaFaces.settle(lowering);
 		// descendants of a class keyword is an exception of the program's runtime
 		lowering.usedExInfo |= lowering.usedClassChains && lowering.readsDescendants;
 		if (lowering.usedHierarchy) {

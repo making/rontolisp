@@ -849,7 +849,9 @@ public final class JavaSiteResolver {
 			// class no program names, whose kind is the interface's implementation type;
 			// a java:subclass one of its superclass and extra interfaces.
 			JavaImplementation implementation = JavaImplementations.resolve(cons, this.lookup);
-			if (!implementation.resolved()) {
+			if (!implementation.resolved() || implementation.standsFor()) {
+				// one standing for a value implements runtime/RontoJavaValue too, a class
+				// no lookup of the program's sees: its class is read when it runs
 				return JavaStaticType.UNKNOWN;
 			}
 			if (implementation.superclass() != null) {

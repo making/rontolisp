@@ -756,6 +756,26 @@ class JvmJavaInteropCompilerTest {
 				""")).isEqualTo("7");
 	}
 
+	// Mirrors JavaInteropTest#aReifyOfSeveralInterfacesMayStandForAValue: a generated
+	// class implementing every interface -- and runtime/RontoJavaValue for one given
+	// :value, which travels beside the program -- and the bridge's refusals for the forms
+	// it cannot resolve.
+	@Test
+	void aReifyOfSeveralInterfacesMayStandForAValue() throws Exception {
+		assertThat(compileAndRunThroughFrontEnd(JavaImplementationPrograms.REIFY_SEVERAL_STANDING))
+			.isEqualTo(JavaImplementationPrograms.REIFY_SEVERAL_STANDING_OUTPUT);
+		JvmLispCompiler compiler = new JvmLispCompiler("Test");
+		compiler.compile(LispReader.readAllFromString("""
+				(let ((th (java:new "java.lang.Thread"
+				            (java:reify '("java.lang.Runnable" "java.util.function.Supplier")
+				              :value (list 1) :class "my.Pair" "run" (lambda () (print :ran)) "get" (lambda () 2)))))
+				  (java:call th "run"))
+				"""));
+		assertThat(compiler.runtimeClassFiles().keySet())
+			.contains("Test$Implementation.class", "Test$Reify0.class", "am/ik/rontolisp/runtime/RontoJavaValue.class")
+			.doesNotContain("Test$JavaBridge.class");
+	}
+
 	// Mirrors JavaInteropTest#whatACallbackRaisesPassesThroughTheJavaCall: through a
 	// generated class and the bridge's Proxy, at a direct site and one left to run time.
 	@Test

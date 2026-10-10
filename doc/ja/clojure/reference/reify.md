@@ -59,7 +59,10 @@ import します（オラクル同様、`clojure.lang` は既定の import に�
 届きます。そのインタフェースへ拡張したプロトコルも同様です。本体が書かなかったメソッドを呼ぶと
 オラクルの `AbstractMethodError` になり（`java.util` の default メソッドはインタフェース側の実装の
 ままで、呼ぶと名前を挙げて拒否されます）、それ以外のインタフェース（`IChunkedSeq`、
-`java.util.Deque` など）は名前を挙げて拒否されます。仕様との差異:`toString` を上書きした値は
+`java.util.Deque` など）は名前を挙げて拒否されます。本体が実装した Java のインタフェース
+（`Runnable`、`Comparable`、`Iterable`、`java.util` のコレクション）と上書きした `Object` の
+メソッドは、Java から見た値にも及びます。値は Java のメンバへ、それらを実装したオブジェクト
+として渡ります（[Java interop](interop.md)）。仕様との差異:`toString` を上書きした値は
 `#object[user$reify "text"]` と印字され、オラクルのクラス番号と同一性ハッシュを持ちません。
 
 ```clojure

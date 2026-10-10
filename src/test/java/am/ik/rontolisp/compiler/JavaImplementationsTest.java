@@ -186,7 +186,7 @@ class JavaImplementationsTest {
 		assertThat(resolved.proxy()).isFalse();
 		assertThat(resolve("(java:proxy \"java.lang.Runnable\" f)").proxy()).isTrue();
 		assertThat(resolve("(java:reify iface \"run\" f)").reason())
-			.isEqualTo("the interface name is not a literal string");
+			.isEqualTo("the interface names are not a literal string or a quoted list of them");
 		assertThat(resolve("(java:reify \"java.lang.Runnable\" name f)").reason())
 			.isEqualTo("method name 1 is not a literal string");
 		assertThat(resolve("(java:reify \"java.lang.Runnable\" \"run\")").reason()).isEqualTo("the form is malformed");
@@ -207,6 +207,101 @@ class JavaImplementationsTest {
 	interface Hidden {
 
 		void run();
+
+	}
+
+	// java:reify of several interfaces: one object implementing the most specific of
+	// them -- a superinterface of another listed one is implied, so a default method it
+	// and the subinterface both declare is none a class must implement, while two
+	// unrelated defaults of one method are --, a designator naming a method of any of
+	// them, the messages naming the interface that declares it.
+	@Test
+	void aReifyOfSeveralInterfacesImplementsTheMostSpecificOfThem() {
+		JavaImplementation both = JavaImplementations.reify(
+				List.of(type("java.lang.Runnable"), type("java.util.function.Supplier")), List.of("run", "get"),
+				CLASSES);
+		assertThat(slots(both)).containsExactly("get()java.lang.Object=1", "run()void=0");
+		assertThat(both.interfaceNames()).isEqualTo("java.lang.Runnable java.util.function.Supplier");
+		assertThat(both.declaringName("get()")).isEqualTo("java.util.function.Supplier");
+		assertThat(both.defaultToString()).isEqualTo("#<java-reify java.lang.Runnable java.util.function.Supplier>");
+		JavaImplementation list = JavaImplementations.reify(
+				List.of(type("java.lang.Iterable"), type("java.util.List"), type("java.util.Collection")),
+				List.of("size"), CLASSES);
+		assertThat(list.interfaceNames()).isEqualTo("java.util.List");
+		assertThat(slots(list)).contains("size()int=0", "get(int)java.lang.Object=-1")
+			.noneMatch(slot -> slot.startsWith("spliterator()") || slot.startsWith("stream()"));
+		assertThat(slots(JavaImplementations.reify(List.of(type("java.util.List"), type("java.util.Set")),
+				List.of("size"), CLASSES)))
+			.contains("spliterator()java.util.Spliterator=-1")
+			.noneMatch(slot -> slot.startsWith("stream()"));
+		assertThatThrownBy(() -> JavaImplementations
+			.reify(List.of(type("java.lang.Runnable"), type("java.util.function.Supplier")), List.of("nope"), CLASSES))
+			.isInstanceOf(IllegalArgumentException.class)
+			.hasMessage("java:reify: interfaces java.lang.Runnable java.util.function.Supplier have no method nope");
+		assertThatThrownBy(() -> JavaImplementations.reify(
+				List.of(type("java.lang.Runnable"), type("java.util.function.Supplier")), List.of("get", "get()"),
+				CLASSES))
+			.isInstanceOf(IllegalArgumentException.class)
+			.hasMessage("java:reify: java.util.function.Supplier.get() is implemented twice");
+		JavaImplementation resolved = resolve(
+				"(java:reify '(\"java.lang.Runnable\" \"java.util.function.Supplier\") \"run\" f \"get\" g)");
+		assertThat(resolved.resolved()).isTrue();
+		assertThat(resolved.interfaceNames()).isEqualTo("java.lang.Runnable java.util.function.Supplier");
+		assertThat(resolve("(java:reify '(\"java.lang.Runnable\" \"java.lang.Runnable\") \"run\" f)").reason())
+			.isEqualTo("java:reify names interface java.lang.Runnable twice");
+		assertThat(resolve("(java:reify '() \"run\" f)").reason()).isEqualTo("the form is malformed");
+		assertThat(JavaImplementations.describe((LispCons) LispReader
+			.readAllFromString("(java:reify '(\"java.lang.Runnable\" \"java.util.function.Supplier\") \"run\" f)")
+			.get(0))).isEqualTo("java:reify \"java.lang.Runnable\" \"java.util.function.Supplier\"");
+		// one object of the interfaces' implementation type, as a java:proxy of them
+		JavaStaticType type = new JavaSiteResolver(CLASSES).typeOf(LispReader
+			.readAllFromString("(java:reify '(\"java.lang.Runnable\" \"java.util.function.Supplier\") \"run\" f)")
+			.get(0));
+		assertThat(type).isEqualTo(new JavaStaticType.Kinds(java.util.Set
+			.of(CLASSES.implementationOf(List.of(type("java.lang.Runnable"), type("java.util.function.Supplier"))))));
+	}
+
+	// :value stands the object for a value: the form resolves like any java:reify, its
+	// :class literal carried, the options in either order and a value that is a
+	// marker's keyword the value; :class without :value, an option twice, and an
+	// interface declaring value() or className() -- runtime/RontoJavaValue's own -- are
+	// refused. Its class is read when it runs.
+	@Test
+	void aReifyGivenAValueStandsForIt() {
+		JavaImplementation standing = resolve(
+				"(java:reify '(\"java.lang.Runnable\" \"java.lang.Comparable\") :value x :class \"my.Task\" \"run\" f"
+						+ " :java-false)");
+		assertThat(standing.resolved()).isTrue();
+		assertThat(standing.standIn()).isEqualTo(new JavaImplementation.StandIn("my.Task"));
+		assertThat(standing.javaFalse()).isTrue();
+		assertThat(slots(standing)).containsExactly("compareTo(java.lang.Object)int=-1", "run()void=0");
+		assertThat(resolve("(java:reify \"java.lang.Runnable\" :class \"c\" :value x \"run\" f)").standIn())
+			.isEqualTo(new JavaImplementation.StandIn("c"));
+		assertThat(resolve("(java:reify \"java.lang.Runnable\" :value x \"run\" f)").standIn())
+			.isEqualTo(new JavaImplementation.StandIn(null));
+		assertThat(resolve("(java:reify \"java.lang.Runnable\" \"run\" f)").standsFor()).isFalse();
+		JavaImplementation keyword = resolve("(java:reify \"java.lang.Runnable\" :value :java-false \"run\" f)");
+		assertThat(keyword.standsFor()).isTrue();
+		assertThat(keyword.javaFalse()).isFalse();
+		assertThat(resolve("(java:reify \"java.lang.Runnable\" :class \"c\" \"run\" f)").reason())
+			.isEqualTo("the form is malformed");
+		assertThat(resolve("(java:reify \"java.lang.Runnable\" :value x :value y \"run\" f)").reason())
+			.isEqualTo("the form is malformed");
+		assertThat(resolve("(java:reify \"java.lang.Runnable\" :value x :class c \"run\" f)").reason())
+			.isEqualTo("the class name is not a literal string");
+		assertThat(resolve("(java:reify \"" + Valued.class.getName() + "\" :value x \"value\" f)").reason())
+			.isEqualTo("java:reify: :value conflicts with " + Valued.class.getName() + ".value()");
+		assertThat(new JavaSiteResolver(CLASSES)
+			.typeOf(LispReader.readAllFromString("(java:reify \"java.lang.Runnable\" :value x \"run\" f)").get(0)))
+			.isEqualTo(JavaStaticType.UNKNOWN);
+	}
+
+	/**
+	 * An interface declaring a method an object standing for a value implements itself.
+	 */
+	public interface Valued {
+
+		Object value();
 
 	}
 

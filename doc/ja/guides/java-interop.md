@@ -16,7 +16,7 @@
 | `java:field` | 静的・インスタンスフィールドの読み取り: `(java:field class-or-obj "name")` |
 | `java:proxy` | callable を 1 つ以上のインターフェースへ適合: `(java:proxy "iface"... callable)` |
 | `java:subclass` | callable でクラスを継承: `(java:subclass "super" '("iface"...) '("method"...) args... callable)` |
-| `java:reify` | インターフェースをメソッドごとに実装: `(java:reify "iface" "method" function ...)` |
+| `java:reify` | インターフェース群をメソッドごとに実装: `(java:reify "iface" "method" function ...)` |
 | `java:handle` | Java に値のない Lisp の値の代理: `(java:handle value "text")` |
 | `java:view` | Lisp のコレクションを読み取り専用の Java のコレクションとして代理: `(java:view value items :list)` |
 
@@ -134,7 +134,7 @@ Java の false は Common Lisp 唯一の偽である `nil` として返ります
         (java:call (java:call m "keySet") "toArray")))   ; => ("{apple=1}" 1 (APPLE))
 ```
 
-完全な形は `(java:handle value text hash order class)` です。`hash` が nil のハンドルはまったく同じ値のハンドルとだけ等しくなり、このとき `text` を nil にすると `Object` と同じくクラス名とハッシュで綴られます。関数の `order` は、値と、Java がハンドルと比べるオブジェクトとを比べ、その答えの符号で順序を決めます。`order` が nil のハンドルは何とも順序付けられません。`class` は等価と順序を分けます。クラスの異なるハンドル同士は等しくならず、比べると両方のクラス名を挙げた `ClassCastException` になります。実数のハンドルは、その数の `java.lang.Number` です ([java:handle](../reference/functions/java-handle.md))。
+完全な形は `(java:handle value text hash order class)` です。`hash` が nil のハンドルはまったく同じ値のハンドルとだけ等しくなり、このとき `text` を nil にすると `Object` と同じくクラス名とハッシュで綴られます。関数の `order` は、値と、Java がハンドルと比べるオブジェクトとを比べ、その答えの符号で順序を決めます。`order` が nil のハンドルは何とも順序付けられません。`class` は等価と順序を分けます。クラスの異なるハンドル同士は等しくならず、比べると両方のクラス名を挙げた `ClassCastException` になります。実数のハンドルは、その数の `java.lang.Number` です ([java:handle](../reference/functions/java-handle.md))。値を表しながらインターフェースも実装するオブジェクトは、`:value` を付けた `java:reify` で作ります ([java:reify によるインターフェースの実装](#implementing-interfaces-with-javareify))。
 
 ### ビュー: java:view
 
@@ -341,6 +341,8 @@ error: --java-static: 1 java: call cannot be compiled without reflection:
 - 名前は 1 つのメソッドを指す。複数のメソッドが共有する名前には、`java:call` の名前と同じくパラメータ型のタグを付ける (`"append(char)"`)。複数のメソッドに一致する名前や、どのメソッドにも一致しない名前はエラーになる
 - どの名前も指さない抽象メソッドは、呼ぶと `UnsupportedOperationException` を投げる。デフォルトメソッドはインターフェースの本体を保つ。`toString`、`equals`、`hashCode` も指定でき、指定しなければ `#<java-reify I>` と同一性比較になる
 - 関数の値は引数と同じ規則でメソッドの戻り型へ変換される。ただし関数は戻る方向ではプロキシにしないので、インターフェースが期待される戻り値には `java:reify` か `java:proxy` のオブジェクトを返す
+- インターフェース名をクォートしたリストで渡すと (`(java:reify '("I" "J") ...)`)、そのすべてを実装するオブジェクトを 1 つ作る。名前はどのインターフェースのメソッドでも指せる
+- インターフェースの後ろに `:value v` を置くと、オブジェクトは[ハンドル](#handles-javahandle)と同じく `v` を表す。Java はこれを `v` として返し、`equals`・`hashCode`・`toString` は指定しなければ、`:class` が名付けるクラスの、ハッシュが nil のハンドルと同じになる
 
 コンパイル済みプログラムは、名前がリテラル文字列の `java:reify` をそれぞれ専用に生成したクラス (`Prog$Reify0.class`) で実装するので、リフレクションを必要としません。[リフレクションなしのコンパイル](#compiling-without-reflection)を参照してください。[リファレンスページ](../reference/functions/java-reify.md)に例がさらにあります。
 

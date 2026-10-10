@@ -42,7 +42,8 @@ import org.jspecify.annotations.Nullable;
 public final class JavaImplementations {
 
 	/** The error a malformed {@code java:reify} call raises when it runs. */
-	public static final String REIFY_USAGE = "java:reify expects (java:reify \"interface\" \"method\" function ...)";
+	public static final String REIFY_USAGE = "java:reify expects (java:reify \"interface\"-or-list"
+			+ " [:value v] [:class \"class\"] \"method\" function ...)";
 
 	/** The error a malformed {@code java:proxy} call raises when it runs. */
 	public static final String PROXY_USAGE = "java:proxy expects (java:proxy \"interface\"... callable)";
@@ -75,18 +76,21 @@ public final class JavaImplementations {
 	/**
 	 * The index the markers ending a {@code java:reify}, {@code java:proxy} or
 	 * {@code java:subclass} form ({@link JavaMarkers}) may start at: after a
-	 * {@code java:reify}'s interface name, a {@code java:proxy}'s interface and callable,
-	 * a {@code java:subclass}'s three names and its callable. A {@code java:subclass}'s
-	 * {@code :functional} converts a function constructor argument by the method's
-	 * arguments, as at a {@code java:new} ending in it; {@code :java-false} answers
-	 * Java's {@code false} to the form's functions as {@code |false|}.
-	 * @param operator the form's operator, qualified
-	 * ({@link LispNames#JAVA_REIFY_QUALIFIED} ...)
-	 * @return the index in the form's elements, the operator first
+	 * {@code java:reify}'s interfaces and the options after them ({@link #reifyParts}), a
+	 * {@code java:proxy}'s interface and callable, a {@code java:subclass}'s three names
+	 * and its callable. A {@code java:subclass}'s {@code :functional} converts a function
+	 * constructor argument by the method's arguments, as at a {@code java:new} ending in
+	 * it; {@code :java-false} answers Java's {@code false} to the form's functions as
+	 * {@code |false|}.
+	 * @param parts the form's elements, the operator first
+	 * @return the index in the form's elements
 	 */
-	public static int firstMarker(String operator) {
-		return switch (operator) {
-			case LispNames.JAVA_REIFY_QUALIFIED -> 2;
+	private static int firstMarker(List<LispVal> parts) {
+		return switch (operatorName(parts)) {
+			case LispNames.JAVA_REIFY_QUALIFIED -> {
+				ReifyParts shape = reifyParts(parts, 1);
+				yield shape == null ? 2 : shape.firstDesignator();
+			}
 			case LispNames.JAVA_PROXY_QUALIFIED -> 3;
 			default -> 5;
 		};
@@ -98,7 +102,7 @@ public final class JavaImplementations {
 	 * @return the markers
 	 */
 	public static JavaMarkers markers(List<LispVal> parts) {
-		return JavaMarkers.of(parts, firstMarker(operatorName(parts)));
+		return JavaMarkers.of(parts, firstMarker(parts));
 	}
 
 	/**
@@ -107,7 +111,57 @@ public final class JavaImplementations {
 	 * @return the count
 	 */
 	public static int markerCount(List<LispVal> parts) {
-		return JavaMarkers.count(parts, firstMarker(operatorName(parts)));
+		return JavaMarkers.count(parts, firstMarker(parts));
+	}
+
+	/**
+	 * Where the parts of a {@code java:reify} are, past its interfaces: the options
+	 * standing the object for a value -- {@code :value v}
+	 * ({@link LispNames#JAVA_VALUE_OPTION}) and {@code :class c}
+	 * ({@link LispNames#JAVA_CLASS_OPTION}), each at most once, in any order -- then the
+	 * designator and function pairs, then the markers. A keyword is never a designator,
+	 * so the options are told from the pairs whatever the values are.
+	 *
+	 * @param firstDesignator the index of the first designator (or of the first marker,
+	 * or the end)
+	 * @param value the index of the {@code :value} form, or {@code -1}
+	 * @param className the index of the {@code :class} form, or {@code -1}
+	 */
+	public record ReifyParts(int firstDesignator, int value, int className) {
+	}
+
+	/**
+	 * The options after a {@code java:reify}'s interfaces.
+	 * @param parts a form's elements (the interfaces at 1) or the evaluated arguments
+	 * (the interfaces at 0)
+	 * @param interfaces the index of the interfaces
+	 * @return where the parts are, or {@code null} when an option is named twice, or
+	 * {@code :class} without {@code :value}: the form is malformed
+	 */
+	public static @Nullable ReifyParts reifyParts(List<LispVal> parts, int interfaces) {
+		int value = -1;
+		int className = -1;
+		int i = interfaces + 1;
+		while (i + 1 < parts.size() && parts.get(i) instanceof LispSymbol option) {
+			if (LispNames.JAVA_VALUE_OPTION.equals(option.name()) && value < 0) {
+				value = i + 1;
+			}
+			else if (LispNames.JAVA_CLASS_OPTION.equals(option.name()) && className < 0) {
+				className = i + 1;
+			}
+			else if (LispNames.JAVA_VALUE_OPTION.equals(option.name())
+					|| LispNames.JAVA_CLASS_OPTION.equals(option.name())) {
+				return null;
+			}
+			else {
+				break;
+			}
+			i += 2;
+		}
+		if (className >= 0 && value < 0) {
+			return null;
+		}
+		return new ReifyParts(i, value, className);
 	}
 
 	private static String operatorName(List<LispVal> parts) {
@@ -191,6 +245,16 @@ public final class JavaImplementations {
 			}
 			return text.toString();
 		}
+		if (!proxy && rest instanceof LispCons cell) {
+			// a java:reify's interfaces: one literal, or a quoted list of them
+			List<String> names = quotedStrings(cell.car());
+			for (String name : names != null ? names : List.<String>of()) {
+				text.append(' ').append(new LispString(name).print());
+			}
+			if (names != null) {
+				return text.toString();
+			}
+		}
 		while (rest instanceof LispCons cell && cell.car() instanceof LispString iface
 				&& (proxy ? cell.cdr() instanceof LispCons : text.length() == "java:reify".length())) {
 			text.append(' ').append(iface.print());
@@ -256,23 +320,55 @@ public final class JavaImplementations {
 		List<LispVal> all = form.toList();
 		JavaMarkers markers = markers(all);
 		List<LispVal> parts = all.subList(0, all.size() - markerCount(all));
-		if (proxy ? parts.size() < 3 : parts.size() < 2 || parts.size() % 2 != 0) {
+		ReifyParts shape = proxy ? null : reifyParts(parts, 1);
+		if (proxy ? parts.size() < 3
+				: shape == null || parts.size() < 2 || (parts.size() - shape.firstDesignator()) % 2 != 0) {
 			return unresolved(proxy, "the form is malformed");
 		}
-		// A java:reify names one interface; a java:proxy every part before its callable.
-		int interfaceCount = proxy ? parts.size() - 2 : 1;
+		// A java:reify names one interface or a quoted list of them; a java:proxy every
+		// part before its callable.
 		List<String> names = new ArrayList<>();
-		for (int i = 1; i <= interfaceCount; i++) {
-			if (!(parts.get(i) instanceof LispString name)) {
-				return unresolved(proxy, interfaceCount == 1 ? "the interface name is not a literal string"
-						: "interface name " + i + " is not a literal string");
+		if (proxy) {
+			int interfaceCount = parts.size() - 2;
+			for (int i = 1; i <= interfaceCount; i++) {
+				if (!(parts.get(i) instanceof LispString name)) {
+					return unresolved(proxy, interfaceCount == 1 ? "the interface name is not a literal string"
+							: "interface name " + i + " is not a literal string");
+				}
+				names.add(name.value());
 			}
+		}
+		else if (parts.get(1) instanceof LispString name) {
 			names.add(name.value());
 		}
+		else {
+			List<String> listed = quotedStrings(parts.get(1));
+			if (listed == null) {
+				return unresolved(proxy, "the interface names are not a literal string or a quoted list of them");
+			}
+			if (listed.isEmpty()) {
+				return unresolved(proxy, "the form is malformed");
+			}
+			names.addAll(listed);
+		}
+		JavaImplementation.StandIn standIn = null;
+		if (shape != null && shape.value() >= 0) {
+			String className = null;
+			if (shape.className() >= 0) {
+				if (parts.get(shape.className()) instanceof LispString given) {
+					className = given.value();
+				}
+				else if (!(parts.get(shape.className()) instanceof LispNil)) {
+					return unresolved(proxy, "the class name is not a literal string");
+				}
+			}
+			standIn = new JavaImplementation.StandIn(className);
+		}
 		List<String> designators = new ArrayList<>();
-		for (int i = 2; !proxy && i < parts.size(); i += 2) {
+		int firstDesignator = shape == null ? parts.size() : shape.firstDesignator();
+		for (int i = firstDesignator; i < parts.size(); i += 2) {
 			if (!(parts.get(i) instanceof LispString designator)) {
-				return unresolved(proxy, "method name " + (i / 2) + " is not a literal string");
+				return unresolved(proxy, "method name " + ((i - firstDesignator) / 2 + 1) + " is not a literal string");
 			}
 			designators.add(designator.value());
 		}
@@ -291,19 +387,26 @@ public final class JavaImplementations {
 							"interface " + type.name() + " is not " + (type.isAccessible() ? "public" : "accessible"));
 				}
 				if (interfaces.contains(type)) {
-					return unresolved(proxy, repeatedInterface(name));
+					return unresolved(proxy, proxy ? repeatedInterface(name) : reifyRepeatedInterface(name));
 				}
 				interfaces.add(type);
 			}
 			JavaImplementation implementation = (proxy ? proxy(interfaces, lookup)
-					: reify(interfaces.get(0), designators, lookup))
+					: reify(interfaces, designators, lookup))
 				.withMarkers(markers);
+			if (standIn != null) {
+				String conflict = standInConflict(implementation.interfaces());
+				if (conflict != null) {
+					return unresolved(proxy, conflict);
+				}
+				implementation = implementation.withStandIn(standIn);
+			}
 			for (JavaImplementation.Slot slot : implementation.slots()) {
 				// The generated class returns the method's type: it must be able to name
 				// it.
 				if (!slot.returnType().isLinkable()) {
 					return unresolved(proxy, "the return type " + slot.returnType().name() + " of "
-							+ implementation.interfaceNames() + "." + slot.key() + " is not public");
+							+ implementation.declaringName(slot.key()) + "." + slot.key() + " is not public");
 				}
 			}
 			return implementation;
@@ -322,6 +425,77 @@ public final class JavaImplementations {
 	}
 
 	/**
+	 * The error a {@code java:reify} that names one interface twice raises when it runs.
+	 * @param name the interface name
+	 * @return the message
+	 */
+	public static String reifyRepeatedInterface(String name) {
+		return "java:reify names interface " + name + " twice";
+	}
+
+	/**
+	 * The error a {@code java:reify} given {@code :value} raises when one of its
+	 * interfaces declares a method the object standing for the value implements itself:
+	 * {@code value()} or {@code className()} of {@code runtime/RontoJavaValue}.
+	 * @param interfaces the interfaces
+	 * @return the message, or {@code null} when none declares one
+	 */
+	public static @Nullable String standInConflict(List<JavaType> interfaces) {
+		for (JavaType iface : interfaces) {
+			for (JavaExecutable method : iface.publicMethods()) {
+				if (!method.isStatic() && method.parameterTypes().isEmpty()
+						&& STAND_IN_METHODS.contains(method.name())) {
+					return standInConflict(iface.name(), method.name());
+				}
+			}
+		}
+		return null;
+	}
+
+	/**
+	 * The error a {@code java:reify} given {@code :value} raises for an interface
+	 * declaring a method the object standing for the value implements itself.
+	 * @param iface the interface
+	 * @param method {@code value} or {@code className}
+	 * @return the message
+	 */
+	public static String standInConflict(String iface, String method) {
+		return "java:reify: :value conflicts with " + iface + "." + method + "()";
+	}
+
+	/**
+	 * The methods of {@code runtime/RontoJavaValue}, which an object standing for a value
+	 * implements itself, both taking no argument.
+	 */
+	public static final List<String> STAND_IN_METHODS = List.of("value", "className");
+
+	/**
+	 * The interfaces an implementation of all of them declares: those no other one of
+	 * them extends, in their order. Implementing a subinterface implements its
+	 * superinterfaces, and its methods are already the most specific ones -- an
+	 * overriding default rather than the one it overrides -- so naming a superinterface
+	 * beside it changes nothing.
+	 * @param interfaces the interfaces, distinct
+	 * @return the ones to implement
+	 */
+	public static List<JavaType> mostSpecific(List<JavaType> interfaces) {
+		List<JavaType> out = new ArrayList<>();
+		for (JavaType iface : interfaces) {
+			boolean implied = false;
+			for (JavaType other : interfaces) {
+				if (other != iface && iface.isAssignableFrom(other)) {
+					implied = true;
+					break;
+				}
+			}
+			if (!implied) {
+				out.add(iface);
+			}
+		}
+		return out;
+	}
+
+	/**
 	 * How {@code (java:reify "I" designator function ...)} implements the interface.
 	 * @param iface the interface
 	 * @param designators the method designators, in order: designator {@code i}'s
@@ -332,9 +506,30 @@ public final class JavaImplementations {
 	 * designator that names no method or several, a method named twice
 	 */
 	public static JavaImplementation reify(JavaType iface, List<String> designators, JavaClassLookup lookup) {
-		Map<String, Group> groups = JavaInterfaceMethods.groups(iface);
+		return reify(List.of(iface), designators, lookup);
+	}
+
+	/**
+	 * How {@code (java:reify '("I" "J" ...) designator function ...)} implements the
+	 * interfaces: one object implementing each ({@link #mostSpecific} of them, a
+	 * superinterface of another listed one implied), a designator naming one method of
+	 * any of them -- a method two declare with one parameter list is one -- or of
+	 * {@code Object}'s three.
+	 * @param listed the interfaces, distinct, in the form's order
+	 * @param designators the method designators, in order: designator {@code i}'s
+	 * function is implementation {@code i}
+	 * @param lookup where {@code Object} is found
+	 * @return the implementation
+	 * @throws IllegalArgumentException with the error the form raises: a malformed tag, a
+	 * designator that names no method or several, a method named twice
+	 */
+	public static JavaImplementation reify(List<JavaType> listed, List<String> designators, JavaClassLookup lookup) {
+		List<JavaType> interfaces = mostSpecific(listed);
+		String names = JavaImplementation.interfaceNames(interfaces);
+		Map<String, Group> groups = JavaInterfaceMethods.groups(interfaces);
 		Map<String, Group> objectGroups = JavaInterfaceMethods.objectGroups(lookup);
 		Map<String, Integer> assigned = new LinkedHashMap<>();
+		JavaImplementation named = new JavaImplementation(false, interfaces, List.of(), null);
 		for (int i = 0; i < designators.size(); i++) {
 			String designator = designators.get(i);
 			JavaOverloads.Member member = JavaOverloads.parseMember(designator);
@@ -352,8 +547,9 @@ public final class JavaImplementations {
 				}
 			}
 			if (candidates.isEmpty()) {
-				throw new IllegalArgumentException(
-						"java:reify: interface " + iface.name() + " has no method " + designator);
+				throw new IllegalArgumentException("java:reify: "
+						+ (interfaces.size() == 1 ? "interface " + names + " has" : "interfaces " + names + " have")
+						+ " no method " + designator);
 			}
 			if (candidates.size() > 1) {
 				List<String> keys = new ArrayList<>();
@@ -361,11 +557,12 @@ public final class JavaImplementations {
 					keys.add(candidate.key());
 				}
 				throw new IllegalArgumentException("java:reify: " + designator + " names more than one method of "
-						+ iface.name() + ": " + String.join(", ", keys));
+						+ names + ": " + String.join(", ", keys));
 			}
 			String key = candidates.get(0).key();
 			if (assigned.putIfAbsent(key, i) != null) {
-				throw new IllegalArgumentException("java:reify: " + iface.name() + "." + key + " is implemented twice");
+				throw new IllegalArgumentException(
+						"java:reify: " + named.declaringName(key) + "." + key + " is implemented twice");
 			}
 		}
 		List<JavaImplementation.Slot> slots = new ArrayList<>();
@@ -389,7 +586,7 @@ public final class JavaImplementations {
 				}
 			}
 		}
-		return new JavaImplementation(false, List.of(iface), slots, null);
+		return new JavaImplementation(false, interfaces, slots, null);
 	}
 
 	/**

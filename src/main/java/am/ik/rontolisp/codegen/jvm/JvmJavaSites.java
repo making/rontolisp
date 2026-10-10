@@ -255,6 +255,54 @@ final class JvmJavaSites {
 		return false;
 	}
 
+	/**
+	 * Whether the program may make a {@code java:reify} standing for a value -- a
+	 * {@code runtime/RontoJavaValue}, which the unmarshal helpers then answer the value
+	 * of, and whose class then travels with the program: a {@code java:reify} form given
+	 * {@code :value}, or {@code java:reify} anywhere but at the head of a call (a
+	 * function value, which may be applied to it). Read off the forms before they are
+	 * compiled.
+	 * @param program the package-resolved top-level forms
+	 * @return whether such an object can be made
+	 */
+	static boolean makesStandIns(List<LispVal> program) {
+		for (LispVal form : program) {
+			if (makesStandIns(form, true, new IdentityHashMap<>())) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	private static boolean makesStandIns(LispVal form, boolean head, IdentityHashMap<LispCons, Boolean> seen) {
+		if (form instanceof LispSymbol symbol) {
+			return !head && LispNames.JAVA_REIFY_QUALIFIED.equals(symbol.name());
+		}
+		if (!(form instanceof LispCons cons) || seen.put(cons, Boolean.TRUE) != null) {
+			return false;
+		}
+		if (cons.car() instanceof LispSymbol operator && LispNames.QUOTE.equals(operator.name())) {
+			return false;
+		}
+		if (cons.car() instanceof LispSymbol operator && LispNames.JAVA_REIFY_QUALIFIED.equals(operator.name())
+				&& cons.isProperList()) {
+			JavaImplementations.ReifyParts shape = JavaImplementations.reifyParts(cons.toList(), 1);
+			if (shape != null && shape.value() >= 0) {
+				return true;
+			}
+		}
+		LispVal current = cons;
+		boolean first = true;
+		while (current instanceof LispCons cell) {
+			if (makesStandIns(cell.car(), first, seen)) {
+				return true;
+			}
+			first = false;
+			current = cell.cdr();
+		}
+		return false;
+	}
+
 	// Whether a resolved site may convert an argument that is a function to an
 	// interface -- directly, or as an element of a sequence made an array -- which the
 	// interface's generated proxy class then applies.

@@ -69,6 +69,96 @@ public final class JavaImplementationPrograms {
 			("accept" "A")
 			("accept" "B")""";
 
+	/**
+	 * java:reify of several interfaces, and one given {@code :value}: one object Java
+	 * holds as each interface -- a superinterface of another listed one implied -- whose
+	 * unnamed abstract method names the interface declaring it; an object standing for a
+	 * value is handed back as the value, its {@code equals}, {@code hashCode} and
+	 * {@code toString} unless named those of a nil-hash handle (equal to an object
+	 * standing for the very same value of its class, the value's identity hash,
+	 * {@code Object}'s spelling of its {@code :class}), and a {@code :value} that is a
+	 * marker's keyword is the value; an interface name computed at run time makes an
+	 * equal object (a compiled program's bridge).
+	 */
+	public static final String REIFY_SEVERAL_STANDING = """
+			(defun row (thunk)
+			  (handler-case (prin1 (funcall thunk))
+			    (java:java-exception (e) (princ (java:call (java:java-exception-cause e) "getMessage")))
+			    (error (e) (princ e)))
+			  (terpri))
+			(let ((o (java:reify '("java.lang.Runnable" "java.util.function.Supplier")
+			           "run" (lambda () (print :ran))
+			           "get" (lambda () 42))))
+			  (java:call (java:new "java.lang.Thread" o) "run")
+			  (row (lambda () (java:call o "get")))
+			  (row (lambda () (java:call o "toString"))))
+			(row (lambda () (let ((l (java:reify '("java.util.Collection" "java.util.List" "java.lang.Iterable")
+			                           "size" (lambda () 0))))
+			                  (java:call l "size"))))
+			(row (lambda () (java:call (java:reify '("java.lang.Runnable" "java.util.function.Supplier")
+			                             "run" (lambda () nil))
+			                           "get")))
+			(defvar *cell* (list :cell 1))
+			(let* ((o (java:reify '("java.lang.Comparable") :value *cell* :class "my.Cell"
+			            "compareTo" (lambda (other) (if (eq other *cell*) 0 1))))
+			       (twin (java:reify "java.lang.Runnable" :value *cell* :class "my.Cell" "run" (lambda () nil)))
+			       (other (java:reify "java.lang.Runnable" :value *cell* :class "my.Other" "run" (lambda () nil)))
+			       (l (java:new "java.util.ArrayList")))
+			  (java:call l "add" o)
+			  (row (lambda () (eq (java:call l "get" 0) *cell*)))
+			  (row (lambda () (java:call o "compareTo" o)))
+			  (row (lambda () (list (java:call l "contains" twin) (java:call l "contains" other))))
+			  (row (lambda () (= (java:call o "hashCode") (java:call twin "hashCode"))))
+			  (row (lambda () (string= (java:call o "toString")
+			                           (format nil "my.Cell@~(~x~)" (java:call o "hashCode"))))))
+			(defun point (x)
+			  (java:reify '("java.lang.Runnable") :value (list :point x) :class "my.Point"
+			    "run" (lambda () nil)
+			    "equals" (lambda (other) (and (consp other) (eq (car other) :point) (= (cadr other) x)))
+			    "hashCode" (lambda () x)
+			    :java-false))
+			(let ((s (java:new "java.util.HashSet")))
+			  (java:call s "add" (point 1))
+			  (java:call s "add" (point 1))
+			  (java:call s "add" (point 2))
+			  (row (lambda () (java:call s "size")))
+			  (row (lambda () (java:call (point 255) "toString"))))
+			(row (lambda () (let ((l (java:new "java.util.ArrayList")))
+			                  (java:call l "add" (java:reify "java.lang.Runnable" :value :java-false "run" (lambda () nil)))
+			                  (java:call l "get" 0))))
+			(defvar *runnable* "java.lang.Runnable")
+			(row (lambda () (let ((l (java:new "java.util.ArrayList"))
+			                      (late (java:reify *runnable* :value *cell* :class "my.Cell" "run" (lambda () nil))))
+			                  (java:call l "add" late)
+			                  (list (eq (java:call l "get" 0) *cell*)
+			                        (java:call l "contains"
+			                                   (java:reify "java.lang.Runnable" :value *cell* :class "my.Cell"
+			                                     "run" (lambda () nil)))))))
+			(row (lambda () (java:reify '("java.lang.Runnable" "java.lang.Runnable") "run" (lambda () nil))))
+			(row (lambda () (java:reify '("java.lang.Runnable" "java.util.function.Supplier") "foo" (lambda () nil))))
+			(row (lambda () (java:reify "java.lang.Runnable" :class "x" "run" (lambda () nil))))
+			""";
+
+	/** What {@link #REIFY_SEVERAL_STANDING} prints, trimmed. */
+	public static final String REIFY_SEVERAL_STANDING_OUTPUT = """
+			:RAN
+			42
+			"#<java-reify java.lang.Runnable java.util.function.Supplier>"
+			0
+			java:reify: no implementation of java.util.function.Supplier.get()
+			T
+			0
+			(T NIL)
+			T
+			T
+			2
+			"my.Point@ff"
+			:JAVA-FALSE
+			(T T)
+			java:reify names interface java.lang.Runnable twice
+			java:reify: interfaces java.lang.Runnable java.util.function.Supplier have no method foo
+			java:reify expects (java:reify "interface"-or-list [:value v] [:class "class"] "method" function ...)""";
+
 	/** java:proxy: every method, a default one too, calls the callable. */
 	public static final String PROXY = """
 			(let ((c (java:proxy "java.util.Comparator" (lambda (m &rest args) (if (equal m "compare") 5 nil)))))

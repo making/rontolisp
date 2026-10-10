@@ -102,10 +102,20 @@ final class JavaInterfaceMethods {
 		return groups;
 	}
 
+	// One method's declarations by return type; a declaration two interfaces both inherit
+	// (Collection.stream() through List and through Set) counts once.
 	private static Group group(List<JavaExecutable> declarations) {
 		Map<String, List<JavaExecutable>> byReturn = new TreeMap<>();
 		for (JavaExecutable declaration : declarations) {
-			byReturn.computeIfAbsent(declaration.returnType().name(), k -> new ArrayList<>()).add(declaration);
+			List<JavaExecutable> sameReturn = byReturn.computeIfAbsent(declaration.returnType().name(),
+					k -> new ArrayList<>());
+			boolean seen = false;
+			for (JavaExecutable other : sameReturn) {
+				seen |= other.declaringClass().name().equals(declaration.declaringClass().name());
+			}
+			if (!seen) {
+				sameReturn.add(declaration);
+			}
 		}
 		List<Variant> variants = new ArrayList<>();
 		for (List<JavaExecutable> sameReturn : byReturn.values()) {

@@ -1165,6 +1165,115 @@ class ClojureInteropTest {
 						""");
 	}
 
+	// Oracle (clj 1.12.6, measured 2026-10-10): a deftype or reify is an instance of
+	// every
+	// Java interface its body implements, so Java calls its methods -- a Thread runs a
+	// Runnable, an executor calls a Callable, String/join walks an Iterable through the
+	// iterator its body answers (a Clojure collection's seq iterator too) --, a TreeSet,
+	// a TreeMap and Collections/sort order it by its compareTo, a HashSet and a HashMap
+	// key it by its equals and hashCode, Object's toString spells its own hashCode, a
+	// java.util.List or java.util.Map type is a List or a Map to Java (a Map's entries
+	// Java's Map.Entry, a default method the body leaves out Java's), and Java hands it
+	// back as itself. A reify closing over a local is one too. Before,
+	// measured 2026-10-09 on the interpreter and the JVM: "No matching constructor for
+	// java.lang.Thread with 1 argument(s)", "class user.Box cannot be cast to class
+	// java.lang.Comparable", a HashSet of two equal Ps of size 2.
+	@Test
+	void aDeftypeOrReifyReachesJavaAsAnImplementationOfItsInterfaces() throws Exception {
+		assertBothEqual(
+				"""
+						(deftype Task [] Runnable (run [_] (println "ran")))
+						(doto (Thread. (Task.)) .start .join)
+						(doto (Thread. (reify Runnable (run [_] (println "ran too")))) .start .join)
+						(defn task [msg] (reify Runnable (run [_] (println msg))))
+						(doto (Thread. (task "closed over")) .start .join)
+						(deftype Box [x] Comparable (compareTo [_ o] (compare x (.-x o))))
+						(println (vec (map #(.-x %) (java.util.TreeSet. [(Box. 2) (Box. 1)]))))
+						(let [l (java.util.ArrayList. [(Box. 3) (Box. 1) (Box. 2)])]
+						  (java.util.Collections/sort l)
+						  (println (map #(.-x %) l)))
+						(let [m (java.util.TreeMap.)]
+						  (.put m (Box. 2) :two)
+						  (.put m (Box. 1) :one)
+						  (println (vals m) (.-x (.firstKey m))))
+						(deftype P [x] Object
+						  (equals [_ o] (and (instance? P o) (= x (.-x o))))
+						  (hashCode [_] (hash x)))
+						(println (.size (java.util.HashSet. [(P. 1) (P. 1)])))
+						(let [m (java.util.HashMap.)]
+						  (.put m (P. 1) :a)
+						  (println (.get m (P. 1)) (.containsKey m (P. 2)) (.size m)))
+						(println (.equals (java.util.ArrayList. [(P. 1)]) (java.util.ArrayList. [(P. 1)]))
+						         (.contains (java.util.ArrayList. [(P. 1)]) "x"))
+						(deftype C [] java.util.concurrent.Callable (call [_] :done))
+						(let [ex (java.util.concurrent.Executors/newSingleThreadExecutor)]
+						  (println (.get (.submit ex (C.))))
+						  (.shutdown ex))
+						(deftype Bag [items] Iterable (iterator [_] (.iterator items)))
+						(println (String/join ", " (Bag. ["a" "b"])))
+						(deftype H [l] java.lang.Iterable (iterator [_] (.iterator l)))
+						(println (String/join "," (H. (java.util.ArrayList. ["x" "y"]))))
+						(let [t (Task.) l (java.util.ArrayList.)]
+						  (.add l t)
+						  (println (identical? t (.get l 0)) (.contains l t) (.indexOf l t)))
+						(deftype Q [x] Object (hashCode [_] 255))
+						(println (str (java.util.ArrayList. [(Q. 1)])) (str (java.util.ArrayList. [(reify Object (toString [_] "r"))])))
+						(deftype L [v] java.util.List
+						  (size [_] (count v))
+						  (get [_ i] (nth v i))
+						  (isEmpty [_] (empty? v))
+						  (iterator [_] (.iterator v))
+						  (contains [_ x] (boolean (some #{x} v))))
+						(println (java.util.Collections/max (L. [1 5 3])) (String/join "-" (L. ["a" "b"]))
+						         (.containsAll (java.util.ArrayList. [1 2]) (L. [2 1])) (.equals (java.util.ArrayList. [1 2]) (L. [1 2])))
+						(deftype M [m] java.util.Map
+						  (size [_] (count m))
+						  (get [_ k] (get m k))
+						  (containsKey [_ k] (contains? m k))
+						  (entrySet [_] (set (seq m)))
+						  (isEmpty [_] (empty? m)))
+						(println (.get (java.util.HashMap. (M. {"a" 1})) "a")
+						         (.getOrDefault (java.util.Collections/unmodifiableMap (M. {"a" 1})) "z" :none))
+						""",
+				"""
+						ran
+						ran too
+						closed over
+						[1 2]
+						(1 2 3)
+						(:one :two) 1
+						1
+						:a false 1
+						true false
+						:done
+						a, b
+						x,y
+						true true 0
+						[user.Q@ff] [r]
+						5 a-b true true
+						1 :none
+						""");
+	}
+
+	// Oracle (clj 1.12.6, measured 2026-10-10): a TreeSet of a deftype implementing no
+	// Comparable throws the cast failure naming the type, an Object override or not; a
+	// face is Comparable only to say so.
+	@Test
+	void aTypeImplementingNoComparableRefusesATreeSetInTheOraclesWords() throws Exception {
+		assertBothEqual("""
+				(deftype T1 [a])
+				(deftype T2 [a] Object (toString [_] "custom"))
+				(deftype T3 [a] Runnable (run [_] nil))
+				(println (try (java.util.TreeSet. [(T1. 1) (T1. 2)]) (catch ClassCastException e (.getMessage e))))
+				(println (try (java.util.TreeSet. [(T2. 1) (T2. 2)]) (catch ClassCastException e (.getMessage e))))
+				(println (try (java.util.TreeSet. [(T3. 1)]) (catch ClassCastException e (.getMessage e))))
+				""", """
+				class user.T1 cannot be cast to class java.lang.Comparable
+				class user.T2 cannot be cast to class java.lang.Comparable
+				class user.T3 cannot be cast to class java.lang.Comparable
+				""");
+	}
+
 	// Oracle (clj 1.12.6, measured 2026-10-09): a keyword hashes as Keyword.hashCode and
 	// a
 	// symbol as Symbol.hashCode (Util.hashCombine of the name's and the namespace's

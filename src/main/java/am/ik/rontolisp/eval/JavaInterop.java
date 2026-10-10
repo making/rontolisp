@@ -871,43 +871,92 @@ final class JavaInterop {
 
 	}
 
-	// (java:reify "fully.qualified.Interface" "method" function ...): each function
-	// implements the one method its designator names (compiler/JavaImplementations.reify
-	// -- the rule a compiled program's generated class follows).
+	// (java:reify interfaces [:value v] [:class "c"] "method" function ...): each
+	// function implements the one method its designator names of the interfaces -- one
+	// name, or a list of them (compiler/JavaImplementations.reify -- the rule a compiled
+	// program's generated class follows) -- and with :value the object stands for v.
 	static LispVal reify(List<LispVal> args, Caller caller) {
-		int markers = JavaMarkers.count(args, 1);
+		JavaImplementations.ReifyParts shape = args.isEmpty() ? null : JavaImplementations.reifyParts(args, 0);
+		if (shape == null) {
+			throw new LispEvalException(JavaImplementations.REIFY_USAGE);
+		}
+		int markers = JavaMarkers.count(args, shape.firstDesignator());
 		if (markers > 0) {
 			// Java's false reaches the functions as |false| (:java-false).
-			return reify(args.subList(0, args.size() - markers), withMarkers(caller, JavaMarkers.of(args, 1)));
+			return reify(args.subList(0, args.size() - markers),
+					withMarkers(caller, JavaMarkers.of(args, shape.firstDesignator())));
 		}
-		if (args.isEmpty() || args.size() % 2 == 0 || !(args.get(0) instanceof LispString interfaceName)) {
+		List<String> names = interfaceNames(args.get(0));
+		if (names == null || (args.size() - shape.firstDesignator()) % 2 != 0) {
 			throw new LispEvalException(JavaImplementations.REIFY_USAGE);
+		}
+		StandIn standIn = null;
+		if (shape.value() >= 0) {
+			LispVal className = shape.className() >= 0 ? args.get(shape.className()) : LispNil.INSTANCE;
+			if (!(className instanceof LispString) && !(className instanceof LispNil)) {
+				throw new LispEvalException(JavaImplementations.REIFY_USAGE);
+			}
+			standIn = new StandIn(args.get(shape.value()),
+					className instanceof LispString given ? given.value() : null);
 		}
 		List<String> designators = new ArrayList<>();
 		List<LispVal> functions = new ArrayList<>();
-		for (int i = 1; i < args.size(); i += 2) {
+		for (int i = shape.firstDesignator(); i < args.size(); i += 2) {
 			if (!(args.get(i) instanceof LispString designator)) {
 				throw new LispEvalException(JavaImplementations.REIFY_USAGE);
 			}
 			designators.add(designator.value());
 			functions.add(args.get(i + 1));
 		}
-		ReflectiveJavaClasses.Type type = loadClass(interfaceName.value(), caller);
-		if (!type.isInterface()) {
-			throw new LispEvalException(JavaImplementations.notAnInterface(false, interfaceName.value()));
+		List<JavaType> types = new ArrayList<>();
+		List<Class<?>> classes = new ArrayList<>();
+		for (String name : names) {
+			ReflectiveJavaClasses.Type type = loadClass(name, caller);
+			if (!type.isInterface()) {
+				throw new LispEvalException(JavaImplementations.notAnInterface(false, name));
+			}
+			if (types.contains(type)) {
+				throw new LispEvalException(JavaImplementations.reifyRepeatedInterface(name));
+			}
+			types.add(type);
+			classes.add(type.type());
 		}
-		List<Object> key = List.of(type.type(), designators);
+		List<Object> key = List.of(classes, designators);
 		Dispatch dispatch = IMPLEMENTATIONS.get(key);
 		if (dispatch == null) {
 			try {
-				dispatch = new Dispatch(JavaImplementations.reify(type, designators, CLASSES));
+				dispatch = new Dispatch(JavaImplementations.reify(types, designators, CLASSES));
 			}
 			catch (IllegalArgumentException ex) {
 				throw new LispEvalException(String.valueOf(ex.getMessage()));
 			}
 			remember(IMPLEMENTATIONS, key, dispatch);
 		}
-		return implement(dispatch, functions, caller);
+		if (standIn != null) {
+			String conflict = JavaImplementations.standInConflict(dispatch.implementation.interfaces());
+			if (conflict != null) {
+				throw new LispEvalException(conflict);
+			}
+		}
+		return implement(dispatch, functions, caller, standIn);
+	}
+
+	// A java:reify's interfaces: one name, or a non-empty proper list of names; null for
+	// anything else.
+	private static @Nullable List<String> interfaceNames(LispVal value) {
+		if (value instanceof LispString name) {
+			return List.of(name.value());
+		}
+		List<String> names = value instanceof LispCons ? stringList(value) : null;
+		return names == null || names.isEmpty() ? null : names;
+	}
+
+	/**
+	 * How a {@code java:reify} given {@code :value} stands for it: the value every
+	 * unmarshal answers for the object ({@code runtime/RontoJavaValue}) and the class
+	 * Java's messages name it by, null for the object's own.
+	 */
+	private record StandIn(LispVal value, @Nullable String className) {
 	}
 
 	// A function passed where an interface is expected: the interface's java:proxy, or,
@@ -938,13 +987,23 @@ final class JavaInterop {
 
 	// The object: a Proxy whose handler dispatches on the implementation's slots.
 	private static LispVal implement(Dispatch dispatch, List<LispVal> functions, Caller caller) {
+		return implement(dispatch, functions, caller, null);
+	}
+
+	// The object, standing for a value when STAND_IN is given: a Proxy implementing
+	// runtime/RontoJavaValue too, which every unmarshal answers the value of.
+	private static LispVal implement(Dispatch dispatch, List<LispVal> functions, Caller caller,
+			@Nullable StandIn standIn) {
 		List<JavaType> types = dispatch.implementation.interfaces();
-		Class<?>[] interfaces = new Class<?>[types.size()];
-		for (int i = 0; i < interfaces.length; i++) {
+		Class<?>[] interfaces = new Class<?>[types.size() + (standIn != null ? 1 : 0)];
+		for (int i = 0; i < types.size(); i++) {
 			interfaces[i] = ((ReflectiveJavaClasses.Type) types.get(i)).type();
 		}
+		if (standIn != null) {
+			interfaces[types.size()] = RontoJavaValue.class;
+		}
 		return new LispJavaObject(Proxy.newProxyInstance(proxyLoader(interfaces), interfaces,
-				new ImplementationHandler(dispatch, functions, caller)));
+				new ImplementationHandler(dispatch, functions, caller, standIn)));
 	}
 
 	// The loader a Proxy class over the interfaces is defined in: the first of theirs
@@ -1069,10 +1128,18 @@ final class JavaInterop {
 		// (compiler/JavaImplementation.readsComparison).
 		private final boolean comparison;
 
+		// The value the object stands for (a java:reify given :value), or null.
+		private final @Nullable StandIn standIn;
+
 		ImplementationHandler(Dispatch dispatch, List<LispVal> functions, Caller caller) {
+			this(dispatch, functions, caller, null);
+		}
+
+		ImplementationHandler(Dispatch dispatch, List<LispVal> functions, Caller caller, @Nullable StandIn standIn) {
 			this.dispatch = dispatch;
 			this.functions = List.copyOf(functions);
 			this.caller = caller;
+			this.standIn = standIn;
 			this.javaFalse = caller.markers().javaFalse();
 			JavaImplementation marked = dispatch.implementation.withMarkers(caller.markers());
 			boolean reads = false;
@@ -1085,22 +1152,32 @@ final class JavaInterop {
 		@Override
 		public @Nullable Object invoke(Object p, Method method, @Nullable Object @Nullable [] methodArgs)
 				throws Throwable {
+			StandIn standing = this.standIn;
+			if (standing != null && method.getDeclaringClass() == RontoJavaValue.class) {
+				// runtime/RontoJavaValue: the value, and the class Java's messages name
+				return "value".equals(method.getName()) ? standing.value()
+						: standing.className() != null ? standing.className() : p.getClass().getName();
+			}
 			int index = this.dispatch.indexOf(method);
 			switch (index) {
 				case Dispatch.HASH_CODE -> {
-					return System.identityHashCode(p);
+					return standing != null ? RontoJavaValue.identityHash((RontoJavaValue) p)
+							: System.identityHashCode(p);
 				}
 				case Dispatch.EQUALS -> {
-					return p == (methodArgs == null ? null : methodArgs[0]);
+					Object other = methodArgs == null ? null : methodArgs[0];
+					return standing != null ? sameValue((RontoJavaValue) p, other) : p == other;
 				}
 				case Dispatch.TO_STRING -> {
-					return this.dispatch.implementation.defaultToString();
+					return standing != null ? RontoJavaValue.identityText((RontoJavaValue) p)
+							: this.dispatch.implementation.defaultToString();
 				}
 				case Dispatch.DEFAULT -> {
 					return InvocationHandler.invokeDefault(p, method, methodArgs);
 				}
-				case JavaImplementation.NONE -> throw new UnsupportedOperationException(
-						JavaImplementation.noImplementation(this.dispatch.ifaceName, Dispatch.keyOf(method)));
+				case JavaImplementation.NONE -> throw new UnsupportedOperationException(JavaImplementation
+					.noImplementation(this.dispatch.implementation.declaringName(Dispatch.keyOf(method)),
+							Dispatch.keyOf(method)));
 				default -> {
 				}
 			}
@@ -1144,9 +1221,11 @@ final class JavaInterop {
 			@Nullable Object[] slot = new @Nullable Object[1];
 			ReflectiveJavaClasses.Type returnType = ReflectiveJavaClasses.of(ret);
 			if (marshal(result, returnType, this.caller, slot, 0, false) == NO_MATCH) {
-				throw new LispEvalException(
-						JavaImplementation.returnMismatchPrefix(proxy) + result.print() + JavaImplementation
-							.returnMismatchSuffix(proxy, this.dispatch.ifaceName, method.getName(), returnType));
+				// a java:reify names the method's interface, a java:proxy all of its own
+				String iface = proxy ? this.dispatch.ifaceName
+						: this.dispatch.implementation.declaringName(Dispatch.keyOf(method));
+				throw new LispEvalException(JavaImplementation.returnMismatchPrefix(proxy) + result.print()
+						+ JavaImplementation.returnMismatchSuffix(proxy, iface, method.getName(), returnType));
 			}
 			return slot[0];
 		}
@@ -1177,6 +1256,13 @@ final class JavaInterop {
 			};
 		}
 
+	}
+
+	// RontoJavaValue.sameValue of an object compared with null (equals(null)), which the
+	// runtime interface cannot spell @Nullable.
+	@SuppressWarnings("NullAway")
+	private static boolean sameValue(RontoJavaValue self, @Nullable Object other) {
+		return RontoJavaValue.sameValue(self, other);
 	}
 
 	// A comparison's refusal (ImplementationHandler.comparison): the failure its

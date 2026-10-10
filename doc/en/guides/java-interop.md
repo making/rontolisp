@@ -38,7 +38,7 @@ The package is not part of Common Lisp, so its functions are referenced with the
 | `java:field` | Read a static or instance field: `(java:field class-or-obj "name")` |
 | `java:proxy` | Adapt a callable to one or more interfaces: `(java:proxy "iface"... callable)` |
 | `java:subclass` | Extend a class with a callable: `(java:subclass "super" '("iface"...) '("method"...) args... callable)` |
-| `java:reify` | Implement an interface one method at a time: `(java:reify "iface" "method" function ...)` |
+| `java:reify` | Implement interfaces one method at a time: `(java:reify "iface" "method" function ...)` |
 | `java:handle` | Stand for a Lisp value Java has no value of: `(java:handle value "text")` |
 | `java:view` | Stand for a Lisp collection as a read-only Java one: `(java:view value items :list)` |
 
@@ -202,7 +202,9 @@ does, the class and the hash. An `order` that is a function compares the value w
 object Java compares the handle with, by the sign of its answer, and a nil `order` makes the
 handle order nothing. `class` splits equality and order: handles of two classes are never
 equal and never compare, a `ClassCastException` naming both. A handle of a real number is a
-`java.lang.Number` of it ([java:handle](../reference/functions/java-handle.md)).
+`java.lang.Number` of it ([java:handle](../reference/functions/java-handle.md)). An object
+that stands for a value and implements interfaces too is a `java:reify` given `:value`
+([Implementing interfaces with java:reify](#implementing-interfaces-with-javareify)).
 
 ### Views: java:view
 
@@ -510,6 +512,12 @@ compiled program:
 - A function's value is converted to the method's return type as an argument is, except
   that a function is not made a proxy on the way back: return a `java:reify` or
   `java:proxy` object where an interface is expected.
+- A quoted list of interface names, `(java:reify '("I" "J") ...)`, makes one object
+  implementing each, a name designating a method of any of them.
+- `:value v` after the interfaces makes the object stand for `v`, as a
+  [handle](#handles-javahandle) does: Java hands it back as `v`, and unless named, its
+  `equals`, `hashCode` and `toString` are those of a handle with a nil hash, of the class
+  `:class` names.
 
 A compiled program implements each `java:reify` whose names are literal strings with a
 class generated for it (`Prog$Reify0.class`), so it needs no reflection: see [Compiling
