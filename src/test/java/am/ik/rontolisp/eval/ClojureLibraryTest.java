@@ -446,13 +446,23 @@ class ClojureLibraryTest {
 	void aProgramMakingNoByteArraySplicesTheLibraryWithoutItsByteArrayArms() {
 		// aget, aset, alength, bytes? and a String construction lower to the forms they
 		// lowered to before byte arrays, and the printer's, the seq view's and the byte
-		// streams' arms go: only a program that can hold a byte array keeps them
+		// streams' arms go: only a program that can hold a byte array keeps them -- one
+		// naming byte-array, or, where the host is, a java: operator, since a byte[] Java
+		// answers is one
 		assertThat(defun(ClojureLibrary.forms(), "RONTOLISP::%CLOJURE-WRITE"))
 			.contains("(RONTOLISP::%CLOJURE-BYTES-P X)");
-		List<LispVal> plain = Clojure.read("(def a (make-array String 2)) (aset a 0 \"x\")"
-				+ " (prn (aget a 0) (alength a) (bytes? a) (seq [1]) (String. \"s\"))"
-				+ " (with-open [o (clojure.java.io/output-stream \"f\")] (.write o 1))", null);
-		List<LispVal> processed = ClojureLibrary.process(plain);
+		String noHostCall = "(def a (make-array String 2)) (aset a 0 \"x\")"
+				+ " (prn (aget a 0) (alength a) (bytes? a) (seq [1]) (String. \"s\"))";
+		assertThat(defun(ClojureLibrary.process(Clojure.read(noHostCall, null), true), "RONTOLISP::%CLOJURE-WRITE"))
+			.doesNotContain("%CLOJURE-BYTES-P");
+		List<LispVal> plain = Clojure
+			.read(noHostCall + " (with-open [o (clojure.java.io/output-stream \"f\")] (.write o 1))", null);
+		// the stream's .write names java:call, whose answer may be a byte[] where the
+		// host
+		// is; compiled for wasm, where a java: call answers nothing, the arms go
+		assertThat(defun(ClojureLibrary.process(plain, true), "RONTOLISP::%CLOJURE-WRITE"))
+			.contains("(RONTOLISP::%CLOJURE-BYTES-P X)");
+		List<LispVal> processed = ClojureLibrary.process(plain, false);
 		assertThat(processed.stream()
 			.map(LispVal::print)
 			.filter(text -> !text.startsWith("(DEFUN ") && !text.startsWith("(DEFVAR ")))

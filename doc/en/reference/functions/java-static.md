@@ -32,3 +32,14 @@ back](../../guides/java-interop.md#javas-false-back-java-false)):
 ```lisp
 (java:static "java.lang.Boolean" "parseBoolean" "no" :java-false)   ; => |false|
 ```
+
+Ending it in `:octets` answers a `byte[]` as an `(unsigned-byte 8)` vector of its octets (the
+guide's [Octets back](../../guides/java-interop.md#octets-back-octets)); a
+[`:bytes` view](java-view.md) hands one to Java:
+
+```lisp
+(java:static "java.util.Arrays" "copyOf"
+             (java:view 'v (make-array 2 :element-type '(unsigned-byte 8) :initial-element 255) :bytes)
+             3 :octets)
+; => #(255 255 0)
+```

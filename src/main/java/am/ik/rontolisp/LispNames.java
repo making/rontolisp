@@ -7977,6 +7977,15 @@ public final class LispNames {
 	public static final String JAVA_FALSE_MARKER = ":JAVA-FALSE";
 
 	/**
+	 * The keyword a {@code java:new} / {@code java:call} / {@code java:static} /
+	 * {@code java:field} may end in, beside the other markers: a {@code byte[]} the form
+	 * answers -- its value, an element of an array it answers -- comes back as an
+	 * {@code (unsigned-byte 8)} vector of its octets rather than a list of signed bytes
+	 * ({@code compiler.JavaMarkers}).
+	 */
+	public static final String JAVA_OCTETS_MARKER = ":OCTETS";
+
+	/**
 	 * The name of the symbol {@code java:} passes as Java's {@code false} -- the
 	 * {@code boolean} false, and {@code Boolean.FALSE} where a reference is expected,
 	 * where {@code nil} is {@code null} -- and which a function called back from Java may
@@ -8037,6 +8046,8 @@ public final class LispNames {
 	 * The items -- a sequence, or for a {@code :map} a hash table or a plist -- converted
 	 * as {@code Object} arguments are its elements; its {@code toString} is the printer's
 	 * answer for the value; {@code java:} answers the value wherever Java hands it back.
+	 * A {@code :bytes} view is no collection: Java is handed the {@code byte[]} of its
+	 * items, an {@code (unsigned-byte 8)} vector ({@link #JAVA_VIEW_BYTES}).
 	 */
 	public static final String JAVA_VIEW = "VIEW";
 
@@ -8057,6 +8068,13 @@ public final class LispNames {
 
 	/** The {@code java:view} shape of a {@code java.util.Map}. */
 	public static final String JAVA_VIEW_MAP = ":MAP";
+
+	/**
+	 * The {@code java:view} shape of a {@code byte[]}: its items an
+	 * {@code (unsigned-byte 8)} vector, which Java is handed as a {@code byte[]} of its
+	 * octets wherever a {@code byte[]} fits.
+	 */
+	public static final String JAVA_VIEW_BYTES = ":BYTES";
 
 	/**
 	 * The {@code java:} operators, qualified. A program naming none of them holds no host

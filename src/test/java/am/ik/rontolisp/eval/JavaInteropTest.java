@@ -723,6 +723,21 @@ class JavaInteropTest {
 		assertThat(output(JavaInteropPrograms.JAVA_VIEW_PROGRAM)).isEqualTo(JavaInteropPrograms.JAVA_VIEW_OUTPUT);
 	}
 
+	// Mirrors
+	// JvmJavaInteropCompilerTest#aCallEndingInOctetsAnswersAByteArrayAsAnOctetVector.
+	// Before: every byte[] Java answered was a list of signed bytes.
+	@Test
+	void aCallEndingInOctetsAnswersAByteArrayAsAnOctetVector() {
+		assertThat(output(JavaInteropPrograms.OCTETS_PROGRAM)).isEqualTo(JavaInteropPrograms.OCTETS_OUTPUT);
+	}
+
+	// Mirrors JvmJavaInteropCompilerTest#aBytesViewIsTheByteArrayJavaStoresInto. Here the
+	// array Java is handed is the vector's own storage.
+	@Test
+	void aBytesViewIsTheByteArrayJavaStoresInto() {
+		assertThat(output(JavaInteropPrograms.BYTES_VIEW_PROGRAM)).isEqualTo(JavaInteropPrograms.BYTES_VIEW_OUTPUT);
+	}
+
 	@Test
 	void proxyOnNonInterfaceSignals() {
 		assertThatThrownBy(() -> eval("(java:proxy \"java.lang.String\" (lambda (m) nil))"))

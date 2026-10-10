@@ -73,6 +73,24 @@ final class ClojureInteropLowering {
 	 * @return the call
 	 */
 	static LispVal hostCall(ClojureLowering ctx, LispSymbol operator, List<LispVal> parts, int names) {
+		return hostCall(ctx, operator, parts, names, false);
+	}
+
+	/**
+	 * {@link #hostCall(ClojureLowering, LispSymbol, List, int)} whose answer may carry a
+	 * {@code byte[]} ({@link #carriesBytes}): where the host is, such a call ends in
+	 * {@code :octets} too and its answer goes through {@link #HOST_ANSWER}, so a
+	 * {@code byte[]} -- the answer, or one an array it answers holds -- is a byte array,
+	 * as the oracle's {@code byte[]} is one. A call whose answer the lowering knows to
+	 * carry none stays as it was, so the site keeps resolving on its declared type.
+	 * @param ctx the hub
+	 * @param operator the {@code java:} operator
+	 * @param parts the names and the arguments
+	 * @param names how many leading parts are names, not arguments
+	 * @param bytes whether the answer may carry a {@code byte[]}
+	 * @return the call
+	 */
+	static LispVal hostCall(ClojureLowering ctx, LispSymbol operator, List<LispVal> parts, int names, boolean bytes) {
 		List<LispVal> crossed = ClojureIoLowering.crossing(operator, parts, names);
 		List<LispVal> ended = new ArrayList<>(parts.size() + 2);
 		ended.addAll(crossed.subList(0, names));
@@ -91,7 +109,100 @@ final class ClojureInteropLowering {
 			ended.add(new LispSymbol(LispNames.JAVA_FUNCTIONAL_MARKER));
 		}
 		ended.add(JAVA_FALSE_MARKER);
-		return ClojureLowerUtil.cons(operator, ended);
+		return answered(ctx, operator, ended, bytes);
+	}
+
+	/**
+	 * The library function a host call's answer goes through where it may carry a
+	 * {@code byte[]} ({@code clojure.lisp}): an {@code (unsigned-byte 8)} vector -- what
+	 * a {@code byte[]} is at a call ending in {@code :octets} -- becomes a byte array,
+	 * and so does one an array the call answers holds; anything else is itself.
+	 */
+	static final String HOST_ANSWER = "RONTOLISP::%CLOJURE-HOST-ANSWER";
+
+	/** The marker a call answering through {@link #HOST_ANSWER} ends in too. */
+	static final LispSymbol OCTETS_MARKER = new LispSymbol(LispNames.JAVA_OCTETS_MARKER);
+
+	// The java: call over its ended parts, answering through HOST_ANSWER with :octets
+	// where the host is and its answer may carry a byte[].
+	private static LispVal answered(ClojureLowering ctx, LispSymbol operator, List<LispVal> ended, boolean bytes) {
+		if (!bytes || !ctx.hostTarget) {
+			return ClojureLowerUtil.cons(operator, ended);
+		}
+		List<LispVal> marked = new ArrayList<>(ended);
+		marked.add(OCTETS_MARKER);
+		return ClojureLowerUtil.list(new LispSymbol(HOST_ANSWER), ClojureLowerUtil.cons(operator, marked));
+	}
+
+	/**
+	 * Whether a value of a member's declared type may carry a {@code byte[]} into the
+	 * program: {@code byte[]} itself, a type every array is ({@code Object},
+	 * {@code Cloneable}, {@code Serializable}), or an array whose elements may.
+	 * @param type the declared type
+	 * @return whether the value may be or hold a {@code byte[]}
+	 */
+	static boolean carriesBytes(Class<?> type) {
+		if (type.isArray()) {
+			return type == byte[].class || carriesBytes(type.getComponentType());
+		}
+		return type == Object.class || type == Cloneable.class || type == java.io.Serializable.class;
+	}
+
+	/**
+	 * Whether a call of the member at this count may answer a {@code byte[]}: true unless
+	 * the class loads and every public method of the name the call may choose -- static
+	 * ones only for a static call -- declares a type that carries none
+	 * ({@link #carriesBytes}). An unknown class or member may answer anything.
+	 * @param className the class, or null when the receiver's class is unknown
+	 * @param designator the member, perhaps tagged ({@code m(T1,T2)})
+	 * @param arity the argument count
+	 * @param statics whether the call is a static one
+	 * @return whether the answer may carry a {@code byte[]}
+	 */
+	static boolean answersBytes(@Nullable String className, String designator, int arity, boolean statics) {
+		if (className == null) {
+			return true;
+		}
+		int tagged = designator.indexOf('(');
+		String member = tagged < 0 ? designator : designator.substring(0, tagged);
+		try {
+			Class<?> found = ClojureHostClasses.load(className);
+			boolean seen = false;
+			for (java.lang.reflect.Method method : found.getMethods()) {
+				if (!method.getName().equals(member)
+						|| statics && !java.lang.reflect.Modifier.isStatic(method.getModifiers())) {
+					continue;
+				}
+				int count = method.getParameterCount();
+				if (count != arity && !(method.isVarArgs() && count - 1 <= arity)) {
+					continue;
+				}
+				seen = true;
+				if (carriesBytes(method.getReturnType())) {
+					return true;
+				}
+			}
+			return !seen;
+		}
+		catch (ReflectiveOperationException | LinkageError | SecurityException _) {
+			return true;
+		}
+	}
+
+	/**
+	 * Whether a static field's value may carry a {@code byte[]}: true unless the class
+	 * loads and has the public field, of a type that carries none.
+	 * @param className the class
+	 * @param field the field
+	 * @return whether its value may carry a {@code byte[]}
+	 */
+	static boolean fieldCarriesBytes(String className, String field) {
+		try {
+			return carriesBytes(ClojureHostClasses.load(className).getField(field).getType());
+		}
+		catch (ReflectiveOperationException | LinkageError | SecurityException _) {
+			return true;
+		}
 	}
 
 	/**
@@ -214,6 +325,20 @@ final class ClojureInteropLowering {
 	 */
 	static LispVal fieldCall(LispVal target, String field) {
 		return ClojureLowerUtil.cons(JAVA_FIELD, List.of(target, LispString.literal(field), JAVA_FALSE_MARKER));
+	}
+
+	/**
+	 * {@link #fieldCall(LispVal, String)} whose value may carry a {@code byte[]}: where
+	 * the host is, ended in {@code :octets} too and answering through
+	 * {@link #HOST_ANSWER}.
+	 * @param ctx the hub
+	 * @param target the class name literal or the object form
+	 * @param field the field name
+	 * @param bytes whether the value may carry a {@code byte[]}
+	 * @return the read
+	 */
+	static LispVal fieldCall(ClojureLowering ctx, LispVal target, String field, boolean bytes) {
+		return answered(ctx, JAVA_FIELD, List.of(target, LispString.literal(field), JAVA_FALSE_MARKER), bytes);
 	}
 
 	/**
@@ -854,7 +979,7 @@ final class ClojureInteropLowering {
 		call.add(LispString.literal(cls));
 		call.add(LispString.literal(designator));
 		call.addAll(args);
-		return hostCall(ctx, JAVA_STATIC, call, 2);
+		return hostCall(ctx, JAVA_STATIC, call, 2, answersBytes(cls, designator, args.size(), true));
 	}
 
 	/**
@@ -871,9 +996,10 @@ final class ClojureInteropLowering {
 			return timeValue;
 		}
 		if (staticMember(cls, member).arities().contains(0)) {
-			return hostCall(ctx, JAVA_STATIC, List.of(LispString.literal(cls), LispString.literal(member)), 2);
+			return hostCall(ctx, JAVA_STATIC, List.of(LispString.literal(cls), LispString.literal(member)), 2,
+					answersBytes(cls, member, 0, true));
 		}
-		return fieldCall(LispString.literal(cls), member);
+		return fieldCall(ctx, LispString.literal(cls), member, fieldCarriesBytes(cls, member));
 	}
 
 	/**
@@ -927,7 +1053,7 @@ final class ClojureInteropLowering {
 		}
 		ClojureLowering.StaticMember seen = staticMember(cls, member);
 		if (seen.field()) {
-			return fieldCall(LispString.literal(cls), member);
+			return fieldCall(ctx, LispString.literal(cls), member, fieldCarriesBytes(cls, member));
 		}
 		if (!seen.arities().isEmpty()) {
 			return arityLambda(ctx, seen.arities(), name, args -> staticCall(ctx, cls, member, args));
@@ -935,7 +1061,7 @@ final class ClojureInteropLowering {
 		if (seen.variadic()) {
 			throw new LispReadException(name + " is variadic and has no value form");
 		}
-		return fieldCall(LispString.literal(cls), member);
+		return fieldCall(ctx, LispString.literal(cls), member, fieldCarriesBytes(cls, member));
 	}
 
 	/**
@@ -1310,7 +1436,7 @@ final class ClojureInteropLowering {
 						ClojureLowerUtil.list(miss,
 								ClojureLowerUtil.list(ClojureLowerUtil.sym("list"), ClojureLowering.NIL_CONST)))),
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), ClojureProtocolLowering.isTypedForm(one), read,
-						fieldCall(one, field)));
+						fieldCall(ctx, one, field, true)));
 	}
 
 	/**
@@ -1603,7 +1729,7 @@ final class ClojureInteropLowering {
 		for (LispVal arg : items.subList(2, items.size())) {
 			args.add(ctx.lower(arg));
 		}
-		return hostCall(ctx, JAVA_CALL, args, 2);
+		return hostCall(ctx, JAVA_CALL, args, 2, true);
 	}
 
 	/**
@@ -1655,8 +1781,6 @@ final class ClojureInteropLowering {
 		direct.add(recv);
 		direct.add(LispString.literal(designator));
 		direct.addAll(args);
-		LispVal hostCall = hostCall(ctx, JAVA_CALL, direct, 2);
-		LispVal call = hostCall;
 		String cls = knownClass;
 		if (cls == null) {
 			cls = constructedClass(receiver);
@@ -1664,6 +1788,8 @@ final class ClojureInteropLowering {
 				cls = hostClassOf(ctx, ref);
 			}
 		}
+		LispVal hostCall = hostCall(ctx, JAVA_CALL, direct, 2, answersBytes(cls, designator, args.size(), false));
+		LispVal call = hostCall;
 		if (cls != null && ClojureTimeValueLowering.CLASSES.contains(cls)) {
 			// a Date, Timestamp or UUID may be a value made here: the value arms take it
 			cls = null;

@@ -40,8 +40,9 @@ import org.jspecify.annotations.Nullable;
  * @param markers the keywords the site ends in ({@link JavaMarkers}): {@code :functional}
  * -- a function argument converted to an interface implements it by its arguments
  * ({@link JavaImplementations#functional}), not as a {@code java:proxy} called with the
- * method's name first -- and {@code :java-false} -- Java's {@code false} comes back as
- * {@code |false|}, which {@link #result} counts on
+ * method's name first -- {@code :java-false} -- Java's {@code false} comes back as
+ * {@code |false|}, which {@link #result} counts on -- and {@code :octets} -- a
+ * {@code byte[]} the site answers comes back as an {@code (unsigned-byte 8)} vector
  */
 public record JavaSite(Operator operator, @Nullable String staticClass, @Nullable String designator,
 		@Nullable JavaExecutable executable, @Nullable JavaField field, boolean packed, JavaStaticType result,
@@ -97,6 +98,13 @@ public record JavaSite(Operator operator, @Nullable String staticClass, @Nullabl
 	 */
 	public boolean javaFalse() {
 		return this.markers.javaFalse();
+	}
+
+	/**
+	 * @return whether the site ends in {@code :octets}
+	 */
+	public boolean octets() {
+		return this.markers.octets();
 	}
 
 	/** The {@code java:} operators a site can be. */

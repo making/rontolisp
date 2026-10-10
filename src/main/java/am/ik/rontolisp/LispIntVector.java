@@ -84,7 +84,10 @@ public final class LispIntVector implements LispVal {
 	/**
 	 * Wraps {@code octets} as an {@code (unsigned-byte 8)} vector WITHOUT copying: the
 	 * vector owns the array from here on, so the caller must not write it again. This is
-	 * how a body, a file's bytes or a digest crosses from Java into a program at no cost.
+	 * how a body, a file's bytes or a digest crosses from Java into a program at no cost
+	 * -- and how a {@code byte[]} a {@code java:} call ending in {@code :octets} answers
+	 * does, where a Java object that kept the array writing it again is the point: the
+	 * vector reads what it stores.
 	 * @param octets the octets
 	 * @return the vector over them
 	 */

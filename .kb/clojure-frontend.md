@@ -2333,7 +2333,11 @@ namespace` but the ones no measured library names (`inspector`, `java.browse`,
   (`-v`), `.getBytes`, the byte streams' `readAllBytes`, `readNBytes`, `toByteArray`, the
   `ByteArrayInputStream`/`ByteArrayOutputStream` constructions, ring's base64 decode kernel and
   the HTTP client's request kernel (`:as` may name `:bytes` at run time); a host boundary's
-  answer (`%clojure-bytes-from-host`, the WIT descriptor `:BYTE-ARRAY`). Measured 2026-10-09
+  answer (`%clojure-bytes-from-host`, the WIT descriptor `:BYTE-ARRAY`); and, where the host is
+  (f13), every `java:` operator: `Family.hostProducers`, counted by `ClojureArms.scan(forms,
+  family, hostTarget)` from `ClojureLibrary.splice`, since any host call may answer a `byte[]`
+  and any host collection hold one (the library's host reads wrap too). On wasm a `java:` call
+  makes nothing, so the java: operators do not count there. Measured 2026-10-09
   against origin/develop 8e24b7237 (wasm P1 / component / JVM class): `demo.clj`,
   `ring-hello.clj`, `greeter.clj`, an array program and a string program byte-identical; a
   clojure.java.io program making no byte array 254,262 -> 254,184 / 262,347 -> 262,262 /
@@ -2357,12 +2361,19 @@ namespace` but the ones no measured library names (`inspector`, `java.browse`,
 - **Consumers elsewhere**: `slurp` of a byte array (UTF-8), `io/input-stream`, `io/reader` and
   `io/copy` of one; the Ring adapter's body; the HTTP client ("HTTP client"); ring-codec's
   base64 ("Ring util namespaces"); `clojure.java.shell`'s `:in` and `:out-enc :bytes`
-  ("clojure.jar namespaces"); a `java:` member's argument ("Java interop": a `:list` view);
-  `rontolisp.wasm`'s `:bytes` and a WIT `list<u8>` ("Host boundary").
+  ("clojure.jar namespaces", now `.toByteArray` as it comes back); a `java:` member's argument
+  ("Java interop": a `:bytes` view, the `byte[]` itself); `rontolisp.wasm`'s `:bytes` and a WIT
+  `list<u8>` ("Host boundary").
 - **Deviations** (user docs `byte-array.md`, `deviations.md`): the hash-less `#object` and
   `str`; `class` a keyword; `aset` of any in-range integer; a seq a snapshot of the elements
   (the oracle's `ArraySeq` reads the array as it walks: `(1 9 3)` there, `(1 2 3)` here after
-  an `aset` between `seq` and the print); a `byte[]` Java answers a list (todo `f13`).
+  an `aset` between `seq` and the print); on the JVM Java holds a copy of the octets, written
+  back when the member returns, so an array a Java object keeps (`ByteBuffer/wrap`, `.array`)
+  is the byte array only on the interpreter
+  (`ClojureInteropTest#anArrayJavaKeepsIsTheByteArrayItselfOnlyOnTheInterpreter` pins both;
+  todo `f25`); a `byte[]` coming back is a new byte array, never
+  `identical?` to one that went out; a `byte[]` a `proxy` / `reify` method or a fn is handed is
+  still a list (`:octets` reads only answers; todo `f24`).
 - **Pins**: clojure-spec `byte-array-makes-a-mutable-array-of-signed-bytes`,
   `a-byte-array-is-no-collection-yet-seqs-its-bytes`,
   `strings-and-byte-arrays-convert-in-a-charset`,
@@ -2375,7 +2386,10 @@ namespace` but the ones no measured library names (`inspector`, `java.browse`,
   `ClojureArmsTest#theByteArrayFamilyFoldsItsArmsAliasesAndSetterToTheFormsBeforeByteArrays`,
   `ClojureLibraryTest#aProgramMakingNoByteArraySplicesTheLibraryWithoutItsByteArrayArms`,
   `ClojureInteropTest#aByteArrayCrossesTheJavaBoundaryAsItsBytes`,
-  `#clojureJavaShellRunsAHostProcessLikeTheOracle`, `ClojureRingAdapterTest` (`/bytes`).
+  `#aByteArrayAJavaMemberAnswersIsAByteArray`, `#aByteArrayReachesJavaAsTheByteArrayJavaStoresInto`,
+  `#clojureJavaShellRunsAHostProcessLikeTheOracle`, `ClojureRingAdapterTest` (`/bytes`),
+  `ClojureLibraryTest#aProgramMakingNoByteArraySplicesTheLibraryWithoutItsByteArrayArms` (a
+  `java:call` keeps the arms on a host target, not on wasm).
 
 ## Transients
 
@@ -3679,10 +3693,10 @@ The `java:` surface (`.kb/java-interop.md`); interpreter and JVM only -- wasm co
   (`%clojure-str-of x "nil" nil`, the `.toString` here), of the oracle's class name
   (`%clojure-class-name-of`), its members converted alike (`%clojure-host-members`: the
   collection itself when every member is plain);
-  a Date/Timestamp/UUID the host object (`%clojure-time-value-host`); a byte array a `:list`
-  view of its elements as Java's bytes, of class `[B` (e81, the byte-array family's arm),
-  which converts where a member takes a `byte[]` (`Arrays/hashCode` of `[-61]` answers the
-  `byte[]` overload's `-30`, measured 2026-10-09) -- a String construction's arguments go
+  a Date/Timestamp/UUID the host object (`%clojure-time-value-host`); a byte array a `:bytes`
+  view of its octets (f13, the byte-array family's arm; e81's `:list` view of its signed
+  elements before): Java gets the `byte[]` wherever one fits, `Object` included, and its stores
+  come back (`.kb/java-interop.md`, "Handles and views") -- a String construction's arguments go
   through the family's alias `%clojure-bytes-host-value` instead, so a byte array reaches
   `%clojure-string-new` as itself; a host object itself;
   anything else -- a fn, an atom, a deftype, a reify, a pattern, a var, a condition inside a
@@ -3723,6 +3737,26 @@ The `java:` surface (`.kb/java-interop.md`); interpreter and JVM only -- wasm co
   `#aSetAKeywordAndARecordCrossTheJavaBoundaryAsTheOraclesDo`,
   `#aKeywordOrSymbolHashesAndSortsInJavaAsTheOraclesDo`,
   `ClojureLoweringTest#aHostArgumentThatMayHoldAValueJavaLacksGoesThroughTheHostValue`.
+- A `byte[]` a member answers is a byte array (f13, 2026-10-10): a host call whose answer may
+  carry one ends in `:octets` and answers through `%clojure-host-answer` (an `(unsigned-byte 8)`
+  vector -> `%clojure-bytes-of`, uncopied; a list -- a Java array -- mapped when it holds one at
+  any depth, keyword-headed lists being Clojure wrappers; else itself, identity kept).
+  `ClojureInteropLowering.hostCall(..., bytes)` / `fieldCall(ctx, ...)` decide by `answersBytes`
+  / `fieldCarriesBytes`: false only when the class loads and every public method of the name the
+  call may choose (static only for a static call; at the arity, a variadic one counting) or the
+  field declares a type that `carriesBytes` none of (`byte[]`, `Object`, `Cloneable`,
+  `Serializable`, or an array of one). Unknown receivers wrap: their answer is a `let`/`if` the
+  resolver types UNKNOWN anyway; a static call, a field and a known-class instance call that
+  carry none stay bare, so the next site keeps resolving on the declared type. Constructions
+  never wrap; `unmappedArm`'s calls and `proxy-super` always; the time-value and io member calls
+  do not. The library's host reads do the same (`%clojure-host-seq`'s `toArray`, entries and
+  `next`, `%clojure-host-get`/`-find`/`-entries`, a Future's `get`, `%clojure-iter-next`).
+  `clojure.java.shell`'s `:out-enc :bytes` takes `.toByteArray` as it comes. Before, measured
+  2026-10-09 against clj 1.12.6: `(bytes? (.toByteArray o))` false, `(alength (.digest md))`
+  an `ARRAY-DIMENSIONS` type error, `(.read in buf)` / `.nextBytes` left `buf` zeros (a copy),
+  `System/arraycopy` refused the `List`, `Objects/toString` answered `[B` (the view's printer);
+  after, oracle-identical on the interpreter and the JVM (`aByteArrayAJavaMemberAnswersIsAByteArray`,
+  `aByteArrayReachesJavaAsTheByteArrayJavaStoresInto`).
 - A fn receiver is the oracle's `AFunction` (`ClojureValueMethodLowering.functionRows`; the
   value gate `%clojure-value-receiver-p` takes `functionp`): `invoke` of 0..20 arguments and
   `applyTo` for any `ifn?` value, `call`, `run` (nil), and `compare` on a fn through

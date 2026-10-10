@@ -22,3 +22,6 @@ rather than `nil` (the guide's [Java's false back](../../guides/java-interop.md#
 ```lisp
 (java:field "java.lang.Boolean" "FALSE" :java-false)   ; => |false|
 ```
+
+Ending it in `:octets` answers a `byte[]` field as an `(unsigned-byte 8)` vector of its
+octets (the guide's [Octets back](../../guides/java-interop.md#octets-back-octets)).

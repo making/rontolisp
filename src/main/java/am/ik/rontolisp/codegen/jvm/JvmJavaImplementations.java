@@ -184,7 +184,7 @@ final class JvmJavaImplementations {
 	 */
 	static final List<String> VIEW_RUNTIME_CLASS_FILES = List.of("am/ik/rontolisp/runtime/RontoJavaListView.class",
 			"am/ik/rontolisp/runtime/RontoJavaVectorView.class", "am/ik/rontolisp/runtime/RontoJavaSetView.class",
-			"am/ik/rontolisp/runtime/RontoJavaMapView.class");
+			"am/ik/rontolisp/runtime/RontoJavaMapView.class", "am/ik/rontolisp/runtime/RontoJavaBytesView.class");
 
 	/** The internal name of {@code runtime/RontoJavaCalls}. */
 	static final String CALLS_INTERFACE = "am/ik/rontolisp/runtime/RontoJavaCalls";

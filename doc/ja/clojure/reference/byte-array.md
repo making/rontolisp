@@ -9,6 +9,7 @@ Java の `byte[]` にあたるバイト配列を返します。`size` 個の 0�
 （[aset](aset.md)、[aset-byte](aset-byte.md)）。コレクションではありませんが（`coll?` と `vector?`
 は false、`=` は同一性）、要素の seq になるので、`count`、`seq`、`vec`、`nth`、`get` と seq の
 関数が受け付けます。オラクルの `#object["[B" ...]` から識別ハッシュを除いた形で印字します。
+インタプリタと JVM では、Java のメンバとの間で双方向に `byte[]` として扱われます（[interop](interop.md)）。
 値としては 1 引数か 2 引数の関数です。
 
 ```clojure

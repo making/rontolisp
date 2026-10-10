@@ -3,7 +3,8 @@
 `(java:view value items shape &optional printer order class)`
 
 Makes a read-only Java collection that stands for `value`: its elements are `items`
-converted as `Object` arguments are, once, when it is made. `shape` is a keyword:
+converted as `Object` arguments are, once, when it is made -- or, with `:bytes`, the
+`byte[]` an octet vector is to Java. `shape` is a keyword:
 
 | `shape` | Java object | `items` |
 |---------|-------------|---------|
@@ -11,6 +12,7 @@ converted as `Object` arguments are, once, when it is made. `shape` is a keyword
 | `:vector` | a `java.util.List` that is also `RandomAccess` and `Comparable` | a proper list or a vector |
 | `:set` | a `java.util.Set`, a repeated element once | a proper list or a vector |
 | `:map` | a `java.util.Map` | a hash table, or a plist |
+| `:bytes` | none: the `byte[]` of the octets | an `(unsigned-byte 8)` vector |
 
 Java reads it through those interfaces: `equals` and `hashCode` follow their contracts, and
 every write throws `UnsupportedOperationException`. Its `toString` is what `(printer value)`
@@ -50,10 +52,29 @@ else.
 ; => ("[1, 2]" 1)
 ```
 
-A `shape` that is none of the four, `items` that are no sequence (a `:map`'s no hash table or
-plist of even length), a `printer` that is no function or nil, an `order` that is no
-function or nil (a function only for a `:vector`), or a `class` that is no string or nil is
-an error: `java:view expects (java:view value items :list|:vector|:set|:map [printer [order
-["class"]]]), got :TREE`; an item that converts to no `Object` is `java:view: no Java value
-for X`. The object is of an `am.ik.rontolisp.runtime.RontoJava*View` class, which the
+A `:bytes` view is no collection, and Java never holds it: wherever a `byte[]` fits -- a
+`byte[]` parameter, an `Object`, `Cloneable` or `Serializable` one, an element of another
+view -- Java is handed the `byte[]` of its octets, and nowhere else does the view convert.
+On the interpreter that array is the vector's own storage, so what Java stores into it, then
+or later, the vector holds. A compiled program's octet vector stores its octets after a
+width, so Java is handed a copy, which the call writes back into the vector when it returns:
+the vector holds what Java stored during the call, not what a Java object that kept the
+array stores later. A vector handed twice to one call is one array to Java. Its `printer` and
+`class` are not used. A `byte[]` comes back as an octet vector at a call ending in
+[`:octets`](java-call.md).
+
+```lisp
+(let* ((b (make-array 4 :element-type '(unsigned-byte 8)))
+       (v (java:view b b :bytes)))
+  (java:call (java:new "java.util.Random" 42) "nextBytes" v)
+  (list b (java:static "java.util.Arrays" "toString" v)))
+; => (#(53 157 65 186) "[53, -99, 65, -70]")
+```
+
+A `shape` that is none of the five, `items` that are no sequence (a `:map`'s no hash table or
+plist of even length, a `:bytes` view's no `(unsigned-byte 8)` vector), a `printer` that is
+no function or nil, an `order` that is no function or nil (a function only for a `:vector`),
+or a `class` that is no string or nil is an error: `java:view expects (java:view value items
+:list|:vector|:set|:map|:bytes [printer [order ["class"]]]), got :TREE`; an item that converts
+to no `Object` is `java:view: no Java value for X`. The object is of an `am.ik.rontolisp.runtime.RontoJava*View` class, which the
 interpreter uses too and a compiled program ships beside it, made with no reflection.

@@ -9,6 +9,7 @@ end). An element reads back as a signed byte, `-128` to `127`. The array is muta
 ([aset](aset.md), [aset-byte](aset-byte.md)); it is no collection (`coll?` and `vector?` are
 false, `=` is identity) but seqs its elements, so `count`, `seq`, `vec`, `nth`, `get` and the
 seq functions take it. It prints as the oracle's `#object["[B" ...]` without the identity hash.
+On the interpreter and the JVM it is a Java member's `byte[]`, both ways ([interop](interop.md)).
 As a value a function of one or two arguments.
 
 ```clojure

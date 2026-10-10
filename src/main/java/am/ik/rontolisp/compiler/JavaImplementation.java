@@ -32,7 +32,8 @@ import org.jspecify.annotations.Nullable;
  * ({@link JavaMarkers}): with {@code :java-false} an argument Java hands a slot's
  * function answers Java's {@code false} as {@code |false|}; with {@code :functional} too,
  * a function implementing {@code java.util.Comparator} may answer a boolean
- * ({@link #readsComparison})
+ * ({@link #readsComparison}); {@code :octets} reads what a call answers, never what Java
+ * hands a function, so an implementation keeps none ({@link JavaMarkers#callbacks})
  * @param standIn how a {@code java:reify} given {@code :value} stands for its value, or
  * {@code null} for an object that stands for none
  */
@@ -43,11 +44,12 @@ public record JavaImplementation(boolean proxy, List<JavaType> interfaces, List<
 	public static final int NONE = -1;
 
 	/**
-	 * Copies the interfaces and the slots.
+	 * Copies the interfaces and the slots, and keeps the markers a function reads.
 	 */
 	public JavaImplementation {
 		interfaces = List.copyOf(interfaces);
 		slots = List.copyOf(slots);
+		markers = markers.callbacks();
 	}
 
 	/**

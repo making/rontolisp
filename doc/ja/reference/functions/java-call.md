@@ -30,3 +30,12 @@
 (java:call (java:new "java.util.ArrayList" (list 1)) "isEmpty" :java-false)
 ; => |false|
 ```
+
+ほかのマーカーと並べて `:octets` で終えると、`byte[]` (結果、または返した配列の要素) を、符号付きバイトのリストではなく、そのオクテットを持つ `(unsigned-byte 8)` のベクタとして返します (ガイドの[バイト列を受け取る](../../guides/java-interop.md#octets-back-octets))。
+
+```lisp
+(let ((o (java:new "java.io.ByteArrayOutputStream")))
+  (java:call o "write" 200)
+  (list (java:call o "toByteArray") (java:call o "toByteArray" :octets)))
+; => ((-56) #(200))
+```

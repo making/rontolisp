@@ -88,7 +88,7 @@
             (java.nio.file.Files/copy (.toPath err-file) err)
             {:exit exit
              :out (if (= out-enc :bytes)
-                    (byte-array (.toByteArray out))
+                    (.toByteArray out)
                     (.toString out out-enc))
              :err (.toString err (.name (java.nio.charset.Charset/defaultCharset)))})))
       (finally

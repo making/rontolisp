@@ -45,3 +45,14 @@ back](../../guides/java-interop.md#javas-false-back-java-false)):
 (java:call (java:new "java.util.ArrayList" (list 1)) "isEmpty" :java-false)
 ; => |false|
 ```
+
+Ending the call in `:octets`, beside the other markers, answers a `byte[]` -- the result, or
+an element of an array it answers -- as an `(unsigned-byte 8)` vector of its octets rather
+than a list of signed bytes (the guide's [Octets back](../../guides/java-interop.md#octets-back-octets)):
+
+```lisp
+(let ((o (java:new "java.io.ByteArrayOutputStream")))
+  (java:call o "write" 200)
+  (list (java:call o "toByteArray") (java:call o "toByteArray" :octets)))
+; => ((-56) #(200))
+```

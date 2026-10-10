@@ -62,12 +62,12 @@ public final class JavaImplementations {
 
 	/**
 	 * The error a {@code java:view} call raises -- with {@code ", got X"} for the first
-	 * argument it refuses: a shape that is none of the four, a printer that is no
+	 * argument it refuses: a shape that is none of the five, a printer that is no
 	 * function or nil, an order that is no function (a {@code :vector}'s) or nil, a class
 	 * that is no string or nil, items that are no sequence ({@code :map}'s no hash table
-	 * or plist).
+	 * or plist, {@code :bytes}' no {@code (unsigned-byte 8)} vector).
 	 */
-	public static final String VIEW_USAGE = "java:view expects (java:view value items :list|:vector|:set|:map"
+	public static final String VIEW_USAGE = "java:view expects (java:view value items :list|:vector|:set|:map|:bytes"
 			+ " [printer [order [\"class\"]]])";
 
 	/** The error of a {@code java:view} item that converts to no {@code Object}. */
@@ -632,7 +632,7 @@ public final class JavaImplementations {
 			}
 		}
 		return new JavaImplementation(false, List.of(iface), slots, null, null,
-				new JavaMarkers(true, markers.javaFalse()));
+				new JavaMarkers(true, markers.javaFalse(), false));
 	}
 
 	/**

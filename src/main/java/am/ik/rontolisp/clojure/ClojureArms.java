@@ -786,7 +786,9 @@ public final class ClojureArms {
 		 * {@code aget}, {@code aset}, {@code alength}, a {@code java:} member's argument,
 		 * {@code String.} and the byte consumers of clojure.java.io, the Ring adapter and
 		 * the HTTP client read: only {@code byte-array}, {@code .getBytes} and the
-		 * readers answering one ({@link ClojureBytesLowering#PRODUCERS}) make one. The
+		 * readers answering one ({@link ClojureBytesLowering#PRODUCERS}) make one -- and,
+		 * where the host is, any {@code java:} operator, since a {@code byte[]} Java
+		 * answers, or a host collection holds, is one ({@link #hostProducers}). The
 		 * aliases are {@code aget}, {@code alength}, {@code bytes?} and a {@code String}
 		 * construction, each to the form it lowered to before byte arrays, and the setter
 		 * {@code aset}'s. Ahead of {@link #HOST}: the construction's alias is
@@ -794,7 +796,7 @@ public final class ClojureArms {
 		 */
 		BYTES("byte-array", Set.of(ClojureBytesLowering.BYTES_P, ClojureBytesLowering.ARRAY_STREAM_P), Set.of(),
 				ClojureBytesLowering.ALIASES, ClojureBytesLowering.PRODUCERS, Set.of(), false, Set.of(), Set.of(),
-				Set.of(), ClojureBytesLowering.SETTERS),
+				Set.of(), ClojureBytesLowering.SETTERS, null, null, Set.copyOf(LispNames.JAVA_OPERATORS_QUALIFIED)),
 
 		/**
 		 * A {@code clojure.java.io} value -- a {@code java.io.File}, a URL, a URI, a byte
@@ -980,6 +982,13 @@ public final class ClojureArms {
 		 */
 		final @Nullable Family requires;
 
+		/**
+		 * What makes a value of the kind where the host is (the interpreter, the JVM) and
+		 * nowhere else: a scan for such a target ({@link #scan(List, Family, boolean)})
+		 * counts these producers too.
+		 */
+		final Set<String> hostProducers;
+
 		Family(String label, Set<String> switches) {
 			this(label, Set.of(), Set.of(), Map.of(), Set.of(), Set.of(), false, switches);
 		}
@@ -1026,6 +1035,15 @@ public final class ClojureArms {
 				Set<String> depths, boolean qualifiedIdents, Set<String> switches, Set<String> refusals,
 				Set<String> conditions, Map<String, String> setters, @Nullable String owned,
 				@Nullable Family requires) {
+			this(label, tests, views, aliases, producers, depths, qualifiedIdents, switches, refusals, conditions,
+					setters, owned, requires, Set.of());
+		}
+
+		Family(String label, Set<String> tests, Set<String> views, Map<String, String> aliases, Set<String> producers,
+				Set<String> depths, boolean qualifiedIdents, Set<String> switches, Set<String> refusals,
+				Set<String> conditions, Map<String, String> setters, @Nullable String owned, @Nullable Family requires,
+				Set<String> hostProducers) {
+			this.hostProducers = hostProducers;
 			this.label = label;
 			this.tests = tests;
 			this.views = views;
@@ -1080,12 +1098,25 @@ public final class ClojureArms {
 	 * @return what they say
 	 */
 	public static Scan scan(List<LispVal> forms, Family family) {
+		return scan(forms, family, false);
+	}
+
+	/**
+	 * {@link #scan(List, Family)} for a target: where the host is, a family's
+	 * {@link Family#hostProducers} are producers too.
+	 * @param forms the top-level forms
+	 * @param family the kind
+	 * @param hostTarget whether the target is one where the host is
+	 * @return what they say
+	 */
+	public static Scan scan(List<LispVal> forms, Family family, boolean hostTarget) {
 		boolean[] found = new boolean[2];
+		Set<String> hostProducers = hostTarget ? family.hostProducers : Set.of();
 		for (LispVal form : forms) {
 			if (isBoundaryDirective(form)) {
 				continue;
 			}
-			scanInto(form, family, found, false);
+			scanInto(form, family, hostProducers, found, false);
 			if (found[0] && found[1]) {
 				break;
 			}
@@ -1106,7 +1137,8 @@ public final class ClojureArms {
 				&& BOUNDARY_DIRECTIVES.contains(head.name());
 	}
 
-	private static void scanInto(LispVal form, Family family, boolean[] found, boolean quoted) {
+	private static void scanInto(LispVal form, Family family, Set<String> hostProducers, boolean[] found,
+			boolean quoted) {
 		if (isDepthDefinition(form, family) || isSwitchDefinition(form, family) || isSwitchSetq(form, family)
 				|| isConditionDefinition(form, family) || isOwnedDefinition(form, family)) {
 			found[1] = true;
@@ -1121,7 +1153,7 @@ public final class ClojureArms {
 					found[1] = true;
 				}
 				else {
-					scanInto(cell.car(), family, found, quoted);
+					scanInto(cell.car(), family, hostProducers, found, quoted);
 				}
 				pairs = cell.cdr();
 			}
@@ -1133,12 +1165,13 @@ public final class ClojureArms {
 			if (family.qualifiedIdents && isQualifiedKeyword(cons)) {
 				found[0] = true;
 			}
-			scanInto(cons.car(), family, found, quotedArgs);
+			scanInto(cons.car(), family, hostProducers, found, quotedArgs);
 			rest = cons.cdr();
 		}
 		if (rest instanceof LispSymbol symbol) {
 			String name = symbol.name();
-			if (family.producers.contains(name) || family.depths.contains(name) || family.switches.contains(name)) {
+			if (family.producers.contains(name) || hostProducers.contains(name) || family.depths.contains(name)
+					|| family.switches.contains(name)) {
 				found[0] = true;
 			}
 			else if (family.tests.contains(name) || family.views.contains(name) || family.aliases.containsKey(name)

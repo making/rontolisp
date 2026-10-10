@@ -2436,22 +2436,28 @@
   "The members of the host object X (%clojure-host-seqable-p) as a list: a
    Collection's through toArray, a Map's entries as [key value] vectors,
    another Iterable's through its iterator, a CharSequence's characters.
-   Unmarshalled: atoms become Lisp values -- Java's false the false object --,
-   a nested host collection stays one. A snapshot, read whole: the oracle's seq
-   of an Iterable is lazy."
+   Unmarshalled: atoms become Lisp values -- Java's false the false object, a
+   byte[] a byte array --, a nested host collection stays one. A snapshot, read
+   whole: the oracle's seq of an Iterable is lazy."
   (cond ((rontolisp::%clojure-host-instance-p x "java.util.Collection")
-         (java:call x "toArray" :java-false))
+         (rontolisp::%clojure-host-answer
+          (java:call x "toArray" :java-false :octets)))
         ((rontolisp::%clojure-host-instance-p x "java.util.Map")
          (mapcar (lambda (e)
-                   (vector (java:call e "getKey" :java-false)
-                           (java:call e "getValue" :java-false)))
+                   (vector (rontolisp::%clojure-host-answer
+                            (java:call e "getKey" :java-false :octets))
+                           (rontolisp::%clojure-host-answer
+                            (java:call e "getValue" :java-false :octets))))
                  (java:call (java:call x "entrySet") "toArray")))
         ((rontolisp::%clojure-host-instance-p x "java.lang.CharSequence")
          (coerce (java:call x "toString") 'list))
-        (t (let ((it (java:call x "iterator")) (acc nil))
-             (do ()
-                 ((not (java:call it "hasNext")) (reverse acc))
-               (setq acc (cons (java:call it "next" :java-false) acc)))))))
+        (t
+         (let ((it (java:call x "iterator")) (acc nil))
+           (do ()
+               ((not (java:call it "hasNext")) (reverse acc))
+             (setq acc
+                   (cons (rontolisp::%clojure-host-answer
+                          (java:call it "next" :java-false :octets)) acc)))))))
 
 (defun rontolisp::%clojure-host-count (x)
   "count of the host object X (%clojure-host-seqable-p): a Collection's or a
@@ -2484,7 +2490,8 @@
   (let ((h (rontolisp::%clojure-host-member k)))
     (if (and (rontolisp::%clojure-host-instance-p x "java.util.Map")
              (java:call x "containsKey" h))
-        (java:call x "get" h :java-false)
+        (rontolisp::%clojure-host-answer
+         (java:call x "get" h :java-false :octets))
         dflt)))
 
 (defun rontolisp::%clojure-host-contains-p (x k)
@@ -2509,7 +2516,9 @@
   (if (rontolisp::%clojure-host-instance-p x "java.util.Map")
       (let ((h (rontolisp::%clojure-host-member k)))
         (if (java:call x "containsKey" h)
-            (vector k (java:call x "get" h :java-false))
+            (vector k
+                    (rontolisp::%clojure-host-answer
+                     (java:call x "get" h :java-false :octets)))
             nil))
       (rontolisp::%clojure-illegal-argument-exception
        (format nil "find not supported on type: ~A"
@@ -2573,8 +2582,10 @@
                 (cond ((rontolisp::%clojure-entry-p m) m)
                       ((rontolisp::%clojure-host-instance-p m
                         "java.util.Map$Entry")
-                       (vector (java:call m "getKey" :java-false)
-                               (java:call m "getValue" :java-false)))
+                       (vector (rontolisp::%clojure-host-answer
+                                (java:call m "getKey" :java-false :octets))
+                               (rontolisp::%clojure-host-answer
+                                (java:call m "getValue" :java-false :octets))))
                       (name (rontolisp::%clojure-class-cast-exception-of
                              (format nil "~A needs a map or a vector" name) m))
                       (t (rontolisp::%clojure-class-cast-exception-of
@@ -2622,9 +2633,10 @@
 ;; Comparable, as the oracle's vector compares --, a set or a sorted set a Set, a
 ;; map, a sorted map or a record a Map, each spelled as str spells the value and
 ;; holding its members as this makes them; a Date, Timestamp or UUID the host
-;; object (%clojure-time-value-host); a host object itself; anything else -- a fn,
-;; an atom, a deftype, a reify, a pattern, a var -- a handle equal only to itself
-;; (%clojure-host-object). Java hands every handle and view back as X.
+;; object (%clojure-time-value-host); a byte array the byte[] of its octets (a
+;; :bytes java:view, which Java never holds itself); a host object itself; anything
+;; else -- a fn, an atom, a deftype, a reify, a pattern, a var -- a handle equal
+;; only to itself (%clojure-host-object). Java hands every handle and view back as X.
 (defun rontolisp::%clojure-host-member (x)
   (cond ((rontolisp::%clojure-host-plain-p x) x)
    ((rontolisp::%clojure-keyword-p x)
@@ -2661,11 +2673,10 @@
    ((or (rontolisp::%clojure-date-p x) (rontolisp::%clojure-timestamp-p x)
         (rontolisp::%clojure-uuid-p x))
     (rontolisp::%clojure-time-value-host x))
-   ;; a byte array: a list of its elements as Java's bytes, which converts where
-   ;; Java takes a byte[]; an arm a program making no byte array folds
-   ((rontolisp::%clojure-bytes-p x)
-    (java:view x (rontolisp::%clojure-bytes-seq x)
-               :list #'rontolisp::%clojure-host-text nil "[B"))
+   ;; a byte array: the byte[] of its octets wherever Java takes one -- the octets
+   ;; themselves on the interpreter, a copy written back after the call compiled;
+   ;; an arm a program making no byte array folds
+   ((rontolisp::%clojure-bytes-p x) (java:view x (car (cdr x)) :bytes))
    ;; a deftype or reify with a face: the implementation of the Java interfaces
    ;; its body implements, standing for it (clojure/ClojureJavaFaces); an arm a
    ;; program registering no face folds
@@ -9275,8 +9286,9 @@
 ;; deref's host arm: a host Future is read through its own get, a failure
 ;; surfacing as the host's ExecutionException or CancellationException.
 (defun rontolisp::%clojure-host-future-get (f)
-  (java:call (the (java:object "java.util.concurrent.Future") f) "get"
-             :java-false))
+  (rontolisp::%clojure-host-answer
+   (java:call (the (java:object "java.util.concurrent.Future") f) "get"
+              :java-false :octets)))
 
 ;; future?: T for a host Future, NO (the false object) for anything else.
 (defun rontolisp::%clojure-host-future-p (x no)
@@ -9298,11 +9310,13 @@
 ;; reports a TimeoutException and letting any other failure through.
 (defun rontolisp::%clojure-host-future-get-within (f ms default)
   (if (realp ms)
-      (handler-case (java:call
-                     (the (java:object "java.util.concurrent.Future") f) "get"
-                     (values (truncate ms))
-                     (java:field "java.util.concurrent.TimeUnit" "MILLISECONDS")
-                     :java-false)
+      (handler-case (rontolisp::%clojure-host-answer
+                     (java:call
+                      (the (java:object "java.util.concurrent.Future") f) "get"
+                      (values (truncate ms))
+                      (java:field "java.util.concurrent.TimeUnit"
+                                  "MILLISECONDS")
+                      :java-false :octets))
         (java:java-exception (c)
           (if (rontolisp::%clojure-host-is-a (java:java-exception-cause c)
                "java.util.concurrent.TimeoutException")
@@ -10325,7 +10339,8 @@
         ((rontolisp::%clojure-iterator-p it)
          (funcall (rontolisp::%clojure-call-method it "next") it))
         ((rontolisp::%clojure-host-object-p it "java.util.Iterator")
-         (java:call it "next" :java-false))
+         (rontolisp::%clojure-host-answer
+          (java:call it "next" :java-false :octets)))
         (t (rontolisp::%clojure-class-cast-exception-of
             "an iterator needs a java.util.Iterator" it))))
 
@@ -18100,6 +18115,41 @@
    Lisp provider's string too) as its UTF-8 encoding."
   (rontolisp::%clojure-bytes-of
    (if (stringp v) (rontolisp:string-to-octets v) v)))
+
+;;; A byte array across the java: boundary: a byte[] Java answers a host call
+;;; ending in :octets is an (unsigned-byte 8) vector there, which the call hands the
+;;; program as a byte array (clojure/ClojureInteropLowering.hostCall); one goes out
+;;; as the byte[] a :bytes java:view is to Java (%clojure-host-member).
+
+;; Whether X is an (unsigned-byte 8) vector: what a byte[] Java answered is at a
+;; call ending in :octets, and no Clojure value is.
+(defun rontolisp::%clojure-octets-p (x)
+  (typep x '(simple-array (unsigned-byte 8) (*))))
+
+;; What a host call ending in :octets answers X as: a byte[] -- an (unsigned-byte 8)
+;; vector -- a byte array over it, and so is one an array the call answers holds (a
+;; list, at any depth); anything else, a Clojure value Java handed back included,
+;; itself.
+(defun rontolisp::%clojure-host-answer (x)
+  (cond ((consp x)
+         (if (rontolisp::%clojure-host-holds-octets x)
+             (mapcar #'rontolisp::%clojure-host-answer x)
+             x))
+        ((rontolisp::%clojure-octets-p x) (rontolisp::%clojure-bytes-of x))
+        (t x)))
+
+;; Whether the list X -- an array a host call answered -- holds an (unsigned-byte 8)
+;; vector, in it or in a list it holds. A list headed by a keyword is a Clojure
+;; value's wrapper, which holds none.
+(defun rontolisp::%clojure-host-holds-octets (x)
+  (if (keywordp (car x))
+      nil
+      (do ((rest x (cdr rest)))
+          ((not (consp rest)) nil)
+        (let ((e (car rest)))
+          (if (or (rontolisp::%clojure-octets-p e)
+                  (and (consp e) (rontolisp::%clojure-host-holds-octets e)))
+              (return t))))))
 
 (defun rontolisp::%clojure-bytes-to-text (x)
   "The byte array X as the text a Preview 1 core module carries a list<u8> as:

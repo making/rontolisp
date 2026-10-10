@@ -683,7 +683,7 @@ final class ClojureValueMethodLowering {
 			parts.add(ClojureLowerUtil.list(new LispSymbol(maker), recv));
 			parts.add(LispString.literal(designator));
 			parts.addAll(args);
-			answer = ClojureInteropLowering.hostCall(ctx, ClojureInteropLowering.JAVA_CALL, parts, 2);
+			answer = ClojureInteropLowering.hostCall(ctx, ClojureInteropLowering.JAVA_CALL, parts, 2, true);
 		}
 		else {
 			answer = refusal(recv, method, false, args);

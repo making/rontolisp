@@ -25,20 +25,34 @@ import am.ik.rontolisp.LispVal;
  * makes); and, with {@code :functional} too, a function implementing
  * {@code java.util.Comparator} by its arguments may answer a boolean
  * ({@link JavaImplementation#readsComparison})
+ * @param octets {@code :octets}: a {@code byte[]} the form answers -- a call's value, a
+ * field's, an element of an array either answers -- comes back as an
+ * {@code (unsigned-byte 8)} vector of its octets rather than a list of signed bytes; what
+ * Java hands a function (converted at the call, or of an implementation) stays a list
  */
-public record JavaMarkers(boolean functional, boolean javaFalse) {
+public record JavaMarkers(boolean functional, boolean javaFalse, boolean octets) {
 
 	/** No marker. */
-	public static final JavaMarkers NONE = new JavaMarkers(false, false);
+	public static final JavaMarkers NONE = new JavaMarkers(false, false, false);
 
 	/** {@code :functional} alone. */
-	public static final JavaMarkers FUNCTIONAL = new JavaMarkers(true, false);
+	public static final JavaMarkers FUNCTIONAL = new JavaMarkers(true, false, false);
 
 	/**
 	 * @return whether any marker is set
 	 */
 	public boolean any() {
-		return this.functional || this.javaFalse;
+		return this.functional || this.javaFalse || this.octets;
+	}
+
+	/**
+	 * These markers but {@code :octets}, which reads only what the form answers: the
+	 * markers a function converted at the call, or an implementation the form makes,
+	 * reads.
+	 * @return the markers without {@code :octets}
+	 */
+	public JavaMarkers callbacks() {
+		return this.octets ? new JavaMarkers(this.functional, this.javaFalse, false) : this;
 	}
 
 	/**
@@ -48,8 +62,11 @@ public record JavaMarkers(boolean functional, boolean javaFalse) {
 	 */
 	private JavaMarkers with(LispVal marker) {
 		String name = ((LispSymbol) marker).name();
-		return LispNames.JAVA_FUNCTIONAL_MARKER.equals(name) ? new JavaMarkers(true, this.javaFalse)
-				: new JavaMarkers(this.functional, true);
+		if (LispNames.JAVA_FUNCTIONAL_MARKER.equals(name)) {
+			return new JavaMarkers(true, this.javaFalse, this.octets);
+		}
+		return LispNames.JAVA_FALSE_MARKER.equals(name) ? new JavaMarkers(this.functional, true, this.octets)
+				: new JavaMarkers(this.functional, this.javaFalse, true);
 	}
 
 	/**
@@ -58,7 +75,8 @@ public record JavaMarkers(boolean functional, boolean javaFalse) {
 	 */
 	public static boolean isMarker(LispVal value) {
 		return value instanceof LispSymbol symbol && (LispNames.JAVA_FUNCTIONAL_MARKER.equals(symbol.name())
-				|| LispNames.JAVA_FALSE_MARKER.equals(symbol.name()));
+				|| LispNames.JAVA_FALSE_MARKER.equals(symbol.name())
+				|| LispNames.JAVA_OCTETS_MARKER.equals(symbol.name()));
 	}
 
 	/**

@@ -163,17 +163,17 @@ class JavaImplementationsTest {
 		JavaImplementation subclass = resolve(
 				"(java:subclass \"java.lang.Thread\" '() '(\"run\") (lambda (this m) nil) :java-false :functional)");
 		assertThat(subclass.resolved()).isTrue();
-		assertThat(subclass.markers()).isEqualTo(new JavaMarkers(true, true));
+		assertThat(subclass.markers()).isEqualTo(new JavaMarkers(true, true, false));
 		JavaImplementation compare = JavaImplementations.functional(type("java.util.Comparator"), CLASSES,
-				new JavaMarkers(true, true));
+				new JavaMarkers(true, true, false));
 		assertThat(compare.readsComparison(compare.slots().get(0))).isTrue();
 		JavaImplementation plain = JavaImplementations.functional(type("java.util.Comparator"), CLASSES);
 		assertThat(plain.readsComparison(plain.slots().get(0))).isFalse();
 		JavaImplementation function = JavaImplementations.functional(type("java.util.function.ToIntBiFunction"),
-				CLASSES, new JavaMarkers(true, true));
+				CLASSES, new JavaMarkers(true, true, false));
 		assertThat(function.readsComparison(function.slots().get(0))).isFalse();
 		JavaImplementation proxied = JavaImplementations.proxy(type("java.util.Comparator"), CLASSES)
-			.withMarkers(new JavaMarkers(true, true));
+			.withMarkers(new JavaMarkers(true, true, false));
 		assertThat(proxied.slots()).allMatch(slot -> !proxied.readsComparison(slot));
 	}
 

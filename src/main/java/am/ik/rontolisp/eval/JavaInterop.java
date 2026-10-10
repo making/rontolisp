@@ -50,6 +50,7 @@ import am.ik.rontolisp.compiler.JavaOverloads;
 import am.ik.rontolisp.compiler.JavaSite;
 import am.ik.rontolisp.compiler.JavaType;
 import am.ik.rontolisp.compiler.ReflectiveJavaClasses;
+import am.ik.rontolisp.runtime.RontoJavaBytesView;
 import am.ik.rontolisp.runtime.RontoJavaCalls;
 import am.ik.rontolisp.runtime.RontoJavaHandle;
 import am.ik.rontolisp.runtime.RontoJavaListView;
@@ -246,7 +247,7 @@ final class JavaInterop {
 	static LispVal callInstance(LispVal target, String methodName, List<LispVal> args, Caller caller) {
 		// A condition standing for a host exception is called as that exception, as a
 		// member takes it; the refusal shows the value handed in.
-		Object receiver = LispJavaObject.receiverObject(hostException(target, caller));
+		Object receiver = receiverObject(hostException(target, caller));
 		if (receiver == null) {
 			throw new LispEvalException("java:call expects a java object as the first argument, got " + target.print());
 		}
@@ -389,13 +390,23 @@ final class JavaInterop {
 		members.put(member, memos);
 	}
 
+	// The object a java:call is made on (LispJavaObject.receiverObject): a :bytes view's
+	// byte[] -- what it is to Java (compiled: _jrecv, the bridge's receiverObject) -- or
+	// the rule's object.
+	private static @Nullable Object receiverObject(LispVal value) {
+		return value instanceof LispJavaObject obj && obj.ref() instanceof RontoJavaBytesView view ? view.bytes()
+				: LispJavaObject.receiverObject(value);
+	}
+
 	// The token of which marshal(value, target) is a pure function for every target, or
 	// null when there is none: a list, vector or hash table (the cost sums its elements),
 	// a java:view List (an array of its items costs theirs), and the values marshal()
-	// never bridges (they never match, so nothing is remembered).
+	// never bridges (they never match, so nothing is remembered). A :bytes view has
+	// none either: it is the byte[] it hands Java, of no class a host kind names.
 	private static @Nullable JavaKind kindOf(LispVal value) {
 		return switch (value) {
 			case LispJavaObject obj when obj.ref() instanceof RontoJavaListView ignored -> null;
+			case LispJavaObject obj when obj.ref() instanceof RontoJavaBytesView ignored -> null;
 			case LispNil ignored -> JavaKind.Lisp.NIL;
 			case LispTrue ignored -> JavaKind.Lisp.T;
 			case LispSymbol symbol when LispNames.JAVA_FALSE.equals(symbol.name()) -> JavaKind.Lisp.FALSE;
@@ -505,8 +516,7 @@ final class JavaInterop {
 		Object target = null;
 		if (receiver != null) {
 			boolean call = site.operator() == JavaSite.Operator.CALL;
-			target = call ? LispJavaObject.receiverObject(receiver)
-					: receiver instanceof LispJavaObject obj ? obj.ref() : null;
+			target = call ? receiverObject(receiver) : receiver instanceof LispJavaObject obj ? obj.ref() : null;
 			if (target == null) {
 				throw new LispEvalException(
 						call ? "java:call expects a java object as the first argument, got " + receiver.print()
@@ -831,7 +841,9 @@ final class JavaInterop {
 				callArgs.add(new LispJavaObject(self));
 				callArgs.add(new LispString(implemented.name()));
 				for (Object argument : methodArgs) {
-					callArgs.add(unmarshal(argument, this.caller));
+					// what Java hands a function: Java's false after :java-false, never
+					// octets (JavaMarkers.callbacks)
+					callArgs.add(unmarshal(argument, this.caller.markers().javaFalse(), false));
 				}
 				LispVal result = this.caller.call(this.callable, callArgs);
 				Class<?> ret = returnClass(implemented);
@@ -1326,6 +1338,15 @@ final class JavaInterop {
 			case LispJavaObject obj when obj.ref() instanceof RontoJavaListView view -> {
 				return marshalListView(view, target, caller, out, index, proxies);
 			}
+			case LispJavaObject obj when obj.ref() instanceof RontoJavaBytesView view -> {
+				// the byte[] it is to Java, wherever one fits: the octets' own storage,
+				// so what Java stores the program reads (compiled: a copy written back)
+				int cost = JavaOverloads.bytesViewCost(target);
+				if (cost != NO_MATCH) {
+					out[index] = view.bytes();
+				}
+				return cost;
+			}
 			case LispCons cons -> {
 				List<LispVal> elements = properListElements(cons);
 				if (elements == null) {
@@ -1535,13 +1556,15 @@ final class JavaInterop {
 	}
 
 	static LispVal unmarshal(@Nullable Object o) {
-		return unmarshal(o, false);
+		return unmarshal(o, false, false);
 	}
 
 	// What a call ending in the caller's markers answers for a Java value: Java's false
-	// as |false| after :java-false, nil otherwise.
+	// as |false| after :java-false, nil otherwise; a byte[] an (unsigned-byte 8) vector
+	// after :octets, a list otherwise.
 	private static LispVal unmarshal(@Nullable Object o, Caller caller) {
-		return unmarshal(o, caller.markers().javaFalse());
+		JavaMarkers markers = caller.markers();
+		return unmarshal(o, markers.javaFalse(), markers.octets());
 	}
 
 	/**
@@ -1664,7 +1687,10 @@ final class JavaInterop {
 	 * without one); every write is an {@code UnsupportedOperationException}; wherever
 	 * Java hands it back, {@code java:} answers the value. As an argument it is a host
 	 * object of its class, and a {@code List} also an array of its items where nothing
-	 * takes it whole ({@link #marshalListView}).
+	 * takes it whole ({@link #marshalListView}). {@code :bytes} over an
+	 * {@code (unsigned-byte 8)} vector makes no collection: Java is handed the vector's
+	 * own {@code byte[]} wherever one fits ({@code runtime/RontoJavaBytesView}), so what
+	 * Java stores into it the program reads.
 	 * @param args the value, the items, the shape, and optionally the printer, the order
 	 * and the class
 	 * @param caller what calls the printer and the order
@@ -1680,7 +1706,8 @@ final class JavaInterop {
 		boolean map = LispNames.JAVA_VIEW_MAP.equals(shape);
 		boolean vector = LispNames.JAVA_VIEW_VECTOR.equals(shape);
 		boolean set = LispNames.JAVA_VIEW_SET.equals(shape);
-		if (!map && !vector && !set && !LispNames.JAVA_VIEW_LIST.equals(shape)) {
+		boolean bytes = LispNames.JAVA_VIEW_BYTES.equals(shape);
+		if (!map && !vector && !set && !bytes && !LispNames.JAVA_VIEW_LIST.equals(shape)) {
 			throw viewUsage(args.get(2));
 		}
 		LispVal printer = args.size() > 3 ? args.get(3) : LispNil.INSTANCE;
@@ -1692,6 +1719,13 @@ final class JavaInterop {
 			throw viewUsage(order);
 		}
 		String className = args.size() > 5 ? className(args.get(5), JavaInterop::viewUsage) : null;
+		if (bytes) {
+			// the octets themselves: Java is handed their storage (compiled: a copy)
+			if (!(items instanceof LispIntVector octets) || octets.width() != 8) {
+				throw viewUsage(items);
+			}
+			return new LispJavaObject(new RontoJavaBytesView(value, octets.octets(), 0));
+		}
 		List<LispVal> members = map ? viewEntries(items) : sequenceElements(items);
 		if (members == null) {
 			throw viewUsage(items);
@@ -1854,9 +1888,15 @@ final class JavaInterop {
 
 	// The Lisp value of a Java value: Java's false is nil, or |false| (javaFalse, a call
 	// ending in :java-false) -- an array's elements alike; a handle or a view is the
-	// value
-	// it stands for (compiled: _junm / _junf).
+	// value it stands for (compiled: _junm / _junf).
 	static LispVal unmarshal(@Nullable Object o, boolean javaFalse) {
+		return unmarshal(o, javaFalse, false);
+	}
+
+	// unmarshal with octets (a call ending in :octets): a byte[] -- the value or an
+	// element of an array -- is an (unsigned-byte 8) vector over the very array, which
+	// the program and Java then share (compiled: a copy, _juno / _jufo).
+	static LispVal unmarshal(@Nullable Object o, boolean javaFalse, boolean octets) {
 		return switch (o) {
 			case null -> LispNil.INSTANCE;
 			case RontoJavaValue handle -> (LispVal) handle.value();
@@ -1873,7 +1913,8 @@ final class JavaInterop {
 			case BigInteger b -> b.bitLength() < 64 ? new LispInteger(b.longValue()) : new LispBigInteger(b);
 			case Character c -> new LispChar(c);
 			case String s -> new LispString(s);
-			default -> o.getClass().isArray() ? arrayToList(o, javaFalse) : new LispJavaObject(o);
+			case byte[] bytes when octets -> LispIntVector.wrapOctets(bytes);
+			default -> o.getClass().isArray() ? arrayToList(o, javaFalse, octets) : new LispJavaObject(o);
 		};
 	}
 
@@ -1882,10 +1923,10 @@ final class JavaInterop {
 
 	// A Java array result (e.g. String.split) surfaces as a Lisp list, elements
 	// unmarshalled recursively; it round-trips back through marshalSequence.
-	private static LispVal arrayToList(Object array, boolean javaFalse) {
+	private static LispVal arrayToList(Object array, boolean javaFalse, boolean octets) {
 		LispVal result = LispNil.INSTANCE;
 		for (int i = Array.getLength(array) - 1; i >= 0; i--) {
-			result = new LispCons(unmarshal(Array.get(array, i), javaFalse), result);
+			result = new LispCons(unmarshal(Array.get(array, i), javaFalse, octets), result);
 		}
 		return result;
 	}

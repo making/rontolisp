@@ -1343,6 +1343,23 @@ class JvmJavaInteropCompilerTest {
 			.isEqualTo(JavaInteropPrograms.JAVA_VIEW_OUTPUT);
 	}
 
+	// Mirrors JavaInteropTest#aCallEndingInOctetsAnswersAByteArrayAsAnOctetVector: direct
+	// sites through _juno / _jufo (and _jaro / _jafo for an array's elements), the bridge
+	// through its own unmarshal.
+	@Test
+	void aCallEndingInOctetsAnswersAByteArrayAsAnOctetVector() throws Exception {
+		assertThat(compileAndRun(JavaInteropPrograms.OCTETS_PROGRAM)).isEqualTo(JavaInteropPrograms.OCTETS_OUTPUT);
+	}
+
+	// Mirrors JavaInteropTest#aBytesViewIsTheByteArrayJavaStoresInto: _jview's :bytes
+	// arm, the bytes arms of _jkind / _jcost$N / _jconv$N / _jrecv, a dispatched site's
+	// sharing and write-back, and the bridge's.
+	@Test
+	void aBytesViewIsTheByteArrayJavaStoresInto() throws Exception {
+		assertThat(compileAndRun(JavaInteropPrograms.BYTES_VIEW_PROGRAM))
+			.isEqualTo(JavaInteropPrograms.BYTES_VIEW_OUTPUT);
+	}
+
 	@Test
 	void proxyOnNonInterfaceSignals() {
 		assertThatThrownBy(() -> compileAndRun("(java:proxy \"java.lang.String\" (lambda (m) nil))"))

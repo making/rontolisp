@@ -31,6 +31,7 @@ import am.ik.rontolisp.compiler.JavaType;
 import am.ik.rontolisp.compiler.OperandTypes;
 import am.ik.rontolisp.runtime.RontoComplex;
 import am.ik.rontolisp.runtime.RontoHashTable;
+import am.ik.rontolisp.runtime.RontoJavaBytesView;
 import am.ik.rontolisp.runtime.RontoJavaCalls;
 import am.ik.rontolisp.runtime.RontoJavaHandle;
 import am.ik.rontolisp.runtime.RontoJavaListView;
@@ -140,6 +141,38 @@ final class JvmJavaDirectSites {
 	static final String ARRAY_TO_LIST_FALSE = "_jarf";
 
 	/**
+	 * {@code _juno(Object)Object}: {@link #UNMARSHAL} at a call ending in
+	 * {@code :octets}, which answers a {@code byte[]} -- the value or an array's element
+	 * -- as an {@code (unsigned-byte 8)} vector: a fresh {@code byte[]} of its octets
+	 * after the width in slot 0.
+	 */
+	static final String UNMARSHAL_OCTETS = "_juno";
+
+	/**
+	 * {@code _jaro(Object)Object}: {@link #ARRAY_TO_LIST} over {@link #UNMARSHAL_OCTETS}.
+	 */
+	static final String ARRAY_TO_LIST_OCTETS = "_jaro";
+
+	/**
+	 * {@code _jufo(Object)Object}: {@link #UNMARSHAL} at a call ending in both
+	 * {@code :java-false} and {@code :octets}.
+	 */
+	static final String UNMARSHAL_FALSE_OCTETS = "_jufo";
+
+	/**
+	 * {@code _jafo(Object)Object}: {@link #ARRAY_TO_LIST} over
+	 * {@link #UNMARSHAL_FALSE_OCTETS}.
+	 */
+	static final String ARRAY_TO_LIST_FALSE_OCTETS = "_jafo";
+
+	// The unmarshal helpers by what the call ends in (unmarshalIndex): none, :java-false,
+	// :octets, both.
+	private static final String[] UNMARSHALS = { UNMARSHAL, UNMARSHAL_FALSE, UNMARSHAL_OCTETS, UNMARSHAL_FALSE_OCTETS };
+
+	private static final String[] ARRAYS_TO_LIST = { ARRAY_TO_LIST, ARRAY_TO_LIST_FALSE, ARRAY_TO_LIST_OCTETS,
+			ARRAY_TO_LIST_FALSE_OCTETS };
+
+	/**
 	 * {@code _jhandle(Object value, Object text, Object hash, Object order, Object class,
 	 * int given)Object}: {@code (java:handle value text hash order class)} of
 	 * {@code given} arguments, the absent ones {@code null}: a
@@ -173,6 +206,8 @@ final class JvmJavaDirectSites {
 	private static final String JAVA_NUMBER_HANDLE = internal(RontoJavaNumberHandle.class);
 
 	private static final String JAVA_LIST_VIEW = internal(RontoJavaListView.class);
+
+	private static final String JAVA_BYTES_VIEW = internal(RontoJavaBytesView.class);
 
 	private static final String JAVA_VECTOR_VIEW = internal(RontoJavaVectorView.class);
 
@@ -262,6 +297,10 @@ final class JvmJavaDirectSites {
 	// views: no host kind, since where an array is expected it is an array of its items.
 	private static final int KIND_VIEW = KIND_CONS + 5;
 
+	// A java:view of shape :bytes (runtime/RontoJavaBytesView), in a program that makes
+	// views: the byte[] it hands Java wherever one fits, never a host object.
+	private static final int KIND_BYTES = KIND_CONS + 6;
+
 	private static final String OBJECT_DESC = "(Ljava/lang/Object;)Ljava/lang/Object;";
 
 	private static final String GUARD_DESC = "(Ljava/lang/Object;Ljava/lang/String;)Ljava/lang/Object;";
@@ -310,13 +349,10 @@ final class JvmJavaDirectSites {
 
 	private @Nullable MethodRefEntry tableGuard;
 
-	private @Nullable MethodRefEntry unmarshal;
+	// _junm and its variants, and _jarr's, by unmarshalIndex: built when first asked for.
+	private final @Nullable MethodRefEntry[] unmarshals = new MethodRefEntry[UNMARSHALS.length];
 
-	private @Nullable MethodRefEntry arrayToList;
-
-	private @Nullable MethodRefEntry unmarshalFalse;
-
-	private @Nullable MethodRefEntry arrayToListFalse;
+	private final @Nullable MethodRefEntry[] arraysToList = new MethodRefEntry[ARRAYS_TO_LIST.length];
 
 	private @Nullable MethodRefEntry comparison;
 
@@ -509,17 +545,18 @@ final class JvmJavaDirectSites {
 	 * @return the helper
 	 */
 	MethodRefEntry unmarshalHelper() {
-		return unmarshal();
+		return unmarshal(false, false);
 	}
 
 	/**
 	 * {@code _junm}, or at a call ending in {@code :java-false} {@code _junf}, which
-	 * answers Java's {@code false} as {@code |false|}: made when first asked for.
+	 * answers Java's {@code false} as {@code |false|}: made when first asked for. What
+	 * Java hands a function goes through this one: never octets.
 	 * @param javaFalse whether Java's false is {@code |false|}
 	 * @return the helper
 	 */
 	MethodRefEntry unmarshalHelper(boolean javaFalse) {
-		return javaFalse ? unmarshalFalse() : unmarshal();
+		return unmarshal(javaFalse, false);
 	}
 
 	/**
@@ -879,6 +916,10 @@ final class JvmJavaDirectSites {
 			// Java's false answers as |false| (emitUnmarshal, Body.markers)
 			key.append("|java-false");
 		}
+		if (site.octets()) {
+			// a byte[] answers as an (unsigned-byte 8) vector (emitUnmarshal)
+			key.append("|octets");
+		}
 		for (JavaSite.Argument argument : site.arguments()) {
 			key.append('|');
 			for (JavaKind kind : argument.kinds()) {
@@ -1048,55 +1089,41 @@ final class JvmJavaDirectSites {
 		return ref;
 	}
 
-	private MethodRefEntry unmarshal() {
-		MethodRefEntry ref = this.unmarshal;
+	// Which of the unmarshal helpers a call ending in these markers takes.
+	private static int unmarshalIndex(boolean javaFalse, boolean octets) {
+		return (javaFalse ? 1 : 0) | (octets ? 2 : 0);
+	}
+
+	// _junm / _junf / _juno / _jufo: the bridge's unmarshal, Java's false answered as
+	// |false| after :java-false (_junf, _jufo), a byte[] as an (unsigned-byte 8) vector
+	// after :octets (_juno, _jufo).
+	private MethodRefEntry unmarshal(boolean javaFalse, boolean octets) {
+		int index = unmarshalIndex(javaFalse, octets);
+		MethodRefEntry ref = this.unmarshals[index];
 		if (ref == null) {
-			Utf8Entry name = this.cp.utf8Entry(UNMARSHAL);
+			Utf8Entry name = this.cp.utf8Entry(UNMARSHALS[index]);
 			Utf8Entry desc = this.cp.utf8Entry(OBJECT_DESC);
 			ref = this.cp.methodRef(this.thisClass, name, desc);
-			this.unmarshal = ref;
-			MethodRefEntry toList = arrayToList();
-			this.methods.add(buildUnmarshal(name, desc, toList, false));
+			this.unmarshals[index] = ref;
+			MethodRefEntry toList = arrayToList(javaFalse, octets);
+			this.methods.add(buildUnmarshal(name, desc, toList, javaFalse));
 		}
 		return ref;
 	}
 
-	private MethodRefEntry arrayToList() {
-		MethodRefEntry ref = this.arrayToList;
+	// _jarr / _jarf / _jaro / _jafo: the arrays-to-lists over the unmarshal of the same
+	// markers.
+	private MethodRefEntry arrayToList(boolean javaFalse, boolean octets) {
+		int index = unmarshalIndex(javaFalse, octets);
+		MethodRefEntry ref = this.arraysToList[index];
 		if (ref == null) {
-			Utf8Entry name = this.cp.utf8Entry(ARRAY_TO_LIST);
+			Utf8Entry name = this.cp.utf8Entry(ARRAYS_TO_LIST[index]);
 			Utf8Entry desc = this.cp.utf8Entry(OBJECT_DESC);
 			ref = this.cp.methodRef(this.thisClass, name, desc);
-			this.arrayToList = ref;
+			this.arraysToList[index] = ref;
 			// _jarr and _junm call each other (an Object[] element is unmarshalled): the
 			// reference is published before the body naming _junm is built.
-			this.methods.add(buildArrayToList(name, desc, unmarshal(), false));
-		}
-		return ref;
-	}
-
-	// _junf / _jarf: _junm / _jarr answering Java's false as |false| (:java-false).
-	private MethodRefEntry unmarshalFalse() {
-		MethodRefEntry ref = this.unmarshalFalse;
-		if (ref == null) {
-			Utf8Entry name = this.cp.utf8Entry(UNMARSHAL_FALSE);
-			Utf8Entry desc = this.cp.utf8Entry(OBJECT_DESC);
-			ref = this.cp.methodRef(this.thisClass, name, desc);
-			this.unmarshalFalse = ref;
-			MethodRefEntry toList = arrayToListFalse();
-			this.methods.add(buildUnmarshal(name, desc, toList, true));
-		}
-		return ref;
-	}
-
-	private MethodRefEntry arrayToListFalse() {
-		MethodRefEntry ref = this.arrayToListFalse;
-		if (ref == null) {
-			Utf8Entry name = this.cp.utf8Entry(ARRAY_TO_LIST_FALSE);
-			Utf8Entry desc = this.cp.utf8Entry(OBJECT_DESC);
-			ref = this.cp.methodRef(this.thisClass, name, desc);
-			this.arrayToListFalse = ref;
-			this.methods.add(buildArrayToList(name, desc, unmarshalFalse(), true));
+			this.methods.add(buildArrayToList(name, desc, unmarshal(javaFalse, octets), javaFalse, octets));
 		}
 		return ref;
 	}
@@ -1536,7 +1563,10 @@ final class JvmJavaDirectSites {
 				JavaOverloads.Overload overload = overloads.get(k);
 				JavaExecutable executable = overload.executable();
 				int[] converted = emitConverted(overload, firstValue);
+				List<Integer> handed = bytesHanded(overload);
+				emitBytesShared(overload, handed, converted, firstValue);
 				stack = Math.max(stack, emitInvoke(executable, converted, hasReceiver, memberFailed));
+				emitBytesWriteBack(handed, converted, firstValue);
 				emitUnmarshal(executable.isConstructor() ? this.type : executable.returnType());
 				a.areturn();
 				if (!last) {
@@ -1544,6 +1574,95 @@ final class JvmJavaDirectSites {
 				}
 			}
 			return stack;
+		}
+
+		/**
+		 * The arguments of an overload's call that may be a {@code :bytes} view handed as
+		 * a copy of its octets ({@code runtime/RontoJavaBytesView}): of no kind the site
+		 * counted on, at a fixed parameter a {@code byte[]} fits. None where the program
+		 * makes no view.
+		 */
+		private List<Integer> bytesHanded(JavaOverloads.Overload overload) {
+			List<Integer> handed = new ArrayList<>();
+			if (!JvmJavaDirectSites.this.views) {
+				return handed;
+			}
+			List<JavaSite.Argument> arguments = this.site.arguments();
+			List<? extends JavaType> params = overload.executable().parameterTypes();
+			int fixed = overload.packed() ? params.size() - 1 : params.size();
+			for (int j = 0; j < fixed; j++) {
+				JavaSite.Argument argument = arguments.get(j);
+				if (!argument.known() && argument.bound() == null
+						&& JavaOverloads.bytesViewCost(params.get(j)) != JavaOverloads.NO_MATCH) {
+					handed.add(j);
+				}
+			}
+			return handed;
+		}
+
+		/**
+		 * Before the call, two views of one vector among {@link #bytesHanded} hand Java
+		 * one copy, as the oracle hands its one {@code byte[]} twice.
+		 */
+		private void emitBytesShared(JavaOverloads.Overload overload, List<Integer> handed, int[] converted,
+				int firstValue) {
+			MethodCode a = this.a;
+			List<? extends JavaType> params = overload.executable().parameterTypes();
+			MethodRefEntry shared = method(JAVA_BYTES_VIEW, "shared", "(Ljava/lang/Object;Ljava/lang/Object;)Z");
+			for (int x = 1; x < handed.size(); x++) {
+				for (int y = 0; y < x; y++) {
+					int later = handed.get(x);
+					int earlier = handed.get(y);
+					MethodCode.Label apart = a.newLabel();
+					a.aload(this.valueSlots[firstValue + earlier]);
+					a.aload(this.valueSlots[firstValue + later]);
+					a.invokestatic(shared);
+					a.ifeq(apart);
+					a.aload(converted[earlier]);
+					if (params.get(later).isArray()) {
+						a.checkcast(cls("[B"));
+					}
+					a.astore(converted[later]);
+					a.labelBinding(apart);
+				}
+			}
+		}
+
+		/**
+		 * After an overload's call, what Java stored into the copy of a {@code :bytes}
+		 * view's octets it was handed goes back into the vector
+		 * ({@code runtime/RontoJavaBytesView}): every argument {@link #bytesHanded} names
+		 * is asked first, then each changed copy is written back, so a vector handed
+		 * twice keeps what Java stored rather than its other copy. A varargs tail's
+		 * elements are not read back.
+		 */
+		private void emitBytesWriteBack(List<Integer> handed, int[] converted, int firstValue) {
+			if (handed.isEmpty()) {
+				return;
+			}
+			MethodCode a = this.a;
+			String pair = "(Ljava/lang/Object;Ljava/lang/Object;)";
+			MethodRefEntry changed = method(JAVA_BYTES_VIEW, "changed", pair + "Z");
+			MethodRefEntry store = method(JAVA_BYTES_VIEW, "store", pair + "V");
+			int[] flags = new int[handed.size()];
+			for (int i = 0; i < flags.length; i++) {
+				int j = handed.get(i);
+				flags[i] = this.nextSlot++;
+				a.aload(this.valueSlots[firstValue + j]);
+				a.aload(converted[j]);
+				a.invokestatic(changed);
+				a.istore(flags[i]);
+			}
+			for (int i = 0; i < flags.length; i++) {
+				int j = handed.get(i);
+				MethodCode.Label kept = a.newLabel();
+				a.iload(flags[i]);
+				a.ifeq(kept);
+				a.aload(this.valueSlots[firstValue + j]);
+				a.aload(converted[j]);
+				a.invokestatic(store);
+				a.labelBinding(kept);
+			}
 		}
 
 		/**
@@ -2113,6 +2232,7 @@ final class JvmJavaDirectSites {
 		void emitUnmarshal(JavaType declared) {
 			MethodCode a = this.a;
 			boolean javaFalse = this.markers.javaFalse();
+			boolean octets = this.markers.octets();
 			switch (declared.name()) {
 				case "void" -> a.aconst_null();
 				case "boolean" -> {
@@ -2201,7 +2321,7 @@ final class JvmJavaDirectSites {
 				});
 				default -> {
 					if (declared.isArray() || mayHideALispValue(declared)) {
-						a.invokestatic(unmarshalHelper(javaFalse));
+						a.invokestatic(unmarshal(javaFalse, octets));
 					}
 					// Any other class holds a host object, which stays itself.
 				}
@@ -2375,10 +2495,11 @@ final class JvmJavaDirectSites {
 	 * {@code _jconv$N} as above at a site ending in these markers: a function converted
 	 * by its arguments after {@code :functional}, and the implementation it becomes
 	 * handed Java's {@code false} as {@code |false|} after {@code :java-false}. The
-	 * markers only matter where a function converts, so the key carries them only then.
+	 * markers only matter where a function converts, so the key carries them only then
+	 * ({@code :octets} never: it reads only what the call answers).
 	 */
 	private MethodRefEntry convert(JavaType target, boolean functions, boolean sequences, JavaMarkers markers) {
-		JavaMarkers used = functions ? markers : JavaMarkers.NONE;
+		JavaMarkers used = functions ? markers.callbacks() : JavaMarkers.NONE;
 		String key = target.name() + (functions ? " functions" : "") + (sequences ? " sequences" : "")
 				+ (used.functional() ? " functional" : "") + (used.javaFalse() ? " java-false" : "");
 		MethodRefEntry ref = this.converts.get(key);
@@ -2637,7 +2758,8 @@ final class JvmJavaDirectSites {
 			returnCode(a, KIND_ARRAY);
 			a.labelBinding(next);
 		}
-		// A java:view List, which _jhost counts a host object, where views can exist.
+		// Where views can exist: a java:view List, which _jhost counts a host object,
+		// and a :bytes view, which it does not.
 		if (this.views) {
 			MethodCode.Label notView = a.newLabel();
 			a.aload(0);
@@ -2645,6 +2767,12 @@ final class JvmJavaDirectSites {
 			a.ifeq(notView);
 			returnCode(a, KIND_VIEW);
 			a.labelBinding(notView);
+			MethodCode.Label notBytes = a.newLabel();
+			a.aload(0);
+			a.instanceOf(cls(JAVA_BYTES_VIEW));
+			a.ifeq(notBytes);
+			returnCode(a, KIND_BYTES);
+			a.labelBinding(notBytes);
 		}
 		// A host object (_jhost); then, so a host pays nothing for it, a Lisp hash table
 		// when the program can hold one; else a value of no kind (a ratio).
@@ -3077,6 +3205,17 @@ final class JvmJavaDirectSites {
 		}
 		if (this.views && !target.isPrimitive()) {
 			emitViewCost(a, code, target, functions);
+			// A :bytes view: the byte[] it is, where one fits (bytesViewCost).
+			int bytesCost = JavaOverloads.bytesViewCost(target);
+			if (bytesCost != JavaOverloads.NO_MATCH) {
+				MethodCode.Label notBytes = a.newLabel();
+				a.iload(code);
+				a.loadConstant(KIND_BYTES);
+				a.if_icmpne(notBytes);
+				a.loadConstant(bytesCost);
+				a.ireturn();
+				a.labelBinding(notBytes);
+			}
 		}
 		if (!target.isPrimitive()) {
 			// A host object: its exact class, or a subclass, of the type.
@@ -3232,6 +3371,18 @@ final class JvmJavaDirectSites {
 			body.emitConvert(0, LISP_KINDS[c], object);
 			a.areturn();
 			a.labelBinding(next);
+		}
+		if (this.views) {
+			// A :bytes view: the byte[] it is to Java.
+			MethodCode.Label notBytes = a.newLabel();
+			a.iload(code);
+			a.loadConstant(KIND_BYTES);
+			a.if_icmpne(notBytes);
+			a.aload(0);
+			a.checkcast(cls(JAVA_BYTES_VIEW));
+			a.invokevirtual(method(JAVA_BYTES_VIEW, "bytes", "()[B"));
+			a.areturn();
+			a.labelBinding(notBytes);
 		}
 		a.aconst_null();
 		a.areturn();
@@ -3431,6 +3582,18 @@ final class JvmJavaDirectSites {
 				a.areturn();
 			}
 			a.labelBinding(notView);
+			if (JavaOverloads.bytesViewCost(target) != JavaOverloads.NO_MATCH) {
+				// A :bytes view: a copy of its octets, which the site writes back.
+				MethodCode.Label notBytes = a.newLabel();
+				a.iload(code);
+				a.loadConstant(KIND_BYTES);
+				a.if_icmpne(notBytes);
+				a.aload(0);
+				a.checkcast(cls(JAVA_BYTES_VIEW));
+				a.invokevirtual(method(JAVA_BYTES_VIEW, "bytes", "()[B"));
+				a.areturn();
+				a.labelBinding(notBytes);
+			}
 		}
 		if (reference) {
 			a.iload(code);
@@ -4084,9 +4247,9 @@ final class JvmJavaDirectSites {
 		MethodCode.Label badClass = a.newLabel();
 		MethodCode.Label badItems = a.newLabel();
 		MethodCode.Label noValue = a.newLabel();
-		// the shape: one of the four keywords, compiled to their names
+		// the shape: one of the five keywords, compiled to their names
 		String[] shapes = { LispNames.JAVA_VIEW_LIST, LispNames.JAVA_VIEW_VECTOR, LispNames.JAVA_VIEW_SET,
-				LispNames.JAVA_VIEW_MAP };
+				LispNames.JAVA_VIEW_MAP, LispNames.JAVA_VIEW_BYTES };
 		MethodCode.Label shapeRead = a.newLabel();
 		a.aload(2);
 		a.instanceOf(string);
@@ -4146,6 +4309,41 @@ final class JvmJavaDirectSites {
 		emitUnquoted(a, 5, badClass);
 		a.astore(className);
 		a.labelBinding(classRead);
+		// a :bytes view: the octet vector, a byte[] after its width that only a program
+		// holding one makes, which Java is handed a copy of
+		MethodCode.Label notBytes = a.newLabel();
+		a.iload(shape);
+		a.loadConstant(4);
+		a.if_icmpne(notBytes);
+		if (this.intVectors) {
+			ClassEntry bytes = cls("[B");
+			a.aload(1);
+			a.instanceOf(bytes);
+			a.ifeq(badItems);
+			a.aload(1);
+			a.checkcast(bytes);
+			a.arraylength();
+			a.ifeq(badItems);
+			a.aload(1);
+			a.checkcast(bytes);
+			a.loadConstant(0);
+			a.baload();
+			a.loadConstant(JvmIntArrayRuntimeBuilder.OCTET_TAG);
+			a.if_icmpne(badItems);
+			ClassEntry view = cls(JAVA_BYTES_VIEW);
+			a.new_(view);
+			a.dup();
+			a.aload(0);
+			a.aload(1);
+			a.checkcast(bytes);
+			a.loadConstant(1);
+			a.invokespecial(this.cp.methodRef(view, "<init>", "(Ljava/lang/Object;[BI)V"));
+			a.areturn();
+		}
+		else {
+			a.goto_(badItems);
+		}
+		a.labelBinding(notBytes);
 		// the members: none for nil; a :map's hash table's entries; else a sequence's
 		// elements (a :map's a plist: a list of even length)
 		MethodCode.Label membersRead = a.newLabel();
@@ -4356,12 +4554,46 @@ final class JvmJavaDirectSites {
 
 	// _jarr(Object)Object: the bridge's arrayToList over every array type (elements
 	// unmarshalled as Array.get would box them), or the value itself when it is no array;
-	// _jarf with javaFalse, a false boolean element |false|.
-	private Method buildArrayToList(Utf8Entry name, Utf8Entry desc, MethodRefEntry unmarshal, boolean javaFalse) {
+	// _jarf with javaFalse, a false boolean element |false|; with octets (_jaro, _jafo) a
+	// byte[] -- the value, or as an Object[] element through UNMARSHAL -- an
+	// (unsigned-byte 8) vector: a fresh byte[] of its octets after the width in slot 0.
+	private Method buildArrayToList(Utf8Entry name, Utf8Entry desc, MethodRefEntry unmarshal, boolean javaFalse,
+			boolean octets) {
 		MethodCode a = new MethodCode();
 		MethodRefEntry longValueOf = method("java/lang/Long", "valueOf", "(J)Ljava/lang/Long;");
 		MethodRefEntry doubleValueOf = method("java/lang/Double", "valueOf", "(D)Ljava/lang/Double;");
 		ClassEntry objectClass = cls("java/lang/Object");
+		if (octets) {
+			MethodCode.Label notBytes = a.newLabel();
+			a.aload(0);
+			a.instanceOf(cls("[B"));
+			a.ifeq(notBytes);
+			// vector = new byte[bytes.length + 1]; vector[0] = 8;
+			// System.arraycopy(bytes, 0, vector, 1, bytes.length)
+			a.aload(0);
+			a.checkcast(cls("[B"));
+			a.astore(2);
+			a.aload(2);
+			a.arraylength();
+			a.loadConstant(1);
+			a.iadd();
+			a.newarray(TypeKind.BYTE);
+			a.astore(1);
+			a.aload(1);
+			a.loadConstant(0);
+			a.loadConstant(JvmIntArrayRuntimeBuilder.OCTET_TAG);
+			a.bastore();
+			a.aload(2);
+			a.loadConstant(0);
+			a.aload(1);
+			a.loadConstant(1);
+			a.aload(2);
+			a.arraylength();
+			a.invokestatic(method("java/lang/System", "arraycopy", "(Ljava/lang/Object;ILjava/lang/Object;II)V"));
+			a.aload(1);
+			a.areturn();
+			a.labelBinding(notBytes);
+		}
 		String[] arrays = { "[Ljava/lang/Object;", "[I", "[J", "[D", "[F", "[S", "[B", "[C", "[Z" };
 		for (String array : arrays) {
 			MethodCode.Label next = a.newLabel();

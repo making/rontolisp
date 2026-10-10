@@ -654,13 +654,111 @@ public final class JavaInteropPrograms {
 			error calling am.ik.rontolisp.runtime.RontoJavaHandle.compareTo: java.lang.ClassCastException: class java.lang.String cannot be cast to class K
 			(1 -1 1 1/2 0.5 0 "seven")
 			error calling am.ik.rontolisp.runtime.RontoJavaNumberHandle.compareTo: java.lang.ClassCastException: class am.ik.rontolisp.runtime.RontoJavaHandle cannot be cast to class my.Ratio
-			java:view expects (java:view value items :list|:vector|:set|:map [printer [order ["class"]]]), got :TREE
-			java:view expects (java:view value items :list|:vector|:set|:map [printer [order ["class"]]]), got 2
-			java:view expects (java:view value items :list|:vector|:set|:map [printer [order ["class"]]]), got (1 2 3)
-			java:view expects (java:view value items :list|:vector|:set|:map [printer [order ["class"]]]), got #<lambda>
+			java:view expects (java:view value items :list|:vector|:set|:map|:bytes [printer [order ["class"]]]), got :TREE
+			java:view expects (java:view value items :list|:vector|:set|:map|:bytes [printer [order ["class"]]]), got 2
+			java:view expects (java:view value items :list|:vector|:set|:map|:bytes [printer [order ["class"]]]), got (1 2 3)
+			java:view expects (java:view value items :list|:vector|:set|:map|:bytes [printer [order ["class"]]]), got #<lambda>
 			java:view: no Java value for #<lambda>
 			java:handle expects (java:handle value text [hash [order ["class"]]]), got NIL
 			java:handle expects (java:handle value text [hash [order ["class"]]]), got 5""";
+
+	/**
+	 * {@code :octets}: a {@code byte[]} a call answers is an {@code (unsigned-byte 8)}
+	 * vector of its octets -- at a resolved site (a typed receiver), a dispatched one
+	 * ({@code either}'s unknown arguments) and one left to run time (an unknown receiver:
+	 * the compiled program's bridge), beside {@code :java-false} in either order, as an
+	 * {@code Object[]}'s element, empty -- and the unmarked call beside them a list of
+	 * signed bytes. Prints {@link #OCTETS_OUTPUT}.
+	 */
+	public static final String OCTETS_PROGRAM = """
+			(defun row (thunk)
+			  (handler-case (prin1 (funcall thunk)) (error (e) (princ e)))
+			  (terpri))
+			(defun octets (&rest xs)
+			  (let ((v (make-array (length xs) :element-type '(unsigned-byte 8))))
+			    (dotimes (i (length xs) v) (setf (aref v i) (nth i xs)))))
+			(defun bytes-of (o) (java:call o "toByteArray" :octets))
+			(defun typed-bytes (o)
+			  (declare (type (java:object "java.io.ByteArrayOutputStream") o))
+			  (java:call o "toByteArray" :octets))
+			(defun either (a b) (java:static "java.util.Objects" "requireNonNullElse" a b :octets))
+			(let ((o (java:new "java.io.ByteArrayOutputStream")))
+			  (java:call o "write" 65)
+			  (java:call o "write" 200)
+			  (row (lambda () (list (java:call o "toByteArray" :octets) (typed-bytes o) (bytes-of o)
+			                        (array-element-type (bytes-of o)))))
+			  (row (lambda () (java:call o "toByteArray")))
+			  (row (lambda () (list (java:call o "toByteArray" :java-false :octets)
+			                        (java:call o "toByteArray" :octets :java-false))))
+			  (row (lambda () (let ((l (java:new "java.util.ArrayList")))
+			                    (java:call l "add" (java:view 'b (octets 1 2) :bytes))
+			                    (java:call l "add" "x")
+			                    (list (java:call l "toArray" :octets) (java:call l "get" 0 :octets)
+			                          (java:call l "toArray")))))
+			  (row (lambda () (length (java:call (java:new "java.io.ByteArrayOutputStream") "toByteArray" :octets))))
+			  (row (lambda () (either nil (java:view 'b (octets 9) :bytes)))))
+			""";
+
+	/** What {@link #OCTETS_PROGRAM} prints. */
+	public static final String OCTETS_OUTPUT = """
+			(#(65 200) #(65 200) #(65 200) (UNSIGNED-BYTE 8))
+			(65 -56)
+			(#(65 200) #(65 200))
+			((#(1 2) "x") #(1 2) ((1 2) "x"))
+			0
+			#(9)""";
+
+	/**
+	 * {@code (java:view value octets :bytes)}: Java is handed the {@code byte[]} of the
+	 * octets wherever one fits -- a {@code byte[]}, an {@code Object} parameter -- and
+	 * nowhere else; what Java stores into it the vector holds after the call, at a
+	 * dispatched site ({@code System.arraycopy}, {@code Random.nextBytes}) and one left
+	 * to run time (an unknown receiver, the class in a variable: the compiled program's
+	 * bridge), a vector handed twice one array to Java. A receiver is the array; items
+	 * that are no octet vector are refused. Prints {@link #BYTES_VIEW_OUTPUT}.
+	 */
+	public static final String BYTES_VIEW_PROGRAM = """
+			(defvar *objects* "java.util.Objects")
+			(defvar *system* "java.lang.System")
+			(defun row (thunk)
+			  (handler-case (prin1 (funcall thunk)) (error (e) (princ e)))
+			  (terpri))
+			(defun octets (&rest xs)
+			  (let ((v (make-array (length xs) :element-type '(unsigned-byte 8))))
+			    (dotimes (i (length xs) v) (setf (aref v i) (nth i xs)))))
+			(defun read-into (in buf) (java:call in "read" buf))
+			(let* ((b (octets 1 255 3))
+			       (v (java:view 'b b :bytes)))
+			  (row (lambda () (list (java:static "java.util.Arrays" "toString" v)
+			                        (subseq (java:static "java.util.Objects" "toString" v) 0 3)
+			                        (java:static "java.lang.reflect.Array" "getLength" v)
+			                        (java:call (java:call v "getClass") "getName"))))
+			  (row (lambda () (java:call (java:new "java.util.Random" 42) "nextBytes" v) b))
+			  (row (lambda () (java:static "java.lang.System" "arraycopy" (java:view 's (octets 7 8 9) :bytes) 0 v 0 2) b))
+			  (row (lambda () (java:static "java.lang.System" "arraycopy" v 0 v 1 2) b))
+			  (row (lambda () (java:static *system* "arraycopy" v 1 v 0 2) b))
+			  (row (lambda () (list (java:static "java.util.Objects" "equals" v v) (java:static *objects* "equals" v v)
+			                        (java:static *objects* "equals" v (java:view 'c (octets 8 8 8) :bytes)))))
+			  (row (lambda () (java:new "java.util.ArrayList" v))))
+			(let ((buf (octets 0 0 0 0 0 0)))
+			  (row (lambda () (list (read-into (java:new "java.io.StringBufferInputStream" "hello") (java:view 'buf buf :bytes))
+			                        buf))))
+			(row (lambda () (java:view 'x (list 1 2) :bytes)))
+			(row (lambda () (java:view 'x (octets 1) :bytes nil (lambda (a b) 0))))
+			""";
+
+	/** What {@link #BYTES_VIEW_PROGRAM} prints. */
+	public static final String BYTES_VIEW_OUTPUT = """
+			("[1, -1, 3]" "[B@" 3 "[B")
+			#(53 157 65)
+			#(7 8 65)
+			#(7 7 8)
+			#(7 8 8)
+			(T T NIL)
+			No matching constructor for java.util.ArrayList with 1 argument(s)
+			(5 #(104 101 108 108 111 0))
+			java:view expects (java:view value items :list|:vector|:set|:map|:bytes [printer [order ["class"]]]), got (1 2)
+			java:view expects (java:view value items :list|:vector|:set|:map|:bytes [printer [order ["class"]]]), got #<lambda>""";
 
 	/**
 	 * Specialized vectors and bignums as arguments, at a dispatched site ({@code ts},

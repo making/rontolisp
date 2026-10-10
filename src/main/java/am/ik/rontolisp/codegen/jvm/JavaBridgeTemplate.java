@@ -85,7 +85,9 @@ final class JavaBridgeTemplate {
 	// java:proxy -- an argument --, or, at a call ending in :functional, to the
 	// implementation calling the function with each abstract method's arguments. The
 	// mode is the low bits (FUNCTIONS_MODE); FUNCTIONS_JAVA_FALSE beside it makes the
-	// implementation hand its function Java's false as |false| (:java-false).
+	// implementation hand its function Java's false as |false| (:java-false), and
+	// FUNCTIONS_OCTETS makes the call answer a byte[] as an (unsigned-byte 8) vector
+	// (:octets), which no function is handed.
 	private static final int FUNCTIONS_NONE = 0;
 
 	private static final int FUNCTIONS_PROXY = 1;
@@ -96,12 +98,16 @@ final class JavaBridgeTemplate {
 
 	private static final int FUNCTIONS_JAVA_FALSE = 4;
 
+	private static final int FUNCTIONS_OCTETS = 8;
+
 	// The keywords a java: call may end in after its arguments (a java:proxy / java:reify
 	// after its callable or last function), mirroring compiler/JavaMarkers; a keyword
 	// compiles to its name.
 	private static final String FUNCTIONAL_MARKER = ":FUNCTIONAL";
 
 	private static final String JAVA_FALSE_MARKER = ":JAVA-FALSE";
+
+	private static final String OCTETS_MARKER = ":OCTETS";
 
 	// What Comparator.compare's slot key is (mirrors compiler/JavaImplementation's
 	// COMPARATOR_COMPARE): a function implementing it by its arguments at a call ending
@@ -270,6 +276,26 @@ final class JavaBridgeTemplate {
 	private static @Nullable Method javaListViewItems;
 
 	/**
+	 * {@code runtime/RontoJavaBytesView} -- a {@code java:view} of shape {@code :bytes}
+	 * -- bound with {@link #javaListViewClass}: the {@code byte[]} it hands Java wherever
+	 * one fits, written back after the call (mirrors {@code JvmJavaDirectSites}' bytes
+	 * arms and {@code emitBytesWriteBack}).
+	 */
+	private static @Nullable Class<?> javaBytesViewClass;
+
+	/** {@code RontoJavaBytesView.bytes()}, bound with {@link #javaBytesViewClass}. */
+	private static @Nullable Method javaBytesViewBytes;
+
+	/** {@code RontoJavaBytesView.changed(Object, Object)}, bound with it. */
+	private static @Nullable Method javaBytesViewChanged;
+
+	/** {@code RontoJavaBytesView.store(Object, Object)}, bound with it. */
+	private static @Nullable Method javaBytesViewStore;
+
+	/** {@code RontoJavaBytesView.shared(Object, Object)}, bound with it. */
+	private static @Nullable Method javaBytesViewShared;
+
+	/**
 	 * The generated program's {@code _jsig(Throwable)}: what this bridge's {@code Proxy}
 	 * records a throwable leaving its callback with, as a generated implementation's
 	 * callback does, so the site whose Java call it reaches -- this bridge's or a direct
@@ -375,6 +401,22 @@ final class JavaBridgeTemplate {
 			javaListViewClass = null;
 			javaListViewItems = null;
 		}
+		try {
+			Class<?> bytesViewClass = Class.forName(JAVA_BYTES_VIEW_CLASS, false, mainClass.getClassLoader());
+			javaBytesViewBytes = bytesViewClass.getMethod("bytes");
+			javaBytesViewChanged = bytesViewClass.getMethod("changed", Object.class, Object.class);
+			javaBytesViewStore = bytesViewClass.getMethod("store", Object.class, Object.class);
+			javaBytesViewShared = bytesViewClass.getMethod("shared", Object.class, Object.class);
+			javaBytesViewClass = bytesViewClass;
+		}
+		catch (ClassNotFoundException | NoSuchMethodException ex) {
+			// No runtime/RontoJavaBytesView beside this program: no view can exist.
+			javaBytesViewClass = null;
+			javaBytesViewBytes = null;
+			javaBytesViewChanged = null;
+			javaBytesViewStore = null;
+			javaBytesViewShared = null;
+		}
 	}
 
 	// What a java:handle or a java:view makes, and a java:view List (mirror
@@ -382,6 +424,8 @@ final class JavaBridgeTemplate {
 	private static final String JAVA_VALUE_CLASS = "am.ik.rontolisp.runtime.RontoJavaValue";
 
 	private static final String JAVA_LIST_VIEW_CLASS = "am.ik.rontolisp.runtime.RontoJavaListView";
+
+	private static final String JAVA_BYTES_VIEW_CLASS = "am.ik.rontolisp.runtime.RontoJavaBytesView";
 
 	// A java:view List converted to an array of its items: after every way to pass it
 	// whole (mirrors compiler/JavaOverloads.COST_VIEW_ARRAY).
@@ -416,6 +460,7 @@ final class JavaBridgeTemplate {
 		int functions = functionsOf(args, marked);
 		args = Arrays.copyOf(args, args.length - marked);
 		boolean javaFalse = (functions & FUNCTIONS_JAVA_FALSE) != 0;
+		boolean octets = (functions & FUNCTIONS_OCTETS) != 0;
 		String designator = lispString(className);
 		if (designator == null) {
 			throw new RuntimeException("java:new expects a class-name string, got " + describe(className));
@@ -433,8 +478,10 @@ final class JavaBridgeTemplate {
 					"No matching constructor for " + designator + " with " + args.length + " argument(s)");
 		}
 		try {
-			return unmarshal(((Constructor<?>) overload[0]).newInstance(marshalArguments(overload, values, functions)),
-					javaFalse);
+			@Nullable Object[] handed = marshalArguments(overload, values, functions);
+			Object made = ((Constructor<?>) overload[0]).newInstance(handed);
+			writeBack(overload, values, handed);
+			return unmarshal(made, javaFalse, octets);
 		}
 		catch (ReflectiveOperationException ex) {
 			throw fail("constructing " + name, ex);
@@ -459,7 +506,8 @@ final class JavaBridgeTemplate {
 	// (mirrors compiler/JavaMarkers.count): the caller then drops them.
 	private static int markerCount(@Nullable Object[] args, int first) {
 		int end = args.length;
-		while (end > first && (FUNCTIONAL_MARKER.equals(args[end - 1]) || JAVA_FALSE_MARKER.equals(args[end - 1]))) {
+		while (end > first && (FUNCTIONAL_MARKER.equals(args[end - 1]) || JAVA_FALSE_MARKER.equals(args[end - 1])
+				|| OCTETS_MARKER.equals(args[end - 1]))) {
 			end--;
 		}
 		return args.length - end;
@@ -467,15 +515,18 @@ final class JavaBridgeTemplate {
 
 	// How the call's function arguments convert, after the MARKED markers ending ARGS:
 	// FUNCTIONS_BY_ARGUMENTS after :functional, else FUNCTIONS_PROXY, with
-	// FUNCTIONS_JAVA_FALSE after :java-false.
+	// FUNCTIONS_JAVA_FALSE after :java-false and FUNCTIONS_OCTETS after :octets.
 	private static int functionsOf(@Nullable Object[] args, int marked) {
 		int functions = FUNCTIONS_PROXY;
 		for (int i = args.length - marked; i < args.length; i++) {
 			if (FUNCTIONAL_MARKER.equals(args[i])) {
 				functions = (functions & ~FUNCTIONS_MODE) | FUNCTIONS_BY_ARGUMENTS;
 			}
-			else {
+			else if (JAVA_FALSE_MARKER.equals(args[i])) {
 				functions |= FUNCTIONS_JAVA_FALSE;
+			}
+			else {
+				functions |= FUNCTIONS_OCTETS;
 			}
 		}
 		return functions;
@@ -488,6 +539,11 @@ final class JavaBridgeTemplate {
 	private static @Nullable Object receiverObject(@Nullable Object target) {
 		if (target != null && isJavaObject(target)) {
 			return target;
+		}
+		Class<?> bytesView = javaBytesViewClass;
+		if (bytesView != null && bytesView.isInstance(target)) {
+			// a :bytes view: the byte[] it is to Java
+			return bytesOf(Objects.requireNonNull(target));
 		}
 		Object value = rendered(target);
 		Object kind = kindOf(value);
@@ -514,8 +570,11 @@ final class JavaBridgeTemplate {
 	 */
 	static @Nullable Object javaField(@Nullable Object classOrObject, @Nullable Object fieldName,
 			@Nullable Object[] markers) {
-		// The markers the form ends in: :java-false answers a false field as |false|.
-		boolean javaFalse = (functionsOf(markers, markerCount(markers, 0)) & FUNCTIONS_JAVA_FALSE) != 0;
+		// The markers the form ends in: :java-false answers a false field as |false|,
+		// :octets a byte[] one as an (unsigned-byte 8) vector.
+		int marked = functionsOf(markers, markerCount(markers, 0));
+		boolean javaFalse = (marked & FUNCTIONS_JAVA_FALSE) != 0;
+		boolean octets = (marked & FUNCTIONS_OCTETS) != 0;
 		String name = lispString(fieldName);
 		if (name == null) {
 			throw new RuntimeException("java:field expects (java:field class-or-object \"field\")");
@@ -529,11 +588,11 @@ final class JavaBridgeTemplate {
 					// Mirrors compiler/JavaSiteResolver.notStatic.
 					throw new RuntimeException("java:field: field " + cls.getName() + "." + name + " is not static");
 				}
-				return unmarshal(field.get(null), javaFalse);
+				return unmarshal(field.get(null), javaFalse, octets);
 			}
 			if (classOrObject != null && isJavaObject(classOrObject)) {
 				Field field = publicField(classOrObject.getClass(), name);
-				return unmarshal(field.get(classOrObject), javaFalse);
+				return unmarshal(field.get(classOrObject), javaFalse, octets);
 			}
 			throw new RuntimeException(
 					"java:field expects a class-name string or a java object, got " + describe(classOrObject));
@@ -1223,6 +1282,7 @@ final class JavaBridgeTemplate {
 		int functions = functionsOf(args, marked);
 		args = Arrays.copyOf(args, args.length - marked);
 		boolean javaFalse = (functions & FUNCTIONS_JAVA_FALSE) != 0;
+		boolean octets = (functions & FUNCTIONS_OCTETS) != 0;
 		@Nullable Object[] values = renderedAll(args);
 		// A static call (no receiver) chooses among the static methods only. The
 		// designator is parsed only when the candidates are needed: a remembered choice
@@ -1241,8 +1301,10 @@ final class JavaBridgeTemplate {
 					"No matching method " + cls.getName() + "." + methodName + " with " + args.length + " argument(s)");
 		}
 		try {
-			return unmarshal(((Method) overload[0]).invoke(receiver, marshalArguments(overload, values, functions)),
-					javaFalse);
+			@Nullable Object[] handed = marshalArguments(overload, values, functions);
+			Object answer = ((Method) overload[0]).invoke(receiver, handed);
+			writeBack(overload, values, handed);
+			return unmarshal(answer, javaFalse, octets);
 		}
 		catch (ReflectiveOperationException ex) {
 			throw fail("calling " + cls.getName() + "." + ((Method) overload[0]).getName(), ex);
@@ -1509,6 +1571,10 @@ final class JavaBridgeTemplate {
 		if (listView != null && listView.isInstance(value)) {
 			return null;
 		}
+		Class<?> bytesView = javaBytesViewClass;
+		if (bytesView != null && bytesView.isInstance(value)) {
+			return null; // a :bytes view: the byte[] it hands Java, where one fits
+		}
 		return isJavaObject(value) ? value.getClass() : null;
 	}
 
@@ -1739,7 +1805,34 @@ final class JavaBridgeTemplate {
 			}
 			out[fixed] = packed;
 		}
+		if (javaBytesViewShared != null) {
+			// two :bytes views of one vector hand Java one copy, as the oracle hands its
+			// one byte[] twice (mirrors JvmJavaDirectSites' emitBytesShared)
+			for (int later = 1; later < fixed; later++) {
+				for (int earlier = 0; earlier < later; earlier++) {
+					if (out[earlier] instanceof byte[] && out[later] instanceof byte[]
+							&& sameBytes(values[earlier], values[later])) {
+						out[later] = out[earlier];
+					}
+				}
+			}
+		}
 		return out;
+	}
+
+	// Whether two arguments are :bytes views of one vector
+	// (runtime/RontoJavaBytesView.shared).
+	private static boolean sameBytes(@Nullable Object one, @Nullable Object other) {
+		Method shared = javaBytesViewShared;
+		if (shared == null) {
+			return false;
+		}
+		try {
+			return (Boolean) Objects.requireNonNull(shared.invoke(null, one, other));
+		}
+		catch (ReflectiveOperationException ex) {
+			throw new IllegalStateException("java interop: cannot read a :bytes view", ex);
+		}
 	}
 
 	// select() costed this argument against this type, so it converts.
@@ -1781,6 +1874,18 @@ final class JavaBridgeTemplate {
 		Class<?> listView = javaListViewClass;
 		if (listView != null && listView.isInstance(value)) {
 			return marshalListView(Objects.requireNonNull(value), target, out, index, functions);
+		}
+		Class<?> bytesView = javaBytesViewClass;
+		if (bytesView != null && bytesView.isInstance(value)) {
+			// a :bytes view: the byte[] it is, wherever one fits (mirrors
+			// compiler/JavaOverloads.bytesViewCost): a copy of its octets, written back
+			// after the call (writeBack)
+			int cost = target == byte[].class ? COST_EXACT
+					: !target.isPrimitive() && target.isAssignableFrom(byte[].class) ? COST_WIDEN : NO_MATCH;
+			if (cost != NO_MATCH) {
+				out[index] = bytesOf(Objects.requireNonNull(value));
+			}
+			return cost;
 		}
 		if (value != null && value.getClass() == Object[].class) {
 			List<@Nullable Object> elements = properListElements((Object[]) value);
@@ -2180,13 +2285,20 @@ final class JavaBridgeTemplate {
 	}
 
 	static @Nullable Object unmarshal(@Nullable Object o) {
-		return unmarshal(o, false);
+		return unmarshal(o, false, false);
 	}
 
 	// The Lisp value of a Java value: Java's false is nil, or |false| (javaFalse, a call
 	// ending in :java-false) -- an array's elements alike (mirrors JvmJavaDirectSites'
 	// _junm / _junf).
 	static @Nullable Object unmarshal(@Nullable Object o, boolean javaFalse) {
+		return unmarshal(o, javaFalse, false);
+	}
+
+	// unmarshal at a call ending in :octets too (octets): a byte[] -- the value or an
+	// element of an array -- is an (unsigned-byte 8) vector of its octets, a fresh byte[]
+	// with the width in slot 0 (mirrors JvmJavaDirectSites' _juno / _jufo).
+	static @Nullable Object unmarshal(@Nullable Object o, boolean javaFalse, boolean octets) {
 		if (o == null) {
 			return null;
 		}
@@ -2224,8 +2336,14 @@ final class JavaBridgeTemplate {
 		if (o instanceof String s) {
 			return quote(s);
 		}
+		if (octets && o instanceof byte[] bytes) {
+			byte[] vector = new byte[bytes.length + 1];
+			vector[0] = OCTET_TAG;
+			System.arraycopy(bytes, 0, vector, 1, bytes.length);
+			return vector;
+		}
 		if (o.getClass().isArray()) {
-			return arrayToList(o, javaFalse);
+			return arrayToList(o, javaFalse, octets);
 		}
 		Class<?> valueClass = javaValueClass;
 		Method value = javaValueMethod;
@@ -2241,11 +2359,53 @@ final class JavaBridgeTemplate {
 		return o; // any other object stays a wrapped host object
 	}
 
+	// The byte[] a :bytes view hands Java (runtime/RontoJavaBytesView.bytes).
+	private static Object bytesOf(Object view) {
+		try {
+			return Objects.requireNonNull(Objects.requireNonNull(javaBytesViewBytes).invoke(view));
+		}
+		catch (ReflectiveOperationException ex) {
+			throw new IllegalStateException("java interop: cannot read a :bytes view", ex);
+		}
+	}
+
+	// After a call, what Java stored into the copy of a :bytes view's octets it was
+	// handed goes back into the vector: every fixed argument asked first, then each
+	// changed copy written back, so a vector handed twice keeps what Java stored. A
+	// varargs tail's elements are not read back (mirrors JvmJavaDirectSites'
+	// emitBytesWriteBack).
+	private static void writeBack(Object[] overload, @Nullable Object[] values, @Nullable Object[] handed) {
+		Method changed = javaBytesViewChanged;
+		Method store = javaBytesViewStore;
+		if (changed == null || store == null) {
+			return;
+		}
+		int fixed = (Boolean) overload[2] ? handed.length - 1 : handed.length;
+		boolean[] stored = new boolean[fixed];
+		boolean any = false;
+		try {
+			for (int i = 0; i < fixed; i++) {
+				stored[i] = (Boolean) Objects.requireNonNull(changed.invoke(null, values[i], handed[i]));
+				any |= stored[i];
+			}
+			if (any) {
+				for (int i = 0; i < fixed; i++) {
+					if (stored[i]) {
+						store.invoke(null, values[i], handed[i]);
+					}
+				}
+			}
+		}
+		catch (ReflectiveOperationException ex) {
+			throw new IllegalStateException("java interop: cannot write a :bytes view back", ex);
+		}
+	}
+
 	// A Java array result surfaces as a Lisp list, elements unmarshalled recursively.
-	private static @Nullable Object arrayToList(Object array, boolean javaFalse) {
+	private static @Nullable Object arrayToList(Object array, boolean javaFalse, boolean octets) {
 		Object result = null;
 		for (int i = Array.getLength(array) - 1; i >= 0; i--) {
-			result = new Object[] { unmarshal(Array.get(array, i), javaFalse), result };
+			result = new Object[] { unmarshal(Array.get(array, i), javaFalse, octets), result };
 		}
 		return result;
 	}

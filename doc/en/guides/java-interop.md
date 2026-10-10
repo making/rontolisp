@@ -84,10 +84,10 @@ Arguments and results are converted between rontolisp and Java automatically:
 | the symbol named `false` | `boolean` false, `Boolean.FALSE` for any reference | after `:java-false`, Java's false |
 | a `java` object | the wrapped host object | any other object → a `java` object |
 | a function/lambda | a `java:proxy` over the matching interface, or after `:functional` an implementation of its abstract methods (an argument only) | — |
-| a proper list / a vector (specialized too) | `T[]` (element-wise, incl. primitives), or `List`/`Collection`/`Iterable` | any Java array → a list |
+| a proper list / a vector (specialized too) | `T[]` (element-wise, incl. primitives), or `List`/`Collection`/`Iterable` | any Java array → a list (after `:octets`, a `byte[]` → an `(unsigned-byte 8)` vector) |
 | a hash table | a fresh `java.util.LinkedHashMap` (`Map`, `HashMap`, `Object`, ...) | — |
 | a `java:handle` | an object Java sees as its text | the value it stands for |
-| a `java:view` | a read-only `List`, `Set` or `Map` of its items (a `List` view: an array of them where nothing takes it whole) | the value it stands for |
+| a `java:view` | a read-only `List`, `Set` or `Map` of its items (a `List` view: an array of them where nothing takes it whole; a `:bytes` view: the `byte[]` of its octets) | the value it stands for |
 
 A Java `null` (and a `void` method) comes back as `nil`. A proper list — or a
 rank-1 array made with `make-array`, a specialized one included (`double-float`,
@@ -178,6 +178,22 @@ throws, which the call reports as the method's failure:
   (java:call l "toString"))   ; => "[1, 2, 3]"
 ```
 
+### Octets back: `:octets`
+
+A Java array comes back as a list, so a `byte[]` is a list of signed bytes. A `java:new`,
+`java:call`, `java:static` or `java:field` ending in `:octets` answers a `byte[]` -- the
+result, a field's value, an element of an array it answers -- as an `(unsigned-byte 8)` vector
+of its octets instead, beside the other markers in any order. A function the call converts,
+and a `java:proxy`, `java:reify` or `java:subclass`'s, is still handed a list. On the
+interpreter the vector is Java's array itself; a compiled program's is a copy. A
+[`:bytes` view](#views-javaview) hands one to Java:
+
+```lisp
+(let ((md (java:static "java.security.MessageDigest" "getInstance" "MD5")))
+  (subseq (java:call md "digest" (java:view 'v (make-array 0 :element-type '(unsigned-byte 8)) :bytes) :octets)
+          0 4))   ; => #(212 29 140 217)
+```
+
 ### Handles: java:handle
 
 `(java:handle value "text")` makes a Java object that stands for a Lisp value Java has no
@@ -226,11 +242,27 @@ answer for the value, and Java hands it back as the value:
 A view is passed itself wherever its class fits. A `List` view where a Java array is expected
 is an array of its items, but only after every way to pass it whole, a varargs array holding
 it as one element included: a Java array a call answers is a list here, and its view
-converts back to the array a later call expects. The Clojure front end hands Java every value
-this way: a vector, list, set or map as a view printed as Clojure prints it, a keyword,
-symbol or ratio as a handle hashed and ordered as Clojure's `Keyword`, `Symbol` and `Ratio`
-are, and any other value as a handle equal only to itself
-([java:view](../reference/functions/java-view.md)).
+converts back to the array a later call expects.
+
+`(java:view value octets :bytes)` makes no collection: wherever a `byte[]` fits (`Object`
+included) Java is handed the `byte[]` of an `(unsigned-byte 8)` vector, and what it stores
+there the vector holds after the call -- on the interpreter the vector's own storage, which
+an object keeping the array writes later too; in a compiled program a copy written back
+when the call returns:
+
+```lisp
+(let* ((b (make-array 3 :element-type '(unsigned-byte 8)))
+       (v (java:view b b :bytes)))
+  (java:static "java.lang.System" "arraycopy"
+               (java:view 's (make-array 3 :element-type '(unsigned-byte 8) :initial-element 7) :bytes)
+               0 v 1 2)
+  b)   ; => #(0 7 7)
+```
+
+The Clojure front end hands Java every value this way: a vector, list, set or map as a view
+printed as Clojure prints it, a byte array as its `byte[]`, a keyword, symbol or ratio as a
+handle hashed and ordered as Clojure's `Keyword`, `Symbol` and `Ratio` are, and any other
+value as a handle equal only to itself ([java:view](../reference/functions/java-view.md)).
 
 A `java` object is `eq` and `eql` only to itself: the same object answered by two
 calls is `eq`, while two objects that are `equals` are not. `equal` and `equalp`

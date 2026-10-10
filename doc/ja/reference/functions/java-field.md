@@ -15,3 +15,5 @@
 ```lisp
 (java:field "java.lang.Boolean" "FALSE" :java-false)   ; => |false|
 ```
+
+`:octets` で終えると、`byte[]` のフィールドをそのオクテットを持つ `(unsigned-byte 8)` のベクタとして返します (ガイドの[バイト列を受け取る](../../guides/java-interop.md#octets-back-octets))。

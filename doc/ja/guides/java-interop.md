@@ -56,10 +56,10 @@ Lisp の値も `java:call` の receiver になり、`Object` 引数に渡した�
 | 名前が `false` のシンボル | `boolean` の false、任意の参照には `Boolean.FALSE` | `:java-false` の後では Java の false |
 | `java` オブジェクト | ラップされたホストオブジェクト | その他のオブジェクト → `java` オブジェクト |
 | 関数/ラムダ | 一致するインターフェースに対する `java:proxy`、`:functional` の後ではその抽象メソッドの実装 (引数に限る) | — |
-| 真リスト / ベクタ (特殊化されたものも含む) | `T[]` (要素ごとに変換、プリミティブ配列も可)、または `List`/`Collection`/`Iterable` | 任意の Java 配列 → リスト |
+| 真リスト / ベクタ (特殊化されたものも含む) | `T[]` (要素ごとに変換、プリミティブ配列も可)、または `List`/`Collection`/`Iterable` | 任意の Java 配列 → リスト (`:octets` の後では `byte[]` → `(unsigned-byte 8)` のベクタ) |
 | ハッシュテーブル | 新しい `java.util.LinkedHashMap` (`Map`、`HashMap`、`Object` など) | — |
 | `java:handle` | Java からはテキストに見えるオブジェクト | 代理する値 |
-| `java:view` | 要素を持つ読み取り専用の `List`・`Set`・`Map` (`List` のビューは、そのまま受け取る引数がないときに限り要素の配列) | 代理する値 |
+| `java:view` | 要素を持つ読み取り専用の `List`・`Set`・`Map` (`List` のビューは、そのまま受け取る引数がないときに限り要素の配列。`:bytes` のビューはオクテットの `byte[]`) | 代理する値 |
 
 Java の `null` (および `void` メソッド) は `nil` として返ります。Java の配列が期待される箇所に真リスト (または `make-array` で作ったランク 1 の配列。`double-float`、`single-float`、`bfloat16`、`(unsigned-byte 8|16|32)` に特殊化された配列も含む) を渡すと、要素ごとに要素型へ変換されます (`int[]` などのプリミティブ配列も含む)。`List`/`Collection`/`Iterable` が期待される箇所では `java.util.List` になり、ネストしたリストは再帰的に変換されます。逆方向では、Java の **配列** の結果は Lisp のリストになりますが、返された `java.util.List` は不透明な `java` オブジェクトのままで、そのメソッドを呼び出して操作します。
 
@@ -122,6 +122,16 @@ Java の false は Common Lisp 唯一の偽である `nil` として返ります
   (java:call l "toString"))   ; => "[1, 2, 3]"
 ```
 
+### バイト列を受け取る: `:octets`
+
+Java の配列はリストとして返るので、`byte[]` は符号付きバイトのリストになります。`:octets` で終わる `java:new`・`java:call`・`java:static`・`java:field` は、`byte[]` (結果、フィールドの値、返した配列の要素) を、そのオクテットを持つ `(unsigned-byte 8)` のベクタとして返します。ほかのマーカーとの順序は問いません。呼び出しが変換する関数や、`java:proxy`・`java:reify`・`java:subclass` の関数に渡る `byte[]` は、これまでどおりリストです。インタプリタのベクタは Java の配列そのものを格納領域とし、コンパイル済みプログラムのベクタはその複製です。Java へ `byte[]` を渡すには [`:bytes` のビュー](#views-javaview)を使います。
+
+```lisp
+(let ((md (java:static "java.security.MessageDigest" "getInstance" "MD5")))
+  (subseq (java:call md "digest" (java:view 'v (make-array 0 :element-type '(unsigned-byte 8)) :bytes) :octets)
+          0 4))   ; => #(212 29 140 217)
+```
+
 ### ハンドル: java:handle
 
 `(java:handle value "text")` は、Java に値のない Lisp の値を代理する Java オブジェクトを作ります。Java からはテキストがその `toString` に見え、同じテキストのハンドル同士は `equals` で等しくなります。ハンドルはテキストでハッシュされテキストで順序付けられますが、`(java:handle value "text" hash "order")` の形では整数の下位 32 ビットをハッシュとし、order のテキストで順序付けられます。そのためハンドルは、その値が自分の言語でそうなるのと同じく `HashMap` のキーになり、`TreeSet` の中で整列します。Java がハンドルを返すところ (結果、配列の要素、コールバックの引数) ではどこでも、`java:` は代理する値を返します。
@@ -148,7 +158,20 @@ Java の false は Common Lisp 唯一の偽である `nil` として返ります
   (list (java:call l "toString") (eq (java:call l "get" 0) items)))   ; => ("[<1 two>]" T)
 ```
 
-ビューは、クラスが合う箇所にはそのまま渡ります。Java の配列が期待される箇所では `List` のビューは要素の配列になりますが、それはビューをそのまま渡す方法 (可変長引数の配列に一つの要素として詰める方法を含む) がすべて合わないときに限られます。この変換があるのは、呼び出しが返した Java の配列がここではリストになるためで、そのビューは後の呼び出しが期待する配列に戻ります。Clojure フロントエンドは、すべての値をこの形で Java に渡します。ベクタ・リスト・セット・マップは Clojure の印字どおりに綴られるビューとして、キーワード・シンボル・分数は Clojure の `Keyword`・`Symbol`・`Ratio` と同じくハッシュし順序付けるハンドルとして、それ以外の値は自分自身とだけ等しいハンドルとして渡します ([java:view](../reference/functions/java-view.md))。
+ビューは、クラスが合う箇所にはそのまま渡ります。Java の配列が期待される箇所では `List` のビューは要素の配列になりますが、それはビューをそのまま渡す方法 (可変長引数の配列に一つの要素として詰める方法を含む) がすべて合わないときに限られます。この変換があるのは、呼び出しが返した Java の配列がここではリストになるためで、そのビューは後の呼び出しが期待する配列に戻ります。
+
+`(java:view value octets :bytes)` はコレクションを作りません。`byte[]` が合う箇所 (`Object` を含む) には `(unsigned-byte 8)` のベクタの `byte[]` が渡り、Java がそこへ書き込んだ値は呼び出しの後でベクタから読めます。インタプリタではベクタ自身の格納領域が渡るので、配列を保持したオブジェクトが後から書き込んだ値も読めます。コンパイル済みプログラムでは複製が渡り、呼び出しが戻るときにベクタへ書き戻されます。
+
+```lisp
+(let* ((b (make-array 3 :element-type '(unsigned-byte 8)))
+       (v (java:view b b :bytes)))
+  (java:static "java.lang.System" "arraycopy"
+               (java:view 's (make-array 3 :element-type '(unsigned-byte 8) :initial-element 7) :bytes)
+               0 v 1 2)
+  b)   ; => #(0 7 7)
+```
+
+Clojure フロントエンドは、すべての値をこの形で Java に渡します。ベクタ・リスト・セット・マップは Clojure の印字どおりに綴られるビューとして、バイト配列はその `byte[]` として、キーワード・シンボル・分数は Clojure の `Keyword`・`Symbol`・`Ratio` と同じくハッシュし順序付けるハンドルとして、それ以外の値は自分自身とだけ等しいハンドルとして渡します ([java:view](../reference/functions/java-view.md))。
 
 `java` オブジェクトが `eq`・`eql` になるのは自分自身とだけです。2 回の呼び出しが返した同じオブジェクトは `eq` ですが、`equals` が真になる別々のオブジェクトは `eq` ではありません。`equal` と `equalp` はオブジェクトの `equals` で比較します。そのため `eq`・`eql` のハッシュテーブルは `java` オブジェクトを同一性でキーにし (格納後に変更したキーも見つかります)、`equal`・`equalp` のテーブルは `equals` と `hashCode` でキーにします。
 

@@ -695,6 +695,52 @@ class JavaBridgeTemplateParityTest {
 		}
 	}
 
+	// A byte[] comes back the same whichever copy reads it at a call ending in :octets:
+	// the bridge's unmarshal and the _juno / _jufo a direct site calls -- an octet vector
+	// (the width 8, then the octets), empty, an Object[]'s element, a byte[][]'s -- while
+	// the unmarked _junm keeps the list of signed bytes.
+	@Test
+	void theBridgeAndADirectSiteAnswerOctetsAlike(@TempDir Path dir) throws Exception {
+		JvmLispCompiler compiler = new JvmLispCompiler("OctetsTest");
+		byte[] bytes = compiler.compile(LispReader.readAllFromString("""
+				(defun get0 (l)
+				  (declare (type (java:object "java.util.List") l))
+				  (list (java:call l "get" 0) (java:call l "get" 0 :octets) (java:call l "get" 0 :java-false :octets)))
+				(let ((l (java:new "java.util.ArrayList")))
+				  (java:call l "add" 1)
+				  (print (get0 l)))
+				"""));
+		Files.write(dir.resolve("OctetsTest.class"), bytes);
+		for (Map.Entry<String, byte[]> file : compiler.runtimeClassFiles().entrySet()) {
+			Path target = dir.resolve(file.getKey());
+			Files.createDirectories(target.getParent());
+			Files.write(target, file.getValue());
+		}
+		List<@Nullable Object> values = Arrays.asList(new byte[] { 1, -1, 0 }, new byte[0],
+				new Object[] { new byte[] { 7 }, "x", Boolean.FALSE }, new byte[][] { { 2, 3 }, {} },
+				new boolean[] { false }, new int[] { 9 }, null, "s");
+		try (URLClassLoader loader = new URLClassLoader(new URL[] { dir.toUri().toURL() },
+				ClassLoader.getSystemClassLoader())) {
+			Class<?> program = loader.loadClass("OctetsTest");
+			Method junm = declared(program, JvmJavaDirectSites.UNMARSHAL, Object.class);
+			Method juno = declared(program, JvmJavaDirectSites.UNMARSHAL_OCTETS, Object.class);
+			Method jufo = declared(program, JvmJavaDirectSites.UNMARSHAL_FALSE_OCTETS, Object.class);
+			Class<?>[] flags = { Object.class, boolean.class, boolean.class };
+			for (Object value : values) {
+				assertThat(Arrays.deepToString(new Object[] { invoke("unmarshal", flags, value, false, true) }))
+					.as("bridge :octets %s", value)
+					.isEqualTo(Arrays.deepToString(new Object[] { juno.invoke(null, value) }));
+				assertThat(Arrays.deepToString(new Object[] { invoke("unmarshal", flags, value, true, true) }))
+					.as("bridge :java-false :octets %s", value)
+					.isEqualTo(Arrays.deepToString(new Object[] { jufo.invoke(null, value) }));
+				assertThat(Arrays.deepToString(new Object[] { invoke("unmarshal", flags, value, false, false) }))
+					.as("bridge %s", value)
+					.isEqualTo(Arrays.deepToString(new Object[] { junm.invoke(null, value) }));
+			}
+			assertThat((byte[]) juno.invoke(null, (Object) new byte[] { 1, -1 })).containsExactly(8, 1, -1);
+		}
+	}
+
 	// What _jcmp or the bridge's comparison answered: an Integer, or the refusal's class
 	// and message.
 	private static @Nullable Object compared(@Nullable Object answer) {
@@ -799,6 +845,8 @@ class JavaBridgeTemplateParityTest {
 		assertThat(constant("JAVA_FALSE")).isEqualTo(LispNames.JAVA_FALSE);
 		assertThat(constant("FUNCTIONAL_MARKER")).isEqualTo(LispNames.JAVA_FUNCTIONAL_MARKER);
 		assertThat(constant("JAVA_FALSE_MARKER")).isEqualTo(LispNames.JAVA_FALSE_MARKER);
+		assertThat(constant("OCTETS_MARKER")).isEqualTo(LispNames.JAVA_OCTETS_MARKER);
+		assertThat(constant("OCTET_TAG")).isEqualTo(JvmIntArrayRuntimeBuilder.OCTET_TAG);
 		assertThat(constant("VALUE_OPTION")).isEqualTo(LispNames.JAVA_VALUE_OPTION);
 		assertThat(constant("CLASS_OPTION")).isEqualTo(LispNames.JAVA_CLASS_OPTION);
 		assertThat(constant("REIFY_USAGE")).isEqualTo(am.ik.rontolisp.compiler.JavaImplementations.REIFY_USAGE);
@@ -807,6 +855,8 @@ class JavaBridgeTemplateParityTest {
 		assertThat(constant("JAVA_VALUE_CLASS")).isEqualTo(am.ik.rontolisp.runtime.RontoJavaValue.class.getName());
 		assertThat(constant("JAVA_LIST_VIEW_CLASS"))
 			.isEqualTo(am.ik.rontolisp.runtime.RontoJavaListView.class.getName());
+		assertThat(constant("JAVA_BYTES_VIEW_CLASS"))
+			.isEqualTo(am.ik.rontolisp.runtime.RontoJavaBytesView.class.getName());
 		assertThat(constant("COST_VIEW_ARRAY")).isEqualTo(JavaOverloads.COST_VIEW_ARRAY);
 		assertThat(constant("COMPARISON_OF_NIL"))
 			.isEqualTo(am.ik.rontolisp.compiler.JavaImplementation.COMPARISON_OF_NIL);

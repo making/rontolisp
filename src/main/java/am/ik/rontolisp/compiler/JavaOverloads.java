@@ -58,6 +58,23 @@ public final class JavaOverloads {
 	/** This argument cannot become this type. */
 	public static final int NO_MATCH = -1;
 
+	/**
+	 * The cost of a {@code java:view} of shape {@code :bytes} for a parameter type: the
+	 * {@code byte[]} it is to Java, which fits only {@code byte[]} itself and the types
+	 * every array is ({@code Object}, {@code Cloneable}, {@code Serializable}). The
+	 * interpreter, the direct sites and the bridge (its own copy) cost it by this.
+	 * @param target the parameter type
+	 * @return {@link #COST_EXACT} for {@code byte[]}, {@link #COST_WIDEN} for a
+	 * supertype, else {@link #NO_MATCH}
+	 */
+	public static int bytesViewCost(JavaType target) {
+		return switch (target.name()) {
+			case "[B" -> COST_EXACT;
+			case "java.lang.Object", "java.lang.Cloneable", "java.io.Serializable" -> COST_WIDEN;
+			default -> NO_MATCH;
+		};
+	}
+
 	/** The class a bignum is, and a fixnum may become. */
 	private static final String BIG_INTEGER = "java.math.BigInteger";
 

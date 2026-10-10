@@ -502,6 +502,63 @@ class ClojureInteropTest {
 	}
 
 	@Test
+	void aByteArrayAJavaMemberAnswersIsAByteArray() throws Exception {
+		// oracle-identical (clj 1.12.6, 2026-10-10): a byte[] a member answers is a byte
+		// array -- a host ByteArrayOutputStream's, a MessageDigest's at an unknown
+		// receiver, Files/readAllBytes', Base64's -- and so is one a host collection
+		// holds,
+		// read by get, seq and toArray (before: a list of its bytes, bytes? false)
+		assertBothEqual("(let [o (^[] java.io.ByteArrayOutputStream/new)] (.write o 65)"
+				+ " (prn [(bytes? (.toByteArray o)) (vec (.toByteArray o))]))"
+				+ " (defn digest [md data] (.digest md data))"
+				+ " (let [d (digest (java.security.MessageDigest/getInstance \"SHA-256\") (.getBytes \"abc\"))]"
+				+ " (prn (bytes? d) (alength d) (aget d 0) (vec (take 4 d))))"
+				+ " (let [p (java.nio.file.Files/createTempFile \"rl\" \".bin\""
+				+ " (make-array java.nio.file.attribute.FileAttribute 0))]"
+				+ " (java.nio.file.Files/write p (byte-array [1 2 -3]) (make-array java.nio.file.OpenOption 0))"
+				+ " (let [r (java.nio.file.Files/readAllBytes p)] (java.nio.file.Files/delete p) (prn (bytes? r) (vec r))))"
+				+ " (let [e (.encode (java.util.Base64/getEncoder) (.getBytes \"hi\"))] (prn (bytes? e) (String. e)))"
+				+ " (let [m (java.util.HashMap.)] (.put m \"k\" (.getBytes \"xyz\"))"
+				+ " (prn (bytes? (get m \"k\")) (vec (.get m \"k\")) (map (comp vec val) m)"
+				+ " (map #(alength %) (.toArray (.values m)))))",
+				"[true [65]]\ntrue 32 -70 [-70 120 22 -65]\ntrue [1 2 -3]\ntrue \"aGk=\"\n"
+						+ "true [120 121 122] ([120 121 122]) (3)\n");
+	}
+
+	@Test
+	void aByteArrayReachesJavaAsTheByteArrayJavaStoresInto() throws Exception {
+		// oracle-identical (clj 1.12.6, 2026-10-10): a byte array is a byte[] to any
+		// parameter one fits, Object's included, and what Java stores into it -- a host
+		// stream's read at an unknown receiver, Random's nextBytes, System/arraycopy, the
+		// same array twice -- the program reads after the call (before: Java read a copy
+		// of its elements, which an Object parameter took as a List)
+		assertBothEqual(
+				"(prn (subs (java.util.Objects/toString (byte-array 1)) 0 3)"
+						+ " (java.lang.reflect.Array/getLength (byte-array 3)))"
+						+ " (defn read-into [in buf] (.read in buf))" + " (let [buf (byte-array 8)]"
+						+ " (prn (read-into (java.io.StringBufferInputStream. \"hello\") buf) (vec buf)))"
+						+ " (let [buf (byte-array 4)] (.nextBytes (java.util.Random. 42) buf) (prn (vec buf)))"
+						+ " (let [src (byte-array [1 2 3]) dst (byte-array 3)] (System/arraycopy src 0 dst 0 3)"
+						+ " (prn (vec dst)))" + " (let [b (byte-array [1 2 3])] (System/arraycopy b 0 b 1 2)"
+						+ " (prn (vec b) (java.util.Objects/equals b b)))"
+						+ " (let [b (byte-array 2) l (java.util.ArrayList.)] (.add l b)"
+						+ " (prn (bytes? (.get l 0)) (map bytes? l)))",
+				"\"[B@\" 3\n5 [104 101 108 108 111 0 0 0]\n[53 -99 65 -70]\n[1 2 3]\n[1 1 2] true\n" + "true (true)\n");
+	}
+
+	@Test
+	void anArrayJavaKeepsIsTheByteArrayItselfOnlyOnTheInterpreter() throws Exception {
+		// a ByteBuffer wraps the array it is handed and writes it after the call: the
+		// interpreter hands Java the byte array's own octets, as the oracle hands its
+		// byte[]; a compiled program's octets sit after a width, so Java holds a copy
+		// (user doc deviation)
+		String program = "(let [b (byte-array 4) bb (java.nio.ByteBuffer/wrap b)] (.putInt bb 42) (prn (vec b)))"
+				+ " (let [bb (java.nio.ByteBuffer/allocate 2) a (.array bb)] (.put bb (byte 7)) (prn (vec a)))";
+		assertThat(interpret(program)).isEqualTo("[0 0 0 42]\n[7 0]\n");
+		assertThat(runOnJvm(program)).isEqualTo("[0 0 0 0]\n[0 0]\n");
+	}
+
+	@Test
 	void printTraceElementSpellsAHostStackTraceElementLikeTheOracle() throws Exception {
 		// oracle-identical (clj 1.12.6, 2026-10-08); a throwable built here has no frames
 		// (clojure-spec clojure-stacktrace-prints-no-frames), so only a host element

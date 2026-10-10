@@ -213,9 +213,9 @@ Package `java` (`LispNames.JAVA_PKG`, `PackageRegistry`; does NOT use `cl`): `ja
   host `ArrayList` subclass its own `isEmpty`/`get`, so a `java:subclass` of `ArrayList` whose
   `isEmpty` answers false while empty throws `index out of bounds` on the JVM (todo e74).
 
-## Markers: `:java-false`, a Comparator's answer (e73, 2026-10-09)
-- Keywords ending a form are MARKERS (`compiler/JavaMarkers`: `:functional`, `:java-false`, any
-  order; a keyword is never an argument a member takes): after the arguments of `java:new` /
+## Markers: `:java-false`, `:octets`, a Comparator's answer (e73, 2026-10-09; f13, 2026-10-10)
+- Keywords ending a form are MARKERS (`compiler/JavaMarkers`: `:functional`, `:java-false`,
+  `:octets`, any order; a keyword is never an argument a member takes): after the arguments of `java:new` /
   `java:call` / `java:static`, after the field name of `java:field`, after the callable (the last
   function) of `java:proxy` / `java:subclass` / `java:reify`. `JavaSiteResolver.resolve` and
   `JavaImplementations.resolve*` set them aside (`JavaSite.markers()`,
@@ -231,6 +231,19 @@ Package `java` (`LispNames.JAVA_PKG`, `PackageRegistry`; does NOT use `cl`): `ja
   `ofConstructed(..., javaFalse)`: a `boolean` answer is {T, FALSE}) keeps the next site
   resolving. Pins: `JavaInteropPrograms.JAVA_FALSE_PROGRAM`, `JavaImplementationPrograms.
   JAVA_FALSE` (both backends), `theBridgeAndADirectSiteAnswerJavasFalseAlike`.
+- `:octets` (f13): a `byte[]` the FORM answers -- a call's value, a field's, an array's element at
+  any depth -- is an `(unsigned-byte 8)` vector, not a list of signed bytes. Never what Java hands
+  a function: `JavaMarkers.callbacks()` strips it, so a function converted at the call and an
+  implementation (`JavaImplementation`'s compact constructor normalizes; todo `f24`) keep lists, the
+  `_jconv$N` key and the generated classes unchanged. Copies: interpreter `unmarshal(o,
+  javaFalse, octets)` -> `LispIntVector.wrapOctets` (the vector IS Java's array: no copy); the
+  direct sites' `_juno` / `_jufo` over `_jaro` / `_jafo` (`unmarshalIndex`, a `[B` arm ahead of
+  the array loop making `byte[]{8, e...}`); the bridge's `unmarshal(o, jf, octets)` and
+  `FUNCTIONS_OCTETS` (`OCTETS_MARKER`, pinned). A program with a `java:` form ending in it turns
+  `usesIntArray` on (`JvmLispCompiler.programAsksJavaForOctets`): without the `_iv*` runtime
+  the answer printed `#<java [B>`. The static type is unchanged (an array is UNKNOWN). Pins:
+  `JavaInteropPrograms.OCTETS_PROGRAM` (resolved, dispatched, bridged, elements, empty, both
+  markers), `JavaBridgeTemplateParityTest#theBridgeAndADirectSiteAnswerOctetsAlike`.
 - A function implementing `java.util.Comparator.compare` at a form ending in BOTH markers
   (`JavaImplementation.readsComparison`: a functional implementation of `Comparator` alone) is
   read as Clojure's `AFunction.compare`: `t` -1; `|false|` 1 when the function answers true
@@ -322,6 +335,27 @@ four classes); no `_apply`, no `$JavaCalls`.
   `List.of(v)` unpacking the vector. Why not a host object's fixed cost with the array at
   `COST_CONVERT`: `m(T...)` of one view then packs or unpacks by its LENGTH (packed 11 against
   2 + 6n).
+- `:bytes` (f13): `(java:view value octets :bytes)` over an `(unsigned-byte 8)` vector is no
+  collection and Java never holds it (`runtime/RontoJavaBytesView`, not a `RontoJavaValue`, so
+  `_jhost` / `isJavaObject` say no): wherever a `byte[]` fits -- `JavaOverloads.bytesViewCost`:
+  `byte[]` EXACT, `Object` / `Cloneable` / `Serializable` WIDEN, else NO_MATCH -- Java is handed
+  `bytes()`; it is kindless (interpreter `kindOf` null, bridge `kindOf` null, `_jkind`
+  `KIND_BYTES` ahead of `_jhost`, built only where `views`), converts in a view's items, and is
+  a receiver as its `byte[]` (`JavaInterop.receiverObject`, the bridge's `receiverObject`,
+  `_jrecv`). Interpreter: offset 0, `bytes()` is the vector's own `byte[]`, so Java's stores --
+  during the call or later through a kept reference -- are the vector's. Compiled: offset 1 (the
+  width), `bytes()` a fresh copy; a DISPATCHED arm (`bytesHanded`: no closed kind, no bound, a
+  fixed parameter `byte[]` fits; a resolved site never takes one) first hands two views of one
+  storage one copy (`emitBytesShared` -> `shared`), then after the invoke asks `changed` of every
+  candidate before `store`-ing any (two passes: one pass let a later unchanged copy of the same
+  vector undo an earlier written one), the bridge alike (`marshalArguments`' sharing, `writeBack`
+  through the bound methods). Not written back: a varargs tail's elements, a call that threw,
+  later writes through a kept reference (compiled only, todo `f25`). `printer` / `class` unused, `order`
+  refused; items no octet vector are `VIEW_USAGE` (`_jview` tests `byte[]` slot 0 == 8 where
+  `intVectors`). Pins: `JavaInteropPrograms.BYTES_VIEW_PROGRAM` (`Arrays.toString`,
+  `Objects.toString`, `Array.getLength`, `nextBytes`, `arraycopy` between two and within one
+  vector, dispatched and bridged, `Objects.equals(v, v)` T on both, a `List` parameter refused,
+  a receiver, an unknown receiver's `read`, refusals).
 - Callbacks (`RontoJavaCalls`): `text` (a string's text, any other answer its printed spelling)
   and `order` (the sign of a real answer, null otherwise). Interpreter: `JavaInterop.Calls` over
   the evaluator, recording what leaves through `raised`. Compiled: a generated
@@ -1016,7 +1050,7 @@ dispatched or run-time site, the receiver of a run-time `java:call` -- one is th
 
 ## Tests / docs
 `JavaSiteResolverTest`, `JavaDeclarationsTest`, `JavaImplementationsTest` (compiler),
-`JvmRuntimeClassFilesTest` (the handle and view classes travel),
+`JvmRuntimeClassFilesTest` (the handle and view classes travel, `RontoJavaBytesView` with the views),
 `JvmClassFileLookupTest` (incl. `everyInterfaceIsImplementedTheSame`),
 `JavaBridgeTemplateParityTest`, `am.ik.jvm.JvmClassPathTest`; direct calls:
 `JvmJavaInteropCompilerTest` (javap shape, class version, `--java-static`, conversions, texts,

@@ -2293,9 +2293,10 @@ public final class JvmLispCompiler implements LispCompiler {
 		// A fetched reply's :body and a served request's :raw-body are OCTET streams
 		// (their chunks long[] packed vectors built by the runtime, not by any scanned
 		// make-array), so a program that fetches or serves may hold one and needs the
-		// _iv* dispatch on.
+		// _iv* dispatch on. So does a java: call ending in :octets, whose byte[] answer
+		// is an octet vector.
 		boolean usesIntArray = programUsesIntArray(program, closRegistry) || usesSeqIntVector || usesFetch
-				|| usesInflate || usesHttpHandler || usesFloat16Bits;
+				|| usesInflate || usesHttpHandler || usesFloat16Bits || programAsksJavaForOctets(program);
 		// The bulk binary transfer behind read-sequence / write-sequence over a packed
 		// buffer (.kb/binary-sequence-io.md): emitted for a program that has both a
 		// packed buffer to move and a sequence-I/O call to move it with -- the primitive
@@ -5787,6 +5788,37 @@ public final class JvmLispCompiler implements LispCompiler {
 			}
 		}
 		return false;
+	}
+
+	// Whether a java: call or field form of the program ends in :octets
+	// (compiler/JavaMarkers): its byte[] answer is an octet vector the java: runtime
+	// makes, not any scanned make-array.
+	private static boolean programAsksJavaForOctets(List<LispVal> program) {
+		for (LispVal expr : program) {
+			if (asksJavaForOctets(expr)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	private static boolean asksJavaForOctets(LispVal val) {
+		while (val instanceof LispCons cons) {
+			if (cons.car() instanceof LispSymbol head && isJavaCallOperator(head.name()) && cons.isProperList()
+					&& am.ik.rontolisp.compiler.JavaMarkers.of(cons.toList(), 1).octets()) {
+				return true;
+			}
+			if (asksJavaForOctets(cons.car())) {
+				return true;
+			}
+			val = cons.cdr();
+		}
+		return false;
+	}
+
+	private static boolean isJavaCallOperator(String name) {
+		return LispNames.JAVA_NEW_QUALIFIED.equals(name) || LispNames.JAVA_CALL_QUALIFIED.equals(name)
+				|| LispNames.JAVA_STATIC_QUALIFIED.equals(name) || LispNames.JAVA_FIELD_QUALIFIED.equals(name);
 	}
 
 	private static boolean usesIntArray(LispVal val, ClosRegistry closRegistry) {

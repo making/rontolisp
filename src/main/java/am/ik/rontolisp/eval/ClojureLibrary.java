@@ -191,7 +191,7 @@ public final class ClojureLibrary {
 		List<LispVal> body = program;
 		Set<ClojureArms.Family> made = EnumSet.noneOf(ClojureArms.Family.class);
 		for (ClojureArms.Family family : ClojureArms.Family.values()) {
-			ClojureArms.Scan scan = ClojureArms.scan(body, family);
+			ClojureArms.Scan scan = ClojureArms.scan(body, family, hostTarget);
 			if (scan.builds() && (hostTarget || !ClojureArms.needsHost(family))
 					&& ClojureArms.madeBeside(family, made)) {
 				made.add(family);

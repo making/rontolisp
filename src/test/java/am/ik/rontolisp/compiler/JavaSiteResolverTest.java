@@ -117,7 +117,7 @@ class JavaSiteResolverTest {
 		assertThat(resolve("(java:new \"java.lang.Boolean\" \"x\" :java-false)").result()).isEqualTo(trueOrFalse);
 		for (String ending : List.of(":java-false :functional", ":functional :java-false")) {
 			JavaSite both = resolve("(java:static \"java.util.Objects\" \"equals\" 1 2 " + ending + ")");
-			assertThat(both.markers()).as(ending).isEqualTo(new JavaMarkers(true, true));
+			assertThat(both.markers()).as(ending).isEqualTo(new JavaMarkers(true, true, false));
 			assertThat(both.designator()).as(ending).isEqualTo("equals(java.lang.Object,java.lang.Object)");
 		}
 		assertThat(member("(java:static \"java.lang.Boolean\" \"toString\""
