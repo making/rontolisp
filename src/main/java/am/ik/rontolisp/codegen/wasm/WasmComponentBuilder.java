@@ -959,7 +959,9 @@ public final class WasmComponentBuilder {
 			final int instance = Objects.requireNonNull(instanceOf.get(imported.ifaceId()));
 			final List<String> fields = new java.util.ArrayList<>();
 			final List<Integer> coreIndices = new java.util.ArrayList<>();
-			for (WasmComponentImportCompiler.Decl decl : imported.decls()) {
+			// One per field: two bindings of the interface may repeat a member, and its
+			// wrappers share the one deduplicated (module, field) core import.
+			for (WasmComponentImportCompiler.Decl decl : imported.distinctDecls()) {
 				funcAliases.add(ComponentWriter.aliasInstanceFunc(instance, decl.field()));
 				lowers.add(WasmComponentImportCompiler.needsMemory(decl)
 						? ComponentWriter.canonLowerMemoryReallocUtf8(compFunc, 0, 0)
@@ -973,7 +975,7 @@ public final class WasmComponentBuilder {
 			// but canon-lowered with the `async` option -- the core call returns the
 			// packed (subtask << 4) | status immediately, and the memory options cover
 			// the always-indirect result.
-			for (WasmComponentImportCompiler.AsyncCall call : imported.calls()) {
+			for (WasmComponentImportCompiler.AsyncCall call : imported.distinctCalls()) {
 				funcAliases.add(ComponentWriter.aliasInstanceFunc(instance, call.field()));
 				lowers.add(ComponentWriter.canonLowerAsyncMemoryReallocUtf8(compFunc, 0, 0));
 				fields.add(call.field());
@@ -996,7 +998,7 @@ public final class WasmComponentBuilder {
 		final List<byte[]> dropCanons = new java.util.ArrayList<>();
 		for (WasmComponentImportCompiler.Import imported : imports) {
 			CoreExports core = Objects.requireNonNull(exports.get(imported.ifaceId()));
-			for (WasmComponentImportCompiler.Drop drop : imported.drops()) {
+			for (WasmComponentImportCompiler.Drop drop : imported.distinctDrops()) {
 				String key = imported.ifaceId() + "#" + drop.resource();
 				Integer outer = outerOf.get(key);
 				if (outer == null) {

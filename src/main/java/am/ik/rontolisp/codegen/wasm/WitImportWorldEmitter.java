@@ -124,7 +124,7 @@ final class WitImportWorldEmitter {
 			discoverResource(resource);
 		}
 		List<WitItem.FuncDef> freestanding = new ArrayList<>();
-		for (WasmComponentImportCompiler.Decl decl : this.imported.decls()) {
+		for (WasmComponentImportCompiler.Decl decl : this.imported.distinctDecls()) {
 			var func = decl.func();
 			String resource = func.resource();
 			if (resource != null) {

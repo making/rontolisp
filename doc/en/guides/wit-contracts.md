@@ -443,7 +443,7 @@ hands you goes straight into the next:
 ```
 
 The one shape that still does not lower is a **`list<T>` argument**
-(`list<u8>` does, as a byte string): an argument is flattened, and a list
+(`list<u8>` does): an argument is flattened, and a list
 would have to be written into linear memory as a canonical array instead. It
 is a compile error naming the WIT line, and `flags` does not cross in either
 direction yet.

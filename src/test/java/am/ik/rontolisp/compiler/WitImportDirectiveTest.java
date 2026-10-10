@@ -479,11 +479,47 @@ class WitImportDirectiveTest {
 
 	@Test
 	void carriesAByteStringAcrossThePreview1Boundary() {
-		// list<u8> is a byte-per-char rontolisp string (the settled mapping), so it
-		// crosses
-		// as :STRING -- the same designator as a WIT string.
+		// list<u8> is a rontolisp string (the settled mapping), so it crosses as :STRING
+		// -- the same designator, and the same text, as a WIT string.
 		assertThat(printed(lowerApi("  put: func(data: list<u8>) -> list<u8>;", Backend.WASM_GC)))
 			.isEqualTo("(RONTOLISP:WASM-IMPORT 'PUT :FROM \"api\" :AS \"put\" :PARAMS '(:STRING) :RETURNS :STRING)");
+	}
+
+	@Test
+	void parsesTheOctetsFlag() {
+		String head = "(rontolisp:wit-import \"kv.wit\" :interface \"" + STORE + "\" :octets ";
+		assertThat(WitImportDirective.parse(form(head + "t)")))
+			.isEqualTo(new Directive("kv.wit", STORE, null, null, FieldStyle.CAMEL, null, true));
+		assertThat(WitImportDirective.parse(form(head + "nil)")))
+			.isEqualTo(new Directive("kv.wit", STORE, null, null, FieldStyle.CAMEL));
+		assertThatThrownBy(() -> WitImportDirective.parse(form(head + "1)")))
+			.isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("rontolisp:wit-import :octets expects t or nil");
+	}
+
+	@Test
+	void octetsLeadTheComponentFormAndHaveNoPreview1Carrier() {
+		String wit = iface("  put: func(data: list<u8>) -> list<u8>;\n  ping: func() -> u32;");
+		Directive octets = new Directive(WIT, API, null, null, FieldStyle.CAMEL, null, true);
+		// --component: the marker leads the members, so every wrapper of this binding
+		// lifts a list<u8> as an octet vector
+		assertThat(printed(lower(wit, Backend.WASM_COMPONENT, octets)))
+			.startsWith("(RONTOLISP::%COMPONENT-IMPORT \"" + API + "\" ")
+			.contains("\" (:OCTETS T) (\"put\" \"PUT\") (\"ping\" \"PING\"))");
+		assertThat(printed(lower(wit, Backend.WASM_COMPONENT, new Directive(WIT, API, null, null, FieldStyle.CAMEL))))
+			.doesNotContain(":OCTETS");
+		// the interpreter and the JVM hand the provider's value over as it is
+		assertThat(printed(lower(wit, Backend.OTHER, octets)))
+			.isEqualTo(printed(lower(wit, Backend.OTHER, new Directive(WIT, API, null, null, FieldStyle.CAMEL))));
+		// a core module declares the list :string, text: refused where a member carries
+		// one, a member without one binds as before
+		for (Backend core : List.of(Backend.WASM_GC, Backend.WASM_NO_GC)) {
+			assertThatThrownBy(() -> lower(wit, core, octets)).isInstanceOf(UnsupportedOperationException.class)
+				.hasMessageContaining("kv.wit:4: 'put': :octets t crosses a list<u8> as its octets, which a Preview 1 "
+						+ "core import cannot carry");
+		}
+		assertThat(printed(lower(iface("  ping: func() -> u32;"), Backend.WASM_GC, octets)))
+			.isEqualTo("(RONTOLISP:WASM-IMPORT 'PING :FROM \"api\" :AS \"ping\" :PARAMS 'NIL :RETURNS :INT)");
 	}
 
 	@Test

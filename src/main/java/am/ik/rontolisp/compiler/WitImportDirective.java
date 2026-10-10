@@ -145,9 +145,28 @@ public final class WitImportDirective {
 	 * so it is no per-function alias. The Clojure lowering passes it
 	 * ({@code rontolisp.wit}), whose vars are {@code c%ns/name} symbols no package export
 	 * table can reach
+	 * @param octets whether a {@code list<u8>} RESULT lifts as a packed
+	 * {@code (unsigned-byte 8)} vector, octet for octet ({@code :octets t}), instead of
+	 * the text a {@code string} lifts to: what {@code --component} decides; the
+	 * interpreter and the JVM hand a provider's value over unconverted either way, and
+	 * Preview 1, whose {@code :string} is text, refuses a member carrying one
 	 */
 	public record Directive(String path, String iface, @Nullable String pkg, @Nullable String module,
-			FieldStyle fieldStyle, @Nullable Map<String, String> names) {
+			FieldStyle fieldStyle, @Nullable Map<String, String> names, boolean octets) {
+
+		/**
+		 * A directive lifting a {@code list<u8>} as text.
+		 * @param path the WIT file path as written
+		 * @param iface the interface to bind
+		 * @param pkg the Lisp package the bindings land in, or {@code null}
+		 * @param module the WASM Preview 1 import module, or {@code null}
+		 * @param fieldStyle how a WIT label is spelled as a Preview 1 import field
+		 * @param names the naming hook, or {@code null}
+		 */
+		public Directive(String path, String iface, @Nullable String pkg, @Nullable String module,
+				FieldStyle fieldStyle, @Nullable Map<String, String> names) {
+			this(path, iface, pkg, module, fieldStyle, names, false);
+		}
 
 		/**
 		 * A directive with no naming hook: the bindings are named by {@code :package} or
@@ -160,7 +179,7 @@ public final class WitImportDirective {
 		 */
 		public Directive(String path, String iface, @Nullable String pkg, @Nullable String module,
 				FieldStyle fieldStyle) {
-			this(path, iface, pkg, module, fieldStyle, null);
+			this(path, iface, pkg, module, fieldStyle, null, false);
 		}
 
 	}
@@ -196,6 +215,7 @@ public final class WitImportDirective {
 		String module = null;
 		FieldStyle fieldStyle = FieldStyle.CAMEL;
 		Map<String, String> names = null;
+		boolean octets = false;
 		int i = 2;
 		while (i < items.size()) {
 			if (!(items.get(i) instanceof LispSymbol keyword) || !keyword.isKeyword()) {
@@ -215,6 +235,8 @@ public final class WitImportDirective {
 				case ":FROM" -> module = designator(value, ":from", form).toLowerCase(Locale.ROOT);
 				case ":FIELD-STYLE" -> fieldStyle = fieldStyle(value, form);
 				case ":NAMES" -> names = WitNamingHook.parse(value, "rontolisp:wit-import", form);
+				case ":OCTETS" ->
+					octets = WasmImportDirective.booleanValue(value, "rontolisp:wit-import", ":octets", form);
 				default -> throw new UnsupportedOperationException(
 						"Unknown rontolisp:wit-import option " + keyword.name() + " in " + form.print());
 			}
@@ -229,7 +251,7 @@ public final class WitImportDirective {
 					"rontolisp:wit-import :names spells every binding itself, so it takes no :package, in "
 							+ form.print());
 		}
-		return new Directive(path.value(), iface, pkg, module, fieldStyle, names);
+		return new Directive(path.value(), iface, pkg, module, fieldStyle, names, octets);
 	}
 
 	// A string, or a bare symbol written in the WIT's own spelling.
@@ -416,6 +438,9 @@ public final class WitImportDirective {
 			}
 			List<Param> params = parameters(func, witPath, locations, resolver, iface, member, wasm, false, noGc);
 			String returns = resultDesignator(func, witPath, locations, resolver, iface, member, wasm, noGc);
+			if (wasm && directive.octets()) {
+				refuseOctets(func, witPath, locations, resolver, iface, member);
+			}
 			if (!wasm && func.def().func().async()) {
 				// An `async func` member on the interpreter / the JVM: the provider call
 				// is synchronous, but the binding is an async-defun so callers get a
@@ -567,7 +592,7 @@ public final class WitImportDirective {
 			forms.add(defpackageForm(directive.pkg(), boundMembers));
 		}
 		if (component) {
-			forms.add(componentImportForm(ifaceId, witSource, componentMembers));
+			forms.add(componentImportForm(ifaceId, witSource, directive.octets(), componentMembers));
 		}
 		forms.addAll(bindings);
 		return forms;
@@ -1140,12 +1165,17 @@ public final class WitImportDirective {
 
 	// (rontolisp::%component-import "iface-id" "wit text" ("member" "lisp-name") ...) --
 	// the WIT text travels inside the form so the WASM compiler reads no files (the
-	// browser playground has no filesystem).
-	private static LispVal componentImportForm(String ifaceId, String witSource, List<LispVal> members) {
+	// browser playground has no filesystem). Under :octets t an (:octets t) entry
+	// leads the members: every list<u8> those bindings lift is an octet vector.
+	private static LispVal componentImportForm(String ifaceId, String witSource, boolean octets,
+			List<LispVal> members) {
 		List<LispVal> out = new ArrayList<>();
 		out.add(new LispSymbol(PackageRegistry.qualifyInternal(LispNames.RONTOLISP_PKG, LispNames.COMPONENT_IMPORT)));
 		out.add(new LispString(ifaceId));
 		out.add(new LispString(witSource));
+		if (octets) {
+			out.add(list(List.of(new LispSymbol(":OCTETS"), new LispSymbol("T"))));
+		}
 		out.addAll(members);
 		return list(out);
 	}
@@ -1504,6 +1534,29 @@ public final class WitImportDirective {
 		// binds through the WIT text, not a flat designator), so component is always
 		// false.
 		return designatorOf(result, witPath, locations, resolver, iface, func, member, "the result", wasm, false, noGc);
+	}
+
+	// :octets t on a core module: a list<u8> crosses a core import as :string, text, so
+	// the octets the option promises have no carrier there. Only a flat type reaches
+	// this check (designatorOf refused the rest), so a list<u8> is a parameter or the
+	// result itself.
+	private static void refuseOctets(WitResolver.Func func, String witPath, WitLocations locations,
+			WitResolver resolver, WitItem.InterfaceDef iface, String member) {
+		List<WitType> types = new ArrayList<>();
+		for (var param : func.def().func().params()) {
+			types.add(param.type());
+		}
+		if (func.def().func().result() != null) {
+			types.add(func.def().func().result());
+		}
+		for (WitType type : types) {
+			Scoped scoped = resolveAliases(type, resolver, iface);
+			if (scoped.type() instanceof WitType.ListOf list && isU8(list.element(), resolver, scoped.iface())) {
+				throw new UnsupportedOperationException(witPath + ":" + locations.lineOf(func.def()) + ": '" + member
+						+ "': :octets t crosses a list<u8> as its octets, which a Preview 1 core import cannot carry "
+						+ "(it declares the list :string, text); compile with --component, or drop :octets");
+			}
+		}
 	}
 
 	// The one place a WIT type is judged. On the WASM boundary only the flat set

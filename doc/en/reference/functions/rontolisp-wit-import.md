@@ -113,6 +113,14 @@ host that has never heard of the program. The output is identical all three ways
   `:camel` (the default — `create-shader` becomes `createShader`, the JavaScript
   convention and what `jco` produces) or `:kebab` (the label verbatim). Ignored
   on the other backends.
+- `:octets` — `t` makes a `--component` binding return every `list<u8>` (the
+  result itself, or one inside an `option`, a `record`, ...) as an
+  `(unsigned-byte 8)` vector holding the octets the host wrote. Without it a
+  `list<u8>` result is text: the octets decoded as UTF-8, so octets that are not
+  UTF-8 (`ff`, a lone continuation byte) do not come back as written. The
+  interpreter and the JVM hand the provider's value over unchanged either way. A
+  Preview 1 module declares a `list<u8>` `:string`, so there a member carrying
+  one is a compile error under `:octets t`.
 
 ## What gets bound
 
@@ -283,9 +291,8 @@ import is a bare host function, with no component type to describe a richer shap
 with. Under **`--component`** the canonical ABI marshals the rich types, so a
 `record`, `variant`, `enum`, `option`, `tuple` or `result` crosses **in both
 directions** — as an argument as well as a result. Two do not: `flags` (in
-neither direction), and a `list<T>` **as an argument** (`list<u8>` crosses, as a
-byte string). Anything unsupported is a compile error naming the WIT file and
-line.
+neither direction), and a `list<T>` **as an argument** (`list<u8>` crosses).
+Anything unsupported is a compile error naming the WIT file and line.
 
 | WIT type | Lisp value | Preview 1 | `--component` |
 | --- | --- | --- | --- |
@@ -295,7 +302,7 @@ line.
 | `bool` | `t` / `nil` | `:bool` | yes |
 | `string` | a string | `:string` | yes |
 | `char` | a character | no | yes |
-| `list<u8>` | a string of raw bytes (one per char) | `:string` | yes |
+| `list<u8>` | a string, the octets as UTF-8 text; under `:octets t` an `(unsigned-byte 8)` vector. An argument may also be an `(unsigned-byte 8)` vector, crossing a component as its octets | `:string` | yes |
 | `list<T>` | a proper list | no | result only |
 | `tuple<...>` | a proper list, positional | no | yes |
 | `option<T>` | the value, or `nil` | no | yes |

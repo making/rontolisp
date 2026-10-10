@@ -1845,18 +1845,20 @@ function and a directive must be a top-level form.
   UTF-8, JDK replacement). Which one is the boundary's answer, not the target's:
   `ClojureBoundary.bytesCrossAsText`, true for `ClojureHostBoundary.CORE_MODULE`, which
   `SourceLanguage` picks from the features (`rontolisp-wasm` without `rontolisp-component`).
-  Coming back is one rule everywhere because every WASM lift of a `list<u8>` is text: a
-  component's result goes through `_string_from_mem` (a UTF-8 decode, NOT one character per
-  byte, measured 2026-10-10: `ff 00 41` stored through wasmtime's keyvalue came back as code
-  point 1835106), so only octets that are valid UTF-8 come back exact (todo `f23`). A Common
-  Lisp provider's string arrives as its UTF-8 encoding; a Common Lisp caller of a Clojure
-  provider gets the packed vector, which the component's argument staging also takes.
+  Coming back: off a core module the directive carries `:octets t` (`.kb/wit.md`), so a
+  component lifts the result as a packed vector, octet for octet; without it the lift was
+  `_string_from_mem`'s UTF-8 decode (measured 2026-10-10: `ff 00 41` stored through wasmtime's
+  keyvalue came back as code point 1835106, `[-9 -128 -127 -94]`). A core module's text comes
+  back as its UTF-8 encoding, exact only for valid UTF-8. `%clojure-bytes-from-host` takes
+  both shapes. A Common Lisp provider's string arrives as its UTF-8 encoding; a Common Lisp
+  caller of a Clojure provider gets the packed vector, which the component's argument staging
+  also takes.
   `:BYTE-ARRAY` and `%clojure-bytes-from-host` are byte-array producers (the descriptor
   global is in the program, so the scan sees the keyword). Pinned:
   `ClojureWitBoundaryTest.aListOfOctetsIsAByteArrayBothWaysOnTheInterpreterAndTheJvm` (alone,
   in an option, in a list; both languages' providers and a CL caller),
   `aListOfOctetsCrossesAPreview1ModuleAsItsUtf8TextUnderNode`,
-  `aComponentImportsWasmtimesKeyvalueStore` (a two-byte character's octets through wasmtime). To the host a list/tuple/flags takes any collection
+  `aComponentImportsWasmtimesKeyvalueStore` (a two-byte character's octets through wasmtime), `aComponentReadsBackOctetsThatAreNoUtf8Exact` (`ff 00 41`). To the host a list/tuple/flags takes any collection
   (`%clojure-seq-all`) and a record any map (`%clojure-call-keyword`, records and sorted maps
   too); a value of no shape of its type is an `IllegalArgumentException` naming the type.
 - **The error arm** is an `ExceptionInfo` ("member of iface answered its error arm") whose

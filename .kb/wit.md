@@ -61,9 +61,27 @@ condition system, `--no-gc` has no spill channel, and migrating later breaks use
 **`list<u8>` = a string**, NOT a list of ints. The premise "one character per byte" does not
 hold on the wasm backends (measured 2026-10-10): a `--component` result lifts through
 `_string_from_mem`, the same non-validating UTF-8 decode as a WIT `string` (`emitLiftString`), so
-`ff 00 41` comes back as one code point, and Preview 1 declares the member `:string`. A
-`list<u8>` result is exact only for octets that are valid UTF-8 (todo `f23`). The Clojure tier
-crosses it as a byte array (`.kb/clojure-frontend.md`, "Host boundary").
+`ff 00 41` comes back as one code point, and Preview 1 declares the member `:string`. So a text
+`list<u8>` result is exact only for octets that are valid UTF-8. The Clojure tier crosses it as
+a byte array (`.kb/clojure-frontend.md`, "Host boundary").
+
+- **`:octets t`** (2026-10-10) on `wit-import`: an opt-in, because the CL tier reads the lifted
+  text (`page-hits.lisp` parses it, `serve.lisp` reads `wasi:http` `field-value`s as header
+  text). The `%component-import` form leads its members with `(:octets t)`; each `Decl` /
+  `AsyncCall` / future `Async` carries the flag, and `liftsOctets()` (a `list<u8>` anywhere in
+  the result, `liftsListU8`) makes the wrapper lift it through `_bytes_from_mem` and forces that
+  helper on, so an `:octets` binding lifting none is byte-identical. Interpreter/JVM: no
+  conversion (the provider's value passes as it is). Preview 1 / `--no-gc`: a member carrying
+  a `list<u8>` is refused (`refuseOctets`) -- exact octets there need a value designator of
+  their own (`:bytes` is the read(2) shape). The Clojure lowering passes `:octets t` wherever
+  `bytesCrossAsText` is false. Pins: `ClojureWitBoundaryTest.aComponentReadsBackOctetsThatAreNoUtf8Exact`
+  (wasmtime keyvalue, `ff 00 41` both tiers), `WitImportDirectiveTest.octetsLeadTheComponentFormAndHaveNoPreview1Carrier`,
+  `WasmComponentImportCompilerTest.anOctetsBindingLiftsAListOfOctetsThroughTheBytesHelperOnly`.
+- **Two bindings of one interface** (`mergeByIface`) keep a wrapper each but the component
+  declares each member once (`Import.distinctDecls` / `distinctCalls` / `distinctDrops`, in
+  `WitComponentTypeEncoder`, `appendUserImports`, `WitImportWorldEmitter`). Before 2026-10-10
+  only the fixed-block path deduplicated, and two `wit-import`s binding one member failed
+  validation (`export name 'open' conflicts`). Pin: `twoBindingsOfOneMemberDeclareItOnce`.
 
 - **Trap**: a rontolisp string is stored UTF-8 (`.kb/wasm-gc-strings.md`), so staging one for a
   `list<u8>` parameter ENCODES and every byte >= 0x80 doubles. A `list<u8>` / `stream<u8>`
@@ -73,8 +91,8 @@ crosses it as a byte array (`.kb/clojure-frontend.md`, "Host boundary").
 - **A `stream<u8>` READ answers a packed byte vector**, lifted through `_bytes_from_mem` (raw
   octets, no decode) in both places a completion is lifted (`emitReadLift`, `_sched_dispatch`'s
   kind-1 settle); `WasmLispCompiler.streamReadsBytes` forces that one helper on, so a module
-  without a byte-stream read is byte-identical. **`list<u8>` RESULTS still lift as byte strings**
-  — trigger: the day a result consumer wants octets, move it to `_bytes_from_mem`.
+  without a byte-stream read is byte-identical. A `list<u8>` RESULT lifts as text unless the
+  binding says `:octets t` (above).
 
 ## `rontolisp:wit-export` — implementing a world
 `(rontolisp:wit-export "count_vowels_component.wit" :world root)`; the path resolves against the
@@ -342,8 +360,8 @@ the provider's member strings, the Preview 1 fields and the component's import/e
   `option`, a `list` or a `result`'s ok arm, the error arm, and `parts` -- a record's fields, a
   variant's cases (a payload-less one shapeless), an enum's and a flags' labels, a tuple's
   elements -- which is what a front end converts its own values by (the Clojure walker,
-  `.kb/clojure-frontend.md`, "Host boundary"). A `list` of an alias of `u8` is a byte string,
-  as the component lifts it. A top-level type naming no definition is `lower`'s error; a
+  `.kb/clojure-frontend.md`, "Host boundary"). A `list` of an alias of `u8` is a byte string.
+  A top-level type naming no definition is `lower`'s error; a
   NESTED one, or a definition containing itself, describes as `UNSUPPORTED` -- the
   interpreter's `lower` never looks inside a record, so only the member reaching it is the
   front end's to refuse. The built-ins of a type alias whose target names no definition

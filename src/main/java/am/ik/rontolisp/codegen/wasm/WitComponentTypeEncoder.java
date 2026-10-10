@@ -107,13 +107,13 @@ final class WitComponentTypeEncoder {
 		for (String resource : provided) {
 			encoder.resourceIndex(encoder.abi, resource);
 		}
-		for (WasmComponentImportCompiler.Decl decl : imported.decls()) {
+		for (WasmComponentImportCompiler.Decl decl : imported.distinctDecls()) {
 			encoder.declareFunction(decl.func(), decl.field(), false);
 		}
 		// Async func members follow the sync ones; their instance-type declaration is the
 		// async function type (tag 0x43) -- the host's real instance declares them async,
 		// and instance linking checks the flag.
-		for (WasmComponentImportCompiler.AsyncCall call : imported.calls()) {
+		for (WasmComponentImportCompiler.AsyncCall call : imported.distinctCalls()) {
 			encoder.declareFunction(call.func(), call.field(), true);
 		}
 		return ComponentWriter.instanceTypeOf(encoder.decls);

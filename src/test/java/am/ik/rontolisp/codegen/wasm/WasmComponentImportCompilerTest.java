@@ -352,6 +352,58 @@ class WasmComponentImportCompilerTest {
 		assertThat(containsAscii(component, "open")).isTrue();
 	}
 
+	// A keyvalue component binding the given members, with or without (:octets t).
+	private static byte[] keyvalueMembers(boolean octets, String... members) {
+		List<String> entries = new ArrayList<>();
+		if (octets) {
+			entries.add("(:octets t)");
+		}
+		StringBuilder calls = new StringBuilder();
+		for (String member : members) {
+			entries.add("(\"" + member + "\" \"KV::%" + member.toUpperCase(java.util.Locale.ROOT) + "\")");
+			calls.append("(print (kv::%").append(member).append(" 1 \"k\"))\n");
+		}
+		return compileComponent("(defpackage kv (:use cl))\n"
+				+ importForm("wasi:keyvalue/store@0.2.0-draft", KV_WIT, entries.toArray(String[]::new)) + calls);
+	}
+
+	@Test
+	void anOctetsBindingLiftsAListOfOctetsThroughTheBytesHelperOnly() {
+		// open lifts no list<u8>: (:octets t) changes no byte of it
+		assertThat(compileComponent("(defpackage kv (:use cl))\n"
+				+ importForm("wasi:keyvalue/store@0.2.0-draft", KV_WIT, "(:octets t)", "(\"open\" \"KV::%OPEN\")")
+				+ "(print (kv::%open \"\"))\n"))
+			.isEqualTo(compileComponent("(defpackage kv (:use cl))\n"
+					+ importForm("wasi:keyvalue/store@0.2.0-draft", KV_WIT, "(\"open\" \"KV::%OPEN\")")
+					+ "(print (kv::%open \"\"))\n"));
+		// bucket-get's option<list<u8>> does: the module gains _bytes_from_mem
+		assertThat(keyvalueMembers(true, "bucket-get")).isNotEqualTo(keyvalueMembers(false, "bucket-get"));
+		assertThat(parseImport("wasi:keyvalue/store@0.2.0-draft", KV_WIT, "(:octets t)",
+				"(\"bucket-get\" \"KV::%BUCKET-GET\")", "(\"open\" \"KV::%OPEN\")")
+			.decls()
+			.stream()
+			.map(WasmComponentImportCompiler.Decl::liftsOctets)).containsExactly(true, false);
+	}
+
+	@Test
+	void twoBindingsOfOneMemberDeclareItOnce() {
+		// mergeByIface keeps both bindings' wrappers (each may lift differently), and the
+		// component instance declares the member once: a second `open` export failed
+		// the component's validation
+		WasmComponentImportCompiler.Import text = parseImport("wasi:keyvalue/store@0.2.0-draft", KV_WIT,
+				"(\"open\" \"KV::%OPEN\")", "(:drop \"bucket\" \"KV::BUCKET-DROP\")");
+		WasmComponentImportCompiler.Import octets = parseImport("wasi:keyvalue/store@0.2.0-draft", KV_WIT,
+				"(:octets t)", "(\"open\" \"KVO::%OPEN\")", "(:drop \"bucket\" \"KVO::BUCKET-DROP\")");
+		WasmComponentImportCompiler.Import merged = WasmComponentImportCompiler.mergeByIface(List.of(text, octets))
+			.get(0);
+		assertThat(merged.decls()).hasSize(2);
+		assertThat(merged.distinctDecls()).containsExactly(text.decls().get(0));
+		assertThat(merged.distinctDrops()).hasSize(1);
+		WitComponentTypeEncoder.OuterResources none = (owner, resource) -> 0;
+		assertThat(WitComponentTypeEncoder.encode(merged, none, new java.util.LinkedHashSet<>()))
+			.isEqualTo(WitComponentTypeEncoder.encode(text, none, new java.util.LinkedHashSet<>()));
+	}
+
 	@Test
 	void anImportFreeComponentIsUnchanged() {
 		// The wiring emits nothing without an import, so no index shifts: the guard that

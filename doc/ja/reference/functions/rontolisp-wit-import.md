@@ -114,6 +114,14 @@ rontolisp counter.lisp -o Counter.class && java Counter
   `:camel` (既定 — `create-shader` は `createShader` になります。JavaScript
   の慣習であり、`jco` が生成するものでもあります) または `:kebab` (ラベルをそのまま)。
   他のバックエンドでは無視されます。
+- `:octets` — `t` にすると、`--component` の束縛は `list<u8>` (結果そのもの、または
+  `option` や `record` などの内側にあるもの) をすべて、ホストが書いたオクテットを持つ
+  `(unsigned-byte 8)` ベクタとして返します。指定しなければ `list<u8>` の結果は
+  テキスト、つまりオクテットを UTF-8 としてデコードした文字列なので、UTF-8 でない
+  オクテット (`ff`、単独の継続バイト) は書かれたとおりには戻りません。インタプリタと
+  JVM はどちらの場合もプロバイダの値をそのまま渡します。Preview 1 モジュールは
+  `list<u8>` を `:string` と宣言するので、`:octets t` のもとでそれを含むメンバは
+  コンパイルエラーになります。
 
 ## 何が束縛されるか
 
@@ -290,7 +298,7 @@ cons `(:ok . V)` / `(:error . E)` — これは戻り値の `result` が ok
 が豊かな型をマーシャリングするので、`record`、`variant`、`enum`、`option`、`tuple`、
 `result` は**両方向で** — 戻り値としてだけでなく引数としても — 渡ります。渡らないのは
 2 つだけです: `flags` (どちらの向きでも)、および**引数としての** `list<T>`
-(`list<u8>` はバイト文字列として渡ります)。サポートされない型は WIT
+(`list<u8>` は渡ります)。サポートされない型は WIT
 ファイル名と行番号を示すコンパイルエラーになります。
 
 | WIT type | Lisp value | Preview 1 | `--component` |
@@ -301,7 +309,7 @@ cons `(:ok . V)` / `(:error . E)` — これは戻り値の `result` が ok
 | `bool` | `t` / `nil` | `:bool` | yes |
 | `string` | a string | `:string` | yes |
 | `char` | a character | no | yes |
-| `list<u8>` | a string of raw bytes (one per char) | `:string` | yes |
+| `list<u8>` | a string, the octets as UTF-8 text; under `:octets t` an `(unsigned-byte 8)` vector. An argument may also be an `(unsigned-byte 8)` vector, crossing a component as its octets | `:string` | yes |
 | `list<T>` | a proper list | no | result only |
 | `tuple<...>` | a proper list, positional | no | yes |
 | `option<T>` | the value, or `nil` | no | yes |

@@ -91,9 +91,18 @@ final class WasmComponentImportCompiler {
 	 * @param func the WIT function
 	 * @param abi the layout calculator scoped to the interface
 	 * @param sig the flat core signature of the lowered call
+	 * @param octets whether a {@code list<u8>} the result carries lifts as a packed
+	 * {@code (unsigned-byte 8)} vector ({@code rontolisp:wit-import :octets t}) rather
+	 * than as text
 	 */
 	record Decl(String lispName, String module, String field, WitResolver.Func func, WitCanonicalAbi abi,
-			WitCanonicalAbi.FlatSig sig) {
+			WitCanonicalAbi.FlatSig sig, boolean octets) {
+
+		/** Whether the result lift calls {@code _bytes_from_mem}. */
+		boolean liftsOctets() {
+			return octets() && liftsListU8(func().def().func().result(), abi());
+		}
+
 	}
 
 	/**
@@ -162,9 +171,17 @@ final class WasmComponentImportCompiler {
 	 * written in (payload references resolve there)
 	 * @param type the resolved target: a {@link WitType.StreamOf} or
 	 * {@link WitType.FutureOf}
+	 * @param octets whether a {@code list<u8>} a future's payload carries lifts as a
+	 * packed {@code (unsigned-byte 8)} vector ({@code :octets t}); a byte stream's chunk
+	 * is one either way
 	 */
 	record Async(String lispName, String module, String field, String alias, AsyncOp op, WitCanonicalAbi abi,
-			WitType type) {
+			WitType type, boolean octets) {
+
+		/** Whether a future read's payload lift calls {@code _bytes_from_mem}. */
+		boolean liftsOctets() {
+			return octets() && op() == AsyncOp.READ && liftsListU8(payload(), abi());
+		}
 
 		boolean stream() {
 			return type() instanceof WitType.StreamOf;
@@ -210,9 +227,17 @@ final class WasmComponentImportCompiler {
 	 * @param func the WIT function
 	 * @param abi the layout calculator scoped to the interface
 	 * @param sig the async-lowered flat core signature
+	 * @param octets whether a {@code list<u8>} the result carries lifts as a packed
+	 * {@code (unsigned-byte 8)} vector ({@code :octets t})
 	 */
 	record AsyncCall(String startName, String liftName, String module, String field, WitResolver.Func func,
-			WitCanonicalAbi abi, WitCanonicalAbi.FlatSig sig) {
+			WitCanonicalAbi abi, WitCanonicalAbi.FlatSig sig, boolean octets) {
+
+		/** Whether the lift wrapper calls {@code _bytes_from_mem}. */
+		boolean liftsOctets() {
+			return octets() && liftsListU8(func().def().func().result(), abi());
+		}
+
 	}
 
 	/**
@@ -332,6 +357,45 @@ final class WasmComponentImportCompiler {
 
 	record Import(String ifaceId, WitItem.InterfaceDef iface, WitResolver resolver, List<Decl> decls, List<Drop> drops,
 			List<Async> asyncs, List<AsyncCall> calls, List<TaskReturn> taskReturns) {
+
+		/**
+		 * The bound functions the component instance declares: the first binding of each
+		 * canonical field. Two bindings of one interface ({@link #mergeByIface}) may each
+		 * bind a member -- under {@code :octets t} and without, say -- and keep a wrapper
+		 * each, but the instance exports the function once.
+		 * @return the decls, one per field
+		 */
+		List<Decl> distinctDecls() {
+			return firstPerKey(decls(), Decl::field);
+		}
+
+		/**
+		 * The async func members the component instance declares, one per field.
+		 * @return the calls, one per field
+		 */
+		List<AsyncCall> distinctCalls() {
+			return firstPerKey(calls(), AsyncCall::field);
+		}
+
+		/**
+		 * The resource drops the component lowers, one per resource.
+		 * @return the drops, one per field
+		 */
+		List<Drop> distinctDrops() {
+			return firstPerKey(drops(), Drop::field);
+		}
+
+		private static <T> List<T> firstPerKey(List<T> all, java.util.function.Function<T, String> key) {
+			java.util.Set<String> seen = new java.util.HashSet<>();
+			List<T> out = new ArrayList<>(all.size());
+			for (T item : all) {
+				if (seen.add(key.apply(item))) {
+					out.add(item);
+				}
+			}
+			return out.size() == all.size() ? all : out;
+		}
+
 	}
 
 	/**
@@ -482,7 +546,10 @@ final class WasmComponentImportCompiler {
 		List<Async> asyncs = new ArrayList<>();
 		List<AsyncCall> calls = new ArrayList<>();
 		List<TaskReturn> taskReturns = new ArrayList<>();
-		for (int i = 3; i < items.size(); i++) {
+		// (:octets t) leads the members of a :octets t directive's form.
+		boolean octets = items.size() > 3 && items.get(3) instanceof LispCons marker
+				&& marker.car() instanceof LispSymbol head && ":OCTETS".equals(head.name());
+		for (int i = octets ? 4 : 3; i < items.size(); i++) {
 			if (!(items.get(i) instanceof LispCons pair) || !(pair.cdr() instanceof LispCons rest)) {
 				throw new UnsupportedOperationException(
 						"Malformed internal component-import member: " + items.get(i).print());
@@ -505,7 +572,7 @@ final class WasmComponentImportCompiler {
 						.orElseThrow(() -> new IllegalStateException(
 								"Internal component-import form names an unknown member: " + member.value()));
 					calls.add(new AsyncCall(startName.value(), liftName.value(), ifaceId.value(), cabiFieldName(func),
-							func, abi, abi.flatSigAsyncLower(func)));
+							func, abi, abi.flatSigAsyncLower(func), octets));
 					continue;
 				}
 				if (":TASK-RETURN".equals(keyword.name())) {
@@ -534,7 +601,7 @@ final class WasmComponentImportCompiler {
 					AsyncOp asyncOp = AsyncOp.of(op.value());
 					asyncs.add(new Async(asyncName.value(), ifaceId.value(),
 							"[async-" + asyncOp.suffix + "]" + alias.value(), alias.value(), asyncOp, target.abi(),
-							target.type()));
+							target.type(), octets));
 					continue;
 				}
 				if (!":DROP".equals(keyword.name()) || !(rest.car() instanceof LispString resource)
@@ -555,7 +622,8 @@ final class WasmComponentImportCompiler {
 				.findFirst()
 				.orElseThrow(() -> new IllegalStateException(
 						"Internal component-import form names an unknown member: " + member.value()));
-			decls.add(new Decl(lispName.value(), ifaceId.value(), cabiFieldName(func), func, abi, abi.flatSig(func)));
+			decls.add(new Decl(lispName.value(), ifaceId.value(), cabiFieldName(func), func, abi, abi.flatSig(func),
+					octets));
 		}
 		return new Import(ifaceId.value(), iface, resolver, decls, drops, asyncs, calls, taskReturns);
 	}
@@ -613,6 +681,31 @@ final class WasmComponentImportCompiler {
 	// a list<u8> ANYWHERE inside it, including as a variant case's payload or a record
 	// field (miss one of those and the canon lower would carry no memory options, so the
 	// staged pointer would have nothing to point into).
+	// Whether lifting a value of this type lifts a list<u8> ANYWHERE inside it -- the
+	// value itself, an option's element, a record field, a case payload, a list's
+	// element -- so an :octets binding needs _bytes_from_mem.
+	static boolean liftsListU8(@Nullable WitType type, WitCanonicalAbi abi) {
+		return switch (type) {
+			case null -> false;
+			case WitType.ListOf list -> abi.isU8(list.element()) || liftsListU8(list.element(), abi);
+			case WitType.OptionOf opt -> liftsListU8(opt.element(), abi);
+			case WitType.ResultOf res -> liftsListU8(res.ok(), abi) || liftsListU8(res.err(), abi);
+			case WitType.TupleOf tuple -> tuple.elements().stream().anyMatch(element -> liftsListU8(element, abi));
+			case WitType.Named named -> {
+				WitCanonicalAbi in = abi.scopeOf(named);
+				yield switch (abi.resolveNamed(named)) {
+					case WitItem.TypeAlias alias -> liftsListU8(alias.target(), in);
+					case WitItem.RecordDef record ->
+						record.fields().stream().anyMatch(field -> liftsListU8(field.type(), in));
+					case WitItem.VariantDef variant ->
+						variant.cases().stream().anyMatch(c -> liftsListU8(c.payload(), in));
+					default -> false;
+				};
+			}
+			default -> false;
+		};
+	}
+
 	private static boolean stagesMemory(WitType type, WitCanonicalAbi abi) {
 		return switch (type) {
 			case WitType.Prim prim -> "string".equals(prim.name());
@@ -693,11 +786,14 @@ final class WasmComponentImportCompiler {
 	 * @param ordinal the import's ordinal (shared with {@code rontolisp:wasm-import})
 	 * @param allocFuncIndex the function index of {@code __ronto_alloc}
 	 * @param strFromMemFuncIndex the function index of {@code _str_from_mem}
+	 * @param bytesFromMemFuncIndex the function index of {@code _bytes_from_mem}, which a
+	 * {@link Decl#liftsOctets} binding needs, or -1
 	 * @return the code entry bytes
 	 */
 	static byte[] buildWrapperBody(WasmLispCompiler.Ctx.Builder ctxBuilder, Decl decl, int ordinal, int allocFuncIndex,
-			int strFromMemFuncIndex) {
+			int strFromMemFuncIndex, int bytesFromMemFuncIndex) {
 		int numParams = lispArity(decl);
+		int octetsFromMem = octetsLift(decl.liftsOctets(), bytesFromMemFuncIndex, decl.lispName());
 		// How much scratch a wrapper needs is a property of how deeply its parameter
 		// types
 		// NEST -- `wasi:http`'s `response-outparam.set` reaches through result -> variant
@@ -711,11 +807,24 @@ final class WasmComponentImportCompiler {
 		// pass
 		// buys is the local INDICES, which must already be right while the body is
 		// written.)
-		Body probe = emitBody(ctxBuilder, decl, numParams, ordinal, allocFuncIndex, strFromMemFuncIndex, MAX_SCRATCH,
-				MAX_SCRATCH);
-		Body body = emitBody(ctxBuilder, decl, numParams, ordinal, allocFuncIndex, strFromMemFuncIndex, probe.i32Pool(),
-				probe.i64Pool());
+		Body probe = emitBody(ctxBuilder, decl, numParams, ordinal, allocFuncIndex, strFromMemFuncIndex, octetsFromMem,
+				MAX_SCRATCH, MAX_SCRATCH);
+		Body body = emitBody(ctxBuilder, decl, numParams, ordinal, allocFuncIndex, strFromMemFuncIndex, octetsFromMem,
+				probe.i32Pool(), probe.i64Pool());
 		return wrapEntry(body);
+	}
+
+	// The helper an :octets binding lifts a list<u8> through (-1: it lifts none, and
+	// every list<u8> is text).
+	private static int octetsLift(boolean liftsOctets, int bytesFromMemFuncIndex, String lispName) {
+		if (!liftsOctets) {
+			return -1;
+		}
+		if (bytesFromMemFuncIndex < 0) {
+			throw new IllegalStateException(
+					"'" + lispName + "': an :octets list<u8> lift emitted without the _bytes_from_mem helper");
+		}
+		return bytesFromMemFuncIndex;
 	}
 
 	// The code-entry framing shared by every wrapper kind: the i32 scratch pool, the i64
@@ -919,22 +1028,27 @@ final class WasmComponentImportCompiler {
 	 * @param call the bound async call
 	 * @param allocFuncIndex the function index of {@code __ronto_alloc}
 	 * @param strFromMemFuncIndex the function index of {@code _str_from_mem}
+	 * @param bytesFromMemFuncIndex the function index of {@code _bytes_from_mem}, which
+	 * an {@link AsyncCall#liftsOctets} binding needs, or -1
 	 * @return the code entry bytes
 	 */
 	static byte[] buildAsyncLiftBody(WasmLispCompiler.Ctx.Builder ctxBuilder, AsyncCall call, int allocFuncIndex,
-			int strFromMemFuncIndex) {
-		Body probe = emitAsyncLift(ctxBuilder, call, allocFuncIndex, strFromMemFuncIndex, MAX_SCRATCH, MAX_SCRATCH);
-		Body body = emitAsyncLift(ctxBuilder, call, allocFuncIndex, strFromMemFuncIndex, probe.i32Pool(),
+			int strFromMemFuncIndex, int bytesFromMemFuncIndex) {
+		int octetsFromMem = octetsLift(call.liftsOctets(), bytesFromMemFuncIndex, call.liftName());
+		Body probe = emitAsyncLift(ctxBuilder, call, allocFuncIndex, strFromMemFuncIndex, octetsFromMem, MAX_SCRATCH,
+				MAX_SCRATCH);
+		Body body = emitAsyncLift(ctxBuilder, call, allocFuncIndex, strFromMemFuncIndex, octetsFromMem, probe.i32Pool(),
 				probe.i64Pool());
 		return wrapEntry(body);
 	}
 
 	private static Body emitAsyncLift(WasmLispCompiler.Ctx.Builder ctxBuilder, AsyncCall call, int allocFuncIndex,
-			int strFromMemFuncIndex, int i32Pool, int i64Pool) {
+			int strFromMemFuncIndex, int octetsFromMem, int i32Pool, int i64Pool) {
 		ByteArrayOutputStream bodyStream = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		am.ik.wasm.WasmWriter writer = new am.ik.wasm.WasmWriter(bodyStream);
 		WasmLispCompiler.Ctx ctx = ctxBuilder.writer(writer).bodyStream(bodyStream).build();
 		Gen gen = new Gen(ctx, call.liftName(), 1, -1, allocFuncIndex, strFromMemFuncIndex, i32Pool, i64Pool);
+		gen.octetsFromMemFuncIndex = octetsFromMem;
 		gen.emitAsyncLiftBody(call);
 		int eqTemps = ctx.nextLocal - (1 + 1 + i32Pool + i64Pool);
 		return new Body(bodyStream.toByteArray(), gen.i32High, gen.i64High, eqTemps);
@@ -982,6 +1096,7 @@ final class WasmComponentImportCompiler {
 		gen.waitOrdinals = waitOrdinals;
 		gen.sched = sched;
 		gen.bytesFromMemFuncIndex = bytesFromMemFuncIndex;
+		gen.octetsFromMemFuncIndex = octetsLift(async.liftsOctets(), bytesFromMemFuncIndex, async.lispName());
 		gen.streamEndedGlobal = streamEndedGlobal;
 		gen.emitAsyncBody(async);
 		int eqTemps = ctx.nextLocal - (numParams + 1 + i32Pool + i64Pool);
@@ -999,12 +1114,13 @@ final class WasmComponentImportCompiler {
 	// literal
 	// twice yields the same offset).
 	private static Body emitBody(WasmLispCompiler.Ctx.Builder ctxBuilder, Decl decl, int numParams, int ordinal,
-			int allocFuncIndex, int strFromMemFuncIndex, int i32Pool, int i64Pool) {
+			int allocFuncIndex, int strFromMemFuncIndex, int octetsFromMem, int i32Pool, int i64Pool) {
 		ByteArrayOutputStream bodyStream = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		am.ik.wasm.WasmWriter writer = new am.ik.wasm.WasmWriter(bodyStream);
 		WasmLispCompiler.Ctx ctx = ctxBuilder.writer(writer).bodyStream(bodyStream).build();
 		Gen gen = new Gen(ctx, decl.lispName(), numParams, ordinal, allocFuncIndex, strFromMemFuncIndex, i32Pool,
 				i64Pool);
+		gen.octetsFromMemFuncIndex = octetsFromMem;
 		gen.emitBody(decl);
 		// Locals: the i32 scratch pool, the i64 scratch pool, then the eq temps allocTemp
 		// handed out during emission.
@@ -1061,6 +1177,11 @@ final class WasmComponentImportCompiler {
 		// _bytes_from_mem, the lift of a byte-stream read's chunk (a packed
 		// (unsigned-byte 8) vector); set for the async built-in wrappers, -1 elsewhere.
 		private int bytesFromMemFuncIndex = -1;
+
+		// _bytes_from_mem again, as the lift of every list<u8> of an :octets binding's
+		// result (a packed (unsigned-byte 8) vector, the octets as the host wrote them);
+		// -1 lifts each through _str_from_mem as text.
+		private int octetsFromMemFuncIndex = -1;
 
 		// The ended-stream latch global (a cons list of i31 readable-end handles whose
 		// read completed DROPPED); set for the async built-in wrappers of a module that
@@ -2679,7 +2800,8 @@ final class WasmComponentImportCompiler {
 						default -> throw resultUnsupported(prim.name());
 					}
 				}
-				case WitType.ListOf list when abi.isU8(list.element()) -> emitLiftString(base, offset);
+				case WitType.ListOf list when abi.isU8(list.element()) -> emitLiftFromMem(base, offset,
+						this.octetsFromMemFuncIndex < 0 ? this.strFromMemFuncIndex : this.octetsFromMemFuncIndex);
 				case WitType.ListOf list -> emitLiftList(abi, list.element(), base, offset);
 				case WitType.BorrowOf ignored -> {
 					load(base, offset, Instruction.I32_LOAD, 2);
@@ -2719,10 +2841,16 @@ final class WasmComponentImportCompiler {
 		// string / list<u8> at [base + offset]: (ptr @+0, byte len @+4) -> a fresh Lisp
 		// string over the host-written bytes.
 		private void emitLiftString(int base, int offset) {
+			emitLiftFromMem(base, offset, this.strFromMemFuncIndex);
+		}
+
+		// (ptr @+0, byte len @+4) at [base + offset] -> what the helper makes of the
+		// host-written bytes: _str_from_mem's string, _bytes_from_mem's octet vector.
+		private void emitLiftFromMem(int base, int offset, int helperFuncIndex) {
 			load(base, offset, Instruction.I32_LOAD, 2);
 			load(base, offset + 4, Instruction.I32_LOAD, 2);
 			this.w.write(Instruction.CALL);
-			this.w.writeUnsignedLeb128(this.strFromMemFuncIndex);
+			this.w.writeUnsignedLeb128(helperFuncIndex);
 		}
 
 		// A variant-shaped value (variant / enum / option / result) in memory: load the

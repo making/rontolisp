@@ -366,6 +366,12 @@ final class ClojureWitLowering {
 		}
 		directive.add(new LispSymbol(":NAMES"));
 		directive.add(ClojureLowerUtil.list(table));
+		if (!ctx.boundary.bytesCrossAsText()) {
+			// a list<u8> is a byte array here, so a component lifts it as its octets,
+			// not as the text a string lifts to
+			directive.add(new LispSymbol(":OCTETS"));
+			directive.add(new LispSymbol("T"));
+		}
 		ctx.hoisted.add(ClojureLowerUtil.list(directive));
 		LispVal servedTable = served.isEmpty() ? null
 				: ClojureLowerUtil.cons(ClojureCollectionLowering.keywordDatum(ERROR_KEY), served);

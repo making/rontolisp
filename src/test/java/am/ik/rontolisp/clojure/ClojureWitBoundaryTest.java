@@ -132,6 +132,53 @@ class ClojureWitBoundaryTest {
 	}
 
 	/**
+	 * Octets that are no UTF-8 -- {@code ff}, a NUL -- come back from wasmtime's store
+	 * exact: the Clojure tier lifts a {@code list<u8>} result as octets
+	 * ({@code :octets t}). Beside it the Common Lisp tier's own expectation: a
+	 * {@code list<u8>} result is text by default, and the octet vector under
+	 * {@code :octets t}, two bindings of the one interface in one component -- which
+	 * declares each member they both bind once (before, a duplicate export name failed
+	 * the component's validation).
+	 */
+	@Test
+	void aComponentReadsBackOctetsThatAreNoUtf8Exact() throws Exception {
+		assumeTrue(HostWasmtime.isAvailable(), "no wasmtime " + HostWasmtime.MINIMUM_MAJOR + "+ on PATH");
+		write("kv.wit", KEYVALUE);
+		Path program = write("octets.clj", """
+				(ns octets
+				  (:require [rontolisp.wit :as wit]))
+
+				(wit/import "kv.wit" {:interface "wasi:keyvalue/store@0.2.0-draft" :as kv})
+
+				(let [bucket (kv/open "")]
+				  (kv/bucket-set bucket "blob" (byte-array [-1 0 65]))
+				  (println (vec (kv/bucket-get bucket "blob"))))
+				""");
+		Path module = this.dir.resolve("octets.wasm");
+		HostBoundaryRuns.cli(program.toString(), "-o", module.toString(), "--component");
+		HostWasmtime.ExecResult run = HostWasmtime.INSTANCE.execInContainer("wasmtime", "run", "-S", "keyvalue=y",
+				module.toString());
+		assertThat(run.exitCode()).as("wasmtime: %s", run.stderr()).isZero();
+		assertThat(run.stdout()).isEqualTo("[-1 0 65]\n");
+		Path lisp = write("octets.lisp", """
+				(rontolisp:wit-import "kv.wit" :interface "wasi:keyvalue/store@0.2.0-draft" :package kv)
+				(rontolisp:wit-import "kv.wit" :interface "wasi:keyvalue/store@0.2.0-draft" :package kvo :octets t)
+				(let ((bucket (kv:open "")))
+				  (kv:bucket-set bucket "text" (coerce (list #\\h (code-char 233)) 'string))
+				  (kvo:bucket-set bucket "blob" (coerce '(255 0 65) '(vector (unsigned-byte 8))))
+				  (print (map 'list #'char-code (kv:bucket-get bucket "text")))
+				  (print (coerce (kvo:bucket-get bucket "text") 'list))
+				  (print (coerce (kvo:bucket-get bucket "blob") 'list)))
+				""");
+		Path lispModule = this.dir.resolve("octets-lisp.wasm");
+		HostBoundaryRuns.cli(lisp.toString(), "-o", lispModule.toString(), "--component");
+		HostWasmtime.ExecResult lispRun = HostWasmtime.INSTANCE.execInContainer("wasmtime", "run", "-S", "keyvalue=y",
+				lispModule.toString());
+		assertThat(lispRun.exitCode()).as("wasmtime: %s", lispRun.stderr()).isZero();
+		assertThat(lispRun.stdout()).isEqualTo("(104 233)\n(104 195 169)\n(255 0 65)\n");
+	}
+
+	/**
 	 * On the interpreter and the JVM the program provides the interface itself: a Clojure
 	 * function of the member name and its arguments, bound under the interface as an
 	 * import wrote it (the bindings dispatch on the canonical id, which the versionless

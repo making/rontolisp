@@ -5442,7 +5442,17 @@ public final class WasmLispCompiler implements LispCompiler {
 		boolean streamReadsBytes = componentAsyncWrappers.values()
 			.stream()
 			.anyMatch(async -> async.stream() && !async.handleElement());
-		boolean bytesFromMem = bytesBoundary || streamReadsBytes;
+		// A component import bound with :octets t lifts a list<u8> in its result as the
+		// same packed vector, so it forces the helper on too -- only where such a result
+		// exists, so an :octets binding with none is byte-identical to one without.
+		boolean liftsOctets = componentImportWrappers.values()
+			.stream()
+			.anyMatch(WasmComponentImportCompiler.Decl::liftsOctets)
+				|| componentCallLiftWrappers.values()
+					.stream()
+					.anyMatch(WasmComponentImportCompiler.AsyncCall::liftsOctets)
+				|| componentAsyncWrappers.values().stream().anyMatch(WasmComponentImportCompiler.Async::liftsOctets);
+		boolean bytesFromMem = bytesBoundary || streamReadsBytes || liftsOctets;
 		// An import wrapper that stages two or more :string/:s-expr PARAMETERS needs the
 		// park allocator under --reentrant (the regions must survive a park, and an
 		// absolute pop is what interleaved extents cannot share), and the park helpers
@@ -5668,7 +5678,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			for (WasmComponentImportCompiler.Decl decl : componentImportWrappers.values()) {
 				int ordinal = Objects.requireNonNull(importSlotIndex.get(decl.module() + "\0" + decl.field()));
 				byte[] body = WasmComponentImportCompiler.buildWrapperBody(ctxBuilder, decl, ordinal, allocFuncIndex,
-						strFromMemFuncIndex);
+						strFromMemFuncIndex, bytesFromMemFuncIndex);
 				userFunctionBodies.set(Objects.requireNonNull(importBodySlots.get(decl.lispName())), body);
 			}
 			for (WasmComponentImportCompiler.Drop drop : componentDropWrappers.values()) {
@@ -5701,7 +5711,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			}
 			for (WasmComponentImportCompiler.AsyncCall call : componentCallLiftWrappers.values()) {
 				byte[] body = WasmComponentImportCompiler.buildAsyncLiftBody(ctxBuilder, call, allocFuncIndex,
-						strFromMemFuncIndex);
+						strFromMemFuncIndex, bytesFromMemFuncIndex);
 				userFunctionBodies.set(Objects.requireNonNull(importBodySlots.get(call.liftName())), body);
 			}
 			for (WasmComponentImportCompiler.TaskReturn tr : componentTaskReturnWrappers.values()) {

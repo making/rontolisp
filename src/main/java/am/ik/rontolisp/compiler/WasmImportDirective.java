@@ -205,9 +205,22 @@ public record WasmImportDirective(String name, String module, String field, List
 				+ form.print() + ", got: " + value.print());
 	}
 
-	// An :async value is the literal t or nil -- the option is a compile-time fact
-	// about the host boundary, so a computed value has nothing it could mean here.
+	// A boolean option's value is the literal t or nil -- the option is a compile-time
+	// fact about the host boundary, so a computed value has nothing it could mean here.
 	private static boolean booleanValue(LispVal value, String keyword, LispCons form) {
+		return booleanValue(value, "rontolisp:wasm-import", keyword, form);
+	}
+
+	/**
+	 * A boolean directive option's value: the literal {@code t} or {@code nil}.
+	 * @param value the option's value as written
+	 * @param directive the directive's name, for the message
+	 * @param keyword the option, for the message
+	 * @param form the directive form, for the message
+	 * @return the flag
+	 * @throws UnsupportedOperationException when the value is neither
+	 */
+	static boolean booleanValue(LispVal value, String directive, String keyword, LispCons form) {
 		if (value instanceof LispNil) {
 			return false;
 		}
@@ -222,8 +235,8 @@ public record WasmImportDirective(String name, String module, String field, List
 				return false;
 			}
 		}
-		throw new UnsupportedOperationException("rontolisp:wasm-import " + keyword + " expects t or nil in "
-				+ form.print() + ", got: " + value.print());
+		throw new UnsupportedOperationException(
+				directive + " " + keyword + " expects t or nil in " + form.print() + ", got: " + value.print());
 	}
 
 	// (quote (:t1 :t2 ...)) -> [":t1", ":t2", ...]; bare nil -> no parameters.

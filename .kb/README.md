@@ -165,7 +165,7 @@ deliberate boundaries the audit must not undo: user-facing operator catalogues l
 ## WASM backends
 
 - [wasi-component.md](wasi-component.md) -- `--component` WASI 0.3 component output
-- [wit.md](wit.md) -- `am.ik.wit`, `--emit-wit`, `WitTypeMapper`, `rontolisp:wit-export`/`wit-import`, the `:names` naming hook and `describe`
+- [wit.md](wit.md) -- `am.ik.wit`, `--emit-wit`, `WitTypeMapper`, `rontolisp:wit-export`/`wit-import`, the `:names` naming hook and `describe`, `:octets` (a `list<u8>` result lifted as octets)
 - [wasm-export-no-wasi.md](wasm-export-no-wasi.md) -- `rontolisp:wasm-export` + `--no-wasi` reactor mode
 - [wasm-import.md](wasm-import.md) -- `rontolisp:wasm-import`, `:async t`, `--emit-js-glue`, `--host-boundary`
 - [no-gc-scalar-wasm.md](no-gc-scalar-wasm.md) -- the `--no-gc` non-GC scalar backend
