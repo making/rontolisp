@@ -11,7 +11,7 @@ As a value a collection plus a rest list of items, folded one by one -- so `alte
 `swap!` over `conj` run what a call would run. With no arguments `[]`, the init arity
 `transduce` calls.
 
-Deviation: transients (`conj!`) are refused by name.
+[`conj!`](conj-bang.md) adds to a transient in place.
 
 ```clojure
 (println (conj [1 2] 3))  ; [1 2 3]

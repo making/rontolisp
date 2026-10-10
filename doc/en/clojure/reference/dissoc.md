@@ -7,7 +7,9 @@ Answers a fresh map over `m`'s pairs minus the given keys; absent keys are ignor
 
 As a value a map plus a rest list of keys.
 
-Deviation: transients (`dissoc!`) are refused by name. Misuse of a non-map may signal
+[`dissoc!`](dissoc-bang.md) removes keys from a transient map in place.
+
+Deviation: misuse of a non-map may signal
 the Common Lisp type error instead of the oracle's.
 
 ```clojure

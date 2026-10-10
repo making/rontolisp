@@ -269,6 +269,9 @@ final class ClojureDispatchLowering {
 			case RECORD -> new Arm(Use.MANY, ClojureProtocolLowering::isRecordForm);
 			case DEFTYPE -> new Arm(Use.MANY, ClojureProtocolLowering::isDeftypeForm);
 			case REIFY -> new Arm(Use.MANY, ClojureProtocolLowering::isReifyForm);
+			case TRANSIENT_VECTOR -> runtime(Use.VARIABLE, ClojureTransientLowering.VECTOR_P);
+			case TRANSIENT_MAP -> runtime(Use.VARIABLE, ClojureTransientLowering.MAP_P);
+			case TRANSIENT_SET -> runtime(Use.VARIABLE, ClojureTransientLowering.SET_P);
 		};
 	}
 
@@ -362,6 +365,12 @@ final class ClojureDispatchLowering {
 		// program making none sheds (ClojureArms.Family.BYTES)
 		branches.add(ClojureLowerUtil.list(ClojureLowerUtil.list(new LispSymbol(ClojureBytesLowering.BYTES_P), one),
 				ClojureCollectionLowering.keywordForm(ClojureBytesLowering.CLASS_NAME)));
+		// a transient answers its class's keyword (its wrapper is a cons): an arm a
+		// program making none sheds (ClojureArms.Family.TRANSIENT)
+		branches
+			.add(ClojureLowerUtil.list(ClojureLowerUtil.list(new LispSymbol(ClojureTransientLowering.TRANSIENT_P), one),
+					ClojureLowerUtil.list(ClojureLowerUtil.sym("list"), ClojureCollectionLowering.KEYWORD_TAG,
+							ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-TRANSIENT-CLASS-NAME"), one))));
 		// a stream answers the host class its printer names, as a keyword like every
 		// kind: an arm a program making no stream sheds (ClojureArms.Family.STREAM)
 		branches.add(ClojureLowerUtil.list(ClojureLowerUtil.list(new LispSymbol(ClojureInteropLowering.STREAM_P), one),

@@ -663,13 +663,35 @@ class ClojureLoweringTest {
 	}
 
 	@Test
-	void transientsAreRefusedByName() {
-		assertThatThrownBy(() -> Clojure.read("(assoc! m :a 1)", null)).isInstanceOf(LispReadException.class)
-			.hasMessageContaining("transients are not supported yet: assoc!");
-		assertThatThrownBy(() -> Clojure.read("(transient {})", null)).isInstanceOf(LispReadException.class)
-			.hasMessageContaining("transients are not supported yet: transient");
-		assertThatThrownBy(() -> Clojure.read("(conj! t 1)", null)).isInstanceOf(LispReadException.class)
-			.hasMessageContaining("transients are not supported yet: conj!");
+	void transientVerbsLowerToOneWorkerCallAfterTheOraclesArityCheck() {
+		assertThat(lowered("(transient [1])")).isEqualTo(FALSE_BINDING + "(RONTOLISP::%CLOJURE-TRANSIENT (VECTOR 1))");
+		assertThat(lowered("(persistent! [1])"))
+			.isEqualTo(FALSE_BINDING + "(RONTOLISP::%CLOJURE-PERSISTENT (VECTOR 1))");
+		assertThat(lowered("(assoc! [1] 0 2 1 3)"))
+			.isEqualTo(FALSE_BINDING + "(RONTOLISP::%CLOJURE-TRANSIENT-ASSOC (VECTOR 1) (LIST 0 2 1 3))");
+		assertThat(lowered("(dissoc! [1] 0 1)"))
+			.isEqualTo(FALSE_BINDING + "(RONTOLISP::%CLOJURE-TRANSIENT-DISSOC (VECTOR 1) (LIST 0 1))");
+		assertThat(lowered("(pop! [1])")).isEqualTo(FALSE_BINDING + "(RONTOLISP::%CLOJURE-TRANSIENT-POP (VECTOR 1))");
+		// the oracle's (conj!) is (transient []), (conj! coll) and (disj! set) the
+		// argument itself
+		assertThat(lowered("(conj!)")).isEqualTo(FALSE_BINDING + "(RONTOLISP::%CLOJURE-TRANSIENT (VECTOR))");
+		assertThat(lowered("(conj! [1])")).isEqualTo(FALSE_BINDING + "(VECTOR 1)");
+		assertThat(lowered("(disj! [1])")).isEqualTo(FALSE_BINDING + "(VECTOR 1)");
+		assertThat(lowered("(conj! [1] 2)"))
+			.isEqualTo(FALSE_BINDING + "(RONTOLISP::%CLOJURE-TRANSIENT-CONJ (VECTOR 1) 2)");
+		assertThat(lowered("(def f conj!)")).contains("RONTOLISP::%CLOJURE-TRANSIENT-CONJ-V");
+		List<List<String>> refused = List.of(List.of("(conj! [] 1 2)", "(3) passed to: clojure.core/conj!"),
+				List.of("(assoc! [] 0)", "(2) passed to: clojure.core/assoc!"),
+				List.of("(dissoc! [])", "(1) passed to: clojure.core/dissoc!"),
+				List.of("(disj!)", "(0) passed to: clojure.core/disj!"),
+				List.of("(pop! [] 1)", "(2) passed to: clojure.core/pop!"),
+				List.of("(persistent!)", "(0) passed to: clojure.core/persistent!"),
+				List.of("(transient [] [])", "(2) passed to: clojure.core/transient"));
+		for (List<String> one : refused) {
+			assertThatThrownBy(() -> Clojure.read(one.get(0), null)).as(one.get(0))
+				.isInstanceOf(LispReadException.class)
+				.hasMessageContaining("Wrong number of args " + one.get(1));
+		}
 	}
 
 	@Test

@@ -109,6 +109,8 @@ categories:
       - { slug: second, name: "second" }
       - { slug: ffirst, name: "ffirst" }
       - { slug: nfirst, name: "nfirst" }
+      - { slug: fnext, name: "fnext" }
+      - { slug: nnext, name: "nnext" }
       - { slug: drop-last, name: "drop-last" }
       - { slug: split-at, name: "split-at" }
       - { slug: split-with, name: "split-with" }
@@ -196,6 +198,13 @@ categories:
       - { slug: hash-unordered-coll, name: "hash-unordered-coll" }
       - { slug: mix-collection-hash, name: "mix-collection-hash" }
       - { slug: hash-combine, name: "hash-combine" }
+      - { slug: transient, name: "transient" }
+      - { slug: persistent-bang, name: "persistent!" }
+      - { slug: conj-bang, name: "conj!" }
+      - { slug: assoc-bang, name: "assoc!" }
+      - { slug: dissoc-bang, name: "dissoc!" }
+      - { slug: disj-bang, name: "disj!" }
+      - { slug: pop-bang, name: "pop!" }
   - title: "数値と述語"
     index_page: clojure/reference/numbers.md
     functions:

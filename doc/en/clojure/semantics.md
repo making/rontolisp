@@ -469,7 +469,6 @@ Each refusal names the missing design, never `unknown name`:
 | Refused | Message shape | Why |
 |---|---|---|
 | end-less `range` | `infinite range is not supported: range needs an end` | an infinite seq cannot be spelled strictly -- spell it with `iterate` |
-| `transient`, `persistent!`, `assoc!`, `dissoc!`, `conj!`, `disj!` | `transients are not supported yet: ...` | no transient runtime behind the tables |
 | `definterface`, `gen-class`, `gen-interface` | `protocols are not supported yet: ...` | no interface generation on any backend |
 | a `reify`/`deftype`/`defrecord` body naming an interface other than the core functions' ([reify](reference/reify.md#host-interfaces)) | `... is not supported yet as an interface of ...` | the other interfaces (`IChunkedSeq`, `java.util.Deque` ...) have no consulting functions yet |
 | a `defrecord` body defining a method of the record's own interfaces the record leaves to the interface (`assocEx`, a `java.util.Map` default) | `... is not supported yet as a method of defrecord` | the record's own verbs answer those interfaces, so no row holds the method |

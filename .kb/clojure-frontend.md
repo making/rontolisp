@@ -59,6 +59,7 @@ The oracle is `clj` 1.12.6.1673: a behavior is decided by running it there, and 
 | record / deftype / reify | `(:C%RECORD tag fields table class)` / `(:C%TYPE tag fields table class slots?)` / a fresh `:C%REIFY` tag | "Dispatch"; the interfaces a body implements are rows under the tag ("Host interfaces") |
 | `#"re"` | `(:C%PATTERN stamp source ops ngroups)` | the stamp is a gensym, so `=` is identity like the oracle |
 | byte array (`byte-array`, `.getBytes`) | `(:C%BYTES octets)`, `octets` a packed `(unsigned-byte 8)` vector | "Byte arrays" |
+| transient | `(:C%TRANSIENT #(kind data count live))` | "Transients" |
 | `reduced`, var, nil dispatch value | `(:C%REDUCED x)`, `(:C%VAR "ns/name" getter)`, `(:C%NIL)` | |
 | `ex-info` | a condition with message and data slots | |
 | `#inst`, `#uuid` | `(:C%INST ms)` (`clojure.instant` also `:C%TIMESTAMP`, `:C%CALENDAR`), `(:C%UUID msb lsb)` | "Instants and UUIDs" |
@@ -164,7 +165,7 @@ answered `2 5 3` before).
 | `keep` `keep-indexed` `map-indexed` `remove` `distinct` `interpose` `partition` `interleave` | one call to the spliced `rontolisp::%clojure-NAME` (`-indexed` for the indexed pair, `partition-v` as a value) | lazy-or-strict ("Laziness"); `keep` keeps `false`; `partition` drops an incomplete tail, refuses a pad; `interleave` stops at the shortest |
 | `some` `every?` `take-while` `drop-while` `zipmap` | stepping, so an infinite input answers | `some` answers the predicate's value |
 | `mapv` `filterv` `mapcat` | the realized result as a vector / appended seqs | `mapcat` is nil-safe like `concat` |
-| `ffirst` `nfirst` | `car`/`cdr` of the seq of the head | each level seqs |
+| `ffirst` `nfirst` `fnext` `nnext` | `car`/`cdr` of the seq of the head / of the tail | each level seqs (`fnext`/`nnext` since 2026-10-10, clojure-spec `fnext-and-nnext-step-past-the-head`, oracle-identical) |
 | `range` | a strict list (1/2/3-arity) | a zero step signals; an end-less `(range)` is refused (no chunking; spell it with `iterate`) |
 | `lazy-seq` `lazy-cat` `repeat` `cycle` `iterate` `repeatedly` | "Laziness" | finite `repeat`/`repeatedly` arities answer strict lists |
 | `drop-last` `split-at` `split-with` `take-last` `nthnext` `nthrest` `peek` `pop` `not-empty` `dedupe` `replace` `find` `subvec` `key` `val` `map-entry?` `rseq` `find-keyword` `partition-all` `partition-by` `min-key` `max-key` `juxt` `fnil` `every-pred` `some-fn` `update-keys` `update-vals` `reduce-kv` `test` `empty` `comparator` `hash-set` | `ClojureCoreLowering`: one call to the fixed-parameter `rontolisp::%clojure-NAME` worker after a lower-time arity check in the oracle's wording (`Wrong number of args (N) passed to: clojure.core/NAME`); as a value `#'rontolisp::%clojure-NAME-v`, checking at run time | `dedupe`/`partition-*`/`drop-last` are lazy-or-strict; `peek`/`pop` take vectors and lists (a strict seq peeks where the oracle's LazySeq throws); `some-fn` answers the oracle's exact failing value; `reduce-kv` walks maps/records/vectors and stops at `reduced`; a non-positive `partition-all` size signals (the oracle loops forever); `find` answers a map/record's stored key (`%clojure-table-key`, so a structural key answers its held representative), a vector's `[i x]` for an integer index in range, nil of nil, and signals on a set, string or list; `subvec` copies (a fresh vector, never a view), truncates a float bound, signals on a nil bound, a non-vector or a range out of bounds; `key`/`val` read a two-member non-string vector and signal otherwise, `map-entry?` is true of exactly those (a map entry IS a plain 2-vector here, so `(map-entry? [1 2])` is true where the oracle's is false; giving entries their own representation would touch `first`/`seq`/`find`/`reduce-kv`/destructuring/`=`/printing for a distinction only `clojure.walk`-style code reads), `rseq` answers a strict list of a vector (nil when empty) and signals on nil, a list, a seq, a string and a hash map; a sorted collection goes through its items vector (`%clojure-sorted-items`, "Sorted collections"), `find-keyword` is `keyword`'s one-argument arm (a two-argument call needs a nil-or-string namespace and a string name) and answers a never-used spelling's keyword where the oracle's is nil -- keywords are `(:C%KEYWORD spelling)` lists with no intern table, and one would cost every `keyword` call and every compiled output a global table; `empty` answers a fresh empty vector, map, set or sorted collection (comparator kept: `%clojure-sorted-with` over an empty items vector, a `cond` clause on `%clojure-sorted-p` the strip folds like any arm) carrying the metadata through `%clojure-put-meta`, nil for a string, nil and any non-collection, and signals `Can't create empty: <record class>` on a record; a list, lazy seq and seq answer nil (the empty-as-nil position, so no metadata; the oracle's `()`) and a map entry `[]` (the oracle nil); `comparator` is a closure over the predicate answering -1 / 1 / 0 from two `%clojure-truthy` tests (a false object counts as false); `hash-set` is `%clojure-set-of` over the argument list (`-v` takes the rest list); type errors use CL wording |
@@ -192,7 +193,8 @@ answered `2 5 3` before).
 | Java interop | "Java interop" | interpreter and JVM only |
 | `quote` | `quote` with symbols mangled | vectors, maps and sets inside are rebuilt (a quoted list holding one becomes a `list` construction) |
 | `comment` | `nil` | |
-| refused by name | | `future` `delay` `force` `promise` `deliver` (no thread pool, memo cell or rendezvous); transients (`transient` ... `disj!`); `definterface` `gen-class` `gen-interface`; `use-fixtures`; `add-watch`/`remove-watch`; `load-string` (no compiler at run time); `eval` and `resolve` of a computed symbol at run time ("Macros") |
+| `transient` `persistent!` `conj!` `assoc!` `dissoc!` `disj!` `pop!` | `ClojureTransientLowering`: one call to the `clojure.lisp` worker after a lower-time arity check in the oracle's wording; `-v` as a value | "Transients" |
+| refused by name | | `future` `delay` `force` `promise` `deliver` (no thread pool, memo cell or rendezvous); `definterface` `gen-class` `gen-interface`; `use-fixtures`; `add-watch`/`remove-watch`; `load-string` (no compiler at run time); `eval` and `resolve` of a computed symbol at run time ("Macros") |
 
 ## Deviations
 
@@ -985,7 +987,9 @@ hash's.
   a key or set member it is found by value since 2026-10-10 ("Structural keys", typed keys).
   instaparse 1.5.0 next stopped at a `^long` return hint on
   a `defn` parameter vector (`auto_flatten_seq.clj:233`; fixed 2026-10-09, below), then, the
-  hints removed by hand, at transients (`conj!`, `:302`, f05).
+  hints removed by hand, at transients (`conj!`, `:302`, f05). Re-probed 2026-10-10 with
+  transients (interpreter, verbatim): past `auto_flatten_seq.clj`, it stops at
+  `print.clj:38:8: format flag %0 is not supported yet` (`(format "%%x%04x" lo)`).
 - A return hint on a parameter vector (`(defn f ^long [x] ...)`, `defn-`, each arity of a
   `defn`/`fn`/`letfn`, a protocol method, `defmethod`) reads as `(%with-meta [..] long)`;
   `ClojureBindingLowering.isVectorDatum` strips the layer, so the clause is not mistaken for a
@@ -2281,6 +2285,52 @@ namespace` but the ones no measured library names (`inspector`, `java.browse`,
   `ClojureInteropTest#aByteArrayCrossesTheJavaBoundaryAsItsBytes`,
   `#clojureJavaShellRunsAHostProcessLikeTheOracle`, `ClojureRingAdapterTest` (`/bytes`).
 
+## Transients
+
+- **The value** (2026-10-10, f05): `(:C%TRANSIENT box)`, `box` the simple vector
+  `#(kind data count live)` (`clojure.lisp` "Transients"): `kind` `:vector`/`:map`/`:set`;
+  `data` a vector's members as the first `count` slots of a simple vector (doubling when full),
+  a map's or set's `equal` table, keys stored through the structural keys; a map's `count` slot
+  says whether it has held more than eight entries (its class name turns
+  `PersistentHashMap$TransientHashMap` from then on, like the object the oracle's `assoc!`
+  answers); `live` false after `persistent!`, after which every verb is the oracle's
+  `IllegalAccessError` (`%clojure-illegal-access-error`, a carrier of its own). `transient`
+  copies once; `persistent!` hands `data` over (a vector trimmed to its count, uncopied when
+  full), so N bang verbs are N edits. Each bang verb answers the transient itself.
+- No collection: `coll?`/`vector?`/`map?`/`seqable?` false, `=` and `hash` identity (the box
+  is a simple vector, `equal` by `eq`, like an atom's cell); `count`, `empty?`, `get`,
+  `contains?` (`ClojureCollectionLowering` arms), `nth`, `find`, a call, a keyword's call
+  (`%clojure-call`, `%clojure-call-keyword`) read it; the seq view refuses it as the oracle's
+  `Don't know how to create ISeq from: <class>`; `counted?`/`ifn?` true, `indexed?` of a
+  vector (`%clojure-is-indexed-transient`, the family's alias of `%clojure-is-indexed`, so
+  `TRANSIENT` stands ahead of `INDEXED`); `class` its class keyword; `instance?` the oracle's
+  supers (`ClojureValueClasses` `TRANSIENT_VECTOR`/`_MAP`/`_SET`); prints
+  `#object[C "C"]` (the hash left out, a byte array's precedent), `str` the class name.
+- Refusals in the oracle's words and classes (`%clojure-transient-refusal`): nil the
+  `NullPointerException` naming the interface call and parameter, anything else (a wrong kind
+  of transient included, checked before liveness, like the oracle's cast) the
+  `ClassCastException` to the interface; a vector index `Key must be integer` /
+  `IndexOutOfBoundsException` (empty message), `Can't pop empty vector`, `Vector arg to map
+  conj must be a pair`, `nth not supported on this type: TransientArrayMap`, `find not
+  supported on type: ...TransientHashSet`, a call's `ArityException` naming
+  `clojure.lang.PersistentVector/TransientVector`. A type implementing
+  `IEditableCollection` or a transient interface answers through its methods (`MARKER` arms).
+- Every arm is the `TRANSIENT` family's (`%clojure-transient-p` and the three kind tests);
+  producers `transient`, `-v` and `conj!`'s value (`(conj!)` lowers to `transient`), so a
+  program making none strips every arm.
+- Deviations: a bang verb's answer is the transient itself (the oracle's array map grows into
+  another object past eight entries, so a program ignoring the answer keeps every edit here);
+  `nth` past the end is nil, as of a vector; the printed `#object` and `str` lack the hash; a
+  conjoined map entry is refused in `conj`'s words.
+- Measured clj 1.12.6 2026-10-10 over every verb on vectors, maps and sets, the reads, the
+  refusals, `class`/`instance?`/`supers`: oracle-identical but for the deviations. Pins:
+  clojure-spec `transients-edit-one-copy-and-persistent-hands-it-over`,
+  `a-transient-refuses-like-the-oracle`,
+  `a-transient-is-no-collection-and-prints-as-the-host-object`,
+  `a-type-implementing-the-transient-interfaces-answers-through-its-methods`;
+  `ClojureLoweringTest#transientVerbsLowerToOneWorkerCallAfterTheOraclesArityCheck`,
+  `ClojureArmsTest#theTransientFamilyIsMadeByTransientAndFoldsItsArmsAndIndexedsHelper`.
+
 ## clojure.java.io
 
 **`clojure.java.io` is a built-in, startup namespace of Clojure source**
@@ -3179,8 +3229,8 @@ interfaces behind an arm family its row's store makes (`ClojureArms`, `COLLECTIO
   `ITERATOR`, `JAVA_COLLECTION` (`Collection`, `SequencedCollection`, `List`, `Set`,
   `RandomAccess`), `JAVA_MAP` (a `SEQABLE` producer too), `HASHEQ` (`IHashEq`, which `hash`
   reads: "Hashes"; its store, like `OBJECT_METHODS`', also makes `TYPED_KEY`: "Structural
-  keys"), `MARKER` (`Serializable`, `IEditableCollection`, the transients:
-  `instance?` and instance calls only). The predicates'
+  keys"), `MARKER` (`Serializable`, `IEditableCollection`, the transient interfaces:
+  `instance?`, instance calls, and `transient`/`persistent!`/the bang verbs, "Transients"). The predicates'
   helpers (`coll?`, `map?`, `set?`, `seq?`, `list?`, `sequential?`, `associative?`,
   `reversible?`) are `%clojure-is-*-type` aliases of the old ones, so the families stand ahead
   of `SORTED`, whose aliases they rename into (the strip goes in enum order). A strip fold
@@ -4012,7 +4062,9 @@ one algorithm (`ClojureReader.readConditional`, `%clojure-rd-conditional`):
 - A symbol's `'` is a constituent (`coll'`, `a'b`) and a number stops at it, as in the
   oracle's token and number readers (`ClojureReaderTest#aQuoteInsideASymbol*`); medley
   and dependency spell `coll'`/`g'` and were unreadable before. First failure per library
-  after this (interpreter, 2026-10-08): medley `transients are not supported yet: assoc!`,
+  after this (interpreter, 2026-10-08): medley `transients are not supported yet: assoc!`
+  (2026-10-10, with transients, `fnext` and `nnext`: `core.cljc:194:3: unknown name:
+  clojure.lang.PersistentQueue`, its `queue`),
   dependency `infinite range is not supported`, camel-snake-kebab `extend needs a core
   type, not Pattern`, cuerdas `unknown namespace: clojure.core` -- lowering gaps for `e43`,
   none in the reader.

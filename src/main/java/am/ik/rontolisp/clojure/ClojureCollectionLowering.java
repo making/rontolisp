@@ -761,6 +761,9 @@ final class ClojureCollectionLowering {
 		// of an array (an arm a program making none sheds)
 		branches.add(ClojureLowerUtil.list(ClojureLowerUtil.list(new LispSymbol(ClojureBytesLowering.BYTES_P), coll),
 				ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-BYTES-GET"), coll, key, dflt)));
+		// a transient reads its member (an arm a program making none sheds)
+		branches.add(transientArm(coll,
+				ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-TRANSIENT-GET"), coll, key, dflt)));
 		branches.add(hostArm(coll, hostCall("GET", coll, key, dflt)));
 		branches.add(ClojureLowerUtil.list(ClojureLowering.TRUE_CONST, dflt));
 		return branches;
@@ -854,6 +857,9 @@ final class ClojureCollectionLowering {
 		branches.add(ClojureLowerUtil.list(ClojureLowerUtil.list(new LispSymbol(ClojureBytesLowering.BYTES_P), bound),
 				ctx.booleanAnswer(
 						ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-BYTES-CONTAINS"), bound, at))));
+		// a transient's containsKey or contains (an arm a program making none sheds)
+		branches.add(transientArm(bound, ctx.booleanAnswer(
+				ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-TRANSIENT-CONTAINS"), bound, at))));
 		branches.add(hostArm(bound, ctx.booleanAnswer(hostCall("CONTAINS-P", bound, at))));
 		branches.add(ClojureLowerUtil.list(ClojureLowering.TRUE_CONST,
 				ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-CONTAINS-PAST"), bound, at)));
@@ -1536,6 +1542,8 @@ final class ClojureCollectionLowering {
 						ClojureLowerUtil.list(ClojureLowerUtil.sym("length"),
 								ClojureLowerUtil.list(ClojureLowerUtil.sym("car"),
 										ClojureLowerUtil.list(ClojureLowerUtil.sym("cdr"), coll)))),
+				// a transient counts its members (an arm a program making none sheds)
+				transientArm(coll, ClojureLowerUtil.list(new LispSymbol(TRANSIENT_COUNT), coll)),
 				ClojureLowerUtil.list(ClojureLowering.TRUE_CONST, ClojureRefusals
 					.refusal(ClojureRefusals.UNSUPPORTED_OPERATION, LispString.literal("count needs a collection"))));
 		List<LispVal> branches = new ArrayList<>();
@@ -1591,6 +1599,11 @@ final class ClojureCollectionLowering {
 								ClojureLowerUtil.list(ClojureLowerUtil.sym("length"),
 										ClojureLowerUtil.list(ClojureLowerUtil.sym("car"),
 												ClojureLowerUtil.list(ClojureLowerUtil.sym("cdr"), coll))))),
+				// a transient is counted, so empty at no member, like the oracle's
+				// empty? (an arm a program making none sheds)
+				transientArm(coll,
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("zerop"),
+								ClojureLowerUtil.list(new LispSymbol(TRANSIENT_COUNT), coll))),
 				ClojureLowerUtil.list(ClojureLowering.TRUE_CONST,
 						ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), ClojureSeqLowering.seqForm(ctx, coll))));
 		List<LispVal> branches = new ArrayList<>();
@@ -1617,6 +1630,18 @@ final class ClojureCollectionLowering {
 
 	/** The counted family's test of a type implementing {@code Counted}. */
 	static final String COUNTED_P = "RONTOLISP::%CLOJURE-COUNTED-P";
+
+	/** A transient's count ({@code clojure.lisp}, "Transients"). */
+	private static final String TRANSIENT_COUNT = "RONTOLISP::%CLOJURE-TRANSIENT-COUNT";
+
+	/**
+	 * A {@code cond} clause answering {@code answer} for a transient: an arm of the
+	 * transient family ({@link ClojureArms.Family#TRANSIENT}).
+	 */
+	private static LispVal transientArm(LispVal coll, LispVal answer) {
+		return ClojureLowerUtil.list(ClojureLowerUtil.list(new LispSymbol(ClojureTransientLowering.TRANSIENT_P), coll),
+				answer);
+	}
 
 	/**
 	 * The collection-interface family's test of a type implementing

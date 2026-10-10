@@ -62,6 +62,11 @@ final class ClojureRefusals {
 	/** {@code clojure.lang.ArityException}: a wrong argument count. */
 	static final String ARITY = "RONTOLISP::%CLOJURE-ARITY-EXCEPTION";
 
+	/**
+	 * {@code java.lang.IllegalAccessError}: a transient used after {@code persistent!}.
+	 */
+	static final String ILLEGAL_ACCESS = "RONTOLISP::%CLOJURE-ILLEGAL-ACCESS-ERROR";
+
 	/** {@code java.lang.RuntimeException}. */
 	static final String RUNTIME = "RONTOLISP::%CLOJURE-RUNTIME-EXCEPTION";
 
@@ -198,8 +203,8 @@ final class ClojureRefusals {
 			Map.entry(UNSUPPORTED_OPERATION, "java.lang.UnsupportedOperationException"),
 			Map.entry(NUMBER_FORMAT, "java.lang.NumberFormatException"),
 			Map.entry(ARITHMETIC, "java.lang.ArithmeticException"), Map.entry(ARITY, "clojure.lang.ArityException"),
-			Map.entry(RUNTIME, "java.lang.RuntimeException"), Map.entry(EXCEPTION, "java.lang.Exception"),
-			Map.entry(CLASS_NOT_FOUND, "java.lang.ClassNotFoundException"),
+			Map.entry(ILLEGAL_ACCESS, "java.lang.IllegalAccessError"), Map.entry(RUNTIME, "java.lang.RuntimeException"),
+			Map.entry(EXCEPTION, "java.lang.Exception"), Map.entry(CLASS_NOT_FOUND, "java.lang.ClassNotFoundException"),
 			Map.entry(PATTERN_SYNTAX, "java.util.regex.PatternSyntaxException"),
 			Map.entry(ILLEGAL_FORMAT_CONVERSION, "java.util.IllegalFormatConversionException"),
 			Map.entry(ASSERTION_ERROR, "java.lang.AssertionError"), Map.entry(IO, "java.io.IOException"),

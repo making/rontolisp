@@ -96,7 +96,7 @@ oracle asks them, the interface's supers included (`IPersistentMap` is an `Assoc
 | `java.util.Collection`, `List`, `Set`, `RandomAccess` | `count` (`size`), `nth` (a `RandomAccess` list's `get`), `contains?` (a `Set`'s `contains`), `=`, `pr` as a list, a vector or a set |
 | `java.util.Map` | `get`, `contains?`, `find`, `count`, `seq` (`entrySet`), `=`, `pr` as a map |
 | `IHashEq` | `hash` (`hasheq`), and the collection hash verbs over a member |
-| `java.io.Serializable`, `IEditableCollection`, the transients | `instance?` and instance calls (transients are refused) |
+| `java.io.Serializable`, `IEditableCollection`, the transients | `instance?` and instance calls; `transient` calls `asTransient`, `persistent!` and the bang verbs the transient interfaces' methods |
 
 `(.iterator coll)` of a core collection, `clojure.lang.SeqIterator` and `clojure.lang.RT/iter`
 answer an iterator over its seq, and `clojure.lang.MapEntry` builds a `[k v]` vector, the

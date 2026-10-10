@@ -753,6 +753,9 @@
         ;; a byte array, the oracle's #object: an arm a program making none folds
         ((rontolisp::%clojure-bytes-p x)
          (rontolisp::%clojure-bytes-write readable stream))
+        ;; a transient, the oracle's #object: an arm a program making none folds
+        ((rontolisp::%clojure-transient-p x)
+         (rontolisp::%clojure-transient-write x readable stream))
         ((and labels (rontolisp::%clojure-node-p x)
               (rontolisp::%clojure-write-label x labels stream)))
         ((rontolisp::%clojure-print-ns-map-p x)
@@ -915,6 +918,10 @@
                ;; Class@hash without the hash): an arm a program making none
                ;; folds
                ((rontolisp::%clojure-bytes-p x) "[B")
+               ;; a transient's toString, its class name (the hash left out
+               ;; like a byte array's): an arm a program making none folds
+               ((rontolisp::%clojure-transient-p x)
+                (rontolisp::%clojure-transient-class-name x))
                ((rontolisp::%clojure-stream-p x)
                 (rontolisp::%clojure-stream-string x))
                ((rontolisp::%clojure-re-pattern-p x)
@@ -1214,6 +1221,14 @@
                                 "java.lang.RuntimeException"
                                 "java.lang.Exception" "java.lang.Throwable")
                               message))
+
+(defun rontolisp::%clojure-illegal-access-error (message)
+  "A refusal the oracle throws as an IllegalAccessError: a transient used after
+   persistent!."
+  (rontolisp::%clojure-refuse '("java.lang.IllegalAccessError"
+                                "java.lang.IncompatibleClassChangeError"
+                                "java.lang.LinkageError" "java.lang.Error"
+                                "java.lang.Throwable") message))
 
 (defun rontolisp::%clojure-runtime-exception (message)
   "A refusal the oracle throws as a RuntimeException."
@@ -1778,6 +1793,8 @@
          (rontolisp::%clojure-instant-class-name x))
         ((rontolisp::%clojure-uuid-p x) "java.util.UUID")
         ((rontolisp::%clojure-bytes-p x) "[B")
+        ((rontolisp::%clojure-transient-p x)
+         (rontolisp::%clojure-transient-class-name x))
         ((and (consp x) (keywordp (car x))) "java.lang.Object")
         ((consp x) "clojure.lang.PersistentList")
         ((hash-table-p x)
@@ -3261,6 +3278,9 @@
    ;; a type implementing IFn: an arm of the invokable family ("Host
    ;; interfaces")
    ((rontolisp::%clojure-invokable-p f) (rontolisp::%clojure-invoke f args))
+   ;; a transient: an arm of the transient family ("Transients")
+   ((rontolisp::%clojure-transient-p f)
+    (rontolisp::%clojure-transient-invoke f args))
    (t (rontolisp::%clojure-class-cast-exception-of "not a function" f))))
 
 (defun rontolisp::%clojure-as-fn (f)
@@ -3282,6 +3302,10 @@
          (rontolisp::%clojure-sorted-get coll k dflt))
         ((rontolisp::%clojure-reader-value-p coll)
          (rontolisp::%clojure-reader-value-get coll k dflt))
+        ;; a transient reads like get: an arm of the transient family
+        ;; ("Transients")
+        ((rontolisp::%clojure-transient-p coll)
+         (rontolisp::%clojure-transient-get coll k dflt))
         ;; a type implementing ILookup, its default given when not nil (the
         ;; dispatcher asks ahead with the count it has): an arm of the lookup
         ;; family ("Host interfaces")
@@ -3875,6 +3899,10 @@
    ((rontolisp::%clojure-jmap-p coll) (rontolisp::%clojure-jmap-seq coll))
    ((rontolisp::%clojure-host-seqable-p coll)
     (rontolisp::%clojure-host-seq coll))
+   ;; a transient is refused in the oracle's words: an arm of the transient
+   ;; family ("Transients")
+   ((rontolisp::%clojure-transient-p coll)
+    (rontolisp::%clojure-transient-seq-refusal coll))
    (t
     (rontolisp::%clojure-illegal-argument-exception "seq needs a collection"))))
 
@@ -3998,6 +4026,10 @@
    ;; family ("Byte arrays")
    ((rontolisp::%clojure-bytes-p coll)
     (rontolisp::%clojure-bytes-nth coll i dflt))
+   ;; a transient vector answers its member, a map or set refuses: an arm of
+   ;; the transient family ("Transients")
+   ((rontolisp::%clojure-transient-p coll)
+    (rontolisp::%clojure-transient-nth coll i dflt))
    ;; a type implementing Indexed answers its nth over the default (nth of two
    ;; arguments is %clojure-nth-2's): an arm of the indexed family ("Host
    ;; interfaces")
@@ -6126,6 +6158,9 @@
    ((rontolisp::%clojure-iassociative-p coll)
     (rontolisp::%clojure-associative-find coll key))
    ((rontolisp::%clojure-jmap-p coll) (rontolisp::%clojure-jmap-find coll key))
+   ;; a transient's entryAt: an arm of the transient family ("Transients")
+   ((rontolisp::%clojure-transient-p coll)
+    (rontolisp::%clojure-transient-find coll key))
    ((rontolisp::%clojure-host-seqable-p coll)
     (rontolisp::%clojure-host-find coll key))
    (t (rontolisp::%clojure-illegal-argument-exception
@@ -6623,7 +6658,8 @@
   "counted?: a list, vector, map, set or record; a lazy seq is not."
   (or (rontolisp::%clojure-is-list x) (rontolisp::%clojure-is-vector x)
       (rontolisp::%clojure-is-map x) (rontolisp::%clojure-set-p x)
-      (rontolisp::%clojure-sorted-set-p x) (rontolisp::%clojure-counted-p x)))
+      (rontolisp::%clojure-sorted-set-p x) (rontolisp::%clojure-counted-p x)
+      (rontolisp::%clojure-transient-p x)))
 
 (defun rontolisp::%clojure-is-ifn (x)
   "ifn?: a function, keyword, symbol, map, set, vector or var. A record is no
@@ -6632,7 +6668,7 @@
       (rontolisp::%clojure-real-symbol-p x) (hash-table-p x)
       (rontolisp::%clojure-set-p x) (rontolisp::%clojure-is-vector x)
       (rontolisp::%clojure-var-p x) (rontolisp::%clojure-sorted-p x)
-      (rontolisp::%clojure-invokable-p x)))
+      (rontolisp::%clojure-invokable-p x) (rontolisp::%clojure-transient-p x)))
 
 (defun rontolisp::%clojure-is-int (x)
   "int?: an integer a long holds (the oracle's Long, Integer, Short, Byte)."
@@ -17463,6 +17499,437 @@
    error's."
   (let ((m (rontolisp::%clojure-ex-message c)))
     (if (stringp m) m "WIT call failed")))
+
+;;;; Transients: transient, persistent! and the bang verbs, editing one copy in
+;;;; place. A transient is (:C%TRANSIENT box), BOX the vector #(kind data count
+;;;; live): KIND :VECTOR, :MAP or :SET; DATA what the bang verbs edit -- a
+;;;; vector's members as the first COUNT slots of a simple vector, a map's or a
+;;;; set's equal table (a set's members each under itself), keys stored through
+;;;; the structural keys like the persistent verbs' -- COUNT of a map whether it
+;;;; has held more than eight entries (the oracle's hash map from then on, its
+;;;; class name) -- and LIVE false once
+;;;; persistent! has answered the collection, after which every verb refuses it
+;;;; as the oracle's IllegalAccessError. transient copies the collection once
+;;;; and persistent! hands DATA over (a vector trimmed to its count), so N bang
+;;;; verbs cost N edits, not N copies. A bang verb answers the transient itself,
+;;;; where the oracle's may answer another object (an array map's assoc! past
+;;;; eight entries): a program reading the answer behaves alike. A transient is
+;;;; no collection: coll?, map?, vector? are false of one, = and hash are
+;;;; identity, seq refuses it, count, get, nth, contains?, find and a call read
+;;;; it, and it prints as the oracle's #object without the identity hash. A type
+;;;; implementing IEditableCollection or a transient interface answers through
+;;;; its own methods. Every shared verb reaches a transient through the arm
+;;;; tests %clojure-transient-p and its three kinds' (clojure/ClojureArms, the
+;;;; transient family), so a program making none compiles as before transients.
+
+;; Whether X is a transient: the arm test of the transient family.
+(defun rontolisp::%clojure-transient-p (x)
+  (if (consp x) (eq (car x) :C%TRANSIENT)))
+
+;; Whether X is a transient vector, map or set: the instance? tests of the
+;; transient family.
+(defun rontolisp::%clojure-transient-vector-p (x)
+  (if (rontolisp::%clojure-transient-p x) (eq (aref (car (cdr x)) 0) :vector)))
+
+(defun rontolisp::%clojure-transient-map-p (x)
+  (if (rontolisp::%clojure-transient-p x) (eq (aref (car (cdr x)) 0) :map)))
+
+(defun rontolisp::%clojure-transient-set-p (x)
+  (if (rontolisp::%clojure-transient-p x) (eq (aref (car (cdr x)) 0) :set)))
+
+;; A fresh transient of KIND over DATA, COUNT members of a vector (of a map
+;; whether it is a hash map).
+(defun rontolisp::%clojure-transient-of (kind data count)
+  (list :C%TRANSIENT (vector kind data count t)))
+
+;; A copy of the equal table TABLE, its keys (representatives already) as
+;; they are.
+(defun rontolisp::%clojure-transient-table (table)
+  (let ((out (make-hash-table :test 'equal)))
+    (maphash (lambda (k v) (setf (gethash k out) v)) table)
+    out))
+
+;; The box of the transient TR, refused as the oracle's IllegalAccessError
+;; once persistent! has answered its collection.
+(defun rontolisp::%clojure-transient-box (tr)
+  (let ((box (car (cdr tr))))
+    (if (aref box 3)
+        box
+        (rontolisp::%clojure-illegal-access-error
+         "Transient used after persistent! call"))))
+
+;; The kind of the transient TR, live or not: what the oracle casts it by
+;; before it checks it is still editable.
+(defun rontolisp::%clojure-transient-kind (tr) (aref (car (cdr tr)) 0))
+
+;; The oracle's class name of the transient TR: a map that has held more than
+;; eight entries is a hash map's, like the object its assoc! answers there.
+(defun rontolisp::%clojure-transient-class-name (tr)
+  (let* ((box (car (cdr tr))) (kind (aref box 0)))
+    (cond ((eq kind :vector) "clojure.lang.PersistentVector$TransientVector")
+          ((eq kind :set) "clojure.lang.PersistentHashSet$TransientHashSet")
+          ((aref box 2) "clojure.lang.PersistentHashMap$TransientHashMap")
+          (t "clojure.lang.PersistentArrayMap$TransientArrayMap"))))
+
+;; The oracle's refusal of X where it casts X to the clojure.lang interface
+;; IFACE to call CALL: its NullPointerException naming the parameter VAR when
+;; X is nil, else its ClassCastException.
+(defun rontolisp::%clojure-transient-refusal (x iface call var)
+  (if (null x)
+      (rontolisp::%clojure-null-pointer-exception
+       (concatenate 'string "Cannot invoke \"clojure.lang." iface "." call
+                    "\" because \"" var "\" is null"))
+      (rontolisp::%clojure-class-cast-exception
+       (concatenate 'string "class " (rontolisp::%clojure-class-name-of x)
+                    " cannot be cast to class clojure.lang." iface))))
+
+(defun rontolisp::%clojure-transient (coll)
+  "(transient coll): a transient over a copy of the vector, map or set COLL; a
+   type implementing IEditableCollection answers its asTransient. nil is the
+   oracle's NullPointerException, anything else (a list, a sorted collection,
+   a record, a string) its ClassCastException."
+  (cond ((hash-table-p coll)
+         (rontolisp::%clojure-transient-of
+          :map (rontolisp::%clojure-transient-table coll)
+          (> (hash-table-count coll) 8)))
+        ((and (vectorp coll) (not (stringp coll)))
+         (rontolisp::%clojure-transient-of
+          :vector (rontolisp::%clojure-vector-copy coll (length coll))
+          (length coll)))
+        ((rontolisp::%clojure-set-p coll)
+         (rontolisp::%clojure-transient-of
+          :set (rontolisp::%clojure-transient-table (car (cdr coll))) 0))
+        ;; a type implementing IEditableCollection: an arm of the marker
+        ;; family ("Host interfaces")
+        ((rontolisp::%clojure-editable-p coll)
+         (funcall (rontolisp::%clojure-interface-entry coll "asTransient")
+                  coll))
+        (t (rontolisp::%clojure-transient-refusal coll "IEditableCollection"
+                                                  "asTransient()" "coll"))))
+
+(defun rontolisp::%clojure-transient-v (&rest args)
+  "transient as a value."
+  (rontolisp::%clojure-check-arity args 1 1 "transient")
+  (rontolisp::%clojure-transient (car args)))
+
+(defun rontolisp::%clojure-persistent (tr)
+  "(persistent! tr): the collection the transient TR edited, handed over
+   uncopied (a vector trimmed to its count), after which TR refuses every
+   verb; a type implementing ITransientCollection answers its persistent."
+  (cond ((rontolisp::%clojure-transient-p tr)
+         (let* ((box (rontolisp::%clojure-transient-box tr))
+                (kind (aref box 0))
+                (data (aref box 1))
+                (n (aref box 2)))
+           (setf (aref box 3) nil)
+           (cond ((eq kind :map) data)
+                 ((eq kind :set) (list :C%SET data))
+                 ((= n (length data)) data)
+                 (t (let ((out (make-array n)))
+                      (dotimes (j n out) (setf (aref out j) (aref data j))))))))
+        ;; a type implementing ITransientCollection: an arm of the marker
+        ;; family
+        ((rontolisp::%clojure-itransient-collection-p tr)
+         (funcall (rontolisp::%clojure-interface-entry tr "persistent") tr))
+        (t (rontolisp::%clojure-transient-refusal tr "ITransientCollection"
+                                                  "persistent()" "coll"))))
+
+(defun rontolisp::%clojure-persistent-v (&rest args)
+  "persistent! as a value."
+  (rontolisp::%clojure-check-arity args 1 1 "persistent!")
+  (rontolisp::%clojure-persistent (car args)))
+
+;; X added at the end of the live vector transient's BOX, its storage doubled
+;; when full.
+(defun rontolisp::%clojure-transient-push (box x)
+  (let ((data (aref box 1)) (n (aref box 2)))
+    (if (= n (length data))
+        (progn
+          (setq data (rontolisp::%clojure-vector-copy data (+ 4 (* 2 n))))
+          (setf (aref box 1) data)))
+    (setf (aref data n) x)
+    (setf (aref box 2) (+ n 1))))
+
+;; PLIST's alternating keys and values set in the live map transient's BOX,
+;; each key stored through the structural keys; a missing last value is nil.
+(defun rontolisp::%clojure-transient-put (box plist)
+  (let ((table (aref box 1)))
+    (do ((p plist (cdr (cdr p))))
+        ((null p))
+      (setf (gethash (rontolisp::%clojure-store-key (car p) table) table)
+            (car (cdr p))))
+    (if (> (hash-table-count table) 8) (setf (aref box 2) t))))
+
+(defun rontolisp::%clojure-transient-conj (tr x)
+  "(conj! tr x): X added to the transient TR in place -- at a vector's end, as
+   a set's member, as a map's entries (what conj takes, a vector that is no
+   pair refused in the oracle's words) -- answering TR; a type implementing
+   ITransientCollection answers its conj."
+  (cond ((rontolisp::%clojure-transient-p tr)
+         (let* ((box (rontolisp::%clojure-transient-box tr))
+                (kind (aref box 0)))
+           (cond ((eq kind :vector) (rontolisp::%clojure-transient-push box x))
+                 ((eq kind :set) (rontolisp::%clojure-set-put (aref box 1) x))
+                 ((and (vectorp x) (not (stringp x)) (/= (length x) 2))
+                  (rontolisp::%clojure-illegal-argument-exception
+                   "Vector arg to map conj must be a pair"))
+                 (t (rontolisp::%clojure-transient-put box
+                     (rontolisp::%clojure-merge-entry-plist x))))
+           tr))
+        ;; a type implementing ITransientCollection: an arm of the marker
+        ;; family
+        ((rontolisp::%clojure-itransient-collection-p tr)
+         (funcall (rontolisp::%clojure-interface-entry tr "conj") tr x))
+        (t (rontolisp::%clojure-transient-refusal tr "ITransientCollection"
+                                                  "conj(Object)" "coll"))))
+
+(defun rontolisp::%clojure-transient-conj-v (&rest args)
+  "conj! as a value: of no argument a fresh transient vector, of one that
+   argument, of two the conj!."
+  (let ((n (rontolisp::%clojure-check-arity args 0 2 "conj!")))
+    (cond ((= n 0) (rontolisp::%clojure-transient (vector)))
+     ((= n 1) (car args))
+     (t (rontolisp::%clojure-transient-conj (car args) (car (cdr args)))))))
+
+;; The member X at the index I of the live vector transient's BOX, the count
+;; appending, like the oracle's assocN: an index that is no integer is its
+;; IllegalArgumentException, one out of range its IndexOutOfBoundsException.
+(defun rontolisp::%clojure-transient-assoc-n (box i x)
+  (if (not (integerp i))
+      (rontolisp::%clojure-illegal-argument-exception "Key must be integer"))
+  (let ((n (aref box 2)))
+    (cond ((and (<= 0 i) (< i n)) (setf (aref (aref box 1) i) x))
+          ((= i n) (rontolisp::%clojure-transient-push box x))
+          (t (rontolisp::%clojure-index-out-of-bounds-exception "")))))
+
+(defun rontolisp::%clojure-transient-assoc (tr plist)
+  "(assoc! tr k v ...): PLIST's alternating keys and values set in the
+   transient TR in place (a missing last value nil, like the oracle's),
+   answering TR -- a map's entries, a vector's indexes; a set is refused like
+   the oracle's cast. A type implementing ITransientAssociative takes each
+   pair through its assoc, the next pair going to its answer."
+  (cond ((rontolisp::%clojure-transient-p tr)
+         (if (eq (rontolisp::%clojure-transient-kind tr) :set)
+             (rontolisp::%clojure-transient-refusal tr "ITransientAssociative"
+                                                    "assoc(Object, Object)"
+                                                    "coll"))
+         (let ((box (rontolisp::%clojure-transient-box tr)))
+           (if (eq (aref box 0) :map)
+               (rontolisp::%clojure-transient-put box plist)
+               (do ((p plist (cdr (cdr p))))
+                   ((null p))
+                 (rontolisp::%clojure-transient-assoc-n box (car p)
+                                                        (car (cdr p)))))
+           tr))
+        ;; a type implementing ITransientAssociative: an arm of the marker
+        ;; family
+        ((rontolisp::%clojure-itransient-associative-p tr)
+         (let ((out tr))
+           (do ((p plist (cdr (cdr p))))
+               ((null p) out)
+             (setq out
+                   (funcall (rontolisp::%clojure-interface-entry out "assoc")
+                            out (car p) (car (cdr p)))))))
+        (t (rontolisp::%clojure-transient-refusal tr "ITransientAssociative"
+                                                  "assoc(Object, Object)"
+                                                  "coll"))))
+
+(defun rontolisp::%clojure-transient-assoc-v (&rest args)
+  "assoc! as a value."
+  (rontolisp::%clojure-check-arity args 3 nil "assoc!")
+  (rontolisp::%clojure-transient-assoc (car args) (cdr args)))
+
+(defun rontolisp::%clojure-transient-dissoc (tr keys)
+  "(dissoc! tr k ...): each of KEYS removed from the map transient TR in
+   place, answering TR; a type implementing ITransientMap takes each through
+   its without."
+  (cond ((rontolisp::%clojure-transient-p tr)
+         (if (not (eq (rontolisp::%clojure-transient-kind tr) :map))
+             (rontolisp::%clojure-transient-refusal tr "ITransientMap"
+                                                    "without(Object)" "map"))
+         (let ((table (aref (rontolisp::%clojure-transient-box tr) 1)))
+           (dolist (k keys tr)
+             (remhash (rontolisp::%clojure-table-key k table) table))))
+        ;; a type implementing ITransientMap: an arm of the marker family
+        ((rontolisp::%clojure-itransient-map-p tr)
+         (let ((out tr))
+           (dolist (k keys out)
+             (setq out
+                   (funcall (rontolisp::%clojure-interface-entry out "without")
+                            out k)))))
+        (t (rontolisp::%clojure-transient-refusal tr "ITransientMap"
+                                                  "without(Object)" "map"))))
+
+(defun rontolisp::%clojure-transient-dissoc-v (&rest args)
+  "dissoc! as a value."
+  (rontolisp::%clojure-check-arity args 2 nil "dissoc!")
+  (rontolisp::%clojure-transient-dissoc (car args) (cdr args)))
+
+(defun rontolisp::%clojure-transient-disj (tr members)
+  "(disj! tr x ...): each of MEMBERS removed from the set transient TR in
+   place, answering TR; a type implementing ITransientSet takes each through
+   its disjoin."
+  (cond ((rontolisp::%clojure-transient-p tr)
+         (if (not (eq (rontolisp::%clojure-transient-kind tr) :set))
+             (rontolisp::%clojure-transient-refusal tr "ITransientSet"
+                                                    "disjoin(Object)" "set"))
+         (let ((table (aref (rontolisp::%clojure-transient-box tr) 1)))
+           (dolist (x members tr)
+             (remhash (rontolisp::%clojure-table-key x table) table))))
+        ;; a type implementing ITransientSet: an arm of the marker family
+        ((rontolisp::%clojure-itransient-set-p tr)
+         (let ((out tr))
+           (dolist (x members out)
+             (setq out
+                   (funcall (rontolisp::%clojure-interface-entry out "disjoin")
+                            out x)))))
+        (t (rontolisp::%clojure-transient-refusal tr "ITransientSet"
+                                                  "disjoin(Object)" "set"))))
+
+(defun rontolisp::%clojure-transient-disj-v (&rest args)
+  "disj! as a value: of one argument that argument, like the oracle's."
+  (if (= (rontolisp::%clojure-check-arity args 1 nil "disj!") 1)
+      (car args)
+      (rontolisp::%clojure-transient-disj (car args) (cdr args))))
+
+(defun rontolisp::%clojure-transient-pop (tr)
+  "(pop! tr): the vector transient TR without its last member, in place,
+   answering TR; an empty one is the oracle's IllegalStateException. A type
+   implementing ITransientVector answers its pop."
+  (cond ((rontolisp::%clojure-transient-p tr)
+         (if (not (eq (rontolisp::%clojure-transient-kind tr) :vector))
+             (rontolisp::%clojure-transient-refusal tr "ITransientVector"
+                                                    "pop()" "coll"))
+         (let* ((box (rontolisp::%clojure-transient-box tr)) (n (aref box 2)))
+           (if (= n 0)
+               (rontolisp::%clojure-illegal-state-exception
+                "Can't pop empty vector"))
+           (setf (aref (aref box 1) (- n 1)) nil)
+           (setf (aref box 2) (- n 1))
+           tr))
+        ;; a type implementing ITransientVector: an arm of the marker family
+        ((rontolisp::%clojure-itransient-vector-p tr)
+         (funcall (rontolisp::%clojure-interface-entry tr "pop") tr))
+        (t (rontolisp::%clojure-transient-refusal tr "ITransientVector" "pop()"
+                                                  "coll"))))
+
+(defun rontolisp::%clojure-transient-pop-v (&rest args)
+  "pop! as a value."
+  (rontolisp::%clojure-check-arity args 1 1 "pop!")
+  (rontolisp::%clojure-transient-pop (car args)))
+
+(defun rontolisp::%clojure-transient-count (tr)
+  "(count tr) of the transient TR: its members."
+  (let ((box (rontolisp::%clojure-transient-box tr)))
+    (if (eq (aref box 0) :vector)
+        (aref box 2)
+        (hash-table-count (aref box 1)))))
+
+(defun rontolisp::%clojure-transient-get (tr k dflt)
+  "(get tr k dflt) of the transient TR: a vector's member at an integer index
+   in range, a map's value, a set's member found by =; else DFLT."
+  (let* ((box (rontolisp::%clojure-transient-box tr)) (data (aref box 1)))
+    (if (eq (aref box 0) :vector)
+        (if (and (integerp k) (<= 0 k) (< k (aref box 2))) (aref data k) dflt)
+        (gethash (rontolisp::%clojure-table-key k data) data dflt))))
+
+(defun rontolisp::%clojure-transient-contains (tr k)
+  "(contains? tr k) of the transient TR, as a generalized boolean: an integer
+   index in range of a vector, a key of a map, a member of a set."
+  (let* ((box (rontolisp::%clojure-transient-box tr)) (data (aref box 1)))
+    (if (eq (aref box 0) :vector)
+        (and (integerp k) (<= 0 k) (< k (aref box 2)))
+        (let ((miss (list nil)))
+          (not
+           (eq (gethash (rontolisp::%clojure-table-key k data) data miss)
+               miss))))))
+
+(defun rontolisp::%clojure-transient-nth (tr i dflt)
+  "(nth tr i dflt) of the transient TR: a vector's member at the index I (a
+   double or ratio truncated, like the oracle's intCast), DFLT past either
+   end; a map or a set is the oracle's UnsupportedOperationException."
+  (if (not (eq (rontolisp::%clojure-transient-kind tr) :vector))
+      (let ((name (rontolisp::%clojure-transient-class-name tr)))
+        (rontolisp::%clojure-unsupported-operation-exception
+         (concatenate 'string "nth not supported on this type: "
+                      (subseq name (+ (position #\$ name) 1))))))
+  (cond
+   ((null i)
+    (rontolisp::%clojure-null-pointer-exception
+     "Cannot invoke \"java.lang.Character.charValue()\" because \"x\" is null"))
+   ((not (realp i))
+    (rontolisp::%clojure-class-cast-exception
+     (concatenate 'string "class " (rontolisp::%clojure-class-name-of i)
+                  " cannot be cast to class java.lang.Number"))))
+  (let ((box (rontolisp::%clojure-transient-box tr))
+        (j (if (integerp i) i (truncate i))))
+    (if (and (<= 0 j) (< j (aref box 2))) (aref (aref box 1) j) dflt)))
+
+(defun rontolisp::%clojure-transient-find (tr k)
+  "(find tr k) of the transient TR: the entry [k v] of a map holding K (K as
+   given, like the oracle's entryAt), of a vector at an integer index in
+   range; nil otherwise. A set is the oracle's IllegalArgumentException."
+  (if (eq (rontolisp::%clojure-transient-kind tr) :set)
+      (rontolisp::%clojure-illegal-argument-exception
+       (concatenate 'string "find not supported on type: "
+                    (rontolisp::%clojure-transient-class-name tr))))
+  (let* ((box (rontolisp::%clojure-transient-box tr)) (data (aref box 1)))
+    (if (eq (aref box 0) :vector)
+        (if (and (integerp k) (<= 0 k) (< k (aref box 2)))
+            (vector k (aref data k))
+            nil)
+        (let* ((miss (list nil))
+               (v (gethash (rontolisp::%clojure-table-key k data) data miss)))
+          (if (eq v miss) nil (vector k v))))))
+
+(defun rontolisp::%clojure-transient-invoke (tr args)
+  "The transient TR called on ARGS, the oracle's IFn: a vector of one integer
+   index answers its member (any other key its IllegalArgumentException, an
+   index out of range its IndexOutOfBoundsException), a map or a set of a key
+   and an optional default reads like get; any other count is its
+   ArityException naming the class."
+  (let ((n (length args)) (kind (rontolisp::%clojure-transient-kind tr)))
+    (if (or (= n 0) (> n 2) (and (= n 2) (eq kind :vector)))
+        (let ((name (rontolisp::%clojure-transient-class-name tr)))
+          (rontolisp::%clojure-arity-exception
+           (format nil "Wrong number of args (~D) passed to: ~A~A~A" n
+                   (subseq name 0 (position #\$ name)) "/"
+                   (subseq name (+ (position #\$ name) 1))))))
+    (if (eq kind :vector)
+        (let ((box (rontolisp::%clojure-transient-box tr)) (i (car args)))
+          (if (not (integerp i))
+              (rontolisp::%clojure-illegal-argument-exception
+               "Key must be integer"))
+          (if (and (<= 0 i) (< i (aref box 2)))
+              (aref (aref box 1) i)
+              (rontolisp::%clojure-index-out-of-bounds-exception "")))
+        (rontolisp::%clojure-transient-get tr (car args) (car (cdr args))))))
+
+;; The oracle's refusal of a seq over the transient TR.
+(defun rontolisp::%clojure-transient-seq-refusal (tr)
+  (rontolisp::%clojure-illegal-argument-exception
+   (concatenate 'string "Don't know how to create ISeq from: "
+                (rontolisp::%clojure-transient-class-name tr))))
+
+;; Write the transient X as the oracle's #object, the identity hash left out
+;; like a byte array's: its class name, and its toString, the class name too
+;; (quoted under pr).
+(defun rontolisp::%clojure-transient-write (x readable stream)
+  (let ((name (rontolisp::%clojure-transient-class-name x)))
+    (write-string "#object[" stream)
+    (write-string name stream)
+    (write-char #\Space stream)
+    (if readable
+        (rontolisp::%clojure-write-readable-string name stream)
+        (write-string name stream))
+    (write-char #\] stream)))
+
+;; indexed?: what %clojure-is-indexed takes, or a vector transient. A program
+;; making no transient calls %clojure-is-indexed in its place (the transient
+;; family's alias).
+(defun rontolisp::%clojure-is-indexed-transient (x)
+  (or (rontolisp::%clojure-is-indexed x)
+      (rontolisp::%clojure-transient-vector-p x)))
 
 ;;;; Byte arrays: the oracle's byte[] as (:C%BYTES octets), over a packed
 ;;;; (unsigned-byte 8) vector OCTETS -- what the byte streams read into and every

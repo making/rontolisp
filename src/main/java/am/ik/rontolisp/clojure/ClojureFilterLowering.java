@@ -738,4 +738,36 @@ final class ClojureFilterLowering {
 				nfirstForm(ctx, ClojureSeqLowering.seqForm(ctx, coll)));
 	}
 
+	/**
+	 * {@code fnext} over an already-lowered seq view: the head of its {@code next}, the
+	 * tail through the view (a lazy one realizing one level).
+	 */
+	static LispVal fnextForm(ClojureLowering ctx, LispVal seq) {
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("car"),
+				ClojureSeqLowering.seqForm(ctx, ClojureLowerUtil.list(ClojureLowerUtil.sym("cdr"), seq)));
+	}
+
+	/** {@code fnext} as a value: a one-argument lambda over the same read. */
+	static LispVal fnextValue(ClojureLowering ctx) {
+		LispSymbol coll = new LispSymbol(ClojureLowering.mangle("fnext-coll"));
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(coll),
+				fnextForm(ctx, ClojureSeqLowering.seqForm(ctx, coll)));
+	}
+
+	/**
+	 * {@code nnext} over an already-lowered seq view: the {@code next} of its
+	 * {@code next}, each tail through the view (of fewer than three members, nil).
+	 */
+	static LispVal nnextForm(ClojureLowering ctx, LispVal seq) {
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("cdr"),
+				ClojureSeqLowering.seqForm(ctx, ClojureLowerUtil.list(ClojureLowerUtil.sym("cdr"), seq)));
+	}
+
+	/** {@code nnext} as a value: a one-argument lambda over the same tail. */
+	static LispVal nnextValue(ClojureLowering ctx) {
+		LispSymbol coll = new LispSymbol(ClojureLowering.mangle("nnext-coll"));
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(coll),
+				nnextForm(ctx, ClojureSeqLowering.seqForm(ctx, coll)));
+	}
+
 }

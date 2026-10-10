@@ -15,7 +15,7 @@ persistent vector copies one path).
 
 As a value a map plus a rest list of pairs; an odd rest count signals at run time.
 
-Transients (`assoc!`) are refused by name.
+[`assoc!`](assoc-bang.md) sets keys of a transient map or vector in place.
 
 ```clojure
 (def mm-base {:a 1})

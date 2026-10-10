@@ -77,6 +77,10 @@ final class ClojureValueClasses {
 			"clojure.lang.Seqable", SERIALIZABLE, ITERABLE, RUNNABLE, "java.util.Collection", "java.util.Set",
 			CALLABLE);
 
+	/** The supers every transient's class shares. */
+	private static final List<String> TRANSIENT_SUPERS = List.of("clojure.lang.AFn", "clojure.lang.Counted",
+			"clojure.lang.IFn", "clojure.lang.ITransientCollection", RUNNABLE, CALLABLE);
+
 	/** An {@code ARef}'s supers, an atom's and a var's. */
 	private static final List<String> REF_SUPERS = List.of("clojure.lang.ARef", "clojure.lang.AReference",
 			"clojure.lang.IDeref", "clojure.lang.IMeta", "clojure.lang.IRef", "clojure.lang.IReference");
@@ -205,7 +209,28 @@ final class ClojureValueClasses {
 		DEFTYPE(List.of("clojure.lang.IType")),
 
 		/** A reify: what every reify class implements. */
-		REIFY(List.of("clojure.lang.IMeta", "clojure.lang.IObj"));
+		REIFY(List.of("clojure.lang.IMeta", "clojure.lang.IObj")),
+
+		/**
+		 * {@code clojure.lang.PersistentVector$TransientVector} (read off clj 1.12.6,
+		 * 2026-10-10).
+		 */
+		TRANSIENT_VECTOR(concat(List.of("clojure.lang.PersistentVector$TransientVector", "clojure.lang.Indexed",
+				"clojure.lang.ITransientVector", "clojure.lang.ITransientAssociative",
+				"clojure.lang.ITransientAssociative2", "clojure.lang.ILookup"), TRANSIENT_SUPERS)),
+
+		/**
+		 * {@code clojure.lang.PersistentArrayMap$TransientArrayMap} or
+		 * {@code PersistentHashMap$TransientHashMap}.
+		 */
+		TRANSIENT_MAP(concat(List.of("clojure.lang.PersistentArrayMap$TransientArrayMap",
+				"clojure.lang.PersistentHashMap$TransientHashMap", "clojure.lang.ATransientMap",
+				"clojure.lang.ITransientMap", "clojure.lang.ITransientAssociative",
+				"clojure.lang.ITransientAssociative2", "clojure.lang.ILookup"), TRANSIENT_SUPERS)),
+
+		/** {@code clojure.lang.PersistentHashSet$TransientHashSet}. */
+		TRANSIENT_SET(concat(List.of("clojure.lang.PersistentHashSet$TransientHashSet", "clojure.lang.ATransientSet",
+				"clojure.lang.ITransientSet"), TRANSIENT_SUPERS));
 
 		/** The classes, the value's own first where it has one. */
 		final Set<String> classes;

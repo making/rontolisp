@@ -266,6 +266,11 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   (`(aset bs 0 5)` is refused there, `(aset bs 0 (byte 5))` is not). A seq over a byte array
   holds the elements the array had when the seq was taken, where the oracle's reads the
   array as it walks.
+- A [transient](reference/transient.md) prints as the oracle's `#object` without the
+  identity hash, and `str` answers its class name. A bang verb answers the transient it
+  was handed, where the oracle's may answer another object (an array map's `assoc!` past
+  eight entries), so a program that ignores the answer keeps every edit here and loses
+  some there. `nth` past the end of a transient vector answers `nil`, as of a vector.
 - An instance call on a collection, keyword, symbol, ratio, atom or fn answers through the core
   functions and shares their deviations (`.getClass` answers what `class` does). A method
   left unmapped is refused as `Method m taking N args is not supported for class C`, where the

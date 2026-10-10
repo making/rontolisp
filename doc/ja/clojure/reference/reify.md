@@ -98,7 +98,7 @@ import します（オラクル同様、`clojure.lang` は既定の import に�
 | `java.util.Collection`, `List`, `Set`, `RandomAccess` | `count`（`size`）、`nth`（`RandomAccess` なリストの `get`）、`contains?`（`Set` の `contains`）、`=`、`pr` でのリスト・ベクタ・集合としての印字 |
 | `java.util.Map` | `get`、`contains?`、`find`、`count`、`seq`（`entrySet`）、`=`、`pr` でのマップとしての印字 |
 | `IHashEq` | `hash`（`hasheq`）、要素にしたときのコレクションのハッシュ関数 |
-| `java.io.Serializable`, `IEditableCollection`、トランジェント | `instance?` とインスタンス呼び出しのみ（トランジェントは拒否されます） |
+| `java.io.Serializable`, `IEditableCollection`、トランジェント | `instance?` とインスタンス呼び出し。`transient` は `asTransient` を、`persistent!` と `!` 付きの操作はトランジェントのインターフェースのメソッドを呼びます |
 
 コアのコレクションへの `(.iterator coll)`、`clojure.lang.SeqIterator`、`clojure.lang.RT/iter` は
 seq を辿るイテレータを返し、`clojure.lang.MapEntry` はここでのマップエントリである `[k v]`

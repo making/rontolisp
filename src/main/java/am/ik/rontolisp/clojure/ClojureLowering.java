@@ -118,28 +118,26 @@ import org.jspecify.annotations.Nullable;
  * so collections print in Clojure notation ({@code [1 :a s]}, {@code {:a 1}},
  * {@code #{1}}, {@code (true false nil :k)}) and the print family answers nil, like the
  * oracle. A lowering error names the innermost form's position ({@code file:line:column}
- * when the file is known) through the reader's offsets. Transients ({@code transient},
- * {@code persistent!}, {@code assoc!}/{@code dissoc!}/{@code conj!}/{@code disj!}) are
- * refused by name: there is no transient runtime behind the tables. State is a tagged
- * one-vector cell ({@code atom} builds it, {@code deref} reads it,
- * {@code swap!}/{@code reset!}/ {@code compare-and-set!} rewrite it); errors are
- * {@code handler-case} inside {@code unwind-protect} ({@code try}, every catch class
- * catch-all) with {@code throw} over {@code error} -- an exception (an {@code ex-info}, a
- * throwable construction, a caught condition, a host {@code Throwable}) signals as a
- * condition carrying its class, message, data and cause, anything else through its
- * printed rendering; dispatch is a method table plus a dispatcher {@code defun}
- * ({@code defmulti}/{@code defmethod}); namespaces wire aliases and refers
- * ({@code clojure.string} over the core string operations, {@code clojure.set} over its
- * spliced runtime, {@code clojure.java.io} for {@code reader} only, a project namespace's
- * file lowered once ahead of the form that requires it); interop lowers to the
- * {@code java:} surface. A {@code defmacro} is a compile-time expander (one lambda over
- * the call's argument list, the same function the runtime table entry holds for
- * {@code macroexpand-1}/{@code macroexpand}) plus datum-to-datum expansion at lower time,
- * so every backend runs expanded code; syntax-quote lowers to {@code quote} with unquote
- * splicing over the mangled namespace ({@code x#} one gensym per expansion);
- * {@code gensym} is the ordinary uninterned symbol. {@code var}/{@code #'} stays refused.
- * The reader spells characters, radix integers and exact {@code M} decimals, and refuses
- * regex literals by name.
+ * when the file is known) through the reader's offsets. Transients edit one copy in place
+ * ({@link ClojureTransientLowering}). State is a tagged one-vector cell ({@code atom}
+ * builds it, {@code deref} reads it, {@code swap!}/{@code reset!}/
+ * {@code compare-and-set!} rewrite it); errors are {@code handler-case} inside
+ * {@code unwind-protect} ({@code try}, every catch class catch-all) with {@code throw}
+ * over {@code error} -- an exception (an {@code ex-info}, a throwable construction, a
+ * caught condition, a host {@code Throwable}) signals as a condition carrying its class,
+ * message, data and cause, anything else through its printed rendering; dispatch is a
+ * method table plus a dispatcher {@code defun} ({@code defmulti}/{@code defmethod});
+ * namespaces wire aliases and refers ({@code clojure.string} over the core string
+ * operations, {@code clojure.set} over its spliced runtime, {@code clojure.java.io} for
+ * {@code reader} only, a project namespace's file lowered once ahead of the form that
+ * requires it); interop lowers to the {@code java:} surface. A {@code defmacro} is a
+ * compile-time expander (one lambda over the call's argument list, the same function the
+ * runtime table entry holds for {@code macroexpand-1}/{@code macroexpand}) plus
+ * datum-to-datum expansion at lower time, so every backend runs expanded code;
+ * syntax-quote lowers to {@code quote} with unquote splicing over the mangled namespace
+ * ({@code x#} one gensym per expansion); {@code gensym} is the ordinary uninterned
+ * symbol. {@code var}/{@code #'} stays refused. The reader spells characters, radix
+ * integers and exact {@code M} decimals, and refuses regex literals by name.
  */
 public final class ClojureLowering {
 
@@ -4447,8 +4445,6 @@ public final class ClojureLowering {
 				return ClojureCollectionLowering.mapConstructorOf(this, items, "hash-map");
 			case "array-map":
 				return ClojureCollectionLowering.mapConstructorOf(this, items, "array-map");
-			case "transient", "persistent!", "assoc!", "dissoc!", "conj!", "disj!":
-				throw new LispReadException("transients are not supported yet: " + name);
 			case "lazy-seq":
 				return capturingMutableFields(() -> ClojureLazyLowering.lazySeqOf(this, items));
 			case "lazy-cat":
@@ -4501,6 +4497,12 @@ public final class ClojureLowering {
 			case "nfirst":
 				ClojureLowerUtil.isTrue(n == 1, "nfirst takes one collection");
 				return ClojureFilterLowering.nfirstForm(this, ClojureSeqLowering.seqForm(this, lower(items.get(1))));
+			case "fnext":
+				ClojureCoreLowering.arity(name, n, 1, 1);
+				return ClojureFilterLowering.fnextForm(this, ClojureSeqLowering.seqForm(this, lower(items.get(1))));
+			case "nnext":
+				ClojureCoreLowering.arity(name, n, 1, 1);
+				return ClojureFilterLowering.nnextForm(this, ClojureSeqLowering.seqForm(this, lower(items.get(1))));
 			case "boolean":
 				ClojureLowerUtil.isTrue(n == 1, "boolean takes one value");
 				return ClojureFnLowering.booleanForm(this, lower(items.get(1)));
@@ -4545,7 +4547,11 @@ public final class ClojureLowering {
 					return sorted;
 				}
 				LispVal core = ClojureCoreLowering.callOf(this, name, items);
-				return core != null ? core : ClojureTransducerLowering.callOf(this, name, items);
+				if (core != null) {
+					return core;
+				}
+				LispVal transientCall = ClojureTransientLowering.callOf(this, name, items);
+				return transientCall != null ? transientCall : ClojureTransducerLowering.callOf(this, name, items);
 		}
 	}
 
@@ -4631,6 +4637,8 @@ public final class ClojureLowering {
 			case "mapcat" -> ClojureFilterLowering.mapcatValue(this);
 			case "ffirst" -> ClojureFilterLowering.ffirstValue(this);
 			case "nfirst" -> ClojureFilterLowering.nfirstValue(this);
+			case "fnext" -> ClojureFilterLowering.fnextValue(this);
+			case "nnext" -> ClojureFilterLowering.nnextValue(this);
 			case "boolean" -> ClojureFnLowering.booleanValue(this);
 			case "char" -> ClojureFnLowering.charValue(this);
 			case "name" -> ClojureFnLowering.nameValue(this);
@@ -4723,7 +4731,11 @@ public final class ClojureLowering {
 					yield sorted;
 				}
 				LispVal core = ClojureCoreLowering.valueOf(this, name);
-				yield core != null ? core : ClojureTransducerLowering.valueOf(name);
+				if (core != null) {
+					yield core;
+				}
+				LispVal transientValue = ClojureTransientLowering.valueOf(name);
+				yield transientValue != null ? transientValue : ClojureTransducerLowering.valueOf(name);
 			}
 		};
 	}

@@ -462,7 +462,6 @@ var はエクスポートより下で定義してかまいません。
 | 拒否されるもの | メッセージ形 | 理由 |
 |---|---|---|
 | end なし `range` | `infinite range is not supported: range needs an end` | 無限 seq は strict には綴れない -- `iterate` を使う |
-| `transient`、`persistent!`、`assoc!`、`dissoc!`、`conj!`、`disj!` | `transients are not supported yet: ...` | テーブルの裏にトランジェント実装がない |
 | `definterface`、`gen-class`、`gen-interface` | `protocols are not supported yet: ...` | どのバックエンドにもインターフェース生成がない |
 | コア関数が参照するもの以外のインタフェースを挙げた `reify`/`deftype`/`defrecord` の本体（[reify](reference/reify.md#host-interfaces)） | `... is not supported yet as an interface of ...` | それ以外のインタフェース（`IChunkedSeq`、`java.util.Deque` など）を参照する関数がまだない |
 | レコード自身のインタフェースのメソッドのうち、レコードがインタフェース側に任せるもの（`assocEx`、`java.util.Map` の default メソッド）を定義した `defrecord` の本体 | `... is not supported yet as a method of defrecord` | それらのインタフェースにはレコード自身の動詞が答えるため、そのメソッドを持つ行がない |

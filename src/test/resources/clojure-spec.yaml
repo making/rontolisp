@@ -11173,3 +11173,152 @@ cases:
       #object["[B" "[B"] "[B" :[B "[B"
       #object[[B [B] [#object[[B [B]]
       :java.io.ByteArrayInputStream #object[java.io.ByteArrayOutputStream "A"]
+  - name: transients-edit-one-copy-and-persistent-hands-it-over
+    # Each bang verb edits the transient in place and answers it; the collection
+    # it was made from is untouched; persistent! answers the edited collection.
+    # count, get, nth, contains?, find, a call and a keyword read a transient;
+    # the bang verbs are values too. Oracle-identical (clj 1.12.6, 2026-10-10).
+    source: |
+      (def trn-v [1 2])
+      (def trn-tv (transient trn-v))
+      (conj! trn-tv 3)
+      (assoc! trn-tv 0 :a 3 4)
+      (pop! trn-tv)
+      (prn trn-v (count trn-tv) (nth trn-tv 0) (get trn-tv 1) (trn-tv 2) (contains? trn-tv 2) (find trn-tv 1) (nth trn-tv 9 :d) (get trn-tv :x :d))
+      (prn (persistent! trn-tv))
+      (def trn-m {:a 1})
+      (def trn-tm (transient trn-m))
+      (prn (identical? trn-tm (assoc! trn-tm :b 2 :c)))
+      (conj! trn-tm [:d 4])
+      (conj! trn-tm {:e 5})
+      (dissoc! trn-tm :a :zz)
+      (prn trn-m (count trn-tm) (get trn-tm :b) (trn-tm :c :none) (:d trn-tm) (contains? trn-tm :c) (find trn-tm :e) (find trn-tm :a))
+      (prn (into (sorted-map) (persistent! trn-tm)))
+      (def trn-ts (transient #{1 2}))
+      (disj! (conj! trn-ts 3) 1 9)
+      (prn (count trn-ts) (get trn-ts 2) (trn-ts 9 :none) (contains? trn-ts 3) (sort (persistent! trn-ts)))
+      (prn (persistent! (reduce conj! (transient []) (range 5))) (persistent! (reduce-kv (fn [m k v] (assoc! m v k)) (transient {}) {:x 1})) (sort (persistent! (reduce disj! (transient #{1 2 3}) [1 3]))))
+      (prn (persistent! (conj!)) (conj! [1]) (disj! #{1}) (empty? (transient [])) (empty? (transient #{1})))
+      (prn (persistent! (assoc! (transient {[1] :v}) '(1) :w)) (persistent! (dissoc! (transient {[1] :v}) '(1))))
+      (prn (persistent! (apply assoc! (transient {}) [:k 1])) (persistent! ((comp pop! pop!) (transient [1 2 3]))) (map persistent! (map transient [[1] {:a 1}])))
+    expected: |
+      [1 2] 3 :a 2 3 true [1 2] :d :d
+      [:a 2 3]
+      true
+      {:a 1} 4 2 nil 4 true [:e 5] nil
+      {:b 2, :c nil, :d 4, :e 5}
+      2 2 :none true (2 3)
+      [0 1 2 3 4] {1 :x} (2)
+      [] [1] #{1} true false
+      {[1] :w} {}
+      {:k 1} [1] ([1] {:a 1})
+  - name: a-transient-refuses-like-the-oracle
+    # After persistent!, under seq, of the wrong kind or nil, and past its
+    # members. Oracle-identical (clj 1.12.6, 2026-10-10); a ClassCastException's
+    # message leaves out the oracle's module text, so only its class prints.
+    source: |
+      (defmacro trn-try [form] `(try ~form (catch Throwable e# [(.getName (class e#)) (ex-message e#)])))
+      (defmacro trn-class [form] `(try ~form (catch Throwable e# (.getName (class e#)))))
+      (def trn-dead (transient [1]))
+      (persistent! trn-dead)
+      (prn (trn-try (conj! trn-dead 2)) (trn-try (count trn-dead)) (trn-try (get trn-dead 0)))
+      (prn (trn-try (seq (transient [1]))) (trn-try (first (transient #{}))))
+      (prn (trn-try (transient nil)) (trn-try (persistent! nil)) (trn-try (disj! nil 1)))
+      (prn (trn-class (transient '(1))) (trn-class (transient (sorted-set 1))) (trn-class (conj! [1] 2)) (trn-class (dissoc! (transient [1]) 0)) (trn-class (disj! (transient {}) 1)) (trn-class (pop! (transient #{}))) (trn-class (assoc! (transient #{}) 1 2)))
+      (prn (trn-try (pop! (transient []))) (trn-class (assoc! (transient [1]) 5 :x)) (trn-try (assoc! (transient [1]) :k :x)) (trn-try (nth (transient {}) 0)) (trn-try (find (transient #{}) 1)))
+      (prn (trn-class ((transient [1 2]) 5)) (trn-try ((transient [1 2]) 1 2)) (trn-try (conj! (transient {}) [1 2 3])))
+    expected: |
+      ["java.lang.IllegalAccessError" "Transient used after persistent! call"] ["java.lang.IllegalAccessError" "Transient used after persistent! call"] ["java.lang.IllegalAccessError" "Transient used after persistent! call"]
+      ["java.lang.IllegalArgumentException" "Don't know how to create ISeq from: clojure.lang.PersistentVector$TransientVector"] ["java.lang.IllegalArgumentException" "Don't know how to create ISeq from: clojure.lang.PersistentHashSet$TransientHashSet"]
+      ["java.lang.NullPointerException" "Cannot invoke \"clojure.lang.IEditableCollection.asTransient()\" because \"coll\" is null"] ["java.lang.NullPointerException" "Cannot invoke \"clojure.lang.ITransientCollection.persistent()\" because \"coll\" is null"] ["java.lang.NullPointerException" "Cannot invoke \"clojure.lang.ITransientSet.disjoin(Object)\" because \"set\" is null"]
+      "java.lang.ClassCastException" "java.lang.ClassCastException" "java.lang.ClassCastException" "java.lang.ClassCastException" "java.lang.ClassCastException" "java.lang.ClassCastException" "java.lang.ClassCastException"
+      ["java.lang.IllegalStateException" "Can't pop empty vector"] "java.lang.IndexOutOfBoundsException" ["java.lang.IllegalArgumentException" "Key must be integer"] ["java.lang.UnsupportedOperationException" "nth not supported on this type: TransientArrayMap"] ["java.lang.IllegalArgumentException" "find not supported on type: clojure.lang.PersistentHashSet$TransientHashSet"]
+      "java.lang.IndexOutOfBoundsException" ["clojure.lang.ArityException" "Wrong number of args (2) passed to: clojure.lang.PersistentVector/TransientVector"] ["java.lang.IllegalArgumentException" "Vector arg to map conj must be a pair"]
+  - name: a-transient-is-no-collection-and-prints-as-the-host-object
+    # The predicates, = and hash (identity), instance? and the class names are
+    # oracle-identical (clj 1.12.6, 2026-10-10). A deviation: the oracle's #object
+    # and toString carry the identity hash, which no value here has (a byte
+    # array's precedent), and class answers the class's keyword.
+    source: |
+      (def trn-pv (transient [1]))
+      (prn (coll? trn-pv) (vector? trn-pv) (map? (transient {})) (set? (transient #{})) (seqable? trn-pv) (counted? trn-pv) (ifn? (transient #{})) (indexed? trn-pv) (indexed? (transient {})) (fn? trn-pv))
+      (prn (= trn-pv trn-pv) (= trn-pv (transient [1])) (= (transient []) []) (= (hash trn-pv) (hash trn-pv)))
+      (prn (instance? clojure.lang.ITransientVector trn-pv) (instance? clojure.lang.ITransientMap trn-pv) (instance? clojure.lang.ITransientAssociative2 (transient {})) (instance? clojure.lang.ITransientSet (transient #{})) (instance? clojure.lang.Counted trn-pv) (instance? clojure.lang.IFn trn-pv) (instance? clojure.lang.IEditableCollection [1]) (instance? clojure.lang.IEditableCollection trn-pv) (instance? clojure.lang.IEditableCollection (sorted-map)))
+      (prn (.getName (class trn-pv)) (.getName (class (transient {}))) (.getName (class (transient (zipmap (range 9) (range 9))))) (.getName (class (transient #{}))))
+      (prn trn-pv (str trn-pv) (class trn-pv))
+      (println trn-pv)
+    expected: |
+      false false false false false true true true false false
+      true false false true
+      true false true true true true true false false
+      "clojure.lang.PersistentVector$TransientVector" "clojure.lang.PersistentArrayMap$TransientArrayMap" "clojure.lang.PersistentHashMap$TransientHashMap" "clojure.lang.PersistentHashSet$TransientHashSet"
+      #object[clojure.lang.PersistentVector$TransientVector "clojure.lang.PersistentVector$TransientVector"] "clojure.lang.PersistentVector$TransientVector" :clojure.lang.PersistentVector$TransientVector
+      #object[clojure.lang.PersistentVector$TransientVector clojure.lang.PersistentVector$TransientVector]
+  - name: a-type-implementing-the-transient-interfaces-answers-through-its-methods
+    # transient reaches an IEditableCollection's asTransient, persistent! and the
+    # bang verbs a transient interface's methods. Oracle-identical (clj 1.12.6,
+    # 2026-10-10).
+    source: |
+      (deftype TrnBox [items]
+        clojure.lang.IEditableCollection
+        (asTransient [_]
+          (let [acc (atom items)]
+            (reify
+              clojure.lang.ITransientCollection
+              (conj [this x] (swap! acc conj x) this)
+              (persistent [_] @acc)
+              clojure.lang.ITransientVector
+              (pop [this] (swap! acc pop) this)
+              (assocN [this i x] (swap! acc assoc i x) this)
+              (assoc [this i x] (swap! acc assoc i x) this)
+              (nth [_ i] (nth @acc i))
+              (nth [_ i d] (nth @acc i d))
+              (count [_] (count @acc))
+              (valAt [_ k] (get @acc k))
+              (valAt [_ k d] (get @acc k d))))))
+      (let [t (transient (TrnBox. [1 2]))]
+        (conj! t 3)
+        (assoc! t 0 :a)
+        (pop! t)
+        (println (count t) (nth t 0) (get t 1) (instance? clojure.lang.ITransientVector t))
+        (println (persistent! t)))
+      (deftype TrnSet [m]
+        clojure.lang.ITransientSet
+        (disjoin [this k] (swap! m dissoc k) this)
+        (contains [_ k] (contains? @m k))
+        (get [_ k] (get @m k))
+        (conj [this k] (swap! m assoc k k) this)
+        (persistent [_] (set (keys @m)))
+        (count [_] (count @m)))
+      (let [s (TrnSet. (atom {:a :a :b :b :c :c}))]
+        (disj! s :a :b)
+        (println (sort (persistent! (conj! s :e)))))
+      (deftype TrnMap [m]
+        clojure.lang.ITransientMap
+        (without [this k] (swap! m dissoc k) this)
+        (assoc [this k v] (swap! m assoc k v) this)
+        (conj [this e] (swap! m conj e) this)
+        (persistent [_] @m)
+        (count [_] (count @m))
+        (valAt [_ k] (get @m k))
+        (valAt [_ k d] (get @m k d)))
+      (let [t (TrnMap. (atom {:a 1 :b 2}))]
+        (dissoc! t :a)
+        (assoc! t :c 3 :d 4)
+        (println (into (sorted-map) (persistent! t))))
+    expected: |
+      2 :a 2 true
+      [:a 2]
+      (:c :e)
+      {:b 2, :c 3, :d 4}
+  - name: fnext-and-nnext-step-past-the-head
+    # (first (next x)) and (next (next x)), each tail through the seq view.
+    # Oracle-identical (clj 1.12.6, 2026-10-10).
+    source: |
+      (prn (fnext [1 2 3]) (fnext [1]) (fnext nil) (fnext {:a 1}) (fnext "ab") (fnext (lazy-seq (cons 1 (lazy-seq (list 2))))))
+      (prn (nnext [1 2 3]) (nnext [1 2]) (nnext nil) (nnext '(1 2 3 4)) (first (nnext (iterate inc 0))) (nnext "abc"))
+      (prn (map fnext [[1 2] [3 4]]) (map nnext [[1 2 3] [4]]) (take 2 (nnext (iterate inc 0))))
+    expected: |
+      2 nil nil nil \b 2
+      (3) nil nil (3 4) 2 (\c)
+      (2 4) ((3) nil) (2 3)

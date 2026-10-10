@@ -346,6 +346,26 @@ class ClojureArmsTest {
 	}
 
 	@Test
+	void theTransientFamilyIsMadeByTransientAndFoldsItsArmsAndIndexedsHelper() {
+		// a read of a transient, a kind's instance? test and indexed?'s helper go from a
+		// program making none, which a bang verb alone does not make
+		List<LispVal> forms = read(
+				"(cond ((rontolisp::%clojure-transient-p c) (rontolisp::%clojure-transient-count c)) (t (length c)))"
+						+ " (or (a x) (rontolisp::%clojure-transient-vector-p x))"
+						+ " (rontolisp::%clojure-is-indexed-transient x) (rontolisp::%clojure-transient-conj tr x)");
+		ClojureArms.Scan scan = ClojureArms.scan(forms, ClojureArms.Family.TRANSIENT);
+		assertThat(scan.builds()).isFalse();
+		assertThat(scan.strips()).isTrue();
+		assertThat(ClojureArms.strip(forms, ClojureArms.Family.TRANSIENT).stream().map(LispVal::print)).containsExactly(
+				"(COND (T (LENGTH C)))", "(A X)", "(RONTOLISP::%CLOJURE-IS-INDEXED X)",
+				"(RONTOLISP::%CLOJURE-TRANSIENT-CONJ TR X)");
+		for (String producer : List.of("(rontolisp::%clojure-transient v)",
+				"(function rontolisp::%clojure-transient-v)", "(function rontolisp::%clojure-transient-conj-v)")) {
+			assertThat(ClojureArms.scan(read(producer), ClojureArms.Family.TRANSIENT).builds()).as(producer).isTrue();
+		}
+	}
+
+	@Test
 	void theReaderValueFamilyFoldsThePredicatesAndTheReaderArmsOfAProgramReadingWithoutOptions() {
 		// only a read that may take {:read-cond :preserve} and the two constructors make
 		// a reader conditional or a tagged literal: the predicates are (progn x false)

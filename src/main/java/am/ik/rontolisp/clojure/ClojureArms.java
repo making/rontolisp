@@ -369,10 +369,11 @@ public final class ClojureArms {
 				Set.of(ClojureInterfaces.HASHEQ_ROW), Set.of()),
 
 		/**
-		 * A record, deftype or reify whose body implements an interface no core verb here
-		 * reads -- {@code Serializable}, {@code IEditableCollection} and the transients
-		 * (refused by name) --, which {@code instance?} answers true of; an instance call
-		 * reaches its methods.
+		 * A record, deftype or reify whose body implements {@code Serializable},
+		 * {@code IEditableCollection} or a transient interface, which {@code instance?}
+		 * answers true of and an instance call reaches the methods of; {@code transient}
+		 * reaches an {@code IEditableCollection}'s {@code asTransient}, and
+		 * {@code persistent!} and the bang verbs a transient interface's methods.
 		 */
 		MARKER("marker-interface",
 				Set.of("RONTOLISP::%CLOJURE-EDITABLE-P", "RONTOLISP::%CLOJURE-ITRANSIENT-COLLECTION-P",
@@ -380,6 +381,22 @@ public final class ClojureArms {
 						"RONTOLISP::%CLOJURE-ITRANSIENT-MAP-P", "RONTOLISP::%CLOJURE-ITRANSIENT-VECTOR-P",
 						"RONTOLISP::%CLOJURE-ITRANSIENT-SET-P", "RONTOLISP::%CLOJURE-SERIALIZABLE-P"),
 				Set.of(), Map.of(), Set.of(ClojureInterfaces.MARKER_ROW), Set.of()),
+
+		/**
+		 * A transient, which {@code persistent!} and the bang verbs edit and
+		 * {@code count}, {@code empty?}, {@code get}, {@code nth}, {@code contains?},
+		 * {@code find}, a call, a keyword's call, {@code counted?}, {@code ifn?},
+		 * {@code indexed?}, {@code class}, {@code instance?}, the printer and {@code str}
+		 * read, and the seq view refuses in the oracle's words: only {@code transient}
+		 * and {@code conj!}'s value make one
+		 * ({@link ClojureTransientLowering#PRODUCERS}). The alias is {@code indexed?}'s
+		 * helper, to the one it called before transients. Ahead of {@link #INDEXED},
+		 * whose alias renames that one in turn.
+		 */
+		TRANSIENT("transient",
+				Set.of(ClojureTransientLowering.TRANSIENT_P, ClojureTransientLowering.VECTOR_P,
+						ClojureTransientLowering.MAP_P, ClojureTransientLowering.SET_P),
+				Set.of(), ClojureTransientLowering.ALIASES, ClojureTransientLowering.PRODUCERS, Set.of()),
 
 		/**
 		 * Sorted maps and sets: no literal makes one, only the constructor and the

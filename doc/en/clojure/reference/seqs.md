@@ -61,6 +61,8 @@ collection realizes a lazy input first; one that stops early (`second`, `nth`, `
 | `second` | `(second [1 2 3])` | `2` |
 | `ffirst` | `(ffirst [[1 2]])` | `1` |
 | `nfirst` | `(nfirst [[1 2 3]])` | `(2 3)` |
+| `fnext` | `(fnext [1 2 3])` | `2` |
+| `nnext` | `(nnext [1 2 3])` | `(3)` |
 | `drop-last` | `(drop-last [1 2 3])` | `(1 2)` |
 | `split-at` | `(split-at 2 [1 2 3 4])` | `[(1 2) (3 4)]` |
 | `split-with` | `(split-with odd? [1 3 4 5])` | `[(1 3) (4 5)]` |

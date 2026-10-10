@@ -1,6 +1,6 @@
 # マップ・セット・ベクター
 
-マップとセットは equal ハッシュテーブルで、その場では変更されません:全操作が新しいテーブルを作るので、永続性は観測可能な形で保たれます。map/set の反復順はテーブルの走査順（未規定）です。キーは `=` で比較されるので、ベクター・リスト・マップ・セットのキーも等しいキーを見つけます。ソート済みのマップとセット（`sorted-map`・`sorted-set` とその `-by` 形）は、エントリーを `compare` か比較関数の順に保ち、その順序でキーを探します。マップとセットの操作はどれもソート済みのものを返し、`subseq`/`rsubseq` はその一部の範囲を走査します。配列は general です。`(make-array Class dim...)` はクラスを無視し、`aget` で読み、`aset` で書き、`alength` で測ります。バイト配列（`byte-array`、または `Byte/TYPE` の `make-array`）は符号付きのバイトを保持します。
+マップとセットは equal ハッシュテーブルで、その場では変更されません:全操作が新しいテーブルを作るので、永続性は観測可能な形で保たれます。map/set の反復順はテーブルの走査順（未規定）です。キーは `=` で比較されるので、ベクター・リスト・マップ・セットのキーも等しいキーを見つけます。ソート済みのマップとセット（`sorted-map`・`sorted-set` とその `-by` 形）は、エントリーを `compare` か比較関数の順に保ち、その順序でキーを探します。マップとセットの操作はどれもソート済みのものを返し、`subseq`/`rsubseq` はその一部の範囲を走査します。配列は general です。`(make-array Class dim...)` はクラスを無視し、`aget` で読み、`aset` で書き、`alength` で測ります。バイト配列（`byte-array`、または `Byte/TYPE` の `make-array`）は符号付きのバイトを保持します。トランジェント（`transient`）は、`persistent!` が返すまでベクター・マップ・セットのコピーをその場で編集します。
 
 | Name | Example | Result |
 |---|---|---|
@@ -65,3 +65,10 @@
 | `hash-unordered-coll` | `(hash-unordered-coll [1 2])` | `460223544` |
 | `mix-collection-hash` | `(mix-collection-hash 1 0)` | `-2017569654` |
 | `hash-combine` | `(hash-combine 0 :a)` | `-626620958` |
+| `transient` | `(count (transient [1 2]))` | `2` |
+| `persistent!` | `(persistent! (transient [1]))` | `[1]` |
+| `conj!` | `(persistent! (conj! (transient [1]) 2))` | `[1 2]` |
+| `assoc!` | `(persistent! (assoc! (transient {}) :a 1))` | `{:a 1}` |
+| `dissoc!` | `(persistent! (dissoc! (transient {:a 1}) :a))` | `{}` |
+| `disj!` | `(persistent! (disj! (transient #{1}) 1))` | `#{}` |
+| `pop!` | `(persistent! (pop! (transient [1 2])))` | `[1]` |
