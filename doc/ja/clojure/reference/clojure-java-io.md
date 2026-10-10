@@ -94,7 +94,9 @@ URL は綴りを保ち、`getProtocol`、`getHost`、`getPort`、`getPath`、`ge
 `write`（int の下位オクテット、バイト配列やその一部）、`flush`、`close` に答えます。バイト
 ストリームの上のリーダーはそれを復号し、その上のライターは flush か close のときにテキストを
 符号化して書き込みます。`:encoding` が指定できるのは UTF-8、ISO-8859-1、US-ASCII（とその別名）
-で、ほかの名前はオラクルの `java.io.UnsupportedEncodingException` です。
+で、ほかの名前はオラクルの `java.io.UnsupportedEncodingException` です。`Charset` を渡すとオラクルの
+`ClassCastException` になります。`(InputStreamReader. in charset)`、`(OutputStreamWriter. out charset)`、
+`ByteArrayOutputStream` の `.toString` は `Charset` も受け取ります（[byte-array](byte-array.md)）。
 
 `(java.io.ByteArrayInputStream. bytes)` はバイト配列をコピーせずに読み、
 `(java.io.ByteArrayInputStream. bytes off len)` は `off` からの一部を読みます。

@@ -234,7 +234,7 @@ final class ClojureIoLowering {
 			RESOURCE_URLS, FILE_SEQ, PREFIX + "FILE-URL", PREFIX + "URL-FILE", PREFIX + "URI-FILE", PREFIX + "URI-URL",
 			PREFIX + "OPEN-INPUT", PREFIX + "OPEN-OUTPUT", OPEN_READER, PREFIX + "OPEN-WRITER", PREFIX + "PARENT-FILE",
 			PREFIX + "FROM-HOST", FILE_INPUT, FILE_OUTPUT, STREAM_WRITER, BYTES_INPUT, BYTES_INPUT_3, BYTES_OUTPUT,
-			INSTALL_FETCH);
+			INSTALL_FETCH, ClojureCharsetLowering.VALUE);
 
 	/**
 	 * The ones of them that answer a Common Lisp character stream, which the printer and
@@ -265,7 +265,7 @@ final class ClojureIoLowering {
 				"isAbsolute", "toURI", "toURL", "hashCode", "getProtocol", "getHost", "getPort", "getDefaultPort",
 				"getFile", "getQuery", "getRef", "getAuthority", "getUserInfo", "toExternalForm", "openStream",
 				"getScheme", "read", "readAllBytes", "readLine", "available", "newLine", "flush", "close",
-				"toByteArray", "size", "reset", "markSupported")) {
+				"toByteArray", "size", "reset", "markSupported", "name", "displayName")) {
 			out.computeIfAbsent(method, m -> new HashMap<>()).put(0, PREFIX + "M-" + kebab(method));
 		}
 		for (String method : List.of("renameTo", "compareTo", "equals", "skip", "transferTo", "write", "append",
@@ -412,6 +412,13 @@ final class ClojureIoLowering {
 			Map.entry("java.io.File", List.of("java.io.Serializable", "java.lang.Comparable")),
 			Map.entry("java.net.URL", List.of("java.io.Serializable")),
 			Map.entry("java.net.URI", List.of("java.lang.Comparable", "java.io.Serializable")),
+			Map.entry("java.nio.charset.Charset", List.of("java.lang.Comparable")),
+			Map.entry("sun.nio.cs.UTF_8", List.of("java.nio.charset.Charset", "java.lang.Comparable")),
+			Map.entry("sun.nio.cs.ISO_8859_1", List.of("java.nio.charset.Charset", "java.lang.Comparable")),
+			Map.entry("sun.nio.cs.US_ASCII", List.of("java.nio.charset.Charset", "java.lang.Comparable")),
+			Map.entry("sun.nio.cs.UTF_16", List.of("java.nio.charset.Charset", "java.lang.Comparable")),
+			Map.entry("sun.nio.cs.UTF_16BE", List.of("java.nio.charset.Charset", "java.lang.Comparable")),
+			Map.entry("sun.nio.cs.UTF_16LE", List.of("java.nio.charset.Charset", "java.lang.Comparable")),
 			Map.entry("java.io.BufferedInputStream",
 					List.of("java.io.FilterInputStream", "java.io.InputStream", "java.io.Closeable",
 							"java.lang.AutoCloseable")),

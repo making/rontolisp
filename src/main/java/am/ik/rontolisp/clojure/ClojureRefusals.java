@@ -109,6 +109,17 @@ final class ClojureRefusals {
 	/** {@code java.io.UnsupportedEncodingException}: a charset no stream knows. */
 	static final String UNSUPPORTED_ENCODING = "RONTOLISP::%CLOJURE-UNSUPPORTED-ENCODING-EXCEPTION";
 
+	/**
+	 * {@code java.nio.charset.UnsupportedCharsetException}: a charset name no JDK knows.
+	 */
+	static final String UNSUPPORTED_CHARSET = "RONTOLISP::%CLOJURE-UNSUPPORTED-CHARSET-EXCEPTION";
+
+	/**
+	 * {@code java.nio.charset.IllegalCharsetNameException}: a string spelling no charset
+	 * name.
+	 */
+	static final String ILLEGAL_CHARSET_NAME = "RONTOLISP::%CLOJURE-ILLEGAL-CHARSET-NAME-EXCEPTION";
+
 	/** {@code java.net.MalformedURLException}: a string spelling no URL. */
 	static final String MALFORMED_URL = "RONTOLISP::%CLOJURE-MALFORMED-URL-EXCEPTION";
 
@@ -211,6 +222,8 @@ final class ClojureRefusals {
 			Map.entry(FILE_NOT_FOUND, "java.io.FileNotFoundException"),
 			Map.entry(NO_SUCH_FILE, "java.nio.file.NoSuchFileException"), Map.entry(ZIP, "java.util.zip.ZipException"),
 			Map.entry(UNSUPPORTED_ENCODING, "java.io.UnsupportedEncodingException"),
+			Map.entry(UNSUPPORTED_CHARSET, "java.nio.charset.UnsupportedCharsetException"),
+			Map.entry(ILLEGAL_CHARSET_NAME, "java.nio.charset.IllegalCharsetNameException"),
 			Map.entry(MALFORMED_URL, "java.net.MalformedURLException"),
 			Map.entry(PROTOCOL, "java.net.ProtocolException"), Map.entry(SAX_PARSE, "org.xml.sax.SAXParseException"),
 			Map.entry(ABSTRACT_METHOD, "java.lang.AbstractMethodError"),

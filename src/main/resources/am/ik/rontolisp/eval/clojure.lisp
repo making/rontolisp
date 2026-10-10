@@ -1291,6 +1291,24 @@
                                 "java.io.IOException" "java.lang.Exception"
                                 "java.lang.Throwable") message))
 
+(defun rontolisp::%clojure-unsupported-charset-exception (message)
+  "A refusal the oracle throws as a java.nio.charset.UnsupportedCharsetException:
+   Charset/forName of a name no JDK charset has."
+  (rontolisp::%clojure-refuse '("java.nio.charset.UnsupportedCharsetException"
+                                "java.lang.IllegalArgumentException"
+                                "java.lang.RuntimeException"
+                                "java.lang.Exception" "java.lang.Throwable")
+                              message))
+
+(defun rontolisp::%clojure-illegal-charset-name-exception (message)
+  "A refusal the oracle throws as a java.nio.charset.IllegalCharsetNameException:
+   Charset/forName of a string no charset is named."
+  (rontolisp::%clojure-refuse '("java.nio.charset.IllegalCharsetNameException"
+                                "java.lang.IllegalArgumentException"
+                                "java.lang.RuntimeException"
+                                "java.lang.Exception" "java.lang.Throwable")
+                              message))
+
 (defun rontolisp::%clojure-malformed-url-exception (message)
   "A refusal the oracle throws as a java.net.MalformedURLException: a string
    that spells no URL."
@@ -18348,8 +18366,12 @@
 ;; array as it is, which the construction decodes itself, anything else the host
 ;; value a java: member takes (%clojure-host-value). A program making no byte
 ;; array calls %clojure-host-value in its place (the family's alias).
+;; A charset value of the io family is the construction's own too: it reads the
+;; value as it is, and views it where it hands the host constructor the argument.
 (defun rontolisp::%clojure-bytes-host-value (x)
-  (if (rontolisp::%clojure-bytes-p x) x (rontolisp::%clojure-host-value x)))
+  (if (or (rontolisp::%clojure-bytes-p x) (rontolisp::%clojure-io-p x))
+      x
+      (rontolisp::%clojure-host-value x)))
 
 ;; (String. x ...): over a byte array X its text (%clojure-string-of-bytes),
 ;; anything else the host's constructor (interpreter, JVM; wasm refuses every
@@ -18365,12 +18387,16 @@
         (rontolisp::%clojure-string-of-bytes x more)
         (let ((n (length more)))
           (cond ((= n 0) (java:new "java.lang.String" x :java-false))
-                ((= n 1) (java:new "java.lang.String" x (car more) :java-false))
+                ((= n 1)
+                 (java:new "java.lang.String" x
+                           (rontolisp::%clojure-io-host (car more))
+                           :java-false))
                 ((= n 2)
                  (java:new "java.lang.String" x (car more) (car (cdr more))
                            :java-false))
                 (t (java:new "java.lang.String" x (car more) (car (cdr more))
-                             (car (cdr (cdr more))) :java-false)))))))
+                    (rontolisp::%clojure-io-host (car (cdr (cdr more))))
+                    :java-false)))))))
 
 ;;;; clojure.java.io: rontolisp.internal.io, the namespace only the built-in
 ;;;; clojure.java.io requires, lowers each var to one of these, and the
@@ -18388,6 +18414,10 @@
 ;;;;                               reply to a GET of an http: or https: URL
 ;;;;                               where the program names rontolisp:fetch
 ;;;;   (:C%URI spec)               java.net.URI
+;;;;   (:C%CHARSET name class)     java.nio.charset.Charset: its canonical NAME
+;;;;                               and the CLASS the JDK implements it in, both
+;;;;                               resolved where the program lowers
+;;;;                               (clojure/ClojureCharsetLowering)
 ;;;;   (:C%INPUT-STREAM #(s octets i closed [class]))
 ;;;;                               java.io.BufferedInputStream over the binary
 ;;;;                               file stream S, or over the octet vector OCTETS
@@ -18428,8 +18458,8 @@
 
 (defun rontolisp::%clojure-io-tag-p (tag)
   "Whether TAG heads a clojure.java.io wrapper."
-  (or (eq tag :C%FILE) (eq tag :C%URL) (eq tag :C%URI) (eq tag :C%INPUT-STREAM)
-      (eq tag :C%OUTPUT-STREAM)))
+  (or (eq tag :C%FILE) (eq tag :C%URL) (eq tag :C%URI) (eq tag :C%CHARSET)
+      (eq tag :C%INPUT-STREAM) (eq tag :C%OUTPUT-STREAM)))
 
 (defun rontolisp::%clojure-io-entry (x)
   "The registry entry of the character stream X when the namespace made it
@@ -18448,7 +18478,7 @@
 (defun rontolisp::%clojure-io-p (x)
   (if (consp x)
       (let ((tag (car x)))
-        (or (eq tag :C%FILE) (eq tag :C%URL) (eq tag :C%URI)
+        (or (eq tag :C%FILE) (eq tag :C%URL) (eq tag :C%URI) (eq tag :C%CHARSET)
             (eq tag :C%INPUT-STREAM) (eq tag :C%OUTPUT-STREAM)))
       (if rontolisp::%clojure-io-streams
           ;; a reader over a fetched reply is a Gray stream, no stream value: an arm
@@ -18487,6 +18517,7 @@
     (cond ((eq kind :C%FILE) "java.io.File")
      ((eq kind :C%URL) "java.net.URL")
      ((eq kind :C%URI) "java.net.URI")
+     ((eq kind :C%CHARSET) (car (cdr (cdr x))))
      ;; a ByteArrayInputStream's or ByteArrayOutputStream's own: an arm a
      ;; program making no byte array folds
      ((rontolisp::%clojure-io-array-stream-p x) (svref (car (cdr (cdr x))) 0))
@@ -18513,7 +18544,8 @@
   (if (rontolisp::%clojure-io-array-stream-p x)
       (rontolisp::%clojure-io-array-string x)
       (let ((kind (rontolisp::%clojure-io-kind x)))
-        (if (or (eq kind :C%FILE) (eq kind :C%URL) (eq kind :C%URI))
+        (if (or (eq kind :C%FILE) (eq kind :C%URL) (eq kind :C%URI)
+                (eq kind :C%CHARSET))
             (car (cdr x))
             (rontolisp::%clojure-io-class-name x)))))
 
@@ -18543,7 +18575,8 @@
    of its kind by spelling, a stream by identity -- what equal answers for the
    wrappers, so = needs no arm of its own."
   (let ((kind (rontolisp::%clojure-io-kind a)))
-    (if (or (eq kind :C%FILE) (eq kind :C%URL) (eq kind :C%URI))
+    (if (or (eq kind :C%FILE) (eq kind :C%URL) (eq kind :C%URI)
+            (eq kind :C%CHARSET))
         (and (consp b) (eq (car b) kind) (string= (car (cdr a)) (car (cdr b))))
         (eq a b))))
 
@@ -18551,7 +18584,8 @@
   "A hash of the clojure.java.io value X agreeing with %clojure-io-equal: a
    File, URL or URI by its spelling, a stream one constant."
   (let ((kind (rontolisp::%clojure-io-kind x)))
-    (if (or (eq kind :C%FILE) (eq kind :C%URL) (eq kind :C%URI))
+    (if (or (eq kind :C%FILE) (eq kind :C%URL) (eq kind :C%URI)
+            (eq kind :C%CHARSET))
         (logand (+ 13 (rontolisp::%clojure-hash-string (car (cdr x)))) 1048575)
         5)))
 
@@ -19435,7 +19469,9 @@
 ;; Whether the byte stream X is a ByteArrayInputStream or a ByteArrayOutputStream:
 ;; the byte-array family's arm test of the byte stream functions.
 (defun rontolisp::%clojure-io-array-stream-p (x)
-  (if (consp x) (if (consp (cdr x)) (consp (cdr (cdr x))))))
+  (if (consp x)
+      (if (or (eq (car x) :C%INPUT-STREAM) (eq (car x) :C%OUTPUT-STREAM))
+          (if (consp (cdr x)) (consp (cdr (cdr x)))))))
 
 ;; Whether the byte stream state STATE is an HTTP client's own response stream --
 ;; the JDK client's, or java.net.HttpURLConnection's -- over a fetched reply's
@@ -19945,14 +19981,29 @@
       (setf (aref out i) b)
       (setq i (+ i 1)))))
 
-;; The charset a String construction or .getBytes names: a charset name as
-;; %clojure-io-charset reads it, or a host java.nio.charset.Charset by its own
-;; name (StandardCharsets/UTF_8), a host arm a program naming no java: operator
-;; folds.
+;; The name of the Charset ENCODING is -- a charset value of the io family
+;; (StandardCharsets/UTF_8), or a host java.nio.charset.Charset, a host arm a
+;; program naming no java: operator folds --, else ENCODING itself.
+(defun rontolisp::%clojure-charset-name (encoding)
+  (cond ((rontolisp::%clojure-io-p encoding)
+         (if (eq (rontolisp::%clojure-io-kind encoding) :C%CHARSET)
+             (car (cdr encoding))
+             encoding))
+        ((rontolisp::%clojure-host-object-p encoding "java.nio.charset.Charset")
+         (java:call encoding "name"))
+        (t encoding)))
+
+;; The charset a String construction, .getBytes, a decoding reader or an
+;; encoding writer names: a charset name as %clojure-io-charset reads it, or a
+;; Charset by its own name. clojure.java.io's :encoding takes the name only, as
+;; the oracle's does, so it reads %clojure-io-charset itself.
 (defun rontolisp::%clojure-bytes-charset (encoding)
-  (if (rontolisp::%clojure-host-object-p encoding "java.nio.charset.Charset")
-      (rontolisp::%clojure-io-charset (java:call encoding "name"))
-      (rontolisp::%clojure-io-charset encoding)))
+  (cond ((rontolisp::%clojure-io-p encoding)
+         (rontolisp::%clojure-io-charset
+          (rontolisp::%clojure-charset-name encoding)))
+        ((rontolisp::%clojure-host-object-p encoding "java.nio.charset.Charset")
+         (rontolisp::%clojure-io-charset (java:call encoding "name")))
+        (t (rontolisp::%clojure-io-charset encoding))))
 
 ;;;; Opening
 
@@ -20744,6 +20795,9 @@
      ((eq kind :C%URL) '("java.net.URL" "java.io.Serializable"))
      ((eq kind :C%URI)
       '("java.net.URI" "java.lang.Comparable" "java.io.Serializable"))
+     ((eq kind :C%CHARSET)
+      (list (car (cdr (cdr x))) "java.nio.charset.Charset"
+            "java.lang.Comparable"))
      ;; a ByteArrayInputStream or ByteArrayOutputStream: an arm a program
      ;; making no byte array folds
      ((rontolisp::%clojure-io-array-stream-p x)
@@ -20813,6 +20867,8 @@
     (cond ((eq kind :C%FILE) (java:new "java.io.File" (car (cdr x))))
           ((eq kind :C%URL) (java:new "java.net.URL" (car (cdr x))))
           ((eq kind :C%URI) (java:new "java.net.URI" (car (cdr x))))
+          ((eq kind :C%CHARSET)
+           (java:static "java.nio.charset.Charset" "forName" (car (cdr x))))
           (t x))))
 
 ;; The path a slurp, spit or line-seq opens: a host java.io.File a java: member
@@ -20835,6 +20891,11 @@
         ((rontolisp::%clojure-host-object-p x "java.net.URI")
          (list :C%URI (java:call x "toString")))
         (t x)))
+
+(defun rontolisp::%clojure-io-charset-value (name class)
+  "The java.nio.charset.Charset of the canonical NAME the JDK implements in
+   CLASS: a StandardCharsets field, Charset/forName of a literal."
+  (list :C%CHARSET name class))
 
 ;; uri?: a java.net.URI, one clojure.java.io made (an io arm) or a host one (the
 ;; host arm).
@@ -20902,12 +20963,14 @@
 (defun rontolisp::%clojure-io-decoding-reader (x charset)
   "(InputStreamReader. x charset) over the byte stream X: a reader decoding
    it."
-  (rontolisp::%clojure-io-open-reader x charset))
+  (rontolisp::%clojure-io-open-reader x
+   (rontolisp::%clojure-charset-name charset)))
 
 (defun rontolisp::%clojure-io-stream-writer (x charset)
   "(OutputStreamWriter. x charset): a writer encoding into the byte stream X."
   (if (and (consp x) (eq (car x) :C%OUTPUT-STREAM))
-      (rontolisp::%clojure-io-open-writer x nil charset)
+      (rontolisp::%clojure-io-open-writer x nil
+       (rontolisp::%clojure-charset-name charset))
       (rontolisp::%clojure-illegal-argument-exception
        "No matching ctor found for class java.io.OutputStreamWriter")))
 
@@ -21019,16 +21082,44 @@
 
 (defun rontolisp::%clojure-io-m-compare-to (x other)
   "File.compareTo: the paths compared as strings, the first differing
-   characters' code difference, else the lengths'."
-  (let ((a
-         (rontolisp::%clojure-io-path
-          (rontolisp::%clojure-io-recv x :C%FILE "compareTo" 1)))
-        (b (rontolisp::%clojure-io-path other))
-        (answer nil))
+   characters' code difference, else the lengths'. Charset.compareTo: the
+   names compared the same way ignoring case."
+  (let* ((charset (eq (rontolisp::%clojure-io-kind x) :C%CHARSET))
+         (a
+          (if charset
+              (car (cdr x))
+              (rontolisp::%clojure-io-path
+               (rontolisp::%clojure-io-recv x :C%FILE "compareTo" 1))))
+         (b
+          (if charset
+              (rontolisp::%clojure-io-charset-other other)
+              (rontolisp::%clojure-io-path other)))
+         (answer nil))
     (dotimes (i (min (length a) (length b)))
-      (if (and (null answer) (not (char= (char a i) (char b i))))
-          (setq answer (- (char-code (char a i)) (char-code (char b i))))))
+      (let ((c (char a i)) (d (char b i)))
+        (if charset
+            (setq c (char-downcase (char-upcase c)) d
+                  (char-downcase (char-upcase d))))
+        (if (and (null answer) (not (char= c d)))
+            (setq answer (- (char-code c) (char-code d))))))
     (or answer (- (length a) (length b)))))
+
+(defun rontolisp::%clojure-io-charset-other (x)
+  "The name of the charset value X, or the oracle's refusal of any other
+   argument of Charset.compareTo."
+  (if (eq (rontolisp::%clojure-io-kind x) :C%CHARSET)
+      (car (cdr x))
+      (rontolisp::%clojure-class-cast-exception-of
+       (concatenate 'string (rontolisp::%clojure-class-name-of x)
+                    " cannot be cast to java.nio.charset.Charset") x)))
+
+(defun rontolisp::%clojure-io-m-name (x)
+  "Charset.name: the canonical name."
+  (car (cdr (rontolisp::%clojure-io-recv x :C%CHARSET "name" 0))))
+
+(defun rontolisp::%clojure-io-m-display-name (x)
+  "Charset.displayName: the canonical name, in every locale."
+  (car (cdr (rontolisp::%clojure-io-recv x :C%CHARSET "displayName" 0))))
 
 ;; File, URL and URI
 
@@ -21072,7 +21163,7 @@
     (cond ((eq kind :C%FILE)
            (logxor (rontolisp::%clojure-string-hash-code (car (cdr x)))
                    1234321))
-          ((or (eq kind :C%URL) (eq kind :C%URI))
+          ((or (eq kind :C%URL) (eq kind :C%URI) (eq kind :C%CHARSET))
            (rontolisp::%clojure-string-hash-code (car (cdr x))))
           (t (%identity-hash x)))))
 

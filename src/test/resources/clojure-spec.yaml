@@ -11221,6 +11221,67 @@ cases:
       #object["[B" "[B"] "[B" :[B "[B"
       #object[[B [B] [#object[[B [B]]
       :java.io.ByteArrayInputStream #object[java.io.ByteArrayOutputStream "A"]
+  - name: standard-charsets-and-charset-for-name-of-a-literal-are-charsets
+    # The six StandardCharsets fields and Charset/forName of a string literal are
+    # a value standing for the charset on every backend: named (.name, .displayName,
+    # str), compared (= by name, .equals, .hashCode, .compareTo ignoring case), an
+    # instance of Charset and Comparable, and read by .getBytes, String. and the
+    # decoding reader, the encoding writer and ByteArrayOutputStream.toString;
+    # clojure.java.io's :encoding takes the name only, so a Charset there is the
+    # oracle's ClassCastException. Charset/forName of a name the JDK rejects is its
+    # exception. Oracle-identical (clj 1.12.6, 2026-10-10).
+    source: |
+      (import '[java.nio.charset StandardCharsets Charset])
+      (def sc-utf8 StandardCharsets/UTF_8)
+      (prn (vec (.getBytes "é" StandardCharsets/UTF_8)) (vec (.getBytes "é€" java.nio.charset.StandardCharsets/ISO_8859_1)) (vec (.getBytes "a€" StandardCharsets/US_ASCII)))
+      (prn (String. (.getBytes "é") StandardCharsets/UTF_8) (String. (byte-array [104 -23]) StandardCharsets/ISO_8859_1) (String. (.getBytes "héllo") 1 2 sc-utf8))
+      (prn (map str [StandardCharsets/US_ASCII StandardCharsets/ISO_8859_1 StandardCharsets/UTF_8 StandardCharsets/UTF_16 StandardCharsets/UTF_16BE StandardCharsets/UTF_16LE]))
+      (prn (.name sc-utf8) (.displayName sc-utf8) (.toString sc-utf8) (str sc-utf8) (str "<" sc-utf8 ">"))
+      (prn (= sc-utf8 StandardCharsets/UTF_8) (= sc-utf8 StandardCharsets/US_ASCII) (= sc-utf8 "UTF-8") (.equals sc-utf8 StandardCharsets/UTF_8) (.equals sc-utf8 "UTF-8") (.hashCode sc-utf8))
+      (prn (get {sc-utf8 1} StandardCharsets/UTF_8) (contains? #{sc-utf8} StandardCharsets/UTF_8) (string? sc-utf8) (nil? sc-utf8))
+      (prn (instance? Charset sc-utf8) (instance? Comparable sc-utf8) (instance? String sc-utf8) (instance? java.io.File sc-utf8))
+      (prn (.compareTo sc-utf8 StandardCharsets/US_ASCII) (.compareTo sc-utf8 StandardCharsets/UTF_16) (.compareTo sc-utf8 StandardCharsets/UTF_8))
+      (prn (= sc-utf8 (Charset/forName "utf8")) (.name (Charset/forName "latin1")) (vec (.getBytes "é" (Charset/forName "UTF-8"))) (.name (java.nio.charset.Charset/forName "ascii")))
+      (prn (try (Charset/forName "bogus") (catch java.nio.charset.UnsupportedCharsetException e (ex-message e)))
+           (try (Charset/forName "") (catch IllegalArgumentException e [(ex-message e) (instance? java.nio.charset.IllegalCharsetNameException e)])))
+      (prn (try (slurp (.getBytes "héllo") :encoding StandardCharsets/ISO_8859_1) (catch ClassCastException e :cce))
+           (try (with-open [r (clojure.java.io/reader (.getBytes "héllo") :encoding sc-utf8)] (.readLine r)) (catch ClassCastException e :cce)))
+      (prn (.read (java.io.InputStreamReader. (java.io.ByteArrayInputStream. (.getBytes "é")) StandardCharsets/UTF_8))
+           (.read (java.io.InputStreamReader. (java.io.ByteArrayInputStream. (.getBytes "é")) sc-utf8)))
+      (let [o (java.io.ByteArrayOutputStream.) w (java.io.OutputStreamWriter. o StandardCharsets/ISO_8859_1)]
+        (.write w "é") (.flush w) (prn (vec (.toByteArray o))))
+      (prn (.toString (doto (java.io.ByteArrayOutputStream.) (.write (.getBytes "é"))) StandardCharsets/ISO_8859_1))
+      (prn (try (.compareTo sc-utf8 "x") (catch ClassCastException e :cce)))
+    expected: |
+      [-61 -87] [-23 63] [97 63]
+      "é" "hé" "é"
+      ("US-ASCII" "ISO-8859-1" "UTF-8" "UTF-16" "UTF-16BE" "UTF-16LE")
+      "UTF-8" "UTF-8" "UTF-8" "UTF-8" "<UTF-8>"
+      true false false true false 81070450
+      1 true false false
+      true true false false
+      1 7 0
+      true "ISO-8859-1" [-61 -87] "US-ASCII"
+      "bogus" ["" true]
+      :cce :cce
+      233 233
+      [-23]
+      "Ã©"
+      :cce
+  - name: a-charset-prints-as-the-host-object-its-hash-left-out
+    # Deviations: the oracle's #object carries the identity hash, which no value
+    # here has, like a stream's; class answers the class's keyword, the oracle the
+    # class; the charsets encoded are UTF-8, ISO-8859-1 and US-ASCII, where the
+    # oracle also encodes UTF-16 (a getBytes of it is the UnsupportedEncodingException
+    # of the name, as any other charset's is).
+    source: |
+      (prn java.nio.charset.StandardCharsets/UTF_8 (class java.nio.charset.StandardCharsets/UTF_16LE))
+      (println java.nio.charset.StandardCharsets/ISO_8859_1 [java.nio.charset.StandardCharsets/US_ASCII])
+      (prn (try (.getBytes "x" java.nio.charset.StandardCharsets/UTF_16) (catch java.io.UnsupportedEncodingException e (ex-message e))))
+    expected: |
+      #object[sun.nio.cs.UTF_8 "UTF-8"] :sun.nio.cs.UTF_16LE
+      #object[sun.nio.cs.ISO_8859_1 ISO-8859-1] [#object[sun.nio.cs.US_ASCII US-ASCII]]
+      "UTF-16"
   - name: transients-edit-one-copy-and-persistent-hands-it-over
     # Each bang verb edits the transient in place and answers it; the collection
     # it was made from is untouched; persistent! answers the edited collection.

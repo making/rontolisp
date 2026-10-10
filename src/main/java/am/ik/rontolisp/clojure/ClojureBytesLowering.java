@@ -215,11 +215,35 @@ final class ClojureBytesLowering {
 		}
 		List<LispVal> operands = new ArrayList<>();
 		for (LispVal operand = call.cdr(); operand instanceof LispCons cell; operand = cell.cdr()) {
-			operands.add(cell.car() instanceof LispCons value
+			LispVal each = unviewed(cell.car());
+			operands.add(each instanceof LispCons value
 					&& ClojureLowerUtil.isSymbolNamed(value.car(), ClojureInteropLowering.HOST_VALUE)
-							? LispCons.rebuilt(value, new LispSymbol(HOST_VALUE), value.cdr()) : cell.car());
+							? LispCons.rebuilt(value, new LispSymbol(HOST_VALUE), value.cdr()) : each);
 		}
 		return LispCons.rebuilt(call, new LispSymbol(STRING_NEW), ClojureLowerUtil.list(operands));
+	}
+
+	/**
+	 * An operand of a String construction without the io family's view of it: the
+	 * construction reads a charset value as it is (and views it itself where it hands the
+	 * host constructor the argument), so the view is no host object's to cross as -- and
+	 * no {@code java:} call for a program that makes no other.
+	 */
+	private static LispVal unviewed(LispVal operand) {
+		if (!(operand instanceof LispCons cell)) {
+			return operand;
+		}
+		if (ClojureLowerUtil.isSymbolNamed(cell.car(), ClojureIoLowering.HOST_VIEW)
+				&& cell.cdr() instanceof LispCons inner) {
+			return inner.car();
+		}
+		if (ClojureLowerUtil.isSymbolNamed(cell.car(), ClojureInteropLowering.HOST_VALUE)
+				&& cell.cdr() instanceof LispCons inner && inner.car() instanceof LispCons view
+				&& ClojureLowerUtil.isSymbolNamed(view.car(), ClojureIoLowering.HOST_VIEW)
+				&& view.cdr() instanceof LispCons argument) {
+			return LispCons.rebuilt(cell, cell.car(), ClojureLowerUtil.list(argument.car()));
+		}
+		return operand;
 	}
 
 	/**

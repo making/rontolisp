@@ -95,6 +95,8 @@ final class ClojureInteropLowering {
 		List<LispVal> ended = new ArrayList<>(parts.size() + 2);
 		ended.addAll(crossed.subList(0, names));
 		boolean literal = true;
+		boolean stringConstruction = operator.equals(JAVA_NEW) && !parts.isEmpty()
+				&& parts.get(0) instanceof LispString named && named.value().equals("java.lang.String");
 		for (int i = names; i < parts.size(); i++) {
 			LispVal argument = parts.get(i);
 			if (isFalseValue(argument)) {
@@ -103,6 +105,12 @@ final class ClojureInteropLowering {
 				continue;
 			}
 			literal &= isLiteral(argument);
+			if (stringConstruction && ClojureCharsetLowering.isValue(argument)) {
+				// a String construction reads a charset value as it is, whatever the
+				// backend (ClojureBytesLowering#stringConstruction)
+				ended.add(argument);
+				continue;
+			}
 			ended.add(hostArgument(ctx, argument, crossed.get(i)));
 		}
 		if (!literal) {
@@ -245,9 +253,14 @@ final class ClojureInteropLowering {
 		if (!ctx.hostTarget) {
 			return crossed;
 		}
-		LispVal hostObject = ClojureTimeValueLowering.hostConstruction(argument);
+		@Nullable LispVal hostObject = ClojureTimeValueLowering.hostConstruction(argument);
 		if (hostObject != null) {
 			// a Date or UUID made for the member alone: the host object at once
+			return hostObject;
+		}
+		hostObject = ClojureCharsetLowering.hostConstruction(argument);
+		if (hostObject != null) {
+			// a charset named for the member alone: the host Charset at once
 			return hostObject;
 		}
 		if (isLiteral(argument) || isPlainForm(argument)
@@ -954,6 +967,11 @@ final class ClojureInteropLowering {
 			// of this front end's own, on every backend
 			return timeValue;
 		}
+		LispVal charset = ClojureCharsetLowering.forName(cls, member, args);
+		if (charset != null) {
+			// Charset/forName of a literal: the charset value of this front end's own
+			return charset;
+		}
 		if (cls.equals("java.lang.System") && member.equals("exit") && args.size() == 1) {
 			// ends the process on every backend, wasm included, like uiop:quit: the
 			// status the host sees is the low byte, as the oracle's is on a POSIX host
@@ -994,6 +1012,10 @@ final class ClojureInteropLowering {
 		LispVal timeValue = ClojureTimeValueLowering.staticCall(cls, member, List.of());
 		if (timeValue != null) {
 			return timeValue;
+		}
+		LispVal charset = ClojureCharsetLowering.field(cls, member);
+		if (charset != null) {
+			return charset;
 		}
 		if (staticMember(cls, member).arities().contains(0)) {
 			return hostCall(ctx, JAVA_STATIC, List.of(LispString.literal(cls), LispString.literal(member)), 2,
@@ -1050,6 +1072,10 @@ final class ClojureInteropLowering {
 		if (types != null) {
 			return arityLambda(ctx, List.of(types.size()), name,
 					args -> staticCall(ctx, cls, member, designator(member, types), args));
+		}
+		LispVal charset = ClojureCharsetLowering.field(cls, member);
+		if (charset != null) {
+			return charset;
 		}
 		ClojureLowering.StaticMember seen = staticMember(cls, member);
 		if (seen.field()) {

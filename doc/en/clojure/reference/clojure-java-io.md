@@ -93,7 +93,10 @@ answers `read` (the next octet, `-1` past the end), `read` into a byte array or 
 `skip`, `transferTo`, `write` of an int's low octet or of a byte array or a part of one,
 `flush` and `close`. A reader over a byte stream decodes it, and a writer over one encodes its
 text into it when flushed or closed. `:encoding` names UTF-8, ISO-8859-1 or US-ASCII (or one
-of their aliases); any other name is the oracle's `java.io.UnsupportedEncodingException`.
+of their aliases) as a string; any other name is the oracle's `java.io.UnsupportedEncodingException`,
+and a `Charset` is its `ClassCastException`. `(InputStreamReader. in charset)`,
+`(OutputStreamWriter. out charset)` and `.toString` of a `ByteArrayOutputStream` take a `Charset`
+too ([byte-array](byte-array.md)).
 
 `(java.io.ByteArrayInputStream. bytes)` reads a byte array in place,
 `(java.io.ByteArrayInputStream. bytes off len)` the part of it from `off`, and

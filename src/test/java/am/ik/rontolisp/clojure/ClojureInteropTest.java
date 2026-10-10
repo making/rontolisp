@@ -704,6 +704,29 @@ class ClojureInteropTest {
 	}
 
 	@Test
+	void aCharsetNamedHereCrossesTheJavaBoundaryAsTheHostCharset() throws Exception {
+		// oracle-identical (clj 1.12.6): a StandardCharsets field or Charset/forName of a
+		// literal is a value of this front end's own (clojure-spec.yaml pins it on every
+		// backend), which a java: member is handed as the host Charset -- a named
+		// argument
+		// at once, a local through the io family's view -- and whose other methods the
+		// host Charset answers
+		assertBothEqual(
+				"(let [p (java.nio.file.Files/createTempFile \"f14\" \".txt\" (make-array java.nio.file.attribute.FileAttribute 0))"
+						+ " cs java.nio.charset.StandardCharsets/UTF_8]"
+						+ " (java.nio.file.Files/writeString p \"héllo\" cs (make-array java.nio.file.OpenOption 0))"
+						+ " (prn (java.nio.file.Files/readString p cs)"
+						+ " (java.nio.file.Files/readString p java.nio.charset.StandardCharsets/ISO_8859_1)"
+						+ " (java.nio.file.Files/readString p (java.nio.charset.Charset/forName \"utf8\")))"
+						+ " (java.nio.file.Files/delete p))",
+				"\"héllo\" \"hÃ©llo\" \"héllo\"\n");
+		assertBothEqual(
+				"(def cs java.nio.charset.StandardCharsets/UTF_8)"
+						+ " (prn (sort (.aliases cs)) (.canEncode cs) (.contains cs cs))",
+				"(\"UTF8\" \"unicode-1-1-utf-8\") true true\n");
+	}
+
+	@Test
 	void aHostDateOrUuidIsEqualToAndComparesBesideOneMadeHere() throws Exception {
 		// oracle-identical (clj 1.12.6) but the printed form: a Date or UUID a member
 		// answers stays the host object, = to the value made here by the first one's

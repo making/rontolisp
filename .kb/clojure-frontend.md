@@ -60,6 +60,7 @@ The oracle is `clj` 1.12.6.1673: a behavior is decided by running it there, and 
 | `#"re"` | `(:C%PATTERN stamp source ops ngroups)` | the stamp is a gensym, so `=` is identity like the oracle |
 | byte array (`byte-array`, `.getBytes`) | `(:C%BYTES octets)`, `octets` a packed `(unsigned-byte 8)` vector | "Byte arrays" |
 | transient | `(:C%TRANSIENT #(kind data count live))` | "Transients" |
+| charset (`StandardCharsets/UTF_8`, `Charset/forName` of a literal) | `(:C%CHARSET name class)`, a `clojure.java.io` value | "Charset values" |
 | `reduced`, var, nil dispatch value | `(:C%REDUCED x)`, `(:C%VAR "ns/name" getter)`, `(:C%NIL)` | |
 | `ex-info` | a condition with message and data slots | |
 | `#inst`, `#uuid` | `(:C%INST ms)` (`clojure.instant` also `:C%TIMESTAMP`, `:C%CALENDAR`), `(:C%UUID msb lsb)` | "Instants and UUIDs" |
@@ -2314,9 +2315,9 @@ namespace` but the ones no measured library names (`inspector`, `java.browse`,
   (`%clojure-aget`/`-aset`/`-alength`), `aclone`, `aset-byte` (`(byte v)`'s range check),
   `make-array` of `Byte/TYPE` and one dimension; `.getBytes` (`%clojure-string-bytes`) and a
   `java.lang.String` construction of one to four arguments (`%clojure-string-new`) over
-  UTF-8, ISO-8859-1 or US-ASCII by name or alias, or a host `Charset` by its name -- any other
-  the oracle's `UnsupportedEncodingException` on every backend, the host's other charsets
-  never consulted (todo `f14` for `StandardCharsets` on wasm). UTF-8 decodes through
+  UTF-8, ISO-8859-1 or US-ASCII by name or alias, or by a charset value ("Charset values") or a
+  host `Charset` by its name -- any other the oracle's `UnsupportedEncodingException` on every
+  backend, the host's other charsets never consulted. UTF-8 decodes through
   `rontolisp::%octets-to-string-replacing` (the JDK's replacement of malformed input, "The JDK
   decoder" under "clojure.java.io"), encoding answers `?`
   for an unmappable character and a lone surrogate. `aset` takes any integer -128..127, where
@@ -2390,6 +2391,52 @@ namespace` but the ones no measured library names (`inspector`, `java.browse`,
   `#clojureJavaShellRunsAHostProcessLikeTheOracle`, `ClojureRingAdapterTest` (`/bytes`),
   `ClojureLibraryTest#aProgramMakingNoByteArraySplicesTheLibraryWithoutItsByteArrayArms` (a
   `java:call` keeps the arms on a host target, not on wasm).
+
+## Charset values
+
+- **The value** (2026-10-10): `(:C%CHARSET name class)`, a `clojure.java.io` value of the io
+  family (`%clojure-io-tag-p`; `ClojureCharsetLowering`): the six `StandardCharsets` fields and
+  `Charset/forName` of a string literal lower to `(%clojure-io-charset-value name class)`, the
+  canonical name and the implementing class (`sun.nio.cs.UTF_8`...) resolved by the JDK that
+  lowers the program, so every backend has them and the wasm backends no longer reach
+  `java:field`. Measured 2026-10-10 (interpreter, wasm P1): `(prn (vec (.getBytes "é"
+  java.nio.charset.StandardCharsets/UTF_8)))` was `[-61 -87]` / `The function JAVA:FIELD is
+  undefined`, and is `[-61 -87]` on all four. A literal the JDK rejects lowers to the
+  refusal (`%clojure-unsupported-charset-exception`, `%clojure-illegal-charset-name-exception`,
+  the oracle's classes and messages); `Charset/forName` of anything but a literal stays
+  `java:static` (host only).
+- **What reads it**: `str`/`.toString`/`.name`/`.displayName` the name (`%clojure-io-m-name`),
+  `=`/`.equals`/`hash` by name, `.hashCode` `String.hashCode` of the name, `.compareTo` the
+  names ignoring case, `class` the implementing class's keyword, `instance?` the class,
+  `Charset` and `Comparable` (`ClojureIoLowering.CLASSES`, `ClojureClassBases.IO_SUPERS`:
+  the real chain `UTF_8 -> Unicode -> Charset` is flattened to `Charset`), prints
+  `#object[sun.nio.cs.UTF_8 "UTF-8"]` (the io printer: hash left out). `%clojure-bytes-charset`
+  (`.getBytes`, `String.`, `ByteArrayOutputStream.toString`) and the decoding reader and
+  encoding writer (`%clojure-charset-name`) read the name; `%clojure-io-charset`, which is
+  clojure.java.io's `:encoding`, takes a name only, so a charset there is the oracle's
+  `ClassCastException` (measured clj 1.12.6: `slurp` and `io/reader` refuse a `Charset`).
+  Every other method (`aliases`, `canEncode`...) is the host `Charset`'s through the crossing.
+- **Crossing**: a charset value handed to a `java:` member is `Charset.forName(name)`
+  (`%clojure-io-host`); one named for the member alone (a field, `forName` of a literal as the
+  argument) is that host `Charset` at once (`ClojureCharsetLowering.hostConstruction`, the
+  `#inst` precedent), making no io value for it. A `Charset` a member answers stays the host
+  object (not `=` to a charset named in the program; documented deviation).
+- **A String construction takes the value as it is**: `hostCall` leaves a charset-value
+  argument of `java:new "java.lang.String"` unwrapped and `ClojureBytesLowering.unviewed`
+  drops the io view of a variable, since the view's `java:static` would make the program
+  name a host operator (arming the whole HOST family, and the JVM spec harness has no
+  `JavaBridge`) and fail on wasm. `%clojure-string-new` views the charset only where it hands
+  the host constructor a non-byte-array.
+- `%clojure-io-array-stream-p` checks the wrapper's tag now: a three-element wrapper is no
+  longer a byte-array stream by shape (the charset value is one).
+- Deviations (user docs `byte-array.md`, `deviations.md`): the hash-less `#object`, `class`
+  a keyword, only three charsets encode (`.getBytes "x" StandardCharsets/UTF_16` is the
+  `UnsupportedEncodingException` where the oracle encodes it), `identical?` of two reads is
+  false (the oracle's one object).
+- **Pins**: clojure-spec `standard-charsets-and-charset-for-name-of-a-literal-are-charsets`
+  (oracle-identical, clj 1.12.6, four backends), `a-charset-prints-as-the-host-object-its-hash-left-out`
+  (the deviation); `ClojureInteropTest#aCharsetNamedHereCrossesTheJavaBoundaryAsTheHostCharset`
+  (interpreter and JVM); `ClojureLoweringTest#aStandardCharsetsFieldAndCharsetForNameOfALiteralLowerToTheCharsetValue`.
 
 ## Transients
 
@@ -2550,7 +2597,8 @@ the file), `default-streams-impl` a map. Until then only `reader` resolved, as a
     backend; and the lookup in `io.clj`'s `resource` (every io program with a jar on its
     source path would carry the reader).
 - **Charsets**: UTF-8, ISO-8859-1, US-ASCII and aliases; any other name the oracle's
-  `UnsupportedEncodingException`. A non-UTF-8 reader decodes the rest of its byte stream at
+  `UnsupportedEncodingException`; `:encoding` takes the name as a string only, a `Charset` being
+  the oracle's `ClassCastException` ("Charset values"). A non-UTF-8 reader decodes the rest of its byte stream at
   once (over a fetched reply, a chunk at a time: below); a registered writer encodes into its
   byte stream at flush/close.
 - **The JDK decoder** (2026-10-10): every place the front end decodes UTF-8 as the oracle's JDK

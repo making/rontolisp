@@ -262,6 +262,13 @@
   （オラクルでは `(aset bs 0 5)` は拒否され、`(aset bs 0 (byte 5))` は拒否されません）。
   バイト配列の seq は、seq を取った時点の要素を保持し、オラクルの seq はたどる時点の配列を
   読みます。
+- `java.nio.charset.StandardCharsets` のフィールドと、文字列リテラルの `Charset/forName`
+  （[文字セット](reference/byte-array.md)）は、オラクルの `#object` から識別ハッシュを除いた形で
+  印字し、`class` はそのクラスのキーワードで答えます。符号化と復号ができるのは UTF-8、
+  ISO-8859-1、US-ASCII だけで、それ以外（たとえば UTF-16）を `.getBytes` や `String.` に渡すと、
+  その名前のオラクルの `java.io.UnsupportedEncodingException` になります。リテラル以外の
+  `Charset/forName` と、Java のメンバが返した `Charset` はホストオブジェクトのままで（インタプリタと
+  JVM）、プログラムで名前を挙げた文字セットとは同じオブジェクトであるときだけ `=` になります。
 - [トランジェント](reference/transient.md)は、オラクルの `#object` から識別ハッシュを除いた形で
   印字し、`str` はクラス名を返します。`!` 付きの操作は渡されたトランジェントを返し、オラクルは
   別のオブジェクトを返すことがあります（8エントリーを超えたアレイマップの `assoc!`）。そのため

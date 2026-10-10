@@ -97,6 +97,8 @@ final class ClojureThrowables {
 			Map.entry("java.io.EOFException", "java.io.IOException"),
 			Map.entry("java.util.zip.ZipException", "java.io.IOException"),
 			Map.entry("java.io.UnsupportedEncodingException", "java.io.IOException"),
+			Map.entry("java.nio.charset.UnsupportedCharsetException", "java.lang.IllegalArgumentException"),
+			Map.entry("java.nio.charset.IllegalCharsetNameException", "java.lang.IllegalArgumentException"),
 			Map.entry("java.net.MalformedURLException", "java.io.IOException"),
 			Map.entry("java.net.ProtocolException", "java.io.IOException"),
 			Map.entry("java.util.NoSuchElementException", "java.lang.RuntimeException"),

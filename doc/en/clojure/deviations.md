@@ -273,6 +273,13 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   (`(aset bs 0 5)` is refused there, `(aset bs 0 (byte 5))` is not). A seq over a byte array
   holds the elements the array had when the seq was taken, where the oracle's reads the
   array as it walks.
+- A `java.nio.charset.StandardCharsets` field or `Charset/forName` of a string literal (a
+  [charset](reference/byte-array.md)) prints as the oracle's `#object` without the identity
+  hash, and `class` answers its class's keyword. Only UTF-8, ISO-8859-1 and US-ASCII encode
+  and decode: `.getBytes` or `String.` with another (UTF-16, say) is the oracle's
+  `java.io.UnsupportedEncodingException` of its name. `Charset/forName` of anything but a
+  literal, and a `Charset` a Java member answers, stay host objects (interpreter and JVM),
+  `=` to a charset named in the program only by being the same object.
 - A [transient](reference/transient.md) prints as the oracle's `#object` without the
   identity hash, and `str` answers its class name. A bang verb answers the transient it
   was handed, where the oracle's may answer another object (an array map's `assoc!` past

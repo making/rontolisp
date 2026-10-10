@@ -1868,6 +1868,35 @@ class ClojureLoweringTest {
 	}
 
 	@Test
+	void aStandardCharsetsFieldAndCharsetForNameOfALiteralLowerToTheCharsetValue() {
+		// the value of this front end's own, never a java:field wasm would refuse
+		assertThat(lowered("(.getBytes \"a\" java.nio.charset.StandardCharsets/UTF_8)"))
+			.contains("(RONTOLISP::%CLOJURE-IO-CHARSET-VALUE \"UTF-8\" \"sun.nio.cs.UTF_8\")")
+			.doesNotContain("JAVA:FIELD");
+		assertThat(lowered("(java.nio.charset.Charset/forName \"latin1\")"))
+			.contains("(RONTOLISP::%CLOJURE-IO-CHARSET-VALUE \"ISO-8859-1\" \"sun.nio.cs.ISO_8859_1\")");
+		assertThat(lowered("(java.nio.charset.Charset/forName \"bogus\")"))
+			.contains("(RONTOLISP::%CLOJURE-UNSUPPORTED-CHARSET-EXCEPTION \"bogus\")");
+		// a String construction reads the value as it is, whatever it was given as
+		assertThat(lowered("(String. (.getBytes \"a\") java.nio.charset.StandardCharsets/UTF_8)"))
+			.contains("(RONTOLISP::%CLOJURE-STRING-NEW \"java.lang.String\"")
+			.contains("(RONTOLISP::%CLOJURE-IO-CHARSET-VALUE \"UTF-8\" \"sun.nio.cs.UTF_8\")")
+			.doesNotContain("JAVA:STATIC");
+		assertThat(lowered("(defn dec-bytes [b cs] (String. b cs))")).contains("(RONTOLISP::%CLOJURE-STRING-NEW")
+			.doesNotContain("%CLOJURE-IO-HOST");
+		// anything but a literal is the host's own static, and a java: member named a
+		// charset alone is handed the host Charset at once
+		assertThat(lowered("(defn fn-name [n] (java.nio.charset.Charset/forName n))")).contains("JAVA:STATIC")
+			.doesNotContain("CHARSET-VALUE");
+		assertThat(lowered("(java.nio.file.Files/readString (java.nio.file.Path/of \"/x\" (make-array String 0))"
+				+ " java.nio.charset.StandardCharsets/UTF_8)"))
+			.contains("(JAVA:STATIC \"java.nio.charset.Charset\" \"forName\" \"UTF-8\")")
+			.doesNotContain("CHARSET-VALUE");
+		// a program naming none keeps the lowering it has
+		assertThat(lowered("(.getBytes \"a\" \"UTF-8\")")).doesNotContain("CHARSET");
+	}
+
+	@Test
 	void arraysLowerToTheCoreArrayForms() {
 		assertThat(lowered("(make-array String 3)")).contains("MAKE-ARRAY");
 		assertThat(lowered("(make-array String 2 2)")).contains("MAKE-ARRAY").contains("LIST");
