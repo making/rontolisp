@@ -217,6 +217,17 @@
       (error 'rontolisp:wit-error
              :payload :other
              :message (concatenate 'string "fetch: no scheme in URL: " url)))
+    ;; The authority follows "://": any other shape is a URL the host cannot request,
+    ;; refused before a resource is made (a bare subseq would signal its own bounds
+    ;; error on "http:x").
+    (unless (and (<= (+ colon 3) (length url))
+                 (char= (char url (+ colon 1)) #\/)
+                 (char= (char url (+ colon 2)) #\/))
+      (error 'rontolisp:wit-error
+             :payload :other
+             :message (concatenate 'string
+                                   "fetch: not a URL the host can request: "
+                                   url)))
     (let* ((rest (subseq url (+ colon 3)))
            (slash (position #\/ rest))
            (authority (if slash (subseq rest 0 slash) rest))

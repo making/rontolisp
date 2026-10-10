@@ -250,3 +250,12 @@ cases:
     expected: |
       T
       :SIGNALLED-AT-AWAIT
+  - name: a-url-with-no-authority-signals-a-refusal-naming-the-url
+    source: |
+      (dolist (u '("http:x" "http:/x" "http:///x"))
+        (print (handler-case (progn (rontolisp:await (rontolisp:fetch u)) :no-signal)
+                 (error (c) (if (search u (princ-to-string c)) :names-the-url :other)))))
+    expected: |
+      :NAMES-THE-URL
+      :NAMES-THE-URL
+      :NAMES-THE-URL

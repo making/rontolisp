@@ -33,7 +33,9 @@ divergence), and again at every later await of the same future. The plain error'
 host failure's message, or its `toString` when it has none (the JDK client's
 `ConnectException`): the JVM rethrows the throwable itself, and the interpreter said `await
 failed` until 2026-10-08. A request that cannot be built (a
-URL with a space in its path) is such a failure: `fetch` answers a future, whose await signals. A
+URL with a space in its path, or one with no `//` after the scheme: `http:x`) is such a failure:
+`fetch` answers a future, whose await signals; every transport's message names the URL (the component's
+`subseq` bounds error on `http:x` until 2026-10-10). A
 transfer that fails mid-body signals at the DRAIN, never reading as a shorter body. The component
 answered `nil` for a fetch it could not start until 2026-09-26.
 
