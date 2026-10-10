@@ -840,6 +840,12 @@ first `=` key of its kind (vector / lazy seq / list / sorted / other) the progra
 `%clojure-key-classes` (equal table, `%clojure-hash` -> classes) groups the representatives
 `=` to each other;
 `%clojure-key-reps` (eq table) maps a representative to its class without hashing.
+Both, and `%clojure-typed-kinds`, are read and written only under `%clojure-key-guard`
+(a Ring handler's threads); what may run the program's code (`%clojure-hash`,
+`%clojure-equal`: a type's own hash or equality, a lazy seq realized) runs outside it --
+`%clojure-key-class` makes a class only when the bucket it compared against is still the
+table's, else compares the classes added since and tries again
+(`.kb/concurrent-served-requests.md`).
 
 - `%clojure-table-key k table` (lookups, `remhash`) answers the representative TABLE holds,
   else K; `%clojure-store-key k table` (stores) answers the one TABLE holds (its key kept,
@@ -3205,8 +3211,18 @@ constructor and consumer, and a regex `replace` with a function replacement.
   (the oracle never evaluates it); the class must match a defined record; a deftype
   literal is refused; an undotted `#P{}` is `No reader function for tag P` (`#inst`/`#uuid`
   read their values, "Instants and UUIDs").
-- `reify`: a fresh tag per evaluation with a row per method; `=` is identity (unless the body
-  overrides `equals`, "Host interfaces").
+- `reify`: `(:C%REIFY tag methods)`. The rows are the SITE's, like the oracle's one class per
+  form (`ClojureProtocolLowering.reifyForm`, since 2026-10-10): the tag is a constant keyword
+  `"reify N"` (a space, so no type's tag or other site's), the protocol and interface rows
+  (and a Java face) are stored once into `ctx.hoisted`, ahead of the top-level datum (and
+  `define`d at macro time), each a trampoline `(funcall (aref (caddr this) i) this ...)`
+  (plain parameters keep their count; any other shape is `apply`ed) into the evaluation's own
+  `methods` vector of lambdas closing over its locals. No evaluation writes a process-wide
+  table (before: a `gensym` tag and a row store per evaluation, racing a Ring handler's
+  threads and growing every table a row per evaluation); `with-meta`'s `copy-list` keeps the
+  vector. `iteration` (`clojure.lisp`) is the same shape over one library tag. `=` is
+  identity (unless the body overrides `equals`, "Host interfaces"). Pinned by clojure-spec
+  `one-reify-site-evaluated-again-keeps-each-instances-methods`.
 - `instance?` (oracle-checked clj 1.12.6, 2026-10-04; it has no value): a record/deftype name
   tests the tag, `Object` non-nil, a throwable class its chain ("Catching"). Any other class
   is a disjunction over the bound value (`ClojureDispatchLowering.instanceOf`): one test per
@@ -3246,7 +3262,7 @@ constructor and consumer, and a regex `replace` with a function replacement.
   core-class tables: `%clojure-implements-p` (`clojure.lisp`) answers a record/deftype whose
   class is among those whose body names the protocol (`TypeDef.protocols`, the pre-scan's
   `BodyProtocols`, methods or none; quoted at lowering, so a type a later REPL input defines
-  is not seen) and a reify with a row under its fresh tag in the protocol's body table
+  is not seen) and a reify with a row under its site's tag in the protocol's body table
   (`inlineTable`). An `extend-type`/`extend-protocol` target is not an instance (its rows
   share the tag with a record's body rows, hence the class list). A body naming a protocol
   with no method stores an empty row (`emptyRowForm`), so `(deftype T [] P)`/`(reify P)` also
@@ -3785,7 +3801,7 @@ The `java:` surface (`.kb/java-interop.md`); interpreter and JVM only -- wasm co
   it at the site's arity (`ProtocolDef.arities`) a clause `(%clojure-inline-method-p recv
   table kw '(classes))` -> the protocol's dispatcher; the classes are the types whose body
   implements it (`TypeDef.inlineMethods`, read leniently by the pre-scan in
-  `declareRecordType`), a reify is any row under its fresh tag (no extension reaches it).
+  `declareRecordType`), a reify is any row under its site's tag (no extension reaches it).
   Then the mapped rows (a record is `map?`, so `(.count r)` stays the map's), then for zero
   arguments an immutable declared field (`%clojure-declared-field-p`, the `(caddr x)` key
   list), then the refusal in the oracle's words on a typed receiver. A site naming neither
@@ -4941,7 +4957,9 @@ resolve var`.
   `ClojureProjectNamespacesTest#aWithRedefsReachesTheCallsOfANamespaceLoadedBeforeIt*`
   (the reseed, all four backends), `ClojureControlLoweringTest`.
 - `with-meta`/`vary-meta` answer a shallow copy recorded in the eq table
-  `%clojure-meta-table`; `meta` reads it. IObj kinds only (a string, number, keyword,
+  `%clojure-meta-table`; `meta` reads it, both under `%clojure-meta-guard` (as the var and
+  namespace tables are under `%clojure-var-guard`/`%clojure-ns-guard`; all three made
+  eagerly, `.kb/concurrent-served-requests.md`). IObj kinds only (a string, number, keyword,
   boolean, atom, deftype or pattern signals; a symbol answers itself).
 - Reader `^m x` reads as `(%with-meta x m)` (a head no Clojure call spells; `#^` reads the
   same): dropped everywhere except on a collection literal, where it attaches without a

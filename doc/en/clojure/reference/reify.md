@@ -2,10 +2,12 @@
 
 `(reify Protocol (method [target & args] body...) ...)`
 
-Answers one fresh dispatch value per evaluation with a row per method in each
-protocol's table: a single-shot map plus methods (never `proxy`, which stays the
-`java:` surface). Each instance dispatches through its own tag, so two instances
-are never `=` to each other, like the oracle; `=` is identity otherwise. Method
+Answers a fresh value per evaluation: a single-shot map plus methods (never
+`proxy`, which stays the `java:` surface). The rows of its methods belong to the
+form, stored once in each protocol's table like the oracle's one class per `reify`
+form; each instance carries the methods its evaluation made, closing over that
+evaluation's locals. Two instances are never `=` to each other, like the oracle;
+`=` is identity otherwise. Method
 groups stand under protocol names, like `extend-type`. A method named again over
 another parameter vector implements another of its arities.
 

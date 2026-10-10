@@ -4616,6 +4616,36 @@ cases:
       true
       :str
       :fn
+  - name: one-reify-site-evaluated-again-keeps-each-instances-methods
+    # The rows of a reify belong to its site, stored once; each evaluation's
+    # methods travel in its value, so two instances of one site (and a with-meta
+    # copy) answer their own captured locals through protocol and interface
+    # methods, a method of two arities included. Matches the oracle (clj 1.12.6).
+    source: |
+      (defprotocol RsP (rs-m [x]) (rs-k [x] [x y]))
+      (defn rs-make [n]
+        (reify
+          RsP
+          (rs-m [_] n)
+          (rs-k [_] [:one n])
+          (rs-k [_ y] [:two n y])
+          clojure.lang.Counted
+          (count [_] (* 10 n))
+          clojure.lang.ILookup
+          (valAt [_ k] [k n])
+          (valAt [_ k d] [k n d])))
+      (def rs-a (rs-make 1))
+      (def rs-b (rs-make 2))
+      (def rs-c (with-meta rs-a {:tag :c}))
+      (prn (rs-m rs-a) (rs-m rs-b) (rs-m rs-c) (meta rs-c))
+      (prn (rs-k rs-a) (rs-k rs-b 5) (count rs-a) (count rs-b) (count rs-c))
+      (prn (get rs-a :x) (get rs-b :y :d) (= rs-a rs-b) (= rs-a rs-a) (satisfies? RsP rs-b))
+      (prn (map rs-m (map rs-make (range 3))) (map count (map rs-make (range 3))))
+    expected: |
+      1 2 1 {:tag :c}
+      [:one 1] [:two 2 5] 10 20 10
+      [:x 1] [:y 2 :d] false true true
+      (0 1 2) (0 10 20)
   - name: deftype-mutable-fields-assign-through-set
     # ^:unsynchronized-mutable / ^:volatile-mutable fields are assignable with
     # set! inside the type's own methods (set! answers the value); a read after

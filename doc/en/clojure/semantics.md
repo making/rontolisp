@@ -401,8 +401,10 @@ keeps the record while every declared field is still present and drops to a plai
 map otherwise, like the oracle). `=` compares two records by tag plus entries
 and never equals a plain map, like the oracle. A `deftype` shares the shape with
 an opaque tag: reads miss, writers and `seq`/`count`/`empty?` signal, and `=`
-is identity, like the oracle. `reify` answers one fresh tag per evaluation with
-a row per method in each protocol's table. Constructors are mangled functions:
+is identity, like the oracle. `reify` answers a fresh value per evaluation; its
+methods' rows belong to the form, stored once in each protocol's table (the
+oracle's one class per form), and each value carries the methods its evaluation
+made. Constructors are mangled functions:
 `->Type` positionally, `map->Type` from a map (records only -- the oracle defines
 none for deftypes); `(Type. ...)`/`(new Type ...)` rewrite to `->Type`.
 `instance?` of a record/deftype name tests the tag; `(.-field x)` reads the field

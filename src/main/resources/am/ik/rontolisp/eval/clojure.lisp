@@ -1952,7 +1952,7 @@
 ;; Whether X is a typed value whose own body implements METHOD (a keyword) of
 ;; the protocol whose inline rows TABLE holds: a record or deftype of one of
 ;; CLASSES, the classes the lowering saw implement it, or a reify with a row
-;; there (no extension reaches a reify's fresh tag).
+;; there (no extension reaches a reify site's tag).
 (defun rontolisp::%clojure-inline-method-p (x table method classes)
   (and (consp x)
        (if (eq (car x) :C%REIFY)
@@ -1963,7 +1963,7 @@
 
 ;; instance? of a protocol's interface: X is a record or deftype whose class
 ;; is among CLASSES (the types whose body names the protocol), or a reify
-;; holding a row under its fresh tag in TABLE, the protocol's body table.
+;; holding a row under its site's tag in TABLE, the protocol's body table.
 (defun rontolisp::%clojure-implements-p (x table classes)
   (and (consp x)
        (if (eq (car x) :C%REIFY)
@@ -3035,15 +3035,24 @@
 ;; Deliberate non-goal (.kb/clojure-frontend.md, "Deviations"): the classes keep
 ;; one representative per distinct stored value and kind for the program's
 ;; lifetime, like the metadata side table.
+;;
+;; A Ring handler runs one thread per request on the interpreter and the JVM, so
+;; the three tables below are read and written under %clojure-key-guard only. What
+;; may run code of the program -- %clojure-hash and %clojure-equal (a type's own
+;; hash and equality, a lazy seq realized) -- runs outside it: a class is made
+;; only when the bucket it was looked for in is still the one in the table, else
+;; the classes added since are compared too and the store tried again.
+
+(defvar rontolisp::%clojure-key-guard (rontolisp:make-mutex))
 
 (defvar rontolisp::%clojure-key-classes
-  nil
+  (make-hash-table :test 'equal)
   "The structural-key classes: an equal table from a %clojure-hash to the list
    of classes under it, each class the list of its representatives (the first
-   one created first), NIL until the first structural key is stored.")
+   one created first).")
 
 (defvar rontolisp::%clojure-key-reps
-  nil
+  (make-hash-table :test 'eq)
   "Every representative's class: an eq table, so a key that already is one (a
    key read out of a table, merged into another) finds its class without
    hashing. Being an eq table, it also gives a wasm module the identity-hash
@@ -3238,10 +3247,10 @@
         (t 3)))
 
 (defvar rontolisp::%clojure-typed-kinds
-  nil
+  (make-hash-table :test 'equal)
   "The typed keys' kinds: an equal table from a deftype's tag and field values
-   to the first typed key the program stored with them, NIL until one is
-   stored.")
+   to the first typed key the program stored with them, read and written under
+   %clojure-key-guard.")
 
 (defun rontolisp::%clojure-typed-kind (k)
   "The kind of the typed key K: the first typed key the program stored of K's
@@ -3257,35 +3266,40 @@
               (cons (car (cdr k))
                (mapcar (lambda (f) (gethash f table)) (car (cdr (cdr k))))))
              (miss (list nil)))
-        (if (null rontolisp::%clojure-typed-kinds)
-            (setq rontolisp::%clojure-typed-kinds
-                  (make-hash-table :test 'equal)))
-        (let ((kind (gethash sig rontolisp::%clojure-typed-kinds miss)))
-          (if (eq kind miss)
-              (setf (gethash sig rontolisp::%clojure-typed-kinds) k)
-              kind)))))
+        (rontolisp:with-mutex (rontolisp::%clojure-key-guard)
+          (let ((kind (gethash sig rontolisp::%clojure-typed-kinds miss)))
+            (if (eq kind miss)
+                (setf (gethash sig rontolisp::%clojure-typed-kinds) k)
+                kind))))))
 
 (defun rontolisp::%clojure-key-class (k create)
   "The class of the structural key K: the representatives = to it. NIL when
    there is none and CREATE is false; a fresh class holding K when CREATE is
    true."
-  (unless rontolisp::%clojure-key-classes
-    (setq rontolisp::%clojure-key-classes (make-hash-table :test 'equal))
-    (setq rontolisp::%clojure-key-reps (make-hash-table :test 'eq)))
-  (or (gethash k rontolisp::%clojure-key-reps)
-      (let* ((h (rontolisp::%clojure-hash k))
-             (bucket (gethash h rontolisp::%clojure-key-classes))
-             (found nil))
-        (do ((b bucket (cdr b)))
-            ((or found (null b)))
-          (if (rontolisp::%clojure-equal (car (car b)) k) (setq found (car b))))
-        (if (and (null found) create)
-            (progn
-              (setq found (list k))
-              (setf (gethash h rontolisp::%clojure-key-classes)
-                    (cons found bucket))
-              (setf (gethash k rontolisp::%clojure-key-reps) found)))
-        found)))
+  (or (rontolisp:with-mutex (rontolisp::%clojure-key-guard)
+        (gethash k rontolisp::%clojure-key-reps))
+      (let ((h (rontolisp::%clojure-hash k)) (seen nil) (found nil) (done nil))
+        (do ()
+            (done found)
+          (let ((bucket
+                 (rontolisp:with-mutex (rontolisp::%clojure-key-guard)
+                   (gethash h rontolisp::%clojure-key-classes))))
+            ;; the classes added since the last look: the whole bucket at first
+            (do ((b bucket (cdr b)))
+                ((or found (eq b seen)))
+              (if (rontolisp::%clojure-equal (car (car b)) k)
+                  (setq found (car b))))
+            (if (or found (not create))
+                (setq done t)
+                (rontolisp:with-mutex (rontolisp::%clojure-key-guard)
+                  (if (eq (gethash h rontolisp::%clojure-key-classes) bucket)
+                      (progn
+                        (setq found (list k))
+                        (setf (gethash h rontolisp::%clojure-key-classes)
+                              (cons found bucket))
+                        (setf (gethash k rontolisp::%clojure-key-reps) found)
+                        (setq done t)))))
+            (setq seen bucket))))))
 
 (defun rontolisp::%clojure-held-key (class table)
   "The representative in CLASS that TABLE holds as a key, or NIL."
@@ -3327,16 +3341,19 @@
         (if held
             held
             (let ((kind (rontolisp::%clojure-key-kind k)) (own nil))
-              (do ((c class (cdr c)))
-                  ((or own (null c)))
-                (if (eql (rontolisp::%clojure-key-kind (car c)) kind)
-                    (setq own (car c))))
-              (if own
-                  own
-                  (progn
-                    (rplacd class (cons k (cdr class)))
-                    (setf (gethash k rontolisp::%clojure-key-reps) class)
-                    k)))))))
+              ;; a kind is no code of the program's, so the look and the store
+              ;; are one step
+              (rontolisp:with-mutex (rontolisp::%clojure-key-guard)
+                (do ((c class (cdr c)))
+                    ((or own (null c)))
+                  (if (eql (rontolisp::%clojure-key-kind (car c)) kind)
+                      (setq own (car c))))
+                (if own
+                    own
+                    (progn
+                      (rplacd class (cons k (cdr class)))
+                      (setf (gethash k rontolisp::%clojure-key-reps) class)
+                      k))))))))
 
 (defun rontolisp::%clojure-set-put (table x)
   "X added to the set table TABLE as a member stored under itself (an = member
@@ -9269,8 +9286,9 @@
 ;;;; Metadata: with-meta and meta over an identity side table.
 ;;
 ;; A value's metadata lives in rontolisp::%clojure-meta-table, an eq table from the
-;; object with-meta answered to its map, made on first use (a program that never
-;; attaches metadata allocates nothing). with-meta answers a fresh shallow copy,
+;; object with-meta answered to its map, read and written under
+;; %clojure-meta-guard (a Ring handler runs one thread per request on the
+;; interpreter and the JVM). with-meta answers a fresh shallow copy,
 ;; like the oracle's new object: the original keeps its own metadata and = still
 ;; compares contents (a reify copy keeps its tag, so it dispatches the same and is
 ;; a different object, like the oracle's). The kinds that carry metadata are the
@@ -9283,10 +9301,11 @@
 ;; has no copy to hang it on, and = on symbols compares names); the table keeps
 ;; every object it was handed for the program's lifetime.
 
+(defvar rontolisp::%clojure-meta-guard (rontolisp:make-mutex))
+
 (defvar rontolisp::%clojure-meta-table
-  nil
-  "The metadata side table: an eq table from an object to its metadata map, NIL
-   until the first metadata is attached.")
+  (make-hash-table :test 'eq)
+  "The metadata side table: an eq table from an object to its metadata map.")
 
 (defun rontolisp::%clojure-check-meta (m)
   "M, or the oracle's refusal when it is neither nil nor a map."
@@ -9299,9 +9318,8 @@
 (defun rontolisp::%clojure-put-meta (x m)
   "X with the metadata map M recorded for it (none for a nil M); answers X."
   (when (rontolisp::%clojure-check-meta m)
-    (unless rontolisp::%clojure-meta-table
-      (setq rontolisp::%clojure-meta-table (make-hash-table :test 'eq)))
-    (setf (gethash x rontolisp::%clojure-meta-table) m))
+    (rontolisp:with-mutex (rontolisp::%clojure-meta-guard)
+      (setf (gethash x rontolisp::%clojure-meta-table) m)))
   x)
 
 ;; A deftype implementing IObj answers its own withMeta, and one implementing
@@ -9344,9 +9362,8 @@
   "X's metadata map, nil when it carries none."
   (if (rontolisp::%clojure-imeta-p x)
       (funcall (rontolisp::%clojure-interface-entry x "meta") x)
-      (if rontolisp::%clojure-meta-table
-          (values (gethash x rontolisp::%clojure-meta-table))
-          nil)))
+      (rontolisp:with-mutex (rontolisp::%clojure-meta-guard)
+        (values (gethash x rontolisp::%clojure-meta-table)))))
 
 (defun rontolisp::%clojure-meta-v (&rest args)
   "meta as a value."
@@ -9411,8 +9428,9 @@
 ;;;; Vars: #'x as a value.
 ;;
 ;; A var is (:C%VAR "ns/name" getter), interned per name in
-;; rontolisp::%clojure-var-table (made on first use), so #'x answers the same
-;; object at every site, like the oracle's one Var per name. GETTER is a
+;; rontolisp::%clojure-var-table (read and written under %clojure-var-guard: a
+;; Ring handler runs one thread per request), so #'x answers the same object at
+;; every site, like the oracle's one Var per name. GETTER is a
 ;; closure over the lowered value of the name, so deref and an invocation read
 ;; the root through it; its metadata lives in %clojure-meta-table like any other
 ;; value's. Each site hands both in: the lowering records a definition's
@@ -9425,10 +9443,11 @@
 ;; an arm a program that makes none sheds, like a sorted-collection arm
 ;; (clojure/ClojureArms, the UNBOUND family).
 
+(defvar rontolisp::%clojure-var-guard (rontolisp:make-mutex))
+
 (defvar rontolisp::%clojure-var-table
-  nil
-  "The interned vars: an equal table from \"ns/name\" to its var, NIL until the
-   first #' runs.")
+  (make-hash-table :test 'equal)
+  "The interned vars: an equal table from \"ns/name\" to its var.")
 
 (defun rontolisp::%clojure-var-p (x)
   "Whether X is the (:C%VAR name getter) var #'x lowers to."
@@ -9437,14 +9456,15 @@
 (defun rontolisp::%clojure-var (name getter meta)
   "The var NAME (\"ns/name\"), interned on first use, reading its root through
    GETTER and carrying META."
-  (unless rontolisp::%clojure-var-table
-    (setq rontolisp::%clojure-var-table (make-hash-table :test 'equal)))
-  (let ((v (gethash name rontolisp::%clojure-var-table)))
-    (if v
-        (rplaca (cdr (cdr v)) getter)
-        (progn
-          (setq v (list :C%VAR name getter))
-          (setf (gethash name rontolisp::%clojure-var-table) v)))
+  (let ((v
+         (rontolisp:with-mutex (rontolisp::%clojure-var-guard)
+           (let ((v (gethash name rontolisp::%clojure-var-table)))
+             (if v
+                 (rplaca (cdr (cdr v)) getter)
+                 (progn
+                   (setq v (list :C%VAR name getter))
+                   (setf (gethash name rontolisp::%clojure-var-table) v)))
+             v))))
     (rontolisp::%clojure-put-meta v meta)))
 
 (defun rontolisp::%clojure-var-dynamic (name getter meta depth)
@@ -9517,7 +9537,7 @@
 ;;;; Namespaces: *ns* as a value, and the REPL's history.
 ;;
 ;; A namespace is (:C%NS-OBJECT "name"), interned per name in
-;; rontolisp::%clojure-ns-table (made on first use), so every read of one
+;; rontolisp::%clojure-ns-table, so every read of one
 ;; answers the same object, like the oracle's one Namespace per name. It exists
 ;; at run time only as a value: what a namespace defines is decided where the
 ;; program lowers, so the-ns and find-ns take the names the program created
@@ -9526,20 +9546,22 @@
 ;; one (%clojure-ns-object-p) is an arm a program that makes none sheds
 ;; (clojure/ClojureArms, the NAMESPACE family).
 
+(defvar rontolisp::%clojure-ns-guard (rontolisp:make-mutex))
+
 (defvar rontolisp::%clojure-ns-table
-  nil
-  "The interned namespaces: an equal table from the name to its namespace,
-   NIL until the first one is made.")
+  (make-hash-table :test 'equal)
+  "The interned namespaces: an equal table from the name to its namespace, read
+   and written under %clojure-ns-guard (a Ring handler runs one thread per
+   request).")
 
 (defun rontolisp::%clojure-ns-object (name)
   "The namespace NAME, interned on first use."
-  (unless rontolisp::%clojure-ns-table
-    (setq rontolisp::%clojure-ns-table (make-hash-table :test 'equal)))
-  (let ((ns (gethash name rontolisp::%clojure-ns-table)))
-    (if ns
-        ns
-        (setf (gethash name rontolisp::%clojure-ns-table)
-              (list :C%NS-OBJECT name)))))
+  (rontolisp:with-mutex (rontolisp::%clojure-ns-guard)
+    (let ((ns (gethash name rontolisp::%clojure-ns-table)))
+      (if ns
+          ns
+          (setf (gethash name rontolisp::%clojure-ns-table)
+                (list :C%NS-OBJECT name))))))
 
 (defun rontolisp::%clojure-ns-object-p (x)
   "Whether X is a namespace."
@@ -9959,7 +9981,10 @@
 ;; stores through a function of its own, the family's producer
 ;; (clojure/ClojureArms), and the verbs ask the family's tests in their arms, so a
 ;; program storing no row of a family has its arms folded and compiles as before.
-;; Like the protocol rows, a reify's row stays for the program's lifetime.
+;; Like the protocol rows, every row is stored as the program starts -- a type's at
+;; its definition, a reify's once per site, ahead of the top-level form holding it
+;; (clojure/ClojureProtocolLowering.reifyForm) -- so a Ring handler's threads (one
+;; per request on the interpreter and the JVM) only read the table.
 
 (defvar rontolisp::%clojure-interface-rows nil)
 
@@ -11085,7 +11110,17 @@
 ;;;; clojure.core/iteration: a reify implementing Seqable and IReduceInit over a
 ;;;; step function, like the oracle's. Its rows are stored through the families'
 ;;;; stores, so its constructor is a producer of the seqable and reduce-interface
-;;;; families (clojure/ClojureArms).
+;;;; families (clojure/ClojureArms). Like a lowered reify's, they are stored once,
+;;;; under one tag, when the library loads -- a Ring handler's threads only read the
+;;;; row tables -- each a trampoline into the instance's own methods vector.
+
+(defvar rontolisp::%clojure-iteration-tag
+  (let ((tag (list :c%keyword "reify iteration")))
+    (rontolisp::%clojure-seqable-row tag '("clojure.lang.Seqable")
+     (list "seq" (lambda (x) (funcall (aref (caddr x) 0)))))
+    (rontolisp::%clojure-reduce-interface-row tag '("clojure.lang.IReduceInit")
+     (list "reduce" (lambda (x f init) (funcall (aref (caddr x) 1) f init))))
+    tag))
 
 (defun rontolisp::%clojure-iteration-fn (opts key dflt)
   "The function option KEY (a keyword) of the options map OPTS as a real
@@ -11112,24 +11147,14 @@
           (rontolisp::%clojure-iteration-fn opts '(:c%keyword "kf")
                                             (lambda (x) x)))
          (initk
-          (rontolisp::%clojure-call-keyword '(:c%keyword "initk") opts nil))
-         (self (list :c%reify (gensym "reify"))))
-    (rontolisp::%clojure-seqable-row (car (cdr self)) '("clojure.lang.Seqable")
-                                     (list "seq"
-                                           (lambda (x)
-                                             (declare (ignore x))
-                                             (rontolisp::%clojure-iteration-seq
-                                              step somef vf kf
-                                              (funcall step initk)))))
-    (rontolisp::%clojure-reduce-interface-row (car (cdr self))
-                                              '("clojure.lang.IReduceInit")
-                                              (list "reduce"
-                                                    (lambda (x f init)
-                                                      (declare (ignore x))
-                                                      (rontolisp::%clojure-iteration-reduce
-                                                       step somef vf kf initk f
-                                                       init))))
-    self))
+          (rontolisp::%clojure-call-keyword '(:c%keyword "initk") opts nil)))
+    (list :c%reify rontolisp::%clojure-iteration-tag
+          (vector (lambda ()
+                    (rontolisp::%clojure-iteration-seq step somef vf kf
+                                                       (funcall step initk)))
+                  (lambda (f init)
+                    (rontolisp::%clojure-iteration-reduce step somef vf kf initk
+                                                          f init))))))
 
 (defun rontolisp::%clojure-iteration-v (&rest args)
   "iteration as a value."
@@ -12125,14 +12150,13 @@
                (and (consp form) (not (keywordp (car form)))))
            (let ((old (rontolisp::%clojure-meta form)))
              ;; a map already: stored without with-meta's check
-             (if (null rontolisp::%clojure-meta-table)
-                 (setq rontolisp::%clojure-meta-table
-                       (make-hash-table :test 'eq)))
-             (setf (gethash form rontolisp::%clojure-meta-table)
-                   (if old
-                       (rontolisp::%clojure-plist-table old
-                        (rontolisp:hash-table-plist meta))
-                       meta))
+             (let ((m
+                    (if old
+                        (rontolisp::%clojure-plist-table old
+                         (rontolisp:hash-table-plist meta))
+                        meta)))
+               (rontolisp:with-mutex (rontolisp::%clojure-meta-guard)
+                 (setf (gethash form rontolisp::%clojure-meta-table) m)))
              form))
           (t (rontolisp::%clojure-illegal-argument-exception
               "Metadata can only be applied to IMetas")))))

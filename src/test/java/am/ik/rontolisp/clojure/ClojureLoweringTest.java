@@ -1066,10 +1066,16 @@ class ClojureLoweringTest {
 		assertThatThrownBy(() -> Clojure.read("(map->T {:a 1}) (deftype T [a])", null))
 			.isInstanceOf(LispReadException.class)
 			.hasMessageContaining("unknown name: map->T");
-		// reify answers one fresh tag per evaluation with a row per method
-		assertThat(lowered("(defprotocol P (foo [x])) (reify P (foo [_] 1))")).contains(":C%REIFY")
-			.contains("GENSYM")
-			.contains("|c%P%methods|");
+		// a reify's rows are its site's: stored once under a tag no symbol spells, ahead
+		// of the top-level form holding it, each a trampoline into the evaluation's own
+		// methods
+		String reify = lowered("(defprotocol P (foo [x])) (defn f [] (reify P (foo [_] 1)))");
+		assertThat(reify).contains("(SETF (GETHASH (LIST :C%KEYWORD \"foo\") ")
+			.contains("(FUNCALL (AREF (CADDR ")
+			.contains("(LIST :C%REIFY (LIST :C%KEYWORD \"reify ")
+			.contains("(VECTOR (LAMBDA (|c%_|) 1))")
+			.doesNotContain("GENSYM");
+		assertThat(reify.indexOf("(FUNCALL (AREF (CADDR ")).isLessThan(reify.indexOf("(DEFUN |c%f|"));
 		// extend-protocol/extend-type/extend are defmethod rows; satisfies? is table
 		// membership; instance? of a type is tag equality
 		assertThat(lowered("(defprotocol P (foo [x])) (extend-protocol P String (foo [s] s))"))
@@ -1210,8 +1216,8 @@ class ClojureLoweringTest {
 		// reducible family's producer, so a program storing none folds every arm
 		String reify = lowered("(require '[clojure.core.protocols :as p])"
 				+ " (def r (reify p/CollReduce (coll-reduce [_ f init] init)))");
-		assertThat(reify).contains(
-				"(RONTOLISP::%CLOJURE-COLL-REDUCER-ROW |c%clojure.core.protocols/CollReduce%methods|" + " (CADR ");
+		assertThat(reify).contains("(RONTOLISP::%CLOJURE-COLL-REDUCER-ROW |c%clojure.core.protocols/CollReduce%methods|"
+				+ " (LIST :C%KEYWORD \"reify ");
 		String record = lowered("(require '[clojure.core.protocols :as p]) (defrecord R [a])"
 				+ " (extend-protocol p/IKVReduce R (kv-reduce [r f init] init))");
 		assertThat(record).contains(
@@ -1230,7 +1236,7 @@ class ClojureLoweringTest {
 		// (supers included) and a lambda per method, the body's or the oracle's
 		// AbstractMethodError for one it leaves out
 		String reify = lowered("(def r (reify clojure.lang.Counted (count [_] 3)))");
-		assertThat(reify).contains("(RONTOLISP::%CLOJURE-COUNTED-ROW (CADR ")
+		assertThat(reify).contains("(RONTOLISP::%CLOJURE-COUNTED-ROW (LIST :C%KEYWORD \"reify ")
 			.contains("'(\"clojure.lang.Counted\") (LIST \"count\" (LAMBDA (");
 		String indexed = lowered("(deftype T [n] clojure.lang.Indexed (nth [_ i] i))");
 		assertThat(indexed).contains(
@@ -1243,7 +1249,7 @@ class ClojureLoweringTest {
 					+ " the resolved method nth of interface clojure.lang.Indexed\")");
 		// an Object override needs no group of its own, and a reify's names its class
 		String object = lowered("(defprotocol P (m [x])) (reify P (m [_] 1) (toString [_] \"r\"))");
-		assertThat(object).contains("(RONTOLISP::%CLOJURE-OBJECT-ROW (CADR ")
+		assertThat(object).contains("(RONTOLISP::%CLOJURE-OBJECT-ROW (LIST :C%KEYWORD \"reify ")
 			.contains(" NIL (LIST \"toString\" (LAMBDA (")
 			.contains("\"class\" \"user$reify\")");
 		// a protocol-only body stores no interface row
@@ -1323,10 +1329,11 @@ class ClojureLoweringTest {
 			.doesNotContain("JAVA-FACE");
 		assertThat(lowered("(deftype U [] clojure.lang.Counted (count [_] 1)) (Thread. (U.))"))
 			.doesNotContain("JAVA-FACE");
-		// an Object override alone shows a face; a reify's registers per evaluation,
+		// an Object override alone shows a face; a reify's registers once per site,
 		// under its class; a boolean answer by its truth, an Iterator as Java's
 		String reify = lowered("(str (java.util.ArrayList. [(reify Object (toString [_] \"r\") (equals [_ o] 1))]))");
-		assertThat(reify).contains("(RONTOLISP::%CLOJURE-OBJECT-ROW (RONTOLISP::%CLOJURE-JAVA-FACE-TAG (CADR ")
+		assertThat(reify)
+			.contains("(RONTOLISP::%CLOJURE-OBJECT-ROW (RONTOLISP::%CLOJURE-JAVA-FACE-TAG (LIST :C%KEYWORD \"reify ")
 			.contains("(JAVA:REIFY '(\"java.lang.Comparable\") :VALUE ")
 			.contains(" :CLASS \"user$reify\" ")
 			.contains("\"equals(java.lang.Object)\" (LAMBDA (")

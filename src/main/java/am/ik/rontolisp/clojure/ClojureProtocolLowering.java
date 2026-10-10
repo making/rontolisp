@@ -60,8 +60,9 @@ final class ClojureProtocolLowering {
 	static final LispSymbol TYPE_TAG = new LispSymbol(":C%TYPE");
 
 	/**
-	 * The tag heading a reify value: {@code (LIST :C%REIFY (gensym))}, one fresh tag per
-	 * evaluation, so two instances never share a dispatch row. Opaque like a deftype.
+	 * The tag heading a reify value: {@code (LIST :C%REIFY tag methods)}, the tag its
+	 * site's ({@link #reifyForm}), the methods the evaluation's own. Opaque like a
+	 * deftype.
 	 */
 	static final LispSymbol REIFY_TAG = new LispSymbol(":C%REIFY");
 
@@ -417,9 +418,9 @@ final class ClojureProtocolLowering {
 	/**
 	 * {@code instance?} of a protocol's interface: a record or deftype whose body names
 	 * the protocol (by class, read off the definitions at lowering), or a reify holding a
-	 * row under its fresh tag in the protocol's body table (every protocol its body names
-	 * has one, and no extension reaches the tag). An extension row is no interface, like
-	 * the oracle.
+	 * row under its site's tag in the protocol's body table (every protocol its body
+	 * names has one, and no extension reaches the tag). An extension row is no interface,
+	 * like the oracle.
 	 */
 	static LispVal implementsForm(ClojureLowering ctx, Map.Entry<String, ClojureLowering.ProtocolDef> protocol,
 			LispVal value) {
@@ -2274,45 +2275,119 @@ final class ClojureProtocolLowering {
 	}
 
 	/**
-	 * {@code (reify Protocol (method [target & args] body...)+ ...)}: one fresh tag per
-	 * evaluation with a row per method in each protocol's table, answering the opaque
-	 * value -- a single-shot map plus methods (never {@code proxy}, which stays the
-	 * {@code java:} surface). A method named again over another parameter vector is
-	 * another arity of it.
+	 * {@code (reify Protocol (method [target & args] body...)+ ...)}: the opaque value
+	 * {@code (:C%REIFY tag methods)} -- a single-shot map plus methods (never
+	 * {@code proxy}, which stays the {@code java:} surface). A method named again over
+	 * another parameter vector is another arity of it.
+	 *
+	 * <p>
+	 * The rows belong to the SITE, like the oracle's one class per {@code reify} form:
+	 * its tag is a constant no other site or type spells, and its protocol and interface
+	 * rows are stored once, ahead of the top-level datum
+	 * ({@link ClojureLowering#hoisted}), each holding a trampoline into the evaluation's
+	 * own {@code methods} vector, the method lambdas closing over its locals. No
+	 * evaluation writes a process-wide table, so a Ring handler's threads -- one per
+	 * request on the interpreter and the JVM -- only read them, and the tables stop
+	 * growing a row per evaluation.
 	 */
 	static LispVal reifyForm(ClojureLowering ctx, List<LispVal> items) {
 		ClojureLowerUtil.isTrue(items.size() >= 2, "reify takes a protocol and methods");
 		TypeBody parsed = typeBody(ctx, items.subList(1, items.size()), "reify");
-		LispSymbol self = ctx.freshTemp();
-		List<LispVal> prologue = new ArrayList<>();
-		prologue.add(ClojureLowerUtil.list(self, ClojureLowerUtil.list(ClojureLowerUtil.sym("list"), REIFY_TAG,
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("gensym"), LispString.literal("reify")))));
-		List<LispVal> body = new ArrayList<>();
+		// a space no symbol spells: no type's tag, and no other site's
+		LispVal tag = ClojureCollectionLowering.keywordForm("reify " + ctx.counter++);
+		List<LispVal> methods = new ArrayList<>();
+		List<LispVal> rows = new ArrayList<>();
 		for (ClojureLowering.ImplGroup group : parsed.groups()) {
 			ClojureLowering.ProtocolDef def = protocolOf(ctx, group.protocol());
 			if (def == null) {
 				throw new LispReadException("No such protocol: " + group.protocol());
 			}
 			if (group.methods().isEmpty()) {
-				body.add(emptyRowForm(def.inlineTable(), ClojureLowerUtil.list(ClojureLowerUtil.sym("cadr"), self)));
+				rows.add(emptyRowForm(def.inlineTable(), tag));
 			}
 			for (ClojureLowering.TypeMethod impl : group.methods()) {
 				LispVal lambda = inlineMethodLambda(ctx, impl, List.of(), null, Map.of());
-				body.add(rowStoreForm(ctx, def, def.inlineTable(),
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("cadr"), self), impl.method(), lambda, true));
+				rows.add(rowStoreForm(ctx, def, def.inlineTable(), tag, impl.method(),
+						reifyTrampoline(ctx, methods, lambda), true));
 			}
 		}
 		// a reify prints as the oracle's class of the namespace it is lowered in
 		String reifyClass = ctx.currentNs.replace('-', '_') + "$reify";
-		List<LispVal> rows = interfaceRows(ctx, "reify", parsed.interfaces(),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("cadr"), self), reifyClass, null, List.of());
+		List<LispVal> interfaceRows = parsed.interfaces().isEmpty() ? List.of()
+				: ClojureInterfaces.rowForms(ctx, "reify", parsed.interfaces(), tag, reifyClass,
+						(impl, dispatch, fallback) -> reifyTrampoline(ctx, methods, interfaceLambda(ctx, impl, dispatch,
+								fallback, arity -> inlineArityLambda(ctx, arity, List.of(), null, Map.of()))));
 		// what Java sees of it: an implementation of its Java interfaces
-		ClojureJavaFaces.give(ctx, "reify", parsed.interfaces(), reifyClass, rows);
-		body.addAll(rows);
-		body.add(self);
+		ClojureJavaFaces.give(ctx, "reify", parsed.interfaces(), reifyClass, interfaceRows);
+		rows.addAll(interfaceRows);
+		ctx.hoisted.addAll(rows);
+		ClojureMacroEvaluator macroTime = ctx.macroEvaluator;
+		if (macroTime != null) {
+			// an expansion may build one too
+			for (LispVal row : rows) {
+				macroTime.define(row);
+			}
+		}
 		ctx.usedProtocols = true;
-		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let*"), ClojureLowerUtil.list(prologue),
-				ClojureLowerUtil.cons(ClojureLowerUtil.sym("progn"), body));
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("list"), REIFY_TAG, tag,
+				ClojureLowerUtil.cons(ClojureLowerUtil.sym("vector"), methods));
+	}
+
+	/**
+	 * A reify method's row entry: the lambda goes to the evaluation's {@code methods}
+	 * vector, the row holds a trampoline calling the one of the instance it is handed
+	 * first, which every caller of a row hands. A lambda over plain parameters keeps its
+	 * count, so a call conses no argument list; any other is applied.
+	 */
+	private static LispVal reifyTrampoline(ClojureLowering ctx, List<LispVal> methods, LispVal lambda) {
+		LispInteger index = new LispInteger(methods.size());
+		methods.add(lambda);
+		List<LispVal> plain = plainParams(lambda);
+		if (plain != null && !plain.isEmpty()) {
+			List<LispVal> params = new ArrayList<>();
+			for (int i = 0; i < plain.size(); i++) {
+				params.add(ctx.freshTemp());
+			}
+			LispVal target = ClojureLowerUtil.list(ClojureLowerUtil.sym("aref"),
+					ClojureLowerUtil.list(ClojureLowerUtil.sym("caddr"), params.get(0)), index);
+			List<LispVal> call = new ArrayList<>();
+			call.add(ClojureLowerUtil.sym("funcall"));
+			call.add(target);
+			call.addAll(params);
+			return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(params),
+					ClojureLowerUtil.list(call));
+		}
+		LispSymbol args = ctx.freshTemp();
+		return ClojureLowerUtil
+			.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(ClojureLowering.AMPERSAND_REST, args),
+					ClojureLowerUtil
+						.list(ClojureLowerUtil.sym("apply"),
+								ClojureLowerUtil.list(ClojureLowerUtil.sym("aref"),
+										ClojureLowerUtil.list(ClojureLowerUtil.sym("caddr"),
+												ClojureLowerUtil.list(ClojureLowerUtil.sym("car"), args)),
+										index),
+								args));
+	}
+
+	/**
+	 * The parameters of a {@code (lambda (p...) ...)} form when each is a plain symbol
+	 * (no lambda-list keyword), else null.
+	 */
+	private static @Nullable List<LispVal> plainParams(LispVal lambda) {
+		List<LispVal> parts = ClojureLowerUtil.items(lambda);
+		if (parts == null || parts.size() < 2 || !ClojureLowerUtil.isSymbolNamed(parts.get(0), "LAMBDA")) {
+			return null;
+		}
+		List<LispVal> params = ClojureLowerUtil.items(parts.get(1));
+		if (params == null) {
+			return null;
+		}
+		for (LispVal param : params) {
+			if (!(param instanceof LispSymbol symbol) || symbol.name().startsWith("&")) {
+				return null;
+			}
+		}
+		return params;
 	}
 
 	// macros: defmacro, lower-time expansion, syntax-quote, macroexpand, gensym
