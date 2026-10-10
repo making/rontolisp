@@ -2787,6 +2787,12 @@
 ;; whose key is a literal scalar skips both. A copy of one table needs neither:
 ;; its keys are representatives already.
 ;;
+;; A deftype or reify is a structural key too when its type gives it a hash and
+;; an equality of its own (%clojure-typed-key-p), what the oracle's hash map
+;; finds it by: it buckets with every value = to it (%clojure-typed-key-hash),
+;; and its kind is its type and field values (%clojure-typed-kind), so only an
+;; object no verb tells from it but by identity stands for it.
+;;
 ;; Deliberate non-goal (.kb/clojure-frontend.md, "Deviations"): the classes keep
 ;; one representative per distinct stored value and kind for the program's
 ;; lifetime, like the metadata side table.
@@ -2808,18 +2814,89 @@
 (defun rontolisp::%clojure-structural-key-p (k)
   "Whether K is a key whose = an equal table does not decide: a non-string
    vector, a map, a set, a record, a lazy seq or a list (every list, since a
-   list = a vector of equal members). Keywords and the other tagged wrappers
-   compare by equal already."
+   list = a vector of equal members), and a deftype or reify keying by value
+   (%clojure-typed-key-p). Keywords and the other tagged wrappers compare by
+   equal already."
   (cond ((consp k)
          (let ((h (car k)))
            (cond ((eq h :C%KEYWORD) nil)
                  ((keywordp h)
                   (or (eq h :C%SET) (eq h :C%LAZY) (eq h :C%RECORD)
                       (rontolisp::%clojure-sorted-p k)
-                      (rontolisp::%clojure-reader-value-p k)))
+                      (rontolisp::%clojure-reader-value-p k)
+                      (rontolisp::%clojure-typed-key-p k)))
                  (t t))))
         ((vectorp k) (not (stringp k)))
         (t (hash-table-p k))))
+
+;; A deftype or reify keys a map or set by value -- the oracle's hash map finds
+;; it by Util.hasheq, then Util.equiv -- when its type has a hash of its own and
+;; an equality other than identity. One with no hash of its own hashes by its
+;; identity in the oracle, so it keys by identity here too. The test is the
+;; typed-key family's (clojure/ClojureArms): only the store of an IHashEq row or
+;; of an Object row makes such a value, so a program storing neither folds every
+;; arm below and its structural keys run as before.
+(defun rontolisp::%clojure-typed-key-p (k)
+  "Whether the deftype or reify K keys a map or set by value: its type
+   implements IHashEq or overrides hashCode, and has an equality of its own
+   (%clojure-typed-equality-p)."
+  (cond
+   ((rontolisp::%clojure-hasheq-p k) (rontolisp::%clojure-typed-equality-p k))
+   ((rontolisp::%clojure-hash-code-p k)
+    (rontolisp::%clojure-typed-equality-p k))
+   (t nil)))
+
+(defun rontolisp::%clojure-typed-equality-p (k)
+  "Whether = may find the deftype or reify K equal to another value: its type
+   implements IPersistentCollection (its equiv), Sequential, java.util.List,
+   java.util.Set or java.util.Map (which a core collection of the kind reads),
+   or overrides equals."
+  (if (or (rontolisp::%clojure-icollection-p k)
+          (rontolisp::%clojure-isequential-p k) (rontolisp::%clojure-jlist-p k)
+          (rontolisp::%clojure-jset-p k) (rontolisp::%clojure-jmap-p k)
+          (rontolisp::%clojure-equals-p k))
+      t
+      nil))
+
+(defun rontolisp::%clojure-typed-key-hash (x)
+  "%clojure-hash of the typed key X (%clojure-typed-key-p): a map, set or
+   sequential type's seq view folded as %clojure-hash folds that core kind, so
+   it buckets with every core collection = to it; any other type its own
+   hasheq, else its hashCode, cut below 2^20."
+  (cond
+   ((rontolisp::%clojure-imap-p x) (rontolisp::%clojure-typed-coll-hash x 0))
+   ((rontolisp::%clojure-jmap-p x) (rontolisp::%clojure-typed-coll-hash x 0))
+   ((rontolisp::%clojure-iset-p x) (rontolisp::%clojure-typed-coll-hash x 1))
+   ((rontolisp::%clojure-jset-p x) (rontolisp::%clojure-typed-coll-hash x 1))
+   ((rontolisp::%clojure-isequential-p x)
+    (rontolisp::%clojure-typed-coll-hash x 2))
+   ((rontolisp::%clojure-jlist-p x) (rontolisp::%clojure-typed-coll-hash x 2))
+   ((rontolisp::%clojure-hasheq-p x)
+    (logand (rontolisp::%clojure-typed-hash x "hasheq") 1048575))
+   (t (logand (rontolisp::%clojure-typed-hash x "hashCode") 1048575))))
+
+(defun rontolisp::%clojure-typed-coll-hash (x kind)
+  "%clojure-hash of the members of X's seq view as the core KIND: 0 a map's
+   entries and 1 a set's members, summed as %clojure-hash-entries sums a
+   table's; 2 a sequential's members, folded in order."
+  (let ((h (cond ((= kind 0) 5) ((= kind 1) 3) (t 1)))
+        (s (rontolisp::%clojure-seq x)))
+    (do ()
+        ((null s) h)
+      (setq h
+            (cond ((= kind 0)
+                   (logand (+ h
+                              (logand (+ (* 1021
+                                            (rontolisp::%clojure-hash
+                                             (rontolisp::%clojure-key (car s))))
+                                         (rontolisp::%clojure-hash
+                                          (rontolisp::%clojure-val (car s))))
+                                      1048575)) 1048575))
+                  ((= kind 1)
+                   (logand (+ h (rontolisp::%clojure-hash (car s))) 1048575))
+                  (t (logand (+ (* h 1021) (rontolisp::%clojure-hash (car s)))
+                             1048575))))
+      (setq s (rontolisp::%clojure-seq-rest s)))))
 
 (defun rontolisp::%clojure-hash-string (s)
   "A hash of the string S's characters, below 2^20."
@@ -2846,10 +2923,11 @@
 (defun rontolisp::%clojure-hash (x)
   "A hash of X below 2^20 that agrees with %clojure-equal: = values hash
    alike, so a sequential hashes its members in order whatever its kind, a map
-   or set its entries in any order, and an identity-compared value one
-   constant. A fold step multiplies by 1021 under a 2^20 mask, so every
-   intermediate stays below 2^30, a wasm fixnum, and the members of a small
-   integer pair [x y] (x, y < 1021) never collide."
+   or set its entries in any order, a typed key as %clojure-typed-key-hash
+   answers, and an identity-compared value one constant. A fold step
+   multiplies by 1021 under a 2^20 mask, so every intermediate stays below
+   2^30, a wasm fixnum, and the members of a small integer pair [x y] (x, y <
+   1021) never collide."
   (cond ((null x) 1)
         ((integerp x) (logand x 1048575))
         ((stringp x) (rontolisp::%clojure-hash-string x))
@@ -2889,6 +2967,10 @@
           ((rontolisp::%clojure-uuid-p x)
            (logand (logxor (car (cdr x)) (car (cdr (cdr x)))) 1048575))
           ((rontolisp::%clojure-io-p x) (rontolisp::%clojure-io-hash x))
+          ;; a deftype or reify with a hash and an equality of its own: an arm
+          ;; of the typed-key family
+          ((rontolisp::%clojure-typed-key-p x)
+           (rontolisp::%clojure-typed-key-hash x))
           (t 0)))
         ((characterp x) (char-code x))
         ((symbolp x) (rontolisp::%clojure-hash-string (symbol-name x)))
@@ -2901,16 +2983,48 @@
         (t 0)))
 
 ;; A sorted collection is kind 4: = to a hash map or set of the same entries, yet
-;; printed in its own order, so a key keeps the kind it was stored as.
+;; printed in its own order, so a key keeps the kind it was stored as. A typed
+;; key's kind is its type and field values (%clojure-typed-kind): = need not
+;; read every field (a priority map's keyfn, an entity's name beside its id), so
+;; only an object no verb tells from it but by identity stands for it.
 (defun rontolisp::%clojure-key-kind (k)
   "The kind a representative keeps for structural K: 0 a vector, 1 a lazy
    seq, 2 a list, 3 anything else (= already tells maps, sets and records
-   apart)."
+   apart), 4 a sorted collection, a typed key's own (%clojure-typed-kind)."
   (cond ((vectorp k) 0)
         ((rontolisp::%clojure-lazy-p k) 1)
+        ((rontolisp::%clojure-typed-key-p k) (rontolisp::%clojure-typed-kind k))
         ((consp k)
          (if (keywordp (car k)) (if (rontolisp::%clojure-sorted-p k) 4 3) 2))
         (t 3)))
+
+(defvar rontolisp::%clojure-typed-kinds
+  nil
+  "The typed keys' kinds: an equal table from a deftype's tag and field values
+   to the first typed key the program stored with them, NIL until one is
+   stored.")
+
+(defun rontolisp::%clojure-typed-kind (k)
+  "The kind of the typed key K: the first typed key the program stored of K's
+   type whose field values are equal to K's, an object no verb tells from K
+   but by identity, so a fresh table may hold it for K as it holds the first =
+   core key of a kind, and the representatives stay one per value; K itself
+   for a reify, whose methods close over what no field shows, and for a type
+   with mutable fields."
+  (if (or (not (eq (car k) :C%TYPE)) (cdr (cdr (cdr (cdr (cdr k))))))
+      k
+      (let* ((table (car (cdr (cdr (cdr k)))))
+             (sig
+              (cons (car (cdr k))
+               (mapcar (lambda (f) (gethash f table)) (car (cdr (cdr k))))))
+             (miss (list nil)))
+        (if (null rontolisp::%clojure-typed-kinds)
+            (setq rontolisp::%clojure-typed-kinds
+                  (make-hash-table :test 'equal)))
+        (let ((kind (gethash sig rontolisp::%clojure-typed-kinds miss)))
+          (if (eq kind miss)
+              (setf (gethash sig rontolisp::%clojure-typed-kinds) k)
+              kind)))))
 
 (defun rontolisp::%clojure-key-class (k create)
   "The class of the structural key K: the representatives = to it. NIL when
@@ -10261,12 +10375,14 @@
           ((rontolisp::%clojure-jlist-p x) (rontolisp::%clojure-seq-equal c x))
           (t nil)))
         ((or (hash-table-p c) (rontolisp::%clojure-sorted-map-p c))
-         (cond ((rontolisp::%clojure-imap-p x)
-                (if (rontolisp::%clojure-map-equivalence-p x)
-                    (rontolisp::%clojure-map-equiv-jmap c x)
-                    nil))
-               ((rontolisp::%clojure-jmap-p x)
-                (rontolisp::%clojure-map-equiv-jmap c x))
+         ;; a java.util.Map first, like the oracle's: an IPersistentMap that is
+         ;; none has no size, containsKey or get to read
+         (cond ((rontolisp::%clojure-jmap-p x)
+                (if (rontolisp::%clojure-imap-p x)
+                    (if (rontolisp::%clojure-map-equivalence-p x)
+                        (rontolisp::%clojure-map-equiv-jmap c x)
+                        nil)
+                    (rontolisp::%clojure-map-equiv-jmap c x)))
                (t nil)))
         ((or (rontolisp::%clojure-set-p c) (rontolisp::%clojure-sorted-set-p c))
          (cond ((rontolisp::%clojure-jset-p x)

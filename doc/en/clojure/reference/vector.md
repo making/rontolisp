@@ -3,7 +3,7 @@
 `(vector x...)`
 
 Answers a vector of the arguments, in order. A vector literal lowers to this call. Vector
-keys compare by identity (see `get`).
+keys compare by `=` (see `get`).
 
 ```clojure
 (println (vector 1 2))    ; [1 2]

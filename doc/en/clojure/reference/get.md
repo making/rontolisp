@@ -9,7 +9,9 @@ Answers the value under `k`: in a map or set (the member itself), the element at
 
 As a value the two- or three-argument read.
 
-Keys compare by `=`, so a vector, list, map or set key finds an equal one. A Java `Map`
+Keys compare by `=`, so a vector, list, map or set key finds an equal one, and so does a
+deftype or reify whose type has a hash and an equality of its own
+([reify](reify.md#map-keys-and-set-members)). A Java `Map`
 looks `k` up itself, by `equals`; a key no Java method takes (a keyword, a symbol, a map,
 a set) is in no Java map, and any other Java object answers the default, like the oracle.
 

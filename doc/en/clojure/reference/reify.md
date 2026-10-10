@@ -122,3 +122,35 @@ seqs); `str` of such a value spells its contents where the oracle answers `Class
 (reduce (fn [acc [k v]] (+ acc v)) 0 p) ; => 1
 (pr-str (dissoc (assoc p :b 2) :a)) ; => "{:b 2}"
 ```
+
+## Map keys and set members
+
+A value whose type has a hash of its own (`IHashEq`'s `hasheq`, `Object`'s `hashCode`) and an
+equality of its own (`IPersistentCollection`'s `equiv`, `Object`'s `equals`, or a map, set or
+sequential interface the core collections read) keys a map or a set by value, as the oracle's
+hash map holds it. A map, set or sequential type finds, and is found by, the core collection `=`
+to it (a `data.priority-map` as a set member); any other type finds a value `=` to it through
+its own equality. The key stored first stays, as for a core key. A type without a hash of its
+own keys by identity, like the oracle's hash map, which hashes it by its identity.
+
+Deviations: every map holds its keys as the oracle's hash map does, while the oracle's array map
+(up to eight entries) compares keys without hashing, so it finds an `=` value of a type with no
+hash of its own, and compares a lookup key that is no `java.util.Collection` or `Map` by
+`equals` alone. A map, set or sequential type is bucketed by its contents rather than its
+`hasheq`, so one whose `hasheq` disagrees with its `=` is still found; any other type is
+bucketed by its own hash, so a core collection its `equiv` calls equal is not found.
+
+```clojure
+(deftype Money [cents]
+  Object
+  (equals [_ o] (and (instance? Money o) (= cents (.-cents ^Money o))))
+  (hashCode [_] cents))
+(contains? #{(Money. 5)} (Money. 5)) ; => true
+(get {(Money. 5) :five} (Money. 5)) ; => :five
+(deftype Pair [a b]
+  clojure.lang.Sequential
+  clojure.lang.Seqable (seq [_] (list a b))
+  clojure.lang.IHashEq (hasheq [_] (hash [a b])))
+(contains? #{[1 2]} (Pair. 1 2)) ; => true
+(get {(Pair. 1 2) :pair} '(1 2)) ; => :pair
+```

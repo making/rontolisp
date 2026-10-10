@@ -633,6 +633,17 @@ public final class ClojureArms {
 				Set.of(), Map.of(), Set.of(ClojureInterfaces.OBJECT_ROW), Set.of()),
 
 		/**
+		 * A deftype or reify whose type has a hash of its own ({@code IHashEq}'s
+		 * {@code hasheq} or an {@code Object} {@code hashCode}) and an equality other
+		 * than identity, which keys a map or a set by value, as the oracle's hash map
+		 * holds it: the structural keys take it, bucketed with every value {@code =} to
+		 * it. Only the store of an {@code IHashEq} row or of an {@code Object} row makes
+		 * one.
+		 */
+		TYPED_KEY("typed-key", Set.of("RONTOLISP::%CLOJURE-TYPED-KEY-P"), Set.of(), Map.of(),
+				Set.of(ClojureInterfaces.HASHEQ_ROW, ClojureInterfaces.OBJECT_ROW), Set.of()),
+
+		/**
 		 * A read in clojure.edn's grammar, which the run-time reader's EDN clauses take:
 		 * only the {@code clojure.edn} entries ({@link ClojureEdnLowering}) start one.
 		 */

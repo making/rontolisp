@@ -177,6 +177,34 @@ class ClojureLibraryTest {
 	}
 
 	@Test
+	void aProgramGivingNoTypeAHashOfItsOwnSplicesTheStructuralKeysWithoutTheTypedKeyArm() {
+		// only the store of an IHashEq row or of an Object row gives a type a hash of
+		// its own, which a typed key needs: a program storing neither keeps the
+		// structural keys as they were, vector and map keys included
+		List<String> verbs = List.of("RONTOLISP::%CLOJURE-STRUCTURAL-KEY-P", "RONTOLISP::%CLOJURE-HASH",
+				"RONTOLISP::%CLOJURE-KEY-KIND");
+		verbs.forEach((verb) -> assertThat(defun(ClojureLibrary.forms(), verb)).as(verb)
+			.contains("(RONTOLISP::%CLOJURE-TYPED-KEY-P"));
+		List<LispVal> plain = ClojureLibrary.process(Clojure.read(
+				"(deftype T [] clojure.lang.IPersistentCollection (equiv [_ o] true))"
+						+ " (println (get {[1] :v} [1]) (contains? #{{:a 1}} {:a 1}) (= (T.) 1) (get {:k 1} :k))",
+				null));
+		verbs.forEach((verb) -> assertThat(defun(plain, verb)).as(verb).doesNotContain("%CLOJURE-TYPED-KEY-P"));
+		// either store keeps the arm, which a hash row of each family answers through
+		for (String body : List.of("clojure.lang.IHashEq (hasheq [_] 1)", "Object (hashCode [_] 1)")) {
+			List<LispVal> typed = ClojureLibrary.process(
+					Clojure.read("(deftype T [] " + body + " clojure.lang.IPersistentCollection (equiv [_ o] true))"
+							+ " (println (contains? #{(T.)} (T.)))", null));
+			verbs.forEach((verb) -> assertThat(defun(typed, verb)).as(body + " " + verb)
+				.contains("(RONTOLISP::%CLOJURE-TYPED-KEY-P"));
+			boolean object = body.startsWith("Object");
+			assertThat(defun(typed, "RONTOLISP::%CLOJURE-TYPED-KEY-P")).as(body)
+				.contains(object ? "%CLOJURE-HASH-CODE-P" : "%CLOJURE-HASHEQ-P")
+				.doesNotContain(object ? "%CLOJURE-HASHEQ-P" : "%CLOJURE-HASH-CODE-P");
+		}
+	}
+
+	@Test
 	void aProgramMakingNoMatcherSplicesNthWithoutItsMatcherArm() {
 		// only re-matcher makes a matcher: a program naming it keeps nth's group arm,
 		// any other compiles nth as before matchers were read

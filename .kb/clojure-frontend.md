@@ -219,7 +219,9 @@ Each is a real work item unless the reason says otherwise.
 - Sorted collections copy on every verb (O(n) per association, a hash map's cost), `class` answers `:map`/`:set`, an empty `subseq` walked from the start is `nil` (the oracle `()`), a `subseq` test passed as a value is recognized by its answers, `compare` orders strings by code point, and `vector-of` answers a plain vector ("Sorted collections").
 - Structural keys: a stored collection key is the first `=` key of its kind the program
   stored, so its metadata and a nested member's spelling follow that object; the
-  representatives live for the whole run, one per distinct value and kind.
+  representatives live for the whole run, one per distinct value and kind (a typed key's kind
+  is its type and field values). Typed keys compare as the oracle's hash map does, never as its
+  array map ("Structural keys").
 - `(= [] nil)` is true (the oracle: false).
 - Seqs: `rest`/`next` of empty is `nil` (the oracle prints `()`); `nth` past the end
   answers `nil` where the oracle throws; a strict input to `for`
@@ -869,8 +871,55 @@ first `=` key of its kind (vector / lazy seq / list / sorted / other) the progra
   `(x . y)` keys, record field reads (keywords).
 - Pinned by `clojure-spec.yaml` `structural-keys-find-equal-collections` (oracle-identical)
   and `ClojureLoweringTest.aLiteralScalarKeySkipsTheStructuralKeyRuntime`.
-- A typed value (`deftype`/`reify`) is no structural key: one with `hasheq`/`equiv` keys a
-  map or set by identity, where the oracle finds it by value (todo f01).
+- Typed keys (2026-10-10): a `deftype`/`reify` whose type has a hash of its own (an `IHashEq`
+  row's `hasheq`, an `Object` row's `hashCode`) and an equality other than identity
+  (`IPersistentCollection`'s `equiv`; `Sequential`, `java.util.List`/`Set`/`Map`, which a core
+  collection of the kind reads; `equals`) is a structural key (`%clojure-typed-key-p`, the
+  `TYPED_KEY` family's test, made by either store). Its bucket (`%clojure-typed-key-hash`): a
+  map, set or sequential type's seq view folded as `%clojure-hash` folds that core kind, so it
+  shares a bucket with every core collection `=` to it; any other type its own `hasheq`, else
+  `hashCode`, under the mask. Its kind (`%clojure-typed-kind`) is its tag and field values
+  under `equal`: `=` need not read every field (a priority map's keyfn, an entity's name beside
+  its id), so only an object no verb tells from it but by identity stands for it in a fresh
+  table, and the representatives stay one per value as for core keys, where each object as its
+  own kind would add one per object stored into a table holding no `=` key, every one walked
+  by the class scans (measured 2026-10-10: 20,000 `(contains? #{(M. 1)} (M. 1))` of a
+  `hashCode`+`equals` type, 0.42 s JVM, 0.64 s wasm). A reify (methods closing over what no
+  field shows) and a type with mutable fields are their own kind, and a field holding a vector
+  or map compares by identity under `equal`: such types keep that growth.
+- What the oracle finds (clj 1.12.6, 2026-10-10, a hash set, an array map and an 11-entry hash
+  map each): data.priority-map 1.2.0 and the core map of its entries find each other in all
+  three; so do two `=` values of a `hashCode`+`equals` or `hasheq`+`equals` type; an
+  `IHashEq`-only type is found nowhere; a `Sequential` type with a `hasheq` and a vector find
+  each other in the hash set and map, while the array map compares a lookup key that is no
+  `java.util.Collection` or `Map` by `equals` alone (`Util.equivPred`) and misses; a type
+  without a hash of its own (`equals` alone, or a `Sequential` `equiv` alone) is missed by the
+  hash set and map (its identity hash: about 1 in 32 shares the first-level slot and is
+  found) and found by the array map, which never hashes. Here every map compares keys as the
+  hash map does. Two deviations come from the bucket: a map, set or sequential type is
+  bucketed by its contents, not its `hasheq` (one whose `hasheq` disagrees with `=` is found
+  where the oracle misses it), and any other type by its own hash, so a core collection its
+  `equiv` calls equal is held apart (an `IPersistentCollection` whose `hasheq` is `[1 2]`'s:
+  `(contains? #{[1 2]} t)` true there, false here). A class is one for both sides of `=`, where
+  the oracle asks the lookup key's: a map type without `java.util.Map` is `=` to `{:a 1}` one
+  way only, and `(contains? #{t} {:a 1})` is false there, true here.
+- A core map reads a map type through `java.util.Map`'s `size`/`containsKey`/`get` only when it
+  is one (`%clojure-core-equiv`); an `IPersistentMap` with `MapEquivalence` and no
+  `java.util.Map` signalled `The function NIL is undefined` on `(= {:a 1} t)` until
+  2026-10-10 (the oracle: false).
+- Cost: a program storing no `IHashEq` and no `Object` row folds the three arms
+  (`%clojure-structural-key-p`'s disjunct, `%clojure-hash`'s and `%clojure-key-kind`'s
+  clauses), so its structural keys, the keyword-only and vector-key work above included, run
+  as before by construction; in one that stores either, a vector or keyword key never reaches
+  the typed test. A typed map, set or sequential's bucket walks its seq (O(n)), where the
+  oracle reads its `hasheq` (instaparse's `AutoFlattenSeq` caches it).
+- Pins: clojure-spec `a-type-with-its-own-hash-and-equality-keys-a-map-or-set-by-value` (all
+  four backends, the oracle's lines),
+  `ClojureLibraryTest#aProgramGivingNoTypeAHashOfItsOwnSplicesTheStructuralKeysWithoutTheTypedKeyArm`,
+  `ClojureArmsTest#theTypedKeyFamilyIsMadeByTheStoreOfAnIHashEqOrAnObjectRow`. Verbatim
+  data.priority-map 1.2.0: `(contains? #{p} {:a 2 :b 1 :c 3})` true and
+  `(get {p :found} {:a 2 :b 1 :c 3} :missing)` `:found` on all four backends, the oracle's
+  (they were `false` and `:missing`).
 
 ## Hashes
 
@@ -933,7 +982,8 @@ hash's.
 - Re-probes (2026-10-09, verbatim): data.priority-map 1.2.0's `compile-if` takes the
   oracle's `hash-unordered-coll` branch now that `resolve` finds it ("Macros"), and `hash`,
   `hash-unordered-coll` and `=` of a priority map answer the oracle's on all four backends; as
-  a key or set member it misses (f01). instaparse 1.5.0 next stopped at a `^long` return hint on
+  a key or set member it is found by value since 2026-10-10 ("Structural keys", typed keys).
+  instaparse 1.5.0 next stopped at a `^long` return hint on
   a `defn` parameter vector (`auto_flatten_seq.clj:233`; fixed 2026-10-09, below), then, the
   hints removed by hand, at transients (`conj!`, `:302`, f05).
 - A return hint on a parameter vector (`(defn f ^long [x] ...)`, `defn-`, each arity of a
@@ -3081,10 +3131,10 @@ measured on clj 1.12.6, 2026-10-08).
   `iteration-seqs-lazily-and-reduces-through-its-step` (the oracle's, clj 1.12.6, 2026-10-08,
   all four backends), `ClojureLibraryTest#aProgramStoringNoInterfaceRowSplicesTheVerbsWithoutTheirInterfaceArms`.
 - Deviations (user doc): the `#object` has no identity hash and a reify's class no number;
-  `equals`/`hashCode`/`hasheq` key no map or set (the tables hold such a value by identity,
-  f01); `sort` and
-  `distinct` take a type implementing `Seqable` alone, where the oracle's `to-array` and
-  destructuring `nth` refuse it.
+  a type keying a map or set by its `hasheq`/`hashCode` and `equiv`/`equals` is compared as
+  the oracle's hash map compares it, never its array map ("Structural keys", typed keys);
+  `sort` and `distinct` take a type implementing `Seqable` alone, where the oracle's
+  `to-array` and destructuring `nth` refuse it.
 - Pins: clojure-spec `a-type-implementing-ireduceinit-ireduce-or-ikvreduce-reduces-through-it`,
   `a-seqable-type-seqs-through-its-seq`,
   `a-counted-or-indexed-type-counts-and-indexes-through-its-methods`,
@@ -3128,7 +3178,8 @@ interfaces behind an arm family its row's store makes (`ClojureArms`, `COLLECTIO
   `COMPARABLE`, `ITERABLE` (a producer of `REDUCIBLE` and `SEQABLE` too, whose arms it rides),
   `ITERATOR`, `JAVA_COLLECTION` (`Collection`, `SequencedCollection`, `List`, `Set`,
   `RandomAccess`), `JAVA_MAP` (a `SEQABLE` producer too), `HASHEQ` (`IHashEq`, which `hash`
-  reads: "Hashes"), `MARKER` (`Serializable`, `IEditableCollection`, the transients:
+  reads: "Hashes"; its store, like `OBJECT_METHODS`', also makes `TYPED_KEY`: "Structural
+  keys"), `MARKER` (`Serializable`, `IEditableCollection`, the transients:
   `instance?` and instance calls only). The predicates'
   helpers (`coll?`, `map?`, `set?`, `seq?`, `list?`, `sequential?`, `associative?`,
   `reversible?`) are `%clojure-is-*-type` aliases of the old ones, so the families stand ahead

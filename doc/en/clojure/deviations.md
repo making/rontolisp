@@ -38,7 +38,9 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   sets included, but a stored collection key is the first `=` key of its kind (vector,
   list, lazy seq) the program stored, so its metadata and the spelling of a nested
   member follow that earlier object; those keys stay alive for the whole run, one
-  per distinct value and kind.
+  per distinct value and kind. An earlier deftype key is stored for a later `=` one only
+  when both are of one type holding the same field values (never for a `reify` or a type
+  with mutable fields), so a field `=` does not read stays the stored object's own.
   `=` compares vectors, lists and lazy seqs element-wise like the oracle, and since `nil`
   is the empty list, `(= [] nil)` and `(= (java.util.ArrayList.) nil)` are `true` where the
   oracle answers `false`. As keys `[]` and `nil` stay apart like the oracle's, so an empty
@@ -300,10 +302,12 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   `java.util.Deque` ...) is refused by name. `first`, `next` and `rest` of an `ISeq` type read
   it through its `seq`, a verb may call a method another number of times than the oracle, and
   `str` of a collection type spells its contents
-  ([collection interfaces](reference/reify.md#collection-interfaces)). A type's `equals`,
-  `hashCode` and `hasheq` answer `=`, `.hashCode` and `hash` but never key a map or a set,
-  which hold such a value by identity. `sort` and `distinct` take a type implementing
-  `Seqable` alone through its seq, where the oracle refuses both.
+  ([collection interfaces](reference/reify.md#collection-interfaces)). A type with a hash and
+  an equality of its own keys a map or a set by value, every map comparing its keys as the
+  oracle's hash map does, where the oracle's array map (up to eight entries) compares them
+  without hashing; a map, set or sequential type is bucketed by its contents rather than its
+  `hasheq` ([map keys](reference/reify.md#map-keys-and-set-members)). `sort` and `distinct`
+  take a type implementing `Seqable` alone through its seq, where the oracle refuses both.
 - `clojure.core.reducers` folds on the calling thread, its parts one after the other, and
   `cat` of two non-empty collections answers one accumulator (a vector) holding both, where
   the oracle answers a `Cat` tree whose fold combines its halves' folds.

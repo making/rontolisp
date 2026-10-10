@@ -10899,6 +10899,103 @@ cases:
       "java.lang.NullPointerException" -539222987 -3
       1013910569 -1640525200 97 994 1013910568 1013910569 3 994 2027821078
       156247261 -2123407586 1772842048 -1172211204 425092884 "java.lang.NullPointerException"
+  - name: a-type-with-its-own-hash-and-equality-keys-a-map-or-set-by-value
+    # A deftype or reify whose type has a hash (IHashEq's hasheq, Object's hashCode)
+    # and an equality (equiv, equals) of its own keys a map or set by value, as the
+    # oracle's hash map holds it: a map, set or sequential type is found by the core
+    # collection = to it and finds it (data.priority-map's shape, instaparse's
+    # AutoFlattenSeq's), any other type an = value of its own; the key a table stored
+    # first stays, a field = does not read is the stored object's own, and an IHashEq
+    # type without an equality keys by identity. A core map reads a map type as a
+    # java.util.Map only (the last line's second = signalled before). Every line is the
+    # oracle's (clj 1.12.6.1673, 2026-10-10).
+    source: |
+      (ns typed-keys)
+      (deftype TkMap [m]
+        clojure.lang.IPersistentMap
+        (count [_] (count m))
+        (seq [_] (seq m))
+        (valAt [_ k] (get m k))
+        (valAt [_ k nf] (get m k nf))
+        (containsKey [_ k] (contains? m k))
+        (equiv [_ o] (= m o))
+        (assoc [_ k v] (TkMap. (assoc m k v)))
+        (without [_ k] (TkMap. (dissoc m k)))
+        clojure.lang.MapEquivalence
+        java.util.Map
+        (size [_] (count m))
+        (get [_ k] (get m k))
+        clojure.lang.IHashEq
+        (hasheq [_] (hash m))
+        Object
+        (hashCode [_] (hash m))
+        (equals [_ o] (= m o)))
+      (deftype TkSeq [xs]
+        clojure.lang.Sequential
+        clojure.lang.Seqable (seq [_] (seq xs))
+        clojure.lang.IPersistentCollection
+        (count [_] (count xs)) (cons [_ x] (TkSeq. (conj xs x))) (empty [_] (TkSeq. []))
+        (equiv [_ o] (and (sequential? o) (= (seq xs) (seq o))))
+        clojure.lang.IHashEq (hasheq [_] (hash-ordered-coll xs)))
+      (deftype TkSet [s]
+        clojure.lang.IPersistentSet
+        (disjoin [_ x] (TkSet. (disj s x))) (contains [_ x] (contains? s x)) (get [_ x] (get s x))
+        (count [_] (count s)) (cons [_ x] (TkSet. (conj s x))) (empty [_] (TkSet. #{}))
+        (equiv [_ o] (= s o)) (seq [_] (seq s))
+        java.util.Set
+        (size [_] (count s)) (iterator [_] (.iterator s))
+        clojure.lang.IHashEq (hasheq [_] (hash s)))
+      (deftype TkMoney [cents]
+        Object
+        (toString [_] (str "$" cents))
+        (equals [_ o] (and (instance? TkMoney o) (= cents (.-cents ^TkMoney o))))
+        (hashCode [_] cents))
+      (deftype TkHeq [x]
+        clojure.lang.IHashEq (hasheq [_] (hash x))
+        Object (equals [_ o] (and (instance? TkHeq o) (= x (.-x ^TkHeq o)))))
+      (deftype TkHeqOnly [x] clojure.lang.IHashEq (hasheq [_] 7))
+      (deftype TkUser [id name]
+        Object
+        (toString [_] name)
+        (equals [_ o] (and (instance? TkUser o) (= id (.-id ^TkUser o))))
+        (hashCode [_] id))
+      (def m {:a 1 :b 2})
+      (def pm (TkMap. m))
+      (prn (contains? #{pm} m) (contains? #{m} pm) (get (hash-map pm :found) m :missing) (get {m :found} pm :missing) (contains? #{pm} (TkMap. {:b 2 :a 1})) (contains? #{pm} {:a 1}))
+      (prn (contains? #{(TkSeq. [1 2])} [1 2]) (contains? #{[1 2]} (TkSeq. [1 2])) (contains? #{'(1 2)} (TkSeq. [1 2])) (contains? #{(TkSeq. [1 2])} (TkSeq. [1 2])) (contains? #{(TkSeq. [1 2])} [2 1]))
+      (prn (contains? #{(TkSet. #{1 2})} #{2 1}) (contains? #{#{1 2}} (TkSet. #{1 2})) (get {(TkSet. #{1 2}) :x} #{1 2}))
+      (prn (contains? #{(TkMoney. 1)} (TkMoney. 1)) (contains? #{(TkMoney. 1)} (TkMoney. 2)) (get {(TkMoney. 1) :x} (TkMoney. 1)) (get {(TkHeq. 1) :x} (TkHeq. 1)) (contains? #{(TkHeqOnly. 1)} (TkHeqOnly. 1)))
+      (let [a (TkMoney. 99) b (TkMoney. 99)]
+        (prn (identical? a (first (conj #{a} b))) (identical? a (key (first (assoc {a 1} b 2)))) (val (first (assoc {a 1} b 2))) (count (assoc {a 1} b 2)) (identical? pm (first (conj #{pm} m))) (instance? TkMap (first (conj #{m} pm))))
+        (prn (try (count #{a b}) (catch IllegalArgumentException e (ex-message e))) (try (count {a 1 b 2}) (catch IllegalArgumentException e (ex-message e)))))
+      (def bob #{(TkUser. 1 "bob")})
+      (prn (str (first #{(TkUser. 1 "ann")})) (str (first (conj bob (TkUser. 1 "ann")))) (contains? bob (TkUser. 1 "ann")) (str (key (first {(TkUser. 1 "cy") :c}))))
+      (prn (count (set [pm m])) (count (distinct [(TkMoney. 1) (TkMoney. 1)])) (sort (vals (frequencies [(TkMoney. 1) (TkMoney. 1) (TkMoney. 2)]))) (count (group-by identity [pm m])) (count (into #{} [(TkSeq. [1 2]) [1 2] '(1 2)])))
+      (def calls (atom 0))
+      (def memo (memoize (fn [x] (swap! calls inc) x)))
+      (memo (TkMoney. 1)) (memo (TkMoney. 1)) (memo pm) (memo m)
+      (prn @calls (count (dissoc {pm 1} m)) (count (disj #{(TkMoney. 1)} (TkMoney. 1))) (= #{(TkMoney. 1)} #{(TkMoney. 1)}) (= {pm 1} {m 1}) (get {[pm] :x} [m]) (contains? #{{:k (TkSeq. [1])}} {:k [1]}))
+      (prn (count (select-keys {(TkMoney. 1) :a} [(TkMoney. 1)])) (get-in {(TkMoney. 1) {:k :v}} [(TkMoney. 1) :k]) (get (update {(TkMoney. 1) 1} (TkMoney. 1) inc) (TkMoney. 1)) (count (merge {pm 1} {m 2})) (val (find {(TkMoney. 1) :a} (TkMoney. 1))))
+      (defmulti mm identity)
+      (defmethod mm (TkMoney. 7) [_] :seven)
+      (defmethod mm m [_] :map)
+      (prn (mm (TkMoney. 7)) (mm pm))
+      (deftype TkNoJ [m] clojure.lang.IPersistentMap (count [_] (count m)) (seq [_] (seq m)) (equiv [_ o] (= m o)) clojure.lang.MapEquivalence)
+      (prn (= (TkNoJ. {:a 1}) {:a 1}) (= {:a 1} (TkNoJ. {:a 1})))
+      (in-ns 'user)
+    expected: |
+      true true :found :found true false
+      true true true true false
+      true true :x
+      true false :x :x false
+      true true 2 1 true false
+      "Duplicate key: $99" "Duplicate key: $99"
+      "ann" "bob" true "cy"
+      1 1 (1 2) 1 1
+      2 0 0 true true :x true
+      1 :v 2 1 :a
+      :seven :map
+      true false
   - name: a-return-type-hint-on-a-parameter-vector-is-metadata
     # ^long [x] is reader metadata on the vector (the arity's return tag); it reads as the
     # vector in defn, defn-, fn, letfn, each arity of a multi-arity form, a protocol

@@ -642,4 +642,22 @@ class ClojureArmsTest {
 			.builds()).isTrue();
 	}
 
+	@Test
+	void theTypedKeyFamilyIsMadeByTheStoreOfAnIHashEqOrAnObjectRow() {
+		// a structural key's typed arms fold to the forms before typed keys unless a
+		// type may have a hash of its own: either store makes one
+		String arms = "(or (eq h :c%set) (rontolisp::%clojure-typed-key-p k))"
+				+ " (cond ((rontolisp::%clojure-typed-key-p x) (rontolisp::%clojure-typed-key-hash x)) (t 0))";
+		assertThat(ClojureArms.scan(read(arms), ClojureArms.Family.TYPED_KEY).strips()).isTrue();
+		assertThat(ClojureArms.strip(read(arms), ClojureArms.Family.TYPED_KEY).stream().map(LispVal::print))
+			.containsExactly("(EQ H :C%SET)", "(COND (T 0))");
+		for (String store : List.of("(rontolisp::%clojure-hasheq-row tag '(\"clojure.lang.IHashEq\") (list))",
+				"(rontolisp::%clojure-object-row tag nil (list \"hashCode\" f))")) {
+			assertThat(ClojureArms.scan(read(arms + store), ClojureArms.Family.TYPED_KEY).builds()).as(store).isTrue();
+		}
+		assertThat(ClojureArms
+			.scan(read(arms + "(rontolisp::%clojure-collection-row tag nil (list))"), ClojureArms.Family.TYPED_KEY)
+			.builds()).isFalse();
+	}
+
 }

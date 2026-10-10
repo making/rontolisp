@@ -124,3 +124,37 @@ seq を辿るイテレータを返し、`clojure.lang.MapEntry` はここでの�
 (reduce (fn [acc [k v]] (+ acc v)) 0 p) ; => 1
 (pr-str (dissoc (assoc p :b 2) :a)) ; => "{:b 2}"
 ```
+
+## マップのキーと集合の要素
+
+型自身がハッシュ（`IHashEq` の `hasheq`、`Object` の `hashCode`）と等価性
+（`IPersistentCollection` の `equiv`、`Object` の `equals`、またはコアのコレクションが読む
+マップ・集合・シーケンシャルのインタフェース）を定める値は、オラクルのハッシュマップと同じく、
+マップのキーや集合の要素として `=` で照合されます。マップ・集合・シーケンシャルの型の値は、
+それと `=` なコアのコレクションで検索でき、コアのコレクションを格納したマップや集合もその値で
+検索できます（集合の要素にした `data.priority-map` など）。それ以外の型の値は、その型の等価性が
+`=` と判定する値で検索できます。コアのキーと同じく、先に格納したキーが残ります。型自身が
+ハッシュを定めない値は同一性で照合されます。オラクルのハッシュマップも、そうした値を同一性に
+基づくハッシュで振り分けるためです。
+
+仕様との差異:ここではどのマップもオラクルのハッシュマップと同じ方法でキーを照合します。
+オラクルの配列マップ（8 エントリまで）はハッシュを使わずにキーを比べるので、型自身がハッシュを
+定めない値も `=` な値で検索でき、`java.util.Collection` でも `Map` でもない検索キーは `equals`
+だけで比べます。マップ・集合・シーケンシャルの型の値は `hasheq` ではなく中身で振り分けられる
+ため、`hasheq` が `=` と食い違う型の値も検索できます。それ以外の型の値は型自身のハッシュで
+振り分けられるため、その `equiv` が等しいと答えるコアのコレクションでは検索できません。
+
+```clojure
+(deftype Money [cents]
+  Object
+  (equals [_ o] (and (instance? Money o) (= cents (.-cents ^Money o))))
+  (hashCode [_] cents))
+(contains? #{(Money. 5)} (Money. 5)) ; => true
+(get {(Money. 5) :five} (Money. 5)) ; => :five
+(deftype Pair [a b]
+  clojure.lang.Sequential
+  clojure.lang.Seqable (seq [_] (list a b))
+  clojure.lang.IHashEq (hasheq [_] (hash [a b])))
+(contains? #{[1 2]} (Pair. 1 2)) ; => true
+(get {(Pair. 1 2) :pair} '(1 2)) ; => :pair
+```
