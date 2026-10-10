@@ -1,5 +1,6 @@
 package am.ik.rontolisp.clojure;
 
+import java.nio.charset.StandardCharsets;
 import java.util.List;
 
 import org.jspecify.annotations.Nullable;
@@ -41,6 +42,17 @@ public interface ClojureFiles {
 	 * @return its text, or {@code null} when there is none to read
 	 */
 	@Nullable String read(String path);
+
+	/**
+	 * Reads a file's octets, for a resource whose contents travel with the program as
+	 * they are. The default encodes what {@link #read} answers in UTF-8.
+	 * @param path the path, as {@link #resolve} built it
+	 * @return its octets, or {@code null} when there is none to read
+	 */
+	default byte @Nullable [] readBytes(String path) {
+		String text = read(path);
+		return text == null ? null : text.getBytes(StandardCharsets.UTF_8);
+	}
 
 	/**
 	 * The directory holding a path, absolute where the host has a working directory.
@@ -110,7 +122,7 @@ public interface ClojureFiles {
 	}
 
 	/**
-	 * The entry names of a jar, read in place.
+	 * The entry names of a jar, read in place; a directory entry's ends with {@code /}.
 	 * @param path the jar's path
 	 * @return the names, or {@code null} when the path names no readable jar (the
 	 * default)
@@ -127,6 +139,19 @@ public interface ClojureFiles {
 	 */
 	default @Nullable String readArchiveEntry(String archive, String entry) {
 		return null;
+	}
+
+	/**
+	 * Reads one entry of a jar's octets, for a resource whose contents travel with the
+	 * program as they are. The default encodes what {@link #readArchiveEntry} answers in
+	 * UTF-8.
+	 * @param archive the jar's path
+	 * @param entry the entry's name, one {@link #archiveEntries} gave
+	 * @return its octets, or {@code null} when it cannot be read
+	 */
+	default byte @Nullable [] readArchiveEntryBytes(String archive, String entry) {
+		String text = readArchiveEntry(archive, entry);
+		return text == null ? null : text.getBytes(StandardCharsets.UTF_8);
 	}
 
 	/**

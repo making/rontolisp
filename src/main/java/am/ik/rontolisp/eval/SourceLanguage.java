@@ -269,6 +269,19 @@ public enum SourceLanguage {
 			}
 
 			@Override
+			public byte @Nullable [] readBytes(String path) {
+				if (!loader.exists(path)) {
+					return null;
+				}
+				try {
+					return loader.loadBytes(path);
+				}
+				catch (IOException ex) {
+					return null;
+				}
+			}
+
+			@Override
 			public @Nullable String parent(String path) {
 				try {
 					java.nio.file.Path parent = java.nio.file.Path.of(path).toAbsolutePath().normalize().getParent();
@@ -324,6 +337,16 @@ public enum SourceLanguage {
 			public @Nullable String readArchiveEntry(String archive, String entry) {
 				try {
 					return loader.loadArchiveEntry(archive, entry);
+				}
+				catch (IOException ex) {
+					return null;
+				}
+			}
+
+			@Override
+			public byte @Nullable [] readArchiveEntryBytes(String archive, String entry) {
+				try {
+					return loader.loadArchiveEntryBytes(archive, entry);
 				}
 				catch (IOException ex) {
 					return null;

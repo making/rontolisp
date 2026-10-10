@@ -1229,7 +1229,7 @@
 
 (defun rontolisp::%clojure-zip-exception (message)
   "A refusal the oracle throws as a java.util.zip.ZipException: a compressed
-   reply that is not what its content coding says."
+   reply that is not what its content coding says, a jar that is no zip file."
   (rontolisp::%clojure-refuse '("java.util.zip.ZipException"
                                 "java.io.IOException" "java.lang.Exception"
                                 "java.lang.Throwable") message))
@@ -1238,6 +1238,14 @@
   "A refusal the oracle throws as a java.io.FileNotFoundException: a file it
    cannot open."
   (rontolisp::%clojure-refuse '("java.io.FileNotFoundException"
+                                "java.io.IOException" "java.lang.Exception"
+                                "java.lang.Throwable") message))
+
+(defun rontolisp::%clojure-no-such-file-exception (message)
+  "A refusal the oracle throws as a java.nio.file.NoSuchFileException: a file
+   that is not there, the jar a jar: URL names."
+  (rontolisp::%clojure-refuse '("java.nio.file.NoSuchFileException"
+                                "java.nio.file.FileSystemException"
                                 "java.io.IOException" "java.lang.Exception"
                                 "java.lang.Throwable") message))
 
@@ -17685,9 +17693,11 @@
 ;;;;   (:C%FILE path)              java.io.File; PATH normalized the way
 ;;;;                               java.io.File normalizes one on Unix
 ;;;;   (:C%URL spec)               java.net.URL: its spelling; a read takes the
-;;;;                               file a file: URL names, the text a resource
-;;;;                               found while lowering carries
-;;;;                               (%clojure-io-resources, by spelling), or the
+;;;;                               file a file: URL names, the contents a
+;;;;                               resource found while lowering keeps
+;;;;                               (%clojure-io-resources, by spelling), the
+;;;;                               entry a jar: URL names where the program looks
+;;;;                               a resource up over a jar when it runs, or the
 ;;;;                               reply to a GET of an http: or https: URL
 ;;;;                               where the program names rontolisp:fetch
 ;;;;   (:C%URI spec)               java.net.URI
@@ -17720,9 +17730,13 @@
 ;; oracle's slurp and spit call them.
 (defvar rontolisp::%clojure-io-factory nil)
 
-;; The text of each resource the lowering found, by its URL's spelling: a jar's
-;; entry travels with the program here, which no wasm backend could open. NIL
-;; until the first one is made.
+;; The contents of each resource the lowering found, by its URL's spelling, as
+;; #(text charset octets): TEXT the characters its octets decode to in CHARSET --
+;; :utf-8 where they are UTF-8, :latin-1 (a character an octet) where not, a
+;; jar's directory entry "" and :directory -- and OCTETS made from TEXT at the
+;; first read that takes them. A jar's entry travels with the program here,
+;; which a wasm backend reads only through a preopen. NIL until the first one is
+;; made.
 (defvar rontolisp::%clojure-io-resources nil)
 
 (defun rontolisp::%clojure-io-tag-p (tag)
@@ -18343,19 +18357,365 @@
   "clojure.java.io/as-file of the URI U: its URL's File."
   (rontolisp::%clojure-io-url-file (rontolisp::%clojure-io-uri-url u)))
 
+(defun rontolisp::%clojure-io-segments (s)
+  "The parts of the string S between its slashes, the empty ones included."
+  (let ((parts nil) (start 0))
+    (dotimes (i (length s))
+      (if (char= (char s i) #\/)
+          (progn
+            (setq parts (cons (subseq s start i) parts))
+            (setq start (+ i 1)))))
+    (reverse (cons (subseq s start) parts))))
+
+(defun rontolisp::%clojure-io-resource-path (root name)
+  "The path a class loader's file: URL names for the resource NAME below the
+   directory ROOT, an absolute path: ROOT, a slash and NAME, its . and ..
+   segments resolved as java.net.URL resolves them against ROOT's URL (an empty
+   segment kept, a trailing one leaving a slash); nil when a .. leads out of
+   ROOT."
+  (let* ((base
+          (if (and (> (length root) 0)
+                   (char= (char root (- (length root) 1)) #\/))
+              root
+              (concatenate 'string root "/")))
+         (out
+          (reverse
+           (rontolisp::%clojure-io-segments
+            (subseq base 0 (- (length base) 1)))))
+         (escaped nil))
+    (do ((rest (rontolisp::%clojure-io-segments name) (cdr rest)))
+        ((or escaped (null rest)))
+      (let ((segment (car rest)))
+        (cond ((or (string= segment ".") (string= segment ".."))
+               (if (string= segment "..")
+                   (if (cdr out) (setq out (cdr out)) (setq escaped t)))
+               (if (null (cdr rest)) (setq out (cons "" out))))
+              (t (setq out (cons segment out))))))
+    (if (not escaped)
+        (let ((s (make-string-output-stream)) (first t))
+          (dolist (segment (reverse out))
+            (if (not first) (write-char #\/ s))
+            (setq first nil)
+            (write-string segment s))
+          (let ((path (get-output-stream-string s)))
+            (if (and (>= (length path) (length base))
+                     (string= base (subseq path 0 (length base))))
+                path))))))
+
+(defun rontolisp::%clojure-io-root-resource (name root)
+  "The file: URL of the resource NAME below the directory ROOT when a file or a
+   directory is there, spelled as a class loader spells one below a directory
+   of its class path; else nil. A NAME starting with a slash, or whose ..
+   leads out of ROOT, names nothing there; the empty one names ROOT itself."
+  (if (and (stringp name)
+           (not (and (> (length name) 0) (char= (char name 0) #\/))))
+      (let ((path (rontolisp::%clojure-io-resource-path root name)))
+        (if (and path
+                 (rontolisp::%clojure-io-exists-p
+                  (rontolisp::%clojure-io-file
+                                               ;; the file a class loader opens: NAME below ROOT as spelled,
+                                               ;; or with its dot segments resolved where a .. is among them
+                                               (if (search ".." name)
+                                                   path
+                                                   (rontolisp::%clojure-io-resolve
+                                                    root name)))))
+            (list :C%URL (concatenate 'string "file:"
+                          (rontolisp::%clojure-io-uri-encode path)))))))
+
 (defun rontolisp::%clojure-io-resource (name roots)
-  "clojure.java.io/resource of a NAME the lowering could not read: the file:
-   URL of the first of the directory ROOTS holding it, else nil."
+  "clojure.java.io/resource of a NAME the lowering could not read, over a
+   source path holding no jar: the file: URL of the first of the directory
+   ROOTS holding a file or a directory of the name, else nil."
   (let ((found nil))
-    (if (and (stringp name) (> (length name) 0) (not (char= (char name 0) #\/)))
+    (dolist (root roots)
+      (if (null found)
+          (setq found (rontolisp::%clojure-io-root-resource name root))))
+    found))
+
+(defun rontolisp::%clojure-io-directory-entry-p (url)
+  "ring.util.response's jar-directory? of the jar: URL URL: whether it names a
+   directory entry of its jar -- one the lowering kept as a directory, or, read
+   from the jar when the program runs, one its name and a slash name."
+  (let ((kept (rontolisp::%clojure-io-kept url)))
+    (cond (kept (eq (svref kept 1) :directory))
+          ;; a jar read when the program runs: an arm a program looking no
+          ;; resource up over a jar folds
+          ((rontolisp::%clojure-io-jar-p url)
+           (rontolisp::%clojure-io-jar-names-directory-p url))
+          (t nil))))
+
+;;;; Jars read when the program runs
+;;;;
+;;;; A program looking a resource name up when it runs, over a source path that
+;;;; holds a jar (%clojure-io-jar-resource), searches the jar's entries in the
+;;;; jar's place among the roots, and a read of the jar: URL it answers opens the
+;;;; entry from the jar as java.util.zip.ZipFile reads one: the central
+;;;; directory once (the end record found from the end of the file, the zip64
+;;;; one where its fields overflow), an entry's octets after its local header,
+;;;; inflated when deflated (rontolisp::%inflate-new, the decoder the HTTP client
+;;;; reads a compressed reply through). Only such a program carries any of this:
+;;;; the definitions named %clojure-io-jar- are the jar family's own
+;;;; (clojure/ClojureArms), which go with its arms -- they name read-sequence and
+;;;; a two-argument file-position, which passes ahead of the pruner read by name.
+
+;; Each jar read so far, by path: the table of its entries, the message of the
+;; oracle's refusal when the file there is no zip, :missing when no file is.
+;; Read and filled under the guard: a Ring handler runs one thread per request on
+;; the interpreter and the JVM, so two may look a resource up at once.
+(defvar rontolisp::%clojure-io-jar-cache (make-hash-table :test 'equal))
+
+(defvar rontolisp::%clojure-io-jar-guard (rontolisp:make-mutex))
+
+(defun rontolisp::%clojure-io-jar-u16 (v i)
+  "The little-endian 16-bit field of the octets V at I."
+  (+ (aref v i) (* 256 (aref v (+ i 1)))))
+
+(defun rontolisp::%clojure-io-jar-u32 (v i)
+  "The little-endian 32-bit field of the octets V at I."
+  (+ (rontolisp::%clojure-io-jar-u16 v i)
+     (* 65536 (rontolisp::%clojure-io-jar-u16 v (+ i 2)))))
+
+(defun rontolisp::%clojure-io-jar-u64 (v i)
+  "The little-endian 64-bit field of the octets V at I."
+  (+ (rontolisp::%clojure-io-jar-u32 v i)
+     (* 4294967296 (rontolisp::%clojure-io-jar-u32 v (+ i 4)))))
+
+(defun rontolisp::%clojure-io-jar-signature-p (v i b2 b3)
+  "Whether the octets V hold the zip signature P K B2 B3 at I."
+  (and (= (aref v i) 80) (= (aref v (+ i 1)) 75) (= (aref v (+ i 2)) b2)
+       (= (aref v (+ i 3)) b3)))
+
+(defun rontolisp::%clojure-io-jar-read (s at n)
+  "N octets of the binary file stream S from the octet AT, as one fresh vector,
+   or nil when the file holds no such run."
+  (if (and (>= at 0) (<= (+ at n) (file-length s)))
+      (let ((v (make-array n :element-type '(unsigned-byte 8))))
+        (file-position s at)
+        (if (= (read-sequence v s) n) v))))
+
+(defun rontolisp::%clojure-io-jar-end (v)
+  "Where the octets V, a zip file's tail, hold its end of central directory
+   record -- the last one whose comment ends the file -- or nil."
+  (let ((found nil) (i (- (length v) 22)))
+    (loop
+      (if (or found (< i 0)) (return found))
+      (if (and (rontolisp::%clojure-io-jar-signature-p v i 5 6)
+           (= (+ i 22 (rontolisp::%clojure-io-jar-u16 v (+ i 20))) (length v)))
+          (setq found i))
+      (setq i (- i 1)))))
+
+(defun rontolisp::%clojure-io-jar-entries (path)
+  "The entries of the jar at PATH, read once: an equal table from each entry's
+   name (a directory's ending in /) to #(at method size length) -- AT where
+   its local header starts, METHOD 0 stored or 8 deflated, SIZE the octets it
+   takes in the jar, LENGTH the octets it holds; the message of the oracle's
+   ZipException when the file there is no zip, :missing when no file is."
+  (rontolisp:with-mutex (rontolisp::%clojure-io-jar-guard)
+    (or (gethash path rontolisp::%clojure-io-jar-cache)
+        (setf (gethash path rontolisp::%clojure-io-jar-cache)
+              (cond ((rontolisp::%clojure-io-regular-p (list :C%FILE path))
+                     (with-open-file (s path :element-type '(unsigned-byte 8))
+                       (rontolisp::%clojure-io-jar-directory s)))
+                    ((rontolisp::%clojure-io-exists-p (list :C%FILE path))
+                     "zip END header not found")
+                    (t :missing))))))
+
+(defun rontolisp::%clojure-io-jar-directory (s)
+  "The entries of the zip file the binary stream S reads, as
+   %clojure-io-jar-entries answers them, from its central directory."
+  (let* ((len (file-length s))
+         (from (max 0 (- len 65557)))
+         (tail (rontolisp::%clojure-io-jar-read s from (- len from)))
+         (e (if tail (rontolisp::%clojure-io-jar-end tail))))
+    (if (null e)
+        "zip END header not found"
+        (let* ((at (+ from e))
+               (count (rontolisp::%clojure-io-jar-u16 tail (+ e 10)))
+               (size (rontolisp::%clojure-io-jar-u32 tail (+ e 12)))
+               (offset (rontolisp::%clojure-io-jar-u32 tail (+ e 16))))
+          (rontolisp::%clojure-io-jar-central s
+           (or (if (or (= count 65535) (= size 4294967295)
+                       (= offset 4294967295))
+                   (rontolisp::%clojure-io-jar-zip64 s at))
+               (vector at count size offset)))))))
+
+(defun rontolisp::%clojure-io-jar-zip64 (s at)
+  "#(at count size offset) of the zip64 end record the locator just ahead of
+   the end record at AT names, or nil when none does."
+  (let ((locator (rontolisp::%clojure-io-jar-read s (- at 20) 20)))
+    (if (and locator (rontolisp::%clojure-io-jar-signature-p locator 0 6 7))
+        (let* ((at64 (rontolisp::%clojure-io-jar-u64 locator 8))
+               (end64 (rontolisp::%clojure-io-jar-read s at64 56)))
+          (if (and end64 (rontolisp::%clojure-io-jar-signature-p end64 0 6 6))
+              (vector at64 (rontolisp::%clojure-io-jar-u64 end64 32)
+                      (rontolisp::%clojure-io-jar-u64 end64 40)
+                      (rontolisp::%clojure-io-jar-u64 end64 48)))))))
+
+(defun rontolisp::%clojure-io-jar-central (s end)
+  "The entries of the central directory the end record END
+   (#(at count size offset)) of the zip file S describes: the directory ends
+   where the record starts and the archive starts OFFSET octets before the
+   directory, so octets put ahead of the archive shift every local header."
+  (let* ((at (svref end 0))
+         (size (svref end 2))
+         (cd (rontolisp::%clojure-io-jar-read s (- at size) size)))
+    (if (null cd)
+        "invalid END header (bad central directory offset)"
+        (let ((shift (- at size (svref end 3)))
+              (table (make-hash-table :test 'equal))
+              (p 0))
+          (dotimes (k (svref end 1))
+            (if p (setq p (rontolisp::%clojure-io-jar-cen cd p shift table))))
+          (if p table "invalid CEN header (bad signature)")))))
+
+(defun rontolisp::%clojure-io-jar-cen (cd p shift table)
+  "Puts the central directory entry at P of the octets CD into TABLE, its local
+   header SHIFT octets on; answers where the next entry starts, nil when no
+   entry is at P."
+  (if (and (<= (+ p 46) (length cd))
+           (rontolisp::%clojure-io-jar-signature-p cd p 1 2))
+      (let* ((start (+ p 46))
+             (end (+ start (rontolisp::%clojure-io-jar-u16 cd (+ p 28)))))
+        (if (<= end (length cd))
+            (progn
+              (setf (gethash
+                     (rontolisp::%octets-to-string (subseq cd start end)) table)
+                    (vector
+                     (+ shift (rontolisp::%clojure-io-jar-u32 cd (+ p 42)))
+                     (rontolisp::%clojure-io-jar-u16 cd (+ p 10))
+                     (rontolisp::%clojure-io-jar-u32 cd (+ p 20))
+                     (rontolisp::%clojure-io-jar-u32 cd (+ p 24))))
+              (+ end (rontolisp::%clojure-io-jar-u16 cd (+ p 30))
+                 (rontolisp::%clojure-io-jar-u16 cd (+ p 32))))))))
+
+(defun rontolisp::%clojure-io-jar-entry (entries name)
+  "The entry NAME of a jar's ENTRIES as java.util.zip.ZipFile.getEntry finds
+   one: of that name, else a directory's of that name and a slash."
+  (or (gethash name entries)
+      (if (and (> (length name) 0)
+               (not (char= (char name (- (length name) 1)) #\/)))
+          (gethash (concatenate 'string name "/") entries))))
+
+(defun rontolisp::%clojure-io-jar-octets (path entry)
+  "The octets the entry ENTRY (#(at method size length)) of the jar at PATH
+   holds, inflated when deflated, as one (unsigned-byte 8) vector."
+  (with-open-file (s path :element-type '(unsigned-byte 8))
+    (let* ((at (svref entry 0))
+           (head (rontolisp::%clojure-io-jar-read s at 30))
+           (data
+            (if (and head (rontolisp::%clojure-io-jar-signature-p head 0 3 4))
+                (rontolisp::%clojure-io-jar-read s
+                 (+ at 30 (rontolisp::%clojure-io-jar-u16 head 26)
+                    (rontolisp::%clojure-io-jar-u16 head 28))
+                 (svref entry 2)))))
+      (cond
+       ((null data)
+        (rontolisp::%clojure-zip-exception
+         "invalid LOC header (bad signature)"))
+       ((= (svref entry 1) 0) data)
+       ((= (svref entry 1) 8)
+        (let* ((decoder (rontolisp::%inflate-new 0))
+               (out (rontolisp::%inflate-update decoder data nil)))
+          (cond ((stringp out) (rontolisp::%clojure-zip-exception out))
+                ((rontolisp::%inflate-finish decoder)
+                 (rontolisp::%clojure-io-exception
+                  "Unexpected end of ZLIB input stream"))
+                (t out))))
+       (t (rontolisp::%clojure-zip-exception "invalid compression method"))))))
+
+(defun rontolisp::%clojure-io-jar-place (u)
+  "Where the jar: URL U points, (path . name): the path of the jar its file:
+   URL before !/ names and the entry's name after it, percent-decoded, its ref
+   left out, as java.net.JarURLConnection parses one. A URL with no !/ is the
+   oracle's MalformedURLException, a jar on no file system refused by name."
+  (let* ((spec (car (cdr u)))
+         (hash (position #\# spec))
+         (body (subseq spec 4 (or hash (length spec))))
+         (bang (search "!/" body)))
+    (cond
+     ((null bang) (rontolisp::%clojure-malformed-url-exception "no !/ in spec"))
+     ((not (equal (rontolisp::%clojure-io-scheme body) "file"))
+      (rontolisp::%clojure-unsupported-operation-exception
+       (concatenate 'string "reading the jar: URL " spec
+                    " is not built in: only a jar on the file system is read")))
+     (t (cons
+         (rontolisp::%clojure-io-path
+          (rontolisp::%clojure-io-url-file (list :C%URL (subseq body 0 bang))))
+         (rontolisp::%clojure-io-percent-decode (subseq body (+ bang 2))))))))
+
+;; Whether X -- a URL, a URI or a string spelling one -- is a jar: URL whose
+;; entry the program reads from its jar when it runs: no resource the lowering
+;; found keeps its contents. The arm test of the jar family
+;; (clojure/ClojureArms), whose one producer is a lookup over a source path
+;; holding a jar: a program making none folds it, and a read of such a URL is
+;; refused by name there (%clojure-io-target).
+(defun rontolisp::%clojure-io-jar-p (x)
+  (let ((u (rontolisp::%clojure-io-url-value x)))
+    (and u (equal (car (rontolisp::%clojure-io-url-parts u)) "jar")
+         (null (rontolisp::%clojure-io-kept u)))))
+
+(defun rontolisp::%clojure-io-jar-input (x)
+  "A byte stream over the entry the jar: URL X names, read from its jar as
+   java.net.JarURLConnection opens one: a missing jar is the oracle's
+   NoSuchFileException, a file that is no zip its ZipException, an entry the
+   jar does not hold its FileNotFoundException, a URL naming no entry its
+   IOException."
+  (let* ((place
+          (rontolisp::%clojure-io-jar-place
+           (rontolisp::%clojure-io-url-value x)))
+         (entries (rontolisp::%clojure-io-jar-entries (car place))))
+    (cond ((eq entries :missing)
+           (rontolisp::%clojure-no-such-file-exception (car place)))
+          ((stringp entries) (rontolisp::%clojure-zip-exception entries))
+          ((= (length (cdr place)) 0)
+           (rontolisp::%clojure-io-exception "no entry name specified"))
+          (t
+           (let ((entry (rontolisp::%clojure-io-jar-entry entries (cdr place))))
+             (if (null entry)
+                 (rontolisp::%clojure-file-not-found-exception
+                  "JAR entry not found in jar file")
+                 (rontolisp::%clojure-io-octets-input
+                  (rontolisp::%clojure-io-jar-octets (car place) entry))))))))
+
+(defun rontolisp::%clojure-io-jar-names-directory-p (url)
+  "Whether the jar: URL URL names a directory entry of its jar: one its name
+   and a slash name, as ring.util.response's jar-directory? asks."
+  (let* ((place
+          (rontolisp::%clojure-io-jar-place
+           (rontolisp::%clojure-io-url-value url)))
+         (entries (rontolisp::%clojure-io-jar-entries (car place)))
+         (name (cdr place)))
+    (if (and (hash-table-p entries)
+             (gethash (if (and (> (length name) 0)
+                               (char= (char name (- (length name) 1)) #\/))
+                          name
+                          (concatenate 'string name "/")) entries))
+        t)))
+
+(defun rontolisp::%clojure-io-jar-root-resource (name path)
+  "The jar: URL of the resource NAME in the jar at PATH when the jar holds an
+   entry of it, or a directory entry of it and a slash; else nil."
+  (let ((entries (rontolisp::%clojure-io-jar-entries path)))
+    (if (and (hash-table-p entries)
+             (rontolisp::%clojure-io-jar-entry entries name))
+        (list :C%URL (concatenate 'string "jar:file:"
+                                  (rontolisp::%clojure-io-uri-encode path) "!/"
+                                  (rontolisp::%clojure-io-uri-encode name))))))
+
+(defun rontolisp::%clojure-io-jar-resource (name roots)
+  "clojure.java.io/resource of a NAME the lowering could not read, over a
+   source path holding a jar: the URL of the first of ROOTS holding it -- a
+   directory's file: URL, a jar's jar: URL (a jar's root is the list of its
+   path) -- else nil."
+  (let ((found nil))
+    (if (stringp name)
         (dolist (root roots)
           (if (null found)
-              (let ((path (rontolisp::%clojure-io-resolve root name)))
-                (if (rontolisp::%clojure-io-regular-p (list :C%FILE path))
-                    (setq found
-                          (list :C%URL (concatenate 'string "file:"
-                                        (rontolisp::%clojure-io-uri-encode
-                                         path)))))))))
+              (setq found
+                    (if (consp root)
+                        (rontolisp::%clojure-io-jar-root-resource name
+                                                                  (car root))
+                        (rontolisp::%clojure-io-root-resource name root))))))
     found))
 
 ;;;; Byte streams
@@ -18966,10 +19326,21 @@
            (rontolisp::%clojure-io-not-found path "No such file or directory"))
           (t path))))
 
-(defun rontolisp::%clojure-io-url-text (x)
-  "The text a URL found while lowering carries, else nil."
-  (if (and rontolisp::%clojure-io-resources (consp x) (eq (car x) :C%URL))
-      (gethash (car (cdr x)) rontolisp::%clojure-io-resources)))
+(defun rontolisp::%clojure-io-kept (x)
+  "The contents kept for X -- a URL, a URI or a string spelling one -- when a
+   resource the lowering found has its spelling, #(text charset octets); else
+   nil."
+  (if rontolisp::%clojure-io-resources
+      (let ((u (rontolisp::%clojure-io-url-value x)))
+        (if u (gethash (car (cdr u)) rontolisp::%clojure-io-resources)))))
+
+(defun rontolisp::%clojure-io-kept-octets (kept)
+  "The octets of the contents KEPT, made from its text at the first read that
+   takes them."
+  (or (svref kept 2)
+      (setf (svref kept 2)
+            (rontolisp::%clojure-octets-of-text (svref kept 0)
+             (if (eq (svref kept 1) :latin-1) :latin-1 :utf-8)))))
 
 ;;;; http: and https: URLs, read through rontolisp:fetch
 ;;;;
@@ -19098,26 +19469,29 @@
               (t (return res)))))))
 
 (defun rontolisp::%clojure-io-open-input (x)
-  "make-input-stream of X: a byte stream over the file X names, over the text
-   a resource carries, or X itself when it is one; nil for anything else."
+  "make-input-stream of X: a byte stream over the file X names, over the
+   contents a resource keeps, over the entry a jar: URL names, or X itself when
+   it is one; nil for anything else."
   ;; a byte array is read in place, as a ByteArrayInputStream reads it: an arm a
   ;; program making none folds
-  (let ((text (rontolisp::%clojure-io-url-text x)))
+  (let ((kept (rontolisp::%clojure-io-kept x)))
     (cond ((and (consp x) (eq (car x) :C%INPUT-STREAM)) x)
-          ((rontolisp::%clojure-bytes-p x)
-           (rontolisp::%clojure-io-octets-input (car (cdr x))))
-          (text (rontolisp::%clojure-io-octets-input
-                 (coerce (rontolisp::%clojure-io-encode text :utf-8) 'vector)))
-          ;; an http: or https: URL, its reply as it arrives: an arm a program
-          ;; that fetches nothing folds
-          ((rontolisp::%clojure-io-remote-p x)
-           (rontolisp::%clojure-io-remote-input x
-                                                "java.io.BufferedInputStream"))
-          (t (let ((path (rontolisp::%clojure-io-target x nil)))
-               (if path
-                   (rontolisp::%clojure-io-input
-                    (open (rontolisp::%clojure-io-check-readable path)
-                          :element-type '(unsigned-byte 8)))))))))
+     ((rontolisp::%clojure-bytes-p x)
+      (rontolisp::%clojure-io-octets-input (car (cdr x))))
+     (kept (rontolisp::%clojure-io-octets-input
+            (rontolisp::%clojure-io-kept-octets kept)))
+     ;; a jar's entry read when the program runs: an arm a program looking
+     ;; no resource up over a jar folds
+     ((rontolisp::%clojure-io-jar-p x) (rontolisp::%clojure-io-jar-input x))
+     ;; an http: or https: URL, its reply as it arrives: an arm a program
+     ;; that fetches nothing folds
+     ((rontolisp::%clojure-io-remote-p x)
+      (rontolisp::%clojure-io-remote-input x "java.io.BufferedInputStream"))
+     (t (let ((path (rontolisp::%clojure-io-target x nil)))
+          (if path
+              (rontolisp::%clojure-io-input
+               (open (rontolisp::%clojure-io-check-readable path)
+                     :element-type '(unsigned-byte 8)))))))))
 
 (defun rontolisp::%clojure-io-octets-left (state)
   "The octets left on the open byte stream of STATE, as one (unsigned-byte 8)
@@ -19210,17 +19584,11 @@
 
 (defun rontolisp::%clojure-io-resource-urls (name roots)
   "ClassLoader.getResources of NAME below the directory ROOTS: the file: URL
-   of each root holding it, a file or a directory, in root order (a
-   directory's with its trailing slash)."
+   of each root holding a file or a directory of the name, in root order."
   (let ((acc nil))
-    (if (and (stringp name)
-             (not (and (> (length name) 0) (char= (char name 0) #\/))))
-        (dolist (root roots)
-          (let ((f
-                 (rontolisp::%clojure-io-file
-                  (rontolisp::%clojure-io-resolve root name))))
-            (if (rontolisp::%clojure-io-exists-p f)
-                (setq acc (cons (rontolisp::%clojure-io-file-url f) acc))))))
+    (dolist (root roots)
+      (let ((url (rontolisp::%clojure-io-root-resource name root)))
+        (if url (setq acc (cons url acc)))))
     (reverse acc)))
 
 (defun rontolisp::%clojure-io-open-output (x append)
@@ -19278,11 +19646,11 @@
 
 (defun rontolisp::%clojure-io-open-reader (x encoding)
   "make-reader of X: a character input stream over the file X names (a plain
-   file stream in UTF-8, decoded at once in another charset), over the text a
-   resource carries, over the byte stream X, or X itself when it is a reader;
-   nil for anything else."
+   file stream in UTF-8, decoded at once in another charset), over the
+   contents a resource keeps or the entry a jar: URL names, over the byte
+   stream X, or X itself when it is a reader; nil for anything else."
   (let ((charset (rontolisp::%clojure-io-charset encoding))
-        (text (rontolisp::%clojure-io-url-text x)))
+        (kept (rontolisp::%clojure-io-kept x)))
     (cond ((rontolisp::%clojure-io-character-stream-p x t) x)
           ((and (consp x) (eq (car x) :C%INPUT-STREAM))
            (rontolisp::%clojure-io-decoded-reader x charset))
@@ -19291,7 +19659,17 @@
           ((rontolisp::%clojure-bytes-p x)
            (rontolisp::%clojure-io-decoded-reader
             (rontolisp::%clojure-io-octets-input (car (cdr x))) charset))
-          (text (make-string-input-stream text))
+          ;; the text kept is the contents decoded in its own charset
+          (kept (if (eq (svref kept 1) charset)
+                    (make-string-input-stream (svref kept 0))
+                    (rontolisp::%clojure-io-decoded-reader
+                     (rontolisp::%clojure-io-octets-input
+                      (rontolisp::%clojure-io-kept-octets kept)) charset)))
+          ;; a jar's entry read when the program runs: an arm a program looking
+          ;; no resource up over a jar folds
+          ((rontolisp::%clojure-io-jar-p x)
+           (rontolisp::%clojure-io-decoded-reader
+            (rontolisp::%clojure-io-jar-input x) charset))
           ;; an http: or https: URL's reply, decoded in CHARSET whatever its own
           ;; says: an arm a program that fetches nothing folds
           ((rontolisp::%clojure-io-remote-p x)
@@ -19633,12 +20011,20 @@
       (eq (rontolisp::%clojure-io-kind x) :C%URI)
       (rontolisp::%clojure-host-instance-p x "java.net.URI")))
 
-(defun rontolisp::%clojure-io-url-found (spec text)
-  "The URL of a resource the lowering found: its spelling, its TEXT kept for
-   a read to take."
-  (if (null rontolisp::%clojure-io-resources)
-      (setq rontolisp::%clojure-io-resources (make-hash-table :test 'equal)))
-  (setf (gethash spec rontolisp::%clojure-io-resources) text)
+(defun rontolisp::%clojure-io-url-found (spec text charset)
+  "The URL of a resource the lowering found, its spelling SPEC, with its
+   contents kept for a read to take: TEXT, the characters its octets decode to
+   in CHARSET (:utf-8, :latin-1, or :directory for a jar's directory entry); a
+   TEXT of nil keeps nothing, a directory a read takes from the file system."
+  (if text
+      (progn
+        (if (null rontolisp::%clojure-io-resources)
+            (setq rontolisp::%clojure-io-resources
+                  (make-hash-table :test 'equal)))
+        (let ((kept (gethash spec rontolisp::%clojure-io-resources)))
+          (if (not (and kept (eq (svref kept 0) text)))
+              (setf (gethash spec rontolisp::%clojure-io-resources)
+                    (vector text charset nil))))))
   (list :C%URL spec))
 
 (defun rontolisp::%clojure-io-literal-path (x)

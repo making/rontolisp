@@ -90,8 +90,14 @@ final class ClojureRefusals {
 	static final String FILE_NOT_FOUND = "RONTOLISP::%CLOJURE-FILE-NOT-FOUND-EXCEPTION";
 
 	/**
+	 * {@code java.nio.file.NoSuchFileException}: the jar a {@code jar:} URL names, not
+	 * there.
+	 */
+	static final String NO_SUCH_FILE = "RONTOLISP::%CLOJURE-NO-SUCH-FILE-EXCEPTION";
+
+	/**
 	 * {@code java.util.zip.ZipException}: a compressed reply that is not what its content
-	 * coding says ({@code rontolisp.http-client}).
+	 * coding says ({@code rontolisp.http-client}), a jar that is no zip file.
 	 */
 	static final String ZIP = "RONTOLISP::%CLOJURE-ZIP-EXCEPTION";
 
@@ -197,7 +203,8 @@ final class ClojureRefusals {
 			Map.entry(PATTERN_SYNTAX, "java.util.regex.PatternSyntaxException"),
 			Map.entry(ILLEGAL_FORMAT_CONVERSION, "java.util.IllegalFormatConversionException"),
 			Map.entry(ASSERTION_ERROR, "java.lang.AssertionError"), Map.entry(IO, "java.io.IOException"),
-			Map.entry(FILE_NOT_FOUND, "java.io.FileNotFoundException"), Map.entry(ZIP, "java.util.zip.ZipException"),
+			Map.entry(FILE_NOT_FOUND, "java.io.FileNotFoundException"),
+			Map.entry(NO_SUCH_FILE, "java.nio.file.NoSuchFileException"), Map.entry(ZIP, "java.util.zip.ZipException"),
 			Map.entry(UNSUPPORTED_ENCODING, "java.io.UnsupportedEncodingException"),
 			Map.entry(MALFORMED_URL, "java.net.MalformedURLException"),
 			Map.entry(PROTOCOL, "java.net.ProtocolException"), Map.entry(SAX_PARSE, "org.xml.sax.SAXParseException"),

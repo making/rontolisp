@@ -122,16 +122,18 @@
     (when-not (.isDirectory file)
       (file-data file))))
 
-;; A jar's entry is the text clojure.java.io/resource found while the program
-;; lowered, which names no directory; its date is the jar's own, as a
-;; JarURLConnection answers.
+;; A jar's entry is what clojure.java.io/resource found while the program
+;; lowered, or read from the jar when it runs; a directory entry is none, as
+;; jar-directory? answers. Its date is the jar's own, as a JarURLConnection
+;; answers.
 (defmethod resource-data :jar
   [url]
-  (let [content  (io-kernel/open-input url)
-        last-mod (.lastModified (jar-file url))]
-    {:content        content
-     :content-length (.available content)
-     :last-modified  (when-not (zero? last-mod) (kernel/date last-mod))}))
+  (when-not (io-kernel/directory-entry? url)
+    (let [content  (io-kernel/open-input url)
+          last-mod (.lastModified (jar-file url))]
+      {:content        content
+       :content-length (.available content)
+       :last-modified  (when-not (zero? last-mod) (kernel/date last-mod))})))
 
 (defn url-response
   "Return a response for the supplied URL."

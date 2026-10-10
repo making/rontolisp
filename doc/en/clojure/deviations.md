@@ -339,8 +339,7 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
 - The built-in [Ring utilities](reference/ring-util.md) name a charset by a string (UTF-8,
   ISO-8859-1, US-ASCII and the JDK's aliases for them; any other is refused), have
   `ring.util.request/body-string` as a function rather than an extensible multimethod,
-  and read only ASCII digits in `content-length`. The file responses find no resource
-  computed at run time inside a jar.
+  and read only ASCII digits in `content-length`.
 - A sorted map or set orders, prints and finds keys like the oracle's, but every verb
   copies it (an association costs the collection's size, like a hash map's); `class`
   answers `:map`/`:set`; a `subseq` or

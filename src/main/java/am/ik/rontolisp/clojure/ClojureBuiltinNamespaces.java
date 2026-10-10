@@ -134,12 +134,18 @@ final class ClojureBuiltinNamespaces {
 	 * keeps none. {@code ring.util.codec}'s base64 pair takes and answers a byte array,
 	 * so every program that could make one carries the byte-array family's arms
 	 * ({@link ClojureBytesLowering}); as a part, only a program naming one of them does.
+	 * {@code clojure.java.io}'s {@code resource} looks a name computed at run time up
+	 * below the source path's roots, and where a jar is among them its lookup carries the
+	 * jar reader ({@link ClojureArms.Family#JAR}); as a part, a program naming it only
+	 * with string literals, which the lowering finds itself
+	 * ({@link ClojureIoLowering#literalResource}), carries no lookup at all.
 	 */
 	private static final Map<String, Part> PARTS = Map.of("ring.util.response",
 			new Part("ring/util/response_files.clj",
 					Set.of("file-response", "url-response", "resource-response", "resource-data")),
 			"clojure.walk", new Part("clojure/walk_macroexpand.clj", Set.of("macroexpand-all")), "ring.util.codec",
-			new Part("ring/util/codec_base64.clj", Set.of("base64-encode", "base64-decode")));
+			new Part("ring/util/codec_base64.clj", Set.of("base64-encode", "base64-decode")), "clojure.java.io",
+			new Part("clojure/java/io_resource.clj", Set.of("resource")));
 
 	/**
 	 * The part of a shipped namespace defining the var.

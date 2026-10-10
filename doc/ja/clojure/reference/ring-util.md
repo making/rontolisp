@@ -67,10 +67,10 @@ Hello, Jürgen!
 ない場合と、パスが `:root` の外に出る場合は `nil` を返します。ディレクトリは、
 `:index-files?` が偽でなければ、その `index.html`、`index.htm`、または最初の `index.*` を
 返します。`resource-response` はソースパスのリソース（[clojure.java.io](clojure-java-io.md)
-のリソースを探すディレクトリにあるファイル）について、`url-response` は
+のリソースを探すディレクトリのファイルと jar のエントリ）について、`url-response` は
 `clojure.java.io/resource` の URL について同じことをし、`resource-data` はそれらが読む
-マップを返します。jar のリソースはバイトストリームです。[Ring アダプター](ring.md)は
-どちらのボディもそのまま送ります。この 4 つは、プログラムが最初にどれかの名前を挙げた
+マップを返します。jar のリソースはそのバイト列を読むバイトストリームで、ディレクトリには
+`nil` を返します。[Ring アダプター](ring.md)はどちらのボディもそのまま送ります。この 4 つは、プログラムが最初にどれかの名前を挙げた
 ところで `ring.util.response` に読み込むので、名前を挙げないプログラムはそのコードを
 持ちません。
 
@@ -110,10 +110,6 @@ nil
   パスが相対パスなら相対パスのまま扱います（WASM バックエンドは作業ディレクトリを
   知りません）。2 つの WASM バックエンドでは、絶対パスを指すリンクはたどりません（WASI
   ホストが拒否します）。そのためファイルは見つかりません。
-- `resource-response` はソースパスのディレクトリにあるリソースだけを見つけます。実行時に
-  組み立てた名前は jar の中では見つかりません（[clojure.java.io](clojure-java-io.md)）。
-  jar のリソースは、名前をリテラルで書いた `clojure.java.io/resource` を `url-response` に
-  渡せば配信できます。
 - `resource-data` のメソッドは `:file` と `:jar` です。ほかのプロトコルの URL は、ここでの
   すべての[マルチメソッド](defmulti.md)と同じ文言で
   `No method in resource-data for dispatch value: :http` を通知します。

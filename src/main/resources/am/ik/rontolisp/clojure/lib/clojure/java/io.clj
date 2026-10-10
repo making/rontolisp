@@ -131,13 +131,8 @@
   (when-let [parent (k/parent-file (apply file f more))]
     (k/mkdirs parent)))
 
-(defn resource
-  "The URL of the file n names below the source path, or nil. A name written
-  as a string literal is read when the program lowers and travels with it; any
-  other is looked up when it runs, below the source path's directories. A
-  class loader given is not consulted."
-  ([n] (k/resource n))
-  ([n _loader] (k/resource n)))
+;; resource is a part of the namespace (io_resource.clj), loaded where a program
+;; first names it
 
 ;; slurp and spit open what no path names through reader and writer, as the
 ;; oracle's do: a type a program extends IOFactory to included

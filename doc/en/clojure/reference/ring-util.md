@@ -65,10 +65,11 @@ Hello, Jürgen!
 `:root`, with Ring's `Content-Length` and `Last-Modified` headers, or `nil` when there is no
 such file or the path leaves `:root`; a directory answers its `index.html`, `index.htm` or
 first `index.*` unless `:index-files?` is false. `resource-response` does the same for a
-resource of the source path (a file of a directory the
+resource of the source path (a file of a directory or an entry of a jar the
 [clojure.java.io](clojure-java-io.md) resources come from), `url-response` for a
 `clojure.java.io/resource` URL, and `resource-data` answers the map they read. A jar's
-resource is a byte stream. The [Ring adapter](ring.md) sends either body as it is. These four
+resource is a byte stream over its octets, and a directory answers `nil`. The
+[Ring adapter](ring.md) sends either body as it is. These four
 load into `ring.util.response` where a program first names one, so a program naming none
 carries none of their code.
 
@@ -108,10 +109,6 @@ program names them:
   where the file's path is (no WASM backend knows the working directory). On both WASM
   backends a link whose target is absolute is not followed (the WASI host refuses it), so
   the file is not found.
-- `resource-response` finds a resource in a directory of the source path only: a name
-  computed at run time is never found inside a jar ([clojure.java.io](clojure-java-io.md)).
-  A jar's resource is served through `url-response` of a `clojure.java.io/resource` whose
-  name is a literal.
 - `resource-data` has the `:file` and `:jar` methods; a URL of another protocol signals
   `No method in resource-data for dispatch value: :http`, the words of every
   [multimethod](defmulti.md) here.

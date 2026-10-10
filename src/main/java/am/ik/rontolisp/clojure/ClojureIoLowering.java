@@ -1,5 +1,9 @@
 package am.ik.rontolisp.clojure;
 
+import java.nio.ByteBuffer;
+import java.nio.charset.CharacterCodingException;
+import java.nio.charset.CodingErrorAction;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -15,6 +19,7 @@ import am.ik.rontolisp.LispString;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispTrue;
 import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.clojure.ClojureDepsGraph.Root;
 import am.ik.rontolisp.reader.LispReadException;
 import org.jspecify.annotations.Nullable;
 
@@ -68,15 +73,41 @@ final class ClojureIoLowering {
 	/** {@code (URI. spec)}. */
 	static final String URI_OF = PREFIX + "URI-OF";
 
-	/** A resource found while the program lowered: its URL and its text. */
+	/**
+	 * A resource found while the program lowered: its URL, and the content a read of it
+	 * takes.
+	 */
 	static final String URL_FOUND = PREFIX + "URL-FOUND";
 
-	/** A resource looked up when the program runs, below the directory roots. */
+	/**
+	 * A resource looked up when the program runs, below the directory roots of a source
+	 * path holding no jar.
+	 */
 	static final String RESOURCE = PREFIX + "RESOURCE";
 
 	/**
+	 * The prefix of the jar reader's definitions in {@code clojure.lisp}: the jar
+	 * family's own ({@link ClojureArms.Family#JAR}), which go with its arms.
+	 */
+	static final String JAR_PREFIX = PREFIX + "JAR-";
+
+	/**
+	 * A resource looked up when the program runs below every root of a source path
+	 * holding a jar, a jar's entries among them: the one producer of a {@code jar:} URL
+	 * read from its jar ({@link ClojureArms.Family#JAR}), and of the io family.
+	 */
+	static final String JAR_RESOURCE = JAR_PREFIX + "RESOURCE";
+
+	/**
+	 * The jar family's arm test: whether a value is a {@code jar:} URL whose entry is
+	 * read from its jar when the program runs.
+	 */
+	static final String JAR_P = JAR_PREFIX + "P";
+
+	/**
 	 * Every directory root's URL of a name when the program runs: a class loader's
-	 * {@code getResources}, which {@code ring.util.response}'s resource response reads.
+	 * {@code getResources}, which {@code ring.util.response}'s resource response reads
+	 * for the {@code file:} URLs among them.
 	 */
 	static final String RESOURCE_URLS = PREFIX + "RESOURCE-URLS";
 
@@ -152,7 +183,9 @@ final class ClojureIoLowering {
 
 	/**
 	 * The kernels: each var one call to its {@code %clojure-io-} worker, with a fixed
-	 * arity, and {@code resource}, lowered in place over the program's directory roots.
+	 * arity, and {@code resource} and {@code resources}, lowered in place over the
+	 * program's roots ({@link #runtimeResource}). {@code directory-entry?} is
+	 * {@code ring.util.response}'s {@code jar-directory?}.
 	 */
 	static ClojureKernelLowering.Kernels kernels() {
 		Map<String, Integer> arity = Map.ofEntries(Map.entry("file", 1), Map.entry("file-2", 2), Map.entry("url", 1),
@@ -162,12 +195,13 @@ final class ClojureIoLowering {
 				Map.entry("open-input", 1), Map.entry("open-output", 2), Map.entry("copy", 3),
 				Map.entry("relative-path", 1), Map.entry("delete", 1), Map.entry("refuse-delete", 1),
 				Map.entry("parent-file", 1), Map.entry("mkdirs", 1), Map.entry("resource", 1),
-				Map.entry("resources", 1), Map.entry("from-host", 1), Map.entry("install", 2));
+				Map.entry("resources", 1), Map.entry("directory-entry?", 1), Map.entry("from-host", 1),
+				Map.entry("install", 2));
 		Map<String, String> workers = Map.of("url", URL_OF, "delete", PREFIX + "M-DELETE", "mkdirs",
 				PREFIX + "M-MKDIRS");
 		Map<String, ClojureKernelLowering.Inline> inline = Map.of("resource",
-				(ctx, args) -> runtimeResource(ctx, RESOURCE, args.get(0)), "resources",
-				(ctx, args) -> runtimeResource(ctx, RESOURCE_URLS, args.get(0)));
+				(ctx, args) -> runtimeResource(ctx, args.get(0)), "resources",
+				(ctx, args) -> resourceUrls(ctx, args.get(0)));
 		return new ClojureKernelLowering.Kernels("clojure.java.io", PREFIX, arity, workers, false, inline);
 	}
 
@@ -176,8 +210,8 @@ final class ClojureIoLowering {
 	 * own constructions and the install a read of an {@code http:} or {@code https:} URL
 	 * goes through -- the io family's producers.
 	 */
-	static final Set<String> PRODUCERS = Set.of(FILE, FILE_2, URL_OF, URI_OF, URL_FOUND, RESOURCE, RESOURCE_URLS,
-			FILE_SEQ, PREFIX + "FILE-URL", PREFIX + "URL-FILE", PREFIX + "URI-FILE", PREFIX + "URI-URL",
+	static final Set<String> PRODUCERS = Set.of(FILE, FILE_2, URL_OF, URI_OF, URL_FOUND, RESOURCE, JAR_RESOURCE,
+			RESOURCE_URLS, FILE_SEQ, PREFIX + "FILE-URL", PREFIX + "URL-FILE", PREFIX + "URI-FILE", PREFIX + "URI-URL",
 			PREFIX + "OPEN-INPUT", PREFIX + "OPEN-OUTPUT", OPEN_READER, PREFIX + "OPEN-WRITER", PREFIX + "PARENT-FILE",
 			PREFIX + "FROM-HOST", FILE_INPUT, FILE_OUTPUT, STREAM_WRITER, BYTES_INPUT, BYTES_INPUT_3, BYTES_OUTPUT,
 			INSTALL_FETCH);
@@ -636,10 +670,12 @@ final class ClojureIoLowering {
 
 	/**
 	 * {@code (clojure.java.io/resource "name" [loader])} with a literal name: found while
-	 * the program lowers -- a directory root's file or a jar root's entry -- the URL with
-	 * its text, which travels with the program, so it reads alike wherever it runs (a
-	 * jar's entry above all, which no wasm backend can open); nil when no root holds it.
-	 * A loader argument still runs. Null for any other call, which runs the var.
+	 * the program lowers -- a directory root's file or directory, a jar root's entry --
+	 * the URL with the contents a read of it takes, which travel with the program, so it
+	 * reads alike wherever it runs (a jar's entry above all, which a wasm backend reads
+	 * only through a preopen); nil when no root holds it ({@link #foundUrl}). A loader
+	 * argument still runs. Null for any other call, which runs the var -- the part of the
+	 * namespace defining it, which a call lowered here does not load.
 	 * @param ctx the hub
 	 * @param name the call's head as written
 	 * @param items the call
@@ -647,12 +683,11 @@ final class ClojureIoLowering {
 	 */
 	static @Nullable LispVal literalResource(ClojureLowering ctx, String name, List<LispVal> items) {
 		if ((items.size() != 2 && items.size() != 3) || !(items.get(1) instanceof LispString literal)
-				|| ctx.isLocal(name) || !"clojure.java.io/resource".equals(ctx.lookupVar(name))) {
+				|| !ctx.namesPartVar(name, "clojure.java.io", "resource")) {
 			return null;
 		}
 		ClojureSourcePath.Resource found = ctx.sourcePath.findResource(literal.value());
-		LispVal url = found == null ? ClojureLowering.NIL_CONST : ClojureLowerUtil.list(new LispSymbol(URL_FOUND),
-				LispString.literal(found.spec()), LispString.literal(found.text()));
+		LispVal url = found == null ? ClojureLowering.NIL_CONST : foundUrl(found);
 		if (items.size() == 3) {
 			return ClojureLowerUtil.list(ClojureLowerUtil.sym("progn"), ctx.lower(items.get(2)), url);
 		}
@@ -660,16 +695,78 @@ final class ClojureIoLowering {
 	}
 
 	/**
-	 * {@code rontolisp.internal.io/resource} and {@code resources}: the run-time lookup
-	 * of a name below the program's directory roots, absolute, baked in as the lowering
-	 * knows them.
+	 * A resource found while the program lowers, as
+	 * {@code (url-found spec text charset)}: its contents the text their octets decode to
+	 * in UTF-8 where they are UTF-8, {@code :utf-8}, else one character an octet,
+	 * {@code :latin-1}, so a binary entry reads back octet for octet; a jar's directory
+	 * entry {@code ""} and {@code :directory}, which reads empty; a directory root's
+	 * directory nothing, which a read takes from the file system, as the oracle's does.
 	 */
-	private static LispVal runtimeResource(ClojureLowering ctx, String worker, LispVal name) {
-		List<LispVal> roots = new ArrayList<>();
-		for (String root : ctx.sourcePath.directoryRoots()) {
-			roots.add(LispString.literal(root));
+	private static LispVal foundUrl(ClojureSourcePath.Resource found) {
+		LispSymbol worker = new LispSymbol(URL_FOUND);
+		LispString spec = LispString.literal(found.spec());
+		byte[] octets = found.octets();
+		if (octets == null) {
+			return ClojureLowerUtil.list(worker, spec, ClojureLowering.NIL_CONST, ClojureLowering.NIL_CONST);
 		}
-		return ClojureLowerUtil.list(new LispSymbol(worker), name,
+		if (found.directory()) {
+			return ClojureLowerUtil.list(worker, spec, LispString.literal(""), ClojureLowerUtil.sym(":directory"));
+		}
+		String text = strictUtf8(octets);
+		return text != null
+				? ClojureLowerUtil.list(worker, spec, LispString.literal(text), ClojureLowerUtil.sym(":utf-8"))
+				: ClojureLowerUtil.list(worker, spec,
+						LispString.literal(new String(octets, StandardCharsets.ISO_8859_1)),
+						ClojureLowerUtil.sym(":latin-1"));
+	}
+
+	/** The text the octets spell as well-formed UTF-8, or null when they do not. */
+	private static @Nullable String strictUtf8(byte[] octets) {
+		try {
+			return StandardCharsets.UTF_8.newDecoder()
+				.onMalformedInput(CodingErrorAction.REPORT)
+				.onUnmappableCharacter(CodingErrorAction.REPORT)
+				.decode(ByteBuffer.wrap(octets))
+				.toString();
+		}
+		catch (CharacterCodingException ex) {
+			return null;
+		}
+	}
+
+	/**
+	 * {@code rontolisp.internal.io/resource}: the lookup of a name when the program runs,
+	 * below its roots in the source path's order, absolute, baked in as the lowering
+	 * knows them -- the directories alone where no jar is among them ({@link #RESOURCE}),
+	 * every root where one is ({@link #JAR_RESOURCE}, a jar's root the list of its path),
+	 * so only such a program carries the jar reader.
+	 */
+	private static LispVal runtimeResource(ClojureLowering ctx, LispVal name) {
+		List<Root> roots = ctx.sourcePath.resourceRoots();
+		boolean jar = false;
+		List<LispVal> spelled = new ArrayList<>();
+		for (Root root : roots) {
+			jar |= root.archive();
+			spelled.add(root.archive() ? ClojureLowerUtil.list(LispString.literal(root.path()))
+					: LispString.literal(root.path()));
+		}
+		return ClojureLowerUtil.list(new LispSymbol(jar ? JAR_RESOURCE : RESOURCE), name,
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("quote"), ClojureLowerUtil.list(spelled)));
+	}
+
+	/**
+	 * {@code rontolisp.internal.io/resources}: every directory root's URL of a name when
+	 * the program runs, the {@code getResources} {@code ring.util.response} reads for its
+	 * {@code file:} URLs alone.
+	 */
+	private static LispVal resourceUrls(ClojureLowering ctx, LispVal name) {
+		List<LispVal> roots = new ArrayList<>();
+		for (Root root : ctx.sourcePath.resourceRoots()) {
+			if (!root.archive()) {
+				roots.add(LispString.literal(root.path()));
+			}
+		}
+		return ClojureLowerUtil.list(new LispSymbol(RESOURCE_URLS), name,
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("quote"), ClojureLowerUtil.list(roots)));
 	}
 

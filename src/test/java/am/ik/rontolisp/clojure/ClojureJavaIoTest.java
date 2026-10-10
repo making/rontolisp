@@ -5,10 +5,14 @@ import java.io.IOException;
 import java.io.OutputStream;
 import java.io.PrintStream;
 import java.lang.reflect.Method;
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Map;
+import java.util.stream.Collectors;
+import java.util.zip.CRC32;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
 
@@ -129,9 +133,8 @@ class ClojureJavaIoTest {
 	/**
 	 * A project whose source path holds a resources directory and a jar: a literal name
 	 * is found while the program lowers (a jar's entry too, which travels with the
-	 * program), a computed one below the directory roots when the program runs. The
-	 * oracle's answers, the last line aside: there a computed name a jar holds is found
-	 * too, here nil (the documented deviation).
+	 * program), a computed one below the roots, the jar's among them, when the program
+	 * runs. The oracle's answers.
 	 */
 	private static final String RESOURCES = """
 			(ns app.main (:require [clojure.java.io :as io]))
@@ -145,24 +148,128 @@ class ClojureJavaIoTest {
 			(with-open [r (io/reader (io/resource "conf.edn"))] (prn (read-string (slurp r))))
 			(prn (.getPath (io/resource "conf.edn")) (.getProtocol (io/resource "jarres/msg.txt")))
 			(with-open [in (io/input-stream (io/resource "jarres/msg.txt"))] (prn (.read in)))
-			(prn (io/resource (str "jarres/" "msg.txt")))
+			(def in-jar (str "jarres/" "msg.txt"))
+			(prn (str (io/resource in-jar)) (slurp (io/resource in-jar)))
 			""";
 
-	private Path resourceProject() throws IOException {
+	/**
+	 * A jar's entries when the program runs, against the jar {@link #resourceProject}
+	 * makes: a computed name the jar holds after the directories hold none, a stored
+	 * entry, an entry whose name needs quoting, a binary entry octet for octet (found by
+	 * a literal name and by a computed one) and decoded in two charsets, an explicit
+	 * directory entry and a directory a jar only implies, a directory root's directory
+	 * and the empty name (the first root), dot segments resolved over the root and a name
+	 * leaving it, and the reads that fail as a {@code JarURLConnection}'s do; then a jar
+	 * ending in a zip64 end record and one behind a stub, which {@code ZipFile} reads
+	 * too. The oracle's answers ({@code clj} 1.12.6 on JDK 25, 2026-10-10).
+	 */
+	private static final String JAR_ENTRIES = """
+			(ns app.main (:require [clojure.java.io :as io]))
+			(def jar (str "%JAR%" ""))
+			(def deps (str "%DEPS%" ""))
+			(defn c [& parts] (apply str parts))
+			(defn octets [u] (with-open [in (io/input-stream u)] (vec (take 4 (drop 252 (.readAllBytes in))))))
+			(prn (str (io/resource (c "public/" "p.txt"))) (slurp (io/resource (c "public/" "p.txt"))))
+			(prn (slurp (io/resource (c "jarres/" "stored.txt"))) (str (io/resource (c "jarres/sp" " ace.txt"))))
+			(prn (octets (io/resource "jarres/img.bin")) (octets (io/resource (c "jarres/" "img.bin"))))
+			(prn (count (slurp (io/resource "jarres/img.bin")))
+			     (count (slurp (io/resource (c "jarres/img" ".bin")) :encoding "ISO-8859-1")))
+			(prn (str (io/resource "jardir")) (str (io/resource (c "jar" "dir/"))) (io/resource "nodir") (io/resource (c "no" "dir")))
+			(prn (str (io/resource "public")) (str (io/resource (c "public/"))) (str (io/resource "")) (str (io/resource (c ""))))
+			(prn (slurp (io/resource "jardir")) (slurp (io/resource (c "jardir"))))
+			(prn (str (io/resource (c "../resources/public/r.txt"))) (io/resource (c "/public/r.txt"))
+			     (str (io/resource (c "public/sub/../r.txt"))) (str (io/resource "public/sub/../r.txt"))
+			     (io/resource (c "../../res.jar")) (str (io/resource (c "public/sub/.."))))
+			(prn (try (slurp (io/as-url (c "jar:file:" jar "!/nope.txt"))) (catch java.io.FileNotFoundException e (ex-message e))))
+			(prn (try (slurp (io/as-url "jar:file:/no/such.jar!/x.txt")) (catch java.nio.file.NoSuchFileException e (ex-message e))))
+			(prn (try (slurp (io/as-url (c "jar:file:" jar "!/"))) (catch java.io.IOException e (ex-message e))))
+			(prn (try (slurp (io/as-url (c "jar:file:" deps "!/x"))) (catch java.util.zip.ZipException e (ex-message e))))
+			(with-open [in (io/input-stream (io/resource (c "jarres/" "msg.txt")))] (prn (.read in) (.available in)))
+			(prn (line-seq (io/reader (io/resource (c "jarres/" "msg.txt")))) (slurp (c "jar:file:" jar "!/jarres/msg.txt")))
+			(prn (slurp (io/resource "z64/hello.txt")) (slurp (io/resource (c "z64/" "hello.txt")))
+			     (slurp (io/resource (c "sfx/" "hello.txt"))))
+			""";
+
+	private Path resourceProject(String program) throws IOException {
 		Path proj = this.dir.resolve("proj");
-		write(proj.resolve("deps.edn"),
-				"{:paths [\"src\" \"resources\"]\n :deps {my/res {:local/root \"../res.jar\"}}}\n");
+		write(proj.resolve("deps.edn"), "{:paths [\"src\" \"resources\"]\n :deps {my/res {:local/root \"../res.jar\"}"
+				+ " my/z64 {:local/root \"../z64.jar\"} my/sfx {:local/root \"../sfx.jar\"}}}\n");
 		write(proj.resolve("resources/conf.edn"), "{:a 1}\n");
-		Path main = write(proj.resolve("src/app/main.clj"), RESOURCES);
-		try (OutputStream out = Files.newOutputStream(this.dir.resolve("res.jar"));
-				ZipOutputStream zip = new ZipOutputStream(out)) {
-			for (Map.Entry<String, String> entry : Map.of("jarres/msg.txt", "from the jar\n").entrySet()) {
-				zip.putNextEntry(new ZipEntry(entry.getKey()));
-				zip.write(entry.getValue().getBytes(StandardCharsets.UTF_8));
-				zip.closeEntry();
-			}
+		write(proj.resolve("resources/public/r.txt"), "res text\n");
+		write(proj.resolve("resources/public/sub/s.txt"), "sub");
+		Files.write(this.dir.resolve("z64.jar"), zip64(zipOf("z64/hello.txt", "zip64 entry\n")));
+		byte[] stub = "#!/bin/sh\nexec java -jar \"$0\" \"$@\"\n".getBytes(StandardCharsets.UTF_8);
+		byte[] archive = zipOf("sfx/hello.txt", "behind a stub\n");
+		byte[] sfx = new byte[stub.length + archive.length];
+		System.arraycopy(stub, 0, sfx, 0, stub.length);
+		System.arraycopy(archive, 0, sfx, stub.length, archive.length);
+		Files.write(this.dir.resolve("sfx.jar"), sfx);
+		Path jar = this.dir.resolve("res.jar");
+		byte[] image = new byte[1024];
+		for (int i = 0; i < image.length; i++) {
+			image[i] = (byte) i;
 		}
-		return main;
+		try (OutputStream out = Files.newOutputStream(jar); ZipOutputStream zip = new ZipOutputStream(out)) {
+			deflated(zip, "jarres/msg.txt", "from the jar\n".getBytes(StandardCharsets.UTF_8));
+			stored(zip, "jarres/stored.txt", "stored entry\n".getBytes(StandardCharsets.UTF_8));
+			deflated(zip, "jarres/img.bin", image);
+			deflated(zip, "jarres/sp ace.txt", "space\n".getBytes(StandardCharsets.UTF_8));
+			// a directory entry the way the jar tool writes one: stored, empty
+			stored(zip, "jardir/", new byte[0]);
+			deflated(zip, "jardir/x.txt", "x in jardir\n".getBytes(StandardCharsets.UTF_8));
+			deflated(zip, "nodir/y.txt", "y\n".getBytes(StandardCharsets.UTF_8));
+			deflated(zip, "public/p.txt", "public in jar\n".getBytes(StandardCharsets.UTF_8));
+		}
+		return write(proj.resolve("src/app/main.clj"), program.replace("%JAR%", jar.toRealPath().toString())
+			.replace("%DEPS%", proj.resolve("deps.edn").toRealPath().toString()));
+	}
+
+	/** A zip archive of one deflated entry. */
+	private static byte[] zipOf(String name, String text) throws IOException {
+		ByteArrayOutputStream out = new ByteArrayOutputStream();
+		try (ZipOutputStream zip = new ZipOutputStream(out)) {
+			deflated(zip, name, text.getBytes(StandardCharsets.UTF_8));
+		}
+		return out.toByteArray();
+	}
+
+	/**
+	 * The archive, which has no comment, ending as one of more than 65,535 entries ends:
+	 * the zip64 end record, its locator, and an end record whose fields overflow.
+	 */
+	private static byte[] zip64(byte[] zip) {
+		int at = zip.length - 22;
+		ByteBuffer end = ByteBuffer.wrap(zip).order(ByteOrder.LITTLE_ENDIAN);
+		long count = end.getShort(at + 10) & 0xFFFF;
+		long size = end.getInt(at + 12) & 0xFFFFFFFFL;
+		long offset = end.getInt(at + 16) & 0xFFFFFFFFL;
+		ByteBuffer out = ByteBuffer.allocate(at + 56 + 20 + 22).order(ByteOrder.LITTLE_ENDIAN);
+		out.put(zip, 0, at);
+		out.putInt(0x06064b50).putLong(44).putShort((short) 45).putShort((short) 45).putInt(0).putInt(0);
+		out.putLong(count).putLong(count).putLong(size).putLong(offset);
+		out.putInt(0x07064b50).putInt(0).putLong(at).putInt(1);
+		out.putInt(0x06054b50).putShort((short) 0).putShort((short) 0).putShort((short) -1).putShort((short) -1);
+		out.putInt(-1).putInt(-1).putShort((short) 0);
+		return out.array();
+	}
+
+	private static void deflated(ZipOutputStream zip, String name, byte[] octets) throws IOException {
+		zip.putNextEntry(new ZipEntry(name));
+		zip.write(octets);
+		zip.closeEntry();
+	}
+
+	private static void stored(ZipOutputStream zip, String name, byte[] octets) throws IOException {
+		ZipEntry entry = new ZipEntry(name);
+		entry.setMethod(ZipEntry.STORED);
+		entry.setSize(octets.length);
+		entry.setCompressedSize(octets.length);
+		CRC32 crc = new CRC32();
+		crc.update(octets);
+		entry.setCrc(crc.getValue());
+		zip.putNextEntry(entry);
+		zip.write(octets);
+		zip.closeEntry();
 	}
 
 	private String resourcesOut() throws IOException {
@@ -170,12 +277,36 @@ class ClojureJavaIoTest {
 		String jar = this.dir.resolve("res.jar").toRealPath().toString();
 		return "\"{:a 1}\\n\"\n\"from the jar\\n\"\n\"file:" + proj + "/resources/conf.edn\"\n\"jar:file:" + jar
 				+ "!/jarres/msg.txt\"\n\"{:a 1}\\n\"\nnil nil\n{:a 1}\n\"" + proj
-				+ "/resources/conf.edn\" \"jar\"\n102\nnil\n";
+				+ "/resources/conf.edn\" \"jar\"\n102\n\"jar:file:" + jar + "!/jarres/msg.txt\" \"from the jar\\n\"\n";
+	}
+
+	private String jarEntriesOut() throws IOException {
+		String proj = this.dir.resolve("proj").toRealPath().toString();
+		String jar = "jar:file:" + this.dir.resolve("res.jar").toRealPath() + "!/";
+		return """
+				"%Jpublic/p.txt" "public in jar\\n"
+				"stored entry\\n" "%Jjarres/sp%20ace.txt"
+				[-4 -3 -2 -1] [-4 -3 -2 -1]
+				1024 1024
+				"%Jjardir" "%Jjardir/" nil nil
+				"file:%P/resources/public" "file:%P/resources/public/" "file:%P/src/" "file:%P/src/"
+				"" ""
+				"file:%P/resources/public/r.txt" nil "file:%P/resources/public/r.txt" "file:%P/resources/public/r.txt" nil "file:%P/resources/public/"
+				"JAR entry not found in jar file"
+				"/no/such.jar"
+				"no entry name specified"
+				"zip END header not found"
+				102 12
+				("from the jar") "from the jar\\n"
+				"zip64 entry\\n" "zip64 entry\\n" "behind a stub\\n"
+				"""
+			.replace("%J", jar)
+			.replace("%P", proj);
 	}
 
 	@Test
 	void resourcesComeFromTheSourcePathOnTheInterpreterAndTheJvm() throws Exception {
-		Path main = resourceProject();
+		Path main = resourceProject(RESOURCES);
 		assertThat(interpret(Files.readString(main), main)).isEqualTo(resourcesOut());
 		assertThat(runOnJvm(Files.readString(main), main, "JioResources")).isEqualTo(resourcesOut());
 	}
@@ -183,11 +314,62 @@ class ClojureJavaIoTest {
 	@Test
 	void resourcesComeFromTheSourcePathOnBothWasmBackends() throws Exception {
 		assumeTrue(HostWasmtime.isAvailable(), "no usable wasmtime on PATH");
-		Path main = resourceProject();
-		// the computed lookup reads the resources directory, which the preopen covers
-		Path proj = this.dir.resolve("proj").toRealPath();
-		assertThat(runOnWasm(Files.readString(main), main, false, proj)).isEqualTo(resourcesOut());
-		assertThat(runOnWasm(Files.readString(main), main, true, proj)).isEqualTo(resourcesOut());
+		Path main = resourceProject(RESOURCES);
+		// the computed lookup reads the resources directory and the jar beside the
+		// project, which the preopen covers
+		Path root = this.dir.toRealPath();
+		assertThat(runOnWasm(Files.readString(main), main, false, root)).isEqualTo(resourcesOut());
+		assertThat(runOnWasm(Files.readString(main), main, true, root)).isEqualTo(resourcesOut());
+	}
+
+	/**
+	 * {@code resource} is a part of the namespace: a program naming it only with string
+	 * literals, which the lowering finds itself, carries no lookup; one computing a name
+	 * carries the lookup below the directory roots, or below every root where the source
+	 * path holds a jar -- the one producer of a URL read from a jar.
+	 */
+	@Test
+	void aResourceLookupIsCarriedOnlyWhereAProgramComputesAName() throws Exception {
+		Path main = resourceProject(RESOURCES);
+		String literal = lowered("(ns app.main (:require [clojure.java.io :as io]))"
+				+ " (prn (slurp (io/resource \"conf.edn\")) (io/resource \"jarres/msg.txt\"))", main);
+		assertThat(literal).contains("(RONTOLISP::%CLOJURE-IO-URL-FOUND ")
+			.doesNotContain("%CLOJURE-IO-RESOURCE")
+			.doesNotContain("%CLOJURE-IO-JAR-")
+			.doesNotContain("|c%clojure.java.io/resource|");
+		String computed = lowered(
+				"(ns app.main (:require [clojure.java.io :as io])) (prn (io/resource (str \"conf\" \".edn\")))", main);
+		assertThat(computed).contains("(RONTOLISP::%CLOJURE-IO-JAR-RESOURCE ").contains("|c%clojure.java.io/resource|");
+		String noJar = Clojure
+			.read("(ns app.main (:require [clojure.java.io :as io])) (prn (map io/resource [\"a\"]))", null)
+			.stream()
+			.map(LispVal::print)
+			.collect(Collectors.joining("\n"));
+		assertThat(noJar).contains("(RONTOLISP::%CLOJURE-IO-RESOURCE ").doesNotContain("%CLOJURE-IO-JAR-");
+	}
+
+	private static String lowered(String program, Path entry) {
+		return SourceLanguage.CLOJURE
+			.read(program, Features.INTERPRETER, entry.toString(), SourceStandards.DEFAULT, SourceLoader.fileSystem())
+			.stream()
+			.map(LispVal::print)
+			.collect(Collectors.joining("\n"));
+	}
+
+	@Test
+	void aJarsEntriesAreFoundAndReadWhenTheProgramRunsOnTheInterpreterAndTheJvm() throws Exception {
+		Path main = resourceProject(JAR_ENTRIES);
+		assertThat(interpret(Files.readString(main), main)).isEqualTo(jarEntriesOut());
+		assertThat(runOnJvm(Files.readString(main), main, "JioJarEntries")).isEqualTo(jarEntriesOut());
+	}
+
+	@Test
+	void aJarsEntriesAreFoundAndReadWhenTheProgramRunsOnBothWasmBackends() throws Exception {
+		assumeTrue(HostWasmtime.isAvailable(), "no usable wasmtime on PATH");
+		Path main = resourceProject(JAR_ENTRIES);
+		Path root = this.dir.toRealPath();
+		assertThat(runOnWasm(Files.readString(main), main, false, root)).isEqualTo(jarEntriesOut());
+		assertThat(runOnWasm(Files.readString(main), main, true, root)).isEqualTo(jarEntriesOut());
 	}
 
 	/**

@@ -283,9 +283,37 @@ class ClojureArmsTest {
 				"(LET ((R X)) (CLOSE R))", "(JAVA:CALL O \"m\" V)", "(STRINGP V)", "(COND (T :OTHER))",
 				"(OPEN-PATH S)");
 		for (String producer : List.of("(rontolisp::%clojure-io-file \"a\")", "(rontolisp::%clojure-io-file-2 p c)",
-				"(rontolisp::%clojure-io-open-input x)", "(rontolisp::%clojure-io-url-found \"file:/a\" \"t\")")) {
+				"(rontolisp::%clojure-io-open-input x)",
+				"(rontolisp::%clojure-io-url-found \"file:/a\" \"t\" :utf-8)")) {
 			assertThat(ClojureArms.scan(read(producer), ClojureArms.Family.IO).builds()).as(producer).isTrue();
 		}
+	}
+
+	@Test
+	void theJarFamilyIsMadeByALookupOverAJarAndTakesTheJarReaderWithItsArms() {
+		// only a resource lookup of a name computed at run time over a source path
+		// holding
+		// a jar makes a jar: URL whose entry is read from its archive: the reads' arms
+		// go,
+		// and the jar reader's definitions with them -- they name read-sequence and a
+		// two-argument file-position, which passes ahead of the pruner read by name
+		List<LispVal> forms = read(
+				"(cond ((rontolisp::%clojure-io-jar-p x) (rontolisp::%clojure-io-jar-input x)) (t (open-path x)))"
+						+ " (defun rontolisp::%clojure-io-jar-read (s at n) (file-position s at) (read-sequence n s))"
+						+ " (defvar rontolisp::%clojure-io-jar-cache nil)"
+						+ " (defun rontolisp::%clojure-io-kept (x) x)");
+		ClojureArms.Scan scan = ClojureArms.scan(forms, ClojureArms.Family.JAR);
+		assertThat(scan.builds()).isFalse();
+		assertThat(scan.strips()).isTrue();
+		assertThat(ClojureArms.strip(forms, ClojureArms.Family.JAR).stream().map(LispVal::print))
+			.containsExactly("(COND (T (OPEN-PATH X)))", "(DEFUN RONTOLISP::%CLOJURE-IO-KEPT (X) X)");
+		assertThat(ClojureArms
+			.scan(read("(rontolisp::%clojure-io-jar-resource n '(\"/p/src\" (\"/p/a.jar\")))"), ClojureArms.Family.JAR)
+			.builds()).isTrue();
+		// the lookup makes a URL too
+		assertThat(ClojureArms
+			.scan(read("(rontolisp::%clojure-io-jar-resource n '((\"/p/a.jar\")))"), ClojureArms.Family.IO)
+			.builds()).isTrue();
 	}
 
 	@Test

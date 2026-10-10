@@ -222,58 +222,115 @@ final class ClojureSourcePath {
 	 * A resource {@code clojure.java.io/resource} found below a root.
 	 *
 	 * @param spec its URL, as the oracle's class loader spells it: {@code file:} and the
-	 * absolute path below a directory root, {@code jar:file:} and the jar's absolute path
-	 * then {@code !/} and the entry below a jar root
-	 * @param text its contents
+	 * absolute path below a directory root ({@link #resourcePath}), {@code jar:file:} and
+	 * the jar's absolute path then {@code !/} and the name below a jar root
+	 * @param octets its contents, or {@code null} for a directory root's directory, which
+	 * a read takes from the file system
+	 * @param directory whether it names a directory: a directory root's, or a jar's
+	 * directory entry, whose contents are empty
 	 */
-	record Resource(String spec, String text) {
+	record Resource(String spec, byte @Nullable [] octets, boolean directory) {
 	}
 
 	/**
 	 * The resource a name finds below the first root holding it, like the oracle's class
-	 * loader over its class path: a directory root's file, a jar root's entry. The
-	 * built-in namespaces' files are no resource (the oracle's are clojure.jar's own). A
-	 * name starting with {@code /} finds nothing, as a class loader's does.
+	 * loader over its class path: a directory root's file or directory, a jar root's
+	 * entry -- of the name, or of the name and a slash, a directory entry, as
+	 * {@code java.util.zip.ZipFile} finds one. The built-in namespaces' files are no
+	 * resource (the oracle's are clojure.jar's own). A name starting with {@code /} finds
+	 * nothing, and below a directory one whose {@code ..} leads out of it, as a class
+	 * loader's does; the empty name is the first directory root itself.
 	 * @param name the resource's path below a root
 	 * @return the resource, or {@code null} when no root holds it
 	 */
 	@Nullable Resource findResource(String name) {
-		if (name.isEmpty() || name.startsWith("/")) {
+		if (name.startsWith("/")) {
 			return null;
 		}
 		for (Root root : roots()) {
-			if (root.archive()) {
-				if (entriesOf(root).contains(name)) {
-					String text = this.files.readArchiveEntry(root.path(), name);
-					if (text != null) {
-						return new Resource(
-								"jar:file:" + uriPath(this.files.absolute(root.path())) + "!/" + uriPath(name), text);
-					}
-				}
-				continue;
-			}
-			String path = this.files.resolve(root.path(), name);
-			String text = this.files.read(path);
-			if (text != null) {
-				return new Resource("file:" + uriPath(this.files.absolute(path)), text);
+			Resource found = root.archive() ? archiveResource(root, name) : directoryResource(root, name);
+			if (found != null) {
+				return found;
 			}
 		}
 		return null;
 	}
 
+	private @Nullable Resource archiveResource(Root root, String name) {
+		Set<String> entries = entriesOf(root);
+		String spec = "jar:file:" + uriPath(this.files.absolute(root.path())) + "!/" + uriPath(name);
+		if (entries.contains(name)) {
+			if (name.endsWith("/")) {
+				return new Resource(spec, new byte[0], true);
+			}
+			byte[] octets = this.files.readArchiveEntryBytes(root.path(), name);
+			return octets == null ? null : new Resource(spec, octets, false);
+		}
+		return !name.isEmpty() && !name.endsWith("/") && entries.contains(name + "/")
+				? new Resource(spec, new byte[0], true) : null;
+	}
+
+	private @Nullable Resource directoryResource(Root root, String name) {
+		String path = resourcePath(this.files.absolute(root.path()), name);
+		if (path == null) {
+			return null;
+		}
+		// the file a class loader opens: the name below the root as spelled, or with its
+		// dot segments resolved where a .. is among them
+		String file = name.isEmpty() ? root.path() : name.contains("..") ? path : this.files.resolve(root.path(), name);
+		if (this.files.isDirectory(file)) {
+			return new Resource("file:" + uriPath(path), null, true);
+		}
+		byte[] octets = this.files.readBytes(file);
+		return octets == null ? null : new Resource("file:" + uriPath(path), octets, false);
+	}
+
 	/**
-	 * The directory roots, absolute, in search order: where a resource whose name is
-	 * known only when the program runs is looked for.
+	 * The path a class loader's {@code file:} URL names for a resource below a directory:
+	 * the directory's absolute path, a slash and the name, its {@code .} and {@code ..}
+	 * segments resolved as {@code java.net.URL} resolves them against the directory's URL
+	 * (an empty segment kept, a trailing one leaving a slash).
+	 * @param directory the directory's absolute path
+	 * @param name the resource's name
+	 * @return the path, or {@code null} when a {@code ..} leads out of the directory
+	 */
+	static @Nullable String resourcePath(String directory, String name) {
+		String base = directory.endsWith("/") ? directory : directory + "/";
+		List<String> out = new ArrayList<>(List.of(base.substring(0, base.length() - 1).split("/", -1)));
+		String[] segments = name.split("/", -1);
+		for (int i = 0; i < segments.length; i++) {
+			String segment = segments[i];
+			boolean last = i == segments.length - 1;
+			if (segment.equals(".") || segment.equals("..")) {
+				if (segment.equals("..")) {
+					if (out.size() <= 1) {
+						return null;
+					}
+					out.remove(out.size() - 1);
+				}
+				if (last) {
+					out.add("");
+				}
+			}
+			else {
+				out.add(segment);
+			}
+		}
+		String path = String.join("/", out);
+		return path.startsWith(base) ? path : null;
+	}
+
+	/**
+	 * The roots, absolute, in search order: where a resource whose name is known only
+	 * when the program runs is looked for -- a directory's files and a jar's entries.
 	 * @return the roots
 	 */
-	List<String> directoryRoots() {
-		List<String> out = new ArrayList<>();
+	List<Root> resourceRoots() {
+		List<Root> out = new ArrayList<>();
 		for (Root root : roots()) {
-			if (!root.archive()) {
-				String absolute = this.files.absolute(root.path());
-				if (!out.contains(absolute)) {
-					out.add(absolute);
-				}
+			Root absolute = new Root(this.files.absolute(root.path()), root.archive());
+			if (!out.contains(absolute)) {
+				out.add(absolute);
 			}
 		}
 		return out;

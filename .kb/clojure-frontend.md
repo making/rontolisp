@@ -747,9 +747,12 @@ before the library splice.
   first argument for anything unsorted, its other arguments variables; an ALIAS
   (`%clojure-is-set` -> `%clojure-set-p`, `%clojure-is-reversible` -> `%clojure-is-vector`);
   a SETTER (`(%clojure-aset a i v)` -> `(setf (aref a i) v)`, the byte-array family's, "Byte
-  arrays").
+  arrays"); an OWNED definition (`Family.owned`: a library `defun`/`defvar`/`defparameter`
+  whose name the family's prefix starts goes with the arms, the jar family's
+  `%clojure-io-jar-`, "clojure.java.io" Resources) -- for code naming what a pass ahead of the
+  pruner reads by name.
   `clojure/ClojureArms` (family `SORTED`; `MATCHER` is the regex matcher's, `REDUCIBLE` a typed value's own `CollReduce`/`IKVReduce` row's, "clojure.jar namespaces", `UNBOUND` is the unbound root's,
-  `STREAM_DEPTH` the core specials' counters, "Vars and metadata", `READER_VALUE` "Reader conditionals", `BYTES` "Byte arrays", `PRINT_FLAGS`,
+  `STREAM_DEPTH` the core specials' counters, "Vars and metadata", `READER_VALUE` "Reader conditionals", `BYTES` "Byte arrays", `JAR` "clojure.java.io", `PRINT_FLAGS`,
   `PRINT_META` and `NAMESPACE_MAP` the printer's, "State", and `STREAM` the stream printer's, "Streams as values") scans for a PRODUCER (`%clojure-sorted-make` and the four
   constructor `-v` values: no literal makes one) and, without one, strips: a test folds to
   false (its clause, its `if` branch or its disjunct goes; one disjunct left stands alone),
@@ -1425,7 +1428,9 @@ oracle's classpath; a `deps.edn` ring-core newer than the shipped one refuses th
   pins the plain program lowering with no `%CLOJURE-IO-`.
   The part is ring-core 1.15.5's code over clojure.java.io's values (io kernels via
   `response.clj`'s `rontolisp.internal.io` alias; new `resources` inline kernel =
-  `getResources` over the directory roots), plus ring kernels `canonical-path`
+  `getResources` over the directory roots, whose `file:` URLs alone ring reads;
+  `directory-entry?` = `jar-directory?`, so `resource-data :jar` of a directory entry is
+  nil), plus ring kernels `canonical-path`
   (`%real-path`: every link resolved, a relative path kept relative from `.`, so no cwd is
   needed on wasm),
   `directory-traversal?`, `format-date` (RFC 1123 via `%clojure-instant-fields`) and
@@ -1438,8 +1443,11 @@ oracle's classpath; a `deps.edn` ring-core newer than the shipped one refuses th
   Links (2026-10-09, same oracle): a link below `:root` served, one leading out of it nil
   (served with `:allow-symlinks? true`), a link to a directory serves its index, on all
   four; `.getCanonicalPath`/`.getCanonicalFile` are `%real-path` over the absolute path.
+  A computed name a jar holds is served from the jar (2026-10-10, e96: `Content-Length` the
+  entry's size, `Last-Modified` the jar's, octets as they are), a jar's directory entry and a
+  directory root's directory nil, all identical to the oracle on all four.
   Deviations: on both wasm backends a link with an ABSOLUTE target is not followed
-  (wasmtime refuses it), so it is nil there; a computed resource name inside a jar is nil (clojure.java.io's, `.todo/e96`); a
+  (wasmtime refuses it), so it is nil there; a
   no-method miss in this front end's words. Both
   wasm backends answer `file-write-date` (2026-10-09), so one expectation holds on all four.
 - Refusals: a var the oracle's namespace has and the built-in one leaves out
@@ -2240,7 +2248,8 @@ the file), `default-streams-impl` a map. Until then only `reader` resolved, as a
   writer are plain file streams (the STREAM family's `BufferedReader`/`BufferedWriter`). A
   wrapper is a list, so `equal` (and with it `=`, map keys) compares by spelling: no `=` arm
   (one made the interpreter's `=` measurably slower and was dropped). A URL keeps only its
-  spelling; a resource's text lives in `%clojure-io-resources` (`equal` table by spelling).
+  spelling; a found resource's contents live in `%clojure-io-resources` (`equal` table by
+  spelling, `#(text charset octets)`).
 - **Arms** (`ClojureArms.Family.IO`: tests `%clojure-io-p`, `%clojure-io-instance-p`,
   `%clojure-io-openable-p`, view `%clojure-io-host`, producers `ClojureIoLowering.PRODUCERS`,
   the kernels and the lowering's `java.io` constructions): the printer, `str`, the
@@ -2282,12 +2291,58 @@ the file), `default-streams-impl` a map. Until then only `reader` resolved, as a
   (`ClojureIoLowering.construction`): `File.` of 1/2, `FileInputStream.`,
   `FileOutputStream.` (append), `FileReader.`, `FileWriter.` (append), `Buffered*.` (the
   stream itself), `OutputStreamWriter.`, `InputStreamReader.` over a byte stream.
-- **Resources**: a literal name is found while lowering (`ClojureSourcePath.findResource`):
-  a directory root answers `file:` + its absolute path (`ClojureFiles.absolute`, link not
-  resolved), a jar root `jar:file:<abs jar>!/name`; the text is embedded
-  (`%clojure-io-url-found spec text`), so a jar's entry reads on wasm too. A computed name
-  is `%clojure-io-resource name '(roots)` at run time, below the directory roots only (the
-  jar case is the documented deviation). A loader argument still runs and is ignored.
+- **Resources** (2026-10-10, e96; every claim against clj 1.12.6 on JDK 25). `resource` is a
+  PART (`clojure/java/io_resource.clj`): `ClojureIoLowering.literalResource` answers a
+  literal-name call in `ClojureLowering.lowerInner` ahead of the macro check (whose
+  `resolveVar` would load the part), naming the var through `namesPartVar`, which loads
+  nothing, so a program naming `resource` only with literals carries no lookup. Lookup as a
+  class loader's, root by root: a directory root's file or directory (`file:` + the root's
+  absolute path, `ClojureFiles.absolute`, link not resolved, then the name with its `.`/`..`
+  segments resolved as `java.net.URL` resolves them, `resourcePath`; a `..` leading out of
+  the root finds nothing there, `../resources/x` from `src` is found below `resources`; the
+  empty name the first root, slash kept), a jar's entry of the name or a directory entry of
+  the name and a slash (`jar:file:<abs jar>!/name`, the name as given; a directory the jar
+  only implies is nil). A loader argument still runs and is ignored (the oracle's nil
+  loader is an NPE).
+  - Literal: found while lowering (`ClojureSourcePath.findResource`), contents embedded as
+    octets (`ClojureFiles.readBytes`/`readArchiveEntryBytes`):
+    `(%clojure-io-url-found spec text charset)`, TEXT the octets' strict UTF-8 decode
+    (`:utf-8`) or one character an octet (`:latin-1`), so a binary entry reads back octet
+    for octet (before, a jar's image came back decoded as UTF-8); a jar's directory entry
+    `"" :directory` (reads empty); a directory root's directory `nil nil`, kept nowhere (a
+    read takes the file system: `(Is a directory)`). `%clojure-io-kept` takes a URL, URI or
+    URL-spelling string; octets are made at the first read; a reader in the kept charset
+    reads the text itself.
+  - Computed: `%clojure-io-resource name '(roots)` below the directory roots when the source
+    path holds no jar, `%clojure-io-jar-resource name '(roots)` over every root in order
+    (a jar's root the list of its path) when it holds one. The jar reader (`clojure.lisp`,
+    "Jars read when the program runs"): the central directory once per jar
+    (`%clojure-io-jar-cache`, read and filled under `%clojure-io-jar-guard`: a Ring handler
+    runs a thread per request; the end record from the last 65,557 octets, the zip64 one where
+    a field overflows, names by `%octets-to-string`, octets ahead of the archive shifting
+    the local headers), an entry's octets after its local header, inflated by
+    `(%inflate-new 0)` (raw DEFLATE; `RontoInflate` on the interpreter and the JVM,
+    `inflate.lisp` on wasm). A read of a `jar:` URL (`%clojure-io-jar-p` in `open-input`,
+    `open-reader`, `directory-entry-p`) refuses as `JarURLConnection` does: a missing jar
+    `NoSuchFileException` (its path), no zip `ZipException` (`zip END header not found`), a
+    missing entry `FileNotFoundException` (`JAR entry not found in jar file`: JDK 25 filters
+    the names out), no entry name `IOException` (`no entry name specified`), no `!/` the
+    `MalformedURLException` `no !/ in spec` (at the read; the oracle's at the construction),
+    a jar on no file system by name. On wasm the jar needs a preopen, like a directory root.
+  - **The jar family** (`ClojureArms.Family.JAR`): test `%clojure-io-jar-p`, producer
+    `%clojure-io-jar-resource`, and every library definition named `%clojure-io-jar-` OWNED:
+    gone with the arms. Why owned: the reader names `read-sequence` and a two-argument
+    `file-position`, which `GrayStreamsLibrary` rewrites onto dispatch helpers it splices
+    unpruned into any Gray-using program (a Ring one), from a dead defun too, and the passes
+    ahead of the pruner select by name ("Prelude trap"). So a program that looks no computed
+    name up over a jar never shows them the reader
+    (`ClojureLibraryTest#aProgramReadingNoJarSplicesTheLibraryWithoutTheJarReader`), and one
+    naming `resource` only with literals has no producer at all
+    (`ClojureJavaIoTest#aResourceLookupIsCarriedOnlyWhereAProgramComputesAName`). Rejected:
+    the lowering embedding a jar's entries below a literal prefix (Ring's `:root`): a
+    request path is any name, and the inflater the reader needs was already on every
+    backend; and the lookup in `io.clj`'s `resource` (every io program with a jar on its
+    source path would carry the reader).
 - **Charsets**: UTF-8, ISO-8859-1, US-ASCII and aliases; any other name the oracle's
   `UnsupportedEncodingException`. A non-UTF-8 reader decodes the rest of its byte stream at
   once; a registered writer encodes into its byte stream at flush/close.
@@ -2369,8 +2424,11 @@ the file), `default-streams-impl` a map. Until then only `reader` resolved, as a
   rule; the oracle's `InputStreamReader` puts U+FFFD per malformed sequence -- the decoder is
   todo `f07`'s), `.available` 0 before the first chunk (the oracle counts what it buffered);
   `input-stream` of a byte-array stream answering it unwrapped and a file or URL stream keeping
-  no mark (todo `f15`); three charsets; a computed
-  resource name never inside a jar; `lastModified` in whole seconds (`file-write-date`'s
+  no mark (todo `f15`); three charsets; a hand-made `jar:` URL read only by a program
+  carrying the jar family (else the generic refusal), a multi-release jar's versioned entry
+  and an entry past 4 GB (zip64's extra field) not read, `.openStream` of a `jar:` URL a
+  `BufferedInputStream` (the oracle's `JarURLConnection$JarURLInputStream`);
+  `lastModified` in whole seconds (`file-write-date`'s
   resolution, every backend); wasm: `getAbsolutePath` of a relative File refused (no
   cwd); `canRead` is `exists`; `line-seq` takes a File/URL/byte stream like a path.
 - Pins: clojure-spec `clojure-java-io-*`, `a-java-io-file-prints-as-the-host-object-*`,
@@ -2384,7 +2442,11 @@ the file), `default-streams-impl` a map. Until then only `reader` resolved, as a
   interpreter and the JVM against a local origin, the Preview 1 and `--no-wasi` refusals);
   `ClojureJavaIoTest`
   (directories, an empty directory deleted and a file dated on all four, a deps.edn project's directory and jar
-  resources on all four backends, the refusals of an `ftp:` read and an `https:` write);
+  resources on all four backends -- a jar's entries found and read when the program runs,
+  binary octets, directory entries, dot segments, the `JarURLConnection` refusals, a zip64
+  jar and one behind a stub -- the part's lazy load, the refusals of an `ftp:` read and an
+  `https:` write);
+  `ClojureArmsTest#theJarFamilyIsMadeByALookupOverAJarAndTakesTheJarReaderWithItsArms`;
   `ClojureInteropTest#aJavaIoFileCrossesTheJavaBoundaryAsTheHostFile`;
   `ClojureArmsTest#theIoFamilyIsMadeByClojureJavaIoAndFoldsTheArmsOfAProgramMakingNone`;
   `ClojureLoweringTest#javaIoIsABuiltInNamespaceLoadedAtItsFirstQualifiedName`;

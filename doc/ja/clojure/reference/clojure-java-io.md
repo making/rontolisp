@@ -18,7 +18,7 @@ open はオラクルの `java.io.FileNotFoundException` になります。
 | `copy` | `(copy input output & opts)`: バイトストリーム、バイト配列、リーダー、File、文字列の中身を、バイトストリーム、ライター、File に書く。文字は `:encoding` で変換する。ほかの組み合わせはオラクルの `IllegalArgumentException` |
 | `delete-file` | `(delete-file f & [silently])`: ファイルを削除して `true` を返す。削除できなければ、`silently` が truthy ならそれを返し、そうでなければ `java.io.IOException` を投げる |
 | `make-parents` | `(make-parents f & more)`: File `(file f & more)` の上の足りないディレクトリを作り、作ったかどうかを返す |
-| `resource` | `(resource name)`: ソースパスが `name` で持つファイルの URL（[リソース](#resources)）、なければ `nil` |
+| `resource` | `(resource name)`: ソースパスが `name` で持つファイルかディレクトリの URL（[リソース](#resources)）、なければ `nil` |
 | `make-reader`, `make-writer`, `make-input-stream`, `make-output-stream` | 4 つのストリーム関数がオプションをマップにして呼ぶ `IOFactory` プロトコル |
 | `default-streams-impl` | 型を拡張するための `IOFactory` のメソッド: 入力ストリームの上のリーダー、出力ストリームの上のライター、両バイトストリームの拒否 |
 
@@ -167,11 +167,14 @@ $ rontolisp get.clj -- https://example.com/
 
 `resource` は名前をソースパス（プログラムのプロジェクトと依存先のルート。ディレクトリと jar。
 [プロジェクト](../semantics.md#projects-depsedn)）で探します。オラクルはクラスパスで探しますが、
-同じプロジェクトはそこへ同じルートを入れます。文字列リテラルで書いた名前はプログラムの
-コンパイル時に見つけます。ディレクトリのファイルはその `file:` URL を、jar のエントリは
-`jar:file:...!/name` URL を返し、見つけたテキストはプログラムと一緒に運ばれるので、WASM
-モジュールを含め、どこで動かしても同じように読めます。プログラムが計算した名前は実行時に、
-ソースパスのディレクトリの下で探します。
+同じプロジェクトはそこへ同じルートを入れます。ディレクトリのファイルとサブディレクトリはその
+`file:` URL を、jar のエントリは `jar:file:...!/name` URL を返します（ディレクトリのエントリ
+`name/` は `name` でも見つかります）。文字列リテラルで書いた名前はプログラムのコンパイル時に
+見つけ、見つけた内容をバイト列のままプログラムに埋め込むので、WASM モジュールを含め、どこで
+動かしても同じように読めます。プログラムが計算した名前は実行時に、ソースパスの各ルートを順に、
+jar のエントリも含めて探します。返した `jar:` URL を読むと、そのエントリを jar から読みます。
+WASM では、それらのディレクトリと jar に `--dir` のプリオープンが要ります。`resource` に
+文字列リテラルしか渡さないプログラムは、実行時に名前を探すコードを含みません。
 
 ```console
 $ cat resources/config.edn
@@ -211,9 +214,10 @@ $ rontolisp src/app/main.clj        # deps.edn holds {:paths ["src" "resources"]
   作ります。綴りが同じ 2 つは `=` で、`java.net.URL` は解決したホストを比べます。File の
   `.hashCode` はオラクルと同じです。
 - `http:` と `https:` の URL を読むのは、そのために fetch を使うプログラムだけです
-  （[HTTP の URL](#http-urls)）。オラクルはどのプログラムでも読みます。`file:`、`http:`、
-  `https:` 以外のプロトコルの URL の読み取りは、名前を挙げて拒否します（`resource` が返した
-  `jar:` URL は除きます）。オラクルは接続を開きます。
+  （[HTTP の URL](#http-urls)）。オラクルはどのプログラムでも読みます。`jar:` URL も同様に、
+  読めるのは `resource` がコンパイル時に見つけたものと、jar を含むソースパスで計算した名前を
+  探すプログラムが読むものだけです。`file:`、`http:`、`https:`、`jar:` 以外のプロトコルの URL
+  の読み取りは、名前を挙げて拒否します。オラクルは接続を開きます。
 - `http:` URL の読み取りでは、トランスポートの失敗はトランスポートのメッセージを持つ
   `java.io.IOException` です（オラクルの `java.net.ConnectException` と
   `UnknownHostException` はその一種です）。305 の応答はたどりません（オラクルは応答が示す
@@ -224,8 +228,7 @@ $ rontolisp src/app/main.clj        # deps.edn holds {:paths ["src" "resources"]
 - `input-stream` と `output-stream` は `ByteArrayInputStream` と `ByteArrayOutputStream` を
   そのまま返し、オラクルはバッファ付きストリームで包みます。ファイルや `http:` URL の上の
   ストリームは `mark` の位置を保持しません。
-- `resource` は、プログラムが計算した名前をソースパスのディレクトリの下だけで探し、jar の中は
-  探しません。渡されたクラスローダーは参照しません。
+- `resource` は渡されたクラスローダーを参照しません。
 - `(java.net.URL. s)` と `(java.net.URI. s)` はホストオブジェクトを作ります（インタプリタと
   JVM）。どのバックエンドにもある URL は `as-url` が作り、その `.toURI` が URI です。
 - `lastModified` は秒単位（1000 の倍数）で答えます。オラクルはミリ秒単位で答えることがあります。

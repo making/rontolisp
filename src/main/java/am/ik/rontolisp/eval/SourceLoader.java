@@ -158,12 +158,12 @@ public interface SourceLoader {
 	}
 
 	/**
-	 * The entry names of a zip archive (a jar), in the archive's own order -- what a
-	 * Clojure dependency on a jar contributes is read from the archive in place, never
-	 * extracted ({@link #loadArchiveEntry}). Like {@link #exists} it must never throw;
-	 * {@code null} means the path names no readable zip archive, which is also the
-	 * default: a loader that is not a filesystem (the browser playground's in-memory map)
-	 * holds no archive.
+	 * The entry names of a zip archive (a jar), in the archive's own order, a directory
+	 * entry's ending with {@code /} -- what a Clojure dependency on a jar contributes is
+	 * read from the archive in place, never extracted ({@link #loadArchiveEntry}). Like
+	 * {@link #exists} it must never throw; {@code null} means the path names no readable
+	 * zip archive, which is also the default: a loader that is not a filesystem (the
+	 * browser playground's in-memory map) holds no archive.
 	 * @param path the archive's path
 	 * @return the entry names, or {@code null} when the path is not a readable archive
 	 */
@@ -181,6 +181,28 @@ public interface SourceLoader {
 	 */
 	default String loadArchiveEntry(String archive, String entry) throws IOException {
 		throw new IOException(archive + ": no archive can be read here");
+	}
+
+	/**
+	 * Reads one entry of a zip archive's octets. The default encodes what
+	 * {@link #loadArchiveEntry} answers in UTF-8.
+	 * @param archive the archive's path
+	 * @param entry the entry's name, as {@link #listArchive} gives it
+	 * @return the entry's octets
+	 * @throws IOException if the archive or the entry cannot be read
+	 */
+	default byte[] loadArchiveEntryBytes(String archive, String entry) throws IOException {
+		return loadArchiveEntry(archive, entry).getBytes(StandardCharsets.UTF_8);
+	}
+
+	/**
+	 * Reads a file's octets. The default encodes what {@link #load} answers in UTF-8.
+	 * @param path the path
+	 * @return the file's octets
+	 * @throws IOException if the file cannot be read
+	 */
+	default byte[] loadBytes(String path) throws IOException {
+		return load(path).getBytes(StandardCharsets.UTF_8);
 	}
 
 	/**
@@ -215,6 +237,11 @@ public interface SourceLoader {
 			@Override
 			public String load(String path) throws IOException {
 				return Files.readString(Path.of(path));
+			}
+
+			@Override
+			public byte[] loadBytes(String path) throws IOException {
+				return Files.readAllBytes(Path.of(path));
 			}
 
 			@Override
@@ -300,10 +327,7 @@ public interface SourceLoader {
 					List<String> names = new ArrayList<>();
 					Enumeration<? extends ZipEntry> entries = zip.entries();
 					while (entries.hasMoreElements()) {
-						ZipEntry entry = entries.nextElement();
-						if (!entry.isDirectory()) {
-							names.add(entry.getName());
-						}
+						names.add(entries.nextElement().getName());
 					}
 					return names;
 				}
@@ -314,13 +338,18 @@ public interface SourceLoader {
 
 			@Override
 			public String loadArchiveEntry(String archive, String entry) throws IOException {
+				return new String(loadArchiveEntryBytes(archive, entry), StandardCharsets.UTF_8);
+			}
+
+			@Override
+			public byte[] loadArchiveEntryBytes(String archive, String entry) throws IOException {
 				try (ZipFile zip = new ZipFile(Path.of(archive).toFile())) {
 					ZipEntry found = zip.getEntry(entry);
 					if (found == null || found.isDirectory()) {
 						throw new IOException(archive + " has no entry " + entry);
 					}
 					try (InputStream in = zip.getInputStream(found)) {
-						return new String(in.readAllBytes(), StandardCharsets.UTF_8);
+						return in.readAllBytes();
 					}
 				}
 			}

@@ -18,7 +18,7 @@ behave the same on the interpreter, the JVM and both WASM targets. On WASM a fil
 | `copy` | `(copy input output & opts)`: what a byte stream, a byte array, a reader, a File or a string holds, written to a byte stream, a writer or a File, characters in `:encoding`; any other pair is the oracle's `IllegalArgumentException` |
 | `delete-file` | `(delete-file f & [silently])`: deletes the file, answering `true`; when it cannot, answers `silently` if that is truthy and otherwise throws a `java.io.IOException` |
 | `make-parents` | `(make-parents f & more)`: makes the missing directories above the File `(file f & more)`, answering whether it made any |
-| `resource` | `(resource name)`: the URL of the file the source path holds under `name` ([Resources](#resources)), or `nil` |
+| `resource` | `(resource name)`: the URL of the file or directory the source path holds under `name` ([Resources](#resources)), or `nil` |
 | `make-reader`, `make-writer`, `make-input-stream`, `make-output-stream` | The `IOFactory` protocol the four stream functions call, with their options as a map |
 | `default-streams-impl` | The `IOFactory` methods to extend a type with: a reader over its input stream, a writer over its output stream, and a refusal of both byte streams |
 
@@ -165,11 +165,15 @@ $ rontolisp get.clj -- https://example.com/
 
 `resource` looks a name up on the source path -- the roots of the program's project and of its
 dependencies, directories and jars ([Projects](../semantics.md#projects-depsedn)) -- where the
-oracle looks on the class path, which the same project fills with the same roots. A name
-written as a string literal is found while the program compiles: a directory's file answers
-its `file:` URL, a jar's entry its `jar:file:...!/name` URL, and the text found travels with the
-program, so it reads the same wherever the program runs, a WASM module included. A name the
-program computes is looked up when it runs, below the source path's directories.
+oracle looks on the class path, which the same project fills with the same roots. A directory's
+file or subdirectory answers its `file:` URL, a jar's entry its `jar:file:...!/name` URL (a
+directory entry `name/` answers `name` too). A name written as a string literal is found while
+the program compiles, and the contents found travel with the program octet for octet, so they
+read the same wherever the program runs, a WASM module included. A name the program computes
+is looked up when it runs, in each root of the source path in order, a jar's entries included;
+reading the `jar:` URL it answers opens the entry from the jar. On WASM those directories and
+jars need a `--dir` preopen. A program naming `resource` only with string literals carries no
+lookup.
 
 ```console
 $ cat resources/config.edn
@@ -209,9 +213,10 @@ replaced.
   its parts, and two are `=` when their spellings are, where `java.net.URL` compares resolved
   hosts. A File's `.hashCode` is the oracle's.
 - An `http:` or `https:` URL is read only by a program that uses fetch for it
-  ([HTTP URLs](#http-urls)), where the oracle reads one in any program. Reading a URL of
-  another protocol than `file:`, `http:` and `https:` is refused by name, but for a `jar:` URL
-  `resource` answered; the oracle opens a connection.
+  ([HTTP URLs](#http-urls)), where the oracle reads one in any program. Likewise a `jar:` URL is
+  read where `resource` found it while the program compiled, or in a program that looks a
+  computed name up on a source path holding a jar. Reading a URL of another protocol than
+  `file:`, `http:`, `https:` and `jar:` is refused by name; the oracle opens a connection.
 - Reading an `http:` URL, a transport failure is a `java.io.IOException` carrying the
   transport's message (the oracle's `java.net.ConnectException` and `UnknownHostException` are
   ones); a 305 reply is not followed (the oracle retries through the proxy it names); the
@@ -222,8 +227,7 @@ replaced.
 - `input-stream` and `output-stream` answer a `ByteArrayInputStream` or a
   `ByteArrayOutputStream` itself, where the oracle wraps it in a buffered stream, and a
   stream over a file or an `http:` URL keeps no `mark`.
-- `resource` finds a name the program computes below the source path's directories only, not
-  inside a jar, and never consults a class loader given.
+- `resource` never consults a class loader given.
 - `(java.net.URL. s)` and `(java.net.URI. s)` construct host objects (the interpreter and the
   JVM); `as-url` makes the URL every backend has, and `.toURI` of it the URI.
 - `lastModified` answers whole seconds (a multiple of 1000), where the oracle may answer

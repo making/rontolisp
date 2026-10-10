@@ -38,7 +38,9 @@ import org.jspecify.annotations.Nullable;
  * its call folds to the plain {@code error} with its message, and the condition class
  * only the carriers signal ({@link Family#conditions}) goes with them. A setter
  * ({@link Family#setters}) is the seventh: its call folds to the {@code setf} of the
- * place it stores into.
+ * place it stores into. The library definitions only the family's arms and producers
+ * reach ({@link Family#owned}) are the eighth: they go with the arms, so what they name
+ * never reaches a pass that runs ahead of the pruner and reads names.
  *
  * <p>
  * The shape every arm keeps, which {@link #strip} checks: a test's arguments, and a
@@ -775,6 +777,22 @@ public final class ClojureArms {
 				Set.of(ClojureKernelLowering.HTTP_REQUEST, ClojureIoLowering.INSTALL_FETCH), Set.of()),
 
 		/**
+		 * A {@code jar:} URL whose entry is read from its jar when the program runs,
+		 * which {@code clojure.java.io}'s reads ({@code slurp}, the readers and byte
+		 * streams, {@code .openStream}) and {@code ring.util.response}'s directory test
+		 * take ({@link ClojureIoLowering#JAR_P}): only a resource lookup of a name
+		 * computed at run time over a source path holding a jar makes one
+		 * ({@link ClojureIoLowering#JAR_RESOURCE}). The jar reader -- a zip file's
+		 * central directory, an entry inflated -- is the family's own
+		 * ({@link ClojureIoLowering#JAR_PREFIX}): it names {@code read-sequence} and a
+		 * two-argument {@code file-position}, which the Gray streams' rewrite and the
+		 * prelude's selection read by name before the pruner runs, so it goes with the
+		 * arms and a program reading no jar compiles as before it existed.
+		 */
+		JAR("jar-entry", Set.of(ClojureIoLowering.JAR_P), Set.of(ClojureIoLowering.JAR_RESOURCE),
+				ClojureIoLowering.JAR_PREFIX),
+
+		/**
 		 * A host object, which {@code instance?} asks the host the class of, {@code =}
 		 * compares as a collection with a Clojure one, {@code seq}, {@code count},
 		 * {@code empty?}, {@code get} and {@code contains?} read as one, the map verbs
@@ -873,8 +891,20 @@ public final class ClojureArms {
 		 */
 		final Map<String, String> setters;
 
+		/**
+		 * The prefix of the library definitions only the family's arms and producers
+		 * reach, or {@code null}: a top-level {@code defun}, {@code defvar} or
+		 * {@code defparameter} of a name it starts goes with the arms.
+		 */
+		final @Nullable String owned;
+
 		Family(String label, Set<String> switches) {
 			this(label, Set.of(), Set.of(), Map.of(), Set.of(), Set.of(), false, switches);
+		}
+
+		Family(String label, Set<String> tests, Set<String> producers, String owned) {
+			this(label, tests, Set.of(), Map.of(), producers, Set.of(), false, Set.of(), Set.of(), Set.of(), Map.of(),
+					owned);
 		}
 
 		Family(String label, Set<String> tests, Set<String> views, Map<String, String> aliases, Set<String> producers,
@@ -902,6 +932,13 @@ public final class ClojureArms {
 		Family(String label, Set<String> tests, Set<String> views, Map<String, String> aliases, Set<String> producers,
 				Set<String> depths, boolean qualifiedIdents, Set<String> switches, Set<String> refusals,
 				Set<String> conditions, Map<String, String> setters) {
+			this(label, tests, views, aliases, producers, depths, qualifiedIdents, switches, refusals, conditions,
+					setters, null);
+		}
+
+		Family(String label, Set<String> tests, Set<String> views, Map<String, String> aliases, Set<String> producers,
+				Set<String> depths, boolean qualifiedIdents, Set<String> switches, Set<String> refusals,
+				Set<String> conditions, Map<String, String> setters, @Nullable String owned) {
 			this.label = label;
 			this.tests = tests;
 			this.views = views;
@@ -913,6 +950,7 @@ public final class ClojureArms {
 			this.refusals = refusals;
 			this.conditions = conditions;
 			this.setters = setters;
+			this.owned = owned;
 		}
 
 		/**
@@ -982,7 +1020,7 @@ public final class ClojureArms {
 
 	private static void scanInto(LispVal form, Family family, boolean[] found, boolean quoted) {
 		if (isDepthDefinition(form, family) || isSwitchDefinition(form, family) || isSwitchSetq(form, family)
-				|| isConditionDefinition(form, family)) {
+				|| isConditionDefinition(form, family) || isOwnedDefinition(form, family)) {
 			found[1] = true;
 			return;
 		}
@@ -1059,7 +1097,7 @@ public final class ClojureArms {
 		boolean changed = false;
 		for (LispVal form : forms) {
 			if (isDepthDefinition(form, family) || isSwitchDefinition(form, family) || isSwitchSetq(form, family)
-					|| isConditionDefinition(form, family)) {
+					|| isConditionDefinition(form, family) || isOwnedDefinition(form, family)) {
 				changed = true;
 				continue;
 			}
@@ -1443,6 +1481,21 @@ public final class ClojureArms {
 				&& head.name().equals("DEFINE-CONDITION") && cons.cdr() instanceof LispCons name
 				&& name.car() instanceof LispSymbol condition && family.conditions.contains(condition.name());
 	}
+
+	/**
+	 * Whether the top-level form defines a function or a variable of the family's own
+	 * ({@link Family#owned}): {@code (defun name ...)}, {@code (defvar name ...)} or
+	 * {@code (defparameter name ...)} of a name its prefix starts. It goes with the arms.
+	 */
+	private static boolean isOwnedDefinition(LispVal form, Family family) {
+		String owned = family.owned;
+		return owned != null && form instanceof LispCons cons && cons.car() instanceof LispSymbol head
+				&& OWNED_DEFINERS.contains(head.name()) && cons.cdr() instanceof LispCons name
+				&& name.car() instanceof LispSymbol defined && defined.name().startsWith(owned);
+	}
+
+	/** The definitions a family may own. */
+	private static final Set<String> OWNED_DEFINERS = Set.of("DEFUN", "DEFVAR", "DEFPARAMETER");
 
 	/**
 	 * Whether the top-level form is the program's definition of one of the family's

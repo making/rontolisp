@@ -83,7 +83,11 @@ class ClojureRingFileResponseTest {
 			(let [d (r/resource-data (io/resource "public/r.txt"))]
 			  (prn (subs (str (:content d)) (count root)) (:content-length d) (inst? (:last-modified d))))
 			(prn (sort (keys (methods r/resource-data))))
-			(prn (r/resource-response (str "jarres/" "j.txt")))
+			(prn (show (r/resource-response (str "jarres/" "j.txt"))))
+			(let [resp (r/resource-response "img.bin" {:root "jarres"})]
+			  (prn (get-in resp [:headers "Content-Length"]) (vec (take 4 (drop 252 (.readAllBytes (:body resp)))))))
+			(prn (r/resource-response (str "jar" "dir")) (r/url-response (io/resource "jardir"))
+			     (r/url-response (io/resource "public")))
 			""";
 
 	private static final String FILE_DATE = "\"Tue, 02 Jan 2024 03:04:05 GMT\"";
@@ -91,8 +95,9 @@ class ClojureRingFileResponseTest {
 	private static final String JAR_DATE = "\"Wed, 06 May 2020 07:08:09 GMT\"";
 
 	/**
-	 * The oracle's output, the last line aside: there a computed resource name a jar
-	 * holds is found and served, here nil (clojure.java.io's documented deviation).
+	 * The oracle's output: a computed resource name a jar holds is served from the jar, a
+	 * binary entry octet for octet, and a directory -- a jar's directory entry, a
+	 * directory root's directory -- is no response.
 	 */
 	private static final String OUT = """
 			[200 "11" %F "/www/a.txt"]
@@ -112,7 +117,9 @@ class ClojureRingFileResponseTest {
 			(:content :content-length :last-modified) 7 %I true
 			"/proj/resources/public/r.txt" 9 true
 			(:file :jar)
-			nil
+			[200 "7" %J "in jar\\n"]
+			"1024" [-4 -3 -2 -1]
+			nil nil nil
 			""";
 
 	private static final Instant FILE_TIME = Instant.parse("2024-01-02T03:04:05Z");
@@ -146,6 +153,13 @@ class ClojureRingFileResponseTest {
 		try (OutputStream out = Files.newOutputStream(jar); ZipOutputStream zip = new ZipOutputStream(out)) {
 			zip.putNextEntry(new ZipEntry("jarres/j.txt"));
 			zip.write("in jar\n".getBytes(StandardCharsets.UTF_8));
+			zip.closeEntry();
+			zip.putNextEntry(new ZipEntry("jarres/img.bin"));
+			for (int i = 0; i < 1024; i++) {
+				zip.write(i);
+			}
+			zip.closeEntry();
+			zip.putNextEntry(new ZipEntry("jardir/"));
 			zip.closeEntry();
 		}
 		Files.setLastModifiedTime(jar, FileTime.from(JAR_TIME));

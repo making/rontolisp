@@ -2297,6 +2297,34 @@ public final class ClojureLowering {
 	}
 
 	/**
+	 * Whether a name names a var of a built-in namespace's part
+	 * ({@link ClojureBuiltinNamespaces#partOf}) as {@link #lookupVar} resolves one,
+	 * without loading the part: a call the lowering answers itself needs no definition of
+	 * the var, so the part's code stays out of the program.
+	 * @param name the name as written
+	 * @param ns the part's namespace
+	 * @param var the var
+	 * @return whether the name names that var
+	 */
+	boolean namesPartVar(String name, String ns, String var) {
+		if (isLocal(name)) {
+			return false;
+		}
+		int slash = qualifierSlash(name);
+		boolean names;
+		if (slash < 0) {
+			VarRef referred = ns().refers.get(name);
+			names = !this.globals.containsKey(varKey(this.currentNs, name)) && referred != null
+					&& referred.ns().equals(ns) && referred.var().equals(var);
+		}
+		else {
+			// a startup namespace's first qualified name loads it here, as a lookup does
+			names = name.substring(slash + 1).equals(var) && ns.equals(projectNamespaceOf(name.substring(0, slash)));
+		}
+		return names && this.builtinNamespaces.contains(ns);
+	}
+
+	/**
 	 * Refers into {@code user} what the oracle's REPL refers before the first input
 	 * ({@code clojure.main/repl-requires}), loading nothing: a namespace loads where a
 	 * name first reaches one of its refers ({@link #loadReplRefer}).
@@ -3311,6 +3339,13 @@ public final class ClojureLowering {
 				coreItems.set(0, new LispSymbol(core));
 				return lowerRow(form, coreItems, true);
 			}
+			// clojure.java.io/resource of a literal name is found while the program
+			// lowers, ahead of any lookup of the var, which would load the part of
+			// the namespace defining it
+			LispVal resource = ClojureIoLowering.literalResource(this, op.name(), items);
+			if (resource != null) {
+				return resource;
+			}
 			if (!ClojureMacroLowering.isReservedHead(op.name())) {
 				// a program macro wins over every lowering row of its name once
 				// defined (a core-named one above its definition is not visible
@@ -3998,11 +4033,6 @@ public final class ClojureLowering {
 			if (inlined != null) {
 				return inlined;
 			}
-		}
-		// clojure.java.io/resource of a literal name is found while the program lowers
-		LispVal resource = ClojureIoLowering.literalResource(this, name, items);
-		if (resource != null) {
-			return resource;
 		}
 		// a read of an http: or https: URL the program spells names fetch
 		ClojureIoLowering.readCall(this, name, items);

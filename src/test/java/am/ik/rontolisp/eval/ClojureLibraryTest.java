@@ -361,6 +361,22 @@ class ClojureLibraryTest {
 	}
 
 	@Test
+	void aProgramReadingNoJarSplicesTheLibraryWithoutTheJarReader() {
+		// the jar reader names read-sequence and a two-argument file-position, which the
+		// Gray streams' rewrite and the prelude's selection read by name before the
+		// pruner runs: only a program looking a computed resource name up over a source
+		// path holding a jar splices it, so any other compiles as before it existed
+		assertThat(defun(ClojureLibrary.forms(), "RONTOLISP::%CLOJURE-IO-JAR-READ")).contains("(READ-SEQUENCE ");
+		List<LispVal> plain = Clojure
+			.read("(ns a (:require [clojure.java.io :as io])) (prn (slurp (io/resource (str \"a\" \".txt\"))))", null);
+		assertThat(ClojureLibrary.process(plain).stream().map(LispVal::print))
+			.noneMatch(text -> text.contains("%CLOJURE-IO-JAR-") || text.contains("READ-SEQUENCE"));
+		List<LispVal> jar = LispReader
+			.readAllFromString("(prn (rontolisp::%clojure-io-jar-resource n '(\"/p/src\" (\"/p/a.jar\"))))");
+		assertThat(defun(ClojureLibrary.process(jar), "RONTOLISP::%CLOJURE-IO-JAR-READ")).contains("(READ-SEQUENCE ");
+	}
+
+	@Test
 	void aProgramMakingNoByteArraySplicesTheLibraryWithoutItsByteArrayArms() {
 		// aget, aset, alength, bytes? and a String construction lower to the forms they
 		// lowered to before byte arrays, and the printer's, the seq view's and the byte
