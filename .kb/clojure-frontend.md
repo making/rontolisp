@@ -3630,9 +3630,25 @@ as itself.
   session registers at once (a later buffer may hand the value over), and a reify registers per
   evaluation, like its rows. Gap: a CL program loading two `.clj` files lowered apart gives a
   type of the file naming no `java:` operator no face in the other.
-- Not records: a record still crosses as its `:map` view, its body's Java interfaces invisible
-  to Java (`.todo/f22`). A Clojure seq iterator passed straight to a member (not answered from a
-  face's `iterator`) is still an identity handle.
+- Records (f22, 2026-10-10): a record whose body names a Java interface (a `clojure.lang` one
+  with a Java super counts: `IFn`'s `Runnable`) gets a face over `java.util.Map` first, then the
+  body's interfaces, `Comparable`; one naming none -- an `Object` `toString` alone included,
+  which the view's `str` text already reads -- keeps crossing as its `:map` view
+  (`%clojure-host-record-view`, the record clause of `%clojure-host-member`, now behind the
+  face clause, which moved ahead of it). The maker binds the view once per face (`(let ((v
+  (%clojure-host-record-view x))) (java:reify ...))`); a slot the body does not define at its
+  count that `Map` declares abstract, plus `equals`/`hashCode`/`toString`, calls the view
+  (`viewCall`: `(java:call (the (java:object "java.util.Map") v) "m" (%clojure-host-member a)
+  ... :java-false)`, a reference answer through `%clojure-host-member`), so it resolves on the
+  JVM (no reflection warning added) and Java's `Map` defaults keep their bodies over it. Equality
+  is the view's `AbstractMap` rule (the oracle's `mapEquals`), so a face and a plain map of its
+  entries are equal in a HashSet both ways. Measured 2026-10-10 against clj 1.12.6, interpreter
+  and JVM: before, the todo's two rows (`RontoJavaMapView cannot be cast to ...Comparable`, `No
+  matching constructor for java.lang.Thread`); after, oracle-identical. Not this rule's: `(.equals
+  rec {:a 1})` from Clojure lowers to `=` (false; the oracle's Map `equals` true) with or without
+  a face (`.todo/f31`).
+- A Clojure seq iterator passed straight to a member (not answered from a face's `iterator`) is
+  still an identity handle.
 - Measured 2026-10-10 against clj 1.12.6, interpreter and JVM: before, `(Thread. (Task.))` was
   `No matching constructor`, a TreeSet of a Comparable deftype `ClassCastException`, a HashSet of
   two equal Ps size 2; after, every row of the pins oracle-identical but the documented
@@ -3640,6 +3656,7 @@ as itself.
   `ExecutorService.submit` takes the overload the signature order picks, where the oracle
   follows a hint or refuses the ambiguity).
 - Pins: `ClojureInteropTest#aDeftypeOrReifyReachesJavaAsAnImplementationOfItsInterfaces`,
+  `#aRecordReachesJavaAsAMapImplementingItsBodysInterfaces`,
   `#aTypeImplementingNoComparableRefusesATreeSetInTheOraclesWords`,
   `ClojureLoweringTest#aTypeShowsJavaItsFaceOnlyWhereTheProgramNamesTheHost`,
   `ClojureSessionTest#aTypeDefinedInOneBufferShowsJavaItsFaceInTheNext`,
@@ -3849,7 +3866,8 @@ The `java:` surface (`.kb/java-interop.md`); interpreter and JVM only -- wasm co
   the value crosses, a `toString` that is `str` here (a lazy seq or record spells its
   contents), `(java.util.Arrays/asList [1 2])` a list of the vector where the oracle throws.
   A deftype or reify whose body names a Java interface or overrides an `Object` method crosses
-  as its face ("Java faces", f10); a record's body interfaces stay invisible to Java. Cost,
+  as its face ("Java faces", f10), and so does a record whose body names a Java interface (a
+  `Map` face, f22). Cost,
   measured 2026-10-09 (JVM class, before -> after; before a handle's hash moved onto `hash`'s
   helpers, which replaced two `java.util.Objects.hashCode` calls per keyword): `(.add l [1 2])` + `str` 108,071 ->
   129,594 B (the member conversion and the view and handle makers, `%clojure-compare` behind a

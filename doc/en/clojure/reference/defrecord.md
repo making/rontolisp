@@ -45,7 +45,9 @@ reads while the record still prints its literal. Its map interfaces are its own:
 defining a method the record defines itself (`count`, `seq`, `valAt`, `assoc`, `iterator`,
 `meta`, `equals`, `hashCode` ...), is the oracle's `Duplicate` refusal, and a method of those
 interfaces the record leaves to the interface (`assocEx`, a `java.util.Map` default) is refused
-by name.
+by name. The Java interfaces the body implements (`Runnable`, `Comparable` ...) are what Java
+sees of the record too: it crosses into a Java member as a `java.util.Map` of its entries that
+implements them ([Java interop](interop.md)).
 
 ```clojure
 (defrecord Adder [n] clojure.lang.IFn (invoke [_ x] (+ n x)))

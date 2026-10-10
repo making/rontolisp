@@ -1298,14 +1298,29 @@ class ClojureLoweringTest {
 			.contains(" \"run\") ")
 			.contains(":JAVA-FALSE))) '(\"java.lang.Runnable\")");
 		// only a program naming a java: operator hands a value to Java; only the host has
-		// a Java; a record crosses as a Map, a type with no Java interface and no Object
-		// override as an object equal only to itself
+		// a Java; a type with no Java interface and no Object override crosses as an
+		// object equal only to itself
 		assertThat(lowered(task + " (def t (Task.))")).doesNotContain("JAVA-FACE");
 		assertThat(Clojure.read(task + " (Thread. (Task.))", null, null, ClojureFiles.NONE, false)
 			.stream()
 			.map(LispVal::print)
 			.collect(Collectors.joining("\n"))).doesNotContain("JAVA-FACE");
-		assertThat(lowered("(defrecord R [] Runnable (run [_] nil)) (Thread. (->R))")).doesNotContain("JAVA-FACE");
+		// a record's face is a Map too, its Map methods, equals, hashCode and toString
+		// its map view's, made once per face; a record with no Java interface crosses as
+		// its map view
+		String record = lowered("(defrecord R [] Runnable (run [_] nil)) (Thread. (->R))");
+		assertThat(record).contains("(JAVA:REIFY '(\"java.util.Map\" \"java.lang.Runnable\" \"java.lang.Comparable\")")
+			.contains("(LET ((")
+			.contains(" (RONTOLISP::%CLOJURE-HOST-RECORD-VIEW ")
+			.contains("\"get(java.lang.Object)\" (LAMBDA (")
+			.contains("(JAVA:CALL (THE (JAVA:OBJECT \"java.util.Map\") ")
+			.contains(" \"get\" (RONTOLISP::%CLOJURE-HOST-MEMBER ")
+			.contains("\"equals(java.lang.Object)\" (LAMBDA (")
+			.contains("\"toString()\" (LAMBDA NIL (RONTOLISP::%CLOJURE-HOST-MEMBER (JAVA:CALL ")
+			.doesNotContain("\"getOrDefault(");
+		assertThat(lowered("(defrecord R [] Object (toString [_] \"r\")) (Thread. (->R))")).doesNotContain("JAVA-FACE");
+		assertThat(lowered("(defrecord R [] clojure.lang.IDeref (deref [_] 1)) (Thread. (->R))"))
+			.doesNotContain("JAVA-FACE");
 		assertThat(lowered("(deftype U [] clojure.lang.Counted (count [_] 1)) (Thread. (U.))"))
 			.doesNotContain("JAVA-FACE");
 		// an Object override alone shows a face; a reify's registers per evaluation,

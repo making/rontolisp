@@ -455,8 +455,9 @@
   `List`・`Set`・`Map` です（ベクタは `RandomAccess` かつ `Comparable` でもあります）。
   キーワード・シンボル・分数はオラクルと同じくハッシュし、比較し、印字されるオブジェクトで
   （分数は `Number` です）、本体が Java のインタフェースを実装するか `Object` のメソッドを
-  上書きする deftype や reify は、そのインタフェースを実装し、型のメソッドを呼ぶ
-  オブジェクトです。アトム・fn・それ以外の deftype や reify などそれ以外の値は、自分自身と
+  上書きする deftype や reify、および本体が Java のインタフェースを実装する record は、
+  そのインタフェースを実装し、型のメソッドを呼ぶオブジェクトです（record は `Map` でも
+  あります）。アトム・fn・それ以外の deftype や reify などそれ以外の値は、自分自身と
   だけ等しく、オラクルの `Object.toString` と同じく綴られるオブジェクトです
   （`clojure.lang.Atom@1b6d3586`）。Java はどれも元の値として返します。オラクルとの違いは
   次のとおりです。Java から見えるクラスが違います（`getClass` と、そのクラスを名指す JDK の
@@ -466,8 +467,7 @@
   シーケンスは最後まで実現されます。`toString` はここでの `str` の答えです（遅延シーケンスと
   record は中身を綴ります）。オラクルのクラスが `Comparable` でない値もここでは
   `Comparable` で、その `compareTo` はオラクルと同じ `ClassCastException` を投げます。
-  Java から deftype のフィールドは見えず、record の本体が実装したインタフェースも見えません
-  （見えるのは record の `Map` だけです）。メンバが返した Java の配列は
+  Java から deftype のフィールドは見えません。メンバが返した Java の配列は
   ここではリストになり、配列が期待され、かつリストのまま受け取る引数がない箇所では配列に
   戻ります。そのため `(java.util.Arrays/asList [1 2])` はベクタを一つ持つリストになります
   （オラクルは例外を投げます）。`make-array` が作る配列もここではベクタで、同じく配列に

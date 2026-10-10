@@ -468,8 +468,9 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   `java.util` `List`, `Set` or `Map` (a vector also `RandomAccess` and `Comparable`) printing
   as Clojure prints it, a keyword, symbol or ratio an object hashing, comparing and printing
   as the oracle's (a ratio a `Number`), a deftype or reify whose body implements a Java
-  interface or overrides an `Object` method an object implementing those interfaces and
-  calling the type's methods, and an atom, fn, other deftype or reify or other value an
+  interface or overrides an `Object` method, or a record whose body implements a Java
+  interface, an object implementing those interfaces (a record's also its `Map`) and calling
+  the type's methods, and an atom, fn, other deftype or reify or other value an
   object equal only to itself, spelled as the oracle's `Object.toString`
   (`clojure.lang.Atom@1b6d3586`). Java hands each back as the value itself. What differs: the
   class Java sees (`getClass`, and the JDK's `ClassCastException` messages naming it; the
@@ -478,8 +479,7 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   converted once, when the value crosses, a lazy seq realized to its end; the `toString` is
   what `str` answers here (a lazy seq and a record spell their contents); a value whose
   oracle class is no `Comparable` is one here whose `compareTo` throws the oracle's
-  `ClassCastException`; Java sees no field of a deftype, and none of the interfaces a
-  record's body implements, only the record's `Map`. A Java array a member answers is a list
+  `ClassCastException`; Java sees no field of a deftype. A Java array a member answers is a list
   here, which converts back to an array where one is expected and nothing takes the list
   whole -- so
   `(java.util.Arrays/asList [1 2])` is a list holding the vector, where the oracle throws --

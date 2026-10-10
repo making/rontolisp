@@ -15,13 +15,15 @@ import am.ik.rontolisp.LispVal;
 import org.jspecify.annotations.Nullable;
 
 /**
- * The face a {@code deftype} or {@code reify} value shows Java: the object
- * {@code %clojure-host-member} hands Java for it, an implementation of the Java
+ * The face a {@code deftype}, {@code reify} or {@code defrecord} value shows Java: the
+ * object {@code %clojure-host-member} hands Java for it, an implementation of the Java
  * interfaces its body implements that stands for the value
  * ({@code .kb/clojure-frontend.md}, "Java faces"). The oracle's type IS a class
  * implementing them, so Java calls its methods, its {@code equals} and {@code hashCode}
  * key a {@code HashSet}, its {@code compareTo} orders a {@code TreeSet}, and it comes
- * back as itself.
+ * back as itself. A record's class is a {@code java.util.Map} too: its face's {@code Map}
+ * methods, {@code equals}, {@code hashCode} and {@code toString} are those of the
+ * record's map view, the object Java sees of a record with no face.
  *
  * <p>
  * The lowering knows the interfaces where it defines the type, so it makes the face with
@@ -72,6 +74,12 @@ final class ClojureJavaFaces {
 	/** {@code Comparable}, which every face implements. */
 	private static final String COMPARABLE = "java.lang.Comparable";
 
+	/** The read-only {@code java.util.Map} view of a record. */
+	private static final String HOST_RECORD_VIEW = "RONTOLISP::%CLOJURE-HOST-RECORD-VIEW";
+
+	/** {@code java.util.Map}, which a record's face implements. */
+	private static final String MAP = "java.util.Map";
+
 	/** {@code Comparable.compareTo}'s key. */
 	private static final String COMPARE_TO = "compareTo(java.lang.Object)";
 
@@ -102,16 +110,19 @@ final class ClojureJavaFaces {
 	 * @param body the body's interfaces and methods
 	 * @param listed the loadable Java interfaces of the body's closure, in its order
 	 * @param className the class Java's messages name the value by
+	 * @param record whether the value is a record, whose face is a {@code Map}
 	 */
-	record Pending(LispCons cell, ClojureInterfaces.InterfaceBody body, List<Class<?>> listed, String className) {
+	record Pending(LispCons cell, ClojureInterfaces.InterfaceBody body, List<Class<?>> listed, String className,
+			boolean record) {
 	}
 
 	/**
-	 * Gives a {@code deftype} or {@code reify} body its face: records the registration of
-	 * its maker on the tag of its first row store, which a session makes at once. A body
-	 * implementing no Java interface and overriding no {@code Object} method has none
-	 * (Java sees an object equal only to itself), and neither has a {@code defrecord}
-	 * (Java sees a {@code Map}) nor a program compiled where the host is not.
+	 * Gives a {@code deftype}, {@code reify} or {@code defrecord} body its face: records
+	 * the registration of its maker on the tag of its first row store, which a session
+	 * makes at once. A body implementing no Java interface and overriding no
+	 * {@code Object} method has none (Java sees an object equal only to itself), nor has
+	 * a record implementing no Java interface (Java sees its map view), nor a program
+	 * compiled where the host is not.
 	 * @param ctx the hub
 	 * @param what the defining form
 	 * @param body the body's interfaces and methods
@@ -120,8 +131,8 @@ final class ClojureJavaFaces {
 	 */
 	static void give(ClojureLowering ctx, String what, ClojureInterfaces.InterfaceBody body, String className,
 			List<LispVal> stores) {
-		if (!ctx.hostTarget || "defrecord".equals(what) || stores.isEmpty()
-				|| !(stores.get(0) instanceof LispCons store) || !(store.cdr() instanceof LispCons cell)) {
+		if (!ctx.hostTarget || stores.isEmpty() || !(stores.get(0) instanceof LispCons store)
+				|| !(store.cdr() instanceof LispCons cell)) {
 			return;
 		}
 		List<Class<?>> listed = new ArrayList<>();
@@ -131,14 +142,19 @@ final class ClojureJavaFaces {
 				listed.add(iface);
 			}
 		}
+		boolean record = "defrecord".equals(what);
 		boolean overrides = false;
 		for (String method : OBJECT_KEYS.values()) {
 			overrides |= body.methods().containsKey(method);
 		}
-		if (listed.isEmpty() && !overrides) {
+		if (listed.isEmpty() && (record || !overrides)) {
+			// a record's Object overrides reach Java through its map view
 			return;
 		}
-		Pending pending = new Pending(cell, body, List.copyOf(listed), className);
+		if (record && !listed.contains(java.util.Map.class)) {
+			listed.add(0, java.util.Map.class);
+		}
+		Pending pending = new Pending(cell, body, List.copyOf(listed), className, record);
 		if (ctx.session) {
 			register(ctx, pending);
 		}
@@ -164,15 +180,16 @@ final class ClojureJavaFaces {
 	private static void register(ClojureLowering ctx, Pending pending) {
 		LispCons cell = pending.cell();
 		cell.setCar(ClojureLowerUtil.list(new LispSymbol(FACE_TAG), cell.car(),
-				maker(ctx, pending.body(), pending.listed(), pending.className())));
+				maker(ctx, pending.body(), pending.listed(), pending.className(), pending.record())));
 	}
 
 	/**
 	 * The maker of a body's face: a {@code java:reify} over its Java interfaces and
-	 * {@code Comparable}, standing for the value.
+	 * {@code Comparable}, standing for the value; a record's over its map view too, made
+	 * once per face.
 	 */
 	private static LispVal maker(ClojureLowering ctx, ClojureInterfaces.InterfaceBody body, List<Class<?>> given,
-			String className) {
+			String className, boolean record) {
 		List<Class<?>> listed = new ArrayList<>(given);
 		Class<?> comparable = Comparable.class;
 		boolean comparableRow = listed.contains(comparable);
@@ -181,6 +198,7 @@ final class ClojureJavaFaces {
 		}
 		List<Class<?>> interfaces = mostSpecific(listed);
 		LispSymbol self = ctx.freshTemp();
+		LispSymbol view = record ? ctx.freshTemp() : null;
 		List<LispVal> parts = new ArrayList<>();
 		parts.add(new LispSymbol(LispNames.JAVA_REIFY_QUALIFIED));
 		List<LispVal> names = new ArrayList<>();
@@ -206,11 +224,18 @@ final class ClojureJavaFaces {
 			if (!comparableRow && COMPARE_TO.equals(key)) {
 				call = notComparable(ctx, className);
 			}
-			else if (defines(body, method)
-					|| !OBJECT_KEYS.containsKey(key) && abstractMethod && (body.methods().containsKey(method.getName())
-							|| ClojureInterfaces.storesRefusal(body.closure(), method.getName()))) {
-				// the body's method, or the refusal its row holds for an abstract one it
-				// leaves out (the oracle's AbstractMethodError)
+			else if (defines(body, method)) {
+				call = rowCall(ctx, self, method);
+			}
+			else if (view != null
+					&& (OBJECT_KEYS.containsKey(key) || abstractMethod && declaresMap(group.getValue()))) {
+				// a record's Map, its equals and its hashCode: its map view's
+				call = viewCall(ctx, view, method);
+			}
+			else if (!OBJECT_KEYS.containsKey(key) && abstractMethod && (body.methods().containsKey(method.getName())
+					|| ClojureInterfaces.storesRefusal(body.closure(), method.getName()))) {
+				// the refusal the row holds for an abstract method the body leaves out
+				// (the oracle's AbstractMethodError)
 				call = rowCall(ctx, self, method);
 			}
 			else {
@@ -223,14 +248,67 @@ final class ClojureJavaFaces {
 		}
 		for (Map.Entry<String, String> object : OBJECT_KEYS.entrySet()) {
 			// an Object method no interface redeclares
-			if (body.methods().containsKey(object.getValue()) && !declared.containsKey(object.getKey())) {
+			if (declared.containsKey(object.getKey())) {
+				continue;
+			}
+			if (body.methods().containsKey(object.getValue())) {
 				parts.add(LispString.literal(object.getKey()));
 				parts.add(rowCall(ctx, self, objectMethod(object.getKey())));
 			}
+			else if (view != null) {
+				// a record's toString: its map view's, its str
+				parts.add(LispString.literal(object.getKey()));
+				parts.add(viewCall(ctx, view, objectMethod(object.getKey())));
+			}
 		}
 		parts.add(new LispSymbol(LispNames.JAVA_FALSE_MARKER));
-		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(self),
-				ClojureLowerUtil.list(parts));
+		LispVal face = ClojureLowerUtil.list(parts);
+		if (view != null) {
+			face = ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
+					ClojureLowerUtil.list(
+							ClojureLowerUtil.list(view, ClojureLowerUtil.list(new LispSymbol(HOST_RECORD_VIEW), self))),
+					face);
+		}
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(self), face);
+	}
+
+	/** Whether {@code java.util.Map} declares one of a group's methods. */
+	private static boolean declaresMap(List<Method> group) {
+		for (Method method : group) {
+			if (method.getDeclaringClass() == java.util.Map.class) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * A slot's function calling the record's map view's method on Java's arguments, each
+	 * as Java takes it, the answer as {@link #rowCall}'s. The view is declared a
+	 * {@code Map}, so the call resolves and nothing reflects.
+	 */
+	private static LispVal viewCall(ClojureLowering ctx, LispSymbol view, Method method) {
+		List<LispVal> params = new ArrayList<>();
+		List<LispVal> call = new ArrayList<>();
+		call.add(new LispSymbol(LispNames.JAVA_CALL_QUALIFIED));
+		call.add(ClojureLowerUtil.list(ClojureLowerUtil.sym("the"),
+				ClojureLowerUtil.list(new LispSymbol(LispNames.JAVA_OBJECT_QUALIFIED), LispString.literal(MAP)), view));
+		call.add(LispString.literal(method.getName()));
+		for (int i = 0; i < method.getParameterCount(); i++) {
+			LispSymbol param = ctx.freshTemp();
+			params.add(param);
+			call.add(ClojureLowerUtil.list(new LispSymbol(HOST_MEMBER), param));
+		}
+		boolean reference = !method.getReturnType().isPrimitive();
+		if (reference) {
+			// a false member answers Clojure's false, not nil
+			call.add(new LispSymbol(LispNames.JAVA_FALSE_MARKER));
+		}
+		LispVal answer = ClojureLowerUtil.list(call);
+		if (reference) {
+			answer = ClojureLowerUtil.list(new LispSymbol(HOST_MEMBER), answer);
+		}
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(params), answer);
 	}
 
 	/**

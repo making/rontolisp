@@ -47,7 +47,10 @@ lower されます。位置指定の `->Name`（数が違うとシグナル）�
 `assoc`、`iterator`、`meta`、`equals`、`hashCode` など）を定義することは、オラクルの
 `Duplicate` による拒否になります。それらのインタフェースのメソッドのうち、レコードが
 インタフェース側の実装に任せるもの（`assocEx`、`java.util.Map` の default メソッド）は名前を
-挙げて拒否されます。
+挙げて拒否されます。本体が実装する Java のインタフェース（`Runnable`、`Comparable` など）は
+Java から見たレコードの姿でもあり、レコードは Java のメンバに、エントリを持つ `java.util.Map`
+であり、かつそれらのインタフェースを実装するオブジェクトとして渡ります
+（[Java 相互運用](interop.md)）。
 
 ```clojure
 (defrecord Adder [n] clojure.lang.IFn (invoke [_ x] (+ n x)))

@@ -2766,12 +2766,12 @@
     (java:view x
      (rontolisp::%clojure-host-members (rontolisp::%clojure-sorted-plist x))
      :map #'rontolisp::%clojure-host-text nil "clojure.lang.PersistentTreeMap"))
-   ((rontolisp::%clojure-record-p x)
-    (java:view x
-               (rontolisp::%clojure-host-members
-                (rontolisp::%clojure-host-record-plist x))
-               :map #'rontolisp::%clojure-host-text nil
-               (rontolisp::%clojure-class-name-of x)))
+   ;; a deftype, reify or record with a face: the implementation of the Java
+   ;; interfaces its body implements (a record's java.util.Map among them),
+   ;; standing for it (clojure/ClojureJavaFaces); an arm a program registering no
+   ;; face folds
+   ((rontolisp::%clojure-java-face-p x) (rontolisp::%clojure-java-face x))
+   ((rontolisp::%clojure-record-p x) (rontolisp::%clojure-host-record-view x))
    ((rontolisp::%clojure-lazy-p x) (rontolisp::%clojure-host-seq-view x))
    ((or (rontolisp::%clojure-date-p x) (rontolisp::%clojure-timestamp-p x)
         (rontolisp::%clojure-uuid-p x))
@@ -2780,10 +2780,6 @@
    ;; themselves on the interpreter, a copy written back after the call compiled;
    ;; an arm a program making no byte array folds
    ((rontolisp::%clojure-bytes-p x) (java:view x (car (cdr x)) :bytes))
-   ;; a deftype or reify with a face: the implementation of the Java interfaces
-   ;; its body implements, standing for it (clojure/ClojureJavaFaces); an arm a
-   ;; program registering no face folds
-   ((rontolisp::%clojure-java-face-p x) (rontolisp::%clojure-java-face x))
    ;; any other wrapper: an atom, a deftype, a reify, a pattern, a var ...
    ((and (consp x) (keywordp (car x))) (rontolisp::%clojure-host-object x))
    ((consp x) (rontolisp::%clojure-host-seq-view x))
@@ -2798,6 +2794,14 @@
    ;; a fn, a condition, a stream: no Java value of its own
    ((rontolisp::%clojure-lisp-value-p x) (rontolisp::%clojure-host-object x))
    (t x)))
+
+;; The record X as a read-only java.util.Map of its entries, the oracle's record
+;; class's Map: what Java sees of it, or what its face's Map methods ask.
+(defun rontolisp::%clojure-host-record-view (x)
+  (java:view x
+   (rontolisp::%clojure-host-members (rontolisp::%clojure-host-record-plist x))
+   :map #'rontolisp::%clojure-host-text nil
+   (rontolisp::%clojure-class-name-of x)))
 
 ;; Whether java: hands the Clojure value X to Java as it is: nil, true, false, a
 ;; string, a character, or a number but a ratio.
@@ -2851,11 +2855,12 @@
                    "java.lang.Object")))
 
 ;; Java faces: what Java sees of a deftype or reify whose body implements a Java
-;; interface or overrides an Object method (clojure/ClojureJavaFaces). The lowering
-;; makes the face with a maker over the type's literal interface names -- a
-;; java:reify standing for the value, each method calling the type's row method --
-;; and stores it in the type's row, under "%java", where %clojure-host-member finds
-;; it; Java hands the face back as the value.
+;; interface or overrides an Object method, or of a record whose body implements a
+;; Java interface (clojure/ClojureJavaFaces). The lowering makes the face with a
+;; maker over the type's literal interface names -- a java:reify standing for the
+;; value, each method calling the type's row method, a record's Map methods its
+;; view's -- and stores it in the type's row, under "%java", where
+;; %clojure-host-member finds it; Java hands the face back as the value.
 
 ;; Stores MAKER -- a one-argument function answering the face of a value of the
 ;; type TAG -- in the type's row; answers TAG, whose form the registration wraps in

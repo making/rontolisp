@@ -1358,6 +1358,43 @@ class ClojureInteropTest {
 						""");
 	}
 
+	// Oracle (clj 1.12.6, measured 2026-10-10): a record's class implements java.util.Map
+	// and every Java interface its body names, so a TreeSet orders it by its compareTo, a
+	// Thread runs it, a HashMap copies its entries, Java keys it by the Map's equals and
+	// hashCode (equal to a plain map of its entries), a record implementing no Comparable
+	// is refused by a TreeSet naming its class, and Java hands it back as itself. Before,
+	// measured 2026-10-10 on the interpreter: "class
+	// am.ik.rontolisp.runtime.RontoJavaMapView cannot be cast to class
+	// java.lang.Comparable", "No matching constructor for java.lang.Thread with 1
+	// argument(s)".
+	@Test
+	void aRecordReachesJavaAsAMapImplementingItsBodysInterfaces() throws Exception {
+		assertBothEqual(
+				"""
+						(defrecord Person [name age] Comparable (compareTo [_ o] (compare age (:age o))))
+						(println (vec (map :name (java.util.TreeSet. [(->Person "b" 2) (->Person "a" 1)]))))
+						(defrecord Job [] Runnable (run [_] (println "job")))
+						(doto (Thread. (->Job)) .start .join)
+						(let [p (->Person "c" 3) m (java.util.HashMap. p) l (java.util.ArrayList. [p])]
+						  (println (.get m :name) (.size m) (.containsKey m :age) (.get (java.util.HashMap. (assoc p :x false)) :x))
+						  (println (identical? p (.get l 0)) (.contains l (->Person "c" 3))))
+						(println (.contains (java.util.HashSet. [(->Person "c" 3)]) {:name "c" :age 3})
+						         (.contains (java.util.HashSet. [{:name "c" :age 3}]) (->Person "c" 3)))
+						(defrecord T [a] Object (toString [_] "T!") Runnable (run [_] nil))
+						(println (str (java.util.ArrayList. [(->T 1)])) (.get (java.util.HashMap. (->T 1)) :a))
+						(println (try (java.util.TreeSet. [(->Job) (->Job)]) (catch ClassCastException e (.getMessage e))))
+						""",
+				"""
+						[a b]
+						job
+						c 2 true false
+						true true
+						true true
+						[T!] 1
+						class user.Job cannot be cast to class java.lang.Comparable
+						""");
+	}
+
 	// Oracle (clj 1.12.6, measured 2026-10-10): a TreeSet of a deftype implementing no
 	// Comparable throws the cast failure naming the type, an Object override or not; a
 	// face is Comparable only to say so.

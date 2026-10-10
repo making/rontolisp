@@ -161,6 +161,15 @@ class ClojureLibraryTest {
 			.read("(deftype T [a] Runnable (run [_] nil)) (println (str (java.util.ArrayList. [(T. 1)])))", null));
 		assertThat(defun(faced, "RONTOLISP::%CLOJURE-HOST-MEMBER")).contains("%CLOJURE-JAVA-FACE-P");
 		assertThat(defun(faced, "RONTOLISP::%CLOJURE-JAVA-FACE-TAG")).contains("\"%java\"");
+		// a record implementing no Java interface crosses as its map view, asking for no
+		// face; one implementing one asks first
+		List<LispVal> record = ClojureLibrary
+			.process(Clojure.read("(defrecord R [a]) (println (str (java.util.ArrayList. [(->R 1)])))", null));
+		assertThat(defun(record, "RONTOLISP::%CLOJURE-HOST-MEMBER")).doesNotContain("%CLOJURE-JAVA-FACE-P")
+			.contains("%CLOJURE-HOST-RECORD-VIEW");
+		List<LispVal> facedRecord = ClojureLibrary.process(Clojure
+			.read("(defrecord R [a] Runnable (run [_] nil)) (println (str (java.util.ArrayList. [(->R 1)])))", null));
+		assertThat(defun(facedRecord, "RONTOLISP::%CLOJURE-HOST-MEMBER")).contains("%CLOJURE-JAVA-FACE-P");
 	}
 
 	@Test
