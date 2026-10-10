@@ -165,6 +165,7 @@ class JvmQuantizedMatrixTest {
 				(defparameter *m* (rontolisp:make-quantized-matrix 'q8-0 32))
 				(defparameter *o* (make-array 3 :element-type '(unsigned-byte 8) :initial-contents '(1 200 8)))
 				(defparameter *l* #8@(8 0 0 0))
+				(defparameter *h* #8@(1 0 0 0 1 0 0 0 32 0 0 0))
 				""";
 		assertAgreedText(program + "(print (list (rontolisp:quantized-matrix-p *o*) (rontolisp:quantized-matrix-p *l*)"
 				+ " (rontolisp:quantized-matrix-p *m*) (arrayp *o*) (arrayp *m*) (typep *o* '(simple-array * (*)))"
@@ -176,6 +177,11 @@ class JvmQuantizedMatrixTest {
 				program + "(print (handler-case (rontolisp:dequantize *o* 'single-float)" + " (error (e) :refused)))",
 				":REFUSED");
 		assertAgreedText(program + "(setf (aref *o* 2) 300) (print (list (aref *o* 2) (reduce #'+ *l*)))", "(44 8)");
+		// An octet vector whose octets spell a q8-0 header of rank 1 and 32 columns.
+		assertAgreedText(
+				program + "(print (list (rontolisp:quantized-matrix-p *h*) (arrayp *h*) (length *h*) *h*"
+						+ " (handler-case (rontolisp:dequantize *h* 'single-float) (error (e) :refused))))",
+				"(NIL T 12 #(1 0 0 0 1 0 0 0 32 0 0 0) :REFUSED)");
 	}
 
 	@Test

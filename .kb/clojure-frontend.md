@@ -2392,14 +2392,13 @@ namespace` but the ones no measured library names (`inspector`, `java.browse`,
 - **Deviations** (user docs `byte-array.md`, `deviations.md`): the hash-less `#object` and
   `str`; `class` a keyword; `aset` of any in-range integer; a seq a snapshot of the elements
   (the oracle's `ArraySeq` reads the array as it walks: `(1 9 3)` there, `(1 2 3)` here after
-  an `aset` between `seq` and the print); on the JVM Java holds a copy of the octets, written
-  back when the member returns, so an array a Java object keeps (`ByteBuffer/wrap`, `.array`)
-  is the byte array only on the interpreter
-  (`ClojureInteropTest#anArrayJavaKeepsIsTheByteArrayItselfOnlyOnTheInterpreter` pins both;
-  todo `f25`); a `byte[]` coming back is a new byte array, never
-  `identical?` to one that went out -- also one Java hands a fn, a `proxy` or a face's method
-  ("Java interop", f24), whose JVM copy is written back when the method returns or throws, a
-  `byte[]` inside an array argument not.
+  an `aset` between `seq` and the print); a `byte[]` coming back is a new byte array (a fresh
+  `(:C%BYTES octets)` wrapper over the same octets), never `identical?` to one that went out --
+  also one Java hands a fn, a `proxy` or a face's method ("Java interop", f24). Java holds the
+  byte array's own octets on both backends since 2026-10-10 (f25), so an array a Java object
+  keeps (`ByteBuffer/wrap`, `.array`) is the byte array, and a fn reads what Java stores while it
+  runs (`ClojureInteropTest#anArrayJavaKeepsIsTheByteArrayItself`, oracle-identical); until then
+  the JVM handed Java a copy written back when the member, or the fn, returned.
 - **Pins**: clojure-spec `byte-array-makes-a-mutable-array-of-signed-bytes`,
   `a-byte-array-is-no-collection-yet-seqs-its-bytes`,
   `strings-and-byte-arrays-convert-in-a-charset`,
@@ -3910,9 +3909,8 @@ The `java:` surface (`.kb/java-interop.md`); interpreter and JVM only -- wasm co
   `aByteArrayReachesJavaAsTheByteArrayJavaStoresInto`).
 - A `byte[]` Java hands a fn, a `proxy` or a face's method is a byte array, and one they answer
   Java's `byte[]` (f24, 2026-10-10). The `java:` half is `:octets` reaching callbacks
-  (`.kb/java-interop.md`, "Markers": the interpreter hands Java's own array, a compiled program a
-  copy written back when the function returns or throws). The Clojure half reads each argument
-  through `%clojure-host-answer`, which is the identity on every Clojure value (none is a raw
+  (`.kb/java-interop.md`, "Markers": Java's own array on both backends). The Clojure half reads
+  each argument through `%clojure-host-answer`, which is the identity on every Clojure value (none is a raw
   octet vector; a keyword-headed list is a wrapper), so a conversion costs only the walk:
   - a fn: Java calls a fn of its own over it, as the oracle's functional interface calls its
     fn. `ClojureInteropLowering.hostCall` ends every call with a non-literal argument (the

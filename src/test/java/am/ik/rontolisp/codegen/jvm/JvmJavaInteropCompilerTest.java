@@ -1324,8 +1324,8 @@ class JvmJavaInteropCompilerTest {
 
 	// Mirrors
 	// JavaInteropTest#anImplementationMadeAtOctetsIsHandedAByteArrayAsAnOctetVector:
-	// the generated classes' callbacks hand a copy through _jcbo and write it back
-	// through _jwbo, the bridge's Proxy through its own.
+	// the generated classes' callbacks hand Java's own array through _juno / _jufo, the
+	// bridge's Proxy through its own unmarshal.
 	@Test
 	void anImplementationMadeAtOctetsIsHandedAByteArrayAsAnOctetVector() throws Exception {
 		assertThat(compileAndRun(JavaImplementationPrograms.OCTETS))

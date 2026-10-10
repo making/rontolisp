@@ -143,8 +143,7 @@ final class JvmJavaDirectSites {
 	/**
 	 * {@code _juno(Object)Object}: {@link #UNMARSHAL} at a call ending in
 	 * {@code :octets}, which answers a {@code byte[]} -- the value or an array's element
-	 * -- as an {@code (unsigned-byte 8)} vector: a fresh {@code byte[]} of its octets
-	 * after the width in slot 0.
+	 * -- as an {@code (unsigned-byte 8)} vector: the very array, which is the vector.
 	 */
 	static final String UNMARSHAL_OCTETS = "_juno";
 
@@ -171,28 +170,6 @@ final class JvmJavaDirectSites {
 
 	private static final String[] ARRAYS_TO_LIST = { ARRAY_TO_LIST, ARRAY_TO_LIST_FALSE, ARRAY_TO_LIST_OCTETS,
 			ARRAY_TO_LIST_FALSE_OCTETS };
-
-	/**
-	 * {@code _jcbo(Object[])Object[]}: the arguments Java hands a function of an
-	 * implementation made at {@code :octets}, each as {@link #UNMARSHAL_OCTETS} makes it
-	 * -- a {@code byte[]} a fresh octet vector -- and an array Java hands twice one
-	 * vector, as Java's one array is.
-	 */
-	static final String CALLBACK_OCTETS = "_jcbo";
-
-	/**
-	 * {@code _jcbf(Object[])Object[]}: {@link #CALLBACK_OCTETS} over
-	 * {@link #UNMARSHAL_FALSE_OCTETS}, after {@code :java-false} too.
-	 */
-	static final String CALLBACK_FALSE_OCTETS = "_jcbf";
-
-	/**
-	 * {@code _jwbo(Object[] handed, Object[] values)V}: after such a function returns or
-	 * throws, what it stored into the octet vector a {@code byte[]} argument became goes
-	 * back into Java's array -- the octets after the width, written only where they
-	 * differ, so an array the function left alone is never written.
-	 */
-	static final String WRITE_BACK_OCTETS = "_jwbo";
 
 	/**
 	 * {@code _jhandle(Object value, Object text, Object hash, Object order, Object class,
@@ -375,11 +352,6 @@ final class JvmJavaDirectSites {
 	private final @Nullable MethodRefEntry[] unmarshals = new MethodRefEntry[UNMARSHALS.length];
 
 	private final @Nullable MethodRefEntry[] arraysToList = new MethodRefEntry[ARRAYS_TO_LIST.length];
-
-	// _jcbo and _jcbf, by whether Java's false is |false|: built when first asked for.
-	private final @Nullable MethodRefEntry[] callbackArguments = new MethodRefEntry[2];
-
-	private @Nullable MethodRefEntry writeBack;
 
 	private @Nullable MethodRefEntry comparison;
 
@@ -577,51 +549,16 @@ final class JvmJavaDirectSites {
 
 	/**
 	 * {@code _junm}, or at a call ending in {@code :java-false} {@code _junf}, which
-	 * answers Java's {@code false} as {@code |false|}: made when first asked for. What
-	 * Java hands a function made without {@code :octets} goes through this one.
+	 * answers Java's {@code false} as {@code |false|}; at one ending in {@code :octets}
+	 * {@code _juno} / {@code _jufo}, which answer a {@code byte[]} as the octet vector it
+	 * is: made when first asked for. What Java hands a function of an implementation goes
+	 * through this one, a {@code byte[]} reaching it as Java's own array.
 	 * @param javaFalse whether Java's false is {@code |false|}
+	 * @param octets whether a {@code byte[]} is an octet vector
 	 * @return the helper
 	 */
-	MethodRefEntry unmarshalHelper(boolean javaFalse) {
-		return unmarshal(javaFalse, false);
-	}
-
-	/**
-	 * {@code _jcbo}, or after {@code :java-false} too {@code _jcbf}: the arguments Java
-	 * hands a function made at {@code :octets} as the Lisp values it is handed, made when
-	 * first asked for.
-	 * @param javaFalse whether Java's false is {@code |false|}
-	 * @return {@code (Object[])Object[]}
-	 */
-	MethodRefEntry callbackArgumentsHelper(boolean javaFalse) {
-		int index = javaFalse ? 1 : 0;
-		MethodRefEntry ref = this.callbackArguments[index];
-		if (ref == null) {
-			Utf8Entry name = this.cp.utf8Entry(javaFalse ? CALLBACK_FALSE_OCTETS : CALLBACK_OCTETS);
-			Utf8Entry desc = this.cp.utf8Entry("([Ljava/lang/Object;)[Ljava/lang/Object;");
-			ref = this.cp.methodRef(this.thisClass, name, desc);
-			this.callbackArguments[index] = ref;
-			this.methods.add(buildCallbackArguments(name, desc, unmarshal(javaFalse, true)));
-		}
-		return ref;
-	}
-
-	/**
-	 * {@code _jwbo}: after a function made at {@code :octets} returns or throws, what it
-	 * stored into the octet vectors {@link #callbackArgumentsHelper} made goes back into
-	 * Java's arrays. Made when first asked for.
-	 * @return {@code (Object[],Object[])V}
-	 */
-	MethodRefEntry writeBackHelper() {
-		MethodRefEntry ref = this.writeBack;
-		if (ref == null) {
-			Utf8Entry name = this.cp.utf8Entry(WRITE_BACK_OCTETS);
-			Utf8Entry desc = this.cp.utf8Entry("([Ljava/lang/Object;[Ljava/lang/Object;)V");
-			ref = this.cp.methodRef(this.thisClass, name, desc);
-			this.writeBack = ref;
-			this.methods.add(buildWriteBack(name, desc));
-		}
-		return ref;
+	MethodRefEntry unmarshalHelper(boolean javaFalse, boolean octets) {
+		return unmarshal(javaFalse, octets);
 	}
 
 	/**
@@ -1193,151 +1130,6 @@ final class JvmJavaDirectSites {
 		return ref;
 	}
 
-	// _jcbo / _jcbf(Object[] handed)Object[]: each argument through UNMARSHAL (_juno /
-	// _jufo), but a byte[] an earlier argument is too takes that one's vector, so the
-	// function stores into one copy of Java's one array.
-	private Method buildCallbackArguments(Utf8Entry name, Utf8Entry desc, MethodRefEntry unmarshal) {
-		MethodCode a = new MethodCode();
-		ClassEntry bytes = cls("[B");
-		// 0 = the handed arguments, 1 = the values, 2 = i, 3 = k, 4 = handed[i]
-		a.aload(0);
-		a.arraylength();
-		a.anewarray(cls("java/lang/Object"));
-		a.astore(1);
-		a.loadConstant(0);
-		a.istore(2);
-		MethodCode.Label loop = a.newLabel();
-		MethodCode.Label done = a.newLabel();
-		MethodCode.Label next = a.newLabel();
-		MethodCode.Label fresh = a.newLabel();
-		a.labelBinding(loop);
-		a.iload(2);
-		a.aload(0);
-		a.arraylength();
-		a.if_icmpge(done);
-		a.aload(0);
-		a.iload(2);
-		a.aaload();
-		a.astore(4);
-		a.aload(4);
-		a.instanceOf(bytes);
-		a.ifeq(fresh);
-		// an earlier argument holding the very array: its vector
-		a.loadConstant(0);
-		a.istore(3);
-		MethodCode.Label earlier = a.newLabel();
-		MethodCode.Label other = a.newLabel();
-		a.labelBinding(earlier);
-		a.iload(3);
-		a.iload(2);
-		a.if_icmpge(fresh);
-		a.aload(0);
-		a.iload(3);
-		a.aaload();
-		a.aload(4);
-		a.if_acmpne(other);
-		a.aload(1);
-		a.iload(2);
-		a.aload(1);
-		a.iload(3);
-		a.aaload();
-		a.aastore();
-		a.goto_(next);
-		a.labelBinding(other);
-		a.iinc(3, 1);
-		a.goto_(earlier);
-		a.labelBinding(fresh);
-		a.aload(1);
-		a.iload(2);
-		a.aload(4);
-		a.invokestatic(unmarshal);
-		a.aastore();
-		a.labelBinding(next);
-		a.iinc(2, 1);
-		a.goto_(loop);
-		a.labelBinding(done);
-		a.aload(1);
-		a.areturn();
-		return new Method(name, desc, a);
-	}
-
-	// _jwbo(Object[] handed, Object[] values)V: each byte[] argument whose octet vector
-	// (the width in slot 0, then the octets) differs from it takes the octets back; the
-	// values null when the function never ran.
-	private Method buildWriteBack(Utf8Entry name, Utf8Entry desc) {
-		MethodCode a = new MethodCode();
-		ClassEntry bytes = cls("[B");
-		// 0 = the handed arguments, 1 = the values, 2 = i, 3 = Java's array,
-		// 4 = the vector
-		MethodCode.Label end = a.newLabel();
-		MethodCode.Label loop = a.newLabel();
-		MethodCode.Label next = a.newLabel();
-		a.aload(1);
-		a.ifnull(end);
-		a.loadConstant(0);
-		a.istore(2);
-		a.labelBinding(loop);
-		a.iload(2);
-		a.aload(0);
-		a.arraylength();
-		a.if_icmpge(end);
-		a.aload(0);
-		a.iload(2);
-		a.aaload();
-		a.instanceOf(bytes);
-		a.ifeq(next);
-		a.aload(1);
-		a.iload(2);
-		a.aaload();
-		a.instanceOf(bytes);
-		a.ifeq(next);
-		a.aload(0);
-		a.iload(2);
-		a.aaload();
-		a.checkcast(bytes);
-		a.astore(3);
-		a.aload(1);
-		a.iload(2);
-		a.aaload();
-		a.checkcast(bytes);
-		a.astore(4);
-		// the vector is a copy one octet longer than the array: anything else is no copy
-		a.aload(4);
-		a.aload(3);
-		a.if_acmpeq(next);
-		a.aload(4);
-		a.arraylength();
-		a.aload(3);
-		a.arraylength();
-		a.loadConstant(1);
-		a.iadd();
-		a.if_icmpne(next);
-		// unchanged: Java's array keeps what it holds
-		a.aload(4);
-		a.loadConstant(1);
-		a.aload(4);
-		a.arraylength();
-		a.aload(3);
-		a.loadConstant(0);
-		a.aload(3);
-		a.arraylength();
-		a.invokestatic(method("java/util/Arrays", "equals", "([BII[BII)Z"));
-		a.ifne(next);
-		a.aload(4);
-		a.loadConstant(1);
-		a.aload(3);
-		a.loadConstant(0);
-		a.aload(3);
-		a.arraylength();
-		a.invokestatic(method("java/lang/System", "arraycopy", "(Ljava/lang/Object;ILjava/lang/Object;II)V"));
-		a.labelBinding(next);
-		a.iinc(2, 1);
-		a.goto_(loop);
-		a.labelBinding(end);
-		a.return_();
-		return new Method(name, desc, a);
-	}
-
 	// --- shared throws ---
 
 	/** {@code throw new RuntimeException(prefix + _lispToString(local))}. */
@@ -1773,10 +1565,7 @@ final class JvmJavaDirectSites {
 				JavaOverloads.Overload overload = overloads.get(k);
 				JavaExecutable executable = overload.executable();
 				int[] converted = emitConverted(overload, firstValue);
-				List<Integer> handed = bytesHanded(overload);
-				emitBytesShared(overload, handed, converted, firstValue);
 				stack = Math.max(stack, emitInvoke(executable, converted, hasReceiver, memberFailed));
-				emitBytesWriteBack(handed, converted, firstValue);
 				emitUnmarshal(executable.isConstructor() ? this.type : executable.returnType());
 				a.areturn();
 				if (!last) {
@@ -1784,95 +1573,6 @@ final class JvmJavaDirectSites {
 				}
 			}
 			return stack;
-		}
-
-		/**
-		 * The arguments of an overload's call that may be a {@code :bytes} view handed as
-		 * a copy of its octets ({@code runtime/RontoJavaBytesView}): of no kind the site
-		 * counted on, at a fixed parameter a {@code byte[]} fits. None where the program
-		 * makes no view.
-		 */
-		private List<Integer> bytesHanded(JavaOverloads.Overload overload) {
-			List<Integer> handed = new ArrayList<>();
-			if (!JvmJavaDirectSites.this.views) {
-				return handed;
-			}
-			List<JavaSite.Argument> arguments = this.site.arguments();
-			List<? extends JavaType> params = overload.executable().parameterTypes();
-			int fixed = overload.packed() ? params.size() - 1 : params.size();
-			for (int j = 0; j < fixed; j++) {
-				JavaSite.Argument argument = arguments.get(j);
-				if (!argument.known() && argument.bound() == null
-						&& JavaOverloads.bytesViewCost(params.get(j)) != JavaOverloads.NO_MATCH) {
-					handed.add(j);
-				}
-			}
-			return handed;
-		}
-
-		/**
-		 * Before the call, two views of one vector among {@link #bytesHanded} hand Java
-		 * one copy, as the oracle hands its one {@code byte[]} twice.
-		 */
-		private void emitBytesShared(JavaOverloads.Overload overload, List<Integer> handed, int[] converted,
-				int firstValue) {
-			MethodCode a = this.a;
-			List<? extends JavaType> params = overload.executable().parameterTypes();
-			MethodRefEntry shared = method(JAVA_BYTES_VIEW, "shared", "(Ljava/lang/Object;Ljava/lang/Object;)Z");
-			for (int x = 1; x < handed.size(); x++) {
-				for (int y = 0; y < x; y++) {
-					int later = handed.get(x);
-					int earlier = handed.get(y);
-					MethodCode.Label apart = a.newLabel();
-					a.aload(this.valueSlots[firstValue + earlier]);
-					a.aload(this.valueSlots[firstValue + later]);
-					a.invokestatic(shared);
-					a.ifeq(apart);
-					a.aload(converted[earlier]);
-					if (params.get(later).isArray()) {
-						a.checkcast(cls("[B"));
-					}
-					a.astore(converted[later]);
-					a.labelBinding(apart);
-				}
-			}
-		}
-
-		/**
-		 * After an overload's call, what Java stored into the copy of a {@code :bytes}
-		 * view's octets it was handed goes back into the vector
-		 * ({@code runtime/RontoJavaBytesView}): every argument {@link #bytesHanded} names
-		 * is asked first, then each changed copy is written back, so a vector handed
-		 * twice keeps what Java stored rather than its other copy. A varargs tail's
-		 * elements are not read back.
-		 */
-		private void emitBytesWriteBack(List<Integer> handed, int[] converted, int firstValue) {
-			if (handed.isEmpty()) {
-				return;
-			}
-			MethodCode a = this.a;
-			String pair = "(Ljava/lang/Object;Ljava/lang/Object;)";
-			MethodRefEntry changed = method(JAVA_BYTES_VIEW, "changed", pair + "Z");
-			MethodRefEntry store = method(JAVA_BYTES_VIEW, "store", pair + "V");
-			int[] flags = new int[handed.size()];
-			for (int i = 0; i < flags.length; i++) {
-				int j = handed.get(i);
-				flags[i] = this.nextSlot++;
-				a.aload(this.valueSlots[firstValue + j]);
-				a.aload(converted[j]);
-				a.invokestatic(changed);
-				a.istore(flags[i]);
-			}
-			for (int i = 0; i < flags.length; i++) {
-				int j = handed.get(i);
-				MethodCode.Label kept = a.newLabel();
-				a.iload(flags[i]);
-				a.ifeq(kept);
-				a.aload(this.valueSlots[firstValue + j]);
-				a.aload(converted[j]);
-				a.invokestatic(store);
-				a.labelBinding(kept);
-			}
 		}
 
 		/**
@@ -3249,9 +2949,8 @@ final class JvmJavaDirectSites {
 	// null when it is no rank-1 vector. The shapes and their headers: a packed float
 	// array double[] / float[] {rank, dim..., e...} and bfloat16 short[] {rank, hi, lo,
 	// ..., e...} (JvmPackedFloatWidth, its element through _bf16Value), a packed integer
-	// vector long[] {width, e...} and an octet vector byte[] {8, e...} (read unsigned;
-	// any other byte[] is a quantized matrix). Locals 7 = the array, 8 = the count, 9 =
-	// the elements, 10 = the index.
+	// vector long[] {width, e...} and an octet vector, the bare byte[] (read unsigned).
+	// Locals 7 = the array, 8 = the count, 9 = the elements, 10 = the index.
 	private void emitPackedElements(MethodCode a, String shape) {
 		int array = 7;
 		int count = 8;
@@ -3291,25 +2990,17 @@ final class JvmJavaDirectSites {
 				a.if_icmpne(notVector);
 				offset = width.dataOffset(1);
 			}
-			case "[B" -> {
-				a.aload(array);
-				a.arraylength();
-				a.ifeq(notVector);
-				a.aload(array);
-				a.loadConstant(0);
-				a.baload();
-				a.loadConstant(JvmIntArrayRuntimeBuilder.OCTET_TAG);
-				a.if_icmpne(notVector);
-				offset = 1;
-			}
+			case "[B" -> offset = 0; // the octets alone
 			default -> offset = 1; // [J: the width, then the elements
 		}
 		MethodCode.Label loop = a.newLabel();
 		MethodCode.Label done = a.newLabel();
 		a.aload(array);
 		a.arraylength();
-		a.loadConstant(offset);
-		a.isub();
+		if (offset != 0) {
+			a.loadConstant(offset);
+			a.isub();
+		}
 		a.istore(count);
 		a.iload(count);
 		a.anewarray(cls("java/lang/Object"));
@@ -3324,8 +3015,10 @@ final class JvmJavaDirectSites {
 		a.iload(index);
 		a.aload(array);
 		a.iload(index);
-		a.loadConstant(offset);
-		a.iadd();
+		if (offset != 0) {
+			a.loadConstant(offset);
+			a.iadd();
+		}
 		MethodRefEntry doubleValueOf = method("java/lang/Double", "valueOf", "(D)Ljava/lang/Double;");
 		MethodRefEntry longValueOf = method("java/lang/Long", "valueOf", "(J)Ljava/lang/Long;");
 		switch (shape) {
@@ -3794,7 +3487,7 @@ final class JvmJavaDirectSites {
 			}
 			a.labelBinding(notView);
 			if (JavaOverloads.bytesViewCost(target) != JavaOverloads.NO_MATCH) {
-				// A :bytes view: a copy of its octets, which the site writes back.
+				// A :bytes view: the vector's own octets.
 				MethodCode.Label notBytes = a.newLabel();
 				a.iload(code);
 				a.loadConstant(KIND_BYTES);
@@ -4520,8 +4213,8 @@ final class JvmJavaDirectSites {
 		emitUnquoted(a, 5, badClass);
 		a.astore(className);
 		a.labelBinding(classRead);
-		// a :bytes view: the octet vector, a byte[] after its width that only a program
-		// holding one makes, which Java is handed a copy of
+		// a :bytes view: the octet vector, a byte[] only a program holding one makes,
+		// which Java is handed itself
 		MethodCode.Label notBytes = a.newLabel();
 		a.iload(shape);
 		a.loadConstant(4);
@@ -4531,24 +4224,13 @@ final class JvmJavaDirectSites {
 			a.aload(1);
 			a.instanceOf(bytes);
 			a.ifeq(badItems);
-			a.aload(1);
-			a.checkcast(bytes);
-			a.arraylength();
-			a.ifeq(badItems);
-			a.aload(1);
-			a.checkcast(bytes);
-			a.loadConstant(0);
-			a.baload();
-			a.loadConstant(JvmIntArrayRuntimeBuilder.OCTET_TAG);
-			a.if_icmpne(badItems);
 			ClassEntry view = cls(JAVA_BYTES_VIEW);
 			a.new_(view);
 			a.dup();
 			a.aload(0);
 			a.aload(1);
 			a.checkcast(bytes);
-			a.loadConstant(1);
-			a.invokespecial(this.cp.methodRef(view, "<init>", "(Ljava/lang/Object;[BI)V"));
+			a.invokespecial(this.cp.methodRef(view, "<init>", "(Ljava/lang/Object;[B)V"));
 			a.areturn();
 		}
 		else {
@@ -4767,7 +4449,7 @@ final class JvmJavaDirectSites {
 	// unmarshalled as Array.get would box them), or the value itself when it is no array;
 	// _jarf with javaFalse, a false boolean element |false|; with octets (_jaro, _jafo) a
 	// byte[] -- the value, or as an Object[] element through UNMARSHAL -- an
-	// (unsigned-byte 8) vector: a fresh byte[] of its octets after the width in slot 0.
+	// (unsigned-byte 8) vector: the very array, which is the vector.
 	private Method buildArrayToList(Utf8Entry name, Utf8Entry desc, MethodRefEntry unmarshal, boolean javaFalse,
 			boolean octets) {
 		MethodCode a = new MethodCode();
@@ -4779,29 +4461,7 @@ final class JvmJavaDirectSites {
 			a.aload(0);
 			a.instanceOf(cls("[B"));
 			a.ifeq(notBytes);
-			// vector = new byte[bytes.length + 1]; vector[0] = 8;
-			// System.arraycopy(bytes, 0, vector, 1, bytes.length)
 			a.aload(0);
-			a.checkcast(cls("[B"));
-			a.astore(2);
-			a.aload(2);
-			a.arraylength();
-			a.loadConstant(1);
-			a.iadd();
-			a.newarray(TypeKind.BYTE);
-			a.astore(1);
-			a.aload(1);
-			a.loadConstant(0);
-			a.loadConstant(JvmIntArrayRuntimeBuilder.OCTET_TAG);
-			a.bastore();
-			a.aload(2);
-			a.loadConstant(0);
-			a.aload(1);
-			a.loadConstant(1);
-			a.aload(2);
-			a.arraylength();
-			a.invokestatic(method("java/lang/System", "arraycopy", "(Ljava/lang/Object;ILjava/lang/Object;II)V"));
-			a.aload(1);
 			a.areturn();
 			a.labelBinding(notBytes);
 		}

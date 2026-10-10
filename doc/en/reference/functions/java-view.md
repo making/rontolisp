@@ -55,11 +55,8 @@ else.
 A `:bytes` view is no collection, and Java never holds it: wherever a `byte[]` fits -- a
 `byte[]` parameter, an `Object`, `Cloneable` or `Serializable` one, an element of another
 view -- Java is handed the `byte[]` of its octets, and nowhere else does the view convert.
-On the interpreter that array is the vector's own storage, so what Java stores into it, then
-or later, the vector holds. A compiled program's octet vector stores its octets after a
-width, so Java is handed a copy, which the call writes back into the vector when it returns:
-the vector holds what Java stored during the call, not what a Java object that kept the
-array stores later. A vector handed twice to one call is one array to Java. Its `printer` and
+That array is the vector's own storage, so what Java stores into it, then or later, the
+vector holds, and a vector handed twice to one call is one array to Java. Its `printer` and
 `class` are not used. A `byte[]` comes back as an octet vector at a call ending in
 [`:octets`](java-call.md).
 

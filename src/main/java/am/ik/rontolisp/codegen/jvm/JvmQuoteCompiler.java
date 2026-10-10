@@ -149,9 +149,9 @@ final class JvmQuoteCompiler {
 
 	/**
 	 * Emits a packed integer-vector literal (ironclad's {@code #N@(...)}, or a macro-time
-	 * {@code LispIntVector} value) as a bare array with a width header: {@code [width,
-	 * e_0, ..., e_{n-1}]} -- a {@code byte[]} at width 8, a {@code long[]} otherwise, the
-	 * native packed representation ({@link JvmIntArrayRuntimeBuilder}). The elements
+	 * {@code LispIntVector} value) as the native packed representation
+	 * ({@link JvmIntArrayRuntimeBuilder}): the bare {@code byte[]} of the octets at width
+	 * 8, a {@code long[]} {@code [width, e_0, ..., e_{n-1}]} otherwise. The elements
 	 * arrive pre-masked from the reader; a zero octet needs no store. The array reference
 	 * is kept on the stack and {@code DUP}ed for each store, so the operand stack stays
 	 * shallow regardless of the element count.
@@ -161,17 +161,17 @@ final class JvmQuoteCompiler {
 	 */
 	static void compileLiteralIntVector(am.ik.rontolisp.LispIntVector iv, JvmLispCompiler.Ctx ctx, String className) {
 		long[] data = iv.toLongArray();
-		JvmEmitHelper.emitIntConst(ctx, 1 + data.length);
-		if (iv.width() == JvmIntArrayRuntimeBuilder.OCTET_TAG) {
+		if (iv.width() == JvmIntArrayRuntimeBuilder.OCTET_WIDTH) {
+			JvmEmitHelper.emitIntConst(ctx, data.length);
 			ctx.body.newarray(TypeKind.BYTE);
-			emitRawByteStore(ctx, 0, JvmIntArrayRuntimeBuilder.OCTET_TAG);
 			for (int i = 0; i < data.length; i++) {
 				if (data[i] != 0) {
-					emitRawByteStore(ctx, 1 + i, (int) data[i]);
+					emitRawByteStore(ctx, i, (int) data[i]);
 				}
 			}
 			return;
 		}
+		JvmEmitHelper.emitIntConst(ctx, 1 + data.length);
 		ctx.body.newarray(TypeKind.LONG);
 		emitRawLongStore(ctx, 0, iv.width());
 		for (int i = 0; i < data.length; i++) {

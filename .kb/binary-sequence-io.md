@@ -29,8 +29,9 @@ along: `.kb/character-sequence-io.md`.
   2026-09-26, no element loop); a stdout write updates `atLineStart`.
 - **JVM** `JvmIoRuntimeBuilder.buildSeqPacked` -> `_readSeqPacked` / `_writeSeqPacked`, called by
   `JvmSequencePackedCompiler`. Buffer is a `float[]`/`double[]` with the `[rank, dims..., data...]`
-  header (data offset `1 + rank`), a `byte[]{8, ...}` octet vector (one bulk transfer, offset 1),
-  or a `long[]` with its width header (offset 1, an element loop). Helpers are
+  header (data offset `1 + rank`), an octet vector's bare `byte[]` (one bulk transfer, offset 0),
+  a quantized matrix's holder (its array past the header, one transfer), or a `long[]` with its
+  width header (offset 1, an element loop). Helpers are
   minted only when the program has both a packed buffer and a `read-sequence`/`write-sequence`
   (`usesPackedSequenceIo` in `JvmLispCompiler`, threaded into `Ctx`); otherwise the primitives
   compile to `aconst_null`.

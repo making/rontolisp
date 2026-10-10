@@ -166,8 +166,8 @@ final class JvmFetchRuntimeBuilder {
 		a.athrow();
 		a.labelBinding(methodDone);
 
-		// --- the request body into slot 18: nil stays null (no body), a packed octet
-		// vector (byte[]{8, ...}) is passed as it is, anything else is its text.
+		// --- the request body into slot 18: nil stays null (no body), an octet vector
+		// (a byte[]) is passed as it is, anything else is its text.
 		MethodCode.Label bodyDone = a.newLabel();
 		MethodCode.Label bodyText = a.newLabel();
 		a.aconst_null();

@@ -488,14 +488,11 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   here, which converts back to an array where one is expected and nothing takes the list
   whole -- so
   `(java.util.Arrays/asList [1 2])` is a list holding the vector, where the oracle throws --
-  and so does an array `make-array` makes, a vector here. A byte array crosses as a `byte[]`
-  of its bytes: on the interpreter its own, on the JVM a copy written back into it when the
-  member returns, so an array a Java object keeps (`ByteBuffer/wrap`'s, a `ByteBuffer`'s
-  `.array`) is the byte array itself only on the interpreter. A `byte[]` coming back is a new
-  byte array, never `identical?` to one that went out; so is one Java hands a `proxy`, a
-  deftype or reify method or a fn, which on the JVM holds a copy, written back into Java's
-  array when the method returns or throws (a `byte[]` inside an array argument is not
-  written back).
+  and so does an array `make-array` makes, a vector here. A byte array crosses as the
+  `byte[]` of its bytes, its own on the interpreter and the JVM alike, so an array a Java
+  object keeps (`ByteBuffer/wrap`'s, a `ByteBuffer`'s `.array`) is the byte array itself. A
+  `byte[]` coming back is a new byte array over the same bytes, never `identical?` to one that
+  went out; so is one Java hands a `proxy`, a deftype or reify method or a fn.
 - An integer receiver is called as an `Integer` when it fits one, else as a `Long`
   (the oracle's is always a `Long`): `(.getClass 1)` answers `java.lang.Integer`.
 - A `_` param tag leaves that parameter to the cost rule of the `java:` surface, so

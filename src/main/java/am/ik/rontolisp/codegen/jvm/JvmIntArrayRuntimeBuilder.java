@@ -15,15 +15,17 @@ import am.ik.rontolisp.codegen.jvm.JvmArrayRuntimeBuilder.ArrayMethod;
  * Builds the JVM bytecode for the packed integer-vector runtime helpers ({@code _iv*}). A
  * packed integer vector ({@code (make-array n :element-type '(unsigned-byte 8|16|32))},
  * rank 1, no fill pointer / adjustability / displacement, or ironclad's {@code #N@(...)}
- * literal) is represented at runtime as a bare array with a width header -- slot 0 holds
- * the element width in bits and the elements (pre-masked, non-negative) start at slot 1,
- * so the length is {@code arr.length - 1}:
+ * literal) is represented at runtime as a bare array:
  *
  * <ul>
- * <li>{@code (unsigned-byte 8)}: a {@code byte[]} {@code [8, e_0, ..., e_{n-1}]}, an
- * element read as {@code e & 0xFF} -- one byte an octet, which is what every HTTP body,
- * binary stream and digest buffer is made of ({@link #OCTET_TAG});</li>
- * <li>{@code (unsigned-byte 16|32)}: a {@code long[]} {@code [width, e_0, ...]}.</li>
+ * <li>{@code (unsigned-byte 8)}: a {@code byte[]} {@code [e_0, ..., e_{n-1}]}, the octets
+ * and nothing else, an element read as {@code e & 0xFF} -- one byte an octet, which is
+ * what every HTTP body, binary stream and digest buffer is made of, and the very array
+ * Java holds, so a {@code byte[]} Java answers or keeps IS the vector
+ * ({@code .kb/java-interop.md});</li>
+ * <li>{@code (unsigned-byte 16|32)}: a {@code long[]} {@code [width, e_0, ...]} -- slot 0
+ * holds the element width in bits and the elements (pre-masked, non-negative) start at
+ * slot 1, so the length is {@code arr.length - 1}.</li>
  * </ul>
  *
  * A {@code long[]} is disjoint from every other runtime shape ({@code int[]} is the
@@ -53,14 +55,11 @@ final class JvmIntArrayRuntimeBuilder {
 	static final String OBJ = "Ljava/lang/Object;";
 
 	/**
-	 * Slot 0 of an {@code (unsigned-byte 8)} vector's {@code byte[]}: its width, as slot
-	 * 0 of a {@code long[]} vector is. It is also what tells the vector from a quantized
-	 * matrix, whose {@code byte[]} starts with a format code
-	 * ({@code JvmQuantizedMatrixRuntimeBuilder#FORMAT_Q8_0}), so no format may be given
-	 * this code. {@code runtime.RontoFetch} and {@code runtime.RontoHttpClack} build the
-	 * same layout and spell it themselves, importing nothing.
+	 * The width of the {@code (unsigned-byte 8)} vector, the {@code byte[]}: what its
+	 * element type names, and the width {@code _ivMake} is asked for. Unlike a
+	 * {@code long[]} vector's, it is in no slot.
 	 */
-	static final int OCTET_TAG = 8;
+	static final int OCTET_WIDTH = 8;
 
 	static final String TO_GENERAL = "_ivToGeneral";
 
@@ -250,24 +249,22 @@ final class JvmIntArrayRuntimeBuilder {
 		a.lstore(vSlot);
 	}
 
-	// _ivAref1(arr, i): packed -> Long.valueOf(l[1 + i]) (pre-masked unsigned, so the
-	// boxed Long is the widened unsigned read), i checked against the length
-	// (_ckBound); else delegate. Serves rank-1 aref and row-major-aref. Locals: 0=arr,
-	// 1=i, 2=l.
+	// _ivAref1(arr, i): octets -> Long.valueOf(b[i] & 0xFF); long[] -> Long.valueOf(l[1
+	// + i]) (pre-masked unsigned, so the boxed Long is the widened unsigned read); i
+	// checked against the length (_ckBound); else delegate. Serves rank-1 aref and
+	// row-major-aref. Locals: 0=arr, 1=i, 2=l.
 	private static ArrayMethod buildAref1(ConstantPool cp, Octets octets, ClassEntry longArrayClass,
 			MethodRefEntry longValueOf, MethodRefEntry ckBound, MethodRefEntry aref1Delegate) {
 		int arr = 0, i = 1, l = 2;
 		MethodCode a = new MethodCode();
 		MethodCode.Label notOctets = a.newLabel();
 		octets.emitTest(a, arr, notOctets);
-		// Long.valueOf(b[1 + i] & 0xFF)
+		// Long.valueOf(b[i] & 0xFF)
 		a.aload(arr);
 		a.checkcast(octets.byteArrayClass());
 		a.astore(l);
 		a.aload(l);
-		a.loadConstant(1);
-		emitBoundedIndex(a, l, i, ckBound);
-		a.iadd();
+		emitBoundedIndex(a, l, i, 0, ckBound);
 		a.baload();
 		a.loadConstant(0xFF);
 		a.iand();
@@ -284,7 +281,7 @@ final class JvmIntArrayRuntimeBuilder {
 		a.astore(l);
 		a.aload(l);
 		a.loadConstant(1);
-		emitBoundedIndex(a, l, i, ckBound);
+		emitBoundedIndex(a, l, i, 1, ckBound);
 		a.iadd();
 		a.laload();
 		a.invokestatic(longValueOf);
@@ -298,18 +295,21 @@ final class JvmIntArrayRuntimeBuilder {
 	}
 
 	// Pushes the subscript in local i checked against the vector's length
-	// (l.length - 1, past the width header): the index as an int.
-	private static void emitBoundedIndex(MethodCode a, int l, int i, MethodRefEntry ckBound) {
+	// (l.length - header: the octets have none, a long[] vector its width): the index
+	// as an int.
+	private static void emitBoundedIndex(MethodCode a, int l, int i, int header, MethodRefEntry ckBound) {
 		a.aload(i);
 		a.aload(l);
 		a.arraylength();
-		a.loadConstant(1);
-		a.isub();
+		if (header != 0) {
+			a.loadConstant(header);
+			a.isub();
+		}
 		a.invokestatic(ckBound);
 	}
 
 	// Pushes the length of the packed vector in local slot, known to be one of the two
-	// representations: its array's length past the width header.
+	// representations: the octets' array length, or a long[]'s past the width header.
 	private static void emitPackedLength(MethodCode a, int slot, Octets octets, ClassEntry longArrayClass) {
 		MethodCode.Label wide = a.newLabel();
 		MethodCode.Label done = a.newLabel();
@@ -324,16 +324,16 @@ final class JvmIntArrayRuntimeBuilder {
 		a.aload(slot);
 		a.checkcast(longArrayClass);
 		a.arraylength();
-		a.labelBinding(done);
 		a.loadConstant(1);
 		a.isub();
+		a.labelBinding(done);
 	}
 
-	// _ivAset1(arr, i, val): packed -> l[1 + i] = coerce(val) & widthMask, return the
-	// stored value as a Long (the value AS STORED, matching the interpreter); else
-	// delegate. The value is checked before the bound, as every store checks them.
-	// Serves rank-1 %aset and %row-major-aset. Locals: 0=arr, 1=i, 2=val, 3=l, 4=idx,
-	// 5=width, 6..7=v.
+	// _ivAset1(arr, i, val): octets -> b[i] = (byte) coerce(val); long[] -> l[1 + i] =
+	// coerce(val) & widthMask; return the stored value as a Long (the value AS STORED,
+	// matching the interpreter); else delegate. The value is checked before the bound, as
+	// every store checks them. Serves rank-1 %aset and %row-major-aset. Locals: 0=arr,
+	// 1=i, 2=val, 3=l, 4=idx, 5=width, 6..7=v.
 	private static ArrayMethod buildAset1(ConstantPool cp, Octets octets, ClassEntry longArrayClass,
 			MethodRefEntry ckBound, ClassEntry longClass, ClassEntry bigIntegerClass, ClassEntry numberClass,
 			MethodRefEntry longValueOf, MethodRefEntry numberLongValue, ClassEntry rtExClass, MethodRefEntry rtExInit,
@@ -343,14 +343,14 @@ final class JvmIntArrayRuntimeBuilder {
 		StringEntry storesIntegers = cp.stringEntry("%aset: a packed integer vector stores integers");
 		MethodCode.Label notOctets = a.newLabel();
 		octets.emitTest(a, arr, notOctets);
-		// b[1 + i] = (byte) v; answer v & 0xFF, the value as stored. The narrowing store
-		// is the mask.
+		// b[i] = (byte) v; answer v & 0xFF, the value as stored. The narrowing store is
+		// the mask.
 		a.aload(arr);
 		a.checkcast(octets.byteArrayClass());
 		a.astore(l);
 		emitCoerceInt(a, val, v, longClass, bigIntegerClass, numberClass, numberLongValue, rtExClass, rtExInit,
 				storesIntegers);
-		emitBoundedIndex(a, l, i, ckBound);
+		emitBoundedIndex(a, l, i, 0, ckBound);
 		a.istore(idx);
 		a.lload(v);
 		a.l2i();
@@ -358,9 +358,7 @@ final class JvmIntArrayRuntimeBuilder {
 		a.iand();
 		a.istore(width);
 		a.aload(l);
-		a.loadConstant(1);
 		a.iload(idx);
-		a.iadd();
 		a.iload(width);
 		a.bastore();
 		a.iload(width);
@@ -377,7 +375,7 @@ final class JvmIntArrayRuntimeBuilder {
 		a.astore(l);
 		emitCoerceInt(a, val, v, longClass, bigIntegerClass, numberClass, numberLongValue, rtExClass, rtExInit,
 				storesIntegers);
-		emitBoundedIndex(a, l, i, ckBound);
+		emitBoundedIndex(a, l, i, 1, ckBound);
 		a.istore(idx);
 		// width = (int) l[0]; v &= (1L << width) - 1
 		a.aload(l);
@@ -532,9 +530,7 @@ final class JvmIntArrayRuntimeBuilder {
 		a.ifeq(wide);
 		emitBoxEach(a, o, n, list, f, alAdd, longValueOf, done, () -> {
 			a.checkcast(octets.byteArrayClass());
-			a.loadConstant(1);
 			a.iload(f);
-			a.iadd();
 			a.baload();
 			a.loadConstant(0xFF);
 			a.iand();
@@ -587,7 +583,7 @@ final class JvmIntArrayRuntimeBuilder {
 		MethodCode.Label notOctets = a.newLabel();
 		octets.emitTest(a, 0, notOctets);
 		emitUnsignedByteSpec(cp, a, objectClass, longValueOf, () -> {
-			a.loadConstant(OCTET_TAG);
+			a.loadConstant(OCTET_WIDTH);
 			a.i2l();
 		});
 		a.areturn();
@@ -638,8 +634,8 @@ final class JvmIntArrayRuntimeBuilder {
 	}
 
 	// _ivMake(dims, init, width): build a packed vector of the compile-time literal width
-	// when dims designates rank 1 (a Long, or a one-element cons list of Longs) -- a
-	// byte[] at width 8, a long[] otherwise -- filled with the masked integer init
+	// when dims designates rank 1 (a Long, or a one-element cons list of Longs) -- the
+	// bare byte[] at width 8, a long[] otherwise -- filled with the masked integer init
 	// (default 0; a non-integer init is a type error). Any other dims shape (rank n)
 	// keeps the general boxed representation via _arrayMake, mirroring the
 	// interpreter's runtime rank check. The rank-1 length is _arrayDimsTotal's, which
@@ -702,19 +698,13 @@ final class JvmIntArrayRuntimeBuilder {
 		StringEntry storesIntegers = cp.stringEntry("make-array: a packed integer vector stores integers");
 		MethodCode.Label wide = a.newLabel();
 		a.iload(width);
-		a.loadConstant(OCTET_TAG);
+		a.loadConstant(OCTET_WIDTH);
 		a.if_icmpne(wide);
-		// width 8: b = new byte[n + 1]; b[0] = 8; the init narrowed into every element
-		// (a zero init is the array's own zero fill)
+		// width 8: b = new byte[n]; the init narrowed into every element (a zero init is
+		// the array's own zero fill)
 		a.iload(n);
-		a.loadConstant(1);
-		a.iadd();
 		a.newarray(TypeKind.BYTE);
 		a.astore(arr);
-		a.aload(arr);
-		a.loadConstant(0);
-		a.loadConstant(OCTET_TAG);
-		a.bastore();
 		MethodCode.Label octetsDone = a.newLabel();
 		a.aload(init);
 		a.ifnull(octetsDone);
@@ -728,9 +718,7 @@ final class JvmIntArrayRuntimeBuilder {
 		a.iload(n);
 		a.if_icmpge(octetsDone);
 		a.aload(arr);
-		a.loadConstant(1);
 		a.iload(i);
-		a.iadd();
 		a.lload(fill);
 		a.l2i();
 		a.bastore();

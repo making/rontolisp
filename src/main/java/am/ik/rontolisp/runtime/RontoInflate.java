@@ -20,7 +20,7 @@ package am.ik.rontolisp.runtime;
  *
  * <p>
  * The static methods speak the JVM backend's value representation (an octet vector is the
- * packed {@code byte[]{8, e0, ...}}, a string its quote-wrapped text, an integer a
+ * bare {@code byte[]} of its octets, a string its quote-wrapped text, an integer a
  * {@code Long}, nil {@code null}); the class imports nothing, so it travels beside a
  * compiled program that decompresses ({@code .kb/jvm-export.md}, "What travels").
  */
@@ -165,22 +165,18 @@ public final class RontoInflate {
 	/**
 	 * {@code %inflate-update} in the JVM backend's representation.
 	 * @param state the decoder
-	 * @param octets the next compressed octets, a packed octet vector
+	 * @param octets the next compressed octets, an octet vector
 	 * @param limit the most octets to answer, or {@code null} for no limit
-	 * @return a packed octet vector, or the quote-wrapped message of a malformed stream
+	 * @return an octet vector, or the quote-wrapped message of a malformed stream
 	 */
 	public static Object update(Object state, Object octets, Object limit) {
-		byte[] packed = (byte[]) octets;
-		Object answer = ((RontoInflate) state).update(packed, 1, packed.length - 1,
+		byte[] input = (byte[]) octets;
+		Object answer = ((RontoInflate) state).update(input, 0, input.length,
 				(limit == null) ? -1 : ((Long) limit).intValue());
 		if (answer instanceof String message) {
 			return "\"" + message + "\"";
 		}
-		byte[] raw = (byte[]) answer;
-		byte[] tagged = new byte[raw.length + 1];
-		tagged[0] = 8;
-		System.arraycopy(raw, 0, tagged, 1, raw.length);
-		return tagged;
+		return answer;
 	}
 
 	/**

@@ -418,10 +418,10 @@ final class JvmArrayRuntimeBuilder {
 		MethodRefEntry defaultElement = cp.methodRef(selfClass, DEFAULT_ELEMENT, DEFAULT_ELEMENT_DESC);
 		ClassEntry longArrayClass = cp.classEntry("[J");
 		MethodRefEntry longLongValue = cp.methodRef(longClass, "longValue", "()J");
-		// The PACKED displacement targets: a packed integer vector is a byte[]{8, e0,
-		// ...} or a long[]{width, e0, ...} and a packed float array a
-		// double[]/float[]{rank, dims..., e0, ...}. (A quantized matrix, the other
-		// byte[], is no array a view can be displaced to.)
+		// The PACKED displacement targets: a packed integer vector is the bare byte[] of
+		// its octets or a long[]{width, e0, ...} and a packed float array a
+		// double[]/float[]{rank, dims..., e0, ...}. (A quantized matrix is no array a
+		// view can be displaced to.)
 		ClassEntry byteArrayClass = cp.classEntry("[B");
 		// A view over one is an ordinary displaced header whose slot 3 holds that array
 		// instead of an ArrayList or a String, so the walk ends on it exactly as it ends
@@ -1463,8 +1463,8 @@ final class JvmArrayRuntimeBuilder {
 		md.instanceOf(strClass);
 		md.ifne(mdStr);
 		// A PACKED target's element count is its representation's own: an integer
-		// vector is byte[]{8, e0, ...} or long[]{width, e0, ...} (length - 1 elements)
-		// and a float array double[]/float[]{rank, dims..., e0, ...} (length - 1 -
+		// vector is the bare byte[] (length elements) or long[]{width, e0, ...} (length
+		// - 1) and a float array double[]/float[]{rank, dims..., e0, ...} (length - 1 -
 		// rank). The view over one is a plain length-5 array view -- only a STRING
 		// target makes a string view.
 		md.aload(mdTarget);
@@ -1499,8 +1499,6 @@ final class JvmArrayRuntimeBuilder {
 		md.aload(mdTarget);
 		md.checkcast(byteArrayClass);
 		md.arraylength();
-		md.loadConstant(1);
-		md.isub();
 		md.istore(mdProduct);
 		md.goto_(mdHaveTotal);
 		md.labelBinding(mdIv);
@@ -2411,7 +2409,7 @@ final class JvmArrayRuntimeBuilder {
 		al.checkcast(longClass);
 		al.invokevirtual(longIntValue);
 		al.istore(3);
-		// (unsigned-byte w): a byte[]{8, 0...} at width 8, else a long[]{w, 0...} -- the
+		// (unsigned-byte w): the bare byte[n] at width 8, else a long[]{w, 0...} -- the
 		// width is the cons's cadr (in k, as an int).
 		MethodCode.Label alWide = al.newLabel();
 		al.aload(2);
@@ -2428,16 +2426,10 @@ final class JvmArrayRuntimeBuilder {
 		al.invokevirtual(longIntValue);
 		al.istore(5);
 		al.iload(5);
-		al.loadConstant(JvmIntArrayRuntimeBuilder.OCTET_TAG);
+		al.loadConstant(JvmIntArrayRuntimeBuilder.OCTET_WIDTH);
 		al.if_icmpne(alWide);
 		al.iload(3);
-		al.loadConstant(1);
-		al.iadd();
 		al.newarray(TypeKind.BYTE);
-		al.dup();
-		al.loadConstant(0);
-		al.loadConstant(JvmIntArrayRuntimeBuilder.OCTET_TAG);
-		al.bastore();
 		al.areturn();
 		al.labelBinding(alWide);
 		al.iload(3);
@@ -2945,7 +2937,7 @@ final class JvmArrayRuntimeBuilder {
 		a.instanceOf(byteArrayClass);
 		a.ifeq(tryLong);
 		emitUnsignedByteSpec(a, cp, objectClass, longValueOf, () -> {
-			a.loadConstant(JvmIntArrayRuntimeBuilder.OCTET_TAG);
+			a.loadConstant(JvmIntArrayRuntimeBuilder.OCTET_WIDTH);
 			a.i2l();
 		});
 		a.astore(etSlot);
@@ -3010,10 +3002,11 @@ final class JvmArrayRuntimeBuilder {
 	// Reads and RETURNS the element the displaced view sees at the 1-based data index
 	// idxSlot when the target in targetSlot is a PACKED vector; branches to notPacked
 	// when it is not (a string view's target). The index arithmetic is the packed
-	// representation's own: an integer vector's element `flat` lives at
-	// {@code l[1 + flat]}, which the 1-based index already IS, and a float array's at
-	// {@code d[1 + rank + flat]} == {@code d[rank + idx]} (and, at bfloat16, at
-	// {@code s[1 + 2 * rank + flat]} == {@code s[2 * rank + idx]}).
+	// representation's own: an octet vector's element `flat` lives at {@code b[flat]} ==
+	// {@code b[idx - 1]}, a long[] vector's at {@code l[1 + flat]}, which the 1-based
+	// index already IS, and a float array's at {@code d[1 + rank + flat]} ==
+	// {@code d[rank + idx]} (and, at bfloat16, at {@code s[1 + 2 * rank + flat]} ==
+	// {@code s[2 * rank + idx]}).
 	private static void emitPackedTargetGet(MethodCode a, int targetSlot, int idxSlot, ClassEntry byteArrayClass,
 			ClassEntry longArrayClass, ClassEntry doubleArrayClass, ClassEntry floatArrayClass,
 			ClassEntry shortArrayClass, @Nullable MethodRefEntry bf16Value, MethodRefEntry longValueOf,
@@ -3028,6 +3021,8 @@ final class JvmArrayRuntimeBuilder {
 		a.aload(targetSlot);
 		a.checkcast(byteArrayClass);
 		a.iload(idxSlot);
+		a.loadConstant(1);
+		a.isub();
 		a.baload();
 		a.loadConstant(0xFF);
 		a.iand();
@@ -3117,7 +3112,8 @@ final class JvmArrayRuntimeBuilder {
 		MethodCode.Label intOk = a.newLabel();
 		MethodCode.Label octetOk = a.newLabel();
 		StringEntry storesIntegers = cp.stringEntry("%aset: a packed integer vector stores integers");
-		// An octet vector: b[idx] = (byte) v, answering v & 0xFF -- the value as stored.
+		// An octet vector: b[idx - 1] = (byte) v, answering v & 0xFF -- the value as
+		// stored.
 		a.aload(targetSlot);
 		a.instanceOf(byteArrayClass);
 		a.ifeq(tryLong);
@@ -3136,6 +3132,8 @@ final class JvmArrayRuntimeBuilder {
 		a.aload(targetSlot);
 		a.checkcast(byteArrayClass);
 		a.iload(idxSlot);
+		a.loadConstant(1);
+		a.isub();
 		a.iload(ixSlot);
 		a.bastore();
 		a.iload(ixSlot);

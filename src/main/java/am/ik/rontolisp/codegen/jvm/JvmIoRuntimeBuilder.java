@@ -4008,21 +4008,19 @@ final class JvmIoRuntimeBuilder {
 		code.istore(SIZE);
 		code.goto_(shaped);
 		code.labelBinding(ifNotLong);
-		// else if (seq instanceof byte[]) -- an (unsigned-byte 8) vector
-		// byte[]{8, e0, ...}: { base = 1; width = 1; size = len - 1 }
+		// else if (seq instanceof byte[]) -- an (unsigned-byte 8) vector, the bare
+		// octets: { base = 0; width = 1; size = len }
 		code.aload(0);
 		code.instanceOf(io.byteArrayClass());
 		MethodCode.Label ifNotByte = code.newLabel();
 		code.ifeq(ifNotByte);
-		code.iconst_1();
+		code.iconst_0();
 		code.istore(BASE);
 		code.iconst_1();
 		code.istore(WIDTH);
 		code.aload(0);
 		code.checkcast(io.byteArrayClass());
 		code.arraylength();
-		code.iconst_1();
-		code.isub();
 		code.istore(SIZE);
 		code.goto_(shaped);
 		code.labelBinding(ifNotByte);
@@ -4355,7 +4353,6 @@ final class JvmIoRuntimeBuilder {
 		return code;
 	}
 
-	// slot[target] = (arg == null ? <dflt> : (int) ((Long) arg).longValue())
 	/**
 	 * Stack: {@code (...) -> (..., byte[])}: the array of the quantized matrix in local
 	 * 0.
@@ -4366,6 +4363,7 @@ final class JvmIoRuntimeBuilder {
 		code.getfield(JvmQuantizedMatrixRuntimeBuilder.carrierData(this.cp));
 	}
 
+	// slot[target] = (arg == null ? <dflt> : (int) ((Long) arg).longValue())
 	private void emitBoundOrDefault(MethodCode code, int argSlot, Runnable dflt, int target) {
 		code.aload(argSlot);
 		MethodCode.Label ifGiven = code.newLabel();

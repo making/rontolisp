@@ -347,8 +347,9 @@ public final class JavaImplementationPrograms {
 	 * of its octets -- a {@code java:reify} and a {@code java:proxy} (generated, and the
 	 * bridge's with the interface in a variable), a {@code java:subclass}, a function
 	 * converted at a resolved, a dispatched and a run-time site -- where the unmarked
-	 * form hands a list of signed bytes. What the function stores Java reads when it
-	 * returns, or throws ({@code readNBytes} reads the array it handed), and one array
+	 * form hands a list of signed bytes. The vector is Java's own array: what the
+	 * function stores Java reads, when it returns or throws ({@code readNBytes} reads the
+	 * array it handed), what Java stores while it runs the function reads, and one array
 	 * Java hands twice is one vector.
 	 */
 	public static final String OCTETS = """
@@ -414,6 +415,15 @@ public final class JavaImplementationPrograms {
 			         (java:call m "forEach" (java:reify "java.util.function.BiConsumer" "accept"
 			                                  (lambda (a b) (setf (aref a 0) 5) (setq got (aref b 0))) :octets))
 			         (list got (java:call (java:call m "keySet") "toArray" :octets)))))
+			(row (lambda ()
+			       (let* ((bb (java:static "java.nio.ByteBuffer" "allocate" 2))
+			              (a (java:call bb "array" :octets))
+			              (seen nil))
+			         (java:call (holding a) "forEach"
+			                    (java:reify "java.util.function.Consumer" "accept"
+			                      (lambda (x) (java:call bb "put" 7) (setf (aref x 1) 5) (setq seen (list (aref x 0) (aref x 1))))
+			                      :octets))
+			         (list seen a))))
 			""";
 
 	/** What {@link #OCTETS} prints. */
@@ -424,7 +434,8 @@ public final class JavaImplementationPrograms {
 			(#(3) #(4) #(3) #(4) #(3) #(4) (3) (4))
 			boom
 			#(9 8 7)
-			(5 (#(5)))""";
+			(5 (#(5)))
+			((7 5) #(7 5))""";
 
 	/**
 	 * A declaration that a value is what a {@code java:proxy} of one interface makes,

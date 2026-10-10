@@ -127,9 +127,8 @@ class RontoFetchTest {
 			if (chunk == RontoFetch.STREAM_MARKER) {
 				break;
 			}
-			byte[] octets = (byte[]) chunk;
-			assertThat(octets[0]).as("the packed vector's width").isEqualTo((byte) 8);
-			out.append(new String(octets, 1, octets.length - 1, StandardCharsets.UTF_8));
+			// an octet chunk: the bare byte[] of its octets
+			out.append(new String((byte[]) chunk, StandardCharsets.UTF_8));
 		}
 		return out.toString();
 	}

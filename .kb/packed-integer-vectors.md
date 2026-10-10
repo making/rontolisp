@@ -16,9 +16,9 @@ Scheme's bytevectors are the 8-bit pack ([scheme-frontend.md](scheme-frontend.md
   the LIVE arrays, `wrapOctets(byte[])` takes one over uncopied (an HTTP body, a request
   body, a digest), `LispIntVector.copy` is one `System.arraycopy` between equal widths
   (`replace`/`fill` between packed vectors, `PackedBuffer`'s `read-sequence`/`write-sequence`).
-- JVM: a bare array with the width in slot 0 and the elements from slot 1 --
-  `byte[]{8, e0, ...}` at width 8 (`JvmIntArrayRuntimeBuilder.OCTET_TAG`), `long[]{16|32, ...}`
-  otherwise; `JvmIntArrayRuntimeBuilder` `_ivAref1`/`_ivAset1`/`_ivDims`/`_ivLength`/
+- JVM: at width 8 the bare `byte[]` of the octets, nothing else in it -- Java's own array
+  (below); at 16/32 a `long[]{16|32, e0, ...}`, the width in slot 0 and the elements from slot 1.
+  `JvmIntArrayRuntimeBuilder` `_ivAref1`/`_ivAset1`/`_ivDims`/`_ivLength`/
   `_ivToGeneral`/`_ivElementType`/`_ivMake`/`_ivRequireGeneral` carry both arms, gated on
   `Ctx.usesIntArray` (gate off = byte-identical build); dispatch chains iv -> fv -> general.
   A `java:` form ending in `:octets` -- a call or field read, or a `java:reify` / `java:proxy` /
@@ -28,14 +28,24 @@ Scheme's bytevectors are the 8-bit pack ([scheme-frontend.md](scheme-frontend.md
   (`.kb/java-interop.md`, "Markers").
   The `%array-alike` allocator is NOT in this tier: it is the general group's `_arrayAlike`
   ([subseq-runtime.md](subseq-runtime.md)).
+- **The JVM's octet vector IS the `byte[]` Java holds** (since 2026-10-10, f25), as the
+  interpreter's `LispIntVector.octets()` is: a `byte[]` a `java:` call answers at `:octets`, or
+  hands a function, is the vector with no copy, a `:bytes` view hands Java the vector's own array,
+  and the runtime classes take and answer octets as they are (`RontoFetch`'s request body and
+  reply chunks, `RontoHttpClack.bodyOctets` -- the request body uncopied -- and `toResponse`
+  (copied, as the interpreter copies), `RontoInflate`, `JvmObjcPrimitivesTemplate`), so
+  `_iv_of_bytes` and every copy behind the width are gone ([java-interop.md](java-interop.md),
+  "Markers", "Handles and views"). Every reader indexes from 0 and counts `arr.length`; the
+  displaced views' 1-based data index reads `b[idx - 1]`.
 - A `byte[]` is ALWAYS an octet vector: the quantized matrix, a `byte[]` too until 2026-10-10,
   is a holder of its own (`runtime/RontoQuantizedMatrix`, [quantized-matrix.md](quantized-matrix.md)),
-  so `JvmIntArrayRuntimeBuilder.Octets` / `emitOctetTestOnStack` are an `instanceof` and no door
-  reads slot 0 to tell the two apart (until then every door taking either did, and one that forgot
-  read a header as data without a word). Pinned by
-  `JvmQuantizedMatrixTest.anOctetVectorAndAQuantizedMatrixAreToldApartWhereBothCanExist`.
-  The travelling Java (`RontoFetch`, `RontoHttpClack`, `JvmObjcPrimitivesTemplate`) spells the 8
-  itself.
+  so `JvmIntArrayRuntimeBuilder.Octets` / `emitOctetTestOnStack` are an `instanceof`. From
+  2026-09-26 until then the vector was `byte[]{8, e0, ...}` -- the width in slot 0, as a `long[]`
+  vector's -- because that slot told it from the matrix's format code; every door taking either
+  read it (one that forgot read a header as data without a word), and Java could only ever be
+  handed a copy of the octets. Pinned by
+  `JvmQuantizedMatrixTest.anOctetVectorAndAQuantizedMatrixAreToldApartWhereBothCanExist` (an
+  octet vector spelling a matrix header among them).
 - wasm-GC: the BARE `TYPE_I8ARR`/`TYPE_I16ARR`/`TYPE_I32ARR`, `(array (mut i8|i16|i32))`,
   types 57-59 in ONE rec group (keeping i32 structurally distinct from `TYPE_LIMBS` under GC
   canonicalization); no wrapper, no dims, `ref.test` discriminates width. `TYPE_IV_SET` (60)

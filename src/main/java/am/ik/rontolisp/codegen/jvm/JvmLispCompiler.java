@@ -2302,7 +2302,8 @@ public final class JvmLispCompiler implements LispCompiler {
 		// wrapper allocates one, and it is not part of the scanned program, so its own
 		// gate forces this one on.
 		// A fetched reply's :body and a served request's :raw-body are OCTET streams
-		// (their chunks long[] packed vectors built by the runtime, not by any scanned
+		// (their chunks octet vectors -- byte[] -- built by the runtime, not by any
+		// scanned
 		// make-array), so a program that fetches or serves may hold one and needs the
 		// _iv* dispatch on. So does a java: form ending in :octets: a byte[] it answers,
 		// or Java hands the functions of the implementation it makes, is an octet vector.

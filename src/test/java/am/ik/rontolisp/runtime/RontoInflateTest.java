@@ -62,21 +62,17 @@ class RontoInflateTest {
 	@SuppressWarnings("NullAway")
 	@Test
 	void theJvmEntryPointsSpeakTheCompiledValueRepresentation() {
+		// an octet vector is the bare byte[] of its octets, in and out
 		byte[] gzip = InflateCases.gzip("héllo".getBytes(StandardCharsets.UTF_8));
-		byte[] packed = new byte[gzip.length + 1];
-		packed[0] = 8;
-		System.arraycopy(gzip, 0, packed, 1, gzip.length);
 		Object decoder = RontoInflate.create(2L);
-		Object out = RontoInflate.update(decoder, packed, null);
+		Object out = RontoInflate.update(decoder, gzip, null);
 		assertThat(out).isInstanceOf(byte[].class);
-		byte[] tagged = (byte[]) out;
-		assertThat(tagged[0]).isEqualTo((byte) 8);
-		assertThat(new String(tagged, 1, tagged.length - 1, StandardCharsets.UTF_8)).isEqualTo("héllo");
+		assertThat(new String((byte[]) out, StandardCharsets.UTF_8)).isEqualTo("héllo");
 		assertThat(RontoInflate.finish(decoder)).isNull();
 		Object raw = RontoInflate.create(0L);
-		assertThat(RontoInflate.update(raw, new byte[] { 8, 7 }, null)).isEqualTo("\"invalid block type\"");
+		assertThat(RontoInflate.update(raw, new byte[] { 7 }, null)).isEqualTo("\"invalid block type\"");
 		Object cut = RontoInflate.create(2L);
-		assertThat(RontoInflate.update(cut, new byte[] { 8, 0x1f }, 1L)).isEqualTo(new byte[] { 8 });
+		assertThat(RontoInflate.update(cut, new byte[] { 0x1f }, 1L)).isEqualTo(new byte[0]);
 		assertThat(RontoInflate.finish(cut)).isEqualTo(1L);
 	}
 

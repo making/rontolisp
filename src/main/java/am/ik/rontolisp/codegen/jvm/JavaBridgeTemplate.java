@@ -87,8 +87,7 @@ final class JavaBridgeTemplate {
 	// mode is the low bits (FUNCTIONS_MODE); FUNCTIONS_JAVA_FALSE beside it makes the
 	// implementation hand its function Java's false as |false| (:java-false), and
 	// FUNCTIONS_OCTETS makes the call answer a byte[] as an (unsigned-byte 8) vector
-	// (:octets), and the implementation hand its function one, written back into Java's
-	// array once the function returns or throws.
+	// (:octets), and the implementation hand its function one: Java's own array.
 	private static final int FUNCTIONS_NONE = 0;
 
 	private static final int FUNCTIONS_PROXY = 1;
@@ -279,22 +278,12 @@ final class JavaBridgeTemplate {
 	/**
 	 * {@code runtime/RontoJavaBytesView} -- a {@code java:view} of shape {@code :bytes}
 	 * -- bound with {@link #javaListViewClass}: the {@code byte[]} it hands Java wherever
-	 * one fits, written back after the call (mirrors {@code JvmJavaDirectSites}' bytes
-	 * arms and {@code emitBytesWriteBack}).
+	 * one fits, the vector's own octets (mirrors {@code JvmJavaDirectSites}' bytes arms).
 	 */
 	private static @Nullable Class<?> javaBytesViewClass;
 
 	/** {@code RontoJavaBytesView.bytes()}, bound with {@link #javaBytesViewClass}. */
 	private static @Nullable Method javaBytesViewBytes;
-
-	/** {@code RontoJavaBytesView.changed(Object, Object)}, bound with it. */
-	private static @Nullable Method javaBytesViewChanged;
-
-	/** {@code RontoJavaBytesView.store(Object, Object)}, bound with it. */
-	private static @Nullable Method javaBytesViewStore;
-
-	/** {@code RontoJavaBytesView.shared(Object, Object)}, bound with it. */
-	private static @Nullable Method javaBytesViewShared;
 
 	/**
 	 * The generated program's {@code _jsig(Throwable)}: what this bridge's {@code Proxy}
@@ -311,9 +300,6 @@ final class JavaBridgeTemplate {
 	 * {@code _apply}.
 	 */
 	private static @Nullable Method failMethod;
-
-	/** The width tag slot 0 of a packed {@code (unsigned-byte 8)} vector holds. */
-	private static final int OCTET_TAG = 8;
 
 	/**
 	 * The key a compiled hash table's insertion-order list hangs off; mirrors
@@ -405,18 +391,12 @@ final class JavaBridgeTemplate {
 		try {
 			Class<?> bytesViewClass = Class.forName(JAVA_BYTES_VIEW_CLASS, false, mainClass.getClassLoader());
 			javaBytesViewBytes = bytesViewClass.getMethod("bytes");
-			javaBytesViewChanged = bytesViewClass.getMethod("changed", Object.class, Object.class);
-			javaBytesViewStore = bytesViewClass.getMethod("store", Object.class, Object.class);
-			javaBytesViewShared = bytesViewClass.getMethod("shared", Object.class, Object.class);
 			javaBytesViewClass = bytesViewClass;
 		}
 		catch (ClassNotFoundException | NoSuchMethodException ex) {
 			// No runtime/RontoJavaBytesView beside this program: no view can exist.
 			javaBytesViewClass = null;
 			javaBytesViewBytes = null;
-			javaBytesViewChanged = null;
-			javaBytesViewStore = null;
-			javaBytesViewShared = null;
 		}
 	}
 
@@ -481,7 +461,6 @@ final class JavaBridgeTemplate {
 		try {
 			@Nullable Object[] handed = marshalArguments(overload, values, functions);
 			Object made = ((Constructor<?>) overload[0]).newInstance(handed);
-			writeBack(overload, values, handed);
 			return unmarshal(made, javaFalse, octets);
 		}
 		catch (ReflectiveOperationException ex) {
@@ -988,79 +967,35 @@ final class JavaBridgeTemplate {
 	}
 
 	// A slot's function applied to the ([method-name] arg...) list, its value marshalled
-	// to the method's return type. After :octets (OCTETS) a byte[] argument is an
-	// (unsigned-byte 8) vector, a copy written back into Java's array once the function
-	// returns or throws.
+	// to the method's return type. After :octets (OCTETS) a byte[] argument is the
+	// (unsigned-byte 8) vector it is: the function stores into Java's own array.
 	private static @Nullable Object callback(String name, boolean proxy, Method method,
 			@Nullable Object @Nullable [] methodArgs, @Nullable Object function, boolean javaFalse, boolean octets,
 			boolean comparison) {
-		@Nullable Object[] values = octets && methodArgs != null ? callbackArguments(methodArgs, javaFalse) : null;
-		try {
-			// Build the ([method-name] arg...) cons list, tail-first.
-			Object argList = null;
-			if (methodArgs != null) {
-				for (int i = methodArgs.length - 1; i >= 0; i--) {
-					argList = new Object[] { values != null ? values[i] : unmarshal(methodArgs[i], javaFalse),
-							argList };
-				}
-			}
-			if (proxy) {
-				argList = new Object[] { quote(method.getName()), argList };
-			}
-			Object result = applyCallable(function, argList);
-			Class<?> ret = method.getReturnType();
-			if (ret == void.class) {
-				return null;
-			}
-			if (comparison) {
-				return comparison(function, (Object[]) Objects.requireNonNull(argList), result);
-			}
-			@Nullable Object[] slot = new @Nullable Object[1];
-			if (marshal(result, ret, slot, 0, FUNCTIONS_NONE) == NO_MATCH) {
-				throw new RuntimeException((proxy ? "java:proxy" : "java:reify") + ": cannot return " + describe(result)
-						+ " as " + ret + " from " + name + (proxy ? "" : "." + method.getName()));
-			}
-			return slot[0];
-		}
-		finally {
-			if (values != null && methodArgs != null) {
-				writeBackOctets(methodArgs, values);
+		// Build the ([method-name] arg...) cons list, tail-first.
+		Object argList = null;
+		if (methodArgs != null) {
+			for (int i = methodArgs.length - 1; i >= 0; i--) {
+				argList = new Object[] { unmarshal(methodArgs[i], javaFalse, octets), argList };
 			}
 		}
-	}
-
-	// The arguments Java hands a function made at :octets as the Lisp values it is
-	// handed (mirrors JvmJavaDirectSites' _jcbo / _jcbf): a byte[] an (unsigned-byte 8)
-	// vector of its own, and one an earlier argument is too that argument's vector, as
-	// Java's one array is.
-	private static @Nullable Object[] callbackArguments(@Nullable Object[] handed, boolean javaFalse) {
-		@Nullable Object[] values = new @Nullable Object[handed.length];
-		for (int i = 0; i < handed.length; i++) {
-			Object argument = handed[i];
-			int earlier = -1;
-			if (argument instanceof byte[]) {
-				for (int k = 0; k < i && earlier < 0; k++) {
-					if (handed[k] == argument) {
-						earlier = k;
-					}
-				}
-			}
-			values[i] = earlier >= 0 ? values[earlier] : unmarshal(argument, javaFalse, true);
+		if (proxy) {
+			argList = new Object[] { quote(method.getName()), argList };
 		}
-		return values;
-	}
-
-	// Once a function made at :octets returns or throws, what it stored into the vector a
-	// byte[] argument became -- the width in slot 0, then the octets -- goes back into
-	// Java's array, where the two differ (mirrors JvmJavaDirectSites' _jwbo).
-	private static void writeBackOctets(@Nullable Object[] handed, @Nullable Object[] values) {
-		for (int i = 0; i < handed.length; i++) {
-			if (handed[i] instanceof byte[] array && values[i] instanceof byte[] vector && vector != array
-					&& vector.length == array.length + 1
-					&& !Arrays.equals(vector, 1, vector.length, array, 0, array.length)) {
-				System.arraycopy(vector, 1, array, 0, array.length);
-			}
+		Object result = applyCallable(function, argList);
+		Class<?> ret = method.getReturnType();
+		if (ret == void.class) {
+			return null;
 		}
+		if (comparison) {
+			return comparison(function, (Object[]) Objects.requireNonNull(argList), result);
+		}
+		@Nullable Object[] slot = new @Nullable Object[1];
+		if (marshal(result, ret, slot, 0, FUNCTIONS_NONE) == NO_MATCH) {
+			throw new RuntimeException((proxy ? "java:proxy" : "java:reify") + ": cannot return " + describe(result)
+					+ " as " + ret + " from " + name + (proxy ? "" : "." + method.getName()));
+		}
+		return slot[0];
 	}
 
 	// What a function implementing Comparator.compare answered, read as Clojure's
@@ -1354,7 +1289,6 @@ final class JavaBridgeTemplate {
 		try {
 			@Nullable Object[] handed = marshalArguments(overload, values, functions);
 			Object answer = ((Method) overload[0]).invoke(receiver, handed);
-			writeBack(overload, values, handed);
 			return unmarshal(answer, javaFalse, octets);
 		}
 		catch (ReflectiveOperationException ex) {
@@ -1856,34 +1790,7 @@ final class JavaBridgeTemplate {
 			}
 			out[fixed] = packed;
 		}
-		if (javaBytesViewShared != null) {
-			// two :bytes views of one vector hand Java one copy, as the oracle hands its
-			// one byte[] twice (mirrors JvmJavaDirectSites' emitBytesShared)
-			for (int later = 1; later < fixed; later++) {
-				for (int earlier = 0; earlier < later; earlier++) {
-					if (out[earlier] instanceof byte[] && out[later] instanceof byte[]
-							&& sameBytes(values[earlier], values[later])) {
-						out[later] = out[earlier];
-					}
-				}
-			}
-		}
 		return out;
-	}
-
-	// Whether two arguments are :bytes views of one vector
-	// (runtime/RontoJavaBytesView.shared).
-	private static boolean sameBytes(@Nullable Object one, @Nullable Object other) {
-		Method shared = javaBytesViewShared;
-		if (shared == null) {
-			return false;
-		}
-		try {
-			return (Boolean) Objects.requireNonNull(shared.invoke(null, one, other));
-		}
-		catch (ReflectiveOperationException ex) {
-			throw new IllegalStateException("java interop: cannot read a :bytes view", ex);
-		}
 	}
 
 	// select() costed this argument against this type, so it converts.
@@ -1929,8 +1836,7 @@ final class JavaBridgeTemplate {
 		Class<?> bytesView = javaBytesViewClass;
 		if (bytesView != null && bytesView.isInstance(value)) {
 			// a :bytes view: the byte[] it is, wherever one fits (mirrors
-			// compiler/JavaOverloads.bytesViewCost): a copy of its octets, written back
-			// after the call (writeBack)
+			// compiler/JavaOverloads.bytesViewCost): the vector's own octets
 			int cost = target == byte[].class ? COST_EXACT
 					: !target.isPrimitive() && target.isAssignableFrom(byte[].class) ? COST_WIDEN : NO_MATCH;
 			if (cost != NO_MATCH) {
@@ -2056,13 +1962,12 @@ final class JavaBridgeTemplate {
 		return total;
 	}
 
-	// The elements of a rank-1 SPECIALIZED vector -- a bare primitive array carrying its
-	// header -- as aref reads them, or null for anything else: a packed float vector
-	// (double[] / float[] {rank, dim, e...}, bfloat16 short[] {rank, hi, lo, e...}, each
-	// element a Double), a packed (unsigned-byte 16|32) vector (long[] {width, e...}) or
-	// an octet vector (byte[] {8, e...}, widened unsigned), each element a Long. A packed
-	// array of another rank, and a quantized matrix (a byte[] whose slot 0 is its format
-	// code), is no sequence. Mirrors JvmJavaDirectSites' _jseq.
+	// The elements of a rank-1 SPECIALIZED vector -- a bare primitive array -- as aref
+	// reads them, or null for anything else: a packed float vector (double[] / float[]
+	// {rank, dim, e...}, bfloat16 short[] {rank, hi, lo, e...}, each element a Double), a
+	// packed (unsigned-byte 16|32) vector (long[] {width, e...}) or an octet vector (the
+	// bare byte[], widened unsigned), each element a Long. A packed array of another rank
+	// is no sequence. Mirrors JvmJavaDirectSites' _jseq.
 	private static @Nullable List<@Nullable Object> packedElements(@Nullable Object value) {
 		List<@Nullable Object> elements = new ArrayList<>();
 		if (value instanceof double[] d) {
@@ -2105,11 +2010,8 @@ final class JavaBridgeTemplate {
 			return elements;
 		}
 		if (value instanceof byte[] b) {
-			if (b.length == 0 || b[0] != OCTET_TAG) {
-				return null;
-			}
-			for (int i = 1; i < b.length; i++) {
-				elements.add((long) (b[i] & 0xFF));
+			for (byte octet : b) {
+				elements.add((long) (octet & 0xFF));
 			}
 			return elements;
 		}
@@ -2348,8 +2250,8 @@ final class JavaBridgeTemplate {
 	}
 
 	// unmarshal at a call ending in :octets too (octets): a byte[] -- the value or an
-	// element of an array -- is an (unsigned-byte 8) vector of its octets, a fresh byte[]
-	// with the width in slot 0 (mirrors JvmJavaDirectSites' _juno / _jufo).
+	// element of an array -- is the (unsigned-byte 8) vector it is (mirrors
+	// JvmJavaDirectSites' _juno / _jufo).
 	static @Nullable Object unmarshal(@Nullable Object o, boolean javaFalse, boolean octets) {
 		if (o == null) {
 			return null;
@@ -2388,11 +2290,8 @@ final class JavaBridgeTemplate {
 		if (o instanceof String s) {
 			return quote(s);
 		}
-		if (octets && o instanceof byte[] bytes) {
-			byte[] vector = new byte[bytes.length + 1];
-			vector[0] = OCTET_TAG;
-			System.arraycopy(bytes, 0, vector, 1, bytes.length);
-			return vector;
+		if (octets && o instanceof byte[]) {
+			return o;
 		}
 		if (o.getClass().isArray()) {
 			return arrayToList(o, javaFalse, octets);
@@ -2418,38 +2317,6 @@ final class JavaBridgeTemplate {
 		}
 		catch (ReflectiveOperationException ex) {
 			throw new IllegalStateException("java interop: cannot read a :bytes view", ex);
-		}
-	}
-
-	// After a call, what Java stored into the copy of a :bytes view's octets it was
-	// handed goes back into the vector: every fixed argument asked first, then each
-	// changed copy written back, so a vector handed twice keeps what Java stored. A
-	// varargs tail's elements are not read back (mirrors JvmJavaDirectSites'
-	// emitBytesWriteBack).
-	private static void writeBack(Object[] overload, @Nullable Object[] values, @Nullable Object[] handed) {
-		Method changed = javaBytesViewChanged;
-		Method store = javaBytesViewStore;
-		if (changed == null || store == null) {
-			return;
-		}
-		int fixed = (Boolean) overload[2] ? handed.length - 1 : handed.length;
-		boolean[] stored = new boolean[fixed];
-		boolean any = false;
-		try {
-			for (int i = 0; i < fixed; i++) {
-				stored[i] = (Boolean) Objects.requireNonNull(changed.invoke(null, values[i], handed[i]));
-				any |= stored[i];
-			}
-			if (any) {
-				for (int i = 0; i < fixed; i++) {
-					if (stored[i]) {
-						store.invoke(null, values[i], handed[i]);
-					}
-				}
-			}
-		}
-		catch (ReflectiveOperationException ex) {
-			throw new IllegalStateException("java interop: cannot write a :bytes view back", ex);
 		}
 	}
 

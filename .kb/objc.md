@@ -224,9 +224,9 @@ NSData's contents as a fresh `(unsigned-byte 8)` vector. Both are Lisp (`dataWit
 - `%octets` -- a value's bytes as an octet vector, or nil; the representation's question, so the
   backend's: `eval/PackedBuffer` (also bfloat16 arrays and quantized matrices);
   `JvmObjcPrimitivesTemplate.bufferBytes` (**a packed float array carries its dimension header IN
-  the array** -- `[rank, dim_0..., e_0...]` -- and a packed integer vector is `byte[]{8, e_0, ...}`
-  / `long[]{width, e_0, ...}`, so only the elements go on the wire, as `LispSingleFloatArray.data()`
-  does); Lisp on `--native` (`%ieee754-single-bits`, lowered on wasm-GC for this; bfloat16 and
+  the array** -- `[rank, dim_0..., e_0...]` -- and a packed integer vector is the bare `byte[]`
+  of its octets (copied, so `%octets` answers a fresh vector) or `long[]{width, e_0, ...}`, so only
+  the elements go on the wire, as `LispSingleFloatArray.data()` does); Lisp on `--native` (`%ieee754-single-bits`, lowered on wasm-GC for this; bfloat16 and
   quantized refused).
 - `%write-octets` / `%read-octets` -- block copy between an octet vector and foreign memory
   (`ObjcRuntime.writeBytes` / `readBytes`; `--native` `p_write_bytes` / `p_read_bytes`, a `:bytes`

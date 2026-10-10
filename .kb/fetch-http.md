@@ -278,7 +278,8 @@ primitive on four stream runtimes and a carry inside each.
 
 Per backend: `HttpSupport.BodyPump` writes one `LispIntVector` per publisher batch (interpreter);
 `RontoFetch` takes the reply with `BodyHandlers.ofPublisher()`, its future settling at the head,
-and `RontoFetch.BodyPump` queues one `byte[]{8, ...}` per publisher batch as it arrives -- a
+and `RontoFetch.BodyPump` queues one octet vector (a bare `byte[]`) per publisher batch as it
+arrives -- a
 failure mid-body a failed future ahead of the pill, which the read taking it awaits and
 signals; a stream the program closed (`_stream_close`'s state 1) cancels the subscription at the
 next batch, a batch queued meanwhile taken back -- `_drain_body` refuses a mixed stream, and
@@ -359,8 +360,8 @@ answers -1).
 every transport** (2026-10-09, for `rontolisp.http-client`'s File, InputStream and multipart
 bodies; before, a string alone). Interpreter: `Environment.fetchBody` copies the vector into a
 `byte[]` for `HttpSupport` (`ofByteArray`), anything else signals naming both kinds. JVM:
-`JvmFetchRuntimeBuilder` hands the packed `byte[]{8, ...}` through as it is and `RontoFetch`
-publishes from offset 1. Component: `%http-write-body` already wrote either kind. `--host-fetch`
+`JvmFetchRuntimeBuilder` hands the octet vector's `byte[]` through as it is and `RontoFetch`
+publishes it whole (from offset 1 of `byte[]{8, ...}` until 2026-10-10). Component: `%http-write-body` already wrote either kind. `--host-fetch`
 and `--native`: the request record's `octets` key, one character an octet (each below 256, so the
 record stays JSON text); the glue rebuilds a `Uint8Array` from the char codes, the runner takes
 `c as u8`. Web playground: `BrowserHttp` passes the octets as ISO-8859-1 text tagged `hasBody` "2".

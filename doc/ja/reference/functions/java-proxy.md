@@ -72,7 +72,7 @@ Java の false は `nil` として callable に渡ります。callable の後ろ
 ; => (|false|)
 ```
 
-`:octets` で終えると、callable に `byte[]` (引数、またはその要素) をそのオクテットを持つ `(unsigned-byte 8)` のベクタとして渡し、callable が格納した値は Java の配列へ書き戻されます (ガイドの[バイト列を受け取る](../../guides/java-interop.md#octets-back-octets))。
+`:octets` で終えると、callable に `byte[]` (引数、またはその要素) をそのオクテットを持つ `(unsigned-byte 8)` のベクタとして渡します。このベクタは Java の配列そのものなので、callable が格納した値は Java から読めます (ガイドの[バイト列を受け取る](../../guides/java-interop.md#octets-back-octets))。
 
 ## 複数のインターフェース
 

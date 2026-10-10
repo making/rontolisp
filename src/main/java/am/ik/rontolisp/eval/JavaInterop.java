@@ -1,5 +1,6 @@
 package am.ik.rontolisp.eval;
 
+import java.lang.ref.WeakReference;
 import java.lang.reflect.Array;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
@@ -14,6 +15,7 @@ import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.WeakHashMap;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Supplier;
 
@@ -1347,7 +1349,7 @@ final class JavaInterop {
 			}
 			case LispJavaObject obj when obj.ref() instanceof RontoJavaBytesView view -> {
 				// the byte[] it is to Java, wherever one fits: the octets' own storage,
-				// so what Java stores the program reads (compiled: a copy written back)
+				// so what Java stores the program reads (compiled alike)
 				int cost = JavaOverloads.bytesViewCost(target);
 				if (cost != NO_MATCH) {
 					out[index] = view.bytes();
@@ -1727,11 +1729,12 @@ final class JavaInterop {
 		}
 		String className = args.size() > 5 ? className(args.get(5), JavaInterop::viewUsage) : null;
 		if (bytes) {
-			// the octets themselves: Java is handed their storage (compiled: a copy)
+			// the octets themselves: Java is handed their storage
 			if (!(items instanceof LispIntVector octets) || octets.width() != 8) {
 				throw viewUsage(items);
 			}
-			return new LispJavaObject(new RontoJavaBytesView(value, octets.octets(), 0));
+			shareOctets(octets);
+			return new LispJavaObject(new RontoJavaBytesView(value, octets.octets()));
 		}
 		List<LispVal> members = map ? viewEntries(items) : sequenceElements(items);
 		if (members == null) {
@@ -1902,7 +1905,7 @@ final class JavaInterop {
 
 	// unmarshal with octets (a call ending in :octets): a byte[] -- the value or an
 	// element of an array -- is an (unsigned-byte 8) vector over the very array, which
-	// the program and Java then share (compiled: a copy, _juno / _jufo).
+	// the program and Java then share (compiled: the array itself, _juno / _jufo).
 	static LispVal unmarshal(@Nullable Object o, boolean javaFalse, boolean octets) {
 		return switch (o) {
 			case null -> LispNil.INSTANCE;
@@ -1920,9 +1923,39 @@ final class JavaInterop {
 			case BigInteger b -> b.bitLength() < 64 ? new LispInteger(b.longValue()) : new LispBigInteger(b);
 			case Character c -> new LispChar(c);
 			case String s -> new LispString(s);
-			case byte[] bytes when octets -> LispIntVector.wrapOctets(bytes);
+			case byte[] bytes when octets -> octetVector(bytes);
 			default -> o.getClass().isArray() ? arrayToList(o, javaFalse, octets) : new LispJavaObject(o);
 		};
+	}
+
+	// The vector each byte[] the program and Java share is: compiled, an octet vector IS
+	// its byte[], so two answers of one array are eq, and so are a vector a :bytes view
+	// handed Java and the array coming back; here a vector is a wrapper, kept one per
+	// array. Weak both ways: the wrapper holds the array, so the entry holds the wrapper
+	// only weakly, and an array nothing holds takes its entry with it.
+	private static final Map<byte[], WeakReference<LispIntVector>> OCTET_VECTORS = new WeakHashMap<>();
+
+	// The vector over these octets: the one already shared, else a new one, kept.
+	private static LispIntVector octetVector(byte[] octets) {
+		synchronized (OCTET_VECTORS) {
+			WeakReference<LispIntVector> kept = OCTET_VECTORS.get(octets);
+			LispIntVector vector = kept != null ? kept.get() : null;
+			if (vector == null) {
+				vector = LispIntVector.wrapOctets(octets);
+				OCTET_VECTORS.put(octets, new WeakReference<>(vector));
+			}
+			return vector;
+		}
+	}
+
+	// A vector whose octets a :bytes view hands Java: the one their array comes back as.
+	private static void shareOctets(LispIntVector vector) {
+		synchronized (OCTET_VECTORS) {
+			WeakReference<LispIntVector> kept = OCTET_VECTORS.get(vector.octets());
+			if (kept == null || kept.get() == null) {
+				OCTET_VECTORS.put(vector.octets(), new WeakReference<>(vector));
+			}
+		}
 	}
 
 	// The symbol a call ending in :java-false answers Java's false as.

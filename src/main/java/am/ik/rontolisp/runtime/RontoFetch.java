@@ -33,7 +33,7 @@ import java.util.concurrent.atomic.AtomicInteger;
  * <p>
  * Everything here speaks the JVM backend's RUNTIME VALUE REPRESENTATION (nil is
  * {@code null}, a cons an {@code Object[2]}, an integer a {@code Long}, a string its
- * quote-wrapped text, an octet vector the packed {@code byte[]{8, e0, ...}}). It is in
+ * quote-wrapped text, an octet vector the bare {@code byte[]} of its octets). It is in
  * {@code runtime}, and imports nothing of the project's, so that it TRAVELS with the
  * compiled class ({@code .kb/jvm-export.md}) and the program fetches on a bare
  * {@code java -cp .}.
@@ -68,8 +68,8 @@ public final class RontoFetch {
 	 * @param url the request URL
 	 * @param method the canonical (upper-case) method, already validated
 	 * @param headers the caller's request fields as a flat name, value, ... list
-	 * @param body the request body -- its text, sent as UTF-8, or a packed octet vector
-	 * ({@code byte[]{8, e0, ...}}), sent as its octets -- or {@code null} for none
+	 * @param body the request body -- its text, sent as UTF-8, or an octet vector (a
+	 * {@code byte[]}), sent as it is -- or {@code null} for none
 	 * @param defaultUserAgent the user-agent a request whose fields name none carries
 	 * @return a {@link CompletableFuture} settling to the response plist
 	 */
@@ -78,8 +78,7 @@ public final class RontoFetch {
 		try {
 			HttpRequest.BodyPublisher publisher = switch (body) {
 				case String text -> HttpRequest.BodyPublishers.ofString(text);
-				case byte[] packed when packed.length > 0 && packed[0] == 8 ->
-					HttpRequest.BodyPublishers.ofByteArray(packed, 1, packed.length - 1);
+				case byte[] octets -> HttpRequest.BodyPublishers.ofByteArray(octets);
 				case null, default -> HttpRequest.BodyPublishers.noBody();
 			};
 			HttpRequest.Builder builder = HttpRequest.newBuilder(URI.create(url)).method(method, publisher);
@@ -169,17 +168,16 @@ public final class RontoFetch {
 
 	/**
 	 * Pumps the client's body publisher into a body stream, one batch at a time: each
-	 * batch is queued as ONE chunk, the packed {@code (unsigned-byte 8)} vector
-	 * {@code byte[]{8, e0, ...}} (the width 8 in slot 0, as the compiled {@code _iv*}
-	 * helpers lay it out, so a body costs one byte an octet) holding the octets as they
-	 * arrived; the end is the end-of-stream pill, and the state turns closed (1), so a
-	 * write is refused as the interpreter's closed stream refuses one. A transfer that
-	 * fails mid-body queues a failed future ahead of the pill: the read that takes it
-	 * awaits it and signals, as the interpreter's failed stream does, so the body never
-	 * reads as a shorter one. A stream the program closes (its state turned closed by
-	 * {@code stream-close}) cancels the subscription at the next batch, which releases
-	 * the connection; a batch queued while it closed is taken back, so no read past the
-	 * end answers it.
+	 * batch is queued as ONE chunk, the {@code (unsigned-byte 8)} vector -- the bare
+	 * {@code byte[]} the compiled {@code _iv*} helpers take, so a body costs one byte an
+	 * octet -- holding the octets as they arrived; the end is the end-of-stream pill, and
+	 * the state turns closed (1), so a write is refused as the interpreter's closed
+	 * stream refuses one. A transfer that fails mid-body queues a failed future ahead of
+	 * the pill: the read that takes it awaits it and signals, as the interpreter's failed
+	 * stream does, so the body never reads as a shorter one. A stream the program closes
+	 * (its state turned closed by {@code stream-close}) cancels the subscription at the
+	 * next batch, which releases the connection; a batch queued while it closed is taken
+	 * back, so no read past the end answers it.
 	 */
 	private static final class BodyPump implements Flow.Subscriber<List<ByteBuffer>> {
 
@@ -212,9 +210,8 @@ public final class RontoFetch {
 				total += buffer.remaining();
 			}
 			if (total > 0) {
-				byte[] chunk = new byte[total + 1];
-				chunk[0] = 8;
-				int k = 1;
+				byte[] chunk = new byte[total];
+				int k = 0;
 				for (ByteBuffer buffer : buffers) {
 					int n = buffer.remaining();
 					buffer.get(chunk, k, n);

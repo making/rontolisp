@@ -82,7 +82,7 @@ Java の false は `nil` として関数に渡ります。最後の関数の後�
 ; => (|false|)
 ```
 
-`:octets` で終えると、関数に `byte[]` (引数、またはその要素) をそのオクテットを持つ `(unsigned-byte 8)` のベクタとして渡し、関数が格納した値は Java の配列へ書き戻されます (ガイドの[バイト列を受け取る](../../guides/java-interop.md#octets-back-octets))。
+`:octets` で終えると、関数に `byte[]` (引数、またはその要素) をそのオクテットを持つ `(unsigned-byte 8)` のベクタとして渡します。このベクタは Java の配列そのものなので、関数が格納した値は Java から読めます (ガイドの[バイト列を受け取る](../../guides/java-interop.md#octets-back-octets))。
 
 ## コンパイル済みプログラムでの扱い
 

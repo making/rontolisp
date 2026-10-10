@@ -2543,15 +2543,15 @@ final class JvmIntFusionCompiler {
 		ctx.allocTemp();
 		MethodCode.Label done = ctx.body.newLabel();
 		if (ctx.usesIntArray) {
-			// An (unsigned-byte 8) vector, byte[]{8, e0, ...}: element e & 0xFF.
+			// An (unsigned-byte 8) vector, the bare byte[]: element b[idx] & 0xFF.
 			ClassEntry byteArrayClass = ctx.cp.classEntry("[B");
 			MethodCode.Label notOctets = ctx.body.newLabel();
 			ctx.body.aload(leaf.arrParam).instanceOf(byteArrayClass).ifeq(notOctets);
 			ctx.body.iload(idxSlot).iflt(bails);
 			ctx.body.iload(idxSlot).aload(leaf.arrParam).checkcast(byteArrayClass);
-			ctx.body.arraylength().iconst_1().isub().if_icmpge(bails);
-			ctx.body.aload(leaf.arrParam).checkcast(byteArrayClass).iconst_1();
-			ctx.body.iload(idxSlot).iadd().baload().loadConstant(0xFF).iand().i2l();
+			ctx.body.arraylength().if_icmpge(bails);
+			ctx.body.aload(leaf.arrParam).checkcast(byteArrayClass);
+			ctx.body.iload(idxSlot).baload().loadConstant(0xFF).iand().i2l();
 			ctx.body.lstore(leaf.longSlot).goto_(done);
 			ctx.body.labelBinding(notOctets);
 			ctx.body.aload(leaf.arrParam).instanceOf(longArrayClass);

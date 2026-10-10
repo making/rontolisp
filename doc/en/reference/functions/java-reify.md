@@ -112,8 +112,8 @@ back](../../guides/java-interop.md#javas-false-back-java-false)):
 ```
 
 Ending it in `:octets` hands a function a `byte[]` -- an argument, or an element of one -- as
-an `(unsigned-byte 8)` vector of its octets, what the function stores going back into Java's
-array (the guide's [Octets back](../../guides/java-interop.md#octets-back-octets)).
+an `(unsigned-byte 8)` vector of its octets -- Java's own array, so what the function stores
+Java reads (the guide's [Octets back](../../guides/java-interop.md#octets-back-octets)).
 
 ## In a compiled program
 

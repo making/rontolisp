@@ -541,7 +541,7 @@ final class JvmJavaImplementations {
 			key.append("|java-false");
 		}
 		if (handsOctets(implementation)) {
-			// its callbacks hand a byte[] over as an octet vector (_jcbo), written back
+			// its callbacks hand a byte[] over as the octet vector it is (_juno)
 			key.append("|octets");
 		}
 		JavaImplementation.StandIn standIn = implementation.standIn();
@@ -591,8 +591,7 @@ final class JvmJavaImplementations {
 
 	// Whether a slot of an implementation made at :octets hands its function octet
 	// vectors: one of its parameters may carry a byte[] (JavaOverloads.carriesBytes). A
-	// slot whose parameters cannot hands its function what _junm makes, with nothing to
-	// write back.
+	// slot whose parameters cannot hands its function what _junm makes.
 	private static boolean handsOctets(JavaImplementation implementation, JavaImplementation.Slot slot) {
 		if (!implementation.octets()) {
 			return false;
@@ -711,9 +710,9 @@ final class JvmJavaImplementations {
 	}
 
 	// static R _jimpl$K(Object fn, Object[] args): (fn [name] (_junm args[0]) ...) --
-	// _junf after :java-false; after :octets the values _jcbo / _jcbf make, whose
-	// vectors _jwbo writes back into Java's arrays once the function returns or throws --
-	// then the value converted to R -- or the interpreter's error for one that does not;
+	// _junf after :java-false, _juno / _jufo after :octets, so a byte[] is handed as the
+	// octet vector it is and the function stores into Java's own array -- then the value
+	// converted to R -- or the interpreter's error for one that does not;
 	// a comparison's answer read by _jcmp instead, whose refusal (AFunction.compare's
 	// NullPointerException or ClassCastException) is the comparator's own failure, thrown
 	// outside the handler. What else leaves it thrown -- the function's exit or
@@ -722,23 +721,11 @@ final class JvmJavaImplementations {
 	private JvmJavaDirectSites.Method buildCallback(boolean proxy, String iface, JavaImplementation.Slot slot,
 			boolean javaFalse, boolean octets, boolean compares, Utf8Entry name, Utf8Entry desc) {
 		MethodCode a = new MethodCode();
-		// 2 = the argument list, 3 = i, 4 = the value, 5 = a comparison's answer, 6 = the
-		// values the arguments became (:octets), 7 = a throwable leaving it
-		int values = 6;
-		if (octets) {
-			// read by the handler, so assigned ahead of its range
-			a.aconst_null();
-			a.astore(values);
-		}
+		// 2 = the argument list, 3 = i, 4 = the value, 5 = a comparison's answer
 		MethodCode.Label start = a.newBoundLabel();
 		ClassEntry objectClass = cls("java/lang/Object");
-		MethodRefEntry unmarshal = this.direct.unmarshalHelper(javaFalse);
+		MethodRefEntry unmarshal = this.direct.unmarshalHelper(javaFalse, octets);
 		MethodRefEntry signal = this.direct.signalHelper();
-		if (octets) {
-			a.aload(1);
-			a.invokestatic(this.direct.callbackArgumentsHelper(javaFalse));
-			a.astore(values);
-		}
 		MethodCode.Label loop = a.newLabel();
 		MethodCode.Label done = a.newLabel();
 		a.aconst_null();
@@ -754,17 +741,10 @@ final class JvmJavaImplementations {
 		a.anewarray(objectClass);
 		a.dup();
 		a.loadConstant(0);
-		if (octets) {
-			a.aload(values);
-			a.iload(3);
-			a.aaload();
-		}
-		else {
-			a.aload(1);
-			a.iload(3);
-			a.aaload();
-			a.invokestatic(unmarshal);
-		}
+		a.aload(1);
+		a.iload(3);
+		a.aaload();
+		a.invokestatic(unmarshal);
 		a.aastore();
 		a.dup();
 		a.loadConstant(1);
@@ -795,7 +775,6 @@ final class JvmJavaImplementations {
 		MethodCode.Label refused = a.newLabel();
 		if ("void".equals(returnType.name())) {
 			a.pop();
-			writeBack(a, octets, 1, values);
 			a.return_();
 		}
 		else if (compares) {
@@ -808,7 +787,6 @@ final class JvmJavaImplementations {
 			a.aload(4);
 			a.invokestatic(this.direct.comparisonHelper());
 			a.astore(5);
-			writeBack(a, octets, 1, values);
 			a.aload(5);
 			a.instanceOf(cls("java/lang/Integer"));
 			a.ifeq(refused);
@@ -819,7 +797,6 @@ final class JvmJavaImplementations {
 		}
 		else {
 			a.astore(4);
-			writeBack(a, octets, 1, values);
 			MethodCode.Label fits = a.newLabel();
 			a.aload(4);
 			a.invokestatic(this.direct.returnedCost(returnType));
@@ -841,7 +818,6 @@ final class JvmJavaImplementations {
 			a.return_(returnKind(returnType));
 		}
 		MethodCode.Label end = a.newBoundLabel();
-		thrownWriteBack(a, octets, 1, values, 7);
 		a.invokestatic(signal);
 		a.athrow();
 		a.exceptionCatch(start, end, end, cls("java/lang/Throwable"));
@@ -852,26 +828,6 @@ final class JvmJavaImplementations {
 			a.athrow();
 		}
 		return new JvmJavaDirectSites.Method(name, desc, a);
-	}
-
-	// After :octets, what the function stored into the vectors its byte[] arguments
-	// became goes back into Java's arrays: _jwbo(args, values).
-	private void writeBack(MethodCode a, boolean octets, int args, int values) {
-		if (octets) {
-			a.aload(args);
-			a.aload(values);
-			a.invokestatic(this.direct.writeBackHelper());
-		}
-	}
-
-	// The same in the handler, the throwable on the stack kept in the local THROWN: what
-	// the function stored before it threw reaches Java as it would have in place.
-	private void thrownWriteBack(MethodCode a, boolean octets, int args, int values, int thrown) {
-		if (octets) {
-			a.astore(thrown);
-			writeBack(a, true, args, values);
-			a.aload(thrown);
-		}
 	}
 
 	private static TypeKind returnKind(JavaType type) {
@@ -886,31 +842,19 @@ final class JvmJavaImplementations {
 	}
 
 	// static R _jsub$K(Object fn, Object self, Object[] args): (fn self name (_junm
-	// args[0]) ...) -- the arguments as _jimpl$K hands them, _jwbo writing back after
-	// :octets -- then the value converted to R -- or the interpreter's error for one that
-	// does not. What leaves it thrown is recorded on its way out to the Java caller
+	// args[0]) ...) -- the arguments as _jimpl$K hands them -- then the value converted
+	// to R -- or the interpreter's error for one that does not. What leaves it thrown is
+	// recorded on its way out to the Java caller
 	// (_jsig), for the site whose Java call it reaches.
 	private JvmJavaDirectSites.Method buildSubclassCallback(JavaImplementation implementation,
 			JavaImplementation.Slot slot, Utf8Entry name, Utf8Entry desc) {
 		MethodCode a = new MethodCode();
 		boolean octets = handsOctets(implementation, slot);
-		// 3 = the argument list, 4 = i, 5 = the value, 6 = the values the arguments
-		// became (:octets), 7 = a throwable leaving it
-		int values = 6;
-		if (octets) {
-			// read by the handler, so assigned ahead of its range
-			a.aconst_null();
-			a.astore(values);
-		}
+		// 3 = the argument list, 4 = i, 5 = the value
 		MethodCode.Label start = a.newBoundLabel();
 		ClassEntry objectClass = cls("java/lang/Object");
-		MethodRefEntry unmarshal = this.direct.unmarshalHelper(implementation.javaFalse());
+		MethodRefEntry unmarshal = this.direct.unmarshalHelper(implementation.javaFalse(), octets);
 		MethodRefEntry signal = this.direct.signalHelper();
-		if (octets) {
-			a.aload(2);
-			a.invokestatic(this.direct.callbackArgumentsHelper(implementation.javaFalse()));
-			a.astore(values);
-		}
 		MethodCode.Label loop = a.newLabel();
 		MethodCode.Label done = a.newLabel();
 		a.aconst_null();
@@ -926,17 +870,10 @@ final class JvmJavaImplementations {
 		a.anewarray(objectClass);
 		a.dup();
 		a.loadConstant(0);
-		if (octets) {
-			a.aload(values);
-			a.iload(4);
-			a.aaload();
-		}
-		else {
-			a.aload(2);
-			a.iload(4);
-			a.aaload();
-			a.invokestatic(unmarshal);
-		}
+		a.aload(2);
+		a.iload(4);
+		a.aaload();
+		a.invokestatic(unmarshal);
 		a.aastore();
 		a.dup();
 		a.loadConstant(1);
@@ -977,12 +914,10 @@ final class JvmJavaImplementations {
 		JavaType superclass = java.util.Objects.requireNonNull(implementation.superclass());
 		if ("void".equals(returnType.name())) {
 			a.pop();
-			writeBack(a, octets, 2, values);
 			a.return_();
 		}
 		else {
 			a.astore(5);
-			writeBack(a, octets, 2, values);
 			MethodCode.Label fits = a.newLabel();
 			a.aload(5);
 			a.invokestatic(this.direct.returnedCost(returnType));
@@ -1005,7 +940,6 @@ final class JvmJavaImplementations {
 			a.return_(returnKind(returnType));
 		}
 		MethodCode.Label end = a.newBoundLabel();
-		thrownWriteBack(a, octets, 2, values, 7);
 		a.invokestatic(signal);
 		a.athrow();
 		a.exceptionCatch(start, end, end, cls("java/lang/Throwable"));

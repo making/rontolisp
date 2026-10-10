@@ -168,8 +168,8 @@ Package `java` (`LispNames.JAVA_PKG`, `PackageRegistry`; does NOT use `cl`): `ja
   float of every width as a double, an unsigned integer widened): interpreter `LispFloatArray`
   (`dims()[0]`, `elementAt`) and `LispIntVector`; compiled `double[]`/`float[]` `{rank, dim, e...}`,
   bfloat16 `short[]` `{rank, hi, lo, e...}` read through the program's `_bf16Value`, `long[]`
-  `{width, e...}`, octet `byte[]` `{8, e...}` -- another `byte[]` is a quantized matrix, another
-  rank no sequence. Two copies: the bridge's `packedElements` (binds `_bf16Value` by name in
+  `{width, e...}`, an octet vector the bare `byte[]` -- another rank no sequence, and a quantized
+  matrix (a `runtime` holder) no kind at all. Two copies: the bridge's `packedElements` (binds `_bf16Value` by name in
   `bind`, so it is a shaker root beside `_lispToString` and in `REFLECTIVELY_FOUND_METHODS`) and
   `_jseq`'s `emitPackedElements` arms, which `_jkind` reaches as KIND_ARRAY. The direct sites
   test only the shapes the program can hold (`JvmJavaDirectSites.packedVectors` from
@@ -213,7 +213,7 @@ Package `java` (`LispNames.JAVA_PKG`, `PackageRegistry`; does NOT use `cl`): `ja
   host `ArrayList` subclass its own `isEmpty`/`get`, so a `java:subclass` of `ArrayList` whose
   `isEmpty` answers false while empty throws `index out of bounds` on the JVM (todo e74).
 
-## Markers: `:java-false`, `:octets`, a Comparator's answer (e73, 2026-10-09; f13, f24, 2026-10-10)
+## Markers: `:java-false`, `:octets`, a Comparator's answer (e73, 2026-10-09; f13, f24, f25, 2026-10-10)
 - Keywords ending a form are MARKERS (`compiler/JavaMarkers`: `:functional`, `:java-false`,
   `:octets`, any order; a keyword is never an argument a member takes): after the arguments of `java:new` /
   `java:call` / `java:static`, after the field name of `java:field`, after the callable (the last
@@ -232,11 +232,22 @@ Package `java` (`LispNames.JAVA_PKG`, `PackageRegistry`; does NOT use `cl`): `ja
   resolving. Pins: `JavaInteropPrograms.JAVA_FALSE_PROGRAM`, `JavaImplementationPrograms.
   JAVA_FALSE` (both backends), `theBridgeAndADirectSiteAnswerJavasFalseAlike`.
 - `:octets` (f13): a `byte[]` the FORM answers -- a call's value, a field's, an array's element at
-  any depth -- is an `(unsigned-byte 8)` vector, not a list of signed bytes. Copies: interpreter
-  `unmarshal(o, javaFalse, octets)` -> `LispIntVector.wrapOctets` (the vector IS Java's array: no
-  copy); the direct sites' `_juno` / `_jufo` over `_jaro` / `_jafo` (`unmarshalIndex`, a `[B` arm
-  ahead of the array loop making `byte[]{8, e...}`); the bridge's `unmarshal(o, jf, octets)` and
-  `FUNCTIONS_OCTETS` (`OCTETS_MARKER`, pinned). A program with a `java:` form ending in it turns
+  any depth -- is an `(unsigned-byte 8)` vector, not a list of signed bytes: the very array, on
+  every backend, so what Java stores into it later -- a `ByteBuffer`'s `array()` the buffer writes
+  -- the vector holds. Copies: interpreter `unmarshal(o, javaFalse, octets)` ->
+  `LispIntVector.wrapOctets`; the direct sites' `_juno` / `_jufo` over `_jaro` / `_jafo`
+  (`unmarshalIndex`, a `[B` arm ahead of the array loop answering the array itself); the bridge's
+  `unmarshal(o, jf, octets)` and `FUNCTIONS_OCTETS` (`OCTETS_MARKER`, pinned). Until 2026-10-10
+  (f25) the compiled arms answered a copy behind the width, `byte[]{8, e...}`, which a later Java
+  store never reached (`.kb/packed-integer-vectors.md`).
+- One array, one vector: two answers of one `byte[]` are `eq`, and so are a vector a `:bytes`
+  view handed Java and that array coming back. Compiled, the vector IS the array; the interpreter
+  wraps it, so it keeps one `LispIntVector` per array (`JavaInterop.octetVector`, a `WeakHashMap`
+  over `WeakReference`s -- the wrapper holds its array, so a strong value would never let the key
+  go -- and `shareOctets` registers a view's vector). Measured 2026-10-10 once the compiled copy
+  was gone, before this: `(NIL NIL NIL)` interpreted, `(T T T)` compiled (`OCTETS_PROGRAM`'s last
+  row). A Clojure byte array is a `(:C%BYTES octets)` wrapper made at each crossing, so
+  `identical?` stays false on both backends (`.kb/clojure-frontend.md`, "Byte arrays"). A program with a `java:` form ending in it turns
   `usesIntArray` on (`JvmLispCompiler.programAsksJavaForOctets`, implementation forms counted):
   without the `_iv*` runtime the answer printed `#<java [B>`. The static type is unchanged (an
   array is UNKNOWN). Pins: `JavaInteropPrograms.OCTETS_PROGRAM` (resolved, dispatched, bridged,
@@ -244,29 +255,27 @@ Package `java` (`LispNames.JAVA_PKG`, `PackageRegistry`; does NOT use `cl`): `ja
 - `:octets` in callbacks (f24): a `byte[]` Java hands a FUNCTION of the form -- converted at the
   call, or of the `java:reify` / `java:proxy` / `java:subclass` it ends -- is one too, an argument
   or an element of one, as `:java-false` reaches them (until f24 `JavaMarkers.callbacks()` stripped
-  it: lists). Interpreter: `ImplementationHandler` / `SubclassHandler` unmarshal with the
-  markers' octets, so the function stores into Java's own array. Compiled: a copy, written back
-  when the function returns OR throws (stores in place land before a throw too). `_jimpl$K` /
-  `_jsub$K` of a slot one of whose parameters may carry a `byte[]` (`JavaOverloads.carriesBytes`:
-  what `bytesViewCost` fits, or an array of it; any other slot keeps `_junm` and writes nothing
-  back), keyed `|octets` (the shell when a slot is, the subshell by the marker, which its
-  `_jsubclass$N`'s conversions read; a converting `_jconv$N` ` octets`), build their values with
-  `_jcbo` / `_jcbf(Object[])Object[]`
-  -- `_juno` / `_jufo` of each argument, a `byte[]` an earlier argument is too taking its vector,
-  so an array Java hands twice is one vector as in place -- and call `_jwbo(handed, values)` after
-  `_apply` (after `_jcmp` for a comparison, which calls the function again) and in the handler
-  before `_jsig`: each top-level `byte[]` whose vector is one octet longer and differs takes the
-  octets back (`Arrays.equals` ranges, then `arraycopy`); values null (never ran) writes nothing.
-  The bridge's `callback`: `callbackArguments` / `writeBackOctets` in a `finally`, the same rule.
-  Not written back: a `byte[]` inside an array argument (compiled only); and a write Java makes
-  to its array while the function runs is lost, the vector being compared with the array as it
-  is then, not as it was handed (f25 drops the copy). Pins:
+  it: lists). It is Java's own array on every backend, so the function stores into it, reads what
+  Java stores while it runs, and an array Java hands twice is one vector. Interpreter:
+  `ImplementationHandler` / `SubclassHandler` unmarshal with the markers' octets. Compiled:
+  `_jimpl$K` / `_jsub$K` of a slot one of whose parameters may carry a `byte[]`
+  (`JavaOverloads.carriesBytes`: what `bytesViewCost` fits, or an array of it; any other slot keeps
+  `_junm`), keyed `|octets` (the shell when a slot is, the subshell by the marker, which its
+  `_jsubclass$N`'s conversions read; a converting `_jconv$N` ` octets`), unmarshal each argument
+  with `_juno` / `_jufo` (`unmarshalHelper(javaFalse, octets)`) where the others take `_junm` /
+  `_junf`; the bridge's `callback` with `unmarshal(arg, jf, octets)`. Until 2026-10-10 (f25) the
+  compiled function was handed copies behind the width (`_jcbo` / `_jcbf`, sharing one copy for an
+  array handed twice) written back by `_jwbo` when it returned or threw (the bridge's
+  `callbackArguments` / `writeBackOctets`), and a `byte[]` inside an array argument was not
+  written back, and a store Java made while the function ran was lost. Pins:
   `JavaImplementationPrograms.OCTETS` (`JavaInteropTest` / `JvmJavaInteropCompilerTest`: a reify
   and a proxy generated and bridged, a subclass Java's `readNBytes` reads, functions converted
-  at resolved, dispatched and run-time sites, stores after return and throw, one array twice),
-  `JavaBridgeTemplateParityTest#theBridgeAndAGeneratedCallbackHandAFunctionOctetsAlike`,
+  at resolved, dispatched and run-time sites, stores after return and throw, one array twice, a
+  `ByteBuffer` writing its array while the function runs),
+  `JavaBridgeTemplateParityTest#theBridgeAndADirectSiteAnswerOctetsAlike` (the one unmarshal both
+  copies hand a function through),
   `JavaImplementationsTest#theMarkersAFormEndsInAreCarriedByItsImplementation`,
-  `JvmLispCompilerSplitTest#aForcedSplitKeepsJavaCallsWorking` (a store written back across a
+  `JvmLispCompilerSplitTest#aForcedSplitKeepsJavaCallsWorking` (a store reaching Java across a
   split).
 - A function implementing `java.util.Comparator.compare` at a form ending in BOTH markers
   (`JavaImplementation.readsComparison`: a functional implementation of `Comparator` alone) is
@@ -366,20 +375,20 @@ four classes); no `_apply`, no `$JavaCalls`.
   `bytes()`; it is kindless (interpreter `kindOf` null, bridge `kindOf` null, `_jkind`
   `KIND_BYTES` ahead of `_jhost`, built only where `views`), converts in a view's items, and is
   a receiver as its `byte[]` (`JavaInterop.receiverObject`, the bridge's `receiverObject`,
-  `_jrecv`). Interpreter: offset 0, `bytes()` is the vector's own `byte[]`, so Java's stores --
-  during the call or later through a kept reference -- are the vector's. Compiled: offset 1 (the
-  width), `bytes()` a fresh copy; a DISPATCHED arm (`bytesHanded`: no closed kind, no bound, a
-  fixed parameter `byte[]` fits; a resolved site never takes one) first hands two views of one
-  storage one copy (`emitBytesShared` -> `shared`), then after the invoke asks `changed` of every
-  candidate before `store`-ing any (two passes: one pass let a later unchanged copy of the same
-  vector undo an earlier written one), the bridge alike (`marshalArguments`' sharing, `writeBack`
-  through the bound methods). Not written back: a varargs tail's elements, a call that threw,
-  later writes through a kept reference (compiled only, todo `f25`). `printer` / `class` unused, `order`
-  refused; items no octet vector are `VIEW_USAGE` (`_jview` tests `byte[]` slot 0 == 8 where
-  `intVectors`). Pins: `JavaInteropPrograms.BYTES_VIEW_PROGRAM` (`Arrays.toString`,
+  `_jrecv`). `bytes()` is the vector's own `byte[]` on every backend (the view holds just that
+  array), so Java's stores -- during the call, in a varargs tail, before a throw, or later through
+  a kept reference (`ByteBuffer.wrap`) -- are the vector's, and two views of one vector hand Java
+  one array. `printer` / `class` unused, `order` refused; items no octet vector are `VIEW_USAGE`
+  (`_jview` tests `byte[]` where `intVectors`, an empty one included). Until 2026-10-10 (f25) the
+  compiled view held the vector's `byte[]{8, e...}` at offset 1 and handed Java a fresh copy, which
+  a dispatched site (`bytesHanded` / `emitBytesShared` / `emitBytesWriteBack`, the view's static
+  `shared` / `changed` / `store`) and the bridge (`marshalArguments`' sharing, `writeBack`) wrote
+  back after the call -- but not a varargs tail's, a call that threw, nor a later store through a
+  kept reference. Pins: `JavaInteropPrograms.BYTES_VIEW_PROGRAM` (`Arrays.toString`,
   `Objects.toString`, `Array.getLength`, `nextBytes`, `arraycopy` between two and within one
   vector, dispatched and bridged, `Objects.equals(v, v)` T on both, a `List` parameter refused,
-  a receiver, an unknown receiver's `read`, refusals).
+  a receiver, an unknown receiver's `read`, a `ByteBuffer` writing the vector after the call,
+  refusals).
 - Callbacks (`RontoJavaCalls`): `text` (a string's text, any other answer its printed spelling)
   and `order` (the sign of a real answer, null otherwise). Interpreter: `JavaInterop.Calls` over
   the evaluator, recording what leaves through `raised`. Compiled: a generated
@@ -824,8 +833,8 @@ Per call the uncached bridge paid `getMethods()` (~2.5 us), `select()` (250 ns -
   (`instanceof $Implementation && instanceof I`, as strict as the interpreter's kind check). A slot
   boxes its arguments as a Proxy does and calls a PACKAGE-PRIVATE program method
   `_jimpl$K(Object fn, Object[] args)R` (one per (proxy?, interface, dispatch key)): `_junm` each
-  argument into a list (a proxy's with the name first; after `:octets` `_jcbo`'s values, written
-  back by `_jwbo`, "Markers"), `_apply`, then the direct sites' RETURNED
+  argument into a list (a proxy's with the name first; after `:octets` `_juno` each, so a `byte[]`
+  is Java's own array, "Markers"), `_apply`, then the direct sites' RETURNED
   `_jcost$N` / `_jconv$N` for R (`returnedCost` / `returnedConvert`: the per-type helpers of
   dispatched sites, without the function arm) or the interpreter's "cannot return" text. The
   `_jimpl$` names are shaker roots and pinned to the main class on a split

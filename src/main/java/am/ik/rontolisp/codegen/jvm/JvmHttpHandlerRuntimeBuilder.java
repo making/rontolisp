@@ -169,7 +169,7 @@ final class JvmHttpHandlerRuntimeBuilder {
 						PackageRegistry.qualifyInternal(LispNames.RONTOLISP_PKG, ClackEnv.NORMALIZE_RESPONSE))),
 				unaryDesc);
 		// The request body crosses as OCTETS -- RontoHttpClack.bodyOctets answers
-		// the packed byte[] vector -- for both :raw-body modes: the buffered Gray stream
+		// the byte[] vector -- for both :raw-body modes: the buffered Gray stream
 		// is a byte stream and stores them as they are (encoding a decoded body doubled
 		// every octet >= #x80 of a binary POST), and the default asynchronous stream is
 		// an octet stream on every backend, one settled chunk here.
@@ -214,8 +214,7 @@ final class JvmHttpHandlerRuntimeBuilder {
 			MethodCode.Label bodyEmpty = a.newLabel();
 			a.aload(3);
 			a.arraylength();
-			a.loadConstant(1);
-			a.if_icmple(bodyEmpty); // byte[]{8} alone: no body
+			a.ifeq(bodyEmpty); // no octets: no body
 			a.aload(2);
 			a.aload(3);
 			a.invokestatic(streamWrite);

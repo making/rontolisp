@@ -127,18 +127,8 @@ final class JvmAsyncRuntimeBuilder {
 	static final String DRAIN_BODY_METHOD = "_drain_body";
 
 	/**
-	 * {@code _iv_of_bytes(byte[]) -> byte[]}: raw bytes -> the packed
-	 * {@code (unsigned-byte 8)} vector ({@code byte[]{8, e0, ...}}, the {@code _iv*}
-	 * runtime's representation) a body stream answers them as. A drained octet body is
-	 * built through it.
-	 */
-	static final String IV_OF_BYTES_METHOD = "_iv_of_bytes";
-
-	static final String IV_OF_BYTES_DESC = "([B)[B";
-
-	/**
 	 * {@code _octetsToString(Object) -> Object}: the packed {@code (unsigned-byte 8)}
-	 * vector ({@code long[]{8, e0, ...}}) decoded by
+	 * vector (the bare {@code byte[]} of its octets) decoded by
 	 * {@code rontolisp::%octets-to-string}'s lenient rule into the quote-framed string,
 	 * or {@code null} ({@code nil}) for any other value. The native half of that decoder:
 	 * a well-formed body is a JDK decode, malformed bytes a bytecode transcode, and only
@@ -286,7 +276,6 @@ final class JvmAsyncRuntimeBuilder {
 		// _stream_read so one drain serves both stream modes.
 		MethodRefEntry awaitSelf = cp.methodRef(thisClass, AWAIT_METHOD, AWAIT_DESC);
 		MethodRefEntry streamReadSelf = cp.methodRef(thisClass, STREAM_READ_METHOD, UNARY_DESC);
-		MethodRefEntry ivOfBytesSelf = cp.methodRef(thisClass, IV_OF_BYTES_METHOD, IV_OF_BYTES_DESC);
 		ClassEntry byteArrayClass = cp.classEntry("[B");
 		ClassEntry longArrayClass = cp.classEntry("[J");
 
@@ -949,42 +938,10 @@ final class JvmAsyncRuntimeBuilder {
 			methods.add(new AsyncMethod(cp.utf8Entry(STREAM_CLOSE_METHOD), cp.utf8Entry(UNARY_DESC), a));
 		}
 
-		// --- _iv_of_bytes(byte[]): raw bytes -> byte[]{8, e0, ...}, the packed
-		// (unsigned-byte 8) vector every HTTP body stream answers its chunks as (the
-		// _iv* runtime's representation, so aref/length dispatch on it as on any
-		// make-array'd octet vector).
-		{
-			MethodRefEntry arraycopy = cp.methodRef(cp.classEntry("java/lang/System"), "arraycopy",
-					"(Ljava/lang/Object;ILjava/lang/Object;II)V");
-			MethodCode a = new MethodCode();
-			// slots: 0 bytes, 1 out
-			a.aload(0);
-			a.arraylength();
-			a.loadConstant(1);
-			a.iadd();
-			a.newarray(TypeKind.BYTE);
-			a.astore(1);
-			a.aload(1);
-			a.loadConstant(0);
-			a.loadConstant(JvmIntArrayRuntimeBuilder.OCTET_TAG);
-			a.bastore(); // out[0] = 8 (the width header)
-			// System.arraycopy(bytes, 0, out, 1, bytes.length)
-			a.aload(0);
-			a.loadConstant(0);
-			a.aload(1);
-			a.loadConstant(1);
-			a.aload(0);
-			a.arraylength();
-			a.invokestatic(arraycopy);
-			a.aload(1);
-			a.areturn();
-			methods.add(new AsyncMethod(cp.utf8Entry(IV_OF_BYTES_METHOD), cp.utf8Entry(IV_OF_BYTES_DESC), a));
-		}
-
 		// --- _drain_body(v): for http-handler response marshaling -- a stream drains to
 		// ONE body value the transport writes as it is: OCTET chunks (every HTTP body
-		// stream's, so a proxied fetch reply goes out byte-exact) to one long[] octet
-		// vector, string chunks (a guest make-stream) to their quoted concatenation; a
+		// stream's, so a proxied fetch reply goes out byte-exact) to one octet vector,
+		// string chunks (a guest make-stream) to their quoted concatenation; a
 		// stream mixing the two kinds is refused, like http-server.lisp's %http-drain.
 		// Any other value passes through. The chunks come through _stream_read + _await
 		// rather than off the queue directly, which is what makes ONE drain serve both
@@ -995,7 +952,6 @@ final class JvmAsyncRuntimeBuilder {
 			MethodRefEntry baosInit = cp.methodRef(baosClass, "<init>", "()V");
 			MethodRefEntry baosWrite = cp.methodRef(baosClass, "write", "(I)V");
 			MethodRefEntry baosWriteBytes = cp.methodRef(baosClass, "writeBytes", "([B)V");
-			MethodRefEntry baosWriteRange = cp.methodRef(baosClass, "write", "([BII)V");
 			MethodRefEntry baosToByteArray = cp.methodRef(baosClass, "toByteArray", "()[B");
 			MethodRefEntry baosToString = cp.methodRef(baosClass, "toString",
 					"(Ljava/nio/charset/Charset;)Ljava/lang/String;");
@@ -1025,8 +981,7 @@ final class JvmAsyncRuntimeBuilder {
 			a.astore(2); // chunk
 			a.aload(2);
 			a.ifnull(done);
-			// an octet chunk, byte[]{8, e0, ...}: the elements after the width header, in
-			// one write
+			// an octet chunk, the bare byte[]: its octets in one write
 			MethodCode.Label notOctets = a.newLabel();
 			a.aload(2);
 			a.instanceOf(byteArrayClass);
@@ -1036,13 +991,7 @@ final class JvmAsyncRuntimeBuilder {
 			a.aload(1);
 			a.aload(2);
 			a.checkcast(byteArrayClass);
-			a.dup(); // [sink, chunk, chunk]
-			a.arraylength();
-			a.loadConstant(1);
-			a.isub();
-			a.loadConstant(1);
-			a.swap(); // [sink, chunk, 1, len-1]
-			a.invokevirtual(baosWriteRange);
+			a.invokevirtual(baosWriteBytes);
 			a.goto_(loop);
 			a.labelBinding(notOctets);
 			a.aload(2);
@@ -1102,7 +1051,6 @@ final class JvmAsyncRuntimeBuilder {
 			// octets: one byte[] vector, written by the transport as it is
 			a.aload(1);
 			a.invokevirtual(baosToByteArray);
-			a.invokestatic(ivOfBytesSelf);
 			a.areturn();
 			// text (or an empty stream): the quoted concatenation
 			a.labelBinding(textResult);
@@ -1180,9 +1128,9 @@ final class JvmAsyncRuntimeBuilder {
 	 * vector was a {@code long[]}, copied into a {@code byte[]}, decoded into a
 	 * {@code CharBuffer} (and, when that refused, into a {@code StringBuilder}) and
 	 * framed by two concatenations -- a 256 MiB body held 1.2 GB of intermediates at the
-	 * decode. A value that is not an octet vector ({@code byte[]} whose slot 0 is
-	 * {@link JvmIntArrayRuntimeBuilder#OCTET_TAG}) answers {@code null}, and the caller's
-	 * per-byte loop (which walks the value through the generic {@code aref}) decides.
+	 * decode. A value that is not an octet vector (a {@code byte[]}) answers
+	 * {@code null}, and the caller's per-byte loop (which walks the value through the
+	 * generic {@code aref}) decides.
 	 * @param cp the constant pool
 	 * @return the helper body
 	 */
@@ -1200,9 +1148,8 @@ final class JvmAsyncRuntimeBuilder {
 		MethodRefEntry lowSurrogate = cp.methodRef(characterClass, "lowSurrogate", "(I)C");
 
 		MethodCode a = new MethodCode();
-		// slots: 0 v, 1 bytes (the vector: tag, then the octets), 2 n (its length), 3 i,
-		// 4 units, 5 every code point OR'd, 6 b, 7 cp, 8 adv, 9 four-byte code point,
-		// 10 k, 11 out
+		// slots: 0 v, 1 bytes (the octets), 2 n (their count), 3 i, 4 units, 5 every code
+		// point OR'd, 6 b, 7 cp, 8 adv, 9 four-byte code point, 10 k, 11 out
 		int bytesSlot = 1, nSlot = 2, iSlot = 3, unitsSlot = 4, orSlot = 5, bSlot = 6, cpSlot = 7, advSlot = 8,
 				cp4Slot = 9, kSlot = 10, outSlot = 11;
 		Unit unit = new Unit(bytesSlot, iSlot, nSlot, bSlot, cpSlot, advSlot, cp4Slot);
@@ -1216,16 +1163,6 @@ final class JvmAsyncRuntimeBuilder {
 		a.aload(bytesSlot);
 		a.arraylength();
 		a.istore(nSlot);
-		// Refuse an empty array and a quantized matrix (another byte[], whose slot 0 is
-		// its format code) rather than reading a header that is not the tag.
-		a.iload(nSlot);
-		a.loadConstant(1);
-		a.if_icmplt(none);
-		a.aload(bytesSlot);
-		a.loadConstant(0);
-		a.baload();
-		a.loadConstant(JvmIntArrayRuntimeBuilder.OCTET_TAG);
-		a.if_icmpne(none);
 		// Count: units (UTF-16 code units, a supplementary character two) and the OR of
 		// every code point.
 		a.loadConstant(0);
@@ -1253,16 +1190,14 @@ final class JvmAsyncRuntimeBuilder {
 		MethodCode.Label notVerbatim = a.newLabel();
 		a.iload(unitsSlot);
 		a.iload(nSlot);
-		a.loadConstant(1);
-		a.isub();
 		a.if_icmpne(notVerbatim);
 		a.iload(nSlot);
-		a.loadConstant(1);
+		a.loadConstant(2);
 		a.iadd();
 		a.newarray(TypeKind.BYTE);
 		a.astore(outSlot);
 		a.aload(bytesSlot);
-		a.loadConstant(1);
+		a.loadConstant(0);
 		a.aload(outSlot);
 		a.loadConstant(1);
 		a.iload(unitsSlot);
@@ -1378,7 +1313,7 @@ final class JvmAsyncRuntimeBuilder {
 	}
 
 	/**
-	 * The lenient rule's step over the octets in {@code bytes[1..n)}: the code point of
+	 * The lenient rule's step over the octets in {@code bytes[0..n)}: the code point of
 	 * the unit at {@code i} into {@code cp} and its length in octets into {@code adv}.
 	 * Emitted once per pass of {@code _octetsToString}'s decode, which differ only in
 	 * what they do with each unit.
@@ -1386,14 +1321,14 @@ final class JvmAsyncRuntimeBuilder {
 	private record Unit(int bytesSlot, int iSlot, int nSlot, int bSlot, int cpSlot, int advSlot, int cp4Slot) {
 
 		/**
-		 * Emits {@code for (i = 1; i < n; i += adv) { <step>; body }}, leaving the loop
+		 * Emits {@code for (i = 0; i < n; i += adv) { <step>; body }}, leaving the loop
 		 * at {@code done}.
 		 * @param a the method being built
 		 * @param done the label past the loop
 		 * @param body what each unit does, with its code point in {@code cpSlot}
 		 */
 		void emitLoop(MethodCode a, MethodCode.Label done, Runnable body) {
-			a.loadConstant(1);
+			a.loadConstant(0);
 			a.istore(this.iSlot);
 			MethodCode.Label loop = a.newLabel();
 			a.labelBinding(loop);

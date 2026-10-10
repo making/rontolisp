@@ -31,7 +31,7 @@
 ; => |false|
 ```
 
-ほかのマーカーと並べて `:octets` で終えると、`byte[]` (結果、または返した配列の要素) を、符号付きバイトのリストではなく、そのオクテットを持つ `(unsigned-byte 8)` のベクタとして返します。呼び出しが変換する関数にも同じ形で渡し、関数が格納した値は Java の配列へ書き戻されます (ガイドの[バイト列を受け取る](../../guides/java-interop.md#octets-back-octets))。
+ほかのマーカーと並べて `:octets` で終えると、`byte[]` (結果、または返した配列の要素) を、符号付きバイトのリストではなく、そのオクテットを持つ `(unsigned-byte 8)` のベクタとして返します。呼び出しが変換する関数にも同じ形で渡します。このベクタは Java の配列そのものなので、関数が格納した値は Java から読めます (ガイドの[バイト列を受け取る](../../guides/java-interop.md#octets-back-octets))。
 
 ```lisp
 (let ((o (java:new "java.io.ByteArrayOutputStream")))

@@ -183,9 +183,10 @@ throws, which the call reports as the method's failure:
 A Java array comes back as a list, so a `byte[]` is a list of signed bytes. A `java:new`,
 `java:call`, `java:static` or `java:field` ending in `:octets` answers a `byte[]` -- the
 result, a field's value, an element of an array it answers -- as an `(unsigned-byte 8)` vector
-of its octets instead, beside the other markers in any order. On the interpreter the vector is
-Java's array itself; a compiled program's is a copy. A [`:bytes` view](#views-javaview) hands
-one to Java:
+of its octets instead, beside the other markers in any order. The vector is Java's array
+itself, on the interpreter and in a compiled program alike: what Java stores into the array
+later -- a `ByteBuffer`'s `array()`, which the buffer writes -- the vector holds, and two answers
+of one array are `eq`. A [`:bytes` view](#views-javaview) hands one to Java:
 
 ```lisp
 (let ((md (java:static "java.security.MessageDigest" "getInstance" "MD5")))
@@ -195,9 +196,9 @@ one to Java:
 
 A function the call converts, and every function of a `java:proxy`, `java:reify` or
 `java:subclass` ending in `:octets`, is handed a `byte[]` -- an argument, or an element of
-one -- as such a vector too. What the function stores into it Java reads: on the interpreter
-at once, in a compiled program when the function returns or throws, each argument's octets
-going back into its array (an element's do not). An array Java hands twice is one vector:
+one -- as such a vector too: Java's array itself, so what the function stores into it Java
+reads, and what Java stores while the function runs the function reads. An array Java hands
+twice is one vector:
 
 ```lisp
 (let ((in (java:subclass "java.io.InputStream" '() '("read")
@@ -258,10 +259,9 @@ it as one element included: a Java array a call answers is a list here, and its 
 converts back to the array a later call expects.
 
 `(java:view value octets :bytes)` makes no collection: wherever a `byte[]` fits (`Object`
-included) Java is handed the `byte[]` of an `(unsigned-byte 8)` vector, and what it stores
-there the vector holds after the call -- on the interpreter the vector's own storage, which
-an object keeping the array writes later too; in a compiled program a copy written back
-when the call returns:
+included) Java is handed the `byte[]` of an `(unsigned-byte 8)` vector -- the vector's own
+storage, so what Java stores there the vector holds, during the call and later through an
+object that keeps the array (`ByteBuffer.wrap`):
 
 ```lisp
 (let* ((b (make-array 3 :element-type '(unsigned-byte 8)))

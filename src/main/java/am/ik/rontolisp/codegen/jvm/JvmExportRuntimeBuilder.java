@@ -1,6 +1,5 @@
 package am.ik.rontolisp.codegen.jvm;
 
-import java.lang.classfile.TypeKind;
 import java.lang.classfile.constantpool.ClassEntry;
 import java.lang.classfile.constantpool.MethodRefEntry;
 import java.lang.classfile.constantpool.Utf8Entry;
@@ -654,65 +653,38 @@ final class JvmExportRuntimeBuilder {
 		return new BuiltMethod(cp.utf8Entry(UNFRAME), cp.utf8Entry(UNFRAME_DESC), asm, false);
 	}
 
-	// _exBytesIn(bytes): a fresh packed (unsigned-byte 8) vector -- byte[]{8, e0, ...},
-	// the width-headered representation .kb/packed-integer-vectors.md pins -- holding a
-	// copy of the bytes.
+	// _exBytesIn(bytes): a fresh packed (unsigned-byte 8) vector -- the bare byte[]
+	// .kb/packed-integer-vectors.md pins -- holding a copy of the bytes: the boundary
+	// copies each way, as wasm-export's does for the same designator.
 	private static BuiltMethod buildBytesIn(ConstantPool cp) {
-		MethodRefEntry arraycopy = cp.methodRef(cp.classEntry("java/lang/System"), "arraycopy",
-				"(Ljava/lang/Object;ILjava/lang/Object;II)V");
+		MethodRefEntry copyOf = cp.methodRef(cp.classEntry("java/util/Arrays"), "copyOf", "([BI)[B");
 		MethodCode asm = new MethodCode();
-		// n = bytes.length; r = new byte[n + 1]; r[0] = 8;
+		// Arrays.copyOf(bytes, bytes.length)
 		asm.aload(0);
+		asm.dup();
 		asm.arraylength();
-		asm.istore(1);
-		asm.iload(1);
-		asm.iconst_1();
-		asm.iadd();
-		asm.newarray(TypeKind.BYTE);
-		asm.astore(2);
-		asm.aload(2);
-		asm.iconst_0();
-		asm.loadConstant(JvmIntArrayRuntimeBuilder.OCTET_TAG);
-		asm.bastore();
-		// System.arraycopy(bytes, 0, r, 1, n)
-		asm.aload(0);
-		asm.iconst_0();
-		asm.aload(2);
-		asm.iconst_1();
-		asm.iload(1);
-		asm.invokestatic(arraycopy);
-		asm.aload(2);
+		asm.invokestatic(copyOf);
 		asm.areturn();
 		return new BuiltMethod(cp.utf8Entry(BYTES_IN), cp.utf8Entry(BYTES_IN_DESC), asm, false);
 	}
 
-	// _exBytesOut(value): the byte[] copy of a packed (unsigned-byte 8) vector
-	// (byte[]{8, e0, ...}); any other value -- a packed vector of another width, and a
-	// quantized matrix, whose byte[] starts with its format code -- throws
+	// _exBytesOut(value): the byte[] copy of a packed (unsigned-byte 8) vector; any
+	// other value -- a packed vector of another width included -- throws
 	// ClassCastException.
 	private static BuiltMethod buildBytesOut(ConstantPool cp, Refs refs) {
 		ClassEntry byteArrayClass = cp.classEntry("[B");
-		MethodRefEntry copyOfRange = cp.methodRef(cp.classEntry("java/util/Arrays"), "copyOfRange", "([BII)[B");
+		MethodRefEntry copyOf = cp.methodRef(cp.classEntry("java/util/Arrays"), "copyOf", "([BI)[B");
 		MethodCode asm = new MethodCode();
 		MethodCode.Label throwLabel = asm.newLabel();
-		// if (value instanceof byte[] b && b[0] == 8) return Arrays.copyOfRange(b, 1,
-		// b.length)
+		// if (value instanceof byte[] b) return Arrays.copyOf(b, b.length)
 		asm.aload(0);
 		asm.instanceOf(byteArrayClass);
 		asm.ifeq(throwLabel);
 		asm.aload(0);
 		asm.checkcast(byteArrayClass);
-		asm.iconst_0();
-		asm.baload();
-		asm.loadConstant(JvmIntArrayRuntimeBuilder.OCTET_TAG);
-		asm.if_icmpne(throwLabel);
-		asm.aload(0);
-		asm.checkcast(byteArrayClass);
 		asm.dup();
-		asm.iconst_1();
-		asm.swap();
 		asm.arraylength();
-		asm.invokestatic(copyOfRange);
+		asm.invokestatic(copyOf);
 		asm.areturn();
 		asm.labelBinding(throwLabel);
 		emitThrowCce(asm, cp, refs, "rontolisp:jvm-export: the function did not return an (unsigned-byte 8) vector: ");

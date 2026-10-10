@@ -668,7 +668,9 @@ public final class JavaInteropPrograms {
 	 * ({@code either}'s unknown arguments) and one left to run time (an unknown receiver:
 	 * the compiled program's bridge), beside {@code :java-false} in either order, as an
 	 * {@code Object[]}'s element, empty -- and the unmarked call beside them a list of
-	 * signed bytes. Prints {@link #OCTETS_OUTPUT}.
+	 * signed bytes. The vector is Java's own array: what Java stores into it later, the
+	 * vector holds, two answers of one array are one vector, and a vector handed to Java
+	 * through a {@code :bytes} view comes back itself. Prints {@link #OCTETS_OUTPUT}.
 	 */
 	public static final String OCTETS_PROGRAM = """
 			(defun row (thunk)
@@ -697,6 +699,17 @@ public final class JavaInteropPrograms {
 			                          (java:call l "toArray")))))
 			  (row (lambda () (length (java:call (java:new "java.io.ByteArrayOutputStream") "toByteArray" :octets))))
 			  (row (lambda () (either nil (java:view 'b (octets 9) :bytes)))))
+			(row (lambda () (let* ((bb (java:static "java.nio.ByteBuffer" "allocate" 2))
+			                       (a (java:call bb "array" :octets)))
+			                  (java:call bb "put" 7)
+			                  a)))
+			(row (lambda () (let* ((bb (java:static "java.nio.ByteBuffer" "allocate" 2))
+			                       (v (octets 1 2))
+			                       (l (java:new "java.util.ArrayList")))
+			                  (java:call l "add" (java:view v v :bytes))
+			                  (list (eq (java:call bb "array" :octets) (java:call bb "array" :octets))
+			                        (eq v (java:call l "get" 0 :octets))
+			                        (eq v (first (java:call l "toArray" :octets)))))))
 			""";
 
 	/** What {@link #OCTETS_PROGRAM} prints. */
@@ -706,16 +719,19 @@ public final class JavaInteropPrograms {
 			(#(65 200) #(65 200))
 			((#(1 2) "x") #(1 2) ((1 2) "x"))
 			0
-			#(9)""";
+			#(9)
+			#(7 0)
+			(T T T)""";
 
 	/**
 	 * {@code (java:view value octets :bytes)}: Java is handed the {@code byte[]} of the
 	 * octets wherever one fits -- a {@code byte[]}, an {@code Object} parameter -- and
-	 * nowhere else; what Java stores into it the vector holds after the call, at a
-	 * dispatched site ({@code System.arraycopy}, {@code Random.nextBytes}) and one left
-	 * to run time (an unknown receiver, the class in a variable: the compiled program's
-	 * bridge), a vector handed twice one array to Java. A receiver is the array; items
-	 * that are no octet vector are refused. Prints {@link #BYTES_VIEW_OUTPUT}.
+	 * nowhere else; what Java stores into it the vector holds, at a dispatched site
+	 * ({@code System.arraycopy}, {@code Random.nextBytes}) and one left to run time (an
+	 * unknown receiver, the class in a variable: the compiled program's bridge), a vector
+	 * handed twice one array to Java, and through a reference Java keeps
+	 * ({@code ByteBuffer.wrap}). A receiver is the array; items that are no octet vector
+	 * are refused. Prints {@link #BYTES_VIEW_OUTPUT}.
 	 */
 	public static final String BYTES_VIEW_PROGRAM = """
 			(defvar *objects* "java.util.Objects")
@@ -743,6 +759,9 @@ public final class JavaInteropPrograms {
 			(let ((buf (octets 0 0 0 0 0 0)))
 			  (row (lambda () (list (read-into (java:new "java.io.StringBufferInputStream" "hello") (java:view 'buf buf :bytes))
 			                        buf))))
+			(let* ((b (octets 0 0 0 0))
+			       (bb (java:static "java.nio.ByteBuffer" "wrap" (java:view 'b b :bytes))))
+			  (row (lambda () (java:call bb "putInt" 42) b)))
 			(row (lambda () (java:view 'x (list 1 2) :bytes)))
 			(row (lambda () (java:view 'x (octets 1) :bytes nil (lambda (a b) 0))))
 			""";
@@ -757,6 +776,7 @@ public final class JavaInteropPrograms {
 			(T T NIL)
 			No matching constructor for java.util.ArrayList with 1 argument(s)
 			(5 #(104 101 108 108 111 0))
+			#(0 0 0 42)
 			java:view expects (java:view value items :list|:vector|:set|:map|:bytes [printer [order ["class"]]]), got (1 2)
 			java:view expects (java:view value items :list|:vector|:set|:map|:bytes [printer [order ["class"]]]), got #<lambda>""";
 

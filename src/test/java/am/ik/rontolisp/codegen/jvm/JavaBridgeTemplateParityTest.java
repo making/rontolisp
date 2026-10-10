@@ -40,6 +40,7 @@ import am.ik.rontolisp.compiler.ReflectiveJavaClasses;
 import am.ik.rontolisp.reader.LispReader;
 import am.ik.rontolisp.runtime.RontoComplex;
 import am.ik.rontolisp.runtime.RontoHashTable;
+import am.ik.rontolisp.runtime.RontoQuantizedMatrix;
 import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -377,8 +378,8 @@ class JavaBridgeTemplateParityTest {
 		LinkedHashMap<Object, Object> hostMap = new LinkedHashMap<>(Map.of("#order", "not a list"));
 		List<@Nullable Object> lisp = Arrays.asList(null, 5L, 1.5, BigInteger.TEN.pow(30), "\"s\"", "FOO", "T",
 				new int[] { 97 }, new BigInteger[] { BigInteger.ONE, BigInteger.TWO }, new Object[] { 1L, null },
-				new Object[] { 3, "car" }, new double[] { 2, 1, 0 }, new byte[] { 8, 1 }, lispArray, lispTable,
-				new RontoComplex(1L, 2L));
+				new Object[] { 3, "car" }, new double[] { 2, 1, 0 }, new byte[] { 1 }, lispArray, lispTable,
+				new RontoComplex(1L, 2L), new RontoQuantizedMatrix(new byte[] { 1, 0, 0, 0 }));
 		// A subclass whose overrides lie about its contents: the class decides, its
 		// methods are never asked.
 		ArrayList<Object> notEmpty = new ArrayList<>() {
@@ -497,8 +498,8 @@ class JavaBridgeTemplateParityTest {
 
 	// A specialized vector reaches a site as the same elements whichever copy reads it:
 	// the bridge's packedElements and the _jseq a dispatched site calls, over every
-	// packed shape -- the rank-1 ones as aref reads them, a rank-2 array and a quantized
-	// matrix (a byte[] whose slot 0 is its format code) as no sequence.
+	// packed shape -- the rank-1 ones as aref reads them (an octet vector the bare
+	// byte[], whatever its first octets spell), a rank-2 array as no sequence.
 	@Test
 	void theBridgeAndADirectSiteReadASpecializedVectorAlike(@TempDir Path dir) throws Exception {
 		JvmLispCompiler compiler = new JvmLispCompiler("PackedTest");
@@ -519,7 +520,8 @@ class JavaBridgeTemplateParityTest {
 		short nan = (short) 0x7f81;
 		List<Object> values = List.of(new double[] { 1, 2, 1.5, -2 }, new float[] { 1, 1, 6 },
 				new short[] { 1, 0, 2, oneAndAHalf, nan }, new long[] { 16, 7, 65535 },
-				new byte[] { 8, 1, (byte) 200, (byte) 255 }, new double[] { 2, 1, 1, 0 }, new byte[] { 1, 0, 0 });
+				new byte[] { 1, (byte) 200, (byte) 255 }, new byte[] { 1, 0, 0, 0, 1, 0, 0, 0, 32, 0, 0, 0 },
+				new double[] { 2, 1, 1, 0 });
 		try (URLClassLoader loader = new URLClassLoader(new URL[] { dir.toUri().toURL() },
 				ClassLoader.getSystemClassLoader())) {
 			Class<?> program = loader.loadClass("PackedTest");
@@ -537,7 +539,7 @@ class JavaBridgeTemplateParityTest {
 				assertThat(bridge).isEqualTo(direct);
 				assertThat(direct).containsExactly(List.of(1.5, -2.0), List.of(6.0),
 						List.of(1.5, am.ik.rontolisp.BFloat16.value(nan)), List.of(7L, 65535L), List.of(1L, 200L, 255L),
-						null, null);
+						List.of(1L, 0L, 0L, 0L, 1L, 0L, 0L, 0L, 32L, 0L, 0L, 0L), null);
 				assertThat(Double.doubleToRawLongBits((Double) Objects.requireNonNull(direct.get(2)).get(1)))
 					.isEqualTo(Double.doubleToRawLongBits(am.ik.rontolisp.BFloat16.value(nan)));
 			}
@@ -696,9 +698,11 @@ class JavaBridgeTemplateParityTest {
 	}
 
 	// A byte[] comes back the same whichever copy reads it at a call ending in :octets:
-	// the bridge's unmarshal and the _juno / _jufo a direct site calls -- an octet vector
-	// (the width 8, then the octets), empty, an Object[]'s element, a byte[][]'s -- while
-	// the unmarked _junm keeps the list of signed bytes.
+	// the bridge's unmarshal and the _juno / _jufo a direct site calls -- the very array,
+	// which is the octet vector, empty, an Object[]'s element, a byte[][]'s -- while the
+	// unmarked _junm keeps the list of signed bytes. What Java hands a function made at
+	// :octets goes through the same unmarshal on both copies (a generated callback's
+	// _juno / _jufo, the bridge Proxy's callback), so it is Java's own array there too.
 	@Test
 	void theBridgeAndADirectSiteAnswerOctetsAlike(@TempDir Path dir) throws Exception {
 		JvmLispCompiler compiler = new JvmLispCompiler("OctetsTest");
@@ -737,68 +741,12 @@ class JavaBridgeTemplateParityTest {
 					.as("bridge %s", value)
 					.isEqualTo(Arrays.deepToString(new Object[] { junm.invoke(null, value) }));
 			}
-			assertThat((byte[]) juno.invoke(null, (Object) new byte[] { 1, -1 })).containsExactly(8, 1, -1);
-		}
-	}
-
-	// What Java hands a function made at :octets comes out the same whichever copy makes
-	// it: the bridge's callbackArguments and the _jcbo / _jcbf a generated callback calls
-	// -- a byte[] an octet vector, one handed twice one vector, an Object[]'s byte[] its
-	// element's -- and what the function stores goes back alike (writeBackOctets, _jwbo)
-	// into the array, once for one handed twice; a function that never ran writes
-	// nothing.
-	@Test
-	void theBridgeAndAGeneratedCallbackHandAFunctionOctetsAlike(@TempDir Path dir) throws Exception {
-		JvmLispCompiler compiler = new JvmLispCompiler("CallbackOctetsTest");
-		byte[] bytes = compiler.compile(LispReader.readAllFromString("""
-				(let ((l (java:new "java.util.ArrayList")))
-				  (java:call l "forEach" (java:reify "java.util.function.Consumer" "accept" (lambda (x) x) :octets))
-				  (java:call l "forEach" (java:reify "java.util.function.Consumer" "accept" (lambda (x) x)
-				                           :java-false :octets)))
-				"""));
-		Files.write(dir.resolve("CallbackOctetsTest.class"), bytes);
-		for (Map.Entry<String, byte[]> file : compiler.runtimeClassFiles().entrySet()) {
-			Path target = dir.resolve(file.getKey());
-			Files.createDirectories(target.getParent());
-			Files.write(target, file.getValue());
-		}
-		byte[] shared = { 1, -1 };
-		Object[] handed = { shared, "x", shared, new Object[] { new byte[] { 3 } }, Boolean.FALSE, null, new byte[0] };
-		Class<?>[] arguments = { Object[].class, boolean.class };
-		Class<?>[] writeBack = { Object[].class, Object[].class };
-		try (URLClassLoader loader = new URLClassLoader(new URL[] { dir.toUri().toURL() },
-				ClassLoader.getSystemClassLoader())) {
-			Class<?> program = loader.loadClass("CallbackOctetsTest");
-			Method jcbo = declared(program, JvmJavaDirectSites.CALLBACK_OCTETS, Object[].class);
-			Method jcbf = declared(program, JvmJavaDirectSites.CALLBACK_FALSE_OCTETS, Object[].class);
-			Method jwbo = declared(program, JvmJavaDirectSites.WRITE_BACK_OCTETS, Object[].class, Object[].class);
-			for (boolean javaFalse : new boolean[] { false, true }) {
-				Object[] direct = (Object[]) (javaFalse ? jcbf : jcbo).invoke(null, (Object) handed);
-				Object[] bridge = (Object[]) Objects
-					.requireNonNull(invoke("callbackArguments", arguments, handed, javaFalse));
-				assertThat(Arrays.deepToString(bridge)).as("java-false %s", javaFalse)
-					.isEqualTo(Arrays.deepToString(direct));
-				assertThat(direct[2]).isSameAs(direct[0]);
-				assertThat(bridge[2]).isSameAs(bridge[0]);
-			}
-			assertThat((byte[]) ((Object[]) jcbo.invoke(null, (Object) handed))[0]).containsExactly(8, 1, -1);
-			for (boolean direct : new boolean[] { true, false }) {
-				byte[] stored = { 1, 2 };
-				byte[] kept = { 5 };
-				Object[] java = { stored, kept, stored };
-				Object[] values = direct ? (Object[]) jcbo.invoke(null, (Object) java)
-						: (Object[]) Objects.requireNonNull(invoke("callbackArguments", arguments, java, false));
-				((byte[]) values[2])[2] = 9;
-				if (direct) {
-					jwbo.invoke(null, java, values);
-					jwbo.invoke(null, java, null);
-				}
-				else {
-					invoke("writeBackOctets", writeBack, java, values);
-				}
-				assertThat(stored).as("direct %s", direct).containsExactly(1, 9);
-				assertThat(kept).as("direct %s", direct).containsExactly(5);
-			}
+			byte[] octets = { 1, -1 };
+			assertThat(juno.invoke(null, (Object) octets)).isSameAs(octets);
+			assertThat(jufo.invoke(null, (Object) octets)).isSameAs(octets);
+			assertThat(invoke("unmarshal", flags, octets, false, true)).isSameAs(octets);
+			Object[] element = (Object[]) Objects.requireNonNull(juno.invoke(null, (Object) new Object[] { octets }));
+			assertThat(element[0]).isSameAs(octets);
 		}
 	}
 
@@ -907,7 +855,6 @@ class JavaBridgeTemplateParityTest {
 		assertThat(constant("FUNCTIONAL_MARKER")).isEqualTo(LispNames.JAVA_FUNCTIONAL_MARKER);
 		assertThat(constant("JAVA_FALSE_MARKER")).isEqualTo(LispNames.JAVA_FALSE_MARKER);
 		assertThat(constant("OCTETS_MARKER")).isEqualTo(LispNames.JAVA_OCTETS_MARKER);
-		assertThat(constant("OCTET_TAG")).isEqualTo(JvmIntArrayRuntimeBuilder.OCTET_TAG);
 		assertThat(constant("VALUE_OPTION")).isEqualTo(LispNames.JAVA_VALUE_OPTION);
 		assertThat(constant("CLASS_OPTION")).isEqualTo(LispNames.JAVA_CLASS_OPTION);
 		assertThat(constant("REIFY_USAGE")).isEqualTo(am.ik.rontolisp.compiler.JavaImplementations.REIFY_USAGE);

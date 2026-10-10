@@ -2,7 +2,6 @@ package am.ik.rontolisp.runtime;
 
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -174,10 +173,11 @@ public final class RontoHttpClack {
 		}
 		byte[] body = switch (drainedBody) {
 			case String text -> unquote(text).getBytes(StandardCharsets.UTF_8);
-			// An (unsigned-byte 8) body: byte[]{8, e0, ...} here. The octets go out as
-			// they are -- which is why the shared normalizer deliberately did not flatten
-			// them into characters this transport would then UTF-8 encode.
-			case byte[] octets -> Arrays.copyOfRange(octets, 1, Math.max(1, octets.length));
+			// An (unsigned-byte 8) body, the bare byte[] here. The octets go out as they
+			// are -- which is why the shared normalizer deliberately did not flatten them
+			// into characters this transport would then UTF-8 encode -- copied, as the
+			// interpreter copies them, so the program's vector is not the one written.
+			case byte[] octets -> octets.clone();
 			// A wider packed vector, long[]{width, e0, ...}: each element narrowed to
 			// the octet a byte sink keeps of it.
 			case long[] wide -> octetsBytes(wide);
@@ -189,22 +189,18 @@ public final class RontoHttpClack {
 	private static final byte[] EMPTY_BODY = new byte[0];
 
 	/**
-	 * The request body as the packed {@code (unsigned-byte 8)} vector of the JVM runtime
-	 * ({@code byte[]{8, e0, ...}}: the width 8 in slot 0, as the compiled {@code _iv*}
-	 * helpers lay it out) -- the octets as they came, for both {@code :raw-body} modes:
+	 * The request body as the {@code (unsigned-byte 8)} vector of the JVM runtime -- the
+	 * bare {@code byte[]} the compiled {@code _iv*} helpers take, so the octets as they
+	 * came, uncopied, as the interpreter wraps them -- for both {@code :raw-body} modes:
 	 * the emitted {@code handle} hands them to the compiled {@code %http-body-stream} (a
 	 * byte stream, which must never see a re-encoded body) or writes them as the default
 	 * asynchronous stream's one chunk (an octet stream on every backend). A bodiless
-	 * request answers the bare width header.
+	 * request answers an empty vector.
 	 * @param request the served request
-	 * @return the body octets, {@code byte[]{8, e0, ...}}
+	 * @return the body octets
 	 */
 	public static byte[] bodyOctets(RontoHttpServer.Request request) {
-		byte[] bytes = request.body();
-		byte[] out = new byte[bytes.length + 1];
-		out[0] = 8;
-		System.arraycopy(bytes, 0, out, 1, bytes.length);
-		return out;
+		return request.body();
 	}
 
 	// long[]{width, e0, ...} -> the raw octets, each element narrowed to its low byte.
