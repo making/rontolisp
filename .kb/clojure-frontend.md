@@ -3549,11 +3549,39 @@ The `java:` surface (`.kb/java-interop.md`); interpreter and JVM only -- wasm co
   (filter odd? [2]))` true like the oracle's empty LazySeq), else the oracle's NPE. A kind
   no arm takes, or a row's method at another arity, is refused in the oracle's words (`No
   matching method contains found taking 1 args for class clojure.lang.PersistentArrayMap`,
-  `No matching field found: first for class ...`); a method no row names is `Method m
-  taking N args is not supported for class C` (the oracle's class may have it). The lowering
-  fixes the words; `%clojure-no-method` appends the class. Measured 2026-10-04 vs `clj`
-  1.12.6: clojure-spec `instance-calls-on-collections-keywords-symbols-and-ratios`
-  oracle-identical but the unsupported-method line.
+  `No matching field found: first for class ...`). The lowering fixes the words;
+  `%clojure-no-method` appends the class. Measured 2026-10-04 vs `clj` 1.12.6: clojure-spec
+  `instance-calls-on-collections-keywords-symbols-and-ratios` oracle-identical.
+  A method no row names at the site's arity (f11, 2026-10-10; `unmappedArm`, in `valueArm` and
+  as `boundArm`'s fallback when no row has the arity) reaches the value's Java object where the
+  oracle's class has it through a JDK interface: `HOST_KINDS` pairs a kind test with the JDK
+  types its `%clojure-host-member` object implements, as the oracle's class does (vector `List`
+  + `RandomAccess` + `Comparable`, seq `List`, set `Set`, map or record `Map`, keyword or symbol
+  `Comparable`, ratio `Number` + `Comparable`, seq iterator `Iterator` through
+  `%clojure-host-iterator`, its face; `Object`'s `wait`/`notify` any value but nil), read by
+  reflection at lowering (`declares`: public, instance, exact parameter count, as Clojure's
+  reflector). `(if (or kind-tests...) (java:call (maker r) "m" args... :java-false) REFUSAL)`
+  where the host is; on wasm the same test guards the unsupported refusal instead, so the
+  words agree with the host's choice on all four backends. REFUSAL is `Method m taking N args is
+  not supported` when some oracle value class has `m/N` that its Java object here lacks
+  (`ClojureValueMethods`, a table read off clj 1.12.6 on JDK 25: each class's public instance
+  methods less `Object`'s and its modeled JDK types'; the reader script's rule is in the
+  class javadoc), else the oracle's words: `.hashCode2`, and `.toArray` of a keyword or byte
+  array, which until f11 said unsupported. One table for every kind, so a name one class has is
+  unsupported on all (`.spliterator :k`; the oracle: `No matching field found`). A seq
+  iterator's `.remove` is a row (`(throw (new UnsupportedOperationException))`, every
+  backend: SeqIterator's message-less UOE), and its class name is `clojure.lang.SeqIterator`
+  (`%clojure-class-name-of`; was `java.lang.Object`). Measured 2026-10-10 against clj 1.12.6,
+  interpreter and JVM: before, `(vec (.toArray [1 2]))`, `(.containsAll [1 2] [1])`, `(count
+  (.entrySet {:a 1}))`, `(.sort v nil)`, an iterator's `.remove` were all `Method m ... is not
+  supported`; after, `[1 2]`, `true`, `1`, UOE, UOE as the oracle. Deviations (user doc): a
+  read-only view's mutator throws only when it would change something (`.remove` of an absent
+  key, `.clear` of an empty vector answer; the oracle always throws); `.toArray` answers a
+  list (a Java array a call answers is unmarshalled). Pins:
+  `ClojureInteropTest#aMethodNoRowNamesReachesTheValuesJavaObject`,
+  `#collectionKeywordSymbolAndRatioReceiversAnswerTheirCommonMethods` (`.hashCode2`, `.reduce`),
+  `ClojureWasmInteropRefusalTest#aMethodOfAValuesJavaObjectIsUnsupportedOnBothBackends`, the
+  clojure-spec case above and `instance-calls-on-a-fn-are-its-ifn-callable-runnable-and-comparator-methods`.
   A record, deftype or reify passes the same gate, and its class also has the protocol
   methods its body implements and its declared fields (oracle, clj 1.12.6, 2026-10-04:
   `(.m r)` calls the inline `m`, `(.a r)` reads field `a`, an `extend-type` method or an
@@ -3567,8 +3595,8 @@ The `java:` surface (`.kb/java-interop.md`); interpreter and JVM only -- wasm co
   Then the mapped rows (a record is `map?`, so `(.count r)` stays the map's), then for zero
   arguments an immutable declared field (`%clojure-declared-field-p`, the `(caddr x)` key
   list), then the refusal in the oracle's words on a typed receiver. A site naming neither
-  is lowered as before, so a typed receiver there keeps the unsupported-method words (the
-  oracle: `No matching field found`), and a site lowered before a later REPL input defines
+  is lowered as on a collection (`unmappedArm`: a record's `Map` methods, else the table's
+  words), and a site lowered before a later REPL input defines
   a type does not see it. A deftype carries its class name at index 4 like a record, for
   the refusal; `.-f` refuses in the same words. Size, 2026-10-04 (wasm P1 / `--optimize=size`
   / component / JVM class): a program with no such site is byte-identical but +26 B per

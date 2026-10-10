@@ -1816,6 +1816,7 @@
         ((rontolisp::%clojure-bytes-p x) "[B")
         ((rontolisp::%clojure-transient-p x)
          (rontolisp::%clojure-transient-class-name x))
+        ((rontolisp::%clojure-seq-iterator-p x) "clojure.lang.SeqIterator")
         ((and (consp x) (keywordp (car x))) "java.lang.Object")
         ((consp x) "clojure.lang.PersistentList")
         ((hash-table-p x)

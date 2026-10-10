@@ -279,14 +279,20 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   eight entries), so a program that ignores the answer keeps every edit here and loses
   some there. `nth` past the end of a transient vector answers `nil`, as of a vector.
 - An instance call on a collection, keyword, symbol, ratio, atom or fn answers through the core
-  functions and shares their deviations (`.getClass` answers what `class` does). A method
-  left unmapped is refused as `Method m taking N args is not supported for class C`, where the
-  oracle may answer (`.toArray`); the class named for a map is an array map up to eight
-  entries and a hash map past them, by size alone. `nil` is the empty list here, so a
+  functions and shares their deviations (`.getClass` answers what `class` does). A method of a
+  JDK interface the oracle's class implements (`.toArray`) is refused on the wasm backends as
+  `Method m taking N args is not supported for class C`, and so is, on every backend, a method
+  the oracle's class may have that nothing here answers (`.reduce`, `.meta`, an atom's
+  `.compareAndSet`); a method one value class has is refused that way on every receiver, where
+  the oracle names it missing from another class. Such a call on the interpreter and the JVM
+  reaches the read-only Java object the value crosses to Java as, whose mutators throw only
+  when they would change something (`.remove` of an absent key, `.clear` of an empty
+  collection answer), where the oracle's always throw. The class named for a map is an array
+  map up to eight entries and a hash map past them, by size alone. `nil` is the empty list here, so a
   collection method answers on it (`(.count nil)` is `0`) where the oracle throws a
   `NullPointerException`; any other method on `nil` is one. On a record, deftype or reify,
   a name that is no protocol method and no field of a record or deftype the program defined
-  is refused that way too, where the oracle says `No matching field found`; a site lowered
+  is treated as on a collection; a site lowered
   before a later REPL input defines a record or deftype does not see its methods or
   fields.
 - `instance?` answers a class by the oracle classes of each kind of value: a list or strict

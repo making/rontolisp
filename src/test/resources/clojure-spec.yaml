@@ -6684,9 +6684,9 @@ cases:
     # A Clojure collection, keyword, symbol or ratio has no host object, so the
     # common clojure.lang / java.util methods on it answer through the core verbs
     # on every backend (answers measured against clj 1.12.6). A method the
-    # oracle's class lacks is refused in its words; any other method on such a
-    # value is refused by name (the oracle's own words for .foo:
-    # "No matching method foo found taking 1 args for class clojure.lang.Keyword").
+    # oracle's class lacks is refused in its words, as is one no value class has;
+    # a seq iterator's remove is the oracle's message-less
+    # UnsupportedOperationException.
     source: |
       (println (.count [1 2 3]) (.size '(1 2)) (.count {:a 1}) (.size #{1 2}) (.count (map inc [1 2])) (.length [1 2]))
       (println (.isEmpty []) (.isEmpty [1]) (.isEmpty {}) (.isEmpty (filter odd? [2])) (.isEmpty #{1}))
@@ -6711,6 +6711,8 @@ cases:
       (println (try (.nth '(1 2) 0) (catch Exception e (.getMessage e))))
       (println (try (.get [1 2 3] 5) (catch IndexOutOfBoundsException e :out-of-bounds)))
       (println (try (.foo :a 1) (catch Exception e (.getMessage e))))
+      (println (try (.hashCode2 [1 2]) (catch Exception e (.getMessage e))))
+      (prn (try (.remove (.iterator [1])) (catch UnsupportedOperationException e [:uoe (.getMessage e)])))
     expected: |
       3 2 1 2 2 2
       true false true true false
@@ -6733,13 +6735,15 @@ cases:
       No matching field found: first for class clojure.lang.PersistentVector
       No matching method nth found taking 1 args for class clojure.lang.PersistentList
       :out-of-bounds
-      Method foo taking 1 args is not supported for class clojure.lang.Keyword
+      No matching method foo found taking 1 args for class clojure.lang.Keyword
+      No matching field found: hashCode2 for class clojure.lang.PersistentVector
+      [:uoe nil]
   - name: instance-calls-on-a-fn-are-its-ifn-callable-runnable-and-comparator-methods
     # A fn is the oracle's AFunction: IFn's invoke and applyTo (for any ifn? value),
     # Callable's call, Runnable's run and Comparator's compare, whose boolean answer
     # is AFunction.compare's (true -1, else 1 when the reversed call is true, else
-    # 0). Answers measured against clj 1.12.6; the last line is the oracle's
-    # "No matching field found: foo for class user$eval157$fn__158$fn__159".
+    # 0). Answers measured against clj 1.12.6; the last line names the fn's
+    # class AFunction, where the oracle names its own (user$eval157$fn__158$fn__159).
     source: |
       (defn fnrecv-lt [a b] (< a b))
       (println (.call (fn [] 5)) (.run (fn [] 5)) (.invoke (fn [] 5)) (.invoke + 1 2 3) (.applyTo + '(1 2 3)))
@@ -6754,7 +6758,7 @@ cases:
       1 :k "ab"
       :npe
       No matching method compare found taking 2 args for class clojure.lang.PersistentArrayMap
-      Method foo taking 0 args is not supported for class clojure.lang.AFunction
+      No matching field found: foo for class clojure.lang.AFunction
   - name: instance-calls-reach-a-record-deftype-or-reify-method-or-field
     # An instance call naming a method a defrecord, deftype or reify body implements
     # calls it, and a zero-argument name that is a declared field reads the field,

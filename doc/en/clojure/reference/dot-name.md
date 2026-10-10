@@ -10,14 +10,18 @@ answers its `str` spelling, on every backend. A collection, keyword, symbol, rat
 no host object either: its common `clojure.lang`/`java.util` methods (`.count`, `.size`,
 `.isEmpty`, `.get`, `.nth`, `.valAt`, `.contains`, `.containsKey`, `.indexOf`, `.getName`,
 `.getNamespace`, `.numerator`, `.deref`, ...) answer through the matching core function on
-every backend, a method its class lacks is refused in the oracle's words, and any other method is
-refused by name. A record, deftype or reify answers what its class has, on every backend: a
-protocol method its body implements calls it (`(.m r)`), and a zero-argument name that is a
-declared field reads it (`(.a r)`); an `extend-type` method, an undeclared name or a mutable
-field is refused in the oracle's words (`No matching field found: q for class user.R`). A name
-that is no protocol method and no field of a record or deftype the program defined is refused
-by name, as on a collection. Anything else runs on the interpreter and the JVM only -- the
-wasm backends reject `java:`.
+every backend. Another method of a JDK interface the oracle's class implements (`.toArray`,
+`.containsAll`, `.entrySet`, `.stream`, `.sort`) is called on the read-only Java object the value
+crosses to Java as, on the interpreter and the JVM, and refused by name on the wasm backends. A
+method its class lacks is refused in the oracle's words (`No matching field found: toArray for
+class clojure.lang.Keyword`), and one the oracle's class may have that nothing here answers
+(`.reduce`, `.meta`) by name. A record, deftype or reify answers what its class has, on every
+backend: a protocol method its body implements calls it (`(.m r)`), and a zero-argument name
+that is a declared field reads it (`(.a r)`); an `extend-type` method, an undeclared name or a
+mutable field is refused in the oracle's words (`No matching field found: q for class
+user.R`). A name that is no protocol method and no field of a record or deftype the program
+defined is treated as on a collection (a record is a `java.util.Map`). Anything else runs on the
+interpreter and the JVM only -- the wasm backends reject `java:`.
 
 ```clojure
 (println (.toUpperCase "hi")) ; HI

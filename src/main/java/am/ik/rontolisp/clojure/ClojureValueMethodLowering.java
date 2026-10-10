@@ -1,10 +1,14 @@
 package am.ik.rontolisp.clojure;
 
+import java.lang.reflect.Method;
+import java.lang.reflect.Modifier;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
+import java.util.RandomAccess;
 import java.util.Set;
 import java.util.TreeMap;
 import java.util.function.Function;
@@ -20,9 +24,11 @@ import org.jspecify.annotations.Nullable;
  * {@code java.util} interface method of the value's class ({@code Counted}, {@code List},
  * {@code Map}, {@code Set}, {@code Named}, {@code Ratio}, {@code IFn}, ...); here the
  * common ones answer through the core verb that does the same, so they run on every
- * backend, and every other method on such a value is refused by name instead of reaching
- * {@code java:call}, which takes no Lisp value but a string, number, character or
- * {@code t}.
+ * backend; where the host is, another method of a JDK interface the oracle's class
+ * implements ({@code toArray}, {@code entrySet}, {@code sort}) is called on the value's
+ * Java object ({@code %clojure-host-member}), never on the value itself, which
+ * {@code java:call} takes only as a string, number, character or {@code t}; every other
+ * method is refused by name.
  *
  * <p>
  * A record, deftype or reify is such a value too, and its class also has the protocol
@@ -36,8 +42,10 @@ import org.jspecify.annotations.Nullable;
  * predicate's bare test) and the core verb, a datum lowered with the receiver and the
  * arguments bound to locals of this class's own names. A kind the row names no arm for is
  * refused in the oracle's words ({@code No matching method contains found taking 1 args
- * for class clojure.lang.PersistentArrayMap}), since its class lacks the method; a method
- * no row names is refused as unsupported, since its class may have it.
+ * for class clojure.lang.PersistentArrayMap}), since its class lacks the method. A method
+ * no row names goes to the Java object of a kind whose class has it through a JDK
+ * interface, and is refused otherwise: as unsupported when some value class of the oracle
+ * has it ({@link ClojureValueMethods}), in the oracle's words when none does.
  *
  * <p>
  * One slice of {@link ClojureLowering}: every method takes the hub as its first argument
@@ -100,6 +108,47 @@ final class ClojureValueMethodLowering {
 	 */
 	private static final String SEQ_ITERATOR = "seq-iterator";
 
+	/** The class whose construction a seq iterator's {@code remove} throws. */
+	private static final String UNSUPPORTED_OPERATION = "java.lang.UnsupportedOperationException";
+
+	/** What makes the Java object a value is ({@code clojure.lisp}). */
+	private static final String HOST_MEMBER = "RONTOLISP::%CLOJURE-HOST-MEMBER";
+
+	/**
+	 * What makes the Java object a value is with a seq iterator its {@code Iterator} face
+	 * ({@code clojure.lisp}).
+	 */
+	private static final String HOST_ITERATOR = "RONTOLISP::%CLOJURE-HOST-ITERATOR";
+
+	/**
+	 * A kind of value whose Java object ({@code %clojure-host-member}) implements JDK
+	 * interfaces the oracle's class implements too: the test of the kind over the bound
+	 * receiver, the interfaces, and what makes the object.
+	 */
+	private record HostKind(Function<LispVal, LispVal> test, List<Class<?>> types, String maker) {
+
+	}
+
+	/**
+	 * The kinds whose Java object answers the methods of the JDK interfaces of the
+	 * oracle's class: a vector a {@code List}, {@code RandomAccess} and
+	 * {@code Comparable}, a list or seq a {@code List}, a set a {@code Set}, a map or
+	 * record a {@code Map}, a keyword or symbol a {@code Comparable}, a ratio a
+	 * {@code Number}, and a seq iterator an {@code Iterator}. {@code Object}'s methods
+	 * every value but nil answers.
+	 */
+	private static final List<HostKind> HOST_KINDS = List.of(
+			new HostKind(r -> ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-IS-VECTOR"), r),
+					List.of(List.class, RandomAccess.class, Comparable.class), HOST_MEMBER),
+			new HostKind(r -> ClojurePredicateLowering.rawTest("seq?", r), List.of(List.class), HOST_MEMBER),
+			new HostKind(r -> ClojurePredicateLowering.rawTest("set?", r), List.of(Set.class), HOST_MEMBER),
+			new HostKind(r -> ClojurePredicateLowering.rawTest("map?", r), List.of(Map.class), HOST_MEMBER),
+			new HostKind(r -> ClojurePredicateLowering.rawTest("ident?", r), List.of(Comparable.class), HOST_MEMBER),
+			new HostKind(r -> ClojurePredicateLowering.rawTest("ratio?", r), List.of(Number.class, Comparable.class),
+					HOST_MEMBER),
+			new HostKind(r -> ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-SEQ-ITERATOR-P"), r),
+					List.of(Iterator.class), HOST_ITERATOR));
+
 	/**
 	 * The kinds no one-argument predicate names exactly, each to its family's test, which
 	 * a program making no such value folds ({@link ClojureArms.Family#INSTANT},
@@ -155,6 +204,9 @@ final class ClojureValueMethodLowering {
 				ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-ITER-HAS-NEXT"), ctx.localSym(RECV)))));
 		row("next", 0, arm(List.of("seq?"), core("next", R)), new Arm(List.of(SEQ_ITERATOR),
 				ctx -> ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-ITER-NEXT"), ctx.localSym(RECV))));
+		// SeqIterator.remove throws, a message-less UnsupportedOperationException
+		row("remove", 0, arm(List.of(SEQ_ITERATOR), ClojureLowerUtil.list(new LispSymbol("throw"),
+				ClojureLowerUtil.list(new LispSymbol("new"), new LispSymbol(UNSUPPORTED_OPERATION)))));
 		row("assocN", 2, arm(List.of("indexed?"), core("assoc", R, A, B)));
 		// a sorted map or set is the oracle's Sorted: its comparator, an entry's key, the
 		// seq from a key and the seq either way, which a Sorted body's subseq reads
@@ -340,7 +392,7 @@ final class ClojureValueMethodLowering {
 		List<String> implemented = ClojureInterfaces.instanceTests(method, args.size() + 1);
 		LispVal arm;
 		if (arms == null && typed == null) {
-			arm = refusal(recv, method, known, args);
+			arm = unmappedArm(ctx, method, designator, recv, args);
 			// an instant or a UUID made here answers its class's method through the
 			// host object it stands for (arms a program making none sheds)
 			arm = ClojureTimeValueLowering.methodArm(ctx, method, designator, recv, args, Set.of(), arm);
@@ -498,7 +550,9 @@ final class ClojureValueMethodLowering {
 						ClojureLowerUtil.list(ClojureLowerUtil.sym("gethash"), key,
 								ClojureProtocolLowering.typedTableOf(self))));
 			}
-			LispVal fallback = refusal(self, method, known, locals);
+			// a row at this arity names every kind whose class has the method
+			LispVal fallback = arms.isEmpty() ? unmappedArm(ctx, method, designator, self, locals)
+					: refusal(self, method, true, locals);
 			// an instant or a UUID made here that no row answered: its class's method
 			// through the host object it stands for (arms a program making none sheds)
 			fallback = ClojureTimeValueLowering.methodArm(ctx, method, designator, self, locals,
@@ -585,6 +639,73 @@ final class ClojureValueMethodLowering {
 			tests.add(ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), self));
 		}
 		return tests.size() == 1 ? tests.get(0) : ClojureLowerUtil.cons(ClojureLowerUtil.sym("or"), tests);
+	}
+
+	/**
+	 * The arm of a method no row names at the site's arity: where the host is, a kind
+	 * whose oracle class has it through a JDK interface ({@link #HOST_KINDS}, or
+	 * {@code Object}) calls it on the value's Java object, as the oracle calls its own
+	 * object -- a vector's {@code toArray} or {@code sort}, a map's {@code entrySet} --
+	 * and where the host is not (wasm), such a kind is refused as unsupported. Any other
+	 * receiver is refused as unsupported when some value class has the method
+	 * ({@link ClojureValueMethods}), else in the oracle's words; nil is the oracle's
+	 * {@code NullPointerException}.
+	 * @param ctx the hub
+	 * @param method the method name
+	 * @param designator the method as {@code java:call} names it
+	 * @param recv the bound receiver
+	 * @param args the lowered (or bound) arguments
+	 * @return the arm
+	 */
+	private static LispVal unmappedArm(ClojureLowering ctx, String method, String designator, LispSymbol recv,
+			List<LispVal> args) {
+		int n = args.size();
+		LispVal refusal = refusal(recv, method, !ClojureValueMethods.unsupported(method, n), args);
+		List<LispVal> tests = new ArrayList<>();
+		String maker = HOST_MEMBER;
+		if (declares(List.of(Object.class), method, n)) {
+			tests.add(recv);
+		}
+		else {
+			for (HostKind kind : HOST_KINDS) {
+				if (declares(kind.types(), method, n)) {
+					tests.add(kind.test().apply(recv));
+					maker = kind.maker().equals(HOST_MEMBER) ? maker : kind.maker();
+				}
+			}
+		}
+		if (tests.isEmpty()) {
+			return refusal;
+		}
+		LispVal answer;
+		if (ctx.hostTarget) {
+			List<LispVal> parts = new ArrayList<>();
+			parts.add(ClojureLowerUtil.list(new LispSymbol(maker), recv));
+			parts.add(LispString.literal(designator));
+			parts.addAll(args);
+			answer = ClojureInteropLowering.hostCall(ctx, ClojureInteropLowering.JAVA_CALL, parts, 2);
+		}
+		else {
+			answer = refusal(recv, method, false, args);
+		}
+		LispVal test = tests.size() == 1 ? tests.get(0) : ClojureLowerUtil.cons(ClojureLowerUtil.sym("or"), tests);
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), test, answer, refusal);
+	}
+
+	/**
+	 * Whether one of the types has a public instance method of the name taking the count
+	 * of arguments, which an instance call of the oracle's reflection would find.
+	 */
+	private static boolean declares(List<Class<?>> types, String method, int n) {
+		for (Class<?> type : types) {
+			for (Method candidate : type.getMethods()) {
+				if (candidate.getName().equals(method) && candidate.getParameterCount() == n
+						&& !Modifier.isStatic(candidate.getModifiers())) {
+					return true;
+				}
+			}
+		}
+		return false;
 	}
 
 	/**

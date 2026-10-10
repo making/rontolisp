@@ -78,11 +78,34 @@ class ClojureInteropTest {
 				"k sym x.txt java.lang.String\n");
 		assertBothEqual("(println (.count [1 2 3]) (.get {:a 1} :a) (.contains #{1} 1) (.getName :abc)"
 				+ " (.getNamespace :a/b) (.numerator 1/3))", "3 1 true abc a 1\n");
-		// a method left unmapped is refused by name
+		// a method no value class has is refused in the oracle's words, one the
+		// oracle's class may have and nothing here answers by name
 		assertBothEqual("(println (try (.hashCode2 [1 2]) (catch Exception e (.getMessage e))))",
-				"Method hashCode2 taking 0 args is not supported for class clojure.lang.PersistentVector\n");
+				"No matching field found: hashCode2 for class clojure.lang.PersistentVector\n");
 		assertBothEqual("(println (try (.size {:a 1} 2) (catch Exception e (.getMessage e))))",
 				"No matching method size found taking 1 args for class clojure.lang.PersistentArrayMap\n");
+		assertBothEqual("(println (try (.reduce [1 2] +) (catch Exception e (.getMessage e))))",
+				"Method reduce taking 1 args is not supported for class clojure.lang.PersistentVector\n");
+	}
+
+	@Test
+	void aMethodNoRowNamesReachesTheValuesJavaObject() throws Exception {
+		// measured against clj 1.12.6: a method of a JDK interface the oracle's class
+		// implements answers as that class's object does, read-only as the oracle's is
+		assertBothEqual(
+				"(prn (vec (.toArray [1 2])) (.containsAll [1 2] [1]) (count (.entrySet {:a 1}))"
+						+ " (vec (.toArray #{:k})) (.getOrDefault {:a 1} :b 9) (.byteValue 7/2) (.getLast '(5 6)))",
+				"[1 2] true 1 [:k] 9 3 6\n");
+		assertBothEqual("(defn uoe [f] (try (f) (catch UnsupportedOperationException e [:uoe (.getMessage e)])))"
+				+ " (prn (uoe #(let [v [3 1 2]] (.sort v nil))) (uoe #(.put {:a 1} :b 2)) (uoe #(.removeIf [1 2] odd?))"
+				+ " (uoe #(let [it (.iterator [1 2])] (.next it) (.remove it))))",
+				"[:uoe nil] [:uoe nil] [:uoe nil] [:uoe nil]\n");
+		// a seq iterator is its Iterator face, a fn the Consumer
+		assertBothEqual("(let [it (.iterator [1 2 3])] (.next it) (.forEachRemaining it println))", "2\n3\n");
+		// a kind whose class lacks the method keeps the oracle's refusal
+		assertBothEqual("(println (try (.toArray :k) (catch Exception e (.getMessage e))))",
+				"No matching field found: toArray for class clojure.lang.Keyword\n");
+		assertBothEqual("(println (try (.toArray nil) (catch NullPointerException e :npe)))", ":npe\n");
 	}
 
 	@Test

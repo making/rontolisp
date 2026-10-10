@@ -137,6 +137,20 @@ class ClojureWasmInteropRefusalTest {
 		}
 	}
 
+	@Test
+	void aMethodOfAValuesJavaObjectIsUnsupportedOnBothBackends() throws Exception {
+		// the interpreter and the JVM call it on the value's Java object
+		// (ClojureInteropTest); a method no value class has keeps the oracle's words
+		String program = "(defn msg [f] (try (f) (catch Exception e (ex-message e))))"
+				+ " (println (msg #(.toArray [1 2])) \"|\" (msg #(.toArray :k)) \"|\""
+				+ " (msg #(let [it (.iterator [1])] (.remove it))))";
+		for (boolean component : new boolean[] { false, true }) {
+			assertThat(run(program, component)).as(component ? "component" : "preview 1")
+				.isEqualTo("Method toArray taking 0 args is not supported for class clojure.lang.PersistentVector"
+						+ " | No matching field found: toArray for class clojure.lang.Keyword | nil\n");
+		}
+	}
+
 	private static byte[] compile(String program, boolean component, ByteArrayOutputStream warnings) {
 		CompileFrontendAccess.Program frontend = CompileFrontendAccess.clojure(program, true, component);
 		try (var _ = ThreadStdio.err(warnings)) {
