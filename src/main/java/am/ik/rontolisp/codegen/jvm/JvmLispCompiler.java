@@ -2207,6 +2207,13 @@ public final class JvmLispCompiler implements LispCompiler {
 		Set<Integer> arityGuardShapes = new HashSet<>();
 		// The built-in operators the wrong-count reports name (see Ctx.arityOperators).
 		JvmArityOperators arityOperators = new JvmArityOperators();
+		// a defun whose body declares its own wrong-count report reports in its words
+		for (DefunDecl defun : defuns) {
+			am.ik.rontolisp.DeclaredArityReport declared = am.ik.rontolisp.DeclaredArityReport.of(defun.bodyExprs);
+			if (declared != null) {
+				arityOperators.declare(defun.name, declared);
+			}
+		}
 		if (usesEval) {
 			for (int arity = 0; arity <= JvmEvalRuntimeBuilder.MAX_CALLABLE_ARITY; arity++) {
 				indirectCallArities.add(arity);

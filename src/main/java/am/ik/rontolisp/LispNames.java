@@ -2886,6 +2886,16 @@ public final class LispNames {
 	public static final String ARITY_MISSING_MESSAGE_INTERNAL = "%ARITY-MISSING-MESSAGE";
 
 	/**
+	 * Internal declaration identifier {@code (declare (%arity-report prefix suffix))} at
+	 * the head of a function body: a wrong-count call of that function reports
+	 * {@code prefix + count + suffix} instead of {@code Function expects ...}
+	 * ({@link DeclaredArityReport}). A language front end spells its own refusal with it
+	 * (Clojure's {@code Wrong number of args (N) passed to: ns/name}); every other
+	 * declaration processor ignores it.
+	 */
+	public static final String ARITY_REPORT_INTERNAL = "%ARITY-REPORT";
+
+	/**
 	 * Internal one-argument primitive {@code (%supplied-p param)}: true unless
 	 * {@code param} holds the UNSUPPLIED marker -- what a caller passes for an
 	 * {@code &optional} parameter it has no argument for, when the callee takes its

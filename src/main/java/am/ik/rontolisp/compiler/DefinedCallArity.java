@@ -4,6 +4,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 import am.ik.rontolisp.ClosRegistry;
+import am.ik.rontolisp.DeclaredArityReport;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispVal;
 import org.jspecify.annotations.Nullable;
@@ -45,6 +46,23 @@ public final class DefinedCallArity {
 	 */
 	public static @Nullable LispVal wrongCountSignal(LispCons call, @Nullable String name, int required,
 			boolean variadic) {
+		return wrongCountSignal(call, name, required, variadic, null);
+	}
+
+	/**
+	 * {@link #wrongCountSignal(LispCons, String, int, boolean)} for a callee that may
+	 * declare its own report ({@link DeclaredArityReport}), which then spells the
+	 * message.
+	 * @param call the call, a proper list headed by the function's name or lambda form
+	 * @param name the function's name as the backend registered it, or {@code null} for a
+	 * {@code lambda} form in call position
+	 * @param required the required parameter count
+	 * @param variadic whether a rest list takes any surplus
+	 * @param declared the report the callee's body declares, or {@code null}
+	 * @return the replacement form, or {@code null} when the count fits
+	 */
+	public static @Nullable LispVal wrongCountSignal(LispCons call, @Nullable String name, int required,
+			boolean variadic, @Nullable DeclaredArityReport declared) {
 		int supplied = 0;
 		for (LispVal rest = call.cdr(); rest instanceof LispCons cell; rest = cell.cdr()) {
 			supplied++;
@@ -56,8 +74,8 @@ public final class DefinedCallArity {
 		for (LispVal rest = call.cdr(); rest instanceof LispCons cell; rest = cell.cdr()) {
 			args.add(cell.car());
 		}
-		String message = ClosRegistry.arityMessage(BuiltinFunctionWrappers.arityOperator(name), required, variadic,
-				supplied);
+		String message = declared != null ? declared.message(supplied)
+				: ClosRegistry.arityMessage(BuiltinFunctionWrappers.arityOperator(name), required, variadic, supplied);
 		return BuiltinCallArity.signalAfterArguments(call, args, message);
 	}
 

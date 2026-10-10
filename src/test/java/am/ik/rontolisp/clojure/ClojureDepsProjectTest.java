@@ -208,7 +208,9 @@ class ClojureDepsProjectTest {
 			.stream()
 			.flatMap(top -> top.forms().stream())
 			.map(LispVal::print)
-			.toList()).anyMatch(form -> form.contains("(DEFUN |c%lib.core/f| (|c%x|) (+ |c%x| 1))"));
+			.toList())
+			.anyMatch(form -> form.contains(
+					"(DEFUN |c%lib.core/f| (|c%x|) " + ClojureLoweringTest.arity("lib.core/f") + " (+ |c%x| 1))"));
 	}
 
 	private static String real(String name) throws IOException {

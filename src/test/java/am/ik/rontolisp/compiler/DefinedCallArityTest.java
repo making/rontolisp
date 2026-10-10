@@ -2,6 +2,7 @@ package am.ik.rontolisp.compiler;
 
 import java.util.Objects;
 
+import am.ik.rontolisp.DeclaredArityReport;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.macro.LispMacroExpander;
@@ -50,6 +51,22 @@ class DefinedCallArityTest {
 		assertThat(BuiltinFunctionWrappers.arityOperator(LispNames.CAR)).isEqualTo(LispNames.CAR);
 		assertThat(BuiltinFunctionWrappers.arityOperator("%UD--dispatch")).isNull();
 		assertThat(BuiltinFunctionWrappers.arityOperator(null)).isNull();
+	}
+
+	@Test
+	void aCalleeDeclaringItsReportIsReportedInItsWords() {
+		DeclaredArityReport clojure = new DeclaredArityReport("Wrong number of args (", ") passed to: my.app/f");
+		assertThat(Objects
+			.requireNonNull(DefinedCallArity.wrongCountSignal(call("(f (incf n) 2)"), "F", 1, false, clojure))
+			.print()).isEqualTo("(PROGN (INCF N) 2 (%PROGRAM-ERROR \"Wrong number of args (2) passed to: my.app/f\"))");
+		assertThat(
+				Objects.requireNonNull(DefinedCallArity.wrongCountSignal(call("(f)"), "F", 1, true, clojure)).print())
+			.isEqualTo("(PROGN (%PROGRAM-ERROR \"Wrong number of args (0) passed to: my.app/f\"))");
+		// it wins over the name of a built-in its function is defined under
+		assertThat(Objects
+			.requireNonNull(DefinedCallArity.wrongCountSignal(call("(car)"), LispNames.CAR, 1, false, clojure))
+			.print()).isEqualTo("(PROGN (%PROGRAM-ERROR \"Wrong number of args (0) passed to: my.app/f\"))");
+		assertThat(DefinedCallArity.wrongCountSignal(call("(f 1)"), "F", 1, false, clojure)).isNull();
 	}
 
 	private static LispCons call(String source) {

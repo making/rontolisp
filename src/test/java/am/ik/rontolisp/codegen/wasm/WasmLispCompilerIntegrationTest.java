@@ -45,6 +45,7 @@ import am.ik.rontolisp.macro.FoldDifferential;
 import am.ik.rontolisp.reader.Features;
 import am.ik.rontolisp.reader.LispReader;
 import am.ik.rontolisp.testsupport.AwaitValuesMatrix;
+import am.ik.rontolisp.testsupport.DeclaredArityReportPrograms;
 import am.ik.rontolisp.testsupport.HashTableKeyPrograms;
 import am.ik.rontolisp.testsupport.HostWasmtime;
 import am.ik.rontolisp.testsupport.MaskSignedFieldProgram;
@@ -13220,6 +13221,15 @@ class WasmLispCompilerIntegrationTest {
 					"CONS expects 2 arguments, got 3"
 					"Function expects 1 argument, got 0"
 					((1 . 2) (3 . 4) 5 ((1 . 2)))""");
+	}
+
+	// A function declaring its own wrong-count report refuses in its words through a
+	// dispatch miss, a literal and a computed apply and a direct call
+	// (DeclaredArityReportPrograms, pinned on all four backends).
+	@Test
+	void aFunctionDeclaringItsArityReportRefusesInItsWords() throws Exception {
+		assertThat(compileAndRun(DeclaredArityReportPrograms.PROGRAM + "(print (ar-all))"))
+			.isEqualTo(DeclaredArityReportPrograms.ANSWER);
 	}
 
 	// A DIRECT call of a wrapped built-in with a count its call shape rules out is the

@@ -1,9 +1,11 @@
 package am.ik.rontolisp.codegen.jvm;
 
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
+import am.ik.rontolisp.DeclaredArityReport;
 import am.ik.rontolisp.compiler.BuiltinFunctionWrappers;
 import org.jspecify.annotations.Nullable;
 
@@ -26,6 +28,12 @@ import org.jspecify.annotations.Nullable;
  * builder never learned.
  *
  * <p>
+ * A callee whose body declares its own report ({@link DeclaredArityReport}) rides the
+ * same index: its entry is {@link #DECLARED_MARK}, the index of its prefix's own entry
+ * (shared by every report with that prefix) as one {@code char}, then its suffix, and
+ * {@code _arityMsg} spells {@code prefix + count + suffix} from it.
+ *
+ * <p>
  * One registry per compile, shared by every compilation context of it.
  */
 final class JvmArityOperators {
@@ -33,9 +41,20 @@ final class JvmArityOperators {
 	/** The bit the operator index starts at; the plain shape stays below it. */
 	static final int OPERATOR_SHIFT = 16;
 
+	/**
+	 * What opens an entry that is a declared report rather than an operator name: no
+	 * operator name and no declared prefix starts with it.
+	 */
+	static final char DECLARED_MARK = '\0';
+
 	private final Map<String, Integer> indices = new LinkedHashMap<>();
 
+	private final Map<String, DeclaredArityReport> declared = new HashMap<>();
+
 	private boolean frozen;
+
+	/** The modified UTF-8 length of the entries joined, separators included. */
+	private int utf8Length;
 
 	/**
 	 * The shape of a callee that reports as {@code Function}: the required count doubled,
@@ -50,14 +69,97 @@ final class JvmArityOperators {
 
 	/**
 	 * The shape a report is spelled from for a callee of this name: {@link #plainShape},
-	 * with the operator's index when the callee is a built-in's.
+	 * with the operator's index when the callee is a built-in's, or its declared report's
+	 * when its body declares one ({@link #declare}).
 	 * @param required the callee's required parameter count
 	 * @param variadic whether it takes a {@code &rest} tail
 	 * @param functionName its name, or {@code null} for an anonymous callee
 	 * @return the shape
 	 */
 	int shape(int required, boolean variadic, @Nullable String functionName) {
+		return shape(required, variadic, functionName, null);
+	}
+
+	/**
+	 * {@link #shape(int, boolean, String)} for a callee whose declared report the caller
+	 * already holds: a lambda, which has no name to register one under.
+	 * @param required the callee's required parameter count
+	 * @param variadic whether it takes a {@code &rest} tail
+	 * @param functionName its name, or {@code null} for an anonymous callee
+	 * @param report the report its body declares, or {@code null} to look the name up
+	 * @return the shape
+	 */
+	int shape(int required, boolean variadic, @Nullable String functionName, @Nullable DeclaredArityReport report) {
+		DeclaredArityReport declaredReport = report != null ? report : declared(functionName);
+		if (declaredReport != null && encodable(declaredReport) && plainShape(required, variadic) < 1 << OPERATOR_SHIFT
+				&& fits(declaredReport.prefix())) {
+			// the prefix is an entry of its own, which every report sharing it points at
+			int prefix = index(declaredReport.prefix());
+			String entry = DECLARED_MARK + String.valueOf((char) prefix) + declaredReport.suffix();
+			if (prefix <= Character.MAX_VALUE && fits(entry)) {
+				return namedShape(required, variadic, entry);
+			}
+		}
 		return namedShape(required, variadic, BuiltinFunctionWrappers.arityOperator(functionName));
+	}
+
+	/**
+	 * Whether the entry is registered already or still fits the one string constant
+	 * {@code _arityMsg} reads the entries from. Past it a declared report is dropped
+	 * rather than the class: the callee reports as {@code Function}.
+	 */
+	private boolean fits(String entry) {
+		return this.indices.containsKey(entry) || this.utf8Length + modifiedUtf8Length(entry) + 1 <= MAX_NAMES_UTF8;
+	}
+
+	/**
+	 * The most modified UTF-8 bytes the joined entries may take: one
+	 * {@code CONSTANT_Utf8} holds 65,535, and the operator names a program registers
+	 * besides take a few hundred.
+	 */
+	private static final int MAX_NAMES_UTF8 = 60_000;
+
+	private static int modifiedUtf8Length(String text) {
+		int length = 0;
+		for (int i = 0; i < text.length(); i++) {
+			char c = text.charAt(i);
+			length += c != 0 && c < 0x80 ? 1 : c < 0x800 ? 2 : 3;
+		}
+		return length;
+	}
+
+	/**
+	 * Registers the report a named function's body declares, which every shape baked for
+	 * that name then carries.
+	 * @param functionName the function's name
+	 * @param report its declared report
+	 */
+	void declare(String functionName, DeclaredArityReport report) {
+		this.declared.put(functionName, report);
+	}
+
+	/**
+	 * {@return the report the named function declares, or {@code null}}
+	 * @param functionName the function's name, or {@code null}
+	 */
+	@Nullable DeclaredArityReport declared(@Nullable String functionName) {
+		return functionName == null ? null : this.declared.get(functionName);
+	}
+
+	/**
+	 * Whether an entry of the frozen list is a declared report rather than an operator
+	 * name.
+	 * @param entry the entry
+	 * @return whether it opens with {@link #DECLARED_MARK}
+	 */
+	static boolean isDeclared(String entry) {
+		return !entry.isEmpty() && entry.charAt(0) == DECLARED_MARK;
+	}
+
+	/** Whether the report's text can ride the newline-joined list. */
+	private static boolean encodable(DeclaredArityReport report) {
+		return report.prefix().indexOf('\n') < 0 && report.suffix().indexOf('\n') < 0 && !report.prefix().isEmpty()
+				&& report.prefix().charAt(0) != DECLARED_MARK;
 	}
 
 	/**
@@ -75,16 +177,22 @@ final class JvmArityOperators {
 		if (operator == null || shape >= 1 << OPERATOR_SHIFT) {
 			return shape;
 		}
-		Integer index = this.indices.get(operator);
+		return shape | (index(operator) << OPERATOR_SHIFT);
+	}
+
+	/** The entry's 1-based index, registering it first when it is new. */
+	private int index(String entry) {
+		Integer index = this.indices.get(entry);
 		if (index == null) {
 			if (this.frozen) {
 				throw new IllegalStateException(
-						"arity operator " + operator + " registered after the message builder read the registry");
+						"arity operator " + entry + " registered after the message builder read the registry");
 			}
 			index = this.indices.size() + 1;
-			this.indices.put(operator, index);
+			this.indices.put(entry, index);
+			this.utf8Length += modifiedUtf8Length(entry) + 1;
 		}
-		return shape | (index << OPERATOR_SHIFT);
+		return index;
 	}
 
 	/**

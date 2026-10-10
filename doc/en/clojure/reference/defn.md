@@ -5,7 +5,9 @@
 
 Defines a function. The multi-arity spelling is one clause per arity plus a dispatch on
 the argument count; a single variadic clause (`&` rest) takes any count past its fixed
-parameters, and any other count signals (`wrong number of arguments passed to: f`). At
+parameters, and any other count signals the oracle's `ArityException`
+(`Wrong number of args (3) passed to: my.app/f`), through a direct call, `apply` or the
+function as a value alike. At
 most one variadic clause and one clause per arity. Parameters destructure, vector and map
 patterns alike; a map pattern after `&` takes keyword arguments, as pairs or one map
 ([seq-to-map-for-destructuring](seq-to-map-for-destructuring.md)). The name lowers to a direct call, so recursion is a call, not a value

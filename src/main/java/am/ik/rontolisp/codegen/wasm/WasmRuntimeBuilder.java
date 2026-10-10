@@ -11,6 +11,7 @@ import java.util.SortedMap;
 import java.util.TreeMap;
 
 import am.ik.rontolisp.ClosRegistry;
+import am.ik.rontolisp.DeclaredArityReport;
 import am.ik.rontolisp.LispEquality;
 import am.ik.rontolisp.RenderCycleGuard;
 import am.ik.wasm.Instruction;
@@ -2363,14 +2364,16 @@ final class WasmRuntimeBuilder {
 	 * <p>
 	 * A built-in operator's function value names the operator in place of
 	 * {@code Function} ({@code CONS expects 2 arguments, got 1}), as the interpreter's
-	 * does. Where the module has a defun under such a name, the report opens its message
-	 * through one shared function, {@code _arity_opening}
-	 * ({@link #buildArityOpeningBody}), which reads the callee's funcId out of the shape
-	 * ({@link #arityShape}) and answers {@code "NAME expects "} from the operator's
-	 * interned name -- or {@code "Function expects "} for any other callee. Shared rather
-	 * than inlined: a selection over every named operator in each dispatcher cost an
-	 * eval-carrying module, which makes every wrapper dispatchable, one copy per
-	 * dispatcher arity (+36 KB on a 367 KB module, measured 2026-09-26).
+	 * does, and a callee whose body declares its own report ({@link DeclaredArityReport})
+	 * reports in its words. Where the module has such a callee, the report spells its
+	 * message through one shared function, {@code _arity_message}
+	 * ({@link #buildArityMessageBody}), which reads the callee's funcId out of the shape
+	 * ({@link #arityShape}) and answers {@code "NAME expects ..."} from the operator's
+	 * interned name, the declared {@code prefix + count + suffix}, or
+	 * {@code "Function expects ..."} for any other callee. Shared rather than inlined: a
+	 * selection over every named operator in each dispatcher cost an eval-carrying
+	 * module, which makes every wrapper dispatchable, one copy per dispatcher arity (+36
+	 * KB on a 367 KB module, measured 2026-09-26).
 	 *
 	 * <p>
 	 * Built only in EH mode behind a handler landing pad -- outside that nothing could
@@ -2412,38 +2415,54 @@ final class WasmRuntimeBuilder {
 		private final SortedMap<Integer, String> namedFuncIds;
 
 		/**
+		 * The funcIds whose body declares its own report ({@link DeclaredArityReport}),
+		 * and the report each declares.
+		 */
+		private final SortedMap<Integer, DeclaredArityReport> declaredFuncIds;
+
+		/**
 		 * The operators a report names with no callee behind them (the eval runtime's own
 		 * count checks), by the id past every funcId above that each was given. Only
-		 * {@code _arity_opening} reads them: {@link #names} stays false for these ids, so
+		 * {@code _arity_message} reads them: {@link #names} stays false for these ids, so
 		 * no dispatcher names a callee by one.
 		 */
 		private final SortedMap<Integer, String> unbackedOperators;
 
-		/** {@code _arity_opening}'s module index, or -1 when the module has none. */
-		private final int openingIndex;
+		/** {@code _arity_message}'s module index, or -1 when the module has none. */
+		private final int messageIndex;
 
 		ArityReport(WasmLispCompiler.StringTable stringTable, int layoutAddress, int instanceTypeIndex,
 				int slotCapacity, int formatControlSlot, boolean identityHash, SortedMap<Integer, String> namedFuncIds,
-				SortedMap<Integer, String> unbackedOperators, int openingIndex) {
+				SortedMap<Integer, DeclaredArityReport> declaredFuncIds, SortedMap<Integer, String> unbackedOperators,
+				int messageIndex) {
 			this.stringTable = stringTable;
 			this.layoutAddress = layoutAddress;
 			this.instanceTypeIndex = instanceTypeIndex;
 			this.slotCapacity = slotCapacity;
 			this.formatControlSlot = formatControlSlot;
 			this.identityHash = identityHash;
-			this.namedFuncIds = openingIndex >= 0 ? namedFuncIds : new TreeMap<>();
-			this.unbackedOperators = openingIndex >= 0 ? unbackedOperators : new TreeMap<>();
-			this.openingIndex = openingIndex;
+			this.declaredFuncIds = messageIndex >= 0 ? new TreeMap<>(declaredFuncIds) : new TreeMap<>();
+			// a declared report wins over the name of the built-in its function shadows
+			SortedMap<Integer, String> operators = messageIndex >= 0 ? new TreeMap<>(namedFuncIds) : new TreeMap<>();
+			operators.keySet().removeAll(this.declaredFuncIds.keySet());
+			this.namedFuncIds = operators;
+			this.unbackedOperators = messageIndex >= 0 ? unbackedOperators : new TreeMap<>();
+			this.messageIndex = messageIndex;
 		}
 
-		/** Whether a shape may carry a funcId the report names an operator for. */
+		/**
+		 * Whether a shape may carry a funcId the report names an operator for, or whose
+		 * body declares the report.
+		 */
 		boolean namesOperators() {
-			return !this.namedFuncIds.isEmpty() || !this.unbackedOperators.isEmpty();
+			return !this.namedFuncIds.isEmpty() || !this.declaredFuncIds.isEmpty() || !this.unbackedOperators.isEmpty();
 		}
 
-		/** Whether the report names the operator of this callee. */
+		/**
+		 * Whether the report names the operator of this callee, or its declared report.
+		 */
 		boolean names(int funcId) {
-			return this.namedFuncIds.containsKey(funcId);
+			return this.namedFuncIds.containsKey(funcId) || this.declaredFuncIds.containsKey(funcId);
 		}
 
 		private void intern() {
@@ -2921,24 +2940,40 @@ final class WasmRuntimeBuilder {
 	 * the way {@code %obj-new} does, and throw the {@code (instance . message)} payload
 	 * on {@code $lisp-cond} -- the channel {@code %error-cond} uses, so a
 	 * {@code program-error} clause matches and the entry landing pad reports it.
-	 * {@code named}: the shape may carry a funcId, and the message opens through
-	 * {@code _arity_opening}; otherwise the assembly is the one a module that named
+	 * {@code named}: the shape may carry a funcId, and the message is
+	 * {@code _arity_message}'s; otherwise the assembly is the one a module that named
 	 * nothing emitted, byte for byte.
 	 */
 	private static void emitArityThrow(WasmWriter w, ArityReport report, int shapeLocal, boolean named, int slotsLocal,
 			int msgLocal, Runnable pushGot) {
 		report.intern();
 		if (named) {
+			// the whole message from the shared function, which reads the callee's
+			// funcId out of the shape (buildArityMessageBody)
 			w.write(Instruction.GET_LOCAL);
 			w.writeUnsignedLeb128(shapeLocal);
-			w.write(Instruction.I32_CONST);
-			w.writeSignedLeb128(0);
+			pushGot.run();
 			w.write(Instruction.CALL);
-			w.writeUnsignedLeb128(report.openingIndex);
+			w.writeUnsignedLeb128(report.messageIndex);
 		}
 		else {
 			emitStrConst(w, Objects.requireNonNull(report.prefix));
+			emitArityExpectation(w, report, shapeLocal, false, pushGot);
 		}
+		w.write(Instruction.SET_LOCAL);
+		w.writeUnsignedLeb128(msgLocal);
+		emitConditionThrow(w, new ConditionInstance(report.layoutAddress, report.instanceTypeIndex, report.slotCapacity,
+				report.formatControlSlot, report.identityHash), slotsLocal, msgLocal);
+	}
+
+	/**
+	 * Appends the CL report's tail to the opening on the stack:
+	 * {@code [at least ]N argument[s], got M}, the callee shape in {@code shapeLocal}
+	 * ({@code named}: carrying a funcId above it) and the count pushed by
+	 * {@code pushGot}.
+	 */
+	private static void emitArityExpectation(WasmWriter w, ArityReport report, int shapeLocal, boolean named,
+			Runnable pushGot) {
 		// a &rest tail makes the count a lower bound
 		w.write(Instruction.GET_LOCAL);
 		w.writeUnsignedLeb128(shapeLocal);
@@ -2973,10 +3008,6 @@ final class WasmRuntimeBuilder {
 		pushGot.run();
 		emitDecimal(w);
 		emitConcat(w);
-		w.write(Instruction.SET_LOCAL);
-		w.writeUnsignedLeb128(msgLocal);
-		emitConditionThrow(w, new ConditionInstance(report.layoutAddress, report.instanceTypeIndex, report.slotCapacity,
-				report.formatControlSlot, report.identityHash), slotsLocal, msgLocal);
 	}
 
 	/**
@@ -3198,43 +3229,51 @@ final class WasmRuntimeBuilder {
 	}
 
 	/**
-	 * {@code _arity_opening(shape, _) -> string}: the opening of a wrong-count message
-	 * for the callee shape -- {@code "NAME expects "} when the shape carries the funcId
-	 * of a callee the report names ({@link #arityShape}), {@code "Function expects "} for
-	 * any other. The funcId is selected over exactly as a dispatcher selects its cases
-	 * ({@link #emitCaseSelector}: a plain or biased {@code br_table}, or a comparison
-	 * chain when the named ids are sparse), one case per named operator:
+	 * {@code _arity_message(shape, got) -> string}: the whole wrong-count message for the
+	 * callee shape and the count -- {@code "NAME expects ..."} when the shape carries the
+	 * funcId of a built-in operator the report names ({@link #arityShape}), the declared
+	 * {@code prefix + got + suffix} when it carries the funcId of a callee whose body
+	 * declares its report ({@link DeclaredArityReport}), {@code "Function expects ..."}
+	 * for any other. The funcId is selected over exactly as a dispatcher selects its
+	 * cases ({@link #emitCaseSelector}: a plain or biased {@code br_table}, or a
+	 * comparison chain when the named ids are sparse), one case per named callee:
 	 *
 	 * <pre>
 	 * block (result eqref) $done
-	 *   block $function
-	 *     block $op_0 ... block $op_{n-1}
-	 *       (shape >>> 16) - 1  select
-	 *     end $op_{n-1}: "NAME" br $done
-	 *     ...
-	 *   end $function: "Function"
+	 *   block (result eqref) $opening
+	 *     block $function
+	 *       block $c_0 ... block $c_{n-1}
+	 *         (shape >>> 16) - 1  select
+	 *       end $c_{n-1}: "NAME" br $opening | prefix got suffix br $done
+	 *       ...
+	 *     end $function: "Function"
+	 *   end $opening
+	 *   " expects " concat, [at least ]N argument[s], got M
 	 * end
-	 * " expects " concat
 	 * </pre>
 	 *
-	 * A shape carrying no funcId selects {@code -1}, which no case claims. The second
-	 * parameter is the selector's scratch local: the function reuses
-	 * {@code TYPE_RAT_NEW}'s {@code (i32, i32) -> (ref null eq)} signature, so no module
-	 * gains a type entry, and its callers pass 0.
+	 * A shape carrying no funcId selects {@code -1}, which no case claims. The function
+	 * reuses {@code TYPE_RAT_NEW}'s {@code (i32, i32) -> (ref null eq)} signature, so no
+	 * module gains a type entry; its one local is the selector's scratch.
 	 * @param report the report whose named funcIds and pieces the body reads
 	 * @return the function body
 	 */
-	static byte[] buildArityOpeningBody(ArityReport report) {
+	static byte[] buildArityMessageBody(ArityReport report) {
 		report.intern();
 		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
-		w.write(0); // 0 locals
-		SortedMap<Integer, String> opening = new TreeMap<>(report.namedFuncIds);
-		opening.putAll(report.unbackedOperators);
-		List<Map.Entry<Integer, String>> ops = new ArrayList<>(opening.entrySet());
-		int n = ops.size();
-		int funcIdLocal = 1;
-		w.write(Instruction.BLOCK);
+		int shapeLocal = 0, gotLocal = 1, funcIdLocal = 2;
+		w.write(1); // 1 local group
+		w.write(1);
+		w.write(Type.I32);
+		SortedMap<Integer, Object> named = new TreeMap<>(report.namedFuncIds);
+		named.putAll(report.unbackedOperators);
+		named.putAll(report.declaredFuncIds);
+		List<Map.Entry<Integer, Object>> cases = new ArrayList<>(named.entrySet());
+		int n = cases.size();
+		w.write(Instruction.BLOCK); // $done
+		w.writeRefType(true, Type.EQ.code());
+		w.write(Instruction.BLOCK); // $opening
 		w.writeRefType(true, Type.EQ.code());
 		w.write(Instruction.BLOCK, 0x40); // $function
 		for (int j = 0; j < n; j++) {
@@ -3243,10 +3282,10 @@ final class WasmRuntimeBuilder {
 		if (n > 0) {
 			Map<Integer, Integer> funcIdToCase = new HashMap<>();
 			for (int j = 0; j < n; j++) {
-				funcIdToCase.put(ops.get(j).getKey(), j);
+				funcIdToCase.put(cases.get(j).getKey(), j);
 			}
 			w.write(Instruction.GET_LOCAL);
-			w.writeUnsignedLeb128(0);
+			w.writeUnsignedLeb128(shapeLocal);
 			w.write(Instruction.I32_CONST);
 			w.writeSignedLeb128(ARITY_FUNC_ID_SHIFT);
 			w.write(Instruction.I32_SHR_U);
@@ -3255,34 +3294,53 @@ final class WasmRuntimeBuilder {
 			w.write(Instruction.I32_SUB);
 			w.write(Instruction.TEE_LOCAL);
 			w.writeUnsignedLeb128(funcIdLocal);
-			emitCaseSelector(w, funcIdToCase, ops.get(n - 1).getKey(), n, funcIdLocal);
+			emitCaseSelector(w, funcIdToCase, cases.get(n - 1).getKey(), n, funcIdLocal);
 		}
 		else {
 			w.write(Instruction.BR);
 			w.writeUnsignedLeb128(0); // $function
 		}
 		for (int k = 0; k < n; k++) {
-			w.write(Instruction.END); // $op_{n-1-k}
-			emitStrConst(w, report.operatorPiece(ops.get(n - 1 - k).getValue()));
-			w.write(Instruction.BR);
-			w.writeUnsignedLeb128(n - k); // $done
+			w.write(Instruction.END); // $c_{n-1-k}
+			// open now: n-1-k case blocks, then $function, $opening, $done
+			if (cases.get(n - 1 - k).getValue() instanceof DeclaredArityReport declared) {
+				emitStrConst(w, report.quoted(declared.prefix()));
+				w.write(Instruction.GET_LOCAL);
+				w.writeUnsignedLeb128(gotLocal);
+				emitDecimal(w);
+				emitConcat(w);
+				emitStrConst(w, report.quoted(declared.suffix()));
+				emitConcat(w);
+				w.write(Instruction.BR);
+				w.writeUnsignedLeb128(n - k + 1); // $done
+			}
+			else {
+				emitStrConst(w, report.operatorPiece((String) cases.get(n - 1 - k).getValue()));
+				w.write(Instruction.BR);
+				w.writeUnsignedLeb128(n - k); // $opening
+			}
 		}
 		w.write(Instruction.END); // $function
 		emitStrConst(w, report.quoted(ClosRegistry.ARITY_ANONYMOUS_OPERATOR));
-		w.write(Instruction.END); // $done
+		w.write(Instruction.END); // $opening
 		// one " expects " for every case, rather than a copy inside each operator's piece
 		emitStrConst(w, report.quoted(ClosRegistry.ARITY_VERB));
 		emitConcat(w);
+		emitArityExpectation(w, report, shapeLocal, true, () -> {
+			w.write(Instruction.GET_LOCAL);
+			w.writeUnsignedLeb128(gotLocal);
+		});
+		w.write(Instruction.END); // $done
 		w.write(Instruction.END); // end function
 		return body.toByteArray();
 	}
 
 	/**
-	 * The body a module that reserved {@code _arity_opening}'s slot emits when it builds
+	 * The body a module that reserved {@code _arity_message}'s slot emits when it builds
 	 * no report after all: nothing calls it, and a null keeps the index space honest.
 	 * @return the function body
 	 */
-	static byte[] buildArityOpeningStubBody() {
+	static byte[] buildArityMessageStubBody() {
 		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		w.write(0); // 0 locals

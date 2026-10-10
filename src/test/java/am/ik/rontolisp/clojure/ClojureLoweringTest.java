@@ -28,6 +28,14 @@ class ClojureLoweringTest {
 
 	private static final String FALSE_BINDING = "(SETQ RONTOLISP::%CLOJURE-FALSE '|false|)\n";
 
+	/**
+	 * The declaration a single-arity function's body opens with: its wrong-count report
+	 * in the oracle's words, naming it.
+	 */
+	static String arity(String name) {
+		return "(DECLARE (%ARITY-REPORT \"Wrong number of args (\" \") passed to: " + name + "\"))";
+	}
+
 	@Test
 	void everyIdentifierManglesBehindThePrefix() {
 		assertThat(lowered("(def x 1) x")).isEqualTo(FALSE_BINDING + "(SETQ |c%x| 1)\n|c%x|");
@@ -41,12 +49,13 @@ class ClojureLoweringTest {
 		// or like a stream alias binds c%name%local, so it stays lexical; the var
 		// keeps its symbol, and a local named like nothing special is untouched
 		assertThat(lowered("(defn f [*x*] *x*) (def ^:dynamic *x* 1)"))
-			.contains("(DEFUN |c%f| (|c%*x*%local|) |c%*x*%local|)");
+			.contains("(DEFUN |c%f| (|c%*x*%local|) " + arity("user/f") + " |c%*x*%local|)");
 		assertThat(lowered("(def ^:dynamic *x* 1) (let [*x* 2] (binding [*x* 3] *x*))"))
 			.contains("(LET* ((|c%*x*%local| 2)) (LET* ((|c%*x*| 3)");
 		assertThat(lowered("(let [*out* 5] *out*)")).contains("(LET* ((|c%*out*%local| 5)) |c%*out*%local|)");
-		assertThat(lowered("(defn f [*x*] *x*)")).contains("(DEFUN |c%f| (|c%*x*|) |c%*x*|)");
-		assertThat(lowered("(ns other) (def ^:dynamic *x* 1) (defn f [*x*] *x*)")).contains("(|c%*x*|) |c%*x*|)");
+		assertThat(lowered("(defn f [*x*] *x*)")).contains("(DEFUN |c%f| (|c%*x*|) " + arity("user/f") + " |c%*x*|)");
+		assertThat(lowered("(ns other) (def ^:dynamic *x* 1) (defn f [*x*] *x*)"))
+			.contains("(|c%*x*|) " + arity("other/f") + " |c%*x*|)");
 	}
 
 	@Test
@@ -93,8 +102,10 @@ class ClojureLoweringTest {
 
 	@Test
 	void defnIsADefunCalledDirectly() {
-		assertThat(lowered("(defn f [x] x) (f 1)")).isEqualTo(FALSE_BINDING + "(DEFUN |c%f| (|c%x|) |c%x|)\n(|c%f| 1)");
-		assertThat(lowered("(defn f [x] x) f")).isEqualTo(FALSE_BINDING + "(DEFUN |c%f| (|c%x|) |c%x|)\n#'|c%f|");
+		assertThat(lowered("(defn f [x] x) (f 1)"))
+			.isEqualTo(FALSE_BINDING + "(DEFUN |c%f| (|c%x|) " + arity("user/f") + " |c%x|)\n(|c%f| 1)");
+		assertThat(lowered("(defn f [x] x) f"))
+			.isEqualTo(FALSE_BINDING + "(DEFUN |c%f| (|c%x|) " + arity("user/f") + " |c%x|)\n#'|c%f|");
 	}
 
 	@Test
@@ -114,9 +125,10 @@ class ClojureLoweringTest {
 		// bare name, later ones take a %defN suffix no identifier spells), the
 		// call sites below each definition call the newest, and a value position
 		// captures the definition current at that point.
-		assertThat(lowered("(defn f [] 1) (def g f) (defn f [] 2) (g) (f)")).contains("(DEFUN |c%f| NIL 1)")
+		assertThat(lowered("(defn f [] 1) (def g f) (defn f [] 2) (g) (f)"))
+			.contains("(DEFUN |c%f| NIL " + arity("user/f") + " 1)")
 			.contains("(SETQ |c%g| #'|c%f|)")
-			.contains("(DEFUN |c%f%def2| NIL 2)")
+			.contains("(DEFUN |c%f%def2| NIL " + arity("user/f") + " 2)")
 			.contains("(FUNCALL |c%g|)")
 			.contains("(|c%f%def2|)");
 		// a top-level call between the definitions calls the older one
@@ -124,11 +136,12 @@ class ClojureLoweringTest {
 		// a redefined dynamic defn installs its fresh function cell, so the
 		// value cell always holds the newest
 		assertThat(lowered("(defn ^:dynamic d [] 1) (defn ^:dynamic d [] 2)")).contains("(DEFPARAMETER |c%d| #'|c%d|)")
-			.contains("(DEFUN |c%d%def2| NIL 2)")
+			.contains("(DEFUN |c%d%def2| NIL " + arity("user/d") + " 2)")
 			.contains("(DEFPARAMETER |c%d| #'|c%d%def2|)");
 		// namespaces version their own names independently
-		assertThat(lowered("(ns nsa) (defn f [] 1) (ns nsb) (defn f [] 2) (nsa/f)")).contains("(DEFUN |c%nsa/f| NIL 1)")
-			.contains("(DEFUN |c%nsb/f| NIL 2)")
+		assertThat(lowered("(ns nsa) (defn f [] 1) (ns nsb) (defn f [] 2) (nsa/f)"))
+			.contains("(DEFUN |c%nsa/f| NIL " + arity("nsa/f") + " 1)")
+			.contains("(DEFUN |c%nsb/f| NIL " + arity("nsb/f") + " 2)")
 			.contains("(|c%nsa/f|)");
 	}
 
@@ -138,8 +151,8 @@ class ClojureLoweringTest {
 		// dispatcher (which funcalls real functions); a let/def binding of a real
 		// function stays a direct funcall; a declared-never-defined name calls its
 		// unbound root, which signals like the oracle's
-		assertThat(lowered("(defn call-it [f x] (f x))"))
-			.contains("(DEFUN |c%call-it| (|c%f| |c%x|) (RONTOLISP::%CLOJURE-CALL |c%f| (LIST |c%x|)))");
+		assertThat(lowered("(defn call-it [f x] (f x))")).contains("(DEFUN |c%call-it| (|c%f| |c%x|) "
+				+ arity("user/call-it") + " (RONTOLISP::%CLOJURE-CALL |c%f| (LIST |c%x|)))");
 		assertThat(lowered("(let [g inc] (g 1))")).contains("(FUNCALL |c%g| 1)");
 		assertThat(lowered("(let [s #{:h}] (s :h))")).contains("RONTOLISP::%CLOJURE-CALL");
 		assertThat(lowered("(def v (fn [x] x)) (v 1)")).contains("(FUNCALL |c%v| 1)");
@@ -159,7 +172,7 @@ class ClojureLoweringTest {
 	@Test
 	void letfnLowersToLabelsWithEveryNamePreScanned() {
 		assertThat(lowered("(letfn [(f [x] x)] (f 1))"))
-			.isEqualTo(FALSE_BINDING + "(LABELS ((|c%f| (|c%x|) |c%x|)) (|c%f| 1))");
+			.isEqualTo(FALSE_BINDING + "(LABELS ((|c%f| (|c%x|) " + arity("user/f") + " |c%x|)) (|c%f| 1))");
 		assertThat(lowered("(letfn [] 1)")).isEqualTo(FALSE_BINDING + "1");
 		// mutual recursion: siblings call each other directly
 		assertThat(lowered("(letfn [(e [n] (o n)) (o [n] n)] (e 1))")).contains("(|c%o| |c%n|)").contains("(|c%e| 1)");
@@ -167,7 +180,7 @@ class ClojureLoweringTest {
 		assertThat(lowered("(letfn [(f [x] x)] f)")).contains("#'|c%f|");
 		// an inner letfn shadows an outer variable: the call stays direct
 		assertThat(lowered("(let [f 99] (letfn [(f [x] x)] (f 1)))"))
-			.contains("(LABELS ((|c%f| (|c%x|) |c%x|)) (|c%f| 1))");
+			.contains("(LABELS ((|c%f| (|c%x|) " + arity("user/f") + " |c%x|)) (|c%f| 1))");
 		assertThatThrownBy(() -> Clojure.read("(letfn [f [x] x] (f 1))", null)).isInstanceOf(LispReadException.class)
 			.hasMessageContaining("a letfn binding takes a name and a function");
 	}
@@ -206,13 +219,13 @@ class ClojureLoweringTest {
 		// ordinary parameter (the recur call assigns exactly) plus the &rest head
 		assertThat(lowered("(defn vr [a & r] (recur a r))"))
 			.contains("(DEFUN |c%vr%*| (|c%a| |c%r|) (|c%vr%*| |c%a| |c%r|))")
-			.contains("(DEFUN |c%vr| (|c%a| &REST |c%r|) (|c%vr%*| |c%a| |c%r|))");
+			.contains("(DEFUN |c%vr| (|c%a| &REST |c%r|) " + arity("user/vr") + " (|c%vr%*| |c%a| |c%r|))");
 		// an unused variadic keeps its single shape
 		assertThat(lowered("(defn vu [a & r] a)"))
-			.isEqualTo(FALSE_BINDING + "(DEFUN |c%vu| (|c%a| &REST |c%r|) |c%a|)");
+			.isEqualTo(FALSE_BINDING + "(DEFUN |c%vu| (|c%a| &REST |c%r|) " + arity("user/vu") + " |c%a|)");
 		// a named fn splits into a worker plus its &rest head inside labels
 		assertThat(lowered("(fn f [a & r] (recur a r))")).contains("(|c%f%*| (|c%a| |c%r|) (|c%f%*| |c%a| |c%r|))")
-			.contains("(|c%f| (|c%a| &REST |c%r|) (|c%f%*| |c%a| |c%r|))");
+			.contains("(|c%f| (|c%a| &REST |c%r|) " + arity("user/f") + " (|c%f%*| |c%a| |c%r|))");
 		// a multi-arity defn's variadic clause recurs to its helper directly
 		assertThat(lowered("(defn vm ([a] a) ([a & r] (recur a r)))")).contains("(|c%vm%*| |c%a| |c%r|)");
 		// a multi-arity fn's variadic clause recurs to its worker directly
@@ -378,9 +391,9 @@ class ClojureLoweringTest {
 	@Test
 	void fnAndAnonFnAreLambdas() {
 		assertThat(lowered("((fn [a b] (+ a b)) 1 2)"))
-			.isEqualTo(FALSE_BINDING + "(FUNCALL (LAMBDA (|c%a| |c%b|) (+ |c%a| |c%b|)) 1 2)");
+			.isEqualTo(FALSE_BINDING + "(FUNCALL (LAMBDA (|c%a| |c%b|) " + arity("user/fn") + " (+ |c%a| |c%b|)) 1 2)");
 		assertThat(lowered("(map #(* % %) '(1 2))")).contains("%CLOJURE-MAP")
-			.contains("(LAMBDA (|c%p1__1#|) (* |c%p1__1#| |c%p1__1#|))");
+			.contains("(LAMBDA (|c%p1__1#|) " + arity("user/fn") + " (* |c%p1__1#| |c%p1__1#|))");
 		assertThatThrownBy(() -> Clojure.read("%", null)).isInstanceOf(LispReadException.class)
 			.hasMessageContaining("%");
 	}
@@ -846,7 +859,7 @@ class ClojureLoweringTest {
 	void multiArityDefnDispatchesByCount() {
 		assertThat(lowered("(defn mar-f ([x] x) ([x y] (+ x y)))")).contains("(DEFUN")
 			.contains("LENGTH")
-			.contains("wrong number of arguments passed to: mar-f");
+			.contains("(RONTOLISP::%CLOJURE-FN-ARITY-ERROR |__clojure_1| \"user/mar-f\")");
 		assertThat(lowered("(defn mar-g ([x & xs] xs))")).contains("NTHCDR");
 		assertThatThrownBy(() -> Clojure.read("(defn bad ([x] x) ([y] y))", null)).isInstanceOf(LispReadException.class)
 			.hasMessageContaining("two clauses for arity 1");
@@ -2668,16 +2681,17 @@ class ClojureLoweringTest {
 
 	@Test
 	void metadataNamesDefinitionsWithoutAffectingThem() {
-		assertThat(lowered("(defn- f [x] x)")).contains("(DEFUN |c%f| (|c%x|) |c%x|)");
+		assertThat(lowered("(defn- f [x] x)")).contains("(DEFUN |c%f| (|c%x|) " + arity("user/f") + " |c%x|)");
 		assertThat(lowered("(def ^:private x 1)")).contains("(SETQ |c%x| 1)");
 		assertThat(lowered("(def ^:dynamic *d* 1)")).contains("(DEFPARAMETER |c%*d*| 1)")
 			.contains("(DEFPARAMETER |c%*d*%bound-depth| 0)");
-		assertThat(lowered("(defn ^:private f [x] x)")).contains("(DEFUN |c%f| (|c%x|) |c%x|)");
-		assertThat(lowered("(defn f {:private true} [x] x)")).contains("(DEFUN |c%f| (|c%x|) |c%x|)");
+		assertThat(lowered("(defn ^:private f [x] x)")).contains("(DEFUN |c%f| (|c%x|) " + arity("user/f") + " |c%x|)");
+		assertThat(lowered("(defn f {:private true} [x] x)"))
+			.contains("(DEFUN |c%f| (|c%x|) " + arity("user/f") + " |c%x|)");
 		assertThat(lowered("(def x \"a docstring\" 1)")).contains("(SETQ |c%x| 1)");
 		assertThat(lowered("(def x \"a docstring\")")).contains("(SETQ |c%x| \"a docstring\")");
 		assertThat(lowered("(def x {:a 1})")).contains("HASH-TABLE");
-		assertThat(lowered("(defn f [^String x] x)")).contains("(DEFUN |c%f| (|c%x|) |c%x|)");
+		assertThat(lowered("(defn f [^String x] x)")).contains("(DEFUN |c%f| (|c%x|) " + arity("user/f") + " |c%x|)");
 		assertThat(lowered("(let [^String x 1] x)")).contains("(LET* ((|c%x| 1)) |c%x|)");
 		assertThatThrownBy(() -> Clojure.read("(defmacro deref [x] x)", null)).isInstanceOf(LispReadException.class)
 			.hasMessageContaining("cannot name a macro");
@@ -3162,7 +3176,8 @@ class ClojureLoweringTest {
 		assertThatThrownBy(() -> loweredWithFiles("(require 'p.x) (p.x/from-cljc)", files))
 			.isInstanceOf(LispReadException.class)
 			.hasMessageContaining("No such var: p.x/from-cljc");
-		assertThat(loweredWithFiles("(require 'p.z) (p.z/f)", files)).contains("(DEFUN |c%p.z/f| NIL 2)");
+		assertThat(loweredWithFiles("(require 'p.z) (p.z/f)", files))
+			.contains("(DEFUN |c%p.z/f| NIL " + arity("p.z/f") + " 2)");
 		assertThatThrownBy(() -> loweredWithFiles("(require 'p.q)", files)).isInstanceOf(LispReadException.class)
 			.hasMessageContaining("Could not locate p/q.clj or p/q.cljc on the source path: ., a, b");
 	}
@@ -3174,7 +3189,7 @@ class ClojureLoweringTest {
 		String out = loweredWithFiles(
 				"(ns m (:require [app.lib :as l])) (require 'app.lib) (println (l/f 1) (app.lib/f 2))",
 				Map.of("src/app/lib.clj", "(ns app.lib) (defn f [x] (inc x))"));
-		assertThat(out).containsOnlyOnce("(DEFUN |c%app.lib/f| (|c%x|) (+ |c%x| 1))")
+		assertThat(out).containsOnlyOnce("(DEFUN |c%app.lib/f| (|c%x|) " + arity("app.lib/f") + " (+ |c%x| 1))")
 			.contains("(|c%app.lib/f| 1)")
 			.contains("(|c%app.lib/f| 2)");
 		assertThat(out.indexOf("DEFUN |c%app.lib/f|")).isLessThan(out.indexOf("(|c%app.lib/f| 1)"));
@@ -3189,9 +3204,9 @@ class ClojureLoweringTest {
 		// two namespaces define one name; user's vars keep the bare mangled name
 		String out = lowered(
 				"(defn f [] 0) (ns a) (defn f [] 1) (ns b (:require [a])) (defn f [] 2) (a/f) (f) (user/f)");
-		assertThat(out).contains("(DEFUN |c%f| NIL 0)")
-			.contains("(DEFUN |c%a/f| NIL 1)")
-			.contains("(DEFUN |c%b/f| NIL 2)")
+		assertThat(out).contains("(DEFUN |c%f| NIL " + arity("user/f") + " 0)")
+			.contains("(DEFUN |c%a/f| NIL " + arity("a/f") + " 1)")
+			.contains("(DEFUN |c%b/f| NIL " + arity("b/f") + " 2)")
 			.contains("(|c%a/f|)\n(|c%b/f|)\n(|c%f|)");
 		// a name another namespace defines is no name here
 		assertThatThrownBy(() -> Clojure.read("(ns a) (defn g [] 1) (ns b) (g)", null))
@@ -3268,7 +3283,7 @@ class ClojureLoweringTest {
 		// namespace's init, which the require site calls behind the loaded flag
 		String out = loweredWithFiles("(ns m (:require [app.lib :as l])) (println (l/f 1))",
 				Map.of("src/app/lib.clj", "(ns app.lib) (println \"hi\") (def v 1) (defn f [x] (inc x))"));
-		assertThat(out).contains("(DEFUN |c%app.lib/f| (|c%x|) (+ |c%x| 1))")
+		assertThat(out).contains("(DEFUN |c%app.lib/f| (|c%x|) " + arity("app.lib/f") + " (+ |c%x| 1))")
 			.contains("(DEFVAR |c%app.lib%loaded| NIL)")
 			.contains("(SETQ |c%app.lib%init-1| (LAMBDA NIL")
 			.contains("(SETQ |c%app.lib/v| 1)")

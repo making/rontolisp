@@ -212,8 +212,7 @@ $ rontolisp proxy.clj -o src/worker.wasm --no-wasi --host-fetch --host-boundary=
   `:body` is a reader here (an input stream under Jetty), so a binary upload sent on is not
   sent octet for octet.
 - A transport failure is a `java.io.IOException` (babashka.http-client: its subclass, such as
-  `java.net.ConnectException`); a wrong argument count is the front end's
-  `ArityException` (`wrong number of arguments passed to: get`).
+  `java.net.ConnectException`).
 - Under `--host-fetch` the host's own `fetch` follows redirects (up to 20), so `:uri` is the
   URL requested, and decompresses a reply itself, so `:headers` lack its
   `content-encoding` and `content-length`.

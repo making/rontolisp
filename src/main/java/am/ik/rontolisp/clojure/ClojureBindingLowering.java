@@ -10,6 +10,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import am.ik.rontolisp.DeclaredArityReport;
 import am.ik.rontolisp.LispChar;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispHashTable;
@@ -77,7 +78,24 @@ final class ClojureBindingLowering {
 		// (defn p ...) captures the function cell (a FUNCTION) instead of reading
 		// the still-unbound value cell; only then does the name become a VARIABLE.
 		boolean valueless = items.size() == at;
-		LispVal value = valueless ? ClojureLowering.NIL_CONST : ctx.lower(items.get(at));
+		LispVal value;
+		if (valueless) {
+			value = ClojureLowering.NIL_CONST;
+		}
+		else {
+			// a fn that IS the value takes the var's name in its arity refusal
+			LispVal outerForm = ctx.defValueForm;
+			String outerKey = ctx.defValueKey;
+			ctx.defValueForm = items.get(at);
+			ctx.defValueKey = ClojureLowering.varKey(ctx.currentNs, name);
+			try {
+				value = ctx.lower(items.get(at));
+			}
+			finally {
+				ctx.defValueForm = outerForm;
+				ctx.defValueKey = outerKey;
+			}
+		}
 		String key = ctx.intern(name, ClojureLowerUtil.nameIsPrivate(nameDatum));
 		ctx.globals.put(key, ClojureLowering.Kind.VARIABLE);
 		ctx.macros.remove(key); // a definition wins over the macro it shadows
@@ -359,31 +377,40 @@ final class ClojureBindingLowering {
 				arglistsOf(items.subList(at, items.size())), doc, exported.attrMap(),
 				ClojureLowerUtil.isSymbolNamed(items.get(0), "defn-"), false);
 		List<LispVal> forms;
-		if (items.get(at) instanceof LispCons && !isVectorDatum(items.get(at))) {
-			forms = multiDefun(ctx, name, items.subList(at, items.size()), callName);
-		}
-		else {
-			boolean variadic = isVariadicParams(items.get(at));
-			String worker = workerName(callName);
-			ClojureLowering.RecurTarget target = new ClojureLowering.RecurTarget(variadic ? worker : callName, true);
-			ClojureLowering.Clause clause = clause(ctx, items.get(at), items.subList(at + 1, items.size()), target);
-			if (target.used() && clause.variadic()) {
-				// a used variadic target splits like the multi-defn helpers: a
-				// worker defun taking the rest as an ordinary parameter (the recur
-				// call assigns exactly) plus the &rest head for normal calls
-				// (wrapping, like the oracle); an unused variadic keeps its shape
-				List<LispVal> workerParams = new ArrayList<>(clause.params());
-				workerParams.remove(ClojureLowering.AMPERSAND_REST);
-				forms = new ArrayList<>(List.of(
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("defun"), new LispSymbol(worker),
-								ClojureLowerUtil.list(workerParams), clause.wrapped()),
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("defun"), fn, ClojureLowerUtil.list(clause.params()),
-								workerCall(worker, clause))));
+		// the oracle's refusal names the var (my.app/f), and a fn inside it after it
+		ctx.fnNames.push(key);
+		try {
+			if (items.get(at) instanceof LispCons && !isVectorDatum(items.get(at))) {
+				forms = multiDefun(ctx, key, items.subList(at, items.size()), callName);
 			}
 			else {
-				forms = new ArrayList<>(List.of(ClojureLowerUtil.list(ClojureLowerUtil.sym("defun"), fn,
-						ClojureLowerUtil.list(clause.params()), clause.wrapped())));
+				boolean variadic = isVariadicParams(items.get(at));
+				String worker = workerName(callName);
+				ClojureLowering.RecurTarget target = new ClojureLowering.RecurTarget(variadic ? worker : callName,
+						true);
+				ClojureLowering.Clause clause = clause(ctx, items.get(at), items.subList(at + 1, items.size()), target);
+				if (target.used() && clause.variadic()) {
+					// a used variadic target splits like the multi-defn helpers: a
+					// worker defun taking the rest as an ordinary parameter (the recur
+					// call assigns exactly) plus the &rest head for normal calls
+					// (wrapping, like the oracle); an unused variadic keeps its shape
+					List<LispVal> workerParams = new ArrayList<>(clause.params());
+					workerParams.remove(ClojureLowering.AMPERSAND_REST);
+					forms = new ArrayList<>(List.of(
+							ClojureLowerUtil.list(ClojureLowerUtil.sym("defun"), new LispSymbol(worker),
+									ClojureLowerUtil.list(workerParams), clause.wrapped()),
+							ClojureLowerUtil.list(ClojureLowerUtil.sym("defun"), fn,
+									ClojureLowerUtil.list(clause.params()), arityDeclaration(key),
+									workerCall(worker, clause))));
+				}
+				else {
+					forms = new ArrayList<>(List.of(ClojureLowerUtil.list(ClojureLowerUtil.sym("defun"), fn,
+							ClojureLowerUtil.list(clause.params()), arityDeclaration(key), clause.wrapped())));
+				}
 			}
+		}
+		finally {
+			ctx.fnNames.pop();
 		}
 		if (dynamic) {
 			// the value cell carries the function for calls and value carries
@@ -457,9 +484,10 @@ final class ClojureBindingLowering {
 	 * ordinary parameter, so the call assigns exactly -- never the dispatch: the oracle's
 	 * {@code recur} re-enters its own arity, and a direct self call is what a backend
 	 * runs in constant stack (the JVM's jump, {@code .kb/jvm-self-tail-calls.md}) where a
-	 * round trip through the dispatch was a mutual recursion of two functions.
+	 * round trip through the dispatch was a mutual recursion of two functions. A count no
+	 * clause takes is the oracle's refusal naming the var key ({@link #arityRefusal}).
 	 */
-	static List<LispVal> multiDefun(ClojureLowering ctx, String name, List<LispVal> clauses, String callName) {
+	static List<LispVal> multiDefun(ClojureLowering ctx, String key, List<LispVal> clauses, String callName) {
 		// the shapes first, without lowering: each clause recurs to its own helper
 		// (a variadic one's takes the rest as an ordinary parameter, so the recur
 		// call assigns exactly, where the dispatch's NTHCDR rest would wrap it in a
@@ -510,8 +538,7 @@ final class ClojureBindingLowering {
 					: ClojureLowerUtil.list(ClojureLowerUtil.sym("="), count, new LispInteger(clause.fixed()));
 			arms.add(ClojureLowerUtil.list(test, ClojureLowerUtil.list(call)));
 		}
-		arms.add(ClojureLowerUtil.list(ClojureLowering.TRUE_CONST, ClojureRefusals.refusal(ClojureRefusals.ARITY,
-				LispString.literal("wrong number of arguments passed to: " + name))));
+		arms.add(ClojureLowerUtil.list(ClojureLowering.TRUE_CONST, arityRefusal(count, key)));
 		forms.add(ClojureLowerUtil.list(ClojureLowerUtil.sym("defun"), new LispSymbol(callName),
 				ClojureLowerUtil.list(List.of(ClojureLowering.AMPERSAND_REST, args)),
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
@@ -628,7 +655,15 @@ final class ClojureBindingLowering {
 		return new ClojureLowering.Clause(List.copyOf(params), List.copyOf(prologue), body, variadic, fixed);
 	}
 
-	static LispVal fn(ClojureLowering ctx, List<LispVal> items) {
+	/**
+	 * A {@code fn}: a lambda, a named one a {@code labels} self-binding.
+	 * @param ctx the lowering
+	 * @param items the form's items
+	 * @param defined the var key of the {@code def} whose value this form is, whose name
+	 * the arity refusal then gives it, or null
+	 * @return the lowered form
+	 */
+	static LispVal fn(ClojureLowering ctx, List<LispVal> items, @Nullable String defined) {
 		int at = 1;
 		ClojureLowerUtil.isTrue(items.size() > at, "fn needs a parameter vector and a body");
 		String self = null;
@@ -637,9 +672,10 @@ final class ClojureBindingLowering {
 			at++;
 		}
 		ClojureLowerUtil.isTrue(items.size() > at, "fn needs a parameter vector and a body");
+		String arityName = defined != null ? defined : arityName(ctx, self);
 		if (self == null) {
 			String fresh = ctx.freshRecurName();
-			ClojureLowering.SplitLambda split = singleOrMultiFn(ctx, items, at, "fn", fresh);
+			ClojureLowering.SplitLambda split = singleOrMultiFn(ctx, items, at, "fn", fresh, arityName);
 			if (!split.used()) {
 				return split.lambda();
 			}
@@ -651,18 +687,70 @@ final class ClojureBindingLowering {
 		String callName = ctx.localSym(name).name();
 		int from = at;
 		return ctx.inScope(scope, () -> {
-			ClojureLowering.SplitLambda split = singleOrMultiFn(ctx, items, from, name, callName);
+			ClojureLowering.SplitLambda split = singleOrMultiFn(ctx, items, from, name, callName, arityName);
 			// a labels self-binding: calls lower directly and the labels
 			// expansion rewrites them to the local; the value is the local
 			return labelsWithHead(callName, split.workers(), split.lambda());
 		});
 	}
 
+	/**
+	 * The oracle's refusal of a wrong argument count opens with this, the count follows
+	 * ({@code clojure.lang.ArityException}'s message).
+	 */
+	static final String ARITY_PREFIX = "Wrong number of args (";
+
+	/** What follows the count in the oracle's refusal, the function's name after it. */
+	static final String ARITY_INFIX = ") passed to: ";
+
+	/**
+	 * The name a local {@code fn}'s arity refusal gives it: the enclosing function's (a
+	 * {@code defn}'s var, {@code my.app/f}), or the namespace outside any, then the
+	 * {@code fn}'s own name or {@code fn}. The oracle's is its class name demunged, which
+	 * adds what this cannot reproduce: a counter on each generated part
+	 * ({@code fn--177}), the {@code evalN} a top-level form compiles into, and the thunks
+	 * it wraps a {@code try} in.
+	 */
+	static String arityName(ClojureLowering ctx, @Nullable String self) {
+		String base = ctx.fnNames.isEmpty() ? ctx.currentNs : ctx.fnNames.peek();
+		return base + "/" + (self != null ? self : "fn");
+	}
+
+	/**
+	 * The declaration a single-arity function's body opens with, so the backends' own
+	 * count check refuses in the oracle's words
+	 * ({@code Wrong number of args (0) passed to: my.app/f}) on the refusal path only.
+	 */
+	static LispVal arityDeclaration(String arityName) {
+		return new DeclaredArityReport(ARITY_PREFIX, ARITY_INFIX + arityName).declaration();
+	}
+
+	/**
+	 * A multi-arity dispatch's refusal of a count no clause takes, in the oracle's words.
+	 */
+	static LispVal arityRefusal(LispVal count, String arityName) {
+		return ClojureLowerUtil.list(new LispSymbol(FN_ARITY_ERROR), count, LispString.literal(arityName));
+	}
+
+	/** The {@code clojure.lisp} worker {@link #arityRefusal} calls. */
+	static final String FN_ARITY_ERROR = "RONTOLISP::%CLOJURE-FN-ARITY-ERROR";
+
 	static ClojureLowering.SplitLambda singleOrMultiFn(ClojureLowering ctx, List<LispVal> items, int at, String owner,
-			String headName) {
+			String headName, String arityName) {
+		ctx.fnNames.push(arityName);
+		try {
+			return singleOrMultiFnNamed(ctx, items, at, owner, headName, arityName);
+		}
+		finally {
+			ctx.fnNames.pop();
+		}
+	}
+
+	private static ClojureLowering.SplitLambda singleOrMultiFnNamed(ClojureLowering ctx, List<LispVal> items, int at,
+			String owner, String headName, String arityName) {
 		String worker = workerName(headName);
 		if (items.get(at) instanceof LispCons && !isVectorDatum(items.get(at))) {
-			return multiFn(ctx, items.subList(at, items.size()), owner, headName, worker);
+			return multiFn(ctx, items.subList(at, items.size()), owner, headName, worker, arityName);
 		}
 		boolean variadic = isVariadicParams(items.get(at));
 		ClojureLowering.RecurTarget target = new ClojureLowering.RecurTarget(variadic ? worker : headName, true);
@@ -672,11 +760,12 @@ final class ClojureBindingLowering {
 			// ordinary parameter (the recur call assigns exactly) while the
 			// &rest head answers normal calls (wrapping, like the oracle)
 			LispVal head = ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(clause.params()),
-					workerCall(worker, clause));
+					arityDeclaration(arityName), workerCall(worker, clause));
 			return new ClojureLowering.SplitLambda(head, List.of(workerEntry(worker, clause)), true);
 		}
 		return new ClojureLowering.SplitLambda(ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"),
-				ClojureLowerUtil.list(clause.params()), clause.wrapped()), List.of(), target.used());
+				ClojureLowerUtil.list(clause.params()), arityDeclaration(arityName), clause.wrapped()), List.of(),
+				target.used());
 	}
 
 	/**
@@ -690,7 +779,7 @@ final class ClojureBindingLowering {
 	 * the worker instead, which takes the rest as an ordinary parameter.
 	 */
 	static ClojureLowering.SplitLambda multiFn(ClojureLowering ctx, List<LispVal> clauses, String owner,
-			String headName, String worker) {
+			String headName, String worker, String arityName) {
 		// the shapes first, without lowering: a used variadic clause recurs to its
 		// worker (which takes the rest as an ordinary parameter) while the dispatch
 		// arm hands it the rest pre-built; every fixed clause recurs through the
@@ -740,8 +829,7 @@ final class ClojureBindingLowering {
 			arms.add(ClojureLowerUtil.list(test, ClojureLowerUtil.list(ClojureLowerUtil.sym("let*"),
 					ClojureLowerUtil.list(bindings), clause.body())));
 		}
-		arms.add(ClojureLowerUtil.list(ClojureLowering.TRUE_CONST, ClojureRefusals.refusal(ClojureRefusals.ARITY,
-				LispString.literal("wrong number of arguments passed to: " + owner))));
+		arms.add(ClojureLowerUtil.list(ClojureLowering.TRUE_CONST, arityRefusal(count, arityName)));
 		LispVal lambda = ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"),
 				ClojureLowerUtil.list(List.of(ClojureLowering.AMPERSAND_REST, args)),
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
@@ -989,7 +1077,7 @@ final class ClojureBindingLowering {
 				String fname = ClojureLowerUtil.plainName(parts.get(0), "letfn");
 				String callName = ctx.localSym(fname).name();
 				ClojureLowering.SplitLambda split = ctx.inScope(captureScope,
-						() -> singleOrMultiFn(ctx, parts, 1, fname, callName));
+						() -> singleOrMultiFn(ctx, parts, 1, fname, callName, arityName(ctx, fname)));
 				for (LispVal worker : split.workers()) {
 					LispVal key = ((LispCons) worker).car();
 					bindings.put(((LispSymbol) key).name(), worker);

@@ -103,7 +103,8 @@ class ClojureControlLoweringTest {
 
 	@Test
 	void aDefnNoWithRedefsNamesStaysADirectCall() {
-		assertThat(lowered("(defn f [] 1) (defn g [] (f))")).contains("(DEFUN |c%g| NIL (|c%f|))")
+		assertThat(lowered("(defn f [] 1) (defn g [] (f))"))
+			.contains("(DEFUN |c%g| NIL " + ClojureLoweringTest.arity("user/g") + " (|c%f|))")
 			.doesNotContain("SETQ |c%f|");
 	}
 
@@ -112,7 +113,8 @@ class ClojureControlLoweringTest {
 		// the pre-scan finds the name anywhere in the file, below the definition too
 		String out = lowered("(defn f [] 1) (defn g [] (f)) (defn t [] (with-redefs [f (fn [] 2)] (g)))");
 		assertThat(out).contains("(SETQ |c%f| #'|c%f|)")
-			.contains("(DEFUN |c%g| NIL (RONTOLISP::%CLOJURE-CALL |c%f| (LIST)))")
+			.contains("(DEFUN |c%g| NIL " + ClojureLoweringTest.arity("user/g")
+					+ " (RONTOLISP::%CLOJURE-CALL |c%f| (LIST)))")
 			.contains("(UNWIND-PROTECT (PROGN (SETQ |c%f| |__clojure_");
 		// ^:redef, the oracle's own opt-out of direct linking, does the same
 		assertThat(lowered("(defn ^:redef f [] 1) (defn g [] (f))")).contains("(SETQ |c%f| #'|c%f|)")

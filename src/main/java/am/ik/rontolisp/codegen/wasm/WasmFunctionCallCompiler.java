@@ -116,7 +116,8 @@ final class WasmFunctionCallCompiler {
 			// the call RUNS, its arguments evaluated first, with a compile-time warning
 			// (compiler/DefinedCallArity): the call may sit in a branch never taken or
 			// under a program-error handler.
-			LispVal wrongCount = DefinedCallArity.wrongCountSignal(cons, name, fi.required(), fi.variadic());
+			LispVal wrongCount = DefinedCallArity.wrongCountSignal(cons, name, fi.required(), fi.variadic(),
+					fi.declaredArity());
 			if (wrongCount != null) {
 				WasmExprCompiler.compileExpr(wrongCount, ctx);
 				return;

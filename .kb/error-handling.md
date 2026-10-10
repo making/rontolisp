@@ -2661,10 +2661,12 @@ Pinned by ci-spec `wrong-arity-funcall-signals-program-error` and `JvmLispCompil
     reading the required count -- `_arityChk` without the mask rejected every RIGHT-count `apply` of
     a built-in (`(apply #'cons '(1 2))`), which the wrong-count tests alone could not see.
   - **wasm-GC**: the shape carries `funcId + 1` from bit 16 up (`WasmRuntimeBuilder.arityShape`),
-    and one shared function, `_arity_opening(shape, _) -> string` (TYPE_RAT_NEW, a conditional
+    and one shared function, `_arity_message(shape, got) -> string` (TYPE_RAT_NEW, a conditional
     index right after `_arity_chk`, reserved once the defuns are final:
-    `WasmLispCompiler.emitsArityOpening`), selects the operator by funcId with the dispatchers' own
-    `emitCaseSelector` and concatenates one shared `" expects "`. A dispatcher whose misses include
+    `WasmLispCompiler.emitsArityMessage`), selects the operator by funcId with the dispatchers' own
+    `emitCaseSelector`, concatenates one shared `" expects "` and spells the expectation and the
+    count (until 2026-10-10 it was `_arity_opening`, answering only `"NAME expects "`, and each
+    caller appended the rest). A dispatcher whose misses include
     a named callee writes `(funcId + 1) << 16 | shape` from its arm (the page bias folded into the
     constant); `_arity_chk` and the spread cases read it off the shape they are handed. The named
     set is the catalog defuns that are DISPATCHABLE or the callee of a guarded literal `apply`
@@ -2674,6 +2676,30 @@ Pinned by ci-spec `wrong-arity-funcall-signals-program-error` and `JvmLispCompil
     module below +36 KB -- one copy per dispatcher arity.
   - The EXPECTATION half followed on 2026-09-27: a built-in's function value reports by its call
     shape too ("A built-in's function VALUE with a wrong count", below).
+- **A report the function DECLARES** (2026-10-10). **Invariant: a function whose body opens with
+  `(declare (%arity-report prefix suffix))` (`DeclaredArityReport`; a docstring, other
+  declarations and a defun's `block` may come first) reports `prefix + count + suffix` on all
+  four backends, through every path above; it wins over a built-in name.** A language front end
+  spells its own refusal with it (Clojure's `Wrong number of args (0) passed to: my.app/f`,
+  [clojure-frontend.md](clojure-frontend.md) "Arity refusals"), read only on the refusal path.
+  Pinned by `DeclaredArityReportPrograms` (`LispEvaluatorTest`, `JvmLispCompilerTest`,
+  `WasmLispCompilerIntegrationTest`) and clojure-spec on all four legs.
+  - Interpreter: `checkArity` reads the lambda's body. Direct calls: `DefinedCallArity` takes the
+    callee's report (`JvmArityOperators.declared` by defun name, `WasmFunctionInfo.declaredArity`,
+    `DeclaredArityReport.ofLambda` for a lambda in call position).
+  - JVM: a declared callee registers `'\0' + (char) prefixIndex + suffix` in `JvmArityOperators`
+    (the prefix its own entry, shared), and `_arityMsg` answers `names[prefixIndex - 1] + got +
+    suffix` for an entry opening with `'\0'`; a build registering none emits the old body. A
+    lambda's report comes from its body (`buildArityMethods`, `renderSpreadCase`). Past nine bits
+    of operator index (a Clojure program names every dispatchable fn) `_arityErr`'s indices move
+    to a second char-per-funcId table (`compileAndRunSixHundredDeclaredReportsEachRefuseInTheirWords`);
+    an entry that would push the joined names past 60,000 modified-UTF-8 bytes is not registered
+    and its callee reports as `Function`, rather than the class failing to build.
+  - wasm-GC: `ArityReport.declaredFuncIds` (defuns and lambdas, dispatchable or guarded) rides
+    the same funcId shape; `_arity_message`'s case for one answers `prefix + got + suffix` and
+    branches past the CL tail. `emitsArityMessage` also turns on for a program spelling
+    `%ARITY-REPORT` (the lambdas are not known in the pre-pass). The eval runtime's unbacked
+    `EVAL` id sits past both maps' largest funcId.
 - **A DIRECT call of a built-in** (2026-09-26). **Invariant: `(op args...)` in call position,
   `op` a `BuiltinFunctionWrappers` name, with a count the operator's call shape rules out,
   evaluates its arguments and then signals `program-error` with ONE text on all four backends**
@@ -2942,7 +2968,7 @@ Pinned by ci-spec `wrong-arity-funcall-signals-program-error` and `JvmLispCompil
   `_eval` evaluates inline report too ([eval-runtime.md](eval-runtime.md), "Argument counts").
   `eval` itself has no wrapper, so its report names an operator no callee carries: the JVM
   registers it by name (`JvmArityOperators.namedShape`), and wasm gives it an id one past the
-  largest named funcId that only `_arity_opening` reads (`ArityReport.unbackedOperators`;
+  largest named funcId that only `_arity_message` reads (`ArityReport.unbackedOperators`;
   `names(id)` stays false for it, so no dispatcher can name a real callee by that id).
 - **Sizes** (2026-09-12, minimal programs, JVM `.class` / wasm Preview 1 bytes):
 
@@ -2991,7 +3017,7 @@ Pinned by ci-spec `wrong-arity-funcall-signals-program-error` and `JvmLispCompil
 
   Even a program that names no built-in itself has some dispatchable (the runtime's own
   `#'identity` / `#'eql` defaults), so a module with a report pays ~150 B on the JVM (the exception
-  class constant, the names and the decode) and ~200 B on wasm (`_arity_opening` plus a handful of
+  class constant, the names and the decode) and ~200 B on wasm (`_arity_message` plus a handful of
   names). The eval row is the price of naming ~250 operators: their names (JVM one joined string,
   wasm one piece each) and one selector case apiece, +1.1% / +2.3%.
 

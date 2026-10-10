@@ -943,10 +943,12 @@ class ClojureInteropTest {
 				"[1 2 3]\n[3 2 1]\n");
 		assertBothEqual("(println (.get (.map (java.util.Optional/of 4) (fn [x] (* 2 x)))))", "8\n");
 		// a fn of the wrong arity is called with the method's arguments, and refuses them
+		// in
+		// the oracle's words
 		assertThatThrownBy(() -> interpret("(.forEach (java.util.ArrayList. [2]) (fn [] 1))"))
-			.hasStackTraceContaining("expects 0 arguments, got 1");
+			.hasStackTraceContaining("Wrong number of args (1) passed to: user/fn");
 		assertThatThrownBy(() -> runOnJvm("(.forEach (java.util.ArrayList. [2]) (fn [] 1))"))
-			.hasStackTraceContaining("expects 0 arguments, got 1");
+			.hasStackTraceContaining("Wrong number of args (1) passed to: user/fn");
 		// Deviation: the oracle converts a fn only to an interface annotated
 		// @FunctionalInterface (a PropertyChangeListener or a DocumentListener is a
 		// ClassCastException there); here every abstract method of any interface calls

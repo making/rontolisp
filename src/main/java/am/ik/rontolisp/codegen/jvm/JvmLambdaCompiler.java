@@ -133,7 +133,8 @@ final class JvmLambdaCompiler {
 		int supplied = callArgs.size() - 1;
 		// A count the lambda list rules out signals when the call runs, as a named
 		// function's direct call does (compiler/DefinedCallArity).
-		LispVal wrongCount = DefinedCallArity.wrongCountSignal(call, null, required, nf.variadic());
+		LispVal wrongCount = DefinedCallArity.wrongCountSignal(call, null, required, nf.variadic(),
+				am.ik.rontolisp.DeclaredArityReport.ofLambda(lambda));
 		if (wrongCount != null) {
 			JvmExprCompiler.compileExpr(wrongCount, ctx, className);
 			return;

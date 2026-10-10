@@ -75,7 +75,8 @@ class SourceLanguageTest {
 		assertThat(SourceLanguage.CLOJURE.read("(defn f [x] x)", Features.INTERPRETER, null)
 			.stream()
 			.map(LispVal::print)
-			.toList()).containsExactly("(SETQ RONTOLISP::%CLOJURE-FALSE '|false|)", "(DEFUN |c%f| (|c%x|) |c%x|)");
+			.toList()).containsExactly("(SETQ RONTOLISP::%CLOJURE-FALSE '|false|)",
+					"(DEFUN |c%f| (|c%x|) (DECLARE (%ARITY-REPORT \"Wrong number of args (\" \") passed to: user/f\")) |c%x|)");
 	}
 
 	@Test

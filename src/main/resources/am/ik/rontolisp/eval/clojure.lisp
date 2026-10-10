@@ -1222,6 +1222,15 @@
                                 "java.lang.Exception" "java.lang.Throwable")
                               message))
 
+(defun rontolisp::%clojure-fn-arity-error (n name)
+  "The oracle's ArityException for a program fn NAME (its ns/name spelling)
+   called with N args: a multi-arity fn's dispatch past every clause. A
+   single-arity fn's body declares the same words for the backends' own count
+   check instead (%arity-report)."
+  (rontolisp::%clojure-arity-exception
+   (concatenate 'string "Wrong number of args (" (princ-to-string n)
+                ") passed to: " name)))
+
 (defun rontolisp::%clojure-illegal-access-error (message)
   "A refusal the oracle throws as an IllegalAccessError: a transient used after
    persistent!."

@@ -36,7 +36,8 @@ class ClojureSessionTest {
 			.startsWith("(SETQ RONTOLISP::%CLOJURE-FALSE '|false|)")
 			.last()
 			.asString()
-			.startsWith(INPUT + "(DEFUN |c%twice| (|c%x|) (* 2 |c%x|)) (RONTOLISP::%CLOJURE-VAR \"user/twice\"");
+			.startsWith(INPUT + "(DEFUN |c%twice| (|c%x|) " + ClojureLoweringTest.arity("user/twice")
+					+ " (* 2 |c%x|)) (RONTOLISP::%CLOJURE-VAR \"user/twice\"");
 		List<ClojureTopLevel> call = session.read("(twice 21)");
 		assertThat(call.get(0).forms().stream().map(LispVal::print).toList()).containsExactly(input("(|c%twice| 21)"));
 	}
@@ -408,7 +409,8 @@ class ClojureSessionTest {
 			.flatMap(top -> top.forms().stream())
 			.map(LispVal::print)
 			.toList();
-		assertThat(required).anyMatch(form -> form.contains("(DEFUN |c%app.lib/f| (|c%x|) (+ |c%x| 1))"));
+		assertThat(required).anyMatch(form -> form
+			.contains("(DEFUN |c%app.lib/f| (|c%x|) " + ClojureLoweringTest.arity("app.lib/f") + " (+ |c%x| 1))"));
 		assertThat(session.read("(l/f 1)").get(0).forms().stream().map(LispVal::print).toList())
 			.containsExactly(input("(|c%app.lib/f| 1)"));
 		List<String> again = session.read("(require 'app.lib)")

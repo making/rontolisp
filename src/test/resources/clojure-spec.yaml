@@ -1362,6 +1362,50 @@ cases:
       42
       :two
       3
+  - name: a-wrong-argument-count-is-refused-in-the-oracles-words
+    # Oracle clj 1.12.6 (2026-10-10), every line but the local fns': a var's function
+    # names its var -- a defn (one arity, several, variadic, wider than the wasm
+    # backends' ten parameters) and a fn that IS a def's value -- through a direct call,
+    # apply, map and a local holding it. A local fn's name drops the oracle's generated
+    # parts: corpus-ns/eval168/fn--169/wna-named--170, corpus-ns/wna-mk/fn--144,
+    # corpus-ns/eval198/fn--199/fn--200 there.
+    source: |
+      (defmacro wna-arity [form] `(try ~form (catch clojure.lang.ArityException e# (.getMessage e#))))
+      (defn wna-one [x] x)
+      (defn wna-two ([x] x) ([x y] y))
+      (def wna-anon (fn [x] x))
+      (defn wna-va [x & more] x)
+      (defn wna-mk [] (fn [y] y))
+      (defn wna-wide [a b c d e f g h i j k] k)
+      (println (wna-arity (wna-one)))
+      (println (wna-arity (apply wna-one [1 2])))
+      (println (wna-arity (wna-two 1 2 3)))
+      (println (wna-arity (wna-anon)))
+      (println (wna-arity (wna-va)))
+      (println (wna-arity ((fn wna-named [x] x))))
+      (println (wna-arity (apply wna-two [1 2 3])))
+      (println (wna-arity (doall (map wna-one [1] [2]))))
+      (println (wna-arity (let [f wna-va] (f))))
+      (println (wna-arity (apply wna-anon [])))
+      (println (wna-arity (wna-wide 1 2)))
+      (println (wna-arity ((wna-mk))))
+      (println (wna-arity ((fn [x] x))))
+      (println (wna-one 1) (wna-two 1 2) (wna-anon 3) (wna-va 4 5) ((wna-mk) 6))
+    expected: |
+      Wrong number of args (0) passed to: corpus-ns/wna-one
+      Wrong number of args (2) passed to: corpus-ns/wna-one
+      Wrong number of args (3) passed to: corpus-ns/wna-two
+      Wrong number of args (0) passed to: corpus-ns/wna-anon
+      Wrong number of args (0) passed to: corpus-ns/wna-va
+      Wrong number of args (0) passed to: corpus-ns/wna-named
+      Wrong number of args (3) passed to: corpus-ns/wna-two
+      Wrong number of args (2) passed to: corpus-ns/wna-one
+      Wrong number of args (0) passed to: corpus-ns/wna-va
+      Wrong number of args (0) passed to: corpus-ns/wna-anon
+      Wrong number of args (2) passed to: corpus-ns/wna-wide
+      Wrong number of args (0) passed to: corpus-ns/wna-mk/fn
+      Wrong number of args (0) passed to: corpus-ns/fn
+      1 2 3 4 6
   - name: declare-forward-declares
     source: |
       (declare dcl-f)

@@ -56,6 +56,7 @@ import am.ik.rontolisp.macro.FoldDifferential;
 import am.ik.rontolisp.reader.LispReadException;
 import am.ik.rontolisp.reader.LispReader;
 import am.ik.rontolisp.testsupport.CorpusFixtures;
+import am.ik.rontolisp.testsupport.DeclaredArityReportPrograms;
 import am.ik.rontolisp.testsupport.HashTableKeyPrograms;
 import am.ik.rontolisp.testsupport.LoweredBuiltinValues;
 import am.ik.rontolisp.testsupport.StringStreamPrograms;
@@ -9130,6 +9131,15 @@ class LispEvaluatorTest {
 		assertThat(evalMulti("(defun ar-f (x) x) " + caught.formatted("(funcall #'ar-f)")).print())
 			.isEqualTo("\"Function expects 1 argument, got 0\"");
 		assertThat(eval("#'elt").print()).isEqualTo("#<function ELT>");
+	}
+
+	// A function whose body declares its own wrong-count report (%arity-report, what the
+	// Clojure front end spells the oracle's ArityException with) refuses in its words: a
+	// defun, a &rest defun and a lambda, through funcall, apply and a direct call.
+	@Test
+	void evalAFunctionDeclaringItsArityReportRefusesInItsWords() {
+		assertThat(evalMulti(DeclaredArityReportPrograms.PROGRAM + "(ar-all)").print())
+			.isEqualTo(DeclaredArityReportPrograms.ANSWER);
 	}
 
 	@Test

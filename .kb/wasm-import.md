@@ -117,7 +117,7 @@ a site straight to the host call instead -- one `memory.copy` and no wrapper -- 
 - **The wrapper still exists** for `#'name`/`funcall`/`mapcar`/dispatch and for a RUNTIME
   string argument; the shaker drops it when no site needs it, and with it `_str_build` and
   `_str_to_mem` when nothing else in the module builds a string.
-- `_lit_stage` sits after `_arity_chk`, `_arity_opening` and `_undefined_function`
+- `_lit_stage` sits after `_arity_chk`, `_arity_message` and `_undefined_function`
   (`litStageFuncBase()`), so it shifts `userFuncBase()` and no fixed index. Its presence is
   decided from the DIRECTIVES in front of pass 2 (`canLowerLiteralCallSite`), deliberately
   loose in the same direction `emitsArityChk` is: a module whose sites all turn out not to

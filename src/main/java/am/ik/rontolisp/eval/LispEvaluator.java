@@ -7501,14 +7501,17 @@ public final class LispEvaluator {
 	/**
 	 * Signals the program-error of a call whose argument count the lambda list refuses,
 	 * naming the operator when the lambda is a built-in's
-	 * ({@link BuiltinFunctionWrappers#arityOperator}).
+	 * ({@link BuiltinFunctionWrappers#arityOperator}), in the words the lambda declares
+	 * when it declares its own ({@link am.ik.rontolisp.DeclaredArityReport}).
 	 */
 	private static void checkArity(LispLambda lambda, List<LispVal> args) {
 		int required = lambda.params().size();
 		if (args.size() < required || (lambda.rest() == null && args.size() > required)) {
+			am.ik.rontolisp.DeclaredArityReport declared = am.ik.rontolisp.DeclaredArityReport.of(lambda.body());
 			throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
-					ClosRegistry.arityMessage(BuiltinFunctionWrappers.arityOperator(lambda.name()), required,
-							lambda.rest() != null, args.size()));
+					declared != null ? declared.message(args.size())
+							: ClosRegistry.arityMessage(BuiltinFunctionWrappers.arityOperator(lambda.name()), required,
+									lambda.rest() != null, args.size()));
 		}
 	}
 

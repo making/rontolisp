@@ -34,6 +34,13 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   A Common Lisp `format`'s `~S`/`~A` on Clojure values stay Common Lisp notation (it is
   a CL surface; `clojure.pprint/cl-format` writes them as Clojure); `print-method` stays
   absent.
+- A wrong argument count is the oracle's `Wrong number of args (N) passed to: name`, but a
+  local `fn`'s name is the oracle's class name without its generated parts: the enclosing
+  function's name (a `defn`'s `my.app/f`, the namespace outside any), then the `fn`'s own
+  name or `fn` (`my.app/f/fn`; the oracle's `my.app/f/fn--177`, and at the top level
+  `my.app/eval176/fn--177/named--178`, with the `evalN` and the function a `try` is
+  wrapped in). A var's function -- a `defn`, a `fn` that is a `def`'s value -- names the
+  var as the oracle's does.
 - A map, set or memo key finds an `=` key like the oracle's, vectors, lists, maps and
   sets included, but a stored collection key is the first `=` key of its kind (vector,
   list, lazy seq) the program stored, so its metadata and the spelling of a nested

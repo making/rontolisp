@@ -46,6 +46,7 @@ import am.ik.rontolisp.macro.FoldDifferential;
 import am.ik.rontolisp.reader.LispReader;
 import am.ik.rontolisp.testsupport.CliStackExtension;
 import am.ik.rontolisp.testsupport.CorpusFixtures;
+import am.ik.rontolisp.testsupport.DeclaredArityReportPrograms;
 import am.ik.rontolisp.testsupport.HashTableKeyPrograms;
 import am.ik.rontolisp.testsupport.LoweredBuiltinValues;
 import am.ik.rontolisp.testsupport.MaskSignedFieldProgram;
@@ -6111,6 +6112,42 @@ class JvmLispCompilerTest {
 					"Function expects 1 argument, got 0"
 					:E
 					((1 . 2) (3 . 4) 5 ((1 . 2)))""");
+	}
+
+	// A function declaring its own wrong-count report refuses in its words through a
+	// dispatch miss, a literal and a computed apply and a direct call
+	// (DeclaredArityReportPrograms, pinned on all four backends).
+	@Test
+	void compileAndRunAFunctionDeclaringItsArityReportRefusesInItsWords() throws Exception {
+		assertThat(compileAndRun(DeclaredArityReportPrograms.PROGRAM + "(print (ar-all))"))
+			.isEqualTo(DeclaredArityReportPrograms.ANSWER);
+	}
+
+	// More declared reports than the dispatch-miss table's cells hold operator indices
+	// for (nine bits): the indices move to a table of their own, and the 600th function
+	// still refuses in its words.
+	@Test
+	void compileAndRunSixHundredDeclaredReportsEachRefuseInTheirWords() throws Exception {
+		StringBuilder program = new StringBuilder();
+		StringBuilder values = new StringBuilder("(defparameter *wd* (list");
+		for (int i = 1; i <= 600; i++) {
+			program.append("(defun wd-")
+				.append(i)
+				.append(" (x) (declare (rontolisp::%arity-report \"W(\" \") wd-")
+				.append(i)
+				.append("\")) x)\n");
+			values.append(" #'wd-").append(i);
+		}
+		program.append(values).append("))\n");
+		program.append("(print (handler-case (funcall (nth 599 *wd*)) (program-error (c) (princ-to-string c))))\n")
+			.append("(print (handler-case (funcall (nth 0 *wd*) 1 2) (program-error (c) (princ-to-string c))))\n")
+			.append("(print (handler-case (funcall #'cons 1) (program-error (c) (princ-to-string c))))\n")
+			.append("(print (funcall (nth 299 *wd*) 7))\n");
+		assertThat(compileAndRun(program.toString())).isEqualTo("""
+				"W(0) wd-600"
+				"W(2) wd-1"
+				"CONS expects 2 arguments, got 1"
+				7""");
 	}
 
 	// A DIRECT call of a wrapped built-in with a count its call shape rules out is the

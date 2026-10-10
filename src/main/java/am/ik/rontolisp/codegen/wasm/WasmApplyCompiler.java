@@ -94,10 +94,11 @@ final class WasmApplyCompiler {
 					ctx.writer.writeUnsignedLeb128(argsSlot);
 					ctx.writer.write(Instruction.I32_CONST);
 					// A built-in callee's shape carries its funcId, so the report names
-					// the
-					// operator (WasmRuntimeBuilder.ArityReport).
+					// the operator, and so does the shape of a callee declaring its own
+					// report (WasmRuntimeBuilder.ArityReport).
 					boolean named = ctx.namesArityOperators
-							&& am.ik.rontolisp.compiler.BuiltinFunctionWrappers.arityOperator(target) != null
+							&& (am.ik.rontolisp.compiler.BuiltinFunctionWrappers.arityOperator(target) != null
+									|| fi.declaredArity() != null)
 							&& fi.funcId() < WasmRuntimeBuilder.ARITY_MAX_NAMED_FUNC_ID;
 					if (named) {
 						ctx.arityNamedCallees.add(fi.funcId());

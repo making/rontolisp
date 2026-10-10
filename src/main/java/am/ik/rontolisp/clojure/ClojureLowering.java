@@ -508,6 +508,21 @@ public final class ClojureLowering {
 	/** The enclosing recur targets, innermost last; empty outside any. */
 	final Deque<RecurTarget> recurTargets = new ArrayDeque<>();
 
+	/**
+	 * The names the enclosing functions' wrong-count refusals give them (the oracle's
+	 * class name, demunged, without its generated parts: {@code my.app/f/fn}), innermost
+	 * first; empty outside any ({@link ClojureBindingLowering#arityName}).
+	 */
+	final Deque<String> fnNames = new ArrayDeque<>();
+
+	/**
+	 * The value form of the {@code def} being lowered and its var key: a {@code fn} that
+	 * IS that form takes the var's name, as the oracle's does ({@code my.app/anon}).
+	 */
+	@Nullable LispVal defValueForm;
+
+	@Nullable String defValueKey;
+
 	/** The enclosing proxy methods' {@code this}, innermost last; empty outside any. */
 	final Deque<ProxyMethod> proxyMethods = new ArrayDeque<>();
 
@@ -3443,7 +3458,8 @@ public final class ClojureLowering {
 			return forms.get(0);
 		}
 		if (ClojureLowerUtil.isSymbolNamed(head, "fn") || ClojureLowerUtil.isSymbolNamed(head, "fn*")) {
-			return capturingMutableFields(() -> ClojureBindingLowering.fn(this, items));
+			String defined = form == this.defValueForm ? this.defValueKey : null;
+			return capturingMutableFields(() -> ClojureBindingLowering.fn(this, items, defined));
 		}
 		if (ClojureLowerUtil.isSymbolNamed(head, "let")) {
 			return ClojureBindingLowering.let(this, items);

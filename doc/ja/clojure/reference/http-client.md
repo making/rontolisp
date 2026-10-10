@@ -214,8 +214,7 @@ $ rontolisp proxy.clj -o src/worker.wasm --no-wasi --host-fetch --host-boundary=
   Ring のリクエストの `:body` はここではリーダー（Jetty では入力ストリーム）なので、
   バイナリのアップロードをそのまま送り出すと、オクテット単位では一致しません。
 - トランスポートの失敗は `java.io.IOException` です（babashka.http-client では
-  `java.net.ConnectException` などのサブクラス）。引数の個数の誤りは、フロントエンド共通の
-  `ArityException`（`wrong number of arguments passed to: get`）です。
+  `java.net.ConnectException` などのサブクラス）。
 - `--host-fetch` ではホスト自身の `fetch` がリダイレクトを（20 回まで）たどるため、`:uri` は
   リクエストした URL になります。また応答の展開もホストが行うため、`:headers` にはその
   `content-encoding` と `content-length` がありません。

@@ -91,7 +91,7 @@ answered `2 5 3` before).
 
 | Clojure | lowers to | notes |
 |---|---|---|
-| `defn` | `defun` of the mangled name, called directly | keeps the direct call and the tree shaker. Several arities: one `c%f%N` `defun` per arity (`%*` variadic) plus a dispatch `defun`; a wrong count signals `wrong number of arguments passed to: f`; at most one variadic clause and one clause per arity. In a body: statement position only, single-arity only |
+| `defn` | `defun` of the mangled name, called directly | keeps the direct call and the tree shaker. Several arities: one `c%f%N` `defun` per arity (`%*` variadic) plus a dispatch `defun`; a wrong count signals the oracle's `Wrong number of args (N) passed to: ns/f` ("Arity refusals"); at most one variadic clause and one clause per arity. In a body: statement position only, single-arity only |
 | redefined `defn` | a fresh internal name per definition: the first keeps the bare name, later ones `%defN` | call sites below each definition call the newest; a value position (`#'f`, `(def g f)`) captures the one current there. Each namespace versions its own names; a session keeps the counts |
 | a call to a `VARIABLE`-kind head | `funcall` of the value cell when it holds a real function (a `let` binding of one, a `def`'d one), else `rontolisp::%clojure-call` | the dispatcher applies functions and looks up collections, like `IFn`, so a parameter may hold a set or map; a `declare`d-never-defined name (`Kind.DECLARED`) calls its unbound root through the dispatcher (the oracle's `Attempting to call unbound fn`); a session keeps it a direct call, since a later buffer may define it |
 | a call whose head is a compound form (`((fn ...) x)`, `((set v) x)`, `((first ks) m)`) | `funcall` when the head lowers to a `function`/`lambda`, else `rontolisp::%clojure-call` | a call result may be a set, map, vector or keyword, which the dispatcher looks up like `IFn`; a collection literal head and a `#'f` head keep their own rows |
@@ -1007,6 +1007,42 @@ hash's.
   `ClojureLoweringTest#theHashVerbsCallTheirWorkersAndATypesHasheqStoresInItsOwnFamily`,
   `ClojureArmsTest#aCollectionInterfaceFamilyIsMadeByTheStoreOfARowOfItsInterfaces` (HASHEQ).
 
+## Arity refusals
+
+A call with a count no arity of a program fn takes is the oracle's
+`Wrong number of args (N) passed to: NAME` (a `clojure.lang.ArityException`; decided
+2026-10-10). Before, measured 2026-10-09 on all four legs, the words were the
+backends' CL ones (`Function expects 1 argument, got 0`, `... at least 1 ...`) for a
+single-arity fn and `wrong number of arguments passed to: two` for a multi-arity dispatch.
+
+- **Single arity: the backends' own count check, handed the words.** The body opens with
+  `(declare (%arity-report "Wrong number of args (" ") passed to: NAME"))`
+  (`ClojureBindingLowering.arityDeclaration`, the root package's `DeclaredArityReport`):
+  every backend reads it where it already judges a count -- `LispEvaluator.checkArity`,
+  `DefinedCallArity` (a direct call), the dispatch-miss and `apply`/spread count guards
+  ([error-handling.md](error-handling.md), "A wrong argument COUNT through a function
+  value") -- on the refusal path only, so a right-count call costs nothing and no backend
+  learns a Clojure name; Common Lisp and Scheme functions keep their words. A Clojure-side
+  check would cost every call. Still a `program-error`, caught as `ArityException`.
+- **Several arities**: the dispatch's last arm, `(%clojure-fn-arity-error count "NAME")`
+  (`clojure.lisp`, an `ArityException` refusal).
+- **The name** (`ClojureBindingLowering.arityName`, `ClojureLowering.fnNames`): a `defn`'s var
+  key (`my.app/f`, `user/f`); a `fn` that IS a `def`'s value form (`defValueForm`, by
+  identity) the var's (`my.app/anon`, the oracle's class takes the def's name); any other
+  `fn`, `letfn` entry or `#()` the enclosing fn's name, or the namespace outside any, then
+  its own name or `fn` (`my.app/f/fn`, `my.app/named`). The oracle's is its class name
+  demunged, which adds what cannot be reproduced: `--N` on each generated part, the
+  `evalN` a top-level form compiles into, the thunks it wraps a `try` in
+  (`my.app/eval176/fn--177/named--178`); user doc deviation.
+- Out of scope, in their own words still: a Java member as a value
+  (`ClojureInteropLowering.arityLambda`), protocol methods, macros.
+- The IR carries the declaration in every single-arity fn; the backends keep it out of
+  inlining decisions like any `declare`. A wasm defun past ten parameters
+  (`WasmArityBundler`) keeps its declaration and names itself in its bundle check.
+- Pins: clojure-spec `a-wrong-argument-count-is-refused-in-the-oracles-words` (every todo row,
+  four legs), `ClojureLoweringTest` (the declaration in each lowered defn and lambda), the
+  backends' `DeclaredArityReportPrograms` trio, `DeclaredArityReportTest`.
+
 ## recur
 
 `recur` targets the innermost `loop`, `fn` (named or anonymous), `defn` clause, `letfn`
@@ -1547,9 +1583,9 @@ new, and the five fetch has (the JDK's on the interpreter and the JVM, `wasi:htt
 - Decided 2026-10-08: babashka.http-client over hato and clj-http, being the smallest API
   over the same `java.net.http` client fetch's JDK leg is. A built-in file rather than a
   lowering slice like `ring.adapter.rontolisp`: the verbs are real vars (values, `#'`,
-  `:refer`), the `assoc` onto the options is the core's own; the cost is the front end's
-  defn arity words (`wrong number of arguments passed to: get`, an `ArityException`; the
-  oracle's `Wrong number of args (0) passed to: babashka.http-client/get`). The name
+  `:refer`), the `assoc` onto the options is the core's own, and a wrong count is the
+  oracle's words under this namespace ("Arity refusals": `Wrong number of args (0) passed
+  to: rontolisp.http-client/get`, the oracle's `babashka.http-client/get`). The name
   `babashka.http-client` (and its sub-namespaces) is refused when no root holds it, pointing
   here (`ClojureBuiltinNamespaces.notShipped`: a claimed name promises its options, and
   `:client`, `:interceptors`, `:version` and its `java.net.URI` `:uri` have no value kind
@@ -1669,7 +1705,7 @@ new, and the five fetch has (the JDK's on the interpreter and the JVM, `wasi:htt
   byte-array `:body` and part and the byte-array reads of the stream body the same day (the
   oracle against an origin serving the same endpoints). Waiting: `:timeout` (todo `148`), a
   reader over the stream body
-  reading as the reply arrives (todo `f07`), the arity words (todo `f06`).
+  reading as the reply arrives (todo `f07`).
 - Pins: `FetchSpecE2eTest#clojureHttpClient` (`clojure-http-spec.yaml`: interpreter, JVM,
   `--native`, component), `ClojureHttpClientTest` (the lowering, the refusals, the FETCH
   strip, the P1 and `--no-wasi` refusals, a Ring proxy relaying a binary reply on the

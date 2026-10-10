@@ -3,14 +3,17 @@ package am.ik.rontolisp.codegen.wasm;
 import java.util.ArrayList;
 import java.util.List;
 
+import am.ik.rontolisp.DeclaredArityReport;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispInteger;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispNil;
+import am.ik.rontolisp.LispString;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
 import am.ik.wasm.Instruction;
 import am.ik.wasm.Type;
+import org.jspecify.annotations.Nullable;
 
 /**
  * Rewrites fixed-arity {@code defun}s with more parameters than the WASM callable-type
@@ -197,11 +200,15 @@ final class WasmArityBundler {
 		List<LispVal> params = ((LispCons) parts.get(2)).toList();
 		LispSymbol bundle = new LispSymbol(BUNDLE_VAR);
 		List<LispVal> newParams = List.of(new LispSymbol(LispNames.LAMBDA_REST), bundle);
+		// a report the body declares stays the defun's own (DeclaredArityReport), and the
+		// check names the defun, so its report is spelled in the declared words
+		DeclaredArityReport declared = DeclaredArityReport.of(parts.subList(3, parts.size()));
 		List<LispVal> letBindings = new ArrayList<>();
 		for (int i = 0; i < params.size(); i++) {
 			LispVal nth = listToCons(List.of(new LispSymbol(LispNames.NTH), new LispInteger(i), bundle));
 			if (i == 0) {
-				nth = listToCons(List.of(new LispSymbol(LispNames.PROGN), bundleCheck(bundle, params.size()), nth));
+				nth = listToCons(List.of(new LispSymbol(LispNames.PROGN),
+						bundleCheck(bundle, params.size(), declared != null ? (LispSymbol) parts.get(1) : null), nth));
 			}
 			letBindings.add(listToCons(List.of(params.get(i), nth)));
 		}
@@ -209,22 +216,31 @@ final class WasmArityBundler {
 		letParts.add(new LispSymbol(LispNames.LET_STAR));
 		letParts.add(listToCons(letBindings));
 		letParts.addAll(parts.subList(3, parts.size()));
-		return listToCons(List.of(parts.get(0), parts.get(1), listToCons(newParams), listToCons(letParts)));
+		List<LispVal> defun = new ArrayList<>(List.of(parts.get(0), parts.get(1), listToCons(newParams)));
+		if (declared != null) {
+			defun.add(declared.declaration());
+		}
+		defun.add(listToCons(letParts));
+		return listToCons(defun);
 	}
 
 	/**
-	 * {@code (%arity-bundle-check bundle n)}: the count check a fixed-arity callee's
-	 * dispatch would make ({@link #compileCheck}).
+	 * {@code (%arity-bundle-check bundle n [name])}: the count check a fixed-arity
+	 * callee's dispatch would make ({@link #compileCheck}); {@code name} is the defun's
+	 * when its body declares its report.
 	 */
-	private static LispVal bundleCheck(LispSymbol bundle, int arity) {
-		return listToCons(List.of(new LispSymbol(CHECK), bundle, new LispInteger(arity)));
+	private static LispVal bundleCheck(LispSymbol bundle, int arity, @Nullable LispSymbol declaring) {
+		return declaring == null ? listToCons(List.of(new LispSymbol(CHECK), bundle, new LispInteger(arity)))
+				: listToCons(List.of(new LispSymbol(CHECK), bundle, new LispInteger(arity),
+						LispString.literal(declaring.name())));
 	}
 
 	/**
 	 * Compiles {@code (%arity-bundle-check bundle n)} to nil, after measuring the list:
 	 * where the module reports a wrong count ({@code _arity_chk}, EH mode behind a
 	 * handler landing pad) it throws the interpreter's {@code program-error},
-	 * {@code Function expects n arguments, got m}, through the helper every other count
+	 * {@code Function expects n arguments, got m} -- or the report the named defun
+	 * declares ({@link DeclaredArityReport}) -- through the helper every other count
 	 * report uses; elsewhere a wrong count traps, as a dispatcher's no-match arm does
 	 * there. A Lisp-level {@code (error 'program-error ...)} would have pulled the
 	 * instance machinery into every module with a wide defun, and could not be compiled
@@ -237,8 +253,17 @@ final class WasmArityBundler {
 		int arity = (int) ((LispInteger) parts.get(2)).value();
 		if (ctx.arityChkFuncIndex >= 0) {
 			WasmExprCompiler.compileExpr(parts.get(1), ctx);
+			// a defun declaring its report carries its funcId, which names it
+			WasmLispCompiler.WasmFunctionInfo declaring = parts.size() > 3 && parts.get(3) instanceof LispString name
+					? ctx.functions.get(name.value()) : null;
+			int named = -1;
+			if (declaring != null && declaring.declaredArity() != null && ctx.namesArityOperators
+					&& declaring.funcId() < WasmRuntimeBuilder.ARITY_MAX_NAMED_FUNC_ID) {
+				named = declaring.funcId();
+				ctx.arityNamedCallees.add(named);
+			}
 			ctx.writer.write(Instruction.I32_CONST);
-			ctx.writer.writeSignedLeb128(WasmRuntimeBuilder.arityShape(arity, false, -1));
+			ctx.writer.writeSignedLeb128(WasmRuntimeBuilder.arityShape(arity, false, named));
 			ctx.writer.write(Instruction.CALL);
 			ctx.writer.writeUnsignedLeb128(ctx.arityChkFuncIndex);
 			ctx.writer.write(Instruction.DROP);

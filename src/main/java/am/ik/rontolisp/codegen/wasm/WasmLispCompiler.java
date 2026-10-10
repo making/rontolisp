@@ -21,6 +21,7 @@ import java.util.TreeMap;
 import java.util.Set;
 
 import am.ik.rontolisp.ClosRegistry;
+import am.ik.rontolisp.DeclaredArityReport;
 import am.ik.rontolisp.LambdaLists;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispDouble;
@@ -610,12 +611,12 @@ public final class WasmLispCompiler implements LispCompiler {
 	}
 
 	/**
-	 * The index of {@code _undefined_function}, right after {@code _arity_opening}, so
+	 * The index of {@code _undefined_function}, right after {@code _arity_message}, so
 	 * adding it moves no fixed index -- only {@link #userFuncBase()}. Only meaningful
 	 * when {@link #emitsUndefinedFunction} is set.
 	 */
 	private int undefinedFunctionFuncBase() {
-		return arityOpeningFuncBase() + (this.emitsArityOpening ? 1 : 0);
+		return arityMessageFuncBase() + (this.emitsArityMessage ? 1 : 0);
 	}
 
 	/**
@@ -630,23 +631,23 @@ public final class WasmLispCompiler implements LispCompiler {
 	}
 
 	/**
-	 * The index of {@code _arity_opening}, right after {@code _arity_chk}, so adding it
+	 * The index of {@code _arity_message}, right after {@code _arity_chk}, so adding it
 	 * moves no fixed index -- only {@link #userFuncBase()}. Only meaningful when
-	 * {@link #emitsArityOpening} is set.
+	 * {@link #emitsArityMessage} is set.
 	 */
-	private int arityOpeningFuncBase() {
+	private int arityMessageFuncBase() {
 		return arityChkFuncBase() + (this.emitsArityChk ? 1 : 0);
 	}
 
 	/**
-	 * The module index of {@code _arity_opening}, the shared function a wrong-count
-	 * report opens its message through when the callee may be a built-in operator
-	 * ({@code WasmRuntimeBuilder.buildArityOpeningBody}), or {@code -1} when this module
-	 * carries none.
+	 * The module index of {@code _arity_message}, the shared function a wrong-count
+	 * report spells its message through when the callee may be a built-in operator or
+	 * declare its own report ({@code WasmRuntimeBuilder.buildArityMessageBody}), or
+	 * {@code -1} when this module carries none.
 	 * @return the function index, or -1
 	 */
-	int arityOpeningFuncIndex() {
-		return this.emitsArityOpening ? arityOpeningFuncBase() : -1;
+	int arityMessageFuncIndex() {
+		return this.emitsArityMessage ? arityMessageFuncBase() : -1;
 	}
 
 	/**
@@ -896,15 +897,16 @@ public final class WasmLispCompiler implements LispCompiler {
 	private boolean emitsArityChk;
 
 	/**
-	 * Whether this module carries {@code _arity_opening}, the shared function a
-	 * wrong-count report reads a built-in operator's name through: gated like the report
-	 * itself (EH mode behind a handler landing pad, with instances) and on the program
-	 * having a defun under a built-in operator's name at all -- an injected wrapper, in
-	 * practice. Decided once the defuns are final and before any index is handed out,
-	 * because it shifts {@link #userFuncBase()}; a module whose report turns out not to
-	 * be built gets a stub.
+	 * Whether this module carries {@code _arity_message}, the shared function a
+	 * wrong-count report reads a built-in operator's name or a declared report through:
+	 * gated like the report itself (EH mode behind a handler landing pad, with instances)
+	 * and on the program having a defun under a built-in operator's name at all -- an
+	 * injected wrapper, in practice -- or a function declaring its own report
+	 * ({@link DeclaredArityReport}). Decided once the defuns are final and before any
+	 * index is handed out, because it shifts {@link #userFuncBase()}; a module whose
+	 * report turns out not to be built gets a stub.
 	 */
-	private boolean emitsArityOpening;
+	private boolean emitsArityMessage;
 
 	/**
 	 * Whether this module carries {@code _undefined_function}, the throw a computed
@@ -4754,8 +4756,11 @@ public final class WasmLispCompiler implements LispCompiler {
 				}
 			}
 		}
-		this.emitsArityOpening = ehMode && hasLandingPad && this.usesInstances
-				&& !arityOperatorFuncIds(defuns, null, Set.of()).isEmpty();
+		// a function that declares its own wrong-count report (DeclaredArityReport) is
+		// named like a built-in operator, through the same shared message function
+		this.emitsArityMessage = ehMode && hasLandingPad && this.usesInstances
+				&& (!arityOperatorFuncIds(defuns, null, Set.of()).isEmpty()
+						|| programUsesSymbol(program, LispNames.ARITY_REPORT_INTERNAL));
 		for (int i = 0; i < defuns.size(); i++) {
 			DefunDecl defun = defuns.get(i);
 			int funcId = nextFuncId[0]++;
@@ -4766,7 +4771,7 @@ public final class WasmLispCompiler implements LispCompiler {
 						+ arity + " (bundle the extra arguments into a list)");
 			}
 			functions.put(defun.name, new WasmFunctionInfo(defun.name, arity, defun.variadic, defun.optionals, funcId,
-					TYPE_CALLABLE_BASE + arity, userFuncBase() + i));
+					TYPE_CALLABLE_BASE + arity, userFuncBase() + i, DeclaredArityReport.of(defun.bodyExprs)));
 			if (Boolean.getBoolean("rontolisp.debug.functable")) {
 				// Profiling aid: map a perf "wasm[0]::function[N]" index back to its
 				// defun (the emitted module carries no name section).
@@ -4922,7 +4927,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			.callArityCeiling(callArityCeiling())
 			.extraDispatchFuncBase(extraDispatchFuncBase())
 			.arityChkFuncIndex(arityChkFuncIndex())
-			.namesArityOperators(this.emitsArityOpening)
+			.namesArityOperators(this.emitsArityMessage)
 			.litStageFuncIndex(litStageFuncIndex())
 			.undefinedFunctionFuncIndex(undefinedFunctionFuncIndex())
 			.unboundVariableFuncIndex(unboundVariableFuncIndex())
@@ -6096,21 +6101,26 @@ public final class WasmLispCompiler implements LispCompiler {
 		// program-error instance may have no representation, and the arm stays the
 		// `unreachable` it was -- so a module that reports nothing is byte-identical,
 		// down to the five interned message pieces this does not add.
-		SortedMap<Integer, String> arityNamedFuncIds = this.emitsArityOpening
+		SortedMap<Integer, String> arityNamedFuncIds = this.emitsArityMessage
 				? arityOperatorFuncIds(defuns, dispatchableFuncIds, arityNamedCallees) : new TreeMap<>();
+		SortedMap<Integer, DeclaredArityReport> arityDeclaredFuncIds = this.emitsArityMessage
+				? declaredArityFuncIds(functions, lambdaDecls, dispatchableFuncIds, arityNamedCallees)
+				: new TreeMap<>();
 		// The operator the eval runtime counts itself with no callee behind it (eval)
 		// gets an id past every named one, which only the report's opening reads -- no
 		// dispatcher arm or spread case names a callee by it, so it cannot collide with a
 		// function whose funcId it happens to equal.
 		SortedMap<Integer, String> unbackedArityOperators = new TreeMap<>();
-		if (usesEval && !arityNamedFuncIds.isEmpty()
-				&& arityNamedFuncIds.lastKey() + 1 < WasmRuntimeBuilder.ARITY_MAX_NAMED_FUNC_ID) {
-			unbackedArityOperators.put(arityNamedFuncIds.lastKey() + 1, LispNames.EVAL);
+		int lastNamedFuncId = Math.max(arityNamedFuncIds.isEmpty() ? -1 : arityNamedFuncIds.lastKey(),
+				arityDeclaredFuncIds.isEmpty() ? -1 : arityDeclaredFuncIds.lastKey());
+		if (usesEval && lastNamedFuncId >= 0 && lastNamedFuncId + 1 < WasmRuntimeBuilder.ARITY_MAX_NAMED_FUNC_ID) {
+			unbackedArityOperators.put(lastNamedFuncId + 1, LispNames.EVAL);
 		}
 		WasmRuntimeBuilder.ArityReport arityReport = arityReport(
 				ehMode && hasLandingPad && this.usesInstances
 						&& (!indirectCallArities.isEmpty() || usesApplyRuntime || this.emitsArityChk),
-				closRegistry, stringTable, layoutAddresses, arityNamedFuncIds, unbackedArityOperators);
+				closRegistry, stringTable, layoutAddresses, arityNamedFuncIds, arityDeclaredFuncIds,
+				unbackedArityOperators);
 		// The guard the SPREAD cases and the literal apply call sites share. Its slot was
 		// reserved in the pre-pass (userFuncBase() shifts by it), so a module that
 		// reserved one and turns out to have no program-error representation to throw
@@ -6121,9 +6131,9 @@ public final class WasmLispCompiler implements LispCompiler {
 				: new byte[0];
 		// The shared opening a report reads a built-in operator's name through; a stub
 		// where no report is built, since then nothing calls it.
-		byte[] arityOpeningBody = this.emitsArityOpening
-				? (arityReport != null ? WasmRuntimeBuilder.buildArityOpeningBody(arityReport)
-						: WasmRuntimeBuilder.buildArityOpeningStubBody())
+		byte[] arityMessageBody = this.emitsArityMessage
+				? (arityReport != null ? WasmRuntimeBuilder.buildArityMessageBody(arityReport)
+						: WasmRuntimeBuilder.buildArityMessageStubBody())
 				: new byte[0];
 		int arityChkIndex = arityReport != null ? arityChkFuncIndex() : -1;
 		// The type-error a wrong-type operand's landing throws (WasmOperandTypes): only
@@ -7939,7 +7949,7 @@ public final class WasmLispCompiler implements LispCompiler {
 				}
 				// The shared report opening, right after it: reuses TYPE_RAT_NEW's
 				// (i32, i32) -> (ref null eq) signature.
-				if (this.emitsArityOpening) {
+				if (this.emitsArityMessage) {
 					fnDef.addFunction(TYPE_RAT_NEW);
 				}
 				// The undefined-function throw, right after it, over the arity-0
@@ -8994,9 +9004,9 @@ public final class WasmLispCompiler implements LispCompiler {
 				if (this.emitsArityChk) {
 					code.addFunction(arityChkBody);
 				}
-				// The shared report opening body, in arityOpeningFuncBase() order.
-				if (this.emitsArityOpening) {
-					code.addFunction(arityOpeningBody);
+				// The shared report message body, in arityMessageFuncBase() order.
+				if (this.emitsArityMessage) {
+					code.addFunction(arityMessageBody);
 				}
 				// The undefined-function throw body, in undefinedFunctionFuncBase()
 				// order.
@@ -9757,6 +9767,38 @@ public final class WasmLispCompiler implements LispCompiler {
 	}
 
 	/**
+	 * The callables whose body declares its own wrong-count report
+	 * ({@link DeclaredArityReport}), as {@code funcId -> report}: a defun or a lambda a
+	 * report can reach, as {@link #arityOperatorFuncIds} picks them.
+	 * @param functions the module's defuns by name
+	 * @param lambdaDecls the module's lambdas
+	 * @param dispatchable the dispatchable funcIds, or null for all
+	 * @param guardedCallees the literal-apply callees whose shape carries their funcId
+	 * @return the declaring funcIds
+	 */
+	static SortedMap<Integer, DeclaredArityReport> declaredArityFuncIds(Map<String, WasmFunctionInfo> functions,
+			List<LambdaInfo> lambdaDecls, @Nullable Set<Integer> dispatchable, Set<Integer> guardedCallees) {
+		SortedMap<Integer, DeclaredArityReport> declared = new TreeMap<>();
+		for (WasmFunctionInfo fi : functions.values()) {
+			if (fi.declaredArity() != null && fi.funcId() < WasmRuntimeBuilder.ARITY_MAX_NAMED_FUNC_ID
+					&& (dispatchable == null || dispatchable.contains(fi.funcId())
+							|| guardedCallees.contains(fi.funcId()))) {
+				declared.put(fi.funcId(), fi.declaredArity());
+			}
+		}
+		for (LambdaInfo lambda : lambdaDecls) {
+			if (lambda.funcId() < WasmRuntimeBuilder.ARITY_MAX_NAMED_FUNC_ID
+					&& (dispatchable == null || dispatchable.contains(lambda.funcId()))) {
+				DeclaredArityReport report = DeclaredArityReport.of(lambda.bodyExprs());
+				if (report != null) {
+					declared.put(lambda.funcId(), report);
+				}
+			}
+		}
+		return declared;
+	}
+
+	/**
 	 * The wrong-argument-count report a dispatcher's no-match arm throws, or {@code null}
 	 * when this module reports none. The message pieces are interned by the report on
 	 * first use rather than here: a module can have dispatchers and still report nothing,
@@ -9767,12 +9809,14 @@ public final class WasmLispCompiler implements LispCompiler {
 	 * @param stringTable the module's string table
 	 * @param layoutAddresses the baked instance layout records
 	 * @param arityOperatorFuncIds the callees whose report names their operator
+	 * @param declaredFuncIds the callees whose report their body declares
 	 * @param unbackedOperators the operators named by an id no callee has
 	 * @return the report, or null
 	 */
 	private WasmRuntimeBuilder.@Nullable ArityReport arityReport(boolean on, ClosRegistry closRegistry,
 			StringTable stringTable, Map<String, Integer> layoutAddresses,
-			SortedMap<Integer, String> arityOperatorFuncIds, SortedMap<Integer, String> unbackedOperators) {
+			SortedMap<Integer, String> arityOperatorFuncIds, SortedMap<Integer, DeclaredArityReport> declaredFuncIds,
+			SortedMap<Integer, String> unbackedOperators) {
 		WasmRuntimeBuilder.ConditionInstance instance = on
 				? conditionInstance(ClosRegistry.PROGRAM_ERROR_CLASS_NAME, closRegistry, layoutAddresses) : null;
 		if (instance == null) {
@@ -9780,7 +9824,7 @@ public final class WasmLispCompiler implements LispCompiler {
 		}
 		return new WasmRuntimeBuilder.ArityReport(stringTable, instance.layoutAddress(), instance.instanceTypeIndex(),
 				instance.slotCapacity(), instance.formatControlSlot(), this.usesIdentityHashTables,
-				arityOperatorFuncIds, unbackedOperators, arityOpeningFuncIndex());
+				arityOperatorFuncIds, declaredFuncIds, unbackedOperators, arityMessageFuncIndex());
 	}
 
 	/**
@@ -10610,10 +10654,11 @@ public final class WasmLispCompiler implements LispCompiler {
 	 * parameter count (excluding the closure env); when {@code variadic}, the last
 	 * parameter is the rest list, the {@code optionals} before it are physical optionals
 	 * (an argument or the UNSUPPLIED marker, {@link WasmPhysicalArgs}), and the callable
-	 * minimum is {@link #required()} arguments.
+	 * minimum is {@link #required()} arguments. {@code declaredArity} is the wrong-count
+	 * report the defun's body declares ({@link DeclaredArityReport}), or {@code null}.
 	 */
 	record WasmFunctionInfo(String name, int paramCount, boolean variadic, int optionals, int funcId, int typeIndex,
-			int funcIndex) {
+			int funcIndex, @Nullable DeclaredArityReport declaredArity) {
 
 		/**
 		 * {@return the arguments a call must pass at least}
@@ -11510,7 +11555,7 @@ public final class WasmLispCompiler implements LispCompiler {
 		/**
 		 * Whether a guarded call site bakes a built-in callee's funcId into the shape it
 		 * hands {@code _arity_chk}, so the report names the operator
-		 * ({@code WasmLispCompiler.emitsArityOpening}).
+		 * ({@code WasmLispCompiler.emitsArityMessage}).
 		 */
 		boolean namesArityOperators;
 
