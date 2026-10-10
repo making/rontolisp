@@ -16,6 +16,10 @@ an error.
   (rontolisp:stream-close s))   ; => NIL
 ```
 
+An argument that is no stream signals a `type-error` expecting
+`(satisfies rontolisp:streamp)`, as
+[`rontolisp:stream-read`](rontolisp-stream-read.md) does.
+
 ## Backend support
 
 Asynchronous streams exist on the interpreter, the JVM backend and -- for the
@@ -23,4 +27,4 @@ request/response body streams `rontolisp:fetch` / `rontolisp:http-handler`
 produce -- the `--component` WASM backend. A Preview 1 WASM module can hold a
 stream value only when a host-backed body gives it one; where none can exist,
 `rontolisp:streamp` answers `nil` and `rontolisp:stream-read` /
-`rontolisp:stream-close` signal an error when called.
+`rontolisp:stream-close` signal that `type-error` when called.

@@ -4,7 +4,10 @@ import java.util.List;
 
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispNames;
+import am.ik.rontolisp.LispNil;
+import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.compiler.OperandTypes;
 import am.ik.wasm.Instruction;
 
 /**
@@ -21,7 +24,9 @@ import am.ik.wasm.Instruction;
  * synchronous pull answering a SETTLED future.</li>
  * </ul>
  * Either way {@code stream-read} answers a future settling to the next chunk (nil = EOF,
- * matching the interpreter/JVM contract). Guest-created streams
+ * matching the interpreter/JVM contract), and a value that is no stream is the operator's
+ * type-error in an EH-mode module (the helpers' operand check,
+ * {@link WasmOperandTypes#emitStreamCheck}). Guest-created streams
  * ({@code rontolisp:make-stream}/{@code stream-write}) remain unsupported on both.
  */
 final class WasmStreamCompiler {
@@ -59,11 +64,56 @@ final class WasmStreamCompiler {
 	}
 
 	/**
+	 * Compiles {@code rontolisp:stream-read}/{@code stream-close} in a module where no
+	 * stream value can EXIST (no {@code %stream-new} anywhere, and no async block to
+	 * produce one): every argument is a non-stream, so the call is the operator's
+	 * type-error expecting {@code (SATISFIES RONTOLISP:STREAMP)}, as the stream helpers'
+	 * operand check signals it in a module that can hold one
+	 * ({@link WasmOperandTypes#emitStreamCheck}) and every other backend does -- at CALL
+	 * time, after the argument is evaluated, so a dead site never rejects the program.
+	 * Outside EH mode it traps.
+	 */
+	static void compileNoStream(String member, LispCons cons, WasmLispCompiler.Ctx ctx) {
+		List<LispVal> args = cons.toList();
+		if (args.size() != 2) {
+			throw new UnsupportedOperationException(
+					"rontolisp:" + member + " expects 1 argument, got " + (args.size() - 1));
+		}
+		LispVal signal = list(new LispSymbol(LispNames.OPERAND_TYPE_ERROR_INTERNAL), args.get(1),
+				quote(new LispSymbol(member)), quote(typeValue(OperandTypes.ASYNC_STREAM_TYPE)));
+		WasmExprCompiler.compileExpr(signal, ctx);
+	}
+
+	// A type spelled as nested lists of symbol names, as the Lisp value it spells.
+	private static LispVal typeValue(Object type) {
+		if (type instanceof List<?> elements) {
+			LispVal value = LispNil.INSTANCE;
+			for (int i = elements.size() - 1; i >= 0; i--) {
+				value = new LispCons(typeValue(java.util.Objects.requireNonNull(elements.get(i))), value);
+			}
+			return value;
+		}
+		return new LispSymbol((String) type);
+	}
+
+	private static LispVal quote(LispVal value) {
+		return list(new LispSymbol(LispNames.QUOTE), value);
+	}
+
+	private static LispVal list(LispVal... elements) {
+		LispVal list = LispNil.INSTANCE;
+		for (int i = elements.length - 1; i >= 0; i--) {
+			list = new LispCons(elements[i], list);
+		}
+		return list;
+	}
+
+	/**
 	 * Compiles {@code rontolisp:streamp} in a module where no stream value can EXIST (no
 	 * {@code %stream-new} anywhere, and no async block to produce one): the answer is nil
 	 * for every argument, so the operand is compiled for its effects and dropped. The
-	 * predicate stays total -- it is {@code stream-read}/{@code stream-close} that get a
-	 * call-time error there, because reaching one really is a bug.
+	 * predicate stays total -- it is {@code stream-read}/{@code stream-close} that signal
+	 * there ({@link #compileNoStream}).
 	 */
 	static void compileStreampConstantNil(LispCons cons, WasmLispCompiler.Ctx ctx) {
 		List<LispVal> args = cons.toList();

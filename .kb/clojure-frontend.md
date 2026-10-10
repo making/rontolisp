@@ -1672,7 +1672,10 @@ new, and the five fetch has (the JDK's on the interpreter and the JVM, `wasi:htt
   `:string` body is them decoded by `%octets-to-string-replacing`, the oracle's `slurp` of the
   body (until 2026-10-10 `read-all`'s lenient decode: a Latin-1 `héllo` read `h鬬o`, the
   oracle's `h�llo`); a first version decoding inside one more `(funcall (async-lambda ...))`
-  trapped `cast failure` on both wasm legs at the async 404 case, todo `f21` --, builds `{:status :headers :body :uri :request}` (headers a string-keyed
+  trapped `cast failure` on both wasm legs at the async 404 case because it named its helper
+  `%clojure-http-text`, the condition-text helper's name, which the deref's `ExecutionException`
+  wrap then fed a condition: `stream-read` of it trapped there, and signals now
+  ([async-await.md](async-await.md), "A value that is no stream") --, builds `{:status :headers :body :uri :request}` (headers a string-keyed
   map, a repeated field a vector in wire order) and throws `ex-info` `Exceptional status
   code: N` over it outside the oracle's unexceptional set unless `:throw false`; `exchange`
   applies `:async-then`/`:async-catch` (the latter handed `{:ex CompletionException :ex-cause

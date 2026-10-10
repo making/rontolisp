@@ -110,6 +110,16 @@ class ThreadTest {
 	}
 
 	@Test
+	void aBuiltInsTypeErrorStaysOneAcrossTheJoin() {
+		// The interpreter twin of JvmThreadTest#aBuiltInsTypeErrorStaysOneAcrossTheJoin.
+		assertThat(evalAll(evaluator(), """
+				(defvar *tj* (read-from-string "5"))
+				(handler-case (rontolisp:join-thread (rontolisp:make-thread (lambda () (car *tj*))))
+				  (type-error (c) (list :type-error (type-error-datum c) (type-error-expected-type c))))
+				""").print()).isEqualTo("(:TYPE-ERROR 5 LIST)");
+	}
+
+	@Test
 	void makeThreadBindingsAreDynamicBindingsInTheSpawnedThreadOnly() {
 		// The clack.handler shape: the spawned server thread prints through a rebound
 		// *standard-output*, while the spawner's own stream stays untouched.

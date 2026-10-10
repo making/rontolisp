@@ -113,6 +113,18 @@ final class OperandTypeException extends LispEvalException {
 	}
 
 	/**
+	 * {@link #notOfType(LispVal, LispVal, String)} of a type spelled as nested lists of
+	 * symbol names ({@link OperandTypes#ASYNC_STREAM_TYPE}).
+	 * @param datum the rejected operand
+	 * @param type the type
+	 * @param operator the operator's symbol name
+	 * @return the exception to throw
+	 */
+	static OperandTypeException notOfType(LispVal datum, java.util.List<?> type, String operator) {
+		return notOfType(datum, typeValue(type), operator);
+	}
+
+	/**
 	 * A type error whose report the built-in words itself rather than as
 	 * {@code OP: The value X is not of type T} -- {@code subseq}'s bounds report, kept
 	 * byte-identical across the backends -- carrying its datum and compound type. It is

@@ -191,7 +191,14 @@ the throwable (`JvmThrowableRecords`; `_tlMap` makes a thread's map on its first
 - **Writers.** `%error-cond` / `%signal-cond` evaluate the condition into a local, then the message,
   then `throw _condPut(new RuntimeException(message), condition)`: nothing is recorded before the
   exception exists. `_await` / `_thread_join` record the payload's condition on the awaiting thread
-  (a plain failure's: none). `_teRaw` / `_oob` / `_opTypeErr` record `{datum, type}`.
+  (a plain failure's: none). `_teRaw` / `_oob` / `_opTypeErr` record `{datum, type}`; in a class
+  with `_teTl` an async body's `run()` and a thread's `call()` put the throwable's record (or null)
+  LAST in the error payload, and `_await` / `_thread_join` record it again on the awaiting thread.
+  Until 2026-10-10 they did not: a built-in's type-error raised in an async body or a thread
+  reached the awaiting pad without its record and was synthesized as a `simple-error`, so
+  `(handler-case (await (funcall (async-lambda () (car 5)))) (type-error ...))` went uncaught on the
+  JVM alone (`AsyncStreamOperandFixture`'s `car` row, `JvmThreadTest#aBuiltInsTypeErrorStaysOneAcrossTheJoin`).
+  `_jsig`'s callback custody stays on one thread and needs no copy.
 - **A condition's message is rendered, not cast** (`JvmErrorCompiler`): the two terminals pass it
   through `_lispToDisplayString`, so a nil `:format-control` reports `NIL`, the interpreter's text.
   The cast failed the throw with a `NullPointerException`, which the one slot passed off as the
@@ -1563,6 +1570,7 @@ type T` with the type the operator requires, as a catchable `type-error` answeri
 | `(copy-list 5)` | `COPY-LIST: ... LIST` |
 | `(close 1)`, `(get-output-stream-string nil)` / `(make-string-input-stream 1)` | `CLOSE:` / `GET-OUTPUT-STREAM-STRING: ... STREAM` / `MAKE-STRING-INPUT-STREAM: ... STRING` |
 | `(get-output-stream-string (make-string-input-stream "a"))`, of `*error-output*` | `GET-OUTPUT-STREAM-STRING: ... (AND STRING-STREAM (SATISFIES OUTPUT-STREAM-P))` |
+| `(rontolisp:stream-read 1)`, `(rontolisp:stream-close nil)`, `(rontolisp:stream-write 1 "x")` | `STREAM-READ:` / `STREAM-CLOSE:` / `STREAM-WRITE: ... (SATISFIES RONTOLISP:STREAMP)` |
 
 - **`copy-list` of a non-list** (2026-09-26): used to signal a bare `type-error` whose
   `datum`/`expected-type` answered nothing on the interpreter (a raw
@@ -1624,6 +1632,24 @@ type T` with the type the operator requires, as a catchable `type-error` answeri
   itself). The text is not kept: that would defeat the slot recycling. Pinned by
   `OutputStreamStringKindFixture.CLOSED_PROGRAM` (ci-spec
   `get-output-stream-string-of-a-closed-string-output-stream`); SBCL's answer differs by design.
+- **rontolisp's asynchronous stream verbs** (2026-10-10): `stream-read`, `stream-close` and
+  `stream-write` of a value that is no such stream report under their bare names, expecting
+  `(SATISFIES RONTOLISP:STREAMP)` (`OperandTypes.ASYNC_STREAM_TYPE`): no type name designates the
+  stream (`type-of` answers `T`, `(typep s 'stream)` NIL). Funnel-typed rows last in the table; a
+  program spells them qualified, so the wasm table's placement tests `OperandTypes.spelling`.
+  Before: the interpreter's `simple-error` `STREAM-READ expects a stream, got: 1`, the JVM's
+  `stream-read expects a stream`, and a `cast failure` trap on both wasm backends (`unreachable` where
+  the folder proved the cast fails) -- the trap todo `f21` took for an async-lowering bug
+  ([async-await.md](async-await.md), "A value that is no stream"). Interpreter:
+  `Environment.requireAsyncStream`. JVM: the `_stream_*` helpers' refusal arm,
+  `_opTypeErr(_teOf(x, type), "OP", "")`. wasm, EH mode only: the stream helpers test their operand
+  (`WasmOperandTypes.emitStreamCheck`, the compound landing under the row), and a module that can
+  hold no stream compiles each call to the `%operand-type-error` (`WasmStreamCompiler.compileNoStream`;
+  it was a `simple-error` saying the module could hold none). Outside EH mode the cast still traps.
+  `stream-write`'s other refusals (`STREAM-WRITE: the stream is closed`, `...: a chunk must not be
+  nil`, `...: the stream has no write end`) are the interpreter's words on the JVM too (it wrote
+  `stream-write: ...`). Pinned by `AsyncStreamOperandFixture` (ci-spec
+  `stream-verbs-signal-a-type-error-over-a-non-stream`).
 - **`scale-float`** (measured 2026-10-06, SBCL 2.2.9): refuses a non-`FLOAT` first argument (a complex,
   an integer, a ratio, a symbol, `nil`) and then a non-`INTEGER` second one, each a `type-error` over the
   argument as given. Before, nothing checked either: the interpreter's `asDouble` answered `6.0` for `3`

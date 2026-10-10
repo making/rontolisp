@@ -21,8 +21,12 @@ Writing to a stream whose write end was closed with
 CL-USER> (let ((s (rontolisp:make-stream)))
     (rontolisp:stream-close s)
     (rontolisp:stream-write s "x"))
-stream-write: the stream is closed
+STREAM-WRITE: the stream is closed
 ```
+
+A first argument that is no stream signals a `type-error` expecting
+`(satisfies rontolisp:streamp)`, as
+[`rontolisp:stream-read`](rontolisp-stream-read.md) does.
 
 ## Backend support
 

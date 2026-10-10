@@ -21,8 +21,12 @@
 CL-USER> (let ((s (rontolisp:make-stream)))
     (rontolisp:stream-close s)
     (rontolisp:stream-write s "x"))
-stream-write: the stream is closed
+STREAM-WRITE: the stream is closed
 ```
+
+ストリームでない第 1 引数は、[`rontolisp:stream-read`](rontolisp-stream-read.md)
+と同じく `(satisfies rontolisp:streamp)` を期待する `type-error` を
+シグナルします。
 
 ## バックエンドのサポート
 

@@ -4,6 +4,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
+import am.ik.rontolisp.LispNames;
 import org.jspecify.annotations.Nullable;
 
 /**
@@ -316,9 +317,28 @@ public final class OperandTypes {
 	/**
 	 * {@code make-list}, funnel-typed: a length outside
 	 * {@code (INTEGER 0 (array-dimension-limit))} lands as a {@link #MAKE_ARRAY}
-	 * dimension does. Last in the table, after {@link #MAKE_ARRAY}.
+	 * dimension does. After {@link #MAKE_ARRAY}.
 	 */
 	public static final String MAKE_LIST = "MAKE-LIST";
+
+	/**
+	 * The verbs of rontolisp's asynchronous stream, funnel-typed:
+	 * {@code rontolisp:stream-read}, {@code stream-write} and {@code stream-close} of a
+	 * value that is no such stream land {@link #ASYNC_STREAM_TYPE}. A program spells them
+	 * package-qualified ({@link #spelling}). Last in the table, after {@link #MAKE_LIST}.
+	 */
+	private static final List<String> ASYNC_STREAM_OPERATORS = List.of(LispNames.STREAM_READ, LispNames.STREAM_WRITE,
+			LispNames.STREAM_CLOSE);
+
+	/**
+	 * The type an asynchronous stream verb requires of its stream, as nested lists of
+	 * symbol names like {@link #FILL_POINTER_VECTOR_TYPE}:
+	 * {@code (SATISFIES RONTOLISP:STREAMP)}. No type name designates rontolisp's stream
+	 * -- {@code type-of} answers {@code T} and it is no CL {@code stream} -- so the type
+	 * is its predicate's.
+	 */
+	public static final List<Object> ASYNC_STREAM_TYPE = List.of("SATISFIES",
+			LispNames.RONTOLISP_PKG + ":" + LispNames.ASYNC_STREAMP);
 
 	/**
 	 * The character comparisons, fixed-typed {@code CHARACTER}: every argument is
@@ -455,6 +475,10 @@ public final class OperandTypes {
 		order.add(MAKE_ARRAY);
 		OPERATOR_TYPES.put(MAKE_LIST, FUNNEL_TYPE);
 		order.add(MAKE_LIST);
+		for (String op : ASYNC_STREAM_OPERATORS) {
+			OPERATOR_TYPES.put(op, FUNNEL_TYPE);
+			order.add(op);
+		}
 		OPERATORS = List.copyOf(order);
 	}
 
@@ -561,6 +585,18 @@ public final class OperandTypes {
 	 */
 	public static List<String> streamOperators() {
 		return STREAM_OPERATORS;
+	}
+
+	/**
+	 * The name a program spells a named operator by: a CL operator's own, the
+	 * package-qualified one for a verb of rontolisp's asynchronous stream
+	 * ({@code RONTOLISP:STREAM-READ} for {@code STREAM-READ}), which reports under its
+	 * bare name.
+	 * @param operator the operator's reported name
+	 * @return the symbol name a program spells it by
+	 */
+	public static String spelling(String operator) {
+		return ASYNC_STREAM_OPERATORS.contains(operator) ? LispNames.RONTOLISP_PKG + ":" + operator : operator;
 	}
 
 	/**

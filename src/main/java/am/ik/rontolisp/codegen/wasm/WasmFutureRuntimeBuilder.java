@@ -259,11 +259,15 @@ final class WasmFutureRuntimeBuilder {
 	 * @param reawaitFunc {@code --report-locations}' {@code _uncaught_reawait}, which the
 	 * poll hands a rejected future and its payload before re-signalling it
 	 * ({@link WasmUncaughtLocations}), or -1 when the module notes no hops
+	 * @param streamCheck the stream helpers' operand check
+	 * ({@link WasmOperandTypes#emitStreamCheck}): a value that is no stream is the
+	 * operator's type-error; null where the module builds no type-error landing
 	 * @return the function body bytes (locals declaration included)
 	 */
 	static byte[] build(int off, int base, int futureType, int frameType, int streamType, int currentTaskGlobal,
 			@org.jspecify.annotations.Nullable Sched sched, @org.jspecify.annotations.Nullable Cb cb,
-			boolean identityHash, int spillGlobal, int reawaitFunc) {
+			boolean identityHash, int spillGlobal, int reawaitFunc,
+			WasmOperandTypes.@org.jspecify.annotations.Nullable StreamCheck streamCheck) {
 		return switch (off) {
 			case OFF_NEW -> buildNew(futureType);
 			case OFF_SETTLE -> buildSettleOrReject(base, futureType, 1);
@@ -274,8 +278,8 @@ final class WasmFutureRuntimeBuilder {
 			case OFF_SUBTASK_FUTURE ->
 				sched == null ? buildUnreachableStub() : buildSubtaskFuture(futureType, sched, identityHash);
 			case OFF_SCHED_LOOP -> sched == null ? buildSyncForce(base) : buildSchedLoop(base, futureType, sched);
-			case OFF_WSTREAM_READ -> buildWasiStreamRead(futureType, streamType, sched);
-			case OFF_WSTREAM_CLOSE -> buildWasiStreamClose(streamType);
+			case OFF_WSTREAM_READ -> buildWasiStreamRead(futureType, streamType, sched, streamCheck);
+			case OFF_WSTREAM_CLOSE -> buildWasiStreamClose(streamType, streamCheck);
 			case OFF_WAKE_LIST -> buildWakeList(base, futureType, frameType, currentTaskGlobal, cb, identityHash);
 			case OFF_SCHED_DISPATCH ->
 				sched == null ? buildUnreachableStub() : buildSchedDispatch(base, streamType, sched, identityHash);
@@ -649,7 +653,8 @@ final class WasmFutureRuntimeBuilder {
 	// whose registry entry (pushed by the read wrapper) gets the stream struct attached
 	// so the scheduler can run the close protocol if the completion turns out to be EOF.
 	private static byte[] buildWasiStreamRead(int futureType, int streamType,
-			@org.jspecify.annotations.Nullable Sched sched) {
+			@org.jspecify.annotations.Nullable Sched sched,
+			WasmOperandTypes.@org.jspecify.annotations.Nullable StreamCheck check) {
 		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		final int S = 0, CHUNK = 1, CUR = 2, REST = 3;
@@ -657,6 +662,9 @@ final class WasmFutureRuntimeBuilder {
 		w.write(1);
 		w.writeUnsignedLeb128(3);
 		w.writeRefType(true, Type.EQ.code());
+		if (check != null) {
+			WasmOperandTypes.emitStreamCheck(w, S, streamType, check.readId(), check);
+		}
 		// Drained already: a settled-nil future.
 		castStream(w, S, streamType);
 		structGet(w, streamType, 0);
@@ -730,11 +738,15 @@ final class WasmFutureRuntimeBuilder {
 	}
 
 	// _wasi_stream_close (stream) -> nil: run the close protocol once.
-	private static byte[] buildWasiStreamClose(int streamType) {
+	private static byte[] buildWasiStreamClose(int streamType,
+			WasmOperandTypes.@org.jspecify.annotations.Nullable StreamCheck check) {
 		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		final int S = 0;
 		w.write(0); // no locals
+		if (check != null) {
+			WasmOperandTypes.emitStreamCheck(w, S, streamType, check.closeId(), check);
+		}
 		castStream(w, S, streamType);
 		structGet(w, streamType, 0);
 		w.write(Instruction.I32_EQZ);

@@ -4762,6 +4762,60 @@ cases:
       1
       NIL
       1
+  - name: stream-verbs-signal-a-type-error-over-a-non-stream
+    # rontolisp:stream-read and stream-close of a value that is no stream are the
+    # operator's type-error expecting (SATISFIES RONTOLISP:STREAMP) -- in call position,
+    # inside an async body and under read-all (signalled at the await, as is any built-in's
+    # type-error raised in an async body), a condition object as the datum -- and a real
+    # stream still reads and closes. Both wasm backends trapped a cast failure, the
+    # interpreter and the JVM signalled simple-errors in two wordings, and the JVM's await
+    # read a built-in's type-error as a simple-error (AsyncStreamOperandFixture).
+    source: |
+      (defvar *aso-1* (read-from-string "1"))
+      (defvar *aso-nil* (read-from-string "nil"))
+      (defvar *aso-a* (read-from-string "a"))
+      (defvar *aso-text* (concatenate 'string "a" "b"))
+      (defvar *aso-chunks* (list 7 8))
+      (defvar *aso-closes* 0)
+      (defvar *aso-stream*
+        (rontolisp::%stream-new
+         (lambda () (let ((c (car *aso-chunks*))) (setq *aso-chunks* (cdr *aso-chunks*)) c))
+         (lambda () (setq *aso-closes* (+ *aso-closes* 1)) nil)))
+      (defun aso-probe (thunk)
+        (handler-case (funcall thunk)
+          (type-error (c) (list :type-error (type-error-datum c) (type-error-expected-type c)))
+          (error () :other-error)))
+      (defmacro aso-row (&rest forms)
+        `(print (list ,@(mapcar (lambda (f) `(aso-probe (lambda () ,f))) forms))))
+      (aso-row (rontolisp:stream-read *aso-1*) (rontolisp:stream-read *aso-nil*)
+               (rontolisp:stream-read *aso-a*) (rontolisp:stream-read *aso-text*))
+      (aso-row (rontolisp:stream-close *aso-1*) (rontolisp:stream-close *aso-nil*)
+               (rontolisp:stream-close *aso-a*) (rontolisp:stream-close *aso-text*))
+      (print (handler-case (rontolisp:await
+                            (funcall (rontolisp:async-lambda ()
+                                       (rontolisp:await (rontolisp:stream-read *aso-1*)))))
+               (type-error (c) (list :type-error (type-error-datum c) (type-error-expected-type c)))))
+      (print (handler-case (rontolisp:await (rontolisp:read-all *aso-a*))
+               (type-error (c) (list :type-error (type-error-datum c) (type-error-expected-type c)))))
+      (print (handler-case (rontolisp:await (funcall (rontolisp:async-lambda () (car *aso-1*))))
+               (type-error (c) (list :type-error (type-error-datum c) (type-error-expected-type c)))))
+      (print (handler-case (rontolisp:stream-read (make-condition 'simple-error :format-control "x"))
+               (type-error (c) (list (type-of (type-error-datum c)) (type-error-expected-type c)))))
+      (print (rontolisp:await (rontolisp:stream-read *aso-stream*)))
+      (print (list (rontolisp:stream-close *aso-stream*) *aso-closes*))
+      (print (handler-case (rontolisp:stream-read *aso-1*) (type-error (c) (princ-to-string c))))
+      (print (handler-case (rontolisp:stream-close *aso-nil*) (type-error (c) (princ-to-string c))))
+    expected: |
+      ((:TYPE-ERROR 1 (SATISFIES RONTOLISP:STREAMP)) (:TYPE-ERROR NIL (SATISFIES RONTOLISP:STREAMP)) (:TYPE-ERROR A (SATISFIES RONTOLISP:STREAMP)) (:TYPE-ERROR "ab" (SATISFIES RONTOLISP:STREAMP)))
+      ((:TYPE-ERROR 1 (SATISFIES RONTOLISP:STREAMP)) (:TYPE-ERROR NIL (SATISFIES RONTOLISP:STREAMP)) (:TYPE-ERROR A (SATISFIES RONTOLISP:STREAMP)) (:TYPE-ERROR "ab" (SATISFIES RONTOLISP:STREAMP)))
+      (:TYPE-ERROR 1 (SATISFIES RONTOLISP:STREAMP))
+      (:TYPE-ERROR A (SATISFIES RONTOLISP:STREAMP))
+      (:TYPE-ERROR 1 LIST)
+      (SIMPLE-ERROR (SATISFIES RONTOLISP:STREAMP))
+      7
+      (NIL 1)
+      "STREAM-READ: The value 1 is not of type (SATISFIES RONTOLISP:STREAMP)"
+      "STREAM-CLOSE: The value NIL is not of type (SATISFIES RONTOLISP:STREAMP)"
   - name: async-wrapper-macro-expands-to-async-defun-and-lambda
     source: |
       (rontolisp:async (defun ci-async-wrap-add (a b) (+ a b)))

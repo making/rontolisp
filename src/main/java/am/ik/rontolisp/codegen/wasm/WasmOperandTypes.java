@@ -187,7 +187,7 @@ final class WasmOperandTypes {
 			java.util.Set<String> wanted = new java.util.LinkedHashSet<>(
 					java.util.List.of("+", "-", "*", "/", "=", "<", ">", "<=", ">="));
 			for (String op : OperandTypes.operators()) {
-				if (spelled.test(op)) {
+				if (spelled.test(OperandTypes.spelling(op))) {
 					wanted.add(op);
 				}
 			}
@@ -402,8 +402,9 @@ final class WasmOperandTypes {
 	 * ({@link #buildCompoundLandingBody})
 	 * @param compoundNames the symbols the compound types spell
 	 * ({@link OperandTypes#FILL_POINTER_VECTOR_TYPE},
-	 * {@link OperandTypes#fillPointerType}), by name: the entries a quoted
-	 * {@code 'vector} shares, as {@code typeNames}
+	 * {@link OperandTypes#fillPointerType}, and {@link OperandTypes#ASYNC_STREAM_TYPE} in
+	 * a module carrying a stream helper), by name: the entries a quoted {@code 'vector}
+	 * shares, as {@code typeNames}
 	 */
 	record Texts(WasmLispCompiler.StringTable.StringEntry valuePrefix,
 			java.util.List<WasmLispCompiler.StringTable.StringEntry> suffixes,
@@ -415,14 +416,21 @@ final class WasmOperandTypes {
 		 * Interns the texts.
 		 * @param table the module's string table
 		 * @param typeError whether the landings build a {@code type-error}
+		 * @param asyncStreams whether the module carries a stream helper, whose operand
+		 * check builds {@link OperandTypes#ASYNC_STREAM_TYPE} ({@link #emitStreamCheck})
 		 * @return the texts
 		 */
-		static Texts intern(WasmLispCompiler.StringTable table, boolean typeError) {
+		static Texts intern(WasmLispCompiler.StringTable table, boolean typeError, boolean asyncStreams) {
 			java.util.Map<String, WasmLispCompiler.StringTable.StringEntry> compoundNames = new java.util.TreeMap<>();
 			for (String name : compoundSymbols(OperandTypes.FILL_POINTER_VECTOR_TYPE, new java.util.ArrayList<>())) {
 				compoundNames.put(name, table.addBodyString(name));
 			}
 			compoundNames.put(OperandTypes.INTEGER_TYPE, table.addBodyString(OperandTypes.INTEGER_TYPE));
+			if (asyncStreams) {
+				for (String name : compoundSymbols(OperandTypes.ASYNC_STREAM_TYPE, new java.util.ArrayList<>())) {
+					compoundNames.computeIfAbsent(name, table::addBodyString);
+				}
+			}
 			return new Texts(table.addBodyString("\"" + OperandTypes.VALUE_PREFIX + "\""),
 					TYPES.stream()
 						.map(type -> table.addBodyString("\"" + OperandTypes.TYPE_INFIX + type + "\""))
@@ -868,6 +876,51 @@ final class WasmOperandTypes {
 		w.write(Instruction.UNREACHABLE);
 		w.write(Instruction.END);
 		return body.toByteArray();
+	}
+
+	/**
+	 * What the stream helpers' operand check ({@link #emitStreamCheck}) needs, in an
+	 * EH-mode module: the operator register, the rows of {@code STREAM-READ} and
+	 * {@code STREAM-CLOSE} (0 where the table has none: an unnamed report), and the texts
+	 * the compound type is built from.
+	 *
+	 * @param operatorGlobal the operator register
+	 * @param readId {@code STREAM-READ}'s row
+	 * @param closeId {@code STREAM-CLOSE}'s row
+	 * @param texts the interned texts, {@link OperandTypes#ASYNC_STREAM_TYPE}'s names
+	 * among them
+	 * @param identityHash whether a cons carries the identity-hash field
+	 */
+	record StreamCheck(int operatorGlobal, int readId, int closeId, Texts texts, boolean identityHash) {
+	}
+
+	/**
+	 * Emits a stream helper's operand check at its entry: the operand in local
+	 * {@code slot} passes when it is a {@code streamType} struct, and anything else --
+	 * nil included -- is the type-error of the operator row {@code id} expecting
+	 * {@code (SATISFIES RONTOLISP:STREAMP)}, through the compound landing
+	 * ({@link #buildCompoundLandingBody}). Without it the helper's cast of the operand
+	 * trapped, which no handler can catch. EH mode only: a module outside it keeps the
+	 * trapping cast and its bytes.
+	 * @param w the writer
+	 * @param slot the local holding the operand
+	 * @param streamType the stream struct's type index
+	 * @param id the operator's row
+	 * @param check the check's wiring
+	 */
+	static void emitStreamCheck(WasmWriter w, int slot, int streamType, int id, StreamCheck check) {
+		w.write(Instruction.BLOCK, WasmLispCompiler.BLOCKTYPE_EMPTY);
+		getLocal(w, slot);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		w.writeHeapType(streamType);
+		w.write(Instruction.BR_IF);
+		w.writeUnsignedLeb128(0);
+		setRegister(w, check.operatorGlobal(), id);
+		getLocal(w, slot);
+		check.texts().emitType(w, OperandTypes.ASYNC_STREAM_TYPE, check.identityHash());
+		call(w, WasmLispCompiler.FUNC_TYPE_ERR_OF);
+		w.write(Instruction.UNREACHABLE);
+		w.write(Instruction.END);
 	}
 
 	private static void i31Get(WasmWriter w) {

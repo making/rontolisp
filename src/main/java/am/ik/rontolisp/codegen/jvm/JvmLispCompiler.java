@@ -3895,7 +3895,7 @@ public final class JvmLispCompiler implements LispCompiler {
 					stringConcat, sizedMain != null ? sizedMain.runRef() : null, mainCtx.mvChannel,
 					recordsAsyncBoundaries ? cp.methodRef(thisClass, JvmUncaughtHandler.ASYNC_AWAITED_METHOD,
 							JvmUncaughtHandler.ASYNC_AWAITED_DESC) : null,
-					programUsesSymbol(program, LispNames.FUTURE_SETTLED_QUALIFIED));
+					programUsesSymbol(program, LispNames.FUTURE_SETTLED_QUALIFIED), teTlField);
 			runnableClass = cp.classEntry("java/lang/Runnable");
 		}
 		else {
@@ -3925,7 +3925,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			curThreadTlFieldRef = cp.fieldRef(thisClass, curThreadTlFieldName, curThreadTlFieldDesc);
 			threadRuntimeBodies = JvmThreadRuntimeBuilder.build(cp, thisClass, objectClass, objectArrayClass,
 					stringClass, mainCtx.conditionChannel, progInitForThread, stringConcat,
-					java.util.Objects.requireNonNull(dynVarRuntime), curThreadTlFieldRef);
+					java.util.Objects.requireNonNull(dynVarRuntime), curThreadTlFieldRef, teTlField);
 			callableClass = cp.classEntry("java/util/concurrent/Callable");
 		}
 		else {

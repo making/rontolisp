@@ -4632,8 +4632,8 @@ public final class WasmLispCompiler implements LispCompiler {
 		// any body compiles -- because the landing bodies are built after the data
 		// segment's content is fixed. EH mode only: outside it all three bodies are a
 		// bare `unreachable` that cites no bytes.
-		WasmOperandTypes.Texts operandTexts = ehMode
-				? WasmOperandTypes.Texts.intern(stringTable, operandTypeErrorPossible) : null;
+		WasmOperandTypes.Texts operandTexts = ehMode ? WasmOperandTypes.Texts.intern(stringTable,
+				operandTypeErrorPossible, this.asyncMode || this.usesP1Streams) : null;
 		// A program that can resolve ANY name at run time (eval, read, a runtime load,
 		// --dynamic) can reach any built-in through it.
 		boolean resolvesAnyName = this.dynamic || usesEval || anyNameResolvable(program, usesRead, usesLoad);
@@ -8976,20 +8976,29 @@ public final class WasmLispCompiler implements LispCompiler {
 						code.addFunction(WasmLinalgSimdRuntimeBuilder.build(i, FUNC_VEC_BASE));
 					}
 				}
+				// The stream helpers' operand check, EH mode only: a value that is no
+				// stream is the operator's type-error, where the cast of it trapped.
+				WasmOperandTypes.StreamCheck streamCheck = operandTexts != null && operandOpGlobalIndex >= 0
+						&& (this.asyncMode || this.usesP1Streams)
+								? new WasmOperandTypes.StreamCheck(operandOpGlobalIndex,
+										operandOperators.ids().getOrDefault(LispNames.STREAM_READ, 0),
+										operandOperators.ids().getOrDefault(LispNames.STREAM_CLOSE, 0), operandTexts,
+										this.usesIdentityHashTables)
+								: null;
 				// Async future runtime bodies (asyncMode only), in asyncFuncBase() order.
 				if (this.asyncMode) {
 					for (int i = 0; i < WasmFutureRuntimeBuilder.FUNC_COUNT; i++) {
 						code.addFunction(WasmFutureRuntimeBuilder.build(i, asyncFuncBase(), asyncTypeBase(),
 								asyncTypeBase() + 1, asyncTypeBase() + 2, currentTaskGlobalIndex, sched, cb,
 								this.usesIdentityHashTables, globalIndices.getOrDefault(LispNames.MV_SPILL, -1),
-								uncaughtLocations != null ? uncaughtLocations.reawaitFuncIndex() : -1));
+								uncaughtLocations != null ? uncaughtLocations.reawaitFuncIndex() : -1, streamCheck));
 					}
 				}
 				// The degenerate tier's stream runtime bodies, in p1StreamFuncBase()
 				// order.
 				if (this.usesP1Streams) {
 					for (int i = 0; i < WasmP1StreamRuntimeBuilder.FUNC_COUNT; i++) {
-						code.addFunction(WasmP1StreamRuntimeBuilder.build(i, p1StreamTypeBase()));
+						code.addFunction(WasmP1StreamRuntimeBuilder.build(i, p1StreamTypeBase(), streamCheck));
 					}
 				}
 				// The EXTRA per-arity dispatcher bodies, in extraDispatchFuncBase()

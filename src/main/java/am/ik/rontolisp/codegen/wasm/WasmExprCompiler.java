@@ -772,14 +772,12 @@ final class WasmExprCompiler {
 						WasmStreamCompiler.compileStreampConstantNil(cons, ctx);
 						return;
 					}
-					// ... but reading or closing one really is a bug to report. The SITE
-					// may still be dead code (the clack-handler-rontolisp bridge drains a
+					// ... and every argument of a read or a close is a non-stream: the
+					// operator's type-error, as on every other backend. The SITE may
+					// still be dead code (the clack-handler-rontolisp bridge drains a
 					// request body it can never receive on Preview 1), so it signals at
 					// CALL time and never rejects the program (the socket policy).
-					WasmExprCompiler.compileExpr(LispMacroExpander.callTimeUnsupportedStub("rontolisp:" + qn.member()
-							+ " requires a stream value, and this module can hold none (they come from"
-							+ " rontolisp:fetch / rontolisp:http-handler bodies on an asynchronous --component"
-							+ " program, and from rontolisp::%stream-new elsewhere)"), ctx);
+					WasmStreamCompiler.compileNoStream(qn.member(), cons, ctx);
 					return;
 				}
 				if (LispNames.MAKE_STREAM.equals(qn.member()) || LispNames.STREAM_WRITE.equals(qn.member())) {

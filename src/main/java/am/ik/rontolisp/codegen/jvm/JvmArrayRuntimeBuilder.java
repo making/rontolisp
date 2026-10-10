@@ -3587,7 +3587,7 @@ final class JvmArrayRuntimeBuilder {
 	// Pushes a type spelled as nested lists of symbol names and Longs
 	// (OperandTypes.FILL_POINTER_VECTOR_TYPE) as the Lisp value it spells: a String is a
 	// symbol, a list a chain of Object[2] conses.
-	private static void emitTypeValue(MethodCode a, ConstantPool cp, ClassEntry objectClass, MethodRefEntry longValueOf,
+	static void emitTypeValue(MethodCode a, ConstantPool cp, ClassEntry objectClass, MethodRefEntry longValueOf,
 			Object type) {
 		if (type instanceof List<?> list) {
 			List<Runnable> elements = new java.util.ArrayList<>();

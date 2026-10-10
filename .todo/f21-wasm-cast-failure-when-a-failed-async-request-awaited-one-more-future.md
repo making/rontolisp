@@ -42,8 +42,15 @@ signalled in the async body, `deref`'s `ExecutionException` re-signal (`%clojure
 
 ## Plan
 
-1. Reduce the program to a Common Lisp one that traps (add the condition object, then a
-   `handler-case` re-signal around the force, one at a time), and pin it in
-   `WasmLispCompilerIntegrationTest` on both wasm legs.
-2. Find the cast in the async lowering (`.kb/async-await.md`; the landing pads of a resumed
-   frame, `.kb/wasm-landing-pad-refresh.md`, are where a stale reference was last met).
+Rewritten 2026-10-10: the premise did not hold. `clojure.lisp` already defines
+`%clojure-http-text (c)`, the condition text `%clojure-future-get` puts in its
+`ExecutionException`; the variant's second definition replaced it, so the deref fed the `ex-info`
+condition to the body decoder, and `stream-read` of a condition trapped on both wasm legs where
+the interpreter and the JVM signalled. The same variant under a fresh name answers on all four.
+Numbers and the story: `.kb/async-await.md`, "A value that is no stream".
+
+1. `stream-read` / `stream-close` / `stream-write` of a non-stream: the operator's `type-error`
+   expecting `(SATISFIES RONTOLISP:STREAMP)` on all four backends (wasm-GC in EH mode), pinned by
+   a shared fixture and a ci-spec case.
+2. The JVM's await and thread join lost a built-in type-error's datum and type on the way to the
+   awaiting thread (a `simple-error` there): carry the record in the error payload.

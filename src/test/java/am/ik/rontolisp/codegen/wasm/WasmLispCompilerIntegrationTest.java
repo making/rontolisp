@@ -14,6 +14,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.stream.Stream;
 
+import am.ik.rontolisp.AsyncStreamOperandFixture;
 import am.ik.rontolisp.FastPathEvaluationOrderFixture;
 import am.ik.rontolisp.CharacterFilePositionFixture;
 import am.ik.rontolisp.HelperWrapperFixture;
@@ -20310,17 +20311,31 @@ class WasmLispCompilerIntegrationTest {
 		assertThatThrownBy(() -> compileAndRun("(print (rontolisp:make-stream))"))
 			.hasMessageContaining("guest-created streams are not available on the WASM backends yet");
 		// A module that never names %stream-new can hold no stream value at all, so
-		// stream-read/stream-close compile to CALL-time error stubs (the
-		// clack-handler-rontolisp bridge carries a body drain that is dead code there):
-		// the message is handler-case-catchable, and an uncaught one is the usual silent
-		// trap. streamp is NOT one of them -- nothing being a stream is an answer, not a
-		// failure, so it is the constant nil.
+		// every argument of stream-read/stream-close is a non-stream: their type-error,
+		// signalled at CALL time (the clack-handler-rontolisp bridge carries a body
+		// drain that is dead code there), handler-case-catchable; uncaught outside EH
+		// mode it is the usual silent trap. streamp is NOT one of them -- nothing being
+		// a stream is an answer, not a failure, so it is the constant nil.
 		assertThat(compileAndRun("(print (handler-case (rontolisp:stream-read 1) (error (e) (princ-to-string e))))"))
-			.contains("requires a stream value, and this module can hold none");
+			.contains("STREAM-READ: The value 1 is not of type (SATISFIES RONTOLISP:STREAMP)");
 		assertThat(compileAndRun("(print (rontolisp:streamp 1)) (print (rontolisp:streamp \"x\"))"))
 			.isEqualTo("NIL\nNIL");
 		assertThatThrownBy(() -> compileAndRun("(defun bad () (rontolisp:await 1))"))
 			.hasMessageContaining("only allowed inside");
+	}
+
+	@Test
+	void streamVerbsSignalATypeErrorOverANonStream() throws Exception {
+		// The wasm twin of AsyncEvalTest#streamVerbsSignalATypeErrorOverANonStream,
+		// Preview 1 and the component: the stream helpers test their operand and land
+		// the operator's type-error (they cast it, a cast-failure trap no handler could
+		// catch), and a module that can hold no stream signals the same at the call.
+		for (boolean component : new boolean[] { false, true }) {
+			assertThat(compileAndRunFrontEndWithDir(AsyncStreamOperandFixture.PROGRAM, component))
+				.isEqualTo(AsyncStreamOperandFixture.EXPECTED);
+			assertThat(compileAndRunFrontEndWithDir(AsyncStreamOperandFixture.NO_STREAM_PROGRAM, component))
+				.isEqualTo(AsyncStreamOperandFixture.NO_STREAM_EXPECTED);
+		}
 	}
 
 	@Test

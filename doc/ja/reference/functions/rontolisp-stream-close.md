@@ -16,6 +16,10 @@
   (rontolisp:stream-close s))   ; => NIL
 ```
 
+ストリームでない引数は、[`rontolisp:stream-read`](rontolisp-stream-read.md)
+と同じく `(satisfies rontolisp:streamp)` を期待する `type-error` を
+シグナルします。
+
 ## バックエンドのサポート
 
 非同期ストリームはインタプリタ、JVM バックエンド、そして — `rontolisp:fetch` /
@@ -23,5 +27,5 @@
 については — `--component` WASM バックエンドに存在します。Preview 1 WASM
 モジュールがストリーム値を持てるのは、ホスト由来のボディが与えた場合だけです。
 ストリームが存在しえないモジュールでは `rontolisp:streamp` は `nil` を返し、
-`rontolisp:stream-read` / `rontolisp:stream-close` は呼び出し時にエラーを
-シグナルします。
+`rontolisp:stream-read` / `rontolisp:stream-close` は呼び出し時にその
+`type-error` をシグナルします。

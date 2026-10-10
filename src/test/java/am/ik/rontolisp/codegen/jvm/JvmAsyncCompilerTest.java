@@ -9,6 +9,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 
+import am.ik.rontolisp.AsyncStreamOperandFixture;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.eval.LispPreludeLibrary;
 import am.ik.rontolisp.reader.LispReader;
@@ -31,7 +32,17 @@ class JvmAsyncCompilerTest {
 
 	private String compileAndRun(String lispCode) throws Exception {
 		// mirror the CLI pipeline's prelude splice so rontolisp:read-all resolves
-		List<LispVal> program = LispPreludeLibrary.process(LispReader.readAllFromString(lispCode));
+		return compileAndRunProgram(LispPreludeLibrary.process(LispReader.readAllFromString(lispCode)));
+	}
+
+	// A program that defines its own macros: the user-macro pass first, as the CLI runs
+	// it.
+	private String compileAndRunExpanded(String lispCode) throws Exception {
+		return compileAndRunProgram(LispPreludeLibrary
+			.process(am.ik.rontolisp.eval.UserMacroExpander.expand(LispReader.readAllFromString(lispCode))));
+	}
+
+	private String compileAndRunProgram(List<LispVal> program) throws Exception {
 		JvmLispCompiler compiler = new JvmLispCompiler("Test");
 		byte[] classBytes = compiler.compile(program);
 		Path classFile = this.tempDir.resolve("Test.class");
@@ -209,6 +220,19 @@ class JvmAsyncCompilerTest {
 				(rontolisp:stream-close *s*)
 				(print *closes*)
 				""")).isEqualTo("T\nNIL\n#<STREAM>\n\"abcd\"\n1\nNIL\n1");
+	}
+
+	@Test
+	void streamVerbsSignalATypeErrorOverANonStream() throws Exception {
+		// The compiled twin of AsyncEvalTest#streamVerbsSignalATypeErrorOverANonStream:
+		// the runtime's stream helpers throw the operator's type-error, which crosses an
+		// await like any condition.
+		assertThat(compileAndRunExpanded(AsyncStreamOperandFixture.PROGRAM))
+			.isEqualTo(AsyncStreamOperandFixture.EXPECTED);
+		assertThat(compileAndRunExpanded(AsyncStreamOperandFixture.NO_STREAM_PROGRAM))
+			.isEqualTo(AsyncStreamOperandFixture.NO_STREAM_EXPECTED);
+		assertThat(compileAndRunExpanded(AsyncStreamOperandFixture.WRITE_PROGRAM))
+			.isEqualTo(AsyncStreamOperandFixture.WRITE_EXPECTED);
 	}
 
 	@Test

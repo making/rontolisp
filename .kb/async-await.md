@@ -151,7 +151,9 @@ keeps the compile error; `--no-gc` the rejection.
 `read-all`), one definition for every backend, each `funcall`ing an `async-lambda` over `await` +
 `handler-case`/`unwind-protect`, so the WASM EH-mode gate flips automatically. Their names go at the
 FRONT of `NoGcWasmCompiler`'s list so the diagnostic points at `rontolisp:then`. Preview 1 supports
-only the success half. A non-future first argument is a `type-error` everywhere.
+only the success half. A non-future first argument is a `simple-error` (`rontolisp:THEN expects a
+future as its first argument`) on all four backends, measured 2026-10-10 -- not the `type-error`
+the async guide promises (todo `f29`).
 
 ## `%stream-new`, the four-backend pull stream
 `rontolisp::%stream-new` (internal) is the ONE producer of a first-class PULL stream: read thunk,
@@ -173,6 +175,31 @@ tiers (`WasmStreamCompiler` picks the tier, `WasmFutureInternalCompiler` builds 
   would have used, which cannot coexist -- so no index moves and a stream-free module is
   byte-identical. A module that can hold NO stream keeps the call-time error stub, but `streamp`
   there is the CONSTANT NIL rather than an error.
+
+## A value that is no stream
+**Invariant (2026-10-10): `stream-read`, `stream-close` and `stream-write` of a value that is no
+stream signal the operator's `type-error` expecting `(SATISFIES RONTOLISP:STREAMP)` on all four
+backends (wasm-GC: in EH mode; outside it the helpers' cast traps)** -- in call position, inside an
+async body (at the await, like any error there) and under `read-all`. Where each backend checks:
+[error-handling.md](error-handling.md), "A wrong-type argument names its operator" (the asynchronous
+stream verbs' bullet). Pinned by
+`AsyncStreamOperandFixture` (`AsyncEvalTest`/`JvmAsyncCompilerTest`/`WasmLispCompilerIntegrationTest`
+`streamVerbsSignalATypeErrorOverANonStream`, ci-spec
+`stream-verbs-signal-a-type-error-over-a-non-stream`). As function values (`#'rontolisp:stream-read`)
+they exist on the interpreter only (todo `f30`).
+
+Found through todo `f21` (measured 2026-10-10, wasmtime 49.0.0). Its premise -- both wasm legs trap
+`cast failure` when the Clojure client's async 404 decodes its `:string` body inside one more
+`(funcall (async-lambda ...))` -- was no async-lowering bug. The variant defined
+`rontolisp::%clojure-http-text (body)`, a name `clojure.lisp` already gives the condition-text
+helper `%clojure-future-get`'s `ExecutionException` wrap calls; the later definition won, so the
+deref handed the `ex-info` condition to the body decoder, and `stream-read` of a condition was a
+trap on wasm (the `ref.cast` at `_p1_stream_read` / `_wasi_stream_read`'s entry) where the
+interpreter and the JVM signalled inside an async body whose failed future nobody awaited. The same
+variant under a fresh name prints `[:execution 404]` on all four legs, and so does the colliding one
+now that the read signals. On the way, the JVM's await turned a built-in's type-error raised in an
+async body into a `simple-error` (its `{datum, type}` record stayed on the body's thread;
+[error-handling.md](error-handling.md), "The JVM keeps what a throwable carries").
 
 ## `read-all` is prelude Lisp
 An `async-defun` in `LispPreludeLibrary` -- **compiler tests that use it must mirror the CLI's
@@ -241,11 +268,12 @@ drained via `rontolisp::%http-drain`, not read-all.
 ## Tests
 `AsyncEvalTest` / `JvmAsyncCompilerTest` pairs (`thenChainsOnFutureSettledValue`,
 `streamNewBuildsAPullStreamOverAPairOfThunks` and its async-thunk / no-write-end edges,
-`octetsDecodeNativelyWhetherOrNotTheBytesAreUtf8`);
+`octetsDecodeNativelyWhetherOrNotTheBytesAreUtf8`, `streamVerbsSignalATypeErrorOverANonStream`);
 `WasmLispCompilerIntegrationTest` `p1Then*` / `componentThen*` / `componentCatch*` /
-`componentFinally*` / `preview1HasAFirstClassStreamValueOverAPairOfThunks`;
+`componentFinally*` / `preview1HasAFirstClassStreamValueOverAPairOfThunks` /
+`streamVerbsSignalATypeErrorOverANonStream`;
 `WasmLispCompilerTest.theP1StreamBlockRidesOnlyAStreamCreatingModule`;
 `NoGcWasmCompilerTest.asyncAwaitSurfaceIsRejected`; `LispPreludeLibraryTest`;
 `WasmHostStreamE2eTest`; ci-spec `future-as-value-combinators-then-catch-finally`,
-`stream-new-builds-a-pull-stream-on-every-backend`, `read-all-passes-a-string-through`,
-`read-all-decodes-an-octet-chunk-stream`.
+`stream-new-builds-a-pull-stream-on-every-backend`, `stream-verbs-signal-a-type-error-over-a-non-stream`,
+`read-all-passes-a-string-through`, `read-all-decodes-an-octet-chunk-stream`.

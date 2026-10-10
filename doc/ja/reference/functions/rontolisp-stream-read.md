@@ -31,6 +31,15 @@ NIL
 残りのチャンクを 1 回の await で 1 つの文字列に読み切るには
 [`rontolisp:read-all`](rontolisp-read-all.md) を使ってください。
 
+ストリームでない引数は `type-error` をシグナルします。datum はその引数、
+expected-type は `(satisfies rontolisp:streamp)` です:
+
+```lisp
+(handler-case (rontolisp:stream-read 1)
+  (type-error (c) (princ-to-string c)))
+; => "STREAM-READ: The value 1 is not of type (SATISFIES RONTOLISP:STREAMP)"
+```
+
 ## バックエンドのサポート
 
 非同期ストリームはインタプリタ、JVM バックエンド、そして — `rontolisp:fetch` /
@@ -38,5 +47,5 @@ NIL
 については — `--component` WASM バックエンドに存在します。Preview 1 WASM
 モジュールがストリーム値を持てるのは、ホスト由来のボディが与えた場合だけです。
 ストリームが存在しえないモジュールでは `rontolisp:streamp` は `nil` を返し、
-`rontolisp:stream-read` / `rontolisp:stream-close` は呼び出し時にエラーを
-シグナルします。
+`rontolisp:stream-read` / `rontolisp:stream-close` は呼び出し時にその
+`type-error` をシグナルします。

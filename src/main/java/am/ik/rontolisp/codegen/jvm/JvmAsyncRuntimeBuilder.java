@@ -12,6 +12,8 @@ import java.util.List;
 
 import am.ik.jvm.ConstantPool;
 import am.ik.jvm.MethodCode;
+import am.ik.rontolisp.LispNames;
+import am.ik.rontolisp.compiler.OperandTypes;
 import am.ik.rontolisp.runtime.RontoFetch;
 
 import org.jspecify.annotations.Nullable;
@@ -205,13 +207,19 @@ final class JvmAsyncRuntimeBuilder {
 	 * @param futureSettled whether the program names
 	 * {@code rontolisp::%future-settled-p}, whose {@code _future_settled} is emitted only
 	 * then
+	 * @param teTl the thread-local record of a wrong-type operand's datum and type
+	 * ({@link JvmOperandTypeRuntime}), or null when no landing pad reads one: an error
+	 * payload carries the record of its throwable, made on the body's thread, and
+	 * {@code _await} records it again on the awaiting one, so a built-in's type-error
+	 * stays one across the await
 	 * @return the runtime bodies
 	 */
 	static AsyncRuntime build(ConstantPool cp, ClassEntry thisClass, ClassEntry objectClass,
 			ClassEntry objectArrayClass, ClassEntry stringClass, JvmLispCompiler.ConditionChannel channel,
 			MethodRefEntry instanceInitRef, MethodRefEntry longValueOf, MethodRefEntry stringLength,
 			MethodRefEntry stringSubstring, MethodRefEntry stringConcat, @Nullable MethodRefEntry launcherRun,
-			@Nullable JvmMvChannel mvChannel, @Nullable MethodRefEntry asyncAwaited, boolean futureSettled) {
+			@Nullable JvmMvChannel mvChannel, @Nullable MethodRefEntry asyncAwaited, boolean futureSettled,
+			@Nullable FieldRefEntry teTl) {
 		// --- shared class/method references ---
 		ClassEntry futureClass = cp.classEntry("java/util/concurrent/CompletableFuture");
 		MethodRefEntry futureCtor = cp.methodRef(futureClass, "<init>", "()V");
@@ -250,8 +258,12 @@ final class JvmAsyncRuntimeBuilder {
 		ClassEntry throwableClass = cp.classEntry("java/lang/Throwable");
 		// An async body's error payload carries its trace when the uncaught report
 		// records
-		// the boundary in it (asyncAwaited): {EMARKER, t, cond, trace}.
-		int errorPayloadLength = asyncAwaited != null ? 4 : 3;
+		// the boundary in it (asyncAwaited): {EMARKER, t, cond, trace}. A wrong-type
+		// operand's record ({datum, type}) is per thread like the condition, so it rides
+		// last when a pad can read one: {EMARKER, t, cond[, trace], record}.
+		int errorPayloadLength = (asyncAwaited != null ? 4 : 3) + (teTl != null ? 1 : 0);
+		int teRecordIndex = errorPayloadLength - 1;
+		@Nullable MethodRefEntry tlMap = teTl != null ? JvmThrowableRecords.tlMap(cp, thisClass) : null;
 		@Nullable MethodRefEntry throwableGetStackTrace = asyncAwaited != null
 				? cp.methodRef(throwableClass, "getStackTrace", "()[Ljava/lang/StackTraceElement;") : null;
 		@Nullable ClassEntry stackTraceArrayClass = asyncAwaited != null ? cp.classEntry("[Ljava/lang/StackTraceElement;") : null;
@@ -439,6 +451,16 @@ final class JvmAsyncRuntimeBuilder {
 				a.invokevirtual(throwableGetStackTrace);
 				a.aastore();
 			}
+			if (teTl != null) {
+				// t's wrong-type record on this thread, or null
+				a.dup();
+				a.loadConstant(teRecordIndex);
+				a.getstatic(teTl);
+				a.invokestatic(java.util.Objects.requireNonNull(tlMap));
+				a.aload(1);
+				a.invokevirtual(JvmThrowableRecords.mapGet(cp));
+				a.aastore();
+			}
 			// [future, payload]
 			a.invokevirtual(futureComplete);
 			a.pop();
@@ -556,6 +578,26 @@ final class JvmAsyncRuntimeBuilder {
 			a.loadConstant(2);
 			a.aaload();
 			a.invokestatic(condPut);
+			if (teTl != null) {
+				// t's wrong-type record, made on the body's thread, recorded HERE too,
+				// so a pad reads the built-in's type-error as one (slot 5 = the record)
+				MethodCode.Label noRecord = a.newLabel();
+				a.aload(4);
+				a.checkcast(objectArrayClass);
+				a.loadConstant(teRecordIndex);
+				a.aaload();
+				a.astore(5);
+				a.aload(5);
+				a.ifnull(noRecord);
+				a.dup();
+				a.getstatic(teTl);
+				a.invokestatic(java.util.Objects.requireNonNull(tlMap));
+				a.swap();
+				a.aload(5);
+				a.invokevirtual(JvmThrowableRecords.mapPut(cp));
+				a.pop();
+				a.labelBinding(noRecord);
+			}
 			if (asyncAwaited != null) {
 				// The uncaught report's hop: this await completes the boundary the body's
 				// thunk recorded in the trace, put back as stored (JvmUncaughtHandler).
@@ -803,7 +845,7 @@ final class JvmAsyncRuntimeBuilder {
 			a.invokestatic(futureCompleted);
 			a.areturn();
 			a.labelBinding(bad);
-			emitThrow(a, cp, runtimeExceptionClass, runtimeExceptionInit, "stream-read expects a stream");
+			emitNotAStream(a, cp, thisClass, objectClass, longValueOf, LispNames.STREAM_READ);
 			methods.add(new AsyncMethod(cp.utf8Entry(STREAM_READ_METHOD), cp.utf8Entry(UNARY_DESC), a));
 		}
 
@@ -846,13 +888,17 @@ final class JvmAsyncRuntimeBuilder {
 			a.invokestatic(futureCompleted);
 			a.areturn();
 			a.labelBinding(bad);
-			emitThrow(a, cp, runtimeExceptionClass, runtimeExceptionInit, "stream-write expects a stream");
+			emitNotAStream(a, cp, thisClass, objectClass, longValueOf, LispNames.STREAM_WRITE);
+			// The other refusals in the interpreter's words: one text on both backends.
 			a.labelBinding(nilChunk);
-			emitThrow(a, cp, runtimeExceptionClass, runtimeExceptionInit, "stream-write: a chunk must not be nil");
+			emitThrow(a, cp, runtimeExceptionClass, runtimeExceptionInit,
+					LispNames.STREAM_WRITE + ": a chunk must not be nil");
 			a.labelBinding(closed);
-			emitThrow(a, cp, runtimeExceptionClass, runtimeExceptionInit, "stream-write: the stream is closed");
+			emitThrow(a, cp, runtimeExceptionClass, runtimeExceptionInit,
+					LispNames.STREAM_WRITE + ": the stream is closed");
 			a.labelBinding(noWriteEnd);
-			emitThrow(a, cp, runtimeExceptionClass, runtimeExceptionInit, "stream-write: the stream has no write end");
+			emitThrow(a, cp, runtimeExceptionClass, runtimeExceptionInit,
+					LispNames.STREAM_WRITE + ": the stream has no write end");
 			methods.add(new AsyncMethod(cp.utf8Entry(STREAM_WRITE_METHOD), cp.utf8Entry(STREAM_WRITE_DESC), a));
 		}
 
@@ -899,7 +945,7 @@ final class JvmAsyncRuntimeBuilder {
 			a.aconst_null();
 			a.areturn();
 			a.labelBinding(bad);
-			emitThrow(a, cp, runtimeExceptionClass, runtimeExceptionInit, "stream-close expects a stream");
+			emitNotAStream(a, cp, thisClass, objectClass, longValueOf, LispNames.STREAM_CLOSE);
 			methods.add(new AsyncMethod(cp.utf8Entry(STREAM_CLOSE_METHOD), cp.utf8Entry(UNARY_DESC), a));
 		}
 
@@ -1470,6 +1516,26 @@ final class JvmAsyncRuntimeBuilder {
 		a.aaload();
 		a.ldc(marker);
 		a.if_acmpne(noLabel);
+	}
+
+	/**
+	 * Emits the type-error of a stream helper's operand (local 0) that is no stream:
+	 * {@code throw _opTypeErr(_teOf(x, (SATISFIES RONTOLISP:STREAMP)), "OP", "")} -- the
+	 * report {@code OP: The value X is not of type (SATISFIES RONTOLISP:STREAMP)}, and
+	 * under a landing pad the datum and the type, as {@code %operand-type-error} throws
+	 * them.
+	 */
+	private static void emitNotAStream(MethodCode a, ConstantPool cp, ClassEntry thisClass, ClassEntry objectClass,
+			MethodRefEntry longValueOf, String operator) {
+		a.aload(0);
+		JvmArrayRuntimeBuilder.emitTypeValue(a, cp, objectClass, longValueOf, OperandTypes.ASYNC_STREAM_TYPE);
+		a.invokestatic(JvmOperandTypeRuntime.self(cp, thisClass, JvmOperandTypeRuntime.TE_OF,
+				JvmOperandTypeRuntime.TE_OF_DESC));
+		a.ldc(cp.stringEntry(operator));
+		a.ldc(cp.stringEntry(OperandTypes.FUNNEL_TYPE));
+		a.invokestatic(JvmOperandTypeRuntime.self(cp, thisClass, JvmOperandTypeRuntime.OP_TYPE_ERR,
+				JvmOperandTypeRuntime.OP_TYPE_ERR_DESC));
+		a.athrow();
 	}
 
 	/** Emits {@code throw new RuntimeException(message)}. */

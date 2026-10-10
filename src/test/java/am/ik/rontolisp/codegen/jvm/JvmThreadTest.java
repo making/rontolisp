@@ -117,6 +117,18 @@ class JvmThreadTest {
 	}
 
 	@Test
+	void aBuiltInsTypeErrorStaysOneAcrossTheJoin() throws Exception {
+		// The datum and type of a built-in's type-error are recorded on the thread that
+		// raised it; the payload carries the record to the joiner, whose pad read the
+		// throwable as a simple-error without it.
+		assertThat(compileAndRun("""
+				(defvar *tj* (read-from-string "5"))
+				(print (handler-case (rontolisp:join-thread (rontolisp:make-thread (lambda () (car *tj*))))
+				         (type-error (c) (list :type-error (type-error-datum c) (type-error-expected-type c)))))
+				""", "ThreadTypeErrProg")).isEqualTo("(:TYPE-ERROR 5 LIST)");
+	}
+
+	@Test
 	void aJoinHandledInACleanupLeavesTheConditionOnItsWayOut() throws Exception {
 		// _thread_join records the thread's condition under the throwable it rethrows:
 		// setting the one per-thread slot replaced the typed condition the cleanup's

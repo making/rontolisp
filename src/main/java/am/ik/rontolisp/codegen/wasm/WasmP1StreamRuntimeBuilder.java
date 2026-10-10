@@ -5,6 +5,7 @@ import java.io.ByteArrayOutputStream;
 import am.ik.wasm.Instruction;
 import am.ik.wasm.Type;
 import am.ik.wasm.WasmWriter;
+import org.jspecify.annotations.Nullable;
 
 /**
  * Builds the two-function stream runtime of the degenerate (non-asyncMode) tier:
@@ -25,6 +26,11 @@ import am.ik.wasm.WasmWriter;
  * both answer a settled {@code TYPE_P1_FUTURE}, and a future wrapping nil is not nil --
  * without the resolve such a thunk could never report EOF. A plain value passes through
  * the resolver unchanged, so a synchronous thunk costs one call.
+ *
+ * <p>
+ * In an EH-mode module both helpers test their operand first: a value that is no stream
+ * is the operator's type-error ({@link WasmOperandTypes#emitStreamCheck}), as on every
+ * other backend, where the cast of it trapped.
  */
 final class WasmP1StreamRuntimeBuilder {
 
@@ -64,18 +70,21 @@ final class WasmP1StreamRuntimeBuilder {
 	 * Builds the body of block member {@code off}.
 	 * @param off the {@code OFF_*} member offset
 	 * @param streamType the {@code TYPE_P1_STREAM} type index
+	 * @param check the operand check's wiring in an EH-mode module, where a value that is
+	 * no stream is the operator's type-error; null outside EH mode, where the cast of it
+	 * traps
 	 * @return the function body bytes (locals declaration included)
 	 */
-	static byte[] build(int off, int streamType) {
+	static byte[] build(int off, int streamType, WasmOperandTypes.@Nullable StreamCheck check) {
 		return switch (off) {
-			case OFF_READ -> buildRead(streamType);
-			case OFF_CLOSE -> buildClose(streamType);
+			case OFF_READ -> buildRead(streamType, check);
+			case OFF_CLOSE -> buildClose(streamType, check);
 			default -> throw new IllegalArgumentException("unknown p1 stream runtime member: " + off);
 		};
 	}
 
 	// _p1_stream_read (stream) -> a settled future of the next chunk (nil = EOF).
-	private static byte[] buildRead(int streamType) {
+	private static byte[] buildRead(int streamType, WasmOperandTypes.@Nullable StreamCheck check) {
 		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		final int S = 0, CHUNK = 1;
@@ -83,6 +92,9 @@ final class WasmP1StreamRuntimeBuilder {
 		w.write(1);
 		w.writeUnsignedLeb128(1);
 		w.writeRefType(true, Type.EQ.code());
+		if (check != null) {
+			WasmOperandTypes.emitStreamCheck(w, S, streamType, check.readId(), check);
+		}
 		// Drained already: a settled-nil future.
 		castStream(w, S, streamType);
 		structGet(w, streamType, 0);
@@ -110,11 +122,14 @@ final class WasmP1StreamRuntimeBuilder {
 	}
 
 	// _p1_stream_close (stream) -> nil: run the close protocol once.
-	private static byte[] buildClose(int streamType) {
+	private static byte[] buildClose(int streamType, WasmOperandTypes.@Nullable StreamCheck check) {
 		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		final int S = 0;
 		w.write(0); // no locals
+		if (check != null) {
+			WasmOperandTypes.emitStreamCheck(w, S, streamType, check.closeId(), check);
+		}
 		castStream(w, S, streamType);
 		structGet(w, streamType, 0);
 		w.write(Instruction.I32_EQZ);

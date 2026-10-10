@@ -12,6 +12,7 @@ import java.util.Map;
 
 import am.ik.jvm.ConstantPool;
 import am.ik.jvm.MethodCode;
+import org.jspecify.annotations.Nullable;
 
 /**
  * Builds the JVM bytecode of the thread primitives behind {@code rontolisp:make-thread},
@@ -113,12 +114,19 @@ final class JvmThreadRuntimeBuilder {
 	 * @param stringConcat {@code String.concat(String)}
 	 * @param dynVarRuntime the dynamic-binding runtime (never null here: the compiler
 	 * forces the stream specials into the bound set when the program spawns threads)
+	 * @param teTl the thread-local record of a wrong-type operand's datum and type
+	 * ({@link JvmOperandTypeRuntime}), or null when no landing pad reads one: the error
+	 * payload carries the record of its throwable, made on the spawned thread, and
+	 * {@code _thread_join} records it again on the joining one, so a built-in's
+	 * type-error stays one across the join ({@code JvmAsyncRuntimeBuilder}'s await does
+	 * the same)
 	 * @return the runtime bodies
 	 */
 	static ThreadRuntime build(ConstantPool cp, ClassEntry thisClass, ClassEntry objectClass,
 			ClassEntry objectArrayClass, ClassEntry stringClass, JvmLispCompiler.ConditionChannel channel,
 			MethodRefEntry instanceInitRef, MethodRefEntry stringConcat,
-			JvmDynVarRuntimeBuilder.DynVarRuntime dynVarRuntime, FieldRefEntry curThreadTlField) {
+			JvmDynVarRuntimeBuilder.DynVarRuntime dynVarRuntime, FieldRefEntry curThreadTlField,
+			@Nullable FieldRefEntry teTl) {
 		ClassEntry threadClass = cp.classEntry("java/lang/Thread");
 		MethodRefEntry threadOfVirtual = cp.methodRef(threadClass, "ofVirtual",
 				"()Ljava/lang/Thread$Builder$OfVirtual;");
@@ -146,6 +154,10 @@ final class JvmThreadRuntimeBuilder {
 		StringEntry tMarker = cp.stringEntry(TMARKER);
 		StringEntry eMarker = cp.stringEntry(JvmAsyncRuntimeBuilder.EMARKER);
 		StringEntry tStr = cp.stringEntry("T");
+		// The error payload {EMARKER, t, cond}, and t's wrong-type record after them when
+		// a pad can read one: {EMARKER, t, cond, record}.
+		int errorPayloadLength = teTl != null ? 4 : 3;
+		@Nullable MethodRefEntry tlMap = teTl != null ? JvmThrowableRecords.tlMap(cp, thisClass) : null;
 
 		List<ThreadMethod> methods = new ArrayList<>();
 
@@ -237,7 +249,7 @@ final class JvmThreadRuntimeBuilder {
 			a.aload(1);
 			a.checkcast(objectArrayClass);
 			a.arraylength();
-			a.loadConstant(3);
+			a.loadConstant(errorPayloadLength);
 			a.if_icmpne(ret);
 			a.aload(1);
 			a.checkcast(objectArrayClass);
@@ -257,6 +269,26 @@ final class JvmThreadRuntimeBuilder {
 			a.loadConstant(2);
 			a.aaload();
 			a.invokestatic(condPut);
+			if (teTl != null) {
+				// t's wrong-type record, made on the spawned thread, recorded HERE too
+				// (slot 3 = the record)
+				MethodCode.Label noRecord = a.newLabel();
+				a.aload(1);
+				a.checkcast(objectArrayClass);
+				a.loadConstant(3);
+				a.aaload();
+				a.astore(3);
+				a.aload(3);
+				a.ifnull(noRecord);
+				a.dup();
+				a.getstatic(teTl);
+				a.invokestatic(java.util.Objects.requireNonNull(tlMap));
+				a.swap();
+				a.aload(3);
+				a.invokevirtual(JvmThrowableRecords.mapPut(cp));
+				a.pop();
+				a.labelBinding(noRecord);
+			}
 			a.athrow();
 			a.labelBinding(ret);
 			a.aload(1);
@@ -435,7 +467,7 @@ final class JvmThreadRuntimeBuilder {
 			// condition channel is a ThreadLocal, so the payload carries it to the joiner
 			MethodCode.Label handler = a.newBoundLabel();
 			a.astore(1);
-			a.loadConstant(3);
+			a.loadConstant(errorPayloadLength);
 			a.anewarray(objectClass);
 			a.dup();
 			a.loadConstant(0);
@@ -450,6 +482,16 @@ final class JvmThreadRuntimeBuilder {
 			a.aload(1);
 			a.invokestatic(condTake);
 			a.aastore();
+			if (teTl != null) {
+				// t's wrong-type record on this thread, or null
+				a.dup();
+				a.loadConstant(3);
+				a.getstatic(teTl);
+				a.invokestatic(java.util.Objects.requireNonNull(tlMap));
+				a.aload(1);
+				a.invokevirtual(JvmThrowableRecords.mapGet(cp));
+				a.aastore();
+			}
 			a.areturn();
 			a.exceptionCatch(tryStart, tryEnd, handler, throwableClass);
 			callMethod = new ThreadMethod(cp.utf8Entry("call"), cp.utf8Entry("()Ljava/lang/Object;"), a);

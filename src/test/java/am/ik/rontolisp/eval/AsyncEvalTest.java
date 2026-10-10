@@ -4,6 +4,7 @@ import java.io.ByteArrayOutputStream;
 import java.io.PrintStream;
 import java.nio.charset.StandardCharsets;
 
+import am.ik.rontolisp.AsyncStreamOperandFixture;
 import am.ik.rontolisp.LispFuture;
 import am.ik.rontolisp.LispInteger;
 import am.ik.rontolisp.LispNil;
@@ -311,6 +312,21 @@ class AsyncEvalTest {
 				(defvar *s* (rontolisp::%stream-new (lambda () nil) (lambda () nil)))
 				(rontolisp:stream-write *s* "x")
 				""")).hasMessageContaining("no write end");
+	}
+
+	@Test
+	void streamVerbsSignalATypeErrorOverANonStream() {
+		// stream-read, stream-close and stream-write of a value that is no stream are
+		// the operator's type-error expecting (SATISFIES RONTOLISP:STREAMP), in call
+		// position, inside an async body and under read-all; stream-write's other
+		// refusals keep one text. Pinned on all four backends (the wasm backends trapped
+		// a cast failure).
+		assertThat(evalMulti(AsyncStreamOperandFixture.PROGRAM).output().trim())
+			.isEqualTo(AsyncStreamOperandFixture.EXPECTED);
+		assertThat(evalMulti(AsyncStreamOperandFixture.NO_STREAM_PROGRAM).output().trim())
+			.isEqualTo(AsyncStreamOperandFixture.NO_STREAM_EXPECTED);
+		assertThat(evalMulti(AsyncStreamOperandFixture.WRITE_PROGRAM).output().trim())
+			.isEqualTo(AsyncStreamOperandFixture.WRITE_EXPECTED);
 	}
 
 	@Test

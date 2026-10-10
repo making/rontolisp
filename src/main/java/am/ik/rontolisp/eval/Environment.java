@@ -2703,7 +2703,9 @@ public final class Environment implements Scope {
 					name + " expects " + arity + " argument" + (arity == 1 ? "" : "s") + ", got " + args.size());
 		}
 		if (!(args.get(0) instanceof LispStream stream)) {
-			throw new LispEvalException(name + " expects a stream, got: " + args.get(0).print());
+			// The operator's type-error expecting (SATISFIES RONTOLISP:STREAMP), the one
+			// every backend signals.
+			throw OperandTypeException.notOfType(args.get(0), OperandTypes.ASYNC_STREAM_TYPE, name);
 		}
 		return stream;
 	}
