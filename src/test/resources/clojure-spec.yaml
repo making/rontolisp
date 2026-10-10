@@ -11545,6 +11545,54 @@ cases:
       [:a 2]
       (:c :e)
       {:b 2, :c 3, :d 4}
+  - name: a-persistent-queue-conjs-at-the-rear-and-pops-from-the-front
+    # clojure.lang.PersistentQueue/EMPTY, by its dotted name or imported, and what
+    # every verb reads of a queue: conj and into add at the rear, peek and pop read
+    # and drop the front, seq walks front to rear; = as a sequential, hash and
+    # .hashCode, str, instance?, the predicates, the seq verbs, metadata, empty, the
+    # java.util.Collection methods and a protocol extended to the class.
+    # Oracle-identical (clj 1.12.6, 2026-10-10).
+    source: |
+      (import '(clojure.lang PersistentQueue))
+      (def pq-e clojure.lang.PersistentQueue/EMPTY)
+      (def pq-q (conj pq-e 1 2 3))
+      (prn (seq pq-q) (seq pq-e) (count pq-q) (count pq-e) (peek pq-q) (peek pq-e) (str pq-q) (str pq-e))
+      (prn (seq (pop pq-q)) (identical? pq-e (pop pq-e)) (seq (into PersistentQueue/EMPTY [4 5 6])) (seq (into pq-q [4 5])))
+      (prn (= pq-q [1 2 3]) (= pq-q '(1 2 3)) (= [1 2 3] pq-q) (= '(1 2 3) pq-q) (= pq-q (conj pq-e 1 2 3)) (= pq-q [1 2]) (= pq-e []) (= pq-e #{}) (= pq-q (seq pq-q)))
+      (prn (hash pq-q) (hash pq-e) (.hashCode pq-q) (.equals pq-q [1 2 3]) (hash (conj pq-e "a" :b 'c 1.5 nil)) (.hashCode (conj pq-e "a" :b 'c 1.5 nil)))
+      (prn (instance? clojure.lang.PersistentQueue pq-q) (instance? PersistentQueue []) (instance? java.util.Collection pq-q) (instance? clojure.lang.IPersistentStack pq-q) (instance? clojure.lang.ISeq pq-q))
+      (prn (coll? pq-q) (seq? pq-q) (sequential? pq-q) (counted? pq-q) (vector? pq-q) (list? pq-q) (seqable? pq-q) (reversible? pq-q) (associative? pq-q) (ifn? pq-q) (empty? pq-e) (empty? pq-q))
+      (prn (first pq-q) (rest pq-q) (next pq-q) (last pq-q) (nth pq-q 1) (get pq-q 0) (map inc pq-q) (reduce + pq-q) (vec pq-q) (cons 0 pq-q) (count (conj pq-e nil)))
+      (prn (meta (with-meta pq-q {:a 1})) (meta (pop (conj (with-meta pq-e {:m 1}) 1 2))) (meta (empty (with-meta pq-q {:a 1}))) (identical? pq-e (empty pq-q)))
+      (prn (.size pq-q) (.contains pq-q 2) (.isEmpty pq-e) (get {[1 2 3] :x} pq-q) (get {pq-q :y} [1 2 3]) (let [[a b & r] pq-q] [a b r]))
+      (prn (seq (reduce (fn [acc i] (pop (conj acc i))) (conj pq-e 0 1 2) (range 3 10))) (count (into pq-e (range 100))) (sequence (map inc) pq-q) (frequencies (conj pq-e :a :a)))
+      (defprotocol PqDescribe (pq-describe [x]))
+      (extend-protocol PqDescribe clojure.lang.PersistentQueue (pq-describe [q] (str "queue of " (count q))) Object (pq-describe [_] "other"))
+      (prn (pq-describe pq-q) (pq-describe [1]))
+    expected: |
+      (1 2 3) nil 3 0 1 nil "clojure.lang.PersistentQueue@7861" "clojure.lang.PersistentQueue@1"
+      (2 3) true (4 5 6) (1 2 3 4 5)
+      true true true true true false true false true
+      736442005 -2017569654 30817 true -221293054 1934539654
+      true false true true false
+      true false true true false true true false false false true false
+      1 (2 3) (2 3) 3 2 nil (2 3 4) 6 [1 2 3] (0 1 2 3) 1
+      {:a 1} {:m 1} {:a 1} true
+      3 true true :x :y [1 2 (3)]
+      (7 8 9) 100 (2 3 4) {:a 2}
+      "queue of 3" "other"
+  - name: a-persistent-queue-prints-as-the-host-object-its-hash-left-out
+    # A deviation: the oracle's #object carries the identity hash, which no value
+    # here has (a byte array's precedent), and class answers the deftype's tag
+    # keyword, where the oracle answers clojure.lang.PersistentQueue. toString is
+    # the oracle's (Class@ the hex of its hashCode).
+    source: |
+      (def pq-p (conj clojure.lang.PersistentQueue/EMPTY 1 2 3))
+      (prn pq-p (class pq-p))
+      (println pq-p [clojure.lang.PersistentQueue/EMPTY])
+    expected: |
+      #object[clojure.lang.PersistentQueue "clojure.lang.PersistentQueue@7861"] :PersistentQueue
+      #object[clojure.lang.PersistentQueue clojure.lang.PersistentQueue@7861] [#object[clojure.lang.PersistentQueue clojure.lang.PersistentQueue@1]]
   - name: fnext-and-nnext-step-past-the-head
     # (first (next x)) and (next (next x)), each tail through the seq view.
     # Oracle-identical (clj 1.12.6, 2026-10-10).

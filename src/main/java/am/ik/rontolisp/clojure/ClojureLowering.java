@@ -2399,6 +2399,25 @@ public final class ClojureLowering {
 	}
 
 	/**
+	 * Loads the shipped namespace defining a {@code clojure.lang} class
+	 * ({@link ClojureLangClasses}) where a top-level datum first names the class, dotted
+	 * or imported: its definitions ahead of the datum, like a namespace the oracle loads
+	 * before the program ({@link #projectNamespaceOf}). Nothing for any other spelling,
+	 * or once the namespace is loaded or loading.
+	 * @param spelling the class as written
+	 */
+	void loadLangClass(String spelling) {
+		if (this.topLevelDepth == 0
+				|| !ClojureLangClasses.isLangClass(ClojureNamespaceLowering.resolveClass(this, spelling))) {
+			return;
+		}
+		String ns = ClojureLangClasses.NAMESPACE;
+		if (!this.loadedNamespaces.contains(ns) && !this.loadingNamespaces.contains(ns)) {
+			ClojureNamespaceLowering.preload(this, ns);
+		}
+	}
+
+	/**
 	 * Loads the part of a built-in namespace defining the var
 	 * ({@link ClojureBuiltinNamespaces#partOf}) where a top-level datum first names it:
 	 * its definitions ahead of the datum, its statements (if any) run there once, like a
@@ -2499,14 +2518,17 @@ public final class ClojureLowering {
 
 	/**
 	 * The record or deftype a class spelling names, by var key: the current namespace's
-	 * own, an imported or dotted class name matching one's host class name, or -- the
-	 * flat lowering's leniency, kept -- the only one of that simple name anywhere. Null
-	 * when it names none.
+	 * own, an imported or dotted class name matching one's host class name (a
+	 * {@code clojure.lang} class of the shipped namespace loaded first,
+	 * {@link #loadLangClass}), or -- the flat lowering's leniency, kept -- the only one
+	 * of that simple name anywhere. Null when it names none.
 	 */
 	@Nullable String typeKeyOf(String name) {
 		if (name.indexOf('/') >= 0) {
 			return null;
 		}
+		// a clojure.lang class of the shipped namespace is its deftype once loaded
+		loadLangClass(name);
 		String own = varKey(this.currentNs, name);
 		if (this.types.containsKey(own)) {
 			return own;

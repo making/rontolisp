@@ -60,6 +60,7 @@ The oracle is `clj` 1.12.6.1673: a behavior is decided by running it there, and 
 | `#"re"` | `(:C%PATTERN stamp source ops ngroups)` | the stamp is a gensym, so `=` is identity like the oracle |
 | byte array (`byte-array`, `.getBytes`) | `(:C%BYTES octets)`, `octets` a packed `(unsigned-byte 8)` vector | "Byte arrays" |
 | transient | `(:C%TRANSIENT #(kind data count live))` | "Transients" |
+| `clojure.lang.PersistentQueue` | a deftype of the shipped namespace `clojure.lang` | "Persistent queues" |
 | charset (`StandardCharsets/UTF_8`, `Charset/forName` of a literal) | `(:C%CHARSET name class)`, a `clojure.java.io` value | "Charset values" |
 | `reduced`, var, nil dispatch value | `(:C%REDUCED x)`, `(:C%VAR "ns/name" getter)`, `(:C%NIL)` | |
 | `ex-info` | a condition with message and data slots | |
@@ -2500,6 +2501,42 @@ namespace` but the ones no measured library names (`inspector`, `java.browse`,
   `ClojureLoweringTest#transientVerbsLowerToOneWorkerCallAfterTheOraclesArityCheck`,
   `ClojureArmsTest#theTransientFamilyIsMadeByTransientAndFoldsItsArmsAndIndexedsHelper`.
 
+## Persistent queues
+
+- **The value** (2026-10-10, f18): `clojure.lang.PersistentQueue` is a `deftype` of the shipped
+  namespace `clojure.lang` (`lib/clojure/lang.clj`; `ClojureLangClasses`), fields the oracle's
+  `_meta cnt f r`: `f` the front as a seq, `r` a vector of what was conjoined since `f` was
+  refilled (`pop` takes `(seq r)` once `f` runs out). Its body implements what the oracle's class
+  does (`IPersistentList`, `IPersistentStack`, `IPersistentCollection`, `Seqable`, `Counted`,
+  `Sequential`, `IHashEq`, `IObj`, `Iterable`, `java.util.Collection` but `toArray` -- no object
+  arrays here, so the `AbstractMethodError` row --, `Serializable`, `Object`), so every verb reads
+  it through the collection-interface families ("Collection interfaces") and no verb carries an
+  arm of its own. The deftype's class is `<ns>.<Name>`, so the namespace's name gives the
+  oracle's class name to the printer, `instance?` and the Java face.
+- **Loading**: `ClojureLowering.loadLangClass` preloads the namespace (`preload`, the startup
+  namespaces' path) where a top-level datum first names the class, dotted or imported --
+  `typeKeyOf` (so `instance?` and `extend-protocol`) and the static field `EMPTY` (a var
+  `PersistentQueue-EMPTY` of the namespace: value, `(C/EMPTY)` and `(. C EMPTY)`,
+  `ClojureLangClasses.staticValue`). A program naming no such class lowers as before. It is in
+  `SHIPPED` but not `STARTUP`, so `(require 'clojure.lang)` loads it too (the oracle has no such
+  namespace).
+- **What it answers** (measured clj 1.12.6, 2026-10-10, ~90 probes, all four backends agreeing):
+  `conj`/`into`/`peek`/`pop`/`seq`/`count`/`empty?`/`=` (either side, as a sequential)/`hash`/
+  `.hashCode`/`.equals`/`str` (`clojure.lang.PersistentQueue@` + the hex of the List hash, a loop
+  over `quot`/`rem`: no bit verbs here)/`instance?`/the predicates (`list?` true, `seq?` false)/
+  `meta`/`with-meta` (identical under the same meta)/`empty` (identical to `EMPTY` under nil
+  meta)/`nth`/`get`/destructuring/map and set keys/`.size`/`.contains`/a protocol extended to the
+  class oracle-identical. Every
+  other difference is a deviation every value shares: the hash-less `#object`, `class` the tag
+  keyword `:PersistentQueue` (`.getName` `PersistentQueue`), `(= q '())` false (nil is the empty
+  list), `(rest EMPTY)` nil, `nth` past the end nil, the refusal texts of `contains?`, `assoc`,
+  a call, `rseq`, `realized?`.
+- Re-probe: medley 1.8.1 (verbatim, deps.edn) loads, and `queue`/`queue?` with `map-vals`,
+  `find-first`, `distinct-by`, `index-by` print the oracle's on all four backends.
+- **Pins**: clojure-spec `a-persistent-queue-conjs-at-the-rear-and-pops-from-the-front`
+  (oracle-identical), `a-persistent-queue-prints-as-the-host-object-its-hash-left-out` (the
+  deviation); `ClojureLanguageNamespacesTest#persistentQueueIsADeftypeOfTheClojureLangNamespaceLoadedWhereAProgramFirstNamesIt`.
+
 ## clojure.java.io
 
 **`clojure.java.io` is a built-in, startup namespace of Clojure source**
@@ -4420,7 +4457,7 @@ one algorithm (`ClojureReader.readConditional`, `%clojure-rd-conditional`):
   and dependency spell `coll'`/`g'` and were unreadable before. First failure per library
   after this (interpreter, 2026-10-08): medley `transients are not supported yet: assoc!`
   (2026-10-10, with transients, `fnext` and `nnext`: `core.cljc:194:3: unknown name:
-  clojure.lang.PersistentQueue`, its `queue`),
+  clojure.lang.PersistentQueue`, its `queue`; it loads since "Persistent queues"),
   dependency `infinite range is not supported`, camel-snake-kebab `extend needs a core
   type, not Pattern`, cuerdas `unknown namespace: clojure.core` -- lowering gaps for `e43`,
   none in the reader.

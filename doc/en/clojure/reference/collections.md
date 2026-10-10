@@ -3,7 +3,7 @@
 A map or set is an `equal` hash table, never mutated in place: every verb builds a fresh one, so persistence holds observably. Map/set iteration order is the table's walk order, unspecified. Keys compare by `=`, so a vector, list, map or set key finds an equal one. A sorted map or set (`sorted-map`, `sorted-set`, their `-by` forms) keeps its entries in `compare` or comparator order instead, finds keys by that order, and every map and set verb answers one again; `subseq`/`rsubseq` walk a bounded range of it. Arrays are general:
 `(make-array Class dim...)` ignores the class, reads through `aget`, writes through
 `aset`, and measures through `alength`; a byte array (`byte-array`, or `make-array` of
-`Byte/TYPE`) holds signed bytes. A transient (`transient`) edits a copy of a vector, map or set in place until `persistent!` hands it back.
+`Byte/TYPE`) holds signed bytes. A transient (`transient`) edits a copy of a vector, map or set in place until `persistent!` hands it back. A persistent queue (`clojure.lang.PersistentQueue/EMPTY`) adds at the rear and pops from the front.
 
 | Name | Example | Result |
 |---|---|---|
@@ -38,6 +38,7 @@ A map or set is an `equal` hash table, never mutated in place: every verb builds
 | `frequencies` | `(frequencies [:a :a])` | `{:a 2}` |
 | `peek` | `(peek [1 2 3])` | `3` |
 | `pop` | `(pop [1 2 3])` | `[1 2]` |
+| `PersistentQueue/EMPTY` | `(seq (conj clojure.lang.PersistentQueue/EMPTY 1 2))` | `(1 2)` |
 | `rseq` | `(rseq [1 2 3])` | `(3 2 1)` |
 | `subvec` | `(subvec [1 2 3 4] 1 3)` | `[2 3]` |
 | `update-keys` | `(update-keys {:a 1} name)` | `{"a" 1}` |

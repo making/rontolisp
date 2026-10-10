@@ -1,6 +1,6 @@
 # マップ・セット・ベクター
 
-マップとセットは equal ハッシュテーブルで、その場では変更されません:全操作が新しいテーブルを作るので、永続性は観測可能な形で保たれます。map/set の反復順はテーブルの走査順（未規定）です。キーは `=` で比較されるので、ベクター・リスト・マップ・セットのキーも等しいキーを見つけます。ソート済みのマップとセット（`sorted-map`・`sorted-set` とその `-by` 形）は、エントリーを `compare` か比較関数の順に保ち、その順序でキーを探します。マップとセットの操作はどれもソート済みのものを返し、`subseq`/`rsubseq` はその一部の範囲を走査します。配列は general です。`(make-array Class dim...)` はクラスを無視し、`aget` で読み、`aset` で書き、`alength` で測ります。バイト配列（`byte-array`、または `Byte/TYPE` の `make-array`）は符号付きのバイトを保持します。トランジェント（`transient`）は、`persistent!` が返すまでベクター・マップ・セットのコピーをその場で編集します。
+マップとセットは equal ハッシュテーブルで、その場では変更されません:全操作が新しいテーブルを作るので、永続性は観測可能な形で保たれます。map/set の反復順はテーブルの走査順（未規定）です。キーは `=` で比較されるので、ベクター・リスト・マップ・セットのキーも等しいキーを見つけます。ソート済みのマップとセット（`sorted-map`・`sorted-set` とその `-by` 形）は、エントリーを `compare` か比較関数の順に保ち、その順序でキーを探します。マップとセットの操作はどれもソート済みのものを返し、`subseq`/`rsubseq` はその一部の範囲を走査します。配列は general です。`(make-array Class dim...)` はクラスを無視し、`aget` で読み、`aset` で書き、`alength` で測ります。バイト配列（`byte-array`、または `Byte/TYPE` の `make-array`）は符号付きのバイトを保持します。トランジェント（`transient`）は、`persistent!` が返すまでベクター・マップ・セットのコピーをその場で編集します。永続キュー（`clojure.lang.PersistentQueue/EMPTY`）は末尾に加え、先頭から取り除きます。
 
 | Name | Example | Result |
 |---|---|---|
@@ -35,6 +35,7 @@
 | `frequencies` | `(frequencies [:a :a])` | `{:a 2}` |
 | `peek` | `(peek [1 2 3])` | `3` |
 | `pop` | `(pop [1 2 3])` | `[1 2]` |
+| `PersistentQueue/EMPTY` | `(seq (conj clojure.lang.PersistentQueue/EMPTY 1 2))` | `(1 2)` |
 | `rseq` | `(rseq [1 2 3])` | `(3 2 1)` |
 | `subvec` | `(subvec [1 2 3 4] 1 3)` | `[2 3]` |
 | `update-keys` | `(update-keys {:a 1} name)` | `{"a" 1}` |

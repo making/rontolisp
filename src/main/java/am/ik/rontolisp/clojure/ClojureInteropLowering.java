@@ -445,6 +445,11 @@ final class ClojureInteropLowering {
 	 * no classlike slash form, so the call keeps falling through.
 	 */
 	static @Nullable LispVal memberCall(ClojureLowering ctx, String name, List<LispVal> items, @Nullable LispVal tags) {
+		LispVal langStatic = items.size() == 1 && tags == null ? ClojureLangClasses.staticValue(ctx, name) : null;
+		if (langStatic != null) {
+			// (Class/FIELD) of a clojure.lang class the shipped namespace defines
+			return langStatic;
+		}
 		QualifiedMember qualified = qualifiedMember(ctx, name);
 		if (qualified == null) {
 			return null;
@@ -1009,6 +1014,10 @@ final class ClojureInteropLowering {
 	 * is the false object, like every predicate value.
 	 */
 	static LispVal staticNoArg(ClojureLowering ctx, String cls, String member) {
+		LispVal langStatic = ClojureLangClasses.staticValue(ctx, cls, member);
+		if (langStatic != null) {
+			return langStatic;
+		}
 		LispVal timeValue = ClojureTimeValueLowering.staticCall(cls, member, List.of());
 		if (timeValue != null) {
 			return timeValue;
@@ -1048,6 +1057,11 @@ final class ClojureInteropLowering {
 	 * the oracle's {@code no matches found}.
 	 */
 	static @Nullable LispVal memberValue(ClojureLowering ctx, String name, @Nullable LispVal tags) {
+		LispVal langStatic = tags == null ? ClojureLangClasses.staticValue(ctx, name) : null;
+		if (langStatic != null) {
+			// a static field of a clojure.lang class the shipped namespace defines
+			return langStatic;
+		}
 		QualifiedMember qualified = qualifiedMember(ctx, name);
 		if (qualified == null) {
 			return null;

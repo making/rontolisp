@@ -169,6 +169,7 @@ categories:
       - { slug: peek, name: "peek" }
       - { slug: rseq, name: "rseq" }
       - { slug: pop, name: "pop" }
+      - { slug: persistent-queue, name: "PersistentQueue/EMPTY" }
       - { slug: subvec, name: "subvec" }
       - { slug: update-keys, name: "update-keys" }
       - { slug: update-vals, name: "update-vals" }

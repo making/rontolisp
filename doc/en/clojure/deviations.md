@@ -285,6 +285,8 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   was handed, where the oracle's may answer another object (an array map's `assoc!` past
   eight entries), so a program that ignores the answer keeps every edit here and loses
   some there. `nth` past the end of a transient vector answers `nil`, as of a vector.
+- A [persistent queue](reference/persistent-queue.md) prints as the oracle's `#object` without
+  the identity hash, and `class` answers the type's keyword `:PersistentQueue`.
 - An instance call on a collection, keyword, symbol, ratio, atom or fn answers through the core
   functions and shares their deviations (`.getClass` answers what `class` does). A method of a
   JDK interface the oracle's class implements (`.toArray`) is refused on the wasm backends as

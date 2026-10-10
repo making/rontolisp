@@ -1,6 +1,7 @@
 package am.ik.rontolisp.clojure;
 
 import java.util.HashMap;
+import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.stream.Collectors;
@@ -225,6 +226,23 @@ class ClojureLanguageNamespacesTest {
 		assertThatThrownBy(() -> Clojure.read("(ns a (:require [clojure.inspector :as i]))", null))
 			.isInstanceOf(LispReadException.class)
 			.hasMessageContaining("unknown namespace: clojure.inspector");
+	}
+
+	@Test
+	void persistentQueueIsADeftypeOfTheClojureLangNamespaceLoadedWhereAProgramFirstNamesIt() {
+		String empty = "(DEFUN |c%clojure.lang/->PersistentQueue|";
+		for (String source : List.of("(defn q [] clojure.lang.PersistentQueue/EMPTY) (q)",
+				"(ns a (:import (clojure.lang PersistentQueue))) (prn PersistentQueue/EMPTY)",
+				"(prn (clojure.lang.PersistentQueue/EMPTY))", "(prn (. clojure.lang.PersistentQueue EMPTY))",
+				"(defn queue? [x] (instance? clojure.lang.PersistentQueue x)) (queue? 1)")) {
+			assertThat(lowered(source, Map.of())).as(source).contains(empty);
+		}
+		assertThat(lowered("(prn clojure.lang.PersistentQueue/EMPTY)", Map.of()))
+			.contains("|c%clojure.lang/PersistentQueue-EMPTY|");
+		// a program naming no clojure.lang class carries none
+		assertThat(
+				lowered("(defn f [x] (conj x 1)) (prn (f [0]) (instance? clojure.lang.IPersistentList ()))", Map.of()))
+			.doesNotContain("clojure.lang/");
 	}
 
 	private static String lowered(String source, Map<String, String> files) {
