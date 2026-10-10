@@ -394,12 +394,19 @@ final class ClojureIoLowering {
 	}
 
 	/**
+	 * The class of a Ring request {@code :body}: Jetty's, as ring-jetty-adapter 1.15.3
+	 * hands one to a handler ({@code clojure.lisp}'s {@code %clojure-ring-input}).
+	 */
+	static final String RING_INPUT = "org.eclipse.jetty.ee9.nested.HttpInput";
+
+	/**
 	 * The classes the values here are, with their supers: what {@code class} answers for
-	 * one, what {@code instance?}, a class chain and a protocol extension read. The last
-	 * four are the classes of a fetched reply's body: {@code rontolisp.http-client}'s
-	 * {@code :as :stream} body (the JDK client's response stream, and the two it is
-	 * decompressed through) and an {@code http:} URL's {@code openStream}
-	 * ({@code java.net.HttpURLConnection}'s).
+	 * one, what {@code instance?}, a class chain and a protocol extension read. The four
+	 * before the last are the classes of a fetched reply's body:
+	 * {@code rontolisp.http-client}'s {@code :as :stream} body (the JDK client's response
+	 * stream, and the two it is decompressed through) and an {@code http:} URL's
+	 * {@code openStream} ({@code java.net.HttpURLConnection}'s); the last is a Ring
+	 * request {@code :body}'s ({@link #RING_INPUT}).
 	 */
 	static final Map<String, List<String>> CLASSES = Map.ofEntries(
 			Map.entry("java.io.File", List.of("java.io.Serializable", "java.lang.Comparable")),
@@ -432,7 +439,9 @@ final class ClojureIoLowering {
 							"java.lang.AutoCloseable")),
 			Map.entry("sun.net.www.protocol.http.HttpURLConnection$HttpInputStream",
 					List.of("java.io.FilterInputStream", "java.io.InputStream", "java.io.Closeable",
-							"java.lang.AutoCloseable")));
+							"java.lang.AutoCloseable")),
+			Map.entry(RING_INPUT, List.of("jakarta.servlet.ServletInputStream", "java.io.InputStream",
+					"java.io.Closeable", "java.lang.AutoCloseable", "java.lang.Runnable")));
 
 	/**
 	 * Whether a value here may be an instance of the class: one of {@link #CLASSES} or a

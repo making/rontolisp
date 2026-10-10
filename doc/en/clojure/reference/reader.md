@@ -5,8 +5,7 @@
 Opens a buffered reader over a path, a File, a URL, a URI or a byte stream, through the
 `IOFactory` protocol of [clojure.java.io](clojure-java-io.md); `:encoding` names the
 charset, UTF-8 by default. An `http:` or `https:` URL is read through `rontolisp:fetch`
-([HTTP URLs](clojure-java-io.md#http-urls)). Of an open reader (a Ring request [`:body`](ring.md)) it
-answers that reader. `line-seq` reads its lines without closing it; `with-open` closes it.
+([HTTP URLs](clojure-java-io.md#http-urls)). Of an open reader it answers that reader. `line-seq` reads its lines without closing it; `with-open` closes it.
 Wires like `clojure.string` (`:as`, `:refer`, or the fully-qualified spelling). Runs on
 every backend; on wasm a file needs a `--dir` preopen covering it -- without one the open
 is the oracle's `java.io.FileNotFoundException`. As a value a function of the same

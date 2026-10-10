@@ -212,7 +212,9 @@ class ClojureHttpClientTest {
 			(def upstream "%UPSTREAM%")
 
 			(defn handler [req]
-			  (let [r (http/get (str upstream (:uri req)) {:as :stream :throw false})]
+			  (let [r (if (= :post (:request-method req))
+			            (http/post (str upstream (:uri req)) {:body (:body req) :as :stream :throw false})
+			            (http/get (str upstream (:uri req)) {:as :stream :throw false}))]
 			    {:status (:status r)
 			     :headers {"content-type" "application/octet-stream"}
 			     :body (:body r)}))
@@ -333,6 +335,13 @@ class ClojureHttpClientTest {
 				out.write(body);
 			}
 		});
+		server.createContext("/upload", exchange -> {
+			byte[] body = exchange.getRequestBody().readAllBytes();
+			exchange.sendResponseHeaders(200, body.length);
+			try (OutputStream out = exchange.getResponseBody()) {
+				out.write(body);
+			}
+		});
 		server.createContext("/status/404", exchange -> {
 			byte[] body = "missing".getBytes(StandardCharsets.UTF_8);
 			exchange.sendResponseHeaders(404, body.length);
@@ -357,6 +366,14 @@ class ClojureHttpClientTest {
 				HttpResponse.BodyHandlers.ofString());
 		assertThat(missing.statusCode()).isEqualTo(404);
 		assertThat(missing.body()).isEqualTo("missing");
+		// the request :body is an InputStream, sent on as its octets
+		byte[] upload = { (byte) 0xff, (byte) 0xfe, 0x41, (byte) 0xc3, (byte) 0xa9 };
+		HttpResponse<byte[]> sentOn = client
+			.send(HttpRequest.newBuilder(URI.create("http://127.0.0.1:" + port + "/upload"))
+				.POST(HttpRequest.BodyPublishers.ofByteArray(upload))
+				.build(), HttpResponse.BodyHandlers.ofByteArray());
+		assertThat(sentOn.statusCode()).isEqualTo(200);
+		assertThat(sentOn.body()).isEqualTo(upload);
 	}
 
 	private static int freePort() throws IOException {

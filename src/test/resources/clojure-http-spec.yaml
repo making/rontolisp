@@ -438,6 +438,8 @@ cases:
       (println (:body (http/post (url "/octets-echo") {:body (:body (http/get (url "/gzip") {:as :stream}))})))
       (println (:body (http/post (url "/octets-echo") {:body "é"})))
       (prn (try (http/post (url "/octets-echo") {:body 42}) (catch clojure.lang.ExceptionInfo e (ex-message e))))
+      (prn (try (http/post (url "/octets-echo") {:body (io/reader (io/file "@SCRATCH@" "body.bin"))})
+                (catch clojure.lang.ExceptionInfo e (ex-message e))))
       (prn (try (http/post (url "/octets-echo") {:body (io/file "@SCRATCH@" "missing")})
                 (catch java.io.FileNotFoundException e (clojure.string/replace (ex-message e) "@SCRATCH@" "DIR"))))
     expected: |
@@ -447,6 +449,7 @@ cases:
       null|68c3a96c6c6f2c20e4b896e7958c0a7365636f6e64206c696e650a
       null|c3a9
       "Don't know how to convert class java.lang.Longto body"
+      "Don't know how to convert class java.io.BufferedReaderto body"
       "DIR/missing not found"
   - name: a-multipart-body-is-the-oracles-octet-for-octet
     source: |

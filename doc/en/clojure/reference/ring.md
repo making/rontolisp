@@ -49,13 +49,16 @@ get /hello
 | `:scheme` | `:http` or `:https` |
 | `:protocol` | `"HTTP/1.1"` |
 | `:content-type`, `:content-length` | from the headers, `nil` when absent |
-| `:body` | an input stream over the request body, `nil` for a request without one |
+| `:body` | a `java.io.InputStream` of the request body's octets, empty for a request without one |
 
-Read `:body` with `slurp`, `line-seq` or `clojure.java.io/reader`; a
-`java.io.InputStreamReader` (or `BufferedReader`) over it is the stream itself, on
-every backend. The stream is buffered, so the read never waits on the network.
-`slurp` closes it; a later read answers the end of the body, as under Ring's Jetty
-adapter.
+Read `:body` with `.read`, `slurp` (in the charset `:encoding` names, UTF-8 by default),
+`clojure.java.io/reader`, `line-seq`, `clojure.java.io/copy` or a
+`java.io.InputStreamReader`, on every backend; a binary upload reads octet for octet. The
+stream is buffered, so a read never waits on the network. Its class is Ring's Jetty
+adapter's, `org.eclipse.jetty.ee9.nested.HttpInput`, and as there a close leaves it
+readable: after `slurp` a later read answers the end of the body. Answered as the
+response `:body`, or sent on as a [`rontolisp.http-client`](http-client.md) request
+`:body`, it is its octets.
 
 ## The response map
 

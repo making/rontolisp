@@ -145,12 +145,14 @@ public final class ClojureArms {
 	 */
 	/**
 	 * What hands a {@code clojure.java.io} value to a program: the namespace's kernels
-	 * and the lowering's {@code java.io} constructions, and the HTTP client's kernel,
-	 * whose {@code :as :stream} body is a byte stream.
+	 * and the lowering's {@code java.io} constructions, the HTTP client's kernel, whose
+	 * {@code :as :stream} body is a byte stream, and the Ring adapter's application,
+	 * whose request {@code :body} is one.
 	 */
 	private static Set<String> ioProducers() {
 		Set<String> out = new HashSet<>(ClojureIoLowering.PRODUCERS);
 		out.add(ClojureKernelLowering.HTTP_REQUEST);
+		out.add(ClojureRingLowering.APP);
 		return Set.copyOf(out);
 	}
 
@@ -792,8 +794,9 @@ public final class ClojureArms {
 		 * instance call read, and any value {@code slurp} and {@code spit} open through
 		 * the loaded namespace: only the namespace's kernels and the lowering's
 		 * {@code java.io} constructions make one ({@link ClojureIoLowering#PRODUCERS}),
-		 * and {@code rontolisp.http-client}'s kernel, whose {@code :as :stream} body is a
-		 * byte stream over the reply.
+		 * {@code rontolisp.http-client}'s kernel, whose {@code :as :stream} body is a
+		 * byte stream over the reply, and {@code ring.adapter.rontolisp}'s application,
+		 * whose request {@code :body} is a byte stream over the request's octets.
 		 */
 		IO("io-value", Set.of(ClojureIoLowering.IO_P, ClojureIoLowering.IO_INSTANCE_P, ClojureIoLowering.OPENABLE_P),
 				Set.of(ClojureIoLowering.HOST_VIEW), Map.of(), ioProducers(), Set.of()),

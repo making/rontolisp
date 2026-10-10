@@ -50,13 +50,16 @@ get /hello
 | `:scheme` | `:http` または `:https` |
 | `:protocol` | `"HTTP/1.1"` |
 | `:content-type`、`:content-length` | ヘッダーから。なければ `nil` |
-| `:body` | リクエストボディの入力ストリーム。ボディのないリクエストでは `nil` |
+| `:body` | リクエストボディのオクテットの `java.io.InputStream`。ボディのないリクエストでは空 |
 
-`:body` は `slurp`、`line-seq`、`clojure.java.io/reader` で読みます。その上の
-`java.io.InputStreamReader`（または `BufferedReader`）はどのバックエンドでもストリーム
-そのものです。ストリームはバッファ済みなので、読み取りがネットワークを待つことはありません。
-`slurp` はストリームを閉じます。その後の読み取りは、Ring の Jetty アダプターと同じく
-ボディの終端を返します。
+`:body` はどのバックエンドでも `.read`、`slurp`（`:encoding` の文字セット。既定は UTF-8）、
+`clojure.java.io/reader`、`line-seq`、`clojure.java.io/copy`、`java.io.InputStreamReader`
+で読めます。バイナリのアップロードはオクテットどおりに読めます。ストリームはバッファ済みなので、
+読み取りがネットワークを待つことはありません。クラスは Ring の Jetty アダプターと同じ
+`org.eclipse.jetty.ee9.nested.HttpInput` で、Jetty と同じく閉じても読めるままです。`slurp`
+の後の読み取りはボディの終端を返します。レスポンスの `:body` として返すか、
+[`rontolisp.http-client`](http-client.md) のリクエストの `:body` として送ると、そのオクテットに
+なります。
 
 ## レスポンスマップ
 

@@ -38,7 +38,7 @@ compile refuses the program, naming the flags that give it one. `clojure.java.io
 | `:headers` | a map of names (strings or keywords) to a string, or to a seq of strings sent as one field each |
 | `:query-params` | a map joined to the URL's query, URL-encoded; a collection value repeats its key |
 | `:form-params` | a map sent as an `application/x-www-form-urlencoded` body |
-| `:body` | a string; a byte array, a `java.io.File` or an input stream (a `clojure.java.io` stream, a reply's `:as :stream` body), sent as its octets; a reader, read to its end |
+| `:body` | a string; a byte array, a `java.io.File` or an input stream (a `clojure.java.io` stream, a reply's `:as :stream` body, a [Ring](ring.md) request's `:body`), sent as its octets |
 | `:multipart` | a seq of parts, sent as a `multipart/form-data` body in place of `:body` and `:form-params` |
 | `:basic-auth` | `[user pass]` or `{:user ... :pass ...}`: an `Authorization: Basic` header |
 | `:oauth-token` | an `Authorization: Bearer` header |
@@ -224,9 +224,6 @@ $ rontolisp proxy.clj -o src/worker.wasm --no-wasi --host-fetch --host-boundary=
   and `:expect-continue`; the vars `client`, `default-client-opts` and the `->` builders,
   which make a `java.net.http` client; the namespace `babashka.http-client` itself, which
   points here.
-- A reader is sent as its text, where babashka.http-client refuses one. A Ring request's
-  `:body` is a reader here (an input stream under Jetty), so a binary upload sent on is not
-  sent octet for octet.
 - A transport failure is a `java.io.IOException` (babashka.http-client: its subclass, such as
   `java.net.ConnectException`).
 - Under `--host-fetch` the host's own `fetch` follows redirects (up to 20), so `:uri` is the

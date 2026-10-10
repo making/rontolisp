@@ -1798,6 +1798,7 @@
         ((or (eq x t) (eq x rontolisp::%clojure-false)) "java.lang.Boolean")
         ((functionp x) "clojure.lang.AFunction")
         ((rontolisp::%clojure-io-p x) (rontolisp::%clojure-io-class-name x))
+        ((rontolisp::%clojure-stream-p x) (rontolisp::%clojure-stream-class x))
         ((rontolisp::%clojure-keyword-p x) "clojure.lang.Keyword")
         ((rontolisp::%clojure-set-p x) "clojure.lang.PersistentHashSet")
         ((rontolisp::%clojure-sorted-map-p x) "clojure.lang.PersistentTreeMap")
@@ -13900,26 +13901,62 @@
   "The Ring request map of the Clack environment ENV. :uri is the RAW path,
    the request target up to its ?, like a servlet's getRequestURI; :headers is
    the environment's own table (lower-cased string names, repeats joined), an
-   equal hash table and so already a Clojure map; :body is the buffered
-   request stream, nil without a body."
+   equal hash table and so already a Clojure map; :body is an InputStream of
+   the request's octets (%clojure-ring-input)."
   (let* ((target (getf env :request-uri))
          (q (position #\? target))
          (method (rontolisp::%clojure-ring-name (getf env :request-method)))
          (scheme (rontolisp::%clojure-ring-name (getf env :url-scheme))))
     (rontolisp::%clojure-ring-map
      (list (cons "server-port" (getf env :server-port))
-           (cons "server-name" (getf env :server-name))
-           (cons "remote-addr" (getf env :remote-addr))
-           (cons "uri" (if q (subseq target 0 q) target))
-           (cons "query-string" (getf env :query-string))
-           (cons "scheme" (rontolisp::%clojure-ring-keyword scheme))
-           (cons "request-method" (rontolisp::%clojure-ring-keyword method))
-           (cons "protocol"
-                 (rontolisp::%clojure-ring-name (getf env :server-protocol)))
-           (cons "headers" (getf env :headers))
-           (cons "content-type" (getf env :content-type))
-           (cons "content-length" (getf env :content-length))
-           (cons "body" (getf env :raw-body))))))
+      (cons "server-name" (getf env :server-name))
+      (cons "remote-addr" (getf env :remote-addr))
+      (cons "uri" (if q (subseq target 0 q) target))
+      (cons "query-string" (getf env :query-string))
+      (cons "scheme" (rontolisp::%clojure-ring-keyword scheme))
+      (cons "request-method" (rontolisp::%clojure-ring-keyword method))
+      (cons "protocol"
+            (rontolisp::%clojure-ring-name (getf env :server-protocol)))
+      (cons "headers" (getf env :headers))
+      (cons "content-type" (getf env :content-type))
+      (cons "content-length" (getf env :content-length))
+      (cons "body" (rontolisp::%clojure-ring-input (getf env :raw-body)))))))
+
+;; The class of a Ring request :body: Jetty's, as ring-jetty-adapter 1.15.3 hands
+;; one to a handler.
+(defun rontolisp::%clojure-ring-input-class ()
+  "org.eclipse.jetty.ee9.nested.HttpInput")
+
+(defun rontolisp::%clojure-ring-input (raw)
+  "The Ring request :body over the buffered request body RAW, a bivalent
+   stream (nil without a body): a java.io.InputStream (a clojure.java.io byte
+   stream) of every octet RAW holds, empty without a body, of the class the
+   oracle's is -- Jetty's HttpInput, which a close leaves readable."
+  (let ((chunks nil) (total 0))
+    (if raw
+        (loop
+          (let ((chunk (make-array 4096 :element-type '(unsigned-byte 8)))
+                (n 0)
+                (b 0))
+            (loop
+              (if (>= n 4096) (return nil))
+              (setq b (read-byte raw nil -1))
+              (if (< b 0) (return nil))
+              (setf (aref chunk n) b)
+              (setq n (+ n 1)))
+            (if (> n 0)
+                (progn
+                  (setq chunks
+                        (cons (if (< n 4096) (subseq chunk 0 n) chunk) chunks))
+                  (setq total (+ total n))))
+            (if (< n 4096) (return nil)))))
+    (list :C%INPUT-STREAM (vector nil
+                                  (if chunks
+                                      (rontolisp::%octets-join (nreverse chunks)
+                                                               total)
+                                      (make-array 0
+                                       :element-type '(unsigned-byte 8))) 0 nil
+                                  (rontolisp::%clojure-ring-input-class)))))
 
 (defun rontolisp::%clojure-ring-sequential-p (x)
   "Whether X is a seq a response body or header value may be: a list, a lazy
@@ -13965,9 +14002,9 @@
 ;; a java: member answered is a host arm.
 (defun rontolisp::%clojure-ring-body (body)
   "A Ring response :body as a Clack body: nil; a String; a seq whose members
-   are written through str; a character input stream (a clojure.java.io/reader,
-   a request :body), read to its end and closed; a java.io.File, its octets as
-   they are; a byte stream (clojure.java.io/input-stream), its octets left,
+   are written through str; a character input stream (a clojure.java.io/reader),
+   read to its end and closed; a java.io.File, its octets as they are; a byte
+   stream (clojure.java.io/input-stream, a request :body), its octets left,
    then closed. Anything else is refused by its printed value."
   (cond ((null body) nil)
    ((stringp body) (list body))
@@ -14349,8 +14386,8 @@
   "The request body fetch sends for the :body option BODY, the oracle's
    ->body-publisher: a string as it is, nil none, a byte array, a java.io.File
    and an InputStream (a clojure.java.io byte stream, a reply's :as :stream
-   body) their octets, a character stream (a clojure.java.io/reader, a Ring
-   request :body) read to its end; anything else the oracle's ex-info."
+   body, a Ring request :body) their octets; anything else -- a reader
+   included -- the oracle's ex-info."
   (cond ((null body) nil)
         ((stringp body) body)
         ;; a byte array's octets as they are: an arm a program making none folds
@@ -14366,12 +14403,7 @@
                     (rontolisp::%clojure-http-octets-of body)))
                  ((eq kind :C%INPUT-STREAM)
                   (rontolisp::%clojure-http-octets-of body))
-                 ((eq kind :READER) (rontolisp::%clojure-io-reader-text body))
                  (t (rontolisp::%clojure-http-no-body body)))))
-        ((streamp body)
-         (let ((text (rontolisp::%clojure-read-to-end body)))
-           (close body)
-           text))
         (t (rontolisp::%clojure-http-no-body body))))
 
 (defun rontolisp::%clojure-http-no-body (body)
@@ -19385,7 +19417,12 @@
   (if (rontolisp::%clojure-io-array-stream-p x)
       nil
       (let* ((state (car (cdr x))) (s (svref state 0)))
-        (if (not (svref state 3))
+        ;; a Ring request :body stays readable, as Jetty's HttpInput does
+        (if (not
+             (or (svref state 3)
+                 (and (> (length state) 4)
+                      (equal (svref state 4)
+                             (rontolisp::%clojure-ring-input-class)))))
             (progn
               (setf (svref state 3) t)
               (cond ((rontolisp::%clojure-async-stream-p s)
@@ -20592,6 +20629,10 @@
           '("sun.net.www.protocol.http.HttpURLConnection$HttpInputStream"
             "java.io.FilterInputStream" "java.io.InputStream"
             "java.io.Closeable" "java.lang.AutoCloseable"))
+         ((equal class (rontolisp::%clojure-ring-input-class))
+          '("org.eclipse.jetty.ee9.nested.HttpInput"
+            "jakarta.servlet.ServletInputStream" "java.io.InputStream"
+            "java.io.Closeable" "java.lang.AutoCloseable" "java.lang.Runnable"))
          (t
           '("jdk.internal.net.http.ResponseSubscribers$HttpResponseInputStream"
             "java.io.InputStream" "java.io.Closeable" "java.lang.AutoCloseable"

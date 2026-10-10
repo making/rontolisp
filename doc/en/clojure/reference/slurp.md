@@ -9,9 +9,9 @@ default). A string spelling a URL is that URL in a program that loads clojure.ja
 an `http:` URL, which goes through `rontolisp:fetch` ([HTTP URLs](clojure-java-io.md#http-urls)):
 `(slurp "https://...")` reads the reply. Runs on every backend; on wasm a file needs a `--dir`
 preopen covering it. An open
-reader (a `clojure.java.io/reader`, a Ring request [`:body`](ring.md)) is read to its end and
-closed on every backend, like the oracle: a later read of it is
-`java.io.IOException: Stream closed` (of a Ring `:body`, the end of the body), and a
+reader (a `clojure.java.io/reader`) or byte stream is read to its end and closed on every
+backend, like the oracle: a later read of it is `java.io.IOException: Stream closed` (of a
+Ring request [`:body`](ring.md), which a close leaves readable, the end of the body), and a
 later close, such as `with-open`'s, does nothing. As a value a one-argument function.
 
 ```console

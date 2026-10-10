@@ -375,6 +375,15 @@ class ClojureRingUtilTest {
 			assertThat(response.statusCode()).isEqualTo(200);
 			assertThat(response.body()).isEqualTo("J\u00fcrgen M|\u65e5 1|y");
 			assertThat(response.headers().firstValue("content-type")).hasValue("text/plain; charset=UTF-8");
+			// the body is read in the form's charset, as ring-core's slurp :encoding
+			// reads it
+			HttpResponse<String> latin = client
+				.send(HttpRequest.newBuilder(URI.create("http://127.0.0.1:" + port + "/form"))
+					.header("Content-Type", "application/x-www-form-urlencoded; charset=ISO-8859-1")
+					.POST(HttpRequest.BodyPublishers
+						.ofByteArray(new byte[] { 'n', 'a', 'm', 'e', '=', (byte) 0xc3, (byte) 0xa9 }))
+					.build(), HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+			assertThat(latin.body()).isEqualTo("\u00c3\u00a9||");
 		}
 		finally {
 			RontoHttpServer.stopServer(handle);

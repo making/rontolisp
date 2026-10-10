@@ -101,8 +101,6 @@ program names them:
   replaces it.
 - `body-string` is a function of `nil`, a string, a seq or a stream, not a multimethod a
   program extends.
-- `wrap-params` reads a form body with `slurp`; the `:encoding` option (or the request's
-  charset) governs the percent-decoding, as in Ring.
 - `content-length` reads ASCII digits only (Java's `Long/valueOf` also takes other
   scripts' digits).
 - A canonical path resolves every symbolic link, as the oracle's does, but stays relative

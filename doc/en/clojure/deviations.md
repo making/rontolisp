@@ -345,12 +345,9 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   reader only and answers lazily);
   `spit`/`slurp`/`line-seq`/`reader` run on every backend, on wasm with a `--dir` preopen
   covering the file.
-  A `java.io.InputStreamReader` over a reader is that reader, on every backend: here a
-  Ring request `:body` is a reader, where the oracle's is an `InputStream`.
 - The Ring adapter (`ring.adapter.rontolisp/run-server`) puts `:content-type` and
   `:content-length` in the request map but not `:character-encoding` or
-  `:ssl-client-cert`; a request without a body has `:body` `nil` (Jetty's adapter
-  supplies an empty stream). An asynchronous handler and a second concurrent server are
+  `:ssl-client-cert`. An asynchronous handler and a second concurrent server are
   refused or replaced, and a `java.io.File` body naming no file signals (500) where Jetty
   answers an empty 200 (see [the adapter](reference/ring.md)).
 - The built-in [Ring utilities](reference/ring-util.md) name a charset by a string (UTF-8,

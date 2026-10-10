@@ -28,7 +28,7 @@
   [request encoding]
   (let [params (if-let [body (and (req/urlencoded-form? request)
                                   (:body request))]
-                 (parse-params (slurp body) encoding)
+                 (parse-params (slurp body :encoding encoding) encoding)
                  {})]
     (-> request
         (assoc-param-map :form-params params)

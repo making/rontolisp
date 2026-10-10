@@ -233,13 +233,16 @@ class WarE2eTest {
 	 * The war leg of {@code ring.adapter.rontolisp/run-server} (the other legs:
 	 * {@code ClojureRingAdapterTest}, {@code ServeRingComponentE2eTest}): the Ring
 	 * handler registered by the shared {@code rontolisp::%http-serve} servlet leg,
-	 * reading its {@code :body} and answering a header vector as repeated lines.
+	 * reading its {@code :body} (an InputStream of the request's octets, empty without a
+	 * body) and answering a header vector as repeated lines.
 	 */
 	private static final String RING_HANDLER = """
 			(ns ring-war (:require [ring.adapter.rontolisp :refer [run-server]] [ring.util.response :as r]))
 			(defn handler [{:keys [request-method uri query-string body]}]
-			  (if (= uri "/file")
-			    (r/file-response "bytes.bin" {:root "%DIR%"})
+			  (cond
+			    (= uri "/file") (r/file-response "bytes.bin" {:root "%DIR%"})
+			    (= uri "/relay") {:body body}
+			    :else
 			    {:status 200
 			     :headers {"Content-Type" "text/plain" "X-Demo" ["one" "two"]}
 			     :body [(name request-method) " " uri " " query-string " " (if body (slurp body) "-")]}))
@@ -267,7 +270,13 @@ class WarE2eTest {
 			assertThat(echo.headers().allValues("x-demo")).containsExactly("one", "two");
 			HttpResponse<String> get = client().send(HttpRequest.newBuilder(uri(port, "/")).build(),
 					HttpResponse.BodyHandlers.ofString());
-			assertThat(get.body()).isEqualTo("get /  -");
+			assertThat(get.body()).as("a bodiless request's :body is an empty stream").isEqualTo("get /  ");
+			byte[] upload = { (byte) 0xff, (byte) 0xfe, 0x41, (byte) 0xc3, (byte) 0xa9 };
+			assertThat(client()
+				.send(HttpRequest.newBuilder(uri(port, "/relay"))
+					.POST(HttpRequest.BodyPublishers.ofByteArray(upload))
+					.build(), HttpResponse.BodyHandlers.ofByteArray())
+				.body()).isEqualTo(upload);
 			HttpResponse<byte[]> file = client().send(HttpRequest.newBuilder(uri(port, "/file")).build(),
 					HttpResponse.BodyHandlers.ofByteArray());
 			assertThat(file.statusCode()).isEqualTo(200);

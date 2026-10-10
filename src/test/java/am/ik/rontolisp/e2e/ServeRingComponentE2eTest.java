@@ -55,6 +55,12 @@ class ServeRingComponentE2eTest {
 			              "|" (:content-length req) "|" (:content-type req)]}
 			      (= uri "/lines")
 			      {:body (str (vec (line-seq (io/reader (java.io.InputStreamReader. body "UTF-8")))))}
+			      (= uri "/octets")
+			      {:body (pr-str [(class body) (instance? java.io.InputStream body)
+			                      (.available body) (.read body) (do (.close body) (.read body))
+			                      (loop [acc []]
+			                        (let [b (.read body)] (if (neg? b) acc (recur (conj acc b)))))])}
+			      (= uri "/relay") {:body body}
 			      (= uri "/empty") {:status 204}
 			      (= uri "/missing") {:body (io/file "/no/such/dir/missing.bin")}
 			      (= uri "/asset") {:body (io/input-stream (io/resource "asset.txt"))}
@@ -105,6 +111,23 @@ class ServeRingComponentE2eTest {
 				.build(), HttpResponse.BodyHandlers.ofString());
 			assertThat(lines.statusCode()).isEqualTo(200);
 			assertThat(lines.body()).isEqualTo("[\"l1\" \"l2\"]");
+
+			byte[] upload = { (byte) 0xff, (byte) 0xfe, 0x41, (byte) 0xc3, (byte) 0xa9 };
+			assertThat(client
+				.send(HttpRequest.newBuilder(uri(port, "/octets"))
+					.POST(HttpRequest.BodyPublishers.ofByteArray(upload))
+					.build(), HttpResponse.BodyHandlers.ofString())
+				.body()).as("the body an InputStream of the request's octets")
+				.isEqualTo("[:org.eclipse.jetty.ee9.nested.HttpInput true 5 255 254 [65 195 169]]");
+			assertThat(client
+				.send(HttpRequest.newBuilder(uri(port, "/octets")).build(), HttpResponse.BodyHandlers.ofString())
+				.body()).as("an empty one without a body")
+				.isEqualTo("[:org.eclipse.jetty.ee9.nested.HttpInput true 0 -1 -1 []]");
+			assertThat(client
+				.send(HttpRequest.newBuilder(uri(port, "/relay"))
+					.POST(HttpRequest.BodyPublishers.ofByteArray(upload))
+					.build(), HttpResponse.BodyHandlers.ofByteArray())
+				.body()).isEqualTo(upload);
 
 			assertThat(client
 				.send(HttpRequest.newBuilder(uri(port, "/empty")).build(), HttpResponse.BodyHandlers.ofString())

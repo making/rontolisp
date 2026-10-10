@@ -330,12 +330,9 @@
   開いて読むパス、File、URL、バイトストリームを取って、HTTP の応答を遅延で読むほかはどれも
   strict に答えます（オラクルはリーダーだけを取って遅延です）。`spit`・`slurp`・`line-seq`・`reader` はすべてのバックエンドで、
   wasm ではファイルを含む `--dir` プリオープン付きで動きます。
-  リーダーの上の `java.io.InputStreamReader` はどのバックエンドでもそのリーダー自身です。Ring のリクエスト
-  `:body` が、オラクルでは `InputStream` であるのに対し、ここではリーダーだからです。
 - Ring アダプター（`ring.adapter.rontolisp/run-server`）のリクエストマップには
   `:content-type` と `:content-length` が入りますが、`:character-encoding` と
-  `:ssl-client-cert` は入りません。ボディのないリクエストの `:body` は `nil` です（Jetty の
-  アダプターは空のストリームを渡します）。非同期ハンドラは拒否し、2 つ目の同時サーバーは
+  `:ssl-client-cert` は入りません。非同期ハンドラは拒否し、2 つ目の同時サーバーは
   最初のものを置き換えます。ファイルを指さない `java.io.File` のボディはエラーを通知し
   （500）、Jetty は空の 200 を返します（[アダプター](reference/ring.md)を参照）。
 - 組み込みの [Ring ユーティリティ](reference/ring-util.md)は、文字セットを文字列で指定します

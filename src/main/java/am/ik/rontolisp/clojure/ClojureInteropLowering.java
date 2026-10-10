@@ -1124,12 +1124,12 @@ final class ClojureInteropLowering {
 	 * The host reader classes a construction of which over a Common Lisp character input
 	 * stream answers the stream itself: such a stream already peeks one character, which
 	 * is all {@code read} needs, so {@code (java.io.PushbackReader. (reader path))} reads
-	 * on every backend. {@code java.io.InputStreamReader} is one too: a Ring request
-	 * {@code :body} is a Lisp input stream here, so {@code (InputStreamReader. body)} --
-	 * the charset argument included, every stream reading UTF-8 -- is the body itself.
+	 * on every backend.
 	 */
-	static final Set<String> READER_WRAPPERS = Set.of("java.io.PushbackReader", "java.io.BufferedReader",
-			"java.io.InputStreamReader");
+	static final Set<String> READER_WRAPPERS = Set.of("java.io.PushbackReader", "java.io.BufferedReader");
+
+	/** The reader decoding a byte stream: {@code (InputStreamReader. in [charset])}. */
+	private static final String INPUT_STREAM_READER = "java.io.InputStreamReader";
 
 	/**
 	 * A {@code java.io.PushbackReader}/{@code java.io.BufferedReader} construction (an
@@ -1137,14 +1137,20 @@ final class ClojureInteropLowering {
 	 * construction a string input stream of its text, on every backend; over a Common
 	 * Lisp stream (a {@code clojure.java.io/reader}, {@code *in*}, a nested wrapper) that
 	 * stream -- decided at run time unless the argument lowers to one; over anything else
-	 * the host construction, like before. Null for any other class or count, so the call
-	 * keeps its {@code java:new} shape.
+	 * the host construction, like before. A {@code java.io.InputStreamReader}
+	 * construction over a byte stream {@code clojure.java.io} made (a Ring request
+	 * {@code :body} among them) decodes it in the charset given; over anything else it is
+	 * the host construction. Null for any other class or count, so the call keeps its
+	 * {@code java:new} shape.
 	 * @param ctx the hub
 	 * @param cls the resolved class name
 	 * @param args the argument datums
 	 * @return the lowered construction, or null
 	 */
 	static @Nullable LispVal readerWrapperConstruction(ClojureLowering ctx, String cls, List<LispVal> args) {
+		if (cls.equals(INPUT_STREAM_READER) && !args.isEmpty() && args.size() <= 2) {
+			return inputStreamReaderConstruction(ctx, args);
+		}
 		if (!READER_WRAPPERS.contains(cls) || args.isEmpty() || args.size() > 2) {
 			return null;
 		}
@@ -1169,15 +1175,32 @@ final class ClojureInteropLowering {
 				: ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
 						ClojureLowerUtil.list(ClojureLowerUtil.sym("streamp"), source), source,
 						ClojureLowerUtil.cons(JAVA_NEW, host));
-		if (cls.equals("java.io.InputStreamReader") && !isStreamForm(reader)) {
-			// a byte stream clojure.java.io made, decoded in the charset given: an arm a
-			// program making none sheds
-			body = ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
-					ClojureLowerUtil.list(new LispSymbol(ClojureIoLowering.IO_P), source),
-					ClojureLowerUtil.list(new LispSymbol(ClojureIoLowering.DECODING_READER), source,
-							host.size() == 3 ? host.get(2) : ClojureLowering.NIL_CONST),
-					body);
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let*"), ClojureLowerUtil.list(bindings), body);
+	}
+
+	/**
+	 * {@code (InputStreamReader. in [charset])}: a byte stream {@code clojure.java.io}
+	 * made decoded in the charset given (an arm a program making none sheds), anything
+	 * else the host construction.
+	 */
+	private static LispVal inputStreamReaderConstruction(ClojureLowering ctx, List<LispVal> args) {
+		LispSymbol source = ctx.freshTemp();
+		List<LispVal> bindings = new ArrayList<>();
+		bindings.add(ClojureLowerUtil.list(source, ctx.lower(args.get(0))));
+		List<LispVal> host = new ArrayList<>();
+		host.add(LispString.literal(INPUT_STREAM_READER));
+		host.add(source);
+		LispVal charset = ClojureLowering.NIL_CONST;
+		if (args.size() == 2) {
+			LispSymbol named = ctx.freshTemp();
+			bindings.add(ClojureLowerUtil.list(named, ctx.lower(args.get(1))));
+			host.add(named);
+			charset = named;
 		}
+		LispVal body = ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
+				ClojureLowerUtil.list(new LispSymbol(ClojureIoLowering.IO_P), source),
+				ClojureLowerUtil.list(new LispSymbol(ClojureIoLowering.DECODING_READER), source, charset),
+				ClojureLowerUtil.cons(JAVA_NEW, host));
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let*"), ClojureLowerUtil.list(bindings), body);
 	}
 

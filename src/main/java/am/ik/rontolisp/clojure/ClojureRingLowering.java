@@ -33,6 +33,12 @@ final class ClojureRingLowering {
 
 	private static final String SERVE = "RONTOLISP::%HTTP-SERVE";
 
+	/**
+	 * The Clack application of a Ring handler, whose request {@code :body} is a
+	 * {@code clojure.java.io} byte stream: a producer of the io family.
+	 */
+	static final String APP = "RONTOLISP::%CLOJURE-RING-APP";
+
 	private ClojureRingLowering() {
 	}
 
@@ -87,8 +93,7 @@ final class ClojureRingLowering {
 	 * first, so a refused option signals before anything binds.
 	 */
 	private static LispVal serve(LispSymbol fun, LispSymbol options) {
-		return ClojureLowerUtil.list(new LispSymbol(SERVE),
-				ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-RING-APP"), fun, options),
+		return ClojureLowerUtil.list(new LispSymbol(SERVE), ClojureLowerUtil.list(new LispSymbol(APP), fun, options),
 				ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-RING-PORT"), options),
 				ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-RING-HOST"), options),
 				ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-RING-JOIN"), options));

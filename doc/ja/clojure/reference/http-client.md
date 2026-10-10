@@ -38,7 +38,7 @@
 | `:headers` | 名前（文字列かキーワード）から文字列、または文字列の seq へのマップ。seq の要素はそれぞれ一つのフィールドとして送る |
 | `:query-params` | URL のクエリに URL エンコードして連結するマップ。値がコレクションならキーを繰り返す |
 | `:form-params` | `application/x-www-form-urlencoded` のボディとして送るマップ |
-| `:body` | 文字列。バイト配列、`java.io.File`、入力ストリーム（`clojure.java.io` のストリーム、応答の `:as :stream` のボディ）はそのオクテットを送る。リーダーは終端まで読んで送る |
+| `:body` | 文字列。バイト配列、`java.io.File`、入力ストリーム（`clojure.java.io` のストリーム、応答の `:as :stream` のボディ、[Ring](ring.md) のリクエストの `:body`）はそのオクテットを送る |
 | `:multipart` | パートの seq。`:body` と `:form-params` に代わって `multipart/form-data` のボディとして送る |
 | `:basic-auth` | `[user pass]` か `{:user ... :pass ...}`。`Authorization: Basic` ヘッダーになる |
 | `:oauth-token` | `Authorization: Bearer` ヘッダーになる |
@@ -226,9 +226,6 @@ $ rontolisp proxy.clj -o src/worker.wasm --no-wasi --host-fetch --host-boundary=
   `:version`、`:raw`、`:expect-continue`、`java.net.http` のクライアントを作る var の
   `client`、`default-client-opts` と `->` で始まるビルダー、そして名前空間
   `babashka.http-client` そのもの（このページを案内します）。
-- リーダーはそのテキストを送ります（babashka.http-client はリーダーを受け付けません）。
-  Ring のリクエストの `:body` はここではリーダー（Jetty では入力ストリーム）なので、
-  バイナリのアップロードをそのまま送り出すと、オクテット単位では一致しません。
 - トランスポートの失敗は `java.io.IOException` です（babashka.http-client では
   `java.net.ConnectException` などのサブクラス）。
 - `--host-fetch` ではホスト自身の `fetch` がリダイレクトを（20 回まで）たどるため、`:uri` は

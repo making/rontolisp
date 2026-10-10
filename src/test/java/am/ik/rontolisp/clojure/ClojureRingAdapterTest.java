@@ -42,13 +42,16 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
  * under {@code wasmtime serve} is {@code ServeRingComponentE2eTest}; the war leg is
  * {@code WarE2eTest}. What every leg pins: the request map (a lower-cased method keyword
  * usable as a map key, the raw {@code :uri}, the query string, the headers map, scheme,
- * protocol, content type and length), the request {@code :body} read through
- * {@code slurp} (which closes it; a second {@code slurp} and a {@code .read} then answer
- * the end, as under the oracle's Jetty adapter), {@code clojure.java.io/reader} +
- * {@code line-seq} and {@code java.io.InputStreamReader}, and the response map (a missing
- * status, a header vector as repeated lines, a keyword header name, a seq body; on the
- * socket legs a {@code java.io.File}, a byte stream, {@code file-response}'s File and a
- * byte array sent octet for octet; on every leg a File naming no file answering 500).
+ * protocol, content type and length), the request {@code :body} -- an InputStream of the
+ * request's octets, empty without a body, of Jetty's class -- read through {@code slurp}
+ * (which closes it; a second {@code slurp} and a {@code .read} then answer the end, as
+ * under the oracle's Jetty adapter), {@code .read} after a {@code .close},
+ * {@code clojure.java.io/reader} + {@code line-seq}, {@code java.io.InputStreamReader},
+ * {@code clojure.java.io/copy} and a Latin-1 {@code slurp}, and the response map (a
+ * missing status, a header vector as repeated lines, a keyword header name, a seq body;
+ * on the socket legs a {@code java.io.File}, a byte stream, {@code file-response}'s File
+ * and a byte array sent octet for octet; on every leg a File naming no file answering
+ * 500).
  */
 class ClojureRingAdapterTest {
 
@@ -77,6 +80,16 @@ class ClojureRingAdapterTest {
 			              "|" (:content-length req) "|" (:content-type req)]}
 			      (= uri "/lines")
 			      {:body (str (vec (line-seq (io/reader (java.io.InputStreamReader. body "UTF-8")))))}
+			      (= uri "/octets")
+			      {:body (pr-str [(class body) (instance? java.io.InputStream body)
+			                      (instance? jakarta.servlet.ServletInputStream body)
+			                      (.available body) (.read body) (do (.close body) (.read body))
+			                      (loop [acc []]
+			                        (let [b (.read body)] (if (neg? b) acc (recur (conj acc b)))))])}
+			      (= uri "/relay") {:body body}
+			      (= uri "/copy")
+			      {:body (let [out (java.io.ByteArrayOutputStream.)] (io/copy body out) (str (vec (.toByteArray out))))}
+			      (= uri "/latin") {:body (slurp body :encoding "ISO-8859-1")}
 			      (= uri "/empty") {:status 204}
 			      (= uri "/file") {:body (io/file "%DIR%" "bytes.bin")}
 			      (= uri "/stream") {:body (io/input-stream (io/file "%DIR%" "bytes.bin"))}
@@ -163,6 +176,33 @@ class ClojureRingAdapterTest {
 		assertThat(lines.statusCode()).as("a response map without :status").isEqualTo(200);
 		assertThat(lines.body()).isEqualTo("[\"l1\" \"l2\"]");
 
+		// the body is an InputStream of the request's octets, empty without a body; a
+		// close leaves it readable, as Jetty's HttpInput (ring-jetty-adapter 1.15.3)
+		byte[] upload = { (byte) 0xff, (byte) 0xfe, 0x41, (byte) 0xc3, (byte) 0xa9 };
+		assertThat(client
+			.send(HttpRequest.newBuilder(uri(port, "/octets"))
+				.POST(HttpRequest.BodyPublishers.ofByteArray(upload))
+				.build(), HttpResponse.BodyHandlers.ofString())
+			.body()).isEqualTo("[:org.eclipse.jetty.ee9.nested.HttpInput true true 5 255 254 [65 195 169]]");
+		assertThat(
+				client.send(HttpRequest.newBuilder(uri(port, "/octets")).build(), HttpResponse.BodyHandlers.ofString())
+					.body())
+			.isEqualTo("[:org.eclipse.jetty.ee9.nested.HttpInput true true 0 -1 -1 []]");
+		assertThat(client
+			.send(HttpRequest.newBuilder(uri(port, "/relay"))
+				.POST(HttpRequest.BodyPublishers.ofByteArray(upload))
+				.build(), HttpResponse.BodyHandlers.ofByteArray())
+			.body()).isEqualTo(upload);
+		assertThat(client.send(
+				HttpRequest.newBuilder(uri(port, "/copy")).POST(HttpRequest.BodyPublishers.ofByteArray(upload)).build(),
+				HttpResponse.BodyHandlers.ofString())
+			.body()).isEqualTo("[-1 -2 65 -61 -87]");
+		assertThat(client
+			.send(HttpRequest.newBuilder(uri(port, "/latin"))
+				.POST(HttpRequest.BodyPublishers.ofByteArray(upload))
+				.build(), HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8))
+			.body()).isEqualTo("ÿþAÃ©");
+
 		HttpResponse<String> empty = client.send(HttpRequest.newBuilder(uri(port, "/empty")).build(),
 				HttpResponse.BodyHandlers.ofString());
 		assertThat(empty.statusCode()).isEqualTo(204);
@@ -221,6 +261,8 @@ class ClojureRingAdapterTest {
 			show(call({ method: 'GET', target: '/nope', headers: { host: 'h' } }));
 			show(call({ method: 'GET', target: '/missing', headers: { host: 'h' } }));
 			show(call({ method: 'GET', target: '/asset', headers: { host: 'h' } }));
+			show(call({ method: 'POST', target: '/octets', headers: { host: 'h', 'content-length': '3' }, body: 'Aé' }));
+			show(call({ method: 'GET', target: '/octets', headers: { host: 'h' } }));
 			""";
 
 	@Test
@@ -239,12 +281,15 @@ class ClojureRingAdapterTest {
 		String replies = new String(node.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
 		assertThat(node.waitFor()).as(replies).isZero();
 		List<String> lines = replies.lines().toList();
-		assertThat(lines).hasSize(7);
+		assertThat(lines).hasSize(9);
 		assertThat(lines.get(5)).as("a File the module cannot read answers 500")
 			.startsWith("[500,")
 			.contains("missing.bin (No such file or directory)");
 		assertThat(lines.get(6)).as("a byte stream over a resource the module carries")
 			.isEqualTo("[200,\"h\u00e9llo\\n\",[]]");
+		assertThat(lines.subList(7, 9)).as("the body an InputStream of the request's octets, empty without one")
+			.containsExactly("[200,\"[:org.eclipse.jetty.ee9.nested.HttpInput true true 3 65 195 [169]]\",[]]",
+					"[200,\"[:org.eclipse.jetty.ee9.nested.HttpInput true true 0 -1 -1 []]\",[]]");
 		assertThat(lines.subList(0, 5)).containsExactly(
 				"[200,\"get G /info a=1&b=%20x ring-test :http HTTP/1.1 true\",[\"x-kw=k\",\"x-multi=a\",\"x-multi=b\"]]",
 				"[201,\"echo:hé|\\\"\\\"|-1|3|text/plain\",[]]", "[200,\"[\\\"l1\\\" \\\"l2\\\"]\",[]]",

@@ -57,7 +57,10 @@ final class ClojureClassBases {
 			Map.entry("java.util.zip.GZIPInputStream", "java.util.zip.InflaterInputStream"),
 			Map.entry("java.util.zip.InflaterInputStream", "java.io.FilterInputStream"),
 			Map.entry("jdk.internal.net.http.ResponseSubscribers$HttpResponseInputStream", "java.io.InputStream"),
-			Map.entry("sun.net.www.protocol.http.HttpURLConnection$HttpInputStream", "java.io.FilterInputStream"));
+			Map.entry("sun.net.www.protocol.http.HttpURLConnection$HttpInputStream", "java.io.FilterInputStream"),
+			// the class of a Ring request :body
+			Map.entry(ClojureIoLowering.RING_INPUT, "jakarta.servlet.ServletInputStream"),
+			Map.entry("jakarta.servlet.ServletInputStream", "java.io.InputStream"));
 
 	/**
 	 * The superclass of each class an instant {@code class} answers that has one below
@@ -260,7 +263,7 @@ final class ClojureClassBases {
 		List<String> classes = new ArrayList<>(RUNTIME_THROWABLES);
 		classes.addAll(STREAM_SUPERS.keySet().stream().sorted().toList());
 		classes.addAll(List.of("java.io.BufferedInputStream", "java.io.BufferedOutputStream", "java.io.File",
-				"java.net.URI", "java.net.URL"));
+				"java.net.URI", "java.net.URL", ClojureIoLowering.RING_INPUT));
 		return classes;
 	}
 

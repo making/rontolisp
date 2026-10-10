@@ -1398,12 +1398,28 @@ serve`, and a war on embedded Tomcat; plain P1 compiles and signals the directiv
   keyword, `:uri` = `:request-uri` up to `?` (RAW, not the decoded `:path-info`),
   `:query-string`, `:headers` = the env's equal table as is (already a Clojure map),
   `:server-name`/`-port`, `:remote-addr`, `:scheme` keyword, `:protocol` string,
-  `:content-type`/`:content-length`, `:body` = the `:buffered` stream (nil without a body).
-  `slurp` closes it, which leaves it readable at its cursor on every backend: the compiled
-  Gray body's close is the default no-op, and the interpreter's `close` keeps an
-  `HttpRequestBodyStream` entry for the transport to remove. A second `slurp` answers `""`
-  and `.read` `-1`, as under the oracle's Jetty adapter (ring-jetty-adapter 1.15.3, measured
-  2026-10-08); `ClojureRingAdapterTest`/`ServeRingComponentE2eTest` `/echo` pin it.
+  `:content-type`/`:content-length`, `:body` = a `clojure.java.io` byte stream of the
+  request's octets (`%clojure-ring-input`, 2026-10-10): `(:C%INPUT-STREAM #(nil octets 0
+  nil "org.eclipse.jetty.ee9.nested.HttpInput"))`, the `:buffered` stream drained by
+  `read-byte` (both bivalent bodies -- the interpreter's `HttpRequestBodyStream`, the compiled
+  Gray class -- answer it; `read-sequence` would put the Gray dispatch helper in every
+  Gray-using Clojure program, "Prelude trap"), EMPTY without a body. So `.read`, `slurp`
+  (`:encoding`), `io/reader`, `line-seq`, `io/copy`, `InputStreamReader.` and the response
+  and client `:body` arms take octets through the io kernels. The Ring app
+  (`ClojureRingLowering.APP`) is an IO-family producer, so every Ring program carries the io
+  arms. Class Jetty's (`ClojureIoLowering.RING_INPUT`: `CLASSES`, `IO_SUPERS` via
+  `jakarta.servlet.ServletInputStream`, an implicit class), `class` its keyword like every
+  io value; a close leaves it readable (`%clojure-io-close-input` skips it), so a second
+  `slurp` answers `""` and `.read` `-1`. Oracle (ring-jetty-adapter 1.15.3, 2026-10-10), POST
+  `ff fe 41 c3 a9` / GET: `.read` loop `[255 254 65 195 169]` / `[]`, `.available` 5 / 0,
+  `.close` then `.read` 255, `slurp` after `.close` the whole body, `io/copy` octets, `slurp
+  :encoding "ISO-8859-1"` `ÿþAÃ©`, supers `ServletInputStream` `InputStream` `Closeable`
+  `AutoCloseable` `Runnable`, `.markSupported` false -- all identical but `class`'s keyword.
+  Before: the `:buffered` character stream, nil without a body (`.read` of a binary
+  upload answered `2089027`, a bodiless `.read` an NPE). Pins: `ClojureRingAdapterTest`
+  `/octets` `/relay` `/copy` `/latin` (interpreter, JVM, the `--no-wasi` export via node),
+  `ServeRingComponentE2eTest` (component), `WarE2eTest#aRingHandlerServesFromTheWarOnTomcat`,
+  `ClojureHttpClientTest`'s proxy `/upload` (sent on octet for octet).
   A computed method keyword is a fresh `string-downcase` charvec; `(get {:get ..} m)` and
   `=` were measured to match on all four. The keyword builders are listed slashless in
   `ClojureLibraryTest`'s namespace-map census (HTTP tokens admit no `/`).
@@ -1423,10 +1439,10 @@ serve`, and a war on embedded Tomcat; plain P1 compiles and signals the directiv
 - Options: `:port` (default 80, `ring.adapter.jetty`'s), `:host`/`:address` (nil = every
   interface), `:join?` (default true; false answers the socket leg's handle), `:async?`
   truthy refused by name. Arity 2 exactly, the oracle's wording; as a value a 2-arg lambda.
-- `(java.io.InputStreamReader. body [charset])` is the stream itself (`READER_WRAPPERS`,
-  beside `PushbackReader`/`BufferedReader`) -- the measured `no matching constructor` on the
-  JVM is gone on every backend. Over a `StringReader` it also answers the string stream,
-  where the oracle has no such constructor (a leniency, not pinned).
+- `(java.io.InputStreamReader. in [charset])` decodes a byte stream `clojure.java.io` made
+  (the request `:body` among them); anything else is the host construction
+  (`ClojureInteropLowering.inputStreamReaderConstruction`). Until 2026-10-10 it answered a Lisp
+  character stream itself (`READER_WRAPPERS`), which the old reader body needed.
 - Cloudflare Workers: `examples/cloudflare-workers/ring-hello-one-source/` compiles
   `examples/clojure/ring-hello.clj` unedited (`--no-wasi --optimize=size --emit-js-glue`,
   419,012 B, 0 imports). Its glue is the hello-* glue less the entropy seed: the reactor
@@ -1549,8 +1565,9 @@ oracle's classpath; a `deps.edn` ring-core newer than the shipped one refuses th
   the built-in Ring namespaces are ...`, and `ring.adapter.jetty` points at `run-server`.
 - Deviations: `body-string` is a `cond`, not a multimethod (`class` of a string is no
   class object on wasm); `content-length` reads ASCII digits (`Long/valueOf` takes any `Nd`);
-  `wrap-params` slurps the body (already characters; the encoding governs the
-  percent-decoding as in Ring); `form-encode` of a map is a function, not the protocol.
+  `form-encode` of a map is a function, not the protocol. `wrap-params` slurps the body with
+  `:encoding` like ring-core (since 2026-10-10: a `charset=ISO-8859-1` form of raw `c3 a9` reads
+  `Ã©`, the oracle's, where the character body read `é`).
 - Native image and the web image: `resource-config.json` registers `clojure/lib/ring/...`
   (`NativeImageResourceConfigTest` lists both directories).
 - Pins: `ClojureRingFileResponseTest` (the file responses on all four backends against a
@@ -1610,9 +1627,10 @@ new, and the five fetch has (the JDK's on the interpreter and the JVM, `wasi:htt
 - The request body (2026-10-09), the oracle's `->body-publisher` (`%clojure-http-body`): nil
   none, a string as it is, a `java.io.File` and an InputStream (a `clojure.java.io` byte stream,
   a reply's `:as :stream` body) their octets (`%clojure-http-octets-of`, an `(unsigned-byte 8)`
-  vector fetch sends as it is, `.kb/fetch-http.md` "The request body"), a reader read to its
-  end (the oracle refuses a Reader; kept while a Ring request `:body` is one, todo `f09`);
-  anything else the oracle's `ex-info` `Don't know how to convert class Xto body` (sic). A
+  vector fetch sends as it is, `.kb/fetch-http.md` "The request body"), a Ring request
+  `:body` among them; anything else -- a reader included (since 2026-10-10; `%clojure-class-name-of`
+  names a stream by `%clojure-stream-class`) -- the oracle's `ex-info` `Don't know how to
+  convert class Xto body` (sic: `java.io.BufferedReaderto body`, measured 2026-10-10). A
   File not there is `FileNotFoundException` `<path> not found` (`ofFile`'s words, not io's `(No
   such file or directory)`). A byte array is sent as its octets, a `ByteArrayInputStream`
   below its end, and a multipart part opens a byte array as `io/input-stream` does (2026-10-09).
