@@ -84,6 +84,7 @@ class SourceLanguageSeamTest {
 			Map.entry("am.ik.rontolisp.eval.GrayStreamsLibrary", SHIPPED_SOURCE),
 			Map.entry("am.ik.rontolisp.eval.HostFetchLibrary", SHIPPED_SOURCE),
 			Map.entry("am.ik.rontolisp.eval.HttpLibrary", SHIPPED_SOURCE),
+			Map.entry("am.ik.rontolisp.eval.InflateLibrary", SHIPPED_SOURCE),
 			Map.entry("am.ik.rontolisp.eval.HttpReactorInliner", SHIPPED_SOURCE),
 			Map.entry("am.ik.rontolisp.eval.HttpReactorLibrary", SHIPPED_SOURCE),
 			Map.entry("am.ik.rontolisp.eval.HttpServeLibrary", SHIPPED_SOURCE),
