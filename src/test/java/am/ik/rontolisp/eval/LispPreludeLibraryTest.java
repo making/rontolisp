@@ -327,6 +327,93 @@ class LispPreludeLibraryTest {
 	}
 
 	@Test
+	void theReplacingDecoderIsTheJdksOnTheCompilePathsAndOnTheInterpreter() {
+		// %octets-to-string-replacing is the JDK's new String(bytes, UTF_8): the
+		// interpreter's native IS that decoder, and the prelude's Lisp -- what the
+		// compile paths run -- hands each well-formed run to the native lenient decoder
+		// and decides every malformed sequence itself. Evaluating the prelude defuns
+		// here overrides the native in this evaluator, so the Lisp rule is pinned
+		// against the JDK's: each malformed shape the replacement counts tell apart, a
+		// sequence the range ends inside, and a seeded sweep over the octets that make
+		// them, each cut out of a longer vector, packed and general.
+		LispEvaluator jdk = new LispEvaluator(new java.io.PrintStream(new java.io.ByteArrayOutputStream()));
+		LispEvaluator lisp = new LispEvaluator(new java.io.PrintStream(new java.io.ByteArrayOutputStream()));
+		for (LispVal form : LispPreludeLibrary
+			.formsFor(am.ik.rontolisp.LispNames.OCTETS_TO_STRING_REPLACING_INTERNAL)) {
+			lisp.eval(form);
+		}
+		List<int[]> cases = new ArrayList<>(List.of(new int[] { 0x61, 0xF0, 0x9F, 0x98, 0x80 }, new int[] {},
+				new int[] { 0x68, 0xE9, 0x6C }, new int[] { 0xE4, 0xB8, 0x41 }, new int[] { 0xED, 0xA0, 0x80 },
+				new int[] { 0xF0, 0x9F }, new int[] { 0xF0, 0x9F, 0x41 }, new int[] { 0xF0, 0x41 },
+				new int[] { 0xE0, 0x80, 0x80 }, new int[] { 0xE0, 0xA0 }, new int[] { 0xC0, 0x80 }, new int[] { 0xC2 },
+				new int[] { 0xF4, 0x90, 0x80, 0x80 }, new int[] { 0xF5, 0x80, 0x80, 0x80 }, new int[] { 0xF8, 0x41 },
+				new int[] { 0x80, 0xBF, 0x41 }, new int[] { 0xF0, 0x9F, 0x98, 0x41 }, new int[] { 0xED, 0xA0 },
+				new int[] { 0xE3, 0x81, 0x93, 0xFF, 0xE3, 0x81 }));
+		java.util.Random random = new java.util.Random(7);
+		int[] octets = { 0x41, 0x80, 0x8F, 0x90, 0x9F, 0xA0, 0xBF, 0xC0, 0xC2, 0xDF, 0xE0, 0xE4, 0xED, 0xEF, 0xF0, 0xF4,
+				0xF5, 0xFF };
+		for (int k = 0; k < 300; k++) {
+			int[] sweep = new int[random.nextInt(9)];
+			for (int i = 0; i < sweep.length; i++) {
+				sweep[i] = octets[random.nextInt(octets.length)];
+			}
+			cases.add(sweep);
+		}
+		for (int[] c : cases) {
+			byte[] bytes = new byte[c.length];
+			StringBuilder contents = new StringBuilder("120 ");
+			for (int i = 0; i < c.length; i++) {
+				bytes[i] = (byte) c[i];
+				contents.append(c[i]).append(' ');
+			}
+			int[] expected = new String(bytes, java.nio.charset.StandardCharsets.UTF_8).codePoints().toArray();
+			for (String elementType : List.of("", " :element-type '(unsigned-byte 8)")) {
+				String call = "(rontolisp::%octets-to-string-replacing (make-array " + (c.length + 2) + elementType
+						+ " :initial-contents '(" + contents + "121)) 1 " + (c.length + 1) + ")";
+				for (LispEvaluator evaluator : List.of(lisp, jdk)) {
+					LispVal actual = evaluator.eval(LispReader.readFromString(call));
+					assertThat(actual).as(call).isInstanceOf(am.ik.rontolisp.LispString.class);
+					assertThat(codePoints((am.ik.rontolisp.LispString) actual)).as(call).containsExactly(expected);
+				}
+			}
+		}
+	}
+
+	@Test
+	void aTextPullStreamPullsThePieceAReadNeedsAndReadsLinesAcrossPieces() {
+		// the reader over a fetched reply: a Gray character stream whose text a function
+		// answers a piece at a time, asked for the next only when a read needs it -- so
+		// the first line is answered with two pieces pulled -- reading lines across
+		// pieces by the read-line rule of every stream here (an LF ends a line, one CR
+		// before it or before the end dropped), stepping back on unread-char, handing
+		// the rest over at once, and closing once
+		LispEvaluator evaluator = new LispEvaluator(new java.io.PrintStream(new java.io.ByteArrayOutputStream()));
+		String program = """
+				(let* ((pieces (list "one" (string #\\Return) (format nil "~%two") "" (format nil "~C~%" #\\Return)
+				                     "x" "three" (string #\\Return)))
+				       (pulled 0)
+				       (released 0)
+				       (s (rontolisp::%make-text-pull-stream
+				           (lambda () (setq pulled (+ pulled 1)) (pop pieces))
+				           (lambda () (setq released (+ released 1))))))
+				  (list (read-line s) pulled
+				        (multiple-value-list (read-line s)) pulled
+				        (peek-char nil s) (read-char s) (progn (unread-char #\\x s) (read-char s)) pulled
+				        (multiple-value-list (read-line s)) (read-line s nil :end)
+				        (progn (rontolisp::%text-pull-stream-close s) (rontolisp::%text-pull-stream-close s) released)
+				        (rontolisp::%text-pull-stream-closed-p s)))
+				""";
+		assertThat(evaluator.eval(LispReader.readFromString(program)).print())
+			.isEqualTo("(\"one\" 3 (\"two\" NIL) 5 #\\x #\\x #\\x 6 (\"three\" T) :END 1 T)");
+		String rest = """
+				(let* ((pieces (list "ab" "" (format nil "c~%d") "e"))
+				       (s (rontolisp::%make-text-pull-stream (lambda () (pop pieces)) nil)))
+				  (list (read-char s) (rontolisp::%text-pull-stream-rest s) (read-char s nil :end)))
+				""";
+		assertThat(evaluator.eval(LispReader.readFromString(rest)).print()).isEqualTo("(#\\a \"bc\nde\" :END)");
+	}
+
+	@Test
 	void thePreludeMergePathnamesAgreesWithPathnameOps() {
 		// merge-pathnames lives in the prelude (one definition, all four backends) while
 		// make-pathname :defaults and uiop:merge-pathnames* go through the Java

@@ -1485,6 +1485,113 @@ public final class LispPreludeLibrary {
 				(defun broadcast-stream-streams (%bss-s)
 				  (%broadcast-stream-components %bss-s))
 				""");
+		// %make-text-pull-stream: a character input stream whose text the function PULL
+		// answers a piece at a time -- a string, or nil once there is no more -- asked
+		// for the next piece only when a read needs a character the pieces so far do not
+		// hold, so a line, a character or a datum is answered as soon as its text has
+		// arrived: a reader over a fetched reply's body is one (clojure.lisp, the reply
+		// reader). A Gray stream of the composite streams' kind, so every read built-in
+		// reaches it on every backend. A line ends at LF, one CR before it (or before the
+		// end) dropped, the read-line rule of every other stream here. It owns its
+		// pushback: unread-char steps back over the character the last read answered,
+		// which is still in hand. %text-pull-stream-close closes it once, running
+		// RELEASE (a function, or nil); a Gray stream has no close method of its own
+		// (gray.lisp: close is ownable program-wide), so a reader built on it closes it
+		// through that function, and asks %text-pull-stream-closed-p, since open-stream-p
+		// answers true for every Gray stream.
+		SOURCES.put(LispNames.MAKE_TEXT_PULL_STREAM_INTERNAL, """
+				(defclass rontolisp::%text-pull-stream (rontolisp:fundamental-character-input-stream)
+				  ((rontolisp::pull :initarg :pull :reader rontolisp::%text-pull-pull)
+				   (rontolisp::release :initarg :release :reader rontolisp::%text-pull-release)
+				   (rontolisp::text :initform "" :accessor rontolisp::%text-pull-text)
+				   (rontolisp::index :initform 0 :accessor rontolisp::%text-pull-index)
+				   (rontolisp::ended :initform nil :accessor rontolisp::%text-pull-ended)
+				   (rontolisp::closed :initform nil :accessor rontolisp::%text-pull-closed)))
+				(defun rontolisp::%text-pull-stream-fill (s)
+				  ;; Whether a character is in hand, pulling pieces until one is or PULL
+				  ;; answers nil.
+				  (loop
+				    (if (< (rontolisp::%text-pull-index s) (length (rontolisp::%text-pull-text s)))
+				        (return t))
+				    (if (rontolisp::%text-pull-ended s) (return nil))
+				    (let ((piece (funcall (rontolisp::%text-pull-pull s))))
+				      (if (null piece)
+				          (setf (rontolisp::%text-pull-ended s) t)
+				          (progn
+				            (setf (rontolisp::%text-pull-text s) piece)
+				            (setf (rontolisp::%text-pull-index s) 0))))))
+				(defmethod rontolisp:stream-read-char ((s rontolisp::%text-pull-stream))
+				  (if (rontolisp::%text-pull-stream-fill s)
+				      (let ((i (rontolisp::%text-pull-index s)))
+				        (setf (rontolisp::%text-pull-index s) (+ i 1))
+				        (char (rontolisp::%text-pull-text s) i))
+				      :eof))
+				(defmethod rontolisp:stream-unread-char ((s rontolisp::%text-pull-stream) c)
+				  (declare (ignore c))
+				  (if (> (rontolisp::%text-pull-index s) 0)
+				      (setf (rontolisp::%text-pull-index s) (- (rontolisp::%text-pull-index s) 1)))
+				  nil)
+				(defmethod rontolisp:stream-peek-char ((s rontolisp::%text-pull-stream))
+				  (if (rontolisp::%text-pull-stream-fill s)
+				      (char (rontolisp::%text-pull-text s) (rontolisp::%text-pull-index s))
+				      :eof))
+				(defmethod rontolisp:stream-listen ((s rontolisp::%text-pull-stream))
+				  (< (rontolisp::%text-pull-index s) (length (rontolisp::%text-pull-text s))))
+				(defmethod rontolisp:stream-read-line ((s rontolisp::%text-pull-stream))
+				  (if (rontolisp::%text-pull-stream-fill s)
+				      (let ((pieces nil) (missing nil))
+				        (loop
+				          (let* ((text (rontolisp::%text-pull-text s))
+				                 (i (rontolisp::%text-pull-index s))
+				                 (nl (position #\\Newline text :start i)))
+				            (if nl
+				                (progn
+				                  (setq pieces (cons (subseq text i nl) pieces))
+				                  (setf (rontolisp::%text-pull-index s) (+ nl 1))
+				                  (return nil))
+				                (progn
+				                  (setq pieces (cons (subseq text i) pieces))
+				                  (setf (rontolisp::%text-pull-index s) (length text))
+				                  (if (not (rontolisp::%text-pull-stream-fill s))
+				                      (progn
+				                        (setq missing t)
+				                        (return nil)))))))
+				        (%quiet-values (rontolisp::%text-pull-line pieces) missing))
+				      :eof))
+				(defun rontolisp::%text-pull-line (pieces)
+				  ;; The line the pieces (newest first) spell, one CR at its end dropped.
+				  (let ((line (if (null (cdr pieces))
+				                  (car pieces)
+				                  (let ((out (make-string-output-stream)))
+				                    (dolist (p (reverse pieces)) (write-string p out))
+				                    (get-output-stream-string out)))))
+				    (if (and (> (length line) 0) (char= (char line (- (length line) 1)) #\\Return))
+				        (subseq line 0 (- (length line) 1))
+				        line)))
+				(defun rontolisp::%text-pull-stream-rest (s)
+				  ;; Every character left, one string: the text in hand and every piece after
+				  ;; it.
+				  (let ((out (make-string-output-stream)))
+				    (loop
+				      (if (not (rontolisp::%text-pull-stream-fill s)) (return nil))
+				      (let ((text (rontolisp::%text-pull-text s)))
+				        (write-string text out :start (rontolisp::%text-pull-index s))
+				        (setf (rontolisp::%text-pull-index s) (length text))))
+				    (get-output-stream-string out)))
+				(defun rontolisp::%text-pull-stream-close (s)
+				  (if (not (rontolisp::%text-pull-closed s))
+				      (let ((release (rontolisp::%text-pull-release s)))
+				        (setf (rontolisp::%text-pull-closed s) t)
+				        (setf (rontolisp::%text-pull-ended s) t)
+				        (setf (rontolisp::%text-pull-text s) "")
+				        (setf (rontolisp::%text-pull-index s) 0)
+				        (if release (funcall release))))
+				  nil)
+				(defun rontolisp::%text-pull-stream-closed-p (s)
+				  (rontolisp::%text-pull-closed s))
+				(defun rontolisp::%make-text-pull-stream (pull release)
+				  (make-instance 'rontolisp::%text-pull-stream :pull pull :release release))
+				""");
 		// clear-input: the read-side twin of clear-output. Nothing on any backend
 		// buffers input a program could throw away, so the operation validates its
 		// stream DESIGNATOR (nil and t are the standard input stream) and answers nil.
@@ -2635,6 +2742,101 @@ public final class LispPreludeLibrary {
 		SOURCES.put(LispNames.OCTETS_TO_STRING, """
 				(defun rontolisp:octets-to-string (octets)
 				  (rontolisp::%octets-to-string octets))
+				""");
+		// %octets-to-string-replacing: the octets of V from START below END decoded as
+		// the
+		// JDK's new String(bytes, UTF_8) decodes them -- each malformed sequence ONE
+		// U+FFFD, as many octets per replacement as that decoder takes, and a sequence
+		// the
+		// range ends inside one -- the decoding the Clojure front end's text of octets
+		// takes (a reader over a fetched reply, slurp, String. of a byte array), where
+		// %octets-to-string above keeps a malformed octet as its own character. Every
+		// well-formed run -- what a strict validator accepts, which every decoder reads
+		// alike -- goes to that native decoder, so a valid body costs one validating pass
+		// here; only a malformed sequence is decided in Lisp. The interpreter binds the
+		// name to the JDK decoder itself (Environment) and never loads this one;
+		// LispPreludeLibraryTest pins the two against each other.
+		SOURCES.put(LispNames.OCTETS_TO_STRING_REPLACING_INTERNAL, """
+				(defun rontolisp::%octets-to-string-replacing (v start end)
+				  (let ((good (rontolisp::%utf-8-well-formed-end v start end)))
+				    (if (= good end)
+				        (rontolisp::%octets-to-string
+				         (if (and (= start 0) (= end (length v))) v (subseq v start end)))
+				        (let ((out (make-string-output-stream)) (i start))
+				          (loop
+				            (if (> good i)
+				                (write-string (rontolisp::%octets-to-string (subseq v i good)) out))
+				            (if (>= good end) (return nil))
+				            (write-char (code-char 65533) out)
+				            (let ((skip (rontolisp::%utf-8-malformed-length v good end)))
+				              (if (null skip) (return nil))
+				              (setq i (+ good skip))
+				              (setq good (rontolisp::%utf-8-well-formed-end v i end))))
+				          (get-output-stream-string out)))))
+				(defun rontolisp::%utf-8-well-formed-end (v start end)
+				  ;; The index of the first octet from START below END at which no
+				  ;; well-formed sequence starts (a malformed one, or one the range ends
+				  ;; inside), END when there is none: the sequences of the Unicode
+				  ;; standard's table, no overlong form, no surrogate, nothing past U+10FFFF.
+				  (let ((i start))
+				    (loop
+				      (if (>= i end) (return end))
+				      (let ((b (aref v i)))
+				        (if (< b 128)
+				            (setq i (+ i 1))
+				            (let ((n (cond ((< b 194) 0) ((< b 224) 2) ((< b 240) 3) ((< b 245) 4) (t 0))))
+				              (if (or (= n 0) (> (+ i n) end)) (return i))
+				              (let ((b1 (aref v (+ i 1))))
+				                (if (or (< b1 (cond ((= b 224) 160) ((= b 240) 144) (t 128)))
+				                        (> b1 (cond ((= b 237) 159) ((= b 244) 143) (t 191)))
+				                        (and (> n 2) (/= (logand (aref v (+ i 2)) 192) 128))
+				                        (and (> n 3) (/= (logand (aref v (+ i 3)) 192) 128)))
+				                    (return i)))
+				              (setq i (+ i n))))))))
+				(defun rontolisp::%utf-8-malformed-length (v i end)
+				  ;; How many octets the JDK's decoder replaces with ONE U+FFFD at the
+				  ;; sequence from I that is not well-formed, or nil when the range ends
+				  ;; inside a sequence it could still complete: the decoder then answers one
+				  ;; U+FFFD for all of it and stops (String.decodeUTF8_UTF16, its malformed3
+				  ;; and malformed4).
+				  (let ((b1 (aref v i)) (r (- end i)))
+				    (cond ((and (>= b1 194) (<= b1 223))
+				           (if (>= r 2) 1 nil))
+				          ((and (>= b1 224) (<= b1 239))
+				           (if (>= r 3)
+				               (let ((b2 (aref v (+ i 1))))
+				                 (cond ((or (and (= b1 224) (= (logand b2 224) 128))
+				                            (/= (logand b2 192) 128))
+				                        1)
+				                       ((/= (logand (aref v (+ i 2)) 192) 128) 2)
+				                       ;; an encoded surrogate, all three
+				                       (t 3)))
+				               (if (and (= r 2)
+				                        (let ((b2 (aref v (+ i 1))))
+				                          (or (and (= b1 224) (= (logand b2 224) 128))
+				                              (/= (logand b2 192) 128))))
+				                   1
+				                   nil)))
+				          ((and (>= b1 240) (<= b1 247))
+				           (if (>= r 4)
+				               (let ((b2 (aref v (+ i 1))))
+				                 (cond ((or (> b1 244)
+				                            (and (= b1 240) (or (< b2 144) (> b2 191)))
+				                            (and (= b1 244) (/= (logand b2 240) 128))
+				                            (/= (logand b2 192) 128))
+				                        1)
+				                       ((/= (logand (aref v (+ i 2)) 192) 128) 2)
+				                       (t 3)))
+				               (cond ((or (> b1 244)
+				                          (and (>= r 2)
+				                               (let ((b2 (aref v (+ i 1))))
+				                                 (or (and (= b1 240) (or (< b2 144) (> b2 191)))
+				                                     (and (= b1 244) (/= (logand b2 240) 128))
+				                                     (/= (logand b2 192) 128)))))
+				                      1)
+				                     ((and (>= r 3) (/= (logand (aref v (+ i 2)) 192) 128)) 2)
+				                     (t nil))))
+				          (t 1))))
 				""");
 		// rontolisp:string-to-octets: the encoder half. Total over every CHARACTER
 		// value -- 0 to #x10FFFF, surrogates included -- so unlike the decoder it has

@@ -327,8 +327,8 @@
   （幅・浮動小数点精度付き）。`%e`・`%g`・フラグ・非リテラルは名前付きで拒否されます。
   `%s` の `nil` はオラクル同様 `"null"` です。
 - `line-seq` は開かれたリーダー（`clojure.java.io/reader` など。閉じるのは `with-open`）か、
-  開いて読むパス、File、URL、バイトストリームを取って、どれも strict に答えます（オラクルは
-  リーダーだけを取って遅延です）。`spit`・`slurp`・`line-seq`・`reader` はすべてのバックエンドで、
+  開いて読むパス、File、URL、バイトストリームを取って、HTTP の応答を遅延で読むほかはどれも
+  strict に答えます（オラクルはリーダーだけを取って遅延です）。`spit`・`slurp`・`line-seq`・`reader` はすべてのバックエンドで、
   wasm ではファイルを含む `--dir` プリオープン付きで動きます。
   リーダーの上の `java.io.InputStreamReader` はどのバックエンドでもそのリーダー自身です。Ring のリクエスト
   `:body` が、オラクルでは `InputStream` であるのに対し、ここではリーダーだからです。

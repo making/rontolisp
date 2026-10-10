@@ -462,6 +462,24 @@ eof contract. Selection keys on ANY of the cluster's surface names (constructor 
 `referencedBySurfaceForm`), so a program that only receives the stream from a library still
 splices the whole entry.
 
+## The text pull stream is a Gray stream too
+`rontolisp::%make-text-pull-stream (pull release)` (`LispPreludeLibrary`,
+`MAKE_TEXT_PULL_STREAM_INTERNAL`, 2026-10-10): a `fundamental-character-input-stream` whose
+text a function answers a piece at a time, asked for the next piece only when a read needs a
+character the pieces so far do not hold -- the Clojure front end's reader over a fetched reply
+(`.kb/clojure-frontend.md`, "Readers over a fetched reply"). Its methods are the composite
+streams' pattern on its own buffer: `stream-read-char`, `-peek-char`, `-listen`, a
+`stream-read-line` over the pieces (an LF ends a line, one CR before it or before the end
+dropped, the rule of every other stream) and its OWN `stream-unread-char`, stepping back over
+the character the last read answered, still in hand -- so the read-line override never reads
+past a parked character (the trap above). Deliberately no `close`/`open-stream-p` method (the
+stand-down is program-wide): `%text-pull-stream-close` runs RELEASE once and
+`%text-pull-stream-closed-p` answers what `open-stream-p` cannot; `%text-pull-stream-rest`
+hands the rest over at once. Selected only by the constructor's name, so only a program that
+can make one carries it and, with it, the protocol. Pin:
+`LispPreludeLibraryTest#aTextPullStreamPullsThePieceAReadNeedsAndReadsLinesAcrossPieces`
+(interpreter); the four backends through the clojure-http corpus.
+
 ## flexi-streams
 `flexi-streams.lisp` is a lite shim except for these REAL Gray classes:
 - `flexi-streams:vector-stream` (`flex:make-in-memory-input-stream`) — a

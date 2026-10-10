@@ -40,7 +40,9 @@ import org.jspecify.annotations.Nullable;
  * ({@link Family#setters}) is the seventh: its call folds to the {@code setf} of the
  * place it stores into. The library definitions only the family's arms and producers
  * reach ({@link Family#owned}) are the eighth: they go with the arms, so what they name
- * never reaches a pass that runs ahead of the pruner and reads names.
+ * never reaches a pass that runs ahead of the pruner and reads names. A family whose
+ * value is made only beside another's ({@link Family#requires}) is made when the program
+ * names one of its producers and makes that family's value too.
  *
  * <p>
  * The shape every arm keeps, which {@link #strip} checks: a test's arguments, and a
@@ -118,6 +120,18 @@ public final class ClojureArms {
 	 */
 	public static boolean needsHost(Family family) {
 		return family == Family.HOST_EXCEPTION;
+	}
+
+	/**
+	 * Whether a program naming one of a family's producers makes a value of it, given the
+	 * families it makes a value of: only beside a value of the family it requires
+	 * ({@link Family#requires}), which the enum puts ahead of it.
+	 * @param family the family
+	 * @param made the families made so far, in the enum's order
+	 * @return {@code true} when nothing the family requires is missing
+	 */
+	public static boolean madeBeside(Family family, Set<Family> made) {
+		return family.requires == null || made.contains(family.requires);
 	}
 
 	private ClojureArms() {
@@ -805,6 +819,26 @@ public final class ClojureArms {
 				Set.of(ClojureKernelLowering.HTTP_REQUEST, ClojureIoLowering.INSTALL_FETCH), Set.of()),
 
 		/**
+		 * A reader over a fetched reply's body that decodes it as it arrives -- the
+		 * prelude's text pull stream, a Gray character stream, over the body's chunks --
+		 * which the io kernels open over a byte stream reading a reply
+		 * ({@link ClojureIoLowering#REPLY_INPUT_P}) and which {@code line-seq} reads
+		 * lazily, a close closes and the rest of whose text a {@code slurp} takes at once
+		 * ({@link ClojureIoLowering#REPLY_READER_P}): only a kernel opening a reader over
+		 * a byte stream makes one -- {@code clojure.java.io}'s reader, an
+		 * {@code InputStreamReader} construction, {@code line-seq} of a byte stream --
+		 * and only in a program that fetches ({@link Family#requires}). The reader's
+		 * definitions are the family's own ({@link ClojureIoLowering#REPLY_PREFIX}): they
+		 * name the prelude's Gray class, whose splice brings the Gray streams' protocol
+		 * and call-site rewrite in, so a program that fetches and opens no reader, or
+		 * opens readers and fetches nothing, compiles as before it existed, its readers
+		 * decoding a byte stream at once.
+		 */
+		REPLY_READER("reply-reader", Set.of(ClojureIoLowering.REPLY_READER_P, ClojureIoLowering.REPLY_INPUT_P),
+				Set.of(ClojureIoLowering.OPEN_READER, ClojureIoLowering.DECODING_READER, ClojureIoLowering.LINE_SEQ),
+				ClojureIoLowering.REPLY_PREFIX, FETCH),
+
+		/**
 		 * A {@code jar:} URL whose entry is read from its jar when the program runs,
 		 * which {@code clojure.java.io}'s reads ({@code slurp}, the readers and byte
 		 * streams, {@code .openStream}) and {@code ring.util.response}'s directory test
@@ -926,13 +960,24 @@ public final class ClojureArms {
 		 */
 		final @Nullable String owned;
 
+		/**
+		 * The family a value of this one is made only beside, or {@code null}: a program
+		 * naming one of this family's producers makes a value of it only when it makes
+		 * one of that family too, which comes ahead of it in the enum.
+		 */
+		final @Nullable Family requires;
+
 		Family(String label, Set<String> switches) {
 			this(label, Set.of(), Set.of(), Map.of(), Set.of(), Set.of(), false, switches);
 		}
 
 		Family(String label, Set<String> tests, Set<String> producers, String owned) {
+			this(label, tests, producers, owned, null);
+		}
+
+		Family(String label, Set<String> tests, Set<String> producers, String owned, @Nullable Family requires) {
 			this(label, tests, Set.of(), Map.of(), producers, Set.of(), false, Set.of(), Set.of(), Set.of(), Map.of(),
-					owned);
+					owned, requires);
 		}
 
 		Family(String label, Set<String> tests, Set<String> views, Map<String, String> aliases, Set<String> producers,
@@ -961,12 +1006,13 @@ public final class ClojureArms {
 				Set<String> depths, boolean qualifiedIdents, Set<String> switches, Set<String> refusals,
 				Set<String> conditions, Map<String, String> setters) {
 			this(label, tests, views, aliases, producers, depths, qualifiedIdents, switches, refusals, conditions,
-					setters, null);
+					setters, null, null);
 		}
 
 		Family(String label, Set<String> tests, Set<String> views, Map<String, String> aliases, Set<String> producers,
 				Set<String> depths, boolean qualifiedIdents, Set<String> switches, Set<String> refusals,
-				Set<String> conditions, Map<String, String> setters, @Nullable String owned) {
+				Set<String> conditions, Map<String, String> setters, @Nullable String owned,
+				@Nullable Family requires) {
 			this.label = label;
 			this.tests = tests;
 			this.views = views;
@@ -979,6 +1025,7 @@ public final class ClojureArms {
 			this.conditions = conditions;
 			this.setters = setters;
 			this.owned = owned;
+			this.requires = requires;
 		}
 
 		/**

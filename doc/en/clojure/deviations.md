@@ -341,7 +341,8 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   `nil` `"null"`, like the oracle.
 - `line-seq` takes an open reader (such as a `clojure.java.io/reader`, which
   `with-open` closes), or a path, a File, a URL or a byte stream it opens, and answers
-  strictly either way (the oracle takes a reader only and answers lazily);
+  strictly either way but over an HTTP reply, which it reads lazily (the oracle takes a
+  reader only and answers lazily);
   `spit`/`slurp`/`line-seq`/`reader` run on every backend, on wasm with a `--dir` preopen
   covering the file.
   A `java.io.InputStreamReader` over a reader is that reader, on every backend: here a

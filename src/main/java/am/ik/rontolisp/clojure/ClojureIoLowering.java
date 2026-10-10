@@ -174,6 +174,26 @@ final class ClojureIoLowering {
 	static final String RESPONSE_P = PREFIX + "RESPONSE-P";
 
 	/**
+	 * The prefix of the reply-reader family's own definitions
+	 * ({@link ClojureArms.Family#REPLY_READER}): a reader over a fetched reply's body,
+	 * decoding it as it arrives ({@code clojure.lisp}, "Readers over a fetched reply").
+	 */
+	static final String REPLY_PREFIX = "RONTOLISP::%CLOJURE-REPLY-";
+
+	/**
+	 * The reply-reader family's arm test of a reader: whether it is one over a fetched
+	 * reply's body, which a lazy {@code line-seq}, a close and the rest of its text read
+	 * through its own arm.
+	 */
+	static final String REPLY_READER_P = REPLY_PREFIX + "READER-P";
+
+	/**
+	 * The reply-reader family's arm test of a byte stream: whether it reads a fetched
+	 * reply's body, which a reader over it decodes as it arrives.
+	 */
+	static final String REPLY_INPUT_P = REPLY_PREFIX + "INPUT-P";
+
+	/**
 	 * The namespace a program requires to read {@code http:} and {@code https:} URLs
 	 * through {@code rontolisp:fetch} where it spells none it reads
 	 * ({@link #spellsHttpUrl}): a built-in file defining nothing, whose load is the

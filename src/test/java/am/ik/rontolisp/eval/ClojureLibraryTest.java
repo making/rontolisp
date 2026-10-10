@@ -405,6 +405,30 @@ class ClojureLibraryTest {
 	}
 
 	@Test
+	void aReaderDecodesAReplyAsItArrivesOnlyInAProgramThatFetchesAndOpensOne() {
+		// the reply reader's definitions name the prelude's Gray class, whose splice
+		// brings the Gray streams' protocol and call-site rewrite in: a program that
+		// fetches and opens no reader, or opens readers and fetches nothing, keeps the
+		// reads that decode a byte stream at once and carries neither
+		assertThat(defun(ClojureLibrary.forms(), "RONTOLISP::%CLOJURE-IO-DECODED-READER"))
+			.contains("(RONTOLISP::%CLOJURE-REPLY-INPUT-P IN)");
+		String client = "(ns a (:require [rontolisp.http-client :as http])) ";
+		String io = "(ns a (:require [clojure.java.io :as io])) ";
+		for (String source : List.of(client + "(println (:body (http/get \"http://x/\")))",
+				io + "(println (line-seq (io/reader \"f\")) (slurp (io/input-stream \"g\")))")) {
+			List<LispVal> processed = ClojureLibrary.process(Clojure.read(source, null));
+			assertThat(processed.stream().map(LispVal::print)).as(source)
+				.noneMatch(text -> text.contains("%CLOJURE-REPLY-") || text.contains("%TEXT-PULL-STREAM"));
+		}
+		List<LispVal> both = ClojureLibrary.process(Clojure.read("(ns a (:require [rontolisp.http-client :as http]"
+				+ " [clojure.java.io :as io])) (println (line-seq (io/reader (:body (http/get \"http://x/\""
+				+ " {:as :stream})))))", null));
+		assertThat(defun(both, "RONTOLISP::%CLOJURE-IO-DECODED-READER"))
+			.contains("(RONTOLISP::%CLOJURE-REPLY-INPUT-P IN)");
+		assertThat(defun(both, "RONTOLISP::%CLOJURE-REPLY-READER")).contains("(RONTOLISP::%MAKE-TEXT-PULL-STREAM ");
+	}
+
+	@Test
 	void aProgramMakingNoByteArraySplicesTheLibraryWithoutItsByteArrayArms() {
 		// aget, aset, alength, bytes? and a String construction lower to the forms they
 		// lowered to before byte arrays, and the printer's, the seq view's and the byte

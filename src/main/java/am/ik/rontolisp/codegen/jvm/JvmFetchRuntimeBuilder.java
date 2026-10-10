@@ -48,8 +48,12 @@ final class JvmFetchRuntimeBuilder {
 	static final String TRANSPORT_START_DESC = "(Ljava/lang/String;Ljava/lang/String;Ljava/util/List;"
 			+ "Ljava/lang/Object;Ljava/lang/String;)Ljava/lang/Object;";
 
-	/** The runtime class files a program that fetches carries beside it. */
-	static final List<String> RUNTIME_CLASS_FILES = List.of(TRANSPORT_CLASS + ".class");
+	/**
+	 * The runtime class files a program that fetches carries beside it: the transport and
+	 * the subscriber pumping a reply's body into its stream as it arrives.
+	 */
+	static final List<String> RUNTIME_CLASS_FILES = List.of(TRANSPORT_CLASS + ".class",
+			TRANSPORT_CLASS + "$BodyPump.class");
 
 	private JvmFetchRuntimeBuilder() {
 	}

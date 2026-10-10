@@ -594,17 +594,28 @@
 
 (defun rontolisp::%clojure-read-to-end (stream)
   "Every character left on STREAM, as one string."
-  (let ((out (make-string-output-stream)))
-    (do ((c (read-char stream nil nil) (read-char stream nil nil)))
-        ((null c) (get-output-stream-string out))
-      (write-char c out))))
+  ;; a reader over a fetched reply hands the rest of its text over at once, every
+  ;; chunk after the one in hand decoded as it arrives: an arm a program making no
+  ;; such reader folds
+  (if (rontolisp::%clojure-reply-reader-p stream)
+      (rontolisp::%text-pull-stream-rest stream)
+      (let ((out (make-string-output-stream)))
+        (do ((c (read-char stream nil nil) (read-char stream nil nil)))
+            ((null c) (get-output-stream-string out))
+          (write-char c out)))))
 
 (defun rontolisp::%clojure-open-reader (stream)
   "STREAM while it is open; a closed one is the oracle's IOException, which a
    closed Java reader answers to every read."
-  (if (open-stream-p stream)
-      stream
-      (rontolisp::%clojure-io-exception "Stream closed")))
+  ;; a reader over a fetched reply is a Gray stream, which open-stream-p answers
+  ;; true for, closed or not: an arm a program making no such reader folds
+  (if (rontolisp::%clojure-reply-reader-p stream)
+      (if (rontolisp::%text-pull-stream-closed-p stream)
+          (rontolisp::%clojure-io-exception "Stream closed")
+          stream)
+      (if (open-stream-p stream)
+          stream
+          (rontolisp::%clojure-io-exception "Stream closed"))))
 
 (defun rontolisp::%clojure-slurp (source)
   "slurp: the whole of SOURCE as a string -- a path, opened and closed around
@@ -14977,6 +14988,18 @@
                (setq total (+ total (length chunk)))
                (setq chunks (cons chunk chunks)))))))))
 
+(defun rontolisp::%clojure-http-body-as (as body coding octets)
+  "The response's :body under the :as option AS: the input stream over the
+   reply BODY (decompressed through CODING) for :stream, a byte array of the
+   body's OCTETS for :bytes, else -- :string, the oracle's slurp of the body --
+   the OCTETS decoded as UTF-8 as the JDK's decoder decodes them, a malformed
+   sequence one U+FFFD."
+  (cond
+   ((equal as (list :c%keyword "stream"))
+    (rontolisp::%clojure-http-input-stream body coding))
+   ((equal as (list :c%keyword "bytes")) (rontolisp::%clojure-bytes-of octets))
+   (t (rontolisp::%octets-to-string-replacing octets 0 (length octets)))))
+
 (defun rontolisp::%clojure-http-respond (prepared transport)
   "The future of the response map of the prepared request PREPARED: the
    exchange, the body decompressed per its content-encoding and read per :as,
@@ -14997,20 +15020,18 @@
              (rontolisp:await
               (rontolisp::%clojure-http-decoded (getf res :body) coding)))
             (checked (rontolisp::%clojure-http-check-as as))
-            (text
+            (octets
              (rontolisp:await
-              (cond ((equal as (list :c%keyword "stream")) nil)
-                    ((equal as (list :c%keyword "bytes"))
-                     (rontolisp::%clojure-http-octets body))
-                    (t (rontolisp:read-all body)))))
+              (if (equal as (list :c%keyword "stream"))
+                  nil
+                  (rontolisp::%clojure-http-octets body))))
             (resp
              (rontolisp::%clojure-http-assoc nil
-              (list "status" status "headers" headers "body"
-                    (cond ((equal as (list :c%keyword "stream"))
-                           (rontolisp::%clojure-http-input-stream body coding))
-                          ((equal as (list :c%keyword "bytes"))
-                           (rontolisp::%clojure-bytes-of text))
-                          (t text)) "uri" (cdr reply) "request" req))))
+                                             (list "status" status "headers"
+                                              headers "body"
+                                              (rontolisp::%clojure-http-body-as
+                                               as body coding octets) "uri"
+                                              (cdr reply) "request" req))))
        (declare (ignore checked))
        (if (and (not
                  (eq (rontolisp::%clojure-http-option req "throw")
@@ -15154,120 +15175,19 @@
     (write-char (char "0123456789ABCDEF" (ash b -4)) out)
     (write-char (char "0123456789ABCDEF" (logand b 15)) out)))
 
-(defun rontolisp::%clojure-ring-utf-8-continuation-p (b)
-  (and (>= b 128) (<= b 191)))
-
-(defun rontolisp::%clojure-ring-write-utf-8 (bytes out)
-  "Writes the characters the UTF-8 BYTES (a simple vector) decode to on OUT,
-   each malformed sequence as U+FFFD exactly as the JDK's new String(bytes,
-   UTF_8) replaces it (String.decodeUTF8_UTF16: how many bytes one
-   replacement takes, and that a truncated tail ends the decoding)."
-  (let ((n (length bytes)) (i 0) (repl (code-char 65533)))
-    (loop
-      (if (>= i n) (return nil))
-      (let ((b1 (svref bytes i)))
-        (setq i (+ i 1))
-        (cond ((< b1 128) (write-char (code-char b1) out))
-              ((and (>= b1 194) (<= b1 223))
-               (cond ((>= i n)
-                      (write-char repl out)
-                      (return nil))
-                     ((rontolisp::%clojure-ring-utf-8-continuation-p
-                       (svref bytes i))
-                      (write-char
-                       (code-char (+ (* 64 (- b1 192)) (- (svref bytes i) 128)))
-                       out)
-                      (setq i (+ i 1)))
-                     (t (write-char repl out))))
-              ((and (>= b1 224) (<= b1 239))
-               (if (< (+ i 1) n)
-                   (let* ((b2 (svref bytes i))
-                          (b3 (svref bytes (+ i 1)))
-                          (bad2
-                           (or (and (= b1 224) (< b2 160))
-                               (not
-                                (rontolisp::%clojure-ring-utf-8-continuation-p
-                                 b2)))))
-                     (cond ((or bad2
-                                (not
-                                 (rontolisp::%clojure-ring-utf-8-continuation-p
-                                  b3)))
-                            (write-char repl out)
-                            (if (not bad2) (setq i (+ i 1))))
-                           (t (let ((c
-                                     (+ (* 4096 (- b1 224)) (* 64 (- b2 128))
-                                        (- b3 128))))
-                                (write-char (if (and (>= c 55296) (<= c 57343))
-                                                repl
-                                                (code-char c)) out)
-                                (setq i (+ i 2))))))
-                   (progn
-                     (write-char repl out)
-                     (if (not
-                          (and (< i n)
-                               (let ((b2 (svref bytes i)))
-                                 (or (and (= b1 224) (< b2 160))
-                                     (not
-                                      (rontolisp::%clojure-ring-utf-8-continuation-p
-                                       b2))))))
-                         (return nil)))))
-              ((and (>= b1 240) (<= b1 247))
-               (if (< (+ i 2) n)
-                   (let* ((b2 (svref bytes i))
-                          (b3 (svref bytes (+ i 1)))
-                          (b4 (svref bytes (+ i 2)))
-                          (uc
-                           (+ (* 262144 (- b1 240)) (* 4096 (- b2 128))
-                              (* 64 (- b3 128)) (- b4 128))))
-                     (if (or (not
-                              (rontolisp::%clojure-ring-utf-8-continuation-p
-                               b2))
-                             (not
-                              (rontolisp::%clojure-ring-utf-8-continuation-p
-                               b3))
-                             (not
-                              (rontolisp::%clojure-ring-utf-8-continuation-p
-                               b4)) (< uc 65536) (> uc 1114111))
-                         (progn
-                           (write-char repl out)
-                           (cond
-                            ((or (> b1 244) (and (= b1 240) (< b2 144))
-                                 (and (= b1 244) (> b2 143))
-                                 (not
-                                  (rontolisp::%clojure-ring-utf-8-continuation-p
-                                   b2))))
-                            ((not
-                              (rontolisp::%clojure-ring-utf-8-continuation-p
-                               b3))
-                             (setq i (+ i 1)))
-                            (t (setq i (+ i 2)))))
-                         (progn
-                           (write-char (code-char uc) out)
-                           (setq i (+ i 3)))))
-                   (progn
-                     (write-char repl out)
-                     (cond ((or (> b1 244)
-                             (and (< i n)
-                              (let ((b2 (svref bytes i)))
-                                (or (and (= b1 240) (< b2 144))
-                                 (and (= b1 244) (> b2 143))
-                                 (not
-                                  (rontolisp::%clojure-ring-utf-8-continuation-p
-                                   b2)))))))
-                           ((and (< (+ i 1) n)
-                                 (not
-                                  (rontolisp::%clojure-ring-utf-8-continuation-p
-                                   (svref bytes (+ i 1)))))
-                            (setq i (+ i 1)))
-                           (t (return nil))))))
-              (t (write-char repl out)))))))
-
 (defun rontolisp::%clojure-ring-write-bytes (bytes charset out)
   "Writes the characters BYTES (a list, in order) decode to in CHARSET on
-   OUT; a byte US-ASCII has no character for is U+FFFD."
+   OUT: UTF-8 as the JDK's decoder replaces a malformed sequence
+   (%octets-to-string-replacing), a byte US-ASCII has no character for
+   U+FFFD."
   (cond ((eq charset :utf-8)
-         (rontolisp::%clojure-ring-write-utf-8 (coerce bytes 'simple-vector)
-                                               out))
+         (let* ((n (length bytes))
+                (v (make-array n :element-type '(unsigned-byte 8)))
+                (i 0))
+           (dolist (b bytes)
+             (setf (aref v i) b)
+             (setq i (+ i 1)))
+           (write-string (rontolisp::%octets-to-string-replacing v 0 n) out)))
         (t (dolist (b bytes)
              (write-char (if (or (eq charset :latin-1) (< b 128))
                              (code-char b)
@@ -18339,7 +18259,10 @@
 (defun rontolisp::%clojure-io-entry (x)
   "The registry entry of the character stream X when the namespace made it
    over no file, else NIL."
-  (if (and rontolisp::%clojure-io-streams (%obj-is x '%stream))
+  ;; a reader over a fetched reply is a Gray stream, no stream value: an arm a
+  ;; program making no such reader folds
+  (if (and rontolisp::%clojure-io-streams
+           (or (%obj-is x '%stream) (rontolisp::%clojure-reply-reader-p x)))
       (gethash x rontolisp::%clojure-io-streams)))
 
 ;; Whether X is a clojure.java.io value: a File, a URL, a URI, a byte stream, or
@@ -18353,7 +18276,9 @@
         (or (eq tag :C%FILE) (eq tag :C%URL) (eq tag :C%URI)
             (eq tag :C%INPUT-STREAM) (eq tag :C%OUTPUT-STREAM)))
       (if rontolisp::%clojure-io-streams
-          (if (%obj-is x '%stream)
+          ;; a reader over a fetched reply is a Gray stream, no stream value: an arm
+          ;; a program making no such reader folds
+          (if (or (%obj-is x '%stream) (rontolisp::%clojure-reply-reader-p x))
               (if (gethash x rontolisp::%clojure-io-streams) t nil)))))
 
 ;; Whether slurp or spit opens X through clojure.java.io rather than as a path:
@@ -19819,17 +19744,16 @@
 (defun rontolisp::%clojure-octets-text (octets start end charset)
   "The text the octets of the vector OCTETS from START below END decode to in
    CHARSET, the JDK's replacement of a malformed sequence included."
-  (let ((out (make-string-output-stream)))
-    (if (eq charset :utf-8)
-        (rontolisp::%clojure-ring-write-utf-8
-         (coerce (subseq octets start end) 'simple-vector) out)
+  (if (eq charset :utf-8)
+      (rontolisp::%octets-to-string-replacing octets start end)
+      (let ((out (make-string-output-stream)))
         (do ((i start (+ i 1)))
             ((>= i end))
           (let ((b (aref octets i)))
             (write-char (if (or (eq charset :latin-1) (< b 128))
                             (code-char b)
-                            (code-char 65533)) out))))
-    (get-output-stream-string out)))
+                            (code-char 65533)) out)))
+        (get-output-stream-string out))))
 
 (defun rontolisp::%clojure-octets-of-text (text charset)
   "The octets of TEXT in CHARSET as one fresh (unsigned-byte 8) vector, the
@@ -20215,26 +20139,29 @@
   stream)
 
 (defun rontolisp::%clojure-io-text-of (in charset)
-  "The rest of the byte stream IN decoded in CHARSET; of a fetched reply's body
-   in UTF-8, read as rontolisp:read-all reads it (a chunk at a time, decoded
-   at once, leniently)."
+  "The rest of the byte stream IN decoded in CHARSET, the JDK's replacement of a
+   malformed sequence included; of a fetched reply's body, its chunks joined and
+   decoded at once."
   (let* ((state (rontolisp::%clojure-io-open-state in)) (s (svref state 0)))
     (cond ((rontolisp::%clojure-async-stream-p s)
-           (if (eq charset :utf-8)
-               (rontolisp::%octets-to-string
-                (rontolisp::%clojure-io-pull-rest state))
-               (rontolisp::%clojure-io-decode
-                (rontolisp::%clojure-io-read-octets in) charset)))
+           (let ((octets (rontolisp::%clojure-io-pull-rest state)))
+             (rontolisp::%clojure-octets-text octets 0 (length octets)
+                                              charset)))
           (t (rontolisp::%clojure-io-decode
               (rontolisp::%clojure-io-read-octets in) charset)))))
 
 (defun rontolisp::%clojure-io-decoded-reader (in charset)
   "A reader over the byte stream IN decoded in CHARSET: the rest of IN read
-   and decoded at once, IN closed, the text a registered string stream."
-  (let ((text (rontolisp::%clojure-io-text-of in charset)))
-    (rontolisp::%clojure-io-close-input in)
-    (rontolisp::%clojure-io-register (make-string-input-stream text)
-                                     :reader nil charset)))
+   and decoded at once, IN closed, the text a registered string stream; over a
+   fetched reply's body, the reply decoded as it arrives (%clojure-reply-reader)."
+  ;; a fetched reply's body is decoded as it arrives, the reader a Gray stream
+  ;; over its chunks: an arm a program making no reader over one folds
+  (if (rontolisp::%clojure-reply-input-p in)
+      (rontolisp::%clojure-reply-reader in charset)
+      (let ((text (rontolisp::%clojure-io-text-of in charset)))
+        (rontolisp::%clojure-io-close-input in)
+        (rontolisp::%clojure-io-register (make-string-input-stream text)
+                                         :reader nil charset))))
 
 (defun rontolisp::%clojure-io-open-reader (x encoding)
   "make-reader of X: a character input stream over the file X names (a plain
@@ -20331,7 +20258,11 @@
                 (rontolisp::%clojure-io-flush-writer s)
                 (rontolisp::%clojure-io-close-output (svref e 1))))
           (remhash s rontolisp::%clojure-io-streams)))
-    (close s)
+    ;; a reader over a fetched reply, a Gray stream close does not reach, closes
+    ;; the reply's body: an arm a program making no such reader folds
+    (if (rontolisp::%clojure-reply-reader-p s)
+        (rontolisp::%text-pull-stream-close s)
+        (close s))
     nil))
 
 ;;;; copy
@@ -20473,19 +20404,144 @@
 (defun rontolisp::%clojure-io-line-seq (x)
   "line-seq of the clojure.java.io value X: the lines of a reader over it --
    a registered reader read where it stands and left open, anything else
-   opened and closed around the read."
+   opened and closed around the read; over a fetched reply, lazily
+   (%clojure-reply-lines)."
   (let ((r (rontolisp::%clojure-io-open-reader x nil)) (acc nil))
     (if (null r)
         (rontolisp::%clojure-class-cast-exception
          (concatenate 'string (rontolisp::%clojure-io-class-name x)
                       " cannot be cast to java.io.BufferedReader")))
-    (do ((line
-          (read-line (rontolisp::%clojure-open-reader r) nil nil)
-          (read-line r nil nil)))
-        ((null line))
-      (setq acc (cons line acc)))
-    (if (not (eq r x)) (rontolisp::%clojure-io-close-stream r))
-    (reverse acc)))
+    ;; a reader over a fetched reply reads a line where the seq reaches it, as
+    ;; the oracle's lazy line-seq does: an arm a program making no such reader
+    ;; folds
+    (if (rontolisp::%clojure-reply-reader-p r)
+        (rontolisp::%clojure-reply-lines r (not (eq r x)))
+        (progn
+          (do ((line
+                (read-line (rontolisp::%clojure-open-reader r) nil nil)
+                (read-line r nil nil)))
+              ((null line))
+            (setq acc (cons line acc)))
+          (if (not (eq r x)) (rontolisp::%clojure-io-close-stream r))
+          (reverse acc)))))
+
+;;;; Readers over a fetched reply
+;;;;
+;;;; A reader over the body of a fetched reply -- rontolisp.http-client's :as
+;;;; :stream body, an http: URL clojure.java.io reads -- is the oracle's
+;;;; BufferedReader over an InputStreamReader over the response's InputStream:
+;;;; it decodes the octets as they arrive and answers a line, a character or a
+;;;; datum once its text is in, so a program follows a reply that never ends
+;;;; (server-sent events, NDJSON, a log tail). It is the prelude's text pull
+;;;; stream (%make-text-pull-stream, a Gray character stream every read
+;;;; built-in reaches on every backend) over the body's chunks, registered as a
+;;;; reader like any the namespace makes. Every definition here is the
+;;;; reply-reader family's own (clojure/ClojureArms): a program that opens no
+;;;; reader, or fetches nothing, carries neither them nor the Gray streams they
+;;;; splice, and decodes a byte stream at once as before.
+
+;; Whether X is a reader over a fetched reply (%clojure-reply-reader): the
+;; reply-reader family's arm test of a reader.
+(defun rontolisp::%clojure-reply-reader-p (x)
+  (typep x 'rontolisp::%text-pull-stream))
+
+;; Whether the byte stream IN reads the body of a fetched reply, its source a
+;; rontolisp stream: the reply-reader family's arm test of a byte stream.
+(defun rontolisp::%clojure-reply-input-p (in)
+  (rontolisp:streamp (svref (car (cdr in)) 0)))
+
+(defun rontolisp::%clojure-reply-reader (in charset)
+  "A reader over the byte stream IN, a fetched reply's body, decoding it in
+   CHARSET as it arrives: the next chunk is pulled only when the text in hand
+   does not hold what a read asks for. UTF-8 is decoded as the oracle's
+   InputStreamReader decodes it -- a sequence a chunk ends inside waits for the
+   chunk completing it, each malformed sequence is one U+FFFD, and so is one
+   the reply ends inside. Closing the reader closes IN."
+  (let ((state (rontolisp::%clojure-io-open-state in)) (carry (list nil)))
+    (rontolisp::%clojure-io-register (rontolisp::%make-text-pull-stream
+                                      (lambda ()
+                                        (rontolisp::%clojure-reply-text state
+                                                                        charset
+                                                                        carry))
+                                      (lambda ()
+                                        (rontolisp::%clojure-io-close-input
+                                         in)))
+                                     :reader nil charset)))
+
+(defun rontolisp::%clojure-reply-text (state charset carry)
+  "The text of the next chunk of the fetched reply's body the open byte stream
+   state STATE reads, decoded in CHARSET; nil at its end. CARRY is a one-cell
+   list of the octets of the UTF-8 sequence the chunk before ended inside,
+   which this chunk continues; the reply ending first, they are one U+FFFD."
+  (let ((chunk (rontolisp::%clojure-reply-octets state)) (held (car carry)))
+    (setf (car carry) nil)
+    (if (null chunk)
+        (if held (rontolisp::%octets-to-string-replacing held 0 (length held)))
+        (let* ((octets
+                (if held
+                    (rontolisp::%octets-join (list held chunk)
+                                             (+ (length held) (length chunk)))
+                    chunk))
+               (end
+                (if (eq charset :utf-8)
+                    (rontolisp::%clojure-reply-utf-8-end octets)
+                    (length octets))))
+          (if (< end (length octets)) (setf (car carry) (subseq octets end)))
+          (rontolisp::%clojure-octets-text octets 0 end charset)))))
+
+(defun rontolisp::%clojure-reply-octets (state)
+  "The octets the open byte stream state STATE, over a fetched reply's body,
+   reads next: what is left of the chunk in hand, else the body's next chunk;
+   nil at its end."
+  (let ((octets (svref state 1)) (i (svref state 2)))
+    (setf (svref state 1) nil)
+    (setf (svref state 2) 0)
+    (if (and octets (< i (length octets)))
+        (if (= i 0) octets (subseq octets i))
+        (rontolisp::%clojure-io-next-chunk (svref state 0)))))
+
+(defun rontolisp::%clojure-reply-utf-8-end (v)
+  "Where the octets V stop short of a UTF-8 sequence the next chunk may still
+   complete -- the index of its lead, when the last one to three octets begin
+   one as the JDK's decoder judges a beginning (it waits for the rest of a
+   sequence its first octets do not already refuse) -- else the length of V."
+  (let* ((n (length v)) (p (- n 1)))
+    ;; back over the continuation octets at the end, three at the most
+    (loop
+      (if (or (< p 0) (< p (- n 3)) (/= (logand (aref v p) 192) 128))
+          (return nil))
+      (setq p (- p 1)))
+    (if (or (< p 0) (< p (- n 3)))
+        n
+        (let* ((b1 (aref v p))
+               (need
+                (cond ((and (>= b1 194) (<= b1 223)) 2)
+                      ((and (>= b1 224) (<= b1 239)) 3)
+                      ((and (>= b1 240) (<= b1 244)) 4)
+                      (t 0))))
+          (if (and (> need (- n p))
+                   (or (= p (- n 1))
+                       (let ((b2 (aref v (+ p 1))))
+                         (cond ((= b1 224) (>= b2 160))
+                               ((= b1 240) (>= b2 144))
+                               ((= b1 244) (<= b2 143))
+                               (t t)))))
+              p
+              n)))))
+
+(defun rontolisp::%clojure-reply-lines (r close)
+  "line-seq of the reader R over a fetched reply, as the oracle's: its first
+   line read now and each later one only when the seq reaches it, nil when it
+   has none; R closed after its last line when CLOSE."
+  (let ((line (read-line (rontolisp::%clojure-open-reader r) nil nil)))
+    (if (null line)
+        (progn
+          (if close (rontolisp::%clojure-io-close-stream r))
+          nil)
+        (let ((more
+               (rontolisp::%clojure-make-lazy
+                (lambda () (rontolisp::%clojure-reply-lines r close)))))
+          (rontolisp::%clojure-make-lazy (lambda () (cons line more)))))))
 
 ;;;; Instance methods: one function per method of a value here, dispatched by
 ;;;; its kind, refusing a kind the oracle's class has no such method for in the

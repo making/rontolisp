@@ -181,6 +181,25 @@ they arrive:
 true {
 ```
 
+A reader over the body decodes the octets as they arrive: `.readLine`, `.read`, `read` and
+`line-seq`, which is lazy, answer as soon as their text is in, so a program follows a reply
+that never ends -- server-sent events, NDJSON, a log tail -- a line at a time. UTF-8 is
+decoded as Java's `InputStreamReader` decodes it, each malformed sequence one U+FFFD, as are
+the `:as :string` body and a `slurp` of the stream.
+
+```clojure
+(ns example
+  (:require [rontolisp.http-client :as http]
+            [clojure.java.io :as io]))
+
+(with-open [r (io/reader (:body (http/get "https://httpbin.ik.am/get" {:as :stream})))]
+  (println (subs (first (line-seq r)) 0 1)))
+```
+
+```
+{
+```
+
 A Ring proxy:
 
 ```console
@@ -201,9 +220,6 @@ $ rontolisp proxy.clj -o src/worker.wasm --no-wasi --host-fetch --host-boundary=
 
 - The response has no `:version`, and its `:uri` is a string (babashka.http-client: a
   `java.net.URI`).
-- `clojure.java.io/reader` over the `:stream` body reads it whole before its first line
-  (a `.read` loop over the body itself takes each octet as it arrives); on the JVM the
-  transport takes the whole reply before the response is answered.
 - Refused by name: the options `:client`, `:interceptors`, `:timeout`, `:version`, `:raw`
   and `:expect-continue`; the vars `client`, `default-client-opts` and the `->` builders,
   which make a `java.net.http` client; the namespace `babashka.http-client` itself, which

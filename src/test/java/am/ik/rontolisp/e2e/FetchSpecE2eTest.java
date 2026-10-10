@@ -18,6 +18,8 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.TreeMap;
 import java.util.concurrent.Callable;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executors;
 import java.util.concurrent.FutureTask;
@@ -89,6 +91,12 @@ class FetchSpecE2eTest {
 	private static final String ORIGIN_MARK = "@ORIGIN@";
 
 	/**
+	 * Stands for the leg's name, which keeps what a case keys on the origin (a held
+	 * reply's release) apart from the same case running on the other legs at once.
+	 */
+	private static final String LEG_MARK = "@LEG@";
+
+	/**
 	 * Stands for the leg's own directory, where a case may write a file: the component
 	 * leg preopens it, the native runner preopens its working directory, which it is.
 	 */
@@ -112,6 +120,13 @@ class FetchSpecE2eTest {
 
 	/** The length {@code /cut-short} announces and never sends. */
 	private static final int CUT_SHORT = 1000;
+
+	/**
+	 * How long {@code /held} waits for its {@code /release} before it ends the reply
+	 * saying none came: what a reader reading the whole reply before its first line costs
+	 * a run.
+	 */
+	private static final int HELD_SECONDS = 30;
 
 	enum Leg {
 
@@ -331,6 +346,49 @@ class FetchSpecE2eTest {
 			}
 			answer(exchange, 200, out.toString());
 		});
+		// A reply whose rest the origin holds until the client has read its first line:
+		// /held?<key> writes "first line" and the second line once /release?<key> has
+		// arrived, which the client sends after reading the first. A client that reads
+		// the whole reply before its first line reads "never released" HELD_SECONDS
+		// later instead.
+		Map<String, CountDownLatch> releases = new ConcurrentHashMap<>();
+		server.createContext("/held", exchange -> {
+			CountDownLatch release = releases.computeIfAbsent(String.valueOf(exchange.getRequestURI().getRawQuery()),
+					key -> new CountDownLatch(1));
+			exchange.sendResponseHeaders(200, 0);
+			try (OutputStream body = exchange.getResponseBody()) {
+				body.write("first line\n".getBytes(StandardCharsets.UTF_8));
+				body.flush();
+				boolean released = release.await(HELD_SECONDS, TimeUnit.SECONDS);
+				body.write((released ? "released\n" : "never released\n").getBytes(StandardCharsets.UTF_8));
+			}
+			catch (InterruptedException ex) {
+				Thread.currentThread().interrupt();
+			}
+		});
+		server.createContext("/release", exchange -> {
+			releases
+				.computeIfAbsent(String.valueOf(exchange.getRequestURI().getRawQuery()), key -> new CountDownLatch(1))
+				.countDown();
+			answer(exchange, 200, "released");
+		});
+		// UTF-8 as a reader decodes it while the reply arrives: a sequence cut across two
+		// writes, then malformed octets -- a lone lead, a truncated sequence, an encoded
+		// surrogate -- and the reply ending inside a sequence.
+		server.createContext("/split", exchange -> {
+			exchange.sendResponseHeaders(200, 0);
+			try (OutputStream body = exchange.getResponseBody()) {
+				body.write(new byte[] { 'a', (byte) 0xf0, (byte) 0x9f });
+				body.flush();
+				Thread.sleep(100);
+				body.write(new byte[] { (byte) 0x98, (byte) 0x80, '\n', 'h', (byte) 0xe9, 'l', 'l', 'o', '\n',
+						(byte) 0xe4, (byte) 0xb8, 'A', '\n', (byte) 0xed, (byte) 0xa0, (byte) 0x80, '\n', (byte) 0xf0,
+						(byte) 0x9f });
+			}
+			catch (InterruptedException ex) {
+				Thread.currentThread().interrupt();
+			}
+		});
 		server.setExecutor(Executors.newVirtualThreadPerTaskExecutor());
 		server.start();
 		origin = server;
@@ -392,7 +450,7 @@ class FetchSpecE2eTest {
 		// have answered.
 		List<Callable<String>> runs = new ArrayList<>();
 		for (Leg leg : Leg.values()) {
-			String program = program(spec.on(leg), originUrl);
+			String program = program(spec.on(leg), originUrl, leg);
 			runs.add(started(leg, () -> run(leg, program, fileName)));
 		}
 		List<DynamicNode> legs = new ArrayList<>();
@@ -402,10 +460,10 @@ class FetchSpecE2eTest {
 		return legs.stream();
 	}
 
-	private static String program(List<Case> cases, String originUrl) {
+	private static String program(List<Case> cases, String originUrl, Leg leg) {
 		StringBuilder program = new StringBuilder();
 		for (Case c : cases) {
-			program.append(c.source().replace(ORIGIN_MARK, originUrl));
+			program.append(c.source().replace(ORIGIN_MARK, originUrl).replace(LEG_MARK, leg.key()));
 		}
 		return program.toString();
 	}

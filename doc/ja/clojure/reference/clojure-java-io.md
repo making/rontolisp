@@ -221,9 +221,8 @@ $ rontolisp src/app/main.clj        # deps.edn holds {:paths ["src" "resources"]
 - `http:` URL の読み取りでは、トランスポートの失敗はトランスポートのメッセージを持つ
   `java.io.IOException` です（オラクルの `java.net.ConnectException` と
   `UnknownHostException` はその一種です）。305 の応答はたどりません（オラクルは応答が示す
-  プロキシを通して送り直します）。リクエストには fetch の `User-Agent` が付きます。UTF-8 と
-  して正しくない応答は `rontolisp:read-all` と同じように復号し、オラクルは不正な並びごとに
-  U+FFFD を置きます。`.available` は届いた分を答え、最初の読み取りの前は 0 です。
+  プロキシを通して送り直します）。リクエストには fetch の `User-Agent` が付きます。
+  `.available` は届いた分を答え、最初の読み取りの前は 0 です。
 - `:encoding` が知る文字セットは 3 つで、オラクルは JDK のものを知っています。
 - `input-stream` と `output-stream` は `ByteArrayInputStream` と `ByteArrayOutputStream` を
   そのまま返し、オラクルはバッファ付きストリームで包みます。ファイルや `http:` URL の上の

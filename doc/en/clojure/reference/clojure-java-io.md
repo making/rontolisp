@@ -220,9 +220,8 @@ replaced.
 - Reading an `http:` URL, a transport failure is a `java.io.IOException` carrying the
   transport's message (the oracle's `java.net.ConnectException` and `UnknownHostException` are
   ones); a 305 reply is not followed (the oracle retries through the proxy it names); the
-  request carries fetch's `User-Agent`; a reply that is not well-formed UTF-8 is decoded as
-  `rontolisp:read-all` decodes it, where the oracle puts U+FFFD for each malformed sequence; and
-  `.available` answers what has arrived, 0 before the first read.
+  request carries fetch's `User-Agent`; and `.available` answers what has arrived, 0 before the
+  first read.
 - `:encoding` knows three charsets, where the oracle knows the JDK's.
 - `input-stream` and `output-stream` answer a `ByteArrayInputStream` or a
   `ByteArrayOutputStream` itself, where the oracle wraps it in a buffered stream, and a

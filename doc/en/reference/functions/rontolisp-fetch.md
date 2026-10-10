@@ -79,9 +79,9 @@ stream itself as a served response body to relay the reply byte-exact:
   (print (getf res :headers)))  ; => (("content-type" . "application/json") ...)
 ```
 
-`:body` is that stream on every backend; on the JVM (whose client takes the
-whole reply at once) it holds one chunk. Awaiting the same future again answers
-the same list, whose body stream a first drain has already consumed.
+`:body` is that stream on every backend, its chunks arriving after the head.
+Awaiting the same future again answers the same list, whose body stream a first
+drain has already consumed.
 
 A JSON response body parses into Lisp values with
 [`rontolisp:json-parse`](rontolisp-json-parse.md), and
@@ -152,5 +152,4 @@ request `:body` from an s-expression.
   signals.
 - A reply whose transfer fails part-way (the connection closes before the
   body it announced has arrived) signals an error instead of reading as a
-  shorter body: when its `:body` is drained, or, on the JVM, whose client takes
-  the whole reply before answering, when the future is awaited.
+  shorter body, when its `:body` is drained.

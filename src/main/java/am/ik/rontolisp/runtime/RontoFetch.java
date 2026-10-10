@@ -5,12 +5,14 @@ import java.net.http.HttpClient;
 import java.net.http.HttpHeaders;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.Flow;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -96,9 +98,10 @@ public final class RontoFetch {
 				.failedFuture(new IllegalStateException("HTTP request failed: " + ex.getMessage(), ex));
 		}
 		// The per-request client is not closed: close() would wait for the request, and
-		// the interpreter leaves its client to the collector the same way.
+		// the interpreter leaves its client to the collector the same way. The future
+		// settles at the head; the body fills in as the reply arrives (bodyStream).
 		return HttpClient.newHttpClient()
-			.sendAsync(request, HttpResponse.BodyHandlers.ofByteArray())
+			.sendAsync(request, HttpResponse.BodyHandlers.ofPublisher())
 			.thenApply(RontoFetch::plist);
 	}
 
@@ -128,7 +131,7 @@ public final class RontoFetch {
 		return fields;
 	}
 
-	private static Object plist(HttpResponse<byte[]> response) {
+	private static Object plist(HttpResponse<Flow.Publisher<List<ByteBuffer>>> response) {
 		// The header alist, built back-to-front; nil (null) when the reply has none.
 		List<Map.Entry<String, String>> fields = responseFields(response.headers());
 		Object alist = null;
@@ -152,21 +155,98 @@ public final class RontoFetch {
 	}
 
 	/**
-	 * The whole reply as ONE octet chunk of a closed stream -- the shape
-	 * {@code _make_stream} builds, with the chunk and the end-of-stream pill already
-	 * queued and the state closed (1), so {@code stream-read} answers the chunk and then
-	 * nil. The chunk is the packed {@code (unsigned-byte 8)} vector, {@code byte[]{8, e0,
-	 * ...}}: the width 8 in slot 0, as the compiled {@code _iv*} helpers lay it out, so a
-	 * body costs one byte an octet.
+	 * The reply's body as a stream of octet chunks filling in as the reply arrives -- the
+	 * shape {@code _make_stream} builds, {@code {SMARKER, queue, state}}, whose
+	 * {@code stream-read} takes the next chunk at its await, blocking only while none has
+	 * arrived ({@link BodyPump}).
 	 */
-	private static Object bodyStream(byte[] body) {
-		byte[] octets = new byte[body.length + 1];
-		octets[0] = 8;
-		System.arraycopy(body, 0, octets, 1, body.length);
+	private static Object bodyStream(Flow.Publisher<List<ByteBuffer>> body) {
 		LinkedBlockingQueue<Object> queue = new LinkedBlockingQueue<>();
-		queue.offer(octets);
-		queue.offer(STREAM_MARKER);
-		return new Object[] { STREAM_MARKER, queue, new AtomicInteger(1) };
+		AtomicInteger state = new AtomicInteger(0);
+		body.subscribe(new BodyPump(queue, state));
+		return new Object[] { STREAM_MARKER, queue, state };
+	}
+
+	/**
+	 * Pumps the client's body publisher into a body stream, one batch at a time: each
+	 * batch is queued as ONE chunk, the packed {@code (unsigned-byte 8)} vector
+	 * {@code byte[]{8, e0, ...}} (the width 8 in slot 0, as the compiled {@code _iv*}
+	 * helpers lay it out, so a body costs one byte an octet) holding the octets as they
+	 * arrived; the end is the end-of-stream pill, and the state turns closed (1), so a
+	 * write is refused as the interpreter's closed stream refuses one. A transfer that
+	 * fails mid-body queues a failed future ahead of the pill: the read that takes it
+	 * awaits it and signals, as the interpreter's failed stream does, so the body never
+	 * reads as a shorter one. A stream the program closes (its state turned closed by
+	 * {@code stream-close}) cancels the subscription at the next batch, which releases
+	 * the connection; a batch queued while it closed is taken back, so no read past the
+	 * end answers it.
+	 */
+	private static final class BodyPump implements Flow.Subscriber<List<ByteBuffer>> {
+
+		private final LinkedBlockingQueue<Object> queue;
+
+		private final AtomicInteger state;
+
+		@SuppressWarnings("NullAway.Init")
+		private Flow.Subscription subscription;
+
+		BodyPump(LinkedBlockingQueue<Object> queue, AtomicInteger state) {
+			this.queue = queue;
+			this.state = state;
+		}
+
+		@Override
+		public void onSubscribe(Flow.Subscription subscription) {
+			this.subscription = subscription;
+			subscription.request(1);
+		}
+
+		@Override
+		public void onNext(List<ByteBuffer> buffers) {
+			if (this.state.get() != 0) {
+				this.subscription.cancel();
+				return;
+			}
+			int total = 0;
+			for (ByteBuffer buffer : buffers) {
+				total += buffer.remaining();
+			}
+			if (total > 0) {
+				byte[] chunk = new byte[total + 1];
+				chunk[0] = 8;
+				int k = 1;
+				for (ByteBuffer buffer : buffers) {
+					int n = buffer.remaining();
+					buffer.get(chunk, k, n);
+					k += n;
+				}
+				this.queue.offer(chunk);
+				if (this.state.get() != 0) {
+					this.queue.remove(chunk);
+					this.subscription.cancel();
+					return;
+				}
+			}
+			this.subscription.request(1);
+		}
+
+		@Override
+		public void onError(Throwable throwable) {
+			this.queue.offer(CompletableFuture
+				.failedFuture(new IllegalStateException("HTTP body failed: " + throwable.getMessage(), throwable)));
+			end();
+		}
+
+		@Override
+		public void onComplete() {
+			end();
+		}
+
+		private void end() {
+			this.queue.offer(STREAM_MARKER);
+			this.state.set(1);
+		}
+
 	}
 
 	private static String quote(String s) {

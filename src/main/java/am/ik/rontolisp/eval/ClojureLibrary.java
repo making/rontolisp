@@ -192,7 +192,8 @@ public final class ClojureLibrary {
 		Set<ClojureArms.Family> made = EnumSet.noneOf(ClojureArms.Family.class);
 		for (ClojureArms.Family family : ClojureArms.Family.values()) {
 			ClojureArms.Scan scan = ClojureArms.scan(body, family);
-			if (scan.builds() && (hostTarget || !ClojureArms.needsHost(family))) {
+			if (scan.builds() && (hostTarget || !ClojureArms.needsHost(family))
+					&& ClojureArms.madeBeside(family, made)) {
 				made.add(family);
 			}
 			else if (scan.arms()) {

@@ -6037,6 +6037,28 @@ public final class LispNames {
 	public static final String OCTETS_JOIN_INTERNAL = "%OCTETS-JOIN";
 
 	/**
+	 * The internal {@code rontolisp::%octets-to-string-replacing} helper: the octets of
+	 * an {@code (unsigned-byte 8)} vector from a start below an end -> the text the JDK's
+	 * {@code new String(bytes, UTF_8)} decodes them to, each malformed sequence ONE
+	 * {@code U+FFFD} (as many octets per replacement as that decoder takes, a sequence
+	 * the range ends inside one) -- the decoding the Clojure front end's text of octets
+	 * takes, where {@link #OCTETS_TO_STRING_INTERNAL} keeps a malformed octet as its own
+	 * character. ONE definition in Lisp source ({@code LispPreludeLibrary}) for the
+	 * compile paths, which hands every well-formed run to the native lenient decoder; the
+	 * interpreter's is the JDK decoder itself ({@code Environment}).
+	 */
+	public static final String OCTETS_TO_STRING_REPLACING_INTERNAL = "%OCTETS-TO-STRING-REPLACING";
+
+	/**
+	 * The internal {@code rontolisp::%make-text-pull-stream} constructor: a character
+	 * input stream (a Gray stream of the prelude's) whose text a function answers a piece
+	 * at a time, asked for the next piece only when a read needs a character the pieces
+	 * so far do not hold -- what a reader over a fetched reply's body is, so a line is
+	 * answered as soon as it has arrived.
+	 */
+	public static final String MAKE_TEXT_PULL_STREAM_INTERNAL = "%MAKE-TEXT-PULL-STREAM";
+
+	/**
 	 * The {@code wait-for} function provided by the {@code rontolisp} package. Returns a
 	 * future that settles (to {@code nil}) after the given number of milliseconds -- the
 	 * timer primitive of the async/await surface, mirroring WASI 0.3's
@@ -7758,6 +7780,14 @@ public final class LispNames {
 	 */
 	public static final String OCTETS_TO_STRING_PACKED_INTERNAL_QUALIFIED = RONTOLISP_PKG + "::"
 			+ OCTETS_TO_STRING_PACKED_INTERNAL;
+
+	/**
+	 * The canonical internal-qualified spelling of
+	 * {@code rontolisp::%octets-to-string-replacing}
+	 * ({@link #OCTETS_TO_STRING_REPLACING_INTERNAL}), the interpreter's native binding.
+	 */
+	public static final String OCTETS_TO_STRING_REPLACING_INTERNAL_QUALIFIED = RONTOLISP_PKG + "::"
+			+ OCTETS_TO_STRING_REPLACING_INTERNAL;
 
 	/**
 	 * The internal {@code rontolisp::%inflate-new} primitive: {@code (%inflate-new kind)}

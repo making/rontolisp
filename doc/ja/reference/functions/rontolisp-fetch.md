@@ -79,9 +79,9 @@ future を [`rontolisp:await`](../special-forms/rontolisp-await.md) に渡すと
   (print (getf res :headers)))  ; => (("content-type" . "application/json") ...)
 ```
 
-`:body` はどのバックエンドでもこのストリームです。JVM (クライアントが応答全体を
-一度に受け取る) では 1 チャンクを持ちます。同じ future をもう一度 await すると
-同じリストが返り、そのボディストリームは最初の読み切りで消費済みです。
+`:body` はどのバックエンドでもこのストリームで、チャンクはヘッダーの後から届きます。
+同じ future をもう一度 await すると同じリストが返り、そのボディストリームは最初の
+読み切りで消費済みです。
 
 JSON のレスポンスボディは
 [`rontolisp:json-parse`](rontolisp-json-parse.md) で Lisp の値にパースでき、
@@ -153,5 +153,4 @@ JSON のレスポンスボディは
   含むもの) も同じ扱いで、`fetch` は future を返し、その await がエラーをシグナルします。
 - 転送が途中で失敗した応答 (予告した長さの本文が届く前に接続が閉じた場合) は、短い
   本文として読めてしまうのではなく、エラーをシグナルします。シグナルするのは `:body`
-  を読み切る時点です。JVM ではクライアントが応答全体を受け取ってから future を完了
-  させるため、future を await した時点になります。
+  を読み切る時点です。

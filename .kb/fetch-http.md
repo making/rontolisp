@@ -185,7 +185,8 @@ rlhttp.readResponseBody(reply, ptr, cap) -> i32  ; 0 = end, -1 = failed mid-body
   attempt `String(char[])` makes and drops for a body that is not Latin-1. The binary decode is
   branch-bound (the lenient arms over random octets): ~1 s a pass on the JVM, which counts, then
   fills. Pinned by `ReadAllHeapBoundE2eTest` (a 32 MiB binary body in a 320 MiB serial-GC heap,
-  both backends).
+  both backends). Since 2026-10-10 the JVM's body arrives a batch a chunk, like the
+  interpreter's, so its drain joins chunks too; the test still holds.
 
 ## The cross-backend corpus and its known divergences
 
@@ -274,9 +275,18 @@ content-dependent corruption. The bivalent-stream alternative was rejected: it n
 primitive on four stream runtimes and a carry inside each.
 
 Per backend: `HttpSupport.BodyPump` writes one `LispIntVector` per publisher batch (interpreter);
-`RontoFetch` takes the reply with `BodyHandlers.ofByteArray()` and queues ONE `byte[]{8, ...}`,
-`_drain_body` refuses a mixed stream, and `usesIntArray` is forced on by
-`usesFetch || usesHttpHandler` (JVM); the `stream<u8>` READ lift answers a packed vector
+`RontoFetch` takes the reply with `BodyHandlers.ofPublisher()`, its future settling at the head,
+and `RontoFetch.BodyPump` queues one `byte[]{8, ...}` per publisher batch as it arrives -- a
+failure mid-body a failed future ahead of the pill, which the read taking it awaits and
+signals; a stream the program closed (`_stream_close`'s state 1) cancels the subscription at the
+next batch, a batch queued meanwhile taken back -- `_drain_body` refuses a mixed stream, and
+`usesIntArray` is forced on by `usesFetch || usesHttpHandler` (JVM). Until 2026-10-10 the JVM
+took the reply with `ofByteArray()` and queued ONE chunk once all of it was in, so its future
+settled at the end of the reply (a reader over a reply that never ends never answered, and a
+transfer cut short signalled at the await of the fetch); the pump travels as a second class
+file (`JvmFetchRuntimeBuilder.RUNTIME_CLASS_FILES`). Pinned by `RontoFetchTest` (a held reply's
+first part taken before the rest is sent; a cut transfer's failed future) and the clojure-http
+corpus' `/held` case on the JVM leg; the `stream<u8>` READ lift answers a packed vector
 (`_bytes_from_mem`, `.kb/wit.md`) so `%http-body-value` needs no change (`--component`);
 `%http-reactor-body-stream` is `%stream-new` over `%http-reactor-octet-source` (`--no-wasi`).
 

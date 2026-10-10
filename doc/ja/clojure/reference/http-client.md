@@ -183,6 +183,25 @@ Preview 1 モジュール（`--native`、`--host-fetch`）では、呼び出し�
 true {
 ```
 
+ボディに対するリーダーは、届いたオクテットから順にデコードします。`.readLine`、`.read`、
+`read`、遅延する `line-seq` は、そのテキストが届いた時点で返るため、終わらない応答
+（server-sent events、NDJSON、ログの追尾）も一行ずつ追えます。UTF-8 は Java の
+`InputStreamReader` と同じくデコードし、不正なシーケンスはそれぞれ一つの U+FFFD になります。
+`:as :string` のボディと、ストリームに対する `slurp` も同じです。
+
+```clojure
+(ns example
+  (:require [rontolisp.http-client :as http]
+            [clojure.java.io :as io]))
+
+(with-open [r (io/reader (:body (http/get "https://httpbin.ik.am/get" {:as :stream})))]
+  (println (subs (first (line-seq r)) 0 1)))
+```
+
+```
+{
+```
+
 Ring のプロキシ:
 
 ```console
@@ -203,9 +222,6 @@ $ rontolisp proxy.clj -o src/worker.wasm --no-wasi --host-fetch --host-boundary=
 
 - レスポンスに `:version` はなく、`:uri` は文字列です（babashka.http-client では
   `java.net.URI`）。
-- `:stream` のボディに対する `clojure.java.io/reader` は、最初の行を返す前に全体を
-  読みます（ボディ自体に対する `.read` のループは、届いたオクテットから順に読みます）。
-  JVM では、トランスポートが応答全体を受け取ってからレスポンスを返します。
 - 名前を挙げて拒否するもの: オプションの `:client`、`:interceptors`、`:timeout`、
   `:version`、`:raw`、`:expect-continue`、`java.net.http` のクライアントを作る var の
   `client`、`default-client-opts` と `->` で始まるビルダー、そして名前空間

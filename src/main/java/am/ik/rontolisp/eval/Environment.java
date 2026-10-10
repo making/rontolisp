@@ -8223,6 +8223,36 @@ public final class Environment implements Scope {
 			}
 			return LispString.wrapCodePoints(decodeUtf8CodePoints(v));
 		}));
+		// %octets-to-string-replacing: the JDK's new String(bytes, UTF_8) of the octets
+		// from START below END, each malformed sequence one U+FFFD -- which is what the
+		// prelude's Lisp definition (LispPreludeLibrary) answers on the compile paths, a
+		// rule the JDK's decoder IS here. The Clojure front end's text of octets (a
+		// reader over a fetched reply, slurp, String. of a byte array) decodes through
+		// it,
+		// so a body is decoded natively rather than by an interpreted pass;
+		// LispPreludeLibraryTest pins the two against each other.
+		String octetsToStringReplacing = LispNames.OCTETS_TO_STRING_REPLACING_INTERNAL_QUALIFIED;
+		env.defineFunction(octetsToStringReplacing, new LispFunction(octetsToStringReplacing, args -> {
+			requireArgCount(LispNames.OCTETS_TO_STRING_REPLACING_INTERNAL, args, 3);
+			LispIntVector v = asOctetVector(LispNames.OCTETS_TO_STRING_REPLACING_INTERNAL, args.get(0));
+			int start = requireIndex(LispNames.OCTETS_TO_STRING_REPLACING_INTERNAL, args.get(1));
+			int end = requireIndex(LispNames.OCTETS_TO_STRING_REPLACING_INTERNAL, args.get(2));
+			if (start > end || end > v.length()) {
+				throw new LispEvalException(LispNames.OCTETS_TO_STRING_REPLACING_INTERNAL + ": the range " + start
+						+ " to " + end + " is not within the " + v.length() + " octets");
+			}
+			byte[] octets;
+			if (v.width() == 8) {
+				octets = v.octets();
+			}
+			else {
+				octets = new byte[v.length()];
+				for (int i = 0; i < octets.length; i++) {
+					octets[i] = (byte) v.elementAt(i);
+				}
+			}
+			return new LispString(new String(octets, start, end - start, StandardCharsets.UTF_8));
+		}));
 		defineInflate(env);
 		env.defineFunction(LispNames.CONSTANTP, new LispFunction(LispNames.CONSTANTP, args -> {
 			requireCallShape(LispNames.CONSTANTP, args);

@@ -317,6 +317,34 @@ class ClojureArmsTest {
 	}
 
 	@Test
+	void theReplyReaderFamilyIsMadeByAReaderOpenedAndTakesItsDefinitionsWithItsArms() {
+		// a reader over a fetched reply is opened by a kernel opening a reader over a
+		// byte stream; where none is, the reads' arms fold to the decode at once, and the
+		// family's own definitions go with them -- they name the prelude's Gray class
+		List<LispVal> forms = read(
+				"(if (rontolisp::%clojure-reply-input-p in) (rontolisp::%clojure-reply-reader in c) (decode in c))"
+						+ " (if (or (%obj-is x '%stream) (rontolisp::%clojure-reply-reader-p x)) (gethash x h))"
+						+ " (defun rontolisp::%clojure-reply-lines (r close) (read-line r))"
+						+ " (defun rontolisp::%clojure-io-kept (x) x)");
+		ClojureArms.Scan scan = ClojureArms.scan(forms, ClojureArms.Family.REPLY_READER);
+		assertThat(scan.builds()).isFalse();
+		assertThat(scan.strips()).isTrue();
+		assertThat(ClojureArms.strip(forms, ClojureArms.Family.REPLY_READER).stream().map(LispVal::print))
+			.containsExactly("(DECODE IN C)", "(IF (%OBJ-IS X '%STREAM) (GETHASH X H))",
+					"(DEFUN RONTOLISP::%CLOJURE-IO-KEPT (X) X)");
+		for (String producer : List.of("(rontolisp::%clojure-io-open-reader x nil)",
+				"(rontolisp::%clojure-io-decoding-reader x nil)", "(rontolisp::%clojure-io-line-seq x)")) {
+			assertThat(ClojureArms.scan(read(producer), ClojureArms.Family.REPLY_READER).builds()).as(producer)
+				.isTrue();
+		}
+		// it is made only beside a fetched value
+		assertThat(ClojureArms.madeBeside(ClojureArms.Family.REPLY_READER, java.util.Set.of())).isFalse();
+		assertThat(ClojureArms.madeBeside(ClojureArms.Family.REPLY_READER, java.util.Set.of(ClojureArms.Family.FETCH)))
+			.isTrue();
+		assertThat(ClojureArms.madeBeside(ClojureArms.Family.FETCH, java.util.Set.of())).isTrue();
+	}
+
+	@Test
 	void theByteArrayFamilyFoldsItsArmsAliasesAndSetterToTheFormsBeforeByteArrays() {
 		// aget, alength, bytes? and a String construction (its arguments' host values
 		// too) are aliases of what they lowered to before, aset a setter of the place it

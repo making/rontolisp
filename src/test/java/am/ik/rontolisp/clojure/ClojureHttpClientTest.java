@@ -23,6 +23,7 @@ import java.util.concurrent.Executors;
 import java.util.stream.Collectors;
 
 import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.cli.CompileFrontendAccess;
 import am.ik.rontolisp.cli.JvmSourceCompiler;
 import am.ik.rontolisp.cli.RontoLispCli;
 import am.ik.rontolisp.eval.ClojureLibrary;
@@ -149,6 +150,28 @@ class ClojureHttpClientTest {
 			.filter(text -> text.startsWith("(DEFUN " + name + " "))
 			.findFirst()
 			.orElseThrow();
+	}
+
+	@Test
+	void onlyAProgramOpeningAReaderOverAReplyCarriesTheGrayStreams() {
+		// a reader over a reply is a Gray stream: the protocol, and the rewrite routing
+		// every stream call through its dispatch, come in only where such a reader can
+		// be made, never with the client alone
+		String client = expanded(REQUIRE + " (println (:body (http/get \"http://x/\")))");
+		assertThat(client).doesNotContain("FUNDAMENTAL-CHARACTER-INPUT-STREAM")
+			.doesNotContain("%GRAY-")
+			.doesNotContain("%TEXT-PULL-STREAM");
+		String reading = expanded("(ns a (:require [rontolisp.http-client :as http] [clojure.java.io :as io]))"
+				+ " (println (line-seq (io/reader (:body (http/get \"http://x/\" {:as :stream})))))");
+		assertThat(reading).contains("(DEFCLASS RONTOLISP::%TEXT-PULL-STREAM ").contains("%GRAY-READ-LINE-DISPATCH");
+	}
+
+	private static String expanded(String source) {
+		return CompileFrontendAccess.clojure(source, false, false)
+			.forms()
+			.stream()
+			.map(LispVal::print)
+			.collect(Collectors.joining("\n"));
 	}
 
 	@Test

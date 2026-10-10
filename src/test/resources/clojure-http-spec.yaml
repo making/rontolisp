@@ -25,8 +25,13 @@
 # coding does not describe: /gzip-bad (plain text), /gzip-empty, /gzip-truncated (the last
 # twelve octets gone), /gzip-badcrc; /octets-echo (the request's content type, "|", and its
 # body in hex) and /multipart (a multipart body, one line a line: the oracle's boundary as
-# BOUNDARY, an octet that is no printable ASCII as <xx>). @SCRATCH@ is the leg's own
-# directory, where a case writes the files it sends.
+# BOUNDARY, an octet that is no printable ASCII as <xx>); /held?<key> ("first line", then
+# "released" once /release?<key> has arrived, or "never released" 30 seconds later) and
+# /split (UTF-8 written in two parts, the first ending inside a sequence: "a" and an
+# emoji, "h" e9 "llo", e4 b8 "A", an encoded surrogate, each on a line, and a sequence the
+# reply ends inside). @SCRATCH@ is the leg's own directory, where a case writes the files
+# it sends; @LEG@ is the leg's name, which keeps a case's keys on the origin apart from the
+# other legs running it at once.
 cases:
   - name: the-origin-and-the-client
     source: |
@@ -645,3 +650,70 @@ cases:
       :io
       :io
       "Can not write to non-file URL <"
+  - name: a-reader-over-a-streamed-reply-reads-as-it-arrives
+    # the oracle's BufferedReader over the response's InputStream: a line, a character,
+    # a datum is answered once it has arrived, and line-seq is lazy, so each read below
+    # answers while /held still holds the rest of its reply; the client's :as :stream
+    # body and an http: URL clojure.java.io reads (rontolisp.http-urls, required above)
+    source: |
+      (let [rdr (io/reader (:body (http/get (url "/held?@LEG@-reader") {:as :stream})))]
+        (prn [(instance? java.io.BufferedReader rdr) (.readLine rdr)])
+        (http/get (url "/release?@LEG@-reader"))
+        (prn [(.readLine rdr) (.readLine rdr)]))
+      (let [lines (line-seq (io/reader (:body (http/get (url "/held?@LEG@-lines") {:as :stream}))))]
+        (prn (first lines))
+        (http/get (url "/release?@LEG@-lines"))
+        (prn (vec (rest lines))))
+      (let [rdr (io/reader (url "/held?@LEG@-url"))]
+        (prn [(.read rdr) (.readLine rdr)])
+        (slurp (url "/release?@LEG@-url"))
+        (prn [(.readLine rdr) (.read rdr)]))
+      (let [rdr (java.io.PushbackReader. (io/reader (:body (http/get (url "/held?@LEG@-read") {:as :stream}))))]
+        (prn [(read rdr) (read rdr)])
+        (http/get (url "/release?@LEG@-read"))
+        (prn (read rdr)))
+      (let [rdr (io/reader (:body (http/get (url "/held?@LEG@-rest") {:as :stream})))]
+        (prn (.readLine rdr))
+        (http/get (url "/release?@LEG@-rest"))
+        (prn (slurp rdr)))
+      (let [rdr (io/reader (:body (http/get (url "/held?@LEG@-close") {:as :stream})))]
+        (prn (.readLine rdr))
+        (.close rdr)
+        (http/get (url "/release?@LEG@-close"))
+        (prn (try (.readLine rdr) (catch java.io.IOException e [:io (ex-message e)])))
+        (prn (try (.read rdr) (catch java.io.IOException e [:io (ex-message e)]))))
+    expected: |
+      [true "first line"]
+      ["released" nil]
+      "first line"
+      ["released"]
+      [102 "irst line"]
+      ["released" -1]
+      [first line]
+      released
+      "first line"
+      "released\n"
+      "first line"
+      [:io "Stream closed"]
+      [:io "Stream closed"]
+  - name: a-reply-is-text-in-the-oracles-decoding
+    # UTF-8 as the oracle's InputStreamReader decodes it, whichever way the text is read:
+    # a sequence the chunks cut is whole, each malformed sequence one U+FFFD (an encoded
+    # surrogate one, a sequence the reply ends inside one); ISO-8859-1 and US-ASCII one
+    # character an octet
+    source: |
+      (prn (vec (line-seq (io/reader (:body (http/get (url "/split") {:as :stream}))))))
+      (prn (slurp (:body (http/get (url "/split") {:as :stream}))))
+      (prn (:body (http/get (url "/split"))))
+      (prn (slurp (url "/split")))
+      (prn (mapv count (line-seq (io/reader (:body (http/get (url "/split") {:as :stream})) :encoding "ISO-8859-1"))))
+      (prn (mapv count (line-seq (io/reader (:body (http/get (url "/split") {:as :stream})) :encoding "US-ASCII"))))
+      (prn (slurp (:body (http/get (url "/split") {:as :stream})) :encoding "US-ASCII"))
+    expected: |
+      ["a😀" "h�llo" "�A" "�" "�"]
+      "a😀\nh�llo\n�A\n�\n�"
+      "a😀\nh�llo\n�A\n�\n�"
+      "a😀\nh�llo\n�A\n�\n�"
+      [5 5 3 3 2]
+      [5 5 3 3 2]
+      "a����\nh�llo\n��A\n���\n��"
