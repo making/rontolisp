@@ -19397,6 +19397,26 @@ cases:
       NIL
       CHARACTER
       "あい"
+  - name: http-buffered-body-stream-lenient-utf8
+    source: |
+      ;; A byte that leads no valid sequence (#xF8-#xFF, a stray continuation)
+      ;; answers its own character from read-char and read-line, as
+      ;; rontolisp:octets-to-string does; it never takes a four-octet lead.
+      (defun ci-body-octets (&rest bytes)
+        (make-array (length bytes) :element-type '(unsigned-byte 8)
+                                   :initial-contents bytes))
+      (defvar *ci-chars* (rontolisp::%http-body-stream
+                          (ci-body-octets 255 254 65 195 169)))
+      (print (loop for c = (read-char *ci-chars* nil nil)
+                   while c collect (char-code c)))
+      (defvar *ci-lines* (rontolisp::%http-body-stream
+                          (ci-body-octets 248 249 250 251 65 10 128 195 169)))
+      (print (map 'list #'char-code (read-line *ci-lines* nil nil)))
+      (print (map 'list #'char-code (read-line *ci-lines* nil nil)))
+    expected: |
+      (255 254 65 233)
+      (248 249 250 251 65)
+      (128 233)
   - name: source-position-literals
     source: |
       ;; rontolisp:current-file / rontolisp:current-line are substituted by the

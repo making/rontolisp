@@ -293,7 +293,7 @@
                        (logior (ash (logand b #x0F) 12)
                                (ash (logand (aref v (+ i 1)) #x3F) 6)
                                (logand (aref v (+ i 2)) #x3F))))
-                     ((and (>= b #xF0) (< (+ i 3) e))
+                     ((and (>= b #xF0) (< b #xF8) (< (+ i 3) e))
                       (setf (rontolisp::%http-body-index stream) (+ i 4))
                       (code-char
                        (logior (ash (logand b #x07) 18)
@@ -364,7 +364,7 @@
                                                         (logand (aref v (+ i 2))
                                                                 #x3F))) out)
                                    (setq i (+ i 3)))
-                                  ((and (>= b #xF0) (< (+ i 3) e))
+                                  ((and (>= b #xF0) (< b #xF8) (< (+ i 3) e))
                                    (write-char (code-char
                                                 (logior (ash (logand b #x07) 18)
                                                         (ash (logand

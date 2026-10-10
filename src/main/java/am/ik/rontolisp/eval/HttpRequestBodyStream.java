@@ -144,7 +144,7 @@ public final class HttpRequestBodyStream extends InputStream {
 		if (b >= 0xE0 && b < 0xF0 && i + 2 < e) {
 			return ((b & 0x0F) << 12) | ((v[i + 1] & 0x3F) << 6) | (v[i + 2] & 0x3F);
 		}
-		if (b >= 0xF0 && i + 3 < e) {
+		if (b >= 0xF0 && b < 0xF8 && i + 3 < e) {
 			return ((b & 0x07) << 18) | ((v[i + 1] & 0x3F) << 12) | ((v[i + 2] & 0x3F) << 6) | (v[i + 3] & 0x3F);
 		}
 		return b;
@@ -162,7 +162,10 @@ public final class HttpRequestBodyStream extends InputStream {
 		if (b < 0xF0) {
 			return i + 2 < e ? 3 : 1;
 		}
-		return i + 3 < e ? 4 : 1;
+		if (b < 0xF8) {
+			return i + 3 < e ? 4 : 1;
+		}
+		return 1;
 	}
 
 }
