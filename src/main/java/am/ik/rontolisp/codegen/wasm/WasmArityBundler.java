@@ -237,14 +237,14 @@ final class WasmArityBundler {
 
 	/**
 	 * Compiles {@code (%arity-bundle-check bundle n)} to nil, after measuring the list:
-	 * where the module reports a wrong count ({@code _arity_chk}, EH mode behind a
-	 * handler landing pad) it throws the interpreter's {@code program-error},
+	 * through {@code _arity_chk}, the helper every other count report uses, which throws
+	 * the interpreter's {@code program-error},
 	 * {@code Function expects n arguments, got m} -- or the report the named defun
-	 * declares ({@link DeclaredArityReport}) -- through the helper every other count
-	 * report uses; elsewhere a wrong count traps, as a dispatcher's no-match arm does
-	 * there. A Lisp-level {@code (error 'program-error ...)} would have pulled the
-	 * instance machinery into every module with a wide defun, and could not be compiled
-	 * at all where the instance gate had already closed.
+	 * declares ({@link DeclaredArityReport}) -- in EH mode behind a handler landing pad
+	 * and traps elsewhere, as a dispatcher's no-match arm does there. A module without
+	 * the helper traps in place. A Lisp-level {@code (error 'program-error ...)} would
+	 * have pulled the instance machinery into every module with a wide defun, and could
+	 * not be compiled at all where the instance gate had already closed.
 	 * @param cons the check form
 	 * @param ctx the compilation context
 	 */

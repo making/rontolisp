@@ -13492,6 +13492,32 @@ class WasmLispCompilerIntegrationTest {
 				((1 2 3) NIL)""");
 	}
 
+	// Without a handler landing pad there is no program-error to throw, so an apply whose
+	// list does not fit the callee traps, as a per-arity dispatcher's miss does there --
+	// through a computed designator (the spread dispatcher), a literal target, an aligned
+	// literal target's improper tail and an eval-built closure. It used to bind nil past
+	// the list's end and drop its surplus.
+	@Test
+	void applyWithAWrongCountTrapsWithoutAHandler() throws Exception {
+		String defs = """
+				(defun one (x) x)
+				(defun two (a b) (list a b))
+				(defun var (a &rest r) (list a r))
+				(print :before)
+				""";
+		for (String call : List.of("(apply (car (list (function one))) (list 1 2))",
+				"(apply (function one) (list 1 2))", "(apply #'two '(1))", "(apply (car (list #'two)) 1 nil)",
+				"(apply #'var 1 2)", "(apply (car (list #'var)) '(1 . 2))", "(apply (eval '(lambda (x) x)) '(1 2))")) {
+			String stderr = compileAndRunExpectTrap(defs + "(print " + call + ")");
+			assertThat(stderr).as(call).contains("unreachable");
+		}
+		assertThat(compileAndRun(defs + """
+				(print (list (apply (car (list (function one))) (list 1)) (apply #'two '(1 2))
+				             (apply #'var 1 2 '(3)) (apply (car (list #'var)) '(1))
+				             (apply (eval '(lambda (x) x)) '(5))))
+				""")).isEqualTo(":BEFORE\n(1 (1 2) (1 (2 3)) (1 NIL) 5)");
+	}
+
 	@Test
 	void destructuringBindMissingElementsSignalProgramError() throws Exception {
 		assertThat(compileAndRun("""

@@ -1414,9 +1414,9 @@ final class WasmEvalRuntimeBuilder {
 
 	/**
 	 * What the arms that check their own argument count report a wrong one through: the
-	 * {@code _arity_chk} index ({@code -1} where the module reports no wrong count, and
-	 * the call traps instead) and each operator's shape
-	 * ({@code WasmRuntimeBuilder.arityShape}, carrying the id its report is named by).
+	 * {@code _arity_chk} index ({@code -1} where the module carries none, and the call
+	 * traps in place) and each operator's shape ({@code WasmRuntimeBuilder.arityShape},
+	 * carrying the id its report is named by).
 	 *
 	 * @param arityChkIndex the {@code _arity_chk} function index, or -1
 	 * @param shapes the shape per {@link #SELF_COUNTED_OPERATORS} name
@@ -1435,8 +1435,9 @@ final class WasmEvalRuntimeBuilder {
 
 	/**
 	 * Emits the wrong-count report of {@code operator} over the argument-form list in
-	 * {@code restSlot}: {@code _arity_chk} throws the interpreter's program-error, and
-	 * the {@code unreachable} after it is what a module that reports no count gets.
+	 * {@code restSlot}: {@code _arity_chk} throws the interpreter's program-error (or
+	 * traps, where the module throws none), and the {@code unreachable} after it is what
+	 * a module without the guard gets.
 	 */
 	private static void emitCountReport(WasmWriter w, CountChecks counts, String operator, int restSlot) {
 		if (counts.arityChkIndex() >= 0) {
@@ -1698,7 +1699,7 @@ final class WasmEvalRuntimeBuilder {
 	 * @param usesEval whether the {@code _eval} interpreter exists (and with it the
 	 * {@code $fenv} and interpreted-closure arms)
 	 * @param arityChkIndex the {@code _arity_chk} function index an interpreted closure's
-	 * wrong count is reported through, or -1 where the module reports none
+	 * wrong count is reported (or trapped) through, or -1 where the module carries none
 	 * @param identityHash whether conses and closures carry an identity hash
 	 * @return the encoded function body
 	 */

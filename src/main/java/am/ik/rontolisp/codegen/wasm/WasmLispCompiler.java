@@ -679,9 +679,9 @@ public final class WasmLispCompiler implements LispCompiler {
 	 * A wrong count through either site is NOT a dispatch miss -- the spread dispatcher
 	 * has a case for every callable and the literal call reaches no dispatcher at all --
 	 * so the {@code br_table}'s report arms cannot catch it and a shared function does
-	 * ({@code WasmRuntimeBuilder.buildArityChkBody}). Gated exactly like the report arms:
-	 * EH mode behind a handler landing pad, which is where a thrown {@code program-error}
-	 * has both a representation and something to catch it.
+	 * ({@code WasmRuntimeBuilder.buildArityChkBody}). It throws the {@code program-error}
+	 * where the report arms do (EH mode behind a handler landing pad) and traps
+	 * elsewhere, as those arms do there.
 	 * @return the function index, or -1
 	 */
 	int arityChkFuncIndex() {
@@ -3885,11 +3885,11 @@ public final class WasmLispCompiler implements LispCompiler {
 		// (apply #'f list) sites live in bodies not yet compiled, and an INJECTED
 		// wrapper can add one after this point -- so it asks only whether the program
 		// mentions apply at all; a module that turns out to have no guarded site pays
-		// one unreferenced function. The rest of the gate is the report arms' own
-		// (WasmRuntimeBuilder.ArityReport): EH mode behind a handler landing pad, which
-		// is where a thrown program-error has both a representation and a catcher.
-		this.emitsArityChk = ehMode && hasLandingPad && this.usesInstances
-				&& (usesApplyRuntime || programUsesSymbol(program, LispNames.APPLY) || bundlesWideDefuns);
+		// one unreferenced function. Where a thrown program-error has no representation
+		// or no catcher (outside EH mode behind a handler landing pad) the guard traps
+		// instead, as a dispatcher's no-match arm does there -- a wrong count is never
+		// a silent bind (WasmRuntimeBuilder.buildArityChkBody).
+		this.emitsArityChk = usesApplyRuntime || programUsesSymbol(program, LispNames.APPLY) || bundlesWideDefuns;
 		// The instance layouts this module bakes (null: every one), decided here because
 		// the gate below reads them, and baked in front of Pass 2a.
 		java.util.@Nullable Set<String> bakedLayoutTags = this.usesInstances
@@ -6122,20 +6122,17 @@ public final class WasmLispCompiler implements LispCompiler {
 				closRegistry, stringTable, layoutAddresses, arityNamedFuncIds, arityDeclaredFuncIds,
 				unbackedArityOperators);
 		// The guard the SPREAD cases and the literal apply call sites share. Its slot was
-		// reserved in the pre-pass (userFuncBase() shifts by it), so a module that
-		// reserved one and turns out to have no program-error representation to throw
-		// gets a body that answers 0 -- the silence it had before -- rather than a hole
-		// where its index is.
-		byte[] arityChkBody = this.emitsArityChk ? (arityReport != null
-				? WasmRuntimeBuilder.buildArityChkBody(arityReport) : WasmRuntimeBuilder.buildArityChkStubBody())
-				: new byte[0];
+		// reserved in the pre-pass (userFuncBase() shifts by it); a module with no
+		// program-error to throw gets the body that traps on a wrong count.
+		byte[] arityChkBody = this.emitsArityChk
+				? WasmRuntimeBuilder.buildArityChkBody(arityReport, this.emitsArityMessage) : new byte[0];
 		// The shared opening a report reads a built-in operator's name through; a stub
 		// where no report is built, since then nothing calls it.
 		byte[] arityMessageBody = this.emitsArityMessage
 				? (arityReport != null ? WasmRuntimeBuilder.buildArityMessageBody(arityReport)
 						: WasmRuntimeBuilder.buildArityMessageStubBody())
 				: new byte[0];
-		int arityChkIndex = arityReport != null ? arityChkFuncIndex() : -1;
+		int arityChkIndex = arityChkFuncIndex();
 		// The type-error a wrong-type operand's landing throws (WasmOperandTypes): only
 		// where the texts interned its type symbols (operandTypeErrorPossible); elsewhere
 		// the message-only payload reports the same text.

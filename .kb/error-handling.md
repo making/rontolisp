@@ -2616,6 +2616,16 @@ Pinned by ci-spec `wrong-arity-funcall-signals-program-error` and `JvmLispCompil
   dispatchers) decided in the pre-pass, because it shifts `userFuncBase()`; a module without it is
   byte-identical. Inlining the throw instead would have cost ~100 B at every one of those sites,
   over a spread dispatcher that is one case per callable.
+  - **Outside the report gate the wasm guard TRAPS** (2026-10-10): `emitsArityChk` is every
+    module that spells `apply`, runs the apply runtime or bundles a wide defun, whatever its
+    EH mode, and a module with no `ArityReport` (outside EH mode, or without a handler landing
+    pad) gets `buildArityChkBody(null, ...)`, whose two refusals are `unreachable` -- what a
+    per-arity dispatcher's miss does there. Before, the slot existed only behind the gate (a
+    stub answering 0 elsewhere), so a no-handler module's `(apply #'one '(1 2))` printed `1`, and
+    every Clojure function-value call (`%clojure-call` applies) bound silently: `(map one [1 2]
+    [3 4])` answered `(1 2)`. The trap body takes the masked shape where call sites may name a
+    callee (`emitsArityMessage` with no report built). Pinned by
+    `WasmLispCompilerIntegrationTest.applyWithAWrongCountTrapsWithoutAHandler`.
   - The walk **stops at the first non-cons**, and a list that ends in anything but nil signals the
     interpreter's `simple-error` `APPLY: last argument must be a list`
     (`ClosRegistry.APPLY_IMPROPER_LIST_MESSAGE`) BEFORE the count is judged (2026-09-26): only an

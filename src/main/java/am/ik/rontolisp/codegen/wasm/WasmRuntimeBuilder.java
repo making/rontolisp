@@ -2812,10 +2812,19 @@ final class WasmRuntimeBuilder {
 	 * rest tail here with the shape {@code (0, variadic)} for that check alone. It reuses
 	 * the {@code ((ref null eq), i32) -> i32} signature ({@code TYPE_STR_TO_MEM}), so no
 	 * module gains a type entry; the result is always 0 and every call site drops it.
-	 * @param report the message pieces and the {@code program-error} layout
+	 *
+	 * <p>
+	 * A module with no {@code program-error} to throw ({@code report} null: outside EH
+	 * mode, without a handler landing pad or its layout) TRAPS on both refusals, as a
+	 * per-arity dispatcher's no-match arm does there: the module stops rather than bind
+	 * nil past the list's end or drop its surplus.
+	 * @param report the message pieces and the {@code program-error} layout, or null
+	 * where the module throws none
+	 * @param namedShapes whether a call site may bake a funcId into the shape it hands
+	 * over ({@link #arityShape}), read when {@code report} is null
 	 * @return the function body
 	 */
-	static byte[] buildArityChkBody(ArityReport report) {
+	static byte[] buildArityChkBody(@Nullable ArityReport report, boolean namedShapes) {
 		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		// Params: 0 = argList, 1 = shape. Locals: 2 = got (i32), 3 = cursor, 4 = slots,
@@ -2867,45 +2876,37 @@ final class WasmRuntimeBuilder {
 		w.write(Instruction.REF_IS_NULL);
 		w.write(Instruction.I32_EQZ);
 		w.write(Instruction.IF, 0x40);
-		w.write(Instruction.REF_NULL);
-		w.writeHeapType(Type.EQ.code());
-		emitStrConst(w, report.applyImproperList());
-		WasmEmitHelper.emitNewCons(w, report.identityHash);
-		w.write(Instruction.THROW);
-		w.writeUnsignedLeb128(WasmLispCompiler.TAG_LISP_COND);
+		if (report != null) {
+			w.write(Instruction.REF_NULL);
+			w.writeHeapType(Type.EQ.code());
+			emitStrConst(w, report.applyImproperList());
+			WasmEmitHelper.emitNewCons(w, report.identityHash);
+			w.write(Instruction.THROW);
+			w.writeUnsignedLeb128(WasmLispCompiler.TAG_LISP_COND);
+		}
+		else {
+			w.write(Instruction.UNREACHABLE);
+		}
 		w.write(Instruction.END);
 		// The count fits when it is the required one, or larger with a &rest tail to
 		// take the surplus.
-		emitArityFits(w, got, report.namesOperators());
+		boolean named = report != null ? report.namesOperators() : namedShapes;
+		emitArityFits(w, got, named);
 		w.write(Instruction.IF, 0x40);
 		w.write(Instruction.I32_CONST);
 		w.writeSignedLeb128(0);
 		w.write(Instruction.RETURN);
 		w.write(Instruction.END);
-		emitArityThrow(w, report, 1, report.namesOperators(), slots, msg, () -> {
-			w.write(Instruction.GET_LOCAL);
-			w.writeUnsignedLeb128(got);
-		});
+		if (report != null) {
+			emitArityThrow(w, report, 1, named, slots, msg, () -> {
+				w.write(Instruction.GET_LOCAL);
+				w.writeUnsignedLeb128(got);
+			});
+		}
+		else {
+			w.write(Instruction.UNREACHABLE);
+		}
 		w.write(Instruction.END); // end function
-		return body.toByteArray();
-	}
-
-	/**
-	 * The body a module that reserved {@code _arity_chk}'s slot emits when it turns out
-	 * to have no {@code program-error} representation to throw: answer 0 and check
-	 * nothing. The slot is decided in the pre-pass (it shifts every user function index),
-	 * the representation only once the class layouts are baked, so the two can disagree;
-	 * a stub keeps the index space honest without inventing a throw the module cannot
-	 * catch.
-	 * @return the function body
-	 */
-	static byte[] buildArityChkStubBody() {
-		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
-		WasmWriter w = new WasmWriter(body);
-		w.write(0); // 0 locals
-		w.write(Instruction.I32_CONST);
-		w.writeSignedLeb128(0);
-		w.write(Instruction.END);
 		return body.toByteArray();
 	}
 
@@ -4035,7 +4036,7 @@ final class WasmRuntimeBuilder {
 					w.writeUnsignedLeb128(1);
 					w.write(Instruction.I32_CONST);
 					w.writeSignedLeb128(arityShape(target.required(), target.variadic(),
-							Objects.requireNonNull(report).names(target.funcId()) ? target.funcId() : -1));
+							report != null && report.names(target.funcId()) ? target.funcId() : -1));
 					w.write(Instruction.CALL);
 					w.writeUnsignedLeb128(arityChkIndex);
 					w.write(Instruction.DROP);

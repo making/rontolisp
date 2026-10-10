@@ -107,7 +107,8 @@ twins, `LispEvaluatorTest.theListAccessorsFuncallAndReduceReportAWrongArgumentCo
 - **An interpreted closure checks its count only without a `&` marker** in its lambda list: the
   runtime `lambda` binds such a list positionally (documented), so its parameter count is no
   count a call must match. The check is `_arityChk(argList, 2 * params)` in `_apply`'s closure
-  arm; on wasm it exists only where `_arity_chk` does.
+  arm; on wasm `_arity_chk` is in every module with `eval`, trapping where no `program-error`
+  is thrown ([error-handling.md](error-handling.md), "Outside the report gate").
 - **Every catalog wrapper takes its call position's keywords** (2026-09-26). `find` / `find-if` /
   `find-if-not`, `sort` and `make-list` were fixed-arity (`FIND expects 2 arguments, got 4` through
   `funcall` and inside `eval`); pinned by ci-spec `builtin-function-values-take-their-keywords`.
