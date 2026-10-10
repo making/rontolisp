@@ -85,6 +85,40 @@ final class ClojureRefusals {
 	 */
 	static final String ILLEGAL_FORMAT_CONVERSION = "RONTOLISP::%CLOJURE-ILLEGAL-FORMAT-CONVERSION-EXCEPTION";
 
+	/**
+	 * {@code java.util.UnknownFormatConversionException}: no conversion Formatter has.
+	 */
+	static final String UNKNOWN_FORMAT_CONVERSION = "RONTOLISP::%CLOJURE-UNKNOWN-FORMAT-CONVERSION-EXCEPTION";
+
+	/** {@code java.util.MissingFormatWidthException}: a flag that needs a width. */
+	static final String MISSING_FORMAT_WIDTH = "RONTOLISP::%CLOJURE-MISSING-FORMAT-WIDTH-EXCEPTION";
+
+	/**
+	 * {@code java.util.MissingFormatArgumentException}: a specifier past the arguments.
+	 */
+	static final String MISSING_FORMAT_ARGUMENT = "RONTOLISP::%CLOJURE-MISSING-FORMAT-ARGUMENT-EXCEPTION";
+
+	/** {@code java.util.IllegalFormatFlagsException}: flags that exclude each other. */
+	static final String ILLEGAL_FORMAT_FLAGS = "RONTOLISP::%CLOJURE-ILLEGAL-FORMAT-FLAGS-EXCEPTION";
+
+	/** {@code java.util.DuplicateFormatFlagsException}: a flag given twice. */
+	static final String DUPLICATE_FORMAT_FLAGS = "RONTOLISP::%CLOJURE-DUPLICATE-FORMAT-FLAGS-EXCEPTION";
+
+	/**
+	 * {@code java.util.FormatFlagsConversionMismatchException}: a flag its conversion (or
+	 * its argument) does not take.
+	 */
+	static final String FORMAT_FLAGS_CONVERSION_MISMATCH = "RONTOLISP::%CLOJURE-FORMAT-FLAGS-CONVERSION-MISMATCH-EXCEPTION";
+
+	/** {@code java.util.IllegalFormatPrecisionException}: a precision on an integer. */
+	static final String ILLEGAL_FORMAT_PRECISION = "RONTOLISP::%CLOJURE-ILLEGAL-FORMAT-PRECISION-EXCEPTION";
+
+	/** {@code java.util.IllegalFormatWidthException}: a width on {@code %n}. */
+	static final String ILLEGAL_FORMAT_WIDTH = "RONTOLISP::%CLOJURE-ILLEGAL-FORMAT-WIDTH-EXCEPTION";
+
+	/** {@code java.util.IllegalFormatArgumentIndexException}: argument index 0. */
+	static final String ILLEGAL_FORMAT_ARGUMENT_INDEX = "RONTOLISP::%CLOJURE-ILLEGAL-FORMAT-ARGUMENT-INDEX-EXCEPTION";
+
 	/** {@code java.lang.AssertionError}. */
 	static final String ASSERTION_ERROR = "RONTOLISP::%CLOJURE-ASSERTION-ERROR";
 
@@ -218,6 +252,15 @@ final class ClojureRefusals {
 			Map.entry(EXCEPTION, "java.lang.Exception"), Map.entry(CLASS_NOT_FOUND, "java.lang.ClassNotFoundException"),
 			Map.entry(PATTERN_SYNTAX, "java.util.regex.PatternSyntaxException"),
 			Map.entry(ILLEGAL_FORMAT_CONVERSION, "java.util.IllegalFormatConversionException"),
+			Map.entry(UNKNOWN_FORMAT_CONVERSION, "java.util.UnknownFormatConversionException"),
+			Map.entry(MISSING_FORMAT_WIDTH, "java.util.MissingFormatWidthException"),
+			Map.entry(MISSING_FORMAT_ARGUMENT, "java.util.MissingFormatArgumentException"),
+			Map.entry(ILLEGAL_FORMAT_FLAGS, "java.util.IllegalFormatFlagsException"),
+			Map.entry(DUPLICATE_FORMAT_FLAGS, "java.util.DuplicateFormatFlagsException"),
+			Map.entry(FORMAT_FLAGS_CONVERSION_MISMATCH, "java.util.FormatFlagsConversionMismatchException"),
+			Map.entry(ILLEGAL_FORMAT_PRECISION, "java.util.IllegalFormatPrecisionException"),
+			Map.entry(ILLEGAL_FORMAT_WIDTH, "java.util.IllegalFormatWidthException"),
+			Map.entry(ILLEGAL_FORMAT_ARGUMENT_INDEX, "java.util.IllegalFormatArgumentIndexException"),
 			Map.entry(ASSERTION_ERROR, "java.lang.AssertionError"), Map.entry(IO, "java.io.IOException"),
 			Map.entry(FILE_NOT_FOUND, "java.io.FileNotFoundException"),
 			Map.entry(NO_SUCH_FILE, "java.nio.file.NoSuchFileException"), Map.entry(ZIP, "java.util.zip.ZipException"),

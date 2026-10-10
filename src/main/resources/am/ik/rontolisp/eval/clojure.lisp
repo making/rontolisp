@@ -1354,6 +1354,91 @@
                                 "java.lang.Exception" "java.lang.Throwable")
                               message))
 
+;; The refusals of java.util.Formatter's parse of a format string, and of its
+;; print where a flag does not fit the argument: each a java.util
+;; IllegalFormatException, in the oracle's words.
+(defun rontolisp::%clojure-unknown-format-conversion-exception (message)
+  "A refusal the oracle throws as a java.util.UnknownFormatConversionException."
+  (rontolisp::%clojure-refuse '("java.util.UnknownFormatConversionException"
+                                "java.util.IllegalFormatException"
+                                "java.lang.IllegalArgumentException"
+                                "java.lang.RuntimeException"
+                                "java.lang.Exception" "java.lang.Throwable")
+                              message))
+
+(defun rontolisp::%clojure-missing-format-width-exception (message)
+  "A refusal the oracle throws as a java.util.MissingFormatWidthException."
+  (rontolisp::%clojure-refuse '("java.util.MissingFormatWidthException"
+                                "java.util.IllegalFormatException"
+                                "java.lang.IllegalArgumentException"
+                                "java.lang.RuntimeException"
+                                "java.lang.Exception" "java.lang.Throwable")
+                              message))
+
+(defun rontolisp::%clojure-missing-format-argument-exception (message)
+  "A refusal the oracle throws as a java.util.MissingFormatArgumentException."
+  (rontolisp::%clojure-refuse '("java.util.MissingFormatArgumentException"
+                                "java.util.IllegalFormatException"
+                                "java.lang.IllegalArgumentException"
+                                "java.lang.RuntimeException"
+                                "java.lang.Exception" "java.lang.Throwable")
+                              message))
+
+(defun rontolisp::%clojure-illegal-format-flags-exception (message)
+  "A refusal the oracle throws as a java.util.IllegalFormatFlagsException."
+  (rontolisp::%clojure-refuse '("java.util.IllegalFormatFlagsException"
+                                "java.util.IllegalFormatException"
+                                "java.lang.IllegalArgumentException"
+                                "java.lang.RuntimeException"
+                                "java.lang.Exception" "java.lang.Throwable")
+                              message))
+
+(defun rontolisp::%clojure-duplicate-format-flags-exception (message)
+  "A refusal the oracle throws as a java.util.DuplicateFormatFlagsException."
+  (rontolisp::%clojure-refuse '("java.util.DuplicateFormatFlagsException"
+                                "java.util.IllegalFormatException"
+                                "java.lang.IllegalArgumentException"
+                                "java.lang.RuntimeException"
+                                "java.lang.Exception" "java.lang.Throwable")
+                              message))
+
+(defun rontolisp::%clojure-format-flags-conversion-mismatch-exception (message)
+  "A refusal the oracle throws as a
+   java.util.FormatFlagsConversionMismatchException."
+  (rontolisp::%clojure-refuse
+   '("java.util.FormatFlagsConversionMismatchException"
+     "java.util.IllegalFormatException" "java.lang.IllegalArgumentException"
+     "java.lang.RuntimeException" "java.lang.Exception" "java.lang.Throwable")
+   message))
+
+(defun rontolisp::%clojure-illegal-format-precision-exception (message)
+  "A refusal the oracle throws as a java.util.IllegalFormatPrecisionException."
+  (rontolisp::%clojure-refuse '("java.util.IllegalFormatPrecisionException"
+                                "java.util.IllegalFormatException"
+                                "java.lang.IllegalArgumentException"
+                                "java.lang.RuntimeException"
+                                "java.lang.Exception" "java.lang.Throwable")
+                              message))
+
+(defun rontolisp::%clojure-illegal-format-width-exception (message)
+  "A refusal the oracle throws as a java.util.IllegalFormatWidthException."
+  (rontolisp::%clojure-refuse '("java.util.IllegalFormatWidthException"
+                                "java.util.IllegalFormatException"
+                                "java.lang.IllegalArgumentException"
+                                "java.lang.RuntimeException"
+                                "java.lang.Exception" "java.lang.Throwable")
+                              message))
+
+(defun rontolisp::%clojure-illegal-format-argument-index-exception (message)
+  "A refusal the oracle throws as a
+   java.util.IllegalFormatArgumentIndexException."
+  (rontolisp::%clojure-refuse '("java.util.IllegalFormatArgumentIndexException"
+                                "java.util.IllegalFormatException"
+                                "java.lang.IllegalArgumentException"
+                                "java.lang.RuntimeException"
+                                "java.lang.Exception" "java.lang.Throwable")
+                              message))
+
 (defun rontolisp::%clojure-assertion-error (message)
   "A refusal the oracle throws as an AssertionError."
   (rontolisp::%clojure-refuse
@@ -8370,6 +8455,266 @@
   (if (rontolisp::%clojure-symbolic-float-p x)
       (rontolisp::%clojure-number-format-exception "Infinite or NaN")
       (rontolisp::%clojure-parse-decimal (princ-to-string x))))
+
+;; format: java.util.Formatter's conversions of one argument, behind the
+;; lowering's parse of the literal format string (ClojureStringLowering
+;; formatOf), which also makes every refusal of the parse. FLAGS is the
+;; specifier's flags in Formatter's own order ("-#+ 0,("), WIDTH and PRECISION
+;; an integer or nil, CONV the conversion as written: an uppercase one
+;; upcases. nil spells null, like the oracle's.
+(defun rontolisp::%clojure-format-justify (s flags width)
+  "S padded with spaces to WIDTH, on the right under the - flag."
+  (let ((pad (if width (- width (length s)) 0)))
+    (cond ((<= pad 0) s)
+     ((find #\- flags)
+      (concatenate 'string s (make-string pad :initial-element #\Space)))
+     (t (concatenate 'string (make-string pad :initial-element #\Space) s)))))
+
+(defun rontolisp::%clojure-format-null (conv flags width)
+  "A nil argument of a non-text conversion: null, justified."
+  (rontolisp::%clojure-format-justify
+   (if (char= conv (char-downcase conv)) "null" "NULL") flags width))
+
+(defun rontolisp::%clojure-format-mismatch (conv x)
+  "The oracle's IllegalFormatConversionException for an argument X of the
+   wrong class for CONV."
+  (rontolisp::%clojure-illegal-format-conversion-exception
+   (concatenate 'string (string (char-downcase conv)) " != "
+                (rontolisp::%clojure-class-name-of x))))
+
+(defun rontolisp::%clojure-format-text (s conv flags width precision)
+  "The text S of a general conversion: cut to PRECISION, upcased under an
+   uppercase CONV, justified."
+  (let ((cut
+         (if (and precision (< precision (length s)))
+             (subseq s 0 precision)
+             s)))
+    (rontolisp::%clojure-format-justify
+     (if (char= conv (char-downcase conv)) cut (string-upcase cut)) flags
+     width)))
+
+(defun rontolisp::%clojure-format-char (x conv flags width)
+  "%c: the character X as text; nil spells null, anything else is refused."
+  (cond ((null x) (rontolisp::%clojure-format-text "null" conv flags width nil))
+        ((characterp x)
+         (rontolisp::%clojure-format-text (string x) conv flags width nil))
+        (t (rontolisp::%clojure-format-mismatch conv x))))
+
+(defun rontolisp::%clojure-format-sign (neg flags)
+  "The leading sign of a number: ( or - when NEG, else + or a space by the flags."
+  (cond (neg (if (find #\( flags) "(" "-"))
+        ((find #\+ flags) "+")
+        ((find #\Space flags) " ")
+        (t "")))
+
+(defun rontolisp::%clojure-format-number (prefix magnitude suffix flags width)
+  "A converted number: zeros between PREFIX (sign, radix indicator) and
+   MAGNITUDE up to WIDTH under the 0 flag, SUFFIX (exponent, closing
+   parenthesis) last, justified."
+  (let ((zeros
+         (if (and width (find #\0 flags))
+             (- width (length prefix) (length magnitude) (length suffix))
+             0)))
+    (rontolisp::%clojure-format-justify (if (> zeros 0)
+                                            (concatenate 'string prefix
+                                                         (make-string zeros
+                                                          :initial-element #\0)
+                                                         magnitude suffix)
+                                            (concatenate 'string prefix
+                                                         magnitude suffix))
+                                        flags width)))
+
+(defun rontolisp::%clojure-format-group (digits)
+  "DIGITS with a comma before each group of three counted from the right."
+  (let ((n (length digits)) (out (make-string-output-stream)))
+    (dotimes (i n)
+      (when (and (> i 0) (= (mod (- n i) 3) 0)) (write-char #\, out))
+      (write-char (char digits i) out))
+    (get-output-stream-string out)))
+
+(defun rontolisp::%clojure-format-integer (x conv flags width)
+  "%d, %o, %x: an integer in the long range as the oracle's Long (octal and
+   hexadecimal in two's complement, refusing the sign flags), past it as a
+   BigInteger (signed)."
+  (cond ((null x) (rontolisp::%clojure-format-null conv flags width))
+        ((not (integerp x)) (rontolisp::%clojure-format-mismatch conv x))
+        (t (let* ((neg (< x 0))
+                  (close (if (and neg (find #\( flags)) ")" ""))
+                  (radix (char-downcase conv)))
+             (if (char= radix #\d)
+                 (let ((digits (format nil "~D" (abs x))))
+                   (rontolisp::%clojure-format-number
+                    (rontolisp::%clojure-format-sign neg flags)
+                    (if (find #\, flags)
+                        (rontolisp::%clojure-format-group digits)
+                        digits) close flags width))
+                 (let ((long (typep x '(signed-byte 64))))
+                   (when long
+                     (let ((bad
+                            (remove-if-not (lambda (c) (find c "+ (")) flags)))
+                       (when (> (length bad) 0)
+                         (rontolisp::%clojure-format-flags-conversion-mismatch-exception
+                          (concatenate 'string "Conversion = " (string radix)
+                                       ", Flags = " bad)))))
+                   (let* ((v
+                           (cond ((not long) (abs x))
+                                 (neg (+ x 18446744073709551616))
+                                 (t x)))
+                          (digits
+                           (if (char= radix #\o)
+                               (format nil "~O" v)
+                               (format nil "~X" v)))
+                          (alternate (find #\# flags)))
+                     (rontolisp::%clojure-format-number
+                      (concatenate 'string
+                       (if long "" (rontolisp::%clojure-format-sign neg flags))
+                       (cond ((not alternate) "")
+                             ((char= radix #\o) "0")
+                             ((char= conv #\x) "0x")
+                             (t "0X")))
+                      (if (char= conv #\x) (string-downcase digits) digits)
+                      (if long "" close) flags width))))))))
+
+(defun rontolisp::%clojure-format-decimal (text)
+  "The shortest decimal TEXT spells (a double's printed text, its sign aside)
+   as (m . k): the double is m times 10 to the k."
+  (let ((m 0) (k 0) (i 0) (n (length text)) (fraction nil))
+    (do ()
+        ((or (>= i n) (find (char text i) "eEdD")))
+      (let ((c (char text i)))
+        (cond ((char= c #\.) (setq fraction t))
+              ((digit-char-p c)
+               (setq m (+ (* m 10) (digit-char-p c)))
+               (when fraction (setq k (- k 1))))))
+      (setq i (+ i 1)))
+    (when (< i n) (setq k (+ k (parse-integer text :start (+ i 1)))))
+    (cons m k)))
+
+(defun rontolisp::%clojure-format-round (m k places)
+  "m times 10 to the k, rounded half up to PLACES decimals, times 10 to the
+   PLACES: Formatter's rounding of the shortest decimal."
+  (let ((shift (+ k places)))
+    (if (>= shift 0)
+        (* m (expt 10 shift))
+        (let ((d (expt 10 (- shift)))) (floor (+ m (floor d 2)) d)))))
+
+(defun rontolisp::%clojure-format-digits (n count)
+  "The decimal digits of N, zeros in front to COUNT."
+  (let ((digits (format nil "~D" n)))
+    (if (< (length digits) count)
+        (concatenate 'string
+         (make-string (- count (length digits)) :initial-element #\0) digits)
+        digits)))
+
+(defun rontolisp::%clojure-format-point (whole fraction flags)
+  "WHOLE and FRACTION joined by the decimal point, which an empty FRACTION
+   keeps only under the # flag."
+  (if (or (> (length fraction) 0) (find #\# flags))
+      (concatenate 'string whole "." fraction)
+      whole))
+
+(defun rontolisp::%clojure-format-fixed (m k places flags)
+  "%f's magnitude of m times 10 to the k: PLACES decimals, the whole part
+   grouped under the , flag."
+  (let* ((digits
+          (rontolisp::%clojure-format-digits
+           (rontolisp::%clojure-format-round m k places) (+ places 1)))
+         (cut (- (length digits) places))
+         (whole (subseq digits 0 cut)))
+    (rontolisp::%clojure-format-point
+     (if (find #\, flags) (rontolisp::%clojure-format-group whole) whole)
+     (subseq digits cut) flags)))
+
+(defun rontolisp::%clojure-format-exponent (m k places)
+  "The decimal exponent of m times 10 to the k once rounded half up to PLACES
+   + 1 significant digits, and those digits: (exponent . digits)."
+  (if (= m 0)
+      (cons 0 0)
+      (let* ((e (+ (- (length (format nil "~D" m)) 1) k))
+             (n (rontolisp::%clojure-format-round m (- k e) places)))
+        (if (> (length (format nil "~D" n)) (+ places 1))
+            (cons (+ e 1) (floor n 10))
+            (cons e n)))))
+
+(defun rontolisp::%clojure-format-scientific (m k places flags)
+  "%e's magnitude of m times 10 to the k: (mantissa . exponent)."
+  (let* ((rounded (rontolisp::%clojure-format-exponent m k places))
+         (digits
+          (rontolisp::%clojure-format-digits (cdr rounded) (+ places 1))))
+    (cons (rontolisp::%clojure-format-point (subseq digits 0 1)
+                                            (subseq digits 1) flags)
+          (car rounded))))
+
+(defun rontolisp::%clojure-format-scientific-text (m k places flags conv close)
+  "%e's text of m times 10 to the k: (mantissa . exponent-and-CLOSE), the
+   exponent signed and at least two digits."
+  (let* ((scientific (rontolisp::%clojure-format-scientific m k places flags))
+         (power (abs (cdr scientific))))
+    (cons (car scientific)
+          (concatenate 'string (if (char= conv #\E) "E" "e")
+                       (if (< (cdr scientific) 0) "-" "+")
+                       (if (< power 10) "0" "") (format nil "~D" power)
+                       close))))
+
+(defun rontolisp::%clojure-format-magnitude (m k conv flags precision close)
+  "The magnitude of m times 10 to the k under %e, %f or %g:
+   (digits . suffix). %g takes PRECISION significant digits, fixed from
+   10 to the -4 up to 10 to the PRECISION once rounded, scientific elsewhere."
+  (let ((form (char-downcase conv)))
+    (cond ((char= form #\f)
+           (cons (rontolisp::%clojure-format-fixed m k (or precision 6) flags)
+                 close))
+          ((char= form #\e)
+           (rontolisp::%clojure-format-scientific-text m k (or precision 6)
+                                                       flags conv close))
+          (t
+           (let* ((significant
+                   (cond ((null precision) 6)
+                         ((= precision 0) 1)
+                         (t precision)))
+                  (e
+                   (car
+                    (rontolisp::%clojure-format-exponent m k
+                                                         (- significant 1)))))
+             (if (and (>= e -4) (< e significant))
+                 (cons (rontolisp::%clojure-format-fixed m k (- significant 1 e)
+                                                         flags) close)
+                 (rontolisp::%clojure-format-scientific-text m k
+                  (- significant 1) flags (if (char= conv #\G) #\E #\e)
+                  close)))))))
+
+(defun rontolisp::%clojure-format-float (x conv flags width precision)
+  "%e, %f, %g: a double as Formatter renders it, from the shortest decimal it
+   prints as, rounded half up."
+  (let ((upper (char/= conv (char-downcase conv))))
+    (cond ((null x) (rontolisp::%clojure-format-null conv flags width))
+          ((not (floatp x)) (rontolisp::%clojure-format-mismatch conv x))
+          ((/= x x)
+           (rontolisp::%clojure-format-justify (if upper "NAN" "NaN") flags
+                                               width))
+          (t
+           (let* ((text (princ-to-string x))
+                  (neg (char= (char text 0) #\-))
+                  (sign (rontolisp::%clojure-format-sign neg flags))
+                  (close (if (and neg (find #\( flags)) ")" "")))
+             (if (or (> x most-positive-double-float)
+                     (< x most-negative-double-float))
+                 (rontolisp::%clojure-format-justify (concatenate 'string sign
+                                                                  (if upper
+                                                                      "INFINITY"
+                                                                      "Infinity")
+                                                                  close) flags
+                                                     width)
+                 (let* ((decimal (rontolisp::%clojure-format-decimal text))
+                        (magnitude
+                         (rontolisp::%clojure-format-magnitude (car decimal)
+                                                               (cdr decimal)
+                                                               conv flags
+                                                               precision
+                                                               close)))
+                   (rontolisp::%clojure-format-number sign (car magnitude)
+                                                      (cdr magnitude) flags
+                                                      width))))))))
 
 (defun rontolisp::%clojure-rationalize (x)
   "(rationalize x): nil as nil, a rational itself, a double as the rational of

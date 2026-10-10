@@ -2666,8 +2666,15 @@ class ClojureLoweringTest {
 			.contains("(RONTOLISP::%CLOJURE-IO-SPIT \"f\" 1 NIL \"UTF-8\")");
 		assertThatThrownBy(() -> Clojure.read("(reader \"f\")", null)).isInstanceOf(LispReadException.class)
 			.hasMessageContaining("unknown name: reader");
-		assertThatThrownBy(() -> Clojure.read("(format \"%e\" 1.5)", null)).isInstanceOf(LispReadException.class)
-			.hasMessageContaining("format directive %e is not supported yet");
+		assertThatThrownBy(() -> Clojure.read("(format \"%h\" 1.5)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("format directive %h is not supported yet");
+		assertThatThrownBy(() -> Clojure.read("(format \"%tY\" 1)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("format directive %t is not supported yet");
+		// a flag renders through the conversion's helper; a refusal of Formatter's parse
+		// is the run-time refusal of its class, after the arguments
+		assertThat(lowered("(format \"%%x%04x\" 10)")).contains("(RONTOLISP::%CLOJURE-FORMAT-INTEGER 10 #\\x \"0\" 4)");
+		assertThat(lowered("(format \"%-d\" (inc 1))")).contains("(+ 1 1)")
+			.contains("(RONTOLISP::%CLOJURE-MISSING-FORMAT-WIDTH-EXCEPTION \"%-d\")");
 		assertThatThrownBy(() -> Clojure.read("(format x 1)", null)).isInstanceOf(LispReadException.class)
 			.hasMessageContaining("format takes a literal format string");
 	}

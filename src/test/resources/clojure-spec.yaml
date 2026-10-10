@@ -3941,6 +3941,48 @@ cases:
       null
          ab|3.14|ff|false|%
       a[1 2]b
+  - name: clojure-format-flags-and-the-formatter-refusals
+    # format is java.util.Formatter: every flag over the conversions that take it,
+    # %e/%g, %f rounding the shortest decimal half up, a long's octal and hex in
+    # two's complement, n$ and < indexes, nil as null, and each refusal of the
+    # parse (and of a flag the argument cannot take) in its class and words, after
+    # the arguments are evaluated. Oracle-identical (clj 1.12.6, 2026-10-10).
+    source: |
+      (println (format "%%x%04x|%08X|%#x|%#o|%-6d|%+d|% d|%(d|%,d|%010d|%(08d" 10 255 255 8 42 42 42 -42 1234567 -42 -42))
+      (println (format "%x|%o|%X|%#x|%-8x|" -1 -8 -255 -1 255))
+      (println (format "%08.2f|%,.2f|%(,.2f|%.0f|%.2f|%.1f|%#.0f|%+f|%,.0f|%.3f" -3.14159 1234567.891 -1234567.891 2.5 0.125 0.25 3.0 ##Inf 1e20 -0.0))
+      (println (format "%e|%.3e|%E|%012.3e|%(e|%.0e|%#.0e|%e" 12345.678 12345.678 0.0000015 -1.5 -1.5 15.0 15.0 4.9E-324))
+      (println (format "%g|%g|%g|%g|%.3g|%G|%,g|%010g|%.0g" 3.14 1e10 0.0001 0.00009999 99.95 1e-10 123456.0 -5.0 5.0))
+      (println (format "%5s|%-5s|%.2s|%S|%5b|%-3c|%5%|%-3%|%.1b|%C" "ab" "ab" "abc" "abc" nil \a false \z))
+      (println (format "%2$s %1$s %<s %s|%s|%d|%f|%5c|%X" "a" "b" nil nil nil nil nil))
+      (println (format "%f|%08.2f|%E|%-+10f|%(f" ##NaN ##-Inf ##NaN ##Inf ##-Inf))
+      (println (format "%s" 1 2) (format "~%s~" "~") (format "a%nb"))
+      (defmacro fmt-refused [cls form] `(try (try ~form :none (catch ~cls e# (ex-message e#))) (catch Throwable e# [:other (ex-message e#)])))
+      (println [(fmt-refused java.util.MissingFormatWidthException (format "%-d" 1)) (fmt-refused java.util.FormatFlagsConversionMismatchException (format "%0s" "a")) (fmt-refused java.util.IllegalFormatFlagsException (format "%-08d" 1))])
+      (println [(fmt-refused java.util.DuplicateFormatFlagsException (format "%++d" 1)) (fmt-refused java.util.IllegalFormatPrecisionException (format "%.2d" 1)) (fmt-refused java.util.IllegalFormatWidthException (format "%5n"))])
+      (println [(fmt-refused java.util.UnknownFormatConversionException (format "%q" 1)) (fmt-refused java.util.UnknownFormatConversionException (format "a%")) (fmt-refused java.util.UnknownFormatConversionException (format "%-1$s" 1)) (fmt-refused java.util.IllegalFormatException (format "%0$s" 1))])
+      (println [(fmt-refused java.util.MissingFormatArgumentException (format "%s %s" 1)) (fmt-refused java.util.MissingFormatArgumentException (format "%<s" 1)) (fmt-refused java.util.FormatFlagsConversionMismatchException (format "%+x" 1)) (fmt-refused java.util.FormatFlagsConversionMismatchException (format "%#s" 1))])
+      (println [(fmt-refused java.util.IllegalFormatConversionException (format "%d" 1.5)) (fmt-refused java.util.IllegalFormatConversionException (format "%f" 1)) (fmt-refused java.util.IllegalFormatConversionException (format "%c" "a")) (fmt-refused java.util.FormatFlagsConversionMismatchException (format "%(+x %d" 1 "a"))])
+      (println [(fmt-refused java.util.MissingFormatWidthException (format "%d %-d" "a" 1)) (fmt-refused java.util.FormatFlagsConversionMismatchException (format "%(#5c" \a)) (fmt-refused java.util.IllegalFormatException (format "%0+-5d" 1))])
+      (println (fmt-refused java.util.MissingFormatWidthException (format "%-d" (print "args first "))))
+    expected: |
+      %x000a|000000FF|0xff|010|42    |+42| 42|(42)|1,234,567|-000000042|(000042)
+      ffffffffffffffff|1777777777777777777770|FFFFFFFFFFFFFF01|0xffffffffffffffff|ff      |
+      -0003.14|1,234,567.89|(1,234,567.89)|3|0.13|0.3|3.|+Infinity|100,000,000,000,000,000,000|-0.000
+      1.234568e+04|1.235e+04|1.500000E-06|-001.500e+00|(1.500000e+00)|2e+01|2.e+01|4.900000e-324
+      3.14000|1.00000e+10|0.000100000|9.99900e-05|100|1.00000E-10|123,456|-005.00000|5
+         ab|ab   |ab|ABC|false|a  |    %|%  |f|Z
+      b a a a|b|null|null| null|NULL
+      NaN|-Infinity|NAN|+Infinity |(Infinity)
+      1 ~~~ a
+      b
+      [%-d Conversion = s, Flags = 0 Flags = '-0']
+      [Flags = '+' 2 5]
+      [Conversion = 'q' Conversion = '%' Conversion = '-' Illegal format argument index = 0]
+      [Format specifier '%s' Format specifier '%<s' Conversion = x, Flags = + Conversion = s, Flags = #]
+      [d != java.lang.Double f != java.lang.Long c != java.lang.String Conversion = x, Flags = +(]
+      [%-d Conversion = c, Flags = #( Flags = '-+0']
+      args first %-d
   - name: metadata-is-parsed-and-dropped
     # ^:private/^:dynamic/^{...}/defn-/type hints parse and drop: reader metadata
     # on a name or a local never affects dispatch, so every shape below answers

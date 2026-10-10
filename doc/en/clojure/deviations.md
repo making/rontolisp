@@ -351,9 +351,12 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
 - `bigint` and `biginteger` answer a plain integer, and `bigdec` a plain rational (`(bigdec "1.5")`
   prints `3/2`, the oracle `1.5M`), like the `N` and `M` literals; `bigdec` of a ratio with an infinite
   decimal expansion signals, like the oracle.
-- `format` renders `%s`/`%d`/`%x`/`%X`/`%o`/`%c`/`%b`/`%f`/`%%`/`%n` (with widths, float
-  precision); `%e`/`%g`, flags and non-literal patterns are named refusals. `%s` spells
-  `nil` `"null"`, like the oracle.
+- `format` renders and refuses as `java.util.Formatter` does, except: the format string must be
+  literal, and `%h`, `%a` and `%t` are refused; an integer past the long range renders as a
+  `BigInteger` (the oracle refuses its `BigInt` under `%d`/`%x`/`%o` and renders a `biginteger`);
+  `int` answers a long, so `(format "%x" (int -1))` is 64 bits of `f` (the oracle's 32), and `%c`
+  refuses an integer (the oracle takes an `Integer` code point); `%S` upcases per code point like
+  `upper-case` (`ß` stays, the oracle's `SS`).
 - `line-seq` takes an open reader (such as a `clojure.java.io/reader`, which
   `with-open` closes), or a path, a File, a URL or a byte stream it opens, and answers
   strictly either way but over an HTTP reply, which it reads lazily (the oracle takes a

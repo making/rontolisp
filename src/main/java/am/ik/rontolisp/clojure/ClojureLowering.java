@@ -4489,7 +4489,7 @@ public final class ClojureLowering {
 				ClojureLowerUtil.isTrue(n == 1, "line-seq takes one path or reader");
 				return ClojureStringLowering.lineSeqForm(this, lower(items.get(1)));
 			case "format":
-				return ClojureStringLowering.formatOf(this, items);
+				return ClojureFormatLowering.formatOf(this, items);
 			case "file-seq":
 				return ClojureIoLowering.fileSeqOf(this, items);
 			case "keys":
