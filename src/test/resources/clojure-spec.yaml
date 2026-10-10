@@ -10087,6 +10087,37 @@ cases:
       (in-ns 'user)
     expected: |
       {:a 1} {:b 2} ([:a 1] [:c 3]) true
+  - name: a-char-sequence-type-counts-seqs-matches-and-reads-as-its-characters
+    # java.lang.CharSequence in a deftype body (.kb/clojure-frontend.md "Host
+    # interfaces"): the instance calls reach its methods (isEmpty the interface's
+    # default), count its length, nth and seq its charAt, and the regex verbs,
+    # clojure.string and String's contains read the string of its characters (Seg is
+    # instaparse's Segment). Every line is the oracle's (clj 1.12.6), on all four
+    # backends.
+    source: |
+      (ns iface-char-sequence
+        (:require [clojure.string :as str]))
+      (deftype Seg [s offset count]
+        CharSequence
+        (length [_] count)
+        (subSequence [_ a b] (Seg. s (+ offset a) (- b a)))
+        (charAt [_ i] (.charAt s (+ offset i)))
+        (toString [_] (subs s offset (+ offset count))))
+      (def g (Seg. "hello world" 6 5))
+      (prn (.length g) (.charAt g 1) (str g) (str (.subSequence g 1 3)) (.isEmpty g) (.isEmpty (Seg. "" 0 0)))
+      (prn (count g) (seq g) (first g) (nth g 4) (nth g 5 :none) (empty? g) (empty? (Seg. "x" 0 0)) (into [] g) (apply str (reverse g)))
+      (prn (instance? CharSequence g) (string? g) (seqable? g) (counted? g) (= g "world"))
+      (prn (re-find #"o.l" g) (re-seq #"[or]" g) (re-matches #"w.*" g) (let [m (re-matcher #"o(r)" g)] [(re-find m) (re-groups m)]))
+      (prn (str/upper-case g) (str/includes? g "or") (str/includes? "a world" g) (str/blank? g) (vec (str/split g #"r")) (str/replace g "o" "0") (str/index-of g "r") (str/join "," [g g]))
+      (prn (.contains "a world" g) (format "%s!" g))
+      (in-ns 'user)
+    expected: |
+      5 \o "world" "or" false true
+      5 (\w \o \r \l \d) \w \d :none false true [\w \o \r \l \d] "dlrow"
+      true false true false false
+      "orl" ("o" "r") "world" [["or" "r"] ["or" "r"]]
+      "WORLD" true true false ["wo" "ld"] "w0rld" 2 "world,world"
+      true "world!"
   - name: a-collection-type-conjs-empties-counts-and-compares-through-its-methods
     # clojure.lang.IPersistentCollection in a deftype body (.kb/clojure-frontend.md
     # "Collection interfaces"): conj and into reach its cons, empty its empty, = its equiv

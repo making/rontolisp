@@ -1247,6 +1247,17 @@ class ClojureLoweringTest {
 					+ " the resolved method count of interface clojure.lang.Counted\")")
 			.contains("(RONTOLISP::%CLOJURE-ABSTRACT-METHOD-ERROR \"does not define or inherit an implementation of"
 					+ " the resolved method nth of interface clojure.lang.Indexed\")");
+		// a CharSequence stores its three abstract methods (the defaults its body leaves
+		// out stay Java's) and its toString in the Object row
+		String chars = lowered("(deftype S [s] CharSequence (length [_] 1) (charAt [_ i] \\a)"
+				+ " (subSequence [_ a b] nil) (toString [_] \"a\"))");
+		assertThat(chars)
+			.contains("(RONTOLISP::%CLOJURE-CHAR-SEQUENCE-ROW (LIST :C%KEYWORD \"S\") '(\"java.lang.CharSequence\")"
+					+ " (LIST \"length\" (LAMBDA (")
+			.contains("\"charAt\" (LAMBDA (")
+			.contains("\"subSequence\" (LAMBDA (")
+			.contains("(RONTOLISP::%CLOJURE-OBJECT-ROW (LIST :C%KEYWORD \"S\") NIL (LIST \"toString\" (LAMBDA (")
+			.doesNotContain("\"isEmpty\"");
 		// an Object override needs no group of its own, and a reify's names its class
 		String object = lowered("(defprotocol P (m [x])) (reify P (m [_] 1) (toString [_] \"r\"))");
 		assertThat(object).contains("(RONTOLISP::%CLOJURE-OBJECT-ROW (LIST :C%KEYWORD \"reify ")

@@ -310,12 +310,13 @@
   `ArityException` をシグナルします（オラクルは `AbstractMethodError`）。
 - `reify`・`deftype`・`defrecord` の本体が実装できるのは、コア関数が参照する `clojure.lang`
   のインタフェース（`IReduceInit`、`IReduce`、`IKVReduce`、`Seqable`、`Counted`、`Indexed`、
-  `ILookup`、`IFn`（`Callable` と `Runnable` を含む）、`IDeref`、`IMeta`、`IObj`）、コレクションの
-  インタフェース（`IPersistentMap`、`ISeq`、`Sequential`、`Iterable`、`java.util.List` など）、
+  `ILookup`、`IFn`（`Callable` と `Runnable` を含む）、`IDeref`、`IMeta`、`IObj`）、`CharSequence`、
+  コレクションのインタフェース（`IPersistentMap`、`ISeq`、`Sequential`、`Iterable`、`java.util.List` など）、
   `Object` のメソッドの上書きです（[reify](reference/reify.md#host-interfaces)）。それ以外の
   インタフェース（`IChunkedSeq`、`java.util.Deque` など）は名前を挙げて拒否されます。`ISeq` 型への
   `first`・`next`・`rest` はその `seq` を通して読み、関数がメソッドを呼ぶ回数はオラクルと異なる
-  ことがあり、コレクションの型の `str` は中身を綴ります
+  ことがあり、コレクションの型の `str` は中身を綴り、正規表現の関数と `clojure.string` は
+  `CharSequence` の型を呼び出しごとに `length` と `charAt` で全体を一度読みます
   （[コレクションのインタフェース](reference/reify.md#collection-interfaces)）。型自身がハッシュと
   等価性を定める値はマップのキーや集合の要素として `=` で照合されますが、どのマップもオラクルの
   ハッシュマップと同じ方法でキーを比べます。オラクルの配列マップ（8 エントリまで）はハッシュを

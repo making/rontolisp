@@ -138,6 +138,23 @@ final class ClojureInterfaces {
 	/** The store of a {@code java.util.Map} row. */
 	static final String JAVA_MAP_ROW = "RONTOLISP::%CLOJURE-JAVA-MAP-ROW";
 
+	/** The store of a {@code java.lang.CharSequence} row. */
+	static final String CHAR_SEQUENCE_ROW = "RONTOLISP::%CLOJURE-CHAR-SEQUENCE-ROW";
+
+	/**
+	 * The view of a string argument of the verbs reading a {@code CharSequence}: a value
+	 * implementing it answers the string of its characters, anything else itself
+	 * ({@link ClojureArms.Family#CHAR_SEQUENCE}).
+	 */
+	static final String CHAR_SEQUENCE_TEXT = "RONTOLISP::%CLOJURE-CHAR-SEQUENCE-TEXT";
+
+	/**
+	 * {@code instance?} of {@code CharSequence}: a string, a host {@code CharSequence} or
+	 * a type implementing it. A program storing no such row calls the host test in its
+	 * place ({@link ClojureArms.Family#CHAR_SEQUENCE}'s alias).
+	 */
+	static final String CHAR_SEQUENCE_INSTANCE_P = "RONTOLISP::%CLOJURE-CHAR-SEQUENCE-INSTANCE-P";
+
 	/** The store of an {@code IHashEq} row, whose {@code hasheq} {@code hash} reads. */
 	static final String HASHEQ_ROW = "RONTOLISP::%CLOJURE-HASHEQ-ROW";
 
@@ -203,6 +220,7 @@ final class ClojureInterfaces {
 			Map.entry(ClojureArms.Family.PENDING, PENDING_ROW),
 			Map.entry(ClojureArms.Family.SORTED_INTERFACE, SORTED_ROW),
 			Map.entry(ClojureArms.Family.COMPARABLE, COMPARABLE_ROW),
+			Map.entry(ClojureArms.Family.CHAR_SEQUENCE, CHAR_SEQUENCE_ROW),
 			Map.entry(ClojureArms.Family.ITERABLE, ITERABLE_ROW), Map.entry(ClojureArms.Family.ITERATOR, ITERATOR_ROW),
 			Map.entry(ClojureArms.Family.JAVA_COLLECTION, JAVA_COLLECTION_ROW),
 			Map.entry(ClojureArms.Family.JAVA_MAP, JAVA_MAP_ROW), Map.entry(ClojureArms.Family.HASHEQ, HASHEQ_ROW),
@@ -493,6 +511,9 @@ final class ClojureInterfaces {
 				List.of(), ClojureArms.Family.JAVA_MAP, "RONTOLISP::%CLOJURE-JMAP-P");
 		add(table, "java.lang.Comparable", methods("compareTo", 2), List.of(), ClojureArms.Family.COMPARABLE,
 				"RONTOLISP::%CLOJURE-ICOMPARABLE-P");
+		add(table, "java.lang.CharSequence", methods("length", 1, "charAt", 2, "subSequence", 3),
+				methods("chars", 1, "codePoints", 1, "getChars", 5, "isEmpty", 1), List.of(),
+				ClojureArms.Family.CHAR_SEQUENCE, "RONTOLISP::%CLOJURE-CHAR-SEQUENCE-P");
 		add(table, "java.io.Serializable", Map.of(), List.of(), ClojureArms.Family.MARKER,
 				"RONTOLISP::%CLOJURE-SERIALIZABLE-P");
 	}

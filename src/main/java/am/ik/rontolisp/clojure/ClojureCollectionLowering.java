@@ -1533,6 +1533,9 @@ final class ClojureCollectionLowering {
 				// a java.util Collection or Map answers its size (arms of their families)
 				ClojureLowerUtil.list(ClojureLowerUtil.list(new LispSymbol(ICOLLECTION_P), coll),
 						ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-COLLECTION-COUNT"), coll)),
+				// a CharSequence its length (an arm of its family)
+				ClojureLowerUtil.list(ClojureLowerUtil.list(new LispSymbol(CHAR_SEQUENCE_P), coll),
+						ClojureLowerUtil.list(new LispSymbol(CHAR_SEQUENCE_LENGTH), coll)),
 				ClojureLowerUtil.list(ClojureLowerUtil.list(new LispSymbol(JCOLLECTION_P), coll),
 						ClojureLowerUtil.list(new LispSymbol(JAVA_SIZE), coll)),
 				ClojureLowerUtil.list(ClojureLowerUtil.list(new LispSymbol(JMAP_P), coll),
@@ -1630,6 +1633,12 @@ final class ClojureCollectionLowering {
 
 	/** The counted family's test of a type implementing {@code Counted}. */
 	static final String COUNTED_P = "RONTOLISP::%CLOJURE-COUNTED-P";
+
+	/** The char-sequence family's test of a type implementing {@code CharSequence}. */
+	private static final String CHAR_SEQUENCE_P = "RONTOLISP::%CLOJURE-CHAR-SEQUENCE-P";
+
+	/** A {@code CharSequence} type's {@code length} ({@code clojure.lisp}). */
+	private static final String CHAR_SEQUENCE_LENGTH = "RONTOLISP::%CLOJURE-CHAR-SEQUENCE-LENGTH";
 
 	/** A transient's count ({@code clojure.lisp}, "Transients"). */
 	private static final String TRANSIENT_COUNT = "RONTOLISP::%CLOJURE-TRANSIENT-COUNT";

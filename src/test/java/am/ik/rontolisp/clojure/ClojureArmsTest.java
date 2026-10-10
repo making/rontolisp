@@ -589,6 +589,16 @@ class ClojureArmsTest {
 				new InterfaceCase(ClojureArms.Family.OBJECT_METHODS,
 						"(cond ((rontolisp::%clojure-to-string-p x) (s x)) (t (p x)))", List.of("(COND (T (P X)))"),
 						"(rontolisp::%clojure-object-row (cadr self) nil (list \"toString\" f))"),
+				// a CharSequence: count's clause, the string view of the regex verbs and
+				// clojure.string, and instance?'s test, the host one without the type
+				new InterfaceCase(ClojureArms.Family.CHAR_SEQUENCE,
+						"(cond ((rontolisp::%clojure-char-sequence-p x) (l x)) (t (e x)))"
+								+ " (upcase (rontolisp::%clojure-char-sequence-text (f x)))"
+								+ " (rontolisp::%clojure-char-sequence-instance-p (f x))",
+						List.of("(COND (T (E X)))", "(UPCASE (F X))",
+								"(RONTOLISP::%CLOJURE-HOST-CHAR-SEQUENCE-P (F X))"),
+						"(rontolisp::%clojure-char-sequence-row (cadr self) '(\"java.lang.CharSequence\")"
+								+ " (list \"length\" f))"),
 				// a face: %clojure-host-member's clause, made by the registration of a
 				// type's maker around the tag of its row store
 				new InterfaceCase(ClojureArms.Family.JAVA_FACE,

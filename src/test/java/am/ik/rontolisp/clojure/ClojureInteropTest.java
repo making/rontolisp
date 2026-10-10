@@ -1467,6 +1467,36 @@ class ClojureInteropTest {
 						""");
 	}
 
+	// Oracle (clj 1.12.6, measured 2026-10-10): a deftype implementing CharSequence (the
+	// shape of instaparse's Segment) is one to Java: a host Pattern matches it through
+	// its
+	// charAt and length, a StringBuilder appends it, String.join and contentEquals read
+	// it, and its defaults (isEmpty) keep Java's bodies.
+	@Test
+	void aCharSequenceTypeReachesJavaAsACharSequence() throws Exception {
+		assertBothEqual(
+				"""
+						(deftype Seg [s offset count]
+						  CharSequence
+						  (length [_] count)
+						  (subSequence [_ a b] (Seg. s (+ offset a) (- b a)))
+						  (charAt [_ i] (.charAt s (+ offset i)))
+						  (toString [_] (subs s offset (+ offset count))))
+						(def g (Seg. "hello world" 6 5))
+						(println (java.util.regex.Pattern/matches "w.*d" g) (.find (.matcher (java.util.regex.Pattern/compile "r.") g)))
+						(let [m (.matcher (java.util.regex.Pattern/compile "o(r)") g)]
+						  (println (.lookingAt m) (.find m) (.group m 1)))
+						(println (String/join "+" [g "x"]) (.toString (doto (java.lang.StringBuilder.) (.append g) (.append "!"))))
+						(println (.contentEquals "world" g) (String/valueOf g) (CharSequence/compare g "world") (.isEmpty g))
+						""",
+				"""
+						true true
+						false true r
+						world+x world!
+						true world 0 false
+						""");
+	}
+
 	// Oracle (clj 1.12.6, measured 2026-10-10): a TreeSet of a deftype implementing no
 	// Comparable throws the cast failure naming the type, an Object override or not; a
 	// face is Comparable only to say so.

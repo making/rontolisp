@@ -54,86 +54,87 @@ final class ClojureStringLowering {
 			}
 			case "split" -> {
 				ClojureLowerUtil.isTrue(n == 2 || n == 3, "split takes a string, a pattern and an optional limit");
-				yield splitForm(ctx, ctx.lower(items.get(1)), ctx.lower(items.get(2)),
+				yield splitForm(ctx, text(ctx, items.get(1)), ctx.lower(items.get(2)),
 						n == 3 ? ctx.lower(items.get(3)) : ClojureLowering.NIL_CONST, true);
 			}
 			case "split-lines" -> {
 				ClojureLowerUtil.isTrue(n == 1, "split-lines takes one string");
-				yield splitLinesForm(ctx, ctx.lower(items.get(1)));
+				yield splitLinesForm(ctx, text(ctx, items.get(1)));
 			}
 			case "upper-case", "lower-case" -> {
 				ClojureLowerUtil.isTrue(n == 1, var + " takes one string");
 				yield ClojureLowerUtil.list(
 						ClojureLowerUtil.sym(var.equals("upper-case") ? "string-upcase" : "string-downcase"),
-						ctx.lower(items.get(1)));
+						text(ctx, items.get(1)));
 			}
 			case "capitalize" -> {
 				ClojureLowerUtil.isTrue(n == 1, "capitalize takes one string");
-				yield capitalizeForm(ctx.lower(items.get(1)));
+				yield capitalizeForm(text(ctx, items.get(1)));
 			}
 			case "trim" -> {
 				ClojureLowerUtil.isTrue(n == 1, "trim takes one string");
-				yield ClojureLowerUtil.list(ClojureLowerUtil.sym("string-trim"), trimBag(), ctx.lower(items.get(1)));
+				yield ClojureLowerUtil.list(ClojureLowerUtil.sym("string-trim"), trimBag(), text(ctx, items.get(1)));
 			}
 			case "triml" -> {
 				ClojureLowerUtil.isTrue(n == 1, "triml takes one string");
 				yield ClojureLowerUtil.list(ClojureLowerUtil.sym("string-left-trim"), trimBag(),
-						ctx.lower(items.get(1)));
+						text(ctx, items.get(1)));
 			}
 			case "trimr" -> {
 				ClojureLowerUtil.isTrue(n == 1, "trimr takes one string");
 				yield ClojureLowerUtil.list(ClojureLowerUtil.sym("string-right-trim"), trimBag(),
-						ctx.lower(items.get(1)));
+						text(ctx, items.get(1)));
 			}
 			case "trim-newline" -> {
 				ClojureLowerUtil.isTrue(n == 1, "trim-newline takes one string");
-				yield trimNewlineForm(ctx.lower(items.get(1)));
+				yield trimNewlineForm(text(ctx, items.get(1)));
 			}
 			case "blank?" -> {
 				ClojureLowerUtil.isTrue(n == 1, "blank? takes one string");
-				yield ctx.booleanAnswer(blankForm(ctx.lower(items.get(1))));
+				yield ctx.booleanAnswer(blankForm(text(ctx, items.get(1))));
 			}
 			case "starts-with?", "ends-with?", "includes?" -> {
 				ClojureLowerUtil.isTrue(n == 2, var + " takes two strings");
-				yield ctx.booleanAnswer(affixForm(var, ctx.lower(items.get(1)), ctx.lower(items.get(2))));
+				yield ctx.booleanAnswer(affixForm(var, text(ctx, items.get(1)),
+						var.equals("includes?") ? text(ctx, items.get(2)) : ctx.lower(items.get(2))));
 			}
 			case "index-of" -> {
 				ClojureLowerUtil.isTrue(n == 2 || n == 3, "index-of takes a string, a value and an optional start");
 				if (n == 2) {
 					yield ClojureLowerUtil.list(ClojureLowerUtil.sym("search"), ctx.lower(items.get(2)),
-							ctx.lower(items.get(1)));
+							text(ctx, items.get(1)));
 				}
 				LispSymbol str = ctx.freshTemp();
 				LispSymbol sub = ctx.freshTemp();
 				LispSymbol from = ctx.freshTemp();
 				yield ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
-						ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(str, ctx.lower(items.get(1))),
+						ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(str, text(ctx, items.get(1))),
 								ClojureLowerUtil.list(sub, ctx.lower(items.get(2))),
 								ClojureLowerUtil.list(from, ctx.lower(items.get(3))))),
 						searchFrom(sub, str, from));
 			}
 			case "last-index-of" -> {
 				ClojureLowerUtil.isTrue(n == 2 || n == 3, "last-index-of takes a string, a value and an optional end");
-				yield lastIndexForm(ctx.lower(items.get(1)), ctx.lower(items.get(2)),
+				yield lastIndexForm(text(ctx, items.get(1)), ctx.lower(items.get(2)),
 						n == 3 ? ctx.lower(items.get(3)) : null);
 			}
 			case "replace" -> {
 				ClojureLowerUtil.isTrue(n == 3, "replace takes a string, a match and a replacement");
-				yield replaceForm(ctx, ctx.lower(items.get(1)), ctx.lower(items.get(2)), ctx.lower(items.get(3)),
+				yield replaceForm(ctx, text(ctx, items.get(1)), ctx.lower(items.get(2)), ctx.lower(items.get(3)),
 						false);
 			}
 			case "replace-first" -> {
 				ClojureLowerUtil.isTrue(n == 3, "replace-first takes a string, a match and a replacement");
-				yield replaceForm(ctx, ctx.lower(items.get(1)), ctx.lower(items.get(2)), ctx.lower(items.get(3)), true);
+				yield replaceForm(ctx, text(ctx, items.get(1)), ctx.lower(items.get(2)), ctx.lower(items.get(3)), true);
 			}
 			case "escape" -> {
 				ClojureLowerUtil.isTrue(n == 2, "escape takes a string and a map");
-				yield escapeForm(ctx, ctx.lower(items.get(1)), ctx.lower(items.get(2)));
+				yield escapeForm(ctx, text(ctx, items.get(1)), ctx.lower(items.get(2)));
 			}
 			case "re-quote-replacement" -> {
 				ClojureLowerUtil.isTrue(n == 1, "re-quote-replacement takes one string");
 				yield replaceForm(
-						ctx, replaceForm(ctx, ctx.lower(items.get(1)), LispString.literal("\\"),
+						ctx, replaceForm(ctx, text(ctx, items.get(1)), LispString.literal("\\"),
 								LispString.literal("\\\\"), false),
 						LispString.literal("$"), LispString.literal("\\$"), false);
 			}
@@ -141,12 +142,33 @@ final class ClojureStringLowering {
 				ClojureLowerUtil.isTrue(n == 1, "reverse takes one string");
 				yield ClojureLowerUtil.list(ClojureLowerUtil.sym("coerce"),
 						ClojureLowerUtil.list(ClojureLowerUtil.sym("reverse"),
-								ClojureLowerUtil.list(ClojureLowerUtil.sym("coerce"), ctx.lower(items.get(1)),
+								ClojureLowerUtil.list(ClojureLowerUtil.sym("coerce"), text(ctx, items.get(1)),
 										ClojureLowerUtil.quoted("list"))),
 						ClojureLowerUtil.quoted("string"));
 			}
 			default -> throw new LispReadException("unknown name: clojure.string/" + var);
 		};
+	}
+
+	/**
+	 * A string argument of a verb the oracle declares over {@code CharSequence}: the
+	 * lowered item through the char-sequence family's view, so a type implementing
+	 * {@code CharSequence} is read as the string of its characters (a view a program
+	 * storing no such row folds to the item).
+	 */
+	static LispVal text(ClojureLowering ctx, LispVal item) {
+		return textOf(ctx.lower(item));
+	}
+
+	/**
+	 * {@link #text} of an already-lowered argument; a literal, which no typed value is,
+	 * stays as it is, so the shapes a verb picks by its literal arguments hold.
+	 */
+	static LispVal textOf(LispVal lowered) {
+		if (!(lowered instanceof LispCons || lowered instanceof LispSymbol) || ClojureLowering.isQuoteForm(lowered)) {
+			return lowered;
+		}
+		return ClojureLowerUtil.list(new LispSymbol(ClojureInterfaces.CHAR_SEQUENCE_TEXT), lowered);
 	}
 
 	/** Whether NAME is a {@code re-*} core name (lowered beside the big switch). */
@@ -169,25 +191,25 @@ final class ClojureStringLowering {
 			case "re-matcher" -> {
 				ClojureLowerUtil.isTrue(n == 2, "re-matcher takes a pattern and a string");
 				yield ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-RE-MATCHER"), ctx.lower(items.get(1)),
-						ctx.lower(items.get(2)));
+						text(ctx, items.get(2)));
 			}
 			case "re-find" -> {
 				ClojureLowerUtil.isTrue(n == 1 || n == 2, "re-find takes a matcher, or a pattern and a string");
 				yield n == 2
 						? ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-RE-FIND"), ctx.lower(items.get(1)),
-								ctx.lower(items.get(2)))
+								text(ctx, items.get(2)))
 						: ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-RE-FIND-M"),
 								ctx.lower(items.get(1)));
 			}
 			case "re-seq" -> {
 				ClojureLowerUtil.isTrue(n == 2, "re-seq takes a pattern and a string");
 				yield ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-RE-SEQ"), ctx.lower(items.get(1)),
-						ctx.lower(items.get(2)));
+						text(ctx, items.get(2)));
 			}
 			case "re-matches" -> {
 				ClojureLowerUtil.isTrue(n == 2, "re-matches takes a pattern and a string");
 				yield ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-RE-MATCHES"), ctx.lower(items.get(1)),
-						ctx.lower(items.get(2)));
+						text(ctx, items.get(2)));
 			}
 			case "re-groups" -> {
 				ClojureLowerUtil.isTrue(n == 1, "re-groups takes a matcher");

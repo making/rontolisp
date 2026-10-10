@@ -331,6 +331,20 @@ public final class ClojureArms {
 				Set.of(ClojureInterfaces.COMPARABLE_ROW), Set.of()),
 
 		/**
+		 * A record, deftype or reify whose body implements
+		 * {@code java.lang.CharSequence}, which {@code count}, {@code nth} and the seq
+		 * view read through its {@code length} and {@code charAt}, {@code seqable?} and
+		 * {@code instance?} answer true of, and the regex verbs and
+		 * {@code clojure.string} read as the string of its characters (the view). The
+		 * alias is {@code instance?}'s test, the host one without the type; it stands
+		 * ahead of {@link #HOST}, whose alias renames that one in turn.
+		 */
+		CHAR_SEQUENCE("char-sequence-interface", Set.of("RONTOLISP::%CLOJURE-CHAR-SEQUENCE-P"),
+				Set.of(ClojureInterfaces.CHAR_SEQUENCE_TEXT),
+				Map.of(ClojureInterfaces.CHAR_SEQUENCE_INSTANCE_P, "RONTOLISP::%CLOJURE-HOST-CHAR-SEQUENCE-P"),
+				Set.of(ClojureInterfaces.CHAR_SEQUENCE_ROW), Set.of()),
+
+		/**
 		 * A record, deftype or reify whose body implements {@code java.lang.Iterable}
 		 * ({@code IPersistentMap} and the {@code java.util} collections extend it), which
 		 * the seq view steps through its {@code iterator} when it is no {@code Seqable},

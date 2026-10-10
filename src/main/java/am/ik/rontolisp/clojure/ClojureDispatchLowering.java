@@ -171,10 +171,13 @@ final class ClojureDispatchLowering {
 	/**
 	 * The classes a core kind's value is or implements that a host object may be too, to
 	 * the test answering both, which a program naming no {@code java:} operator calls as
-	 * the kind's own test ({@link ClojureArms.Family#HOST}'s aliases).
+	 * the kind's own test ({@link ClojureArms.Family#HOST}'s aliases). A
+	 * {@code CharSequence}'s answers a type implementing it too, which a program storing
+	 * no such row calls as the host test ({@link ClojureArms.Family#CHAR_SEQUENCE}'s
+	 * alias, ahead of the host family's).
 	 */
 	private static final Map<String, String> HOST_ALIASES = Map.of("java.lang.Number",
-			"RONTOLISP::%CLOJURE-HOST-NUMBER-P", "java.lang.CharSequence", "RONTOLISP::%CLOJURE-HOST-CHAR-SEQUENCE-P");
+			"RONTOLISP::%CLOJURE-HOST-NUMBER-P", "java.lang.CharSequence", ClojureInterfaces.CHAR_SEQUENCE_INSTANCE_P);
 
 	/** {@code instance?}'s host arm ({@code clojure.lisp}). */
 	static final String HOST_OBJECT_P = "RONTOLISP::%CLOJURE-HOST-OBJECT-P";

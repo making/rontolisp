@@ -2413,16 +2413,19 @@ final class ClojureInteropLowering {
 			case "equalsIgnoreCase" -> args.size() == 1
 					? ctx.booleanAnswer(ClojureLowerUtil.list(ClojureLowerUtil.sym("string-equal"), recv, args.get(0)))
 					: null;
-			case "contains" -> args.size() == 1
-					? ctx.booleanAnswer(ClojureStringLowering.affixForm("includes?", recv, args.get(0))) : null;
+			// a CharSequence argument is read as its characters (a view a program
+			// storing no such row folds)
+			case "contains" -> args.size() == 1 ? ctx.booleanAnswer(
+					ClojureStringLowering.affixForm("includes?", recv, ClojureStringLowering.textOf(args.get(0))))
+					: null;
 			case "startsWith" -> args.size() == 1
 					? ctx.booleanAnswer(ClojureStringLowering.affixForm("starts-with?", recv, args.get(0))) : null;
 			case "endsWith" -> args.size() == 1
 					? ctx.booleanAnswer(ClojureStringLowering.affixForm("ends-with?", recv, args.get(0))) : null;
 			case "indexOf" -> stringIndexForm(ctx, recv, args, false);
 			case "lastIndexOf" -> stringIndexForm(ctx, recv, args, true);
-			case "replace" ->
-				args.size() == 2 ? ClojureStringLowering.replaceForm(ctx, recv, args.get(0), args.get(1), false) : null;
+			case "replace" -> args.size() == 2 ? ClojureStringLowering.replaceForm(ctx, recv,
+					ClojureStringLowering.textOf(args.get(0)), ClojureStringLowering.textOf(args.get(1)), false) : null;
 			case "replaceFirst" ->
 				args.size() == 2 ? ClojureStringLowering.replaceForm(ctx, recv, args.get(0), args.get(1), true) : null;
 			case "split" -> switch (args.size()) {

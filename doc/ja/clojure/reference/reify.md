@@ -54,6 +54,7 @@ import します（オラクル同様、`clojure.lang` は既定の import に�
 | `IFn`（`Callable` と `Runnable` を含む） | 呼び出し、関数引数（`map`、`filter` など）、`apply`（`applyTo` を通す）、`ifn?` |
 | `IDeref` | `deref`、`@` |
 | `IMeta`, `IObj` | `meta`、`with-meta`、`vary-meta`（`deftype` のみ。`reify` は自身でメタデータを持ちます） |
+| `java.lang.CharSequence` | `count`（`length`）、`nth`、`seq` と seq を辿るすべての関数（`charAt`）、`seqable?`。`re-find`・`re-seq`・`re-matches`・`re-matcher`・`clojure.string`・文字列の `.contains` と `.replace` はその文字を並べた文字列を読みます |
 | `Object` | `str` と印字（`toString`）、`=`（`equals`）、`.hashCode` と `IHashEq` がない場合の `hash`（`hashCode`） |
 
 インタフェースへの `instance?` と、そのメソッドのインスタンス呼び出し（`(.count x)`）も型に
@@ -65,6 +66,9 @@ import します（オラクル同様、`clojure.lang` は既定の import に�
 メソッドは、Java から見た値にも及びます。値は Java のメンバへ、それらを実装したオブジェクト
 として渡ります（[Java interop](interop.md)）。仕様との差異:`toString` を上書きした値は
 `#object[user$reify "text"]` と印字され、オラクルのクラス番号と同一性ハッシュを持ちません。
+正規表現の関数と `clojure.string` は `CharSequence` を呼び出しごとに `length` と `charAt` で
+全体を一度読みます。オラクルのマッチャは照合に要るところまでしか読まず、`clojure.string` の
+関数の多くは `toString` を呼びます。
 
 ```clojure
 (def three (reify clojure.lang.Counted (count [_] 3)

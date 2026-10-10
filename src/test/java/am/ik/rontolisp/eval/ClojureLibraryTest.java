@@ -150,6 +150,29 @@ class ClojureLibraryTest {
 	}
 
 	@Test
+	void aProgramStoringNoCharSequenceRowReadsItsStringsWithoutTheView() {
+		// only the store of a CharSequence row makes a value count, nth, the seq view,
+		// the regex verbs and clojure.string read through its length and charAt: a
+		// program storing none compiles them as before, instance? as the host test
+		String source = "(def s (str \"ab\" 1)) (println (count s) (seq s) (nth s 0) (re-find #\"a\" s)"
+				+ " (clojure.string/upper-case s) (.contains \"xab\" s) (instance? CharSequence s))";
+		Map<String, String> arms = Map.of("RONTOLISP::%CLOJURE-STRICT-SEQ", "%CLOJURE-CHAR-SEQUENCE-P",
+				"RONTOLISP::%CLOJURE-NTH", "%CLOJURE-CHAR-SEQUENCE-P", "RONTOLISP::%CLOJURE-IS-SEQABLE",
+				"%CLOJURE-CHAR-SEQUENCE-P");
+		arms.forEach((verb, arm) -> assertThat(defun(ClojureLibrary.forms(), verb)).as(verb).contains(arm));
+		List<LispVal> plain = ClojureLibrary.process(Clojure.read(source, null));
+		arms.forEach((verb, arm) -> assertThat(defun(plain, verb)).as(verb).doesNotContain(arm));
+		String program = plain.get(plain.size() - 1).print();
+		assertThat(program).doesNotContain("%CLOJURE-CHAR-SEQUENCE").contains("(STRINGP ");
+		// a body naming CharSequence keeps every arm, and instance? asks for the type
+		List<LispVal> typed = ClojureLibrary.process(Clojure.read("(deftype Seg [s] CharSequence (length [_] 1)"
+				+ " (charAt [_ i] \\a) (subSequence [_ a b] nil)) " + source, null));
+		arms.forEach((verb, arm) -> assertThat(defun(typed, verb)).as(verb).contains(arm));
+		assertThat(typed.get(typed.size() - 1).print()).contains("%CLOJURE-CHAR-SEQUENCE-TEXT")
+			.contains("%CLOJURE-CHAR-SEQUENCE-INSTANCE-P");
+	}
+
+	@Test
 	void aProgramRegisteringNoFaceHandsJavaItsValuesWithoutTheFaceArm() {
 		// %clojure-host-member asks a deftype or reify for its face only in a program
 		// that registers one: one whose types show Java nothing keeps the clause it had

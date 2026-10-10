@@ -4135,6 +4135,10 @@
    ;; interfaces")
    ((rontolisp::%clojure-iterable-p coll)
     (rontolisp::%clojure-iterable-seq coll))
+   ;; one implementing CharSequence its characters through its length and
+   ;; charAt: an arm of the char-sequence family ("Host interfaces")
+   ((rontolisp::%clojure-char-sequence-p coll)
+    (rontolisp::%clojure-char-sequence-chars coll))
    ((rontolisp::%clojure-jmap-p coll) (rontolisp::%clojure-jmap-seq coll))
    ((rontolisp::%clojure-host-seqable-p coll)
     (rontolisp::%clojure-host-seq coll))
@@ -4274,7 +4278,11 @@
    ;; interfaces")
    ((rontolisp::%clojure-indexed-p coll)
     (funcall (rontolisp::%clojure-interface-entry coll "nth") coll i dflt))
-   ;; past it, the oracle's RT.nthFrom: a RandomAccess java.util.List's get, a
+   ;; past it, the oracle's RT.nthFrom: a CharSequence's charAt below its length
+   ;; (an arm of the char-sequence family, "Host interfaces"),
+   ((rontolisp::%clojure-char-sequence-p coll)
+    (rontolisp::%clojure-char-sequence-nth coll i dflt))
+   ;; a RandomAccess java.util.List's get, a
    ;; Sequential's seq stepped (arms of their families, "Collection
    ;; interfaces")
    ((rontolisp::%clojure-random-access-p coll)
@@ -6834,13 +6842,15 @@
       (rontolisp::%clojure-set-p x) (rontolisp::%clojure-sorted-set-p x)))
 
 ;; A type implementing the interface a predicate names answers true: arms of
-;; the seqable, counted, indexed and invokable families ("Host interfaces"), and
-;; of the iterable and java-map families ("Collection interfaces").
+;; the seqable, counted, indexed, invokable and char-sequence families ("Host
+;; interfaces"), and of the iterable and java-map families ("Collection
+;; interfaces").
 (defun rontolisp::%clojure-is-seqable (x)
   "seqable?: what seq takes -- nil, a string or a collection."
   (or (null x) (stringp x) (rontolisp::%clojure-is-coll x)
       (rontolisp::%clojure-seqable-p x) (rontolisp::%clojure-iterable-p x)
-      (rontolisp::%clojure-jmap-p x) (rontolisp::%clojure-bytes-p x)))
+      (rontolisp::%clojure-jmap-p x) (rontolisp::%clojure-bytes-p x)
+      (rontolisp::%clojure-char-sequence-p x)))
 
 ;; The predicates over a type implementing a collection interface: each answers
 ;; the plain helper's test or the interface's, an arm of its family
@@ -10227,6 +10237,75 @@
         ((rontolisp::%clojure-is-coll b) nil)
         (t (rontolisp::%clojure-truthy
             (funcall (rontolisp::%clojure-interface-entry a "equals") a b)))))
+
+;; CharSequence: count, nth and the seq view read a type implementing it through
+;; its length and charAt, like the oracle's RT; the regex verbs and
+;; clojure.string read it through the view, the string of its characters (the
+;; oracle's Matcher reads charAt, clojure.string mostly toString: one string
+;; here, read once per call, where the oracle's matcher reads as far as it
+;; matches).
+
+(defun rontolisp::%clojure-char-sequence-row (tag names methods)
+  "Stores a CharSequence row, with the interface's default isEmpty (a zero
+   length) where the body leaves it out."
+  (rontolisp::%clojure-interface-store tag names methods)
+  (let ((row (gethash tag rontolisp::%clojure-interface-rows)))
+    (if (null (gethash "isEmpty" row))
+        (setf (gethash "isEmpty" row)
+              (lambda (x)
+                (if (= (rontolisp::%clojure-char-sequence-length x) 0)
+                    t
+                    rontolisp::%clojure-false))))))
+
+(defun rontolisp::%clojure-char-sequence-p (x)
+  (rontolisp::%clojure-interface-entry x "java.lang.CharSequence"))
+
+(defun rontolisp::%clojure-char-sequence-instance-p (x)
+  "instance? of CharSequence: a string, a host CharSequence or a type
+   implementing it. A program storing no CharSequence row calls the host test
+   in its place (the char-sequence family's alias)."
+  (or (rontolisp::%clojure-host-char-sequence-p x)
+      (if (rontolisp::%clojure-char-sequence-p x) t nil)))
+
+(defun rontolisp::%clojure-char-sequence-length (x)
+  "The length of the CharSequence X: what its length answers, an int."
+  (let ((n (funcall (rontolisp::%clojure-interface-entry x "length") x)))
+    (if (integerp n)
+        n
+        (rontolisp::%clojure-class-cast-exception
+         "the answer of length cannot be cast to class java.lang.Number"))))
+
+(defun rontolisp::%clojure-char-sequence-char (x i)
+  "The character at I of the CharSequence X: what its charAt answers, a
+   character."
+  (let ((c (funcall (rontolisp::%clojure-interface-entry x "charAt") x i)))
+    (if (characterp c)
+        c
+        (rontolisp::%clojure-class-cast-exception
+         "the answer of charAt cannot be cast to class java.lang.Character"))))
+
+(defun rontolisp::%clojure-char-sequence-chars (x)
+  "The seq of the CharSequence X: its characters in order, nil when it has
+   none, like the oracle's StringSeq."
+  (let ((n (rontolisp::%clojure-char-sequence-length x)) (acc nil))
+    (do ((i 0 (+ i 1)))
+        ((>= i n) (reverse acc))
+      (setq acc (cons (rontolisp::%clojure-char-sequence-char x i) acc)))))
+
+(defun rontolisp::%clojure-char-sequence-nth (x i dflt)
+  "(nth x i dflt) of the CharSequence X: its charAt below its length, else
+   DFLT, like the oracle's nthFrom."
+  (if (< i (rontolisp::%clojure-char-sequence-length x))
+      (rontolisp::%clojure-char-sequence-char x i)
+      dflt))
+
+(defun rontolisp::%clojure-char-sequence-text (x)
+  "X, unless it implements CharSequence: then the string of its characters,
+   read through its length and charAt. The char-sequence family's view, which
+   the regex verbs and clojure.string read their string through."
+  (if (rontolisp::%clojure-char-sequence-p x)
+      (coerce (rontolisp::%clojure-char-sequence-chars x) 'string)
+      x))
 
 ;;;; Collection interfaces: a reify, deftype or defrecord body implementing one
 ;;;; of the clojure.lang collection interfaces, java.lang.Iterable,

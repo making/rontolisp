@@ -999,7 +999,13 @@ hash's.
   transients (interpreter, verbatim): past `auto_flatten_seq.clj`, it stops at
   `print.clj:38:8: format flag %0 is not supported yet` (`(format "%%x%04x" lo)`). With
   `format`'s flags (2026-10-10) it stops at `gll.clj:51:4: java.lang.CharSequence is not
-  supported yet as an interface of deftype` (its `Segment` deftype).
+  supported yet as an interface of deftype` (its `Segment` deftype). With `CharSequence`
+  (2026-10-10, f27) it stops at `gll.clj:183:4: No such multimethod: clojure.core/print-method`
+  (`defmethod print-method` of a record); each next stop removed by hand: `gll.clj:197`
+  `type`, `gll.clj:942` `delay` (refused), `viz.clj:19` `ns-resolve`/`find-ns`, `viz.clj:89` a
+  `require` of an absent optional namespace inside a function body (loaded while lowering),
+  `macros.clj:4` `&env` (`.todo` item). Its `re-match-at-front` also calls `.lookingAt` and
+  `.group` on a `re-matcher` matcher, which no value-method row maps.
 - A return hint on a parameter vector (`(defn f ^long [x] ...)`, `defn-`, each arity of a
   `defn`/`fn`/`letfn`, a protocol method, `defmethod`) reads as `(%with-meta [..] long)`;
   `ClojureBindingLowering.isVectorDatum` strips the layer, so the clause is not mistaken for a
@@ -3405,8 +3411,8 @@ measured on clj 1.12.6, 2026-10-08).
   `IHashEq`, `Associative` 9 each ...: "Collection interfaces" below) and `IReduceInit` 5
   (next.jdbc's `plan`, `clojure.core/iteration`, below). Supported: `IReduceInit`, `IReduce`,
   `IKVReduce`, `Seqable`, `Counted`, `Indexed`, `ILookup`, `IFn` with its supers `Callable` and
-  `Runnable`, `IDeref`, `IMeta`, `IObj`, `Object`'s `toString`/`equals`/`hashCode`, and the
-  collection interfaces. Any other interface of the jar (`CLOJURE_LANG`, its public list:
+  `Runnable`, `IDeref`, `IMeta`, `IObj`, `Object`'s `toString`/`equals`/`hashCode`,
+  `java.lang.CharSequence` (f27, below), and the collection interfaces. Any other interface of the jar (`CLOJURE_LANG`, its public list:
   `IChunkedSeq`, `IRef` ...) or loadable host interface (`java.util.Deque`) is refused by name
   (`X is not supported yet as an interface of reify`), a class the oracle's `only interfaces
   are supported, had: C`, an undotted unknown name its `Unable to resolve symbol` (`clojure.lang`
@@ -3472,6 +3478,33 @@ measured on clj 1.12.6, 2026-10-08).
     record clause, so a record still prints its literal), `%clojure-equal` ahead of the
     identity clause (the value itself is equal, a collection on the right is not -- the
     oracle asks the collection --, else `equals` by truth).
+  - CHAR_SEQUENCE (`java.lang.CharSequence`, f27, 2026-10-10; instaparse's `Segment`): what
+    reads one, measured on clj 1.12.6 over a deftype: `count` (RT `countFrom`: after
+    `IPersistentCollection`, so `countForm`'s clause stands there), `seq` (`%clojure-strict-seq`
+    after `Iterable`, before `java.util.Map`, the oracle's `seqFrom` order; strict, the
+    characters through `charAt`), `nth` (`%clojure-nth` after `Indexed`: below `length` its
+    `charAt`, else the default -- the oracle's three-argument rule; two arguments share the
+    shape, so past the end is nil where the oracle calls `charAt`), `seqable?`, the instance
+    calls (`length`/`charAt`/`subSequence`; `isEmpty`, the one default with a portable body, is
+    stored by `%clojure-char-sequence-row` as a zero length where the body leaves it out;
+    `chars`/`codePoints`/`getChars` refuse by name), `re-find`/`re-seq`/`re-matches`/
+    `re-matcher`, every `clojure.string` verb's string (and `includes?`'s substring), String's
+    `.contains`/`.replace` arguments. Those last read the view
+    `%clojure-char-sequence-text` (`ClojureStringLowering.text`/`textOf`; a literal argument
+    stays bare): the string of its characters read through `length`/`charAt` once per call --
+    the regex runtime indexes a string, where the oracle's matcher reads `charAt` as far as
+    it matches, so instaparse's per-terminal `(re-matcher re (sub-sequence text i))` copies
+    the rest of the text each time (not measured). `instance? CharSequence` is the alias
+    `%clojure-char-sequence-instance-p` -> `%clojure-host-char-sequence-p` (HOST's alias ->
+    `stringp` in turn, so the family stands ahead of HOST), keeping the one-test shape. Not
+    read through it, as in the oracle: `subs`, `re-pattern`, `vec`, `get`, `=`, `compare`,
+    `string?`, `counted?`, `sequential?`. A face (Java faces) implements `CharSequence` with
+    no further code: a host `Pattern`, `StringBuilder.append`, `String/join` read it on both
+    `java:` backends. Before: the lowering refusal `java.lang.CharSequence is not supported
+    yet as an interface of deftype`; after, every measured verb oracle-identical on all four
+    backends but the two pre-existing deviations it surfaced: `subs` of any non-string
+    answers a `subseq` instead of the oracle's `ClassCastException`, and
+    `clojure.string/split` answers a list where the oracle answers a vector (`.todo` items).
   `instance?` of a supported interface adds its test (never over a literal or quoted value,
   which no typed value is, so no binding changes), and an instance call of a declared method a
   clause calling the row's method (`ClojureInterfaces.instanceTest`; an `if` around the refusal
@@ -3500,10 +3533,13 @@ measured on clj 1.12.6, 2026-10-08).
   `an-ifn-type-is-called-through-its-invoke-and-applied-through-its-apply-to`,
   `an-ideref-type-derefs-through-its-deref`,
   `a-type-overriding-object-answers-str-and-equals-through-it`,
-  `a-deftype-implementing-iobj-carries-its-own-metadata` (all four backends, the oracle's but
-  the `#object` line); `ClojureLoweringTest#aBodyImplementingAnInterfaceStoresItsRowThroughTheFamilyOfEach`
+  `a-deftype-implementing-iobj-carries-its-own-metadata`,
+  `a-char-sequence-type-counts-seqs-matches-and-reads-as-its-characters` (all four backends, the
+  oracle's but the `#object` line); `ClojureLoweringTest#aBodyImplementingAnInterfaceStoresItsRowThroughTheFamilyOfEach`
   (the stores and every refusal), `ClojureArmsTest#anInterfaceFamilyIsMadeByTheStoreOfARowOfItsInterfaces`,
-  `ClojureLibraryTest#aProgramStoringNoInterfaceRowSplicesTheVerbsWithoutTheirInterfaceArms`.
+  `ClojureLibraryTest#aProgramStoringNoInterfaceRowSplicesTheVerbsWithoutTheirInterfaceArms`,
+  `#aProgramStoringNoCharSequenceRowReadsItsStringsWithoutTheView`,
+  `ClojureInteropTest#aCharSequenceTypeReachesJavaAsACharSequence`.
 
 ## Collection interfaces
 
