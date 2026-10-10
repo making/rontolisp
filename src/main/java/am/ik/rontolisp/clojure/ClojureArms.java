@@ -757,16 +757,22 @@ public final class ClojureArms {
 		/**
 		 * A rontolisp future or stream -- what {@code rontolisp.http-client} answers
 		 * under {@code :async true}, and the reply body it answers under
-		 * {@code :as :stream} -- which {@code deref} and {@code future?} read through the
-		 * await runtime and {@code slurp}, {@code clojure.java.io/reader}, {@code .close}
-		 * and a Ring response body take: only the client's kernel makes one, so a program
-		 * that fetches nothing folds every arm. Ahead of {@link #HOST}: {@code future?}'s
-		 * call {@code (future-or-host-p value false)} stands for
+		 * {@code :as :stream} or a read of an {@code http:} or {@code https:} URL opens
+		 * -- which {@code deref} and {@code future?} read through the await runtime and
+		 * {@code slurp}, {@code clojure.java.io/reader}, {@code .close} and a Ring
+		 * response body take, and the reads of {@code clojure.java.io} that open such a
+		 * URL ({@link ClojureIoLowering#REMOTE_P}): only the client's kernel and the
+		 * install of the transport those reads go through
+		 * ({@link ClojureIoLowering#INSTALL_FETCH}) make one, so a program that fetches
+		 * nothing folds every arm. Ahead of {@link #HOST}: {@code future?}'s call
+		 * {@code (future-or-host-p value false)} stands for
 		 * {@code (host-future-p value false)}, which that family folds in turn.
 		 */
-		FETCH("fetch", Set.of(ClojureStateLowering.FUTURE_P, ClojureStateLowering.ASYNC_STREAM_P), Set.of(),
-				Map.of(ClojurePredicateLowering.FUTURE_OR_HOST_P, ClojurePredicateLowering.HOST_FUTURE_P),
-				Set.of(ClojureKernelLowering.HTTP_REQUEST), Set.of()),
+		FETCH("fetch",
+				Set.of(ClojureStateLowering.FUTURE_P, ClojureStateLowering.ASYNC_STREAM_P, ClojureIoLowering.REMOTE_P,
+						ClojureIoLowering.RESPONSE_P),
+				Set.of(), Map.of(ClojurePredicateLowering.FUTURE_OR_HOST_P, ClojurePredicateLowering.HOST_FUTURE_P),
+				Set.of(ClojureKernelLowering.HTTP_REQUEST, ClojureIoLowering.INSTALL_FETCH), Set.of()),
 
 		/**
 		 * A host object, which {@code instance?} asks the host the class of, {@code =}

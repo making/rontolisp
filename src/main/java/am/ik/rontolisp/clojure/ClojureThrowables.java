@@ -98,6 +98,7 @@ final class ClojureThrowables {
 			Map.entry("java.util.zip.ZipException", "java.io.IOException"),
 			Map.entry("java.io.UnsupportedEncodingException", "java.io.IOException"),
 			Map.entry("java.net.MalformedURLException", "java.io.IOException"),
+			Map.entry("java.net.ProtocolException", "java.io.IOException"),
 			Map.entry("java.util.NoSuchElementException", "java.lang.RuntimeException"),
 			Map.entry("java.util.concurrent.ExecutionException", "java.lang.Exception"),
 			Map.entry("java.util.concurrent.CompletionException", "java.lang.RuntimeException"),

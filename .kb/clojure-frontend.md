@@ -152,7 +152,7 @@ answered `2 5 3` before).
 | `clojure.math` | the same, loaded at its `require`; a double function's body is `rontolisp.internal.math/NAME`, lowered in place to `(%strict-math :name (rontolisp::%clojure-double a) ...)`, `round` and the long arithmetic one call to `rontolisp::%clojure-math-NAME` (`ClojureKernelLowering`) | "clojure.jar namespaces" |
 | `subs`, `.substring` | `%clojure-subs`, the refusal family's alias of `subseq` ("Refusals") | a bound outside a string is the oracle's `StringIndexOutOfBoundsException` where a class is read; a double or ratio bound is truncated (`%clojure-string-bound`), a non-number one is refused as the oracle does ("Refusals") |
 | `format` | the Java directives translated to `format` over Clojure-rendered arguments | literal format string only; `%s` like `str` (nil spells `null`), `%b`; `%e`/`%g`, flags and the rest refused |
-| `spit` `slurp` `line-seq` `file-seq` | `with-open-file` of the `str` spelling / `rontolisp::%clojure-slurp` / a `read-line` loop / `%clojure-io-file-seq`, each with the io family's arm ("clojure.java.io"); with `:encoding` `%clojure-io-spit`/`-slurp` | every backend; wasm needs a `--dir` preopen (without it the open signals). `spit` supersedes unless `:append` is truthy, `nil` writes nothing. `slurp`, `line-seq` and `reader` take a path or an open stream (`streamp`, so a Gray instance -- the Ring `:body` -- too): `slurp` reads a stream to its end and closes it (the oracle's `with-open`; until 2026-10-08 it left it open), `reader` answers it, `line-seq` reads it strictly and never closes it. A read of a CLOSED stream -- `slurp`, `line-seq`, `.read`, `.readLine`, `read-line` -- goes through `%clojure-open-reader` (`open-stream-p`, else the `%clojure-io-exception` carrier: the oracle's `IOException: Stream closed`); before it the interpreter said `READ-CHAR expects an input stream`, the JVM an NPE, and both wasm backends READ a closed string input stream (its record is never marked closed, `.kb/read-load-streams.md`). `read` is not guarded: the oracle wraps the failure in a `LispReader$ReaderException` over a `LineNumberingPushbackReader` and not over a `PushbackReader`, which share one stream kind here. A second close is harmless on every backend (`.kb/read-load-streams.md`, "close on an already-closed stream"). Pins: clojure-spec `slurp-closes-the-stream-it-reads`, `ClojureInteropTest#filesRoundTripThroughReaderAndLineSeq`, `ClojureWasmFileIoTest`. `slurp` was an inline `read-char` loop per site until 2026-10-08. `clojure.java.io/reader` is the namespace's var since 2026-10-08 (before: `%clojure-reader`, a lowering), `file-seq` a lazy walk of Files ("clojure.java.io") |
+| `spit` `slurp` `line-seq` `file-seq` | `with-open-file` of the `str` spelling / `rontolisp::%clojure-slurp` / a `read-line` loop / `%clojure-io-file-seq`, each with the io family's arm ("clojure.java.io"); with `:encoding` `%clojure-io-spit`/`-slurp` | every backend; wasm needs a `--dir` preopen (without it the open signals). `spit` supersedes unless `:append` is truthy, `nil` writes nothing. `slurp`, `line-seq` and `reader` take a path or an open stream (`streamp`, so a Gray instance -- the Ring `:body` -- too): `slurp` reads a stream to its end and closes it (the oracle's `with-open`; until 2026-10-08 it left it open), `reader` answers it, `line-seq` reads it strictly and never closes it. A read of a CLOSED stream -- `slurp`, `line-seq`, `.read`, `.readLine`, `read-line` -- goes through `%clojure-open-reader` (`open-stream-p`, else the `%clojure-io-exception` carrier: the oracle's `IOException: Stream closed`); before it the interpreter said `READ-CHAR expects an input stream`, the JVM an NPE, and both wasm backends READ a closed string input stream (its record is never marked closed, `.kb/read-load-streams.md`). `read` is not guarded: the oracle wraps the failure in a `LispReader$ReaderException` over a `LineNumberingPushbackReader` and not over a `PushbackReader`, which share one stream kind here. A second close is harmless on every backend (`.kb/read-load-streams.md`, "close on an already-closed stream"). Pins: clojure-spec `slurp-closes-the-stream-it-reads`, `ClojureInteropTest#filesRoundTripThroughReaderAndLineSeq`, `ClojureWasmFileIoTest`. `slurp` was an inline `read-char` loop per site until 2026-10-08. `clojure.java.io/reader` is the namespace's var since 2026-10-08 (before: `%clojure-reader`, a lowering), `file-seq` a lazy walk of Files ("clojure.java.io"). A string spelling a URL is the URL once clojure.java.io has loaded or the program reads `http:` URLs, which go through its `rontolisp:fetch` where it spells one in the read or requires `rontolisp.http-urls` ("clojure.java.io", 2026-10-10) |
 | `read-string` `read` | `rontolisp::%clojure-read-string`/`-read` (`-opts` for an options map, `-v` as values) over the call site's namespace context | "Reading"; every backend |
 | regex `#"..."`, `re-pattern` `re-matcher` `re-find` `re-seq` `re-matches` `re-groups` | `RONTOLISP::%CLOJURE-RE-COMPILE` and the spliced matcher | "Regex" |
 | `map` `filter` `concat` | `rontolisp::%clojure-map`/`-filter`/`-concat` | any number of collections (`map` stops at the shortest); lazy when an input is lazy, strict otherwise ("Laziness"); a false object drops like nil |
@@ -1555,10 +1555,11 @@ new, and the five fetch has (the JDK's on the interpreter and the JVM, `wasi:htt
   :ex-data :ex-message :request}`) in async mode only. A plain call `%future-force`s it;
   `:async true` answers it.
 - The rontolisp future and stream under the core verbs are arms of
-  `ClojureArms.Family.FETCH` (tests `%clojure-future-p`, `%clojure-async-stream-p`; the
+  `ClojureArms.Family.FETCH` (tests `%clojure-future-p`, `%clojure-async-stream-p`, and
+  clojure.java.io's `%clojure-io-remote-p` and `%clojure-io-response-p`; the
   alias `%clojure-future-or-host-p` -> `%clojure-host-future-p`, which the HOST family folds
-  in turn, so FETCH precedes HOST in the enum; producer the kernel's `%clojure-http-request`
-  alone). `deref`: a clause of `%clojure-deref-other` ahead of the host one (on the JVM the
+  in turn, so FETCH precedes HOST in the enum; producers the kernel's `%clojure-http-request`
+  and clojure.java.io's `%clojure-io-install-fetch`, "clojure.java.io"). `deref`: a clause of `%clojure-deref-other` ahead of the host one (on the JVM the
   future IS a `CompletableFuture`, whose settled EMARKER/VMARKER payload only `_await`
   reads), a failure re-signalled as `java.util.concurrent.ExecutionException` over it (a
   C%E with the cause), like `get`. Timed `deref`: `%clojure-future-get-within` polls the
@@ -2295,7 +2296,62 @@ the file), `default-streams-impl` a map. Until then only `reader` resolved, as a
   non-string to `%clojure-io-slurp`/`-spit`, which ask the namespace's `reader`/`writer`
   (with `:encoding`/`:append`) when no kernel opens the value -- a type extended to
   `IOFactory`, and the oracle's `Cannot open <1> as an InputStream.` for `(slurp 1)`. A
-  program not loading the namespace keeps the path-only `slurp`.
+  program not loading the namespace keeps the path-only `slurp`. A string spelling a URL
+  (`%clojure-io-url-spelling-p`: a scheme `java.net.URL` knows, no space) is that URL once the
+  namespace has loaded or the fetch is installed (below), any other string a path -- the
+  oracle's `RT.toUrl` falling back to a File on its `MalformedURLException`, so
+  `(slurp "http://h/a b")` opens a file of that name there too (2026-10-10; before, a string
+  went to the plain path even then, and `(slurp "file:/x")` failed).
+- **`http:` and `https:` URLs** (2026-10-10, e84): read through the program's own
+  `rontolisp:fetch` as the oracle's `java.net.HttpURLConnection` reads one (`clojure.lisp` "http:
+  and https: URLs", every claim below run against clj 1.12.6 and a local origin): a GET with
+  `Accept: */*`, the fragment left out; a 300, 301, 302, 303 or 307 followed to a `Location` of
+  the same protocol (in any case), never 308, never http to https, a 305 not followed either (the
+  oracle retries through the proxy it names, which fetch cannot), a `Location` of a protocol
+  `java.net.URL` does not know its `MalformedURLException`; the 20th redirect reply
+  `java.net.ProtocolException` `Server redirected too many times (20)` (19 then a 200 answers);
+  status 400 or more refused where the stream opens -- 404 and 410 `FileNotFoundException` of the
+  URL answering, any other `IOException` `Server returned HTTP response code: N for URL: u`; a
+  `Location`-less 3xx answered as it is. A transport failure, at the head
+  (`%clojure-io-remote-send`) or mid-body (`%clojure-io-remote-body`, a `%stream-new` over the
+  reply's body awaiting each chunk inside a `handler-case`), is the IOException carrier over the
+  transport's words. The stream is the client's shape `(:C%INPUT-STREAM #(body nil 0 nil class))`,
+  class `java.io.BufferedInputStream` for `input-stream`/`reader`/`slurp`, and
+  `sun.net.www.protocol.http.HttpURLConnection$HttpInputStream` for `.openStream` (a closed read
+  `stream is closed`, `.available` 0 once closed, `IO_SUPERS` to `FilterInputStream`); the reads
+  are `%clojure-io-open-input`'s and `-open-reader`'s arm `%clojure-io-remote-p` and
+  `.openStream`'s, ahead of `%clojure-io-target`, whose refusal of an http: URL names both ways
+  in. Verified on the four legs of `FetchSpecE2eTest` (interpreter, JVM, `--native`,
+  `--component`): identical but the transport's words and the fields it adds.
+- **Which program names fetch** (the gate, decided 2026-10-10): a program naming
+  `rontolisp:fetch` is what every transport splice and the Preview 1 refusal read, so naming it
+  in the namespace's kernels would make every program loading clojure.java.io (a startup
+  namespace) import `wasi:http` on a component and be refused on Preview 1.
+  `ClojureLowering.readsHttpUrls` is set by `readsUrlOf` -- a string literal spelling `http:` or
+  `https:` (`ClojureIoLowering.spellsHttpUrl`, any depth, scheme in any ASCII case) in the first
+  argument of `slurp`, of `clojure.java.io/reader`, `input-stream`, `make-reader`,
+  `make-input-stream` (`ClojureIoLowering.readCall`, by resolved var) or in `.openStream`'s
+  receiver -- or by loading `rontolisp.http-urls` (a built-in file defining nothing,
+  `ClojureNamespaceLowering.loadNamespace`); then `ClojureIoLowering.installFetch`,
+  `(%clojure-io-install-fetch #'(lambda (url% options%) (rontolisp:fetch url% options%)))`, runs
+  at index 1 of the program (a session: ahead of the buffer that first reads one), so a read above
+  the literal reads too. `INSTALL_FETCH` is an io and a fetch producer, `REMOTE_P` and
+  `%clojure-io-response-p` fetch tests, so a program that fetches nothing folds every arm of it.
+  Rejected: any http literal anywhere in the program (a Ring handler printing a URL beside
+  `(slurp (:body req))` would be refused under `--no-wasi` without `--host-fetch`, and a component
+  would need `-S http=y`); `rontolisp.http-client` as the opt-in (its request kernel rides every
+  such program); the namespace's own statement installing it (a late `require` would leave the
+  reads above it refused). A URL only computed, without the require: the refusal by name; in a
+  program loading no clojure.java.io a string `slurp` stays the plain path, byte-identical.
+- **Measured** (2026-10-10, raw bytes, wasm P1 / component / JVM class, base `ca2d7c77f` ->
+  after): `demo.clj`, `ring-hello.clj` and `(println (slurp "data.txt"))` byte-identical; an io
+  program reading a File (`io/reader` + `line-seq`, `slurp` of an `io/file`) 236,933 -> 238,209 /
+  243,846 -> 245,122 / 290,107 -> 291,466 (the http: refusal's words, the URL-spelling check;
+  the response-stream words moved behind the fetch arm, -0.3 KB of it). Reading a URL:
+  `(println (slurp "https://example.com/"))` P1 refused (naming clojure.java.io), component
+  291,128, class 195,889 (the same program slurping a file: 57,339 / 70,836); with `io/reader`
+  and `line-seq` 403,600 / 327,640 (a file: 245,122 / 291,466). The client's minimal GET is
+  546,954 / 358,248.
 - **`extend` of a computed map** (2026-10-08, needed for `default-streams-impl`):
   `ClojureProtocolLowering.computedRows` -> `%clojure-extend-rows (lambda (method fn)
   store) map '(methods)`, the store the literal map's row takes, an entry naming no method
@@ -2306,17 +2362,29 @@ the file), `default-streams-impl` a map. Until then only `reader` resolved, as a
   72,788 -> 72,737 / 74,662 -> 74,659; `.write` on a `StringWriter` 52,383 -> 52,741 /
   44,383 -> 44,741 / 55,918 -> 56,289 / 102,833 -> 103,383 (the instance call's io arm).
 - **Deviations** (user doc `clojure-java-io.md`): no identity hash in `#object`; a URL's
-  `.hashCode`/`=` by spelling; reading a non-`file:` URL refused by name; `input-stream` of
-  a byte-array stream answering it unwrapped and a file stream keeping no mark (todo `f15`);
-  three charsets; a computed
+  `.hashCode`/`=` by spelling; an `http:` URL read only where the program uses fetch for it,
+  a URL of another protocol than `file:`/`http:`/`https:` refused by name; reading an `http:`
+  URL, a transport failure an IOException in the transport's words, a 305 not followed, fetch's
+  `User-Agent`, UTF-8 decoded leniently (`%clojure-io-text-of`'s `%octets-to-string`, read-all's
+  rule; the oracle's `InputStreamReader` puts U+FFFD per malformed sequence -- the decoder is
+  todo `f07`'s), `.available` 0 before the first chunk (the oracle counts what it buffered);
+  `input-stream` of a byte-array stream answering it unwrapped and a file or URL stream keeping
+  no mark (todo `f15`); three charsets; a computed
   resource name never inside a jar; `lastModified` in whole seconds (`file-write-date`'s
   resolution, every backend); wasm: `getAbsolutePath` of a relative File refused (no
   cwd); `canRead` is `exists`; `line-seq` takes a File/URL/byte stream like a path.
 - Pins: clojure-spec `clojure-java-io-*`, `a-java-io-file-prints-as-the-host-object-*`,
   `java-io-files-are-made-renamed-and-deleted`, `extend-takes-a-map-computed-at-run-time`
-  (all four backends, oracle-identical but the hash/`class` case); `ClojureJavaIoTest`
+  (all four backends, oracle-identical but the hash/`class` case); clojure-http-spec
+  `clojure-java-io-reads-an-http-url-through-fetch`,
+  `an-http-url-read-follows-and-refuses-what-http-url-connection-does`,
+  `an-http-url-stream-closes-and-fails-in-its-classs-words` (`FetchSpecE2eTest`'s four legs,
+  oracle-identical); `ClojureHttpUrlsTest` (the gate's positions and non-positions, the
+  require, a session, the fetch arm's fold, the refusal of a computed URL, the reads on the
+  interpreter and the JVM against a local origin, the Preview 1 and `--no-wasi` refusals);
+  `ClojureJavaIoTest`
   (directories, an empty directory deleted and a file dated on all four, a deps.edn project's directory and jar
-  resources on all four backends, the non-file URL refusals);
+  resources on all four backends, the refusals of an `ftp:` read and an `https:` write);
   `ClojureInteropTest#aJavaIoFileCrossesTheJavaBoundaryAsTheHostFile`;
   `ClojureArmsTest#theIoFamilyIsMadeByClojureJavaIoAndFoldsTheArmsOfAProgramMakingNone`;
   `ClojureLoweringTest#javaIoIsABuiltInNamespaceLoadedAtItsFirstQualifiedName`;

@@ -199,7 +199,8 @@ has no leg (its transport is the JavaScript host, `WasmHostFetchBodyE2eTest`).
 
 The same test runs a second corpus over the same origin and legs, `clojure-http-spec.yaml`:
 Clojure's `rontolisp.http-client`, every request of which is the program's own fetch call
-(`.kb/clojure-frontend.md`, "HTTP client"). Its one skip is the `--native` leg of a timed
+(`.kb/clojure-frontend.md`, "HTTP client"), and clojure.java.io's reads of an `http:` URL, which
+go through the same call (`.kb/clojure-frontend.md`, "clojure.java.io"). Its one skip is the `--native` leg of a timed
 `deref` of a pending reply: a Preview 1 async body runs to its end at the call.
 
 A case a leg skips names the divergence; no case skips a leg since 2026-09-26. What the corpus

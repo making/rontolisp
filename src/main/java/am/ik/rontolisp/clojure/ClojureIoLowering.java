@@ -7,6 +7,7 @@ import java.util.Map;
 import java.util.Set;
 
 import am.ik.rontolisp.LispChar;
+import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispDouble;
 import am.ik.rontolisp.LispInteger;
 import am.ik.rontolisp.LispNil;
@@ -122,6 +123,34 @@ final class ClojureIoLowering {
 	private static final String BYTES_OUTPUT = PREFIX + "BYTES-OUTPUT";
 
 	/**
+	 * The install of the program's own {@code rontolisp:fetch} as what an {@code http:}
+	 * or {@code https:} URL is read through ({@link #installFetch}): a producer of the
+	 * fetch family ({@link ClojureArms.Family#FETCH}) and of the io family, since a read
+	 * of such a URL answers a byte stream over the reply.
+	 */
+	static final String INSTALL_FETCH = PREFIX + "INSTALL-FETCH";
+
+	/**
+	 * The fetch family's arm test of a read that opens a URL: whether the value is an
+	 * {@code http:} or {@code https:} URL the program reads through its fetch.
+	 */
+	static final String REMOTE_P = PREFIX + "REMOTE-P";
+
+	/**
+	 * The fetch family's arm test of a byte stream's state: whether it is an HTTP
+	 * client's own response stream, whose closed reads have words of their own.
+	 */
+	static final String RESPONSE_P = PREFIX + "RESPONSE-P";
+
+	/**
+	 * The namespace a program requires to read {@code http:} and {@code https:} URLs
+	 * through {@code rontolisp:fetch} where it spells none it reads
+	 * ({@link #spellsHttpUrl}): a built-in file defining nothing, whose load is the
+	 * program's choice ({@link ClojureLowering#readsHttpUrls}).
+	 */
+	static final String HTTP_URLS = "rontolisp.http-urls";
+
+	/**
 	 * The kernels: each var one call to its {@code %clojure-io-} worker, with a fixed
 	 * arity, and {@code resource}, lowered in place over the program's directory roots.
 	 */
@@ -143,13 +172,15 @@ final class ClojureIoLowering {
 	}
 
 	/**
-	 * What makes a clojure.java.io value: the kernels the namespace calls and the
-	 * lowering's own constructions -- the io family's producers.
+	 * What makes a clojure.java.io value: the kernels the namespace calls, the lowering's
+	 * own constructions and the install a read of an {@code http:} or {@code https:} URL
+	 * goes through -- the io family's producers.
 	 */
 	static final Set<String> PRODUCERS = Set.of(FILE, FILE_2, URL_OF, URI_OF, URL_FOUND, RESOURCE, RESOURCE_URLS,
 			FILE_SEQ, PREFIX + "FILE-URL", PREFIX + "URL-FILE", PREFIX + "URI-FILE", PREFIX + "URI-URL",
 			PREFIX + "OPEN-INPUT", PREFIX + "OPEN-OUTPUT", OPEN_READER, PREFIX + "OPEN-WRITER", PREFIX + "PARENT-FILE",
-			PREFIX + "FROM-HOST", FILE_INPUT, FILE_OUTPUT, STREAM_WRITER, BYTES_INPUT, BYTES_INPUT_3, BYTES_OUTPUT);
+			PREFIX + "FROM-HOST", FILE_INPUT, FILE_OUTPUT, STREAM_WRITER, BYTES_INPUT, BYTES_INPUT_3, BYTES_OUTPUT,
+			INSTALL_FETCH);
 
 	/**
 	 * The ones of them that answer a Common Lisp character stream, which the printer and
@@ -311,8 +342,10 @@ final class ClojureIoLowering {
 	/**
 	 * The classes the values here are, with their supers: what {@code class} answers for
 	 * one, what {@code instance?}, a class chain and a protocol extension read. The last
-	 * three are the classes of {@code rontolisp.http-client}'s {@code :as :stream} body:
-	 * the JDK client's response stream, and the two it is decompressed through.
+	 * four are the classes of a fetched reply's body: {@code rontolisp.http-client}'s
+	 * {@code :as :stream} body (the JDK client's response stream, and the two it is
+	 * decompressed through) and an {@code http:} URL's {@code openStream}
+	 * ({@code java.net.HttpURLConnection}'s).
 	 */
 	static final Map<String, List<String>> CLASSES = Map.ofEntries(
 			Map.entry("java.io.File", List.of("java.io.Serializable", "java.lang.Comparable")),
@@ -340,8 +373,12 @@ final class ClojureIoLowering {
 			Map.entry("java.util.zip.GZIPInputStream",
 					List.of("java.util.zip.InflaterInputStream", "java.io.FilterInputStream", "java.io.InputStream",
 							"java.io.Closeable", "java.lang.AutoCloseable")),
-			Map.entry("java.util.zip.InflaterInputStream", List.of("java.io.FilterInputStream", "java.io.InputStream",
-					"java.io.Closeable", "java.lang.AutoCloseable")));
+			Map.entry("java.util.zip.InflaterInputStream",
+					List.of("java.io.FilterInputStream", "java.io.InputStream", "java.io.Closeable",
+							"java.lang.AutoCloseable")),
+			Map.entry("sun.net.www.protocol.http.HttpURLConnection$HttpInputStream",
+					List.of("java.io.FilterInputStream", "java.io.InputStream", "java.io.Closeable",
+							"java.lang.AutoCloseable")));
 
 	/**
 	 * Whether a value here may be an instance of the class: one of {@link #CLASSES} or a
@@ -512,6 +549,87 @@ final class ClojureIoLowering {
 	 */
 	static LispVal hostFilePath(LispVal x) {
 		return ClojureLowerUtil.list(new LispSymbol(HOST_FILE_PATH), x);
+	}
+
+	// http: and https: URLs
+
+	/**
+	 * The vars of {@code clojure.java.io} whose first argument is what a read opens: a
+	 * URL there is read.
+	 */
+	private static final Set<String> READS = Set.of("clojure.java.io/reader", "clojure.java.io/input-stream",
+			"clojure.java.io/make-reader", "clojure.java.io/make-input-stream");
+
+	/**
+	 * A call of a {@code clojure.java.io} var that opens a read ({@link #READS}): the
+	 * program reads an {@code http:} or {@code https:} URL there when its first argument
+	 * spells one ({@link ClojureLowering#readsUrlOf}).
+	 * @param ctx the hub
+	 * @param name the call's head as written
+	 * @param items the call
+	 */
+	static void readCall(ClojureLowering ctx, String name, List<LispVal> items) {
+		if (items.size() >= 2 && !ctx.isLocal(name) && READS.contains(ctx.lookupVar(name))) {
+			ctx.readsUrlOf(items.get(1));
+		}
+	}
+
+	/**
+	 * Whether the datum holds a string literal spelling an {@code http:} or
+	 * {@code https:} URL, the scheme in any case as {@code java.net.URL} reads one, at
+	 * any depth: what makes a read of the form it opens one of an {@code http:} or
+	 * {@code https:} URL ({@code (slurp "https://...")},
+	 * {@code (io/reader (str "https://" host path))}).
+	 * @param datum the form a read opens, as read
+	 * @return whether it spells such a URL
+	 */
+	static boolean spellsHttpUrl(LispVal datum) {
+		if (datum instanceof LispString literal) {
+			return isHttpSpelling(literal.value());
+		}
+		LispVal rest = datum;
+		while (rest instanceof LispCons cons) {
+			if (spellsHttpUrl(cons.car())) {
+				return true;
+			}
+			rest = cons.cdr();
+		}
+		return false;
+	}
+
+	/**
+	 * {@code (install-fetch (function (lambda (url options) (rontolisp:fetch url
+	 * options))))}: the program's own fetch installed as what {@code clojure.java.io}
+	 * reads an {@code http:} or {@code https:} URL through. The program names
+	 * {@code rontolisp:fetch} there, which every transport splice and the Preview 1
+	 * refusal read; it runs before anything else ({@link ClojureLowering#readsHttpUrls}).
+	 * @return the statement
+	 */
+	static LispVal installFetch() {
+		LispSymbol url = new LispSymbol("URL%");
+		LispSymbol options = new LispSymbol("OPTIONS%");
+		return ClojureLowerUtil.list(new LispSymbol(INSTALL_FETCH),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("function"),
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(url, options),
+								ClojureLowerUtil.list(new LispSymbol("RONTOLISP:FETCH"), url, options))));
+	}
+
+	/**
+	 * Whether the string starts with {@code http:} or {@code https:}, in any ASCII case.
+	 */
+	private static boolean isHttpSpelling(String s) {
+		int colon = s.indexOf(':');
+		if (colon != 4 && colon != 5) {
+			return false;
+		}
+		String scheme = colon == 4 ? "http" : "https";
+		for (int i = 0; i < colon; i++) {
+			char c = s.charAt(i);
+			if ((c >= 'A' && c <= 'Z' ? (char) (c + 32) : c) != scheme.charAt(i)) {
+				return false;
+			}
+		}
+		return true;
 	}
 
 	// Resources

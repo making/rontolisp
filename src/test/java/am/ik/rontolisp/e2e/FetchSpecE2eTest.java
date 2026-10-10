@@ -59,8 +59,8 @@ import static org.junit.jupiter.api.DynamicTest.dynamicTest;
  * {@code ci-spec.yaml} idea: the cases are concatenated into one program per leg and the
  * output is sliced back per case, so a failure names its case and its leg. The second
  * corpus, {@code clojure-http-spec.yaml}, is the Clojure client
- * ({@code rontolisp.http-client}) over the same origin and legs, one {@code .clj} program
- * per leg.
+ * ({@code rontolisp.http-client}) and {@code clojure.java.io}'s reads of an {@code http:}
+ * URL over the same origin and legs, one {@code .clj} program per leg.
  *
  * <p>
  * Every leg goes through the command line -- this JVM's {@link RontoLispCli}, or the
@@ -259,6 +259,13 @@ class FetchSpecE2eTest {
 			answer(exchange, 302, "hop " + hop);
 		});
 		server.createContext("/no-location", exchange -> answer(exchange, 302, "nowhere"));
+		// A redirect to another protocol, which clojure.java.io's read of a URL does not
+		// follow (java.net.HttpURLConnection's rule).
+		server.createContext("/redirect-https", exchange -> {
+			exchange.getResponseHeaders()
+				.add("Location", "https://127.0.0.1:" + server.getAddress().getPort() + "/hello");
+			answer(exchange, 302, "moved");
+		});
 		server.createContext("/slow", exchange -> {
 			try {
 				Thread.sleep(1000);
@@ -367,8 +374,9 @@ class FetchSpecE2eTest {
 	}
 
 	/**
-	 * The Clojure client, {@code rontolisp.http-client}, over the same origin and legs
-	 * ({@code clojure-http-spec.yaml}): every request it makes goes through
+	 * The Clojure client, {@code rontolisp.http-client}, and {@code clojure.java.io}'s
+	 * reads of an {@code http:} URL over the same origin and legs
+	 * ({@code clojure-http-spec.yaml}): every request either makes goes through
 	 * {@code rontolisp:fetch}, so each transport is one leg here too.
 	 */
 	@TestFactory

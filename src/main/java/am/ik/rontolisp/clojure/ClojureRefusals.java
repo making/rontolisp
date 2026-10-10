@@ -102,6 +102,12 @@ final class ClojureRefusals {
 	static final String MALFORMED_URL = "RONTOLISP::%CLOJURE-MALFORMED-URL-EXCEPTION";
 
 	/**
+	 * {@code java.net.ProtocolException}: an HTTP reply a read of an {@code http:} URL
+	 * will not take, one redirecting too many times.
+	 */
+	static final String PROTOCOL = "RONTOLISP::%CLOJURE-PROTOCOL-EXCEPTION";
+
+	/**
 	 * {@code org.xml.sax.SAXParseException}: a document {@code clojure.xml/parse} reads
 	 * that is not well-formed.
 	 */
@@ -194,7 +200,7 @@ final class ClojureRefusals {
 			Map.entry(FILE_NOT_FOUND, "java.io.FileNotFoundException"), Map.entry(ZIP, "java.util.zip.ZipException"),
 			Map.entry(UNSUPPORTED_ENCODING, "java.io.UnsupportedEncodingException"),
 			Map.entry(MALFORMED_URL, "java.net.MalformedURLException"),
-			Map.entry(SAX_PARSE, "org.xml.sax.SAXParseException"),
+			Map.entry(PROTOCOL, "java.net.ProtocolException"), Map.entry(SAX_PARSE, "org.xml.sax.SAXParseException"),
 			Map.entry(ABSTRACT_METHOD, "java.lang.AbstractMethodError"),
 			Map.entry(NO_SUCH_ELEMENT, "java.util.NoSuchElementException"));
 

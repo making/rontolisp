@@ -1255,6 +1255,13 @@
                                 "java.io.IOException" "java.lang.Exception"
                                 "java.lang.Throwable") message))
 
+(defun rontolisp::%clojure-protocol-exception (message)
+  "A refusal the oracle throws as a java.net.ProtocolException: an HTTP reply
+   it will not read, such as one redirecting too many times."
+  (rontolisp::%clojure-refuse '("java.net.ProtocolException"
+                                "java.io.IOException" "java.lang.Exception"
+                                "java.lang.Throwable") message))
+
 (defun rontolisp::%clojure-exception (message)
   "A refusal the oracle throws as a plain java.lang.Exception."
   (rontolisp::%clojure-refuse '("java.lang.Exception" "java.lang.Throwable")
@@ -17678,9 +17685,11 @@
 ;;;;   (:C%FILE path)              java.io.File; PATH normalized the way
 ;;;;                               java.io.File normalizes one on Unix
 ;;;;   (:C%URL spec)               java.net.URL: its spelling; a read takes the
-;;;;                               file a file: URL names, or the text a resource
+;;;;                               file a file: URL names, the text a resource
 ;;;;                               found while lowering carries
-;;;;                               (%clojure-io-resources, by spelling)
+;;;;                               (%clojure-io-resources, by spelling), or the
+;;;;                               reply to a GET of an http: or https: URL
+;;;;                               where the program names rontolisp:fetch
 ;;;;   (:C%URI spec)               java.net.URI
 ;;;;   (:C%INPUT-STREAM #(s octets i closed [class]))
 ;;;;                               java.io.BufferedInputStream over the binary
@@ -17688,7 +17697,8 @@
 ;;;;                               from index I; or, with the CLASS named, the
 ;;;;                               InputStream over a fetched reply's body that
 ;;;;                               rontolisp.http-client answers under
-;;;;                               :as :stream, S the rontolisp stream of its
+;;;;                               :as :stream or a read of an http: or https:
+;;;;                               URL opens, S the rontolisp stream of its
 ;;;;                               octet chunks and OCTETS the chunk in hand
 ;;;;   (:C%OUTPUT-STREAM #(s closed))
 ;;;;                               java.io.BufferedOutputStream over the binary
@@ -17742,13 +17752,17 @@
 
 ;; Whether slurp or spit opens X through clojure.java.io rather than as a path:
 ;; a value of the namespace, or -- once it has loaded (%clojure-io-install) --
-;; anything but a path string, which its reader or writer opens or refuses in
-;; the oracle's words, a type a program extended IOFactory to included. An arm
-;; test of the io family, like %clojure-io-p.
+;; anything but a string naming a file, which its reader or writer opens or
+;; refuses in the oracle's words, a type a program extended IOFactory to
+;; included. A string spelling a URL is that URL, as the oracle's RT.toUrl reads
+;; one, there and in a program reading http: URLs (%clojure-io-install-fetch). An
+;; arm test of the io family, like %clojure-io-p.
 (defun rontolisp::%clojure-io-openable-p (x)
-  (if (rontolisp::%clojure-io-p x)
-      t
-      (if rontolisp::%clojure-io-factory (not (stringp x)))))
+  (cond ((rontolisp::%clojure-io-p x) t)
+        ((stringp x)
+         (if (or rontolisp::%clojure-io-factory rontolisp::%clojure-io-fetch)
+             (rontolisp::%clojure-io-url-spelling-p x)))
+        (t rontolisp::%clojure-io-factory)))
 
 (defun rontolisp::%clojure-io-kind (x)
   "X's clojure.java.io kind: its wrapper tag, :READER or :WRITER for a
@@ -18176,6 +18190,13 @@
   (rontolisp::%clojure-io-one-of scheme
    '("file" "jar" "http" "https" "ftp" "mailto" "jrt")))
 
+(defun rontolisp::%clojure-io-url-spelling-p (s)
+  "Whether the string S spells a URL: a scheme java.net.URL knows and no space,
+   where the oracle's RT.toUrl throws its MalformedURLException."
+  (let ((scheme (rontolisp::%clojure-io-scheme s)))
+    (and scheme (not (position #\Space s))
+         (rontolisp::%clojure-io-url-protocol-p scheme))))
+
 (defun rontolisp::%clojure-io-url-of (s)
   "clojure.java.io/as-url of the string S: the URL it spells. No scheme, an
    unknown one or a space is the oracle's MalformedURLException."
@@ -18364,12 +18385,15 @@
 (defun rontolisp::%clojure-io-array-stream-p (x)
   (if (consp x) (if (consp (cdr x)) (consp (cdr (cdr x))))))
 
+;; Whether the byte stream state STATE is an HTTP client's own response stream --
+;; the JDK client's, or java.net.HttpURLConnection's -- over a fetched reply's
+;; body no content coding or buffer was put over. The arm test of the fetch
+;; family (clojure/ClojureArms): only a fetch makes one.
 (defun rontolisp::%clojure-io-response-p (state)
-  "Whether the byte stream state STATE is the JDK client's response stream: a
-   fetched reply's body no content coding was read off."
   (and (> (length state) 4)
-       (equal (svref state 4)
-        "jdk.internal.net.http.ResponseSubscribers$HttpResponseInputStream")))
+       (rontolisp::%clojure-io-one-of (svref state 4)
+        '("jdk.internal.net.http.ResponseSubscribers$HttpResponseInputStream"
+          "sun.net.www.protocol.http.HttpURLConnection$HttpInputStream"))))
 
 (defun rontolisp::%clojure-io-open-state (x)
   "The state of the open byte stream X; a closed one is the oracle's
@@ -18377,8 +18401,13 @@
   (let ((state (car (cdr x))))
     (if (svref state (if (eq (car x) :C%INPUT-STREAM) 3 1))
         (rontolisp::%clojure-io-exception
+         ;; an HTTP client's own response stream has words of its own: an arm a
+         ;; program that fetches nothing folds
          (if (rontolisp::%clojure-io-response-p state)
-             "closed"
+             (if (equal (svref state 4)
+                  "sun.net.www.protocol.http.HttpURLConnection$HttpInputStream")
+                 "stream is closed"
+                 "closed")
              "Stream closed"))
         state)))
 
@@ -18433,22 +18462,27 @@
 
 (defun rontolisp::%clojure-io-available (x)
   "InputStream.available: the octets left on the byte stream X -- of a fetched
-   reply's body, those of the chunk in hand, and 0 once the JDK client's
+   reply's body, those of the chunk in hand, and 0 once an HTTP client's own
    response stream is closed."
   ;; a ByteArrayInputStream's below its end: an arm a program making no byte
   ;; array folds
   (if (rontolisp::%clojure-io-array-stream-p x)
       (rontolisp::%clojure-io-array-available x)
-      (if (and (svref (car (cdr x)) 3)
-               (rontolisp::%clojure-io-response-p (car (cdr x))))
-          0
-          (let* ((state (rontolisp::%clojure-io-open-state x))
-                 (s (svref state 0)))
-            (cond ((rontolisp::%clojure-async-stream-p s)
-                   (let ((octets (svref state 1)))
-                     (if octets (- (length octets) (svref state 2)) 0)))
-                  (s (- (file-length s) (file-position s)))
-                  (t (- (length (svref state 1)) (svref state 2))))))))
+      ;; an HTTP client's own response stream answers 0 once closed: an arm a
+      ;; program that fetches nothing folds
+      (if (rontolisp::%clojure-io-response-p (car (cdr x)))
+          (if (svref (car (cdr x)) 3) 0 (rontolisp::%clojure-io-left x))
+          (rontolisp::%clojure-io-left x))))
+
+(defun rontolisp::%clojure-io-left (x)
+  "The octets left on the open byte stream X, no ByteArrayInputStream: of a
+   fetched reply's body, those of the chunk in hand."
+  (let* ((state (rontolisp::%clojure-io-open-state x)) (s (svref state 0)))
+    (cond ((rontolisp::%clojure-async-stream-p s)
+           (let ((octets (svref state 1)))
+             (if octets (- (length octets) (svref state 2)) 0)))
+          (s (- (file-length s) (file-position s)))
+          (t (- (length (svref state 1)) (svref state 2))))))
 
 (defun rontolisp::%clojure-io-skip (x n)
   "InputStream.skip: up to N octets of the byte stream X passed over, the count
@@ -18876,15 +18910,16 @@
 
 (defun rontolisp::%clojure-io-target (x for-write)
   "The path a stream over X opens: a File's, a string's (a string spelling a
-   file: URL is that URL), a file: URL's; nil for anything else. A URL of any
-   other protocol is refused: reading one is not built in, and FOR-WRITE
-   refuses it in the oracle's words."
+   URL is that URL, as the oracle's RT.toUrl reads one, any other a path), a
+   file: URL's; nil for anything else. A URL of any other protocol FOR-WRITE
+   refuses in the oracle's words; a read of one is refused by name -- an http:
+   or https: URL is read ahead of this (%clojure-io-remote-p) where the program
+   names rontolisp:fetch."
   (cond ((stringp x)
-         (let ((scheme (rontolisp::%clojure-io-scheme x)))
-           (if (and scheme (rontolisp::%clojure-io-url-protocol-p scheme))
-               (rontolisp::%clojure-io-target (rontolisp::%clojure-io-url-of x)
-                                              for-write)
-               x)))
+         (if (rontolisp::%clojure-io-url-spelling-p x)
+             (rontolisp::%clojure-io-target (rontolisp::%clojure-io-url-of x)
+                                            for-write)
+             x))
         ((and (consp x) (eq (car x) :C%FILE)) (car (cdr x)))
         ((and (consp x) (eq (car x) :C%URL))
          (let ((parts (rontolisp::%clojure-io-url-parts x)))
@@ -18895,6 +18930,13 @@
                   (rontolisp::%clojure-illegal-argument-exception
                    (concatenate 'string "Can not write to non-file URL <"
                                 (car (cdr x)) ">")))
+                 ((rontolisp::%clojure-io-one-of (car parts) '("http" "https"))
+                  (rontolisp::%clojure-unsupported-operation-exception
+                   (concatenate 'string "reading the " (car parts) ": URL "
+                                (car (cdr x)) " goes through rontolisp:fetch,"
+                                " which this program does not name: write the"
+                                " URL as a string literal in the form that"
+                                " reads it, or require rontolisp.http-urls")))
                  (t (rontolisp::%clojure-unsupported-operation-exception
                      (concatenate 'string "reading the " (car parts) ": URL "
                                   (car (cdr x)) " is not built in"))))))
@@ -18929,6 +18971,132 @@
   (if (and rontolisp::%clojure-io-resources (consp x) (eq (car x) :C%URL))
       (gethash (car (cdr x)) rontolisp::%clojure-io-resources)))
 
+;;;; http: and https: URLs, read through rontolisp:fetch
+;;;;
+;;;; A program reads one only where it names fetch, which every transport splice
+;;;; and the Preview 1 refusal read: one that spells such a URL as a string
+;;;; literal in the form a read opens, or requires rontolisp.http-urls, installs
+;;;; its own (lambda (url options) (rontolisp:fetch url options)) here before
+;;;; anything runs (clojure/ClojureIoLowering.installFetch). The read is
+;;;; java.net.HttpURLConnection's: a GET, a redirect followed to a URL of the
+;;;; same protocol, a reply of status 400 or more refused, the body a byte stream
+;;;; over the reply as it arrives (decoded by :encoding, never by the reply's
+;;;; charset, and never decompressed).
+
+(defvar rontolisp::%clojure-io-fetch nil)
+
+(defun rontolisp::%clojure-io-install-fetch (transport)
+  "Makes TRANSPORT, a call of the program's own rontolisp:fetch, what an http:
+   or https: URL is read through, and slurp and spit open a string spelling a
+   URL through clojure.java.io. Answers nil."
+  (setq rontolisp::%clojure-io-fetch transport)
+  nil)
+
+(defun rontolisp::%clojure-io-url-value (x)
+  "The URL a stream over X reads, or nil: a URL itself, a URI's, a string's
+   when it spells one, a host URL's or URI's."
+  (cond ((stringp x)
+         (if (rontolisp::%clojure-io-url-spelling-p x)
+             (rontolisp::%clojure-io-url-of x)))
+        ((and (consp x) (eq (car x) :C%URL)) x)
+        ((and (consp x) (eq (car x) :C%URI))
+         (rontolisp::%clojure-io-url-value (car (cdr x))))
+        ((consp x) nil)
+        (t (let ((v (rontolisp::%clojure-io-from-host x)))
+             (if (eq v x) nil (rontolisp::%clojure-io-url-value v))))))
+
+;; Whether X -- a URL, a URI or a string spelling one -- is an http: or https: URL
+;; the program reads through rontolisp:fetch. The arm test of the fetch family
+;; (clojure/ClojureArms) in every read that opens a URL: a program that fetches
+;; nothing folds it, and such a read refuses the URL by name.
+(defun rontolisp::%clojure-io-remote-p (x)
+  (if rontolisp::%clojure-io-fetch
+      (let ((u (rontolisp::%clojure-io-url-value x)))
+        (if u
+            (rontolisp::%clojure-io-one-of
+             (car (rontolisp::%clojure-io-url-parts u)) '("http" "https"))))))
+
+(defun rontolisp::%clojure-io-remote-input (x class)
+  "A byte stream of CLASS over the reply to a GET of the http: or https: URL X
+   (%clojure-io-remote-p), its body read as it arrives."
+  (list :C%INPUT-STREAM (vector (rontolisp::%clojure-io-remote-body
+                                 (getf (rontolisp::%clojure-io-remote-get
+                                        (car
+                                         (cdr
+                                          (rontolisp::%clojure-io-url-value
+                                           x)))) :body)) nil 0 nil class)))
+
+(defun rontolisp::%clojure-io-remote-body (body)
+  "The reply BODY as a stream of its chunks whose read signals a transfer that
+   fails as the oracle's IOException over the transport's words, where the
+   transport signals its own error. Closing it closes BODY."
+  (rontolisp::%stream-new (lambda ()
+                            (funcall
+                             (rontolisp:async-lambda ()
+                               (handler-case (rontolisp:await
+                                              (rontolisp:stream-read body))
+                                 (error (c)
+                                   (rontolisp::%clojure-io-exception
+                                    (princ-to-string c)))))))
+                          (lambda () (rontolisp:stream-close body))))
+
+(defun rontolisp::%clojure-io-remote-send (url)
+  "The reply to one GET of URL through the installed transport, asking for any
+   type and leaving the URL's fragment out, as the oracle's request does; a
+   transport failure is the oracle's IOException over the transport's words."
+  (let ((hash (position #\# url)))
+    (handler-case (rontolisp::%future-force
+                   (funcall rontolisp::%clojure-io-fetch
+                    (if hash (subseq url 0 hash) url)
+                    (list :method "GET" :headers (list (cons "Accept" "*/*")))))
+      (error (c) (rontolisp::%clojure-io-exception (princ-to-string c))))))
+
+(defun rontolisp::%clojure-io-remote-location (res url)
+  "Where the reply RES to a GET of URL redirects it, as
+   java.net.HttpURLConnection follows one: a 300, 301, 302, 303 or 307 whose
+   Location resolves to a URL of URL's protocol; nil for any other reply, a
+   redirect to another protocol (http to https too) and one with no Location.
+   A Location of a protocol java.net.URL knows nothing of is its
+   MalformedURLException, the reply's body closed first."
+  (if (member (getf res :status) '(300 301 302 303 307))
+      (let ((location
+             (cdr (assoc "location" (getf res :headers) :test #'string=))))
+        (if location
+            (let ((resolved (rontolisp::%clojure-http-resolve url location)))
+              (if (not (rontolisp::%clojure-io-url-spelling-p resolved))
+                  (rontolisp:stream-close (getf res :body)))
+              (let ((target (rontolisp::%clojure-io-url-of resolved)))
+                (if (string= (car (rontolisp::%clojure-io-url-parts target))
+                     (car (rontolisp::%clojure-io-url-parts (list :C%URL url))))
+                    (car (cdr target)))))))))
+
+(defun rontolisp::%clojure-io-remote-get (spec)
+  "The reply to a GET of the URL SPEC as java.net.HttpURLConnection reads one:
+   its redirects followed, the 20th the oracle's ProtocolException; a status of
+   400 or more refused, 404 and 410 as its FileNotFoundException of the URL
+   answering, any other as its IOException naming the code. The body of each
+   reply left behind is closed."
+  (let ((url spec) (hops 0))
+    (loop
+      (let* ((res (rontolisp::%clojure-io-remote-send url))
+             (status (getf res :status))
+             (next (rontolisp::%clojure-io-remote-location res url)))
+        (cond (next
+               (rontolisp:stream-close (getf res :body))
+               (setq hops (+ hops 1))
+               (if (>= hops 20)
+                   (rontolisp::%clojure-protocol-exception
+                    "Server redirected too many times (20)"))
+               (setq url next))
+              ((>= status 400)
+               (rontolisp:stream-close (getf res :body))
+               (if (or (= status 404) (= status 410))
+                   (rontolisp::%clojure-file-not-found-exception url)
+                   (rontolisp::%clojure-io-exception
+                    (concatenate 'string "Server returned HTTP response code: "
+                                 (princ-to-string status) " for URL: " url))))
+              (t (return res)))))))
+
 (defun rontolisp::%clojure-io-open-input (x)
   "make-input-stream of X: a byte stream over the file X names, over the text
    a resource carries, or X itself when it is one; nil for anything else."
@@ -18940,6 +19108,11 @@
            (rontolisp::%clojure-io-octets-input (car (cdr x))))
           (text (rontolisp::%clojure-io-octets-input
                  (coerce (rontolisp::%clojure-io-encode text :utf-8) 'vector)))
+          ;; an http: or https: URL, its reply as it arrives: an arm a program
+          ;; that fetches nothing folds
+          ((rontolisp::%clojure-io-remote-p x)
+           (rontolisp::%clojure-io-remote-input x
+                                                "java.io.BufferedInputStream"))
           (t (let ((path (rontolisp::%clojure-io-target x nil)))
                (if path
                    (rontolisp::%clojure-io-input
@@ -19119,6 +19292,13 @@
            (rontolisp::%clojure-io-decoded-reader
             (rontolisp::%clojure-io-octets-input (car (cdr x))) charset))
           (text (make-string-input-stream text))
+          ;; an http: or https: URL's reply, decoded in CHARSET whatever its own
+          ;; says: an arm a program that fetches nothing folds
+          ((rontolisp::%clojure-io-remote-p x)
+           (rontolisp::%clojure-io-decoded-reader
+            (rontolisp::%clojure-io-remote-input x
+                                                 "java.io.BufferedInputStream")
+            charset))
           (t
            (let ((path (rontolisp::%clojure-io-target x nil)))
              (cond ((null path) nil)
@@ -19381,6 +19561,11 @@
           '("java.io.BufferedInputStream" "java.io.FilterInputStream"
             "java.io.InputStream" "java.io.Closeable"
             "java.lang.AutoCloseable"))
+         ((equal class
+                 "sun.net.www.protocol.http.HttpURLConnection$HttpInputStream")
+          '("sun.net.www.protocol.http.HttpURLConnection$HttpInputStream"
+            "java.io.FilterInputStream" "java.io.InputStream"
+            "java.io.Closeable" "java.lang.AutoCloseable"))
          (t
           '("jdk.internal.net.http.ResponseSubscribers$HttpResponseInputStream"
             "java.io.InputStream" "java.io.Closeable" "java.lang.AutoCloseable"
@@ -19727,8 +19912,13 @@
   (car (cdr (rontolisp::%clojure-io-recv x :C%URL "toExternalForm" 0))))
 
 (defun rontolisp::%clojure-io-m-open-stream (x)
-  (rontolisp::%clojure-io-open-input
-   (rontolisp::%clojure-io-recv x :C%URL "openStream" 0)))
+  (let ((u (rontolisp::%clojure-io-recv x :C%URL "openStream" 0)))
+    ;; an http: or https: URL's stream is java.net.HttpURLConnection's own: an
+    ;; arm a program that fetches nothing folds
+    (if (rontolisp::%clojure-io-remote-p u)
+        (rontolisp::%clojure-io-remote-input u
+         "sun.net.www.protocol.http.HttpURLConnection$HttpInputStream")
+        (rontolisp::%clojure-io-open-input u))))
 
 ;; URI
 

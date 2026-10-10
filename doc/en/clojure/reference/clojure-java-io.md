@@ -63,8 +63,8 @@ a File) the namespace's streams.
 A URL keeps its spelling and answers `getProtocol`, `getHost`, `getPort`, `getPath`,
 `getFile`, `getQuery`, `getRef`, `getAuthority` and `getUserInfo` like `java.net.URL`; a
 spelling of no known protocol is the oracle's `java.net.MalformedURLException`. A `file:` URL
-opens its file. A URI answers `getScheme` and `getPath`, `toURL` its URL, and `uri?` is true
-of it. `class` of each answers its class's keyword (`:java.io.File`), and `instance?`, a
+opens its file, an `http:` or `https:` URL its reply ([HTTP URLs](#http-urls)). A URI answers
+`getScheme` and `getPath`, `toURL` its URL, and `uri?` is true of it. `class` of each answers its class's keyword (`:java.io.File`), and `instance?`, a
 multimethod on `class` and a protocol extended to the class take the value, its supers
 included (`java.io.InputStream` for a byte stream).
 
@@ -117,6 +117,50 @@ false).
 ; => [3 [104 -61 -87] [108 108 111 33]]
 ```
 
+## HTTP URLs
+
+An `http:` or `https:` URL -- a URL, a URI or a string spelling one -- is read through
+[`rontolisp:fetch`](../../guides/http-fetch.md) the way the oracle's
+`java.net.HttpURLConnection` reads it: `slurp`, `reader`, `input-stream` and a URL's
+`.openStream` send a GET, follow a redirect (300, 301, 302, 303, 307) to a URL of the same
+protocol, and refuse a reply of status 400 or more where the stream opens -- 404 and 410 as
+`java.io.FileNotFoundException` of the URL, any other as `java.io.IOException` naming the code;
+the 20th redirect is `java.net.ProtocolException`. The body is read as it arrives, decoded in
+`:encoding` (UTF-8 by default) whatever charset the reply names, and never decompressed.
+`input-stream` answers a `java.io.BufferedInputStream` over it, `.openStream` the connection's
+own stream. Writing to one is refused in the oracle's words.
+
+A program reads such a URL when it writes one as a string literal in the form a read opens --
+`(slurp "https://...")`, `(io/reader (str "https://" host path))`,
+`(.openStream (io/as-url "https://..."))` -- or when it requires `rontolisp.http-urls`, a
+namespace that defines nothing. Either makes the program use fetch from its start, so its target
+must carry fetch (the targets of the [HTTP client](http-client.md)): a Preview 1 module, and a
+`--no-wasi` one without `--host-fetch`, is refused when it compiles. In any other program,
+reading an `http:` URL is an `UnsupportedOperationException` naming both ways in; such a program
+uses no fetch, so a component reading only files imports no `wasi:http`.
+
+```clojure
+;; a URL written where it is read: the program reads it through rontolisp:fetch
+(println (subs (slurp "https://httpbin.ik.am/get") 0 1))
+(println (try (slurp "https://httpbin.ik.am/status/404")
+              (catch java.io.FileNotFoundException e :not-found)))
+```
+
+```
+{
+:not-found
+```
+
+A URL the program computes is read once it requires the namespace:
+
+```console
+$ cat get.clj
+(ns get (:require [rontolisp.http-urls]))
+(println (subs (slurp (first *command-line-args*)) 0 15))
+$ rontolisp get.clj -- https://example.com/
+<!doctype html>
+```
+
 ## Resources
 
 `resource` looks a name up on the source path -- the roots of the program's project and of its
@@ -164,12 +208,20 @@ replaced.
 - `.hashCode` of a URL or a URI is its spelling's `String.hashCode`, where the oracle hashes
   its parts, and two are `=` when their spellings are, where `java.net.URL` compares resolved
   hosts. A File's `.hashCode` is the oracle's.
-- Reading a URL of another protocol than `file:` is refused by name, but for a `jar:` URL
+- An `http:` or `https:` URL is read only by a program that uses fetch for it
+  ([HTTP URLs](#http-urls)), where the oracle reads one in any program. Reading a URL of
+  another protocol than `file:`, `http:` and `https:` is refused by name, but for a `jar:` URL
   `resource` answered; the oracle opens a connection.
+- Reading an `http:` URL, a transport failure is a `java.io.IOException` carrying the
+  transport's message (the oracle's `java.net.ConnectException` and `UnknownHostException` are
+  ones); a 305 reply is not followed (the oracle retries through the proxy it names); the
+  request carries fetch's `User-Agent`; a reply that is not well-formed UTF-8 is decoded as
+  `rontolisp:read-all` decodes it, where the oracle puts U+FFFD for each malformed sequence; and
+  `.available` answers what has arrived, 0 before the first read.
 - `:encoding` knows three charsets, where the oracle knows the JDK's.
 - `input-stream` and `output-stream` answer a `ByteArrayInputStream` or a
   `ByteArrayOutputStream` itself, where the oracle wraps it in a buffered stream, and a
-  stream over a file keeps no `mark`.
+  stream over a file or an `http:` URL keeps no `mark`.
 - `resource` finds a name the program computes below the source path's directories only, not
   inside a jar, and never consults a class loader given.
 - `(java.net.URL. s)` and `(java.net.URI. s)` construct host objects (the interpreter and the

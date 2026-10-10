@@ -8,14 +8,17 @@
 # babashka.http-client 0.4.23 required as `http` against the same origin (2026-10-08),
 # and differs from it only where a comment says so: the response map has no :version
 # (no transport here reports one), and a transport failure is an IOException carrying
-# the transport's message (the oracle's ConnectException is one).
+# the transport's message (the oracle's ConnectException is one). The last cases read an
+# http: URL through clojure.java.io, whose transport is the same fetch
+# (rontolisp.http-urls), diffed against clj 1.12.6's own clojure.java.io.
 #
 # The origin's endpoints beyond fetch-spec.yaml's: /headers (the request's header
 # fields as {name=[values]}, sorted, without host, connection, content-length,
 # user-agent and transfer-encoding), /query (the raw query), /form ("<content-type>|<body>"),
 # /status/500, /status/308 (to /hello), /redirect-post and /redirect-307 (302 and 307 to
 # /echo), /redirect-303 (303 to the relative "echo"), /loop (302 to /loop?<n+1>, body
-# "hop <n>"), /no-location (302 without a Location), /lines (two lines of UTF-8 text), and
+# "hop <n>"), /no-location (302 without a Location), /redirect-https (302 to /hello
+# spelled https:), /lines (two lines of UTF-8 text), and
 # /lines' text compressed: /gzip, /gzip-upper (the coding spelled GZIP), /deflate (zlib),
 # /deflate-raw (raw DEFLATE under "deflate"), /gzip-twice (two members, "one " and "two"),
 # /gzip-404 ("missing" with a 404), /br (seven plain octets claiming br), and replies the
@@ -564,3 +567,81 @@ cases:
     expected: |
       "rontolisp.http-client: :timeout is not supported: rontolisp:fetch has no timeout yet"
       "No matching clause: :json"
+  - name: clojure-java-io-reads-an-http-url-through-fetch
+    # clojure.java.io's reads of an http: URL (rontolisp.http-urls makes the program's
+    # fetch their transport) are java.net.HttpURLConnection's, diffed against clj
+    # 1.12.6's own clojure.java.io (2026-10-10): the body decoded by :encoding (UTF-8
+    # by default) whatever its charset, io/input-stream a BufferedInputStream over
+    # the stream openStream answers.
+    source: |
+      (require 'rontolisp.http-urls)
+      (prn (slurp (url "/lines")))
+      (prn (count (slurp (io/as-url (url "/lines")) :encoding "ISO-8859-1")))
+      (prn (vec (line-seq (io/reader (url "/lines")))))
+      (with-open [in (io/input-stream (url "/octets"))]
+        (prn [(instance? java.io.BufferedInputStream in)
+              (loop [acc []] (let [b (.read in)] (if (neg? b) acc (recur (conj acc b)))))]))
+      (with-open [in (.openStream (io/as-url (url "/octets")))]
+        (prn [(instance? java.io.BufferedInputStream in) (instance? java.io.FilterInputStream in)
+              (vec (.readAllBytes in))]))
+      (let [f (io/file "@SCRATCH@" "url.bin")]
+        (io/copy (io/input-stream (url "/big")) f)
+        (prn (.length f)))
+      (prn (slurp (url "/status/204")))
+    expected: |
+      "héllo, 世界\nsecond line\n"
+      27
+      ["héllo, 世界" "second line"]
+      [true [255 254 65 0 128 127]]
+      [false true [-1 -2 65 0 -128 127]]
+      300000
+      ""
+  - name: an-http-url-read-follows-and-refuses-what-http-url-connection-does
+    # a redirect to a URL of the same protocol is followed -- not a 308, not one to
+    # https -- the 20th refused; a status of 400 or more is refused, 404 and 410 as
+    # FileNotFoundException of the URL, any other naming its code, where the stream
+    # opens
+    source: |
+      (defn read-url [p]
+        (try (slurp (url p))
+             (catch java.io.FileNotFoundException e [:not-found (subs (ex-message e) (count origin))])
+             (catch java.net.ProtocolException e [:protocol (ex-message e)])
+             (catch java.io.IOException e [:io (clojure.string/replace (ex-message e) origin "")])))
+      (doseq [p ["/redirect" "/redirect-303" "/redirect-307" "/status/308" "/redirect-https"
+                 "/no-location" "/loop" "/status/404" "/status/500"]]
+        (prn (read-url p)))
+      (prn (try (io/input-stream (url "/status/404")) (catch java.io.FileNotFoundException e :not-found)))
+      (prn (try (.openStream (io/as-url (url "/status/500"))) (catch java.io.IOException e :io)))
+    expected: |
+      "hello-from-fetch"
+      "GET:"
+      "GET:"
+      "moved"
+      "moved"
+      "nowhere"
+      [:protocol "Server redirected too many times (20)"]
+      [:not-found "/status/404"]
+      [:io "Server returned HTTP response code: 500 for URL: /status/500"]
+      :not-found
+      :io
+  - name: an-http-url-stream-closes-and-fails-in-its-classs-words
+    # a transport failure is an IOException carrying the transport's message (the
+    # oracle's are a ConnectException and "Premature EOF", IOExceptions both)
+    source: |
+      (let [in (io/input-stream (url "/hello"))]
+        (.close in)
+        (prn (try (.read in) (catch java.io.IOException e (ex-message e)))))
+      (let [in (.openStream (io/as-url (url "/hello")))]
+        (.close in)
+        (prn (try (.read in) (catch java.io.IOException e (ex-message e))))
+        (prn (.available in)))
+      (prn (try (slurp "http://127.0.0.1:1/refused") (catch java.io.IOException e :io)))
+      (prn (try (slurp (url "/cut-short")) (catch java.io.IOException e :io)))
+      (prn (try (spit (url "/echo") "x") (catch IllegalArgumentException e (subs (ex-message e) 0 31))))
+    expected: |
+      "Stream closed"
+      "stream is closed"
+      0
+      :io
+      :io
+      "Can not write to non-file URL <"

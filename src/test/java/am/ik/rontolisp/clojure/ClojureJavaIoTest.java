@@ -191,19 +191,21 @@ class ClojureJavaIoTest {
 	}
 
 	/**
-	 * A URL of another protocol than {@code file:} names no file: reading one is refused
-	 * by name (the oracle opens a connection), writing one in the oracle's words.
+	 * A URL of another protocol than {@code file:}, {@code http:} and {@code https:}
+	 * names nothing a read takes: reading one is refused by name (the oracle opens a
+	 * connection), writing one -- an {@code https:} one too -- in the oracle's words. An
+	 * {@code http:} read is {@code ClojureHttpUrlsTest}'s.
 	 */
 	private static final String NON_FILE_URL = """
 			(require '[clojure.java.io :as io])
-			(prn (try (slurp (io/as-url "http://example.invalid/x")) (catch UnsupportedOperationException e (ex-message e))))
+			(prn (try (slurp (io/as-url "ftp://example.invalid/x")) (catch UnsupportedOperationException e (ex-message e))))
 			(prn (try (io/writer "https://example.invalid/y") (catch IllegalArgumentException e (ex-message e))))
 			""";
 
 	@Test
 	void aUrlOfAnotherProtocolThanFileIsRefused() throws Exception {
 		String out = """
-				"reading the http: URL http://example.invalid/x is not built in"
+				"reading the ftp: URL ftp://example.invalid/x is not built in"
 				"Can not write to non-file URL <https://example.invalid/y>"
 				""";
 		assertThat(interpret(NON_FILE_URL, null)).isEqualTo(out);

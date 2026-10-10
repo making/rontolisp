@@ -458,6 +458,9 @@ defined below it.
 fetch, and a target without one refuses the program when it compiles
 ([HTTP client](reference/http-client.md)). Its future under `:async true` is a rontolisp
 future: `deref` waits for it through the same mechanism as `rontolisp:await`.
+`clojure.java.io` reads an `http:` or `https:` URL through the same fetch, in a program that
+writes one where it reads it or requires `rontolisp.http-urls`
+([HTTP URLs](reference/clojure-java-io.md#http-urls)).
 
 ## Not yet
 
@@ -480,7 +483,7 @@ Each refusal names the missing design, never `unknown name`:
 | `&form`/`&env` in `defmacro` parameters | by name | macros receive no compilation environment |
 | `::alias/kw` with an unknown alias | `Invalid token: ...` | only required aliases, the file's own ns and known namespaces resolve |
 | `--no-gc` builds | by name | that backend has no pairs, symbols or closures |
-| reading an `http:` (or any other non-`file:`) URL | `reading the http: URL ... is not built in` | no connection runtime behind `clojure.java.io`; [rontolisp.http-client](reference/http-client.md) fetches |
+| reading a URL of another protocol than `file:`, `http:` and `https:` (`ftp:` ...) | `reading the ftp: URL ... is not built in` | no connection runtime behind `clojure.java.io` for it; an `http:` URL is read through `rontolisp:fetch` ([HTTP URLs](reference/clojure-java-io.md#http-urls)) |
 | `with-redefs` of a `clojure.core` var, a macro, a multimethod or protocol method; in the REPL, of a `defn` an earlier input defined without `^:redef` | `with-redefs of ... is not supported...`, `... define it ^:redef to redefine it` | core verbs lower inline; only a `def`/`defn`/`declare` var has a root to replace, and a REPL input already ran with direct calls |
 | an asynchronous Ring handler (`run-server` with `:async? true`) | `asynchronous handlers (:async? true) are not supported` | no respond/raise protocol under the transports |
 | `:async` on a `rontolisp.wasm` declaration, an `async func` WIT member or export | `:async is not supported yet ...`, `... is an async func ...` | the future a suspending crossing answers is no Clojure future |

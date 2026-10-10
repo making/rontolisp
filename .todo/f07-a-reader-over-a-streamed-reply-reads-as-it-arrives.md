@@ -27,6 +27,13 @@ NDJSON, a log tail) line by line. Here (2026-10-09):
   (`.readLine`, `.read`, `.ready`, `line-seq`, `slurp`) the io kernels dispatch.
 - `line-seq` lazy over such a reader, as the oracle's `lazy-seq` of `.readLine`, without a cost
   on the strict file path.
+- The same decoder serves `slurp` of a reply: `%clojure-io-text-of` decodes UTF-8 through
+  `%octets-to-string` (`read-all`'s lenient rule) for the client's `:as :stream` body and, since
+  e84, an `http:` URL clojure.java.io reads, where the oracle's `InputStreamReader` puts U+FFFD per
+  malformed sequence (measured 2026-10-10: a Latin-1 `héllo` reply read as UTF-8 is `h鬬o` here,
+  `h�llo` there; 300,000 octets of `i % 251` count 262,955 characters here, 300,000 there).
+  The Lisp JDK-replacement decoder (`%clojure-octets-text`) would answer the oracle's text; its
+  cost over a large body is unmeasured, against the native `%octets-to-string`.
 - `RontoFetch` streaming the reply (a publisher queuing a packed vector a batch, like the
   interpreter's `BodyPump`), and what that costs a whole-body `read-all`.
 

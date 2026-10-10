@@ -62,8 +62,9 @@ File はそのパスで、Unix の `java.io.File` と同じく正規化されま
 
 URL は綴りを保ち、`getProtocol`、`getHost`、`getPort`、`getPath`、`getFile`、`getQuery`、
 `getRef`、`getAuthority`、`getUserInfo` に `java.net.URL` と同じく答えます。知られていない
-プロトコルの綴りはオラクルの `java.net.MalformedURLException` です。`file:` URL はそのファイルを
-開きます。URI は `getScheme` と `getPath` に答え、`toURL` はその URL を返し、`uri?` は true です。
+プロトコルの綴りはオラクルの `java.net.MalformedURLException` です。`file:` URL はそのファイルを、
+`http:` と `https:` の URL はその応答を開きます（[HTTP の URL](#http-urls)）。URI は `getScheme` と
+`getPath` に答え、`toURL` はその URL を返し、`uri?` は true です。
 どれも `class` はそのクラスのキーワード（`:java.io.File`）を返し、`instance?`、`class` で振り分ける
 マルチメソッド、そのクラスに拡張したプロトコルは、上位型も含めて値を受け付けます（バイトストリーム
 なら `java.io.InputStream`）。
@@ -117,6 +118,51 @@ URL は綴りを保ち、`getProtocol`、`getHost`、`getPort`、`getPath`、`ge
 ; => [3 [104 -61 -87] [108 108 111 33]]
 ```
 
+## HTTP の URL
+
+`http:` と `https:` の URL（URL、URI、URL を綴った文字列）は、オラクルの
+`java.net.HttpURLConnection` と同じように [`rontolisp:fetch`](../../guides/http-fetch.md) で
+読みます。`slurp`、`reader`、`input-stream` と URL の `.openStream` は GET を送り、同じ
+プロトコルの URL へのリダイレクト（300、301、302、303、307）をたどり、ステータスが 400 以上の
+応答をストリームを開く時点で拒否します。404 と 410 は URL を示す
+`java.io.FileNotFoundException`、それ以外はコードを示す `java.io.IOException` で、20 回目の
+リダイレクトは `java.net.ProtocolException` です。ボディは届いた分から読み、応答が示す文字
+セットではなく `:encoding`（既定は UTF-8）で復号し、伸張はしません。`input-stream` はその上の
+`java.io.BufferedInputStream` を、`.openStream` は接続自身のストリームを返します。書き込みは
+オラクルと同じ文言で拒否します。
+
+プログラムがこの URL を読むのは、読み取りが開く式の中に URL を文字列リテラルで書いたとき
+（`(slurp "https://...")`、`(io/reader (str "https://" host path))`、
+`(.openStream (io/as-url "https://..."))`）か、何も定義しない名前空間 `rontolisp.http-urls` を
+`require` したときです。どちらの場合もプログラムは開始時から fetch を使うので、ターゲットには
+fetch が必要です（[HTTP クライアント](http-client.md)のターゲット）。素の Preview 1 モジュールと、
+`--host-fetch` なしの `--no-wasi` モジュールは、コンパイルの時点で拒否されます。それ以外の
+プログラムでは、`http:` URL の読み取りは 2 つの方法を示す `UnsupportedOperationException` です。
+このプログラムは fetch を使わないので、ファイルだけを読むコンポーネントは `wasi:http` を
+インポートしません。
+
+```clojure
+;; a URL written where it is read: the program reads it through rontolisp:fetch
+(println (subs (slurp "https://httpbin.ik.am/get") 0 1))
+(println (try (slurp "https://httpbin.ik.am/status/404")
+              (catch java.io.FileNotFoundException e :not-found)))
+```
+
+```
+{
+:not-found
+```
+
+プログラムが計算した URL は、この名前空間を `require` すれば読めます。
+
+```console
+$ cat get.clj
+(ns get (:require [rontolisp.http-urls]))
+(println (subs (slurp (first *command-line-args*)) 0 15))
+$ rontolisp get.clj -- https://example.com/
+<!doctype html>
+```
+
 ## リソース
 
 `resource` は名前をソースパス（プログラムのプロジェクトと依存先のルート。ディレクトリと jar。
@@ -164,12 +210,20 @@ $ rontolisp src/app/main.clj        # deps.edn holds {:paths ["src" "resources"]
 - URL と URI の `.hashCode` は綴りの `String.hashCode` で、オラクルは構成要素からハッシュを
   作ります。綴りが同じ 2 つは `=` で、`java.net.URL` は解決したホストを比べます。File の
   `.hashCode` はオラクルと同じです。
-- `file:` 以外のプロトコルの URL の読み取りは、名前を挙げて拒否します（`resource` が返した
+- `http:` と `https:` の URL を読むのは、そのために fetch を使うプログラムだけです
+  （[HTTP の URL](#http-urls)）。オラクルはどのプログラムでも読みます。`file:`、`http:`、
+  `https:` 以外のプロトコルの URL の読み取りは、名前を挙げて拒否します（`resource` が返した
   `jar:` URL は除きます）。オラクルは接続を開きます。
+- `http:` URL の読み取りでは、トランスポートの失敗はトランスポートのメッセージを持つ
+  `java.io.IOException` です（オラクルの `java.net.ConnectException` と
+  `UnknownHostException` はその一種です）。305 の応答はたどりません（オラクルは応答が示す
+  プロキシを通して送り直します）。リクエストには fetch の `User-Agent` が付きます。UTF-8 と
+  して正しくない応答は `rontolisp:read-all` と同じように復号し、オラクルは不正な並びごとに
+  U+FFFD を置きます。`.available` は届いた分を答え、最初の読み取りの前は 0 です。
 - `:encoding` が知る文字セットは 3 つで、オラクルは JDK のものを知っています。
 - `input-stream` と `output-stream` は `ByteArrayInputStream` と `ByteArrayOutputStream` を
-  そのまま返し、オラクルはバッファ付きストリームで包みます。ファイルの上のストリームは
-  `mark` の位置を保持しません。
+  そのまま返し、オラクルはバッファ付きストリームで包みます。ファイルや `http:` URL の上の
+  ストリームは `mark` の位置を保持しません。
 - `resource` は、プログラムが計算した名前をソースパスのディレクトリの下だけで探し、jar の中は
   探しません。渡されたクラスローダーは参照しません。
 - `(java.net.URL. s)` と `(java.net.URI. s)` はホストオブジェクトを作ります（インタプリタと

@@ -1330,6 +1330,22 @@ public final class ClojureLowering {
 	boolean stmEmitted;
 
 	/**
+	 * Whether the program reads {@code http:} and {@code https:} URLs through
+	 * {@code rontolisp:fetch}: it spells one in a form a read opens ({@link #readsUrlOf})
+	 * or loads {@code rontolisp.http-urls}. Its fetch is then installed as their
+	 * transport before anything runs, behind the false binding
+	 * ({@link ClojureIoLowering#installFetch}); any other program names no fetch, which
+	 * every transport splice and the Preview 1 refusal read, and refuses such a read by
+	 * name.
+	 */
+	boolean readsHttpUrls;
+
+	/**
+	 * Whether a session's buffer already installed the fetch the URLs are read through.
+	 */
+	boolean httpUrlsEmitted;
+
+	/**
 	 * The {@code clojure.core} specials the program reads, binds, assigns or takes the
 	 * var of: their definitions (a flag's root, a counter) are spliced in once, behind
 	 * the false binding ({@link ClojureCoreSpecials#definitions}).
@@ -1539,6 +1555,11 @@ public final class ClojureLowering {
 		if (lowering.usedStm) {
 			// the STM runtime runs before anything else, like the false value
 			lowering.forms.addAll(1, ClojureStateLowering.stmRuntime(lowering));
+		}
+		if (lowering.readsHttpUrls) {
+			// the fetch an http: or https: URL is read through is in place before
+			// anything reads one, like the false value
+			lowering.forms.add(1, ClojureIoLowering.installFetch());
 		}
 		if (!lowering.usedSpecials.isEmpty()) {
 			// the specials are special before anything binds them
@@ -1829,6 +1850,12 @@ public final class ClojureLowering {
 			// it, like the false binding; later buffers reuse it.
 			out.add(0, new ClojureTopLevel(ClojureStateLowering.stmRuntime(this), false));
 			this.stmEmitted = true;
+		}
+		if (this.readsHttpUrls && !this.httpUrlsEmitted) {
+			// The fetch an http: or https: URL is read through is installed ahead of
+			// the buffer that first reads one, like the false binding.
+			out.add(0, new ClojureTopLevel(List.of(ClojureIoLowering.installFetch()), false));
+			this.httpUrlsEmitted = true;
 		}
 		// a run-time read asks the data readers first
 		List<LispVal> rootLoaded = ClojureDataReaders.noteRuntimeReads(this);
@@ -2342,6 +2369,21 @@ public final class ClojureLowering {
 		LispVal init = requireCall(unit, LoadMode.GUARDED);
 		if (init != null) {
 			this.hoisted.add(init);
+		}
+	}
+
+	/**
+	 * Marks the program as one that reads an {@code http:} or {@code https:} URL
+	 * ({@link #readsHttpUrls}) where a read opens a form spelling one: a string literal
+	 * spelling such a URL inside it ({@link ClojureIoLowering#spellsHttpUrl}), the first
+	 * argument of {@code slurp}, of {@code clojure.java.io}'s {@code reader} and
+	 * {@code input-stream} ({@link ClojureIoLowering#readCall}) or the receiver of
+	 * {@code .openStream}.
+	 * @param opened the form the read opens, as read
+	 */
+	void readsUrlOf(LispVal opened) {
+		if (!this.readsHttpUrls && ClojureIoLowering.spellsHttpUrl(opened)) {
+			this.readsHttpUrls = true;
 		}
 	}
 
@@ -3962,6 +4004,8 @@ public final class ClojureLowering {
 		if (resource != null) {
 			return resource;
 		}
+		// a read of an http: or https: URL the program spells names fetch
+		ClojureIoLowering.readCall(this, name, items);
 		List<LispVal> args = new ArrayList<>();
 		for (int i = 1; i < items.size(); i++) {
 			args.add(lower(items.get(i)));
@@ -4345,6 +4389,7 @@ public final class ClojureLowering {
 				return ClojureStringLowering.spitOf(this, items);
 			case "slurp":
 				ClojureLowerUtil.isTrue(n >= 1, "slurp takes a path and options");
+				readsUrlOf(items.get(1));
 				if (n > 1) {
 					return ClojureIoLowering.slurpWithOptions(this, items);
 				}

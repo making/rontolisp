@@ -15,7 +15,8 @@ has:
 | Native executable | `--native` | the executable's own client |
 
 A plain Preview 1 module, and a `--no-wasi` one without `--host-fetch`, has no transport: the
-compile refuses the program, naming the flags that give it one.
+compile refuses the program, naming the flags that give it one. `clojure.java.io` reads an
+`http:` URL through the same fetch ([HTTP URLs](clojure-java-io.md#http-urls)).
 
 ```clojure
 (ns example (:require [rontolisp.http-client :as http]))

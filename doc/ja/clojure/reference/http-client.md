@@ -16,6 +16,7 @@
 
 素の Preview 1 モジュールと、`--host-fetch` なしの `--no-wasi` モジュールにはトランスポートが
 ありません。コンパイルはそのプログラムを拒否し、トランスポートを与えるフラグを示します。
+`clojure.java.io` も同じ fetch で `http:` URL を読みます（[HTTP の URL](clojure-java-io.md#http-urls)）。
 
 ```clojure
 (ns example (:require [rontolisp.http-client :as http]))

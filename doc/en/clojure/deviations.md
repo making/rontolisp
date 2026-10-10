@@ -413,9 +413,9 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   is `=` to one made here but prints as the host object and is another map key).
 - `clojure.java.io`'s `java.io.File`, `java.net.URL`, `java.net.URI` and byte streams are
   values of this front end's own on every backend; [clojure.java.io](reference/clojure-java-io.md)
-  lists the differences (three charsets, no connection behind an `http:` URL, a resource
-  found on the source path rather than the class path, WASM's directories, a byte-array
-  stream `input-stream` answers unwrapped).
+  lists the differences (three charsets, an `http:` URL read only by a program that uses
+  `rontolisp:fetch` for it, a resource found on the source path rather than the class path,
+  WASM's directories, a byte-array stream `input-stream` answers unwrapped).
 - A data reader runs as the program compiles, so its answer in source loses its metadata
   and needs a spelling here: a function, a deftype instance and a host object other than a
   UUID or Date are `Can't embed object in code`, where the oracle compiles one its

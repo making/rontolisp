@@ -398,8 +398,9 @@
   [インスタントと UUID](reference/instants.md) にあります。
 - `clojure.java.io` の `java.io.File`、`java.net.URL`、`java.net.URI`、バイトストリームは、
   すべてのバックエンドでこのフロントエンド自身の値です。違い（文字セットは 3 つ、`http:` URL
-  の背後に接続がない、リソースはクラスパスではなくソースパスで見つける、WASM のディレクトリ、
-  `input-stream` がバイト配列のストリームを包まずに返す）は
+  を読むのはそのために `rontolisp:fetch` を使うプログラムだけ、リソースはクラスパスではなく
+  ソースパスで見つける、WASM のディレクトリ、`input-stream` がバイト配列のストリームを包まずに
+  返す）は
   [clojure.java.io](reference/clojure-java-io.md) にあります。
 - データリーダはプログラムのコンパイル時に動くので、ソースでの答えはメタデータを失い、ここで
   綴れる値でなければなりません。関数、deftype のインスタンス、UUID・Date 以外のホストの

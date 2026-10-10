@@ -29,7 +29,7 @@ interop エントリのすべてを、分野ごとにまとめています。**�
 | [clojure.core.reducers](reference/clojure-core-reducers.md) | レデューサーとフォルダー: 畳み込み可能なビューとしての `map`/`filter`/`mapcat`/`take` など、部分ごとの `fold`、`foldcat`/`cat`/`append!`、`monoid` |
 | [clojure.edn](reference/clojure-edn.md) | EDN データの読み取り: `:eof`・`:readers`・`:default` を取る `read-string`/`read` |
 | [clojure.instant](reference/clojure-instant.md) | RFC 3339 タイムスタンプの読み取り: `parse-timestamp`、`validated`、`read-instant-date`/`-timestamp`/`-calendar` |
-| [clojure.java.io](reference/clojure-java-io.md) | ファイル、URL と、その上のストリーム: `file`、`reader`/`writer`、`input-stream`/`output-stream`、`copy`、`resource`、`Coercions`/`IOFactory` プロトコル |
+| [clojure.java.io](reference/clojure-java-io.md) | ファイル、URL と、その上のストリーム: `file`、`reader`/`writer`、`input-stream`/`output-stream`、`copy`、`resource`、`Coercions`/`IOFactory` プロトコル、`rontolisp:fetch` で読む `http:` URL |
 | [clojure.math](reference/clojure-math.md) | どのバックエンドでも同じビットを返す double の関数、丸めと隣の double、オーバーフローを拒否する long の算術 |
 | [clojure.pprint](reference/clojure-pprint.md) | プリティプリント: 右マージンの内側にレイアウトする `pprint`/`write`、`print-table`、コード用の `code-dispatch`、プログラムが拡張・置換できるディスパッチ |
 | [clojure.stacktrace](reference/clojure-stacktrace.md) | スロー可能オブジェクトとその原因の出力: `root-cause`、`print-throwable`、`print-stack-trace`、`print-cause-trace` |

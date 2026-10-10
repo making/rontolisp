@@ -619,6 +619,9 @@ final class ClojureNamespaceLowering {
 				throw new LispReadException(hostOnly);
 			}
 			ctx.builtinNamespaces.add(ns);
+			// rontolisp.http-urls defines nothing: its load is the program's choice to
+			// read http: and https: URLs through its fetch
+			ctx.readsHttpUrls |= ns.equals(ClojureIoLowering.HTTP_URLS);
 		}
 		ctx.loadFile(ns, found);
 		ctx.emitNamespaceInit(ns);

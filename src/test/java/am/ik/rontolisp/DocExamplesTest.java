@@ -157,12 +157,15 @@ class DocExamplesTest {
 
 	/**
 	 * If an example uses {@code rontolisp:fetch} -- or Clojure's
-	 * {@code rontolisp.http-client}, which sends through it -- rewrites the origin of its
-	 * http(s) URL string literals to the local test server (keeping the path) so
-	 * evaluation stays offline; otherwise returns the source unchanged.
+	 * {@code rontolisp.http-client} and {@code rontolisp.http-urls}, which go through it;
+	 * a Clojure example reading a URL it spells says so in a comment naming fetch --
+	 * rewrites the origin of its http(s) URL string literals to the local test server
+	 * (keeping the path) so evaluation stays offline; otherwise returns the source
+	 * unchanged.
 	 */
 	private static String rewriteFetchUrls(String source) {
-		if (!source.contains("rontolisp:fetch") && !source.contains("rontolisp.http-client")) {
+		if (!source.contains("rontolisp:fetch") && !source.contains("rontolisp.http-client")
+				&& !source.contains("rontolisp.http-urls")) {
 			return source;
 		}
 		return source.replaceAll("(?<=\")https?://[^\"/]*", Matcher.quoteReplacement(localFetchOrigin()));

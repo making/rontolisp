@@ -278,6 +278,10 @@ final class ClojureInteropLowering {
 			}
 			ClojureLowerUtil.isTrue(name.length() > 1, "a method call needs a method name");
 			ClojureLowerUtil.isTrue(items.size() >= 2, name + " takes a target and arguments");
+			if (name.equals(".openStream")) {
+				// a read of an http: or https: URL the program spells names fetch
+				ctx.readsUrlOf(items.get(1));
+			}
 			return instanceCall(ctx, ctx.lower(items.get(1)), name.substring(1), items.subList(2, items.size()));
 		}
 		if (name.endsWith(".") && name.length() > 1 && isClassSpelling(name.substring(0, name.length() - 1))) {

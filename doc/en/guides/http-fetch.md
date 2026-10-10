@@ -18,7 +18,8 @@ assumes; here we cover only what is particular to making requests.
 
 A Clojure program sends its requests through
 [`rontolisp.http-client`](../clojure/reference/http-client.md), babashka.http-client's API
-over this same `fetch`.
+over this same `fetch`, and reads an `http:` URL's body through it with `slurp` and
+[clojure.java.io](../clojure/reference/clojure-java-io.md#http-urls).
 
 > **Backend support.** The interpreter and JVM-compiled classes use the JDK
 > `java.net.http.HttpClient`; the request runs on a background thread from the

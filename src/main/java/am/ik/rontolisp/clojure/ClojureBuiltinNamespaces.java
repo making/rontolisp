@@ -33,7 +33,9 @@ final class ClojureBuiltinNamespaces {
 	/**
 	 * The shipped namespaces, each with the public vars of the oracle's namespace
 	 * (ring-core 1.15.5, ring-codec 1.3.0, clj 1.12.6; babashka.http-client 0.4.23 for
-	 * {@code rontolisp.http-client}, which has its API) it leaves out and why.
+	 * {@code rontolisp.http-client}, which has its API) it leaves out and why;
+	 * {@code rontolisp.http-urls} defines no var: its load is the program's choice to
+	 * read {@code http:} URLs through its fetch ({@link ClojureLowering#readsHttpUrls}).
 	 */
 	private static final Map<String, Map<String, String>> SHIPPED = Map.ofEntries(
 			Map.entry("ring.util.response", Map.of()), Map.entry("ring.util.request", Map.of()),
@@ -54,7 +56,8 @@ final class ClojureBuiltinNamespaces {
 			Map.entry("clojure.math", Map.of()), Map.entry("clojure.java.io", Map.of()),
 			Map.entry("clojure.repl", replLeftOut()), Map.entry("clojure.main", mainLeftOut()),
 			Map.entry("clojure.java.shell", Map.of()), Map.entry("clojure.xml", xmlLeftOut()),
-			Map.entry("clojure.pprint", Map.of()), Map.entry("rontolisp.http-client", httpClientLeftOut()));
+			Map.entry("clojure.pprint", Map.of()), Map.entry("rontolisp.http-client", httpClientLeftOut()),
+			Map.entry(ClojureIoLowering.HTTP_URLS, Map.of()));
 
 	/**
 	 * The public vars of babashka.http-client 0.4.23 that {@code rontolisp.http-client}

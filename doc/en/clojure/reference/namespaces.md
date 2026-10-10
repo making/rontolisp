@@ -48,3 +48,4 @@ source path like any other; any other namespace of Clojure's own is an error.
 | `ring.adapter.rontolisp` | [Ring adapter](ring.md) |
 | `ring.util.*`, `ring.middleware.*` | [Ring utilities](ring-util.md) |
 | `rontolisp.http-client` | [HTTP client](http-client.md) |
+| `rontolisp.http-urls` (no vars: `clojure.java.io` reads `http:` URLs through `rontolisp:fetch`) | [HTTP URLs](clojure-java-io.md#http-urls) |
