@@ -88,12 +88,11 @@ tcp-socket-bind of wasi:sockets/types@0.3.0 answered its error arm
 :invalid-state
 ```
 
-A `list<u8>` crosses a component, and a provider, as its octets, both ways. A WASM core
-module carries one as `string`, so there a byte array goes to the host as the text its octets
-decode to as UTF-8, and the host's text comes back as its UTF-8 encoding: octets that are not
-valid UTF-8 do not cross a core module exact. A Common Lisp provider's string arrives as its UTF-8
-encoding, and a Common Lisp caller of a Clojure provider gets the octets as an
-`(unsigned-byte 8)` vector.
+A `list<u8>` crosses as its octets, both ways, on every target: a component, a provider, and a
+WASM core module, whose glue (`--emit-js-glue`) hands the host a `Uint8Array` and takes one back
+(text as its UTF-8 encoding). Octets that are not valid UTF-8 cross exact. A Common Lisp
+provider's string arrives as its UTF-8 encoding, and a Common Lisp caller of a Clojure provider
+gets the octets as an `(unsigned-byte 8)` vector.
 
 A member whose types reach a stream or a future is not bound, and an `async func` is not
 either. A reference to one is refused when the program compiles, naming the WIT line:

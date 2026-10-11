@@ -11,7 +11,6 @@ import am.ik.rontolisp.compiler.BoundaryType;
 import am.ik.rontolisp.compiler.WitExportDirective;
 import am.ik.rontolisp.compiler.WitImportDirective;
 import am.ik.rontolisp.compiler.WitTypeMapper;
-import am.ik.rontolisp.reader.Features;
 import am.ik.rontolisp.reader.LispReadException;
 import org.jspecify.annotations.Nullable;
 
@@ -22,43 +21,16 @@ import org.jspecify.annotations.Nullable;
  * {@link WitExportDirective#describe} for a WIT interface's members and a world's
  * exports. So a member a Clojure var names is the member the emitted
  * {@code rontolisp:wit-import} binds, under the same name and with the same refusals, and
- * no WIT is read twice in two dialects. Stateless; one instance serves every read of a
- * target, a Preview 1 core module having its own ({@link #CORE_MODULE}).
+ * no WIT is read twice in two dialects. Stateless; one instance serves every read.
  */
 public final class ClojureHostBoundary implements ClojureBoundary {
 
-	/**
-	 * The boundary a read through the source-language seam lowers against, but for a
-	 * Preview 1 core module's.
-	 */
-	public static final ClojureBoundary INSTANCE = new ClojureHostBoundary(false);
-
-	/**
-	 * A Preview 1 core module's boundary, which carries a WIT {@code list<u8>} as
-	 * {@code :string} text.
-	 */
-	public static final ClojureBoundary CORE_MODULE = new ClojureHostBoundary(true);
+	/** The boundary a read through the source-language seam lowers against. */
+	public static final ClojureBoundary INSTANCE = new ClojureHostBoundary();
 
 	private static final Set<String> DESIGNATORS = designatorSet();
 
-	private final boolean bytesAsText;
-
-	private ClojureHostBoundary(boolean bytesAsText) {
-		this.bytesAsText = bytesAsText;
-	}
-
-	/**
-	 * The boundary a read with these features lowers against.
-	 * @param features the active reader features
-	 * @return {@link #CORE_MODULE} for a WASM core module, else {@link #INSTANCE}
-	 */
-	public static ClojureBoundary of(Features features) {
-		return features.contains("rontolisp-wasm") && !features.contains(Features.COMPONENT) ? CORE_MODULE : INSTANCE;
-	}
-
-	@Override
-	public boolean bytesCrossAsText() {
-		return this.bytesAsText;
+	private ClojureHostBoundary() {
 	}
 
 	private static Set<String> designatorSet() {

@@ -49,6 +49,7 @@ WASM ホスト (ブラウザの JavaScript、または wasmtime にプリロー�
 | `:string` | `(ptr, len)` | UTF-8 bytes in linear memory |
 | `:s-expr` | `(ptr, len)` | the argument is printed to readable text; a result is parsed by the embedded reader |
 | `:bytes` | `(ptr, len)` argument / `(ptr, cap) -> len` result | an `(unsigned-byte 8)` vector as raw bytes — no UTF-8 in either direction |
+| `:octets` | `(ptr, len)` | imports only: an `(unsigned-byte 8)` vector as a value, raw bytes both ways; an argument may also be a string (its UTF-8 bytes) |
 
 `:string`/`:s-expr` の**引数**は、呼び出しがすでに保持しているメモリへの
 `(ptr, len)` ビューです — 読むのは構いませんが、そこへ書き込んではいけません。
@@ -74,6 +75,13 @@ pull ループはリニアメモリをフラットに保ちます。
 ;; (read-chunk buf) => the chunk's full length; up to (length buf) bytes
 ;; of buf are overwritten. On the JS side: readChunk(ptr, cap) -> n.
 ```
+
+`:octets` の**結果**は生のバイトに対する `:string` の形です: ホストは
+`__ronto_alloc` でバッファを確保してオクテットを書き込み、`(ptr, len)` を返します。
+呼び出しはそのオクテットだけを持つ新しい `(unsigned-byte 8)` ベクタを返します
+— デコードも受信バッファもありません。
+[`rontolisp:wit-import :octets t`](rontolisp-wit-import.md) が Preview 1 で WIT の
+`list<u8>` を宣言する型がこれです。
 
 ## `:async t` — サスペンドしうるホスト関数
 
@@ -125,7 +133,7 @@ pull ループはリニアメモリをフラットに保ちます。
 - [`--no-gc`](../../guides/wasm-nogc.md#host-imports-rontolispwasm-import) は
   このディレクティブを受け付けます。型の語彙は独自で、固定幅整数のファミリ全体
   (ハウス整数が `i64` のため)、`:float`、`:bool`、`:string`、`:void` を運びます。
-  `:s-expr`、`:bytes`、`:async t` は運べません。
+  `:s-expr`、`:bytes`、`:octets`、`:async t` は運べません。
   [`--no-gc --component`](../../guides/wasm-nogc.md#host-imports-in-a-component)
   では到達するインポートがコンポーネントのインポートになるため、`:from` は
   lower-kebab-case のラベルか WIT インターフェース id、`:as` と `:param-names`

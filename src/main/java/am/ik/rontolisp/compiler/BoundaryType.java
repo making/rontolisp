@@ -128,6 +128,18 @@ public enum BoundaryType {
 	BYTES(":BYTES", null),
 
 	/**
+	 * {@code octets}: an {@code (unsigned-byte 8)} vector as a VALUE, its octets raw in
+	 * both directions -- what a WIT {@code list<u8>} is under
+	 * {@code rontolisp:wit-import :octets t} on a Preview&nbsp;1 core module. A parameter
+	 * is {@code (ptr,len)} like {@link #BYTES} (a string argument stages as its UTF-8
+	 * encoding, as the canonical ABI's {@code list<u8>} lowering takes one); a result is
+	 * the {@link #STRING} shape, host-reserved through {@code __ronto_alloc} and answered
+	 * as {@code (ptr,len)}, lifted without a decode. {@code rontolisp:wasm-import} on a
+	 * wasm-GC core module only: no WIT spelling of its own and no export carrier.
+	 */
+	OCTETS(":OCTETS", null),
+
+	/**
 	 * {@code float-vector}: a rank-1 packed float array, crossing as the
 	 * {@code am.ik.rontolisp.runtime.RontoFloatArray} handle. A rontolisp-only boundary
 	 * type with no WIT spelling and <strong>no WASM carrier</strong>: it is the JVM
@@ -323,22 +335,32 @@ public enum BoundaryType {
 	}
 
 	/**
-	 * The designators a directive may name, in vocabulary order, for an error message
-	 * that has to spell out the accepted set. {@link #VOID} is excluded: it is the
-	 * omitted-{@code :returns} marker, not something a parameter list may contain.
-	 * @return the canonical designators of every non-void member
+	 * Returns whether only {@code rontolisp:wasm-import} names this type: every export
+	 * parser refuses it.
+	 * @return {@code true} for {@link #EXTERN} and {@link #OCTETS}
+	 */
+	public boolean importOnly() {
+		return this == EXTERN || this == OCTETS;
+	}
+
+	/**
+	 * The designators an export directive may name, in vocabulary order, for an error
+	 * message that has to spell out the accepted set. {@link #VOID} is excluded: it is
+	 * the omitted-{@code :returns} marker, not something a parameter list may contain.
+	 * @return the canonical designators of every non-void, non-import-only member
 	 */
 	public static List<String> valueDesignators() {
-		return designators(type -> type != VOID && type != EXTERN);
+		return designators(type -> type != VOID && !type.importOnly());
 	}
 
 	/**
 	 * The subset of {@link #valueDesignators()} a WASM boundary can carry, i.e. without
 	 * the {@link #jvmOnly()} members.
-	 * @return the canonical designators of every non-void, non-JVM-only member
+	 * @return the canonical designators of every non-void, non-import-only, non-JVM-only
+	 * member
 	 */
 	public static List<String> wasmValueDesignators() {
-		return designators(type -> type != VOID && type != EXTERN && !type.jvmOnly());
+		return designators(type -> type != VOID && !type.importOnly() && !type.jvmOnly());
 	}
 
 	private static List<String> designators(java.util.function.Predicate<BoundaryType> accept) {

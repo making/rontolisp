@@ -54,17 +54,6 @@ public interface ClojureBoundary {
 	Set<String> designators();
 
 	/**
-	 * Whether a WIT {@code list<u8>} crosses as text: a Preview 1 core module carries one
-	 * as {@code :string}, the text whose UTF-8 encoding its octets are. Elsewhere -- the
-	 * canonical ABI, a provider on the interpreter or the JVM -- it crosses as its
-	 * octets.
-	 * @return {@code true} on a Preview 1 core module
-	 */
-	default boolean bytesCrossAsText() {
-		return false;
-	}
-
-	/**
 	 * The members a {@code rontolisp:wit-import} of the interface binds.
 	 * @param witText the WIT text
 	 * @param witPath the WIT file path, for a message

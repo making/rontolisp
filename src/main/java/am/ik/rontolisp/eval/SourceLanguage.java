@@ -176,7 +176,7 @@ public enum SourceLanguage {
 			return new LispReader.ReadPrefix(Clojure.read(source, file,
 					loader == null ? ClojureMacroTime.create() : ClojureMacroTime.create(loader.javaClassLoader()),
 					clojureFiles(loader, standards), !features.contains("rontolisp-wasm"),
-					ClojureHostBoundary.of(features)), null);
+					ClojureHostBoundary.INSTANCE), null);
 		}
 		catch (LispReadException ex) {
 			return new LispReader.ReadPrefix(List.of(), ex);

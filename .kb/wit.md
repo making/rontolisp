@@ -61,7 +61,8 @@ condition system, `--no-gc` has no spill channel, and migrating later breaks use
 **`list<u8>` = a string**, NOT a list of ints. The premise "one character per byte" does not
 hold on the wasm backends (measured 2026-10-10): a `--component` result lifts through
 `_string_from_mem`, the same non-validating UTF-8 decode as a WIT `string` (`emitLiftString`), so
-`ff 00 41` comes back as one code point, and Preview 1 declares the member `:string`. So a text
+`ff 00 41` comes back as one code point, and Preview 1 declares the member `:string` (without
+`:octets t`). So a text
 `list<u8>` result is exact only for octets that are valid UTF-8. The Clojure tier crosses it as
 a byte array (`.kb/clojure-frontend.md`, "Host boundary").
 
@@ -71,11 +72,14 @@ a byte array (`.kb/clojure-frontend.md`, "Host boundary").
   `AsyncCall` / future `Async` carries the flag, and `liftsOctets()` (a `list<u8>` anywhere in
   the result, `liftsListU8`) makes the wrapper lift it through `_bytes_from_mem` and forces that
   helper on, so an `:octets` binding lifting none is byte-identical. Interpreter/JVM: no
-  conversion (the provider's value passes as it is). Preview 1 / `--no-gc`: a member carrying
-  a `list<u8>` is refused (`refuseOctets`) -- exact octets there need a value designator of
-  their own (`:bytes` is the read(2) shape). The Clojure lowering passes `:octets t` wherever
-  `bytesCrossAsText` is false. Pins: `ClojureWitBoundaryTest.aComponentReadsBackOctetsThatAreNoUtf8Exact`
-  (wasmtime keyvalue, `ff 00 41` both tiers), `WitImportDirectiveTest.octetsLeadTheComponentFormAndHaveNoPreview1Carrier`,
+  conversion (the provider's value passes as it is). Preview 1 (2026-10-11): `designatorOf`
+  lowers a `list<u8>` to the `:octets` designator instead of `:string` (`.kb/wasm-import.md`,
+  "`:octets`"), so a member carries octets both ways; a module without `:octets t` is
+  byte-identical. `--no-gc`: a member carrying a `list<u8>` is refused (`refuseOctets`, no
+  byte vector). The Clojure lowering passes `:octets t` on every target. Pins:
+  `ClojureWitBoundaryTest.aComponentReadsBackOctetsThatAreNoUtf8Exact` (wasmtime keyvalue,
+  `ff 00 41` both tiers), `.aListOfOctetsCrossesAPreview1ModuleExactUnderNode`,
+  `WitImportDirectiveTest.octetsLeadTheComponentFormAndCrossAPreview1ModuleAsOctets`,
   `WasmComponentImportCompilerTest.anOctetsBindingLiftsAListOfOctetsThroughTheBytesHelperOnly`.
 - **Two bindings of one interface** (`mergeByIface`) keep a wrapper each but the component
   declares each member once (`Import.distinctDecls` / `distinctCalls` / `distinctDrops`, in
@@ -323,7 +327,7 @@ default** (`.kb/wasm-import.md`).
   **the PROVIDER** calling `(error 'rontolisp:wit-error :payload ...)`, an obligation no one
   enforces.
 - **Preview 1 WASM — only the flat set `rontolisp:wasm-import` carries** (`INT`/`HANDLE` ->
-  `:int`, `FLOAT` -> `:float`, `BOOLEAN` -> `:bool`, `STRING`/`BYTE_STRING` -> `:string`, no
+  `:int`, `FLOAT` -> `:float`, `BOOLEAN` -> `:bool`, `STRING`/`BYTE_STRING` -> `:string` (`BYTE_STRING` -> `:octets` under `:octets t`), no
   result -> `:void`); everything else is a compile error naming the WIT file and LINE, a core
   import having no component type to declare a richer shape with. So **`wasi:keyvalue/store` does
   not cross Preview 1**; the interfaces that DO are the flat host-shaped ones (WebGL).

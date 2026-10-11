@@ -98,15 +98,15 @@ class ClojureWitBoundaryTest {
 		// drop too (bound only where the program names it, like a Common Lisp drop). A
 		// member answering a result binds behind its var's wrapper, which on WASM reads
 		// the envelope through the raw binding and throws the error arm itself; a byte
-		// array crosses a Preview 1 module as the text its octets decode to
+		// array crosses a Preview 1 module as its octets (:octets t)
 		List<String> forms = wasmForms(program);
 		assertThat(forms)
 			.contains("(RONTOLISP:WIT-IMPORT \"kv.wit\" :INTERFACE "
 					+ "\"wasi:keyvalue/store@0.2.0-draft\" :NAMES ((\"open\" \"" + ns + "open%wit\") (\"bucket-get\" \""
 					+ ns + "bucket-get%wit\") (\"bucket-set\" \"" + ns + "bucket-set%wit\") (\"bucket-drop\" \"" + ns
-					+ "bucket-drop\")))")
+					+ "bucket-drop\")) :OCTETS T)")
 			.anyMatch(form -> form.startsWith("(DEFUN |" + ns + "bucket-set| (")
-					&& form.contains("(RONTOLISP::%CLOJURE-BYTES-TO-TEXT "))
+					&& form.contains("(RONTOLISP::%CLOJURE-BYTES-TO-HOST "))
 			.anyMatch(form -> form.startsWith("(DEFUN |" + ns + "open| (")
 					&& form.contains("(RONTOLISP::%CLOJURE-WIT-ANSWER (|" + ns + "open%wit%raw| ")
 					&& form.endsWith(" \"wasi:keyvalue/store@0.2.0-draft\" \"open\"))"));
@@ -323,42 +323,45 @@ class ClojureWitBoundaryTest {
 	}
 
 	/**
-	 * A Preview 1 core module carries a {@code list<u8>} as {@code :string} text, so a
-	 * byte array goes to the host as the text its octets decode to as UTF-8 and the
-	 * host's text comes back as its UTF-8 encoding: the octets of a two-byte character
-	 * arrive whole both ways, under node.
+	 * A Preview 1 core module carries a {@code list<u8>} as its octets ({@code :octets}),
+	 * so a byte array reaches the host as a {@code Uint8Array} and the host's comes back
+	 * octet for octet, under node -- {@code ff 00 41}, which is no UTF-8, included; a
+	 * host answering text answers its UTF-8 encoding.
 	 */
 	@Test
-	void aListOfOctetsCrossesAPreview1ModuleAsItsUtf8TextUnderNode() throws Exception {
+	void aListOfOctetsCrossesAPreview1ModuleExactUnderNode() throws Exception {
 		assumeTrue(HostBoundaryRuns.nodeAvailable(), "node is not on PATH");
 		write("blob.wit", BLOB_WIT);
-		Path program = write("text.clj", """
-				(ns text
+		Path program = write("octets.clj", """
+				(ns octets
 				  (:require [rontolisp.wit :as wit]))
 
 				(wit/import "blob.wit" {:interface "example:blob/blob" :as blob})
 
 				(defn report {:wasm/export {:params [:int] :returns :string}} [n]
 				  (let [b (blob/fetch n)]
-				    (str (blob/checksum (.getBytes "h\u00e9")) " " (bytes? b) " " (vec b))))
+				    (str (blob/checksum (byte-array [-1 0 65])) " " (bytes? b) " " (vec b) " " (vec (blob/fetch 0)))))
 				""");
-		HostBoundaryRuns.cli(program.toString(), "-o", this.dir.resolve("text.wasm").toString(), "--no-wasi",
+		HostBoundaryRuns.cli(program.toString(), "-o", this.dir.resolve("octets.wasm").toString(), "--no-wasi",
 				"--emit-js-glue");
 		Path host = write("run.mjs", """
 				import fs from 'fs';
-				import { instantiate } from './text.js';
+				import { instantiate } from './octets.js';
 
-				const module = new WebAssembly.Module(fs.readFileSync(new URL('./text.wasm', import.meta.url)));
+				const module = new WebAssembly.Module(fs.readFileSync(new URL('./octets.wasm', import.meta.url)));
 				const lisp = instantiate(module, {
 				  blob: {
-				    checksum: (text) => { console.log('host got', JSON.stringify(text)); return text.length; },
-				    fetch: (n) => '\u00e9' + n,
+				    checksum: (data) => {
+				      console.log('host got', data instanceof Uint8Array, Array.from(data).join(' '));
+				      return data.length;
+				    },
+				    fetch: (n) => (n === 0 ? '\u00e9' : new Uint8Array([n, 0xff, 0x00, 0x41])),
 				  },
 				});
 				console.log(lisp.report(7));
 				""");
 		assertThat(HostBoundaryRuns.node(this.dir, host.toString()))
-			.isEqualTo("host got \"h\u00e9\"\n2 true [-61 -87 55]\n");
+			.isEqualTo("host got true 255 0 65\n3 true [7 -1 0 65] [-61 -87]\n");
 	}
 
 	private static final String MATH_WIT = """

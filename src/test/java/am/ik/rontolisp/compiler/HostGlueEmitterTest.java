@@ -359,6 +359,34 @@ class HostGlueEmitterTest {
 	}
 
 	@Test
+	void anOctetsImportHandsTheHostAUint8ArrayAndTakesOneBack() {
+		String source = """
+				(rontolisp:wasm-import 'swap :from "env" :as "swap" :params '(:octets) :returns :octets :async t)
+				(rontolisp:async-defun relay (v) (length (rontolisp:await (swap v))))
+				(rontolisp:wasm-export 'relay :params '(:int) :returns :int)
+				""";
+		String glue = glueOf(source);
+		// the argument copied out as octets, never decoded; the answer staged as its
+		// octets (text as its UTF-8 encoding) where a :string answer would be encoded
+		assertThat(glue).contains("// (:octets) -> :octets")
+			.contains("return (p0, p0Len) =>\n          settle(what, call(readBytes(p0, p0Len)), writeOctets);")
+			.contains("const writeOctets = (value) => write(octets(value));")
+			.contains("typeof chunk === \"string\" ? encoder.encode(chunk) : chunk;")
+			.doesNotContain("readString")
+			.doesNotContain("writeString");
+		// --reentrant: the answer is a park block the module frees
+		WasmLispCompiler reentrant = WasmLispCompiler.builder()
+			.noWasi(true)
+			.optimize(OptimizeLevel.NONE)
+			.reentrant(true)
+			.build();
+		reentrant.compile(LispReader.readAllFromString(source, Features.WASM_REACTOR));
+		assertThat(glue(reentrant, "glue.js")).contains("settle(what, call(readBytes(p0, p0Len)), writeParkOctets);")
+			.contains("const ptr = exports.__ronto_park_alloc(bytes.length);")
+			.doesNotContain("writeOctets");
+	}
+
+	@Test
 	void aModuleThatImportsNothingGetsGlueThatAsksForNothing() {
 		String glue = glueOf("""
 				(defun twice (n) (* n 2))

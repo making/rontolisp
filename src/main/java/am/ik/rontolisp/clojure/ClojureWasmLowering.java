@@ -104,31 +104,18 @@ final class ClojureWasmLowering {
 		/**
 		 * A byte array: its octets on the way to the host (anything else refused as the
 		 * oracle's cast to {@code byte[]}), and the octets coming back as a byte array --
-		 * a packed vector as it is, a string (the text a WASM build lifts a WIT
-		 * {@code list<u8>} to, a Common Lisp provider's) as its UTF-8 encoding.
+		 * a packed vector as it is, a string (a Common Lisp provider's) as its UTF-8
+		 * encoding.
 		 */
-		BYTES,
-
-		/**
-		 * A byte array crossing as text (a WIT {@code list<u8>} on a Preview 1 core
-		 * module, {@link ClojureBoundary#bytesCrossAsText}): its octets decoded as UTF-8
-		 * on the way to the host, and coming back as {@link #BYTES} does.
-		 */
-		TEXT_BYTES
+		BYTES
 
 	}
 
 	/** {@link Crossing#BYTES} on the way to the host. */
 	static final String BYTES_TO_HOST = "RONTOLISP::%CLOJURE-BYTES-TO-HOST";
 
-	/**
-	 * {@link Crossing#BYTES} and {@link Crossing#TEXT_BYTES} coming back: a producer of
-	 * the byte-array family.
-	 */
+	/** {@link Crossing#BYTES} coming back: a producer of the byte-array family. */
 	static final String BYTES_FROM_HOST = "RONTOLISP::%CLOJURE-BYTES-FROM-HOST";
-
-	/** {@link Crossing#TEXT_BYTES} on the way to the host. */
-	static final String BYTES_TO_TEXT = "RONTOLISP::%CLOJURE-BYTES-TO-TEXT";
 
 	/**
 	 * One declared boundary type.
@@ -251,7 +238,7 @@ final class ClojureWasmLowering {
 		ctx.hoisted.addAll(ClojureVarLowering.record(ctx, key, null, items.get(1), null, null, null, false, false));
 		LispSymbol var = ClojureLowering.varSym(key);
 		List<Designated> declared = new ArrayList<>(params == null ? List.of() : params);
-		if (result != null && result.crossing() == Crossing.BYTES) {
+		if (result != null && result.designator().equals(":BYTES")) {
 			// the read(2) shape: the caller passes the byte array the host fills, and the
 			// call answers the value's full length
 			declared.add(result);
@@ -609,7 +596,6 @@ final class ClojureWasmLowering {
 			case S_EXPR ->
 				ClojureStringLowering.strOf(ctx, value, LispString.literal("nil"), ClojureLowering.TRUE_CONST);
 			case BYTES -> ClojureLowerUtil.list(new LispSymbol(BYTES_TO_HOST), value);
-			case TEXT_BYTES -> ClojureLowerUtil.list(new LispSymbol(BYTES_TO_TEXT), value);
 		};
 	}
 
@@ -625,7 +611,7 @@ final class ClojureWasmLowering {
 			case PLAIN, NILLABLE_BOOL -> value;
 			case BOOL -> ctx.ifFalsey(value, ClojureLowering.TRUE_CONST, ctx.falseVariable);
 			case S_EXPR -> ClojureReadLowering.readStringOf(ctx, value);
-			case BYTES, TEXT_BYTES -> ClojureLowerUtil.list(new LispSymbol(BYTES_FROM_HOST), value);
+			case BYTES -> ClojureLowerUtil.list(new LispSymbol(BYTES_FROM_HOST), value);
 		};
 	}
 
@@ -746,6 +732,7 @@ final class ClojureWasmLowering {
 			case ":BOOL" -> new Designated(upper, Crossing.BOOL);
 			case ":S-EXPR" -> new Designated(":STRING", Crossing.S_EXPR);
 			case ":BYTES" -> new Designated(upper, Crossing.BYTES);
+			case ":OCTETS" -> new Designated(upper, Crossing.BYTES);
 			default -> new Designated(upper, Crossing.PLAIN);
 		};
 	}

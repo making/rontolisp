@@ -39,7 +39,10 @@ import am.ik.wasm.WasmWriter;
  * called with a trailing {@code (ptr,cap)} pair ("write up to cap bytes at ptr") and
  * answers the value's FULL length, which the call returns; the wrapper copies
  * {@code min(n,cap)} bytes into the caller's vector and pops its staged regions, so a
- * pull loop over one reused buffer keeps linear memory flat.
+ * pull loop over one reused buffer keeps linear memory flat. An {@code :octets} value
+ * (import only) is an {@code (unsigned-byte 8)} vector both ways: a parameter stages as a
+ * {@code :bytes} one does (a string argument as its UTF-8 encoding), a result is a
+ * {@code :string} result's {@code (ptr,len)} lifted as raw octets.
  *
  * <p>
  * Because every {@code FUNC_*} function index is a fixed compile-time constant, the
@@ -68,11 +71,13 @@ final class WasmImportCompiler {
 	 * {@code .kb/wit.md}. {@code :bytes} is the byte-transfer type: an
 	 * {@code (unsigned-byte 8)} vector crossing as raw bytes with no UTF-8 decode -- a
 	 * {@code :string} result's non-validating decoder corrupts arbitrary bytes, so binary
-	 * needs its own designator, not care at the call site.
+	 * needs its own designator, not care at the call site. {@code :octets} is the same
+	 * octets as a VALUE: what {@code rontolisp:wit-import :octets t} lowers a WIT
+	 * {@code list<u8>} to.
 	 */
 	private static final List<BoundaryType> KNOWN_PARAM_TYPES = List.of(BoundaryType.S32, BoundaryType.S64,
 			BoundaryType.FLOAT, BoundaryType.BOOL, BoundaryType.STRING, BoundaryType.S_EXPR, BoundaryType.BYTES,
-			BoundaryType.EXTERN);
+			BoundaryType.OCTETS, BoundaryType.EXTERN);
 
 	/**
 	 * Whether a declaration names {@code :extern} anywhere: the module then carries the
@@ -397,9 +402,19 @@ final class WasmImportCompiler {
 		return decl.returnType() == BoundaryType.S_EXPR;
 	}
 
-	/** Returns whether any declared type is the {@code :bytes} boundary type. */
+	/**
+	 * Returns whether any declared type is the {@code :bytes} or the {@code :octets}
+	 * boundary type: both stage a vector's octets through {@code _bytes_copy}, and an
+	 * {@code :octets} result lifts through {@code _bytes_from_mem}.
+	 */
 	static boolean usesBytes(Decl decl) {
-		return decl.returnType() == BoundaryType.BYTES || decl.paramTypes().contains(BoundaryType.BYTES);
+		return decl.returnType() == BoundaryType.BYTES || decl.returnType() == BoundaryType.OCTETS
+				|| decl.paramTypes().stream().anyMatch(WasmImportCompiler::stagesOctets);
+	}
+
+	// A parameter whose octets stage through _bytes_copy into their own allocation.
+	private static boolean stagesOctets(BoundaryType type) {
+		return type == BoundaryType.BYTES || type == BoundaryType.OCTETS;
 	}
 
 	/**
@@ -488,14 +503,17 @@ final class WasmImportCompiler {
 	 * {@code -1} when no {@code :bytes} type is present)
 	 * @param bytesFillFuncIndex the function index of the {@code _bytes_fill} helper (or
 	 * {@code -1} when no {@code :bytes} type is present)
+	 * @param bytesFromMemFuncIndex the function index of the {@code _bytes_from_mem}
+	 * helper (or {@code -1} when no {@code :bytes}/{@code :octets} type is present)
 	 * @return the code entry bytes
 	 */
 	static byte[] buildWrapperBody(WasmLispCompiler.Ctx.Builder ctxBuilder, Decl decl, int ordinal,
-			int strFromMemFuncIndex, int allocFuncIndex, int bytesCopyFuncIndex, int bytesFillFuncIndex) {
+			int strFromMemFuncIndex, int allocFuncIndex, int bytesCopyFuncIndex, int bytesFillFuncIndex,
+			int bytesFromMemFuncIndex) {
 		int numParams = decl.paramTypes().size();
 		int numLispParams = lispArity(decl);
 		boolean bytesResult = decl.returnType() == BoundaryType.BYTES;
-		int numBytesParams = (int) decl.paramTypes().stream().filter(t -> t == BoundaryType.BYTES).count();
+		int numBytesParams = (int) decl.paramTypes().stream().filter(WasmImportCompiler::stagesOctets).count();
 		boolean bytesStaging = bytesResult || numBytesParams > 0;
 		// Two or more :string/:s-expr parameters have to hold their linear-memory
 		// regions AT THE SAME TIME, across the host call -- so they cannot share the
@@ -510,15 +528,16 @@ final class WasmImportCompiler {
 		// i32 scratch locals, right after the env+param slots and before any
 		// (ref null eq) temps handed out by allocTemp:
 		// - an :s-expr result needs two, for the (ptr,len) the host returns -- and so
-		// does a :string result under --reentrant, whose park block the wrapper frees
-		// after boxing;
+		// does a :string or :octets result under --reentrant, whose park block the
+		// wrapper frees after boxing;
 		// - :bytes staging needs a heap mark (the staged regions are POPPED on return,
 		// so a pull-loop caller's arena stays flat -- the finding-2 shape), a (ptr,len)
 		// pair per :bytes parameter, and (ptr,cap,n) for a :bytes result. Under
 		// --reentrant the regions are park blocks instead (freed, not popped: the pop
 		// is an absolute store two interleaved pull loops cannot share) and the mark
 		// slot goes unused.
-		int sExprTemps = needsReader(decl) || (reentrant && usesStrFromMem(decl)) ? 2 : 0;
+		int sExprTemps = needsReader(decl)
+				|| (reentrant && (usesStrFromMem(decl) || decl.returnType() == BoundaryType.OCTETS)) ? 2 : 0;
 		int ptrSlot = numLispParams + 1;
 		int markSlot = numLispParams + 1 + sExprTemps;
 		int bytesParamBase = markSlot + 1;
@@ -550,11 +569,23 @@ final class WasmImportCompiler {
 			// exact-or-trap, like every other boundary type.
 			int k = 0;
 			for (int i = 0; i < numParams; i++) {
-				if (decl.paramTypes().get(i) != BoundaryType.BYTES) {
+				BoundaryType type = decl.paramTypes().get(i);
+				if (!stagesOctets(type)) {
 					continue;
 				}
 				int lenSlot = bytesParamBase + 2 * k + 1;
 				int bufPtrSlot = bytesParamBase + 2 * k;
+				if (type == BoundaryType.OCTETS) {
+					// An :octets argument is a byte vector, or a string staged as a
+					// staged :string parameter is (its UTF-8 encoding) and released
+					// like a vector's region -- the component's list<u8> rule
+					// (WasmComponentImportCompiler.emitStageBytesParam).
+					ctx.writer.write(Instruction.GET_LOCAL);
+					ctx.writer.writeUnsignedLeb128(i + 1);
+					ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+					ctx.writer.writeHeapType(WasmLispCompiler.TYPE_I8ARR);
+					ctx.writer.write(Instruction.IF, 0x40);
+				}
 				emitByteVectorLen(ctx, i + 1);
 				ctx.writer.write(Instruction.SET_LOCAL);
 				ctx.writer.writeUnsignedLeb128(lenSlot);
@@ -568,6 +599,15 @@ final class WasmImportCompiler {
 				ctx.writer.write(Instruction.CALL);
 				ctx.writer.writeUnsignedLeb128(bytesCopyFuncIndex);
 				ctx.writer.write(Instruction.DROP);
+				if (type == BoundaryType.OCTETS) {
+					ctx.writer.write(Instruction.ELSE);
+					emitStagedMemoryParam(ctx, BoundaryType.STRING, i + 1, bufPtrSlot, reentrant);
+					ctx.writer.write(Instruction.SET_LOCAL);
+					ctx.writer.writeUnsignedLeb128(lenSlot);
+					ctx.writer.write(Instruction.SET_LOCAL);
+					ctx.writer.writeUnsignedLeb128(bufPtrSlot);
+					ctx.writer.write(Instruction.END);
+				}
 				k++;
 			}
 			// Stage the :bytes result's receive region: cap = array.len(buffer) -- the
@@ -595,7 +635,7 @@ final class WasmImportCompiler {
 		int k = 0;
 		int m = 0;
 		for (int i = 0; i < numParams; i++) {
-			if (decl.paramTypes().get(i) == BoundaryType.BYTES) {
+			if (stagesOctets(decl.paramTypes().get(i))) {
 				ctx.writer.write(Instruction.GET_LOCAL);
 				ctx.writer.writeUnsignedLeb128(bytesParamBase + 2 * k);
 				ctx.writer.write(Instruction.GET_LOCAL);
@@ -653,7 +693,8 @@ final class WasmImportCompiler {
 			ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_INT_NEW);
 		}
 		else {
-			emitBoxResult(ctx, decl.returnType(), ptrSlot, strFromMemFuncIndex, reentrant);
+			emitBoxResult(ctx, decl.returnType(), ptrSlot,
+					decl.returnType() == BoundaryType.OCTETS ? bytesFromMemFuncIndex : strFromMemFuncIndex, reentrant);
 			if (staging) {
 				// The staged parameter regions are dead once the host call returned (a
 				// :string/:s-expr result was already copied out of linear memory by the
@@ -878,11 +919,13 @@ final class WasmImportCompiler {
 	}
 
 	// Boxes the host call's result (already on the stack) into (ref null eq).
-	// --reentrant: a :string/:s-expr result's (ptr,len) is a park block the HOST
+	// --reentrant: a :string/:s-expr/:octets result's (ptr,len) is a park block the HOST
 	// allocated (__ronto_park_alloc) -- a plain __ronto_alloc region would leak, since
 	// the synchronous bracket that used to pop it closes before the host's answer
 	// exists -- and the wrapper frees it here, after copying the bytes out.
-	private static void emitBoxResult(WasmLispCompiler.Ctx ctx, BoundaryType type, int ptrSlot, int strFromMemFuncIndex,
+	// fromMemFuncIndex is the lift of a memory-typed result: _str_from_mem for a
+	// :string, _bytes_from_mem for an :octets one.
+	private static void emitBoxResult(WasmLispCompiler.Ctx ctx, BoundaryType type, int ptrSlot, int fromMemFuncIndex,
 			boolean reentrant) {
 		switch (type) {
 			case S32 -> ctx.writer.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
@@ -906,8 +949,9 @@ final class WasmImportCompiler {
 				ctx.writer.write(Instruction.REF_NULL);
 				ctx.writer.writeHeapType(Type.EQ.code());
 			}
-			// (ptr,len) the host wrote into linear memory -> a fresh Lisp string.
-			case STRING -> {
+			// (ptr,len) the host wrote into linear memory -> a fresh Lisp string, or for
+			// :octets a fresh (unsigned-byte 8) vector of the raw octets (no decode).
+			case STRING, OCTETS -> {
 				if (reentrant) {
 					ctx.writer.write(Instruction.SET_LOCAL);
 					ctx.writer.writeUnsignedLeb128(ptrSlot + 1); // len
@@ -919,7 +963,7 @@ final class WasmImportCompiler {
 					ctx.writer.writeUnsignedLeb128(ptrSlot + 1);
 				}
 				ctx.writer.write(Instruction.CALL);
-				ctx.writer.writeUnsignedLeb128(strFromMemFuncIndex);
+				ctx.writer.writeUnsignedLeb128(fromMemFuncIndex);
 				if (reentrant) {
 					emitParkFreeOf(ctx, ptrSlot);
 				}

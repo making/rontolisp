@@ -498,7 +498,7 @@ class WitImportDirectiveTest {
 	}
 
 	@Test
-	void octetsLeadTheComponentFormAndHaveNoPreview1Carrier() {
+	void octetsLeadTheComponentFormAndCrossAPreview1ModuleAsOctets() {
 		String wit = iface("  put: func(data: list<u8>) -> list<u8>;\n  ping: func() -> u32;");
 		Directive octets = new Directive(WIT, API, null, null, FieldStyle.CAMEL, null, true);
 		// --component: the marker leads the members, so every wrapper of this binding
@@ -511,15 +511,22 @@ class WitImportDirectiveTest {
 		// the interpreter and the JVM hand the provider's value over as it is
 		assertThat(printed(lower(wit, Backend.OTHER, octets)))
 			.isEqualTo(printed(lower(wit, Backend.OTHER, new Directive(WIT, API, null, null, FieldStyle.CAMEL))));
-		// a core module declares the list :string, text: refused where a member carries
-		// one, a member without one binds as before
-		for (Backend core : List.of(Backend.WASM_GC, Backend.WASM_NO_GC)) {
-			assertThatThrownBy(() -> lower(wit, core, octets)).isInstanceOf(UnsupportedOperationException.class)
-				.hasMessageContaining("kv.wit:4: 'put': :octets t crosses a list<u8> as its octets, which a Preview 1 "
-						+ "core import cannot carry");
-		}
+		// a wasm-GC core module declares the list :octets both ways, where it is :string
+		// text without the option; a member without one binds as before
+		assertThat(printed(lower(wit, Backend.WASM_GC, octets)))
+			.contains("(RONTOLISP:WASM-IMPORT 'PUT :FROM \"api\" :AS \"put\" :PARAMS '(:OCTETS) :RETURNS :OCTETS)");
+		assertThat(printed(lower(wit, Backend.WASM_GC, new Directive(WIT, API, null, null, FieldStyle.CAMEL))))
+			.contains("(RONTOLISP:WASM-IMPORT 'PUT :FROM \"api\" :AS \"put\" :PARAMS '(:STRING) :RETURNS :STRING)");
 		assertThat(printed(lower(iface("  ping: func() -> u32;"), Backend.WASM_GC, octets)))
 			.isEqualTo("(RONTOLISP:WASM-IMPORT 'PING :FROM \"api\" :AS \"ping\" :PARAMS 'NIL :RETURNS :INT)");
+		// --no-gc has no byte vector: refused where a member carries one
+		assertThatThrownBy(() -> lower(wit, Backend.WASM_NO_GC, octets))
+			.isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining(
+					"kv.wit:4: 'put': :octets t crosses a list<u8> as a byte vector, which --no-gc has " + "none of");
+		assertThat(printed(lower(iface("  ping: func() -> u32;"), Backend.WASM_NO_GC, octets)))
+			.isEqualTo(printed(lower(iface("  ping: func() -> u32;"), Backend.WASM_NO_GC,
+					new Directive(WIT, API, null, null, FieldStyle.CAMEL))));
 	}
 
 	@Test

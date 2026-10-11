@@ -1797,7 +1797,10 @@ function and a directive must be a top-level form.
   Pinned under node through the glue, all four directions (`ff` included) and the refusal
   (`ClojureWasmBoundaryTest.aByteArrayCrossesAsItsOctetsUnderNode`), the interpreter and JVM
   stubs (`theInterpreterAndTheJvmCallABytesExportAndStubABytesImport`). `--component` and
-  `--no-gc` refuse `:bytes` as for Common Lisp.
+  `--no-gc` refuse `:bytes` as for Common Lisp. `:octets` (`.kb/wasm-import.md`) is the same
+  BYTES crossing as a value both ways, no read(2) shape: `defimport` keys that shape on the
+  `:bytes` designator, not on the crossing. Pin:
+  `ClojureWasmBoundaryTest.anOctetsImportTakesAndAnswersAByteArrayUnderNode`.
 - **Order**: `defimport` registers its name in pass one by spelling (like `deftest`), so a
   call above it is a direct call; on the interpreter and the JVM it binds a stub of the
   declared arity throwing `UnsupportedOperationException` in Clojure's words (the
@@ -1852,24 +1855,23 @@ function and a directive must be a top-level form.
   rich types lowers byte-identically to before.
 - **`list<u8>` is a byte array** (2026-10-10; a string one character per byte before): out
   `%clojure-bytes-to-host` (the octets; a component stages a packed vector raw), in
-  `%clojure-bytes-from-host`. A Preview 1 core module declares the member `:string`, so there
-  the inline crossing is `TEXT_BYTES`: out `%clojure-bytes-to-text` (the octets decoded as
-  UTF-8, JDK replacement). Which one is the boundary's answer, not the target's:
-  `ClojureBoundary.bytesCrossAsText`, true for `ClojureHostBoundary.CORE_MODULE`, which
-  `SourceLanguage` picks from the features (`rontolisp-wasm` without `rontolisp-component`).
-  Coming back: off a core module the directive carries `:octets t` (`.kb/wit.md`), so a
-  component lifts the result as a packed vector, octet for octet; without it the lift was
-  `_string_from_mem`'s UTF-8 decode (measured 2026-10-10: `ff 00 41` stored through wasmtime's
-  keyvalue came back as code point 1835106, `[-9 -128 -127 -94]`). A core module's text comes
-  back as its UTF-8 encoding, exact only for valid UTF-8. `%clojure-bytes-from-host` takes
-  both shapes. A Common Lisp provider's string arrives as its UTF-8 encoding; a Common Lisp
+  `%clojure-bytes-from-host`, on every target: the directive always carries `:octets t`
+  (`.kb/wit.md`), so a component lifts the result as a packed vector, octet for octet, and a
+  Preview 1 core module declares the member `:octets` (`.kb/wasm-import.md`), raw both ways.
+  Without it the component lift was `_string_from_mem`'s UTF-8 decode (measured 2026-10-10:
+  `ff 00 41` stored through wasmtime's keyvalue came back as code point 1835106,
+  `[-9 -128 -127 -94]`), and until 2026-10-11 a core module declared the member `:string`, so
+  the octets went out decoded as UTF-8 (`%clojure-bytes-to-text`, gone with
+  `ClojureBoundary.bytesCrossAsText`) and came back as the text's encoding, exact only for
+  valid UTF-8. `%clojure-bytes-from-host` takes both shapes. A Common Lisp provider's string
+  arrives as its UTF-8 encoding; a Common Lisp
   caller of a Clojure provider gets the packed vector, which the component's argument staging
   also takes.
   `:BYTE-ARRAY` and `%clojure-bytes-from-host` are byte-array producers (the descriptor
   global is in the program, so the scan sees the keyword). Pinned:
   `ClojureWitBoundaryTest.aListOfOctetsIsAByteArrayBothWaysOnTheInterpreterAndTheJvm` (alone,
   in an option, in a list; both languages' providers and a CL caller),
-  `aListOfOctetsCrossesAPreview1ModuleAsItsUtf8TextUnderNode`,
+  `aListOfOctetsCrossesAPreview1ModuleExactUnderNode` (`ff 00 41` both ways through the glue),
   `aComponentImportsWasmtimesKeyvalueStore` (a two-byte character's octets through wasmtime), `aComponentReadsBackOctetsThatAreNoUtf8Exact` (`ff 00 41`). To the host a list/tuple/flags takes any collection
   (`%clojure-seq-all`) and a record any map (`%clojure-call-keyword`, records and sorted maps
   too); a value of no shape of its type is an `IllegalArgumentException` naming the type.

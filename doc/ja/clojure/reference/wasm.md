@@ -51,15 +51,16 @@ add is a host function (rontolisp.wasm/defimport): only a compiled WASM module c
 ## 型
 
 型キーワードは境界のものです。`:int`、`:long`、`:s8` ... `:u64`、`:float`、`:bool`、
-`:string`、`:s-expr`、`:bytes`、`:extern`（インポートのみ）、それに結果用の `:void`
-（`:returns` を書かない宣言はこれを意味します）。Clojure と境界とで綴りが異なる値は、
-渡るときに変換します。
+`:string`、`:s-expr`、`:bytes`、`:octets`、`:extern`（最後の二つはインポートのみ）、それに
+結果用の `:void`（`:returns` を書かない宣言はこれを意味します）。Clojure と境界とで綴りが
+異なる値は、渡るときに変換します。
 
 | 型 | ホストへ | ホストから |
 |---|---|---|
 | `:bool` | `false` と `nil` は偽として渡る | 偽は `nil` ではなく `false` として届く |
 | `:s-expr` | `pr-str` が出力するテキスト | `read-string` が読む値 |
 | `:bytes` | [バイト配列](byte-array.md)のオクテット。それ以外の値は `ClassCastException` を投げる | バイト配列 |
+| `:octets` | `:bytes` と同じ | バイト配列 |
 
 したがって `:s-expr` を通ると、ベクタ、マップ、キーワード、`false` はそのまま往復します。
 `:s-expr` はどのホストでも `:string` と同じ UTF-8 テキストとして渡ります。これらの型を
@@ -91,6 +92,10 @@ $ rontolisp bin.clj -o bin.wasm --no-wasi --emit-js-glue
 
 Common Lisp の `:bytes` 型と同じく、渡れるのは GC バックエンドの WASM コアモジュールだけです。
 インタプリタと JVM では、`:bytes` を答えるインポートもバイト配列を受け取るスタブです。
+
+`:octets` は同じオクテットを値として渡します。`:octets` を答えるインポートは、渡すバッファを
+取らず、ホストが返したオクテットをそのまま持つバイト配列を答えます。
+[`rontolisp.wit`](wit.md) が WASM コアモジュールで WIT の `list<u8>` を宣言する型がこれです。
 
 ## 動くターゲット
 

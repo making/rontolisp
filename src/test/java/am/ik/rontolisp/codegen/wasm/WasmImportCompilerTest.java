@@ -176,6 +176,29 @@ class WasmImportCompilerTest {
 	}
 
 	@Test
+	void parsesOctetsAsAValueOfTheStringShapeAndKeepsItAnImportOnlyType() {
+		// :octets is a byte vector as a VALUE: (ptr,len) both ways like a :string, no
+		// trailing receive buffer, and the _bytes_* helpers it stages and lifts through.
+		WasmImportCompiler.Decl put = parse("(rontolisp:wasm-import 'put :params '(:octets) :returns :octets)");
+		assertThat(put.paramTypes()).containsExactly(BoundaryType.OCTETS);
+		assertThat(put.returnType()).isEqualTo(BoundaryType.OCTETS);
+		assertThat(WasmImportCompiler.lispArity(put)).isEqualTo(1);
+		assertThat(WasmImportCompiler.hostParamTypes(put)).containsExactly(Type.I32, Type.I32);
+		assertThat(WasmImportCompiler.hostResultTypes(put)).containsExactly(Type.I32, Type.I32);
+		assertThat(WasmImportCompiler.usesBytes(put)).isTrue();
+		assertThat(WasmImportCompiler.usesStrFromMem(put)).isFalse();
+		// no export carrier, and --no-gc has no byte vector to carry
+		assertThatThrownBy(() -> WasmExportCompiler
+			.parse((LispCons) LispReader.readAllFromString("(rontolisp:wasm-export 'f :returns :octets)").getFirst()))
+			.hasMessageContaining(":OCTETS");
+		assertThatThrownBy(() -> new NoGcWasmCompiler().compile(LispReader.readAllFromString("""
+				(rontolisp:wasm-import 'put :params '(:octets) :returns :int)
+				(defun f () (put "x"))
+				(rontolisp:wasm-export 'f :params '() :returns :int)
+				"""))).hasMessageContaining("type designator :OCTETS is not supported with --no-gc");
+	}
+
+	@Test
 	void bytesImportCompilesToACallableWrapperWithTheBufferArity() {
 		// The synthetic defun carries the Lisp arity (declared params + the trailing
 		// receive buffer for a :bytes result), so an ordinary call site with the buffer

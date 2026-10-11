@@ -49,6 +49,7 @@ The type designators are shared with
 | `:string` | `(ptr, len)` | UTF-8 bytes in linear memory |
 | `:s-expr` | `(ptr, len)` | the argument is printed to readable text; a result is parsed by the embedded reader |
 | `:bytes` | `(ptr, len)` argument / `(ptr, cap) -> len` result | an `(unsigned-byte 8)` vector as raw bytes — no UTF-8 in either direction |
+| `:octets` | `(ptr, len)` | imports only: an `(unsigned-byte 8)` vector as a value, raw bytes both ways; an argument may also be a string (its UTF-8 bytes) |
 
 A `:string`/`:s-expr` **argument** is a `(ptr, len)` view into memory the call
 already holds — read it, but do not write through it. See [the boundary
@@ -74,6 +75,13 @@ flat.
 ;; (read-chunk buf) => the chunk's full length; up to (length buf) bytes
 ;; of buf are overwritten. On the JS side: readChunk(ptr, cap) -> n.
 ```
+
+An `:octets` **result** is the `:string` shape over raw bytes: the host
+reserves the buffer with `__ronto_alloc`, writes the octets and returns
+`(ptr, len)`, and the call answers a fresh `(unsigned-byte 8)` vector of exactly
+those octets — no decode, no receive buffer. It is what
+[`rontolisp:wit-import :octets t`](rontolisp-wit-import.md) declares a WIT
+`list<u8>` as on Preview 1.
 
 ## `:async t` — a host function that may suspend
 
@@ -123,7 +131,7 @@ spells both directions `async func`, and the directive carries the direction.)
 - [`--no-gc`](../../guides/wasm-nogc.md#host-imports-rontolispwasm-import) takes
   the directive, with its own type vocabulary: the whole fixed-width integer
   family (its house integer is `i64`), `:float`, `:bool`, `:string` and `:void`,
-  but not `:s-expr`, not `:bytes` and not `:async t`. Under
+  but not `:s-expr`, not `:bytes`, not `:octets` and not `:async t`. Under
   [`--no-gc --component`](../../guides/wasm-nogc.md#host-imports-in-a-component)
   the reached imports become the component's imports, so `:from` must be a
   lower-kebab-case label or a WIT interface id, and `:as` and every

@@ -5672,7 +5672,7 @@ public final class WasmLispCompiler implements LispCompiler {
 									+ WasmImportCompiler.hostImportOrdinal(importWrappers, decl.name()));
 				}
 				byte[] body = WasmImportCompiler.buildWrapperBody(ctxBuilder, decl, ordinal, strFromMemFuncIndex,
-						allocFuncIndex, bytesCopyFuncIndex, bytesFillFuncIndex);
+						allocFuncIndex, bytesCopyFuncIndex, bytesFillFuncIndex, bytesFromMemFuncIndex);
 				userFunctionBodies.set(Objects.requireNonNull(importBodySlots.get(decl.name())), body);
 			}
 			for (WasmComponentImportCompiler.Decl decl : componentImportWrappers.values()) {

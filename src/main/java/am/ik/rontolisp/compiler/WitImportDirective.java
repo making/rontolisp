@@ -147,9 +147,11 @@ public final class WitImportDirective {
 	 * table can reach
 	 * @param octets whether a {@code list<u8>} RESULT lifts as a packed
 	 * {@code (unsigned-byte 8)} vector, octet for octet ({@code :octets t}), instead of
-	 * the text a {@code string} lifts to: what {@code --component} decides; the
-	 * interpreter and the JVM hand a provider's value over unconverted either way, and
-	 * Preview 1, whose {@code :string} is text, refuses a member carrying one
+	 * the text a {@code string} lifts to: what {@code --component} decides, and what a
+	 * Preview 1 core module declares a {@code list<u8>} as ({@code :octets} rather than
+	 * {@code :string}, both directions); the interpreter and the JVM hand a provider's
+	 * value over unconverted either way, and {@code --no-gc}, which has no byte vector,
+	 * refuses a member carrying one
 	 */
 	public record Directive(String path, String iface, @Nullable String pkg, @Nullable String module,
 			FieldStyle fieldStyle, @Nullable Map<String, String> names, boolean octets) {
@@ -390,7 +392,8 @@ public final class WitImportDirective {
 			String name = bindingName(directive, member);
 			if (component) {
 				validateComponentFunc(func, witPath, locations, resolver, iface, member);
-				List<Param> params = parameters(func, witPath, locations, resolver, iface, member, false, true, false);
+				List<Param> params = parameters(func, witPath, locations, resolver, iface, member, false, true, false,
+						false);
 				if (func.def().func().async()) {
 					// An `async func` member async-lowers: the call starts as a subtask
 					// (%member-start, returning a (packed . retptr) token cons), which
@@ -436,9 +439,13 @@ public final class WitImportDirective {
 			if (noGcComponent) {
 				validateNoGcComponentFunc(func, witPath, locations, resolver, iface, member);
 			}
-			List<Param> params = parameters(func, witPath, locations, resolver, iface, member, wasm, false, noGc);
-			String returns = resultDesignator(func, witPath, locations, resolver, iface, member, wasm, noGc);
-			if (wasm && directive.octets()) {
+			// :octets t on a wasm-GC core module: a list<u8> crosses as :octets, a byte
+			// vector both ways, instead of :string text.
+			boolean octets = wasm && !noGc && directive.octets();
+			List<Param> params = parameters(func, witPath, locations, resolver, iface, member, wasm, false, noGc,
+					octets);
+			String returns = resultDesignator(func, witPath, locations, resolver, iface, member, wasm, noGc, octets);
+			if (noGc && directive.octets()) {
 				refuseOctets(func, witPath, locations, resolver, iface, member);
 			}
 			if (!wasm && func.def().func().async()) {
@@ -1496,10 +1503,12 @@ public final class WitImportDirective {
 	}
 
 	// The lambda list of a binding. A resource method takes the handle as its leading
-	// parameter (the WIT `self` receiver, which the model does not spell out).
+	// parameter (the WIT `self` receiver, which the model does not spell out). octets:
+	// a list<u8> is the :octets designator rather than :string (:octets t on a wasm-GC
+	// core module).
 	private static List<Param> parameters(WitResolver.Func func, String witPath, WitLocations locations,
 			WitResolver resolver, WitItem.InterfaceDef iface, String member, boolean wasm, boolean component,
-			boolean noGc) {
+			boolean noGc, boolean octets) {
 		List<Param> params = new ArrayList<>();
 		boolean method = func.resource() != null && func.def().kind() == WitItem.FuncKind.PLAIN;
 		if (method) {
@@ -1507,7 +1516,7 @@ public final class WitImportDirective {
 		}
 		for (var param : func.def().func().params()) {
 			String designator = designatorOf(param.type(), witPath, locations, resolver, iface, func, member,
-					"parameter '" + param.name() + "'", wasm, component, noGc);
+					"parameter '" + param.name() + "'", wasm, component, noGc, octets);
 			String name = param.name();
 			if (method && "self".equals(name)) {
 				throw new UnsupportedOperationException(witPath + ":" + locations.lineOf(func.def()) + ": '" + member
@@ -1522,7 +1531,8 @@ public final class WitImportDirective {
 	// The wasm-import :returns designator (":VOID" when the function returns nothing). A
 	// constructor returns its resource, which the WIT model leaves implicit.
 	private static String resultDesignator(WitResolver.Func func, String witPath, WitLocations locations,
-			WitResolver resolver, WitItem.InterfaceDef iface, String member, boolean wasm, boolean noGc) {
+			WitResolver resolver, WitItem.InterfaceDef iface, String member, boolean wasm, boolean noGc,
+			boolean octets) {
 		if (func.def().kind() == WitItem.FuncKind.CONSTRUCTOR) {
 			return ":INT";
 		}
@@ -1533,13 +1543,14 @@ public final class WitImportDirective {
 		// resultDesignator is only reached on the non-component path (the component path
 		// binds through the WIT text, not a flat designator), so component is always
 		// false.
-		return designatorOf(result, witPath, locations, resolver, iface, func, member, "the result", wasm, false, noGc);
+		return designatorOf(result, witPath, locations, resolver, iface, func, member, "the result", wasm, false, noGc,
+				octets);
 	}
 
-	// :octets t on a core module: a list<u8> crosses a core import as :string, text, so
-	// the octets the option promises have no carrier there. Only a flat type reaches
-	// this check (designatorOf refused the rest), so a list<u8> is a parameter or the
-	// result itself.
+	// :octets t under --no-gc: the scalar backend has no byte vector, so the octets the
+	// option promises have no value to arrive as. Only a flat type reaches this check
+	// (designatorOf refused the rest), so a list<u8> is a parameter or the result
+	// itself.
 	private static void refuseOctets(WitResolver.Func func, String witPath, WitLocations locations,
 			WitResolver resolver, WitItem.InterfaceDef iface, String member) {
 		List<WitType> types = new ArrayList<>();
@@ -1553,8 +1564,8 @@ public final class WitImportDirective {
 			Scoped scoped = resolveAliases(type, resolver, iface);
 			if (scoped.type() instanceof WitType.ListOf list && isU8(list.element(), resolver, scoped.iface())) {
 				throw new UnsupportedOperationException(witPath + ":" + locations.lineOf(func.def()) + ": '" + member
-						+ "': :octets t crosses a list<u8> as its octets, which a Preview 1 core import cannot carry "
-						+ "(it declares the list :string, text); compile with --component, or drop :octets");
+						+ "': :octets t crosses a list<u8> as a byte vector, which --no-gc has none of (the scalar "
+						+ "backend has no arrays); compile on the default GC backend, or drop :octets");
 			}
 		}
 	}
@@ -1564,10 +1575,11 @@ public final class WitImportDirective {
 	// boundary
 	// is an ordinary Lisp function call, so every type crosses as its settled house
 	// representation (WitTypeMapper) and only stream/future -- which have no rontolisp
-	// value at all until language-level async lands -- are refused.
+	// value at all until language-level async lands -- are refused. octets: a list<u8>
+	// crosses as :octets, its octets raw, instead of :string text.
 	private static String designatorOf(WitType type, String witPath, WitLocations locations, WitResolver resolver,
 			WitItem.InterfaceDef iface, WitResolver.Func func, String member, String what, boolean wasm,
-			boolean component, boolean noGc) {
+			boolean component, boolean noGc, boolean octets) {
 		// --no-gc carries EVERY type that has a WIT spelling -- its house integer is i64,
 		// so the 64-bit widths cross where the wasm-GC i31ref has to refuse them. The
 		// designator is therefore read straight off the prim name, the way the EXPORT
@@ -1611,7 +1623,8 @@ public final class WitImportDirective {
 			case INT, HANDLE -> ":INT";
 			case FLOAT -> ":FLOAT";
 			case BOOLEAN -> ":BOOL";
-			case STRING, BYTE_STRING -> ":STRING";
+			case STRING -> ":STRING";
+			case BYTE_STRING -> octets ? ":OCTETS" : ":STRING";
 			// A Preview 1 core import is a bare host function: it carries flat values and
 			// nothing else, because a core module has no component type with which to
 			// declare a richer shape to its host. The canonical ABI is what marshals the

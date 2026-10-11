@@ -250,6 +250,38 @@ class ClojureWasmBoundaryTest {
 	}
 
 	/**
+	 * An import of {@code :octets} takes a byte array and answers one, a value both ways
+	 * (no receive buffer, unlike {@code :bytes}), octet for octet under node.
+	 */
+	@Test
+	void anOctetsImportTakesAndAnswersAByteArrayUnderNode() throws Exception {
+		assumeTrue(HostBoundaryRuns.nodeAvailable(), "node is not on PATH");
+		Path program = this.dir.resolve("oct.clj");
+		Files.writeString(program, """
+				(ns oct
+				  (:require [rontolisp.wasm :as wasm]))
+
+				(wasm/defimport swap {:from "host" :params [:octets] :returns :octets})
+
+				(defn probe {:wasm/export {:params [] :returns :string}} []
+				  (let [b (swap (byte-array [-1 0 65]))]
+				    (str (bytes? b) " " (vec b))))
+				""");
+		HostBoundaryRuns.cli(program.toString(), "-o", this.dir.resolve("oct.wasm").toString(), "--no-wasi",
+				"--emit-js-glue");
+		Path host = this.dir.resolve("run.mjs");
+		Files.writeString(host, """
+				import fs from 'fs';
+				import { instantiate } from './oct.js';
+
+				const module = new WebAssembly.Module(fs.readFileSync(new URL('./oct.wasm', import.meta.url)));
+				const lisp = instantiate(module, { host: { swap: (data) => Uint8Array.from(data).reverse() } });
+				console.log(lisp.probe());
+				""");
+		assertThat(HostBoundaryRuns.node(this.dir, host.toString())).isEqualTo("true [65 0 -1]\n");
+	}
+
+	/**
 	 * On the interpreter and the JVM an export taking {@code :bytes} is an ordinary
 	 * function of a byte array, and an import answering {@code :bytes} a stub taking the
 	 * byte array to fill after the declared parameters.

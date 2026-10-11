@@ -18928,13 +18928,6 @@
                   (and (consp e) (rontolisp::%clojure-host-holds-octets e)))
               (return t))))))
 
-(defun rontolisp::%clojure-bytes-to-text (x)
-  "The byte array X as the text a Preview 1 core module carries a list<u8> as:
-   its octets decoded as UTF-8, a malformed sequence replaced as the JDK's
-   decoder replaces one."
-  (let ((octets (rontolisp::%clojure-bytes-to-host x)))
-    (rontolisp::%octets-to-string-replacing octets 0 (length octets))))
-
 ;; bytes?: T for a byte array, NO (the false object) for anything else. A program
 ;; making no byte array calls progn in its place (the family's alias), so the
 ;; predicate is (progn x false) there.

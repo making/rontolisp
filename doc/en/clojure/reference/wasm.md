@@ -50,15 +50,16 @@ add is a host function (rontolisp.wasm/defimport): only a compiled WASM module c
 ## Types
 
 The type keywords are the boundary's: `:int`, `:long`, `:s8` ... `:u64`, `:float`, `:bool`,
-`:string`, `:s-expr`, `:bytes`, `:extern` (imports only) and, for a result, `:void` -- what a
-declaration without `:returns` means. A value Clojure spells differently from the boundary is
-converted on the way across:
+`:string`, `:s-expr`, `:bytes`, `:octets` and `:extern` (the last two imports only) and, for a
+result, `:void` -- what a declaration without `:returns` means. A value Clojure spells
+differently from the boundary is converted on the way across:
 
 | Type | To the host | From the host |
 |---|---|---|
 | `:bool` | `false` and `nil` cross as false | false arrives as `false`, not `nil` |
 | `:s-expr` | the text `pr-str` prints | the value `read-string` reads |
 | `:bytes` | a [byte array](byte-array.md)'s octets; anything else throws `ClassCastException` | a byte array |
+| `:octets` | as `:bytes` | a byte array |
 
 So vectors, maps, keywords and `false` round-trip through `:s-expr`, which crosses as the same
 UTF-8 text a `:string` does on every host. A declaration with none of these types lowers to
@@ -89,6 +90,10 @@ $ rontolisp bin.clj -o bin.wasm --no-wasi --emit-js-glue
 
 Like the Common Lisp `:bytes` type, it crosses only a WASM core module of the GC backend; on
 the interpreter and the JVM an import answering `:bytes` is a stub taking the byte array too.
+
+`:octets` is the same octets as a value: an import answering `:octets` answers a byte array
+holding exactly the octets the host returned, with no buffer to pass. It is what
+[`rontolisp.wit`](wit.md) declares a WIT `list<u8>` as on a WASM core module.
 
 ## Where it runs
 

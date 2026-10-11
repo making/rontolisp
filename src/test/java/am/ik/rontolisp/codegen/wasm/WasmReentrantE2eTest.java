@@ -286,6 +286,55 @@ class WasmReentrantE2eTest {
 				"6000 6000 true");
 	}
 
+	private static final String OCTETS_MODULE = """
+			(rontolisp:wasm-import 'swap :from "env" :as "swap" :params '(:octets) :returns :octets :async t)
+			(rontolisp:async-defun relay (n)
+			  (let ((v (rontolisp:await
+			            (swap (make-array 3 :element-type '(unsigned-byte 8) :initial-contents (list n 0 255))))))
+			    (+ (* 16777216 (length v)) (* 65536 (aref v 0)) (* 256 (aref v 1)) (aref v 2))))
+			(rontolisp:wasm-export 'relay :params '(:int) :returns :int)
+			""";
+
+	private static final String OCTETS_DRIVER = """
+			const fs = require('fs');
+			let ex;
+			const env = {
+			  // An :octets import RESULT is a park block the MODULE frees after copying it out.
+			  swap: new WebAssembly.Suspending(async (ptr, len) => {
+			    const got = new Uint8Array(ex.memory.buffer.slice(ptr, ptr + len)); // read at call time
+			    await new Promise((r) => setTimeout(r, got[0] === 1 ? 40 : got[0] === 2 ? 10 : 0));
+			    const back = got.reverse();
+			    const p = ex.__ronto_park_alloc(back.length);
+			    new Uint8Array(ex.memory.buffer, p, back.length).set(back);
+			    return [p, back.length];
+			  }),
+			};
+			const inst = new WebAssembly.Instance(new WebAssembly.Module(fs.readFileSync(process.argv[2])), { env });
+			ex = inst.exports;
+			ex._initialize();
+			const relay = WebAssembly.promising(ex.relay);
+			const loop = async (n, k) => {
+			  for (let i = 0; i < k; i++) await relay(n);
+			};
+			(async () => {
+			  // 1. two overlapped calls: the slower one's argument and answer sat staged
+			  // while the other ran, and both cross exactly.
+			  console.log((await Promise.all([relay(1), relay(2)])).join(' '));
+			  // 2. two interleaved call loops: every park block returned, memory flat.
+			  await Promise.all([loop(3, 50), loop(4, 50)]);
+			  const before = ex.memory.buffer.byteLength;
+			  await Promise.all([loop(3, 2000), loop(4, 2000)]);
+			  console.log(ex.memory.buffer.byteLength === before);
+			})();
+			""";
+
+	@Test
+	void overlappedOctetsCrossThroughParkBlocks() throws Exception {
+		Path wasm = compile("octets.wasm", OCTETS_MODULE);
+		// 3 octets, ff 00 n each: 3*2^24 + 0xff*2^16 + n
+		assertThat(runNode(driver(OCTETS_DRIVER), wasm).lines().toList()).containsExactly("67043329 67043330", "true");
+	}
+
 	// The dog-fetcher shape on the ENVELOPE boundary: each request makes one upstream
 	// round trip. Compiled --host-fetch --reentrant; the generated glue's worker() is
 	// the whole host.

@@ -428,6 +428,7 @@ public final class HostGlueEmitter {
 			// A :bytes result is a SOURCE of chunks: the module owns the receive buffer,
 			// so what a host answers is the next chunk, and null at the end of them.
 			case BYTES -> "chunk";
+			case OCTETS -> "octets";
 			case VOID -> "{}";
 			case STRING, S_EXPR -> "text";
 			case BOOL -> "flag";
@@ -447,6 +448,7 @@ public final class HostGlueEmitter {
 		String base = switch (type) {
 			case STRING, S_EXPR -> "text";
 			case BYTES -> "chunk";
+			case OCTETS -> "octets";
 			case BOOL -> "flag";
 			// An i64 crosses as a BigInt, and a plain number there is a TypeError.
 			case S64, U64 -> "bigint";
@@ -1134,7 +1136,9 @@ public final class HostGlueEmitter {
 			.stream()
 			.anyMatch(i -> i.paramTypes().stream().anyMatch(HostGlueEmitter::isText))
 				|| surface.exports().stream().anyMatch(e -> isText(e.returnType()));
-		boolean readBytes = surface.imports().stream().anyMatch(i -> i.paramTypes().contains(BoundaryType.BYTES))
+		boolean readBytes = surface.imports()
+			.stream()
+			.anyMatch(i -> i.paramTypes().contains(BoundaryType.BYTES) || i.paramTypes().contains(BoundaryType.OCTETS))
 				|| surface.exports().stream().anyMatch(e -> e.returnType() == BoundaryType.BYTES);
 		// --reentrant: an import's text RESULT is staged in a park block the MODULE
 		// frees after copying it out -- a bump allocation would leak, since the
@@ -1148,6 +1152,11 @@ public final class HostGlueEmitter {
 		boolean reserve = surface.exports().stream().anyMatch(e -> e.returnType() == BoundaryType.BYTES);
 		boolean write = surface.exports().stream().anyMatch(e -> e.paramTypes().contains(BoundaryType.BYTES));
 		boolean pulls = surface.imports().stream().anyMatch(i -> i.returnType() == BoundaryType.BYTES);
+		// An import's :octets RESULT is the :string shape over the host's octets: a
+		// Uint8Array as it is, text as its UTF-8 encoding.
+		boolean answersOctets = surface.imports().stream().anyMatch(i -> i.returnType() == BoundaryType.OCTETS);
+		boolean writeOctets = answersOctets && !surface.reentrant();
+		boolean writeParkOctets = answersOctets && surface.reentrant();
 		if (readString) {
 			out.append("""
 
@@ -1167,7 +1176,7 @@ public final class HostGlueEmitter {
 					    new Uint8Array(exports.memory.buffer.slice(ptr, ptr + len));
 					""");
 		}
-		if (writeString || write) {
+		if (writeString || write || writeOctets) {
 			out.append("""
 
 					  // Bytes the HOST hands over live in the module's own bump allocator, and
@@ -1202,10 +1211,25 @@ public final class HostGlueEmitter {
 		else if (reserve) {
 			out.append("  const reserve = (n) => [exports.__ronto_alloc(n), n];\n");
 		}
-		if (pulls || write) {
+		if (pulls || write || answersOctets) {
 			out.append("""
 					  const octets = (chunk) =>
 					    typeof chunk === "string" ? encoder.encode(chunk) : chunk;
+					""");
+		}
+		if (writeOctets) {
+			out.append("  const writeOctets = (value) => write(octets(value));\n");
+		}
+		if (writeParkOctets) {
+			out.append("""
+					  // An import's octets answer lives in a park block until the MODULE has
+					  // copied it out -- which it frees itself with __ronto_park_free.
+					  const writeParkOctets = (value) => {
+					    const bytes = octets(value);
+					    const ptr = exports.__ronto_park_alloc(bytes.length);
+					    new Uint8Array(exports.memory.buffer, ptr, bytes.length).set(bytes);
+					    return [ptr, bytes.length];
+					  };
 					""");
 		}
 	}
@@ -1474,6 +1498,7 @@ public final class HostGlueEmitter {
 	private static String importResult(BoundaryType type, boolean reentrant) {
 		return switch (type) {
 			case STRING, S_EXPR -> reentrant ? "writeParkString" : "writeString";
+			case OCTETS -> reentrant ? "writeParkOctets" : "writeOctets";
 			case BOOL -> "(value) => (value ? 1 : 0)";
 			case VOID -> "() => undefined";
 			default -> "(value) => value";
@@ -1491,7 +1516,7 @@ public final class HostGlueEmitter {
 				params.add(name + "Len");
 				args.add("readString(" + name + ", " + name + "Len)");
 			}
-			case BYTES -> {
+			case BYTES, OCTETS -> {
 				params.add(name);
 				params.add(name + "Len");
 				args.add("readBytes(" + name + ", " + name + "Len)");

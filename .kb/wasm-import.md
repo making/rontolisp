@@ -168,11 +168,11 @@ runtime-built string, the flat-memory loop).
   `hostResultTypes` settle the host signature, and `am.ik.wasm.WasmImportInjector` resolves the
   same `PLACEHOLDER_FUNC_BASE` encoding. **The accepted TYPE SET is per-backend and follows the
   house integer**, which is why `parse` takes it as an argument: `KNOWN_PARAM_TYPES` here
-  (`:s32`, `:s64`, `:float`, `:bool`, `:string`, `:s-expr`, `:bytes`, `:extern` -- the house
+  (`:s32`, `:s64`, `:float`, `:bool`, `:string`, `:s-expr`, `:bytes`, `:octets`, `:extern` -- the house
   integer is `i31ref`; `:s64` crosses through the boxed exact integer, `_int_val` / `_int_new`),
   `SCALAR_PARAM_TYPES` there (every type with a WIT spelling, i.e. the whole fixed-width integer
-  family plus `:float`/`:bool`/`:string` -- the house integer is `i64`, and `:s-expr`/`:bytes`
-  are heap objects that model has no runtime for). `SCALAR_PARAM_TYPES` is DERIVED from
+  family plus `:float`/`:bool`/`:string` -- the house integer is `i64`, and `:s-expr`/`:bytes`/
+  `:octets` are heap objects that model has no runtime for). `SCALAR_PARAM_TYPES` is DERIVED from
   `BoundaryType.witName() != null` so it cannot drift from what a WIT world can name.
 - A `:string` result forces the `__ronto_alloc`/`_str_from_mem` pair (`memoryHelpers`); an
   `:s-expr` result forces `usesRead`. **Latent gap fixed:** `usesStrFromMem` named only `:string`,
@@ -456,6 +456,25 @@ stages and pops, and both say the caller owns the memory (which is why the write
 nothing). [[clack]] ("The WASM boundary") has the whole shape, including why each thunk CALLS its
 import instead of taking `#'name`, and why a plain WASI COMMAND module keeps the in-band bodies
 (its host is `wasmtime run`, which satisfies no `env.*` import).
+
+## `:octets` -- the same octets as a VALUE (2026-10-11)
+What `rontolisp:wit-import :octets t` lowers a WIT `list<u8>` to on a wasm-GC core module
+([[wit]], "`:octets t`"), where `:string` decodes the host's octets as UTF-8. Import only
+(`BoundaryType.importOnly`, refused by every export parser; `--no-gc` refuses it as
+`SCALAR_PARAM_TYPES` has no member without a WIT spelling).
+- The host ABI is the `:string` one, `(ptr,len)` both ways; only the guest side differs. A
+  PARAMETER stages like a `:bytes` one (`stagesOctets`, `_bytes_copy` into its own allocation),
+  except that a non-vector argument takes the else-arm of a `ref.test TYPE_I8ARR` and stages as a
+  staged `:string` (its UTF-8 encoding) -- the component's `emitStageBytesParam` rule, so `:octets
+  t` takes the same arguments on both. A RESULT is host-reserved (`__ronto_alloc`, under
+  `--reentrant` `__ronto_park_alloc`, freed by the wrapper) and lifted by `_bytes_from_mem`.
+- `usesBytes` covers it, so the three `_bytes_*` helpers and the memory pair ride exactly the
+  modules that name it. The glue: an argument is `readBytes` (a `Uint8Array` copy), an answer
+  `writeOctets` / `writeParkOctets` over the `octets` helper (a string as its UTF-8 encoding).
+- Pins: `WasmOctetsBoundaryE2eTest` (node: `ff 00 41` and a string out, exact back, flat memory
+  over a call loop), `WasmReentrantE2eTest.overlappedOctetsCrossThroughParkBlocks`,
+  `HostGlueEmitterTest.anOctetsImportHandsTheHostAUint8ArrayAndTakesOneBack`,
+  `WasmImportCompilerTest.parsesOctetsAsAValueOfTheStringShapeAndKeepsItAnImportOnlyType`.
 
 ## The component path does NOT go through this compiler
 A `rontolisp:wit-import` under `--component` lowers to `rontolisp::%component-import`, which

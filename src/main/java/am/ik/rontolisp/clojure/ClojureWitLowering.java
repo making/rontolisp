@@ -332,10 +332,10 @@ final class ClojureWitLowering {
 			else if (crossings.converts()) {
 				List<ClojureWasmLowering.Crossing> params = new ArrayList<>();
 				for (LispVal param : crossings.params()) {
-					params.add(outCrossing(ctx, param));
+					params.add(outCrossing(param));
 				}
 				ctx.wit.wrappers.put(var.name(), new Wrapper(ClojureWasmLowering.importWrapper(ctx, var,
-						new LispSymbol(bound), params, inCrossing(ctx, crossings.result())), List.of(), false));
+						new LispSymbol(bound), params, inCrossing(crossings.result())), List.of(), false));
 			}
 			if (crossings.serves()) {
 				served.add(servedEntry(member.name(), crossings));
@@ -366,12 +366,10 @@ final class ClojureWitLowering {
 		}
 		directive.add(new LispSymbol(":NAMES"));
 		directive.add(ClojureLowerUtil.list(table));
-		if (!ctx.boundary.bytesCrossAsText()) {
-			// a list<u8> is a byte array here, so a component lifts it as its octets,
-			// not as the text a string lifts to
-			directive.add(new LispSymbol(":OCTETS"));
-			directive.add(new LispSymbol("T"));
-		}
+		// a list<u8> is a byte array here, so it crosses as its octets -- a component's
+		// lift and a core module's import alike -- not as the text a string is
+		directive.add(new LispSymbol(":OCTETS"));
+		directive.add(new LispSymbol("T"));
 		ctx.hoisted.add(ClojureLowerUtil.list(directive));
 		LispVal servedTable = served.isEmpty() ? null
 				: ClojureLowerUtil.cons(ClojureCollectionLowering.keywordDatum(ERROR_KEY), served);
@@ -694,12 +692,12 @@ final class ClojureWitLowering {
 	}
 
 	/** The inline crossing of an argument whose descriptor is {@link #inline}. */
-	private static ClojureWasmLowering.Crossing outCrossing(ClojureLowering ctx, LispVal descriptor) {
+	private static ClojureWasmLowering.Crossing outCrossing(LispVal descriptor) {
 		if (descriptor == BOOL) {
 			return ClojureWasmLowering.Crossing.BOOL;
 		}
 		if (descriptor == BYTE_ARRAY) {
-			return bytesCrossing(ctx);
+			return ClojureWasmLowering.Crossing.BYTES;
 		}
 		return isOptionOf(descriptor, BOOL) ? ClojureWasmLowering.Crossing.NILLABLE_BOOL
 				: ClojureWasmLowering.Crossing.PLAIN;
@@ -709,26 +707,17 @@ final class ClojureWitLowering {
 	 * The inline crossing of a result whose descriptor is {@link #inline}: an
 	 * {@code option<bool>} keeps {@code nil} as its absent value.
 	 */
-	private static ClojureWasmLowering.Crossing inCrossing(ClojureLowering ctx, LispVal descriptor) {
+	private static ClojureWasmLowering.Crossing inCrossing(LispVal descriptor) {
 		if (descriptor == BYTE_ARRAY) {
-			return bytesCrossing(ctx);
+			return ClojureWasmLowering.Crossing.BYTES;
 		}
 		return descriptor == BOOL ? ClojureWasmLowering.Crossing.BOOL : ClojureWasmLowering.Crossing.PLAIN;
-	}
-
-	/**
-	 * How a {@code list<u8>} crosses inline: as its octets, or as text where the boundary
-	 * carries one as a {@code :string} (a Preview 1 core module).
-	 */
-	private static ClojureWasmLowering.Crossing bytesCrossing(ClojureLowering ctx) {
-		return ctx.boundary.bytesCrossAsText() ? ClojureWasmLowering.Crossing.TEXT_BYTES
-				: ClojureWasmLowering.Crossing.BYTES;
 	}
 
 	/** A Clojure argument as the boundary's value, the walker reading its descriptor. */
 	private static LispVal toHost(ClojureLowering ctx, LispVal descriptor, LispVal value, List<String> types) {
 		if (inline(descriptor)) {
-			return ClojureWasmLowering.toHost(ctx, outCrossing(ctx, descriptor), value);
+			return ClojureWasmLowering.toHost(ctx, outCrossing(descriptor), value);
 		}
 		return ClojureLowerUtil.list(new LispSymbol(OUT), typeArg(ctx, descriptor, types), value);
 	}
@@ -736,7 +725,7 @@ final class ClojureWitLowering {
 	/** The boundary's answer as the Clojure value, the walker reading its descriptor. */
 	private static LispVal fromHost(ClojureLowering ctx, LispVal descriptor, LispVal value, List<String> types) {
 		if (inline(descriptor)) {
-			return ClojureWasmLowering.fromHost(ctx, inCrossing(ctx, descriptor), value);
+			return ClojureWasmLowering.fromHost(ctx, inCrossing(descriptor), value);
 		}
 		return ClojureLowerUtil.list(new LispSymbol(IN), typeArg(ctx, descriptor, types), value);
 	}

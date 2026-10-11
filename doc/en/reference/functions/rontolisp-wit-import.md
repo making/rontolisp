@@ -113,13 +113,15 @@ host that has never heard of the program. The output is identical all three ways
   `:camel` (the default — `create-shader` becomes `createShader`, the JavaScript
   convention and what `jco` produces) or `:kebab` (the label verbatim). Ignored
   on the other backends.
-- `:octets` — `t` makes a `--component` binding return every `list<u8>` (the
-  result itself, or one inside an `option`, a `record`, ...) as an
+- `:octets` — `t` makes a binding return every `list<u8>` (the result itself,
+  or under `--component` one inside an `option`, a `record`, ...) as an
   `(unsigned-byte 8)` vector holding the octets the host wrote. Without it a
   `list<u8>` result is text: the octets decoded as UTF-8, so octets that are not
-  UTF-8 (`ff`, a lone continuation byte) do not come back as written. The
-  interpreter and the JVM hand the provider's value over unchanged either way. A
-  Preview 1 module declares a `list<u8>` `:string`, so there a member carrying
+  UTF-8 (`ff`, a lone continuation byte) do not come back as written. A Preview 1
+  module declares the member `:octets` instead of `:string`
+  ([`rontolisp:wasm-import`](rontolisp-wasm-import.md)), so an argument crosses
+  as its octets too. The interpreter and the JVM hand the provider's value over
+  unchanged either way. `--no-gc` has no byte vector, so there a member carrying
   one is a compile error under `:octets t`.
 
 ## What gets bound
@@ -302,7 +304,7 @@ Anything unsupported is a compile error naming the WIT file and line.
 | `bool` | `t` / `nil` | `:bool` | yes |
 | `string` | a string | `:string` | yes |
 | `char` | a character | no | yes |
-| `list<u8>` | a string, the octets as UTF-8 text; under `:octets t` an `(unsigned-byte 8)` vector. An argument may also be an `(unsigned-byte 8)` vector, crossing a component as its octets | `:string` | yes |
+| `list<u8>` | a string, the octets as UTF-8 text; under `:octets t` an `(unsigned-byte 8)` vector. An argument may also be an `(unsigned-byte 8)` vector, crossing a component (and Preview 1 under `:octets t`) as its octets | `:string`; `:octets` under `:octets t` | yes |
 | `list<T>` | a proper list | no | result only |
 | `tuple<...>` | a proper list, positional | no | yes |
 | `option<T>` | the value, or `nil` | no | yes |

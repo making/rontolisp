@@ -114,13 +114,15 @@ rontolisp counter.lisp -o Counter.class && java Counter
   `:camel` (既定 — `create-shader` は `createShader` になります。JavaScript
   の慣習であり、`jco` が生成するものでもあります) または `:kebab` (ラベルをそのまま)。
   他のバックエンドでは無視されます。
-- `:octets` — `t` にすると、`--component` の束縛は `list<u8>` (結果そのもの、または
-  `option` や `record` などの内側にあるもの) をすべて、ホストが書いたオクテットを持つ
-  `(unsigned-byte 8)` ベクタとして返します。指定しなければ `list<u8>` の結果は
+- `:octets` — `t` にすると、束縛は `list<u8>` (結果そのもの、または `--component`
+  では `option` や `record` などの内側にあるもの) をすべて、ホストが書いたオクテットを
+  持つ `(unsigned-byte 8)` ベクタとして返します。指定しなければ `list<u8>` の結果は
   テキスト、つまりオクテットを UTF-8 としてデコードした文字列なので、UTF-8 でない
-  オクテット (`ff`、単独の継続バイト) は書かれたとおりには戻りません。インタプリタと
-  JVM はどちらの場合もプロバイダの値をそのまま渡します。Preview 1 モジュールは
-  `list<u8>` を `:string` と宣言するので、`:octets t` のもとでそれを含むメンバは
+  オクテット (`ff`、単独の継続バイト) は書かれたとおりには戻りません。Preview 1
+  モジュールはメンバを `:string` ではなく `:octets` と宣言する
+  ([`rontolisp:wasm-import`](rontolisp-wasm-import.md)) ので、引数もオクテットのまま
+  渡ります。インタプリタと JVM はどちらの場合もプロバイダの値をそのまま渡します。
+  `--no-gc` にはバイトベクタがないので、`:octets t` のもとでそれを含むメンバは
   コンパイルエラーになります。
 
 ## 何が束縛されるか
@@ -309,7 +311,7 @@ cons `(:ok . V)` / `(:error . E)` — これは戻り値の `result` が ok
 | `bool` | `t` / `nil` | `:bool` | yes |
 | `string` | a string | `:string` | yes |
 | `char` | a character | no | yes |
-| `list<u8>` | a string, the octets as UTF-8 text; under `:octets t` an `(unsigned-byte 8)` vector. An argument may also be an `(unsigned-byte 8)` vector, crossing a component as its octets | `:string` | yes |
+| `list<u8>` | a string, the octets as UTF-8 text; under `:octets t` an `(unsigned-byte 8)` vector. An argument may also be an `(unsigned-byte 8)` vector, crossing a component (and Preview 1 under `:octets t`) as its octets | `:string`; `:octets` under `:octets t` | yes |
 | `list<T>` | a proper list | no | result only |
 | `tuple<...>` | a proper list, positional | no | yes |
 | `option<T>` | the value, or `nil` | no | yes |
