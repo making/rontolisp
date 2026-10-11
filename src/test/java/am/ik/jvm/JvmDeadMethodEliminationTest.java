@@ -359,6 +359,14 @@ class JvmDeadMethodEliminationTest {
 	}
 
 	@Test
+	void theGensymCounterHelperLivesOnlyWithAGensym() throws Exception {
+		assertThat(declaredMethodNames(compile("(print (+ 1 2))", OptimizeLevel.DEFAULT)))
+			.doesNotContain("_gensymNext");
+		assertThat(declaredMethodNames(compile("(print (symbolp (gensym)))", OptimizeLevel.DEFAULT)))
+			.contains("_gensymNext");
+	}
+
+	@Test
 	void aClosureMadeOnlyBehindATrampolineBounceKeepsItsCase() throws Exception {
 		// Every call through a value here is a tail call, so only the value tails' _vtc1
 		// (through the dispatcher copy it calls) and the trampoline reach an arity-1

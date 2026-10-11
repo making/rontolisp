@@ -4195,6 +4195,12 @@ public final class JvmLispCompiler implements LispCompiler {
 		definition.addField(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, renderDepthFieldName, renderDepthFieldDesc);
 		definition.addField(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, colFieldName, colFieldDesc);
 		definition.addField(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, gensymCtrFieldName, gensymCtrFieldDesc);
+		// synchronized: the counter is shared by every request thread (the shake drops
+		// the method, and the field with it, when no gensym is left).
+		definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC | AccessFlag.ACC_SYNCHRONIZED,
+				cp.utf8Entry(JvmGensymCompiler.NEXT_METHOD), cp.utf8Entry(JvmGensymCompiler.NEXT_DESC),
+				JvmGensymCompiler
+					.nextCode(cp.fieldRef(thisClass, JvmGensymCompiler.CTR_FIELD, JvmGensymCompiler.CTR_DESC)));
 		// The two strings last PROVEN to hold no surrogate pair, so a character
 		// index into one is 1 + i. Deliberately NOT volatile: a String is
 		// immutable and a reference field is written atomically, so a racing

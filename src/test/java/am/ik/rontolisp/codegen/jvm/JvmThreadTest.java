@@ -76,6 +76,24 @@ class JvmThreadTest {
 	}
 
 	@Test
+	void gensymsMadeByRacingThreadsAreAllDistinct() throws Exception {
+		// The counter is one static int per compiled class; a plain read-increment-write
+		// let two threads answer the same name (a served handler runs one thread per
+		// request, .kb/concurrent-served-requests.md). Every name is kept, then counted.
+		assertThat(compileAndRun("""
+				(defun th-names (n)
+				  (let ((acc nil))
+				    (dotimes (i n) (push (gensym) acc))
+				    acc))
+				(let ((threads nil) (seen (make-hash-table :test 'equal)))
+				  (dotimes (k 8) (push (rontolisp:make-thread (lambda () (th-names 20000))) threads))
+				  (dolist (th threads)
+				    (dolist (name (rontolisp:join-thread th)) (setf (gethash name seen) t)))
+				  (print (hash-table-count seen)))
+				""", "ThreadGensymProg")).isEqualTo("160000");
+	}
+
+	@Test
 	void joinThreadYieldsTheFunctionsValueAndTheThreadIsDeadAfterwards() throws Exception {
 		assertThat(compileAndRun("""
 				(let ((th (rontolisp:make-thread (lambda () (+ 40 2)))))

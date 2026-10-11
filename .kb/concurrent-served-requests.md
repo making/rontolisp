@@ -36,13 +36,15 @@ bugs, and each looks like someone else's fault.
   guard is a no-op), so a function swapping its own atom retries everywhere. Before: 48
   requests x 20 updates counted 250-770 of 960. Volatiles stay plain (the oracle's are).
   Not covered: refs and agents (single-threaded STM).
+- JVM `gensym` (2026-10-11): the counter is bumped by `ACC_SYNCHRONIZED` `_gensymNext()`
+  (`JvmGensymCompiler`), shaken with the last `gensym`. Before: 8 threads x 20000 `gensym`s
+  answered ~100k distinct names of 160k. The interpreter's is an `AtomicLong`; WASM is exempt.
 - Protocol and interface rows are written only as the program starts: a type's at its
   definition, a `reify`'s once per SITE, hoisted ahead of its top-level datum, the evaluation's
   methods carried in the value (`.kb/clojure-frontend.md`, "`reify`"). Before, every
   evaluation stored rows under a `gensym` tag into the same tables every dispatch reads
-  (`The function NIL is undefined` under a burst), and the JVM's `gensym` counter is a plain
-  static increment. Reads stay lock-free. Not covered: an `extend`/`extend-type` or
-  `defmethod` executed while requests run (every one in the corpus is top-level).
+  (`The function NIL is undefined` under a burst). Reads stay lock-free. Not covered: an `extend`/`extend-type`
+  or `defmethod` executed while requests run (every one in the corpus is top-level).
 - Lazy loads (interpreter): `LispEvaluator.libraryLoadLock` guards EVERY load and every read of a
   guarding flag -- `resolveFunction`'s slow path plus the `ensure*Loaded` gates and
   `applyJsonHelper`. Fast path stays lock-free. Inside the lock the flag is set BEFORE evaluating
@@ -66,4 +68,6 @@ bugs, and each looks like someone else's fault.
   updates four atoms 20 times: `swap!` called and as a value, a `compare-and-set!` retry loop
   called and as a value). The single-threaded retry is clojure-spec
   `swap-retries-when-its-function-changed-the-atom`.
+- `JvmThreadTest#gensymsMadeByRacingThreadsAreAllDistinct` (8 threads x 20000 `gensym`s, all
+  names distinct); `JvmDeadMethodEliminationTest#theGensymCounterHelperLivesOnlyWithAGensym`.
 - Not in the suite: bursts of 12 concurrent POSTs against `examples/db/postgres-web.lisp`.
