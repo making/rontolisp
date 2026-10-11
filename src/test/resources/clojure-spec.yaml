@@ -12253,3 +12253,26 @@ cases:
       2 nil nil nil \b 2
       (3) nil nil (3 4) 2 (\c)
       (2 4) ((3) nil) (2 3)
+  - name: a-reader-macro-class-reads-a-literals-body-from-a-stream
+    # (clojure.lang.LispReader$StringReader.) and $RegexReader are functions of
+    # (reader, opening character, options, pending forms): they read the body
+    # past the opening quote, escapes decoded, and leave the rest of the stream
+    # unread; another count is an ArityException. Oracle lines (clj 1.12.6,
+    # 2026-10-11); instaparse's safe-read-string is this call. Deviations: fn?
+    # is true and class a keyword.
+    source: |
+      (def string-reader (clojure.lang.LispReader$StringReader.))
+      (def regex-reader (clojure.lang.LispReader$RegexReader.))
+      (prn (with-in-str "ab\\nc\"rest" (let [v (string-reader *in* \" {} nil)] [v (slurp *in*)])))
+      (prn (with-in-str "a+\\d\"rest" (let [v (regex-reader *in* \" {} nil)] [(str v) (re-find v "xaa3") (slurp *in*)])))
+      (prn (with-in-str "\"" (string-reader *in* \" {} nil)) (ifn? string-reader))
+      (prn (with-in-str "ab" (try (string-reader *in* \" {} nil) (catch RuntimeException e (ex-message e)))))
+      (prn (with-in-str "x\\q\"" (try (string-reader *in* \" {} nil) (catch RuntimeException e (ex-message e)))))
+      (prn (try (string-reader *in* nil) (catch clojure.lang.ArityException e (ex-message e))))
+    expected: |
+      ["ab\nc" "rest"]
+      ["a+\\d" "aa3" "rest"]
+      "" true
+      "EOF while reading string"
+      "Unsupported escape character: \\q"
+      "Wrong number of args (2) passed to: clojure.lang.LispReader/StringReader"

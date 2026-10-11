@@ -706,7 +706,9 @@ final class ClojureInteropLowering {
 	 * which no backend here has as a host class, over already-lowered arguments: a
 	 * {@code MapEntry} of a key and a value is the two-member vector a map entry is here,
 	 * a {@code SeqIterator} over a seq the library's iterator over it
-	 * ({@link ClojureInterfaces#SEQ_ITERATOR}). Null for any other class or count.
+	 * ({@link ClojureInterfaces#SEQ_ITERATOR}), the no-argument reader macros of a string
+	 * and a regex literal a function of the oracle's four arguments reading the literal's
+	 * body from a stream. Null for any other class or count.
 	 */
 	static @Nullable LispVal clojureLangConstruction(String cls, List<LispVal> args) {
 		if (cls.equals("clojure.lang.MapEntry") && args.size() == 2) {
@@ -714,6 +716,12 @@ final class ClojureInteropLowering {
 		}
 		if (cls.equals("clojure.lang.SeqIterator") && args.size() == 1) {
 			return ClojureLowerUtil.list(new LispSymbol(ClojureInterfaces.SEQ_ITERATOR), args.get(0));
+		}
+		if (args.isEmpty() && cls.equals("clojure.lang.LispReader$StringReader")) {
+			return ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-LISPREADER-STRING"));
+		}
+		if (args.isEmpty() && cls.equals("clojure.lang.LispReader$RegexReader")) {
+			return ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-LISPREADER-REGEX"));
 		}
 		if (cls.equals("clojure.lang.Cons") && args.size() == 2) {
 			return ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-CONS"), args.get(0), args.get(1));

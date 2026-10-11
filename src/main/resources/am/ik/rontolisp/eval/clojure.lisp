@@ -15550,6 +15550,32 @@
               (setq chars (cons (rontolisp::%clojure-rd-next rd) chars))
               (setq done t)))))))
 
+(defun rontolisp::%clojure-reader-macro (name read)
+  "The function (clojure.lang.LispReader$NAME.) is: of the oracle's four
+   arguments (reader, the opening character, options, pending forms), it
+   answers what READ, a function of the stream, reads past the opening
+   character, leaving the rest of the stream unread; any other count is the
+   oracle's arity error."
+  (lambda (&rest args)
+    (if (= (length args) 4)
+        (funcall read (rontolisp::%clojure-read-stream (car args)))
+        (rontolisp::%clojure-arity-exception
+         (format nil
+          "Wrong number of args (~D) passed to: clojure.lang.LispReader/~A"
+          (length args) name)))))
+
+(defun rontolisp::%clojure-lispreader-string ()
+  "(clojure.lang.LispReader$StringReader.): the reader macro of a string
+   literal, as a function."
+  (rontolisp::%clojure-reader-macro "StringReader"
+   (lambda (stream) (rontolisp::%clojure-rd-string (cons stream nil)))))
+
+(defun rontolisp::%clojure-lispreader-regex ()
+  "(clojure.lang.LispReader$RegexReader.): the reader macro of a regex
+   literal, as a function."
+  (rontolisp::%clojure-reader-macro "RegexReader"
+   (lambda (stream) (rontolisp::%clojure-rd-regex (cons stream nil)))))
+
 ;; Inside a preserved reader conditional any tag, a record's too, reads as a
 ;; tagged literal.
 (defun rontolisp::%clojure-rd-record (rd)

@@ -290,6 +290,8 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   some there. `nth` past the end of a transient vector answers `nil`, as of a vector.
 - A [persistent queue](reference/persistent-queue.md) prints as the oracle's `#object` without
   the identity hash, and `class` answers the type's keyword `:PersistentQueue`.
+- A `clojure.lang.LispReader$StringReader` or `$RegexReader` ([read](reference/read.md)) is a
+  function: `fn?` of one is true, where the oracle's is false.
 - A [delay](reference/delay.md) prints as the oracle's `#object` without the identity hash, a
   failed one's `:val` the exception's report where the oracle prints its `#error` map, and `str`
   answers `clojure.lang.Delay` (the oracle's `clojure.lang.Delay@hash`).

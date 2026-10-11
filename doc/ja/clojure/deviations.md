@@ -279,6 +279,8 @@
   トランジェントのベクターの末尾を過ぎた `nth` は、ベクターと同じく `nil` を返します。
 - [永続キュー](reference/persistent-queue.md)は、オラクルの `#object` から識別ハッシュを除いた形で
   印字し、`class` は型のキーワード `:PersistentQueue` を返します。
+- `clojure.lang.LispReader$StringReader` と `$RegexReader`（[read](reference/read.md)）は関数で、
+  `fn?` は true を返します（オラクルは false）。
 - [delay](reference/delay.md) は、オラクルの `#object` から識別ハッシュを除いた形で印字します。
   失敗した delay の `:val` は例外のレポートで、オラクルはその `#error` マップを印字します。`str` は
   `clojure.lang.Delay` を返します（オラクルは `clojure.lang.Delay@hash`）。

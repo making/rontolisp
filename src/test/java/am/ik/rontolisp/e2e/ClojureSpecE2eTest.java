@@ -9,7 +9,9 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.Callable;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.FutureTask;
@@ -171,12 +173,24 @@ class ClojureSpecE2eTest {
 
 	private static String runOnJvm(String program) throws Exception {
 		String name = "ClojureSpec";
-		byte[] classBytes = new JvmSourceCompiler(name).sourceLanguage("clojure").compile(program, null).classBytes();
+		JvmSourceCompiler.Result compiled = new JvmSourceCompiler(name).sourceLanguage("clojure")
+			.compile(program, null);
+		byte[] classBytes = compiled.classBytes();
+		// The part classes a program past one class's pool joins travel as runtime
+		// classes.
+		Map<String, byte[]> parts = new HashMap<>();
+		compiled.runtimeClasses()
+			.forEach((path, bytes) -> parts.put(path.substring(0, path.length() - ".class".length()).replace('/', '.'),
+					bytes));
 		ClassLoader loader = new ClassLoader(ClojureSpecE2eTest.class.getClassLoader()) {
 			@Override
 			protected Class<?> findClass(String n) throws ClassNotFoundException {
 				if (n.equals(name)) {
 					return defineClass(n, classBytes, 0, classBytes.length);
+				}
+				byte[] part = parts.get(n);
+				if (part != null) {
+					return defineClass(n, part, 0, part.length);
 				}
 				return super.findClass(n);
 			}

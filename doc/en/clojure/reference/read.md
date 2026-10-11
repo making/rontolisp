@@ -13,6 +13,13 @@ conditionals as for [read-string](read-string.md); an end inside a datum always 
 argument (recursive?) is accepted and ignored. Runs on every backend (a file needs a
 `--dir` preopen on wasm); as a value, zero to four arguments.
 
+`(clojure.lang.LispReader$StringReader.)` and `(clojure.lang.LispReader$RegexReader.)` are the
+reader macros of a string and a regex literal, as functions of the oracle's four arguments
+(reader, opening character, options, pending forms): they read the body up to the closing quote
+from the reader, which they leave right after it, and answer the string or the pattern; any
+other count of arguments is the oracle's `ArityException`. Deviation: `fn?` of one is true. The
+other reader macro classes are refused by name.
+
 ```clojure
 (let [r (java.io.PushbackReader. (java.io.StringReader. "(1 2) :k"))]
   (println (read r))

@@ -3729,6 +3729,10 @@ interfaces behind an arm family its row's store makes (`ClojureArms`, `COLLECTIO
   lookahead terminal and nested `(* .. *)` comments, then `gll/parse` (a success, a failure
   with its `NOT "c"` lookahead) print the oracle's lines on the interpreter and the JVM; wasm
   stops at the `Segment`'s `StringBuilder` interop as before.
+  With the reader macro classes (2026-10-11, f44; "Reading") `cfg/safe-read-string` and
+  `cfg/ebnf` are the oracle's on the interpreter, and `instaparse.core` verbatim (`(insta/parser
+  "S = 'a'+ 'b'")`, a success and the failure text) as a JVM class (compile 16 s, run 45 s;
+  the interpreter's load of `instaparse.abnf` still exceeds 400 s).
 - Pins: clojure-spec `a-collection-type-conjs-empties-counts-and-compares-through-its-methods`,
   `a-map-type-assocs-dissocs-reads-and-prints-as-a-map`,
   `a-set-type-disjs-contains-and-prints-as-a-set`,
@@ -4766,6 +4770,18 @@ runs at run time.
   reads nothing is byte-identical.
 - Pinned by clojure-spec `read-string-metadata-namespace-maps-and-token-refusals`,
   `ClojureReaderTest#aNamespaceMapQualifiesItsKeys`.
+- **Reader macro classes** (2026-10-11, f44; instaparse's `safe-read-string` builds
+  `(clojure.lang.LispReader$StringReader.)` and calls it `(reader r s {} (LinkedList.))`):
+  `(Class.)` of `LispReader$StringReader` / `$RegexReader` lowers
+  (`ClojureInteropLowering.clojureLangConstruction`) to a function of the oracle's four arguments
+  (`%clojure-lispreader-string` / `-regex`, `%clojure-reader-macro` in `clojure.lisp`) that
+  reads the body past the quote from the stream with `%clojure-rd-string` / `%clojure-rd-regex`
+  and leaves the rest (`java.util.LinkedList.`, instaparse's pending forms, is a host `java:new`: undefined on wasm); the stream is checked like `read`'s, any other count is the oracle's
+  `ArityException` (`... passed to: clojure.lang.LispReader/StringReader`). Measured clj
+  1.12.6: the oracle's instance is `ifn?` but not `fn?`, here `fn?` is true; the other reader
+  macro classes (`ListReader` ...) construct in the oracle and stay `No such class` here. A
+  `java.io.StringReader` argument is refused as for `read` (the oracle reads it). Pinned by
+  clojure-spec `a-reader-macro-class-reads-a-literals-body-from-a-stream`.
 
 **clojure.edn** (`ClojureEdnLowering`, a known namespace like `clojure.string`, so its
 qualified names need no `require` -- the oracle loads it before the program) reads through
