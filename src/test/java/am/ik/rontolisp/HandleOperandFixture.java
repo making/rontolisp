@@ -82,4 +82,55 @@ public final class HandleOperandFixture {
 			"(100000000000000000000 NIL)", "(:SIMPLE-ERROR \"TCP-PEER-ADDRESS expects a connected socket handle\")",
 			":JOINED");
 
+	/**
+	 * What a socket operator signals when the HOST's work fails -- its arguments being
+	 * fine -- shared by the interpreter's and the JVM backend's suites: a
+	 * {@code simple-error} reading {@code OP: cannot ... H:P: <the JDK's message>}. A
+	 * line prints {@code :OK} when the text is the expected one, the text itself
+	 * otherwise.
+	 */
+	public static final String HOST_FAILURE_PROGRAM = """
+			(defun hf-msg (thunk)
+			  (handler-case (progn (funcall thunk) :no-error)
+			    (simple-error (c) (princ-to-string c))
+			    (error (c) (list :other (princ-to-string c)))))
+			(defun hf-check (got want) (if (string= got want) :ok got))
+			(defun hf-prefix (got want) (if (eql 0 (search want got)) :ok got))
+			(let* ((l (rontolisp:tcp-listen 0 "127.0.0.1"))
+			       (port (rontolisp:tcp-local-port l)))
+			  (print (hf-check (hf-msg (lambda () (rontolisp:tcp-listen port "127.0.0.1")))
+			                   (format nil "tcp-listen: cannot listen on 127.0.0.1:~D: Address already in use" port)))
+			  (print (hf-check (hf-msg (lambda () (rontolisp:tcp-listen port nil)))
+			                   (format nil "tcp-listen: cannot listen on *:~D: Address already in use" port)))
+			  (let* ((c (rontolisp:tcp-connect "127.0.0.1" port))
+			         (a (rontolisp:tcp-accept l)))
+			    (close a)
+			    (print (hf-prefix (hf-msg (lambda () (rontolisp:tls-upgrade c "127.0.0.1")))
+			                      "tls-upgrade: cannot upgrade the stream to TLS against 127.0.0.1: "))
+			    (close c))
+			  (close l)
+			  (print (hf-check (hf-msg (lambda () (rontolisp:tcp-connect "127.0.0.1" port)))
+			                   (format nil "tcp-connect: cannot connect to 127.0.0.1:~D: Connection refused" port)))
+			  (print (hf-check (hf-msg (lambda () (rontolisp:tls-connect "127.0.0.1" port)))
+			                   (format nil "tls-connect: cannot connect to 127.0.0.1:~D: Connection refused" port))))
+			(let* ((l (rontolisp:tcp-listen 0 "127.0.0.1"))
+			       (c (rontolisp:tcp-connect "127.0.0.1" (rontolisp:tcp-local-port l)))
+			       (a (rontolisp:tcp-accept l)))
+			  (rontolisp:tcp-set-timeout c 50)
+			  (print (hf-msg (lambda () (read-line c))))
+			  (print (hf-msg (lambda () (read-char c))))
+			  (print (hf-msg (lambda () (read-byte c))))
+			  (close a)
+			  (close c)
+			  (close l))
+			(print (hf-msg (lambda () (rontolisp:tls-listen "/nonexistent.p12" "pw" 0))))
+			(print (hf-msg (lambda () (rontolisp:tls-listen "/nonexistent.p12" "pw" 0 "127.0.0.1"))))
+			""";
+
+	/** What {@link #HOST_FAILURE_PROGRAM} prints. */
+	public static final String HOST_FAILURE_EXPECTED = String.join("\n", ":OK", ":OK", ":OK", ":OK", ":OK",
+			"\"read-line: Read timed out\"", "\"read-char: Read timed out\"", "\"read-byte: Read timed out\"",
+			"\"tls-listen: cannot listen on *:0: /nonexistent.p12 (No such file or directory)\"",
+			"\"tls-listen: cannot listen on 127.0.0.1:0: /nonexistent.p12 (No such file or directory)\"");
+
 }

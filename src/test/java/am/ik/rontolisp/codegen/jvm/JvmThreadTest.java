@@ -246,4 +246,10 @@ class JvmThreadTest {
 			.isEqualTo(am.ik.rontolisp.HandleOperandFixture.EXPECTED);
 	}
 
+	@Test
+	void socketHostFailuresReadAsTheInterpretersDo() throws Exception {
+		assertThat(compileAndRun(am.ik.rontolisp.HandleOperandFixture.HOST_FAILURE_PROGRAM, "HostFailureProg"))
+			.isEqualTo(am.ik.rontolisp.HandleOperandFixture.HOST_FAILURE_EXPECTED);
+	}
+
 }

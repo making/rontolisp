@@ -37,7 +37,9 @@ import org.jspecify.annotations.Nullable;
  * ({@code _sockStr}, {@code _sockPort}, {@code _sockMs}); a handle naming no open entry
  * of the kind the operator takes is its {@code OP expects a ... handle} error
  * ({@code _sockEntry}). A host exception reaches the program only from the host's own
- * work: a refused connection, a bad keystore.
+ * work -- a refused connection, a bad keystore -- and as the interpreter's
+ * {@code OP: cannot ... H:P: <JDK message>} {@code simple-error}
+ * ({@code emitHostFailure}).
  */
 final class JvmSocketRuntimeBuilder {
 
@@ -52,7 +54,8 @@ final class JvmSocketRuntimeBuilder {
 	record SocketRuntime(List<SocketMethod> methods, ClassEntry socketClass, ClassEntry serverSocketClass,
 			MethodRefEntry socketGetInputStream, MethodRefEntry socketGetOutputStream, MethodRefEntry socketClose,
 			MethodRefEntry serverSocketClose, MethodRefEntry sockReadLine, MethodRefEntry sockWriteLine,
-			MethodRefEntry sockWriteString, MethodRefEntry sockReadChar, @Nullable MethodRefEntry sockReadLinePair) {
+			MethodRefEntry sockWriteString, MethodRefEntry sockReadChar, MethodRefEntry sockReadByte,
+			MethodRefEntry sockWriteByte, @Nullable MethodRefEntry sockReadLinePair) {
 	}
 
 	static final String TCP_CONNECT_METHOD = "_tcpConnect";
@@ -116,6 +119,14 @@ final class JvmSocketRuntimeBuilder {
 	private static final String SOCK_WRITE_STRING_METHOD = "_sockWriteString";
 
 	private static final String SOCK_WRITE_STRING_DESC = "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;";
+
+	private static final String SOCK_READ_BYTE_METHOD = "_sockReadByte";
+
+	private static final String SOCK_READ_BYTE_DESC = "(Ljava/lang/Object;)I";
+
+	private static final String SOCK_WRITE_BYTE_METHOD = "_sockWriteByte";
+
+	private static final String SOCK_WRITE_BYTE_DESC = "(Ljava/lang/Object;I)V";
 
 	private static final String SOCK_READ_CHAR_METHOD = "_sockReadChar";
 
@@ -476,6 +487,10 @@ final class JvmSocketRuntimeBuilder {
 				builder.buildSockWriteString()));
 		methods.add(new SocketMethod(cp.utf8Entry(SOCK_READ_CHAR_METHOD), cp.utf8Entry(SOCK_READ_CHAR_DESC),
 				builder.buildSockReadChar()));
+		methods.add(new SocketMethod(cp.utf8Entry(SOCK_READ_BYTE_METHOD), cp.utf8Entry(SOCK_READ_BYTE_DESC),
+				builder.buildSockReadByte()));
+		methods.add(new SocketMethod(cp.utf8Entry(SOCK_WRITE_BYTE_METHOD), cp.utf8Entry(SOCK_WRITE_BYTE_DESC),
+				builder.buildSockWriteByte()));
 		// _readLinePair's socket arm, only where the stream runtime emits that helper.
 		MethodRefEntry sockReadLinePair = null;
 		if (readLinePairs) {
@@ -485,7 +500,9 @@ final class JvmSocketRuntimeBuilder {
 		}
 		return new SocketRuntime(methods, builder.socketClass, builder.serverSocketClass, builder.socketGetInputStream,
 				builder.socketGetOutputStream, builder.socketClose, builder.serverSocketClose, builder.sockReadLineRef,
-				builder.sockWriteLineRef, builder.sockWriteStringRef, builder.sockReadCharRef, sockReadLinePair);
+				builder.sockWriteLineRef, builder.sockWriteStringRef, builder.sockReadCharRef,
+				cp.methodRef(thisClass, SOCK_READ_BYTE_METHOD, SOCK_READ_BYTE_DESC),
+				cp.methodRef(thisClass, SOCK_WRITE_BYTE_METHOD, SOCK_WRITE_BYTE_DESC), sockReadLinePair);
 	}
 
 	/**
@@ -499,14 +516,20 @@ final class JvmSocketRuntimeBuilder {
 		emitCheckedString(code, 0, 2, LispNames.TCP_CONNECT);
 		emitCheckedPort(code, 1, LispNames.TCP_CONNECT);
 		code.istore(3);
-		// new Socket(h, p)
+		// try { return addStream(new Socket(h, p)); } catch (IOException e) { ... }
+		MethodCode.Label tryStart = code.newBoundLabel();
 		code.new_(this.socketClass);
 		code.dup();
 		code.aload(2);
 		code.iload(3);
 		code.invokespecial(this.socketInit);
 		code.invokestatic(this.addStreamRef);
+		MethodCode.Label tryEnd = code.newBoundLabel();
 		code.areturn();
+		emitHostFailure(code, tryStart, tryEnd, 7, false, c -> {
+			c.ldc(this.cp.stringEntry("tcp-connect: cannot connect to "));
+			emitHostPort(c, 2, 3, false);
+		});
 		return code;
 	}
 
@@ -530,6 +553,7 @@ final class JvmSocketRuntimeBuilder {
 		emitCheckedString(code, 0, 3, LispNames.TLS_CONNECT);
 		emitCheckedPort(code, 1, LispNames.TLS_CONNECT);
 		code.istore(6);
+		MethodCode.Label tryStart = code.newBoundLabel();
 		// SSLContext ctx = SSLContext.getInstance("TLS");
 		// ctx.init(null, insecure != null ? new TrustManager[]{new Prog()} : null,
 		// null);
@@ -584,7 +608,12 @@ final class JvmSocketRuntimeBuilder {
 		code.invokevirtual(this.sslSocketStartHandshake);
 		code.aload(4);
 		code.invokestatic(this.addStreamRef);
+		MethodCode.Label tryEnd = code.newBoundLabel();
 		code.areturn();
+		emitHostFailure(code, tryStart, tryEnd, 7, true, c -> {
+			c.ldc(this.cp.stringEntry("tls-connect: cannot connect to "));
+			emitHostPort(c, 3, 6, false);
+		});
 		return code;
 	}
 
@@ -610,6 +639,7 @@ final class JvmSocketRuntimeBuilder {
 		code.checkcast(this.socketClass);
 		code.astore(4);
 		emitCheckedString(code, 1, 3, LispNames.TLS_UPGRADE);
+		MethodCode.Label tryStart = code.newBoundLabel();
 		// SSLContext ctx = SSLContext.getInstance("TLS");
 		// ctx.init(null, insecure != null ? new TrustManager[]{new Prog()} : null,
 		// null);
@@ -666,7 +696,15 @@ final class JvmSocketRuntimeBuilder {
 		code.invokevirtual(this.sslSocketStartHandshake);
 		code.aload(5);
 		code.invokestatic(this.addStreamRef);
+		MethodCode.Label tryEnd = code.newBoundLabel();
 		code.areturn();
+		emitHostFailure(code, tryStart, tryEnd, 7, true, c -> {
+			c.ldc(this.cp.stringEntry("tls-upgrade: cannot upgrade the stream to TLS against "));
+			c.aload(3);
+			c.invokevirtual(this.stringConcat);
+			c.ldc(this.cp.stringEntry(": "));
+			c.invokevirtual(this.stringConcat);
+		});
 		return code;
 	}
 
@@ -685,6 +723,7 @@ final class JvmSocketRuntimeBuilder {
 		// 12=h (String, null for every interface)
 		MethodCode code = new MethodCode();
 		emitListenArgs(code, LispNames.TLS_LISTEN);
+		MethodCode.Label tryStart = code.newBoundLabel();
 		// pw = pw.toCharArray()
 		code.aload(5);
 		code.invokevirtual(this.stringToCharArray);
@@ -706,6 +745,7 @@ final class JvmSocketRuntimeBuilder {
 		code.aload(7);
 		code.invokevirtual(this.fileInputStreamClose);
 		emitKmfToServerSocket(code);
+		emitListenFailure(code, tryStart, "tls-listen: cannot listen on ", 12, 11, 13, true);
 		return code;
 	}
 
@@ -724,6 +764,7 @@ final class JvmSocketRuntimeBuilder {
 		// Reported as TLS-LISTEN-PEM: the operator the compile path rewrites into this
 		// one
 		emitListenArgs(code, LispNames.TLS_LISTEN_PEM);
+		MethodCode.Label tryStart = code.newBoundLabel();
 		// pw = pw.toCharArray()
 		code.aload(5);
 		code.invokevirtual(this.stringToCharArray);
@@ -746,6 +787,7 @@ final class JvmSocketRuntimeBuilder {
 		code.aload(5);
 		code.invokevirtual(this.keyStoreLoad);
 		emitKmfToServerSocket(code);
+		emitListenFailure(code, tryStart, "tls-listen-pem: cannot listen on ", 12, 11, 13, true);
 		return code;
 	}
 
@@ -812,6 +854,9 @@ final class JvmSocketRuntimeBuilder {
 		MethodCode code = new MethodCode();
 		emitCheckedPort(code, 0, LispNames.TCP_LISTEN);
 		code.istore(2);
+		code.aconst_null();
+		code.astore(3);
+		MethodCode.Label tryStart = code.newBoundLabel();
 		code.aload(1);
 		MethodCode.Label ifHost = code.newLabel();
 		code.ifnonnull(ifHost);
@@ -834,6 +879,7 @@ final class JvmSocketRuntimeBuilder {
 		code.invokespecial(this.serverSocketInitHost);
 		code.invokestatic(this.addStreamRef);
 		code.areturn();
+		emitListenFailure(code, tryStart, "tcp-listen: cannot listen on ", 3, 2, 4, false);
 		return code;
 	}
 
@@ -845,9 +891,12 @@ final class JvmSocketRuntimeBuilder {
 		MethodCode code = new MethodCode();
 		emitCheckedEntry(code, 0, LISTENER_KIND, LispNames.TCP_ACCEPT + " expects a listener handle");
 		code.checkcast(this.serverSocketClass);
+		MethodCode.Label tryStart = code.newBoundLabel();
 		code.invokevirtual(this.serverSocketAccept);
 		code.invokestatic(this.addStreamRef);
+		MethodCode.Label tryEnd = code.newBoundLabel();
 		code.areturn();
+		emitHostFailure(code, tryStart, tryEnd, 1, false, c -> c.ldc(this.cp.stringEntry("tcp-accept: ")));
 		return code;
 	}
 
@@ -891,9 +940,12 @@ final class JvmSocketRuntimeBuilder {
 		code.checkcast(this.socketClass);
 		code.aload(1);
 		code.invokestatic(this.cp.methodRef(this.thisClassRef, SOCK_MS_METHOD, SOCK_MS_DESC));
+		MethodCode.Label tryStart = code.newBoundLabel();
 		code.invokevirtual(this.socketSetSoTimeout);
+		MethodCode.Label tryEnd = code.newBoundLabel();
 		code.aload(1);
 		code.areturn();
+		emitHostFailure(code, tryStart, tryEnd, 2, false, c -> c.ldc(this.cp.stringEntry("tcp-set-timeout: ")));
 		return code;
 	}
 
@@ -982,6 +1034,7 @@ final class JvmSocketRuntimeBuilder {
 	private MethodCode buildSockReadLine(boolean pair) {
 		// Slots: 0=socket, 1=in (InputStream), 2=baos, 3=b (int), 4=bytes, 5=len (int)
 		MethodCode code = new MethodCode();
+		MethodCode.Label tryStart = code.newBoundLabel();
 		// in = ((Socket) socket).getInputStream();
 		code.aload(0);
 		code.checkcast(this.socketClass);
@@ -1080,6 +1133,7 @@ final class JvmSocketRuntimeBuilder {
 			code.aastore();
 		}
 		code.areturn();
+		emitStreamFailure(code, tryStart, 6, "read-line: ");
 		return code;
 	}
 
@@ -1092,6 +1146,7 @@ final class JvmSocketRuntimeBuilder {
 		// Slots: 0=str, 1=socket, 2=content (String)
 		MethodCode code = new MethodCode();
 		emitStripQuotes(code, 0, 2);
+		MethodCode.Label tryStart = code.newBoundLabel();
 		// content = content.concat("\n");
 		code.aload(2);
 		code.ldc(this.newlineStr);
@@ -1107,6 +1162,7 @@ final class JvmSocketRuntimeBuilder {
 		code.invokevirtual(this.outputStreamWriteBytes);
 		code.aload(0);
 		code.areturn();
+		emitStreamFailure(code, tryStart, 3, "write-line: ");
 		return code;
 	}
 
@@ -1121,6 +1177,7 @@ final class JvmSocketRuntimeBuilder {
 		// Slots: 0=str, 1=socket, 2=content (String)
 		MethodCode code = new MethodCode();
 		emitStripQuotes(code, 0, 2);
+		MethodCode.Label tryStart = code.newBoundLabel();
 		// ((Socket) socket).getOutputStream().write(content.getBytes(UTF_8));
 		code.aload(1);
 		code.checkcast(this.socketClass);
@@ -1131,6 +1188,42 @@ final class JvmSocketRuntimeBuilder {
 		code.invokevirtual(this.outputStreamWriteBytes);
 		code.aload(0);
 		code.areturn();
+		emitStreamFailure(code, tryStart, 3, "write-string: ");
+		return code;
+	}
+
+	/**
+	 * {@code _sockReadByte(Object socket) -> int}. One byte off the socket's input
+	 * stream, -1 at the peer's close; the {@code read-byte} arm of {@code _readByte}.
+	 */
+	private MethodCode buildSockReadByte() {
+		// Slots: 0=socket
+		MethodCode code = new MethodCode();
+		MethodCode.Label tryStart = code.newBoundLabel();
+		code.aload(0);
+		code.checkcast(this.socketClass);
+		code.invokevirtual(this.socketGetInputStream);
+		code.invokevirtual(this.inputStreamRead);
+		code.ireturn();
+		emitStreamFailure(code, tryStart, 1, "read-byte: ");
+		return code;
+	}
+
+	/**
+	 * {@code _sockWriteByte(Object socket, int b)}. One byte onto the socket's output
+	 * stream, sent immediately; the {@code write-byte} arm of {@code _writeByte}.
+	 */
+	private MethodCode buildSockWriteByte() {
+		// Slots: 0=socket, 1=b
+		MethodCode code = new MethodCode();
+		MethodCode.Label tryStart = code.newBoundLabel();
+		code.aload(0);
+		code.checkcast(this.socketClass);
+		code.invokevirtual(this.socketGetOutputStream);
+		code.iload(1);
+		code.invokevirtual(this.cp.methodRef(this.cp.classEntry("java/io/OutputStream"), "write", "(I)V"));
+		code.return_();
+		emitStreamFailure(code, tryStart, 2, "write-byte: ");
 		return code;
 	}
 
@@ -1149,6 +1242,7 @@ final class JvmSocketRuntimeBuilder {
 	private MethodCode buildSockReadChar() {
 		// Slots: 0=socket, 1=in (InputStream), 2=b0 (int), 3=n (int), 4=baos, 5=b (int)
 		MethodCode code = new MethodCode();
+		MethodCode.Label tryStart = code.newBoundLabel();
 		// in = ((Socket) socket).getInputStream();
 		code.aload(0);
 		code.checkcast(this.socketClass);
@@ -1216,6 +1310,7 @@ final class JvmSocketRuntimeBuilder {
 		code.invokevirtual(this.stringCodePointAt);
 		code.istore(2);
 		emitBoxCodePoint(code, 2);
+		emitStreamFailure(code, tryStart, 6, "read-char: ");
 		return code;
 	}
 
@@ -1537,6 +1632,91 @@ final class JvmSocketRuntimeBuilder {
 		code.invokestatic(JvmOperandTypeRuntime.self(this.cp, this.thisClassRef, JvmOperandTypeRuntime.OP_TYPE_ERR,
 				JvmOperandTypeRuntime.OP_TYPE_ERR_DESC));
 		code.athrow();
+	}
+
+	/**
+	 * Closes a socket stream helper whose whole body from {@code tryStart} is protected:
+	 * an {@code IOException} reads {@code <operator>: <message>}, the interpreter's
+	 * {@code SocketSupport} text.
+	 */
+	private void emitStreamFailure(MethodCode code, MethodCode.Label tryStart, int exSlot, String lead) {
+		MethodCode.Label tryEnd = code.newBoundLabel();
+		emitHostFailure(code, tryStart, tryEnd, exSlot, false, c -> c.ldc(this.cp.stringEntry(lead)));
+	}
+
+	/**
+	 * Emits the handler that gives a listener's host failure the interpreter's text
+	 * ({@code SocketSupport.listen}): {@code <lead><host or *>:<port>: <message>}. The
+	 * protected range runs from {@code tryStart} to here.
+	 */
+	private void emitListenFailure(MethodCode code, MethodCode.Label tryStart, String lead, int hostSlot, int portSlot,
+			int exSlot, boolean tls) {
+		MethodCode.Label tryEnd = code.newBoundLabel();
+		emitHostFailure(code, tryStart, tryEnd, exSlot, tls, c -> {
+			c.ldc(this.cp.stringEntry(lead));
+			emitHostPort(c, hostSlot, portSlot, true);
+		});
+	}
+
+	/**
+	 * Emits, at the end of a method whose protected range {@code tryStart..tryEnd} is
+	 * complete, the handler that turns a host {@code IOException} (and, for TLS, a
+	 * {@code GeneralSecurityException}) into {@code throw new RuntimeException(prefix +
+	 * String.valueOf(e.getMessage()))} -- the interpreter's {@code SocketSupport}
+	 * wrapping, so a refused connection reads the same on both. The handler uses locals
+	 * {@code exSlot} (the exception) and {@code exSlot + 1} (the text).
+	 * @param prefix pushes the prefix {@code String}
+	 */
+	private void emitHostFailure(MethodCode code, MethodCode.Label tryStart, MethodCode.Label tryEnd, int exSlot,
+			boolean tls, java.util.function.Consumer<MethodCode> prefix) {
+		MethodCode.Label handler = code.newBoundLabel();
+		// The handler's frame records the caught exception as an Object.
+		code.checkcast(this.cp.classEntry("java/lang/Throwable"));
+		code.astore(exSlot);
+		prefix.accept(code);
+		code.aload(exSlot);
+		code.invokevirtual(
+				this.cp.methodRef(this.cp.classEntry("java/lang/Throwable"), "getMessage", "()Ljava/lang/String;"));
+		code.invokestatic(this.cp.methodRef(this.stringClass, "valueOf", "(Ljava/lang/Object;)Ljava/lang/String;"));
+		code.invokevirtual(this.stringConcat);
+		code.astore(exSlot + 1);
+		ClassEntry rte = this.cp.classEntry("java/lang/RuntimeException");
+		code.new_(rte);
+		code.dup();
+		code.aload(exSlot + 1);
+		code.invokespecial(this.cp.methodRef(rte, "<init>", "(Ljava/lang/String;)V"));
+		code.athrow();
+		code.exceptionCatch(tryStart, tryEnd, handler, this.cp.classEntry("java/io/IOException"));
+		if (tls) {
+			code.exceptionCatch(tryStart, tryEnd, handler,
+					this.cp.classEntry("java/security/GeneralSecurityException"));
+		}
+	}
+
+	/**
+	 * With a lead {@code String} on the stack, appends {@code <host>:<port>: }. A
+	 * {@code starIfNull} host that is null reads {@code *} (every interface).
+	 */
+	private void emitHostPort(MethodCode code, int hostSlot, int portSlot, boolean starIfNull) {
+		code.aload(hostSlot);
+		if (starIfNull) {
+			MethodCode.Label named = code.newLabel();
+			MethodCode.Label joined = code.newLabel();
+			code.ifnonnull(named);
+			code.ldc(this.cp.stringEntry("*"));
+			code.goto_(joined);
+			code.labelBinding(named);
+			code.aload(hostSlot);
+			code.labelBinding(joined);
+		}
+		code.invokevirtual(this.stringConcat);
+		code.ldc(this.cp.stringEntry(":"));
+		code.invokevirtual(this.stringConcat);
+		code.iload(portSlot);
+		code.invokestatic(this.cp.methodRef(this.stringClass, "valueOf", "(I)Ljava/lang/String;"));
+		code.invokevirtual(this.stringConcat);
+		code.ldc(this.cp.stringEntry(": "));
+		code.invokevirtual(this.stringConcat);
 	}
 
 	/** Emits {@code Long.valueOf((long) <stack top int>)}. */

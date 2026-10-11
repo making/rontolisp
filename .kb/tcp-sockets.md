@@ -26,9 +26,20 @@ listener where a connection is needed) is `OP expects a {listener|socket or list
 handle`, a `simple-error` with no datum. JVM: the socket runtime's `_sockEntry`/`_sockStr`/`_sockPort`/
 `_sockMs` (`%tls-listen-p12`'s report says `TLS-LISTEN-PEM`, the operator the inliner rewrote). Measured
 before (2026-10-11): the JVM leaked `ClassCastException`s and NPEs (`_streams` is null in a program with
-no file stream) where the interpreter signalled. Still different: a refused CONNECTION's text
-(interpreter `tcp-connect: cannot connect to H:P: Connection refused`, JVM `Connection refused`) -- host
-work, not an argument. Pinned by `HandleOperandFixture` ([error-handling.md](error-handling.md)).
+no file stream) where the interpreter signalled.
+
+## Host failures (interpreter and JVM, one text)
+A host exception (an `IOException`; for TLS also a `GeneralSecurityException`) is a `simple-error` reading
+`OP: cannot connect to H:P: MSG` (`tcp-connect`, `tls-connect`), `OP: cannot listen on H|*:P: MSG`
+(`tcp-listen`, `tls-listen`, `tls-listen-pem`), `tls-upgrade: cannot upgrade the stream to TLS against H: MSG`,
+or `OP: MSG` (`tcp-accept`, `tcp-set-timeout`, `read-line`, `read-char`, `read-byte`, `write-line`,
+`write-string`, `write-byte`); MSG is the JDK's. The interpreter wraps in `SocketSupport`; the JVM in a
+handler `emitHostFailure` appends to each socket helper (`_sockReadByte`/`_sockWriteByte` carry the byte
+operators' arm, so `_readByte`/`_writeByte` call them). Measured before (2026-10-11): the JVM answered the bare
+`Connection refused` / `Address already in use`. The handler frame records the caught exception as an `Object`:
+`checkcast Throwable` before using it. Pinned by `HandleOperandFixture.HOST_FAILURE_PROGRAM`. Still unwrapped on
+the JVM: nothing known; an unknown host's text (`no-such-host.invalid`) is DNS-dependent and unpinned.
+Both groups pinned by `HandleOperandFixture` ([error-handling.md](error-handling.md)).
 
 ## Per-backend mechanics
 - Handle allocation is CONCURRENT on interpreter and JVM (`ConcurrentHashMap` + `AtomicLong`; the

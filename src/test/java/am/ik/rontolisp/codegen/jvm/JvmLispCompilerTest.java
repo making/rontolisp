@@ -17124,7 +17124,8 @@ class JvmLispCompilerTest {
 				       (port (rontolisp:tcp-local-port listener)))
 				  (close listener)
 				  (rontolisp:tcp-connect "127.0.0.1" port))
-				""")).hasStackTraceContaining("java.net.ConnectException");
+				""")).hasStackTraceContaining("tcp-connect: cannot connect to 127.0.0.1:")
+			.hasStackTraceContaining("Connection refused");
 	}
 
 	@Test
@@ -17294,7 +17295,8 @@ class JvmLispCompilerTest {
 			am.ik.rontolisp.TlsTestSupport.startOneShotEchoServer(server);
 			assertThatThrownBy(
 					() -> compileAndRun("(rontolisp:tls-connect \"127.0.0.1\" " + server.getLocalPort() + ")"))
-				.hasStackTraceContaining("SSLHandshakeException");
+				.hasStackTraceContaining("tls-connect: cannot connect to 127.0.0.1:")
+				.hasStackTraceContaining("PKIX path building failed");
 		}
 	}
 
@@ -17406,7 +17408,8 @@ class JvmLispCompilerTest {
 			am.ik.rontolisp.TlsTestSupport.startOneShotEchoServer(server);
 			assertThatThrownBy(() -> compileAndRun(
 					"(rontolisp:tls-connect \"127.0.0.1\" " + server.getLocalPort() + " :insecure nil)"))
-				.hasStackTraceContaining("SSLHandshakeException");
+				.hasStackTraceContaining("tls-connect: cannot connect to 127.0.0.1:")
+				.hasStackTraceContaining("PKIX path building failed");
 		}
 	}
 
