@@ -40,6 +40,36 @@ class JavaImplementationsTest {
 		return JavaImplementations.resolve((LispCons) LispReader.readAllFromString(form).get(0), CLASSES);
 	}
 
+	// A java:handle whose value only markers follow, :functional and :java-false among
+	// them, is a handle of a function -- the object a call ending in them makes of it,
+	// whose :through a literal #'name names or is computed; one given a text, or markers
+	// without the two, is a handle of a text.
+	@Test
+	void aHandleOfAFunctionEndsInTheMarkersOfACallMakingItsObject() {
+		assertThat(handleMarkers("(java:handle f :functional :java-false)"))
+			.isEqualTo(new JavaMarkers(true, true, false));
+		assertThat(handleMarkers("(java:handle f :octets :through #'hook :java-false :functional)"))
+			.isEqualTo(new JavaMarkers(true, true, true, "HOOK"));
+		assertThat(Objects.requireNonNull(handleMarkers("(java:handle f :functional :java-false :through hook)"))
+			.throughComputed()).isTrue();
+		assertThat(handleMarkers("(java:handle f \"f\" :functional :java-false)")).isNull();
+		assertThat(handleMarkers("(java:handle f :functional)")).isNull();
+		assertThat(handleMarkers("(java:handle f :java-false :octets)")).isNull();
+		assertThat(handleMarkers("(java:handle f nil nil)")).isNull();
+		LispCons computed = (LispCons) LispReader
+			.readAllFromString("(list (java:handle f :functional :java-false :through hook) '(java:handle g"
+					+ " :functional :java-false) (java:handle h :functional :java-false :through #'hook))")
+			.get(0);
+		assertThat(JavaImplementations.functionHandlesIn(computed)).hasSize(2)
+			.extracting(JavaImplementations::functionHandleReason)
+			.containsExactly(JavaMarkers.THROUGH_COMPUTED, null);
+	}
+
+	private static @org.jspecify.annotations.Nullable JavaMarkers handleMarkers(String form) {
+		return JavaImplementations
+			.handleFunctionMarkers(((LispCons) LispReader.readAllFromString(form).get(0)).toList(), 1);
+	}
+
 	// The designated method calls its function; an abstract method none names throws;
 	// a default method keeps its body; Object implements a redeclared equals.
 	@Test

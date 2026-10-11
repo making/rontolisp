@@ -1,6 +1,7 @@
 # java:handle
 
-`(java:handle value text &optional hash order class)`
+`(java:handle value text &optional hash order class)`<br>
+`(java:handle function :functional :java-false [:octets] [:through f])`
 
 Java に値のない Lisp の値 (シンボル、リストなど) である `value` を代理する Java オブジェクトを作ります。Java からは `text` がそのオブジェクトの `toString` に見えます。`class` とテキストが同じハンドル同士は `equals` で等しくなります。オブジェクトの `hashCode` は `hash` の下位 32 ビット (指定しなければテキストの `hashCode`) で、ハンドルは同じクラスのハンドルを `order` (指定しなければテキスト) で順序付けます。そのためハンドルは `java.util.HashMap` のキーになり、`java.util.TreeSet` の中で整列します。Java がハンドルを返すところ (メソッドの結果、配列の要素、コールバックの引数) ではどこでも、`java:` は `value` を返します。JVM 専用の `java` 連携パッケージの一部であり、インタプリタと JVM クラスへのコンパイルの両方で利用できます (WASM バックエンドでは利用できません)。[Java 連携ガイド](../../guides/java-interop.md#handles-javahandle)を参照してください。
 
@@ -34,4 +35,15 @@ Java に値のない Lisp の値 (シンボル、リストなど) である `val
 ; => ("[1/3, 1/2, 3/4]" 1/3 0.3333333333333333)
 ```
 
-文字列でない `text` (hash があるときの nil を含む)、整数でも nil でもない `hash`、文字列・関数・nil のいずれでもない `order`、文字列でも nil でもない `class` はエラーです: `java:handle expects (java:handle value text [hash [order ["class"]]]), got 2`。オブジェクトのクラスは `am.ik.rontolisp.runtime.RontoJavaHandle` (数なら `RontoJavaNumberHandle`) です。インタプリタも同じクラスを使い、コンパイル済みプログラムはこのクラスを隣に置いて、リフレクションなしでハンドルを作ります。[java:view](java-view.md) も参照してください。
+関数と、`text` の位置に呼び出しのマーカー (`:functional` と `:java-false`、加えて `:octets` と `:through f` を任意の順で) を渡すと、ハンドルはそのマーカーで終わる呼び出しでの関数そのものであるオブジェクト ([java:call](java-call.md)) になります。関数の引数で `Runnable`・`Callable`・`Comparator` を実装し、`clojure.lang.AFunction` を名乗り、同じクラスでその関数を表すどのオブジェクトとも等しくなります。Java はこれをその呼び出しのオブジェクトと同じく呼びます。メンバーを選んだ呼び出しはないので、`f` には `resolved` として nil を渡します。
+
+```lisp
+(let* ((f (lambda () 42))
+       (h (java:handle f :functional :java-false))
+       (l (java:new "java.util.ArrayList")))
+  (java:call l "add" h)
+  (list (java:call h "call") (eq f (java:call l "get" 0))))
+; => (42 T)
+```
+
+文字列でない `text` (hash があるときの nil を含む)、整数でも nil でもない `hash`、文字列・関数・nil のいずれでもない `order`、文字列でも nil でもない `class` はエラーです: `java:handle expects (java:handle value text [hash [order ["class"]]]), got 2`。マーカーの前の値が関数でないときもエラーです: `java:handle expects (java:handle function :functional :java-false [:octets] [:through f]), got 5`。オブジェクトのクラスは `am.ik.rontolisp.runtime.RontoJavaHandle` (数なら `RontoJavaNumberHandle`) です。インタプリタも同じクラスを使い、コンパイル済みプログラムはこのクラスを隣に置いて、リフレクションなしでハンドルを作ります。関数そのものであるオブジェクトは、コンパイル済みプログラムでは生成されたクラスのオブジェクトで、インタプリタと、`:through` の関数がリテラルの `#'name` でないときは `java.lang.reflect.Proxy` です。[java:view](java-view.md) も参照してください。

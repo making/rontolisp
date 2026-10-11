@@ -61,6 +61,106 @@ public final class JavaImplementations {
 	public static final String HANDLE_USAGE = "java:handle expects (java:handle value text [hash [order [\"class\"]]])";
 
 	/**
+	 * The error a {@code java:handle} of a function ({@link #handleFunctionMarkers})
+	 * raises when its value is no function -- with {@code ", got X"}.
+	 */
+	public static final String HANDLE_FUNCTION_USAGE = "java:handle expects"
+			+ " (java:handle function :functional :java-false [:octets] [:through f])";
+
+	/**
+	 * The markers a {@code java:handle} of a function ends in: its value followed by
+	 * nothing but markers ({@link JavaMarkers}), {@code :functional} and
+	 * {@code :java-false} among them -- the markers of a call that makes a function the
+	 * object it is ({@link JavaImplementation#isFunctionObjectCall}), which the handle
+	 * then is ({@link #functionObject}), made without a call, so no member was chosen
+	 * ({@link JavaMarkers#resolved} false). Any other {@code java:handle} -- one given a
+	 * text, or markers without those two in its place -- is a handle given a text, its
+	 * first marker a text it refuses.
+	 * @param parts a form's elements, the value at {@code value}, or the evaluated
+	 * arguments
+	 * @param value the index of the value
+	 * @return the markers, or {@code null} for a handle given a text
+	 */
+	public static @Nullable JavaMarkers handleFunctionMarkers(List<LispVal> parts, int value) {
+		int first = value + 1;
+		int marked = JavaMarkers.count(parts, first);
+		if (marked == 0 || parts.size() - marked != first) {
+			return null;
+		}
+		JavaMarkers markers = JavaMarkers.of(parts, first);
+		return JavaImplementation.isFunctionObjectCall(markers) ? markers : null;
+	}
+
+	/**
+	 * Whether a form is a {@code java:handle} of a function
+	 * ({@link #handleFunctionMarkers}).
+	 * @param form a form
+	 * @return whether it is one
+	 */
+	public static boolean isFunctionHandle(LispVal form) {
+		return form instanceof LispCons cons && cons.car() instanceof LispSymbol head
+				&& LispNames.JAVA_HANDLE_QUALIFIED.equals(head.name()) && cons.isProperList()
+				&& handleFunctionMarkers(cons.toList(), 1) != null;
+	}
+
+	/**
+	 * The {@code java:handle} forms of a function a form shows
+	 * ({@link #isFunctionHandle}), outermost first, quoted data skipped.
+	 * @param form a form
+	 * @return the forms, each once
+	 */
+	public static List<LispCons> functionHandlesIn(LispVal form) {
+		List<LispCons> forms = new ArrayList<>();
+		collectFunctionHandles(form, forms, new java.util.IdentityHashMap<>());
+		return forms;
+	}
+
+	private static void collectFunctionHandles(LispVal form, List<LispCons> forms,
+			java.util.IdentityHashMap<LispCons, Boolean> seen) {
+		LispVal current = form;
+		boolean head = true;
+		while (current instanceof LispCons cons && seen.put(cons, Boolean.TRUE) == null) {
+			if (head) {
+				if (cons.car() instanceof LispSymbol sym && LispNames.isQuote(sym.name())) {
+					return;
+				}
+				if (isFunctionHandle(cons)) {
+					forms.add(cons);
+				}
+				head = false;
+			}
+			if (cons.car() instanceof LispCons inner) {
+				collectFunctionHandles(inner, forms, seen);
+			}
+			current = cons.cdr();
+		}
+	}
+
+	/**
+	 * Why a {@code java:handle} of a function is left to run time, or {@code null} when
+	 * it is not: a {@code :through} no literal {@code #'name} names
+	 * ({@link JavaMarkers#throughComputed}), which a compiled program's generated class
+	 * cannot call, so the bridge's {@code Proxy} is made instead.
+	 * @param form a {@code java:handle} of a function
+	 * @return the reason, or {@code null}
+	 */
+	public static @Nullable String functionHandleReason(LispCons form) {
+		JavaMarkers markers = handleFunctionMarkers(form.toList(), 1);
+		return markers != null && markers.throughComputed() ? JavaMarkers.THROUGH_COMPUTED : null;
+	}
+
+	/**
+	 * The report of a {@code java:handle} of a function left to run time
+	 * ({@link #functionHandleReason}), without a position prefix.
+	 * @param reason why
+	 * @return e.g. {@code java:handle is implemented by reflection at run time: its
+	 * :through function is not named by #'}
+	 */
+	public static String functionHandleWarning(String reason) {
+		return "java:handle is implemented by reflection at run time: " + reason;
+	}
+
+	/**
 	 * The error a {@code java:view} call raises -- with {@code ", got X"} for the first
 	 * argument it refuses: a shape that is none of the five, a printer that is no
 	 * function or nil, an order that is no function (a {@code :vector}'s) or nil, a class

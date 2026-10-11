@@ -1,6 +1,7 @@
 # java:handle
 
-`(java:handle value text &optional hash order class)`
+`(java:handle value text &optional hash order class)`<br>
+`(java:handle function :functional :java-false [:octets] [:through f])`
 
 Makes a Java object that stands for `value`, a Lisp value Java has no value of (a symbol, a
 list, ...). Java sees `text` as the object's `toString`. Two handles of one `class` and one
@@ -51,9 +52,29 @@ guide](../../guides/java-interop.md#handles-javahandle).
 ; => ("[1/3, 1/2, 3/4]" 1/3 0.3333333333333333)
 ```
 
+Given a function and, in place of `text`, a call's markers -- `:functional` and
+`:java-false`, beside any of `:octets` and `:through f`, in any order -- the handle is the
+object the function is at a call ending in them ([java:call](java-call.md)): a `Runnable`,
+`Callable` and `Comparator` by the function's arguments, named `clojure.lang.AFunction`, equal
+to every object standing for the function under that class. Java calls it as such a call's
+object, through `f` with `resolved` nil, since no call chose a member.
+
+```lisp
+(let* ((f (lambda () 42))
+       (h (java:handle f :functional :java-false))
+       (l (java:new "java.util.ArrayList")))
+  (java:call l "add" h)
+  (list (java:call h "call") (eq f (java:call l "get" 0))))
+; => (42 T)
+```
+
 A `text` that is no string (or nil with a hash), a `hash` that is no integer or nil, an
 `order` that is no string, function or nil, or a `class` that is no string or nil is an
-error: `java:handle expects (java:handle value text [hash [order ["class"]]]), got 2`. The
-object is of `am.ik.rontolisp.runtime.RontoJavaHandle` (`RontoJavaNumberHandle` for a
-number), a class the interpreter uses too and a compiled program ships beside it, made with
-no reflection. See also [java:view](java-view.md).
+error: `java:handle expects (java:handle value text [hash [order ["class"]]]), got 2`, and so
+is a value no function before the markers: `java:handle expects (java:handle function
+:functional :java-false [:octets] [:through f]), got 5`. The object is of
+`am.ik.rontolisp.runtime.RontoJavaHandle` (`RontoJavaNumberHandle` for a number), a class the
+interpreter uses too and a compiled program ships beside it, made with no reflection. The
+object a function is is of a class a compiled program generates, and a
+`java.lang.reflect.Proxy` on the interpreter and where the `:through` function is no literal
+`#'name`. See also [java:view](java-view.md).

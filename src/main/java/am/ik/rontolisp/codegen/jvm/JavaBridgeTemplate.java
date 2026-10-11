@@ -197,6 +197,10 @@ final class JavaBridgeTemplate {
 	// Mirrors compiler/JavaImplementations.PROXY_USAGE.
 	private static final String PROXY_USAGE = "java:proxy expects (java:proxy \"interface\"... callable)";
 
+	// Mirrors compiler/JavaImplementations.HANDLE_FUNCTION_USAGE.
+	private static final String HANDLE_FUNCTION_USAGE = "java:handle expects"
+			+ " (java:handle function :functional :java-false [:octets] [:through f])";
+
 	private static final String KIND_NIL = "nil";
 
 	private static final String KIND_T = "t";
@@ -757,6 +761,34 @@ final class JavaBridgeTemplate {
 			return standIn(interfaces, slots, functions, javaFalse, octets, false, value, standInClass, through);
 		}
 		return implementation(interfaces, false, slots, functions, javaFalse, octets, comparison, through);
+	}
+
+	/**
+	 * Implements {@code (java:handle function marker...)} -- a {@code java:handle} of a
+	 * function -- whose {@code :through} function no {@code #'name} names: the object the
+	 * function is at a call ending in the markers (mirrors {@code eval/JavaInterop
+	 * .handle} and {@code compiler/JavaImplementations.handleFunctionMarkers}; the
+	 * compiled form makes it itself otherwise).
+	 * @param function the value
+	 * @param markers the evaluated markers, {@code :functional} and {@code :java-false}
+	 * among them
+	 * @return the object
+	 */
+	static @Nullable Object javaHandle(@Nullable Object function, @Nullable Object[] markers) {
+		int marked = markerCount(markers, 0);
+		int functions = functionsOf(markers, marked);
+		if (marked != markers.length || (functions & FUNCTIONS_MODE) != FUNCTIONS_BY_ARGUMENTS
+				|| (functions & FUNCTIONS_JAVA_FALSE) == 0) {
+			throw new IllegalStateException("java:handle: not a handle of a function");
+		}
+		if (!KIND_FUNCTION.equals(kindOf(function))) {
+			throw new RuntimeException(HANDLE_FUNCTION_USAGE + ", got " + describe(function));
+		}
+		Object object = functionObject(function, (functions & FUNCTIONS_OCTETS) != 0, throughOf(markers, marked));
+		if (object == null) {
+			throw new IllegalStateException("java:handle: no runtime/RontoJavaValue beside the program");
+		}
+		return object;
 	}
 
 	// A java:reify's interfaces: one name, or a non-empty proper list of names; null for

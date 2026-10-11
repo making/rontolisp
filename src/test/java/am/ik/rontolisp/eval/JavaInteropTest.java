@@ -738,6 +738,16 @@ class JavaInteropTest {
 			.isEqualTo(JavaImplementationPrograms.FUNCTION_OBJECT_OUTPUT);
 	}
 
+	// Mirrors
+	// JvmJavaInteropCompilerTest#aHandleOfAFunctionGivenTheMarkersIsTheObjectItIs.
+	// Before (measured 2026-10-11), the markers were the text: "java:handle expects
+	// (java:handle value text [hash [order ["class"]]]), got :FUNCTIONAL".
+	@Test
+	void aHandleOfAFunctionGivenTheMarkersIsTheObjectItIs() {
+		assertThat(output(JavaImplementationPrograms.FUNCTION_HANDLE))
+			.isEqualTo(JavaImplementationPrograms.FUNCTION_HANDLE_OUTPUT);
+	}
+
 	// Mirrors JvmJavaInteropCompilerTest#aHandleIsItsTextToJavaAndItsValueBack.
 	@Test
 	void aHandleIsItsTextToJavaAndItsValueBack() {
@@ -927,10 +937,12 @@ class JavaInteropTest {
 					(setq java:*warn-on-reflection* t)
 					(defun proxy-of (iface f) (java:proxy iface f))
 					(defun runnable (f) (java:reify "java.lang.Runnable" "run" f))
+					(defun object-of (f g) (java:handle f :functional :java-false :through g))
 					""");
 		}
 		assertThat(err.toString()).contains(
-				"warning: java:proxy is implemented by reflection at run time: the interface name is not a literal string")
+				"warning: java:proxy is implemented by reflection at run time: the interface name is not a literal string",
+				"warning: java:handle is implemented by reflection at run time: its :through function is not named by #'")
 			.doesNotContain("java:reify");
 	}
 

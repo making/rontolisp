@@ -3119,9 +3119,12 @@
 ;; map, a sorted map or a record a Map, each spelled as str spells the value and
 ;; holding its members as this makes them; a Date, Timestamp or UUID the host
 ;; object (%clojure-time-value-host); a byte array the byte[] of its octets (a
-;; :bytes java:view, which Java never holds itself); a host object itself; anything
-;; else -- a fn, an atom, a deftype, a reify, a pattern, a var -- a handle equal
-;; only to itself (%clojure-host-object). Java hands every handle and view back as X.
+;; :bytes java:view, which Java never holds itself); a fn the object it is -- a
+;; Runnable, Callable and Comparator calling it through %clojure-host-call, the
+;; object a fn Java receives itself is (a java:handle of a function); a host object
+;; itself; anything else -- an atom, a deftype, a reify, a pattern, a var -- a handle
+;; equal only to itself (%clojure-host-object). Java hands every handle and view
+;; back as X.
 (defun rontolisp::%clojure-host-member (x)
   (cond ((rontolisp::%clojure-host-plain-p x) x)
    ((rontolisp::%clojure-keyword-p x)
@@ -3173,7 +3176,12 @@
    ((rontolisp::%clojure-real-symbol-p x)
     (rontolisp::%clojure-host-ident x (rontolisp::%clojure-symbol-full-name x)
                                     nil))
-   ;; a fn, a condition, a stream: no Java value of its own
+   ;; a fn: the object it is, as a host call's markers make it of a fn argument
+   ((functionp x)
+    (java:handle x
+                 :functional :java-false
+                 :octets :through #'rontolisp::%clojure-host-call))
+   ;; a condition, a stream: no Java value of its own
    ((rontolisp::%clojure-lisp-value-p x) (rontolisp::%clojure-host-object x))
    (t x)))
 
@@ -3225,16 +3233,14 @@
              :list #'rontolisp::%clojure-host-text nil
              (rontolisp::%clojure-class-name-of x)))
 
-;; X -- a fn, an atom, a deftype, a reify, a pattern, a var, or a value of no
-;; Java kind -- as a java:handle equal only to itself, of the oracle's class
+;; X -- an atom, a deftype, a reify, a pattern, a var, or a value of no Java kind
+;; -- as a java:handle equal only to itself, of the oracle's class
 ;; (%clojure-class-name-of), spelled as the oracle's toString spells it: Object's
-;; (the class and the hash) for a fn, an atom, a reduced and a type overriding no
+;; (the class and the hash) for an atom, a reduced and a type overriding no
 ;; toString, what str answers for anything else.
 (defun rontolisp::%clojure-host-object (x)
   (java:handle x (rontolisp::%clojure-host-object-text x) nil nil
-               (if (or (functionp x) (consp x))
-                   (rontolisp::%clojure-class-name-of x)
-                   "java.lang.Object")))
+   (if (consp x) (rontolisp::%clojure-class-name-of x) "java.lang.Object")))
 
 ;; Java faces: what Java sees of a deftype or reify whose body implements a Java
 ;; interface or overrides an Object method, or of a record whose body implements a
@@ -3296,11 +3302,11 @@
                  (rontolisp::%clojure-class-name-of x))))
 
 ;; What %clojure-host-object's handle answers Java's toString with: nil (Object's
-;; spelling) for a fn, an atom, a reduced and a type overriding no toString, the
-;; value as str spells it otherwise. The object-methods test stays a bare cond test,
-;; so a program whose types override none folds it.
+;; spelling) for an atom, a reduced and a type overriding no toString, the value as
+;; str spells it otherwise. The object-methods test stays a bare cond test, so a
+;; program whose types override none folds it.
 (defun rontolisp::%clojure-host-object-text (x)
-  (cond ((or (functionp x) (rontolisp::%clojure-atom-p x)
+  (cond ((or (rontolisp::%clojure-atom-p x)
              (and (consp x) (eq (car x) :C%REDUCED)))
          nil)
         ((and (consp x) (eq (car x) :C%TYPE))

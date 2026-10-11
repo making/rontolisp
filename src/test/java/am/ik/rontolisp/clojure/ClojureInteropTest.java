@@ -766,6 +766,38 @@ class ClojureInteropTest {
 				"true true true [true 1] [1 true] true true true\n1\ntrue true\n");
 	}
 
+	// Oracle-identical (clj 1.12.6, measured 2026-10-11): a fn inside a collection Java
+	// receives -- a vector, a list, a set -- and a fn a fn answers Java are the object
+	// the
+	// fn is, as a fn Java receives itself is: a Callable an executor calls, a Runnable,
+	// Callable and Comparator a checked list takes, handed back as the fn, equal both
+	// ways
+	// to the object a fn Java receives itself is, and no Comparable. Before, measured
+	// 2026-10-11 on the interpreter and the JVM: an identity handle, "class
+	// am.ik.rontolisp.runtime.RontoJavaHandle cannot be cast to class
+	// java.util.concurrent.Callable" and the checked list's "Attempt to insert class
+	// am.ik.rontolisp.runtime.RontoJavaHandle element".
+	@Test
+	void aFnInsideACollectionJavaReceivesIsTheFnItself() throws Exception {
+		assertBothEqual("(import '(java.util.concurrent Executors)) (def pool (Executors/newFixedThreadPool 2))"
+				+ " (def f (fn [] 1))"
+				+ " (prn (mapv #(.get %) (.invokeAll pool [(fn [] 1) (fn [] 2)])) (.invokeAny pool [(fn [] 3)]))"
+				+ " (prn (let [l (java.util.Collections/checkedList (java.util.ArrayList.) Runnable)] (.addAll l [f])"
+				+ " (identical? f (.get l 0)))"
+				+ " (let [l (java.util.Collections/checkedList (java.util.ArrayList.) java.util.concurrent.Callable)]"
+				+ " (.addAll l (list f)) (identical? f (.get l 0)))"
+				+ " (let [l (java.util.Collections/checkedList (java.util.ArrayList.) java.util.Comparator)]"
+				+ " (.addAll l #{f}) (identical? f (.get l 0))))"
+				+ " (prn (mapv #(.get %) (.invokeAll pool (-> (.stream (java.util.ArrayList. [1 2]))"
+				+ " (.map (fn [x] (fn [] (* x 10)))) (.toList)))))"
+				+ " (prn (let [l (java.util.ArrayList.)] (.add l f) (.addAll l [f]) [(.indexOf l f) (.lastIndexOf l f)])"
+				+ " (.equals (java.util.ArrayList. [f]) (doto (java.util.ArrayList.) (.add f)))"
+				+ " (.equals (doto (java.util.ArrayList.) (.add f)) (java.util.ArrayList. [f]))"
+				+ " (= (.hashCode (java.util.ArrayList. [f])) (.hashCode (doto (java.util.ArrayList.) (.add f)))))"
+				+ " (prn (try (java.util.TreeSet. [f]) (catch ClassCastException e :cce)))" + " (.shutdown pool)",
+				"[1 2] 3\ntrue true true\n[10 20]\n[0 1] true true true\n:cce\n");
+	}
+
 	@Test
 	void aProxyOrTypeIsHandedAByteArrayAndAnswersJavaTheOraclesObject() throws Exception {
 		// oracle-identical (clj 1.12.6, 2026-10-10): a proxy's answer reaches Java as the

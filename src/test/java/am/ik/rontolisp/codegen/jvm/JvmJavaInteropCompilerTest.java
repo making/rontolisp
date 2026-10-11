@@ -1020,8 +1020,9 @@ class JvmJavaInteropCompilerTest {
 
 	// --java-static: a program whose sites are all direct compiles to a class with no
 	// reflection; any site that would need the bridge is a compile error naming it. A
-	// java:reify / java:proxy whose interface resolves and a function passed where an
-	// interface is expected need none: their classes are generated.
+	// java:reify / java:proxy whose interface resolves, a function passed where an
+	// interface is expected and a java:handle of a function whose :through is named by
+	// #' need none: their classes are generated.
 	@Test
 	void javaStaticRefusesEverySiteThatNeedsReflection() throws Exception {
 		JvmLispCompiler direct = JvmLispCompiler.builder().className("Test").javaStatic(true).build();
@@ -1030,6 +1031,9 @@ class JvmJavaInteropCompilerTest {
 				(java:call (java:proxy "java.lang.Runnable" (lambda (m) (print m))) "run")
 				(java:call (java:static "java.util.List" "of" 1) "forEach" (lambda (m x) (print x)))
 				(java:call (java:reify "java.lang.Runnable" "run" (lambda () (print :ran))) "run")
+				(defun through (f kind resolved args) (declare (ignore kind resolved)) (apply f args))
+				(java:static "java.util.Objects" "requireNonNull"
+				             (java:handle (lambda () (print :called)) :functional :java-false :through #'through))
 				"""));
 		assertThat(new String(classBytes, java.nio.charset.StandardCharsets.ISO_8859_1))
 			.doesNotContain(JvmJavaRuntimeBuilder.BRIDGE_SUFFIX)
@@ -1060,14 +1064,17 @@ class JvmJavaInteropCompilerTest {
 					(defun len (x) (java:call x "length"))
 					(defun proxy-of (iface f) (java:proxy iface f))
 					(java:reify "no.such.Listener" "run" (lambda () nil))
+					(defun object-of (f g) (java:handle f :functional :java-false :through g))
 					"""))).isInstanceOf(UnsupportedOperationException.class)
-			.hasMessageContaining("--java-static: 3 java: calls cannot be compiled without reflection:")
+			.hasMessageContaining("--java-static: 4 java: calls cannot be compiled without reflection:")
 			.hasMessageContaining("java:call \"length\": it is resolved by reflection at run time:"
 					+ " the receiver's class is not known")
 			.hasMessageContaining("java:proxy: it implements its interface with java.lang.reflect.Proxy:"
 					+ " the interface name is not a literal string")
 			.hasMessageContaining("java:reify \"no.such.Listener\": it implements its interface with"
-					+ " java.lang.reflect.Proxy: class no.such.Listener is not found");
+					+ " java.lang.reflect.Proxy: class no.such.Listener is not found")
+			.hasMessageContaining("java:handle: it implements the object a function is with java.lang.reflect.Proxy:"
+					+ " its :through function is not named by #'");
 	}
 
 	// The class's disassembly, as javap prints it.
@@ -1351,6 +1358,16 @@ class JvmJavaInteropCompilerTest {
 			.isEqualTo(JavaImplementationPrograms.FUNCTION_OBJECT_OUTPUT);
 	}
 
+	// Mirrors JavaInteropTest#aHandleOfAFunctionGivenTheMarkersIsTheObjectItIs: the
+	// generated class of the object a function is, made by java:handle, through a
+	// :through
+	// named by #' (_jthrough$N) and a computed one (the bridge).
+	@Test
+	void aHandleOfAFunctionGivenTheMarkersIsTheObjectItIs() throws Exception {
+		assertThat(compileAndRun(JavaImplementationPrograms.FUNCTION_HANDLE))
+			.isEqualTo(JavaImplementationPrograms.FUNCTION_HANDLE_OUTPUT);
+	}
+
 	// Mirrors JavaInteropTest#aHandleIsItsTextToJavaAndItsValueBack:
 	// runtime/RontoJavaHandle
 	// through _jhandle, unwrapped by _junm / _jarr at a direct site and by the bridge's
@@ -1504,8 +1521,10 @@ class JvmJavaInteropCompilerTest {
 		assertThat(compileWarnings("""
 				(defun proxy-of (iface f) (java:proxy iface f))
 				(defun runnable (f) (java:reify "java.lang.Runnable" "run" f))
+				(defun object-of (f g) (java:handle f :functional :java-false :through g))
 				""", true)).contains(
-				"warning: java:proxy is implemented by reflection at run time: the interface name is not a literal string")
+				"warning: java:proxy is implemented by reflection at run time: the interface name is not a literal string",
+				"warning: java:handle is implemented by reflection at run time: its :through function is not named by #'")
 			.doesNotContain("java:reify");
 	}
 

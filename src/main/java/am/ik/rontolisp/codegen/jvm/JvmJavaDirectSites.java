@@ -184,6 +184,17 @@ final class JvmJavaDirectSites {
 			+ "Ljava/lang/Object;I)Ljava/lang/Object;";
 
 	/**
+	 * {@code _jfnh(Object value)Object}: the value of a {@code java:handle} of a function
+	 * ({@code JavaImplementations.handleFunctionMarkers}) when it is one, which the
+	 * factory of the object a function is then makes the object of; any other value is
+	 * the form's usage error.
+	 */
+	static final String FUNCTION_HANDLE = "_jfnh";
+
+	/** {@link #FUNCTION_HANDLE}'s descriptor. */
+	static final String FUNCTION_HANDLE_DESC = "(Ljava/lang/Object;)Ljava/lang/Object;";
+
+	/**
 	 * {@code _jview(Object value, Object items, Object shape, Object printer, Object order,
 	 * Object class, int given)Object}: {@code (java:view value items shape printer order
 	 * class)} of {@code given} arguments, the absent ones {@code null}: a
@@ -370,6 +381,8 @@ final class JvmJavaDirectSites {
 
 	private @Nullable MethodRefEntry handle;
 
+	private @Nullable MethodRefEntry functionHandle;
+
 	private @Nullable MethodRefEntry view;
 
 	// Whether the program makes a java:handle or a java:view (a runtime/RontoJavaValue),
@@ -518,6 +531,40 @@ final class JvmJavaDirectSites {
 			this.methods.add(buildHandle(name, desc));
 		}
 		return ref;
+	}
+
+	/**
+	 * {@code _jfnh}: the function a {@code java:handle} of a function is handed, checked,
+	 * made when first asked for.
+	 * @return {@code _jfnh(Object)Object}
+	 */
+	MethodRefEntry functionHandleHelper() {
+		MethodRefEntry ref = this.functionHandle;
+		if (ref == null) {
+			Utf8Entry name = this.cp.utf8Entry(FUNCTION_HANDLE);
+			Utf8Entry desc = this.cp.utf8Entry(FUNCTION_HANDLE_DESC);
+			ref = this.cp.methodRef(this.thisClass, name, desc);
+			this.functionHandle = ref;
+			this.methods.add(buildFunctionHandle(name, desc));
+		}
+		return ref;
+	}
+
+	// _jfnh(Object value)Object: eval/JavaInterop.handle's check of a java:handle of a
+	// function -- the value itself when _jkind calls it a function, else the usage
+	// error naming it.
+	private Method buildFunctionHandle(Utf8Entry name, Utf8Entry desc) {
+		MethodCode a = new MethodCode();
+		MethodCode.Label notFunction = a.newLabel();
+		a.aload(0);
+		a.invokestatic(kind());
+		a.loadConstant(code(JavaKind.Lisp.FUNCTION));
+		a.if_icmpne(notFunction);
+		a.aload(0);
+		a.areturn();
+		a.labelBinding(notFunction);
+		throwDescribing(a, JavaImplementations.HANDLE_FUNCTION_USAGE + ", got ", 0);
+		return new Method(name, desc, a);
 	}
 
 	/**

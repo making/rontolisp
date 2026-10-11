@@ -620,6 +620,92 @@ public final class JavaImplementationPrograms {
 			(T T T T)""";
 
 	/**
+	 * A {@code java:handle} of a function given, in place of the text, the markers of a
+	 * call that makes the function the object it is ({@code :functional} and
+	 * {@code :java-false}): that object, made without a call -- a {@code Runnable}, a
+	 * {@code Callable} and a {@code Comparator} by the function's arguments, no
+	 * {@code Comparable}, named {@code clojure.lang.AFunction}, which Java hands back as
+	 * the function at a resolved, a dispatched and a run-time site, equal both ways to
+	 * the object a call makes of the function and to an identity handle of it. Java calls
+	 * it as such a call's object -- {@code compare} read as {@code AFunction.compare},
+	 * Java's false handed over as {@code |false|} and, after {@code :octets}, a
+	 * {@code byte[]} as an octet vector -- through a {@code :through} function named by
+	 * {@code #'} or computed, told no call chose a member. A value no function is
+	 * refused.
+	 */
+	public static final String FUNCTION_HANDLE = """
+			(defun row (thunk)
+			  (handler-case (prin1 (funcall thunk)) (error (e) (princ e)))
+			  (terpri))
+			(defun prefixp (prefix text)
+			  (and (>= (length text) (length prefix)) (string= prefix text :end2 (length prefix))))
+			(defun class-named (name) (java:static "java.lang.Class" "forName" name))
+			(defun either (a b) (java:static "java.util.Objects" "requireNonNullElse" a b))
+			(defun is-a (name x) (java:call (class-named name) "isInstance" x))
+			(defvar *through* nil)
+			(defun through (f kind resolved args)
+			  (push (list kind resolved) *through*)
+			  (apply f args))
+			(row (lambda ()
+			       (let* ((f (lambda () 1))
+			              (h (java:handle f :functional :java-false))
+			              (l (java:new "java.util.ArrayList")))
+			         (java:call l "add" h)
+			         (list (eq f (java:call l "get" 0)) (eq f (java:static "java.util.Objects" "requireNonNull" h))
+			               (eq f (either nil h)) (eq f (java:call (java:static "java.util.List" "of" h) "get" 0))
+			               (is-a "java.lang.Runnable" h) (is-a "java.util.concurrent.Callable" h)
+			               (is-a "java.util.Comparator" h) (is-a "java.lang.Comparable" h)
+			               (prefixp "clojure.lang.AFunction@" (java:call h "toString"))))))
+			(row (lambda ()
+			       (let* ((f (lambda () 1))
+			              (h (java:handle f :functional :java-false))
+			              (identity (java:handle f nil nil nil "clojure.lang.AFunction"))
+			              (made (java:new "java.util.ArrayList")))
+			         (java:call made "add" f :functional :java-false)
+			         (list (java:call made "indexOf" h) (java:call (java:static "java.util.List" "of" h) "indexOf" f
+			                                                       :functional :java-false)
+			               (java:call h "equals" identity) (java:call identity "equals" h)
+			               (java:call h "equals" (java:handle f :functional :java-false))
+			               (java:call h "equals" (java:handle (lambda () 1) :functional :java-false))
+			               (= (java:call h "hashCode") (java:call identity "hashCode"))))))
+			(row (lambda ()
+			       (let* ((runs nil)
+			              (f (lambda (&rest args)
+			                   (push args runs)
+			                   (cond ((null args) 7) ((eq (car args) '|false|) 5) ((< (car args) (cadr args)) t)
+			                         (t '|false|))))
+			              (h (java:handle f :java-false :functional)))
+			         (list (java:call h "run") (java:call h "call") (java:call h "compare" 1 2) (java:call h "compare" 2 1)
+			               (java:call h "compare" '|false| 0) (reverse runs)))))
+			(row (lambda ()
+			       (let ((f (lambda (a b) (declare (ignore b)) (if (vectorp a) (aref a 0) -1)))
+			             (octets (java:view 'b (make-array 2 :element-type '(unsigned-byte 8) :initial-element 7) :bytes)))
+			         (list (java:call (java:handle f :functional :java-false :octets) "compare" octets 0)
+			               (java:call (java:handle f :functional :java-false) "compare" octets 0)))))
+			(row (lambda ()
+			       (setq *through* nil)
+			       (let* ((f (lambda (&rest args) (length args)))
+			              (named (java:handle f :functional :java-false :through #'through))
+			              (g #'through)
+			              (computed (java:handle f :through g :functional :java-false)))
+			         (list (java:call named "call") (java:call named "compare" 1 2) (java:call named "run")
+			               (java:call computed "call") (java:call computed "compare" 1 2)
+			               (eq f (java:static "java.util.Objects" "requireNonNull" computed)) (reverse *through*)))))
+			(row (lambda () (java:handle 5 :functional :java-false)))
+			(row (lambda () (java:handle 'f :functional :java-false :octets)))
+			""";
+
+	/** What {@link #FUNCTION_HANDLE} prints. */
+	public static final String FUNCTION_HANDLE_OUTPUT = """
+			(T T T T T T T NIL T)
+			(0 0 T T T NIL T)
+			(NIL 7 -1 1 5 (NIL NIL (1 2) (2 1) (1 2) (|false| 0)))
+			(7 -1)
+			(0 2 NIL 0 2 T ((:OBJECT NIL) (NIL NIL) (NIL NIL) (:OBJECT NIL) (NIL NIL)))
+			java:handle expects (java:handle function :functional :java-false [:octets] [:through f]), got 5
+			java:handle expects (java:handle function :functional :java-false [:octets] [:through f]), got F""";
+
+	/**
 	 * A declaration that a value is what a {@code java:proxy} of one interface makes,
 	 * holding a {@code java:proxy} of that interface and another: the kind is the
 	 * interface list, so the declaration lies.

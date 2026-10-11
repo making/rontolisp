@@ -5434,6 +5434,15 @@ public final class LispEvaluator {
 						.reflectionWarning(implementationForm, implementation));
 				}
 			}
+			// ... and the object a function is, which a compiled program makes by
+			// reflection when its :through is computed.
+			for (LispCons handle : am.ik.rontolisp.compiler.JavaImplementations.functionHandlesIn(lowered)) {
+				String reason = am.ik.rontolisp.compiler.JavaImplementations.functionHandleReason(handle);
+				if (reason != null) {
+					System.err.println(location + "warning: "
+							+ am.ik.rontolisp.compiler.JavaImplementations.functionHandleWarning(reason));
+				}
+			}
 		}
 		return lowered;
 	}

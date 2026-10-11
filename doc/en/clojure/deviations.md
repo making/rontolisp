@@ -491,18 +491,17 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   any interface, each called with the method's arguments; the oracle converts a fn only
   to an interface annotated `@FunctionalInterface` (a `PropertyChangeListener` is a
   `ClassCastException` there). As in the oracle, a fn Java takes as a `Runnable`,
-  `Callable`, `Comparator` or `Object` is the fn Java hands back
-  (`(.comparator (java.util.TreeSet. f))` is `f`), and where the method answers an object the
-  fn's answer is the value's own object; the fn's Java object spells itself
-  `clojure.lang.AFunction@1b6d3586`, where the oracle's names the fn's own class. A fn inside
-  a collection Java receives is no `Runnable`, `Callable` or `Comparator`
-  (`(.invokeAll pool [f g])` is a `ClassCastException`, where the oracle runs both). Where the
-  method answers a primitive the answer is cast as the oracle's adapter casts it, a boolean
-  by its compiler's `(Boolean)` cast where the call resolves before it runs and by its
-  reflector's truthiness where it does not: a call the oracle resolves only through a type
-  hint (dropped here) or a collection literal's class (`(.filter (.stream [1 2]) pred)`)
-  reads a predicate's `nil` as `false` here where the oracle throws. A `proxy` body's
-  primitive answer is unboxed as the oracle's proxy class unboxes it.
+  `Callable`, `Comparator` or `Object`, inside a collection too, is the fn Java hands back
+  (`(.comparator (java.util.TreeSet. f))` is `f`, `(.invokeAll pool [f g])` runs both), and
+  where the method answers an object the fn's answer is the value's own object; the fn's Java
+  object spells itself `clojure.lang.AFunction@1b6d3586`, where the oracle's names the fn's own
+  class. Where the method answers a primitive the answer is cast as the oracle's adapter
+  casts it, a boolean by its compiler's `(Boolean)` cast where the call resolves before it
+  runs and by its reflector's truthiness where it does not: a call the oracle resolves only
+  through a type hint (dropped here) or a collection literal's class
+  (`(.filter (.stream [1 2]) pred)`) reads a predicate's `nil` as `false` here where the
+  oracle throws. A `proxy` body's primitive answer is unboxed as the oracle's proxy class
+  unboxes it.
 - A value passed to Java is an object of this front end's classes that Java reads as the
   oracle's own: a vector, list, lazy seq, set, map, record or sorted collection a read-only
   `java.util` `List`, `Set` or `Map` (a vector also `RandomAccess` and `Comparable`) printing
@@ -510,8 +509,8 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   as the oracle's (a ratio a `Number`), a deftype or reify whose body implements a Java
   interface or overrides an `Object` method, or a record whose body implements a Java
   interface, an object implementing those interfaces (a record's also its `Map`) and calling
-  the type's methods, and an atom, fn, other deftype or reify or other value an
-  object equal only to itself, spelled as the oracle's `Object.toString`
+  the type's methods, a fn the object the fn is (above), and an atom, other deftype or reify
+  or other value an object equal only to itself, spelled as the oracle's `Object.toString`
   (`clojure.lang.Atom@1b6d3586`). Java hands each back as the value itself. What differs: the
   class Java sees (`getClass`, and the JDK's `ClassCastException` messages naming it; the
   front end's own cast failures name the oracle's class but lack the module tail; a reify's

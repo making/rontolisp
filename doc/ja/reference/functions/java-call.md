@@ -22,7 +22,7 @@
 
 メソッド名にはパラメータ型を付けられます (`"append(CharSequence)"`)。レシーバのクラスがテキストから分かる呼び出し (`(java:new ...)`、宣言された戻り型、`(the (java:object "C") x)`、`(declare (type (java:object "C") v))`) は、実行前に一度だけ、そのクラスのメソッドの中から解決されます。引数の種別も分かればただ 1 つのメソッドへ、分からなければオーバーロードの集合へ解決され、実行時に引数の種別でその中から選びます (ガイドの[実行前の呼び出し解決](../../guides/java-interop.md#resolving-calls-before-they-run))。
 
-インターフェースが期待される位置に渡した関数はその `java:proxy` になり、メソッド名を先頭に呼ばれます。引数の後ろを `:functional` で終えると、各抽象メソッドをメソッドの引数だけで実装します。`java:new` と `java:static` も同じ終わり方で同じく変換します (ガイドの [java:proxy によるコールバック](../../guides/java-interop.md#callbacks-via-javaproxy))。`:functional` と `:java-false` で終えると、`Object` が期待される位置に渡した関数は関数そのものであるオブジェクトになり、Java から返るときはその関数です。それ以外の呼び出しでは、この位置の関数は拒否されます (ガイドの [Java の false を受け取る](../../guides/java-interop.md#javas-false-back-java-false))。
+インターフェースが期待される位置に渡した関数はその `java:proxy` になり、メソッド名を先頭に呼ばれます。引数の後ろを `:functional` で終えると、各抽象メソッドをメソッドの引数だけで実装します。`java:new` と `java:static` も同じ終わり方で同じく変換します (ガイドの [java:proxy によるコールバック](../../guides/java-interop.md#callbacks-via-javaproxy))。`:functional` と `:java-false` で終えると、`Object` が期待される位置に渡した関数は関数そのものであるオブジェクトになり、Java から返るときはその関数です。それ以外の呼び出しでは、この位置の関数は拒否されます (ガイドの [Java の false を受け取る](../../guides/java-interop.md#javas-false-back-java-false))。[java:handle](java-handle.md) は、呼び出しなしで関数からこのオブジェクトを作ります。
 
 引数の後ろ (`:functional` との前後は問いません) を `:java-false` で終えると、Java の false を `nil` ではなく `|false|` として返します (ガイドの [Java の false を受け取る](../../guides/java-interop.md#javas-false-back-java-false))。
 

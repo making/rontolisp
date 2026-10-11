@@ -903,6 +903,8 @@ class JavaBridgeTemplateParityTest {
 		assertThat(constant("VALUE_OPTION")).isEqualTo(LispNames.JAVA_VALUE_OPTION);
 		assertThat(constant("CLASS_OPTION")).isEqualTo(LispNames.JAVA_CLASS_OPTION);
 		assertThat(constant("REIFY_USAGE")).isEqualTo(am.ik.rontolisp.compiler.JavaImplementations.REIFY_USAGE);
+		assertThat(constant("HANDLE_FUNCTION_USAGE"))
+			.isEqualTo(am.ik.rontolisp.compiler.JavaImplementations.HANDLE_FUNCTION_USAGE);
 		assertThat(constant("COMPARATOR_COMPARE"))
 			.isEqualTo(am.ik.rontolisp.compiler.JavaImplementation.COMPARATOR_COMPARE);
 		assertThat(constant("JAVA_VALUE_CLASS")).isEqualTo(am.ik.rontolisp.runtime.RontoJavaValue.class.getName());

@@ -1657,12 +1657,22 @@ final class JavaInterop {
 	 * with -- its answer's sign, or the {@code ClassCastException} of a cast to the class
 	 * when it answers no real -- and with a nil order no handle at all. A handle standing
 	 * for a real number is a {@code Number} of it ({@link RontoJavaNumberHandle}).
-	 * Wherever Java hands one back, {@code java:} answers the value.
-	 * @param args the value, the text, and optionally the hash, the order and the class
-	 * @param caller what calls an order function
+	 * Wherever Java hands one back, {@code java:} answers the value. A function followed
+	 * by a call's markers, {@code :functional} and {@code :java-false} among them, is the
+	 * object the function is at such a call (compiler/JavaImplementations
+	 * .handleFunctionMarkers, {@link #functionObject}).
+	 * @param args the value, the text, and optionally the hash, the order and the class;
+	 * or a function and markers
+	 * @param caller what calls an order function, or the function
 	 * @return the handle, a host object
 	 */
 	static LispVal handle(List<LispVal> args, Caller caller) {
+		if (!args.isEmpty() && JavaImplementations.handleFunctionMarkers(args, 0) != null) {
+			if (!isFunction(args.get(0))) {
+				throw new LispEvalException(JavaImplementations.HANDLE_FUNCTION_USAGE + ", got " + args.get(0).print());
+			}
+			return functionObject(args.get(0), withMarkers(caller, args, 1));
+		}
 		if (args.size() < 2 || args.size() > 5) {
 			throw new LispEvalException(HANDLE_USAGE);
 		}

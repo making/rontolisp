@@ -476,12 +476,11 @@
   メソッドすべてを実装し、それぞれメソッドの引数で呼ばれます。オラクルが fn を変換する
   のは `@FunctionalInterface` 注釈付きのインタフェースだけです（`PropertyChangeListener`
   はオラクルでは `ClassCastException` になります）。オラクルと同じく、Java が
-  `Runnable`・`Callable`・`Comparator`・`Object` として受け取った fn は Java から fn
-  そのものとして返り（`(.comparator (java.util.TreeSet. f))` は `f` です）、オブジェクトを
-  返すメソッドでは fn の答えは値自身のオブジェクトになります。fn の Java オブジェクトは
+  `Runnable`・`Callable`・`Comparator`・`Object` として受け取った fn は、コレクションの中の
+  fn も含めて Java から fn そのものとして返り（`(.comparator (java.util.TreeSet. f))` は
+  `f` で、`(.invokeAll pool [f g])` は両方を実行します）、オブジェクトを返すメソッドでは fn
+  の答えは値自身のオブジェクトになります。fn の Java オブジェクトは
   `clojure.lang.AFunction@1b6d3586` と綴られます（オラクルでは fn 自身のクラス名です）。
-  Java が受け取るコレクションの中の fn は `Runnable`・`Callable`・`Comparator` ではありません
-  （`(.invokeAll pool [f g])` は `ClassCastException` になり、オラクルは両方を実行します）。
   プリミティブを返すメソッドでは、答えはオラクルのアダプタと同じくキャストされます。
   `boolean` は、呼び出しが実行前に解決されるならコンパイラの `(Boolean)` キャスト、
   そうでなければリフレクションの真偽判定です。そのため、オラクルが型ヒント（ここでは
@@ -497,8 +496,9 @@
   （分数は `Number` です）、本体が Java のインタフェースを実装するか `Object` のメソッドを
   上書きする deftype や reify、および本体が Java のインタフェースを実装する record は、
   そのインタフェースを実装し、型のメソッドを呼ぶオブジェクトです（record は `Map` でも
-  あります）。アトム・fn・それ以外の deftype や reify などそれ以外の値は、自分自身と
-  だけ等しく、オラクルの `Object.toString` と同じく綴られるオブジェクトです
+  あります）。fn は fn そのものであるオブジェクト（上の項目）です。アトム・それ以外の
+  deftype や reify などそれ以外の値は、自分自身とだけ等しく、オラクルの `Object.toString`
+  と同じく綴られるオブジェクトです
   （`clojure.lang.Atom@1b6d3586`）。Java はどれも元の値として返します。オラクルとの違いは
   次のとおりです。Java から見えるクラスが違います（`getClass` と、そのクラスを名指す JDK の
   `ClassCastException` のメッセージ。このフロントエンド自身のキャスト失敗はオラクルのクラス名を

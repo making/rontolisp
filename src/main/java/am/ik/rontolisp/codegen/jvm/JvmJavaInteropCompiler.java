@@ -60,6 +60,11 @@ final class JvmJavaInteropCompiler {
 	static void compile(String member, LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
 		List<LispVal> args = cons.toList();
 		if (LispNames.JAVA_HANDLE.equals(member)) {
+			JavaMarkers function = JavaImplementations.handleFunctionMarkers(args, 1);
+			if (function != null) {
+				compileFunctionHandle(function, cons, args, ctx, className);
+				return;
+			}
 			// (java:handle value text hash order class): a runtime/RontoJavaHandle, made
 			// with
 			// no reflection by _jhandle (eval/JavaInterop.handle on the interpreter); an
@@ -241,6 +246,51 @@ final class JvmJavaInteropCompiler {
 			JvmExprCompiler.compileExpr(functions.get(i), ctx, className);
 			ctx.body.aastore();
 		}
+		ctx.body.invokestatic(factory);
+	}
+
+	/**
+	 * A {@code java:handle} of a function
+	 * ({@code JavaImplementations.handleFunctionMarkers}): the object the function is at
+	 * a call ending in the markers after it -- the factory of the class a call converting
+	 * a function there gets ({@link JvmJavaImplementations#functionObjectFactory}),
+	 * handed the value {@code _jfnh} checked; with a {@code :through} no {@code #'name}
+	 * names, the bridge's object, made when the form runs
+	 * ({@code eval/JavaInterop.handle} on the interpreter).
+	 */
+	private static void compileFunctionHandle(JavaMarkers markers, LispCons cons, List<LispVal> args,
+			JvmLispCompiler.Ctx ctx, String className) {
+		JvmJavaSites sites = Objects.requireNonNull(ctx.javaSites, "the java: sites were not prepared");
+		if (markers.throughComputed()) {
+			if (sites.javaStatic()) {
+				sites.refuse(cons, Objects.requireNonNull(sites.bridgeReason(cons)));
+				ctx.body.aconst_null();
+				return;
+			}
+			Map<String, MethodRefEntry> ops = ctx.javaOps;
+			if (ops == null) {
+				// No bridge in this attempt: the helper-gate check retries with it.
+				ctx.body.invokestatic(
+						ctx.cp.methodRef(ctx.cp.classEntry(className), JvmJavaRuntimeBuilder.INIT_METHOD, "()V"));
+				ctx.body.aconst_null();
+				return;
+			}
+			ctx.body.invokestatic(Objects.requireNonNull(ops.get("init")));
+			JvmExprCompiler.compileExpr(args.get(1), ctx, className);
+			compileRestArray(args, 2, ctx, className);
+			emitBridgeCall(ctx, ops, "handle");
+			return;
+		}
+		prepareThrough(markers, ctx, className);
+		MethodRefEntry factory = Objects.requireNonNull(sites.implementations().functionObjectFactory(markers),
+				"the function interfaces");
+		JvmEmitHelper.emitIntConst(ctx, 1);
+		ctx.body.anewarray(ctx.objectClass);
+		ctx.body.dup();
+		JvmEmitHelper.emitIntConst(ctx, 0);
+		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
+		ctx.body.invokestatic(sites.direct().functionHandleHelper());
+		ctx.body.aastore();
 		ctx.body.invokestatic(factory);
 	}
 

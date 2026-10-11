@@ -398,6 +398,40 @@ Package `java` (`LispNames.JAVA_PKG`, `PackageRegistry`; does NOT use `cl`): `ja
   `#theTemplateImplementsAFunctionalArgumentAsTheSharedRuleDoes`,
   `JavaImplementationsTest#theMarkersAFormEndsInAreCarriedByItsImplementation`,
   `ClojureInteropTest#aFnWhereJavaExpectsAnObjectIsTheFnItself`.
+- `(java:handle function marker...)` -- a value followed by nothing but markers,
+  `:functional` and `:java-false` among them (`JavaImplementations.handleFunctionMarkers`) --
+  is that object made WITHOUT a call (f47, 2026-10-11): `JavaImplementations.functionObject` at
+  the form's markers, `resolved` nil, a value no function `HANDLE_FUNCTION_USAGE`. A handle
+  given a text, or markers without the two in its place, is the old handle (its first marker
+  a bad text). What it is for: a Lisp-held object a function is, for a view's item or a
+  function's answer, which no conversion at a call reaches (the Clojure front end's
+  `%clojure-host-member` of a fn; until f47 an identity handle there, so `(.invokeAll pool
+  [f g])` was the `RontoJavaHandle`-to-`Callable` `ClassCastException`). Copies: interpreter
+  `JavaInterop.handle` -> `functionObject` (the one `FUNCTION_OBJECT_KEY` dispatch);
+  compiled `JvmJavaInteropCompiler.compileFunctionHandle`: `prepareThrough`, `_jfnh` (the
+  `_jkind` FUNCTION check, else the usage error) into `functionObjectFactory(markers)` -- the
+  very shell a converting site of the same markers gets, so a Clojure program with a site
+  converting at `Object` with `resolved` nil adds no class; a `:through` no `#'name` names is
+  the bridge's `javaHandle` (`ops` "handle", `functionObject` there; `bridgeReason`,
+  `needsBridge`, `--java-static` refuses it, `--warn-java-reflection` and
+  `java:*warn-on-reflection*` report it: `functionHandleReason` / `functionHandleWarning`).
+  Predictions: `makesStandIns` and `needsApply` count such a form, `callsBack` does not (its
+  class calls the function, no `$JavaCalls`). Rejected: a `:value` `java:reify` of the three
+  in `clojure.lisp` (a second shell beside the call sites', the interfaces and class name
+  restated in Lisp, and the bridge's `:value` reify reads no comparison) and a function
+  flavour of `RontoJavaHandle` over `RontoJavaCalls` (a fourth copy of the comparison reading
+  and of the through call). Observed 2026-10-11 on the clj fixtures (JVM class, before ->
+  after): `(.put m "a" [1 2])` on a var receiver (every site at run time) 728,056 ->
+  732,259 B plus a 1,401 B shell and the 236 B base; `(java.util.ArrayList. [1 2])` 735,163 ->
+  735,181 B, its shells unchanged; the bridge 71,517 -> 72,206 B. Pins:
+  `JavaImplementationPrograms.FUNCTION_HANDLE` (`JavaInteropTest` /
+  `JvmJavaInteropCompilerTest#aHandleOfAFunctionGivenTheMarkersIsTheObjectItIs`: sites,
+  equality both ways, `run`/`call`/`compare`, Java's false, `:octets`, a named and a computed
+  `:through`, the refusals), `JavaImplementationsTest#aHandleOfAFunctionEndsInTheMarkersOfACallMakingItsObject`,
+  `JvmJavaInteropCompilerTest#javaStaticRefusesEverySiteThatNeedsReflection`,
+  `#warnJavaReflectionReportsAnInterfaceImplementedByReflection` /
+  `JavaInteropTest#warnOnReflectionReportsAnInterfaceImplementedByReflection`,
+  `JavaBridgeTemplateParityTest#theBridgeSpellsTheRepresentationAsTheRuntimeDoes`.
 - A function costs `COST_PROXY` (8) against a functional interface (one abstract method,
   Object's public methods aside: `JavaInterfaceMethods.isFunctionalInterface`, cached; the
   bridge's copy), `COST_FUNCTION_OBJECT` (9) against `java.lang.Object` (f39: Clojure's fn is

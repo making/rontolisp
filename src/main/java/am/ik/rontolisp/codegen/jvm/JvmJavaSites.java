@@ -131,13 +131,19 @@ final class JvmJavaSites {
 	/**
 	 * Why a site needs the reflective bridge, or {@code null} when it compiles to code
 	 * that needs nothing else: a {@code java:reify} / {@code java:proxy} whose interface
-	 * is not resolved when it is compiled, or a site left to run time. A function value
-	 * passed where an interface is expected needs nothing: it becomes the interface's
-	 * generated proxy class.
+	 * is not resolved when it is compiled, a {@code java:handle} of a function whose
+	 * {@code :through} is computed, or a site left to run time. A function value passed
+	 * where an interface is expected needs nothing: it becomes the interface's generated
+	 * proxy class.
 	 * @param site a {@code java:} form
 	 * @return the reason, or {@code null}
 	 */
 	@Nullable String bridgeReason(LispCons site) {
+		if (JavaImplementations.isFunctionHandle(site)) {
+			String reason = JavaImplementations.functionHandleReason(site);
+			return reason == null ? null
+					: "it implements the object a function is with java.lang.reflect.Proxy: " + reason;
+		}
 		if (JavaImplementations.isImplementationForm(site)) {
 			JavaImplementation implementation = implementation(site);
 			if (implementation.resolved()) {
@@ -175,19 +181,22 @@ final class JvmJavaSites {
 		return false;
 	}
 
-	// The java: sites of a form, java:reify and java:proxy ones included.
+	// The java: sites of a form, java:reify and java:proxy ones and the java:handle forms
+	// making the object a function is included.
 	private static List<LispCons> proxySitesAnd(LispVal form) {
 		List<LispCons> found = new ArrayList<>(JavaSiteResolver.sitesIn(form));
 		found.addAll(JavaImplementations.formsIn(form));
+		found.addAll(JavaImplementations.functionHandlesIn(form));
 		return found;
 	}
 
 	/**
 	 * Whether the program makes an object of a generated implementation class -- a
 	 * {@code java:reify} / {@code java:proxy} whose interface resolves, a resolved site
-	 * passing a function where an interface is expected: its functions are applied
-	 * through {@code _apply}, which the program then carries. Read off the forms before
-	 * they are compiled; a misprediction is caught by the helper-gate check.
+	 * passing a function where an interface is expected, a {@code java:handle} of a
+	 * function: its functions are applied through {@code _apply}, which the program then
+	 * carries. Read off the forms before they are compiled; a misprediction is caught by
+	 * the helper-gate check.
 	 * @param program the package-resolved top-level forms
 	 * @return whether the apply runtime is needed
 	 */
@@ -197,6 +206,11 @@ final class JvmJavaSites {
 		}
 		for (LispVal form : program) {
 			for (LispCons site : proxySitesAnd(form)) {
+				if (JavaImplementations.isFunctionHandle(site)) {
+					// the object a function is, whose class -- or the bridge's Proxy --
+					// applies it
+					return true;
+				}
 				if (JavaImplementations.isImplementationForm(site)) {
 					if (implementation(site).resolved()) {
 						return true;
@@ -216,8 +230,9 @@ final class JvmJavaSites {
 	 * the program's {@code _apply} ({@code JvmJavaImplementations.callsClass}): it names
 	 * {@code java:view} (a printer, a vector's order), or {@code java:handle} anywhere
 	 * but at the head of a call whose order is absent, a literal string or nil -- one
-	 * given any other order, or a function value of it, may be handed a function. Read
-	 * off the forms before they are compiled.
+	 * given any other order, or a function value of it, may be handed a function; a
+	 * {@code java:handle} of a function makes the object the function is, which its own
+	 * class calls. Read off the forms before they are compiled.
 	 * @param program the package-resolved top-level forms
 	 * @return whether such a callback can happen
 	 */
@@ -238,7 +253,9 @@ final class JvmJavaSites {
 		if (!(form instanceof LispCons cons) || seen.put(cons, Boolean.TRUE) != null) {
 			return false;
 		}
-		if (cons.car() instanceof LispSymbol operator && LispNames.JAVA_HANDLE_QUALIFIED.equals(operator.name())) {
+		if (cons.car() instanceof LispSymbol operator && LispNames.JAVA_HANDLE_QUALIFIED.equals(operator.name())
+				&& !JavaImplementations.isFunctionHandle(cons)) {
+			// (the object a function is calls it through its own class, not $JavaCalls)
 			List<LispVal> parts = cons.toList();
 			if (parts.size() > 4 && !(parts.get(4) instanceof LispString) && !(parts.get(4) instanceof LispNil)) {
 				return true;
@@ -264,8 +281,9 @@ final class JvmJavaSites {
 	 * value, which may be applied to it), or a call converting functions that ends in
 	 * {@code :functional} and {@code :java-false}, which makes a {@code Runnable},
 	 * {@code Callable} or {@code Comparator} of a function stand for it
-	 * ({@link JavaImplementation#standsForItsFunction}). Read off the forms before they
-	 * are compiled.
+	 * ({@link JavaImplementation#standsForItsFunction}), as a {@code java:handle} of a
+	 * function does ({@link JavaImplementations#handleFunctionMarkers}). Read off the
+	 * forms before they are compiled.
 	 * @param program the package-resolved top-level forms
 	 * @return whether such an object can be made
 	 */
@@ -294,6 +312,9 @@ final class JvmJavaSites {
 			if (shape != null && shape.value() >= 0) {
 				return true;
 			}
+		}
+		if (JavaImplementations.isFunctionHandle(cons)) {
+			return true;
 		}
 		if (cons.car() instanceof LispSymbol operator && cons.isProperList()) {
 			JavaMarkers markers = switch (operator.name()) {
@@ -360,6 +381,9 @@ final class JvmJavaSites {
 	}
 
 	private static String describe(LispCons site) {
+		if (JavaImplementations.isFunctionHandle(site)) {
+			return "java:handle";
+		}
 		if (JavaImplementations.isImplementationForm(site)) {
 			return JavaImplementations.describe(site);
 		}
@@ -406,6 +430,12 @@ final class JvmJavaSites {
 				if (!implementation.resolved()) {
 					CompileWarnings.warn(implementationForm,
 							JavaImplementations.reflectionWarning(implementationForm, implementation));
+				}
+			}
+			for (LispCons handle : JavaImplementations.functionHandlesIn(form)) {
+				String reason = JavaImplementations.functionHandleReason(handle);
+				if (reason != null) {
+					CompileWarnings.warn(handle, JavaImplementations.functionHandleWarning(reason));
 				}
 			}
 		}

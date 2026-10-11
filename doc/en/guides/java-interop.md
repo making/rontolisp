@@ -198,6 +198,10 @@ object of its own; where an `Object` is expected it has none there, and the call
   (list (eq by-value (java:call s "comparator")) (eq by-value (java:call l "get" 0))))   ; => (T T)
 ```
 
+A `java:handle` of the function given the call's markers in place of a text,
+`(java:handle f :functional :java-false)`, is that same object made without a call: one Lisp
+holds, to hand Java inside a collection or as a function's answer.
+
 ### Octets back: `:octets`
 
 A Java array comes back as a list, so a `byte[]` is a list of signed bytes. A `java:new`,
@@ -284,7 +288,9 @@ the value:
         (java:call (java:call m "keySet") "toArray")))   ; => ("{apple=1}" 1 (APPLE))
 ```
 
-The full form is `(java:handle value text hash order class)`. A nil `hash` makes a handle
+The full form is `(java:handle value text hash order class)`, beside `(java:handle function
+:functional :java-false ...)`, the object a function is ([Java's false
+back](#javas-false-back-java-false)). A nil `hash` makes a handle
 equal only to an object standing for the very same value under its class -- another such
 handle, a `java:reify` given `:value`, the object a function is -- and a nil `text` then
 spells it as `Object` does, the class and the hash. An `order` that is a function compares the value with the
@@ -333,8 +339,9 @@ object that keeps the array (`ByteBuffer.wrap`):
 
 The Clojure front end hands Java every value this way: a vector, list, set or map as a view
 printed as Clojure prints it, a byte array as its `byte[]`, a keyword, symbol or ratio as a
-handle hashed and ordered as Clojure's `Keyword`, `Symbol` and `Ratio` are, and any other
-value as a handle equal only to itself ([java:view](../reference/functions/java-view.md)).
+handle hashed and ordered as Clojure's `Keyword`, `Symbol` and `Ratio` are, a fn as the
+object it is, and any other value as a handle equal only to itself
+([java:view](../reference/functions/java-view.md)).
 
 A `java` object is `eq` and `eql` only to itself: the same object answered by two
 calls is `eq`, while two objects that are `equals` are not. `equal` and `equalp`

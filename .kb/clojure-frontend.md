@@ -4082,10 +4082,12 @@ The `java:` surface (`.kb/java-interop.md`); interpreter and JVM only -- wasm co
   come back (`.kb/java-interop.md`, "Handles and views") -- a String construction's arguments go
   through the family's alias `%clojure-bytes-host-value` instead, so a byte array reaches
   `%clojure-string-new` as itself; a host object itself;
-  anything else -- a fn, an atom, a deftype, a reify, a pattern, a var, a condition inside a
-  collection -- an identity handle (`%clojure-host-object`: nil hash, the oracle's class name,
-  text nil -- `Object`'s spelling `clojure.lang.Atom@hex` -- for a fn, an atom, a reduced and a
-  type overriding no `toString`, else `str`; `%clojure-host-object-text` keeps the
+  a fn the object it is (f47: `(java:handle x :functional :java-false :octets :through
+  #'%clojure-host-call)`, the function object a host call's fn argument gets, "A fn or a
+  `proxy` body Java calls" below); anything else -- an atom, a deftype, a reify, a pattern, a
+  var, a condition inside a collection -- an identity handle (`%clojure-host-object`: nil
+  hash, the oracle's class name, text nil -- `Object`'s spelling `clojure.lang.Atom@hex` --
+  for an atom, a reduced and a type overriding no `toString`, else `str`; `%clojure-host-object-text` keeps the
   object-methods test `%clojure-to-string-p` a bare `cond` test, which the library strip
   requires). Java hands every one back as the value (`identical?`). Not wrapped, so the site
   keeps resolving on the argument's kind: a literal, a fn form, a construction, a `make-array`
@@ -4204,14 +4206,25 @@ The `java:` surface (`.kb/java-interop.md`); interpreter and JVM only -- wasm co
     an int was expected.
   - A fn Java takes as an `Object` (f39) is the object the fn is (`.kb/java-interop.md`, the
     function object): a `Runnable`, `Callable` and `Comparator` standing for the fn, spelled
-    `clojure.lang.AFunction@hex` as `%clojure-host-object` spells a fn inside a collection,
-    with which it is equal both ways. The oracle's fn class is its own (`user$f`), so the text
-    is the deviation; a fn inside a collection crosses as that identity handle, none of the
-    three: `(.invokeAll pool [f g])` casts it to `Callable` (`ClassCastException`, where the
-    oracle answers both futures), a checked list of `Runnable` refuses it.
-    Measured 2026-10-11 against clj 1.12.6: `(.add l f)` then `(.get l 0)` is `f` (before: `No
-    matching method`), as are a map's, a set's, `Optional/of`'s and a reflective `.add`'s, and
-    `StringBuilder.append` takes it as an `Object`.
+    `clojure.lang.AFunction@hex`. The oracle's fn class is its own (`user$f`), so the text is
+    the deviation. Measured 2026-10-11 against clj 1.12.6: `(.add l f)` then `(.get l 0)` is
+    `f` (before: `No matching method`), as are a map's, a set's, `Optional/of`'s and a
+    reflective `.add`'s, and `StringBuilder.append` takes it as an `Object`.
+  - So is a fn inside a collection, and a fn a fn or proxy body answers (f47, 2026-10-11):
+    `%clojure-host-member`'s `functionp` arm is `(java:handle x :functional :java-false :octets
+    :through #'%clojure-host-call)`, the call sites' markers, so a compiled program reuses the
+    shell of a site of them that converts at `Object` with `resolved` nil (`.kb/java-interop.md`,
+    `java:handle` of a function, has what a program converting no fn pays). Until then
+    `%clojure-host-object`'s identity handle, which implements none of the three: measured
+    2026-10-11 against clj 1.12.6, interpreter and JVM alike, `(.invokeAll pool [(fn [] 1) (fn
+    [] 2)])` and `.invokeAny` were the `RontoJavaHandle`-to-`Callable` `ClassCastException`,
+    `(.addAll l [f])` on a checked list of `Runnable` `Attempt to insert class
+    ...RontoJavaHandle element`; after, oracle-identical, with a checked list of `Callable` (of
+    a list) and of `Comparator` (of a set), `invokeAll` over a stream's `toList` of fns a fn
+    answered, equality both ways with the object `(.add l f)` makes, and `(TreeSet. [f])` a
+    `ClassCastException` (no `Comparable`; the JDK's message names this front end's class
+    where the handle's named `clojure.lang.AFunction`). Pin:
+    `ClojureInteropTest#aFnInsideACollectionJavaReceivesIsTheFnItself`.
   - a fn: `ClojureInteropLowering.hostCall` ends every call with a non-literal argument (the
     `:functional` ones) in `:octets` and `:through #'%clojure-host-call` where the host is
     (`answered(..., bytes, converts)`; `%clojure-host-answer` around the CALL's answer only

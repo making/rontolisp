@@ -58,8 +58,9 @@ final class JvmJavaRuntimeBuilder {
 	 * The ready-to-emit {@code _javaInit} method, its guard field, the constant-pool
 	 * references the {@code java:} call-site compiler needs ({@code ops} keys:
 	 * {@code init}, {@code new}, {@code call}, {@code static}, {@code field},
-	 * {@code proxy}, {@code reify}), and the bridge class file that travels beside the
-	 * program, keyed by its path within an output tree.
+	 * {@code proxy}, {@code reify}, {@code subclass}, {@code handle}), and the bridge
+	 * class file that travels beside the program, keyed by its path within an output
+	 * tree.
 	 */
 	record JavaRuntime(Utf8Entry initName, Utf8Entry initDesc, MethodCode initCode, Utf8Entry initedFieldName,
 			Utf8Entry initedFieldDesc, Map<String, MethodRefEntry> ops, Map<String, byte[]> classFiles) {
@@ -106,6 +107,7 @@ final class JvmJavaRuntimeBuilder {
 		ops.put("proxy", cp.methodRef(bridgeClass, "javaProxy", newDesc));
 		ops.put("reify", cp.methodRef(bridgeClass, "javaReify", newDesc));
 		ops.put("subclass", cp.methodRef(bridgeClass, "javaSubclass", newDesc));
+		ops.put("handle", cp.methodRef(bridgeClass, "javaHandle", newDesc));
 
 		// --- _javaInit body ---
 		MethodCode code = new MethodCode();

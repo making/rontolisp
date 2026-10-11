@@ -132,6 +132,8 @@ Java の false は Common Lisp 唯一の偽である `nil` として返ります
   (list (eq by-value (java:call s "comparator")) (eq by-value (java:call l "get" 0))))   ; => (T T)
 ```
 
+テキストの位置に呼び出しのマーカーを渡した関数の `java:handle`、`(java:handle f :functional :java-false)` は、呼び出しなしで作った同じオブジェクトです。Lisp が保持でき、コレクションの中や関数の戻り値として Java に渡せます。
+
 ### バイト列を受け取る: `:octets`
 
 Java の配列はリストとして返るので、`byte[]` は符号付きバイトのリストになります。`:octets` で終わる `java:new`・`java:call`・`java:static`・`java:field` は、`byte[]` (結果、フィールドの値、返した配列の要素) を、そのオクテットを持つ `(unsigned-byte 8)` のベクタとして返します。ほかのマーカーとの順序は問いません。このベクタは、インタプリタでもコンパイル済みプログラムでも Java の配列そのものです。そのため Java が後からこの配列へ書き込んだ値 (`ByteBuffer` の `array()` へバッファが書き込む値など) もベクタから読め、同じ配列を 2 度受け取ると 2 つは `eq` になります。Java へ `byte[]` を渡すには [`:bytes` のビュー](#views-javaview)を使います。
@@ -182,7 +184,7 @@ Java の配列はリストとして返るので、`byte[]` は符号付きバイ
         (java:call (java:call m "keySet") "toArray")))   ; => ("{apple=1}" 1 (APPLE))
 ```
 
-完全な形は `(java:handle value text hash order class)` です。`hash` が nil のハンドルは、同じクラスでまったく同じ値を表すオブジェクト (同様のハンドル、`:value` を付けた `java:reify`、関数そのものであるオブジェクト) とだけ等しくなり、このとき `text` を nil にすると `Object` と同じくクラス名とハッシュで綴られます。関数の `order` は、値と、Java がハンドルと比べるオブジェクトとを比べ、その答えの符号で順序を決めます。`order` が nil のハンドルは何とも順序付けられません。`class` は等価と順序を分けます。クラスの異なるハンドル同士は等しくならず、比べると両方のクラス名を挙げた `ClassCastException` になります。実数のハンドルは、その数の `java.lang.Number` です ([java:handle](../reference/functions/java-handle.md))。値を表しながらインターフェースも実装するオブジェクトは、`:value` を付けた `java:reify` で作ります ([java:reify によるインターフェースの実装](#implementing-interfaces-with-javareify))。
+完全な形は `(java:handle value text hash order class)` で、ほかに関数そのものであるオブジェクトを作る `(java:handle function :functional :java-false ...)` があります ([Java の false を受け取る](#javas-false-back-java-false))。`hash` が nil のハンドルは、同じクラスでまったく同じ値を表すオブジェクト (同様のハンドル、`:value` を付けた `java:reify`、関数そのものであるオブジェクト) とだけ等しくなり、このとき `text` を nil にすると `Object` と同じくクラス名とハッシュで綴られます。関数の `order` は、値と、Java がハンドルと比べるオブジェクトとを比べ、その答えの符号で順序を決めます。`order` が nil のハンドルは何とも順序付けられません。`class` は等価と順序を分けます。クラスの異なるハンドル同士は等しくならず、比べると両方のクラス名を挙げた `ClassCastException` になります。実数のハンドルは、その数の `java.lang.Number` です ([java:handle](../reference/functions/java-handle.md))。値を表しながらインターフェースも実装するオブジェクトは、`:value` を付けた `java:reify` で作ります ([java:reify によるインターフェースの実装](#implementing-interfaces-with-javareify))。
 
 ### ビュー: java:view
 
@@ -209,7 +211,7 @@ Java の配列はリストとして返るので、`byte[]` は符号付きバイ
   b)   ; => #(0 7 7)
 ```
 
-Clojure フロントエンドは、すべての値をこの形で Java に渡します。ベクタ・リスト・セット・マップは Clojure の印字どおりに綴られるビューとして、バイト配列はその `byte[]` として、キーワード・シンボル・分数は Clojure の `Keyword`・`Symbol`・`Ratio` と同じくハッシュし順序付けるハンドルとして、それ以外の値は自分自身とだけ等しいハンドルとして渡します ([java:view](../reference/functions/java-view.md))。
+Clojure フロントエンドは、すべての値をこの形で Java に渡します。ベクタ・リスト・セット・マップは Clojure の印字どおりに綴られるビューとして、バイト配列はその `byte[]` として、キーワード・シンボル・分数は Clojure の `Keyword`・`Symbol`・`Ratio` と同じくハッシュし順序付けるハンドルとして、fn は関数そのものであるオブジェクトとして、それ以外の値は自分自身とだけ等しいハンドルとして渡します ([java:view](../reference/functions/java-view.md))。
 
 `java` オブジェクトが `eq`・`eql` になるのは自分自身とだけです。2 回の呼び出しが返した同じオブジェクトは `eq` ですが、`equals` が真になる別々のオブジェクトは `eq` ではありません。`equal` と `equalp` はオブジェクトの `equals` で比較します。そのため `eq`・`eql` のハッシュテーブルは `java` オブジェクトを同一性でキーにし (格納後に変更したキーも見つかります)、`equal`・`equalp` のテーブルは `equals` と `hashCode` でキーにします。
 
