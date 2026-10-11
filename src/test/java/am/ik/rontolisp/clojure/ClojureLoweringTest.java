@@ -2307,7 +2307,7 @@ class ClojureLoweringTest {
 		String out = loweredWithExpanders(
 				"(defmacro mu-ch ([x f] (list '. x f)) ([x f & m] (concat (list 'mu-ch (list '. x f)) m))) (mu-ch \"hi\" toUpperCase length)");
 		assertThat(out).contains("wrong number of arguments passed to macro: mu-ch");
-		assertThat(out).contains("STRING-UPCASE");
+		assertThat(out).contains("%CLOJURE-UPPER-CASE");
 		assertThatThrownBy(() -> Clojure.read("(defmacro mu-dup ([x] x) ([y] y))", null, ClojureMacroTime.create()))
 			.isInstanceOf(LispReadException.class)
 			.hasMessageContaining("two clauses for arity 1");

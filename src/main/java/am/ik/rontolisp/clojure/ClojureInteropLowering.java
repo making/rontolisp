@@ -2374,10 +2374,8 @@ final class ClojureInteropLowering {
 	static @Nullable LispVal stringMethod(ClojureLowering ctx, String method, LispVal recv, List<LispVal> args,
 			boolean typed) {
 		return switch (method) {
-			case "toUpperCase" ->
-				args.isEmpty() ? ClojureLowerUtil.list(ClojureLowerUtil.sym("string-upcase"), recv) : null;
-			case "toLowerCase" ->
-				args.isEmpty() ? ClojureLowerUtil.list(ClojureLowerUtil.sym("string-downcase"), recv) : null;
+			case "toUpperCase" -> args.isEmpty() ? ClojureStringLowering.caseMapped(recv, true) : null;
+			case "toLowerCase" -> args.isEmpty() ? ClojureStringLowering.caseMapped(recv, false) : null;
 			case "trim" -> args.isEmpty() ? ClojureLowerUtil.list(ClojureLowerUtil.sym("string-trim"),
 					ClojureStringLowering.javaTrimBag(), recv) : null;
 			case "strip" -> args.isEmpty()

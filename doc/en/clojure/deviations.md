@@ -356,8 +356,12 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   literal, and `%h`, `%a` and `%t` are refused; an integer past the long range renders as a
   `BigInteger` (the oracle refuses its `BigInt` under `%d`/`%x`/`%o` and renders a `biginteger`);
   `int` answers a long, so `(format "%x" (int -1))` is 64 bits of `f` (the oracle's 32), and `%c`
-  refuses an integer (the oracle takes an `Integer` code point); `%S` upcases per code point like
-  `upper-case` (`ß` stays, the oracle's `SS`).
+  refuses an integer (the oracle takes an `Integer` code point).
+- `upper-case`, `lower-case`, `capitalize`, `.toUpperCase`, `.toLowerCase`, the uppercase `format`
+  conversions and `cl-format`'s case clauses map as the oracle's `String` methods do in a locale
+  other than Turkish, Azerbaijani and Lithuanian (`ß` to `SS`, a capital sigma ending a word to
+  `ς`), except in a word holding a character past the BMP, where the JDK can see a word end that
+  is not there: `(lower-case "Α𝐀Σ")` is `"α𝐀ς"` here and `"α𝐀σ"` in the oracle.
 - `line-seq` takes an open reader (such as a `clojure.java.io/reader`, which
   `with-open` closes), or a path, a File, a URL or a byte stream it opens, and answers
   strictly either way but over an HTTP reply, which it reads lazily (the oracle takes a

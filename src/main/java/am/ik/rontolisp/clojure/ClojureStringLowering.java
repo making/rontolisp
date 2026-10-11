@@ -63,9 +63,7 @@ final class ClojureStringLowering {
 			}
 			case "upper-case", "lower-case" -> {
 				ClojureLowerUtil.isTrue(n == 1, var + " takes one string");
-				yield ClojureLowerUtil.list(
-						ClojureLowerUtil.sym(var.equals("upper-case") ? "string-upcase" : "string-downcase"),
-						text(ctx, items.get(1)));
+				yield caseMapped(text(ctx, items.get(1)), var.equals("upper-case"));
 			}
 			case "capitalize" -> {
 				ClojureLowerUtil.isTrue(n == 1, "capitalize takes one string");
@@ -451,8 +449,41 @@ final class ClojureStringLowering {
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(line), unended), lines);
 	}
 
-	/** {@code capitalize}: the first character up, the rest down. */
+	/** {@code String.toUpperCase}, the oracle's mapping ({@code clojure.lisp}). */
+	static final String UPPER_CASE = "RONTOLISP::%CLOJURE-UPPER-CASE";
+
+	/** {@code String.toLowerCase}, the oracle's mapping ({@code clojure.lisp}). */
+	static final String LOWER_CASE = "RONTOLISP::%CLOJURE-LOWER-CASE";
+
+	/** {@code clojure.string/capitalize} over the oracle's mappings. */
+	static final String CAPITALIZE = "RONTOLISP::%CLOJURE-CAPITALIZE";
+
+	/**
+	 * {@code String.toUpperCase} (UPPER) or {@code toLowerCase} of a lowered text: the
+	 * library's mapping, which takes some characters to several and a capital sigma to
+	 * its final form. A literal of ASCII characters only keeps Common Lisp's fold, the
+	 * same mapping there, which the pure-builtin fold answers while the program compiles.
+	 */
+	static LispVal caseMapped(LispVal text, boolean upper) {
+		if (isAsciiLiteral(text)) {
+			return ClojureLowerUtil.list(ClojureLowerUtil.sym(upper ? "string-upcase" : "string-downcase"), text);
+		}
+		return ClojureLowerUtil.list(new LispSymbol(upper ? UPPER_CASE : LOWER_CASE), text);
+	}
+
+	private static boolean isAsciiLiteral(LispVal text) {
+		return text instanceof LispString literal && literal.value().chars().allMatch(c -> c < 128);
+	}
+
+	/**
+	 * {@code capitalize}: the first character up, the rest down, each by the oracle's
+	 * mapping ({@link #CAPITALIZE}); an ASCII literal by Common Lisp's fold, as
+	 * {@link #caseMapped} keeps it.
+	 */
 	static LispVal capitalizeForm(LispVal text) {
+		if (!isAsciiLiteral(text)) {
+			return ClojureLowerUtil.list(new LispSymbol(CAPITALIZE), text);
+		}
 		LispSymbol str = new LispSymbol("__clojure_cap");
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let"), ClojureLowerUtil.list(List
 			.of(ClojureLowerUtil.list(str, text))), ClojureLowerUtil.list(

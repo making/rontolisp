@@ -5013,6 +5013,218 @@
         (t (rontolisp::%clojure-class-cast-exception-of
             "char needs a character or a number" x))))
 
+;;;; Case mapping: String.toUpperCase and String.toLowerCase, behind upper-case,
+;;;; lower-case, capitalize, the uppercase format conversions and cl-format's
+;;;; case clauses. Common Lisp's string-upcase and string-downcase fold each
+;;;; character alone; the oracle maps some characters to several (SpecialCasing:
+;;;; ss for the sharp s) and a capital sigma to its final form at the end of a
+;;;; word. The tables are generated from the JDK (clojure/ClojureCaseMapping):
+;;;; %clojure-special-upcase, %clojure-special-downcase, %clojure-word-runs.
+
+(defun rontolisp::%clojure-case-ascii-p (s)
+  "Whether every character of S is ASCII: there the one-character fold is the
+   whole mapping."
+  (let ((n (length s)) (i 0))
+    (loop
+      (if (or (>= i n) (>= (char-code (char s i)) 128)) (return (>= i n)))
+      (setq i (+ i 1)))))
+
+(defun rontolisp::%clojure-special-case (code keys values)
+  "The mapping of the character CODE when it is one of KEYS, a string of the
+   characters in ascending order whose mappings VALUES holds, else nil."
+  (let ((low 0) (high (- (length keys) 1)) (found nil))
+    (loop
+      (if (or found (> low high)) (return found))
+      (let* ((middle (ash (+ low high) -1))
+             (key (char-code (char keys middle))))
+        (cond ((< code key) (setq high (- middle 1)))
+              ((> code key) (setq low (+ middle 1)))
+              (t (setq found (svref values middle))))))))
+
+(defun rontolisp::%clojure-upper-case (s)
+  "String.toUpperCase: a character of SpecialCasing to its several, every
+   other one through char-upcase."
+  (if (rontolisp::%clojure-case-ascii-p s)
+      (string-upcase s)
+      (let ((out (make-string-output-stream)))
+        (dotimes (i (length s))
+          (let* ((c (char s i))
+                 (special (rontolisp::%clojure-special-upcase (char-code c))))
+            (if special
+                (write-string special out)
+                (write-char (char-upcase c) out))))
+        (get-output-stream-string out))))
+
+(defun rontolisp::%clojure-lower-case (s)
+  "String.toLowerCase: a capital sigma to its final form where the JDK's
+   Final_Sigma test holds, U+0130 to i and a combining dot, every other
+   character through char-downcase."
+  (if (rontolisp::%clojure-case-ascii-p s)
+      (string-downcase s)
+      (let ((out (make-string-output-stream)))
+        (dotimes (i (length s))
+          (let* ((c (char s i)) (code (char-code c)))
+            (if (= code 931)
+                (write-char (code-char
+                             (if (rontolisp::%clojure-final-sigma-p s i)
+                                 962
+                                 963)) out)
+                (let ((special (rontolisp::%clojure-special-downcase code)))
+                  (if special
+                      (write-string special out)
+                      (write-char (char-downcase c) out))))))
+        (get-output-stream-string out))))
+
+(defun rontolisp::%clojure-capitalize (s)
+  "clojure.string/capitalize: the first UTF-16 unit upcased and the rest
+   downcased as a string of its own. A first character past the BMP is a
+   surrogate pair there, whose halves neither mapping changes."
+  (if (= (length s) 0)
+      s
+      (let ((first (char s 0)))
+        (concatenate 'string
+                     (if (> (char-code first) 65535)
+                         (string first)
+                         (rontolisp::%clojure-upper-case (string first)))
+                     (rontolisp::%clojure-lower-case (subseq s 1))))))
+
+(defun rontolisp::%clojure-decode-runs (table count)
+  "The COUNT runs of TABLE as a simple vector of (start class) pairs. A run is
+   its distance from the start of the one before in base-32 digits, the most
+   significant first and each but the last offset by 32, then its class; a
+   digit d is the character 48 + d, skipping the backslash."
+  (let ((runs (make-array (* 2 count) :initial-element 0))
+        (start 0)
+        (value 0)
+        (k 0)
+        (class-next nil))
+    (dotimes (i (length table) runs)
+      (let* ((c (char-code (char table i))) (d (if (> c 92) (- c 49) (- c 48))))
+        (cond (class-next
+               (setf (svref runs (+ k 1)) d)
+               (setq k (+ k 2) class-next nil))
+              ((>= d 32) (setq value (+ (* value 32) (- d 32))))
+              (t
+               (setq start (+ start (* value 32) d) value 0 class-next t)
+               (setf (svref runs k) start)))))))
+
+(defun rontolisp::%clojure-word-class (code)
+  "The part of the character CODE in the JDK's word BreakIterator, times two,
+   plus one when its Final_Sigma test counts the character cased: 0 none, 1
+   passed over (a format character), 2 a mark (the letter's or digit's
+   before it), 3 a letter, 4 a digit, 5 punctuation between two letters, 6
+   between two digits, 7 either, 8 a danda (a word's end a number may
+   follow)."
+  (let* ((runs (rontolisp::%clojure-word-runs))
+         (low 0)
+         (high (- (ash (length runs) -1) 1)))
+    ;; the last run starting at or below CODE
+    (loop
+      (if (>= low high) (return (svref runs (+ (* 2 low) 1))))
+      (let ((middle (ash (+ low high 1) -1)))
+        (if (<= (svref runs (* 2 middle)) code)
+            (setq low middle)
+            (setq high (- middle 1)))))))
+
+(defun rontolisp::%clojure-word-kind (s i)
+  "The word part of the character at I of S, without its cased bit."
+  (ash (rontolisp::%clojure-word-class (char-code (char s i))) -1))
+
+(defun rontolisp::%clojure-word-skip (s i step)
+  "The first index from I, moving by STEP, of a character the word iterator
+   does not pass over: -1 or the length when there is none."
+  (let ((n (length s)))
+    (loop
+      (if (or (< i 0) (>= i n) (/= (rontolisp::%clojure-word-kind s i) 1))
+          (return i))
+      (setq i (+ i step)))))
+
+(defun rontolisp::%clojure-word-base (s i kind)
+  "Looking back from I past marks and passed-over characters: the index of
+   the character they belong to when it is of KIND (3 a letter, 4 a digit,
+   nil either), else nil."
+  (let ((k 1))
+    (loop
+      (if (< i 0) (return nil))
+      (setq k (rontolisp::%clojure-word-kind s i))
+      (if (not (or (= k 1) (= k 2)))
+          (return (if (if kind (= k kind) (or (= k 3) (= k 4))) i nil)))
+      (setq i (- i 1)))))
+
+(defun rontolisp::%clojure-cased-before-p (s i)
+  "Whether a cased character comes before the sigma at I of S in its word."
+  (let ((j (- i 1)) (letter t) (answer 0))
+    (loop
+      (if (not (eql answer 0)) (return answer))
+      (setq j (rontolisp::%clojure-word-skip s j -1))
+      (if (< j 0)
+          (setq answer nil)
+          (let* ((class (rontolisp::%clojure-word-class (char-code (char s j))))
+                 (kind (ash class -1)))
+            (cond ((= kind 2)
+                   ;; marks: part of the letter or digit before them
+                   (let ((base (rontolisp::%clojure-word-base s j nil)))
+                     (cond ((null base) (setq answer nil))
+                           ((do ((k base (+ k 1)) (cased nil))
+                                ((or cased (> k j)) cased)
+                              (setq cased
+                                    (oddp
+                                     (rontolisp::%clojure-word-class
+                                      (char-code (char s k))))))
+                            (setq answer t))
+                           (t (setq letter
+                                    (= (rontolisp::%clojure-word-kind s base) 3)
+                                    j (- base 1))))))
+                  ((or (= kind 3) (= kind 4))
+                   (if (oddp class)
+                       (setq answer t)
+                       (setq letter (= kind 3) j (- j 1))))
+                  ((and letter (or (= kind 5) (= kind 7))
+                        (rontolisp::%clojure-word-base s (- j 1) 3))
+                   (setq j (- j 1)))
+                  ((and (not letter) (or (= kind 6) (= kind 7))
+                        (rontolisp::%clojure-word-base s (- j 1) 4))
+                   (setq j (- j 1)))
+                  ((and (not letter) (= kind 8)
+                        (rontolisp::%clojure-word-base s (- j 1) 3))
+                   (setq letter t j (- j 1)))
+                  (t (setq answer nil))))))))
+
+(defun rontolisp::%clojure-cased-after-p (s i)
+  "Whether a cased character comes after the sigma at I of S in its word."
+  (let ((j (+ i 1)) (n (length s)) (letter t) (answer 0))
+    (loop
+      (if (not (eql answer 0)) (return answer))
+      (setq j (rontolisp::%clojure-word-skip s j 1))
+      (if (>= j n)
+          (setq answer nil)
+          (let* ((class (rontolisp::%clojure-word-class (char-code (char s j))))
+                 (kind (ash class -1)))
+            (if (or (= kind 2) (= kind 3) (= kind 4))
+                (if (oddp class)
+                    (setq answer t)
+                    (progn
+                      (if (/= kind 2) (setq letter (= kind 3)))
+                      (setq j (+ j 1))))
+                ;; punctuation joins only with the right character after it
+                (let* ((next (rontolisp::%clojure-word-skip s (+ j 1) 1))
+                       (after
+                        (if (< next n)
+                            (rontolisp::%clojure-word-kind s next)
+                            0)))
+                  (if (if letter
+                          (or (and (or (= kind 5) (= kind 7)) (= after 3))
+                              (and (= kind 8) (= after 4)))
+                          (and (or (= kind 6) (= kind 7)) (= after 4)))
+                      (setq j next)
+                      (setq answer nil)))))))))
+
+(defun rontolisp::%clojure-final-sigma-p (s i)
+  "The JDK's Final_Sigma test of the capital sigma at I of S: a cased
+   character before it in its word and none after it."
+  (and (rontolisp::%clojure-cased-before-p s i)
+       (not (rontolisp::%clojure-cased-after-p s i))))
+
 ;;;; Regular expressions: patterns, matchers, and the pattern arms of
 ;;;; split/replace.
 ;;
@@ -8540,9 +8752,10 @@
          (if (and precision (< precision (length s)))
              (subseq s 0 precision)
              s)))
-    (rontolisp::%clojure-format-justify
-     (if (char= conv (char-downcase conv)) cut (string-upcase cut)) flags
-     width)))
+    (rontolisp::%clojure-format-justify (if (char= conv (char-downcase conv))
+                                            cut
+                                            (rontolisp::%clojure-upper-case
+                                             cut)) flags width)))
 
 (defun rontolisp::%clojure-format-char (x conv flags width)
   "%c: the character X as text; nil spells null, anything else is refused."
@@ -17777,9 +17990,9 @@
              (setf (aref state 1) t)
              (char-upcase x))
             (t (char-downcase x)))
-      (let ((s (string-downcase x)))
+      (let ((s (rontolisp::%clojure-lower-case x)))
         (cond ((= mode 0) s)
-              ((= mode 3) (string-upcase x))
+              ((= mode 3) (rontolisp::%clojure-upper-case x))
               ((= mode 1)
                (let ((out
                       (rontolisp::%clojure-pp-capitalized s (aref state 0))))

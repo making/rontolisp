@@ -138,7 +138,7 @@ answered `2 5 3` before).
 | `defmacro` `macroexpand(-1)` `gensym`, `` ` `` `~` `~@` | "Macros" | |
 | `defmulti` `defmethod` hierarchies `defprotocol` `defrecord` `deftype` `reify` `extend*` `satisfies?` `instance?` `class` | "Dispatch" | a body's `clojure.lang` interfaces and `Object` overrides: "Host interfaces" |
 | `ns` `require` `use` `import` `in-ns` | alias and refer wiring; a project namespace's file loaded at the `require` | "Namespaces and project files" |
-| `clojure.string` (`join` `split` `split-lines` `upper-case` `lower-case` `capitalize` `trim` `triml` `trimr` `trim-newline` `blank?` `starts-with?` `ends-with?` `includes?` `index-of` `last-index-of` `replace` `replace-first` `escape` `re-quote-replacement` `reverse`) | core string operations | reached as `alias/var`, `clojure.string/var` or a referred var. `split`/`replace` take a pattern (through the regex runtime) or a literal string/char (a plain string never compiles to a pattern). Empty literal-`split` input is `nil` (a pattern answers one empty part); a positive `split` limit caps, a negative keeps every part, else trailing empties drop. `index-of`'s start (and `.indexOf`'s) is clamped into `[0, length]` before CL's `search`, which refuses a start outside the string, so it reads like Java's: past the end nothing is found (an empty match is the length), a negative one is 0 (`ClojureStringLowering.searchFrom`); `trim` `triml` `trimr` `blank?` (and `.strip*`) trim the bag `ClojureStringLowering.trimBag` builds from `Character.isWhitespace` (9-13, 28-32, the Unicode space separators but U+00A0/U+2007/U+202F, U+2028/U+2029), the oracle's test -- verified on clj 1.12.6 over the whole BMP 2026-10-09; Java `.trim` is the `<= 32` bag (`javaTrimBag`); `trim-newline` stays `\n`/`\r` only. Pinned by clojure-spec `blank-and-the-trims-take-java-whitespace` |
+| `clojure.string` (`join` `split` `split-lines` `upper-case` `lower-case` `capitalize` `trim` `triml` `trimr` `trim-newline` `blank?` `starts-with?` `ends-with?` `includes?` `index-of` `last-index-of` `replace` `replace-first` `escape` `re-quote-replacement` `reverse`) | core string operations | reached as `alias/var`, `clojure.string/var` or a referred var. `split`/`replace` take a pattern (through the regex runtime) or a literal string/char (a plain string never compiles to a pattern). Empty literal-`split` input is `nil` (a pattern answers one empty part); a positive `split` limit caps, a negative keeps every part, else trailing empties drop. `index-of`'s start (and `.indexOf`'s) is clamped into `[0, length]` before CL's `search`, which refuses a start outside the string, so it reads like Java's: past the end nothing is found (an empty match is the length), a negative one is 0 (`ClojureStringLowering.searchFrom`); `trim` `triml` `trimr` `blank?` (and `.strip*`) trim the bag `ClojureStringLowering.trimBag` builds from `Character.isWhitespace` (9-13, 28-32, the Unicode space separators but U+00A0/U+2007/U+202F, U+2028/U+2029), the oracle's test -- verified on clj 1.12.6 over the whole BMP 2026-10-09; Java `.trim` is the `<= 32` bag (`javaTrimBag`); `trim-newline` stays `\n`/`\r` only. Pinned by clojure-spec `blank-and-the-trims-take-java-whitespace`. `upper-case` `lower-case` `capitalize` map as Java's `String` does ("Case mapping") |
 | `clojure.set` (`union` `intersection` `difference` `select` `project` `rename-keys` `rename` `index` `map-invert` `join` `subset?` `superset?`: every public var) | `ClojureSetLowering`: one call to the spliced `rontolisp::%clojure-set-NAME` worker (`?` spelled `-p`, the variadic three over one list of their sets, `join` with a key map `-join-km`) after a lower-time arity check in the oracle's wording (`... passed to: clojure.set/NAME`); as a value `#'...-v` | the oracle's own algorithms, so an answer's kind follows the same input: `union` grows its largest input (bubble order and all; a vector or list there answers one, a map signals), `intersection` shrinks its smallest, `difference`/`select` the first; nil stays nil, an unchanged input is answered itself, a set changes in a fresh copy. Membership goes through the structural-key runtime; `contains?` on a vector is by index, like the oracle's. Relation members may be records: `join`'s merge keeps the first's record, `rename-keys` keeps it unless a declared field is renamed away. Answers carry no metadata. Corpus witness: shcloj4 `examples.test.sequences` `test-sets`/`test-joins` (`ClojureProjectNamespacesTest`); the whole namespace stays red on `examples.utils` (the `?.` macro), `clojure.xml` and `file-seq` (measured 2026-10-03: the load stops at `utils.clj:37:1`) |
 | `ring.adapter.rontolisp` (`run-server`) | `(rontolisp::%http-serve (%clojure-ring-app f opts) (%clojure-ring-port opts) (%clojure-ring-host opts) (%clojure-ring-join opts))` (`ClojureRingLowering`) | "Ring adapter" |
 | `rontolisp.wasm` (`defimport` `export`, a `defn`'s `:wasm/export`) | `rontolisp:wasm-import` hoisted ahead of the datum / `rontolisp:wasm-export` after the whole program, each passing the name as written as `:as`; a converting crossing behind a wrapper `defun` (`ClojureWasmLowering`) | "Host boundary" |
@@ -4293,6 +4293,49 @@ tail after an early `take` stop).
 - Deviations: an `eduction` is a seq computed once (the oracle re-runs it per reduction and
   `println` prints the object); `take-nth` of the seq arity signals on a zero step and
   steps by the magnitude of a negative one; `halt-when`/`random-sample` are absent.
+
+## Case mapping
+
+`upper-case` `lower-case` `capitalize` `.toUpperCase` `.toLowerCase`, the uppercase `format`
+conversions (`%clojure-format-text`) and `cl-format`'s `~(` clauses over a string write call
+`%clojure-upper-case` / `%clojure-lower-case` / `%clojure-capitalize` (`clojure.lisp`, "Case
+mapping"): `String.toUpperCase` / `toLowerCase` in the oracle's default locale (en_US, measured
+clj 1.12.6 2026-10-11; the tr/az/lt rules are not taken). Common Lisp's `string-upcase` stays a
+fold per code point (`.kb/characters-code-points.md`). Before 2026-10-11 the verbs lowered to
+`string-upcase`/`string-downcase`: `"straße"` stayed `"STRAßE"`, `"ΑΣ"` was `"ασ"`.
+- Tables generated from the JDK (`clojure/ClojureCaseMapping`, appended to
+  `ClojureLibrary.forms()`, pruned like any definition): `%clojure-special-upcase` (the 102 code
+  points whose `toUpperCase` is not `Character.toUpperCase`), `%clojure-special-downcase`
+  (U+0130 alone), `%clojure-word-runs` (2,236 runs of the word class, delta-encoded, decoded on
+  first use). An ASCII string takes Common Lisp's fold; an ASCII LITERAL keeps the old
+  `string-upcase` / `string-downcase` / inline capitalize at the site, which the pure-builtin fold
+  answers while compiling.
+- **Final_Sigma is the JDK's, not Unicode's** (`scheme.lisp`'s is Unicode 3.13's):
+  `ConditionalSpecialCasing.isFinalCased` asks for a cased character before the sigma and none
+  after it within its WORD as the legacy `RuleBasedBreakIterator` draws one
+  (`sun.text.resources.BreakIteratorRules`, `WordBreakRules`), and its `isCased` is Lu/Ll/Lt
+  plus a hard-coded list. So `"Α1Σ"` is `"α1ς"` (a digit joins the word), `"ΑΣ1Α"` `"ασ1α"`,
+  `"Α..Σ"` `"α..σ"`. The walk (`%clojure-cased-before-p` / `-after-p`): letters (and Mc) and
+  digits run together; a mid-word mark (Pd, Pc, U+00AD, U+2027, `"` `'` `.`) joins two letters,
+  a mid-number one (`"` `'` `,` `.` U+066B) two digits; a danda ends a word a number may
+  continue; marks (Mn, Me, U+3099/U+309A) belong to the letter or digit before them; Cf is
+  passed over; kana and the BMP kanji ranges of the rules are no letters.
+- Measured 2026-10-11, JDK 25: the walk modelled in Java against `String.toLowerCase(Locale.ROOT)`
+  over 24 templates x every code point and 3 M random strings over one character of each class --
+  no difference on BMP strings. The class derivation against the compiled category table (read by
+  reflection): equal but U+110BD, U+110CD, U+1343F, U+1BCA3, U+1D17A, U+E0001, U+E007F (controls
+  there) and the unassigned code points between the CJK extensions (letters there).
+- Deviation (documented): in a word holding a character past the BMP the JDK can see a word end
+  that is not there -- `isBoundary(i)` is `following(i - 1)`, which starts INSIDE the surrogate
+  pair and backs up through the backward state table from a lone surrogate. `"Α𝐀Σ"` is `"α𝐀σ"`
+  there, `"α𝐀ς"` here. Emulating it needs the backward table; not done.
+- `capitalize` is `clojure.string`'s source over UTF-16 units: under two units the whole
+  `toUpperCase`, else the first unit up and the rest down as a string of its own (`"ΑΣ"` ->
+  `"Ασ"`); a supplementary first character is a surrogate pair there and stays as it is.
+- Pins: `ClojureCaseMappingTest` (the interpreter against the JDK at the first 1,024 code points,
+  both sides of every run and special mapping, nine sigma templates over those, 4,000 random
+  words), clojure-spec `the-case-verbs-map-as-java-strings-do` and the `~(` line of
+  `clojure-pprint-cl-format-walks-its-arguments-like-the-oracle` (all four backends).
 
 ## Regex
 

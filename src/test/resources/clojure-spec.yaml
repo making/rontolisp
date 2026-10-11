@@ -1558,6 +1558,32 @@ cases:
       4
       4
       3
+  - name: the-case-verbs-map-as-java-strings-do
+    # String.toUpperCase / toLowerCase, not a fold per character: SpecialCasing maps
+    # one character to several, a capital sigma ends a word in its final form where
+    # the JDK's word iterator draws the word (digits and a letter-only mark between
+    # letters join it, two marks in a row do not). capitalize upcases the first UTF-16
+    # unit and downcases the rest as a string of its own. Oracle-identical (clj 1.12.6,
+    # 2026-10-11).
+    source: |
+      (require '[clojure.string :as s])
+      (defn cm-up [x] (s/upper-case x))
+      (defn cm-down [x] (s/lower-case x))
+      (prn (cm-up "straße") (format "%S" "straße") (.toUpperCase "ŉ") (cm-down "ΑΣ"))
+      (prn (cm-up "hi") (cm-down "HI") (cm-up "ﬀ ǆ ᾳ") (map int (cm-up "ΐ")) (map int (cm-down "İ")))
+      (prn (s/lower-case "ΟΔΥΣΣΕΥΣ ΣΑΣ. Σ") (.toLowerCase "ΑΣ-ΑΣ") (cm-down (str "ΑΣ" (char 769))))
+      (prn (cm-down "Α1Σ") (cm-down "ΑΣ1Α") (cm-down "Α.Σ") (cm-down "Α..Σ") (cm-down "1.Σ") (cm-down "ΑΣ.1"))
+      (prn (s/capitalize "ßa") (s/capitalize "ΑΣ") (s/capitalize "aΑΣ") (s/capitalize "ß") (s/capitalize "İX"))
+      (prn (format "%S|%C|%-6S|%.3S|%S" \ß \ß "ß" "ﬀﬀ" :ß))
+      (prn (map s/upper-case ["ß" "ﬀ"]) (map s/capitalize ["ßß"]))
+    expected: |
+      "STRASSE" "STRASSE" "ʼN" "ας"
+      "HI" "hi" "FF Ǆ ΑΙ" (921 776 769) (105 775)
+      "οδυσσευς σας. σ" "ασ-ας" "ας́"
+      "α1ς" "ασ1α" "α.ς" "α..σ" "1.σ" "ας.1"
+      "SSa" "Ασ" "Aας" "SS" "İx"
+      "SS|SS|SS    |FFFF|:SS"
+      ("SS" "FF") ("SSß")
   - name: index-of-reads-its-start-as-java-does
     # A start past the end answers nil (the length for an empty match), a negative one
     # is 0, a fractional one truncates -- where CL's search refuses a start outside
@@ -9188,6 +9214,7 @@ cases:
       (prn (cl-format nil "~(Hello WORLD~) ~:(hello world~) ~@(  hELLO wORLD~) ~:@(hello world~)"))
       (prn (cl-format nil "~:(~a-~a~)|~:(foo-bar~)|~:(~c~c~)|~(~c~c~)|~@(~c~c~)" "foo" "bar" \a \b \A \B \a \B))
       (prn (cl-format nil "~:(~w~)|~:@(~w~)|~(~&x~)|~:(it's ~r~)" "hello world" 'abc 21))
+      (prn (cl-format nil "~:@(~a~)|~(~a~)|~@(~a~)|~:(~a~)|~:@(~c~)" "straße" "ΑΣ ΣΑΣ" "ßΑΣ x" "ßa ΑΣ" \ß))
       (prn (cl-format nil "~10<foo~;bar~>|~10:<foo~;bar~>|~10@<foo~;bar~>|~10:@<~a~>|~10,,,'.:@<~a~>" "x" "x"))
       (prn (cl-format nil "~10,5<a~;b~;c~>|~4<abcdef~>|~,,2<a~;b~>|~<~a~;~a~^~;~a~>|" 1 2))
       (prn (cl-format nil "abcdefgh~<foo~1,10:;bar~>|abc~<foo~1,10:;bar~>|~<foo~v,v:;bar~>|" 2 9))
@@ -9212,6 +9239,7 @@ cases:
       "hello world Hello World   Hello world HELLO WORLD"
       "Foo-bar|Foo-Bar|Ab|ab|Ab"
       "\"hello World\"|ABC|\nx|It'S Twenty-One"
+      "STRASSE|ας σας|ßας x|ßA ας|ß"
       "foo    bar|  foo  bar|foo  bar  |     x    |.....x...."
       "a    b   c|abcdef|a  b|1|"
       "abcdefghfoobar|abcfoobar|foobar|"

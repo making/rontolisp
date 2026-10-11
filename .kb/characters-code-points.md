@@ -139,7 +139,9 @@ prelude names lazily.
 CHARACTER COUNT as the argument (`(string-upcase "straße")` is `"STRAßE"`, SBCL agrees), and no
 context-sensitive rule (`(string-downcase "ΑΣ")` is `"ασ"`). Interpreter and JVM used to call
 `String.toUpperCase(Locale.ROOT)`, which DOES apply SpecialCasing and Final_Sigma; **do NOT
-"simplify" either back to the `String` overload.**
+"simplify" either back to the `String` overload.** The Clojure front end's case verbs are the
+other side of that line: they DO map as `String` does, in a library helper of their own
+(`.kb/clojure-frontend.md`, "Case mapping"), as Scheme's `string-upcase` does (`.kb/scheme-frontend.md`).
 - Interpreter: `Environment.caseFoldString` / `capitalizeString` walk code points.
 - JVM: one shared emitter `JvmStringCaseFold`; `JvmStringUpcaseCompiler` and
   `JvmStringCapitalizeCompiler` are thin mode selectors over it.
