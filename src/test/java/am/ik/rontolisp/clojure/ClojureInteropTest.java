@@ -2267,9 +2267,10 @@ class ClojureInteropTest {
 			.isInstanceOf(Exception.class);
 		assertThatThrownBy(() -> interpret("(println (re-find \"a+\" \"aaab\"))")).isInstanceOf(Exception.class);
 		assertThatThrownBy(() -> runOnJvm("(println (re-find \"a+\" \"aaab\"))")).isInstanceOf(Exception.class);
-		assertThatThrownBy(() -> interpret("(println (re-find #\"a(?=b)\" \"ab\"))")).isInstanceOf(Exception.class)
+		assertThatThrownBy(() -> interpret("(println (re-find #\"\\p{L}\" \"ab\"))")).isInstanceOf(Exception.class)
 			.hasMessageContaining("unsupported regex");
-		assertThatThrownBy(() -> runOnJvm("(println (re-find #\"a(?=b)\" \"ab\"))")).isInstanceOf(Exception.class);
+		assertThatThrownBy(() -> runOnJvm("(println (re-find #\"\\p{L}\" \"ab\"))")).isInstanceOf(Exception.class);
+		assertBothEqual("(println (re-find #\"a(?=b)\" \"ab\"))", "a\n");
 	}
 
 	@Test

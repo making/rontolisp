@@ -1204,10 +1204,12 @@ final class ClojureReader {
 	 * {@code clj} 1.12.6.1673 (2026-10-02). {@code \\} stays two characters (so
 	 * {@code #"\\d"} reads a literal backslash plus {@code d}, where the old read halved
 	 * the run and answered the digit class); {@code \"} and {@code \'} stay two
-	 * characters without ending the literal; the recognized escape letters stay as
-	 * written while any other letter is the oracle's read-time refusal; {@code \\u} takes
-	 * four hex digits and {@code \x} two; a {@code \0} needs an octal digit behind it;
-	 * {@code \Q} copies raw through {@code \E} (a lone {@code \E} is refused).
+	 * characters without ending the literal; the escape letters {@code Pattern} knows
+	 * stay as written while any other ASCII letter is the oracle's read-time refusal (a
+	 * backslash before any other character spells that character); {@code \\u} takes four
+	 * hex digits and {@code \x} two or a braced code point; a {@code \0} needs an octal
+	 * digit behind it; {@code \Q} copies raw through {@code \E} (a lone {@code \E} is
+	 * refused).
 	 */
 	private LispVal readRegexSource() {
 		next();
@@ -1229,8 +1231,8 @@ final class ClojureReader {
 			}
 			char e = next();
 			switch (e) {
-				case 'n', 't', 'r', 'f', 'b', 'a', 'e', 'h', 'v', 'w', 'd', 's', 'c', 'p', 'z', 'A', 'B', 'D', 'G', 'H',
-						'P', 'R', 'S', 'V', 'W', 'X', 'Z' -> {
+				case 'n', 't', 'r', 'f', 'b', 'a', 'e', 'h', 'k', 'v', 'w', 'd', 's', 'c', 'p', 'z', 'A', 'B', 'D', 'G',
+						'H', 'N', 'P', 'R', 'S', 'V', 'W', 'X', 'Z' -> {
 					text.append('\\');
 					text.append(e);
 				}
@@ -1252,7 +1254,8 @@ final class ClojureReader {
 				case 'x' -> {
 					text.append('\\');
 					text.append('x');
-					text.append(readRegexHex(2, "hexadecimal"));
+					text.append(this.pos < this.source.length() && peek() == '{' ? readRegexBracedHex()
+							: readRegexHex(2, "hexadecimal"));
 				}
 				// Octal `0`-`7` stays verbatim (up to two more `0`-`7`): the
 				// oracle refuses a `\0` with no octal digit behind it, while
@@ -1276,7 +1279,7 @@ final class ClojureReader {
 					text.append(e);
 				}
 				default -> {
-					if (Character.isLetter(e)) {
+					if ((e >= 'a' && e <= 'z') || (e >= 'A' && e <= 'Z')) {
 						throw error("Illegal/unsupported escape sequence: \\" + e);
 					}
 					text.append('\\');
@@ -1284,6 +1287,38 @@ final class ClojureReader {
 				}
 			}
 		}
+	}
+
+	/**
+	 * The braced code point of a regex {@code \x{h...h}} escape, kept verbatim with its
+	 * braces: one or more hex digits up to {@code 10FFFF}, anything else the oracle's
+	 * refusal.
+	 * @return the braces and the digits as written
+	 */
+	private String readRegexBracedHex() {
+		StringBuilder raw = new StringBuilder();
+		raw.append(next());
+		if (this.pos >= this.source.length() || !isAsciiHexDigit(peek())) {
+			throw error("Illegal hexadecimal escape sequence");
+		}
+		int value = 0;
+		while (this.pos < this.source.length() && isAsciiHexDigit(peek())) {
+			char digit = next();
+			value = value * 16 + Character.digit(digit, 16);
+			if (value > Character.MAX_CODE_POINT) {
+				throw error("Hexadecimal codepoint is too big");
+			}
+			raw.append(digit);
+		}
+		if (this.pos >= this.source.length() || peek() != '}') {
+			throw error("Unclosed hexadecimal escape sequence");
+		}
+		raw.append(next());
+		return raw.toString();
+	}
+
+	private static boolean isAsciiHexDigit(char c) {
+		return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F');
 	}
 
 	/**
@@ -1317,7 +1352,7 @@ final class ClojureReader {
 	private String readRegexHex(int count, String kind) {
 		StringBuilder raw = new StringBuilder();
 		for (int i = 0; i < count; i++) {
-			if (this.pos >= this.source.length() || Character.digit(peek(), 16) < 0) {
+			if (this.pos >= this.source.length() || !isAsciiHexDigit(peek())) {
 				throw error("Illegal " + kind + " escape sequence");
 			}
 			raw.append(next());

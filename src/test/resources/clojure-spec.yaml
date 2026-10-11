@@ -5897,6 +5897,64 @@ cases:
       "xy" "ab" "!?" "!1?"
       (" ," ",,  ") "a_b_c"
       "ab12c" "xyz" nil
+  - name: a-regex-looks-ahead-and-behind
+    # Lookahead, lookbehind (bounded, and the unbounded one-character loop the
+    # oracle takes) and atomic groups, every line the oracle's (clj 1.12.6,
+    # 2026-10-11); until then each was the unsupported-regex refusal. The last
+    # line pins the oracle's captures: GroupCurly keeps the inner group of the
+    # iteration it backed off from, and a capture inside a failed negative
+    # lookahead stays.
+    source: |
+      (prn (re-find #"a(?!c)" "acab") (re-find #"(?<=x)y" "ay xy") (re-seq #"\w+(?=,)" "ab,cd,ef") (re-seq #"(?<!\$)\b\d+" "$10 20 $30 40"))
+      (prn (re-find #"(?<=(a|bc))d" "bcd") (re-seq #"(?<=a+)b" "aab ab b") (re-find #"(?>ab|a)c" "abc") (re-find #"(?>a|ab)c" "abc"))
+      (prn (clojure.string/replace "1234567" #"(?<=\d)(?=(\d{3})+$)" ",") (clojure.string/split "aXbYc" #"(?=[XY])") (re-seq #"(?<!^)(?=[A-Z])" "camelCaseWord"))
+      (prn (re-find #"(?=(\w+))\1:" "abc:") (re-find #"((\w)\w)*\w\w" "abcde") (re-find #"(?!(a)b)a(c)?" "abac") (re-find #"(?<=a{2,3})x" "aaaax"))
+    expected: |
+      "a" "y" ("ab" "cd") ("20" "40")
+      ["d" "bc"] ("b" "b") "abc" nil
+      "1,234,567" ["a" "Xb" "Yc"] ("" "")
+      ["abc:" "abc"] ["abcd" "ab" "c"] ["ac" "a" "c"] "x"
+  - name: a-regex-takes-inline-flags
+    # (?x) comments, (?s) dotall, (?i) and (?iu) case, (?m) lines, (?d) Unix
+    # lines; a (?flags) group holds to the end of its enclosing group (across
+    # a |), a (?flags:...) group inside it only. The oracle's lines (clj
+    # 1.12.6, 2026-10-11).
+    source: |
+      (prn (re-find #"(?x) a b # comment" "xab") (re-find #"(?s)a.b" "a\nb") (re-find #"a.b" "a\nb") (re-find #"(?i)abc" "xAbC") (re-seq #"(?m)^\w+$" "ab\ncd\r\nef"))
+      (prn (re-find #"a(?i)b|c" "aBC") (re-seq #"(?i:a)b" "Ab AB ab") (re-find #"(?i)(?-i:a)b" "AB aB") (re-matches #"(?d).+" "a\rb") (re-matches #".+" "a\rb"))
+      (prn (re-find #"(?iu)é" "É") (re-find #"(?i)é" "É") (re-seq #"(?x)[a b]+" "ab ba") (re-find #"(?x)a\ b" "a b") (re-find #"(?i)(a)\1" "aA"))
+    expected: |
+      "ab" "a\nb" nil "AbC" ("ab" "cd" "ef")
+      "aB" ("Ab" "ab") "aB" "a\rb" nil
+      "É" nil ("ab" "ba") "a b" ["aA" "a"]
+  - name: a-regex-names-its-groups
+    # (?<name>...) and \k<name>; a matcher's group, start and end of a name;
+    # ${name} in a replacement, and $11 read as group 1 then a 1 when the
+    # pattern has no group 11. The oracle's lines (clj 1.12.6, 2026-10-11).
+    source: |
+      (let [m (re-matcher #"(?<year>\d{4})-(?<month>\d\d)" "on 2026-10")]
+        (prn (.find m) (.group m "year") (.start m "month") (.end m "month") (re-groups m)))
+      (prn (clojure.string/replace "2026-10" #"(?<y>\d+)-(?<m>\d+)" "${m}/${y}") (re-find #"(?<w>a)\k<w>" "xaa") (clojure.string/replace "abc" #"(b)" "[$1$11]"))
+      (prn (try (.group (doto (re-matcher #"(?<a>x)" "x") .find) "b") (catch IllegalArgumentException e (ex-message e))))
+    expected: |
+      true "2026" 8 10 ["2026-10" "2026" "10"]
+      "10/2026" ["aa" "a"] "a[bb1]c"
+      "No group with name <b>"
+  - name: a-regex-parses-as-java-util-regex-does
+    # The parser is Pattern's: its refusals and messages; a quantifier after
+    # \Q..\E takes the last character; \11 is \1 then 1 below eleven groups;
+    # nested classes unite, && intersects ([[:alpha:]] is a nested class);
+    # . and $ know U+0085 U+2028 U+2029 and \r\n; \R, \x{..} and \cX. The
+    # oracle's lines (clj 1.12.6, 2026-10-11).
+    source: |
+      (defn regex-pse [s] (try (re-pattern s) (catch java.util.regex.PatternSyntaxException e (ex-message e))))
+      (prn (regex-pse "(?<=(?:ab)+)c") (regex-pse "a{") (regex-pse "(?q)") (regex-pse "[z-a]"))
+      (prn (re-seq #"\Qab\E+" "abab abbb") (re-find #"(a)\11" "aa1") (re-seq #"[a[bc]]+" "abcd") (re-seq #"[\w&&[^\d]]+" "ab12cd") (re-find #"[[:alpha:]]+" "x:alpha"))
+      (prn (re-seq #"." "a\u0085b c") (re-seq #"$" "a\r\n") (re-find #"\R\n" "\r\n") (re-find #"\x{41}\cJ" "A\n") (re-find #"\ca" "!"))
+    expected: |
+      "Look-behind group does not have an obvious maximum length near index 10\n(?<=(?:ab)+)c\n          ^" "Illegal repetition near index 2\na{" "Unknown inline modifier near index 2\n(?q)\n  ^" "Illegal character range near index 3\n[z-a]\n   ^"
+      ("ab" "ab" "abbb") ["aa1" "a"] ("abc") ("ab" "cd") ":alpha"
+      ("a" "b" "c") ("" "") "\r\n" "A\n" "!"
   - name: def-after-defn-memoize-captures-function
     # (def p (memoize p)) after a (defn p ...) captures the function cell: the
     # value lowers against the OLD FUNCTION binding (#'c%p), not the

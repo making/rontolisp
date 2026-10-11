@@ -5586,36 +5586,61 @@
 ;;;; Regular expressions: patterns, matchers, and the pattern arms of
 ;;;; split/replace.
 ;;
-;; A pattern is (LIST :C%PATTERN stamp source ops ngroups): STAMP a fresh
+;; A pattern is (LIST :C%PATTERN stamp source ops ngroups names): STAMP a fresh
 ;; gensym, so EQUAL is identity like the oracle; SOURCE the pattern string;
-;; OPS the parsed opcode tree; NGROUPS the capturing-group count. A matcher is
+;; OPS the parsed opcode tree; NGROUPS the capturing-group count; NAMES the
+;; named groups as an alist of (name . index). A matcher is
 ;; (LIST :C%MATCHER stamp pattern input cell) where CELL is (CONS next-pos
 ;; last), mutated through rplaca/rplacd like the lazy cell; LAST is NIL or
-;; (start end groups). Opcodes are keyword-headed lists: (:lit code),
-;; (:dot), (:cls negated items) over integer codes, (:r lo hi) ranges and :w
-;; :s :d members (a nested (:cls ...) member is a use of [\W] and friends),
-;; (:bol) (:zend) (:eol) (:wb) (:nwb), (:seq ops...), (:alt a b),
-;; (:rep op min max mode) with a NIL max unbounded and a :greedy,
-;; :reluctant or :possessive mode, (:grp idx op), (:backref idx).
-;; The parser signals unsupported constructs (lookarounds,
-;; named groups, inline flags, POSIX classes, &&
-;; intersections, \G, \E outside \Q..\E) instead of answering wrongly; an
-;; unknown alphabetic escape signals too, while a backslashed
-;; non-alphanumeric spells itself. What differs from the oracle on purpose:
-;; . is any character but \n and \r; $ is the end or just before one final
-;; \n or \r; \s and \b are ASCII; there is no \p, octal tops up at two digits
-;; past the leading zero, and an unmatched group substitutes "" in a
-;; replacement (missing groups and a trailing $ still signal, like the
-;; oracle). A replacement function renders through str, so NIL answers ""
-;; where the oracle throws its NullPointerException.
+;; (start end groups), GROUPS the match's group vector (start and end of the
+;; group N at 2N and 2N+1, -1 for a group that took no part).
+;;
+;; The parser (%clojure-rp-*) is java.util.regex.Pattern's recursive descent
+;; (JDK 25) ported method by method over the pattern's code points: the
+;; \Q..\E rewrite, the comments-mode lexer, inline flags saved and restored per
+;; group (persisting past a (?flags) group to the end of the enclosing one),
+;; the escapes, class unions and && intersections, the closures and the
+;; look-behind's TreeInfo study in Java's int arithmetic, with the oracle's
+;; PatternSyntaxException messages. Flags are Java's bits: 1 UNIX_LINES (d),
+;; 2 CASE_INSENSITIVE (i), 4 COMMENTS (x), 8 MULTILINE (m), 32 DOTALL (s),
+;; 64 UNICODE_CASE (u), 128 CANON_EQ (c), 256 UNICODE_CHARACTER_CLASS (U).
+;; What no backend matches here is refused as an unsupported regex: \p and \P,
+;; \N{..}, \X, \b{g}, \G, \d \s \w \b under (?U), a class under (?c).
+;;
+;; Opcodes are keyword-headed lists. One character: (:lit c), (:ilit c) ASCII
+;; case-insensitive (c lower case), (:ulit c) Unicode case-insensitive (c
+;; folded through toUpperCase and toLowerCase), (:dot), (:udot) (under d),
+;; (:any) (under s), (:cls negated items), whose items are codes, (:r lo hi),
+;; (:ri lo hi) and (:ru lo hi) (ranges, case-insensitive ASCII and Unicode),
+;; (:u c) (a folded code), :w :s :d :h :v, nested (:cls ...) and (:and a b).
+;; Zero width: (:bol) (:mbol) (:ubol) for ^ and \A, (:eol) (:meol) (:ueol)
+;; (:umeol) for $ and \Z, (:zend) (:wb) (:nwb), (:look op) (:nlook op),
+;; (:behind op min max) (:nbehind op min max). Else (:seq ops...), (:alt a b),
+;; (:grp idx op), (:atomic op), (:backref idx) (:ibackref idx) (:ubackref idx),
+;; (:lb) for \R and (:rep op min max mode kind): MAX NIL unbounded, MODE
+;; :greedy, :reluctant or :possessive, KIND the node the oracle builds: :cpg
+;; (one character, greedy, unbounded), :curly, :gcurly (a capturing group whose
+;; body matches one way) and :ques iterate by each iteration's first success,
+;; :loop backtracks into every iteration (:loopm also remembers where another
+;; iteration failed, the oracle's memo of a top-level greedy loop), :branch is
+;; ? on a group.
+;;
+;; Matching is a backtracking walk in continuation-passing style over the
+;; oracle's match nodes: an op calls its continuation with its end position,
+;; NIL backtracks, and the groups live in one vector per search that a group
+;; sets and restores as the oracle's GroupTail does. What differs from the
+;; oracle: a non-spacing mark after a letter is no word character for \b;
+;; indices count code points, not UTF-16 units. A replacement function renders
+;; through str, so NIL answers "" where the oracle throws its
+;; NullPointerException.
 
 (defun rontolisp::%clojure-re-pattern-p (x)
-  "Whether X is the (:C%PATTERN stamp source ops ngroups) wrapper the
+  "Whether X is the (:C%PATTERN stamp source ops ngroups names) wrapper the
    lowering lowers regex literals to."
   (and (consp x) (eq (car x) :C%PATTERN) (consp (cdr x)) (consp (cdr (cdr x)))
        (stringp (car (cdr (cdr x)))) (consp (cdr (cdr (cdr x))))
-       (consp (cdr (cdr (cdr (cdr x)))))
-       (null (cdr (cdr (cdr (cdr (cdr x))))))))
+       (consp (cdr (cdr (cdr (cdr x))))) (consp (cdr (cdr (cdr (cdr (cdr x))))))
+       (null (cdr (cdr (cdr (cdr (cdr (cdr x)))))))))
 
 (defun rontolisp::%clojure-re-matcher-p (x)
   "Whether X is the (:C%MATCHER stamp pattern input cell) wrapper re-matcher
@@ -5638,6 +5663,10 @@
   "The NGROUPS slot of the pattern P."
   (car (cdr (cdr (cdr (cdr p))))))
 
+(defun rontolisp::%clojure-re-pat-names (p)
+  "The NAMES slot of the pattern P."
+  (car (cdr (cdr (cdr (cdr (cdr p)))))))
+
 (defun rontolisp::%clojure-re-match-pat (m)
   "The PATTERN slot of the matcher M."
   (car (cdr (cdr m))))
@@ -5657,6 +5686,14 @@
       x
       (rontolisp::%clojure-class-cast-exception-of message x)))
 
+(defun rontolisp::%clojure-re-name-lookup (name names)
+  "The group index the alist NAMES of (name . index) holds for NAME, or NIL."
+  (cond ((null names) nil)
+        ((string= (car (car names)) name) (cdr (car names)))
+        (t (rontolisp::%clojure-re-name-lookup name (cdr names)))))
+
+;;; Character classes the oracle spells in ASCII and the case mappings.
+
 (defun rontolisp::%clojure-re-word-char-p (code)
   "Whether CODE is an ASCII word character ([A-Za-z0-9_], like the oracle)."
   (or (and (<= 48 code) (<= code 57)) (and (<= 65 code) (<= code 90))
@@ -5666,14 +5703,18 @@
   "Whether CODE is an ASCII digit."
   (and (<= 48 code) (<= code 57)))
 
+(defun rontolisp::%clojure-re-letter-code-p (code)
+  "Whether CODE is an ASCII letter."
+  (or (and (<= 65 code) (<= code 90)) (and (<= 97 code) (<= code 122))))
+
 (defun rontolisp::%clojure-re-alpha-code-p (code)
   "Whether CODE is ASCII alphanumeric."
-  (or (rontolisp::%clojure-re-digit-code-p code) (and (<= 65 code) (<= code 90))
-      (and (<= 97 code) (<= code 122))))
+  (or (rontolisp::%clojure-re-digit-code-p code)
+      (rontolisp::%clojure-re-letter-code-p code)))
 
 (defun rontolisp::%clojure-re-space-code-p (code)
   "Whether CODE is ASCII whitespace (like the oracle's \\s)."
-  (or (= code 32) (= code 9) (= code 10) (= code 12) (= code 13) (= code 11)))
+  (or (= code 32) (and (<= 9 code) (<= code 13))))
 
 (defun rontolisp::%clojure-re-hex-value (code)
   "The hex value of CODE, or NIL."
@@ -5682,392 +5723,1129 @@
         ((and (<= 97 code) (<= code 102)) (- code 87))
         (t nil)))
 
-(defun rontolisp::%clojure-re-parse-digits (s len i)
-  "Digits at I: (pos value), or NIL without one."
-  (if (or (>= i len)
-          (not (rontolisp::%clojure-re-digit-code-p (char-code (char s i)))))
-      nil
-      (rontolisp::%clojure-re-parse-digits-acc s len (+ i 1)
-                                               (- (char-code (char s i)) 48))))
+(defun rontolisp::%clojure-re-line-term-p (code)
+  "Whether CODE ends a line for . ^ and $ (\\n \\r U+0085 U+2028 U+2029)."
+  (or (= code 10) (= code 13) (= code 133) (= code 8232) (= code 8233)))
 
-(defun rontolisp::%clojure-re-parse-digits-acc (s len i v)
-  "The digit run value from I onto V: (pos value)."
-  (if (or (>= i len)
-          (not (rontolisp::%clojure-re-digit-code-p (char-code (char s i)))))
-      (list i v)
-      (rontolisp::%clojure-re-parse-digits-acc s len (+ i 1)
-       (+ (* v 10) (- (char-code (char s i)) 48)))))
+(defun rontolisp::%clojure-re-horiz-p (code)
+  "Whether CODE is \\h, a horizontal whitespace character."
+  (or (= code 9) (= code 32) (= code 160) (= code 5760) (= code 6158)
+      (and (<= 8192 code) (<= code 8202)) (= code 8239) (= code 8287)
+      (= code 12288)))
 
-(defun rontolisp::%clojure-re-parse (source)
-  "The (ops ngroups) of the pattern SOURCE, or a signal."
-  (let ((r (rontolisp::%clojure-re-parse-alt source (length source) 0 0)))
-    (if (not (= (car r) (length source)))
-        (rontolisp::%clojure-pattern-syntax-exception
-         "unsupported regex: unmatched )")
-        (list (car (cdr r)) (car (cdr (cdr r)))))))
+(defun rontolisp::%clojure-re-vert-p (code)
+  "Whether CODE is \\v, a vertical whitespace character."
+  (or (and (<= 10 code) (<= code 13)) (= code 133) (= code 8232) (= code 8233)))
 
-(defun rontolisp::%clojure-re-parse-alt (s len i n)
-  "An alternation at I: (pos node ngroups)."
-  (let ((r (rontolisp::%clojure-re-parse-seq s len i n)))
-    (let ((i1 (car r)) (a (car (cdr r))) (n1 (car (cdr (cdr r)))))
-      (if (and (< i1 len) (= (char-code (char s i1)) (char-code #\|)))
-          (let ((r2 (rontolisp::%clojure-re-parse-alt s len (+ i1 1) n1)))
-            (list (car r2) (list :alt a (car (cdr r2))) (car (cdr (cdr r2)))))
-          r))))
+(defun rontolisp::%clojure-re-ascii-lower (code)
+  "CODE lower-cased when it is an ASCII capital (the oracle's ASCII.toLower)."
+  (if (and (<= 65 code) (<= code 90)) (+ code 32) code))
+
+(defun rontolisp::%clojure-re-ascii-upper (code)
+  "CODE upper-cased when it is an ASCII small letter (ASCII.toUpper)."
+  (if (and (<= 97 code) (<= code 122)) (- code 32) code))
+
+(defun rontolisp::%clojure-re-upcase (code)
+  "Character.toUpperCase of CODE."
+  (char-code (char-upcase (code-char code))))
+
+(defun rontolisp::%clojure-re-downcase (code)
+  "Character.toLowerCase of CODE."
+  (char-code (char-downcase (code-char code))))
+
+(defun rontolisp::%clojure-re-fold (code)
+  "CODE through toUpperCase, then toLowerCase: the key the oracle compares
+   characters by under (?iu)."
+  (rontolisp::%clojure-re-downcase (rontolisp::%clojure-re-upcase code)))
 
 (defun rontolisp::%clojure-re-seq-node (ops)
   "The node for the OPS list: empty is (:seq) (matches empty), one is itself."
   (if (null ops) (list :seq) (if (null (cdr ops)) (car ops) (cons :seq ops))))
 
-(defun rontolisp::%clojure-re-parse-seq (s len i n)
-  "A sequence at I: (pos node ngroups)."
-  (rontolisp::%clojure-re-parse-seq-acc s len i n nil))
+(defun rontolisp::%clojure-re-char-op-p (op)
+  "Whether the op OP matches exactly one character."
+  (let ((tag (car op)))
+    (or (eq tag :lit) (eq tag :cls) (eq tag :ilit) (eq tag :ulit) (eq tag :dot)
+        (eq tag :udot) (eq tag :any))))
 
-(defun rontolisp::%clojure-re-parse-seq-acc (s len i n acc)
-  "The sequence tail at I over the reversed ACC: (pos node ngroups)."
-  (if (or (>= i len) (= (char-code (char s i)) (char-code #\)))
-          (= (char-code (char s i)) (char-code #\|)))
-      (list i (rontolisp::%clojure-re-seq-node (reverse acc)) n)
-      (let ((r (rontolisp::%clojure-re-parse-atom s len i n)))
-        (rontolisp::%clojure-re-parse-seq-acc s len (car r) (car (cdr (cdr r)))
-                                              (cons (car (cdr r)) acc)))))
+;;; The parse state is a vector #(codes cursor flags groups length source names
+;;; backref loops): CODES the pattern's code points and two zeros (Java's temp),
+;;; CURSOR an index into them, FLAGS the inline flags in force, GROUPS one past
+;;; the capturing groups seen (Java's capturingGroupCount), LENGTH the code count,
+;;; SOURCE the pattern for the messages, NAMES the named groups, the latest first,
+;;; BACKREF whether a back reference was seen (hasGroupRef), LOOPS the greedy
+;;; unbounded Loops no quantified group or look-behind holds (topClosureNodes),
+;;; which the parse marks :loopm (memoized) when no back reference was seen.
 
-(defun rontolisp::%clojure-re-parse-atom (s len i n)
-  "One quantified atom at I: (pos node ngroups)."
-  (let ((r (rontolisp::%clojure-re-parse-base s len i n)))
-    (let ((i1 (car r)) (b (car (cdr r))) (n1 (car (cdr (cdr r)))))
-      (let ((q
-             (if (< i1 len) (rontolisp::%clojure-re-parse-quant s len i1) nil)))
-        (if (null q)
-            r
-            (list (car q)
-                  (list :rep b (car (cdr q)) (car (cdr (cdr q)))
-                        (car (cdr (cdr (cdr q))))) n1))))))
+(defun rontolisp::%clojure-rp-at (st i)
+  "The code at I of the parse state ST's pattern, 0 past either end."
+  (let ((codes (svref st 0)))
+    (if (and (>= i 0) (< i (length codes))) (svref codes i) 0)))
 
-(defun rontolisp::%clojure-re-quant-tail (s len j min max greedy)
-  "A quantifier past its body: reluctant on ?, possessive on +."
-  (if (and (< j len) (= (char-code (char s j)) (char-code #\?)))
-      (list (+ j 1) min max :reluctant)
-      (if (and (< j len) (= (char-code (char s j)) (char-code #\+)))
-          (list (+ j 1) min max :possessive)
-          (list j min max greedy))))
+(defun rontolisp::%clojure-rp-cur (st)
+  "The parse cursor of ST."
+  (svref st 1))
 
-(defun rontolisp::%clojure-re-parse-quant (s len i)
-  "A quantifier at I: (pos min max greedy-p), or NIL."
-  (let ((c (char-code (char s i))))
-    (cond ((= c (char-code #\*))
-           (rontolisp::%clojure-re-quant-tail s len (+ i 1) 0 nil :greedy))
-          ((= c (char-code #\+))
-           (rontolisp::%clojure-re-quant-tail s len (+ i 1) 1 nil :greedy))
-          ((= c (char-code #\?))
-           (rontolisp::%clojure-re-quant-tail s len (+ i 1) 0 1 :greedy))
-          ((= c (char-code #\{)) (rontolisp::%clojure-re-parse-braces s len i))
-          (t nil))))
+(defun rontolisp::%clojure-rp-go (st i)
+  "Move the parse cursor of ST to I."
+  (setf (svref st 1) i))
 
-(defun rontolisp::%clojure-re-parse-braces (s len i)
-  "A {n[,m]} quantifier at I: (pos min max greedy-p), or NIL when the braces
-   hold no quantifier (a literal { instead, like the oracle)."
-  (let ((r (rontolisp::%clojure-re-parse-digits s len (+ i 1))))
-    (if (null r)
+(defun rontolisp::%clojure-rp-has (st f)
+  "Whether the flag bits F are on in ST (Java's has)."
+  (not (= (logand (svref st 2) f) 0)))
+
+(defun rontolisp::%clojure-re-decimal (n)
+  "The decimal spelling of the integer N."
+  (let ((digits nil) (v (if (< n 0) (- n) n)))
+    (do ()
+        ((and digits (= v 0))
+         (coerce (if (< n 0) (cons #\- digits) digits) 'string))
+      (let ((q (truncate v 10)))
+        (setq digits (cons (code-char (+ 48 (- v (* q 10)))) digits))
+        (setq v q)))))
+
+(defun rontolisp::%clojure-rp-error (st desc)
+  "Signal the oracle's PatternSyntaxException DESC at the cursor of ST: the
+   description, its index, the pattern and a caret under the index."
+  (let ((index (- (rontolisp::%clojure-rp-cur st) 1))
+        (pattern (svref st 5))
+        (caret nil))
+    (if (and (>= index 0) (< index (length pattern)))
+        (progn
+          (setq caret (list #\^))
+          (dotimes (i index)
+            (setq caret
+                  (cons
+                   (if (char= (char pattern (- index 1 i)) #\Tab) #\Tab #\Space)
+                   caret)))
+          (setq caret (cons #\Newline caret))))
+    (rontolisp::%clojure-pattern-syntax-exception
+     (concatenate 'string desc
+                  (if (>= index 0)
+                      (concatenate 'string " near index "
+                                   (rontolisp::%clojure-re-decimal index))
+                      "") (string #\Newline) pattern (coerce caret 'string)))))
+
+;;; The lexer: Java's peek, read, next, skip and unread, past whitespace and #
+;;; comments under COMMENTS.
+
+(defun rontolisp::%clojure-rp-line-sep-p (st ch)
+  "Whether CH ends a # comment (only \\n under UNIX_LINES)."
+  (if (rontolisp::%clojure-rp-has st 1)
+      (= ch 10)
+      (rontolisp::%clojure-re-line-term-p ch)))
+
+(defun rontolisp::%clojure-rp-take (st)
+  "The code under the cursor of ST, the cursor past it (temp[cursor++])."
+  (let ((i (rontolisp::%clojure-rp-cur st)))
+    (rontolisp::%clojure-rp-go st (+ i 1))
+    (rontolisp::%clojure-rp-at st i)))
+
+(defun rontolisp::%clojure-rp-peek-past-line (st)
+  "Java's peekPastLine: the cursor onto the end of a # comment, its code."
+  (rontolisp::%clojure-rp-go st (+ (rontolisp::%clojure-rp-cur st) 1))
+  (let ((ch (rontolisp::%clojure-rp-at st (rontolisp::%clojure-rp-cur st))))
+    (do ()
+        ((or (= ch 0) (rontolisp::%clojure-rp-line-sep-p st ch)))
+      (rontolisp::%clojure-rp-go st (+ (rontolisp::%clojure-rp-cur st) 1))
+      (setq ch (rontolisp::%clojure-rp-at st (rontolisp::%clojure-rp-cur st))))
+    (if (and (= ch 0) (> (rontolisp::%clojure-rp-cur st) (svref st 4)))
+        (progn
+          (rontolisp::%clojure-rp-go st (svref st 4))
+          (rontolisp::%clojure-rp-at st (svref st 4)))
+        ch)))
+
+(defun rontolisp::%clojure-rp-peek-past-ws (st ch)
+  "Java's peekPastWhitespace: CH, or the cursor moved past comments-mode
+   whitespace and # comments onto the code it answers."
+  (do ()
+      ((not (or (rontolisp::%clojure-re-space-code-p ch) (= ch 35))) ch)
+    (do ()
+        ((not (rontolisp::%clojure-re-space-code-p ch)))
+      (rontolisp::%clojure-rp-go st (+ (rontolisp::%clojure-rp-cur st) 1))
+      (setq ch (rontolisp::%clojure-rp-at st (rontolisp::%clojure-rp-cur st))))
+    (if (= ch 35) (setq ch (rontolisp::%clojure-rp-peek-past-line st)))))
+
+(defun rontolisp::%clojure-rp-parse-past-line (st)
+  "Java's parsePastLine: the code ending a # comment, consumed."
+  (let ((ch (rontolisp::%clojure-rp-take st)))
+    (do ()
+        ((or (= ch 0) (rontolisp::%clojure-rp-line-sep-p st ch)))
+      (setq ch (rontolisp::%clojure-rp-take st)))
+    (if (and (= ch 0) (> (rontolisp::%clojure-rp-cur st) (svref st 4)))
+        (progn
+          (rontolisp::%clojure-rp-go st (svref st 4))
+          (rontolisp::%clojure-rp-take st))
+        ch)))
+
+(defun rontolisp::%clojure-rp-parse-past-ws (st ch)
+  "Java's parsePastWhitespace: CH, or the code consumed past comments-mode
+   whitespace and # comments."
+  (do ()
+      ((not (or (rontolisp::%clojure-re-space-code-p ch) (= ch 35))) ch)
+    (do ()
+        ((not (rontolisp::%clojure-re-space-code-p ch)))
+      (setq ch (rontolisp::%clojure-rp-take st)))
+    (if (= ch 35) (setq ch (rontolisp::%clojure-rp-parse-past-line st)))))
+
+(defun rontolisp::%clojure-rp-peek (st)
+  "Java's peek: the code under the cursor, past comments-mode space."
+  (let ((ch (rontolisp::%clojure-rp-at st (rontolisp::%clojure-rp-cur st))))
+    (if (rontolisp::%clojure-rp-has st 4)
+        (rontolisp::%clojure-rp-peek-past-ws st ch)
+        ch)))
+
+(defun rontolisp::%clojure-rp-read (st)
+  "Java's read: the code under the cursor, consumed."
+  (let ((ch (rontolisp::%clojure-rp-take st)))
+    (if (rontolisp::%clojure-rp-has st 4)
+        (rontolisp::%clojure-rp-parse-past-ws st ch)
+        ch)))
+
+(defun rontolisp::%clojure-rp-next (st)
+  "Java's next: the cursor one on, the code there peeked."
+  (rontolisp::%clojure-rp-go st (+ (rontolisp::%clojure-rp-cur st) 1))
+  (rontolisp::%clojure-rp-peek st))
+
+(defun rontolisp::%clojure-rp-next-escaped (st)
+  "Java's nextEscaped: the cursor one on, the code there as it is."
+  (rontolisp::%clojure-rp-go st (+ (rontolisp::%clojure-rp-cur st) 1))
+  (rontolisp::%clojure-rp-at st (rontolisp::%clojure-rp-cur st)))
+
+(defun rontolisp::%clojure-rp-skip (st)
+  "Java's skip: the code after the cursor, the cursor two on."
+  (let ((i (rontolisp::%clojure-rp-cur st)))
+    (rontolisp::%clojure-rp-go st (+ i 2))
+    (rontolisp::%clojure-rp-at st (+ i 1))))
+
+(defun rontolisp::%clojure-rp-unread (st)
+  "Java's unread: the cursor one back."
+  (rontolisp::%clojure-rp-go st (- (rontolisp::%clojure-rp-cur st) 1)))
+
+(defun rontolisp::%clojure-rp-accept (st ch message)
+  "Java's accept: the next code read must be CH, else MESSAGE."
+  (if (not (= (rontolisp::%clojure-rp-read st) ch))
+      (rontolisp::%clojure-rp-error st message)))
+
+;;; The parser.
+
+(defun rontolisp::%clojure-rp-remove-qe (st)
+  "Java's RemoveQEQuoting: each \\Q..\\E span of ST's pattern rewritten to
+   escaped literals (a digit opening one as \\x3 and the digit), the rest
+   kept."
+  (let ((codes (svref st 0)) (plen (svref st 4)) (i 0))
+    (do ()
+        ((or (>= i (- plen 1))
+             (and (= (svref codes i) 92) (= (svref codes (+ i 1)) 81))))
+      (setq i (+ i (if (= (svref codes i) 92) 2 1))))
+    (if (< i (- plen 1))
+        (let ((out nil) (in-quote t) (begin-quote t))
+          (dotimes (x i) (setq out (cons (svref codes x) out)))
+          (setq i (+ i 2))
+          (do ()
+              ((>= i plen))
+            (let ((c (svref codes i)) (requote nil))
+              (setq i (+ i 1))
+              (cond ((or (> c 127) (rontolisp::%clojure-re-letter-code-p c))
+                     (setq out (cons c out)))
+                    ((rontolisp::%clojure-re-digit-code-p c)
+                     (if begin-quote
+                         (setq out (cons 51 (cons 120 (cons 92 out)))))
+                     (setq out (cons c out)))
+                    ((not (= c 92))
+                     (if in-quote (setq out (cons 92 out)))
+                     (setq out (cons c out)))
+                    (in-quote (if (= (svref codes i) 69)
+                                  (progn
+                                    (setq i (+ i 1))
+                                    (setq in-quote nil))
+                                  (setq out (cons 92 (cons 92 out)))))
+                    ((= (svref codes i) 81)
+                     (setq i (+ i 1))
+                     (setq in-quote t)
+                     (setq begin-quote t)
+                     (setq requote t))
+                    (t
+                     (setq out (cons c out))
+                     (if (not (= i plen))
+                         (progn
+                           (setq out (cons (svref codes i) out))
+                           (setq i (+ i 1))))))
+              (if (not requote) (setq begin-quote nil))))
+          (let* ((n (length out))
+                 (final (make-array (+ n 2) :initial-element 0)))
+            (dotimes (x n)
+              (setf (svref final (- n 1 x)) (car out))
+              (setq out (cdr out)))
+            (setf (svref st 0) final)
+            (setf (svref st 4) n))))))
+
+(defun rontolisp::%clojure-re-parse (source)
+  "The (ops ngroups names) of the pattern SOURCE as the oracle's
+   Pattern.compile parses it, or its signal."
+  (let* ((n (length source)) (codes (make-array (+ n 2) :initial-element 0)))
+    (dotimes (i n) (setf (svref codes i) (char-code (char source i))))
+    (let ((st (vector codes 0 0 1 n source nil nil nil)))
+      (rontolisp::%clojure-rp-remove-qe st)
+      (let ((ops (rontolisp::%clojure-rp-expr st)))
+        (if (not (= (rontolisp::%clojure-rp-cur st) (svref st 4)))
+            (cond
+             ((= (rontolisp::%clojure-rp-peek st) 41)
+              (rontolisp::%clojure-rp-error st "Unmatched closing ')'"))
+             ((and (= (rontolisp::%clojure-rp-cur st) (+ (svref st 4) 1))
+                   (= (rontolisp::%clojure-rp-at st (- (svref st 4) 1)) 92))
+              (rontolisp::%clojure-rp-error st "Unescaped trailing backslash"))
+             (t (rontolisp::%clojure-rp-error st "Unexpected internal error"))))
+        (if (not (svref st 7))
+            (dolist (loop-op (svref st 8)) (rplaca (nthcdr 5 loop-op) :loopm)))
+        (list ops (- (svref st 3) 1) (reverse (svref st 6)))))))
+
+(defun rontolisp::%clojure-rp-expr (st)
+  "Java's expr: the alternatives of sequences up to a ) or the end."
+  (let ((alts (list (rontolisp::%clojure-rp-sequence st))))
+    (do ()
+        ((not (= (rontolisp::%clojure-rp-peek st) 124))
+         (rontolisp::%clojure-rp-alternation (reverse alts)))
+      (rontolisp::%clojure-rp-next st)
+      (setq alts (cons (rontolisp::%clojure-rp-sequence st) alts)))))
+
+(defun rontolisp::%clojure-rp-alternation (alts)
+  "The op trying each of ALTS in order."
+  (if (null (cdr alts))
+      (car alts)
+      (list :alt (car alts) (rontolisp::%clojure-rp-alternation (cdr alts)))))
+
+(defun rontolisp::%clojure-rp-sequence (st)
+  "Java's sequence: the atoms up to a |, a ) or the end, each under its
+   closure."
+  (let ((acc nil) (done nil))
+    (do ()
+        (done (rontolisp::%clojure-re-seq-node (reverse acc)))
+      (let ((ch (rontolisp::%clojure-rp-peek st)))
+        (cond ((= ch 40)
+               (let ((group (rontolisp::%clojure-rp-group0 st)))
+                 (if group (setq acc (cons group acc)))))
+              ((or (= ch 124) (= ch 41)) (setq done t))
+              ((and (= ch 0) (>= (rontolisp::%clojure-rp-cur st) (svref st 4)))
+               (setq done t))
+              ((or (= ch 63) (= ch 42) (= ch 43))
+               (rontolisp::%clojure-rp-next st)
+               (rontolisp::%clojure-rp-error st
+                                             (concatenate 'string
+                                              "Dangling meta character '"
+                                              (string (code-char ch)) "'")))
+              (t (setq acc
+                       (cons (rontolisp::%clojure-rp-closure st
+                              (rontolisp::%clojure-rp-sequence-atom st ch))
+                             acc))))))))
+
+(defun rontolisp::%clojure-rp-sequence-atom (st ch)
+  "The node a sequence holds for the code CH under the cursor: a class, an
+   escape or a run of literals, an anchor or a dot under the flags."
+  (cond ((= ch 91)
+         (if (rontolisp::%clojure-rp-has st 128)
+             (error
+              "unsupported regex: a character class under (?c) is not supported"))
+         (rontolisp::%clojure-rp-class-op (rontolisp::%clojure-rp-clazz st t)))
+        ((= ch 92)
+         (let ((e (rontolisp::%clojure-rp-next-escaped st)))
+           (if (or (= e 112) (= e 80))
+               (error "unsupported regex: \\p is not supported")
+               (progn
+                 (rontolisp::%clojure-rp-unread st)
+                 (rontolisp::%clojure-rp-atom st)))))
+        ((= ch 94)
+         (rontolisp::%clojure-rp-next st)
+         (cond ((not (rontolisp::%clojure-rp-has st 8)) (list :bol))
+               ((rontolisp::%clojure-rp-has st 1) (list :ubol))
+               (t (list :mbol))))
+        ((= ch 36)
+         (rontolisp::%clojure-rp-next st)
+         (if (rontolisp::%clojure-rp-has st 1)
+             (if (rontolisp::%clojure-rp-has st 8) (list :umeol) (list :ueol))
+             (if (rontolisp::%clojure-rp-has st 8) (list :meol) (list :eol))))
+        ((= ch 46)
+         (rontolisp::%clojure-rp-next st)
+         (cond ((rontolisp::%clojure-rp-has st 32) (list :any))
+               ((rontolisp::%clojure-rp-has st 1) (list :udot))
+               (t (list :dot))))
+        (t (rontolisp::%clojure-rp-atom st))))
+
+(defun rontolisp::%clojure-rp-atom (st)
+  "Java's atom: a run of literal characters (the last left to a quantifier
+   after it), or the node of one escape."
+  (let ((codes nil)
+        (count 0)
+        (prev -1)
+        (node nil)
+        (done nil)
+        (ch (rontolisp::%clojure-rp-peek st)))
+    (do ()
+        (done)
+      (cond ((or (= ch 42) (= ch 43) (= ch 63) (= ch 123))
+             (if (> count 1)
+                 (progn
+                   (rontolisp::%clojure-rp-go st prev)
+                   (setq count (- count 1))
+                   (setq codes (cdr codes))))
+             (setq done t))
+            ((or (= ch 36) (= ch 46) (= ch 94) (= ch 40) (= ch 91) (= ch 124)
+                 (= ch 41))
+             (setq done t))
+            ((= ch 92)
+             (let ((e (rontolisp::%clojure-rp-next-escaped st)))
+               (if (or (= e 112) (= e 80))
+                   (if (> count 0)
+                       (progn
+                         (rontolisp::%clojure-rp-unread st)
+                         (setq done t))
+                       (error "unsupported regex: \\p is not supported"))
+                   (progn
+                     (rontolisp::%clojure-rp-unread st)
+                     (setq prev (rontolisp::%clojure-rp-cur st))
+                     (let ((r
+                            (rontolisp::%clojure-rp-escape st nil (= count 0)
+                                                           nil)))
+                       (cond ((integerp r)
+                              (setq codes (cons r codes))
+                              (setq count (+ count 1))
+                              (setq ch (rontolisp::%clojure-rp-peek st)))
+                             ((= count 0)
+                              (setq node r)
+                              (setq done t))
+                             (t
+                              (rontolisp::%clojure-rp-go st prev)
+                              (setq done t))))))))
+            ((and (= ch 0) (>= (rontolisp::%clojure-rp-cur st) (svref st 4)))
+             (setq done t))
+            (t
+             (setq prev (rontolisp::%clojure-rp-cur st))
+             (setq codes (cons ch codes))
+             (setq count (+ count 1))
+             (setq ch (rontolisp::%clojure-rp-next st)))))
+    (cond (node node)
+          ((= count 1) (rontolisp::%clojure-rp-single st (car codes)))
+          (t (rontolisp::%clojure-re-seq-node
+              (mapcar (lambda (c) (rontolisp::%clojure-rp-slice-op st c))
+                      (reverse codes)))))))
+
+(defun rontolisp::%clojure-rp-single (st ch)
+  "Java's single: the op matching the one character CH under the flags."
+  (cond ((not (rontolisp::%clojure-rp-has st 2)) (list :lit ch))
+        ((rontolisp::%clojure-rp-has st 64)
+         (let ((upper (rontolisp::%clojure-re-upcase ch)))
+           (if (= upper (rontolisp::%clojure-re-downcase upper))
+               (list :lit ch)
+               (list :ulit (rontolisp::%clojure-re-downcase upper)))))
+        ((and (< ch 128)
+              (not
+               (= (rontolisp::%clojure-re-ascii-lower ch)
+                  (rontolisp::%clojure-re-ascii-upper ch))))
+         (list :ilit (rontolisp::%clojure-re-ascii-lower ch)))
+        (t (list :lit ch))))
+
+(defun rontolisp::%clojure-rp-slice-op (st ch)
+  "The op of the character CH in a run of two or more (Java's newSlice): under
+   (?iu) every one folds, under (?i) the ASCII letters lower-case."
+  (cond ((not (rontolisp::%clojure-rp-has st 2)) (list :lit ch))
+        ((rontolisp::%clojure-rp-has st 64)
+         (list :ulit (rontolisp::%clojure-re-fold ch)))
+        ((rontolisp::%clojure-re-letter-code-p ch)
+         (list :ilit (rontolisp::%clojure-re-ascii-lower ch)))
+        (t (list :lit ch))))
+
+(defun rontolisp::%clojure-rp-closure (st prev)
+  "Java's closure: PREV under the quantifier after it, or PREV."
+  (let ((ch (rontolisp::%clojure-rp-peek st)))
+    (cond
+     ((= ch 63) (list :rep prev 0 1 (rontolisp::%clojure-rp-qtype st) :ques))
+     ((= ch 42) (rontolisp::%clojure-rp-curly st prev 0))
+     ((= ch 43) (rontolisp::%clojure-rp-curly st prev 1))
+     ((= ch 123) (rontolisp::%clojure-rp-counted st prev))
+     (t prev))))
+
+(defun rontolisp::%clojure-rp-qtype (st)
+  "Java's qtype: the mode a ? or + after a quantifier gives it."
+  (let ((ch (rontolisp::%clojure-rp-next st)))
+    (cond ((= ch 63)
+           (rontolisp::%clojure-rp-next st)
+           :reluctant)
+          ((= ch 43)
+           (rontolisp::%clojure-rp-next st)
+           :possessive)
+          (t :greedy))))
+
+(defun rontolisp::%clojure-rp-curly (st prev cmin)
+  "Java's curly: PREV repeated CMIN or more times."
+  (let ((mode (rontolisp::%clojure-rp-qtype st)))
+    (list :rep prev cmin nil mode
+          (if (and (eq mode :greedy) (rontolisp::%clojure-re-char-op-p prev))
+              :cpg :curly))))
+
+(defun rontolisp::%clojure-rp-counted (st prev)
+  "Java's {n}, {n,} and {n,m} closures of PREV."
+  (let ((ch (rontolisp::%clojure-rp-skip st)) (cmin 0) (cmax 0) (open nil))
+    (if (not (rontolisp::%clojure-re-digit-code-p ch))
+        (rontolisp::%clojure-rp-error st "Illegal repetition"))
+    (do ()
+        ((not (rontolisp::%clojure-re-digit-code-p ch)))
+      (setq cmin (+ (* cmin 10) (- ch 48)))
+      (if (> cmin 2147483647)
+          (rontolisp::%clojure-rp-error st "Illegal repetition range"))
+      (setq ch (rontolisp::%clojure-rp-read st)))
+    (if (= ch 44)
+        (progn
+          (setq ch (rontolisp::%clojure-rp-read st))
+          (if (= ch 125)
+              (setq open t)
+              (do ()
+                  ((not (rontolisp::%clojure-re-digit-code-p ch)))
+                (setq cmax (+ (* cmax 10) (- ch 48)))
+                (if (> cmax 2147483647)
+                    (rontolisp::%clojure-rp-error st
+                                                  "Illegal repetition range"))
+                (setq ch (rontolisp::%clojure-rp-read st)))))
+        (setq cmax cmin))
+    (if open
+        (progn
+          (rontolisp::%clojure-rp-unread st)
+          (rontolisp::%clojure-rp-curly st prev cmin))
+        (progn
+          (if (not (= ch 125))
+              (rontolisp::%clojure-rp-error st "Unclosed counted closure"))
+          (if (< cmax cmin)
+              (rontolisp::%clojure-rp-error st "Illegal repetition range"))
+          (rontolisp::%clojure-rp-unread st)
+          (let ((mode (rontolisp::%clojure-rp-qtype st)))
+            (list :rep prev cmin cmax mode
+                  (if (and (= cmin 0) (= cmax 1)) :ques :curly)))))))
+
+(defun rontolisp::%clojure-rp-group0 (st)
+  "Java's group0: the group at the ( under the cursor under its closure, or
+   NIL for a (?flags) group, whose flags stay on to the end of the group that
+   holds it."
+  (let ((save (svref st 2))
+        (loops (svref st 8))
+        (head nil)
+        (assertion nil)
+        (capturing nil)
+        (flags-only nil)
+        (ch (rontolisp::%clojure-rp-next st)))
+    (if (= ch 63)
+        (let ((c (rontolisp::%clojure-rp-skip st)))
+          (cond ((= c 58) (setq head (rontolisp::%clojure-rp-expr st)))
+                ((or (= c 61) (= c 33))
+                 (setq head
+                       (list (if (= c 61) :look :nlook)
+                             (rontolisp::%clojure-rp-expr st)))
+                 (setq assertion t))
+                ((= c 62)
+                 (setq head (list :atomic (rontolisp::%clojure-rp-expr st)))
+                 (setq assertion t))
+                ((= c 60)
+                 (let ((d (rontolisp::%clojure-rp-read st)))
+                   (if (or (= d 61) (= d 33))
+                       (progn
+                         (setq head (rontolisp::%clojure-rp-behind st (= d 33)))
+                         (setf (svref st 8) loops)
+                         (setq assertion t))
+                       (progn
+                         (setq head (rontolisp::%clojure-rp-named-group st d))
+                         (setq capturing t)))))
+                ((or (= c 36) (= c 64))
+                 (rontolisp::%clojure-rp-error st "Unknown group type"))
+                (t
+                 (rontolisp::%clojure-rp-unread st)
+                 (rontolisp::%clojure-rp-add-flag st)
+                 (let ((d (rontolisp::%clojure-rp-read st)))
+                   (cond ((= d 41) (setq flags-only t))
+                         ((not (= d 58))
+                          (rontolisp::%clojure-rp-error st
+                           "Unknown inline modifier"))
+                         (t (setq head (rontolisp::%clojure-rp-expr st))))))))
+        (let ((idx (svref st 3)))
+          (setf (svref st 3) (+ idx 1))
+          (setq capturing t)
+          (setq head (list :grp idx (rontolisp::%clojure-rp-expr st)))))
+    (if flags-only
         nil
-        (let ((j (car r)) (lo (car (cdr r))))
-          (if (and (< j len) (= (char-code (char s j)) (char-code #\,)))
-              (let ((r2 (rontolisp::%clojure-re-parse-digits s len (+ j 1))))
-                (let ((k (if r2 (car r2) (+ j 1)))
-                      (hi (if r2 (car (cdr r2)) nil)))
-                  (if (or (>= k len)
-                          (not (= (char-code (char s k)) (char-code #\}))))
-                      nil
-                      (if (and hi (< hi lo))
-                          (rontolisp::%clojure-pattern-syntax-exception
-                           "unsupported regex: bad repetition range")
-                          (rontolisp::%clojure-re-quant-tail s len (+ k 1) lo hi
-                                                             :greedy)))))
-              (if (or (>= j len)
-                      (not (= (char-code (char s j)) (char-code #\}))))
-                  nil
-                  (rontolisp::%clojure-re-quant-tail s len (+ j 1) lo lo
-                                                     :greedy)))))))
+        (progn
+          (rontolisp::%clojure-rp-accept st 41 "Unclosed group")
+          (setf (svref st 2) save)
+          (let ((node (rontolisp::%clojure-rp-closure st head)))
+            (if (or (eq node head) assertion)
+                node
+                (let ((rep
+                       (rontolisp::%clojure-rp-group-closure node head
+                                                             capturing)))
+                  (setf (svref st 8) loops)
+                  (if (and (eq (nth 5 rep) :loop) (eq (nth 4 rep) :greedy)
+                           (or (null (nth 3 rep)) (= (nth 3 rep) 2147483647)))
+                      (setf (svref st 8) (cons rep loops)))
+                  rep)))))))
 
-(defun rontolisp::%clojure-re-parse-base (s len i n)
-  "One atom at I: (pos node ngroups)."
-  (let ((c (char-code (char s i))))
-    (cond ((= c (char-code #\()) (rontolisp::%clojure-re-parse-group s len i n))
-     ((= c (char-code #\[))
-      (let ((r (rontolisp::%clojure-re-parse-class s len (+ i 1))))
-        (list (car r) (car (cdr r)) n)))
-     ((= c (char-code #\.)) (list (+ i 1) (list :dot) n))
-     ((= c (char-code #\^)) (list (+ i 1) (list :bol) n))
-     ((= c (char-code #\$)) (list (+ i 1) (list :eol) n))
-     ((= c (char-code #\\)) (rontolisp::%clojure-re-parse-escape s len i n nil))
-     ((or (= c (char-code #\*)) (= c (char-code #\+)) (= c (char-code #\?)))
-      (rontolisp::%clojure-pattern-syntax-exception
-       "unsupported regex: dangling quantifier"))
-     ((or (= c (char-code #\{)) (= c (char-code #\})))
-      (list (+ i 1) (list :lit c) n))
-     ((or (= c (char-code #\))) (= c (char-code #\|)))
-      (rontolisp::%clojure-pattern-syntax-exception
-       "unsupported regex: unmatched delimiter"))
-     (t (list (+ i 1) (list :lit c) n)))))
+(defun rontolisp::%clojure-rp-group-closure (node head capturing)
+  "Java's group0 over the group HEAD under the quantifier NODE: ? a Branch
+   (possessive, a Ques), a possessive count a Curly, another count a
+   GroupCurly when the body matches one way (one that does not capture is a
+   Curly's match), else a Loop."
+  (let ((cmin (nth 2 node))
+        (cmax (nth 3 node))
+        (mode (nth 4 node))
+        (kind (nth 5 node)))
+    (cond ((eq kind :ques)
+           (list :rep head 0 1 mode (if (eq mode :possessive) :ques :branch)))
+          ((eq mode :possessive) (list :rep head cmin cmax mode :curly))
+          ((nth 3 (rontolisp::%clojure-rp-study (list head) 0 0 t t))
+           (list :rep head cmin cmax mode (if capturing :gcurly :curly)))
+          (t (list :rep head cmin cmax mode :loop)))))
 
-(defun rontolisp::%clojure-re-parse-group (s len i n)
-  "A group at I (the opening paren): (pos node ngroups)."
-  (if (and (< (+ i 1) len) (= (char-code (char s (+ i 1))) (char-code #\?)))
-      (rontolisp::%clojure-re-parse-group-q s len i n)
-      (let ((idx (+ n 1)))
-        (let ((r (rontolisp::%clojure-re-parse-alt s len (+ i 1) idx)))
-          (let ((j (car r)))
-            (if (or (>= j len) (not (= (char-code (char s j)) (char-code #\)))))
-                (rontolisp::%clojure-pattern-syntax-exception
-                 "unsupported regex: unclosed group")
-                (list (+ j 1) (list :grp idx (car (cdr r)))
-                      (car (cdr (cdr r))))))))))
+(defun rontolisp::%clojure-rp-behind (st negated)
+  "A look-behind's body under the cursor with its length bounds, Java's
+   TreeInfo of it (the oracle refuses one with no obvious maximum)."
+  (let* ((body (rontolisp::%clojure-rp-expr st))
+         (info (rontolisp::%clojure-rp-study (list body) 0 0 t t)))
+    (if (not (nth 2 info))
+        (rontolisp::%clojure-rp-error st
+         "Look-behind group does not have an obvious maximum length"))
+    (list (if negated :nbehind :behind) body (nth 0 info) (nth 1 info))))
 
-(defun rontolisp::%clojure-re-parse-group-q (s len i n)
-  "A (? group at I: only (?:...) lowers, the rest is refused by name."
-  (if (or (>= (+ i 2) len)
-          (not (= (char-code (char s (+ i 2))) (char-code #\:))))
-      (error "unsupported regex: only (?:...) groups are supported")
-      (let ((r (rontolisp::%clojure-re-parse-alt s len (+ i 3) n)))
-        (let ((j (car r)))
-          (if (or (>= j len) (not (= (char-code (char s j)) (char-code #\)))))
-              (rontolisp::%clojure-pattern-syntax-exception
-               "unsupported regex: unclosed group")
-              (list (+ j 1) (car (cdr r)) (car (cdr (cdr r)))))))))
+(defun rontolisp::%clojure-rp-named-group (st ch)
+  "A (?<name>X) capturing group whose name starts at CH, recorded."
+  (let ((name (rontolisp::%clojure-rp-group-name st ch)))
+    (if (rontolisp::%clojure-re-name-lookup name (svref st 6))
+        (rontolisp::%clojure-rp-error st
+                                      (concatenate 'string
+                                                   "Named capturing group <"
+                                                   name
+                                                   "> is already defined")))
+    (let ((idx (svref st 3)))
+      (setf (svref st 3) (+ idx 1))
+      (setf (svref st 6) (cons (cons name idx) (svref st 6)))
+      (list :grp idx (rontolisp::%clojure-rp-expr st)))))
 
-(defun rontolisp::%clojure-re-parse-escape (s len i n in-class)
-  "An escape at I (the backslash): (pos node ngroups)."
-  (if (>= (+ i 1) len)
-      (rontolisp::%clojure-pattern-syntax-exception
-       "unsupported regex: trailing backslash")
-      (let ((e (char-code (char s (+ i 1)))))
-        (cond ((= e (char-code #\w)) (list (+ i 2) (list :cls nil (list :w)) n))
-              ((= e (char-code #\W)) (list (+ i 2) (list :cls t (list :w)) n))
-              ((= e (char-code #\s)) (list (+ i 2) (list :cls nil (list :s)) n))
-              ((= e (char-code #\S)) (list (+ i 2) (list :cls t (list :s)) n))
-              ((= e (char-code #\d)) (list (+ i 2) (list :cls nil (list :d)) n))
-              ((= e (char-code #\D)) (list (+ i 2) (list :cls t (list :d)) n))
-              ((= e (char-code #\b))
-               (if in-class
-                   (list (+ i 2) (list :lit 8) n)
-                   (list (+ i 2) (list :wb) n)))
-              ((= e (char-code #\B))
-               (if in-class
-                   (rontolisp::%clojure-pattern-syntax-exception
-                    "unsupported regex: bad escape")
-                   (list (+ i 2) (list :nwb) n)))
-              ((= e (char-code #\A))
-               (if in-class
-                   (rontolisp::%clojure-pattern-syntax-exception
-                    "unsupported regex: bad escape")
-                   (list (+ i 2) (list :bol) n)))
-              ((= e (char-code #\z))
-               (if in-class
-                   (rontolisp::%clojure-pattern-syntax-exception
-                    "unsupported regex: bad escape")
-                   (list (+ i 2) (list :zend) n)))
-              ((= e (char-code #\G))
-               (error "unsupported regex: \\G is not supported"))
-              ((= e (char-code #\n)) (list (+ i 2) (list :lit 10) n))
-              ((= e (char-code #\t)) (list (+ i 2) (list :lit 9) n))
-              ((= e (char-code #\r)) (list (+ i 2) (list :lit 13) n))
-              ((= e (char-code #\f)) (list (+ i 2) (list :lit 12) n))
-              ((= e (char-code #\a)) (list (+ i 2) (list :lit 7) n))
-              ((= e (char-code #\e)) (list (+ i 2) (list :lit 27) n))
-              ((= e (char-code #\u))
-               (rontolisp::%clojure-re-parse-hex s len (+ i 2) 4 n))
-              ((= e (char-code #\x))
-               (rontolisp::%clojure-re-parse-hex s len (+ i 2) 2 n))
-              ((= e (char-code #\c))
-               (rontolisp::%clojure-re-parse-control s len (+ i 2) n))
-              ((= e (char-code #\Q))
-               (rontolisp::%clojure-re-parse-quoted s len (+ i 2) n))
-              ((= e (char-code #\E))
-               (rontolisp::%clojure-pattern-syntax-exception
-                "unsupported regex: lone \\E"))
-              ((= e 48) (rontolisp::%clojure-re-parse-octal s len (+ i 1) n))
-              ((and (<= 49 e) (<= e 57))
-               (rontolisp::%clojure-re-parse-backref s len (+ i 2) (- e 48) n))
-              ((rontolisp::%clojure-re-alpha-code-p e)
-               (rontolisp::%clojure-pattern-syntax-exception
-                "unsupported regex: bad escape"))
-              (t (list (+ i 2) (list :lit e) n))))))
+(defun rontolisp::%clojure-rp-group-name (st ch)
+  "Java's groupname: a Latin letter CH, then letters and digits, then >."
+  (if (not (rontolisp::%clojure-re-letter-code-p ch))
+      (rontolisp::%clojure-rp-error st
+       "capturing group name does not start with a Latin letter"))
+  (let ((chars nil) (c ch))
+    (do ()
+        ((not (rontolisp::%clojure-re-alpha-code-p c)))
+      (setq chars (cons (code-char c) chars))
+      (setq c (rontolisp::%clojure-rp-read st)))
+    (if (not (= c 62))
+        (rontolisp::%clojure-rp-error st
+         "named capturing group is missing trailing '>'"))
+    (coerce (reverse chars) 'string)))
 
-(defun rontolisp::%clojure-re-parse-hex (s len j count n)
-  "COUNT hex digits at J: (pos node ngroups)."
-  (if (> (+ j count) len)
-      (rontolisp::%clojure-pattern-syntax-exception
-       "unsupported regex: bad hex escape")
-      (let ((v (rontolisp::%clojure-re-hex-acc s j (+ j count) 0)))
-        (if (null v)
-            (rontolisp::%clojure-pattern-syntax-exception
-             "unsupported regex: bad hex escape")
-            (list (+ j count) (list :lit v) n)))))
+(defun rontolisp::%clojure-rp-flag-bits (ch)
+  "The flag bits the inline flag letter CH stands for, or NIL."
+  (cond ((= ch 105) 2)
+        ((= ch 109) 8)
+        ((= ch 115) 32)
+        ((= ch 100) 1)
+        ((= ch 117) 64)
+        ((= ch 99) 128)
+        ((= ch 120) 4)
+        ((= ch 85) 320)
+        (t nil)))
 
-(defun rontolisp::%clojure-re-hex-acc (s j end v)
-  "The hex value over [J, END): the number, or NIL past a non-hex digit."
-  (if (>= j end)
-      v
-      (let ((d (rontolisp::%clojure-re-hex-value (char-code (char s j)))))
+(defun rontolisp::%clojure-rp-add-flag (st)
+  "Java's addFlag: the flags of (?flags-flags) on, the ones after the - off."
+  (let ((ch (rontolisp::%clojure-rp-peek st)) (done nil))
+    (do ()
+        (done)
+      (let ((bits (rontolisp::%clojure-rp-flag-bits ch)))
+        (cond (bits
+               (setf (svref st 2) (logior (svref st 2) bits))
+               (setq ch (rontolisp::%clojure-rp-next st)))
+              ((= ch 45)
+               (rontolisp::%clojure-rp-next st)
+               (rontolisp::%clojure-rp-sub-flag st)
+               (setq done t))
+              (t (setq done t)))))))
+
+(defun rontolisp::%clojure-rp-sub-flag (st)
+  "Java's subFlag: the flags after a - off."
+  (let ((ch (rontolisp::%clojure-rp-peek st)) (done nil))
+    (do ()
+        (done)
+      (let ((bits (rontolisp::%clojure-rp-flag-bits ch)))
+        (if bits
+            (progn
+              (setf (svref st 2) (logand (svref st 2) (- 511 bits)))
+              (setq ch (rontolisp::%clojure-rp-next st)))
+            (setq done t))))))
+
+;;; Classes: an item for a union is (:cls nil items), its negation (:cls t
+;;; items), an intersection (:and a b); the codes Java keeps in a class's bit
+;;; table come back from %clojure-rp-range as (:bits codes...).
+
+(defun rontolisp::%clojure-rp-members (item)
+  "The members of the class ITEM taken as a union."
+  (if (and (consp item) (eq (car item) :cls) (not (car (cdr item))))
+      (car (cdr (cdr item)))
+      (list item)))
+
+(defun rontolisp::%clojure-rp-union (a b)
+  "The class item matching what A or B matches."
+  (list :cls nil
+        (append (rontolisp::%clojure-rp-members a)
+                (rontolisp::%clojure-rp-members b))))
+
+(defun rontolisp::%clojure-rp-class-op (item)
+  "The one-character op of the class ITEM."
+  (if (and (consp item) (eq (car item) :cls)) item (list :cls nil (list item))))
+
+(defun rontolisp::%clojure-rp-clazz (st consume)
+  "Java's clazz: the class at the [ under the cursor as one item (unions, &&
+   intersections, a ^ right after the [ negating), its ] consumed when
+   CONSUME."
+  (let ((prev nil)
+        (curr nil)
+        (bits nil)
+        (has-bits nil)
+        (neg nil)
+        (result nil)
+        (ch (rontolisp::%clojure-rp-next st)))
+    (if (and (= ch 94)
+             (= (rontolisp::%clojure-rp-at st
+                 (- (rontolisp::%clojure-rp-cur st) 1)) 91))
+        (progn
+          (setq ch (rontolisp::%clojure-rp-next st))
+          (setq neg t)))
+    (do ()
+        (result result)
+      (let ((member t))
+        (cond ((= ch 91)
+               (setq curr (rontolisp::%clojure-rp-clazz st t))
+               (setq prev
+                     (if prev (rontolisp::%clojure-rp-union prev curr) curr))
+               (setq ch (rontolisp::%clojure-rp-peek st))
+               (setq member nil))
+              ((= ch 38)
+               (setq ch (rontolisp::%clojure-rp-next st))
+               (if (= ch 38)
+                   (let ((right nil))
+                     (setq ch (rontolisp::%clojure-rp-next st))
+                     (do ()
+                         ((or (= ch 93) (= ch 38)))
+                       (let ((part
+                              (if (= ch 91)
+                                  (rontolisp::%clojure-rp-clazz st t)
+                                  (progn
+                                    (rontolisp::%clojure-rp-unread st)
+                                    (rontolisp::%clojure-rp-clazz st nil)))))
+                         (setq right
+                               (if right
+                                   (rontolisp::%clojure-rp-union right part)
+                                   part)))
+                       (setq ch (rontolisp::%clojure-rp-peek st)))
+                     (if has-bits
+                         (progn
+                           (if prev
+                               (setq prev
+                                     (rontolisp::%clojure-rp-union prev
+                                      (list :cls nil bits)))
+                               (progn
+                                 (setq prev (list :cls nil bits))
+                                 (setq curr prev)))
+                           (setq has-bits nil)))
+                     (if right (setq curr right))
+                     (cond ((and prev curr) (setq prev (list :and prev curr)))
+                      (prev (rontolisp::%clojure-rp-error st
+                             "Bad intersection syntax"))
+                      (right (setq prev right))
+                      (t (rontolisp::%clojure-rp-error st "Bad class syntax")))
+                     (setq member nil))
+                   (rontolisp::%clojure-rp-unread st)))
+              ((= ch 0)
+               (if (>= (rontolisp::%clojure-rp-cur st) (svref st 4))
+                   (rontolisp::%clojure-rp-error st
+                                                 "Unclosed character class")))
+              ((and (= ch 93) (or prev has-bits))
+               (if consume (rontolisp::%clojure-rp-next st))
+               (let ((whole
+                      (cond ((null prev) (list :cls nil bits))
+                            (has-bits (rontolisp::%clojure-rp-union prev
+                                       (list :cls nil bits)))
+                            (t prev))))
+                 (setq result
+                       (if neg
+                           (list :cls t (rontolisp::%clojure-rp-members whole))
+                           whole)))
+               (setq member nil)))
+        (if member
+            (let ((r (rontolisp::%clojure-rp-range st)))
+              (if (and (consp r) (eq (car r) :bits))
+                  (progn
+                    (setq bits (append (cdr r) bits))
+                    (setq has-bits t)
+                    (setq curr nil))
+                  (progn
+                    (setq curr r)
+                    (setq prev
+                          (if prev (rontolisp::%clojure-rp-union prev r) r))))
+              (setq ch (rontolisp::%clojure-rp-peek st))))))))
+
+(defun rontolisp::%clojure-rp-range (st)
+  "Java's range: the class member under the cursor, a character's codes for
+   the bit table as (:bits codes...), or an item."
+  (let ((ch (rontolisp::%clojure-rp-peek st)) (item nil))
+    (if (= ch 92)
+        (let ((e (rontolisp::%clojure-rp-next-escaped st)))
+          (if (or (= e 112) (= e 80))
+              (error "unsupported regex: \\p is not supported")
+              (let ((isrange
+                     (= (rontolisp::%clojure-rp-at st
+                         (+ (rontolisp::%clojure-rp-cur st) 1)) 45)))
+                (rontolisp::%clojure-rp-unread st)
+                (let ((r (rontolisp::%clojure-rp-escape st t t isrange)))
+                  (if (integerp r) (setq ch r) (setq item r))))))
+        (rontolisp::%clojure-rp-next st))
+    (cond (item item)
+          ((and (= (rontolisp::%clojure-rp-peek st) 45)
+                (not
+                 (= (rontolisp::%clojure-rp-at st
+                     (+ (rontolisp::%clojure-rp-cur st) 1)) 91))
+                (not
+                 (= (rontolisp::%clojure-rp-at st
+                     (+ (rontolisp::%clojure-rp-cur st) 1)) 93)))
+           (rontolisp::%clojure-rp-next st)
+           (let ((m (rontolisp::%clojure-rp-peek st)))
+             (if (= m 92)
+                 (setq m (rontolisp::%clojure-rp-escape st t nil t))
+                 (rontolisp::%clojure-rp-next st))
+             (if (or (not (integerp m)) (< m ch))
+                 (rontolisp::%clojure-rp-error st "Illegal character range"))
+             (cond ((not (rontolisp::%clojure-rp-has st 2)) (list :r ch m))
+                   ((rontolisp::%clojure-rp-has st 64) (list :ru ch m))
+                   (t (list :ri ch m)))))
+          (t (rontolisp::%clojure-rp-bits-or-single st ch)))))
+
+(defun rontolisp::%clojure-rp-bits-or-single (st ch)
+  "Java's bitsOrSingle: the codes the class's bit table takes for CH (both
+   cases under (?i), Character's under (?iu) past ASCII), or for a character
+   past it, or one (?iu) folds specially, the item of Java's single."
+  (if (and (< ch 256)
+           (not
+            (and (rontolisp::%clojure-rp-has st 2)
+                 (rontolisp::%clojure-rp-has st 64)
+                 (or (= ch 255) (= ch 181) (= ch 73) (= ch 105) (= ch 83)
+                     (= ch 115) (= ch 75) (= ch 107) (= ch 197) (= ch 229)))))
+      (cons :bits (cond ((not (rontolisp::%clojure-rp-has st 2)) (list ch))
+                        ((< ch 128)
+                         (list ch (rontolisp::%clojure-re-ascii-upper ch)
+                               (rontolisp::%clojure-re-ascii-lower ch)))
+                        ((rontolisp::%clojure-rp-has st 64)
+                         (list ch (rontolisp::%clojure-re-downcase ch)
+                               (rontolisp::%clojure-re-upcase ch)))
+                        (t (list ch))))
+      (let ((op (rontolisp::%clojure-rp-single st ch)))
+        (if (eq (car op) :ulit) (list :u (car (cdr op))) (car (cdr op))))))
+
+;;; Escapes.
+
+(defun rontolisp::%clojure-rp-escape (st inclass create isrange)
+  "Java's escape at the backslash under the cursor: the code it stands for,
+   or for an escape no character spells its op (inside a class INCLASS, its
+   item) when CREATE, :META when not. ISRANGE: a range follows (\\v is then
+   U+000B)."
+  (let ((ch (rontolisp::%clojure-rp-skip st)))
+    (cond ((= ch 48) (rontolisp::%clojure-rp-octal st))
+          ((and (<= 49 ch) (<= ch 57))
+           (cond (inclass (rontolisp::%clojure-rp-bad-escape st))
+                 (create (rontolisp::%clojure-rp-ref st (- ch 48)))
+                 (t :meta)))
+          ((or (= ch 65) (= ch 66) (= ch 71) (= ch 82) (= ch 88) (= ch 90)
+               (= ch 98) (= ch 107) (= ch 122))
+           (if inclass
+               (rontolisp::%clojure-rp-bad-escape st)
+               (rontolisp::%clojure-rp-escape-node st ch create)))
+          ((or (= ch 68) (= ch 83) (= ch 87) (= ch 100) (= ch 115) (= ch 119))
+           (cond ((not create) :meta)
+            ((rontolisp::%clojure-rp-has st 256)
+             (error
+              "unsupported regex: \\d \\s \\w under (?U) are not supported"))
+            (t (list :cls (or (= ch 68) (= ch 83) (= ch 87))
+                     (list
+                      (cond ((or (= ch 68) (= ch 100)) :d)
+                            ((or (= ch 83) (= ch 115)) :s)
+                            (t :w)))))))
+          ((or (= ch 72) (= ch 104))
+           (if create (list :cls (= ch 72) (list :h)) :meta))
+          ((and (= ch 118) isrange) 11)
+          ((or (= ch 86) (= ch 118))
+           (if create (list :cls (= ch 86) (list :v)) :meta))
+          ((= ch 78) (error "unsupported regex: \\N{...} is not supported"))
+          ((= ch 97) 7)
+          ((= ch 99) (rontolisp::%clojure-rp-control st))
+          ((= ch 101) 27)
+          ((= ch 102) 12)
+          ((= ch 110) 10)
+          ((= ch 114) 13)
+          ((= ch 116) 9)
+          ((= ch 117) (rontolisp::%clojure-rp-unicode st))
+          ((= ch 120) (rontolisp::%clojure-rp-hex st))
+          ((rontolisp::%clojure-re-letter-code-p ch)
+           (rontolisp::%clojure-rp-bad-escape st))
+          (t ch))))
+
+(defun rontolisp::%clojure-rp-bad-escape (st)
+  "The oracle's refusal of an escape it has no meaning for."
+  (rontolisp::%clojure-rp-error st "Illegal/unsupported escape sequence"))
+
+(defun rontolisp::%clojure-rp-escape-node (st ch create)
+  "The op of the escape letter CH that matches no character, outside a
+   class: \\A \\B \\R \\Z \\b \\z, \\k<name> (checked even when not CREATE);
+   :META when not CREATE."
+  (cond ((= ch 107) (rontolisp::%clojure-rp-named-ref st create))
+   ((not create) :meta)
+   ((= ch 65) (list :bol))
+   ((= ch 66) (rontolisp::%clojure-rp-word-bound st (list :nwb)))
+   ((= ch 71) (error "unsupported regex: \\G is not supported"))
+   ((= ch 82) (list :lb))
+   ((= ch 88) (error "unsupported regex: \\X is not supported"))
+   ((= ch 90) (if (rontolisp::%clojure-rp-has st 1) (list :ueol) (list :eol)))
+   ((= ch 98) (rontolisp::%clojure-rp-bound st))
+   (t (list :zend))))
+
+(defun rontolisp::%clojure-rp-word-bound (st op)
+  "The word-boundary OP, refused under (?U), whose word is Unicode's."
+  (if (rontolisp::%clojure-rp-has st 256)
+      (error "unsupported regex: \\b under (?U) is not supported")
+      op))
+
+(defun rontolisp::%clojure-rp-bound (st)
+  "\\b, refusing the \\b{g} grapheme boundary."
+  (if (= (rontolisp::%clojure-rp-peek st) 123)
+      (if (= (rontolisp::%clojure-rp-skip st) 103)
+          (if (= (rontolisp::%clojure-rp-read st) 125)
+              (error "unsupported regex: \\b{g} is not supported")
+              (rontolisp::%clojure-rp-bad-escape st))
+          (progn
+            (rontolisp::%clojure-rp-unread st)
+            (rontolisp::%clojure-rp-unread st)
+            (rontolisp::%clojure-rp-word-bound st (list :wb))))
+      (rontolisp::%clojure-rp-word-bound st (list :wb))))
+
+(defun rontolisp::%clojure-rp-backref (st n)
+  "The back reference op to the group N under the flags; the pattern then
+   memoizes no loop (Java's hasGroupRef)."
+  (setf (svref st 7) t)
+  (cond ((not (rontolisp::%clojure-rp-has st 2)) (list :backref n))
+        ((rontolisp::%clojure-rp-has st 64) (list :ubackref n))
+        (t (list :ibackref n))))
+
+(defun rontolisp::%clojure-rp-ref (st n)
+  "Java's ref: the back reference \\N, taking the digits after it while a
+   group of the number they make has been seen."
+  (let ((done nil))
+    (do ()
+        (done)
+      (let ((ch (rontolisp::%clojure-rp-peek st)))
+        (if (and (rontolisp::%clojure-re-digit-code-p ch)
+                 (<= (+ (* n 10) (- ch 48)) (- (svref st 3) 1)))
+            (progn
+              (setq n (+ (* n 10) (- ch 48)))
+              (rontolisp::%clojure-rp-read st))
+            (setq done t))))
+    (rontolisp::%clojure-rp-backref st n)))
+
+(defun rontolisp::%clojure-rp-named-ref (st create)
+  "\\k<name>: the back reference to the named group seen before it."
+  (if (not (= (rontolisp::%clojure-rp-read st) 60))
+      (rontolisp::%clojure-rp-error st
+       "\\k is not followed by '<' for named capturing group"))
+  (let* ((name
+          (rontolisp::%clojure-rp-group-name st
+                                             (rontolisp::%clojure-rp-read st)))
+         (idx (rontolisp::%clojure-re-name-lookup name (svref st 6))))
+    (if (null idx)
+        (rontolisp::%clojure-rp-error st
+                                      (concatenate 'string
+                                                   "named capturing group <"
+                                                   name "> does not exist")))
+    (if create (rontolisp::%clojure-rp-backref st idx) :meta)))
+
+(defun rontolisp::%clojure-rp-control (st)
+  "Java's c: \\cX, the code of X with its bit 64 flipped."
+  (if (< (rontolisp::%clojure-rp-cur st) (svref st 4))
+      (logxor (rontolisp::%clojure-rp-read st) 64)
+      (rontolisp::%clojure-rp-error st "Illegal control escape sequence")))
+
+(defun rontolisp::%clojure-rp-octal-p (code)
+  "Whether CODE is an octal digit."
+  (and (<= 48 code) (<= code 55)))
+
+(defun rontolisp::%clojure-rp-octal (st)
+  "Java's o: \\0 and one to three octal digits (three only up to \\0377)."
+  (let ((n (rontolisp::%clojure-rp-read st)))
+    (if (not (rontolisp::%clojure-rp-octal-p n))
+        (rontolisp::%clojure-rp-error st "Illegal octal escape sequence")
+        (let ((m (rontolisp::%clojure-rp-read st)))
+          (if (not (rontolisp::%clojure-rp-octal-p m))
+              (progn
+                (rontolisp::%clojure-rp-unread st)
+                (- n 48))
+              (let ((o (rontolisp::%clojure-rp-read st)))
+                (if (and (rontolisp::%clojure-rp-octal-p o) (<= n 51))
+                    (+ (* (- n 48) 64) (* (- m 48) 8) (- o 48))
+                    (progn
+                      (rontolisp::%clojure-rp-unread st)
+                      (+ (* (- n 48) 8) (- m 48))))))))))
+
+(defun rontolisp::%clojure-rp-hex (st)
+  "Java's x: \\xhh or \\x{h...h}."
+  (let ((n (rontolisp::%clojure-rp-read st)))
+    (cond ((rontolisp::%clojure-re-hex-value n)
+           (let ((m (rontolisp::%clojure-rp-read st)))
+             (if (rontolisp::%clojure-re-hex-value m)
+                 (+ (* (rontolisp::%clojure-re-hex-value n) 16)
+                    (rontolisp::%clojure-re-hex-value m))
+                 (rontolisp::%clojure-rp-error st
+                  "Illegal hexadecimal escape sequence"))))
+          ((and (= n 123)
+            (rontolisp::%clojure-re-hex-value (rontolisp::%clojure-rp-peek st)))
+           (let ((v 0) (d (rontolisp::%clojure-rp-read st)))
+             (do ()
+                 ((not (rontolisp::%clojure-re-hex-value d)))
+               (setq v (+ (* v 16) (rontolisp::%clojure-re-hex-value d)))
+               (if (> v 1114111)
+                   (rontolisp::%clojure-rp-error st
+                    "Hexadecimal codepoint is too big"))
+               (setq d (rontolisp::%clojure-rp-read st)))
+             (if (not (= d 125))
+                 (rontolisp::%clojure-rp-error st
+                  "Unclosed hexadecimal escape sequence"))
+             v))
+          (t (rontolisp::%clojure-rp-error st
+              "Illegal hexadecimal escape sequence")))))
+
+(defun rontolisp::%clojure-rp-uxxxx (st)
+  "Four hex digits of a \\u escape."
+  (let ((v 0))
+    (dotimes (i 4 v)
+      (let ((d
+             (rontolisp::%clojure-re-hex-value
+              (rontolisp::%clojure-rp-read st))))
         (if (null d)
-            nil
-            (rontolisp::%clojure-re-hex-acc s (+ j 1) end (+ (* v 16) d))))))
+            (rontolisp::%clojure-rp-error st "Illegal Unicode escape sequence"))
+        (setq v (+ (* v 16) d))))))
 
-(defun rontolisp::%clojure-re-parse-control (s len j n)
-  "A \\cX control character at J: (pos node ngroups)."
-  (if (>= j len)
-      (rontolisp::%clojure-pattern-syntax-exception
-       "unsupported regex: bad control escape")
-      (let ((c (char-code (char s j))))
-        (if (and (<= 65 c) (<= c 90))
-            (list (+ j 1) (list :lit (- c 64)) n)
-            (if (and (<= 97 c) (<= c 122))
-                (list (+ j 1) (list :lit (- c 96)) n)
-                (rontolisp::%clojure-pattern-syntax-exception
-                 "unsupported regex: bad control escape"))))))
+(defun rontolisp::%clojure-rp-unicode (st)
+  "Java's u: \\uhhhh, a high surrogate joined with a low one spelled \\uhhhh
+   right after it."
+  (let ((n (rontolisp::%clojure-rp-uxxxx st)))
+    (if (and (<= 55296 n) (<= n 56319))
+        (let ((cur (rontolisp::%clojure-rp-cur st)))
+          (if (and (= (rontolisp::%clojure-rp-read st) 92)
+                   (= (rontolisp::%clojure-rp-read st) 117))
+              (let ((n2 (rontolisp::%clojure-rp-uxxxx st)))
+                (if (and (<= 56320 n2) (<= n2 57343))
+                    (+ 65536 (* (- n 55296) 1024) (- n2 56320))
+                    (progn
+                      (rontolisp::%clojure-rp-go st cur)
+                      n)))
+              (progn
+                (rontolisp::%clojure-rp-go st cur)
+                n)))
+        n)))
 
-(defun rontolisp::%clojure-re-parse-octal (s len j n)
-  "An octal escape at J (the leading zero): (pos node ngroups)."
-  (let ((k (rontolisp::%clojure-re-octal-end s len (+ j 1) (+ j 3))))
-    (list k (list :lit (rontolisp::%clojure-re-octal-value s j k 0)) n)))
+;;; The study: Java's TreeInfo over a chain of ops, in its int arithmetic.
 
-(defun rontolisp::%clojure-re-octal-end (s len j stop)
-  "Past up to two more octal digits from J: the end position."
-  (if (or (>= j stop) (>= j len)
-          (not
-           (and (<= 48 (char-code (char s j))) (<= (char-code (char s j)) 55))))
-      j
-      (rontolisp::%clojure-re-octal-end s len (+ j 1) stop)))
+(defun rontolisp::%clojure-rp-i32 (n)
+  "N wrapped to Java's int."
+  (rontolisp::%clojure-wrap-bits n 32))
 
-(defun rontolisp::%clojure-re-octal-value (s j end v)
-  "The octal value over [J, END)."
-  (if (>= j end)
-      v
-      (rontolisp::%clojure-re-octal-value s (+ j 1) end
-       (+ (* v 8) (- (char-code (char s j)) 48)))))
+(defun rontolisp::%clojure-rp-study (chain mn mx valid det)
+  "Java's study of the node chain CHAIN (ops in match order) from the
+   TreeInfo (MN MX VALID DET): (minLength maxLength maxValid deterministic),
+   so a look-behind's bounds and refusal and a group closure's node are the
+   oracle's."
+  (if (null chain)
+      (list mn mx valid det)
+      (let* ((op (car chain)) (rest (cdr chain)) (tag (car op)))
+        (cond ((rontolisp::%clojure-re-char-op-p op)
+               (rontolisp::%clojure-rp-study rest
+                (rontolisp::%clojure-rp-i32 (+ mn 1))
+                (rontolisp::%clojure-rp-i32 (+ mx 1)) valid det))
+              ((eq tag :seq)
+               (rontolisp::%clojure-rp-study (append (cdr op) rest) mn mx valid
+                                             det))
+              ((eq tag :grp)
+               (rontolisp::%clojure-rp-study (cons (car (cdr (cdr op))) rest) mn
+                                             mx valid det))
+              ((eq tag :lb)
+               (rontolisp::%clojure-rp-study rest
+                (rontolisp::%clojure-rp-i32 (+ mn 1))
+                (rontolisp::%clojure-rp-i32 (+ mx 2)) valid det))
+              ((or (eq tag :backref) (eq tag :ibackref) (eq tag :ubackref))
+               (rontolisp::%clojure-rp-study rest mn mx nil det))
+              ((eq tag :atomic)
+               (let ((r
+                      (rontolisp::%clojure-rp-study (list (car (cdr op))) mn mx
+                                                    valid det)))
+                 (rontolisp::%clojure-rp-study rest (nth 0 r) (nth 1 r)
+                                               (nth 2 r) (nth 3 r))))
+              ((eq tag :alt)
+               (rontolisp::%clojure-rp-study-branch (cdr op) rest mn mx valid))
+              ((eq tag :rep)
+               (rontolisp::%clojure-rp-study-rep op rest mn mx valid det))
+              (t (rontolisp::%clojure-rp-study rest mn mx valid det))))))
 
-(defun rontolisp::%clojure-re-parse-backref (s len j v n)
-  "A backreference from J (past the first digit) over V: (pos node ngroups).
-   Any digit run compiles (like the oracle); a group that never participates
-   never matches."
-  (if (or (>= j len)
-          (not (rontolisp::%clojure-re-digit-code-p (char-code (char s j)))))
-      (list j (list :backref v) n)
-      (rontolisp::%clojure-re-parse-backref s len (+ j 1)
-       (+ (* v 10) (- (char-code (char s j)) 48)) n)))
+(defun rontolisp::%clojure-rp-study-branch (alts rest mn mx valid)
+  "Java's Branch.study: each of ALTS (NIL matching nothing) from an empty
+   TreeInfo, then the REST of the chain from an empty one, all summed."
+  (let ((min2 2147483647) (max2 -1) (v valid))
+    (dolist (a alts)
+      (let ((r
+             (if a
+                 (rontolisp::%clojure-rp-study (list a) 0 0 t t)
+                 (list 0 0 t t))))
+        (if (< (nth 0 r) min2) (setq min2 (nth 0 r)))
+        (if (> (nth 1 r) max2) (setq max2 (nth 1 r)))
+        (if (not (nth 2 r)) (setq v nil))))
+    (let ((r (rontolisp::%clojure-rp-study rest 0 0 t t)))
+      (list (rontolisp::%clojure-rp-i32
+             (+ (nth 0 r) (rontolisp::%clojure-rp-i32 (+ mn min2))))
+            (rontolisp::%clojure-rp-i32
+             (+ (nth 1 r) (rontolisp::%clojure-rp-i32 (+ mx max2))))
+            (and (nth 2 r) v) nil))))
 
-(defun rontolisp::%clojure-re-parse-quoted (s len j n)
-  "A \\Q..\\E span from J: (pos node ngroups) of literal codes."
-  (let ((end (rontolisp::%clojure-re-quoted-end s len j)))
-    (let ((codes (rontolisp::%clojure-re-quoted-codes s j end nil)))
-      (list (if (>= end len) len (+ end 2))
-            (rontolisp::%clojure-re-seq-node
-             (mapcar (lambda (c) (list :lit c)) codes)) n))))
+(defun rontolisp::%clojure-rp-study-rep (op rest mn mx valid det)
+  "The study of the quantified OP by the node the oracle built for it."
+  (let ((unit (nth 1 op))
+        (cmin (nth 2 op))
+        (cmax (or (nth 3 op) 2147483647))
+        (kind (nth 5 op)))
+    (cond ((eq kind :cpg)
+           (rontolisp::%clojure-rp-study rest
+            (rontolisp::%clojure-rp-i32 (+ mn cmin))
+            (if valid (rontolisp::%clojure-rp-i32 (+ mx 2147483647)) mx) valid
+            nil))
+          ((eq kind :ques)
+           (let ((r (rontolisp::%clojure-rp-study (list unit) mn mx valid det)))
+             (rontolisp::%clojure-rp-study rest mn (nth 1 r) (nth 2 r) nil)))
+          ((eq kind :branch)
+           (rontolisp::%clojure-rp-study-branch (list unit nil) rest mn mx
+                                                valid))
+          ((or (eq kind :loop) (eq kind :loopm)) (list mn mx nil nil))
+          (t
+           (let* ((r (rontolisp::%clojure-rp-study (list unit) 0 0 t t))
+                  (tmin (rontolisp::%clojure-rp-i32 (+ (* (nth 0 r) cmin) mn)))
+                  (tmax (rontolisp::%clojure-rp-i32 (+ (* (nth 1 r) cmax) mx)))
+                  (both (and valid (nth 2 r))))
+             (rontolisp::%clojure-rp-study rest (if (< tmin mn) 268435455 tmin)
+              (if both tmax (nth 1 r)) (and both (not (< tmax mx)))
+              (if (and (nth 3 r) (= cmin cmax)) det nil)))))))
 
-(defun rontolisp::%clojure-re-quoted-end (s len j)
-  "The position of the \\E closing the quote from J, or LEN."
-  (if (or (>= j len)
-          (and (= (char-code (char s j)) (char-code #\\)) (< (+ j 1) len)
-               (= (char-code (char s (+ j 1))) (char-code #\E))))
-      j
-      (rontolisp::%clojure-re-quoted-end s len (+ j 1))))
-
-(defun rontolisp::%clojure-re-quoted-codes (s j end acc)
-  "The codes over [J, END), reversed onto ACC."
-  (if (>= j end)
-      (reverse acc)
-      (rontolisp::%clojure-re-quoted-codes s (+ j 1) end
-                                           (cons (char-code (char s j)) acc))))
-
-(defun rontolisp::%clojure-re-parse-class (s len i)
-  "A character class body from I (past the opening bracket): (pos node)."
-  (let ((neg nil) (j i) (first nil))
-    (if (and (< j len) (= (char-code (char s j)) 94))
-        (progn
-          (setq neg t)
-          (setq j (+ j 1)))
-        nil)
-    (if (and (< j len) (= (char-code (char s j)) 93))
-        (progn
-          (setq first (list 93))
-          (setq j (+ j 1)))
-        nil)
-    (let ((r (rontolisp::%clojure-re-class-rest s len j first)))
-      (list (car r) (list :cls neg (reverse (car (cdr r))))))))
-
-(defun rontolisp::%clojure-re-class-rest (s len j acc)
-  "The class tail from J over the reversed ACC: (endpos items)."
-  (cond ((>= j len)
-         (rontolisp::%clojure-pattern-syntax-exception
-          "unsupported regex: unclosed character class"))
-        ((= (char-code (char s j)) 93) (list (+ j 1) acc))
-        (t (let ((step (rontolisp::%clojure-re-class-item s len j acc)))
-             (rontolisp::%clojure-re-class-rest s len (car step)
-                                                (car (cdr step)))))))
-
-(defun rontolisp::%clojure-re-class-item (s len j acc)
-  "One class item at J over the reversed ACC: (pos items)."
-  (let ((c (char-code (char s j))))
-    (cond ((= c 92) (rontolisp::%clojure-re-class-escaped s len j acc))
-          ((and (= c 91) (< (+ j 1) len)
-                (= (char-code (char s (+ j 1))) (char-code #\:)))
-           (error "unsupported regex: POSIX classes are not supported"))
-          ((and (= c 38) (< (+ j 1) len) (= (char-code (char s (+ j 1))) 38))
-           (error "unsupported regex: class intersection is not supported"))
-          (t (rontolisp::%clojure-re-class-range s len j acc c (+ j 1))))))
-
-(defun rontolisp::%clojure-re-class-range (s len j acc lo k)
-  "The item for the code LO at J, a range past K when a dash follows: (pos
-   items). A dash at the end (or past the end) is literal."
-  (if (and (< k len) (= (char-code (char s k)) (char-code #\-)) (< (+ k 1) len)
-           (not (= (char-code (char s (+ k 1))) (char-code #\]))))
-      (let ((r (rontolisp::%clojure-re-class-range-end s len (+ k 1))))
-        (if (> lo (car (cdr r)))
-            (rontolisp::%clojure-pattern-syntax-exception
-             "unsupported regex: bad character range")
-            (list (car r) (cons (list :r lo (car (cdr r))) acc))))
-      (list k (cons lo acc))))
-
-(defun rontolisp::%clojure-re-class-range-end (s len j)
-  "A range endpoint at J: (pos code)."
-  (if (= (char-code (char s j)) 92)
-      (let ((r (rontolisp::%clojure-re-parse-escape s len j 0 t)))
-        (let ((v (car (cdr r))))
-          (if (and (consp v) (eq (car v) :lit))
-              (list (car r) (car (cdr v)))
-              (rontolisp::%clojure-pattern-syntax-exception
-               "unsupported regex: bad character range"))))
-      (list (+ j 1) (char-code (char s j)))))
-
-(defun rontolisp::%clojure-re-class-escaped (s len j acc)
-  "A backslashed class item at J (the backslash) over the reversed ACC:
-   (pos items). Single codes may open ranges; class nodes never do."
-  (let ((r (rontolisp::%clojure-re-parse-escape s len j 0 t)))
-    (let ((k (car r)) (v (car (cdr r))))
-      (cond ((and (consp v) (eq (car v) :lit))
-             (rontolisp::%clojure-re-class-range s len j acc (car (cdr v)) k))
-            ((and (consp v) (eq (car v) :cls))
-             (if (rontolisp::%clojure-re-dash-follows s len k)
-                 (rontolisp::%clojure-pattern-syntax-exception
-                  "unsupported regex: bad character range")
-                 (list k (cons v acc))))
-            ((and (consp v) (eq (car v) :seq))
-             (rontolisp::%clojure-re-class-splice s len k acc (cdr v)))
-            (t (rontolisp::%clojure-pattern-syntax-exception
-                "unsupported regex: bad escape"))))))
-
-(defun rontolisp::%clojure-re-dash-follows (s len k)
-  "Whether a range dash follows at K (a dash past a non-] char)."
-  (and (< k len) (= (char-code (char s k)) (char-code #\-)) (< (+ k 1) len)
-       (not (= (char-code (char s (+ k 1))) (char-code #\])))))
-
-(defun rontolisp::%clojure-re-class-splice (s len k acc lits)
-  "The \\Q..\\E literals LITS spliced raw (no ranges open inside a quote)."
-  (if (null lits)
-      (list k acc)
-      (rontolisp::%clojure-re-class-splice s len k
-                                           (cons (car (cdr (car lits))) acc)
-                                           (cdr lits))))
+;;; The matcher: java.util.regex's match nodes over the group vector of one
+;;; search (start and end of group N at 2N and 2N+1, -1 for none), which a group
+;;; sets as its body ends and restores when what follows fails (GroupHead and
+;;; GroupTail), so a capture made inside a lookaround, an atomic group or a
+;;; quantified unit stays when the match backs out past it, as in the oracle.
 
 (defun rontolisp::%clojure-re-item-test (item code)
   "Whether the class ITEM matches CODE."
@@ -6075,12 +6853,36 @@
         ((eq item :w) (rontolisp::%clojure-re-word-char-p code))
         ((eq item :s) (rontolisp::%clojure-re-space-code-p code))
         ((eq item :d) (rontolisp::%clojure-re-digit-code-p code))
-        ((and (consp item) (eq (car item) :r))
+        ((eq item :h) (rontolisp::%clojure-re-horiz-p code))
+        ((eq item :v) (rontolisp::%clojure-re-vert-p code))
+        ((not (consp item)) nil)
+        ((eq (car item) :r)
          (and (<= (car (cdr item)) code) (<= code (car (cdr (cdr item))))))
-        ;; a \s \d \w member (or its negation) is a (:cls negated items) node
-        ((and (consp item) (eq (car item) :cls))
+        ;; a \s \d \w member (or its negation), a nested class or union
+        ((eq (car item) :cls)
          (rontolisp::%clojure-re-cls-test (car (cdr item))
                                           (car (cdr (cdr item))) code))
+        ((eq (car item) :ri)
+         (let ((lo (car (cdr item))) (hi (car (cdr (cdr item)))))
+           (or (and (<= lo code) (<= code hi))
+               (and (< code 128)
+                    (or (let ((u (rontolisp::%clojure-re-ascii-upper code)))
+                          (and (<= lo u) (<= u hi)))
+                        (let ((l (rontolisp::%clojure-re-ascii-lower code)))
+                          (and (<= lo l) (<= l hi))))))))
+        ((eq (car item) :ru)
+         (let ((lo (car (cdr item))) (hi (car (cdr (cdr item)))))
+           (or (and (<= lo code) (<= code hi))
+               (let ((up (rontolisp::%clojure-re-upcase code)))
+                 (or (and (<= lo up) (<= up hi))
+                     (let ((down (rontolisp::%clojure-re-downcase up)))
+                       (and (<= lo down) (<= down hi))))))))
+        ((eq (car item) :u)
+         (or (= code (car (cdr item)))
+             (= (rontolisp::%clojure-re-fold code) (car (cdr item)))))
+        ((eq (car item) :and)
+         (and (rontolisp::%clojure-re-item-test (car (cdr item)) code)
+              (rontolisp::%clojure-re-item-test (car (cdr (cdr item))) code)))
         (t nil)))
 
 (defun rontolisp::%clojure-re-any-item (items code)
@@ -6095,6 +6897,22 @@
   (let ((hit (rontolisp::%clojure-re-any-item items code)))
     (if neg (not hit) hit)))
 
+(defun rontolisp::%clojure-re-char-test (op code)
+  "Whether the one-character op OP matches CODE."
+  (let ((tag (car op)))
+    (cond ((eq tag :lit) (= code (car (cdr op))))
+          ((eq tag :cls)
+           (rontolisp::%clojure-re-cls-test (car (cdr op)) (car (cdr (cdr op)))
+                                            code))
+          ((eq tag :dot) (not (rontolisp::%clojure-re-line-term-p code)))
+          ((eq tag :ilit)
+           (= (rontolisp::%clojure-re-ascii-lower code) (car (cdr op))))
+          ((eq tag :ulit)
+           (or (= code (car (cdr op)))
+               (= (rontolisp::%clojure-re-fold code) (car (cdr op)))))
+          ((eq tag :udot) (not (= code 10)))
+          (t t))))
+
 (defun rontolisp::%clojure-re-word-boundary-p (s len pos)
   "Whether POS is a word boundary (ASCII word characters, like the oracle)."
   (let ((left
@@ -6105,161 +6923,499 @@
               (rontolisp::%clojure-re-word-char-p (char-code (char s pos))))))
     (if left (not right) right)))
 
-(defun rontolisp::%clojure-re-match (op s len pos groups k)
-  "Match OP at POS: the success continuation K over (end groups), or NIL.
-   Backtracking rides OR: a continuation answering NIL retries the next
-   alternative, so each combinator tries every choice in order."
-  (let ((tag (car op)))
-    (cond ((eq tag :lit)
-           (if (and (< pos len) (= (char-code (char s pos)) (car (cdr op))))
-               (funcall k (+ pos 1) groups)
-               nil))
-          ((eq tag :dot)
-           (if (and (< pos len) (not (= (char-code (char s pos)) 10))
-                    (not (= (char-code (char s pos)) 13)))
-               (funcall k (+ pos 1) groups)
-               nil))
-          ((eq tag :cls)
-           (if (and (< pos len)
-                    (rontolisp::%clojure-re-cls-test (car (cdr op))
-                                                     (car (cdr (cdr op)))
-                                                     (char-code (char s pos))))
-               (funcall k (+ pos 1) groups)
-               nil))
-          ((eq tag :bol) (if (= pos 0) (funcall k pos groups) nil))
-          ((eq tag :zend) (if (= pos len) (funcall k pos groups) nil))
-          ((eq tag :eol)
-           (if (or (= pos len)
-                   (and (= pos (- len 1)) (> len 0)
-                        (let ((c (char-code (char s (- len 1)))))
-                          (or (= c 10) (= c 13)))))
-               (funcall k pos groups)
-               nil))
-          ((eq tag :wb)
-           (if (rontolisp::%clojure-re-word-boundary-p s len pos)
-               (funcall k pos groups)
-               nil))
-          ((eq tag :nwb)
-           (if (rontolisp::%clojure-re-word-boundary-p s len pos)
-               nil
-               (funcall k pos groups)))
-          ((eq tag :seq)
-           (rontolisp::%clojure-re-match-seq (cdr op) s len pos groups k))
-          ((eq tag :alt)
-           (or (rontolisp::%clojure-re-match (car (cdr op)) s len pos groups k)
-               (rontolisp::%clojure-re-match (car (cdr (cdr op))) s len pos
-                                             groups k)))
-          ((eq tag :backref)
-           (rontolisp::%clojure-re-match-backref (car (cdr op)) groups s len pos
-                                                 k))
-          ((eq tag :rep)
-           (rontolisp::%clojure-re-match-rep (car (cdr op)) (car (cdr (cdr op)))
-                                             (car (cdr (cdr (cdr op))))
-                                             (car (cdr (cdr (cdr (cdr op))))) s
-                                             len pos groups k))
-          ((eq tag :grp)
-           (rontolisp::%clojure-re-match (car (cdr (cdr op))) s len pos groups
-                                         (lambda (p2 g2)
-                                           (funcall k p2
-                                                    (cons (list (car (cdr op))
-                                                                pos p2) g2)))))
-          (t (error "unsupported regex: bad opcode")))))
+(defun rontolisp::%clojure-re-anchor-p (tag s len pos)
+  "Whether the zero-width anchor TAG holds at POS of S (LEN long), as the
+   oracle's Begin, Caret, UnixCaret, Dollar, UnixDollar, End and Bound do:
+   a line ends at \\n (not after a \\r), \\r, U+0085, U+2028 or U+2029 (\\n
+   alone under UNIX_LINES), ^ in MULTILINE never holds at the very end."
+  (cond ((eq tag :bol) (= pos 0))
+        ((eq tag :eol)
+         (cond ((< pos (- len 2)) nil)
+               ((= pos (- len 2))
+                (and (= (char-code (char s pos)) 13)
+                     (= (char-code (char s (+ pos 1))) 10)))
+               ((< pos len)
+                (let ((c (char-code (char s pos))))
+                  (if (= c 10)
+                      (not
+                       (and (> pos 0) (= (char-code (char s (- pos 1))) 13)))
+                      (rontolisp::%clojure-re-line-term-p c))))
+               (t t)))
+        ((eq tag :zend) (= pos len))
+        ((eq tag :wb) (rontolisp::%clojure-re-word-boundary-p s len pos))
+        ((eq tag :nwb) (not (rontolisp::%clojure-re-word-boundary-p s len pos)))
+        ((eq tag :mbol)
+         (cond ((= pos len) nil)
+               ((> pos 0)
+                (let ((c (char-code (char s (- pos 1)))))
+                  (and (rontolisp::%clojure-re-line-term-p c)
+                       (not (and (= c 13) (= (char-code (char s pos)) 10))))))
+               (t t)))
+        ((eq tag :meol)
+         (if (< pos len)
+             (let ((c (char-code (char s pos))))
+               (if (= c 10)
+                   (not (and (> pos 0) (= (char-code (char s (- pos 1))) 13)))
+                   (rontolisp::%clojure-re-line-term-p c)))
+             t))
+        ((eq tag :ubol)
+         (cond ((= pos len) nil)
+               ((> pos 0) (= (char-code (char s (- pos 1))) 10))
+               (t t)))
+        ((eq tag :ueol)
+         (if (< pos len)
+             (and (= (char-code (char s pos)) 10) (= pos (- len 1)))
+             t))
+        ((eq tag :umeol) (if (< pos len) (= (char-code (char s pos)) 10) t))
+        (t nil)))
 
-(defun rontolisp::%clojure-re-match-seq (ops s len pos groups k)
+(defun rontolisp::%clojure-re-set-group (g idx start end)
+  "Set the bounds of the group IDX in the group vector G."
+  (setf (svref g (* 2 idx)) start)
+  (setf (svref g (+ (* 2 idx) 1)) end))
+
+(defun rontolisp::%clojure-re-match (op s len pos g k)
+  "Match OP at POS of S (LEN long) over the group vector G: the continuation
+   K's answer for the end position, or NIL. Backtracking rides OR: a
+   continuation answering NIL retries the next alternative, so each
+   combinator tries every choice in order."
+  (let ((tag (car op)))
+    (cond
+     ((eq tag :lit)
+      (if (and (< pos len) (= (char-code (char s pos)) (car (cdr op))))
+          (funcall k (+ pos 1))
+          nil))
+     ((eq tag :seq) (rontolisp::%clojure-re-match-seq (cdr op) s len pos g k))
+     ((eq tag :rep) (rontolisp::%clojure-re-match-rep op s len pos g k))
+     ((rontolisp::%clojure-re-char-op-p op)
+      (if (and (< pos len)
+               (rontolisp::%clojure-re-char-test op (char-code (char s pos))))
+          (funcall k (+ pos 1))
+          nil))
+     ((eq tag :grp)
+      (rontolisp::%clojure-re-match-group (car (cdr op)) (car (cdr (cdr op))) s
+                                          len pos g k))
+     ((eq tag :alt)
+      (or (rontolisp::%clojure-re-match (car (cdr op)) s len pos g k)
+          (rontolisp::%clojure-re-match (car (cdr (cdr op))) s len pos g k)))
+     ((eq tag :look)
+      (if (rontolisp::%clojure-re-first (car (cdr op)) s len pos g)
+          (funcall k pos)
+          nil))
+     ((eq tag :nlook)
+      (if (rontolisp::%clojure-re-first (car (cdr op)) s len pos g)
+          nil
+          (funcall k pos)))
+     ((eq tag :behind)
+      (if (rontolisp::%clojure-re-behind op s len pos g) (funcall k pos) nil))
+     ((eq tag :nbehind)
+      (if (rontolisp::%clojure-re-behind op s len pos g) nil (funcall k pos)))
+     ((eq tag :atomic)
+      (let ((end (rontolisp::%clojure-re-first (car (cdr op)) s len pos g)))
+        (if end (funcall k end) nil)))
+     ((or (eq tag :backref) (eq tag :ibackref) (eq tag :ubackref))
+      (rontolisp::%clojure-re-match-backref op s len pos g k))
+     ((eq tag :lb) (rontolisp::%clojure-re-match-linebreak s len pos k))
+     ((rontolisp::%clojure-re-anchor-p tag s len pos) (funcall k pos))
+     (t nil))))
+
+(defun rontolisp::%clojure-re-match-seq (ops s len pos g k)
   "Match the OPS list in order at POS."
   (if (null ops)
-      (funcall k pos groups)
-      (rontolisp::%clojure-re-match (car ops) s len pos groups
-                                    (lambda (p2 g2)
+      (funcall k pos)
+      (rontolisp::%clojure-re-match (car ops) s len pos g
+                                    (lambda (p2)
                                       (rontolisp::%clojure-re-match-seq
-                                       (cdr ops) s len p2 g2 k)))))
+                                       (cdr ops) s len p2 g k)))))
 
-(defun rontolisp::%clojure-re-match-backref (idx groups s len pos k)
-  "Match the IDX group's captured string at POS (fail past no match)."
-  (let ((b (assoc idx groups)))
-    (if (null b)
+(defun rontolisp::%clojure-re-match-group (idx body s len pos g k)
+  "The group IDX over BODY at POS (the oracle's GroupHead and GroupTail): the
+   group takes POS to where BODY ends before K runs, and its old bounds come
+   back when K fails."
+  (rontolisp::%clojure-re-match body s len pos g
+                                (lambda (end)
+                                  (let ((old-start (svref g (* 2 idx)))
+                                        (old-end (svref g (+ (* 2 idx) 1))))
+                                    (rontolisp::%clojure-re-set-group g idx pos
+                                                                      end)
+                                    (or (funcall k end)
+                                        (progn
+                                          (rontolisp::%clojure-re-set-group g
+                                           idx old-start old-end)
+                                          nil))))))
+
+(defun rontolisp::%clojure-re-first (op s len pos g)
+  "OP's first success at POS: its end, or NIL. Its captures stay (the match
+   behind it is never retried)."
+  (rontolisp::%clojure-re-match op s len pos g (lambda (end) end)))
+
+(defun rontolisp::%clojure-re-behind (op s len pos g)
+  "Whether the look-behind OP (:behind body min max) holds at POS as the
+   oracle's Behind tries it: its body from POS - min back to POS - max (not
+   before 0), the first start one of whose matches ends at POS."
+  (let ((body (car (cdr op)))
+        (from (rontolisp::%clojure-rp-i32 (- pos (car (cdr (cdr (cdr op)))))))
+        (j (rontolisp::%clojure-rp-i32 (- pos (car (cdr (cdr op))))))
+        (found nil))
+    (if (< from 0) (setq from 0))
+    (if (> j pos) (setq j pos))
+    (do ()
+        ((or found (< j from)) found)
+      (setq found
+            (rontolisp::%clojure-re-match body s len j g
+             (lambda (end) (if (= end pos) t nil))))
+      (setq j (- j 1)))))
+
+(defun rontolisp::%clojure-re-match-backref (op s len pos g k)
+  "Match at POS the text the group of the back reference OP took: exactly,
+   or case-insensitively (:ibackref ASCII, :ubackref Unicode); fail past a
+   group that took no part or that the pattern lacks."
+  (let ((i2 (* 2 (car (cdr op)))) (tag (car op)))
+    (if (or (>= i2 (length g)) (< (svref g i2) 0))
         nil
-        (let ((gs (car (cdr b))) (ge (car (cdr (cdr b)))))
-          (if (and (<= (+ pos (- ge gs)) len)
-                   (string= (subseq s gs ge) (subseq s pos (+ pos (- ge gs)))))
-              (funcall k (+ pos (- ge gs)) groups)
-              nil)))))
+        (let* ((gs (svref g i2))
+               (n (- (svref g (+ i2 1)) gs))
+               (ok (<= (+ pos n) len))
+               (i 0))
+          (do ()
+              ((or (not ok) (>= i n)))
+            (let ((c1 (char-code (char s (+ pos i))))
+                  (c2 (char-code (char s (+ gs i)))))
+              (if (not (= c1 c2))
+                  (cond ((eq tag :ibackref)
+                         (if (not
+                              (= (rontolisp::%clojure-re-ascii-lower c1)
+                                 (rontolisp::%clojure-re-ascii-lower c2)))
+                             (setq ok nil)))
+                        ((eq tag :ubackref)
+                         (let ((u1 (rontolisp::%clojure-re-upcase c1))
+                               (u2 (rontolisp::%clojure-re-upcase c2)))
+                           (if (not
+                                (or (= u1 u2)
+                                    (= (rontolisp::%clojure-re-downcase u1)
+                                       (rontolisp::%clojure-re-downcase u2))))
+                               (setq ok nil))))
+                        (t (setq ok nil)))))
+            (setq i (+ i 1)))
+          (if ok (funcall k (+ pos n)) nil)))))
 
-(defun rontolisp::%clojure-re-match-rep (unit min max mode s len pos groups k)
-  "Match UNIT between MIN and (MAX, NIL unbounded) times."
-  (cond ((eq mode :reluctant)
-         (rontolisp::%clojure-re-match-rep-reluctant unit min max s len pos
-                                                     groups k))
-        ((eq mode :possessive)
-         (rontolisp::%clojure-re-match-rep-possessive unit min max s len pos
-                                                      groups k))
-        (t (rontolisp::%clojure-re-match-rep-greedy unit min max s len pos
-                                                    groups k))))
+(defun rontolisp::%clojure-re-match-linebreak (s len pos k)
+  "\\R: \\r\\n, giving way to \\r alone when what follows fails, or one of
+   \\n \\x0B \\f \\r U+0085 U+2028 U+2029 (the oracle's LineEnding)."
+  (if (< pos len)
+      (let ((c (char-code (char s pos))))
+        (cond ((= c 13)
+               (or (and (< (+ pos 1) len) (= (char-code (char s (+ pos 1))) 10)
+                        (funcall k (+ pos 2))) (funcall k (+ pos 1))))
+              ((rontolisp::%clojure-re-vert-p c) (funcall k (+ pos 1)))
+              (t nil)))
+      nil))
 
-(defun rontolisp::%clojure-re-match-rep-greedy (unit min max s len pos groups k)
-  "Greedy repetition: one more iteration first, fewer on failure. An empty
-   iteration settles (it must not loop, like the oracle)."
-  (if (and max (= max 0))
-      (if (> min 0) nil (funcall k pos groups))
-      (or (rontolisp::%clojure-re-match unit s len pos groups
-           (lambda (p2 g2)
-             (if (= p2 pos)
-                 (if (> min 0) nil (funcall k pos groups))
-                 (or (rontolisp::%clojure-re-match-rep-greedy unit
-                      (if (> min 0) (- min 1) 0) (if max (- max 1) nil) s len p2
-                      g2 k) (if (> min 0) nil (funcall k pos groups))))))
-          (if (> min 0) nil (funcall k pos groups)))))
+(defun rontolisp::%clojure-re-match-rep (op s len pos g k)
+  "Match the quantified op (:rep unit min max mode kind) as the oracle's node
+   of that kind does."
+  (let ((unit (nth 1 op))
+        (lo (nth 2 op))
+        (hi (nth 3 op))
+        (mode (nth 4 op))
+        (kind (nth 5 op)))
+    (cond ((rontolisp::%clojure-re-char-op-p unit)
+           (rontolisp::%clojure-re-match-run unit lo hi mode s len pos k))
+          ((or (eq kind :loop) (eq kind :loopm))
+           (rontolisp::%clojure-re-loop op s len pos g k))
+          ((eq kind :branch)
+           (if (eq mode :reluctant)
+               (or (funcall k pos)
+                   (rontolisp::%clojure-re-match unit s len pos g k))
+               (or (rontolisp::%clojure-re-match unit s len pos g k)
+                   (funcall k pos))))
+          ((eq kind :gcurly)
+           (rontolisp::%clojure-re-group-curly (car (cdr unit))
+                                               (car (cdr (cdr unit))) lo hi mode
+                                               s len pos g k))
+          (t (rontolisp::%clojure-re-curly unit lo hi mode s len pos g k)))))
 
-(defun rontolisp::%clojure-re-match-first (unit s len pos groups)
-  "UNIT's first success as (end . groups), or NIL: the capturing
-   continuation never fails, so no alternative is ever retried."
-  (rontolisp::%clojure-re-match unit s len pos groups
-                                (lambda (end g) (cons end g))))
+(defun rontolisp::%clojure-re-match-run (unit lo hi mode s len pos k)
+  "A quantified one-character UNIT: the matching run from POS counted at
+   once, then tried longest first (greedy), shortest first (reluctant) or
+   only longest (possessive)."
+  (let ((top (if hi (+ pos hi) len)))
+    (if (> top len) (setq top len))
+    (if (eq mode :reluctant)
+        (let ((end pos) (found nil) (stop nil))
+          (do ()
+              ((or stop (>= end (+ pos lo))))
+            (if (and (< end len)
+                     (rontolisp::%clojure-re-char-test unit
+                      (char-code (char s end))))
+                (setq end (+ end 1))
+                (setq stop t)))
+          (if stop
+              nil
+              (do ()
+                  ((or found stop) found)
+                (setq found (funcall k end))
+                (if (not found)
+                    (if (and (< end top)
+                             (rontolisp::%clojure-re-char-test unit
+                              (char-code (char s end))))
+                        (setq end (+ end 1))
+                        (setq stop t))))))
+        (let ((end pos))
+          (do ()
+              ((or (>= end top)
+                   (not
+                    (rontolisp::%clojure-re-char-test unit
+                     (char-code (char s end))))))
+            (setq end (+ end 1)))
+          (cond ((< (- end pos) lo) nil)
+                ((eq mode :possessive) (funcall k end))
+                (t (let ((found nil) (least (+ pos lo)))
+                     (do ()
+                         ((or found (< end least)) found)
+                       (setq found (funcall k end))
+                       (setq end (- end 1))))))))))
 
-(defun rontolisp::%clojure-re-match-max-commit (unit min max s len pos groups)
-  "UNIT consumed greedily (each iteration its first success, like the
-   oracle's possessive lock): (end . groups), or NIL past an unsatisfied MIN."
-  (if (and max (= max 0))
-      (if (> min 0) nil (cons pos groups))
-      (let ((once (rontolisp::%clojure-re-match-first unit s len pos groups)))
-        (if (null once)
-            (if (> min 0) nil (cons pos groups))
-            (if (= (car once) pos)
-                (if (> min 0) nil (cons pos groups))
-                (rontolisp::%clojure-re-match-max-commit unit
-                 (if (> min 0) (- min 1) 0) (if max (- max 1) nil) s len
-                 (car once) (cdr once)))))))
+(defun rontolisp::%clojure-re-iterate (unit lo s len pos g)
+  "The first LO iterations of UNIT from POS, each its first success (an empty
+   one standing for the rest): where they end, or NIL."
+  (let ((p pos) (n 0))
+    (do ()
+        ((or (null p) (>= n lo)) p)
+      (let ((end (rontolisp::%clojure-re-first unit s len p g)))
+        (setq n (if (and end (= end p)) lo (+ n 1)))
+        (setq p end)))))
 
-(defun rontolisp::%clojure-re-match-rep-possessive
-    (unit min max s len pos groups k)
-  "Possessive repetition: the greedy consumption commits (no count is given
-   back), then K runs once."
-  (let ((res
-         (rontolisp::%clojure-re-match-max-commit unit min max s len pos
-                                                  groups)))
-    (if (null res) nil (funcall k (car res) (cdr res)))))
+(defun rontolisp::%clojure-re-curly (unit lo hi mode s len pos g k)
+  "The oracle's Curly: UNIT (no group, or a possessive one) repeated, each
+   iteration its first success; the minimum first, then greedy takes every
+   further one and gives them back one at a time, reluctant adds them one at
+   a time, possessive keeps them all. An empty iteration ends the run."
+  (let ((p (rontolisp::%clojure-re-iterate unit lo s len pos g)) (n lo))
+    (cond ((null p) nil)
+          ((eq mode :reluctant)
+           (let ((found nil) (stop nil))
+             (do ()
+                 ((or found stop) found)
+               (setq found (funcall k p))
+               (if (not found)
+                   (let ((end
+                          (if (and hi (>= n hi))
+                              nil
+                              (rontolisp::%clojure-re-first unit s len p g))))
+                     (if (or (null end) (= end p))
+                         (setq stop t)
+                         (progn
+                           (setq p end)
+                           (setq n (+ n 1)))))))))
+          (t (let ((ends (list p)) (stop nil))
+               (do ()
+                   ((or stop (and hi (>= n hi))))
+                 (let ((end (rontolisp::%clojure-re-first unit s len p g)))
+                   (if (or (null end) (= end p))
+                       (setq stop t)
+                       (progn
+                         (setq p end)
+                         (setq n (+ n 1))
+                         (setq ends (cons p ends))))))
+               (if (eq mode :possessive)
+                   (funcall k p)
+                   (let ((found nil))
+                     (do ((rest ends (cdr rest)))
+                         ((or found (null rest)) found)
+                       (setq found (funcall k (car rest)))))))))))
 
-(defun rontolisp::%clojure-re-match-rep-reluctant
-    (unit min max s len pos groups k)
-  "Reluctant repetition: settle first, iterate on failure."
-  (or (if (> min 0) nil (funcall k pos groups))
-      (and (or (null max) (> max 0))
-           (rontolisp::%clojure-re-match unit s len pos groups
-            (lambda (p2 g2)
-              (if (= p2 pos)
-                  nil
-                  (rontolisp::%clojure-re-match-rep-reluctant unit
-                   (if (> min 0) (- min 1) 0) (if max (- max 1) nil) s len p2 g2
-                   k)))))))
+(defun rontolisp::%clojure-re-group-curly (idx body lo hi mode s len pos g k)
+  "The oracle's GroupCurly: the group IDX whose BODY matches one way,
+   repeated. Each iteration sets the group; greedy backs off resetting it to
+   the iteration kept, and to what it was after the minimum at the minimum;
+   an empty iteration ends the run (greedy: its bounds dropped); a failure
+   restores the group."
+  (let ((save-start (svref g (* 2 idx)))
+        (save-end (svref g (+ (* 2 idx) 1)))
+        (p pos)
+        (n 0)
+        (fail nil))
+    (do ()
+        ((or fail (>= n lo)))
+      (let ((end (rontolisp::%clojure-re-first body s len p g)))
+        (if (null end)
+            (setq fail t)
+            (progn
+              (rontolisp::%clojure-re-set-group g idx p end)
+              (setq n (if (= end p) lo (+ n 1)))
+              (setq p end)))))
+    (let ((found
+           (cond (fail nil)
+                 ((eq mode :reluctant)
+                  (rontolisp::%clojure-re-group-lazy idx body n hi s len p g k))
+                 (t (rontolisp::%clojure-re-group-greedy idx body n hi s len p g
+                                                         k)))))
+      (if (not found)
+          (rontolisp::%clojure-re-set-group g idx save-start save-end))
+      found)))
 
-(defun rontolisp::%clojure-re-find-from (ops s len from)
-  "The leftmost match at or past FROM: (start end groups), or NIL."
-  (do ((pos from (+ pos 1)) (found nil))
-      ((or found (> pos len)) found)
-    (let ((hit
-           (rontolisp::%clojure-re-match ops s len pos nil
-                                         (lambda (end g) (list pos end g)))))
-      (if hit (setq found hit)))))
+(defun rontolisp::%clojure-re-group-greedy (idx body n hi s len pos g k)
+  "GroupCurly's greedy pass from POS, N iterations done."
+  (let ((save-start (svref g (* 2 idx)))
+        (save-end (svref g (+ (* 2 idx) 1)))
+        (p pos)
+        (ends nil)
+        (stop nil))
+    (do ()
+        ((or stop (and hi (>= n hi))))
+      (let ((end (rontolisp::%clojure-re-first body s len p g)))
+        (cond ((null end) (setq stop t))
+              ((= end p) (setq stop t))
+              (t
+               (rontolisp::%clojure-re-set-group g idx p end)
+               (setq ends (cons (cons p end) ends))
+               (setq p end)
+               (setq n (+ n 1))))))
+    (let ((found nil))
+      (do ((rest ends (cdr rest)))
+          ((or found (null rest)))
+        (rontolisp::%clojure-re-set-group g idx (car (car rest))
+                                          (cdr (car rest)))
+        (setq found (funcall k (cdr (car rest)))))
+      (or found
+          (progn
+            (rontolisp::%clojure-re-set-group g idx save-start save-end)
+            (funcall k pos))))))
+
+(defun rontolisp::%clojure-re-group-lazy (idx body n hi s len pos g k)
+  "GroupCurly's reluctant pass from POS, N iterations done: the continuation
+   first, one more iteration on its failure; an empty one fails."
+  (let ((p pos) (found nil) (stop nil))
+    (do ()
+        ((or found stop) found)
+      (setq found (funcall k p))
+      (if (not found)
+          (let ((end
+                 (if (and hi (>= n hi))
+                     nil
+                     (rontolisp::%clojure-re-first body s len p g))))
+            (if (or (null end) (= end p))
+                (setq stop t)
+                (progn
+                  (rontolisp::%clojure-re-set-group g idx p end)
+                  (setq p end)
+                  (setq n (+ n 1)))))))))
+
+(defun rontolisp::%clojure-re-loop (op s len pos g k)
+  "The oracle's Loop (LazyLoop under :reluctant) entry for the quantified
+   group OP whose body matches in more than one way: each iteration
+   backtracks with the ones after it."
+  (let ((unit (nth 1 op))
+        (lo (nth 2 op))
+        (hi (nth 3 op))
+        (lazy (eq (nth 4 op) :reluctant)))
+    (cond ((> lo 0)
+           (rontolisp::%clojure-re-match unit s len pos g
+                                         (lambda (p2)
+                                           (rontolisp::%clojure-re-loop-next op
+                                            1 pos s len p2 g k))))
+          ((and hi (= hi 0)) (funcall k pos))
+          (lazy (or (funcall k pos)
+                    (rontolisp::%clojure-re-match unit s len pos g
+                     (lambda (p2)
+                       (rontolisp::%clojure-re-loop-next op 1 pos s len p2 g
+                                                         k)))))
+          (t (or (rontolisp::%clojure-re-match unit s len pos g
+                  (lambda (p2)
+                    (rontolisp::%clojure-re-loop-next op 1 pos s len p2 g k)))
+                 (funcall k pos))))))
+
+(defun rontolisp::%clojure-re-loop-memo (op g len)
+  "The positions the memoized loop OP failed to iterate from in this search
+   (the oracle's localsPos): a vector over 0..LEN, kept in the slot of the
+   group vector G no group uses (group 0's end)."
+  (let ((entry (assoc op (svref g 1))))
+    (if entry
+        (cdr entry)
+        (let ((memo (make-array (+ len 1) :initial-element nil)))
+          (setf (svref g 1) (cons (cons op memo) (svref g 1)))
+          memo))))
+
+(defun rontolisp::%clojure-re-loop-next (op count start s len pos g k)
+  "The oracle's Loop.match (LazyLoop.match when reluctant) for the quantified
+   group OP after an iteration from START to POS, COUNT done: an iteration
+   that consumed nothing ends the loop; below the minimum another must
+   follow; past it greedy tries another before the continuation, lazy after.
+   A memoized loop (:loopm) goes straight on from a position where another
+   iteration already failed in this search."
+  (let ((unit (nth 1 op)) (lo (nth 2 op)) (hi (nth 3 op)))
+    (cond ((not (> pos start)) (funcall k pos))
+          ((< count lo)
+           (rontolisp::%clojure-re-match unit s len pos g
+                                         (lambda (p2)
+                                           (rontolisp::%clojure-re-loop-next op
+                                            (+ count 1) pos s len p2 g k))))
+          ((eq (nth 4 op) :reluctant)
+           (or (funcall k pos)
+               (and (or (null hi) (< count hi))
+                    (rontolisp::%clojure-re-match unit s len pos g
+                     (lambda (p2)
+                       (rontolisp::%clojure-re-loop-next op (+ count 1) pos s
+                                                         len p2 g k))))))
+          ((eq (nth 5 op) :loopm)
+           (let ((memo (rontolisp::%clojure-re-loop-memo op g len)))
+             (if (svref memo pos)
+                 (funcall k pos)
+                 (or (rontolisp::%clojure-re-match unit s len pos g
+                      (lambda (p2)
+                        (rontolisp::%clojure-re-loop-next op (+ count 1) pos s
+                                                          len p2 g k)))
+                     (progn
+                       (setf (svref memo pos) t)
+                       (funcall k pos))))))
+          (t (or (and (or (null hi) (< count hi))
+                      (rontolisp::%clojure-re-match unit s len pos g
+                       (lambda (p2)
+                         (rontolisp::%clojure-re-loop-next op (+ count 1) pos s
+                                                           len p2 g k))))
+                 (funcall k pos))))))
+
+(defun rontolisp::%clojure-re-groups-of (p)
+  "A fresh group vector for the pattern P: no group has matched, no loop
+   memoized (slot 1, unused by any group, holds the loops' memos)."
+  (let ((g
+         (make-array (* 2 (+ (rontolisp::%clojure-re-pat-ngroups p) 1))
+                     :initial-element -1)))
+    (setf (svref g 1) nil)
+    g))
+
+(defun rontolisp::%clojure-re-find-from (p s len from)
+  "The leftmost match of the pattern P at or past FROM: (start end groups),
+   GROUPS the search's group vector, or NIL. The groups start empty once per
+   search, not per start position, like the oracle's."
+  (let ((ops (rontolisp::%clojure-re-pat-ops p))
+        (g (rontolisp::%clojure-re-groups-of p)))
+    (do ((pos from (+ pos 1)) (found nil))
+        ((or found (> pos len)) found)
+      (let ((end
+             (rontolisp::%clojure-re-match ops s len pos g (lambda (end) end))))
+        (if end (setq found (list pos end g)))))))
+
+(defun rontolisp::%clojure-re-match-at-start (p s whole)
+  "The match of the pattern P at the start of S, the whole of it when WHOLE:
+   (0 end groups), or NIL."
+  (let* ((len (length s))
+         (g (rontolisp::%clojure-re-groups-of p))
+         (end
+          (rontolisp::%clojure-re-match (rontolisp::%clojure-re-pat-ops p) s len
+           0 g (lambda (end) (if (or (not whole) (= end len)) end nil)))))
+    (if end (list 0 end g) nil)))
+
+(defun rontolisp::%clojure-re-group-span (found n)
+  "The (start . end) the group N of the match FOUND took, NIL for one that
+   took no part."
+  (if (= n 0)
+      (cons (car found) (car (cdr found)))
+      (let ((g (car (cdr (cdr found)))) (i (* 2 n)))
+        (if (or (>= (+ i 1) (length g)) (< (svref g i) 0))
+            nil
+            (cons (svref g i) (svref g (+ i 1)))))))
 
 (defun rontolisp::%clojure-re-next (m)
   "The matcher's next match: (start end groups), or NIL. An empty match
@@ -6278,8 +7434,7 @@
                   (rplacd cell nil)
                   nil)
                 (let ((found
-                       (rontolisp::%clojure-re-find-from
-                        (rontolisp::%clojure-re-pat-ops pat) input len from)))
+                       (rontolisp::%clojure-re-find-from pat input len from)))
                   (if (null found)
                       (progn
                         (rplaca cell (+ len 1))
@@ -6290,24 +7445,23 @@
                         (rplacd cell found)
                         found)))))))))
 
-(defun rontolisp::%clojure-re-group-strings (s bindings n i)
-  "The group strings 1..N over the BINDINGS alist (NIL past no match)."
+(defun rontolisp::%clojure-re-group-strings (s found n i)
+  "The strings of the groups I..N of the match FOUND (NIL for one that took no
+   part)."
   (if (> i n)
       nil
-      (cons (let ((b (assoc i bindings)))
-              (if (null b) nil (subseq s (car (cdr b)) (car (cdr (cdr b))))))
-            (rontolisp::%clojure-re-group-strings s bindings n (+ i 1)))))
+      (cons (let ((span (rontolisp::%clojure-re-group-span found i)))
+              (if (null span) nil (subseq s (car span) (cdr span))))
+            (rontolisp::%clojure-re-group-strings s found n (+ i 1)))))
 
 (defun rontolisp::%clojure-re-value (s found ngroups)
   "The match value for (start end groups) FOUND: the string without groups, a
    vector of the whole plus every group (NIL past no match) with them."
-  (let ((start (car found))
-        (end (car (cdr found)))
-        (bindings (car (cdr (cdr found)))))
+  (let ((start (car found)) (end (car (cdr found))))
     (if (= ngroups 0)
         (subseq s start end)
         (coerce (cons (subseq s start end)
-                 (rontolisp::%clojure-re-group-strings s bindings ngroups 1))
+                      (rontolisp::%clojure-re-group-strings s found ngroups 1))
                 'vector))))
 
 (defun rontolisp::%clojure-re-compile (source)
@@ -6316,8 +7470,8 @@
       (rontolisp::%clojure-class-cast-exception-of
        "re-pattern takes a pattern or a string" source)
       (let ((parsed (rontolisp::%clojure-re-parse source)))
-        (list :C%PATTERN (gensym "re") source (car parsed)
-              (car (cdr parsed))))))
+        (list :C%PATTERN (gensym "re") source (car parsed) (car (cdr parsed))
+              (car (cdr (cdr parsed)))))))
 
 (defun rontolisp::%clojure-re-pattern (x)
   "The pattern for X: itself for a pattern, compiled for a string."
@@ -6392,15 +7546,11 @@
     (if (not (stringp s))
         (rontolisp::%clojure-class-cast-exception-of
          "re-matches takes a pattern and a string" s)
-        (let ((len (length s)))
-          (let ((hit
-                 (rontolisp::%clojure-re-match
-                  (rontolisp::%clojure-re-pat-ops p) s len 0 nil
-                  (lambda (end g) (if (= end len) (list 0 end g) nil)))))
-            (if (null hit)
-                nil
-                (rontolisp::%clojure-re-value s hit
-                 (rontolisp::%clojure-re-pat-ngroups p))))))))
+        (let ((hit (rontolisp::%clojure-re-match-at-start p s t)))
+          (if (null hit)
+              nil
+              (rontolisp::%clojure-re-value s hit
+               (rontolisp::%clojure-re-pat-ngroups p)))))))
 
 (defun rontolisp::%clojure-re-groups (m)
   "The last match's groups as a vector (the whole first), or a signal past no
@@ -6443,10 +7593,7 @@
           (cond ((null last)
                  (rontolisp::%clojure-illegal-state-exception "No match found"))
                 ((= i 0) (subseq s (car last) (car (cdr last))))
-                (t
-                 (car
-                  (rontolisp::%clojure-re-group-strings s (car (cdr (cdr last)))
-                                                        i i))))))))
+                (t (car (rontolisp::%clojure-re-group-strings s last i i))))))))
 
 (defun rontolisp::%clojure-re-fresh-matcher (p s)
   "A matcher of the pattern value P over S."
@@ -6479,25 +7626,19 @@
 (defun rontolisp::%clojure-matcher-anchored (m whole)
   "Matcher.lookingAt() (a match at the input's start) and, under WHOLE,
    Matcher.matches() (one spanning the whole input): the match recorded."
-  (let ((input (rontolisp::%clojure-re-match-input m))
-        (cell (rontolisp::%clojure-re-match-cell m)))
-    (let ((len (length input)))
-      (let ((found
-             (rontolisp::%clojure-re-match (rontolisp::%clojure-re-pat-ops
-                                            (rontolisp::%clojure-re-match-pat
-                                             m)) input len 0 nil
-                                           (lambda (end g)
-                                             (if (or (not whole) (= end len))
-                                                 (list 0 end g)
-                                                 nil)))))
-        (if found
-            (progn
-              (rplaca cell (car (cdr found)))
-              (rplacd cell found)
-              t)
-            (progn
-              (rplacd cell nil)
-              rontolisp::%clojure-false))))))
+  (let ((cell (rontolisp::%clojure-re-match-cell m))
+        (found
+         (rontolisp::%clojure-re-match-at-start
+          (rontolisp::%clojure-re-match-pat m)
+          (rontolisp::%clojure-re-match-input m) whole)))
+    (if found
+        (progn
+          (rplaca cell (car (cdr found)))
+          (rplacd cell found)
+          t)
+        (progn
+          (rplacd cell nil)
+          rontolisp::%clojure-false))))
 
 (defun rontolisp::%clojure-matcher-looking-at (m)
   "Matcher.lookingAt()."
@@ -6508,12 +7649,21 @@
   (rontolisp::%clojure-matcher-anchored m t))
 
 (defun rontolisp::%clojure-matcher-range (m n)
-  "The (start . end) group N of matcher M's last match spans, (-1 . -1) for one
-   that took no part; the oracle's refusals without a match or past the
-   pattern's groups."
+  "The (start . end) group N (a number or a group name) of matcher M's last
+   match spans, (-1 . -1) for one that took no part; the oracle's refusals
+   without a match, past the pattern's groups or for a name it lacks."
   (let ((last (cdr (rontolisp::%clojure-re-match-cell m))))
     (cond ((null last)
            (rontolisp::%clojure-illegal-state-exception "No match found"))
+          ((stringp n)
+           (let ((idx
+                  (rontolisp::%clojure-re-name-lookup n
+                   (rontolisp::%clojure-re-pat-names
+                    (rontolisp::%clojure-re-match-pat m)))))
+             (if (null idx)
+                 (rontolisp::%clojure-illegal-argument-exception
+                  (concatenate 'string "No group with name <" n ">"))
+                 (rontolisp::%clojure-matcher-range m idx))))
           ((not (integerp n))
            (rontolisp::%clojure-illegal-argument-exception
             "No matching method takes a group that is no int"))
@@ -6522,31 +7672,26 @@
                   (rontolisp::%clojure-re-pat-ngroups
                    (rontolisp::%clojure-re-match-pat m))))
            (rontolisp::%clojure-index-out-of-bounds-exception
-            (concatenate 'string "No group " (princ-to-string n))))
-          ((= n 0) (cons (car last) (car (cdr last))))
-          (t (let ((b (assoc n (car (cdr (cdr last))))))
-               (if b (cons (car (cdr b)) (car (cdr (cdr b)))) (cons -1 -1)))))))
+            (concatenate 'string "No group "
+                         (rontolisp::%clojure-re-decimal n))))
+          (t (or (rontolisp::%clojure-re-group-span last n) (cons -1 -1))))))
 
 (defun rontolisp::%clojure-matcher-group (m n)
-  "Matcher.group(int), group(String): the text group N took, nil for one that
-   took no part. No pattern here has a named group, so a name is the oracle's
-   IllegalArgumentException once a match exists."
-  (if (stringp n)
-      (if (null (cdr (rontolisp::%clojure-re-match-cell m)))
-          (rontolisp::%clojure-illegal-state-exception "No match found")
-          (rontolisp::%clojure-illegal-argument-exception
-           (concatenate 'string "No group with name <" n ">")))
-      (let ((r (rontolisp::%clojure-matcher-range m n)))
-        (if (< (car r) 0)
-            nil
-            (subseq (rontolisp::%clojure-re-match-input m) (car r) (cdr r))))))
+  "Matcher.group(int), group(String): the text the group N (a number or a
+   name) took, nil for one that took no part."
+  (let ((r (rontolisp::%clojure-matcher-range m n)))
+    (if (< (car r) 0)
+        nil
+        (subseq (rontolisp::%clojure-re-match-input m) (car r) (cdr r)))))
 
 (defun rontolisp::%clojure-matcher-start (m n)
-  "Matcher.start(int): where group N began, -1 for one that took no part."
+  "Matcher.start(int), start(String): where group N began, -1 for one that
+   took no part."
   (car (rontolisp::%clojure-matcher-range m n)))
 
 (defun rontolisp::%clojure-matcher-end (m n)
-  "Matcher.end(int): where group N ended, -1 for one that took no part."
+  "Matcher.end(int), end(String): where group N ended, -1 for one that took
+   no part."
   (cdr (rontolisp::%clojure-matcher-range m n)))
 
 (defun rontolisp::%clojure-matcher-group-count (m)
@@ -6607,72 +7752,112 @@
                   (reverse
                    (rontolisp::%clojure-re-drop-empty (reverse parts)))))))))
 
-(defun rontolisp::%clojure-re-group-string (nn start end bindings s)
-  "The $N substitution: the whole for 0, the group or \"\" past no match."
-  (if (= nn 0)
-      (subseq s start end)
-      (let ((b (assoc nn bindings)))
-        (if (null b) "" (subseq s (car (cdr b)) (car (cdr (cdr b))))))))
+(defun rontolisp::%clojure-re-found-span (found n ngroups)
+  "The (start . end) the group N of the match FOUND spans, NIL for one that
+   took no part; past the NGROUPS groups the oracle's refusal."
+  (cond ((or (< n 0) (> n ngroups))
+         (rontolisp::%clojure-index-out-of-bounds-exception
+          (concatenate 'string "No group " (rontolisp::%clojure-re-decimal n))))
+        (t (rontolisp::%clojure-re-group-span found n))))
 
-(defun rontolisp::%clojure-re-interp-pieces
-    (repl len i s start end bindings ngroups acc)
-  "The replacement pieces over the reversed ACC."
-  (if (>= i len)
-      (reverse acc)
+(defun rontolisp::%clojure-re-group-ref (repl i p)
+  "The group a $ reference at I of the replacement REPL names (past the $),
+   as Matcher.appendReplacement reads it: ${name} a named group of the
+   pattern P, else a digit and the digits after it while a group of the
+   number they make exists. (group . index past the reference), or the
+   oracle's IllegalArgumentException."
+  (let ((n (length repl)) (d (char-code (char repl i))))
+    (if (= d 123)
+        (let ((j (+ i 1)) (next d))
+          (do ()
+              ((or (>= j n)
+                   (not
+                    (rontolisp::%clojure-re-alpha-code-p
+                     (setq next (char-code (char repl j)))))))
+            (setq j (+ j 1)))
+          (if (= j (+ i 1))
+              (rontolisp::%clojure-illegal-argument-exception
+               "named capturing group has 0 length name"))
+          (if (not (= next 125))
+              (rontolisp::%clojure-illegal-argument-exception
+               "named capturing group is missing trailing '}'"))
+          (let ((name (subseq repl (+ i 1) j)))
+            (if (rontolisp::%clojure-re-digit-code-p (char-code (char name 0)))
+                (rontolisp::%clojure-illegal-argument-exception
+                 (concatenate 'string "capturing group name {" name
+                              "} starts with digit character")))
+            (let ((idx
+                   (rontolisp::%clojure-re-name-lookup name
+                    (rontolisp::%clojure-re-pat-names p))))
+              (if (null idx)
+                  (rontolisp::%clojure-illegal-argument-exception
+                   (concatenate 'string "No group with name {" name "}")))
+              (cons idx (+ j 1)))))
+        (if (not (rontolisp::%clojure-re-digit-code-p d))
+            (rontolisp::%clojure-illegal-argument-exception
+             "Illegal group reference")
+            (let ((ref (- d 48))
+                  (j (+ i 1))
+                  (done nil)
+                  (ngroups (rontolisp::%clojure-re-pat-ngroups p)))
+              (do ()
+                  ((or done (>= j n)))
+                (let ((e (char-code (char repl j))))
+                  (if (and (rontolisp::%clojure-re-digit-code-p e)
+                           (<= (+ (* ref 10) (- e 48)) ngroups))
+                      (progn
+                        (setq ref (+ (* ref 10) (- e 48)))
+                        (setq j (+ j 1)))
+                      (setq done t))))
+              (cons ref j))))))
+
+(defun rontolisp::%clojure-re-interpolate (repl s found p)
+  "The replacement string REPL for the match FOUND of the pattern P, as the
+   oracle's Matcher.appendReplacement expands it: \\ quotes the character
+   after it, $n and ${name} are a group's text (none for one that took no
+   part)."
+  (let ((out (make-string-output-stream))
+        (n (length repl))
+        (i 0)
+        (ngroups (rontolisp::%clojure-re-pat-ngroups p)))
+    (do ()
+        ((>= i n) (get-output-stream-string out))
       (let ((c (char-code (char repl i))))
         (cond ((= c 92)
-               (if (>= (+ i 1) len)
-                   (rontolisp::%clojure-re-interp-pieces repl len (+ i 1) s
-                                                         start end bindings
-                                                         ngroups
-                                                         (cons "\\" acc))
-                   (rontolisp::%clojure-re-interp-pieces repl len (+ i 2) s
-                    start end bindings ngroups
-                    (cons (subseq repl (+ i 1) (+ i 2)) acc))))
+               (if (= (+ i 1) n)
+                   (rontolisp::%clojure-illegal-argument-exception
+                    "character to be escaped is missing"))
+               (write-char (char repl (+ i 1)) out)
+               (setq i (+ i 2)))
               ((= c 36)
-               (let ((r (rontolisp::%clojure-re-parse-digits repl len (+ i 1))))
-                 (if (null r)
-                     (rontolisp::%clojure-illegal-argument-exception
-                      "Illegal group reference: group index is missing")
-                     (let ((nn (car (cdr r))))
-                       (if (> nn ngroups)
-                           (rontolisp::%clojure-index-out-of-bounds-exception
-                            (concatenate 'string "No group "
-                             (rontolisp::%clojure-str-of nn "" nil)))
-                           (rontolisp::%clojure-re-interp-pieces repl len
-                            (car r) s start end bindings ngroups
-                            (cons (rontolisp::%clojure-re-group-string nn start
-                                                                       end
-                                                                       bindings
-                                                                       s)
-                                  acc)))))))
-              (t (rontolisp::%clojure-re-interp-pieces repl len (+ i 1) s start
-                  end bindings ngroups (cons (subseq repl i (+ i 1)) acc)))))))
-
-(defun rontolisp::%clojure-re-interpolate (repl s found ngroups)
-  "The string REPL over (start end groups) FOUND: \\ quotes, $N the group."
-  (let ((out (make-string-output-stream)))
-    (let ((pieces
-           (rontolisp::%clojure-re-interp-pieces repl (length repl) 0 s
-                                                 (car found) (car (cdr found))
-                                                 (car (cdr (cdr found))) ngroups
-                                                 nil)))
-      (do ((rest pieces (cdr rest)))
-          ((null rest) (get-output-stream-string out))
-        (write-string (car rest) out)))))
+               (if (= (+ i 1) n)
+                   (rontolisp::%clojure-illegal-argument-exception
+                    "Illegal group reference: group index is missing"))
+               (let* ((ref (rontolisp::%clojure-re-group-ref repl (+ i 1) p))
+                      (span
+                       (rontolisp::%clojure-re-found-span found (car ref)
+                                                          ngroups)))
+                 (if span (write-string (subseq s (car span) (cdr span)) out))
+                 (setq i (cdr ref))))
+              (t
+               (write-char (char repl i) out)
+               (setq i (+ i 1))))))))
 
 (defun rontolisp::%clojure-re-replacement (rep)
   "REP as %clojure-re-subst takes it: a string as itself, anything else as a
    real function (through the IFn dispatcher unless it is one)."
   (if (stringp rep) rep (rontolisp::%clojure-as-fn rep)))
 
-(defun rontolisp::%clojure-re-subst (rep s found ngroups)
-  "The substitution for FOUND: a string interpolates, the real function REP
-   applies through str (like the oracle's function arm, whose NIL is \"\")."
+(defun rontolisp::%clojure-re-subst (rep s found p)
+  "The substitution for FOUND of the pattern P: a string interpolates, the
+   real function REP applies through str (like the oracle's function arm,
+   whose NIL is \"\")."
   (if (stringp rep)
-      (rontolisp::%clojure-re-interpolate rep s found ngroups)
-      (rontolisp::%clojure-str-of
-       (funcall rep (rontolisp::%clojure-re-value s found ngroups)) "" nil)))
+      (rontolisp::%clojure-re-interpolate rep s found p)
+      (rontolisp::%clojure-str-of (funcall rep
+                                           (rontolisp::%clojure-re-value s found
+                                            (rontolisp::%clojure-re-pat-ngroups
+                                             p))) "" nil)))
 
 (defun rontolisp::%clojure-re-replace (s pat rep once)
   "S with the pattern PAT swapped for REP: every match, or the first for ONCE.
@@ -6684,17 +7869,15 @@
     (if (not (stringp s))
         (rontolisp::%clojure-class-cast-exception-of
          "replace takes a string, a match and a replacement" s)
-        (let ((m (rontolisp::%clojure-re-fresh-matcher p s))
-              (len (length s))
-              (ngroups (rontolisp::%clojure-re-pat-ngroups p)))
+        (let ((m (rontolisp::%clojure-re-fresh-matcher p s)) (len (length s)))
           (if once
               (let ((found (rontolisp::%clojure-re-next m)))
                 (if (null found)
                     s
                     (let ((out (make-string-output-stream)))
                       (write-string (subseq s 0 (car found)) out)
-                      (write-string
-                       (rontolisp::%clojure-re-subst rep s found ngroups) out)
+                      (write-string (rontolisp::%clojure-re-subst rep s found p)
+                                    out)
                       (write-string (subseq s (car (cdr found)) len) out)
                       (get-output-stream-string out))))
               (let ((out (make-string-output-stream)))
@@ -6706,8 +7889,8 @@
                      (write-string (subseq s pos len) out)
                      (get-output-stream-string out))
                   (write-string (subseq s pos (car found)) out)
-                  (write-string
-                   (rontolisp::%clojure-re-subst rep s found ngroups) out)
+                  (write-string (rontolisp::%clojure-re-subst rep s found p)
+                                out)
                   (setq pos (car (cdr found))))))))))
 
 ;;;; The core backlog.

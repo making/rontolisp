@@ -692,7 +692,7 @@ final class ClojureMacroLowering {
 	 */
 	static LispVal decodePattern(LispCons wrapper) {
 		List<LispVal> parts = ClojureLowerUtil.items(wrapper);
-		if (parts != null && parts.size() == 5 && parts.get(2) instanceof LispString source) {
+		if (parts != null && parts.size() == 6 && parts.get(2) instanceof LispString source) {
 			return ClojureLowerUtil.list(ClojureReader.REGEX, source);
 		}
 		throw new LispReadException("an unreadable value: " + wrapper.print());

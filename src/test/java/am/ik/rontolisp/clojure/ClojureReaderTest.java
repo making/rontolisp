@@ -100,6 +100,16 @@ class ClojureReaderTest {
 		assertThat(printed("#\"a\\Qb\\Ec\"")).isEqualTo("[(|%regex| \"a\\\\Qb\\\\Ec\")]");
 		assertThatThrownBy(() -> read("#\"\\q\"")).isInstanceOf(LispReadException.class)
 			.hasMessageContaining("Illegal/unsupported escape sequence");
+		// what Pattern takes reads verbatim too: \k, \N, a braced \x and a backslash
+		// before a character no escape names
+		assertThat(printed("#\"\\k<n>\\N{x}\\x{41}\\\u00e9\""))
+			.isEqualTo("[(|%regex| \"\\\\k<n>\\\\N{x}\\\\x{41}\\\\\u00e9\")]");
+		assertThatThrownBy(() -> read("#\"\\x{g}\"")).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Illegal hexadecimal escape sequence");
+		assertThatThrownBy(() -> read("#\"\\x{41\"")).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Unclosed hexadecimal escape sequence");
+		assertThatThrownBy(() -> read("#\"\\x{110000}\"")).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Hexadecimal codepoint is too big");
 		assertThatThrownBy(() -> read("#%x")).isInstanceOf(LispReadException.class)
 			.hasMessageContaining("unsupported reader form #%");
 	}

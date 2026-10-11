@@ -125,7 +125,7 @@
   オラクルが投げるクラスとして実行時エラーを捕捉し、Clojure ランタイム自身の拒否は同じ呼び出しで
   オラクルが投げるクラスとして捕捉します（`(first 5)` は `IllegalArgumentException`、失敗した
   `assert` は `Exception` の catch が捕捉しない `AssertionError`）。クラスを示さないエラー --
-  オラクルが受け付ける構文の拒否（正規表現の先読み、`(partition 0 coll)`）-- は、
+  オラクルが受け付ける構文の拒否（正規表現の `\p{L}`、`(partition 0 coll)`）-- は、
   `clojure.lang.ExceptionInfo` 以外のどのクラスの catch でも最初のものが捕捉します。
   下位の関数が先に拒否する誤用は、その関数のクラスになります。`(shuffle 5)` は `seq` の
   `IllegalArgumentException` で、オラクルは `java.util.Collection` へのキャストで失敗します。範囲外の添字は `IndexOutOfBoundsException` で、

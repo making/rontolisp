@@ -525,8 +525,8 @@ for the same call**, decided where it is detected (oracle-checked clj 1.12.6, 20
   `subs-and-substring-refuse-a-non-number-bound-with-the-oracles-class`,
   `ClojureLoweringTest#aStringMethodOfAReceiverNotKnownToBeAStringIsTheReflectiveAlias`,
   `ClojureArmsTest#theRefusalFamilyFoldsEachRefusalToThePlainErrorOfItsMessage`.
-- Names no class: a refusal of a construct the oracle accepts (regex lookaround, named groups,
-  `\G`, POSIX classes, `(partition 0 ...)`, a deftype literal), a value macro's
+- Names no class: a refusal of a construct the oracle accepts (regex `\p{..}`, `\G`, the Unicode
+  classes under `(?U)`, `(partition 0 ...)`, a deftype literal), a value macro's
   `Can't take value of a macro` (a compile error in the oracle), internal invariants. A
   misuse a lower verb refuses first carries that verb's
   class: `(shuffle 5)` is `seq`'s IAE, the oracle's CCE casting to `Collection`.
@@ -3723,7 +3723,12 @@ interfaces behind an arm family its row's store makes (`ClojureArms`, `COLLECTIO
   (2026-10-11) it stops at `core.clj:337:5: instance? takes a class name, not
   gll/failure-type`; past that by hand, every namespace lowers and the load stops at the
   `cfg.clj` regex (`unsupported regex: only (?:...) groups are supported`). With `instance?`
-  of a class value (2026-10-11) the load reaches that regex verbatim.
+  of a class value (2026-10-11) the load reaches that regex verbatim. With the regex port
+  ("Regex", 2026-10-11) it stops at `No such class: clojure.lang.LispReader$StringReader`;
+  that replaced by hand with a `read-string`, `cfg/ebnf` of grammars holding `(?i)`, a
+  lookahead terminal and nested `(* .. *)` comments, then `gll/parse` (a success, a failure
+  with its `NOT "c"` lookahead) print the oracle's lines on the interpreter and the JVM; wasm
+  stops at the `Segment`'s `StringBuilder` interop as before.
 - Pins: clojure-spec `a-collection-type-conjs-empties-counts-and-compares-through-its-methods`,
   `a-map-type-assocs-dissocs-reads-and-prints-as-a-map`,
   `a-set-type-disjs-contains-and-prints-as-a-set`,
@@ -4543,18 +4548,86 @@ fold per code point (`.kb/characters-code-points.md`). Before 2026-10-11 the ver
 
 ## Regex
 
-`#"..."` reads to `(%regex source)` with every escape verbatim like the oracle (`#"\\d"`
-is a backslash plus `d`); unknown alphabetic escapes, a short `\u`/`\x`, a bare `\0` and a
-lone `\E` are refused at read time. The engine is a backtracking matcher in `clojure.lisp`
-over string primitives every backend compiles: no per-backend code (a host
-`java.util.regex` would serve two backends). It costs about 20 KB of wasm when referenced,
-nothing otherwise. Greedy, reluctant and possessive quantifiers and backreferences work;
-lookarounds, named groups, inline flags, POSIX classes, `&&`, `\G` signal `unsupported
-regex` at construction. Patterns print `#"..."`, matchers `#<Matcher source>`; `class`
-answers `:pattern`/`:matcher`. A `\s`/`\d`/`\w` member of a bracket class (or its negation)
-is a nested `(:cls negated items)` item `%clojure-re-item-test` tests through its items list;
-until 2026-10-11 it read the node's tail instead and matched nothing (`[,\s]+` found only
-commas, `[^\s]+` took spaces), clojure-spec `a-class-escape-inside-brackets-matches-its-class`.
+**Invariant: the engine is `java.util.regex` (JDK 25) ported into `clojure.lisp`, so a pattern
+compiles, refuses (with the oracle's message) and matches as the oracle's `Pattern` does, on every
+backend** -- one Lisp body, no per-backend code (a host `java.util.regex` would serve two
+backends). Ported 2026-10-11 (`.todo/f43`); before, a smaller backtracking matcher refused
+lookarounds, named groups, inline flags, `&&` and nested classes, quantified a whole `\Q..\E`,
+took `{` that opens no count as a literal, `\11` as group 11, `\ca` as control-A, tried a greedy
+group's shorter counts before its other alternatives and let `.`/`$` ignore U+0085/U+2028/
+U+2029 and `\r\n`. Patterns print `#"..."`, matchers `#<Matcher source>`; `class` answers
+`:pattern`/`:matcher`; a pattern is `(:C%PATTERN stamp source ops ngroups names)`
+(`ClojureMacroLowering.decodePattern` reads its source back).
+- Reading: `#"..."` reads to `(%regex source)` with every escape verbatim like the oracle
+  (`#"\\d"` is a backslash plus `d`); an ASCII letter `Pattern` gives no meaning after a
+  backslash, a short `\u`/`\x`, a malformed `\x{..}`, a bare `\0` and a lone `\E` are refused at
+  read time (`ClojureReader.readRegexSource`); every other refusal is the parser's when the
+  literal evaluates, where the oracle's comes at read time. `read-string` of `#"..."` goes
+  straight to the parser.
+- Parser (`%clojure-rp-*`): `Pattern`'s recursive descent method by method over the code points
+  -- `RemoveQEQuoting` (so `\Qab\E+` repeats the `b`), the lexer's `peek`/`read`/`next`/`skip`
+  past comments-mode space and `#` comments (inside a class too: `(?x)[a b]` is `[ab]`, `(?x)[#]`
+  unclosed), `expr`/`sequence`/`atom` (a literal run leaves its last character to a quantifier),
+  `closure`, `group0` (flags saved per group and restored at its `)`, a `(?flags)` group's holding
+  to the end of the enclosing group, across `|`), `clazz`/`range` (unions, `&&` with Java's
+  `prev`/`curr`/bit-table bookkeeping, `[[:alpha:]]` a nested class), `escape` (`\cX` is X xor
+  64, three octal digits only up to `\0377`, surrogate `\u` pairs joined, `\11` taking its second
+  digit only while eleven groups exist), named groups and `\k<name>`. A refusal is the oracle's
+  `PatternSyntaxException` text: description, ` near index N` (the cursor into the rewritten
+  pattern, so after a `\Q..\E` it counts the rewrite), the pattern, a caret line
+  (`%clojure-rp-error`).
+- Flags are `Pattern`'s bits. `i` folds ASCII (`:ilit`, `:ri`); `iu` folds through
+  `char-upcase`/`char-downcase` (`:ulit`, `:ru`, `:u`): one character only when its cases differ,
+  every character of a run, so `(?iu)aß` takes `aẞ` and `(?iu)ß` does not, as in the oracle;
+  `m` `d` `s` `x` change `^`/`$`, the line terminators, `.` and the lexer. `U` and `c` parse;
+  what they change is refused (below).
+- Look-behind bounds are Java's `TreeInfo` study (`%clojure-rp-study`) in its int arithmetic
+  (`%clojure-wrap-bits`): a body without `maxValid` is `Look-behind group does not have an
+  obvious maximum length`; a one-character greedy loop keeps `maxValid` (`(?<=a+)b` matches,
+  `(?<=a+b+)c` sums past the int range and never matches), a Curly or GroupCurly overflowing
+  its check is refused (`(?<=b(?:a)*)x`) -- each the oracle's. The study walks the ops as
+  Java's node chain (a Branch studies the rest of the chain afresh); the closure's KIND says
+  which node the oracle built.
+- Matcher: continuation-passing backtracking, an op calling its continuation with its end. The
+  groups are ONE vector per search (`%clojure-re-groups-of`, reset per `find`, not per start
+  position): a group sets its bounds where its body ends and restores them when the continuation
+  fails (GroupHead/GroupTail), so a capture made inside a lookaround, an atomic group, a failed
+  negative lookahead or an iteration stays when the match backs out past it, as the oracle's
+  does (`(?!(a)b)a(c)?` over `abac` has group 1 `a`). KIND: `:cpg` and any one-character unit
+  run as a counted run (`%clojure-re-match-run`, no recursion per character); `:curly`/`:ques`
+  repeat the unit's first success (Curly: `\R*\n` takes no `\r\n` at 0); `:gcurly` is GroupCurly
+  (a capturing group whose body matches one way: its group follows the iteration kept, the
+  inner groups keep the furthest one, `((\w)\w)*\w\w` over `abcde` is `["abcd" "ab" "c"]`; a
+  non-capturing one is a Curly); `:loop` is Loop/LazyLoop (an empty iteration ends the loop),
+  `:loopm` a greedy unbounded Loop no quantified group or look-behind holds, in a pattern with no
+  back reference, which remembers per search the positions it failed to iterate from (the
+  oracle's `localsPos`), so `(a|aa)*c` and `(x+x+)+y` stay polynomial; `:branch` is `?` on a
+  group. `.`, `^`, `$`, `\Z` know `\r\n`, U+0085, U+2028/U+2029; `(?m)^` never holds at the end.
+- Replacement strings expand as `Matcher.appendReplacement` does (`%clojure-re-interpolate`):
+  `\x` quotes, `$n` takes digits while that group exists (`$11` with one group is group 1 and
+  `1`), `${name}`, the oracle's messages (`character to be escaped is missing`, `Illegal group
+  reference`, `No group with name {n}`...). A matcher's `group`/`start`/`end` take a name.
+- Refused as `unsupported regex` (a plain error, "Catching"): `\p`/`\P`, `\N{..}`, `\X`,
+  `\b{g}`, `\G`, `\d \s \w \b` under `(?U)` (Unicode classes need tables), a class under `(?c)`
+  (NFC matching); `.todo/f49`. Deviations: a non-spacing mark after a letter is no word
+  character for `\b` (the oracle asks `Character.getType`); positions count code points, not
+  UTF-16 units.
+- Verified 2026-10-11 against `java.util.regex` by a random differential: 34,000 patterns of
+  lookarounds, flags, classes, groups and quantifiers over inputs up to 30 characters, every
+  find, group and refusal message identical, and 1,500 random `replace`/`split` calls; the spec
+  cases against clj 1.12.6.
+- Cost, `(println (re-find #"a+" "caab"))`: wasm P1 66,836 -> 131,494 B, JVM class 113,252 ->
+  167,847 B; ~16.7 KB of the wasm are the case tables `char-upcase`/`char-downcase` bring for
+  `(?iu)` (reachable from every pattern, so every regex program carries them). The interpreter
+  times a regex-heavy loop as before (12.5 / 12.4 s).
+- Pins: `ClojureRegexTest` (the interpreter against `java.util.regex`: curated cases, a seeded
+  random corpus, the Loop memo, the unsupported refusals), clojure-spec
+  `a-regex-looks-ahead-and-behind`, `a-regex-takes-inline-flags`, `a-regex-names-its-groups`,
+  `a-regex-parses-as-java-util-regex-does` (four backends, the oracle's lines),
+  `ClojureReaderTest#regexLiteralsReadAsMarkedSourceStrings`. A `\s`/`\d`/`\w` member of a
+  bracket class (or its negation) is a nested `(:cls negated items)` item; until 2026-10-11 it
+  read the node's tail instead and matched nothing (`[,\s]+` found only commas), clojure-spec
+  `a-class-escape-inside-brackets-matches-its-class`.
 
 **`nth` of a matcher reads `Matcher.group(n)`** (oracle-checked clj 1.12.6, 2026-10-05): the
 last match's group `n`, `nil` for a group that took no part, `IllegalStateException` ("No match
@@ -4582,14 +4655,13 @@ pattern reads group 0 unless a non-nil default is given. `second`/`first`/`seq` 
 recv) (%clojure-matcher-NAME recv args...) arm)`, an arm of the MATCHER family, so a program
 making no matcher refuses the method as before. `clojure.lisp`'s `%clojure-matcher-*`: `find` (of
 none, or a start that resets first, `Illegal start index` outside the input), `lookingAt` and
-`matches` (`%clojure-matcher-anchored`: `%clojure-re-match` at 0 with an accepting or
+`matches` (`%clojure-matcher-anchored`: `%clojure-re-match-at-start`, an accepting or
 whole-input continuation) record their match in the cell as `re-find` does, a failed one
 clearing the match and keeping where the next `find` starts (the JDK's `first`/`last`, read off
-`Matcher.java` of JDK 25); `group`, `start`, `end` of none or a group read it (nil / -1 for a
+`Matcher.java` of JDK 25); `group`, `start`, `end` of none, a group or a group name read it (nil / -1 for a
 group that took no part), `IllegalStateException` `No match found` without a match,
-`IndexOutOfBoundsException` `No group n` past the groups, a string group name the
-`IllegalArgumentException` `No group with name <n>` (no named group parses here); `groupCount`,
-`reset`, `pattern`. `hitEnd`, regions and `toMatchResult` stay refused. Pins: clojure-spec
+`IndexOutOfBoundsException` `No group n` past the groups, a name the pattern lacks the
+`IllegalArgumentException` `No group with name <n>`; `groupCount`, `reset`, `pattern`. `hitEnd`, regions and `toMatchResult` stay refused. Pins: clojure-spec
 `a-matcher-answers-the-java-matcher-methods` (oracle-identical, four backends),
 `ClojureLibraryTest#aProgramMakingNoMatcherSplicesNthWithoutItsMatcherArm`.
 
