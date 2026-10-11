@@ -2722,6 +2722,35 @@ cases:
       false false false 9
       true
       true true false OK
+  - name: instance-of-a-class-value-tests-what-class-answers
+    # instance? of a class held in a var or computed (instaparse's gll/failure-type): a
+    # value whose class is it, a condition of a subclass; nil and a non-class are the
+    # oracle's refusals. Measured against clj 1.12.6, identical.
+    source: |
+      (defrecord Icv [a])
+      (def icv-t (type (->Icv 1)))
+      (println (instance? icv-t (->Icv 2)) (instance? icv-t 3) (instance? icv-t nil) (instance? icv-t {:a 2}))
+      (println (instance? (class "s") "t") (instance? (class 1) 2) (instance? (class :a) :b) (instance? (class [1]) {}))
+      (def icv-ec (class (ex-info "x" {})))
+      (println (instance? icv-ec (ex-info "y" {})) (instance? icv-ec (Exception. "z")) (instance? icv-ec "z"))
+      (println (instance? (class (Exception. "x")) (ex-info "y" {})) (instance? (class (RuntimeException. "x")) (try (+ 1 "a") (catch Exception e e))))
+      (let [c (class 'a)] (println (instance? c 'b) (instance? c "b")))
+      (println (try (instance? nil 1) (catch NullPointerException e :npe)) (try (instance? 3 1) (catch ClassCastException e :cce)))
+      (println (filter #(instance? (class {}) %) [{} [] {:a 1}]))
+      (ns icv-gll)
+      (defrecord Failure [index reason])
+      (def failure-type (type (Failure. nil nil)))
+      (ns auto (:require [clojure.string :as str]))
+      (println (instance? icv-gll/failure-type (icv-gll/->Failure 1 2)) (instance? icv-gll/failure-type {:index 1 :reason 2}))
+    expected: |
+      true false false false
+      true true true false
+      true false false
+      true true
+      true false
+      :npe :cce
+      ({} {:a 1})
+      true false
   - name: a-vector-import-spec-registers-its-classes
     # (:import [pkg A B]) and (import '[pkg A B]) register the classes like the list
     # spelling, a host class or another namespace's protocol interface (munged package).

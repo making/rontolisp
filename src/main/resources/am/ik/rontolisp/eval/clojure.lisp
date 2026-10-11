@@ -2195,6 +2195,35 @@
                                      (car chain))
       (rontolisp::%clojure-host-instance-p x (car chain))))
 
+;; A class keyword is a keyword here, so a keyword naming no class answers false
+;; where the oracle refuses it.
+(defun rontolisp::%clojure-class-instance-p (c x k)
+  "instance? of the class value C over X, whose class (what class answers) is
+   K: a class keyword takes a value of that class, a condition whose class
+   chain holds it (a subclass) and a host object of it; a host class object
+   asks the host. nil is the oracle's NullPointerException, any other value
+   its ClassCastException."
+  (cond ((rontolisp::%clojure-keyword-p c)
+         (cond ((null x) nil)
+               ((equal k c) t)
+               ((rontolisp::%clojure-exception-p x)
+                (rontolisp::%clojure-chain-has
+                 (rontolisp::%clojure-condition-chain x) (car (cdr c))))
+               (t (rontolisp::%clojure-host-instance-p x (car (cdr c))))))
+        ((rontolisp::%clojure-host-class-name c)
+         (rontolisp::%clojure-host-class-instance-p c x))
+        ((null c)
+         (rontolisp::%clojure-null-pointer-exception
+          "Cannot invoke \"java.lang.Class.isInstance(Object)\" because \"c\" is null"))
+        (t (rontolisp::%clojure-host-cast-failure c "java.lang.Class"))))
+
+(defun rontolisp::%clojure-host-class-instance-p (c x)
+  "Whether X is an instance of the host class object C: the host's
+   isInstance of X as an instance call hands it over (%clojure-host-value: a
+   vector a java.util.List). A host arm like %clojure-host-class: a program
+   with no java: operator gets a body answering NIL."
+  (java:call c "isInstance" (rontolisp::%clojure-host-value x)))
+
 (defun rontolisp::%clojure-print-stack-trace (x)
   ".printStackTrace: a condition writes its toString line to *err* (the oracle
    adds a line per frame), answering nil; anything else calls the host

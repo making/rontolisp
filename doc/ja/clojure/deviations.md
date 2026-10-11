@@ -308,6 +308,12 @@
   インタフェース（`user.P`）が知るのはその箇所を lower した時点で定義済みの record と deftype
   なので、後の REPL 入力で定義したものはそこではインスタンスになりません。プロトコル自身の名前
   （var である `P`）は未知の名前になります（オラクルは `ClassCastException`）。
+  `class` が返したクラスの値は `class` が区別するものだけを区別するので、
+  `(instance? (class 1) 1.5)` と `(instance? (class {}) (sorted-map))` は `true` です。サブクラスを
+  たどるのは例外と実行時エラーだけなので、`java.sql.Timestamp` の `ts` について
+  `(instance? (class #inst "2020") ts)` は `false` です。キーワードは `class` が返すクラスの
+  キーワードとして扱うので、var 経由の `(instance? :a x)` は `false` になります（オラクルは
+  `ClassCastException`）。その例外のメッセージにモジュールの末尾は付きません。
 - `reduce` と `reduce-kv`（とその上に作られた動詞）が `clojure.core.protocols/CollReduce` と
   `IKVReduce` を参照するのは record・deftype・`reify` に対してだけです。どちらかを `nil`、
   `Object`、コアの種類へ拡張したものには `coll-reduce` や `kv-reduce` を直接呼んで届きます。

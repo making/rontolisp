@@ -1533,6 +1533,20 @@ class ClojureLoweringTest {
 	}
 
 	@Test
+	void instanceOfAClassValueTestsTheValueAgainstItAtRunTime() {
+		// a class held in a var, a local or computed: the value's class, read once
+		assertThat(lowered("(def c (class 1)) (instance? c 2)")).contains("(RONTOLISP::%CLOJURE-CLASS-INSTANCE-P ");
+		assertThat(lowered("(instance? (class 1) 2)")).contains("(RONTOLISP::%CLOJURE-CLASS-INSTANCE-P ");
+		assertThat(lowered("(fn [String x] (instance? String x))")).contains("(RONTOLISP::%CLOJURE-CLASS-INSTANCE-P ");
+		assertThat(lowered("(ns a) (def t (class 1)) (ns b) (instance? a/t 2)"))
+			.contains("(RONTOLISP::%CLOJURE-CLASS-INSTANCE-P ");
+		// a class name keeps its own test; a keyword is no class
+		assertThat(lowered("(def x 1) (instance? String x)")).doesNotContain("CLASS-INSTANCE-P");
+		assertThatThrownBy(() -> Clojure.read("(instance? :a 1)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("instance? takes a class name, not :a");
+	}
+
+	@Test
 	void aCatchOfNoThrowableClassIsTheOraclesRefusal() {
 		assertThatThrownBy(() -> Clojure.read("(try 1 (catch Foo e 2))", null)).isInstanceOf(LispReadException.class)
 			.hasMessageContaining("Unable to resolve classname: Foo");

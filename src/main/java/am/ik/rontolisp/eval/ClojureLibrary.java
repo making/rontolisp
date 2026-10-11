@@ -65,10 +65,12 @@ public final class ClojureLibrary {
 	 * {@code %clojure-host-class} ({@code class} of a value of no Clojure kind) refuses,
 	 * {@code %clojure-host-class-name} (the printer), {@code %clojure-host-string}
 	 * ({@code str}), {@code %clojure-host-instance-p} ({@code inst?}, {@code uuid?},
-	 * {@code uri?}, {@code class?}) and {@code %clojure-host-throwable} (an exception's
-	 * view of a value) answer NIL, {@code %clojure-host-method} ({@code .getMessage} of a
-	 * value that is no exception) refuses, and {@code %clojure-other-hash} ({@code hash}
-	 * of a value of no Clojure kind) answers its identity hash.
+	 * {@code uri?}, {@code class?}), {@code %clojure-host-class-instance-p}
+	 * ({@code instance?} of a class value) and {@code %clojure-host-throwable} (an
+	 * exception's view of a value) answer NIL, {@code %clojure-host-method}
+	 * ({@code .getMessage} of a value that is no exception) refuses, and
+	 * {@code %clojure-other-hash} ({@code hash} of a value of no Clojure kind) answers
+	 * its identity hash.
 	 */
 	private static final String HOST_ARMS_WITHOUT_JAVA = """
 			(defun rontolisp::%clojure-host-class (x)
@@ -82,6 +84,9 @@ public final class ClojureLibrary {
 			  nil)
 			(defun rontolisp::%clojure-host-instance-p (x class-name)
 			  (declare (ignore x class-name))
+			  nil)
+			(defun rontolisp::%clojure-host-class-instance-p (c x)
+			  (declare (ignore c x))
 			  nil)
 			(defun rontolisp::%clojure-host-throwable (x)
 			  (declare (ignore x))

@@ -3343,6 +3343,24 @@ constructor and consumer, and a regex `replace` with a function replacement.
   byte-identical; two `(instance? user.P x)` sites +694 / +622 / +701 / +1015 against one
   `(instance? R x)`; an empty body group +498 / +498 / +502 / +118. Pin: clojure-spec
   `instance-of-a-protocol-interface-tests-the-body-implementations`.
+  A class VALUE (oracle-checked clj 1.12.6, 2026-10-11; instaparse's `(instance?
+  gll/failure-type x)`, `failure-type` a `(type (Failure. nil nil))`): a class argument that is
+  no symbol, or a symbol a local or a var holds, or one that does not read like a class
+  (`ClojureDispatchLowering.namesClass`), lowers to `%clojure-class-instance-p c x (class x)`
+  (`clojure.lisp`, both arguments bound once, in order; until then `instance? takes a class
+  name`). A class keyword is `true` of a value `class` answers it for (`equal`), of a condition
+  whose chain holds it (the EXCEPTION arm) and of a host object of it
+  (`%clojure-host-instance-p`); a host class object (a class spelled as a value is
+  `Class.forName`) asks `%clojure-host-class-instance-p`, isInstance over `%clojure-host-value`
+  (a host arm, NIL without `java:`, `ClojureLibrary.HOST_ARMS_WITHOUT_JAVA`); nil is the
+  oracle's NPE, any other value its CCE. The function is referenced only from such a site, so
+  a program with none is unchanged. Deviations (documented): the value tells what `class`
+  tells (`(class 1)` is every number's, `(class {})` a sorted map's), only a condition walks
+  to a superclass (a Timestamp is no instance of `(class #inst ...)`), and a keyword is a
+  class keyword (`false`, the oracle's CCE). Pins: clojure-spec
+  `instance-of-a-class-value-tests-what-class-answers` (all four, oracle-identical),
+  `ClojureInteropTest#instanceOfAHostClassObjectAsksTheHost`,
+  `ClojureLoweringTest#instanceOfAClassValueTestsTheValueAgainstItAtRunTime`.
 - **Class chains** (oracle-checked clj 1.12.6, 2026-10-04). A dispatch value
   (`dispatchClassKey`) and an argument of `isa?`/`derive`/`underive`/`parents`/`ancestors`/
   `descendants` (`hierarchyArg`: a class spelling no local or var shadows) lower a class
@@ -3704,7 +3722,8 @@ interfaces behind an arm family its row's store makes (`ClojureArms`, `COLLECTIO
   LispReader string reader, the GLL parse speed). With `alter-var-root`/`alter-meta!`
   (2026-10-11) it stops at `core.clj:337:5: instance? takes a class name, not
   gll/failure-type`; past that by hand, every namespace lowers and the load stops at the
-  `cfg.clj` regex (`unsupported regex: only (?:...) groups are supported`).
+  `cfg.clj` regex (`unsupported regex: only (?:...) groups are supported`). With `instance?`
+  of a class value (2026-10-11) the load reaches that regex verbatim.
 - Pins: clojure-spec `a-collection-type-conjs-empties-counts-and-compares-through-its-methods`,
   `a-map-type-assocs-dissocs-reads-and-prints-as-a-map`,
   `a-set-type-disjs-contains-and-prints-as-a-set`,

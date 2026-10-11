@@ -22,6 +22,13 @@ interpreter and the JVM a host object answers by its host class, so
 `(instance? Number (java.math.BigDecimal. "1"))` is `true`; a class no value here has
 (`Integer`) answers `false`, and a name no class has is `unknown name`.
 
+A class held in a local or a var, or computed (`(def t (type (->R)))`, `(instance? (class x) y)`),
+is tested when the call runs: a class `class` or `type` answered is `true` of a value whose
+class is it and of an exception or runtime error of a subclass; a class spelled as a value
+(`(def s String)`) asks the host on the interpreter and the JVM. `nil` throws a
+`NullPointerException` and any other value that is no class a `ClassCastException`, like the
+oracle.
+
 ```clojure
 (println (instance? String "a") (instance? String 1)) ; true false
 (println (instance? java.util.List [1]) (instance? clojure.lang.IFn :k) (instance? java.util.Map [1])) ; true true false
@@ -31,4 +38,6 @@ interpreter and the JVM a host object answers by its host class, so
 (defrecord S [])
 (extend-type S P (m [_] 2))
 (println (instance? user.P (->R)) (instance? user.P (->S)) (satisfies? P (->S))) ; true false true
+(def rt (type (->R)))
+(println (instance? rt (->R)) (instance? rt (->S)) (instance? (class "s") "t")) ; true false true
 ```

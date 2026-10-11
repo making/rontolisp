@@ -23,6 +23,12 @@ JVM ではホストのオブジェクトをホストのクラスで検査する�
 `(instance? Number (java.math.BigDecimal. "1"))` は `true` です。ここではどの値もインスタンスに
 ならないクラス（`Integer`）は `false`、どのクラスでもない名前は `unknown name` になります。
 
+ローカルや var に入れたクラスや計算したクラス（`(def t (type (->R)))`、`(instance? (class x) y)`）
+は呼び出しの実行時に検査します。`class` や `type` が返したクラスは、クラスがそれ自身である値と、
+そのサブクラスの例外・実行時エラーについて `true` です。値として書いたクラス（`(def s String)`）は
+インタプリタと JVM ではホストに問い合わせます。オラクルと同じく、`nil` は
+`NullPointerException`、クラスでないそれ以外の値は `ClassCastException` を投げます。
+
 ```clojure
 (println (instance? String "a") (instance? String 1)) ; true false
 (println (instance? java.util.List [1]) (instance? clojure.lang.IFn :k) (instance? java.util.Map [1])) ; true true false
@@ -32,4 +38,6 @@ JVM ではホストのオブジェクトをホストのクラスで検査する�
 (defrecord S [])
 (extend-type S P (m [_] 2))
 (println (instance? user.P (->R)) (instance? user.P (->S)) (satisfies? P (->S))) ; true false true
+(def rt (type (->R)))
+(println (instance? rt (->R)) (instance? rt (->S)) (instance? (class "s") "t")) ; true false true
 ```

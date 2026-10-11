@@ -49,15 +49,51 @@ final class ClojureDispatchLowering {
 	 * ({@code %clojure-host-object-p}, an arm a program naming no {@code java:} operator
 	 * sheds, {@link ClojureArms.Family#HOST}). A protocol's interface tests the records,
 	 * deftypes and reifies whose body names the protocol. A class no value here has
-	 * answers false; a name no class has is the oracle's unresolved symbol.
+	 * answers false; a name no class has is the oracle's unresolved symbol. Any other
+	 * class argument -- a local, a var, a call -- is a class value, tested at run time
+	 * ({@link #classValueInstance}).
 	 */
 	static LispVal instanceOf(ClojureLowering ctx, List<LispVal> items) {
 		ClojureLowerUtil.isTrue(items.size() == 3, "instance? takes a class and a value");
-		if (!(items.get(1) instanceof LispSymbol cls)) {
-			throw new LispReadException("instance? takes a class name, not " + items.get(1).print());
+		LispVal cls = items.get(1);
+		if (cls instanceof LispSymbol name && namesClass(ctx, name.name())) {
+			return instanceAnswer(ctx, name.name(), ctx.lower(items.get(2)), false);
 		}
-		return instanceAnswer(ctx, cls.name(), ctx.lower(items.get(2)), false);
+		return classValueInstance(ctx, ctx.lower(cls), ctx.lower(items.get(2)));
 	}
+
+	/**
+	 * Whether {@code instance?}'s class argument spells a class (or a keyword, which
+	 * {@link #instanceAnswer} refuses) rather than a value: no local or var holds it, and
+	 * it is a type's name or reads like a class.
+	 */
+	private static boolean namesClass(ClojureLowering ctx, String name) {
+		if (name.startsWith(":")) {
+			return true;
+		}
+		if (ctx.isLocal(name) || ctx.lookupVar(name) != null) {
+			return false;
+		}
+		return ctx.typeDefOf(name) != null || ClojureNamespaceLowering.isClasslike(ctx, name);
+	}
+
+	/**
+	 * {@code instance?} of a class value: the value tested against what {@code class}
+	 * answers ({@code %clojure-class-instance-p}, {@code clojure.lisp}): a class keyword
+	 * takes the values {@code class} answers it for and the conditions of a subclass, a
+	 * host class object asks the host. Both arguments are evaluated once, in order.
+	 */
+	private static LispVal classValueInstance(ClojureLowering ctx, LispVal cls, LispVal lowered) {
+		LispSymbol c = ctx.freshTemp();
+		LispSymbol x = ctx.freshTemp();
+		LispVal test = ClojureLowerUtil.list(new LispSymbol(CLASS_INSTANCE_P), c, x, classForm(ctx, x));
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let*"),
+				ClojureLowerUtil.list(ClojureLowerUtil.list(c, cls), ClojureLowerUtil.list(x, lowered)),
+				ctx.booleanAnswer(test));
+	}
+
+	/** {@code instance?} of a class value ({@code clojure.lisp}). */
+	static final String CLASS_INSTANCE_P = "RONTOLISP::%CLOJURE-CLASS-INSTANCE-P";
 
 	/**
 	 * The test of {@code instance?} of the named class over a variable, as a generalized

@@ -319,6 +319,12 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   protocol's interface (`user.P`) knows the records and deftypes defined when the site is
   lowered, so one a later REPL input defines is not an instance there; the protocol's own
   name (`P`, a var) is an unknown name, where the oracle throws a `ClassCastException`.
+  A class value `class` answered tells what `class` tells: `(instance? (class 1) 1.5)` and
+  `(instance? (class {}) (sorted-map))` are `true`, and a subclass is walked only for an
+  exception or a runtime error, so `(instance? (class #inst "2020") ts)` of a
+  `java.sql.Timestamp` is `false`. A keyword is taken for the class keyword `class` answers,
+  so `(instance? :a x)` through a var answers `false`, where the oracle throws a
+  `ClassCastException`; that exception's message has no module tail.
 - `reduce` and `reduce-kv` (and the verbs built on them) consult
   `clojure.core.protocols/CollReduce` and `IKVReduce` for a record, deftype or `reify`
   only: an extension of either to `nil`, `Object` or a core kind is reached through

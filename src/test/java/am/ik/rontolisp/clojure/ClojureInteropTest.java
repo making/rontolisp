@@ -394,6 +394,20 @@ class ClojureInteropTest {
 	}
 
 	@Test
+	void instanceOfAHostClassObjectAsksTheHost() throws Exception {
+		// measured against clj 1.12.6: a class spelled as a value is a host class object,
+		// whose isInstance takes a Clojure value through the boundary's view of it
+		assertBothEqual("(def hs String) (def hl java.util.List)"
+				+ " (println (instance? hs \"t\") (instance? hs 1) (instance? hl [1]) (instance? hl '(1))"
+				+ " (instance? hl {}) (instance? hl nil))", "true false true true false false\n");
+		assertBothEqual("(println (instance? (class (java.util.ArrayList.)) (java.util.ArrayList.))"
+				+ " (instance? (class (java.util.ArrayList.)) (java.util.LinkedList.))"
+				+ " (instance? (class (java.io.File. \"x\")) (java.io.File. \"y\"))"
+				+ " (let [m java.util.Map] (instance? m {:a 1})))", "true false true true\n");
+		assertBothEqual("(println (instance? (class (Exception. \"x\")) (java.io.IOException. \"y\")))", "true\n");
+	}
+
+	@Test
 	void hostObjectsChainThroughCalls() throws Exception {
 		assertBothEqual("(println (.toString (. (StringBuilder. \"a\") (append \"b\"))))", "ab\n");
 		assertBothEqual("(println (try (Integer/parseInt \"xx\") (catch Exception e \"bad\")))", "bad\n");
