@@ -2637,6 +2637,21 @@ public final class LispPreludeLibrary {
 				               (hex cp ""))))
 				          (t nil))))
 				""");
+		// %copy-equal-table: the copy every Clojure map, set and record field table takes
+		// before a verb changes it (an assoc, a dissoc, a conj onto a set). The table is
+		// walked once and its keys stored in its own order, so the copy iterates as the
+		// original does; the plist round trip it replaced consed a list per entry and
+		// stored the keys back to front, reversing a map's order on every assoc. The
+		// interpreter binds a native mirror (Environment), which never loads this one:
+		// interpreted, the loop cost a step per entry, and instaparse's parse table
+		// copies tens of thousands of entries per assoc (.kb/clojure-frontend.md, "The
+		// copy a map verb takes").
+		SOURCES.put(LispNames.COPY_EQUAL_TABLE_INTERNAL, """
+				(defun rontolisp::%copy-equal-table (table)
+				  (let ((out (make-hash-table :test 'equal)))
+				    (maphash (lambda (k v) (setf (gethash k out) v)) table)
+				    out))
+				""");
 		// %octets-join: a list of (unsigned-byte 8) vectors -> ONE packed vector holding
 		// them in order. The blit every drain of an octet-chunk stream needs (read-all
 		// below, %http-drain in http-server.lisp): the chunks are collected and blitted

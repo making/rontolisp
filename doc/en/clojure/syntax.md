@@ -56,9 +56,11 @@ printing without its mark. Ratios read as `1/2`.
 `##NaN`, `##Inf` and `##-Inf` read as doubles, in source and under `read-string`/`read`,
 and `pr`, `prn` and `println` print them in the same spelling (also inside a collection);
 `str` and `format` say `NaN`, `Infinity` and `-Infinity` for the bare value. Any other
-`##name` is an `Unknown symbolic value` refusal. Two NaNs are never `=`; a NaN used as a
-map or set key is found by value here, where the oracle finds only the same boxed object, so
-two computed NaN keys of one literal are a `Duplicate key` (the oracle keeps both).
+`##name` is an `Unknown symbolic value` refusal. Two NaNs are never `=`, even one value with
+itself (the oracle's one boxed NaN is `=` to itself, `(def n ##NaN) (= n n)`), while a
+collection holding a NaN is `=` to itself, as in the oracle; a NaN used as a map or set key is
+found by value here, where the oracle finds only the same boxed object, so two computed NaN
+keys of one literal are a `Duplicate key` (the oracle keeps both).
 
 ## Booleans, nil and keywords
 

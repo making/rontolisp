@@ -53,7 +53,7 @@ parameter count against every group of the body, so a `toString` may stand under
 | `IFn` (with `Callable` and `Runnable`) | a call, a function argument (`map`, `filter` ...), `apply` (through `applyTo`), `ifn?` |
 | `IDeref` | `deref`, `@` |
 | `IMeta`, `IObj` | `meta`, `with-meta`, `vary-meta` (`deftype` only: a `reify` carries metadata itself) |
-| `java.lang.CharSequence` | `count` (`length`), `nth`, `seq` and every function over a seq (`charAt`), `seqable?`; `re-find`, `re-seq`, `re-matches`, `re-matcher`, `clojure.string` and a string's `.contains` and `.replace` read the string of its characters |
+| `java.lang.CharSequence` | `count` (`length`), `nth`, `seq` and every function over a seq (`charAt`), `seqable?`; `re-matcher` and `re-find` read its characters (`charAt`) as far as a match needs, `re-seq`, `re-matches`, `clojure.string` and a string's `.contains` and `.replace` the string of all of them |
 | `Object` | `str` and printing (`toString`), `=` (`equals`), `.hashCode` and `hash` without `IHashEq` (`hashCode`) |
 
 `instance?` of the interface and an instance call of its method (`(.count x)`) reach the type
@@ -64,9 +64,11 @@ interface's, refused by name when called), and any other interface (`IChunkedSeq
 `Comparable`, `Iterable`, a `java.util` collection) and the `Object` methods it overrides are
 what Java sees of the value too: it crosses into a Java member as an object implementing them
 ([Java interop](interop.md)). Deviations: a value overriding `toString` prints as
-`#object[user$reify "text"]`, without the oracle's class number and identity hash; the regex
-functions and `clojure.string` read a `CharSequence` whole through `length` and `charAt` once
-per call, where the oracle's matcher reads only as far as it matches and most `clojure.string`
+`#object[user$reify "text"]`, without the oracle's class number and identity hash; a
+`re-matcher` or `re-find` over a `CharSequence` reads it in prefixes of 16, 32, 64 ...
+characters, so it may call `charAt` past where the oracle's matcher stops, and the other regex
+functions and `clojure.string` read it whole through `length` and `charAt` once per call,
+where the oracle's matcher reads only as far as it matches and most `clojure.string`
 functions call `toString`.
 
 ```clojure

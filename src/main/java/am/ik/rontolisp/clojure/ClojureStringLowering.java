@@ -186,16 +186,19 @@ final class ClojureStringLowering {
 				ClojureLowerUtil.isTrue(n == 1, "re-pattern takes a pattern or a string");
 				yield ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-RE-PATTERN"), ctx.lower(items.get(1)));
 			}
+			// re-matcher and re-find take a CharSequence type as it is: the runtime reads
+			// it only as far as a match needs (clojure.lisp, the lazy matcher), where
+			// the text view would read all of it first
 			case "re-matcher" -> {
 				ClojureLowerUtil.isTrue(n == 2, "re-matcher takes a pattern and a string");
 				yield ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-RE-MATCHER"), ctx.lower(items.get(1)),
-						text(ctx, items.get(2)));
+						ctx.lower(items.get(2)));
 			}
 			case "re-find" -> {
 				ClojureLowerUtil.isTrue(n == 1 || n == 2, "re-find takes a matcher, or a pattern and a string");
 				yield n == 2
 						? ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-RE-FIND"), ctx.lower(items.get(1)),
-								text(ctx, items.get(2)))
+								ctx.lower(items.get(2)))
 						: ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-RE-FIND-M"),
 								ctx.lower(items.get(1)));
 			}

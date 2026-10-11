@@ -329,9 +329,10 @@
   `Object` のメソッドの上書きです（[reify](reference/reify.md#host-interfaces)）。それ以外の
   インタフェース（`IChunkedSeq`、`java.util.Deque` など）は名前を挙げて拒否されます。`ISeq` 型への
   `first`・`next`・`rest` はその `seq` を通して読み、関数がメソッドを呼ぶ回数はオラクルと異なる
-  ことがあり、コレクションの型の `str` は中身を綴り、正規表現の関数と `clojure.string` は
-  `CharSequence` の型を呼び出しごとに `length` と `charAt` で全体を一度読みます
-  （[コレクションのインタフェース](reference/reify.md#collection-interfaces)）。型自身がハッシュと
+  ことがあり、コレクションの型の `str` は中身を綴り、`re-matcher` と `re-find` は `CharSequence`
+  の型を先頭の 16、32、64 ... 文字と範囲を広げながら読み（オラクルのマッチャが止まる位置より先まで
+  読みます）、ほかの正規表現の関数と `clojure.string` は呼び出しごとに `length` と `charAt` で
+  全体を一度読みます（[コレクションのインタフェース](reference/reify.md#collection-interfaces)）。型自身がハッシュと
   等価性を定める値はマップのキーや集合の要素として `=` で照合されますが、どのマップもオラクルの
   ハッシュマップと同じ方法でキーを比べます。オラクルの配列マップ（8 エントリまで）はハッシュを
   使わずに比べます。マップ・集合・シーケンシャルの型の値は `hasheq` ではなく中身で振り分けられます

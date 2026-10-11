@@ -16,6 +16,7 @@ import am.ik.rontolisp.LispHashTable;
 import am.ik.rontolisp.LispArray;
 import am.ik.rontolisp.LispDouble;
 import am.ik.rontolisp.LispInteger;
+import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispTrue;
 import am.ik.rontolisp.LispString;
@@ -171,6 +172,16 @@ final class ClojureCollectionLowering {
 	/** {@code (RONTOLISP:HASH-TABLE-PLIST table)}. */
 	static LispVal tablePlist(LispVal table) {
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("rontolisp:hash-table-plist"), table);
+	}
+
+	/**
+	 * {@code (RONTOLISP::%COPY-EQUAL-TABLE table)}: a fresh equal table holding the
+	 * entries of the equal table {@code table} in its order, the copy a map, set or
+	 * record field table takes before a verb changes it. Its keys are the table's own,
+	 * representatives already, so no key goes through the structural-key runtime.
+	 */
+	static LispVal copyTable(LispVal table) {
+		return ClojureLowerUtil.list(new LispSymbol(LispNames.COPY_EQUAL_TABLE_INTERNAL_QUALIFIED), table);
 	}
 
 	/**
@@ -571,8 +582,7 @@ final class ClojureCollectionLowering {
 		body.add(dissocAnswer(ctx, map, copy));
 		LispVal lowered = ctx.lower(items.get(1));
 		LispVal src = dissocSource(map);
-		LispVal rebuilt = ClojureLowerUtil
-			.letForm(List.of(ClojureLowerUtil.list(copy, tableFromPlist(tablePlist(src)))), body);
+		LispVal rebuilt = ClojureLowerUtil.letForm(List.of(ClojureLowerUtil.list(copy, copyTable(src))), body);
 		// a type implementing IPersistentMap drops each key through its without, like the
 		// oracle's RT.dissoc (an arm a program storing no such row sheds, ClojureArms); a
 		// branch runs the keys, so each runs once
@@ -652,7 +662,7 @@ final class ClojureCollectionLowering {
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("remhash"), lookupKey(storedKey(one, bound), copy, false),
 						copy));
 		LispVal rebuilt = ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
-				ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(copy, tableFromPlist(tablePlist(src))))), drops,
+				ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(copy, copyTable(src)))), drops,
 				dissocAnswer(ctx, bound, copy));
 		// a type implementing IPersistentMap drops each key through its without (an arm a
 		// program storing no such row sheds, ClojureArms)
@@ -1221,18 +1231,9 @@ final class ClojureCollectionLowering {
 	/** One member added to a set: a fresh table over the old members plus the member. */
 	static LispVal setAdd(ClojureLowering ctx, LispVal coll, LispVal item) {
 		LispSymbol table = ctx.freshTemp();
-		LispSymbol key = ctx.freshTemp();
-		LispSymbol val = ctx.freshTemp();
-		LispVal copy = ClojureLowerUtil.list(ClojureLowerUtil.sym("maphash"),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(List.of(key, val)),
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("declare"),
-								ClojureLowerUtil.list(ClojureLowerUtil.sym("ignore"), val)),
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("setf"),
-								ClojureLowerUtil.list(ClojureLowerUtil.sym("gethash"), key, table), key)),
-				setInner(coll));
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
-				ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(table, makeTable()))), copy, setPut(table, item),
-				wrapSet(table));
+				ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(table, copyTable(setInner(coll))))),
+				setPut(table, item), wrapSet(table));
 	}
 
 	/**
@@ -1264,22 +1265,13 @@ final class ClojureCollectionLowering {
 		ClojureLowerUtil.isTrue(n >= 1, "disj takes a set and members");
 		LispSymbol set = ctx.freshTemp();
 		LispSymbol table = ctx.freshTemp();
-		LispSymbol key = ctx.freshTemp();
-		LispSymbol val = ctx.freshTemp();
-		LispVal copy = ClojureLowerUtil.list(ClojureLowerUtil.sym("maphash"),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(List.of(key, val)),
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("declare"),
-								ClojureLowerUtil.list(ClojureLowerUtil.sym("ignore"), val)),
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("setf"),
-								ClojureLowerUtil.list(ClojureLowerUtil.sym("gethash"), key, table), key)),
-				setInner(hashedSet(set)));
 		List<LispVal> body = new ArrayList<>();
-		body.add(ClojureLowerUtil.list(table, makeTable()));
+		body.add(ClojureLowerUtil.list(table, copyTable(setInner(hashedSet(set)))));
 		List<LispVal> members = new ArrayList<>();
 		for (int i = 2; i < items.size(); i++) {
 			members.add(ctx.lower(items.get(i)));
 		}
-		LispVal kept = ClojureLowerUtil.list(ClojureLowerUtil.sym("let"), ClojureLowerUtil.list(body), copy,
+		LispVal kept = ClojureLowerUtil.list(ClojureLowerUtil.sym("let"), ClojureLowerUtil.list(body),
 				remhashes(members, table, set), shrunkSet(table, set));
 		LispVal needSet = ClojureRefusals.refusal(ClojureRefusals.CLASS_CAST, LispString.literal("disj needs a set"));
 		// a type implementing IPersistentSet drops each member through its disjoin, like
@@ -1348,22 +1340,13 @@ final class ClojureCollectionLowering {
 		LispSymbol members = new LispSymbol(ClojureLowering.mangle("disj-members"));
 		LispSymbol bound = ctx.freshTemp();
 		LispSymbol table = ctx.freshTemp();
-		LispSymbol key = ctx.freshTemp();
-		LispSymbol val = ctx.freshTemp();
 		LispSymbol one = ctx.freshTemp();
-		LispVal copy = ClojureLowerUtil.list(ClojureLowerUtil.sym("maphash"),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(List.of(key, val)),
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("declare"),
-								ClojureLowerUtil.list(ClojureLowerUtil.sym("ignore"), val)),
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("setf"),
-								ClojureLowerUtil.list(ClojureLowerUtil.sym("gethash"), key, table), key)),
-				setInner(hashedSet(bound)));
 		LispVal drops = ClojureLowerUtil.list(ClojureLowerUtil.sym("dolist"),
 				ClojureLowerUtil.list(List.of(one, members)), ClojureLowerUtil.list(ClojureLowerUtil.sym("remhash"),
 						lookupKey(storedKey(one, bound), table, false), table));
 		LispVal kept = ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
-				ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(table, makeTable()))), copy, drops,
-				shrunkSet(table, bound));
+				ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(table, copyTable(setInner(hashedSet(bound)))))),
+				drops, shrunkSet(table, bound));
 		LispVal needSet = ClojureRefusals.refusal(ClojureRefusals.CLASS_CAST, LispString.literal("disj needs a set"));
 		// a type implementing IPersistentSet drops each member through its disjoin (an
 		// arm a

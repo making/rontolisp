@@ -64,6 +64,48 @@ class ClojureRegexTest {
 			    (error (c) (list (if (rontolisp::%clojure-refusal-p c) 1 2) (princ-to-string c)))))
 			""";
 
+	// The same finds through a matcher over a CharSequence type (a deftype whose length
+	// and charAt read IN) that has read SEED characters: each search runs over the
+	// prefix read so far and reads on while it reads the prefix's end, so a seed of one
+	// puts a prefix boundary at 1, 2, 4, 8 ... and one of three at 3, 6, 12 ... The
+	// groups are read off the prefix the matcher holds.
+	private static final String LAZY_PROBE = """
+			(defun regex-lazy-matcher (re in seed)
+			  (list :c%matcher (gensym "re") (rontolisp::%clojure-re-compile re) (subseq in 0 (min seed (length in)))
+			        (cons 0 nil) (cons (list :c%type 'regex-probe-cs in) (length in))))
+			(defun regex-lazy-probe (re in seed)
+			  (handler-case
+			      (let* ((m (regex-lazy-matcher re in seed))
+			             (n (rontolisp::%clojure-re-pat-ngroups (rontolisp::%clojure-re-match-pat m)))
+			             (acc nil))
+			        (do ((found (rontolisp::%clojure-re-next m) (rontolisp::%clojure-re-next m))
+			             (k 1 (+ k 1)))
+			            ((or (null found) (> k 20)) (cons 0 (reverse acc)))
+			          (setq acc (cons (cons (car found)
+			                                (cons (car (cdr found))
+			                                      (rontolisp::%clojure-re-group-strings
+			                                       (rontolisp::%clojure-re-match-input m) found n 0)))
+			                          acc))))
+			    (error (c) (list (if (rontolisp::%clojure-refusal-p c) 1 2) (princ-to-string c)))))
+			(defun regex-lazy-anchored (re in seed whole)
+			  (let* ((m (regex-lazy-matcher re in seed))
+			         (n (rontolisp::%clojure-re-pat-ngroups (rontolisp::%clojure-re-match-pat m)))
+			         (found (rontolisp::%clojure-re-lazy-search m 0 whole)))
+			    (if found
+			        (cons (car found)
+			              (cons (car (cdr found))
+			                    (rontolisp::%clojure-re-group-strings
+			                     (rontolisp::%clojure-re-match-input m) found n 0)))
+			        nil)))
+			(defun regex-lazy-anchored-probe (re in seed)
+			  (handler-case
+			      (list 0 (regex-lazy-anchored re in seed nil) (regex-lazy-anchored re in seed t))
+			    (error (c) (list (if (rontolisp::%clojure-refusal-p c) 1 2) (princ-to-string c)))))
+			(rontolisp::%clojure-char-sequence-row 'regex-probe-cs '("java.lang.CharSequence")
+			  (list "length" (lambda (x) (length (car (cdr (cdr x)))))
+			        "charAt" (lambda (x i) (char (car (cdr (cdr x))) i))))
+			""";
+
 	private static LispEvaluator evaluator;
 
 	record Case(String regex, String input) {
@@ -73,6 +115,9 @@ class ClojureRegexTest {
 	static void defineTheProbe() {
 		evaluator = new LispEvaluator(new PrintStream(new ByteArrayOutputStream(), true, StandardCharsets.UTF_8));
 		evaluator.eval(LispReader.readAllFromString(PROBE, Features.INTERPRETER).get(0));
+		for (LispVal form : LispReader.readAllFromString(LAZY_PROBE, Features.INTERPRETER)) {
+			evaluator.eval(form);
+		}
 	}
 
 	private static Case c(String regex, String input) {
@@ -127,6 +172,44 @@ class ClojureRegexTest {
 	}
 
 	@Test
+	void aMatcherOverACharSequenceTypeReadingAPrefixAnswersAsOverTheWholeInput() throws Exception {
+		// A matcher over a CharSequence type reads a prefix and reads on only while a
+		// search reads where the prefix ends (the engine's end mark): every find,
+		// lookingAt and matches over the random corpus and the curated cases with the
+		// boundaries of every power of two (seed 1) and of three times one (seed 3) is
+		// java.util.regex's answer over the whole input. An engine step that read the
+		// end without marking it would stop at a prefix boundary.
+		List<Case> cases = new ArrayList<>(new RandomPatterns(new Random(20261011)).cases(2000));
+		cases.addAll(List.of(c("a+b", "aaaaaaaaaaaaaaaaab"), c("a*?b", "aaaab"), c("a{2,5}+b", "aaaaab"),
+				c("\\w+$", "abcdefghij"), c("(?m)^b", "aaaa\nbb"), c("a\\b", "aaaa"), c("\\Bb", "aaab"),
+				c("(a)\\1{3}", "aaaaa"), c("a\\R", "aaaa\r\n"), c("x\\z", "aaaax"), c("x\\Z", "aax\n"),
+				c("(?=aaaaab)a", "aaaaab"), c("(?!aaaaab)a", "aaaaac"), c("(?<=aaaa)b", "aaaab"),
+				c("abc|abcdef", "abcdef"), c("(?:ab)*c", "ababababc"), c("(a|ab)*c", "abababc"), c("$", "aaaaaa"),
+				c("(?d)$", "aaaa\n"), c("", "")));
+		for (int seed : List.of(1, 3)) {
+			assertThat(mismatches(cases, lazyRuntime("regex-lazy-probe", cases, seed), java(cases)))
+				.as("finds, seed " + seed)
+				.isEmpty();
+			assertThat(mismatches(cases, lazyRuntime("regex-lazy-anchored-probe", cases, seed), anchored(cases)))
+				.as("lookingAt and matches, seed " + seed)
+				.isEmpty();
+		}
+	}
+
+	// The cases whose two answers differ, each with both answers: the whole list of
+	// answers says too little when one of two thousand cases differs.
+	private static List<String> mismatches(List<Case> cases, List<String> actual, List<String> expected) {
+		List<String> out = new ArrayList<>();
+		for (int i = 0; i < cases.size(); i++) {
+			if (!actual.get(i).equals(expected.get(i))) {
+				out.add(quote(cases.get(i).regex()) + " over " + quote(cases.get(i).input()) + ": " + actual.get(i)
+						+ " where java.util.regex answers " + expected.get(i));
+			}
+		}
+		return out;
+	}
+
+	@Test
 	void aTopLevelGreedyLoopRemembersWhereItFailedAsTheOraclesDoes() throws Exception {
 		// the oracle's Loop memo (localsPos): without it each pattern backtracks
 		// exponentially over its input; with a back reference the oracle keeps none
@@ -174,6 +257,52 @@ class ClojureRegexTest {
 			}
 		}
 		return answers;
+	}
+
+	// The lazy PROBE's answer to each case, the matcher seeded with SEED characters.
+	private static List<String> lazyRuntime(String probe, List<Case> cases, int seed) {
+		List<String> answers = new ArrayList<>();
+		for (int from = 0; from < cases.size(); from += 200) {
+			String calls = cases.subList(from, Math.min(from + 200, cases.size()))
+				.stream()
+				.map(c -> "(" + probe + " " + new LispString(c.regex()).print() + " "
+						+ new LispString(c.input()).print() + " " + seed + ")")
+				.collect(Collectors.joining(" "));
+			LispVal list = evaluator
+				.eval(LispReader.readAllFromString("(list " + calls + ")", Features.INTERPRETER).get(0));
+			for (LispVal rest = list; rest instanceof LispCons cons; rest = cons.cdr()) {
+				answers.add(render(cons.car()));
+			}
+		}
+		return answers;
+	}
+
+	// java.util.regex's lookingAt and matches of each case, rendered like the lazy
+	// anchored probe: (0 looking matches), each (start end group0 ...) or nil, or the
+	// PatternSyntaxException message.
+	private static List<String> anchored(List<Case> cases) {
+		return cases.stream().map(c -> {
+			try {
+				Pattern p = Pattern.compile(c.regex());
+				return "(0 " + anchoredMatch(p.matcher(c.input()), false) + " "
+						+ anchoredMatch(p.matcher(c.input()), true) + ")";
+			}
+			catch (PatternSyntaxException ex) {
+				return "(1 " + quote(String.valueOf(ex.getMessage())) + ")";
+			}
+		}).toList();
+	}
+
+	private static String anchoredMatch(Matcher m, boolean whole) {
+		if (!(whole ? m.matches() : m.lookingAt())) {
+			return "nil";
+		}
+		StringBuilder out = new StringBuilder("(").append(m.start()).append(' ').append(m.end());
+		for (int g = 0; g <= m.groupCount(); g++) {
+			String group = m.group(g);
+			out.append(' ').append(group == null ? "nil" : quote(group));
+		}
+		return out.append(')').toString();
 	}
 
 	private static String render(LispVal value) {

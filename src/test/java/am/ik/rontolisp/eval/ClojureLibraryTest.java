@@ -158,7 +158,8 @@ class ClojureLibraryTest {
 				+ " (clojure.string/upper-case s) (.contains \"xab\" s) (instance? CharSequence s))";
 		Map<String, String> arms = Map.of("RONTOLISP::%CLOJURE-STRICT-SEQ", "%CLOJURE-CHAR-SEQUENCE-P",
 				"RONTOLISP::%CLOJURE-NTH", "%CLOJURE-CHAR-SEQUENCE-P", "RONTOLISP::%CLOJURE-IS-SEQABLE",
-				"%CLOJURE-CHAR-SEQUENCE-P");
+				"%CLOJURE-CHAR-SEQUENCE-P", "RONTOLISP::%CLOJURE-RE-FIND", "%CLOJURE-CHAR-SEQUENCE-P",
+				"RONTOLISP::%CLOJURE-RE-NEXT", "%CLOJURE-RE-LAZY-P");
 		arms.forEach((verb, arm) -> assertThat(defun(ClojureLibrary.forms(), verb)).as(verb).contains(arm));
 		List<LispVal> plain = ClojureLibrary.process(Clojure.read(source, null));
 		arms.forEach((verb, arm) -> assertThat(defun(plain, verb)).as(verb).doesNotContain(arm));

@@ -2478,12 +2478,17 @@
          ok)))
 
 (defun rontolisp::%clojure-equal (a b)
-  "Clojure = over two values, T or NIL: two sets by membership, two records by
+  "Clojure = over two values, T or NIL: a value other than a number is = to
+   itself without a look inside, like the oracle's Util.equiv (a collection
+   holding NaN, an endless lazy seq); two sets by membership, two records by
    tag plus entries, a deftype or reify by identity, two maps entry by entry,
    two sequentials element by element, two floats numerically, anything else
    with equal (numbers keep their category, strings and characters compare by
    value)."
   (cond
+   ;; a number keeps its numeric test: NaN is not = to itself here, which the
+   ;; oracle answers for a primitive double and not for one boxed object
+   ((and (eq a b) (not (numberp a))) t)
    ((and (vectorp a) (vectorp b) (not (stringp a)) (not (stringp b)))
     ;; two vectors read in place, without the seq view's copies
     (and (eql (length a) (length b))
@@ -3530,10 +3535,10 @@
   "A hash of X below 2^20 that agrees with %clojure-equal: = values hash
    alike, so a sequential hashes its members in order whatever its kind, a map
    or set its entries in any order, a typed key as %clojure-typed-key-hash
-   answers, and an identity-compared value one constant. A fold step
-   multiplies by 1021 under a 2^20 mask, so every intermediate stays below
-   2^30, a wasm fixnum, and the members of a small integer pair [x y] (x, y <
-   1021) never collide."
+   answers, a function (= only to itself) its identity hash, and any other
+   identity-compared value one constant. A fold step multiplies by 1021 under
+   a 2^20 mask, so every intermediate stays below 2^30, a wasm fixnum, and the
+   members of a small integer pair [x y] (x, y < 1021) never collide."
   (cond ((null x) 1)
         ((integerp x) (logand x 1048575))
         ((stringp x) (rontolisp::%clojure-hash-string x))
@@ -3586,6 +3591,10 @@
              2))
         ((numberp x) 4)
         ((hash-table-p x) (rontolisp::%clojure-hash-entries x nil))
+        ;; a key holding a fresh closure ([listener i], instaparse's message
+        ;; cache) would otherwise put every class of one i into one bucket, which
+        ;; each lookup scans and which grows for the whole run
+        ((functionp x) (logand (%identity-hash x) 1048575))
         (t 0)))
 
 ;; A sorted collection is kind 4: = to a hash map or set of the same entries, yet
@@ -3722,15 +3731,14 @@
 ;; A sorted map BASE answers a sorted map (%clojure-sorted-assoc): assoc and merge
 ;; onto one keep its order.
 (defun rontolisp::%clojure-plist-table (base plist)
-  "A fresh map: BASE's entries (a table copied as is, or nil) plus PLIST's
-   alternating keys and values left to right, each key stored through
+  "A fresh map: BASE's entries (a table copied as is, in its order, or nil) plus
+   PLIST's alternating keys and values left to right, each key stored through
    %clojure-store-key, later pairs winning."
   (if (rontolisp::%clojure-sorted-p base)
       (rontolisp::%clojure-sorted-assoc base plist)
       (let ((out
              (if base
-                 (rontolisp:plist-hash-table (rontolisp:hash-table-plist base)
-                                             :test 'equal)
+                 (rontolisp::%copy-equal-table base)
                  (make-hash-table :test 'equal))))
         (do ((p plist (cdr (cdr p))))
             ((null p) out)
@@ -5593,7 +5601,10 @@
 ;; (LIST :C%MATCHER stamp pattern input cell) where CELL is (CONS next-pos
 ;; last), mutated through rplaca/rplacd like the lazy cell; LAST is NIL or
 ;; (start end groups), GROUPS the match's group vector (start and end of the
-;; group N at 2N and 2N+1, -1 for a group that took no part).
+;; group N at 2N and 2N+1, -1 for a group that took no part; slot 0 marks that
+;; the search read where its input ends, %clojure-re-hit-end). A matcher over a
+;; CharSequence type has a sixth slot (type . length), INPUT then the prefix
+;; read so far (%clojure-re-lazy-matcher).
 ;;
 ;; The parser (%clojure-rp-*) is java.util.regex.Pattern's recursive descent
 ;; (JDK 25) ported method by method over the pattern's code points: the
@@ -5644,12 +5655,16 @@
 
 (defun rontolisp::%clojure-re-matcher-p (x)
   "Whether X is the (:C%MATCHER stamp pattern input cell) wrapper re-matcher
-   builds."
+   builds, or the one over a CharSequence type, whose sixth slot (type .
+   length) is what INPUT, the prefix read so far, is read from."
   (and (consp x) (eq (car x) :C%MATCHER) (consp (cdr x)) (consp (cdr (cdr x)))
        (rontolisp::%clojure-re-pattern-p (car (cdr (cdr x))))
        (consp (cdr (cdr (cdr x)))) (stringp (car (cdr (cdr (cdr x)))))
        (consp (cdr (cdr (cdr (cdr x))))) (consp (car (cdr (cdr (cdr (cdr x))))))
-       (null (cdr (cdr (cdr (cdr (cdr x))))))))
+       (or (null (cdr (cdr (cdr (cdr (cdr x))))))
+           (and (consp (cdr (cdr (cdr (cdr (cdr x))))))
+                (consp (car (cdr (cdr (cdr (cdr (cdr x)))))))
+                (null (cdr (cdr (cdr (cdr (cdr (cdr x)))))))))))
 
 (defun rontolisp::%clojure-re-pat-source (p)
   "The SOURCE slot of the pattern P."
@@ -6923,11 +6938,15 @@
               (rontolisp::%clojure-re-word-char-p (char-code (char s pos))))))
     (if left (not right) right)))
 
-(defun rontolisp::%clojure-re-anchor-p (tag s len pos)
+(defun rontolisp::%clojure-re-anchor-p (tag s len pos g)
   "Whether the zero-width anchor TAG holds at POS of S (LEN long), as the
    oracle's Begin, Caret, UnixCaret, Dollar, UnixDollar, End and Bound do:
    a line ends at \\n (not after a \\r), \\r, U+0085, U+2028 or U+2029 (\\n
-   alone under UNIX_LINES), ^ in MULTILINE never holds at the very end."
+   alone under UNIX_LINES), ^ in MULTILINE never holds at the very end. Any
+   anchor but ^ within two characters of the end reads where the input ends
+   (the group vector G's mark, %clojure-re-hit-end)."
+  (if (and (not (eq tag :bol)) (>= (+ pos 2) len))
+      (rontolisp::%clojure-re-hit-end g))
   (cond ((eq tag :bol) (= pos 0))
         ((eq tag :eol)
          (cond ((< pos (- len 2)) nil)
@@ -6974,6 +6993,18 @@
   (setf (svref g (* 2 idx)) start)
   (setf (svref g (+ (* 2 idx) 1)) end))
 
+;; Slot 0 of a search's group vector -- group 0's start, which no group sets (the
+;; whole match is the search's own answer) -- marks that the search read where the
+;; input ends: a test of a position at or near LEN that more input could answer
+;; otherwise (the oracle's Matcher.hitEnd). Every engine step that reads the end
+;; marks it, so a search that did not would answer the same over a longer input:
+;; what lets a matcher over a CharSequence type read only a prefix
+;; (%clojure-re-lazy-search). Marking more than that costs a longer prefix, never
+;; a wrong answer.
+(defun rontolisp::%clojure-re-hit-end (g)
+  "Marks that the search of the group vector G read where its input ends."
+  (setf (svref g 0) t))
+
 (defun rontolisp::%clojure-re-match (op s len pos g k)
   "Match OP at POS of S (LEN long) over the group vector G: the continuation
    K's answer for the end position, or NIL. Backtracking rides OR: a
@@ -6982,16 +7013,23 @@
   (let ((tag (car op)))
     (cond
      ((eq tag :lit)
-      (if (and (< pos len) (= (char-code (char s pos)) (car (cdr op))))
-          (funcall k (+ pos 1))
-          nil))
+      (if (< pos len)
+          (if (= (char-code (char s pos)) (car (cdr op)))
+              (funcall k (+ pos 1))
+              nil)
+          (progn
+            (rontolisp::%clojure-re-hit-end g)
+            nil)))
      ((eq tag :seq) (rontolisp::%clojure-re-match-seq (cdr op) s len pos g k))
      ((eq tag :rep) (rontolisp::%clojure-re-match-rep op s len pos g k))
      ((rontolisp::%clojure-re-char-op-p op)
-      (if (and (< pos len)
-               (rontolisp::%clojure-re-char-test op (char-code (char s pos))))
-          (funcall k (+ pos 1))
-          nil))
+      (if (< pos len)
+          (if (rontolisp::%clojure-re-char-test op (char-code (char s pos)))
+              (funcall k (+ pos 1))
+              nil)
+          (progn
+            (rontolisp::%clojure-re-hit-end g)
+            nil)))
      ((eq tag :grp)
       (rontolisp::%clojure-re-match-group (car (cdr op)) (car (cdr (cdr op))) s
                                           len pos g k))
@@ -7015,8 +7053,8 @@
         (if end (funcall k end) nil)))
      ((or (eq tag :backref) (eq tag :ibackref) (eq tag :ubackref))
       (rontolisp::%clojure-re-match-backref op s len pos g k))
-     ((eq tag :lb) (rontolisp::%clojure-re-match-linebreak s len pos k))
-     ((rontolisp::%clojure-re-anchor-p tag s len pos) (funcall k pos))
+     ((eq tag :lb) (rontolisp::%clojure-re-match-linebreak s len pos g k))
+     ((rontolisp::%clojure-re-anchor-p tag s len pos g) (funcall k pos))
      (t nil))))
 
 (defun rontolisp::%clojure-re-match-seq (ops s len pos g k)
@@ -7077,6 +7115,7 @@
                (n (- (svref g (+ i2 1)) gs))
                (ok (<= (+ pos n) len))
                (i 0))
+          (if (not ok) (rontolisp::%clojure-re-hit-end g))
           (do ()
               ((or (not ok) (>= i n)))
             (let ((c1 (char-code (char s (+ pos i))))
@@ -7099,17 +7138,20 @@
             (setq i (+ i 1)))
           (if ok (funcall k (+ pos n)) nil)))))
 
-(defun rontolisp::%clojure-re-match-linebreak (s len pos k)
+(defun rontolisp::%clojure-re-match-linebreak (s len pos g k)
   "\\R: \\r\\n, giving way to \\r alone when what follows fails, or one of
    \\n \\x0B \\f \\r U+0085 U+2028 U+2029 (the oracle's LineEnding)."
   (if (< pos len)
       (let ((c (char-code (char s pos))))
         (cond ((= c 13)
+               (if (>= (+ pos 1) len) (rontolisp::%clojure-re-hit-end g))
                (or (and (< (+ pos 1) len) (= (char-code (char s (+ pos 1))) 10)
                         (funcall k (+ pos 2))) (funcall k (+ pos 1))))
               ((rontolisp::%clojure-re-vert-p c) (funcall k (+ pos 1)))
               (t nil)))
-      nil))
+      (progn
+        (rontolisp::%clojure-re-hit-end g)
+        nil)))
 
 (defun rontolisp::%clojure-re-match-rep (op s len pos g k)
   "Match the quantified op (:rep unit min max mode kind) as the oracle's node
@@ -7120,7 +7162,7 @@
         (mode (nth 4 op))
         (kind (nth 5 op)))
     (cond ((rontolisp::%clojure-re-char-op-p unit)
-           (rontolisp::%clojure-re-match-run unit lo hi mode s len pos k))
+           (rontolisp::%clojure-re-match-run unit lo hi mode s len pos g k))
           ((or (eq kind :loop) (eq kind :loopm))
            (rontolisp::%clojure-re-loop op s len pos g k))
           ((eq kind :branch)
@@ -7135,11 +7177,12 @@
                                                s len pos g k))
           (t (rontolisp::%clojure-re-curly unit lo hi mode s len pos g k)))))
 
-(defun rontolisp::%clojure-re-match-run (unit lo hi mode s len pos k)
+(defun rontolisp::%clojure-re-match-run (unit lo hi mode s len pos g k)
   "A quantified one-character UNIT: the matching run from POS counted at
    once, then tried longest first (greedy), shortest first (reluctant) or
-   only longest (possessive)."
-  (let ((top (if hi (+ pos hi) len)))
+   only longest (possessive). A run the input's end stops reads the end
+   (%clojure-re-hit-end)."
+  (let ((top (if hi (+ pos hi) len)) (capped (or (null hi) (> (+ pos hi) len))))
     (if (> top len) (setq top len))
     (if (eq mode :reluctant)
         (let ((end pos) (found nil) (stop nil))
@@ -7149,7 +7192,9 @@
                      (rontolisp::%clojure-re-char-test unit
                       (char-code (char s end))))
                 (setq end (+ end 1))
-                (setq stop t)))
+                (progn
+                  (if (>= end len) (rontolisp::%clojure-re-hit-end g))
+                  (setq stop t))))
           (if stop
               nil
               (do ()
@@ -7160,7 +7205,10 @@
                              (rontolisp::%clojure-re-char-test unit
                               (char-code (char s end))))
                         (setq end (+ end 1))
-                        (setq stop t))))))
+                        (progn
+                          (if (and capped (>= end top))
+                              (rontolisp::%clojure-re-hit-end g))
+                          (setq stop t)))))))
         (let ((end pos))
           (do ()
               ((or (>= end top)
@@ -7168,6 +7216,7 @@
                     (rontolisp::%clojure-re-char-test unit
                      (char-code (char s end))))))
             (setq end (+ end 1)))
+          (if (and capped (>= end top)) (rontolisp::%clojure-re-hit-end g))
           (cond ((< (- end pos) lo) nil)
                 ((eq mode :possessive) (funcall k end))
                 (t (let ((found nil) (least (+ pos lo)))
@@ -7387,12 +7436,20 @@
 
 (defun rontolisp::%clojure-re-find-from (p s len from)
   "The leftmost match of the pattern P at or past FROM: (start end groups),
-   GROUPS the search's group vector, or NIL. The groups start empty once per
-   search, not per start position, like the oracle's."
-  (let ((ops (rontolisp::%clojure-re-pat-ops p))
-        (g (rontolisp::%clojure-re-groups-of p)))
+   GROUPS the search's group vector, or NIL."
+  (rontolisp::%clojure-re-search p s len from
+                                 (rontolisp::%clojure-re-groups-of p)))
+
+(defun rontolisp::%clojure-re-search (p s len from g)
+  "%clojure-re-find-from over the fresh group vector G, which marks whether
+   the search read where S ends: one that tried every start position did,
+   since more input brings more of them (the oracle's Start node). The groups
+   start empty once per search, not per start position, like the oracle's."
+  (let ((ops (rontolisp::%clojure-re-pat-ops p)))
     (do ((pos from (+ pos 1)) (found nil))
-        ((or found (> pos len)) found)
+        ((or found (> pos len))
+         (if (null found) (rontolisp::%clojure-re-hit-end g))
+         found)
       (let ((end
              (rontolisp::%clojure-re-match ops s len pos g (lambda (end) end))))
         (if end (setq found (list pos end g)))))))
@@ -7400,11 +7457,24 @@
 (defun rontolisp::%clojure-re-match-at-start (p s whole)
   "The match of the pattern P at the start of S, the whole of it when WHOLE:
    (0 end groups), or NIL."
-  (let* ((len (length s))
-         (g (rontolisp::%clojure-re-groups-of p))
-         (end
-          (rontolisp::%clojure-re-match (rontolisp::%clojure-re-pat-ops p) s len
-           0 g (lambda (end) (if (or (not whole) (= end len)) end nil)))))
+  (rontolisp::%clojure-re-anchored p s (length s) whole
+                                   (rontolisp::%clojure-re-groups-of p)))
+
+(defun rontolisp::%clojure-re-anchored (p s len whole g)
+  "The match of the pattern P at the start of S (LEN long), the whole of it
+   when WHOLE, over the fresh group vector G, which marks whether the match
+   read where S ends: a whole match ending at LEN reads it, since more input
+   would leave it short."
+  (let ((end
+         (rontolisp::%clojure-re-match (rontolisp::%clojure-re-pat-ops p) s len
+                                       0 g
+                                       (lambda (end)
+                                         (cond ((not whole) end)
+                                               ((= end len)
+                                                (rontolisp::%clojure-re-hit-end
+                                                 g)
+                                                end)
+                                               (t nil))))))
     (if end (list 0 end g) nil)))
 
 (defun rontolisp::%clojure-re-group-span (found n)
@@ -7423,7 +7493,14 @@
   (let ((cell (rontolisp::%clojure-re-match-cell m))
         (input (rontolisp::%clojure-re-match-input m))
         (pat (rontolisp::%clojure-re-match-pat m)))
-    (let ((len (length input)) (pos (car cell)) (last (cdr cell)))
+    (let ((len
+           ;; a CharSequence type's whole length, of which INPUT is the prefix
+           ;; read so far: an arm of the char-sequence family
+           (if (rontolisp::%clojure-re-lazy-p m)
+               (rontolisp::%clojure-re-lazy-length m)
+               (length input)))
+          (pos (car cell))
+          (last (cdr cell)))
       (if (> pos len)
           nil
           (let ((from
@@ -7434,7 +7511,10 @@
                   (rplacd cell nil)
                   nil)
                 (let ((found
-                       (rontolisp::%clojure-re-find-from pat input len from)))
+                       (if (rontolisp::%clojure-re-lazy-p m)
+                           (rontolisp::%clojure-re-lazy-search m from :find)
+                           (rontolisp::%clojure-re-find-from pat input len
+                                                             from))))
                   (if (null found)
                       (progn
                         (rplaca cell (+ len 1))
@@ -7481,29 +7561,110 @@
 
 (defun rontolisp::%clojure-re-matcher (pat s)
   "A matcher of the pattern PAT over the string S (a pattern only, like the
-   oracle)."
+   oracle), or over a type implementing CharSequence, read only as far as a
+   match needs it."
   (let ((p
          (rontolisp::%clojure-re-as-pattern pat
           "re-matcher takes a pattern and a string")))
-    (if (not (stringp s))
-        (rontolisp::%clojure-class-cast-exception-of
-         "re-matcher takes a pattern and a string" s)
-        (list :C%MATCHER (gensym "re") p s (cons 0 nil)))))
+    (cond ((stringp s) (list :C%MATCHER (gensym "re") p s (cons 0 nil)))
+          ;; an arm of the char-sequence family ("Host interfaces")
+          ((rontolisp::%clojure-char-sequence-p s)
+           (rontolisp::%clojure-re-lazy-matcher p s))
+          (t (rontolisp::%clojure-class-cast-exception-of
+              "re-matcher takes a pattern and a string" s)))))
 
 (defun rontolisp::%clojure-re-find (pat s)
   "The first match of PAT in S, or NIL."
   (let ((p
          (rontolisp::%clojure-re-as-pattern pat
           "re-find takes a matcher, or a pattern and a string")))
-    (if (not (stringp s))
-        (rontolisp::%clojure-class-cast-exception-of
-         "re-find takes a matcher, or a pattern and a string" s)
-        (let ((m (list :C%MATCHER (gensym "re") p s (cons 0 nil))))
-          (let ((found (rontolisp::%clojure-re-next m)))
-            (if (null found)
-                nil
-                (rontolisp::%clojure-re-value s found
-                 (rontolisp::%clojure-re-pat-ngroups p))))))))
+    (cond ((stringp s)
+           (let ((m (list :C%MATCHER (gensym "re") p s (cons 0 nil))))
+             (let ((found (rontolisp::%clojure-re-next m)))
+               (if (null found)
+                   nil
+                   (rontolisp::%clojure-re-value s found
+                    (rontolisp::%clojure-re-pat-ngroups p))))))
+          ;; a type implementing CharSequence, read as far as the first match: an
+          ;; arm of the char-sequence family ("Host interfaces")
+          ((rontolisp::%clojure-char-sequence-p s)
+           (rontolisp::%clojure-re-find-m
+            (rontolisp::%clojure-re-lazy-matcher p s)))
+          (t (rontolisp::%clojure-class-cast-exception-of
+              "re-find takes a matcher, or a pattern and a string" s)))))
+
+;; A matcher over a type implementing CharSequence reads its characters only as
+;; far as a match needs them, as the oracle's Matcher reads charAt: its INPUT is
+;; the prefix read so far and its sixth slot (type . length) what the prefix is
+;; read from. A search runs over the prefix; one that read where the prefix ends
+;; (%clojure-re-hit-end) runs again over a prefix twice as long, until it did not
+;; or the prefix is the whole input, and so answers what a search over the whole
+;; input answers. instaparse's terminals, (re-matcher re (sub-sequence text i))
+;; then .lookingAt, read a few characters each where the whole rest of the text
+;; was read through charAt before.
+
+(defun rontolisp::%clojure-re-lazy-matcher (p cs)
+  "A matcher of the pattern P over the CharSequence type CS, its length read
+   now (the oracle's Matcher reads it on reset) and no character yet."
+  (list :C%MATCHER (gensym "re") p "" (cons 0 nil)
+        (cons cs (rontolisp::%clojure-char-sequence-length cs))))
+
+(defun rontolisp::%clojure-re-lazy-p (m)
+  "Whether the matcher M reads a CharSequence type as it goes: the test of
+   the char-sequence family's arms in the matcher verbs."
+  (if (cdr (cdr (cdr (cdr (cdr m))))) t nil))
+
+(defun rontolisp::%clojure-re-lazy-length (m)
+  "The length of the CharSequence type the lazy matcher M reads."
+  (cdr (car (cdr (cdr (cdr (cdr (cdr m))))))))
+
+(defun rontolisp::%clojure-re-lazy-grow (m need)
+  "The lazy matcher M's prefix, read on when it is shorter than NEED
+   characters: to NEED and at least twice its length (16 from none), at most
+   the whole input; stored in M and answered."
+  (let* ((s (rontolisp::%clojure-re-match-input m))
+         (source (car (cdr (cdr (cdr (cdr (cdr m)))))))
+         (have (length s))
+         (want (max need (if (= have 0) 16 (* 2 have)))))
+    (if (> want (cdr source)) (setq want (cdr source)))
+    (if (or (>= have need) (<= want have))
+        s
+        (let ((out (make-string want))
+              (char-at
+               (rontolisp::%clojure-interface-entry (car source) "charAt")))
+          (replace out s)
+          (do ((i have (+ i 1)))
+              ((>= i want))
+            (let ((c (funcall char-at (car source) i)))
+              (if (characterp c)
+                  (setf (char out i) c)
+                  (rontolisp::%clojure-class-cast-exception
+                   "the answer of charAt cannot be cast to class java.lang.Character"))))
+          (rplaca (cdr (cdr (cdr m))) out)
+          out))))
+
+(defun rontolisp::%clojure-re-lazy-search (m from whole)
+  "The match of the lazy matcher M over its whole input: the leftmost at or
+   past FROM when WHOLE is :find, else the one at the start (the whole input
+   when WHOLE is true), each over a prefix grown until the search no longer
+   reads its end."
+  (let ((p (rontolisp::%clojure-re-match-pat m))
+        (total (rontolisp::%clojure-re-lazy-length m))
+        (found nil)
+        (done nil))
+    (rontolisp::%clojure-re-lazy-grow m (max from 1))
+    (do ()
+        (done found)
+      (let* ((s (rontolisp::%clojure-re-match-input m))
+             (len (length s))
+             (g (rontolisp::%clojure-re-groups-of p)))
+        (setq found
+              (if (eq whole :find)
+                  (rontolisp::%clojure-re-search p s len from g)
+                  (rontolisp::%clojure-re-anchored p s len whole g)))
+        (if (and (eq (svref g 0) t) (< len total))
+            (rontolisp::%clojure-re-lazy-grow m (+ len 1))
+            (setq done t))))))
 
 (defun rontolisp::%clojure-re-find-m (m)
   "The matcher's next match, or NIL."
@@ -7616,7 +7777,10 @@
   "Matcher.find(int): the matcher reset, then a match searched from START, the
    oracle's IndexOutOfBoundsException outside the input."
   (if (or (not (integerp start)) (< start 0)
-          (> start (length (rontolisp::%clojure-re-match-input m))))
+          (> start
+             (if (rontolisp::%clojure-re-lazy-p m)
+                 (rontolisp::%clojure-re-lazy-length m)
+                 (length (rontolisp::%clojure-re-match-input m)))))
       (rontolisp::%clojure-index-out-of-bounds-exception "Illegal start index")
       (let ((cell (rontolisp::%clojure-re-match-cell m)))
         (rplaca cell start)
@@ -7628,9 +7792,13 @@
    Matcher.matches() (one spanning the whole input): the match recorded."
   (let ((cell (rontolisp::%clojure-re-match-cell m))
         (found
-         (rontolisp::%clojure-re-match-at-start
-          (rontolisp::%clojure-re-match-pat m)
-          (rontolisp::%clojure-re-match-input m) whole)))
+         ;; a CharSequence type read as far as the match needs: an arm of the
+         ;; char-sequence family
+         (if (rontolisp::%clojure-re-lazy-p m)
+             (rontolisp::%clojure-re-lazy-search m 0 whole)
+             (rontolisp::%clojure-re-match-at-start
+              (rontolisp::%clojure-re-match-pat m)
+              (rontolisp::%clojure-re-match-input m) whole))))
     (if found
         (progn
           (rplaca cell (car (cdr found)))
@@ -9233,9 +9401,7 @@
       nil
       (let* ((src (rontolisp::%clojure-set-entries m "rename-keys"))
              (pairs (rontolisp::%clojure-kv-pairs kmap "rename-keys"))
-             (out
-              (rontolisp:plist-hash-table (rontolisp:hash-table-plist src)
-                                          :test 'equal))
+             (out (rontolisp::%copy-equal-table src))
              (miss (list nil))
              (record (rontolisp::%clojure-record-p m)))
         (dolist (p pairs)
@@ -17020,8 +17186,7 @@
    keyword names and values put over them, a later pair winning."
   (let ((out
          (if table
-             (rontolisp:plist-hash-table (rontolisp:hash-table-plist table)
-                                         :test 'equal)
+             (rontolisp::%copy-equal-table table)
              (make-hash-table :test 'equal))))
     (do ((p pairs (cdr (cdr p))))
         ((null p) out)

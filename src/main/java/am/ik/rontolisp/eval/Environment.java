@@ -8183,6 +8183,21 @@ public final class Environment implements Scope {
 			};
 			return name == null ? LispNil.INSTANCE : new LispString(name);
 		}));
+		// %copy-equal-table: the native mirror of the prelude's table copy
+		// (LispPreludeLibrary.COPY_EQUAL_TABLE_INTERNAL), the arrangement of
+		// %octets-to-string below -- the compile paths compile the Lisp definition, the
+		// interpreter finds this one first. Every Clojure assoc, dissoc and set conj
+		// copies
+		// its table through it, so it has to be native here: the interpreted loop cost a
+		// step per entry, and a table that grows by assoc paid it for every entry on
+		// every
+		// assoc (instaparse's parse table). Pinned against the Lisp one by
+		// LispPreludeLibraryTest.
+		String copyEqualTable = LispNames.COPY_EQUAL_TABLE_INTERNAL_QUALIFIED;
+		env.defineFunction(copyEqualTable, new LispFunction(copyEqualTable, args -> {
+			requireArgCount(LispNames.COPY_EQUAL_TABLE_INTERNAL, args, 1);
+			return requireHashTable(LispNames.MAPHASH, args.get(0)).copyEqual();
+		}));
 		// %octets-to-string: the native mirror of the prelude's lenient UTF-8 decoder
 		// (LispPreludeLibrary.OCTETS_TO_STRING_INTERNAL), the char-name arrangement --
 		// the compile paths compile the Lisp definition, the interpreter finds this one

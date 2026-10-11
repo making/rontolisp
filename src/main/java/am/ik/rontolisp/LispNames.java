@@ -6037,6 +6037,18 @@ public final class LispNames {
 	public static final String OCTETS_JOIN_INTERNAL = "%OCTETS-JOIN";
 
 	/**
+	 * The internal {@code rontolisp::%copy-equal-table} helper: an {@code equal} hash
+	 * table -> a fresh {@code equal} table holding its entries (each key as first stored)
+	 * in its iteration order, which a later store into either leaves the other without --
+	 * the copy a Clojure map, set or record field table takes before an {@code assoc},
+	 * {@code dissoc}, {@code conj} or {@code disj} changes it. ONE definition in Lisp
+	 * source ({@code LispPreludeLibrary}) for the compile paths; the interpreter's is
+	 * native ({@code Environment}), where the Lisp loop cost an interpreted step per
+	 * entry.
+	 */
+	public static final String COPY_EQUAL_TABLE_INTERNAL = "%COPY-EQUAL-TABLE";
+
+	/**
 	 * The internal {@code rontolisp::%octets-to-string-replacing} helper: the octets of
 	 * an {@code (unsigned-byte 8)} vector from a start below an end -> the text the JDK's
 	 * {@code new String(bytes, UTF_8)} decodes them to, each malformed sequence ONE
@@ -7771,6 +7783,12 @@ public final class LispNames {
 	 * ({@link #OCTETS_TO_STRING_INTERNAL}).
 	 */
 	public static final String OCTETS_TO_STRING_INTERNAL_QUALIFIED = RONTOLISP_PKG + "::" + OCTETS_TO_STRING_INTERNAL;
+
+	/**
+	 * The canonical internal-qualified spelling of {@code rontolisp::%copy-equal-table}
+	 * ({@link #COPY_EQUAL_TABLE_INTERNAL}).
+	 */
+	public static final String COPY_EQUAL_TABLE_INTERNAL_QUALIFIED = RONTOLISP_PKG + "::" + COPY_EQUAL_TABLE_INTERNAL;
 
 	/**
 	 * The canonical internal-qualified spelling of

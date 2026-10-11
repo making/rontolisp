@@ -50,7 +50,7 @@ The oracle is `clj` 1.12.6.1673: a behavior is decided by running it there, and 
 | `nil` / `true` | `NIL` / `T` | `nil` IS the empty list |
 | `false` | the value of `rontolisp::%clojure-false`, a distinct non-`NIL` symbol spelled `false` | the `#f` treatment of `scheme.lisp`; every lowered test is an explicit null-or-false check on a temporary; the symbol `java:` passes as Java's false ("Java interop") |
 | `:foo`, `:a/b` | `(:C%KEYWORD "foo")`, spelling verbatim | compared by `equal`; `::kw` / `::alias/kw` resolve at lower time against the current namespace (an unknown alias is the oracle's `Invalid token`) |
-| `{k v}` | an `equal` hash table (`rontolisp:plist-hash-table`), never mutated: every verb builds a fresh one | the shared runtime (`.kb/hash-tables.md`), so persistence holds on all four backends with no per-backend code; a persistent-map library would add a representation every backend prints, hashes and compares. Collection keys go through "Structural keys" |
+| `{k v}` | an `equal` hash table (`rontolisp:plist-hash-table`), never mutated: every verb builds a fresh one, copying the table ("The copy a map verb takes") | the shared runtime (`.kb/hash-tables.md`), so persistence holds on all four backends with no per-backend code; a persistent-map library would add a representation every backend prints, hashes and compares. Collection keys go through "Structural keys" |
 | `#{..}` | `(:C%SET table)`, each member under itself | a repeated literal element is refused when the read forms are `=` (`ClojureReader.equivKey`: `1`/`1N`, `[1]`/`(1)`, maps and sets in any order; `Duplicate key`); members `=` only once evaluated: "Literal keys equal once evaluated" |
 | `sorted-map` / `sorted-set` (and `-by`) | `(:C%SORTED setp cmp items)`: a vector of `[k v]` entries or members in comparator order | "Sorted collections" |
 | `[..]` | a CL vector (a `vector` call) | a string is a CL vector too, so `vector?`/`coll?` exclude strings |
@@ -885,10 +885,29 @@ table's, else compares the classes added since and tries again
   finds the same boxed NaN but not another).
 - Two vectors compare in place in `%clojure-equal` (no seq-view copies) -- the bucket scan's
   hot path.
+- `%clojure-equal` answers T for one object other than a number on both sides before reading
+  it (2026-10-11), the oracle's `Util.equiv` `k1 == k2`: a key `=` to its representative
+  through a shared member (`[i parser]`, the parser one map) no longer walks that member, and
+  `(= v v)` of a vector, map, set or list holding NaN is true, of an endless lazy seq true
+  (it never returned), of an unrealized lazy seq true without realizing it -- each the
+  oracle's. A number keeps its test: `(let [x ##NaN] (= x x))` false like the oracle's
+  primitive double; `(def n ##NaN) (= n n)` stays false where the oracle's one boxed NaN is
+  `=` to itself (user doc `syntax.md`).
+- A function hashes by its identity (`%identity-hash`) in `%clojure-hash` (2026-10-11); it
+  hashed 0, so every `[f i]` key of one `i` shared a bucket and each fresh closure added a
+  class to it for the run (instaparse's message cache, keyed `[listener index]`: the
+  interpreter's `cfg/ebnf` of one small grammar ran 2.0 s, then 3.5 s by the eighth run). A
+  set of 2,000 `[f 0]` keys over distinct closures: 60.2 s -> 0.72 s on the interpreter (load
+  ~3, the two arms back to back). Only
+  functions: any other identity-compared value may be `equal` to another wrapper of it (a
+  var's list), so it keeps the constant. `%clojure-hash` is reached only through
+  `%clojure-key-class`, whose eq table already gives a wasm module the identity slot.
 - Untouched on purpose: hierarchy tables (tags), protocol tables (tags), `prefer-method`'s
   `(x . y)` keys, record field reads (keywords).
-- Pinned by `clojure-spec.yaml` `structural-keys-find-equal-collections` (oracle-identical)
-  and `ClojureLoweringTest.aLiteralScalarKeySkipsTheStructuralKeyRuntime`.
+- Pinned by `clojure-spec.yaml` `structural-keys-find-equal-collections` (oracle-identical),
+  `keys-holding-distinct-closures-stay-hashed` (a regression is a minute-long interpreter leg),
+  `a-value-is-equal-to-itself-before-its-contents-are-read`, and
+  `ClojureLoweringTest.aLiteralScalarKeySkipsTheStructuralKeyRuntime`.
 - Typed keys (2026-10-10): a `deftype`/`reify` whose type has a hash of its own (an `IHashEq`
   row's `hasheq`, an `Object` row's `hashCode`) and an equality other than identity
   (`IPersistentCollection`'s `equiv`; `Sequential`, `java.util.List`/`Set`/`Map`, which a core
@@ -938,6 +957,29 @@ table's, else compares the classes added since and tries again
   data.priority-map 1.2.0: `(contains? #{p} {:a 2 :b 1 :c 3})` true and
   `(get {p :found} {:a 2 :b 1 :c 3} :missing)` `:found` on all four backends, the oracle's
   (they were `false` and `:missing`).
+
+## The copy a map verb takes
+
+**`assoc`, `dissoc`, `merge`, a set's `conj`/`disj` and the other verbs answering a changed
+map copy the table first, through `rontolisp::%copy-equal-table`** (2026-10-11): a fresh
+`equal` table of the same entries in the same order. It is a prelude defun the compile paths
+compile (a `maphash` and a store per entry) and a native mirror the interpreter binds first
+(`LispHashTable.copyEqual`, the entries shared), pinned against each other by
+`LispPreludeLibraryTest#thePreludeCopyEqualTableAgreesWithTheInterpretersNativeMirror`. Sites:
+`%clojure-plist-table`, `rename-keys`, the HTTP client's `assoc`, `ClojureCollectionLowering`'s
+`copyTable` (`dissoc`, `disj`, a set's `conj`) and the hierarchy's `c%h-copy-table`.
+- It replaced `(plist-hash-table (hash-table-plist m))`: prelude Lisp too, so an interpreted
+  step and a list cell per entry on the interpreter, and it stored the keys back to front, so
+  each `assoc` reversed the walk order (`(assoc {:a 1 :b 2} :c 3)` printed
+  `{:b 2, :a 1, :c 3}`; the oracle's array map and now this print `{:a 1, :b 2, :c 3}`).
+- Still O(n) per verb: a map grown one `assoc` at a time is O(n^2). instaparse's GLL parse
+  table (`(swap! nodes assoc node-key node)`, 19,481 nodes for `instaparse.abnf`'s grammar)
+  and message cache (7,220 entries) were 91% of that grammar's `cfg/ebnf` as a JVM class and
+  more than 87% on the interpreter. A probe mutating a table of more than 64 entries in place
+  (unsound; the ceiling, load ~20): JVM 38.6 -> 4.5 s, interpreter > 580 -> 76 s. The native
+  mirror reaches the interpreter's ceiling (77 s, load ~4); the compiled loop only saves the
+  list (JVM 39.0 -> 36.5 s, load ~4, base `db05c2f42`). A JVM table shares no structure with a copy (`RontoHashTable`: a bucket index of
+  mutable pairs, read directly by the Java bridge and the HTTP runtime): `.todo/f50`.
 
 ## Hashes
 
@@ -1013,7 +1055,8 @@ hash's.
   `type`, `gll.clj:942` `delay` (refused), `viz.clj:19` `ns-resolve`/`find-ns`, `viz.clj:89` a
   `require` of an absent optional namespace inside a function body (loaded while lowering),
   `macros.clj:4` `&env` (`.todo` item). Its `re-match-at-front` also calls `.lookingAt` and
-  `.group` on a `re-matcher` matcher, which no value-method row maps.
+  `.group` on a `re-matcher` matcher, which no value-method row mapped then (the matcher
+  methods since 2026-10-11, "Regex"; the rest of the path, "Collection interfaces" re-probes).
 - A return hint on a parameter vector (`(defn f ^long [x] ...)`, `defn-`, each arity of a
   `defn`/`fn`/`letfn`, a protocol method, `defmethod`) reads as `(%with-meta [..] long)`;
   `ClojureBindingLowering.isVectorDatum` strips the layer, so the clause is not mistaken for a
@@ -3570,14 +3613,16 @@ measured on clj 1.12.6, 2026-10-08).
     shape, so past the end is nil where the oracle calls `charAt`), `seqable?`, the instance
     calls (`length`/`charAt`/`subSequence`; `isEmpty`, the one default with a portable body, is
     stored by `%clojure-char-sequence-row` as a zero length where the body leaves it out;
-    `chars`/`codePoints`/`getChars` refuse by name), `re-find`/`re-seq`/`re-matches`/
-    `re-matcher`, every `clojure.string` verb's string (and `includes?`'s substring), String's
+    `chars`/`codePoints`/`getChars` refuse by name), `re-matcher` and `re-find` (the type
+    itself, read as far as a match needs: the lazy matcher, "Regex"), `re-seq`/`re-matches`,
+    every `clojure.string` verb's string (and `includes?`'s substring), String's
     `.contains`/`.replace` arguments. Those last read the view
     `%clojure-char-sequence-text` (`ClojureStringLowering.text`/`textOf`; a literal argument
-    stays bare): the string of its characters read through `length`/`charAt` once per call --
-    the regex runtime indexes a string, where the oracle's matcher reads `charAt` as far as
-    it matches, so instaparse's per-terminal `(re-matcher re (sub-sequence text i))` copies
-    the rest of the text each time (not measured). `instance? CharSequence` is the alias
+    stays bare): the string of its characters read through `length`/`charAt` once per call.
+    `re-matcher` and `re-find` read the view too until 2026-10-11, so instaparse's per-terminal
+    `(re-matcher re (sub-sequence text i))` read the rest of the text through `charAt` each
+    time: 35 s of the interpreter's 76 s on `instaparse.abnf`'s grammar once the table copy
+    was gone ("The copy a map verb takes"), 29% of the JVM's 4.5 s. `instance? CharSequence` is the alias
     `%clojure-char-sequence-instance-p` -> `%clojure-host-char-sequence-p` (HOST's alias ->
     `stringp` in turn, so the family stands ahead of HOST), keeping the one-test shape. Not
     read through it, as in the oracle: `subs`, `re-pattern`, `vec`, `get`, `=`, `compare`,
@@ -3733,6 +3778,21 @@ interfaces behind an arm family its row's store makes (`ClojureArms`, `COLLECTIO
   `cfg/ebnf` are the oracle's on the interpreter, and `instaparse.core` verbatim (`(insta/parser
   "S = 'a'+ 'b'")`, a success and the failure text) as a JVM class (compile 16 s, run 45 s;
   the interpreter's load of `instaparse.abnf` still exceeds 400 s).
+  Where the time went (2026-10-11, f45; JFR over the JVM class, whose methods are the runtime's
+  functions): `cfg/ebnf` of `S = 'a'+ !'c' 'b'` -- `%clojure-key-class` 54% (its bucket
+  scans' `%clojure-equal` 43%: a closure hashing 0, an `=` walking one parser map against
+  itself; "Structural keys") and the table copy 41%; the 33-rule ABNF grammar -- the copy 91%
+  ("The copy a map verb takes"), then, the copy gone, the `Segment` read whole per terminal,
+  47% of the JVM's rest and 46% of the interpreter's (the lazy matcher, "Regex"). The item's
+  other suspects, the node key's hash and `AutoFlattenSeq`'s, never showed. After the four
+  (load ~4, base `db05c2f42`; before / after): the small grammar's `cfg/ebnf` on the
+  interpreter 2.0 s rising to 3.5 s over eight runs / ~1.0 s flat, JVM ~120 / ~95 ms warm
+  (oracle ~10 ms); the ABNF grammar's, interpreter > 580 / 48.3 s, JVM 39.0 / 36.5 s (oracle
+  0.19 s); `instaparse.core` verbatim and its README parses, interpreter load > 400 s / 82 s
+  wall, JVM run 45.5 / 36.3 s (oracle 2.5 s wall). Every README line (hiccup, enlive, a
+  failure, the `insta/transform` arithmetic, `insta/parses`' seven parses, an
+  `:input-format :abnf` grammar) is the oracle's on the interpreter and the JVM; the JVM's
+  load is the copy (`.todo/f50`).
 - Pins: clojure-spec `a-collection-type-conjs-empties-counts-and-compares-through-its-methods`,
   `a-map-type-assocs-dissocs-reads-and-prints-as-a-map`,
   `a-set-type-disjs-contains-and-prints-as-a-set`,
@@ -4632,6 +4692,29 @@ U+2029 and `\r\n`. Patterns print `#"..."`, matchers `#<Matcher source>`; `class
   bracket class (or its negation) is a nested `(:cls negated items)` item; until 2026-10-11 it
   read the node's tail instead and matched nothing (`[,\s]+` found only commas), clojure-spec
   `a-class-escape-inside-brackets-matches-its-class`.
+
+**A matcher over a type implementing `CharSequence` reads it only as far as a match needs**
+(2026-10-11): `re-matcher` and `re-find` take the type itself, not the text view, and
+`%clojure-re-lazy-matcher` keeps the prefix read so far as the matcher's INPUT, `(type .
+length)` in a sixth slot. A search (`%clojure-re-lazy-search`) runs over the prefix; one that
+read where the prefix ends reads on (16 characters first, then twice the prefix) and runs
+again, so it answers the search over the whole input. "Read the end" is the engine's mark,
+slot 0 of the group vector (group 0's start, which no group sets; `%clojure-re-hit-end`, the
+oracle's `Matcher.hitEnd`): a char op or a run reaching LEN, an anchor within two characters
+of it, a back reference past it, `\R` at it, a whole match ending at it, and a find that tried
+every start position (the oracle's `Start` node: a look-behind fails at LEN without reading
+it, and more input brings more positions). Marking too much costs a longer prefix, never an
+answer. The matcher verbs ask `%clojure-re-lazy-p`, the CHAR_SEQUENCE family's second test.
+The oracle reads `charAt` to where it stops and the groups back through
+`subSequence(..).toString()`; here the groups come off the prefix (user doc: `charAt` past
+where the oracle stops). Pins: `ClojureRegexTest#aMatcherOverACharSequenceTypeReadingAPrefixAnswersAsOverTheWholeInput`
+(the random corpus and curated cases through prefixes seeded at 1 and 3 characters, every
+find, lookingAt and matches `java.util.regex`'s over the whole input; it caught the missing
+find-exhaustion mark), clojure-spec
+`re-matcher-and-re-find-read-a-char-sequence-type-only-as-far-as-a-match-needs` (a
+billion-character type, instaparse's `Segment` terminal; four backends, the oracle's lines),
+`ClojureLoweringTest#reMatcherAndReFindReadACharSequenceTypeThroughTheLazyMatcherOnlyWhereOneIsStored`.
+`hitEnd` stays refused as a method.
 
 **`nth` of a matcher reads `Matcher.group(n)`** (oracle-checked clj 1.12.6, 2026-10-05): the
 last match's group `n`, `nil` for a group that took no part, `IllegalStateException` ("No match

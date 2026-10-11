@@ -283,6 +283,28 @@ public final class LispHashTable implements LispVal {
 		return this.map.values();
 	}
 
+	/**
+	 * A fresh {@code equal} table holding this table's entries -- each key as first
+	 * stored -- in its insertion order, which a later store into either table leaves the
+	 * other without: what {@code rontolisp::%copy-equal-table} answers. An {@code equal}
+	 * table hands its placed keys over as they are (a key and an entry are immutable, so
+	 * the two tables may share them); any other table's keys are placed again under
+	 * {@code equal}, as storing them into a fresh table would.
+	 * @return the copy
+	 */
+	public LispHashTable copyEqual() {
+		LispHashTable copy = new LispHashTable(TEST_EQUAL);
+		if (this.testCode == TEST_EQUAL) {
+			copy.map.putAll(this.map);
+		}
+		else {
+			for (Entry entry : this.map.values()) {
+				copy.put(entry.key(), entry.value());
+			}
+		}
+		return copy;
+	}
+
 	@Override
 	public String print() {
 		return switch (this.testCode) {

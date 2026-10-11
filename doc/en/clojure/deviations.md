@@ -342,8 +342,10 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   ([reify](reference/reify.md#host-interfaces)); any other interface (`IChunkedSeq`,
   `java.util.Deque` ...) is refused by name. `first`, `next` and `rest` of an `ISeq` type read
   it through its `seq`, a verb may call a method another number of times than the oracle, and
-  `str` of a collection type spells its contents, and the regex functions and `clojure.string`
-  read a `CharSequence` type whole through its `length` and `charAt` once per call
+  `str` of a collection type spells its contents, `re-matcher` and `re-find` read a
+  `CharSequence` type in prefixes of 16, 32, 64 ... characters (past where the oracle's
+  matcher stops), and the other regex functions and `clojure.string` read it whole through its
+  `length` and `charAt` once per call
   ([collection interfaces](reference/reify.md#collection-interfaces)). A type with a hash and
   an equality of its own keys a map or a set by value, every map comparing its keys as the
   oracle's hash map does, where the oracle's array map (up to eight entries) compares them

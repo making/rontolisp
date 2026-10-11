@@ -170,8 +170,7 @@ final class ClojureHierarchyLowering {
 		LispSymbol ss = new LispSymbol("ss");
 		LispSymbol s = new LispSymbol("s");
 		// (defun c%h-copy-table (table) ...)
-		runtime.add(hdefun("C%H-COPY-TABLE", List.of(table),
-				ClojureCollectionLowering.tableFromPlist(ClojureCollectionLowering.tablePlist(table))));
+		runtime.add(hdefun("C%H-COPY-TABLE", List.of(table), ClojureCollectionLowering.copyTable(table)));
 		// (defun c%h-empty-set () (list :c%set (make-hash-table ...)))
 		runtime.add(hdefun("C%H-EMPTY-SET", List.of(),
 				hfn("LIST", ClojureCollectionLowering.SET_TAG, ClojureCollectionLowering.makeTable())));

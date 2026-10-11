@@ -225,6 +225,48 @@ class LispPreludeLibraryTest {
 	}
 
 	@Test
+	void thePreludeCopyEqualTableAgreesWithTheInterpretersNativeMirror() {
+		// %copy-equal-table is the copy a Clojure map, set or record field table takes
+		// before a verb changes it: Lisp in the prelude for the compile paths, Java in
+		// Environment for the interpreter, which finds the native first. Evaluating the
+		// prelude defun overrides the native in that evaluator, so the two are pinned
+		// against each other: a fresh equal table, each key as first stored, the
+		// source's order (a key removed and stored again last), a store into the copy
+		// leaving the source as it was, and the keys of an eq table placed again under
+		// equal (two equal strings one key, the later value kept).
+		String program = """
+				(let ((src (make-hash-table :test 'equal)) (k (list :c%keyword "a")) (v (vector 1 2))
+				      (e (make-hash-table :test 'eq)))
+				  (setf (gethash k src) 1)
+				  (setf (gethash "b" src) 2)
+				  (setf (gethash v src) 3)
+				  (setf (gethash 4 src) 4)
+				  (remhash "b" src)
+				  (setf (gethash "b" src) 5)
+				  (setf (gethash (copy-seq "x") e) 1)
+				  (setf (gethash (copy-seq "x") e) 2)
+				  (let ((copy (rontolisp::%copy-equal-table src)) (pairs nil)
+				        (ecopy (rontolisp::%copy-equal-table e)))
+				    (setf (gethash :new copy) 6)
+				    (remhash 4 copy)
+				    (maphash (lambda (key val) (push (list key val) pairs)) copy)
+				    (list (reverse pairs) (hash-table-count src) (hash-table-count copy)
+				          (eq (car (car (last pairs))) k) (gethash v copy) (gethash (list :c%keyword "a") copy)
+				          (hash-table-test copy) (gethash :new src) (gethash 4 src)
+				          (hash-table-count ecopy) (gethash "x" ecopy) (hash-table-test ecopy))))""";
+		String expected = "(((:C%KEYWORD \"a\") 1) (#(1 2) 3) (\"b\" 5) (:NEW 6)) 4 4 T 3 1 EQUAL NIL 4 1 2 EQUAL";
+		LispEvaluator nativeSide = new LispEvaluator(new java.io.PrintStream(new java.io.ByteArrayOutputStream()));
+		LispEvaluator preludeSide = new LispEvaluator(new java.io.PrintStream(new java.io.ByteArrayOutputStream()));
+		for (LispVal form : LispPreludeLibrary.formsFor(am.ik.rontolisp.LispNames.COPY_EQUAL_TABLE_INTERNAL)) {
+			preludeSide.eval(form);
+		}
+		String nativeAnswer = nativeSide.eval(LispReader.readFromString(program)).print();
+		String preludeAnswer = preludeSide.eval(LispReader.readFromString(program)).print();
+		assertThat(nativeAnswer).isEqualTo("(" + expected + ")");
+		assertThat(preludeAnswer).isEqualTo(nativeAnswer);
+	}
+
+	@Test
 	void thePreludeOctetsToStringAgreesWithTheInterpretersNativeMirror() {
 		// %octets-to-string is the lenient UTF-8 decoder read-all decodes an octet-chunk
 		// body with: Lisp in the prelude for the compile paths, Java in Environment for

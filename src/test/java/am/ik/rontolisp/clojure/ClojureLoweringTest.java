@@ -2887,6 +2887,25 @@ class ClojureLoweringTest {
 	}
 
 	@Test
+	void reMatcherAndReFindReadACharSequenceTypeThroughTheLazyMatcherOnlyWhereOneIsStored() {
+		// re-matcher and re-find hand their input to the runtime as it is, which reads a
+		// CharSequence type only as far as a match needs (the lazy matcher); the text
+		// view
+		// of the other regex verbs reads it whole. A program storing no CharSequence row
+		// folds the lazy matcher's arms and carries none of it.
+		String source = "(def m (re-matcher #\"a\" (str \"ab\"))) (println (.lookingAt m) (re-find #\"b\" (str \"ab\"))"
+				+ " (re-matches #\"ab\" (str \"ab\")))";
+		assertThat(lowered(source)).contains("(RONTOLISP::%CLOJURE-RE-MATCHER (RONTOLISP::%CLOJURE-RE-COMPILE \"a\") ")
+			.contains(
+					"(RONTOLISP::%CLOJURE-RE-MATCHES (RONTOLISP::%CLOJURE-RE-COMPILE \"ab\") (RONTOLISP::%CLOJURE-CHAR-SEQUENCE-TEXT ");
+		assertThat(prunedForms(source)).doesNotContain("%CLOJURE-RE-LAZY").doesNotContain("%CLOJURE-CHAR-SEQUENCE");
+		String typed = prunedForms("(deftype S [] CharSequence (length [_] 2) (charAt [_ i] \\a)"
+				+ " (subSequence [_ a b] nil)) " + source);
+		assertThat(typed).contains("(DEFUN RONTOLISP::%CLOJURE-RE-LAZY-SEARCH ")
+			.contains("(DEFUN RONTOLISP::%CLOJURE-RE-LAZY-MATCHER ");
+	}
+
+	@Test
 	void reFormsLowerToTheRegexRuntime() {
 		assertThat(lowered("(re-find #\"a+\" \"aaab\")")).contains("RONTOLISP::%CLOJURE-RE-FIND");
 		assertThat(lowered("(re-find (re-matcher #\"a\" \"a\"))")).contains("RONTOLISP::%CLOJURE-RE-FIND-M");

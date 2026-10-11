@@ -6938,6 +6938,45 @@ cases:
       1
       :vy :vy
       true nil
+  - name: keys-holding-distinct-closures-stay-hashed
+    # A key holding a function buckets by the function's identity: a set of 2,000
+    # [f 0] keys over distinct closures (instaparse's message cache keys
+    # [listener index]) is built in linear time. Under one constant hash per
+    # function every key of one index shared a bucket, each store scanned it,
+    # and this case took ~63 s on the interpreter (0.7 s after, 2026-10-11).
+    # Matches the oracle (clj 1.12.6).
+    source: |
+      (let [fs (mapv (fn [i] (fn [] i)) (range 2000))
+            s (set (map (fn [f] [f 0]) fs))
+            m (zipmap (map (fn [f] [f 1]) (take 200 fs)) (range 200))]
+        (prn (count s) (every? (fn [f] (contains? s [f 0])) fs) (contains? s [(fn [] 0) 0])
+             (count m) (m [(nth fs 7) 1]) (m [(nth fs 7) 0])))
+    expected: |
+      2000 true false 200 7 nil
+  - name: a-value-is-equal-to-itself-before-its-contents-are-read
+    # = answers true for one object on both sides without reading it, like the
+    # oracle's Util.equiv (k1 == k2): a collection holding NaN is = to itself
+    # (not to a copy), an endless lazy seq is = to itself, and a lazy seq is not
+    # realized by it. A number keeps its numeric test: (= x x) of a NaN local is
+    # false, as the oracle's primitive double is. Every line matches the oracle
+    # (clj 1.12.6, 2026-10-11); before, the first line was false but for not=, and
+    # the second never returned.
+    source: |
+      (let [v [##NaN] m {:a ##NaN} s #{[##NaN]} l (list ##NaN)]
+        (prn (= v v) (= m m) (= s s) (= l l) (= v [##NaN]) (= [v] [v]) (not= v v)))
+      (let [r (repeat 1) c (cycle [1 2])]
+        (prn (= r r) (= c c) (= [r] [r]) (= {:k c} {:k c})))
+      (let [seen (atom 0) s (lazy-seq (swap! seen inc) [1 2 3])]
+        (prn (= s s) @seen (= s (map identity [1 2 3])) @seen))
+      (let [f (fn [] 1) g (fn [] 2)]
+        (prn (= f f) (= f g) (get {[f 1] :a [g 1] :b} [f 1]) (get {[f 1] :a [g 1] :b} [g 1]) (contains? #{[f 1]} [g 1])))
+      (let [x ##NaN] (prn (= x x) (= ##NaN ##NaN)))
+    expected: |
+      true true true true false true false
+      true true true true
+      true 0 true 1
+      true false :a :b false
+      false false
   - name: a-literal-refuses-keys-equal-once-evaluated
     # A map or set literal whose computed keys or members are = once evaluated is
     # the oracle's run-time Duplicate key, after every form ran: a map names the
@@ -10664,6 +10703,43 @@ cases:
       "orl" ("o" "r") "world" [["or" "r"] ["or" "r"]]
       "WORLD" true true false ["wo" "ld"] "w0rld" 2 "world,world"
       true "world!"
+  - name: re-matcher-and-re-find-read-a-char-sequence-type-only-as-far-as-a-match-needs
+    # re-matcher and re-find read a CharSequence type through its charAt only as far
+    # as a match needs (.kb/clojure-frontend.md "Regex", the lazy matcher), as the
+    # oracle's Matcher does: a type a billion characters long matches at once, where
+    # reading it whole first never returned. LzSeg is instaparse's Segment and its
+    # terminal, (re-matcher re (.subSequence text i (.length text))) then .lookingAt.
+    # Every line is the oracle's (clj 1.12.6, 2026-10-11), on all four backends.
+    source: |
+      (ns lazy-char-sequence)
+      (deftype LzCs [n]
+        CharSequence
+        (length [_] n)
+        (charAt [_ i] (if (= (mod i 7) 6) \b \a))
+        (subSequence [_ a b] (apply str (for [i (range a b)] (if (= (mod i 7) 6) \b \a))))
+        (toString [_] "lz"))
+      (let [big (LzCs. 1000000000)
+            m (re-matcher #"a+b" big)]
+        (prn (re-find #"ab" big) (re-find #"a{3}b" big) (re-find #"(a)(b)" big))
+        (prn (.lookingAt m) (.group m) (.end m) (.find m) (.start m) (.group m) (re-find m)))
+      (deftype LzSeg [^String s off cnt]
+        CharSequence
+        (length [_] cnt)
+        (charAt [_ i] (.charAt s (+ off i)))
+        (subSequence [_ a b] (LzSeg. s (+ off a) (- b a)))
+        (toString [_] (subs s off (+ off cnt))))
+      (let [text (LzSeg. "abc 123 xyz" 0 11)
+            at (fn [re i]
+                 (let [m (re-matcher re (.subSequence text i (.length text)))]
+                   (when (.lookingAt m) (.group m))))]
+        (prn (at #"[a-z]+" 0) (at #"\s*\d+" 3) (at #"[a-z]+" 4) (at #"\s+(?=x)" 7) (at #"\w+$" 8) (at #"z" 10))
+        (prn (.matches (re-matcher #"\w+ \d+ \w+" text)) (.matches (re-matcher #"\w+" text)) (re-find #"\d+" text)))
+      (in-ns 'user)
+    expected: |
+      "ab" "aaab" ["ab" "a" "b"]
+      true "aaaaaab" 7 true 7 "aaaaaab" "aaaaaab"
+      "abc" " 123" nil " " "xyz" "z"
+      true false "123"
   - name: a-collection-type-conjs-empties-counts-and-compares-through-its-methods
     # clojure.lang.IPersistentCollection in a deftype body (.kb/clojure-frontend.md
     # "Collection interfaces"): conj and into reach its cons, empty its empty, = its equiv
