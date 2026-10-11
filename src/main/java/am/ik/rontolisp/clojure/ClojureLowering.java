@@ -269,6 +269,29 @@ public final class ClojureLowering {
 	final Set<String> varRootReaders = new HashSet<>();
 
 	/**
+	 * The var keys whose top-level root writer an {@code alter-var-root} site under a
+	 * shadowing local already hoisted (see {@link ClojureVarLowering#rootSetterOf}).
+	 */
+	final Set<String> varRootWriters = new HashSet<>();
+
+	/**
+	 * Whether every {@code #'} site of a value-cell var registers its root setter: the
+	 * program holds an {@code alter-var-root} of a var it does not spell as {@code #'x}
+	 * (or takes {@code alter-var-root} as a value), found by the pre-scan or, inside a
+	 * macro expansion, by the pass before this one ({@link #rootSetterMiss}).
+	 */
+	boolean rootSetters;
+
+	/**
+	 * Whether this pass met a computed {@code alter-var-root} with {@link #rootSetters}
+	 * off: the program lowers again with it on ({@link #lower}).
+	 */
+	boolean rootSetterMiss;
+
+	/** Whether this pass lowered a value-cell var site without its root setter. */
+	boolean unsetVarSites;
+
+	/**
 	 * Every namespace the lowering has seen, by name; {@link #currentNs} names the one
 	 * the forms lower in.
 	 */
@@ -1512,8 +1535,9 @@ public final class ClojureLowering {
 	 * the var's value cell (at most once more per such var; a program without one lowers
 	 * once). An extension to a walked class of a protocol whose dispatchers lowered
 	 * without the walk leaves it in {@link #walkMisses} the same way, so only the
-	 * protocols extended to one walk. The second pass reuses the first's resolved source
-	 * path.
+	 * protocols extended to one walk, and a computed {@code alter-var-root} the pre-scan
+	 * could not see (a macro expansion's) turns {@link #rootSetters} on. The second pass
+	 * reuses the first's resolved source path.
 	 */
 	static List<LispVal> lower(List<LispVal> datums, @Nullable ClojureReader reader,
 			@Nullable ClojureMacroEvaluator macroEvaluator, ClojureFiles files, boolean hostTarget,
@@ -1522,8 +1546,10 @@ public final class ClojureLowering {
 		Set<String> walking = new HashSet<>();
 		Map<String, Set<String>> guards = new LinkedHashMap<>();
 		ClojureSourcePath sourcePath = null;
+		boolean rootSetters = false;
 		while (true) {
 			ClojureLowering lowering = new ClojureLowering();
+			lowering.rootSetters = rootSetters;
 			lowering.redefinable.addAll(redefinable);
 			lowering.walkingProtocols.addAll(walking);
 			guards.forEach((protocol, tests) -> lowering.interfaceGuards.put(protocol, new LinkedHashSet<>(tests)));
@@ -1536,7 +1562,9 @@ public final class ClojureLowering {
 				guarded |= guards.computeIfAbsent(miss.getKey(), ignored -> new LinkedHashSet<>())
 					.addAll(miss.getValue());
 			}
-			if (!redefs && !walks && !guarded) {
+			boolean setters = lowering.rootSetterMiss && !rootSetters;
+			rootSetters |= lowering.rootSetterMiss;
+			if (!redefs && !walks && !guarded && !setters) {
 				return forms;
 			}
 			sourcePath = lowering.sourcePath;
@@ -2025,11 +2053,31 @@ public final class ClojureLowering {
 
 	/**
 	 * Records into {@link #redefNames} the simple name of every var a {@code with-redefs}
-	 * the datum holds names, at any depth.
+	 * or an {@code alter-var-root} of a literal {@code #'x} the datum holds names, at any
+	 * depth, and turns {@link #rootSetters} on for any other {@code alter-var-root}.
 	 */
 	private void scanRedefinitions(LispVal datum) {
+		if (datum instanceof LispSymbol s && isAlterVarRootName(s.name())) {
+			// alter-var-root as a value: its var is computed
+			needRootSetters();
+			return;
+		}
 		List<LispVal> items = ClojureLowerUtil.items(datum);
 		if (items == null) {
+			return;
+		}
+		if (!items.isEmpty() && items.get(0) instanceof LispSymbol head && isAlterVarRootName(head.name())) {
+			String target = items.size() >= 2 ? ClojureVarLowering.literalVarName(items.get(1)) : null;
+			if (target != null) {
+				int slash = qualifierSlash(target);
+				this.redefNames.add(slash < 0 ? target : target.substring(slash + 1));
+			}
+			else {
+				needRootSetters();
+			}
+			for (LispVal item : items.subList(1, items.size())) {
+				scanRedefinitions(item);
+			}
 			return;
 		}
 		if (items.size() >= 2 && ClojureLowerUtil.isSymbolNamed(items.get(0), "with-redefs")) {
@@ -2045,6 +2093,23 @@ public final class ClojureLowering {
 		}
 		for (LispVal item : items) {
 			scanRedefinitions(item);
+		}
+	}
+
+	/** Whether a name spells {@code clojure.core/alter-var-root}. */
+	static boolean isAlterVarRootName(String name) {
+		return name.equals("alter-var-root") || name.equals("clojure.core/alter-var-root");
+	}
+
+	/**
+	 * Turns {@link #rootSetters} on for an {@code alter-var-root} of a computed var; a
+	 * value-cell var site this pass already lowered without its setter makes the program
+	 * lower again ({@link #rootSetterMiss}).
+	 */
+	void needRootSetters() {
+		if (!this.rootSetters) {
+			this.rootSetters = true;
+			this.rootSetterMiss |= this.unsetVarSites;
 		}
 	}
 

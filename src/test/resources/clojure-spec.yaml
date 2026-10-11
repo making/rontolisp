@@ -4145,6 +4145,98 @@ cases:
       :orig
       [:all :all] [0 5]
       1 false
+  - name: alter-var-root-replaces-the-root-of-a-literal-var
+    # The root becomes (apply f root args) and the call answers it: a def's, a
+    # dynamic var's at the root, a declared one's (from the unbound root), a defn's
+    # (made redefinable, so a caller sees the new root, also from a macro
+    # expansion's #'), past a local of the name; a throwing f leaves the root.
+    # Oracle-identical (clj 1.12.6).
+    source: |
+      (def ^:dynamic *avr-fmt* :hiccup)
+      (println (alter-var-root #'*avr-fmt* (constantly :enlive)) *avr-fmt*)
+      (def avr-counter 1)
+      (println [(alter-var-root #'avr-counter + 10) avr-counter])
+      (println (alter-var-root (var avr-counter) (fn [x y z] (+ x y z)) 100 1000))
+      (defn avr-f [] 1)
+      (defn avr-call-f [] (avr-f))
+      (alter-var-root #'avr-f (constantly (fn [] 2)))
+      (println (avr-f) (avr-call-f))
+      (defn avr-p [] :p)
+      (println (alter-var-root #'avr-p (constantly {:a 1})) (avr-p :a))
+      (declare avr-u)
+      (println (str (alter-var-root #'avr-u (fn [x] (str "was " x)))))
+      (let [avr-counter 5] (println (alter-var-root #'avr-counter inc) avr-counter))
+      (println avr-counter (alter-var-root #'avr-counter :k) (alter-var-root #'avr-counter {nil :m}))
+      (defmacro avr-set! [v value]
+        (if (contains? &env :locals) `(set! ~v ~value) `(alter-var-root (var ~v) (constantly ~value))))
+      (defn avr-set-fmt! [t] (avr-set! *avr-fmt* t))
+      (avr-set-fmt! :x)
+      (println *avr-fmt*)
+      (defn avr-g [] :g)
+      (defn avr-h [] (avr-g))
+      (defmacro avr-swap! [v f] `(alter-var-root (var ~v) (constantly ~f)))
+      (avr-swap! avr-g (fn [] :swapped))
+      (println (avr-g) (avr-h))
+      (println (try (alter-var-root #'avr-counter (fn [x] (throw (ex-info "no" {})))) (catch Exception e (ex-message e))) avr-counter)
+    expected: |
+      :enlive :enlive
+      [11 11]
+      1111
+      2 2
+      {:a 1} 1
+      was Unbound: #'runs-ns/avr-u
+      1112 5
+      1112 nil :m
+      :x
+      :swapped :swapped
+      no :m
+  - name: alter-meta-and-reset-meta-replace-a-reference-metadata
+    # A var keeps the altered metadata at every later #' site until a later def
+    # of the name replaces it (instaparse's defclone copies :doc/:arglists this
+    # way); an atom, ref and agent carry it too; a volatile, a map and a
+    # non-map metadata are the oracle's ClassCastException, nil its NPE. A site
+    # lowered above a redefinition never puts the older metadata back.
+    # Oracle-identical (clj 1.12.6).
+    source: |
+      (defn amt-g "doc of g" [x] x)
+      (def amt-h amt-g)
+      (println (:doc (alter-meta! #'amt-h assoc :doc (:doc (meta #'amt-g)))) (:doc (meta #'amt-h)) (:name (meta #'amt-h)))
+      (defmacro amt-clone [here there]
+        `(do (def ~here ~there)
+             (alter-meta! (var ~here) assoc :doc (:doc (meta (var ~there))) :arglists (:arglists (meta (var ~there))))
+             (var ~here)))
+      (println (amt-clone amt-k amt-g) (:arglists (meta #'amt-k)) (:doc (meta #'amt-k)) (amt-k 7))
+      (def amt-m 0)
+      (let [v #'amt-m] (println (reset-meta! v {:a 1}) (meta #'amt-m) (meta v)))
+      (def amt-n 5) (alter-meta! #'amt-n assoc :doc "n doc") (def amt-n 6) (println (:doc (meta #'amt-n)) amt-n)
+      (def ^{:test (fn [] 1)} amt-t 1) (alter-meta! #'amt-t dissoc :test) (println (test #'amt-t))
+      (let [a (atom 1)] (println (alter-meta! a assoc :a 1) (meta a) (reset-meta! a nil) (meta a)))
+      (println (alter-meta! (ref 1) assoc :r 1) (alter-meta! (agent 1) assoc :g 1))
+      (println (map #(:n (alter-meta! % update :n (fnil inc 0))) [#'amt-m #'amt-m]) (apply reset-meta! [#'amt-n {:z 1}]) (meta #'amt-n))
+      (println (try (alter-meta! (volatile! 1) assoc :a 1) (catch ClassCastException e :cce)))
+      (println (try (alter-meta! {} assoc :a 1) (catch ClassCastException e :cce)))
+      (println (try (alter-meta! nil assoc :a 1) (catch NullPointerException e :npe)))
+      (println (try (alter-meta! #'amt-m (constantly 1)) (catch ClassCastException e :cce)))
+      (defn amt-r "a" [] 1)
+      (defn amt-show [] (:doc (meta #'amt-r)))
+      (println (amt-show))
+      (defn amt-r "b" [] 2)
+      (println (:doc (meta #'amt-r)) (amt-show))
+    expected: |
+      doc of g doc of g amt-h
+      #'runs-ns/amt-k ([x]) doc of g 7
+      {:a 1} {:a 1} {:a 1}
+      nil 6
+      :no-test
+      {:a 1} {:a 1} nil nil
+      {:r 1} {:g 1}
+      (1 2) {:z 1} {:z 1}
+      :cce
+      :cce
+      :npe
+      :cce
+      a
+      b b
   - name: clojure-format-args
     # format over Java directives: %s converts like str (nil spells "null", like
     # String/valueOf), %b the boolean spelling, numbers the matching directive.

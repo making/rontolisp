@@ -121,6 +121,7 @@ answered `2 5 3` before).
 | `while` | `(do () (falsey-test nil) body)` | answers nil; the body is non-tail (`recur` refused like the oracle's) |
 | `locking` | host targets: `(let ((tmp x)) nil-check (rontolisp:with-mutex ((%clojure-monitor tmp)) body))`; wasm: the same without the mutex (`ClojureLowering.hostTarget`) | `%clojure-monitor` (clojure.lisp "Monitors") keeps one reentrant `make-mutex` per value in an `eql` table (a keyword by its spelling in an `equal` one), made under one guard mutex: a Ring handler runs one thread per request on the interpreter and the JVM. Both defvars are library definitions the pruner drops with the helper, so a program without `locking` and every wasm program carries none. nil is `NullPointerException` before the body (message `... "locklocal" is null`; the oracle's names a gensym). Body behind the `try` barrier |
 | `with-redefs` | values bound in order, old roots saved, `(unwind-protect (progn (setq cell v)... body) (setq cell old)...)` (`ClojureVarLowering.withRedefsOf`) | "Vars and metadata", with-redefs |
+| `alter-var-root` `alter-meta!` `reset-meta!` | `(%clojure-alter-root var setter f args)` for a literal `#'x` of a value cell, else `(%clojure-alter-var-root v f args)`; `(%clojure-alter-meta r f args)`, `(%clojure-reset-meta r m)` (`ClojureVarLowering.alterRootOf`/`alterMetaOf`/`resetMetaOf`) | "Vars and metadata", alter-var-root |
 | `try`/`catch`/`finally`/`throw` | `handler-case` inside `unwind-protect`; `throw` is `%clojure-throw` | one `handler-case` clause per catch, in order, of the type its class takes ("Catching"); `throw` signals an exception as itself (a caught one rethrows unchanged, a host `Throwable` as the `java:java-exception` carrying it, "Host exceptions"), anything else a `ClassCastException` (nil a `NullPointerException`) whose message is its rendering, so strings keep their message |
 | `ex-info` `ex-data` `ex-message` `ex-cause`, `.getMessage` `.getLocalizedMessage` `.getCause` | one call to the `clojure.lisp` "Exceptions" function | see "Exceptions" |
 | `assert` | `if` around the `AssertionError` carrier ("Refusals") | the `Assert failed:` message evaluates only on failure; it names the failed form, built only in the failure branch: rendered at lower time (`ClojureStringLowering.prSource`: symbols, keywords, integers, strings, chars, lists, vectors, maps) so no printer is linked, else `quote` through the readable `%clojure-str-of` (double, ratio, set, regex...) which links the collection printer (measured 2026-10-03: `(assert (nil? x))` wasm 3171 -> 3282 bytes; with a double in the form 3171 -> 54237 versus 21992 before) |
@@ -3700,7 +3701,10 @@ interfaces behind an arm family its row's store makes (`ClojureArms`, `COLLECTIO
   19 ms (1 / 2 / 5 / 8 rules 1.1 / 2.1 / 7.1 / 16.5 s on the interpreter), and
   `instaparse.abnf`'s load-time grammar did not finish in 300 s on the interpreter. `.todo`
   items for each (alter-var-root, instance? of a class value, regex flags and lookaround, the
-  LispReader string reader, the GLL parse speed).
+  LispReader string reader, the GLL parse speed). With `alter-var-root`/`alter-meta!`
+  (2026-10-11) it stops at `core.clj:337:5: instance? takes a class name, not
+  gll/failure-type`; past that by hand, every namespace lowers and the load stops at the
+  `cfg.clj` regex (`unsupported regex: only (?:...) groups are supported`).
 - Pins: clojure-spec `a-collection-type-conjs-empties-counts-and-compares-through-its-methods`,
   `a-map-type-assocs-dissocs-reads-and-prints-as-a-map`,
   `a-set-type-disjs-contains-and-prints-as-a-set`,
@@ -5080,7 +5084,12 @@ the inst override, the files' refusals, a session, the unfetched note), clojure-
 
 **A var is `(:C%VAR "ns/name" getter)`, interned per name in `%clojure-var-table`.**
 `ClojureVarLowering.varOf` lowers `#'x`/`(var x)` to `(%clojure-var "ns/x" (lambda () ROOT)
-META)`; each evaluation re-points the interned var, so `=` holds. ROOT is the name's value
+META [GEN])`; each evaluation re-points the interned var's getter, so `=` holds. GEN is which
+definition of the name recorded META (`VarMeta.generation`, 1 omitted, 0 before any):
+the var takes META on first use and from a site of a later definition only
+(`%clojure-var-generations`), so a site never undoes an `alter-meta!` of the definition it
+saw, and a site above a redefinition no longer puts the older metadata back once a newer
+one ran (until 2026-10-11 every site re-put its own). ROOT is the name's value
 as the site sees it (a redefined `defn`'s current version, a value cell, a signal for a
 macro); a `user` var shadowed by a local reads through a hoisted `|c%x%root|`. `lookupVar`,
 not `resolveVar`: a private var is reachable, like the oracle. A local is `Unable to
@@ -5121,7 +5130,7 @@ resolve var`.
   `:doc`, the attr map, `:line`/`:column`/`:file`, `:name`, `:ns` (a symbol), `:macro`.
   Constant values stay a datum at each `#'` site; evaluated ones are stored into
   `|c%x%meta|` ahead of the definition. A site above a redefinition sees the older
-  metadata. Anything other than `def`/`defn`/`defn-`/`defmacro` carries only
+  metadata until a site below it has run (GEN above). Anything other than `def`/`defn`/`defn-`/`defmacro` carries only
   `:name`/`:ns`. `test` calls `(:test (meta v))`. `var-get` (measured 2026-10-04: `unknown name: var-get`) is
   `%clojure-var-root` (`ClojureVarLowering.getOf`, value `-v`): the root of a var, and unlike
   `deref` (atoms, reduced values) a signal for anything that is no var, like the oracle.
@@ -5236,6 +5245,38 @@ resolve var`.
   1.12.6) and pinned by clojure-spec `with-redefs-replaces-var-roots-for-the-body`,
   `ClojureProjectNamespacesTest#aWithRedefsReachesTheCallsOfANamespaceLoadedBeforeIt*`
   (the reseed, all four backends), `ClojureControlLoweringTest`.
+- **alter-var-root** (2026-10-11; instaparse's `set-global-var!` and `enable-tracing!`).
+  The root becomes `(apply f root args)` through the IFn dispatcher, answered, holding
+  the var's `%clojure-monitor` (the `locking` mutex; the oracle's `alterRoot`/`alterMeta`
+  synchronize on the reference), so the function runs under it. A literal `#'x`
+  of a var with a value cell (`hasValueCell`: not `FUNCTION`/`MACRO`, not in
+  `globalDirectFuns`) lowers to `%clojure-alter-root` with the site's own setter
+  (`rootSetterOf`: `(lambda (v) (setq cell v))`, or a hoisted `|c%x%set-root|` where a local
+  shadows a `user` var's cell). A literal `#'f` of a `defn` (or a `def` of a function) is a
+  `with-redefs` target: `scanRedefinitions` adds the name to `redefNames`, and one met only in
+  a macro expansion goes to `redefMisses` (another pass). Any other var goes through
+  `%clojure-alter-var-root`, which finds the setter a site registered in
+  `%clojure-var-setters` (`%clojure-var-setter`). Sites register only when
+  `ClojureLowering.rootSetters` is on: the pre-scan saw an `alter-var-root` of a non-literal
+  var or the name as a value, or a pass met one in an expansion after lowering a var site
+  without setter (`unsetVarSites` -> `rootSetterMiss` -> another pass). With it on, a var site
+  of a direct `defn` adds the key to `redefMisses`, so every function whose var the program
+  takes is redefinable; a program with no computed `alter-var-root` lowers its var sites as
+  before. No setter -- a `clojure.core` var, a macro, a multimethod / protocol method /
+  record constructor / test, a session's direct `defn` -- is the run-time
+  `UnsupportedOperationException` `alter-var-root of #'... is not supported: ...` (the oracle
+  alters them). A non-var is `ClassCastException`, nil `NullPointerException`. Deviation as
+  `with-redefs`: under a `binding` of a dynamic var the `setq` changes the binding.
+- **alter-meta! / reset-meta!** work on the oracle's IReference kinds (`%clojure-reference-p`:
+  a var, an atom / ref / agent but not a volatile, a namespace object) through the metadata
+  table; a nil answer removes the entry (`%clojure-replace-meta`); a non-map answer is
+  `ClassCastException`. A var keeps it until a site of a later definition (GEN) runs. Measured
+  against clj 1.12.6 2026-10-11 and pinned by clojure-spec
+  `alter-var-root-replaces-the-root-of-a-literal-var`,
+  `alter-meta-and-reset-meta-replace-a-reference-metadata` (oracle-identical),
+  `ClojureAlterVarRootE2eTest` (computed vars, the expansion-only pass, the refusals; all
+  four backends), `ClojureSessionTest#aLaterBufferAltersTheRootOfAVarAnEarlierOneDefined`,
+  `ClojureVarRootConcurrentRequestsTest` (request threads, `.kb/concurrent-served-requests.md`).
 - `with-meta`/`vary-meta` answer a shallow copy recorded in the eq table
   `%clojure-meta-table`; `meta` reads it, both under `%clojure-meta-guard` (as the var and
   namespace tables are under `%clojure-var-guard`/`%clojure-ns-guard`; all three made

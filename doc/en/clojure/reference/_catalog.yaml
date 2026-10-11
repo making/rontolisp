@@ -27,6 +27,9 @@ categories:
       - { slug: vary-meta, name: "vary-meta" }
       - { slug: var, name: "var" }
       - { slug: var-get, name: "var-get" }
+      - { slug: alter-var-root, name: "alter-var-root" }
+      - { slug: alter-meta-bang, name: "alter-meta!" }
+      - { slug: reset-meta-bang, name: "reset-meta!" }
       - { slug: resolve, name: "resolve" }
       - { slug: core-test, name: "test" }
       - { slug: comment, name: "comment" }

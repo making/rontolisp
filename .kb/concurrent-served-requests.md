@@ -26,6 +26,12 @@ bugs, and each looks like someone else's fault.
   the one compared against (`%clojure-key-class`), else the newer classes are compared and
   the store retried -- a lock held there could deadlock on a lazy seq waiting for a thread that
   stores a key.
+- Clojure `alter-var-root` / `alter-meta!` / `reset-meta!` (2026-10-11): each holds the
+  reference's `%clojure-monitor` (the `locking` mutex, reentrant) around the read, the
+  function and the store, like the oracle's methods synchronized on the reference; a `#'`
+  site decides and stores a var's first metadata under `%clojure-var-guard`, so no
+  `alter-meta!` lands between. Without the monitors 48 requests x 20 alterations kept ~75 of
+  960 (`ClojureVarRootConcurrentRequestsTest`, interpreter and JVM).
 - Clojure atoms (`clojure.lisp` "Atoms across request threads", 2026-10-11): `swap!` is the
   oracle's retry loop `%clojure-atom-swap` (the function outside any lock, re-run when the
   compare fails), `compare-and-set!` `%clojure-atom-cas` and `reset!` `%clojure-atom-reset`

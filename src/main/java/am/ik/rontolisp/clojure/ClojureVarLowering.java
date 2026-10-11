@@ -41,10 +41,12 @@ final class ClojureVarLowering {
 	private static final String META_SUFFIX = "%meta";
 
 	/**
-	 * A var's recorded metadata: the map datum, and whether the definition evaluated it
-	 * into the var's meta global (some value is no constant).
+	 * A var's recorded metadata: the map datum, whether the definition evaluated it into
+	 * the var's meta global (some value is no constant), and which definition of the name
+	 * recorded it (1 for the first), so a site of an older one never replaces the
+	 * metadata a newer one or an {@code alter-meta!} gave the var.
 	 */
-	record VarMeta(LispVal datum, boolean stored) {
+	record VarMeta(LispVal datum, boolean stored, int generation) {
 	}
 
 	/** The global a definition stores its var's evaluated metadata in. */
@@ -121,7 +123,8 @@ final class ClojureVarLowering {
 			map.add(entry.getValue());
 		}
 		LispVal datum = ClojureLowerUtil.list(map);
-		ctx.varMetas.put(key, new VarMeta(datum, stored));
+		VarMeta older = ctx.varMetas.get(key);
+		ctx.varMetas.put(key, new VarMeta(datum, stored, older == null ? 1 : older.generation() + 1));
 		if (!stored) {
 			return List.of();
 		}
@@ -618,8 +621,30 @@ final class ClojureVarLowering {
 	}
 
 	private static LispVal varOfKey(ClojureLowering ctx, String key) {
+		LispVal var = internedVarOf(ctx, key);
+		if (!ctx.rootSetters) {
+			// a computed alter-var-root met later in this pass would have needed the
+			// site's setter, or the function made redefinable
+			ctx.unsetVarSites = true;
+			return var;
+		}
+		if (!hasValueCell(ctx, key)) {
+			if (!ctx.session && ctx.globals.get(key) != ClojureLowering.Kind.MACRO && !ctx.redefinable.contains(key)) {
+				// a computed alter-var-root may reach this var: the program lowers
+				// again with the function redefinable, so the var has a value cell
+				ctx.redefMisses.add(key);
+			}
+			return var;
+		}
+		// a computed alter-var-root finds the root setter of the var here
+		return ClojureLowerUtil.list(runtime("VAR-SETTER"), var, rootSetterOf(ctx, key));
+	}
+
+	private static LispVal internedVarOf(ClojureLowering ctx, String key) {
 		LispVal root = rootOfKey(ctx, key);
 		VarMeta meta = ctx.varMetas.get(key);
+		// the definition whose metadata the site carries: 0 before any
+		int generation = meta == null ? 0 : meta.generation();
 		LispVal metaForm;
 		if (meta == null) {
 			int slash = key.indexOf('/');
@@ -632,14 +657,141 @@ final class ClojureVarLowering {
 			metaForm = meta.stored() ? metaSym(key) : ctx.lower(meta.datum());
 		}
 		LispVal getter = ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(), root);
+		List<LispVal> call = new ArrayList<>();
 		if (ctx.dynamicVars.contains(key)) {
 			// only a dynamic var's site carries the binding-depth reader thread-bound?
 			// asks, so a program with no dynamic var pays nothing for it
-			return ClojureLowerUtil.list(runtime("VAR-DYNAMIC"), LispString.literal(key), getter, metaForm,
-					ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(),
-							ClojureLowering.boundDepthSym(key)));
+			call.addAll(List.of(runtime("VAR-DYNAMIC"), LispString.literal(key), getter, metaForm, ClojureLowerUtil
+				.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(), ClojureLowering.boundDepthSym(key))));
 		}
-		return ClojureLowerUtil.list(runtime("VAR"), LispString.literal(key), getter, metaForm);
+		else {
+			call.addAll(List.of(runtime("VAR"), LispString.literal(key), getter, metaForm));
+		}
+		if (generation != 1) {
+			call.add(new LispInteger(generation));
+		}
+		return ClojureLowerUtil.list(call);
+	}
+
+	/**
+	 * Whether a program var's root is a value cell a store reaches: a {@code def}'s, a
+	 * {@code declare}'s, a redefinable or dynamic {@code defn}'s -- not a function called
+	 * directly, whose calls never read the cell, nor a macro's.
+	 */
+	private static boolean hasValueCell(ClojureLowering ctx, String key) {
+		ClojureLowering.Kind kind = ctx.globals.get(key);
+		return kind != ClojureLowering.Kind.FUNCTION && kind != ClojureLowering.Kind.MACRO
+				&& !ctx.globalDirectFuns.contains(key);
+	}
+
+	/**
+	 * The one-argument function storing a var's value cell: a closure where the site
+	 * stands, or, where a local of a {@code user} var's name shadows the cell, a
+	 * top-level writer the local cannot shadow.
+	 */
+	static LispVal rootSetterOf(ClojureLowering ctx, String key) {
+		LispSymbol cell = ClojureLowering.varSym(key);
+		if (key.startsWith("user/") && ctx.isLocal(key.substring("user/".length()))) {
+			LispSymbol writer = new LispSymbol(cell.name() + "%set-root");
+			if (ctx.varRootWriters.add(key)) {
+				LispSymbol value = ctx.freshTemp();
+				ctx.hoisted
+					.add(ClojureLowerUtil.list(ClojureLowerUtil.sym("defun"), writer, ClojureLowerUtil.list(value),
+							ClojureLowerUtil.list(ClojureLowerUtil.sym("setq"), cell, value)));
+			}
+			return ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), writer);
+		}
+		LispSymbol value = ctx.freshTemp();
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(value),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("setq"), cell, value));
+	}
+
+	/**
+	 * The symbol a literal {@code #'x} / {@code (var x)} datum names, or null for any
+	 * other datum.
+	 */
+	static @Nullable String literalVarName(LispVal datum) {
+		List<LispVal> parts = ClojureLowerUtil.items(ClojureLowerUtil.stripMeta(datum));
+		if (parts != null && parts.size() == 2 && ClojureLowerUtil.isSymbolNamed(parts.get(0), "var")
+				&& ClojureLowerUtil.stripMeta(parts.get(1)) instanceof LispSymbol target) {
+			return target.name();
+		}
+		return null;
+	}
+
+	/**
+	 * {@code (alter-var-root v f args...)}: the root becomes {@code (apply f root args)},
+	 * which the call answers. A literal {@code #'x} of a var with a value cell stores the
+	 * cell through the setter the site hands the run-time library; a {@code defn} called
+	 * directly is made redefinable like a {@code with-redefs} target (the pre-scan finds
+	 * the name, or the program lowers again, {@link ClojureLowering#redefMisses}). Any
+	 * other var -- a computed one, which turns {@link ClojureLowering#rootSetters} on, a
+	 * {@code clojure.core} var, a macro, a multimethod, a session's direct {@code defn}
+	 * -- goes through the setter a site of it registered, refused at run time where there
+	 * is none.
+	 * @param ctx the hub
+	 * @param items the form, head included
+	 * @return the lowered call
+	 */
+	static LispVal alterRootOf(ClojureLowering ctx, List<LispVal> items) {
+		ClojureLowerUtil.isTrue(items.size() >= 3,
+				"Wrong number of args (" + (items.size() - 1) + ") passed to: clojure.core/alter-var-root");
+		String name = literalVarName(items.get(1));
+		if (name == null) {
+			ctx.needRootSetters();
+		}
+		LispVal var = ctx.lower(items.get(1));
+		LispVal f = ctx.lower(items.get(2));
+		LispVal args = ClojureLowerUtil.cons(ClojureLowerUtil.sym("list"), ctx.lowers(items, 3));
+		if (name != null) {
+			String core = ClojureCoreNames.coreSpelling(name);
+			String key = core != null ? null : ctx.lookupVar(name);
+			if (key != null && hasValueCell(ctx, key)) {
+				return ClojureLowerUtil.list(runtime("ALTER-ROOT"), var, rootSetterOf(ctx, key), f, args);
+			}
+			if (key != null && ctx.globals.get(key) != ClojureLowering.Kind.MACRO && !ctx.redefinable.contains(key)
+					&& !ctx.session) {
+				// this pass is thrown away: the program lowers again with the var
+				// redefinable
+				ctx.redefMisses.add(key);
+				return ClojureLowering.NIL_CONST;
+			}
+		}
+		return ClojureLowerUtil.list(runtime("ALTER-VAR-ROOT"), var, f, args);
+	}
+
+	/** {@code alter-var-root} as a value: its var is computed. */
+	static LispVal alterRootValue(ClojureLowering ctx) {
+		ctx.needRootSetters();
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), runtime("ALTER-VAR-ROOT-V"));
+	}
+
+	/**
+	 * {@code (alter-meta! r f args...)}: the reference's metadata becomes
+	 * {@code (apply f meta args)}, which the call answers. A var keeps it until a site of
+	 * a later definition of the name runs, like the oracle's {@code def} replacing it.
+	 * @param ctx the hub
+	 * @param items the form, head included
+	 * @return the lowered call
+	 */
+	static LispVal alterMetaOf(ClojureLowering ctx, List<LispVal> items) {
+		ClojureLowerUtil.isTrue(items.size() >= 3,
+				"Wrong number of args (" + (items.size() - 1) + ") passed to: clojure.core/alter-meta!");
+		return ClojureLowerUtil.list(runtime("ALTER-META"), ctx.lower(items.get(1)), ctx.lower(items.get(2)),
+				ClojureLowerUtil.cons(ClojureLowerUtil.sym("list"), ctx.lowers(items, 3)));
+	}
+
+	/** {@code (reset-meta! r m)}: the reference's metadata becomes {@code m}. */
+	static LispVal resetMetaOf(ClojureLowering ctx, List<LispVal> items) {
+		ClojureLowerUtil.isTrue(items.size() == 3,
+				"Wrong number of args (" + (items.size() - 1) + ") passed to: clojure.core/reset-meta!");
+		return ClojureLowerUtil.list(runtime("RESET-META"), ctx.lower(items.get(1)), ctx.lower(items.get(2)));
+	}
+
+	/** {@code alter-meta!} or {@code reset-meta!} as a value. */
+	static LispVal metaWriterValue(String name) {
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("function"),
+				runtime(name.equals("alter-meta!") ? "ALTER-META-V" : "RESET-META-V"));
 	}
 
 	/**

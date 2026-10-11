@@ -328,6 +328,22 @@ class ClojureSessionTest {
 	}
 
 	@Test
+	void aLaterBufferAltersTheRootOfAVarAnEarlierOneDefined() {
+		// a def's value cell takes the new root; a defn an earlier input lowered as a
+		// direct call cannot, so its alteration is refused naming ^:redef, which the
+		// oracle's REPL would have altered
+		assertThat(runSession("(def sx-root 1)", "(println (alter-var-root #'sx-root inc) sx-root)",
+				"(defn sx-direct [] 1)",
+				"(println (try (alter-var-root #'sx-direct (constantly 2))"
+						+ " (catch UnsupportedOperationException e (ex-message e))))",
+				"(defn ^:redef sx-redef [] 1)", "(alter-var-root #'sx-redef (constantly (fn [] 2)))",
+				"(println (sx-redef))"))
+			.isEqualTo("2 2\nalter-var-root of #'user/sx-direct is not supported: its calls do not go through"
+					+ " the var (a defn an earlier input defined without ^:redef, a multimethod, protocol method,"
+					+ " record constructor or test)\n2\n");
+	}
+
+	@Test
 	void aMacroOfALaterBufferEvaluatesOverWhatAnEarlierOneDefined() {
 		// eval in a macro body lowers through the session's one lowering
 		assertThat(runSession("(defn sx-four [] 4)", "(defmacro sx-if [t a b] (if (eval t) a b))",

@@ -486,6 +486,7 @@ var はエクスポートより下で定義してかまいません。
 | `--no-gc` ビルド | 名前で | そのバックエッドにはペアもシンボルもクロージャもない |
 | `file:`、`http:`、`https:` 以外のプロトコル（`ftp:` など）の URL の読み取り | `reading the ftp: URL ... is not built in` | `clojure.java.io` の下にそのための接続の実行系がない。`http:` URL は `rontolisp:fetch` で読む（[HTTP の URL](reference/clojure-java-io.md#http-urls)） |
 | `clojure.core` の var、マクロ、マルチメソッド、プロトコルメソッドの `with-redefs`。REPL では、以前の入力が `^:redef` なしで定義した `defn` の `with-redefs` | `with-redefs of ... is not supported...`、`... define it ^:redef to redefine it` | コアの関数は呼び出しごとにインライン展開される。置き換えるルートを持つのは `def`/`defn`/`declare` の var だけで、REPL の入力は直接呼び出しのまま実行済み |
+| `clojure.core` の var、マルチメソッド、プロトコルメソッド、レコードのコンストラクタ、テストの `alter-var-root`。REPL では、以前の入力が `^:redef` なしで定義した `defn` の `alter-var-root` | `alter-var-root of #'... is not supported: ...`（呼び出しの実行時に `UnsupportedOperationException`） | `with-redefs` と同じ |
 | 非同期の Ring ハンドラ（`:async? true` 付きの `run-server`） | `asynchronous handlers (:async? true) are not supported` | トランスポートに respond/raise の仕組みがない |
 | `rontolisp.wasm` の宣言の `:async`、`async func` の WIT メンバーやエクスポート | `:async is not supported yet ...`、`... is an async func ...` | 中断する呼び出しが答える future は Clojure の future ではない |
 | stream か future を受け取るか答える WIT メンバー | `... which the Clojure tier does not carry yet (file.wit:N)` | 非同期 canonical ABI のハンドルが答える Clojure の future がまだない |

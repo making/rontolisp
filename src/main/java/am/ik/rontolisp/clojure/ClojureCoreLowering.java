@@ -197,6 +197,12 @@ final class ClojureCoreLowering {
 			case "var-get":
 				arity(name, n, 1, 1);
 				return ClojureVarLowering.getOf(ctx.lower(items.get(1)));
+			case "alter-var-root":
+				return ClojureVarLowering.alterRootOf(ctx, items);
+			case "alter-meta!":
+				return ClojureVarLowering.alterMetaOf(ctx, items);
+			case "reset-meta!":
+				return ClojureVarLowering.resetMetaOf(ctx, items);
 			case "the-ns", "find-ns", "ns-name":
 				arity(name, n, 1, 1);
 				return worker(name, ctx.lower(items.get(1)), ctx.knownNamespaces());
@@ -262,6 +268,8 @@ final class ClojureCoreLowering {
 			case "test" -> ClojureVarLowering.testValue();
 			case "type" -> ClojureDispatchLowering.typeValue(ctx);
 			case "var-get" -> ClojureVarLowering.getValue();
+			case "alter-var-root" -> ClojureVarLowering.alterRootValue(ctx);
+			case "alter-meta!", "reset-meta!" -> ClojureVarLowering.metaWriterValue(name);
 			case "the-ns", "find-ns", "ns-name" -> {
 				LispSymbol arg = ctx.freshTemp();
 				yield ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(arg),

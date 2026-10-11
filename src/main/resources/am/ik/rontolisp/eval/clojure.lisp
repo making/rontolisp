@@ -10071,7 +10071,8 @@
    (class x))."
   (rontolisp::%clojure-meta-method x (list :C%KEYWORD "type")))
 
-;;;; Monitors: the lock locking holds on the interpreter and the JVM.
+;;;; Monitors: the lock locking holds on the interpreter and the JVM, and the
+;;;; one alter-var-root, alter-meta! and reset-meta! hold.
 ;;
 ;; The oracle's locking enters the object's own monitor. Here a value has none, so
 ;; rontolisp::%clojure-monitors maps it, by identity (eql: a number by value), to a
@@ -10079,8 +10080,9 @@
 ;; handler runs one thread per request, so two may ask at once). A keyword is a
 ;; fresh list per site, so it is keyed by its spelling instead, one monitor per
 ;; keyword like the oracle's interned one. Like the metadata table it keeps every
-;; object it was handed. The wasm lowering never calls it: a module is
-;; single-threaded, so the body runs as is.
+;; object it was handed. The wasm lowering of locking never calls it: a module
+;; is single-threaded, so the body runs as is (the alter functions call it on
+;; every target, where wasm's mutex is a no-op).
 
 (defvar rontolisp::%clojure-monitor-guard (rontolisp:make-mutex))
 
@@ -10426,26 +10428,49 @@
   "Whether X is the (:C%VAR name getter) var #'x lowers to."
   (and (consp x) (eq (car x) :C%VAR)))
 
-(defun rontolisp::%clojure-var (name getter meta)
-  "The var NAME (\"ns/name\"), interned on first use, reading its root through
-   GETTER and carrying META."
-  (let ((v
-         (rontolisp:with-mutex (rontolisp::%clojure-var-guard)
-           (let ((v (gethash name rontolisp::%clojure-var-table)))
-             (if v
-                 (rplaca (cdr (cdr v)) getter)
-                 (progn
-                   (setq v (list :C%VAR name getter))
-                   (setf (gethash name rontolisp::%clojure-var-table) v)))
-             v))))
-    (rontolisp::%clojure-put-meta v meta)))
+(defvar rontolisp::%clojure-var-generations
+  (make-hash-table :test 'equal)
+  "The definition each interned var's metadata came from: an equal table from
+   \"ns/name\" to the generation its last metadata store carried.")
 
-(defun rontolisp::%clojure-var-dynamic (name getter meta depth)
+(defun rontolisp::%clojure-var (name getter meta &optional (generation 1))
+  "The var NAME (\"ns/name\"), interned on first use, reading its root through
+   GETTER. META is the metadata of the definition GENERATION (the how-manyth
+   definition of the name the site saw, 0 before any): the var takes it on
+   first use and from a site of a later definition, so a site never undoes an
+   alter-meta! or reset-meta! of the definition it saw, and a redefinition
+   replaces the metadata, like the oracle's def. The store happens under the
+   guard, so no request thread's alter-meta! lands between the decision and it."
+  (rontolisp:with-mutex (rontolisp::%clojure-var-guard)
+    (let ((v (gethash name rontolisp::%clojure-var-table))
+          (seen (gethash name rontolisp::%clojure-var-generations)))
+      (if v
+          (rplaca (cdr (cdr v)) getter)
+          (progn
+            (setq v (list :C%VAR name getter))
+            (setf (gethash name rontolisp::%clojure-var-table) v)))
+      (if (or (null seen) (< seen generation))
+          (progn
+            (setf (gethash name rontolisp::%clojure-var-generations) generation)
+            (rontolisp::%clojure-replace-meta v meta))
+          v))))
+
+(defun rontolisp::%clojure-var-dynamic
+    (name getter meta depth &optional (generation 1))
   "The var NAME of a ^:dynamic var: as the plain var, and DEPTH, a closure over
    its binding-depth counter, recorded as the fourth element for thread-bound?."
-  (let ((v (rontolisp::%clojure-var name getter meta)))
+  (let ((v (rontolisp::%clojure-var name getter meta generation)))
     (rplacd (cdr (cdr v)) (list depth))
     v))
+
+(defun rontolisp::%clojure-replace-meta (x m)
+  "X with the metadata map M replacing its own, none for a nil M; answers X."
+  (if (rontolisp::%clojure-check-meta m)
+      (rontolisp::%clojure-put-meta x m)
+      (progn
+        (rontolisp:with-mutex (rontolisp::%clojure-meta-guard)
+          (remhash x rontolisp::%clojure-meta-table))
+        x)))
 
 (defun rontolisp::%clojure-var-get (v)
   "The root of the var V."
@@ -10487,6 +10512,110 @@
   "test as a value."
   (rontolisp::%clojure-check-arity args 1 1 "test")
   (rontolisp::%clojure-var-test (car args)))
+
+;;;; alter-var-root, alter-meta! and reset-meta!.
+;;
+;; A var's root is the value cell of its name, which only the lowering can name:
+;; an alter-var-root of a literal #'x hands its own setter (a closure storing the
+;; cell) to %clojure-alter-root. A var reached any other way finds the setter a
+;; site of it registered in %clojure-var-setters, which every value-cell var site
+;; of a program holding such an alter-var-root does (clojure/ClojureVarLowering);
+;; a var with none -- a defn called directly, a clojure.core var -- is refused by
+;; name. Each alteration holds the reference's monitor (%clojure-monitor, a
+;; reentrant mutex per value), so two request threads altering one reference take
+;; turns while others run, like the oracle's methods synchronized on the
+;; reference; the function runs under it, like the oracle's.
+
+(defvar rontolisp::%clojure-var-setters
+  (make-hash-table :test 'eq)
+  "The root setter of each var a settable site handed one: an eq table from the
+   var to a one-argument closure storing its value cell.")
+
+(defun rontolisp::%clojure-var-setter (v setter)
+  "The var V, its root setter SETTER recorded for a computed alter-var-root."
+  (rontolisp:with-mutex (rontolisp::%clojure-var-guard)
+    (setf (gethash v rontolisp::%clojure-var-setters) setter))
+  v)
+
+(defun rontolisp::%clojure-alter-root (v setter f args)
+  "alter-var-root of the var V whose root SETTER stores: the root becomes
+   (apply f root args), which it answers."
+  (rontolisp:with-mutex ((rontolisp::%clojure-monitor v))
+    (funcall setter
+     (rontolisp::%clojure-call f (cons (rontolisp::%clojure-var-get v) args)))))
+
+(defun rontolisp::%clojure-alter-var-root (v f args)
+  "alter-var-root of a var computed at run time: through the setter a site of
+   it registered. Anything that is no var signals like the oracle's cast."
+  (if (rontolisp::%clojure-var-p v)
+      (let ((setter
+             (rontolisp:with-mutex (rontolisp::%clojure-var-guard)
+               (values (gethash v rontolisp::%clojure-var-setters)))))
+        (if setter
+            (rontolisp::%clojure-alter-root v setter f args)
+            (rontolisp::%clojure-unsupported-operation-exception
+             (concatenate 'string "alter-var-root of #'" (car (cdr v))
+                          " is not supported: "
+                          (if (eql (search "clojure.core/" (car (cdr v))) 0)
+                              "a clojure.core verb lowers inline at every call"
+                              (concatenate 'string
+                               "its calls do not go through the var (a defn an"
+                               " earlier input defined without ^:redef, a"
+                               " multimethod, protocol method, record"
+                               " constructor or test)"))))))
+      (rontolisp::%clojure-class-cast-exception-of "alter-var-root needs a var"
+                                                   v)))
+
+(defun rontolisp::%clojure-alter-var-root-v (&rest args)
+  "alter-var-root as a value."
+  (rontolisp::%clojure-check-arity args 2 nil "alter-var-root")
+  (rontolisp::%clojure-alter-var-root (car args) (car (cdr args))
+                                      (cdr (cdr args))))
+
+(defun rontolisp::%clojure-reference-p (x)
+  "Whether X is one of the oracle's IReference kinds: a var, an atom, a ref,
+   an agent or a namespace (a volatile is none)."
+  (or (rontolisp::%clojure-var-p x) (rontolisp::%clojure-ns-object-p x)
+      (and (rontolisp::%clojure-atom-p x)
+           (let ((cell (car (cdr x))))
+             (not (and (= (length cell) 2) (eq (aref cell 1) :C%VOLATILE)))))))
+
+(defun rontolisp::%clojure-check-reference (x op)
+  "X when it is a reference; else the oracle's cast refusal naming OP."
+  (if (rontolisp::%clojure-reference-p x)
+      x
+      (rontolisp::%clojure-class-cast-exception-of
+       (concatenate 'string op
+                    " needs a var, an atom, a ref, an agent or a namespace")
+       x)))
+
+(defun rontolisp::%clojure-alter-meta (r f args)
+  "alter-meta!: the reference R's metadata becomes (apply f meta args), which
+   it answers."
+  (rontolisp::%clojure-check-reference r "alter-meta!")
+  (rontolisp:with-mutex ((rontolisp::%clojure-monitor r))
+    (let ((m
+           (rontolisp::%clojure-call f
+                                     (cons (rontolisp::%clojure-meta r) args))))
+      (rontolisp::%clojure-replace-meta r m)
+      m)))
+
+(defun rontolisp::%clojure-alter-meta-v (&rest args)
+  "alter-meta! as a value."
+  (rontolisp::%clojure-check-arity args 2 nil "alter-meta!")
+  (rontolisp::%clojure-alter-meta (car args) (car (cdr args)) (cdr (cdr args))))
+
+(defun rontolisp::%clojure-reset-meta (r m)
+  "reset-meta!: the reference R's metadata becomes M, which it answers."
+  (rontolisp::%clojure-check-reference r "reset-meta!")
+  (rontolisp:with-mutex ((rontolisp::%clojure-monitor r))
+    (rontolisp::%clojure-replace-meta r m)
+    m))
+
+(defun rontolisp::%clojure-reset-meta-v (&rest args)
+  "reset-meta! as a value."
+  (rontolisp::%clojure-check-arity args 2 2 "reset-meta!")
+  (rontolisp::%clojure-reset-meta (car args) (car (cdr args))))
 
 ;;;; eval, and resolve of a computed symbol: the lowering's own work, so they run
 ;;;; only while the program lowers. The macro-time evaluator (eval/ClojureMacroTime)

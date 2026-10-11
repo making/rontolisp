@@ -25,6 +25,9 @@
 | `with-meta` | `(with-meta [1] {:a 1})` | `[1]` |
 | `var` | `(do (def x 5) #'x)` | `#'user/x` |
 | `var-get` | `(do (def x 5) (var-get #'x))` | `5` |
+| `alter-var-root` | `(do (def x 5) (alter-var-root #'x inc))` | `6` |
+| `alter-meta!` | `(do (def x 5) (alter-meta! #'x assoc :k 1) (:k (meta #'x)))` | `1` |
+| `reset-meta!` | `(do (def x 5) (reset-meta! #'x {:k 2}))` | `{:k 2}` |
 | `resolve` | `(resolve 'inc)` | `#'clojure.core/inc` |
 | `test` | `(do (defn ^{:test (fn [] nil)} t []) (test #'t))` | `:ok` |
 | `comment` | `(comment (anything at all))` | `nil` |

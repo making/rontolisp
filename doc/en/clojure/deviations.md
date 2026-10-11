@@ -250,8 +250,8 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   against a quoted form holds and printing spells the oracle's lowercase. Nested syntax-quote
   evaluates its levels in the one expansion.
 - A var's metadata comes from the definitions lowered above the `#'` site: a body
-  lowered above a redefinition keeps the older docstring where the oracle's var shows
-  the newest (the same split as its calls). `:ns` is the namespace's symbol (the oracle's
+  lowered above a redefinition sees the older docstring until a `#'` site lowered below
+  the redefinition has run, where the oracle's var shows the newest at once. `:ns` is the namespace's symbol (the oracle's
   is a Namespace object), `:file` of the entry file is the path as given (the oracle
   absolutizes it), and a var defined by anything but `def`/`defn`/`defn-`/`defmacro`
   (`defmulti`, `deftest`, a record's factory, ...) carries only `:name` and `:ns`.
@@ -430,10 +430,11 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   that var for its extent once it is defined, so a function called there reads the
   local's value; the oracle binds a local lexically, and the function reads the var.
   In a file such a local is lexical.
-- The root `with-redefs` replaces is the var's value cell, so inside a `binding` of a
-  `^:dynamic` var it changes that binding (the oracle changes the root and the binding
-  stays). A `clojure.core` var is refused by name; in the REPL, so is a `defn` an
-  earlier input defined without `^:redef`.
+- The root `with-redefs` and `alter-var-root` replace is the var's value cell, so inside
+  a `binding` of a `^:dynamic` var they change that binding (the oracle changes the root
+  and the binding stays). A `clojure.core` var is refused by name, and so is a
+  multimethod, protocol method, record constructor or test that `alter-var-root` reaches;
+  in the REPL, so is a `defn` an earlier input defined without `^:redef`.
 - `locking` holds a mutex kept per value, and the lock table keeps every value it was
   handed for the program's lifetime. The `NullPointerException` of a `nil` lock names
   the local `locklocal` (the oracle names a generated one).
