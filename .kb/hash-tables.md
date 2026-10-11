@@ -106,11 +106,11 @@ read back" below).
 
 - interpreter `LispHashTable` via `LispEquality.equalpKey`; the float arm is `LispRatio.ofDouble`,
   the same decomposition `rational` answers.
-- JVM `runtime/RontoHashTable.equalpKey`, so that class TRAVELS beside a compiled program making an
-  `equalp` table (`.kb/jvm-export.md`). Marker = reserved String key `#equalp` beside `#order`
-  (`#eql`/`#eq` for identity tables); `_hashKey` folds and `_hashGet`/`_hashPut`/`_hashRem`
-  run every key through it, then compare and hash by `_hashTest`. **Trap**:
-  `_hashClr` must read the markers before the clear and hang them back.
+- JVM `runtime/RontoHashTable.equalpKey`, in the class every compiled table is
+  (`.kb/jvm-export.md`, "What travels"). The test is the table's own final field
+  (`RontoHashTable.newTable(test)`, read by `test`): `_hashKey` folds and
+  `_hashGet`/`_hashPut`/`_hashRem` run every key through it, then compare and hash by
+  `_hashTest`. `clrhash` replaces only the entries, so the test stays.
 - WASM `_equalp_key` (`WasmEqualpKeyRuntimeBuilder`, `FUNC_EQUALP_KEY`, appended after the last
   fixed helper so no index shifts). A fraction strips the mantissa's trailing zero bits and builds
   the `TYPE_RATIO` directly (`_int_new` numerator, `_big_ash` denominator): an odd numerator over a
@@ -118,9 +118,10 @@ read back" below).
   module with an `equalp` table, every other module byte-identical. The tag rides in the LOW TWO
   BITS of the header count, stored as `entries * 4 + test` (0 equal, 1 equalp, 2 eql, 3 eq), so the header car stays an i31; every
   count read shifts past it. An eql/eq key is placed by `_ihash` (`FUNC_IHASH`, the
-  identity-hash slot below) and compared with the eql/eq comparison inlined at the bucket
-  scan; `_hash_resize` reads the tag off the header it already takes and places by the
-  same call.
+  identity-hash slot below) and compared with the eql/eq comparison inlined in
+  `_ht_get`/`_ht_put`/`_ht_rem` (`WasmHashTableRuntimeBuilder.emitKeyTest`); an entry keeps
+  the hash it was placed by, so neither growing the buckets nor building the trie hashes
+  again.
 
 **Gate: `LispMacroExpander.programMakesEqualpHashTable`**, one scan shared by both compiled
 backends. `:test` must be written LITERALLY (`'equalp`/`#'equalp`) — the compile paths read it from
@@ -144,17 +145,14 @@ store is a fresh entry with the new key. Until 2026-10-05 every backend handed b
 the interpreter and JVM kept the NEWEST key object of an `equal` table where WASM and SBCL keep the
 first (observable by `eq`).
 
-- interpreter: the `LinkedHashMap`'s `Key` holds the fold, the `Entry` the key as first stored
-  (`put` merges, keeping the stored entry's key).
-- JVM: an `equalp` table's pair is `{fold, value, key}` when the fold differs from the key
-  (`_hashPut` compares the two by reference), else the two-slot `{key, value}`; in a program that
-  makes an `equalp` table `maphash` reads slot `(length - 2) * 2`, branch-free. `_hashPut` no longer
-  writes the key slot on a re-store.
-- WASM: an `equalp` table's entry is `(fold . (key . value))`; every other entry stays
-  `(key . value)`. The cons whose cdr is the value -- the entry, or the cell -- is the HOLDER
-  (`WasmHashTableCompiler.emitValueHolder`, an `(eqref -> eqref)` `if` on the tag), so `gethash`,
-  the re-store and `maphash` read one field path for both shapes; the resize and the bucket scan
-  only read the car and are unchanged.
+- interpreter and JVM (one `RontoHashTable` pair): an `equalp` table's pair is
+  `{fold, value, key}` when the fold differs from the key (compared by reference), else the
+  two-slot `{key, value}`; in a program that makes an `equalp` table `maphash` reads slot
+  `(length - 2) * 2`, branch-free (the interpreter's `LispHashTable.entries` slot 2 of a
+  three-slot pair). A re-store writes only the value slot.
+- WASM: an entry array holds the fold in its key slot and, when the fold differs, the key as
+  first stored in a seventh slot, which `maphash` reads (`WasmHashTableCompiler`'s walk of
+  `_ht_entries`: slot 6 of a seven-slot entry in an `equalp` module, else slot 4).
 
 Measured 2026-10-05 (linux-x86-64): every module of a program with no `equalp` table is
 byte-identical on P1 and the component (bench-report, size-report and 30 examples/probes); a JVM
@@ -178,8 +176,8 @@ can reach. A cap may only ever be by depth/count, never anything order- or addre
 and spent across the WHOLE traversal, never handed down per branch.
 
 - interpreter: a one-cell `int[]` threaded by `LispEquality.hash`.
-- JVM: `_hash(key, depth, gas)` third `[I` parameter, allocated per placement site by
-  `JvmHashRuntimeBuilder.emitKeyHash`.
+- JVM: `_hash(key, depth, gas)` third `[I` parameter, allocated per placement by
+  `JvmHashRuntimeBuilder`'s `KeyHash`.
 - WASM: a second `(mut i32)` global after the depth one (`hashGasGlobalIndex`) — `_hash`'s
   signature is fixed at `((ref null eq)) -> i32`. The outermost entry refills it; unlike the depth
   counter it is NOT restored on the way out.
@@ -200,31 +198,48 @@ prefix on both compilers), `RontoHashTableEqualpKeyTest.theWorkBudgetStopsBothFo
 A REGRESSION IS A HANG, not a flaky number.
 
 ## Representation
-Interpreter/JVM use a real `LispHashTable`/`LinkedHashMap`; WASM is a true open-chaining table
-(`WasmHashTableCompiler`), not an alist: a `TYPE_CELL` box (so `consp` is nil) holding a header
-`cons (count . buckets)`, `count` an i31 of live entries, `buckets` a `TYPE_HASH_BUCKETS` array
-(`array (mut (ref null eq))`, index 33, bare comptype after `TYPE_CHAR`); slot =
-`(_hash(key) & 0x7fffffff) % capacity`, each slot a `(key . value)` alist or nil. General arrays
-share the box, so `hash-table-p` is `ref.test TYPE_CELL` PLUS the header-car test.
+ONE structure on all four backends: CHAINS of entries placed by the key's hash and scanned with
+the test, plus the entries in INSERTION ORDER, which `maphash` walks. The interpreter and the JVM
+share the class (`runtime/RontoHashTable`; the interpreter's `LispHashTable` wraps one and
+compares with `LispEquality`, a compiled program's `_hash*` helpers with `_equal`/`_eqv`); WASM
+rebuilds it over wasm-GC arrays (`WasmHashTableRuntimeBuilder`, the `_ht_*` functions).
 
+- A table starts FLAT: power-of-two buckets of entries linked through `next` (a bucket mixes
+  hashes, so a scan skips an entry of another hash), doubling past three quarters full, and an
+  order array. A removal unlinks the entry and kills its order slot (`END` on the JVM, nil on
+  WASM); the order compacts once half its slots are dead, so each `remhash` is O(1) amortised.
+  Unlinking from the order instead -- the JVM's `#order` list until 2026-09-18 -- cost 2.9 s for
+  50,000 removals from a 300,000-entry `eq` table (`.todo/855`). A table nobody copies stays
+  flat all its life; the first copy makes it a TRIE ("Copies share structure"), `clrhash` flat
+  again.
+- An entry keeps the hash it was placed by, so growing and converting never hash again. The
+  bucket index and the trie path read `spread(h) = h ^ (h >>> 16)`, HashMap's: a bijection, so
+  two keys share a trie chain exactly when their hashes are equal; a double's hash, often zero
+  below bit 20, takes its low bits from the high half, and consecutive integers stay
+  neighbours. WASM keeps the spread hash cut to 30 bits (an i31).
+- The PAIR is what readers outside the table code see. JVM/interpreter: an `Object[]`,
+  `{key, value}` or `{fold, value, key}` ("The key read back"), reached only through the class:
+  `maphash` (`liveValues`, the JVM's `_hashValues`), the Java bridge's `tableEntries`
+  (`JavaBridgeTemplate`), the direct sites' `_jtab` (`JvmJavaDirectSites`) and the HTTP runtime
+  (`RontoHttpClack` builds `:headers` through `RontoHashTable.put`, whose atom keys hash by
+  `hashCode` as `_hash` hashes them). Anything but a `RontoHashTable` fails at the first
+  `gethash`.
+- WASM: a `TYPE_CELL` box (so `consp` is nil) holding a header `cons (count . record)`, `count`
+  an i31 of live entries (tagged, "`equalp` is a KEY FOLD"), the record a `TYPE_HASH_BUCKETS`
+  array (`array (mut (ref null eq))`, index 33, bare comptype after `TYPE_CHAR`): flat
+  `[buckets, order, size, dead]` or trie `[root, vroot, vtail, vsize, vshift, dead]`, told apart
+  by `array.len`. An entry is an array `[hash, pos, owner, next, key, value]` (+ the key as
+  written in an `equalp` table). General arrays share the box, so `hash-table-p` is
+  `ref.test TYPE_CELL` PLUS the header-car test. The functions are 25 fixed indices from
+  `FUNC_HT_BASE` (after `FUNC_READ_LINK`) plus `_ht_entries` at `FUNC_HT_ENTRIES`, the slot
+  `_hash_resize` held; each reuses a `TYPE_CALLABLE_BASE` signature (an integer travels as an
+  i31), so no type is added, and the tree shaker drops whichever a module never calls.
+- `maphash` walks INSERTION ORDER on all four backends: a re-store keeps the key's place, a key
+  removed and stored again goes last. The walk is a snapshot (`liveValues`/`_ht_entries`), so a
+  store during it does not change it. Until 2026-10-11 WASM walked bucket order (a Clojure map
+  of a dozen keys printed in another order there).
 - `LispEquality.hash` / `.equal` sit in the ROOT package next to each other because they must
   agree; conses and instances are folded by `LispEquality` itself, not their own `hashCode`.
-- JVM: the `LinkedHashMap` is a BUCKET INDEX (boxed `Integer` hash -> `ArrayList` of `Object[2]`)
-  plus an insertion-order `ArrayList` under `#order`; re-storing mutates the pair's value in place. The
-  shape is declared ONCE in `runtime/RontoHashTable` and read by `JvmHashRuntimeBuilder` and the
-  hand-written runtimes (`RontoHttpClack`'s `:headers`) -- a plain `HashMap` fails at the first
-  `gethash`. Buckets are `new ArrayList<>(1)`, not the default ten.
-  **A removal does NOT unlink the pair from `#order`** -- unlinking scans and memmoves,
-  O(n) per `remhash`, which measured 2.9 s for 50,000 removals from a 300,000-entry
-  `eq` table on the JVM against ~0 ms on WASM (`.todo/855`; the other suspects --
-  packed `(vector i)`, `make-wkey`, `identityHashCode`, the bucket index -- split
-  clean). The pair keeps its slot with an unforgeable tombstone for a key, counted
-  under `#dead`; the live count is the list size minus that number, `maphash` (via
-  `_hashValues`) skips tombstones, and the list compacts in place once half of it is
-  dead (on a fresh `put` and before a full walk, so each removal stays O(1)
-  amortised). After the change the same program prints its answer in 659 ms on the
-  JVM against 1,307 ms on WASM Preview 1 (medians of 5 runs, linux-x86-64,
-  2026-09-18; before: 3,592 ms / 1,443 ms).
 - WASM `FUNC_HASH` must agree with `_equal` (equal keys hash equal); signature
   `((ref null eq)) -> i32` = `TYPE_RAT_GET`, always emitted. Strings/symbols fold content bytes
   (`h = h*31 + byte`) because `_equal` compares via `_string_eq`, not interned offsets
@@ -241,18 +256,73 @@ share the box, so `hash-table-p` is `ref.test TYPE_CELL` PLUS the header-car tes
   overflowed the stack as a key and a vector grown after it was stored lost its entry
   (`JvmLispCompilerTest#compileAndRunAVectorKeyHashesByIdentity`).
 - A HASH TABLE key is identity under every test and on every backend, like a vector.
-  On the JVM a table is a `LinkedHashMap`, whose `hashCode` AND `equals` walk the
-  entries: `_hash` and `_eqv` both answer by identity for any `java.util.Map`. Before
-  that a table filled after it was stored lost its entry under all four tests and two
-  empty tables were `eq` (`JvmLispCompilerTest#compileAndRunAHashTableKeyHashesAndComparesByIdentity`,
+  `RontoHashTable` overrides neither `hashCode` nor `equals`, and `_hash` asks
+  `System.identityHashCode` for one explicitly. Until 2026-10-11 a JVM table was a
+  `LinkedHashMap`, whose `hashCode` and `equals` walk the entries, so `_hash` and `_eqv` had an
+  identity arm for any `java.util.Map`; before that arm (2026-09-17) a table filled after it
+  was stored lost its entry under all four tests and two empty tables were `eq`
+  (`JvmLispCompilerTest#compileAndRunAHashTableKeyHashesAndComparesByIdentity`,
   ci-spec `hash-table-as-hash-key`). Audit 2026-09-17, all four backends agree: a
   rank-2 array, a packed fixnum/double vector and a structure mutated after storage
   in an `eq` table keep their entry, and so does a fill-pointer STRING grown after
   storage since strings key an eq/eql table by identity ("Strings under eq/eql").
-- `puthash` doubles (`FUNC_HASH_RESIZE`) past load factor 0.75; both funcs sit just before
-  `FUNC_USER_BASE` in Preview 1 and `--component`. `maphash` order is unspecified: interpreter and
-  JVM walk insertion order (JVM through `#order`, which is why the bucket index may reorder
-  freely), WASM bucket order.
+
+## Copies share structure (`.todo/f50`, 2026-10-11)
+
+**`rontolisp::%copy-equal-table` -- the copy every Clojure `assoc`, `dissoc`, `merge` and set
+`conj`/`disj` takes (`.kb/clojure-frontend.md`, "The copy a map verb takes") -- is native on all
+four backends and shares the table's structure: O(n) the first time a table is copied, O(1)
+after it, and a store into either side O(log n).** The JVM and WASM compiled the prelude loop (a
+`maphash` and a store per entry) until then, so a map grown one `assoc` at a time was O(n^2):
+instaparse's GLL parse table (19,481 nodes) spent 91% of a 36 s grammar load copying.
+
+- The first copy turns the source into a TRIE: a hash array mapped trie of hash chains (32 ways
+  a level on the JVM, 16 on WASM so a bitmap fits an i31) plus the entries in insertion order as
+  Clojure's persistent vector (a 32-way trie of full leaves plus a tail). The source and the copy
+  then hold it under FRESH edit tokens. A node, vector node or entry changes in place only when
+  it carries the table's own token (Clojure's transient ownership); anything else is copied
+  along its path first, and an entry another table shares has its pair cloned before its value
+  changes. So neither side changes in place what the other reads.
+- A removal kills the entry's order slot; the trie rebuilds without the dead slots once half are
+  dead -- amortised O(1) along one line of copies, though copies branching from one table at
+  the threshold each pay the rebuild.
+- Another test's table (eql, eq, equalp) is re-placed key by key under `equal`, each key as
+  first stored, as before.
+- THREADS (the `RontoHashTable` javadoc): reading writes nothing; a copy writes one volatile
+  field of its source (`repr`), replacing the shape by one of the same entries, so a reader on
+  another thread works on whichever shape it read -- the flat one is never changed again. The
+  todo's "a copy may not write its source" meant no reader may see the source's storage change
+  under it, which this keeps: a Clojure map shared by Ring request threads is read and copied
+  by all of them at once (`RontoHashTableTest#threadsCopyingAndReadingOneTableLeaveItUnchanged`).
+  WASM runs one thread and replaces the header's record.
+- Common Lisp tables, never copied, stay flat and pay nothing: bench-report `hash` (1.6 M
+  `eql` stores and reads) JVM ~710 -> ~365 ms and WASM ~750 -> ~480 ms (the flat shape
+  replacing the bucket index of lists, and the spread), the interpreter ~4.2 s either way
+  (2026-10-11, interleaved runs, load 2-4).
+- Measured 2026-10-11 (linux-x86-64, load 2-4, one run each), ms:
+
+  | | interpreter | JVM class | WASM Preview 1 |
+  | --- | --- | --- | --- |
+  | 8,000 `assoc`s onto `{}`, before | 1,342 | 2,026 | 5,215 |
+  | after | 120 | 20 | 10 |
+  | `(into {} ...)` of 8,000 pairs, before | 2,055 | 2,941 | 5,375 |
+  | after | 512 | 84 | 18 |
+
+  instaparse 1.5.0's README probe as a JVM class: `instaparse.core` load 34.7 -> 3.7 s, the
+  whole run 37.4 -> 4.7 s (oracle clj 1.12.6: 1.5 / 1.6 s); on the interpreter 52.7 -> 42.9 s /
+  69.7 -> 60.0 s, whose copy was already native and whose remaining cost is interpretation.
+- WASM: a map grown by tens of thousands of `assoc`s leaves every replaced path for the
+  collector, and wasmtime's copying collector rescans the live heap: 10k / 20k / 40k / 80k /
+  160k entries took 15 / 36 / 458 / 1,106 / 2,463 ms against the JVM's 47 / 42 / 62 / 105 /
+  227 ms. The clojure-spec pin grows 20,000 for that reason.
+- Pins: `testsupport/HashTableCopyPrograms` (the insertion-order walk, a copy's independence, an
+  eql and an equalp table's copy, and a table grown to 50,000 keys one copy and one store at a
+  time -- before: interpreter 25 s, JVM 72 s, WASM Preview 1 > 300 s) through
+  `LispEvaluatorTest#aHashTableWalksInInsertionOrderAndACopySharesItsStructure`, its JVM twin
+  and both WASM twins; `RontoHashTableTest` (a random workload over copies and clears against
+  one `LinkedHashMap` each, 200,000 copy-and-store steps under a timeout, eight threads over one
+  table); clojure-spec `a-map-grown-one-assoc-at-a-time-shares-its-table`. A REGRESSION IS A
+  HANG.
 
 ## The identity-hash slot (WASM)
 
@@ -275,11 +345,12 @@ modules).
   last fixed helper, a constant-0 stub in other modules): reads the slot, and on `0`
   assigns `fmix32(++seq)` -- `seq` a `(mut i32)` global at `identityHashSeqGlobalIndex`,
   murmur3's finalizer a bijection so a value of 1 or more never mixes to the unassigned
-  `0`, and the mix spreads consecutive assignments over every bit where `% capacity`
+  `0`, and the mix spreads consecutive assignments over every bit where a bucket mask
   reads only the low ones. A non-aggregate falls through to `_hash`, which `eql`/`eq` on
   such a value agrees with. The hash never moves once assigned, whatever the fields do.
 - **Who calls it**: an `eq`/`eql` table's `gethash`/`puthash`/`remhash` placement
-  (`WasmHashTableCompiler.pushKeyHash`) and `_hash_resize`, for every key; and `_hash`'s
+  (`_ht_get`/`_ht_put`/`_ht_rem`, `WasmHashTableRuntimeBuilder.emitPlacementHash`), for
+  every key -- the entry keeps the hash, so growth never asks again; and `_hash`'s
   `TYPE_CELL` arm in a slotted module, so a vector or table key of an `equal` table -- whose
   `equal` IS identity -- is placed by it too. A cons in an `equal` table still hashes
   structurally. A Clojure program storing a collection key gets the slot through
@@ -352,10 +423,10 @@ and ci-spec `identity-hash-table-many-aggregate-keys`.
 - `:TEST` is the test LOOKUP IMPLEMENTS, from the same place per backend as `hash-table-test`:
   `LispHashTable.testCode()`, `_hashTest`, the header count's low two bits. One whole constant
   per test, not one assembled at run time.
-- `:COUNT` is the O(1) live count (`_hashSize` on the JVM — the map's own `size()` counts BUCKETS).
-- JVM: the printer arm is keyed on `JvmHashRuntimeBuilder.MAP_CLASS` = `java.util.LinkedHashMap`,
-  deliberately NOT the plain `HashMap` a `java:` call can hand back — that class is the
-  discriminator `_hashP` and the printer share, so a host map stays a host object.
+- `:COUNT` is the O(1) live count (`_hashSize` on the JVM, `RontoHashTable.count`).
+- JVM: the printer arm is keyed on `JvmHashRuntimeBuilder.MAP_CLASS` = `runtime/RontoHashTable`,
+  a class of the program's own runtime that no `java:` call answers -- the discriminator `_hashP`
+  and the printer share, so a host map stays a host object.
 - WASM: the non-array arm of the shared `TYPE_CELL` branch (`WasmRuntimeBuilder.emitPrintArray`).
   **That branch must RETURN for every cell** — a cell falling out lands in the cons tail, prints
   `" . "` and re-enters the printer on the SAME value: unbounded recursion, an unrecoverable

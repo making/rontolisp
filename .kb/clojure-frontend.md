@@ -50,7 +50,7 @@ The oracle is `clj` 1.12.6.1673: a behavior is decided by running it there, and 
 | `nil` / `true` | `NIL` / `T` | `nil` IS the empty list |
 | `false` | the value of `rontolisp::%clojure-false`, a distinct non-`NIL` symbol spelled `false` | the `#f` treatment of `scheme.lisp`; every lowered test is an explicit null-or-false check on a temporary; the symbol `java:` passes as Java's false ("Java interop") |
 | `:foo`, `:a/b` | `(:C%KEYWORD "foo")`, spelling verbatim | compared by `equal`; `::kw` / `::alias/kw` resolve at lower time against the current namespace (an unknown alias is the oracle's `Invalid token`) |
-| `{k v}` | an `equal` hash table (`rontolisp:plist-hash-table`), never mutated: every verb builds a fresh one, copying the table ("The copy a map verb takes") | the shared runtime (`.kb/hash-tables.md`), so persistence holds on all four backends with no per-backend code; a persistent-map library would add a representation every backend prints, hashes and compares. Collection keys go through "Structural keys" |
+| `{k v}` | an `equal` hash table (`rontolisp:plist-hash-table`), never mutated: every verb builds a fresh one, a copy sharing the table's structure ("The copy a map verb takes") | the shared runtime (`.kb/hash-tables.md`), whose copy shares structure, so persistence holds on all four backends at O(log n) a verb with no representation of its own; a persistent-map library would add one every backend prints, hashes and compares. Collection keys go through "Structural keys" |
 | `#{..}` | `(:C%SET table)`, each member under itself | a repeated literal element is refused when the read forms are `=` (`ClojureReader.equivKey`: `1`/`1N`, `[1]`/`(1)`, maps and sets in any order; `Duplicate key`); members `=` only once evaluated: "Literal keys equal once evaluated" |
 | `sorted-map` / `sorted-set` (and `-by`) | `(:C%SORTED setp cmp items)`: a vector of `[k v]` entries or members in comparator order | "Sorted collections" |
 | `[..]` | a CL vector (a `vector` call) | a string is a CL vector too, so `vector?`/`coll?` exclude strings |
@@ -206,8 +206,10 @@ answered `2 5 3` before).
 Each is a real work item unless the reason says otherwise.
 
 - Printing (`clojure.lisp`, `%clojure-write`): `nil` prints `nil`, never `()` (an empty lazy
-  seq prints `()`); map/set walk order is unspecified (the spec pins only single-entry maps
-  and single-member sets); unreadable values print `#<..>` -- functions `#<procedure>`, atoms
+  seq prints `()`); a map or set prints in insertion order on all four backends since
+  2026-10-11 -- the oracle's array map's order (at most eight entries; clojure-spec
+  `a-map-grown-one-assoc-at-a-time-shares-its-table`), never its hash map's or hash set's --
+  while `seq`/`keys`/`vals` walk it newest-first (`.todo/f55`); unreadable values print `#<..>` -- functions `#<procedure>`, atoms
   and agents `#<Atom v>`, an `ex-info` its condition, a hierarchy its hash table, a
   stream the oracle's `#object` without the hash ("Streams as values"), any
   other host object `#<java C>` (the oracle's `#object[C 0x.. "..."]` carries a hash; a
@@ -566,11 +568,13 @@ keyword, var, reduced value or namespace read as its list (`(first :a)` was `:C%
 - A record's walks (`seq`, `keys`, `vals`, `reduce`, `reduce-kv`, `into`, `hash-ordered-coll`
   ...) take `%clojure-record-entries`' order, the printer's: the declared fields in order,
   then the extension keys in the table's walk order (`%clojure-record-column` for
-  `keys`/`vals`). Measured 2026-10-09 against clj 1.12.6: the oracle's extension map is an
-  array map, so its keys come in insertion order; here several extension keys come in the
-  table's order, flipped by every copy (`assoc`, `map->R`), like any map's ("Deviations":
-  walk order). A record with at most one extension key is the oracle's on all four backends.
-  Pin: clojure-spec `a-records-seq-walks-its-declared-fields-in-order-then-the-rest`.
+  `keys`/`vals`). The oracle's extension map is an array map, so its keys come in insertion
+  order, and so do they here on all four backends since 2026-10-11 (a copy keeps the order and
+  every backend walks a table in insertion order; before, wasm walked bucket order). Measured
+  that day against clj 1.12.6: `(assoc (->R 1 2) :e3 3 :e1 1 :e2 2 :e5 5)` prints, seqs and
+  `reduce-kv`s as the oracle's; `map->R` of a literal map reverses its extension keys, since it
+  reads the map through `seq`, which walks a table newest-first (`:q :b :a` there, `:a :b :q`
+  here). Pin: clojure-spec `a-records-seq-walks-its-declared-fields-in-order-then-the-rest`.
 - `%clojure-strict-seq`: a plain list passes after `consp` + `keywordp`; a set, record or
   sorted collection seqs; anything else (a wrapper, `false`, a number, a symbol, a
   function) is `seq`'s IAE. `false` was empty until then (the oracle refuses).
@@ -962,24 +966,22 @@ table's, else compares the classes added since and tries again
 
 **`assoc`, `dissoc`, `merge`, a set's `conj`/`disj` and the other verbs answering a changed
 map copy the table first, through `rontolisp::%copy-equal-table`** (2026-10-11): a fresh
-`equal` table of the same entries in the same order. It is a prelude defun the compile paths
-compile (a `maphash` and a store per entry) and a native mirror the interpreter binds first
-(`LispHashTable.copyEqual`, the entries shared), pinned against each other by
-`LispPreludeLibraryTest#thePreludeCopyEqualTableAgreesWithTheInterpretersNativeMirror`. Sites:
-`%clojure-plist-table`, `rename-keys`, the HTTP client's `assoc`, `ClojureCollectionLowering`'s
-`copyTable` (`dissoc`, `disj`, a set's `conj`) and the hierarchy's `c%h-copy-table`.
+`equal` table of the same entries in the same order, which shares the source's structure on
+all four backends -- O(n) the first time a table is copied, O(1) after it, a store into the copy
+O(log n) (`.kb/hash-tables.md`, "Copies share structure": `LispHashTable.copyEqual`, the JVM's
+`_hashCopy`, wasm's `_ht_copy`). Sites: `%clojure-plist-table`, `rename-keys`, the HTTP
+client's `assoc`, `ClojureCollectionLowering`'s `copyTable` (`dissoc`, `disj`, a set's `conj`)
+and the hierarchy's `c%h-copy-table`.
 - It replaced `(plist-hash-table (hash-table-plist m))`: prelude Lisp too, so an interpreted
   step and a list cell per entry on the interpreter, and it stored the keys back to front, so
   each `assoc` reversed the walk order (`(assoc {:a 1 :b 2} :c 3)` printed
   `{:b 2, :a 1, :c 3}`; the oracle's array map and now this print `{:a 1, :b 2, :c 3}`).
-- Still O(n) per verb: a map grown one `assoc` at a time is O(n^2). instaparse's GLL parse
-  table (`(swap! nodes assoc node-key node)`, 19,481 nodes for `instaparse.abnf`'s grammar)
-  and message cache (7,220 entries) were 91% of that grammar's `cfg/ebnf` as a JVM class and
-  more than 87% on the interpreter. A probe mutating a table of more than 64 entries in place
-  (unsound; the ceiling, load ~20): JVM 38.6 -> 4.5 s, interpreter > 580 -> 76 s. The native
-  mirror reaches the interpreter's ceiling (77 s, load ~4); the compiled loop only saves the
-  list (JVM 39.0 -> 36.5 s, load ~4, base `db05c2f42`). A JVM table shares no structure with a copy (`RontoHashTable`: a bucket index of
-  mutable pairs, read directly by the Java bridge and the HTTP runtime): `.todo/f50`.
+- Until the structure was shared (`.todo/f50`) the compile paths compiled a prelude defun (a
+  `maphash` and a store per entry) and the copy was O(n) per verb everywhere: a map grown one
+  `assoc` at a time was O(n^2). instaparse's GLL parse table (`(swap! nodes assoc node-key
+  node)`, 19,481 nodes for `instaparse.abnf`'s grammar) and message cache (7,220 entries) were
+  91% of that grammar's `cfg/ebnf` as a JVM class. Now `instaparse.core` loads in 3.7 s as a
+  JVM class (34.7 s before; the oracle 1.5 s) -- the numbers in `.kb/hash-tables.md`.
 
 ## Hashes
 
@@ -2065,9 +2067,9 @@ namespace` but the ones no measured library names (`inspector`, `java.browse`,
     buffer overflowed, which only the replay reproduces.
   - Fidelity, the same day against clj 1.12.6: 1,500 generated layouts (nested vectors,
     lists, maps up to eight keys, sets, scalars, each at a random margin) identical on the
-    interpreter and the JVM class; 500 with one-key maps identical on both wasm legs (a
-    hash map's walk order is the backend's, "Deviations", so several keys differ there as
-    `pr` does); the feature probes (fill/miser/mandatory, `:current`/`:block` indent,
+    interpreter and the JVM class; 500 with one-key maps identical on both wasm legs (wasm
+    then walked a table in bucket order, so several keys differed there as `pr` did; every
+    backend walks insertion order since 2026-10-11, `.kb/hash-tables.md`); the feature probes (fill/miser/mandatory, `:current`/`:block` indent,
     per-line prefix, `*print-length*`/`*print-level*`/`*print-meta*`, reader macros,
     namespace maps, radix printing with its negative-number quirk, `print-table`)
     identical on all four.
@@ -3793,7 +3795,9 @@ interfaces behind an arm family its row's store makes (`ClojureArms`, `COLLECTIO
   wall, JVM run 45.5 / 36.3 s (oracle 2.5 s wall). Every README line (hiccup, enlive, a
   failure, the `insta/transform` arithmetic, `insta/parses`' seven parses, an
   `:input-format :abnf` grammar) is the oracle's on the interpreter and the JVM; the JVM's
-  load is the copy (`.todo/f50`).
+  load was the copy, which shares structure since `.todo/f50` (2026-10-11, load ~4): load
+  34.7 -> 3.7 s, the run 37.4 -> 4.7 s as a JVM class, 52.7 -> 42.9 s / 69.7 -> 60.0 s on the
+  interpreter (oracle 1.5 / 1.6 s).
 - Pins: clojure-spec `a-collection-type-conjs-empties-counts-and-compares-through-its-methods`,
   `a-map-type-assocs-dissocs-reads-and-prints-as-a-map`,
   `a-set-type-disjs-contains-and-prints-as-a-set`,

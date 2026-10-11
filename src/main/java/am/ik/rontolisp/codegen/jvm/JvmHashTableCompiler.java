@@ -9,7 +9,6 @@ import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispHashTable;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispVal;
-import am.ik.rontolisp.compiler.OperandTypes;
 import am.ik.rontolisp.macro.LispMacroExpander;
 
 /**
@@ -21,33 +20,6 @@ import am.ik.rontolisp.macro.LispMacroExpander;
 final class JvmHashTableCompiler {
 
 	private JvmHashTableCompiler() {
-	}
-
-	/**
-	 * Runs the table operand on the stack through the program's {@code _jcktab} in a
-	 * {@code java:} program: a host {@code LinkedHashMap} a call answered is no Lisp
-	 * table, and the helpers read their operand by the class alone -- a lookup in one
-	 * answered nil, a store wrote a bucket into it. It is refused here with the
-	 * interpreter's {@code OP expects a hash table, got X}. A program without
-	 * {@code java:} holds no host map and emits nothing.
-	 * @param ctx the compilation context, the operand on top of its stack
-	 * @param lispName the operator the refusal names
-	 */
-	private static void emitHostTableGuard(JvmLispCompiler.Ctx ctx, String lispName) {
-		emitTableCheck(ctx, lispName);
-		JvmJavaSites javaSites = ctx.javaSites;
-		if (javaSites == null) {
-			return;
-		}
-		// The operator the refusal names, or null (ACONST_NULL) for an unnamed one.
-		String reported = OperandTypes.reportedOperator(lispName);
-		if (reported == null) {
-			ctx.body.aconst_null();
-		}
-		else {
-			JvmEmitHelper.compileUnspelledLiteral(reported, ctx);
-		}
-		ctx.body.invokestatic(javaSites.direct().tableGuard());
 	}
 
 	/**
@@ -70,13 +42,13 @@ final class JvmHashTableCompiler {
 		}
 	}
 
-	// The same guard for a table operand with one more argument evaluated above it on the
+	// The same check for a table operand with one more argument evaluated above it on the
 	// stack (gethash's default, %puthash's value): every argument is evaluated before the
 	// table is refused, as the interpreter does.
-	private static void emitHostTableGuardUnderOne(JvmLispCompiler.Ctx ctx, String lispName) {
+	private static void emitTableCheckUnderOne(JvmLispCompiler.Ctx ctx, String lispName) {
 		int top = ctx.allocTemp();
 		ctx.body.astore(top);
-		emitHostTableGuard(ctx, lispName);
+		emitTableCheck(ctx, lispName);
 		ctx.body.aload(top);
 	}
 
@@ -119,7 +91,7 @@ final class JvmHashTableCompiler {
 		if (!ctx.usesIdentityHashTables) {
 			List<LispVal> args = cons.toList();
 			JvmExprCompiler.compileExpr(args.get(1), ctx, className);
-			emitHostTableGuard(ctx, LispNames.HASH_TABLE_TEST);
+			emitTableCheck(ctx, LispNames.HASH_TABLE_TEST);
 			invokeHelper(ctx, className, JvmHashRuntimeBuilder.EQUALP_P, JvmHashRuntimeBuilder.EQUALP_P_DESC);
 			MethodCode.Label notEqualp = ctx.body.newLabel();
 			MethodCode.Label end = ctx.body.newLabel();
@@ -133,7 +105,7 @@ final class JvmHashTableCompiler {
 		}
 		List<LispVal> args = cons.toList();
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
-		emitHostTableGuard(ctx, LispNames.HASH_TABLE_TEST);
+		emitTableCheck(ctx, LispNames.HASH_TABLE_TEST);
 		invokeHelper(ctx, className, JvmHashRuntimeBuilder.TEST, JvmHashRuntimeBuilder.TEST_DESC);
 		// The test code goes into a temp: each comparison below consumes its own copy
 		// (3 eq, 2 eql, 1 equalp, else equal).
@@ -184,7 +156,7 @@ final class JvmHashTableCompiler {
 			String lispName, LispVal expansion) {
 		List<LispVal> forms = ((LispCons) expansion).toList();
 		JvmExprCompiler.compileExpr(forms.get(1), ctx, className);
-		emitHostTableGuard(ctx, lispName);
+		emitTableCheck(ctx, lispName);
 		ctx.body.pop();
 		JvmExprCompiler.compileExpr(forms.get(2), ctx, className);
 	}
@@ -199,7 +171,7 @@ final class JvmHashTableCompiler {
 		else {
 			ctx.body.aconst_null();
 		}
-		emitHostTableGuardUnderOne(ctx, LispNames.GETHASH);
+		emitTableCheckUnderOne(ctx, LispNames.GETHASH);
 		invokeHelper(ctx, className, JvmHashRuntimeBuilder.GET, JvmHashRuntimeBuilder.GET_DESC);
 	}
 
@@ -209,7 +181,7 @@ final class JvmHashTableCompiler {
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
 		JvmExprCompiler.compileExpr(args.get(2), ctx, className);
 		JvmExprCompiler.compileExpr(args.get(3), ctx, className);
-		emitHostTableGuardUnderOne(ctx, LispNames.PUTHASH);
+		emitTableCheckUnderOne(ctx, LispNames.PUTHASH);
 		invokeHelper(ctx, className, JvmHashRuntimeBuilder.PUT, JvmHashRuntimeBuilder.PUT_DESC);
 	}
 
@@ -217,22 +189,42 @@ final class JvmHashTableCompiler {
 		List<LispVal> args = cons.toList();
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
 		JvmExprCompiler.compileExpr(args.get(2), ctx, className);
-		emitHostTableGuard(ctx, LispNames.REMHASH);
+		emitTableCheck(ctx, LispNames.REMHASH);
 		invokeHelper(ctx, className, JvmHashRuntimeBuilder.REM, JvmHashRuntimeBuilder.REM_DESC);
 	}
 
 	static void compileClr(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
 		List<LispVal> args = cons.toList();
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
-		emitHostTableGuard(ctx, LispNames.CLRHASH);
+		emitTableCheck(ctx, LispNames.CLRHASH);
 		invokeHelper(ctx, className, JvmHashRuntimeBuilder.CLR, JvmHashRuntimeBuilder.CLR_DESC);
 	}
 
 	static void compileCount(LispCons cons, JvmLispCompiler.Ctx ctx, String className, String lispName) {
 		List<LispVal> args = cons.toList();
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
-		emitHostTableGuard(ctx, lispName);
+		emitTableCheck(ctx, lispName);
 		invokeHelper(ctx, className, JvmHashRuntimeBuilder.COUNT, JvmHashRuntimeBuilder.COUNT_DESC);
+	}
+
+	/**
+	 * Compiles {@code (rontolisp::%copy-equal-table table)}, the copy every Clojure map,
+	 * set and record field table takes before a verb changes it: {@code _hashCopy}, which
+	 * shares an {@code equal} table's structure in O(1) ({@code .kb/hash-tables.md},
+	 * "Copies share structure"). Anything but a table is refused as the interpreter's
+	 * native copy refuses it, as {@code maphash}'s operand.
+	 * @param cons the call
+	 * @param ctx the compilation context
+	 * @param className the generated class
+	 */
+	static void compileCopy(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
+		List<LispVal> args = cons.toList();
+		if (args.size() != 2) {
+			throw new UnsupportedOperationException("%copy-equal-table expects 1 argument, got " + (args.size() - 1));
+		}
+		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
+		emitTableCheck(ctx, LispNames.MAPHASH);
+		invokeHelper(ctx, className, JvmHashRuntimeBuilder.COPY, JvmHashRuntimeBuilder.COPY_DESC);
 	}
 
 	static void compileP(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
@@ -259,7 +251,7 @@ final class JvmHashTableCompiler {
 		c.astore(funcSlot);
 
 		JvmExprCompiler.compileExpr(args.get(2), ctx, className);
-		emitHostTableGuard(ctx, LispNames.MAPHASH);
+		emitTableCheck(ctx, LispNames.MAPHASH);
 		invokeHelper(ctx, className, JvmHashRuntimeBuilder.VALUES, JvmHashRuntimeBuilder.VALUES_DESC);
 		int arrSlot = ctx.allocTemp();
 		c.astore(arrSlot);

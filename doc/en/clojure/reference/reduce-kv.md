@@ -2,7 +2,7 @@
 
 `(reduce-kv f init coll)`
 
-Folds `(f acc k v)` over a map's or record's entries (the table's walk order), a Java
+Folds `(f acc k v)` over a map's or record's entries (in the order the map prints), a Java
 `Map`'s entries (interpreter and JVM) or a vector's index/member pairs, starting from
 `init`; `nil` answers `init`. A list, set or string signals, like the oracle. A `reduced`
 answer stops the fold. As a value a three-argument function. A record, deftype or `reify`

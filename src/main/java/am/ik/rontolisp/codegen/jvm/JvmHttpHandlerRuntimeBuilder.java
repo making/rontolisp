@@ -80,7 +80,9 @@ final class JvmHttpHandlerRuntimeBuilder {
 			"am/ik/rontolisp/runtime/RontoHttpServer$ServerException.class",
 			"am/ik/rontolisp/runtime/RontoHttpServer$StoppableServer.class",
 			"am/ik/rontolisp/runtime/RontoHttpClack.class", "am/ik/rontolisp/runtime/RontoClackEnv.class",
-			"am/ik/rontolisp/runtime/RontoHashTable.class");
+			"am/ik/rontolisp/runtime/RontoHashTable.class", "am/ik/rontolisp/runtime/RontoHashTable$Entry.class",
+			"am/ik/rontolisp/runtime/RontoHashTable$Flat.class", "am/ik/rontolisp/runtime/RontoHashTable$Trie.class",
+			"am/ik/rontolisp/runtime/RontoHashTable$Node.class", "am/ik/rontolisp/runtime/RontoHashTable$VNode.class");
 
 	/**
 	 * Reads {@link #RUNTIME_CLASS_FILES} off the compiler's own classpath.

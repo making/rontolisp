@@ -1273,17 +1273,18 @@ public final class WasmLispCompiler implements LispCompiler {
 	// present; only the hash-table compiler references it. Equal keys hash equal.
 	static final int FUNC_HASH = FUNC_PLIST_GET + 1;
 
-	// Rehash helper: grows a hash table's bucket array (doubling capacity) and
-	// redistributes its entries. Always present; called by puthash when the load factor
-	// is exceeded.
-	static final int FUNC_HASH_RESIZE = FUNC_HASH + 1;
+	// _ht_entries (header) -> array: a hash table's live entries in insertion order, the
+	// snapshot maphash walks (WasmHashTableRuntimeBuilder.buildEntries), in the slot the
+	// old bucket resize helper held; the rest of the table runtime is the block at
+	// FUNC_HT_BASE.
+	static final int FUNC_HT_ENTRIES = FUNC_HASH + 1;
 
 	// Modulo / remainder runtime: dispatch on operand type (i31 fast path, exact ratio,
 	// or f64 for a float operand) so mod/rem work on floats reaching them through a
 	// variable. Appended here (after the hash helpers, before FUNC_USER_BASE) so no
 	// import/FUNC_START index shifts and the component blobs are unaffected. Always
 	// present; only the mod/rem compiler references them.
-	static final int FUNC_RAT_REM = FUNC_HASH_RESIZE + 1;
+	static final int FUNC_RAT_REM = FUNC_HT_ENTRIES + 1;
 
 	static final int FUNC_RAT_MOD = FUNC_RAT_REM + 1;
 
@@ -2235,6 +2236,15 @@ public final class WasmLispCompiler implements LispCompiler {
 	// program names %read-link.
 	static final int FUNC_READ_LINK = FUNC_FILE_WRITE_DATE + 1;
 
+	// The hash-table runtime (WasmHashTableRuntimeBuilder): gethash, puthash, remhash
+	// and the structure-sharing copy over a chained table that becomes a trie of hash
+	// chains once copied, each keeping the insertion order --
+	// WasmHashTableRuntimeBuilder.FUNC_COUNT functions at FUNC_HT_BASE + the builder's
+	// offsets. Each reuses a TYPE_CALLABLE_BASE signature, so no type is added; appended
+	// after the last fixed helper so no index above shifts, and shaken from a module
+	// that makes no table.
+	static final int FUNC_HT_BASE = FUNC_READ_LINK + 1;
+
 	/**
 	 * The fixed function index of an fdlibm function.
 	 * @param fn the function
@@ -2265,7 +2275,7 @@ public final class WasmLispCompiler implements LispCompiler {
 	// above keeps its value; the user defuns below shift by
 	// WasmVecSimdRuntimeBuilder.FUNC_COUNT when the block is present. Read the base
 	// through userFuncBase(), never FUNC_USER_BASE.
-	static final int FUNC_VEC_BASE = FUNC_READ_LINK + 1;
+	static final int FUNC_VEC_BASE = FUNC_HT_BASE + WasmHashTableRuntimeBuilder.FUNC_COUNT;
 
 	// User defuns start after the dispatch functions, the plist helper, the two
 	// hash-table runtime helpers, the two mod/rem helpers, the gensym helper, the
@@ -2286,10 +2296,10 @@ public final class WasmLispCompiler implements LispCompiler {
 	// conversion (_rat_to_f64), the division-by-zero landing (_div_zero), the subseq
 	// bounds landing (_subseq_bad), the bounds check (_ck_bounds), the four exact
 	// prefix steps (_rat_add_f64 .. _rat_div_f64), the limb-tier random draw
-	// (_rand_big), the path stat (_file_write_date) and the link read (_read_link) --
-	// plus, under --simd, the vec: SIMD block. Use userFuncBase(), which adds that
-	// offset.
-	static final int FUNC_USER_BASE = FUNC_READ_LINK + 1;
+	// (_rand_big), the path stat (_file_write_date), the link read (_read_link) and the
+	// hash-table runtime (_ht_*) -- plus, under --simd, the vec: SIMD block. Use
+	// userFuncBase(), which adds that offset.
+	static final int FUNC_USER_BASE = FUNC_HT_BASE + WasmHashTableRuntimeBuilder.FUNC_COUNT;
 
 	// Type indices
 	static final int TYPE_FD_WRITE = 0;
@@ -7661,7 +7671,8 @@ public final class WasmLispCompiler implements LispCompiler {
 												// (ref null eq)
 				// Hash-table runtime helpers
 				fnDef.addFunction(TYPE_RAT_GET); // _hash ((ref null eq)) -> i32
-				fnDef.addFunction(TYPE_PRINT_VAL); // _hash_resize ((ref null eq)) -> ()
+				fnDef.addFunction(TYPE_CALLABLE_BASE + 0); // _ht_entries (header) ->
+															// entries (FUNC_HT_ENTRIES)
 				// Modulo / remainder runtime helpers
 				fnDef.addFunction(TYPE_CALLABLE_BASE + 1); // _rat_rem
 				fnDef.addFunction(TYPE_CALLABLE_BASE + 1); // _rat_mod
@@ -7919,6 +7930,10 @@ public final class WasmLispCompiler implements LispCompiler {
 															// (FUNC_FILE_WRITE_DATE)
 				fnDef.addFunction(TYPE_CALLABLE_BASE + 0); // _read_link (path) -> value
 															// (FUNC_READ_LINK)
+				// the hash-table runtime block (FUNC_HT_BASE ..)
+				for (int i = 0; i < WasmHashTableRuntimeBuilder.FUNC_COUNT; i++) {
+					fnDef.addFunction(WasmHashTableRuntimeBuilder.typeIndexOf(i));
+				}
 				// vec: SIMD block (--simd only): the three element helpers + twelve
 				// kernels
 				if (this.simd) {
@@ -8611,12 +8626,12 @@ public final class WasmLispCompiler implements LispCompiler {
 				}
 				// plist runtime helper body (FUNC_PLIST_GET)
 				code.addFunction(WasmPlistRuntimeBuilder.buildPlistGet());
-				// Hash-table runtime helper bodies (FUNC_HASH, FUNC_HASH_RESIZE)
+				// Hash-table runtime helper bodies (FUNC_HASH, FUNC_HT_ENTRIES)
 				code.addFunction(WasmRuntimeBuilder.buildHashBody(this.usesInstances ? instanceTypeBase() : -1,
 						this.addressKeyedLayout, hashDepthGlobalIndex, hashGasGlobalIndex, this.charvecPossible,
 						this.usesIdentityHashTables));
-				code.addFunction(WasmRuntimeBuilder.buildHashResizeBody(this.usesIdentityHashTables,
-						this.usesInstances ? instanceTypeBase() : -1));
+				code.addFunction(WasmHashTableRuntimeBuilder
+					.buildEntries(this.usesEqualpHashTables || this.usesIdentityHashTables));
 				// Modulo / remainder runtime helper bodies (FUNC_RAT_REM, FUNC_RAT_MOD)
 				code.addFunction(WasmRatioRuntimeBuilder.buildRatRemBody(false, nonFiniteRemainderMessage,
 						this.usesIdentityHashTables));
@@ -8972,6 +8987,14 @@ public final class WasmLispCompiler implements LispCompiler {
 				// nil stub where nothing declared it.
 				code.addFunction(readLinkOrdinal < 0 ? WasmEmitHelper.buildNilBody() : WasmIoRuntimeBuilder
 					.buildReadLinkBody(WasmImportCompiler.PLACEHOLDER_FUNC_BASE + readLinkOrdinal));
+				// the hash-table runtime block (FUNC_HT_BASE ..): shaken from a module
+				// that makes no table.
+				WasmHashTableRuntimeBuilder.Flags tableFlags = new WasmHashTableRuntimeBuilder.Flags(
+						this.usesEqualpHashTables || this.usesIdentityHashTables, this.usesIdentityHashTables,
+						this.usesEqualpHashTables);
+				for (int i = 0; i < WasmHashTableRuntimeBuilder.FUNC_COUNT; i++) {
+					code.addFunction(WasmHashTableRuntimeBuilder.build(i, tableFlags));
+				}
 				// vec: SIMD block bodies (--simd only), in FUNC_VEC_BASE index order.
 				if (this.simd) {
 					// Each helper is handed the function index of the scalar vec.lisp

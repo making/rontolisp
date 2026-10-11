@@ -14,8 +14,10 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   string. The print family answers `nil`, like the oracle.
 - Collections print in Clojure notation (`[1 :a s]`, `{:a 1}`, `#{1}`,
   `(true false nil :k)`); a quoted symbol demangles from behind `c%`. `nil` stays `nil`
-  (never `()`), and map/set walk order stays unspecified (same as `keys`/`vals`), so only
-  single-entry maps and single-member sets print deterministically. A value that closes a
+  (never `()`). A map or set prints its entries in insertion order on every backend -- the
+  oracle's order for a map of at most eight entries (its array map), not past eight (its
+  hash map) nor for a set (its hash set) -- while `seq`, `keys` and `vals` walk them newest
+  first. A value that closes a
   cycle prints with a datum label (`#0=(1 . #0#)`), like Scheme's `write`; sharing
   without a cycle prints twice. An atom prints unreadably (`#<Atom value>`), a function
   as `#<procedure>`, an exception as its `toString` (`clojure.lang.ExceptionInfo: m {}`;
@@ -98,8 +100,8 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   above it still reach the core verb); a local binding shadows it in its scope, like the
   oracle.
 - The seq family's empty `rest`/`next` is `nil`, where the oracle prints `()`; `nth` past
-  the end answers the default instead of throwing; map/set seq order is the table's walk
-  order; strings seq to characters printing in Common Lisp notation. Lazy seqs realize
+  the end answers the default instead of throwing; a map or set seqs newest first, the
+  reverse of the order it prints in; strings seq to characters printing in Common Lisp notation. Lazy seqs realize
   one element at a time (no chunking); `str` of a lazy seq spells its members, where the
   oracle answers `clojure.lang.LazySeq@<hash>`; `map` takes any number of collections.
 - A `for` over strict collections answers a strict list, realized when the `for` runs

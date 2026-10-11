@@ -3,7 +3,8 @@
 `(hash-set x ...)`
 
 `clojure.core/hash-set`: a set of the arguments, a repeated one kept once. The same equal
-hash table as a `#{...}` literal, so iteration order is unspecified. As a value a function
+hash table as a `#{...}` literal: it prints its members in insertion order and `seq` walks
+them newest first, where the oracle's hash set has an order of its own. As a value a function
 of any number of arguments.
 
 ```clojure

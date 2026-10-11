@@ -2,8 +2,7 @@
 
 `(vals m)`
 
-Answers the list of the map's values, in the table's walk order -- the same unspecified
-order `keys` walks. `vals` of `nil` is `nil`.
+Answers the list of the map's values, newest first -- the order `keys` walks. `vals` of `nil` is `nil`.
 
 As a value a one-argument lambda.
 

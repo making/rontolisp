@@ -584,6 +584,12 @@ final class JvmExprCompiler {
 					JvmHttpServerSeamCompiler.compile(qn.member(), cons, ctx, className);
 					return;
 				}
+				if (LispNames.COPY_EQUAL_TABLE_INTERNAL.equals(qn.member())) {
+					// The copy every Clojure map verb takes: _hashCopy, which shares an
+					// equal table's structure.
+					JvmHashTableCompiler.compileCopy(cons, ctx, className);
+					return;
+				}
 				if (LispNames.OCTETS_TO_STRING_PACKED_INTERNAL.equals(qn.member())) {
 					// The native half of the prelude's lenient octet decoder: a packed
 					// octet vector decoded (the JDK's strict decode, else a transcode by

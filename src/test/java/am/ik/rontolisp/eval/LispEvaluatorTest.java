@@ -57,6 +57,7 @@ import am.ik.rontolisp.reader.LispReadException;
 import am.ik.rontolisp.reader.LispReader;
 import am.ik.rontolisp.testsupport.CorpusFixtures;
 import am.ik.rontolisp.testsupport.DeclaredArityReportPrograms;
+import am.ik.rontolisp.testsupport.HashTableCopyPrograms;
 import am.ik.rontolisp.testsupport.HashTableKeyPrograms;
 import am.ik.rontolisp.testsupport.LoweredBuiltinValues;
 import am.ik.rontolisp.testsupport.StringStreamPrograms;
@@ -15537,6 +15538,17 @@ class LispEvaluatorTest {
 		// JvmLispCompilerTest#compileAndRunAHashTableHandsBackTheKeyAsFirstStored and
 		// WasmLispCompilerIntegrationTest's *HashTableHandsBackTheKeyAsFirstStored.
 		assertThat(printedOutput(HashTableKeyPrograms.PROGRAM)).isEqualTo(HashTableKeyPrograms.EXPECTED);
+	}
+
+	@Test
+	void aHashTableWalksInInsertionOrderAndACopySharesItsStructure() {
+		// maphash walks insertion order; %copy-equal-table answers an equal table that
+		// changes independently of its source, in O(1) for an equal one. The compiled
+		// twins are
+		// JvmLispCompilerTest#compileAndRunAHashTableWalksInInsertionOrderAndACopySharesItsStructure
+		// and WasmLispCompilerIntegrationTest's
+		// *HashTableWalksInInsertionOrderAndACopySharesItsStructure.
+		assertThat(printedOutput(HashTableCopyPrograms.PROGRAM)).isEqualTo(HashTableCopyPrograms.EXPECTED);
 	}
 
 	@Test

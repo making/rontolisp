@@ -47,6 +47,7 @@ import am.ik.rontolisp.reader.LispReader;
 import am.ik.rontolisp.testsupport.CliStackExtension;
 import am.ik.rontolisp.testsupport.CorpusFixtures;
 import am.ik.rontolisp.testsupport.DeclaredArityReportPrograms;
+import am.ik.rontolisp.testsupport.HashTableCopyPrograms;
 import am.ik.rontolisp.testsupport.HashTableKeyPrograms;
 import am.ik.rontolisp.testsupport.LoweredBuiltinValues;
 import am.ik.rontolisp.testsupport.MaskSignedFieldProgram;
@@ -18369,6 +18370,15 @@ class JvmLispCompilerTest {
 		assertThat(compileAndRun(am.ik.rontolisp.cli.CompileFrontendAccess.corpus(HashTableKeyPrograms.PROGRAM,
 				am.ik.rontolisp.reader.Features.JVM, false, false)))
 			.isEqualTo(HashTableKeyPrograms.EXPECTED);
+	}
+
+	@Test
+	void compileAndRunAHashTableWalksInInsertionOrderAndACopySharesItsStructure() throws Exception {
+		// The interpreter twin is
+		// LispEvaluatorTest#aHashTableWalksInInsertionOrderAndACopySharesItsStructure.
+		assertThat(compileAndRun(am.ik.rontolisp.cli.CompileFrontendAccess.corpus(HashTableCopyPrograms.PROGRAM,
+				am.ik.rontolisp.reader.Features.JVM, false, false)))
+			.isEqualTo(HashTableCopyPrograms.EXPECTED);
 	}
 
 	@Test

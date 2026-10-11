@@ -61,7 +61,7 @@ class JvmRuntimeGroupNamesTest {
 		ClassEntry stringArrayClass = cp.classEntry("[Ljava/lang/String;");
 
 		List<JvmHashRuntimeBuilder.HashMethod> emitted = JvmHashRuntimeBuilder.build(cp, selfClass, objectClass,
-				objectArrayClass, longValueOf, equal, eqv, strv, stringArrayClass, false, false, null, null);
+				objectArrayClass, longValueOf, equal, eqv, strv, stringArrayClass, false, false, null);
 
 		assertThat(emitted.stream().map(m -> m.name().index()).collect(Collectors.toSet()))
 			.isEqualTo(indicesOf(cp, JvmHashRuntimeBuilder.METHOD_NAMES));
@@ -81,7 +81,7 @@ class JvmRuntimeGroupNamesTest {
 		ClassEntry stringArrayClass = cp.classEntry("[Ljava/lang/String;");
 
 		List<JvmHashRuntimeBuilder.HashMethod> folding = JvmHashRuntimeBuilder.build(cp, selfClass, objectClass,
-				objectArrayClass, longValueOf, equal, eqv, strv, stringArrayClass, true, false, null, null);
+				objectArrayClass, longValueOf, equal, eqv, strv, stringArrayClass, true, false, null);
 
 		Set<String> names = new java.util.LinkedHashSet<>(JvmHashRuntimeBuilder.METHOD_NAMES);
 		names.addAll(JvmHashRuntimeBuilder.EQUALP_METHOD_NAMES);
@@ -103,7 +103,7 @@ class JvmRuntimeGroupNamesTest {
 		ClassEntry stringArrayClass = cp.classEntry("[Ljava/lang/String;");
 
 		List<JvmHashRuntimeBuilder.HashMethod> identity = JvmHashRuntimeBuilder.build(cp, selfClass, objectClass,
-				objectArrayClass, longValueOf, equal, eqv, strv, stringArrayClass, false, true, null, null);
+				objectArrayClass, longValueOf, equal, eqv, strv, stringArrayClass, false, true, null);
 
 		Set<String> names = new java.util.LinkedHashSet<>(JvmHashRuntimeBuilder.METHOD_NAMES);
 		names.addAll(JvmHashRuntimeBuilder.IDENTITY_METHOD_NAMES);

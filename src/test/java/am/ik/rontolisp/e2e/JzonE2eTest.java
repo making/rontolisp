@@ -35,10 +35,11 @@ import static org.assertj.core.api.Assertions.assertThat;
  * to a CLOS stream instance).
  *
  * <p>
- * The exercise avoids the two accepted cross-backend divergences: the WASM large-float
- * print shape and hash-table iteration order over multiple keys (plus non-ASCII
- * {@code \\u} escapes, whose {@code code-char} is byte-oriented on WASM) -- those stay
- * pinned by the interpreter-only README walkthrough below.
+ * The exercise avoids the accepted cross-backend divergence, the WASM large-float print
+ * shape (plus non-ASCII {@code \\u} escapes, whose {@code code-char} is byte-oriented on
+ * WASM) -- those stay pinned by the interpreter-only README walkthrough below. A
+ * multi-key hash table stringifies in insertion order on every backend, the order
+ * {@code maphash} walks.
  */
 class JzonE2eTest extends AsdfLibraryE2eSupport {
 
@@ -100,7 +101,9 @@ class JzonE2eTest extends AsdfLibraryE2eSupport {
 				                              (1 t)
 				                              (2 (values t (format nil "Lupin the ~A" value)))))))
 				(let ((ht (make-hash-table :test 'equal)))
+				  (setf (gethash 'only-keys ht) 'are-affected)
 				  (setf (gethash '|noChange| ht) '|when used|)
+				  (setf (gethash "AS A" ht) '|value|)
 				  (com.inuoe.jzon:stringify ht :pretty t :stream t))
 				(terpri)
 				(defclass readme-person ()
@@ -133,8 +136,11 @@ class JzonE2eTest extends AsdfLibraryE2eSupport {
 				":CAUGHT-MULTIPLE-CONTENT",
 				// :replacer (returned string, echoed via print)
 				"\"[", "\\\"second\\\",", "\\\"Lupin the third\\\"", "]\"",
-				// a |...|-escaped symbol hash key (verbatim case)
-				"{", "\"noChange\": \"when used\"", "}",
+				// the README's three hash keys in insertion order: a symbol, a
+				// |...|-escaped
+				// symbol (verbatim case) and a string. Known deviation from the README's
+				// output: symbol values keep rontolisp's verbatim case.
+				"{", "\"only-keys\": \"ARE-AFFECTED\",", "\"noChange\": \"when used\",", "\"AS A\": \"value\"", "}",
 				// CLOS instance serialized as an object. The never-initialized alias slot
 				// is UNBOUND, so jzon's coerced-fields skips it -- exactly
 				// what
@@ -145,24 +151,15 @@ class JzonE2eTest extends AsdfLibraryE2eSupport {
 	}
 
 	// The README walkthrough pieces the four-backend exercise cannot carry -- a
-	// non-ASCII \\u escape (code-char is byte-oriented on WASM), a large-float print
-	// (the WASM print shape differs) and a multi-key hash table (iteration order is
-	// backend-local) -- pinned on the interpreter. Known deviation from the README's
-	// output: symbol values keep rontolisp's verbatim case.
+	// non-ASCII \\u escape (code-char is byte-oriented on WASM) and a large-float print
+	// (the WASM print shape differs) -- pinned on the interpreter.
 	private static final String INTERPRETER_RESIDUE_EXERCISE = """
 			(asdf:load-system :com.inuoe.jzon)
 			(print (com.inuoe.jzon:parse "\\"a\\\\nb\\\\u00e9\\""))
 			(print (com.inuoe.jzon:parse "-1.5e10"))
-			(let ((ht (make-hash-table :test 'equal)))
-			  (setf (gethash 'only-keys ht) 'are-affected)
-			  (setf (gethash '|noChange| ht) '|when used|)
-			  (setf (gethash "AS A" ht) '|value|)
-			  (com.inuoe.jzon:stringify ht :pretty t :stream t))
-			(terpri)
 			""";
 
-	private static final List<String> INTERPRETER_RESIDUE_EXPECTED = List.of("\"a", "bé\"", "-1.5e10", "{",
-			"\"only-keys\": \"ARE-AFFECTED\",", "\"noChange\": \"when used\",", "\"AS A\": \"value\"", "}");
+	private static final List<String> INTERPRETER_RESIDUE_EXPECTED = List.of("\"a", "bé\"", "-1.5e10");
 
 	@Test
 	void interpreterResidueCases() {

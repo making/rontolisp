@@ -2,8 +2,8 @@
 
 `(keys m)`
 
-Answers the list of the map's keys, in the table's walk order -- unspecified. `keys` of
-`nil` is `nil`.
+Answers the list of the map's keys, newest first -- the reverse of the order the map
+prints. `keys` of `nil` is `nil`.
 
 As a value a one-argument lambda.
 

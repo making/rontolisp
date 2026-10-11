@@ -49,6 +49,7 @@ import am.ik.rontolisp.reader.Features;
 import am.ik.rontolisp.reader.LispReader;
 import am.ik.rontolisp.testsupport.AwaitValuesMatrix;
 import am.ik.rontolisp.testsupport.DeclaredArityReportPrograms;
+import am.ik.rontolisp.testsupport.HashTableCopyPrograms;
 import am.ik.rontolisp.testsupport.HashTableKeyPrograms;
 import am.ik.rontolisp.testsupport.HostWasmtime;
 import am.ik.rontolisp.testsupport.MaskSignedFieldProgram;
@@ -21958,6 +21959,20 @@ class WasmLispCompilerIntegrationTest {
 	void componentAHashTableHandsBackTheKeyAsFirstStored() throws Exception {
 		assertThat(runFrontendProgramWithDir(HashTableKeyPrograms.PROGRAM, true))
 			.isEqualTo(HashTableKeyPrograms.EXPECTED);
+	}
+
+	@Test
+	void aHashTableWalksInInsertionOrderAndACopySharesItsStructureOnPreview1() throws Exception {
+		// The interpreter twin is
+		// LispEvaluatorTest#aHashTableWalksInInsertionOrderAndACopySharesItsStructure.
+		assertThat(runFrontendProgramWithDir(HashTableCopyPrograms.PROGRAM, false))
+			.isEqualTo(HashTableCopyPrograms.EXPECTED);
+	}
+
+	@Test
+	void componentAHashTableWalksInInsertionOrderAndACopySharesItsStructure() throws Exception {
+		assertThat(runFrontendProgramWithDir(HashTableCopyPrograms.PROGRAM, true))
+			.isEqualTo(HashTableCopyPrograms.EXPECTED);
 	}
 
 	@Test

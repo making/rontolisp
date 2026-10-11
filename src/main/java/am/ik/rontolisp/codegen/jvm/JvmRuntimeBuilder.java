@@ -1507,7 +1507,7 @@ final class JvmRuntimeBuilder {
 		// "#<HASH-TABLE>" for a hash table, "#<java class>" for a wrapped host object
 		// (java: interop), then val.toString()
 		code.labelBinding(ifNotArray);
-		emitHashTableBranch(code, hashPrint, javaPrint);
+		emitHashTableBranch(code, hashPrint);
 		emitDefaultTail(code, objectToString, javaPrint, ffiPrint);
 
 		return code;
@@ -2263,7 +2263,7 @@ final class JvmRuntimeBuilder {
 		// "#<HASH-TABLE>" for a hash table, "#<java class>" for a wrapped host object
 		// (java: interop), then val.toString()
 		code.labelBinding(ifNotArray);
-		emitHashTableBranch(code, hashPrint, javaPrint);
+		emitHashTableBranch(code, hashPrint);
 		emitDefaultTail(code, objectToString, javaPrint, ffiPrint);
 
 		return code;
@@ -2527,15 +2527,14 @@ final class JvmRuntimeBuilder {
 	 * Constant-pool references for printing a wrapped {@code java:} host object as
 	 * {@code #<java class.Name>} (interpreter parity), threaded into the two
 	 * lisp-to-string builders only when the program uses {@code java:} interop -- which
-	 * is also when an {@code ArrayList} / {@code LinkedHashMap} may be a host object
-	 * rather than a Lisp array / hash table, so those branches ask the program's shared
-	 * tests ({@code lispArray} = {@code _jlarr}, {@code lispTable} = {@code _jltab})
-	 * first.
+	 * is also when an {@code ArrayList} may be a host object rather than a Lisp array, so
+	 * the array branch asks the program's shared test ({@code lispArray} =
+	 * {@code _jlarr}) first. A hash table needs no such test: its class is the program's
+	 * own runtime's, which no host value has.
 	 */
 	record JavaPrint(ClassEntry bigIntegerClass, MethodRefEntry objectGetClass, MethodRefEntry classGetName,
 			MethodRefEntry stringConcat, StringEntry prefix, StringEntry suffix,
-			@org.jspecify.annotations.Nullable MemberRefEntry lispArray,
-			@org.jspecify.annotations.Nullable MemberRefEntry lispTable) {
+			@org.jspecify.annotations.Nullable MemberRefEntry lispArray) {
 	}
 
 	/**
@@ -2557,10 +2556,8 @@ final class JvmRuntimeBuilder {
 	 *
 	 * <p>
 	 * {@code mapClass} is {@link JvmHashRuntimeBuilder#MAP_CLASS}, the runtime class a
-	 * COMPILED table has -- and a host {@code java:} map too, so a {@code java:} program
-	 * tests {@link JavaPrint#lispTable} instead: without a branch of its own a table used
-	 * to fall through to {@code toString()} and print Java's own map syntax -- container
-	 * braces, the raw {@code Object[]} entry pair, and an IDENTITY HASH, which made the
+	 * COMPILED table has and no host value has: without a branch of its own a table used
+	 * to fall through to {@code toString()} and print an IDENTITY HASH, which made the
 	 * same program print different text on two runs
 	 * ({@code .kb/emitted-output-determinism.md}). The count comes from {@code mapSize},
 	 * the {@code _hashSize} helper {@code _hashCount} reads too, so the printed number
@@ -3237,23 +3234,15 @@ final class JvmRuntimeBuilder {
 	}
 
 	// Emits "if (val is the compiled hash-table class) return "#<HASH-TABLE :TEST EQUAL
-	// :COUNT ".concat(Integer.toString(map.size())).concat(">")" -- the interpreter's
+	// :COUNT ".concat(Integer.toString(count)).concat(">")" -- the interpreter's
 	// LispHashTable.print() answer, so all four backends print one table identically. A
 	// no-op in a program that never makes a table.
-	private static void emitHashTableBranch(MethodCode code, @org.jspecify.annotations.Nullable HashPrint hashPrint,
-			@org.jspecify.annotations.Nullable JavaPrint javaPrint) {
+	private static void emitHashTableBranch(MethodCode code, @org.jspecify.annotations.Nullable HashPrint hashPrint) {
 		if (hashPrint == null) {
 			return;
 		}
 		code.aload(0);
-		if (javaPrint != null && javaPrint.lispTable() != null) {
-			// A java: call can answer a LinkedHashMap of its own: a host object, printed
-			// by the #<java ...> tail.
-			code.invokestatic(java.util.Objects.requireNonNull(javaPrint.lispTable()));
-		}
-		else {
-			code.instanceOf(hashPrint.mapClass());
-		}
+		code.instanceOf(hashPrint.mapClass());
 		MethodCode.Label skip = code.newLabel();
 		code.ifeq(skip);
 		if (hashPrint.equalpTag() != null && hashPrint.equalpTest() != null && hashPrint.testCode() == null) {

@@ -25,9 +25,10 @@ Package `java` (`LispNames.JAVA_PKG`, `PackageRegistry`; does NOT use `cl`): `ja
   (user doc: `guides/java-interop.md`, "Native image").
 - WASM: rejected; no `BuiltinFunctionWrappers` entry, so `#'java:call` is a compile error while
   the interpreter allows it.
-- A host `ArrayList` / `LinkedHashMap` a Java call answers is not a Lisp array / hash table
-  ("What a host object is" below): the compiled printer and predicates ask the shared tests,
-  the accessors refuse it through guards built on them.
+- A host `ArrayList` a Java call answers is not a Lisp array ("What a host object is" below):
+  the compiled printer and predicates ask the shared test, the accessors refuse it through a
+  guard built on it. No host value is a Lisp hash table: a table is the travelling
+  `runtime/RontoHashTable` (2026-10-11; before, a `LinkedHashMap`, which a host map shared).
 - Trap: the template must have NO nested classes/records and NO rontolisp imports. The bridge
   forces `usesEval`, a generated interface class only the apply tier (`JvmJavaSites.needsApply`);
   `usesJava` threads `JvmRuntimeBuilder.JavaPrint` into the print builders.
@@ -56,31 +57,31 @@ Package `java` (`LispNames.JAVA_PKG`, `PackageRegistry`; does NOT use `cl`): `ja
   `Long`/`Double`/`BigInteger`/`String`, NOT any Java array (characters, ratios, conses,
   function values, instances, streams, `#d`/`#f`/octet vectors -- a Java array a call answers
   is unmarshalled into a list, so none is ever a host), NOT exactly an `ArrayList` whose slot 0
-  is an `Object[]` (a Lisp array), NOT exactly a `LinkedHashMap` holding an `ArrayList` under
-  `RontoHashTable.ORDER_KEY` (a hash table), NOT a class in `am.ik.rontolisp.runtime`
-  (`RontoComplex`) -- but a handle or view (`RontoJavaValue`, "Handles and views") is one. The bridge spells the key and the package itself (no rontolisp imports);
-  `theBridgeSpellsTheRepresentationAsTheRuntimeDoes` pins both.
+  is an `Object[]` (a Lisp array), NOT a class in `am.ik.rontolisp.runtime` (`RontoHashTable`,
+  every hash table; `RontoComplex`) -- but a handle or view (`RontoJavaValue`, "Handles and
+  views") is one. The bridge spells the table class and the package itself (no rontolisp
+  imports); `theBridgeSpellsTheRepresentationAsTheRuntimeDoes` pins both.
 - The array and table arms are ONE test each in a compiled program: `_jlarr` (non-empty
-  `ArrayList`, slot 0 an `Object[]`) and `_jltab` (`LinkedHashMap`, an `ArrayList` under the
-  order key), `JvmJavaDirectSites.lispArray()` / `lispTable()`, built on first use. Both test
-  the EXACT class (`getClass() ==`) before reading: a host subclass's own `isEmpty` / `get` /
-  `size` can lie (a `java:subclass` of `ArrayList` whose `isEmpty` says false on an empty list
-  reached `get(0)`: `IndexOutOfBoundsException`, measured 2026-10-08; the interpreter answered
-  NIL). The bridge's `lispArrayHeader` / `isLispTable` / `rendered` and `_strv` (every
-  program) test the exact class too. `_jhost` and `_jkind` call them, and so -- in a `java:`
-  program only (`Ctx.javaSites`, `JavaPrint`), a program without `java:` keeps its
-  `instanceof` bytecode -- do the printer's array and hash-table arms
-  (`JavaPrint.lispArray/lispTable`), `_hashP` (`hash-table-p`, the class dispatch, typep
-  `hash-table`), `%arrayp` (`arrayp`, `vectorp`, typep `vector`/`array`/`sequence`,
+  `ArrayList`, slot 0 an `Object[]`) and `_jltab` (`instanceof RontoHashTable`, a final class
+  no host value has), `JvmJavaDirectSites.lispArray()` / `lispTable()`, built on first use.
+  `_jlarr` tests the EXACT class (`getClass() ==`) before reading: a host subclass's own
+  `isEmpty` / `get` can lie (a `java:subclass` of `ArrayList` whose `isEmpty` says false on an
+  empty list reached `get(0)`: `IndexOutOfBoundsException`, measured 2026-10-08; the
+  interpreter answered NIL). The bridge's `lispArrayHeader` / `rendered` and `_strv` (every
+  program) test the exact class too, `isLispTable` the table's class name. `_jhost` and
+  `_jkind` call them, and so -- in a `java:` program only (`Ctx.javaSites`, `JavaPrint`), a
+  program without `java:` keeps its `instanceof` bytecode -- do the printer's array arm
+  (`JavaPrint.lispArray`), `%arrayp` (`arrayp`, `vectorp`, typep `vector`/`array`/`sequence`,
   `type-of`), `stringp` and `%simple-array-p` (`JavaImplementationPrograms.
-  HOST_COLLECTION_SUBCLASS`, both backends). Before, measured
-  2026-09-26: `hash-table-p` of a host map `T`, printing it (in a program with hash tables)
-  `NullPointerException`; `arrayp` of a host list `T`, `vectorp` / typep / `type-of`
-  `IndexOutOfBoundsException` or `ClassCastException`
+  HOST_COLLECTION_SUBCLASS`, both backends); the printer's hash-table arm and `_hashP`
+  (`hash-table-p`, the class dispatch, typep `hash-table`) need nothing but their
+  `instanceof`. Before, measured 2026-09-26: `hash-table-p` of a host map `T`, printing it (in
+  a program with hash tables) `NullPointerException`; `arrayp` of a host list `T`, `vectorp` /
+  typep / `type-of` `IndexOutOfBoundsException` or `ClassCastException`
   (`JavaInteropPrograms.HOST_COLLECTION_PROGRAM`, both backends).
 - The bridge's `kindOf` ends with it (a host's kind = its exact class, anything else none);
   `_jkind` answers HOST / NONE through `_jhost`; a direct site's exact-class kind test of
-  `ArrayList` / `LinkedHashMap` / a runtime class also calls `_jhost` (`mayHoldALispValue`).
+  `ArrayList` / a runtime class also calls `_jhost` (`mayHoldALispValue`).
 - Messages: the bridge's `describe` is the program's `_lispToString`, bound in `bind` beside
   `_apply` (a shaker root while the bridge travels; `REFLECTIVELY_FOUND_METHODS` keeps it in
   the class on a split), the old minimal text only when absent -- so a site left to run time
@@ -206,8 +207,8 @@ Package `java` (`LispNames.JAVA_PKG`, `PackageRegistry`; does NOT use `cl`): `ja
   `Map` is expected were `No matching method`, a callback answering `|false|` for a `boolean`
   `java:reify: cannot return |false| as boolean`. Pins: `JavaInteropPrograms.
   FALSE_AND_TABLE_PROGRAM` (`JavaInteropTest` / `JvmJavaInteropCompilerTest`: resolved,
-  dispatched and bridged sites, receivers, callbacks, tombstoned and `equalp` tables, refusals),
-  `HOST_OBJECT_OUTPUT` (a table's `Objects.toString` is `"{}"`),
+  dispatched and bridged sites, receivers, callbacks, tables with removed entries and `equalp`
+  tables, refusals), `HOST_OBJECT_OUTPUT` (a table's `Objects.toString` is `"{}"`),
   `JavaSiteResolverTest#aQuotedFalseSymbolResolvesAsJavasFalse`, the parity corpus.
 - Known gap, not this rule's: a direct site's `_jlarr` (and the bridge's `isJavaObject`) asks a
   host `ArrayList` subclass its own `isEmpty`/`get`, so a `java:subclass` of `ArrayList` whose
@@ -816,7 +817,7 @@ Per call the uncached bridge paid `getMethods()` (~2.5 us), `select()` (250 ns -
   `NoClassDefFoundError` -> `No such class: C`, an `ldc C` for a class-named site; per argument a
   kind dispatch (the bridge's `kindOf` tests: `"T".equals`, `instanceof Long`, `int[]` of length 1
   and `isBmpCodePoint`, quote-framed `String` (length 3 = STRING_1), exact `getClass()` for a host
-  kind -- `_jhost` for an `ArrayList`/`LinkedHashMap`/runtime class, a `BigInteger` never a
+  kind -- `_jhost` for an `ArrayList`/runtime class, a `BigInteger` never a
   host kind) into the bridge's `convert`/`convertLong` arm for (kind, parameter), a `checkcast` to
   a class parameter after the join (the frame pass may merge arms to `Number`/`Object`); then
   `invokevirtual`/`invokeinterface` (InterfaceMethodref on an interface owner)/`invokestatic`/`new`

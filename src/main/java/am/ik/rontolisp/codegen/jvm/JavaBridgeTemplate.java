@@ -332,11 +332,11 @@ final class JavaBridgeTemplate {
 	private static @Nullable Method failMethod;
 
 	/**
-	 * The key a compiled hash table's insertion-order list hangs off; mirrors
-	 * {@code runtime/RontoHashTable.ORDER_KEY} (this class may import nothing of
+	 * The class a compiled hash table is; mirrors
+	 * {@code runtime/RontoHashTable.MAP_CLASS} (this class may import nothing of
 	 * rontolisp's).
 	 */
-	private static final String HASH_TABLE_ORDER_KEY = "#order";
+	private static final String HASH_TABLE_CLASS = "am.ik.rontolisp.runtime.RontoHashTable";
 
 	/**
 	 * The package of the classes that travel with a compiled program and hold Lisp values
@@ -2555,9 +2555,9 @@ final class JavaBridgeTemplate {
 	// cons / function value / instance, a double[]/float[]/byte[] specialized vector --
 	// a Java array a call answers is unmarshalled into a list, so none is ever a host
 	// object), not a Lisp array (an ArrayList whose slot 0 is its Object[] header), not a
-	// Lisp hash table (a LinkedHashMap holding its insertion-order ArrayList under
-	// "#order") and not a travelling runtime class's value (a complex number). Mirrored
-	// by JvmJavaDirectSites' _jhost: a resolved site and the bridge classify alike.
+	// Lisp hash table and not a travelling runtime class's value (a complex number).
+	// Mirrored by JvmJavaDirectSites' _jhost: a resolved site and the bridge classify
+	// alike.
 	private static boolean isJavaObject(@Nullable Object v) {
 		if (v == null || v instanceof Long || v instanceof Double || v instanceof BigInteger || v instanceof String
 				|| v.getClass().isArray()) {
@@ -2585,11 +2585,10 @@ final class JavaBridgeTemplate {
 		return !list.isEmpty() && list.get(0) instanceof Object[] header ? header : null;
 	}
 
-	// Whether a value is a Lisp hash table: exactly a LinkedHashMap, holding its
-	// insertion-order ArrayList under the order key. Mirrors JvmJavaDirectSites' _jltab.
+	// Whether a value is a Lisp hash table: an instance of the travelling table class,
+	// which no host value is. Mirrors JvmJavaDirectSites' _jltab.
 	private static boolean isLispTable(@Nullable Object v) {
-		return v != null && v.getClass() == LinkedHashMap.class
-				&& ((LinkedHashMap<?, ?>) v).get(HASH_TABLE_ORDER_KEY) instanceof ArrayList;
+		return v != null && v.getClass().getName().equals(HASH_TABLE_CLASS);
 	}
 
 	// How a message shows a value: the program's printer (prin1), as the interpreter

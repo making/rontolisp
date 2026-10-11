@@ -16,39 +16,31 @@ import am.ik.wasm.Type;
 /**
  * Compiles the hash-table built-ins. A hash table is a {@code TYPE_CELL} struct (a
  * mutable single-field box, never otherwise exposed as a Lisp value) whose field holds a
- * <em>header</em> {@code TYPE_CONS} of {@code (count . buckets)}: {@code count} is an i31
- * integer of live entries (so {@code hash-table-count} is O(1)) and {@code buckets} is a
- * {@code TYPE_HASH_BUCKETS} array (open-chaining hash table). Each bucket slot holds an
- * association list of {@code (key . value)} entries or nil -- an {@code equalp} table's
- * entry is {@code (fold . (key . value))}, placed and compared by the key's fold and
- * keeping the key as first stored for {@code maphash} ({@link #foldingEntries}). A key's
- * bucket is {@code (_hash(key) & 0x7fffffff) % capacity}; {@code _hash}
- * ({@link WasmLispCompiler#FUNC_HASH}) agrees with the structural {@code _equal} runtime
- * ({@link WasmLispCompiler#FUNC_EQUAL}) used to compare keys within a bucket, so equal
- * keys land in the same bucket. The table grows (doubling, via
- * {@link WasmLispCompiler#FUNC_HASH_RESIZE}) once the load factor exceeds 0.75, keeping
- * {@code gethash}/{@code puthash}/{@code remhash} amortized O(1) -- unlike the previous
- * O(n) single-alist representation.
+ * <em>header</em> {@code TYPE_CONS} of {@code (count . record)}: {@code count} is an i31
+ * integer of live entries (so {@code hash-table-count} is O(1)) and {@code record} the
+ * hash chains -- a chained table, a persistent trie once copied -- and the insertion
+ * order that the runtime functions of {@link WasmHashTableRuntimeBuilder} keep, which
+ * every site here calls: {@code _ht_get}, {@code _ht_put}, {@code _ht_rem},
+ * {@code _ht_entries} (the snapshot {@code maphash} walks) and {@code _ht_copy}
+ * ({@code rontolisp::%copy-equal-table}, O(1) for an {@code equal} table once it has been
+ * copied). A key's chain is placed by {@code _hash} ({@link WasmLispCompiler#FUNC_HASH}),
+ * which agrees with the structural {@code _equal} ({@link WasmLispCompiler#FUNC_EQUAL})
+ * the chain is scanned with, so equal keys share a chain.
  *
  * <p>
  * In a module that writes a non-equal {@code :test} anywhere ({@link #tagged tagged}),
  * that {@code count} is TAGGED -- {@code entries * 4 + test} (0 equal, 1 equalp, 2 eql, 3
  * eq) -- so a table carries its own test without a second field and without disturbing
  * {@code hash-table-p}, whose discrimination is that the header car is an i31 at all.
- * Every count read then shifts past the tag;
- * {@code gethash}/{@code puthash}/{@code remhash} run an equalp key through
- * {@link WasmLispCompiler#FUNC_EQUALP_KEY} when the tag says so, compare an eql/eq key
- * with the eql/eq comparison, and place an eql/eq key by
+ * Every count read then shifts past the tag; the runtime functions run an equalp key
+ * through {@link WasmLispCompiler#FUNC_EQUALP_KEY} when the tag says so, compare an
+ * eql/eq key with the eql/eq comparison, and place an eql/eq key by
  * {@link WasmLispCompiler#FUNC_IHASH}: the identity-hash slot every cons, cell and
  * instance of such a module carries ({@link WasmIdentityHashRuntimeBuilder}), stable
  * under slot mutation, which a structural hash is not ({@code .kb/hash-tables.md}). In
- * every other module the count is the plain entry count, no site emits a test and no
- * object carries the slot.
+ * every other module the count is the plain entry count and no object carries the slot.
  */
 final class WasmHashTableCompiler {
-
-	// Initial bucket count for a fresh (or cleared) table.
-	private static final int INITIAL_CAP = 8;
 
 	private WasmHashTableCompiler() {
 	}
@@ -57,7 +49,7 @@ final class WasmHashTableCompiler {
 		// The arguments are read from the SOURCE, never evaluated: a literal :test
 		// tags the header count with the test the table's lookups implement, and
 		// every other keyword (:size and friends) is accepted and ignored. Result: a
-		// cell holding a fresh (count . empty-buckets) header.
+		// cell holding a fresh (count . empty-record) header.
 		emitNewHeader(ctx, tagged(ctx) ? LispMacroExpander.hashTableTestCode(cons) : LispHashTable.TEST_EQUAL);
 		WasmEmitHelper.emitNewCell(ctx);
 	}
@@ -154,42 +146,11 @@ final class WasmHashTableCompiler {
 			ctx.writer.writeHeapType(Type.EQ.code());
 		}
 		int dfltSlot = setTemp(ctx);
-		// header (count . buckets)
 		int headerSlot = tableFirst ? headerSlotOf(tableSlot, ctx) : headerSlot(args.get(2), ctx);
-		int foldTagSlot = emitFoldKey(ctx, headerSlot, keySlot);
-		// The tag hoisted out of the bucket walk: every entry is compared by it.
-		int tagSlot = ctx.usesIdentityHashTables ? emitTestTag(ctx, headerSlot) : -1;
-		// cur = the bucket alist head for key
-		pushBucketHead(ctx, headerSlot, keySlot);
-		int curSlot = setTemp(ctx);
-
-		// block $result (eqref) / block $notfound / loop
-		ctx.writer.write(Instruction.BLOCK);
-		ctx.writer.writeRefType(true, Type.EQ.code());
-		ctx.writer.write(Instruction.BLOCK, 0x40);
-		ctx.writer.write(Instruction.LOOP, 0x40);
-
-		emitCursorIsConsElseBreak(ctx, curSlot, 1); // not a cons -> $notfound
-
-		// the table's own test on (key, car(car(cur)))?
-		emitKeyCompare(ctx, keySlot, curSlot, tagSlot);
-		ctx.writer.write(Instruction.IF, 0x40);
-		// match: push cdr(holder) = value and break to $result
-		getLocal(ctx, curSlot);
-		castConsGet(ctx, 0); // entry
-		emitValueHolder(ctx, foldTagSlot);
-		castConsGet(ctx, 1); // value
-		// depth 3: $if(0) $loop(1) $notfound(2) $result(3)
-		ctx.writer.write(Instruction.BR, 3); // -> $result
-		ctx.writer.write(Instruction.END); // end if
-
-		advanceCursor(ctx, curSlot);
-		ctx.writer.write(Instruction.BR, 0); // loop
-		ctx.writer.write(Instruction.END); // end loop
-		ctx.writer.write(Instruction.END); // end $notfound
-		// not found: the default
+		getLocal(ctx, headerSlot);
+		getLocal(ctx, keySlot);
 		getLocal(ctx, dfltSlot);
-		ctx.writer.write(Instruction.END); // end $result
+		call(ctx, WasmLispCompiler.FUNC_HT_BASE + WasmHashTableRuntimeBuilder.GET);
 	}
 
 	static void compilePut(LispCons cons, WasmLispCompiler.Ctx ctx) {
@@ -214,99 +175,10 @@ final class WasmHashTableCompiler {
 			valSlot = setTemp(ctx);
 			headerSlot = headerSlotOf(tableSlot, ctx);
 		}
-		// The key as written, which a fresh entry of a folding table keeps.
-		int origSlot = -1;
-		if (foldingEntries(ctx)) {
-			getLocal(ctx, keySlot);
-			origSlot = setTemp(ctx);
-		}
-		int foldTagSlot = emitFoldKey(ctx, headerSlot, keySlot);
-		int tagSlot = ctx.usesIdentityHashTables ? emitTestTag(ctx, headerSlot) : -1;
-		// idx = bucket index for key, boxed as i31 so it survives the find loop
-		pushBucketIndex(ctx, headerSlot, keySlot);
-		ctx.writer.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
-		int idxSlot = setTemp(ctx);
-		// cur = buckets[idx]
-		getHeaderArr(ctx, headerSlot);
-		getIndex(ctx, idxSlot);
-		arrayGet(ctx);
-		int curSlot = setTemp(ctx);
-
-		ctx.writer.write(Instruction.BLOCK, 0x40); // $done
-		ctx.writer.write(Instruction.BLOCK, 0x40); // $notfound
-		ctx.writer.write(Instruction.LOOP, 0x40);
-
-		emitCursorIsConsElseBreak(ctx, curSlot, 1); // -> $notfound
-
-		emitKeyCompare(ctx, keySlot, curSlot, tagSlot);
-		ctx.writer.write(Instruction.IF, 0x40);
-		// match: rplacd(holder, value) -- the entry keeps the key it was first stored
-		// under
-		getLocal(ctx, curSlot);
-		castConsGet(ctx, 0); // entry
-		emitValueHolder(ctx, foldTagSlot);
-		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
-		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_CONS);
-		getLocal(ctx, valSlot);
-		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_SET);
-		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
-		ctx.writer.writeUnsignedLeb128(1);
-		// depth 3: $if(0) $loop(1) $notfound(2) $done(3)
-		ctx.writer.write(Instruction.BR, 3); // -> $done
-		ctx.writer.write(Instruction.END); // end if
-
-		advanceCursor(ctx, curSlot);
-		ctx.writer.write(Instruction.BR, 0);
-		ctx.writer.write(Instruction.END); // end loop
-		ctx.writer.write(Instruction.END); // end $notfound
-		// not found: buckets[idx] = cons(cons(key, value), buckets[idx])
-		getHeaderArr(ctx, headerSlot); // array
-		getIndex(ctx, idxSlot); // index
-		// new entry = cons(key, value), or cons(fold, cons(key, value)) in a folding
-		// table
-		getLocal(ctx, keySlot);
-		if (foldingEntries(ctx)) {
-			pushIsFolding(ctx, foldTagSlot);
-			ctx.writer.write(Instruction.IF);
-			ctx.writer.writeRefType(true, Type.EQ.code());
-			getLocal(ctx, origSlot);
-			getLocal(ctx, valSlot);
-			WasmEmitHelper.emitNewCons(ctx);
-			ctx.writer.write(Instruction.ELSE);
-			getLocal(ctx, valSlot);
-			ctx.writer.write(Instruction.END);
-		}
-		else {
-			getLocal(ctx, valSlot);
-		}
-		WasmEmitHelper.emitNewCons(ctx);
-		// cons(newentry, oldhead)
-		getHeaderArr(ctx, headerSlot);
-		getIndex(ctx, idxSlot);
-		arrayGet(ctx);
-		WasmEmitHelper.emitNewCons(ctx);
-		arraySet(ctx);
-		// count = count + 1
-		addToCount(ctx, headerSlot, 1);
-		// grow when load factor (count / capacity) exceeds 0.75: count*4 >= capacity*3
-		getCount(ctx, headerSlot);
-		ctx.writer.write(Instruction.I32_CONST);
-		ctx.writer.writeSignedLeb128(4);
-		ctx.writer.write(Instruction.I32_MUL);
-		getHeaderArr(ctx, headerSlot);
-		ctx.writer.write(Instruction.GC_PREFIX, Instruction.ARRAY_LEN);
-		ctx.writer.write(Instruction.I32_CONST);
-		ctx.writer.writeSignedLeb128(3);
-		ctx.writer.write(Instruction.I32_MUL);
-		ctx.writer.write(Instruction.I32_GE_S);
-		ctx.writer.write(Instruction.IF, 0x40);
 		getLocal(ctx, headerSlot);
-		ctx.writer.write(Instruction.CALL);
-		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_HASH_RESIZE);
-		ctx.writer.write(Instruction.END); // end resize if
-		ctx.writer.write(Instruction.END); // end $done
-		// return value
+		getLocal(ctx, keySlot);
 		getLocal(ctx, valSlot);
+		call(ctx, WasmLispCompiler.FUNC_HT_BASE + WasmHashTableRuntimeBuilder.PUT);
 	}
 
 	static void compileRem(LispCons cons, WasmLispCompiler.Ctx ctx) {
@@ -314,68 +186,30 @@ final class WasmHashTableCompiler {
 		WasmExprCompiler.compileExpr(args.get(1), ctx);
 		int keySlot = setTemp(ctx);
 		int headerSlot = headerSlot(args.get(2), ctx);
-		emitFoldKey(ctx, headerSlot, keySlot);
-		int tagSlot = ctx.usesIdentityHashTables ? emitTestTag(ctx, headerSlot) : -1;
-		// idx (boxed i31)
-		pushBucketIndex(ctx, headerSlot, keySlot);
-		ctx.writer.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
-		int idxSlot = setTemp(ctx);
-		// cur = buckets[idx]
-		getHeaderArr(ctx, headerSlot);
-		getIndex(ctx, idxSlot);
-		arrayGet(ctx);
-		int curSlot = setTemp(ctx);
-		// prev = nil
-		ctx.writer.write(Instruction.REF_NULL);
-		ctx.writer.writeHeapType(Type.EQ.code());
-		int prevSlot = setTemp(ctx);
+		getLocal(ctx, headerSlot);
+		getLocal(ctx, keySlot);
+		call(ctx, WasmLispCompiler.FUNC_HT_BASE + WasmHashTableRuntimeBuilder.REM);
+	}
 
-		ctx.writer.write(Instruction.BLOCK); // $result (eqref)
-		ctx.writer.writeRefType(true, Type.EQ.code());
-		ctx.writer.write(Instruction.BLOCK, 0x40); // $notfound
-		ctx.writer.write(Instruction.LOOP, 0x40);
-
-		emitCursorIsConsElseBreak(ctx, curSlot, 1);
-
-		emitKeyCompare(ctx, keySlot, curSlot, tagSlot);
-		ctx.writer.write(Instruction.IF, 0x40);
-		// remove cur: if prev is nil, buckets[idx] = cdr(cur); else rplacd(prev,
-		// cdr(cur))
-		getLocal(ctx, prevSlot);
-		ctx.writer.write(Instruction.REF_IS_NULL);
-		ctx.writer.write(Instruction.IF, 0x40);
-		getHeaderArr(ctx, headerSlot);
-		getIndex(ctx, idxSlot);
-		getLocal(ctx, curSlot);
-		castConsGet(ctx, 1);
-		arraySet(ctx);
-		ctx.writer.write(Instruction.ELSE);
-		getLocal(ctx, prevSlot);
-		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
-		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_CONS);
-		getLocal(ctx, curSlot);
-		castConsGet(ctx, 1);
-		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_SET);
-		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
-		ctx.writer.writeUnsignedLeb128(1);
-		ctx.writer.write(Instruction.END); // end inner if
-		// count = count - 1
-		addToCount(ctx, headerSlot, -1);
-		WasmEmitHelper.emitTrue(ctx);
-		// depth 3: $outerIf(0) $loop(1) $notfound(2) $result(3)
-		ctx.writer.write(Instruction.BR, 3); // -> $result
-		ctx.writer.write(Instruction.END); // end outer if
-
-		// prev = cur; cur = cdr(cur)
-		getLocal(ctx, curSlot);
-		setLocal(ctx, prevSlot);
-		advanceCursor(ctx, curSlot);
-		ctx.writer.write(Instruction.BR, 0);
-		ctx.writer.write(Instruction.END); // end loop
-		ctx.writer.write(Instruction.END); // end $notfound
-		ctx.writer.write(Instruction.REF_NULL);
-		ctx.writer.writeHeapType(Type.EQ.code());
-		ctx.writer.write(Instruction.END); // end $result
+	/**
+	 * Compiles {@code (rontolisp::%copy-equal-table table)}, the copy every Clojure map,
+	 * set and record field table takes before a verb changes it: {@code _ht_copy}, which
+	 * shares an {@code equal} table's structure in O(1) ({@code .kb/hash-tables.md},
+	 * "Copies share structure"). In EH mode anything but a table is its
+	 * {@code HASH-TABLE} type-error, as the interpreter's native copy refuses it.
+	 * @param cons the call
+	 * @param ctx the compile context
+	 */
+	static void compileCopy(LispCons cons, WasmLispCompiler.Ctx ctx) {
+		List<LispVal> args = cons.toList();
+		if (args.size() != 2) {
+			throw new UnsupportedOperationException("%copy-equal-table expects 1 argument, got " + (args.size() - 1));
+		}
+		WasmExprCompiler.compileExpr(args.get(1), ctx);
+		int tableSlot = setTemp(ctx);
+		emitTableCheck(ctx, tableSlot);
+		getLocal(ctx, tableSlot);
+		call(ctx, WasmLispCompiler.FUNC_HT_BASE + WasmHashTableRuntimeBuilder.COPY);
 	}
 
 	static void compileClr(LispCons cons, WasmLispCompiler.Ctx ctx) {
@@ -387,7 +221,7 @@ final class WasmHashTableCompiler {
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
 		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_CELL);
 		// The emptied table keeps its TEST: the fresh header's count carries the old
-		// header's fold flag, and nothing else of it.
+		// header's test tag, and nothing else of it.
 		emitClearedHeader(ctx, cellSlot);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_SET);
 		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CELL);
@@ -519,58 +353,57 @@ final class WasmHashTableCompiler {
 		WasmExprCompiler.compileExpr(WasmFunctionFormCompiler.designator(args.get(1), ctx), ctx);
 		int funcSlot = setTemp(ctx);
 		int headerSlot = headerSlot(args.get(2), ctx);
-		// A folding table's entries are (fold . (key . value)): its tag, read once.
-		int foldTagSlot = foldingEntries(ctx) ? emitTestTag(ctx, headerSlot) : -1;
-		// i = 0 (boxed i31 bucket index)
+		// The live entries in insertion order, a snapshot: storing into the table or
+		// removing the current key from the function changes neither.
+		getLocal(ctx, headerSlot);
+		call(ctx, WasmLispCompiler.FUNC_HT_ENTRIES);
+		int entriesSlot = setTemp(ctx);
+		// i = 0 (boxed i31 index)
 		ctx.writer.write(Instruction.I32_CONST);
 		ctx.writer.writeSignedLeb128(0);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
 		int iSlot = setTemp(ctx);
-		int curSlot = ctx.allocTemp();
+		int entrySlot = ctx.allocTemp();
 
-		// outer loop over buckets
-		ctx.writer.write(Instruction.BLOCK, 0x40); // $outer
-		ctx.writer.write(Instruction.LOOP, 0x40); // $o
-		// if i >= capacity break $outer
+		ctx.writer.write(Instruction.BLOCK, 0x40); // $done
+		ctx.writer.write(Instruction.LOOP, 0x40); // $next
+		// if i >= length break $done
 		getIndex(ctx, iSlot);
-		getHeaderArr(ctx, headerSlot);
+		getLocal(ctx, entriesSlot);
+		castEntries(ctx);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.ARRAY_LEN);
 		ctx.writer.write(Instruction.I32_GE_S);
 		ctx.writer.write(Instruction.BR_IF, 1);
-		// cur = buckets[i]
-		getHeaderArr(ctx, headerSlot);
+		// entry = entries[i]
+		getLocal(ctx, entriesSlot);
+		castEntries(ctx);
 		getIndex(ctx, iSlot);
 		arrayGet(ctx);
-		setLocal(ctx, curSlot);
-		// inner loop over the bucket alist
-		ctx.writer.write(Instruction.BLOCK, 0x40); // $inner
-		ctx.writer.write(Instruction.LOOP, 0x40); // $in
-		emitCursorIsConsElseBreak(ctx, curSlot, 1); // -> $inner
-		// dispatch_2(func, car(holder), cdr(holder)): the holder is the entry itself,
-		// or a folding table's (key . value) cell, which keeps the key as first stored
+		setLocal(ctx, entrySlot);
+		// dispatch_2(func, key, value): the key as first stored -- an equalp entry's
+		// seventh slot when its fold differs
 		getLocal(ctx, funcSlot);
-		getLocal(ctx, curSlot);
-		castConsGet(ctx, 0); // entry
 		if (foldingEntries(ctx)) {
-			emitValueHolder(ctx, foldTagSlot);
-			int holderSlot = setTemp(ctx);
-			getLocal(ctx, holderSlot);
-			castConsGet(ctx, 0); // key
-			getLocal(ctx, holderSlot);
+			getLocal(ctx, entrySlot);
+			castEntries(ctx);
+			ctx.writer.write(Instruction.GC_PREFIX, Instruction.ARRAY_LEN);
+			ctx.writer.write(Instruction.I32_CONST);
+			ctx.writer.writeSignedLeb128(WasmHashTableRuntimeBuilder.E_ORIG + 1);
+			ctx.writer.write(Instruction.I32_EQ);
+			ctx.writer.write(Instruction.IF);
+			ctx.writer.writeRefType(true, Type.EQ.code());
+			entrySlotGet(ctx, entrySlot, WasmHashTableRuntimeBuilder.E_ORIG);
+			ctx.writer.write(Instruction.ELSE);
+			entrySlotGet(ctx, entrySlot, WasmHashTableRuntimeBuilder.E_KEY);
+			ctx.writer.write(Instruction.END);
 		}
 		else {
-			castConsGet(ctx, 0); // key
-			getLocal(ctx, curSlot);
-			castConsGet(ctx, 0); // entry
+			entrySlotGet(ctx, entrySlot, WasmHashTableRuntimeBuilder.E_KEY);
 		}
-		castConsGet(ctx, 1); // value
+		entrySlotGet(ctx, entrySlot, WasmHashTableRuntimeBuilder.E_VALUE);
 		ctx.writer.write(Instruction.CALL);
 		ctx.writer.writeUnsignedLeb128(dispatchFuncIdx);
 		ctx.writer.write(Instruction.DROP);
-		advanceCursor(ctx, curSlot);
-		ctx.writer.write(Instruction.BR, 0); // loop $in
-		ctx.writer.write(Instruction.END); // end loop $in
-		ctx.writer.write(Instruction.END); // end $inner
 		// i = i + 1
 		getIndex(ctx, iSlot);
 		ctx.writer.write(Instruction.I32_CONST);
@@ -578,9 +411,9 @@ final class WasmHashTableCompiler {
 		ctx.writer.write(Instruction.I32_ADD);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
 		setLocal(ctx, iSlot);
-		ctx.writer.write(Instruction.BR, 0); // loop $o
-		ctx.writer.write(Instruction.END); // end loop $o
-		ctx.writer.write(Instruction.END); // end $outer
+		ctx.writer.write(Instruction.BR, 0); // loop $next
+		ctx.writer.write(Instruction.END); // end loop $next
+		ctx.writer.write(Instruction.END); // end $done
 		// maphash returns nil
 		ctx.writer.write(Instruction.REF_NULL);
 		ctx.writer.writeHeapType(Type.EQ.code());
@@ -612,7 +445,13 @@ final class WasmHashTableCompiler {
 		ctx.writer.writeUnsignedLeb128(slot);
 	}
 
-	// Compiles the table expression and reads its (count . buckets) header cons into a
+	// Calls the runtime function at the given index.
+	private static void call(WasmLispCompiler.Ctx ctx, int function) {
+		ctx.writer.write(Instruction.CALL);
+		ctx.writer.writeUnsignedLeb128(function);
+	}
+
+	// Compiles the table expression and reads its (count . record) header cons into a
 	// fresh temp, returning the temp slot.
 	private static int headerSlot(LispVal tableExpr, WasmLispCompiler.Ctx ctx) {
 		WasmExprCompiler.compileExpr(tableExpr, ctx);
@@ -643,29 +482,22 @@ final class WasmHashTableCompiler {
 				&& (table instanceof LispSymbol || ArgumentOrder.isOrderIndependent(table)));
 	}
 
-	// Emits a fresh header cons (count, empty buckets array) onto the stack. In a module
-	// that tags, the count is TAGGED -- entries * 4 + the two-bit test code -- which
-	// keeps the header car an i31 and so leaves hash-table-p's discrimination (an i31
-	// count here, a dims array for a general array sharing the TYPE_CELL box) exactly
-	// as it was.
+	// Emits a fresh header cons (count, empty record) onto the stack. In a module that
+	// tags, the count is TAGGED -- entries * 4 + the two-bit test code -- which keeps the
+	// header car an i31 and so leaves hash-table-p's discrimination (an i31 count here,
+	// a dims array for a general array sharing the TYPE_CELL box) exactly as it was.
 	private static void emitNewHeader(WasmLispCompiler.Ctx ctx, int testCode) {
 		// count = i31(testCode) for an empty table (0 entries)
 		ctx.writer.write(Instruction.I32_CONST);
 		ctx.writer.writeSignedLeb128(testCode);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
-		// buckets = array.new buckets (null, INITIAL_CAP)
-		ctx.writer.write(Instruction.REF_NULL);
-		ctx.writer.writeHeapType(Type.EQ.code());
-		ctx.writer.write(Instruction.I32_CONST);
-		ctx.writer.writeSignedLeb128(INITIAL_CAP);
-		ctx.writer.write(Instruction.GC_PREFIX, Instruction.ARRAY_NEW);
-		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
-		// header = cons(count, buckets)
+		WasmHashTableRuntimeBuilder.emitNewRecord(ctx.writer);
 		WasmEmitHelper.emitNewCons(ctx);
 	}
 
-	// Emits the header a cleared table gets: zero entries, fresh buckets, and the test
-	// tag the cell's current header carries.
+	// Emits the header a cleared table gets: zero entries, a fresh record, and the test
+	// tag the cell's current header carries. The old record's nodes stay as they are,
+	// for any copy that shares them.
 	private static void emitClearedHeader(WasmLispCompiler.Ctx ctx, int cellSlot) {
 		if (!tagged(ctx)) {
 			emitNewHeader(ctx, LispHashTable.TEST_EQUAL);
@@ -679,13 +511,7 @@ final class WasmHashTableCompiler {
 		ctx.writer.writeSignedLeb128(3);
 		ctx.writer.write(Instruction.I32_AND);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
-		// buckets = array.new buckets (null, INITIAL_CAP)
-		ctx.writer.write(Instruction.REF_NULL);
-		ctx.writer.writeHeapType(Type.EQ.code());
-		ctx.writer.write(Instruction.I32_CONST);
-		ctx.writer.writeSignedLeb128(INITIAL_CAP);
-		ctx.writer.write(Instruction.GC_PREFIX, Instruction.ARRAY_NEW);
-		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
+		WasmHashTableRuntimeBuilder.emitNewRecord(ctx.writer);
 		WasmEmitHelper.emitNewCons(ctx);
 	}
 
@@ -709,165 +535,16 @@ final class WasmHashTableCompiler {
 		WasmEmitHelper.castI31GetS(ctx);
 	}
 
-	// Compares the lookup key in keySlot against the entry key at the cursor in
-	// curSlot -- both pushed here -- leaving an i32: the table's own test, read off
-	// tagSlot (an eql/eq table compares by identity for aggregates), or the plain
-	// structural _equal call when tagSlot is negative (a module with no identity
-	// tables, where the tag can only say equal or equalp).
-	private static void emitKeyCompare(WasmLispCompiler.Ctx ctx, int keySlot, int curSlot, int tagSlot) {
-		// Each arm pushes its own (a b): the table's own test, read off tagSlot (an
-		// eql/eq table compares by identity for aggregates), or the plain structural
-		// _equal call when tagSlot is negative (a module with no identity tables,
-		// where the tag can only say equal or equalp).
-		if (tagSlot < 0) {
-			pushEntryKey(ctx, keySlot, curSlot);
-			ctx.writer.write(Instruction.CALL);
-			ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_EQUAL);
-			return;
-		}
-		// eql (2) and eq (3) are one predicate (.kb/eq-numbers.md), so one arm serves
-		// both.
-		getTag(ctx, tagSlot);
-		ctx.writer.write(Instruction.I32_CONST);
-		ctx.writer.writeSignedLeb128(LispHashTable.TEST_EQL);
-		ctx.writer.write(Instruction.I32_GE_S);
-		ctx.writer.write(Instruction.IF);
-		ctx.writer.write(Type.I32);
-		pushEntryKey(ctx, keySlot, curSlot);
-		WasmEmitHelper.emitEqlComparison(ctx);
-		ctx.writer.write(Instruction.ELSE);
-		pushEntryKey(ctx, keySlot, curSlot);
-		ctx.writer.write(Instruction.CALL);
-		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_EQUAL);
-		ctx.writer.write(Instruction.END);
-	}
-
-	// Pushes the lookup key in keySlot and the entry key at the cursor in curSlot.
-	private static void pushEntryKey(WasmLispCompiler.Ctx ctx, int keySlot, int curSlot) {
-		getLocal(ctx, keySlot);
-		getLocal(ctx, curSlot);
-		castConsGet(ctx, 0); // entry
-		castConsGet(ctx, 0); // car(entry) = key
-	}
-
-	// Replaces the key in keySlot with its equalp fold when the table folds (tag 1),
-	// answering the temp holding the tag (-1 when there is none). Not one instruction in
-	// a module that tags no count.
-	private static int emitFoldKey(WasmLispCompiler.Ctx ctx, int headerSlot, int keySlot) {
-		if (!tagged(ctx)) {
-			return -1;
-		}
-		int tagSlot = emitTestTag(ctx, headerSlot);
-		getTag(ctx, tagSlot);
-		ctx.writer.write(Instruction.I32_CONST);
-		ctx.writer.writeSignedLeb128(LispHashTable.TEST_EQUALP);
-		ctx.writer.write(Instruction.I32_EQ);
-		ctx.writer.write(Instruction.IF, 0x40);
-		getLocal(ctx, keySlot);
-		ctx.writer.write(Instruction.CALL);
-		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_EQUALP_KEY);
-		setLocal(ctx, keySlot);
-		ctx.writer.write(Instruction.END);
-		return tagSlot;
-	}
-
 	/**
 	 * Whether this module's tables can hold FOLDING entries: an {@code equalp} table's
-	 * entry is {@code (fold . (key . value))} -- placed and compared by the fold in its
-	 * car, like every entry, while the cell in its cdr keeps the key as first stored,
-	 * which {@code maphash} hands back, and the value. Every other table's entry stays
-	 * {@code (key . value)}, so the cdr of the entry's HOLDER ({@link #emitValueHolder})
-	 * is the value in both shapes. A module that makes no {@code equalp} table emits not
-	 * one instruction for it.
+	 * entry whose fold differs from its key keeps the key as first stored in a seventh
+	 * slot, which {@code maphash} hands back. A module that makes no {@code equalp} table
+	 * emits not one instruction for it.
 	 * @param ctx the compilation context
 	 * @return whether the program makes an {@code equalp} table
 	 */
 	private static boolean foldingEntries(WasmLispCompiler.Ctx ctx) {
 		return ctx.usesEqualpHashTables;
-	}
-
-	// Pushes the i32 "this table folds" off the tag in tagSlot -- the tag itself where
-	// it can only be 0 (equal) or 1 (equalp), a module with no identity table.
-	private static void pushIsFolding(WasmLispCompiler.Ctx ctx, int tagSlot) {
-		getTag(ctx, tagSlot);
-		if (ctx.usesIdentityHashTables) {
-			ctx.writer.write(Instruction.I32_CONST);
-			ctx.writer.writeSignedLeb128(LispHashTable.TEST_EQUALP);
-			ctx.writer.write(Instruction.I32_EQ);
-		}
-	}
-
-	// Replaces the entry on the stack with its value HOLDER, the cons whose cdr is the
-	// value: the entry itself, or a folding table's (key . value) cell. An
-	// (eqref -> eqref) if with no else, so the entry passes through untouched when the
-	// table does not fold. Not one instruction in a module with no folding table.
-	private static void emitValueHolder(WasmLispCompiler.Ctx ctx, int foldTagSlot) {
-		if (!foldingEntries(ctx)) {
-			return;
-		}
-		pushIsFolding(ctx, foldTagSlot);
-		ctx.writer.write(Instruction.IF);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_CALLABLE_BASE);
-		castConsGet(ctx, 1); // the (key . value) cell
-		ctx.writer.write(Instruction.END);
-	}
-
-	// Pushes the header's bucket array (cast to TYPE_HASH_BUCKETS) onto the stack.
-	private static void getHeaderArr(WasmLispCompiler.Ctx ctx, int headerSlot) {
-		getLocal(ctx, headerSlot);
-		castConsGet(ctx, 1); // cdr(header) = buckets (ref null eq)
-		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
-		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_HASH_BUCKETS);
-	}
-
-	// Pushes the i32 bucket index for key (in keySlot) onto the stack.
-	private static void pushBucketIndex(WasmLispCompiler.Ctx ctx, int headerSlot, int keySlot) {
-		pushKeyHash(ctx, headerSlot, keySlot);
-		ctx.writer.write(Instruction.I32_CONST);
-		ctx.writer.writeSignedLeb128(0x7fffffff);
-		ctx.writer.write(Instruction.I32_AND);
-		getHeaderArr(ctx, headerSlot);
-		ctx.writer.write(Instruction.GC_PREFIX, Instruction.ARRAY_LEN);
-		ctx.writer.write(Instruction.I32_REM_U);
-	}
-
-	// Pushes the raw hash for key: _ihash(key) for an eql/eq table -- the identity-hash
-	// slot an aggregate key carries (WasmIdentityHashRuntimeBuilder), stable under slot
-	// mutation where a structural hash would move, and _hash for everything else --
-	// and _hash(key) for an equal/equalp table.
-	private static void pushKeyHash(WasmLispCompiler.Ctx ctx, int headerSlot, int keySlot) {
-		if (!ctx.usesIdentityHashTables) {
-			getLocal(ctx, keySlot);
-			ctx.writer.write(Instruction.CALL);
-			ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_HASH);
-			return;
-		}
-		getLocal(ctx, headerSlot);
-		castConsGet(ctx, 0);
-		WasmEmitHelper.castI31GetS(ctx);
-		ctx.writer.write(Instruction.I32_CONST);
-		ctx.writer.writeSignedLeb128(3);
-		ctx.writer.write(Instruction.I32_AND);
-		ctx.writer.write(Instruction.I32_CONST);
-		ctx.writer.writeSignedLeb128(LispHashTable.TEST_EQL);
-		ctx.writer.write(Instruction.I32_GE_S);
-		ctx.writer.write(Instruction.IF);
-		ctx.writer.write(Type.I32);
-		getLocal(ctx, keySlot);
-		ctx.writer.write(Instruction.CALL);
-		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_IHASH);
-		ctx.writer.write(Instruction.ELSE);
-		getLocal(ctx, keySlot);
-		ctx.writer.write(Instruction.CALL);
-		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_HASH);
-		ctx.writer.write(Instruction.END);
-	}
-
-	// Pushes buckets[bucketIndex(key)] (the bucket alist head) onto the stack.
-	private static void pushBucketHead(WasmLispCompiler.Ctx ctx, int headerSlot, int keySlot) {
-		getHeaderArr(ctx, headerSlot);
-		pushBucketIndex(ctx, headerSlot, keySlot);
-		arrayGet(ctx);
 	}
 
 	// Unboxes the i31 in idxSlot to an i32 on the stack.
@@ -882,41 +559,20 @@ final class WasmHashTableCompiler {
 		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
 	}
 
-	// array.set TYPE_HASH_BUCKETS: [array, i32 index, value] -> [].
-	private static void arraySet(WasmLispCompiler.Ctx ctx) {
-		ctx.writer.write(Instruction.GC_PREFIX, Instruction.ARRAY_SET);
-		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
-	}
-
-	// Pushes the header's live-entry count as an i32 on the stack, past the test tag
-	// in a module that carries one.
-	private static void getCount(WasmLispCompiler.Ctx ctx, int headerSlot) {
-		getLocal(ctx, headerSlot);
-		castConsGet(ctx, 0); // count i31
-		WasmEmitHelper.castI31GetS(ctx);
-		if (tagged(ctx)) {
-			ctx.writer.write(Instruction.I32_CONST);
-			ctx.writer.writeSignedLeb128(2);
-			ctx.writer.write(Instruction.I32_SHR_S);
-		}
-	}
-
-	// header.count += delta (delta is +1 or -1) -- one ENTRY, so the tagged count moves
-	// by four and the test tag under it is untouched.
-	private static void addToCount(WasmLispCompiler.Ctx ctx, int headerSlot, int delta) {
-		getLocal(ctx, headerSlot);
+	// Casts the eqref on the stack to the TYPE_HASH_BUCKETS array an entry and the
+	// entries snapshot are.
+	private static void castEntries(WasmLispCompiler.Ctx ctx) {
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
-		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_CONS);
-		getLocal(ctx, headerSlot);
-		castConsGet(ctx, 0);
-		WasmEmitHelper.castI31GetS(ctx);
+		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_HASH_BUCKETS);
+	}
+
+	// Pushes the given slot of the entry in entrySlot.
+	private static void entrySlotGet(WasmLispCompiler.Ctx ctx, int entrySlot, int slot) {
+		getLocal(ctx, entrySlot);
+		castEntries(ctx);
 		ctx.writer.write(Instruction.I32_CONST);
-		ctx.writer.writeSignedLeb128(tagged(ctx) ? delta * 4 : delta);
-		ctx.writer.write(Instruction.I32_ADD);
-		ctx.writer.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
-		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_SET);
-		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
-		ctx.writer.writeUnsignedLeb128(0);
+		ctx.writer.writeSignedLeb128(slot);
+		arrayGet(ctx);
 	}
 
 	// Assumes a cell (eqref) on the stack; replaces it with its field-0 value (the header
@@ -937,22 +593,6 @@ final class WasmHashTableCompiler {
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
 		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
 		ctx.writer.writeUnsignedLeb128(field);
-	}
-
-	// if cursor is not a cons, break out by `depth`.
-	private static void emitCursorIsConsElseBreak(WasmLispCompiler.Ctx ctx, int curSlot, int depth) {
-		getLocal(ctx, curSlot);
-		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
-		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_CONS);
-		ctx.writer.write(Instruction.I32_EQZ);
-		ctx.writer.write(Instruction.BR_IF, depth);
-	}
-
-	// cursor = cdr(cursor)
-	private static void advanceCursor(WasmLispCompiler.Ctx ctx, int curSlot) {
-		getLocal(ctx, curSlot);
-		castConsGet(ctx, 1);
-		setLocal(ctx, curSlot);
 	}
 
 }

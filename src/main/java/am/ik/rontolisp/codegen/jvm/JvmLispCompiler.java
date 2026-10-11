@@ -177,9 +177,8 @@ public final class JvmLispCompiler implements LispCompiler {
 
 	/**
 	 * Whether the last {@link #compile} uses hash tables, i.e. whether the emitted class
-	 * needs {@code RontoHashTable} beside it: the key fold for an {@code equalp} table,
-	 * and the tombstone machinery (tombstone/liveCount/liveValues/maybeCompact) every
-	 * table's put/remove/count/values helpers call.
+	 * needs {@code RontoHashTable} beside it: every table is one, and the key fold for an
+	 * {@code equalp} table lives there too.
 	 */
 	private boolean needsHashTableRuntime;
 
@@ -1634,13 +1633,13 @@ public final class JvmLispCompiler implements LispCompiler {
 		// hash-free program can still reference _hashP -- and forcedGroups carries the
 		// previous run's verdict when it did (see compile(List)).
 		// http-handler forces the group on: the Clack environment's :headers value is a
-		// hash table (built by RontoHttpClack in the _hash* runtime's HashMap
-		// representation), whether or not the program's own source names a hash op.
+		// hash table (built by RontoHttpClack as a runtime/RontoHashTable), whether or
+		// not the program's own source names a hash op.
 		// A table whose keys are FOLDED: the three extra helpers and the fold call in
 		// get/put/remove ride on their own gate, so a program that writes no
 		// :test 'equalp is emitted exactly as it was before the fold existed. The
 		// travelling RontoHashTable rides with any hash-using output, fold or not:
-		// every table's put/remove/count/values helpers call its tombstone machinery.
+		// every table is one.
 		boolean usesEqualpHashTables = LispMacroExpander.programMakesEqualpHashTable(program)
 				|| forcedGroups.contains(GROUP_HASH_EQUALP);
 		// A table whose aggregates key by identity: the makers, the test reader and
@@ -3472,8 +3471,8 @@ public final class JvmLispCompiler implements LispCompiler {
 				Objects.requireNonNull(numericRuntime.ops().get(JvmNumericRuntimeBuilder.EQUAL)),
 				Objects.requireNonNull(numericRuntime.ops().get(JvmNumericRuntimeBuilder.EQV)),
 				strvMethod != null ? strvMethod : null, instanceLayoutClass != null ? instanceLayoutClass : null,
-				usesEqualpHashTables, usesIdentityHashTables, javaSites != null ? javaSites.direct().lispTable() : null,
-				javaSites != null ? javaSites.direct().host() : null) : List.of();
+				usesEqualpHashTables, usesIdentityHashTables, javaSites != null ? javaSites.direct().host() : null)
+				: List.of();
 
 		// Build the array runtime helpers, only when the program uses arrays. Includes
 		// the
@@ -3587,7 +3586,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			JvmJavaDirectSites direct = Objects.requireNonNull(javaSites).direct();
 			javaPrint = new JvmRuntimeBuilder.JavaPrint(bigIntegerClassForPrint, objectGetClass, classGetName,
 					stringConcat, cp.stringEntry("#<java "), cp.stringEntry(">"),
-					usesArrays ? direct.lispArray() : null, usesHashTables ? direct.lispTable() : null);
+					usesArrays ? direct.lispArray() : null);
 		}
 		else {
 			javaPrint = null;
@@ -5682,7 +5681,8 @@ public final class JvmLispCompiler implements LispCompiler {
 		return programUsesSymbol(program, LispNames.MAKE_HASH_TABLE) || programUsesSymbol(program, LispNames.GETHASH)
 				|| programUsesSymbol(program, LispNames.REMHASH) || programUsesSymbol(program, LispNames.CLRHASH)
 				|| programUsesSymbol(program, LispNames.HASH_TABLE_COUNT)
-				|| programUsesSymbol(program, LispNames.HASH_TABLE_P) || programUsesSymbol(program, LispNames.MAPHASH);
+				|| programUsesSymbol(program, LispNames.HASH_TABLE_P) || programUsesSymbol(program, LispNames.MAPHASH)
+				|| programUsesSymbol(program, LispNames.COPY_EQUAL_TABLE_INTERNAL_QUALIFIED);
 	}
 
 	private static boolean programUsesAnyArrayOp(List<LispVal> program) {

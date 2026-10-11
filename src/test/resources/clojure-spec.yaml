@@ -7081,6 +7081,32 @@ cases:
              (count m) (m [(nth fs 7) 1]) (m [(nth fs 7) 0])))
     expected: |
       2000 true false 200 7 nil
+  - name: a-map-grown-one-assoc-at-a-time-shares-its-table
+    # Every assoc, dissoc and set conj copies its source's table, and the copy shares
+    # the source's structure, so a map or set grown one verb at a time costs O(log n)
+    # a step and every intermediate version keeps its own entries (.kb/hash-tables.md,
+    # "Copies share structure"); the copy walked the table, and this case was
+    # 2 x 10^8 entry copies, 10 to 30 s a backend. A map walks in insertion order on
+    # all four backends, the oracle's array map order (at most eight entries).
+    # Matches the oracle (clj 1.12.6, 2026-10-11).
+    source: |
+      (let [big (reduce (fn [m i] (assoc m i (* i i))) {} (range 20000))
+            s (reduce conj #{} (range 20000))
+            steps (loop [m {} i 0 acc []]
+                    (if (> i 3000) acc (recur (assoc m i (- i)) (inc i) (conj acc m))))
+            small (reduce (fn [m i] (assoc m (keyword (str "k" i)) i)) {} (range 5))
+            m2 (-> small (dissoc :k2) (assoc :k9 9) (assoc :k0 :zero))]
+        (println (count big) (get big 19999) (count s) (contains? s 7777) (contains? s 20000))
+        (println (map count (take-nth 1000 steps)) (get (steps 2000) 1999) (get (steps 1999) 1999 :absent))
+        (println small)
+        (println m2)
+        (println (count small) (get small :k2) (count (disj s 5)) (count s)))
+    expected: |
+      20000 399960001 20000 true false
+      (0 1000 2000 3000) -1999 :absent
+      {:k0 0, :k1 1, :k2 2, :k3 3, :k4 4}
+      {:k0 :zero, :k1 1, :k3 3, :k4 4, :k9 9}
+      5 2 19999 20000
   - name: a-value-is-equal-to-itself-before-its-contents-are-read
     # = answers true for one object on both sides without reading it, like the
     # oracle's Util.equiv (k1 == k2): a collection holding NaN is = to itself

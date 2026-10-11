@@ -95,8 +95,7 @@ final class JvmJavaDirectSites {
 
 	/**
 	 * {@code _jltab(Object)Z}: whether a value is a Lisp hash table -- a
-	 * {@code LinkedHashMap} holding its insertion-order {@code ArrayList} under
-	 * {@link RontoHashTable#ORDER_KEY}, not a host map a call answered.
+	 * {@code runtime/RontoHashTable}, a class no host value has.
 	 */
 	static final String LISP_TABLE = "_jltab";
 
@@ -107,14 +106,6 @@ final class JvmJavaDirectSites {
 	 * argument spells (null for an unnamed report).
 	 */
 	static final String ARRAY_GUARD = "_jckarr";
-
-	/**
-	 * {@code _jcktab(Object, String)Object}: a hash-table accessor's operand, answered
-	 * unchanged unless it is a host {@code LinkedHashMap}, which is refused with the
-	 * interpreter's {@code HASH-TABLE} type-error, named as {@link #ARRAY_GUARD} names
-	 * its.
-	 */
-	static final String TABLE_GUARD = "_jcktab";
 
 	/**
 	 * {@code _jrecv(Object)Object}: the object a {@code java:call} on a value that is no
@@ -363,8 +354,6 @@ final class JvmJavaDirectSites {
 	private @Nullable MethodRefEntry lispTable;
 
 	private @Nullable MethodRefEntry arrayGuard;
-
-	private @Nullable MethodRefEntry tableGuard;
 
 	// _junm and its variants, and _jarr's, by unmarshalIndex: built when first asked for.
 	private final @Nullable MethodRefEntry[] unmarshals = new MethodRefEntry[UNMARSHALS.length];
@@ -1075,12 +1064,11 @@ final class JvmJavaDirectSites {
 	}
 
 	// A class whose exact instances the compiled representation also uses for Lisp values
-	// (a Lisp array is an ArrayList, a hash table a LinkedHashMap, a complex number a
-	// travelling runtime class): a host kind of it is told apart by _jhost.
+	// (a Lisp array is an ArrayList; a hash table, a complex number a travelling runtime
+	// class): a host kind of it is told apart by _jhost.
 	private static boolean mayHoldALispValue(JavaType host) {
 		String name = host.name();
-		return "java.util.ArrayList".equals(name) || "java.util.LinkedHashMap".equals(name)
-				|| name.startsWith(RUNTIME_PACKAGE_PREFIX);
+		return "java.util.ArrayList".equals(name) || name.startsWith(RUNTIME_PACKAGE_PREFIX);
 	}
 
 	/**
@@ -1119,8 +1107,8 @@ final class JvmJavaDirectSites {
 	}
 
 	/**
-	 * The one test a {@code java:} program tells a Lisp hash table from a host
-	 * {@code LinkedHashMap} by, shared as {@link #lispArray()} is. Built on first use.
+	 * The one test a {@code java:} program tells a Lisp hash table from a host value by,
+	 * shared as {@link #lispArray()} is. Built on first use.
 	 * @return {@code _jltab(Object)Z}
 	 */
 	MethodRefEntry lispTable() {
@@ -1149,24 +1137,6 @@ final class JvmJavaDirectSites {
 			ref = this.cp.methodRef(this.thisClass, name, desc);
 			this.arrayGuard = ref;
 			this.methods.add(buildGuard(name, desc, "java/util/ArrayList", lispArray(), OperandTypes.Kind.ARRAY));
-		}
-		return ref;
-	}
-
-	/**
-	 * The guard a hash-table accessor runs its table operand through in a {@code java:}
-	 * program, as {@link #arrayGuard()} is for arrays. Built on first use.
-	 * @return {@code _jcktab(Object, String)Object}, the operator name second
-	 */
-	MethodRefEntry tableGuard() {
-		MethodRefEntry ref = this.tableGuard;
-		if (ref == null) {
-			Utf8Entry name = this.cp.utf8Entry(TABLE_GUARD);
-			Utf8Entry desc = this.cp.utf8Entry(GUARD_DESC);
-			ref = this.cp.methodRef(this.thisClass, name, desc);
-			this.tableGuard = ref;
-			this.methods
-				.add(buildGuard(name, desc, RontoHashTable.MAP_CLASS, lispTable(), OperandTypes.Kind.HASH_TABLE));
 		}
 		return ref;
 	}
@@ -1856,7 +1826,7 @@ final class JvmJavaDirectSites {
 				a.if_acmpne(fail);
 				if (mayHoldALispValue(host)) {
 					// A class the compiled representation also uses (a Lisp array is an
-					// ArrayList, a hash table a LinkedHashMap): _jhost tells them apart.
+					// ArrayList): _jhost tells them apart.
 					a.aload(slot);
 					a.invokestatic(host());
 					a.ifeq(fail);
@@ -3699,10 +3669,10 @@ final class JvmJavaDirectSites {
 		return new Method(name, desc, a);
 	}
 
-	// _jckarr / _jcktab(Object v, String op)Object: v unless it is an instance of the
-	// class a Lisp array / table shares with a host collection and the shared test says
-	// it is no Lisp one -- then the interpreter's refusal, a simple-error: throw new
-	// RuntimeException(op + " expects ..., got " + _lispToString(v)).
+	// _jckarr(Object v, String op)Object: v unless it is an instance of the class a Lisp
+	// array shares with a host collection and the shared test says it is no Lisp one --
+	// then the interpreter's refusal, the accessor's type-error over the host value. A
+	// hash table needs no such guard: its class is the program's own runtime's.
 	private Method buildGuard(Utf8Entry name, Utf8Entry desc, String sharedClass, MethodRefEntry lispTest,
 			OperandTypes.Kind kind) {
 		MethodCode a = new MethodCode();
@@ -3736,21 +3706,12 @@ final class JvmJavaDirectSites {
 		return new Method(name, desc, a);
 	}
 
-	// _jltab(Object)Z: a LinkedHashMap holding an ArrayList under the order key. The
-	// class is exact, as _jlarr's is: a host subclass's own get is never asked.
+	// _jltab(Object)Z: an instance of the travelling table class, which is final and no
+	// host value is.
 	private Method buildLispTable(Utf8Entry name, Utf8Entry desc) {
 		MethodCode a = new MethodCode();
-		ClassEntry linkedHashMap = cls(RontoHashTable.MAP_CLASS);
-		MethodCode.Label no = a.newLabel();
-		emitExactClass(a, linkedHashMap, no);
 		a.aload(0);
-		a.checkcast(linkedHashMap);
-		a.ldc(str(RontoHashTable.ORDER_KEY));
-		a.invokevirtual(method(RontoHashTable.MAP_CLASS, "get", "(Ljava/lang/Object;)Ljava/lang/Object;"));
-		a.instanceOf(cls(RontoHashTable.LIST_CLASS));
-		a.ireturn();
-		a.labelBinding(no);
-		a.loadConstant(0);
+		a.instanceOf(cls(RontoHashTable.MAP_CLASS));
 		a.ireturn();
 		return new Method(name, desc, a);
 	}

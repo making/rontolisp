@@ -288,7 +288,7 @@ byte array (`byte-array`, `.getBytes`, `(make-array Byte/TYPE n)`) wraps an
 
 The seq family runs over list views of every collection: lists pass through
 untouched, vectors and strings coerce, maps contribute one two-vector per entry and sets
-one member per element (both in the table's walk order, unspecified); `nil` and `false`
+one member per element (both newest first); `nil` and `false`
 are empty; anything else signals like the oracle. Strict collections coerce up front,
 while a lazy seq (`lazy-seq`, `lazy-cat`, `repeat`, `cycle`, `iterate`, `repeatedly`)
 realizes one element at a time through the same view: `take` steps through it and

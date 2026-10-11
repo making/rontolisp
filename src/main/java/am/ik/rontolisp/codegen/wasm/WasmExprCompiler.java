@@ -692,6 +692,12 @@ final class WasmExprCompiler {
 					WasmStrByteCompiler.compile(qn.member(), cons, ctx);
 					return;
 				}
+				if (LispNames.COPY_EQUAL_TABLE_INTERNAL.equals(qn.member())) {
+					// The copy every Clojure map verb takes: _ht_copy, which shares an
+					// equal table's structure.
+					WasmHashTableCompiler.compileCopy(cons, ctx);
+					return;
+				}
 				if (LispNames.OCTETS_TO_STRING_PACKED_INTERNAL.equals(qn.member())) {
 					// The native half of the prelude's lenient octet decoder: a packed
 					// (unsigned-byte 8) vector decoded (one copy when it is valid UTF-8,

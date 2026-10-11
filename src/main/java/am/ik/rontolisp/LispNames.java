@@ -6037,14 +6037,15 @@ public final class LispNames {
 	public static final String OCTETS_JOIN_INTERNAL = "%OCTETS-JOIN";
 
 	/**
-	 * The internal {@code rontolisp::%copy-equal-table} helper: an {@code equal} hash
-	 * table -> a fresh {@code equal} table holding its entries (each key as first stored)
-	 * in its iteration order, which a later store into either leaves the other without --
-	 * the copy a Clojure map, set or record field table takes before an {@code assoc},
-	 * {@code dissoc}, {@code conj} or {@code disj} changes it. ONE definition in Lisp
-	 * source ({@code LispPreludeLibrary}) for the compile paths; the interpreter's is
-	 * native ({@code Environment}), where the Lisp loop cost an interpreted step per
-	 * entry.
+	 * The internal {@code rontolisp::%copy-equal-table} helper: a hash table -> a fresh
+	 * {@code equal} table holding its entries (each key as first stored) in its iteration
+	 * order, which a later store into either leaves the other without -- the copy a
+	 * Clojure map, set or record field table takes before an {@code assoc},
+	 * {@code dissoc}, {@code conj} or {@code disj} changes it. Native on every backend
+	 * ({@code LispHashTable.copyEqual}, the JVM's {@code _hashCopy}, wasm's
+	 * {@code _ht_copy}): an {@code equal} table's copy shares its structure, O(n) the
+	 * first time and O(1) after it ({@code .kb/hash-tables.md}, "Copies share
+	 * structure").
 	 */
 	public static final String COPY_EQUAL_TABLE_INTERNAL = "%COPY-EQUAL-TABLE";
 

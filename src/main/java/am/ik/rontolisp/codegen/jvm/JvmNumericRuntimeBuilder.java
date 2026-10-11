@@ -807,8 +807,7 @@ final class JvmNumericRuntimeBuilder {
 		ClassEntry listClass = cp.classEntry("java/util/List");
 		StringRefs stringRefs = new StringRefs(stringClass, listClass, cp.methodRef(stringClass, "isEmpty", "()Z"),
 				cp.methodRef(stringClass, "charAt", "(I)C"));
-		methods.add(buildEqv(nEqv, dCmp, ratArrClass, intArrClass, cp.classEntry("java/util/Map"), objEquals,
-				stringRefs, hostTest));
+		methods.add(buildEqv(nEqv, dCmp, ratArrClass, intArrClass, objEquals, stringRefs, hostTest));
 		methods.add(buildEqual(nEqual, dCmp, objArrClass, ratArrClass, integerClass, rEqv, rEqual, strArrClass,
 				strvMethod, stringRefs, objEquals, hostTest, hostReceiver));
 		methods.add(buildRatTrunc(nRatTrunc, dUnary, rRatNum, rRatDen, rNorm, biDiv));
@@ -2706,18 +2705,18 @@ final class JvmNumericRuntimeBuilder {
 	// (Object[].equals is reference equality), CHARACTERs (int[]{codePoint}) compare by
 	// their sole code point (int[].equals is also reference equality, and the JVM does
 	// not cache char literals like Character.valueOf(char) does), everything else uses
-	// a.equals(b). A hash table (a Map) is the exception: Map.equals walks the entries,
-	// so two empty tables were eq, while eql/equal on a table is identity. So are an
-	// ARRAY (a List: a general vector, a mutable character vector, a string view) and a
-	// STRING (a quote-framed java.lang.String), as ANSI has it: two distinct strings with
+	// a.equals(b) -- identity for a hash table, whose class (runtime/RontoHashTable)
+	// overrides neither equals nor hashCode. The exceptions are an ARRAY (a List: a
+	// general vector, a mutable character vector, a string view) and a STRING (a
+	// quote-framed java.lang.String), identity as ANSI has it: two distinct strings with
 	// equal contents are not eql. Equal string LITERALS are still one object, because
 	// ldc interns them -- the coalescing the interpreter and WASM reproduce. A SYMBOL is
 	// a bare String and keeps comparing by name. In a java: program (hostTest non-null)
-	// a HOST OBJECT is identity too: its equals is equal's answer, not eql's -- asked
-	// here, a reify whose equals answers true was eq to T and to 1
+	// a HOST OBJECT is identity too, a host Map included: its equals is equal's answer,
+	// not eql's -- asked here, a reify whose equals answers true was eq to T and to 1
 	// (.kb/eq-numbers.md, "Host objects").
 	private static NumericMethod buildEqv(Utf8Entry name, Utf8Entry desc, ClassEntry ratArrClass,
-			ClassEntry intArrClass, ClassEntry mapClass, MethodRefEntry objEquals, StringRefs strings,
+			ClassEntry intArrClass, MethodRefEntry objEquals, StringRefs strings,
 			@org.jspecify.annotations.Nullable MethodRefEntry hostTest) {
 		MethodCode c = new MethodCode();
 		// CHARACTER compare (int[]{cp}): if both operands are length-1 int[], value
@@ -2774,21 +2773,6 @@ final class JvmNumericRuntimeBuilder {
 		c.ireturn();
 		c.labelBinding(ifObj1);
 		c.labelBinding(ifObj2);
-		// if (a instanceof Map) return a == b
-		c.aload(0);
-		c.instanceOf(mapClass);
-		MethodCode.Label ifNotMap = c.newLabel();
-		c.ifeq(ifNotMap);
-		c.aload(0);
-		c.aload(1);
-		MethodCode.Label ifNotSame = c.newLabel();
-		c.if_acmpne(ifNotSame);
-		c.iconst_1();
-		c.ireturn();
-		c.labelBinding(ifNotSame);
-		c.iconst_0();
-		c.ireturn();
-		c.labelBinding(ifNotMap);
 		// if (a instanceof List || b instanceof List || isString(a)) return a == b
 		MethodCode.Label toIdentity = c.newLabel();
 		c.aload(0);

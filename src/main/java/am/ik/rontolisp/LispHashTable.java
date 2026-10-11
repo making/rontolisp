@@ -1,7 +1,11 @@
 package am.ik.rontolisp;
 
-import java.util.Collection;
-import java.util.LinkedHashMap;
+import java.util.ArrayList;
+import java.util.List;
+
+import org.jspecify.annotations.Nullable;
+
+import am.ik.rontolisp.runtime.RontoHashTable;
 
 /**
  * A hash table value (Common Lisp {@code hash-table}).
@@ -9,10 +13,10 @@ import java.util.LinkedHashMap;
  * <p>
  * Keys are compared by the table's test and hashed to agree with it. An {@code equal}
  * table separates placement ({@link LispEquality#hash}, a depth-capped fold over the
- * key's structure) from comparison (real {@code equal} within the bucket). An {@code eql}
+ * key's structure) from comparison (real {@code equal} within the chain). An {@code eql}
  * or {@code eq} table compares with {@link LispEquality#eql} / {@link LispEquality#eq}
  * instead; its aggregates (conses, instances, allocated strings) hash by identity
- * ({@link System#identityHashCode}), so a key mutated after insertion keeps its bucket,
+ * ({@link System#identityHashCode}), so a key mutated after insertion keeps its chain,
  * while every other value hashes structurally exactly as an {@code equal} table hashes
  * it. Both compiled backends reproduce each pair, so all four backends agree on which
  * keys are one key. A CYCLIC key is therefore usable -- the cap bounds the hash and
@@ -25,8 +29,12 @@ import java.util.LinkedHashMap;
  * see {@link #placed}.
  *
  * <p>
- * Insertion order is preserved for {@code maphash}, but portable programs should not rely
- * on iteration order (the JVM/WASM backends do not guarantee it).
+ * The entries live in a {@link RontoHashTable}, the structure a compiled JVM program's
+ * tables are: hash chains, scanned here with the table's test, and the pairs in insertion
+ * order, which {@code maphash} walks. A copy ({@link #copyEqual}) shares it -- the first
+ * one turns the table into a trie, every later one is O(1) -- so a Clojure map grown one
+ * {@code assoc} at a time costs O(log n) a step ({@code .kb/hash-tables.md}, "Copies
+ * share structure").
  */
 public final class LispHashTable implements LispVal {
 
@@ -118,58 +126,24 @@ public final class LispHashTable implements LispVal {
 
 	private final int testCode;
 
-	private final LinkedHashMap<Key, Entry> map = new LinkedHashMap<>();
+	private final RontoHashTable table;
 
-	/**
-	 * A key as the backing {@link LinkedHashMap} sees it: the Lisp value plus its
-	 * precomputed hash for the table's test. Bucket membership is that hash and bucket
-	 * comparison is the test's predicate, which is the whole point -- the value's own
-	 * {@code hashCode} recurses without a bound.
-	 */
-	private record Key(LispVal val, int hash, int testCode) {
-
-		static Key of(LispVal val, int testCode) {
-			return new Key(val, placementHash(val, testCode), testCode);
-		}
-
-		// The hash the test agrees with: an eql/eq table's aggregates hash by
-		// identity, so a key mutated after insertion keeps its bucket, and so does a
-		// host object, by the identity of the object it wraps (its own hashCode moves
-		// when it is mutated, and the wrapper is fresh per Java call); everything
-		// else -- including an eql/eq table's numbers, symbols and source-literal
-		// strings, which compare by value exactly as equal compares them -- hashes
-		// structurally.
-		private static int placementHash(LispVal val, int testCode) {
-			if (testCode == TEST_EQL || testCode == TEST_EQ) {
-				if (LispEquality.isIdentityAggregate(val)) {
-					return System.identityHashCode(val);
-				}
-				if (val instanceof LispJavaObject host) {
-					return System.identityHashCode(host.ref());
-				}
+	// The hash the test agrees with: an eql/eq table's aggregates hash by identity, so a
+	// key mutated after insertion keeps its chain, and so does a host object, by the
+	// identity of the object it wraps (its own hashCode moves when it is mutated, and the
+	// wrapper is fresh per Java call); everything else -- including an eql/eq table's
+	// numbers, symbols and source-literal strings, which compare by value exactly as
+	// equal compares them -- hashes structurally.
+	private static int placementHash(LispVal val, int testCode) {
+		if (testCode == TEST_EQL || testCode == TEST_EQ) {
+			if (LispEquality.isIdentityAggregate(val)) {
+				return System.identityHashCode(val);
 			}
-			return LispEquality.hash(val);
-		}
-
-		@Override
-		public int hashCode() {
-			return this.hash;
-		}
-
-		@Override
-		public boolean equals(Object o) {
-			if (!(o instanceof Key other) || this.testCode != other.testCode) {
-				return false;
+			if (val instanceof LispJavaObject host) {
+				return System.identityHashCode(host.ref());
 			}
-			if (this.val == other.val) {
-				return true;
-			}
-			return switch (this.testCode) {
-				case TEST_EQL -> LispEquality.eql(this.val, other.val);
-				case TEST_EQ -> LispEquality.eq(this.val, other.val);
-				default -> LispEquality.equal(this.val, other.val);
-			};
 		}
+		return LispEquality.hash(val);
 	}
 
 	/**
@@ -195,7 +169,12 @@ public final class LispHashTable implements LispVal {
 	 * @param testCode the test lookups implement
 	 */
 	public LispHashTable(int testCode) {
+		this(testCode, RontoHashTable.newTable(testCode));
+	}
+
+	private LispHashTable(int testCode, RontoHashTable table) {
 		this.testCode = testCode;
+		this.table = table;
 	}
 
 	/**
@@ -218,13 +197,36 @@ public final class LispHashTable implements LispVal {
 
 	/**
 	 * The value this table PLACES {@code val} under: {@code val} itself, or its
-	 * {@code equalp} fold. The fold is the map's key -- a bucket decides by {@code equal}
-	 * against the keys already in it, so the fold has to be what is there -- while the
-	 * entry keeps the key as first stored, which is what {@code maphash} hands back, as
-	 * SBCL does ({@code .kb/hash-tables.md}).
+	 * {@code equalp} fold. The fold is the pair's slot 0 -- a chain decides by
+	 * {@code equal} against the keys already in it, so the fold has to be what is there
+	 * -- while the pair keeps the key as first stored in a third slot, which is what
+	 * {@code maphash} hands back, as SBCL does ({@code .kb/hash-tables.md}).
 	 */
 	private LispVal placed(LispVal val) {
 		return this.testCode == TEST_EQUALP ? LispEquality.equalpKey(val) : val;
+	}
+
+	// The entry of the chain from `first` whose key the test calls the placed key, or
+	// null. A flat table's bucket holds other hashes too: their entries are skipped.
+	private RontoHashTable.@Nullable Entry match(RontoHashTable.Entry first, LispVal placed, int hash) {
+		for (RontoHashTable.Entry entry = first; entry != RontoHashTable.END; entry = entry.next) {
+			if (entry.hash != hash) {
+				continue;
+			}
+			LispVal stored = (LispVal) entry.pair[0];
+			if (stored == placed) {
+				return entry;
+			}
+			boolean same = switch (this.testCode) {
+				case TEST_EQL -> LispEquality.eql(placed, stored);
+				case TEST_EQ -> LispEquality.eq(placed, stored);
+				default -> LispEquality.equal(placed, stored);
+			};
+			if (same) {
+				return entry;
+			}
+		}
+		return null;
 	}
 
 	/**
@@ -234,8 +236,10 @@ public final class LispHashTable implements LispVal {
 	 * @return the stored value, or {@code dflt}
 	 */
 	public LispVal get(LispVal key, LispVal dflt) {
-		Entry e = this.map.get(Key.of(placed(key), this.testCode));
-		return (e == null) ? dflt : e.value();
+		LispVal placed = placed(key);
+		int hash = placementHash(placed, this.testCode);
+		RontoHashTable.Entry entry = match(RontoHashTable.find(this.table, hash), placed, hash);
+		return (entry == null) ? dflt : (LispVal) entry.pair[1];
 	}
 
 	/**
@@ -246,8 +250,21 @@ public final class LispHashTable implements LispVal {
 	 * @return the stored value
 	 */
 	public LispVal put(LispVal key, LispVal value) {
-		this.map.merge(Key.of(placed(key), this.testCode), new Entry(key, value),
-				(stored, fresh) -> new Entry(stored.key(), fresh.value()));
+		LispVal placed = placed(key);
+		int hash = placementHash(placed, this.testCode);
+		// A key its fold changed keeps itself in a third slot: what maphash hands back.
+		RontoHashTable.Entry chain = RontoHashTable.putOrChain(this.table, hash, placed, value, key);
+		if (chain == RontoHashTable.END) {
+			return value;
+		}
+		RontoHashTable.Entry entry = match(chain, placed, hash);
+		if (entry != null) {
+			RontoHashTable.setValue(this.table, entry, value);
+		}
+		else {
+			RontoHashTable.add(this.table, hash,
+					(placed == key) ? new Object[] { key, value } : new Object[] { placed, value, key });
+		}
 		return value;
 	}
 
@@ -257,14 +274,21 @@ public final class LispHashTable implements LispVal {
 	 * @return {@code true} if an entry was removed
 	 */
 	public boolean remove(LispVal key) {
-		return this.map.remove(Key.of(placed(key), this.testCode)) != null;
+		LispVal placed = placed(key);
+		int hash = placementHash(placed, this.testCode);
+		RontoHashTable.Entry entry = match(RontoHashTable.find(this.table, hash), placed, hash);
+		if (entry == null) {
+			return false;
+		}
+		RontoHashTable.remove(this.table, entry);
+		return true;
 	}
 
 	/**
 	 * Removes all entries.
 	 */
 	public void clear() {
-		this.map.clear();
+		RontoHashTable.clear(this.table);
 	}
 
 	/**
@@ -272,35 +296,40 @@ public final class LispHashTable implements LispVal {
 	 * @return the entry count
 	 */
 	public int count() {
-		return this.map.size();
+		return RontoHashTable.count(this.table);
 	}
 
 	/**
-	 * Returns the stored entries in insertion order.
+	 * Returns the stored entries in insertion order: a snapshot, which storing into the
+	 * table afterwards leaves as it was.
 	 * @return the entries
 	 */
-	public Collection<Entry> entries() {
-		return this.map.values();
+	public List<Entry> entries() {
+		Object[] pairs = RontoHashTable.liveValues(this.table);
+		List<Entry> entries = new ArrayList<>(pairs.length);
+		for (Object pair : pairs) {
+			Object[] slots = (Object[]) pair;
+			entries.add(new Entry((LispVal) slots[(slots.length == 3) ? 2 : 0], (LispVal) slots[1]));
+		}
+		return entries;
 	}
 
 	/**
 	 * A fresh {@code equal} table holding this table's entries -- each key as first
 	 * stored -- in its insertion order, which a later store into either table leaves the
 	 * other without: what {@code rontolisp::%copy-equal-table} answers. An {@code equal}
-	 * table hands its placed keys over as they are (a key and an entry are immutable, so
-	 * the two tables may share them); any other table's keys are placed again under
-	 * {@code equal}, as storing them into a fresh table would.
+	 * table's copy shares its structure in O(1) ({@link RontoHashTable#copyEqual}); any
+	 * other table's keys are placed again under {@code equal}, as storing them into a
+	 * fresh table would.
 	 * @return the copy
 	 */
 	public LispHashTable copyEqual() {
-		LispHashTable copy = new LispHashTable(TEST_EQUAL);
 		if (this.testCode == TEST_EQUAL) {
-			copy.map.putAll(this.map);
+			return new LispHashTable(TEST_EQUAL, RontoHashTable.copyEqual(this.table));
 		}
-		else {
-			for (Entry entry : this.map.values()) {
-				copy.put(entry.key(), entry.value());
-			}
+		LispHashTable copy = new LispHashTable(TEST_EQUAL);
+		for (Entry entry : entries()) {
+			copy.put(entry.key(), entry.value());
 		}
 		return copy;
 	}

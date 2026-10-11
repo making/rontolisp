@@ -10,8 +10,8 @@ subset of `alexandria:hash-table-alist`.
 (rontolisp:hash-table-alist (rontolisp:alist-hash-table '(("k" . 7))))   ; => (("k" . 7))
 ```
 
-The pair order follows the table's iteration order (backend-specific, like
-`maphash`), so it is well defined for a single-entry table.
+The pairs come newest first -- the reverse of `maphash`'s order -- on every
+backend.
 
 ## Backend support
 

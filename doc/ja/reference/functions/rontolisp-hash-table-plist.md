@@ -10,9 +10,8 @@
 (rontolisp:hash-table-plist (rontolisp:plist-hash-table (list :a 1)))   ; => (:A 1)
 ```
 
-ペアの順序はテーブルの反復順序に従う(`maphash` と同様にバックエンド依存)
-ため、単一エントリのテーブルでは明確に定まります。
-[`rontolisp:json-parse`](rontolisp-json-parse.md) のオブジェクトではキーが
+ペアはどのバックエンドでも新しいものから順に並びます(`maphash` の順序の
+逆)。[`rontolisp:json-parse`](rontolisp-json-parse.md) のオブジェクトではキーが
 文字列であり、`getf` では検索できない(`eq` で比較するため)ので、それらは
 代わりに `gethash` で読み取ってください。
 

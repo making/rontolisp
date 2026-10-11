@@ -466,8 +466,9 @@ written under `"cs"` and then under `"CS"`, and `0.5` for one written under `0.5
 Storing under a key the table already has replaces the value and keeps the key, under
 every test.
 An `eql` or `eq` table keys aggregates (conses, vectors, strings, instances) by
-identity and every other value by value. Iteration order (`maphash`) is not guaranteed
-across backends, so portable code should not depend on it. A table itself prints
+identity and every other value by value. `maphash` walks the entries in insertion order
+on every backend (a key removed and stored again comes last); ANSI leaves the order
+unspecified, so portable code should not depend on it. A table itself prints
 as SBCL's unreadable tag minus its trailing identity hash --
 `#<HASH-TABLE :TEST EQUAL :COUNT n>`, the same text on every backend, with no
 entry content. `:TEST` is the test lookup actually implements, i.e. `EQUALP` for

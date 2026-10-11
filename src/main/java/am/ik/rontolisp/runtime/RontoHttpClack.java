@@ -2,7 +2,6 @@ package am.ik.rontolisp.runtime;
 
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 
@@ -70,7 +69,7 @@ public final class RontoHttpClack {
 		}
 		// The header table: lowercased names, repeated headers joined with ", " in wire
 		// order (the Clack handler-backend rule), never nil.
-		LinkedHashMap<Object, Object> headers = RontoHashTable.newTable();
+		RontoHashTable headers = RontoHashTable.newTable();
 		// "" is "the header was not sent" throughout: this package carries no @Nullable
 		// (see RontoHashTable), and no HTTP header value that matters here is empty.
 		String host = "";

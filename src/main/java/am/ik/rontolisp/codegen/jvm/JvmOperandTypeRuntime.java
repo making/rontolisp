@@ -124,11 +124,10 @@ final class JvmOperandTypeRuntime {
 	static final String CK_CHR = "_ckChr";
 
 	/**
-	 * A hash-table accessor's operand check: a Lisp hash table (a {@code LinkedHashMap})
-	 * answers itself, anything else throws the unnamed {@code HASH-TABLE} report for the
-	 * operator's wrapper to name. A {@code java:} program's host map passes here and is
-	 * refused by its own guard after ({@code JvmJavaDirectSites.TABLE_GUARD}). Descriptor
-	 * {@link #CK_IDX_DESC}.
+	 * A hash-table accessor's operand check: a Lisp hash table (a
+	 * {@code runtime/RontoHashTable}) answers itself, anything else -- a {@code java:}
+	 * program's host map too -- throws the unnamed {@code HASH-TABLE} report for the
+	 * operator's wrapper to name. Descriptor {@link #CK_IDX_DESC}.
 	 */
 	static final String CK_TAB = "_ckTab";
 

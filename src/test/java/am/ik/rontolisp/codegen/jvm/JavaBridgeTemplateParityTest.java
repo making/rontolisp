@@ -395,9 +395,8 @@ class JavaBridgeTemplateParityTest {
 	// What a compiled program counts as a host object is one rule with two copies: the
 	// bridge's isJavaObject and the _jhost a resolved site calls. Over the compiled
 	// representation of every kind of Lisp value and a spread of host objects -- the
-	// ArrayList / LinkedHashMap a Lisp array / hash table also is among them, and
-	// subclasses of them whatever their overrides answer -- the two answer alike, and as
-	// intended.
+	// ArrayList a Lisp array also is among them, maps of every class, and subclasses of
+	// them whatever their overrides answer -- the two answer alike, and as intended.
 	@Test
 	void theBridgeAndADirectSiteCountTheSameHostObjects(@TempDir Path dir) throws Exception {
 		JvmLispCompiler compiler = new JvmLispCompiler("HostTest");
@@ -416,8 +415,7 @@ class JavaBridgeTemplateParityTest {
 		ArrayList<Object> lispArray = new ArrayList<>();
 		lispArray.add(new Object[] { new Object[] { 1L }, null, null });
 		lispArray.add(7L);
-		LinkedHashMap<Object, Object> lispTable = new LinkedHashMap<>();
-		lispTable.put(RontoHashTable.ORDER_KEY, new ArrayList<>());
+		RontoHashTable lispTable = RontoHashTable.newTable();
 		ArrayList<Object> hostList = new ArrayList<>(List.of(1L));
 		LinkedHashMap<Object, Object> hostMap = new LinkedHashMap<>(Map.of("#order", "not a list"));
 		List<@Nullable Object> lisp = Arrays.asList(null, 5L, 1.5, BigInteger.TEN.pow(30), "\"s\"", "FOO", "T",
@@ -616,6 +614,7 @@ class JavaBridgeTemplateParityTest {
 				  (remhash "a" h)
 				  (print (ts h))
 				  (print (ts* h)))
+				(print (ts (make-hash-table)))
 				"""));
 		Files.write(dir.resolve("TableTest.class"), bytes);
 		for (Map.Entry<String, byte[]> file : compiler.runtimeClassFiles().entrySet()) {
@@ -889,12 +888,12 @@ class JavaBridgeTemplateParityTest {
 		}
 	}
 
-	// The bridge may import nothing of rontolisp's, so it spells the hash table's order
-	// key, the runtime package, Java's false, the markers, Comparator's compare, the
+	// The bridge may import nothing of rontolisp's, so it spells the hash table's
+	// class, the runtime package, Java's false, the markers, Comparator's compare, the
 	// class a handle or view is and a comparison's refusals itself.
 	@Test
 	void theBridgeSpellsTheRepresentationAsTheRuntimeDoes() throws Exception {
-		assertThat(constant("HASH_TABLE_ORDER_KEY")).isEqualTo(RontoHashTable.ORDER_KEY);
+		assertThat(constant("HASH_TABLE_CLASS")).isEqualTo(RontoHashTable.MAP_CLASS.replace('/', '.'));
 		assertThat(constant("RUNTIME_PACKAGE_PREFIX")).isEqualTo(JvmJavaDirectSites.RUNTIME_PACKAGE_PREFIX);
 		assertThat(constant("JAVA_FALSE")).isEqualTo(LispNames.JAVA_FALSE);
 		assertThat(constant("FUNCTIONAL_MARKER")).isEqualTo(LispNames.JAVA_FUNCTIONAL_MARKER);
