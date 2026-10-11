@@ -108,6 +108,13 @@ final class JvmJavaImplementations {
 	/** The generated subclasses by shape, in the order they were first asked for. */
 	private final Map<String, Subshell> subshells = new LinkedHashMap<>();
 
+	/**
+	 * The program-side method a callback calls its function through, by the name of the
+	 * function a form's {@code :through} names
+	 * ({@link #through(String, MethodRefEntry)}).
+	 */
+	private final Map<String, MethodRefEntry> throughs = new LinkedHashMap<>();
+
 	/** Whether a direct call tests an argument against {@link #baseClass()}. */
 	private boolean baseTested;
 
@@ -144,6 +151,42 @@ final class JvmJavaImplementations {
 		this.lookup = lookup;
 		this.direct = direct;
 		this.lispToString = lispToString;
+	}
+
+	/**
+	 * Registers how the callbacks of an implementation a form ending in
+	 * {@code :through #'name} makes call their function: through {@code helper}, the
+	 * program's {@code _jthrough$N(Object function, Object object, Object arguments)},
+	 * which calls {@code name} over them -- {@code object} {@code t} when the method
+	 * answers an object -- and answers what it answers. The site compiles the helper (it
+	 * needs the compiler's context) before it asks for anything generated for the form.
+	 * @param name the function's name
+	 * @param helper the program-side method calling it
+	 */
+	void through(String name, MethodRefEntry helper) {
+		this.throughs.putIfAbsent(name, helper);
+	}
+
+	/**
+	 * @param name the name of a function a {@code :through} names
+	 * @return whether {@link #through(String, MethodRefEntry)} registered its helper
+	 */
+	boolean hasThrough(String name) {
+		return this.throughs.containsKey(name);
+	}
+
+	// The registered helper a :through's callbacks call their function through, or null
+	// for markers naming none.
+	private @Nullable MethodRefEntry throughHelper(JavaMarkers markers) {
+		String name = markers.through();
+		if (name == null) {
+			return null;
+		}
+		MethodRefEntry helper = this.throughs.get(name);
+		if (helper == null) {
+			throw new IllegalStateException("no :through helper was compiled for " + name);
+		}
+		return helper;
 	}
 
 	/**
@@ -375,7 +418,15 @@ final class JvmJavaImplementations {
 	MethodRefEntry factory(JavaImplementation implementation) {
 		Shell shell = shell(implementation);
 		return this.cp.methodRef(this.cp.classEntry(shell.internalName()), FACTORY,
-				implementation.standsFor() ? STAND_IN_FACTORY_DESC : FACTORY_DESC);
+				holdsValue(implementation) ? STAND_IN_FACTORY_DESC : FACTORY_DESC);
+	}
+
+	// Whether the generated class holds the value it stands for in a field of its own,
+	// handed to its factory: a java:reify given :value. A function converted to an
+	// interface stands for its one function (fns[0]).
+	private static boolean holdsValue(JavaImplementation implementation) {
+		JavaImplementation.StandIn standIn = implementation.standIn();
+		return standIn != null && !standIn.function();
 	}
 
 	/**
@@ -544,8 +595,16 @@ final class JvmJavaImplementations {
 			// its callbacks hand a byte[] over as the octet vector it is (_juno)
 			key.append("|octets");
 		}
+		if (implementation.markers().through() != null) {
+			// its callbacks call their function through the one named (_jthrough$N)
+			key.append("|through=").append(implementation.markers().through());
+		}
 		JavaImplementation.StandIn standIn = implementation.standIn();
-		if (standIn != null) {
+		if (standIn != null && standIn.function()) {
+			// it stands for its function (runtime/RontoJavaValue)
+			key.append("|stands");
+		}
+		else if (standIn != null) {
 			// it stands for a value, its class named so (runtime/RontoJavaValue)
 			key.append("|value=").append(standIn.className() != null ? standIn.className() : "");
 		}
@@ -566,15 +625,18 @@ final class JvmJavaImplementations {
 
 	// The program-side method a slot calls, made the first time one of its shape asks:
 	// one per (proxy or not, interfaces, method, return type, how Java's false and a
-	// byte[] reach the function, whether its answer is read as a comparison).
+	// byte[] reach the function, whether its answer is read as a comparison, the
+	// function it is called through).
 	private String callback(JavaImplementation implementation, JavaImplementation.Slot slot) {
 		boolean proxy = implementation.proxy();
 		String iface = implementation.interfaceNames();
 		boolean javaFalse = implementation.javaFalse();
 		boolean octets = handsOctets(implementation, slot);
 		boolean compares = implementation.readsComparison(slot);
+		String through = implementation.markers().through();
 		String key = (proxy ? "proxy|" : "reify|") + iface + "|" + slot.dispatchKey() + (javaFalse ? "|java-false" : "")
-				+ (octets ? "|octets" : "") + (compares ? "|compares" : "");
+				+ (octets ? "|octets" : "") + (compares ? "|compares" : "")
+				+ (through != null ? "|through=" + through : "");
 		String cached = this.callbacks.get(key);
 		if (cached != null) {
 			return cached;
@@ -584,8 +646,9 @@ final class JvmJavaImplementations {
 		// a java:reify's refusal names the method's interface, a java:proxy's all of its
 		// own (eval/JavaInterop alike)
 		String named = proxy ? iface : implementation.declaringName(slot.key());
-		this.methods.add(buildCallback(proxy, named, slot, javaFalse, octets, compares, this.cp.utf8Entry(name),
-				this.cp.utf8Entry(callbackDescriptor(slot))));
+		this.methods
+			.add(buildCallback(proxy, named, slot, javaFalse, octets, compares, throughHelper(implementation.markers()),
+					this.cp.utf8Entry(name), this.cp.utf8Entry(callbackDescriptor(slot))));
 		return name;
 	}
 
@@ -638,6 +701,11 @@ final class JvmJavaImplementations {
 			// conversions), whatever the slots take
 			key.append(" octets");
 		}
+		if (implementation.markers().through() != null) {
+			// its callbacks and a function constructor argument's call their function
+			// through the one named (_jthrough$N)
+			key.append(" through=").append(implementation.markers().through());
+		}
 		Subshell cached = this.subshells.get(key.toString());
 		if (cached != null) {
 			return cached;
@@ -682,9 +750,10 @@ final class JvmJavaImplementations {
 	// and a byte[] reach the callable).
 	private String subclassCallback(JavaImplementation implementation, JavaImplementation.Slot slot) {
 		JavaType superclass = java.util.Objects.requireNonNull(implementation.superclass());
+		String through = implementation.markers().through();
 		String key = "subclass|" + superclass.name() + "|" + implementation.interfaceNames() + "|" + slot.dispatchKey()
 				+ (implementation.javaFalse() ? "|java-false" : "")
-				+ (handsOctets(implementation, slot) ? "|octets" : "");
+				+ (handsOctets(implementation, slot) ? "|octets" : "") + (through != null ? "|through=" + through : "");
 		String cached = this.callbacks.get(key);
 		if (cached != null) {
 			return cached;
@@ -719,7 +788,8 @@ final class JvmJavaImplementations {
 	// condition, that error -- is recorded on its way out to the Java caller (_jsig), for
 	// the site whose Java call it reaches.
 	private JvmJavaDirectSites.Method buildCallback(boolean proxy, String iface, JavaImplementation.Slot slot,
-			boolean javaFalse, boolean octets, boolean compares, Utf8Entry name, Utf8Entry desc) {
+			boolean javaFalse, boolean octets, boolean compares, @Nullable MethodRefEntry through, Utf8Entry name,
+			Utf8Entry desc) {
 		MethodCode a = new MethodCode();
 		// 2 = the argument list, 3 = i, 4 = the value, 5 = a comparison's answer
 		MethodCode.Label start = a.newBoundLabel();
@@ -767,11 +837,8 @@ final class JvmJavaImplementations {
 			a.aastore();
 			a.astore(2);
 		}
-		a.aload(0);
-		a.aload(2);
-		a.invokestatic(this.cp.methodRef(this.thisClass, "_apply",
-				"(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;"));
 		JavaType returnType = slot.returnType();
+		emitApply(a, 0, 2, returnType, through);
 		MethodCode.Label refused = a.newLabel();
 		if ("void".equals(returnType.name())) {
 			a.pop();
@@ -785,7 +852,7 @@ final class JvmJavaImplementations {
 			a.aload(0);
 			a.aload(2);
 			a.aload(4);
-			a.invokestatic(this.direct.comparisonHelper());
+			a.invokestatic(this.direct.comparisonHelper(through));
 			a.astore(5);
 			a.aload(5);
 			a.instanceOf(cls("java/lang/Integer"));
@@ -828,6 +895,28 @@ final class JvmJavaImplementations {
 			a.athrow();
 		}
 		return new JvmJavaDirectSites.Method(name, desc, a);
+	}
+
+	// The function in local FN applied to the argument list in local ARGS, its value
+	// left on the stack: _apply(fn, args), or, through a :through's helper,
+	// _jthrough$N(fn, object, args) -- object t when the method answers an object (no
+	// primitive, not void), else nil.
+	private void emitApply(MethodCode a, int fn, int args, JavaType returnType, @Nullable MethodRefEntry through) {
+		a.aload(fn);
+		if (through == null) {
+			a.aload(args);
+			a.invokestatic(this.cp.methodRef(this.thisClass, "_apply",
+					"(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;"));
+			return;
+		}
+		if (returnType.isPrimitive()) {
+			a.aconst_null();
+		}
+		else {
+			a.ldc(this.cp.stringEntry("T"));
+		}
+		a.aload(args);
+		a.invokestatic(through);
 	}
 
 	private static TypeKind returnKind(JavaType type) {
@@ -906,11 +995,8 @@ final class JvmJavaImplementations {
 		a.aload(3);
 		a.aastore();
 		a.astore(3);
-		a.aload(0);
-		a.aload(3);
-		a.invokestatic(this.cp.methodRef(this.thisClass, "_apply",
-				"(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;"));
 		JavaType returnType = slot.returnType();
+		emitApply(a, 0, 3, returnType, throughHelper(implementation.markers()));
 		JavaType superclass = java.util.Objects.requireNonNull(implementation.superclass());
 		if ("void".equals(returnType.name())) {
 			a.pop();
@@ -1167,17 +1253,18 @@ final class JvmJavaImplementations {
 		ClassEntry self = selfClass;
 		ClassEntry base = baseClass;
 		FieldRefEntry fns = pool.fieldRef(base, "fns", "[Ljava/lang/Object;");
-		// private <init>(Object[] fns) { super(fns); }, or for a stand-in
+		// private <init>(Object[] fns) { super(fns); }, or holding a value
 		// private <init>(Object value, Object[] fns) { super(fns); this.value = value; }
-		String initDesc = standIn != null ? "(Ljava/lang/Object;[Ljava/lang/Object;)V" : "([Ljava/lang/Object;)V";
+		boolean holdsValue = holdsValue(implementation);
+		String initDesc = holdsValue ? "(Ljava/lang/Object;[Ljava/lang/Object;)V" : "([Ljava/lang/Object;)V";
 		Utf8Entry initName = pool.utf8Entry("<init>");
 		Utf8Entry initType = pool.utf8Entry(initDesc);
 		MethodCode init = new MethodCode();
 		init.aload(0);
-		init.aload(standIn != null ? 2 : 1);
+		init.aload(holdsValue ? 2 : 1);
 		init.invokespecial(pool.methodRef(base, "<init>", "([Ljava/lang/Object;)V"));
 		FieldRefEntry value = null;
-		if (standIn != null) {
+		if (holdsValue) {
 			value = pool.fieldRef(self, "value", "Ljava/lang/Object;");
 			definition.addField(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_FINAL, pool.utf8Entry("value"),
 					pool.utf8Entry("Ljava/lang/Object;"));
@@ -1187,26 +1274,26 @@ final class JvmJavaImplementations {
 		}
 		init.return_();
 		definition.addMethod(AccessFlag.ACC_PRIVATE, initName, initType, init);
-		// static Object of(Object[] fns) { return new Self(fns); }, or for a stand-in
+		// static Object of(Object[] fns) { return new Self(fns); }, or holding a value
 		// static Object of(Object value, Object[] fns) { return new Self(value, fns); }
 		MethodCode factory = new MethodCode();
 		factory.new_(self);
 		factory.dup();
 		factory.aload(0);
-		if (standIn != null) {
+		if (holdsValue) {
 			factory.aload(1);
 		}
 		factory.invokespecial(pool.methodRef(self, "<init>", initDesc));
 		factory.areturn();
 		definition.addMethod(AccessFlag.ACC_STATIC, pool.utf8Entry(FACTORY),
-				pool.utf8Entry(standIn != null ? STAND_IN_FACTORY_DESC : FACTORY_DESC), factory);
+				pool.utf8Entry(holdsValue ? STAND_IN_FACTORY_DESC : FACTORY_DESC), factory);
 		ClassEntry program = pool.classEntry(this.programInternalName);
 		List<JavaImplementation.Slot> slots = implementation.slots();
 		for (int i = 0; i < slots.size(); i++) {
 			writeSlot(definition, pool, fns, program, implementation, slots.get(i), shell.callbacks().get(i));
 		}
-		if (standIn != null && value != null) {
-			writeStandIn(definition, pool, value, implementation, standIn);
+		if (standIn != null) {
+			writeStandIn(definition, pool, value, fns, implementation, standIn);
 		}
 		else if (!implementation.declaresToString()) {
 			MethodCode text = new MethodCode();
@@ -1218,16 +1305,25 @@ final class JvmJavaImplementations {
 		return definition.build();
 	}
 
-	// An object standing for a value (runtime/RontoJavaValue): value() answers the field,
+	// An object standing for a value (runtime/RontoJavaValue): value() answers the field
+	// -- the one function, fns[0], of a function converted to an interface --,
 	// className() the class its form names (else its own), and equals, hashCode and
 	// toString no slot implements answer the interface's shared rules -- equal only to an
 	// object standing for the very same value, its identity hash, Object's spelling of
 	// the class -- as the interpreter's Proxy does.
-	private static void writeStandIn(ClassDefinition.Builder definition, ConstantPool pool, FieldRefEntry value,
-			JavaImplementation implementation, JavaImplementation.StandIn standIn) {
+	private static void writeStandIn(ClassDefinition.Builder definition, ConstantPool pool,
+			@Nullable FieldRefEntry value, FieldRefEntry fns, JavaImplementation implementation,
+			JavaImplementation.StandIn standIn) {
 		MethodCode read = new MethodCode();
 		read.aload(0);
-		read.getfield(value);
+		if (value != null) {
+			read.getfield(value);
+		}
+		else {
+			read.getfield(fns);
+			read.loadConstant(0);
+			read.aaload();
+		}
 		read.areturn();
 		definition.addMethod(AccessFlag.ACC_PUBLIC, pool.utf8Entry("value"), pool.utf8Entry("()Ljava/lang/Object;"),
 				read);

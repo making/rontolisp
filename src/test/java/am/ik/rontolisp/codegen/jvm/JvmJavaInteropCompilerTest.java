@@ -1332,6 +1332,16 @@ class JvmJavaInteropCompilerTest {
 			.isEqualTo(JavaImplementationPrograms.OCTETS_OUTPUT);
 	}
 
+	// Mirrors JavaInteropTest#javaCallsAFunctionThroughTheFunctionAfterThrough: the
+	// generated classes' callbacks through _jthrough$N (and _jcmp$N), the bridge's Proxy
+	// through its own callBack; a Comparator's getter unmarshals the function its
+	// stand-in holds.
+	@Test
+	void javaCallsAFunctionThroughTheFunctionAfterThrough() throws Exception {
+		assertThat(compileAndRun(JavaImplementationPrograms.THROUGH))
+			.isEqualTo(JavaImplementationPrograms.THROUGH_OUTPUT);
+	}
+
 	// Mirrors JavaInteropTest#aHandleIsItsTextToJavaAndItsValueBack:
 	// runtime/RontoJavaHandle
 	// through _jhandle, unwrapped by _junm / _jarr at a direct site and by the bridge's

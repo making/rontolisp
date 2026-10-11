@@ -119,7 +119,8 @@ class JvmLispCompilerSplitTest {
 
 	// Direct java: calls are private methods of the class, the helpers they share too,
 	// the bridge finds _apply, _jsig and _jfail by name, and a generated interface
-	// implementation calls its program-side callback from its own class: a forced split
+	// implementation calls its program-side callback from its own class, and that the
+	// helper calling a function through the function a :through names: a forced split
 	// must leave every one reachable -- what a callback raises too.
 	@Test
 	void aForcedSplitKeepsJavaCallsWorking() throws Exception {
@@ -156,12 +157,18 @@ class JvmLispCompilerSplitTest {
 				  (java:call l "add" (java:view 'v (make-array 2 :element-type '(unsigned-byte 8)) :bytes))
 				  (java:call l "forEach" (lambda (x) (setf (aref x 0) 9)) :functional :octets)
 				  (print (java:call l "get" 0 :octets)))
+				(defun via (f object args) (if object (prin1-to-string (apply f args)) (apply f args)))
+				(print (list (java:call (java:static "java.util.Optional" "empty") "orElseGet" (lambda () 5)
+				                        :functional :through #'via)
+				             (java:call (java:call (java:static "java.util.stream.IntStream" "range" 0 3) "map"
+				                                   (lambda (x) (* x 10)) :functional :through #'via)
+				                        "sum")))
 				""";
 		JvmLispCompiler whole = JvmLispCompiler.builder().className("Features").build();
 		String expected = run("Features", whole.compile(program(source)), whole.runtimeClassFiles());
 		assertThat(expected).contains("\"[1, 2]\"")
-			.endsWith(
-					"(3 4.0)\n7\n\"ba\"\n(97 98)\n1\n2\n3\n10\n\"boom 1\"\n(\"[1, 2, apple]\" APPLE |false|)\n#(9 0)");
+			.endsWith("(3 4.0)\n7\n\"ba\"\n(97 98)\n1\n2\n3\n10\n\"boom 1\"\n(\"[1, 2, apple]\" APPLE |false|)\n#(9 0)"
+					+ "\n(\"5\" 30)");
 		JvmLispCompiler split = JvmLispCompiler.builder().className("Features").classPoolLimit(3000).build();
 		byte[] splitMain = split.compile(program(source));
 		assertThat(split.runtimeClassFiles()).containsKey("Features$Part1.class");

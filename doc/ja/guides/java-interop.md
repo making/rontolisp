@@ -122,6 +122,14 @@ Java の false は Common Lisp 唯一の偽である `nil` として返ります
   (java:call l "toString"))   ; => "[1, 2, 3]"
 ```
 
+この呼び出しで `java.lang.Runnable`・`java.util.concurrent.Callable`・`java.util.Comparator` が期待される箇所に渡した関数は、Java から返るときもその関数です。Clojure の fn がこの 3 つのインターフェースそのものであるのと同じく、Java が保持するオブジェクトは関数の代理になり、インターフェースのゲッター (`TreeSet` の `comparator` など) は関数を返します。ほかのインターフェースへ変換した関数と、`:java-false` のない呼び出しで変換した関数は、関数とは別のオブジェクトのまま返ります。
+
+```lisp
+(let* ((by-value (lambda (a b) (- a b)))
+       (s (java:new "java.util.TreeSet" by-value :functional :java-false)))
+  (eq by-value (java:call s "comparator")))   ; => T
+```
+
 ### バイト列を受け取る: `:octets`
 
 Java の配列はリストとして返るので、`byte[]` は符号付きバイトのリストになります。`:octets` で終わる `java:new`・`java:call`・`java:static`・`java:field` は、`byte[]` (結果、フィールドの値、返した配列の要素) を、そのオクテットを持つ `(unsigned-byte 8)` のベクタとして返します。ほかのマーカーとの順序は問いません。このベクタは、インタプリタでもコンパイル済みプログラムでも Java の配列そのものです。そのため Java が後からこの配列へ書き込んだ値 (`ByteBuffer` の `array()` へバッファが書き込む値など) もベクタから読め、同じ配列を 2 度受け取ると 2 つは `eq` になります。Java へ `byte[]` を渡すには [`:bytes` のビュー](#views-javaview)を使います。
@@ -141,6 +149,23 @@ Java の配列はリストとして返るので、`byte[]` は符号付きバイ
             :octets)))
   (java:call in "readNBytes" 3 :octets))   ; => #(7)
 ```
+
+### 関数を別の関数経由で呼ばせる: `:through`
+
+`:through` と関数で終わる形式 (ほかのマーカーとの順序は問いません) では、形式がインターフェースへ変換する関数と、形式が作る `java:reify`・`java:proxy`・`java:subclass` の関数を、Java はすべてその関数経由で呼びます。メソッドは `(f function object arguments)` を実行します。`arguments` は関数を適用するはずだった引数のリスト (`java:proxy` の callable ならメソッド名が先頭、`java:subclass` ならオブジェクトとメソッド名が先頭) で、`object` はメソッドがオブジェクトを返す (プリミティブでも `void` でもない) とき `t`、それ以外では `nil` です。`f` の返した値がメソッドの戻り値になり、関数の戻り値と同じ規則で戻り値の型へ変換されます。そのため値の受け渡し方は `f` が決められます。たとえば Java の引数を関数に渡す前に変換し、戻り値はメソッドがオブジェクトを返すときだけ変換して、`void` のメソッドが捨てる戻り値には手を付けずにおけます。Clojure フロントエンドは、fn と `proxy` の本体をすべてこの方法で Java に渡しています。
+
+```lisp
+(defun quoted (f object args)
+  (let ((answer (apply f args)))
+    (if object (prin1-to-string answer) answer)))
+(list (java:call (java:static "java.util.Optional" "empty") "orElseGet" (lambda () :x)
+                 :functional :through #'quoted)
+      (java:call (java:call (java:static "java.util.stream.IntStream" "range" 0 3) "map"
+                            (lambda (x) (* x 10)) :functional :through #'quoted)
+                 "sum"))   ; => (":X" 30)
+```
+
+コンパイル済みプログラムは、リテラルの `#'name` が指す関数を直接呼びます。`:through` の後ろがそれ以外の形式なら、呼び出しは実行時に解決され、形式を評価した値を呼びます。
 
 ### ハンドル: java:handle
 

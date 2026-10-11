@@ -57,3 +57,8 @@ Java's own array, so what the function stores Java reads (the guide's [Octets ba
   (list (java:call o "toByteArray") (java:call o "toByteArray" :octets)))
 ; => ((-56) #(200))
 ```
+
+Ending the call in `:through` and a function, beside the other markers, has Java call a
+function the call converts through that function: `(f function object arguments)`, `object`
+`t` when the method answers an object, and the method answers what `f` answers (the guide's
+[Calling functions through another](../../guides/java-interop.md#calling-functions-through-another-through)).

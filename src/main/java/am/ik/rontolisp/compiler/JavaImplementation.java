@@ -33,9 +33,12 @@ import org.jspecify.annotations.Nullable;
  * function answers Java's {@code false} as {@code |false|}; with {@code :functional} too,
  * a function implementing {@code java.util.Comparator} may answer a boolean
  * ({@link #readsComparison}); with {@code :octets} a {@code byte[]} Java hands it -- an
- * argument, or an element of one -- is an {@code (unsigned-byte 8)} vector of its octets
- * @param standIn how a {@code java:reify} given {@code :value} stands for its value, or
- * {@code null} for an object that stands for none
+ * argument, or an element of one -- is an {@code (unsigned-byte 8)} vector of its octets;
+ * with {@code :through} Java calls each slot's function through the function it names
+ * @param standIn how a {@code java:reify} given {@code :value} stands for its value, or a
+ * function converted to {@code Runnable}, {@code Callable} or {@code Comparator} for
+ * itself ({@link #standsForItsFunction}), or {@code null} for an object that stands for
+ * none
  */
 public record JavaImplementation(boolean proxy, List<JavaType> interfaces, List<Slot> slots, @Nullable String reason,
 		@Nullable JavaType superclass, JavaMarkers markers, @Nullable StandIn standIn) {
@@ -120,8 +123,47 @@ public record JavaImplementation(boolean proxy, List<JavaType> interfaces, List<
 	 *
 	 * @param className the class its form names ({@code :class}), or {@code null} for the
 	 * object's own
+	 * @param function whether the value is the function the object calls -- a function
+	 * converted where an interface is expected ({@link #standsForItsFunction}) -- rather
+	 * than the value of a {@code :value}
 	 */
-	public record StandIn(@Nullable String className) {
+	public record StandIn(@Nullable String className, boolean function) {
+
+		/** A function converted where an interface is expected, standing for itself. */
+		public static final StandIn FUNCTION = new StandIn(null, true);
+
+		/**
+		 * A {@code java:reify} given {@code :value}.
+		 * @param className the class its form names ({@code :class}), or {@code null} for
+		 * the object's own
+		 */
+		public StandIn(@Nullable String className) {
+			this(className, false);
+		}
+
+	}
+
+	/**
+	 * The interfaces the object a function is converted to stands for the function where
+	 * the call ends in {@code :functional} and {@code :java-false}: those Clojure's
+	 * {@code AFunction} implements itself, so Java hands the fn back as the fn.
+	 */
+	public static final List<String> FUNCTION_INTERFACES = List.of("java.lang.Runnable",
+			"java.util.concurrent.Callable", JavaImplementation.COMPARATOR);
+
+	/**
+	 * Whether the object a function is converted to where the interface is expected, at a
+	 * call ending in these markers, stands for the function
+	 * ({@code runtime/RontoJavaValue}): after {@code :functional} and
+	 * {@code :java-false}, for {@code Runnable}, {@code Callable} and {@code Comparator}
+	 * ({@link #FUNCTION_INTERFACES}), which Clojure's fn is itself -- Java hands the
+	 * object back as the function, as it hands a Clojure fn back as the fn.
+	 * @param iface the interface's name
+	 * @param markers the call's markers
+	 * @return whether the object stands for the function
+	 */
+	public static boolean standsForItsFunction(String iface, JavaMarkers markers) {
+		return markers.functional() && markers.javaFalse() && FUNCTION_INTERFACES.contains(iface);
 	}
 
 	/**

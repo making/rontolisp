@@ -7986,6 +7986,15 @@ public final class LispNames {
 	public static final String JAVA_OCTETS_MARKER = ":OCTETS";
 
 	/**
+	 * The keyword a {@code java:} form may end in, beside the other markers, followed by
+	 * a function: Java calls every function the form converts to an interface, or the
+	 * implementation it makes calls, through that function -- {@code (f function object
+	 * arguments)}, {@code object} true when the method answers an object -- and takes its
+	 * answer ({@code compiler.JavaMarkers#through}).
+	 */
+	public static final String JAVA_THROUGH_MARKER = ":THROUGH";
+
+	/**
 	 * The name of the symbol {@code java:} passes as Java's {@code false} -- the
 	 * {@code boolean} false, and {@code Boolean.FALSE} where a reference is expected,
 	 * where {@code nil} is {@code null} -- and which a function called back from Java may

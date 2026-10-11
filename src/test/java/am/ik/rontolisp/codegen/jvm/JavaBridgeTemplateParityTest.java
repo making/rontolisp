@@ -680,8 +680,9 @@ class JavaBridgeTemplateParityTest {
 			List<@Nullable Object> bridge = new ArrayList<>();
 			for (Object answer : answers) {
 				direct.add(compared(jcmp.invoke(null, null, null, answer)));
-				bridge.add(compared(invoke("comparison", new Class<?>[] { Object.class, Object[].class, Object.class },
-						null, new Object[] { 1L, new Object[] { 2L, null } }, answer)));
+				bridge.add(compared(invoke("comparison",
+						new Class<?>[] { Object.class, Object[].class, Object.class, Object.class }, null,
+						new Object[] { 1L, new Object[] { 2L, null } }, answer, null)));
 			}
 			assertThat(bridge).isEqualTo(direct);
 			// the oracle's AFunction.compare: Long/BigInt.intValue (low bits), (int) of a

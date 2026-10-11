@@ -5259,8 +5259,7 @@ public final class LispEvaluator {
 			if (args.size() != 2 || !(args.get(1) instanceof LispString field)) {
 				throw new LispEvalException(jfield + " expects (java:field class-or-object \"field\")");
 			}
-			return JavaInterop.field(args.get(0), field.value(),
-					JavaInterop.withMarkers(caller, am.ik.rontolisp.compiler.JavaMarkers.of(all, 2)));
+			return JavaInterop.field(args.get(0), field.value(), JavaInterop.withMarkers(caller, all, 2));
 		}));
 		String jproxy = PackageRegistry.qualify(LispNames.JAVA_PKG, LispNames.JAVA_PROXY);
 		this.globalEnv.defineFunction(jproxy, new LispFunction(jproxy, all -> {
@@ -5278,8 +5277,7 @@ public final class LispEvaluator {
 				}
 				interfaces.add(iface.value());
 			}
-			return JavaInterop.proxy(interfaces, args.get(args.size() - 1),
-					JavaInterop.withMarkers(caller, am.ik.rontolisp.compiler.JavaMarkers.of(all, 2)));
+			return JavaInterop.proxy(interfaces, args.get(args.size() - 1), JavaInterop.withMarkers(caller, all, 2));
 		}));
 		String jreify = PackageRegistry.qualify(LispNames.JAVA_PKG, LispNames.JAVA_REIFY);
 		this.globalEnv.defineFunction(jreify, new LispFunction(jreify, args -> JavaInterop.reify(args, caller)));
@@ -5336,8 +5334,9 @@ public final class LispEvaluator {
 		if (site.markers().any()) {
 			// The arguments end in the markers the resolution set aside.
 			int first = am.ik.rontolisp.compiler.JavaSiteResolver.firstArgument(site.operator()) - 1;
+			caller = JavaInterop.withMarkers(caller, site.markers(),
+					am.ik.rontolisp.compiler.JavaMarkers.throughFunction(args, first));
 			args = args.subList(0, args.size() - am.ik.rontolisp.compiler.JavaMarkers.count(args, first));
-			caller = JavaInterop.withMarkers(caller, site.markers());
 		}
 		LispVal result = switch (site.operator()) {
 			case NEW -> JavaInterop.invokeResolved(site, null, args.subList(1, args.size()), caller);

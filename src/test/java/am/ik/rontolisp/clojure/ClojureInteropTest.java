@@ -594,6 +594,43 @@ class ClojureInteropTest {
 	}
 
 	@Test
+	void aFnsAnswerReachesJavaAsTheOraclesOwnObject() throws Exception {
+		// oracle-identical (clj 1.12.6, 2026-10-11): what a fn Java calls answers a
+		// method
+		// answering an object is the value's own object -- a map, a keyword, a vector
+		// Java
+		// hands back as a vector, a set, a ratio, a symbol, a lazy seq, a fn, an atom --
+		// whether the fn is a form, a defn or a parameter of a site left to run time; an
+		// answer a void method drops is never converted (an infinite seq is not
+		// realized); and a fn converted to a Comparator is the fn Java hands back, while
+		// one converted to another interface is not (before: "cannot return" for a map, a
+		// keyword, a set, a ratio, a symbol, a fn, an atom; a vector or a lazy seq an
+		// ArrayList copy; the comparator a host object)
+		assertBothEqual("(prn (.computeIfAbsent (java.util.HashMap.) \"a\" (fn [k] {:a 1}))"
+				+ " (.computeIfAbsent (java.util.HashMap.) \"a\" (fn [k] :kw))"
+				+ " (let [m (java.util.HashMap.)] (.computeIfAbsent m \"b\" (fn [k] [1 2])) (vector? (.get m \"b\")))"
+				+ " (let [f (fn [a b] 0)] (identical? f (.comparator (java.util.TreeSet. f)))))",
+				"{:a 1} :kw true true\n");
+		assertBothEqual("(let [o (java.util.Optional/empty)]"
+				+ " (prn (.orElseGet o (fn [] #{1})) (.orElseGet o (fn [] 1/2)) (.orElseGet o (fn [] 'abc))"
+				+ " (seq? (.orElseGet o (fn [] (map inc [1 2])))) (fn? (.orElseGet o (fn [] inc)))"
+				+ " (let [a (atom 1)] (identical? a (.orElseGet o (fn [] a))))))"
+				+ " (prn (vec (.toList (.map (.stream [1 2 3]) (fn [x] {:v x})))))"
+				+ " (defn mk [k] {:k k}) (prn (.computeIfAbsent (java.util.HashMap.) \"a\" mk))"
+				+ " (defn get-or [o f] (.orElseGet o f))"
+				+ " (prn (get-or (java.util.Optional/empty) (fn [] {:a 1})) (get-or (java.util.Optional/empty) (fn [] [:x])))"
+				+ " (.forEach [1 2] (fn [x] (iterate inc x))) (prn :void-done)",
+				"#{1} 1/2 abc true true true\n[{:v 1} {:v 2} {:v 3}]\n{:k \"a\"}\n{:a 1} [:x]\n:void-done\n");
+		assertBothEqual(
+				"(prn (let [f (fn [a b] (compare a b))] (identical? f (.comparator (java.util.PriorityQueue. 10 f))))"
+						+ " (let [f (fn [t e] nil) t (Thread. (fn []))] (.setUncaughtExceptionHandler t f)"
+						+ " (identical? f (.getUncaughtExceptionHandler t)))"
+						+ " ((.comparator (java.util.TreeSet. (fn [a b] (compare b a)))) 1 2)"
+						+ " (let [t (java.util.concurrent.FutureTask. (fn [] {:a 1}))] (.run t) (.get t)))",
+				"true false 1 {:a 1}\n");
+	}
+
+	@Test
 	void aProxyOrTypeIsHandedAByteArrayAndAnswersJavaTheOraclesObject() throws Exception {
 		// oracle-identical (clj 1.12.6, 2026-10-10): a proxy's answer reaches Java as the
 		// value's own object -- a byte array the byte[], a vector a List, a map a Map, a

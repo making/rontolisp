@@ -185,6 +185,30 @@ class JavaImplementationsTest {
 		assertThat(JavaImplementations
 			.functional(type("java.util.function.Consumer"), CLASSES, new JavaMarkers(true, false, true))
 			.markers()).isEqualTo(new JavaMarkers(true, false, true));
+		// :through and the function a literal #'name names are carried, the form's
+		// functions Java calls through it; a computed one leaves the form to run time
+		assertThat(resolve("(java:proxy \"java.util.function.Consumer\" f :through #'hook :java-false)").markers())
+			.isEqualTo(new JavaMarkers(false, true, false, "HOOK"));
+		assertThat(resolve("(java:reify \"java.util.function.Consumer\" \"accept\" f :through #'hook)").markers()
+			.through()).isEqualTo("HOOK");
+		assertThat(resolve("(java:subclass \"java.lang.Thread\" '() '(\"run\") f :through #'hook)").markers().through())
+			.isEqualTo("HOOK");
+		assertThat(resolve("(java:reify \"java.util.function.Consumer\" \"accept\" f :through hook)").reason())
+			.isEqualTo(JavaMarkers.THROUGH_COMPUTED);
+		// after :functional and :java-false a function converted to Runnable, Callable or
+		// Comparator stands for itself (Clojure's fn is all three), to any other
+		// interface,
+		// or without :java-false, it does not
+		for (String iface : JavaImplementation.FUNCTION_INTERFACES) {
+			JavaImplementation standing = JavaImplementations.functional(type(iface), CLASSES,
+					new JavaMarkers(true, true, false));
+			assertThat(standing.standIn()).as(iface).isEqualTo(JavaImplementation.StandIn.FUNCTION);
+			assertThat(JavaImplementations.functional(type(iface), CLASSES, new JavaMarkers(true, false, false))
+				.standsFor()).as(iface).isFalse();
+		}
+		assertThat(JavaImplementations
+			.functional(type("java.lang.Thread$UncaughtExceptionHandler"), CLASSES, new JavaMarkers(true, true, false))
+			.standsFor()).isFalse();
 		// only a parameter a byte[] fits, or an array of one, may be handed an octet
 		// vector
 		for (Class<?> carries : List.of(byte[].class, Object.class, Cloneable.class, java.io.Serializable.class,

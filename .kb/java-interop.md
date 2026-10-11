@@ -213,9 +213,10 @@ Package `java` (`LispNames.JAVA_PKG`, `PackageRegistry`; does NOT use `cl`): `ja
   host `ArrayList` subclass its own `isEmpty`/`get`, so a `java:subclass` of `ArrayList` whose
   `isEmpty` answers false while empty throws `index out of bounds` on the JVM (todo e74).
 
-## Markers: `:java-false`, `:octets`, a Comparator's answer (e73, 2026-10-09; f13, f24, f25, 2026-10-10)
+## Markers: `:java-false`, `:octets`, `:through`, a Comparator's answer (e73, 2026-10-09; f13, f24, f25, 2026-10-10; f33, 2026-10-11)
 - Keywords ending a form are MARKERS (`compiler/JavaMarkers`: `:functional`, `:java-false`,
-  `:octets`, any order; a keyword is never an argument a member takes): after the arguments of `java:new` /
+  `:octets`, `:through` with the function after it, any order; a keyword is never an argument
+  a member takes): after the arguments of `java:new` /
   `java:call` / `java:static`, after the field name of `java:field`, after the callable (the last
   function) of `java:proxy` / `java:subclass` / `java:reify`. `JavaSiteResolver.resolve` and
   `JavaImplementations.resolve*` set them aside (`JavaSite.markers()`,
@@ -295,6 +296,53 @@ Package `java` (`LispNames.JAVA_PKG`, `PackageRegistry`; does NOT use `cl`): `ja
   handler range); its false arm calls the function again through `_apply`. Before, measured
   2026-10-08: `cannot return T as int from java.util.Comparator.compare`; nil and a string,
   2026-10-09, `cannot return NIL as int`.
+- `:through f` (f33, 2026-10-11): every function the form converts to an interface (an argument,
+  a `java:subclass`'s constructor argument) and every function of the implementation it makes
+  is called by Java through `f` -- `(f function object arguments)`, `arguments` the list the
+  function would be applied to (a proxy's with the name first, a subclass's with `this` and
+  the name), `object` `t` when the slot's return type is no primitive and not `void` -- and the
+  slot answers what `f` answers, marshalled as a function's answer. It is the one place a
+  language learns whether its answer is read: Clojure's `%clojure-host-call` converts an answer
+  to the oracle's own object only then, so a `void` method's answer (a lazy seq, a growing
+  vector) is never realized or walked (`.kb/clojure-frontend.md`, "Java interop"). The marker
+  is VALUED: `JavaMarkers.count` / the bridge's `markerCount` take `:through` and the element
+  after it as one pair while scanning back, `of` records the name a literal `#'name` names
+  (`through()`; any other form or an evaluated value `COMPUTED`, ""), `throughFunction` answers
+  the form or value. A computed one leaves the form to run time (`JavaMarkers.THROUGH_COMPUTED`:
+  the resolver, `JavaImplementations.resolve*`), so a compiled program always knows the name.
+  Copies: interpreter `JavaInterop.callBack` (`Caller.through()`, set by `withMarkers(caller,
+  args, first)` and the evaluator's resolved path from the evaluated arguments) in
+  `ImplementationHandler` and `SubclassHandler`; the bridge's `callBack` (the value threaded
+  through `marshalArguments` ... `convert` into `functional` / `proxy` / `implementation`);
+  compiled: `JvmJavaInteropCompiler.prepareThrough` compiles `_jthrough$N(fn, object, args)`
+  -- an outlined body, the DIRECT call `(name fn object args)` -- before the form asks for a
+  shell, and `_jimpl$K` / `_jsub$K` keyed `|through=name` call it with the slot's constant
+  (`ldc "T"` or null) where they called `_apply` (`emitApply`); shells, subshells, `_jconv$N`
+  and site shapes are keyed by the name. A comparison's second call goes through `f` too, with
+  `object` nil (`_jcmp$N`, a `_jcmp` per helper; the interpreter's and the bridge's
+  `comparison`). Pins: `JavaImplementationPrograms.THROUGH` (`JavaInteropTest` /
+  `JvmJavaInteropCompilerTest#javaCallsAFunctionThroughTheFunctionAfterThrough`: resolved,
+  dispatched, run-time and computed sites, reify, proxy, subclass, a comparison's six calls),
+  `JavaSiteResolverTest#aTrailingThroughAndItsFunctionAreSetAside`,
+  `JavaImplementationsTest#theMarkersAFormEndsInAreCarriedByItsImplementation`,
+  `JvmLispCompilerSplitTest#aForcedSplitKeepsJavaCallsWorking`.
+- A function converted at a form ending in `:functional` AND `:java-false` to `Runnable`,
+  `Callable` or `Comparator` STANDS FOR ITSELF (f33; `JavaImplementation.standsForItsFunction`,
+  `FUNCTION_INTERFACES`, `StandIn.FUNCTION`): Clojure's `AFunction` is those three, so Java hands
+  it back as the function -- `(.comparator (TreeSet. f))` is `f` -- while one converted to any
+  other interface (`UncaughtExceptionHandler`) stays the oracle's adapter, an object of its own.
+  Interpreter: `implementation` adds the handler's `StandIn` of the function; bridge:
+  `functional` makes a `standIn` Proxy (only with the value class bound); compiled: the shell
+  (`|stands`) implements `RontoJavaValue`, `value()` reading `fns[0]`, factory `of(Object[])`
+  unchanged; `JvmJavaSites.makesStandIns` counts a site or subclass ending in both markers. A
+  getter answers such an object through a DECLARED interface type, which the direct sites used
+  to leave a host object: in a program making `RontoJavaValue`s, `mayHideALispValue` now
+  unmarshals every interface type (any one a face may implement) and the view superclasses
+  `AbstractCollection`/`List`/`Set`/`Map`, as the interpreter always did -- before, a face
+  coming back through a method declared to answer an interface was a host object compiled and
+  the value interpreted. The resolver still types such an answer as the interface, so a direct
+  `java:call` ON it refuses the function (both backends alike); Clojure wraps every receiver
+  first.
 - A function costs `COST_PROXY` (8) against a functional interface (one abstract method,
   Object's public methods aside: `JavaInterfaceMethods.isFunctionalInterface`, cached; the
   bridge's copy) and `COST_PROXY_NOT_FUNCTIONAL` (9) against any other, so `TreeSet(Comparator)`

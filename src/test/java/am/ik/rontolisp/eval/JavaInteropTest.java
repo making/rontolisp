@@ -719,6 +719,16 @@ class JavaInteropTest {
 		assertThat(output(JavaImplementationPrograms.OCTETS)).isEqualTo(JavaImplementationPrograms.OCTETS_OUTPUT);
 	}
 
+	// Mirrors
+	// JvmJavaInteropCompilerTest#javaCallsAFunctionThroughTheFunctionAfterThrough.
+	// Before :through (2026-10-11) a language read Java's arguments and converted its
+	// answer in an adapter of its own, which could not know whether the method answers
+	// anything, nor hand Java back the function it was given.
+	@Test
+	void javaCallsAFunctionThroughTheFunctionAfterThrough() {
+		assertThat(output(JavaImplementationPrograms.THROUGH)).isEqualTo(JavaImplementationPrograms.THROUGH_OUTPUT);
+	}
+
 	// Mirrors JvmJavaInteropCompilerTest#aHandleIsItsTextToJavaAndItsValueBack.
 	@Test
 	void aHandleIsItsTextToJavaAndItsValueBack() {

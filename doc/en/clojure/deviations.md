@@ -467,12 +467,15 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
 - A fn passed where a Java interface is expected implements every abstract method of
   any interface, each called with the method's arguments; the oracle converts a fn only
   to an interface annotated `@FunctionalInterface` (a `PropertyChangeListener` is a
-  `ClassCastException` there). Java holds an object calling the fn, so it never hands the
-  fn back as itself, where the oracle's fn is itself a `Runnable`, `Callable` and
-  `Comparator` (`(.comparator (java.util.TreeSet. f))` is `f` there). The fn's answer
-  reaches Java as the `java:` surface converts it -- a byte array as its `byte[]`, a vector
-  as an `ArrayList` copy, while a map, set, keyword or ratio is refused (`cannot return`) --
-  where a `proxy` method answering a reference hands Java the value's own object.
+  `ClassCastException` there). As in the oracle, a fn converted to a `Runnable`, `Callable`
+  or `Comparator` is the fn Java hands back (`(.comparator (java.util.TreeSet. f))` is `f`),
+  and where the method answers an object the fn's answer is the value's own object. Where
+  the method answers a primitive, the answer converts as the `java:` surface converts it,
+  where the oracle casts it: `nil` answering a `boolean` is `false` (the oracle's
+  `NullPointerException`), a ratio or a double answering an `int` is refused
+  (`cannot return`; the oracle truncates it), and a long beyond an `int` keeps its low 32
+  bits (the oracle's `integer overflow`). A fn passed where an `Object` is expected matches
+  no parameter (`No matching method`), where the oracle hands Java the fn.
 - A value passed to Java is an object of this front end's classes that Java reads as the
   oracle's own: a vector, list, lazy seq, set, map, record or sorted collection a read-only
   `java.util` `List`, `Set` or `Map` (a vector also `RandomAccess` and `Comparable`) printing

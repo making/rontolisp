@@ -234,6 +234,13 @@ final class JvmJavaDirectSites {
 	static final String COMPARISON = "_jcmp";
 
 	/**
+	 * The classes a {@code java:view} extends ({@code runtime/RontoJava*View}): a value
+	 * declared so may be one, which unmarshal answers the value of.
+	 */
+	private static final List<String> VIEW_SUPERCLASSES = List.of("java.util.AbstractCollection",
+			"java.util.AbstractList", "java.util.AbstractSet", "java.util.AbstractMap");
+
+	/**
 	 * {@code _jkind(Object)I}: a value's classification, one of the {@code KIND_} codes.
 	 */
 	static final String KIND = "_jkind";
@@ -354,6 +361,9 @@ final class JvmJavaDirectSites {
 	private final @Nullable MethodRefEntry[] arraysToList = new MethodRefEntry[ARRAYS_TO_LIST.length];
 
 	private @Nullable MethodRefEntry comparison;
+
+	/** The {@code _jcmp} variants calling the function again through a helper. */
+	private final Map<MethodRefEntry, MethodRefEntry> comparisonsThrough = new LinkedHashMap<>();
 
 	private @Nullable MethodRefEntry handle;
 
@@ -565,18 +575,26 @@ final class JvmJavaDirectSites {
 	 * {@code _jcmp}: what a function implementing {@code Comparator.compare} answered as
 	 * an {@code Integer}, or the {@code RuntimeException} the comparator throws for it,
 	 * made when first asked for. Its false arm calls the function again through
-	 * {@code _apply}.
+	 * {@code _apply} -- or, for a function Java calls through a {@code :through}'s helper
+	 * ({@code _jthrough$N}), through that helper, in a {@code _jcmp$N} of its own.
+	 * @param through the helper the function is called through, or {@code null}
 	 * @return {@code _jcmp(Object,Object,Object)Object}
 	 */
-	MethodRefEntry comparisonHelper() {
-		MethodRefEntry ref = this.comparison;
+	MethodRefEntry comparisonHelper(@Nullable MethodRefEntry through) {
+		MethodRefEntry ref = through == null ? this.comparison : this.comparisonsThrough.get(through);
 		if (ref == null) {
-			Utf8Entry name = this.cp.utf8Entry(COMPARISON);
+			Utf8Entry name = this.cp
+				.utf8Entry(through == null ? COMPARISON : COMPARISON + "$" + this.comparisonsThrough.size());
 			Utf8Entry desc = this.cp
 				.utf8Entry("(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;");
 			ref = this.cp.methodRef(this.thisClass, name, desc);
-			this.comparison = ref;
-			this.methods.add(buildComparison(name, desc));
+			if (through == null) {
+				this.comparison = ref;
+			}
+			else {
+				this.comparisonsThrough.put(through, ref);
+			}
+			this.methods.add(buildComparison(name, desc, through));
 		}
 		return ref;
 	}
@@ -921,6 +939,10 @@ final class JvmJavaDirectSites {
 		if (site.octets()) {
 			// a byte[] answers as an (unsigned-byte 8) vector (emitUnmarshal)
 			key.append("|octets");
+		}
+		if (site.markers().through() != null) {
+			// a function converted is called through the one named (Body.markers)
+			key.append("|through=").append(site.markers().through());
 		}
 		for (JavaSite.Argument argument : site.arguments()) {
 			key.append('|');
@@ -2266,9 +2288,16 @@ final class JvmJavaDirectSites {
 
 		// A supertype of a box, of String, of BigInteger or of an array, or BigInteger's
 		// subclass: a value declared so may be one of those at run time, which unmarshal
-		// turns into a Lisp value (compiler/JavaStaticType.ofDeclared's rule).
+		// turns into a Lisp value (compiler/JavaStaticType.ofDeclared's rule). In a
+		// program that makes objects standing for Lisp values (runtime/RontoJavaValue: a
+		// handle, a view, a java:reify given :value, a function converted to a Runnable,
+		// Callable or Comparator), also any interface -- such an object may implement any
+		// -- and the classes a view extends, which unmarshal answers the value of, as the
+		// interpreter's does.
 		boolean mayHideALispValue(JavaType declared) {
-			return JavaStaticType.becomesLisp(declared, JvmJavaDirectSites.this.lookup);
+			return JavaStaticType.becomesLisp(declared, JvmJavaDirectSites.this.lookup)
+					|| JvmJavaDirectSites.this.handles
+							&& (declared.isInterface() || VIEW_SUPERCLASSES.contains(declared.name()));
 		}
 
 	}
@@ -2412,7 +2441,7 @@ final class JvmJavaDirectSites {
 		JavaMarkers used = functions ? markers : JavaMarkers.NONE;
 		String key = target.name() + (functions ? " functions" : "") + (sequences ? " sequences" : "")
 				+ (used.functional() ? " functional" : "") + (used.javaFalse() ? " java-false" : "")
-				+ (used.octets() ? " octets" : "");
+				+ (used.octets() ? " octets" : "") + (used.through() != null ? " through=" + used.through() : "");
 		MethodRefEntry ref = this.converts.get(key);
 		if (ref == null) {
 			Utf8Entry name = this.cp.utf8Entry(CONVERT_PREFIX + this.converts.size());
@@ -4580,7 +4609,7 @@ final class JvmJavaDirectSites {
 	// quotient truncated -- each an Integer; nil the NullPointerException and anything
 	// else the ClassCastException AFunction.compare's cast to Number throws, which the
 	// callback throws as the comparator's own failure.
-	private Method buildComparison(Utf8Entry name, Utf8Entry desc) {
+	private Method buildComparison(Utf8Entry name, Utf8Entry desc, @Nullable MethodRefEntry through) {
 		MethodCode a = new MethodCode();
 		ClassEntry objects = cls("[Ljava/lang/Object;");
 		ClassEntry objectClass = cls("java/lang/Object");
@@ -4611,6 +4640,10 @@ final class JvmJavaDirectSites {
 		a.invokevirtual(equals);
 		a.ifeq(notFalse);
 		a.aload(0);
+		if (through != null) {
+			// compare answers no object
+			a.aconst_null();
+		}
 		// new Object[] { b, new Object[] { a, null } }, ARGS being { a, { b, null } }
 		a.loadConstant(2);
 		a.anewarray(objectClass);
@@ -4636,7 +4669,7 @@ final class JvmJavaDirectSites {
 		a.aaload();
 		a.aastore();
 		a.aastore();
-		a.invokestatic(this.cp.methodRef(this.thisClass, "_apply",
+		a.invokestatic(through != null ? through : this.cp.methodRef(this.thisClass, "_apply",
 				"(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;"));
 		a.astore(3);
 		a.aload(3);

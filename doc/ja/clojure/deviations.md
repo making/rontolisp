@@ -453,13 +453,16 @@
 - Java のインタフェースが期待される位置に渡した fn は、どのインタフェースでもその抽象
   メソッドすべてを実装し、それぞれメソッドの引数で呼ばれます。オラクルが fn を変換する
   のは `@FunctionalInterface` 注釈付きのインタフェースだけです（`PropertyChangeListener`
-  はオラクルでは `ClassCastException` になります）。Java が保持するのは fn を呼ぶオブジェクト
-  なので、Java が fn そのものを返すことはありません。オラクルの fn はそれ自体が `Runnable`・
-  `Callable`・`Comparator` です（オラクルでは `(.comparator (java.util.TreeSet. f))` が `f`
-  です）。fn の答えは `java:` サーフェスの変換で Java へ渡ります。バイト配列はその `byte[]`、
-  ベクタは `ArrayList` の複製になり、マップ・セット・キーワード・分数は拒否されます
-  （`cannot return`）。参照を返す `proxy` のメソッドなら、Java は値自身のオブジェクトを
-  受け取ります。
+  はオラクルでは `ClassCastException` になります）。オラクルと同じく、`Runnable`・
+  `Callable`・`Comparator` へ変換した fn は Java から fn そのものとして返り
+  （`(.comparator (java.util.TreeSet. f))` は `f` です）、オブジェクトを返すメソッドでは
+  fn の答えは値自身のオブジェクトになります。プリミティブを返すメソッドでは、答えは
+  `java:` サーフェスの規則で変換され、オラクルのキャストとは次の点で異なります。`boolean`
+  への `nil` は `false` になり（オラクルは `NullPointerException`）、`int` への分数や
+  浮動小数点数は拒否され（`cannot return`。オラクルは切り捨てます）、`int` の範囲を超える
+  long は下位 32 ビットになります（オラクルは `integer overflow`）。`Object` が期待される
+  位置に渡した fn はどのパラメータにも合わず（`No matching method`）、オラクルは fn
+  そのものを Java に渡します。
 - Java に渡した値は、このフロントエンドのクラスのオブジェクトで、Java からはオラクル自身の
   オブジェクトと同じように読めます。ベクタ・リスト・遅延シーケンス・セット・マップ・record・
   ソート済みコレクションは、Clojure の印字どおりに綴られる読み取り専用の `java.util` の

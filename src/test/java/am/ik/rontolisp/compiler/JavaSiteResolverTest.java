@@ -3,6 +3,7 @@ package am.ik.rontolisp.compiler;
 import java.util.List;
 
 import am.ik.rontolisp.LispCons;
+import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.reader.LispReader;
 import org.junit.jupiter.api.Test;
 
@@ -123,6 +124,32 @@ class JavaSiteResolverTest {
 		assertThat(member("(java:static \"java.lang.Boolean\" \"toString\""
 				+ " (java:call (java:new \"java.util.ArrayList\") \"isEmpty\" :java-false))"))
 			.isEqualTo("java.lang.Boolean toString(boolean)");
+	}
+
+	// :through and the function after it are no arguments, in any place among the other
+	// markers: the site resolves as without them and carries the name of the function a
+	// literal #'name names; any other function form leaves the site to run time, which
+	// calls the value it evaluates to.
+	@Test
+	void aTrailingThroughAndItsFunctionAreSetAside() {
+		for (String ending : List.of(":functional :through #'hook :java-false",
+				":through #'hook :functional :java-false", ":functional :java-false :through #'hook")) {
+			JavaSite site = resolve("(java:static \"java.util.Objects\" \"equals\" 1 2 " + ending + ")");
+			assertThat(site.resolved()).as(ending).isTrue();
+			assertThat(site.markers()).as(ending).isEqualTo(new JavaMarkers(true, true, false, "HOOK"));
+			assertThat(site.designator()).as(ending).isEqualTo("equals(java.lang.Object,java.lang.Object)");
+		}
+		JavaSite computed = resolve("(java:static \"java.util.Objects\" \"equals\" 1 2 :through hook)");
+		assertThat(computed.resolved()).isFalse();
+		assertThat(computed.reason()).isEqualTo(JavaMarkers.THROUGH_COMPUTED);
+		List<LispVal> parts = ((LispCons) LispReader.readAllFromString("(f 1 :through #'g :octets)").get(0)).toList();
+		assertThat(JavaMarkers.count(parts, 1)).isEqualTo(3);
+		assertThat(JavaMarkers.throughFunction(parts, 1)).isEqualTo(parts.get(3));
+		assertThat(JavaMarkers.of(parts, 1).throughComputed()).isFalse();
+		// a :through that ends the parts names no function: it is no marker
+		List<LispVal> bare = ((LispCons) LispReader.readAllFromString("(f 1 :through)").get(0)).toList();
+		assertThat(JavaMarkers.count(bare, 1)).isZero();
+		assertThat(JavaMarkers.throughFunction(bare, 1)).isNull();
 	}
 
 	// The quoted symbol |false| is Java's false: the boolean overload for a primitive, a

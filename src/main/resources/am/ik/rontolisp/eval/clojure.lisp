@@ -2790,33 +2790,27 @@
 
 ;; The value a java: member is handed for the Clojure value X, where the oracle
 ;; hands Java its own object: the lowering wraps each argument of a host call in
-;; this (clojure/ClojureInteropLowering.hostCall). A fn is the fn Java calls in its
-;; place (%clojure-host-fn) -- the call makes it the interface a parameter expects
-;; -- a condition itself, which java: hands over as the host exception it stands
-;; for; anything else is what %clojure-host-member makes of it.
+;; this (clojure/ClojureInteropLowering.hostCall). A fn is itself -- the call makes
+;; it the interface a parameter expects and Java calls it through
+;; %clojure-host-call -- a condition too, which java: hands over as the host
+;; exception it stands for; anything else is what %clojure-host-member makes of it.
 (defun rontolisp::%clojure-host-value (x)
-  (cond ((functionp x) (rontolisp::%clojure-host-fn x))
+  (cond ((functionp x) x)
         ((rontolisp::%clojure-lisp-instance-p x) x)
         (t (rontolisp::%clojure-host-member x))))
 
-;; The fn Java calls for the fn F, as the oracle's functional interface calls its
-;; fn: F over the arguments as Clojure values -- a byte[] a byte array, since the
-;; host call ends in :octets -- answering a byte array as its byte[]. A fn form or
-;; a defn handed to a member is wrapped the same way where the lowering sees it
-;; (clojure/ClojureInteropLowering.hostFunction).
-(defun rontolisp::%clojure-host-fn (f)
-  (lambda (&rest args) (rontolisp::%clojure-host-apply f args)))
-
-;; F applied to the arguments ARGS Java hands the fn it calls (%clojure-host-fn).
-(defun rontolisp::%clojure-host-apply (f args)
-  (rontolisp::%clojure-host-fn-answer
-   (apply f (rontolisp::%clojure-host-answer args))))
-
-;; What a fn Java calls answers it for X: a byte array the byte[] of its octets,
-;; anything else as it is -- the method may answer nothing, and a byte array is the
-;; only value whose conversion costs no walk (a collection's view realizes it).
-(defun rontolisp::%clojure-host-fn-answer (x)
-  (if (rontolisp::%clojure-bytes-p x) (java:view x (car (cdr x)) :bytes) x))
+;; How Java calls the Clojure fn F a host call converted to an interface, or a
+;; proxy's body, as the oracle's functional interface and proxy call their fn: F
+;; over the arguments ARGS as Clojure values -- a byte[] a byte array, since the
+;; form ends in :octets -- answering, when OBJECT says the method answers an object,
+;; the value's own object (%clojure-host-member: a map its Map, a keyword one Java
+;; hands back as the keyword, a byte array its byte[]), and otherwise the answer as
+;; it is: an answer a void method drops is never converted, so a lazy seq stays
+;; unrealized and no collection is walked per call. The java: :through the form
+;; ends in names it (clojure/ClojureInteropLowering.HOST_CALL).
+(defun rontolisp::%clojure-host-call (f object args)
+  (let ((answer (apply f (rontolisp::%clojure-host-answer args))))
+    (if object (rontolisp::%clojure-host-member answer) answer)))
 
 ;; The Java object the Clojure value X is, behaving as the oracle's own object: a
 ;; host call's argument (%clojure-host-value), a member of a collection crossing,
@@ -19128,12 +19122,16 @@
 ;; (String. x ...): over a byte array X its text (%clojure-string-of-bytes),
 ;; anything else the host's constructor (interpreter, JVM; wasm refuses every
 ;; java: call). CLASS is java.lang.String; ARGS the arguments after X with the
-;; markers of the call, which no String constructor reads. A program making no
-;; byte array calls java:new in its place (the family's alias).
+;; markers of the call -- the keywords, and the function after :through -- which
+;; no String constructor reads. A program making no byte array calls java:new in
+;; its place (the family's alias).
 (defun rontolisp::%clojure-string-new (class x &rest args)
   (declare (ignore class))
-  (let ((more nil))
-    (dolist (a args) (if (not (keywordp a)) (setq more (cons a more))))
+  (let ((more nil) (marker nil))
+    (dolist (a args)
+      (cond (marker (setq marker nil))
+            ((eq a :through) (setq marker t))
+            ((not (keywordp a)) (setq more (cons a more)))))
     (setq more (reverse more))
     (if (rontolisp::%clojure-bytes-p x)
         (rontolisp::%clojure-string-of-bytes x more)

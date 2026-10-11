@@ -39,3 +39,5 @@
   (list (java:call o "toByteArray") (java:call o "toByteArray" :octets)))
 ; => ((-56) #(200))
 ```
+
+ほかのマーカーと並べて `:through` と関数で終えると、呼び出しが変換する関数を、Java はその関数経由で呼びます。メソッドは `(f function object arguments)` を実行し (`object` はメソッドがオブジェクトを返すとき `t`)、`f` の返した値を返します (ガイドの[関数を別の関数経由で呼ばせる](../../guides/java-interop.md#calling-functions-through-another-through))。

@@ -18,6 +18,7 @@ import am.ik.rontolisp.compiler.CompileWarnings;
 import am.ik.rontolisp.compiler.JavaClassLookup;
 import am.ik.rontolisp.compiler.JavaImplementation;
 import am.ik.rontolisp.compiler.JavaImplementations;
+import am.ik.rontolisp.compiler.JavaMarkers;
 import am.ik.rontolisp.compiler.JavaOverloads;
 import am.ik.rontolisp.compiler.JavaSite;
 import am.ik.rontolisp.compiler.JavaSiteResolver;
@@ -256,12 +257,15 @@ final class JvmJavaSites {
 	}
 
 	/**
-	 * Whether the program may make a {@code java:reify} standing for a value -- a
+	 * Whether the program may make an object standing for a value -- a
 	 * {@code runtime/RontoJavaValue}, which the unmarshal helpers then answer the value
 	 * of, and whose class then travels with the program: a {@code java:reify} form given
-	 * {@code :value}, or {@code java:reify} anywhere but at the head of a call (a
-	 * function value, which may be applied to it). Read off the forms before they are
-	 * compiled.
+	 * {@code :value}, {@code java:reify} anywhere but at the head of a call (a function
+	 * value, which may be applied to it), or a call converting functions that ends in
+	 * {@code :functional} and {@code :java-false}, which makes a {@code Runnable},
+	 * {@code Callable} or {@code Comparator} of a function stand for it
+	 * ({@link JavaImplementation#standsForItsFunction}). Read off the forms before they
+	 * are compiled.
 	 * @param program the package-resolved top-level forms
 	 * @return whether such an object can be made
 	 */
@@ -288,6 +292,17 @@ final class JvmJavaSites {
 				&& cons.isProperList()) {
 			JavaImplementations.ReifyParts shape = JavaImplementations.reifyParts(cons.toList(), 1);
 			if (shape != null && shape.value() >= 0) {
+				return true;
+			}
+		}
+		if (cons.car() instanceof LispSymbol operator && cons.isProperList()) {
+			JavaMarkers markers = switch (operator.name()) {
+				case LispNames.JAVA_NEW_QUALIFIED -> JavaMarkers.of(cons.toList(), 2);
+				case LispNames.JAVA_CALL_QUALIFIED, LispNames.JAVA_STATIC_QUALIFIED -> JavaMarkers.of(cons.toList(), 3);
+				case LispNames.JAVA_SUBCLASS_QUALIFIED -> JavaImplementations.markers(cons.toList());
+				default -> JavaMarkers.NONE;
+			};
+			if (markers.functional() && markers.javaFalse()) {
 				return true;
 			}
 		}

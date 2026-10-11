@@ -178,6 +178,18 @@ throws, which the call reports as the method's failure:
   (java:call l "toString"))   ; => "[1, 2, 3]"
 ```
 
+At such a call a function passed where a `java.lang.Runnable`, `java.util.concurrent.Callable`
+or `java.util.Comparator` is expected is also the function Java hands back, as Clojure's fn
+is itself each of the three: the object Java holds stands for it, so a getter of the
+interface -- a `TreeSet`'s `comparator` -- answers the function. Converted to any other
+interface, or without `:java-false`, the function stays behind an object of its own:
+
+```lisp
+(let* ((by-value (lambda (a b) (- a b)))
+       (s (java:new "java.util.TreeSet" by-value :functional :java-false)))
+  (eq by-value (java:call s "comparator")))   ; => T
+```
+
 ### Octets back: `:octets`
 
 A Java array comes back as a list, so a `byte[]` is a list of signed bytes. A `java:new`,
@@ -207,6 +219,34 @@ twice is one vector:
             :octets)))
   (java:call in "readNBytes" 3 :octets))   ; => #(7)
 ```
+
+### Calling functions through another: `:through`
+
+A form ending in `:through` and a function -- among the other markers, in any order -- has
+Java call every function it converts to an interface, and every function of the
+`java:reify`, `java:proxy` or `java:subclass` it makes, through that function: the method
+runs `(f function object arguments)`, where `arguments` is the list the function would be
+applied to (a `java:proxy`'s callable's with the method's name first, a `java:subclass`'s
+with the object and the name first) and `object` is `t` when the method answers an object --
+neither a primitive nor `void` -- and `nil` otherwise. What `f` answers is the method's
+answer, converted to its return type as a function's answer is. So `f` decides how values
+cross: it may convert Java's arguments before the function sees them, and convert the
+answer only where the method answers an object, leaving alone an answer a `void` method
+drops. The Clojure front end crosses every fn and `proxy` body this way.
+
+```lisp
+(defun quoted (f object args)
+  (let ((answer (apply f args)))
+    (if object (prin1-to-string answer) answer)))
+(list (java:call (java:static "java.util.Optional" "empty") "orElseGet" (lambda () :x)
+                 :functional :through #'quoted)
+      (java:call (java:call (java:static "java.util.stream.IntStream" "range" 0 3) "map"
+                            (lambda (x) (* x 10)) :functional :through #'quoted)
+                 "sum"))   ; => (":X" 30)
+```
+
+A compiled program calls a function named by a literal `#'name` directly; any other form
+after `:through` leaves the call to run time, which calls what the form evaluates to.
 
 ### Handles: java:handle
 

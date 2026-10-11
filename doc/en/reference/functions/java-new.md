@@ -27,5 +27,7 @@ The arguments may be followed by `:functional`, which converts a function argume
 Java converts a lambda (the guide's [Callbacks via
 java:proxy](../../guides/java-interop.md#callbacks-via-javaproxy)), by `:java-false`, which hands such a function
 Java's false as `|false|` (the guide's [Java's false back](../../guides/java-interop.md#javas-false-back-java-false)),
-and by `:octets`, which hands it a `byte[]` as an `(unsigned-byte 8)` vector of its octets (the
-guide's [Octets back](../../guides/java-interop.md#octets-back-octets)).
+by `:octets`, which hands it a `byte[]` as an `(unsigned-byte 8)` vector of its octets (the
+guide's [Octets back](../../guides/java-interop.md#octets-back-octets)), and by `:through` and a
+function, through which Java calls such a function (the guide's [Calling functions through
+another](../../guides/java-interop.md#calling-functions-through-another-through)).

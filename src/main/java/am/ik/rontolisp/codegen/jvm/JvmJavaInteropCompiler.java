@@ -119,6 +119,7 @@ final class JvmJavaInteropCompiler {
 			// interpreter's rule): a resolved one makes an object of its generated class.
 			JavaImplementation implementation = sites.implementation(cons);
 			if (implementation.resolved()) {
+				prepareThrough(implementation.markers(), ctx, className);
 				if (implementation.isSubclass()) {
 					compileSubclass(implementation, args.subList(0, size), ctx, className);
 				}
@@ -135,6 +136,7 @@ final class JvmJavaInteropCompiler {
 			// (eval/JavaInterop.invokeResolved).
 			JavaSite site = sites.resolve(cons);
 			if (site.resolved()) {
+				prepareThrough(site.markers(), ctx, className);
 				compileDirect(site, args, ctx, className);
 				return;
 			}
@@ -332,6 +334,45 @@ final class JvmJavaInteropCompiler {
 		}
 		ctx.body.invokestatic(method);
 	}
+
+	/**
+	 * Compiles, the first time a resolved form names it, the method the callbacks of the
+	 * implementations it makes call their function through after {@code :through #'name}:
+	 * {@code _jthrough$N(Object function, Object object, Object arguments)}, the direct
+	 * call {@code (name function object arguments)} -- registered with the generated
+	 * implementations before the form asks for any
+	 * ({@code JvmJavaImplementations.through}).
+	 */
+	private static void prepareThrough(JavaMarkers markers, JvmLispCompiler.Ctx ctx, String className) {
+		String name = markers.through();
+		JvmJavaImplementations implementations = Objects.requireNonNull(ctx.javaSites).implementations();
+		if (name == null || name.isEmpty() || implementations.hasThrough(name)) {
+			return;
+		}
+		String methodName = THROUGH_PREFIX + ctx.outlinedBodies.size();
+		Utf8Entry nameUtf8 = ctx.cp.utf8Entry(methodName);
+		Utf8Entry descUtf8 = ctx.cp.utf8Entry(THROUGH_DESC);
+		MethodRefEntry ref = JvmEmitHelper.selfMethod(ctx, className, methodName, THROUGH_DESC);
+		JvmLispCompiler.Ctx body = ctx.ctxBuilder.build();
+		body.evalStoreRef = ctx.evalStoreRef;
+		body.nextLocal = 3;
+		body.maxLocals = 3;
+		List<LispVal> parameters = List.of(new LispSymbol("__jthrough_function$0"),
+				new LispSymbol("__jthrough_object$1"), new LispSymbol("__jthrough_arguments$2"));
+		for (int i = 0; i < parameters.size(); i++) {
+			body.locals.put(((LispSymbol) parameters.get(i)).name(), i);
+		}
+		JvmExprCompiler.compileExpr(new LispCons(new LispSymbol(name), list(parameters.toArray(new LispVal[0]))), body,
+				className);
+		body.body.areturn();
+		ctx.outlinedBodies.add(new JvmBodyOutliner.OutlinedBody(methodName, nameUtf8, descUtf8, body));
+		implementations.through(name, ref);
+	}
+
+	/** The prefix of a {@link #prepareThrough} method's name. */
+	private static final String THROUGH_PREFIX = "_jthrough$";
+
+	private static final String THROUGH_DESC = "(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;";
 
 	private static void requireArity(boolean ok, String message) {
 		if (!ok) {

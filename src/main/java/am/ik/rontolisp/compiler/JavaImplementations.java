@@ -320,6 +320,9 @@ public final class JavaImplementations {
 		List<LispVal> all = form.toList();
 		JavaMarkers markers = markers(all);
 		List<LispVal> parts = all.subList(0, all.size() - markerCount(all));
+		if (markers.throughComputed()) {
+			return unresolved(proxy, JavaMarkers.THROUGH_COMPUTED);
+		}
 		ReifyParts shape = proxy ? null : reifyParts(parts, 1);
 		if (proxy ? parts.size() < 3
 				: shape == null || parts.size() < 2 || (parts.size() - shape.firstDesignator()) % 2 != 0) {
@@ -607,10 +610,13 @@ public final class JavaImplementations {
 	/**
 	 * {@link #functional(JavaType, JavaClassLookup)} at a call ending in these markers
 	 * ({@code :functional} among them): with {@code :java-false} an argument Java hands
-	 * the function answers Java's {@code false} as {@code |false|}, and a function
+	 * the function answers Java's {@code false} as {@code |false|}, a function
 	 * implementing {@code java.util.Comparator} may answer a boolean
-	 * ({@link JavaImplementation#readsComparison}); with {@code :octets} a {@code byte[]}
-	 * Java hands it is an {@code (unsigned-byte 8)} vector.
+	 * ({@link JavaImplementation#readsComparison}), and the object stands for the
+	 * function where the interface is {@code Runnable}, {@code Callable} or
+	 * {@code Comparator} ({@link JavaImplementation#standsForItsFunction}); with
+	 * {@code :octets} a {@code byte[]} Java hands it is an {@code (unsigned-byte 8)}
+	 * vector; with {@code :through} Java calls it through the function named.
 	 * @param iface the interface
 	 * @param lookup unused; for symmetry with {@link #reify}
 	 * @param markers the call's markers
@@ -632,8 +638,10 @@ public final class JavaImplementations {
 				}
 			}
 		}
-		return new JavaImplementation(false, List.of(iface), slots, null, null,
-				new JavaMarkers(true, markers.javaFalse(), markers.octets()));
+		JavaMarkers used = new JavaMarkers(true, markers.javaFalse(), markers.octets(), markers.through());
+		JavaImplementation implementation = new JavaImplementation(false, List.of(iface), slots, null, null, used);
+		return JavaImplementation.standsForItsFunction(iface.name(), used)
+				? implementation.withStandIn(JavaImplementation.StandIn.FUNCTION) : implementation;
 	}
 
 	/**
@@ -727,6 +735,9 @@ public final class JavaImplementations {
 		List<LispVal> parts = all.subList(0, all.size() - markerCount(all));
 		if (parts.size() < 5) {
 			return subclassUnresolved("the form is malformed");
+		}
+		if (markers.throughComputed()) {
+			return subclassUnresolved(JavaMarkers.THROUGH_COMPUTED);
 		}
 		if (!(parts.get(1) instanceof LispString superName)) {
 			return subclassUnresolved("the superclass name is not a literal string");

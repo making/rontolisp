@@ -22,7 +22,7 @@
 ; => ("over!" "x" "x")
 ```
 
-callable の後ろを `:functional` で終えると、インターフェースが期待されるコンストラクタ引数の関数は、`java:proxy` としてではなくメソッドの引数だけで呼ばれる実装になります（`java:new` の `:functional` と同じです）。`:java-false` で終えると、callable に Java の false を `nil` ではなく `|false|` として渡し、`:octets` で終えると `byte[]` をそのオクテットを持つ `(unsigned-byte 8)` のベクタとして渡します。このベクタは Java の配列そのものなので、callable が格納した値は Java から読めます (ガイドの [Java の false を受け取る](../../guides/java-interop.md#javas-false-back-java-false)、[バイト列を受け取る](../../guides/java-interop.md#octets-back-octets))。
+callable の後ろを `:functional` で終えると、インターフェースが期待されるコンストラクタ引数の関数は、`java:proxy` としてではなくメソッドの引数だけで呼ばれる実装になります（`java:new` の `:functional` と同じです）。`:java-false` で終えると、callable に Java の false を `nil` ではなく `|false|` として渡し、`:octets` で終えると `byte[]` をそのオクテットを持つ `(unsigned-byte 8)` のベクタとして渡します。このベクタは Java の配列そのものなので、callable が格納した値は Java から読めます (ガイドの [Java の false を受け取る](../../guides/java-interop.md#javas-false-back-java-false)、[バイト列を受け取る](../../guides/java-interop.md#octets-back-octets))。`:through` と関数で終えると、Java は callable と関数のコンストラクタ引数をその関数経由で呼び、callable に渡す引数の先頭にはオブジェクトとメソッド名が来ます (ガイドの[関数を別の関数経由で呼ばせる](../../guides/java-interop.md#calling-functions-through-another-through))。
 
 ## コンパイル済みプログラムでは
 

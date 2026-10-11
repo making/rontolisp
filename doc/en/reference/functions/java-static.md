@@ -44,3 +44,6 @@ one to Java:
              3 :octets)
 ; => #(255 255 0)
 ```
+
+Ending it in `:through` and a function has Java call a function the call converts through
+that function (the guide's [Calling functions through another](../../guides/java-interop.md#calling-functions-through-another-through)).

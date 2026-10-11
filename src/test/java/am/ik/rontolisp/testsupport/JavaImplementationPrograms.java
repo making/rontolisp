@@ -438,6 +438,92 @@ public final class JavaImplementationPrograms {
 			((7 5) #(7 5))""";
 
 	/**
+	 * Functions Java calls through the function a form ends in after {@code :through}:
+	 * {@code (through function object arguments)}, {@code object} {@code t} where the
+	 * method answers an object -- whose answer the hook wraps -- and {@code nil} where it
+	 * answers a primitive or nothing, Java taking what the hook answers. A function
+	 * converted at a resolved site, a dispatched one (the function a parameter), one left
+	 * to run time (the receiver of no known class) and one whose {@code :through} is
+	 * computed; a {@code java:reify}, a {@code java:proxy} (handed its method's name
+	 * first) and a {@code java:subclass} (handed the object and the name); a comparison
+	 * read as {@code AFunction.compare}, its second call through the hook too (TimSort's
+	 * four comparisons of three, two of them false and called again: six). After
+	 * {@code :functional} and {@code :java-false}, a function converted to a
+	 * {@code Comparator} stands for itself -- the {@code TreeSet} hands it back as the
+	 * function, an interface's getter included -- where one converted to another
+	 * interface, or without {@code :java-false}, does not.
+	 */
+	public static final String THROUGH = """
+			(defvar *calls* nil)
+			(defvar *optional* "java.util.Optional")
+			(defun row (thunk)
+			  (handler-case (prin1 (funcall thunk)) (error (e) (princ e)))
+			  (terpri))
+			(defun through (f object args)
+			  (push object *calls*)
+			  (let ((answer (apply f args)))
+			    (if object (format nil "<~A>" answer) answer)))
+			(defun calls () (prog1 (reverse *calls*) (setq *calls* nil)))
+			(defun or-else (o f) (java:call o "orElseGet" f :functional :through #'through))
+			(defun or-else-optional (o f)
+			  (declare (type (java:object "java.util.Optional") o))
+			  (java:call o "orElseGet" f :functional :through #'through))
+			(row (lambda ()
+			       (list (java:call (java:static "java.util.Optional" "empty") "orElseGet" (lambda () 41)
+			                        :functional :through #'through)
+			             (or-else-optional (java:static "java.util.Optional" "empty") (lambda () 42))
+			             (or-else (java:static *optional* "empty") (lambda () 43))
+			             (let ((h #'through))
+			               (java:call (java:static "java.util.Optional" "empty") "orElseGet" (lambda () 44)
+			                          :functional :through h))
+			             (calls))))
+			(row (lambda ()
+			       (let ((l (java:new "java.util.ArrayList")) (seen nil))
+			         (dolist (x (list 1 2)) (java:call l "add" x))
+			         (java:call l "forEach" (lambda (x) (push x seen) :dropped) :functional :through #'through)
+			         (list (reverse seen)
+			               (java:call (java:call (java:static "java.util.stream.IntStream" "range" 0 3) "map"
+			                                     (lambda (x) (* x 10)) :functional :through #'through)
+			                          "sum")
+			               (calls)))))
+			(row (lambda ()
+			       (list (java:call (java:reify "java.util.function.Supplier" "get" (lambda () 1) :through #'through)
+			                        "get")
+			             (java:call (java:proxy "java.util.function.Function" (lambda (m x) (list m x)) :through #'through)
+			                        "apply" 5)
+			             (java:call (java:subclass "java.lang.Object" '() '("toString") (lambda (this m) (list m))
+			                          :through #'through)
+			                        "toString")
+			             (calls))))
+			(row (lambda ()
+			       (let ((l (java:new "java.util.ArrayList")))
+			         (dolist (x (list 3 1 2)) (java:call l "add" x))
+			         (java:static "java.util.Collections" "sort" l (lambda (a b) (if (> a b) t '|false|))
+			           :functional :java-false :through #'through)
+			         (list (java:call l "toString") (calls)))))
+			(row (lambda ()
+			       (let* ((f (lambda (a b) (- a b)))
+			              (ts (java:new "java.util.TreeSet" f :functional :java-false))
+			              (plain (java:new "java.util.TreeSet" f :functional))
+			              (th (java:new "java.lang.Thread" (lambda ()) :functional :java-false))
+			              (g (lambda (thread e) nil)))
+			         (java:call ts "add" 2)
+			         (java:call ts "add" 1)
+			         (java:call th "setUncaughtExceptionHandler" g :functional :java-false)
+			         (list (eq f (java:call ts "comparator")) (java:call ts "toString")
+			               (eq f (java:call plain "comparator"))
+			               (eq g (java:call th "getUncaughtExceptionHandler"))))))
+			""";
+
+	/** What {@link #THROUGH} prints. */
+	public static final String THROUGH_OUTPUT = """
+			("<41>" "<42>" "<43>" "<44>" (T T T T))
+			((1 2) 30 (NIL NIL NIL NIL NIL))
+			("<1>" "<(apply 5)>" "<(toString)>" (T T T))
+			("[3, 2, 1]" (NIL NIL NIL NIL NIL NIL))
+			(T "[1, 2]" NIL NIL)""";
+
+	/**
 	 * A declaration that a value is what a {@code java:proxy} of one interface makes,
 	 * holding a {@code java:proxy} of that interface and another: the kind is the
 	 * interface list, so the declaration lies.

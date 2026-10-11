@@ -338,6 +338,10 @@ public final class JavaSiteResolver {
 		JavaMarkers markers = JavaMarkers.of(parts, first);
 		parts = parts.subList(0, parts.size() - JavaMarkers.count(parts, first));
 		boolean javaFalse = markers.javaFalse();
+		if (markers.throughComputed()) {
+			// A compiled call names the function it calls a converted one through.
+			return JavaSite.unresolved(operator, JavaStaticType.UNKNOWN, JavaMarkers.THROUGH_COMPUTED);
+		}
 		try {
 			JavaSite resolved = switch (operator) {
 				case NEW -> resolveNew(parts, javaFalse);

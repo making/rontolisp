@@ -1855,47 +1855,51 @@ class ClojureLoweringTest {
 			.doesNotContain("(IF (JAVA:CALL");
 		assertThat(lowered("(println (.matches \"abc\" \"x\"))")).contains("\"matches\" \"x\" :JAVA-FALSE)")
 			.doesNotContain("(IF (JAVA:CALL");
-		// :functional before it when an argument may be a fn; a literal false argument
-		// is the quoted false object, which a site resolves on
-		assertThat(lowered("(defn each [l f] (.forEach l f))")).contains(
-				"\"forEach\" (RONTOLISP::%CLOJURE-HOST-VALUE (RONTOLISP::%CLOJURE-IO-HOST |c%f|)) :FUNCTIONAL :JAVA-FALSE :OCTETS)");
+		// :functional before it when an argument may be a fn, which Java calls through
+		// the
+		// host call; a literal false argument is the quoted false object, which a site
+		// resolves on
+		assertThat(lowered("(defn each [l f] (.forEach l f))"))
+			.contains("\"forEach\" (RONTOLISP::%CLOJURE-HOST-VALUE (RONTOLISP::%CLOJURE-IO-HOST |c%f|))"
+					+ " :FUNCTIONAL :JAVA-FALSE :OCTETS :THROUGH #'RONTOLISP::%CLOJURE-HOST-CALL)");
 		assertThat(lowered("(.add (java.util.ArrayList.) false)")).contains("\"add\" '|false| :JAVA-FALSE)");
 		assertThat(lowered("(java.util.ArrayList. 3)")).endsWith("(JAVA:NEW \"java.util.ArrayList\" 3 :JAVA-FALSE)");
-		// a proxy's body is handed Java's false as the false object, and a byte[] as a
-		// byte array
-		assertThat(lowered("(proxy [Runnable] [] (run [] 1))")).endsWith(":JAVA-FALSE :OCTETS)");
-		assertThat(lowered("(proxy [Thread] [] (run [] 1))")).endsWith(":JAVA-FALSE :OCTETS)");
+		// a proxy's body is handed Java's false as the false object, and Java calls it
+		// through the host call
+		assertThat(lowered("(proxy [Runnable] [] (run [] 1))"))
+			.endsWith(":JAVA-FALSE :OCTETS :THROUGH #'RONTOLISP::%CLOJURE-HOST-CALL)");
+		assertThat(lowered("(proxy [Thread] [] (run [] 1))"))
+			.endsWith(":JAVA-FALSE :OCTETS :THROUGH #'RONTOLISP::%CLOJURE-HOST-CALL)");
 	}
 
 	@Test
-	void aFnOrProxyJavaCallsReadsItsArgumentsAsClojureValues() {
-		// a fn form handed to a member reads each parameter through the host answer and
-		// answers through the fn answer in place, still a fn form the site resolves on; a
-		// defn or a local bound to a fn is applied through the host apply; the call ends
-		// in
-		// :octets, so a byte[] reaches the fn as an octet vector the host answer reads
+	void aFnOrProxyJavaCallsIsCalledThroughTheHostCall() {
+		// a fn form, a defn or a local bound to a fn is handed to a member as it is --
+		// still a fn the site resolves on -- and the call ends in :octets and :through
+		// the
+		// host call, which reads each argument Java hands it as a Clojure value (a byte[]
+		// a byte array) and answers the value's own object where the method answers one
 		assertThat(lowered("(.forEach (java.util.ArrayList.) (fn [x] x))"))
-			.contains("\"forEach\" (LAMBDA (|c%x|) " + arity("user/fn")
-					+ " (RONTOLISP::%CLOJURE-HOST-FN-ANSWER (LET ((|c%x| (RONTOLISP::%CLOJURE-HOST-ANSWER |c%x|)))"
-					+ " |c%x|))) :FUNCTIONAL :JAVA-FALSE :OCTETS)");
-		assertThat(lowered("(defn show [b] b) (.forEach (java.util.ArrayList.) show)"))
-			.contains("\"forEach\" (LAMBDA (&REST |__clojure_1|) (RONTOLISP::%CLOJURE-HOST-APPLY #'|c%show|"
-					+ " |__clojure_1|)) :FUNCTIONAL :JAVA-FALSE :OCTETS)");
+			.contains("\"forEach\" (LAMBDA (|c%x|) " + arity("user/fn") + " |c%x|) :FUNCTIONAL :JAVA-FALSE :OCTETS"
+					+ " :THROUGH #'RONTOLISP::%CLOJURE-HOST-CALL)");
+		assertThat(lowered("(defn show [b] b) (.forEach (java.util.ArrayList.) show)")).contains(
+				"\"forEach\" #'|c%show| :FUNCTIONAL :JAVA-FALSE :OCTETS :THROUGH #'RONTOLISP::%CLOJURE-HOST-CALL)");
 		assertThat(lowered("(let [g (fn [b] b)] (.forEach (java.util.ArrayList.) g))"))
-			.contains("(RONTOLISP::%CLOJURE-HOST-APPLY |c%g| ");
-		// a proxy reads its Java arguments the same way and ends in :octets; a method
-		// answering a reference answers through the host member, a void one as it is
+			.contains("\"forEach\" |c%g| :FUNCTIONAL :JAVA-FALSE :OCTETS :THROUGH #'RONTOLISP::%CLOJURE-HOST-CALL)");
+		// a proxy's body answers as it is and ends in the same markers: Java calls it
+		// through the host call, which converts an answer only where the method answers
+		// an object
 		assertThat(lowered("(proxy [java.util.function.Supplier java.lang.Runnable] [] (get [] [1]) (run [] 2))"))
-			.contains("(RONTOLISP::%CLOJURE-HOST-ANSWER (CDR ")
-			.contains("(RONTOLISP::%CLOJURE-HOST-MEMBER (APPLY (LAMBDA NIL (VECTOR 1)) ")
+			.contains("(APPLY (LAMBDA NIL (VECTOR 1)) ")
 			.contains("(APPLY (LAMBDA NIL 2) ")
-			.doesNotContain("(RONTOLISP::%CLOJURE-HOST-MEMBER (APPLY (LAMBDA NIL 2) ")
-			.endsWith(":JAVA-FALSE :OCTETS)");
+			.doesNotContain("%CLOJURE-HOST-MEMBER")
+			.doesNotContain("%CLOJURE-HOST-ANSWER")
+			.endsWith(":JAVA-FALSE :OCTETS :THROUGH #'RONTOLISP::%CLOJURE-HOST-CALL)");
 		assertThat(lowered("(proxy [java.io.InputStream] [] (read [b o l] 1) (toString [] \"s\"))"))
-			.contains("(LET ((|__clojure_1| (RONTOLISP::%CLOJURE-HOST-ANSWER |__clojure_1|)))")
-			.contains("(RONTOLISP::%CLOJURE-HOST-MEMBER (APPLY (LAMBDA (|c%this|) \"s\") ")
-			.doesNotContain("(RONTOLISP::%CLOJURE-HOST-MEMBER (APPLY (LAMBDA (|c%this| |c%b|")
-			.endsWith(":JAVA-FALSE :OCTETS)");
+			.contains("(APPLY (LAMBDA (|c%this|) \"s\") ")
+			.doesNotContain("%CLOJURE-HOST-MEMBER")
+			.doesNotContain("%CLOJURE-HOST-ANSWER")
+			.endsWith(":JAVA-FALSE :OCTETS :THROUGH #'RONTOLISP::%CLOJURE-HOST-CALL)");
 		// where the host is not (wasm) none of it: a java: form is a call-time error
 		String wasm = Clojure
 			.read("(.forEach (java.util.ArrayList.) (fn [x] x)) (proxy [java.lang.Runnable] [] (run [] 1))", null, null,
@@ -1903,9 +1907,7 @@ class ClojureLoweringTest {
 			.stream()
 			.map(LispVal::print)
 			.collect(Collectors.joining("\n"));
-		assertThat(wasm).doesNotContain("%CLOJURE-HOST-FN-ANSWER")
-			.doesNotContain("%CLOJURE-HOST-ANSWER")
-			.doesNotContain(":OCTETS");
+		assertThat(wasm).doesNotContain("%CLOJURE-HOST-CALL").doesNotContain(":THROUGH").doesNotContain(":OCTETS");
 	}
 
 	@Test
@@ -1913,8 +1915,9 @@ class ClojureLoweringTest {
 		// a parameter, a keyword or a call may hold a keyword, a symbol, a set or a
 		// record: the library function hands Java a value of it, behind the io family's
 		// view of a clojure.java.io value
-		assertThat(lowered("(defn put [m k] (.put m k 1))")).contains(
-				"\"put\" (RONTOLISP::%CLOJURE-HOST-VALUE (RONTOLISP::%CLOJURE-IO-HOST |c%k|)) 1 :FUNCTIONAL :JAVA-FALSE :OCTETS)");
+		assertThat(lowered("(defn put [m k] (.put m k 1))"))
+			.contains("\"put\" (RONTOLISP::%CLOJURE-HOST-VALUE (RONTOLISP::%CLOJURE-IO-HOST |c%k|)) 1"
+					+ " :FUNCTIONAL :JAVA-FALSE :OCTETS :THROUGH #'RONTOLISP::%CLOJURE-HOST-CALL)");
 		assertThat(lowered("(java.util.HashSet. #{1})"))
 			.contains("(JAVA:NEW \"java.util.HashSet\" (RONTOLISP::%CLOJURE-HOST-VALUE ");
 		assertThat(lowered("(.add (java.util.ArrayList.) :a)")).contains("\"add\" (RONTOLISP::%CLOJURE-HOST-VALUE ");
@@ -1927,7 +1930,7 @@ class ClojureLoweringTest {
 			.contains("\"add\" (JAVA:NEW \"java.util.ArrayList\" :JAVA-FALSE)")
 			.doesNotContain("%CLOJURE-HOST-VALUE");
 		assertThat(lowered("(let [l (java.util.ArrayList.)] (.add (java.util.ArrayList.) l))"))
-			.contains("\"add\" |c%l| :FUNCTIONAL :JAVA-FALSE :OCTETS)")
+			.contains("\"add\" |c%l| :FUNCTIONAL :JAVA-FALSE :OCTETS :THROUGH #'RONTOLISP::%CLOJURE-HOST-CALL)")
 			.doesNotContain("%CLOJURE-HOST-VALUE");
 		// a local the binding shadows is no longer the construction
 		assertThat(lowered("(let [l (java.util.ArrayList.)] (fn [l] (.add (java.util.ArrayList.) l)))"))

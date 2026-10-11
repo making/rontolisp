@@ -46,6 +46,10 @@ the callable Java's false as `|false|` rather than `nil` (the guide's [Java's fa
 back](../../guides/java-interop.md#javas-false-back-java-false)), and in `:octets` a `byte[]`
 as an `(unsigned-byte 8)` vector of its octets -- Java's own array, so what the callable
 stores Java reads (the guide's [Octets back](../../guides/java-interop.md#octets-back-octets)).
+Ending it in `:through` and a function has Java call the callable, and a function
+constructor argument, through that function, the object and the method's name first among
+the callable's arguments (the guide's [Calling functions through
+another](../../guides/java-interop.md#calling-functions-through-another-through)).
 
 ## In a compiled program
 

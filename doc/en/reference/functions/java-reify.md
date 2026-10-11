@@ -114,6 +114,9 @@ back](../../guides/java-interop.md#javas-false-back-java-false)):
 Ending it in `:octets` hands a function a `byte[]` -- an argument, or an element of one -- as
 an `(unsigned-byte 8)` vector of its octets -- Java's own array, so what the function stores
 Java reads (the guide's [Octets back](../../guides/java-interop.md#octets-back-octets)).
+Ending it in `:through` and a function has Java call each function through that function,
+`(f function object arguments)`, and answer what it answers (the guide's [Calling functions
+through another](../../guides/java-interop.md#calling-functions-through-another-through)).
 
 ## In a compiled program
 
