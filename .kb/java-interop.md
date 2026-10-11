@@ -418,7 +418,8 @@ Package `java` (`LispNames.JAVA_PKG`, `PackageRegistry`; does NOT use `cl`): `ja
   Predictions: `makesStandIns` and `needsApply` count such a form, `callsBack` does not (its
   class calls the function, no `$JavaCalls`). Rejected: a `:value` `java:reify` of the three
   in `clojure.lisp` (a second shell beside the call sites', the interfaces and class name
-  restated in Lisp, and the bridge's `:value` reify reads no comparison) and a function
+  restated in Lisp, and the bridge's `:value` reify read no comparison, 2026-10-11:
+  `.todo/f52`) and a function
   flavour of `RontoJavaHandle` over `RontoJavaCalls` (a fourth copy of the comparison reading
   and of the through call). Observed 2026-10-11 on the clj fixtures (JVM class, before ->
   after): `(.put m "a" [1 2])` on a var receiver (every site at run time) 728,056 ->
