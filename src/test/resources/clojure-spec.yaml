@@ -6048,6 +6048,41 @@ cases:
       "Look-behind group does not have an obvious maximum length near index 10\n(?<=(?:ab)+)c\n          ^" "Illegal repetition near index 2\na{" "Unknown inline modifier near index 2\n(?q)\n  ^" "Illegal character range near index 3\n[z-a]\n   ^"
       ("ab" "ab" "abbb") ["aa1" "a"] ("abc") ("ab" "cd") ":alpha"
       ("a" "b" "c") ("" "") "\r\n" "A\n" "!"
+  - name: a-regex-reads-unicode-properties
+    # \p and \P resolve as Pattern's family does -- categories, scripts,
+    # blocks, binary properties, the POSIX and java names, name=value -- over
+    # tables generated from the JDK; (?U) makes \w \d \s \b and the POSIX
+    # names Unicode's; \b counts a non-spacing mark after a letter as part of
+    # its word; a pattern made at run time reads them too. The oracle's lines
+    # (clj 1.12.6, 2026-10-11).
+    source: |
+      (defn regex-uni-pse [s] (try (re-pattern s) (catch java.util.regex.PatternSyntaxException e (ex-message e))))
+      (prn (re-seq #"\p{L}+" "héllo wörld 42") (re-seq #"\pL+" "ab1") (re-seq #"\p{Lu}" "Hello World") (re-find #"\P{L}+" "abc123def") (re-seq #"\p{IsGreek}+" "abc αβγ δ"))
+      (prn (re-seq #"\p{InBasicLatin}+" "aé b") (re-seq #"\p{sc=Han}" "日本語abc") (re-seq #"[\p{Lu}\d]+" "aB3cD") (re-seq #"\p{Punct}" "a,b.«c»!") (re-seq #"(?i)\p{Lu}+" "abc DEF"))
+      (prn (re-seq #"\p{javaLowerCase}+" "aBcd") (re-seq #"\p{IsAlphabetic}+" "a1Ⅻb") (re-seq #"\p{IsEmoji}" "a😀b") (re-seq #"[\p{L}&&[^\p{IsLatin}]]+" "abΣσ日c") (re-seq #"\p{block=Greek}+" "aαb"))
+      (prn (re-find #"(?U)\w+" "日本語!") (re-seq #"(?U)\d" "4٤") (re-seq #"\d" "4٤") (re-seq #"(?U)\s" "a b\u00a0c\u2003d") (re-seq #"(?U)\p{Alpha}+" "aé1"))
+      (prn (re-seq #"(?U)\b\w+\b" "été café") (re-seq #"\b\w+\b" "e\u0301te\u0301") (re-seq #"\b\w+\b" "été") (re-seq #"\b" "a\u0301 b"))
+      (prn (regex-uni-pse "\\p{Foo}") (regex-uni-pse "\\p{sc=Foo}") (regex-uni-pse "\\p{L") (regex-uni-pse "\\p{}"))
+      (prn (clojure.string/replace "a1b٢" #"\p{Nd}" "#") (clojure.string/split "a b\u00a0c" #"\p{Zs}") (re-find (re-pattern (str "\\p{" "Lu" "}+")) "abCDe") (re-find (read-string "#\"\\p{Ll}+\"") "ABcdE"))
+    expected: |
+      ("héllo" "wörld") ("ab") ("H" "W") "123" ("αβγ" "δ")
+      ("a" " b") ("日" "本" "語") ("B3" "D") ("," "." "!") ("abc" "DEF")
+      ("a" "cd") ("a" "Ⅻb") ("😀") ("Σσ日") ("α")
+      "日本語" ("4" "٤") ("4") (" " " " " ") ("aé")
+      ("été" "café") nil ("t") ("" "" "" "")
+      "Unknown character property name {Foo} near index 6\n\\p{Foo}\n      ^" "Unknown Unicode property {name=<sc>, value=<Foo>} near index 9\n\\p{sc=Foo}\n         ^" "Unclosed character family near index 4\n\\p{L" "Empty character family near index 3\n\\p{}\n   ^"
+      "a#b#" ["a" "b" "c"] "CD" "cd"
+  - name: backslash-g-holds-where-the-last-match-ended
+    # \G holds where the matcher's last match ended (its start before any, the
+    # start a find(int) gives), so re-seq, replace and split stop at the first
+    # gap; a failed find keeps the end it holds at. The oracle's lines (clj
+    # 1.12.6, 2026-10-11).
+    source: |
+      (prn (re-seq #"\G\d" "12a3") (re-seq #"\G" "ab") (clojure.string/replace "aaba" #"\Ga" "x") (clojure.string/split "1,2,,3" #"\G\d,?"))
+      (let [m (re-matcher #"\G\w" "ab c")] (prn (re-find m) (re-find m) (re-find m) (.lookingAt m) (re-find m) (.find m 3) (.group m)))
+    expected: |
+      ("1" "2") ("") "xxba" ["" "" ",3"]
+      "a" "b" nil false nil true "c"
   - name: def-after-defn-memoize-captures-function
     # (def p (memoize p)) after a (defn p ...) captures the function cell: the
     # value lowers against the OLD FUNCTION binding (#'c%p), not the

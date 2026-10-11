@@ -184,7 +184,13 @@ final class ClojureStringLowering {
 		return switch (name) {
 			case "re-pattern" -> {
 				ClojureLowerUtil.isTrue(n == 1, "re-pattern takes a pattern or a string");
-				yield ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-RE-PATTERN"), ctx.lower(items.get(1)));
+				// a literal source is parsed as a regex literal's is, so only the
+				// families
+				// its text may need are made
+				if (items.get(1) instanceof LispString source) {
+					yield ClojureLowerUtil.list(new LispSymbol(reCompiler(source.value())), source);
+				}
+				yield ClojureLowerUtil.list(new LispSymbol(RE_PATTERN), ctx.lower(items.get(1)));
 			}
 			// re-matcher and re-find take a CharSequence type as it is: the runtime reads
 			// it only as far as a match needs (clojure.lisp, the lazy matcher), where
@@ -744,6 +750,48 @@ final class ClojureStringLowering {
 	 * ({@link ClojureArms.Family#MATCHER}).
 	 */
 	static final String MATCHER_VALUE_P = "RONTOLISP::%CLOJURE-MATCHER-VALUE-P";
+
+	/** The run-time parse of a pattern's source ({@code clojure.lisp}). */
+	static final String RE_COMPILE = "RONTOLISP::%CLOJURE-RE-COMPILE";
+
+	/**
+	 * The parse of a regex literal naming a Unicode property or the {@code U} flag: the
+	 * producer of the families whose arms read the Unicode tables
+	 * ({@link ClojureArms.Family#REGEX_UNICODE},
+	 * {@link ClojureArms.Family#REGEX_CATEGORY}).
+	 */
+	static final String RE_COMPILE_UNICODE = "RONTOLISP::%CLOJURE-RE-COMPILE-UNICODE";
+
+	/**
+	 * The parse of a regex literal naming a word boundary, which reads the general
+	 * category of a non-spacing mark: the producer of
+	 * {@link ClojureArms.Family#REGEX_CATEGORY}.
+	 */
+	static final String RE_COMPILE_BOUND = "RONTOLISP::%CLOJURE-RE-COMPILE-BOUND";
+
+	/** {@code re-pattern} of a computed value: a pattern whose source is unknown here. */
+	static final String RE_PATTERN = "RONTOLISP::%CLOJURE-RE-PATTERN";
+
+	/**
+	 * The run-time parse a pattern source known while lowering calls: the one making the
+	 * Unicode families where the source may name a property or the {@code U} flag (a
+	 * backslash before {@code p} or {@code P}; an open group's question mark and a
+	 * {@code U}), the one making the category family where it may name a word boundary (a
+	 * backslash before {@code b} or {@code B}), else the plain one. A test may say yes
+	 * where the parse needs neither (inside a quote, after an escaped backslash): that
+	 * costs the tables, never an answer.
+	 * @param source the pattern's source
+	 * @return the parse function's name
+	 */
+	static String reCompiler(String source) {
+		if (source.contains("\\p") || source.contains("\\P") || source.contains("(?") && source.indexOf('U') >= 0) {
+			return RE_COMPILE_UNICODE;
+		}
+		if (source.contains("\\b") || source.contains("\\B")) {
+			return RE_COMPILE_BOUND;
+		}
+		return RE_COMPILE;
+	}
 
 	/**
 	 * Whether the lowered value is regex state (a pattern or a matcher): opaque to every

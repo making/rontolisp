@@ -2912,7 +2912,11 @@ class ClojureLoweringTest {
 		assertThat(lowered("(re-seq #\"a\" \"a\")")).contains("RONTOLISP::%CLOJURE-RE-SEQ");
 		assertThat(lowered("(re-matches #\"a\" \"a\")")).contains("RONTOLISP::%CLOJURE-RE-MATCHES");
 		assertThat(lowered("(re-groups (re-matcher #\"a\" \"a\"))")).contains("RONTOLISP::%CLOJURE-RE-GROUPS");
-		assertThat(lowered("(re-pattern \"a\")")).contains("RONTOLISP::%CLOJURE-RE-PATTERN");
+		// a literal source parses as a regex literal's; a computed one at run time
+		assertThat(lowered("(re-pattern \"a\")")).contains("(RONTOLISP::%CLOJURE-RE-COMPILE \"a\")");
+		assertThat(lowered("(re-pattern \"\\\\pL\")")).contains("(RONTOLISP::%CLOJURE-RE-COMPILE-UNICODE \"\\\\pL\")");
+		assertThat(lowered("(defn f [s] (re-pattern s))")).contains("(RONTOLISP::%CLOJURE-RE-PATTERN ");
+		assertThat(lowered("(re-find #\"\\ba\" \"a\")")).contains("(RONTOLISP::%CLOJURE-RE-COMPILE-BOUND ");
 		assertThat(lowered("(map re-find [(re-matcher #\"a\" \"a\")])")).contains("RONTOLISP::%CLOJURE-RE-FIND-M");
 		assertThat(lowered("(quote #\"a\")")).contains("RONTOLISP::%CLOJURE-RE-COMPILE");
 		assertThatThrownBy(() -> Clojure.read("(re-find #\"a\" \"a\" \"a\")", null))

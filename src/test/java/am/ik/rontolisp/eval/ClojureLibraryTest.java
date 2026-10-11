@@ -274,6 +274,36 @@ class ClojureLibraryTest {
 	}
 
 	@Test
+	void aProgramWhosePatternsNameNoUnicodePropertySplicesTheRegexEngineWithoutItsTables() {
+		// the parser resolves a property and the matcher tests one only where a pattern
+		// may name one: a literal naming \p, \P or U, or a pattern made from a string
+		// at run time; \b reads the general category of a mark only where a literal names
+		// a word boundary or a property may be named
+		String parse = "RONTOLISP::%CLOJURE-RP-PROPERTY";
+		String test = "RONTOLISP::%CLOJURE-RE-ITEM-TEST";
+		String bound = "RONTOLISP::%CLOJURE-RE-BOUND-WORD-P";
+		assertThat(defun(ClojureLibrary.forms(), parse)).contains("(RONTOLISP::%CLOJURE-RE-UNICODE-P ST)");
+		assertThat(defun(ClojureLibrary.forms(), test)).contains("(RONTOLISP::%CLOJURE-RE-UNI-ITEM-P ITEM)");
+		assertThat(defun(ClojureLibrary.forms(), bound)).contains("(RONTOLISP::%CLOJURE-RE-CAT-WORD-P S I UNICODE)");
+		List<LispVal> plain = ClojureLibrary
+			.process(Clojure.read("(println (re-find #\"a+\" \"caab\") (re-pattern \"x\"))", null));
+		assertThat(defun(plain, parse)).doesNotContain("UNICODE-P").doesNotContain("FAMILY");
+		assertThat(defun(plain, test)).doesNotContain("UNI-ITEM");
+		assertThat(defun(plain, bound)).doesNotContain("CAT-WORD");
+		List<LispVal> wordBound = ClojureLibrary.process(Clojure.read("(println (re-find #\"\\ba\" \"a\"))", null));
+		assertThat(defun(wordBound, parse)).doesNotContain("FAMILY");
+		assertThat(defun(wordBound, bound)).contains("CAT-WORD");
+		for (String source : List.of("(println (re-find #\"\\p{L}\" \"a\"))", "(println (re-find #\"(?U)\\w\" \"a\"))",
+				"(println (re-pattern \"\\\\pL\"))", "(defn f [s] (re-pattern s)) (println (f \"a\"))",
+				"(println (read-string \"#\\\"a\\\"\"))")) {
+			List<LispVal> unicode = ClojureLibrary.process(Clojure.read(source, null));
+			assertThat(defun(unicode, parse)).as(source).contains("FAMILY");
+			assertThat(defun(unicode, test)).as(source).contains("UNI-ITEM");
+			assertThat(defun(unicode, bound)).as(source).contains("CAT-WORD");
+		}
+	}
+
+	@Test
 	void aProgramMakingNoDelaySplicesDerefAndThePrinterWithoutTheirDelayArms() {
 		// only delay makes a delay: a program naming it keeps deref's and the printer's
 		// delay arms, any other derefs and prints as before delays, and its force and

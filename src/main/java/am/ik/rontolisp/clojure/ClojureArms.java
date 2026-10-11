@@ -168,6 +168,27 @@ public final class ClojureArms {
 		return Set.copyOf(out);
 	}
 
+	/**
+	 * What makes a pattern that may name a Unicode property or the {@code U} flag: a
+	 * literal whose source may, and every parse of a string the program computes or
+	 * reads.
+	 */
+	private static Set<String> regexUnicodeProducers() {
+		return Set.of(ClojureStringLowering.RE_COMPILE_UNICODE, ClojureStringLowering.RE_PATTERN,
+				"RONTOLISP::%CLOJURE-LISPREADER-REGEX", "RONTOLISP::%CLOJURE-READ", "RONTOLISP::%CLOJURE-READ-V",
+				"RONTOLISP::%CLOJURE-READ-OPTS", "RONTOLISP::%CLOJURE-READ-FROM", "RONTOLISP::%CLOJURE-READ-STRING",
+				"RONTOLISP::%CLOJURE-READ-STRING-V", "RONTOLISP::%CLOJURE-READ-STRING-OPTS");
+	}
+
+	/**
+	 * What makes a pattern whose word boundary may meet a mark: those and a literal's.
+	 */
+	private static Set<String> regexCategoryProducers() {
+		Set<String> out = new HashSet<>(regexUnicodeProducers());
+		out.add(ClojureStringLowering.RE_COMPILE_BOUND);
+		return Set.copyOf(out);
+	}
+
 	private static Set<String> streamProducers() {
 		Set<String> out = new HashSet<>(Set.of("RONTOLISP::%CLOJURE-OUT", "RONTOLISP::%CLOJURE-IN",
 				"RONTOLISP::%CLOJURE-ERR", "RONTOLISP::%CLOJURE-STRING-WRITER", "RONTOLISP::%CLOJURE-STRING-READER",
@@ -598,6 +619,29 @@ public final class ClojureArms {
 		 */
 		MATCHER("matcher", Set.of(ClojureStringLowering.MATCHER_VALUE_P), Set.of(), Map.of(),
 				Set.of("RONTOLISP::%CLOJURE-RE-MATCHER"), Set.of()),
+
+		/**
+		 * A pattern naming a Unicode property ({@code \p}, {@code \P}) or the {@code U}
+		 * flag, whose classes and word boundary the regex engine reads from the Unicode
+		 * tables ({@code clojure-unicode.lisp}): the parser's arms resolve such a name
+		 * (refused as before without them) and the matcher's arm tests such an item. Only
+		 * a regex literal (or a {@code re-pattern} of a literal string) whose source may
+		 * name one ({@link ClojureStringLowering#reCompiler}) makes one -- and every
+		 * pattern made from a string while the program runs: {@code re-pattern} of a
+		 * computed value, a read of {@code #"..."}, the reader's regex macro.
+		 */
+		REGEX_UNICODE("regex-unicode", Set.of("RONTOLISP::%CLOJURE-RE-UNICODE-P", "RONTOLISP::%CLOJURE-RE-UNI-ITEM-P"),
+				Set.of(), Map.of(), regexUnicodeProducers(), Set.of()),
+
+		/**
+		 * A pattern whose word boundary reads the general category of the characters
+		 * beside it past ASCII (a non-spacing mark after a letter or digit is a word
+		 * character; under {@code U} Unicode's word characters): the arm of {@code \b}
+		 * and {@code \B}'s test. A regex literal whose source may name a word boundary
+		 * makes one, and whatever makes a {@link #REGEX_UNICODE} pattern.
+		 */
+		REGEX_CATEGORY("regex-category", Set.of("RONTOLISP::%CLOJURE-RE-CAT-WORD-P"), Set.of(), Map.of(),
+				regexCategoryProducers(), Set.of()),
 
 		/**
 		 * A record, deftype or reify whose type has its own row of

@@ -19,30 +19,39 @@ The syntax is `java.util.regex`'s: escapes and classes (unions `[a[bc]]`,
 intersections `[a-z&&[^aeiou]]`, `\h` `\v` `\R`, `\x{h...h}`), groups (capturing,
 `(?:...)`, named `(?<name>...)` with `\k<name>`, atomic `(?>...)`), lookahead `(?=...)`
 `(?!...)` and lookbehind `(?<=...)` `(?<!...)` (with a maximum length, as the oracle
-requires), back references, greedy, reluctant and possessive quantifiers, and the inline
-flags `i` `m` `s` `x` `d` `u` -- `(?i)` holds to the end of the enclosing group,
-`(?i:...)` inside it, `(?-i)` turns one off. A malformed pattern is the oracle's
-`PatternSyntaxException` with its message. `clojure.string/split`, `replace` and
-`replace-first` take patterns too (plain strings stay literal); a string replacement
-expands `$n` and `${name}` as `Matcher.appendReplacement` does (`re-quote-replacement`
-quotes them), a function applies to the match through `str`.
+requires), back references, greedy, reluctant and possessive quantifiers, `\G` (where the
+matcher's last match ended), and the inline flags `i` `m` `s` `x` `d` `u` `U` -- `(?i)`
+holds to the end of the enclosing group, `(?i:...)` inside it, `(?-i)` turns one off. A
+malformed pattern is the oracle's `PatternSyntaxException` with its message.
+`clojure.string/split`, `replace` and `replace-first` take patterns too (plain strings stay
+literal); a string replacement expands `$n` and `${name}` as `Matcher.appendReplacement`
+does (`re-quote-replacement` quotes them), a function applies to the match through `str`.
 
-What the engine cannot match signals `unsupported regex`: `\p{...}` and `\P{...}`,
-`\N{...}`, `\X`, `\b{g}`, `\G`, `\d` `\s` `\w` `\b` under `(?U)`, and a character class
-under `(?c)`.
+Unicode properties are the oracle's: `\p{...}` and `\P{...}` name a general category
+(`\p{L}`, `\pL`, `\p{Lu}`, `\p{gc=Nd}`), a script (`\p{IsGreek}`, `\p{sc=Han}`), a block
+(`\p{InBasicLatin}`, `\p{block=Greek}`), a binary property (`\p{IsAlphabetic}`,
+`\p{IsEmoji}`), a POSIX class (`\p{Alpha}`, ASCII unless `(?U)`) or a `Character` method
+(`\p{javaLowerCase}`), taken from the JDK's Unicode tables; under `(?U)` `\w` `\d` `\s` `\b`
+are Unicode's too, and `\b` takes a non-spacing mark after a letter or digit as part of its
+word. A program carries the tables only when one of its patterns may name a property, the `U`
+flag or a word boundary, or is built from a string at run time.
+
+What the engine cannot match signals `unsupported regex`: `\N{...}`, `\X`, `\b{g}`, and a
+character class or property under `(?c)`.
 
 Deviations: the reader keeps backslashes verbatim, like the oracle (`#"\\d"` reads a
 literal backslash followed by `d`, so classes spell with single backslashes); an unknown
 ASCII-letter escape, a short or non-hex `\u`/`\x`, a `\0` with no octal digit behind it and
 a lone `\E` are read-time refusals, any other malformed pattern is refused where it is
 compiled; `re-seq` answers a strict list (the oracle's lazy prints the same); indices count
-code points, not UTF-16 units; a non-spacing mark after a letter is no word character for
-`\b`; a replacement function renders through `str`, so `nil` answers `""` where the oracle
-throws.
+code points, not UTF-16 units; a replacement function renders through `str`, so `nil`
+answers `""` where the oracle throws.
 
 ```clojure
 (println (re-find #"\d+" "abc123"))  ; 123
 (println (re-seq #"(?<=\$)\d+" "$10 20 $30"))  ; (10 30)
 (println (re-find #"(?i)hello" "Say HELLO"))  ; HELLO
+(println (re-seq #"\p{L}+" "héllo wörld 42"))  ; (héllo wörld)
+(println (re-seq #"\G\d" "12a3"))  ; (1 2)
 (println (clojure.string/replace "2026-10" #"(?<y>\d+)-(?<m>\d+)" "${m}/${y}"))  ; 10/2026
 ```

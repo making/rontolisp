@@ -101,6 +101,21 @@ class ClojureRegexTest {
 			  (handler-case
 			      (list 0 (regex-lazy-anchored re in seed nil) (regex-lazy-anchored re in seed t))
 			    (error (c) (list (if (rontolisp::%clojure-refusal-p c) 1 2) (princ-to-string c)))))
+			(defvar rontolisp::%clojure-false '|false|)
+			(defun regex-ops (re in ops)
+			  (let ((m (rontolisp::%clojure-re-fresh-matcher (rontolisp::%clojure-re-compile re) in))
+			        (acc nil))
+			    (dolist (op ops (reverse acc))
+			      (setq acc
+			            (cons (handler-case
+			                      (if (eq t (cond ((= op -3) (rontolisp::%clojure-matcher-find m))
+			                                      ((= op -2) (rontolisp::%clojure-matcher-looking-at m))
+			                                      ((= op -1) (rontolisp::%clojure-matcher-matches m))
+			                                      (t (rontolisp::%clojure-matcher-find-from m op))))
+			                          (list (rontolisp::%clojure-matcher-start m 0) (rontolisp::%clojure-matcher-end m 0))
+			                          nil)
+			                    (error (c) (declare (ignore c)) "oob"))
+			                  acc)))))
 			(rontolisp::%clojure-char-sequence-row 'regex-probe-cs '("java.lang.CharSequence")
 			  (list "length" (lambda (x) (length (car (cdr (cdr x)))))
 			        "charAt" (lambda (x i) (char (car (cdr (cdr x))) i))))
@@ -222,23 +237,144 @@ class ClojureRegexTest {
 
 	@Test
 	void whatNoBackendMatchesIsRefusedAsAnUnsupportedRegex() {
-		List<Case> cases = List.of(c("\\p{L}", "a"), c("[\\P{L}]", "a"), c("a\\p{L}", "a"),
-				c("\\N{LATIN SMALL LETTER A}", "a"), c("\\X", "a"), c("\\b{g}", "a"), c("\\G", "a"), c("(?U)\\w", "a"),
-				c("(?U)\\b", "a"), c("(?c)[a]", "a"));
-		assertThat(runtime(cases)).isEqualTo(List.of("(2 \"unsupported regex: \\\\p is not supported\")",
-				"(2 \"unsupported regex: \\\\p is not supported\")",
-				"(2 \"unsupported regex: \\\\p is not supported\")",
-				"(2 \"unsupported regex: \\\\N{...} is not supported\")",
+		// a name the oracle looks up in Unicode's name list, the grapheme clusters, a
+		// class
+		// or a property matched against the input's NFC normalization
+		List<Case> cases = List.of(c("\\N{LATIN SMALL LETTER A}", "a"), c("\\X", "a"), c("\\b{g}", "a"),
+				c("(?c)[a]", "a"), c("(?c)\\p{L}", "a"));
+		assertThat(runtime(cases)).isEqualTo(List.of("(2 \"unsupported regex: \\\\N{...} is not supported\")",
 				"(2 \"unsupported regex: \\\\X is not supported\")",
 				"(2 \"unsupported regex: \\\\b{g} is not supported\")",
-				"(2 \"unsupported regex: \\\\G is not supported\")",
-				"(2 \"unsupported regex: \\\\d \\\\s \\\\w under (?U) are not supported\")",
-				"(2 \"unsupported regex: \\\\b under (?U) is not supported\")",
+				"(2 \"unsupported regex: a character class under (?c) is not supported\")",
 				"(2 \"unsupported regex: a character class under (?c) is not supported\")"));
-		// the oracle takes each, and (?U) or (?c) where neither changes a match
+		// the oracle takes each, and (?U) or (?c) where neither changes a match; a class
+		// the oracle refuses is refused as it refuses it, (?c) or not
 		assertThat(java(cases)).noneMatch(answer -> answer.startsWith("(1 "));
-		assertThat(runtime(List.of(c("(?U)a", "A"), c("(?iU)\\u00e9", "É"), c("(?c)a", "a"))))
-			.isEqualTo(java(List.of(c("(?U)a", "A"), c("(?iU)\\u00e9", "É"), c("(?c)a", "a"))));
+		List<Case> taken = List.of(c("(?U)a", "A"), c("(?iU)\\u00e9", "É"), c("(?c)a", "a"), c("(?c)[a", "a"),
+				c("(?c)\\p{Foo}", "a"));
+		assertThat(runtime(taken)).isEqualTo(java(taken));
+	}
+
+	@Test
+	void unicodePropertiesMatchAsJavaUtilRegexDoes() {
+		String text = "héllo Wörld 42 ٤٢ Ǆǅǆ ΣΑΣ ﬁ _x‿y ｱ日本語 \u0301\u20dd e\u0301 1\u0301 \t\u00a0\u2028 $€ («»)"
+				+ " 😀🏻🇯🇵 \ufdd0\uffff Ⅻⓐǅ ";
+		List<Case> cases = new ArrayList<>();
+		for (String regex : List.of("\\p{L}+", "\\pL+", "\\PL+", "\\p{Lu}", "\\p{Ll}+", "\\p{Lt}", "\\p{Lm}",
+				"\\p{Lo}+", "\\p{Mn}", "\\p{Me}", "\\p{Nd}+", "\\p{N}+", "\\p{No}", "\\p{Nl}", "\\p{Zs}", "\\p{Z}",
+				"\\p{Zl}", "\\p{Cc}", "\\p{Cn}", "\\p{C}", "\\p{Cs}", "\\p{Co}", "\\p{Cf}", "\\p{P}+", "\\p{Pc}",
+				"\\p{Pd}", "\\p{Ps}", "\\p{Pe}", "\\p{Pi}", "\\p{Pf}", "\\p{Po}", "\\p{S}", "\\p{Sc}", "\\p{Sm}",
+				"\\p{Sk}", "\\p{So}", "\\p{LC}+", "\\p{LD}+", "\\p{L1}+", "\\p{all}", "\\p{ASCII}+", "\\p{Alnum}+",
+				"\\p{Alpha}+", "\\p{Blank}", "\\p{Cntrl}", "\\p{Digit}", "\\p{Graph}+", "\\p{Lower}+", "\\p{Print}+",
+				"\\p{Punct}", "\\p{Space}", "\\p{Upper}", "\\p{XDigit}+", "\\p{javaLowerCase}+", "\\p{javaUpperCase}",
+				"\\p{javaAlphabetic}+", "\\p{javaIdeographic}+", "\\p{javaTitleCase}", "\\p{javaDigit}+",
+				"\\p{javaDefined}+", "\\p{javaLetter}+", "\\p{javaLetterOrDigit}+", "\\p{javaJavaIdentifierStart}+",
+				"\\p{javaJavaIdentifierPart}+", "\\p{javaUnicodeIdentifierStart}+", "\\p{javaUnicodeIdentifierPart}+",
+				"\\p{javaIdentifierIgnorable}", "\\p{javaSpaceChar}", "\\p{javaWhitespace}", "\\p{javaISOControl}",
+				"\\p{javaMirrored}", "\\p{IsAlphabetic}+", "\\p{IsLetter}+", "\\p{IsIdeographic}+", "\\p{IsLowercase}+",
+				"\\p{IsUppercase}+", "\\p{IsTitlecase}", "\\p{IsPunctuation}", "\\p{IsWhite_Space}",
+				"\\p{IsWhiteSpace}", "\\p{IsDigit}+", "\\p{IsHex_Digit}+", "\\p{IsHexDigit}", "\\p{IsJoin_Control}",
+				"\\p{IsNoncharacter_Code_Point}", "\\p{IsAssigned}+", "\\p{IsControl}", "\\p{IsEmoji}",
+				"\\p{IsEmoji_Presentation}", "\\p{IsEmoji_Modifier}", "\\p{IsEmoji_Modifier_Base}",
+				"\\p{IsEmoji_Component}", "\\p{IsExtended_Pictographic}", "\\p{IsWord}+", "\\p{IsAlnum}+",
+				"\\p{IsBlank}", "\\p{IsGraph}+", "\\p{IsPrint}+", "\\p{IsPunct}", "\\p{IsSpace}", "\\p{IsCntrl}",
+				"\\p{IsXDigit}", "\\p{IsAlpha}+", "\\p{IsLower}+", "\\p{IsUpper}", "\\p{Isalphabetic}+", "\\p{IsLu}",
+				"\\p{IsL}+", "\\p{IsLatin}+", "\\p{IsGreek}+", "\\p{Isgreek}+", "\\p{IsGrek}+", "\\p{IsHan}+",
+				"\\p{IsKatakana}", "\\p{IsCommon}+", "\\p{IsInherited}", "\\p{IsZyyy}+", "\\p{InGreek}+",
+				"\\p{InBasic_Latin}+", "\\p{InBasicLatin}+", "\\p{InBasic Latin}+", "\\p{InLatin-1 Supplement}+",
+				"\\p{InLATIN_1_SUPPLEMENT}+", "\\p{InGreek and Coptic}+", "\\p{InCJKUnifiedIdeographs}+",
+				"\\p{InSurrogates_Area}", "\\p{InEmoticons}", "\\p{sc=Latin}+", "\\p{script=Grek}+", "\\p{SC=latn}+",
+				"\\p{blk=Greek}+", "\\p{block=Halfwidth and Fullwidth Forms}", "\\p{gc=Lu}",
+				"\\p{general_category=Nd}+", "\\p{GC=L}+", "\\P{L}+", "\\P{IsLatin}+", "\\P{InGreek}",
+				"[\\p{L}&&[^a-z]]+", "[^\\p{L}\\p{N}]+", "[\\p{Lu}\\d]+", "[\\P{L}x]+", "[a-z\\p{InGreek}]+",
+				"(?i)\\p{Lu}+", "(?i)\\p{Ll}+", "(?i)\\p{Lt}+", "(?i)\\p{Lower}+", "(?i)\\p{Upper}+",
+				"(?i)\\p{javaLowerCase}+", "(?i)\\p{IsLowercase}+", "(?i)\\p{IsUppercase}+", "(?i)\\p{IsTitlecase}+",
+				"(?U)\\p{Lower}+", "(?U)\\p{Alpha}+", "(?U)\\p{Punct}", "(?U)\\p{Digit}+", "(?U)\\p{Space}",
+				"(?U)\\p{XDigit}+", "(?U)\\p{Alnum}+", "(?U)\\p{Blank}", "(?U)\\p{Graph}+", "(?U)\\p{Print}+",
+				"(?U)\\p{Cntrl}", "(?U)\\p{Upper}+", "(?iU)\\p{Upper}+", "(?U)\\p{L}+", "(?U)\\p{javaDigit}+",
+				"(?U)\\w+", "(?U)\\W+", "(?U)\\d+", "(?U)\\D+", "(?U)\\s+", "(?U)\\S+", "(?U)[\\w&&[^\\d]]+",
+				"(?U)\\b\\w+\\b", "(?U)\\B.", "(?U:\\w+)\\w", "(?U)(?-U:\\w+)", "\\b\\w+\\b", "\\b.", "\\B.",
+				"(?x)\\p { L } +", "(?x)\\p{ L }", "(?x)\\pL+", "\\p{L}{2}", "\\p{L}*?\\d", "(?<=\\p{L})\\d",
+				"\\Q\\p{L}\\E")) {
+			cases.add(c(regex, text));
+		}
+		cases.addAll(List.of(c("\\b\\w+\\b", "été"), c("\\b\\w+\\b", "e\u0301te\u0301"), c("\\b", "\u0301a"),
+				c("\\b", "a\u0301\u0302 b"), c("\\b", "1\u0301"), c("\\b", "_\u0301"), c("\\B", "a\u0301"),
+				c("(?U)\\b", "日本 語"), c("(?U)\\b", "a\u0301 \u0301"), c("(?U)\\w+", "a\u200cb\u200d"),
+				// the oracle's refusals of a family it cannot resolve
+				c("\\p{}", ""), c("\\p{L", ""), c("\\p{Foo}", ""), c("\\pX", ""), c("\\p", ""), c("\\P", ""),
+				c("\\p{IsFoo}", ""), c("\\p{InFoo}", ""), c("\\p{sc=Foo}", ""), c("\\p{x=y}", ""), c("\\p{=L}", ""),
+				c("\\p{gc=}", ""), c("\\p{lu}", ""), c("\\p{alpha}", ""), c("(?U)\\p{alpha}", "a"),
+				c("\\p{InBasic-Latin}", ""), c("\\p{IsLatn}", "a"), c("[\\p{Foo}]", ""), c("[\\p{L}-z]", ""),
+				c("[a-\\p{L}]", ""), c("(?x)\\p{L # c\n}", ""), c("(?x)\\p{ # }\n}", ""), c("a\\p{L", ""),
+				c("\\p{L}\\p{Foo", ""), c("\\p{Is}", ""), c("\\p{In}", ""), c("\\p{L1 }", "")));
+		assertThat(mismatches(cases, runtime(cases), java(cases))).isEmpty();
+	}
+
+	@Test
+	void randomUnicodePatternsMatchAsJavaUtilRegexDoes() throws Exception {
+		List<Case> cases = new RandomPatterns(new Random(20261012), true).cases(1500);
+		assertThat(cases).hasSizeGreaterThan(1400);
+		assertThat(mismatches(cases, runtime(cases), java(cases))).isEmpty();
+	}
+
+	@Test
+	void backslashGHoldsWhereTheMatchersLastMatchEnded() {
+		List<Case> cases = List.of(c("\\G\\d", "12a3"), c("\\G", "ab"), c("\\Ga|b", "aabab"), c("a|\\Gb", "bab"),
+				c("\\G\\w*", "ab cd"), c("(?<=\\G.)x", "axbx"), c("\\G(?:ab)*", "ababxab"), c("[\\G]", ""),
+				c("\\G+", "a"), c("x*\\G", "xxa"));
+		assertThat(mismatches(cases, runtime(cases), java(cases))).isEmpty();
+		// the matcher methods: find from the last match's end (one past an empty one),
+		// find(int) from its start, lookingAt and matches from the start, each failure
+		// keeping where the last match ended, as the oracle's
+		Random random = new Random(20261012);
+		List<String> patterns = List.of("\\G\\w", "\\Ga*", "\\G\\w+|x", "a\\G", "\\Gab|b", "^\\G", "\\G$", "(?:\\Ga)+",
+				"\\G\\b\\w", "^");
+		List<String> inputs = List.of("aab", "ab ab", "xaxa", "", "b");
+		StringBuilder program = new StringBuilder("(list");
+		List<String> expected = new ArrayList<>();
+		for (int i = 0; i < 300; i++) {
+			String regex = patterns.get(random.nextInt(patterns.size()));
+			String input = inputs.get(random.nextInt(inputs.size()));
+			List<Integer> ops = new ArrayList<>();
+			for (int k = 0; k < 7; k++) {
+				ops.add(random.nextInt(4) == 0 ? random.nextInt(4) - 3 : random.nextInt(input.length() + 2));
+			}
+			program.append(" (regex-ops ")
+				.append(new LispString(regex).print())
+				.append(' ')
+				.append(new LispString(input).print())
+				.append(" '(")
+				.append(ops.stream().map(String::valueOf).collect(Collectors.joining(" ")))
+				.append("))");
+			expected.add(javaOps(regex, input, ops));
+		}
+		LispVal answers = evaluator
+			.eval(LispReader.readAllFromString(program.append(')').toString(), Features.INTERPRETER).get(0));
+		List<String> actual = new ArrayList<>();
+		for (LispVal rest = answers; rest instanceof LispCons cons; rest = cons.cdr()) {
+			actual.add(render(cons.car()));
+		}
+		assertThat(actual).isEqualTo(expected);
+	}
+
+	// An op script over one matcher: -3 find(), -2 lookingAt(), -1 matches(), n >= 0
+	// find(n); each answers (start end), nil, or the refusal of find(n) past the input.
+	private static String javaOps(String regex, String input, List<Integer> ops) {
+		Matcher m = Pattern.compile(regex).matcher(input);
+		List<String> out = new ArrayList<>();
+		for (int op : ops) {
+			boolean hit;
+			try {
+				hit = op == -3 ? m.find() : op == -2 ? m.lookingAt() : op == -1 ? m.matches() : m.find(op);
+			}
+			catch (IndexOutOfBoundsException ex) {
+				out.add("\"oob\"");
+				continue;
+			}
+			out.add(hit ? "(" + m.start() + " " + m.end() + ")" : "nil");
+		}
+		return "(" + String.join(" ", out) + ")";
 	}
 
 	// The runtime's answer to each case, rendered like java(...)'s.
@@ -284,8 +420,8 @@ class ClojureRegexTest {
 		return cases.stream().map(c -> {
 			try {
 				Pattern p = Pattern.compile(c.regex());
-				return "(0 " + anchoredMatch(p.matcher(c.input()), false) + " "
-						+ anchoredMatch(p.matcher(c.input()), true) + ")";
+				return "(0 " + anchoredMatch(p.matcher(c.input()), c.input(), false) + " "
+						+ anchoredMatch(p.matcher(c.input()), c.input(), true) + ")";
 			}
 			catch (PatternSyntaxException ex) {
 				return "(1 " + quote(String.valueOf(ex.getMessage())) + ")";
@@ -293,11 +429,13 @@ class ClojureRegexTest {
 		}).toList();
 	}
 
-	private static String anchoredMatch(Matcher m, boolean whole) {
+	private static String anchoredMatch(Matcher m, String input, boolean whole) {
 		if (!(whole ? m.matches() : m.lookingAt())) {
 			return "nil";
 		}
-		StringBuilder out = new StringBuilder("(").append(m.start()).append(' ').append(m.end());
+		StringBuilder out = new StringBuilder("(").append(input.codePointCount(0, m.start()))
+			.append(' ')
+			.append(input.codePointCount(0, m.end()));
 		for (int g = 0; g <= m.groupCount(); g++) {
 			String group = m.group(g);
 			out.append(' ').append(group == null ? "nil" : quote(group));
@@ -336,7 +474,11 @@ class ClojureRegexTest {
 			Matcher m = Pattern.compile(c.regex()).matcher(c.input());
 			StringBuilder out = new StringBuilder("(0");
 			for (int n = 0; n < 20 && m.find(); n++) {
-				out.append(" (").append(m.start()).append(' ').append(m.end());
+				// the runtime counts code points where the oracle counts UTF-16 units
+				out.append(" (")
+					.append(c.input().codePointCount(0, m.start()))
+					.append(' ')
+					.append(c.input().codePointCount(0, m.end()));
 				for (int g = 0; g <= m.groupCount(); g++) {
 					String group = m.group(g);
 					out.append(' ').append(group == null ? "nil" : quote(group));
@@ -381,8 +523,27 @@ class ClojureRegexTest {
 
 		private boolean named;
 
+		private final boolean unicode;
+
 		RandomPatterns(Random random) {
+			this(random, false);
+		}
+
+		/**
+		 * Random patterns, with the Unicode constructs among them when UNICODE: the
+		 * properties, the U flag and \\G, over inputs of letters, digits, marks and
+		 * spaces past ASCII.
+		 */
+		RandomPatterns(Random random, boolean unicode) {
 			this.random = random;
+			this.unicode = unicode;
+		}
+
+		private String property() {
+			return pick("\\p{L}", "\\P{L}", "\\p{Lu}", "\\p{Ll}", "\\pN", "\\p{Nd}", "\\p{Mn}", "\\p{M}", "\\p{Zs}",
+					"\\p{P}", "\\p{IsLatin}", "\\p{IsGreek}", "\\p{InGreek}", "\\p{sc=Han}", "\\p{IsAlphabetic}",
+					"\\p{IsWhite_Space}", "\\p{Alpha}", "\\p{Punct}", "\\p{Lower}", "\\p{javaLowerCase}",
+					"\\p{javaUpperCase}", "\\p{IsLu}", "\\P{IsLatin}", "\\p{IsDigit}", "\\p{Upper}", "\\p{XDigit}");
 		}
 
 		List<Case> cases(int count) throws Exception {
@@ -423,6 +584,9 @@ class ClojureRegexTest {
 		}
 
 		private String classItem() {
+			if (this.unicode && this.random.nextInt(4) == 0) {
+				return property();
+			}
 			return switch (this.random.nextInt(9)) {
 				case 0 -> "a-c";
 				case 1 -> "A-C";
@@ -456,6 +620,9 @@ class ClojureRegexTest {
 		}
 
 		private String atom(int depth) {
+			if (this.unicode && this.random.nextInt(5) == 0) {
+				return this.random.nextInt(6) == 0 ? "\\G" : property();
+			}
 			return switch (this.random.nextInt(depth > 2 ? 10 : 22)) {
 				case 0, 1, 2, 3 -> literal();
 				case 4 -> ".";
@@ -492,10 +659,11 @@ class ClojureRegexTest {
 			StringBuilder flags = new StringBuilder();
 			int n = this.random.nextInt(3);
 			for (int i = 0; i < n; i++) {
-				flags.append(pick("i", "m", "s", "x", "d", "u"));
+				flags.append(this.unicode ? pick("i", "m", "s", "x", "d", "u", "U", "U")
+						: pick("i", "m", "s", "x", "d", "u"));
 			}
 			if (this.random.nextInt(4) == 0) {
-				flags.append('-').append(pick("i", "m", "s", "x", "d", "u"));
+				flags.append('-').append(this.unicode ? pick("i", "U") : pick("i", "m", "s", "x", "d", "u"));
 			}
 			return flags.isEmpty() ? "i" : flags.toString();
 		}
@@ -521,7 +689,7 @@ class ClojureRegexTest {
 		}
 
 		private String input() {
-			String alphabet = "abABx1_ -\n\rkKéÉſS#";
+			String alphabet = this.unicode ? "abAx1_ -éÉΣσ٤日\u0301\u0302\u00a0Ⅻ\u200cǅ" : "abABx1_ -\n\rkKéÉſS#";
 			StringBuilder input = new StringBuilder();
 			int n = this.random.nextInt(9);
 			for (int i = 0; i < n; i++) {

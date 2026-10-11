@@ -297,6 +297,12 @@
       },
       {
         "condition": {
+          "typeReachable": "am.ik.rontolisp.eval.ClojureLibrary"
+        },
+        "pattern": "am/ik/rontolisp/eval/clojure-unicode\\.lisp"
+      },
+      {
+        "condition": {
           "typeReachable": "am.ik.rontolisp.clojure.ClojureBuiltinNamespaces"
         },
         "pattern": "am/ik/rontolisp/clojure/lib/ring/(util|middleware)/[a-z0-9_]+\\.clj"

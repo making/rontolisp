@@ -127,7 +127,7 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   runtime signals its Common Lisp condition, and a refusal of the Clojure runtime by the class
   the oracle throws for the same call (`(first 5)` an `IllegalArgumentException`, a failed
   `assert` an `AssertionError`, which an `Exception` catch does not take). An error naming no
-  class -- a refusal of a construct the oracle accepts (a regex `\p{L}`,
+  class -- a refusal of a construct the oracle accepts (a regex `\X`,
   `(partition 0 coll)`) -- is taken by the first catch of any class but
   `clojure.lang.ExceptionInfo`. A misuse a lower verb refuses first carries that verb's class:
   `(shuffle 5)` is the `IllegalArgumentException` of `seq`, where the oracle casts to

@@ -472,7 +472,9 @@ final class ClojureCollectionLowering {
 	 */
 	static LispVal regexForm(List<LispVal> items) {
 		ClojureLowerUtil.isTrue(items.size() == 2, "a regex literal takes a pattern string");
-		return ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-RE-COMPILE"), items.get(1));
+		String compiler = items.get(1) instanceof LispString source ? ClojureStringLowering.reCompiler(source.value())
+				: ClojureStringLowering.RE_COMPILE_UNICODE;
+		return ClojureLowerUtil.list(new LispSymbol(compiler), items.get(1));
 	}
 
 	/**

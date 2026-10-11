@@ -266,6 +266,41 @@ class ClojureArmsTest {
 	}
 
 	@Test
+	void theRegexFamiliesAreMadeByAPatternThatMayNameAPropertyOrAWordBoundary() {
+		// the parser's arm refuses a property as before without the unicode family; the
+		// category family's arm is the clause of \b's test past ASCII
+		List<LispVal> parser = read("(if (rontolisp::%clojure-re-unicode-p st) (family st) (error \"no\"))");
+		assertThat(ClojureArms.strip(parser, ClojureArms.Family.REGEX_UNICODE).stream().map(LispVal::print))
+			.containsExactly("(ERROR \"no\")");
+		List<LispVal> bound = read("(cond ((ascii c) t) ((rontolisp::%clojure-re-cat-word-p s i u) t) (t nil))");
+		assertThat(ClojureArms.strip(bound, ClojureArms.Family.REGEX_CATEGORY).stream().map(LispVal::print))
+			.containsExactly("(COND ((ASCII C) T) (T NIL))");
+		for (String maker : List.of("rontolisp::%clojure-re-compile-unicode", "rontolisp::%clojure-re-pattern",
+				"rontolisp::%clojure-read-string", "rontolisp::%clojure-lispreader-regex")) {
+			assertThat(ClojureArms.scan(read("(" + maker + " x)"), ClojureArms.Family.REGEX_UNICODE).builds()).as(maker)
+				.isTrue();
+			assertThat(ClojureArms.scan(read("(" + maker + " x)"), ClojureArms.Family.REGEX_CATEGORY).builds())
+				.as(maker)
+				.isTrue();
+		}
+		assertThat(ClojureArms.scan(read("(rontolisp::%clojure-re-compile-bound x)"), ClojureArms.Family.REGEX_UNICODE)
+			.builds()).isFalse();
+		assertThat(ClojureArms.scan(read("(rontolisp::%clojure-re-compile-bound x)"), ClojureArms.Family.REGEX_CATEGORY)
+			.builds()).isTrue();
+		assertThat(ClojureArms.scan(read("(rontolisp::%clojure-re-compile x)"), ClojureArms.Family.REGEX_CATEGORY)
+			.builds()).isFalse();
+		// a literal or a re-pattern of a literal string parses through the parse its
+		// source may need
+		assertThat(ClojureStringLowering.reCompiler("a+")).isEqualTo(ClojureStringLowering.RE_COMPILE);
+		assertThat(ClojureStringLowering.reCompiler("\\ba")).isEqualTo(ClojureStringLowering.RE_COMPILE_BOUND);
+		assertThat(ClojureStringLowering.reCompiler("\\B")).isEqualTo(ClojureStringLowering.RE_COMPILE_BOUND);
+		for (String source : List.of("\\pL", "\\P{L}", "(?U)\\w", "(?iU:a)", "\\b\\p{L}")) {
+			assertThat(ClojureStringLowering.reCompiler(source)).as(source)
+				.isEqualTo(ClojureStringLowering.RE_COMPILE_UNICODE);
+		}
+	}
+
+	@Test
 	void theIoFamilyIsMadeByClojureJavaIoAndFoldsTheArmsOfAProgramMakingNone() {
 		// only the namespace's kernels and the java.io constructions make a File, a URL
 		// or a byte stream: an instance call's arm, a java: argument's view, class's and

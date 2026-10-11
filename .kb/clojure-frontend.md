@@ -525,8 +525,8 @@ for the same call**, decided where it is detected (oracle-checked clj 1.12.6, 20
   `subs-and-substring-refuse-a-non-number-bound-with-the-oracles-class`,
   `ClojureLoweringTest#aStringMethodOfAReceiverNotKnownToBeAStringIsTheReflectiveAlias`,
   `ClojureArmsTest#theRefusalFamilyFoldsEachRefusalToThePlainErrorOfItsMessage`.
-- Names no class: a refusal of a construct the oracle accepts (regex `\p{..}`, `\G`, the Unicode
-  classes under `(?U)`, `(partition 0 ...)`, a deftype literal), a value macro's
+- Names no class: a refusal of a construct the oracle accepts (regex `\N{..}`, `\X`, `\b{g}`, a
+  class under `(?c)`, `(partition 0 ...)`, a deftype literal), a value macro's
   `Can't take value of a macro` (a compile error in the oracle), internal invariants. A
   misuse a lower verb refuses first carries that verb's
   class: `(shuffle 5)` is `seq`'s IAE, the oracle's CCE casting to `Collection`.
@@ -1554,7 +1554,8 @@ oracle's classpath; a `deps.edn` ring-core newer than the shipped one refuses th
   "a%41")` 357,787 B, `wrap-params` over a query 500,960 B -- generic `conj`/`apply
   str`/`throw` and the regex engine per program -- against 26,940 B for the Common Lisp
   `rontolisp:url-decode`. And no core verb tests a Unicode letter (`\p{L}` of
-  `wrap-keyword-params`; `alpha-char-p` is ASCII on wasm, the regex engine has no `\p`).
+  `wrap-keyword-params`; `alpha-char-p` is ASCII on wasm, the regex engine had no `\p` -- it has
+  since 2026-10-11, at ~81 KB of tables and resolver a program, "Regex").
   Decided: the namespaces stay Clojure source (the oracle's own code where it is
   map-shaped), and the byte/string work is Common Lisp kernels (`clojure.lisp`, "The
   ring.util kernels"), reached through `rontolisp.internal.ring`, a known namespace only a
@@ -4684,11 +4685,22 @@ U+2029 and `\r\n`. Patterns print `#"..."`, matchers `#<Matcher source>`; `class
   `\x` quotes, `$n` takes digits while that group exists (`$11` with one group is group 1 and
   `1`), `${name}`, the oracle's messages (`character to be escaped is missing`, `Illegal group
   reference`, `No group with name {n}`...). A matcher's `group`/`start`/`end` take a name.
-- Refused as `unsupported regex` (a plain error, "Catching"): `\p`/`\P`, `\N{..}`, `\X`,
-  `\b{g}`, `\G`, `\d \s \w \b` under `(?U)` (Unicode classes need tables), a class under `(?c)`
-  (NFC matching); `.todo/f49`. Deviations: a non-spacing mark after a letter is no word
-  character for `\b` (the oracle asks `Character.getType`); positions count code points, not
-  UTF-16 units.
+- `\G` (`:glast`) holds where the matcher's last match ended: the cell's car is the oracle's
+  `last` (0 before any match, the end of the last one, kept by a failed search or `lookingAt`),
+  handed to each search in the group vector's slot 1 (`(:glast . pos)` beside the loop memos);
+  `find(int)` hands its start and, failing, leaves 0, as the oracle's `reset` does. A failed
+  find keeps the car (it used to put it one past the end), so a later find searches again from
+  there like the oracle's (`^` over `ab`: find, find fails, find answers the empty match at 0
+  again); past an empty match at the end the oracle searches no more and keeps that match's
+  bounds with its groups cleared, here the cdr `(end end nil)` that
+  `%clojure-re-last-match` takes for none (the oracle's `group()` answers null there, here
+  `No match found`, as before).
+- Refused as `unsupported regex` (a plain error, "Catching"): `\N{..}` (the oracle looks the
+  name up in Unicode's name list, ~35,000 names), `\X` and `\b{g}` (grapheme clusters:
+  `jdk.internal.util.regex.Grapheme`'s rules over a break property and the Indic conjunct
+  lists, `.todo/f54`), a class or a property under
+  `(?c)` (matched against the input's NFC normalization: the canonical decomposition and
+  composition tables). Deviation: positions count code points, not UTF-16 units.
 - Verified 2026-10-11 against `java.util.regex` by a random differential: 34,000 patterns of
   lookarounds, flags, classes, groups and quantifiers over inputs up to 30 characters, every
   find, group and refusal message identical, and 1,500 random `replace`/`split` calls; the spec
@@ -4705,6 +4717,56 @@ U+2029 and `\r\n`. Patterns print `#"..."`, matchers `#<Matcher source>`; `class
   bracket class (or its negation) is a nested `(:cls negated items)` item; until 2026-10-11 it
   read the node's tail instead and matched nothing (`[,\s]+` found only commas), clojure-spec
   `a-class-escape-inside-brackets-matches-its-class`.
+
+**`\p`/`\P`, `(?U)` and `\b`'s marks read Unicode tables generated from the JDK, which only a
+program whose patterns may name them carries** (2026-10-11, `.todo/f49`). `family` is ported
+(`%clojure-rp-family`): `name=value` (`sc`/`script`, `blk`/`block`, `gc`/`general_category`, the
+key lower-cased as `String.toLowerCase` does), `In` + a block, `Is` + a binary property, a
+category or a script, else (a POSIX class over Unicode first under `U`) `forProperty`'s
+case-sensitive names; the oracle's four messages. The names live in three `NAME:SPEC` tables
+(`%clojure-re-uni-unicode-names`, `-posix-names`, `-java-names`, a SPEC a tiny language of
+predicate bits, categories and ranges with `!`, `+`, `&` and `|` for the case-insensitive
+widening; 4.4 KB of wasm less than a `cond` clause per name, measured). The items `(:gc mask)`
+`(:ub bit)` `(:sc script)` `(:blk block)` read `clojure-unicode.lisp` (beside `clojure.lisp`,
+spliced by `ClojureLibrary.forms`): runs of a combo per code point (`Character.getType` in bits
+0-4, 24 `Character` predicates from bit 5, under i31's range), of `UnicodeScript` ordinals and
+of `UnicodeBlock` places, and the scripts' (constant and ISO 15924 alias) and blocks' names
+(`UnicodeBlock.forName`'s: the constant's and each canonical name with and without its
+spaces, `*` the constant's spaced), each decoded on first use. `ClojureUnicodeTablesTest`
+generates the file from the running JDK and fails, naming the regenerated copy, when the
+shipped one differs (names found by public API alone: every four-letter `forName`, the
+constant's underscore variants and three canonical names that are none -- a later JDK's new
+such name would go unseen). Committed rather than generated at start the way
+`ClojureCaseMapping` is: one pass over the code points with `UnicodeScript.of` and
+`UnicodeBlock.of` measured 230-300 ms (2026-10-11), every Clojure compile.
+- Two families gate the tables (`ClojureArms`): `REGEX_UNICODE` (tests `%clojure-re-unicode-p`
+  in the parser -- without it `\p` and `(?U)`'s classes refuse as before -- and
+  `%clojure-re-uni-item-p` in `%clojure-re-item-test`) and `REGEX_CATEGORY`
+  (`%clojure-re-cat-word-p`, `\b`'s test past ASCII: a non-spacing mark with a letter or digit
+  before it past other marks, the oracle's `hasBaseCharacter`, and under `U` Unicode's word).
+  The lowering picks a literal's parse by its source (`ClojureStringLowering.reCompiler`, a
+  textual over-approximation): `%clojure-re-compile-unicode` where it holds a backslash and
+  `p`/`P` or `(?` and a `U`, `-bound` where a backslash and `b`/`B`, else the plain one;
+  `re-pattern` of a literal string the same. Every pattern made from a string at run time --
+  `re-pattern` of a computed value, the Clojure reads (`read-string`, `read`), the reader's
+  regex macro -- makes both.
+- Cost, wasm P1 / component / JVM class, before -> after (2026-10-11): no regex
+  (`(count "abc")`) 28,623 / 29,860 / 470,017 unchanged; `(re-find #"a+" "caab")` 367,142 /
+  373,281 / 631,801 -> 368,559 / 374,706 / 634,440 (the `\G` and word-boundary plumbing);
+  `#"\ba+\b"` 367,150 / 373,289 / 631,807 -> 388,518 / 393,880 / 655,164 (the category table:
+  11 KB of runs); `#"\p{L}+"` (refused before) 449,897 / 455,377 / 723,992; `(re-pattern (str
+  ...))` 368,114 / 374,266 / 633,877 -> 450,728 / 456,209 / 728,076. Of the wasm's ~81 KB over
+  the plain pattern, ~40 KB are data (the runs, the names) and ~41 KB code (the resolver, the
+  name lookups, `String.toUpperCase`/`toLowerCase` with their own tables).
+- Verified against `java.util.regex` (`ClojureRegexTest`): every property name of the
+  curated list over a text of every category's characters, the refusals, a seeded random
+  corpus of properties, `U` flags and `\G` over letters, digits, marks and spaces past ASCII
+  (1,500 patterns), 300 random scripts of `find`/`find(int)`/`lookingAt`/`matches` over `\G`
+  patterns; the decoded tables at both sides of every run and every `forName` spelling
+  (`ClojureUnicodeTablesTest`); clojure-spec `a-regex-reads-unicode-properties`,
+  `backslash-g-holds-where-the-last-match-ended` (four backends, the oracle's lines);
+  `ClojureLibraryTest#aProgramWhosePatternsNameNoUnicodePropertySplicesTheRegexEngineWithoutItsTables`,
+  `ClojureArmsTest#theRegexFamiliesAreMadeByAPatternThatMayNameAPropertyOrAWordBoundary`.
 
 **A matcher over a type implementing `CharSequence` reads it only as far as a match needs**
 (2026-10-11): `re-matcher` and `re-find` take the type itself, not the text view, and
