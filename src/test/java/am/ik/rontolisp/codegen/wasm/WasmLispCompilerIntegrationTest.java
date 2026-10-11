@@ -31,6 +31,7 @@ import am.ik.rontolisp.SearchMismatchBoundsFixture;
 import am.ik.rontolisp.ParseIntegerBoundsFixture;
 import am.ik.rontolisp.ParseIntegerSyntaxFixture;
 import am.ik.rontolisp.RadixRangeFixture;
+import am.ik.rontolisp.RontolispNativeValueFixture;
 import am.ik.rontolisp.ReadFeatureGuardFixture;
 import am.ik.rontolisp.ReadFromStringLambdaListFixture;
 import am.ik.rontolisp.runtime.MalformedUtf8FileDecodingTest;
@@ -18822,7 +18823,7 @@ class WasmLispCompilerIntegrationTest {
 
 	@Test
 	void arcAndHyperbolicSoftwareApproximation() throws Exception {
-		// asin/acos/atan/sinh/cosh were the LAST members of
+		// asin/acos/atan/sinh/cosh were the last transcendental members of
 		// BuiltinFunctionWrappers.WASM_UNSUPPORTED -- every transcendental built-in
 		// compiles on WASM, today as a call into the fdlibm runtime (StrictMath's bits,
 		// pinned by WasmFdlibmRuntimeBuilderTest). This probe keeps the historical
@@ -18883,7 +18884,7 @@ class WasmLispCompilerIntegrationTest {
 		assertThat(compileAndRun("(print (cosh (/ -1.0 0.0)))")).isEqualTo("Infinity");
 		assertThat(compileAndRun("(print (sinh 800.0))")).isEqualTo("Infinity");
 		// First-class values over integer arguments (the wrappers left
-		// WASM_UNSUPPORTED, which is now empty).
+		// WASM_UNSUPPORTED).
 		assertThat(Double.parseDouble(compileAndRun("(print (funcall #'atan 1))"))).isCloseTo(StrictMath.atan(1),
 				within(1e-5));
 		assertThat(Double.parseDouble(compileAndRun("(print (funcall #'asin 1))"))).isCloseTo(Math.PI / 2,
@@ -20353,6 +20354,62 @@ class WasmLispCompilerIntegrationTest {
 					() -> compileAndRunFrontEndWithDir(AsyncStreamOperandFixture.WRITE_VALUE_PROGRAM, component))
 				.hasMessageContaining("requires the interpreter or the JVM backend");
 		}
+	}
+
+	@Test
+	void rontolispNativesAreFunctionValues() throws Exception {
+		// The wasm twin of LispEvaluatorTest#rontolispNativesAreFunctionValues, Preview 1
+		// and the component. A value does what the call does on each: the thread
+		// primitives are undefined, Preview 1's sockets refuse at call time, and a native
+		// the call refuses at compile time refuses the program as a value too.
+		for (boolean component : new boolean[] { false, true }) {
+			assertThat(compileAndRunFrontEnd(RontolispNativeValueFixture.PORTABLE_PROGRAM, component))
+				.isEqualTo(RontolispNativeValueFixture.PORTABLE_EXPECTED);
+			assertThat(compileAndRunFrontEnd(RontolispNativeValueFixture.NO_THREAD_PROGRAM, component))
+				.isEqualTo(RontolispNativeValueFixture.NO_THREAD_EXPECTED);
+			for (String member : List.of("tls-listen", "tls-listen-pem")) {
+				assertThatThrownBy(
+						() -> compileAndRunFrontEnd("(print (functionp #'rontolisp:" + member + "))", component))
+					.hasMessageContaining("is not supported on any WASM target");
+			}
+		}
+		assertThat(compileAndRunFrontEnd(RontolispNativeValueFixture.NO_SOCKET_PROGRAM, false))
+			.isEqualTo(RontolispNativeValueFixture.NO_SOCKET_EXPECTED);
+		assertThatThrownBy(() -> compileAndRunFrontEnd(RontolispNativeValueFixture.ASYNC_PROGRAM, false))
+			.hasMessageContaining("WAIT-FOR requires the interpreter, the JVM backend or --component");
+		assertThatThrownBy(() -> compileAndRunFrontEnd("(print (functionp #'rontolisp:fetch))", false))
+			.hasMessageContaining("is only available in WASM component mode");
+		for (String member : List.of("tls-connect", "tls-upgrade")) {
+			assertThatThrownBy(() -> compileAndRunFrontEnd("(print (functionp #'rontolisp:" + member + "))", false))
+				.hasMessageContaining("no wasi:tls host API is wired on Preview 1 WASM");
+		}
+		assertThat(
+				compileAndRunFrontEnd(RontolispNativeValueFixture.SOCKET_PROGRAM, true, "tcp=y", "inherit-network=y"))
+			.isEqualTo(RontolispNativeValueFixture.SOCKET_EXPECTED);
+		assertThat(compileAndRunFrontEnd(RontolispNativeValueFixture.ASYNC_PROGRAM, true, "http=y"))
+			.isEqualTo(RontolispNativeValueFixture.ASYNC_EXPECTED);
+	}
+
+	/**
+	 * Compiles a source through the CLI's whole front end and runs it as Preview 1 or as
+	 * a component, with these {@code -S} host options.
+	 */
+	private static String compileAndRunFrontEnd(String source, boolean component, String... hostOptions)
+			throws Exception {
+		List<LispVal> program = am.ik.rontolisp.cli.CompileFrontendAccess
+			.withSystemPath(source, List.of(), true, component)
+			.forms();
+		byte[] wasmBytes = WasmLispCompiler.builder().component(component).build().compile(program);
+		wasmtime.copyFileToContainer(Transferable.of(wasmBytes), path("frontend-options.wasm"));
+		List<String> command = new ArrayList<>(List.of("wasmtime", "run", "-W", "gc=y", "-W", "exceptions=y"));
+		for (String option : hostOptions) {
+			command.add("-S");
+			command.add(option);
+		}
+		command.add(path("frontend-options.wasm"));
+		ExecResult result = wasmtime.execInContainer(command.toArray(String[]::new));
+		assertThat(result.getExitCode()).as("exit code for: %s\nstderr: %s", source, result.getStderr()).isZero();
+		return result.getStdout().trim();
 	}
 
 	@Test

@@ -71,9 +71,32 @@ symbol-function unexport unuse-package use-package`; JVM, P1 and component ident
   compiled to `The function FORMAT is undefined` for `format`.
 - `#'require` / `#'provide` refuse with the computed call's text, `REQUIRE is only supported as a
   literal top-level form on the compile path` (`BuiltinFunctionWrappers.noFunctionValueMessage`).
-- The `rontolisp:` async predicates and stream verbs are entries too (qualified names,
-  [async-await.md](async-await.md), "Function values"); no other `rontolisp:` native is yet
-  (2026-10-11: `#'rontolisp:version`, `make-thread`, `tcp-connect`, `json-parse`, `wait-for` and
-  the rest of the `NativeCallShapes` `rontolisp:` rows are `undefined` on the JVM).
+- **Every `rontolisp:` row of `NativeCallShapes` but `await` (a special form) is an entry**
+  (qualified names; the async ones: [async-await.md](async-await.md), "Function values"). A value
+  does on each backend what a call does there (measured 2026-10-11 on all four):
+  - Mutexes and `version`: all four. `json-parse`/`json-stringify` are no entries: `json.lisp` is
+    spliced on every compile path, so its defuns were already the values (the todo's "undefined on
+    the JVM" for them did not reproduce).
+  - Threads: interpreter and JVM. On WASM a call is an undefined function, so the names are
+    `BuiltinFunctionWrappers.WASM_UNSUPPORTED`: no wrapper (its body would call the wrapper
+    itself) and `WasmFunctionFormCompiler.undefined` answers true, so `#'` is the catchable
+    `undefined-function` a call is.
+  - `tcp-*`: Preview 1's wrapper body is the call-time stub; under `--component` (and for `fetch`,
+    `wait-for`, `tls-connect`, `tls-upgrade`) the spliced library defun is the value and no wrapper
+    is injected (`userDefinedNames`).
+  - A call that refuses the program refuses it as a value: P1's `fetch`/`wait-for`/`tls-connect`/
+    `tls-upgrade`, both WASM's `tls-listen`/`tls-listen-pem`.
+  - JVM `tls-listen-pem` is `BuiltinFunctionWrappers.JVM_UNSUPPORTED`: its call compiles only with
+    literal paths (`TlsPemInliner`), and a value is a computed call, refused with that text
+    (`TLS_LISTEN_PEM_COMPUTED_PATH_MESSAGE`). A wrapper would call itself: the inliner runs before
+    the wrappers exist and the JVM has no lowering for the unrewritten call.
+  - The paired `tls-connect`/`tls-upgrade` tail: the JVM lowering takes `:insecure` only as a
+    literal, so `ShadowedBuiltins.call` checks the run-time keyword and passes a literal, another
+    keyword being the interpreter's `TLS-CONNECT expects :insecure, got: :VERIFY`.
+  Pinned by `RontolispNativeValueFixture` (`rontolispNativesAreFunctionValues` in
+  `LispEvaluatorTest`/`WasmLispCompilerIntegrationTest`,
+  `compileAndRunRontolispNativesAreFunctionValues`, `compileAndRunTlsNativesAreFunctionValues`,
+  `compileTlsListenPemAsAFunctionValueIsRefusedAsAComputedCall` in `JvmLispCompilerTest`, ci-spec
+  `rontolisp-natives-are-function-values`).
 - `--component`'s sockets rewrite (`WasmSocketsRewrite`) runs before the wrappers exist, so
   `#'close` of a socket stream skips its `%io-close` bookkeeping, as `#'listen` does.

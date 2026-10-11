@@ -37,16 +37,33 @@ public final class BuiltinFunctionWrappers {
 	}
 
 	/**
-	 * Built-in operators that the WASM backend cannot compile. The WASM compiler passes
-	 * these to {@link #generate(Set, Set)} so that no wrapper defun referencing them is
-	 * injected. Now EMPTY -- the last members ({@code asin} / {@code acos} / {@code atan}
-	 * / {@code sinh} / {@code cosh}) left when the WASM backend gained every
-	 * transcendental built-in (today the fdlibm runtime,
-	 * {@code codegen.wasm.WasmFdlibmRuntimeBuilder}), so every {@code #'} first-class
-	 * value is supported. Kept as the seam for any future built-in a backend cannot
-	 * compile.
+	 * Built-in operators the WASM backends have no lowering for: the {@code rontolisp:}
+	 * thread primitives, interpreter and JVM only. The WASM compiler passes these to
+	 * {@link #generate(Set, Set)} so that no wrapper defun is injected for them (its body
+	 * would call the wrapper itself), and compiles a {@code #'} of one as a name no
+	 * definition has: the undefined-function signalled where the reference runs, as a
+	 * call of one is.
 	 */
-	public static final Set<String> WASM_UNSUPPORTED = Set.of();
+	public static final Set<String> WASM_UNSUPPORTED = Set.of(rontolisp(LispNames.MAKE_THREAD),
+			rontolisp(LispNames.JOIN_THREAD), rontolisp(LispNames.THREADP), rontolisp(LispNames.THREAD_ALIVE_P),
+			rontolisp(LispNames.DESTROY_THREAD), rontolisp(LispNames.CURRENT_THREAD));
+
+	/**
+	 * Built-in operators the JVM backend compiles a call of but has no function value
+	 * for: {@code rontolisp:tls-listen-pem}, whose call compiles only with literal paths
+	 * (the {@code cli} pre-pass bakes the files into the output). A value is a call with
+	 * computed paths, so a {@code #'} of it is refused with that call's text
+	 * ({@link #noFunctionValueMessage}).
+	 */
+	public static final Set<String> JVM_UNSUPPORTED = Set.of(rontolisp(LispNames.TLS_LISTEN_PEM));
+
+	/**
+	 * What the JVM backend reports for a {@code rontolisp:tls-listen-pem} call whose
+	 * certificate or key path is no string literal.
+	 */
+	public static final String TLS_LISTEN_PEM_COMPUTED_PATH_MESSAGE = LispNames.TLS_LISTEN_PEM
+			+ ": cert-file and key-file must be string literals when compiling"
+			+ " (compiled output embeds the certificate; use the interpreter for runtime paths)";
 
 	/**
 	 * Hash-table operator wrappers whose compiled bodies reference runtime helpers (JVM)
@@ -111,12 +128,12 @@ public final class BuiltinFunctionWrappers {
 			LispNames.WARN);
 
 	/**
-	 * The native built-ins ({@link NativeCallShapes}) every compiled backend lowers in
-	 * call position and has no defun for, in injection order. The interpreter binds each
-	 * as a Java {@code LispFunction}; the compile paths' function value is a wrapper
-	 * derived from the operator's call shape ({@code FunctionValueWrappers}), so
-	 * {@code #'arrayp} and {@code (funcall 'close s)} answer as the call does and a count
-	 * the shape rules out reports the interpreter's text. Reference-gated like
+	 * The native built-ins ({@link NativeCallShapes}) the compiled backends lower in call
+	 * position and have no defun for, in injection order. The interpreter binds each as a
+	 * Java {@code LispFunction}; the compile paths' function value is a wrapper derived
+	 * from the operator's call shape ({@code FunctionValueWrappers}), so {@code #'arrayp}
+	 * and {@code (funcall 'close s)} answer as the call does and a count the shape rules
+	 * out reports the interpreter's text. Reference-gated like
 	 * {@link #REFERENCE_GATED_FUNCTIONS}: several bodies reach a runtime (the eval
 	 * mirror, the stream and hash-table helpers, the run-time function box) that a gate
 	 * scanning the source program turns on for the operator's name. {@code require} and
@@ -131,16 +148,25 @@ public final class BuiltinFunctionWrappers {
 			LispNames.MAKE_RANDOM_STATE, LispNames.MAKE_STRING_INPUT_STREAM, LispNames.MAKE_STRING_OUTPUT_STREAM,
 			LispNames.MAKE_SYNONYM_STREAM, LispNames.OPEN_STREAM_P, LispNames.RATIONALP, LispNames.ROW_MAJOR_AREF,
 			LispNames.SYMBOL_FUNCTION, LispNames.UNEXPORT, LispNames.UNUSE_PACKAGE, LispNames.USE_PACKAGE,
-			// The async predicates and stream verbs. The bodies reach the async runtime,
-			// whose gates scan for the operator's name -- which the #' reference is. On
-			// the wasm backends make-stream and stream-write refuse the program as a
-			// value exactly as they do in call position.
-			PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.ASYNC_STREAMP),
-			PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.FUTUREP),
-			PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.STREAM_READ),
-			PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.STREAM_CLOSE),
-			PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.MAKE_STREAM),
-			PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.STREAM_WRITE));
+			// The rontolisp: natives. Each body is the call position, so it reaches the
+			// backend's lowering and the runtime whose gate scans for the operator's name
+			// -- which the #' reference is. Where a call refuses the program (on a wasm
+			// backend: make-stream, stream-write, fetch, wait-for and the tls-* names),
+			// so does the value; where a spliced library defun is the call (the
+			// component's sockets, tls client, fetch and wait-for), that defun is the
+			// value and no wrapper is injected. The thread primitives have no wasm
+			// wrapper (WASM_UNSUPPORTED), tls-listen-pem no JVM one (JVM_UNSUPPORTED).
+			rontolisp(LispNames.ASYNC_STREAMP), rontolisp(LispNames.FUTUREP), rontolisp(LispNames.STREAM_READ),
+			rontolisp(LispNames.STREAM_CLOSE), rontolisp(LispNames.MAKE_STREAM), rontolisp(LispNames.STREAM_WRITE),
+			rontolisp(LispNames.MAKE_MUTEX), rontolisp(LispNames.MUTEX_ACQUIRE), rontolisp(LispNames.MUTEX_RELEASE),
+			rontolisp(LispNames.VERSION), rontolisp(LispNames.MAKE_THREAD), rontolisp(LispNames.JOIN_THREAD),
+			rontolisp(LispNames.THREADP), rontolisp(LispNames.THREAD_ALIVE_P), rontolisp(LispNames.DESTROY_THREAD),
+			rontolisp(LispNames.CURRENT_THREAD), rontolisp(LispNames.WAIT_FOR), rontolisp(LispNames.FETCH),
+			rontolisp(LispNames.TCP_CONNECT), rontolisp(LispNames.TCP_LISTEN), rontolisp(LispNames.TCP_ACCEPT),
+			rontolisp(LispNames.TCP_LOCAL_PORT), rontolisp(LispNames.TCP_LOCAL_ADDRESS),
+			rontolisp(LispNames.TCP_PEER_ADDRESS), rontolisp(LispNames.TCP_PEER_PORT),
+			rontolisp(LispNames.TCP_SET_TIMEOUT), rontolisp(LispNames.TLS_CONNECT), rontolisp(LispNames.TLS_UPGRADE),
+			rontolisp(LispNames.TLS_LISTEN), rontolisp(LispNames.TLS_LISTEN_PEM));
 
 	/**
 	 * Wrappers injected only when the program takes the operator as a first-class value
@@ -297,14 +323,18 @@ public final class BuiltinFunctionWrappers {
 	 * What a compile path reports for a {@code #'name} of a standard function it has no
 	 * function value for: {@code require} and {@code provide} exist on the compile path
 	 * only as literal top-level forms, spliced before anything runs, so neither has a
-	 * value -- the refusal a nested or computed call of either gets. Any other name is a
-	 * standard function the backend has no wrapper for.
+	 * value -- the refusal a nested or computed call of either gets. A
+	 * {@link #JVM_UNSUPPORTED} name is refused with its computed call's text. Any other
+	 * name is a standard function the backend has no wrapper for.
 	 * @param name the function name
 	 * @return the refusal message
 	 */
 	public static String noFunctionValueMessage(String name) {
 		if (LispNames.REQUIRE.equals(name) || LispNames.PROVIDE.equals(name)) {
 			return name + " is only supported as a literal top-level form on the compile path";
+		}
+		if (JVM_UNSUPPORTED.contains(name)) {
+			return TLS_LISTEN_PEM_COMPUTED_PATH_MESSAGE;
 		}
 		return "Cannot compile: " + name + " as a function value (this backend has none for the built-in)";
 	}
@@ -880,6 +910,10 @@ public final class BuiltinFunctionWrappers {
 
 	private static String rontolispInternal(String member) {
 		return LispNames.RONTOLISP_PKG + "::" + member;
+	}
+
+	private static String rontolisp(String member) {
+		return PackageRegistry.qualify(LispNames.RONTOLISP_PKG, member);
 	}
 
 	/**

@@ -35,4 +35,3 @@ single-threaded by construction and do not compile this function; the
 - The bindings' values are used as given; unlike upstream `bordeaux-threads`, there is no
   form evaluation in the new thread (the `bt2:make-thread` shim accepts `quote` forms and
   self-evaluating values in `:initial-bindings` and signals on anything else).
-- These primitives have no function value: `#'rontolisp:make-thread` is an error.

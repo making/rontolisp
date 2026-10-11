@@ -179,9 +179,10 @@ final class JvmFunctionFormCompiler {
 			emitUndefinedFunctionThrow(name, ctx);
 		}
 		else {
-			// A standard function with no function value here (require/provide, which
-			// the compile path has only as literal top-level forms): it HAS a
-			// definition, so the late-binding signal above would misreport it.
+			// A built-in with no function value here (require/provide, which the
+			// compile path has only as literal top-level forms; a JVM_UNSUPPORTED
+			// name): it HAS a definition, so the late-binding signal above would
+			// misreport it.
 			throw new UnsupportedOperationException(BuiltinFunctionWrappers.noFunctionValueMessage(name));
 		}
 	}

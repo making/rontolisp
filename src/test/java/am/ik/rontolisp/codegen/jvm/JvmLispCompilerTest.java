@@ -17443,6 +17443,82 @@ class JvmLispCompilerTest {
 			.hasMessageContaining("expects :insecure");
 	}
 
+	// The compiled twin of LispEvaluatorTest#rontolispNativesAreFunctionValues: each
+	// #'rontolisp:NAME was "The function RONTOLISP:NAME is undefined".
+	@Test
+	void compileAndRunRontolispNativesAreFunctionValues() throws Exception {
+		for (String[] pair : new String[][] {
+				{ am.ik.rontolisp.RontolispNativeValueFixture.PORTABLE_PROGRAM,
+						am.ik.rontolisp.RontolispNativeValueFixture.PORTABLE_EXPECTED },
+				{ am.ik.rontolisp.RontolispNativeValueFixture.THREAD_PROGRAM,
+						am.ik.rontolisp.RontolispNativeValueFixture.THREAD_EXPECTED },
+				{ am.ik.rontolisp.RontolispNativeValueFixture.SOCKET_PROGRAM,
+						am.ik.rontolisp.RontolispNativeValueFixture.SOCKET_EXPECTED },
+				{ am.ik.rontolisp.RontolispNativeValueFixture.ASYNC_PROGRAM,
+						am.ik.rontolisp.RontolispNativeValueFixture.ASYNC_EXPECTED },
+				{ am.ik.rontolisp.RontolispNativeValueFixture.TLS_PROGRAM,
+						am.ik.rontolisp.RontolispNativeValueFixture.TLS_EXPECTED } }) {
+			assertThat(compileAndRun(am.ik.rontolisp.cli.CompileFrontendAccess.corpus(pair[0],
+					am.ik.rontolisp.reader.Features.JVM, false, false)))
+				.isEqualTo(pair[1]);
+		}
+	}
+
+	// The TLS natives as function values over a real handshake: tls-listen serves,
+	// tls-connect and tls-upgrade connect (:insecure, so no trust store is needed).
+	@Test
+	@ResourceLock(value = Resources.SYSTEM_PROPERTIES, mode = ResourceAccessMode.READ)
+	void compileAndRunTlsNativesAreFunctionValues() throws Exception {
+		try (javax.net.ssl.SSLServerSocket server = am.ik.rontolisp.TlsTestSupport.newServerSocket()) {
+			Thread echo = am.ik.rontolisp.TlsTestSupport.startOneShotEchoServer(server);
+			assertThat(compileAndRun("""
+					(let ((client (apply #'rontolisp:tls-connect (list "127.0.0.1" %d :insecure t))))
+					  (write-line "hello through a value" client)
+					  (let ((reply (read-line client)))
+					    (close client)
+					    (print reply)))
+					""".formatted(server.getLocalPort()))).isEqualTo("\"hello through a value\"");
+			echo.join();
+		}
+		try (javax.net.ssl.SSLServerSocket server = am.ik.rontolisp.TlsTestSupport.newServerSocket()) {
+			Thread echo = am.ik.rontolisp.TlsTestSupport.startOneShotEchoServer(server);
+			assertThat(compileAndRun("""
+					(let* ((sock (rontolisp:tcp-connect "127.0.0.1" %d))
+					       (tls (funcall #'rontolisp:tls-upgrade sock "127.0.0.1" :insecure t)))
+					  (write-line "upgraded through a value" tls)
+					  (let ((reply (read-line tls)))
+					    (close tls)
+					    (print reply)))
+					""".formatted(server.getLocalPort()))).isEqualTo("\"upgraded through a value\"");
+			echo.join();
+		}
+		int port = am.ik.rontolisp.TlsTestSupport.freePort();
+		Thread client = am.ik.rontolisp.TlsTestSupport.startOneShotEchoClient(port, "served through a value");
+		assertThat(compileAndRun("""
+				(let* ((listener (funcall #'rontolisp:tls-listen "%s" "%s" %d "127.0.0.1"))
+				       (client (rontolisp:tcp-accept listener))
+				       (line (read-line client)))
+				  (write-line line client)
+				  (close client)
+				  (close listener)
+				  (print line))
+				""".formatted(am.ik.rontolisp.TlsTestSupport.keyStore(), am.ik.rontolisp.TlsTestSupport.STORE_PASSWORD,
+				port)))
+			.isEqualTo("\"served through a value\"");
+		client.join();
+	}
+
+	// #'rontolisp:tls-listen-pem is a call with computed paths, which the JVM refuses:
+	// the
+	// certificate is baked into the output at compile time.
+	@Test
+	void compileTlsListenPemAsAFunctionValueIsRefusedAsAComputedCall() {
+		assertThatThrownBy(() -> compileAndRun("(print (functionp #'rontolisp:tls-listen-pem))"))
+			.isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining(
+					am.ik.rontolisp.compiler.BuiltinFunctionWrappers.TLS_LISTEN_PEM_COMPUTED_PATH_MESSAGE);
+	}
+
 	@Test
 	@ResourceLock(Resources.SYSTEM_PROPERTIES)
 	void compileAndRunClSslShimHttpsRequestAgainstLocalTlsServer() throws Exception {

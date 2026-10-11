@@ -16,8 +16,9 @@ round-trip are portable.
 - WASM (both): no handle can exist; the shim's `#+rontolisp-wasm` defuns SIGNAL at CALL time —
   never inline, which would turn a compile-time error into a silently sequential program.
   `threadp` answers nil, `bt:*supports-threads-p*` nil (WASM clackup runs `:use-thread nil`), the
-  direct `rontolisp:make-thread` spelling is not compiled at all. No `BuiltinFunctionWrappers`
-  entries; `--no-gc` rejects the names.
+  direct `rontolisp:make-thread` spelling is an undefined function, a call and a `#'` alike
+  (`BuiltinFunctionWrappers.WASM_UNSUPPORTED`; the interpreter and the JVM have the values,
+  [lisp2-namespaces.md](lisp2-namespaces.md)); `--no-gc` rejects the names.
 
 ## Bindings, join, feature
 - The `(symbol . VALUE)` alist binds in the NEW thread only; a spawned thread inherits NO bindings

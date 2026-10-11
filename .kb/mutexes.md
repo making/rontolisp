@@ -13,8 +13,8 @@ portable; never print, order or do arithmetic on one.
   EXIST even single-threaded: an undefined function is a compile error.
 - Reentrant. Releasing an unheld mutex: `LispEvalException` /
   `IllegalMonitorStateException` / unnoticed (WASM).
-- `--no-gc` rejects the names; no `BuiltinFunctionWrappers` entry, so
-  `#'rontolisp:make-mutex` is an error.
+- `--no-gc` rejects the names. `#'rontolisp:make-mutex` and the other two are function values on
+  all four (`NATIVE_VALUE_FUNCTIONS`, [lisp2-namespaces.md](lisp2-namespaces.md)).
 
 ## `with-mutex`
 `LispMacroExpander.expandWithMutex`, dispatched on the qualified name from

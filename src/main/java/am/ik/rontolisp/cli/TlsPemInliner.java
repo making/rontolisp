@@ -13,6 +13,7 @@ import am.ik.rontolisp.LispTrees;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.PackageRegistry;
 import am.ik.rontolisp.compiler.BuiltinCallArity;
+import am.ik.rontolisp.compiler.BuiltinFunctionWrappers;
 import am.ik.rontolisp.eval.TlsPemSupport;
 
 import org.jspecify.annotations.Nullable;
@@ -80,9 +81,7 @@ public final class TlsPemInliner {
 	private static LispVal rewriteCall(List<LispVal> elements, @Nullable String baseDir) {
 		List<LispVal> args = elements.subList(1, elements.size());
 		if (!(args.get(0) instanceof LispString certPath) || !(args.get(1) instanceof LispString keyPath)) {
-			throw new UnsupportedOperationException(
-					LispNames.TLS_LISTEN_PEM + ": cert-file and key-file must be string literals when compiling "
-							+ "(compiled output embeds the certificate; use the interpreter for runtime paths)");
+			throw new UnsupportedOperationException(BuiltinFunctionWrappers.TLS_LISTEN_PEM_COMPUTED_PATH_MESSAGE);
 		}
 		String cert = resolve(baseDir, certPath.value());
 		String key = resolve(baseDir, keyPath.value());

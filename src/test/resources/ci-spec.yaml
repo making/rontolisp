@@ -4853,6 +4853,26 @@ cases:
       NIL
       (NIL 1)
       ((:TYPE-ERROR 1 (SATISFIES RONTOLISP:STREAMP)) (:TYPE-ERROR 1 (SATISFIES RONTOLISP:STREAMP)) (:TYPE-ERROR "ab" (SATISFIES RONTOLISP:STREAMP)))
+  - name: rontolisp-natives-are-function-values
+    # #'rontolisp:make-mutex, mutex-acquire, mutex-release, version and the json-* pair
+    # through funcall, apply, mapc/mapcar and a variable. The compiled backends reported
+    # each but json-* undefined (RontolispNativeValueFixture.PORTABLE_PROGRAM).
+    source: |
+      (defvar *rnv-m* (funcall #'rontolisp:make-mutex))
+      (defvar *rnv-acquire* #'rontolisp:mutex-acquire)
+      (defun rnv-probe (thunk) (handler-case (progn (funcall thunk) :ok) (error () :error)))
+      (print (list (rnv-probe (lambda () (funcall *rnv-acquire* *rnv-m*) (rontolisp:mutex-release *rnv-m*)))
+                   (rnv-probe (lambda () (rontolisp:mutex-acquire *rnv-m*)
+                                (apply #'rontolisp:mutex-release (list *rnv-m*))))
+                   (rnv-probe (lambda () (mapc #'rontolisp:mutex-acquire (list *rnv-m*))
+                                (mapc #'rontolisp:mutex-release (list *rnv-m*))))))
+      (print (list (equal (funcall #'rontolisp:version) (rontolisp:version))
+                   (stringp (getf (apply #'rontolisp:version nil) :version))))
+      (print (mapcar #'rontolisp:json-stringify (mapcar #'rontolisp:json-parse (list "[1,2]" "\"a\""))))
+    expected: |
+      (:OK :OK :OK)
+      (T T)
+      ("[1,2]" "\"a\"")
   - name: future-combinators-signal-a-type-error-over-a-non-future
     # rontolisp:then, then*, catch and finally of a first argument that is no future are
     # the operator's type-error expecting (SATISFIES RONTOLISP:FUTUREP); they were a

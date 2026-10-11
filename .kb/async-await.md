@@ -207,8 +207,8 @@ spells. Until then the JVM, Preview 1 and the component reported `The function R
 is undefined` (measured 2026-10-10). Pinned by `AsyncStreamOperandFixture.VALUE_PROGRAM` /
 `NO_STREAM_VALUE_PROGRAM` / `WRITE_VALUE_PROGRAM` (`asyncPredicatesAndStreamVerbsAreFunctionValues`
 in `AsyncEvalTest`/`JvmAsyncCompilerTest`/`WasmLispCompilerIntegrationTest`, ci-spec
-`async-predicates-and-stream-verbs-are-function-values`). The other `rontolisp:` natives
-(threads, mutexes, sockets, `json-*`, `fetch`, `wait-for`, `version`) still have none (todo `f38`).
+`async-predicates-and-stream-verbs-are-function-values`). The other `rontolisp:` natives:
+[lisp2-namespaces.md](lisp2-namespaces.md), "A native built-in's function value".
 
 Found through todo `f21` (measured 2026-10-10, wasmtime 49.0.0). Its premise -- both wasm legs trap
 `cast failure` when the Clojure client's async 404 decodes its `:string` body inside one more

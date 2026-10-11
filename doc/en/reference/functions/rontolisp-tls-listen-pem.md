@@ -42,7 +42,8 @@ The example below is a one-connection TLS echo server; test it with
   error.
 - **JVM**: the certificate and key are parsed **at compile time** and the
   resulting keystore is embedded in the compiled class, so `cert-file` and
-  `key-file` must be **string literals** (a computed path is a compile error);
+  `key-file` must be **string literals** (a computed path is a compile error,
+  and so is `#'rontolisp:tls-listen-pem`, whose calls pass computed paths);
   relative paths resolve against the source file's directory. The compiled
   program needs no PEM files at run time.
 - **WASM**: not supported — `tls-listen-pem` is a **compile error** in both

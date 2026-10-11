@@ -16,6 +16,7 @@ import am.ik.rontolisp.LispString;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispTrees;
 import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.PackageRegistry;
 import am.ik.rontolisp.SourceProvenance;
 import am.ik.rontolisp.macro.LispMacroExpander;
 
@@ -55,6 +56,13 @@ import am.ik.rontolisp.macro.LispMacroExpander;
  * {@code LispFunction} and deliberately lets defuns shadow each other.
  */
 public final class ShadowedBuiltins {
+
+	private static final String INSECURE_KEYWORD = ":INSECURE";
+
+	/** The built-ins whose keyword/value pair is {@code :insecure v}. */
+	private static final Set<String> INSECURE_TAKING = Set.of(
+			PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.TLS_CONNECT),
+			PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.TLS_UPGRADE));
 
 	private ShadowedBuiltins() {
 	}
@@ -339,7 +347,9 @@ public final class ShadowedBuiltins {
 
 	// The built-in called with these argument forms: a direct lowered call, except that
 	// close's keyword position must hold :abort, which the lowering drops (it strips a
-	// LITERAL :abort only, so a run-time one is checked here).
+	// LITERAL :abort only, so a run-time one is checked here), and tls-connect's and
+	// tls-upgrade's must hold :insecure, which the lowering takes only as a literal --
+	// another keyword is the interpreter's error.
 	private static LispVal call(String builtin, List<LispVal> args, LispVal count,
 			Map.@org.jspecify.annotations.Nullable Entry<String, BuiltinAlias> alias) {
 		if (LispNames.CLOSE.equals(builtin) && args.size() == 3) {
@@ -347,6 +357,15 @@ public final class ShadowedBuiltins {
 			return listOf(new LispSymbol(LispNames.IF),
 					listOf(new LispSymbol(LispNames.EQ_GENERAL), args.get(1), new LispSymbol(LispNames.ABORT_KEYWORD)),
 					call(builtin, args.subList(0, 1), count, alias), wrongCount(message, args.size(), count));
+		}
+		if (INSECURE_TAKING.contains(builtin) && args.size() == 4) {
+			LispSymbol insecure = new LispSymbol(INSECURE_KEYWORD);
+			return listOf(new LispSymbol(LispNames.IF),
+					listOf(new LispSymbol(LispNames.EQ_GENERAL), args.get(2), insecure),
+					listOf(new LispSymbol(builtin), args.get(0), args.get(1), insecure, args.get(3)),
+					listOf(new LispSymbol(LispNames.ERROR),
+							new LispString(BuiltinCallArity.operator(builtin) + " expects :insecure, got: ~S"),
+							args.get(2)));
 		}
 		List<LispVal> call = new ArrayList<>(1 + args.size());
 		call.add(new LispSymbol(alias != null && alias.getValue().accepts(args.size()) ? alias.getKey() : builtin));

@@ -30,5 +30,3 @@
   [`rontolisp:thread-alive-p`](rontolisp-thread-alive-p.md) の答えだけです。
 - 自分自身のハンドルを [`rontolisp:join-thread`](rontolisp-join-thread.md) に渡すと
   永久にブロックします (自分自身への join は upstream でも同じです)。
-- これらのプリミティブに関数値はありません: `#'rontolisp:current-thread` はエラー
-  です。

@@ -373,14 +373,17 @@ final class WasmFunctionFormCompiler {
 	/**
 	 * {@return whether {@code name} has no definition at all -- no function this backend
 	 * registered, no car/cdr composition, no variable holding the function, no standard
-	 * function or wrapped built-in, and no {@code --dynamic} runtime to ask}
+	 * function or wrapped built-in this backend has, and no {@code --dynamic} runtime to
+	 * ask} A {@link BuiltinFunctionWrappers#WASM_UNSUPPORTED} name is undefined here, as
+	 * a call of it is.
 	 * @param name the function name
 	 * @param ctx the compilation context
 	 */
 	static boolean undefined(String name, WasmLispCompiler.Ctx ctx) {
 		return !ctx.functions.containsKey(name) && !LispNames.isCarCdrComposition(name) && !ctx.dynamic
 				&& !ctx.globalIndices.containsKey(name) && !PackageRegistry.isClFunctionName(name)
-				&& !BuiltinFunctionWrappers.isWrappedBuiltin(name);
+				&& (!BuiltinFunctionWrappers.isWrappedBuiltin(name)
+						|| BuiltinFunctionWrappers.WASM_UNSUPPORTED.contains(name));
 	}
 
 	/**

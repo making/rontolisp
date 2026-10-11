@@ -20679,6 +20679,24 @@ class LispEvaluatorTest {
 			.isEqualTo(am.ik.rontolisp.DivisionByZeroFixture.EXPECTED);
 	}
 
+	// The rontolisp: natives as function values. The twins are
+	// JvmLispCompilerTest#compileAndRunRontolispNativesAreFunctionValues and
+	// WasmLispCompilerIntegrationTest#rontolispNativesAreFunctionValues (the compiled
+	// backends had no value for them).
+	@Test
+	void rontolispNativesAreFunctionValues() {
+		assertThat(printedLines(am.ik.rontolisp.RontolispNativeValueFixture.PORTABLE_PROGRAM))
+			.isEqualTo(am.ik.rontolisp.RontolispNativeValueFixture.PORTABLE_EXPECTED);
+		assertThat(printedLines(am.ik.rontolisp.RontolispNativeValueFixture.THREAD_PROGRAM))
+			.isEqualTo(am.ik.rontolisp.RontolispNativeValueFixture.THREAD_EXPECTED);
+		assertThat(printedLines(am.ik.rontolisp.RontolispNativeValueFixture.SOCKET_PROGRAM))
+			.isEqualTo(am.ik.rontolisp.RontolispNativeValueFixture.SOCKET_EXPECTED);
+		assertThat(printedLines(am.ik.rontolisp.RontolispNativeValueFixture.ASYNC_PROGRAM))
+			.isEqualTo(am.ik.rontolisp.RontolispNativeValueFixture.ASYNC_EXPECTED);
+		assertThat(printedLines(am.ik.rontolisp.RontolispNativeValueFixture.TLS_PROGRAM))
+			.isEqualTo(am.ik.rontolisp.RontolispNativeValueFixture.TLS_EXPECTED);
+	}
+
 	// A left shift by a count no backend can build a result for signals a simple-error
 	// naming the operator and the count -- the JVM signalled an arithmetic-error without
 	// the count, the wasm-GC backends trapped, and a count at the int range's edge

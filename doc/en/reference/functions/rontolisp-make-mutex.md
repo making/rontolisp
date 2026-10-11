@@ -26,4 +26,3 @@ as many times as it acquired it.
 ## Limitations
 
 - The handle is opaque and backend-dependent — do not print or order it.
-- Macros and these primitives have no function value: `#'rontolisp:make-mutex` is an error.

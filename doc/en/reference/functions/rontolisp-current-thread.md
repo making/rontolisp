@@ -30,4 +30,3 @@ time.
   handle either way.
 - Passing your own handle to [`rontolisp:join-thread`](rontolisp-join-thread.md)
   blocks forever (joining yourself does upstream too).
-- These primitives have no function value: `#'rontolisp:current-thread` is an error.

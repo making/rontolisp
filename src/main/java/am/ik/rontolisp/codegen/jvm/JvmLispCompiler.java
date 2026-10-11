@@ -1760,8 +1760,9 @@ public final class JvmLispCompiler implements LispCompiler {
 		// parse-integer / read-from-string wrappers reference runtime helpers that are
 		// emitted only when the program itself uses the operator (_parseInt; the reader
 		// runtime). Exclude each wrapper unless the program references the symbol, so the
-		// wrapper and its helper stay gated together.
-		Set<String> wrapperExcludes = new HashSet<>();
+		// wrapper and its helper stay gated together. A JVM_UNSUPPORTED name has no
+		// wrapper: its #' is refused (JvmFunctionFormCompiler).
+		Set<String> wrapperExcludes = new HashSet<>(BuiltinFunctionWrappers.JVM_UNSUPPORTED);
 		if (!programUsesSymbol(program, LispNames.PARSE_INTEGER)) {
 			wrapperExcludes.add(LispNames.PARSE_INTEGER);
 		}

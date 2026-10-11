@@ -36,4 +36,3 @@
   スレッド内でのフォーム評価はありません(`bt2:make-thread` シムは
   `:initial-bindings` に `quote` フォームと自己評価値を受け付け、それ以外は
   エラーを通知します)。
-- これらのプリミティブは関数値を持ちません: `#'rontolisp:make-thread` はエラーです。
