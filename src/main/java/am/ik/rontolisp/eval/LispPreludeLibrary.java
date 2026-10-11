@@ -2914,12 +2914,14 @@ public final class LispPreludeLibrary {
 		// gate flips automatically because handler-case/unwind-protect head symbols land
 		// in the AST via the splice, and --no-gc rejects the surface by name).
 		//
-		// Non-future first argument is a type-error -- no JS-style auto-coercion to a
-		// resolved promise (users write (funcall (async-lambda () v)) for that).
+		// Non-future first argument is a type-error expecting (SATISFIES
+		// RONTOLISP:FUTUREP)
+		// -- no JS-style auto-coercion to a resolved promise (users write
+		// (funcall (async-lambda () v)) for that).
 		SOURCES.put(LispNames.THEN, """
 				(defun rontolisp:then (%rl-then-fut %rl-then-fn)
 				  (unless (rontolisp:futurep %rl-then-fut)
-				    (error "rontolisp:THEN expects a future as its first argument"))
+				    (%operand-type-error %rl-then-fut 'then '(satisfies rontolisp:futurep)))
 				  (funcall (rontolisp:async-lambda ()
 				             (funcall %rl-then-fn (rontolisp:await %rl-then-fut)))))
 				""");
@@ -2929,7 +2931,7 @@ public final class LispPreludeLibrary {
 		SOURCES.put(LispNames.THEN_STAR, """
 				(defun rontolisp:then* (%rl-thens-fut &rest %rl-thens-fns)
 				  (unless (rontolisp:futurep %rl-thens-fut)
-				    (error "rontolisp:THEN* expects a future as its first argument"))
+				    (%operand-type-error %rl-thens-fut 'then* '(satisfies rontolisp:futurep)))
 				  (if (null %rl-thens-fns)
 				      %rl-thens-fut
 				      (funcall (rontolisp:async-lambda ()
@@ -2947,7 +2949,7 @@ public final class LispPreludeLibrary {
 		SOURCES.put(LispNames.CATCH, """
 				(defun rontolisp:catch (%rl-catch-fut %rl-catch-handler)
 				  (unless (rontolisp:futurep %rl-catch-fut)
-				    (error "rontolisp:CATCH expects a future as its first argument"))
+				    (%operand-type-error %rl-catch-fut 'catch '(satisfies rontolisp:futurep)))
 				  (funcall (rontolisp:async-lambda ()
 				             (handler-case (rontolisp:await %rl-catch-fut)
 				               (error (%rl-catch-c) (funcall %rl-catch-handler %rl-catch-c))))))
@@ -2957,7 +2959,7 @@ public final class LispPreludeLibrary {
 		SOURCES.put(LispNames.FINALLY, """
 				(defun rontolisp:finally (%rl-fin-fut %rl-fin-thunk)
 				  (unless (rontolisp:futurep %rl-fin-fut)
-				    (error "rontolisp:FINALLY expects a future as its first argument"))
+				    (%operand-type-error %rl-fin-fut 'finally '(satisfies rontolisp:futurep)))
 				  (funcall (rontolisp:async-lambda ()
 				             (unwind-protect (rontolisp:await %rl-fin-fut)
 				               (funcall %rl-fin-thunk)))))

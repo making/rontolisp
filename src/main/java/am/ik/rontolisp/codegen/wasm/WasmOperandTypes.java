@@ -402,9 +402,9 @@ final class WasmOperandTypes {
 	 * ({@link #buildCompoundLandingBody})
 	 * @param compoundNames the symbols the compound types spell
 	 * ({@link OperandTypes#FILL_POINTER_VECTOR_TYPE},
-	 * {@link OperandTypes#fillPointerType}, and {@link OperandTypes#ASYNC_STREAM_TYPE} in
-	 * a module carrying a stream helper), by name: the entries a quoted {@code 'vector}
-	 * shares, as {@code typeNames}
+	 * {@link OperandTypes#fillPointerType}, {@link OperandTypes#ASYNC_STREAM_TYPE} and
+	 * {@link OperandTypes#ASYNC_FUTURE_TYPE} in a module carrying an async runtime), by
+	 * name: the entries a quoted {@code 'vector} shares, as {@code typeNames}
 	 */
 	record Texts(WasmLispCompiler.StringTable.StringEntry valuePrefix,
 			java.util.List<WasmLispCompiler.StringTable.StringEntry> suffixes,
@@ -428,6 +428,9 @@ final class WasmOperandTypes {
 			compoundNames.put(OperandTypes.INTEGER_TYPE, table.addBodyString(OperandTypes.INTEGER_TYPE));
 			if (asyncStreams) {
 				for (String name : compoundSymbols(OperandTypes.ASYNC_STREAM_TYPE, new java.util.ArrayList<>())) {
+					compoundNames.computeIfAbsent(name, table::addBodyString);
+				}
+				for (String name : compoundSymbols(OperandTypes.ASYNC_FUTURE_TYPE, new java.util.ArrayList<>())) {
 					compoundNames.computeIfAbsent(name, table::addBodyString);
 				}
 			}

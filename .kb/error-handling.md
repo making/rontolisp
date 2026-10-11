@@ -1650,6 +1650,13 @@ type T` with the type the operator requires, as a catchable `type-error` answeri
   nil`, `...: the stream has no write end`) are the interpreter's words on the JVM too (it wrote
   `stream-write: ...`). Pinned by `AsyncStreamOperandFixture` (ci-spec
   `stream-verbs-signal-a-type-error-over-a-non-stream`).
+- **rontolisp's future combinators** (2026-10-10): `rontolisp:then`, `then*`, `catch` and `finally` of a
+  first argument that is no future report under their bare names, expecting
+  `(SATISFIES RONTOLISP:FUTUREP)` (`OperandTypes.ASYNC_FUTURE_TYPE`), as the stream verbs do; funnel-typed
+  rows after theirs, spelled `RONTOLISP:`-qualified (`OperandTypes.spelling`) so CL's `catch` special form
+  does not match. The prelude defuns call `%operand-type-error` (they were `(error "rontolisp:THEN expects
+  ...")`, a `simple-error`); the wasm compound-type texts are interned with the stream type's. Pinned by
+  `AsyncCombinatorOperandFixture` ([async-await.md](async-await.md)).
 - **`scale-float`** (measured 2026-10-06, SBCL 2.2.9): refuses a non-`FLOAT` first argument (a complex,
   an integer, a ratio, a symbol, `nil`) and then a non-`INTEGER` second one, each a `type-error` over the
   argument as given. Before, nothing checked either: the interpreter's `asDouble` answered `6.0` for `3`

@@ -9,6 +9,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 
+import am.ik.rontolisp.AsyncCombinatorOperandFixture;
 import am.ik.rontolisp.AsyncStreamOperandFixture;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.eval.LispPreludeLibrary;
@@ -552,16 +553,8 @@ class JvmAsyncCompilerTest {
 
 	@Test
 	void combinatorsRejectNonFutureFirstArgument() throws Exception {
-		assertThat(compileAndRun("""
-				(print (handler-case (rontolisp:then 42 #'identity)
-				         (error (c) (simple-condition-format-control c))))
-				(print (handler-case (rontolisp:catch 42 (lambda (c) c))
-				         (error (c) (simple-condition-format-control c))))
-				(print (handler-case (rontolisp:finally 42 (lambda () nil))
-				         (error (c) (simple-condition-format-control c))))
-				""")).isEqualTo("\"rontolisp:THEN expects a future as its first argument\"\n"
-				+ "\"rontolisp:CATCH expects a future as its first argument\"\n"
-				+ "\"rontolisp:FINALLY expects a future as its first argument\"");
+		assertThat(compileAndRunExpanded(AsyncCombinatorOperandFixture.PROGRAM))
+			.isEqualTo(AsyncCombinatorOperandFixture.EXPECTED);
 	}
 
 	@Test

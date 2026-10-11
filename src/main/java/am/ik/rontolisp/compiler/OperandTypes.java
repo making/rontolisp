@@ -325,7 +325,7 @@ public final class OperandTypes {
 	 * The verbs of rontolisp's asynchronous stream, funnel-typed:
 	 * {@code rontolisp:stream-read}, {@code stream-write} and {@code stream-close} of a
 	 * value that is no such stream land {@link #ASYNC_STREAM_TYPE}. A program spells them
-	 * package-qualified ({@link #spelling}). Last in the table, after {@link #MAKE_LIST}.
+	 * package-qualified ({@link #spelling}). After {@link #MAKE_LIST}.
 	 */
 	private static final List<String> ASYNC_STREAM_OPERATORS = List.of(LispNames.STREAM_READ, LispNames.STREAM_WRITE,
 			LispNames.STREAM_CLOSE);
@@ -339,6 +339,24 @@ public final class OperandTypes {
 	 */
 	public static final List<Object> ASYNC_STREAM_TYPE = List.of("SATISFIES",
 			LispNames.RONTOLISP_PKG + ":" + LispNames.ASYNC_STREAMP);
+
+	/**
+	 * The future combinators, funnel-typed: {@code rontolisp:then}, {@code then*},
+	 * {@code catch} and {@code finally} of a first argument that is no future land
+	 * {@link #ASYNC_FUTURE_TYPE}. A program spells them package-qualified
+	 * ({@link #spelling}), so a bare {@code catch} -- CL's special form -- never names
+	 * the row. Last in the table, after {@link #ASYNC_STREAM_OPERATORS}.
+	 */
+	private static final List<String> ASYNC_FUTURE_OPERATORS = List.of(LispNames.THEN, LispNames.THEN_STAR,
+			LispNames.CATCH, LispNames.FINALLY);
+
+	/**
+	 * The type a future combinator requires of its first argument, spelled like
+	 * {@link #ASYNC_STREAM_TYPE}: {@code (SATISFIES RONTOLISP:FUTUREP)}. No type name
+	 * designates a future.
+	 */
+	public static final List<Object> ASYNC_FUTURE_TYPE = List.of("SATISFIES",
+			LispNames.RONTOLISP_PKG + ":" + LispNames.FUTUREP);
 
 	/**
 	 * The character comparisons, fixed-typed {@code CHARACTER}: every argument is
@@ -479,6 +497,10 @@ public final class OperandTypes {
 			OPERATOR_TYPES.put(op, FUNNEL_TYPE);
 			order.add(op);
 		}
+		for (String op : ASYNC_FUTURE_OPERATORS) {
+			OPERATOR_TYPES.put(op, FUNNEL_TYPE);
+			order.add(op);
+		}
 		OPERATORS = List.copyOf(order);
 	}
 
@@ -590,13 +612,14 @@ public final class OperandTypes {
 	/**
 	 * The name a program spells a named operator by: a CL operator's own, the
 	 * package-qualified one for a verb of rontolisp's asynchronous stream
-	 * ({@code RONTOLISP:STREAM-READ} for {@code STREAM-READ}), which reports under its
-	 * bare name.
+	 * ({@code RONTOLISP:STREAM-READ} for {@code STREAM-READ}) or a future combinator
+	 * ({@code RONTOLISP:CATCH} for {@code CATCH}), which report under their bare names.
 	 * @param operator the operator's reported name
 	 * @return the symbol name a program spells it by
 	 */
 	public static String spelling(String operator) {
-		return ASYNC_STREAM_OPERATORS.contains(operator) ? LispNames.RONTOLISP_PKG + ":" + operator : operator;
+		return ASYNC_STREAM_OPERATORS.contains(operator) || ASYNC_FUTURE_OPERATORS.contains(operator)
+				? LispNames.RONTOLISP_PKG + ":" + operator : operator;
 	}
 
 	/**

@@ -14,6 +14,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.stream.Stream;
 
+import am.ik.rontolisp.AsyncCombinatorOperandFixture;
 import am.ik.rontolisp.AsyncStreamOperandFixture;
 import am.ik.rontolisp.FastPathEvaluationOrderFixture;
 import am.ik.rontolisp.CharacterFilePositionFixture;
@@ -20335,6 +20336,17 @@ class WasmLispCompilerIntegrationTest {
 				.isEqualTo(AsyncStreamOperandFixture.EXPECTED);
 			assertThat(compileAndRunFrontEndWithDir(AsyncStreamOperandFixture.NO_STREAM_PROGRAM, component))
 				.isEqualTo(AsyncStreamOperandFixture.NO_STREAM_EXPECTED);
+		}
+	}
+
+	@Test
+	void futureCombinatorsSignalATypeErrorOverANonFuture() throws Exception {
+		// The wasm twin of AsyncEvalTest#combinatorsRejectNonFutureFirstArgument, Preview
+		// 1
+		// and the component.
+		for (boolean component : new boolean[] { false, true }) {
+			assertThat(compileAndRunFrontEndWithDir(AsyncCombinatorOperandFixture.PROGRAM, component))
+				.isEqualTo(AsyncCombinatorOperandFixture.EXPECTED);
 		}
 	}
 

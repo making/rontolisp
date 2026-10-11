@@ -4,6 +4,7 @@ import java.io.ByteArrayOutputStream;
 import java.io.PrintStream;
 import java.nio.charset.StandardCharsets;
 
+import am.ik.rontolisp.AsyncCombinatorOperandFixture;
 import am.ik.rontolisp.AsyncStreamOperandFixture;
 import am.ik.rontolisp.LispFuture;
 import am.ik.rontolisp.LispInteger;
@@ -667,15 +668,12 @@ class AsyncEvalTest {
 	@Test
 	void combinatorsRejectNonFutureFirstArgument() {
 		// the design decision: no JS-style auto-coercion of arbitrary values to a
-		// resolved promise -- each operator signals a clear error
+		// resolved promise -- each operator signals the operator's type-error expecting
+		// (SATISFIES RONTOLISP:FUTUREP); pinned on all four backends
+		assertThat(evalMulti(AsyncCombinatorOperandFixture.PROGRAM).output().trim())
+			.isEqualTo(AsyncCombinatorOperandFixture.EXPECTED);
 		assertThatThrownBy(() -> eval("(rontolisp:then 42 #'identity)"))
-			.hasMessageContaining("rontolisp:THEN expects a future");
-		assertThatThrownBy(() -> eval("(rontolisp:then* 42 #'identity)"))
-			.hasMessageContaining("rontolisp:THEN* expects a future");
-		assertThatThrownBy(() -> eval("(rontolisp:catch 42 (lambda (c) c))"))
-			.hasMessageContaining("rontolisp:CATCH expects a future");
-		assertThatThrownBy(() -> eval("(rontolisp:finally 42 (lambda () nil))"))
-			.hasMessageContaining("rontolisp:FINALLY expects a future");
+			.hasMessageContaining("THEN: The value 42 is not of type (SATISFIES RONTOLISP:FUTUREP)");
 	}
 
 	@Test

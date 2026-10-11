@@ -4816,6 +4816,32 @@ cases:
       (NIL 1)
       "STREAM-READ: The value 1 is not of type (SATISFIES RONTOLISP:STREAMP)"
       "STREAM-CLOSE: The value NIL is not of type (SATISFIES RONTOLISP:STREAMP)"
+  - name: future-combinators-signal-a-type-error-over-a-non-future
+    # rontolisp:then, then*, catch and finally of a first argument that is no future are
+    # the operator's type-error expecting (SATISFIES RONTOLISP:FUTUREP); they were a
+    # simple-error (AsyncCombinatorOperandFixture). The CL catch special form is unaffected.
+    source: |
+      (defvar *aco-42* (read-from-string "42"))
+      (defvar *aco-nil* (read-from-string "nil"))
+      (defvar *aco-a* (read-from-string "a"))
+      (defun aco-probe (thunk)
+        (handler-case (funcall thunk)
+          (type-error (c) (list :type-error (type-error-datum c) (type-error-expected-type c)
+                                (princ-to-string c)))
+          (error () :other-error)))
+      (print (aco-probe (lambda () (rontolisp:then *aco-42* #'identity))))
+      (print (aco-probe (lambda () (rontolisp:then* *aco-nil* #'identity))))
+      (print (aco-probe (lambda () (rontolisp:catch *aco-a* (lambda (c) c)))))
+      (print (aco-probe (lambda () (rontolisp:finally *aco-42* (lambda () nil)))))
+      (print (catch 'aco-tag (throw 'aco-tag :thrown)))
+      (print (rontolisp:await (rontolisp:then (funcall (rontolisp:async-lambda () 20)) #'1+)))
+    expected: |
+      (:TYPE-ERROR 42 (SATISFIES RONTOLISP:FUTUREP) "THEN: The value 42 is not of type (SATISFIES RONTOLISP:FUTUREP)")
+      (:TYPE-ERROR NIL (SATISFIES RONTOLISP:FUTUREP) "THEN*: The value NIL is not of type (SATISFIES RONTOLISP:FUTUREP)")
+      (:TYPE-ERROR A (SATISFIES RONTOLISP:FUTUREP) "CATCH: The value A is not of type (SATISFIES RONTOLISP:FUTUREP)")
+      (:TYPE-ERROR 42 (SATISFIES RONTOLISP:FUTUREP) "FINALLY: The value 42 is not of type (SATISFIES RONTOLISP:FUTUREP)")
+      :THROWN
+      21
   - name: async-wrapper-macro-expands-to-async-defun-and-lambda
     source: |
       (rontolisp:async (defun ci-async-wrap-add (a b) (+ a b)))

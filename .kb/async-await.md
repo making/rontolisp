@@ -151,9 +151,16 @@ keeps the compile error; `--no-gc` the rejection.
 `read-all`), one definition for every backend, each `funcall`ing an `async-lambda` over `await` +
 `handler-case`/`unwind-protect`, so the WASM EH-mode gate flips automatically. Their names go at the
 FRONT of `NoGcWasmCompiler`'s list so the diagnostic points at `rontolisp:then`. Preview 1 supports
-only the success half. A non-future first argument is a `simple-error` (`rontolisp:THEN expects a
-future as its first argument`) on all four backends, measured 2026-10-10 -- not the `type-error`
-the async guide promises (todo `f29`).
+only the success half. A non-future first argument is the operator's `type-error` expecting
+`(SATISFIES RONTOLISP:FUTUREP)` on all four backends (2026-10-10; it was a `simple-error`
+`rontolisp:THEN expects a future as its first argument`): the prelude source calls
+`(%operand-type-error fut 'then '(satisfies rontolisp:futurep))`. Rows `THEN`, `THEN*`, `CATCH`,
+`FINALLY` in `OperandTypes` (`ASYNC_FUTURE_OPERATORS`, funnel-typed after the stream verbs; a program
+spells them `RONTOLISP:`-qualified, so CL's `catch` form never names the `CATCH` row). Pinned by
+`AsyncCombinatorOperandFixture` (`AsyncEvalTest`/`JvmAsyncCompilerTest`/
+`WasmLispCompilerIntegrationTest` `combinatorsRejectNonFutureFirstArgument` /
+`futureCombinatorsSignalATypeErrorOverANonFuture`, ci-spec
+`future-combinators-signal-a-type-error-over-a-non-future`).
 
 ## `%stream-new`, the four-backend pull stream
 `rontolisp::%stream-new` (internal) is the ONE producer of a first-class PULL stream: read thunk,
