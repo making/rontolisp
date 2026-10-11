@@ -2,8 +2,9 @@
 
 `(await a...)`
 
-Waits for the agents' sends, answering `nil`. Every send already ran, so this
-only checks each argument is an agent cell and rendezvous.
+Runs the actions sent to the agents so far, or waits for the thread running them,
+answering `nil`. Inside an action it signals (`Can't await in agent action`), like the
+oracle.
 
 ```clojure
 (def a (agent 0))

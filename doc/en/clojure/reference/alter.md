@@ -2,9 +2,9 @@
 
 `(alter r f args...)`
 
-Applies `f` to the ref's old value and the arguments inside `dosync`, writes
-the answer through the ref's validator, and answers the new value. Works as a
-function value, like `swap!`.
+Applies `f` to the ref's old value and the arguments inside `dosync`, writes the
+answer, and answers the new value; the ref's validator runs on its final value when
+the transaction ends. Works as a function value, like `swap!`.
 
 ```clojure
 (def r (ref 0))

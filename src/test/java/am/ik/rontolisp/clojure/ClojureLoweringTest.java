@@ -2937,16 +2937,24 @@ class ClojureLoweringTest {
 	@Test
 	void stmVerbsLowerOverTheAtomCell() {
 		assertThat(lowered("(ref 0)")).contains(":C%ATOM");
-		assertThat(lowered("(ref 0 :validator odd?)")).contains("C%STM-PUT");
-		assertThat(lowered("(dosync 1)")).contains("C%STM-DEPTH");
-		assertThat(lowered("(def r (ref 0)) (alter r inc)")).contains("C%STM-CHECK").contains("No transaction");
-		assertThat(lowered("(def r (ref 0)) (commute r inc)")).contains("C%STM-CHECK");
-		assertThat(lowered("(def r (ref 0)) (ref-set r 1)")).contains("C%STM-CHECK");
-		assertThat(lowered("(def r (ref 0)) (ensure r)")).contains("C%STM-DEPTH");
-		assertThat(lowered("(agent 0)")).contains(":C%ATOM");
-		assertThat(lowered("(def a (agent 0)) (send a inc)")).contains("C%AGENT").contains("C%STM-CHECK");
+		assertThat(lowered("(ref 0 :validator odd?)")).contains("(RONTOLISP::%CLOJURE-REF-MAKE 0");
+		// a transaction is its body's thunk run by the one-lock runtime, the thunk its
+		// own zero-arity recur target like the oracle's (fn [] body)
+		assertThat(lowered("(dosync 1)")).contains("(RONTOLISP::%CLOJURE-STM-RUN (LAMBDA NIL 1))");
+		assertThatThrownBy(() -> Clojure.read("(loop [i 0] (dosync (if (< i 3) (recur (inc i)) i)))", null))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("wrong number of arguments passed to recur: expected 0, got 1");
+		assertThat(lowered("(def r (ref 0)) (alter r inc)")).contains("(RONTOLISP::%CLOJURE-STM-REQUIRE)")
+			.contains("RONTOLISP::%CLOJURE-STM-WRITE");
+		assertThat(lowered("(def r (ref 0)) (commute r inc)")).contains("RONTOLISP::%CLOJURE-STM-WRITE");
+		assertThat(lowered("(def r (ref 0)) (ref-set r 1)")).contains("RONTOLISP::%CLOJURE-STM-WRITE");
+		assertThat(lowered("(def r (ref 0)) (ensure r)")).contains("(RONTOLISP::%CLOJURE-STM-REQUIRE)");
+		assertThat(lowered("(agent 0)")).contains("(RONTOLISP::%CLOJURE-AGENT-MAKE 0 NIL)");
+		assertThat(lowered("(def a (agent 0)) (send a inc)")).contains("C%AGENT")
+			.contains("RONTOLISP::%CLOJURE-AGENT-SEND");
 		assertThat(lowered("(def a (agent 0)) (send-off a inc)")).contains("C%AGENT");
-		assertThat(lowered("(def a (agent 0)) (await a)")).contains("PROGN").contains("NIL");
+		assertThat(lowered("(def a (agent 0)) (await a)")).contains("(RONTOLISP::%CLOJURE-AGENT-AWAIT ")
+			.contains("Can't await in agent action");
 		assertThat(lowered("(shutdown-agents)")).contains("NIL");
 		assertThat(lowered("alter")).contains("LAMBDA");
 		assertThatThrownBy(() -> Clojure.read("(ref 0 :history 1)", null)).isInstanceOf(LispReadException.class)

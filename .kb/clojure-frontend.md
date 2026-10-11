@@ -55,7 +55,7 @@ The oracle is `clj` 1.12.6.1673: a behavior is decided by running it there, and 
 | `sorted-map` / `sorted-set` (and `-by`) | `(:C%SORTED setp cmp items)`: a vector of `[k v]` entries or members in comparator order | "Sorted collections" |
 | `[..]` | a CL vector (a `vector` call) | a string is a CL vector too, so `vector?`/`coll?` exclude strings |
 | list, seq | a CL list | lazy seq: `(:C%LAZY cell)`, memoized through `rplaca`/`rplacd` ("Laziness") |
-| atom, volatile, ref, agent | `(:C%ATOM #(value))`; a volatile's cell `#(value :C%VOLATILE)` | one cell shape, so STM verbs accept atoms; the second slot is only what `volatile?` reads |
+| atom, volatile, ref, agent | `(:C%ATOM #(value))`; a volatile's cell `#(value :C%VOLATILE)`; a validated ref's `#(value nil validator)`, an agent's `#(value nil validator (running . queue))` | one cell shape, so STM verbs accept atoms; `volatile?` reads the length 2, so slot 1 of the longer cells stays nil; `send` refuses a cell that is not 4 long |
 | record / deftype / reify | `(:C%RECORD tag fields table class)` / `(:C%TYPE tag fields table class slots?)` / a fresh `:C%REIFY` tag | "Dispatch"; the interfaces a body implements are rows under the tag ("Host interfaces") |
 | `#"re"` | `(:C%PATTERN stamp source ops ngroups)` | the stamp is a gensym, so `=` is identity like the oracle |
 | byte array (`byte-array`, `.getBytes`) | `(:C%BYTES octets)`, `octets` a packed `(unsigned-byte 8)` vector | "Byte arrays" |
@@ -125,8 +125,8 @@ answered `2 5 3` before).
 | `ex-info` `ex-data` `ex-message` `ex-cause`, `.getMessage` `.getLocalizedMessage` `.getCause` | one call to the `clojure.lisp` "Exceptions" function | see "Exceptions" |
 | `assert` | `if` around the `AssertionError` carrier ("Refusals") | the `Assert failed:` message evaluates only on failure; it names the failed form, built only in the failure branch: rendered at lower time (`ClojureStringLowering.prSource`: symbols, keywords, integers, strings, chars, lists, vectors, maps) so no printer is linked, else `quote` through the readable `%clojure-str-of` (double, ratio, set, regex...) which links the collection printer (measured 2026-10-03: `(assert (nil? x))` wasm 3171 -> 3282 bytes; with a double in the form 3171 -> 54237 versus 21992 before) |
 | `atom` `deref`/`@` `swap!` `reset!` `compare-and-set!` `volatile!` `vswap!` `vreset!` | reads/writes of the cell; an atom's `swap!`/`compare-and-set!`/`reset!` through the guarded `%clojure-atom-*` helpers (`.kb/concurrent-served-requests.md`) | answer the new value; `compare-and-set!` compares with `eql`; `swap!` retries like the oracle's CAS loop; `seq`/`first`/`count`/`empty?`/`cons`/`conj` onto a cell signal like the oracle; `deref` also reads a host `Future`, with or without a timeout ("A host `Future` under `deref`"), and the rontolisp future the HTTP client answers ("HTTP client") |
-| `ref` `dosync` `alter` `commute` `ref-set` `ensure` | the cell under the spliced STM runtime | "State" |
-| `agent` `send` `send-off` `await` `shutdown-agents` | the cell as a synchronous agent | "State" |
+| `ref` `dosync` `alter` `commute` `ref-set` `ensure` | the cell under `clojure.lisp`'s `%clojure-stm-*` | "State" |
+| `agent` `send` `send-off` `await` `shutdown-agents` | the cell under `clojure.lisp`'s `%clojure-agent-*` | "State" |
 | `binding` / `set!` | `let*` of specials plus a depth counter | "State" |
 | `with-open` | `let*` plus `unwind-protect` closing in reverse | a stream closes through `close` on every backend, anything else through the `close` interop call; an empty vector is the bare body |
 | `with-out-str` | `let*` rebinding `*standard-output*` to `make-string-output-stream`, read back | never a literal `with-output-to-string`: it flips a WASM module into EH mode |
@@ -5367,11 +5367,32 @@ resolve var`.
   `set!` of any other local is `Cannot assign to non-mutable`. The oracle compiles
   `fn`/`#()`/`letfn`/`reify`/`lazy-seq`/`for`/`dosync`/`proxy` to classes that copy the
   fields they read, so `capturingMutableFields` rebinds those as plain locals around them.
-- STM (single-threaded): `dosync` binds the depth deeper and never retries; `alter`/
-  `commute`/`ref-set` go through the validator (a failed one writes nothing); `commute`
-  runs once (the oracle may twice); every verb outside `dosync` signals `No transaction
-  running`. Agents are synchronous: `send`/`send-off` apply at once with `*agent*` bound,
-  answering the cell; `await` and `shutdown-agents` answer `nil`.
+- STM (`clojure.lisp` "Refs and agents across request threads", 2026-10-11): `dosync` is
+  `(%clojure-stm-run (lambda () body))`, the thunk its own zero-arity `recur` target (the
+  oracle's `(fn [] body)`). The outermost one holds `%clojure-stm-guard` (one lock for every
+  transaction) and binds `%clojure-stm-log`; a nested one joins. `alter`/`commute`/`ref-set`
+  store in place through `%clojure-stm-write`, logging the ref's pre-transaction value on its
+  first write; at the body's end every written ref's validator runs on its final value, and a
+  non-local exit restores the log. Never retries, so `commute` runs once (the oracle may
+  twice). Every verb outside one is `%clojure-stm-require`'s `No transaction running`;
+  `ensure` answers the value. A validator rides in the cell (`%clojure-ref-make`, also
+  validating the initial value), not a registry. Agents: `send` queues `(lambda (old) (let
+  ((C%AGENT a) depth) (apply f old args)))` (f and args run at the send) through
+  `%clojure-agent-send`; a send while `%clojure-agent-held` is bound (inside a transaction or
+  an action) waits in that box, released on success, dropped on failure. `%clojure-agent-drain`
+  appends under `%clojure-atom-guard` and, when no thread runs the agent, runs the queue on
+  this thread (actions outside every lock, so no deadlock between agents); a failing action
+  signals there and leaves the rest queued for the next drain. `await` refuses inside an
+  action (`C%AGENT`), queues a marker and runs the queue; a host target
+  (`%clojure-agent-await`) then polls the marker between `(sleep 0.001)`s, wasm
+  (`%clojure-agent-await-here`) never waits, so no `sleep` reaches a module. `C%AGENT` is the
+  only spliced `stmRuntime` form. Model choice: the shcloj4 corpus's refs and agents
+  (`chat.clj`, `concurrency.clj`, `pi.clj`) are single-threaded `alter`/`commute`/`send-off`,
+  none relying on a retry or on a deref-after-write seeing another transaction, so the one
+  lock suffices; a per-ref read/write set would need `deref` to tell a ref from an atom (they
+  share the cell) and to read the transaction. Pins: clojure-spec
+  `transactions-commit-whole-and-agents-hold-sends` (oracle-identical),
+  `ClojureRefAgentConcurrentRequestsTest`.
 
 ## clojure.test
 

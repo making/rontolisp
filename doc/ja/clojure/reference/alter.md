@@ -2,7 +2,7 @@
 
 `(alter r f args...)`
 
-`dosync` の内側で、ref の古い値と引数に関数 `f` を適用し、ref の validator を通して書き込み、新しい値を返します。`swap!` 同様、関数値として動きます。
+`dosync` の内側で、ref の古い値と引数に関数 `f` を適用して答えを書き込み、新しい値を返します。ref の validator はトランザクションの終わりに最終値に対して走ります。`swap!` 同様、関数値として動きます。
 
 ```clojure
 (def r (ref 0))

@@ -338,14 +338,17 @@ var. A name no program definition claims, or a `clojure.core/` spelling, is the 
 metadata is `:name`, `:ns` and a macro's `:macro`. A core var with no value here
 (`#'all-ns`) is refused.
 
-A `ref` is the atom cell with a transaction discipline: `dosync` opens the
-extent (single-threaded, so no retries and no isolation), `alter`/`commute`
-apply through the `:validator` (a failed one signals and writes nothing),
-`ref-set` replaces through it, and `ensure` answers the ref -- every verb
-requiring the extent. An `agent` is the same cell updated by `send`/`send-off`,
-which apply at once (there is no thread pool, so async ordering is out) and
-answer the agent; `*agent*` is bound while one runs. `await` rendezvous and
-`shutdown-agents` answer `nil`. A [delay](reference/delay.md) runs its body once, on
+A `ref` is the atom cell written only in a transaction: `dosync` runs its body
+holding one lock for every transaction of the process (a nested `dosync` joins
+the running one), `alter`/`commute`/`ref-set` write the ref and keep its old
+value, and `ensure` answers its value -- every verb requiring a transaction.
+When the body returns, the `:validator` of every ref it wrote runs on the final
+value; when it signals, every ref it wrote gets its old value back. An `agent`
+runs the actions `send`/`send-off` queue one at a time, in order, on the
+sending thread when it is idle (there is no thread pool); a send made inside a
+transaction or an action runs once that completes. `*agent*` is bound while an
+action runs, `await` runs or waits for the actions sent so far, and
+`shutdown-agents` answers `nil`. A [delay](reference/delay.md) runs its body once, on
 the first `force` or `deref`, under its own lock. `future`/`promise`/`deliver`
 stay refused by name, and so does `proxy-super` (proxy methods take no super
 handle).

@@ -491,84 +491,51 @@ final class ClojureStateLowering {
 				withAtom(ctx, cell, "compare-and-set!", bound -> compareAndSetBuild(ctx, bound, wanted, value)));
 	}
 
-	// state: refs over the atom cell, agents as synchronous atoms, binding over
-	// specials, and the small imperative companions
+	// state: refs and agents over the atom cell (the spliced helpers of clojure.lisp,
+	// "Refs and agents across request threads"), binding over specials, and the small
+	// imperative companions
+
+	/** {@code dosync}: the body's thunk run as one transaction. */
+	static final LispSymbol STM_RUN = new LispSymbol("RONTOLISP::%CLOJURE-STM-RUN");
+
+	/** The refusal of a transaction verb outside {@code dosync}. */
+	static final LispSymbol STM_REQUIRE = new LispSymbol("RONTOLISP::%CLOJURE-STM-REQUIRE");
+
+	/** {@code alter}/{@code commute}/{@code ref-set}'s logged write. */
+	static final LispSymbol STM_WRITE = new LispSymbol("RONTOLISP::%CLOJURE-STM-WRITE");
+
+	/** A ref with a validator. */
+	static final LispSymbol REF_MAKE = new LispSymbol("RONTOLISP::%CLOJURE-REF-MAKE");
+
+	/** An agent. */
+	static final LispSymbol AGENT_MAKE = new LispSymbol("RONTOLISP::%CLOJURE-AGENT-MAKE");
+
+	/** {@code send}/{@code send-off}: an action queued on the agent. */
+	static final LispSymbol AGENT_SEND = new LispSymbol("RONTOLISP::%CLOJURE-AGENT-SEND");
+
+	/** {@code await} on a host target, waiting for another thread's run of the queue. */
+	static final LispSymbol AGENT_AWAIT = new LispSymbol("RONTOLISP::%CLOJURE-AGENT-AWAIT");
+
+	/** {@code await} on wasm, where this thread runs every queue. */
+	static final LispSymbol AGENT_AWAIT_HERE = new LispSymbol("RONTOLISP::%CLOJURE-AGENT-AWAIT-HERE");
+
+	/** The acting-agent var, {@code *agent*}. */
+	private static final LispSymbol AGENT_VAR = new LispSymbol("C%AGENT");
 
 	/**
-	 * The STM runtime, spliced once behind the false binding when the program uses refs
-	 * or agents: the open-transaction depth (a {@code dosync} binds it one deeper, so
-	 * {@code alter} and friends outside one signal), the validator registry (an alist of
-	 * cell/validator pairs, cells compared by identity) and the acting-agent var (bound
-	 * while a {@code send} runs, nil outside one). Pure lowering over existing
-	 * primitives, so every backend runs it unchanged.
+	 * The agent runtime, spliced once behind the false binding when the program sends to
+	 * an agent, awaits one or reads {@code *agent*}: the acting-agent var, bound while an
+	 * action runs, nil outside one. Transactions and agents are the spliced helpers.
 	 */
-	static List<LispVal> stmRuntime(ClojureLowering ctx) {
+	static List<LispVal> stmRuntime() {
 		List<LispVal> runtime = new ArrayList<>();
-		runtime.add(ClojureLowerUtil.list(ClojureLowerUtil.sym("defvar"), new LispSymbol("C%STM-DEPTH"),
-				new LispInteger(0)));
-		runtime.add(ClojureLowerUtil.list(ClojureLowerUtil.sym("defvar"), new LispSymbol("C%STM-VALIDATORS"),
-				ClojureLowering.NIL_CONST));
-		runtime.add(ClojureLowerUtil.list(ClojureLowerUtil.sym("defvar"), new LispSymbol("C%AGENT"),
-				ClojureLowering.NIL_CONST));
-		LispSymbol cell = new LispSymbol("cell");
-		LispSymbol validator = new LispSymbol("validator");
-		LispSymbol rest = new LispSymbol("rest");
-		LispSymbol value = new LispSymbol("value");
-		LispSymbol found = new LispSymbol("found");
-		LispSymbol verdict = new LispSymbol("verdict");
-		// (defun c%stm-put (cell validator) ...): register the validator, answer it
-		runtime.add(ClojureLowerUtil.list(ClojureLowerUtil.sym("defun"), new LispSymbol("C%STM-PUT"),
-				ClojureLowerUtil.list(List.of(cell, validator)),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("setq"), new LispSymbol("C%STM-VALIDATORS"),
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("cons"),
-								ClojureLowerUtil.list(ClojureLowerUtil.sym("cons"), cell, validator),
-								new LispSymbol("C%STM-VALIDATORS"))),
-				validator));
-		// (defun c%stm-get (cell) ...): the validator registered for the cell, or nil
-		LispSymbol walk = new LispSymbol("walk");
-		runtime.add(ClojureLowerUtil.list(ClojureLowerUtil.sym("defun"), new LispSymbol("C%STM-GET"),
-				ClojureLowerUtil.list(List.of(cell)),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("labels"), ClojureLowerUtil.list(List.of(ClojureLowerUtil
-					.list(walk, ClojureLowerUtil.list(rest), ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
-							ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), rest), ClojureLowering.NIL_CONST,
-							ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
-									ClojureLowerUtil.list(ClojureLowerUtil.sym("eq"),
-											ClojureLowerUtil.list(ClojureLowerUtil.sym("caar"), rest), cell),
-									ClojureLowerUtil.list(ClojureLowerUtil.sym("cdar"), rest),
-									ClojureLowerUtil.list(walk,
-											ClojureLowerUtil.list(ClojureLowerUtil.sym("cdr"), rest))))))),
-						ClojureLowerUtil.list(walk, new LispSymbol("C%STM-VALIDATORS")))));
-		// (defun c%stm-check (cell value) ...): write the value through the
-		// validator, answering it; a failed validator signals and writes nothing
-		// (the single-threaded rollback: nothing else ran)
-		LispVal write = ClojureLowerUtil.list(ClojureLowerUtil.sym("progn"), atomPut(cell, value), value);
-		runtime.add(ClojureLowerUtil.list(ClojureLowerUtil.sym("defun"), new LispSymbol("C%STM-CHECK"),
-				ClojureLowerUtil.list(List.of(cell, value)),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
-						ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(found,
-								ClojureLowerUtil.list(new LispSymbol("C%STM-GET"), cell)))),
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), found,
-								ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
-										ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(verdict,
-												ClojureLowerUtil.list(ClojureLowerUtil.sym("funcall"), found, value)))),
-										ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
-												ClojureLowerUtil.list(ClojureLowerUtil.sym("or"),
-														ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), verdict),
-														ClojureLowerUtil.list(ClojureLowerUtil.sym("eq"), verdict,
-																ctx.falseVariable)),
-												ClojureRefusals.refusal(ClojureRefusals.ILLEGAL_STATE,
-														LispString.literal("Invalid reference state")),
-												write)),
-								write))));
+		runtime.add(ClojureLowerUtil.list(ClojureLowerUtil.sym("defvar"), AGENT_VAR, ClojureLowering.NIL_CONST));
 		return runtime;
 	}
 
 	/** The STM transaction guard: the body runs only inside {@code dosync}. */
 	static LispVal txnGuard(LispVal guarded) {
-		return ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym(">"), new LispSymbol("C%STM-DEPTH"), new LispInteger(0)),
-				guarded,
-				ClojureRefusals.refusal(ClojureRefusals.ILLEGAL_STATE, LispString.literal("No transaction running")));
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("progn"), ClojureLowerUtil.list(STM_REQUIRE), guarded);
 	}
 
 	/**
@@ -596,30 +563,19 @@ final class ClojureStateLowering {
 	}
 
 	/**
-	 * A fresh cell with the validator registered: every {@code ref} and every
-	 * {@code agent} with a {@code :validator} builds one.
-	 */
-	static LispVal checkedCell(ClojureLowering ctx, LispVal init, LispVal validator) {
-		LispSymbol made = ctx.freshTemp();
-		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
-				ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(made, wrapAtom(init)))),
-				ClojureLowerUtil.list(new LispSymbol("C%STM-PUT"), made, validator), made);
-	}
-
-	/**
 	 * {@code (ref init & opts)}: an atom cell, like {@code atom}; with a
-	 * {@code :validator} the validator runs on every {@code alter}/{@code commute}/
-	 * {@code ref-set} and rejects the write on failure.
+	 * {@code :validator}, the spliced {@link #REF_MAKE}'s cell carrying it, which the
+	 * initial value must pass and every transaction writing the ref runs on its final
+	 * value.
 	 */
 	static LispVal refOf(ClojureLowering ctx, List<LispVal> items) {
 		ClojureLowerUtil.isTrue(items.size() >= 2, "ref takes an initial value");
 		LispVal init = ctx.lower(items.get(1));
 		LispVal validator = validatorOpt(ctx, items, 2, "ref");
-		ctx.usedStm = true;
 		if (validator == null) {
 			return wrapAtom(init);
 		}
-		return checkedCell(ctx, init, validator);
+		return ClojureLowerUtil.list(REF_MAKE, init, validator);
 	}
 
 	/** {@code ref} as a value: a one-argument lambda over the constructor. */
@@ -629,45 +585,47 @@ final class ClojureStateLowering {
 	}
 
 	/**
-	 * {@code (dosync body...)}: the body with the transaction depth bound one deeper.
-	 * Single-threaded there is nothing to retry and nothing to isolate against, so a
-	 * transaction is a dynamic extent; {@code alter} and friends still require one.
+	 * {@code (dosync body...)}: the body's thunk, which the spliced {@link #STM_RUN} runs
+	 * as one transaction under the one lock every transaction takes (a nested
+	 * {@code dosync} joins the running one). The thunk is the body's own zero-arity
+	 * {@code recur} target, like the oracle's {@code (fn [] body)}.
 	 */
 	static LispVal dosyncOf(ClojureLowering ctx, List<LispVal> items) {
-		ctx.usedStm = true;
-		LispSymbol depth = new LispSymbol("C%STM-DEPTH");
-		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
-				ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(depth,
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("+"), depth, new LispInteger(1))))),
-				ctx.body(items, 1));
+		ClojureLowering.RecurTarget target = new ClojureLowering.RecurTarget(ctx.freshRecurName(), true);
+		target.setArity(0, false);
+		ctx.pushRecurTarget(target);
+		try {
+			LispVal lambda = ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(List.of()),
+					ctx.bodyTail(items, 1));
+			LispVal thunk = target.used() ? ClojureLowering.labelsSelfCall(target.callName(), lambda) : lambda;
+			return ClojureLowerUtil.list(STM_RUN, thunk);
+		}
+		finally {
+			ctx.recurTargets.pop();
+		}
 	}
 
 	/**
 	 * {@code (alter ref fun args...)} and {@code (commute ref fun args...)}: the function
-	 * applied to the old value and the arguments, written through the validator.
-	 * Single-threaded the two commute identically (the oracle may run a commute's
-	 * function twice); both require a transaction.
+	 * applied to the old value and the arguments, written through the transaction's log.
+	 * Transactions run one at a time, so the two commute identically (the oracle may run
+	 * a commute's function twice); both require a transaction.
 	 */
 	static LispVal alterOf(ClojureLowering ctx, List<LispVal> items, String op) {
 		ClojureLowerUtil.isTrue(items.size() >= 3, op + " takes a ref, a function and arguments");
-		ctx.usedStm = true;
 		return alterBuild(ctx, ctx.lower(items.get(1)), ClojureBindingLowering.fnValue(ctx, items.get(2)),
 				ClojureLowerUtil.cons(ClojureLowerUtil.sym("list"), ctx.lowers(items, 3)), op);
 	}
 
 	/**
 	 * An {@code alter}/{@code commute} over already-lowered forms: the guard, the
-	 * application and the validated write, answering the new value.
+	 * application and the logged write, answering the new value.
 	 */
 	static LispVal alterBuild(ClojureLowering ctx, LispVal cell, LispVal fun, LispVal argList, String op) {
 		return withAtom(ctx, cell, op, bound -> {
-			LispSymbol next = ctx.freshTemp();
 			LispVal spread = ClojureLowerUtil.list(ClojureLowerUtil.sym("cons"), atomGet(bound), argList);
-			LispVal update = ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
-					ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(next,
-							ClojureLowerUtil.list(ClojureLowerUtil.sym("apply"), fun, spread)))),
-					ClojureLowerUtil.list(new LispSymbol("C%STM-CHECK"), bound, next));
-			return txnGuard(update);
+			return txnGuard(ClojureLowerUtil.list(STM_WRITE, atomCell(bound),
+					ClojureLowerUtil.list(ClojureLowerUtil.sym("apply"), fun, spread)));
 		});
 	}
 
@@ -681,20 +639,16 @@ final class ClojureStateLowering {
 				alterBuild(ctx, cell, fun, rest, op));
 	}
 
-	/** {@code (ref-set ref value)}: the value written through the validator. */
+	/** {@code (ref-set ref value)}: the value written through the transaction's log. */
 	static LispVal refSetOf(ClojureLowering ctx, List<LispVal> items) {
 		ClojureLowerUtil.isTrue(items.size() == 3, "ref-set takes a ref and a value");
-		ctx.usedStm = true;
 		LispVal value = ctx.lower(items.get(2));
-		return withAtom(ctx, ctx.lower(items.get(1)), "ref-set", bound -> txnGuard(refSetBuild(ctx, bound, value)));
+		return withAtom(ctx, ctx.lower(items.get(1)), "ref-set", bound -> txnGuard(refSetBuild(bound, value)));
 	}
 
-	/** A {@code ref-set} over already-lowered forms: the validated write. */
-	static LispVal refSetBuild(ClojureLowering ctx, LispVal bound, LispVal value) {
-		LispSymbol next = ctx.freshTemp();
-		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
-				ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(next, value))),
-				ClojureLowerUtil.list(new LispSymbol("C%STM-CHECK"), bound, next));
+	/** A {@code ref-set} over already-lowered forms: the logged write. */
+	static LispVal refSetBuild(LispVal bound, LispVal value) {
+		return ClojureLowerUtil.list(STM_WRITE, atomCell(bound), value);
 	}
 
 	/** {@code ref-set} as a value: a two-argument lambda over the write. */
@@ -702,70 +656,72 @@ final class ClojureStateLowering {
 		LispSymbol cell = new LispSymbol(ClojureLowering.mangle("ref-set-cell"));
 		LispSymbol value = new LispSymbol(ClojureLowering.mangle("ref-set-value"));
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(List.of(cell, value)),
-				withAtom(ctx, cell, "ref-set", bound -> txnGuard(refSetBuild(ctx, bound, value))));
+				withAtom(ctx, cell, "ref-set", bound -> txnGuard(refSetBuild(bound, value))));
 	}
 
 	/**
-	 * {@code (ensure ref)}: the ref itself, requiring a transaction like the oracle
-	 * (where it also snapshots the ref for the transaction's read set).
+	 * {@code (ensure ref)}: the ref's value, requiring a transaction like the oracle's.
+	 * Transactions run one at a time, so no other one writes the ref meanwhile.
 	 */
 	static LispVal ensureOf(ClojureLowering ctx, List<LispVal> items) {
 		ClojureLowerUtil.isTrue(items.size() == 2, "ensure takes one ref");
-		ctx.usedStm = true;
-		return withAtom(ctx, ctx.lower(items.get(1)), "ensure", bound -> txnGuard(bound));
+		return withAtom(ctx, ctx.lower(items.get(1)), "ensure", bound -> txnGuard(atomGet(bound)));
 	}
 
 	/**
-	 * {@code (agent init & opts)}: an atom cell, like {@code ref}; a {@code :validator}
-	 * runs on every {@code send}.
+	 * {@code (agent init & opts)}: the spliced {@link #AGENT_MAKE}'s cell, carrying the
+	 * {@code :validator} (which the initial value must pass and every action's answer)
+	 * and the agent's queue.
 	 */
 	static LispVal agentOf(ClojureLowering ctx, List<LispVal> items) {
 		ClojureLowerUtil.isTrue(items.size() >= 2, "agent takes an initial value");
 		LispVal init = ctx.lower(items.get(1));
 		LispVal validator = validatorOpt(ctx, items, 2, "agent");
-		ctx.usedStm = true;
-		if (validator == null) {
-			return wrapAtom(init);
-		}
-		return checkedCell(ctx, init, validator);
+		return ClojureLowerUtil.list(AGENT_MAKE, init, validator == null ? ClojureLowering.NIL_CONST : validator);
 	}
 
 	/** {@code agent} as a value: a one-argument lambda over the constructor. */
 	static LispVal agentValue(ClojureLowering ctx) {
 		LispSymbol init = new LispSymbol(ClojureLowering.mangle("agent-init"));
-		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(init), wrapAtom(init));
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(init),
+				ClojureLowerUtil.list(AGENT_MAKE, init, ClojureLowering.NIL_CONST));
 	}
 
 	/**
-	 * {@code (send agent fun args...)} and {@code (send-off ...)}: the function applied
-	 * now, through the validator, answering the agent. Agents run synchronously -- there
-	 * is no thread pool on any backend, so async ordering is out and {@code await} is
-	 * already past when it runs.
+	 * {@code (send agent fun args...)} and {@code (send-off ...)}: the action queued on
+	 * the agent, answering the agent. There is no thread pool on any backend: an idle
+	 * agent runs its queue on the sender's thread at once, a running one on the thread
+	 * already running it.
 	 */
 	static LispVal sendOf(ClojureLowering ctx, List<LispVal> items) {
 		String op = ((LispSymbol) items.get(0)).name();
 		ClojureLowerUtil.isTrue(items.size() >= 3, op + " takes an agent, a function and arguments");
-		ctx.usedStm = true;
 		return sendBuild(ctx, ctx.lower(items.get(1)), ClojureBindingLowering.fnValue(ctx, items.get(2)),
 				ClojureLowerUtil.cons(ClojureLowerUtil.sym("list"), ctx.lowers(items, 3)), op);
 	}
 
 	/**
-	 * A {@code send} over already-lowered forms: the application with {@code *agent*}
-	 * bound to the cell (its binding-depth counter one deeper), answering the cell.
+	 * A {@code send} over already-lowered forms: the function and the arguments run now,
+	 * and the spliced {@link #AGENT_SEND} queues the action applying them to the agent's
+	 * value with {@code *agent*} bound to the agent (its binding-depth counter one
+	 * deeper).
 	 */
 	static LispVal sendBuild(ClojureLowering ctx, LispVal cell, LispVal fun, LispVal argList, String op) {
+		ctx.usedStm = true;
 		return withAtom(ctx, cell, op, bound -> {
-			LispSymbol next = ctx.freshTemp();
-			LispVal spread = ClojureLowerUtil.list(ClojureLowerUtil.sym("cons"), atomGet(bound), argList);
-			LispVal update = ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
-					ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(next,
-							ClojureLowerUtil.list(ClojureLowerUtil.sym("apply"), fun, spread)))),
-					ClojureLowerUtil.list(new LispSymbol("C%STM-CHECK"), bound, next));
+			LispSymbol function = ctx.freshTemp();
+			LispSymbol args = ctx.freshTemp();
+			LispSymbol old = ctx.freshTemp();
+			LispVal action = ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(old),
+					ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
+							ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(AGENT_VAR, bound),
+									ClojureVarLowering.specialDepthPair(ctx, "*agent*"))),
+							ClojureLowerUtil.list(ClojureLowerUtil.sym("apply"), function,
+									ClojureLowerUtil.list(ClojureLowerUtil.sym("cons"), old, args))));
 			return ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
-					ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(new LispSymbol("C%AGENT"), bound),
-							ClojureVarLowering.specialDepthPair(ctx, "*agent*"))),
-					ClojureLowerUtil.list(ClojureLowerUtil.sym("progn"), update, bound));
+					ClojureLowerUtil
+						.list(List.of(ClojureLowerUtil.list(function, fun), ClojureLowerUtil.list(args, argList))),
+					ClojureLowerUtil.list(AGENT_SEND, bound, action));
 		});
 	}
 
@@ -782,20 +738,22 @@ final class ClojureStateLowering {
 	}
 
 	/**
-	 * {@code (await agent...)}: every send already ran, so every agent is awaited; each
-	 * is still checked, answering nil like the oracle.
+	 * {@code (await agent...)}: the agents run, then the oracle's refusal inside an
+	 * action, then the actions queued on each so far run, answering nil. A host target
+	 * waits for a queue another thread is running ({@link #AGENT_AWAIT}); on wasm this
+	 * thread runs every queue ({@link #AGENT_AWAIT_HERE}, no wait).
 	 */
 	static LispVal awaitOf(ClojureLowering ctx, List<LispVal> items) {
 		ctx.usedStm = true;
-		List<LispVal> checks = new ArrayList<>();
-		for (int i = 1; i < items.size(); i++) {
-			checks.add(derefForm(ctx, ctx.lower(items.get(i))));
-		}
-		checks.add(ClojureLowering.NIL_CONST);
-		if (checks.size() == 1) {
-			return ClojureLowering.NIL_CONST;
-		}
-		return ClojureLowerUtil.cons(ClojureLowerUtil.sym("progn"), checks);
+		LispSymbol agents = ctx.freshTemp();
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
+				ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(agents,
+						ClojureLowerUtil.cons(ClojureLowerUtil.sym("list"), ctx.lowers(items, 1))))),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), AGENT_VAR,
+						ClojureRefusals.refusal(ClojureRefusals.EXCEPTION,
+								LispString.literal("Can't await in agent action"))),
+				ClojureLowerUtil.list(ctx.hostTarget ? AGENT_AWAIT : AGENT_AWAIT_HERE, agents),
+				ClojureLowering.NIL_CONST);
 	}
 
 	/**

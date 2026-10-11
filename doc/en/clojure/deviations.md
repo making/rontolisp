@@ -408,14 +408,20 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   reduced; `println` prints it as that seq where the oracle prints the object. An input
   reducing through its own `CollReduce` row is reduced at the `eduction`, so its `seq`
   answers where the oracle's refuses. A `reduced` value prints as its wrapper list.
-- Transactions are single-threaded extents: `dosync` never retries, `commute`
-  runs its function once (the oracle may run it twice), validators run on the
-  write and a failed one leaves the old value; `alter` and friends outside
-  `dosync` signal.
-- Agents are synchronous atoms: `send`/`send-off` apply at once and answer the
-  agent (which prints unreadably, `#<Atom ...>`, not the oracle's object),
-  `await` and `shutdown-agents` answer `nil`, and `*agent*` is bound only while
-  a send runs (`nil` outside one, where the oracle leaves it unbound).
+- Transactions run one at a time: `dosync` holds one lock for every transaction
+  of the process, so a body never retries and its side effects run once
+  (`commute` runs its function once; the oracle may run it twice). A body that
+  waits for another thread's transaction never finishes, and a read outside a
+  transaction may see a running one's write, where the oracle's sees only
+  committed values.
+- Agents have no thread pool: a send to an idle agent runs its action on the
+  sender's thread before `send` returns, and one to an agent another thread is
+  running joins that thread's queue. A failing action signals on the thread
+  running it and the agent stays usable (no `agent-error`, `restart-agent` or
+  error modes; the oracle fails the agent). An agent prints unreadably,
+  `#<Atom ...>`, not the oracle's object; `shutdown-agents` answers `nil`, and
+  `*agent*` is bound only while an action runs (`nil` outside one, where the
+  oracle leaves it unbound).
 - `binding` rebinds only `^:dynamic` vars (anything else is refused, like the
   oracle's non-dynamic error); a `^:dynamic` `defn` is rebindable too (its calls
   go through the var while the definition stays direct); reader metadata on names

@@ -1369,11 +1369,9 @@ public final class ClojureLowering {
 	final Map<String, HostClass> hostClasses = new HashMap<>();
 
 	/**
-	 * Whether the program uses refs or agents (any of {@code ref}/{@code dosync}/
-	 * {@code alter}/{@code commute}/{@code ref-set}/{@code ensure}/{@code agent}/
-	 * {@code send}/{@code send-off}/{@code await}, or a {@code binding} of
-	 * {@code *agent*}): the STM runtime (the transaction depth, the validator registry
-	 * and the agent var) is spliced in once, behind the false binding.
+	 * Whether the program names the acting-agent var ({@code send}/{@code send-off}/
+	 * {@code await}, or a read or {@code binding} of {@code *agent*}): the STM runtime
+	 * (the agent var) is spliced in once, behind the false binding.
 	 */
 	boolean usedStm;
 
@@ -1614,7 +1612,7 @@ public final class ClojureLowering {
 		}
 		if (lowering.usedStm) {
 			// the STM runtime runs before anything else, like the false value
-			lowering.forms.addAll(1, ClojureStateLowering.stmRuntime(lowering));
+			lowering.forms.addAll(1, ClojureStateLowering.stmRuntime());
 		}
 		if (lowering.readsHttpUrls) {
 			// the fetch an http: or https: URL is read through is in place before
@@ -1917,7 +1915,7 @@ public final class ClojureLowering {
 		if (this.usedStm && !this.stmEmitted) {
 			// The STM runtime travels ahead of the buffer that first needs
 			// it, like the false binding; later buffers reuse it.
-			out.add(0, new ClojureTopLevel(ClojureStateLowering.stmRuntime(this), false));
+			out.add(0, new ClojureTopLevel(ClojureStateLowering.stmRuntime(), false));
 			this.stmEmitted = true;
 		}
 		if (this.readsHttpUrls && !this.httpUrlsEmitted) {
@@ -5344,7 +5342,7 @@ public final class ClojureLowering {
 	 */
 	public static List<LispVal> macroTimeRuntimeForms() {
 		ClojureLowering ctx = new ClojureLowering();
-		List<LispVal> forms = new ArrayList<>(ClojureStateLowering.stmRuntime(ctx));
+		List<LispVal> forms = new ArrayList<>(ClojureStateLowering.stmRuntime());
 		forms.addAll(ClojureStateLowering.exInfoRuntime(ctx));
 		// a definition's dispatcher may walk: the walk finds no class at macro time
 		forms.addAll(ClojureProtocolLowering.protocolRuntime(ctx, true));

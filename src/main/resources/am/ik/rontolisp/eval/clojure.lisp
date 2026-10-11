@@ -10135,6 +10135,199 @@
     (let* ((old (aref cell 0)) (new (apply f old args)))
       (when (rontolisp::%clojure-atom-cas cell old new) (return new)))))
 
+;;;; Refs and agents across request threads.
+;;
+;; A transaction (dosync) runs its body holding %clojure-stm-guard, one lock for
+;; every transaction of the process: transactions run one at a time and never
+;; retry, so a body's side effects run once. alter, commute and ref-set write the
+;; ref in place and log its value from before the transaction; when the body
+;; returns, the validators of the written refs run on their final values, and a
+;; body that signals (a refusing validator included) puts every logged value
+;; back. A nested dosync joins the running transaction. A read outside any
+;; transaction takes no lock, so it may see a running transaction's write.
+;;
+;; An agent runs its actions one at a time in the order they were sent. A send
+;; queues the action under %clojure-atom-guard and, when no thread is running the
+;; agent, runs the queue on the sender's thread until it is empty (there is no
+;; thread pool: an idle agent's send runs at once). Actions run outside every
+;; lock, so a send never waits for another request's action. A send made while a
+;; transaction or an action runs is held until it completes, and dropped when it
+;; fails, like the oracle's. A failing action signals on the thread running it
+;; and leaves the actions queued behind it to the next send or await.
+;;
+;; A ref with a validator and every agent carry it in the cell: #(value nil
+;; validator) and #(value nil validator state), slot 1 nil because a volatile is
+;; the cell of length 2; STATE is (running . queue). A ref without one is the
+;; atom's one-vector. On wasm, a single-threaded module, the guards are no-ops.
+
+(defvar rontolisp::%clojure-stm-guard (rontolisp:make-mutex))
+
+;; The running transaction's log, a box holding (cell . value before the
+;; transaction) entries; nil outside a transaction.
+(defvar rontolisp::%clojure-stm-log nil)
+
+;; Where a send waits while a transaction or an action runs on this thread: a
+;; box holding (agent . action) entries, newest first; nil where it runs at once.
+(defvar rontolisp::%clojure-agent-held nil)
+
+(defun rontolisp::%clojure-stm-validate (value validator)
+  "VALUE, once VALIDATOR (nil for none) accepts it; else the oracle's refusal."
+  (if (and validator
+           (not (rontolisp::%clojure-truthy (funcall validator value))))
+      (rontolisp::%clojure-illegal-state-exception "Invalid reference state")
+      value))
+
+(defun rontolisp::%clojure-cell-validator (cell)
+  "The validator CELL carries, or nil."
+  (if (> (length cell) 2) (aref cell 2) nil))
+
+(defun rontolisp::%clojure-ref-make (init validator)
+  "(ref init :validator f): the cell carrying VALIDATOR, which INIT must pass."
+  (list :C%ATOM (vector (rontolisp::%clojure-stm-validate init validator) nil
+                        validator)))
+
+(defun rontolisp::%clojure-agent-make (init validator)
+  "(agent init) and (agent init :validator f): an idle agent with no queued
+   action over INIT, which VALIDATOR (nil for none) must pass."
+  (list :C%ATOM (vector (rontolisp::%clojure-stm-validate init validator) nil
+                        validator (cons nil nil))))
+
+(defun rontolisp::%clojure-stm-require ()
+  "Nil inside a transaction; the oracle's refusal outside one."
+  (if rontolisp::%clojure-stm-log
+      nil
+      (rontolisp::%clojure-illegal-state-exception "No transaction running")))
+
+(defun rontolisp::%clojure-stm-write (cell value)
+  "alter, commute and ref-set inside the running transaction: VALUE stored in
+   CELL, whose value from before the transaction is logged on its first write;
+   answers VALUE."
+  (let ((log rontolisp::%clojure-stm-log))
+    (if (assoc cell (car log))
+        nil
+        (setf (car log) (cons (cons cell (aref cell 0)) (car log))))
+    (setf (aref cell 0) value)))
+
+(defun rontolisp::%clojure-stm-run (body)
+  "dosync: the thunk BODY run as one transaction, answering its value. The
+   sends it made are dispatched once it committed."
+  (if rontolisp::%clojure-stm-log
+      (funcall body)
+      (let* ((log (list nil))
+             (held (list nil))
+             (value
+              (rontolisp:with-mutex (rontolisp::%clojure-stm-guard)
+                (let ((done nil))
+                  (unwind-protect (let ((answer
+                                         (let ((rontolisp::%clojure-stm-log log)
+                                               (rontolisp::%clojure-agent-held
+                                                held))
+                                           (funcall body))))
+                                    (dolist (entry (car log))
+                                      (rontolisp::%clojure-stm-validate
+                                       (aref (car entry) 0)
+                                       (rontolisp::%clojure-cell-validator
+                                        (car entry))))
+                                    (setq done t)
+                                    answer)
+                    (if done
+                        nil
+                        (dolist (entry (car log))
+                          (setf (aref (car entry) 0) (cdr entry)))))))))
+        (rontolisp::%clojure-agent-release held)
+        value)))
+
+(defun rontolisp::%clojure-agent-release (held)
+  "The sends the box HELD kept, sent in the order they were made."
+  (dolist (entry (reverse (car held)))
+    (rontolisp::%clojure-agent-send (car entry) (cdr entry))))
+
+(defun rontolisp::%clojure-agent-cell (agent)
+  "AGENT's cell; the oracle's cast failure for anything but an agent."
+  (let ((cell (car (cdr agent))))
+    (if (= (length cell) 4)
+        cell
+        (rontolisp::%clojure-class-cast-exception-of "send needs an agent"
+                                                     agent))))
+
+(defun rontolisp::%clojure-agent-send (agent action)
+  "send and send-off: ACTION, a function of AGENT's value answering its next,
+   queued on AGENT, or held while a transaction or an action runs on this
+   thread; answers AGENT."
+  (let ((cell (rontolisp::%clojure-agent-cell agent))
+        (held rontolisp::%clojure-agent-held))
+    (if held
+        (setf (car held) (cons (cons agent action) (car held)))
+        (rontolisp::%clojure-agent-drain cell action))
+    agent))
+
+(defun rontolisp::%clojure-agent-drain (cell action)
+  "ACTION (when not nil) queued on CELL; then, unless another thread is running
+   the agent, its queue run on this thread until it is empty."
+  (let ((state (aref cell 3)) (mine nil))
+    (rontolisp:with-mutex (rontolisp::%clojure-atom-guard)
+      (if action (setf (cdr state) (append (cdr state) (list action))))
+      (if (and (cdr state) (not (car state)))
+          (progn
+            (setf (car state) t)
+            (setq mine t))))
+    (if mine
+        (let ((done nil))
+          (unwind-protect (loop
+                            (let ((next
+                                   (rontolisp:with-mutex (rontolisp::%clojure-atom-guard)
+                                     (if (cdr state)
+                                         (let ((first (car (cdr state))))
+                                           (setf (cdr state) (cdr (cdr state)))
+                                           first)
+                                         (progn
+                                           (setf (car state) nil)
+                                           nil)))))
+                              (if next
+                                  (rontolisp::%clojure-agent-act cell next)
+                                  (progn
+                                    (setq done t)
+                                    (return nil)))))
+            (if done
+                nil
+                (rontolisp:with-mutex (rontolisp::%clojure-atom-guard)
+                  (setf (car state) nil))))))))
+
+(defun rontolisp::%clojure-agent-act (cell action)
+  "One action of the agent CELL: its answer validated and stored, then the
+   sends it made sent."
+  (let* ((held (list nil))
+         (next
+          (let ((rontolisp::%clojure-agent-held held)
+                (rontolisp::%clojure-stm-log nil))
+            (funcall action (aref cell 0)))))
+    (setf (aref cell 0) (rontolisp::%clojure-stm-validate next (aref cell 2)))
+    (rontolisp::%clojure-agent-release held)))
+
+(defun rontolisp::%clojure-agent-await-here (agents)
+  "await's dispatch: a marker action queued behind each of AGENTS' queued
+   actions, and each queue run on this thread unless another thread runs it;
+   answers the markers' boxes, each true once its marker ran."
+  (let ((marks nil))
+    (dolist (agent agents)
+      (let ((cell (rontolisp::%clojure-agent-cell agent)) (seen (list nil)))
+        (rontolisp::%clojure-agent-drain cell
+                                         (lambda (value)
+                                           (setf (car seen) t)
+                                           value))
+        (setq marks (cons (cons cell seen) marks))))
+    marks))
+
+(defun rontolisp::%clojure-agent-await (agents)
+  "await on a host target: %clojure-agent-await-here, then a wait between
+   sleeps of a millisecond for each marker another thread is running, taking
+   the queue over when that thread stopped on a failing action; answers nil."
+  (dolist (mark (rontolisp::%clojure-agent-await-here agents))
+    (loop
+      (if (car (cdr mark)) (return nil))
+      (sleep 0.001)
+      (rontolisp::%clojure-agent-drain (car mark) nil))))
+
 ;;;; Delays: delay, force, deref and realized? over a memo cell.
 ;;
 ;; A delay is (:C%DELAY cell), CELL the vector #(thunk value failure mutex): THUNK

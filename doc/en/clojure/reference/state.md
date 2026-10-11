@@ -17,7 +17,7 @@ An atom is a tagged cell every verb reads and writes; each verb answers the new 
 | `alter` | `(do (def r (ref 0)) (dosync (alter r + 2)))` | `2` |
 | `commute` | `(do (def r (ref 1)) (dosync (commute r * 3)))` | `3` |
 | `ref-set` | `(do (def r (ref 0)) (dosync (ref-set r 9)))` | `9` |
-| `ensure` | `(do (def r (ref 0)) (dosync (ensure r) :ok))` | `:ok` |
+| `ensure` | `(do (def r (ref 7)) (dosync (ensure r)))` | `7` |
 | `agent` | `(deref (agent 1))` | `1` |
 | `send` | `(do (def a (agent 0)) @(send a + 5))` | `5` |
 | `send-off` | `(do (def a (agent 0)) @(send-off a + 5))` | `5` |

@@ -4259,8 +4259,8 @@ cases:
   - name: refs-transact-singly
     # The chat.clj slice: a validated ref altered and commuted in transactions,
     # ref-set and ensure inside one, every verb refused outside one. Commute runs
-    # once here (the oracle may run its function twice); Validators run, retries
-    # do not -- the documented single-threaded deviation.
+    # once here (the oracle may run its function twice): transactions run one at a
+    # time under one lock and never retry -- the documented deviation.
     source: |
       (def room (ref [] :validator (fn [msgs] (<= (count msgs) 3))))
       (dosync (alter room (fn [m x] (conj m x)) :hi))
@@ -4286,6 +4286,49 @@ cases:
       :no-txn
       :no-txn
       :ok
+  - name: transactions-commit-whole-and-agents-hold-sends
+    # Oracle-identical (clj 1.12.6): validators run on a transaction's final values and on
+    # a ref's or agent's initial one; a failing transaction puts back every ref it wrote; a
+    # nested dosync joins the outer one and ensure answers the value. A send made inside a
+    # transaction runs once it commits and is dropped when it fails; one made inside an
+    # action runs after that action; send to a non-agent is a cast failure, and await
+    # inside an action is refused.
+    source: |
+      (def tv (ref 1 :validator pos?))
+      (println (dosync (alter tv dec) (alter tv inc)) @tv)
+      (def ta (ref 0))
+      (def tb (ref 0))
+      (println (try (dosync (alter ta inc) (ref-set tb 5) (throw (Exception. "boom"))) (catch Exception e (ex-message e))) @ta @tb)
+      (println (try (dosync (alter ta inc) (alter tv - 5)) (catch Exception e (ex-message e))) @ta @tv)
+      (println (dosync (alter ta inc) (dosync (alter tb + @ta)) (ensure tb)) @ta @tb)
+      (println (try (ref -1 :validator pos?) (catch Exception e (ex-message e))) (try (agent -1 :validator pos?) (catch Exception e (ex-message e))))
+      (def tg (agent 0))
+      (println (dosync (send tg inc) @tg))
+      (await tg)
+      (println @tg (try (dosync (send tg inc) (throw (Exception. "x"))) (catch Exception e :dropped)) (do (await tg) @tg))
+      (def tlog (atom []))
+      (def th (agent 0))
+      (send th (fn [v] (send th (fn [w] (swap! tlog conj [:inner w]) (+ w 10))) (swap! tlog conj [:outer v]) (inc v)))
+      (await th)
+      (await th)
+      (println @th @tlog)
+      (println (try (send (atom 1) inc) (catch ClassCastException e :not-an-agent)))
+      (def tk (agent 0))
+      (send tk (fn [v] (println (try (await tk) (catch Exception e (ex-message e)))) v))
+      (await tk)
+      (println (await) @tk)
+    expected: |
+      1 1
+      boom 0 0
+      Invalid reference state 0 1
+      1 1 1
+      Invalid reference state Invalid reference state
+      0
+      1 :dropped 1
+      11 [[:outer 0] [:inner 1]]
+      :not-an-agent
+      Can't await in agent action
+      nil 0
   - name: binding-rebinds-dynamic-vars
     # The concurrency.clj slice (without the sleeps): ^:dynamic vars rebind with
     # dynamic extent -- a callee sees the binding, the root returns after -- while
@@ -4425,8 +4468,8 @@ cases:
       [5 p]
   - name: agents-send-synchronously
     # The pi.clj slice: two agents count a partitioned sample, await rendezvous,
-    # and the estimate combines deterministically. Sends apply at once (there is
-    # no thread pool, so async ordering is out); *agent* is bound while one runs.
+    # and the estimate combines deterministically. A send to an idle agent runs at
+    # once (there is no thread pool); *agent* is bound while one runs.
     source: |
       (defn inside? [[x y]] (<= (+ (* x x) (* y y)) 1))
       (def left (agent 0))

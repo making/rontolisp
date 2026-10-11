@@ -35,7 +35,15 @@ bugs, and each looks like someone else's fault.
   so a slot CAS there is not one `VarHandle` call. All four backends call the same helpers (wasm's
   guard is a no-op), so a function swapping its own atom retries everywhere. Before: 48
   requests x 20 updates counted 250-770 of 960. Volatiles stay plain (the oracle's are).
-  Not covered: refs and agents (single-threaded STM).
+- Clojure refs and agents (`clojure.lisp` "Refs and agents across request threads",
+  2026-10-11; `.kb/clojure-frontend.md` "State"): every transaction runs under one lock
+  `%clojure-stm-guard` with an undo log; an agent's queue is appended under
+  `%clojure-atom-guard` and run by whichever thread finds the agent idle, actions outside
+  every lock. A validator lives in its cell (the old `C%STM-VALIDATORS` alist, pushed
+  unguarded, lost entries and grew forever). Before: 48 requests x 20 rounds counted
+  94-129 of 960 alters, 135 of 960 sends, a two-ref transfer drifted by 2-32, and 3-31
+  per-request refs lost their validator. Not covered: a transaction body waiting for
+  another thread's transaction deadlocks (documented deviation).
 - JVM `gensym` (2026-10-11): the counter is bumped by `ACC_SYNCHRONIZED` `_gensymNext()`
   (`JvmGensymCompiler`), shaken with the last `gensym`. Before: 8 threads x 20000 `gensym`s
   answered ~100k distinct names of 160k. The interpreter's is an `AtomicLong`; WASM is exempt.
@@ -68,6 +76,9 @@ bugs, and each looks like someone else's fault.
   updates four atoms 20 times: `swap!` called and as a value, a `compare-and-set!` retry loop
   called and as a value). The single-threaded retry is clojure-spec
   `swap-retries-when-its-function-changed-the-atom`.
+- `ClojureRefAgentConcurrentRequestsTest` (48 requests at once, 2 rounds per leg; each
+  request runs 20 rounds of an `alter`, an `alter` as a value, a two-ref transfer, a `send`,
+  a `send-off` as a value, and a fresh validated ref that must refuse).
 - `JvmThreadTest#gensymsMadeByRacingThreadsAreAllDistinct` (8 threads x 20000 `gensym`s, all
   names distinct); `JvmDeadMethodEliminationTest#theGensymCounterHelperLivesOnlyWithAGensym`.
 - Not in the suite: bursts of 12 concurrent POSTs against `examples/db/postgres-web.lisp`.
