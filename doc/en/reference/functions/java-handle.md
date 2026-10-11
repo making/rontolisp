@@ -27,8 +27,9 @@ guide](../../guides/java-interop.md#handles-javahandle).
 ; => "[b, a]"
 ```
 
-- A nil `hash` makes a handle equal only to a handle of the very same `value` (`eq`), its
-  `hashCode` the value's identity hash. Its `text` may then be nil: its `toString` is
+- A nil `hash` makes a handle equal only to an object standing for the very same `value`
+  (`eq`) under its `class` -- such a handle, a `java:reify` given `:value`, the object a
+  function is ([java:call](java-call.md)) -- its `hashCode` the value's identity hash. Its `text` may then be nil: its `toString` is
   `Object`'s spelling, the class and the hex hash (`my.Cell@1b6d3586`).
 - `order` may be a function: `compareTo` calls it with the value and the Lisp value of the
   object compared with, and answers the sign of the real number it answers. A nil `order`

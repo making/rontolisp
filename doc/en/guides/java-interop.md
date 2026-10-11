@@ -83,7 +83,7 @@ Arguments and results are converted between rontolisp and Java automatically:
 | `t` / `nil` | `boolean` (`nil` also → any `null` reference) | `boolean` → `t`/`nil` (after `:java-false`, `t`/`\|false\|`) |
 | the symbol named `false` | `boolean` false, `Boolean.FALSE` for any reference | after `:java-false`, Java's false |
 | a `java` object | the wrapped host object | any other object → a `java` object |
-| a function/lambda | a `java:proxy` over the matching interface, or after `:functional` an implementation of its abstract methods (an argument only) | — |
+| a function/lambda | a `java:proxy` over the matching interface, or after `:functional` an implementation of its abstract methods; where `Object` is expected, after `:functional :java-false`, the object it is (an argument only) | — |
 | a proper list / a vector (specialized too) | `T[]` (element-wise, incl. primitives), or `List`/`Collection`/`Iterable` | any Java array → a list (after `:octets`, a `byte[]` → an `(unsigned-byte 8)` vector) |
 | a hash table | a fresh `java.util.LinkedHashMap` (`Map`, `HashMap`, `Object`, ...) | — |
 | a `java:handle` | an object Java sees as its text | the value it stands for |
@@ -178,16 +178,24 @@ throws, which the call reports as the method's failure:
   (java:call l "toString"))   ; => "[1, 2, 3]"
 ```
 
-At such a call a function passed where a `java.lang.Runnable`, `java.util.concurrent.Callable`
-or `java.util.Comparator` is expected is also the function Java hands back, as Clojure's fn
-is itself each of the three: the object Java holds stands for it, so a getter of the
-interface -- a `TreeSet`'s `comparator` -- answers the function. Converted to any other
-interface, or without `:java-false`, the function stays behind an object of its own:
+At such a call a function passed where a `java.lang.Runnable`, `java.util.concurrent.Callable`,
+`java.util.Comparator` or `java.lang.Object` is expected is the object the function is, as
+Clojure's fn is one object that is each of the three: it implements all three by the
+function's arguments (its `compare` read as above), names itself `clojure.lang.AFunction`
+(`clojure.lang.AFunction@1b6d3586`), and stands for the function, so Java hands it back as
+the function -- a `TreeSet`'s `comparator`, a list's element -- and two such objects of one
+function are `equals`, as are one and a `java:handle` of the function of that class.
+Converted to any other interface, or without `:java-false`, the function stays behind an
+object of its own; where an `Object` is expected it has none there, and the call is refused
+(`java: a function where java.lang.Object is expected needs a java:handle, got ...`) -- a
+[`java:handle`](#handles-javahandle) makes an object of any value:
 
 ```lisp
 (let* ((by-value (lambda (a b) (- a b)))
-       (s (java:new "java.util.TreeSet" by-value :functional :java-false)))
-  (eq by-value (java:call s "comparator")))   ; => T
+       (s (java:new "java.util.TreeSet" by-value :functional :java-false))
+       (l (java:new "java.util.ArrayList")))
+  (java:call l "add" by-value :functional :java-false)
+  (list (eq by-value (java:call s "comparator")) (eq by-value (java:call l "get" 0))))   ; => (T T)
 ```
 
 ### Octets back: `:octets`
@@ -223,21 +231,31 @@ twice is one vector:
 ### Calling functions through another: `:through`
 
 A form ending in `:through` and a function -- among the other markers, in any order -- has
-Java call every function it converts to an interface, and every function of the
-`java:reify`, `java:proxy` or `java:subclass` it makes, through that function: the method
-runs `(f function object arguments)`, where `arguments` is the list the function would be
-applied to (a `java:proxy`'s callable's with the method's name first, a `java:subclass`'s
-with the object and the name first) and `object` is `t` when the method answers an object --
-neither a primitive nor `void` -- and `nil` otherwise. What `f` answers is the method's
-answer, converted to its return type as a function's answer is. So `f` decides how values
-cross: it may convert Java's arguments before the function sees them, and convert the
-answer only where the method answers an object, leaving alone an answer a `void` method
-drops. The Clojure front end crosses every fn and `proxy` body this way.
+Java call every function it converts (to an interface, or to the object it is), and every
+function of the `java:reify`, `java:proxy` or `java:subclass` it makes, through that
+function: the method runs `(f function kind resolved arguments)`, where `arguments` is the
+list the function would be applied to (a `java:proxy`'s callable's with the method's name
+first, a `java:subclass`'s with the object and the name first), `kind` how Java takes the
+answer -- `:object` where the method answers a reference, the keyword of its primitive
+(`:boolean`, `:char`, `:byte`, `:short`, `:int`, `:long`, `:float`, `:double`) where it
+answers one, and `nil` where Java takes none (a `void` method, a `compare` read as
+`AFunction.compare`) -- and `resolved` is `t` when the call converting the function chose
+its member before it ran (resolved to one member, or among one overload; see [Resolving
+calls before they run](#resolving-calls-before-they-run)) and `nil` when it chose as it ran,
+and for the functions of a `java:reify`, `java:proxy` or `java:subclass`. What `f` answers is
+the method's answer, converted to its return type as a function's answer is. So `f` decides
+how values cross: it may convert Java's arguments before the function sees them, convert the
+answer only where the method answers an object, cast it as its language casts a primitive,
+and leave alone an answer a `void` method drops. The Clojure front end crosses every fn and
+`proxy` body this way, casting a primitive answer as Clojure's functional interface adapter
+does -- its compiler's where the call chose its member before it ran, its reflector's
+otherwise -- and a `proxy` body's as Clojure's proxy class does.
 
 ```lisp
-(defun quoted (f object args)
+(defun quoted (f kind resolved args)
+  (declare (ignore resolved))
   (let ((answer (apply f args)))
-    (if object (prin1-to-string answer) answer)))
+    (if (eq kind :object) (prin1-to-string answer) answer)))
 (list (java:call (java:static "java.util.Optional" "empty") "orElseGet" (lambda () :x)
                  :functional :through #'quoted)
       (java:call (java:call (java:static "java.util.stream.IntStream" "range" 0 3) "map"
@@ -267,8 +285,9 @@ the value:
 ```
 
 The full form is `(java:handle value text hash order class)`. A nil `hash` makes a handle
-equal only to a handle of the very same value, and a nil `text` then spells it as `Object`
-does, the class and the hash. An `order` that is a function compares the value with the
+equal only to an object standing for the very same value under its class -- another such
+handle, a `java:reify` given `:value`, the object a function is -- and a nil `text` then
+spells it as `Object` does, the class and the hash. An `order` that is a function compares the value with the
 object Java compares the handle with, by the sign of its answer, and a nil `order` makes the
 handle order nothing. `class` splits equality and order: handles of two classes are never
 equal and never compare, a `ClassCastException` naming both. A handle of a real number is a
@@ -356,9 +375,11 @@ When no integer overload exists the integer is converted to the available type:
 (java:static "java.lang.Math" "sqrt" 16)   ; => 4.0
 ```
 
-A function costs less for a functional interface (one abstract method) than for another
-interface, so `TreeSet(Comparator)` wins over `TreeSet(Collection)`, as a Java lambda's
-target does:
+A function costs less for a functional interface (one abstract method) than for
+`java.lang.Object`, and less for `Object` than for any other interface, so
+`TreeSet(Comparator)` wins over `TreeSet(Collection)`, as a Java lambda's target does, and
+`StringBuilder.append(Object)` over `append(CharSequence)`, as Clojure's fn is an `Object` and
+no `CharSequence`:
 
 ```lisp
 (let ((s (java:new "java.util.TreeSet" (lambda (a b) (- b a)) :functional)))

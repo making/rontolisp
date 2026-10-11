@@ -136,7 +136,7 @@ class JavaSiteResolverTest {
 				":through #'hook :functional :java-false", ":functional :java-false :through #'hook")) {
 			JavaSite site = resolve("(java:static \"java.util.Objects\" \"equals\" 1 2 " + ending + ")");
 			assertThat(site.resolved()).as(ending).isTrue();
-			assertThat(site.markers()).as(ending).isEqualTo(new JavaMarkers(true, true, false, "HOOK"));
+			assertThat(site.markers()).as(ending).isEqualTo(new JavaMarkers(true, true, false, "HOOK", true));
 			assertThat(site.designator()).as(ending).isEqualTo("equals(java.lang.Object,java.lang.Object)");
 		}
 		JavaSite computed = resolve("(java:static \"java.util.Objects\" \"equals\" 1 2 :through hook)");
@@ -150,6 +150,41 @@ class JavaSiteResolverTest {
 		List<LispVal> bare = ((LispCons) LispReader.readAllFromString("(f 1 :through)").get(0)).toList();
 		assertThat(JavaMarkers.count(bare, 1)).isZero();
 		assertThat(JavaMarkers.throughFunction(bare, 1)).isNull();
+	}
+
+	// A site ending in :through tells the function it names whether it chose its member
+	// before it ran -- resolved to one member, or dispatched over its only overload, as
+	// Clojure's compiler resolves a call -- where a dispatch among several, a site left
+	// to
+	// run time and a form with no :through say nothing.
+	@Test
+	void aSiteTellsItsThroughWhetherItChoseItsMemberFirst() {
+		assertThat(resolve("(java:call (the (java:object \"java.util.ArrayList\") l) \"removeIf\" g"
+				+ " :functional :through #'hook)")
+			.markers()
+			.resolved()).isTrue();
+		JavaSite several = resolve("(java:static \"java.lang.String\" \"valueOf\" x :functional :through #'hook)");
+		assertThat(several.dispatched()).isTrue();
+		assertThat(several.markers().resolved()).isFalse();
+		JavaSite unknown = resolve("(java:call l \"removeIf\" g :functional :through #'hook)");
+		assertThat(unknown.resolved()).isFalse();
+		assertThat(unknown.markers().resolved()).isFalse();
+		assertThat(resolve("(java:static \"java.util.Objects\" \"equals\" 1 2 :functional)").markers())
+			.isEqualTo(new JavaMarkers(true, false, false));
+	}
+
+	// A function value where java.lang.Object is expected costs after every interface it
+	// implements and before any other, so StringBuilder.append(Object) takes it, not
+	// append(CharSequence): the object a function is
+	// (JavaImplementations.functionObject).
+	@Test
+	void aFunctionWhereAnObjectIsExpectedResolvesToTheObjectOverload() {
+		assertThat(resolve("(java:call (java:new \"java.lang.StringBuilder\") \"append\" (lambda () 1))").designator())
+			.isEqualTo("append(java.lang.Object)");
+		assertThat(resolve("(java:new \"java.util.TreeSet\" (lambda (a b) 0))").designator())
+			.isEqualTo("java.util.TreeSet(java.util.Comparator)");
+		assertThat(resolve("(java:call (java:new \"java.util.ArrayList\") \"add\" (lambda () 1))").designator())
+			.isEqualTo("add(java.lang.Object)");
 	}
 
 	// The quoted symbol |false| is Java's false: the boolean overload for a primitive, a

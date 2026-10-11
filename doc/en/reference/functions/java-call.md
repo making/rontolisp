@@ -35,7 +35,7 @@ known too, otherwise to the overloads it chooses among by the kinds its argument
 it runs (the guide's [Resolving calls before they
 run](../../guides/java-interop.md#resolving-calls-before-they-run)).
 
-A function argument passed where an interface is expected becomes a `java:proxy` of it, called with the method name first. Ending the call in `:functional`, after the arguments, makes it implement each abstract method by the method's arguments instead, as `java:new` and `java:static` do with the same ending (the guide's [Callbacks via java:proxy](../../guides/java-interop.md#callbacks-via-javaproxy)).
+A function argument passed where an interface is expected becomes a `java:proxy` of it, called with the method name first. Ending the call in `:functional`, after the arguments, makes it implement each abstract method by the method's arguments instead, as `java:new` and `java:static` do with the same ending (the guide's [Callbacks via java:proxy](../../guides/java-interop.md#callbacks-via-javaproxy)). Ending it in `:functional` and `:java-false`, a function passed where an `Object` is expected is the object the function is, which Java hands back as the function; at any other call such an argument is refused (the guide's [Java's false back](../../guides/java-interop.md#javas-false-back-java-false)).
 
 Ending the call in `:java-false`, after the arguments (before or after `:functional`),
 answers Java's false as `|false|` rather than `nil` (the guide's [Java's false
@@ -59,6 +59,8 @@ Java's own array, so what the function stores Java reads (the guide's [Octets ba
 ```
 
 Ending the call in `:through` and a function, beside the other markers, has Java call a
-function the call converts through that function: `(f function object arguments)`, `object`
-`t` when the method answers an object, and the method answers what `f` answers (the guide's
+function the call converts through that function: `(f function kind resolved arguments)`,
+`kind` how Java takes the answer (`:object`, a primitive's keyword such as `:int`, or `nil`
+where it takes none), `resolved` `t` when the call chose its member before it ran, and the
+method answers what `f` answers (the guide's
 [Calling functions through another](../../guides/java-interop.md#calling-functions-through-another-through)).

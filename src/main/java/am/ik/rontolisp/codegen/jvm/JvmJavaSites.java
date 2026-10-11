@@ -320,7 +320,9 @@ final class JvmJavaSites {
 
 	// Whether a resolved site may convert an argument that is a function to an
 	// interface -- directly, or as an element of a sequence made an array -- which the
-	// interface's generated proxy class then applies.
+	// interface's generated proxy class then applies; or, at a site ending in :functional
+	// and :java-false, where Object is expected, to the object the function is, whose
+	// class applies it too (JavaImplementations.functionObject).
 	private static boolean passesAFunction(JavaSite site) {
 		if (!site.resolved() || site.arguments().isEmpty()) {
 			return false;
@@ -337,7 +339,8 @@ final class JvmJavaSites {
 				while (type.componentType() != null) {
 					type = java.util.Objects.requireNonNull(type.componentType());
 				}
-				if (type.isInterface()) {
+				if (type.isInterface() || JavaOverloads.OBJECT.equals(type.name())
+						&& JavaImplementation.isFunctionObjectCall(site.markers())) {
 					return true;
 				}
 			}

@@ -1922,11 +1922,11 @@ class ClojureLoweringTest {
 		assertThat(lowered("(.add (java.util.ArrayList.) false)")).contains("\"add\" '|false| :JAVA-FALSE)");
 		assertThat(lowered("(java.util.ArrayList. 3)")).endsWith("(JAVA:NEW \"java.util.ArrayList\" 3 :JAVA-FALSE)");
 		// a proxy's body is handed Java's false as the false object, and Java calls it
-		// through the host call
+		// through the proxy call -- a proxy over a class through the subclass call
 		assertThat(lowered("(proxy [Runnable] [] (run [] 1))"))
-			.endsWith(":JAVA-FALSE :OCTETS :THROUGH #'RONTOLISP::%CLOJURE-HOST-CALL)");
+			.endsWith(":JAVA-FALSE :OCTETS :THROUGH #'RONTOLISP::%CLOJURE-PROXY-CALL)");
 		assertThat(lowered("(proxy [Thread] [] (run [] 1))"))
-			.endsWith(":JAVA-FALSE :OCTETS :THROUGH #'RONTOLISP::%CLOJURE-HOST-CALL)");
+			.endsWith(":JAVA-FALSE :OCTETS :THROUGH #'RONTOLISP::%CLOJURE-SUBCLASS-CALL)");
 	}
 
 	@Test
@@ -1944,19 +1944,19 @@ class ClojureLoweringTest {
 		assertThat(lowered("(let [g (fn [b] b)] (.forEach (java.util.ArrayList.) g))"))
 			.contains("\"forEach\" |c%g| :FUNCTIONAL :JAVA-FALSE :OCTETS :THROUGH #'RONTOLISP::%CLOJURE-HOST-CALL)");
 		// a proxy's body answers as it is and ends in the same markers: Java calls it
-		// through the host call, which converts an answer only where the method answers
-		// an object
+		// through the proxy call -- a proxy over a class through the subclass call --
+		// which unboxes the answer for the kind Java takes, as the oracle's proxy class
 		assertThat(lowered("(proxy [java.util.function.Supplier java.lang.Runnable] [] (get [] [1]) (run [] 2))"))
 			.contains("(APPLY (LAMBDA NIL (VECTOR 1)) ")
 			.contains("(APPLY (LAMBDA NIL 2) ")
 			.doesNotContain("%CLOJURE-HOST-MEMBER")
 			.doesNotContain("%CLOJURE-HOST-ANSWER")
-			.endsWith(":JAVA-FALSE :OCTETS :THROUGH #'RONTOLISP::%CLOJURE-HOST-CALL)");
+			.endsWith(":JAVA-FALSE :OCTETS :THROUGH #'RONTOLISP::%CLOJURE-PROXY-CALL)");
 		assertThat(lowered("(proxy [java.io.InputStream] [] (read [b o l] 1) (toString [] \"s\"))"))
 			.contains("(APPLY (LAMBDA (|c%this|) \"s\") ")
 			.doesNotContain("%CLOJURE-HOST-MEMBER")
 			.doesNotContain("%CLOJURE-HOST-ANSWER")
-			.endsWith(":JAVA-FALSE :OCTETS :THROUGH #'RONTOLISP::%CLOJURE-HOST-CALL)");
+			.endsWith(":JAVA-FALSE :OCTETS :THROUGH #'RONTOLISP::%CLOJURE-SUBCLASS-CALL)");
 		// where the host is not (wasm) none of it: a java: form is a call-time error
 		String wasm = Clojure
 			.read("(.forEach (java.util.ArrayList.) (fn [x] x)) (proxy [java.lang.Runnable] [] (run [] 1))", null, null,
@@ -1964,7 +1964,10 @@ class ClojureLoweringTest {
 			.stream()
 			.map(LispVal::print)
 			.collect(Collectors.joining("\n"));
-		assertThat(wasm).doesNotContain("%CLOJURE-HOST-CALL").doesNotContain(":THROUGH").doesNotContain(":OCTETS");
+		assertThat(wasm).doesNotContain("%CLOJURE-HOST-CALL")
+			.doesNotContain("%CLOJURE-PROXY-CALL")
+			.doesNotContain(":THROUGH")
+			.doesNotContain(":OCTETS");
 	}
 
 	@Test

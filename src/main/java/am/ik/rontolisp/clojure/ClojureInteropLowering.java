@@ -136,13 +136,17 @@ final class ClojureInteropLowering {
 
 	/**
 	 * The library function Java calls a Clojure fn through ({@code clojure.lisp}), named
-	 * after the {@code :through} a host call converting a fn ends in, and a proxy: the fn
-	 * over its arguments as Clojure values -- read through {@link #HOST_ANSWER}, so a
-	 * {@code byte[]} is a byte array -- answering, where the method answers an object,
-	 * the value's own object ({@code %clojure-host-member}: a map a {@code Map}, a
-	 * keyword one Java hands back as the keyword, a byte array its {@code byte[]}), and
-	 * anything else as it is: an answer a void method drops is never converted, so a lazy
-	 * seq stays unrealized and no collection is walked per call.
+	 * after the {@code :through} a host call converting a fn ends in: the fn over its
+	 * arguments as Clojure values -- read through {@link #HOST_ANSWER}, so a
+	 * {@code byte[]} is a byte array -- answering as the oracle's functional interface
+	 * adapter answers for the kind Java takes ({@code compiler.JavaMarkers#through}):
+	 * where the method answers an object the value's own object
+	 * ({@code %clojure-host-member}: a map a {@code Map}, a keyword one Java hands back
+	 * as the keyword, a byte array its {@code byte[]}), where it answers a primitive the
+	 * adapter's cast (its compiler's where the call chose its member before it ran, its
+	 * reflector's otherwise), and where it answers nothing the answer as it is: an answer
+	 * a void method drops is never converted, so a lazy seq stays unrealized and no
+	 * collection is walked per call.
 	 */
 	static final String HOST_CALL = "RONTOLISP::%CLOJURE-HOST-CALL";
 
@@ -150,8 +154,27 @@ final class ClojureInteropLowering {
 	 * The markers ending a form whose functions Java calls through {@link #HOST_CALL}:
 	 * {@code :through #'rontolisp::%clojure-host-call}.
 	 */
-	static final List<LispVal> THROUGH_HOST_CALL = List.of(new LispSymbol(LispNames.JAVA_THROUGH_MARKER),
-			ClojureLowerUtil.list(ClojureLowerUtil.sym("FUNCTION"), new LispSymbol(HOST_CALL)));
+	static final List<LispVal> THROUGH_HOST_CALL = through(HOST_CALL);
+
+	/**
+	 * The library function Java calls a {@code proxy}'s body through
+	 * ({@code clojure.lisp}): {@link #HOST_CALL}'s reading of its arguments, its answer
+	 * unboxed as the oracle's proxy class unboxes one (a primitive by a {@code Boolean},
+	 * {@code Character} or {@code Number} cast, unchecked).
+	 */
+	static final String PROXY_CALL = "RONTOLISP::%CLOJURE-PROXY-CALL";
+
+	/**
+	 * {@link #PROXY_CALL} for a {@code proxy} over a class, whose body Java hands the
+	 * object first; a fn its constructor arguments convert is called through it too.
+	 */
+	static final String SUBCLASS_CALL = "RONTOLISP::%CLOJURE-SUBCLASS-CALL";
+
+	// :through #'name.
+	private static List<LispVal> through(String name) {
+		return List.of(new LispSymbol(LispNames.JAVA_THROUGH_MARKER),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("FUNCTION"), new LispSymbol(name)));
+	}
 
 	// The java: call over its ended parts where the host is, ending in :octets too when
 	// its answer may carry a byte[] -- answering through HOST_ANSWER -- or it converts a
@@ -1622,24 +1645,25 @@ final class ClojureInteropLowering {
 		javaProxy.add(callable);
 		// the body is handed Java's false as the false object
 		javaProxy.add(JAVA_FALSE_MARKER);
-		proxyThrough(ctx, javaProxy);
+		proxyThrough(ctx, javaProxy, PROXY_CALL);
 		return ClojureLowerUtil.cons(JAVA_PROXY, javaProxy);
 	}
 
 	/**
 	 * Ends a {@code java:proxy} / {@code java:subclass} where the host is so that Java
-	 * calls the body through {@link #HOST_CALL}, as the oracle's proxy reads Java's
-	 * arguments and answers it: each argument a Clojure value -- a {@code byte[]}, which
-	 * the form's {@code :octets} hands it as an octet vector, a byte array -- and an
-	 * answer where the method answers an object the value's own object (a byte array the
-	 * {@code byte[]}, a vector the oracle's {@code List}, a map its {@code Map}, a
-	 * keyword one Java hands back as the keyword); a void or primitive method takes the
-	 * answer as it is, so a void one drops a lazy seq unrealized.
+	 * calls the body through {@link #PROXY_CALL} / {@link #SUBCLASS_CALL}, as the
+	 * oracle's proxy reads Java's arguments and answers it: each argument a Clojure value
+	 * -- a {@code byte[]}, which the form's {@code :octets} hands it as an octet vector,
+	 * a byte array -- and an answer where the method answers an object the value's own
+	 * object (a byte array the {@code byte[]}, a vector the oracle's {@code List}, a map
+	 * its {@code Map}, a keyword one Java hands back as the keyword), where it answers a
+	 * primitive unboxed as the oracle's proxy class unboxes it, and where it answers
+	 * nothing as it is, so a void one drops a lazy seq unrealized.
 	 */
-	private static void proxyThrough(ClojureLowering ctx, List<LispVal> form) {
+	private static void proxyThrough(ClojureLowering ctx, List<LispVal> form, String call) {
 		if (ctx.hostTarget) {
 			form.add(OCTETS_MARKER);
-			form.addAll(THROUGH_HOST_CALL);
+			form.addAll(through(call));
 		}
 	}
 
@@ -1788,7 +1812,7 @@ final class ClojureInteropLowering {
 		// the body, and a fn constructor argument, is handed Java's false as the false
 		// object
 		javaSubclass.add(JAVA_FALSE_MARKER);
-		proxyThrough(ctx, javaSubclass);
+		proxyThrough(ctx, javaSubclass, SUBCLASS_CALL);
 		return ClojureLowerUtil.cons(JAVA_SUBCLASS, javaSubclass);
 	}
 

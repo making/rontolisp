@@ -82,7 +82,7 @@ Java の false は `nil` として関数に渡ります。最後の関数の後�
 ; => (|false|)
 ```
 
-`:octets` で終えると、関数に `byte[]` (引数、またはその要素) をそのオクテットを持つ `(unsigned-byte 8)` のベクタとして渡します。このベクタは Java の配列そのものなので、関数が格納した値は Java から読めます (ガイドの[バイト列を受け取る](../../guides/java-interop.md#octets-back-octets))。`:through` と関数で終えると、Java は各関数をその関数経由で `(f function object arguments)` として呼び、その戻り値を返します (ガイドの[関数を別の関数経由で呼ばせる](../../guides/java-interop.md#calling-functions-through-another-through))。
+`:octets` で終えると、関数に `byte[]` (引数、またはその要素) をそのオクテットを持つ `(unsigned-byte 8)` のベクタとして渡します。このベクタは Java の配列そのものなので、関数が格納した値は Java から読めます (ガイドの[バイト列を受け取る](../../guides/java-interop.md#octets-back-octets))。`:through` と関数で終えると、Java は各関数をその関数経由で `(f function kind resolved arguments)` (`resolved` は `nil`) として呼び、その戻り値を返します (ガイドの[関数を別の関数経由で呼ばせる](../../guides/java-interop.md#calling-functions-through-another-through))。
 
 ## コンパイル済みプログラムでの扱い
 

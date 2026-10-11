@@ -164,9 +164,13 @@ final class JavaInterop {
 	}
 
 	// Applies FUNCTION, which Java calls back, to ARGS: directly, or through the function
-	// the call ended in after :through, handed the function, whether the method of
-	// return type RET answers an object (no primitive, not void), and the arguments.
-	private static LispVal callBack(Caller caller, LispVal function, List<LispVal> args, Class<?> ret) {
+	// the call ended in after :through, handed the function, how Java takes the answer
+	// of a method of return type RET (JavaImplementation.answerKind: a primitive's
+	// keyword, :object, or nil for void and for a COMPARISON the caller reads itself),
+	// whether the site converting it chose its member before it ran
+	// (JavaMarkers.resolved), and the arguments.
+	private static LispVal callBack(Caller caller, LispVal function, List<LispVal> args, Class<?> ret,
+			boolean comparison) {
 		LispVal through = caller.through();
 		if (through == null) {
 			return caller.call(function, args);
@@ -175,7 +179,9 @@ final class JavaInterop {
 		for (int i = args.size() - 1; i >= 0; i--) {
 			list = new LispCons(args.get(i), list);
 		}
-		return caller.call(through, List.of(function, ret.isPrimitive() ? LispNil.INSTANCE : LispTrue.INSTANCE, list));
+		String kind = JavaImplementation.answerKind(ret.getName(), comparison);
+		return caller.call(through, List.of(function, kind == null ? LispNil.INSTANCE : new LispSymbol(kind),
+				caller.markers().resolved() ? LispTrue.INSTANCE : LispNil.INSTANCE, list));
 	}
 
 	// How many evaluated arguments ending the list are markers
@@ -886,7 +892,7 @@ final class JavaInterop {
 					callArgs.add(unmarshal(argument, markers.javaFalse(), markers.octets()));
 				}
 				Class<?> ret = returnClass(implemented);
-				LispVal result = callBack(this.caller, this.callable, callArgs, ret);
+				LispVal result = callBack(this.caller, this.callable, callArgs, ret, false);
 				if (ret == void.class) {
 					return null;
 				}
@@ -1010,24 +1016,44 @@ final class JavaInterop {
 	private record StandIn(LispVal value, @Nullable String className) {
 	}
 
-	// A function passed where an interface is expected: the interface's java:proxy, or,
-	// at a call ending in :functional, the implementation calling the function with each
-	// abstract method's arguments (compiler/JavaImplementations.functional).
-	private static LispVal implementation(Class<?> iface, LispVal function, Caller caller) {
-		if (!caller.markers().functional()) {
-			return proxy(iface.getName(), function, caller);
+	// A function passed where an interface -- or Object -- is expected: the interface's
+	// java:proxy, or, at a call ending in :functional, the implementation calling the
+	// function with each abstract method's arguments
+	// (compiler/JavaImplementations.functional); after :functional :java-false, where
+	// Object, Runnable, Callable or Comparator is expected, the object the function is
+	// (functionObject).
+	private static LispVal implementation(Class<?> target, LispVal function, Caller caller) {
+		if (target == Object.class || JavaImplementation.standsForItsFunction(target.getName(), caller.markers())) {
+			return functionObject(function, caller);
 		}
-		List<Object> key = List.of(iface, FUNCTIONAL_KEY);
+		if (!caller.markers().functional()) {
+			return proxy(target.getName(), function, caller);
+		}
+		List<Object> key = List.of(target, FUNCTIONAL_KEY);
 		Dispatch dispatch = IMPLEMENTATIONS.get(key);
 		if (dispatch == null) {
-			dispatch = new Dispatch(JavaImplementations.functional(ReflectiveJavaClasses.of(iface), CLASSES));
+			dispatch = new Dispatch(JavaImplementations.functional(ReflectiveJavaClasses.of(target), CLASSES));
 			remember(IMPLEMENTATIONS, key, dispatch);
 		}
-		// After :java-false a Runnable, Callable or Comparator stands for the function,
-		// which Java hands back as itself (JavaImplementation.standsForItsFunction).
-		StandIn standIn = JavaImplementation.standsForItsFunction(iface.getName(), caller.markers())
-				? new StandIn(function, null) : null;
-		return implement(dispatch, List.of(function), caller, standIn);
+		return implement(dispatch, List.of(function), caller);
+	}
+
+	// The object a function converted at the caller's call is where Object (or Runnable,
+	// Callable or Comparator) is expected (compiler/JavaImplementations.functionObject):
+	// after :functional :java-false one implementing the three by its arguments and
+	// standing for it, which Java hands back as the function -- Clojure's fn; at any
+	// other call the refusal, a function having no Java object of its own there.
+	private static LispVal functionObject(LispVal function, Caller caller) {
+		if (!JavaImplementation.isFunctionObjectCall(caller.markers())) {
+			throw new LispEvalException(JavaImplementation.functionObjectRefusal(function.print()));
+		}
+		Dispatch dispatch = IMPLEMENTATIONS.get(FUNCTION_OBJECT_KEY);
+		if (dispatch == null) {
+			JavaImplementation object = JavaImplementations.functionObject(CLASSES, caller.markers());
+			dispatch = new Dispatch(java.util.Objects.requireNonNull(object, "the function interfaces"));
+			remember(IMPLEMENTATIONS, FUNCTION_OBJECT_KEY, dispatch);
+		}
+		return implement(dispatch, List.of(function), caller, new StandIn(function, JavaImplementation.FUNCTION_CLASS));
 	}
 
 	// The designators-list stand-in of a java:proxy's key.
@@ -1035,6 +1061,9 @@ final class JavaInterop {
 
 	// The designators-list stand-in of a function's :functional implementation's key.
 	private static final String FUNCTIONAL_KEY = "functional";
+
+	// The key of the object a function is (functionObject).
+	private static final List<Object> FUNCTION_OBJECT_KEY = List.of("function object");
 
 	// How a java:proxy of an interface class, or a java:reify of (interface class,
 	// designators), implements it: resolved once.
@@ -1270,12 +1299,13 @@ final class JavaInterop {
 			}
 			LispVal function = this.functions.get(index);
 			Class<?> ret = method.getReturnType();
-			LispVal result = callBack(this.caller, function, callArgs, ret);
+			boolean compares = this.comparison && ret == int.class && "compare".equals(method.getName())
+					&& method.getParameterCount() == 2;
+			LispVal result = callBack(this.caller, function, callArgs, ret, compares);
 			if (ret == void.class) {
 				return null;
 			}
-			if (this.comparison && ret == int.class && "compare".equals(method.getName())
-					&& method.getParameterCount() == 2) {
+			if (compares) {
 				return comparison(function, callArgs, result);
 			}
 			@Nullable Object[] slot = new @Nullable Object[1];
@@ -1301,7 +1331,8 @@ final class JavaInterop {
 			return switch (answer) {
 				case LispTrue ignored -> -1;
 				case LispSymbol symbol when LispNames.JAVA_FALSE.equals(symbol.name()) -> {
-					LispVal reversed = callBack(this.caller, function, List.of(args.get(1), args.get(0)), int.class);
+					LispVal reversed = callBack(this.caller, function, List.of(args.get(1), args.get(0)), int.class,
+							true);
 					boolean truthy = !(reversed instanceof LispNil)
 							&& !(reversed instanceof LispSymbol s && LispNames.JAVA_FALSE.equals(s.name()));
 					yield truthy ? 1 : 0;

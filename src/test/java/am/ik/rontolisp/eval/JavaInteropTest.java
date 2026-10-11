@@ -729,6 +729,15 @@ class JavaInteropTest {
 		assertThat(output(JavaImplementationPrograms.THROUGH)).isEqualTo(JavaImplementationPrograms.THROUGH_OUTPUT);
 	}
 
+	// Mirrors JvmJavaInteropCompilerTest#aFunctionWhereAnObjectIsExpectedIsTheObjectItIs.
+	// Before (measured 2026-10-11), a function matched no Object parameter: "No matching
+	// method java.util.ArrayList.add with 1 argument(s)".
+	@Test
+	void aFunctionWhereAnObjectIsExpectedIsTheObjectItIs() {
+		assertThat(output(JavaImplementationPrograms.FUNCTION_OBJECT))
+			.isEqualTo(JavaImplementationPrograms.FUNCTION_OBJECT_OUTPUT);
+	}
+
 	// Mirrors JvmJavaInteropCompilerTest#aHandleIsItsTextToJavaAndItsValueBack.
 	@Test
 	void aHandleIsItsTextToJavaAndItsValueBack() {

@@ -4050,14 +4050,76 @@ The `java:` surface (`.kb/java-interop.md`); interpreter and JVM only -- wasm co
   after, oracle-identical on the interpreter and the JVM (`aByteArrayAJavaMemberAnswersIsAByteArray`,
   `aByteArrayReachesJavaAsTheByteArrayJavaStoresInto`).
 - A fn or a `proxy` body Java calls reads Java's arguments as Clojure values and answers Java
-  the oracle's own object (f24, 2026-10-10; f33, 2026-10-11): Java calls it THROUGH
-  `%clojure-host-call` (`ClojureInteropLowering.HOST_CALL`), named by the `java:` marker
-  `:through` (`.kb/java-interop.md`, "Markers") -- `(apply f (%clojure-host-answer args))`, a
-  `byte[]` (`:octets`: Java's own array) a byte array, then `%clojure-host-member` of the
-  answer only where `object` says the method answers an object. Only the `java:` layer knows
-  the slot's return type, so this is the one place the answer can be converted without
-  converting one a void method drops (a lazy seq realized, a growing vector walked per
-  `forEach` call: quadratic).
+  as the oracle does (f24, 2026-10-10; f33, f39, 2026-10-11): Java calls it THROUGH
+  `%clojure-host-call` (`ClojureInteropLowering.HOST_CALL`; a proxy body through
+  `%clojure-proxy-call` / `%clojure-subclass-call`), named by the `java:` marker `:through`
+  (`.kb/java-interop.md`, "Markers") -- `(apply f (%clojure-host-answer args))`, a `byte[]`
+  (`:octets`: Java's own array) a byte array, then the answer for the KIND Java takes it as:
+  `%clojure-host-member` of it only for `:object`, a cast for a primitive, as it is for none.
+  Only the `java:` layer knows the slot's return type, so this is the one place the answer can
+  be converted without converting one a void method drops (a lazy seq realized, a growing
+  vector walked per `forEach` call: quadratic).
+  - A fn's primitive answer (f39) is cast as the oracle's functional interface adapter casts
+    it, read off clj 1.12.6's `Compiler$FISupport`, `FnInvokers`, `Reflector.boxArg` /
+    `coerceAdapterReturn` and `RT` (javap, 2026-10-11): `int`/`long`/`double`/`float`/`short`/
+    `byte` by `RT.intCast`/`longCast`/`doubleCast`/`floatCast`/`shortCast`/`byteCast` of an
+    object (`%clojure-host-int-cast` ... `%clojure-host-bounded-cast`: a ratio or double
+    truncated, a character its code but a Number cast's failure for a double, out of range the
+    `IllegalArgumentException` spelling the value as Java does, past the int range
+    `Math.toIntExact`'s `integer overflow`, nil the helpful NPE `RT` throws, anything else the
+    Character or Number cast's CCE without the module tail) -- the compiled adapter's
+    `FnInvokers` and the reflector's `coerceAdapterReturn` agree there; a `char` by a
+    `(Character)` cast; a `boolean` by the compiled adapter's LambdaMetafactory `(Boolean)`
+    cast where `java:`'s `resolved` says the call chose its member before it ran (nil the
+    message-less NPE of a hidden frame -- a host `NullPointerException`, so `ex-message` is
+    nil as the oracle's --, any other value but true and false the CCE) and by the
+    reflector's `RT.booleanCast` where it did not (nil and false false, anything else true).
+    The oracle's compiler resolves a call whose receiver class it knows and whose method has
+    one overload at the arity (or whose arguments' static classes pick one); `java:`'s
+    resolution is the closest model this front end has (`.kb/java-interop.md`, "One resolution
+    model"), so it decides, and every mismatch errs lenient: a call the oracle resolves only
+    through a type hint (dropped here) or a collection literal's class (`(.filter (.stream
+    [1 2 3]) pred)`: the value receiver's Java object goes through `%clojure-host-member`, of
+    no static class) reads a predicate's nil as false where the oracle throws. Measured
+    2026-10-11 against clj 1.12.6: `(defn rm [l f] (.removeIf l f))` with `(fn [x] nil)` keeps
+    everything (`[1 2 3]`) and with `(fn [x] :kw)` removes everything, a `let` receiver's
+    `removeIf`, `Predicate/not` of a fn form and `IntStream/range`'s `filter` throw the NPE,
+    `(.removeIf (ArrayList. [1]) (fn [x] :kw))` the CCE -- oracle-identical here since f39,
+    the hinted `(defn rmh [^ArrayList l f] ...)` the documented lenient deviation. Before:
+    `java:` marshalled the answer (nil false, a ratio or double `cannot return`, a long's low
+    32 bits for an `int`). Not modeled (no JDK interface reaches them; `ScanFI` over the JDK's
+    modules, 2026-10-11, found only boolean-answering ones of three or more parameters, and
+    none answering a char, short, byte or float): a method of more than two parameters answers
+    through the adapter's `invokeOO..` and a LambdaMetafactory cast to the wrapper, so a
+    third-party one answering an `int` would refuse a `Long` there; the reflector's Proxy also
+    routes a default method to the fn (`negate` of a reflected `Predicate/not` is an
+    `ArityException` there), where its body runs here.
+  - A proxy body's primitive answer (f39) is unboxed as the oracle's proxy class does
+    (core_proxy's `gen-method`: ASM `unbox`): a `(Boolean)` or `(Character)` cast, any other
+    primitive `((Number) x).intValue()` -- `longValue`, `floatValue`, `doubleValue` --
+    unchecked (`%clojure-unchecked-int` / `-long`: a long's low bits, a double or ratio
+    truncated, a double past the range its edge), Java narrowing a `short` or `byte`; nil the
+    helpful NPE naming the fn's `IFn.invoke` of the method's arguments and `this`
+    (`%clojure-proxy-null`, the arity from the argument list: `%clojure-subclass-call` hands
+    the object first), anything else the cast's CCE; a `Comparator` proxy's `compare` is such
+    an int, no `AFunction.compare`. A fn constructor argument of a proxy over a class is called
+    through the subclass call too, which the oracle's reflector converts: they agree for
+    `Runnable`, `Callable` and `Comparator` (the fn itself in the oracle: no adapter), the only
+    constructor parameters measured. Measured 2026-10-11 against clj 1.12.6: thirteen answers
+    (`ToIntFunction`, `ToLongFunction`, `ToDoubleFunction`, `Predicate`, `InputStream.read` and
+    `markSupported`, `Comparator.compare`), oracle-identical but the CCE's module tail; before,
+    nil false for a boolean and `cannot return` for a ratio, a double, nil or a keyword where
+    an int was expected.
+  - A fn Java takes as an `Object` (f39) is the object the fn is (`.kb/java-interop.md`, the
+    function object): a `Runnable`, `Callable` and `Comparator` standing for the fn, spelled
+    `clojure.lang.AFunction@hex` as `%clojure-host-object` spells a fn inside a collection,
+    with which it is equal both ways. The oracle's fn class is its own (`user$f`), so the text
+    is the deviation; a fn inside a collection crosses as that identity handle, none of the
+    three: `(.invokeAll pool [f g])` casts it to `Callable` (`ClassCastException`, where the
+    oracle answers both futures), a checked list of `Runnable` refuses it.
+    Measured 2026-10-11 against clj 1.12.6: `(.add l f)` then `(.get l 0)` is `f` (before: `No
+    matching method`), as are a map's, a set's, `Optional/of`'s and a reflective `.add`'s, and
+    `StringBuilder.append` takes it as an `Object`.
   - a fn: `ClojureInteropLowering.hostCall` ends every call with a non-literal argument (the
     `:functional` ones) in `:octets` and `:through #'%clojure-host-call` where the host is
     (`answered(..., bytes, converts)`; `%clojure-host-answer` around the CALL's answer only
@@ -4073,8 +4135,9 @@ The `java:` surface (`.kb/java-interop.md`); interpreter and JVM only -- wasm co
     through `%clojure-host-fn-answer`, which converted a byte array only: a map, set, keyword,
     ratio, symbol, atom or fn answer was `cannot return`, a vector or lazy seq an `ArrayList`
     copy, and no stand-in could stand for the program's fn, only for its adapter.
-  - a `proxy`: `java:proxy` / `java:subclass` end in `:octets` and the same `:through`
-    (`proxyThrough`); the callable is handed `(name . args)` / `(this name . args)`, which
+  - a `proxy`: `java:proxy` / `java:subclass` end in `:octets` and `:through
+    #'%clojure-proxy-call` / `#'%clojure-subclass-call` (`proxyThrough`, f39; until then the
+    host call's); the callable is handed `(name . args)` / `(this name . args)`, which
     `%clojure-host-answer` reads, and its dispatch answers as the body does. Until f33 the
     lowering read the arguments itself (`proxyArguments`) and wrapped a body in
     `%clojure-host-member` when SOME method of its name and count answered a reference
@@ -4093,11 +4156,11 @@ The `java:` surface (`.kb/java-interop.md`); interpreter and JVM only -- wasm co
   infinite `iterate` dropped by `forEach`, oracle-identical. Before f24 (2026-10-10): a
   proxy's `write(byte[],int,int)` saw `(bytes? bs)` false, `InputStream.read`'s `aset` was
   `(SETF AREF): The value (0 0) is not of type ARRAY`, a `Supplier` answering a byte array
-  `cannot return (:C%BYTES #(1 2))`. What still differs (user doc deviations): a primitive
-  answer converts as `java:` converts one (`nil` false for a `boolean`, a ratio or double
-  refused and a long's low 32 bits for an `int`, where the oracle casts), and a fn where an
-  `Object` is expected matches nothing. Wasm lowers as before (every half gated on
+  `cannot return (:C%BYTES #(1 2))`. Wasm lowers as before (every half gated on
   `hostTarget`). Pins: `ClojureInteropTest#aFnsAnswerReachesJavaAsTheOraclesOwnObject`,
+  `#aFnsPrimitiveAnswerReachesJavaCastAsTheOraclesAdapterCastsIt`,
+  `#aProxysPrimitiveAnswerIsUnboxedAsTheOraclesProxyClassUnboxesIt`,
+  `#aFnWhereJavaExpectsAnObjectIsTheFnItself`,
   `#aByteArrayJavaHandsAProxyIsOneItStoresInto`, `#aByteArrayJavaHandsAFnIsOneItStoresInto`,
   `#aProxyOrTypeIsHandedAByteArrayAndAnswersJavaTheOraclesObject`,
   `ClojureLoweringTest#aFnOrProxyJavaCallsIsCalledThroughTheHostCall`.

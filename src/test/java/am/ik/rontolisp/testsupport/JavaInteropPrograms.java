@@ -630,6 +630,7 @@ public final class JavaInteropPrograms {
 			(row (lambda () (java:view 1 2 :list)))
 			(row (lambda () (java:view 1 '(1 2 3) :map)))
 			(row (lambda () (java:view 1 '(1) :list nil (lambda (a b) 0))))
+			(row (lambda () (java:view 1 (list 1/2) :list)))
 			(row (lambda () (java:view 1 (list (lambda () 1)) :list)))
 			(row (lambda () (java:handle 1 nil)))
 			(row (lambda () (java:handle 1 "t" 0 "o" 5)))
@@ -658,7 +659,8 @@ public final class JavaInteropPrograms {
 			java:view expects (java:view value items :list|:vector|:set|:map|:bytes [printer [order ["class"]]]), got 2
 			java:view expects (java:view value items :list|:vector|:set|:map|:bytes [printer [order ["class"]]]), got (1 2 3)
 			java:view expects (java:view value items :list|:vector|:set|:map|:bytes [printer [order ["class"]]]), got #<lambda>
-			java:view: no Java value for #<lambda>
+			java:view: no Java value for 1/2
+			java: a function where java.lang.Object is expected needs a java:handle, got #<lambda>
 			java:handle expects (java:handle value text [hash [order ["class"]]]), got NIL
 			java:handle expects (java:handle value text [hash [order ["class"]]]), got 5""";
 

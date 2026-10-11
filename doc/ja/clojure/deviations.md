@@ -459,16 +459,20 @@
 - Java のインタフェースが期待される位置に渡した fn は、どのインタフェースでもその抽象
   メソッドすべてを実装し、それぞれメソッドの引数で呼ばれます。オラクルが fn を変換する
   のは `@FunctionalInterface` 注釈付きのインタフェースだけです（`PropertyChangeListener`
-  はオラクルでは `ClassCastException` になります）。オラクルと同じく、`Runnable`・
-  `Callable`・`Comparator` へ変換した fn は Java から fn そのものとして返り
-  （`(.comparator (java.util.TreeSet. f))` は `f` です）、オブジェクトを返すメソッドでは
-  fn の答えは値自身のオブジェクトになります。プリミティブを返すメソッドでは、答えは
-  `java:` サーフェスの規則で変換され、オラクルのキャストとは次の点で異なります。`boolean`
-  への `nil` は `false` になり（オラクルは `NullPointerException`）、`int` への分数や
-  浮動小数点数は拒否され（`cannot return`。オラクルは切り捨てます）、`int` の範囲を超える
-  long は下位 32 ビットになります（オラクルは `integer overflow`）。`Object` が期待される
-  位置に渡した fn はどのパラメータにも合わず（`No matching method`）、オラクルは fn
-  そのものを Java に渡します。
+  はオラクルでは `ClassCastException` になります）。オラクルと同じく、Java が
+  `Runnable`・`Callable`・`Comparator`・`Object` として受け取った fn は Java から fn
+  そのものとして返り（`(.comparator (java.util.TreeSet. f))` は `f` です）、オブジェクトを
+  返すメソッドでは fn の答えは値自身のオブジェクトになります。fn の Java オブジェクトは
+  `clojure.lang.AFunction@1b6d3586` と綴られます（オラクルでは fn 自身のクラス名です）。
+  Java が受け取るコレクションの中の fn は `Runnable`・`Callable`・`Comparator` ではありません
+  （`(.invokeAll pool [f g])` は `ClassCastException` になり、オラクルは両方を実行します）。
+  プリミティブを返すメソッドでは、答えはオラクルのアダプタと同じくキャストされます。
+  `boolean` は、呼び出しが実行前に解決されるならコンパイラの `(Boolean)` キャスト、
+  そうでなければリフレクションの真偽判定です。そのため、オラクルが型ヒント（ここでは
+  捨てられます）やコレクションリテラルのクラス（`(.filter (.stream [1 2]) pred)`）に
+  よってだけ解決する呼び出しでは、述語の `nil` はここでは `false` になり、オラクルは
+  例外を投げます。`proxy` の本体が返すプリミティブは、オラクルの proxy クラスと同じく
+  アンボックスされます。
 - Java に渡した値は、このフロントエンドのクラスのオブジェクトで、Java からはオラクル自身の
   オブジェクトと同じように読めます。ベクタ・リスト・遅延シーケンス・セット・マップ・record・
   ソート済みコレクションは、Clojure の印字どおりに綴られる読み取り専用の `java.util` の

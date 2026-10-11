@@ -19,7 +19,7 @@ Java に値のない Lisp の値 (シンボル、リストなど) である `val
 ; => "[b, a]"
 ```
 
-- `hash` に nil を渡すと、ハンドルはまったく同じ `value` (`eq`) のハンドルとだけ等しくなり、`hashCode` はその値の同一性ハッシュになります。このとき `text` も nil にでき、`toString` は `Object` と同じくクラス名と 16 進のハッシュで綴られます (`my.Cell@1b6d3586`)。
+- `hash` に nil を渡すと、ハンドルは同じ `class` でまったく同じ `value` (`eq`) を表すオブジェクト (同様のハンドル、`:value` を付けた `java:reify`、関数そのものであるオブジェクト ([java:call](java-call.md))) とだけ等しくなり、`hashCode` はその値の同一性ハッシュになります。このとき `text` も nil にでき、`toString` は `Object` と同じくクラス名と 16 進のハッシュで綴られます (`my.Cell@1b6d3586`)。
 - `order` には関数も渡せます。`compareTo` はその関数を値と比較相手のオブジェクトの Lisp の値で呼び、返された実数の符号を答えます。`order` が nil のハンドルは何とも順序付けられません。比較相手を順序付けられないとき、また別の `class` のハンドルと比べたときは、キャストが投げるのと同じ `ClassCastException` (`class S cannot be cast to class K`) を投げます。
 - `class` は Java のメッセージがハンドルを呼ぶクラス名で、等価と順序を分けます。クラスの異なるハンドル同士は `equals` で等しくならず、比較もできません。
 - 実数のハンドルは、その数の `java.lang.Number` です。`doubleValue` (分数は `DECIMAL64` で割った商)、`longValue`、`intValue` を答えます。

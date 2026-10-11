@@ -1342,6 +1342,15 @@ class JvmJavaInteropCompilerTest {
 			.isEqualTo(JavaImplementationPrograms.THROUGH_OUTPUT);
 	}
 
+	// Mirrors JavaInteropTest#aFunctionWhereAnObjectIsExpectedIsTheObjectItIs: the direct
+	// sites' and the dispatched sites' function arm for java.lang.Object, the generated
+	// class standing for the function, the refusal at any other call.
+	@Test
+	void aFunctionWhereAnObjectIsExpectedIsTheObjectItIs() throws Exception {
+		assertThat(compileAndRun(JavaImplementationPrograms.FUNCTION_OBJECT))
+			.isEqualTo(JavaImplementationPrograms.FUNCTION_OBJECT_OUTPUT);
+	}
+
 	// Mirrors JavaInteropTest#aHandleIsItsTextToJavaAndItsValueBack:
 	// runtime/RontoJavaHandle
 	// through _jhandle, unwrapped by _junm / _jarr at a direct site and by the bridge's

@@ -6,12 +6,13 @@ import java.util.Objects;
  * What {@code (java:handle value text hash order class)} makes: a Java object standing
  * for a Lisp value Java has none of. Java sees the text as its {@code toString} --
  * without one, {@code Object}'s spelling, the class and the hex hash -- and equals
- * handles of one class by their texts, or, made with no hash, only a handle of the very
- * same value (whose hash is then the value's identity hash). It orders a handle of its
- * own class by its order text, or asks a Lisp function of its value and the object
- * compared with; made with neither, and against a handle of another class,
- * {@code compareTo} is the {@code ClassCastException} a cast to the class would throw. A
- * handle standing for a real number is a {@link RontoJavaNumberHandle}.
+ * handles of one class by their texts, or, made with no hash, only an object standing for
+ * the very same value of its class (whose hash is then the value's identity hash), as
+ * {@link RontoJavaValue#sameValue} rules. It orders a handle of its own class by its
+ * order text, or asks a Lisp function of its value and the object compared with; made
+ * with neither, and against a handle of another class, {@code compareTo} is the
+ * {@code ClassCastException} a cast to the class would throw. A handle standing for a
+ * real number is a {@link RontoJavaNumberHandle}.
  */
 public final class RontoJavaHandle implements RontoJavaValue, Comparable<Object> {
 
@@ -90,11 +91,19 @@ public final class RontoJavaHandle implements RontoJavaValue, Comparable<Object>
 		if (this == other) {
 			return true;
 		}
-		if (!(other instanceof RontoJavaHandle handle) || handle.identity != this.identity
+		if (this.identity) {
+			// RontoJavaValue.sameValue's rule, so either side answers alike: any object
+			// standing for the very same value under the same class (a java:reify given
+			// :value, a function's object) but a handle equal by its text
+			return other instanceof RontoJavaValue that
+					&& !(other instanceof RontoJavaHandle handle && !handle.identity) && that.value() == this.value
+					&& that.className().equals(className());
+		}
+		if (!(other instanceof RontoJavaHandle handle) || handle.identity
 				|| !Objects.equals(handle.className, this.className)) {
 			return false;
 		}
-		return this.identity ? handle.value == this.value : Objects.equals(handle.text, this.text);
+		return Objects.equals(handle.text, this.text);
 	}
 
 	@Override

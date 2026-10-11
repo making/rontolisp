@@ -36,11 +36,21 @@ public final class JavaOverloads {
 	public static final int COST_PROXY = 8;
 
 	/**
+	 * A Lisp callable where {@code java.lang.Object} is expected: after every interface
+	 * the function implements (a functional one, as a Java lambda's target, and
+	 * {@code Runnable}, {@code Callable} or {@code Comparator}, which Clojure's fn is
+	 * itself), before any other interface -- Clojure's fn is an {@code Object} and no
+	 * {@code CharSequence}, so {@code StringBuilder.append(Object)} takes it.
+	 */
+	public static final int COST_FUNCTION_OBJECT = 9;
+
+	/**
 	 * A Lisp callable adapted to an interface of several abstract methods, or none: after
 	 * every functional one, as only a functional interface takes a Java lambda
-	 * ({@link JavaInterfaceMethods#isFunctionalInterface}).
+	 * ({@link JavaInterfaceMethods#isFunctionalInterface}), and after {@code Object}
+	 * ({@link #COST_FUNCTION_OBJECT}).
 	 */
-	public static final int COST_PROXY_NOT_FUNCTIONAL = 9;
+	public static final int COST_PROXY_NOT_FUNCTIONAL = 10;
 
 	/** The flat penalty for packing a varargs tail: a fixed-arity overload wins. */
 	public static final int COST_VARARGS = 10;
@@ -89,6 +99,12 @@ public final class JavaOverloads {
 
 	/** The class a bignum is, and a fixnum may become. */
 	private static final String BIG_INTEGER = "java.math.BigInteger";
+
+	/**
+	 * The class every value is: a function converts to it
+	 * ({@link #COST_FUNCTION_OBJECT}).
+	 */
+	public static final String OBJECT = "java.lang.Object";
 
 	/** A tag type that matches any parameter type. */
 	public static final String WILDCARD = "_";
@@ -486,8 +502,10 @@ public final class JavaOverloads {
 				yield assignableFrom(target, "java.lang.Integer", lookup) ? COST_BOXED : NO_MATCH;
 			}
 			// A Lisp callable passed where an interface is expected is auto-wrapped in a
-			// proxy -- a functional interface first, as a Java lambda.
-			case FUNCTION -> !target.isInterface() ? NO_MATCH
+			// proxy -- a functional interface first, as a Java lambda; where an Object is
+			// expected it is the object a function is
+			// (JavaImplementations.functionObject).
+			case FUNCTION -> OBJECT.equals(name) ? COST_FUNCTION_OBJECT : !target.isInterface() ? NO_MATCH
 					: JavaInterfaceMethods.isFunctionalInterface(target) ? COST_PROXY : COST_PROXY_NOT_FUNCTIONAL;
 		};
 	}

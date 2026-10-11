@@ -72,9 +72,13 @@ final class JavaBridgeTemplate {
 
 	private static final int COST_PROXY = 8;
 
+	// A function where java.lang.Object is expected: after every interface it implements,
+	// before any other (mirrors compiler/JavaOverloads.COST_FUNCTION_OBJECT).
+	private static final int COST_FUNCTION_OBJECT = 9;
+
 	// A function where an interface of no single abstract method is expected: after every
-	// functional one (mirrors compiler/JavaOverloads.COST_PROXY_NOT_FUNCTIONAL).
-	private static final int COST_PROXY_NOT_FUNCTIONAL = 9;
+	// functional one and Object (mirrors JavaOverloads.COST_PROXY_NOT_FUNCTIONAL).
+	private static final int COST_PROXY_NOT_FUNCTIONAL = 10;
 
 	private static final int COST_VARARGS = 10;
 
@@ -111,14 +115,25 @@ final class JavaBridgeTemplate {
 
 	// The keyword a java: form may end in followed by a function (mirrors
 	// compiler/JavaMarkers.through): Java calls each function the form converts, or the
-	// implementation it makes calls, through that function -- (f function object args),
-	// object t when the method answers an object -- and takes what it answers.
+	// implementation it makes calls, through that function -- (f function kind resolved
+	// args), kind how Java takes the answer (answerKind) and resolved nil, a site left to
+	// run time choosing its member as it runs -- and takes what it answers.
 	private static final String THROUGH_MARKER = ":THROUGH";
 
-	// The interfaces a function converted after :functional and :java-false stands for
-	// itself as (mirrors compiler/JavaImplementation.FUNCTION_INTERFACES).
+	// The interfaces Clojure's fn is: after :functional and :java-false a function
+	// converted to one of them, or where Object is expected, is one object implementing
+	// all three and standing for it (mirrors JavaImplementation.FUNCTION_INTERFACES and
+	// JavaImplementations.functionObject, both in compiler/).
 	private static final List<String> FUNCTION_INTERFACES = List.of("java.lang.Runnable",
 			"java.util.concurrent.Callable", "java.util.Comparator");
+
+	// The class the object a function is names itself by (mirrors
+	// compiler/JavaImplementation.FUNCTION_CLASS).
+	private static final String FUNCTION_CLASS = "clojure.lang.AFunction";
+
+	// The refusal of a function where java.lang.Object is expected at any other call
+	// (mirrors compiler/JavaImplementation.FUNCTION_OBJECT_REFUSAL).
+	private static final String FUNCTION_OBJECT_REFUSAL = "java: a function where java.lang.Object is expected needs a java:handle, got ";
 
 	// What Comparator.compare's slot key is (mirrors compiler/JavaImplementation's
 	// COMPARATOR_COMPARE): a function implementing it by its arguments at a call ending
@@ -800,25 +815,53 @@ final class JavaBridgeTemplate {
 	// compiler/JavaImplementations.functional).
 	private static Object functional(Class<?> iface, @Nullable Object function, boolean javaFalse, boolean octets,
 			@Nullable Object through) {
+		if (javaFalse && FUNCTION_INTERFACES.contains(iface.getName())) {
+			// ... after :java-false too a Runnable, Callable or Comparator is the object
+			// the function is, which Java hands back as itself
+			// (JavaImplementation.standsForItsFunction): the program carries the value
+			// class wherever a form ends in both markers
+			Object object = functionObject(function, octets, through);
+			if (object != null) {
+				return object;
+			}
+		}
 		List<Object> key = List.of(iface, FUNCTIONAL_KEY);
 		Map<String, Integer> slots = IMPLEMENTATIONS.get(key);
 		if (slots == null) {
-			slots = functionalSlots(iface);
+			slots = functionalSlots(new Class<?>[] { iface });
 			remember(IMPLEMENTATIONS, key, slots);
 		}
 		// After :java-false too, a Comparator's function may answer a boolean (mirrors
 		// compiler/JavaImplementation.readsComparison).
 		boolean comparison = javaFalse && "java.util.Comparator".equals(iface.getName());
-		@Nullable Object[] functions = new @Nullable Object[] { function };
-		if (javaFalse && javaValueClass != null && FUNCTION_INTERFACES.contains(iface.getName())) {
-			// ... and a Runnable, Callable or Comparator stands for the function, which
-			// Java hands back as itself (JavaImplementation.standsForItsFunction): the
-			// program carries the value class wherever a form ends in both markers
-			return standIn(new Class<?>[] { iface }, slots, functions, javaFalse, octets, comparison, function, null,
-					through);
+		return implementation(new Class<?>[] { iface }, false, slots, new @Nullable Object[] { function }, javaFalse,
+				octets, comparison, through);
+	}
+
+	// The designators stand-in of the key of the object a function is.
+	private static final String FUNCTION_OBJECT_KEY = "function object";
+
+	// The object a function converted at a call ending in :functional and :java-false is
+	// where Object, Runnable, Callable or Comparator is expected: one Proxy implementing
+	// the three by the function's arguments, its compare read as Clojure's
+	// AFunction.compare, standing for the function (mirrors
+	// compiler/JavaImplementations.functionObject); null without the value class beside
+	// the program.
+	private static @Nullable Object functionObject(@Nullable Object function, boolean octets,
+			@Nullable Object through) {
+		if (javaValueClass == null) {
+			return null;
 		}
-		return implementation(new Class<?>[] { iface }, false, slots, functions, javaFalse, octets, comparison,
-				through);
+		Class<?>[] interfaces = new Class<?>[] { Runnable.class, java.util.concurrent.Callable.class,
+				java.util.Comparator.class };
+		List<Object> key = List.of(FUNCTION_OBJECT_KEY);
+		Map<String, Integer> slots = IMPLEMENTATIONS.get(key);
+		if (slots == null) {
+			slots = functionalSlots(interfaces);
+			remember(IMPLEMENTATIONS, key, slots);
+		}
+		return standIn(interfaces, slots, new @Nullable Object[] { function }, true, octets, true, function,
+				FUNCTION_CLASS, through);
 	}
 
 	// Whether the interface has exactly one method a class must implement, Object's
@@ -850,9 +893,9 @@ final class JavaBridgeTemplate {
 	// Every method a class implementing the interface must implement, by
 	// name(parameters)return -- an abstract one, Object's three aside -- each variant of
 	// it calling the function (mirrors compiler/JavaImplementations.functional).
-	private static Map<String, Integer> functionalSlots(Class<?> iface) {
+	private static Map<String, Integer> functionalSlots(Class<?>[] interfaces) {
 		Map<String, Integer> slots = new HashMap<>();
-		for (Map.Entry<String, List<Method>> group : groups(new Class<?>[] { iface }).entrySet()) {
+		for (Map.Entry<String, List<Method>> group : groups(interfaces).entrySet()) {
 			if (OBJECT_METHODS.contains(group.getKey())) {
 				continue;
 			}
@@ -1037,7 +1080,7 @@ final class JavaBridgeTemplate {
 			argList = new Object[] { quote(method.getName()), argList };
 		}
 		Class<?> ret = method.getReturnType();
-		Object result = callBack(function, argList, ret, through);
+		Object result = callBack(function, argList, ret, comparison, through);
 		if (ret == void.class) {
 			return null;
 		}
@@ -1053,16 +1096,41 @@ final class JavaBridgeTemplate {
 	}
 
 	// FUNCTION applied to the argument list ARGS Java hands it: directly, or through
-	// THROUGH -- (through function object args), object t when the method of return type
-	// RET answers an object (no primitive, not void) -- mirroring eval/JavaInterop's
-	// callBack and the generated callbacks' _jthrough$N.
+	// THROUGH -- (through function kind resolved args), kind how Java takes the answer of
+	// a method of return type RET (answerKind; none for a COMPARISON the caller reads
+	// itself) and resolved nil, a site left to run time choosing its member as it runs --
+	// mirroring eval/JavaInterop's callBack and the generated callbacks' _jthrough$N.
 	private static @Nullable Object callBack(@Nullable Object function, @Nullable Object args, Class<?> ret,
-			@Nullable Object through) {
+			boolean comparison, @Nullable Object through) {
 		if (through == null) {
 			return applyCallable(function, args);
 		}
-		Object object = ret.isPrimitive() ? null : "T";
-		return applyCallable(through, new Object[] { function, new Object[] { object, new Object[] { args, null } } });
+		Object kind = answerKind(ret, comparison);
+		return applyCallable(through,
+				new Object[] { function, new Object[] { kind, new Object[] { null, new Object[] { args, null } } } });
+	}
+
+	// How Java takes the answer of a method of return type RET, as a :through function is
+	// handed it (mirrors compiler/JavaImplementation.answerKind): a primitive's keyword,
+	// :OBJECT for a reference, none (null) for void and for a comparison read as
+	// AFunction.compare. A keyword compiles to its name, a constant: one string a symbol
+	// is compared by identity with.
+	private static @Nullable String answerKind(Class<?> ret, boolean comparison) {
+		if (comparison) {
+			return null;
+		}
+		return switch (ret.getName()) {
+			case "void" -> null;
+			case "boolean" -> ":BOOLEAN";
+			case "char" -> ":CHAR";
+			case "byte" -> ":BYTE";
+			case "short" -> ":SHORT";
+			case "int" -> ":INT";
+			case "long" -> ":LONG";
+			case "float" -> ":FLOAT";
+			case "double" -> ":DOUBLE";
+			default -> ":OBJECT";
+		};
 	}
 
 	// What a function implementing Comparator.compare answered, read as Clojure's
@@ -1080,7 +1148,7 @@ final class JavaBridgeTemplate {
 		if (JAVA_FALSE.equals(answer)) {
 			Object a = args[0];
 			Object b = ((Object[]) Objects.requireNonNull(args[1]))[0];
-			Object back = callBack(function, new Object[] { b, new Object[] { a, null } }, int.class, through);
+			Object back = callBack(function, new Object[] { b, new Object[] { a, null } }, int.class, true, through);
 			return back != null && !JAVA_FALSE.equals(back) ? 1 : 0;
 		}
 		if (answer instanceof Long l) {
@@ -2146,7 +2214,7 @@ final class JavaBridgeTemplate {
 				}
 				yield target.isAssignableFrom(Integer.class) ? COST_BOXED : NO_MATCH;
 			}
-			case KIND_FUNCTION -> !target.isInterface() ? NO_MATCH
+			case KIND_FUNCTION -> target == Object.class ? COST_FUNCTION_OBJECT : !target.isInterface() ? NO_MATCH
 					: isFunctionalInterface(target) ? COST_PROXY : COST_PROXY_NOT_FUNCTIONAL;
 			default -> throw new IllegalArgumentException("unknown argument kind " + kind);
 		};
@@ -2227,8 +2295,16 @@ final class JavaBridgeTemplate {
 		if (value.getClass() == Object[].class) { // a function value
 			boolean javaFalse = (functions & FUNCTIONS_JAVA_FALSE) != 0;
 			boolean octets = (functions & FUNCTIONS_OCTETS) != 0;
-			return (functions & FUNCTIONS_MODE) == FUNCTIONS_BY_ARGUMENTS
-					? functional(target, value, javaFalse, octets, through)
+			boolean byArguments = (functions & FUNCTIONS_MODE) == FUNCTIONS_BY_ARGUMENTS;
+			if (target == Object.class) {
+				// the object a function is (mirrors eval/JavaInterop.functionObject)
+				Object object = byArguments && javaFalse ? functionObject(value, octets, through) : null;
+				if (object == null) {
+					throw new RuntimeException(FUNCTION_OBJECT_REFUSAL + describe(value));
+				}
+				return object;
+			}
+			return byArguments ? functional(target, value, javaFalse, octets, through)
 					: proxy(target, value, javaFalse, octets, through);
 		}
 		return value; // a wrapped host object

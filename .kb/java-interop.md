@@ -32,8 +32,8 @@ Package `java` (`LispNames.JAVA_PKG`, `PackageRegistry`; does NOT use `cl`): `ja
   forces `usesEval`, a generated interface class only the apply tier (`JvmJavaSites.needsApply`);
   `usesJava` threads `JvmRuntimeBuilder.JavaPrint` into the print builders.
 - `select()` = lowest total cost `COST_EXACT` < `COST_WIDEN` < `COST_CONVERT` < `COST_NARROW` <
-  `COST_BOXED` < `COST_PROXY` < `COST_PROXY_NOT_FUNCTIONAL` (`COST_VARARGS` via `varargsCost`), ties
-  by stable signature string,
+  `COST_BOXED` < `COST_PROXY` < `COST_FUNCTION_OBJECT` < `COST_PROXY_NOT_FUNCTIONAL`
+  (`COST_VARARGS` via `varargsCost`), ties by stable signature string,
   then (one parameter list, covariant variants) the most specific return type -- never the
   bridge that erases it. `marshal`/`marshalSequence`/`marshalTable`/`accessibleMethod`. Symbols
   (but `|false|`), ratios, dotted lists and rank-2+ arrays are NOT marshalled ("Bignums and
@@ -296,15 +296,30 @@ Package `java` (`LispNames.JAVA_PKG`, `PackageRegistry`; does NOT use `cl`): `ja
   handler range); its false arm calls the function again through `_apply`. Before, measured
   2026-10-08: `cannot return T as int from java.util.Comparator.compare`; nil and a string,
   2026-10-09, `cannot return NIL as int`.
-- `:through f` (f33, 2026-10-11): every function the form converts to an interface (an argument,
-  a `java:subclass`'s constructor argument) and every function of the implementation it makes
-  is called by Java through `f` -- `(f function object arguments)`, `arguments` the list the
-  function would be applied to (a proxy's with the name first, a subclass's with `this` and
-  the name), `object` `t` when the slot's return type is no primitive and not `void` -- and the
-  slot answers what `f` answers, marshalled as a function's answer. It is the one place a
-  language learns whether its answer is read: Clojure's `%clojure-host-call` converts an answer
-  to the oracle's own object only then, so a `void` method's answer (a lazy seq, a growing
-  vector) is never realized or walked (`.kb/clojure-frontend.md`, "Java interop"). The marker
+- `:through f` (f33, 2026-10-11; f39 the kind and `resolved`, the same day): every function the
+  form converts (to an interface, or to the object a function is where `Object` is expected; an
+  argument, a `java:subclass`'s constructor argument) and every function of the implementation
+  it makes is called by Java through `f` -- `(f function kind resolved arguments)`, `arguments`
+  the list the function would be applied to (a proxy's with the name first, a subclass's with
+  `this` and the name), `kind` how Java takes the answer (`JavaImplementation.answerKind`: the
+  primitive return type's keyword -- `:boolean` `:char` `:byte` `:short` `:int` `:long` `:float`
+  `:double` --, `:object` for any reference, nil for `void` and for a `compare` the call reads
+  as `AFunction.compare`, whose second call is nil too), `resolved` `t` when the site
+  converting the function chose its member before it ran (`JavaMarkers.resolved`, set by
+  `JavaSiteResolver.choosesItsMemberFirst`: resolved to one member, or dispatched over its only
+  overload -- Clojure's compiler resolves exactly such a call, its reflector the rest) and nil
+  for a site choosing among several overloads as it runs, a site left to run time, the bridge
+  and an implementation form's own functions -- and the slot answers what `f` answers,
+  marshalled as a function's answer. It is the one place a language learns whether, and as
+  what, its answer is read: Clojure's `%clojure-host-call` converts an answer to the oracle's
+  own object only for `:object`, so a `void` method's answer (a lazy seq, a growing vector) is
+  never realized or walked, and casts a primitive answer as the oracle's adapter casts it
+  (`.kb/clojure-frontend.md`, "Java interop"). The bit lives in `JavaMarkers` (no keyword
+  spells it; `of` never sets it) and is kept only beside a `:through` (`withResolved`), so no
+  other shape is split by it; where it is kept it keys `_jsite$N` shapes, `_jconv$N`, shells,
+  `_jimpl$K` and the `_jcmp$N` variants. Until f39 the second argument was `object`, `t` for a
+  reference return and nil otherwise, which could not tell a primitive's type: the oracle's
+  casts need it. The marker
   is VALUED: `JavaMarkers.count` / the bridge's `markerCount` take `:through` and the element
   after it as one pair while scanning back, `of` records the name a literal `#'name` names
   (`through()`; any other form or an evaluated value `COMPUTED`, ""), `throughFunction` answers
@@ -314,25 +329,58 @@ Package `java` (`LispNames.JAVA_PKG`, `PackageRegistry`; does NOT use `cl`): `ja
   args, first)` and the evaluator's resolved path from the evaluated arguments) in
   `ImplementationHandler` and `SubclassHandler`; the bridge's `callBack` (the value threaded
   through `marshalArguments` ... `convert` into `functional` / `proxy` / `implementation`);
-  compiled: `JvmJavaInteropCompiler.prepareThrough` compiles `_jthrough$N(fn, object, args)`
-  -- an outlined body, the DIRECT call `(name fn object args)` -- before the form asks for a
-  shell, and `_jimpl$K` / `_jsub$K` keyed `|through=name` call it with the slot's constant
-  (`ldc "T"` or null) where they called `_apply` (`emitApply`); shells, subshells, `_jconv$N`
-  and site shapes are keyed by the name. A comparison's second call goes through `f` too, with
-  `object` nil (`_jcmp$N`, a `_jcmp` per helper; the interpreter's and the bridge's
-  `comparison`). Pins: `JavaImplementationPrograms.THROUGH` (`JavaInteropTest` /
+  compiled: `JvmJavaInteropCompiler.prepareThrough` compiles `_jthrough$N(fn, kind, resolved,
+  args)` -- an outlined body, the DIRECT call `(name fn kind resolved args)` -- before the form
+  asks for a shell, and `_jimpl$K` / `_jsub$K` keyed `|through=name` (and ` resolved`) call it
+  with the slot's kind (an `ldc` of the keyword's name, a compiled keyword being its interned
+  name, or null) and the bit (`ldc "T"` or null) where they called `_apply` (`emitApply`);
+  shells, subshells, `_jconv$N` and site shapes are keyed by the name. A comparison's second
+  call goes through `f` too, kind nil (`_jcmp$N`, a `_jcmp` per helper and bit; the
+  interpreter's and the bridge's `comparison`). Pins: `JavaImplementationPrograms.THROUGH`
+  (`JavaInteropTest` /
   `JvmJavaInteropCompilerTest#javaCallsAFunctionThroughTheFunctionAfterThrough`: resolved,
   dispatched, run-time and computed sites, reify, proxy, subclass, a comparison's six calls),
-  `JavaSiteResolverTest#aTrailingThroughAndItsFunctionAreSetAside`,
+  `JavaSiteResolverTest#aTrailingThroughAndItsFunctionAreSetAside` and
+  `#aSiteTellsItsThroughWhetherItChoseItsMemberFirst`,
+  `JavaBridgeTemplateParityTest#theBridgeHandsThroughTheAnswerKindTheSharedRuleNames`,
   `JavaImplementationsTest#theMarkersAFormEndsInAreCarriedByItsImplementation`,
   `JvmLispCompilerSplitTest#aForcedSplitKeepsJavaCallsWorking`.
 - A function converted at a form ending in `:functional` AND `:java-false` to `Runnable`,
-  `Callable` or `Comparator` STANDS FOR ITSELF (f33; `JavaImplementation.standsForItsFunction`,
-  `FUNCTION_INTERFACES`, `StandIn.FUNCTION`): Clojure's `AFunction` is those three, so Java hands
-  it back as the function -- `(.comparator (TreeSet. f))` is `f` -- while one converted to any
-  other interface (`UncaughtExceptionHandler`) stays the oracle's adapter, an object of its own.
-  Interpreter: `implementation` adds the handler's `StandIn` of the function; bridge:
-  `functional` makes a `standIn` Proxy (only with the value class bound); compiled: the shell
+  `Callable`, `Comparator` or `Object` is THE OBJECT THE FUNCTION IS (f33 for the three, f39 for
+  `Object` and the one object; `JavaImplementations.functionObject`,
+  `JavaImplementation.standsForItsFunction` / `isFunctionObjectCall`, `FUNCTION_INTERFACES`,
+  `StandIn.FUNCTION`): one implementation of all three by the function's arguments -- `run` void,
+  `call` an object, `compare` read as `AFunction.compare` (`readsComparison` takes an
+  implementation including `Comparator`) -- standing for the function, named
+  `clojure.lang.AFunction` (`FUNCTION_CLASS`), so two such objects of one function made at two
+  calls (two shells: a shape keyed by its markers) are equal, as one fn is one object, and so
+  are one and an identity `java:handle` of the function under that class (the Clojure front
+  end's `%clojure-host-object` of a fn). Clojure's `AFunction` is those three and an `Object`,
+  so Java hands it back as the function -- `(.comparator (TreeSet. f))`, `(.get l 0)` after
+  `(.add l f)` are `f` -- while one converted to any other interface (`UncaughtExceptionHandler`)
+  stays the oracle's adapter, an object of its own. Where `Object` is expected at any other
+  call the conversion is REFUSED (`JavaImplementation.functionObjectRefusal`: `java: a function
+  where java.lang.Object is expected needs a java:handle, got X`): a function has no Java object
+  of its own there, and an empty stand-in would need the value runtime in every program with an
+  unknown argument at an `Object` parameter (a `_junm` arm, `RontoJavaValue` beside it) -- one
+  that stood for nothing (a fresh object, a proxy of no interface) would hand back no function.
+  The cost is marker-independent all the same (the memos are keyed by kinds alone), so a CL
+  call passing a function where `Object` or a non-functional interface is expected now chooses
+  `Object` and is refused, where it chose the interface's `java:proxy` (`StringBuilder.append`)
+  or matched nothing. Copies: interpreter `JavaInterop.implementation` / `functionObject` (one
+  `Dispatch` under `FUNCTION_OBJECT_KEY`); the bridge's `functional` / `functionObject` (the
+  slots of the three, a stand-in Proxy with the value class, else the refusal); compiled
+  `Body.emitConvert`'s FUNCTION arm for `java.lang.Object` (`functionObjectFactory`, else a
+  `throwDescribing` of the refusal), which every `_jconv$N` for `Object` -- a varargs array's,
+  a sequence's and a table's elements included -- gets once its `kindCost` row exists, and
+  `JvmJavaSites.passesAFunction` predicts `_apply` for an `Object` parameter at both markers.
+  Measured 2026-10-11 against clj 1.12.6 (`(let [f (fn [] 1) l (ArrayList.)] (.add l f)
+  (identical? f (.get l 0)))` true): before, `No matching method java.util.ArrayList.add with 1
+  argument(s)` on the interpreter and the JVM; after, true on both, and a list, a map, a set,
+  `Optional`, a checked list of `Runnable` and reflection's `Method.invoke` of `run`, `call` and
+  `compare` on it as the oracle. Interpreter: `functionObject` adds the handler's `StandIn` of
+  the function; bridge: `functionObject` makes a `standIn` Proxy (only with the value class
+  bound); compiled: the shell
   (`|stands`) implements `RontoJavaValue`, `value()` reading `fns[0]`, factory `of(Object[])`
   unchanged; `JvmJavaSites.makesStandIns` counts a site or subclass ending in both markers. A
   getter answers such an object through a DECLARED interface type, which the direct sites used
@@ -342,14 +390,35 @@ Package `java` (`LispNames.JAVA_PKG`, `PackageRegistry`; does NOT use `cl`): `ja
   coming back through a method declared to answer an interface was a host object compiled and
   the value interpreted. The resolver still types such an answer as the interface, so a direct
   `java:call` ON it refuses the function (both backends alike); Clojure wraps every receiver
-  first.
+  first. Pins: `JavaImplementationPrograms.FUNCTION_OBJECT`
+  (`JavaInteropTest` / `JvmJavaInteropCompilerTest#aFunctionWhereAnObjectIsExpectedIsTheObjectItIs`:
+  resolved, dispatched, varargs and sequence conversions, the refusal, a handle's equality),
+  `JavaSiteResolverTest#aFunctionWhereAnObjectIsExpectedResolvesToTheObjectOverload`,
+  `JavaBridgeTemplateParityTest#aFunctionCostsLessForAFunctionalInterface` and
+  `#theTemplateImplementsAFunctionalArgumentAsTheSharedRuleDoes`,
+  `JavaImplementationsTest#theMarkersAFormEndsInAreCarriedByItsImplementation`,
+  `ClojureInteropTest#aFnWhereJavaExpectsAnObjectIsTheFnItself`.
 - A function costs `COST_PROXY` (8) against a functional interface (one abstract method,
   Object's public methods aside: `JavaInterfaceMethods.isFunctionalInterface`, cached; the
-  bridge's copy) and `COST_PROXY_NOT_FUNCTIONAL` (9) against any other, so `TreeSet(Comparator)`
+  bridge's copy), `COST_FUNCTION_OBJECT` (9) against `java.lang.Object` (f39: Clojure's fn is
+  an `Object`; a functional interface is the more specific match) and
+  `COST_PROXY_NOT_FUNCTIONAL` (10; 9 until f39) against any other, so `TreeSet(Comparator)`
   beats `TreeSet(Collection)` (`PriorityQueue`, `ConcurrentSkipListSet` alike), as a Java
   lambda's target does. Before, measured 2026-10-08: the tie went by signature to
   `Collection`, whose conversion then called the function as a list (`Function expects 2
   arguments, got 0`). Pin: `aFunctionCostsLessForAFunctionalInterface`.
+  The `Object` crossing, measured 2026-10-11 on JDK 25.0.4
+  (`.todo/artefacts/f39-clojure-fn-where-java-expects-an-object-or-answers-a-primitive/run.sh`:
+  every public method and constructor group of java.base's public top-level `java.*` classes,
+  20624 groups, a function alone or beside an integer, a string or a function): 2724 shapes
+  that matched nothing now match an `Object` parameter, and 32 choices move, each from a
+  non-functional interface to `Object`. Five are the oracle's (a fn is no `CharSequence` or
+  `List`): `StringBuffer`/`StringBuilder` `append`/`insert(CharSequence)`,
+  `ListFormat.format(List)`. The other 27 (`compareTo` of `Path`, `ProcessHandle` and the
+  `java.time` chronology types, `DelayQueue` `add`/`offer`/`put`, the classfile builders'
+  `accept`) move onto the generic method's erased `Object` form, which casts to the type it
+  names: a failure either way, now that cast's `ClassCastException` as for a string, before
+  a proxy of the interface.
 
 ## Handles and views: `java:handle`, `java:view` (e73, e89 2026-10-09)
 
@@ -377,7 +446,10 @@ four classes); no `_apply`, no `$JavaCalls`.
 - `(java:handle value text hash order class)`, the last three optional (`RontoJavaHandle`):
   `toString` the text, or nil -- `Object`'s spelling `class@hex(hashCode)`, which needs a nil
   hash. Equality: same class (`Objects.equals` of the names) and the text, or with a NIL hash
-  only a handle of the very same value (`==` of the representation), whose `hashCode` is then
+  only an object standing for the very same value (`==` of the representation) under the same
+  `className()` -- `RontoJavaValue.sameValue`'s rule, so a function's object and a `:value`
+  reify answer it alike both ways (f39; until then only another identity handle) --, whose
+  `hashCode` is then
   `System.identityHashCode(value)`; else the hash's low 32 bits (the text's `hashCode` when
   absent). `compareTo` (`ORDER_TEXT` / `ORDER_FUNCTION` / `ORDER_NONE`): another handle of its
   class by the order text (absent: the text); or `(order value other')` through

@@ -36,9 +36,10 @@ import org.jspecify.annotations.Nullable;
  * argument, or an element of one -- is an {@code (unsigned-byte 8)} vector of its octets;
  * with {@code :through} Java calls each slot's function through the function it names
  * @param standIn how a {@code java:reify} given {@code :value} stands for its value, or a
- * function converted to {@code Runnable}, {@code Callable} or {@code Comparator} for
- * itself ({@link #standsForItsFunction}), or {@code null} for an object that stands for
- * none
+ * function converted to {@code Runnable}, {@code Callable}, {@code Comparator} or
+ * {@code Object} for itself ({@link #standsForItsFunction},
+ * {@link JavaImplementations#functionObject}), or {@code null} for an object that stands
+ * for none
  */
 public record JavaImplementation(boolean proxy, List<JavaType> interfaces, List<Slot> slots, @Nullable String reason,
 		@Nullable JavaType superclass, JavaMarkers markers, @Nullable StandIn standIn) {
@@ -124,13 +125,19 @@ public record JavaImplementation(boolean proxy, List<JavaType> interfaces, List<
 	 * @param className the class its form names ({@code :class}), or {@code null} for the
 	 * object's own
 	 * @param function whether the value is the function the object calls -- a function
-	 * converted where an interface is expected ({@link #standsForItsFunction}) -- rather
-	 * than the value of a {@code :value}
+	 * converted where one of {@link #FUNCTION_INTERFACES} or {@code Object} is expected
+	 * ({@link JavaImplementations#functionObject}) -- rather than the value of a
+	 * {@code :value}
 	 */
 	public record StandIn(@Nullable String className, boolean function) {
 
-		/** A function converted where an interface is expected, standing for itself. */
-		public static final StandIn FUNCTION = new StandIn(null, true);
+		/**
+		 * A function converted to the object it is, standing for itself: named
+		 * {@code clojure.lang.AFunction}, the class Clojure's fn is one of, so two such
+		 * objects of one function -- made at two calls -- are equal, as one fn is one
+		 * object, and an identity {@code java:handle} of the function named so too.
+		 */
+		public static final StandIn FUNCTION = new StandIn(FUNCTION_CLASS, true);
 
 		/**
 		 * A {@code java:reify} given {@code :value}.
@@ -144,16 +151,26 @@ public record JavaImplementation(boolean proxy, List<JavaType> interfaces, List<
 	}
 
 	/**
-	 * The interfaces the object a function is converted to stands for the function where
-	 * the call ends in {@code :functional} and {@code :java-false}: those Clojure's
-	 * {@code AFunction} implements itself, so Java hands the fn back as the fn.
+	 * The class the object a function is names itself by ({@link StandIn#FUNCTION}):
+	 * Clojure's fn is one of it.
+	 */
+	public static final String FUNCTION_CLASS = "clojure.lang.AFunction";
+
+	/**
+	 * The interfaces Clojure's {@code AFunction} implements itself: after
+	 * {@code :functional} and {@code :java-false} a function converted to one of them, or
+	 * where {@code Object} is expected, is one object implementing all three by the
+	 * function's arguments and standing for it
+	 * ({@link JavaImplementations#functionObject}), so Java hands the fn back as the fn
+	 * -- as Clojure's fn is one object, whichever of them Java takes it as.
 	 */
 	public static final List<String> FUNCTION_INTERFACES = List.of("java.lang.Runnable",
 			"java.util.concurrent.Callable", JavaImplementation.COMPARATOR);
 
 	/**
 	 * Whether the object a function is converted to where the interface is expected, at a
-	 * call ending in these markers, stands for the function
+	 * call ending in these markers, is the object the function is
+	 * ({@link JavaImplementations#functionObject}), standing for it
 	 * ({@code runtime/RontoJavaValue}): after {@code :functional} and
 	 * {@code :java-false}, for {@code Runnable}, {@code Callable} and {@code Comparator}
 	 * ({@link #FUNCTION_INTERFACES}), which Clojure's fn is itself -- Java hands the
@@ -163,7 +180,65 @@ public record JavaImplementation(boolean proxy, List<JavaType> interfaces, List<
 	 * @return whether the object stands for the function
 	 */
 	public static boolean standsForItsFunction(String iface, JavaMarkers markers) {
-		return markers.functional() && markers.javaFalse() && FUNCTION_INTERFACES.contains(iface);
+		return isFunctionObjectCall(markers) && FUNCTION_INTERFACES.contains(iface);
+	}
+
+	/**
+	 * Whether a function converted at a call ending in these markers is an object of its
+	 * own -- one standing for it, implementing {@link #FUNCTION_INTERFACES} by its
+	 * arguments, Clojure's fn -- where {@code Object} or one of those interfaces is
+	 * expected: after {@code :functional} and {@code :java-false}.
+	 * @param markers the call's markers
+	 * @return whether the function is such an object there
+	 */
+	public static boolean isFunctionObjectCall(JavaMarkers markers) {
+		return markers.functional() && markers.javaFalse();
+	}
+
+	/**
+	 * The message of the refusal of a function where {@code java.lang.Object} is expected
+	 * at a call ending in other markers than {@code :functional} and {@code :java-false}
+	 * ({@link #isFunctionObjectCall}): a Lisp function has no Java object of its own
+	 * there, and {@code java:handle} makes one of any value.
+	 * @param value the function as the program prints it
+	 * @return the message
+	 */
+	public static String functionObjectRefusal(String value) {
+		return FUNCTION_OBJECT_REFUSAL + value;
+	}
+
+	/** What {@link #functionObjectRefusal} writes before the value. */
+	public static final String FUNCTION_OBJECT_REFUSAL = "java: a function where java.lang.Object is expected needs a java:handle, got ";
+
+	/**
+	 * How Java takes the answer of a slot's function, as a {@code :through} function is
+	 * handed it ({@link JavaMarkers#through}): the keyword naming the return type when it
+	 * is a primitive -- {@code :boolean}, {@code :char}, {@code :byte}, {@code :short},
+	 * {@code :int}, {@code :long}, {@code :float}, {@code :double} -- {@code :object} for
+	 * any reference type, and none ({@code nil}) when Java takes no answer of the
+	 * method's type: a {@code void} method, and a comparison the call reads itself
+	 * ({@link #readsComparison}). The keywords' names, as a compiled program spells a
+	 * keyword.
+	 * @param returnType the method's return type's name ({@link Class#getName()})
+	 * @param comparison whether the slot's answer is read as a comparison
+	 * @return the keyword's name, or {@code null} for none
+	 */
+	public static @Nullable String answerKind(String returnType, boolean comparison) {
+		if (comparison) {
+			return null;
+		}
+		return switch (returnType) {
+			case "void" -> null;
+			case "boolean" -> ":BOOLEAN";
+			case "char" -> ":CHAR";
+			case "byte" -> ":BYTE";
+			case "short" -> ":SHORT";
+			case "int" -> ":INT";
+			case "long" -> ":LONG";
+			case "float" -> ":FLOAT";
+			case "double" -> ":DOUBLE";
+			default -> ":OBJECT";
+		};
 	}
 
 	/**
@@ -215,24 +290,32 @@ public record JavaImplementation(boolean proxy, List<JavaType> interfaces, List<
 	/**
 	 * Whether a slot's function answers as a comparison: the function a call ending in
 	 * {@code :functional} and {@code :java-false} converts to
-	 * {@code java.util.Comparator} implements {@code compare}, and may answer a boolean
-	 * as Clojure's {@code AFunction.compare} reads one -- {@code t} is {@code -1},
-	 * {@code |false|} {@code 1} when the function answers true for the arguments swapped
-	 * and {@code 0} otherwise -- or any real number, whose {@code intValue} it is (a
-	 * float or ratio truncated, an integer's low 32 bits); {@code nil} is the
-	 * {@code NullPointerException} ({@link #COMPARISON_OF_NIL}) and anything else the
-	 * {@code ClassCastException} ({@link #comparisonCastFailure}) its cast to
-	 * {@code Number} throws there, the comparator's own failure, which the site whose
-	 * Java call it reaches wraps like any member's. A {@code java:proxy}'s callable and a
-	 * {@code java:subclass}'s are called with the method's name: neither reads one.
+	 * {@code java.util.Comparator} -- the object a function is there, a
+	 * {@code Comparator} among its interfaces -- implements {@code compare}, and may
+	 * answer a boolean as Clojure's {@code AFunction.compare} reads one -- {@code t} is
+	 * {@code -1}, {@code |false|} {@code 1} when the function answers true for the
+	 * arguments swapped and {@code 0} otherwise -- or any real number, whose
+	 * {@code intValue} it is (a float or ratio truncated, an integer's low 32 bits);
+	 * {@code nil} is the {@code NullPointerException} ({@link #COMPARISON_OF_NIL}) and
+	 * anything else the {@code ClassCastException} ({@link #comparisonCastFailure}) its
+	 * cast to {@code Number} throws there, the comparator's own failure, which the site
+	 * whose Java call it reaches wraps like any member's. A {@code java:proxy}'s callable
+	 * and a {@code java:subclass}'s are called with the method's name: neither reads one.
 	 * @param slot one of the slots
 	 * @return whether its function's answer is read so
 	 */
 	public boolean readsComparison(Slot slot) {
-		return !this.proxy && this.superclass == null && this.markers.functional() && this.markers.javaFalse()
-				&& slot.implementation() != NONE && "int".equals(slot.returnType().name())
-				&& COMPARATOR_COMPARE.equals(slot.key()) && this.interfaces.size() == 1
-				&& COMPARATOR.equals(this.interfaces.get(0).name());
+		if (this.proxy || this.superclass != null || !this.markers.functional() || !this.markers.javaFalse()
+				|| slot.implementation() == NONE || !"int".equals(slot.returnType().name())
+				|| !COMPARATOR_COMPARE.equals(slot.key())) {
+			return false;
+		}
+		for (JavaType iface : this.interfaces) {
+			if (COMPARATOR.equals(iface.name())) {
+				return true;
+			}
+		}
+		return false;
 	}
 
 	/** The interface whose {@code compare} a function may answer a boolean for. */

@@ -616,15 +616,72 @@ public final class JavaImplementations {
 	 * function where the interface is {@code Runnable}, {@code Callable} or
 	 * {@code Comparator} ({@link JavaImplementation#standsForItsFunction}); with
 	 * {@code :octets} a {@code byte[]} Java hands it is an {@code (unsigned-byte 8)}
-	 * vector; with {@code :through} Java calls it through the function named.
+	 * vector; with {@code :through} Java calls it through the function named. Where the
+	 * function stands for itself it is the object the function is
+	 * ({@link #functionObject}), whichever of its interfaces Java expects.
 	 * @param iface the interface
-	 * @param lookup unused; for symmetry with {@link #reify}
+	 * @param lookup where the object a function is finds its interfaces
 	 * @param markers the call's markers
 	 * @return the implementation
 	 */
 	public static JavaImplementation functional(JavaType iface, JavaClassLookup lookup, JavaMarkers markers) {
+		JavaMarkers used = functionalMarkers(markers);
+		if (JavaImplementation.standsForItsFunction(iface.name(), used)) {
+			JavaImplementation object = functionObject(lookup, used);
+			if (object != null) {
+				return object;
+			}
+		}
+		JavaImplementation implementation = new JavaImplementation(false, List.of(iface),
+				functionalSlots(JavaInterfaceMethods.groups(iface)), null, null, used);
+		return JavaImplementation.standsForItsFunction(iface.name(), used)
+				? implementation.withStandIn(JavaImplementation.StandIn.FUNCTION) : implementation;
+	}
+
+	/**
+	 * The object a function converted at a call ending in these markers is where
+	 * {@code Object} -- or {@code Runnable}, {@code Callable} or {@code Comparator} -- is
+	 * expected: after {@code :functional} and {@code :java-false}
+	 * ({@link JavaImplementation#isFunctionObjectCall}) one object implementing the three
+	 * ({@link JavaImplementation#FUNCTION_INTERFACES}) by the function's arguments, its
+	 * {@code compare} read as Clojure's {@code AFunction.compare}
+	 * ({@link JavaImplementation#readsComparison}), standing for the function
+	 * ({@link JavaImplementation.StandIn#FUNCTION}) -- Clojure's fn, which is all three,
+	 * and which Java hands back as itself. At any other call a function has no object of
+	 * its own where {@code Object} is expected: {@code null}, the conversion's refusal
+	 * ({@link JavaImplementation#functionObjectRefusal}).
+	 * @param lookup where the three interfaces are found
+	 * @param markers the call's markers
+	 * @return the implementation, or {@code null} at a call that makes none
+	 */
+	public static @Nullable JavaImplementation functionObject(JavaClassLookup lookup, JavaMarkers markers) {
+		if (!JavaImplementation.isFunctionObjectCall(markers)) {
+			return null;
+		}
+		List<JavaType> interfaces = new ArrayList<>();
+		for (String name : JavaImplementation.FUNCTION_INTERFACES) {
+			JavaType iface = lookup.find(name);
+			if (iface == null) {
+				return null;
+			}
+			interfaces.add(iface);
+		}
+		return new JavaImplementation(false, interfaces, functionalSlots(JavaInterfaceMethods.groups(interfaces)), null,
+				null, functionalMarkers(markers))
+			.withStandIn(JavaImplementation.StandIn.FUNCTION);
+	}
+
+	// The markers of a function converted at a call ending in these: :functional among
+	// them, the rest as the call's.
+	private static JavaMarkers functionalMarkers(JavaMarkers markers) {
+		return new JavaMarkers(true, markers.javaFalse(), markers.octets(), markers.through(), markers.resolved());
+	}
+
+	// The slots of a :functional implementation of these method groups: every variant of
+	// a group with an abstract one calls the one function, Object's three aside.
+	private static List<JavaImplementation.Slot> functionalSlots(Map<String, Group> groups) {
 		List<JavaImplementation.Slot> slots = new ArrayList<>();
-		for (Group group : JavaInterfaceMethods.groups(iface).values()) {
+		for (Group group : groups.values()) {
 			if (JavaInterfaceMethods.OBJECT_METHODS.contains(group.key())) {
 				continue;
 			}
@@ -638,10 +695,7 @@ public final class JavaImplementations {
 				}
 			}
 		}
-		JavaMarkers used = new JavaMarkers(true, markers.javaFalse(), markers.octets(), markers.through());
-		JavaImplementation implementation = new JavaImplementation(false, List.of(iface), slots, null, null, used);
-		return JavaImplementation.standsForItsFunction(iface.name(), used)
-				? implementation.withStandIn(JavaImplementation.StandIn.FUNCTION) : implementation;
+		return slots;
 	}
 
 	/**

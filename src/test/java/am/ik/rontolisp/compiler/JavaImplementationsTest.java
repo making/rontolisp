@@ -166,7 +166,9 @@ class JavaImplementationsTest {
 		assertThat(subclass.markers()).isEqualTo(new JavaMarkers(true, true, false));
 		JavaImplementation compare = JavaImplementations.functional(type("java.util.Comparator"), CLASSES,
 				new JavaMarkers(true, true, false));
-		assertThat(compare.readsComparison(compare.slots().get(0))).isTrue();
+		assertThat(compare.slots()).filteredOn(slot -> slot.name().equals("compare"))
+			.singleElement()
+			.matches(compare::readsComparison);
 		JavaImplementation plain = JavaImplementations.functional(type("java.util.Comparator"), CLASSES);
 		assertThat(plain.readsComparison(plain.slots().get(0))).isFalse();
 		JavaImplementation function = JavaImplementations.functional(type("java.util.function.ToIntBiFunction"),
@@ -209,6 +211,26 @@ class JavaImplementationsTest {
 		assertThat(JavaImplementations
 			.functional(type("java.lang.Thread$UncaughtExceptionHandler"), CLASSES, new JavaMarkers(true, true, false))
 			.standsFor()).isFalse();
+		// ... the one object the function is, whichever of the three Java expects, and
+		// where Object is expected: all three implemented by its arguments, named as
+		// Clojure's fn, its compare a comparison; at any other call it has none
+		JavaImplementation object = java.util.Objects.requireNonNull(
+				JavaImplementations.functionObject(CLASSES, new JavaMarkers(true, true, false, "HOOK", true)));
+		assertThat(object.interfaces()).extracting(JavaType::name)
+			.containsExactlyElementsOf(JavaImplementation.FUNCTION_INTERFACES);
+		assertThat(slots(object)).containsExactly("call()java.lang.Object=0",
+				"compare(java.lang.Object,java.lang.Object)int=0", "run()void=0");
+		assertThat(object.slots()).filteredOn(object::readsComparison)
+			.extracting(JavaImplementation.Slot::name)
+			.containsExactly("compare");
+		assertThat(object.standIn()).isEqualTo(JavaImplementation.StandIn.FUNCTION);
+		assertThat(java.util.Objects.requireNonNull(object.standIn()).className()).isEqualTo("clojure.lang.AFunction");
+		assertThat(object.markers()).isEqualTo(new JavaMarkers(true, true, false, "HOOK", true));
+		assertThat(JavaImplementations.functional(type("java.lang.Runnable"), CLASSES,
+				new JavaMarkers(true, true, false, "HOOK", true)))
+			.isEqualTo(object);
+		assertThat(JavaImplementations.functionObject(CLASSES, new JavaMarkers(true, false, false))).isNull();
+		assertThat(JavaImplementations.functionObject(CLASSES, JavaMarkers.NONE)).isNull();
 		// only a parameter a byte[] fits, or an array of one, may be handed an octet
 		// vector
 		for (Class<?> carries : List.of(byte[].class, Object.class, Cloneable.class, java.io.Serializable.class,

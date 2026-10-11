@@ -439,19 +439,23 @@ public final class JavaImplementationPrograms {
 
 	/**
 	 * Functions Java calls through the function a form ends in after {@code :through}:
-	 * {@code (through function object arguments)}, {@code object} {@code t} where the
-	 * method answers an object -- whose answer the hook wraps -- and {@code nil} where it
-	 * answers a primitive or nothing, Java taking what the hook answers. A function
-	 * converted at a resolved site, a dispatched one (the function a parameter), one left
-	 * to run time (the receiver of no known class) and one whose {@code :through} is
-	 * computed; a {@code java:reify}, a {@code java:proxy} (handed its method's name
-	 * first) and a {@code java:subclass} (handed the object and the name); a comparison
-	 * read as {@code AFunction.compare}, its second call through the hook too (TimSort's
-	 * four comparisons of three, two of them false and called again: six). After
-	 * {@code :functional} and {@code :java-false}, a function converted to a
-	 * {@code Comparator} stands for itself -- the {@code TreeSet} hands it back as the
-	 * function, an interface's getter included -- where one converted to another
-	 * interface, or without {@code :java-false}, does not.
+	 * {@code (through function kind resolved arguments)}, {@code kind} how Java takes the
+	 * answer -- {@code :object} where the method answers an object, whose answer the hook
+	 * wraps, the primitive's keyword ({@code :int} ... every one a {@code DataInput}
+	 * answers), {@code nil} where it answers nothing or the call reads a comparison --
+	 * and {@code resolved} whether the converting site chose its member before it ran: a
+	 * site resolved to one member, or dispatched over its only overload (the function a
+	 * parameter), {@code t}; one left to run time (the receiver of no known class), one
+	 * whose {@code :through} is computed and an implementation form's own functions
+	 * {@code nil}. Java takes what the hook answers. A {@code java:reify}, a
+	 * {@code java:proxy} (handed its method's name first) and a {@code java:subclass}
+	 * (handed the object and the name); a comparison read as {@code AFunction.compare},
+	 * its second call through the hook too (TimSort's four comparisons of three, two of
+	 * them false and called again: six). After {@code :functional} and
+	 * {@code :java-false}, a function converted to a {@code Comparator} stands for itself
+	 * -- the {@code TreeSet} hands it back as the function, an interface's getter
+	 * included -- where one converted to another interface, or without
+	 * {@code :java-false}, does not.
 	 */
 	public static final String THROUGH = """
 			(defvar *calls* nil)
@@ -459,10 +463,20 @@ public final class JavaImplementationPrograms {
 			(defun row (thunk)
 			  (handler-case (prin1 (funcall thunk)) (error (e) (princ e)))
 			  (terpri))
-			(defun through (f object args)
-			  (push object *calls*)
+			(defun through (f kind resolved args)
+			  (push (list kind resolved) *calls*)
 			  (let ((answer (apply f args)))
-			    (if object (format nil "<~A>" answer) answer)))
+			    (if (eq kind :object) (format nil "<~A>" answer) answer)))
+			(defun kinds (f kind resolved args)
+			  (push (list kind resolved) *calls*)
+			  (apply f args)
+			  (case kind
+			    (:boolean t)
+			    (:char #\\a)
+			    ((:byte :short :int :long) 7)
+			    ((:float :double) 1.5)
+			    (:object "s")
+			    (t nil)))
 			(defun calls () (prog1 (reverse *calls*) (setq *calls* nil)))
 			(defun or-else (o f) (java:call o "orElseGet" f :functional :through #'through))
 			(defun or-else-optional (o f)
@@ -513,15 +527,97 @@ public final class JavaImplementationPrograms {
 			         (list (eq f (java:call ts "comparator")) (java:call ts "toString")
 			               (eq f (java:call plain "comparator"))
 			               (eq g (java:call th "getUncaughtExceptionHandler"))))))
+			(row (lambda ()
+			       (let ((d (java:proxy "java.io.DataInput" (lambda (m &rest args) (list m args)) :through #'kinds)))
+			         (list (java:call d "readBoolean") (java:call d "readByte") (java:call d "readChar")
+			               (java:call d "readShort") (java:call d "readInt") (java:call d "readLong")
+			               (java:call d "readFloat") (java:call d "readDouble") (java:call d "readLine")
+			               (calls)))))
 			""";
 
 	/** What {@link #THROUGH} prints. */
 	public static final String THROUGH_OUTPUT = """
-			("<41>" "<42>" "<43>" "<44>" (T T T T))
-			((1 2) 30 (NIL NIL NIL NIL NIL))
-			("<1>" "<(apply 5)>" "<(toString)>" (T T T))
-			("[3, 2, 1]" (NIL NIL NIL NIL NIL NIL))
-			(T "[1, 2]" NIL NIL)""";
+			("<41>" "<42>" "<43>" "<44>" ((:OBJECT T) (:OBJECT T) (:OBJECT NIL) (:OBJECT NIL)))
+			((1 2) 30 ((NIL T) (NIL T) (:INT T) (:INT T) (:INT T)))
+			("<1>" "<(apply 5)>" "<(toString)>" ((:OBJECT NIL) (:OBJECT NIL) (:OBJECT NIL)))
+			("[3, 2, 1]" ((NIL T) (NIL T) (NIL T) (NIL T) (NIL T) (NIL T)))
+			(T "[1, 2]" NIL NIL)
+			(T 7 #\\a 7 7 7 1.5 1.5 "s" ((:BOOLEAN NIL) (:BYTE NIL) (:CHAR NIL) (:SHORT NIL) (:INT NIL) (:LONG NIL) (:FLOAT NIL) (:DOUBLE NIL) (:OBJECT NIL)))""";
+
+	/**
+	 * A function where {@code java.lang.Object} is expected. After {@code :functional}
+	 * and {@code :java-false} it is the object the function is: Java holds it and hands
+	 * it back as the function -- one object of one function, equal however many calls
+	 * make it, and to an identity {@code java:handle} of it -- named
+	 * {@code clojure.lang.AFunction}, and a {@code Runnable}, a {@code Callable} and a
+	 * {@code Comparator} Java calls (reflection's {@code Method.invoke} on it), its
+	 * {@code compare} read as {@code AFunction.compare}; an {@code Object} overload takes
+	 * it before an interface it implements none of ({@code StringBuilder.append(Object)},
+	 * not {@code append(CharSequence)}), a varargs {@code Object} array and a sequence's
+	 * elements too. At any other call the conversion is refused, naming
+	 * {@code java:handle}, which makes an object Java hands back as any value.
+	 */
+	public static final String FUNCTION_OBJECT = """
+			(defun row (thunk)
+			  (handler-case (prin1 (funcall thunk)) (error (e) (princ e)))
+			  (terpri))
+			(defun prefixp (prefix text)
+			  (and (>= (length text) (length prefix)) (string= prefix text :end2 (length prefix))))
+			(defun class-named (name) (java:static "java.lang.Class" "forName" name))
+			(defun method-of (iface name)
+			  (java:call (class-named iface) "getMethod" name))
+			(defun compare-method ()
+			  (java:call (class-named "java.util.Comparator") "getMethod" "compare" (class-named "java.lang.Object")
+			             (class-named "java.lang.Object")))
+			(row (lambda ()
+			       (let ((l (java:new "java.util.ArrayList")) (s (java:new "java.util.HashSet")) (f (lambda () 1)))
+			         (java:call l "add" f :functional :java-false)
+			         (java:call s "add" f :functional :java-false)
+			         (list (eq f (java:call l "get" 0))
+			               (java:call s "contains" f :functional :java-false)
+			               (java:call l "indexOf" f :functional :java-false)
+			               (java:call s "contains" (java:handle f nil nil nil "clojure.lang.AFunction"))
+			               (prefixp "clojure.lang.AFunction@"
+			                        (java:static "java.util.Objects" "toString" f :functional :java-false))
+			               (prefixp "clojure.lang.AFunction@"
+			                        (java:call (java:call (java:new "java.lang.StringBuilder") "append" f
+			                                              :functional :java-false)
+			                                   "toString"))
+			               (eq f (java:call (java:static "java.util.List" "of" f :functional :java-false) "get" 0))
+			               (eq f (java:call (java:static "java.util.Arrays" "asList" 1 f :functional :java-false)
+			                                "get" 1))
+			               (eq f (java:call (java:new "java.util.ArrayList" (list f) :functional :java-false)
+			                                "get" 0))))))
+			(row (lambda ()
+			       (let* ((runs nil)
+			              (f (lambda (&rest args)
+			                   (push args runs)
+			                   (cond ((null args) 7) ((< (car args) (cadr args)) t) (t '|false|)))))
+			         (list (java:call (method-of "java.lang.Runnable" "run") "invoke" f :functional :java-false)
+			               (java:call (method-of "java.util.concurrent.Callable" "call") "invoke" f
+			                          :functional :java-false)
+			               (java:call (compare-method) "invoke" f 1 2 :functional :java-false)
+			               (java:call (compare-method) "invoke" f 2 1 :functional :java-false)
+			               (reverse runs)))))
+			(row (lambda ()
+			       (let ((l (java:new "java.util.ArrayList")) (f (lambda () 1)))
+			         (list (handler-case (java:call l "add" f)
+			                 (error (e)
+			                   (prefixp "java: a function where java.lang.Object is expected needs a java:handle, got "
+			                            (princ-to-string e))))
+			               (handler-case (java:call l "add" f :functional)
+			                 (error (e)
+			                   (prefixp "java: a function where java.lang.Object is expected needs a java:handle, got "
+			                            (princ-to-string e))))
+			               (java:call l "add" (java:handle f nil nil))
+			               (eq f (java:call l "get" 0))))))
+			""";
+
+	/** What {@link #FUNCTION_OBJECT} prints. */
+	public static final String FUNCTION_OBJECT_OUTPUT = """
+			(T T 0 T T T T T T)
+			(NIL 7 -1 1 (NIL NIL (1 2) (2 1) (1 2)))
+			(T T T T)""";
 
 	/**
 	 * A declaration that a value is what a {@code java:proxy} of one interface makes,

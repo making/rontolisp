@@ -630,6 +630,128 @@ class ClojureInteropTest {
 				"true false 1 {:a 1}\n");
 	}
 
+	// Oracle-identical (clj 1.12.6, measured 2026-10-11) but the ClassCastException's
+	// module tail: a fn's answer where the method answers a primitive is cast as the
+	// oracle's functional interface adapter casts it -- an int, a long and a double by
+	// RT's intCast, longCast and doubleCast of an object (a ratio or a double truncated,
+	// out of range the IllegalArgumentException, past the int range "integer overflow", a
+	// character its code, anything else the Character or Number cast's failure); a
+	// boolean by a (Boolean) cast where the oracle's compiler resolved the call (a site
+	// resolved here to one member, or dispatched over its only overload: nil the
+	// message-less NullPointerException, any other value the ClassCastException) and by
+	// RT.booleanCast where its reflector does (a receiver of no known class: nil false,
+	// anything else true). Before, measured 2026-10-11 on the interpreter and the JVM:
+	// "java:reify: cannot return 1/2 as int ...", "cannot return 1.9 as int", nil false
+	// for removeIf, 4294967297 its low 32 bits.
+	@Test
+	void aFnsPrimitiveAnswerReachesJavaCastAsTheOraclesAdapterCastsIt() throws Exception {
+		String row = "(defmacro row [label form] `(try (println ~label (pr-str ~form))"
+				+ " (catch Throwable e# (println ~label (.getName (class e#)) (ex-message e#)))))";
+		assertBothEqual(
+				row + " (row :remove-nil (let [l (java.util.ArrayList. [1 2 3])] (.removeIf l (fn [x] nil)) (vec l)))"
+						+ " (row :remove-kw (.removeIf (java.util.ArrayList. [1]) (fn [x] :kw)))"
+						+ " (row :remove-param (let [l (java.util.ArrayList. [1 2 3]) f (identity (fn [x] nil))]"
+						+ " (.removeIf l f) (vec l)))" + " (defn rm [l f] (.removeIf l f) (vec l))"
+						+ " (row :reflected-nil (rm (java.util.ArrayList. [1 2 3]) (fn [x] nil)))"
+						+ " (row :reflected-kw (rm (java.util.ArrayList. [1 2 3]) (fn [x] :kw)))"
+						+ " (row :int-pred (.count (.filter (java.util.stream.IntStream/range 0 3) (fn [a] nil))))",
+				":remove-nil java.lang.NullPointerException nil\n"
+						+ ":remove-kw java.lang.ClassCastException class clojure.lang.Keyword cannot be cast to class java.lang.Boolean\n"
+						+ ":remove-param java.lang.NullPointerException nil\n:reflected-nil [1 2 3]\n"
+						+ ":reflected-kw []\n:int-pred java.lang.NullPointerException nil\n");
+		assertBothEqual(
+				row + " (defn ints [f] (.sum (.mapToInt (.stream [1 2 3]) f)))"
+						+ " (row :ratio (ints (fn [x] (/ x 2)))) (row :double (ints (fn [x] 1.9)))"
+						+ " (row :negative (ints (fn [x] -2.5))) (row :nan (ints (fn [x] ##NaN)))"
+						+ " (row :char (ints (fn [x] \\a))) (row :overflow (ints (fn [x] 4294967297)))"
+						+ " (row :past-long (ints (fn [x] 99999999999999999999))) (row :huge (ints (fn [x] 1e30)))"
+						+ " (row :nil (ints (fn [x] nil))) (row :kw (ints (fn [x] :kw)))"
+						+ " (row :pair (.reduce (java.util.stream.IntStream/range 0 4) 0 (fn [a b] (/ (+ a b) 2))))",
+				":ratio 2\n:double 3\n:negative -6\n:nan 0\n:char 291\n"
+						+ ":overflow java.lang.ArithmeticException integer overflow\n"
+						+ ":past-long java.lang.IllegalArgumentException Value out of range for long: 99999999999999999999\n"
+						+ ":huge java.lang.IllegalArgumentException Value out of range for long: 1.0E30\n"
+						+ ":nil java.lang.NullPointerException Cannot invoke \"java.lang.Character.charValue()\" because \"x\" is null\n"
+						+ ":kw java.lang.ClassCastException class clojure.lang.Keyword cannot be cast to class java.lang.Character\n"
+						+ ":pair 2\n");
+		assertBothEqual(
+				row + " (defn longs [f] (.sum (.mapToLong (.stream [1]) f)))"
+						+ " (defn doubles [f] (.sum (.mapToDouble (.stream [1]) f)))"
+						+ " (row :long-ratio (longs (fn [x] 7/2))) (row :long-char (longs (fn [x] \\a)))"
+						+ " (row :long-big (longs (fn [x] 4294967297))) (row :long-nil (longs (fn [x] nil)))"
+						+ " (row :long-kw (longs (fn [x] :kw))) (row :double-ratio (doubles (fn [x] 1/2)))"
+						+ " (row :double-int (doubles (fn [x] 3))) (row :double-char (doubles (fn [x] \\a)))"
+						+ " (row :double-nil (doubles (fn [x] nil)))",
+				":long-ratio 3\n:long-char 97\n:long-big 4294967297\n"
+						+ ":long-nil java.lang.NullPointerException Cannot invoke \"java.lang.Number.doubleValue()\" because \"x\" is null\n"
+						+ ":long-kw java.lang.ClassCastException class clojure.lang.Keyword cannot be cast to class java.lang.Number\n"
+						+ ":double-ratio 0.5\n:double-int 3.0\n"
+						+ ":double-char java.lang.ClassCastException class java.lang.Character cannot be cast to class java.lang.Number\n"
+						+ ":double-nil java.lang.NullPointerException Cannot invoke \"java.lang.Number.doubleValue()\" because \"x\" is null\n");
+	}
+
+	// Oracle-identical (clj 1.12.6, measured 2026-10-11) but the ClassCastException's
+	// module tail: a proxy body's answer where the method answers a primitive is unboxed
+	// as the oracle's proxy class unboxes it -- a (Boolean) or (Character) cast, any
+	// number's unchecked intValue, longValue or doubleValue (a long's low 32 bits, a
+	// double or ratio truncated, a double past the int range its edge) -- nil the
+	// NullPointerException naming the fn's invoke, anything else the cast's
+	// ClassCastException, a Comparator's compare a number's intValue too. Before,
+	// measured 2026-10-11 on the interpreter and the JVM: nil false for a boolean,
+	// "cannot
+	// return" for a ratio, a double, nil or a keyword where an int is expected.
+	@Test
+	void aProxysPrimitiveAnswerIsUnboxedAsTheOraclesProxyClassUnboxesIt() throws Exception {
+		String row = "(defmacro row [label form] `(try (println ~label (pr-str ~form))"
+				+ " (catch Throwable e# (println ~label (.getName (class e#)) (ex-message e#)))))";
+		assertBothEqual(row + " (defn as-int [v] (.applyAsInt (proxy [java.util.function.ToIntFunction] []"
+				+ " (applyAsInt [x] v)) 1))"
+				+ " (row :long (as-int 4294967297)) (row :ratio (as-int 7/2)) (row :double (as-int 1.9))"
+				+ " (row :edge (as-int 3.0e9)) (row :big (as-int 99999999999999999999))"
+				+ " (row :nil (as-int nil)) (row :char (as-int \\a))"
+				+ " (row :long-edge (.applyAsLong (proxy [java.util.function.ToLongFunction] [] (applyAsLong [x] 1e30)) 1))"
+				+ " (row :test-nil (.test (proxy [java.util.function.Predicate] [] (test [x] nil)) 1))"
+				+ " (row :test-kw (.test (proxy [java.util.function.Predicate] [] (test [x] :kw)) 1))"
+				+ " (row :read-nil (.read (proxy [java.io.InputStream] [] (read [] nil))))"
+				+ " (row :compare (.compare (proxy [java.util.Comparator] [] (compare [a b] 7/2)) 1 2))"
+				+ " (row :compare-true (.compare (proxy [java.util.Comparator] [] (compare [a b] true)) 1 2))",
+				":long 1\n:ratio 3\n:double 1\n:edge 2147483647\n:big 1661992959\n"
+						+ ":nil java.lang.NullPointerException Cannot invoke \"java.lang.Number.intValue()\" because the return value of \"clojure.lang.IFn.invoke(Object, Object)\" is null\n"
+						+ ":char java.lang.ClassCastException class java.lang.Character cannot be cast to class java.lang.Number\n"
+						+ ":long-edge 9223372036854775807\n"
+						+ ":test-nil java.lang.NullPointerException Cannot invoke \"java.lang.Boolean.booleanValue()\" because the return value of \"clojure.lang.IFn.invoke(Object, Object)\" is null\n"
+						+ ":test-kw java.lang.ClassCastException class clojure.lang.Keyword cannot be cast to class java.lang.Boolean\n"
+						+ ":read-nil java.lang.NullPointerException Cannot invoke \"java.lang.Number.intValue()\" because the return value of \"clojure.lang.IFn.invoke(Object)\" is null\n"
+						+ ":compare 3\n"
+						+ ":compare-true java.lang.ClassCastException class java.lang.Boolean cannot be cast to class java.lang.Number\n");
+	}
+
+	// Oracle-identical (clj 1.12.6, measured 2026-10-11) but the text the fn's object
+	// spells (the oracle's class is the fn's own, user$f): a fn Java takes as an Object
+	// is the fn -- a list, a map, a set and Optional hold it and hand it back, identical?
+	// to it, one object however many calls hand it over -- and it is a Runnable Java
+	// checks (a checked list of Runnable takes it); an Object overload takes it before an
+	// interface it is none of (StringBuilder.append(Object)). Before, measured 2026-10-11
+	// on the interpreter and the JVM: "No matching method java.util.ArrayList.add with 1
+	// argument(s)".
+	@Test
+	void aFnWhereJavaExpectsAnObjectIsTheFnItself() throws Exception {
+		assertBothEqual("(def f (fn [] 1))"
+				+ " (prn (let [l (java.util.ArrayList.)] (.add l f) (identical? f (.get l 0)))"
+				+ " (let [g (fn [] 2) l (java.util.ArrayList.)] (.add l g) (identical? g (.get l 0)))"
+				+ " (let [add (fn [l x] (.add l x)) l (java.util.ArrayList.)] (add l f) (identical? f (.get l 0)))"
+				+ " (let [m (java.util.HashMap.)] (.put m \"k\" f) (.put m f 1) [(identical? f (.get m \"k\")) (.get m f)])"
+				+ " (let [s (java.util.HashSet.)] (.add s f) (.add s f) [(.size s) (.contains s f)])"
+				+ " (identical? f (.get (java.util.Optional/of f)))" + " (java.util.Objects/equals f f)"
+				+ " (let [l (java.util.Collections/checkedList (java.util.ArrayList.) Runnable)] (.add l f)"
+				+ " (identical? f (.get l 0))))"
+				+ " (let [a (atom 0) l (java.util.ArrayList.)] (.add l (fn [] (swap! a inc)))"
+				+ " (.run ^Runnable (.get l 0)) (prn @a))"
+				+ " (prn (.startsWith (str (.append (StringBuilder.) f)) \"clojure.lang.AFunction@\")"
+				+ " (.startsWith (String/valueOf f) \"clojure.lang.AFunction@\"))",
+				"true true true [true 1] [1 true] true true true\n1\ntrue true\n");
+	}
+
 	@Test
 	void aProxyOrTypeIsHandedAByteArrayAndAnswersJavaTheOraclesObject() throws Exception {
 		// oracle-identical (clj 1.12.6, 2026-10-10): a proxy's answer reaches Java as the
@@ -1145,9 +1267,13 @@ class ClojureInteropTest {
 				"2\n");
 		assertBothEqual("(defn each [coll f] (.forEach coll f)) (each (java.util.ArrayList. [3]) println)", "3\n");
 		assertBothEqual("(defn each2 [f] (.forEach (java.util.ArrayList. [5]) f)) (each2 println)", "5\n");
-		assertBothEqual("(println (.test (java.util.function.Predicate/not (fn [x] (when (odd? x) true))) 2))",
-				"true\n");
+		assertBothEqual("(println (.test (java.util.function.Predicate/not (fn [x] (odd? x))) 2))", "true\n");
 		assertBothEqual("(println (.test (java.util.function.Predicate/not odd?) 2))", "true\n");
+		// ... and a boolean answer that is no boolean is the oracle's cast failure at a
+		// call its compiler resolves (Predicate/not of a fn form; before 2026-10-11 nil
+		// was false here: aFnsPrimitiveAnswerReachesJavaCastAsTheOraclesAdapterCastsIt)
+		assertBothEqual("(println (try (.test (java.util.function.Predicate/not (fn [x] (when (odd? x) true))) 2)"
+				+ " (catch NullPointerException e [:npe (ex-message e)])))", "[:npe nil]\n");
 		assertBothEqual(
 				"(let [l (java.util.ArrayList. [3 1 2])]"
 						+ " (java.util.Collections/sort l (fn [a b] (compare a b))) (println (vec l))"

@@ -338,9 +338,9 @@ final class JvmJavaInteropCompiler {
 	/**
 	 * Compiles, the first time a resolved form names it, the method the callbacks of the
 	 * implementations it makes call their function through after {@code :through #'name}:
-	 * {@code _jthrough$N(Object function, Object object, Object arguments)}, the direct
-	 * call {@code (name function object arguments)} -- registered with the generated
-	 * implementations before the form asks for any
+	 * {@code _jthrough$N(Object function, Object kind, Object resolved, Object
+	 * arguments)}, the direct call {@code (name function kind resolved arguments)} --
+	 * registered with the generated implementations before the form asks for any
 	 * ({@code JvmJavaImplementations.through}).
 	 */
 	private static void prepareThrough(JavaMarkers markers, JvmLispCompiler.Ctx ctx, String className) {
@@ -355,10 +355,10 @@ final class JvmJavaInteropCompiler {
 		MethodRefEntry ref = JvmEmitHelper.selfMethod(ctx, className, methodName, THROUGH_DESC);
 		JvmLispCompiler.Ctx body = ctx.ctxBuilder.build();
 		body.evalStoreRef = ctx.evalStoreRef;
-		body.nextLocal = 3;
-		body.maxLocals = 3;
-		List<LispVal> parameters = List.of(new LispSymbol("__jthrough_function$0"),
-				new LispSymbol("__jthrough_object$1"), new LispSymbol("__jthrough_arguments$2"));
+		body.nextLocal = 4;
+		body.maxLocals = 4;
+		List<LispVal> parameters = List.of(new LispSymbol("__jthrough_function$0"), new LispSymbol("__jthrough_kind$1"),
+				new LispSymbol("__jthrough_resolved$2"), new LispSymbol("__jthrough_arguments$3"));
 		for (int i = 0; i < parameters.size(); i++) {
 			body.locals.put(((LispSymbol) parameters.get(i)).name(), i);
 		}
@@ -372,7 +372,7 @@ final class JvmJavaInteropCompiler {
 	/** The prefix of a {@link #prepareThrough} method's name. */
 	private static final String THROUGH_PREFIX = "_jthrough$";
 
-	private static final String THROUGH_DESC = "(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;";
+	private static final String THROUGH_DESC = "(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;";
 
 	private static void requireArity(boolean ok, String message) {
 		if (!ok) {

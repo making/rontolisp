@@ -2862,26 +2862,216 @@
 ;; The value a java: member is handed for the Clojure value X, where the oracle
 ;; hands Java its own object: the lowering wraps each argument of a host call in
 ;; this (clojure/ClojureInteropLowering.hostCall). A fn is itself -- the call makes
-;; it the interface a parameter expects and Java calls it through
-;; %clojure-host-call -- a condition too, which java: hands over as the host
-;; exception it stands for; anything else is what %clojure-host-member makes of it.
+;; it the interface a parameter expects, or where an Object is expected the object
+;; it is (a Runnable, a Callable and a Comparator Java hands back as the fn), and
+;; Java calls it through %clojure-host-call -- a condition too, which java: hands
+;; over as the host exception it stands for; anything else is what
+;; %clojure-host-member makes of it.
 (defun rontolisp::%clojure-host-value (x)
   (cond ((functionp x) x)
         ((rontolisp::%clojure-lisp-instance-p x) x)
         (t (rontolisp::%clojure-host-member x))))
 
-;; How Java calls the Clojure fn F a host call converted to an interface, or a
-;; proxy's body, as the oracle's functional interface and proxy call their fn: F
-;; over the arguments ARGS as Clojure values -- a byte[] a byte array, since the
-;; form ends in :octets -- answering, when OBJECT says the method answers an object,
-;; the value's own object (%clojure-host-member: a map its Map, a keyword one Java
-;; hands back as the keyword, a byte array its byte[]), and otherwise the answer as
-;; it is: an answer a void method drops is never converted, so a lazy seq stays
-;; unrealized and no collection is walked per call. The java: :through the form
-;; ends in names it (clojure/ClojureInteropLowering.HOST_CALL).
-(defun rontolisp::%clojure-host-call (f object args)
+;; How Java calls the Clojure fn F a host call converted to an interface (or to
+;; the object a fn is, where Object is expected), as the oracle's functional
+;; interface adapter calls its fn: F over the arguments ARGS as Clojure values -- a
+;; byte[] a byte array, since the form ends in :octets -- answering Java as the
+;; adapter answers it for KIND, how Java takes the answer (java:'s :through): an
+;; object the value's own (%clojure-host-member: a map its Map, a keyword one Java
+;; hands back as the keyword, a byte array its byte[]), a primitive cast as the
+;; adapter casts it (%clojure-host-fn-primitive) -- the one its compiler makes when
+;; RESOLVED says the call chose its member before it ran, else its reflector's --
+;; and with no KIND the answer as it is: an answer a void method drops is never
+;; converted, so a lazy seq stays unrealized and no collection is walked per call.
+;; The java: :through the form ends in names it
+;; (clojure/ClojureInteropLowering.HOST_CALL).
+(defun rontolisp::%clojure-host-call (f kind resolved args)
   (let ((answer (apply f (rontolisp::%clojure-host-answer args))))
-    (if object (rontolisp::%clojure-host-member answer) answer)))
+    (cond ((null kind) answer)
+          ((eq kind :object) (rontolisp::%clojure-host-member answer))
+          (t (rontolisp::%clojure-host-fn-primitive answer kind resolved)))))
+
+;; The fn's answer X where Java takes the primitive KIND, as the oracle's adapter
+;; casts it (clj 1.12.6): a boolean (Boolean) X where its compiler made the adapter
+;; (RESOLVED; a LambdaMetafactory cast: nil its NullPointerException, any other value
+;; but true and false its ClassCastException) and RT.booleanCast where its reflector
+;; did (nil and false are false, anything else true); a char (Character) X; an int,
+;; long, double, float, short or byte RT's cast of an object (FnInvokers'):
+;; %clojure-host-int-cast, %clojure-host-long-cast, %clojure-host-double-cast,
+;; %clojure-host-float-cast, %clojure-host-bounded-cast.
+(defun rontolisp::%clojure-host-fn-primitive (x kind resolved)
+  (cond
+   ((eq kind :boolean)
+    (cond ((or (eq x t) (eq x rontolisp::%clojure-false)) x)
+          ((not resolved) (if x t rontolisp::%clojure-false))
+          ((null x) (rontolisp::%clojure-host-null-pointer))
+          (t (rontolisp::%clojure-host-cast-failure x "java.lang.Boolean"))))
+   ((eq kind :char)
+    (cond ((characterp x) x)
+          ((null x) (rontolisp::%clojure-host-null-pointer))
+          (t (rontolisp::%clojure-host-cast-failure x "java.lang.Character"))))
+   ((eq kind :int) (rontolisp::%clojure-host-int-cast x))
+   ((eq kind :long) (rontolisp::%clojure-host-long-cast x))
+   ((eq kind :double) (rontolisp::%clojure-host-double-cast x))
+   ((eq kind :float) (rontolisp::%clojure-host-float-cast x))
+   ((eq kind :short)
+    (rontolisp::%clojure-host-bounded-cast x -32768 32767 "short"))
+   ((eq kind :byte) (rontolisp::%clojure-host-bounded-cast x -128 127 "byte"))
+   (t x)))
+
+;; The NullPointerException with no message the oracle's adapter throws casting nil
+;; in a frame the JDK hides (a LambdaMetafactory class): a host one, so a catch binds
+;; the oracle's very object, its message nil.
+(defun rontolisp::%clojure-host-null-pointer ()
+  (let ((e (java:new "java.lang.NullPointerException")))
+    (error 'java:java-exception
+           :format-control (%text-control (java:call e "toString"))
+           :%java-exception-cause e)))
+
+;; The ClassCastException casting X to the class TO, without the oracle's module
+;; tail.
+(defun rontolisp::%clojure-host-cast-failure (x to)
+  (rontolisp::%clojure-class-cast-exception
+   (concatenate 'string "class " (rontolisp::%clojure-class-name-of x)
+                " cannot be cast to class " to)))
+
+;; The oracle's RT.intCast of the object X: a number its longCast (a ratio and a
+;; double truncated, past the long range refused) refused past the int range as
+;; Math.toIntExact refuses it; a character its code; anything else the Character
+;; cast's ClassCastException, nil its NullPointerException.
+(defun rontolisp::%clojure-host-int-cast (x)
+  (cond ((numberp x) (rontolisp::%clojure-int-cast x))
+   ((characterp x) (char-code x))
+   ((null x)
+    (rontolisp::%clojure-null-pointer-exception
+     "Cannot invoke \"java.lang.Character.charValue()\" because \"x\" is null"))
+   (t (rontolisp::%clojure-host-cast-failure x "java.lang.Character"))))
+
+;; The oracle's RT.longCast of the object X: a number or a character as
+;; %clojure-long-cast casts one; anything else the Number cast's
+;; ClassCastException, nil its NullPointerException.
+(defun rontolisp::%clojure-host-long-cast (x)
+  (if (or (numberp x) (characterp x))
+      (rontolisp::%clojure-long-cast x)
+      (rontolisp::%clojure-host-number x)))
+
+;; The oracle's RT.doubleCast of the object X: a number's double; anything else the
+;; Number cast's ClassCastException (a character too), nil its NullPointerException.
+(defun rontolisp::%clojure-host-double-cast (x)
+  (float (rontolisp::%clojure-host-number x)))
+
+;; The oracle's RT.floatCast of the object X: a number's double, refused past the
+;; float range (NaN passes) spelling X as its toString; anything else the Number
+;; cast's ClassCastException, nil its NullPointerException. Java narrows the double.
+(defun rontolisp::%clojure-host-float-cast (x)
+  (let ((d (float (rontolisp::%clojure-host-number x))))
+    (if (and (= d d)
+             (or (> d 3.4028234663852886e38) (< d -3.4028234663852886e38)))
+        (rontolisp::%clojure-illegal-argument-exception
+         (concatenate 'string "Value out of range for float: "
+                      (rontolisp::%clojure-host-number-text x)))
+        d)))
+
+;; The oracle's RT.shortCast or RT.byteCast of the object X: its longCast
+;; (%clojure-host-long-cast) refused outside LOW..HIGH as "Value out of range for
+;; NAME: " and X's toString.
+(defun rontolisp::%clojure-host-bounded-cast (x low high name)
+  (let ((n (rontolisp::%clojure-host-long-cast x)))
+    (if (or (< n low) (> n high))
+        (rontolisp::%clojure-illegal-argument-exception
+         (concatenate 'string "Value out of range for " name ": "
+                      (rontolisp::%clojure-host-number-text x)))
+        n)))
+
+;; X when it is a number, as the oracle casts an object to java.lang.Number: nil its
+;; NullPointerException at the doubleValue RT then calls, anything else (a
+;; character too) its ClassCastException.
+(defun rontolisp::%clojure-host-number (x)
+  (cond ((numberp x) x)
+   ((null x)
+    (rontolisp::%clojure-null-pointer-exception
+     "Cannot invoke \"java.lang.Number.doubleValue()\" because \"x\" is null"))
+   (t (rontolisp::%clojure-host-cast-failure x "java.lang.Number"))))
+
+;; The number or character X as its Java toString spells it: a double as
+;; Double.toString (1.0E30, Infinity), a character as itself, anything else its
+;; digits.
+(defun rontolisp::%clojure-host-number-text (x)
+  (cond ((characterp x) (string x))
+        ((not (floatp x)) (princ-to-string x))
+        ((rontolisp::%clojure-symbolic-float-p x) (princ-to-string x))
+        (t (string-upcase (princ-to-string x)))))
+
+;; How Java calls the body of a proxy -- ARGS its method's name, then Java's
+;; arguments -- as the oracle's proxy class calls its fn: the body over Clojure
+;; values, as %clojure-host-call hands them, answering Java for KIND as the class
+;; unboxes the answer (%clojure-proxy-answer). RESOLVED is no proxy's concern: its
+;; class is made once. The java: :through a proxy ends in names it
+;; (clojure/ClojureInteropLowering.PROXY_CALL).
+(defun rontolisp::%clojure-proxy-call (f kind resolved args)
+  (declare (ignore resolved))
+  (rontolisp::%clojure-proxy-answer
+   (apply f (rontolisp::%clojure-host-answer args)) kind (length args)))
+
+;; How Java calls the body of a proxy over a class -- ARGS the object, the method's
+;; name, then Java's arguments -- as %clojure-proxy-call calls a proxy of
+;; interfaces. The java: :through such a proxy ends in names it
+;; (clojure/ClojureInteropLowering.SUBCLASS_CALL).
+(defun rontolisp::%clojure-subclass-call (f kind resolved args)
+  (declare (ignore resolved))
+  (rontolisp::%clojure-proxy-answer
+   (apply f (rontolisp::%clojure-host-answer args)) kind (- (length args) 1)))
+
+;; A proxy body's answer X where Java takes KIND, as the oracle's proxy class unboxes
+;; it (core_proxy's gen-method, clj 1.12.6): no KIND the answer as it is, an object
+;; the value's own (%clojure-host-member), a boolean (Boolean) X, a char
+;; (Character) X, any other primitive ((Number) X).intValue() -- longValue(),
+;; floatValue(), doubleValue() for those -- unchecked; nil the NullPointerException
+;; naming the fn's invoke of ARITY arguments, its this among them, and any other
+;; value the cast's ClassCastException. Java narrows an int to a short or a byte.
+(defun rontolisp::%clojure-proxy-answer (x kind arity)
+  (cond ((null kind) x)
+        ((eq kind :object) (rontolisp::%clojure-host-member x))
+        ((eq kind :boolean)
+         (cond ((or (eq x t) (eq x rontolisp::%clojure-false)) x)
+          ((null x)
+           (rontolisp::%clojure-proxy-null "java.lang.Boolean.booleanValue()"
+                                           arity))
+          (t (rontolisp::%clojure-host-cast-failure x "java.lang.Boolean"))))
+        ((eq kind :char)
+         (cond ((characterp x) x)
+          ((null x)
+           (rontolisp::%clojure-proxy-null "java.lang.Character.charValue()"
+                                           arity))
+          (t (rontolisp::%clojure-host-cast-failure x "java.lang.Character"))))
+        ((numberp x)
+         (cond ((eq kind :long) (rontolisp::%clojure-unchecked-long x))
+               ((or (eq kind :double) (eq kind :float)) (float x))
+               (t (rontolisp::%clojure-unchecked-int x))))
+        ((null x)
+         (rontolisp::%clojure-proxy-null (cond
+                                          ((eq kind :long)
+                                           "java.lang.Number.longValue()")
+                                          ((eq kind :double)
+                                           "java.lang.Number.doubleValue()")
+                                          ((eq kind :float)
+                                           "java.lang.Number.floatValue()")
+                                          (t "java.lang.Number.intValue()"))
+                                         arity))
+        (t (rontolisp::%clojure-host-cast-failure x "java.lang.Number"))))
+
+;; The NullPointerException of the proxy class's unboxing of nil: calling METHOD on
+;; the null the fn's invoke of ARITY arguments answered.
+(defun rontolisp::%clojure-proxy-null (method arity)
+  (let ((params "Object") (n 1))
+    (do ()
+        ((>= n arity))
+      (setq params (concatenate 'string params ", Object"))
+      (setq n (+ n 1)))
+    (rontolisp::%clojure-null-pointer-exception
+     (concatenate 'string "Cannot invoke \"" method
+                  "\" because the return value of \"clojure.lang.IFn.invoke("
+                  params ")\" is null"))))
 
 ;; The Java object the Clojure value X is, behaving as the oracle's own object: a
 ;; host call's argument (%clojure-host-value), a member of a collection crossing,

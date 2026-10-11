@@ -362,8 +362,11 @@ final class JvmJavaDirectSites {
 
 	private @Nullable MethodRefEntry comparison;
 
-	/** The {@code _jcmp} variants calling the function again through a helper. */
-	private final Map<MethodRefEntry, MethodRefEntry> comparisonsThrough = new LinkedHashMap<>();
+	/**
+	 * The {@code _jcmp} variants calling the function again through a helper, by the
+	 * helper and whether the converting site chose its member before it ran.
+	 */
+	private final Map<List<Object>, MethodRefEntry> comparisonsThrough = new LinkedHashMap<>();
 
 	private @Nullable MethodRefEntry handle;
 
@@ -576,12 +579,16 @@ final class JvmJavaDirectSites {
 	 * an {@code Integer}, or the {@code RuntimeException} the comparator throws for it,
 	 * made when first asked for. Its false arm calls the function again through
 	 * {@code _apply} -- or, for a function Java calls through a {@code :through}'s helper
-	 * ({@code _jthrough$N}), through that helper, in a {@code _jcmp$N} of its own.
+	 * ({@code _jthrough$N}), through that helper, in a {@code _jcmp$N} of its own per
+	 * whether the converting site chose its member before it ran.
 	 * @param through the helper the function is called through, or {@code null}
+	 * @param resolved whether the site converting the function chose its member before it
+	 * ran, which the helper is handed
 	 * @return {@code _jcmp(Object,Object,Object)Object}
 	 */
-	MethodRefEntry comparisonHelper(@Nullable MethodRefEntry through) {
-		MethodRefEntry ref = through == null ? this.comparison : this.comparisonsThrough.get(through);
+	MethodRefEntry comparisonHelper(@Nullable MethodRefEntry through, boolean resolved) {
+		List<Object> key = through == null ? List.of() : List.of(through, resolved);
+		MethodRefEntry ref = through == null ? this.comparison : this.comparisonsThrough.get(key);
 		if (ref == null) {
 			Utf8Entry name = this.cp
 				.utf8Entry(through == null ? COMPARISON : COMPARISON + "$" + this.comparisonsThrough.size());
@@ -592,9 +599,9 @@ final class JvmJavaDirectSites {
 				this.comparison = ref;
 			}
 			else {
-				this.comparisonsThrough.put(through, ref);
+				this.comparisonsThrough.put(key, ref);
 			}
-			this.methods.add(buildComparison(name, desc, through));
+			this.methods.add(buildComparison(name, desc, through, resolved));
 		}
 		return ref;
 	}
@@ -941,8 +948,12 @@ final class JvmJavaDirectSites {
 			key.append("|octets");
 		}
 		if (site.markers().through() != null) {
-			// a function converted is called through the one named (Body.markers)
+			// a function converted is called through the one named (Body.markers),
+			// handed whether the site chose its member before it ran
 			key.append("|through=").append(site.markers().through());
+			if (site.markers().resolved()) {
+				key.append(" resolved");
+			}
 		}
 		for (JavaSite.Argument argument : site.arguments()) {
 			key.append('|');
@@ -2005,15 +2016,25 @@ final class JvmJavaDirectSites {
 					// The interface's generated proxy class over the function, as the
 					// bridge makes it a Proxy -- at a :functional site the class
 					// implementing its abstract methods by their arguments: of(new
-					// Object[] { function }).
+					// Object[] { function }). Where Object is expected, the object the
+					// function is after :functional :java-false, else the refusal.
+					MethodRefEntry factory = JavaOverloads.OBJECT.equals(name)
+							? implementations().functionObjectFactory(this.markers)
+							: this.markers.functional() ? implementations().functionalFactory(target, this.markers)
+									: implementations().proxyFactory(target, this.markers);
+					if (factory == null) {
+						throwDescribing(a, JavaImplementation.FUNCTION_OBJECT_REFUSAL, slot);
+						// unreachable: the arm's join expects the converted value
+						a.aconst_null();
+						break;
+					}
 					a.loadConstant(1);
 					a.anewarray(cls("java/lang/Object"));
 					a.dup();
 					a.loadConstant(0);
 					a.aload(slot);
 					a.aastore();
-					a.invokestatic(this.markers.functional() ? implementations().functionalFactory(target, this.markers)
-							: implementations().proxyFactory(target, this.markers));
+					a.invokestatic(factory);
 				}
 			}
 		}
@@ -2441,7 +2462,8 @@ final class JvmJavaDirectSites {
 		JavaMarkers used = functions ? markers : JavaMarkers.NONE;
 		String key = target.name() + (functions ? " functions" : "") + (sequences ? " sequences" : "")
 				+ (used.functional() ? " functional" : "") + (used.javaFalse() ? " java-false" : "")
-				+ (used.octets() ? " octets" : "") + (used.through() != null ? " through=" + used.through() : "");
+				+ (used.octets() ? " octets" : "") + (used.through() != null ? " through=" + used.through() : "")
+				+ (used.resolved() ? " resolved" : "");
 		MethodRefEntry ref = this.converts.get(key);
 		if (ref == null) {
 			Utf8Entry name = this.cp.utf8Entry(CONVERT_PREFIX + this.converts.size());
@@ -4609,7 +4631,7 @@ final class JvmJavaDirectSites {
 	// quotient truncated -- each an Integer; nil the NullPointerException and anything
 	// else the ClassCastException AFunction.compare's cast to Number throws, which the
 	// callback throws as the comparator's own failure.
-	private Method buildComparison(Utf8Entry name, Utf8Entry desc, @Nullable MethodRefEntry through) {
+	private Method buildComparison(Utf8Entry name, Utf8Entry desc, @Nullable MethodRefEntry through, boolean resolved) {
 		MethodCode a = new MethodCode();
 		ClassEntry objects = cls("[Ljava/lang/Object;");
 		ClassEntry objectClass = cls("java/lang/Object");
@@ -4641,8 +4663,15 @@ final class JvmJavaDirectSites {
 		a.ifeq(notFalse);
 		a.aload(0);
 		if (through != null) {
-			// compare answers no object
+			// the answer is read here, no kind; whether the converting site chose its
+			// member before it ran
 			a.aconst_null();
+			if (resolved) {
+				a.ldc(str("T"));
+			}
+			else {
+				a.aconst_null();
+			}
 		}
 		// new Object[] { b, new Object[] { a, null } }, ARGS being { a, { b, null } }
 		a.loadConstant(2);

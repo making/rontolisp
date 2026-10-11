@@ -156,10 +156,12 @@ final class JvmJavaImplementations {
 	/**
 	 * Registers how the callbacks of an implementation a form ending in
 	 * {@code :through #'name} makes call their function: through {@code helper}, the
-	 * program's {@code _jthrough$N(Object function, Object object, Object arguments)},
-	 * which calls {@code name} over them -- {@code object} {@code t} when the method
-	 * answers an object -- and answers what it answers. The site compiles the helper (it
-	 * needs the compiler's context) before it asks for anything generated for the form.
+	 * program's {@code _jthrough$N(Object function, Object kind, Object resolved, Object
+	 * arguments)}, which calls {@code name} over them -- {@code kind} how Java takes the
+	 * answer ({@code JavaImplementation.answerKind}), {@code resolved} whether the
+	 * converting site chose its member before it ran -- and answers what it answers. The
+	 * site compiles the helper (it needs the compiler's context) before it asks for
+	 * anything generated for the form.
 	 * @param name the function's name
 	 * @param helper the program-side method calling it
 	 */
@@ -472,6 +474,20 @@ final class JvmJavaImplementations {
 	}
 
 	/**
+	 * The factory of the object a function value is where {@code Object} is expected at a
+	 * site ending in {@code :functional} and {@code :java-false}: one class implementing
+	 * {@code Runnable}, {@code Callable} and {@code Comparator} by the function's
+	 * arguments, standing for it ({@link JavaImplementations#functionObject}).
+	 * @param markers the site's markers
+	 * @return the factory, taking a one-element array holding the function, or
+	 * {@code null} at a site that makes no such object (the conversion's refusal)
+	 */
+	@Nullable MethodRefEntry functionObjectFactory(JavaMarkers markers) {
+		JavaImplementation object = JavaImplementations.functionObject(this.lookup, markers);
+		return object == null ? null : factory(object);
+	}
+
+	/**
 	 * The construction dispatcher of the class a resolved {@code java:subclass} extends
 	 * its superclass with: {@code _jsubclass$N(Object callable, Object[]
 	 * constructorArguments)}, answering the new object. The dispatcher chooses the
@@ -596,8 +612,12 @@ final class JvmJavaImplementations {
 			key.append("|octets");
 		}
 		if (implementation.markers().through() != null) {
-			// its callbacks call their function through the one named (_jthrough$N)
+			// its callbacks call their function through the one named (_jthrough$N),
+			// telling it whether the converting site chose its member before it ran
 			key.append("|through=").append(implementation.markers().through());
+			if (implementation.markers().resolved()) {
+				key.append(" resolved");
+			}
 		}
 		JavaImplementation.StandIn standIn = implementation.standIn();
 		if (standIn != null && standIn.function()) {
@@ -626,7 +646,8 @@ final class JvmJavaImplementations {
 	// The program-side method a slot calls, made the first time one of its shape asks:
 	// one per (proxy or not, interfaces, method, return type, how Java's false and a
 	// byte[] reach the function, whether its answer is read as a comparison, the
-	// function it is called through).
+	// function it is called through and whether the converting site chose its member
+	// before it ran).
 	private String callback(JavaImplementation implementation, JavaImplementation.Slot slot) {
 		boolean proxy = implementation.proxy();
 		String iface = implementation.interfaceNames();
@@ -634,9 +655,10 @@ final class JvmJavaImplementations {
 		boolean octets = handsOctets(implementation, slot);
 		boolean compares = implementation.readsComparison(slot);
 		String through = implementation.markers().through();
+		boolean resolved = implementation.markers().resolved();
 		String key = (proxy ? "proxy|" : "reify|") + iface + "|" + slot.dispatchKey() + (javaFalse ? "|java-false" : "")
 				+ (octets ? "|octets" : "") + (compares ? "|compares" : "")
-				+ (through != null ? "|through=" + through : "");
+				+ (through != null ? "|through=" + through + (resolved ? " resolved" : "") : "");
 		String cached = this.callbacks.get(key);
 		if (cached != null) {
 			return cached;
@@ -648,7 +670,7 @@ final class JvmJavaImplementations {
 		String named = proxy ? iface : implementation.declaringName(slot.key());
 		this.methods
 			.add(buildCallback(proxy, named, slot, javaFalse, octets, compares, throughHelper(implementation.markers()),
-					this.cp.utf8Entry(name), this.cp.utf8Entry(callbackDescriptor(slot))));
+					resolved, this.cp.utf8Entry(name), this.cp.utf8Entry(callbackDescriptor(slot))));
 		return name;
 	}
 
@@ -788,8 +810,8 @@ final class JvmJavaImplementations {
 	// condition, that error -- is recorded on its way out to the Java caller (_jsig), for
 	// the site whose Java call it reaches.
 	private JvmJavaDirectSites.Method buildCallback(boolean proxy, String iface, JavaImplementation.Slot slot,
-			boolean javaFalse, boolean octets, boolean compares, @Nullable MethodRefEntry through, Utf8Entry name,
-			Utf8Entry desc) {
+			boolean javaFalse, boolean octets, boolean compares, @Nullable MethodRefEntry through, boolean resolved,
+			Utf8Entry name, Utf8Entry desc) {
 		MethodCode a = new MethodCode();
 		// 2 = the argument list, 3 = i, 4 = the value, 5 = a comparison's answer
 		MethodCode.Label start = a.newBoundLabel();
@@ -838,7 +860,7 @@ final class JvmJavaImplementations {
 			a.astore(2);
 		}
 		JavaType returnType = slot.returnType();
-		emitApply(a, 0, 2, returnType, through);
+		emitApply(a, 0, 2, returnType, compares, through, resolved);
 		MethodCode.Label refused = a.newLabel();
 		if ("void".equals(returnType.name())) {
 			a.pop();
@@ -852,7 +874,7 @@ final class JvmJavaImplementations {
 			a.aload(0);
 			a.aload(2);
 			a.aload(4);
-			a.invokestatic(this.direct.comparisonHelper(through));
+			a.invokestatic(this.direct.comparisonHelper(through, resolved));
 			a.astore(5);
 			a.aload(5);
 			a.instanceOf(cls("java/lang/Integer"));
@@ -899,9 +921,12 @@ final class JvmJavaImplementations {
 
 	// The function in local FN applied to the argument list in local ARGS, its value
 	// left on the stack: _apply(fn, args), or, through a :through's helper,
-	// _jthrough$N(fn, object, args) -- object t when the method answers an object (no
-	// primitive, not void), else nil.
-	private void emitApply(MethodCode a, int fn, int args, JavaType returnType, @Nullable MethodRefEntry through) {
+	// _jthrough$N(fn, kind, resolved, args) -- kind how Java takes the answer
+	// (JavaImplementation.answerKind: a primitive's keyword, :object, nil for void and a
+	// comparison COMPARES reads), resolved t when the site converting the function chose
+	// its member before it ran.
+	private void emitApply(MethodCode a, int fn, int args, JavaType returnType, boolean compares,
+			@Nullable MethodRefEntry through, boolean resolved) {
 		a.aload(fn);
 		if (through == null) {
 			a.aload(args);
@@ -909,11 +934,18 @@ final class JvmJavaImplementations {
 					"(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;"));
 			return;
 		}
-		if (returnType.isPrimitive()) {
+		String kind = JavaImplementation.answerKind(returnType.name(), compares);
+		if (kind == null) {
 			a.aconst_null();
 		}
 		else {
+			a.ldc(this.cp.stringEntry(kind));
+		}
+		if (resolved) {
 			a.ldc(this.cp.stringEntry("T"));
+		}
+		else {
+			a.aconst_null();
 		}
 		a.aload(args);
 		a.invokestatic(through);
@@ -996,7 +1028,8 @@ final class JvmJavaImplementations {
 		a.aastore();
 		a.astore(3);
 		JavaType returnType = slot.returnType();
-		emitApply(a, 0, 3, returnType, throughHelper(implementation.markers()));
+		emitApply(a, 0, 3, returnType, false, throughHelper(implementation.markers()),
+				implementation.markers().resolved());
 		JavaType superclass = java.util.Objects.requireNonNull(implementation.superclass());
 		if ("void".equals(returnType.name())) {
 			a.pop();

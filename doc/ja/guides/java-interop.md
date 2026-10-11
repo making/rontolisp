@@ -55,7 +55,7 @@ Lisp の値も `java:call` の receiver になり、`Object` 引数に渡した�
 | `t` / `nil` | `boolean` (`nil` は任意の `null` 参照にもなる) | `boolean` → `t`/`nil` (`:java-false` の後では `t`/`\|false\|`) |
 | 名前が `false` のシンボル | `boolean` の false、任意の参照には `Boolean.FALSE` | `:java-false` の後では Java の false |
 | `java` オブジェクト | ラップされたホストオブジェクト | その他のオブジェクト → `java` オブジェクト |
-| 関数/ラムダ | 一致するインターフェースに対する `java:proxy`、`:functional` の後ではその抽象メソッドの実装 (引数に限る) | — |
+| 関数/ラムダ | 一致するインターフェースに対する `java:proxy`、`:functional` の後ではその抽象メソッドの実装。`Object` が期待される箇所では `:functional :java-false` の後で関数そのものであるオブジェクト (引数に限る) | — |
 | 真リスト / ベクタ (特殊化されたものも含む) | `T[]` (要素ごとに変換、プリミティブ配列も可)、または `List`/`Collection`/`Iterable` | 任意の Java 配列 → リスト (`:octets` の後では `byte[]` → `(unsigned-byte 8)` のベクタ) |
 | ハッシュテーブル | 新しい `java.util.LinkedHashMap` (`Map`、`HashMap`、`Object` など) | — |
 | `java:handle` | Java からはテキストに見えるオブジェクト | 代理する値 |
@@ -122,12 +122,14 @@ Java の false は Common Lisp 唯一の偽である `nil` として返ります
   (java:call l "toString"))   ; => "[1, 2, 3]"
 ```
 
-この呼び出しで `java.lang.Runnable`・`java.util.concurrent.Callable`・`java.util.Comparator` が期待される箇所に渡した関数は、Java から返るときもその関数です。Clojure の fn がこの 3 つのインターフェースそのものであるのと同じく、Java が保持するオブジェクトは関数の代理になり、インターフェースのゲッター (`TreeSet` の `comparator` など) は関数を返します。ほかのインターフェースへ変換した関数と、`:java-false` のない呼び出しで変換した関数は、関数とは別のオブジェクトのまま返ります。
+この呼び出しで `java.lang.Runnable`・`java.util.concurrent.Callable`・`java.util.Comparator`・`java.lang.Object` が期待される箇所に渡した関数は、関数そのものであるオブジェクトになります。Clojure の fn が 3 つのインターフェースを兼ねる 1 つのオブジェクトであるのと同じく、このオブジェクトは 3 つすべてを関数の引数で実装し (`compare` は上の読み方)、クラス名を `clojure.lang.AFunction` と名乗り (`clojure.lang.AFunction@1b6d3586`)、関数の代理になります。そのため Java から返るとき (`TreeSet` の `comparator`、リストの要素など) は関数そのものであり、同じ関数のオブジェクト同士は `equals` で、このクラスの関数の `java:handle` とも等しくなります。ほかのインターフェースへ変換した関数と、`:java-false` のない呼び出しで変換した関数は、関数とは別のオブジェクトのまま返ります。`:java-false` のない呼び出しでは `Object` に対応するオブジェクトがないため、呼び出しは拒否されます (`java: a function where java.lang.Object is expected needs a java:handle, got ...`)。任意の値のオブジェクトは [`java:handle`](#handles-javahandle) で作れます。
 
 ```lisp
 (let* ((by-value (lambda (a b) (- a b)))
-       (s (java:new "java.util.TreeSet" by-value :functional :java-false)))
-  (eq by-value (java:call s "comparator")))   ; => T
+       (s (java:new "java.util.TreeSet" by-value :functional :java-false))
+       (l (java:new "java.util.ArrayList")))
+  (java:call l "add" by-value :functional :java-false)
+  (list (eq by-value (java:call s "comparator")) (eq by-value (java:call l "get" 0))))   ; => (T T)
 ```
 
 ### バイト列を受け取る: `:octets`
@@ -152,12 +154,13 @@ Java の配列はリストとして返るので、`byte[]` は符号付きバイ
 
 ### 関数を別の関数経由で呼ばせる: `:through`
 
-`:through` と関数で終わる形式 (ほかのマーカーとの順序は問いません) では、形式がインターフェースへ変換する関数と、形式が作る `java:reify`・`java:proxy`・`java:subclass` の関数を、Java はすべてその関数経由で呼びます。メソッドは `(f function object arguments)` を実行します。`arguments` は関数を適用するはずだった引数のリスト (`java:proxy` の callable ならメソッド名が先頭、`java:subclass` ならオブジェクトとメソッド名が先頭) で、`object` はメソッドがオブジェクトを返す (プリミティブでも `void` でもない) とき `t`、それ以外では `nil` です。`f` の返した値がメソッドの戻り値になり、関数の戻り値と同じ規則で戻り値の型へ変換されます。そのため値の受け渡し方は `f` が決められます。たとえば Java の引数を関数に渡す前に変換し、戻り値はメソッドがオブジェクトを返すときだけ変換して、`void` のメソッドが捨てる戻り値には手を付けずにおけます。Clojure フロントエンドは、fn と `proxy` の本体をすべてこの方法で Java に渡しています。
+`:through` と関数で終わる形式 (ほかのマーカーとの順序は問いません) では、形式が変換する関数 (インターフェースへの変換と、関数そのものであるオブジェクトへの変換) と、形式が作る `java:reify`・`java:proxy`・`java:subclass` の関数を、Java はすべてその関数経由で呼びます。メソッドは `(f function kind resolved arguments)` を実行します。`arguments` は関数を適用するはずだった引数のリスト (`java:proxy` の callable ならメソッド名が先頭、`java:subclass` ならオブジェクトとメソッド名が先頭) です。`kind` は Java が戻り値をどう受け取るかを表し、メソッドが参照型を返すなら `:object`、プリミティブを返すならその型のキーワード (`:boolean`・`:char`・`:byte`・`:short`・`:int`・`:long`・`:float`・`:double`)、Java が受け取らないなら (`void` のメソッド、`AFunction.compare` として読む `compare`) `nil` です。`resolved` は、関数を変換した呼び出しが実行前にメンバーを選んでいた (1 つのメンバーに解決されていた、または候補のオーバーロードが 1 つだった。[実行前の呼び出し解決](#resolving-calls-before-they-run)を参照) とき `t`、実行時に選んだときと、`java:reify`・`java:proxy`・`java:subclass` の関数では `nil` です。`f` の返した値がメソッドの戻り値になり、関数の戻り値と同じ規則で戻り値の型へ変換されます。そのため値の受け渡し方は `f` が決められます。たとえば Java の引数を関数に渡す前に変換し、戻り値はメソッドがオブジェクトを返すときだけ変換し、プリミティブは自分の言語のキャストの規則で変換して、`void` のメソッドが捨てる戻り値には手を付けずにおけます。Clojure フロントエンドは、fn と `proxy` の本体をすべてこの方法で Java に渡しています。プリミティブの戻り値は、fn なら Clojure の関数型インターフェースのアダプタと同じく (呼び出しが実行前にメンバーを選んでいればコンパイラのもの、そうでなければリフレクションのもの)、`proxy` の本体なら Clojure の proxy クラスと同じくキャストします。
 
 ```lisp
-(defun quoted (f object args)
+(defun quoted (f kind resolved args)
+  (declare (ignore resolved))
   (let ((answer (apply f args)))
-    (if object (prin1-to-string answer) answer)))
+    (if (eq kind :object) (prin1-to-string answer) answer)))
 (list (java:call (java:static "java.util.Optional" "empty") "orElseGet" (lambda () :x)
                  :functional :through #'quoted)
       (java:call (java:call (java:static "java.util.stream.IntStream" "range" 0 3) "map"
@@ -179,7 +182,7 @@ Java の配列はリストとして返るので、`byte[]` は符号付きバイ
         (java:call (java:call m "keySet") "toArray")))   ; => ("{apple=1}" 1 (APPLE))
 ```
 
-完全な形は `(java:handle value text hash order class)` です。`hash` が nil のハンドルはまったく同じ値のハンドルとだけ等しくなり、このとき `text` を nil にすると `Object` と同じくクラス名とハッシュで綴られます。関数の `order` は、値と、Java がハンドルと比べるオブジェクトとを比べ、その答えの符号で順序を決めます。`order` が nil のハンドルは何とも順序付けられません。`class` は等価と順序を分けます。クラスの異なるハンドル同士は等しくならず、比べると両方のクラス名を挙げた `ClassCastException` になります。実数のハンドルは、その数の `java.lang.Number` です ([java:handle](../reference/functions/java-handle.md))。値を表しながらインターフェースも実装するオブジェクトは、`:value` を付けた `java:reify` で作ります ([java:reify によるインターフェースの実装](#implementing-interfaces-with-javareify))。
+完全な形は `(java:handle value text hash order class)` です。`hash` が nil のハンドルは、同じクラスでまったく同じ値を表すオブジェクト (同様のハンドル、`:value` を付けた `java:reify`、関数そのものであるオブジェクト) とだけ等しくなり、このとき `text` を nil にすると `Object` と同じくクラス名とハッシュで綴られます。関数の `order` は、値と、Java がハンドルと比べるオブジェクトとを比べ、その答えの符号で順序を決めます。`order` が nil のハンドルは何とも順序付けられません。`class` は等価と順序を分けます。クラスの異なるハンドル同士は等しくならず、比べると両方のクラス名を挙げた `ClassCastException` になります。実数のハンドルは、その数の `java.lang.Number` です ([java:handle](../reference/functions/java-handle.md))。値を表しながらインターフェースも実装するオブジェクトは、`:value` を付けた `java:reify` で作ります ([java:reify によるインターフェースの実装](#implementing-interfaces-with-javareify))。
 
 ### ビュー: java:view
 
@@ -234,7 +237,7 @@ Clojure フロントエンドは、すべての値をこの形で Java に渡し
 (java:static "java.lang.Math" "sqrt" 16)   ; => 4.0
 ```
 
-関数は、関数型インターフェース (抽象メソッドが 1 つ) に対してそれ以外のインターフェースより低いコストになります。そのため Java のラムダの変換先と同じく、`TreeSet(Collection)` より `TreeSet(Comparator)` が選ばれます。
+関数は、関数型インターフェース (抽象メソッドが 1 つ) に対して `java.lang.Object` より低いコストになり、`Object` に対してはそれ以外のインターフェースより低いコストになります。そのため Java のラムダの変換先と同じく `TreeSet(Collection)` より `TreeSet(Comparator)` が選ばれ、Clojure の fn が `Object` であって `CharSequence` ではないのと同じく `append(CharSequence)` より `StringBuilder.append(Object)` が選ばれます。
 
 ```lisp
 (let ((s (java:new "java.util.TreeSet" (lambda (a b) (- b a)) :functional)))

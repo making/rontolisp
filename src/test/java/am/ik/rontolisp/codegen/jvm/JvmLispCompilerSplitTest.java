@@ -157,7 +157,8 @@ class JvmLispCompilerSplitTest {
 				  (java:call l "add" (java:view 'v (make-array 2 :element-type '(unsigned-byte 8)) :bytes))
 				  (java:call l "forEach" (lambda (x) (setf (aref x 0) 9)) :functional :octets)
 				  (print (java:call l "get" 0 :octets)))
-				(defun via (f object args) (if object (prin1-to-string (apply f args)) (apply f args)))
+				(defun via (f kind resolved args)
+				  (if (and (eq kind :object) resolved) (prin1-to-string (apply f args)) (apply f args)))
 				(print (list (java:call (java:static "java.util.Optional" "empty") "orElseGet" (lambda () 5)
 				                        :functional :through #'via)
 				             (java:call (java:call (java:static "java.util.stream.IntStream" "range" 0 3) "map"

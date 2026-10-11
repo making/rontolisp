@@ -349,7 +349,8 @@ public final class JavaSiteResolver {
 				case CALL -> resolveCall(parts, javaFalse);
 				case FIELD -> resolveField(parts, javaFalse);
 			};
-			return markers.any() ? resolved.withMarkers(markers) : resolved;
+			return markers.any() ? resolved.withMarkers(markers.withResolved(choosesItsMemberFirst(resolved)))
+					: resolved;
 		}
 		catch (IllegalArgumentException ex) {
 			// A malformed parameter tag: the run-time path raises it.
@@ -361,6 +362,18 @@ public final class JavaSiteResolver {
 			// would not, so the site is left to run time, which reports what it meets.
 			return JavaSite.unresolved(operator, JavaStaticType.UNKNOWN, "the classes could not be inspected: " + ex);
 		}
+	}
+
+	/**
+	 * Whether a site chose the member it calls before it runs: resolved to one member, or
+	 * dispatched over its only overload -- the call Clojure's compiler resolves, its
+	 * reflector the others -- which a function the site converts is called with
+	 * ({@link JavaMarkers#resolved}).
+	 * @param site how the site resolved
+	 * @return whether its member is fixed before it runs
+	 */
+	static boolean choosesItsMemberFirst(JavaSite site) {
+		return site.resolved() && (site.executable() != null || site.overloads().size() == 1);
 	}
 
 	private JavaSite resolveNew(List<LispVal> parts, boolean javaFalse) {

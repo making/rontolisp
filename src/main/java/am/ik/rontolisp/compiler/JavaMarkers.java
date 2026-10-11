@@ -38,13 +38,23 @@ import org.jspecify.annotations.Nullable;
  * rather than a list of signed bytes
  * @param through {@code :through f}: Java calls each function the form converts to an
  * interface, and each the implementation it makes calls, through {@code f} --
- * {@code (f function object arguments)}, {@code arguments} the list the function would be
- * applied to, {@code object} true when the method answers an object (no primitive, not
- * {@code void}) -- and takes what {@code f} answers. The name of the function a literal
- * {@code #'name} names, {@link #COMPUTED} for any other form or an evaluated value,
- * {@code null} when the form ends in no {@code :through}
+ * {@code (f function kind resolved arguments)}, {@code arguments} the list the function
+ * would be applied to, {@code kind} how Java takes the answer
+ * ({@link JavaImplementation#answerKind}: the method's primitive return type as a
+ * keyword, {@code :object} for a reference, {@code nil} for none), {@code resolved}
+ * {@link #resolved} -- and takes what {@code f} answers. The name of the function a
+ * literal {@code #'name} names, {@link #COMPUTED} for any other form or an evaluated
+ * value, {@code null} when the form ends in no {@code :through}
+ * @param resolved no keyword a form is written with: whether the site converting a
+ * function chose its member before it ran -- resolved to one member, or dispatched over
+ * its only overload ({@code JavaSiteResolver}) -- which a {@code :through} function is
+ * handed, as Clojure's compiled call and its reflector coerce a fn's answer otherwise.
+ * Kept only beside a {@code :through} ({@link #withResolved}); never set by
+ * {@link #of(List, int)}, so a site chosen as it runs and an implementation form's own
+ * functions hand {@code nil}
  */
-public record JavaMarkers(boolean functional, boolean javaFalse, boolean octets, @Nullable String through) {
+public record JavaMarkers(boolean functional, boolean javaFalse, boolean octets, @Nullable String through,
+		boolean resolved) {
 
 	/** No marker. */
 	public static final JavaMarkers NONE = new JavaMarkers(false, false, false);
@@ -76,7 +86,33 @@ public record JavaMarkers(boolean functional, boolean javaFalse, boolean octets,
 	}
 
 	/**
-	 * @return whether any marker is set
+	 * Markers as a form is written with them: no site's choice ({@link #resolved}).
+	 * @param functional {@code :functional}
+	 * @param javaFalse {@code :java-false}
+	 * @param octets {@code :octets}
+	 * @param through {@code :through}'s function name, or {@code null}
+	 */
+	public JavaMarkers(boolean functional, boolean javaFalse, boolean octets, @Nullable String through) {
+		this(functional, javaFalse, octets, through, false);
+	}
+
+	/**
+	 * These markers at a site that chose its member before it ran, or did not: the
+	 * {@link #resolved} a {@code :through} function is handed. Without a {@code :through}
+	 * nothing reads it, so the markers stay as they are -- a shape keyed by them is not
+	 * split for nothing.
+	 * @param chosen whether the site chose its member before it ran
+	 * @return the markers
+	 */
+	public JavaMarkers withResolved(boolean chosen) {
+		boolean kept = chosen && this.through != null;
+		return kept == this.resolved ? this
+				: new JavaMarkers(this.functional, this.javaFalse, this.octets, this.through, kept);
+	}
+
+	/**
+	 * @return whether any marker is set ({@link #resolved}, which no form is written
+	 * with, aside)
 	 */
 	public boolean any() {
 		return this.functional || this.javaFalse || this.octets || this.through != null;

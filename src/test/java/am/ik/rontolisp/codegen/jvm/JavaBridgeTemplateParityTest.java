@@ -90,6 +90,11 @@ class JavaBridgeTemplateParityTest {
 		return new Arg(ReflectiveJavaClasses.of(object.getClass()), object);
 	}
 
+	// A function value: compiled, an Object[] whose slot 0 is an Integer.
+	private static Arg function() {
+		return new Arg(JavaKind.Lisp.FUNCTION, new Object[] { 0 });
+	}
+
 	private static final Arg T = new Arg(JavaKind.Lisp.T, "T");
 
 	private static final Arg FALSE = new Arg(JavaKind.Lisp.FALSE, LispNames.JAVA_FALSE);
@@ -199,6 +204,19 @@ class JavaBridgeTemplateParityTest {
 				ReflectiveJavaClasses.instance()))
 			.isEqualTo(JavaOverloads.COST_PROXY_NOT_FUNCTIONAL);
 		assertThat(constant("COST_PROXY_NOT_FUNCTIONAL")).isEqualTo(JavaOverloads.COST_PROXY_NOT_FUNCTIONAL);
+		// where Object is expected, after every interface the function implements and
+		// before any other: StringBuilder.append(Object), not append(CharSequence)
+		assertThat(JavaOverloads.kindCost(JavaKind.Lisp.FUNCTION, ReflectiveJavaClasses.of(Object.class),
+				ReflectiveJavaClasses.instance()))
+			.isEqualTo(JavaOverloads.COST_FUNCTION_OBJECT)
+			.isGreaterThan(JavaOverloads.COST_PROXY)
+			.isLessThan(JavaOverloads.COST_PROXY_NOT_FUNCTIONAL);
+		assertThat(constant("COST_FUNCTION_OBJECT")).isEqualTo(JavaOverloads.COST_FUNCTION_OBJECT);
+		Object[] template = templateChoice(StringBuilder.class, "append", List.of(function()));
+		assertThat(((Method) Objects.requireNonNull(template)[0]).getParameterTypes()).containsExactly(Object.class);
+		JavaOverloads.Overload shared = sharedChoice(StringBuilder.class, "append", List.of(function()));
+		assertThat(Objects.requireNonNull(shared).executable().parameterTypes().get(0).name())
+			.isEqualTo("java.lang.Object");
 	}
 
 	// A non-public receiver class whose method is declared on a non-public superclass
@@ -331,11 +349,37 @@ class JavaBridgeTemplateParityTest {
 				"java.util.Iterator", "java.lang.CharSequence", "java.util.List", "java.awt.event.KeyListener",
 				"am.ik.rontolisp.compiler.JavaImplementationsTest$Narrowed")) {
 			Class<?> iface = Class.forName(name);
-			assertThat(String.valueOf(new java.util.TreeMap<>(
-					(java.util.Map<?, ?>) invoke("functionalSlots", new Class<?>[] { Class.class }, iface))))
+			assertThat(String.valueOf(new java.util.TreeMap<>((java.util.Map<?, ?>) invoke("functionalSlots",
+					new Class<?>[] { Class[].class }, (Object) new Class<?>[] { iface }))))
 				.as("%s", name)
 				.isEqualTo(slots(am.ik.rontolisp.compiler.JavaImplementations
 					.functional(ReflectiveJavaClasses.of(iface), ReflectiveJavaClasses.instance())));
+		}
+		// the object a function is after :functional :java-false: the three interfaces
+		// Clojure's fn is, by its arguments
+		Class<?>[] functionInterfaces = new Class<?>[] { Runnable.class, java.util.concurrent.Callable.class,
+				java.util.Comparator.class };
+		assertThat(String.valueOf(new java.util.TreeMap<>((java.util.Map<?, ?>) invoke("functionalSlots",
+				new Class<?>[] { Class[].class }, (Object) functionInterfaces))))
+			.isEqualTo(slots(Objects.requireNonNull(am.ik.rontolisp.compiler.JavaImplementations.functionObject(
+					ReflectiveJavaClasses.instance(), new am.ik.rontolisp.compiler.JavaMarkers(true, true, false)))));
+		assertThat(constant("FUNCTION_CLASS")).isEqualTo(am.ik.rontolisp.compiler.JavaImplementation.FUNCTION_CLASS);
+		assertThat(constant("FUNCTION_OBJECT_REFUSAL"))
+			.isEqualTo(am.ik.rontolisp.compiler.JavaImplementation.FUNCTION_OBJECT_REFUSAL);
+	}
+
+	// How Java takes a function's answer, as a :through function is handed it: both
+	// copies name every return type alike, and a comparison read as AFunction.compare
+	// none.
+	@Test
+	void theBridgeHandsThroughTheAnswerKindTheSharedRuleNames() throws Exception {
+		for (Class<?> ret : List.of(void.class, boolean.class, char.class, byte.class, short.class, int.class,
+				long.class, float.class, double.class, Object.class, String.class, int[].class, Runnable.class)) {
+			for (boolean comparison : List.of(false, true)) {
+				assertThat(invoke("answerKind", new Class<?>[] { Class.class, boolean.class }, ret, comparison))
+					.as("%s %s", ret, comparison)
+					.isEqualTo(am.ik.rontolisp.compiler.JavaImplementation.answerKind(ret.getName(), comparison));
+			}
 		}
 	}
 
