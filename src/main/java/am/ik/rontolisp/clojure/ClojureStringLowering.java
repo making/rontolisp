@@ -55,7 +55,7 @@ final class ClojureStringLowering {
 			case "split" -> {
 				ClojureLowerUtil.isTrue(n == 2 || n == 3, "split takes a string, a pattern and an optional limit");
 				yield splitForm(ctx, text(ctx, items.get(1)), ctx.lower(items.get(2)),
-						n == 3 ? ctx.lower(items.get(3)) : ClojureLowering.NIL_CONST, true);
+						n == 3 ? ctx.lower(items.get(3)) : ClojureLowering.NIL_CONST);
 			}
 			case "split-lines" -> {
 				ClojureLowerUtil.isTrue(n == 1, "split-lines takes one string");
@@ -318,13 +318,22 @@ final class ClojureStringLowering {
 	}
 
 	/**
-	 * {@code split}: the string cut at every (non-overlapping, in order) occurrence of
-	 * the string pattern -- a character or anything else signals, like the oracle's cast
-	 * failure -- as a strict list. An empty match cuts between characters; an empty input
-	 * answers nil; a positive limit caps the parts (the last holding the rest); a
+	 * {@code split}: the parts of {@link #splitList} as a vector, like the oracle's (and
+	 * the {@code String[]} of {@code .split}).
+	 */
+	static LispVal splitForm(ClojureLowering ctx, LispVal text, LispVal pattern, LispVal limit) {
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("coerce"), splitList(ctx, text, pattern, limit),
+				ClojureLowerUtil.quoted("vector"));
+	}
+
+	/**
+	 * The string cut at every (non-overlapping, in order) occurrence of the string
+	 * pattern -- a character or anything else signals, like the oracle's cast failure --
+	 * as a strict list. An empty match cuts between characters; an empty input answers
+	 * one empty part; a positive limit caps the parts (the last holding the rest); a
 	 * negative limit keeps every part; otherwise trailing empties drop.
 	 */
-	static LispVal splitForm(ClojureLowering ctx, LispVal text, LispVal pattern, LispVal limit, boolean emptyToNil) {
+	private static LispVal splitList(ClojureLowering ctx, LispVal text, LispVal pattern, LispVal limit) {
 		LispSymbol str = ctx.freshTemp();
 		LispSymbol raw = ctx.freshTemp();
 		LispSymbol pat = ctx.freshTemp();
@@ -335,9 +344,9 @@ final class ClojureStringLowering {
 		LispVal cut = splitLoop(ctx, str, pat, lim);
 		LispVal whole = ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), ClojureLowerUtil.list(
 				ClojureLowerUtil.sym("zerop"), ClojureLowerUtil.list(ClojureLowerUtil.sym("length"), pat)), chars, cut);
-		LispVal result = emptyToNil ? ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
+		LispVal result = ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("string="), str, LispString.literal("")),
-				ClojureLowering.NIL_CONST, whole) : whole;
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("list"), LispString.literal("")), whole);
 		LispVal checked = ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("or"),
 						ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), lim),
@@ -428,7 +437,10 @@ final class ClojureStringLowering {
 						ClojureLowerUtil.list(self, ClojureLowerUtil.list(ClojureLowerUtil.sym("reverse"), parts))));
 	}
 
-	/** {@code split-lines}: split on newlines, an empty input nil, each line unended. */
+	/**
+	 * {@code split-lines}: split on newlines into a vector, an empty input one empty
+	 * line, each line unended.
+	 */
 	static LispVal splitLinesForm(ClojureLowering ctx, LispVal text) {
 		LispSymbol line = ctx.freshTemp();
 		LispSymbol len = ctx.freshTemp();
@@ -444,9 +456,12 @@ final class ClojureStringLowering {
 						ClojureLowerUtil.list(ClojureLowerUtil.sym("subseq"), line, new LispInteger(0),
 								ClojureLowerUtil.list(ClojureLowerUtil.sym("-"), len, new LispInteger(1))),
 						line));
-		LispVal lines = splitForm(ctx, text, LispString.literal("\n"), ClojureLowering.NIL_CONST, true);
-		return ClojureLowerUtil.list(ClojureLowerUtil.sym("mapcar"),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(line), unended), lines);
+		LispVal lines = splitList(ctx, text, LispString.literal("\n"), ClojureLowering.NIL_CONST);
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("coerce"),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("mapcar"),
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(line), unended),
+						lines),
+				ClojureLowerUtil.quoted("vector"));
 	}
 
 	/** {@code String.toUpperCase}, the oracle's mapping ({@code clojure.lisp}). */

@@ -1975,8 +1975,8 @@ class ClojureInteropTest {
 
 	@Test
 	void stringSplitStaysLiteral() throws Exception {
-		assertBothEqual("(println (.split \"aaa\" \".\"))", "(aaa)\n");
-		assertBothEqual("(println (.split \"a,b\" \",\"))", "(a b)\n");
+		assertBothEqual("(println (.split \"aaa\" \".\"))", "[aaa]\n");
+		assertBothEqual("(println (.split \"a,b\" \",\"))", "[a b]\n");
 	}
 
 	@Test

@@ -2285,8 +2285,8 @@ final class ClojureInteropLowering {
 			case "replaceFirst" ->
 				args.size() == 2 ? ClojureStringLowering.replaceForm(ctx, recv, args.get(0), args.get(1), true) : null;
 			case "split" -> switch (args.size()) {
-				case 1 -> ClojureStringLowering.splitForm(ctx, recv, args.get(0), ClojureLowering.NIL_CONST, true);
-				case 2 -> ClojureStringLowering.splitForm(ctx, recv, args.get(0), args.get(1), true);
+				case 1 -> ClojureStringLowering.splitForm(ctx, recv, args.get(0), ClojureLowering.NIL_CONST);
+				case 2 -> ClojureStringLowering.splitForm(ctx, recv, args.get(0), args.get(1));
 				default -> null;
 			};
 			case "concat" -> args.size() == 1 ? ClojureLowerUtil.list(ClojureLowerUtil.sym("concatenate"),

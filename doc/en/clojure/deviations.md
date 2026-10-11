@@ -208,7 +208,7 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   `user$reify` without the oracle's number.
 - A deftype's `^:volatile-mutable` field is the same plain slot as an
   `^:unsynchronized-mutable` one (no cross-thread ordering).
-- `split`/`replace` answer seqs, never vectors, and plain strings stay literal (only
+- `split`/`replace` leave a plain string literal (only
   pattern values match by pattern); `index-of` answers `-1` when missing, like the
   oracle (where `clojure.string/index-of` answers `nil`).
 - `def` inside a body sets the global when the body runs; `defn` inside a body works only

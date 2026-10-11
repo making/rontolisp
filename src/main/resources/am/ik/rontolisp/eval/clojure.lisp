@@ -1582,6 +1582,8 @@
 (defun rontolisp::%clojure-subs-checked (s start end end-p reflective)
   (rontolisp::%clojure-string-bound-number start reflective)
   (if end-p (rontolisp::%clojure-string-bound-number end reflective))
+  (if (and (not reflective) (not (stringp s)))
+      (rontolisp::%clojure-class-cast-exception-of "subs takes a string" s))
   (let ((n (if (stringp s) (length s) 0)))
     (if (and (stringp s) (integerp start) (or (null end) (integerp end))
              (not (<= 0 start (if end end n) n)))
@@ -1594,8 +1596,9 @@
   "(subs S START END): subseq, whose refusal of bounds outside a string is the
    oracle's StringIndexOutOfBoundsException here, in subseq's own words, and of
    a bound that is no number its NullPointerException (nil, an END of nil
-   included) or ClassCastException. The refusal family's alias of subseq: a
-   program that reads no condition's class calls subseq itself."
+   included) or ClassCastException, and of a S that is no string (any other
+   sequence included) its ClassCastException. The refusal family's alias of
+   subseq: a program that reads no condition's class calls subseq itself."
   (rontolisp::%clojure-subs-checked s start end end-p nil))
 
 (defun rontolisp::%clojure-subs-by-reflection

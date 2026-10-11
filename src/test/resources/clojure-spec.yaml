@@ -1557,9 +1557,9 @@ cases:
       bbb
       bbb
       baa
-      (a b)
-      (a b )
-      (a b)
+      [a b]
+      [a b ]
+      [a b]
       a\$b
       hI
       ih
@@ -2878,9 +2878,9 @@ cases:
       (println (.split "aaa" "."))
     expected: |
       aaa
-      (aaa)
+      [aaa]
       aaa
-      (aaa)
+      [aaa]
   - name: pr-and-pr-str-are-readable
     # pr/prn are the readable arms of print/println, pr-str of str: strings print
     # quoted, chars with their backslash, collections in Clojure notation.
@@ -5377,7 +5377,7 @@ cases:
       (println (split-lines "a\nb"))
     expected: |
       HI
-      (a b)
+      [a b]
   - name: vec-coerces-every-collection-to-a-vector
     # vec is the vector-over-seq-view coercion: lists pass through member by
     # member, strings become character vectors, maps contribute one two-vector
@@ -5658,11 +5658,11 @@ cases:
       (println (coll? #"a+"))
       (println (re-matcher #"a+" "aaab"))
     expected: |
-      (a b c)
-      (a b)
-      (a b )
+      [a b c]
+      [a b]
+      [a b ]
       1
-      nil
+      []
       (there)
       [foo bar baz]
       bbb
@@ -5678,6 +5678,27 @@ cases:
       :matcher
       false
       #<Matcher a+>
+  - name: split-and-split-lines-answer-a-vector-and-subs-takes-only-a-string
+    # clojure.string/split and split-lines answer a vector (conj appends, vector?
+    # holds), an empty input one empty part; .split of a String answers an array,
+    # a vector here. subs of anything but a string is a ClassCastException (nil a
+    # NullPointerException), read where a condition's class is (clj 1.12.6).
+    source: |
+      (require '[clojure.string :as sv])
+      (prn (sv/split "a,b" #",") (conj (sv/split "a,b" #",") "c") (vector? (sv/split "a,b" #",")))
+      (prn (sv/split "" #",") (sv/split "a,b,," #",") (sv/split "a,b,c" #"," 2))
+      (prn (sv/split-lines "a\nb") (sv/split-lines "") (conj (sv/split-lines "a\r\nb") "c"))
+      (prn (vec (.split "a,b" ",")) (alength (.split "a,b" ",")) (aget (.split "a,b" ",") 1))
+      (defn subs-class [f] (try (f) :none (catch NullPointerException e :npe) (catch ClassCastException e :cce)))
+      (deftype SubsD [x])
+      (prn (subs-class #(subs [1 2 3] 1)) (subs-class #(subs '(1 2 3) 1)) (subs-class #(subs (SubsD. 1) 0))
+           (subs-class #(subs nil 1)) (subs-class #(subs "abc" 1)))
+    expected: |
+      ["a" "b"] ["a" "b" "c"] true
+      [""] ["a" "b"] ["a" "b,c"]
+      ["a" "b"] [""] ["a" "b" "c"]
+      ["a" "b"] 2 "b"
+      :cce :cce :cce :npe :none
   - name: regex-literal-backslashes-stay-verbatim
     # The reader keeps backslashes verbatim like the oracle (the old read
     # halved every run, so #"\\d" answered the digit class). A single-backslash

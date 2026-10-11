@@ -31,7 +31,7 @@ Deviations: the reader keeps backslashes verbatim, like the oracle
 single backslashes); unknown alphabetic escapes, a short or non-hex `\u`/`\x`,
 a `\0` with no octal digit behind it and a lone `\E` are read-time refusals;
 `re-seq` answers a strict list (the oracle's lazy prints
-the same); `split` answers a seq, never a vector; `.` excludes only `\n`/`\r`,
+the same); `.` excludes only `\n`/`\r`,
 `$` matches at the end or just before one final newline, and `\s`/`\b` are
 ASCII; a replacement function renders through `str`, so `nil` answers `""`
 where the oracle throws.
@@ -39,5 +39,5 @@ where the oracle throws.
 ```clojure
 (println (re-find #"\d+" "abc123"))  ; 123
 (println (re-seq #"a+" "aaabbaa"))  ; (aaa aa)
-(println (clojure.string/split "a b  c" #"\s+"))  ; (a b c)
+(println (clojure.string/split "a b  c" #"\s+"))  ; [a b c]
 ```

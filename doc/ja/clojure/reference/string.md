@@ -6,8 +6,8 @@
 |---|---|---|
 | `subs` | `(subs "hello" 1 3)` | `el` |
 | `clojure.string/join` | `(clojure.string/join "," ["a" "b"])` | `a,b` |
-| `clojure.string/split` | `(clojure.string/split "a,b" ",")` | `("a" "b")` |
-| `clojure.string/split-lines` | `(clojure.string/split-lines "a\nb")` | `("a" "b")` |
+| `clojure.string/split` | `(clojure.string/split "a,b" ",")` | `["a" "b"]` |
+| `clojure.string/split-lines` | `(clojure.string/split-lines "a\nb")` | `["a" "b"]` |
 | `clojure.string/upper-case` | `(clojure.string/upper-case "hi")` | `HI` |
 | `clojure.string/lower-case` | `(clojure.string/lower-case "HI")` | `hi` |
 | `clojure.string/capitalize` | `(clojure.string/capitalize "hi there")` | `Hi there` |
