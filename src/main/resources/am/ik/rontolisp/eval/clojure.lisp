@@ -9716,6 +9716,42 @@
       (or (gethash key table)
           (setf (gethash key table) (rontolisp:make-mutex))))))
 
+;;;; Atoms across request threads.
+;;
+;; A Ring handler runs one thread per request on the interpreter and the JVM, and an
+;; atom is how a program shares state between them. swap! is the oracle's retry
+;; loop: the function runs on the value read, outside any lock, and the
+;; compare-and-set stores its answer only if the cell still holds that value, else
+;; it runs again on the newer one (also what a function swapping the same atom
+;; itself sees, on every backend). The compare and the store are one step under
+;; %clojure-atom-guard, which holds nothing but an eql and a store, so it never
+;; waits on the program's code; reset! stores under it too, so no store lands
+;; between a compare and its store. CELL is the atom's one-vector. deref reads
+;; without the guard: a stale read fails the compare and is read again. On wasm, a
+;; single-threaded module, the guard is a no-op.
+
+(defvar rontolisp::%clojure-atom-guard (rontolisp:make-mutex))
+
+(defun rontolisp::%clojure-atom-cas (cell old new)
+  "T when CELL held OLD (eql) and now holds NEW, as one step; else NIL."
+  (rontolisp:with-mutex (rontolisp::%clojure-atom-guard)
+    (when (eql (aref cell 0) old)
+      (setf (aref cell 0) new)
+      t)))
+
+(defun rontolisp::%clojure-atom-reset (cell new)
+  "CELL rewritten to NEW under the guard; answers NEW."
+  (rontolisp:with-mutex (rontolisp::%clojure-atom-guard)
+    (setf (aref cell 0) new))
+  new)
+
+(defun rontolisp::%clojure-atom-swap (cell f args)
+  "F applied to CELL's value and ARGS until the compare-and-set stores its answer;
+   answers the value stored."
+  (loop
+    (let* ((old (aref cell 0)) (new (apply f old args)))
+      (when (rontolisp::%clojure-atom-cas cell old new) (return new)))))
+
 ;;;; Vars: #'x as a value.
 ;;
 ;; A var is (:C%VAR "ns/name" getter), interned per name in

@@ -4750,8 +4750,8 @@ public final class ClojureLowering {
 			case "atom" -> ClojureStateLowering.atomValue(this);
 			case "volatile!" -> ClojureStateLowering.volatileValue();
 			case "deref" -> ClojureStateLowering.derefValue(this);
-			case "swap!", "vswap!" -> ClojureStateLowering.swapValue(this);
-			case "reset!", "vreset!" -> ClojureStateLowering.resetValue(this);
+			case "swap!", "vswap!" -> ClojureStateLowering.swapValue(this, name);
+			case "reset!", "vreset!" -> ClojureStateLowering.resetValue(this, name);
 			case "compare-and-set!" -> ClojureStateLowering.compareAndSetValue(this);
 			case "ref" -> ClojureStateLowering.refValue(this);
 			case "alter" -> ClojureStateLowering.alterValue(this, "alter");

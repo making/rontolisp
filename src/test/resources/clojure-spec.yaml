@@ -1668,6 +1668,32 @@ cases:
       5
       (1 2)
       42
+  - name: swap-retries-when-its-function-changed-the-atom
+    # Oracle-identical (clj 1.12.6): swap! is a compare-and-set retry loop, so a
+    # function that swaps or resets the same atom itself makes the outer store
+    # fail and runs again on the newer value (in call position and as a value);
+    # compare-and-set! runs its arguments in order.
+    source: |
+      (def a06 (atom 0))
+      (def a06-calls (atom 0))
+      (println (swap! a06 (fn [v] (when (= 1 (swap! a06-calls inc)) (swap! a06 + 10)) (inc v))))
+      (println @a06 @a06-calls)
+      (def a06-swap swap!)
+      (println (a06-swap a06 (fn [v] (when (= 3 (swap! a06-calls inc)) (reset! a06 100)) (* 2 v))))
+      (println @a06 @a06-calls)
+      (reset! a06 5)
+      (println (compare-and-set! (do (println "atom") a06) (do (println "expected") 5) (do (println "new") 7)))
+      (println @a06)
+    expected: |
+      11
+      11 2
+      200
+      200 4
+      atom
+      expected
+      new
+      true
+      7
   - name: deref-with-a-timeout-refuses-a-value-that-is-no-future
     # Oracle-identical (clj 1.12.6): the three-argument deref needs an
     # IBlockingDeref, which only a host Future is here, so an atom, a volatile, a

@@ -1553,8 +1553,10 @@ class ClojureLoweringTest {
 	void atomsAreTaggedCells() {
 		assertThat(lowered("(atom 1)")).contains(":C%ATOM").contains("(VECTOR 1)");
 		assertThat(lowered("(def a (atom 1)) @a")).contains("AREF");
-		assertThat(lowered("(def a (atom 1)) (swap! a inc)")).contains("APPLY");
-		assertThat(lowered("(def a (atom 1)) (compare-and-set! a 1 2)")).contains("EQL");
+		assertThat(lowered("(def a (atom 1)) (swap! a inc)")).contains("RONTOLISP::%CLOJURE-ATOM-SWAP");
+		assertThat(lowered("(def a (volatile! 1)) (vswap! a inc)")).contains("APPLY").doesNotContain("%CLOJURE-ATOM-");
+		assertThat(lowered("(def a (atom 1)) (compare-and-set! a 1 2)")).contains("RONTOLISP::%CLOJURE-ATOM-CAS");
+		assertThat(lowered("(def a (atom 1)) (reset! a 2)")).contains("RONTOLISP::%CLOJURE-ATOM-RESET");
 		assertThatThrownBy(() -> Clojure.read("(deref a 1)", null)).isInstanceOf(LispReadException.class)
 			.hasMessageContaining("deref takes one or three arguments");
 		assertThatThrownBy(() -> Clojure.read("(deref a 1 2 3)", null)).isInstanceOf(LispReadException.class)
@@ -2643,7 +2645,8 @@ class ClojureLoweringTest {
 		assertThat(lowered("(map set [[1]])")).contains("LAMBDA").contains("GETHASH");
 		assertThat(lowered("(map hash-map [:a] [1])")).contains("LAMBDA").contains("RONTOLISP::%CLOJURE-PLIST-TABLE");
 		assertThat(lowered("(map array-map [:a] [1])")).contains("LAMBDA").contains("RONTOLISP::%CLOJURE-PLIST-TABLE");
-		assertThat(lowered("(let [a (atom [1])] (swap! a conj 1))")).contains("APPLY").contains("REDUCE");
+		assertThat(lowered("(let [a (atom [1])] (swap! a conj 1))")).contains("RONTOLISP::%CLOJURE-ATOM-SWAP")
+			.contains("REDUCE");
 		assertThatThrownBy(() -> Clojure.read("(vec)", null)).isInstanceOf(LispReadException.class)
 			.hasMessageContaining("vec takes one collection");
 		assertThatThrownBy(() -> Clojure.read("(vec [1] [2])", null)).isInstanceOf(LispReadException.class)

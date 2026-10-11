@@ -26,6 +26,16 @@ bugs, and each looks like someone else's fault.
   the one compared against (`%clojure-key-class`), else the newer classes are compared and
   the store retried -- a lock held there could deadlock on a lazy seq waiting for a thread that
   stores a key.
+- Clojure atoms (`clojure.lisp` "Atoms across request threads", 2026-10-11): `swap!` is the
+  oracle's retry loop `%clojure-atom-swap` (the function outside any lock, re-run when the
+  compare fails), `compare-and-set!` `%clojure-atom-cas` and `reset!` `%clojure-atom-reset`
+  compare and store under `%clojure-atom-guard`, which holds only an `eql` and a store (no
+  program code, so no deadlock); `deref` reads unguarded. Chosen over a core vector CAS: the
+  JVM's general vector starts packed in a `long[]` and widens in place (`.kb/core-representation.md`),
+  so a slot CAS there is not one `VarHandle` call. All four backends call the same helpers (wasm's
+  guard is a no-op), so a function swapping its own atom retries everywhere. Before: 48
+  requests x 20 updates counted 250-770 of 960. Volatiles stay plain (the oracle's are).
+  Not covered: refs and agents (single-threaded STM).
 - Protocol and interface rows are written only as the program starts: a type's at its
   definition, a `reify`'s once per SITE, hoisted ahead of its top-level datum, the evaluation's
   methods carried in the value (`.kb/clojure-frontend.md`, "`reify`"). Before, every
@@ -52,4 +62,8 @@ bugs, and each looks like someone else's fault.
   interface methods, vector and deftype map keys, `#'x` and `the-ns` identity). Before
   (2026-10-10) every round failed on both legs: 500s from the races above, a lost namespace
   identity; with only the guards, the reify rows still failed.
+- `ClojureAtomConcurrentRequestsTest` (48 requests at once, 2 rounds per leg; each request
+  updates four atoms 20 times: `swap!` called and as a value, a `compare-and-set!` retry loop
+  called and as a value). The single-threaded retry is clojure-spec
+  `swap-retries-when-its-function-changed-the-atom`.
 - Not in the suite: bursts of 12 concurrent POSTs against `examples/db/postgres-web.lisp`.

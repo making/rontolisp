@@ -263,6 +263,13 @@ final class ClojureStateLowering {
 						ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-DEREF-OTHER"), cell)));
 	}
 
+	/**
+	 * {@code swap!} and {@code vswap!}. {@code swap!} is the oracle's retry loop, the
+	 * spliced {@link #ATOM_SWAP}: a Ring handler runs one thread per request on the
+	 * interpreter and the JVM, and a function that swaps the same atom itself makes the
+	 * outer store retry on every backend. A volatile, which the oracle does not make
+	 * atomic either, is read, the function applied and the cell written.
+	 */
 	static LispVal swapOf(ClojureLowering ctx, List<LispVal> items) {
 		String op = ((LispSymbol) items.get(0)).name();
 		ClojureLowerUtil.isTrue(items.size() >= 3, op + " takes an atom, a function and arguments");
@@ -273,6 +280,10 @@ final class ClojureStateLowering {
 			List<LispVal> tail = new ArrayList<>();
 			for (LispVal arg : rest) {
 				tail.add(ctx.lower(arg));
+			}
+			if (atomic(op)) {
+				return ClojureLowerUtil.list(ATOM_SWAP, atomCell(cell), ClojureBindingLowering.fnValue(ctx, fun),
+						ClojureLowerUtil.cons(ClojureLowerUtil.sym("list"), tail));
 			}
 			LispVal spread = ClojureLowerUtil.list(ClojureLowerUtil.sym("cons"), atomGet(cell),
 					ClojureLowerUtil.cons(ClojureLowerUtil.sym("list"), tail));
@@ -291,6 +302,9 @@ final class ClojureStateLowering {
 		ClojureLowerUtil.isTrue(items.size() == 3, op + " takes an atom and a value");
 		LispVal value = ctx.lower(items.get(2));
 		return withAtom(ctx, ctx.lower(items.get(1)), op, cell -> {
+			if (atomic(op)) {
+				return ClojureLowerUtil.list(ATOM_RESET, atomCell(cell), value);
+			}
 			LispSymbol next = ctx.freshTemp();
 			return ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
 					ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(next, value))), atomPut(cell, next), next);
@@ -301,21 +315,55 @@ final class ClojureStateLowering {
 	 * {@code compare-and-set!}: the cell rewritten only when its value is {@code eql} to
 	 * the expected one -- value comparison for numbers, identity for everything else,
 	 * which is how the oracle's reference comparison answers on coalesced literals --
-	 * answering a Clojure boolean.
+	 * answering a Clojure boolean. The expected value runs before the new one, like the
+	 * oracle's arguments.
 	 */
 	static LispVal compareAndSetOf(ClojureLowering ctx, List<LispVal> items) {
 		ClojureLowerUtil.isTrue(items.size() == 4, "compare-and-set! takes an atom, an expected value and a new value");
 		LispVal wanted = ctx.lower(items.get(2));
 		LispVal value = ctx.lower(items.get(3));
 		return withAtom(ctx, ctx.lower(items.get(1)), "compare-and-set!", cell -> {
+			LispSymbol expected = ctx.freshTemp();
 			LispSymbol next = ctx.freshTemp();
 			return ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
-					ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(next, value))),
-					ctx.booleanAnswer(ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
-							ClojureLowerUtil.list(ClojureLowerUtil.sym("eql"), wanted, atomGet(cell)), ClojureLowerUtil
-								.list(ClojureLowerUtil.sym("progn"), atomPut(cell, next), ClojureLowering.TRUE_CONST),
-							ClojureLowering.NIL_CONST)));
+					ClojureLowerUtil
+						.list(List.of(ClojureLowerUtil.list(expected, wanted), ClojureLowerUtil.list(next, value))),
+					compareAndSetBuild(ctx, cell, expected, next));
 		});
+	}
+
+	/**
+	 * The compare and the store over an already-bound atom, expected value and new value,
+	 * as one step: the spliced {@link #ATOM_CAS}, answering a Clojure boolean.
+	 */
+	private static LispVal compareAndSetBuild(ClojureLowering ctx, LispVal cell, LispVal wanted, LispVal value) {
+		return ctx.booleanAnswer(ClojureLowerUtil.list(ATOM_CAS, atomCell(cell), wanted, value));
+	}
+
+	/**
+	 * The spliced helpers that make an atom's update one step where a Ring handler runs
+	 * one thread per request ({@code clojure.lisp}, "Atoms across request threads"):
+	 * {@code swap!}'s retry loop, {@code compare-and-set!}'s compare and store, and
+	 * {@code reset!}'s store, each over the atom's one-vector cell. On wasm their guard
+	 * is a no-op.
+	 */
+	static final LispSymbol ATOM_SWAP = new LispSymbol("RONTOLISP::%CLOJURE-ATOM-SWAP");
+
+	static final LispSymbol ATOM_CAS = new LispSymbol("RONTOLISP::%CLOJURE-ATOM-CAS");
+
+	static final LispSymbol ATOM_RESET = new LispSymbol("RONTOLISP::%CLOJURE-ATOM-RESET");
+
+	/**
+	 * Whether the verb goes through the guarded helpers: an atom's, never a volatile's
+	 * ({@code vswap!}/{@code vreset!} are a plain read and write in the oracle too).
+	 */
+	private static boolean atomic(String op) {
+		return !op.startsWith("v");
+	}
+
+	/** The one-vector cell of an already-bound atom. */
+	private static LispVal atomCell(LispVal bound) {
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("cadr"), bound);
 	}
 
 	/** {@code atom} as a value: a one-argument lambda over the constructor. */
@@ -330,28 +378,36 @@ final class ClojureStateLowering {
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(cell), derefForm(ctx, cell));
 	}
 
-	/** {@code swap!} as a value: over an atom, a function and any more arguments. */
-	static LispVal swapValue(ClojureLowering ctx) {
+	/**
+	 * {@code swap!} (or {@code vswap!}, named by {@code op}) as a value: over an atom, a
+	 * function and any more arguments.
+	 */
+	static LispVal swapValue(ClojureLowering ctx, String op) {
 		LispSymbol cell = new LispSymbol(ClojureLowering.mangle("swap-cell"));
 		LispSymbol fun = new LispSymbol(ClojureLowering.mangle("swap-fun"));
 		LispSymbol rest = new LispSymbol(ClojureLowering.mangle("swap-rest"));
 		LispSymbol next = new LispSymbol(ClojureLowering.mangle("swap-next"));
 		LispVal spread = ClojureLowerUtil.list(ClojureLowerUtil.sym("cons"), atomGet(cell), rest);
-		LispVal update = ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
-				ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(next,
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("apply"), fun, spread)))),
-				atomPut(cell, next), next);
+		LispVal update = atomic(op) ? ClojureLowerUtil.list(ATOM_SWAP, atomCell(cell), fun, rest)
+				: ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
+						ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(next,
+								ClojureLowerUtil.list(ClojureLowerUtil.sym("apply"), fun, spread)))),
+						atomPut(cell, next), next);
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"),
 				ClojureLowerUtil.list(List.of(cell, fun, ClojureLowering.AMPERSAND_REST, rest)),
 				withAtom(ctx, cell, "swap!", ignored -> update));
 	}
 
-	/** {@code reset!} as a value: a two-argument lambda over the writer. */
-	static LispVal resetValue(ClojureLowering ctx) {
+	/**
+	 * {@code reset!} (or {@code vreset!}, named by {@code op}) as a value: a two-argument
+	 * lambda over the writer.
+	 */
+	static LispVal resetValue(ClojureLowering ctx, String op) {
 		LispSymbol cell = new LispSymbol(ClojureLowering.mangle("reset-cell"));
 		LispSymbol value = new LispSymbol(ClojureLowering.mangle("reset-value"));
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(List.of(cell, value)),
-				withAtom(ctx, cell, "reset!", bound -> atomPut(bound, value)));
+				withAtom(ctx, cell, "reset!", bound -> atomic(op)
+						? ClojureLowerUtil.list(ATOM_RESET, atomCell(bound), value) : atomPut(bound, value)));
 	}
 
 	/**
@@ -430,13 +486,9 @@ final class ClojureStateLowering {
 		LispSymbol cell = new LispSymbol(ClojureLowering.mangle("cas-cell"));
 		LispSymbol wanted = new LispSymbol(ClojureLowering.mangle("cas-wanted"));
 		LispSymbol value = new LispSymbol(ClojureLowering.mangle("cas-value"));
-		return ClojureLowerUtil
-			.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(List.of(cell, wanted, value)), withAtom(ctx,
-					cell, "compare-and-set!",
-					bound -> ctx.booleanAnswer(ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
-							ClojureLowerUtil.list(ClojureLowerUtil.sym("eql"), wanted, atomGet(bound)), ClojureLowerUtil
-								.list(ClojureLowerUtil.sym("progn"), atomPut(bound, value), ClojureLowering.TRUE_CONST),
-							ClojureLowering.NIL_CONST))));
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"),
+				ClojureLowerUtil.list(List.of(cell, wanted, value)),
+				withAtom(ctx, cell, "compare-and-set!", bound -> compareAndSetBuild(ctx, bound, wanted, value)));
 	}
 
 	// state: refs over the atom cell, agents as synchronous atoms, binding over
