@@ -20340,6 +20340,22 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void asyncPredicatesAndStreamVerbsAreFunctionValues() throws Exception {
+		// The wasm twin of AsyncEvalTest#asyncPredicatesAndStreamVerbsAreFunctionValues,
+		// Preview 1 and the component. make-stream and stream-write refuse the program as
+		// a function value as they do in call position.
+		for (boolean component : new boolean[] { false, true }) {
+			assertThat(compileAndRunFrontEndWithDir(AsyncStreamOperandFixture.VALUE_PROGRAM, component))
+				.isEqualTo(AsyncStreamOperandFixture.VALUE_EXPECTED);
+			assertThat(compileAndRunFrontEndWithDir(AsyncStreamOperandFixture.NO_STREAM_VALUE_PROGRAM, component))
+				.isEqualTo(AsyncStreamOperandFixture.NO_STREAM_VALUE_EXPECTED);
+			assertThatThrownBy(
+					() -> compileAndRunFrontEndWithDir(AsyncStreamOperandFixture.WRITE_VALUE_PROGRAM, component))
+				.hasMessageContaining("requires the interpreter or the JVM backend");
+		}
+	}
+
+	@Test
 	void futureCombinatorsSignalATypeErrorOverANonFuture() throws Exception {
 		// The wasm twin of AsyncEvalTest#combinatorsRejectNonFutureFirstArgument, Preview
 		// 1
