@@ -192,8 +192,23 @@ async body (at the await, like any error there) and under `read-all`. Where each
 stream verbs' bullet). Pinned by
 `AsyncStreamOperandFixture` (`AsyncEvalTest`/`JvmAsyncCompilerTest`/`WasmLispCompilerIntegrationTest`
 `streamVerbsSignalATypeErrorOverANonStream`, ci-spec
-`stream-verbs-signal-a-type-error-over-a-non-stream`). As function values (`#'rontolisp:stream-read`)
-they exist on the interpreter only (todo `f30`).
+`stream-verbs-signal-a-type-error-over-a-non-stream`).
+
+## Function values
+**Invariant (2026-10-11): `#'rontolisp:streamp`, `futurep`, `stream-read` and `stream-close` are
+function values on all four backends, `make-stream` and `stream-write` on the interpreter and the
+JVM** (the wasm backends refuse the program at the `#'` as at a call). A non-stream is the
+operator's type-error through the value too. The compiled values are reference-gated
+`NATIVE_VALUE_FUNCTIONS` entries derived from the `NativeCallShapes` rows
+([lisp2-namespaces.md](lisp2-namespaces.md), "A native built-in's function value"); the body is
+the call position, so it reaches the same helpers, and the async-runtime gates
+(`JvmLispCompiler`'s `usesStreamOps`/`usesAsyncRuntime`) already scan for the name the `#'`
+spells. Until then the JVM, Preview 1 and the component reported `The function RONTOLISP:STREAMP
+is undefined` (measured 2026-10-10). Pinned by `AsyncStreamOperandFixture.VALUE_PROGRAM` /
+`NO_STREAM_VALUE_PROGRAM` / `WRITE_VALUE_PROGRAM` (`asyncPredicatesAndStreamVerbsAreFunctionValues`
+in `AsyncEvalTest`/`JvmAsyncCompilerTest`/`WasmLispCompilerIntegrationTest`, ci-spec
+`async-predicates-and-stream-verbs-are-function-values`). The other `rontolisp:` natives
+(threads, mutexes, sockets, `json-*`, `fetch`, `wait-for`, `version`) still have none (todo `f38`).
 
 Found through todo `f21` (measured 2026-10-10, wasmtime 49.0.0). Its premise -- both wasm legs trap
 `cast failure` when the Clojure client's async 404 decodes its `:string` body inside one more

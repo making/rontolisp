@@ -237,6 +237,18 @@ class JvmAsyncCompilerTest {
 	}
 
 	@Test
+	void asyncPredicatesAndStreamVerbsAreFunctionValues() throws Exception {
+		// The compiled twin of
+		// AsyncEvalTest#asyncPredicatesAndStreamVerbsAreFunctionValues.
+		assertThat(compileAndRunExpanded(AsyncStreamOperandFixture.VALUE_PROGRAM))
+			.isEqualTo(AsyncStreamOperandFixture.VALUE_EXPECTED);
+		assertThat(compileAndRunExpanded(AsyncStreamOperandFixture.NO_STREAM_VALUE_PROGRAM))
+			.isEqualTo(AsyncStreamOperandFixture.NO_STREAM_VALUE_EXPECTED);
+		assertThat(compileAndRunExpanded(AsyncStreamOperandFixture.WRITE_VALUE_PROGRAM))
+			.isEqualTo(AsyncStreamOperandFixture.WRITE_VALUE_EXPECTED);
+	}
+
+	@Test
 	void aPullStreamResolvesAnAsynchronousReadThunk() throws Exception {
 		// The chunk arrives as a future and is resolved AT THE READ, before the
 		// end-of-stream test (a future wrapping nil is not nil).

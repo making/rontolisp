@@ -331,6 +331,19 @@ class AsyncEvalTest {
 	}
 
 	@Test
+	void asyncPredicatesAndStreamVerbsAreFunctionValues() {
+		// #'rontolisp:streamp, futurep, stream-read, stream-close, make-stream and
+		// stream-write through funcall, apply, mapcar and a variable; pinned on all four
+		// backends (the compiled ones had no function value for them).
+		assertThat(evalMulti(AsyncStreamOperandFixture.VALUE_PROGRAM).output().trim())
+			.isEqualTo(AsyncStreamOperandFixture.VALUE_EXPECTED);
+		assertThat(evalMulti(AsyncStreamOperandFixture.NO_STREAM_VALUE_PROGRAM).output().trim())
+			.isEqualTo(AsyncStreamOperandFixture.NO_STREAM_VALUE_EXPECTED);
+		assertThat(evalMulti(AsyncStreamOperandFixture.WRITE_VALUE_PROGRAM).output().trim())
+			.isEqualTo(AsyncStreamOperandFixture.WRITE_VALUE_EXPECTED);
+	}
+
+	@Test
 	void readAllDrainsAStream() {
 		Run run = evalMulti("""
 				(defvar *s* (rontolisp:make-stream))

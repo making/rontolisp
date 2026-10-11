@@ -130,7 +130,17 @@ public final class BuiltinFunctionWrappers {
 			LispNames.HASH_TABLE_SIZE, LispNames.HASH_TABLE_TEST, LispNames.IMPORT, LispNames.LOAD,
 			LispNames.MAKE_RANDOM_STATE, LispNames.MAKE_STRING_INPUT_STREAM, LispNames.MAKE_STRING_OUTPUT_STREAM,
 			LispNames.MAKE_SYNONYM_STREAM, LispNames.OPEN_STREAM_P, LispNames.RATIONALP, LispNames.ROW_MAJOR_AREF,
-			LispNames.SYMBOL_FUNCTION, LispNames.UNEXPORT, LispNames.UNUSE_PACKAGE, LispNames.USE_PACKAGE);
+			LispNames.SYMBOL_FUNCTION, LispNames.UNEXPORT, LispNames.UNUSE_PACKAGE, LispNames.USE_PACKAGE,
+			// The async predicates and stream verbs. The bodies reach the async runtime,
+			// whose gates scan for the operator's name -- which the #' reference is. On
+			// the wasm backends make-stream and stream-write refuse the program as a
+			// value exactly as they do in call position.
+			PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.ASYNC_STREAMP),
+			PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.FUTUREP),
+			PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.STREAM_READ),
+			PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.STREAM_CLOSE),
+			PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.MAKE_STREAM),
+			PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.STREAM_WRITE));
 
 	/**
 	 * Wrappers injected only when the program takes the operator as a first-class value
