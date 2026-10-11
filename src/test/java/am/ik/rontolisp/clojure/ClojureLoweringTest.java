@@ -2982,7 +2982,18 @@ class ClojureLoweringTest {
 		assertThat(lowered("(def r (ref 0)) (commute r inc)")).contains("RONTOLISP::%CLOJURE-STM-WRITE");
 		assertThat(lowered("(def r (ref 0)) (ref-set r 1)")).contains("RONTOLISP::%CLOJURE-STM-WRITE");
 		assertThat(lowered("(def r (ref 0)) (ensure r)")).contains("(RONTOLISP::%CLOJURE-STM-REQUIRE)");
-		assertThat(lowered("(agent 0)")).contains("(RONTOLISP::%CLOJURE-AGENT-MAKE 0 NIL)");
+		assertThat(lowered("(agent 0)")).contains("(RONTOLISP::%CLOJURE-AGENT-MAKE 0 NIL NIL NIL)");
+		// options are read at run time, like the oracle's (apply hash-map options)
+		assertThat(lowered("(agent 0 :error-mode :continue)")).contains("(RONTOLISP::%CLOJURE-AGENT-V 0");
+		assertThat(lowered("(def a (agent 0)) (restart-agent a 1 :clear-actions true)"))
+			.contains("(RONTOLISP::%CLOJURE-AGENT-RESTART |c%a| 1 (LIST ");
+		assertThat(lowered("(def a (agent 0)) (agent-error a)")).contains("(RONTOLISP::%CLOJURE-AGENT-ERROR |c%a|)");
+		assertThat(lowered("(map error-mode [])")).contains("RONTOLISP::%CLOJURE-AGENT-ERROR-MODE");
+		assertThatThrownBy(() -> Clojure.read("(def a (agent 0)) (restart-agent a)", null))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Wrong number of args (1) passed to: clojure.core/restart-agent");
+		// a failed agent's refusal carries its error as the cause: the exception runtime
+		assertThat(lowered("(def a (agent 0)) (send a inc)")).contains("C%E-NEW");
 		assertThat(lowered("(def a (agent 0)) (send a inc)")).contains("C%AGENT")
 			.contains("RONTOLISP::%CLOJURE-AGENT-SEND");
 		assertThat(lowered("(def a (agent 0)) (send-off a inc)")).contains("C%AGENT");

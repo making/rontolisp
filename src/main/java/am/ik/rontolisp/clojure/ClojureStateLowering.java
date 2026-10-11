@@ -670,21 +670,107 @@ final class ClojureStateLowering {
 
 	/**
 	 * {@code (agent init & opts)}: the spliced {@link #AGENT_MAKE}'s cell, carrying the
-	 * {@code :validator} (which the initial value must pass and every action's answer)
-	 * and the agent's queue.
+	 * agent's validator (which the initial value must pass and every action's answer),
+	 * its error handler and mode, and its queue. Options go to {@link #AGENT_V}, which
+	 * reads them at run time like the oracle's {@code (apply hash-map options)}.
 	 */
 	static LispVal agentOf(ClojureLowering ctx, List<LispVal> items) {
 		ClojureLowerUtil.isTrue(items.size() >= 2, "agent takes an initial value");
-		LispVal init = ctx.lower(items.get(1));
-		LispVal validator = validatorOpt(ctx, items, 2, "agent");
-		return ClojureLowerUtil.list(AGENT_MAKE, init, validator == null ? ClojureLowering.NIL_CONST : validator);
+		if (items.size() == 2) {
+			return ClojureLowerUtil.list(AGENT_MAKE, ctx.lower(items.get(1)), ClojureLowering.NIL_CONST,
+					ClojureLowering.NIL_CONST, ClojureLowering.NIL_CONST);
+		}
+		return ClojureLowerUtil.cons(AGENT_V, ctx.lowers(items, 1));
 	}
 
-	/** {@code agent} as a value: a one-argument lambda over the constructor. */
-	static LispVal agentValue(ClojureLowering ctx) {
-		LispSymbol init = new LispSymbol(ClojureLowering.mangle("agent-init"));
-		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(init),
-				ClojureLowerUtil.list(AGENT_MAKE, init, ClojureLowering.NIL_CONST));
+	/** {@code agent} as a value: the library constructor reading options. */
+	static LispVal agentValue() {
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), AGENT_V);
+	}
+
+	/** {@code agent} with options, called and as a value. */
+	static final LispSymbol AGENT_V = new LispSymbol("RONTOLISP::%CLOJURE-AGENT-V");
+
+	/**
+	 * One agent verb reading or restarting a failed agent: one call to its
+	 * {@code clojure.lisp} worker over a fixed argument count.
+	 *
+	 * @param worker the library function
+	 * @param arity its fixed argument count
+	 * @param options whether options follow them, handed to the worker as one list
+	 */
+	private record AgentVerb(String worker, int arity, boolean options) {
+
+		AgentVerb(String worker, int arity) {
+			this(worker, arity, false);
+		}
+
+	}
+
+	private static final Map<String, AgentVerb> AGENT_VERBS = Map.of("agent-error",
+			new AgentVerb("RONTOLISP::%CLOJURE-AGENT-ERROR", 1), "agent-errors",
+			new AgentVerb("RONTOLISP::%CLOJURE-AGENT-ERRORS", 1), "clear-agent-errors",
+			new AgentVerb("RONTOLISP::%CLOJURE-AGENT-CLEAR-ERRORS", 1), "restart-agent",
+			new AgentVerb("RONTOLISP::%CLOJURE-AGENT-RESTART", 2, true), "set-error-handler!",
+			new AgentVerb("RONTOLISP::%CLOJURE-AGENT-SET-ERROR-HANDLER", 2), "set-error-mode!",
+			new AgentVerb("RONTOLISP::%CLOJURE-AGENT-SET-ERROR-MODE", 2), "error-handler",
+			new AgentVerb("RONTOLISP::%CLOJURE-AGENT-ERROR-HANDLER", 1), "error-mode",
+			new AgentVerb("RONTOLISP::%CLOJURE-AGENT-ERROR-MODE", 1));
+
+	/**
+	 * The agent rows of the lowering ({@code agent}, {@code send}, {@code send-off},
+	 * {@code await}, {@code shutdown-agents} and the error verbs), or null when the call
+	 * names none of them.
+	 */
+	static @Nullable LispVal agentRow(ClojureLowering ctx, String name, List<LispVal> items) {
+		switch (name) {
+			case "agent":
+				return agentOf(ctx, items);
+			case "send", "send-off":
+				return sendOf(ctx, items);
+			case "await":
+				return awaitOf(ctx, items);
+			case "shutdown-agents":
+				ClojureLowerUtil.isTrue(items.size() == 1, "shutdown-agents takes no arguments");
+				return ClojureLowering.NIL_CONST;
+			default:
+				AgentVerb verb = AGENT_VERBS.get(name);
+				if (verb == null) {
+					return null;
+				}
+				ClojureCoreLowering.arity(name, items.size() - 1, verb.arity(), verb.options() ? -1 : verb.arity());
+				List<LispVal> call = new ArrayList<>();
+				call.add(new LispSymbol(verb.worker()));
+				call.addAll(ctx.lowers(items.subList(0, verb.arity() + 1), 1));
+				if (verb.options()) {
+					call.add(ClojureLowerUtil.cons(ClojureLowerUtil.sym("list"), ctx.lowers(items, verb.arity() + 1)));
+				}
+				return ClojureLowerUtil.list(call);
+		}
+	}
+
+	/** An agent error verb as a value: a lambda over its worker, or null for no verb. */
+	static @Nullable LispVal agentVerbValue(String name) {
+		AgentVerb verb = AGENT_VERBS.get(name);
+		if (verb == null) {
+			return null;
+		}
+		List<LispVal> params = new ArrayList<>();
+		List<LispVal> call = new ArrayList<>();
+		call.add(new LispSymbol(verb.worker()));
+		for (int i = 0; i < verb.arity(); i++) {
+			LispSymbol param = new LispSymbol(ClojureLowering.mangle("agent-arg" + i));
+			params.add(param);
+			call.add(param);
+		}
+		if (verb.options()) {
+			LispSymbol options = new LispSymbol(ClojureLowering.mangle("agent-options"));
+			params.add(ClojureLowering.AMPERSAND_REST);
+			params.add(options);
+			call.add(options);
+		}
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(params),
+				ClojureLowerUtil.list(call));
 	}
 
 	/**
@@ -708,6 +794,7 @@ final class ClojureStateLowering {
 	 */
 	static LispVal sendBuild(ClojureLowering ctx, LispVal cell, LispVal fun, LispVal argList, String op) {
 		ctx.usedStm = true;
+		ctx.usedExInfo = true; // a failed agent's refusal carries its error as the cause
 		return withAtom(ctx, cell, op, bound -> {
 			LispSymbol function = ctx.freshTemp();
 			LispSymbol args = ctx.freshTemp();
@@ -745,6 +832,7 @@ final class ClojureStateLowering {
 	 */
 	static LispVal awaitOf(ClojureLowering ctx, List<LispVal> items) {
 		ctx.usedStm = true;
+		ctx.usedExInfo = true; // a failed agent's refusal carries its error as the cause
 		LispSymbol agents = ctx.freshTemp();
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
 				ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(agents,

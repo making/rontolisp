@@ -3811,18 +3811,10 @@ public final class ClojureLowering {
 		if (ClojureLowerUtil.isSymbolNamed(head, "ensure")) {
 			return ClojureStateLowering.ensureOf(this, items);
 		}
-		if (ClojureLowerUtil.isSymbolNamed(head, "agent")) {
-			return ClojureStateLowering.agentOf(this, items);
-		}
-		if (ClojureLowerUtil.isSymbolNamed(head, "send") || ClojureLowerUtil.isSymbolNamed(head, "send-off")) {
-			return ClojureStateLowering.sendOf(this, items);
-		}
-		if (ClojureLowerUtil.isSymbolNamed(head, "await")) {
-			return ClojureStateLowering.awaitOf(this, items);
-		}
-		if (ClojureLowerUtil.isSymbolNamed(head, "shutdown-agents")) {
-			ClojureLowerUtil.isTrue(items.size() == 1, "shutdown-agents takes no arguments");
-			return NIL_CONST;
+		LispVal agentRow = head instanceof LispSymbol agentHead
+				? ClojureStateLowering.agentRow(this, agentHead.name(), items) : null;
+		if (agentRow != null) {
+			return agentRow;
 		}
 		if (ClojureLowerUtil.isSymbolNamed(head, "binding")) {
 			return ClojureStateLowering.bindingOf(this, items);
@@ -4906,7 +4898,10 @@ public final class ClojureLowering {
 			case "alter" -> ClojureStateLowering.alterValue(this, "alter");
 			case "commute" -> ClojureStateLowering.alterValue(this, "commute");
 			case "ref-set" -> ClojureStateLowering.refSetValue(this);
-			case "agent" -> ClojureStateLowering.agentValue(this);
+			case "agent" -> ClojureStateLowering.agentValue();
+			case "agent-error", "agent-errors", "clear-agent-errors", "restart-agent", "set-error-handler!",
+					"set-error-mode!", "error-handler", "error-mode" ->
+				ClojureStateLowering.agentVerbValue(name);
 			case "send" -> ClojureStateLowering.sendValue(this, "send");
 			case "send-off" -> ClojureStateLowering.sendValue(this, "send-off");
 			case "odd?" ->

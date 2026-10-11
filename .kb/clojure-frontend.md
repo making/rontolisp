@@ -55,7 +55,7 @@ The oracle is `clj` 1.12.6.1673: a behavior is decided by running it there, and 
 | `sorted-map` / `sorted-set` (and `-by`) | `(:C%SORTED setp cmp items)`: a vector of `[k v]` entries or members in comparator order | "Sorted collections" |
 | `[..]` | a CL vector (a `vector` call) | a string is a CL vector too, so `vector?`/`coll?` exclude strings |
 | list, seq | a CL list | lazy seq: `(:C%LAZY cell)`, memoized through `rplaca`/`rplacd` ("Laziness") |
-| atom, volatile, ref, agent | `(:C%ATOM #(value))`; a volatile's cell `#(value :C%VOLATILE)`; a validated ref's `#(value nil validator)`, an agent's `#(value nil validator (running . queue))` | one cell shape, so STM verbs accept atoms; `volatile?` reads the length 2, so slot 1 of the longer cells stays nil; `send` refuses a cell that is not 4 long |
+| atom, volatile, ref, agent | `(:C%ATOM #(value))`; a volatile's cell `#(value :C%VOLATILE)`; a validated ref's `#(value nil validator)`, an agent's `#(value nil validator #(running queue error handler mode))` | one cell shape, so STM verbs accept atoms; `volatile?` reads the length 2, so slot 1 of the longer cells stays nil; `send` refuses a cell that is not 4 long |
 | record / deftype / reify | `(:C%RECORD tag fields table class)` / `(:C%TYPE tag fields table class slots?)` / a fresh `:C%REIFY` tag | "Dispatch"; the interfaces a body implements are rows under the tag ("Host interfaces") |
 | `#"re"` | `(:C%PATTERN stamp source ops ngroups)` | the stamp is a gensym, so `=` is identity like the oracle |
 | byte array (`byte-array`, `.getBytes`) | `(:C%BYTES octets)`, `octets` a packed `(unsigned-byte 8)` vector | "Byte arrays" |
@@ -127,7 +127,7 @@ answered `2 5 3` before).
 | `assert` | `if` around the `AssertionError` carrier ("Refusals") | the `Assert failed:` message evaluates only on failure; it names the failed form, built only in the failure branch: rendered at lower time (`ClojureStringLowering.prSource`: symbols, keywords, integers, strings, chars, lists, vectors, maps) so no printer is linked, else `quote` through the readable `%clojure-str-of` (double, ratio, set, regex...) which links the collection printer (measured 2026-10-03: `(assert (nil? x))` wasm 3171 -> 3282 bytes; with a double in the form 3171 -> 54237 versus 21992 before) |
 | `atom` `deref`/`@` `swap!` `reset!` `compare-and-set!` `volatile!` `vswap!` `vreset!` | reads/writes of the cell; an atom's `swap!`/`compare-and-set!`/`reset!` through the guarded `%clojure-atom-*` helpers (`.kb/concurrent-served-requests.md`) | answer the new value; `compare-and-set!` compares with `eql`; `swap!` retries like the oracle's CAS loop; `seq`/`first`/`count`/`empty?`/`cons`/`conj` onto a cell signal like the oracle; `deref` also reads a host `Future`, with or without a timeout ("A host `Future` under `deref`"), and the rontolisp future the HTTP client answers ("HTTP client") |
 | `ref` `dosync` `alter` `commute` `ref-set` `ensure` | the cell under `clojure.lisp`'s `%clojure-stm-*` | "State" |
-| `agent` `send` `send-off` `await` `shutdown-agents` | the cell under `clojure.lisp`'s `%clojure-agent-*` | "State" |
+| `agent` `send` `send-off` `await` `shutdown-agents` `agent-error` `restart-agent` `set-error-handler!` `set-error-mode!` `error-handler` `error-mode` `agent-errors` `clear-agent-errors` | the cell under `clojure.lisp`'s `%clojure-agent-*` (`ClojureStateLowering.agentRow`) | "State" |
 | `binding` / `set!` | `let*` of specials plus a depth counter | "State" |
 | `with-open` | `let*` plus `unwind-protect` closing in reverse | a stream closes through `close` on every backend, anything else through the `close` interop call; an empty vector is the bare body |
 | `with-out-str` | `let*` rebinding `*standard-output*` to `make-string-output-stream`, read back | never a literal `with-output-to-string`: it flips a WASM module into EH mode |
@@ -5625,8 +5625,20 @@ resolve var`.
   `%clojure-agent-send`; a send while `%clojure-agent-held` is bound (inside a transaction or
   an action) waits in that box, released on success, dropped on failure. `%clojure-agent-drain`
   appends under `%clojure-atom-guard` and, when no thread runs the agent, runs the queue on
-  this thread (actions outside every lock, so no deadlock between agents); a failing action
-  signals there and leaves the rest queued for the next drain. `await` refuses inside an
+  this thread (actions outside every lock, so no deadlock between agents). A failing action
+  never signals (2026-10-11; before, it signalled on the draining thread and the agent stayed
+  usable): `%clojure-agent-act` catches it, drops its held sends, calls the error handler
+  (held unbound, so its sends dispatch; its own failure ignored) and, unless the mode is
+  `:continue`, stores the error, which stops the drain with the queue kept. `send`, `await`
+  and a send inside a transaction then refuse through `%clojure-agent-check`: a
+  `RuntimeException` whose cause is the error, built by `C%E-NEW`, so `send`/`await` set
+  `usedExInfo`. A held send is released straight into the queue, unchecked, like the
+  oracle's `releasePendingSends`. `restart-agent` validates, clears the error (and the queue
+  with `:clear-actions`) and drains on its own thread. Options of `agent` (and of
+  `restart-agent`) are read at run time by `%clojure-agent-option`, the oracle's
+  `(apply hash-map options)`: unknown keys ignored, a lone key `No value supplied for key`.
+  A host `await` waits on through a failure until a restart runs its marker, like the
+  oracle's latch. `await` refuses inside an
   action (`C%AGENT`), queues a marker and runs the queue; a host target
   (`%clojure-agent-await`) then polls the marker between `(sleep 0.001)`s, wasm
   (`%clojure-agent-await-here`) never waits, so no `sleep` reaches a module. `C%AGENT` is the
@@ -5636,6 +5648,7 @@ resolve var`.
   lock suffices; a per-ref read/write set would need `deref` to tell a ref from an atom (they
   share the cell) and to read the transaction. Pins: clojure-spec
   `transactions-commit-whole-and-agents-hold-sends` (oracle-identical),
+  `a-failing-action-fails-the-agent-until-restart-agent` (oracle-identical),
   `ClojureRefAgentConcurrentRequestsTest`.
 
 ## clojure.test

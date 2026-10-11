@@ -11538,13 +11538,17 @@
 ;; thread pool: an idle agent's send runs at once). Actions run outside every
 ;; lock, so a send never waits for another request's action. A send made while a
 ;; transaction or an action runs is held until it completes, and dropped when it
-;; fails, like the oracle's. A failing action signals on the thread running it
-;; and leaves the actions queued behind it to the next send or await.
+;; fails, like the oracle's. A failing action (a throw, a refusing validator)
+;; never signals: the agent's error handler is called with the agent and the
+;; error, then in the :fail mode the agent keeps the error and stops, its queue
+;; kept, refusing every send and await until restart-agent; in the :continue
+;; mode the queue goes on.
 ;;
 ;; A ref with a validator and every agent carry it in the cell: #(value nil
 ;; validator) and #(value nil validator state), slot 1 nil because a volatile is
-;; the cell of length 2; STATE is (running . queue). A ref without one is the
-;; atom's one-vector. On wasm, a single-threaded module, the guards are no-ops.
+;; the cell of length 2; STATE is #(running queue error handler mode). A ref
+;; without one is the atom's one-vector. On wasm, a single-threaded module, the
+;; guards are no-ops.
 
 (defvar rontolisp::%clojure-stm-guard (rontolisp:make-mutex))
 
@@ -11572,11 +11576,44 @@
   (list :C%ATOM (vector (rontolisp::%clojure-stm-validate init validator) nil
                         validator)))
 
-(defun rontolisp::%clojure-agent-make (init validator)
-  "(agent init) and (agent init :validator f): an idle agent with no queued
-   action over INIT, which VALIDATOR (nil for none) must pass."
+(defun rontolisp::%clojure-agent-make (init validator handler mode)
+  "(agent init): an idle agent with no queued action over INIT, which
+   VALIDATOR (nil for none) must pass, its error HANDLER (nil for none) and
+   MODE; a MODE nil is the oracle's default, :continue with a handler and :fail
+   without."
   (list :C%ATOM (vector (rontolisp::%clojure-stm-validate init validator) nil
-                        validator (cons nil nil))))
+                        validator
+                        (vector nil nil nil handler
+                                (or mode
+                                    (if handler
+                                        '(:c%keyword "continue")
+                                        '(:c%keyword "fail")))))))
+
+(defun rontolisp::%clojure-agent-option (options name)
+  "What the key/value list OPTIONS gives the keyword NAME, read like the
+   oracle's (apply hash-map options): the last value when repeated, nil for
+   none or a false one; a key without a value is its refusal."
+  (let ((found nil))
+    (do ((p options (cdr (cdr p))))
+        ((null p) (if (rontolisp::%clojure-truthy found) found nil))
+      (if (null (cdr p))
+          (rontolisp::%clojure-illegal-argument-exception
+           (concatenate 'string "No value supplied for key: "
+                        (rontolisp::%clojure-str-of (car p) "null" nil))))
+      (if (and (consp (car p)) (eq (car (car p)) :c%keyword)
+               (equal (car (cdr (car p))) name))
+          (setq found (car (cdr p)))))))
+
+(defun rontolisp::%clojure-agent-v (&rest args)
+  "agent with options, called and as a value: (agent init :validator f
+   :error-handler h :error-mode m); :meta and any other key are ignored, like
+   the oracle's."
+  (rontolisp::%clojure-check-arity args 1 nil "agent")
+  (let ((options (cdr args)))
+    (rontolisp::%clojure-agent-make (car args)
+     (rontolisp::%clojure-agent-option options "validator")
+     (rontolisp::%clojure-agent-option options "error-handler")
+     (rontolisp::%clojure-agent-option options "error-mode"))))
 
 (defun rontolisp::%clojure-stm-require ()
   "Nil inside a transaction; the oracle's refusal outside one."
@@ -11624,95 +11661,197 @@
         value)))
 
 (defun rontolisp::%clojure-agent-release (held)
-  "The sends the box HELD kept, sent in the order they were made."
+  "The sends the box HELD kept, queued in the order they were made: enqueued
+   like the oracle's releasePendingSends, so a send held for an agent that has
+   failed since joins its queue."
   (dolist (entry (reverse (car held)))
-    (rontolisp::%clojure-agent-send (car entry) (cdr entry))))
+    (rontolisp::%clojure-agent-drain (car entry) (cdr entry))))
 
-(defun rontolisp::%clojure-agent-cell (agent)
-  "AGENT's cell; the oracle's cast failure for anything but an agent."
-  (let ((cell (car (cdr agent))))
-    (if (= (length cell) 4)
-        cell
-        (rontolisp::%clojure-class-cast-exception-of "send needs an agent"
-                                                     agent))))
+(defun rontolisp::%clojure-agent-cell (agent op)
+  "AGENT's cell; the oracle's cast failure of OP for anything but an agent."
+  (if (and (rontolisp::%clojure-atom-p agent) (= (length (car (cdr agent))) 4))
+      (car (cdr agent))
+      (rontolisp::%clojure-class-cast-exception-of
+       (concatenate 'string op " needs an agent") agent)))
+
+(defun rontolisp::%clojure-agent-check (cell)
+  "Nil while the agent CELL has no error; else the oracle's refusal of a send
+   to a failed agent, a RuntimeException whose cause is the error."
+  (let ((failure (aref (aref cell 3) 2)))
+    (if failure
+        (error
+         (c%e-new '("java.lang.RuntimeException" "java.lang.Exception"
+                    "java.lang.Throwable") "Agent is failed, needs restart" nil
+                  failure)))))
 
 (defun rontolisp::%clojure-agent-send (agent action)
   "send and send-off: ACTION, a function of AGENT's value answering its next,
    queued on AGENT, or held while a transaction or an action runs on this
-   thread; answers AGENT."
-  (let ((cell (rontolisp::%clojure-agent-cell agent))
+   thread; answers AGENT. A failed agent refuses it."
+  (let ((cell (rontolisp::%clojure-agent-cell agent "send"))
         (held rontolisp::%clojure-agent-held))
+    (rontolisp::%clojure-agent-check cell)
     (if held
         (setf (car held) (cons (cons agent action) (car held)))
-        (rontolisp::%clojure-agent-drain cell action))
+        (rontolisp::%clojure-agent-drain agent action))
     agent))
 
-(defun rontolisp::%clojure-agent-drain (cell action)
-  "ACTION (when not nil) queued on CELL; then, unless another thread is running
-   the agent, its queue run on this thread until it is empty."
-  (let ((state (aref cell 3)) (mine nil))
+(defun rontolisp::%clojure-agent-drain (agent action)
+  "ACTION (when not nil) queued on AGENT; then, unless another thread is
+   running the agent or it has failed, its queue run on this thread until it is
+   empty or an action fails."
+  (let* ((cell (car (cdr agent))) (state (aref cell 3)) (mine nil))
     (rontolisp:with-mutex (rontolisp::%clojure-atom-guard)
-      (if action (setf (cdr state) (append (cdr state) (list action))))
-      (if (and (cdr state) (not (car state)))
+      (if action (setf (aref state 1) (append (aref state 1) (list action))))
+      (if (and (aref state 1) (not (aref state 0)) (not (aref state 2)))
           (progn
-            (setf (car state) t)
+            (setf (aref state 0) t)
             (setq mine t))))
     (if mine
         (let ((done nil))
           (unwind-protect (loop
                             (let ((next
                                    (rontolisp:with-mutex (rontolisp::%clojure-atom-guard)
-                                     (if (cdr state)
-                                         (let ((first (car (cdr state))))
-                                           (setf (cdr state) (cdr (cdr state)))
+                                     (if (and (aref state 1)
+                                              (not (aref state 2)))
+                                         (let ((first (car (aref state 1))))
+                                           (setf (aref state 1)
+                                                 (cdr (aref state 1)))
                                            first)
                                          (progn
-                                           (setf (car state) nil)
+                                           (setf (aref state 0) nil)
                                            nil)))))
                               (if next
-                                  (rontolisp::%clojure-agent-act cell next)
+                                  (rontolisp::%clojure-agent-act agent cell
+                                                                 next)
                                   (progn
                                     (setq done t)
                                     (return nil)))))
             (if done
                 nil
                 (rontolisp:with-mutex (rontolisp::%clojure-atom-guard)
-                  (setf (car state) nil))))))))
+                  (setf (aref state 0) nil))))))))
 
-(defun rontolisp::%clojure-agent-act (cell action)
-  "One action of the agent CELL: its answer validated and stored, then the
-   sends it made sent."
-  (let* ((held (list nil))
-         (next
-          (let ((rontolisp::%clojure-agent-held held)
-                (rontolisp::%clojure-stm-log nil))
-            (funcall action (aref cell 0)))))
-    (setf (aref cell 0) (rontolisp::%clojure-stm-validate next (aref cell 2)))
-    (rontolisp::%clojure-agent-release held)))
+(defun rontolisp::%clojure-agent-act (agent cell action)
+  "One action of AGENT, whose cell is CELL: its answer validated and stored,
+   then the sends it made sent. When it fails, the sends are dropped, the error
+   handler is called (its own failure ignored, its sends dispatched at once)
+   and, unless the mode is :continue, the agent keeps the error."
+  (let ((held (list nil)) (failure nil))
+    (handler-case (let ((next
+                         (let ((rontolisp::%clojure-agent-held held)
+                               (rontolisp::%clojure-stm-log nil))
+                           (funcall action (aref cell 0)))))
+                    (setf (aref cell 0)
+                     (rontolisp::%clojure-stm-validate next (aref cell 2))))
+      (error (c) (setq failure c)))
+    (if failure
+        (let* ((state (aref cell 3)) (handler (aref state 3)))
+          (if handler
+              (handler-case (let ((rontolisp::%clojure-agent-held nil)
+                                  (rontolisp::%clojure-stm-log nil))
+                              (funcall handler agent failure))
+                (error () nil)))
+          (if (equal (aref state 4) '(:c%keyword "continue"))
+              nil
+              (rontolisp:with-mutex (rontolisp::%clojure-atom-guard)
+                (setf (aref state 2) failure))))
+        (rontolisp::%clojure-agent-release held))))
 
 (defun rontolisp::%clojure-agent-await-here (agents)
   "await's dispatch: a marker action queued behind each of AGENTS' queued
    actions, and each queue run on this thread unless another thread runs it;
-   answers the markers' boxes, each true once its marker ran."
+   answers the markers' boxes, each true once its marker ran. A failed agent
+   refuses its marker, like the oracle's send of it."
   (let ((marks nil))
     (dolist (agent agents)
-      (let ((cell (rontolisp::%clojure-agent-cell agent)) (seen (list nil)))
-        (rontolisp::%clojure-agent-drain cell
+      (let ((cell (rontolisp::%clojure-agent-cell agent "await"))
+            (seen (list nil)))
+        (rontolisp::%clojure-agent-check cell)
+        (rontolisp::%clojure-agent-drain agent
                                          (lambda (value)
                                            (setf (car seen) t)
                                            value))
-        (setq marks (cons (cons cell seen) marks))))
+        (setq marks (cons (cons agent seen) marks))))
     marks))
 
 (defun rontolisp::%clojure-agent-await (agents)
   "await on a host target: %clojure-agent-await-here, then a wait between
    sleeps of a millisecond for each marker another thread is running, taking
-   the queue over when that thread stopped on a failing action; answers nil."
+   the queue over when that thread stopped. Like the oracle's, it waits on
+   through a failure until restart-agent runs the marker."
   (dolist (mark (rontolisp::%clojure-agent-await-here agents))
     (loop
       (if (car (cdr mark)) (return nil))
       (sleep 0.001)
       (rontolisp::%clojure-agent-drain (car mark) nil))))
+
+(defun rontolisp::%clojure-agent-state (agent op)
+  "The state vector #(running queue error handler mode) of AGENT, the oracle's
+   cast failure of OP for anything but an agent."
+  (aref (rontolisp::%clojure-agent-cell agent op) 3))
+
+(defun rontolisp::%clojure-agent-error (agent)
+  "agent-error: the error AGENT failed on, nil while it has not failed."
+  (aref (rontolisp::%clojure-agent-state agent "agent-error") 2))
+
+(defun rontolisp::%clojure-agent-errors (agent)
+  "agent-errors (deprecated): a list of AGENT's error, nil when it has none."
+  (let ((failure
+         (aref (rontolisp::%clojure-agent-state agent "agent-errors") 2)))
+    (if failure (list failure))))
+
+(defun rontolisp::%clojure-agent-restart (agent value options)
+  "restart-agent: the failed AGENT's value set to VALUE, which its validator
+   must pass, its error cleared and its queue run on this thread -- or dropped
+   when OPTIONS, a key/value list, gives :clear-actions a true value; answers
+   VALUE. An agent that has not failed is the oracle's refusal."
+  (let* ((clear (rontolisp::%clojure-agent-option options "clear-actions"))
+         (cell (rontolisp::%clojure-agent-cell agent "restart-agent"))
+         (state (aref cell 3))
+         (restarted nil))
+    (if (aref state 2)
+        (progn
+          (rontolisp::%clojure-stm-validate value (aref cell 2))
+          (rontolisp:with-mutex (rontolisp::%clojure-atom-guard)
+            (if (aref state 2)
+                (progn
+                  (setf (aref cell 0) value)
+                  (if clear (setf (aref state 1) nil))
+                  (setf (aref state 2) nil)
+                  (setq restarted t))))))
+    (if restarted
+        (progn
+          (rontolisp::%clojure-agent-drain agent nil)
+          value)
+        (rontolisp::%clojure-runtime-exception
+         "Agent does not need a restart"))))
+
+(defun rontolisp::%clojure-agent-clear-errors (agent)
+  "clear-agent-errors (deprecated): restart-agent of AGENT over its own value."
+  (rontolisp::%clojure-agent-restart agent
+   (aref (rontolisp::%clojure-agent-cell agent "clear-agent-errors") 0) nil))
+
+(defun rontolisp::%clojure-agent-set-error-handler (agent handler)
+  "set-error-handler!: HANDLER, a function of the agent and the error, called
+   when an action of AGENT fails; answers nil."
+  (setf (aref (rontolisp::%clojure-agent-state agent "set-error-handler!") 3)
+        (if (rontolisp::%clojure-truthy handler) handler nil))
+  nil)
+
+(defun rontolisp::%clojure-agent-set-error-mode (agent mode)
+  "set-error-mode!: AGENT's mode, :continue going on past a failing action and
+   anything else keeping its error; answers nil."
+  (setf (aref (rontolisp::%clojure-agent-state agent "set-error-mode!") 4) mode)
+  nil)
+
+(defun rontolisp::%clojure-agent-error-handler (agent)
+  "error-handler: AGENT's error handler, nil for none."
+  (aref (rontolisp::%clojure-agent-state agent "error-handler") 3))
+
+(defun rontolisp::%clojure-agent-error-mode (agent)
+  "error-mode: AGENT's mode keyword."
+  (aref (rontolisp::%clojure-agent-state agent "error-mode") 4))
 
 ;;;; Delays: delay, force, deref and realized? over a memo cell.
 ;;

@@ -1,8 +1,8 @@
 # agent
 
-`(agent v)` / `(agent v :validator validate-fn)`
+`(agent v & options)`、オプションは `:validator f`・`:error-handler h`・`:error-mode m`・`:meta m`
 
-agent は値を保持し、`send`/`send-off` で送ったアクションが送った順に1つずつその値を更新します。読むのは `deref`/`@` です。スレッドプールはありません。アイドルの agent への送信はそのアクションを送信側のスレッドで走らせてから戻り、別のスレッドが走らせている agent への送信はそのスレッドのキューに加わります。`:validator` は初期値と各アクションの答えを受け入れる必要があります。アクションの実行中 `*agent*` はその agent に束縛され、外側では `nil` です。`future`/`promise` は名前で拒否されたままです。
+agent は値を保持し、`send`/`send-off` で送ったアクションが送った順に1つずつその値を更新します。読むのは `deref`/`@` です。スレッドプールはありません。アイドルの agent への送信はそのアクションを送信側のスレッドで走らせてから戻り、別のスレッドが走らせている agent への送信はそのスレッドのキューに加わります。`:validator` は初期値と各アクションの答えを受け入れる必要があります。失敗したアクションは、`:error-handler` がないときの既定である `:fail` モードでは agent を失敗状態にします（`agent-error`、`restart-agent`）。`:error-handler` があると既定は `:continue` です。オプションはオラクルの `(apply hash-map options)` 同様に読まれ、未知のキーは無視され、値のないキーは拒否されます。アクションの実行中 `*agent*` はその agent に束縛され、外側では `nil` です。`future`/`promise` は名前で拒否されたままです。
 
 ```clojure
 (def a (agent 0))

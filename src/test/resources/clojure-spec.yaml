@@ -4450,6 +4450,99 @@ cases:
       :not-an-agent
       Can't await in agent action
       nil 0
+  - name: a-failing-action-fails-the-agent-until-restart-agent
+    # Oracle-identical (clj 1.12.6, measured 2026-10-11 with a sleep after each failing
+    # send): a failing action leaves the agent failed in the default :fail mode -- send
+    # answers the agent, agent-error answers the error, and send, await and a send inside
+    # a transaction refuse with the error as the cause until restart-agent, which runs the
+    # queue kept behind the failure or drops it with :clear-actions. An error handler is
+    # called with the agent and the error (its own failure ignored) and makes :continue
+    # the default mode; options are read like the oracle's (apply hash-map options).
+    source: |
+      (def fa (agent 1 :validator pos?))
+      (println (= fa (send fa dec)))
+      (println @fa (instance? IllegalStateException (agent-error fa)) (ex-message (agent-error fa)))
+      (println (try (send fa inc) (catch RuntimeException e [(ex-message e) (ex-message (ex-cause e))])))
+      (println (try (await fa) (catch RuntimeException e (ex-message e))))
+      (println (error-mode fa) (error-handler fa) (count (agent-errors fa)))
+      (println (try (restart-agent fa -5) (catch IllegalStateException e (ex-message e))) (some? (agent-error fa)) @fa)
+      (println (restart-agent fa 5) @fa (agent-error fa) (agent-errors fa))
+      (println (try (restart-agent fa 6) (catch RuntimeException e (ex-message e))))
+      (send fa inc)
+      (await fa)
+      (println @fa)
+      (def fs (agent 0 :error-handler (fn [ag e] (send ag + 100)) :error-mode :fail))
+      (send fs (fn [_] (throw (Exception. "f3"))))
+      (println @fs (ex-message (agent-error fs)))
+      (println (restart-agent fs 1))
+      (await fs)
+      (println @fs)
+      (def fc (agent 0 :error-handler (fn [ag e] (send ag + 100)) :error-mode :fail))
+      (send fc (fn [_] (throw (ex-info "boom" {:x 1}))))
+      (println (ex-data (agent-error fc)) (restart-agent fc 7 :clear-actions true))
+      (await fc)
+      (println @fc)
+      (def flog (atom []))
+      (def fh (agent 0 :error-handler (fn [ag e] (swap! flog conj [(= ag fh) (ex-message e)]))))
+      (send fh (fn [_] (throw (Exception. "e1"))))
+      (send fh inc)
+      (await fh)
+      (println @fh @flog (agent-error fh) (error-mode fh))
+      (def fd (agent 0 :error-mode :continue))
+      (send fd (fn [_] (throw (Exception. "e2"))))
+      (send fd inc)
+      (await fd)
+      (println @fd (agent-error fd) (error-handler fd))
+      (def fe (agent 0))
+      (println (set-error-mode! fe :continue) (set-error-handler! fe (fn [ag ex] (swap! flog conj :h))) (error-mode fe) (fn? (error-handler fe)))
+      (send fe (fn [_] (throw (Exception. "e3"))))
+      (await fe)
+      (println @fe (count @flog))
+      (def fi (agent 1 :error-handler (fn [ag ex] (throw (Exception. "inner")))))
+      (send fi (fn [_] (throw (Exception. "e6"))))
+      (send fi inc)
+      (await fi)
+      (println @fi)
+      (def fq (agent 0))
+      (send fq (fn [v] (send fq + 10) (throw (Exception. "f1"))))
+      (println @fq (ex-message (agent-error fq)))
+      (println (try (dosync (send fq inc)) (catch RuntimeException e (ex-message e))))
+      (println (try (agent 1 :error-mode) (catch IllegalArgumentException e (ex-message e))))
+      (println (error-mode (agent 1 :bogus 2)) (error-mode (agent 1 :error-handler nil)) (error-mode (agent 1 :error-mode false)))
+      (println (try (clear-agent-errors (agent 1)) (catch RuntimeException e (ex-message e))))
+      (println (clear-agent-errors fq) @fq (agent-error fq))
+      (println (try (agent-error (atom 1)) (catch ClassCastException e :not-an-agent)))
+      (println (map error-mode [(agent 1) (agent 1 :error-mode :continue)]) @(apply agent 3 [:validator odd?]))
+      (println (try (restart-agent fq 1 :clear-actions) (catch IllegalArgumentException e (ex-message e))))
+    expected: |
+      true
+      1 true Invalid reference state
+      [Agent is failed, needs restart Invalid reference state]
+      Agent is failed, needs restart
+      :fail nil 1
+      Invalid reference state true 1
+      5 5 nil nil
+      Agent does not need a restart
+      6
+      0 f3
+      1
+      101
+      {:x 1} 7
+      7
+      1 [[true e1]] nil :continue
+      1 nil nil
+      nil nil :continue true
+      0 2
+      2
+      0 f1
+      Agent is failed, needs restart
+      No value supplied for key: :error-mode
+      :fail :fail :fail
+      Agent does not need a restart
+      0 0 nil
+      :not-an-agent
+      (:fail :continue) 3
+      No value supplied for key: :clear-actions
   - name: binding-rebinds-dynamic-vars
     # The concurrency.clj slice (without the sleeps): ^:dynamic vars rebind with
     # dynamic extent -- a callee sees the binding, the root returns after -- while

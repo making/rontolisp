@@ -22,6 +22,12 @@ atom は全操作が読み書きするタグ付きセルです。各操作は新
 | `send` | `(do (def a (agent 0)) @(send a + 5))` | `5` |
 | `send-off` | `(do (def a (agent 0)) @(send-off a + 5))` | `5` |
 | `await` | `(do (def a (agent 0)) (await a))` | `nil` |
+| `agent-error` | `(agent-error (agent 0))` | `nil` |
+| `restart-agent` | `(do (def a (agent 0 :validator pos?)) (send a dec) (restart-agent a 5))` | `5` |
+| `set-error-handler!` | `(set-error-handler! (agent 0) println)` | `nil` |
+| `set-error-mode!` | `(set-error-mode! (agent 0) :continue)` | `nil` |
+| `error-handler` | `(error-handler (agent 0))` | `nil` |
+| `error-mode` | `(error-mode (agent 0))` | `:fail` |
 | `shutdown-agents` | `(shutdown-agents)` | `nil` |
 | `delay` | `(deref (delay (+ 1 2)))` | `3` |
 | `force` | `(force (delay 4))` | `4` |

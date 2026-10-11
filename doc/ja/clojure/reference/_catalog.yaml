@@ -376,6 +376,12 @@ categories:
       - { slug: send, name: "send" }
       - { slug: send-off, name: "send-off" }
       - { slug: await, name: "await" }
+      - { slug: agent-error, name: "agent-error" }
+      - { slug: restart-agent, name: "restart-agent" }
+      - { slug: set-error-handler-bang, name: "set-error-handler!" }
+      - { slug: set-error-mode-bang, name: "set-error-mode!" }
+      - { slug: error-handler, name: "error-handler" }
+      - { slug: error-mode, name: "error-mode" }
       - { slug: shutdown-agents, name: "shutdown-agents" }
       - { slug: delay, name: "delay" }
       - { slug: force, name: "force" }

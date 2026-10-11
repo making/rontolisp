@@ -426,9 +426,9 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   committed values.
 - Agents have no thread pool: a send to an idle agent runs its action on the
   sender's thread before `send` returns, and one to an agent another thread is
-  running joins that thread's queue. A failing action signals on the thread
-  running it and the agent stays usable (no `agent-error`, `restart-agent` or
-  error modes; the oracle fails the agent). An agent prints unreadably,
+  running joins that thread's queue; likewise `restart-agent` runs the queue kept
+  behind a failure on its own thread, and an error handler runs on the thread
+  running the failing action. An agent prints unreadably,
   `#<Atom ...>`, not the oracle's object; `shutdown-agents` answers `nil`, and
   `*agent*` is bound only while an action runs (`nil` outside one, where the
   oracle leaves it unbound).
