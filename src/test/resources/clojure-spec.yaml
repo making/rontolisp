@@ -5485,6 +5485,20 @@ cases:
       123
       a\"b
       a\nb
+  - name: a-class-escape-inside-brackets-matches-its-class
+    # \s \S \d \D \w \W as members of a bracket class, negated or not, test their
+    # class like the oracle (clj 1.12.6); until 2026-10-11 such a member matched
+    # nothing, so [,\s]+ found only commas and [^\s]+ took the spaces too.
+    source: |
+      (prn (re-find #"[,\s]+" "a, \tb") (re-find #"[\d]+" "ab123c") (re-find #"[\w-]+" "!foo-bar!") (re-find #"[^\s]+" "  xy z"))
+      (prn (re-find #"[\S]+" "  xy z") (re-find #"[\D]+" "12ab3") (re-find #"[^\w]+" "ab!?cd") (re-find #"[\W\d]+" "ab!1?cd"))
+      (prn (re-seq #"[\s,]+" "a ,b,,  c") (clojure.string/replace "a b\tc" #"[\s]" "_"))
+      (prn (re-matches #"[a-c\d]+" "ab12c") (re-matches #"[^a-c\d]+" "xyz") (re-matches #"[^a-c\d]+" "x1z"))
+    expected: |
+      ", \t" "123" "foo-bar" "xy"
+      "xy" "ab" "!?" "!1?"
+      (" ," ",,  ") "a_b_c"
+      "ab12c" "xyz" nil
   - name: def-after-defn-memoize-captures-function
     # (def p (memoize p)) after a (defn p ...) captures the function cell: the
     # value lowers against the OLD FUNCTION binding (#'c%p), not the

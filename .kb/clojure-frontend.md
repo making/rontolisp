@@ -4370,7 +4370,10 @@ over string primitives every backend compiles: no per-backend code (a host
 nothing otherwise. Greedy, reluctant and possessive quantifiers and backreferences work;
 lookarounds, named groups, inline flags, POSIX classes, `&&`, `\G` signal `unsupported
 regex` at construction. Patterns print `#"..."`, matchers `#<Matcher source>`; `class`
-answers `:pattern`/`:matcher`.
+answers `:pattern`/`:matcher`. A `\s`/`\d`/`\w` member of a bracket class (or its negation)
+is a nested `(:cls negated items)` item `%clojure-re-item-test` tests through its items list;
+until 2026-10-11 it read the node's tail instead and matched nothing (`[,\s]+` found only
+commas, `[^\s]+` took spaces), clojure-spec `a-class-escape-inside-brackets-matches-its-class`.
 
 **`nth` of a matcher reads `Matcher.group(n)`** (oracle-checked clj 1.12.6, 2026-10-05): the
 last match's group `n`, `nil` for a group that took no part, `IllegalStateException` ("No match

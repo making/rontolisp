@@ -5787,9 +5787,10 @@
         ((eq item :d) (rontolisp::%clojure-re-digit-code-p code))
         ((and (consp item) (eq (car item) :r))
          (and (<= (car (cdr item)) code) (<= code (car (cdr (cdr item))))))
+        ;; a \s \d \w member (or its negation) is a (:cls negated items) node
         ((and (consp item) (eq (car item) :cls))
-         (rontolisp::%clojure-re-cls-test (car (cdr item)) (cdr (cdr item))
-                                          code))
+         (rontolisp::%clojure-re-cls-test (car (cdr item))
+                                          (car (cdr (cdr item))) code))
         (t nil)))
 
 (defun rontolisp::%clojure-re-any-item (items code)
