@@ -323,7 +323,7 @@ public final class JavaImplementationPrograms {
 			(row (lambda () (sorted* (lambda (a b) "x"))))
 			(row (lambda () (let ((l (java:new "java.util.ArrayList")))
 			                  (dolist (x (list 3 1 2)) (java:call l "add" x))
-			                  (java:static "java.util.Collections" "sort" l (lambda (a b) (< a b)) :functional)
+			                  (java:static "java.util.Collections" "sort" l (lambda (a b) (if (< a b) t (quote |false|))) :functional)
 			                  (java:call l "toString"))))
 			""";
 
@@ -533,6 +533,16 @@ public final class JavaImplementationPrograms {
 			               (java:call d "readShort") (java:call d "readInt") (java:call d "readLong")
 			               (java:call d "readFloat") (java:call d "readDouble") (java:call d "readLine")
 			               (calls)))))
+			(row (lambda ()
+			       (let* ((h #'through)
+			              (value (java:reify "java.util.Comparator" :value 'v "compare" (lambda (a b) (if (< a b) t (quote |false|)))
+			                       :functional :java-false :through h))
+			              (several (java:reify '("java.util.Comparator" "java.lang.Runnable") "compare"
+			                         (lambda (a b) (if (< a b) t (quote |false|))) :functional :java-false :through h))
+			              (lone (java:reify "java.util.Comparator" "compare" (lambda (a b) (if (< a b) t (quote |false|)))
+			                      :functional :java-false :through h)))
+			         (list (java:call value "compare" 1 2) (java:call several "compare" 1 2)
+			               (java:call lone "compare" 1 2) (java:call lone "compare" 2 1) (calls)))))
 			""";
 
 	/** What {@link #THROUGH} prints. */
@@ -542,7 +552,8 @@ public final class JavaImplementationPrograms {
 			("<1>" "<(apply 5)>" "<(toString)>" ((:OBJECT NIL) (:OBJECT NIL) (:OBJECT NIL)))
 			("[3, 2, 1]" ((NIL T) (NIL T) (NIL T) (NIL T) (NIL T) (NIL T)))
 			(T "[1, 2]" NIL NIL)
-			(T 7 #\\a 7 7 7 1.5 1.5 "s" ((:BOOLEAN NIL) (:BYTE NIL) (:CHAR NIL) (:SHORT NIL) (:INT NIL) (:LONG NIL) (:FLOAT NIL) (:DOUBLE NIL) (:OBJECT NIL)))""";
+			(T 7 #\\a 7 7 7 1.5 1.5 "s" ((:BOOLEAN NIL) (:BYTE NIL) (:CHAR NIL) (:SHORT NIL) (:INT NIL) (:LONG NIL) (:FLOAT NIL) (:DOUBLE NIL) (:OBJECT NIL)))
+			(-1 -1 -1 1 ((NIL NIL) (NIL NIL) (NIL NIL) (NIL NIL) (NIL NIL)))""";
 
 	/**
 	 * A function where {@code java.lang.Object} is expected. After {@code :functional}

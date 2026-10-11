@@ -368,6 +368,40 @@ class JavaBridgeTemplateParityTest {
 			.isEqualTo(am.ik.rontolisp.compiler.JavaImplementation.FUNCTION_OBJECT_REFUSAL);
 	}
 
+	// A java:reify's compare function is read as AFunction.compare under the same rule
+	// in the bridge and in the shared implementation: after :functional and
+	// :java-false, whichever interface listed is the Comparator.
+	@Test
+	void theTemplateReadsAReifiedComparisonAsTheSharedRuleDoes() throws Exception {
+		int byArguments = (int) Objects.requireNonNull(constant("FUNCTIONS_BY_ARGUMENTS"));
+		int ending = byArguments | (int) Objects.requireNonNull(constant("FUNCTIONS_JAVA_FALSE"));
+		for (List<String> names : List.of(List.of("java.util.Comparator"),
+				List.of("java.util.Comparator", "java.lang.Runnable"),
+				List.of("java.lang.Runnable", "java.util.Comparator"), List.of("java.lang.Runnable"),
+				List.of("java.util.function.ToIntBiFunction"))) {
+			String designator = names.contains("java.util.Comparator") ? "compare"
+					: names.contains("java.lang.Runnable") ? "run" : "applyAsInt";
+			List<Class<?>> listed = new ArrayList<>();
+			List<am.ik.rontolisp.compiler.JavaType> types = new ArrayList<>();
+			for (String name : names) {
+				listed.add(Class.forName(name));
+				types.add(ReflectiveJavaClasses.of(Class.forName(name)));
+			}
+			am.ik.rontolisp.compiler.JavaImplementation shared = am.ik.rontolisp.compiler.JavaImplementations
+				.reify(types, List.of(designator), ReflectiveJavaClasses.instance())
+				.withMarkers(new am.ik.rontolisp.compiler.JavaMarkers(true, true, false));
+			boolean sharedReads = shared.slots().stream().anyMatch(shared::readsComparison);
+			Class<?>[] specific = (Class<?>[]) Objects
+				.requireNonNull(invoke("mostSpecific", new Class<?>[] { List.class }, listed));
+			assertThat(invoke("readsComparison", new Class<?>[] { Class[].class, int.class }, specific, ending))
+				.as("%s", names)
+				.isEqualTo(sharedReads);
+			assertThat(invoke("readsComparison", new Class<?>[] { Class[].class, int.class }, specific, byArguments))
+				.as("%s without :java-false", names)
+				.isEqualTo(false);
+		}
+	}
+
 	// How Java takes a function's answer, as a :through function is handed it: both
 	// copies name every return type alike, and a comparison read as AFunction.compare
 	// none.

@@ -755,12 +755,27 @@ final class JavaBridgeTemplate {
 		}
 		// Ending in :functional and :java-false, a Comparator's compare function may
 		// answer a boolean (mirrors compiler/JavaImplementation.readsComparison).
-		boolean comparison = javaFalse && (markers & FUNCTIONS_MODE) == FUNCTIONS_BY_ARGUMENTS && interfaces.length == 1
-				&& "java.util.Comparator".equals(interfaces[0].getName());
+		boolean comparison = readsComparison(interfaces, markers);
 		if (standsFor) {
-			return standIn(interfaces, slots, functions, javaFalse, octets, false, value, standInClass, through);
+			return standIn(interfaces, slots, functions, javaFalse, octets, comparison, value, standInClass, through);
 		}
 		return implementation(interfaces, false, slots, functions, javaFalse, octets, comparison, through);
+	}
+
+	// Whether a java:reify of these interfaces ending in these markers reads its
+	// Comparator's compare function's answer as Clojure's AFunction.compare: after
+	// :functional and :java-false, whichever of the interfaces is the Comparator,
+	// :value or not (mirrors compiler/JavaImplementation.readsComparison).
+	static boolean readsComparison(Class<?>[] interfaces, int markers) {
+		if ((markers & FUNCTIONS_JAVA_FALSE) == 0 || (markers & FUNCTIONS_MODE) != FUNCTIONS_BY_ARGUMENTS) {
+			return false;
+		}
+		for (Class<?> iface : interfaces) {
+			if ("java.util.Comparator".equals(iface.getName())) {
+				return true;
+			}
+		}
+		return false;
 	}
 
 	/**

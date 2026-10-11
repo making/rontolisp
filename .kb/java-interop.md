@@ -352,7 +352,7 @@ Package `java` (`LispNames.JAVA_PKG`, `PackageRegistry`; does NOT use `cl`): `ja
   `JavaImplementation.standsForItsFunction` / `isFunctionObjectCall`, `FUNCTION_INTERFACES`,
   `StandIn.FUNCTION`): one implementation of all three by the function's arguments -- `run` void,
   `call` an object, `compare` read as `AFunction.compare` (`readsComparison` takes an
-  implementation including `Comparator`) -- standing for the function, named
+  implementation including `Comparator`, with `:value` or several interfaces too; the bridge's `javaReify` mirrors it by `readsComparison(Class[], int)`) -- standing for the function, named
   `clojure.lang.AFunction` (`FUNCTION_CLASS`), so two such objects of one function made at two
   calls (two shells: a shape keyed by its markers) are equal, as one fn is one object, and so
   are one and an identity `java:handle` of the function under that class (the Clojure front
