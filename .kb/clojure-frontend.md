@@ -3703,9 +3703,9 @@ as itself.
   is the view's `AbstractMap` rule (the oracle's `mapEquals`), so a face and a plain map of its
   entries are equal in a HashSet both ways. Measured 2026-10-10 against clj 1.12.6, interpreter
   and JVM: before, the todo's two rows (`RontoJavaMapView cannot be cast to ...Comparable`, `No
-  matching constructor for java.lang.Thread`); after, oracle-identical. Not this rule's: `(.equals
-  rec {:a 1})` from Clojure lowers to `=` (false; the oracle's Map `equals` true) with or without
-  a face (`.todo/f31`).
+  matching constructor for java.lang.Thread`); after, oracle-identical. `(.equals rec {:a 1})`
+  from Clojure is the value-method row's `%clojure-java-equal` ("Java interop"), true as the
+  oracle's, with or without a face.
 - A Clojure seq iterator passed straight to a member (not answered from a face's `iterator`) is
   still an identity handle.
 - Measured 2026-10-10 against clj 1.12.6, interpreter and JVM: before, `(Thread. (Task.))` was
@@ -3798,6 +3798,19 @@ The `java:` surface (`.kb/java-interop.md`); interpreter and JVM only -- wasm co
   `No matching field found: first for class ...`). The lowering fixes the words;
   `%clojure-no-method` appends the class. Measured 2026-10-04 vs `clj` 1.12.6: clojure-spec
   `instance-calls-on-collections-keywords-symbols-and-ratios` oracle-identical.
+  `.equiv` is `=`; `.equals` is the oracle's `Util.equals`, `%clojure-java-equal` (2026-10-11):
+  a type's own `equals` (a collection argument too), any other deftype/reify identity, a map,
+  sorted map or record against another of those by `mapEquals` (count, each key found by the
+  other's own lookup -- `=` or its comparator --, values by `%clojure-java-equal`; the record tag
+  ignored), two sequentials member by member by `%clojure-java-equal`, a double only a double of
+  its bits (`Double.equals`), anything else `%clojure-equal`. Measured vs clj 1.12.6 on all four
+  backends: before, `(.equals (->Q 1) {:a 1})`, its mirror, two record types, `[0.0]`/`[-0.0]`,
+  `[##NaN]` and nested records differed; after, identical (clojure-spec
+  `equals-of-a-clojure-value-is-its-class-s-java-equals-not-equiv`). Not reachable: `(.equals 1
+  1N)` is `false` in the oracle and `true` here, since `1N` reads as the integer `1` (the
+  `N`/`M` literal rule); a number or character receiver is no value receiver, so it keeps
+  `java:call` (the host's `Long`/`Double.equals`, right on the interpreter and the JVM, a
+  call-time error on wasm, like every method of a number there).
   A method no row names at the site's arity (f11, 2026-10-10; `unmappedArm`, in `valueArm` and
   as `boundArm`'s fallback when no row has the arity) reaches the value's Java object where the
   oracle's class has it through a JDK interface: `HOST_KINDS` pairs a kind test with the JDK

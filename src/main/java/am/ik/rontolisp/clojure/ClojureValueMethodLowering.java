@@ -268,9 +268,11 @@ final class ClojureValueMethodLowering {
 		row("assoc", 2, arm(List.of("map?", "indexed?"), core("assoc", R, A, B)));
 		row("without", 1, arm(List.of("map?"), core("dissoc", R, A)));
 		row("disjoin", 1, arm(List.of("set?"), core("disj", R, A)));
-		for (String equal : List.of("equiv", "equals")) {
-			row(equal, 1, arm(List.of(), core("=", R, A)));
-		}
+		row("equiv", 1, arm(List.of(), core("=", R, A)));
+		// the class's Java equals, which parts from = (a record equals a map of its
+		// entries, a double only a double of its bits)
+		row("equals", 1, new Arm(List.of(), ctx -> ctx.booleanAnswer(ClojureLowerUtil
+			.list(new LispSymbol("RONTOLISP::%CLOJURE-JAVA-EQUAL"), ctx.localSym(RECV), ctx.localSym(argName(0))))));
 		row("compareTo", 1, arm(List.of("indexed?", "ident?", "ratio?", INSTANT, UUID), core("compare", R, A)));
 	}
 

@@ -6836,6 +6836,28 @@ cases:
       No matching method foo found taking 1 args for class clojure.lang.Keyword
       No matching field found: hashCode2 for class clojure.lang.PersistentVector
       [:uoe nil]
+  - name: equals-of-a-clojure-value-is-its-class-s-java-equals-not-equiv
+    # .equals is the class's Java equals, .equiv is =. They part where a record
+    # meets a map or another record (APersistentMap.mapEquals ignores the type:
+    # keys found by the other map's lookup, values by equals), where doubles meet
+    # inside a collection (Double.equals: 0.0 is not -0.0, NaN is NaN) and where
+    # a type overriding equals is a member. Measured against clj 1.12.6.
+    source: |
+      (defrecord EqQ [a])
+      (defrecord EqR [a])
+      (deftype EqT [a])
+      (deftype EqU [a] Object (equals [_ o] true) (hashCode [_] 1))
+      (println (.equals (->EqQ 1) {:a 1}) (.equals {:a 1} (->EqQ 1)) (.equals (->EqQ 1) (->EqR 1)) (.equals (->EqQ 1) {:a 1 :b 2}) (.equals (assoc (->EqQ 1) :b 2) {:a 1 :b 2}))
+      (println (= (->EqQ 1) {:a 1}) (.equiv (->EqQ 1) {:a 1}) (.equiv {:a 1} (->EqQ 1)) (.equiv [0.0] [-0.0]))
+      (println (.equals [0.0] [-0.0]) (.equals [##NaN] [##NaN]) (= [0.0] [-0.0]) (.equals {:a 0.0} {:a -0.0}) (.equals {0.0 :a} {-0.0 :a}) (.equals #{0.0} #{-0.0}))
+      (println (.equals [(->EqQ 1)] [{:a 1}]) (.equals {:k (->EqQ 1)} {:k {:a 1}}) (.equals #{(->EqQ 1)} #{{:a 1}}) (.equals (map identity [1 2]) [1 2]) (.equals '(1 2) [1 2]) (.equals [1] [1.0]))
+      (println (.equals (sorted-map :a 1) (->EqQ 1)) (.equals (->EqQ 1) (sorted-map :a 1)) (.equals (EqT. 1) (EqT. 1)) (.equals (EqU. 1) 2) (.equals [(EqU. 1)] [2]) (.equals (first {:a 1}) [:a 1]))
+    expected: |
+      true true true false true
+      false false false true
+      false true true false true true
+      true true false true true false
+      true true false true true true
   - name: instance-calls-on-a-fn-are-its-ifn-callable-runnable-and-comparator-methods
     # A fn is the oracle's AFunction: IFn's invoke and applyTo (for any ifn? value),
     # Callable's call, Runnable's run and Comparator's compare, whose boolean answer

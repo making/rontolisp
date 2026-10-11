@@ -7,7 +7,8 @@ uses as `(:C%RECORD tag fields table class)`, so the map verbs read through it
 (`get`/`contains?`/`keys`/`vals`/`count`/`seq` read the entries; `assoc`/`update`/
 `conj`/`merge` rebuild the table and keep the tag; `dissoc` keeps the record while
 every declared field is still present and drops to a plain map otherwise, like the
-oracle). `=` compares two records by tag plus entries and never equals a plain map.
+oracle). `=` compares two records by tag plus entries and never equals a plain map;
+`.equals` ignores the tag, like the oracle's `mapEquals`.
 Two constructors lower to mangled functions: `->Name` positionally (a wrong count
 signals) and `map->Name` from a map (missing fields default to `nil`, extra entries
 kept); `(Name. ...)` rewrites to `->Name`. Inline method bodies see the fields as

@@ -10,7 +10,10 @@ answers its `str` spelling, on every backend. A collection, keyword, symbol, rat
 no host object either: its common `clojure.lang`/`java.util` methods (`.count`, `.size`,
 `.isEmpty`, `.get`, `.nth`, `.valAt`, `.contains`, `.containsKey`, `.indexOf`, `.getName`,
 `.getNamespace`, `.numerator`, `.deref`, ...) answer through the matching core function on
-every backend. Another method of a JDK interface the oracle's class implements (`.toArray`,
+every backend. `.equiv` is `=`, and `.equals` is the oracle's Java `equals`: a record equals a
+map, sorted map or other record of its entries, and doubles inside a collection compare by
+`Double.equals` (`(.equals [0.0] [-0.0])` false, `(.equals [##NaN] [##NaN])` true). Another
+method of a JDK interface the oracle's class implements (`.toArray`,
 `.containsAll`, `.entrySet`, `.stream`, `.sort`) is called on the read-only Java object the value
 crosses to Java as, on the interpreter and the JVM, and refused by name on the wasm backends. A
 method its class lacks is refused in the oracle's words (`No matching field found: toArray for

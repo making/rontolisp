@@ -2437,6 +2437,80 @@
    ;; Clojure one reach the host-object family's arm
    (t (or (equal a b) (rontolisp::%clojure-host-equal-p a b)))))
 
+;; (.equals a b) of a Clojure value A, T or NIL: the oracle's Util.equals, A's
+;; class's equals, where it parts from =. A type overriding equals answers it
+;; (a collection argument too) and any other deftype or reify is identity; a
+;; map or record equals a map or record of its entries whatever either type
+;; (APersistentMap.mapEquals: each key of A found by B's own lookup, the values
+;; by equals); a sequential equals a sequential of members equal by equals; a
+;; double equals only a double of its bits (Double.equals: 0.0 is not -0.0, NaN
+;; is NaN). Anything else, and a pair of other kinds, by =.
+(defun rontolisp::%clojure-java-equal (a b)
+  (cond ((rontolisp::%clojure-equals-p a)
+         (or (eq a b)
+             (rontolisp::%clojure-truthy
+              (funcall (rontolisp::%clojure-interface-entry a "equals") a b))))
+        ((rontolisp::%clojure-typed-opaque-p a) (eq a b))
+        ((and (rontolisp::%clojure-is-map a) (rontolisp::%clojure-is-map b))
+         (rontolisp::%clojure-map-java-equal a b))
+        ((and (rontolisp::%clojure-sequential-p a)
+              (rontolisp::%clojure-sequential-p b))
+         (rontolisp::%clojure-seq-java-equal a b))
+        ((floatp a)
+         (and (floatp b)
+              (if (/= a a)
+                  (/= b b)
+                  (eql (%ieee754-double-bits a) (%ieee754-double-bits b)))))
+        (t (rontolisp::%clojure-equal a b))))
+
+;; mapEquals of the maps or records A and B: one count, and every key of A held
+;; by B (found by B's comparator when sorted, by = otherwise) under a value
+;; %clojure-java-equal to A's.
+(defun rontolisp::%clojure-map-java-equal (a b)
+  (and (= (rontolisp::%clojure-set-count a) (rontolisp::%clojure-set-count b))
+       (let ((miss (list nil)) (ok t))
+         (dolist (kv (rontolisp::%clojure-kv-pairs a ".equals") ok)
+           (if ok
+               (let ((w
+                      (if (rontolisp::%clojure-record-p b)
+                          (let ((table (car (cdr (cdr (cdr b))))))
+                            (gethash
+                             (rontolisp::%clojure-table-key (car kv) table)
+                             table miss))
+                          (rontolisp::%clojure-sorted-lookup b (car kv) miss))))
+                 (if (or (eq w miss)
+                         (not (rontolisp::%clojure-java-equal (cdr kv) w)))
+                     (setq ok nil))))))))
+
+;; Two sequentials member by member through %clojure-java-equal, the oracle's
+;; APersistentVector.doEquals and ASeq.equals: two vectors read in place, any
+;; other pair through the seq view.
+(defun rontolisp::%clojure-seq-java-equal (a b)
+  (if (and (vectorp a) (vectorp b))
+      (and (eql (length a) (length b))
+           (let ((same t))
+             (dotimes (i (length a))
+               (if (and same
+                        (not
+                         (rontolisp::%clojure-java-equal (aref a i)
+                                                         (aref b i))))
+                   (setq same nil)))
+             same))
+      (let ((x (rontolisp::%clojure-seq a))
+            (y (rontolisp::%clojure-seq b))
+            (same t)
+            (done nil))
+        (do ()
+            (done same)
+          (cond ((and (null x) (null y)) (setq done t))
+                ((or (null x) (null y)
+                     (not (rontolisp::%clojure-java-equal (car x) (car y))))
+                 (setq same nil)
+                 (setq done t))
+                (t
+                 (setq x (rontolisp::%clojure-seq (cdr x)))
+                 (setq y (rontolisp::%clojure-seq (cdr y)))))))))
+
 ;; = of a host collection and a Clojure one, the oracle's pcequiv: Util.equiv
 ;; hands a pair holding a Clojure collection to that collection's equiv, which
 ;; takes a java.util.List, Map or Set of its kind. The two functions are the
