@@ -230,7 +230,10 @@ final class ClojureValueClasses {
 
 		/** {@code clojure.lang.PersistentHashSet$TransientHashSet}. */
 		TRANSIENT_SET(concat(List.of("clojure.lang.PersistentHashSet$TransientHashSet", "clojure.lang.ATransientSet",
-				"clojure.lang.ITransientSet"), TRANSIENT_SUPERS));
+				"clojure.lang.ITransientSet"), TRANSIENT_SUPERS)),
+
+		/** {@code clojure.lang.Delay} (read off clj 1.12.6, 2026-10-11). */
+		DELAY(concat(List.of("clojure.lang.Delay", "clojure.lang.IDeref", "clojure.lang.IPending"), SUPPLIERS));
 
 		/** The classes, the value's own first where it has one. */
 		final Set<String> classes;

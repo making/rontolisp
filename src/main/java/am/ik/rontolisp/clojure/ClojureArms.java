@@ -156,6 +156,18 @@ public final class ClojureArms {
 		return Set.copyOf(out);
 	}
 
+	/**
+	 * What may set a print flag away from its root: a read of {@code *print-length*},
+	 * {@code *print-level*} or {@code *print-readably*}, and the store of a
+	 * {@code print-method}, whose method runs with {@code *print-readably*} bound
+	 * ({@link Family#PRINT_METHOD}).
+	 */
+	private static Set<String> printFlagProducers() {
+		Set<String> out = new HashSet<>(ClojureCoreSpecials.PRINT_FLAGS);
+		out.add(ClojureDispatchLowering.PRINT_METHOD_ROW);
+		return Set.copyOf(out);
+	}
+
 	private static Set<String> streamProducers() {
 		Set<String> out = new HashSet<>(Set.of("RONTOLISP::%CLOJURE-OUT", "RONTOLISP::%CLOJURE-IN",
 				"RONTOLISP::%CLOJURE-ERR", "RONTOLISP::%CLOJURE-STRING-WRITER", "RONTOLISP::%CLOJURE-STRING-READER",
@@ -429,6 +441,17 @@ public final class ClojureArms {
 				Set.of(), ClojureTransientLowering.ALIASES, ClojureTransientLowering.PRODUCERS, Set.of()),
 
 		/**
+		 * A delay, which {@code force}, {@code deref}, {@code realized?}, {@code delay?},
+		 * {@code class}, {@code instance?}, the printer and {@code str} read: only
+		 * {@code delay} makes one ({@link ClojureLazyLowering#MAKE_DELAY}). The aliases
+		 * are {@code force} and {@code delay?}'s test, each to {@code progn}: the value
+		 * itself and the {@code (progn value false)} every value answers without delays.
+		 */
+		DELAY("delay", Set.of(ClojureLazyLowering.DELAY_P), Set.of(),
+				Map.of(ClojureLazyLowering.FORCE, "PROGN", ClojureLazyLowering.IS_DELAY, "PROGN"),
+				Set.of(ClojureLazyLowering.MAKE_DELAY), Set.of()),
+
+		/**
 		 * Sorted maps and sets: no literal makes one, only the constructor and the
 		 * constructors' values. The family stands behind the collection interfaces' (from
 		 * {@link #COLLECTION} on), whose aliases rename a helper to one of its own
@@ -486,8 +509,8 @@ public final class ClojureArms {
 		 */
 		PRINT_FLAGS("print-flags", Set.of("RONTOLISP::%CLOJURE-PRINT-CUT-P", "RONTOLISP::%CLOJURE-PRINT-DEEP-P"),
 				Set.of("RONTOLISP::%CLOJURE-PRINT-READABLE"),
-				Map.of("RONTOLISP::%CLOJURE-WRITE-NESTED", "RONTOLISP::%CLOJURE-WRITE"),
-				ClojureCoreSpecials.PRINT_FLAGS, Set.of()),
+				Map.of("RONTOLISP::%CLOJURE-WRITE-NESTED", "RONTOLISP::%CLOJURE-WRITE"), printFlagProducers(),
+				Set.of()),
 
 		/**
 		 * The printer's reading of {@code *print-meta*}: the {@code ^m} it writes ahead
@@ -496,6 +519,17 @@ public final class ClojureArms {
 		 */
 		PRINT_META("print-meta", Set.of("RONTOLISP::%CLOJURE-PRINT-META-P"), Set.of(), Map.of(),
 				ClojureCoreSpecials.PRINT_META, Set.of()),
+
+		/**
+		 * A record or deftype a program defined a {@code print-method} for, which the
+		 * printer writes through it: only the store of such a method
+		 * ({@link ClojureDispatchLowering#PRINT_METHOD_ROW}) makes one. The store is a
+		 * producer of {@link #PRINT_FLAGS} too: the method runs with
+		 * {@code *print-readably*} bound to the printer's side, which a {@code pr} inside
+		 * it reads through that family's view, as the oracle's {@code print} binds it.
+		 */
+		PRINT_METHOD("print-method", Set.of(ClojureDispatchLowering.PRINT_METHOD_P), Set.of(), Map.of(),
+				Set.of(ClojureDispatchLowering.PRINT_METHOD_ROW), Set.of()),
 
 		/**
 		 * A map the printer writes as {@code #:ns{...}} under
@@ -555,10 +589,12 @@ public final class ClojureArms {
 				Set.of(), false, Set.of(), ClojureRefusals.CARRIERS, Set.of(ClojureRefusals.CONDITION)),
 
 		/**
-		 * A regular-expression matcher, which {@code nth} reads the groups of: only
+		 * A regular-expression matcher, which {@code nth} reads the groups of and an
+		 * instance call reaches {@code java.util.regex.Matcher}'s methods of
+		 * ({@code .find}, {@code .lookingAt}, {@code .group} ...): only
 		 * {@code re-matcher} (and its value) makes one.
 		 */
-		MATCHER("matcher", Set.of("RONTOLISP::%CLOJURE-MATCHER-VALUE-P"), Set.of(), Map.of(),
+		MATCHER("matcher", Set.of(ClojureStringLowering.MATCHER_VALUE_P), Set.of(), Map.of(),
 				Set.of("RONTOLISP::%CLOJURE-RE-MATCHER"), Set.of()),
 
 		/**

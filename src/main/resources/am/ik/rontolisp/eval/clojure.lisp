@@ -30,8 +30,9 @@
 ;; Deliberate non-goals, each a documented deviation (.kb/clojure-frontend.md):
 ;; nil IS the empty list (stays nil, never ()); map/set walk order is unspecified
 ;; (same as keys/vals); ~S/~A on Clojure values stay Common Lisp notation
-;; (format is a CL surface); print-method/pprint stay absent, and *print-dup*
-;; is a plain value (the other print flags are honoured); unreadable values
+;; (format is a CL surface); a print-method is a program's own record's or
+;; deftype's only, and *print-dup* is a plain value (the other print flags are
+;; honoured); unreadable values
 ;; (functions, host objects) print #<..>, except a
 ;; host class object, which prints its name like the oracle's; a condition prints
 ;; its report (an exception's is its toString).
@@ -296,6 +297,61 @@
                   (rontolisp::%clojure-write shown "nil" readable stream labels)
                   (write-char #\Space stream))))))
     nil))
+
+;; print-method: the methods a program defines for its records and deftypes,
+;; (defmethod print-method R [x writer] ...), kept under the type's tag. The
+;; printer's %clojure-print-method-p, an arm of the print-method family whose
+;; producer is the store (clojure/ClojureArms), hands a value of such a type to
+;; its method, the stream as the writer, at any depth and from every printing
+;; verb, with *print-readably* bound to the printer's side (nil under print, like
+;; the oracle's print binds it), so a pr inside the method writes as the oracle's
+;; would. The table is written when a defmethod runs (a program's start) and read
+;; without a lock, like the protocol rows.
+(defvar rontolisp::%clojure-print-methods (make-hash-table :test 'equal))
+
+(defun rontolisp::%clojure-print-method-row (tag method)
+  "Store METHOD as the print-method of the type whose tag is TAG; answers nil."
+  (setf (gethash tag rontolisp::%clojure-print-methods) method)
+  nil)
+
+(defun rontolisp::%clojure-print-method-remove (tag)
+  "Forget the print-method of the type whose tag is TAG; answers print-method."
+  (remhash tag rontolisp::%clojure-print-methods)
+  #'rontolisp::%clojure-print-method-v)
+
+(defun rontolisp::%clojure-print-method-get (tag)
+  "The print-method of the type whose tag is TAG; without one the printer's own,
+   print-method itself (the oracle's answers its default method, never nil)."
+  (or (gethash tag rontolisp::%clojure-print-methods)
+      #'rontolisp::%clojure-print-method-v))
+
+(defun rontolisp::%clojure-print-method-p (x readable stream)
+  "Write X through its type's print-method when it is a record or deftype with
+   one, READABLE the side the printer is on, and answer T; NIL otherwise."
+  (let ((method
+         (if (and (consp x) (or (eq (car x) :C%RECORD) (eq (car x) :C%TYPE)))
+             (gethash (car (cdr x)) rontolisp::%clojure-print-methods)
+             nil)))
+    (if method
+        (progn
+          (let ((rontolisp::%clojure-print-readably readable))
+            (funcall method x stream))
+          t)
+        nil)))
+
+(defun rontolisp::%clojure-print-method (x writer)
+  "print-method called: X written to WRITER through its type's print-method, or
+   as pr writes it (under *print-readably*) without one; answers nil."
+  (let ((readable (rontolisp::%clojure-print-readable t)))
+    (if (rontolisp::%clojure-print-method-p x readable writer)
+        nil
+        (rontolisp::%clojure-print x "nil" readable writer)))
+  nil)
+
+(defun rontolisp::%clojure-print-method-v (&rest args)
+  "print-method as a value."
+  (rontolisp::%clojure-check-arity args 2 2 "print-method")
+  (rontolisp::%clojure-print-method (car args) (car (cdr args))))
 
 (defun rontolisp::%clojure-ident-spelling (k)
   "The spelling of the keyword or symbol K (a symbol's demangled), NIL for
@@ -721,6 +777,10 @@
         ((rontolisp::%clojure-keyword-p x)
          (write-char #\: stream)
          (write-string (car (cdr x)) stream))
+        ;; a record or deftype a program defined a print-method for writes through
+        ;; it, ahead of its metadata and the flags, like the oracle's dispatch: an
+        ;; arm a program defining none folds
+        ((rontolisp::%clojure-print-method-p x readable stream))
         ;; no collection and no metadata: ahead of the flags' arms
         ((rontolisp::%clojure-reader-value-p x)
          (rontolisp::%clojure-write-reader-value x nil-replacement readable
@@ -767,6 +827,11 @@
         ;; a transient, the oracle's #object: an arm a program making none folds
         ((rontolisp::%clojure-transient-p x)
          (rontolisp::%clojure-transient-write x readable stream))
+        ;; a delay, the oracle's #object of an IDeref: an arm a program making none
+        ;; folds
+        ((rontolisp::%clojure-delay-p x)
+         (rontolisp::%clojure-delay-write x nil-replacement readable stream
+                                          labels))
         ((and labels (rontolisp::%clojure-node-p x)
               (rontolisp::%clojure-write-label x labels stream)))
         ((rontolisp::%clojure-print-ns-map-p x)
@@ -933,6 +998,9 @@
                ;; like a byte array's): an arm a program making none folds
                ((rontolisp::%clojure-transient-p x)
                 (rontolisp::%clojure-transient-class-name x))
+               ;; a delay's toString, its class name (the hash left out): an arm
+               ;; a program making none folds
+               ((rontolisp::%clojure-delay-p x) "clojure.lang.Delay")
                ((rontolisp::%clojure-stream-p x)
                 (rontolisp::%clojure-stream-string x))
                ((rontolisp::%clojure-re-pattern-p x)
@@ -6162,6 +6230,118 @@
   "A matcher of the pattern value P over S."
   (list :C%MATCHER (gensym "re") p s (cons 0 nil)))
 
+;; Matcher methods: java.util.regex.Matcher's own methods on a matcher, the
+;; instance calls of the matcher family's arm (clojure/ClojureValueMethodLowering).
+;; find, lookingAt and matches record their match in the matcher's cell the way
+;; re-find does -- the next find starts at its end, one past an empty one -- and a
+;; failed one forgets the last match but not where the next find starts, like the
+;; oracle's first/last pair; group, start and end read the match back, the oracle's
+;; IllegalStateException without one and IndexOutOfBoundsException past the
+;; pattern's groups; reset starts over. A boolean answers T or the false object.
+
+(defun rontolisp::%clojure-matcher-find (m)
+  "Matcher.find(): the next match, recorded."
+  (if (rontolisp::%clojure-re-next m) t rontolisp::%clojure-false))
+
+(defun rontolisp::%clojure-matcher-find-from (m start)
+  "Matcher.find(int): the matcher reset, then a match searched from START, the
+   oracle's IndexOutOfBoundsException outside the input."
+  (if (or (not (integerp start)) (< start 0)
+          (> start (length (rontolisp::%clojure-re-match-input m))))
+      (rontolisp::%clojure-index-out-of-bounds-exception "Illegal start index")
+      (let ((cell (rontolisp::%clojure-re-match-cell m)))
+        (rplaca cell start)
+        (rplacd cell nil)
+        (rontolisp::%clojure-matcher-find m))))
+
+(defun rontolisp::%clojure-matcher-anchored (m whole)
+  "Matcher.lookingAt() (a match at the input's start) and, under WHOLE,
+   Matcher.matches() (one spanning the whole input): the match recorded."
+  (let ((input (rontolisp::%clojure-re-match-input m))
+        (cell (rontolisp::%clojure-re-match-cell m)))
+    (let ((len (length input)))
+      (let ((found
+             (rontolisp::%clojure-re-match (rontolisp::%clojure-re-pat-ops
+                                            (rontolisp::%clojure-re-match-pat
+                                             m)) input len 0 nil
+                                           (lambda (end g)
+                                             (if (or (not whole) (= end len))
+                                                 (list 0 end g)
+                                                 nil)))))
+        (if found
+            (progn
+              (rplaca cell (car (cdr found)))
+              (rplacd cell found)
+              t)
+            (progn
+              (rplacd cell nil)
+              rontolisp::%clojure-false))))))
+
+(defun rontolisp::%clojure-matcher-looking-at (m)
+  "Matcher.lookingAt()."
+  (rontolisp::%clojure-matcher-anchored m nil))
+
+(defun rontolisp::%clojure-matcher-matches (m)
+  "Matcher.matches()."
+  (rontolisp::%clojure-matcher-anchored m t))
+
+(defun rontolisp::%clojure-matcher-range (m n)
+  "The (start . end) group N of matcher M's last match spans, (-1 . -1) for one
+   that took no part; the oracle's refusals without a match or past the
+   pattern's groups."
+  (let ((last (cdr (rontolisp::%clojure-re-match-cell m))))
+    (cond ((null last)
+           (rontolisp::%clojure-illegal-state-exception "No match found"))
+          ((not (integerp n))
+           (rontolisp::%clojure-illegal-argument-exception
+            "No matching method takes a group that is no int"))
+          ((or (< n 0)
+               (> n
+                  (rontolisp::%clojure-re-pat-ngroups
+                   (rontolisp::%clojure-re-match-pat m))))
+           (rontolisp::%clojure-index-out-of-bounds-exception
+            (concatenate 'string "No group " (princ-to-string n))))
+          ((= n 0) (cons (car last) (car (cdr last))))
+          (t (let ((b (assoc n (car (cdr (cdr last))))))
+               (if b (cons (car (cdr b)) (car (cdr (cdr b)))) (cons -1 -1)))))))
+
+(defun rontolisp::%clojure-matcher-group (m n)
+  "Matcher.group(int), group(String): the text group N took, nil for one that
+   took no part. No pattern here has a named group, so a name is the oracle's
+   IllegalArgumentException once a match exists."
+  (if (stringp n)
+      (if (null (cdr (rontolisp::%clojure-re-match-cell m)))
+          (rontolisp::%clojure-illegal-state-exception "No match found")
+          (rontolisp::%clojure-illegal-argument-exception
+           (concatenate 'string "No group with name <" n ">")))
+      (let ((r (rontolisp::%clojure-matcher-range m n)))
+        (if (< (car r) 0)
+            nil
+            (subseq (rontolisp::%clojure-re-match-input m) (car r) (cdr r))))))
+
+(defun rontolisp::%clojure-matcher-start (m n)
+  "Matcher.start(int): where group N began, -1 for one that took no part."
+  (car (rontolisp::%clojure-matcher-range m n)))
+
+(defun rontolisp::%clojure-matcher-end (m n)
+  "Matcher.end(int): where group N ended, -1 for one that took no part."
+  (cdr (rontolisp::%clojure-matcher-range m n)))
+
+(defun rontolisp::%clojure-matcher-group-count (m)
+  "Matcher.groupCount(): the pattern's capturing groups."
+  (rontolisp::%clojure-re-pat-ngroups (rontolisp::%clojure-re-match-pat m)))
+
+(defun rontolisp::%clojure-matcher-reset (m)
+  "Matcher.reset(): the matcher with no match, its next find from the start."
+  (let ((cell (rontolisp::%clojure-re-match-cell m)))
+    (rplaca cell 0)
+    (rplacd cell nil)
+    m))
+
+(defun rontolisp::%clojure-matcher-pattern (m)
+  "Matcher.pattern(): the matcher's pattern."
+  (rontolisp::%clojure-re-match-pat m))
+
 (defun rontolisp::%clojure-re-drop-empty (xs)
   "XS past its leading empty strings (trailing empties drop reversed)."
   (if (and xs (stringp (car xs)) (string= (car xs) ""))
@@ -7256,11 +7436,14 @@
 ;; A type implementing IPending answers its isRealized: an arm of the
 ;; pending-interface family ("Collection interfaces").
 (defun rontolisp::%clojure-is-realized (x)
-  "realized?: whether the lazy seq X has run its body. A list (what the seq
-   verbs answer over a strict input) is realized; anything else signals, like
-   the oracle's cast."
+  "realized?: whether the lazy seq or delay X has run its body. A list (what
+   the seq verbs answer over a strict input) is realized; anything else signals,
+   like the oracle's cast."
   (cond ((rontolisp::%clojure-lazy-p x) (null (car (car (cdr x)))))
         ((rontolisp::%clojure-is-list x) t)
+        ;; a delay whose body has run (or signalled): an arm a program making
+        ;; none folds
+        ((rontolisp::%clojure-delay-p x) (null (aref (car (cdr x)) 0)))
         ((rontolisp::%clojure-ipending-p x)
          (rontolisp::%clojure-ipending-realized x))
         (t (rontolisp::%clojure-class-cast-exception-of
@@ -9689,6 +9872,12 @@
           (if (rontolisp::%clojure-truthy f) f nil))
         nil)))
 
+(defun rontolisp::%clojure-type-tag (x)
+  "type's read of X's metadata: its logically true :type entry, else NIL, under
+   which type answers X's class, like the oracle's (or (get (meta x) :type)
+   (class x))."
+  (rontolisp::%clojure-meta-method x (list :C%KEYWORD "type")))
+
 ;;;; Monitors: the lock locking holds on the interpreter and the JVM.
 ;;
 ;; The oracle's locking enters the object's own monitor. Here a value has none, so
@@ -9752,6 +9941,76 @@
   (loop
     (let* ((old (aref cell 0)) (new (apply f old args)))
       (when (rontolisp::%clojure-atom-cas cell old new) (return new)))))
+
+;;;; Delays: delay, force, deref and realized? over a memo cell.
+;;
+;; A delay is (:C%DELAY cell), CELL the vector #(thunk value failure mutex): THUNK
+;; the body's closure until it has run, VALUE its answer, FAILURE the condition it
+;; signalled, MUTEX the delay's own lock. The body runs at most once, under that
+;; lock like the oracle's synchronized deref (a Ring handler runs one thread per
+;; request on the interpreter and the JVM; on wasm the lock is a no-op), and a
+;; body that signalled signals the same condition again on every later force, the
+;; oracle's cached exception. A force reads the cell under the lock, so it never
+;; sees the thunk gone before the value is stored; realized? and the printer read
+;; the thunk slot alone, without waiting on a body another thread runs, like the
+;; oracle's isRealized. A force from inside the body runs the body again, the
+;; oracle's recursion. Every verb's test of one is an arm of the delay family
+;; (clojure/ClojureArms): a program making no delay compiles as before delays.
+
+(defun rontolisp::%clojure-delay (thunk)
+  "delay: an unrealized delay over the zero-argument closure THUNK."
+  (list :C%DELAY (vector thunk nil nil (rontolisp:make-mutex))))
+
+(defun rontolisp::%clojure-delay-p (x)
+  "Whether X is the (:C%DELAY cell) wrapper delay builds."
+  (and (consp x) (eq (car x) :C%DELAY)))
+
+(defun rontolisp::%clojure-delay-force (d)
+  "The value of the delay D: its body's answer, the body run the first time
+   under D's lock; a body that signalled signals its condition again."
+  (let ((cell (car (cdr d))) (value nil) (failure nil))
+    (rontolisp:with-mutex ((aref cell 3))
+      (let ((thunk (aref cell 0)))
+        (if thunk
+            (progn
+              (handler-case (setf (aref cell 1) (funcall thunk))
+                (error (c) (setf (aref cell 2) c)))
+              (setf (aref cell 0) nil))))
+      (setq value (aref cell 1))
+      (setq failure (aref cell 2)))
+    (if failure (error failure) value)))
+
+(defun rontolisp::%clojure-force (x)
+  "force: the value of the delay X, anything else itself. A program making no
+   delay calls progn in its place (the delay family's alias)."
+  (if (rontolisp::%clojure-delay-p x) (rontolisp::%clojure-delay-force x) x))
+
+(defun rontolisp::%clojure-force-v (&rest args)
+  "force as a value."
+  (rontolisp::%clojure-check-arity args 1 1 "force")
+  (rontolisp::%clojure-force (car args)))
+
+(defun rontolisp::%clojure-is-delay (x no)
+  "delay?: T for a delay, NO (the false object) for anything else. A program
+   making no delay calls progn in its place (the delay family's alias)."
+  (if (rontolisp::%clojure-delay-p x) t no))
+
+(defun rontolisp::%clojure-delay-write
+    (x nil-replacement readable stream labels)
+  "Write the delay X as the oracle's print-method of an IDeref does, its
+   #object[clojure.lang.Delay {:status s, :val v}] without the identity hash:
+   :pending with a nil value until the body has run, then :ready with its answer
+   or :failed with its condition."
+  (let ((cell (car (cdr x))))
+    (write-string "#object[clojure.lang.Delay {:status " stream)
+    (write-string
+     (cond ((aref cell 0) ":pending") ((aref cell 2) ":failed") (t ":ready"))
+     stream)
+    (write-string ", :val " stream)
+    (rontolisp::%clojure-write-nested
+     (cond ((aref cell 0) nil) ((aref cell 2) (aref cell 2)) (t (aref cell 1)))
+     "nil" readable stream labels)
+    (write-string "}]" stream)))
 
 ;;;; Vars: #'x as a value.
 ;;
@@ -9850,6 +10109,15 @@
 ;;;; compiled program carries no lowering, so here both refuse. resolve of a
 ;;;; quoted symbol never comes here: it resolves while the program lowers.
 
+;; A macro body's &env and &form: the call's locals (a map of each local's symbol
+;; to itself, nil without one) and the call itself, which an expansion while the
+;; program lowers binds (clojure/ClojureMacroLowering), and a run-time expansion
+;; binds &form for. Nil elsewhere, so a run-time macroexpand's &env is nil, like
+;; the oracle's.
+(defvar rontolisp::%clojure-macro-env nil)
+
+(defvar rontolisp::%clojure-macro-form nil)
+
 (defun rontolisp::%clojure-eval (form)
   "eval at run time: refused."
   (declare (ignore form))
@@ -9861,6 +10129,37 @@
   (declare (ignore symbol))
   (rontolisp::%clojure-unsupported-operation-exception
    "resolve of a computed symbol is not supported at run time: vars exist only while the program lowers"))
+
+(defun rontolisp::%clojure-ns-resolve-in (pair)
+  "ns-resolve of the symbol (second PAIR) in the namespace (first PAIR) at run
+   time: refused, like resolve. The macro-time evaluator resolves it through the
+   lowering instead."
+  (declare (ignore pair))
+  (rontolisp::%clojure-unsupported-operation-exception
+   "ns-resolve of a computed namespace or symbol is not supported at run time: vars exist only while the program lowers"))
+
+(defun rontolisp::%clojure-ns-resolve (ns symbol)
+  "ns-resolve of a namespace or symbol computed at run time: a nil namespace is
+   the oracle's NullPointerException (the-ns of nil reaching the namespace
+   table), any other resolves through %clojure-ns-resolve-in."
+  (if (null ns)
+      (rontolisp::%clojure-null-pointer-exception
+       "Cannot invoke \"Object.hashCode()\" because \"key\" is null")
+      (rontolisp::%clojure-ns-resolve-in (list ns symbol))))
+
+(defun rontolisp::%clojure-ns-resolve-v (&rest args)
+  "ns-resolve as a value: of a namespace and a symbol, or of a namespace, an
+   environment (a map, as &env is) and a symbol, which answers nil when the
+   environment holds the symbol."
+  (rontolisp::%clojure-check-arity args 2 3 "ns-resolve")
+  (if (cdr (cdr args))
+      (let ((env (car (cdr args)))
+            (symbol (car (cdr (cdr args))))
+            (miss (list nil)))
+        (if (and (hash-table-p env) (not (eq (gethash symbol env miss) miss)))
+            nil
+            (rontolisp::%clojure-ns-resolve (car args) symbol)))
+      (rontolisp::%clojure-ns-resolve (car args) (car (cdr args)))))
 
 ;;;; Namespaces: *ns* as a value, and the REPL's history.
 ;;
@@ -10013,6 +10312,8 @@
   (cond ((rontolisp::%clojure-reduced-p x) (car (cdr x)))
    ((rontolisp::%clojure-var-p x) (rontolisp::%clojure-var-get x))
    ((rontolisp::%clojure-future-p x) (rontolisp::%clojure-future-get x))
+   ;; a delay forces: an arm a program making none folds
+   ((rontolisp::%clojure-delay-p x) (rontolisp::%clojure-delay-force x))
    ((rontolisp::%clojure-host-object-p x "java.util.concurrent.Future")
     (rontolisp::%clojure-host-future-get x))
    ;; a type implementing IDeref: an arm of the derefable family ("Host

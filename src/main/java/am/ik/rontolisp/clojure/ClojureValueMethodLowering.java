@@ -12,6 +12,7 @@ import java.util.RandomAccess;
 import java.util.Set;
 import java.util.TreeMap;
 import java.util.function.Function;
+import am.ik.rontolisp.LispInteger;
 import am.ik.rontolisp.LispString;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
@@ -408,8 +409,52 @@ final class ClojureValueMethodLowering {
 			arm = boundArm(ctx, method, designator, recv, args, arms == null ? List.of() : arms, known, typed,
 					implemented);
 		}
+		LispVal matcherCall = matcherMethod(method, recv, args);
+		if (matcherCall != null) {
+			// a matcher answers java.util.regex.Matcher's own method: an arm a program
+			// making no matcher sheds (ClojureArms.Family.MATCHER), leaving the arm it
+			// had
+			arm = ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
+					ClojureLowerUtil.list(new LispSymbol(ClojureStringLowering.MATCHER_VALUE_P), recv), matcherCall,
+					arm);
+		}
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
 				ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-VALUE-RECEIVER-P"), recv), arm, call);
+	}
+
+	/**
+	 * The call of a {@code java.util.regex.Matcher} method on a matcher
+	 * ({@code clojure.lisp} "Matcher methods"): {@code find} of none or a start,
+	 * {@code lookingAt}, {@code matches}, {@code group}, {@code start} and {@code end} of
+	 * none or a group, {@code groupCount}, {@code reset} and {@code pattern}; null for
+	 * any other method.
+	 */
+	private static @Nullable LispVal matcherMethod(String method, LispSymbol recv, List<LispVal> args) {
+		String helper = switch (method + "/" + args.size()) {
+			case "find/0" -> "FIND";
+			case "find/1" -> "FIND-FROM";
+			case "lookingAt/0" -> "LOOKING-AT";
+			case "matches/0" -> "MATCHES";
+			case "group/0", "group/1" -> "GROUP";
+			case "start/0", "start/1" -> "START";
+			case "end/0", "end/1" -> "END";
+			case "groupCount/0" -> "GROUP-COUNT";
+			case "reset/0" -> "RESET";
+			case "pattern/0" -> "PATTERN";
+			default -> null;
+		};
+		if (helper == null) {
+			return null;
+		}
+		List<LispVal> call = new ArrayList<>();
+		call.add(new LispSymbol("RONTOLISP::%CLOJURE-MATCHER-" + helper));
+		call.add(recv);
+		if (args.isEmpty() && (helper.equals("GROUP") || helper.equals("START") || helper.equals("END"))) {
+			// group 0, the whole match
+			call.add(new LispInteger(0));
+		}
+		call.addAll(args);
+		return ClojureLowerUtil.list(call);
 	}
 
 	/**

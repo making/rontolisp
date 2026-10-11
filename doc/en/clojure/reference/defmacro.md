@@ -7,8 +7,11 @@ Defines a compile-time macro: each call site expands while lowering, before any
 backend runs, so every backend executes expanded code. Parameters bind the call's
 argument forms unevaluated (`&` the rest as a list, destructuring like `defn`
 parameters); several arities dispatch on the argument count, like `defn`. A docstring
-and an attr map are skipped. `&form` and `&env` are refused: a body runs with its
-arguments only, never with a compilation environment.
+and an attr map are skipped. The body's implicit `&form` is the call itself and `&env`
+a map of the call site's locals, each local's symbol to itself, or nil where the call sees
+no local (the oracle's values are the compiler's `LocalBinding`s), so a `.cljc` library's
+`(contains? &env :locals)` takes its Clojure branch; a run-time `macroexpand` binds `&form`
+and leaves `&env` nil, like the oracle. Neither may name a parameter.
 
 The definition answers `nil` and registers a runtime table entry of the same
 expander, so `macroexpand-1` expands the same function at run time. A macro body

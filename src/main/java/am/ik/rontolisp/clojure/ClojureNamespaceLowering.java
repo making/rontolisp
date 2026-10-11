@@ -480,6 +480,11 @@ final class ClojureNamespaceLowering {
 				String why = ClojureBuiltinNamespaces.languageNotShipped(ns);
 				throw new LispReadException(why != null ? why : "unknown namespace: " + ns);
 			}
+			if (ctx.defersMissingLibraries && isMissing(ctx, ns)) {
+				// reached only when the code around it runs: the oracle's load fails
+				// there, so a program that never runs it, or catches it, keeps going
+				return missingLibrary(ns);
+			}
 			// a dependency edge for :reload-all: the file being lowered owns it
 			// (the innermost file on the loading stack), or the entry program's
 			// namespace at its own top level
@@ -568,6 +573,25 @@ final class ClojureNamespaceLowering {
 			}
 		}
 		return out;
+	}
+
+	/**
+	 * Whether a namespace is neither loaded nor loading and no root of the source path
+	 * holds its file: what a {@code require} of it fails on ({@link #loadNamespace}).
+	 */
+	private static boolean isMissing(ClojureLowering ctx, String ns) {
+		return !ctx.loadedNamespaces.contains(ns) && !ctx.loadingNamespaces.contains(ns)
+				&& ClojureBuiltinNamespaces.notShipped(ns) == null && ctx.sourcePath.find(ns) == null;
+	}
+
+	/**
+	 * The oracle's failure to load a namespace no root holds, where the load runs: its
+	 * {@code FileNotFoundException}, in its words.
+	 */
+	private static LispVal missingLibrary(String ns) {
+		String base = ClojureSourcePath.scriptBaseOf(ns);
+		return ClojureRefusals.refusal(ClojureRefusals.FILE_NOT_FOUND, LispString
+			.literal("Could not locate " + base + "__init.class, " + base + ".clj or " + base + ".cljc on classpath."));
 	}
 
 	/** The oracle's root resource of a namespace: {@code /demo/cyc_a}. */

@@ -9,7 +9,8 @@ core のマクロです。それ以外の名前は `nil` で、このフロン�
 含みます。そのため、動作中の `clojure.core` によってコードを選ぶライブラリ
 （`resolve` を使う `compile-if`）は、ここで lower できるコードを選びます。計算で得た
 シンボルはマクロ本体の中でだけ解決でき、実行時は `UnsupportedOperationException` を
-投げます。`(resolve env sym)` は拒否します。関数値としても使えます。
+投げます。`(resolve env sym)` は現在の名前空間での [ns-resolve](ns-resolve.md) で、環境（マクロの
+`&env`）が持つシンボルには nil を返します。関数値としても使えます。
 
 ```clojure
 (defn greet [] "hi")

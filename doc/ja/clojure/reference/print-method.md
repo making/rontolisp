@@ -1,0 +1,25 @@
+# print-method
+
+`(defmethod print-method Type [x writer] body...)` / `(print-method x writer)`
+
+`clojure.core/print-method` はプリンタのマルチメソッドです。プログラムが自分の record や deftype
+に定義したメソッドは、`pr`・`prn`・`print`・`println`・`pr-str`・`prn-str`・`print-str`・
+`println-str` と REPL がその型の値を書く方法になり、コレクションの中や、コレクションの `str`
+の一部でも使われます。writer は書き込み先のストリームです。文字列を `.write` するか、
+`binding [*out* writer]` して印字します。`print` の下でメソッド内の `pr` は `print` と同じく
+書きます（oracle の `print` と同じく `*print-readably*` が nil になります）。関数として呼ぶと
+`print-method` は `x` をその型のメソッドで書き、メソッドがなければ `pr` と同じく書きます。
+`remove-method` は既定の書き方に戻し、`get-method` はメソッドを返します（なければ
+`print-method` 自身）。
+
+逸脱: メソッドを持てるのはプログラム自身の record と deftype だけです。`:type` キーワード、
+ホストや `clojure.lang` のクラス、`Object`、nil のメソッドは名前で拒否し、`print-method` の
+`methods` と `prefer-method` も同様です。値そのものの `str` は、oracle がその `toString` を
+返すところで、メソッドが書く内容を返します。
+
+```clojure
+(defrecord Point [x y])
+(defmethod print-method Point [p w] (.write w (str "<" (:x p) "," (:y p) ">")))
+(prn (->Point 1 2) [(->Point 3 4)]) ; <1,2> [<3,4>]
+(println (pr-str (->Point 5 6))) ; <5,6>
+```

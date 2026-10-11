@@ -393,6 +393,22 @@ class ClojureArmsTest {
 	}
 
 	@Test
+	void theDelayFamilyIsMadeByDelayAndFoldsForceAndDelayPToProgn() {
+		// a program making no delay forces nothing: force is the value itself, delay? the
+		// (progn x false) it lowered to before delays, and a delay arm goes
+		List<LispVal> forms = read("(rontolisp::%clojure-force x) (rontolisp::%clojure-is-delay x false)"
+				+ " (cond ((rontolisp::%clojure-delay-p x) (rontolisp::%clojure-delay-force x)) (t x))");
+		ClojureArms.Scan scan = ClojureArms.scan(forms, ClojureArms.Family.DELAY);
+		assertThat(scan.builds()).isFalse();
+		assertThat(scan.strips()).isTrue();
+		assertThat(ClojureArms.strip(forms, ClojureArms.Family.DELAY).stream().map(LispVal::print))
+			.containsExactly("(PROGN X)", "(PROGN X FALSE)", "(COND (T X))");
+		assertThat(
+				ClojureArms.scan(read("(rontolisp::%clojure-delay (lambda () 1))"), ClojureArms.Family.DELAY).builds())
+			.isTrue();
+	}
+
+	@Test
 	void theReaderValueFamilyFoldsThePredicatesAndTheReaderArmsOfAProgramReadingWithoutOptions() {
 		// only a read that may take {:read-cond :preserve} and the two constructors make
 		// a reader conditional or a tagged literal: the predicates are (progn x false)

@@ -228,10 +228,13 @@ final class ClojureVarLowering {
 	 * @return the lowered call
 	 */
 	static LispVal resolveOf(ClojureLowering ctx, List<LispVal> items) {
+		if (items.size() == 3) {
+			// (resolve env sym) is the oracle's (ns-resolve *ns* env sym)
+			return nsResolveOf(ctx, List.of(new LispSymbol("ns-resolve"), new LispSymbol("clojure.core/*ns*"),
+					items.get(1), items.get(2)));
+		}
 		ClojureLowerUtil.isTrue(items.size() == 2,
-				items.size() == 3
-						? "resolve with an environment map is not supported yet: there is no compilation environment"
-						: "Wrong number of args (" + (items.size() - 1) + ") passed to: clojure.core/resolve");
+				"Wrong number of args (" + (items.size() - 1) + ") passed to: clojure.core/resolve");
 		List<LispVal> quoted = ClojureLowerUtil.items(items.get(1));
 		if (quoted != null && quoted.size() == 2 && ClojureLowerUtil.isSymbolNamed(quoted.get(0), "quote")
 				&& ClojureLowerUtil.stripMeta(quoted.get(1)) instanceof LispSymbol target
@@ -244,6 +247,158 @@ final class ClojureVarLowering {
 	/** {@code resolve} as a value: every argument is computed. */
 	static LispVal resolveValue() {
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), ClojureMacroLowering.RESOLVE);
+	}
+
+	/**
+	 * The run-time library's {@code ns-resolve} of a computed namespace or symbol: a nil
+	 * namespace is the oracle's {@code NullPointerException}, any other is refused there
+	 * and resolved by the lowering at macro time.
+	 */
+	static final String NS_RESOLVE = "RONTOLISP::%CLOJURE-NS-RESOLVE";
+
+	/** {@code ns-resolve} as a value: every argument is computed. */
+	static final String NS_RESOLVE_V = "RONTOLISP::%CLOJURE-NS-RESOLVE-V";
+
+	/**
+	 * {@code (ns-resolve ns sym)} / {@code (ns-resolve ns env sym)}: a quoted symbol in a
+	 * namespace the lowering knows -- a quoted name, {@code (find-ns 'n)},
+	 * {@code (the-ns 'n)} or {@code *ns*} -- resolves while the program lowers, like
+	 * {@code resolve} in that namespace ({@link #resolvedIn}); one no {@code ns} or
+	 * {@code in-ns} created above the call and the program required none of is the
+	 * oracle's failure there ({@code find-ns}'s nil, a {@code NullPointerException};
+	 * {@code the-ns}'s {@code No namespace: n found}). Anything else calls the run-time
+	 * library's {@code ns-resolve} ({@link #NS_RESOLVE}). An environment holding the
+	 * symbol answers nil first, the oracle's {@code contains?} test.
+	 * @param ctx the hub
+	 * @param items the form, head included
+	 * @return the lowered call
+	 */
+	static LispVal nsResolveOf(ClojureLowering ctx, List<LispVal> items) {
+		int n = items.size() - 1;
+		ClojureCoreLowering.arity("ns-resolve", n, 2, 3);
+		LispVal symDatum = items.get(n);
+		String target = quotedSymbol(symDatum);
+		NamespaceDesignator designator = designatorOf(ctx, items.get(1));
+		if (target != null && designator != null) {
+			LispVal resolved = resolvedIn(ctx, designator, target);
+			if (n == 2) {
+				return resolved;
+			}
+			LispSymbol env = ctx.freshTemp();
+			LispVal held = ClojureCollectionLowering.containsForm(ctx, env, ctx.lower(symDatum));
+			return ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
+					ClojureLowerUtil.list(ClojureLowerUtil.list(env, ctx.lower(items.get(2)))),
+					ctx.ifFalsey(held, ClojureLowering.NIL_CONST, resolved));
+		}
+		LispSymbol ns = ctx.freshTemp();
+		LispSymbol sym = ctx.freshTemp();
+		LispVal call = ClojureLowerUtil.list(new LispSymbol(NS_RESOLVE), ns, sym);
+		List<LispVal> bindings = new ArrayList<>();
+		bindings.add(ClojureLowerUtil.list(ns, ctx.lower(items.get(1))));
+		LispVal body = call;
+		if (n == 3) {
+			LispSymbol env = ctx.freshTemp();
+			bindings.add(ClojureLowerUtil.list(env, ctx.lower(items.get(2))));
+			body = ctx.ifFalsey(ClojureCollectionLowering.containsForm(ctx, env, sym), ClojureLowering.NIL_CONST, call);
+		}
+		bindings.add(ClojureLowerUtil.list(sym, ctx.lower(symDatum)));
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let*"), ClojureLowerUtil.list(bindings), body);
+	}
+
+	/** {@code ns-resolve} as a value: every argument is computed. */
+	static LispVal nsResolveValue() {
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), new LispSymbol(NS_RESOLVE_V));
+	}
+
+	/** The name a quoted symbol datum spells, or null for any other datum. */
+	private static @Nullable String quotedSymbol(LispVal datum) {
+		List<LispVal> quoted = ClojureLowerUtil.items(datum);
+		if (quoted != null && quoted.size() == 2 && ClojureLowerUtil.isSymbolNamed(quoted.get(0), "quote")
+				&& ClojureLowerUtil.stripMeta(quoted.get(1)) instanceof LispSymbol target
+				&& !target.name().startsWith(":")) {
+			return target.name();
+		}
+		return null;
+	}
+
+	/**
+	 * A namespace the lowering knows at the call: its name, and whether the spelling
+	 * finds it ({@code find-ns}, nil when none exists) or names it ({@code the-ns} or a
+	 * quoted name, refused when none exists).
+	 */
+	private record NamespaceDesignator(String name, boolean finds) {
+	}
+
+	/**
+	 * The namespace a datum designates while the program lowers: a quoted name,
+	 * {@code (find-ns 'n)}, {@code (the-ns 'n)}, or {@code *ns*}, the namespace the call
+	 * lowers in (the oracle reads it where the call runs, like {@code resolve}'s); null
+	 * for any other datum.
+	 */
+	private static @Nullable NamespaceDesignator designatorOf(ClojureLowering ctx, LispVal datum) {
+		String quoted = quotedSymbol(datum);
+		if (quoted != null) {
+			return new NamespaceDesignator(quoted, false);
+		}
+		if (datum instanceof LispSymbol s && (s.name().equals("*ns*") || s.name().equals("clojure.core/*ns*"))
+				&& !ctx.isLocal(s.name())
+				&& (s.name().startsWith("clojure.core/") || ctx.lookupVar(s.name()) == null)) {
+			return new NamespaceDesignator(ctx.currentNs, false);
+		}
+		List<LispVal> call = ClojureLowerUtil.items(datum);
+		if (call != null && call.size() == 2 && call.get(0) instanceof LispSymbol head
+				&& (head.name().equals("find-ns") || head.name().equals("the-ns")) && !ctx.isLocal(head.name())
+				&& ctx.lookupVar(head.name()) == null) {
+			String name = quotedSymbol(call.get(1));
+			if (name != null) {
+				return new NamespaceDesignator(name, head.name().equals("find-ns"));
+			}
+		}
+		return null;
+	}
+
+	/**
+	 * What {@code ns-resolve} of a symbol answers in a namespace a macro body computed
+	 * (the macro-time {@code ns-resolve}): {@link #resolvedIn} of the namespace named,
+	 * which does not exist as the oracle's {@code the-ns} says.
+	 * @param ctx the hub
+	 * @param namespace the namespace's name
+	 * @param target the symbol's name
+	 * @return the lowered answer
+	 */
+	static LispVal resolvedInNamespace(ClojureLowering ctx, String namespace, String target) {
+		return resolvedIn(ctx, new NamespaceDesignator(namespace, false), target);
+	}
+
+	/**
+	 * What {@code ns-resolve} of a symbol answers in a namespace the lowering knows:
+	 * {@code resolve} of it where that namespace is current -- a namespace a program
+	 * {@code ns} or {@code in-ns} created reads its own interns and refers, any other
+	 * known one (a library, {@code clojure.core}) its qualified name. A namespace that
+	 * does not exist is the oracle's failure.
+	 */
+	private static LispVal resolvedIn(ClojureLowering ctx, NamespaceDesignator designator, String target) {
+		String name = designator.name();
+		if (ctx.createdNamespaces.contains(name)) {
+			String outer = ctx.currentNs;
+			ctx.currentNs = name;
+			try {
+				return resolved(ctx, target);
+			}
+			finally {
+				ctx.currentNs = outer;
+			}
+		}
+		if (ctx.knowsNamespace(name)) {
+			return resolved(ctx, ClojureLowering.qualifierSlash(target) > 0 ? target : name + "/" + target);
+		}
+		if (designator.finds()) {
+			// find-ns answers nil, and the-ns of nil fails on the namespace table's key
+			return ClojureRefusals.refusal(ClojureRefusals.NULL_POINTER,
+					LispString.literal("Cannot invoke \"Object.hashCode()\" because \"key\" is null"));
+		}
+		return ClojureRefusals.refusal(ClojureRefusals.EXCEPTION,
+				LispString.literal("No namespace: " + name + " found"));
 	}
 
 	/**

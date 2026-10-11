@@ -275,6 +275,7 @@ final class ClojureDispatchLowering {
 			case TRANSIENT_VECTOR -> runtime(Use.VARIABLE, ClojureTransientLowering.VECTOR_P);
 			case TRANSIENT_MAP -> runtime(Use.VARIABLE, ClojureTransientLowering.MAP_P);
 			case TRANSIENT_SET -> runtime(Use.VARIABLE, ClojureTransientLowering.SET_P);
+			case DELAY -> runtime(Use.VARIABLE, ClojureLazyLowering.DELAY_P);
 		};
 	}
 
@@ -374,6 +375,10 @@ final class ClojureDispatchLowering {
 			.add(ClojureLowerUtil.list(ClojureLowerUtil.list(new LispSymbol(ClojureTransientLowering.TRANSIENT_P), one),
 					ClojureLowerUtil.list(ClojureLowerUtil.sym("list"), ClojureCollectionLowering.KEYWORD_TAG,
 							ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-TRANSIENT-CLASS-NAME"), one))));
+		// a delay answers its class's keyword (its wrapper is a cons): an arm a program
+		// making none sheds (ClojureArms.Family.DELAY)
+		branches.add(ClojureLowerUtil.list(ClojureLowerUtil.list(new LispSymbol(ClojureLazyLowering.DELAY_P), one),
+				ClojureCollectionLowering.keywordForm("clojure.lang.Delay")));
 		// a stream answers the host class its printer names, as a keyword like every
 		// kind: an arm a program making no stream sheds (ClojureArms.Family.STREAM)
 		branches.add(ClojureLowerUtil.list(ClojureLowerUtil.list(new LispSymbol(ClojureInteropLowering.STREAM_P), one),
@@ -482,6 +487,30 @@ final class ClojureDispatchLowering {
 		LispSymbol one = new LispSymbol(ClojureLowering.mangle("class-one"));
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(one), classForm(ctx, one));
 	}
+
+	/**
+	 * {@code type}: the logically true {@code :type} entry of the value's metadata
+	 * ({@code rontolisp::%clojure-type-tag}), else what {@code class} answers -- the
+	 * oracle's {@code (or (get (meta x) :type) (class x))}. Inside a {@code defmulti}
+	 * dispatch function a nil answers nil, as {@code class} does there.
+	 */
+	static LispVal typeForm(ClojureLowering ctx, LispVal lowered) {
+		LispSymbol one = ctx.freshTemp();
+		LispSymbol tag = ctx.freshTemp();
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let*"),
+				ClojureLowerUtil.list(ClojureLowerUtil.list(one, lowered),
+						ClojureLowerUtil.list(tag, ClojureLowerUtil.list(new LispSymbol(TYPE_TAG), one))),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), tag, tag, classForm(ctx, one)));
+	}
+
+	/** {@code type} as a value: a one-argument lambda over the same read. */
+	static LispVal typeValue(ClojureLowering ctx) {
+		LispSymbol one = new LispSymbol(ClojureLowering.mangle("type-one"));
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(one), typeForm(ctx, one));
+	}
+
+	/** The logically true {@code :type} entry of a value's metadata, else nil. */
+	static final String TYPE_TAG = "RONTOLISP::%CLOJURE-TYPE-TAG";
 
 	// IO entry points: spit/slurp/line-seq over the eval IO layer (plus the
 	// clojure.java.io/reader constructor and the line-seq reader arity)
@@ -972,10 +1001,63 @@ final class ClojureDispatchLowering {
 		return new LispSymbol(ClojureLowering.varSym(key).name() + suffix);
 	}
 
+	/**
+	 * The store of a {@code print-method} a program defines for a record or deftype
+	 * ({@code clojure.lisp}): the print-method family's producer
+	 * ({@link ClojureArms.Family#PRINT_METHOD}).
+	 */
+	static final String PRINT_METHOD_ROW = "RONTOLISP::%CLOJURE-PRINT-METHOD-ROW";
+
+	/**
+	 * The printer's arm writing a value through its type's {@code print-method}: the test
+	 * of the print-method family.
+	 */
+	static final String PRINT_METHOD_P = "RONTOLISP::%CLOJURE-PRINT-METHOD-P";
+
+	/**
+	 * Whether a multimethod name is {@code clojure.core/print-method}: spelled so, or
+	 * bare where no local or program var claims the name.
+	 */
+	static boolean isPrintMethod(ClojureLowering ctx, String name) {
+		return name.equals("clojure.core/print-method")
+				|| name.equals("print-method") && !ctx.isLocal(name) && ctx.resolveVar(name) == null;
+	}
+
+	/**
+	 * The type tag a {@code print-method} dispatch value names: a record or deftype the
+	 * program defines. Any other dispatch value -- a {@code :type} keyword, a host or
+	 * {@code clojure.lang} class, {@code Object}, nil -- is refused by name: the printer
+	 * consults a program's print-methods for its own types only.
+	 */
+	private static LispVal printMethodTag(ClojureLowering ctx, LispVal keyDatum) {
+		ClojureLowering.TypeDef type = keyDatum instanceof LispSymbol s ? ctx.typeDefOf(s.name()) : null;
+		if (type == null) {
+			throw new LispReadException("print-method of " + keyDatum.print()
+					+ " is not supported yet: the printer consults a print-method of a record or deftype only");
+		}
+		return ClojureProtocolLowering.typeTagForm(type.tagSpelling());
+	}
+
+	/**
+	 * {@code (defmethod print-method R [x writer] body...)} of a record or deftype
+	 * {@code R}: the method stored under the type's tag, where the printer writes every
+	 * value of the type through it -- {@code pr}, {@code prn}, {@code print},
+	 * {@code println} and their string forms, at any depth ({@code clojure.lisp}
+	 * "print-method").
+	 */
+	private static LispVal printMethodForm(ClojureLowering ctx, List<LispVal> items) {
+		LispVal tag = printMethodTag(ctx, items.get(2));
+		LispVal lambda = methodLambda(ctx, items.get(3), items.subList(4, items.size()));
+		return ClojureLowerUtil.list(new LispSymbol(PRINT_METHOD_ROW), tag, lambda);
+	}
+
 	static LispVal defmethodForm(ClojureLowering ctx, List<LispVal> items) {
 		ClojureLowerUtil.isTrue(items.size() >= 4,
 				"defmethod takes a name, a dispatch value, a parameter vector and a body");
 		String name = ClojureLowerUtil.plainName(items.get(1), "defmethod");
+		if (isPrintMethod(ctx, name)) {
+			return printMethodForm(ctx, items);
+		}
 		String key = multimethodKey(ctx, name);
 		LispSymbol methods = tableGlobal(key, "%methods");
 		LispVal lambda = methodLambda(ctx, items.get(3), items.subList(4, items.size()));
@@ -997,6 +1079,11 @@ final class ClojureDispatchLowering {
 	static LispVal removeMethodOf(ClojureLowering ctx, List<LispVal> items) {
 		ClojureLowerUtil.isTrue(items.size() == 3, "remove-method takes a multimethod and a dispatch value");
 		String name = ClojureLowerUtil.plainName(items.get(1), "remove-method");
+		if (isPrintMethod(ctx, name)) {
+			// the type's method gone, the printer's default back
+			return ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-PRINT-METHOD-REMOVE"),
+					printMethodTag(ctx, items.get(2)));
+		}
 		String key = multimethodKey(ctx, name);
 		LispSymbol methods = tableGlobal(key, "%methods");
 		LispVal keyDatum = items.get(2);
@@ -1017,6 +1104,10 @@ final class ClojureDispatchLowering {
 	static LispVal getMethodOf(ClojureLowering ctx, List<LispVal> items) {
 		ClojureLowerUtil.isTrue(items.size() == 3, "get-method takes a multimethod and a dispatch value");
 		String name = ClojureLowerUtil.plainName(items.get(1), "get-method");
+		if (isPrintMethod(ctx, name)) {
+			return ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-PRINT-METHOD-GET"),
+					printMethodTag(ctx, items.get(2)));
+		}
 		LispSymbol methods = tableGlobal(multimethodKey(ctx, name), "%methods");
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("gethash"),
 				ClojureCollectionLowering.lookupKey(dispatchKeyForm(ctx, items.get(2)), methods), methods,

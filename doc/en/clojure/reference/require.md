@@ -13,7 +13,10 @@ An unquoted vector spec is accepted too, though real Clojure rejects it.
 A prefix list `'(prefix [sub ...])` wires each member under the prefix, quoted or bare.
 `:reload` runs each named namespace again (`def` resets, `defonce` keeps its root);
 `:reload-all` re-runs their dependencies first. A `require` inside a function body loads
-when the body runs, answering `nil` like any other `require`.
+when the body runs, answering `nil` like any other `require`; there, and inside a `try` or a
+`when`, a namespace no root holds fails only when the code runs, with the oracle's
+`FileNotFoundException` (`Could not locate a/b__init.class, a/b.clj or a/b.cljc on
+classpath.`), so an optional library's `(try (require 'x) (catch Exception e ...))` works.
 
 ```clojure
 (require '[clojure.string :as s])

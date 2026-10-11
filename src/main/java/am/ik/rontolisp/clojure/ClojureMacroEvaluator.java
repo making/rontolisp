@@ -78,6 +78,17 @@ public interface ClojureMacroEvaluator {
 		LispVal resolveForm(LispVal value);
 
 		/**
+		 * The form {@code (ns-resolve ns sym)} evaluates where both are computed: what
+		 * {@code resolve} of the symbol lowers to in the namespace (a namespace object or
+		 * a symbol naming one), the oracle's {@code No namespace: n found} for one that
+		 * does not exist.
+		 * @param pair the list of the namespace and the symbol, as the run-time library
+		 * holds them
+		 * @return the lowered form
+		 */
+		LispVal nsResolveForm(LispVal pair);
+
+		/**
 		 * The form the macro scope of a namespace evaluates to
 		 * ({@code ClojureMacroLowering.macroScope}): the scope as the lowering knows it
 		 * now, so a macro body's {@code macroexpand} resolves its head in {@code *ns*}

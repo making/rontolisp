@@ -1594,6 +1594,61 @@ class ClojureLoweringTest {
 	}
 
 	@Test
+	void aRequireTheCodeAroundItReachesFailsWhereItRunsWhenNoRootHoldsTheNamespace() {
+		// the oracle's load fails where it runs: inside a function, a try or a when the
+		// failure is the FileNotFoundException that code throws, in the oracle's words;
+		// a top-level require still fails while the program lowers
+		String expected = "(RONTOLISP::%CLOJURE-FILE-NOT-FOUND-EXCEPTION "
+				+ "\"Could not locate no/such/lib__init.class, no/such/lib.clj or no/such/lib.cljc on classpath.\")";
+		assertThat(lowered("(defn f [] (require 'no.such.lib))")).contains(expected);
+		assertThat(lowered("(try (require '[no.such.lib :as n]) (catch Exception e nil))")).contains(expected);
+		assertThat(lowered("(when false (use 'no.such.lib))")).contains(expected);
+		assertThatThrownBy(() -> Clojure.read("(require 'no.such.lib)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Could not locate no/such/lib.clj");
+	}
+
+	@Test
+	void nsResolveResolvesAQuotedSymbolInANamespaceTheLoweringKnows() {
+		// a quoted symbol in a namespace the lowering knows resolves like resolve there;
+		// one that does not exist is the oracle's failure (find-ns's nil reaching the-ns,
+		// the-ns's own refusal); anything computed goes to the run-time library
+		String source = "(ns nr) (defn f [] 1) ";
+		assertThat(lowered(source + "(ns-resolve 'nr 'f)")).contains("\"nr/f\"");
+		assertThat(lowered(source + "(ns-resolve (find-ns 'nr) 'f)")).contains("\"nr/f\"");
+		assertThat(lowered(source + "(ns-resolve *ns* 'f)")).contains("\"nr/f\"");
+		assertThat(lowered(source + "(ns-resolve 'clojure.core 'map)")).contains("\"clojure.core/map\"");
+		assertThat(lowered(source + "(ns-resolve 'nr 'nowhere)")).doesNotContain("nowhere");
+		assertThat(lowered(source + "(ns-resolve (find-ns 'no.such) 'f)"))
+			.contains("(RONTOLISP::%CLOJURE-NULL-POINTER-EXCEPTION ");
+		assertThat(lowered(source + "(ns-resolve 'no.such 'f)"))
+			.contains("(RONTOLISP::%CLOJURE-EXCEPTION \"No namespace: no.such found\")");
+		assertThat(lowered(source + "(let [s 'f] (ns-resolve *ns* s))")).contains("(RONTOLISP::%CLOJURE-NS-RESOLVE ");
+		assertThatThrownBy(() -> Clojure.read("(ns-resolve 'user)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Wrong number of args (1) passed to: clojure.core/ns-resolve");
+	}
+
+	@Test
+	void aMacroBodyReadsItsCallAndTheCallsLocalsThroughFormAndEnv() {
+		// &env is nil without a local, else a map of the locals' symbols; &form the call
+		String source = "(defmacro m [] `(quote ~[(when &env (sort (map name (keys &env)))) &form]))";
+		assertThat(macroLowered(source + " (m)")).contains("(VECTOR 'NIL '(|c%m|))");
+		assertThat(macroLowered(source + " (let [a 1 b 2] (m))")).contains("\"a\"").contains("\"b\"");
+		// a run-time expansion binds &form where a macro reads it, and only there
+		assertThat(macroLowered(source + " (macroexpand '(m))")).contains("RONTOLISP::%CLOJURE-MACRO-FORM");
+		assertThat(macroLowered("(defmacro n [] 1) (macroexpand '(n))")).doesNotContain("%CLOJURE-MACRO-FORM");
+		assertThatThrownBy(() -> Clojure.read("(defn g [] &env)", null, ClojureMacroTime.create()))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("unknown name: &env");
+	}
+
+	private static String macroLowered(String source) {
+		return Clojure.read(source, null, ClojureMacroTime.create())
+			.stream()
+			.map(LispVal::print)
+			.collect(Collectors.joining("\n"));
+	}
+
+	@Test
 	void bareRequireAcceptsPrefixLists() {
 		// prefix lists wire each member under the prefix on the shared path:
 		// quoted ('(prefix ...), the oracle's spelling) and bare (the
@@ -2143,8 +2198,11 @@ class ClojureLoweringTest {
 
 	@Test
 	void evalAndResolveRefuseWhatTheyCannotTake() {
-		assertThatThrownBy(() -> loweredWithMacros("(resolve {} 'inc)")).isInstanceOf(LispReadException.class)
-			.hasMessageContaining("resolve with an environment map is not supported yet");
+		// (resolve env sym) is (ns-resolve *ns* env sym): a symbol the environment holds
+		// resolves to nil
+		assertThat(loweredWithMacros("(resolve {} 'inc)")).contains("\"clojure.core/inc\"");
+		assertThatThrownBy(() -> loweredWithMacros("(resolve 1 2 3)")).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Wrong number of args (3) passed to: clojure.core/resolve");
 		assertThatThrownBy(() -> loweredWithMacros("(eval 1 2)")).isInstanceOf(LispReadException.class)
 			.hasMessageContaining("Wrong number of args (2) passed to: clojure.core/eval");
 		assertThatThrownBy(() -> loweredWithMacros("(defmacro mu-rs [x] (resolve x)) (mu-rs :k)"))
@@ -2179,10 +2237,10 @@ class ClojureLoweringTest {
 			.hasMessageContaining("cannot name a macro");
 		assertThatThrownBy(() -> Clojure.read("(defmacro mu-env [&form x] x)", null, ClojureMacroTime.create()))
 			.isInstanceOf(LispReadException.class)
-			.hasMessageContaining("&form is not supported yet");
+			.hasMessageContaining("&form cannot name a macro parameter");
 		assertThatThrownBy(() -> Clojure.read("(defmacro mu-env2 [x &env] x)", null, ClojureMacroTime.create()))
 			.isInstanceOf(LispReadException.class)
-			.hasMessageContaining("&env is not supported yet");
+			.hasMessageContaining("&env cannot name a macro parameter");
 		assertThatThrownBy(() -> Clojure.read("(defmacro)", null, ClojureMacroTime.create()))
 			.isInstanceOf(LispReadException.class)
 			.hasMessageContaining("defmacro needs a name");
@@ -2950,13 +3008,20 @@ class ClojureLoweringTest {
 	}
 
 	@Test
+	void aDelayIsAMemoCellOverItsBodysThunkAndForceTheFamilysHelper() {
+		// the body is a zero-argument lambda (its own recur target), handed to the
+		// constructor that makes the delay family's value; force is one helper call
+		assertThat(lowered("(delay (println 1) 2)")).contains("(RONTOLISP::%CLOJURE-DELAY (LAMBDA NIL ");
+		assertThat(lowered("(force 1)")).contains("(RONTOLISP::%CLOJURE-FORCE 1)");
+		assertThat(lowered("(map force [1])")).contains("#'RONTOLISP::%CLOJURE-FORCE-V");
+		assertThatThrownBy(() -> Clojure.read("(force)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Wrong number of args (0) passed to: clojure.core/force");
+	}
+
+	@Test
 	void futuresPromisesAndProxySuperStayRefused() {
 		assertThatThrownBy(() -> Clojure.read("(future 1)", null)).isInstanceOf(LispReadException.class)
 			.hasMessageContaining("future is not supported yet");
-		assertThatThrownBy(() -> Clojure.read("(delay 1)", null)).isInstanceOf(LispReadException.class)
-			.hasMessageContaining("delay is not supported yet");
-		assertThatThrownBy(() -> Clojure.read("(force x)", null)).isInstanceOf(LispReadException.class)
-			.hasMessageContaining("force is not supported yet");
 		assertThatThrownBy(() -> Clojure.read("(promise)", null)).isInstanceOf(LispReadException.class)
 			.hasMessageContaining("promise is not supported yet");
 		assertThatThrownBy(() -> Clojure.read("(deliver p 1)", null)).isInstanceOf(LispReadException.class)
@@ -3117,7 +3182,10 @@ class ClojureLoweringTest {
 			.contains("\"java.util.UUID\"");
 		assertThat(lowered("(map map? [1])")).contains("LAMBDA").contains("(RONTOLISP::%CLOJURE-IS-MAP-TYPE ");
 		// a kind no value here has: false, the argument still evaluated
-		assertThat(lowered("(delay? [1])")).contains("PROGN").contains("RONTOLISP::%CLOJURE-FALSE");
+		assertThat(lowered("(chunked-seq? [1])")).contains("PROGN").contains("RONTOLISP::%CLOJURE-FALSE");
+		// a delay: the delay family's test, (progn x false) again where no delay is made
+		assertThat(lowered("(delay? [1])")).contains("(RONTOLISP::%CLOJURE-IS-DELAY (VECTOR 1) ")
+			.contains("RONTOLISP::%CLOJURE-FALSE");
 		// the sorted-aware tests: sorted? its own, set? and reversible? the helpers a
 		// program storing no row of the interface's family and building no sorted
 		// collection calls as the plain ones (ClojureLibrary's strip, in family order)

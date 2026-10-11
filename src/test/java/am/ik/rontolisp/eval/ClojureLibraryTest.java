@@ -262,6 +262,37 @@ class ClojureLibraryTest {
 		List<LispVal> matcher = ClojureLibrary
 			.process(Clojure.read("(println (nth (re-matcher #\"(a)\" \"a\") 1))", null));
 		assertThat(defun(matcher, "RONTOLISP::%CLOJURE-NTH")).contains("(RONTOLISP::%CLOJURE-MATCHER-VALUE-P COLL)");
+		// an instance call of a Matcher method reaches the matcher's own only where a
+		// matcher exists; elsewhere it is refused as before
+		String call = "(defn f [m] (.lookingAt m)) (println (f 1))";
+		assertThat(ClojureLibrary.process(Clojure.read(call, null)).stream().map(LispVal::print))
+			.noneMatch(text -> text.contains("(RONTOLISP::%CLOJURE-MATCHER-LOOKING-AT "));
+		assertThat(ClojureLibrary.process(Clojure.read(call + " (f (re-matcher #\"a\" \"a\"))", null))
+			.stream()
+			.map(LispVal::print)).anyMatch(text -> text.contains("(RONTOLISP::%CLOJURE-MATCHER-LOOKING-AT "));
+	}
+
+	@Test
+	void aProgramMakingNoDelaySplicesDerefAndThePrinterWithoutTheirDelayArms() {
+		// only delay makes a delay: a program naming it keeps deref's and the printer's
+		// delay arms, any other derefs and prints as before delays, and its force and
+		// delay? are the value itself and (progn x false)
+		assertThat(defun(ClojureLibrary.forms(), "RONTOLISP::%CLOJURE-DEREF-OTHER"))
+			.contains("(RONTOLISP::%CLOJURE-DELAY-P X)");
+		List<LispVal> plain = ClojureLibrary
+			.process(Clojure.read("(prn @(atom 1) (deref (reduced 2)) (force 3) (delay? 4) [5])", null));
+		for (String name : List.of("RONTOLISP::%CLOJURE-DEREF-OTHER", "RONTOLISP::%CLOJURE-WRITE",
+				"RONTOLISP::%CLOJURE-IS-REALIZED")) {
+			assertThat(defun(plain, name)).as(name).doesNotContain("DELAY");
+		}
+		assertThat(plain.stream()
+			.map(LispVal::print)
+			.filter(text -> !text.startsWith("(DEFUN ") && !text.startsWith("(DEFVAR ")))
+			.noneMatch(text -> text.contains("%CLOJURE-FORCE") || text.contains("%CLOJURE-IS-DELAY")
+					|| text.contains("%CLOJURE-DELAY-P"));
+		List<LispVal> delayed = ClojureLibrary.process(Clojure.read("(prn @(delay 1) (delay? 2))", null));
+		assertThat(defun(delayed, "RONTOLISP::%CLOJURE-DEREF-OTHER")).contains("(RONTOLISP::%CLOJURE-DELAY-P X)");
+		assertThat(defun(delayed, "RONTOLISP::%CLOJURE-WRITE")).contains("(RONTOLISP::%CLOJURE-DELAY-P X)");
 	}
 
 	@Test

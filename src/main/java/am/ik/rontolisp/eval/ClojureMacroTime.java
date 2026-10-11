@@ -79,6 +79,12 @@ public final class ClojureMacroTime {
 	private static final LispSymbol RESOLVE = new LispSymbol("RONTOLISP::%CLOJURE-RESOLVE");
 
 	/**
+	 * The run-time library's {@code ns-resolve} of a computed namespace or symbol,
+	 * refused there.
+	 */
+	private static final LispSymbol NS_RESOLVE_IN = new LispSymbol("RONTOLISP::%CLOJURE-NS-RESOLVE-IN");
+
+	/**
 	 * The macro runtime's scopes by namespace name, a constant in a program: here the
 	 * lowering's as they stand when a macro body expands.
 	 */
@@ -116,6 +122,7 @@ public final class ClojureMacroTime {
 				}
 				macroEval.eval(callingBack(EVAL, ClojureMacroEvaluator.Lowering::evalForm));
 				macroEval.eval(callingBack(RESOLVE, ClojureMacroEvaluator.Lowering::resolveForm));
+				macroEval.eval(callingBack(NS_RESOLVE_IN, ClojureMacroEvaluator.Lowering::nsResolveForm));
 				macroEval.eval(callingBack(MACRO_SCOPE, ClojureMacroEvaluator.Lowering::macroScopeForm));
 				this.evaluator = macroEval;
 			}

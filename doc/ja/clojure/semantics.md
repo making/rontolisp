@@ -199,8 +199,11 @@ $ rontolisp test                      # test/**/*_test.clj を clojure.test で�
 expander 適用へ渡り、答えは datum に decode されて他のフォームと同様に lower されます。
 そのため、すべてのバックエンドも、マクロ呼び出しに対するインタプリタ自身の `eval`
 も、展開後のコードを実行します。パラメータには未評価フォームが束縛され（`&` rest、
-destructuring、複数アリティは `defn` と同様。docstring と attr map は読み飛ばし）、
-`&form`/`&env` は拒否されます。本体が見えるのは核の built-in、`clojure.lisp`
+destructuring、複数アリティは `defn` と同様。docstring と attr map は読み飛ばし）。
+本体の `&form` は呼び出しそのもの、`&env` は呼び出し位置のローカルを各シンボルからそれ自身へ
+写すマップです（ローカルがなければ oracle と同じく nil。oracle の値はコンパイラの
+`LocalBinding`）。実行時の `macroexpand` は `&form` を束縛し、`&env` は nil のままです。
+本体が見えるのは核の built-in、`clojure.lisp`
 ライブラリ、そして呼び出し位置より上にあるプログラムのトップレベル定義（自身のファイル、
 require した名前空間、REPL の前の入力のもの）であり、oracle のフォームごとのロードと
 同じです。`def` の値は、本体がそれを読むときにだけ展開用に作られます。本体は
@@ -330,7 +333,8 @@ docstring の `:doc`、名前のメタデータと attr マップ（定義の位
 `agent` は `send`/`send-off` で更新される同じセルです。送信は即時に適用され
 （スレッドプールがないため非同期の順序付けは対象外）、agent を答えます。送信の
 実行中 `*agent*` が束縛されます。`await` の待ち合わせと `shutdown-agents` は
-`nil` を答えます。`future`/`delay`/`force`/`promise`/`deliver` は名前で拒否された
+`nil` を答えます。[delay](reference/delay.md) は最初の `force` か `deref` で、自身の
+ロックの下で本体を一度だけ実行します。`future`/`promise`/`deliver` は名前で拒否された
 ままで、`proxy-super` も同様です（proxy メソッドに super ハンドルはありません）。
 
 `binding` は `^:dynamic` な var と `clojure.core` の特殊変数を動的エクステントで
@@ -469,12 +473,12 @@ var はエクスポートより下で定義してかまいません。
 | レコード自身のインタフェースのメソッドのうち、レコードがインタフェース側に任せるもの（`assocEx`、`java.util.Map` の default メソッド）を定義した `defrecord` の本体 | `... is not supported yet as a method of defrecord` | それらのインタフェースにはレコード自身の動詞が答えるため、そのメソッドを持つ行がない |
 | 本体が書かなかった `java.util` の default メソッドのインスタンス呼び出し | `the default method ... is not supported yet` | default メソッドの本体は Java で、どのバックエンドもそれを実行しない |
 | 特殊変数でない core の var（`inc`）やホストフィールドへの `set!` | `set! of a var is not supported yet: ...`、`set! of a host field is not supported yet: ...` | 代入先の var がない。`java:` にフィールド書き込みがない |
-| `future`、`delay`/`force`、`promise`/`deliver` | 名前で | どのバックエンドにもスレッドプール・遅延メモセル・ブロッキング待ち合わせがない |
+| `future`、`promise`/`deliver` | 名前で | どのバックエンドにもスレッドプール・ブロッキング待ち合わせがない |
 | proxy メソッドの外側の `proxy-super` | `proxy-super outside a proxy method` | `proxy-super` はメソッドの `this` に対するスーパークラスの実装呼び出し |
 | 2 つめのクラス・重複メソッド・`final` スーパークラスを伴う `proxy` | `... is a class, not an interface`、`proxy defines method ... twice`、`proxy cannot extend final class ...` | スーパークラスは 1 つのみ、メソッド名ごとに本体は 1 つ、`final` のスーパークラスは不可 |
 | インターフェースだけの proxy の `toString`/`equals`/`hashCode` | `proxy cannot override ... yet` | `java:proxy` は `Object` の 3 メソッドを保つので本体は実行されない（クラスの proxy は実行する） |
 | 可変長のみの静的メンバー、インスタンスメソッド（`Class/.m`）、コンストラクタ（`Class/new`）の値 | `... is variadic and has no value form` | `java:static`、`java:call`、`java:new` へ届く rest 展開がない |
-| `defmacro` パラメータの `&form`/`&env` | 名前で | マクロはコンパイル環境を受け取らない |
+| `defmacro` パラメータとしての `&form`/`&env` | 名前で | 本体の暗黙の引数である |
 | 未知のエイリアスの `::alias/kw` | `Invalid token: ...` | 解決するのは require のエイリアス、ファイル自身の ns、既知の名前空間のみ |
 | `--no-gc` ビルド | 名前で | そのバックエッドにはペアもシンボルもクロージャもない |
 | `file:`、`http:`、`https:` 以外のプロトコル（`ftp:` など）の URL の読み取り | `reading the ftp: URL ... is not built in` | `clojure.java.io` の下にそのための接続の実行系がない。`http:` URL は `rontolisp:fetch` で読む（[HTTP の URL](reference/clojure-java-io.md#http-urls)） |

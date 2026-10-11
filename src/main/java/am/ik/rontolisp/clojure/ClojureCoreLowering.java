@@ -183,6 +183,14 @@ final class ClojureCoreLowering {
 			case "meta":
 				arity(name, n, 1, 1);
 				return worker(name, ctx.lower(items.get(1)));
+			case "type":
+				arity(name, n, 1, 1);
+				return ClojureDispatchLowering.typeForm(ctx, ctx.lower(items.get(1)));
+			case "print-method":
+				// the type's print-method a program defined, else the value written as pr
+				// writes it ("print-method", clojure.lisp)
+				arity(name, n, 2, 2);
+				return worker(name, ctx.lower(items.get(1)), ctx.lower(items.get(2)));
 			case "test":
 				arity(name, n, 1, 1);
 				return ClojureVarLowering.testOf(ctx.lower(items.get(1)));
@@ -245,13 +253,14 @@ final class ClojureCoreLowering {
 					"unchecked-remainder-int", "run!", "iteration", "seq-to-map-for-destructuring", "println", "print",
 					"prn", "pr", "flush", "read-line", "reader-conditional", "tagged-literal", "inst-ms", "parse-uuid",
 					"random-uuid", "iterator-seq", "hash-ordered-coll", "hash-unordered-coll", "mix-collection-hash",
-					"hash-combine", "byte-array", "bytes", "aclone", "aset-byte" ->
+					"hash-combine", "byte-array", "bytes", "aclone", "aset-byte", "print-method" ->
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), runtime(name + "-v"));
 			case "hash" -> ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), runtime("hasheq-v"));
 			case "inst-ms*" -> ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), runtime("inst-ms-v"));
 			case "map-entry?" -> ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), runtime("map-entry-p-v"));
 			case "pmap" -> ClojureSeqLowering.mapValue(ctx);
 			case "test" -> ClojureVarLowering.testValue();
+			case "type" -> ClojureDispatchLowering.typeValue(ctx);
 			case "var-get" -> ClojureVarLowering.getValue();
 			case "the-ns", "find-ns", "ns-name" -> {
 				LispSymbol arg = ctx.freshTemp();

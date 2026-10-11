@@ -168,6 +168,44 @@ final class ClojureLazyLowering {
 		}
 	}
 
+	/** The delay family's test of a delay ({@code clojure.lisp}). */
+	static final String DELAY_P = "RONTOLISP::%CLOJURE-DELAY-P";
+
+	/** {@code delay}'s constructor over the body's thunk: the delay family's producer. */
+	static final String MAKE_DELAY = "RONTOLISP::%CLOJURE-DELAY";
+
+	/**
+	 * {@code force}: a delay's value, anything else itself; {@code progn} in a program
+	 * making no delay (the delay family's alias).
+	 */
+	static final String FORCE = "RONTOLISP::%CLOJURE-FORCE";
+
+	/**
+	 * {@code delay?}'s test {@code (is-delay value false)}: {@code progn} in a program
+	 * making no delay (the delay family's alias), the false answer every value has there.
+	 */
+	static final String IS_DELAY = "RONTOLISP::%CLOJURE-IS-DELAY";
+
+	/**
+	 * {@code (delay body...)}: a delay over a zero-argument thunk of the body, which is
+	 * its own {@code recur} target like the oracle's {@code fn*} -- the body runs at most
+	 * once, on the first {@code force} or {@code deref} ({@code clojure.lisp} "Delays").
+	 */
+	static LispVal delayOf(ClojureLowering ctx, List<LispVal> items) {
+		ClojureLowering.RecurTarget target = new ClojureLowering.RecurTarget(ctx.freshRecurName(), true);
+		target.setArity(0, false);
+		ctx.pushRecurTarget(target);
+		try {
+			LispVal lambda = ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(List.of()),
+					ctx.bodyTail(items, 1));
+			LispVal thunk = target.used() ? ClojureLowering.labelsSelfCall(target.callName(), lambda) : lambda;
+			return ClojureLowerUtil.list(new LispSymbol(MAKE_DELAY), thunk);
+		}
+		finally {
+			ctx.recurTargets.pop();
+		}
+	}
+
 	/**
 	 * {@code (lazy-cat e...)}: each expression behind its own {@code lazy-seq},
 	 * concatenated lazily -- a datum rewrite onto {@code concat}, so chunk-free laziness

@@ -143,22 +143,40 @@ final class ClojureMacroLowering {
 		}
 		ClojureLowerUtil.isTrue(items.size() > at, "defmacro needs a parameter vector and a body");
 		List<ClojureLowering.Clause> clauses;
-		if (items.get(at) instanceof LispCons && !ClojureBindingLowering.isVectorDatum(items.get(at))) {
-			List<LispVal> raw = items.subList(at, items.size());
-			for (LispVal clauseDatum : raw) {
-				List<LispVal> parts = ClojureLowerUtil.items(clauseDatum);
-				if (parts != null && !parts.isEmpty()) {
-					refuseEnvForm(parts.get(0));
+		boolean outerReads = ctx.macroReadsEnv;
+		ctx.macroReadsEnv = false;
+		ctx.macroBodyDepth++;
+		boolean readsEnv;
+		try {
+			if (items.get(at) instanceof LispCons && !ClojureBindingLowering.isVectorDatum(items.get(at))) {
+				List<LispVal> raw = items.subList(at, items.size());
+				for (LispVal clauseDatum : raw) {
+					List<LispVal> parts = ClojureLowerUtil.items(clauseDatum);
+					if (parts != null && !parts.isEmpty()) {
+						refuseEnvForm(parts.get(0));
+					}
 				}
+				clauses = ClojureBindingLowering.arityClauses(ctx, raw, "defmacro");
 			}
-			clauses = ClojureBindingLowering.arityClauses(ctx, raw, "defmacro");
+			else {
+				refuseEnvForm(items.get(at));
+				clauses = List
+					.of(ClojureBindingLowering.clause(ctx, items.get(at), items.subList(at + 1, items.size())));
+			}
 		}
-		else {
-			refuseEnvForm(items.get(at));
-			clauses = List.of(ClojureBindingLowering.clause(ctx, items.get(at), items.subList(at + 1, items.size())));
+		finally {
+			ctx.macroBodyDepth--;
+			readsEnv = ctx.macroReadsEnv;
+			ctx.macroReadsEnv = outerReads;
 		}
 		LispVal expander = macroExpander(ctx, name, clauses);
 		String key = ctx.intern(name, ClojureLowerUtil.nameIsPrivate(items.get(1)));
+		if (readsEnv) {
+			ctx.envMacros.add(key);
+		}
+		else {
+			ctx.envMacros.remove(key);
+		}
 		LispSymbol table = macroTable(key);
 		ctx.macros.put(key, expander);
 		ctx.globals.put(key, ClojureLowering.Kind.MACRO);
@@ -295,13 +313,15 @@ final class ClojureMacroLowering {
 	}
 
 	/**
-	 * Refuses {@code &form} and {@code &env} anywhere in a macro parameter datum: a macro
-	 * body runs with its arguments only, never with a compilation environment.
+	 * Refuses {@code &form} and {@code &env} anywhere in a macro parameter datum: both
+	 * are the body's implicit arguments ({@link #MACRO_FORM}, {@link #MACRO_ENV}), which
+	 * a parameter of the name would hide.
 	 */
 	static void refuseEnvForm(LispVal datum) {
 		if (datum instanceof LispSymbol s) {
 			if (s.name().equals("&form") || s.name().equals("&env")) {
-				throw new LispReadException(s.name() + " is not supported yet: macros receive no environment");
+				throw new LispReadException(
+						s.name() + " cannot name a macro parameter: it is the body's implicit argument");
 			}
 			return;
 		}
@@ -371,7 +391,36 @@ final class ClojureMacroLowering {
 		if (expander == null) {
 			throw new LispReadException("macro `" + name + "` used before its definition");
 		}
-		return expandMacro(ctx, name, expander, items);
+		return expandMacro(ctx, name, expander, items, ctx.envMacros.contains(key));
+	}
+
+	/**
+	 * The special a macro body's {@code &env} reads: the call's locals, nil outside an
+	 * expansion while the program lowers (a run-time {@code macroexpand}'s, the oracle's
+	 * nil).
+	 */
+	static final String MACRO_ENV = "RONTOLISP::%CLOJURE-MACRO-ENV";
+
+	/** The special a macro body's {@code &form} reads: the call being expanded. */
+	static final String MACRO_FORM = "RONTOLISP::%CLOJURE-MACRO-FORM";
+
+	/**
+	 * The value of {@code &env} at a call: nil where the call sees no local, like the
+	 * oracle's, else a map of each local's symbol to itself (the oracle's values are the
+	 * compiler's {@code LocalBinding}s), built from the datum the program would spell.
+	 */
+	private static LispVal envValue(ClojureLowering ctx) {
+		java.util.TreeSet<String> locals = new java.util.TreeSet<>(ctx.visibleLocals());
+		if (locals.isEmpty()) {
+			return ClojureLowering.NIL_CONST;
+		}
+		List<LispVal> map = new ArrayList<>();
+		map.add(new LispSymbol("%hash-map"));
+		for (String local : locals) {
+			map.add(new LispSymbol(local));
+			map.add(new LispSymbol(local));
+		}
+		return ctx.quote(ClojureLowerUtil.list(map));
 	}
 
 	/**
@@ -392,7 +441,8 @@ final class ClojureMacroLowering {
 	 * of the expander, the answer decodes back to a datum and lowers like any other form
 	 * -- which expands the macros the expansion calls, one depth deeper.
 	 */
-	static LispVal expandMacro(ClojureLowering ctx, String name, LispVal expander, List<LispVal> items) {
+	static LispVal expandMacro(ClojureLowering ctx, String name, LispVal expander, List<LispVal> items,
+			boolean bindsEnv) {
 		if (ctx.macroDepth >= ClojureLowering.MAX_MACRO_DEPTH) {
 			throw new LispReadException("macro expansion of `" + name + "` did not terminate");
 		}
@@ -405,11 +455,17 @@ final class ClojureMacroLowering {
 			quoted.add(ctx.quote(items.get(i)));
 		}
 		// the body reads the load's specials where the call expands, like the oracle's
-		// macroexpansion inside the load
-		LispVal invocation = ClojureLowerUtil.list(ClojureLowerUtil.sym("let"), ClojureLowerUtil.list(
+		// macroexpansion inside the load, and a body reading &env or &form the call's
+		// locals and the call
+		List<LispVal> bindings = new ArrayList<>(List.of(
 				ClojureLowerUtil.list(ClojureCoreSpecials.NS, ClojureCoreSpecials.namespaceObject(ctx.currentNs)),
 				ClojureLowerUtil.list(ClojureCoreSpecials.FILE, LispString.literal(ctx.loadingFile)),
-				ClojureLowerUtil.list(ClojureCoreSpecials.SOURCE_PATH, LispString.literal(ctx.loadingSourcePath))),
+				ClojureLowerUtil.list(ClojureCoreSpecials.SOURCE_PATH, LispString.literal(ctx.loadingSourcePath))));
+		if (bindsEnv) {
+			bindings.add(ClojureLowerUtil.list(new LispSymbol(MACRO_ENV), envValue(ctx)));
+			bindings.add(ClojureLowerUtil.list(new LispSymbol(MACRO_FORM), ctx.quote(ClojureLowerUtil.list(items))));
+		}
+		LispVal invocation = ClojureLowerUtil.list(ClojureLowerUtil.sym("let"), ClojureLowerUtil.list(bindings),
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("funcall"), expander,
 						ClojureLowerUtil.cons(ClojureLowerUtil.sym("list"), quoted)));
 		handOverCaughtClasses(ctx, ctx.macroEvaluator);
@@ -439,6 +495,22 @@ final class ClojureMacroLowering {
 	static String exMessage(RuntimeException ex) {
 		String message = ex.getMessage();
 		return message == null ? ex.toString() : message;
+	}
+
+	/**
+	 * The name of the namespace a run-time value stands for: a namespace object
+	 * {@code (:C%NS-OBJECT "name")} or a symbol naming one; null for anything else.
+	 */
+	static @Nullable String namespaceName(ClojureLowering ctx, LispVal value) {
+		if (value instanceof LispCons cons && cons.car() instanceof LispSymbol tag && tag.name().equals(":C%NS-OBJECT")
+				&& cons.cdr() instanceof LispCons rest && rest.car() instanceof LispString name) {
+			return name.value();
+		}
+		if (value instanceof LispSymbol) {
+			LispVal datum = decodeDatum(ctx, value);
+			return datum instanceof LispSymbol symbol ? symbol.name() : null;
+		}
+		return null;
 	}
 
 	/**
@@ -1150,6 +1222,21 @@ final class ClojureMacroLowering {
 			}
 
 			@Override
+			public LispVal nsResolveForm(LispVal pair) {
+				List<LispVal> parts = ClojureLowerUtil.items(pair);
+				if (parts == null || parts.size() != 2) {
+					throw new LispReadException("ns-resolve takes a namespace and a symbol");
+				}
+				String namespace = namespaceName(ctx, parts.get(0));
+				LispVal datum = decodeDatum(ctx, parts.get(1));
+				if (namespace == null || !(datum instanceof LispSymbol symbol) || symbol.name().startsWith(":")) {
+					throw new LispReadException(
+							"ns-resolve takes a namespace and a symbol: " + parts.get(0).print() + " " + datum.print());
+				}
+				return ClojureVarLowering.resolvedInNamespace(ctx, namespace, symbol.name());
+			}
+
+			@Override
 			public LispVal macroScopeForm(LispVal namespace) {
 				String name = namespace instanceof LispString string ? string.value() : "";
 				return ClojureLowerUtil.list(ClojureLowerUtil.sym("quote"), macroScope(ctx, name));
@@ -1379,9 +1466,7 @@ final class ClojureMacroLowering {
 									ClojureHierarchyLowering.hfn("C%MACRO-FN",
 											ClojureHierarchyLowering.hfn("CAR", form)),
 									ClojureLowering.NIL_CONST))),
-					ClojureHierarchyLowering.hfn("IF", next,
-							ClojureHierarchyLowering.hfn("FUNCALL", next, ClojureHierarchyLowering.hfn("CDR", form)),
-							form))));
+					ClojureHierarchyLowering.hfn("IF", next, expansionOf(ctx, next, form), form))));
 		// (defun C%MACROEXPAND (form) ...): to the fixpoint, the mangled data itself
 		LispVal walkExpand = ClojureHierarchyLowering
 			.hfnDef("WALK", List.of(form), ClojureHierarchyLowering.hlet(
@@ -1390,12 +1475,24 @@ final class ClojureMacroLowering {
 									ClojureHierarchyLowering.hfn("C%MACRO-FN",
 											ClojureHierarchyLowering.hfn("CAR", form)),
 									ClojureLowering.NIL_CONST))),
-					ClojureHierarchyLowering.hfn("IF", next, ClojureHierarchyLowering.hfn("WALK",
-							ClojureHierarchyLowering.hfn("FUNCALL", next, ClojureHierarchyLowering.hfn("CDR", form))),
-							form)));
+					ClojureHierarchyLowering.hfn("IF", next,
+							ClojureHierarchyLowering.hfn("WALK", expansionOf(ctx, next, form)), form)));
 		runtime.add(ClojureHierarchyLowering.hdefun(MACROEXPAND, List.of(form),
 				ClojureHierarchyLowering.hlabels(List.of(walkExpand), ClojureHierarchyLowering.hfn("WALK", form))));
 		return runtime;
+	}
+
+	/**
+	 * A run-time expansion of the macro call {@code form} through its expander
+	 * {@code next}: {@code &form} bound to the call where a macro body reads it, the
+	 * oracle's; {@code &env} stays nil, the oracle's too.
+	 */
+	private static LispVal expansionOf(ClojureLowering ctx, LispSymbol next, LispSymbol form) {
+		LispVal call = ClojureHierarchyLowering.hfn("FUNCALL", next, ClojureHierarchyLowering.hfn("CDR", form));
+		if (!ctx.readsMacroForm) {
+			return call;
+		}
+		return ClojureHierarchyLowering.hlet(List.of(ClojureLowerUtil.list(new LispSymbol(MACRO_FORM), form)), call);
 	}
 
 }

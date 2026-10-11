@@ -204,8 +204,10 @@ site expands datum to datum while lowering -- the argument forms travel quoted i
 one application of the lowered body, the answer decodes back to a datum and lowers
 like any other form -- so every backend, and the interpreter's own `eval` of a macro
 call, runs expanded code. Parameters bind unevaluated forms (`&` rest, destructuring
-and several arities like `defn`; a docstring and an attr map are skipped);
-`&form`/`&env` are refused. A body sees the core builtins, the `clojure.lisp`
+and several arities like `defn`; a docstring and an attr map are skipped). A body's
+`&form` is the call and `&env` a map of the call site's locals, each symbol to itself (nil
+where the call sees none, like the oracle's; its values are the compiler's
+`LocalBinding`s); a run-time `macroexpand` binds `&form` and leaves `&env` nil. A body sees the core builtins, the `clojure.lisp`
 library and the program's top-level definitions above the call site -- its own file's,
 a required namespace's, an earlier REPL input's -- like the oracle's form-by-form load;
 a `def`'s value is built for an expansion only when the body reads it. A body may
@@ -343,7 +345,8 @@ apply through the `:validator` (a failed one signals and writes nothing),
 requiring the extent. An `agent` is the same cell updated by `send`/`send-off`,
 which apply at once (there is no thread pool, so async ordering is out) and
 answer the agent; `*agent*` is bound while one runs. `await` rendezvous and
-`shutdown-agents` answer `nil`. `future`/`delay`/`force`/`promise`/`deliver`
+`shutdown-agents` answer `nil`. A [delay](reference/delay.md) runs its body once, on
+the first `force` or `deref`, under its own lock. `future`/`promise`/`deliver`
 stay refused by name, and so does `proxy-super` (proxy methods take no super
 handle).
 
@@ -476,12 +479,12 @@ Each refusal names the missing design, never `unknown name`:
 | a `defrecord` body defining a method of the record's own interfaces the record leaves to the interface (`assocEx`, a `java.util.Map` default) | `... is not supported yet as a method of defrecord` | the record's own verbs answer those interfaces, so no row holds the method |
 | an instance call of a `java.util` default method the body left out | `the default method ... is not supported yet` | the default's body is Java, which no backend runs |
 | `set!` of a core var that is no special (`inc`), of a host field | `set! of a var is not supported yet: ...`, `set! of a host field is not supported yet: ...` | no var to assign; the `java:` surface has no field write |
-| `future`, `delay`/`force`, `promise`/`deliver` | by name | no thread pool, lazy memo cells or blocking rendezvous on any backend |
+| `future`, `promise`/`deliver` | by name | no thread pool or blocking rendezvous on any backend |
 | `proxy-super` outside a proxy method | `proxy-super outside a proxy method` | a `proxy-super` calls the superclass implementation on the method's `this` |
 | `proxy` with a second class, a duplicate method, a final superclass | `... is a class, not an interface`, `proxy defines method ... twice`, `proxy cannot extend final class ...` | one superclass only, one body per method name, no final superclass |
 | `toString`/`equals`/`hashCode` in an interface-only `proxy` | `proxy cannot override ... yet` | `java:proxy` keeps `Object`'s three, so the body would never run (a class proxy runs it) |
 | a variadic-only static member, instance method (`Class/.m`) or constructor (`Class/new`) as a value | `... is variadic and has no value form` | no rest-spread reaches `java:static`, `java:call` or `java:new` |
-| `&form`/`&env` in `defmacro` parameters | by name | macros receive no compilation environment |
+| `&form`/`&env` as `defmacro` parameters | by name | they are the body's implicit arguments |
 | `::alias/kw` with an unknown alias | `Invalid token: ...` | only required aliases, the file's own ns and known namespaces resolve |
 | `--no-gc` builds | by name | that backend has no pairs, symbols or closures |
 | reading a URL of another protocol than `file:`, `http:` and `https:` (`ftp:` ...) | `reading the ftp: URL ... is not built in` | no connection runtime behind `clojure.java.io` for it; an `http:` URL is read through `rontolisp:fetch` ([HTTP URLs](reference/clojure-java-io.md#http-urls)) |

@@ -40,6 +40,7 @@
 | `fn?` | `(fn? inc)` | `true` |
 | `instance?` | `(instance? String "a")` | `true` |
 | `class` | `(class "a")` | `:string` |
+| `type` | `(type (with-meta [] {:type :a}))` | `:a` |
 | `int` | `(int 2.7)` | `2` |
 | `long` | `(long -2.7)` | `-2` |
 | `double` | `(double 1)` | `1.0` |

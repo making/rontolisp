@@ -466,6 +466,46 @@ cases:
     expected: |
       nil
       3
+  - name: delay-runs-its-body-once-and-force-reads-it
+    # A delay's body runs at most once, on the first force or deref, and a body that
+    # threw throws the same exception again (realized? is then true); force of any
+    # other value is the value. delay? and instance? of Delay, IDeref and IPending
+    # answer, = is identity, and deref with a timeout is the oracle's
+    # ClassCastException. Every line the oracle's (clj 1.12.6); the printed form
+    # leaves out the identity hash the oracle's #object carries (deviation).
+    source: |
+      (ns delay-memo)
+      (def runs (atom 0))
+      (def d (delay (swap! runs inc) (println "running") :v))
+      (prn (realized? d) (delay? d) (delay? 1) @runs)
+      (prn (force d) (force d) @d (deref d) @runs (realized? d))
+      (prn (force 5) (force nil) (map force [(delay 1) 2 (delay 3)]) (map delay? [1 nil]))
+      (def e (delay (throw (ex-info "boom" {:k 1}))))
+      (prn (try @e (catch clojure.lang.ExceptionInfo x (ex-message x))) (try (force e) (catch Exception x (ex-data x))) (realized? e))
+      (prn (instance? clojure.lang.Delay d) (instance? clojure.lang.IDeref d) (instance? clojure.lang.IPending d) (instance? clojure.lang.Delay 1))
+      (prn (= d d) (= (delay 1) (delay 1)) (str "s:" (delay? d)) (count (filter delay? [1 d])))
+      (let [x 10 dd (delay (* x 2))] (prn (force dd) (realized? (delay)) @(delay)))
+      (prn (try (deref (delay 7) 100 :timeout) (catch ClassCastException x :cce)))
+      (defn countdown [n] (delay (if (pos? n) @(countdown (dec n)) :done)))
+      (prn @(countdown 3))
+      (def shown (delay [1 "a"]))
+      (prn shown)
+      (force shown)
+      (prn [shown] (str shown))
+      (in-ns 'user)
+    expected: |
+      false true false 0
+      running
+      :v :v :v :v 1 true
+      5 nil (1 2 3) (false false)
+      "boom" {:k 1} true
+      true true true false
+      true false "s:true" 1
+      20 false nil
+      :cce
+      :done
+      #object[clojure.lang.Delay {:status :pending, :val nil}]
+      [#object[clojure.lang.Delay {:status :ready, :val [1 "a"]}]] "clojure.lang.Delay"
   - name: lazy-cat-fibs-prefix
     # lazy-cat nests concat over per-member lazy-seqs, so the self-referential
     # fibs (the book's introduction.clj shape) terminates behind take; map runs
@@ -2027,6 +2067,94 @@ cases:
       was-kw
       dflt
       dflt
+  - name: type-reads-the-type-metadata-else-the-class
+    # type is the oracle's (or (get (meta x) :type) (class x)): a logically true
+    # :type entry of the metadata, any value, else what class answers (compared, not
+    # printed: class answers kind keywords here). As a defmulti dispatch function
+    # nil answers nil, so the nil method takes it. Every line the oracle's (clj
+    # 1.12.6).
+    source: |
+      (ns type-meta)
+      (defrecord TR [a])
+      (prn (type (with-meta [1 2] {:type :my-type})) (type (with-meta {:a 1} {:type "str-type"})) (type (with-meta (->TR 1) {:type ::rec})))
+      (prn (= (type (->TR 1)) (class (->TR 2))) (= (type 1) (class 2)) (= (type (with-meta [1] {:type nil})) (class [1])) (= (type (with-meta [1] {:type false})) (class [1])))
+      (prn (map type [(with-meta [] {:type :a}) (with-meta '(1) {:type :b}) (with-meta {} {:type :c})]))
+      (defmulti kind type)
+      (defmethod kind :circle [x] (str "circle " (:r x)))
+      (defmethod kind TR [x] (str "record " (:a x)))
+      (defmethod kind nil [x] "nil!")
+      (defmethod kind :default [x] "other")
+      (prn (kind (with-meta {:r 2} {:type :circle})) (kind (->TR 3)) (kind 5) (kind nil))
+      (in-ns 'auto)
+    expected: |
+      :my-type "str-type" :type-meta/rec
+      true true true true
+      (:a :b :c)
+      "circle 2" "record 3" "other" "nil!"
+  - name: print-method-of-a-record-or-deftype-is-how-every-printer-writes-it
+    # A print-method a program defines for a record or deftype is how pr, prn, print,
+    # println and their string forms write a value of the type, at any depth, the
+    # stream the method's writer (.write, binding *out*, print-method of a part); a pr
+    # inside it under print writes as print does (*print-readably* nil, like the
+    # oracle's print), print-method called writes through it or as pr, get-method and
+    # remove-method reach it. instaparse's Failure and Parser print this way. Every
+    # line the oracle's (clj 1.12.6).
+    source: |
+      (ns pm-ns)
+      (defrecord R [a b])
+      (deftype T [x])
+      (defrecord Plain [a])
+      (defmethod print-method R [r w]
+        (.write w (str "#R<" (:a r) ">")))
+      (defmethod print-method T [t ^java.io.Writer w]
+        (binding [*out* w]
+          (print "T:" (.-x t))))
+      (def r (->R 1 2))
+      (prn r)
+      (println r)
+      (pr r) (newline)
+      (print r) (newline)
+      (prn (pr-str r) (print-str r) (prn-str r))
+      (prn [r (T. 5) {:k r} #{r} (list r) (->Plain r)])
+      (println [r (T. "s")])
+      (prn (str [r]) (with-out-str (pr r)) (map identity [r r]) (seq [r]))
+      (prn (T. [1 "a"]))
+      (print (T. [1 "a"])) (newline)
+      (binding [*print-readably* false] (prn r (T. "z")))
+      (prn (with-out-str (println (T. "w"))) (with-out-str (print-method r *out*)))
+      (print-method [1 "a" (T. 8)] *out*) (newline)
+      (prn (fn? (get-method print-method R)) (fn? (get-method print-method Plain)))
+      (defmethod print-method R [r w] (.write w "again"))
+      (prn r)
+      (remove-method print-method R)
+      (prn r (->Plain 3))
+      (defrecord Q [v])
+      (defmethod print-method Q [q w] (.write w "<") (print-method (:v q) w) (.write w ">"))
+      (prn (->Q "s") (->Q [1 (->Q :k)]))
+      (print (->Q "s")) (newline)
+      (defmethod print-method Plain [p w] (.write w "P") (pr (:a p)))
+      (prn (with-out-str (pr (->Plain "x"))) (with-out-str (print (->Plain "x"))))
+      (in-ns 'auto)
+    expected: |
+      #R<1>
+      #R<1>
+      #R<1>
+      #R<1>
+      "#R<1>" "#R<1>" "#R<1>\n"
+      [#R<1> T: 5 {:k #R<1>} #{#R<1>} (#R<1>) #pm_ns.Plain{:a #R<1>}]
+      [#R<1> T: s]
+      "[#R<1>]" "#R<1>" (#R<1> #R<1>) (#R<1>)
+      T: [1 a]
+      T: [1 a]
+      #R<1> T: z
+      "T: w\n" "#R<1>"
+      [1 "a" T: 8]
+      true true
+      again
+      #pm_ns.R{:a 1, :b 2} #pm_ns.Plain{:a 3}
+      <"s"> <[1 <:k>]>
+      <s>
+      "P\"x\"" "Px"
   - name: indirect-named-class-dispatch-hits-the-nil-method
     # A call to a named class-calling function nested inside an inline dispatch
     # datum answers the nil method for nil: the call site inlines the recorded
@@ -3258,6 +3386,43 @@ cases:
     expected: |
       eval is not supported at run time: only a macro body's eval runs, while the program lowers
       resolve of a computed symbol is not supported at run time: vars exist only while the program lowers
+  - name: macro-env-and-form-ns-resolve-and-a-require-that-runs-later
+    # A macro body's &form is the call and &env the call's locals (nil without one, so
+    # instaparse's defclone and set-global-var! take their clj branch); a run-time
+    # macroexpand binds &form and leaves &env nil. ns-resolve resolves a quoted symbol in
+    # a namespace the program knows, answers nil for a symbol the environment holds, and
+    # fails as the oracle does for one that does not exist (find-ns's nil, the-ns's No
+    # namespace). A require inside a function of a namespace no root holds fails where
+    # it runs, which instaparse's tree-viz catches. Every line the oracle's (clj 1.12.6).
+    source: |
+      (ns env-ns)
+      (defmacro form-of [& args] `(quote ~&form))
+      (defmacro locals [] `(quote ~(when &env (sort (map name (keys &env))))))
+      (prn (form-of 1 2) (macroexpand '(form-of 1 2)) (macroexpand-1 '(form-of :a)))
+      (prn (locals) (let [p 1 q 2] (locals)) (macroexpand '(locals)))
+      (defmacro defclone [here there]
+        (if (contains? &env :locals)
+          `(def ~here ~there)
+          `(do (def ~here ~there) (var ~here))))
+      (defclone my-inc inc)
+      (prn (my-inc 1))
+      (defn tree-viz [t]
+        (try
+          (require 'rhizome.viz)
+          :loaded
+          (catch Exception e (str "no rhizome: " (.getMessage e)))))
+      (prn (tree-viz nil))
+      (def escapable (try (ns-resolve (find-ns 'rhizome.dot) 'escapable-characters) (catch Exception e nil)))
+      (prn escapable (ns-resolve 'env-ns 'tree-viz) (ns-resolve *ns* 'my-inc) (ns-resolve 'env-ns {} 'my-inc) (ns-resolve 'env-ns '{my-inc 1} 'my-inc) (ns-resolve 'clojure.core 'map))
+      (prn (try (ns-resolve 'no.such.ns 'x) (catch Exception e (ex-message e))))
+      (in-ns 'lit)
+    expected: |
+      (form-of 1 2) (quote (form-of 1 2)) (quote (form-of :a))
+      nil ("p" "q") (quote nil)
+      2
+      "no rhizome: Could not locate rhizome/viz__init.class, rhizome/viz.clj or rhizome/viz.cljc on classpath."
+      nil #'env-ns/tree-viz #'env-ns/my-inc #'env-ns/my-inc nil #'clojure.core/map
+      "No namespace: no.such.ns found"
   - name: a-macro-argument-holding-a-regex-literal-expands
     # A macro argument travels quoted into the expander and its answer reads back as a
     # datum: a regex literal answers its pattern, which reads back as the literal (the
@@ -5417,6 +5582,54 @@ cases:
       [user@host user host]
       a
       nil
+  - name: a-matcher-answers-the-java-matcher-methods
+    # java.util.regex.Matcher's methods on a re-matcher: find (of none or a start),
+    # lookingAt and matches record a match the next find starts past, group, start and
+    # end (of the whole or a group) read it, -1 and nil for a group that took no part,
+    # groupCount, reset and pattern; no match is the IllegalStateException, a group
+    # past the pattern's the IndexOutOfBoundsException. re-match-at-front is
+    # instaparse's. Every line the oracle's (clj 1.12.6).
+    source: |
+      (ns matcher-methods)
+      (defn grp [m] (try (.group m) (catch IllegalStateException e (str "ISE " (.getMessage e)))))
+      (let [m (re-matcher #"(a+)(b)?" "aaab aa c")]
+        (prn (grp m) (.lookingAt m) (.group m) (.group m 1) (.group m 2) (.start m) (.end m) (.start m 1) (.end m 2) (.groupCount m))
+        (prn (.find m) (.group m) (.start m) (.end m) (.group m 2) (.start m 2) (.end m 2))
+        (prn (.find m) (grp m) (.lookingAt m) (.group m) (.find m) (.group m))
+        (prn (.matches m) (grp m) (do (.reset m) (grp m)) (.find m) (.group m)))
+      (let [m (re-matcher #"\d+" "123")]
+        (prn (.matches m) (.group m) (.start m) (.end m)))
+      (let [m (re-matcher #"x" "abc")]
+        (prn (.lookingAt m) (grp m) (.matches m) (.find m) (try (.start m) (catch IllegalStateException e (.getMessage e)))))
+      (let [m (re-matcher #"(a)" "a")]
+        (.find m)
+        (prn (try (.group m 2) (catch IndexOutOfBoundsException e (.getMessage e))) (try (.start m -1) (catch IndexOutOfBoundsException e (.getMessage e))))
+        (prn (try (.group m "nm") (catch IllegalArgumentException e (.getMessage e)))))
+      (let [m (re-matcher #"a*" "baa")]
+        (prn (.find m) (.group m) (.start m) (.find m) (.group m) (.start m) (.find m) (.group m) (.start m) (.find m)))
+      (let [m (re-matcher #"b" "abcb")]
+        (prn (.find m 2) (.start m) (.find m 0) (.start m) (try (.find m 9) (catch IndexOutOfBoundsException e (.getMessage e)))))
+      (defn re-match-at-front [regexp text]
+        (let [^java.util.regex.Matcher matcher (re-matcher regexp text)
+              match? (.lookingAt matcher)]
+          (when match?
+            (.group matcher))))
+      (prn (re-match-at-front #"[a-z]+" "abc123") (re-match-at-front #"\d+" "abc123"))
+      (prn (str (.pattern (re-matcher #"a.b" "x"))) (re-groups (doto (re-matcher #"(x)" "xx") .lookingAt)))
+      (in-ns 'jio)
+    expected: |
+      "ISE No match found" true "aaab" "aaa" "b" 0 4 0 4 2
+      true "aa" 5 7 nil -1 -1
+      false "ISE No match found" true "aaab" true "aa"
+      false "ISE No match found" "ISE No match found" true "aaab"
+      true "123" 0 3
+      false "ISE No match found" false false "No match found"
+      "No group 2" "No group -1"
+      "No group with name <nm>"
+      true "" 0 true "aa" 1 true "" 3 false
+      true 3 true 1 "Illegal start index"
+      "abc" nil
+      "a.b" ["x" "x"]
   - name: string-split-and-replace-take-patterns
     # The exploring.clj indexable-words/ellipsize shapes and the utils.clj
     # jar-urls filter: split/replace take pattern values (strings stay

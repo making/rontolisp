@@ -32,8 +32,11 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   top-level `set!` of it to a literal switches off the asserts after it; a `set!` inside
   a function, or to a computed value, does not (the oracle's takes effect once it runs).
   A Common Lisp `format`'s `~S`/`~A` on Clojure values stay Common Lisp notation (it is
-  a CL surface; `clojure.pprint/cl-format` writes them as Clojure); `print-method` stays
-  absent.
+  a CL surface; `clojure.pprint/cl-format` writes them as Clojure).
+  [print-method](reference/print-method.md) takes a program's own records and deftypes
+  only: a method for a `:type` keyword or a class is refused by name, `methods` and
+  `prefer-method` of it are too, and `get-method` of a type without one answers
+  `print-method` itself where the oracle's answers its default method.
 - A wrong argument count is the oracle's `Wrong number of args (N) passed to: name`, but a
   local `fn`'s name is the oracle's class name without its generated parts: the enclosing
   function's name (a `defn`'s `my.app/f`, the namespace outside any), then the `fn`'s own
@@ -287,6 +290,9 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   some there. `nth` past the end of a transient vector answers `nil`, as of a vector.
 - A [persistent queue](reference/persistent-queue.md) prints as the oracle's `#object` without
   the identity hash, and `class` answers the type's keyword `:PersistentQueue`.
+- A [delay](reference/delay.md) prints as the oracle's `#object` without the identity hash, a
+  failed one's `:val` the exception's report where the oracle prints its `#error` map, and `str`
+  answers `clojure.lang.Delay` (the oracle's `clojure.lang.Delay@hash`).
 - An instance call on a collection, keyword, symbol, ratio, atom or fn answers through the core
   functions and shares their deviations (`.getClass` answers what `class` does). A method of a
   JDK interface the oracle's class implements (`.toArray`) is refused on the wasm backends as

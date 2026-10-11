@@ -1,6 +1,6 @@
 # Namespaces
 
-Every namespace has its own vars: a definition belongs to the current namespace, a name resolves to that namespace's own var and then to a referred one, and `alias/name` or `full.name/name` reaches another namespace's public var. A namespace form switches to its namespace and wires its clauses: `:as` registers an alias, `:refer`/`:use` unqualified names, `:import` class names for interop, `(:refer-clojure :only/:exclude ...)` narrows the visible core; metadata on the name (`^{...}`, `#^{...}`), a docstring and an attr map are skipped. The [built-in namespaces](#built-in-namespaces) need no file; any other namespace is one the program declares with `ns`, or one loaded once from its file on the source path ([Semantics](../semantics.md#namespaces-and-files)). A namespace no root holds is an error.
+Every namespace has its own vars: a definition belongs to the current namespace, a name resolves to that namespace's own var and then to a referred one, and `alias/name` or `full.name/name` reaches another namespace's public var. A namespace form switches to its namespace and wires its clauses: `:as` registers an alias, `:refer`/`:use` unqualified names, `:import` class names for interop, `(:refer-clojure :only/:exclude ...)` narrows the visible core; metadata on the name (`^{...}`, `#^{...}`), a docstring and an attr map are skipped. The [built-in namespaces](#built-in-namespaces) need no file; any other namespace is one the program declares with `ns`, or one loaded once from its file on the source path ([Semantics](../semantics.md#namespaces-and-files)). A namespace no root holds is an error ([require](require.md): inside a function or a `try`, where the code runs).
 
 | Name | Example | Result |
 |---|---|---|
@@ -12,6 +12,7 @@ Every namespace has its own vars: a definition belongs to the current namespace,
 | `the-ns` | `(str (the-ns 'user))` | `"user"` |
 | `find-ns` | `(find-ns 'no-such)` | `nil` |
 | `ns-name` | `(ns-name *ns*)` | `user` |
+| `ns-resolve` | `(ns-resolve 'clojure.core 'inc)` | `#'clojure.core/inc` |
 
 ## Built-in namespaces
 

@@ -23,3 +23,5 @@ An atom is a tagged cell every verb reads and writes; each verb answers the new 
 | `send-off` | `(do (def a (agent 0)) @(send-off a + 5))` | `5` |
 | `await` | `(do (def a (agent 0)) (await a))` | `nil` |
 | `shutdown-agents` | `(shutdown-agents)` | `nil` |
+| `delay` | `(deref (delay (+ 1 2)))` | `3` |
+| `force` | `(force (delay 4))` | `4` |

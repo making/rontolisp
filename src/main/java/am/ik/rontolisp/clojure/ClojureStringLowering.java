@@ -720,6 +720,14 @@ final class ClojureStringLowering {
 	}
 
 	/**
+	 * The matcher family's test of a matcher ({@code clojure.lisp}, an alias of
+	 * {@code %clojure-re-matcher-p} that stands only in arm positions): what a verb or an
+	 * instance call that reads a matcher asks ahead of its fall-through
+	 * ({@link ClojureArms.Family#MATCHER}).
+	 */
+	static final String MATCHER_VALUE_P = "RONTOLISP::%CLOJURE-MATCHER-VALUE-P";
+
+	/**
 	 * Whether the lowered value is regex state (a pattern or a matcher): opaque to every
 	 * collection verb, like a deftype or reify value.
 	 */

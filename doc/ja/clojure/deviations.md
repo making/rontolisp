@@ -33,8 +33,11 @@
  トップレベルでリテラルに `set!` すると以降の `assert` が無効になります。関数の中の
  `set!` や計算した値への `set!` では無効になりません（オラクルでは実行された時点で効きます）。
  Common Lisp の `format` で Clojure 値に `~S`/`~A` を使うと Common Lisp 記法のままです（CL
- サーフェスのため。`clojure.pprint/cl-format` は Clojure の記法で書きます）。`print-method` は
- ありません。
+ サーフェスのため。`clojure.pprint/cl-format` は Clojure の記法で書きます）。
+ [print-method](reference/print-method.md) はプログラム自身の record と deftype だけが対象です。
+ `:type` キーワードやクラスのメソッドは名前で拒否し、その `methods` と `prefer-method` も
+ 同様です。メソッドのない型の `get-method` は `print-method` 自身を返します（オラクルは
+ 既定のメソッドを返します）。
 - 引数の個数の誤りはオラクルと同じ `Wrong number of args (N) passed to: 名前` ですが、
  ローカルの `fn` の名前はオラクルのクラス名から生成部分を除いたものです。囲む関数の名前
  （`defn` なら `my.app/f`、外にない場合は名前空間）に、`fn` 自身の名前か `fn` を続けます
@@ -276,6 +279,9 @@
   トランジェントのベクターの末尾を過ぎた `nth` は、ベクターと同じく `nil` を返します。
 - [永続キュー](reference/persistent-queue.md)は、オラクルの `#object` から識別ハッシュを除いた形で
   印字し、`class` は型のキーワード `:PersistentQueue` を返します。
+- [delay](reference/delay.md) は、オラクルの `#object` から識別ハッシュを除いた形で印字します。
+  失敗した delay の `:val` は例外のレポートで、オラクルはその `#error` マップを印字します。`str` は
+  `clojure.lang.Delay` を返します（オラクルは `clojure.lang.Delay@hash`）。
 - コレクション・キーワード・シンボル・比・atom・fn へのインスタンス呼び出しは core 関数を通して
   答えるため、その逸脱も引き継ぎます（`.getClass` は `class` と同じ値を返します）。オラクルの
   クラスが実装する JDK インターフェースのメソッド（`.toArray`）は wasm バックエンドで

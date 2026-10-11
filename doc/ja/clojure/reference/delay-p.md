@@ -2,8 +2,8 @@
 
 `(delay? x)`
 
-`clojure.core/delay?`: どの値にも `false` を返します。`delay` は拒否されるため、ここにはそれに当たる値がありません（それ以外の値に対するオラクルの答えと同じです）。引数は評価されます。値としては1引数の関数です。
+`clojure.core/delay?`: [delay](delay.md) には `true`、それ以外の値には `false` を返します。引数は評価されます。値としては1引数の関数です。
 
 ```clojure
-(println (delay? 1))  ; false
+(println (delay? 1) (delay? (delay 1)))  ; false true
 ```

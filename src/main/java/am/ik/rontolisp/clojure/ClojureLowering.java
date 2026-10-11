@@ -333,6 +333,37 @@ public final class ClojureLowering {
 	 */
 	private int topLevelDepth;
 
+	/** The top-level datum lowering now ({@link #topLevelsOf}), or null. */
+	private @Nullable LispVal topDatum;
+
+	/**
+	 * How deep the lowering is inside {@code defmacro} bodies: {@code &env} and
+	 * {@code &form} read the specials an expansion binds there.
+	 */
+	int macroBodyDepth;
+
+	/**
+	 * Whether the {@code defmacro} body lowering now read {@code &env} or {@code &form}.
+	 */
+	boolean macroReadsEnv;
+
+	/** Whether a macro body read {@code &form}, so a run-time expansion binds it. */
+	boolean readsMacroForm;
+
+	/**
+	 * The macros whose bodies read {@code &env} or {@code &form}, by var key: their
+	 * expansions while the program lowers bind both ({@link ClojureMacroLowering}).
+	 */
+	final Set<String> envMacros = new HashSet<>();
+
+	/**
+	 * Whether a {@code require} or {@code use} lowering now stands inside its top-level
+	 * datum, where the program reaches it only when that code runs: a namespace the
+	 * source path does not hold is then the oracle's failure where it runs, not a
+	 * lowering one ({@link ClojureNamespaceLowering#requireOne}).
+	 */
+	boolean defersMissingLibraries;
+
 	/**
 	 * Every namespace an {@code ns} or {@code in-ns} named so far, {@code user} first:
 	 * the namespaces {@code run-tests} knows beside the ones that defined a test (the
@@ -2573,6 +2604,19 @@ public final class ClojureLowering {
 	}
 
 	/**
+	 * The names of every local in reach where the lowering stands: what a macro call's
+	 * {@code &env} holds.
+	 * @return the names
+	 */
+	Set<String> visibleLocals() {
+		Set<String> names = new HashSet<>();
+		for (Map<String, Kind> scope : this.scopes) {
+			names.addAll(scope.keySet());
+		}
+		return names;
+	}
+
+	/**
 	 * The symbol a name reads as: a local's own mangled name, else the var it resolves to
 	 * -- a redefined {@code defn}'s current definition (see {@link #currentDefnSym}), so
 	 * the call sites below each definition call the newest and a value position captures
@@ -2970,17 +3014,32 @@ public final class ClojureLowering {
 	 * @return the lowered list
 	 */
 	LispVal knownNamespaces() {
+		List<LispVal> names = new ArrayList<>();
+		for (String name : knownNamespaceNames()) {
+			names.add(LispString.literal(name));
+		}
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("quote"), ClojureLowerUtil.list(names));
+	}
+
+	/**
+	 * Whether a namespace exists where a call lowers: one an {@code ns} or {@code in-ns}
+	 * created above it, a library the program required, a namespace {@code clj -M} loads
+	 * first, or one a data reader names -- what {@code find-ns} finds.
+	 * @param ns the namespace's name
+	 * @return {@code true} when it exists
+	 */
+	boolean knowsNamespace(String ns) {
+		return knownNamespaceNames().contains(ns);
+	}
+
+	private Set<String> knownNamespaceNames() {
 		Set<String> known = new java.util.TreeSet<>(this.createdNamespaces);
 		known.addAll(this.requiredLibraries);
 		known.addAll(STARTUP_NAMESPACES);
 		for (String var : this.sourcePath.dataReaders().vars().values()) {
 			known.add(var.substring(0, var.indexOf('/')));
 		}
-		List<LispVal> names = new ArrayList<>();
-		for (String name : known) {
-			names.add(LispString.literal(name));
-		}
-		return ClojureLowerUtil.list(ClojureLowerUtil.sym("quote"), ClojureLowerUtil.list(names));
+		return known;
 	}
 
 	/**
@@ -3109,6 +3168,24 @@ public final class ClojureLowering {
 		List<LispVal> out = new ArrayList<>(calls);
 		out.add(NIL_CONST);
 		return out;
+	}
+
+	/**
+	 * The init calls of a {@code require} or {@code use} form: inside its top-level datum
+	 * (a function body, a {@code try}, a {@code when}) a namespace the source path does
+	 * not hold fails where the code runs, like the oracle's load, so a program that never
+	 * runs it, or catches the failure, still compiles; the datum itself fails while it
+	 * lowers.
+	 */
+	private List<LispVal> requireSpecsWhere(LispVal form, List<LispVal> specs, boolean use) {
+		boolean outer = this.defersMissingLibraries;
+		this.defersMissingLibraries = form != this.topDatum;
+		try {
+			return ClojureNamespaceLowering.requireSpecs(this, specs, use);
+		}
+		finally {
+			this.defersMissingLibraries = outer;
+		}
 	}
 
 	/**
@@ -3255,6 +3332,10 @@ public final class ClojureLowering {
 
 	private List<LispVal> topLevelsOf(LispVal form) {
 		this.topLevelDepth++;
+		LispVal outerDatum = this.topDatum;
+		boolean outerDefers = this.defersMissingLibraries;
+		this.topDatum = form;
+		this.defersMissingLibraries = false;
 		try {
 			if (ClojureLowerUtil.isNsForm(form)) {
 				// wires the aliases and defines nothing itself; its clauses'
@@ -3326,6 +3407,8 @@ public final class ClojureLowering {
 		}
 		finally {
 			this.topLevelDepth--;
+			this.topDatum = outerDatum;
+			this.defersMissingLibraries = outerDefers;
 		}
 	}
 
@@ -3707,8 +3790,7 @@ public final class ClojureLowering {
 			return NIL_CONST;
 		}
 		if (ClojureLowerUtil.isSymbolNamed(head, "require")) {
-			List<LispVal> calls = ClojureNamespaceLowering.requireSpecs(this,
-					ClojureNamespaceLowering.specsOf(items, "require"), false);
+			List<LispVal> calls = requireSpecsWhere(form, ClojureNamespaceLowering.specsOf(items, "require"), false);
 			return calls.isEmpty() ? NIL_CONST : ClojureLowerUtil.cons(ClojureLowerUtil.sym("progn"), withNil(calls));
 		}
 		if (ClojureLowerUtil.isSymbolNamed(head, "load")
@@ -3717,8 +3799,7 @@ public final class ClojureLowering {
 			return calls.isEmpty() ? NIL_CONST : ClojureLowerUtil.cons(ClojureLowerUtil.sym("progn"), withNil(calls));
 		}
 		if (ClojureLowerUtil.isSymbolNamed(head, "use")) {
-			List<LispVal> calls = ClojureNamespaceLowering.requireSpecs(this,
-					ClojureNamespaceLowering.specsOf(items, "use"), true);
+			List<LispVal> calls = requireSpecsWhere(form, ClojureNamespaceLowering.specsOf(items, "use"), true);
 			return calls.isEmpty() ? NIL_CONST : ClojureLowerUtil.cons(ClojureLowerUtil.sym("progn"), withNil(calls));
 		}
 		if (ClojureLowerUtil.isSymbolNamed(head, "import")) {
@@ -4326,6 +4407,8 @@ public final class ClojureLowering {
 				return ClojureMacroLowering.evalCall(this, items);
 			case "resolve":
 				return ClojureVarLowering.resolveOf(this, items);
+			case "ns-resolve":
+				return ClojureVarLowering.nsResolveOf(this, items);
 			case "macroexpand-1":
 				ClojureLowerUtil.isTrue(n == 1, "macroexpand-1 takes one form");
 				return ClojureMacroLowering.macroexpandCall(this, ClojureMacroLowering.MACROEXPAND_1,
@@ -4526,9 +4609,10 @@ public final class ClojureLowering {
 			case "future":
 				throw new LispReadException("future is not supported yet: there is no thread pool on any backend");
 			case "delay":
-				throw new LispReadException("delay is not supported yet: lazy memo cells need a design");
+				return capturingMutableFields(() -> ClojureLazyLowering.delayOf(this, items));
 			case "force":
-				throw new LispReadException("force is not supported yet: lazy memo cells need a design");
+				ClojureCoreLowering.arity(name, n, 1, 1);
+				return ClojureLowerUtil.list(new LispSymbol(ClojureLazyLowering.FORCE), lower(items.get(1)));
 			case "promise":
 				throw new LispReadException("promise is not supported yet: blocking rendezvous needs a design");
 			case "deliver":
@@ -4668,6 +4752,8 @@ public final class ClojureLowering {
 			case "repeatedly" -> ClojureLazyLowering.repeatedlyValue(this);
 			case "range" -> ClojureLazyLowering.rangeValue(this);
 			case "dorun" -> ClojureLazyLowering.dorunValue(this);
+			case "force" ->
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), new LispSymbol("RONTOLISP::%CLOJURE-FORCE-V"));
 			case "doall" -> ClojureLazyLowering.doallValue(this);
 			case "subs" -> ClojureStringLowering.subsValue(this);
 			case "re-pattern" -> ClojureStringLowering.reValue(this, "re-pattern", List.of(1));
@@ -4782,6 +4868,7 @@ public final class ClojureLowering {
 			case "ex-info" -> ClojureStateLowering.exInfoValue(this);
 			case "eval" -> ClojureMacroLowering.evalValue();
 			case "resolve" -> ClojureVarLowering.resolveValue();
+			case "ns-resolve" -> ClojureVarLowering.nsResolveValue();
 			case "macroexpand-1" -> ClojureMacroLowering.macroexpandValue(this, ClojureMacroLowering.MACROEXPAND_1);
 			case "macroexpand" -> ClojureMacroLowering.macroexpandValue(this, ClojureMacroLowering.MACROEXPAND);
 			default -> {
@@ -4968,6 +5055,14 @@ public final class ClojureLowering {
 		if (special != null && !isLocal(name) && resolveVar(name) == null) {
 			// a clojure.core special no program var claims: its special variable
 			return specialRead(special);
+		}
+		if ((name.equals("&env") || name.equals("&form")) && this.macroBodyDepth > 0) {
+			// a macro body's implicit arguments: the call's locals and the call itself,
+			// which the expansion binds (ClojureMacroLowering.expandMacro)
+			this.macroReadsEnv = true;
+			this.readsMacroForm |= name.equals("&form");
+			return new LispSymbol(
+					name.equals("&env") ? ClojureMacroLowering.MACRO_ENV : ClojureMacroLowering.MACRO_FORM);
 		}
 		if (!known(name)) {
 			if (name.equals("nth")) {

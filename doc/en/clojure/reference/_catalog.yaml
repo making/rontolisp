@@ -245,6 +245,7 @@ categories:
       - { slug: fn-p, name: "fn?" }
       - { slug: instance-p, name: "instance?" }
       - { slug: class, name: "class" }
+      - { slug: type, name: "type" }
       - { slug: int, name: "int" }
       - { slug: long, name: "long" }
       - { slug: double, name: "double" }
@@ -373,6 +374,8 @@ categories:
       - { slug: send-off, name: "send-off" }
       - { slug: await, name: "await" }
       - { slug: shutdown-agents, name: "shutdown-agents" }
+      - { slug: delay, name: "delay" }
+      - { slug: force, name: "force" }
       - { slug: future-cancel, name: "future-cancel" }
   - title: "Multimethods and hierarchies"
     index_page: clojure/reference/multimethods.md
@@ -383,6 +386,7 @@ categories:
       - { slug: get-method, name: "get-method" }
       - { slug: methods, name: "methods" }
       - { slug: prefer-method, name: "prefer-method" }
+      - { slug: print-method, name: "print-method" }
       - { slug: derive, name: "derive" }
       - { slug: underive, name: "underive" }
       - { slug: isa-p, name: "isa?" }
@@ -424,6 +428,7 @@ categories:
       - { slug: the-ns, name: "the-ns" }
       - { slug: find-ns, name: "find-ns" }
       - { slug: ns-name, name: "ns-name" }
+      - { slug: ns-resolve, name: "ns-resolve" }
   - title: "Names and keywords"
     index_page: clojure/reference/names.md
     functions:
