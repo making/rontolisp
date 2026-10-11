@@ -71,5 +71,9 @@ symbol-function unexport unuse-package use-package`; JVM, P1 and component ident
   compiled to `The function FORMAT is undefined` for `format`.
 - `#'require` / `#'provide` refuse with the computed call's text, `REQUIRE is only supported as a
   literal top-level form on the compile path` (`BuiltinFunctionWrappers.noFunctionValueMessage`).
+- The `rontolisp:` async predicates and stream verbs are entries too (qualified names,
+  [async-await.md](async-await.md), "Function values"); no other `rontolisp:` native is yet
+  (2026-10-11: `#'rontolisp:version`, `make-thread`, `tcp-connect`, `json-parse`, `wait-for` and
+  the rest of the `NativeCallShapes` `rontolisp:` rows are `undefined` on the JVM).
 - `--component`'s sockets rewrite (`WasmSocketsRewrite`) runs before the wrappers exist, so
   `#'close` of a socket stream skips its `%io-close` bookkeeping, as `#'listen` does.
