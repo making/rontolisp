@@ -16,6 +16,6 @@ that never blocks may run to completion anyway — this is a request, not a kill
 
 - Delivery is asynchronous: `thread-alive-p` may still answer `t` for a moment after
   this returns.
-- A value that is not a thread handle is an error.
+- A value that is not a thread handle signals a `type-error` expecting `(SATISFIES RONTOLISP:THREADP)`.
 - Interpreter and JVM backend only, like
   [`rontolisp:make-thread`](rontolisp-make-thread.md) itself.

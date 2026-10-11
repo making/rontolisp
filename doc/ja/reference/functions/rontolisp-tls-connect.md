@@ -47,7 +47,8 @@
 - **インタープリタ**と **JVM**: JDK の TLS スタック(`SSLSocket`)を使います。
   `host` にはホスト名または IP リテラルを指定できます。接続やハンドシェイクの
   失敗(ポート拒否、信頼されていない証明書、ホスト名の不一致)はエラーを通知
-  します。
+  します。文字列でない `host` や `(INTEGER 0 65535)` の範囲外の `port` は、接続の前に
+  その演算子の `type-error` を通知します。
 - **WASM `--component`**(WASI 0.3): サポートされます。wasmtime の
   `wasi:tls@0.3.0-draft` インターフェイス上で動き、通常のソケット実行フラグ
   (`-S tcp=y -S inherit-network=y`)に `-S tls=y`

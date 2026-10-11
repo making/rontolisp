@@ -47,7 +47,8 @@ TLS-wrapped protocols:
 
 - **Interpreter** and **JVM**: use the JDK TLS stack (`SSLSocket`); `host` may
   be a hostname or an IP literal. A failed connection or handshake (refused
-  port, untrusted certificate, hostname mismatch) signals an error.
+  port, untrusted certificate, hostname mismatch) signals an error. A `host` that is no string or a `port` outside `(INTEGER 0 65535)` signals the
+  operator's `type-error` before anything connects.
 - **WASM `--component`** (WASI 0.3): supported, over wasmtime's
   `wasi:tls@0.3.0-draft` interface — add `-S tls=y` to the usual socket run
   flags (`-S tcp=y -S inherit-network=y`). Like

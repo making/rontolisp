@@ -17,6 +17,6 @@
 
 - 割り込みの伝達は非同期です。返った直後の `thread-alive-p` はしばらく `t` を
   返すことがあります。
-- スレッドハンドルでない値はエラーです。
+- スレッドハンドルでない値は `(SATISFIES RONTOLISP:THREADP)` を期待する `type-error` を通知します。
 - [`rontolisp:make-thread`](rontolisp-make-thread.md) 自身と同様、インタプリタと
   JVM バックエンドのみです。

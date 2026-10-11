@@ -14,6 +14,22 @@ is promoted to a real suspension point. Reads are byte-at-a-time on interpreter/
 holds one host CHUNK per socket (documented divergence). `read-line` answers `nil` at peer close;
 `read` does not work on sockets. Errors: interpreter/JVM signal, the WASM component returns `nil`.
 
+## Argument refusals (interpreter and JVM, one condition and text)
+Every argument is checked, in argument order, before the host acts. A host, path or password that is
+no string is the operator's `type-error` expecting `STRING`; a port outside `(INTEGER 0 65535)` and a
+`tcp-set-timeout` count outside `(OR NULL (INTEGER 0))` likewise (ranges, bignums included: 70000 was the
+JDK's `port out of range`, a `program-error` on the interpreter and a `simple-error` on the JVM; a count
+past an int clamps on both, where the JVM's `l2i` turned 3e9 into "timeout can't be negative"). A
+listener's host may be `nil` (every interface) on both -- the JVM cannot tell it from an absent one. A
+handle naming no open entry of the operator's kind (a non-handle, a closed socket, a file stream, a
+listener where a connection is needed) is `OP expects a {listener|socket or listener|connected socket}
+handle`, a `simple-error` with no datum. JVM: the socket runtime's `_sockEntry`/`_sockStr`/`_sockPort`/
+`_sockMs` (`%tls-listen-p12`'s report says `TLS-LISTEN-PEM`, the operator the inliner rewrote). Measured
+before (2026-10-11): the JVM leaked `ClassCastException`s and NPEs (`_streams` is null in a program with
+no file stream) where the interpreter signalled. Still different: a refused CONNECTION's text
+(interpreter `tcp-connect: cannot connect to H:P: Connection refused`, JVM `Connection refused`) -- host
+work, not an argument. Pinned by `HandleOperandFixture` ([error-handling.md](error-handling.md)).
+
 ## Per-backend mechanics
 - Handle allocation is CONCURRENT on interpreter and JVM (`ConcurrentHashMap` + `AtomicLong`; the
   synchronized `_addStream`) — invariant and the crossed-PostgreSQL-handshake failure in
@@ -213,7 +229,7 @@ so fetch+tcp and serve+tcp compose in one component.
 For the usocket shim's `get-local-*`/`get-peer-*`. Interpreter
 `SocketSupport.localAddress`/`peerAddress`/`peerPort` (null/-1 for a wrong-kind entry ->
 `Environment` signals); JVM `_tcpLocalAddress`/`_tcpPeerAddress`/`_tcpPeerPort` (the address
-returners quote-frame the string). WASM: REAL in component mode — sockets.lisp reads
+returners quote-frame the string; a wrong-kind entry is `_sockEntry`'s refusal, the interpreter's text). WASM: REAL in component mode — sockets.lisp reads
 `get-local-address`/`get-remote-address` (an `ip-socket-address` variant->record->tuple lift) and
 formats the dotted quad in Lisp; a wrong-kind handle or host error yields `nil`. `tcp-local-port`
 reads the real bound port the same way. Preview 1: the call-time error.
@@ -320,7 +336,7 @@ proposal); mutual TLS; CONNECT timeouts; `--no-gc`; the browser playground; `(do
 empty do bindings in examples (pre-existing `expandDo` limitation).
 
 ## Pinning tests
-`LispEvaluatorTest#tcp*`/`#usocket*`/`#tls*`/`#clSslShim*`;
+`HandleOperandFixture` (`ThreadTest`/`JvmThreadTest`); `LispEvaluatorTest#tcp*`/`#usocket*`/`#tls*`/`#clSslShim*`;
 `JvmLispCompilerTest#compileAndRunTcp*`/`#compileAndRunUsocket*`/`#compileAndRunTls*`/
 `#compileAndRunClSslShim*` + the wrong-arg-count rejections;
 `WasmLispCompilerTest#tcp*`/`#usocket*`/`#tls*`/`#fetchAndTcpInOneComponentProgramCompiles`/

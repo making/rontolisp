@@ -29,15 +29,15 @@ peer 系アクセサはリスナーハンドルを拒否します(リスナー�
 $ rontolisp
 CL-USER> (setq l (rontolisp:tcp-listen 0 "127.0.0.1"))
 CL-USER> (rontolisp:tcp-peer-address l)
-Error: tcp-peer-address expects a connected socket handle
+Error: TCP-PEER-ADDRESS expects a connected socket handle
 ```
 
 ## バックエンドごとの対応
 
 - **インタープリタ**と **JVM**: 対応する `java.net.Socket` / `ServerSocket` の
   `getLocalAddress()` / `getInetAddress()` / `getPort()` を使用します。種類の
-  合わないハンドルはエラーを通知します(インタープリタ)/キャストエラーで
-  失敗します(JVM)。
+  合う開いたハンドルでない値(リスナー、閉じたソケット、ファイルストリーム、
+  `1`、`nil`)は、どちらでも上の `simple-error` を通知します。
 - **WASM**: コンポーネントモードのみ -- 3 つともインタープリタ/JVM と
   まったく同じように実際のアドレスとポートを返します。失敗時や種類の
   合わないハンドルではエラーを通知せず `nil` を返します(splice された

@@ -30,7 +30,10 @@ behind the usocket shim's
 
 ## Backend support
 
-- **Interpreter** and **JVM**: real, via `Socket.setSoTimeout`.
+- **Interpreter** and **JVM**: real, via `Socket.setSoTimeout`; a count past
+  2147483647 waits 2147483647 milliseconds. `milliseconds` outside
+  `(OR NULL (INTEGER 0))` signals the operator's `type-error`, and a value that
+  is not an open connected socket handle a `simple-error`.
 - **WASM component**: SIGNALS at call time — `wasi:sockets@0.3.0` exposes no
   receive-timeout knob, and a timeout that silently never fires is the failure
   mode a client sets it to avoid. Catch it (or do not set a read timeout) on

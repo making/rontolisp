@@ -13529,7 +13529,9 @@ public final class LispEvaluator {
 					fn + " expects 1 argument, got " + args.size());
 		}
 		if (!(args.get(0) instanceof LispThread thread)) {
-			throw new LispEvalException(fn + " expects a thread handle, got " + args.get(0).print());
+			// The operator's type-error expecting (SATISFIES RONTOLISP:THREADP), the one
+			// the JVM signals too.
+			throw OperandTypeException.notOfType(args.get(0), OperandTypes.THREAD_TYPE, fn);
 		}
 		return thread;
 	}

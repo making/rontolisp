@@ -238,4 +238,12 @@ class JvmThreadTest {
 				""", "ThreadBt2Prog")).isEqualTo("(T CONFIGURED NIL \"bt2-thread\" UNSET NIL)");
 	}
 
+	@Test
+	void threadAndSocketOperatorsSignalTheirConditionOverAValueTheyCannotTake() throws Exception {
+		// The interpreter's conditions and words (ThreadTest), where a cast or a null
+		// table used to leak a host exception.
+		assertThat(compileAndRun(am.ik.rontolisp.HandleOperandFixture.PROGRAM, "HandleOperandProg"))
+			.isEqualTo(am.ik.rontolisp.HandleOperandFixture.EXPECTED);
+	}
+
 }

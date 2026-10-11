@@ -17342,6 +17342,20 @@ class JvmLispCompilerTest {
 		client.join();
 	}
 
+	@Test
+	void tlsListenP12ReportsItsArgumentsAsTlsListenPem() throws Exception {
+		// The operator a program spells is tls-listen-pem (the inliner rewrites it into
+		// %tls-listen-p12), so a bad port or host is ITS type-error, before any keystore
+		// is read.
+		assertThat(compileAndRun("""
+				(defun p12-report (thunk) (handler-case (funcall thunk) (type-error (c) (princ-to-string c))))
+				(print (p12-report (lambda () (rontolisp:%tls-listen-p12 "AA==" "pw" (read-from-string "70000")))))
+				(print (p12-report (lambda () (rontolisp:%tls-listen-p12 "AA==" "pw" 0 (read-from-string "h")))))
+				""")).isEqualTo("""
+				"TLS-LISTEN-PEM: The value 70000 is not of type (INTEGER 0 65535)"
+				"TLS-LISTEN-PEM: The value H is not of type STRING\"""");
+	}
+
 	// A wrong COUNT is the interpreter's run-time program-error; an option keyword the
 	// operator does not take stays a compile error, the keyword check being the
 	// operator's own.

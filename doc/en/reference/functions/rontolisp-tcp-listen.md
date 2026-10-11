@@ -33,7 +33,9 @@ bidirectional stream (see
 
 - **Interpreter** and **JVM**: use the JDK `java.net.ServerSocket` (with
   `SO_REUSEADDR` on the interpreter); a failed bind (for example a port
-  already in use) signals an error.
+  already in use) signals an error. A `port` outside `(INTEGER 0 65535)` or a
+  `host` that is neither a string nor `nil` (every interface) signals the
+  operator's `type-error` before anything binds.
 - **WASM**: component-only, over `wasi:sockets@0.3.0`. `host` must be an IPv4
   literal. Compile with `--component` and run with `wasmtime run
   -S tcp=y -S inherit-network=y` (wasmtime 46+); a failed

@@ -26,8 +26,9 @@
 ## バックエンドごとの対応
 
 - **インタープリタ**と **JVM**: 対応する `java.net.ServerSocket` / `Socket` の
-  `getLocalPort()` を使用します。ソケットでもリスナーでもないハンドルは
-  エラーを通知します(インタープリタ)/キャストエラーで失敗します(JVM)。
+  `getLocalPort()` を使用します。開いたソケットでもリスナーでもない値は、
+  どちらでも `simple-error`
+  `TCP-LOCAL-PORT expects a socket or listener handle` を通知します。
 - **WASM**: コンポーネント専用で、`wasi:sockets` の `get-local-address` を
   使用します。ソケットでもリスナーでもないハンドルには `nil` を返します。
   Preview 1(コアモジュール)モードでは他の tcp 組み込みと同様、呼び出し時エラーです。

@@ -14,7 +14,7 @@ After a [`rontolisp:join-thread`](rontolisp-join-thread.md) the answer is reliab
 
 ## Limitations
 
-- A value that is not a thread handle is an error (use
+- A value that is not a thread handle signals a `type-error` expecting `(SATISFIES RONTOLISP:THREADP)` (use
   [`rontolisp:threadp`](rontolisp-threadp.md) first when unsure).
 - Interpreter and JVM backend only, like
   [`rontolisp:make-thread`](rontolisp-make-thread.md) itself.

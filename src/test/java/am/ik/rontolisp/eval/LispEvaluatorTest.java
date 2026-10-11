@@ -13211,9 +13211,9 @@ class LispEvaluatorTest {
 		assertThatThrownBy(() -> eval("(rontolisp:tcp-connect \"127.0.0.1\")")).isInstanceOf(LispEvalException.class)
 			.hasMessageContaining("TCP-CONNECT");
 		assertThatThrownBy(() -> eval("(rontolisp:tcp-connect 80 80)")).isInstanceOf(LispEvalException.class)
-			.hasMessageContaining("expects a string host");
+			.hasMessage("TCP-CONNECT: The value 80 is not of type STRING");
 		assertThatThrownBy(() -> eval("(rontolisp:tcp-listen \"nope\")")).isInstanceOf(LispEvalException.class)
-			.hasMessageContaining("expects an integer port");
+			.hasMessage("TCP-LISTEN: The value \"nope\" is not of type (INTEGER 0 65535)");
 		assertThatThrownBy(() -> eval("(rontolisp:tcp-accept 12345)")).isInstanceOf(LispEvalException.class)
 			.hasMessageContaining("expects a listener handle");
 		assertThatThrownBy(() -> eval("(rontolisp:tcp-local-port 12345)")).isInstanceOf(LispEvalException.class)
@@ -14759,12 +14759,12 @@ class LispEvaluatorTest {
 			.isInstanceOf(LispEvalException.class)
 			.hasMessageContaining("TLS-LISTEN-PEM");
 		assertThatThrownBy(() -> eval("(rontolisp:tls-listen-pem 1 \"k.pem\" 0)")).isInstanceOf(LispEvalException.class)
-			.hasMessageContaining("expects a string certificate path");
+			.hasMessage("TLS-LISTEN-PEM: The value 1 is not of type STRING");
 		assertThatThrownBy(() -> eval("(rontolisp:tls-listen-pem \"c.pem\" 1 0)")).isInstanceOf(LispEvalException.class)
-			.hasMessageContaining("expects a string key path");
+			.hasMessage("TLS-LISTEN-PEM: The value 1 is not of type STRING");
 		assertThatThrownBy(() -> eval("(rontolisp:tls-listen-pem \"c.pem\" \"k.pem\" \"nope\")"))
 			.isInstanceOf(LispEvalException.class)
-			.hasMessageContaining("expects an integer port");
+			.hasMessage("TLS-LISTEN-PEM: The value \"nope\" is not of type (INTEGER 0 65535)");
 	}
 
 	@Test
@@ -14779,12 +14779,12 @@ class LispEvaluatorTest {
 		assertThatThrownBy(() -> eval("(rontolisp:tls-listen \"ks.p12\" \"pw\")")).isInstanceOf(LispEvalException.class)
 			.hasMessageContaining("TLS-LISTEN");
 		assertThatThrownBy(() -> eval("(rontolisp:tls-listen 1 \"pw\" 0)")).isInstanceOf(LispEvalException.class)
-			.hasMessageContaining("expects a string keystore path");
+			.hasMessage("TLS-LISTEN: The value 1 is not of type STRING");
 		assertThatThrownBy(() -> eval("(rontolisp:tls-listen \"ks.p12\" 1 0)")).isInstanceOf(LispEvalException.class)
-			.hasMessageContaining("expects a string password");
+			.hasMessage("TLS-LISTEN: The value 1 is not of type STRING");
 		assertThatThrownBy(() -> eval("(rontolisp:tls-listen \"ks.p12\" \"pw\" \"nope\")"))
 			.isInstanceOf(LispEvalException.class)
-			.hasMessageContaining("expects an integer port");
+			.hasMessage("TLS-LISTEN: The value \"nope\" is not of type (INTEGER 0 65535)");
 	}
 
 	@Test
@@ -14792,10 +14792,10 @@ class LispEvaluatorTest {
 		assertThatThrownBy(() -> eval("(rontolisp:tls-connect \"127.0.0.1\")")).isInstanceOf(LispEvalException.class)
 			.hasMessageContaining("TLS-CONNECT");
 		assertThatThrownBy(() -> eval("(rontolisp:tls-connect 443 443)")).isInstanceOf(LispEvalException.class)
-			.hasMessageContaining("expects a string host");
+			.hasMessage("TLS-CONNECT: The value 443 is not of type STRING");
 		assertThatThrownBy(() -> eval("(rontolisp:tls-connect \"127.0.0.1\" \"nope\")"))
 			.isInstanceOf(LispEvalException.class)
-			.hasMessageContaining("expects an integer port");
+			.hasMessage("TLS-CONNECT: The value \"nope\" is not of type (INTEGER 0 65535)");
 		// the only accepted option is the :insecure keyword-value pair (arity 4)
 		assertThatThrownBy(() -> eval("(rontolisp:tls-connect \"127.0.0.1\" 443 :insecure)"))
 			.isInstanceOf(LispEvalException.class)

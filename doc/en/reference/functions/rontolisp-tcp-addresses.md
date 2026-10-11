@@ -28,15 +28,15 @@ The peer accessors reject a listener handle (a listener has no peer):
 $ rontolisp
 CL-USER> (setq l (rontolisp:tcp-listen 0 "127.0.0.1"))
 CL-USER> (rontolisp:tcp-peer-address l)
-Error: tcp-peer-address expects a connected socket handle
+Error: TCP-PEER-ADDRESS expects a connected socket handle
 ```
 
 ## Backend support
 
 - **Interpreter** and **JVM**: `getLocalAddress()` / `getInetAddress()` /
-  `getPort()` on the underlying `java.net.Socket` / `ServerSocket`. A handle
-  that is not the right kind of socket signals an error (interpreter) or fails
-  with a cast error (JVM).
+  `getPort()` on the underlying `java.net.Socket` / `ServerSocket`. A value
+  that is not an open handle of the right kind (a listener, a closed socket, a
+  file stream, `1`, `nil`) signals the `simple-error` above on both.
 - **WASM**: component mode only -- all three return real addresses and ports,
   exactly like the interpreter/JVM. On failure or a wrong kind of handle they
   return `nil` instead of signaling (so a spliced usocket program still runs

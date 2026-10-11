@@ -26,8 +26,9 @@ It also works on a connected socket handle, where it reports the local
 ## Backend support
 
 - **Interpreter** and **JVM**: `getLocalPort()` on the underlying
-  `java.net.ServerSocket` / `Socket`. A handle that is not a socket or
-  listener signals an error (interpreter) or fails with a cast error (JVM).
+  `java.net.ServerSocket` / `Socket`. A value that is not an open socket or
+  listener handle signals the `simple-error`
+  `TCP-LOCAL-PORT expects a socket or listener handle` on both.
 - **WASM**: component-only, via `wasi:sockets`' `get-local-address`; returns
   `nil` for a handle that is not a socket or listener. Call-time error in
   Preview 1 (core-module) mode, like every tcp built-in.

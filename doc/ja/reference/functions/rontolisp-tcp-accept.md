@@ -29,7 +29,8 @@
 ## バックエンドごとの対応
 
 - **インタープリタ**と **JVM**: `java.net.ServerSocket.accept()` を使用します。
-  閉じたリスナーでの accept はエラーを通知します。
+  閉じたリスナーや、開いたリスナーのハンドルでない値での accept は
+  `simple-error` `TCP-ACCEPT expects a listener handle` を通知します。
 - **WASM**: コンポーネント専用。accept は `wasi:sockets@0.3.0` の accept
   ストリームから `tcp-socket` ハンドルを 1 つ読み出す協調ブロッキング読み取り
   です。async 本体では、保留中の accept はそのタスクだけをサスペンドするため、

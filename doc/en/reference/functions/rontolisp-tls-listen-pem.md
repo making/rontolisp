@@ -39,7 +39,8 @@ The example below is a one-connection TLS echo server; test it with
 - **Interpreter**: reads the PEM files at run time, so `cert-file` and
   `key-file` may be computed at run time. A missing file, a malformed
   certificate, an encrypted or unsupported key, or a busy port signals an
-  error.
+  error. On both backends a `port` outside `(INTEGER 0 65535)` or a `host`
+  that is neither a string nor `nil` signals the operator's `type-error` first.
 - **JVM**: the certificate and key are parsed **at compile time** and the
   resulting keystore is embedded in the compiled class, so `cert-file` and
   `key-file` must be **string literals** (a computed path is a compile error,

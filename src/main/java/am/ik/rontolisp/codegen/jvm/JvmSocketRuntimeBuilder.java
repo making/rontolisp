@@ -11,6 +11,8 @@ import java.util.List;
 
 import am.ik.jvm.ConstantPool;
 import am.ik.jvm.MethodCode;
+import am.ik.rontolisp.LispNames;
+import am.ik.rontolisp.compiler.OperandTypes;
 import org.jspecify.annotations.Nullable;
 
 /**
@@ -27,6 +29,15 @@ import org.jspecify.annotations.Nullable;
  * (byte-at-a-time reads, unbuffered writes), {@code _readByte}/{@code _writeByte} branch
  * to the socket's input/output stream, and {@code _closeStream} closes the socket
  * directly. All methods are emitted only when the program uses a tcp or tls built-in.
+ *
+ * <p>
+ * Every helper checks its arguments before it acts, with the interpreter's words: a host,
+ * path or password that is no string, a port outside {@code (INTEGER 0 65535)} and a
+ * deadline outside {@code (OR NULL (INTEGER 0))} are the operator's type-error
+ * ({@code _sockStr}, {@code _sockPort}, {@code _sockMs}); a handle naming no open entry
+ * of the kind the operator takes is its {@code OP expects a ... handle} error
+ * ({@code _sockEntry}). A host exception reaches the program only from the host's own
+ * work: a refused connection, a bad keystore.
  */
 final class JvmSocketRuntimeBuilder {
 
@@ -109,6 +120,28 @@ final class JvmSocketRuntimeBuilder {
 	private static final String SOCK_READ_CHAR_METHOD = "_sockReadChar";
 
 	private static final String SOCK_READ_CHAR_DESC = "(Ljava/lang/Object;)Ljava/lang/Object;";
+
+	private static final String SOCK_ENTRY_METHOD = "_sockEntry";
+
+	private static final String SOCK_ENTRY_DESC = "(Ljava/lang/Object;ILjava/lang/String;)Ljava/lang/Object;";
+
+	private static final String SOCK_STR_METHOD = "_sockStr";
+
+	private static final String SOCK_STR_DESC = "(Ljava/lang/Object;Ljava/lang/String;)Ljava/lang/String;";
+
+	private static final String SOCK_PORT_METHOD = "_sockPort";
+
+	private static final String SOCK_PORT_DESC = "(Ljava/lang/Object;Ljava/lang/String;)I";
+
+	private static final String SOCK_MS_METHOD = "_sockMs";
+
+	private static final String SOCK_MS_DESC = "(Ljava/lang/Object;)I";
+
+	/** {@code _sockEntry}'s kinds: a connected socket. */
+	private static final int SOCKET_KIND = 1;
+
+	/** {@code _sockEntry}'s kinds: a listener. */
+	private static final int LISTENER_KIND = 2;
 
 	private final ConstantPool cp;
 
@@ -428,6 +461,13 @@ final class JvmSocketRuntimeBuilder {
 				builder.buildTcpPeerPort()));
 		methods.add(new SocketMethod(cp.utf8Entry(TCP_SET_TIMEOUT_METHOD), cp.utf8Entry(TCP_SET_TIMEOUT_DESC),
 				builder.buildTcpSetTimeout()));
+		methods.add(new SocketMethod(cp.utf8Entry(SOCK_ENTRY_METHOD), cp.utf8Entry(SOCK_ENTRY_DESC),
+				builder.buildSockEntry()));
+		methods
+			.add(new SocketMethod(cp.utf8Entry(SOCK_STR_METHOD), cp.utf8Entry(SOCK_STR_DESC), builder.buildSockStr()));
+		methods.add(new SocketMethod(cp.utf8Entry(SOCK_PORT_METHOD), cp.utf8Entry(SOCK_PORT_DESC),
+				builder.buildSockPort()));
+		methods.add(new SocketMethod(cp.utf8Entry(SOCK_MS_METHOD), cp.utf8Entry(SOCK_MS_DESC), builder.buildSockMs()));
 		methods.add(new SocketMethod(cp.utf8Entry(SOCK_READ_LINE_METHOD), cp.utf8Entry(SOCK_READ_LINE_DESC),
 				builder.buildSockReadLine(false)));
 		methods.add(new SocketMethod(cp.utf8Entry(SOCK_WRITE_LINE_METHOD), cp.utf8Entry(SOCK_WRITE_LINE_DESC),
@@ -454,15 +494,16 @@ final class JvmSocketRuntimeBuilder {
 	 * it in the stream table.
 	 */
 	private MethodCode buildTcpConnect() {
-		// Slots: 0=host, 1=port, 2=h (String)
+		// Slots: 0=host, 1=port, 2=h (String), 3=p (int)
 		MethodCode code = new MethodCode();
-		emitStripQuotes(code, 0, 2);
-		// new Socket(h, (int) ((Long) port).longValue())
+		emitCheckedString(code, 0, 2, LispNames.TCP_CONNECT);
+		emitCheckedPort(code, 1, LispNames.TCP_CONNECT);
+		code.istore(3);
+		// new Socket(h, p)
 		code.new_(this.socketClass);
 		code.dup();
 		code.aload(2);
-		code.aload(1);
-		emitUnboxInt(code);
+		code.iload(3);
 		code.invokespecial(this.socketInit);
 		code.invokestatic(this.addStreamRef);
 		code.areturn();
@@ -484,9 +525,11 @@ final class JvmSocketRuntimeBuilder {
 	 */
 	private MethodCode buildTlsConnect() {
 		// Slots: 0=host, 1=port, 2=insecure, 3=h (String), 4=socket (SSLSocket),
-		// 5=params
+		// 5=params, 6=p (int)
 		MethodCode code = new MethodCode();
-		emitStripQuotes(code, 0, 3);
+		emitCheckedString(code, 0, 3, LispNames.TLS_CONNECT);
+		emitCheckedPort(code, 1, LispNames.TLS_CONNECT);
+		code.istore(6);
 		// SSLContext ctx = SSLContext.getInstance("TLS");
 		// ctx.init(null, insecure != null ? new TrustManager[]{new Prog()} : null,
 		// null);
@@ -512,11 +555,10 @@ final class JvmSocketRuntimeBuilder {
 		code.labelBinding(gotoInit);
 		code.aconst_null();
 		code.invokevirtual(this.sslContextInit);
-		// socket = (SSLSocket) ctx.getSocketFactory().createSocket(h, (int) port)
+		// socket = (SSLSocket) ctx.getSocketFactory().createSocket(h, p)
 		code.invokevirtual(this.sslContextGetSocketFactory);
 		code.aload(3);
-		code.aload(1);
-		emitUnboxInt(code);
+		code.iload(6);
 		code.invokevirtual(this.socketFactoryCreateSocket);
 		code.checkcast(this.sslSocketClass);
 		code.astore(4);
@@ -563,11 +605,11 @@ final class JvmSocketRuntimeBuilder {
 		// Slots: 0=handle, 1=host, 2=insecure, 3=h (String), 4=sock (Socket),
 		// 5=tls (SSLSocket), 6=params
 		MethodCode code = new MethodCode();
-		emitStripQuotes(code, 1, 3);
-		// sock = (Socket) _streams[(int) handle];
-		emitLoadStreamEntry(code, 0);
+		// sock = the connected socket the handle names; then h = the host
+		emitCheckedEntry(code, 0, SOCKET_KIND, LispNames.TLS_UPGRADE + " expects a connected socket handle");
 		code.checkcast(this.socketClass);
 		code.astore(4);
+		emitCheckedString(code, 1, 3, LispNames.TLS_UPGRADE);
 		// SSLContext ctx = SSLContext.getInstance("TLS");
 		// ctx.init(null, insecure != null ? new TrustManager[]{new Prog()} : null,
 		// null);
@@ -640,10 +682,9 @@ final class JvmSocketRuntimeBuilder {
 		// Slots: 0=keystore, 1=password, 2=port, 3=host, 4=path (String),
 		// 5=pw (String, then char[]), 6=store (KeyStore), 7=in (FileInputStream),
 		// 8=kms (KeyManager[]), 9=ctx (SSLContext), 10=factory, 11=p (int),
-		// 12=h (String)
+		// 12=h (String, null for every interface)
 		MethodCode code = new MethodCode();
-		emitStripQuotes(code, 0, 4);
-		emitStripQuotes(code, 1, 5);
+		emitListenArgs(code, LispNames.TLS_LISTEN);
 		// pw = pw.toCharArray()
 		code.aload(5);
 		code.invokevirtual(this.stringToCharArray);
@@ -678,10 +719,11 @@ final class JvmSocketRuntimeBuilder {
 	private MethodCode buildTlsListenP12() {
 		// Slots: 0=base64, 1=password, 2=port, 3=host, 4=b64 (String),
 		// 5=pw (String, then char[]), 6=store (KeyStore), 7=in (ByteArrayInputStream),
-		// 8=kms, 9=ctx, 10=factory, 11=p (int), 12=h (String)
+		// 8=kms, 9=ctx, 10=factory, 11=p (int), 12=h (String, null for every interface)
 		MethodCode code = new MethodCode();
-		emitStripQuotes(code, 0, 4);
-		emitStripQuotes(code, 1, 5);
+		// Reported as TLS-LISTEN-PEM: the operator the compile path rewrites into this
+		// one
+		emitListenArgs(code, LispNames.TLS_LISTEN_PEM);
 		// pw = pw.toCharArray()
 		code.aload(5);
 		code.invokevirtual(this.stringToCharArray);
@@ -710,7 +752,7 @@ final class JvmSocketRuntimeBuilder {
 	/**
 	 * Emits the shared tail of {@link #buildTlsListen} / {@link #buildTlsListenP12}:
 	 * given slot 5 = the password {@code char[]}, slot 6 = the loaded {@code KeyStore},
-	 * slot 2 = the port {@code Long} and slot 3 = the host {@code String} (nil = all
+	 * slot 11 = the checked port and slot 12 = the host {@code String} (null = all
 	 * interfaces), builds the {@code SSLContext} over the keystore's key managers and
 	 * binds the TLS server socket, storing it in the stream table.
 	 */
@@ -734,14 +776,11 @@ final class JvmSocketRuntimeBuilder {
 		code.aconst_null();
 		code.aconst_null();
 		code.invokevirtual(this.sslContextInit);
-		// factory = ctx.getServerSocketFactory(); p = (int) port;
+		// factory = ctx.getServerSocketFactory();
 		code.aload(9);
 		code.invokevirtual(this.sslContextGetServerSocketFactory);
 		code.astore(10);
-		code.aload(2);
-		emitUnboxInt(code);
-		code.istore(11);
-		code.aload(3);
+		code.aload(12);
 		MethodCode.Label ifHost = code.newLabel();
 		code.ifnonnull(ifHost);
 		// factory.createServerSocket(p, 50)
@@ -753,7 +792,6 @@ final class JvmSocketRuntimeBuilder {
 		code.areturn();
 		code.labelBinding(ifHost);
 		// factory.createServerSocket(p, 50, InetAddress.getByName(h))
-		emitStripQuotes(code, 3, 12);
 		code.aload(10);
 		code.iload(11);
 		code.loadConstant(50);
@@ -772,8 +810,7 @@ final class JvmSocketRuntimeBuilder {
 	private MethodCode buildTcpListen() {
 		// Slots: 0=port, 1=host, 2=p (int), 3=h (String)
 		MethodCode code = new MethodCode();
-		code.aload(0);
-		emitUnboxInt(code);
+		emitCheckedPort(code, 0, LispNames.TCP_LISTEN);
 		code.istore(2);
 		code.aload(1);
 		MethodCode.Label ifHost = code.newLabel();
@@ -787,7 +824,7 @@ final class JvmSocketRuntimeBuilder {
 		code.areturn();
 		code.labelBinding(ifHost);
 		// new ServerSocket(p, 50, InetAddress.getByName(h))
-		emitStripQuotes(code, 1, 3);
+		emitCheckedString(code, 1, 3, LispNames.TCP_LISTEN);
 		code.new_(this.serverSocketClass);
 		code.dup();
 		code.iload(2);
@@ -806,7 +843,7 @@ final class JvmSocketRuntimeBuilder {
 	 */
 	private MethodCode buildTcpAccept() {
 		MethodCode code = new MethodCode();
-		emitLoadStreamEntry(code, 0);
+		emitCheckedEntry(code, 0, LISTENER_KIND, LispNames.TCP_ACCEPT + " expects a listener handle");
 		code.checkcast(this.serverSocketClass);
 		code.invokevirtual(this.serverSocketAccept);
 		code.invokestatic(this.addStreamRef);
@@ -821,7 +858,8 @@ final class JvmSocketRuntimeBuilder {
 	private MethodCode buildTcpLocalPort() {
 		// Slots: 0=handle, 1=entry
 		MethodCode code = new MethodCode();
-		emitLoadStreamEntry(code, 0);
+		emitCheckedEntry(code, 0, SOCKET_KIND | LISTENER_KIND,
+				LispNames.TCP_LOCAL_PORT + " expects a socket or listener handle");
 		code.astore(1);
 		code.aload(1);
 		code.instanceOf(this.serverSocketClass);
@@ -843,26 +881,16 @@ final class JvmSocketRuntimeBuilder {
 
 	/**
 	 * {@code _tcpSetTimeout(Object handle, Object ms) -> Object}. Sets the socket entry's
-	 * read deadline ({@code Socket.setSoTimeout}): a boxed {@code Long} millisecond
-	 * count, or {@code null} (nil) to clear it. Returns the {@code ms} argument. A
-	 * non-socket entry fails on the {@code CHECKCAST} (a {@code ClassCastException},
-	 * catchable like the other runtime failures).
+	 * read deadline ({@code Socket.setSoTimeout}): a millisecond count ({@code _sockMs}),
+	 * or {@code null} (nil) to clear it. Returns the {@code ms} argument.
 	 */
 	private MethodCode buildTcpSetTimeout() {
 		// Slots: 0=handle, 1=ms
 		MethodCode code = new MethodCode();
-		emitLoadStreamEntry(code, 0);
+		emitCheckedEntry(code, 0, SOCKET_KIND, LispNames.TCP_SET_TIMEOUT + " expects a connected socket handle");
 		code.checkcast(this.socketClass);
 		code.aload(1);
-		MethodCode.Label ifNil = code.newLabel();
-		code.ifnull(ifNil);
-		code.aload(1);
-		emitUnboxInt(code);
-		MethodCode.Label gotoSet = code.newLabel();
-		code.goto_(gotoSet);
-		code.labelBinding(ifNil);
-		code.iconst_0();
-		code.labelBinding(gotoSet);
+		code.invokestatic(this.cp.methodRef(this.thisClassRef, SOCK_MS_METHOD, SOCK_MS_DESC));
 		code.invokevirtual(this.socketSetSoTimeout);
 		code.aload(1);
 		code.areturn();
@@ -876,7 +904,8 @@ final class JvmSocketRuntimeBuilder {
 	private MethodCode buildTcpLocalAddress() {
 		// Slots: 0=handle, 1=entry
 		MethodCode code = new MethodCode();
-		emitLoadStreamEntry(code, 0);
+		emitCheckedEntry(code, 0, SOCKET_KIND | LISTENER_KIND,
+				LispNames.TCP_LOCAL_ADDRESS + " expects a socket or listener handle");
 		code.astore(1);
 		code.aload(1);
 		code.instanceOf(this.serverSocketClass);
@@ -904,7 +933,7 @@ final class JvmSocketRuntimeBuilder {
 	private MethodCode buildTcpPeerAddress() {
 		// Slots: 0=handle, 1=entry
 		MethodCode code = new MethodCode();
-		emitLoadStreamEntry(code, 0);
+		emitCheckedEntry(code, 0, SOCKET_KIND, LispNames.TCP_PEER_ADDRESS + " expects a connected socket handle");
 		code.astore(1);
 		code.ldc(this.quoteStr);
 		code.aload(1);
@@ -920,7 +949,7 @@ final class JvmSocketRuntimeBuilder {
 	 */
 	private MethodCode buildTcpPeerPort() {
 		MethodCode code = new MethodCode();
-		emitLoadStreamEntry(code, 0);
+		emitCheckedEntry(code, 0, SOCKET_KIND, LispNames.TCP_PEER_PORT + " expects a connected socket handle");
 		code.checkcast(this.socketClass);
 		code.invokevirtual(this.socketGetPort);
 		emitBoxLong(code);
@@ -1255,20 +1284,259 @@ final class JvmSocketRuntimeBuilder {
 	}
 
 	/**
-	 * Emits {@code _streams[(int) ((Long) slot<handleSlot>).longValue()]} (an Object).
+	 * Emits {@code _sockEntry(slot<handleSlot>, kinds, refusal)}: the open entry of one
+	 * of {@code kinds} the handle names, or the operator's refusal.
 	 */
-	private void emitLoadStreamEntry(MethodCode code, int handleSlot) {
-		code.getstatic(this.streamsField);
+	private void emitCheckedEntry(MethodCode code, int handleSlot, int kinds, String refusal) {
 		code.aload(handleSlot);
-		emitUnboxInt(code);
-		code.aaload();
+		code.loadConstant(kinds);
+		code.ldc(this.cp.stringEntry(refusal));
+		code.invokestatic(this.cp.methodRef(this.thisClassRef, SOCK_ENTRY_METHOD, SOCK_ENTRY_DESC));
 	}
 
-	/** Emits {@code (int) ((Long) <stack top>).longValue()}. */
-	private void emitUnboxInt(MethodCode code) {
+	/**
+	 * Emits {@code slot<target> = _sockStr(slot<src>, "OP")}: the string's characters, or
+	 * the operator's {@code STRING} type-error.
+	 */
+	private void emitCheckedString(MethodCode code, int srcSlot, int targetSlot, String operator) {
+		code.aload(srcSlot);
+		code.ldc(this.cp.stringEntry(operator));
+		code.invokestatic(this.cp.methodRef(this.thisClassRef, SOCK_STR_METHOD, SOCK_STR_DESC));
+		code.astore(targetSlot);
+	}
+
+	/**
+	 * Pushes {@code _sockPort(slot<src>, "OP")}: the port as an {@code int}, or the
+	 * operator's {@code (INTEGER 0 65535)} type-error.
+	 */
+	private void emitCheckedPort(MethodCode code, int srcSlot, String operator) {
+		code.aload(srcSlot);
+		code.ldc(this.cp.stringEntry(operator));
+		code.invokestatic(this.cp.methodRef(this.thisClassRef, SOCK_PORT_METHOD, SOCK_PORT_DESC));
+	}
+
+	/**
+	 * Emits the checked arguments of {@link #buildTlsListen} / {@link #buildTlsListenP12}
+	 * in the interpreter's order: slot 4 = the keystore (a path or Base64), slot 5 = the
+	 * password as a {@code char[]}, slot 11 = the port, slot 12 = the host or null.
+	 */
+	private void emitListenArgs(MethodCode code, String operator) {
+		emitCheckedString(code, 0, 4, operator);
+		emitCheckedString(code, 1, 5, operator);
+		emitCheckedPort(code, 2, operator);
+		code.istore(11);
+		code.aconst_null();
+		code.astore(12);
+		code.aload(3);
+		MethodCode.Label noHost = code.newLabel();
+		code.ifnull(noHost);
+		emitCheckedString(code, 3, 12, operator);
+		code.labelBinding(noHost);
+	}
+
+	/**
+	 * {@code _sockEntry(Object h, int kinds, String refusal) -> Object}: the
+	 * {@code _streams} entry a {@code Long} handle names when it is a {@code Socket}
+	 * (kinds bit 1) or a {@code ServerSocket} (bit 2); anything else -- a value that is
+	 * no handle, a handle past the table or with no table at all, a closed or other
+	 * stream's entry -- throws {@code new RuntimeException(refusal)}, the interpreter's
+	 * simple-error.
+	 */
+	private MethodCode buildSockEntry() {
+		// Slots: 0=h, 1=kinds, 2=refusal, 3=entry, 4=table, 5-6=i (long)
+		MethodCode code = new MethodCode();
+		MethodCode.Label refuse = code.newLabel();
+		code.aload(0);
+		code.instanceOf(this.longClass);
+		code.ifeq(refuse);
+		code.getstatic(this.streamsField);
+		code.astore(4);
+		code.aload(4);
+		code.ifnull(refuse);
+		code.aload(0);
 		code.checkcast(this.longClass);
 		code.invokevirtual(this.longValue);
+		code.lstore(5);
+		code.lload(5);
+		code.lconst_0();
+		code.lcmp();
+		code.iflt(refuse);
+		code.lload(5);
+		code.aload(4);
+		code.arraylength();
+		code.i2l();
+		code.lcmp();
+		code.ifge(refuse);
+		code.aload(4);
+		code.lload(5);
 		code.l2i();
+		code.aaload();
+		code.astore(3);
+		MethodCode.Label notSocket = code.newLabel();
+		code.iload(1);
+		code.loadConstant(SOCKET_KIND);
+		code.iand();
+		code.ifeq(notSocket);
+		code.aload(3);
+		code.instanceOf(this.socketClass);
+		code.ifeq(notSocket);
+		code.aload(3);
+		code.areturn();
+		code.labelBinding(notSocket);
+		code.iload(1);
+		code.loadConstant(LISTENER_KIND);
+		code.iand();
+		code.ifeq(refuse);
+		code.aload(3);
+		code.instanceOf(this.serverSocketClass);
+		code.ifeq(refuse);
+		code.aload(3);
+		code.areturn();
+		code.labelBinding(refuse);
+		ClassEntry rte = this.cp.classEntry("java/lang/RuntimeException");
+		code.new_(rte);
+		code.dup();
+		code.aload(2);
+		code.invokespecial(this.cp.methodRef(rte, "<init>", "(Ljava/lang/String;)V"));
+		code.athrow();
+		return code;
+	}
+
+	/**
+	 * {@code _sockStr(Object x, String op) -> String}: a string's characters (a mutable
+	 * character vector rendered first), or {@code throw _opTypeErr(_teOf(x, STRING), op,
+	 * FUNNEL_TYPE)} -- a symbol is a bare {@code String}, so the quote frame decides.
+	 */
+	private MethodCode buildSockStr() {
+		// Slots: 0=x, 1=op, 2=s
+		MethodCode code = new MethodCode();
+		MethodCode.Label refuse = code.newLabel();
+		code.aload(0);
+		if (this.strvRef != null) {
+			code.invokestatic(this.strvRef);
+		}
+		code.astore(2);
+		code.aload(2);
+		code.instanceOf(this.stringClass);
+		code.ifeq(refuse);
+		code.aload(2);
+		code.checkcast(this.stringClass);
+		code.ldc(this.quoteStr);
+		code.invokevirtual(this.cp.methodRef(this.stringClass, "startsWith", "(Ljava/lang/String;)Z"));
+		code.ifeq(refuse);
+		code.aload(2);
+		code.checkcast(this.stringClass);
+		code.iconst_1();
+		code.aload(2);
+		code.checkcast(this.stringClass);
+		code.invokevirtual(this.stringLength);
+		code.iconst_1();
+		code.isub();
+		code.invokevirtual(this.stringSubstring);
+		code.areturn();
+		code.labelBinding(refuse);
+		emitThrowOperandTypeError(code, OperandTypes.Kind.STRING.name());
+		return code;
+	}
+
+	/**
+	 * {@code _sockPort(Object x, String op) -> int}: an integer in
+	 * {@code (INTEGER 0 65535)}, or that type's type-error under {@code op}.
+	 */
+	private MethodCode buildSockPort() {
+		// Slots: 0=x, 1=op, 2-3=v (long)
+		MethodCode code = new MethodCode();
+		MethodCode.Label refuse = code.newLabel();
+		code.aload(0);
+		code.instanceOf(this.longClass);
+		code.ifeq(refuse);
+		code.aload(0);
+		code.checkcast(this.longClass);
+		code.invokevirtual(this.longValue);
+		code.lstore(2);
+		code.lload(2);
+		code.lconst_0();
+		code.lcmp();
+		code.iflt(refuse);
+		code.lload(2);
+		code.ldc(this.cp.entries().longEntry(65535L));
+		code.lcmp();
+		code.ifgt(refuse);
+		code.lload(2);
+		code.l2i();
+		code.ireturn();
+		code.labelBinding(refuse);
+		emitThrowOperandTypeError(code, OperandTypes.PORT_TYPE);
+		return code;
+	}
+
+	/**
+	 * {@code _sockMs(Object x) -> int}: {@code tcp-set-timeout}'s milliseconds -- nil is
+	 * 0 (no deadline), a count past an {@code int}'s range the longest one -- or the
+	 * {@code (OR NULL (INTEGER 0))} type-error under {@code TCP-SET-TIMEOUT}.
+	 */
+	private MethodCode buildSockMs() {
+		// Slots: 0=x, 1=op, 2-3=v (long)
+		MethodCode code = new MethodCode();
+		MethodCode.Label refuse = code.newLabel();
+		MethodCode.Label notLong = code.newLabel();
+		MethodCode.Label notNil = code.newLabel();
+		code.aload(0);
+		code.ifnonnull(notNil);
+		code.iconst_0();
+		code.ireturn();
+		code.labelBinding(notNil);
+		code.ldc(this.cp.stringEntry(LispNames.TCP_SET_TIMEOUT));
+		code.astore(1);
+		code.aload(0);
+		code.instanceOf(this.longClass);
+		code.ifeq(notLong);
+		code.aload(0);
+		code.checkcast(this.longClass);
+		code.invokevirtual(this.longValue);
+		code.lstore(2);
+		code.lload(2);
+		code.lconst_0();
+		code.lcmp();
+		code.iflt(refuse);
+		code.lload(2);
+		code.ldc(this.cp.entries().longEntry(Integer.MAX_VALUE));
+		code.invokestatic(this.cp.methodRef(this.cp.classEntry("java/lang/Math"), "min", "(JJ)J"));
+		code.l2i();
+		code.ireturn();
+		code.labelBinding(notLong);
+		ClassEntry bigClass = this.cp.classEntry("java/math/BigInteger");
+		code.aload(0);
+		code.instanceOf(bigClass);
+		code.ifeq(refuse);
+		code.aload(0);
+		code.checkcast(bigClass);
+		code.invokevirtual(this.cp.methodRef(bigClass, "signum", "()I"));
+		code.ifle(refuse);
+		code.ldc(this.cp.entries().intEntry(Integer.MAX_VALUE));
+		code.ireturn();
+		code.labelBinding(refuse);
+		emitThrowOperandTypeError(code, OperandTypes.TIMEOUT_TYPE);
+		return code;
+	}
+
+	/**
+	 * Emits {@code throw _opTypeErr(_teOf(x, type), op, FUNNEL_TYPE)} for a check helper
+	 * whose operand is local 0 and whose operator name is local 1: the report
+	 * {@code OP: The value X is not of type T}, and under a landing pad the datum and the
+	 * type, as the interpreter's {@code OperandTypeException} carries them.
+	 */
+	private void emitThrowOperandTypeError(MethodCode code, Object type) {
+		code.aload(0);
+		JvmArrayRuntimeBuilder.emitTypeValue(code, this.cp, this.cp.classEntry("java/lang/Object"), this.longValueOf,
+				type);
+		code.invokestatic(JvmOperandTypeRuntime.self(this.cp, this.thisClassRef, JvmOperandTypeRuntime.TE_OF,
+				JvmOperandTypeRuntime.TE_OF_DESC));
+		code.aload(1);
+		code.ldc(this.cp.stringEntry(OperandTypes.FUNNEL_TYPE));
+		code.invokestatic(JvmOperandTypeRuntime.self(this.cp, this.thisClassRef, JvmOperandTypeRuntime.OP_TYPE_ERR,
+				JvmOperandTypeRuntime.OP_TYPE_ERR_DESC));
+		code.athrow();
 	}
 
 	/** Emits {@code Long.valueOf((long) <stack top int>)}. */

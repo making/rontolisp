@@ -12,6 +12,8 @@ import java.util.Map;
 
 import am.ik.jvm.ConstantPool;
 import am.ik.jvm.MethodCode;
+import am.ik.rontolisp.LispNames;
+import am.ik.rontolisp.compiler.OperandTypes;
 import org.jspecify.annotations.Nullable;
 
 /**
@@ -165,6 +167,7 @@ final class JvmThreadRuntimeBuilder {
 		// virtual thread; the handle packs the thread (alive/destroy) and the task (join)
 		{
 			MethodCode a = new MethodCode();
+			emitRequireBindings(a, cp, thisClass, stringClass, objectArrayClass, stringConcat);
 			// runner (slot 2) = new Prog() with the two fields set
 			a.new_(thisClass);
 			a.dup();
@@ -210,13 +213,14 @@ final class JvmThreadRuntimeBuilder {
 		// its condition re-set on the joining thread (the _await precedent)
 		{
 			MethodCode a = new MethodCode();
+			emitRequireThread(a, cp, thisClass, objectClass, LispNames.JOIN_THREAD);
 			a.aload(0);
 			a.checkcast(objectArrayClass);
 			a.loadConstant(2);
 			a.aaload();
 			a.checkcast(futureTaskClass);
-			// the try region covers ONLY get(): a bad handle's ClassCastException above
-			// must surface as itself, not as "interrupted"
+			// the try region covers ONLY get(): the handle check above must surface as
+			// itself, not as "interrupted"
 			MethodCode.Label tryStart = a.newBoundLabel();
 			a.invokevirtual(futureTaskGet); // [v]
 			a.astore(1);
@@ -300,6 +304,7 @@ final class JvmThreadRuntimeBuilder {
 		// --- _thread_alive(h): Thread.isAlive as T/nil
 		{
 			MethodCode a = new MethodCode();
+			emitRequireThread(a, cp, thisClass, objectClass, LispNames.THREAD_ALIVE_P);
 			MethodCode.Label no = a.newLabel();
 			a.aload(0);
 			a.checkcast(objectArrayClass);
@@ -319,6 +324,7 @@ final class JvmThreadRuntimeBuilder {
 		// --- _thread_destroy(h): interrupt the thread, answer the handle
 		{
 			MethodCode a = new MethodCode();
+			emitRequireThread(a, cp, thisClass, objectClass, LispNames.DESTROY_THREAD);
 			a.aload(0);
 			a.checkcast(objectArrayClass);
 			a.loadConstant(1);
@@ -498,6 +504,96 @@ final class JvmThreadRuntimeBuilder {
 		}
 
 		return new ThreadRuntime(List.copyOf(methods), callMethod);
+	}
+
+	/**
+	 * Emits {@code _thread_spawn}'s check of its bindings (local 1) before anything
+	 * starts, the interpreter's: a proper list of conses each headed by a symbol (a bare
+	 * {@code String}; a string is quote-framed), else
+	 * {@code MAKE-THREAD expects an alist of (symbol . value) bindings, got X}. Without
+	 * it a bad alist spawned and failed inside the thread, reaching the program only at
+	 * the join. Slots 5 (the walk) and 6 (the pair).
+	 */
+	private static void emitRequireBindings(MethodCode a, ConstantPool cp, ClassEntry thisClass, ClassEntry stringClass,
+			ClassEntry objectArrayClass, MethodRefEntry stringConcat) {
+		MethodRefEntry isCons = JvmOperandTypeRuntime.self(cp, thisClass, JvmOperandTypeRuntime.IS_CONS,
+				JvmOperandTypeRuntime.IS_CONS_DESC);
+		MethodCode.Label loop = a.newLabel();
+		MethodCode.Label done = a.newLabel();
+		MethodCode.Label refuse = a.newLabel();
+		a.aload(1);
+		a.astore(5);
+		a.labelBinding(loop);
+		a.aload(5);
+		a.ifnull(done);
+		a.aload(5);
+		a.invokestatic(isCons);
+		a.ifeq(refuse);
+		a.aload(5);
+		a.checkcast(objectArrayClass);
+		a.loadConstant(0);
+		a.aaload();
+		a.astore(6);
+		a.aload(6);
+		a.invokestatic(isCons);
+		a.ifeq(refuse);
+		a.aload(6);
+		a.checkcast(objectArrayClass);
+		a.loadConstant(0);
+		a.aaload();
+		a.astore(6);
+		a.aload(6);
+		a.instanceOf(stringClass);
+		a.ifeq(refuse);
+		a.aload(6);
+		a.checkcast(stringClass);
+		a.ldc(cp.stringEntry("\""));
+		a.invokevirtual(cp.methodRef(stringClass, "startsWith", "(Ljava/lang/String;)Z"));
+		a.ifne(refuse);
+		a.aload(5);
+		a.checkcast(objectArrayClass);
+		a.loadConstant(1);
+		a.aaload();
+		a.astore(5);
+		a.goto_(loop);
+		a.labelBinding(refuse);
+		ClassEntry rte = cp.classEntry("java/lang/RuntimeException");
+		a.new_(rte);
+		a.dup();
+		a.ldc(cp.stringEntry(LispNames.MAKE_THREAD + " expects an alist of (symbol . value) bindings, got "));
+		a.aload(1);
+		a.invokestatic(cp.methodRef(thisClass, "_lispToString", "(Ljava/lang/Object;)Ljava/lang/String;"));
+		a.invokevirtual(stringConcat);
+		a.invokespecial(cp.methodRef(rte, "<init>", "(Ljava/lang/String;)V"));
+		a.athrow();
+		a.labelBinding(done);
+	}
+
+	/**
+	 * Emits the handle check opening a thread helper whose operand (local 0) must be a
+	 * thread: {@code if (_threadp(h) == null) throw _opTypeErr(_teOf(h, (SATISFIES
+	 * RONTOLISP:THREADP)), "OP", FUNNEL_TYPE)} -- the interpreter's report
+	 * {@code OP: The value X is not of type (SATISFIES RONTOLISP:THREADP)}, and under a
+	 * landing pad the datum and the type, where a cast used to leak a host exception.
+	 */
+	private static void emitRequireThread(MethodCode a, ConstantPool cp, ClassEntry thisClass, ClassEntry objectClass,
+			String operator) {
+		MethodCode.Label ok = a.newLabel();
+		a.aload(0);
+		a.invokestatic(cp.methodRef(thisClass, THREADP_METHOD, UNARY_DESC));
+		a.ifnonnull(ok);
+		a.aload(0);
+		JvmArrayRuntimeBuilder.emitTypeValue(a, cp, objectClass,
+				cp.methodRef(cp.classEntry("java/lang/Long"), "valueOf", "(J)Ljava/lang/Long;"),
+				OperandTypes.THREAD_TYPE);
+		a.invokestatic(JvmOperandTypeRuntime.self(cp, thisClass, JvmOperandTypeRuntime.TE_OF,
+				JvmOperandTypeRuntime.TE_OF_DESC));
+		a.ldc(cp.stringEntry(operator));
+		a.ldc(cp.stringEntry(OperandTypes.FUNNEL_TYPE));
+		a.invokestatic(JvmOperandTypeRuntime.self(cp, thisClass, JvmOperandTypeRuntime.OP_TYPE_ERR,
+				JvmOperandTypeRuntime.OP_TYPE_ERR_DESC));
+		a.athrow();
+		a.labelBinding(ok);
 	}
 
 }

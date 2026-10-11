@@ -29,7 +29,8 @@ program never blocks for long:
 ## Backend support
 
 - **Interpreter** and **JVM**: `java.net.ServerSocket.accept()`; accepting on
-  a closed listener signals an error.
+  a closed listener, or on any value that is not an open listener handle,
+  signals the `simple-error` `TCP-ACCEPT expects a listener handle`.
 - **WASM**: component-only. The accept is a cooperatively blocking read of one
   `tcp-socket` handle from the `wasi:sockets@0.3.0` accept stream; in an async
   body a pending accept suspends only its own task, so other tasks (a

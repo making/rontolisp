@@ -359,6 +359,29 @@ public final class OperandTypes {
 			LispNames.RONTOLISP_PKG + ":" + LispNames.FUTUREP);
 
 	/**
+	 * The type {@code rontolisp:join-thread}, {@code thread-alive-p} and
+	 * {@code destroy-thread} require of their handle, spelled like
+	 * {@link #ASYNC_STREAM_TYPE}: {@code (SATISFIES RONTOLISP:THREADP)}. These operators
+	 * are no table rows: no wasm backend can hold a thread, so only the interpreter and
+	 * the JVM report under them, naming the operator directly.
+	 */
+	public static final List<Object> THREAD_TYPE = List.of("SATISFIES",
+			LispNames.RONTOLISP_PKG + ":" + LispNames.THREADP);
+
+	/**
+	 * The type the {@code rontolisp:} socket constructors require of a port,
+	 * {@code (INTEGER 0 65535)}: an integer outside it is as wrong as a string. Reported,
+	 * like {@link #THREAD_TYPE}, under an operator that is no table row.
+	 */
+	public static final List<Object> PORT_TYPE = List.of(Kind.INTEGER.name(), 0L, 65535L);
+
+	/**
+	 * The type {@code rontolisp:tcp-set-timeout} requires of its milliseconds,
+	 * {@code (OR NULL (INTEGER 0))}: nil clears the deadline.
+	 */
+	public static final List<Object> TIMEOUT_TYPE = List.of("OR", "NULL", List.of(Kind.INTEGER.name(), 0L));
+
+	/**
 	 * The character comparisons, fixed-typed {@code CHARACTER}: every argument is
 	 * checked, the single one of a one-argument call included. Last in the table, after
 	 * the hash-table accessors.

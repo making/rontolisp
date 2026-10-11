@@ -20,6 +20,15 @@ round-trip are portable.
   (`BuiltinFunctionWrappers.WASM_UNSUPPORTED`; the interpreter and the JVM have the values,
   [lisp2-namespaces.md](lisp2-namespaces.md)); `--no-gc` rejects the names.
 
+## A value that is no thread
+`join-thread`/`thread-alive-p`/`destroy-thread` of a non-thread: the operator's `type-error` expecting
+`(SATISFIES RONTOLISP:THREADP)` on the interpreter (`requireThread`) and the JVM (`emitRequireThread`,
+`_threadp` first); the wasm bt2 `thread-alive-p` signals the same condition and text by hand. A bindings
+alist that is not a proper list of `(symbol . value)` conses is `make-thread`'s `simple-error` BEFORE a
+thread starts on both (the JVM's `emitRequireBindings`; it used to spawn and fail at the join). A
+non-function first argument still spawns on both and fails at the join. Pinned by `HandleOperandFixture`
+([error-handling.md](error-handling.md), "A wrong-type argument names its operator").
+
 ## Bindings, join, feature
 - The `(symbol . VALUE)` alist binds in the NEW thread only; a spawned thread inherits NO bindings
   (`.kb/dynamic-special-variables.md`) and they die with it. Interpreter: `DynamicBindings.push`,
@@ -60,7 +69,7 @@ caching in `_curThreadTl` (null task slot — self-join NPEs). Works for ANY thr
 body's self-handle is its own, NOT the spawner's handle for it.
 
 ## Tests
-`ThreadTest`, `JvmThreadTest`,
+`ThreadTest`, `JvmThreadTest` (both run `HandleOperandFixture`),
 `WasmLispCompilerIntegrationTest#bt2ThreadEntryPointsSignalWhileThreadpAnswersNil`, ci-spec
 `bt2-thread-api-portable-surface` (spawn/join excluded — output cannot be identical across
 backends).

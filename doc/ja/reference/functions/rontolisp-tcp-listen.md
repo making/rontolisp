@@ -33,7 +33,9 @@
 
 - **インタープリタ**と **JVM**: JDK の `java.net.ServerSocket` を使用します
   (インタープリタでは `SO_REUSEADDR` 付き)。バインド失敗(ポート使用中など)は
-  エラーを通知します。
+  エラーを通知します。`(INTEGER 0 65535)` の範囲外の `port` や、文字列でも
+  `nil`(全インターフェース)でもない `host` は、バインドの前にその演算子の
+  `type-error` を通知します。
 - **WASM**: コンポーネント専用で、`wasi:sockets@0.3.0` 上で動作します。`host`
   は IPv4 リテラルである必要があります。`--component` でコンパイルし、
   `wasmtime run -S tcp=y -S inherit-network=y` で

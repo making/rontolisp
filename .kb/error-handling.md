@@ -1657,6 +1657,21 @@ type T` with the type the operator requires, as a catchable `type-error` answeri
   does not match. The prelude defuns call `%operand-type-error` (they were `(error "rontolisp:THEN expects
   ...")`, a `simple-error`); the wasm compound-type texts are interned with the stream type's. Pinned by
   `AsyncCombinatorOperandFixture` ([async-await.md](async-await.md)).
+- **rontolisp's thread and socket operators** (2026-10-11, interpreter and JVM only): `join-thread`,
+  `thread-alive-p` and `destroy-thread` of a non-thread expect `(SATISFIES RONTOLISP:THREADP)`
+  (`OperandTypes.THREAD_TYPE`); a socket constructor's host, path or password that is no string expects
+  `STRING`, a port `(INTEGER 0 65535)` (`PORT_TYPE`, so 70000 and a bignum are type-errors too), and
+  `tcp-set-timeout`'s milliseconds `(OR NULL (INTEGER 0))` (`TIMEOUT_TYPE`; a count past an int clamps).
+  **No table rows**: no wasm backend holds a thread and the component's socket layer answers nil, so a
+  row would only cost a wasm module spelling the name; the interpreter names the operator directly
+  (`OperandTypeException.notOfType`/`of` fall back to the operator itself), the JVM through
+  `_opTypeErr(_teOf(x, type), "OP", FUNNEL_TYPE)` (`JvmThreadRuntimeBuilder.emitRequireThread`, the socket
+  runtime's `_sockStr`/`_sockPort`/`_sockMs`). A socket HANDLE of the wrong kind or state stays a
+  `simple-error` (`OP expects a connected socket handle`): no type names "an open connected socket", and
+  the JVM helper sees the resolved handle, not the value the program passed, so no report prints it.
+  Before: the interpreter's `simple-error`s in their own words, the JVM's `ClassCastException` (an
+  unnamed type-error) or an NPE's `simple-error` -- `_streams` is null in a program with no file stream.
+  Pinned by `HandleOperandFixture` ([threads.md](threads.md), [tcp-sockets.md](tcp-sockets.md)).
 - **`scale-float`** (measured 2026-10-06, SBCL 2.2.9): refuses a non-`FLOAT` first argument (a complex,
   an integer, a ratio, a symbol, `nil`) and then a non-`INTEGER` second one, each a `type-error` over the
   argument as given. Before, nothing checked either: the interpreter's `asDouble` answered `6.0` for `3`

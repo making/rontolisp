@@ -31069,14 +31069,18 @@ class WasmLispCompilerIntegrationTest {
 		List<LispVal> program = am.ik.rontolisp.cli.LoadInliner.inline(LispReader.readAllFromString("""
 				(asdf:load-system "bordeaux-threads")
 				(print (bt2:threadp 42))
-				(print (handler-case (bt2:thread-alive-p 42) (error (e) :not-a-thread)))
+				(print (handler-case (bt2:thread-alive-p 42)
+				         (type-error (e) (list (type-error-datum e) (type-error-expected-type e)
+				                               (princ-to-string e)))))
 				(print (handler-case (bt2:make-thread (lambda () 1)) (error (e) :spawn-error)))
 				(print bordeaux-threads:*supports-threads-p*)
 				"""), path -> {
 			throw new java.io.FileNotFoundException(path);
 		}, null, List.of(), am.ik.rontolisp.reader.Features.WASM);
-		assertThat(compileAndRunProgram(am.ik.rontolisp.eval.LispPreludeLibrary.process(program)))
-			.isEqualTo("NIL\n:NOT-A-THREAD\n:SPAWN-ERROR\nNIL");
+		// thread-alive-p's type-error is the interpreter's and the JVM's
+		// (HandleOperandFixture): every wasm-reachable argument is a non-thread.
+		assertThat(compileAndRunProgram(am.ik.rontolisp.eval.LispPreludeLibrary.process(program))).isEqualTo(
+				"NIL\n(42 (SATISFIES RONTOLISP:THREADP) \"THREAD-ALIVE-P: The value 42 is not of type (SATISFIES RONTOLISP:THREADP)\")\n:SPAWN-ERROR\nNIL");
 	}
 
 	@Test

@@ -97,7 +97,17 @@ class ThreadTest {
 	void threadAlivePOnANonThreadIsAnError() {
 		assertThatThrownBy(() -> evalAll(evaluator(), "(rontolisp:thread-alive-p 42)"))
 			.isInstanceOf(LispEvalException.class)
-			.hasMessageContaining("expects a thread handle");
+			.hasMessage("THREAD-ALIVE-P: The value 42 is not of type (SATISFIES RONTOLISP:THREADP)");
+	}
+
+	@Test
+	void threadAndSocketOperatorsSignalTheirConditionOverAValueTheyCannotTake() {
+		// Pinned identically on the JVM (JvmThreadTest).
+		ByteArrayOutputStream out = new ByteArrayOutputStream();
+		evalAll(new LispEvaluator(new PrintStream(out, true, java.nio.charset.StandardCharsets.UTF_8)),
+				am.ik.rontolisp.HandleOperandFixture.PROGRAM);
+		assertThat(out.toString(java.nio.charset.StandardCharsets.UTF_8).trim())
+			.isEqualTo(am.ik.rontolisp.HandleOperandFixture.EXPECTED);
 	}
 
 	@Test

@@ -132,9 +132,14 @@
 #+rontolisp-wasm
 (defun bt2:thread-alive-p (thread)
   ;; No thread handle can exist on this backend, so every argument is the same
-  ;; non-thread the interpreter and the JVM signal on -- identical behavior for
-  ;; every wasm-reachable input, not a divergence.
-  (error "THREAD-ALIVE-P expects a thread handle, got ~A" thread))
+  ;; non-thread the interpreter and the JVM signal on -- the same type-error and
+  ;; report for every wasm-reachable input, not a divergence.
+  (error 'type-error
+   :datum thread
+   :expected-type '(satisfies rontolisp:threadp)
+   :format-control
+   "THREAD-ALIVE-P: The value ~S is not of type (SATISFIES RONTOLISP:THREADP)"
+   :format-arguments (list thread)))
 
 #+rontolisp-wasm
 (defun bt2:destroy-thread (thread)

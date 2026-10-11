@@ -18,5 +18,5 @@ join の後、同じハンドルへの
 
 - [`rontolisp:make-thread`](rontolisp-make-thread.md) 自身と同様、インタプリタと
   JVM バックエンドのみです。
-- スレッドハンドルでない値はエラーです。
+- スレッドハンドルでない値は `(SATISFIES RONTOLISP:THREADP)` を期待する `type-error` を通知します。
 - タイムアウト付きの join はありません。

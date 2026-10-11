@@ -50,7 +50,8 @@ HTTPS requests prefer [`rontolisp:fetch`](rontolisp-fetch.md)):
 - **Interpreter** and **JVM**: use the JDK TLS stack
   (`SSLSocketFactory.createSocket(socket, host, port, true)`); a failed
   handshake (untrusted certificate, hostname mismatch, a peer that does not
-  speak TLS) signals an error.
+  speak TLS) signals an error. A `host` that is no string signals the
+  operator's `type-error`.
 - **WASM `--component`** (WASI 0.3): supported, over wasmtime's
   `wasi:tls@0.3.0-draft` interface — add `-S tls=y` to the usual socket run
   flags. On this backend the upgrade is the *natural* primitive (the host's

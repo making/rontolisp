@@ -11,7 +11,8 @@ Spawns a new (virtual) thread running the zero-argument `function` and returns a
 differs per backend, so printing or ordering one is not portable.
 
 `bindings` is an alist of `(symbol . value)` pairs, each established as a thread-scoped
-dynamic binding in the **new** thread before `function` runs. The spawned thread inherits
+dynamic binding in the **new** thread before `function` runs. Anything else signals a
+`simple-error` before a thread starts. The spawned thread inherits
 no dynamic bindings from its spawner: without an entry here it reads every special
 variable's global value. Binding `*standard-output*` this way routes the new thread's
 print family into a stream of your choice — the shape the `bordeaux-threads`/`bt2`

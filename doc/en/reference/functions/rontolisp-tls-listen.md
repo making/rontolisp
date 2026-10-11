@@ -45,7 +45,9 @@ Complete servers live in the `examples/` directory:
 
 - **Interpreter** and **JVM**: use the JDK TLS stack. Unlike `tcp-listen` on
   the WASM backend, failures never yield `nil`: a missing keystore, a wrong
-  password or a busy port signals an error on both backends.
+  password or a busy port signals an error on both backends. A path, password
+  or `host` that is no string (`host` may be `nil`) or a `port` outside
+  `(INTEGER 0 65535)` signals the operator's `type-error` first.
 - **WASM**: not supported — `tls-listen` is a **compile error** in both
   Preview 1 and `--component` mode. The `wasi:tls` proposal is **client-only
   by design** (there is no server-side TLS interface in any draft), so a TLS

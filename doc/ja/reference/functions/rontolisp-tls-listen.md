@@ -47,7 +47,9 @@ keytool -genkeypair -alias my-server -keyalg EC -dname CN=localhost \
 - **インタープリタ**と **JVM**: JDK の TLS スタックを使います。WASM
   バックエンドの `tcp-listen` と異なり、失敗が `nil` になることはありません:
   キーストアの欠落、誤ったパスワード、使用中のポートは、どちらのバックエンド
-  でもエラーを通知します。
+  でもエラーを通知します。文字列でないパス、パスワード、`host`(`host` は `nil`
+  でもよい)や `(INTEGER 0 65535)` の範囲外の `port` は、先にその演算子の
+  `type-error` を通知します。
 - **WASM**: 非サポート — `tls-listen` は Preview 1 と `--component` の
   どちらのモードでも**コンパイルエラー**です。`wasi:tls` の提案は
   **設計上クライアント専用**(どのドラフトにもサーバー側 TLS

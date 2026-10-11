@@ -14,7 +14,7 @@
 
 ## 制限
 
-- スレッドハンドルでない値はエラーです(不確かな場合は先に
+- スレッドハンドルでない値は `(SATISFIES RONTOLISP:THREADP)` を期待する `type-error` を通知します(不確かな場合は先に
   [`rontolisp:threadp`](rontolisp-threadp.md) を使ってください)。
 - [`rontolisp:make-thread`](rontolisp-make-thread.md) 自身と同様、インタプリタと
   JVM バックエンドのみです。

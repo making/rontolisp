@@ -47,7 +47,8 @@ the server closes:
 
 - **Interpreter** and **JVM**: use the JDK `java.net.Socket`; `host` may be a
   hostname or an IP literal. A failed connection (for example a refused port)
-  signals an error.
+  signals an error. A `host` that is no string or a `port` outside `(INTEGER 0 65535)` signals the
+  operator's `type-error` before anything connects.
 - **WASM**: component-only, over `wasi:sockets@0.3.0` (natively WASI 0.3, no
   0.2 hybrid). `host` must be an
   **IPv4 literal** such as `"127.0.0.1"` (hostname resolution via

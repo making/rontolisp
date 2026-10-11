@@ -49,7 +49,8 @@ HTTPS リクエストには [`rontolisp:fetch`](rontolisp-fetch.md) を使って
 - **インタープリタ**と **JVM**: JDK の TLS スタック
   (`SSLSocketFactory.createSocket(socket, host, port, true)`)を使います。
   ハンドシェイクの失敗(信頼されていない証明書、ホスト名の不一致、TLS を話さない
-  相手)はエラーを通知します。
+  相手)はエラーを通知します。文字列でない `host` はその演算子の `type-error` を
+  通知します。
 - **WASM `--component`**(WASI 0.3): サポートされます。wasmtime の
   `wasi:tls@0.3.0-draft` インターフェイス上で動き、通常のソケット実行フラグに
   `-S tls=y` を追加します。このバックエンドではアップグレードこそが*自然な*
