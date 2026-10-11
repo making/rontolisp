@@ -111,6 +111,16 @@ class ThreadTest {
 	}
 
 	@Test
+	void socketHostFailuresReadAsTheJvmBackendsDo() {
+		// Pinned identically on the JVM (JvmThreadTest).
+		ByteArrayOutputStream out = new ByteArrayOutputStream();
+		evalAll(new LispEvaluator(new PrintStream(out, true, java.nio.charset.StandardCharsets.UTF_8)),
+				am.ik.rontolisp.HandleOperandFixture.HOST_FAILURE_PROGRAM);
+		assertThat(out.toString(java.nio.charset.StandardCharsets.UTF_8).trim())
+			.isEqualTo(am.ik.rontolisp.HandleOperandFixture.HOST_FAILURE_EXPECTED);
+	}
+
+	@Test
 	void joinThreadResignalsTheThreadsErrorSoHandlerCaseDispatches() {
 		assertThat(evalAll(evaluator(), """
 				(handler-case

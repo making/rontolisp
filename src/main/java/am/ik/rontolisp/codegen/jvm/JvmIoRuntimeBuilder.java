@@ -3095,27 +3095,25 @@ final class JvmIoRuntimeBuilder {
 			code.aload(3);
 		}
 		if (this.sockets != null) {
+			// A socket entry reads through _sockReadByte, which words a host failure as
+			// the interpreter does.
 			code.astore(3);
 			code.aload(3);
 			code.instanceOf(this.sockets.socketClass());
 			MethodCode.Label ifNotSocket = code.newLabel();
 			code.ifeq(ifNotSocket);
 			code.aload(3);
-			code.checkcast(this.sockets.socketClass());
-			code.invokevirtual(this.sockets.socketGetInputStream());
-			code.astore(3);
-			MethodCode.Label gotoRead = code.newLabel();
-			code.goto_(gotoRead);
+			code.invokestatic(this.sockets.sockReadByte());
+			code.istore(4);
+			if (afterIoByte == null) {
+				afterIoByte = code.newLabel();
+			}
+			code.goto_(afterIoByte);
 			code.labelBinding(ifNotSocket);
 			code.aload(3);
-			code.checkcast(this.inputStreamClass);
-			code.astore(3);
-			code.labelBinding(gotoRead);
 		}
-		else {
-			code.checkcast(this.inputStreamClass);
-			code.astore(3);
-		}
+		code.checkcast(this.inputStreamClass);
+		code.astore(3);
 		MethodCode.Label gotoStdRead = code.newLabel();
 		code.goto_(gotoStdRead);
 		code.labelBinding(ifHandle);
@@ -3512,27 +3510,23 @@ final class JvmIoRuntimeBuilder {
 			code.aload(2);
 		}
 		if (this.sockets != null) {
+			// A socket entry writes through _sockWriteByte, which words a host failure
+			// as the interpreter does.
 			code.astore(2);
 			code.aload(2);
 			code.instanceOf(this.sockets.socketClass());
 			MethodCode.Label ifNotSocket = code.newLabel();
 			code.ifeq(ifNotSocket);
 			code.aload(2);
-			code.checkcast(this.sockets.socketClass());
-			code.invokevirtual(this.sockets.socketGetOutputStream());
-			code.astore(2);
-			MethodCode.Label gotoWrite = code.newLabel();
-			code.goto_(gotoWrite);
+			emitByteValue(code);
+			code.invokestatic(this.sockets.sockWriteByte());
+			code.aload(0);
+			code.areturn();
 			code.labelBinding(ifNotSocket);
 			code.aload(2);
-			code.checkcast(this.outputStreamClass);
-			code.astore(2);
-			code.labelBinding(gotoWrite);
 		}
-		else {
-			code.checkcast(this.outputStreamClass);
-			code.astore(2);
-		}
+		code.checkcast(this.outputStreamClass);
+		code.astore(2);
 		MethodCode.Label gotoWriteByte = code.newLabel();
 		code.goto_(gotoWriteByte);
 		code.labelBinding(ifHandle);
