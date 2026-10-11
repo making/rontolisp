@@ -3707,11 +3707,22 @@ final class JvmJavaDirectSites {
 	}
 
 	// _jltab(Object)Z: an instance of the travelling table class, which is final and no
-	// host value is.
+	// host value is. Tested by NAME, as the bridge's isLispTable is: the class travels
+	// only with a hash-using program, and an instanceof would load it in one that has
+	// none (a NoClassDefFoundError on the first java: value).
 	private Method buildLispTable(Utf8Entry name, Utf8Entry desc) {
 		MethodCode a = new MethodCode();
+		MethodCode.Label no = a.newLabel();
 		a.aload(0);
-		a.instanceOf(cls(RontoHashTable.MAP_CLASS));
+		a.ifnull(no);
+		a.aload(0);
+		a.invokevirtual(method("java/lang/Object", "getClass", "()Ljava/lang/Class;"));
+		a.invokevirtual(method("java/lang/Class", "getName", "()Ljava/lang/String;"));
+		a.ldc(str(RontoHashTable.MAP_CLASS.replace('/', '.')));
+		a.invokevirtual(method("java/lang/String", "equals", "(Ljava/lang/Object;)Z"));
+		a.ireturn();
+		a.labelBinding(no);
+		a.loadConstant(0);
 		a.ireturn();
 		return new Method(name, desc, a);
 	}

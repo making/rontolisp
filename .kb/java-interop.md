@@ -62,8 +62,10 @@ Package `java` (`LispNames.JAVA_PKG`, `PackageRegistry`; does NOT use `cl`): `ja
   views") is one. The bridge spells the table class and the package itself (no rontolisp
   imports); `theBridgeSpellsTheRepresentationAsTheRuntimeDoes` pins both.
 - The array and table arms are ONE test each in a compiled program: `_jlarr` (non-empty
-  `ArrayList`, slot 0 an `Object[]`) and `_jltab` (`instanceof RontoHashTable`, a final class
-  no host value has), `JvmJavaDirectSites.lispArray()` / `lispTable()`, built on first use.
+  `ArrayList`, slot 0 an `Object[]`) and `_jltab` (the class NAME equals `RontoHashTable`'s, a
+  final class no host value has; never `instanceof`, which loads the class, and it travels only
+  with a hash-using program: `NoClassDefFoundError` on the first `java:` value otherwise,
+  2026-10-11, `JvmRuntimeClassReferencesTest`), `JvmJavaDirectSites.lispArray()` / `lispTable()`, built on first use.
   `_jlarr` tests the EXACT class (`getClass() ==`) before reading: a host subclass's own
   `isEmpty` / `get` can lie (a `java:subclass` of `ArrayList` whose `isEmpty` says false on an
   empty list reached `get(0)`: `IndexOutOfBoundsException`, measured 2026-10-08; the
