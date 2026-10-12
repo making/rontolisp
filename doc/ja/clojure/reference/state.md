@@ -9,6 +9,12 @@ atom は全操作が読み書きするタグ付きセルです。各操作は新
 | `swap!` | `(swap! (atom 1) + 10 20)` | `31` |
 | `reset!` | `(reset! (atom 1) 2)` | `2` |
 | `compare-and-set!` | `(compare-and-set! (atom 2) 2 3)` | `true` |
+| `swap-vals!` | `(swap-vals! (atom 1) inc)` | `[1 2]` |
+| `reset-vals!` | `(reset-vals! (atom 1) 5)` | `[1 5]` |
+| `add-watch` | `(let [a (atom 0)] (add-watch a :k (fn [k r o n] (println o n))) (reset! a 1))` | `1` (prints `0 1`) |
+| `remove-watch` | `(let [a (atom 0)] (= a (remove-watch a :k)))` | `true` |
+| `set-validator!` | `(set-validator! (atom 1) pos?)` | `nil` |
+| `get-validator` | `(get-validator (atom 1))` | `nil` |
 | `volatile!` | `(deref (volatile! 1))` | `1` |
 | `vswap!` | `(vswap! (volatile! 1) + 2)` | `3` |
 | `vreset!` | `(vreset! (volatile! 1) 2)` | `2` |
@@ -22,6 +28,7 @@ atom は全操作が読み書きするタグ付きセルです。各操作は新
 | `send` | `(do (def a (agent 0)) @(send a + 5))` | `5` |
 | `send-off` | `(do (def a (agent 0)) @(send-off a + 5))` | `5` |
 | `await` | `(do (def a (agent 0)) (await a))` | `nil` |
+| `await-for` | `(do (def a (agent 0)) (await-for 100 a))` | `true` |
 | `agent-error` | `(agent-error (agent 0))` | `nil` |
 | `restart-agent` | `(do (def a (agent 0 :validator pos?)) (send a dec) (restart-agent a 5))` | `5` |
 | `set-error-handler!` | `(set-error-handler! (agent 0) println)` | `nil` |

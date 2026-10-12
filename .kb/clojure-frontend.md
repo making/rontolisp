@@ -55,7 +55,7 @@ The oracle is `clj` 1.12.6.1673: a behavior is decided by running it there, and 
 | `sorted-map` / `sorted-set` (and `-by`) | `(:C%SORTED setp cmp items)`: a vector of `[k v]` entries or members in comparator order | "Sorted collections" |
 | `[..]` | a CL vector (a `vector` call) | a string is a CL vector too, so `vector?`/`coll?` exclude strings |
 | list, seq | a CL list | lazy seq: `(:C%LAZY cell)`, memoized through `rplaca`/`rplacd` ("Laziness") |
-| atom, volatile, ref, agent | `(:C%ATOM #(value))`; a volatile's cell `#(value :C%VOLATILE)`; a validated ref's `#(value nil validator)`, an agent's `#(value nil validator #(running queue error handler mode))` | one cell shape, so STM verbs accept atoms; `volatile?` reads the length 2, so slot 1 of the longer cells stays nil; `send` refuses a cell that is not 4 long |
+| atom, volatile, ref, agent | `(:C%ATOM #(value))`; a volatile's cell `#(value :C%VOLATILE)`; a validated ref's and every agent's `#(value nil validator state watches)` (`state` an agent's `#(running queue error handler mode)`, nil for a ref), and so is every atom's and ref's in a program that may give a reference a validator or a watch ("State", validators and watches) | one cell shape, so STM verbs accept atoms; `volatile?` reads the length 2, so slot 1 of the longer cells stays nil; `send` refuses a cell that is not 5 long with a state |
 | record / deftype / reify | `(:C%RECORD tag fields table class)` / `(:C%TYPE tag fields table class slots?)` / a fresh `:C%REIFY` tag | "Dispatch"; the interfaces a body implements are rows under the tag ("Host interfaces") |
 | `#"re"` | `(:C%PATTERN stamp source ops ngroups)` | the stamp is a gensym, so `=` is identity like the oracle |
 | byte array (`byte-array`, `.getBytes`) | `(:C%BYTES octets)`, `octets` a packed `(unsigned-byte 8)` vector | "Byte arrays" |
@@ -125,9 +125,10 @@ answered `2 5 3` before).
 | `try`/`catch`/`finally`/`throw` | `handler-case` inside `unwind-protect`; `throw` is `%clojure-throw` | one `handler-case` clause per catch, in order, of the type its class takes ("Catching"); `throw` signals an exception as itself (a caught one rethrows unchanged, a host `Throwable` as the `java:java-exception` carrying it, "Host exceptions"), anything else a `ClassCastException` (nil a `NullPointerException`) whose message is its rendering, so strings keep their message |
 | `ex-info` `ex-data` `ex-message` `ex-cause`, `.getMessage` `.getLocalizedMessage` `.getCause` | one call to the `clojure.lisp` "Exceptions" function | see "Exceptions" |
 | `assert` | `if` around the `AssertionError` carrier ("Refusals") | the `Assert failed:` message evaluates only on failure; it names the failed form, built only in the failure branch: rendered at lower time (`ClojureStringLowering.prSource`: symbols, keywords, integers, strings, chars, lists, vectors, maps) so no printer is linked, else `quote` through the readable `%clojure-str-of` (double, ratio, set, regex...) which links the collection printer (measured 2026-10-03: `(assert (nil? x))` wasm 3171 -> 3282 bytes; with a double in the form 3171 -> 54237 versus 21992 before) |
-| `atom` `deref`/`@` `swap!` `reset!` `compare-and-set!` `volatile!` `vswap!` `vreset!` | reads/writes of the cell; an atom's `swap!`/`compare-and-set!`/`reset!` through the guarded `%clojure-atom-*` helpers (`.kb/concurrent-served-requests.md`) | answer the new value; `compare-and-set!` compares with `eql`; `swap!` retries like the oracle's CAS loop; `seq`/`first`/`count`/`empty?`/`cons`/`conj` onto a cell signal like the oracle; `deref` also reads a host `Future`, with or without a timeout ("A host `Future` under `deref`"), and the rontolisp future the HTTP client answers ("HTTP client") |
+| `atom` `deref`/`@` `swap!` `reset!` `compare-and-set!` `swap-vals!` `reset-vals!` `volatile!` `vswap!` `vreset!` | reads/writes of the cell; an atom's `swap!`/`compare-and-set!`/`reset!`/`-vals` through the guarded `%clojure-ref-*` helpers, each the plain `%clojure-atom-*` one where no reference can have a validator or watch (`.kb/concurrent-served-requests.md`; "State", validators and watches); `atom`'s options through `%clojure-atom-options` | answer the new value (`-vals` `[old new]`); `compare-and-set!` compares with `eql`; `swap!` retries like the oracle's CAS loop; `seq`/`first`/`count`/`empty?`/`cons`/`conj` onto a cell signal like the oracle; `deref` also reads a host `Future`, with or without a timeout ("A host `Future` under `deref`"), and the rontolisp future the HTTP client answers ("HTTP client") |
 | `ref` `dosync` `alter` `commute` `ref-set` `ensure` | the cell under `clojure.lisp`'s `%clojure-stm-*` | "State" |
-| `agent` `send` `send-off` `await` `shutdown-agents` `agent-error` `restart-agent` `set-error-handler!` `set-error-mode!` `error-handler` `error-mode` `agent-errors` `clear-agent-errors` | the cell under `clojure.lisp`'s `%clojure-agent-*` (`ClojureStateLowering.agentRow`) | "State" |
+| `agent` `send` `send-off` `await` `await-for` `shutdown-agents` `agent-error` `restart-agent` `set-error-handler!` `set-error-mode!` `error-handler` `error-mode` `agent-errors` `clear-agent-errors` | the cell under `clojure.lisp`'s `%clojure-agent-*` (`ClojureStateLowering.agentRow`) | "State" |
+| `add-watch` `remove-watch` `set-validator!` `get-validator` | one call to `%clojure-<verb>` (`ClojureStateLowering.watchRow`), the `-v` function as a value | "State", validators and watches |
 | `binding` / `set!` | `let*` of specials plus a depth counter | "State" |
 | `with-open` | `let*` plus `unwind-protect` closing in reverse | a stream closes through `close` on every backend, anything else through the `close` interop call; an empty vector is the bare body |
 | `with-out-str` | `let*` rebinding `*standard-output*` to `make-string-output-stream`, read back | never a literal `with-output-to-string`: it flips a WASM module into EH mode |
@@ -199,7 +200,7 @@ answered `2 5 3` before).
 | `quote` | `quote` with symbols mangled | vectors, maps and sets inside are rebuilt (a quoted list holding one becomes a `list` construction) |
 | `comment` | `nil` | |
 | `transient` `persistent!` `conj!` `assoc!` `dissoc!` `disj!` `pop!` | `ClojureTransientLowering`: one call to the `clojure.lisp` worker after a lower-time arity check in the oracle's wording; `-v` as a value | "Transients" |
-| refused by name | | `future` `promise` `deliver` (no thread pool or rendezvous); `definterface` `gen-class` `gen-interface`; `use-fixtures`; `add-watch`/`remove-watch`; `load-string` (no compiler at run time); `eval` and `resolve` of a computed symbol at run time ("Macros") |
+| refused by name | | `future` `promise` `deliver` (no thread pool or rendezvous); `definterface` `gen-class` `gen-interface`; `use-fixtures`; `load-string` (no compiler at run time); `eval` and `resolve` of a computed symbol at run time ("Macros") |
 
 ## Deviations
 
@@ -5799,7 +5800,47 @@ resolve var`.
   share the cell) and to read the transaction. Pins: clojure-spec
   `transactions-commit-whole-and-agents-hold-sends` (oracle-identical),
   `a-failing-action-fails-the-agent-until-restart-agent` (oracle-identical),
-  `ClojureRefAgentConcurrentRequestsTest`.
+  `ClojureRefAgentConcurrentRequestsTest`. `await-for` (2026-10-12) queues `await`'s markers and,
+  on a host target, polls them until its deadline (`%clojure-agent-await-for`, `T`/`NIL` through
+  `booleanAnswer`); on wasm (`%clojure-agent-await-for-here`) every marker has run but one queued
+  behind a failure. `await` and `await-for` refuse inside a transaction first (`io!`'s
+  `IllegalStateException`, read off `%clojure-stm-log`), then inside an action. Deviation:
+  `(await-for 0 a)` answers true (the oracle's races its pool).
+- **Validators and watches** (2026-10-12; `clojure.lisp` "Validators and watches"). An atom, ref
+  or agent keeps both in its cell, `#(value nil validator state watches)`; a var (interned, so one
+  object per name) in the eq tables `%clojure-var-validators`/`%clojure-var-watches`. WATCHES is
+  a fresh list of `(key . fn)` per change, in the order the oracle's watch map (a
+  `PersistentHashMap`) walks its keys: `%clojure-watch-insert` places a new key by
+  `%clojure-hash-map-before-p` over `%clojure-hasheq` (the 32-bit hash five bits at a time from
+  the low end, the trie's index per level; equal hashes in insertion order, a replaced key keeps
+  its place) -- measured identical to clj 1.12.6 on 19 mixed keys and on `(range 40)` with a
+  removal. A watch runs after the store on the storing thread, a validator ahead of it (outside
+  `%clojure-atom-guard`, which never runs program code): an atom's `%clojure-ref-swap`/`-reset`/
+  `-cas`/`-swap-vals`/`-reset-vals` (`reset!` reads the old value under the guard, the oracle's
+  reads it unguarded); a ref's once its transaction commits -- `%clojure-stm-write` now logs the
+  ref, not its cell, `%clojure-stm-noted` stores each committed value into the log inside the
+  lock and `%clojure-stm-notified` calls the watches after it, ahead of the held sends; an
+  agent's after each action (`%clojure-agent-act`, so `await`'s marker notifies with old = new,
+  like the oracle's count-down action); a var's on `alter-var-root` (`%clojure-alter-root`, which
+  validates too). `%clojure-stm-validate` calls the validator through `%clojure-call`, so any
+  IFn validates (a set, a keyword), like the oracle. The strip: family
+  `ClojureArms.Family.WATCH`, producers `%clojure-add-watch`, `%clojure-set-validator` (and their
+  `-v`) and `%clojure-atom-options` (any `atom` option, and `atom` as a value, whose `&rest`
+  options may hold one). Without one, the alias `%clojure-ref-cell` -> `VECTOR` gives atoms and
+  refs the one-long cell, the `%clojure-ref-*` helpers fold to the plain `%clojure-atom-*` ones
+  (which take the atom, not its cell, since this change), and the views `%clojure-ref-notified`,
+  `%clojure-ref-validated`, `%clojure-stm-noted`, `%clojure-stm-notified` to their first argument.
+  `get-validator` and `remove-watch` are no producers: on a one-long cell they answer nil and the
+  reference. Deviation: a later `def`, `defn` or `with-redefs` replacing a var's root neither
+  calls its watches nor checks its validator (the oracle's `bindRoot` does both); `swap-vals!`
+  and `reset-vals!` take a ref or a volatile like `swap!` (the oracle's refuse anything but an
+  atom). Pins: clojure-spec `atom-options-and-validators-guard-every-store`,
+  `swap-vals-and-reset-vals-answer-the-old-and-the-new-value`,
+  `add-watch-calls-a-watch-after-every-change-of-an-atom`,
+  `refs-agents-and-vars-call-their-watches-and-validators`,
+  `await-for-answers-whether-the-actions-ran-in-time` (all oracle-identical, four backends),
+  `ClojureLibraryTest#aProgramGivingNoReferenceAValidatorOrWatchCallsThePlainAtomHelpers`,
+  `ClojureAtomConcurrentRequestsTest` (its second round watches and validates under a burst).
 
 ## clojure.test
 

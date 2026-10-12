@@ -4543,6 +4543,155 @@ cases:
       :not-an-agent
       (:fail :continue) 3
       No value supplied for key: :clear-actions
+  - name: atom-options-and-validators-guard-every-store
+    # Oracle-identical (clj 1.12.6, 2026-10-12): atom reads its options like the
+    # oracle's (apply hash-map options) -- :meta first, then a :validator the initial
+    # value must pass, any other key ignored, a lone key refused. A validator (any IFn)
+    # runs ahead of every swap!, reset! and compare-and-set!, set-validator! checks the
+    # current value first and nil removes it; get-validator answers it, nil for none.
+    source: |
+      (def av (atom 1 :validator pos? :meta {:a 1}))
+      (println @av (meta av) (fn? (get-validator av)))
+      (println (try (swap! av - 5) (catch IllegalStateException e (ex-message e))) @av)
+      (println (try (atom -1 :validator pos?) (catch IllegalStateException e (ex-message e))))
+      (println (try (atom 1 :validator) (catch IllegalArgumentException e (ex-message e))) @(atom 2 :ignored 3) (meta (atom 1 :meta {:x 1} :meta {:x 2})))
+      (def bv (atom 0))
+      (println (set-validator! bv even?) (try (set-validator! bv odd?) (catch IllegalStateException e (ex-message e))) (fn? (get-validator bv)))
+      (println (set-validator! bv nil) (get-validator bv) (get-validator (agent 1)) (get-validator (ref 1)))
+      (def kv (atom 5 :validator #{5 6}))
+      (println (swap! kv inc) (try (swap! kv inc) (catch IllegalStateException e (ex-message e))) (try (reset! kv 7) (catch IllegalStateException e (ex-message e))))
+      (println (compare-and-set! kv 6 5) (try (compare-and-set! kv 5 9) (catch IllegalStateException e (ex-message e))) @kv)
+      (println (try (swap! (atom 1 :validator (fn [_] (throw (ex-info "no" {:v 1})))) inc) (catch clojure.lang.ExceptionInfo e (ex-data e))))
+      (println (try (get-validator (volatile! 1)) (catch ClassCastException e :not-a-ref)) (try (set-validator! nil pos?) (catch NullPointerException e :npe)))
+      (println @(apply atom 3 [:validator odd?]) (map deref (map atom [1 2])) (try (apply atom -3 [:validator odd? :validator pos?]) (catch IllegalStateException e (ex-message e))))
+    expected: |
+      1 {:a 1} true
+      Invalid reference state 1
+      Invalid reference state
+      No value supplied for key: :validator 2 {:x 2}
+      nil Invalid reference state true
+      nil nil nil nil
+      6 Invalid reference state Invalid reference state
+      true Invalid reference state 5
+      {:v 1}
+      :not-a-ref :npe
+      3 (1 2) Invalid reference state
+  - name: swap-vals-and-reset-vals-answer-the-old-and-the-new-value
+    # Oracle-identical (clj 1.12.6, 2026-10-12): swap!'s and reset!'s store, answering
+    # [old new], validated like theirs; both are values too.
+    source: |
+      (def sv (atom 0))
+      (println (swap-vals! sv inc) (swap-vals! sv + 10 20) (reset-vals! sv 7) @sv)
+      (println (swap-vals! (atom [1]) conj 2) (map #(%1 (atom 1) %2) [swap-vals! reset-vals!] [inc 5]))
+      (println (try (reset-vals! (atom 1 :validator pos?) -1) (catch IllegalStateException e (ex-message e))))
+      (println (try (swap-vals! (atom 1) (fn [_] (throw (ex-info "f" {})))) (catch clojure.lang.ExceptionInfo e (ex-message e))))
+    expected: |
+      [0 1] [1 31] [31 7] 7
+      [[1] [1 2]] ([1 2] [1 5])
+      Invalid reference state
+      f
+  - name: add-watch-calls-a-watch-after-every-change-of-an-atom
+    # Oracle-identical (clj 1.12.6, 2026-10-12): a watch is called with its key, the
+    # atom, the old and the new value after every swap!, reset! (the same value too),
+    # successful compare-and-set! and -vals verb; a key replaces its earlier watch, and
+    # several run in the oracle's watch-map (hash) order. A watch's failure reaches
+    # the caller with the value stored. A volatile is no reference.
+    source: |
+      (def wlog (atom []))
+      (def wa (atom 0))
+      (println (= wa (add-watch wa :k (fn [k r o n] (swap! wlog conj [k (= r wa) o n])))))
+      (swap! wa inc)
+      (reset! wa 5)
+      (reset! wa 5)
+      (compare-and-set! wa 4 9)
+      (compare-and-set! wa 5 6)
+      (swap-vals! wa inc)
+      (reset-vals! wa 0)
+      (println @wlog)
+      (println (= wa (remove-watch wa :k)) (= wa (remove-watch wa :absent)))
+      (swap! wa inc)
+      (println (count @wlog))
+      (add-watch wa :x (fn [k r o n] (println :x o n)))
+      (add-watch wa :x (fn [k r o n] (println :x2 o n)))
+      (swap! wa inc)
+      (remove-watch wa :x)
+      (def worder (atom []))
+      (doseq [k [:a :b :c "x" 1 40 [1 2] 'sym nil]]
+        (add-watch wa k (fn [k _ _ _] (swap! worder conj k))))
+      (reset! wa 1)
+      (println @worder)
+      (def wt (atom 0))
+      (add-watch wt :boom (fn [k r o n] (throw (ex-info "watch" {}))))
+      (println (try (swap! wt inc) (catch clojure.lang.ExceptionInfo e (ex-message e))) @wt)
+      (println (try (add-watch (volatile! 1) :k identity) (catch ClassCastException e :not-a-ref)) (try (add-watch nil :k identity) (catch NullPointerException e :npe)))
+      (println (= wa ((fn [f] (f wa :y (fn [& _]))) add-watch)) (= wa (apply remove-watch [wa :y])))
+    expected: |
+      true
+      [[:k true 0 1] [:k true 1 5] [:k true 5 5] [:k true 5 6] [:k true 6 7] [:k true 7 0]]
+      true true
+      6
+      :x2 1 2
+      [nil 1 x 40 :c sym :b [1 2] :a]
+      watch 1
+      :not-a-ref :npe
+      true true
+  - name: refs-agents-and-vars-call-their-watches-and-validators
+    # Oracle-identical (clj 1.12.6, 2026-10-12): a ref's watches run once per
+    # committed transaction that wrote it (old = its value before the transaction),
+    # an agent's after each action (await's marker too, with old = new, hence the
+    # filter), a var's after alter-var-root, which its validator guards.
+    source: |
+      (def rlog (atom []))
+      (def wr (ref 0))
+      (add-watch wr :k (fn [k r o n] (swap! rlog conj [:ref (= r wr) o n])))
+      (dosync (alter wr inc) (alter wr inc) (swap! rlog conj :in-txn))
+      (dosync (ref-set wr 2))
+      (println (try (dosync (alter wr inc) (throw (ex-info "x" {}))) (catch clojure.lang.ExceptionInfo e :rolled-back)) @wr)
+      (set-validator! wr pos?)
+      (println (try (dosync (ref-set wr -1)) (catch IllegalStateException e (ex-message e))) @wr (fn? (get-validator wr)))
+      (println @rlog)
+      (def glog (atom []))
+      (def wg (agent 0))
+      (add-watch wg :k (fn [k a o n] (when (not= o n) (swap! glog conj [(= a wg) o n]))))
+      (send wg inc)
+      (send wg + 10)
+      (await wg)
+      (println @glog)
+      (def wx 1)
+      (def xlog (atom []))
+      (add-watch #'wx :k (fn [k v o n] (swap! xlog conj [k (= v #'wx) o n])))
+      (alter-var-root #'wx + 10)
+      (set-validator! #'wx pos?)
+      (println (try (alter-var-root #'wx -) (catch IllegalStateException e (ex-message e))) wx @xlog (fn? (get-validator #'wx)))
+      (remove-watch #'wx :k)
+      (alter-var-root #'wx inc)
+      (println wx (count @xlog) (try (set-validator! #'wx neg?) (catch IllegalStateException e (ex-message e))))
+    expected: |
+      :rolled-back 2
+      Invalid reference state 2 true
+      [:in-txn [:ref true 0 2] [:ref true 2 2]]
+      [[true 0 1] [true 1 11]]
+      Invalid reference state 11 [[:k true 1 11]] true
+      12 1 Invalid reference state
+  - name: await-for-answers-whether-the-actions-ran-in-time
+    # Oracle-identical (clj 1.12.6, 2026-10-12): await-for runs like await and answers
+    # true when every agent's actions sent so far ran; await and await-for refuse
+    # inside a transaction (io!) and inside an action. Deviation: the oracle's
+    # (await-for 0 a) races its pool and may answer false; here the actions run first.
+    source: |
+      (def af (agent 0))
+      (send af + 5)
+      (println (await-for 1000 af) @af (await-for 1000))
+      (println (try (dosync (await-for 10 af)) (catch IllegalStateException e (ex-message e))) (try (dosync (await af)) (catch IllegalStateException e (ex-message e))))
+      (def afk (agent 0))
+      (send afk (fn [v] (println (try (await-for 10 afk) (catch Exception e (ex-message e)))) v))
+      (await afk)
+      (println (try (await-for 10 (atom 1)) (catch ClassCastException e :not-an-agent)))
+    expected: |
+      true 5 true
+      await-for in transaction await in transaction
+      Can't await in agent action
+      :not-an-agent
   - name: binding-rebinds-dynamic-vars
     # The concurrency.clj slice (without the sleeps): ^:dynamic vars rebind with
     # dynamic extent -- a callee sees the binding, the root returns after -- while

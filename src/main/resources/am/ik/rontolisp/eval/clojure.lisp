@@ -12201,31 +12201,56 @@
 ;; itself sees, on every backend). The compare and the store are one step under
 ;; %clojure-atom-guard, which holds nothing but an eql and a store, so it never
 ;; waits on the program's code; reset! stores under it too, so no store lands
-;; between a compare and its store. CELL is the atom's one-vector. deref reads
-;; without the guard: a stale read fails the compare and is read again. On wasm, a
-;; single-threaded module, the guard is a no-op.
+;; between a compare and its store. ATOM is the (:C%ATOM cell) wrapper, CELL its
+;; vector. deref reads without the guard: a stale read fails the compare and is
+;; read again. On wasm, a single-threaded module, the guard is a no-op.
+;;
+;; These are the plain helpers: a program that can give no reference a validator
+;; or a watch calls them. One that can (it names add-watch, set-validator! or an
+;; atom option) calls the %clojure-ref-* helpers of "Validators and watches"
+;; instead, which the strip renames to these elsewhere (clojure/ClojureArms, the
+;; WATCH family).
 
 (defvar rontolisp::%clojure-atom-guard (rontolisp:make-mutex))
 
-(defun rontolisp::%clojure-atom-cas (cell old new)
-  "T when CELL held OLD (eql) and now holds NEW, as one step; else NIL."
-  (rontolisp:with-mutex (rontolisp::%clojure-atom-guard)
-    (when (eql (aref cell 0) old)
-      (setf (aref cell 0) new)
-      t)))
+(defun rontolisp::%clojure-atom-cas (atom old new)
+  "T when ATOM held OLD (eql) and now holds NEW, as one step; else NIL."
+  (let ((cell (car (cdr atom))))
+    (rontolisp:with-mutex (rontolisp::%clojure-atom-guard)
+      (when (eql (aref cell 0) old)
+        (setf (aref cell 0) new)
+        t))))
 
-(defun rontolisp::%clojure-atom-reset (cell new)
-  "CELL rewritten to NEW under the guard; answers NEW."
-  (rontolisp:with-mutex (rontolisp::%clojure-atom-guard)
-    (setf (aref cell 0) new))
+(defun rontolisp::%clojure-atom-reset (atom new)
+  "ATOM rewritten to NEW under the guard; answers NEW."
+  (let ((cell (car (cdr atom))))
+    (rontolisp:with-mutex (rontolisp::%clojure-atom-guard)
+      (setf (aref cell 0) new)))
   new)
 
-(defun rontolisp::%clojure-atom-swap (cell f args)
-  "F applied to CELL's value and ARGS until the compare-and-set stores its answer;
-   answers the value stored."
-  (loop
-    (let* ((old (aref cell 0)) (new (apply f old args)))
-      (when (rontolisp::%clojure-atom-cas cell old new) (return new)))))
+(defun rontolisp::%clojure-atom-swap (atom f args)
+  "F applied to ATOM's value and ARGS until the compare-and-set stores its
+   answer; answers the value stored."
+  (let ((cell (car (cdr atom))))
+    (loop
+      (let* ((old (aref cell 0)) (new (apply f old args)))
+        (when (rontolisp::%clojure-atom-cas atom old new) (return new))))))
+
+(defun rontolisp::%clojure-atom-swap-vals (atom f args)
+  "swap-vals!: as %clojure-atom-swap, answering [old new]."
+  (let ((cell (car (cdr atom))))
+    (loop
+      (let* ((old (aref cell 0)) (new (apply f old args)))
+        (when (rontolisp::%clojure-atom-cas atom old new)
+          (return (vector old new)))))))
+
+(defun rontolisp::%clojure-atom-reset-vals (atom new)
+  "reset-vals!: ATOM rewritten to NEW, answering [old new]."
+  (let ((cell (car (cdr atom))))
+    (loop
+      (let ((old (aref cell 0)))
+        (when (rontolisp::%clojure-atom-cas atom old new)
+          (return (vector old new)))))))
 
 ;;;; Refs and agents across request threads.
 ;;
@@ -12251,10 +12276,11 @@
 ;; mode the queue goes on.
 ;;
 ;; A ref with a validator and every agent carry it in the cell: #(value nil
-;; validator) and #(value nil validator state), slot 1 nil because a volatile is
-;; the cell of length 2; STATE is #(running queue error handler mode). A ref
-;; without one is the atom's one-vector. On wasm, a single-threaded module, the
-;; guards are no-ops.
+;; validator state watches), slot 1 nil because a volatile is the cell of length
+;; 2; an agent's STATE is #(running queue error handler mode), nil for a ref, and
+;; WATCHES the reference's watches ("Validators and watches"). A ref without a
+;; validator is the atom's cell. On wasm, a single-threaded module, the guards
+;; are no-ops.
 
 (defvar rontolisp::%clojure-stm-guard (rontolisp:make-mutex))
 
@@ -12267,9 +12293,12 @@
 (defvar rontolisp::%clojure-agent-held nil)
 
 (defun rontolisp::%clojure-stm-validate (value validator)
-  "VALUE, once VALIDATOR (nil for none) accepts it; else the oracle's refusal."
+  "VALUE, once VALIDATOR (nil for none, else any IFn) accepts it; else the
+   oracle's refusal."
   (if (and validator
-           (not (rontolisp::%clojure-truthy (funcall validator value))))
+           (not
+            (rontolisp::%clojure-truthy
+             (rontolisp::%clojure-call validator (list value)))))
       (rontolisp::%clojure-illegal-state-exception "Invalid reference state")
       value))
 
@@ -12280,7 +12309,7 @@
 (defun rontolisp::%clojure-ref-make (init validator)
   "(ref init :validator f): the cell carrying VALIDATOR, which INIT must pass."
   (list :C%ATOM (vector (rontolisp::%clojure-stm-validate init validator) nil
-                        validator)))
+                        validator nil nil)))
 
 (defun rontolisp::%clojure-agent-make (init validator handler mode)
   "(agent init): an idle agent with no queued action over INIT, which
@@ -12293,7 +12322,7 @@
                                 (or mode
                                     (if handler
                                         '(:c%keyword "continue")
-                                        '(:c%keyword "fail")))))))
+                                        '(:c%keyword "fail")))) nil)))
 
 (defun rontolisp::%clojure-agent-option (options name)
   "What the key/value list OPTIONS gives the keyword NAME, read like the
@@ -12327,42 +12356,65 @@
       nil
       (rontolisp::%clojure-illegal-state-exception "No transaction running")))
 
-(defun rontolisp::%clojure-stm-write (cell value)
+(defun rontolisp::%clojure-stm-write (ref value)
   "alter, commute and ref-set inside the running transaction: VALUE stored in
-   CELL, whose value from before the transaction is logged on its first write;
+   REF, whose value from before the transaction is logged on its first write;
    answers VALUE."
-  (let ((log rontolisp::%clojure-stm-log))
-    (if (assoc cell (car log))
+  (let ((log rontolisp::%clojure-stm-log) (cell (car (cdr ref))))
+    (if (assoc ref (car log))
         nil
-        (setf (car log) (cons (cons cell (aref cell 0)) (car log))))
+        (setf (car log) (cons (cons ref (aref cell 0)) (car log))))
     (setf (aref cell 0) value)))
 
 (defun rontolisp::%clojure-stm-run (body)
   "dosync: the thunk BODY run as one transaction, answering its value. The
-   sends it made are dispatched once it committed."
+   watches of the refs it wrote are called once it committed, then the sends it
+   made are dispatched."
   (if rontolisp::%clojure-stm-log
       (funcall body)
       (let* ((log (list nil))
              (held (list nil))
              (value
-              (rontolisp:with-mutex (rontolisp::%clojure-stm-guard)
-                (let ((done nil))
-                  (unwind-protect (let ((answer
-                                         (let ((rontolisp::%clojure-stm-log log)
-                                               (rontolisp::%clojure-agent-held
-                                                held))
-                                           (funcall body))))
-                                    (dolist (entry (car log))
-                                      (rontolisp::%clojure-stm-validate
-                                       (aref (car entry) 0)
-                                       (rontolisp::%clojure-cell-validator
-                                        (car entry))))
-                                    (setq done t)
-                                    answer)
-                    (if done
-                        nil
-                        (dolist (entry (car log))
-                          (setf (aref (car entry) 0) (cdr entry)))))))))
+              (rontolisp::%clojure-stm-notified (rontolisp:with-mutex (rontolisp::%clojure-stm-guard)
+                                                  (let ((done nil))
+                                                    (unwind-protect (let ((answer
+                                                                           (let ((rontolisp::%clojure-stm-log
+                                                                                  log)
+                                                                                 (rontolisp::%clojure-agent-held
+                                                                                  held))
+                                                                             (funcall
+                                                                              body))))
+                                                                      (dolist (entry
+                                                                               (car
+                                                                                log))
+                                                                        (let ((cell
+                                                                               (car
+                                                                                (cdr
+                                                                                 (car
+                                                                                  entry)))))
+                                                                          (rontolisp::%clojure-stm-validate
+                                                                           (aref
+                                                                            cell
+                                                                            0)
+                                                                           (rontolisp::%clojure-cell-validator
+                                                                            cell))))
+                                                                      (setq done
+                                                                            t)
+                                                                      (rontolisp::%clojure-stm-noted
+                                                                       answer
+                                                                       log))
+                                                      (if done
+                                                          nil
+                                                          (dolist (entry
+                                                                   (car log))
+                                                            (setf
+                                                             (aref (car
+                                                                    (cdr
+                                                                     (car
+                                                                      entry)))
+                                                                   0)
+                                                             (cdr entry)))))))
+                                                log)))
         (rontolisp::%clojure-agent-release held)
         value)))
 
@@ -12375,7 +12427,8 @@
 
 (defun rontolisp::%clojure-agent-cell (agent op)
   "AGENT's cell; the oracle's cast failure of OP for anything but an agent."
-  (if (and (rontolisp::%clojure-atom-p agent) (= (length (car (cdr agent))) 4))
+  (if (and (rontolisp::%clojure-atom-p agent) (= (length (car (cdr agent))) 5)
+           (aref (car (cdr agent)) 3))
       (car (cdr agent))
       (rontolisp::%clojure-class-cast-exception-of
        (concatenate 'string op " needs an agent") agent)))
@@ -12440,16 +12493,19 @@
 
 (defun rontolisp::%clojure-agent-act (agent cell action)
   "One action of AGENT, whose cell is CELL: its answer validated and stored,
-   then the sends it made sent. When it fails, the sends are dropped, the error
+   the agent's watches called, then the sends it made sent. When it fails, the sends are dropped, the error
    handler is called (its own failure ignored, its sends dispatched at once)
    and, unless the mode is :continue, the agent keeps the error."
   (let ((held (list nil)) (failure nil))
-    (handler-case (let ((next
-                         (let ((rontolisp::%clojure-agent-held held)
-                               (rontolisp::%clojure-stm-log nil))
-                           (funcall action (aref cell 0)))))
-                    (setf (aref cell 0)
-                     (rontolisp::%clojure-stm-validate next (aref cell 2))))
+    (handler-case (let* ((old (aref cell 0))
+                         (next
+                          (let ((rontolisp::%clojure-agent-held held)
+                                (rontolisp::%clojure-stm-log nil))
+                            (funcall action old))))
+                    (rontolisp::%clojure-ref-notified
+                     (setf (aref cell 0)
+                      (rontolisp::%clojure-stm-validate next (aref cell 2)))
+                     agent old))
       (error (c) (setq failure c)))
     (if failure
         (let* ((state (aref cell 3)) (handler (aref state 3)))
@@ -12491,6 +12547,38 @@
       (if (car (cdr mark)) (return nil))
       (sleep 0.001)
       (rontolisp::%clojure-agent-drain (car mark) nil))))
+
+(defun rontolisp::%clojure-await-timeout (timeout)
+  "TIMEOUT, await-for's milliseconds; the oracle's cast refusal for anything
+   but a number."
+  (if (realp timeout)
+      timeout
+      (rontolisp::%clojure-class-cast-exception-of
+       "await-for needs a number of milliseconds" timeout)))
+
+(defun rontolisp::%clojure-agent-await-for (timeout agents)
+  "await-for on a host target: %clojure-agent-await-here, then a wait between
+   sleeps of a millisecond for each marker another thread is running, until
+   TIMEOUT milliseconds from the call passed; T when every marker ran, NIL
+   when the time ran out."
+  (let ((deadline
+         (+ (get-internal-real-time)
+            (* (rontolisp::%clojure-await-timeout timeout)
+               (/ internal-time-units-per-second 1000)))))
+    (dolist (mark (rontolisp::%clojure-agent-await-here agents) t)
+      (loop
+        (if (car (cdr mark)) (return nil))
+        (if (>= (get-internal-real-time) deadline)
+            (return-from rontolisp::%clojure-agent-await-for nil))
+        (sleep 0.001)
+        (rontolisp::%clojure-agent-drain (car mark) nil)))))
+
+(defun rontolisp::%clojure-agent-await-for-here (timeout agents)
+  "await-for on wasm, where this thread runs every queue: T when every marker
+   ran, NIL when one waits behind a failed action."
+  (rontolisp::%clojure-await-timeout timeout)
+  (dolist (mark (rontolisp::%clojure-agent-await-here agents) t)
+    (if (car (cdr mark)) nil (return nil))))
 
 (defun rontolisp::%clojure-agent-state (agent op)
   "The state vector #(running queue error handler mode) of AGENT, the oracle's
@@ -12558,6 +12646,286 @@
 (defun rontolisp::%clojure-agent-error-mode (agent)
   "error-mode: AGENT's mode keyword."
   (aref (rontolisp::%clojure-agent-state agent "error-mode") 4))
+
+;;;; Validators and watches.
+;;
+;; set-validator!, get-validator, add-watch, remove-watch, an atom's options and
+;; the verbs that store into a reference with them. An atom, a ref and an agent
+;; keep both in the cell, #(value nil validator state watches); a var, interned
+;; per name, in the eq tables below. WATCHES is a list of (key . fn) entries in
+;; the order the oracle's watch map, a PersistentHashMap, walks its keys (by
+;; their hashes, %clojure-hash-map-before-p), each list fresh, so a notification
+;; walks it without a lock. A
+;; watch is called with the key, the reference, the old and the new value after
+;; the store, on the thread that stored: an atom's after a swap!, reset!,
+;; successful compare-and-set!, swap-vals! or reset-vals!; a ref's once its
+;; transaction committed (once per ref written, with its value from before the
+;; transaction); an agent's after each action, await's marker included; a var's
+;; after an alter-var-root. A watch's failure passes to the storing verb, the
+;; value already stored. A validator runs ahead of the store.
+;;
+;; Only a program naming set-validator!, add-watch or an atom option can give a
+;; reference either (clojure/ClojureArms, the WATCH family): every other program
+;; has its atoms' and refs' cells one long (%clojure-ref-cell folds to vector),
+;; calls the plain atom helpers of "Atoms across request threads" in place of the
+;; %clojure-ref-* ones here, and has the views below folded to their first
+;; argument.
+
+(defvar rontolisp::%clojure-var-watches
+  (make-hash-table :test 'eq)
+  "Each watched var's watch list: an eq table from the var.")
+
+(defvar rontolisp::%clojure-var-validators
+  (make-hash-table :test 'eq)
+  "Each validated var's validator: an eq table from the var.")
+
+(defun rontolisp::%clojure-ref-cell (value)
+  "The cell of an atom or a ref over VALUE, with room for a validator and
+   watches."
+  (vector value nil nil nil nil))
+
+(defun rontolisp::%clojure-watchable-ref (ref op)
+  "REF when it is an atom, a ref, an agent or a var; the oracle's cast refusal
+   naming OP otherwise (a volatile included), its NullPointerException for nil."
+  (if (or (rontolisp::%clojure-var-p ref)
+          (and (rontolisp::%clojure-atom-p ref)
+               (not (= (length (car (cdr ref))) 2))))
+      ref
+      (rontolisp::%clojure-class-cast-exception-of
+       (concatenate 'string op " needs an atom, a ref, an agent or a var")
+       ref)))
+
+(defun rontolisp::%clojure-watchable-cell (ref op)
+  "The cell of REF, an atom, a ref or an agent; nil for a var; the refusal of
+   %clojure-watchable-ref naming OP for anything else."
+  (rontolisp::%clojure-watchable-ref ref op)
+  (if (rontolisp::%clojure-var-p ref) nil (car (cdr ref))))
+
+(defun rontolisp::%clojure-ref-validator (ref)
+  "The validator of REF, nil for none."
+  (if (rontolisp::%clojure-var-p ref)
+      (rontolisp:with-mutex (rontolisp::%clojure-var-guard)
+        (values (gethash ref rontolisp::%clojure-var-validators)))
+      (rontolisp::%clojure-cell-validator (car (cdr ref)))))
+
+(defun rontolisp::%clojure-ref-watches (ref)
+  "The watch list of REF."
+  (if (rontolisp::%clojure-var-p ref)
+      (rontolisp:with-mutex (rontolisp::%clojure-var-guard)
+        (values (gethash ref rontolisp::%clojure-var-watches)))
+      (let ((cell (car (cdr ref))))
+        (if (= (length cell) 5) (aref cell 4) nil))))
+
+(defun rontolisp::%clojure-ref-notify (ref old new)
+  "REF's watches called with their key, REF, OLD and NEW."
+  (dolist (watch (rontolisp::%clojure-ref-watches ref))
+    (rontolisp::%clojure-call (cdr watch) (list (car watch) ref old new))))
+
+(defun rontolisp::%clojure-ref-notified (new ref old)
+  "A view: NEW, once REF's watches were called with OLD and NEW."
+  (rontolisp::%clojure-ref-notify ref old new)
+  new)
+
+(defun rontolisp::%clojure-ref-validated (value ref)
+  "A view: VALUE, once REF's validator accepts it."
+  (rontolisp::%clojure-stm-validate value
+                                    (rontolisp::%clojure-ref-validator ref)))
+
+(defun rontolisp::%clojure-stm-noted (answer log)
+  "A view: ANSWER, once each entry (ref . old) of the committing transaction's
+   LOG holds the ref's committed value too, (ref old . new)."
+  (dolist (entry (car log))
+    (setf (cdr entry) (cons (cdr entry) (aref (car (cdr (car entry))) 0))))
+  answer)
+
+(defun rontolisp::%clojure-stm-notified (value log)
+  "A view: VALUE, once the watches of each ref the committed transaction's LOG
+   wrote were called, in the order of the first writes."
+  (dolist (entry (reverse (car log)))
+    (rontolisp::%clojure-ref-notify (car entry) (car (cdr entry))
+                                    (cdr (cdr entry))))
+  value)
+
+(defun rontolisp::%clojure-ref-swap (atom f args)
+  "swap! of a program that may validate or watch: F applied to ATOM's value
+   and ARGS, validated, until the compare-and-set stores it; the watches
+   called; answers the value stored."
+  (let ((cell (car (cdr atom))))
+    (loop
+      (let* ((old (aref cell 0))
+             (new (rontolisp::%clojure-ref-validated (apply f old args) atom)))
+        (when (rontolisp::%clojure-atom-cas atom old new)
+          (rontolisp::%clojure-ref-notify atom old new)
+          (return new))))))
+
+(defun rontolisp::%clojure-ref-swap-vals (atom f args)
+  "swap-vals! of a program that may validate or watch: as %clojure-ref-swap,
+   answering [old new]."
+  (let ((cell (car (cdr atom))))
+    (loop
+      (let* ((old (aref cell 0))
+             (new (rontolisp::%clojure-ref-validated (apply f old args) atom)))
+        (when (rontolisp::%clojure-atom-cas atom old new)
+          (rontolisp::%clojure-ref-notify atom old new)
+          (return (vector old new)))))))
+
+(defun rontolisp::%clojure-ref-reset (atom new)
+  "reset! of a program that may validate or watch: NEW validated and stored,
+   the watches called with the value it replaced; answers NEW."
+  (let ((cell (car (cdr atom))) (old nil))
+    (rontolisp::%clojure-ref-validated new atom)
+    (rontolisp:with-mutex (rontolisp::%clojure-atom-guard)
+      (setq old (aref cell 0))
+      (setf (aref cell 0) new))
+    (rontolisp::%clojure-ref-notify atom old new)
+    new))
+
+(defun rontolisp::%clojure-ref-reset-vals (atom new)
+  "reset-vals! of a program that may validate or watch: NEW validated and
+   stored, the watches called; answers [old new]."
+  (let ((cell (car (cdr atom))))
+    (loop
+      (let ((old (aref cell 0)))
+        (rontolisp::%clojure-ref-validated new atom)
+        (when (rontolisp::%clojure-atom-cas atom old new)
+          (rontolisp::%clojure-ref-notify atom old new)
+          (return (vector old new)))))))
+
+(defun rontolisp::%clojure-ref-cas (atom old new)
+  "compare-and-set! of a program that may validate or watch: NEW validated,
+   then stored when ATOM holds OLD, the watches called with OLD and NEW; T when
+   it stored."
+  (rontolisp::%clojure-ref-validated new atom)
+  (if (rontolisp::%clojure-atom-cas atom old new)
+      (progn
+        (rontolisp::%clojure-ref-notify atom old new)
+        t)
+      nil))
+
+(defun rontolisp::%clojure-set-validator (ref f)
+  "set-validator!: F (nil to remove) as REF's validator, once REF's value
+   passes it; answers nil."
+  (let ((cell (rontolisp::%clojure-watchable-cell ref "set-validator!"))
+        (f (if (rontolisp::%clojure-truthy f) f nil)))
+    (if cell
+        (progn
+          (rontolisp::%clojure-stm-validate (aref cell 0) f)
+          (setf (aref cell 2) f))
+        (rontolisp:with-mutex ((rontolisp::%clojure-monitor ref))
+          (rontolisp::%clojure-stm-validate (rontolisp::%clojure-var-get ref) f)
+          (rontolisp:with-mutex (rontolisp::%clojure-var-guard)
+            (if f
+                (setf (gethash ref rontolisp::%clojure-var-validators) f)
+                (remhash ref rontolisp::%clojure-var-validators)))))
+    nil))
+
+(defun rontolisp::%clojure-set-validator-v (&rest args)
+  "set-validator! as a value."
+  (rontolisp::%clojure-check-arity args 2 2 "set-validator!")
+  (rontolisp::%clojure-set-validator (car args) (car (cdr args))))
+
+(defun rontolisp::%clojure-get-validator (ref)
+  "get-validator: REF's validator, nil for none."
+  (rontolisp::%clojure-watchable-ref ref "get-validator")
+  (rontolisp::%clojure-ref-validator ref))
+
+(defun rontolisp::%clojure-get-validator-v (&rest args)
+  "get-validator as a value."
+  (rontolisp::%clojure-check-arity args 1 1 "get-validator")
+  (rontolisp::%clojure-get-validator (car args)))
+
+(defun rontolisp::%clojure-hash-map-before-p (a b)
+  "Whether a key of hash A comes before one of hash B in the walk of the
+   oracle's PersistentHashMap: the 32-bit hashes compared five bits at a time
+   from the low end, the trie's index at each level."
+  (let ((x (logand a 4294967295)) (y (logand b 4294967295)) (before nil))
+    (do ((shift 0 (+ shift 5)))
+        ((> shift 30) before)
+      (let ((i (logand (ash x (- shift)) 31)) (j (logand (ash y (- shift)) 31)))
+        (if (/= i j)
+            (progn
+              (setq before (< i j))
+              (setq shift 35)))))))
+
+(defun rontolisp::%clojure-watch-insert (watches key fn hash)
+  "The watch list WATCHES, in the walk order of the oracle's watch map, with
+   the watch FN of KEY, whose hash is HASH: ahead of the first watch whose key
+   it comes before, after those of an equal hash."
+  (if (or (null watches)
+          (rontolisp::%clojure-hash-map-before-p hash
+           (rontolisp::%clojure-hasheq (car (car watches)))))
+      (cons (cons key fn) watches)
+      (cons (car watches)
+            (rontolisp::%clojure-watch-insert (cdr watches) key fn hash))))
+
+(defun rontolisp::%clojure-watch-put (watches key fn)
+  "The watch list WATCHES with KEY's watch FN: in the place of an earlier
+   watch of a key = to KEY, else where the oracle's watch map walks it."
+  (if (find-if (lambda (watch) (rontolisp::%clojure-equal (car watch) key))
+               watches)
+      (mapcar (lambda (watch)
+                (if (rontolisp::%clojure-equal (car watch) key)
+                    (cons key fn)
+                    watch)) watches)
+      (rontolisp::%clojure-watch-insert watches key fn
+                                        (rontolisp::%clojure-hasheq key))))
+
+(defun rontolisp::%clojure-watch-drop (watches key)
+  "The watch list WATCHES without the watch of a key = to KEY."
+  (remove-if (lambda (watch) (rontolisp::%clojure-equal (car watch) key))
+             watches))
+
+(defun rontolisp::%clojure-add-watch (ref key fn)
+  "add-watch: FN called with KEY, REF, the old and the new value after each
+   change of REF, replacing an earlier watch of KEY; answers REF."
+  (let ((cell (rontolisp::%clojure-watchable-cell ref "add-watch")))
+    (if cell
+        (rontolisp:with-mutex (rontolisp::%clojure-atom-guard)
+          (setf (aref cell 4)
+                (rontolisp::%clojure-watch-put (aref cell 4) key fn)))
+        (rontolisp:with-mutex (rontolisp::%clojure-var-guard)
+          (setf (gethash ref rontolisp::%clojure-var-watches)
+                (rontolisp::%clojure-watch-put
+                 (gethash ref rontolisp::%clojure-var-watches) key fn))))
+    ref))
+
+(defun rontolisp::%clojure-add-watch-v (&rest args)
+  "add-watch as a value."
+  (rontolisp::%clojure-check-arity args 3 3 "add-watch")
+  (rontolisp::%clojure-add-watch (car args) (car (cdr args))
+                                 (car (cdr (cdr args)))))
+
+(defun rontolisp::%clojure-remove-watch (ref key)
+  "remove-watch: REF without its watch of KEY; answers REF."
+  (let ((cell (rontolisp::%clojure-watchable-cell ref "remove-watch")))
+    (if cell
+        (if (= (length cell) 5)
+            (rontolisp:with-mutex (rontolisp::%clojure-atom-guard)
+              (setf (aref cell 4)
+                    (rontolisp::%clojure-watch-drop (aref cell 4) key))))
+        (rontolisp:with-mutex (rontolisp::%clojure-var-guard)
+          (let ((left
+                 (rontolisp::%clojure-watch-drop
+                  (gethash ref rontolisp::%clojure-var-watches) key)))
+            (if left
+                (setf (gethash ref rontolisp::%clojure-var-watches) left)
+                (remhash ref rontolisp::%clojure-var-watches)))))
+    ref))
+
+(defun rontolisp::%clojure-remove-watch-v (&rest args)
+  "remove-watch as a value."
+  (rontolisp::%clojure-check-arity args 2 2 "remove-watch")
+  (rontolisp::%clojure-remove-watch (car args) (car (cdr args))))
+
+(defun rontolisp::%clojure-atom-options (atom options)
+  "(atom x & options): ATOM given the :meta and the :validator the key/value
+   list OPTIONS gives, read like the oracle's (apply hash-map options), the
+   metadata first; the validator must accept the value. Answers ATOM."
+  (let ((m (rontolisp::%clojure-agent-option options "meta"))
+        (validator (rontolisp::%clojure-agent-option options "validator")))
+    (if m (rontolisp::%clojure-reset-meta atom m))
+    (if validator (rontolisp::%clojure-set-validator atom validator))
+    atom))
 
 ;;;; Delays: delay, force, deref and realized? over a memo cell.
 ;;
@@ -12768,10 +13136,14 @@
 
 (defun rontolisp::%clojure-alter-root (v setter f args)
   "alter-var-root of the var V whose root SETTER stores: the root becomes
-   (apply f root args), which it answers."
+   (apply f root args), which the var's validator must accept and it answers,
+   and the var's watches are called."
   (rontolisp:with-mutex ((rontolisp::%clojure-monitor v))
-    (funcall setter
-     (rontolisp::%clojure-call f (cons (rontolisp::%clojure-var-get v) args)))))
+    (let ((old (rontolisp::%clojure-var-get v)))
+      (rontolisp::%clojure-ref-notified (funcall setter
+                                         (rontolisp::%clojure-ref-validated
+                                          (rontolisp::%clojure-call f
+                                           (cons old args)) v)) v old))))
 
 (defun rontolisp::%clojure-alter-var-root (v f args)
   "alter-var-root of a var computed at run time: through the setter a site of

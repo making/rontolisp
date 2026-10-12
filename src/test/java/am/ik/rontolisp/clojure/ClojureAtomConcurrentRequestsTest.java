@@ -44,7 +44,9 @@ import static org.assertj.core.api.Assertions.assertThat;
  * {@link #UPDATES} times -- {@code swap!} in call position and as a value,
  * {@code compare-and-set!} in a retry loop in call position and as a value -- through a
  * function slow enough to widen the window between the read and the write. A lost update
- * leaves a count short of the requests times the updates.
+ * leaves a count short of the requests times the updates. The second round gives the
+ * atoms a validator and a watch counting its calls, so the program runs the aware helpers
+ * ({@link ClojureArms.Family#WATCH}): the watch is called once per stored update.
  */
 class ClojureAtomConcurrentRequestsTest {
 
@@ -54,22 +56,32 @@ class ClojureAtomConcurrentRequestsTest {
 
 	private static final String EXPECTED = "[960 960 960 960]";
 
+	private static final String EXPECTED_WATCHED = "[960 960 960 960 1920]";
+
 	@TempDir
 	Path dir;
 
-	private static String program(int port) {
+	private static String program(int port, boolean watched) {
+		String watches = !watched ? "" : """
+				(def notes (atom 0))
+				(doseq [a [swaps cases]]
+				  (set-validator! a number?)
+				  (add-watch a :notes (fn [_ _ old new] (when (= new (inc old)) (swap! notes inc)))))
+				""";
+		String counts = watched ? "[@swaps @value-swaps @cases @value-cases @notes]"
+				: "[@swaps @value-swaps @cases @value-cases]";
 		return """
 				(ns hits (:require [ring.adapter.rontolisp :as ring]))
 				(def swaps (atom 0))
 				(def value-swaps (atom 0))
 				(def cases (atom 0))
 				(def value-cases (atom 0))
-				(defn slow-inc [n] (inc (+ n (- (reduce + (range 64)) (reduce + (range 64))))))
+				%WATCHES%(defn slow-inc [n] (inc (+ n (- (reduce + (range 64)) (reduce + (range 64))))))
 				(defn cas-inc! [cas a]
 				  (loop [] (let [v @a] (when-not (cas a v (slow-inc v)) (recur)))))
 				(defn handler [req]
 				  (if (= "/count" (:uri req))
-				    {:body (pr-str [@swaps @value-swaps @cases @value-cases])}
+				    {:body (pr-str %COUNTS%)}
 				    (do (dotimes [_ %UPDATES%]
 				          (swap! swaps slow-inc)
 				          (apply swap! value-swaps [slow-inc])
@@ -77,7 +89,10 @@ class ClojureAtomConcurrentRequestsTest {
 				          (cas-inc! compare-and-set! value-cases))
 				        {:body "ok"})))
 				(println (ring/run-server handler {:port %PORT% :host "127.0.0.1" :join? false}))
-				""".replace("%PORT%", Integer.toString(port)).replace("%UPDATES%", Integer.toString(UPDATES));
+				""".replace("%WATCHES%", watches)
+			.replace("%COUNTS%", counts)
+			.replace("%PORT%", Integer.toString(port))
+			.replace("%UPDATES%", Integer.toString(UPDATES));
 	}
 
 	@Test
@@ -85,7 +100,7 @@ class ClojureAtomConcurrentRequestsTest {
 		for (int round = 0; round < 2; round++) {
 			int port = freePort();
 			Path source = Files.createDirectories(this.dir.resolve("i" + round)).resolve("hits.clj");
-			Files.writeString(source, program(port));
+			Files.writeString(source, program(port, round == 1));
 			List<LispVal> forms = SourceLanguage.CLOJURE.read(Files.readString(source), Features.INTERPRETER,
 					source.toString(), SourceStandards.DEFAULT, SourceLoader.fileSystem());
 			ByteArrayOutputStream out = new ByteArrayOutputStream();
@@ -98,7 +113,7 @@ class ClojureAtomConcurrentRequestsTest {
 			});
 			long handle = Long.parseLong(out.toString(StandardCharsets.UTF_8).strip());
 			try {
-				assertBurst(port);
+				assertBurst(port, round == 1 ? EXPECTED_WATCHED : EXPECTED);
 			}
 			finally {
 				RontoHttpServer.stopServer(handle);
@@ -111,7 +126,7 @@ class ClojureAtomConcurrentRequestsTest {
 		for (int round = 0; round < 2; round++) {
 			int port = freePort();
 			Path source = Files.createDirectories(this.dir.resolve("j" + round)).resolve("hits.clj");
-			Files.writeString(source, program(port));
+			Files.writeString(source, program(port, round == 1));
 			String name = "AtomBurst" + round;
 			JvmSourceCompiler.Result result = new JvmSourceCompiler(name).sourceLanguage("clojure")
 				.compile(Files.readString(source), source.toString());
@@ -135,7 +150,7 @@ class ClojureAtomConcurrentRequestsTest {
 			}
 			long handle = Long.parseLong(out.toString(StandardCharsets.UTF_8).strip());
 			try {
-				assertBurst(port);
+				assertBurst(port, round == 1 ? EXPECTED_WATCHED : EXPECTED);
 			}
 			finally {
 				RontoHttpServer.stopServer(handle);
@@ -143,8 +158,8 @@ class ClojureAtomConcurrentRequestsTest {
 		}
 	}
 
-	/** {@link #REQUESTS} requests at once, then the four counts. */
-	private static void assertBurst(int port) throws Exception {
+	/** {@link #REQUESTS} requests at once, then the counts. */
+	private static void assertBurst(int port, String expected) throws Exception {
 		HttpClient client = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build();
 		CountDownLatch start = new CountDownLatch(1);
 		List<Future<HttpResponse<String>>> replies = new ArrayList<>();
@@ -165,7 +180,7 @@ class ClojureAtomConcurrentRequestsTest {
 		HttpResponse<String> counts = client.send(
 				HttpRequest.newBuilder(URI.create("http://127.0.0.1:" + port + "/count")).build(),
 				HttpResponse.BodyHandlers.ofString());
-		assertThat(counts.body()).isEqualTo(EXPECTED);
+		assertThat(counts.body()).isEqualTo(expected);
 	}
 
 	private static int freePort() throws IOException {

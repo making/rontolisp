@@ -431,7 +431,14 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   running the failing action. An agent prints unreadably,
   `#<Atom ...>`, not the oracle's object; `shutdown-agents` answers `nil`, and
   `*agent*` is bound only while an action runs (`nil` outside one, where the
-  oracle leaves it unbound).
+  oracle leaves it unbound). `(await-for 0 a)` answers `true` once the actions it
+  ran finished; the oracle's races its pool and may answer `false`.
+- A var's watches and validator run on `alter-var-root` only: a later `def` or `defn`
+  of the var and a `with-redefs` replace its root without calling its watches or checking
+  its validator (the oracle does both).
+- `swap!`, `reset!`, `compare-and-set!`, `swap-vals!` and `reset-vals!` also take a
+  ref or a volatile, whose cell an atom shares (the oracle's refuse anything but an
+  atom).
 - `binding` rebinds only `^:dynamic` vars (anything else is refused, like the
   oracle's non-dynamic error); a `^:dynamic` `defn` is rebindable too (its calls
   go through the var while the definition stays direct); reader metadata on names

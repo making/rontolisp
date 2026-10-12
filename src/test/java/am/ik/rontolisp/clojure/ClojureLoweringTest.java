@@ -1565,12 +1565,29 @@ class ClojureLoweringTest {
 
 	@Test
 	void atomsAreTaggedCells() {
-		assertThat(lowered("(atom 1)")).contains(":C%ATOM").contains("(VECTOR 1)");
+		// the aware helpers, which a program giving no reference a validator or a watch
+		// has renamed to the plain ones (ClojureArms.Family.WATCH)
+		assertThat(lowered("(atom 1)")).contains(":C%ATOM").contains("(RONTOLISP::%CLOJURE-REF-CELL 1)");
 		assertThat(lowered("(def a (atom 1)) @a")).contains("AREF");
-		assertThat(lowered("(def a (atom 1)) (swap! a inc)")).contains("RONTOLISP::%CLOJURE-ATOM-SWAP");
-		assertThat(lowered("(def a (volatile! 1)) (vswap! a inc)")).contains("APPLY").doesNotContain("%CLOJURE-ATOM-");
-		assertThat(lowered("(def a (atom 1)) (compare-and-set! a 1 2)")).contains("RONTOLISP::%CLOJURE-ATOM-CAS");
-		assertThat(lowered("(def a (atom 1)) (reset! a 2)")).contains("RONTOLISP::%CLOJURE-ATOM-RESET");
+		assertThat(lowered("(def a (atom 1)) (swap! a inc)")).contains("RONTOLISP::%CLOJURE-REF-SWAP");
+		assertThat(lowered("(def a (volatile! 1)) (vswap! a inc)")).contains("APPLY")
+			.doesNotContain("%CLOJURE-ATOM-")
+			.doesNotContain("%CLOJURE-REF-");
+		assertThat(lowered("(def a (atom 1)) (compare-and-set! a 1 2)")).contains("RONTOLISP::%CLOJURE-REF-CAS");
+		assertThat(lowered("(def a (atom 1)) (reset! a 2)")).contains("RONTOLISP::%CLOJURE-REF-RESET");
+		assertThat(lowered("(def a (atom 1)) (swap-vals! a + 2)")).contains("RONTOLISP::%CLOJURE-REF-SWAP-VALS");
+		assertThat(lowered("(def a (atom 1)) (reset-vals! a 2)")).contains("RONTOLISP::%CLOJURE-REF-RESET-VALS");
+		assertThat(lowered("(atom 1 :validator pos?)")).contains("RONTOLISP::%CLOJURE-ATOM-OPTIONS");
+		assertThat(lowered("(add-watch (atom 1) :k identity)")).contains("RONTOLISP::%CLOJURE-ADD-WATCH");
+		assertThat(lowered("(map set-validator! [] [])")).contains("RONTOLISP::%CLOJURE-SET-VALIDATOR-V");
+		assertThatThrownBy(() -> Clojure.read("(atom)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Wrong number of args (0) passed to: clojure.core/atom");
+		assertThatThrownBy(() -> Clojure.read("(add-watch (atom 1) :k)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Wrong number of args (2) passed to: clojure.core/add-watch");
+		assertThatThrownBy(() -> Clojure.read("(reset-vals! (atom 1))", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Wrong number of args (1) passed to: clojure.core/reset-vals!");
+		assertThatThrownBy(() -> Clojure.read("(await-for)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Wrong number of args (0) passed to: clojure.core/await-for");
 		assertThatThrownBy(() -> Clojure.read("(deref a 1)", null)).isInstanceOf(LispReadException.class)
 			.hasMessageContaining("deref takes one or three arguments");
 		assertThatThrownBy(() -> Clojure.read("(deref a 1 2 3)", null)).isInstanceOf(LispReadException.class)
@@ -2720,7 +2737,7 @@ class ClojureLoweringTest {
 		assertThat(lowered("(map set [[1]])")).contains("LAMBDA").contains("GETHASH");
 		assertThat(lowered("(map hash-map [:a] [1])")).contains("LAMBDA").contains("RONTOLISP::%CLOJURE-PLIST-TABLE");
 		assertThat(lowered("(map array-map [:a] [1])")).contains("LAMBDA").contains("RONTOLISP::%CLOJURE-PLIST-TABLE");
-		assertThat(lowered("(let [a (atom [1])] (swap! a conj 1))")).contains("RONTOLISP::%CLOJURE-ATOM-SWAP")
+		assertThat(lowered("(let [a (atom [1])] (swap! a conj 1))")).contains("RONTOLISP::%CLOJURE-REF-SWAP")
 			.contains("REDUCE");
 		assertThatThrownBy(() -> Clojure.read("(vec)", null)).isInstanceOf(LispReadException.class)
 			.hasMessageContaining("vec takes one collection");

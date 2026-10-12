@@ -318,9 +318,10 @@ examples:
   - path: clojure/state.clj
     backends: [interpreter, jvm, wasm, wasm-component-run]
     note: >-
-      atoms, refs with a rolled-back transaction and a validator, agents failing,
-      refused, restarted and in :continue mode, delays, volatiles, binding,
-      alter-var-root, with-redefs; the output is clj 1.12.6's
+      atoms, refs with a rolled-back transaction and a validator, watches and
+      validators on atoms, refs and vars, swap-vals!/reset-vals!, agents failing,
+      refused, restarted and in :continue mode, await-for, delays, volatiles,
+      binding, alter-var-root, with-redefs; the output is clj 1.12.6's
     expect:
       file: .expected/clojure-state.txt
   - path: clojure/portable.cljc

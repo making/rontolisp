@@ -1,5 +1,5 @@
 ;; state.clj -- the reference types: atoms, refs and their transactions, agents with
-;; their failed state, validators, delays, vars redefined at run time.
+;; their failed state, validators and watches, delays, vars redefined at run time.
 ;;
 ;;   rontolisp state.clj
 ;;   rontolisp state.clj -o State.class && java State
@@ -29,6 +29,26 @@
   (println (compare-and-set! temperature 20 25) (compare-and-set! temperature 20 30) @temperature))
 (let [stock (ref 3 :validator #(>= % 0))]
   (println (try (dosync (alter stock - 5)) (catch IllegalStateException e (ex-message e))) @stock))
+
+(println "== watches and validators")
+;; a watch sees every change after it is stored; a validator refuses a value before
+(let [temperature (atom 20 :validator #(<= -50 % 60))
+      readings (atom [])]
+  (add-watch temperature :log (fn [_ _ old new] (swap! readings conj [old new])))
+  (swap! temperature + 5)
+  (println (swap-vals! temperature - 3) (reset-vals! temperature 30))
+  (println (try (reset! temperature 99) (catch IllegalStateException e (ex-message e))) @temperature)
+  (remove-watch temperature :log)
+  (reset! temperature 0)
+  (println "readings:" @readings))
+
+;; a ref's watch runs once its transaction commits, with the value from before it
+(let [balance (ref 100)
+      audit (atom [])]
+  (add-watch balance :audit (fn [_ _ old new] (swap! audit conj (- new old))))
+  (dosync (alter balance - 30) (alter balance + 5))
+  (dosync (alter balance + 50))
+  (println "audit:" @audit @balance))
 
 (println "== agents")
 (let [counter (agent 0)]
@@ -61,6 +81,11 @@
   (await a)
   (println "continue:" @a @seen (error-mode a)))
 
+(let [worker (agent 0)]
+  (set-validator! worker #(< % 10))
+  (dotimes [i 4] (send worker + i))
+  (println "await-for:" (await-for 1000 worker) @worker))
+
 (println "== delays and volatiles")
 (let [d (delay (println "  (computing once)") 42)
       v (volatile! 1)]
@@ -72,6 +97,7 @@
 (def ^:dynamic *greeting* "hello")
 (defn greet [who] (str *greeting* ", " who))
 (def counter 0)
+(add-watch #'counter :trace (fn [_ _ old new] (println "  counter:" old "->" new)))
 (alter-var-root #'counter + 10)
 (println (greet "ada") (binding [*greeting* "hi"] (greet "bob")) counter)
 (with-redefs [greet (fn [who] (str "stub for " who))]

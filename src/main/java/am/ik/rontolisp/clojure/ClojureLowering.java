@@ -3837,9 +3837,13 @@ public final class ClojureLowering {
 		if (ClojureLowerUtil.isSymbolNamed(head, "vswap!")) {
 			return ClojureStateLowering.swapOf(this, items);
 		}
-		if (ClojureLowerUtil.isSymbolNamed(head, "add-watch") || ClojureLowerUtil.isSymbolNamed(head, "remove-watch")) {
-			throw new LispReadException(
-					((LispSymbol) head).name() + " is not supported yet: atom watches need a design");
+		LispVal watchRow = head instanceof LispSymbol watchHead
+				? ClojureStateLowering.watchRow(this, watchHead.name(), items) : null;
+		if (watchRow != null) {
+			return watchRow;
+		}
+		if (ClojureLowerUtil.isSymbolNamed(head, "swap-vals!") || ClojureLowerUtil.isSymbolNamed(head, "reset-vals!")) {
+			return ClojureStateLowering.swapValsOf(this, items);
 		}
 		if (ClojureLowerUtil.isSymbolNamed(head, "comment")) {
 			return NIL_CONST;
@@ -4894,6 +4898,9 @@ public final class ClojureLowering {
 			case "swap!", "vswap!" -> ClojureStateLowering.swapValue(this, name);
 			case "reset!", "vreset!" -> ClojureStateLowering.resetValue(this, name);
 			case "compare-and-set!" -> ClojureStateLowering.compareAndSetValue(this);
+			case "swap-vals!", "reset-vals!" -> ClojureStateLowering.swapValsValue(this, name);
+			case "add-watch", "remove-watch", "set-validator!", "get-validator" ->
+				ClojureStateLowering.watchVerbValue(name);
 			case "ref" -> ClojureStateLowering.refValue(this);
 			case "alter" -> ClojureStateLowering.alterValue(this, "alter");
 			case "commute" -> ClojureStateLowering.alterValue(this, "commute");

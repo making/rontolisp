@@ -16,5 +16,5 @@ No update is lost, and `f` may run more than once.
 (println @a)                ; 31
 ```
 
-Misuse of a non-atom signals. There is no `add-watch`/`remove-watch`: watches are
-refused by name.
+A validator (`set-validator!`) checks each answer before it is stored, and the atom's
+watches (`add-watch`) are called after the store. Misuse of a non-atom signals.

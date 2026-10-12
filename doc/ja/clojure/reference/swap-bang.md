@@ -12,4 +12,4 @@ Clojure と同じく compare-and-set の再試行ループです。`f` はロッ
 (println @a)                ; 31
 ```
 
-アトムでないものへの誤用はシグナルを上げます。`add-watch`/`remove-watch` はなく、watch は名前で拒否されます。
+validator（`set-validator!`）は格納の前に各結果を検査し、アトムの watch（`add-watch`）は格納の後に呼ばれます。アトムでないものへの誤用はシグナルを上げます。

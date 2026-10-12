@@ -414,7 +414,14 @@
   スレッドで走ります。agent の印字は
   unreadable な `#<Atom ...>` で、オラクルのオブジェクトではありません。
   `shutdown-agents` は `nil` を答え、`*agent*` はアクションの実行中にだけ束縛され
-  ます（外側は `nil`。オラクルでは unbound です）。
+  ます（外側は `nil`。オラクルでは unbound です）。`(await-for 0 a)` は、走らせた
+  アクションが終わっていれば `true` を答えます（オラクルはプールと競合し `false` を
+  答えることがあります）。
+- var の watch と validator が走るのは `alter-var-root` だけです。後の `def`・`defn` と
+  `with-redefs` は var のルートを置き換えますが、watch を呼ばず validator も検査
+  しません（オラクルはどちらも行います）。
+- `swap!`、`reset!`、`compare-and-set!`、`swap-vals!`、`reset-vals!` は、atom と
+  セルを共有する ref と volatile も受け付けます（オラクルは atom 以外を拒否します）。
 - `binding` が再束縛できるのは `^:dynamic` な var だけです（それ以外はオラクルの
   非 dynamic エラー同様に拒否）。`^:dynamic` な `defn` も再束縛できます（定義は
   直接のまま、呼び出しは var 経由になります）。それ以外の名前やローカルについた

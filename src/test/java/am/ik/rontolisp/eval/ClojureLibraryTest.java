@@ -327,6 +327,46 @@ class ClojureLibraryTest {
 	}
 
 	@Test
+	void aProgramGivingNoReferenceAValidatorOrWatchCallsThePlainAtomHelpers() {
+		// only add-watch, set-validator! and an atom's options give a reference either:
+		// every other program builds one-long atom cells, calls the plain helpers and
+		// has the agent's, the transaction's and alter-var-root's watch views folded
+		String source = """
+				(def a (atom 1)) (swap! a inc) (reset! a 2) (compare-and-set! a 2 3) (swap-vals! a inc)
+				(reset-vals! a 0) (def r (ref 0)) (dosync (alter r inc)) (def g (agent 0)) (send g inc)
+				(def x 1) (alter-var-root #'x inc) (prn @a @r @g x)""";
+		List<LispVal> plain = ClojureLibrary.process(Clojure.read(source, null));
+		String own = program(plain, source);
+		assertThat(own).contains("(VECTOR 1)")
+			.contains("RONTOLISP::%CLOJURE-ATOM-SWAP ")
+			.contains("RONTOLISP::%CLOJURE-ATOM-RESET ")
+			.contains("RONTOLISP::%CLOJURE-ATOM-CAS ")
+			.contains("RONTOLISP::%CLOJURE-ATOM-SWAP-VALS ")
+			.contains("RONTOLISP::%CLOJURE-ATOM-RESET-VALS ")
+			.doesNotContain("%CLOJURE-REF-");
+		for (String name : List.of("RONTOLISP::%CLOJURE-AGENT-ACT", "RONTOLISP::%CLOJURE-STM-RUN",
+				"RONTOLISP::%CLOJURE-ALTER-ROOT", "RONTOLISP::%CLOJURE-ATOM-SWAP")) {
+			assertThat(defun(plain, name)).as(name)
+				.doesNotContain("NOTIFIED")
+				.doesNotContain("NOTED")
+				.doesNotContain("VALIDATED");
+		}
+		String watched = source + " (add-watch a :k (fn [k r o n] (prn o n)))";
+		List<LispVal> aware = ClojureLibrary.process(Clojure.read(watched, null));
+		assertThat(program(aware, watched)).contains("(RONTOLISP::%CLOJURE-REF-CELL 1)")
+			.contains("RONTOLISP::%CLOJURE-REF-SWAP ")
+			.doesNotContain("%CLOJURE-ATOM-SWAP");
+		assertThat(defun(aware, "RONTOLISP::%CLOJURE-AGENT-ACT")).contains("RONTOLISP::%CLOJURE-REF-NOTIFIED");
+		assertThat(defun(aware, "RONTOLISP::%CLOJURE-STM-RUN")).contains("RONTOLISP::%CLOJURE-STM-NOTIFIED");
+		assertThat(defun(aware, "RONTOLISP::%CLOJURE-ALTER-ROOT")).contains("RONTOLISP::%CLOJURE-REF-VALIDATED");
+		for (String producer : List.of("(set-validator! a pos?)", "(atom 1 :meta {})", "(map add-watch [] [] [])")) {
+			assertThat(program(ClojureLibrary.process(Clojure.read(source + producer, null)), source + producer))
+				.as(producer)
+				.contains("%CLOJURE-REF-CELL");
+		}
+	}
+
+	@Test
 	void aProgramMakingNoDelaySplicesDerefAndThePrinterWithoutTheirDelayArms() {
 		// only delay makes a delay: a program naming it keeps deref's and the printer's
 		// delay arms, any other derefs and prints as before delays, and its force and

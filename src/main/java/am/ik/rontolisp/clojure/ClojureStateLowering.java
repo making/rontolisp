@@ -129,15 +129,22 @@ final class ClojureStateLowering {
 
 	/**
 	 * The tag heading an atom: {@code (:C%ATOM #(value))}, the set wrapper's shape, so
-	 * the verbs can tell an atom from a plain vector. The value lives in a one-vector
-	 * cell, which every backend reads and writes; printing spells the wrapper, not the
-	 * oracle's object syntax.
+	 * the verbs can tell an atom from a plain vector. The value lives in a vector cell,
+	 * which every backend reads and writes; printing spells the wrapper, not the oracle's
+	 * object syntax.
 	 */
 	static final LispSymbol ATOM_TAG = new LispSymbol(":C%ATOM");
 
+	/**
+	 * The cell of an atom or a ref: {@code #(value nil validator state watches)} in a
+	 * program that may give a reference a validator or a watch, the one-vector
+	 * {@code #(value)} in every other ({@link ClojureArms.Family#WATCH} folds it to
+	 * {@code vector}).
+	 */
+	static final LispSymbol REF_CELL = new LispSymbol("RONTOLISP::%CLOJURE-REF-CELL");
+
 	static LispVal wrapAtom(LispVal value) {
-		return ClojureLowerUtil.list(ClojureLowerUtil.sym("list"), ATOM_TAG,
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("vector"), value));
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("list"), ATOM_TAG, ClojureLowerUtil.list(REF_CELL, value));
 	}
 
 	/**
@@ -193,10 +200,24 @@ final class ClojureStateLowering {
 					.refusal(ClojureRefusals.CLASS_CAST_OF, LispString.literal(op + " needs an atom"), cell)));
 	}
 
+	/**
+	 * {@code (atom init & options)}: the wrapped cell; options go to the spliced
+	 * {@link #ATOM_OPTIONS}, which reads them at run time like the oracle's
+	 * {@code (apply hash-map options)} -- {@code :meta} first, then a {@code :validator}
+	 * the initial value must pass, any other key ignored.
+	 */
 	static LispVal atomOf(ClojureLowering ctx, List<LispVal> items) {
-		ClojureLowerUtil.isTrue(items.size() == 2, "atom takes an initial value");
-		return wrapAtom(ctx.lower(items.get(1)));
+		ClojureCoreLowering.arity("atom", items.size() - 1, 1, -1);
+		LispVal atom = wrapAtom(ctx.lower(items.get(1)));
+		if (items.size() == 2) {
+			return atom;
+		}
+		return ClojureLowerUtil.list(ATOM_OPTIONS, atom,
+				ClojureLowerUtil.cons(ClojureLowerUtil.sym("list"), ctx.lowers(items, 2)));
 	}
+
+	/** {@code atom}'s options: the metadata and the validator of a fresh atom. */
+	static final LispSymbol ATOM_OPTIONS = new LispSymbol("RONTOLISP::%CLOJURE-ATOM-OPTIONS");
 
 	static LispVal derefOf(ClojureLowering ctx, List<LispVal> items) {
 		ClojureLowerUtil.isTrue(items.size() == 2 || items.size() == 4, "deref takes one or three arguments");
@@ -282,7 +303,7 @@ final class ClojureStateLowering {
 				tail.add(ctx.lower(arg));
 			}
 			if (atomic(op)) {
-				return ClojureLowerUtil.list(ATOM_SWAP, atomCell(cell), ClojureBindingLowering.fnValue(ctx, fun),
+				return ClojureLowerUtil.list(ATOM_SWAP, cell, ClojureBindingLowering.fnValue(ctx, fun),
 						ClojureLowerUtil.cons(ClojureLowerUtil.sym("list"), tail));
 			}
 			LispVal spread = ClojureLowerUtil.list(ClojureLowerUtil.sym("cons"), atomGet(cell),
@@ -303,7 +324,7 @@ final class ClojureStateLowering {
 		LispVal value = ctx.lower(items.get(2));
 		return withAtom(ctx, ctx.lower(items.get(1)), op, cell -> {
 			if (atomic(op)) {
-				return ClojureLowerUtil.list(ATOM_RESET, atomCell(cell), value);
+				return ClojureLowerUtil.list(ATOM_RESET, cell, value);
 			}
 			LispSymbol next = ctx.freshTemp();
 			return ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
@@ -337,21 +358,107 @@ final class ClojureStateLowering {
 	 * as one step: the spliced {@link #ATOM_CAS}, answering a Clojure boolean.
 	 */
 	private static LispVal compareAndSetBuild(ClojureLowering ctx, LispVal cell, LispVal wanted, LispVal value) {
-		return ctx.booleanAnswer(ClojureLowerUtil.list(ATOM_CAS, atomCell(cell), wanted, value));
+		return ctx.booleanAnswer(ClojureLowerUtil.list(ATOM_CAS, cell, wanted, value));
 	}
 
 	/**
 	 * The spliced helpers that make an atom's update one step where a Ring handler runs
-	 * one thread per request ({@code clojure.lisp}, "Atoms across request threads"):
-	 * {@code swap!}'s retry loop, {@code compare-and-set!}'s compare and store, and
-	 * {@code reset!}'s store, each over the atom's one-vector cell. On wasm their guard
-	 * is a no-op.
+	 * one thread per request ({@code clojure.lisp}, "Atoms across request threads" and
+	 * "Validators and watches"): {@code swap!}'s retry loop, {@code compare-and-set!}'s
+	 * compare and store, {@code reset!}'s store and the two {@code -vals} verbs, each
+	 * over the atom, running its validator and calling its watches. A program that can
+	 * give no reference either has each renamed to the plain {@code %clojure-atom-}
+	 * helper ({@link ClojureArms.Family#WATCH}). On wasm their guard is a no-op.
 	 */
-	static final LispSymbol ATOM_SWAP = new LispSymbol("RONTOLISP::%CLOJURE-ATOM-SWAP");
+	static final LispSymbol ATOM_SWAP = new LispSymbol("RONTOLISP::%CLOJURE-REF-SWAP");
 
-	static final LispSymbol ATOM_CAS = new LispSymbol("RONTOLISP::%CLOJURE-ATOM-CAS");
+	static final LispSymbol ATOM_CAS = new LispSymbol("RONTOLISP::%CLOJURE-REF-CAS");
 
-	static final LispSymbol ATOM_RESET = new LispSymbol("RONTOLISP::%CLOJURE-ATOM-RESET");
+	static final LispSymbol ATOM_RESET = new LispSymbol("RONTOLISP::%CLOJURE-REF-RESET");
+
+	static final LispSymbol ATOM_SWAP_VALS = new LispSymbol("RONTOLISP::%CLOJURE-REF-SWAP-VALS");
+
+	static final LispSymbol ATOM_RESET_VALS = new LispSymbol("RONTOLISP::%CLOJURE-REF-RESET-VALS");
+
+	/** The aware helpers, each to the plain one a program without validators calls. */
+	static final Map<String, String> WATCH_ALIASES = Map.of(REF_CELL.name(), "VECTOR", ATOM_SWAP.name(),
+			"RONTOLISP::%CLOJURE-ATOM-SWAP", ATOM_CAS.name(), "RONTOLISP::%CLOJURE-ATOM-CAS", ATOM_RESET.name(),
+			"RONTOLISP::%CLOJURE-ATOM-RESET", ATOM_SWAP_VALS.name(), "RONTOLISP::%CLOJURE-ATOM-SWAP-VALS",
+			ATOM_RESET_VALS.name(), "RONTOLISP::%CLOJURE-ATOM-RESET-VALS");
+
+	/**
+	 * The views over a store the plain code already made, each answering its first
+	 * argument: the call of a reference's watches after it, and a var's validator ahead
+	 * of it, and the transaction's snapshot and call of its refs' watches.
+	 */
+	static final Set<String> WATCH_VIEWS = Set.of("RONTOLISP::%CLOJURE-REF-NOTIFIED",
+			"RONTOLISP::%CLOJURE-REF-VALIDATED", "RONTOLISP::%CLOJURE-STM-NOTED", "RONTOLISP::%CLOJURE-STM-NOTIFIED");
+
+	/**
+	 * What may give a reference a validator or a watch: the verbs, called or as values,
+	 * and an atom's options.
+	 */
+	static final Set<String> WATCH_PRODUCERS = Set.of("RONTOLISP::%CLOJURE-ADD-WATCH",
+			"RONTOLISP::%CLOJURE-ADD-WATCH-V", "RONTOLISP::%CLOJURE-SET-VALIDATOR",
+			"RONTOLISP::%CLOJURE-SET-VALIDATOR-V", ATOM_OPTIONS.name());
+
+	/**
+	 * {@code (swap-vals! atom f args...)} and {@code (reset-vals! atom value)}: the store
+	 * of {@code swap!} and {@code reset!}, answering {@code [old new]}.
+	 */
+	static LispVal swapValsOf(ClojureLowering ctx, List<LispVal> items) {
+		String op = ((LispSymbol) items.get(0)).name();
+		boolean swap = op.equals("swap-vals!");
+		ClojureCoreLowering.arity(op, items.size() - 1, 2, swap ? -1 : 2);
+		LispVal loweredAtom = ctx.lower(items.get(1));
+		LispVal second = swap ? ClojureBindingLowering.fnValue(ctx, items.get(2)) : ctx.lower(items.get(2));
+		LispVal rest = ClojureLowerUtil.cons(ClojureLowerUtil.sym("list"), ctx.lowers(items, 3));
+		return withAtom(ctx, loweredAtom, op, cell -> swap ? ClojureLowerUtil.list(ATOM_SWAP_VALS, cell, second, rest)
+				: ClojureLowerUtil.list(ATOM_RESET_VALS, cell, second));
+	}
+
+	/** {@code swap-vals!}/{@code reset-vals!} as a value. */
+	static LispVal swapValsValue(ClojureLowering ctx, String op) {
+		LispSymbol cell = new LispSymbol(ClojureLowering.mangle("vals-cell"));
+		LispSymbol arg = new LispSymbol(ClojureLowering.mangle("vals-arg"));
+		if (op.equals("reset-vals!")) {
+			return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(List.of(cell, arg)),
+					withAtom(ctx, cell, op, bound -> ClojureLowerUtil.list(ATOM_RESET_VALS, bound, arg)));
+		}
+		LispSymbol rest = new LispSymbol(ClojureLowering.mangle("vals-rest"));
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"),
+				ClojureLowerUtil.list(List.of(cell, arg, ClojureLowering.AMPERSAND_REST, rest)),
+				withAtom(ctx, cell, op, bound -> ClojureLowerUtil.list(ATOM_SWAP_VALS, bound, arg, rest)));
+	}
+
+	/**
+	 * The validator and watch verbs: each one call to its {@code clojure.lisp} worker
+	 * over a fixed argument count, and its {@code -v} function as a value.
+	 */
+	private static final Map<String, AgentVerb> WATCH_VERBS = Map.of("add-watch",
+			new AgentVerb("RONTOLISP::%CLOJURE-ADD-WATCH", 3), "remove-watch",
+			new AgentVerb("RONTOLISP::%CLOJURE-REMOVE-WATCH", 2), "set-validator!",
+			new AgentVerb("RONTOLISP::%CLOJURE-SET-VALIDATOR", 2), "get-validator",
+			new AgentVerb("RONTOLISP::%CLOJURE-GET-VALIDATOR", 1));
+
+	/**
+	 * A validator or watch verb's call, or null when the call names none of them.
+	 */
+	static @Nullable LispVal watchRow(ClojureLowering ctx, String name, List<LispVal> items) {
+		AgentVerb verb = WATCH_VERBS.get(name);
+		if (verb == null) {
+			return null;
+		}
+		ClojureCoreLowering.arity(name, items.size() - 1, verb.arity(), verb.arity());
+		return ClojureLowerUtil.cons(new LispSymbol(verb.worker()), ctx.lowers(items, 1));
+	}
+
+	/** A validator or watch verb as a value: its library function, or null for none. */
+	static @Nullable LispVal watchVerbValue(String name) {
+		AgentVerb verb = WATCH_VERBS.get(name);
+		return verb == null ? null
+				: ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), new LispSymbol(verb.worker() + "-V"));
+	}
 
 	/**
 	 * Whether the verb goes through the guarded helpers: an atom's, never a volatile's
@@ -361,15 +468,14 @@ final class ClojureStateLowering {
 		return !op.startsWith("v");
 	}
 
-	/** The one-vector cell of an already-bound atom. */
-	private static LispVal atomCell(LispVal bound) {
-		return ClojureLowerUtil.list(ClojureLowerUtil.sym("cadr"), bound);
-	}
-
-	/** {@code atom} as a value: a one-argument lambda over the constructor. */
+	/** {@code atom} as a value: a lambda of the initial value and options. */
 	static LispVal atomValue(ClojureLowering ctx) {
 		LispSymbol init = new LispSymbol(ClojureLowering.mangle("atom-init"));
-		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(init), wrapAtom(init));
+		LispSymbol options = new LispSymbol(ClojureLowering.mangle("atom-options"));
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"),
+				ClojureLowerUtil.list(List.of(init, ClojureLowering.AMPERSAND_REST, options)),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), options,
+						ClojureLowerUtil.list(ATOM_OPTIONS, wrapAtom(init), options), wrapAtom(init)));
 	}
 
 	/** {@code deref} as a value: a one-argument lambda over the reader. */
@@ -388,7 +494,7 @@ final class ClojureStateLowering {
 		LispSymbol rest = new LispSymbol(ClojureLowering.mangle("swap-rest"));
 		LispSymbol next = new LispSymbol(ClojureLowering.mangle("swap-next"));
 		LispVal spread = ClojureLowerUtil.list(ClojureLowerUtil.sym("cons"), atomGet(cell), rest);
-		LispVal update = atomic(op) ? ClojureLowerUtil.list(ATOM_SWAP, atomCell(cell), fun, rest)
+		LispVal update = atomic(op) ? ClojureLowerUtil.list(ATOM_SWAP, cell, fun, rest)
 				: ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
 						ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(next,
 								ClojureLowerUtil.list(ClojureLowerUtil.sym("apply"), fun, spread)))),
@@ -406,8 +512,8 @@ final class ClojureStateLowering {
 		LispSymbol cell = new LispSymbol(ClojureLowering.mangle("reset-cell"));
 		LispSymbol value = new LispSymbol(ClojureLowering.mangle("reset-value"));
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(List.of(cell, value)),
-				withAtom(ctx, cell, "reset!", bound -> atomic(op)
-						? ClojureLowerUtil.list(ATOM_RESET, atomCell(bound), value) : atomPut(bound, value)));
+				withAtom(ctx, cell, "reset!",
+						bound -> atomic(op) ? ClojureLowerUtil.list(ATOM_RESET, bound, value) : atomPut(bound, value)));
 	}
 
 	/**
@@ -624,7 +730,7 @@ final class ClojureStateLowering {
 	static LispVal alterBuild(ClojureLowering ctx, LispVal cell, LispVal fun, LispVal argList, String op) {
 		return withAtom(ctx, cell, op, bound -> {
 			LispVal spread = ClojureLowerUtil.list(ClojureLowerUtil.sym("cons"), atomGet(bound), argList);
-			return txnGuard(ClojureLowerUtil.list(STM_WRITE, atomCell(bound),
+			return txnGuard(ClojureLowerUtil.list(STM_WRITE, bound,
 					ClojureLowerUtil.list(ClojureLowerUtil.sym("apply"), fun, spread)));
 		});
 	}
@@ -648,7 +754,7 @@ final class ClojureStateLowering {
 
 	/** A {@code ref-set} over already-lowered forms: the logged write. */
 	static LispVal refSetBuild(LispVal bound, LispVal value) {
-		return ClojureLowerUtil.list(STM_WRITE, atomCell(bound), value);
+		return ClojureLowerUtil.list(STM_WRITE, bound, value);
 	}
 
 	/** {@code ref-set} as a value: a two-argument lambda over the write. */
@@ -730,6 +836,8 @@ final class ClojureStateLowering {
 				return sendOf(ctx, items);
 			case "await":
 				return awaitOf(ctx, items);
+			case "await-for":
+				return awaitForOf(ctx, items);
 			case "shutdown-agents":
 				ClojureLowerUtil.isTrue(items.size() == 1, "shutdown-agents takes no arguments");
 				return ClojureLowering.NIL_CONST;
@@ -837,12 +945,53 @@ final class ClojureStateLowering {
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
 				ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(agents,
 						ClojureLowerUtil.cons(ClojureLowerUtil.sym("list"), ctx.lowers(items, 1))))),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), AGENT_VAR,
-						ClojureRefusals.refusal(ClojureRefusals.EXCEPTION,
-								LispString.literal("Can't await in agent action"))),
-				ClojureLowerUtil.list(ctx.hostTarget ? AGENT_AWAIT : AGENT_AWAIT_HERE, agents),
+				awaitGuard("await"), ClojureLowerUtil.list(ctx.hostTarget ? AGENT_AWAIT : AGENT_AWAIT_HERE, agents),
 				ClojureLowering.NIL_CONST);
 	}
+
+	/**
+	 * {@code (await-for timeout agent...)}: {@code await}'s refusals and markers, then a
+	 * wait of at most {@code timeout} milliseconds for them, answering whether every one
+	 * ran. A host target waits for a queue another thread is running
+	 * ({@link #AGENT_AWAIT_FOR}); on wasm this thread runs every queue, so only a marker
+	 * queued behind a failed action is left ({@link #AGENT_AWAIT_FOR_HERE}).
+	 */
+	static LispVal awaitForOf(ClojureLowering ctx, List<LispVal> items) {
+		ClojureCoreLowering.arity("await-for", items.size() - 1, 1, -1);
+		ctx.usedStm = true;
+		ctx.usedExInfo = true; // a failed agent's refusal carries its error as the cause
+		LispSymbol timeout = ctx.freshTemp();
+		LispSymbol agents = ctx.freshTemp();
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
+				ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(timeout, ctx.lower(items.get(1))),
+						ClojureLowerUtil.list(agents,
+								ClojureLowerUtil.cons(ClojureLowerUtil.sym("list"), ctx.lowers(items, 2))))),
+				awaitGuard("await-for"), ctx.booleanAnswer(ClojureLowerUtil
+					.list(ctx.hostTarget ? AGENT_AWAIT_FOR : AGENT_AWAIT_FOR_HERE, timeout, agents)));
+	}
+
+	/** {@code await-for} on a host target, waiting for another thread's run. */
+	static final LispSymbol AGENT_AWAIT_FOR = new LispSymbol("RONTOLISP::%CLOJURE-AGENT-AWAIT-FOR");
+
+	/** {@code await-for} on wasm, where this thread runs every queue. */
+	static final LispSymbol AGENT_AWAIT_FOR_HERE = new LispSymbol("RONTOLISP::%CLOJURE-AGENT-AWAIT-FOR-HERE");
+
+	/**
+	 * The oracle's refusals of an {@code await} or {@code await-for} named {@code op}:
+	 * inside a transaction ({@code io!}'s {@code IllegalStateException}), then inside an
+	 * action.
+	 */
+	private static LispVal awaitGuard(String op) {
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("cond"),
+				ClojureLowerUtil.list(STM_LOG,
+						ClojureRefusals.refusal(ClojureRefusals.ILLEGAL_STATE,
+								LispString.literal(op + " in transaction"))),
+				ClojureLowerUtil.list(AGENT_VAR, ClojureRefusals.refusal(ClojureRefusals.EXCEPTION,
+						LispString.literal("Can't await in agent action"))));
+	}
+
+	/** The running transaction's log, nil outside one ({@code clojure.lisp}). */
+	private static final LispSymbol STM_LOG = new LispSymbol("RONTOLISP::%CLOJURE-STM-LOG");
 
 	/**
 	 * One body lowered behind the {@code try} barrier with the tail position kept: a

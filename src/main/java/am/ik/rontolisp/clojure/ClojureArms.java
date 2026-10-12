@@ -486,6 +486,20 @@ public final class ClojureArms {
 				Set.of(ClojureLazyLowering.MAKE_DELAY), Set.of()),
 
 		/**
+		 * A reference with a validator or a watch: an atom, a ref or an agent whose cell
+		 * carries them, or a var whose tables do. Only {@code add-watch},
+		 * {@code set-validator!} and an atom's options give one
+		 * ({@link ClojureStateLowering#WATCH_PRODUCERS}); a ref or agent made with a
+		 * {@code :validator} checks it through code of its own. The aliases are the atom
+		 * cell's constructor, to {@code vector} (a one-long cell, with no room for
+		 * either), and the atom verbs' aware helpers, each to its plain one; the views
+		 * call the watches after an agent's action, a transaction's commit and an
+		 * {@code alter-var-root}, and run a var's validator ahead of the last.
+		 */
+		WATCH("watched-reference", Set.of(), ClojureStateLowering.WATCH_VIEWS, ClojureStateLowering.WATCH_ALIASES,
+				ClojureStateLowering.WATCH_PRODUCERS, Set.of()),
+
+		/**
 		 * Sorted maps and sets: no literal makes one, only the constructor and the
 		 * constructors' values. The family stands behind the collection interfaces' (from
 		 * {@link #COLLECTION} on), whose aliases rename a helper to one of its own

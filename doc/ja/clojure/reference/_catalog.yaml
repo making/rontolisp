@@ -363,6 +363,12 @@ categories:
       - { slug: swap-bang, name: "swap!" }
       - { slug: reset-bang, name: "reset!" }
       - { slug: compare-and-set-bang, name: "compare-and-set!" }
+      - { slug: swap-vals-bang, name: "swap-vals!" }
+      - { slug: reset-vals-bang, name: "reset-vals!" }
+      - { slug: add-watch, name: "add-watch" }
+      - { slug: remove-watch, name: "remove-watch" }
+      - { slug: set-validator-bang, name: "set-validator!" }
+      - { slug: get-validator, name: "get-validator" }
       - { slug: volatile-bang, name: "volatile!" }
       - { slug: vswap-bang, name: "vswap!" }
       - { slug: vreset-bang, name: "vreset!" }
@@ -376,6 +382,7 @@ categories:
       - { slug: send, name: "send" }
       - { slug: send-off, name: "send-off" }
       - { slug: await, name: "await" }
+      - { slug: await-for, name: "await-for" }
       - { slug: agent-error, name: "agent-error" }
       - { slug: restart-agent, name: "restart-agent" }
       - { slug: set-error-handler-bang, name: "set-error-handler!" }

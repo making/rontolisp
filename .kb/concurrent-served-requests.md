@@ -41,6 +41,10 @@ bugs, and each looks like someone else's fault.
   so a slot CAS there is not one `VarHandle` call. All four backends call the same helpers (wasm's
   guard is a no-op), so a function swapping its own atom retries everywhere. Before: 48
   requests x 20 updates counted 250-770 of 960. Volatiles stay plain (the oracle's are).
+  A program that can give a reference a validator or a watch calls the aware
+  `%clojure-ref-swap`/`-cas`/`-reset` instead (2026-10-12, `.kb/clojure-frontend.md` "State"):
+  the same compare and store, the validator ahead of it and the watches after it, both outside
+  the guard; `ClojureAtomConcurrentRequestsTest`'s second round pins that path.
 - Clojure refs and agents (`clojure.lisp` "Refs and agents across request threads",
   2026-10-11; `.kb/clojure-frontend.md` "State"): every transaction runs under one lock
   `%clojure-stm-guard` with an undo log; an agent's queue is appended under

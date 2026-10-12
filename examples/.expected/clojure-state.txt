@@ -5,17 +5,24 @@ balances: 70 130 200
 == compare-and-set! and validators
 true false 25
 Invalid reference state 3
+== watches and validators
+[25 22] [22 30]
+Invalid reference state 30
+readings: [[20 25] [25 22] [22 30]]
+audit: [-25 50] 125
 == agents
 counter: 5
 failed with: overdrawn {:balance -10}
 send refused: Agent is failed, needs restart
 restarted: 5 nil
 continue: 7 [skipped] :continue
+await-for: true 6
 == delays and volatiles
   (computing once)
 false 42 42 true
 3 true
 == vars
+  counter: 0 -> 10
 hello, ada hi, bob 10
 stub for eve
 hello, eve Greets. true false
