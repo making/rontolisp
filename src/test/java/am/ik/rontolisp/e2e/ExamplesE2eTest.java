@@ -1,5 +1,6 @@
 package am.ik.rontolisp.e2e;
 
+import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.IOException;
 import java.io.OutputStream;
@@ -12,9 +13,13 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Objects;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
+
+import javax.tools.JavaCompiler;
+import javax.tools.ToolProvider;
 
 import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.DynamicContainer;
@@ -118,6 +123,16 @@ import static org.junit.jupiter.api.DynamicTest.dynamicTest;
  * skipped assumption (not a failure), so datasets that need
  * {@code deep-learning-from-scratch/download-mnist.sh} silently gate on file
  * presence.</li>
+ * <li>{@code cli} -- rontolisp's own command line in place of the program file, for a
+ * {@code deps.edn} project: {@code [-M:alias, ...]}, {@code [-X:alias, ...]},
+ * {@code [test]}. The leg runs in a copy of the directory holding {@code path} (the
+ * project is the working directory's, as {@code clj}'s is), and the leg's own options
+ * ({@code -o}, {@code --component}, ...) go ahead of it -- after a leading {@code test}
+ * -- because {@code -M} and {@code -X} end rontolisp's options. {@code args} follow it
+ * unseparated on the interpreter: they are the main function's.</li>
+ * <li>{@code javaSources} -- {@code .java} files (under {@code examples/}) compiled,
+ * before the leg, into a class directory that is passed as {@code --java-classpath} and
+ * put on a compiled program's {@code java -cp}: a Java library of the example's own.</li>
  * </ul>
  * Exact matches ({@code equals}/{@code file}) are compared line-by-line, tolerant of a
  * trailing newline, and are asserted against every RUN backend -- so a per-backend
@@ -197,10 +212,35 @@ class ExamplesE2eTest {
 			@Nullable String stdin, @Nullable String stdinFile, @Nullable Expect expect,
 			@Nullable List<String> systemPath, @Nullable String workDir, @Nullable List<String> workFiles,
 			@Nullable Map<String, String> env, @Nullable Boolean simd, @Nullable Boolean parallel,
-			@Nullable List<String> library, @Nullable String note) {
+			@Nullable List<String> library, @Nullable List<String> cli, @Nullable List<String> javaSources,
+			@Nullable String note) {
 
 		List<String> argsOrEmpty() {
 			return this.args == null ? List.of() : this.args;
+		}
+
+		/**
+		 * What names the program on a leg's command line, around the leg's own options:
+		 * the file followed by them, or the {@code cli} preceded by them -- after a
+		 * leading {@code test}, the subcommand they belong to.
+		 * @param source the program file's absolute path
+		 * @param legFlags the leg's options ({@code -o}, {@code --component}, ...)
+		 * @return the arguments after the driver
+		 */
+		List<String> invocation(String source, List<String> legFlags) {
+			if (this.cli == null || this.cli.isEmpty()) {
+				return concat(List.of(source), legFlags);
+			}
+			if ("test".equals(this.cli.get(0))) {
+				return concat(concat(List.of("test"), legFlags), this.cli.subList(1, this.cli.size()));
+			}
+			return concat(legFlags, this.cli);
+		}
+
+		/** The container's name: the path, and the command line when it has one. */
+		String displayName() {
+			return (this.cli == null || this.cli.isEmpty()) ? this.path
+					: this.path + " (" + String.join(" ", this.cli) + ")";
 		}
 
 		/**
@@ -287,6 +327,55 @@ class ExamplesE2eTest {
 				PROJECT_DIR.resolve("src/test/resources/rove") + File.pathSeparator
 						+ PROJECT_DIR.resolve("src/test/resources/dissect"));
 		assertThat(systemPathFlags(none)).isEmpty();
+	}
+
+	/**
+	 * A {@code cli} takes the leg's options in front of it -- after a leading
+	 * {@code test} -- since {@code -M} and {@code -X} end rontolisp's options, and a file
+	 * takes them behind it. Needs neither the examples opt-in nor a driver.
+	 * @throws Exception if the inline manifest cannot be parsed
+	 */
+	@Test
+	void theLegsOptionsGoAheadOfACommandLineAndAfterAFile() throws Exception {
+		Manifest manifest = MAPPER.readValue("""
+				examples:
+				  - path: p/deps.edn
+				    backends: [interpreter]
+				    cli: ["-M:run", "a"]
+				  - path: p/deps.edn
+				    backends: [interpreter]
+				    cli: [test, "-A:x"]
+				  - path: file.clj
+				    backends: [interpreter]
+				""", Manifest.class);
+		List<String> legFlags = List.of("-o", "Prog.class");
+
+		assertThat(manifest.examples().get(0).invocation("/abs/p/deps.edn", legFlags)).containsExactly("-o",
+				"Prog.class", "-M:run", "a");
+		assertThat(manifest.examples().get(1).invocation("/abs/p/deps.edn", legFlags)).containsExactly("test", "-o",
+				"Prog.class", "-A:x");
+		assertThat(manifest.examples().get(2).invocation("/abs/file.clj", legFlags)).containsExactly("/abs/file.clj",
+				"-o", "Prog.class");
+		assertThat(manifest.examples().get(0).displayName()).isEqualTo("p/deps.edn (-M:run a)");
+	}
+
+	/**
+	 * Every {@code javaSources} file the real manifest names exists.
+	 * @throws Exception if the manifest cannot be read
+	 */
+	@Test
+	void everyJavaSourceInTheManifestExists() throws Exception {
+		assumeTrue(Files.isRegularFile(MANIFEST), () -> "manifest not found: " + MANIFEST);
+		for (Example example : loadManifest().examples()) {
+			if (example.javaSources() == null) {
+				continue;
+			}
+			for (String file : example.javaSources()) {
+				assertThat(EXAMPLES_DIR.resolve(file))
+					.as("%s declares a javaSources file that does not exist: %s", example.path(), file)
+					.isRegularFile();
+			}
+		}
 	}
 
 	/**
@@ -485,19 +574,22 @@ class ExamplesE2eTest {
 				}
 			}));
 		}
-		return dynamicContainer(example.path(), tests.stream());
+		return dynamicContainer(example.displayName(), tests.stream());
 	}
 
 	private static void verify(Backend backend, Example example, Path source, List<String> driver, Path work)
 			throws Exception {
-		Path runDir = stageWorkspace(example, work, backend);
+		Path runDir = stageWorkspace(example, source, work, backend);
 		String src = source.toString();
 		List<String> args = example.argsOrEmpty();
 		Map<String, String> env = example.envOrEmpty();
 		byte @Nullable [] stdin = resolveStdin(example);
+		Path javaClasses = compileJavaSources(example, work);
 		// --simd is a compile-time flag on every path, the interpreter's included; the
-		// --system-path flags come with it.
-		List<String> flags = concat(example.simdFlag(), systemPathFlags(example));
+		// --system-path and --java-classpath flags come with it.
+		List<String> flags = concat(concat(example.simdFlag(), systemPathFlags(example)),
+				javaClasses == null ? List.of() : List.of("--java-classpath", javaClasses.toString()));
+		boolean cli = example.cli() != null && !example.cli().isEmpty();
 		switch (backend) {
 			case INTERPRETER -> {
 				// The flags come BEFORE the program's own arguments, and a `--` separates
@@ -505,29 +597,35 @@ class ExamplesE2eTest {
 				// is what puts them in (uiop:command-line-arguments). Without the
 				// separator an argument would be read as a second input file. An
 				// interpreted example needs --system-path just as much as a compiled one
-				// -- asdf:load-system resolves the .asd at run time here.
-				List<String> ownArguments = args.isEmpty() ? List.of() : concat(List.of("--"), args);
+				// -- asdf:load-system resolves the .asd at run time here. Under a `cli`
+				// the arguments follow it bare: -M has already ended the options.
+				List<String> ownArguments = (args.isEmpty() || cli) ? args : concat(List.of("--"), args);
 				Result run = exec(runDir,
 						concat(vectorApiDriver(driver, example),
-								concat(concat(List.of(src), concat(flags, example.parallelFlag())), ownArguments)),
+								concat(example.invocation(src, concat(flags, example.parallelFlag())), ownArguments)),
 						stdin, env);
 				assertRan(run, example, "interpreter");
 			}
 			case JVM -> {
 				Result compile = exec(runDir,
-						concat(driver, concat(List.of(src, "-o", "Prog.class"), concat(flags, example.parallelFlag()))),
+						concat(driver,
+								example.invocation(src,
+										concat(List.of("-o", "Prog.class"), concat(flags, example.parallelFlag())))),
 						null, Map.of());
 				assertCompiled(compile, example, "jvm (compile)");
 				assertNoOsrHostileBackedges(runDir, example, "jvm (compile)");
 				List<String> java = example.simdOn() ? List.of("java", "--add-modules", "jdk.incubator.vector")
 						: List.of("java");
-				Result run = exec(runDir, concat(java, concat(List.of("-cp", jvmClasspath(runDir), "Prog"), args)),
-						stdin, env);
+				Result run = exec(runDir,
+						concat(java, concat(List.of("-cp", jvmClasspath(runDir, javaClasses), "Prog"), args)), stdin,
+						env);
 				assertRan(run, example, "jvm (run)");
 			}
 			case WASM -> {
 				Result compile = exec(runDir,
-						concat(driver, concat(List.of(src, "-o", "prog.wasm", "--optimize"), flags)), null, Map.of());
+						concat(driver,
+								example.invocation(src, concat(List.of("-o", "prog.wasm", "--optimize"), flags))),
+						null, Map.of());
 				assertCompiled(compile, example, "wasm (compile)");
 				Result run = exec(runDir,
 						concat(concat(List.of("wasmtime", "run", "-W", "gc", "-W", "exceptions=y", "--dir", "."),
@@ -544,7 +642,9 @@ class ExamplesE2eTest {
 				// Preview 1 syscalls the `wasm` leg exercises. An example that only
 				// compiled here could (and did) trap on that adapter for years.
 				Result compile = exec(runDir,
-						concat(driver, concat(List.of(src, "-o", "prog.wasm", "--component", "--optimize"), flags)),
+						concat(driver,
+								example.invocation(src,
+										concat(List.of("-o", "prog.wasm", "--component", "--optimize"), flags))),
 						null, Map.of());
 				assertCompiled(compile, example, "wasm-component-run (compile)");
 				Result run = exec(runDir, concat(concat(List.of("wasmtime", "run", "--dir", "."),
@@ -552,7 +652,8 @@ class ExamplesE2eTest {
 				assertRan(run, example, "wasm-component-run (run)");
 			}
 			case JVM_COMPILE -> {
-				Result compile = exec(runDir, concat(driver, concat(List.of(src, "-o", "Prog.class"), flags)), null,
+				Result compile = exec(runDir,
+						concat(driver, example.invocation(src, concat(List.of("-o", "Prog.class"), flags))), null,
 						Map.of());
 				assertCompiled(compile, example, "jvm-compile");
 				assertNoOsrHostileBackedges(runDir, example, "jvm-compile");
@@ -561,13 +662,16 @@ class ExamplesE2eTest {
 				// The Servlet transport: the container owns the port, so there is
 				// nothing to run here -- the war is deployed, and the deployment
 				// itself is pinned by WarE2eTest / ClackE2eTest.
-				Result compile = exec(runDir, concat(driver, concat(List.of(src, "-o", "app.war"), flags)), null,
+				Result compile = exec(runDir,
+						concat(driver, example.invocation(src, concat(List.of("-o", "app.war"), flags))), null,
 						Map.of());
 				assertCompiled(compile, example, "war-compile");
 			}
 			case WASM_COMPONENT -> {
 				Result compile = exec(runDir,
-						concat(driver, concat(List.of(src, "-o", "prog.wasm", "--component", "--optimize"), flags)),
+						concat(driver,
+								example.invocation(src,
+										concat(List.of("-o", "prog.wasm", "--component", "--optimize"), flags))),
 						null, Map.of());
 				assertCompiled(compile, example, "wasm-component");
 			}
@@ -576,20 +680,25 @@ class ExamplesE2eTest {
 				// node) rather than running it, so this leg builds the reactor shape
 				// the directory's own build.sh deploys.
 				Result compile = exec(runDir,
-						concat(driver, concat(List.of(src, "-o", "prog.wasm", "--no-wasi", "--optimize"), flags)), null,
-						Map.of());
+						concat(driver,
+								example.invocation(src,
+										concat(List.of("-o", "prog.wasm", "--no-wasi", "--optimize"), flags))),
+						null, Map.of());
 				assertCompiled(compile, example, "wasm-reactor");
 			}
 			case NO_GC -> {
 				Result compile = exec(runDir,
-						concat(driver, concat(List.of(src, "-o", "prog.wasm", "--no-gc", "--optimize"), flags)), null,
-						Map.of());
+						concat(driver,
+								example.invocation(src,
+										concat(List.of("-o", "prog.wasm", "--no-gc", "--optimize"), flags))),
+						null, Map.of());
 				assertCompiled(compile, example, "no-gc");
 			}
 			case NO_GC_SIMD -> {
 				Result compile = exec(runDir,
 						concat(driver,
-								concat(List.of(src, "-o", "prog.wasm", "--no-gc", "--simd", "--optimize"), flags)),
+								example.invocation(src,
+										concat(List.of("-o", "prog.wasm", "--no-gc", "--simd", "--optimize"), flags))),
 						null, Map.of());
 				assertCompiled(compile, example, "no-gc-simd");
 			}
@@ -633,7 +742,15 @@ class ExamplesE2eTest {
 	 * {@code deep-learning-from-scratch/download-mnist.sh}) the leg is skipped rather
 	 * than failed -- same shape as the wasmtime-on-PATH check.
 	 */
-	private static Path stageWorkspace(Example example, Path work, Backend backend) throws IOException {
+	private static Path stageWorkspace(Example example, Path source, Path work, Backend backend) throws IOException {
+		if (example.cli() != null && !example.cli().isEmpty()) {
+			// A deps.edn project runs from its own directory: a copy, so nothing a leg
+			// writes (Prog.class, prog.wasm) lands in examples/.
+			Path project = source.getParent();
+			assertThat(project).as("%s: a cli example's path names a file in its project", example.path()).isNotNull();
+			copyTree(Objects.requireNonNull(project), work);
+			return work;
+		}
 		Path runDir = work;
 		if (example.workDir() != null && !example.workDir().isBlank()) {
 			runDir = work.resolve(example.workDir());
@@ -666,6 +783,45 @@ class ExamplesE2eTest {
 			Files.copy(src, dst);
 		}
 		return runDir;
+	}
+
+	private static void copyTree(Path from, Path to) throws IOException {
+		try (Stream<Path> walk = Files.walk(from)) {
+			for (Path path : walk.toList()) {
+				Path target = to.resolve(from.relativize(path).toString());
+				if (Files.isDirectory(path)) {
+					Files.createDirectories(target);
+				}
+				else {
+					Files.copy(path, target);
+				}
+			}
+		}
+	}
+
+	/**
+	 * Compiles the example's {@code javaSources} into {@code work/java-classes} with the
+	 * JDK's own compiler, the directory the leg passes as {@code --java-classpath}.
+	 * @param example the manifest entry
+	 * @param work the leg's throwaway directory
+	 * @return the class directory, or {@code null} when the example has no Java sources
+	 * @throws IOException if the directory cannot be made
+	 */
+	private static @Nullable Path compileJavaSources(Example example, Path work) throws IOException {
+		if (example.javaSources() == null || example.javaSources().isEmpty()) {
+			return null;
+		}
+		JavaCompiler javac = ToolProvider.getSystemJavaCompiler();
+		assumeTrue(javac != null, "no Java compiler in this JVM");
+		Path classes = Files.createDirectories(work.resolve("java-classes"));
+		List<String> arguments = new ArrayList<>(List.of("-d", classes.toString()));
+		for (String file : example.javaSources()) {
+			arguments.add(EXAMPLES_DIR.resolve(file).toString());
+		}
+		ByteArrayOutputStream errors = new ByteArrayOutputStream();
+		int status = javac.run(null, null, errors, arguments.toArray(String[]::new));
+		assertThat(status).as("%s: javac failed%n%s", example.path(), errors.toString(StandardCharsets.UTF_8)).isZero();
+		return classes;
 	}
 
 	private static void assertCompiled(Result result, Example example, String label) {
@@ -805,15 +961,19 @@ class ExamplesE2eTest {
 	 * with {@code NoClassDefFoundError}. The two are interchangeable here because the
 	 * exec jar is a shade of {@code target/classes} with no external dependencies.
 	 * @param runDir the workspace the leg runs in
+	 * @param javaClasses the example's compiled {@code javaSources}, if any
 	 * @return the {@code -cp} value
 	 */
-	private static String jvmClasspath(Path runDir) {
+	private static String jvmClasspath(Path runDir, @Nullable Path javaClasses) {
 		Path runtime = newestExecJar();
 		if (runtime == null) {
 			Path classes = PROJECT_DIR.resolve("target").resolve("classes");
 			runtime = Files.isDirectory(classes) ? classes : null;
 		}
-		return runtime == null ? runDir.toString() : runDir + File.pathSeparator + runtime.toAbsolutePath();
+		String path = runtime == null ? runDir.toString() : runDir + File.pathSeparator + runtime.toAbsolutePath();
+		// a .class carries no class path of its own: the example's Java library joins
+		// java's, as its README's `java -cp .:classes` does
+		return javaClasses == null ? path : path + File.pathSeparator + javaClasses;
 	}
 
 	private static @Nullable Path newestExecJar() {

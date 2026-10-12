@@ -88,6 +88,9 @@ tcp-socket-bind of wasi:sockets/types@0.3.0 answered its error arm
 :invalid-state
 ```
 
+[`examples/clojure/wit-types/`](https://github.com/making/rontolisp/tree/develop/examples/clojure/wit-types) は、enum、flags、variant、record、option、
+タプルのリスト、`result` をプロバイダとの間で両方向に渡します。
+
 `list<u8>` はどのターゲットでも、両方向にオクテットのまま渡ります。コンポーネント、
 プロバイダ、WASM コアモジュールのいずれもです。コアモジュールのグルー（`--emit-js-glue`）は
 ホストに `Uint8Array` を渡し、`Uint8Array` を受け取ります（テキストはその UTF-8 符号化として

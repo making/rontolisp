@@ -1,0 +1,7 @@
+a reader of :clj / rontolisp
+true [\, \; \|]
+[a b c d]
+true (:clj [1 2] :cljs [3]) false #?(:clj [1 2] :cljs [3])
+[0 #?@(:clj [1 2])] true
+:jvm :web
+true color/rgb [255 0 0] #color/rgb [255 0 0]

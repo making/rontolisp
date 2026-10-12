@@ -1,0 +1,33 @@
+== regex
+(10 30)
+HELLO World
+[2026-10 2026 10]
+12/10/2026
+(1 2 3)
+3 pairs, last: [[c=333 c 333]]
+== unicode
+(héllo wörld Ωμέγα)
+(Ωμέγα)
+(H W Ü)
+(na ve caf) (naïve café)
+5 clusters of 8 code points
+λλ
+== split and replace
+[a b  c]
+[a b  c  ]
+[one two	three]
+hellO wOrld
+cost: \$6
+== format
+|left    |   right|
+|0003.142|+42|1,234,567|(5)|
+ff FF 10 0xff 1.234568e+04
+hello world, world!
+== case and whitespace
+STRASSE οδος Élan
+true "padded"
+== charsets
+UTF-8 10 bytes, round trip: héllo €
+ISO-8859-1 7 bytes, round trip: héllo ?
+US-ASCII 7 bytes, round trip: h?llo ?
+[-61 -87] ISO-8859-1

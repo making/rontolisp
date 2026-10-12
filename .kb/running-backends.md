@@ -75,6 +75,11 @@ exercise:
 # instead of 39. Anchor a directory with a trailing slash: `only=llm/`.
 ```
 
+A `deps.edn` project's entry names a file in the project and a `cli` (`[-M:alias]`, `[test]`):
+every leg runs in a copy of that directory with its options ahead of the command line (after a
+leading `test`); `javaSources` compiles an example's own Java library onto `--java-classpath`
+(`ExamplesE2eTest#theLegsOptionsGoAheadOfACommandLineAndAfterAFile`). Both since 2026-10-12.
+
 It is the longest run in the repo. **Split it with `-Drontolisp.examples.only=` from the
 start** -- one slice per surface -- and run each slice to completion in the foreground. A
 run detached into the background loses its result if the session ends before it finishes,

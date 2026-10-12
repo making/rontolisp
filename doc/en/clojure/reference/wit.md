@@ -88,6 +88,9 @@ tcp-socket-bind of wasi:sockets/types@0.3.0 answered its error arm
 :invalid-state
 ```
 
+[`examples/clojure/wit-types/`](https://github.com/making/rontolisp/tree/develop/examples/clojure/wit-types) crosses an enum, flags, variants, a
+record, an option, a list of tuples and a `result` both ways against a provider.
+
 A `list<u8>` crosses as its octets, both ways, on every target: a component, a provider, and a
 WASM core module, whose glue (`--emit-js-glue`) hands the host a `Uint8Array` and takes one back
 (text as its UTF-8 encoding). Octets that are not valid UTF-8 cross exact. A Common Lisp

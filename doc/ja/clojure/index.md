@@ -22,6 +22,11 @@ rontolisp prog.txt --source-language clojure       # 任意の拡張子
 `deps.edn` のプロジェクトは `clj` と同じように実行できます。`rontolisp -M:dev -m my.app args`、
 `rontolisp -X:build`、テストは `rontolisp test` です（[セマンティクス](semantics.md)）。
 
+[`examples/clojure/`](https://github.com/making/rontolisp/tree/develop/examples/clojure) に、期待される出力付きで実行できるプログラムがあります:
+コレクション、テキストと正規表現、マクロ、参照型、同梱の名前空間、リーダ条件、`deps.edn`
+プロジェクト、Java interop と Java ライブラリ、Ring ハンドラを相手にする HTTP クライアント、
+WASM と WIT の境界です。
+
 `--no-gc` は名前で拒否されます:そのバックエッドにはペアもシンボルもクロージャもないからです。
 
 ```clojure

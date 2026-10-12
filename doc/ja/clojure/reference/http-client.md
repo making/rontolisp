@@ -29,6 +29,9 @@
 200 application/json
 ```
 
+[`examples/clojure/http-client.clj`](https://github.com/making/rontolisp/tree/develop/examples/clojure/http-client.clj) は、同じプログラムがローカルの
+ポートで提供する Ring ハンドラを相手に、これらのリクエストを送ります。
+
 ## オプション
 
 | オプション | 意味 |

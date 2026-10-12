@@ -29,6 +29,9 @@ compile refuses the program, naming the flags that give it one. `clojure.java.io
 200 application/json
 ```
 
+[`examples/clojure/http-client.clj`](https://github.com/making/rontolisp/tree/develop/examples/clojure/http-client.clj) runs these requests against a
+Ring handler the same program serves on a local port.
+
 ## Options
 
 | Option | Meaning |

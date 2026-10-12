@@ -1,0 +1,21 @@
+== atoms and refs
+hits: 1000
+[insufficient funds {:short 370}]
+balances: 70 130 200
+== compare-and-set! and validators
+true false 25
+Invalid reference state 3
+== agents
+counter: 5
+failed with: overdrawn {:balance -10}
+send refused: Agent is failed, needs restart
+restarted: 5 nil
+continue: 7 [skipped] :continue
+== delays and volatiles
+  (computing once)
+false 42 42 true
+3 true
+== vars
+hello, ada hi, bob 10
+stub for eve
+hello, eve Greets. true false

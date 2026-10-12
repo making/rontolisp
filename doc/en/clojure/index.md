@@ -20,6 +20,11 @@ rontolisp prog.txt --source-language clojure       # any extension
 A `deps.edn` project runs as `clj` runs it: `rontolisp -M:dev -m my.app args`,
 `rontolisp -X:build`, and `rontolisp test` for its tests ([Semantics](semantics.md)).
 
+[`examples/clojure/`](https://github.com/making/rontolisp/tree/develop/examples/clojure) holds runnable programs with their expected output: the
+collections, text and regular expressions, macros, the reference types, the bundled
+namespaces, reader conditionals, a `deps.edn` project, Java interop and a Java library, the
+HTTP client against a Ring handler, and the WASM and WIT boundary.
+
 `--no-gc` is refused: that backend has no pairs, symbols or closures.
 
 ```clojure

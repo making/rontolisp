@@ -83,6 +83,14 @@
 #                them -- the `os` gate's shape, for the other kind of thing a
 #                machine may not have. COMPILE legs are never gated: they load
 #                nothing.
+#   cli          rontolisp's own command line in place of FILE, for a deps.edn
+#                project ([-M:alias], [-X:alias, :k, v], [test]); `path` names a file
+#                in the project, and every leg runs in a copy of that file's
+#                directory. The leg's options (-o ..., --component) go ahead of the
+#                command line -- after a leading `test` -- since -M and -X end
+#                rontolisp's options; `args` follow it unseparated.
+#   javaSources  .java files compiled before the leg into a class directory that is
+#                passed as --java-classpath and joins a compiled program's java -cp
 #   note         free-form comment
 #
 # GUI examples (jvm/, macos/, minesweeper, rainbow/, the webgl-*/ and other browser
@@ -272,6 +280,109 @@ examples:
       the same world check runs where nothing is exported. Host-invoked (wasmtime run
       --invoke 'shout("Ada", true)' -> "HELLO, ADA!!!"), so the harness only compiles;
       ClojureWitBoundaryTest runs the invokes
+  - path: clojure/macros.clj
+    backends: [interpreter, jvm, wasm, wasm-component-run]
+    note: >-
+      macro bodies calling the program's functions and reading its vars, eval at
+      expansion time, a template naming a private helper, &form/&env, run-time
+      macroexpand; the output is clj 1.12.6's
+    expect:
+      file: .expected/clojure-macros.txt
+  - path: clojure/text.clj
+    backends: [interpreter, jvm, wasm, wasm-component-run]
+    note: >-
+      java.util.regex's syntax (lookaround, inline flags, named groups, \G), \p{...},
+      \X, \N{name}, split/replace, format's flags, full case mapping, Unicode
+      whitespace, three charsets; the output is clj 1.12.6's
+    expect:
+      file: .expected/clojure-text.txt
+  - path: clojure/collections.clj
+    backends: [interpreter, jvm, wasm, wasm-component-run]
+    note: >-
+      a map's insertion-order seq, a 20,000-entry map built by assoc, records, a
+      deftype keying a map by its own hasheq/equals, hash, transients, PersistentQueue,
+      deftype/reify of the collection interfaces, keyword-argument and namespaced
+      destructuring, case/condp, iteration, byte arrays, #inst/#uuid; the output is
+      clj 1.12.6's
+    expect:
+      file: .expected/clojure-collections.txt
+  - path: clojure/bundled-namespaces.clj
+    backends: [interpreter, jvm, wasm, wasm-component-run]
+    note: >-
+      the clojure.jar namespaces shipped as Clojure source: walk, edn, template, pprint
+      (code-dispatch, print-table, cl-format), data, zip, core.protocols, datafy,
+      stacktrace, repl, math, core.reducers, set, instant, xml, java.io (a file in the
+      working directory: the wasm legs run with --dir .); the output is clj 1.12.6's
+    expect:
+      file: .expected/clojure-bundled-namespaces.txt
+  - path: clojure/state.clj
+    backends: [interpreter, jvm, wasm, wasm-component-run]
+    note: >-
+      atoms, refs with a rolled-back transaction and a validator, agents failing,
+      refused, restarted and in :continue mode, delays, volatiles, binding,
+      alter-var-root, with-redefs; the output is clj 1.12.6's
+    expect:
+      file: .expected/clojure-state.txt
+  - path: clojure/portable.cljc
+    backends: [interpreter, jvm, wasm, wasm-component-run]
+    note: >-
+      a .cljc entry file: #? and #?@ under the :rontolisp/:clj features, read-string
+      under :read-cond :preserve and :allow, a tagged literal kept as data. clj 1.12.6
+      prints the same but for its own :clj branch on the first line
+    expect:
+      file: .expected/clojure-portable.txt
+  - path: clojure/deps-project/deps.edn
+    cli: ["-M:invoice"]
+    args: [tea, coffee]
+    backends: [interpreter, jvm, wasm, wasm-component-run]
+    note: >-
+      a deps.edn project's -main through an alias's :main-opts; the project reads a
+      :local/root library's .cljc, a data reader from src/data_readers.clj, and ns
+      clauses (:refer-clojure :exclude, :rename, :as-alias). A compiled leg keeps the
+      alias's arguments and takes the run's after them, so all four print alike
+    expect:
+      file: .expected/clojure-deps-project-main.txt
+  - path: clojure/deps-project/deps.edn
+    cli: ["-X:summary", ":currency", '"USD"']
+    backends: [interpreter, jvm, wasm, wasm-component-run]
+    note: -X calls the alias's :exec-fn with its :exec-args merged with the command line's
+    expect:
+      file: .expected/clojure-deps-project-exec.txt
+  - path: clojure/deps-project/deps.edn
+    cli: [test]
+    backends: [interpreter, jvm, wasm, wasm-component-run]
+    note: rontolisp test runs the -test namespaces under the :test alias's :extra-paths
+    expect:
+      file: .expected/clojure-deps-project-test.txt
+  - path: clojure/http-client.clj
+    backends: [interpreter, jvm]
+    note: >-
+      rontolisp.http-client against a Ring handler the program serves on a free local
+      port (:join? false), then System/exit: GET with query parameters, a form POST, a
+      PUT body, a streamed reply read by line-seq, the 404 ex-info and :throw false,
+      :async. The port comes from java.net.ServerSocket and the server needs a socket
+      the program owns, so only the interpreter and the JVM run it
+    expect:
+      file: .expected/clojure-http-client.txt
+  - path: clojure/wit-types/shop.clj
+    backends: [interpreter, jvm]
+    note: >-
+      a WIT import crossing an enum, flags, a variant with and without payload, a
+      record, an option, a list of tuples, a result argument and a result answer whose
+      error arm is caught, against the provider the program binds. No wasm leg: a
+      component import does not carry flags or a list of tuples yet, and a Preview 1
+      import carries scalars only (both are refused by name)
+    expect:
+      file: .expected/clojure-wit-types.txt
+  - path: clojure/java-library/main.clj
+    javaSources: [clojure/java-library/java/example/Slugger.java]
+    backends: [interpreter, jvm]
+    note: >-
+      a Java library of the example's own on --java-classpath: a static method and
+      field, a constructor, a List argument and a fn as a Predicate. The WASM targets
+      refuse --java-classpath
+    expect:
+      file: .expected/clojure-java-library.txt
 
   # --- ml: numerical computing & machine learning ----------------------------
   - path: ml/deep-digits.lisp

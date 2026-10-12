@@ -1,0 +1,9 @@
+{:paths ["src"]
+ :deps {example/units {:local/root "units"}}
+ :aliases {;; -M:invoice runs app.main's -main with these arguments ahead of the rest
+           :invoice {:main-opts ["-m" "app.main" "EUR"]}
+           ;; -X:summary calls app.main/summary with this map, merged with key/value args
+           :summary {:exec-fn app.main/summary
+                     :exec-args {:title "Order summary" :currency "EUR"}}
+           ;; rontolisp test runs the -test namespaces of :test's :extra-paths
+           :test {:extra-paths ["test"]}}}
