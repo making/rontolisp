@@ -154,6 +154,23 @@ class ClojureWasmInteropRefusalTest {
 		}
 	}
 
+	@Test
+	void aMemberNoValueHereHasIsTheOraclesRefusalOnBothBackends() throws Exception {
+		// no value a wasm program makes has getBytes but a string, or a field s: the
+		// oracle's own refusal, where the host arm was a call-time error; a String
+		// construction of anything but a byte array is the host's, refused by name
+		String program = "(defn msg [f] (try (f) (catch Exception e (ex-message e))))"
+				+ " (defn g [x] (.getBytes x \"UTF-8\")) (defn h [x] (.-s x)) (defn s [x] (String. x))"
+				+ " (println (count (g \"ab\")) (msg #(g 5)) \"|\" (msg #(h 5)) \"|\" (count (s (byte-array 2)))"
+				+ " (msg #(s \"abc\")))";
+		for (boolean component : new boolean[] { false, true }) {
+			assertThat(run(program, component)).as(component ? "component" : "preview 1")
+				.isEqualTo("2 No matching method getBytes found taking 1 args for class java.lang.Long"
+						+ " | No matching field found: s for class java.lang.Long"
+						+ " | 2 Constructor java.lang.String taking 1 args is not supported for class java.lang.String\n");
+		}
+	}
+
 	private static byte[] compile(String program, boolean component, ByteArrayOutputStream warnings) {
 		CompileFrontendAccess.Program frontend = CompileFrontendAccess.clojure(program, true, component);
 		try (var _ = ThreadStdio.err(warnings)) {

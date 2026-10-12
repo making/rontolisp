@@ -14,7 +14,9 @@ core operation, which runs on every backend; anything else goes to `java:call`, 
 string as a `String`, a number as its box and a character as a `Character`
 (`(.codePointAt "abc" 0)`, `(.compareTo 1 2)`).
 Classes resolve dotted as written, through `:import`, or through `java.lang`. Runs on the
-interpreter and the JVM only -- the wasm backends reject `java:`.
+interpreter and the JVM only -- the wasm backends reject `java:`; there a member no value has is
+the oracle's refusal, so a compile warns only of a call the host alone answers
+([interop](interop.md)).
 
 ```clojure
 (println (. "hi" length)) ; 2

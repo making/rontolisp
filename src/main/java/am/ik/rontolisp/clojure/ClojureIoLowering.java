@@ -329,7 +329,8 @@ final class ClojureIoLowering {
 	 * An instance call's arm for a clojure.java.io receiver: {@code (if (io-p recv)
 	 * (method recv args...) call)} where the values here have the method at that count;
 	 * any other member is the host object's ({@code java:call} of the receiver's host
-	 * object, on the backends that have one).
+	 * object, on the backends that have one) and, where the host is not (wasm), refused:
+	 * by name when one of the value classes has it, else in the oracle's words.
 	 * @param ctx the hub
 	 * @param method the method name
 	 * @param designator the method as {@code java:call} names it (its parameter types
@@ -351,6 +352,11 @@ final class ClojureIoLowering {
 			own.addAll(args);
 			io = ClojureLowerUtil.list(own);
 		}
+		else if (!ctx.hostTarget) {
+			// where the host is not (wasm) no host object stands for the value: a member
+			// one of the classes has is refused by name, any other in the oracle's words
+			io = ClojureValueMethodLowering.refusal(recv, method, !declaredByAClass(method, args.size()), args);
+		}
 		else {
 			// any other member is the host object's, on the backends that have one
 			List<LispVal> host = new ArrayList<>();
@@ -361,6 +367,23 @@ final class ClojureIoLowering {
 		}
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), ClojureLowerUtil.list(new LispSymbol(IO_P), recv), io,
 				call);
+	}
+
+	/**
+	 * Whether one of the classes a clojure.java.io value is an object of
+	 * ({@link #CLASSES}) has a public instance method of the name at the count.
+	 */
+	private static boolean declaredByAClass(String method, int arity) {
+		List<Class<?>> types = new ArrayList<>();
+		for (String name : CLASSES.keySet()) {
+			try {
+				types.add(Class.forName(name, false, ClassLoader.getPlatformClassLoader()));
+			}
+			catch (ClassNotFoundException | LinkageError _) {
+				// a JDK without the class: none of its methods counts
+			}
+		}
+		return ClojureValueMethodLowering.declares(types, method, arity);
 	}
 
 	/**

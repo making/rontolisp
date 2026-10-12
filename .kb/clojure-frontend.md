@@ -3910,10 +3910,48 @@ as itself.
   `ClojureArmsTest#anInterfaceFamilyIsMadeByTheStoreOfARowOfItsInterfaces` (the JAVA_FACE case),
   `ClojureLibraryTest#aProgramRegisteringNoFaceHandsJavaItsValuesWithoutTheFaceArm`.
 
+## Host arms where the host is not
+
+**A wasm compile warns of a `java:` operator only where the program's own call needs the
+host; the host ARMS -- what answers a host object no wasm program can hold -- never reach
+the backend.** Measured 2026-10-12 on the exec jar before the change: `(count (.getBytes "abc"
+"UTF-8"))` warned `JAVA:CALL`, `(String. (.getBytes ...) "UTF-8")` `CALL`+`NEW`, `.getBytes` of a
+`StandardCharsets` field `CALL`+`STATIC`+`NEW`, a deftype overriding `equals` over `(.-s ^K o)`
+`CALL`+`FIELD`, `examples/clojure/collections.clj` five and `bundled-namespaces.clj` six
+operators, on P1 and `--component` alike, each printing the oracle's output; `deps-project` none
+(then and after). Muting the warning for library-spliced forms was rejected: it would hide a
+real call too. Where it is decided, every piece keyed on `hostTarget` (`Clojure.read`'s, and
+`ClojureLibrary.splice`'s `!wasm`):
+- `ClojureArms.needsHost`: `HOST` (host objects) joins `HOST_EXCEPTION`, so its arms strip on
+  wasm whatever `java:` the program names (a `java:` call makes no host object there).
+- `ClojureLibrary`: a wasm program splices `formsWithoutHost` -- the `HOST_ARMS_WITHOUT_JAVA`
+  stand-ins whatever it names, plus `HOST_ARMS_WITHOUT_HOST` for a host arm a value made there
+  reaches (`%clojure-host-string-new`, `(String. x)` of a non-byte-array, refused by name).
+- An instance call on a receiver of no known class (`ClojureInteropLowering.hostlessCall`):
+  the `java:call` arm stays only when a class such a receiver may be an object of there --
+  `Object`, `Long`, `Double`, `Character`, `Boolean`, `Throwable`, and `String` / `Writer` /
+  `Reader` unless the string / stream arm answers first -- has the method at the count (the
+  program's call needs the host: `(.byteValue x)` still warns); otherwise the oracle's refusal
+  (`No matching method getBytes found taking 1 args for class java.lang.Long`). The string arm is
+  built ahead of the host arm on wasm only, so the host's temp numbering is unchanged.
+  `.toString` there is `str` past the stream arm; `(.-f x)` of a non-type the oracle's
+  `No matching field found`; an io value's unmapped member refused by name when an io class has
+  it, else in the oracle's words (`ClojureIoLowering.methodArm`); no argument takes the io
+  family's host view (`crossing`).
+- The hierarchy's host class walk needs `hostTarget` (`ClojureLowering.noteHost`).
+- A Clojure `if` whose lowered test is the literal `true`, `nil` or `false` keeps only its branch
+  (both are still lowered, so a dead branch's refusals stand). Bundled sources ask the target
+  through it: `rontolisp.internal.xml/host?` is false on wasm and `hosted?` answers whether the
+  target has the host, so `clojure.xml`'s SAX parser and `host-events` throw
+  `UnsupportedOperationException` there instead of compiling a `java:` form.
+- Pins: `ClojureWasmHostArmsTest` (the table's programs and the two examples, both targets, plus
+  the `(.byteValue x)` warning), `ClojureWasmInteropRefusalTest#aMemberNoValueHereHasIsTheOraclesRefusalOnBothBackends`.
+
 ## Java interop
 
 The `java:` surface (`.kb/java-interop.md`); interpreter and JVM only -- wasm compiles
-`java:` to a call-time error (`ClojureWasmInteropRefusalTest`).
+`java:` to a call-time error (`ClojureWasmInteropRefusalTest`), a warning only for a call the
+host alone answers ("Host arms where the host is not").
 
 - `(. obj m args)`/`(.m obj args)` instance, `(. Class m args)`/`(Class/m args)` static,
   `(Class. args)`/`(new Class args)`, `(Class/FIELD)`, `(.-f obj)`, `..`, `memfn`. Classes

@@ -7,6 +7,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 
+import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
@@ -148,6 +149,29 @@ final class ClojureKernelLowering {
 	}
 
 	/**
+	 * {@code rontolisp.internal.xml}: the workers of {@code events} and {@code blank?},
+	 * and two questions about the host in place -- {@code host?} of a value (the worker
+	 * where the host is; false where it is not, wasm, since nothing makes a host object
+	 * there) and {@code hosted?}, whether the target has the host at all -- each a
+	 * constant there, which a Clojure {@code if} folds, so the host SAX parser's code
+	 * never reaches a program for such a target.
+	 */
+	private static Kernels xmlKernels() {
+		LispSymbol hostP = new LispSymbol("RONTOLISP::%CLOJURE-XML-HOST-P");
+		Map<String, Inline> inline = Map.of("host?", (ctx, args) -> {
+			LispVal value = args.get(0);
+			if (ctx.hostTarget) {
+				return ClojureLowerUtil.list(hostP, value);
+			}
+			return value instanceof LispCons
+					? ClojureLowerUtil.list(ClojureLowerUtil.sym("progn"), value, ctx.falseVariable)
+					: ctx.falseVariable;
+		}, "hosted?", (ctx, args) -> ctx.hostTarget ? ClojureLowering.TRUE_CONST : ctx.falseVariable);
+		return new Kernels("clojure.xml", "RONTOLISP::%CLOJURE-XML-",
+				Map.of("events", 1, "blank?", 1, "host?", 1, "hosted?", 0), Map.of(), false, inline);
+	}
+
+	/**
 	 * {@code rontolisp.internal.math}: the {@link #STRICT_MATH} functions in place, and
 	 * the workers ({@code rontolisp::%clojure-math-NAME}) of {@code round} and the long
 	 * arithmetic.
@@ -231,10 +255,7 @@ final class ClojureKernelLowering {
 					new Kernels("rontolisp.http-client", "RONTOLISP::%CLOJURE-HTTP-",
 							Map.ofEntries(Map.entry("request", 2), Map.entry("fetch", 2)),
 							Map.of("fetch", "RONTOLISP:FETCH"), true)),
-			Map.entry("rontolisp.internal.xml",
-					new Kernels("clojure.xml", "RONTOLISP::%CLOJURE-XML-",
-							Map.of("events", 1, "blank?", 1, "host?", 1))),
-			Map.entry("rontolisp.internal.math", mathKernels()),
+			Map.entry("rontolisp.internal.xml", xmlKernels()), Map.entry("rontolisp.internal.math", mathKernels()),
 			Map.entry(ClojureIoLowering.NAMESPACE, ClojureIoLowering.kernels()));
 
 	private ClojureKernelLowering() {

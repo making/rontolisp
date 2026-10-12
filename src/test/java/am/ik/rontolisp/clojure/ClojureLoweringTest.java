@@ -846,7 +846,7 @@ class ClojureLoweringTest {
 		assertThat(lowered("(-> {:a 1} :a)")).contains("GETHASH");
 		assertThat(lowered("(as-> 5 x (inc x))")).contains("LET*");
 		assertThat(lowered("(doto 5 (inc))")).contains("(LET");
-		assertThat(lowered("(cond-> 5 true inc)")).contains("(IF");
+		assertThat(lowered("(cond-> 5 (odd? 5) inc)")).contains("(IF");
 		assertThat(lowered("(some-> nil (inc))")).contains("NULL");
 		assertThat(lowered("(list* 1 [2 3])")).contains("%CLOJURE-CONS").contains("(VECTOR 2 3)");
 		assertThatThrownBy(() -> Clojure.read("(->)", null)).isInstanceOf(LispReadException.class)
@@ -2027,13 +2027,13 @@ class ClojureLoweringTest {
 		assertThat(lowered("(let [l (java.util.ArrayList.)] (fn [l] (.add (java.util.ArrayList.) l)))"))
 			.contains("(RONTOLISP::%CLOJURE-HOST-VALUE (RONTOLISP::%CLOJURE-IO-HOST |c%l|))");
 		// where the host is not (wasm) a java: call is a call-time error: no wrap of
-		// its own
-		assertThat(Clojure.read("(defn put [m k] (.put m k 1))", null, null, ClojureFiles.NONE, false)
+		// its own, nor the io family's view of an argument
+		assertThat(Clojure.read("(defn cmp [m k] (.compareTo m k))", null, null, ClojureFiles.NONE, false)
 			.stream()
 			.map(LispVal::print)
-			.collect(Collectors.joining("\n")))
-			.contains("\"put\" (RONTOLISP::%CLOJURE-IO-HOST |c%k|) 1 :FUNCTIONAL :JAVA-FALSE)")
-			.doesNotContain("%CLOJURE-HOST-VALUE");
+			.collect(Collectors.joining("\n"))).contains("\"compareTo\" |c%k| :FUNCTIONAL :JAVA-FALSE)")
+			.doesNotContain("%CLOJURE-HOST-VALUE")
+			.doesNotContain("%CLOJURE-IO-HOST");
 	}
 
 	@Test
@@ -2167,10 +2167,13 @@ class ClojureLoweringTest {
 
 	@Test
 	void macroCallsExpandAtLowerTime() {
-		String out = loweredWithMacros("(defmacro mu-unless [c t] (list 'if c nil t)) (mu-unless false 42)");
+		String out = loweredWithMacros(
+				"(defmacro mu-unless [c t] (list 'if c nil t)) (defn f [c] (mu-unless c 42)) (mu-unless false 7)");
 		assertThat(out).contains("|c%mu-unless%macro|");
-		// the call lowered to the if over the false value, answering 42 for false
+		// the call lowered to the if over its test, answering 42 for a false one
 		assertThat(out).contains("(LET ((|__clojure_").contains("RONTOLISP::%CLOJURE-FALSE").contains(" 42 NIL))");
+		// and over the literal false, to the branch it takes
+		assertThat(out).endsWith("7");
 	}
 
 	@Test

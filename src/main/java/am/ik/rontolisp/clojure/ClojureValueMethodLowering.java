@@ -749,7 +749,7 @@ final class ClojureValueMethodLowering {
 	 * Whether one of the types has a public instance method of the name taking the count
 	 * of arguments, which an instance call of the oracle's reflection would find.
 	 */
-	private static boolean declares(List<Class<?>> types, String method, int n) {
+	static boolean declares(List<Class<?>> types, String method, int n) {
 		for (Class<?> type : types) {
 			for (Method candidate : type.getMethods()) {
 				if (candidate.getName().equals(method) && candidate.getParameterCount() == n

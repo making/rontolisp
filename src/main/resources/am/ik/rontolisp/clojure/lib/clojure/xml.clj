@@ -61,7 +61,11 @@
 (defn sax-parser
   "A new host javax.xml.parsers.SAXParser."
   []
-  (.newSAXParser (javax.xml.parsers.SAXParserFactory/newInstance)))
+  ;; a target without the host (wasm) has no SAX parser to make
+  (if (k/hosted?)
+    (.newSAXParser (javax.xml.parsers.SAXParserFactory/newInstance))
+    (throw (UnsupportedOperationException.
+            "clojure.xml/sax-parser makes the host's SAX parser, which this target has not"))))
 
 (defn disable-external-entities
   "The host SAXParser parser, set to read no external DTD and no external
@@ -90,19 +94,23 @@
   "The events of the document a host SAX parser reads, startparse handing
   it s and a ContentHandler recording them."
   [s startparse]
-  (let [events (atom [])
-        handler (proxy [org.xml.sax.helpers.DefaultHandler] []
-                  (startElement [uri local-name q-name atts]
-                    (swap! events conj
-                           (into [q-name]
-                                 (mapcat (fn [i] [(.getQName atts (int i)) (.getValue atts (int i))])
-                                         (range (.getLength atts))))))
-                  (endElement [uri local-name q-name]
-                    (swap! events conj nil))
-                  (characters [ch start length]
-                    (swap! events conj (String. ch (int start) (int length)))))]
-    (startparse s handler)
-    @events))
+  ;; a target without the host (wasm) has no ContentHandler to hand
+  (if (k/hosted?)
+    (let [events (atom [])
+          handler (proxy [org.xml.sax.helpers.DefaultHandler] []
+                    (startElement [uri local-name q-name atts]
+                      (swap! events conj
+                             (into [q-name]
+                                   (mapcat (fn [i] [(.getQName atts (int i)) (.getValue atts (int i))])
+                                           (range (.getLength atts))))))
+                    (endElement [uri local-name q-name]
+                      (swap! events conj nil))
+                    (characters [ch start length]
+                      (swap! events conj (String. ch (int start) (int length)))))]
+      (startparse s handler)
+      @events)
+    (throw (UnsupportedOperationException.
+            "clojure.xml/parse with a startparse needs the host's SAX parser, which this target has not"))))
 
 (defn parse
   "Reads the XML document s -- a File, an InputStream, or a string naming a

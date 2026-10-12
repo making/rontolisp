@@ -61,5 +61,6 @@ it.
   Clojure's is a `java.net.MalformedURLException` for one that is no URL, and names a missing
   file by its absolute path.
 - A rarer mistake is still a `SAXParseException`, with a message of rontolisp's own.
-- On WebAssembly, `parse` with a `startparse` and the host parser functions fail when called,
-  like any Java interop.
+- On WebAssembly, `parse` with a `startparse` and `sax-parser` (so `startparse-sax` and
+  `startparse-sax-safe`) throw `UnsupportedOperationException` when called: there is no host SAX
+  parser.

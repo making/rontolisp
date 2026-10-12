@@ -59,5 +59,6 @@ clojure> (xml/parse "/tmp/note.xml")
 - ファイルを示さない文字列は、与えたパスを示す `java.io.FileNotFoundException` です。Clojure では
   URL でない文字列は `java.net.MalformedURLException` で、存在しないファイルは絶対パスで示します。
 - まれな誤りも `SAXParseException` ですが、メッセージは rontolisp 独自のものです。
-- WebAssembly では、`startparse` を渡した `parse` とホストのパーサー関数は、ほかの Java 相互運用と
-  同じく呼び出した時点で失敗します。
+- WebAssembly では、`startparse` を渡した `parse` と `sax-parser`（つまり `startparse-sax` と
+  `startparse-sax-safe`）は、呼び出した時点で `UnsupportedOperationException` を投げます。ホストの
+  SAX パーサーがないためです。

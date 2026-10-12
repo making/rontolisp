@@ -119,7 +119,7 @@ public final class ClojureArms {
 	 * @return {@code true} when only the host can make one
 	 */
 	public static boolean needsHost(Family family) {
-		return family == Family.HOST_EXCEPTION;
+		return family == Family.HOST || family == Family.HOST_EXCEPTION;
 	}
 
 	/**

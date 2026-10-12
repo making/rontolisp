@@ -105,6 +105,23 @@ public final class ClojureLibrary {
 			  (%identity-hash x))
 			""";
 
+	/**
+	 * The bodies a target without the host (wasm) splices in place of the host arms a
+	 * value made there still reaches, on top of {@link #HOST_ARMS_WITHOUT_JAVA}:
+	 * {@code %clojure-host-string-new} ({@code (String. x)} of an {@code x} that is no
+	 * byte array) refuses by name, since the class has the constructor. A {@code java:}
+	 * operator is a call-time error there and makes no host object, so every other host
+	 * arm answers as it does in a program naming none.
+	 */
+	private static final String HOST_ARMS_WITHOUT_HOST = """
+			(defun rontolisp::%clojure-host-string-new (x more)
+			  (rontolisp::%clojure-no-method
+			   x
+			   (format nil "Constructor java.lang.String taking ~A args is not supported for class "
+			           (+ 1 (length more)))
+			   "String."))
+			""";
+
 	@Nullable private static volatile Set<String> functionNames;
 
 	private ClojureLibrary() {
@@ -217,7 +234,7 @@ public final class ClojureLibrary {
 		if (body != program && !referencesAny(body)) {
 			return new Splice(List.of(), body);
 		}
-		return new Splice(library(usesJava(body), made), body);
+		return new Splice(library(hostTarget, hostTarget && usesJava(body), made), body);
 	}
 
 	/**
@@ -240,13 +257,14 @@ public final class ClojureLibrary {
 	}
 
 	/**
-	 * The library a program splices: with or without the host arms, and with the arms of
-	 * only the families whose values the program makes (one that builds no sorted
-	 * collection takes no sorted-collection arm).
+	 * The library a program splices: with or without the host arms (and without the
+	 * host's, where it is not), and with the arms of only the families whose values the
+	 * program makes (one that builds no sorted collection takes no sorted-collection
+	 * arm).
 	 */
-	private static List<LispVal> library(boolean java, Set<ClojureArms.Family> made) {
-		List<LispVal> library = java ? forms() : formsWithoutHostArms();
-		StringBuilder key = new StringBuilder(java ? "default" : "without-host-arms");
+	private static List<LispVal> library(boolean host, boolean java, Set<ClojureArms.Family> made) {
+		List<LispVal> library = java ? forms() : host ? formsWithoutHostArms() : formsWithoutHost();
+		StringBuilder key = new StringBuilder(java ? "default" : host ? WITHOUT_HOST_ARMS : WITHOUT_HOST);
 		List<ClojureArms.Family> stripped = new ArrayList<>();
 		for (ClojureArms.Family family : ClojureArms.Family.values()) {
 			if (!made.contains(family)) {
@@ -277,21 +295,39 @@ public final class ClojureLibrary {
 	private static List<LispVal> formsWithoutHostArms() {
 		// read first: a nested computeIfAbsent on one ConcurrentHashMap is refused
 		List<LispVal> library = forms();
-		return FORMS.computeIfAbsent("without-host-arms", ignored -> {
-			Map<String, LispVal> standIns = new HashMap<>();
-			for (LispVal standIn : LispReader.readAllFromString(HOST_ARMS_WITHOUT_JAVA)) {
-				standIns.put(definedName(standIn), standIn);
-			}
-			List<LispVal> out = new ArrayList<>();
-			for (LispVal form : library) {
-				LispVal standIn = standIns.remove(definedName(form));
-				out.add(standIn == null ? form : standIn);
-			}
-			if (!standIns.isEmpty()) {
-				throw new IllegalStateException("clojure.lisp defines no host arm " + standIns.keySet());
-			}
-			return List.copyOf(out);
-		});
+		return FORMS.computeIfAbsent(WITHOUT_HOST_ARMS, ignored -> standingIn(library, HOST_ARMS_WITHOUT_JAVA));
+	}
+
+	/**
+	 * The library for a target without the host (wasm): {@link #formsWithoutHostArms()}
+	 * with the host arms a value made there reaches replaced too
+	 * ({@link #HOST_ARMS_WITHOUT_HOST}), so no {@code java:} operator, a call-time error
+	 * there, is left for a program the host has no part in.
+	 */
+	private static List<LispVal> formsWithoutHost() {
+		List<LispVal> library = formsWithoutHostArms();
+		return FORMS.computeIfAbsent(WITHOUT_HOST, ignored -> standingIn(library, HOST_ARMS_WITHOUT_HOST));
+	}
+
+	private static final String WITHOUT_HOST_ARMS = "without-host-arms";
+
+	private static final String WITHOUT_HOST = "without-host";
+
+	// The library with each definition the stand-ins name replaced by its stand-in.
+	private static List<LispVal> standingIn(List<LispVal> library, String source) {
+		Map<String, LispVal> standIns = new HashMap<>();
+		for (LispVal standIn : LispReader.readAllFromString(source)) {
+			standIns.put(definedName(standIn), standIn);
+		}
+		List<LispVal> out = new ArrayList<>();
+		for (LispVal form : library) {
+			LispVal standIn = standIns.remove(definedName(form));
+			out.add(standIn == null ? form : standIn);
+		}
+		if (!standIns.isEmpty()) {
+			throw new IllegalStateException("clojure.lisp defines no host arm " + standIns.keySet());
+		}
+		return List.copyOf(out);
 	}
 
 	private static String definedName(LispVal form) {

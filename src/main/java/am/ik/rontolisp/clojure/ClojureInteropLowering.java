@@ -93,7 +93,8 @@ final class ClojureInteropLowering {
 	 * @return the call
 	 */
 	static LispVal hostCall(ClojureLowering ctx, LispSymbol operator, List<LispVal> parts, int names, boolean bytes) {
-		List<LispVal> crossed = ClojureIoLowering.crossing(operator, parts, names);
+		// where the host is not (wasm) no member runs, so no value crosses to one
+		List<LispVal> crossed = ctx.hostTarget ? ClojureIoLowering.crossing(operator, parts, names) : parts;
 		List<LispVal> ended = new ArrayList<>(parts.size() + 2);
 		ended.addAll(crossed.subList(0, names));
 		boolean literal = true;
@@ -1517,7 +1518,8 @@ final class ClojureInteropLowering {
 	/**
 	 * {@code (.-field target)}: a record or deftype answers its field table's entry (a
 	 * missing or mutable field signals in the oracle's words); anything else takes the
-	 * host field path, like before.
+	 * host field path, like before -- where the host is not (wasm), the oracle's refusal,
+	 * since no value there has a public instance field.
 	 */
 	static LispVal fieldRead(ClojureLowering ctx, LispVal target, String field) {
 		LispSymbol one = ctx.freshTemp();
@@ -1537,7 +1539,8 @@ final class ClojureInteropLowering {
 						ClojureLowerUtil.list(miss,
 								ClojureLowerUtil.list(ClojureLowerUtil.sym("list"), ClojureLowering.NIL_CONST)))),
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), ClojureProtocolLowering.isTypedForm(one), read,
-						fieldCall(ctx, one, field, true)));
+						ctx.hostTarget ? fieldCall(ctx, one, field, true)
+								: ClojureValueMethodLowering.refusal(one, field, true, List.of())));
 	}
 
 	/**
@@ -1910,8 +1913,7 @@ final class ClojureInteropLowering {
 				cls = hostClassOf(ctx, ref);
 			}
 		}
-		LispVal hostCall = hostCall(ctx, JAVA_CALL, direct, 2, answersBytes(cls, designator, args.size(), false));
-		LispVal call = hostCall;
+		LispVal call = hostCall(ctx, JAVA_CALL, direct, 2, answersBytes(cls, designator, args.size(), false));
 		if (cls != null && ClojureTimeValueLowering.CLASSES.contains(cls)) {
 			// a Date, Timestamp or UUID may be a value made here: the value arms take it
 			cls = null;
@@ -1930,13 +1932,20 @@ final class ClojureInteropLowering {
 			return ClojureLowerUtil.list(new LispSymbol(STACK_TRACE_METHODS.get(method)), receiver);
 		}
 		if (method.equals("toString") && args.isEmpty()) {
-			call = valueToString(recv);
+			call = valueToString(ctx, recv);
 		}
 		boolean hashCode = method.equals("hashCode") && args.isEmpty() && cls == null;
 		if (hashCode) {
 			call = valueHashCode(recv);
 		}
 		LispVal stream = streamMethod(ctx, method, recv, args);
+		boolean typed = cls != null || receiver instanceof LispString;
+		// where the host is not (wasm) the string arm is known ahead of the host arm,
+		// which no string then reaches
+		LispVal mapped = ctx.hostTarget ? null : stringMethod(ctx, method, recv, args, typed);
+		if (cls == null && !ctx.hostTarget && !(method.equals("toString") && args.isEmpty()) && !hashCode) {
+			call = hostlessCall(recv, method, args, call, mapped != null, stream != null);
+		}
 		if (stream != null) {
 			call = ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
 					ClojureLowerUtil.list(ClojureLowerUtil.sym("streamp"), recv), stream, call);
@@ -1954,7 +1963,9 @@ final class ClojureInteropLowering {
 			// answers its own methods: an arm a program making none sheds
 			call = ClojureIoLowering.methodArm(ctx, method, designator, recv, args, call);
 		}
-		LispVal mapped = stringMethod(ctx, method, recv, args, cls != null || receiver instanceof LispString);
+		if (ctx.hostTarget) {
+			mapped = stringMethod(ctx, method, recv, args, typed);
+		}
 		LispVal out = mapped == null ? call : ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("stringp"), recv), mapped, call);
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
@@ -1974,9 +1985,10 @@ final class ClojureInteropLowering {
 	 * like the oracle's {@code NullPointerException}; anything else is a host object and
 	 * keeps the {@code java:call}. No predicate here answers true for a host object (a
 	 * host collection is no Lisp array or table on the JVM either), so the host path is
-	 * exactly what it was.
+	 * exactly what it was. Where the host is not (wasm) nothing is a host object, so
+	 * every value past the stream takes the {@code str} spelling.
 	 */
-	static LispVal valueToString(LispSymbol recv) {
+	static LispVal valueToString(ClojureLowering ctx, LispSymbol recv) {
 		List<LispVal> direct = new ArrayList<>();
 		direct.add(recv);
 		direct.add(LispString.literal("toString"));
@@ -1991,17 +2003,55 @@ final class ClojureInteropLowering {
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("functionp"), recv),
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("typep"), recv,
 						ClojureLowerUtil.list(ClojureLowerUtil.sym("quote"), ClojureLowerUtil.sym("condition"))));
-		return ClojureLowerUtil.list(ClojureLowerUtil.sym("cond"),
-				ClojureLowerUtil.list(ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), recv),
-						ClojureRefusals.refusal(ClojureRefusals.NULL_POINTER,
-								LispString.literal("NullPointerException: toString of nil"))),
-				ClojureLowerUtil.list(ClojureLowerUtil.list(new LispSymbol(STREAM_P), recv),
-						ClojureLowerUtil.list(new LispSymbol(STREAM_STRING), recv)),
-				ClojureLowerUtil
-					.list(lispValue,
-							ClojureLowerUtil.list(ClojureLowering.CLOJURE_STR_OF, recv, LispString.literal("nil"),
-									ClojureLowering.NIL_CONST)),
+		LispVal str = ClojureLowerUtil.list(ClojureLowering.CLOJURE_STR_OF, recv, LispString.literal("nil"),
+				ClojureLowering.NIL_CONST);
+		LispVal nil = ClojureLowerUtil.list(ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), recv), ClojureRefusals
+			.refusal(ClojureRefusals.NULL_POINTER, LispString.literal("NullPointerException: toString of nil")));
+		LispVal stream = ClojureLowerUtil.list(ClojureLowerUtil.list(new LispSymbol(STREAM_P), recv),
+				ClojureLowerUtil.list(new LispSymbol(STREAM_STRING), recv));
+		if (!ctx.hostTarget) {
+			return ClojureLowerUtil.list(ClojureLowerUtil.sym("cond"), nil, stream,
+					ClojureLowerUtil.list(ClojureLowering.TRUE_CONST, str));
+		}
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("cond"), nil, stream, ClojureLowerUtil.list(lispValue, str),
 				ClojureLowerUtil.list(ClojureLowering.TRUE_CONST, call));
+	}
+
+	/**
+	 * The classes a receiver of no known class may be an object of where the host is not
+	 * (wasm), past the string and the stream: nothing makes a host object there, so what
+	 * reaches an instance call's host arm is a number, a character, a boolean or an
+	 * exception, and {@code Object}'s methods are every value's.
+	 */
+	private static final List<Class<?>> HOSTLESS_RECEIVERS = List.of(Object.class, Long.class, Double.class,
+			Character.class, Boolean.class, Throwable.class);
+
+	/**
+	 * An instance call's host arm for a receiver of no known class where the host is not
+	 * (wasm): the {@code java:call} -- a call-time error there, which the compile warns
+	 * of -- when a class such a receiver may be an object of has the method at the count,
+	 * since the program's call then needs the host; otherwise the oracle's own refusal,
+	 * since no value there has the method.
+	 * @param recv the bound receiver
+	 * @param method the method name
+	 * @param args the lowered arguments
+	 * @param call the {@code java:call}
+	 * @param strings whether a string answers ahead of the arm (the string arm)
+	 * @param streams whether a stream answers ahead of the arm (the stream arm)
+	 * @return the arm
+	 */
+	static LispVal hostlessCall(LispSymbol recv, String method, List<LispVal> args, LispVal call, boolean strings,
+			boolean streams) {
+		List<Class<?>> classes = new ArrayList<>(HOSTLESS_RECEIVERS);
+		if (!strings) {
+			classes.add(String.class);
+		}
+		if (!streams) {
+			classes.add(java.io.Writer.class);
+			classes.add(java.io.Reader.class);
+		}
+		return ClojureValueMethodLowering.declares(classes, method, args.size()) ? call
+				: ClojureValueMethodLowering.refusal(recv, method, true, args);
 	}
 
 	/**

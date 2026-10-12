@@ -22580,8 +22580,8 @@
       (rontolisp::%clojure-host-value x)))
 
 ;; (String. x ...): over a byte array X its text (%clojure-string-of-bytes),
-;; anything else the host's constructor (interpreter, JVM; wasm refuses every
-;; java: call). CLASS is java.lang.String; ARGS the arguments after X with the
+;; anything else the host's constructor (%clojure-host-string-new). CLASS is
+;; java.lang.String; ARGS the arguments after X with the
 ;; markers of the call -- the keywords, and the function after :through -- which
 ;; no String constructor reads. A program making no byte array calls java:new in
 ;; its place (the family's alias).
@@ -22595,18 +22595,23 @@
     (setq more (reverse more))
     (if (rontolisp::%clojure-bytes-p x)
         (rontolisp::%clojure-string-of-bytes x more)
-        (let ((n (length more)))
-          (cond ((= n 0) (java:new "java.lang.String" x :java-false))
-                ((= n 1)
-                 (java:new "java.lang.String" x
-                           (rontolisp::%clojure-io-host (car more))
-                           :java-false))
-                ((= n 2)
-                 (java:new "java.lang.String" x (car more) (car (cdr more))
-                           :java-false))
-                (t (java:new "java.lang.String" x (car more) (car (cdr more))
-                    (rontolisp::%clojure-io-host (car (cdr (cdr more))))
-                    :java-false)))))))
+        (rontolisp::%clojure-host-string-new x more))))
+
+;; (String. x more...) of an X that is no byte array: the host's constructor. A
+;; host arm: where the host is not (wasm) it refuses by name
+;; (eval/ClojureLibrary's stand-ins), since the class has the constructor.
+(defun rontolisp::%clojure-host-string-new (x more)
+  (let ((n (length more)))
+    (cond ((= n 0) (java:new "java.lang.String" x :java-false))
+          ((= n 1)
+           (java:new "java.lang.String" x
+                     (rontolisp::%clojure-io-host (car more)) :java-false))
+          ((= n 2)
+           (java:new "java.lang.String" x (car more) (car (cdr more))
+                     :java-false))
+          (t (java:new "java.lang.String" x (car more) (car (cdr more))
+                       (rontolisp::%clojure-io-host (car (cdr (cdr more))))
+                       :java-false)))))
 
 ;;;; clojure.java.io: rontolisp.internal.io, the namespace only the built-in
 ;;;; clojure.java.io requires, lowers each var to one of these, and the

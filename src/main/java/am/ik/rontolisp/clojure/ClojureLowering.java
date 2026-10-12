@@ -1023,7 +1023,8 @@ public final class ClojureLowering {
 	 */
 	void noteHost(List<LispVal> lowered) {
 		this.namedHost = this.namedHost || ClojureHierarchyLowering.namesHost(lowered);
-		if (this.usedHierarchy && this.namedHost) {
+		// where the host is not (wasm) no host class object exists to walk
+		if (this.hostTarget && this.usedHierarchy && this.namedHost) {
 			this.hostClassWalk = true;
 			this.usedClassChains = true;
 		}
@@ -3942,6 +3943,15 @@ public final class ClojureLowering {
 			LispVal test = lower(items.get(1));
 			LispVal then = lowerTailSlot(items.get(2));
 			LispVal elseForm = items.size() == 4 ? lowerTailSlot(items.get(3)) : NIL_CONST;
+			// a test the lowering knows -- a literal, or a built-in namespace's
+			// question about the target (ClojureKernelLowering) -- keeps only its
+			// branch, so what the other one names never reaches the program
+			if (test == TRUE_CONST) {
+				return then;
+			}
+			if (test == NIL_CONST || test == this.falseVariable) {
+				return elseForm;
+			}
 			return ifFalsey(test, then, elseForm);
 		}
 		if (ClojureLowerUtil.isSymbolNamed(head, "when")) {

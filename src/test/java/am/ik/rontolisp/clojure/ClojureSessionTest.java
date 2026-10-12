@@ -245,7 +245,7 @@ class ClojureSessionTest {
 		// a later input may expand at run time: the table holds the expander itself
 		assertThat(defined).anyMatch(form -> form.contains("(SETQ |c%sx-unless%macro| (LAMBDA "))
 			.noneMatch(form -> form.contains("C%MACRO-EXPANDER"));
-		List<String> call = session.read("(sx-unless false 42)")
+		List<String> call = session.read("(sx-unless (odd? 2) 42)")
 			.stream()
 			.flatMap(top -> top.forms().stream())
 			.map(LispVal::print)
